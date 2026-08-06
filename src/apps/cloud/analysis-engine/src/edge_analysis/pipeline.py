@@ -11,12 +11,7 @@ from dataclasses import asdict, replace
 from datetime import timedelta
 from typing import Any
 
-from .adapters.archive import (
-    archived_events,
-    decomp_summary,
-    write_explanation_to_s3,
-    write_run_archive,
-)
+from .adapters.archive import archived_events, decomp_summary, write_run_archive
 from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
 from .adapters.llm import AnalysisClient, TracingClient
@@ -198,6 +193,17 @@ def run(
     log("trigger.consumed", route=route_code, event_search=event_search,
         layer_route=(rt.kind if rt else "미상"), **ids)
 
+    # 영속 전제를 **LLM 앞에서** 검사한다(ALPHA-797). 세 전제가 모두 이 시점에 확정돼
+    # 있다 - profile·bundle 은 이 런이 만드는 게 아닌 사전 상태고, route 는 바로 위
+    # `persist_observation_route` 가 커밋했다. 뒤에서 검사하면 결손을 **LLM 을 태운
+    # 뒤에야** 알게 되고, 그때는 결과를 버리기 아까워 S3 폴백으로 접게 된다 - 그 폴백이
+    # `explanation_run` 을 안 남겨 소비자의 멱등 프리플라이트(`has_run_for_route`)가
+    # 영영 false 로 남고, 재배달이 같은 트리거에 LLM 을 다시 태운다(#554 리뷰).
+    prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
+    missing = [key for key, value in prereqs.items() if not value]
+    if missing:
+        raise PipelineError(f"설명 영속 전제가 없다: {missing}")
+
     # 파이프라인이 조립한 이벤트를 소비만 한다(ALPHA-412, 읽기 전용).
     events: list[EventContext] = []
     if event_search:
@@ -306,7 +312,13 @@ def run(
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,
         confidence=explanation.confidence_level, bundles=len(verdicts.bundles))
-    outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, events)
+    outcome = store.persist_explanation(
+        settings, etf_instrument_id, explanation,
+        route_id=prereqs["route"],
+        bundle=prereqs["bundle"],
+        primary_thread_id=_primary_thread_id(events),
+        events=events,
+    )
     write_run_archive(s3, settings, {
         "outcome": "explained",
         "trigger": asdict(gate),
@@ -340,31 +352,6 @@ def _redacted(notes: dict) -> dict:
     """
     return {k: _DSN_SECRET.sub(lambda m: (m.group(1) or "") + (m.group(3) or "") + "***", v)
             if isinstance(v, str) else v for k, v in notes.items()}
-
-
-def _persist_explanation(
-    store: EventStore, s3, settings: Settings, etf_instrument_id: str, explanation, events,
-) -> dict[str, Any]:
-    """FK 전제가 있으면 RDS 에, 없으면 S3 로 폴백해 설명을 영속한다."""
-    prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
-    missing = [key for key, value in prereqs.items() if not value]
-    if missing:
-        location = write_explanation_to_s3(s3, settings, explanation.raw, events)
-        log(
-            "explanation_result.skipped",
-            reason="missing_prerequisites",
-            missing=missing,
-            s3=location,
-            trade_date=settings.trade_date.isoformat(),
-        )
-        return {"persisted": "s3", "location": location, "missing": missing}
-    return store.persist_explanation(
-        settings, etf_instrument_id, explanation,
-        route_id=prereqs["route"],
-        bundle=prereqs["bundle"],
-        primary_thread_id=_primary_thread_id(events),
-        events=events,
-    )
 
 
 def _primary_thread_id(events: list[EventContext]) -> str | None:
