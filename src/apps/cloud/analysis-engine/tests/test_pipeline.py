@@ -130,6 +130,24 @@ def test_statics_failure_is_persisted_as_low_confidence():
     assert "판정불가" in store.explanation.summary
 
 
+def test_absent_trace_does_not_discard_the_explanation(monkeypatch):
+    """관측 부재가 설명을 버리지 않는다.
+
+    `write_agent_trace` 는 빈 trace·쓰기 실패에 `None` 을 돌려주는 것이 계약인데
+    (`trace.py` 도크스트링: "어느 쪽이든 런은 계속"), 호출자가 그것을 치명으로 다뤄
+    **성공한 런일수록 죽었다** — 분봉 경로가 예외 없이 완주하면서 `log()` 를 한 번도
+    안 남기면 trace 가 비기 때문이다(2026-08-06 dev 장중 전건 사망).
+    """
+    monkeypatch.setattr("edge_analysis.pipeline.write_agent_trace", lambda *a, **k: None)
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    assert "persist_explanation" in store.calls
+    # 부재는 **부재로** 남는다 - 있는 척하지 않는다.
+    assert store.explanation.raw["stage_results"]["analysis_trace"] is None
+
+
 def test_missing_prerequisites_fall_back_to_s3():
     store = _FakeStore(trigger=_TRIGGER, prereqs={"profile": False, "route": None, "bundle": None})
     s3 = _FakeS3()

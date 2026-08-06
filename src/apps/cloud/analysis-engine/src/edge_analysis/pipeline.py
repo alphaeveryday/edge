@@ -229,7 +229,16 @@ def run(
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
     trace_manifest = write_agent_trace(s3, settings, trace)
     if trace_manifest is None:
-        raise PipelineError("중간 분석 trace를 S3에 기록하지 못했습니다")
+        # **관측 부재가 설명을 버리지 않는다** - `trace.py` 의 계약이 그것이다("쓰기 실패·
+        # 비 s3:// prefix·빈 trace 면 None, 어느 쪽이든 런은 계속"). 여기서 죽이면
+        # **성공한 런일수록** 죽는다: 분봉 요청창 경로가 예외 없이 완주하면서 log() 를 한
+        # 번도 안 남기면 trace 가 비고, 그 빈 리스트가 설명을 통째로 버린다 - 2026-08-06
+        # dev 장중에 소비자 런 전건이 이 자리에서 죽어 설명 저장이 0건이었다.
+        #
+        # `events` 가 두 부재를 가른다: 0 이면 **기록할 것이 없었고**, 그 외는 쓰기가 실패한
+        # 것이다(그 사유는 `write_agent_trace` 의 `agent_trace.failed` 가 이미 남긴다).
+        # 이름을 `failed` 로 쓰지 않는 이유가 그것이다 - 대개 S3 에 가지도 않았다.
+        log("agent_trace.absent", events=len(trace))
 
     if minute_row is not None:
         honest = plain = text.strip()
