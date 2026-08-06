@@ -81,6 +81,7 @@ from .steps import (
     load_etf_holdings,
     load_etf_nav,
     load_instruments,
+    load_investor_intraday,
     load_price_daily,
     load_price_triggers,
     ingest_raw,
@@ -94,6 +95,7 @@ from .steps import (
     normalize_etf_nav,
     normalize_etf_profile,
     normalize_investor,
+    normalize_investor_estimate,
     normalize_news,
     normalize_price,
     tag_news,
@@ -138,10 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile",
                  "ingest-raw-investor", "ingest-raw-investor-estimate",
-                 "normalize-price", "normalize-investor",
+                 "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-assertions", "assemble-events",
+                 "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
@@ -403,6 +405,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # source= 가 규정하고(현재 kis), 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-investor":
         return normalize_investor.run(storage, run_id, args.input_run_id)
+    # 장중 투자자 추정 정제(ALPHA-768)도 raw 만 읽는다 — EOD 와 **다른 데이터셋**이라 스텝이
+    # 따로다(정체성 키에 슬롯이 붙어 병합 규칙이 다르다). --input-run-id 는 한 슬롯 런의 raw 만
+    # 좁히는 축이고, 미지정이면 전체를 다시 훑어도 멱등이라 결과가 같다.
+    if args.step == "normalize-investor-estimate":
+        return normalize_investor_estimate.run(storage, run_id, args.input_run_id)
     # 뉴스 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-news":
@@ -494,6 +501,15 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
     if args.step == "load-etf-flow":
         return load_etf_flow.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
+        )
+
+    # 장중 투자자 추정 적재(ALPHA-768)도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-etf-flow
+    # 와 같다(canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip). 창은 **거래일** 축이라
+    # 하루를 지정하면 그날의 슬롯 전부가 대상이다(슬롯 단위 창은 없다).
+    if args.step == "load-investor-intraday":
+        return load_investor_intraday.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
         )

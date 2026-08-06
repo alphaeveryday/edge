@@ -317,6 +317,22 @@ def parse_raw_investor_key(key: str) -> dict[str, str]:
     }
 
 
+# ── raw 장중 투자자 추정 스캔(정제 입력) ────────────────
+# EOD 와 **다른 dataset** 이라 마커만 다르다. 키 파싱은 `parse_raw_investor_key` 를 그대로 쓴다 —
+# 경로 규약(source·market·ingest_date·run_id)이 같고, 그 함수는 `key=value` 세그먼트만 취하므로
+# dataset 에 무관하다(복제하면 두 벌이 따로 낡는다).
+_RAW_INVESTOR_ESTIMATE_MARKER = "/dataset=investor_flow_intraday/"
+
+
+def is_raw_investor_estimate_key(key: str) -> bool:
+    """raw investor_flow_intraday 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return (
+        key.startswith("raw/")
+        and _RAW_INVESTOR_ESTIMATE_MARKER in key
+        and key.endswith(".ndjson")
+    )
+
+
 def canonical_investor_flow_partition(market: str, trade_date: str) -> str:
     """canonical 투자자 수급 파티션 프리픽스 (끝 슬래시 없음).
 
@@ -326,6 +342,19 @@ def canonical_investor_flow_partition(market: str, trade_date: str) -> str:
     ticker 가 파티션 내 행 키다. 벤더(kis)는 시장이 가르므로 컬럼(provenance)이지 파티션이 아니다.
     """
     return f"canonical/market_data/investor_flow_daily/market={market}/trade_date={trade_date}"
+
+
+def canonical_investor_flow_intraday_partition(market: str, trade_date: str) -> str:
+    """canonical 장중 투자자 추정 파티션 프리픽스 (끝 슬래시 없음).
+
+    EOD(`canonical_investor_flow_partition`)와 파티션 축은 같지만(market·trade_date) **다른
+    데이터셋**이다 — 값이 가집계 추정이라 확정치와 섞이면 소비자가 어느 쪽을 본 것인지 사후에
+    구분할 수 없다(`.dev/etf-flow-collection-plan.md` §2.5).
+
+    정체성 키는 **한 축 많다**: (market, ticker, trade_date, asof_slot). 하루 4~5 슬롯이 한
+    종목·한 날짜에 공존하므로 파티션 안의 행 키가 ticker 단독이 아니라 (ticker, asof_slot) 이다.
+    """
+    return f"canonical/market_data/investor_flow_intraday/market={market}/trade_date={trade_date}"
 
 
 # ── raw news 스캔(정제 입력) ─────────────────────────────

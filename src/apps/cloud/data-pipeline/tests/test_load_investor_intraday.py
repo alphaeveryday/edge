@@ -1,0 +1,352 @@
+"""load_investor_intraday 스텝 테스트 — canonical 장중 추정 → investor_flow_intraday.
+
+실 DB 없이 돈다 — 가짜 커넥션이 실행된 SQL·파라미터를 기록해 '무엇을 어떻게 넣는가'를
+검사한다(load_etf_flow 테스트와 같은 관례). EOD 로더와 겹치는 것(MIC 해소·모호 ticker)은
+거기서 이미 검사하므로, 여기선 **슬롯 축**에서만 틀릴 수 있는 것을 본다.
+"""
+
+import io
+import json
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from data_pipeline.config import DbConfig
+from data_pipeline.lake import LocalStorage, canonical_investor_flow_intraday_partition
+from data_pipeline.steps import load_investor_intraday as step
+
+_NET = step._NET_COLUMNS  # 추정 수량 3컬럼
+_COLS = ("market", "ticker", "trade_date", "asof_slot", *_NET, "source_vendor", "fetched_at")
+
+
+def _schema(overrides=None):
+    overrides = overrides or {}
+    fields = [(c, overrides.get(c, pa.string()))
+              for c in ("market", "ticker", "trade_date", "asof_slot")]
+    fields += [(c, overrides.get(c, pa.int64())) for c in _NET]
+    fields += [("source_vendor", pa.string()), ("fetched_at", pa.string())]
+    return pa.schema(fields)
+
+
+def _write_canonical(storage, rows, market="KR", trade_date="2026-08-05",
+                     part="part-00000", schema=None):
+    table = pa.Table.from_pylist(
+        [{c: r.get(c) for c in _COLS} for r in rows], schema=schema or _schema())
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    storage.put_bytes(
+        f"{canonical_investor_flow_intraday_partition(market, trade_date)}/{part}.parquet",
+        buf.getvalue())
+
+
+def _flow_row(ticker="005930", slot="0930", trade_date="2026-08-05", **over):
+    row = {c: (i + 1) * 100 for i, c in enumerate(_NET)}
+    row.update({"market": "KR", "ticker": ticker, "trade_date": trade_date, "asof_slot": slot,
+                "source_vendor": "kis", "fetched_at": "2026-08-05T00:30:00+00:00"})
+    row.update(over)
+    return row
+
+
+class _FakeCursor:
+    """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
+
+    def __init__(self, log, instrument_rows, existing):
+        self._log = log
+        self._instrument_rows = instrument_rows
+        self._existing = existing
+        self._rows = []
+        self._returning = None
+
+    def execute(self, sql, params=None):
+        norm = " ".join(sql.split())
+        self._log.append((norm, params))
+        upper = norm.upper()
+        if upper.startswith("SELECT TICKER, INSTRUMENT_ID FROM INSTRUMENT"):
+            self._rows = list(self._instrument_rows)
+        elif upper.startswith("INSERT INTO INVESTOR_FLOW_INTRADAY"):
+            # PK 는 3축이다 — 슬롯까지 넣어야 페이크가 운영 PK 와 같은 충돌을 낸다.
+            key = (params[0], params[1], params[2])
+            value = tuple(params[3:3 + len(_NET)])
+            prev = self._existing.get(key)
+            if prev is None:
+                self._returning = (False,)
+            elif prev == value:
+                self._returning = None  # WHERE distinct 가 걸러 아무 행도 반환하지 않는다
+            else:
+                self._returning = (True,)
+            self._existing[key] = value
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._returning
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, instruments=None, existing=None):
+        self.log = []
+        instruments = instruments if instruments is not None else {"005930": "inst_samsung"}
+        self.instrument_rows = list(instruments.items())
+        self.existing = dict(existing or {})
+
+    def cursor(self):
+        return _FakeCursor(self.log, self.instrument_rows, self.existing)
+
+
+def _fake_connect(conn):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _c(config):
+        yield conn
+
+    return _c
+
+
+def _db():
+    return DbConfig(password="x")
+
+
+def _inserts(conn):
+    return [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO INVESTOR_FLOW_INTRADAY")]
+
+
+def _log(storage, run_id="R1"):
+    keys = [k for k in storage.list_keys("operations_archive/data_quality_logs/")
+            if "investor_flow_intraday_load" in k and f"run_id={run_id}/" in k]
+    assert len(keys) == 1, keys
+    return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def test_canonical_추정이_마트_행이_된다(tmp_path, monkeypatch):
+    # WHY: 이 스텝이 장중 수급 체인의 끝이다. 슬롯과 3값이 그대로 실려야 다운스트림이 같은
+    #      수를 본다 — 파라미터 순서가 어긋나면 외국인 값이 기관 컬럼에 들어가도 아무도 못 잡는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row()])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    [params] = _inserts(conn)
+    assert params[:3] == ["inst_samsung", "2026-08-05", "0930"]
+    assert list(params[3:3 + len(_NET)]) == [100, 200, 300]
+    assert params[-2] == "2026-08-05T00:30:00+00:00"  # available_at = fetched_at(수집 시각)
+    assert params[-1] == "R1"                          # data_version = run_id
+
+
+def test_충돌_키가_3축이다(tmp_path, monkeypatch):
+    # WHY: 아래 슬롯 테스트들은 **가짜 커서**로 돈다 — 그 페이크가 PK 를 스스로 정의하므로,
+    #      운영 SQL 의 ON CONFLICT 에서 asof_slot 이 빠져도 페이크는 여전히 3축으로 충돌을
+    #      판정해 전부 통과한다(페이크가 운영 결함을 흉내 내 회귀를 가리는 형태). 계약을
+    #      SQL 문자열에서 직접 확인해 그 구멍을 막는다.
+    sql = " ".join(step._UPSERT_SQL.split())
+    assert "ON CONFLICT (instrument_id, trade_date, asof_slot) DO UPDATE" in sql
+    # DISTINCT 비교는 수량 3컬럼만 — 메타(available_at·data_version) 변화로 UPDATE 가 돌면
+    # 멱등 재실행이 매번 updated 로 세어져 '정정이 있었다'는 신호가 무의미해진다.
+    assert "available_at) IS DISTINCT FROM" not in sql
+
+
+def test_하루의_슬롯들이_각각_행이_된다(tmp_path, monkeypatch):
+    # WHY: PK 에서 슬롯이 빠지면 뒤 슬롯이 앞 슬롯을 **덮어** 하루에 한 행만 남는다 —
+    #      장중 추이가 사라지는데 런은 성공으로 끝난다. 완료 조건이 바로 이것이다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [
+        _flow_row(slot="0930", net_qty_total_est=11),
+        _flow_row(slot="1120", net_qty_total_est=22),
+        _flow_row(slot="1320", net_qty_total_est=33),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    inserts = _inserts(conn)
+    assert [(p[2], p[5]) for p in inserts] == [("0930", 11), ("1120", 22), ("1320", 33)]
+    assert _log(storage)["created"] == 3
+
+
+def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
+    # WHY: 창 미지정이 canonical 전체 스캔이라 매 슬롯 런이 그날의 앞 슬롯을 다시 훑는다.
+    #      멱등이 아니면 PK(instrument_id, trade_date, asof_slot) 위반으로 배치가 죽는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(slot="0930"), _flow_row(slot="1120")])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+    assert step.run(storage, "R2", db=_db()) == 0
+
+    first, second = _log(storage, "R1"), _log(storage, "R2")
+    assert (first["created"], first["already_present"]) == (2, 0)
+    assert (second["created"], second["already_present"]) == (0, 2)  # 신규 0 = 멱등
+
+
+def test_벤더_정정은_갱신으로_흐른다(tmp_path, monkeypatch):
+    # WHY: 값은 가집계라 벤더가 같은 슬롯을 고쳐 준다. 마트가 DO NOTHING 이면 canonical 은
+    #      정정본, 마트는 옛 값으로 두 계층이 영구 불일치한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(slot="0930")])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    _write_canonical(storage, [_flow_row(slot="0930", net_qty_total_est=999,
+                                         fetched_at="2026-08-05T02:20:00+00:00")])
+    assert step.run(storage, "R2", db=_db()) == 0
+    assert _log(storage, "R2")["updated"] == 1
+
+
+def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(tmp_path, monkeypatch):
+    # WHY: instrument 마스터에 없는 종목을 넣으면 FK 위반으로 **런 전체가 롤백**된다. 유니버스가
+    #      holdings 파생이라 편입 직후 종목이 마스터보다 먼저 나타날 수 있다 — 상시 경로다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(), _flow_row(ticker="999999")])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    assert len(_inserts(conn)) == 1
+    log = _log(storage)
+    assert log["skipped_unknown_instrument"] == 1
+    assert log["unknown_instruments"] == ["KR:999999"]
+
+
+def test_슬롯이_문자열이_아니면_격리한다(tmp_path, monkeypatch):
+    # WHY: 게이트가 스스로 죽으면 안 된다(Rule 12). 드리프트로 슬롯이 int 로 실리면 후보
+    #      정렬에서 str/int 비교가 TypeError 를 내 **정상 행까지 통째로 롤백**된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(slot=930)], schema=_schema({"asof_slot": pa.int64()}))
+    _write_canonical(storage, [_flow_row(slot="1120")], part="part-00001")
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    assert [p[2] for p in _inserts(conn)] == ["1120"]  # 정상 행은 살아남는다
+    assert _log(storage)["skipped_missing_identity"] == 1
+
+
+def test_추정_수량_결측은_격리한다(tmp_path, monkeypatch):
+    # WHY: 셋 다 NOT NULL 이라 결측 행을 넣으면 배치 전체가 죽는다. canonical 이 보장하지만
+    #      손상 parquet 방어선은 로더가 갖는다(load_etf_flow 와 같은 근거).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(net_qty_institution_est=None)])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    assert _inserts(conn) == []
+    log = _log(storage)
+    assert log["skipped_load_violation"] == 1
+    assert log["load_violations"][0]["reason"] == "missing_headline"
+    assert log["load_violations"][0]["asof_slot"] == "0930"
+
+
+def test_불량_거래일과_시각은_격리한다(tmp_path, monkeypatch):
+    # WHY: 손상 canonical 의 trade_date/fetched_at 은 문자열 게이트를 통과하지만 DATE·
+    #      TIMESTAMPTZ 변환에서 터진다. 커밋 경계가 런 전체라 그 한 행이 **정상 행까지 롤백**
+    #      시킨다 — 격리하지 않으면 배치가 통째로 죽는다.
+    storage = LocalStorage(tmp_path / "lake")
+    # 파티션과 행의 trade_date 를 함께 준다 — 로더가 보는 건 행 값이고, 파티션은 스캔 축이다.
+    _write_canonical(storage, [_flow_row(trade_date="2026-02-31")],      # 존재하지 않는 달력일
+                     trade_date="2026-02-31")
+    _write_canonical(storage, [_flow_row(trade_date="2026-08-06", fetched_at="garbage")],
+                     trade_date="2026-08-06")
+    _write_canonical(storage, [_flow_row()])                             # 정상 행
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    assert [p[1] for p in _inserts(conn)] == ["2026-08-05"]  # 정상 행만 살아남는다
+    log = _log(storage)
+    assert log["skipped_load_violation"] == 2
+    assert sorted(v["reason"] for v in log["load_violations"]) == [
+        "bad_available_at", "bad_trade_date"]
+
+
+def test_미패딩_거래일과_결측_시각도_격리한다(tmp_path, monkeypatch):
+    # WHY: 둘 다 '통과할 것 같은데 통과하면 안 되는' 값이다. "2026-8-5" 는 strptime 을
+    #      통과하지만 canonical 에선 "2026-08-05" 와 다른 후보 키이면서 DATE 로는 같은 값이라,
+    #      뒤에 온 불량 행이 최신성 판정을 우회해 정상 값을 덮는다. fetched_at 결측은 실행
+    #      시각으로 대체하면 관측 가능 시각을 지어내면서 손상까지 정상 적재로 집계된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(trade_date="2026-8-5")], trade_date="2026-8-5")
+    _write_canonical(storage, [_flow_row(trade_date="2026-08-06", fetched_at=None)],
+                     trade_date="2026-08-06")
+    _write_canonical(storage, [_flow_row()])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    assert [p[1] for p in _inserts(conn)] == ["2026-08-05"]
+    log = _log(storage)
+    assert sorted(v["reason"] for v in log["load_violations"]) == [
+        "bad_available_at", "bad_trade_date"]
+
+
+def test_파티션과_어긋난_행은_적재하지_않는다(tmp_path, monkeypatch):
+    # WHY: 로더는 **파티션**으로 시장(MIC 집합)을 고르고 **행**의 trade_date 를 적재한다.
+    #      둘이 어긋난 행을 그냥 쓰면 다른 시장 수급이 KR 종목에 붙고, 행 날짜가 --from/--to
+    #      창 밖이어도 적재돼 창 계약이 조용히 깨진다. 정상 경로엔 없는 조합이다(정제가 행
+    #      값으로 파티션을 정한다) — 어긋났다면 손상이므로 드러내야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row(), _flow_row(ticker="000660", market="US"),
+                               _flow_row(ticker="000660", trade_date="2026-08-04")])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+
+    assert [p[1] for p in _inserts(conn)] == ["2026-08-05"]
+    assert _log(storage)["skipped_missing_identity"] == 2
+
+
+def test_BIGINT_를_넘는_수량과_비문자열_시각은_격리한다(tmp_path, monkeypatch):
+    # WHY: 손상 canonical 의 과대 수량은 `_is_int` 를 통과하지만 BIGINT 범위를 넘어 INSERT 가
+    #      죽고, 정수 available_at 은 str() 로 감싸 검사하면 통과한 뒤 **원래 정수**가
+    #      TIMESTAMPTZ 에 바인딩된다(검사한 값과 넣는 값이 다르다). 둘 다 런 전체를 롤백시킨다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, [_flow_row()])
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+    assert step.run(storage, "R1", db=_db()) == 0
+    assert len(_inserts(conn)) == 1
+
+    # parquet 스키마가 못 담는 값이라 canonical 을 거치지 않고 게이트를 직접 친다.
+    assert step._load_violation(
+        {**{c: 1 for c in _NET}, "net_qty_total_est": 2**63, "available_at": "2026-08-05T00:00:00+00:00"},
+        "2026-08-05") == "out_of_range"
+    assert step._load_violation(
+        {**{c: 1 for c in _NET}, "available_at": 20260805}, "2026-08-05") == "bad_available_at"
+
+
+def test_최신_판정이_오프셋_다른_시각을_실제로_비교한다(tmp_path, monkeypatch):
+    # WHY: 같은 키가 여러 part 에 걸리면 최신값이 이겨야 한다(정정 정책). 문자열로 비교하면
+    #      '+09:00' 표기가 '+00:00' 보다 항상 크게 읽혀, **더 오래된 추정치가 DB 에 남는다** —
+    #      벤더 정정이 조용히 무시되는 형태라 값만 보고는 알 수 없다.
+    storage = LocalStorage(tmp_path / "lake")
+    # 01:00Z(옛것) — 문자열로는 '10:00…' 이라 더 커 보인다
+    _write_canonical(storage, [_flow_row(net_qty_total_est=111,
+                                         fetched_at="2026-08-05T10:00:00+09:00")])
+    # 02:00Z(새것)
+    _write_canonical(storage, [_flow_row(net_qty_total_est=222,
+                                         fetched_at="2026-08-05T02:00:00+00:00")],
+                     part="part-00001")
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db()) == 0
+    [params] = _inserts(conn)
+    assert params[5] == 222
