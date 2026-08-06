@@ -245,6 +245,18 @@ def run(
             text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — 통계 표면 부재 — "
                     f"{type(exc).__name__}: {str(exc)[:160]}")
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
+    # **커버리지를 읽는 소비자를 만든다.** `layers`·`duck` 은 로깅을 모르고 경로와 폴백
+    # 사유를 `exists`/`unbound` 에만 적는다 - "커버리지 보고가 곧 '어떻게 쟀는가' 다"
+    # (`_series` 주석). 그런데 그 딕셔너리를 아무도 읽지 않아, 2026-08-06 하루 동안
+    # 다음을 전부 추측으로 다뤘다: 5분봉을 Iceberg 로 읽었나 canonical 합집합으로
+    # 읽었나 · Athena 로 집계했나 DuckDB 로 폴백했나(그 사유는 무엇인가) · 층 분해가
+    # 왜 None 인가.
+    #
+    # 성공·실패 어느 쪽으로 끝났든 찍는다 - 폴백은 **성공한 런에서** 일어나므로
+    # 예외 경로에만 두면 정작 봐야 할 것을 못 본다.
+    log("statics.coverage",
+        exists=_redacted(getattr(lake, "exists", {})),
+        unbound=_redacted(getattr(lake, "unbound", {})))
     trace_manifest = write_agent_trace(s3, settings, trace)
     if trace_manifest is None:
         # **관측 부재가 설명을 버리지 않는다** - `trace.py` 의 계약이 그것이다("쓰기 실패·
@@ -305,6 +317,27 @@ def run(
     })
     log("done", route=route_code, events=len(events), **outcome)
     return 0
+
+
+_DSN_SECRET = re.compile(
+    r"(password\s*=\s*)('[^']*'|\"[^\"]*\"|\S+)"   # 키워드형 (따옴표 안 공백 포함)
+    r"|(?<=://)([^:/@\s]*:)[^@\s]+(?=@)",          # URI 형 [user]:pass@host (사용자명 생략 가능)
+    re.IGNORECASE)
+
+
+def _redacted(notes: dict) -> dict:
+    """커버리지 값의 자격증명을 가린다 — **2차 방어**다.
+
+    커버리지는 부재를 예외 전문 그대로 담는다(침묵 금지). 그 문자열에 DSN 이 섞일 수 있는
+    유일한 지점은 `CausalLake._rdb` 이고, **보증은 거기서 한다** — 지울 문자열을 손에 쥐고
+    있으니 정확히 지운다(`str(e).replace(dsn, …)`).
+
+    여기는 그 뒤를 받치는 그물이다. 정규식으로 안전을 주장하지 않는다(`adapters/readonly.py`
+    가 같은 말을 한다: 안전은 앞 층이 담당하고 마지막 층은 사용성이다) — 새 원천이 생겨도
+    자격증명이 한 겹은 걸리게 두는 것이 목적이다.
+    """
+    return {k: _DSN_SECRET.sub(lambda m: (m.group(1) or "") + (m.group(3) or "") + "***", v)
+            if isinstance(v, str) else v for k, v in notes.items()}
 
 
 def _persist_explanation(

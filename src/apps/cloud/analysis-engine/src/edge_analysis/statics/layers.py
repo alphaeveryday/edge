@@ -213,6 +213,23 @@ FROM b JOIN k ON k.symbol = b.sym WHERE b.lr IS NOT NULL GROUP BY b.sym
 """
 
 
+def _absent(lake, key: str, why: str) -> None:
+    """부재 사유를 커버리지에 적는다 — 아래 `_series` 의 `exists["clock_panel"]` 과 같은 자리.
+
+    이 모듈은 로깅을 모른다(`exists` 기록이 관례고 소비는 호출자 몫이다).
+
+    **`unbound` 이 아니라 `exists` 다.** `unbound` 는 `표 → 못 묶은 사유` 라 키가 표 이름이고
+    소비자가 그 전제를 쓴다 — `bind_day()` 는 `len(bound) - len(unbound)` 로 바인딩 수를 세고
+    `coverage()` 는 "생성 실패" 로 인쇄한다. 합성 키를 넣으면 개수가 어긋나고 표본 부족이
+    표 생성 실패로 읽힌다. `exists` 는 이미 표가 아닌 축(`s3`·`rdb`·`clock_panel`)을 담는다.
+
+    대역 레이크는 그 딕셔너리가 없을 수 있어 방어한다 — **관측이 본업을 무너뜨리면 안 된다.**
+    """
+    notes = getattr(lake, "exists", None)
+    if notes is not None:
+        notes[key] = why
+
+
 def _series(lake, day: str, kinds: tuple[str, ...],
             *, clock: tuple[str, str] | None = None,
             only: str | tuple[str, ...] | None = None) -> dict[str, tuple]:
@@ -441,6 +458,12 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     '섹터가 없음' 이 아니다 - 호출자가 그 구분을 적어야 한다.
     """
     d0 = dt.date.fromisoformat(day)
+    # 이번 호출의 판정으로 덮는다. 한 런이 `decompose` 를 두 번 부르므로(라우팅·설명)
+    # 앞 호출의 실패가 남으면 뒤 호출이 성공해도 커버리지가 실패를 말한다 — 부재를
+    # 안 지우는 것은 부재를 지어내는 것과 같다.
+    notes = getattr(lake, "exists", None)
+    if notes is not None:
+        notes.pop("layers", None)
     ser = _series(lake, day, ("market", "sector"), clock=clock)
     # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다. `kinds` 에 'stock' 을 넣으면
     # 856 종목이 섹터 후보가 되어 겹침 게이트가 종목마다 질의를 돌고, 무엇보다
@@ -449,11 +472,18 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
         tgt = _series(lake, day, ("stock",), clock=clock, only=etf)
         if etf in tgt:
             ser = {**ser, etf: tgt[etf]}
+    # **부재를 침묵으로 남기지 않는다.** 아래 `None` 은 둘 다 정상 반환값이지만 처방이
+    # 다르다 - 재료가 없는 것은 적재 일감이고, 표본이 모자란 것은 창·유니버스 문제다.
+    # 지금은 호출자가 둘을 구분할 방법이 없어 `layer_route=미상` 하나로 뭉개진다
+    # (2026-08-06 장중 전 런). 이 모듈은 로깅을 모르므로 커버리지에 적고 소비는 호출자 몫이다.
     if etf not in ser or d0 not in ser[etf][1]:
+        _absent(lake, "layers", f"대상 계열 부재 ({etf})" if etf not in ser
+                else f"대상 계열에 당일 없음 ({etf} {day})")
         return None
     tmap = ser[etf][1]
     hist = sorted(d for d in tmap if d < d0)[-BETA_WINDOW:]
     if len(hist) < MIN_BETA_N:
+        _absent(lake, "layers", f"β 표본 부족 ({etf} {len(hist)} < {MIN_BETA_N})")
         return None
     y, y_now = np.array([tmap[d] for d in hist]), float(tmap[d0])
 

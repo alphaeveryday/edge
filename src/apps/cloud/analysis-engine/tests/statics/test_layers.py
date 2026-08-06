@@ -5,8 +5,8 @@ import re
 import numpy as np
 import pytest
 
-from edge_analysis.statics.layers import (MARKET_CODE, Rollup, decompose, overlap,
-                                          residual_rho)
+from edge_analysis.statics.layers import (MARKET_CODE, MIN_BETA_N, Rollup, decompose,
+                                          overlap, residual_rho)
 
 DAYS = [dt.date(2026, 1, 1) + dt.timedelta(d) for d in range(90)]
 
@@ -79,6 +79,69 @@ def test_layer_sum_plus_idio_equals_total_exactly():
     r = decompose(_lake(sector_beta=0.8), "T", _day())
     assert r is not None
     assert sum(x.contribution for x in r.layers) + r.idio == pytest.approx(r.total, abs=1e-12)
+
+
+def test_decompose_records_why_it_returned_none():
+    """`None` 은 정상 반환값이지만 **침묵이면 안 된다.**
+
+    재료 부재("대상 계열이 없다")와 표본 부족("β 창이 안 찬다")은 처방이 다른데 지금은
+    같은 `None` 이다. 2026-08-06 장중에 전 런이 `layer_route=미상` 이었는데 왜인지
+    로그로 못 봤다. 이 모듈은 로깅을 모르므로 `exists` 에 적고 소비는 호출자가 한다.
+    """
+    lake = _lake(sector_beta=0.8)
+    lake.exists = {}
+
+    assert decompose(lake, "없는종목", _day()) is None
+    assert "없는종목" in lake.exists["layers"]
+
+
+def test_decompose_distinguishes_short_history_from_missing_series():
+    """두 `None` 은 처방이 다르다 — 재료 부재는 적재 일감, 표본 부족은 창·유니버스 문제다.
+
+    한쪽만 사유를 남기면 운영에서 둘을 못 가른다. `MIN_BETA_N` 미달 경로도 말해야 한다.
+    """
+    lake = _lake()
+    lake.exists = {}
+    for m in lake.series.values():
+        m["ret"] = m["ret"][:10]
+
+    assert decompose(lake, "T", DAYS[10].isoformat()) is None
+    assert "표본 부족" in lake.exists["layers"]
+    assert str(MIN_BETA_N) in lake.exists["layers"]
+
+
+def test_decompose_does_not_pollute_unbound_which_counts_tables():
+    """사유를 `unbound` 에 넣으면 안 된다 — 거긴 `표 → 못 묶은 사유` 이고 소비자가 있다.
+
+    `duck.bind_day()` 는 `len(bound) - len(unbound)` 로 바인딩 수를 세고 `coverage()` 는
+    "생성 실패" 로 인쇄한다. 합성 키가 끼면 개수가 어긋나고 표본 부족이 표 생성 실패로 읽힌다.
+    """
+    lake = _lake(sector_beta=0.8)
+    lake.exists, lake.unbound = {}, {}
+
+    assert decompose(lake, "없는종목", _day()) is None
+    assert lake.unbound == {}
+
+
+def test_a_later_success_clears_an_earlier_absence():
+    """한 런이 `decompose` 를 두 번 부른다(라우팅·설명).
+
+    앞 호출의 실패가 남으면 뒤 호출이 성공해도 커버리지가 실패를 말한다 — 부재를 안 지우는
+    것은 부재를 지어내는 것과 같다.
+    """
+    lake = _lake(sector_beta=0.8)
+    lake.exists = {}
+
+    assert decompose(lake, "없는종목", _day()) is None
+    assert "layers" in lake.exists
+
+    assert decompose(lake, "T", _day()) is not None
+    assert "layers" not in lake.exists
+
+
+def test_decompose_tolerates_a_lake_without_coverage_dicts():
+    """대역 레이크(`exists` 없음)에서도 죽지 않는다 — 관측이 본업을 무너뜨리면 안 된다."""
+    assert decompose(_lake(sector_beta=0.8), "없는종목", _day()) is None
 
 
 def test_market_layer_always_enters_first():
