@@ -330,6 +330,16 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
             # explanation JSON 을 반환하므로 인과 하네스(설계 제안 계약)와 맞지 않는다.
             # 인과 경로 e2e 는 ALPHA-620/622 소관(공인 OFF 모드, config.py 주석 참조).
         )
+        # 통계 표면 산출을 주입한다. 이 픽스처엔 **5분봉이 없고**(로컬 백필에 `bars/` 가
+        # 없고 CI 엔 S3 자격증명도 없다) 합성 이력으로는 어느 검정도 못 세운다 — 위
+        # 주석이 이미 그렇게 적었다. 그대로 두면 `run_statics` 가 표면 부재로 죽고,
+        # ALPHA-795 이후 그런 런은 **게시도 발번도 하지 않아** 이 골든패스가 지키려는
+        # 계보(게시 → 전 테넌트 outbox)를 통째로 못 밟는다.
+        #
+        # 그래서 statics 를 흉내내지 않고 **경계로 취급해** 고정 산출을 준다 — S3·LLM 을
+        # fake 로 두는 것과 같은 축이다. 표면 부재 자체의 계약은 단위 테스트가 지킨다.
+        monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                            lambda *_a, **_k: "[ETF] 091160 시장 주도 · e2e 고정 산출")
         store = EventStore.connect(settings)
         try:
             assert run(settings, lake=LakeReader(s3, settings.lake_bucket),
