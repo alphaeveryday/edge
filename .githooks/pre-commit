@@ -3,7 +3,8 @@
 #
 # 활성화(클론당 1회):  git config core.hooksPath .githooks
 # 의존: PostgreSQL 18 (initdb·pg_ctl·psql, PATH 에 있어야 함).
-# 재생성 실패(도구 없음 등) 시 커밋을 막지 않고 경고만 한다 — ERD 는 낡은 채 남을 수 있다(훅은 강제성 없음).
+# 재생성 실패(도구 없음 등) 시 커밋을 막지 않고 경고만 한다 — 이 훅은 편의이고 강제성이 없다.
+# 집행은 CI 가 한다(ALPHA-783): schema-validate 가 PR 에서 재생성해 커밋본과 대조하고 어긋나면 빨간불.
 set -uo pipefail
 
 # 마이그레이션이 스테이징됐을 때만 동작한다(일반 커밋은 즉시 통과 — 매 커밋마다 DB 를 띄우지 않음).
