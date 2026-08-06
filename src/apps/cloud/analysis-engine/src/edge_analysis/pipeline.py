@@ -163,8 +163,10 @@ def run(
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
-    lake = causal_lake if causal_lake is not None else CausalLake()
     day_iso = settings.trade_date.isoformat()
+    # 거래일을 **레이크 구성 시점에** 넘긴다 - 5분봉 정본(Iceberg)이 이 날을 담고 있는지
+    # 를 거기서 판정하고, 못 담으면 canonical 합집합으로 내려간다(`iceberg_covers`).
+    lake = causal_lake if causal_lake is not None else CausalLake(day=day_iso)
 
     # 분봉 트리거는 **구간 모드**로 층을 가른다. 하루 모드는 당일 일봉을 요구하는데
     # (`decompose` 는 `d0` 가 계열에 없으면 None) 확정 일봉은 마감 뒤에 나온다 - 장중엔
