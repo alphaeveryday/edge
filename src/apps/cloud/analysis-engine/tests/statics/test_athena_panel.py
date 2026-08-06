@@ -139,6 +139,31 @@ def test_kinds_are_recorded_in_the_query_so_cost_can_be_attributed_later():
     assert "kinds=market,sector" in sql and "1심볼" in sql
 
 
+def test_panel_bounds_the_history_so_the_row_cap_is_not_blown():
+    """상한만 걸면 표 전체(2022-11~)를 긁는다.
+
+    실측(2026-08-05 · query d100beea): 198심볼 × ~800거래일 = **159,572행**으로
+    `MAX_RESULT_ROWS`(100,000)를 넘겨 `ResultTooLarge` 가 났고, 그 예외는 일부러 안
+    잡히므로 런이 `판정불가 — 통계 표면 부재` 로 통째로 떨어졌다.
+
+    필요한 이력은 `BETA_WINDOW`(60거래일)뿐이다. 행 수는 심볼 × 날짜 축이라 **시각창을
+    좁혀도 안 줄어든다** - 줄일 수 있는 축은 날짜다.
+    """
+    sql = athena.panel_sql(DAY, KINDS, T0, T1, ("005930",))
+    where = sql.split("WHERE", 1)[1].split("GROUP BY", 1)[0]
+    assert f"trade_date <= DATE '{DAY}'" in where
+    assert "trade_date >= DATE" in where
+    # 60거래일을 채울 만큼은 남긴다 - 짧으면 MIN_BETA_N(40) 미달로 층이 조용히 빠진다.
+    # 주말·공휴일을 감안하면 60거래일에 최소 ~88 달력일이 든다.
+    assert athena.LOOKBACK_DAYS >= 88
+
+
+def test_lookback_is_overridable_per_call():
+    """창을 넓혀야 하는 질의(긴 β)가 생겨도 상수를 고치지 않는다."""
+    sql = athena.panel_sql(DAY, KINDS, T0, T1, ("005930",), lookback_days=7)
+    assert "INTERVAL '7' DAY" in sql
+
+
 def test_table_and_database_are_env_overridable(monkeypatch):
     monkeypatch.setenv("EDGE_ATHENA_DB", "other_db")
     monkeypatch.setenv("EDGE_ATHENA_BARS_TABLE", "other_table")
