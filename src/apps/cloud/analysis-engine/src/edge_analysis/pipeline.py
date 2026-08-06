@@ -200,13 +200,18 @@ def run(
     # `explanation_run` 을 안 남겨 소비자의 멱등 프리플라이트(`has_run_for_route`)가
     # 영영 false 로 남고, 재배달이 같은 트리거에 LLM 을 다시 태운다(#554 리뷰).
     #
-    # ⚠️ **EOD 레인의 폭발 반경이 여기서 바뀐다.** 세 전제 중 `profile` 만 종목별이라
-    # (나머지 둘은 런 전역), 신규 ETF 를 유니버스에 넣고 `etf_profile` 을 안 채우면 그
-    # 한 종목의 비0 종료가 `AnalysisResultCheck`(전량성공 게이트, ADR-0028)를 통해
-    # **유니버스 일일 런 전체**를 실패로 만든다. 이전에는 그 종목만 S3 로 새고 런은
-    # 초록이었다 - 그게 관대한 쪽 오류였다. 설명이 없는 ETF 가 조용히 초록에 묻히면
-    # 아무도 안 채운다. `holdings` 빈·수익률 미착지가 이미 같은 축으로 죽으므로
-    # `profile` 만 예외였던 것을 일반 규칙에 맞춘 것이다(Rule 12).
+    # ⚠️ **EOD 레인의 폭발 반경이 여기서 바뀐다.** 셋 중 결손이 실제로 갈리는 건
+    # `profile` 뿐이다 - `route` 는 종목별이되 바로 위가 방금 커밋해 결손이 구조적으로
+    # 불가능하고, `bundle` 은 런 전역이다. 그래서 신규 ETF 를 유니버스에 넣고
+    # `etf_profile` 을 안 채우면 그 한 종목의 비0 종료가 `AnalysisResultCheck`(전량성공
+    # 게이트, ADR-0028)를 통해 **유니버스 일일 런 전체**를 실패로 만든다.
+    #
+    # 이전에는 그 종목만 S3 로 새고 런은 초록이었다 - 그게 관대한 쪽 오류였다. 설명이
+    # 없는 ETF 가 조용히 초록에 묻히면 아무도 안 채운다. 대가는 의식적으로 받는다:
+    # profile 결손은 데이터가 아니라 **사람이 채우는 마스터**라 자기치유가 없고, 채울
+    # 때까지 일일 런이 매일 빨갛다. 같은 종류의 선례가 바로 이 파일에 이미 있다 -
+    # `resolve_etf_instrument` 결손도 종목 하나로 런을 죽인다(ALPHA-467). `holdings`
+    # 빈은 선례로 못 쓴다: 그건 매일 적재되는 데이터라 다음날 자연 복구된다(Rule 12).
     prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
     missing = [key for key, value in prereqs.items() if not value]
     if missing:
