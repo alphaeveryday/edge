@@ -1,8 +1,8 @@
 """run 오케스트레이션 테스트.
 
 의존성을 fake 로 주입해 I/O 가 아니라 제어 흐름을 고정한다: 트리거 없는 날은 분석
-없이 잔잔히 종료하고, 트리거 있는 날은 설명을 영속하며, FK 전제가 없는 날은 고아
-행을 넣는 대신 S3 로 폴백한다.
+없이 잔잔히 종료하고, 트리거 있는 날은 설명을 영속하며, FK 전제가 없는 날은 LLM 을
+태우기 전에 선다.
 """
 
 import json
@@ -198,15 +198,29 @@ def test_absent_trace_does_not_discard_the_explanation(monkeypatch):
     assert store.explanation.raw["stage_results"]["analysis_trace"] is None
 
 
-def test_missing_prerequisites_fall_back_to_s3():
+def test_missing_prerequisites_abort_before_the_llm(monkeypatch):
+    """영속 전제 결손은 **LLM 을 태우기 전에** 런을 세운다(ALPHA-797).
+
+    전제(profile·route·bundle)는 셋 다 LLM 앞에서 확정된다 — 뒤에서 검사하면 결손을
+    **과금한 뒤에야** 알게 되고, 그러면 결과를 버리기 아까워 S3 로 접게 된다. 그 폴백이
+    `explanation_run` 을 안 남기므로 소비자의 멱등 프리플라이트(`has_run_for_route`)가
+    영영 false 로 남고, 재배달이 같은 트리거에 LLM 을 다시 태운다(#554 리뷰 P2).
+
+    그래서 단언의 무게는 반환값이 아니라 **`run_statics` 가 안 불린 것**에 있다 —
+    검사를 영속 시점으로 되돌리면 이 단언만 깨진다.
+    """
+    import edge_analysis.statics.etfcell as etfcell
+
+    burned: list[str] = []
+    monkeypatch.setattr(
+        etfcell, "run", lambda *a, **k: (burned.append("llm"), "")[1])
     store = _FakeStore(trigger=_TRIGGER, prereqs={"profile": False, "route": None, "bundle": None})
     s3 = _FakeS3()
 
-    assert _run(store, s3) == 0
+    with pytest.raises(PipelineError, match="설명 영속 전제가 없다"):
+        _run(store, s3)
+    assert burned == []                              # LLM 미호출 — 과금 없음
     assert "persist_explanation" not in store.calls  # 고아 RDS 행 없음
-    keys = [p["Key"] for p in s3.puts]
-    assert any("/runs/" not in k for k in keys)  # 설명 S3 폴백
-    assert any("/runs/" in k for k in keys)      # 런 아카이브
 
 
 def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch):
