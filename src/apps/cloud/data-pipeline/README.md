@@ -521,6 +521,18 @@ PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서를 
 돌게 된 지금은 창 밖으로 밀린 canonical 을 자동으로 주워올 경로가 그것뿐이다. 특히 아래
 issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
 
+**장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`, ALPHA-769)도 같은 형태다 —
+`CollectKisInvestorEstimate → NormalizeInvestorEstimate → LoadInvestorIntraday` 를 평일 5슬롯
+(09:35·10:05·11:25·13:25·14:35 KST)으로 돈다. **다만 컷오버가 아니라 신설이다**: 이 3스텝은
+시장 SFN 이 한 번도 돈 적이 없어(ALPHA-767·768 이 층만 만들고 배선을 안 붙였다) 두 레인이 같은
+스텝을 동시에 소유하는 겹침 창이 없고, 그래서 스케줄을 처음부터 ENABLED 로 세웠다. 슬롯 수는
+우리가 고른 게 아니라 소스가 정한다 — 벤더 갱신이 하루 4~5회뿐이고 유형별로 시각이 갈려
+합집합이 5개다(+5분은 정각 반영 지연이 미관측이라 둔 여유).
+
+⚠️ 이 레인의 `LoadInvestorIntraday` 도 **창 없이 돈다** — 공시와 같은 이유(풀스캔이 백로그 회수
+경로)이고, 그 때문에 **공휴일에도 실일을 한다**. 원장 카탈로그에서 이 작업만
+`kr_trading_calendar=False` 인 근거가 그것이다(수집·정제는 비거래일에 대상 자체가 없어 True).
+
 ⚠️ **컷오버가 필요한 이유는 성능이 아니라 원장 정체성이다.** 작업 정체성의 정본은
 `catalog.by_cli(step, source)` 인데 두 레인의 CLI 가 글자 그대로 같아(`ingest-raw-disclosure`
 등), 같은 스텝을 두 레인이 동시에 소유하면 `by_cli` 가 먼저 온 쪽을 돌려줘 장중 런의 attempt
@@ -596,15 +608,21 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
     (`kis` task-def 에도 주입). 이 skip 은 **정상 상태**라 raw-ingest-skipped 알람 토큰을 쓰지
     않는다 — 드러남은 collection_log 가 맡는다.
 - `ingest-raw-investor-estimate`(종목별 **장중** 투자자 추정, **kis 세트** — EOD 투자자 수급과
-  같은 앱키·같은 유니버스, ALPHA-767) — **SFN 에 편입돼 있지 않다.** 레인 신설은 ALPHA-769
-  소관이라 그전까지는 손으로 돌릴 때만 수집된다. dataset 은 `investor_flow_intraday` 로
+  같은 앱키·같은 유니버스, ALPHA-767) — **장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`,
+  평일 5슬롯 09:35·10:05·11:25·13:25·14:35 KST)의 raw 스텝이다(ALPHA-769). dataset 은 `investor_flow_intraday` 로
   EOD(`investor_flow_daily`)와 **갈라 둔다** — 값이 가집계 추정(`*_fake_*`)이고 시간축이
   거래일이 아니라 그날의 슬롯(`bsop_hour_gb`)이라, 한 데이터셋에 섞으면 소비자가 잠정과
   확정을 구분할 수 없다.
   - EOD(`FHPTJ04160001`)와 **tr_id·파라미터가 갈린다**: 장중은 `HHPTJ04160200` 이고 종목코드
     하나(`MKSC_SHRN_ISCD`)만 받는다 — 날짜 파라미터가 아예 없다.
   - **갱신은 하루 4회**(외국인 09:30·11:20·13:20·14:30 / 기관 10:00·11:20·13:20·14:30) —
-    합집합 5슬롯이 ALPHA-769 스케줄의 근거다.
+    합집합 5슬롯이 레인 스케줄의 근거다.
+  - ⭐ **응답이 누적이다**(2026-08-06 dev 실측): 한 콜이 그날 슬롯 **전부**를 준다(14:51 한 번에
+    325종목 1,574행 = 종목당 최대 5행). 그래서 슬롯을 하나 놓쳐도 다음 슬롯이 회수하고, 레인이
+    `retry 0` 을 쓰는 근거가 된다. 슬롯 필드 `bsop_hour_gb` 의 도메인도 같은 실측에서 **`"1"`~
+    `"5"` 한 자리 코드**로 확인됐다(`"0930"` 같은 시각 문자열이 아니다 — 슬롯 1 은 기관값이
+    284/284 전건 0이라 09:30 외국인 갱신에 대응한다). 값은 장 시작부터의 **누적 순매수**라
+    슬롯 간 차분이 그 구간의 순매수이고, 거래가 없던 종목은 그 슬롯 행이 아예 없다.
   - ⚠️ **ETF 자체는 0행이다.** 거래소가 ETF 의 장중 투자자 귀속을 생산하지 않는다(KIS 장중
     투자자 4종 전수조사로 확정). 우리 유니버스는 ETF **구성종목**(개별주식)이라 적용되지만,
     holdings 유니버스에 섞여 오는 ETF 자신은 빈 응답이 정상이다.
@@ -613,20 +631,22 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
   - **기준일 가드**: 응답에 날짜 필드가 없어 거래일을 수집 시각(KST)으로 붙이는데, 비거래일·
     개장 전에 KIS 가 직전 슬롯을 주면 어제 데이터가 오늘 거래일로 굳는다(위 iNAV·ALPHA-387 과
     같은 함정). 그래서 **거래일이고 첫 슬롯(09:30 KST) 이후**일 때만 수집한다.
-  - ⚠️ **가드 처리 방식이 iNAV 와 다르다 — ALPHA-769 에서 정할 결정이다.** iNAV 는
-    `skip_reason` 으로 `status=skipped`(정상 상태) 마감인데, 이 스텝은 예외를 올려
-    `status=error`·exit 1 이 된다(`ingest_raw_investor` 스텝에 `skip_reason` 기제가 없다).
-    지금은 수동 실행뿐이라 "못 돌 시각에 돌렸다"를 시끄럽게 드러내는 편이 맞지만, ALPHA-769
-    가 평일 cron 을 켜면 **공휴일마다 런이 FAILED** 로 마감된다 — 그때 iNAV 규약(skip)으로
-    맞출지 함께 결정한다.
-  - **뒤 두 스텝도 SFN 밖이다**(ALPHA-768): `normalize-investor-estimate`(raw → canonical
+  - **가드는 iNAV 와 같은 `skip_reason` 규약이다**(ALPHA-769 에서 통일). 못 돌 시각이면
+    `status=skipped`·exit 0 으로 마감하고 사유를 collection_log 에 남긴다. 종전엔 예외를 올려
+    `status=error`·exit 1 이었는데, 레인이 **평일 cron** 이라 그대로 두면 공휴일마다 런이
+    FAILED 여서 예정된 무산출과 진짜 고장이 구분되지 않는다. 기제는 공유 스텝
+    (`ingest_raw_investor`)에 심었고 EOD 어댑터엔 이 속성이 없어 동작이 불변이다. 어댑터의
+    `fetch` 는 여전히 같은 사유로 raise 한다 — **직접 호출자**를 위한 것이고, 조건은
+    `skip_reason` 하나가 정본이라 두 경로가 갈릴 수 없다.
+  - **뒤 두 스텝도 같은 레인이다**(ALPHA-768·769): `normalize-investor-estimate`(raw → canonical
     `investor_flow_intraday`) → `load-investor-intraday`(→ 동명 테이블). EOD 체인
     (`normalize-investor` → `load-etf-flow`)과 스텝을 **복제하지 않고 갈랐다** — 정체성 키에
     `asof_slot` 이 붙어 병합 키·PK·창 프루닝이 전부 달라 인자로 갈아끼울 수 없다(수집 스텝은
-    저장 위치만 달라 인자로 갈랐던 것과 대조). 세 스텝을 손으로 이어 돌리면 체인이 닫힌다
+    저장 위치만 달라 인자로 갈랐던 것과 대조). 레인이 자동으로 돌리지만 세 스텝을 손으로 이어
+    돌려도 체인이 닫힌다 — 복구·검증용이다
     (`src/` 에서. 수집은 KIS 앱키, 적재는 DB 접속이 필요하다 — 위 각 절의 env 와 같다):
     ```bash
-    # 수집 — 거래일이고 09:30(KST) 이후일 때만. 아니면 라벨을 못 붙여 죽는다
+    # 수집 — 거래일이고 09:30(KST) 이후일 때만. 아니면 사유를 남기고 skip(exit 0)한다
     DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET=... \
       uv run --package data-pipeline python -m data_pipeline.run ingest-raw-investor-estimate
     # 정제 — --input-run-id 로 한 슬롯 런만 좁힐 수 있다(미지정=전체 raw, 멱등)
@@ -947,10 +967,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 27작업 =
-  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4**(ALPHA-724 가
-  공시 4작업의 소유 레인을 옮겼다 — 총계는 그대로)(ECS Task state 33개 중 — 시장 SFN 31 +
-  뉴스 SFN 직렬 2. ALPHA-181 → 578 → 553 PR2 → 591). 레인은 `CatalogEntry.pipeline_type` 축이고
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4 + 장중 수급 레인
+  (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
+  ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
+  늘어난다)(ECS Task state 36개 중 — 시장 SFN 31 + 뉴스 SFN 직렬 2 + 장중 수급 3.
+  ALPHA-181 → 578 → 553 PR2 → 591 → 769). 레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
   `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외는 ① `fmp` 수집
