@@ -114,6 +114,17 @@ locals {
           "athena:StartQueryExecution",
           "athena:GetQueryExecution",
           "athena:GetQueryResults",
+          # 타임아웃 중단. `statics/athena.py` 의 `_wait` 가 상한을 넘기면
+          # `stop_query_execution` 을 부르고 **실패를 삼킨다** — 권한이 없으면 원 질의는
+          # 계속 스캔되는데 DuckDB 폴백까지 돌아 비용·부하가 겹친다(조용히).
+          #
+          # ⚠️ 받아들인 비용: 이 액션의 **최소 리소스 단위가 워크그룹**이다(Athena 는
+          # query id 단위 ARN 이 없다). 그런데 `market_data` 는 공용이라 canonical
+          # 적재기도 같은 워크그룹을 쓴다(`data_pipeline/canonical/athena.py`
+          # `WORKGROUP` 기본값). 즉 이 역할은 **남의 질의도 중단할 수 있다** — query id
+          # 를 알아야 하지만 로그에 남는다. 더 좁힐 방법은 워크그룹 분리뿐이고, 그건
+          # 이 모듈 밖(버킷·워크그룹은 terraform 관리 밖)이라 여기서 할 수 없다.
+          "athena:StopQueryExecution",
         ]
         Resource = [
           "arn:aws:athena:${var.region}:${data.aws_caller_identity.current.account_id}:workgroup/${var.analysis_athena_workgroup}",
@@ -121,14 +132,38 @@ locals {
       },
       {
         # 표 데이터 스캔. glue:Get* 는 "이 표가 어디 있나" 까지만 답한다.
+        #
+        # `s3:GetBucketLocation` 은 **결과 위치 해석**에 든다 — Athena 는 질의 제출 시
+        # 출력 버킷의 리전을 호출자 자격으로 확인한다. 워크그룹이 결과 위치를 강제해도
+        # (`Enforce=True`) 그 확인은 호출자 몫이라 없으면 제출 자체가 AccessDenied 다.
+        # 여기 붙이는 이유: 강제된 결과 위치가 이 표버킷의 `athena-results/` prefix 라
+        # 대상 버킷이 같다(아래 PutObject 문장과 같은 버킷).
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Action   = ["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation"]
         Resource = [var.analysis_market_data_bucket_arn, "${var.analysis_market_data_bucket_arn}/*"]
       },
       {
         # 결과 CSV 쓰기. 위치는 워크그룹이 강제하므로 prefix 를 그 규약에 맞춘다.
-        Effect   = "Allow"
-        Action   = ["s3:PutObject"]
+        #
+        # multipart 두 액션이 함께 든다 — Athena 는 결과를 multipart upload 로 쓴다
+        # (AWS 표준 Athena 정책이 `PutObject` 와 같이 싣는 짝). 없으면 실패가 조용하다:
+        # 쓰기 AccessDenied 는 `AthenaUnavailable` 로 접혀 DuckDB 폴백(질의당 376.4MB)
+        # 으로 내려간다.
+        #
+        # `athena.py` 의 `MAX_RESULT_BYTES`(32MB)는 **이 업로드를 막지 못한다** — 그
+        # 검사는 질의가 끝나 결과가 S3 에 다 쓰인 뒤에 크기를 보고 거절하는 것이라,
+        # 상한을 넘는 결과도 일단 올라간다. 즉 파트 수를 상한으로 가늠하면 안 된다.
+        #
+        # ⚠️ `AbortMultipartUpload` 는 **정리를 보장하지 않는다** — 중단이 호출됐을 때
+        # 조각을 지울 수 있게 할 뿐이다. 실패·취소 후 남는 미완료 업로드는 버킷
+        # lifecycle 의 abort 규칙이 치우는 것이 AWS 권고인데, 이 버킷은 terraform
+        # 관리 밖이라 그 규칙의 유무를 여기서 알 수 없다(보관 비용은 남을 수 있다).
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:ListMultipartUploadParts",
+          "s3:AbortMultipartUpload",
+        ]
         Resource = ["${var.analysis_market_data_bucket_arn}/athena-results/*"]
       },
     ]
