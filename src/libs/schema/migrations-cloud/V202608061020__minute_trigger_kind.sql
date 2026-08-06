@@ -7,9 +7,14 @@
 --
 -- 그래서 회수도 이 테이블에 행으로 남긴다. 구간 시작 = "이 종목·세션에서 이번 window
 -- 앞의 가장 최근 행"(종류 무관) 한 질의로 나온다. 이것은 이 테이블을 **직접 때리는 새
--- 조회 표면**이다 — 기존 소비자(`eventstore.find_published_minute_run_ids`)는 관측을
--- 거쳐 닿으므로 회수 행을 구조적으로 못 보고, 구간 질의를 대신하지 못한다. 다만 술어가
--- `uq_minute_price_trigger_window` 로 서빙되므로 인덱스는 새로 필요 없다.
+-- 조회 표면**이다 — 관측을 거쳐 닿는 소비자(`eventstore.find_published_minute_run_ids`·
+-- window 후보 질의)는 회수 행을 구조적으로 못 보므로 구간 질의를 대신하지 못한다. 다만
+-- 술어가 `uq_minute_price_trigger_window` 로 서빙되므로 인덱스는 새로 필요 없다.
+--
+-- ⚠️ 이 표를 **직접** 읽는 곳이 하나 더 있다: `eventstore.fetch_minute_price_trigger` 는
+-- PK 로 한 행을 집고 **종류를 안 본다**. REVERT 행의 id 가 그 진입점에 닿으면 엔진이 회수를
+-- 발화로 읽고 설명을 만든다 — 지금 그걸 막는 것은 "회수 행은 큐로 안 나간다"는 **관례**뿐이고
+-- 구조적 보호가 아니다(아래 복합 FK 는 관측 쪽만 지킨다). writer PR 에서 종류 필터를 건다.
 --
 -- 회수 행은 **큐로 나가지 않는다** — 구간 마커일 뿐이다. 게시 설명을 내리는 경로는
 -- 기존 `ExposureReverted`(EXPOSURE_EVENT_TYPE)가 그대로 진다. 회수 시점에 트리거 사건을

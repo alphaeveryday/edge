@@ -20,9 +20,13 @@
 --
 -- 다만 분리가 이 표를 지켜주지는 않는다 — 재작성이 도는 내내 etf_contribution_observation
 -- 에 ACCESS EXCLUSIVE 가 걸려 관측 읽기·쓰기가 통째로 선다. `lock_timeout` 은 **획득
--- 대기만** 묶고 보유 시간은 안 묶는다. 생성 컬럼을 포기하면 재작성을 피할 수 있지만
--- 그러면 관측 writer 가 상수를 손으로 적어야 하고, 이 파일은 writer 보다 **먼저** 착지하므로
--- 현행 INSERT 가 그 즉시 깨진다 — 재작성은 확장-먼저를 지키기 위해 치르는 값이다.
+-- 대기만** 묶고 보유 시간은 안 묶는다.
+--
+-- 그래도 생성 컬럼이다 — 평범한 컬럼으로 재작성을 피하려 하면 **둘 중 하나를 고르게 되고
+-- 둘 다 나쁘다**. ① nullable 로 두면 이 파일이 writer 보다 먼저 착지해도 현행 INSERT 가
+-- 안 깨지지만, kind 가 NULL 이라 **FK 검사를 건너뛴다**(MATCH SIMPLE) — 보호가 사라진 채
+-- 조용히 통과한다. ② NOT NULL 이나 CHECK 로 강제하면 보호는 되는데 그 순간 현행 INSERT 가
+-- 깨진다(writer 는 이 컬럼을 모른다). 생성 컬럼만 둘 다 피한다 — 재작성은 그 값이다.
 --
 -- 🔴 **문장 순서를 바꾸지 마라.** 이 파일도 minute_price_trigger 를 잠근다 — 복합 FK 추가는
 -- ShareRowExclusive(쓰기 차단), **DROP CONSTRAINT 는 ACCESS EXCLUSIVE**(읽기까지 차단)다.
