@@ -12,6 +12,7 @@ import { RequireSession } from './layouts/RequireSession';
 import { LoginPage } from './pages/LoginPage';
 import { IncidentsPage } from './pages/ops/IncidentsPage';
 import { IncidentsListPage } from './pages/ops/IncidentsListPage';
+import { IncidentDetailPage } from './pages/ops/IncidentDetailPage';
 import { RunAxisPage } from './pages/ops/RunAxisPage';
 import { ChainPage } from './pages/ops/ChainPage';
 import { DatasetPage } from './pages/ops/DatasetPage';
@@ -27,6 +28,7 @@ import { NewsLineagePage } from './pages/NewsLineagePage';
 import { HoldingsImpactPage } from './pages/HoldingsImpactPage';
 import { AnalysesPage } from './pages/AnalysesPage';
 import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
+import { AnalysisSymbolPage } from './pages/AnalysisSymbolPage';
 
 export function App() {
   return (
@@ -39,6 +41,8 @@ export function App() {
           <Route path="/" element={<IncidentsPage />} />
           {/* 오늘(요약)과 문제·사건(전체 목록)은 역할이 다른 화면이다 */}
           <Route path="/ops/incidents" element={<IncidentsListPage />} />
+          {/* 사건 상세 — 조사의 출발점. 라우트라서 뒤로 가기·딥링크가 그대로 동작한다 */}
+          <Route path="/ops/incidents/:vid" element={<IncidentDetailPage />} />
           <Route path="/ops/runs" element={<RunAxisPage />} />
           <Route path="/ops/chain" element={<ChainPage />} />
           <Route path="/ops/datasets" element={<DatasetPage />} />
@@ -53,6 +57,8 @@ export function App() {
           <Route path="/lineage/news" element={<NewsLineagePage />} />
           <Route path="/impact/holdings" element={<HoldingsImpactPage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
+          {/* 종목 상세 — 구체 경로라 :id 보다 먼저 둔다(뒤에 두면 symbol 이 분석 id 로 잡힌다) */}
+          <Route path="/analyses/symbol/:market/:code" element={<AnalysisSymbolPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
         </Route>
       </Route>

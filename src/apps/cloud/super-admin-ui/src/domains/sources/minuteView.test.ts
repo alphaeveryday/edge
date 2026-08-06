@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  datasetKind,
   evidencedCount,
   gapRuns,
   issues,
@@ -17,6 +18,8 @@ import {
   materializedCount,
   qualityDefectCount,
   segments,
+  sessionHealth,
+  windowUnit,
 } from './minuteView.ts';
 import type { MinuteGapWindow, MinuteJobCounts, MinuteSession } from './types.ts';
 
@@ -202,4 +205,161 @@ test('좁은 표면용 짧은 이름은 제목을 자르지 않고 따로 준다
 test('정상 세션에는 확인할 항목이 하나도 없다', () => {
   const s = session({ expectedWindowCount: 5, windows: { valid: 4, validEmpty: 1 } });
   assert.deepEqual(issues(s, { ...NO_JOBS, succeeded: 120 }), []);
+});
+
+/* ── 데이터셋은 서로 다른 판정 단위다 (장중은 시간대이지 판정 단위가 아니다) ── */
+
+const newsSession = (o: SessionOverride = {}) =>
+  session({ dataset: 'news_minute', sourceGroup: 'bigkinds', universeVersion: 'none', ...o });
+
+test('원장 dataset 어휘를 그대로 가른다 — 모르는 값을 가격으로 접지 않는다', () => {
+  assert.equal(datasetKind('price_minute'), 'price');
+  assert.equal(datasetKind('news_minute'), 'news');
+  assert.equal(datasetKind('price_minute_v2'), 'other');
+  assert.equal(windowUnit('news'), 'poll(1분)');
+  assert.notEqual(windowUnit('price'), windowUnit('news'));
+});
+
+test('뉴스의 빈 결과는 "거래 없음"이 아니라 "신규 기사 0건"이다', () => {
+  /* 같은 컬럼이 다른 사실을 말한다 — 가격 문구를 뉴스에 그대로 쓰면 없는 의미가 붙는다 */
+  const w = { valid: 3, validEmpty: 5 };
+  const priceEmpty = segments(session({ expectedWindowCount: 8, windows: w })).find(
+    (x) => x.key === 'validEmpty',
+  )!;
+  const newsEmpty = segments(newsSession({ expectedWindowCount: 8, windows: w })).find(
+    (x) => x.key === 'validEmpty',
+  )!;
+  assert.match(priceEmpty.meaning, /거래가 없었/);
+  assert.match(newsEmpty.meaning, /신규 기사가 없었/);
+  assert.doesNotMatch(newsEmpty.meaning, /거래/);
+  /* 카운트 축은 그대로다 — 의미만 갈린다(서버 판정을 화면이 다시 만들지 않는다) */
+  assert.equal(priceEmpty.count, newsEmpty.count);
+});
+
+test('뉴스의 불완전은 unit 유실이 아니라 anchor 미도달(따라잡기)이다', () => {
+  const inc = segments(newsSession({ expectedWindowCount: 4, windows: { valid: 3, incomplete: 1 } })).find(
+    (x) => x.key === 'incomplete',
+  )!;
+  assert.match(inc.label, /따라잡기/);
+  assert.match(inc.meaning, /anchor/);
+  /* 뒤처짐을 성공으로 위장하지 않는다 — 정상 조각과 톤이 갈린다 */
+  assert.notEqual(inc.tone, 'active');
+});
+
+test('뉴스 확인 항목의 단위는 창이 아니라 poll 이다', () => {
+  const s = newsSession({
+    expectedWindowCount: 6,
+    windows: { valid: 2, validEmpty: 2, incomplete: 1, due: 1, overdueNoEvidence: 1 },
+  });
+  const list = issues(s, NO_JOBS);
+  const none = list.find((i) => i.key === 'noEvidence')!;
+  assert.equal(none.unit, 'poll(1분)');
+  assert.match(none.title, /poll/);
+  for (const i of list) assert.doesNotMatch(i.unit, /창/);
+});
+
+/* ── 무증거는 판정이지 원인이 아니다 ── */
+
+test('무증거 근거는 서버 판정 조건으로 쓰고 원인을 단정하지 않는다', () => {
+  const w = { valid: 2, due: 2, overdueNoEvidence: 2 };
+  for (const s of [
+    session({ expectedWindowCount: 4, windows: w }),
+    newsSession({ expectedWindowCount: 4, windows: w }),
+  ]) {
+    const none = issues(s, NO_JOBS).find((i) => i.key === 'noEvidence')!;
+    /* 서버가 실제로 쓰는 술어(기한 경과 + DUE/유효 lease 없는 CLAIMED)를 그대로 적는다 */
+    assert.match(none.detail, /기한\(window_end\) 경과 후 결과 증거 없음/);
+    assert.match(none.detail, /DUE 또는 유효 lease 없는 CLAIMED/);
+    /* VALID_EMPTY 는 실행 증거가 있으므로 정상 귀결로 따로 센다는 사실이 함께 남는다 */
+    assert.match(none.detail, /VALID_EMPTY/);
+    assert.match(none.detail, /다음 확인/);
+    /* task/attempt 근거 없이 실행체 사망·미실행을 확정하지 않는다 */
+    for (const banned of ['안 돌았', '죽었', '죽은', '사망']) {
+      assert.ok(!none.detail.includes(banned), `근거에 원인 단정이 남았다: ${banned}`);
+    }
+  }
+});
+
+test('lease 만료는 별도 사실로 남기되 실행체 사망으로 읽히지 않는다', () => {
+  const live = liveness(session({ phase: 'ACTIVE', leaseExpired: true }));
+  assert.equal(live.kind, 'broken');
+  assert.match(live.basis, /lease 만료/);
+  assert.match(live.basis, /서버\(DB 시계\) 판정/);
+  /* 원인은 이 응답이 답하지 않는다는 사실을 함께 적는다 */
+  assert.match(live.basis, /이 응답이 답하지 않는다/);
+});
+
+test('유효 lease 없는 claim 은 고착 후보이지 consumer 사망 확정이 아니다', () => {
+  const stuck = issues(session(), { ...NO_JOBS, claimedExpired: 2 }).find(
+    (i) => i.key === 'claimedExpired',
+  )!;
+  assert.match(stuck.detail, /consumer 사망 확정이 아니다/);
+});
+
+test('무증거 판정 자체는 데이터셋과 무관하게 서버 카운트 그대로다', () => {
+  /* 뉴스라고 관대해지지 않는다 — 이벤트가 없었다는 이유로 무증거를 지우면 결손이 사라진다 */
+  const w = { valid: 2, due: 2, overdueNoEvidence: 2 };
+  const price = issues(session({ expectedWindowCount: 4, windows: w }), NO_JOBS);
+  const news = issues(newsSession({ expectedWindowCount: 4, windows: w }), NO_JOBS);
+  assert.equal(news.find((i) => i.key === 'noEvidence')!.count, 2);
+  assert.equal(
+    price.find((i) => i.key === 'noEvidence')!.count,
+    news.find((i) => i.key === 'noEvidence')!.count,
+  );
+});
+
+/* ── 세션 건강도 — 네 축을 합치되 이유를 잃지 않는다 ── */
+
+test('수집기가 살아 있어도 품질 결함이 있으면 정상이 아니다', () => {
+  const s = session({
+    expectedWindowCount: 390,
+    windows: { valid: 280, validEmpty: 40, incomplete: 3, due: 67 },
+    leaseExpired: false,
+  });
+  const h = sessionHealth(s, NO_JOBS);
+  assert.equal(h.kind, 'caution');
+  assert.match(h.reason, /품질 결함 3/);
+  /* 축이 따로 남아 원인을 볼 수 있다 */
+  assert.match(h.liveness, /수집기 정상/);
+  assert.equal(h.quality.defects, 3);
+});
+
+test('커버리지 분모는 기한 도래분이다 — 미도래 창을 결손으로 세지 않는다', () => {
+  const s = session({
+    expectedWindowCount: 390,
+    /* 도래: 증거 323 + 무증거 0 = 323. 미도래·수집 중 67 은 분모 밖 */
+    windows: { valid: 280, validEmpty: 40, incomplete: 3, due: 67 },
+  });
+  const h = sessionHealth(s, NO_JOBS);
+  assert.equal(h.coverage.elapsed, 323);
+  assert.equal(h.coverage.evidenced, 323);
+  assert.ok(h.coverage.elapsed < s.expectedWindowCount, '거래일 전체 기대 창을 분모로 쓰지 않는다');
+});
+
+test('heartbeat 끊김·기한 경과 무증거는 장애다', () => {
+  assert.equal(sessionHealth(session({ leaseExpired: true }), NO_JOBS).kind, 'failure');
+  const noEv = sessionHealth(
+    session({ expectedWindowCount: 10, windows: { valid: 6, due: 4, overdueNoEvidence: 4 } }),
+    NO_JOBS,
+  );
+  assert.equal(noEv.kind, 'failure');
+  assert.match(noEv.reason, /기한 경과 후 결과 증거 없음 4/);
+});
+
+test('세션 시작 전은 대기, 종료 국면은 종료 — 결손으로 그리지 않는다', () => {
+  const wait = sessionHealth(session({ phase: 'PLANNED', expectedWindowCount: 390, windows: { due: 390 } }), NO_JOBS);
+  assert.equal(wait.kind, 'waiting');
+  const closed = sessionHealth(
+    session({ phase: 'FINALIZED', leaseExpired: true, contiguousCompleteThrough: 'X', windows: { valid: 390 } }),
+    NO_JOBS,
+  );
+  assert.equal(closed.kind, 'closed');
+  assert.match(closed.reason, /최종 연속 완결/);
+});
+
+test('큐 고착·DEAD 도 주의로 올라온다 — heartbeat 만으로 정상을 정하지 않는다', () => {
+  const s = session({ expectedWindowCount: 5, windows: { valid: 5 } });
+  assert.equal(sessionHealth(s, NO_JOBS).kind, 'normal');
+  assert.equal(sessionHealth(s, { ...NO_JOBS, dead: 2 }).kind, 'caution');
+  assert.equal(sessionHealth(s, { ...NO_JOBS, claimedExpired: 1 }).kind, 'caution');
 });

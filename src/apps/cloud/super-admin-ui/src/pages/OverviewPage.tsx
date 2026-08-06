@@ -136,18 +136,11 @@ function LaneCard({ lane, mock = false }: { lane: OverviewLane; mock?: boolean }
               {lane.defects.map((d) => (
                 <tr
                   key={d.taskKey}
-                  /* holdings 결손은 영향 화면(ALPHA-686)이 답한다 — 나머지는 드릴다운 */
-                  onClick={() =>
-                    d.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX'
-                      ? navigate(`/impact/holdings?runKey=${encodeURIComponent(lane.runKey)}`)
-                      : openDrilldown(d.taskKey)
-                  }
+                  /* 결손 상세는 조건부 드릴다운이라 여기서 직행하지 않는다 — 데이터셋 흐름을
+                   * 거쳐야 "결손인가·판정 대기인가·계산 불가인가"가 먼저 보인다(ALPHA-738). */
+                  onClick={() => openDrilldown(d.taskKey)}
                   style={{ cursor: 'pointer' }}
-                  title={
-                    d.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX'
-                      ? '결손 영향 화면으로 이동'
-                      : '작업 드릴다운으로 이동'
-                  }
+                  title="작업 드릴다운으로 이동"
                 >
                   <td style={{ padding: '2px 10px 2px 0', whiteSpace: 'nowrap' }}>{d.taskKey}</td>
                   <td style={{ padding: '2px 0', color: 'var(--down, #b91c1c)' }}>

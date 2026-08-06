@@ -23,6 +23,35 @@ import type { MinuteGapWindow, MinuteJobCounts, MinuteSession } from './types.ts
 /** ui-kit BadgeTone 과 같은 어휘지만 모듈이 UI 를 import 하지 않도록 여기서 재선언한다 */
 export type ViewTone = 'active' | 'neutral' | 'gated' | 'warn' | 'blocked' | 'env';
 
+/* ── 데이터셋 축 ── */
+
+/**
+ * 1분 원장의 데이터셋. 어휘 정본은 `data_pipeline/minute/states.py` 의
+ * `DATASET_PRICE_MINUTE`·`DATASET_NEWS_MINUTE` 다.
+ *
+ * **둘은 같은 세션·창 원장을 쓰지만 같은 판정 단위가 아니다.** 장중은 실행 시간대이지
+ * 판정 단위가 아니라서, 두 데이터셋을 하나의 정상/장애로 합치지 않는다. 같은 컬럼이
+ * 말하는 사실도 다르다(`commit.py` `commit_news_window` 의 판정 규칙):
+ *   · VALID_EMPTY — 가격은 "그 분에 거래가 없었다", 뉴스는 "그 분에 신규 기사가 없었다"
+ *   · INCOMPLETE  — 가격은 unit 유실, 뉴스는 poll 이 직전 성공 anchor 에 못 닿고 잘린 것
+ *                   (truncated = 따라잡기 예약, 곧 lag 신호다)
+ *   · universe    — 뉴스 세션은 소스 단위라 universe 축이 없다(원장에 `'none'` 이 박힌다)
+ *
+ * 어휘 밖 dataset 은 'other' 로 둔다 — 모르는 것을 가격으로 접으면 없는 의미가 붙는다.
+ */
+export type DatasetKind = 'price' | 'news' | 'other';
+
+export function datasetKind(dataset: string): DatasetKind {
+  if (dataset === 'price_minute') return 'price';
+  if (dataset === 'news_minute') return 'news';
+  return 'other';
+}
+
+/** 창 축의 단위 이름 — 뉴스의 1분은 수집 창이 아니라 **poll 1회**로 읽힌다 */
+export function windowUnit(kind: DatasetKind): string {
+  return kind === 'news' ? 'poll(1분)' : '창(1분)';
+}
+
 /* ── 실행 축 ── */
 
 export type LivenessKind = 'live' | 'broken' | 'closing' | 'unknown' | 'failed';
@@ -56,7 +85,9 @@ export function liveness(s: MinuteSession): Liveness {
       kind: 'broken',
       label: '실행 증거 끊김',
       tone: 'blocked',
-      basis: 'lease 만료(서버 DB 시계 판정) — 실행체가 갱신을 멈췄다',
+      basis:
+        'lease 만료 — 서버(DB 시계) 판정이다. 근거는 lease_expires_at 이 now() 보다 앞선다는 사실뿐이고, ' +
+        '실행체가 죽었는지 배포·네트워크 때문인지는 이 응답이 답하지 않는다.',
     };
   }
   if (s.leaseExpired === false) {
@@ -68,6 +99,119 @@ export function liveness(s: MinuteSession): Liveness {
     tone: 'neutral',
     basis: 'lease 부재(NULL) — "죽었다"가 아니라 기동 증거 자체가 없다는 사실',
   };
+}
+
+/* ── 세션 건강도 — 네 축을 합치되 무엇 때문인지 잃지 않는다 ── */
+
+/**
+ * `실행 정상` 하나로 수집기 생존·진행·커버리지·품질을 합치면, 수집기가 살아 있는데 결함이
+ * 있는 상태가 초록으로 보인다. 그래서 **네 축을 따로 재고** 가장 나쁜 축으로 등급을 정하되
+ * 이유를 함께 낸다.
+ *
+ * ⚠️ 커버리지 분모는 **기한이 도래한 창**이다. 거래일 전체 기대 창(390)을 분모로 쓰면 아직
+ * 오지 않은 창이 결손처럼 보인다. 응답은 도래 여부를 직접 주지 않으므로
+ * `증거 있는 창 + 무증거 창` 을 **하한**으로 쓴다(유효 lease 로 수집 중인 창은 아직 결과가
+ * 없을 뿐이라 어느 쪽에도 넣지 않는다).
+ */
+export type SessionHealthKind = 'normal' | 'caution' | 'failure' | 'waiting' | 'closed';
+
+export interface SessionHealth {
+  kind: SessionHealthKind;
+  label: string;
+  tone: ViewTone;
+  /** 왜 이 등급인가 — 가장 나쁜 축의 사실 */
+  reason: string;
+  /** 수집기 생존 */
+  liveness: string;
+  /** 진행 — 워터마크와 마지막 기록 */
+  progress: string;
+  /** 커버리지 — 기한 도래분 대비 증거 */
+  coverage: { elapsed: number; evidenced: number; text: string };
+  /** 품질 — 결함·무증거·큐 고착 */
+  quality: { defects: number; text: string };
+}
+
+/** ISO 의 시:분만 — 응답이 이미 KST 오프셋을 달고 오므로 자르는 것이 결정적이다(locale 불요) */
+const hhmmOf = (iso: string | null) => (iso ? iso.slice(11, 16) : '—');
+
+export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionHealth {
+  const w = s.windows;
+  const kind = datasetKind(s.dataset);
+  const noun = kind === 'news' ? 'poll' : '창';
+  const evidenced = evidencedCount(s);
+  /* 도래한 창의 하한 — 미도래·수집 중은 분모에 넣지 않는다 */
+  const elapsed = evidenced + w.overdueNoEvidence;
+  const defects = qualityDefectCount(s);
+  const stuck = jobs.claimedExpired + jobs.dead;
+
+  const coverage = {
+    elapsed,
+    evidenced,
+    text: `기한 도래 ${elapsed}${noun} 중 증거 ${evidenced}`,
+  };
+  const quality = {
+    defects,
+    text:
+      kind === 'news'
+        ? `잘린 poll·격리 ${defects} · 처리 대기 ${jobs.waiting} · DEAD ${jobs.dead}`
+        : `품질 결함 ${defects} · DEAD ${jobs.dead}`,
+  };
+  const progress =
+    kind === 'news'
+      ? `최근 성공 poll ${hhmmOf(s.processedThrough)}`
+      : `연속 완결 ${hhmmOf(s.contiguousCompleteThrough)} · 마지막 기록 ${hhmmOf(s.processedThrough)}`;
+  const live = liveness(s);
+  const livenessText =
+    live.kind === 'live'
+      ? `수집기 정상 · heartbeat ${hhmmOf(s.heartbeatAt)}`
+      : `${live.label} · heartbeat ${hhmmOf(s.heartbeatAt)}`;
+
+  const base = { reason: '', liveness: livenessText, progress, coverage, quality };
+
+  /* 세션 시작 전 — 아직 아무것도 안 돈 것을 결손으로 그리지 않는다 */
+  if (s.phase === 'PLANNED') {
+    return { ...base, kind: 'waiting', label: '대기', tone: 'neutral', reason: '세션이 아직 시작되지 않았다(phase=PLANNED)' };
+  }
+  /* 종료 국면 — 최종 완결 상태를 함께 말한다 */
+  if (s.phase === 'DRAINED' || s.phase === 'QC_RUNNING' || s.phase === 'FINALIZED') {
+    return {
+      ...base,
+      kind: 'closed',
+      label: '종료',
+      tone: 'gated',
+      reason: `phase=${s.phase} · 최종 연속 완결 ${hhmmOf(s.contiguousCompleteThrough)}`,
+    };
+  }
+  if (s.phase === 'FAILED') {
+    return { ...base, kind: 'failure', label: '장애', tone: 'blocked', reason: '세션 phase=FAILED' };
+  }
+  /* 장애 — heartbeat 끊김 또는 기한 경과 무증거 */
+  if (live.kind === 'broken') {
+    return { ...base, kind: 'failure', label: '장애', tone: 'blocked', reason: live.basis };
+  }
+  if (w.overdueNoEvidence > 0) {
+    return {
+      ...base,
+      kind: 'failure',
+      label: '장애',
+      tone: 'blocked',
+      reason: `기한 경과 후 결과 증거 없음 ${w.overdueNoEvidence}${noun}`,
+    };
+  }
+  /* 수집기가 살아 있어도 결함이 있으면 정상이 아니다 */
+  if (defects > 0 || stuck > 0) {
+    return {
+      ...base,
+      kind: 'caution',
+      label: '주의',
+      tone: 'warn',
+      reason: defects > 0 ? `품질 결함 ${defects}${noun}` : `유효 lease 없는 claim·DEAD ${stuck}건`,
+    };
+  }
+  if (live.kind === 'unknown') {
+    return { ...base, kind: 'caution', label: '주의', tone: 'warn', reason: live.basis };
+  }
+  return { ...base, kind: 'normal', label: '정상', tone: 'active', reason: '네 축 모두 이상 없음' };
 }
 
 /* ── 창 축 ── */
@@ -93,11 +237,58 @@ export interface Segment {
 }
 
 /**
+ * 뉴스 poll 의 의미 덮어쓰기 — 같은 원장 컬럼이지만 사실이 다르다.
+ * 근거: `data_pipeline/minute/commit.py` `commit_news_window`(격리→INVALID, truncated→
+ * INCOMPLETE, 신규 0건→VALID_EMPTY) · `news_worker.py`(anchor 두 개와 따라잡기 예산).
+ * 가격 문구를 그대로 두면 "거래가 없었다"가 뉴스 화면에 뜬다.
+ */
+const NEWS_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
+  valid: {
+    label: '신규 기사 관측',
+    meaning: 'poll 이 돌았고 신규·정정 기사를 관측한 분이다.',
+  },
+  validEmpty: {
+    label: '정상 · 신규 0건',
+    meaning:
+      'poll 이 돌았고 그 분에 신규 기사가 없었다는 **증거가 남은** 분 — 정상 poll 증거다. 뉴스는 이 조각이 다수인 게 정상이며, 무증거(결과 증거 없음)와 다른 사실이라 합쳐 세지 않는다.',
+  },
+  incomplete: {
+    label: '잘린 poll · 따라잡기',
+    meaning:
+      'poll 이 직전 성공 anchor 에 닿기 전에 page 예산이 끝난 분(truncated)이다. 관측이 뒤처졌다는 뜻이고 다음 poll 이 더 깊은 예산으로 따라잡도록 예약된 상태다 — 성공으로 위장하지 않는다.',
+  },
+  invalid: {
+    label: '격리 발생',
+    meaning: '관측한 기사 중 격리된 건이 있어 무효로 커밋된 poll 이다.',
+  },
+  missing: {
+    label: 'MISSING (EOD 판정)',
+    meaning: 'EOD reconciliation 이 결손으로 판정한 분 — 장중에는 매겨지지 않는다',
+  },
+  noEvidence: {
+    label: '무증거',
+    meaning:
+      '판정: 기한(window_end) 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. **기사가 없었다는 뜻이 아니다** — 그건 신규 0건이다. 이 사실만으로 worker 사망을 단정하지 않는다.',
+  },
+  pending: {
+    label: '미도래 · poll 중',
+    meaning:
+      '아직 기한이 안 온 분과 유효 lease 로 poll 중인 분이 한 통이다 — 이 응답은 둘을 가르지 않는다. 결함이 아니다.',
+  },
+  unmaterialized: {
+    label: 'poll 행 없음',
+    meaning: '예정 poll 수에는 있는데 원장에 행이 없다 — 어떤 집계에도 안 잡히는 materialize 결손 후보',
+  },
+};
+
+/**
  * 분별 전체 타임라인 대신 쓰는 구간 요약. 각 조각은 응답이 실제로 준 카운트이고,
  * 합은 expectedWindowCount 다 — 없는 분모를 만들지 않는다.
  *
  * `pending` 은 "미도래"와 "수집 중"을 **응답이 못 가르는** 한 통이다. 이 둘을 갈라 진행률을
  * 그리려면 서버가 도래 여부를 내려줘야 한다(minuteViewApiGaps 참고).
+ *
+ * 라벨·의미는 dataset 이 정한다 — 카운트 축은 같아도 사실이 다르기 때문이다(NEWS_SEGMENTS).
  */
 export function segments(s: MinuteSession): Segment[] {
   const w = s.windows;
@@ -112,7 +303,7 @@ export function segments(s: MinuteSession): Segment[] {
       pattern: 'dot',
       tone: 'active',
       meaning:
-        '돌았는데 그 분에 거래가 없었다는 **증거가 남은** 창 — 정상 결과다. 무증거(안 돌았음)와 다른 사실이라 합쳐 세지 않는다.',
+        '돌았는데 그 분에 거래가 없었다는 **증거가 남은** 창 — 실행 증거가 있으므로 정상 귀결이다. 무증거(결과 증거 없음)와 다른 사실이라 합쳐 세지 않는다.',
     },
     { key: 'incomplete', label: '불완전', count: w.incomplete, pattern: 'solid', tone: 'warn', meaning: '결과는 남았으나 스텝이 유실을 판정한 창' },
     { key: 'invalid', label: '무효', count: w.invalid, pattern: 'solid', tone: 'blocked', meaning: '결과가 남았으나 무효로 판정된 창' },
@@ -124,7 +315,7 @@ export function segments(s: MinuteSession): Segment[] {
       pattern: 'hatch',
       tone: 'blocked',
       meaning:
-        '기한(window_end)이 지났는데 결과가 안 적힌 창 — 안 돌았거나 실행체가 죽었다. 서버(DB 시계) 판정이다.',
+        '판정: 기한(window_end) 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. 서버(DB 시계) 판정이며, 이 사실만으로 미실행·실행체 사망을 확정하지 않는다.',
     },
     {
       key: 'pending',
@@ -144,7 +335,10 @@ export function segments(s: MinuteSession): Segment[] {
       meaning: '기대 창 수에는 있는데 원장에 행이 없다 — 어떤 집계에도 안 잡히는 materialize 결손 후보',
     },
   ];
-  return all.filter((seg) => seg.count > 0);
+  const news = datasetKind(s.dataset) === 'news';
+  return all
+    .filter((seg) => seg.count > 0)
+    .map((seg) => (news && NEWS_SEGMENTS[seg.key] ? { ...seg, ...NEWS_SEGMENTS[seg.key]! } : seg));
 }
 
 /** 원장에 실재하는 창 행 수. 기대 창 수와 다르면 위 숫자들을 그대로 믿으면 안 된다. */
@@ -240,6 +434,10 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   const out: Issue[] = [];
   const live = liveness(s);
   const w = s.windows;
+  /* 단위·명사는 dataset 이 정한다 — 뉴스 화면에 "창"·"거래"가 나오면 없는 의미가 붙는다 */
+  const news = datasetKind(s.dataset) === 'news';
+  const unit = windowUnit(datasetKind(s.dataset));
+  const noun = news ? 'poll' : '창';
 
   if (live.kind === 'broken' || live.kind === 'failed') {
     out.push({
@@ -258,14 +456,20 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   if (w.overdueNoEvidence > 0) {
     out.push({
       key: 'noEvidence',
-      title: '무증거 창 — 기한이 지났는데 결과가 없다',
+      title: `무증거 ${noun} — 기한이 지났는데 결과가 없다`,
       short: '무증거',
       count: w.overdueNoEvidence,
-      unit: '창(1분)',
+      unit,
       tone: 'blocked',
       range: rangeOf(noEvidenceGaps),
-      detail:
-        '안 돌았거나 실행체가 죽은 창이다. 돌았는데 거래가 없었던 창(정상 · 빈 데이터)과 다른 사실이라 합치지 않는다.',
+      detail: [
+        '판정 — 기한(window_end) 경과 후 결과 증거 없음',
+        '원장 상태 — DUE 또는 유효 lease 없는 CLAIMED (서버 DB 시계 판정)',
+        news
+          ? '구분 — 신규 0건(VALID_EMPTY)은 poll 실행 증거가 있어 정상 귀결로 따로 집계'
+          : '구분 — 빈 데이터(VALID_EMPTY)는 실행 증거가 있어 정상 귀결로 따로 집계',
+        '다음 확인 — 세션 heartbeat · lease · 관련 job',
+      ].join(' · '),
     });
   }
 
@@ -274,13 +478,17 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   if (quality > 0) {
     out.push({
       key: 'quality',
-      title: '품질 결함 창 — 불완전 · 무효 · MISSING',
+      title: news
+        ? '품질 결함 poll — 잘린 poll(따라잡기) · 격리 · MISSING'
+        : '품질 결함 창 — 불완전 · 무효 · MISSING',
       short: '품질 결함',
       count: quality,
-      unit: '창(1분)',
+      unit,
       tone: 'warn',
       range: rangeOf(qualityGaps),
-      detail: '결과는 남았지만 정상이 아닌 창과 EOD QC 가 결손으로 판정한 창이다.',
+      detail: news
+        ? 'anchor 에 못 닿고 잘린 poll(관측이 뒤처졌다), 격리분이 있어 무효로 커밋된 poll, EOD 가 결손으로 판정한 분이다.'
+        : '결과는 남았지만 정상이 아닌 창과 EOD QC 가 결손으로 판정한 창이다.',
     });
   }
 
@@ -288,13 +496,13 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   if (materialized !== s.expectedWindowCount) {
     out.push({
       key: 'ledgerMismatch',
-      title: '원장 불일치 — 기대 창 수와 실재 행 수가 다르다',
+      title: `원장 불일치 — ${news ? '예정 poll' : '기대 창'} 수와 실재 행 수가 다르다`,
       short: '원장 불일치',
       count: Math.abs(s.expectedWindowCount - materialized),
-      unit: '창(1분)',
+      unit,
       tone: 'blocked',
       range: null,
-      detail: `기대 ${s.expectedWindowCount} vs 실재 ${materialized}. 행이 없는 창은 무증거를 포함한 어떤 집계에도 안 잡히므로 위 숫자들을 그대로 믿으면 안 된다.`,
+      detail: `${news ? '예정' : '기대'} ${s.expectedWindowCount} vs 실재 ${materialized}. 행이 없는 ${noun}은 무증거를 포함한 어떤 집계에도 안 잡히므로 위 숫자들을 그대로 믿으면 안 된다.`,
     });
   }
 
@@ -308,7 +516,7 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       tone: 'blocked',
       range: null,
       detail:
-        'Consumer 가 죽고 아무도 재청구하지 않은 고착 후보다(만료·NULL 포함 — writer 의 회수 조건과 같은 집합). "처리 중"에 뭉개면 영원히 경고가 없다.',
+        '판정 — status=CLAIMED 인데 유효한 lease 가 없다(만료 또는 NULL, writer 의 회수 조건과 같은 집합). 재청구 대상인 고착 후보이며 **consumer 사망 확정이 아니다**. "처리 중"에 뭉개면 영원히 경고가 없다.',
     });
   }
 
@@ -340,7 +548,32 @@ function rangeOf(gaps: MinuteGapWindow[]): { from: string; to: string } | null {
  * 이 화면이 정확해지려면 서버가 더 줘야 하는 것 — 화면에 그대로 노출해 부채를 감추지 않는다.
  * (구현은 이 작업 범위 밖이다. 프론트에서 추정해 메우지 않는다.)
  */
-export const MINUTE_API_GAPS: { need: string; why: string }[] = [
+export interface ApiGap {
+  need: string;
+  why: string;
+}
+
+/**
+ * 뉴스 레인에만 해당하는 부채 — 가격 탭에 섞어 놓으면 어느 데이터셋의 한계인지 흐려진다.
+ * 근거: `news_poll_anchor` 마이그레이션 · `news_worker.py`(차단 쿨다운·claim 반납) ·
+ * `JdbcMinuteStatusRepository.NEWS_JOBS_SQL`(날짜 축 집계).
+ */
+export const NEWS_API_GAPS: ApiGap[] = [
+  {
+    need: 'poll anchor 의 따라잡기 상태 (success_poll_at vs head_poll_at)',
+    why: '원장에는 "직전 성공 anchor 에 못 닿았다"는 lag 예약이 있는데 응답에 없다 — 화면은 잘린 poll 카운트로 뒤처짐을 간접 관측할 뿐 "지금도 뒤처져 있는가"에 답하지 못한다.',
+  },
+  {
+    need: '벤더 차단 쿨다운 상태 (blocked_until · 차단 사유)',
+    why: '차단되면 Worker 가 claim 을 즉시 반납해 DUE 로 돌아간다 — 기한이 지나면 "무증거"와 **같은 모양**이 된다. 억제 중인 것과 안 돈 것을 응답으로 가를 수 없다.',
+  },
+  {
+    need: '뉴스 추출 job 의 세션·소스 축',
+    why: 'news_extraction_job 은 세션 연결 컬럼이 없어 생성 시각(KST) 날짜로만 집계된다 — 장중 세션이 만든 job 과 백필 생산자의 job 이 한 통이라 이 숫자를 세션 판정에 쓸 수 없다.',
+  },
+];
+
+export const MINUTE_API_GAPS: ApiGap[] = [
   {
     need: 'windows.elapsed (또는 claimedLive) 1개 필드',
     why: 'overdueNoEvidence 가 live lease CLAIMED 를 빼기 때문에 "도래한 창"을 응답으로 못 센다 — 진행률 분모가 없다.',

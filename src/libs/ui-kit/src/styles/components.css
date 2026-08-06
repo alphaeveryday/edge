@@ -161,7 +161,19 @@
   content: ""; position: absolute; left: -3px; top: 7px; bottom: 7px;
   width: 3px; border-radius: var(--radius-pill); background: var(--accent);
 }
-.nav-section { padding: var(--sp-5) var(--sp-5) var(--sp-3); font-size: var(--xs-size); font-weight: 600; letter-spacing: var(--label-track); text-transform: uppercase; color: var(--gray-600); }
+/* 그룹 제목 — 접히지 않는 heading 이다. 선택 여부와 무관하게 항상 선명해야 위계가 한눈에
+   보인다(현재 메뉴 강조는 .nav-item.active 의 배경·왼쪽 선이 따로 한다).
+   ⚠️ 사이드바는 어두운 면(--bg-nav)이라 고대비 토큰은 --fg-1 이 아니라 --gray-200 이다. */
+.nav-section {
+  margin: 0;
+  padding: var(--sp-7) var(--sp-5) var(--sp-4);
+  font-size: var(--h3-size);
+  line-height: var(--h3-line);
+  font-weight: var(--h3-weight);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--gray-200);
+}
 .nav-sub { height: 30px; font-size: var(--sm-size); color: var(--gray-500); }
 .nav-sub:hover { color: var(--gray-200); }
 .nav-sub.active { color: #fff; }

@@ -6,6 +6,7 @@
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { Absent, AxisHeader, F, Info, kst, useFocusRow } from './shared';
+import { NewsFunnel } from './NewsFunnel';
 import '../../styles/ops.css';
 
 /** 신선도 판정 — 근거가 없으면 FRESH 라고 말하지 않는다 */
@@ -133,6 +134,8 @@ export function DatasetPage() {
           </tbody>
         </table>
       </div>
+      {/* 뉴스 데이터셋의 당일 단계별 처리량 — 추이 화면에서 옮겨 왔다(하루의 단면이지 추이가 아니다) */}
+      <NewsFunnel />
     </div>
   );
 }

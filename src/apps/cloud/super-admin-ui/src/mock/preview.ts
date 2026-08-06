@@ -10,7 +10,7 @@
  *      사건은 규칙 엔진 스냅샷과 같다(시장 15:40 진행 중 · 뉴스 15:30 타임아웃 ·
  *      수급 361/363 결손 · 구성종목 4종 누락 · 유니버스 33종).
  */
-import type { Analysis } from '../domains/analyses';
+import type { Analysis, AnalysisEvidence } from '../domains/analyses';
 import type { TaskFact } from '../rules/types';
 import type {
   ExecutionStatus,
@@ -200,9 +200,25 @@ function newsSlot(date: string): GridSlot {
 
 const GRID_DATES = ['2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-01', '2026-08-02', MOCK_TRADING_DATE];
 
+/* 같은 날짜의 두 번째 배치 실행 — 정규 슬롯이 실패한 뒤의 재실행이다.
+ * 박스는 하나로 접히고 드릴다운의 실행 목록에만 두 줄로 선다(그 확인이 이 슬롯의 목적).
+ * ⚠️ 원장에 런 kind(정규·수동·백필) 컬럼이 없어 목에서도 그 라벨을 붙이지 않는다 —
+ * 여기서 지어내면 화면이 없는 축을 가진 것처럼 보인다(decisions.md §3-4 계측 부채). */
+const rerunSlot = (date: string): GridSlot => ({
+  runKey: `etf-daily:${date}T16:20`,
+  launchStatus: 'LAUNCHED',
+  orchestrationStatus: 'SUCCEEDED',
+  tradingDate: date,
+  /* 오늘 정규 슬롯에서 FAILED 였던 가격 수집만 다시 돌려 성공했다 */
+  tasks: [cell(MARKET_TASKS[1], { recordsOut: 1452 })],
+});
+
 export const MOCK_GRID: SourceGrid = {
   days: 7,
-  slots: GRID_DATES.flatMap((d) => [newsSlot(d), marketSlot(d)]),
+  slots: [
+    ...GRID_DATES.flatMap((d) => [newsSlot(d), marketSlot(d)]),
+    rerunSlot(MOCK_TRADING_DATE),
+  ],
 };
 
 /* ─────────── /minute — 장중 세션 ─────────── */
@@ -247,7 +263,48 @@ export const MOCK_MINUTE: MinuteStatus = {
       ],
       priceJobs: { waiting: 12, claimed: 3, claimedExpired: 1, succeeded: 1284, dead: 2 },
     },
+    /* 뉴스 세션은 가격과 **별도 객체**다 — 기대 창 수만 베껴 오면 뉴스가 가격의 사본이 된다.
+     * 값의 모양이 다른 이유: 뉴스는 신규 기사가 없는 분이 다수라 VALID_EMPTY 가 대부분이고,
+     * 결함은 anchor 에 못 닿고 잘린 poll(INCOMPLETE)로 나타난다(commit_news_window 판정).
+     * universeVersion 은 원장이 실제로 넣는 'none' 이다(뉴스 세션은 소스 단위 — states.py
+     * UNIVERSE_DATASETS 밖). 창 집계의 합은 여기서도 기대 수와 같아야 거짓 원장 불일치가
+     * 안 뜬다: 30+4+88+264+3+0+1 = 390. */
+    {
+      sessionId: 'mock-session-news-bigkinds',
+      dataset: 'news_minute',
+      sourceGroup: 'bigkinds',
+      phase: 'ACTIVE',
+      universeVersion: 'none',
+      expectedWindowCount: 390,
+      processedThrough: iso('15:27'),
+      contiguousCompleteThrough: iso('14:52'),
+      heartbeatAt: iso('15:29'),
+      leaseExpiresAt: iso('15:34'),
+      leaseExpired: false,
+      windows: {
+        due: 30,
+        claimed: 4,
+        valid: 88,
+        validEmpty: 264,
+        incomplete: 3,
+        missing: 0,
+        invalid: 1,
+        overdueNoEvidence: 2,
+      },
+      gaps: [
+        { windowStart: iso('11:18'), windowEnd: iso('11:19'), dataStatus: 'DUE', noEvidence: true },
+        { windowStart: iso('11:19'), windowEnd: iso('11:20'), dataStatus: 'DUE', noEvidence: true },
+        { windowStart: iso('13:05'), windowEnd: iso('13:06'), dataStatus: 'INCOMPLETE', noEvidence: false },
+        { windowStart: iso('13:06'), windowEnd: iso('13:07'), dataStatus: 'INCOMPLETE', noEvidence: false },
+        { windowStart: iso('14:53'), windowEnd: iso('14:54'), dataStatus: 'INCOMPLETE', noEvidence: false },
+        { windowStart: iso('09:12'), windowEnd: iso('09:13'), dataStatus: 'INVALID', noEvidence: false },
+      ],
+      /* 뉴스 세션에는 window job 이 없다 — price_window_job 은 가격 창을 참조한다.
+       * 서버도 0 을 채워 보낸다(JdbcMinuteStatusRepository 의 getOrDefault). */
+      priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+    },
   ],
+  /* 기사 단위 추출 job — 세션이 아니라 날짜 축이다(백필 생산자분이 섞인다) */
   newsJobs: { waiting: 5, claimed: 2, claimedExpired: 0, succeeded: 318, dead: 3 },
 };
 
@@ -599,16 +656,126 @@ const analysis = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'name' | 'code' |
   ...o,
 });
 
+/** 사용 근거 한 건 — 응답이 실제로 주는 축만(구분·제목·수집 소스·발행 시각) */
+const ev = (type: '뉴스' | '공시', title: string, source: string, time: string): AnalysisEvidence => ({
+  type,
+  title,
+  source,
+  time: `${MOCK_TRADING_DATE} ${time}`,
+});
+
+/**
+ * 검수용 분석 목데이터. 화면 구조를 보려면 다음 사례가 다 있어야 한다:
+ *   · 종목 6개(KRX·NASDAQ) · 같은 종목의 장중 다건(KODEX 반도체 4건)
+ *   · 최신 시도가 실패했지만 이전 유효 설명이 남은 종목(KODEX 200)
+ *   · 진행 중인 종목(TIGER 미디어컨텐츠) · 근거 0건인 결과(KODEX 은행)
+ *   · 전체 근거 수가 표시 상한보다 큰 결과(KODEX 반도체 15:30 — 56건 중 3건 표시)
+ *
+ * ⚠️ 목록과 상세의 숫자가 어긋나면 검수가 무의미하다 — 이 배열 하나가 두 화면의 유일한
+ * 출처이고, 종목 상세의 "오늘 N건"도 여기서 센다. 실패한 시도에는 설명 본문을 넣지 않는다.
+ */
 export const MOCK_ANALYSES: Analysis[] = [
-  analysis({ id: 'mock-1', publicationStatus: 'PUBLISHED',  name: 'KODEX 반도체', code: '091160', market: 'KRX', direction: 1, changePct: 3.42, status: 'COMPLETED', doneTime: '15:47', confidence: 'HIGH', result: '반도체 대형주 강세' }),
-  analysis({ id: 'mock-2', publicationStatus: 'PUBLISHED',  name: 'TIGER 2차전지테마', code: '305540', market: 'KRX', direction: -1, changePct: 4.18, status: 'COMPLETED', doneTime: '15:49', confidence: 'MEDIUM', result: '전기차 수요 둔화 우려' }),
-  analysis({ id: 'mock-3', name: 'KODEX 200', code: '069500', market: 'KRX', direction: 1, changePct: 1.12, status: 'PENDING' }),
-  analysis({ id: 'mock-4', name: 'TIGER 미디어컨텐츠', code: '228810', market: 'KRX', direction: -1, changePct: 3.05, status: 'FAILED' }),
-  analysis({ id: 'mock-5', name: 'KODEX 보험', code: '140700', market: 'KRX', direction: -1, changePct: 2.87, status: 'FAILED' }),
-  analysis({ id: 'mock-6', name: 'KODEX 은행', code: '091170', market: 'KRX', direction: 1, changePct: 2.31, status: 'COMPLETED', publicationStatus: 'WITHDRAWN', doneTime: '15:52', confidence: 'MEDIUM', result: '무효화로 회수됨' }),
-  analysis({ id: 'mock-7', publicationStatus: 'PUBLISHED',  name: 'Invesco QQQ Trust', code: 'QQQ', market: 'NASDAQ', direction: 1, changePct: 2.04, status: 'COMPLETED', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST`, doneTime: '05:18', confidence: 'HIGH', result: '빅테크 실적 호조' }),
-  analysis({ id: 'mock-8', publicationStatus: 'DRAFT',  name: 'iShares Semiconductor', code: 'SOXX', market: 'NASDAQ', direction: -1, changePct: 3.76, status: 'COMPLETED', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST`, doneTime: '05:21', confidence: 'LOW', result: '반도체 장비 수출 규제 우려' }),
-  analysis({ id: 'mock-9', name: 'Tesla', code: 'TSLA', market: 'NASDAQ', direction: -1, changePct: 5.62, status: 'PENDING', basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00 KST` }),
+  /* KODEX 반도체 — 장중 4건. 최신 15:30 이 유효 설명이다 */
+  analysis({
+    id: 'mock-091160-1530', name: 'KODEX 반도체', code: '091160', market: 'KRX',
+    direction: 1, changePct: 3.2, status: 'COMPLETED',
+    basisTime: '15:30', basisTimeAbs: `${MOCK_TRADING_DATE} 15:30`, doneTime: '15:41',
+    confidence: 'HIGH', result: '반도체 업종 강세로 구성종목이 동반 상승했습니다.',
+    evidence: [
+      ev('뉴스', '반도체 수출 3개월 연속 증가', 'BIGKINDS', '12:40'),
+      ev('공시', '단일판매·공급계약 체결', 'DART', '10:05'),
+      ev('뉴스', 'HBM 수요 증가 전망', 'BIGKINDS', '09:31'),
+    ],
+    /* 표시 상한보다 총 건수가 큰 사례 — 화면이 "56건 중 3건 표시"라고 말해야 한다 */
+    evidenceTotal: 56,
+  }),
+  analysis({
+    id: 'mock-091160-1410', name: 'KODEX 반도체', code: '091160', market: 'KRX',
+    direction: 1, changePct: 2.4, status: 'COMPLETED',
+    basisTime: '14:10', basisTimeAbs: `${MOCK_TRADING_DATE} 14:10`, doneTime: '14:19',
+    confidence: 'MEDIUM', result: '장중 반등 — 외국인 순매수 전환.',
+    evidence: [ev('뉴스', '외국인 순매수 전환', 'BIGKINDS', '13:55')], evidenceTotal: 1,
+  }),
+  analysis({
+    id: 'mock-091160-1022', name: 'KODEX 반도체', code: '091160', market: 'KRX',
+    direction: 1, changePct: 1.8, status: 'COMPLETED',
+    basisTime: '10:22', basisTimeAbs: `${MOCK_TRADING_DATE} 10:22`, doneTime: '10:31',
+    confidence: 'MEDIUM', result: '개장 초 강세.',
+    evidence: [ev('뉴스', '개장 초 반도체 강세', 'BIGKINDS', '10:02')], evidenceTotal: 1,
+  }),
+  analysis({
+    id: 'mock-091160-0910', name: 'KODEX 반도체', code: '091160', market: 'KRX',
+    direction: 1, changePct: 1.1, status: 'COMPLETED',
+    basisTime: '09:10', basisTimeAbs: `${MOCK_TRADING_DATE} 09:10`, doneTime: '09:18',
+    confidence: 'LOW', result: '시초가 갭 상승.',
+    evidence: [], evidenceTotal: 0,
+  }),
+
+  /* TIGER 2차전지테마 — 2건 */
+  analysis({
+    id: 'mock-305540-1452', name: 'TIGER 2차전지테마', code: '305540', market: 'KRX',
+    direction: -1, changePct: 4.18, status: 'COMPLETED',
+    basisTime: '14:52', basisTimeAbs: `${MOCK_TRADING_DATE} 14:52`, doneTime: '15:02',
+    confidence: 'MEDIUM', result: '전기차 수요 둔화 우려로 밸류체인이 조정받았습니다.',
+    evidence: [
+      ev('뉴스', '2차전지 밸류체인 조정', 'BIGKINDS', '14:31'),
+      ev('뉴스', '전기차 판매 증가율 둔화', 'BIGKINDS', '11:20'),
+    ],
+    evidenceTotal: 12,
+  }),
+  analysis({
+    id: 'mock-305540-1105', name: 'TIGER 2차전지테마', code: '305540', market: 'KRX',
+    direction: -1, changePct: 2.6, status: 'COMPLETED',
+    basisTime: '11:05', basisTimeAbs: `${MOCK_TRADING_DATE} 11:05`, doneTime: '11:14',
+    confidence: 'LOW', result: '오전 약세.',
+    evidence: [ev('뉴스', '2차전지 약세 지속', 'BIGKINDS', '10:44')], evidenceTotal: 1,
+  }),
+
+  /* KODEX 200 — 최신 시도(15:20)가 실패했지만 13:10 유효 설명이 남아 있다 */
+  analysis({
+    id: 'mock-069500-1520', name: 'KODEX 200', code: '069500', market: 'KRX',
+    direction: 1, changePct: 1.12, status: 'FAILED',
+    basisTime: '15:20', basisTimeAbs: `${MOCK_TRADING_DATE} 15:20`,
+  }),
+  analysis({
+    id: 'mock-069500-1310', name: 'KODEX 200', code: '069500', market: 'KRX',
+    direction: 1, changePct: 0.94, status: 'COMPLETED',
+    basisTime: '13:10', basisTimeAbs: `${MOCK_TRADING_DATE} 13:10`, doneTime: '13:19',
+    confidence: 'MEDIUM', result: '지수 전반 완만한 상승.',
+    evidence: [ev('뉴스', '코스피 외국인 순매수', 'BIGKINDS', '12:58')], evidenceTotal: 4,
+  }),
+
+  /* 진행 중 — 결과가 아직 없다(본문·신뢰도 null) */
+  analysis({
+    id: 'mock-228810-1535', name: 'TIGER 미디어컨텐츠', code: '228810', market: 'KRX',
+    direction: -1, changePct: 3.05, status: 'PENDING',
+    basisTime: '15:35', basisTimeAbs: `${MOCK_TRADING_DATE} 15:35`,
+  }),
+
+  /* 근거가 하나도 없는 결과 */
+  analysis({
+    id: 'mock-091170-1450', name: 'KODEX 은행', code: '091170', market: 'KRX',
+    direction: 1, changePct: 2.31, status: 'COMPLETED',
+    basisTime: '14:50', basisTimeAbs: `${MOCK_TRADING_DATE} 14:50`, doneTime: '14:59',
+    confidence: 'LOW', result: '금리 기대 변화에 따른 은행주 강세.',
+    evidence: [], evidenceTotal: 0,
+  }),
+
+  /* NASDAQ — 2종목 */
+  analysis({
+    id: 'mock-QQQ-0500', name: 'Invesco QQQ Trust', code: 'QQQ', market: 'NASDAQ',
+    direction: 1, changePct: 2.04, status: 'COMPLETED',
+    basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00`, doneTime: '05:18',
+    confidence: 'HIGH', result: '빅테크 실적 호조로 지수 ETF 가 상승했습니다.',
+    evidence: [ev('뉴스', '빅테크 분기 실적 호조', 'BIGKINDS', '04:32')], evidenceTotal: 9,
+  }),
+  analysis({
+    id: 'mock-SOXX-0500', name: 'iShares Semiconductor', code: 'SOXX', market: 'NASDAQ',
+    direction: -1, changePct: 3.76, status: 'COMPLETED',
+    basisTime: '05:00', basisTimeAbs: `${MOCK_TRADING_DATE} 05:00`, doneTime: '05:21',
+    confidence: 'LOW', result: '반도체 장비 수출 규제 우려가 반영됐습니다.',
+    evidence: [ev('공시', '수출 규제 관련 공시', 'DART', '04:10')], evidenceTotal: 2,
+  }),
 ];
 
 /* ─────────── /lineage/news — 근거·계보 ───────────

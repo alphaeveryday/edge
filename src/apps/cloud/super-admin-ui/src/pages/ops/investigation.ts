@@ -1,0 +1,229 @@
+/* 사건 → 조사 경로 (ALPHA-738).
+ *
+ * **모든 사건을 실행에 연결하지 않는다.** 사건마다 기준 축이 다르고, 축이 없는 사건을 억지로
+ * 런에 매달면 무관한 최근 실행이 원인처럼 보인다. 그래서 이 모듈이 하는 일은 하나다 —
+ * 위반이 실제로 들고 있는 식별자만으로 다음 조사 대상을 정하고, 없으면 없다고 말한다.
+ *
+ * 지키는 선:
+ *   · 없는 run_id 를 지어내지 않는다. `runId` 나 drill 앵커가 준 것만 쓴다.
+ *   · 런 행이 없는 슬롯(no_run_row)은 "실행"이 아니라 **예정 슬롯**이다 — 실행 조사로 보내되
+ *     그 화면이 답할 것은 "런 행이 없다"는 근거뿐이라는 사실을 함께 넘긴다.
+ *   · 큐·배포처럼 실행 자체가 없는 사건은 실행 화면을 거치지 않는다. 원장 근거도 없으면
+ *     `ledger: null` 로 두고 화면이 "원장 근거 없음"이라고 쓰게 한다.
+ *   · 조사 문맥은 **식별자**로만 넘긴다. 표시 문자열은 받는 화면이 실제 데이터로 조회한다.
+ */
+import type { Facts, Incident, Violation } from '../../rules/types';
+
+/** 조사 대상의 종류 — 화면이 아니라 **무엇을 조사하는가**다 */
+export type TargetKind = 'run' | 'slot' | 'session' | 'dataset' | 'queue' | 'output';
+
+export interface Target {
+  kind: TargetKind;
+  /** 대상의 실제 식별자(런 키·데이터셋 id·큐 이름 등) */
+  id: string;
+  label: string;
+  /** 왜 이 대상인가 — 추정이 아니라 위반이 들고 있던 축의 설명 */
+  why: string;
+  href: string;
+}
+
+/**
+ * 원장 근거 화면에 넘길 문맥. 값이 있는 키만 필터가 된다 — 문맥이 하나도 없으면 `null` 이고,
+ * 그때 원장 화면은 전체를 덤프하는 대신 "문맥 없이 열 수 없다"고 말한다.
+ */
+export interface LedgerContext {
+  incident?: string;
+  runKey?: string;
+  task?: string;
+  dataset?: string;
+  /** 실시간 세션 축 — 세션 날짜(KST) */
+  date?: string;
+}
+
+export interface Investigation {
+  targets: Target[];
+  ledger: LedgerContext | null;
+  /** 원장 근거가 없거나 제한적일 때의 사유. 있으면 화면이 그대로 보여준다 */
+  ledgerNote: string | null;
+}
+
+/** 실시간 수집 데이터셋 — 어휘 정본은 data_pipeline/minute/states.py */
+const REALTIME_DATASETS = new Set(['price_minute', 'news_minute']);
+
+const q = (v: string) => encodeURIComponent(v);
+
+/**
+ * 사건 하나의 조사 경로. `facts` 는 런 행 존재 여부처럼 **화면이 추정하면 안 되는 사실**을
+ * 확인하는 데만 쓴다(예: 계획됐는데 런 행이 없는 슬롯인가).
+ */
+export function investigate(incident: Incident, facts: Facts): Investigation {
+  const v = incident.root;
+  const [axis, anchor] = v.drill;
+  const vid = v.vid;
+
+  /* ── 실행·작업 축 ── */
+  if (axis === 'run') {
+    /* 작업 앵커는 런을 스스로 말하지 않는다 — 위반이 실은 runId 를 들고 있다.
+     * 없으면 런을 추측하지 않고 작업 축까지만 조사한다(같은 task_key 의 다른 런이 섞인다). */
+    if (anchor.startsWith('task-')) {
+      const taskKey = anchor.slice(5);
+      const runId = v.runId;
+      if (!runId) {
+        return {
+          targets: [],
+          ledger: null,
+          ledgerNote: `이 위반은 작업(${taskKey})만 지목하고 어느 런의 것인지 기록하지 않았다 — 런을 추측해 연결하지 않는다.`,
+        };
+      }
+      const task = facts.tasks.find((t) => t.run_id === runId && t.task_key === taskKey);
+      return {
+        targets: [
+          {
+            kind: 'run',
+            id: runId,
+            label: `${taskKey} · ${runId}`,
+            why: '이 위반이 기록한 run_id 의 작업이다 — 같은 작업명의 다른 런은 열지 않는다',
+            href: `/ops/runs?run_id=${q(runId)}&focus=${q(anchor)}&fromIncident=${q(vid)}`,
+          },
+        ],
+        ledger: {
+          incident: vid,
+          runKey: runId,
+          task: taskKey,
+          ...(task?.dataset ? { dataset: task.dataset } : {}),
+        },
+        ledgerNote: null,
+      };
+    }
+
+    if (anchor.startsWith('run-')) {
+      const runId = anchor.slice(4);
+      const run = facts.runs.find((r) => r.id === runId);
+      /* 계획은 있는데 런 행이 없다 — 실행이 아니라 **예정 슬롯**이다. 실행 화면으로 보내되
+       * 그 화면이 답할 것은 작업 목록이 아니라 "행이 없다"는 근거뿐이다. */
+      if (run?.no_run_row) {
+        return {
+          targets: [
+            {
+              kind: 'slot',
+              id: runId,
+              label: `예정 슬롯 ${runId}`,
+              why: '계획된 슬롯인데 ops_pipeline_run 행이 없다 — 조사 대상은 실행이 아니라 슬롯이다',
+              href: `/ops/runs?run_id=${q(runId)}&fromIncident=${q(vid)}`,
+            },
+          ],
+          ledger: { incident: vid, runKey: runId },
+          ledgerNote:
+            '런 행 자체가 없으므로 원장 근거는 "이 슬롯에 행이 없다"까지다 — 작업·시도 행은 존재하지 않는다.',
+        };
+      }
+      return {
+        targets: [
+          {
+            kind: 'run',
+            id: runId,
+            label: `실행 ${runId}`,
+            why: '이 위반이 지목한 런이다 — 최근 런 전체를 다시 훑지 않는다',
+            href: `/ops/runs?run_id=${q(runId)}&fromIncident=${q(vid)}`,
+          },
+        ],
+        ledger: { incident: vid, runKey: runId },
+        ledgerNote: null,
+      };
+    }
+  }
+
+  /* ── 데이터셋 축 ── 실시간 데이터셋이면 조사 대상은 그 날짜의 세션이다 */
+  if (axis === 'dataset' && anchor.startsWith('ds-')) {
+    const datasetId = anchor.slice(3);
+    const date = facts.meta.today;
+    if (REALTIME_DATASETS.has(datasetId)) {
+      return {
+        targets: [
+          {
+            kind: 'session',
+            id: datasetId,
+            label: `실시간 세션 ${datasetId} · ${date}`,
+            why: '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다',
+            href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
+          },
+        ],
+        ledger: { incident: vid, dataset: datasetId, date },
+        ledgerNote: null,
+      };
+    }
+    return {
+      targets: [
+        {
+          kind: 'dataset',
+          id: datasetId,
+          label: `데이터셋 ${datasetId}`,
+          why: '이 사건의 기준 축은 데이터셋 계약이다 — 특정 실행에 매여 있지 않다',
+          href: `/ops/datasets?focus=${q(anchor)}&fromIncident=${q(vid)}`,
+        },
+      ],
+      ledger: { incident: vid, dataset: datasetId },
+      ledgerNote:
+        '이 사건은 실행에 매여 있지 않아 원장 근거는 데이터셋 축까지다 — 런·작업·시도 행으로 좁힐 식별자가 위반에 없다.',
+    };
+  }
+
+  /* ── 큐 축 ── 실행체가 아예 없는 인프라 사건. 실행 화면을 거치지 않는다 */
+  if (axis === 'chain' && anchor.startsWith('q-')) {
+    return {
+      targets: [
+        {
+          kind: 'queue',
+          id: v.target,
+          label: `큐 ${v.target}`,
+          why: '실행이 아니라 큐·소비자 배선이 근거다 — 관련 실행이 존재하지 않는다',
+          href: `/ops/chain?focus=${q(anchor)}&fromIncident=${q(vid)}`,
+        },
+      ],
+      ledger: null,
+      ledgerNote:
+        '큐 깊이·소비자 배선은 AWS 제어면과 배포 상태가 근거다 — 운영 원장(ops_*)에 대응 행이 없다.',
+    };
+  }
+
+  /* ── 그 밖의 산출·흐름 축 ── 지목 화면까지만 보낸다 */
+  const route: Record<string, string> = {
+    chain: '/ops/chain',
+    trend: '/ops/trend',
+    dataset: '/ops/datasets',
+    delivery: '/ops/delivery',
+  };
+  const href = route[axis];
+  return {
+    targets: href
+      ? [
+          {
+            kind: 'output',
+            id: v.target,
+            label: v.title,
+            why: '이 사건의 기준 축은 산출·흐름이라 실행 하나로 좁혀지지 않는다',
+            href: `${href}?focus=${q(anchor)}&fromIncident=${q(vid)}`,
+          },
+        ]
+      : [],
+    ledger: null,
+    ledgerNote:
+      '이 사건은 실행·작업 식별자를 들고 있지 않아 원장 근거로 좁힐 문맥이 없다 — 실행을 추측해 연결하지 않는다.',
+  };
+}
+
+/** 원장 근거 화면 주소 — 문맥이 없으면 `null`(문맥 없는 원장 열기를 만들지 않는다) */
+export function ledgerHref(ctx: LedgerContext | null): string | null {
+  if (!ctx) return null;
+  const p = new URLSearchParams();
+  if (ctx.incident) p.set('incident', ctx.incident);
+  if (ctx.runKey) p.set('runKey', ctx.runKey);
+  if (ctx.task) p.set('task', ctx.task);
+  if (ctx.dataset) p.set('dataset', ctx.dataset);
+  if (ctx.date) p.set('date', ctx.date);
+  const qs = p.toString();
+  return qs ? `/sources?${qs}` : null;
+}
+
+/** 사건 상세 주소 — vid 가 사건의 식별자다(root 위반 id) */
+export const incidentHref = (v: Violation): string => `/ops/incidents/${encodeURIComponent(v.vid)}`;

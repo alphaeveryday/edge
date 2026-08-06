@@ -25,66 +25,43 @@ interface NavArea {
 }
 interface NavGroup {
   group: string;
-  /** 클릭으로 펼치고 접는 그룹인가. 테넌트 영역은 기존 구조를 그대로 둔다(고정 노출) */
-  collapsible: boolean;
   areas: NavArea[];
 }
 
+/**
+ * 정보 구조 시험판(ALPHA-738) — `운영` 그룹을 없애고 개요·문제를 파이프라인 아래로 넣었다.
+ *
+ * ⚠️ **메뉴에서 뺀 화면의 라우트·컴포넌트는 지우지 않았다**(App.tsx 그대로). 나중에 제거
+ * 여부를 결정할 수 있게 되돌리기 쉬운 상태로 둔다 — 지금은 진입 경로만 정리한다.
+ *   `/ops/chain`   설명 생성 흐름 — 분석 결과 상세·문제에서 실행으로 가는 길이 우선이다
+ *   `/ops/delivery` 전달 경계 — 이 콘솔의 담당 범위 밖(ADR-0026)
+ *   `/lineage/news` 뉴스 계보 — 최상위가 아니라 분석 결과의 근거, 데이터의 퍼널로 들어간다
+ *   `/overview`·`/sources` 원장 — 조사 마지막 근거 화면(앞선 결정)
+ */
 const NAV_GROUPS: NavGroup[] = [
   {
-    /* 전역 운영 — 특정 파이프라인 단계가 아니라 오늘 전체를 묻는 화면들이다 */
-    group: '운영',
-    collapsible: true,
-    areas: [
-      { path: '/', label: '오늘', icon: 'alertTriangle' },
-      { path: '/ops/incidents', label: '문제·사건', icon: 'fileText' },
-    ],
-  },
-  {
     group: '파이프라인',
-    collapsible: true,
     areas: [
+      { path: '/', label: '개요', icon: 'alertTriangle' },
+      { path: '/ops/incidents', label: '문제', icon: 'fileText' },
       {
         path: '/ops/runs',
         label: '실행',
         icon: 'clipboardCheck',
         subs: [
           { path: '/grid', label: '실행 이력' },
-          { path: '/minute', label: '장중 세션' },
-          { path: '/overview', label: '원장' },
+          { path: '/minute', label: '현재 실행' },
         ],
       },
-      {
-        path: '/ops/datasets',
-        label: '데이터',
-        icon: 'database',
-        subs: [
-          { path: '/sources', label: '수집 상태' },
-          { path: '/impact/holdings', label: '결손 영향' },
-        ],
-      },
-      /* Cloud Event Store 에 결과가 적재되고 Cloud 게시 상태가 확정되는 데까지 (ADR-0026) */
-      { path: '/ops/chain', label: '설명 생성 흐름', icon: 'trendChart' },
       { path: '/ops/trend', label: '추이', icon: 'trendChart' },
     ],
   },
   {
-    /* Cloud→테넌트 전달 경계. 테넌트 계정·설정 관리와는 다른 관심사라 그 아래 두지 않는다 */
-    group: '전달',
-    collapsible: true,
-    areas: [{ path: '/ops/delivery', label: 'Cloud 게시·발번 경계', icon: 'shield' }],
-  },
-  {
     group: '분석 결과',
-    collapsible: true,
-    areas: [
-      { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
-      { path: '/lineage/news', label: '근거·계보', icon: 'database' },
-    ],
+    areas: [{ path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' }],
   },
   {
     group: '테넌트 관리',
-    collapsible: false,
     areas: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
 ];
@@ -92,15 +69,6 @@ const NAV_GROUPS: NavGroup[] = [
 /* 메뉴 항목은 실제 링크(a)다 — 주소가 드러나고 새 탭 열기·가운데 클릭이 그대로 동작한다.
  * 전역 `a:hover { text-decoration: underline }` 만 눌러 두고 색·배경은 .nav-item 이 준다. */
 const NAV_LINK: CSSProperties = { textDecoration: 'none' };
-/* 그룹 헤더는 button — 폰트만 상속받고 크기·자간·색은 .nav-section 이 그대로 준다 */
-const GROUP_BTN: CSSProperties = {
-  background: 'none',
-  border: 0,
-  fontFamily: 'inherit',
-  textAlign: 'left',
-  cursor: 'pointer',
-  userSelect: 'none',
-};
 
 /** '/' 는 startsWith 로 모든 경로에 붙는다 — 루트만 정확 일치로 가른다 */
 const matchPath = (path: string, target: string) =>
@@ -132,9 +100,6 @@ export function AdminLayout() {
   const logout = useLogout();
 
   const [menuOpen, setMenuOpen] = useState(false);
-  /* 기본 펼침은 "현재 경로가 속한 그룹 하나"다. 여기 담기는 것은 사용자가 그 위에 덧연
-   * 비활성 그룹뿐이고, 세션 메모리에만 남는다 — 새로고침하면 다시 경로 기준으로 복원된다. */
-  const [userOpenedGroups, setUserOpenedGroups] = useState<Record<string, boolean>>({});
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState('');
   const [profileError, setProfileError] = useState(false);
@@ -164,19 +129,22 @@ export function AdminLayout() {
   } else if (path.startsWith('/tenants')) {
     pageTitle = '테넌트 목록';
   } else if (path.startsWith('/sources')) {
-    pageTitle = '데이터 소스 수집 상태';
+    pageTitle = '원장 근거';
   } else if (path.startsWith('/grid')) {
     pageTitle = '파이프라인 실행 이력';
   } else if (path.startsWith('/minute')) {
-    pageTitle = '장중 1분 수집';
+    /* 지금 가동 중인 것 전체를 묻는다 — 도는 배치 + 활성 수집 세션. URL 은 호환 유지 */
+    pageTitle = '현재 실행';
   } else if (path.startsWith('/analyses')) {
     pageTitle = '가격 변동 분석 목록';
   } else if (path.startsWith('/lineage/news')) {
     pageTitle = '뉴스 계보';
   } else if (path.startsWith('/impact/holdings')) {
-    pageTitle = '구성종목 결손 영향';
+    pageTitle = '구성종목 결손 상세';
+  } else if (/^\/ops\/incidents\/.+/.test(path)) {
+    pageTitle = '사건 상세';
   } else if (path.startsWith('/ops/incidents')) {
-    pageTitle = '문제·사건';
+    pageTitle = '파이프라인 문제';
   } else if (path.startsWith('/ops/runs')) {
     pageTitle = '런·작업 귀결';
   } else if (path.startsWith('/ops/chain')) {
@@ -184,13 +152,15 @@ export function AdminLayout() {
   } else if (path.startsWith('/ops/datasets')) {
     pageTitle = '데이터셋 신선도';
   } else if (path.startsWith('/ops/trend')) {
-    pageTitle = '산출 추이';
+    /* 산출량만이 아니라 완전성·지연·결손까지 본다 — 내비의 '추이' 명칭은 그대로 */
+    pageTitle = '산출·품질 추이';
   } else if (path.startsWith('/ops/delivery')) {
     pageTitle = 'Cloud 게시·발번 경계';
   } else if (path.startsWith('/overview')) {
     pageTitle = '레인 원장 요약';
   } else if (path === '/') {
-    pageTitle = '오늘 운영 요약';
+    /* 상세를 복제하지 않고 "지금 무엇을 봐야 하나"만 짧게 답하는 요약 화면이다 */
+    pageTitle = '파이프라인 개요';
   }
   const showBack = Boolean(tenantId || analysisId);
 
@@ -229,30 +199,14 @@ export function AdminLayout() {
         </div>
 
         {NAV_GROUPS.map((g) => {
-          const groupActive = g.areas.some((a) => inArea(path, a));
-          /* 현재 화면이 속한 그룹은 항상 펼쳐 둔다(접힌 채로 활성 메뉴가 숨지 않게).
-           * 나머지는 기본 접힘이고, 사용자가 눌러 연 동안만 함께 펼쳐진다. */
-          const expanded = !g.collapsible || groupActive || !!userOpenedGroups[g.group];
           return (
             <div key={g.group}>
-              {g.collapsible ? (
-                <button
-                  type="button"
-                  className="nav-section flex w-full items-center gap-1.5"
-                  /* 활성 그룹은 헤더도 밝게 — 어느 영역 안에 있는지 접힘/펼침과 별개로 보인다 */
-                  style={{ ...GROUP_BTN, color: groupActive ? 'var(--gray-300)' : undefined }}
-                  aria-expanded={expanded}
-                  onClick={() => setUserOpenedGroups((s) => ({ ...s, [g.group]: !expanded }))}
-                >
-                  <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} className="flex-none" />
-                  <span>{g.group}</span>
-                </button>
-              ) : (
-                <div className="nav-section">{g.group}</div>
-              )}
+              {/* 그룹 제목은 **비상호작용 heading** 이다 — 접기를 없앴으므로 button 도,
+               * chevron 도, aria-expanded 도 두지 않는다(없는 조작을 약속하지 않는다).
+               * 선택 여부와 무관하게 항상 선명하고, 현재 메뉴 강조는 .nav-item.active 소관이다. */}
+              <h2 className="nav-section">{g.group}</h2>
 
-              {expanded &&
-                g.areas.map((area) => {
+              {g.areas.map((area) => {
                   const onOwnScreen = matchPath(path, area.path);
                   const inside = inArea(path, area);
                   return (
@@ -270,8 +224,10 @@ export function AdminLayout() {
                         <Icon name={area.icon} className="ic" />
                         <span>{area.label}</span>
                       </Link>
-                      {inside &&
-                        area.subs?.map((sub) => {
+                      {/* 하위 화면도 항상 보인다 — 접기를 없앴으므로 "그 영역에 들어와 있을 때만"
+                       * 나타나는 조건도 두지 않는다(위계가 한눈에 보여야 한다). 길어지면
+                       * 사이드바가 스크롤된다. */}
+                      {area.subs?.map((sub) => {
                           const current = matchPath(path, sub.path);
                           return (
                             <Link
@@ -287,7 +243,7 @@ export function AdminLayout() {
                         })}
                     </div>
                   );
-                })}
+              })}
             </div>
           );
         })}

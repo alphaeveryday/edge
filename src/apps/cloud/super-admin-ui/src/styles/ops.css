@@ -166,12 +166,41 @@
   border-color: rgba(47, 125, 91, 0.3);
 }
 
-/* 마스터–상세: 선택된 런 행. 색만으로 말하지 않는다(행 안의 ▶ 표식·"선택됨" 칩과 함께) */
+/* 마스터–상세: 런 행 선택.
+   ⚠️ 선택 표시가 **자리를 차지하면 안 된다** — 예전에는 ▶ 표식과 "선택됨" 칩이 끼어들어
+   런 ID 와 열 위치가 밀렸다. 모든 행이 같은 왼쪽 선 공간을 미리 갖고 색만 바뀐다. */
+.ops-run-row > td:first-child {
+  box-shadow: inset 3px 0 0 transparent;
+}
 .ops-run-selected > td {
   background: var(--accent-tint);
 }
 .ops-run-selected > td:first-child {
   box-shadow: inset 3px 0 0 var(--accent);
+}
+.ops-run-row { cursor: pointer; }
+.ops-run-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* 두 관측 축 셀 — 상태 배지 + 관측 시각(보조) */
+.ops-obs { white-space: nowrap; }
+.ops-obs-at { margin-left: var(--sp-2); }
+
+/* 대조·AWS 근거 카드 — 작업 목록 위에 놓이는 사실 상자 */
+.ops-gapcard {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  padding: var(--sp-4) var(--sp-5);
+}
+.ops-gapcard-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
 }
 /* 표 안의 선택·펼침 트리거 — 링크처럼 보이되 진짜 button 이라 Tab·Enter·Space 가 동작한다 */
 .ops-run-btn {
@@ -407,6 +436,24 @@ button.kpi.ops-sev.ops-sev-on {
   flex-wrap: wrap;
 }
 
+/* 오늘: 실시간 수집 지름길 — 한 줄에 데이터셋 하나. 합산 상태를 만들지 않는다 */
+.ops-rt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.ops-rt-link {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: inherit;
+  text-decoration: none;
+}
+.ops-rt-link:hover { border-color: var(--accent); }
+.ops-rt-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ops-rt-link .ops-lane-link { margin-left: auto; }
+
 /* 오늘: 설명 제공 요약 — 결과 요약이라 상태색을 쓰지 않는다 */
 .ops-stage-cards {
   display: grid;
@@ -430,3 +477,192 @@ button.kpi.ops-sev.ops-sev-on {
   font-variant-numeric: tabular-nums;
   margin-top: var(--sp-2);
 }
+
+/* ── 조사 흐름 (ALPHA-738) ──
+   원장은 먼저 훑는 화면이 아니라 조사의 마지막 근거다. breadcrumb 는 그 경로를 실제
+   식별자로 보여주고, 대상 카드는 "다음에 무엇을 열 것인가"만 말한다. */
+.ops-crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  color: var(--fg-3);
+}
+.ops-crumb > [aria-hidden='true'] { color: var(--fg-4); }
+
+.ops-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--sp-3) var(--sp-6);
+}
+.ops-fact { display: flex; gap: var(--sp-3); align-items: baseline; }
+
+.ops-target-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.ops-target {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: inherit;
+  text-decoration: none;
+}
+.ops-target:hover { border-color: var(--accent); }
+.ops-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ops-target .ops-lane-link { margin-left: auto; }
+
+.ops-ledger-cta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+
+/* ── 단계 흐름 ── 목적은 단계 상태와 실패 위치다(산출량 비교가 아니다) */
+.ops-flow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-4) 0;
+}
+.ops-flow-step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+/* 앞이 막힌 뒤의 단계 — 흐리게 두되 인과를 단정하는 문구는 쓰지 않는다 */
+.ops-flow-after { opacity: 0.6; border-style: dashed; }
+.ops-flow-arrow { color: var(--fg-4); }
+
+/* ── 산출 추이 (small multiples) ──
+   지표마다 독립된 작은 그래프. 단위·규모가 달라 공통 y 축을 쓰지 않는다. */
+.tr-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  gap: var(--sp-4);
+}
+/* 지표가 많아졌다 — 카드는 낮게 유지하고 정의·집계 방식은 (i) 로 내린다 */
+.tr-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+.tr-card-head { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.tr-card-info { margin-left: auto; }
+.tr-meta { color: var(--fg-3); }
+.tr-foot { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
+.tr-drill { margin-left: auto; }
+
+/* 분류 필터 — 이상 지표가 기본이다 */
+.tr-filters { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-5); }
+.tr-filterbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--sm-size);
+  cursor: pointer;
+}
+.tr-filterbtn[aria-pressed='true'] { background: var(--fg-2); color: #fff; border-color: var(--fg-2); }
+.tr-filterbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tr-count { font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+.tr-spark { display: block; width: 100%; height: 44px; overflow: visible; }
+.tr-spark-empty {
+  display: flex;
+  align-items: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--sp-4);
+}
+/* 정상 범위(중앙값 ±25%) 음영 — 상태색이 아니라 배경이다 */
+.tr-band { fill: var(--gray-200); opacity: 0.7; }
+/* 중앙값 기준선 — 파선이라 계열선과 헷갈리지 않는다 */
+.tr-base { stroke: var(--fg-4); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.tr-line { fill: none; stroke: var(--fg-3); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.tr-today { fill: var(--fg-1); }
+/* 이탈한 오늘 점 — 색과 크기가 함께 바뀐다(색만으로 말하지 않는다) */
+.tr-out { fill: var(--down); stroke: var(--bg-surface); stroke-width: 1.5; }
+
+.tr-figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-5);
+}
+.tr-figures b { font-variant-numeric: tabular-nums; }
+.tr-figures-end { margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-2); }
+.tr-link { margin-top: var(--sp-2); }
+.tr-outofscope { margin-top: var(--sp-6); padding-top: var(--sp-5); border-top: 1px solid var(--border); }
+
+/* 퍼널 상태 셀 — 짧은 배지 + ⓘ. 긴 문장을 셀에 넣지 않는다 */
+.ops-badges { display: inline-flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+.ops-badge-with-info { display: inline-flex; align-items: center; gap: 2px; }
+
+/* 개요의 "지금 확인할 것" — 숫자 하나와 다음 행동만 */
+.ops-now { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.ops-now-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: inherit;
+  text-decoration: none;
+}
+.ops-now-item:hover { border-color: var(--accent); }
+.ops-now-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ops-now-item .ops-lane-link { margin-left: auto; }
+
+/* 개요의 실시간 행 — 네 축을 세로로 쌓되 카드는 낮게 유지한다 */
+.ops-rt-axes { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+.ops-rt-head { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.ops-rt-head .ops-lane-link { margin-left: auto; }
+.ops-rt-axis { display: block; }
+
+/* 개요의 즉시 조치 — 카드가 아니라 한 줄. 상세는 문제 화면이 답한다 */
+.ops-p0-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.ops-p0-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ops-p0-line:hover { border-color: var(--accent); }
+.ops-p0-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ops-p0-line .ops-lane-link { margin-left: auto; }

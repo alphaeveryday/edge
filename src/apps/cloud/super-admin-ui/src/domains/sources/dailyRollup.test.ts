@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { datesOf, groupState, rollup, stateOf } from './dailyRollup.ts';
+import { datesOf, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
 import type { GridCell, GridSlot } from './types.ts';
 
@@ -88,7 +88,7 @@ test('기한 전 대기는 실패·누락이 아니라 실행 중이다', () => 
   assert.equal(r.state, '실행 중');
 });
 
-test('기대 실행 수는 원장의 DUE 셀에서 센다 — 주기에서 지어내지 않는다', () => {
+test('기대 실행은 계획이 있던 실행 인스턴스 수다 — DUE 셀 수가 아니다', () => {
   const r = rollup([
     slot('etf-daily:2026-08-03T15:40', '2026-08-03', [
       cell({ taskKey: 'PRICE_COLLECTION_KIS' }),
@@ -97,8 +97,21 @@ test('기대 실행 수는 원장의 DUE 셀에서 센다 — 주기에서 지�
       cell({ taskKey: 'LOAD_PRICE_DAILY', planStatus: 'SKIPPED', outcome: null, dataStatus: null }),
     ]),
   ]).get('price_daily|2026-08-03')!;
-  assert.equal(r.expected, 2);
-  assert.equal(r.counts.skipped, 1);
+  /* 예전에는 DUE 셀마다 +1 해서 2가 나왔다 — 실행은 한 번인데 기대가 2로 부풀던 자리다 */
+  assert.equal(r.expected, 1);
+  assert.equal(r.executions.length, 1);
+  assert.equal(r.counts.skipped, 1, '작업 축 카운트는 그대로 남는다');
+});
+
+test('계획(DUE)이 하나도 없는 실행은 기대 실행에 세지 않는다', () => {
+  const r = rollup([
+    slot('etf-daily:2026-08-03T16:20', '2026-08-03', [
+      cell({ taskKey: 'PRICE_COLLECTION_KIS', planStatus: 'SKIPPED', outcome: null, dataStatus: null }),
+    ]),
+  ]).get('price_daily|2026-08-03')!;
+  assert.equal(r.executions.length, 1, '관측된 실행은 있다');
+  assert.equal(r.expected, 0, '계획된 실행은 아니다');
+  assert.equal(r.state, '계획 스킵');
 });
 
 test('같은 날짜의 여러 런이 박스 하나로 접힌다', () => {
@@ -110,12 +123,70 @@ test('같은 날짜의 여러 런이 박스 하나로 접힌다', () => {
   ]);
   assert.equal(map.size, 1, '데이터셋×날짜 하나');
   const r = map.get('stock_news|2026-08-03')!;
-  assert.equal(r.runs.length, 2);
-  assert.deepEqual([...new Set(r.runs.map((x) => x.runKey))].sort(), [
+  /* 다른 런은 별도 실행으로 남는다 — 날짜로 합치지 않는다 */
+  assert.equal(r.executions.length, 2);
+  assert.deepEqual(r.executions.map((e) => e.runKey).sort(), [
     'news:2026-08-03T15:00',
     'news:2026-08-03T15:30',
   ]);
   assert.equal(r.state, '장애');
+});
+
+/* ── 실행 인스턴스 축 — 작업을 실행으로 세지 않는다 ── */
+
+test('한 런의 작업 3개는 실행 1회다 — 기대 실행이 작업 수로 부풀지 않는다', () => {
+  const map = rollup([
+    slot('etf-daily:2026-08-03T15:40', '2026-08-03', [
+      cell({ taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null }),
+      cell({ taskKey: 'NORMALIZE_PRICE', outcome: 'BLOCKED', dataStatus: null }),
+      cell({ taskKey: 'LOAD_PRICE_DAILY', outcome: 'PENDING', dataStatus: null }),
+    ]),
+    /* 같은 날 재실행 — 작업 1개짜리 별도 런 */
+    slot('etf-daily:2026-08-03T16:20', '2026-08-03', [cell({ taskKey: 'PRICE_COLLECTION_KIS' })]),
+  ]);
+  const r = map.get('price_daily|2026-08-03')!;
+  assert.equal(r.executions.length, 2, '실행은 2회다(작업 4개가 아니다)');
+  assert.equal(r.expected, 2, '기대 실행도 2 — DUE 셀 수(4)가 아니다');
+  /* 작업 축은 따로 남는다 — 실행 축과 섞지 않는다 */
+  assert.equal(r.counts.failed, 2); // FAILED + BLOCKED
+  assert.equal(r.executions[0].tasks.length, 3, '15:40 실행을 펼치면 작업 3개');
+  assert.equal(r.executions[1].tasks.length, 1);
+});
+
+test('실행마다 자기 상태를 갖는다 — 일별 장애가 어느 실행의 것인지 알 수 있다', () => {
+  const map = rollup([
+    slot('etf-daily:2026-08-03T15:40', '2026-08-03', [
+      cell({ taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null }),
+    ]),
+    slot('etf-daily:2026-08-03T16:20', '2026-08-03', [cell({ taskKey: 'PRICE_COLLECTION_KIS' })]),
+  ]);
+  const r = map.get('price_daily|2026-08-03')!;
+  assert.equal(r.state, '장애', '하루는 최악 실행을 따른다');
+  assert.deepEqual(
+    r.executions.map((e) => [e.runKey.slice(-5), e.state]),
+    [
+      ['15:40', '장애'],
+      ['16:20', '정상'],
+    ],
+  );
+});
+
+test('10회 실행 × 작업 3개가 30건으로 평탄화되지 않는다', () => {
+  const slots = Array.from({ length: 10 }, (_, i) =>
+    slot(`etf-daily:2026-08-03T${String(10 + i).padStart(2, '0')}:00`, '2026-08-03', [
+      cell({ taskKey: 'PRICE_COLLECTION_KIS' }),
+      cell({ taskKey: 'NORMALIZE_PRICE' }),
+      cell({ taskKey: 'LOAD_PRICE_DAILY' }),
+    ]),
+  );
+  const r = rollup(slots).get('price_daily|2026-08-03')!;
+  assert.equal(r.executions.length, 10, '기본 목록은 실행 10건');
+  assert.equal(r.expected, 10);
+  assert.equal(
+    r.executions.reduce((a, e) => a + e.tasks.length, 0),
+    30,
+    '작업 30개는 실행을 펼쳐야 나온다',
+  );
 });
 
 test('카탈로그에 없는 작업은 어느 데이터셋에도 배정하지 않는다', () => {
@@ -143,14 +214,8 @@ test('셀이 없으면 계획 없음, 전부 스킵이면 계획 스킵', () => 
   assert.equal(stateOf(counts({ skipped: 1, fulfilled: 1 }), 2), '정상');
 });
 
-test('그룹 행은 하위 상태를 결정적으로 집계한다', () => {
-  assert.equal(groupState(['정상', '주의', '장애']), '장애');
-  assert.equal(groupState(['정상', '주의', '실행 중']), '주의');
-  assert.equal(groupState(['정상', '실행 중']), '실행 중');
-  assert.equal(groupState(['정상', '계획 스킵']), '정상');
-  assert.equal(groupState(['계획 없음', '계획 스킵']), '계획 스킵');
-  assert.equal(groupState([]), '계획 없음');
-});
+/* 그룹 롤업 테스트는 함수와 함께 제거했다 — 시장·뉴스·장중은 제어 단위가 아니라서
+ * 그 층위의 상태는 원장에 근거가 없다(행은 데이터셋이 직접 선다). */
 
 /* ── 날짜 축 ── */
 

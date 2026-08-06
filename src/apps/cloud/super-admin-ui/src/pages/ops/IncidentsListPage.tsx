@@ -12,7 +12,8 @@ import { useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { Severity } from '../../rules/types';
-import { INCIDENTS, Info, SEV_TONE, drillHref, fmt, runbookOf, violationTip } from './shared';
+import { OUT_OF_SCOPE_INCIDENTS, PIPELINE_INCIDENTS, Info, SEV_TONE, fmt, runbookOf, violationTip } from './shared';
+import { incidentHref } from './investigation';
 import '../../styles/ops.css';
 
 const SEVERITIES: Severity[] = ['P0', 'P1', 'P2'];
@@ -22,7 +23,7 @@ const SEV_MEANING: Record<Severity, string> = {
   P2: '기록해 두고 본다',
 };
 const isSeverity = (v: string | null): v is Severity => v === 'P0' || v === 'P1' || v === 'P2';
-const bySeverity = (sev: Severity) => INCIDENTS.filter((i) => i.sev === sev);
+const bySeverity = (sev: Severity) => PIPELINE_INCIDENTS.filter((i) => i.sev === sev);
 
 export function IncidentsListPage() {
   const [params, setParams] = useSearchParams();
@@ -51,14 +52,20 @@ export function IncidentsListPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="card card-pad">
-        <p className="t-sm m-0">심각도를 골라 그 사건만 봅니다.</p>
+        <p className="t-sm m-0">
+          실행·작업 실패, 데이터 결손·신선도, 장중 수집 지연·무증거, 분석 생성 실패, 원장·관측
+          불일치 — 파이프라인 소관 문제만 봅니다.
+        </p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
           {/* 전체 개수는 보조 문구로만 — 단순 합계를 핵심 카드로 세우지 않는다 */}
-          규칙이 오늘 잡은 사건은 모두 {INCIDENTS.length}건입니다. 정렬은 evaluate() 가 낸 순서(심각도 →
+          규칙이 오늘 잡은 파이프라인 문제는 모두 {PIPELINE_INCIDENTS.length}건입니다
+          {OUT_OF_SCOPE_INCIDENTS.length > 0 &&
+            ` (전달 경계 등 담당 범위 밖 ${OUT_OF_SCOPE_INCIDENTS.length}건 제외)`}
+          . 정렬은 evaluate() 가 낸 순서(심각도 →
           연쇄 크기 → 대표 수치) 그대로이고, 단위가 다른 수치를 가로질러 비교하지 않으므로 같은 심각도
           안의 위아래를 조치 우선순위로 읽지 마세요.
           {' · '}
-          <Link to="/">오늘 운영 요약으로</Link>
+          <Link to="/">파이프라인 개요로</Link>
         </p>
       </div>
 
@@ -159,7 +166,7 @@ export function IncidentsListPage() {
                         <button
                           type="button"
                           className="ops-run-btn"
-                          onClick={() => navigate(drillHref(I.root))}
+                          onClick={() => navigate(incidentHref(I.root))}
                         >
                           상세 →
                         </button>

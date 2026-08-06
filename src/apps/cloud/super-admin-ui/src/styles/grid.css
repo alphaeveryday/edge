@@ -46,6 +46,11 @@
 .gd-s-skip { background: repeating-linear-gradient(45deg, #e5e7eb 0 3px, #fff 3px 6px); }
 /* 계획 없음 — 그 날짜에 계획 행 자체가 없다 */
 .gd-s-none { background: #fff; border-style: dashed; }
+/* 다른 원장 — 판정이 아니라 "이 격자가 담지 않는다"는 사실. 상태색을 쓰지 않는다 */
+.gd-s-other {
+  background: repeating-linear-gradient(90deg, var(--gray-300) 0 1px, #fff 1px 4px);
+  border-style: dotted;
+}
 
 /* 격자 표 — sticky 행 머리와 날짜 열 */
 .gd-scroll { overflow-x: auto; padding: 0 var(--sp-6) var(--sp-5); }
@@ -58,10 +63,40 @@
   text-align: left;
   font-weight: 500;
   white-space: nowrap;
-  padding: 2px var(--sp-5) 2px 0;
-  min-width: 148px;
+  padding: var(--sp-2) var(--sp-5) var(--sp-2) 0;
+  min-width: 172px;
 }
-.gd-rowhead-sub { padding-left: var(--sp-6); color: var(--fg-2); font-weight: 400; }
+/* 행 머리 — 이름 + 유형·도메인 배지. 그룹 층이 없어 행이 곧 제어 단위다 */
+.gd-rowname { display: block; font-weight: 600; color: var(--fg-1); }
+.gd-rowmeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-top: 1px;
+}
+.gd-rowmeta .chip { font-size: 10px; padding: 0 4px; }
+
+/* 필터 — 유형·도메인 두 축이 같은 모양 */
+.gd-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-6);
+  margin-bottom: var(--sp-4);
+}
+.gd-filter { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.gd-filterbtn {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--xs-size);
+  cursor: pointer;
+}
+.gd-filterbtn[aria-pressed='true'] { background: var(--fg-2); color: #fff; }
+.gd-filterbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .gd-datehead {
   padding: 2px 3px 6px;
   font-size: 10px;
@@ -70,19 +105,6 @@
   white-space: nowrap;
 }
 .gd-box { padding: 2px; }
-/* 그룹 펼치기 — 진짜 버튼이라 Tab·Enter·Space 가 동작한다 */
-.gd-grouptoggle {
-  border: 0;
-  background: none;
-  padding: 2px 0;
-  font: inherit;
-  font-weight: 600;
-  color: var(--fg-1);
-  cursor: pointer;
-  text-align: left;
-}
-.gd-grouptoggle:hover { color: var(--accent); }
-.gd-grouptoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
 /* 선택된 박스 — 색 외에 링으로도 표시 */
 .gd-cellbtn.gd-selected .gd-cell { box-shadow: 0 0 0 2px var(--accent); }
 

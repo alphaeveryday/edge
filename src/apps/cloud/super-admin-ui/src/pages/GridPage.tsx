@@ -4,25 +4,36 @@
  *
  * 역할 분리:
  *   실행 이력(여기) — 여러 **날짜**를 비교하는 일 단위 요약. 박스 하나 = 데이터셋 × 날짜.
- *   장중 세션(/minute) — 특정 날짜의 분·시간 단위 상태. 여기서 복제하지 않는다.
+ *   실시간 세션(/minute) — 특정 날짜의 분·poll 단위 상태. 여기서 복제하지 않고 지목해 보낸다.
  *   실행 원장 상세(/sources) — 개별 실행의 시도·이슈·산출물.
  *
- * 이전 구조와 다른 점: 행이 **작업(task_key)** 이 아니라 **운영 그룹 › 데이터셋**이고,
- * 열이 **슬롯(런)** 이 아니라 **날짜**다. 같은 날 런이 여럿이어도 박스 하나로 접힌다.
+ * 행은 **데이터셋**이 직접 선다. 시장·뉴스·일배치·실시간은 **필터와 배지**이지 상태를 갖는
+ * 부모 행이 아니다 — 그 층위는 실제 제어 단위가 아니라서 성공/장애를 매길 원장 근거가 없다.
+ *
+ * 실행 인스턴스는 화면에서만 union 이다(DB 통합 아님):
+ *   배치 실행    — ops 원장의 런×작업  → /sources 실행 상세
+ *   실시간 세션  — minute_ingestion_session → /minute?date=&dataset= 세션 상세
+ * 1분 창 390개를 최상위 런으로 세우지 않는다 — 실시간의 상위 단위는 데이터셋 × 세션 날짜다.
  *
  * 데이터셋 축은 화면 쪽 카탈로그다 — 격자 API 가 dataset 을 주지 않는다(datasetCatalog 참고).
  * 상태·기대 실행 수는 원장 값에서만 센다(dailyRollup 참고) — 주기로 숫자를 지어내지 않는다.
  */
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type { SourceGrid } from '../domains/sources';
 import { useSourceGrid } from '../domains/sources/hooks';
-import { CATALOG_SOURCE, DATASET_GROUPS } from '../domains/sources/datasetCatalog';
-import type { DatasetEntry } from '../domains/sources/datasetCatalog';
-import { datesOf, groupState, rollup } from '../domains/sources/dailyRollup';
-import type { DayRollup, DayState } from '../domains/sources/dailyRollup';
+import {
+  ALL_DATASETS,
+  CATALOG_SOURCE,
+  DATASET_DOMAINS,
+  DATASET_KINDS,
+  kindOf,
+} from '../domains/sources/datasetCatalog';
+import type { DatasetDomain, DatasetEntry, DatasetKindLabel } from '../domains/sources/datasetCatalog';
+import { datesOf, rollup } from '../domains/sources/dailyRollup';
+import type { DayExecution, DayRollup, DayState } from '../domains/sources/dailyRollup';
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
@@ -38,8 +49,17 @@ const STATE_CLASS: Record<DayState, string> = {
   '실행 중': 'gd-s-run',
   '계획 스킵': 'gd-s-skip',
   '계획 없음': 'gd-s-none',
+  '상태 미제공': 'gd-s-nostate',
 };
-const STATE_ORDER: DayState[] = ['정상', '주의', '장애', '실행 중', '계획 스킵', '계획 없음'];
+const STATE_ORDER: DayState[] = [
+  '정상',
+  '주의',
+  '장애',
+  '실행 중',
+  '계획 스킵',
+  '계획 없음',
+  '상태 미제공',
+];
 const STATE_TONE: Record<DayState, BadgeTone> = {
   정상: 'active',
   주의: 'warn',
@@ -47,7 +67,11 @@ const STATE_TONE: Record<DayState, BadgeTone> = {
   '실행 중': 'env',
   '계획 스킵': 'gated',
   '계획 없음': 'neutral',
+  '상태 미제공': 'neutral',
 };
+
+/* 원장 stage 어휘 → 표시명. 모르는 stage 는 원문 그대로 둔다 */
+const STAGE_LABEL: Record<string, string> = { raw: '수집', normalize: '정제', feature: '적재' };
 
 const OUTCOME_LABEL: Record<string, string> = {
   FULFILLED: '성공',
@@ -58,7 +82,8 @@ const OUTCOME_LABEL: Record<string, string> = {
 };
 
 const STATUS_TIP = [
-  '박스 하나 = 데이터셋 × 날짜. 그 날짜에 예정된 실행·수집을 전부 접은 결과다.',
+  '박스 하나 = 데이터셋 × 날짜. 그날의 **실행 인스턴스** 상태를 전부 접은 결과다.',
+  '실행 인스턴스는 runKey 하나다 — 한 런에 작업이 3개여도 실행은 1회로 센다.',
   '',
   '정상 — 기한이 지난 기대 실행이 모두 정상 귀결됐다',
   '주의 — 불완전·무효·유실 등 확인이 필요하다',
@@ -71,10 +96,14 @@ const STATUS_TIP = [
   '  빈 데이터(VALID_EMPTY) — 돌았고 그 날 데이터가 없었다는 증거가 남았다. 정상이다.',
   '  무증거(MISSED) — 기한이 지났는데 실행·결과 증거가 없다. 장애다.',
   '',
-  '기대 실행 수는 주기에서 지어내지 않고 원장의 계획 행(plan_status=DUE)을 센다 —',
-  '그래서 주기가 다른 데이터셋에 같은 기대치가 적용되지 않는다.',
+  '상태 미제공 — API 가 그 날짜의 판정 값을 주지 않았다. 계획 없음(계획 행이 없다)과 다른',
+  '  사실이라 합치지 않는다. 실시간 데이터셋은 최근 7일 요약 엔드포인트가 없어 여기 해당한다.',
   '',
-  '그룹 행은 하위 데이터셋 상태의 결정적 집계다(장애 > 주의 > 실행 중 > 정상 > 계획 스킵 > 계획 없음).',
+  '기대 실행 수는 주기에서 지어내지 않고 계획(plan_status=DUE)이 있던 실행 인스턴스를 센다 —',
+  '작업 수가 아니다. 그래서 일배치와 실시간 데이터셋에 같은 기대 실행 수가 적용되지 않는다.',
+  '',
+  '유형(일배치·실시간)과 도메인(시장·뉴스)은 필터·배지다 — 그 층위는 실제 제어 단위가',
+  '아니라서 성공/장애를 매길 원장 근거가 없다. 그래서 그룹 롤업 행을 두지 않는다.',
 ].join('\n');
 
 /** 박스 — 격자와 범례가 이 컴포넌트 하나를 공유한다(두 곳에 모양을 복제하면 범례가 거짓말한다) */
@@ -98,12 +127,38 @@ function GridLegend() {
 
 const mmdd = (d: string) => d.slice(5);
 
-type LaneFilter = 'all' | 'market' | 'news';
-const LANE_FILTERS: { key: LaneFilter; label: string }[] = [
-  { key: 'all', label: '전체' },
-  { key: 'market', label: '시장' },
-  { key: 'news', label: '뉴스' },
-];
+/** 필터 버튼 묶음 — 유형·도메인 두 축이 같은 모양을 쓴다(축마다 다른 조작을 만들지 않는다) */
+function FilterRow<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T | 'all';
+  options: T[];
+  onChange: (v: T | 'all') => void;
+}) {
+  const all: (T | 'all')[] = ['all', ...options];
+  return (
+    <span className="gd-filter" role="group" aria-label={`${label} 필터`}>
+      <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+        {label}
+      </span>
+      {all.map((o) => (
+        <button
+          key={o}
+          type="button"
+          className="gd-filterbtn"
+          aria-pressed={value === o}
+          onClick={() => onChange(o)}
+        >
+          {o === 'all' ? '전체' : o}
+        </button>
+      ))}
+    </span>
+  );
+}
 
 export function GridPage() {
   const { data: grid, isPending, isError, error } = useSourceGrid();
@@ -133,37 +188,33 @@ interface Selection {
 }
 
 function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) {
-  const [laneFilter, setLaneFilter] = useState<LaneFilter>('all');
-  /* 기본은 접힘 — 전부 펼치면 화면이 다시 길어진다 */
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [kindFilter, setKindFilter] = useState<DatasetKindLabel | 'all'>('all');
+  const [domainFilter, setDomainFilter] = useState<DatasetDomain | 'all'>('all');
   const [selected, setSelected] = useState<Selection | null>(null);
 
-  const slots = useMemo(
-    () =>
-      grid.slots.filter((slot) => {
-        if (laneFilter === 'all') return true;
-        return laneFilter === 'news'
-          ? slot.runKey.startsWith('news:')
-          : !slot.runKey.startsWith('news:');
-      }),
-    [grid.slots, laneFilter],
-  );
-
-  const dates = useMemo(() => datesOf(slots), [slots]);
-  const rolled = useMemo(() => rollup(slots), [slots]);
+  /* 필터는 **행**에만 건다 — 슬롯을 걸러 날짜 축까지 바뀌면 필터를 바꿀 때마다 열이 움직인다 */
+  const dates = useMemo(() => datesOf(grid.slots), [grid.slots]);
+  const rolled = useMemo(() => rollup(grid.slots), [grid.slots]);
   const at = (datasetId: string, date: string) => rolled.get(`${datasetId}|${date}`);
 
-  /* 이 창에서 셀이 하나도 없는 데이터셋은 감춘다 — 레인 필터로 통째로 빈 행은 소음이다.
-   * 다른 원장 소관(장중)은 필터와 무관하게 남겨 "이 격자에 없다"는 사실을 말한다. */
-  const visibleGroups = DATASET_GROUPS.map((g) => ({
-    ...g,
-    datasets: g.datasets.filter(
-      (d) => !d.inOpsGrid || dates.some((date) => at(d.id, date) !== undefined),
-    ),
-  })).filter((g) => g.datasets.length > 0);
+  /* 이 창에서 셀이 하나도 없는 배치 데이터셋은 감춘다 — 통째로 빈 행은 소음이다.
+   * 실시간 데이터셋은 이 격자에 셀이 아예 없는 게 정상이라 그 규칙에서 뺀다. */
+  const rows = ALL_DATASETS.filter((d) => {
+    if (kindFilter !== 'all' && kindOf(d) !== kindFilter) return false;
+    if (domainFilter !== 'all' && d.domain !== domainFilter) return false;
+    return !d.inOpsGrid || dates.some((date) => at(d.id, date) !== undefined);
+  });
 
-  const stateOfDataset = (d: DatasetEntry, date: string): DayState =>
-    at(d.id, date)?.state ?? '계획 없음';
+  /**
+   * 셀 상태 — **데이터 출처를 상태로 만들지 않는다.** 배치든 실시간이든 같은 어휘를 쓰고,
+   * 판정 값이 없을 때만 `상태 미제공` 이다. 실시간은 최근 7일 요약 API 가 없어 실데이터에서는
+   * 전부 여기 해당한다(목 미리보기에서는 목표 구조를 볼 수 있게 목 판정을 쓴다).
+   */
+  const boxState = (d: DatasetEntry, date: string): DayState => {
+    const r = at(d.id, date);
+    if (r) return r.state;
+    return d.inOpsGrid ? '계획 없음' : '상태 미제공';
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -173,43 +224,39 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             최근 {grid.days}일 · 데이터셋별 일 단위
           </span>
-          <span style={{ display: 'inline-flex', gap: 4 }}>
-            {LANE_FILTERS.map((f) => (
-              <button
-                key={f.key}
-                type="button"
-                className="t-xs"
-                aria-pressed={laneFilter === f.key}
-                onClick={() => {
-                  setLaneFilter(f.key);
-                  setSelected(null);
-                }}
-                style={{
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                  border: '1px solid var(--border-strong)',
-                  cursor: 'pointer',
-                  background: laneFilter === f.key ? 'var(--fg-2)' : 'transparent',
-                  color: laneFilter === f.key ? '#fff' : 'var(--fg-2)',
-                }}
-              >
-                {f.label}
-              </button>
-            ))}
-          </span>
         </div>
 
         <div className="card-pad" style={{ paddingTop: 0 }}>
+          <div className="gd-filters">
+            <FilterRow
+              label="유형"
+              value={kindFilter}
+              options={DATASET_KINDS}
+              onChange={(v) => {
+                setKindFilter(v);
+                setSelected(null);
+              }}
+            />
+            <FilterRow
+              label="도메인"
+              value={domainFilter}
+              options={DATASET_DOMAINS}
+              onChange={(v) => {
+                setDomainFilter(v);
+                setSelected(null);
+              }}
+            />
+          </div>
           <GridLegend />
           <div className="gd-hint">
             <span>
-              <b>그룹 행</b> 선택 → 데이터셋 펼치기
+              <b>박스</b> 선택 → 그 데이터셋·날짜의 실행 목록
             </span>
             <span>
-              <b>박스</b> 선택 → 그 데이터셋·날짜의 일별 요약과 실행 목록
+              실행 목록에서 <b>배치 실행</b>은 실행 상세로, <b>실시간 세션</b>은 세션 상세로 갑니다
             </span>
             <span style={{ marginLeft: 'auto' }}>
-              분 단위 상태는 <Link to="/minute">장중 세션</Link>이 답합니다
+              분·poll 단위 상태는 <Link to="/minute">현재 실행</Link>이 답합니다
             </span>
           </div>
         </div>
@@ -217,11 +264,7 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
         {dates.length === 0 ? (
           <div className="card-pad" style={{ paddingTop: 0 }}>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-              {laneFilter === 'all'
-                ? `최근 ${grid.days}일 안에 기록된 파이프라인 실행이 없습니다.`
-                : `최근 ${grid.days}일 안에 이 레인의 실행이 없습니다 (필터: ${
-                    LANE_FILTERS.find((f) => f.key === laneFilter)?.label
-                  }).`}
+              최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.
             </p>
           </div>
         ) : (
@@ -238,82 +281,40 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                 </tr>
               </thead>
               <tbody>
-                {visibleGroups.map((g) => {
-                  const open = !!openGroups[g.group];
-                  return (
-                    <Fragment key={g.group}>
-                      <tr>
-                        <th className="gd-rowhead" scope="row">
+                {rows.map((d) => (
+                  <tr key={d.id}>
+                    <th className="gd-rowhead" scope="row">
+                      <span className="gd-rowname">{d.label}</span>
+                      {/* 유형·도메인은 배지다 — 상태를 갖는 부모 행으로 세우지 않는다 */}
+                      <span className="gd-rowmeta">
+                        <span className="chip">{kindOf(d)}</span>
+                        <span className="chip">{d.domain}</span>
+                        <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                          {d.cadence.label}
+                        </span>
+                      </span>
+                    </th>
+                    {dates.map((date) => {
+                      const r = at(d.id, date);
+                      const st = boxState(d, date);
+                      const sel = selected?.dataset.id === d.id && selected?.date === date;
+                      return (
+                        <td key={date} className="gd-box">
                           <button
                             type="button"
-                            className="gd-grouptoggle"
-                            aria-expanded={open}
-                            onClick={() => setOpenGroups((s) => ({ ...s, [g.group]: !s[g.group] }))}
+                            className={'gd-cellbtn' + (sel ? ' gd-selected' : '')}
+                            aria-pressed={sel}
+                            title={boxTip(d, date, r)}
+                            aria-label={`${d.label} ${date} ${st} — 그날 실행 목록 보기`}
+                            onClick={() => setSelected(sel ? null : { dataset: d, date, rollup: r })}
                           >
-                            <span aria-hidden="true">{open ? '▾' : '▸'}</span> {g.group}
+                            <StateBox state={st} />
                           </button>
-                        </th>
-                        {dates.map((date) => {
-                          const st = groupState(g.datasets.map((d) => stateOfDataset(d, date)));
-                          return (
-                            <td key={date} className="gd-box">
-                              {/* 그룹 박스는 요약이라 선택 대상이 아니다 — 조치는 데이터셋 단위다 */}
-                              <span
-                                className="gd-static"
-                                title={`${g.group} · ${date} · ${st}\n하위 데이터셋 ${g.datasets.length}개의 집계`}
-                                aria-label={`${g.group} ${date} ${st}`}
-                              >
-                                <StateBox state={st} />
-                              </span>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                      {open &&
-                        g.datasets.map((d) => (
-                          <tr key={`${g.group}|${d.id}`}>
-                            <th className="gd-rowhead gd-rowhead-sub" scope="row">
-                              {d.label}
-                              {!d.inOpsGrid && d.elsewhere && (
-                                <Link to={d.elsewhere.href} className="t-xs" style={{ marginLeft: 6 }}>
-                                  {d.elsewhere.label} →
-                                </Link>
-                              )}
-                            </th>
-                            {dates.map((date) => {
-                              const r = at(d.id, date);
-                              const st = r?.state ?? '계획 없음';
-                              const sel = selected?.dataset.id === d.id && selected?.date === date;
-                              const tip = boxTip(d, date, r);
-                              return (
-                                <td key={date} className="gd-box">
-                                  {mock || !d.inOpsGrid ? (
-                                    /* 목 미리보기와 다른 원장 소관은 선택 대상이 아니다 */
-                                    <span className="gd-static" title={tip}>
-                                      <StateBox state={st} />
-                                    </span>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      className={'gd-cellbtn' + (sel ? ' gd-selected' : '')}
-                                      aria-pressed={sel}
-                                      title={tip}
-                                      aria-label={`${d.label} ${date} ${st} — 일별 요약 보기`}
-                                      onClick={() =>
-                                        setSelected(sel ? null : { dataset: d, date, rollup: r })
-                                      }
-                                    >
-                                      <StateBox state={st} />
-                                    </button>
-                                  )}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                    </Fragment>
-                  );
-                })}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -321,8 +322,11 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
 
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            행 축(운영 그룹 · 데이터셋 · 수집 주기)은 <b>{CATALOG_SOURCE}</b>입니다 — 격자 응답이 데이터셋을
-            주지 않아 화면이 작업을 데이터셋으로 묶습니다. 상태와 기대 실행 수는 원장 값에서만 셉니다.
+            행 축(데이터셋 · 유형 · 도메인 · 수집 주기)은 <b>{CATALOG_SOURCE}</b>입니다 — 격자 응답이
+            데이터셋을 주지 않아 화면이 작업을 데이터셋으로 묶습니다. 상태와 기대 실행 수는 원장
+            값에서만 셉니다. 실시간 데이터셋의 판정 출처는 <b>minute_ingestion_session/window</b>이고,
+            그 원장에는 최근 7일 일별 요약 엔드포인트가 없어 실데이터에서는 <b>상태 미제공</b>으로
+            둡니다 — 없는 판정을 지어내지 않습니다.
           </p>
         </div>
       </div>
@@ -335,14 +339,11 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
 function boxTip(d: DatasetEntry, date: string, r?: DayRollup): string {
   if (!d.inOpsGrid) {
     return [
-      `${d.label} · ${date}`,
-      `이 격자의 원장(ops_expected_task)에 없습니다 — ${
-        d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'
-      } 소관`,
-      d.elsewhere ? `${d.elsewhere.label} 화면에서 확인` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+      `${d.label} · ${date} · 상태 미제공`,
+      `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'}`,
+      '그 원장에 최근 7일 일별 요약 엔드포인트가 없어 이 날짜의 판정 값을 받지 못했습니다',
+      '없는 상태를 지어내지 않습니다 — 선택하면 그날의 세션 상세로 갑니다',
+    ].join('\n');
   }
   if (!r) return `${d.label} · ${date} · 계획 없음\n이 날짜에 계획 행이 없습니다`;
   const c = r.counts;
@@ -364,31 +365,111 @@ function boxTip(d: DatasetEntry, date: string, r?: DayRollup): string {
     .join('\n');
 }
 
-/** 박스 선택 → 일별 요약과 실행 목록. 개별 실행은 기존 실행 원장 상세로 내려간다. */
+/**
+ * 박스 선택 → 그날의 **실행 인스턴스 목록**. 작업은 실행을 펼쳐야 나온다.
+ *
+ * 기본은 접힘이되 **문제 있는 실행만 펼친다** — 정상 실행까지 펼치면 하루 10회 × 작업 3개가
+ * 다시 30행 평탄화가 된다. 일별 배지만 두고 어느 실행이 장애인지 못 찾는 상태로 두지 않는다.
+ *
+ * 작업을 고르면 **실행 상세**(/ops/runs)로 간다 — 원장 근거로 바로 건너뛰지 않는다.
+ * 정식 순서: 실행 이력 → 실행 목록 → 실행 상세 → 작업 상세 → 원장 근거.
+ *
+ * ⚠️ 런 kind(정규·수동·백필)는 격자 응답에 없다(decisions.md §3-4 계측 부채) — 여기서
+ * runKey 모양으로 추측하지 않고 `배치 실행`까지만 단언한다.
+ */
 function DayDetail({ sel, mock, onClose }: { sel: Selection; mock: boolean; onClose: () => void }) {
-  const navigate = useNavigate();
   const { dataset: d, date, rollup: r } = sel;
-  const c = r?.counts;
-  const open = (runKey: string, taskKey: string) =>
-    navigate(
-      `/sources?${mock ? 'preview=mock&' : ''}runKey=${encodeURIComponent(
-        runKey,
-      )}&task=${encodeURIComponent(taskKey)}`,
-    );
 
-  const figures: [string, number][] = c
-    ? [
-        ['성공', c.fulfilled],
-        ['빈 데이터 증거', c.emptyEvidence],
-        ['실패', c.failed],
-        ['불완전', c.incomplete],
-        ['무효', c.invalid],
-        ['무증거', c.noEvidence],
-        ['판정 대기', c.pending],
-        ['실행 중', c.running],
-        ['계획 스킵', c.skipped],
-      ]
-    : [];
+  /* 실시간 데이터셋 — 이 격자에는 그날의 판정이 없다. 세션 한 건을 실행 인스턴스로 세우고 보낸다.
+   * 1분 창 390개를 최상위 실행 390개로 펼치지 않는다(상위 단위는 데이터셋 × 세션 날짜). */
+  if (d.sessionDataset) {
+    const href = `/minute?date=${date}&dataset=${d.sessionDataset}`;
+    return (
+      <div className="card" id="gd-detail">
+        <div className="card-head">
+          <span className="t-label">
+            {d.label} · {date}
+          </span>
+          <StatusBadge tone={STATE_TONE['상태 미제공']}>상태 미제공</StatusBadge>
+          <InfoPopover
+            label="판정 출처"
+            title="판정 출처"
+            text={
+              `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '—'}\n\n` +
+              '이 원장에는 최근 7일 일별 요약 엔드포인트가 없어 격자가 이 날짜의 판정 값을 받지 못했다.\n' +
+              '데이터 출처가 다른 것은 운영 상태가 아니므로 상태 어휘로 쓰지 않는다 —\n' +
+              '없는 판정을 지어내는 대신 "상태 미제공"이라고 쓰고 세션 상세로 보낸다.'
+            }
+          />
+          <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <div className="card-pad">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>실행 인스턴스</th>
+                <th>유형</th>
+                <th>상태</th>
+                <th>상세</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="mono">
+                  {d.sessionDataset} · {date}
+                </td>
+                <td>
+                  <span className="chip">실시간 세션</span>
+                </td>
+                <td>
+                  <StatusBadge tone={STATE_TONE['상태 미제공']}>상태 미제공</StatusBadge>
+                </td>
+                <td>
+                  <Link to={href} className="gd-linkbtn">
+                    세션 상세 →
+                  </Link>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
+            실행 인스턴스는 <b>데이터셋 × 세션 날짜</b> 한 건입니다 — 1분 창·poll 은 그 세션의 하위
+            증거라 여기서 실행으로 펼치지 않습니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!r) {
+    return (
+      <div className="card" id="gd-detail">
+        <div className="card-head">
+          <span className="t-label">
+            {d.label} · {date}
+          </span>
+          <StatusBadge tone={STATE_TONE['계획 없음']}>계획 없음</StatusBadge>
+          <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <div className="card-pad">
+          <p className="t-sm m-0" style={{ color: 'var(--fg-3)' }}>
+            이 날짜에 이 데이터셋의 계획 행이 없습니다 — 실행 계획 자체가 없었다는 사실입니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const byState = (st: DayState) => r.executions.filter((e) => e.state === st).length;
+  const summary: [DayState, number][] = (
+    ['정상', '주의', '장애', '실행 중', '계획 스킵'] as DayState[]
+  )
+    .map((st) => [st, byState(st)] as [DayState, number])
+    .filter(([, n]) => n > 0);
 
   return (
     <div className="card" id="gd-detail">
@@ -396,80 +477,129 @@ function DayDetail({ sel, mock, onClose }: { sel: Selection; mock: boolean; onCl
         <span className="t-label">
           {d.label} · {date}
         </span>
-        <StatusBadge tone={STATE_TONE[r?.state ?? '계획 없음']}>{r?.state ?? '계획 없음'}</StatusBadge>
+        <StatusBadge tone={STATE_TONE[r.state]}>{r.state}</StatusBadge>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-          주기 {d.cadence.label} · 기대 실행 {r?.expected ?? 0}
+          실행 {r.executions.length}회 · 기대 {r.expected}회 · {d.cadence.label}
+          <InfoPopover
+            label="실행 수"
+            title="실행 수 세는 법"
+            text={
+              '실행 인스턴스는 runKey 하나다 — 한 런에 수집·정제·적재 작업이 3개 있어도 실행은 1회다.\n' +
+              '기대 실행은 계획(plan_status=DUE)이 있던 실행 인스턴스 수이고, 작업 수가 아니다.\n' +
+              '계획 슬롯인데 런 행이 없으면 그 슬롯 하나가 실행 인스턴스 한 건으로 선다.'
+            }
+          />
         </span>
         <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
           닫기
         </button>
       </div>
       <div className="card-pad">
-        {!r ? (
-          <p className="t-sm m-0" style={{ color: 'var(--fg-3)' }}>
-            이 날짜에 이 데이터셋의 계획 행이 없습니다 — 실행 계획 자체가 없었다는 사실입니다.
-          </p>
-        ) : (
-          <>
-            <div className="gd-figures">
-              {figures.map(([label, n]) => (
-                <span key={label} className={'gd-figure' + (n === 0 ? ' gd-figure-zero' : '')}>
-                  {label} <b>{n}</b>
-                </span>
-              ))}
-            </div>
-            <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
-              빈 데이터 증거는 <b>돌았고 데이터가 없었다</b>는 사실이고, 무증거는{' '}
-              <b>기한이 지났는데 증거가 없다</b>는 사실입니다 — 합쳐 세지 않습니다.
-            </p>
+        <div className="gd-figures">
+          {summary.map(([st, n]) => (
+            <span key={st} className="gd-figure">
+              <StateBox state={st} /> {st} <b>{n}</b>
+            </span>
+          ))}
+        </div>
 
-            <div style={{ overflowX: 'auto' }}>
-              <table className="table" style={{ marginTop: 12 }}>
-                <thead>
-                  <tr>
-                    <th>실행(런)</th>
-                    <th>작업</th>
-                    <th>귀결</th>
-                    <th>데이터</th>
-                    <th className="num">산출</th>
-                    <th className="num">유실</th>
-                    <th>사유</th>
-                    <th>상세</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.runs.map((run) => (
-                    <tr key={`${run.runKey}|${run.taskKey}`}>
-                      <td className="mono">{run.runKey}</td>
-                      <td className="mono">{run.taskKey}</td>
-                      <td>
-                        {run.planStatus === 'SKIPPED'
-                          ? '계획 스킵'
-                          : run.running
-                            ? '실행 중'
-                            : (OUTCOME_LABEL[run.outcome ?? ''] ?? run.outcome ?? '판정 없음')}
-                      </td>
-                      <td className="col-muted">{run.dataStatus ?? '—'}</td>
-                      <td className="num">{run.recordsOut ?? '—'}</td>
-                      <td className="num">{run.failedRecords ?? '—'}</td>
-                      <td className="col-muted t-xs">{run.reason ?? '—'}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="gd-linkbtn"
-                          onClick={() => open(run.runKey, run.taskKey)}
-                        >
-                          실행 상세 →
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
+        <ul className="gd-exec-list">
+          {r.executions.map((e) => (
+            <ExecutionRow key={e.runKey} exec={e} mock={mock} />
+          ))}
+        </ul>
+
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 10 }}>
+          빈 데이터 증거는 <b>돌았고 데이터가 없었다</b>는 사실이고, 무증거는{' '}
+          <b>기한이 지났는데 증거가 없다</b>는 사실입니다 — 합쳐 세지 않습니다. 같은 날 런이
+          여럿이면 실행이 여러 건으로 섭니다. 그중 무엇이 정규·수동·백필인지는 원장에 기록이 없어
+          구분하지 않습니다.
+        </p>
       </div>
     </div>
+  );
+}
+
+/** 실행 하나 — 접힘이 기본이고 문제 있는 실행만 펼친 채로 시작한다 */
+function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
+  const problem = exec.state === '장애' || exec.state === '주의';
+  const [open, setOpen] = useState(problem);
+  const navigate = useNavigate();
+  const c = exec.counts;
+  const openTask = (taskKey: string) =>
+    /* 원장 근거로 바로 건너뛰지 않는다 — 실행 상세를 거쳐 작업 상세를 연다 */
+    navigate(
+      `/ops/runs?run_id=${encodeURIComponent(exec.runKey)}&focus=task-${encodeURIComponent(taskKey)}`,
+    );
+
+  const problems = c.failed + c.noEvidence;
+  const facts = [
+    problems > 0 ? `문제 작업 ${problems}` : null,
+    c.running > 0 ? `실행 중 ${c.running}` : null,
+    c.incomplete + c.invalid > 0 ? `부분 결손 ${c.incomplete + c.invalid}` : null,
+    c.skipped > 0 ? `계획 제외 ${c.skipped}` : null,
+    `전체 작업 ${exec.tasks.length}`,
+  ].filter(Boolean);
+
+  return (
+    <li className="gd-exec">
+      <button
+        type="button"
+        className="gd-exec-head"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <span className="mono t-sm">{exec.runKey}</span>
+        <span className="chip">배치 실행</span>
+        <StatusBadge tone={STATE_TONE[exec.state]}>{exec.state}</StatusBadge>
+        {mock && <MockChip />}
+        <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+          {facts.join(' · ')}
+        </span>
+      </button>
+      {open && (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>단계</th>
+                <th>작업</th>
+                <th>귀결</th>
+                <th>데이터</th>
+                <th className="num">산출</th>
+                <th className="num">유실</th>
+                <th>사유</th>
+                <th>상세</th>
+              </tr>
+            </thead>
+            <tbody>
+              {exec.tasks.map((t) => (
+                <tr key={t.taskKey}>
+                  <td className="col-muted">{STAGE_LABEL[t.stage] ?? t.stage}</td>
+                  <td className="mono">{t.taskKey}</td>
+                  <td>
+                    {t.planStatus === 'SKIPPED'
+                      ? '계획 제외'
+                      : t.running
+                        ? '실행 중'
+                        : (OUTCOME_LABEL[t.outcome ?? ''] ?? t.outcome ?? '판정 없음')}
+                  </td>
+                  <td className="col-muted">{t.dataStatus ?? '—'}</td>
+                  <td className="num">{t.recordsOut ?? '—'}</td>
+                  <td className="num">{t.failedRecords ?? '—'}</td>
+                  <td className="col-muted t-xs">{t.reason ?? '—'}</td>
+                  <td>
+                    <button type="button" className="gd-linkbtn" onClick={() => openTask(t.taskKey)}>
+                      실행 상세 →
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </li>
   );
 }

@@ -9,7 +9,7 @@
  * 실행 방식은 정규 / 수동 / 백필 셋이다. 백필은 흐름이 아니라 실행 방식이고, 같은 체인을
  * 과거 날짜로 다시 돌린다 — 산출 축 숫자에 "어느 런이 만든 것인가"가 붙어야 하는 이유다.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
@@ -17,19 +17,23 @@ import { retryCap } from '../../rules/rules';
 import type { RunFact, TaskFact } from '../../rules/types';
 import { MOCK_RUN_TASKS } from '../../mock/preview';
 import { MockChip } from '../_shared/MockPreview';
-import { Absent, AxisHeader, F, Info, fmt, kst } from './shared';
+import { Absent, AxisHeader, F, INCIDENTS, Info, fmt, kst } from './shared';
+import {
+  ABSENCE_LABEL,
+  ABSENCE_MEANING,
+  awsFailureEvidence,
+  awsObservation,
+  isAwsTerminalFailure,
+  ledgerObservation,
+  reconcile,
+} from './runObservation';
+import type { Observation } from './runObservation';
+import { incidentHref, ledgerHref } from './investigation';
 import '../../styles/ops.css';
 
 const KIND_LABEL: Record<string, string> = { scheduled: '정규', manual: '수동', backfill: '백필' };
 const LANE_LABEL: Record<string, string> = { 'etf-daily': '시장 EOD', news: '뉴스' };
 
-const LEDGER_TONE: Record<string, BadgeTone> = {
-  SUCCEEDED: 'active',
-  FAILED: 'blocked',
-  TIMED_OUT: 'blocked',
-  ABORTED: 'blocked',
-  RUNNING: 'warn',
-};
 
 /* 작업 stage → 화면 그룹. 원장 어휘를 그대로 쓰고, 모르는 stage 는 원문으로 남긴다 —
  * 새 stage 가 생겼을 때 조용히 사라지는 것보다 낯선 이름으로 보이는 편이 낫다. */
@@ -103,12 +107,51 @@ function tasksOfRun(runId: string): { tasks: TaskFact[]; mock: boolean } {
 /** 슬롯 키에서 예정 시각만 — "etf-daily:2026-08-03T15:40" → "15:40" */
 const slotTime = (runId: string) => runId.match(/T(\d{2}:\d{2})/)?.[1] ?? null;
 
-function runStatus(r: RunFact): { label: string; tone: BadgeTone } {
-  if (r.no_run_row) return { label: '행 없음', tone: 'blocked' };
-  if (r.ledger_status) return { label: r.ledger_status, tone: LEDGER_TONE[r.ledger_status] ?? 'neutral' };
-  if (r.aws_status) return { label: `원장 없음 · AWS ${r.aws_status}`, tone: 'warn' };
-  return { label: '원장 없음', tone: 'neutral' };
+/**
+ * 관측 하나를 배지로 — 값이 있으면 한국어 라벨(원본 enum 은 title), 없으면 부재 사유다.
+ * **다른 축의 값을 여기 끌어오지 않는다**(예전에는 원장 열에 AWS 값을 복사했다).
+ */
+function ObservationCell({ obs, at }: { obs: Observation; at: string }) {
+  return (
+    <>
+      {obs.status ? (
+        <StatusBadge tone={obs.status.tone}>
+          <span title={`원본 enum: ${obs.status.raw}`}>{obs.status.label}</span>
+        </StatusBadge>
+      ) : (
+        <span className="t-xs" style={{ color: 'var(--fg-4)' }} title={ABSENCE_MEANING[obs.absence!]}>
+          {ABSENCE_LABEL[obs.absence!]}
+        </span>
+      )}
+      {/* 관측 시각은 보조 정보 — 상태 옆에 작게 둔다 */}
+      <span className="t-xs ops-obs-at" style={{ color: 'var(--fg-3)' }}>
+        {obs.at ? `${at} ${kst(obs.at)}` : ''}
+      </span>
+    </>
+  );
 }
+
+const AXIS_TIP = [
+  'DB 원장 투영',
+  '  파이프라인 운영 원장에 마지막으로 기록된 실행 상태.',
+  '',
+  'AWS 실행 상태',
+  '  Step Functions 제어면에서 조회한 실행 상태.',
+  '',
+  '두 값은 별도 관측이다 — 다르면 어느 쪽으로도 덮어쓰지 않고 대조 열에 불일치로 남긴다.',
+  '',
+  '대조',
+  '  두 관측값의 일치 여부. 불일치는 투영 지연이나 원장 기록 누락일 수 있으며,',
+  '  이 화면에서 원인을 추정하지 않는다.',
+  '',
+  '판정 마감',
+  '  계획된 실행의 완료 판정 기한이다. **AWS 종료 시각과 다르다.**',
+  '',
+  '부재는 한 가지가 아니다.',
+  `  런 행 없음 — ${ABSENCE_MEANING.runRowMissing}`,
+  `  원장 상태 미기록 — ${ABSENCE_MEANING.ledgerStatusMissing}`,
+  `  AWS 관측 없음 — ${ABSENCE_MEANING.awsNotObserved}`,
+].join('\n');
 
 export function RunAxisPage() {
   const [params, setParams] = useSearchParams();
@@ -129,19 +172,25 @@ export function RunAxisPage() {
 
   const requested = params.get('run_id');
   const requestedValid = requested != null && runs.some((r) => r.id === requested);
-  const selectedId =
-    (requestedValid ? requested : undefined) ??
-    (focusedRunId && runs.some((r) => r.id === focusedRunId) ? focusedRunId : undefined) ??
-    runs[0]?.id;
+  /* 사건에서 왔으면 그 사건을 함께 띄운다 — 조사 문맥이 없으면 이 화면이 왜 이 런을 열었는지
+   * 알 수 없고, 돌아갈 곳도 사라진다. */
+  const fromIncident = params.get('fromIncident');
+  const incident = fromIncident
+    ? (INCIDENTS.find((i) => i.root.vid === fromIncident) ?? null)
+    : null;
 
-  /* URL 에 있는 run_id 가 목록에 없으면(오타·필터로 사라짐) 첫 런으로 떨어뜨리고 주소를 정리한다 */
-  useEffect(() => {
-    if (requested != null && !requestedValid && selectedId) {
-      const next = new URLSearchParams(params);
-      next.set('run_id', selectedId);
-      setParams(next, { replace: true });
-    }
-  }, [requested, requestedValid, selectedId, params, setParams]);
+  /**
+   * ⚠️ **지목한 런을 못 찾으면 다른 런으로 조용히 갈아타지 않는다.**
+   * 예전에는 첫 런을 골라 주소까지 고쳐 썼는데, 그러면 사건이 준 run_id 가 오타이거나 사라졌을
+   * 때 **무관한 최근 실행이 그 사건의 실행처럼** 보인다(관대해지는 쪽 오류). 못 찾았다는 사실을
+   * 그대로 낸다.
+   */
+  const notFound = requested != null && !requestedValid;
+  const selectedId = notFound
+    ? undefined
+    : (requested ?? undefined) ??
+      (focusedRunId && runs.some((r) => r.id === focusedRunId) ? focusedRunId : undefined) ??
+      runs[0]?.id;
 
   const selectRun = (id: string) => {
     const next = new URLSearchParams(params);
@@ -158,9 +207,35 @@ export function RunAxisPage() {
     <div className="flex flex-col gap-4">
       <AxisHeader question="오늘 어떤 런이 돌았고, 그 런의 작업은 귀결됐는가?" />
 
+      {incident && (
+        <nav className="t-xs ops-crumb" aria-label="조사 경로">
+          <Link to="/ops/incidents">문제·사건</Link>
+          <span aria-hidden="true">›</span>
+          <Link to={incidentHref(incident.root)}>{incident.root.title}</Link>
+          <span aria-hidden="true">›</span>
+          <span style={{ color: 'var(--fg-1)' }}>실행 {requested}</span>
+        </nav>
+      )}
+
+      {notFound ? (
+        /* 사건이 준 run_id 를 못 찾았다 — 다른 런을 대신 열지 않는다 */
+        <div className="card card-pad">
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>연결된 실행을 찾지 못했습니다</p>
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            <code>{requested}</code> 가 최근 런 목록에 없습니다. 다른 최근 실행을 대신 선택하지
+            않습니다 — 무관한 런이 이 사건의 실행처럼 보이기 때문입니다.{' '}
+            {incident ? (
+              <Link to={incidentHref(incident.root)}>사건으로 돌아가기</Link>
+            ) : (
+              <Link to="/ops/runs">최근 런 전체 보기</Link>
+            )}
+          </p>
+        </div>
+      ) : null}
+
       <RunList runs={runs} selectedId={selectedId} onSelect={selectRun} />
 
-      {selected ? (
+      {notFound ? null : selected ? (
         <RunTasks run={selected} focus={focus} />
       ) : (
         <div className="card card-pad">
@@ -191,40 +266,42 @@ function RunList({
       <div className="card-head">
         <span className="t-label">최근 런</span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-          런을 고르면 아래 작업 목록이 그 런의 것으로 바뀝니다 · 원장과 AWS 제어면이 어긋나면 어느 쪽으로도
-          덮지 않고 둘 다 보여줍니다
+          런을 고르면 아래 작업 목록이 그 런의 것으로 바뀝니다 · DB 원장 투영과 AWS 실행 상태는 별도
+          관측이라 어긋나면 대조 열에 남깁니다
+          <Info tip={AXIS_TIP} label="관측 축·대조·판정 마감" />
         </span>
       </div>
       <table className="table">
         <thead>
           <tr>
-            <th style={{ width: 34 }}>
-              <span className="sr-only">선택</span>
-            </th>
             <th>런</th>
             <th>파이프라인</th>
             <th>실행 방식</th>
             <th>거래일</th>
             <th>예정</th>
-            <th>원장</th>
-            <th>AWS 제어면</th>
-            <th>마감</th>
+            <th>DB 원장 투영</th>
+            <th>AWS 실행 상태</th>
+            <th>대조</th>
+            <th>판정 마감</th>
           </tr>
         </thead>
         <tbody>
           {runs.map((r) => {
             const on = r.id === selectedId;
-            const st = runStatus(r);
+            const led = ledgerObservation(r);
+            const aws = awsObservation(r);
+            const rec = reconcile(r);
             return (
               <tr
                 key={r.id}
                 id={'run-' + r.id}
-                className={on ? 'ops-run-selected' : undefined}
+                /* 선택 표시는 **자리를 차지하지 않는 축**으로만 한다 — 모든 행이 같은 왼쪽 선
+                 * 공간을 미리 갖고 색만 바뀐다. 예전엔 ▶ 와 "선택됨" 칩이 끼어들어 런 ID 와
+                 * 열 위치가 밀렸다. */
+                className={'ops-run-row' + (on ? ' ops-run-selected' : '')}
+                aria-selected={on}
                 onClick={() => onSelect(r.id)}
-                style={{ cursor: 'pointer' }}
               >
-                {/* 색에만 기대지 않는다 — 표식(▶)과 aria-pressed 로도 선택을 말한다 */}
-                <td style={{ color: 'var(--accent)', fontWeight: 700 }}>{on ? '▶' : ''}</td>
                 <td>
                   {/* 진짜 버튼이라 Tab 으로 닿고 Enter·Space 가 그대로 동작한다 */}
                   <button
@@ -239,11 +316,6 @@ function RunList({
                     {r.id}
                   </button>
                   {r.mock && <MockChip />}
-                  {on && (
-                    <span className="chip chip-accent" style={{ marginLeft: 6 }}>
-                      선택됨
-                    </span>
-                  )}
                 </td>
                 <td className="col-muted">{LANE_LABEL[r.lane] ?? r.lane}</td>
                 <td>
@@ -251,17 +323,17 @@ function RunList({
                 </td>
                 <td className="col-muted">{r.trading_date}</td>
                 <td className="col-muted">{slotTime(r.id) ?? <Absent kind="none" />}</td>
-                <td>
-                  <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+                <td className="ops-obs">
+                  <ObservationCell obs={led} at="갱신" />
+                </td>
+                <td className="ops-obs">
+                  <ObservationCell obs={aws} at="종료" />
                 </td>
                 <td>
-                  {r.aws_status ? (
-                    <StatusBadge tone={r.aws_status === 'SUCCEEDED' ? 'active' : 'blocked'}>
-                      {r.aws_status}
-                    </StatusBadge>
-                  ) : (
-                    <Absent kind="none" />
-                  )}
+                  {/* 색만으로 갈리지 않게 텍스트 배지로 낸다 */}
+                  <StatusBadge tone={rec.tone}>
+                    <span title={rec.basis}>{rec.label}</span>
+                  </StatusBadge>
                 </td>
                 <td className="col-muted">{r.deadline ? kst(r.deadline) : <Absent kind="none" />}</td>
               </tr>
@@ -272,7 +344,8 @@ function RunList({
       <div className="card-pad" style={{ paddingTop: 0 }}>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
           같은 거래일에 정규·수동·백필·재실행이 함께 있을 수 있어 런은 날짜가 아니라{' '}
-          <code>run_id</code> 로 지목합니다. 실행 방식(kind)은 아직 원장에 기록되지 않아 이 열은 목값입니다.
+          <code>run_id</code> 로 지목합니다. 실행 방식(kind)은 아직 원장에 기록되지 않아 이 열은 목값이고,
+          그런 런에는 행마다 <b>MOCK</b> 을 붙입니다 — 나머지 값은 운영 원장·AWS 제어면 스냅샷입니다.
         </p>
       </div>
     </div>
@@ -287,11 +360,196 @@ const ATTEMPT_TIP =
   '시도 / 정책 상한. 상한은 CatalogEntry 에 아직 없어 목값이다(SFN Retry 블록 0개) — ' +
   '분모 없이 2/3 처럼 쓰면 안 되고, 계측이 붙기 전엔 "시도 N회"까지만 정직하다.';
 const FAILED_TIP =
-  'ops.failed_records — 스텝이 스스로 판정한 유실값이며 skipped_* 를 더한 값이 아니다. 잡마다 단위가 다르다.';
+  '유실 = 작업이 원장에 기록한 ops.failed_records 다. 스텝이 스스로 판정한 값이며 skipped_* 를 더한 값이 아니고, 잡마다 단위가 다르다.\n' +
+  '"—" 는 0 이 아니라 **계측 값이 기록되지 않았다**는 뜻이다.';
+const RECORDS_TIP =
+  '산출 = 작업이 원장에 기록한 records_out 이다.\n' +
+  '"—" 는 0 이 아니라 **계측 값이 기록되지 않았다**는 뜻이다 — 0건 처리와 구분한다(ALPHA-182 의 NULL 계약).';
 const PLAN_TIP =
   '이 목록은 ops_expected_task(계획 스냅샷) 행이다 — 계획에 있는 작업만 나오고, plan_status 가 계획 축, ' +
   'task_outcome 이 실제 축이다. 두 축을 대조해 계획 제외·미기동을 가른다.\n' +
   '계획 행 자체가 없는 런은 무엇이 예정이었는지 알 수 없어 "계획 정보 없음"이라고 쓴다 — 0 개가 아니다.';
+
+/* ══ 제어면·원장 대조 ══
+ *
+ * 두 관측이 다르거나 한쪽이 없을 때만 세운다. **원인을 만들지 않는다** — 두 값과 각각의
+ * 관측 시각을 나란히 놓고, 아래 작업 목록이 DB 원장 기준이라는 사실만 덧붙인다.
+ */
+function ObservationGap({ run }: { run: RunFact }) {
+  const rec = reconcile(run);
+  if (rec.kind === 'match' || rec.kind === 'noObservation') return null;
+
+  const led = ledgerObservation(run);
+  const aws = awsObservation(run);
+  const title =
+    rec.kind === 'mismatch'
+      ? '제어면·원장 불일치'
+      : rec.kind === 'ledgerStatusMissing'
+        ? '원장 상태 미기록'
+        : rec.kind === 'awsNotObserved'
+          ? 'AWS 관측 없음'
+          : '런 미생성';
+
+  return (
+    <div className="card-pad" style={{ paddingBottom: 0 }}>
+      <div className="ops-gapcard">
+        <div className="ops-gapcard-head">
+          <StatusBadge tone={rec.tone}>{title}</StatusBadge>
+          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+            {rec.basis}
+          </span>
+        </div>
+        <div className="ops-facts" style={{ marginTop: 8 }}>
+          <div className="t-xs ops-fact">
+            <span style={{ color: 'var(--fg-3)' }}>AWS 실행</span>
+            <span>
+              {aws.status ? (
+                <>
+                  {aws.status.label} <span className="mono">({aws.status.raw})</span>
+                  {aws.at ? ` · ${kst(aws.at)} 종료` : ''}
+                </>
+              ) : (
+                ABSENCE_LABEL[aws.absence!]
+              )}
+            </span>
+          </div>
+          <div className="t-xs ops-fact">
+            <span style={{ color: 'var(--fg-3)' }}>DB 원장 투영</span>
+            <span>
+              {led.status ? (
+                <>
+                  {led.status.label} <span className="mono">({led.status.raw})</span>
+                  {led.at ? ` · ${kst(led.at)} 마지막 갱신` : ''}
+                </>
+              ) : (
+                ABSENCE_LABEL[led.absence!]
+              )}
+            </span>
+          </div>
+        </div>
+        <p className="t-xs m-0" style={{ color: 'var(--fg-2)', marginTop: 8 }}>
+          아래 작업 목록은 <b>DB 원장 기준의 마지막 관측값</b>입니다. AWS 최종 상태가 작업 원장에
+          아직 반영되지 않았을 수 있습니다 — 화면이 작업을 AWS 상태에 맞춰 바꾸지 않습니다.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ══ AWS 실패 근거 ══
+ *
+ * 제어면이 terminal failure 로 끝났을 때만 연다. **응답에 있는 축만 값을 갖고** 나머지는
+ * 계측 없음이다 — 하단 작업 중 하나를 실패 원인으로 지목하지 않는다(작업과 실패 state 를
+ * 잇는 key 가 어느 응답에도 없다).
+ */
+function AwsFailureEvidence({ run }: { run: RunFact }) {
+  if (!isAwsTerminalFailure(run)) return null;
+  const rows = awsFailureEvidence(run);
+  return (
+    <div className="card-pad" style={{ paddingBottom: 0 }}>
+      <div className="ops-gapcard">
+        <div className="ops-gapcard-head">
+          <span className="t-label">AWS 실패 근거</span>
+          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+            제어면이 준 값만 — 없는 축은 계측 없음입니다
+          </span>
+        </div>
+        <div className="ops-facts" style={{ marginTop: 8 }}>
+          {rows.map((r) => (
+            <div key={r.label} className="t-xs ops-fact">
+              <span style={{ color: 'var(--fg-3)' }}>{r.label}</span>
+              <span>
+                {r.value === null ? (
+                  <Absent kind="uninstrumented" />
+                ) : r.label === '종료' ? (
+                  kst(r.value)
+                ) : (
+                  <span className="mono">{r.value}</span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
+          실패 state·error·cause·execution ARN 은 이 응답에 없습니다. 그래서 아래 작업 중 하나를
+          AWS 실패 원인으로 연결하지 않습니다 — 둘을 잇는 key 가 계측되면 그때 지목합니다.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ══ 단계 흐름 — 어디서 막혔는가 ══
+ *
+ * 원장의 stage 순서(수집 → 정제 → 적재)는 **실제 의존 관계**다: 정제는 수집 산출을 읽고,
+ * 적재는 정제 산출을 읽는다. 그래서 이 순서로만 그린다 — 같은 stage 안의 작업들은 서로
+ * 병렬이라 순서를 만들지 않고 한 칸으로 접는다.
+ *
+ * 산출량은 여기 넣지 않는다. 데이터셋마다 레코드 단위가 달라 비율로 비교하면 거짓 대비가
+ * 생긴다 — 이 그림의 목적은 **단계 상태와 실패 위치**뿐이다.
+ */
+const FLOW_ORDER: TaskState[] = [
+  '실패',
+  '타임아웃',
+  '미기동',
+  '선행 미충족',
+  '부분 결손',
+  '실행 중',
+  '대기',
+  '판정 없음',
+  '계획 제외',
+  '성공',
+];
+
+function stageState(states: TaskState[]): TaskState {
+  for (const s of FLOW_ORDER) if (states.includes(s)) return s;
+  return '판정 없음';
+}
+
+function StageFlow({ groups }: { groups: [string, TaskFact[]][] }) {
+  /* 단계가 하나뿐이면 흐름이 아니다 — 화살표를 그리지 않는다 */
+  if (groups.length < 2) return null;
+  const steps = groups.map(([name, items]) => ({
+    name,
+    count: items.length,
+    state: stageState(items.map(taskState)),
+  }));
+  /* 앞 단계가 막힌 뒤의 단계는 "그 결과"라는 사실만 표시한다 — 원인을 새로 만들지 않는다 */
+  const blockedFrom = steps.findIndex((x) => x.state === '실패' || x.state === '타임아웃' || x.state === '미기동');
+
+  return (
+    <div className="card-pad" style={{ paddingBottom: 0 }}>
+      <div className="ops-flow" role="img" aria-label={steps.map((x) => `${x.name} ${x.state}`).join(', ')}>
+        {steps.map((x, i) => (
+          <Fragment key={x.name}>
+            {i > 0 && (
+              <span className="ops-flow-arrow" aria-hidden="true">
+                →
+              </span>
+            )}
+            <span className={'ops-flow-step' + (blockedFrom >= 0 && i > blockedFrom ? ' ops-flow-after' : '')}>
+              <span className="t-label">{x.name}</span>
+              <StatusBadge tone={STATE_TONE[x.state]}>{x.state}</StatusBadge>
+              <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                작업 {x.count}
+              </span>
+            </span>
+          </Fragment>
+        ))}
+        <Info
+          tip={
+            '원장 stage 순서(수집 → 정제 → 적재)는 실제 의존 관계다 — 정제는 수집 산출을, 적재는 정제 산출을 읽는다.\n' +
+            '같은 단계 안의 작업들은 서로 병렬이라 순서를 만들지 않고 한 칸으로 접는다.\n\n' +
+            '단계 상태는 그 단계 작업 중 가장 나쁜 것이다(실패 > 타임아웃 > 미기동 > 선행 미충족 > 부분 결손 > 실행 중 > 대기 > 계획 제외 > 성공).\n' +
+            '막힌 단계 뒤는 흐리게 두되 "그래서 못 했다"고 인과를 단정하지는 않는다 — 원장이 준 것은 각 단계의 귀결뿐이다.\n\n' +
+            '산출량은 여기 넣지 않는다: 데이터셋마다 레코드 단위가 달라 비율로 비교하면 거짓 대비가 된다.'
+          }
+          label="단계 흐름"
+        />
+      </div>
+    </div>
+  );
+}
 
 function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
   const { tasks, mock } = tasksOfRun(run.id);
@@ -313,7 +571,9 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
 
   const states = tasks.map(taskState);
   const n = (s: TaskState) => states.filter((x) => x === s).length;
-  const st = runStatus(run);
+  const led = ledgerObservation(run);
+  const aws = awsObservation(run);
+  const rec = reconcile(run);
 
   const groups = useMemo(() => {
     const by = new Map<string, TaskFact[]>();
@@ -334,7 +594,7 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
     <div className="card">
       <div className="card-head">
         <span className="t-label">
-          선택한 런의 작업 {tasks.length}개 {mock && <MockChip />}
+          작업 목록 · DB 원장 기준 — {tasks.length}개 {mock && <MockChip />}
         </span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
           이 런(run_id)에 속한 작업만 표시합니다 — 다른 런의 작업을 합치지 않습니다
@@ -347,7 +607,11 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
         <p className="t-sm m-0">
           <b>{LANE_LABEL[run.lane] ?? run.lane}</b> · {run.trading_date} ·{' '}
           {slotTime(run.id) ?? '예정 시각 없음'} · {KIND_LABEL[run.kind] ?? run.kind}{' '}
-          <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+          {/* 두 축을 각각 낸다 — 하나로 합치지 않는다 */}
+          <ObservationCell obs={led} at="갱신" /> <ObservationCell obs={aws} at="종료" />{' '}
+          <StatusBadge tone={rec.tone}>
+            <span title={rec.basis}>{rec.label}</span>
+          </StatusBadge>
         </p>
         <p className="t-xs mono m-0" style={{ color: 'var(--fg-3)', marginTop: 2 }}>
           run_id: {run.id}
@@ -386,6 +650,11 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
         )}
       </div>
 
+      <ObservationGap run={run} />
+      <AwsFailureEvidence run={run} />
+
+      {tasks.length > 0 && <StageFlow groups={groups} />}
+
       {tasks.length === 0 ? (
         <div className="card-pad">
           <p className="t-sm m-0">이 런에 기록된 작업이 없습니다.</p>
@@ -405,7 +674,9 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
               <tr>
                 <th>작업</th>
                 <th>상태</th>
-                <th className="num">산출 행</th>
+                <th className="num">
+                  산출 행 <Info tip={RECORDS_TIP} label="산출 행" />
+                </th>
                 <th className="num">
                   유실 <Info tip={FAILED_TIP} label="유실" />
                 </th>
@@ -539,6 +810,10 @@ function TaskRows({
 
 /** 작업 상세 — (run_id, task_key, 마지막 시도)로 식별한다. 같은 작업명의 다른 런 기록과 섞이지 않는다. */
 function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; state: TaskState }) {
+  /* 조사 문맥을 원장까지 이어 붙인다 — 사건에서 시작했으면 원장 화면의 breadcrumb 가
+   * 그 사건으로 돌아갈 수 있어야 한다 */
+  const [params] = useSearchParams();
+  const incidentId = params.get('fromIncident');
   const facts: [string, React.ReactNode][] = [
     ['run_id', <span className="mono">{run.id}</span>],
     ['작업', <span className="mono">{t.task_key}</span>],
@@ -593,7 +868,7 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
       {/* 한 단계 아래 = 원장 근거. 이 화면은 스냅샷 요약이고 시도 전량·대조 이슈는 라이브 원장에 있다.
        * 같은 run_key 네임스페이스라 그대로 넘기고, 원장에 없으면 그쪽이 정직하게 404 를 말한다. */}
       <p className="t-xs m-0" style={{ marginTop: 8 }}>
-        <Link to={`/sources?runKey=${encodeURIComponent(run.id)}&task=${encodeURIComponent(t.task_key)}`}>
+        <Link to={ledgerHref({ incident: incidentId ?? undefined, runKey: run.id, task: t.task_key, dataset: t.dataset ?? undefined })!}>
           원장 근거 보기 →
         </Link>{' '}
         <span style={{ color: 'var(--fg-3)' }}>

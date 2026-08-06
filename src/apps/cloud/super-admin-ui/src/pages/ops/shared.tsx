@@ -12,11 +12,35 @@ import { InfoPopover } from '../_shared/InfoPopover';
 import type { Facts, Incident, RunbookEntry, Severity, Violation } from '../../rules/types';
 import factsJson from '../../rules/facts-snapshot.json';
 
-/* 스냅샷에는 규칙이 읽지 않는 표시 전용 축도 들어 있다 */
+/* 스냅샷에는 규칙이 읽지 않는 표시 전용 축도 들어 있다.
+ *
+ * ⚠️ 퍼널 단계의 주의사항은 **완성된 문장이 아니라 구조화된 필드**다 — 화면이 그 값으로
+ * 배지·설명을 결정적으로 만든다. 문장을 데이터에 박아 두면 표 셀이 문단이 되고, 값이 바뀌어도
+ * 문장은 그대로 남는다(예: 상한 도달 런이 0인데 "상한 절단값" 문구가 남는 일). */
 interface FunnelStep {
   stage: string;
   value: number;
   unit: string;
+  /** 창 겹침이 값에 포함되는가 */
+  includesWindowOverlap?: boolean;
+  /** 중복이 값에 포함되는가 */
+  includesDuplicates?: boolean;
+  /** 런당 수집 상한 = maxPages × pageSize */
+  maxPages?: number;
+  pageSize?: number;
+  totalRuns?: number;
+  /** 상한에 도달한 런 수 — 0 보다 크면 "수집 상한 도달" */
+  runsAtLimit?: number;
+  dedupKey?: string;
+  /** 앞 단계와 시각 축이 다르면 값이 어긋나는 게 정상이다 */
+  timestampAxis?: string;
+  /** 유니버스 필터가 걸리는 단계인가 */
+  universeFilter?: boolean;
+  /** 실질 탈락 단계인가 */
+  dropStage?: boolean;
+  /** 부재 사유 계측이 있는가. false = 사유가 한 통이라 원인을 못 가른다 */
+  missingReasonInstrumentation?: boolean;
+  /** 구조화할 수 없는 짧은 보충만 남긴다 */
   note?: string;
 }
 interface DeliveryFacts {
@@ -30,6 +54,7 @@ export const EV = evaluate(F);
 export const VIOLATIONS = EV.violations;
 export const INCIDENTS = EV.incidents;
 export const P0 = INCIDENTS.filter((i) => i.sev === 'P0');
+
 
 export const fmt = (n: unknown): string =>
   n == null ? '—' : typeof n === 'number' ? n.toLocaleString('ko-KR') : String(n);
@@ -88,6 +113,24 @@ export const DOMAIN_OF_DRILL: Record<string, string> = {
 export function domainOf(v: Violation): string {
   return DOMAIN_OF_DRILL[v.drill[0]] ?? v.layer ?? '기타';
 }
+
+/**
+ * 이 콘솔이 운영을 책임지는 범위 밖의 도메인. **룰 엔진은 그대로 돌리고 표시에서만 가른다** —
+ * 규칙을 지우면 "안 봤다"와 "봤는데 소관이 아니다"가 같은 모양이 된다.
+ *
+ * 파이프라인 운영 범위: 파이프라인 실행 · 일배치/실시간 수집 · 데이터 완전성 · 분석 실행 ·
+ * 분석 결과 생성. 테넌트별 전달·발번·온프렘 수신·최종 게시·MTS 노출은 그 밖이다(ADR-0026).
+ */
+export const OUT_OF_PIPELINE_DOMAINS = new Set(['테넌트 전달']);
+
+/** 파이프라인·분석 소관 사건만. 전달 사건을 파이프라인 P0·심각도 합계에 섞지 않는다. */
+export const PIPELINE_INCIDENTS = INCIDENTS.filter(
+  (i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root)),
+);
+/** 범위 밖 사건 — 숨기지 않고 "여기 소관이 아니다"로 세어 보인다 */
+export const OUT_OF_SCOPE_INCIDENTS = INCIDENTS.filter((i) =>
+  OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root)),
+);
 
 /** 드릴다운 대상 — 규칙 위반의 drill 축을 실제 라우트로 옮긴다 */
 export const DRILL_ROUTE: Record<string, string> = {
