@@ -32,7 +32,7 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 
 ```
 src/edge_analysis/
-  __main__.py · cli.py · config.py · observability.py · pipeline.py
+  __main__.py · cli.py · config.py · observability.py · pipeline.py · window_batch.py
   domain/     models.py · decomposition.py · packet.py       # 순수, stdlib top-level import
   adapters/   lake · eventstore · llm · archive · readonly · trace · universe · price_daily
               causal_data   # 인과 조회 표면(코호트·정렬열·비중). PIT 를 코드가 바인딩한다
@@ -42,6 +42,10 @@ src/edge_analysis/
               domain_docs   # 「사업의 내용」 RAG 조회 (버킷 없으면 미부착)
   causal/     contracts · p0_question … p9_registry · run    # P0–P9 귀속 파이프라인
               graph · verify · sandbox · chain · engine · stats · fit   # 검정 실행 기계
+  statics/    frame · windows · tree · gates · render · vocab   # 정적 층 — LLM 이전에 코드가 고정하는 전부
+              duck · athena · interval · layers · route · etfcell   # 5분봉·시각창 집계 표면(Athena↔DuckDB)·층 분해·라우팅
+              (그 외 tool_* · paneltest · premium … — 어휘·설계 SSOT 는 statics/__init__ 과
+               docs/analysis-engine/causal-attribution-design.md)
 ```
 
 ### 인과귀속 P0–P9 (`causal/`)
