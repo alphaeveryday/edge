@@ -30,6 +30,7 @@ import sys
 from ..config import PipelineError
 from .route import route_etf, say_route
 from .interval import (
+    ROLL_UNSET,
     build_block_plan,
     final_explanation_payload,
     window_facts,
@@ -38,13 +39,20 @@ from .interval import (
 
 def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         window_start: str | None = None, window_end: str | None = None,
-        summary: bool = False, window_meta: dict | None = None) -> str:
-    """ETF 하루 또는 요청창 하나를 설명한다."""
+        summary: bool = False, window_meta: dict | None = None,
+        roll=ROLL_UNSET) -> str:
+    """ETF 하루 또는 요청창 하나를 설명한다.
+
+    ``roll`` 은 호출자가 **이미 계산한** 구간 층 분해다(`pipeline` 의 라우팅이 쓴 것).
+    요청창 갈래가 그것을 그대로 쓴다 - 라우팅과 설명이 같은 분해를 봐야 원장의
+    route_code 와 산문 근거의 계보가 갈리지 않는다. ``None`` 도 전달된 값이다(라우팅이
+    못 얻었다는 사실). 계약은 `interval.window_facts` 가 갖는다.
+    """
     if window_start is not None or window_end is not None:
         if not instrument_id or window_start is None or window_end is None:
             raise ValueError("요청창 설명에는 instrument_id·window_start·window_end가 필요하다")
         facts = window_facts(
-            lake, etf, instrument_id, day, window_start, window_end)
+            lake, etf, instrument_id, day, window_start, window_end, roll=roll)
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
@@ -70,7 +78,11 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
     from .premium5 import premium_5m
     out: list[str] = []
 
-    roll = decompose(lake, etf, day)
+    # 하루 모드도 주입분을 존중한다 - 무조건 재대입하면 파라미터를 **조용히 무시**하게
+    # 되고, 그 침묵은 호출자가 넘겼다고 믿는 동안 계속된다. 현재 `pipeline` 은 하루
+    # 경로에 넘기지 않아(창 인자 없음) 동작은 그대로다.
+    if roll is ROLL_UNSET:
+        roll = decompose(lake, etf, day)
     if roll is None:
         # **부재는 예외로 말한다.** 산문으로 돌려주면 호출자가 그것을 정상 설명과 못 가르고
         # 게시본 자리를 내준다 - 판정불가가 발화의 게시본을 선점하면 나중의 제대로 된

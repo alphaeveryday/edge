@@ -1,3 +1,6 @@
+import pytest
+
+from edge_analysis.config import PipelineError
 from edge_analysis.statics.interval import WindowFacts
 
 
@@ -20,11 +23,57 @@ def _facts():
     )
 
 
+def test_run_hands_the_injected_rollup_to_window_facts(monkeypatch):
+    """`run` 은 받은 층 분해를 **그대로 전달만** 한다 — 중간에서 흘리면 안 된다.
+
+    이 전달이 끊기면 설명 경로가 조용히 재질의로 돌아가는데, 파이프라인 테스트는
+    `etfcell.run` 자체를 가짜로 바꾸고 interval 테스트는 `window_facts` 를 직접 부르므로
+    **어느 쪽도 그 회귀를 못 잡는다**. 이 지점만 이 테스트가 본다.
+    """
+    from edge_analysis.statics import etfcell
+
+    seen = {}
+
+    def fake_window_facts(*args, **kwargs):
+        seen.update(kwargs)
+        return _facts()
+
+    monkeypatch.setattr(etfcell, "window_facts", fake_window_facts)
+    sentinel = object()
+    etfcell.run(object(), "091160", "2026-08-05", instrument_id="iid",
+                window_start="09:00", window_end="10:35", roll=sentinel)
+
+    assert seen.get("roll") is sentinel, "run 이 주입분을 흘렸다"
+
+
+def test_daily_run_respects_an_injected_rollup(monkeypatch):
+    """하루 모드도 주입분을 쓴다 — 무조건 재대입하면 **파라미터를 조용히 무시**한다.
+
+    호출자는 넘겼다고 믿는데 실제로는 다른 분해로 산문이 만들어진다. 침묵이라 로그로도
+    안 드러난다 — 그 갈래를 여기서 고정한다.
+    """
+    from edge_analysis.statics import etfcell
+
+    calls = []
+
+    def fake_decompose(*a, **k):    # pragma: no cover - 불려선 안 된다
+        calls.append(a)
+        return None
+
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose", fake_decompose)
+    # 주입분이 `None` = "호출자도 못 얻었다" — 재질의 없이 그 사실을 그대로 말한다.
+    # 분해 없는 하루 설명은 fail-loud 다(ALPHA-793 이후 문자열 반환이 아니라 raise).
+    with pytest.raises(PipelineError, match="층 분해 불가"):
+        etfcell.run(object(), "091160", "2026-08-05", roll=None)
+
+    assert calls == [], "주입분이 있는데 하루 모드가 재분해했다"
+
+
 def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
     from edge_analysis.statics import etfcell
 
     calls = []
-    monkeypatch.setattr(etfcell, "window_facts", lambda *args: _facts())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *args, **kwargs: _facts())
 
     def ask(system, user):
         calls.append((system, user))
@@ -72,7 +121,7 @@ def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
 def test_model_cannot_replace_the_final_explanation(monkeypatch):
     from edge_analysis.statics import etfcell
 
-    monkeypatch.setattr(etfcell, "window_facts", lambda *args: _facts())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *args, **kwargs: _facts())
     text = etfcell.run(
         object(), "091160", "2026-08-05",
         lambda *_: {"template": "삼성전자 -2.1% 때문입니다."},

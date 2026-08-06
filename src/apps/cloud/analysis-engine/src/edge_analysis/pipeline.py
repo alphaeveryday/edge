@@ -168,11 +168,16 @@ def run(
     # 원리적으로 못 채운다. 2026-08-06 장중 전건이 그 자리에서 `layer_route=미상` 이었다.
     # 구간 모드는 같은 시각창의 과거 60일에서 β 를 뽑아 5분봉만으로 선다(`_series`).
     #
-    # 창을 **여기서 한 번만** 만들어 라우팅과 설명이 나눠 쓴다. 두 번 계산하면 둘이
-    # 조용히 갈라지고, 그러면 원장의 route_code 가 산문이 설명한 창과 달라진다.
+    # 창과 층 분해를 **여기서 한 번만** 만들어 라우팅과 설명이 나눠 쓴다. 두 번 계산하면
+    # 둘이 조용히 갈라지고, 그러면 원장의 route_code 가 산문이 설명한 창과 달라진다.
     # `clamp` 를 거치는 이유도 같다 - 설명 쪽(`window_facts`)이 그것을 쓰므로 정규화
     # 결과가 한 벌이어야 한다.
+    #
+    # 창 문자열도 아래 `window` 조립분과 **같은 변수**를 쓴다 - 같은 식을 두 번 적으면
+    # 한쪽만 고쳐지는 날이 온다. `roll` 은 `run_statics` 로 넘겨 `window_facts` 가
+    # 재계산하지 않게 한다(그 재계산이 갈림의 실제 경로였다).
     clock = None
+    window_end = None
     if minute_row is not None:
         window_end = (
             minute_row.window_start + timedelta(minutes=5)
@@ -180,11 +185,36 @@ def run(
         clock = clamp(SESSION_OPEN[:5], window_end)[:2]
 
     roll = rt = None
+    routing_failed = False
     try:
         roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock)
         rt = route_etf(roll)
     except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
-        log("statics.layers.failed", error=f"{type(exc).__name__}: {exc}")
+        # **분해까지 됐어도 라우팅이 터지면 그 분해는 버린다.** `route_etf` 가 던지면
+        # `roll` 만 살아남는데, 원장에는 `rt=None` 이라 미상(PRICE_ONLY)이 적힌다.
+        # 그 상태로 분해를 설명 쪽에 넘기면 원장은 "층을 못 봤다" 인데 산문에는 시장·
+        # 섹터·종목 기여가 실린다 - 이 경로가 닫으려는 갈림 그대로다.
+        #
+        # 버리기 전에 **무엇을 버렸는지는 남긴다** - 분해는 됐는데 라우터가 깨진 경우
+        # 예외 문자열만으로는 어떤 층 값이 깨뜨렸는지 재현이 안 된다.
+        #
+        # ⚠️ 진단은 **어떤 경우에도 런을 죽이지 않는다.** 이 요약이 만지는 값은 방금
+        # 라우터를 깨뜨린 바로 그 값이다 - `x.kind` 역참조든 `layers` 순회 자체든 다시
+        # 던질 수 있고, 그러면 `roll = None` 과 route 적재까지 못 가 런이 통째로 죽는다.
+        # `getattr` 기본값은 `AttributeError` 만 삼키므로 부족하다. 블록째 감싼다.
+        try:
+            discarded = [getattr(x, "kind", "?")
+                         for x in (getattr(roll, "layers", None) or ())]
+        except Exception:               # noqa: BLE001 - 진단 실패는 진단으로만 말한다
+            discarded = ["?"]
+        log("statics.layers.failed", error=f"{type(exc).__name__}: {exc}",
+            discarded_layers=discarded, had_rollup=roll is not None)
+        roll = None
+        # 폐기가 **확신도를 올려서는 안 된다**. 아래 `idio_qualified` 는 `roll is None`
+        # 을 "분해가 아예 없다 → 자격을 따질 대상도 없다(관대하게 True)" 로 읽는데,
+        # 폐기된 None 은 뜻이 다르다 - 층을 봤는데 라우팅이 깨진 것이다. 구분하지 않으면
+        # 실패한 런이 오히려 더 높은 확신도로 영속된다(Rule 12).
+        routing_failed = True
     route_code, event_search = route_code_of(rt.kind if rt else "")
     ids = store.persist_observation_route(
         gate.trigger_id, decomp, route_code, event_search, entity_index,
@@ -258,12 +288,26 @@ def run(
                 window = {
                     "instrument_id": etf_instrument_id,
                     "window_start": SESSION_OPEN[:5],
-                    "window_end": (
-                        minute_row.window_start + timedelta(minutes=5)
-                    ).astimezone(KST).strftime("%H:%M"),
+                    "window_end": window_end,
                     "window_meta": window_meta,
                 }
-            text = run_statics(lake, settings.etf_ticker, day_iso, ask, **window)
+            # 라우팅이 쓴 그 분해를 그대로 넘긴다 - 같은 창을 두 번 질의하면 그 사이
+            # 분봉 canonical 이 정정될 때 route_code 와 산문 근거가 한 explanation 안에서
+            # 갈린다. **창 인자 밖**에 두는 이유: 하루 모드(배치)도 같은 분해를 두 번
+            # 부르고 있었다 - 두 경로가 같은 계약을 쓴다.
+            #
+            # `None` 도 **넘기는 값**이다(재료 부재·질의 실패·라우팅 실패로 폐기). 그때
+            # 설명 쪽이 다시 계산하면, 라우팅 시점엔 없던 재료가 그새 착지했을 때 원장은
+            # 미상(PRICE_ONLY)인데 산문에는 층 근거가 실린다 - 같은 갈림이다.
+            #
+            # ⚠️ 하루 모드에 남는 갈림: 분해는 한 벌이 됐지만 **괴리 판정(`pv`)은 아직
+            # 아니다** - `etfcell` 하루 갈래가 `screen()` 으로 자기 `pv` 를 뽑아
+            # `route_etf(roll, pv)` 로 다시 라우팅하므로, 원장이 `COMMON_FACTOR` 인데
+            # 산문은 `괴리단독` 일 수 있다(이 변경 전에도 그랬다 - 좁혔을 뿐 닫지 못했다).
+            # 닫으려면 라우팅 결과 자체를 넘겨야 하는데, 하루 경로는 ALPHA-785 범위 밖이라
+            # 여기서 손대지 않는다.
+            text = run_statics(lake, settings.etf_ticker, day_iso, ask,
+                               roll=roll, **window)
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
             # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
             # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.
@@ -307,6 +351,11 @@ def run(
         {"kind": x.kind, "name": x.name, "contribution": x.contribution}
         for x in (roll.layers if roll else ())],
         "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None),
+        # **왜 층이 비었는지**를 원장이 스스로 말한다. 라우팅 실패로 폐기한 경우와 재료가
+        # 없던 경우는 위 필드가 똑같이 비지만 확신도가 갈린다(폐기면 LOW) - 이 값이 없으면
+        # explanation_result 만 보는 감사·재처리 소비자가 그 차이를 재현하지 못하고 로그를
+        # 뒤져야 한다. 로그는 보존 기간이 있고 원장은 남는다.
+        "routing_failed": routing_failed,
         # 요청창의 내부 블록·시간축·근거 조회키는 ``stage_results``에도 구조화해
         # 최종 문자열에서 다시 파싱하지 않고 추적한다.
         "plain": plain.strip().lstrip("=").strip()}
@@ -324,7 +373,8 @@ def run(
     stage["analysis_trace"] = trace_manifest
     verdicts = verdicts_from(
         text, route_kind=(rt.kind if rt else ""),
-        idio_qualified=bool(roll is None or roll.rho is None or abs(roll.rho) < 0.20),
+        idio_qualified=bool(not routing_failed and (
+            roll is None or roll.rho is None or abs(roll.rho) < 0.20)),
         bundles=tuple(sorted(set(payload_bundles or re.findall(
             r"\bev_[0-9a-f]{16}\b", text)))))
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)

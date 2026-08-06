@@ -224,11 +224,223 @@ def test_missing_prerequisites_abort_before_the_llm(monkeypatch):
     assert "persist_explanation" not in store.calls  # 고아 RDS 행 없음
 
 
+class _MinuteFakeStore(_FakeStore):
+    """분봉 축 입력을 받는 store — 적재된 route_code 를 들여다볼 수 있다."""
+
+    def __init__(self, prereqs):
+        super().__init__(trigger=None, prereqs=prereqs)
+        self.route_code = None
+
+    def fetch_minute_price_trigger(self, trigger_id):
+        from datetime import datetime, timezone
+
+        from edge_analysis.adapters.eventstore import MinuteTriggerRow
+        return MinuteTriggerRow(
+            gate=PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
+            ticker="091160",
+            trade_date=date(2026, 7, 16),
+            session_id="ses-1",
+            window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+            generation=1,
+        )
+
+    def fetch_minute_window_meta(self, session_id, window_start):
+        return (1, "d" * 64)
+
+    def persist_observation_route(self, trigger_id, decomp, route_code,
+                                  event_search, entity_index, *, minute=False):
+        self.route_code = route_code
+        return super().persist_observation_route(
+            trigger_id, decomp, route_code, event_search, entity_index, minute=minute)
+
+
+def test_routing_rollup_is_handed_to_the_explanation_path(monkeypatch):
+    """라우팅이 계산한 층 분해가 **그대로** 설명 경로로 간다(ALPHA-785).
+
+    이 창의 분해는 route_code 를 정해 원장에 들어간다. 설명 쪽이 같은 창을 다시
+    질의하면 두 질의 사이의 분봉 canonical 정정이 한 explanation 안에서 라우팅 근거와
+    산문 근거를 갈라놓는다 — 같은 객체가 넘어가는 것이 그 창을 닫는 계약이다.
+
+    `is` 로 보는 이유: 값이 같은 다른 분해(재질의 결과)는 이 계약을 만족하지 않는다.
+    """
+    sentinel = SimpleNamespace(
+        etf="091160", etf_name="테스트 ETF", idio=0.001, rho=0.12,
+        layers=(SimpleNamespace(kind="시장", name="KODEX200", contribution=0.2),),
+        names=(),
+    )
+    seen = {}
+
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose",
+                        lambda *a, **k: sentinel)
+
+    def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        seen.update(kwargs)
+        kwargs["window_meta"].update({
+            "window_start": kwargs["window_start"], "as_of": kwargs["window_end"],
+        })
+        return "설명"
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+
+    store = _MinuteFakeStore(_PREREQS_OK)
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+
+    assert run(settings, lake=_FakeLake(), store=store, client=_FakeClient(),
+               s3=_FakeS3(), causal_lake=object()) == 0
+    assert seen["roll"] is sentinel, "설명 경로가 라우팅의 분해를 안 받았다"
+    # 라우팅도 같은 분해로 판정했다 — 넘긴 것과 원장에 남은 것이 한 벌이다
+    assert store.route_code == "COMMON_FACTOR"
+    # **정상 경로는 강등되지 않는다.** 폐기 플래그가 실수로 늘 켜지거나 안 꺼지는 회귀를
+    # 실패 쪽 단언만으로는 못 잡는다 — 그 회귀는 유효한 런을 통째로 LOW 로 만든다.
+    assert store.explanation.raw["stage_results"]["routing_failed"] is False
+    assert store.explanation.confidence_level != "LOW"
+
+
+class _HostileField:
+    """`kind` 역참조가 던진다 — **AttributeError 가 아니라서** getattr 기본값이 못 삼킨다."""
+
+    @property
+    def kind(self):
+        raise RuntimeError("이 필드가 라우터를 깨뜨렸다")
+
+
+class _HostileLayers:
+    """순회 자체가 던진다 — 원소가 아니라 컨테이너가 깨진 경우."""
+
+    def __iter__(self):
+        raise RuntimeError("층 목록을 읽을 수 없다")
+
+
+@pytest.mark.parametrize("layers", [(_HostileField(),), _HostileLayers()],
+                         ids=["field-raises", "iteration-raises"])
+def test_discard_logging_survives_the_value_that_broke_the_router(
+        monkeypatch, capsys, layers):
+    """폐기 로깅이 **라우터를 깨뜨린 바로 그 값**을 다시 만져도 런은 계속된다.
+
+    이 요약이 읽는 것은 방금 라우터를 터뜨린 값이다. 원소가 던지든 컨테이너 순회가
+    던지든, 진단을 남기려다 `roll = None` 과 route 적재 전에 런을 죽이면 계약("폐기 후
+    계속")을 지키려는 코드가 계약을 깨는 것이 된다 — 예외 **종류**로 방어하면 새 종류가
+    나올 때마다 같은 구멍이 열리므로 부류째 막는다.
+    """
+    monkeypatch.setattr(
+        "edge_analysis.statics.layers.decompose",
+        lambda *a, **k: SimpleNamespace(
+            etf="091160", etf_name="T", idio=0.0, rho=None,
+            layers=layers, names=()))
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        lambda *a, **k: "설명")
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    assert _run(store, _FakeS3()) == 0, "진단 로깅이 런을 죽였다"
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    failed = [e for e in events if e.get("event") == "statics.layers.failed"]
+    assert failed and failed[0]["had_rollup"] is True
+    # 읽을 수 없는 값은 물음표로 남는다 — 없는 척하지 않는다
+    assert failed[0]["discarded_layers"] == ["?"]
+
+
+def test_daily_path_also_hands_over_its_rollup(monkeypatch):
+    """하루(배치) 경로도 같은 분해를 넘긴다 — 여기도 같은 질의를 두 번 부르고 있었다.
+
+    분봉만 고치면 배치 런에서 원장의 route_code 와 산문 층 근거가 계속 갈린다. 두 경로가
+    같은 계약을 쓰는지 여기서 본다(창 인자 유무와 무관하게 `roll` 이 넘어간다).
+    """
+    sentinel = SimpleNamespace(
+        etf="091160", etf_name="테스트 ETF", idio=0.001, rho=0.12,
+        layers=(SimpleNamespace(kind="시장", name="KODEX200", contribution=0.2),),
+        names=(),
+    )
+    seen = {}
+
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose",
+                        lambda *a, **k: sentinel)
+
+    def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        seen.update(kwargs)
+        return "설명"
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+
+    assert _run(_FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK), _FakeS3()) == 0
+    # 창 인자는 없고(하루 모드) roll 만 넘어간다
+    assert seen == {"roll": sentinel}, f"하루 경로가 분해를 안 넘겼다: {sorted(seen)}"
+
+
+def test_failed_routing_discards_the_rollup_it_could_not_use(monkeypatch, capsys):
+    """분해는 됐는데 **라우팅이 터지면** 그 분해를 설명 쪽에 넘기지 않는다.
+
+    원장에는 `rt=None` 이라 미상(PRICE_ONLY)이 적힌다. 그 상태로 분해를 넘기면 원장은
+    "층을 못 봤다" 인데 산문에는 시장·섹터 기여가 실린다 — 분해 자체의 실패보다 잡기
+    어려운 갈림이다(분해는 성공했으므로 로그도 라우팅 쪽만 가리킨다).
+    """
+    usable = SimpleNamespace(
+        etf="091160", etf_name="테스트 ETF", idio=0.001, rho=0.12,
+        layers=(SimpleNamespace(kind="시장", name="KODEX200", contribution=0.2),),
+        names=(),
+    )
+    seen = {}
+
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose",
+                        lambda *a, **k: usable)
+
+    def boom(*a, **k):
+        raise RuntimeError("라우팅 실패")
+
+    # ⚠️ 문자열 경로로 패치하면 안 된다 — `statics/__init__.py` 가 `.gates` 의 **함수**
+    # `route` 를 임포트해 동명의 서브모듈을 가리므로, 패치 성공 여부가 임포트 순서에
+    # 따라 흔들린다(단독 실행이면 실패). 모듈 객체를 직접 잡는다.
+    import edge_analysis.statics.route as route_mod
+    monkeypatch.setattr(route_mod, "route_etf", boom)
+
+    def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        seen.update(kwargs)
+        kwargs["window_meta"].update({
+            "window_start": kwargs["window_start"], "as_of": kwargs["window_end"],
+        })
+        return "설명"
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+
+    store = _MinuteFakeStore(_PREREQS_OK)
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+
+    assert run(settings, lake=_FakeLake(), store=store, client=_FakeClient(),
+               s3=_FakeS3(), causal_lake=object()) == 0
+    assert store.route_code == "PRICE_ONLY"
+    assert seen["roll"] is None, "원장이 못 쓴 분해를 산문이 썼다"
+    # **폐기가 확신도를 올리면 안 된다.** `idio_qualified` 는 `roll is None` 을 "따질
+    # 대상이 없다"로 읽어 관대한 True 를 주는데, 폐기된 None 은 뜻이 다르다 — 구분하지
+    # 않으면 라우팅이 깨진 런이 오히려 더 확신 있게 영속된다(Rule 12).
+    assert store.explanation.confidence_level == "LOW"
+    # 원장이 **스스로** 사유를 말한다 — 로그는 보존 기간이 있고 원장은 남는다
+    assert store.explanation.raw["stage_results"]["routing_failed"] is True
+    # **버린 것이 무엇인지는 남는다.** 분해는 됐는데 라우터가 깨진 경우 예외 문자열만으론
+    # 어떤 층 값이 깨뜨렸는지 재현이 안 된다 — 폐기가 진단까지 지우면 안 된다.
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    failed = [e for e in events if e.get("event") == "statics.layers.failed"]
+    assert failed, "폐기를 로그로 안 남겼다"
+    assert failed[0]["had_rollup"] is True, "분해가 있었다는 사실이 사라졌다"
+    assert failed[0]["discarded_layers"] == ["시장"], "무엇을 버렸는지가 없다"
+
+
 def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch):
     """분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다.
 
     env 기본값(ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염되고,
     계보가 일 단위 축(price_movement_trigger_id)에 매달리면 FK 위반이다.
+
+    같은 핸드오프로 **라우팅이 쓴 층 분해(`roll`)도 넘어간다**(ALPHA-785) — 설명 쪽이
+    같은 창을 다시 질의하면 그 사이 정정이 들어올 때 route_code 와 산문 근거가 한
+    explanation 안에서 갈린다. 여기선 레이크가 없어 분해가 실패하므로 `None` 이 넘어가는데,
+    그것도 **전달된 값**이다(라우팅도 못 얻었다는 사실) — 설명 쪽은 재시도하지 않는다.
+    그 계약 자체는 `test_injected_none_rollup_is_not_retried_here` 가 실물로 고정한다.
     """
     called = {}
 
@@ -306,6 +518,7 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         "instrument_id": "inst_ETF",
         "window_start": "09:00",
         "window_end": "10:35",
+        "roll": None,   # 레이크 부재로 라우팅 분해가 실패했다 — 넘길 것이 없다
     }
     assert store.explanation.raw["stage_results"]["window"] == {
         "window_start": "09:00", "as_of": "10:35",
