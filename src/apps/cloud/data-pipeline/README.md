@@ -142,7 +142,7 @@
 > 업로드는 사람이 확인 후 한다: universe 는 세션 identity 축이라 갈아끼우는 순간 그날
 > 계획이 바뀐다). 객체 없이 스케일업하면 worker·consumer 는 기동 거부(fail-loud)다.
 > **처리량 제약은 벤더 교체로 풀렸다**(ALPHA-735) — 토스는 종목당 1콜 × 363종 ÷ 초당
-> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(마진 두고 12)라 400종이
+> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(기본은 12.5)라 400종이
 > 33초에 든다. 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
 > BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
