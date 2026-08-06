@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 from datetime import date
 
 import pytest
@@ -13,7 +14,8 @@ from types import SimpleNamespace
 
 from edge_analysis.domain.models import Holding, PriceTrigger
 from edge_analysis.config import PipelineError
-from edge_analysis.pipeline import _redacted, run
+from edge_analysis.pipeline import _redacted, _verdict_reason, run
+from edge_analysis.statics.interval import IntervalError, window_facts
 
 _SETTINGS = SimpleNamespace(
     trigger_id=None,
@@ -128,6 +130,9 @@ def test_statics_failure_is_persisted_as_low_confidence():
     assert _run(store, _FakeS3()) == 0
     assert store.explanation.confidence_level == "LOW"
     assert "판정불가" in store.explanation.summary
+    # 검수 화면에 뜨는 문장이다 - 파이썬 예외 타입이 다시 붙으면 여기서 죽는다.
+    assert not re.search(r"\b(ValueError|KeyError|AttributeError|TypeError)\b",
+                         store.explanation.summary), store.explanation.summary
 
 
 def test_run_logs_what_it_measured_with(capsys):
@@ -433,3 +438,53 @@ def test_empty_returns_fail_loud_before_llm():
     with pytest.raises(ReturnsNotReadyError):
         run(_SETTINGS, lake=_EmptyReturnsLake(), store=store, client=_FakeClient(), s3=s3)
     assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
+
+
+def test_verdict_message_carries_the_reason_not_the_exception_type():
+    """검수 화면에 파이썬 예외 문자열이 뜨면 안 된다.
+
+    안쪽 문장은 이미 사람이 읽는 한국어인데 `ValueError:` 가 앞에 붙어 스택 레벨 문구가
+    됐다(실측: `판정불가 — 통계 표면 부재 — ValueError: 요청창 09:00~09:54 5분 수익률을
+    계산하지 못했습니다`). 도메인 예외는 **사유만** 싣는다.
+    """
+    assert _verdict_reason(IntervalError("요청창 5분 수익률을 계산하지 못했습니다")) \
+        == "요청창 5분 수익률을 계산하지 못했습니다"
+    assert _verdict_reason(PipelineError("분봉 트리거가 없다")) == "분봉 트리거가 없다"
+
+
+def test_unexpected_exceptions_keep_their_type_because_that_is_the_bug_signal():
+    """예상 못 한 예외는 타입을 남긴다 — 지우면 버그가 데이터 부재처럼 읽힌다."""
+    got = _verdict_reason(KeyError("holdings"))
+    assert got.startswith("KeyError")
+
+
+def test_window_facts_raises_the_domain_error_so_the_prose_stays_human():
+    """`_verdict_reason` 이 옳아도 **원천이 맨 `ValueError` 면** 산문에 타입이 다시 붙는다.
+
+    배선을 고정한다: 요청창 5분 수익률을 못 낼 때 `interval` 이 자기 도메인 예외를 던져야
+    한다. `IntervalError` 는 `ValueError` 하위라 기존 `except ValueError` 경로는 그대로다.
+    """
+    lake = _BarelessLake()
+    with pytest.raises(IntervalError) as caught:
+        window_facts(lake, "091160", "iid-1", "2026-07-16", "09:00", "09:05")
+
+    assert "5분 수익률을 계산하지 못했습니다" in str(caught.value)
+    assert _verdict_reason(caught.value) == str(caught.value)   # 타입 접두가 안 붙는다
+    assert isinstance(caught.value, ValueError)                 # 기존 except 경로 보존
+
+
+class _BarelessLake:
+    """5분봉이 한 행도 없는 레이크 — 상류 적재가 멈춘 날의 모양이다.
+
+    커버리지 딕셔너리는 **인스턴스마다** 새로 만든다 - 클래스 속성이면 한 테스트가 적은
+    사유가 다음 테스트에 남아 오염된다.
+    """
+
+    def __init__(self):
+        self.exists, self.unbound = {}, {}
+
+    def sql(self, q: str):
+        return []
+
+    def taus(self, instrument_id: str, day: str):
+        return []

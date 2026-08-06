@@ -244,8 +244,8 @@ def run(
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
             # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
             # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.
-            text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — 통계 표면 부재 — "
-                    f"{type(exc).__name__}: {str(exc)[:160]}")
+            text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — "
+                    f"{_verdict_reason(exc)}")
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
     # **커버리지를 읽는 소비자를 만든다.** `layers`·`duck` 은 로깅을 모르고 경로와 폴백
     # 사유를 `exists`/`unbound` 에만 적는다 - "커버리지 보고가 곧 '어떻게 쟀는가' 다"
@@ -319,6 +319,23 @@ def run(
     })
     log("done", route=route_code, events=len(events), **outcome)
     return 0
+
+
+def _verdict_reason(exc: Exception) -> str:
+    """판정불가 산문에 실을 사유. **도메인 예외는 사유만, 그 외는 타입까지.**
+
+    이 문자열은 검수 화면에 그대로 뜬다. 도메인 예외(`PipelineError`·`IntervalError`)의
+    메시지는 이미 사람이 읽는 문장이라 `ValueError:` 같은 접두가 붙으면 스택 레벨 문구가
+    된다 — 실측: `판정불가 — 통계 표면 부재 — ValueError: 요청창 09:00~09:54 5분 수익률을
+    계산하지 못했습니다`.
+
+    예상 못 한 예외는 **타입을 남긴다.** 지우면 버그가 데이터 부재처럼 읽혀, 고칠 것과
+    기다릴 것이 같은 문장이 된다(Rule 12 — 부재와 결함을 갈라 말한다).
+    """
+    from .statics.interval import IntervalError
+    if isinstance(exc, (PipelineError, IntervalError)):
+        return str(exc)[:160]
+    return f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
 _DSN_SECRET = re.compile(
