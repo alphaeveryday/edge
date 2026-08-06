@@ -452,7 +452,7 @@ class EventStore:
 
         route 조회는 **입력 축을 따라간다** — 분봉 실행(settings.trigger_id)의 계보는
         minute_price_trigger_id 에 매달리므로, 일 단위 (etf, trade_date) 조인으로
-        찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 **다른** 일 단위 트리거 route
+        찾으면 없거나(전제 누락으로 런 실패) 같은 날의 **다른** 일 단위 트리거 route
         가 잡혀 남의 계보에 영속된다(ALPHA-709 리뷰 실측).
         """
         with self._conn.cursor() as cur:

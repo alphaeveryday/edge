@@ -199,6 +199,26 @@ def rdb_dsn_from_env() -> str:
     return " ".join(parts)
 
 
+def iceberg_covers(newest, asked_day: str, day_rows: int = 0) -> bool:
+    """정본 5분봉 표가 **요청 거래일을 실제로 담고 있는가.** 붙었다 ≠ 그날이 있다.
+
+    `_bars_iceberg` 는 ATTACH 와 뷰 생성이 되면 성공으로 쳤다. 정본이 비거나 낡아도
+    합집합 폴백을 건너뛰므로, 상류 적재가 멈추면 엔진이 조용히 과거만 본다 — 2026-08-06
+    실측: 정본은 그날 0행인데 canonical 롤업 산출은 정상이었고, 권한이 붙자 엔진이 낡은
+    쪽을 잡아 5분봉을 통째로 잃었다.
+
+    **최신 거래일이 아니라 그날의 행 수를 본다.** `max(trade_date) >= 요청일` 은 표에
+    구멍이 있어도 통과한다 — 실측 8/3·8/4 는 13종목뿐이었고 8/5 는 12:45 에 끊겼다.
+    상류가 띄엄띄엄 채우는 동안 '최신은 최신인데 그날은 없는' 상태가 실제로 났다.
+
+    `asked_day` 가 비면 판정하지 않는다(자가검사·탐색 실행의 기존 동작). **빈 표만은
+    기준일과 무관하게 정본이 아니다** — 그건 신선도가 아니라 부재다.
+    """
+    if newest is None:
+        return False
+    return True if not asked_day else day_rows > 0
+
+
 def s3_secret_sql() -> str:
     """S3 자격증명 시크릿 DDL. 실행 환경에 맞는 AWS SDK 체인을 고른다.
 
@@ -270,7 +290,8 @@ class CausalLake:
     """한 연결 위의 뷰 집합. exists 딕셔너리가 곧 커버리지 보고서다."""
 
     def __init__(self, backfill_dir: str | Path | None = None,
-                 rdb_dsn: str | None = None, bars_dir: str | Path | None = None):
+                 rdb_dsn: str | None = None, bars_dir: str | Path | None = None,
+                 day: str = ""):
         import duckdb
         self.con = duckdb.connect()
         for pragma in session_pragmas():
@@ -282,6 +303,10 @@ class CausalLake:
         self.unbound: dict[str, str] = {}       # 표 → 못 묶은 사유 (침묵 금지)
         self.backfill_notes: dict[str, str] = {}  # 백필 세트 → 못 읽은/0행인 사유
         self.day: str = ""                      # 지금 뷰가 잘려 있는 기준일
+        # 5분봉 **정본 신선도**의 기준일. `day` 와 다르다: 그건 뷰를 자르는 시점이고
+        # 이건 "정본이 이 날을 담고 있나"를 묻는 값이다. `_bars_iceberg` 가 구성 시점에
+        # 판정하는데 `bind_day()` 는 그 뒤에 오므로 별도로 받는다. 비면 판정하지 않는다.
+        self.asked_day: str = day
         self.effective: dict[str, tuple[int, str | None]] = {}  # 표 → (그날 행수, 도달 지평)
         self.s3: dict[str, str] = {}            # S3 뷰 이름 → 버킷 경로
         self.deferred: dict[str, str] = {}      # 첫 조회 때 걸 뷰 (스니핑이 비싼 것)
@@ -325,6 +350,20 @@ class CausalLake:
             self.con.execute("INSTALL iceberg; LOAD iceberg")
             self.con.execute(f"ATTACH '{BARS_ICEBERG_ACCOUNT}' AS gl "
                              "(TYPE iceberg, ENDPOINT_TYPE 'glue')")
+            # **신선도를 먼저 본다.** 아래 `_icb_suffix` 는 45일을 스캔해 물질화하는데,
+            # 낡은 표에 그 값을 치르고 나서 버리면 1분 주기에서 그대로 낭비다.
+            # 최신일과 **그날의 행 수**를 함께 묻는다 - 최신만 보면 표에 구멍이 있어도
+            # 통과한다. `asked_day` 가 없으면 `= NULL` 이 되어 행 수는 0 이고, 그때는
+            # `iceberg_covers` 가 최신 유무만 본다(기존 동작).
+            day_pred = f"DATE '{self.asked_day}'" if self.asked_day else "NULL"
+            newest, day_rows = self.con.execute(
+                f"SELECT max(trade_date), count(*) FILTER (WHERE trade_date = {day_pred}) "
+                f"FROM {tbl}").fetchone()
+            if not iceberg_covers(newest, self.asked_day, day_rows):
+                self.unbound["bars_5m_iceberg"] = (
+                    f"정본에 요청일이 없다 ({self.asked_day} {day_rows}행 · 최신 {newest}) "
+                    "- canonical 합집합으로 내려간다")
+                return False
             # 2026-08-05 하루만 상류 롤업이 접미사 없는 심볼을 쓴다(실측 14,842행 ·
             # 362종목). 접미사를 추측하면 KQ 가 깨지므로 같은 표의 접미사 붙은 행에서
             # 매핑을 만든다 - `month(ts)` 파티션이라 한 달만 읽으면 된다.
@@ -339,8 +378,6 @@ class CausalLake:
                 "b.ticker, b.ts, b.trade_date, b.open, b.high, b.low, b.close, "
                 "b.volume, b.source_vendor, b.available_at "
                 f"FROM {tbl} b LEFT JOIN _icb_suffix m ON m.ticker = b.ticker")
-            newest = self.con.execute(
-                "SELECT max(trade_date) FROM bars_5m").fetchone()[0]
         except Exception as e:      # noqa: BLE001 - 부재는 폴백으로, 침묵 금지
             self.unbound["bars_5m_iceberg"] = f"{type(e).__name__}: {str(e)[:80]}"
             return False

@@ -3,11 +3,15 @@
 # 최종 물리 스키마를 결정적 DBML(ERD)로 추출한다(scripts/gen-erd.sql).
 #
 # Flyway 가 DB 스키마 SSOT 이며 이 산출물(generated/*.dbml)은 파생물이다 — 사람이 편집하지 않는다.
-# ⚠️ 재생성을 강제하는 CI 게이트는 없다. `.githooks/pre-commit` 이 마이그레이션 커밋에서 이 스크립트를
-# 돌리지만 pg18 이 없으면 경고만 하고 통과시키므로(훅 자체도 core.hooksPath 설정이 있어야 돈다),
-# 낡은 dbml 이 조용히 머지될 수 있다 — 마이그레이션을 추가했으면 이 스크립트를 직접 돌려 확인하라
-# (pg18 이 없으면 docker: `docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
-#  bash src/libs/schema/scripts/generate-erd.sh`).
+# 집행은 CI 가 한다(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR 에서 이 스크립트를
+# 다시 돌려 커밋본과 대조하고, 어긋나면 빨간불을 낸다. `.githooks/pre-commit` 도 같은 일을 하지만
+# opt-in 이고 pg18 이 없으면 경고만 하므로 방어선이 아니라 편의다.
+# ⚠️ 이 레포는 branch protection 이 없어 그 체크가 required 가 아니다 — 빨간불이 머지를 막지는
+# 못한다. 마이그레이션을 추가했으면 직접 돌려 확인하라(pg18 없으면 docker — `chmod` 을 빼면
+# 리눅스에서 Permission denied 다. 컨테이너가 postgres uid 로 남의 파일을 truncate 하지 못한다):
+#  `chmod -R a+w src/libs/schema/generated && \
+#   docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
+#   bash src/libs/schema/scripts/generate-erd.sh`
 #
 # 의존: initdb · pg_ctl · createdb · psql (PostgreSQL 18 클라이언트+서버). 외부/npm 도구 없음.
 # 결정성: 임시 클러스터를 --no-locale(C 로케일)로 만들고 gen-erd.sql 의 ORDER BY 를 COLLATE "C"
@@ -58,6 +62,9 @@ apply "$HERE/migrations-cloud"  edge
 apply "$HERE/migrations-onprem" edge_onprem
 
 mkdir -p "$OUT"
-psql -tA -q -d edge        -f "$SQL" > "$OUT/physical-erd.dbml"
-psql -tA -q -d edge_onprem -f "$SQL" > "$OUT/physical-erd-onprem.dbml"
+# ON_ERROR_STOP=1 은 apply() 와 같은 이유로 필수다 — 없으면 gen-erd.sql 이 깨져도 psql 이 0 으로
+# 끝나 **빈 파일**이 산출물로 남는다. CI 대조는 훅과 같은 SQL 을 돌리므로 양쪽 다 비어 서로
+# 일치하고, ERD 가 파괴된 채 게이트가 초록이 된다(집행이 자기 실패를 못 보는 자리).
+psql -v ON_ERROR_STOP=1 -tA -q -d edge        -f "$SQL" > "$OUT/physical-erd.dbml"
+psql -v ON_ERROR_STOP=1 -tA -q -d edge_onprem -f "$SQL" > "$OUT/physical-erd-onprem.dbml"
 echo "generated: $OUT/physical-erd.dbml, $OUT/physical-erd-onprem.dbml"

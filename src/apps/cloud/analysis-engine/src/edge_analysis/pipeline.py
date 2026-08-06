@@ -11,12 +11,7 @@ from dataclasses import asdict, replace
 from datetime import timedelta
 from typing import Any
 
-from .adapters.archive import (
-    archived_events,
-    decomp_summary,
-    write_explanation_to_s3,
-    write_run_archive,
-)
+from .adapters.archive import archived_events, decomp_summary, write_run_archive
 from .adapters.eventstore import EventStore
 from .adapters.lake import LakeReader
 from .adapters.llm import AnalysisClient, TracingClient
@@ -163,8 +158,10 @@ def run(
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
-    lake = causal_lake if causal_lake is not None else CausalLake()
     day_iso = settings.trade_date.isoformat()
+    # 거래일을 **레이크 구성 시점에** 넘긴다 - 5분봉 정본(Iceberg)이 이 날을 담고 있는지
+    # 를 거기서 판정하고, 못 담으면 canonical 합집합으로 내려간다(`iceberg_covers`).
+    lake = causal_lake if causal_lake is not None else CausalLake(day=day_iso)
 
     # 분봉 트리거는 **구간 모드**로 층을 가른다. 하루 모드는 당일 일봉을 요구하는데
     # (`decompose` 는 `d0` 가 계열에 없으면 None) 확정 일봉은 마감 뒤에 나온다 - 장중엔
@@ -195,6 +192,30 @@ def run(
     )
     log("trigger.consumed", route=route_code, event_search=event_search,
         layer_route=(rt.kind if rt else "미상"), **ids)
+
+    # 영속 전제를 **LLM 앞에서** 검사한다(ALPHA-797). 세 전제가 모두 이 시점에 확정돼
+    # 있다 - profile·bundle 은 이 런이 만드는 게 아닌 사전 상태고, route 는 바로 위
+    # `persist_observation_route` 가 커밋했다. 뒤에서 검사하면 결손을 **LLM 을 태운
+    # 뒤에야** 알게 되고, 그때는 결과를 버리기 아까워 S3 폴백으로 접게 된다 - 그 폴백이
+    # `explanation_run` 을 안 남겨 소비자의 멱등 프리플라이트(`has_run_for_route`)가
+    # 영영 false 로 남고, 재배달이 같은 트리거에 LLM 을 다시 태운다(#554 리뷰).
+    #
+    # ⚠️ **EOD 레인의 폭발 반경이 여기서 바뀐다.** 셋 중 결손이 실제로 갈리는 건
+    # `profile` 뿐이다 - `route` 는 종목별이되 바로 위가 방금 커밋해 결손이 구조적으로
+    # 불가능하고, `bundle` 은 런 전역이다. 그래서 신규 ETF 를 유니버스에 넣고
+    # `etf_profile` 을 안 채우면 그 한 종목의 비0 종료가 `AnalysisResultCheck`(전량성공
+    # 게이트, ADR-0028)를 통해 **유니버스 일일 런 전체**를 실패로 만든다.
+    #
+    # 이전에는 그 종목만 S3 로 새고 런은 초록이었다 - 그게 관대한 쪽 오류였다. 설명이
+    # 없는 ETF 가 조용히 초록에 묻히면 아무도 안 채운다. 대가는 의식적으로 받는다:
+    # profile 결손은 데이터가 아니라 **사람이 채우는 마스터**라 자기치유가 없고, 채울
+    # 때까지 일일 런이 매일 빨갛다. 같은 종류의 선례가 바로 이 파일에 이미 있다 -
+    # `resolve_etf_instrument` 결손도 종목 하나로 런을 죽인다(ALPHA-467). `holdings`
+    # 빈은 선례로 못 쓴다: 그건 매일 적재되는 데이터라 다음날 자연 복구된다(Rule 12).
+    prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
+    missing = [key for key, value in prereqs.items() if not value]
+    if missing:
+        raise PipelineError(f"설명 영속 전제가 없다: {missing}")
 
     # 파이프라인이 조립한 이벤트를 소비만 한다(ALPHA-412, 읽기 전용).
     events: list[EventContext] = []
@@ -242,8 +263,8 @@ def run(
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
             # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
             # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.
-            text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — 통계 표면 부재 — "
-                    f"{type(exc).__name__}: {str(exc)[:160]}")
+            text = (f"[ETF] {settings.etf_ticker} {day_iso} 판정불가 — "
+                    f"{_verdict_reason(exc)}")
             log("statics.surface.unavailable", error=f"{type(exc).__name__}: {exc}")
     # **커버리지를 읽는 소비자를 만든다.** `layers`·`duck` 은 로깅을 모르고 경로와 폴백
     # 사유를 `exists`/`unbound` 에만 적는다 - "커버리지 보고가 곧 '어떻게 쟀는가' 다"
@@ -304,7 +325,13 @@ def run(
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,
         confidence=explanation.confidence_level, bundles=len(verdicts.bundles))
-    outcome = _persist_explanation(store, s3, settings, etf_instrument_id, explanation, events)
+    outcome = store.persist_explanation(
+        settings, etf_instrument_id, explanation,
+        route_id=prereqs["route"],
+        bundle=prereqs["bundle"],
+        primary_thread_id=_primary_thread_id(events),
+        events=events,
+    )
     write_run_archive(s3, settings, {
         "outcome": "explained",
         "trigger": asdict(gate),
@@ -317,6 +344,23 @@ def run(
     })
     log("done", route=route_code, events=len(events), **outcome)
     return 0
+
+
+def _verdict_reason(exc: Exception) -> str:
+    """판정불가 산문에 실을 사유. **도메인 예외는 사유만, 그 외는 타입까지.**
+
+    이 문자열은 검수 화면에 그대로 뜬다. 도메인 예외(`PipelineError`·`IntervalError`)의
+    메시지는 이미 사람이 읽는 문장이라 `ValueError:` 같은 접두가 붙으면 스택 레벨 문구가
+    된다 — 실측: `판정불가 — 통계 표면 부재 — ValueError: 요청창 09:00~09:54 5분 수익률을
+    계산하지 못했습니다`.
+
+    예상 못 한 예외는 **타입을 남긴다.** 지우면 버그가 데이터 부재처럼 읽혀, 고칠 것과
+    기다릴 것이 같은 문장이 된다(Rule 12 — 부재와 결함을 갈라 말한다).
+    """
+    from .statics.interval import IntervalError
+    if isinstance(exc, (PipelineError, IntervalError)):
+        return str(exc)[:160]
+    return f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
 _DSN_SECRET = re.compile(
@@ -338,31 +382,6 @@ def _redacted(notes: dict) -> dict:
     """
     return {k: _DSN_SECRET.sub(lambda m: (m.group(1) or "") + (m.group(3) or "") + "***", v)
             if isinstance(v, str) else v for k, v in notes.items()}
-
-
-def _persist_explanation(
-    store: EventStore, s3, settings: Settings, etf_instrument_id: str, explanation, events,
-) -> dict[str, Any]:
-    """FK 전제가 있으면 RDS 에, 없으면 S3 로 폴백해 설명을 영속한다."""
-    prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
-    missing = [key for key, value in prereqs.items() if not value]
-    if missing:
-        location = write_explanation_to_s3(s3, settings, explanation.raw, events)
-        log(
-            "explanation_result.skipped",
-            reason="missing_prerequisites",
-            missing=missing,
-            s3=location,
-            trade_date=settings.trade_date.isoformat(),
-        )
-        return {"persisted": "s3", "location": location, "missing": missing}
-    return store.persist_explanation(
-        settings, etf_instrument_id, explanation,
-        route_id=prereqs["route"],
-        bundle=prereqs["bundle"],
-        primary_thread_id=_primary_thread_id(events),
-        events=events,
-    )
 
 
 def _primary_thread_id(events: list[EventContext]) -> str | None:

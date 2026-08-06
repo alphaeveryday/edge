@@ -84,9 +84,17 @@ variable "analysis_image" {
 }
 
 variable "analysis_release_bundle_version" {
-  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. null 이면 주입 안 함(앱이 S3 fallback)."
+  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. RDS 의 release_bundle(PUBLISHED) 행과 일치해야 한다. 기본값도 null 도 없는 이유: 미주입이면 영속 전제 결손으로 런이 실패한다(ALPHA-797 이 S3 폴백을 폐기) — 런타임 exit 1 보다 plan 단계에서 막는 게 싸다."
   type        = string
-  default     = null
+  nullable    = false
+
+  # nullable=false 는 누락·명시적 null 만 막는다 — 빈 문자열은 통과해 런타임 exit 1 이
+  # 되므로(코드가 `if bundle:` 로 거른다) description 이 내건 "plan 에서 막는다"가
+  # 그 한 갈래에서만 깨진다. 둘은 서로 대신하지 못한다.
+  validation {
+    condition     = var.analysis_release_bundle_version != ""
+    error_message = "release_bundle(PUBLISHED) 행과 일치하는 번들 버전이 필요하다 — 빈 값은 런타임 exit 1 이다(ALPHA-797)."
+  }
 }
 
 # 시각창 집계 Athena 오프로드(ALPHA-780). 둘 다 채워야 자격이 붙는다 — 하나만 주면

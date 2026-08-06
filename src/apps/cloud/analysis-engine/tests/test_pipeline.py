@@ -1,11 +1,12 @@
 """run 오케스트레이션 테스트.
 
 의존성을 fake 로 주입해 I/O 가 아니라 제어 흐름을 고정한다: 트리거 없는 날은 분석
-없이 잔잔히 종료하고, 트리거 있는 날은 설명을 영속하며, FK 전제가 없는 날은 고아
-행을 넣는 대신 S3 로 폴백한다.
+없이 잔잔히 종료하고, 트리거 있는 날은 설명을 영속하며, FK 전제가 없는 날은 LLM 을
+태우기 전에 선다.
 """
 
 import json
+import re
 from datetime import date
 
 import pytest
@@ -13,7 +14,8 @@ from types import SimpleNamespace
 
 from edge_analysis.domain.models import Holding, PriceTrigger
 from edge_analysis.config import PipelineError
-from edge_analysis.pipeline import _redacted, run
+from edge_analysis.pipeline import _redacted, _verdict_reason, run
+from edge_analysis.statics.interval import IntervalError, window_facts
 
 _SETTINGS = SimpleNamespace(
     trigger_id=None,
@@ -128,6 +130,9 @@ def test_statics_failure_is_persisted_as_low_confidence():
     assert _run(store, _FakeS3()) == 0
     assert store.explanation.confidence_level == "LOW"
     assert "판정불가" in store.explanation.summary
+    # 검수 화면에 뜨는 문장이다 - 파이썬 예외 타입이 다시 붙으면 여기서 죽는다.
+    assert not re.search(r"\b(ValueError|KeyError|AttributeError|TypeError)\b",
+                         store.explanation.summary), store.explanation.summary
 
 
 def test_run_logs_what_it_measured_with(capsys):
@@ -193,15 +198,29 @@ def test_absent_trace_does_not_discard_the_explanation(monkeypatch):
     assert store.explanation.raw["stage_results"]["analysis_trace"] is None
 
 
-def test_missing_prerequisites_fall_back_to_s3():
+def test_missing_prerequisites_abort_before_the_llm(monkeypatch):
+    """영속 전제 결손은 **LLM 을 태우기 전에** 런을 세운다(ALPHA-797).
+
+    전제(profile·route·bundle)는 셋 다 LLM 앞에서 확정된다 — 뒤에서 검사하면 결손을
+    **과금한 뒤에야** 알게 되고, 그러면 결과를 버리기 아까워 S3 로 접게 된다. 그 폴백이
+    `explanation_run` 을 안 남기므로 소비자의 멱등 프리플라이트(`has_run_for_route`)가
+    영영 false 로 남고, 재배달이 같은 트리거에 LLM 을 다시 태운다(#554 리뷰 P2).
+
+    그래서 단언의 무게는 반환값이 아니라 **`run_statics` 가 안 불린 것**에 있다 —
+    검사를 영속 시점으로 되돌리면 이 단언만 깨진다.
+    """
+    import edge_analysis.statics.etfcell as etfcell
+
+    burned: list[str] = []
+    monkeypatch.setattr(
+        etfcell, "run", lambda *a, **k: (burned.append("llm"), "")[1])
     store = _FakeStore(trigger=_TRIGGER, prereqs={"profile": False, "route": None, "bundle": None})
     s3 = _FakeS3()
 
-    assert _run(store, s3) == 0
+    with pytest.raises(PipelineError, match="설명 영속 전제가 없다"):
+        _run(store, s3)
+    assert burned == []                              # LLM 미호출 — 과금 없음
     assert "persist_explanation" not in store.calls  # 고아 RDS 행 없음
-    keys = [p["Key"] for p in s3.puts]
-    assert any("/runs/" not in k for k in keys)  # 설명 S3 폴백
-    assert any("/runs/" in k for k in keys)      # 런 아카이브
 
 
 def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch):
@@ -433,3 +452,53 @@ def test_empty_returns_fail_loud_before_llm():
     with pytest.raises(ReturnsNotReadyError):
         run(_SETTINGS, lake=_EmptyReturnsLake(), store=store, client=_FakeClient(), s3=s3)
     assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
+
+
+def test_verdict_message_carries_the_reason_not_the_exception_type():
+    """검수 화면에 파이썬 예외 문자열이 뜨면 안 된다.
+
+    안쪽 문장은 이미 사람이 읽는 한국어인데 `ValueError:` 가 앞에 붙어 스택 레벨 문구가
+    됐다(실측: `판정불가 — 통계 표면 부재 — ValueError: 요청창 09:00~09:54 5분 수익률을
+    계산하지 못했습니다`). 도메인 예외는 **사유만** 싣는다.
+    """
+    assert _verdict_reason(IntervalError("요청창 5분 수익률을 계산하지 못했습니다")) \
+        == "요청창 5분 수익률을 계산하지 못했습니다"
+    assert _verdict_reason(PipelineError("분봉 트리거가 없다")) == "분봉 트리거가 없다"
+
+
+def test_unexpected_exceptions_keep_their_type_because_that_is_the_bug_signal():
+    """예상 못 한 예외는 타입을 남긴다 — 지우면 버그가 데이터 부재처럼 읽힌다."""
+    got = _verdict_reason(KeyError("holdings"))
+    assert got.startswith("KeyError")
+
+
+def test_window_facts_raises_the_domain_error_so_the_prose_stays_human():
+    """`_verdict_reason` 이 옳아도 **원천이 맨 `ValueError` 면** 산문에 타입이 다시 붙는다.
+
+    배선을 고정한다: 요청창 5분 수익률을 못 낼 때 `interval` 이 자기 도메인 예외를 던져야
+    한다. `IntervalError` 는 `ValueError` 하위라 기존 `except ValueError` 경로는 그대로다.
+    """
+    lake = _BarelessLake()
+    with pytest.raises(IntervalError) as caught:
+        window_facts(lake, "091160", "iid-1", "2026-07-16", "09:00", "09:05")
+
+    assert "5분 수익률을 계산하지 못했습니다" in str(caught.value)
+    assert _verdict_reason(caught.value) == str(caught.value)   # 타입 접두가 안 붙는다
+    assert isinstance(caught.value, ValueError)                 # 기존 except 경로 보존
+
+
+class _BarelessLake:
+    """5분봉이 한 행도 없는 레이크 — 상류 적재가 멈춘 날의 모양이다.
+
+    커버리지 딕셔너리는 **인스턴스마다** 새로 만든다 - 클래스 속성이면 한 테스트가 적은
+    사유가 다음 테스트에 남아 오염된다.
+    """
+
+    def __init__(self):
+        self.exists, self.unbound = {}, {}
+
+    def sql(self, q: str):
+        return []
+
+    def taus(self, instrument_id: str, day: str):
+        return []
