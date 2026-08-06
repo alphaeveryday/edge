@@ -594,16 +594,20 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     #    겹치면 그 레인들의 kis 잡은 **합**이 동시 발급자 수다.
     variables = _strip_hcl(( tf.parent / "variables.tf").read_text())
     windows = {}
+    read_vars: list[str] = []   # 아래 env 가드가 손유지 목록 대신 이걸 쓴다
     for lane, jobs in per_lane.items():
         if not jobs:
             continue
         if lane == "market":
-            crons, timeout = [_hcl_default(variables, "schedule_expression")], \
-                _hcl_default_number(variables, "state_machine_timeout_seconds")
+            cron_var, timeout_var = "schedule_expression", "state_machine_timeout_seconds"
+            crons = [_hcl_default(variables, cron_var)]
         else:
             prefix = lane.replace("_pipeline.tf", "")
-            crons = _hcl_cron_map(variables, f"{prefix}_schedule_expressions")
-            timeout = _hcl_default_number(variables, f"{prefix}_state_machine_timeout_seconds")
+            cron_var = f"{prefix}_schedule_expressions"
+            timeout_var = f"{prefix}_state_machine_timeout_seconds"
+            crons = _hcl_cron_map(variables, cron_var)
+        timeout = _hcl_default_number(variables, timeout_var)
+        read_vars += [cron_var, timeout_var]
         mins = sorted(h * 60 + m for h, m in (_cron_hm(c) for c in crons))
         end = mins[-1] + timeout // 60
         # 창을 하루 안의 분(0~1440)으로 비교하므로 자정을 넘으면 아래 disjoint 판정이 거짓이
@@ -618,10 +622,10 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     #    실제로 도는 창과 여기서 검증하는 창이 갈려 **가드가 눈이 먼다** — 하필 위 실패 메시지가
     #    "슬롯을 떼든 하라"고 유도하는 자리가 env 쪽이라 실제로 밟기 쉬운 경로다. 오버라이드가
     #    생기면 조용히 지나가지 말고 여기서 멈춰 이 계산을 env 기준으로 고치게 한다.
+    #    목록은 **위에서 실제로 읽은 var** 에서 뽑는다 — 손으로 유지하면 kis 잡이 다른 레인으로
+    #    옮겨갔을 때 그 레인의 var 가 목록에 없어 가드가 또 눈이 먼다.
     env_tf = _strip_hcl((tf.parent.parent.parent / "envs/dev/main.tf").read_text())
-    for var in ("schedule_expression", "state_machine_timeout_seconds",
-                "investor_intraday_schedule_expressions",
-                "investor_intraday_state_machine_timeout_seconds"):
+    for var in read_vars:
         assert not _re_module.search(rf"^\s*{var}\s*=", env_tf, _re_module.M), (
             f"envs/dev 가 `{var}` 를 오버라이드한다 — 이 가드는 모듈 default 로 창을 계산하므로 "
             "실제와 다른 값을 검증하게 된다. 계산을 env 기준으로 바꿔라")
@@ -645,25 +649,35 @@ def _strip_hcl(text: str) -> str:
     return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", "//")))
 
 
+def _hcl_block(tf: str, name: str) -> str:
+    """`variable "name" { … }` 블록 본문.
+
+    경계는 **0열의 닫는 중괄호**로 잡는다 — `test_ops_catalog._hcl_number` 가 이미 쓰는
+    관용구다. 같은 일에 두 관용구를 두면 갈린다(Rule 11).
+
+    ⚠️ `[^}]*?` 로 막는 방법도 블록을 안 넘지만 **중첩 `{}` 를 못 넘는다** — `validation {}`
+    블록이 `default` 앞에 오면(합법 HCL) 파서가 못 찾고 죽는다. 지금 `validation` 을 가진
+    5개는 전부 `default` 가 먼저라 안 밟지만, 순서를 바꾸는 정상 변경을 막는 거짓 양성이다.
+    """
+    m = _re_module.search(rf'variable\s+"{name}"\s*\{{(.*?)^\}}', tf, _re_module.S | _re_module.M)
+    assert m, f"{name} variable 블록을 못 찾았다 — 파서가 낡았다"
+    return m.group(1)
+
+
 def _hcl_default(tf: str, name: str) -> str:
-    import re as _re
-    m = _re.search(rf'variable\s+"{name}"\s*\{{[^}}]*?default\s*=\s*"([^"]+)"', tf, _re.S)
+    m = _re_module.search(r'default\s*=\s*"([^"]+)"', _hcl_block(tf, name))
     assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
     return m.group(1)
 
 
 def _hcl_default_number(tf: str, name: str) -> int:
-    import re as _re
-    m = _re.search(rf'variable\s+"{name}"\s*\{{[^}}]*?default\s*=\s*(\d+)', tf, _re.S)
+    m = _re_module.search(r"default\s*=\s*(\d+)", _hcl_block(tf, name))
     assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
     return int(m.group(1))
 
 
 def _hcl_cron_map(tf: str, name: str) -> list[str]:
-    import re as _re
-    m = _re.search(rf'variable\s+"{name}"\s*\{{[^}}]*?default\s*=\s*\{{(.*?)^\s*\}}', tf, _re.S | _re.M)
-    assert m, f"{name} 의 default 맵을 못 찾았다 — 파서가 낡았다"
-    crons = _re.findall(r'"(cron\([^"]+\))"', m.group(1))
+    crons = _re_module.findall(r'"(cron\([^"]+\))"', _hcl_block(tf, name))
     assert crons, f"{name} 에서 cron 을 못 뽑았다"
     return crons
 

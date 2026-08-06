@@ -632,7 +632,11 @@ def test_장중_수급_레인은_달력_플래그가_작업마다_다르다():
     # 그 근거(창 인자 부재)가 terraform 에 그대로 있는지 함께 든다 — 나중에 `--from/--to` 를
     # 붙이면 전량 스캔이 아니게 되고, 그때는 이 레인도 공시처럼 전부 False 가 아니라 반대로
     # 적재를 True 로 되돌려야 한다. 근거가 코드에서 사라졌는데 값만 남는 것을 막는다.
-    sm = (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8")
+    # ⚠️ **주석을 먼저 걷는다.** 배선을 뗄 때 가장 흔한 형태가 삭제가 아니라 주석 처리인데,
+    # 원문을 그대로 훑으면 창 인자를 붙이면서 옛 줄을 주석에 남긴 변경이 그대로 통과한다 —
+    # 근거는 사라졌는데 단언만 초록이다(`test_ops_catalog._strip_hcl_comments` 와 같은 규율).
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
     assert "States.Array('load-investor-intraday', '--run-id', $.run_id)" in sm, (
         "load-investor-intraday 의 command 가 바뀌었다 — 창 인자가 붙었다면 "
         "'공휴일에도 전량 스캔으로 실일을 한다'는 False 의 근거가 사라진다")
