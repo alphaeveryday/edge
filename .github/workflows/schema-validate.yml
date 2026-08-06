@@ -236,6 +236,32 @@ jobs:
           ./gradlew :libs:schema:flywayValidate --info
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
 
+      # ── 파생 ERD 대조 (ALPHA-783) ──
+      # generated/*.dbml 은 커밋된 계약 산출물인데(ADR-0005 · implementation.md 체크리스트)
+      # 여태 집행이 없었다: pre-commit 훅은 opt-in 이고 pg18 없으면 경고만 하고 통과한다.
+      # 그 결과 dev 의 ERD 가 마이그레이션 3건만큼 밀린 채였고, 무관한 PR 이 재생성하다 우연히
+      # 드러났다(ALPHA-768/#549). 여기서 다시 만들어 커밋본과 대조한다.
+      #
+      # 마지막에 두는 이유: 마이그레이션이 깨졌으면 generate-erd.sh 도 같이 죽는데, 그 실패는
+      # "ERD 가 낡았다"로 읽혀 원인을 가린다. 위 flywayValidate 가 먼저 제 이름으로 실패하게 한다.
+      #
+      # pg18 은 컨테이너로 가져온다 — 러너에 PGDG 저장소를 얹는 것보다 스텝이 적다. 위 ephemeral
+      # Postgres(pg16·edge-ci-pg)와 무관하다: 스크립트가 자기 컨테이너 안에 제 클러스터를 띄운다.
+      - name: 파생 ERD 재생성 대조
+        run: |
+          set -euo pipefail
+          # 컨테이너는 postgres uid 로 도는데 워크스페이스는 러너 소유다 — 미리 열지 않으면
+          # 스크립트가 산출물을 못 써서 "차이 없음"처럼 조용히 통과할 수 있다.
+          chmod -R a+w src/libs/schema/generated
+          docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
+            bash src/libs/schema/scripts/generate-erd.sh
+          if ! git diff --exit-code --stat -- src/libs/schema/generated/; then
+            echo "::error::generated/*.dbml 이 마이그레이션과 어긋납니다. 재생성해 같은 커밋에 담으세요(implementation.md 체크리스트). 로컬에 pg18 이 없으면: docker run --rm -v \"\$PWD:/repo\" -w /repo --user postgres postgres:18 bash src/libs/schema/scripts/generate-erd.sh"
+            git diff -- src/libs/schema/generated/
+            exit 1
+          fi
+          echo "OK — 파생 ERD 가 마이그레이션과 일치."
+
       # 1회용 VM 에선 no-op 인 방어적 teardown(영속 러너 시절 도입 — 컨테이너·포트 잔존 방지).
       - name: Tear down ephemeral Postgres
         if: always()
