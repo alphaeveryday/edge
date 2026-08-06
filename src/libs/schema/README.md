@@ -123,6 +123,32 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - `cleanDisabled = true` — `flyway clean` 금지(데이터 전체 삭제 방지).
 - `validateMigrationNaming = true` — 파일명 규칙 위반 시 실패.
 
+## 락 예산 — 장중에 쓰이는 표를 만질 때 (ALPHA-799)
+
+`schema-migrate` 는 이 경로가 바뀐 dev push 마다 **즉시** 돈다 — 장 시간 게이트가 없다.
+그런데 장중 파이프라인은 `minute_price_trigger` 에 매분 INSERT 하고, 분석엔진은
+autocommit=False 라 런의 첫 문장이 잡은 ACCESS SHARE 가 S3 왕복을 지나서야 풀린다.
+그 뒤에 **무한정 대기하는 DDL** 이 끼면 그 뒤의 매분 INSERT 가 전부 줄을 선다
+(head-of-line blocking). 마이그레이션 task 폴링 상한이 1080초라 최악 18분간 안 드러난다.
+
+그런 표에 ACCESS EXCLUSIVE 를 잡는 DDL 을 쓸 때는 파일 선두에 락 상한을 건다:
+
+```sql
+SET LOCAL lock_timeout = '3s';
+```
+
+- **`SET LOCAL` 이다.** 맨 `SET` 은 Flyway 가 한 런을 한 커넥션으로 처리하기 때문에 세션에
+  남아, **뒤따르는 모든 마이그레이션이 그 값을 물려받는다**(실측: 후속 파일에서
+  `current_setting('lock_timeout')` = `3s`). 남의 파일이 자기 SQL 에 없는 이유로 죽는다.
+- **실패는 안전하다.** PG 는 DDL 이 트랜잭션이라 타임아웃 실패가 통째로 롤백되고
+  `flyway_schema_history` 에 기록도 안 남는다 — 재시도에 `flyway repair` 가 필요 없다
+  (실측: 충돌 락 보유 중 `flywayMigrate` → `55P03` 로 3.4초 만에 실패, history 무기록,
+  락 해제 후 재실행이 그대로 성공).
+- **획득 대기만 묶는다.** 락을 잡은 뒤의 **보유 시간**은 안 묶는다. 표를 재작성하는 DDL
+  (`ADD COLUMN ... GENERATED ... STORED` 등)이나 인덱스를 짓는 `ADD CONSTRAINT ... UNIQUE`
+  는 보유 시간이 행 수에 비례하므로, 그런 문장은 **파일을 갈라** 다른 표의 락 수명에
+  묶이지 않게 한다(Flyway 는 마이그레이션 하나를 한 트랜잭션으로 감싼다).
+
 ## 물리 ERD 자동 생성 (파생물)
 
 Flyway 마이그레이션이 스키마 SSOT 이므로, 물리 ERD 는 사람이 그리지 않고 **마이그레이션에서 생성**한다.
