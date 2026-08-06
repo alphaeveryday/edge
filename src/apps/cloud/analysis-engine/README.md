@@ -22,6 +22,7 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 ```
 
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 임의 값을 만들지 않고 결과를 S3에 쓰고 로그로 알린다.
+- **매 런 커버리지 1줄을 로그에 남긴다**(ALPHA-792) — `statics.coverage` 에 `exists`·`unbound` 가 실린다: 5분봉을 Glue Iceberg 로 읽었는지 canonical 합집합으로 폴백했는지, 시각창 집계를 Athena 로 보냈는지 DuckDB 로 돌았는지(폴백 사유까지), 층 분해가 왜 `None` 인지. 이 값들은 원래 `CausalLake` 안에만 있어 운영에서 볼 수 없었다. 자격증명은 가린다(DSN 은 `_rdb` 가 원천에서 지우고 로그 쪽이 한 겹 더 받친다).
 - **매 런(평온 종료 포함) 런 아카이브 1건을 S3에 남긴다**(ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다).
 
 ## 구조

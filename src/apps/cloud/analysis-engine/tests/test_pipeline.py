@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from edge_analysis.domain.models import Holding, PriceTrigger
 from edge_analysis.config import PipelineError
-from edge_analysis.pipeline import run
+from edge_analysis.pipeline import _redacted, run
 
 _SETTINGS = SimpleNamespace(
     trigger_id=None,
@@ -128,6 +128,51 @@ def test_statics_failure_is_persisted_as_low_confidence():
     assert _run(store, _FakeS3()) == 0
     assert store.explanation.confidence_level == "LOW"
     assert "판정불가" in store.explanation.summary
+
+
+def test_run_logs_what_it_measured_with(capsys):
+    """**무엇으로 쟀는가**가 로그에 남아야 한다.
+
+    `layers`·`duck` 은 경로와 폴백 사유를 `exists`/`unbound` 에만 적는다. 아무도 안 읽으면
+    5분봉을 Iceberg 로 읽었는지 canonical 합집합으로 읽었는지, Athena 로 집계했는지
+    DuckDB 로 폴백했는지가 사라진다 — 2026-08-06 하루를 그 추측으로 보냈다.
+    """
+    _run(_FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK), _FakeS3())
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    coverage = [e for e in events if e.get("event") == "statics.coverage"]
+    assert coverage, "런이 커버리지를 안 남겼다"
+    # 키만 있는지가 아니라 **레이크가 잰 값이 실제로 실렸는지** 본다 - 빈 딕셔너리를
+    # 찍어도 통과하는 단언은 이 로그가 사라지는 회귀를 못 막는다(Rule 9).
+    exists = coverage[0]["exists"]
+    assert exists, "커버리지가 비어 있다"
+    assert "s3" in exists, f"S3 표면 상태가 없다: {sorted(exists)}"
+
+
+def test_coverage_log_hides_the_rdb_password():
+    """커버리지는 부재를 **예외 전문 그대로** 담는데(침묵 금지), RDB 항목엔 DSN 이 섞인다.
+
+    `CausalLake._rdb` 는 `password=…` 가 든 DSN 을 `ATTACH` SQL 에 넣고 실패하면 그 예외를
+    `exists["rdb"]` 에 보존한다 — DuckDB 오류는 문장을 되돌려주는 일이 흔하다. `log()` 계약이
+    "비밀값은 절대 넣지 않는다" 이므로 내보내는 쪽이 가린다. **사유는 남기고 자격증명만 지운다.**
+    """
+    got = _redacted({
+        "rdb": "실패: ATTACH 'host=h dbname=d user=u password=s3cr3t' AS rdb: 연결 거부",
+        "quoted": "password='s3 cr3t' 뒤에도 문장이 있다",       # 따옴표 안 공백
+        "uri": "실패: postgres://edge:s3cr3t@db.internal:5432/edge 연결 거부",  # URI 형
+        "uri_nouser": "실패: postgres://:s3cr3t@db.internal/edge",   # 사용자명 생략도 합법이다
+        "s3": 33,
+    })
+
+    assert "s3cr3t" not in got["rdb"]
+    assert "연결 거부" in got["rdb"] and "host=h" in got["rdb"]   # 사유는 남는다
+    # 형태가 하나가 아니다 - 공백 든 비밀번호는 `\S+` 로 못 자르고, URI 형은 `password=`
+    # 가 아예 없다. 둘 다 통과시키면 이 함수는 있으나 마나다.
+    assert "s3 cr3t" not in got["quoted"] and "뒤에도 문장이 있다" in got["quoted"]
+    assert "s3cr3t" not in got["uri"] and "db.internal" in got["uri"]
+    assert "s3cr3t" not in got["uri_nouser"]
+    assert got["s3"] == 33                                        # 문자열 아닌 값은 그대로
 
 
 def test_absent_trace_does_not_discard_the_explanation(monkeypatch):

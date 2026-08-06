@@ -638,7 +638,11 @@ class CausalLake:
             self.exists.update({t: self.rows.get(t, 0) for t in RDB_TABLES})
             self.exists["rdb"] = True
         except Exception as e:      # 터널 죽음 = 부재 보고, 침묵 금지
-            self.exists["rdb"] = f"실패: {e}"
+            # **DSN 을 사유에서 지운다.** 위 ATTACH 는 dsn 을 SQL 에 넣고, DuckDB 오류는
+            # 문장을 그대로 되돌려주는 일이 흔하다 - 그 문자열에 `password=` 가 있다.
+            # 커버리지는 밖으로 나가므로(런 로그) 여기서 지우지 않으면 자격증명이 샌다.
+            # 정규식으로 추측하지 않는다: **지울 문자열을 이미 손에 쥐고 있다.**
+            self.exists["rdb"] = f"실패: {str(e).replace(dsn, '<dsn>')}"
 
     def _plan(self) -> list[tuple[str, str | None, str]]:
         """묶을 표와 각자의 클램프 열. **생성과 분리**한다 - 클램프 기준일은 셀마다
