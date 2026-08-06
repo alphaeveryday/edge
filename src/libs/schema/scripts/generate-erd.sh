@@ -46,10 +46,16 @@ createdb edge
 createdb edge_onprem
 
 # 파일명 timestamp 버전이 고정폭이라 glob 정렬 = Flyway 적용 순서. 세트별 독립.
+# `-1` 로 파일 하나를 한 트랜잭션에 넣는다 — 배포 경로(Flyway)가 마이그레이션마다
+# 트랜잭션을 여는 것과 같은 조건으로 적용해야, 그 전제를 쓰는 문장이 여기서만 다르게
+# 동작하지 않는다. 없으면 autocommit 문장 단위라 `SET LOCAL`(락 예산, README 참고)이
+# "can only be used in transaction blocks" 경고와 함께 no-op 이 된다.
+# ⚠️ 트랜잭션 밖에서만 되는 DDL(`CREATE INDEX CONCURRENTLY` 등)을 쓰는 마이그레이션이
+# 생기면 이 플래그가 그것을 막는다 — 그때는 그 파일만 갈라야 한다(현재 사용 0건).
 apply() {  # $1=migration dir  $2=db
   local f
   for f in "$1"/V*.sql; do
-    psql -v ON_ERROR_STOP=1 -q -d "$2" -f "$f" >/dev/null
+    psql -v ON_ERROR_STOP=1 -q -1 -d "$2" -f "$f" >/dev/null
   done
 }
 apply "$HERE/migrations-cloud"  edge
