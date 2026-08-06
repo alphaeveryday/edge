@@ -94,13 +94,54 @@ resource "aws_iam_role" "analysis_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
 }
 
+# 시각창 집계 Athena 오프로드 자격(ALPHA-780). **카탈로그 권한만으로는 못 읽는다** —
+# Athena 는 호출자 자격으로 표 데이터를 스캔하고 결과 CSV 도 호출자 자격으로 쓴다.
+# 그 CSV 를 DuckDB 가 `read_csv` 로 받는다(`statics/athena.py`) — 읽기·쓰기가 다 필요하다.
+#
+# 왜 필요한가: 구간 모드는 시각창 집계를 **언제나** Athena 로 보내고(`layers.py`), 폴백인
+# DuckDB 경로는 질의당 376.4MB 를 컨테이너로 받는다(실측). 1분 주기가 못 버틴다.
+#
+# 버킷·워크그룹이 비면 문장을 만들지 않는다 — `analysis_release_bundle_version` 과 같은
+# 조건부 주입 패턴이다. 반쪽 정책보다 부재가 낫다(폴백 사유가 로그에 남는다).
+locals {
+  analysis_athena_statements = (
+    var.analysis_market_data_bucket_arn == "" || var.analysis_athena_workgroup == ""
+    ? []
+    : [
+      {
+        Effect = "Allow"
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+        ]
+        Resource = [
+          "arn:aws:athena:${var.region}:${data.aws_caller_identity.current.account_id}:workgroup/${var.analysis_athena_workgroup}",
+        ]
+      },
+      {
+        # 표 데이터 스캔. glue:Get* 는 "이 표가 어디 있나" 까지만 답한다.
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Resource = [var.analysis_market_data_bucket_arn, "${var.analysis_market_data_bucket_arn}/*"]
+      },
+      {
+        # 결과 CSV 쓰기. 위치는 워크그룹이 강제하므로 prefix 를 그 규약에 맞춘다.
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${var.analysis_market_data_bucket_arn}/athena-results/*"]
+      },
+    ]
+  )
+}
+
 resource "aws_iam_role_policy" "analysis_task" {
   name = "${var.name}-analysis-task"
   role = aws_iam_role.analysis_task.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:ListBucket"]
@@ -124,7 +165,7 @@ resource "aws_iam_role_policy" "analysis_task" {
         Action   = ["s3:PutObject"]
         Resource = ["${var.lake_bucket_arn}/${local.analysis_result_s3_prefix}*"]
       },
-    ]
+    ], local.analysis_athena_statements)
   })
 }
 
