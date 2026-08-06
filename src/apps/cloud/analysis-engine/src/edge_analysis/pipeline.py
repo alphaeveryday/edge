@@ -158,15 +158,33 @@ def run(
     # `event_search` 를 호출자가 정하게 두지 않는다 - 원장 CHECK 가 route_code 와
     # 묶으므로 코드에서 파생한다(`route_code_of`).
     from .statics.duck import CausalLake
+    from .statics.interval import clamp
     from .statics.layers import SESSION_OPEN, decompose as layer_decompose
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
     lake = causal_lake if causal_lake is not None else CausalLake()
     day_iso = settings.trade_date.isoformat()
+
+    # 분봉 트리거는 **구간 모드**로 층을 가른다. 하루 모드는 당일 일봉을 요구하는데
+    # (`decompose` 는 `d0` 가 계열에 없으면 None) 확정 일봉은 마감 뒤에 나온다 - 장중엔
+    # 원리적으로 못 채운다. 2026-08-06 장중 전건이 그 자리에서 `layer_route=미상` 이었다.
+    # 구간 모드는 같은 시각창의 과거 60일에서 β 를 뽑아 5분봉만으로 선다(`_series`).
+    #
+    # 창을 **여기서 한 번만** 만들어 라우팅과 설명이 나눠 쓴다. 두 번 계산하면 둘이
+    # 조용히 갈라지고, 그러면 원장의 route_code 가 산문이 설명한 창과 달라진다.
+    # `clamp` 를 거치는 이유도 같다 - 설명 쪽(`window_facts`)이 그것을 쓰므로 정규화
+    # 결과가 한 벌이어야 한다.
+    clock = None
+    if minute_row is not None:
+        window_end = (
+            minute_row.window_start + timedelta(minutes=5)
+        ).astimezone(KST).strftime("%H:%M")
+        clock = clamp(SESSION_OPEN[:5], window_end)[:2]
+
     roll = rt = None
     try:
-        roll = layer_decompose(lake, settings.etf_ticker, day_iso)
+        roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock)
         rt = route_etf(roll)
     except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
         log("statics.layers.failed", error=f"{type(exc).__name__}: {exc}")
