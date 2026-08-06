@@ -90,6 +90,14 @@ TIMEOUT_SEC = 300.0   # 5분이면 Athena 쪽이 병든 것이다 - 기다리지
 MAX_RESULT_BYTES = 32 * 1024 * 1024
 MAX_RESULT_ROWS = 100_000
 
+# 패널 이력 창(달력일). **상한만 걸면 표 전체를 긁는다** - 실측(2026-08-05 · query
+# d100beea): 198심볼 × ~800거래일 = 159,572행으로 상한을 넘겨 런이 통째로 죽었다.
+# 행 수는 심볼 × 날짜 축이라 **시각창을 좁혀도 안 줄어든다** - 줄일 수 있는 축은 날짜다.
+#
+# 60(`layers.BETA_WINDOW`)거래일을 채우는 데 주말·공휴일 감안 ~88 달력일이 든다. 120 은
+# 그 위의 여유다 - 짧게 잡으면 `MIN_BETA_N`(40) 미달로 층이 **조용히** 후보에서 빠진다.
+LOOKBACK_DAYS = 120
+
 # Athena 타입 → DuckDB 타입. 없는 것은 VARCHAR 로 둔다 - 모르는 것을 숫자로 만드는
 # 것보다 문자열로 두는 쪽이 안전하다(반대는 값이 조용히 바뀐다).
 _TYPES = {"boolean": "BOOLEAN", "tinyint": "BIGINT", "smallint": "BIGINT",
@@ -259,14 +267,16 @@ def note() -> str:
 # 같은 집합을 정확히 가리키면서 - 스트립 결과가 `t` 인 심볼은 `t`·`t.KS`·`t.KQ` 뿐이다 -
 # 프루닝이 산다: 같은 질의 47.5MB.
 _PANEL_SQL = r"""
--- edge layers clock panel · kinds={kinds} · {t0}~{t1} · <= {day} · {n}심볼
+-- edge layers clock panel · kinds={kinds} · {t0}~{t1} · <= {day} · {lookback}일 · {n}심볼
 SELECT sym, d, lr, vol FROM (
     SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym,
            CAST(ts AS DATE) AS d,
            ln(max_by(close, ts) / min_by(open, ts)) AS lr,
            sum(volume) AS vol
     FROM {table}
-    WHERE trade_date <= DATE '{day}' AND open > 0 AND close > 0
+    WHERE trade_date <= DATE '{day}'
+      AND trade_date >= DATE '{day}' - INTERVAL '{lookback}' DAY
+      AND open > 0 AND close > 0
       AND CAST(ts AS TIME) >= TIME '{t0}' AND CAST(ts AS TIME) < TIME '{t1}'
       AND symbol IN ({lit})
     GROUP BY 1, 2
@@ -276,15 +286,17 @@ ORDER BY sym, d
 
 
 def panel_sql(day: str, kinds: tuple[str, ...], t0: str, t1: str,
-              syms: tuple[str, ...]) -> str:
+              syms: tuple[str, ...], lookback_days: int = LOOKBACK_DAYS) -> str:
     """질의 문자열. 테스트가 레이크 없이 조립만 검사할 수 있게 따로 뺀다."""
     lit = ", ".join(f"'{s}{sfx}'" for s in syms for sfx in ("", ".KS", ".KQ"))
     return _PANEL_SQL.format(table=f"{_env(DB_ENV)}.{_env(TABLE_ENV)}", day=day,
-                             kinds=",".join(kinds), t0=t0, t1=t1, n=len(syms), lit=lit)
+                             kinds=",".join(kinds), t0=t0, t1=t1, n=len(syms), lit=lit,
+                             lookback=lookback_days)
 
 
 def clock_panel(day: str, kinds: tuple[str, ...], t0: str, t1: str, *,
-                con, only: tuple[str, ...] | None = None) -> list[tuple]:
+                con, only: tuple[str, ...] | None = None,
+                lookback_days: int = LOOKBACK_DAYS) -> list[tuple]:
     """`layers._CLOCK_SQL` 과 같은 행: [(sym, [lr…], [date…], [vol…])] - 날짜 오름차순.
 
     `only` 는 **필수**다. 심볼 회원(`layers_daily.kind`)은 Athena 에 없으므로 호출자가
@@ -296,7 +308,7 @@ def clock_panel(day: str, kinds: tuple[str, ...], t0: str, t1: str, *,
         # 여기서 관대하면 1,642 심볼 전량 집계가 조용히 나간다. 폴백으로 넘길 사안이
         # 아니라 호출자 버그이므로 예외 종류를 갈라 던진다.
         raise ValueError("clock_panel: 심볼 목록(only)이 없으면 표 전량을 집계한다")
-    rows = run(panel_sql(day, kinds, t0, t1, syms), con=con)
+    rows = run(panel_sql(day, kinds, t0, t1, syms, lookback_days), con=con)
     # 질의가 (sym, d) 오름차순으로 냈으므로 인접 묶음이 곧 심볼이다 - 다시 정렬하지
     # 않는다. `vol` 은 NULL 이 올 수 있다: 거래정지 판정이 그 값을 본다.
     out = []
