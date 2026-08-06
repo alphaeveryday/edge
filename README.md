@@ -26,7 +26,7 @@ src/
 ├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
-│   │   └── generated/        #   스키마에서 생성한 각 언어 모델 (생성기 후속 도입)
+│   │   └── generated/        #   스키마 파생물 — 생성기가 있는 것은 물리 ERD(DBML) 둘뿐
 │   ├── jvm-common/           # JVM    · 공통 응답 규약(apipayload)·예외 매핑 + 공유 도메인
 │   ├── ui-kit/               # Node   · 두 UI 공유 디자인 시스템
 │   ├── py-common/            # Python · 공통 유틸
@@ -63,8 +63,8 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `screening-worker` | JVM | **edge-onprem** | 점검 실행 — 미점검 번들 파싱·정책 평가(NEW=활성 정책 룰·임계값으로 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 분기, 근거는 screening_check — ALPHA-429, 무효화=즉시 비노출, 정정(CORRECTION)은 폐지 유형으로 fail-loud — ADR-0044) |
 | `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 온프렘 Published Store(PG) 조회 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 4종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 무효화 단독**(게시본 WITHDRAWN 전이 + `tenant_delivery` INVALIDATION 발번 + `admin_activity_log` 감사) — ALPHA-440·737, session 은 인증 세션 주체 투영 — ALPHA-608) |
-| `data-pipeline` | Python | **edge-cloud** | 통합 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 |
-| `analysis-engine` | Python | **edge-cloud** | 같은 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
+| `data-pipeline` | Python | **edge-cloud** | 통합(시장) 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 + 레인 SFN 3종 단독 소유(뉴스·공시·장중 수급) |
+| `analysis-engine` | Python | **edge-cloud** | 시장 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
 
 sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](docs/adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 
@@ -78,7 +78,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 
 | 라이브러리 | 런타임 | 역할 |
 |---|---|---|
-| `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 언어별 생성 모델을 모두 관리 |
+| `schema` | — | **DB 스키마 단일 진실 공급원(SSOT)**. 마이그레이션과 그 파생물(물리 ERD)을 관리 — 언어별 모델 생성기는 아직 없다 |
 | `jvm-common` | JVM | 공통 API 응답 규약(apipayload — `ApiResponse`·`BaseErrorCode`·`GeneralException`)·예외→공통 응답 포맷 매핑(`ExceptionAdvice`, auto-configuration 으로 웹 앱 활성) + 공유 도메인 모델·Cloud Event Store(`explanation_result` 등) 접근 로직 |
 | `ui-kit` | Node | 콘솔 UI 공유 디자인 시스템 — EDGE 디자인 토큰·컴포넌트 CSS·React 프리미티브 (소스 export 패키지) |
 | `py-common` | Python | Python 공통 유틸 |
@@ -87,7 +87,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
 - `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](src/libs/schema/README.md)의 Gradle Flyway 태스크로.
-- `generated/` — 스키마로부터 각 언어용 모델을 생성합니다(생성기는 후속 티켓에서 도입; 그 전까지 Flyway SQL이 계약 SSOT). JVM·Python 등 여러 런타임이 동일한 스키마 정의를 공유하도록 보장합니다.
+- `generated/` — 스키마로부터 만드는 파생물을 커밋합니다. 현재 있는 생성기는 **물리 ERD** 하나입니다(`scripts/generate-erd.sh` → `physical-erd.dbml`·`physical-erd-onprem.dbml`, pre-commit 훅 + `schema-validate` CI 가 재생성해 커밋본과 대조 — ALPHA-783). **각 언어용 모델 생성기는 아직 없어**, JVM·Python 소비자는 Flyway SQL 을 계약 SSOT로 직접 따릅니다.
 
 ## 데이터 흐름
 
