@@ -32,7 +32,8 @@ def run_window_universe(day: str | None, start: str, end: str, request_id: str |
         candidates = store.window_candidates(base.trade_date)
         if not candidates:
             raise PipelineError(f"{base.trade_date}: 분봉 route 계보가 있는 ETF가 없습니다")
-        lake = CausalLake()
+        # 거래일을 넘긴다 - 5분봉 정본이 그 날을 담는지 판정해야 낡은 표를 안 잡는다.
+        lake = CausalLake(day=base.trade_date.isoformat())
         stored = skipped = errors = 0
         for candidate in candidates:
             settings = replace(

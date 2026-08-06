@@ -8,14 +8,15 @@
 DuckDB 실물 연결이 필요 없는 것은 순수 함수로, 필요한 것(백필 우선순위)은 in-memory
 연결 + 로컬 parquet 로 검사한다 — S3 는 절대 건드리지 않는다.
 """
+import datetime as dt
 import tempfile
 
 import duckdb
 import pytest
 
 from edge_analysis.statics.duck import (
-    BACKFILL_SETS, CausalLake, backfill_sources, rdb_dsn_from_env, s3_secret_sql,
-    session_pragmas)
+    BACKFILL_SETS, CausalLake, backfill_sources, iceberg_covers, rdb_dsn_from_env,
+    s3_secret_sql, session_pragmas)
 
 _ENVS = ("EDGE_RDB_DSN", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
          "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE", "AWS_REGION",
@@ -237,3 +238,86 @@ def test_coverage_does_not_call_zero_rows_present(tmp_path, monkeypatch):
 
     assert "백필 1/10 — flow_daily 로컬 (1행)" in out
     assert "0행/부재" in out and "layers_daily" in out
+
+
+# ── 5분봉 정본 신선도 ────────────────────────────────────────────────────
+def test_empty_or_stale_iceberg_is_not_treated_as_the_source_of_truth():
+    """**붙었다 ≠ 오늘을 담고 있다.**
+
+    `_bars_iceberg` 는 ATTACH 와 뷰 생성이 되면 True 라 정본이 비어 있어도 합집합 폴백을
+    건너뛴다. 2026-08-06 실측: 정본 표는 그날 0행이었고 canonical 롤업 산출은 정상이었는데,
+    Athena·버킷 권한이 붙자 엔진이 낡은 정본을 잡고 5분봉을 통째로 못 봤다.
+    """
+    day = "2026-08-06"
+    assert iceberg_covers(None, day, 0) is False                    # 빈 표
+    assert iceberg_covers(dt.date(2026, 8, 5), day, 0) is False     # 하루 낡음
+    assert iceberg_covers(dt.date(2026, 8, 6), day, 78) is True     # 그날이 있다
+    # **최신일이 아니라 그날의 행이 기준이다.** 상류가 띄엄띄엄 채우면 '최신은 최신인데
+    # 그날은 없는' 상태가 난다 - 실측 8/3·8/4 는 13종목, 8/5 는 12:45 에 끊겼다.
+    assert iceberg_covers(dt.date(2026, 8, 7), day, 0) is False
+
+
+def test_freshness_is_not_judged_without_an_asked_day():
+    """기준일이 없으면 판정하지 않는다 — 자가검사·탐색 실행의 기존 동작을 안 바꾼다.
+
+    다만 **빈 표는 기준일과 무관하게 정본이 아니다.** 그건 신선도가 아니라 부재다.
+    """
+    assert iceberg_covers(dt.date(2020, 1, 1), "", 0) is True
+    assert iceberg_covers(None, "", 0) is False
+
+
+class _RecordingCon:
+    """`_bars_iceberg` 가 내는 SQL 을 받아 적고 `max(trade_date)` 만 답한다."""
+
+    def __init__(self, newest, day_rows):
+        self.newest, self.day_rows, self.sql = newest, day_rows, []
+
+    def execute(self, q):
+        self.sql.append(q)
+        return self
+
+    def fetchone(self):
+        return (self.newest, self.day_rows)
+
+
+def _iceberg_lake(newest, asked_day, day_rows=0):
+    lk = CausalLake.__new__(CausalLake)
+    lk.con = _RecordingCon(newest, day_rows)
+    lk.exists, lk.unbound, lk.asked_day = {}, {}, asked_day
+    return lk
+
+
+def test_stale_iceberg_falls_back_and_says_why():
+    """판정이 **배선돼 있어야** 한다 — 순수 함수만 맞고 호출이 빠지면 아무것도 안 바뀐다.
+
+    그리고 폴백은 조용하면 안 된다(Rule 12): 왜 정본을 안 썼는지가 커버리지에 남아야
+    `statics.coverage` 로그가 그걸 드러낸다.
+    """
+    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-06", day_rows=0)
+
+    assert lk._bars_iceberg() is False
+    assert "bars_5m_iceberg" in lk.unbound
+    assert "bars_5m" not in lk.exists          # 정본이라 말하지 않는다
+
+
+def test_stale_iceberg_does_not_pay_the_45day_materialization():
+    """낡은 표에 `_icb_suffix` 45일 스캔을 치르고 버리면 1분 주기에서 그대로 낭비다.
+
+    판정이 그 물질화 **앞**에 있어야 한다 - 순서가 곧 비용이다.
+    """
+    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-06", day_rows=0)
+    lk._bars_iceberg()
+
+    assert not any("_icb_suffix" in q for q in lk.con.sql)
+    assert not any("CREATE OR REPLACE VIEW bars_5m" in q for q in lk.con.sql)
+
+
+def test_fresh_iceberg_still_becomes_the_source_of_truth():
+    """폴백이 상시화되면 정본을 둔 이유가 사라진다 — 신선하면 그대로 쓴다."""
+    lk = _iceberg_lake(dt.date(2026, 8, 6), "2026-08-06", day_rows=78)
+
+    assert lk._bars_iceberg() is True
+    assert "Glue Iceberg" in lk.exists["bars_5m"]
+    # 폴백 경로만 검사하면 정본 경로가 깨져도 통과한다 - 뷰까지 실제로 세우는지 본다.
+    assert any("_icb_suffix" in q for q in lk.con.sql)
+    assert any("CREATE OR REPLACE VIEW bars_5m" in q for q in lk.con.sql)
