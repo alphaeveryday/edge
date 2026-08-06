@@ -222,6 +222,13 @@ resource "aws_scheduler_schedule" "investor_intraday" {
     # (2차 런에서 `050890` 이 네트워크 오류로 결손) canonical 병합이 앞 슬롯 값을 보존해
     # 적재가 `already` 로 수렴했다. 즉 슬롯 하나를 통째로 놓쳐도 **다음 슬롯이 그날 전부를
     # 다시 받아 회수한다**. 제출 실패로 슬롯이 누락되면 PLANNER_MISSING 이 열려 드러난다.
+    #
+    # ⚠️ **회수 논리는 마지막 슬롯(`s1435`)에는 성립하지 않는다** — 그 뒤로 그날 슬롯이 없고
+    # 이 API 엔 날짜 파라미터가 없어 소급이 불가하다(run.py 가 `--from/--to` 를 거부한다).
+    # 14:35 제출이 튕기면 그날 4·5번 갱신(13:20·14:30)은 자동으로는 영구 결손이다. 그래도
+    # retry 를 안 두는 이유는 같다(겹침이 더 나쁘다): 대신 DLQ + PLANNER_MISSING 으로 드러나고,
+    # 벤더 값은 그날 장중 내내 남아 있으므로 **수동 plan-run 으로 회수할 수 있다**. 즉 자동
+    # 회수가 없는 것이지 복구 불가가 아니다.
     retry_policy {
       maximum_event_age_in_seconds = 3600
       maximum_retry_attempts       = 0

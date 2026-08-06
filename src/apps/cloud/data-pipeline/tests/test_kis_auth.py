@@ -1,5 +1,6 @@
 """KIS 인증 테스트 — 토큰 run 당 1회 발급·메모리 캐시, 실패 fail-loud (네트워크 없음)."""
 
+import itertools
 import json
 
 import pytest
@@ -585,8 +586,70 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
                if s in excluded and not any(s in v for v in per_lane.values())]
     assert not orphans, f"시장에서 뺐는데 어느 레인도 안 가진 kis 잡: {orphans}"
 
+    # ⚠️ **레인별로 세는 것이 옳으려면 "레인이 시간상 안 겹친다"가 참이어야 한다.** 그 전제를
+    #    주석에만 두면 슬롯 하나를 옮기는 순간 조용히 깨지고 — 예: 장중 레인에 15:40 근처
+    #    슬롯을 더하면 시장 런과 동시에 kis 컨테이너 5개가 토큰을 발급한다 — 이 테스트는
+    #    계속 초록이다. 가드가 기대는 근거를 여기서 값으로 든다(edge-review 지적).
+    #    겹치면 그 레인들의 kis 잡은 **합**이 동시 발급자 수다.
+    variables = _strip_hcl(( tf.parent / "variables.tf").read_text())
+    windows = {}
+    for lane, jobs in per_lane.items():
+        if not jobs:
+            continue
+        if lane == "market":
+            crons, timeout = [_hcl_default(variables, "schedule_expression")], \
+                _hcl_default_number(variables, "state_machine_timeout_seconds")
+        else:
+            prefix = lane.replace("_pipeline.tf", "")
+            crons = _hcl_cron_map(variables, f"{prefix}_schedule_expressions")
+            timeout = _hcl_default_number(variables, f"{prefix}_state_machine_timeout_seconds")
+        mins = sorted(h * 60 + m for h, m in (_cron_hm(c) for c in crons))
+        windows[lane] = (mins[0], mins[-1] + timeout // 60)
+
+    for a, b in itertools.combinations(sorted(windows), 2):
+        (a0, a1), (b0, b1) = windows[a], windows[b]
+        assert a1 < b0 or b1 < a0, (
+            f"kis 잡을 가진 레인 {a}{windows[a]} 와 {b}{windows[b]} 의 실행 창(분, KST)이 "
+            f"겹친다 — 레인별 최대치로 세면 안 되고 합({len(per_lane[a]) + len(per_lane[b])})이 "
+            "동시 발급자 수다. 예산을 올리든 슬롯을 떼든 하라"
+        )
+
     concurrent = max(len(v) for v in per_lane.values())
     assert TOKEN_RATE_LIMIT_MAX_RETRY > concurrent - 1, (
         f"동시 발급자 {concurrent}개(레인별 {per_lane})인데 재시도 예산이 "
         f"{TOKEN_RATE_LIMIT_MAX_RETRY} — 마지막 브랜치가 자기 차례를 못 받는다"
     )
+
+
+def _strip_hcl(text: str) -> str:
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", "//")))
+
+
+def _hcl_default(tf: str, name: str) -> str:
+    import re as _re
+    m = _re.search(rf'variable\s+"{name}"\s*\{{.*?default\s*=\s*"([^"]+)"', tf, _re.S)
+    assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
+    return m.group(1)
+
+
+def _hcl_default_number(tf: str, name: str) -> int:
+    import re as _re
+    m = _re.search(rf'variable\s+"{name}"\s*\{{.*?default\s*=\s*(\d+)', tf, _re.S)
+    assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
+    return int(m.group(1))
+
+
+def _hcl_cron_map(tf: str, name: str) -> list[str]:
+    import re as _re
+    m = _re.search(rf'variable\s+"{name}"\s*\{{.*?default\s*=\s*\{{(.*?)^\s*\}}', tf, _re.S | _re.M)
+    assert m, f"{name} 의 default 맵을 못 찾았다 — 파서가 낡았다"
+    crons = _re.findall(r'"(cron\([^"]+\))"', m.group(1))
+    assert crons, f"{name} 에서 cron 을 못 뽑았다"
+    return crons
+
+
+def _cron_hm(expr: str) -> tuple[int, int]:
+    import re as _re
+    m = _re.match(r"^cron\((\d+) (\d+) ", expr)
+    assert m, f"cron 형식이 아니다: {expr} — rate() 는 슬롯 키가 안 나온다"
+    return int(m.group(2)), int(m.group(1))

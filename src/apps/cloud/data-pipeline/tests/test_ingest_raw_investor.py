@@ -222,3 +222,52 @@ def test_크리덴셜_결측이_달력_사유보다_우선한다(tmp_path):
         storage.list_keys("operations_archive/collection_logs/")[0]))
     assert log["status"] == "skipped"
     assert "missing credentials" in log["reason"]
+
+
+def test_실제_장중_어댑터가_휴장일에_스텝을_skip_으로_마감한다(tmp_path, monkeypatch):
+    """WHY: 위 두 테스트는 스텝의 **계약**(우선순위·exit 0·로그)만 잠근다 — 소스를 가짜로
+    세우기 때문이다. 그러면 어댑터의 속성 이름을 `_skip_reason` 으로 바꾸고 `fetch` 만 따라
+    고쳐도 **전 테스트가 초록인 채** 스텝은 영영 skip 경로를 안 타고, 공휴일 런이 다시
+    `status=error`·exit 1 로 돌아간다 — ALPHA-769 가 없앤 바로 그 회귀다(edge-review 지적).
+
+    그래서 여기선 **실제 `KisInvestorEstimateSource`** 로 스텝을 한 번 태워 이름 결속을 든다.
+    토요일 시계를 물리고, 클라이언트는 호출되면 터지게 둔다 — skip 은 토큰·질의를 태우기
+    **전에** 나야 한다(어댑터 단위 테스트가 `client.urls == []` 로 잠근 것과 같은 계약).
+    """
+    from datetime import datetime as _dt
+
+    from data_pipeline.lake import raw_investor_estimate_partition
+    from data_pipeline.sources import kis_investor_estimate as _mod
+    from data_pipeline.sources.kis_investor_estimate import KisInvestorEstimateSource
+
+    saturday = _dt(2026, 8, 8, 11, 25, 0, tzinfo=_mod.KST)
+
+    class _Clock(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            return saturday.astimezone(tz) if tz is not None else saturday.replace(tzinfo=None)
+
+    monkeypatch.setattr(_mod, "datetime", _Clock)
+
+    class _Exploding:
+        _sleep = staticmethod(lambda secs: None)
+
+        def request(self, *a, **kw):
+            raise AssertionError("휴장일인데 KIS 를 호출했다 — skip 이 질의보다 뒤에 있다")
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = KisInvestorEstimateSource(
+        KisInvestorSourceConfig(env="prod", app_key="k", app_secret="s"), _Exploding())
+
+    exit_code = ingest_raw_investor.run(
+        settings, storage, source, "r1",
+        dataset="investor_flow_intraday", partition=raw_investor_estimate_partition,
+        job_name="ingest_raw_investor_estimate")
+
+    assert exit_code == 0, "휴장일은 실패가 아니라 skip 이다 — 평일 cron 이 매 공휴일 FAILED 가 된다"
+    assert storage.list_keys("raw") == []
+    log = json.loads(storage.get_bytes(
+        storage.list_keys("operations_archive/collection_logs/")[0]))
+    assert log["status"] == "skipped"
+    assert "거래일이 아니다" in log["reason"]
