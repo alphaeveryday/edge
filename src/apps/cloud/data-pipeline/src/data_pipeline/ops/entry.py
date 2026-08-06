@@ -301,6 +301,7 @@ _LANE_STATE_MACHINE_ARN_ENV = {
     catalog.PIPELINE_TYPE: "OPS_STATE_MACHINE_ARN",
     catalog.NEWS_PIPELINE_TYPE: "OPS_NEWS_STATE_MACHINE_ARN",
     catalog.DISCLOSURE_PIPELINE_TYPE: "OPS_DISCLOSURE_STATE_MACHINE_ARN",
+    catalog.INVESTOR_INTRADAY_PIPELINE_TYPE: "OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN",
 }
 
 
@@ -361,6 +362,8 @@ def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
         (catalog.PIPELINE_TYPE, [_sched_hhmm()]),
         (catalog.NEWS_PIPELINE_TYPE, _lane_sched_hhmms("OPS_NEWS_SCHED_HHMM")),
         (catalog.DISCLOSURE_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM")),
+        (catalog.INVESTOR_INTRADAY_PIPELINE_TYPE,
+         _lane_sched_hhmms("OPS_INVESTOR_INTRADAY_SCHED_HHMM")),
     ]
     slots: list[tuple[str, bool]] = []
     for lane, hhmms in lanes:

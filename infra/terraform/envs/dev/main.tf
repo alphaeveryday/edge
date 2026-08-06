@@ -519,6 +519,16 @@ module "data_pipeline" {
   # 그때부터 Reconciler 가 공시 슬롯 결측을 판정한다.
   disclosure_schedule_state = "ENABLED"
 
+  # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
+  # ENABLED 라 이 줄은 **명시일 뿐 값을 바꾸지 않는다** — 그래도 적는 이유는 위 두 레인과 나란히
+  # 놓여야 "dev 에서 어떤 레인이 도는가"를 이 파일 하나로 읽을 수 있어서다.
+  # 공시·뉴스처럼 DISABLED 신설 → 별도 apply 컷오버를 밟지 않는 이유: 이 3스텝은 시장 SFN 이
+  # 돌던 것을 뺏어오는 게 아니라 **배선이 0이던 신설**이라(ALPHA-767·768) 두 레인이 같은 스텝을
+  # 동시에 소유하는 겹침 창이 없다.
+  # ⚠️ 이 스케줄이 켜져 있으므로 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 도 함께 주입된다
+  # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다.
+  investor_intraday_schedule_state = "ENABLED"
+
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
   # 지정해 수동 1회 대조로 판정을 확인했다 — orchestration NULL→FAILED 동기화, 자기 기록이

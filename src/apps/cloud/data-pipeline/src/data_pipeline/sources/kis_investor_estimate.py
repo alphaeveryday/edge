@@ -86,6 +86,47 @@ class KisInvestorEstimateSource:
         # 앱키·시크릿은 env 로만 주입(커밋 금지) — 둘 중 하나라도 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.app_key) and bool(self.app_secret)
 
+    @property
+    def skip_reason(self) -> str | None:
+        """지금 수집하면 안 되는 사유, 수집해도 되면 None (ALPHA-769).
+
+        판정 내용은 종전과 같다 — **비거래일엔 라벨을 지어낼 수 없다.** 응답에 날짜가 없어
+        거래일은 우리가 붙이는데(`fetch` 의 asof_date), 휴장일·개장 전에 KIS 가 직전 슬롯을
+        그대로 돌려주면 **어제 데이터가 오늘 거래일로 저장된다**. 소급 재조회가 없는 소스라
+        잘못 붙은 라벨은 응답으로 복원할 수 없다.
+
+        KRX holdings 가 `_as_of` 로 "거래일이면 오늘, 아니면 직전 거래일"을 택한 것과 다른
+        선택인 이유: 그건 **일별 스냅샷**이라 직전 거래일 값이 여전히 참이지만, 장중 추정은
+        비거래일에 존재 자체를 하지 않아 어떤 라벨도 참이 아니다.
+
+        ⚠️ **바뀐 것은 이 사실을 무엇으로 표현하느냐다(ALPHA-767 이 남긴 규약 충돌).**
+        종전에는 `fetch` 안에서 `ValueError` 를 올렸다 — 그러면 스텝이 `status=error`·exit 1 로
+        마감한다. 레인이 평일 cron 으로 도는 순간(ALPHA-769) 그 규약은 **공휴일마다 런을
+        FAILED 로 만든다**: 예정대로 아무것도 없는 날인데 알람이 울리고, 진짜 고장과 구분되지
+        않는다. 같은 성질의 소스인 iNAV(`kis_inav.skip_reason`)는 처음부터 skip 규약이었다 —
+        레포가 이미 푼 문제라 그쪽에 맞춘다(Rule 7·11).
+
+        거래일 판정은 `ops.trading_calendar.is_trading_day`(env `OPS_KR_HOLIDAYS`)를 그대로
+        쓴다. Planner·KRX·iNAV 와 같은 휴장일 집합이어야 한다 — 복제하면 갈라진다.
+        """
+        now_kst = datetime.now(KST)
+        if not is_trading_day(now_kst.date()):
+            return (
+                f"{now_kst.date()} 는 KR 거래일이 아니다 — 장중 투자자 추정은 비거래일에 "
+                "존재하지 않아 거래일 라벨을 붙일 수 없다(소급 불가라 사후 정정도 안 된다)"
+            )
+        # 거래일 여부만으로는 부족하다 — **개장 전**에도 `is_trading_day` 는 참이다. 월요일
+        # 08:00 실행에서 KIS 가 금요일 마지막 슬롯을 그대로 주면 그 행이 월요일 거래일로
+        # 저장된다(위와 같은 유실, 같은 이유로 복원 불가). 첫 슬롯 전에는 오늘의 추정이
+        # 존재하지 않으므로 라벨을 만들지 않는다.
+        if now_kst.time() < SESSION_FIRST_SLOT:
+            return (
+                f"{now_kst.time().strftime('%H:%M')} 는 첫 슬롯"
+                f"({SESSION_FIRST_SLOT.strftime('%H:%M')}) 전이다 — 오늘의 장중 추정이 아직 "
+                "없어 거래일 라벨을 붙일 수 없다"
+            )
+        return None
+
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:
         """수집 대상 → [(our_ticker, kis_symbol)]. EOD 어댑터의 `plan` 과 같은 규칙이다 —
         KRX 6자리 코드는 항등 매핑이 기본이고 `symbol_map` 은 예외 오버라이드 축이다.
@@ -135,29 +176,14 @@ class KisInvestorEstimateSource:
         if not plan:
             return
         now_kst = datetime.now(KST)
-        # ⚠️ **비거래일엔 라벨을 지어낼 수 없다.** 응답에 날짜가 없어 거래일은 우리가 붙이는데
-        # (아래 asof_date), 휴장일·개장 전에 KIS 가 직전 슬롯을 그대로 돌려주면 **어제 데이터가
-        # 오늘 거래일로 저장된다**. 소급 재조회가 없는 소스라 잘못 붙은 라벨은 응답으로 복원할
-        # 수 없다 — 그러니 조용히 라벨하지 않고 여기서 죽는다(Rule 12).
-        #
-        # KRX holdings 가 `_as_of` 로 "거래일이면 오늘, 아니면 직전 거래일"을 택한 것과 다른
-        # 선택인 이유: 그건 **일별 스냅샷**이라 직전 거래일 값이 여전히 참이지만, 장중 추정은
-        # 비거래일에 존재 자체를 하지 않아 어떤 라벨도 참이 아니다.
-        if not is_trading_day(now_kst.date()):
-            raise ValueError(
-                f"{now_kst.date()} 는 KR 거래일이 아니다 — 장중 투자자 추정은 비거래일에 "
-                "존재하지 않아 거래일 라벨을 붙일 수 없다(소급 불가라 사후 정정도 안 된다)"
-            )
-        # 거래일 여부만으로는 부족하다 — **개장 전**에도 `is_trading_day` 는 참이다. 월요일
-        # 08:00 실행에서 KIS 가 금요일 마지막 슬롯을 그대로 주면 그 행이 월요일 거래일로
-        # 저장된다(위와 같은 유실, 같은 이유로 복원 불가). 첫 슬롯 전에는 오늘의 추정이
-        # 존재하지 않으므로 라벨을 만들지 않는다.
-        if now_kst.time() < SESSION_FIRST_SLOT:
-            raise ValueError(
-                f"{now_kst.time().strftime('%H:%M')} 는 첫 슬롯"
-                f"({SESSION_FIRST_SLOT.strftime('%H:%M')}) 전이다 — 오늘의 장중 추정이 아직 "
-                "없어 거래일 라벨을 붙일 수 없다"
-            )
+        # ⚠️ **라벨 가드는 여기서도 유효하다** — 배선된 경로는 스텝이 `skip_reason` 을 먼저 보고
+        # 돌아가므로(ingest_raw_investor) 이 raise 는 안 밟힌다. 남겨 두는 건 **직접 호출자**
+        # 때문이다: 조건을 스텝으로만 옮기면 어댑터를 직접 쓰는 경로가 휴장일에 조용히 어제
+        # 데이터를 오늘 거래일로 라벨하고, 이 소스는 소급 재조회가 없어 사후 정정이 불가하다.
+        # 조건 자체는 복제하지 않는다 — `skip_reason` 하나가 정본이다(갈라지면 두 경로의 판정이
+        # 어긋난다). 사유 문구는 그대로 쓴다.
+        if (blocked := self.skip_reason) is not None:
+            raise ValueError(blocked)
         fetched_at = datetime.now(timezone.utc).isoformat()
         # 응답에 날짜가 없다 — 수집 시점의 KST 날짜가 이 스냅샷의 거래일이다. 위 거래일 가드가
         # 통과한 뒤라야 이 라벨이 참이다.

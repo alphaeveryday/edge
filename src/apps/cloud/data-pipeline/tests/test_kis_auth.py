@@ -1,6 +1,8 @@
 """KIS 인증 테스트 — 토큰 run 당 1회 발급·메모리 캐시, 실패 fail-loud (네트워크 없음)."""
 
+import itertools
 import json
+import re as _re_module
 
 import pytest
 
@@ -543,7 +545,15 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     #      기다려야 한다. 예산이 브랜치 수보다 작으면 그 브랜치는 상시 partial 이 된다
     #      (edge-review 지적 — kis 브랜치가 2개에서 3개로 늘었는데 예산이 2였다).
     #      SFN 의 kis 브랜치 수와 이 상수가 같이 움직여야 한다는 계약을 값으로 고정한다.
+    #
+    # ⚠️ **세는 단위는 잡 정의가 아니라 레인이다**(ALPHA-769). 동시 발급은 한 SFN 의 Parallel
+    #    안에서만 일어나는데, `statemachine.tf` 의 잡 리스트에는 그 SFN 이 돌지 않는 정의도
+    #    들어 있다 — 레인 파일들이 같은 리스트를 부분집합 필터로 재사용하기 때문이다(DRY).
+    #    종전 파서는 파일 전체의 `taskdef_key = "kis"` 를 셌고, 그때까지 제외된 잡 중 kis 가
+    #    하나도 없어서 두 수가 우연히 같았다. 장중 수급 레인이 kis 잡을 시장 SFN 밖으로
+    #    가져가면서 갈렸다 — 그대로 두면 **동시에 뜨지도 않는 브랜치 때문에 예산을 올리게 된다**.
     import pathlib as _p
+    import re as _re
 
     from data_pipeline.sources.kis_auth import TOKEN_RATE_LIMIT_MAX_RETRY
 
@@ -556,9 +566,124 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     )
     if tf is None:  # 저장소 밖(패키지만 설치된 환경)에서는 검사할 대상이 없다
         pytest.skip("statemachine.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
-    kis_branches = tf.read_text().count('taskdef_key  = "kis"')
-    assert kis_branches >= 3, f"kis 브랜치 수 파싱 실패({kis_branches}) — 경로·형식 확인"
-    assert TOKEN_RATE_LIMIT_MAX_RETRY > kis_branches - 1, (
-        f"동시 발급자 {kis_branches}개인데 재시도 예산이 {TOKEN_RATE_LIMIT_MAX_RETRY} — "
-        "마지막 브랜치가 자기 차례를 못 받는다"
+    text = tf.read_text()
+    kis_states = _re.findall(r'state\s*=\s*"(\w+)"\s*\n\s*taskdef_key\s*=\s*"kis"', text)
+    assert len(kis_states) >= 3, f"kis 잡 파싱 실패({kis_states}) — 경로·형식 확인"
+
+    excluded_block = _re.search(
+        r"market_excluded_states\s*=\s*\[(.*?)\]", text, _re.S)
+    assert excluded_block, "market_excluded_states 를 못 찾았다 — 파서가 낡았다"
+    excluded = set(_re.findall(r'"(\w+)"', excluded_block.group(1)))
+
+    # 레인별 kis 잡 수. 시장 = 제외되지 않은 것, 나머지는 각 레인 파일이 이름으로 고른 것.
+    per_lane = {"market": [s for s in kis_states if s not in excluded]}
+    for lane_file in ("news_pipeline.tf", "disclosure_pipeline.tf",
+                      "investor_intraday_pipeline.tf"):
+        lane_text = (tf.parent / lane_file).read_text()
+        per_lane[lane_file] = [
+            s for s in kis_states if s in excluded and f'"{s}"' in lane_text
+        ]
+    orphans = [s for s in kis_states
+               if s in excluded and not any(s in v for v in per_lane.values())]
+    assert not orphans, f"시장에서 뺐는데 어느 레인도 안 가진 kis 잡: {orphans}"
+
+    # ⚠️ **레인별로 세는 것이 옳으려면 "레인이 시간상 안 겹친다"가 참이어야 한다.** 그 전제를
+    #    주석에만 두면 슬롯 하나를 옮기는 순간 조용히 깨지고 — 예: 장중 레인에 15:40 근처
+    #    슬롯을 더하면 시장 런과 동시에 kis 컨테이너 5개가 토큰을 발급한다 — 이 테스트는
+    #    계속 초록이다. 가드가 기대는 근거를 여기서 값으로 든다(edge-review 지적).
+    #    겹치면 그 레인들의 kis 잡은 **합**이 동시 발급자 수다.
+    variables = _strip_hcl(( tf.parent / "variables.tf").read_text())
+    windows = {}
+    read_vars: list[str] = []   # 아래 env 가드가 손유지 목록 대신 이걸 쓴다
+    for lane, jobs in per_lane.items():
+        if not jobs:
+            continue
+        if lane == "market":
+            cron_var, timeout_var = "schedule_expression", "state_machine_timeout_seconds"
+            crons = [_hcl_default(variables, cron_var)]
+        else:
+            prefix = lane.replace("_pipeline.tf", "")
+            cron_var = f"{prefix}_schedule_expressions"
+            timeout_var = f"{prefix}_state_machine_timeout_seconds"
+            crons = _hcl_cron_map(variables, cron_var)
+        timeout = _hcl_default_number(variables, timeout_var)
+        read_vars += [cron_var, timeout_var]
+        mins = sorted(h * 60 + m for h, m in (_cron_hm(c) for c in crons))
+        end = mins[-1] + timeout // 60
+        # 창을 하루 안의 분(0~1440)으로 비교하므로 자정을 넘으면 아래 disjoint 판정이 거짓이
+        # 된다(끝이 시작보다 작아져 어떤 창과도 안 겹치는 것처럼 보인다). 넘는 순간 조용히
+        # 통과시키지 말고 여기서 멈춘다 — 그때는 요일 축까지 넣어 다시 모델링해야 한다.
+        assert end < 24 * 60, (
+            f"{lane} 실행 창이 자정을 넘는다({mins[0]}~{end}분) — 하루 안 분 비교로는 겹침을 "
+            "판정할 수 없다. 타임아웃을 줄이거나 이 계산에 요일 축을 넣어라")
+        windows[lane] = (mins[0], end)
+
+    # ⚠️ **이 가드는 모듈 default 만 읽는다.** `envs/*/main.tf` 가 cron·타임아웃을 오버라이드하면
+    #    실제로 도는 창과 여기서 검증하는 창이 갈려 **가드가 눈이 먼다** — 하필 위 실패 메시지가
+    #    "슬롯을 떼든 하라"고 유도하는 자리가 env 쪽이라 실제로 밟기 쉬운 경로다. 오버라이드가
+    #    생기면 조용히 지나가지 말고 여기서 멈춰 이 계산을 env 기준으로 고치게 한다.
+    #    목록은 **위에서 실제로 읽은 var** 에서 뽑는다 — 손으로 유지하면 kis 잡이 다른 레인으로
+    #    옮겨갔을 때 그 레인의 var 가 목록에 없어 가드가 또 눈이 먼다.
+    env_tf = _strip_hcl((tf.parent.parent.parent / "envs/dev/main.tf").read_text())
+    for var in read_vars:
+        assert not _re_module.search(rf"^\s*{var}\s*=", env_tf, _re_module.M), (
+            f"envs/dev 가 `{var}` 를 오버라이드한다 — 이 가드는 모듈 default 로 창을 계산하므로 "
+            "실제와 다른 값을 검증하게 된다. 계산을 env 기준으로 바꿔라")
+
+    for a, b in itertools.combinations(sorted(windows), 2):
+        (a0, a1), (b0, b1) = windows[a], windows[b]
+        assert a1 < b0 or b1 < a0, (
+            f"kis 잡을 가진 레인 {a}{windows[a]} 와 {b}{windows[b]} 의 실행 창(분, KST)이 "
+            f"겹친다 — 레인별 최대치로 세면 안 되고 합({len(per_lane[a]) + len(per_lane[b])})이 "
+            "동시 발급자 수다. 예산을 올리든 슬롯을 떼든 하라"
+        )
+
+    concurrent = max(len(v) for v in per_lane.values())
+    assert TOKEN_RATE_LIMIT_MAX_RETRY > concurrent - 1, (
+        f"동시 발급자 {concurrent}개(레인별 {per_lane})인데 재시도 예산이 "
+        f"{TOKEN_RATE_LIMIT_MAX_RETRY} — 마지막 브랜치가 자기 차례를 못 받는다"
     )
+
+
+def _strip_hcl(text: str) -> str:
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", "//")))
+
+
+def _hcl_block(tf: str, name: str) -> str:
+    """`variable "name" { … }` 블록 본문.
+
+    경계는 **0열의 닫는 중괄호**로 잡는다 — `test_ops_catalog._hcl_number` 가 이미 쓰는
+    관용구다. 같은 일에 두 관용구를 두면 갈린다(Rule 11).
+
+    ⚠️ `[^}]*?` 로 막는 방법도 블록을 안 넘지만 **중첩 `{}` 를 못 넘는다** — `validation {}`
+    블록이 `default` 앞에 오면(합법 HCL) 파서가 못 찾고 죽는다. 지금 `validation` 을 가진
+    5개는 전부 `default` 가 먼저라 안 밟지만, 순서를 바꾸는 정상 변경을 막는 거짓 양성이다.
+    """
+    m = _re_module.search(rf'variable\s+"{name}"\s*\{{(.*?)^\}}', tf, _re_module.S | _re_module.M)
+    assert m, f"{name} variable 블록을 못 찾았다 — 파서가 낡았다"
+    return m.group(1)
+
+
+def _hcl_default(tf: str, name: str) -> str:
+    m = _re_module.search(r'default\s*=\s*"([^"]+)"', _hcl_block(tf, name))
+    assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
+    return m.group(1)
+
+
+def _hcl_default_number(tf: str, name: str) -> int:
+    m = _re_module.search(r"default\s*=\s*(\d+)", _hcl_block(tf, name))
+    assert m, f"{name} 의 default 를 못 찾았다 — 파서가 낡았다"
+    return int(m.group(1))
+
+
+def _hcl_cron_map(tf: str, name: str) -> list[str]:
+    crons = _re_module.findall(r'"(cron\([^"]+\))"', _hcl_block(tf, name))
+    assert crons, f"{name} 에서 cron 을 못 뽑았다"
+    return crons
+
+
+def _cron_hm(expr: str) -> tuple[int, int]:
+    import re as _re
+    m = _re.match(r"^cron\((\d+) (\d+) ", expr)
+    assert m, f"cron 형식이 아니다: {expr} — rate() 는 슬롯 키가 안 나온다"
+    return int(m.group(2)), int(m.group(1))

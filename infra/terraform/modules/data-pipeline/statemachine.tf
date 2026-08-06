@@ -89,6 +89,22 @@ locals {
       taskdef_key  = "kis"
       command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id)"
     },
+    {
+      # 장중 투자자 추정(ALPHA-767) — KIS HHPTJ04160200. 위 EOD 확정치와 **다른 데이터셋**이다
+      # (가집계 추정 vs 확정). 같은 kis 세트라 task-def·앱키·유니버스를 공유한다.
+      #
+      # ⚠️ 이 잡은 **시장 SFN 에서 제외**된다(아래 market_excluded_states) — 장중 수급 레인
+      # (investor_intraday_pipeline.tf)이 5슬롯으로 돌린다. 정의를 여기 두는 이유는 공시·뉴스
+      # 레인과 같다: 레인 파일이 이 리스트를 부분집합 필터로 재사용해 command_expr·taskdef_key
+      # 드리프트를 막는다(DRY).
+      #
+      # ⚠️ **날짜창 인자가 없다.** 이 API 는 날짜 파라미터 자체가 없어 오늘치 장중 추정만 준다
+      # (소급 백필 불가). run.py 가 `--from/--to` 를 주면 거부한다 — 갭을 메운 줄 착각하게 두지
+      # 않으려는 것이고, 그래서 EOD 수집과 달리 창을 넘길 자리가 없다.
+      state        = "CollectKisInvestorEstimate"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-investor-estimate', '--run-id', $.run_id)"
+    },
     # 기준일(ALPHA-387, dev 실측으로 확정): 스케줄이 장 마감 후(15:40 KST, ALPHA-414)라
     # **거래일 런은 그날 PDF 가 이미 게시돼 있다**(07-22·23·24 연속 스냅샷 내용 상이). 반면
     # 비거래일 런은 빈 응답이 아니라 직전 거래일 PDF 가 온다(토 07-18 응답 = 금 07-17 바이트
@@ -168,6 +184,14 @@ locals {
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-investor', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
+    {
+      # 장중 투자자 추정 정제(ALPHA-768) — raw investor_flow_intraday → canonical. EOD 와 스텝이
+      # 따로인 이유는 정체성 키에 슬롯이 붙어 병합 규칙이 다르기 때문이다(같은 거래일에 5행).
+      # 장중 수급 레인 소관 — 시장 SFN 에서는 제외된다(market_excluded_states).
+      state        = "NormalizeInvestorEstimate"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-investor-estimate', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
   ]
 
   # feature/factor 스테이지(구 derive, ALPHA-386→408 개명). canonical 을 소비해 분석이 읽을
@@ -240,6 +264,18 @@ locals {
       taskdef_key  = "rds"
       command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id)"
     },
+    {
+      # 장중 투자자 추정 적재(ALPHA-768) — canonical investor_flow_intraday →
+      # investor_flow_intraday. 창 미지정 = canonical 전체 스캔 + 멱등(값이 바뀐 정정만 UPDATE).
+      #
+      # ⚠️ **하루 5슬롯인데 창을 붙이지 않는다** — 공시 레인이 같은 판단을 한 자리다
+      # (disclosure_pipeline.tf `LoadDisclosure` 주석). 그 풀스캔이 곧 백로그 회수 경로라서,
+      # 창을 붙이면 슬롯 하나가 죽었을 때 주워올 경로가 사라진다. 비용도 작다: canonical 은
+      # `trade_date` 파티션당 작은 parquet 하나다.
+      state        = "LoadInvestorIntraday"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-investor-intraday', '--run-id', $.run_id)"
+    },
   ]
 
   # 뉴스 레인 스텝은 뉴스 SFN(news_pipeline.tf) 소관 — 시장 SFN 페이즈에서 제외한다(ALPHA-553
@@ -252,9 +288,15 @@ locals {
   # `catalog.by_cli` 가 CLI 로 해소하는데 두 레인의 CLI 가 같아, 한 스텝을 두 레인이 동시에
   # 소유하면 장중 런의 attempt 가 시장 레인 task_key 로 기록된다(장중 영구 MISSED + 시장
   # LEDGER_GAP). 잡 **정의**는 위 원본 리스트에 남아 공시 SFN 이 부분집합 필터로 재사용한다.
+  # 장중 수급 3스텝(ALPHA-769)도 같은 이유로 빠진다 — 장중 수급 레인
+  # (investor_intraday_pipeline.tf)이 평일 5슬롯으로 돌린다. 다만 공시·뉴스와 **성격이 다르다**:
+  # 저 둘은 시장 SFN 이 돌던 스텝의 소유 레인 이동(컷오버)이었지만, 이 셋은 시장 SFN 이 한 번도
+  # 돈 적 없는 **신설**이다(ALPHA-767·768 이 층만 만들고 배선을 안 붙였다). 그래서 "두 레인이
+  # 같은 스텝을 동시에 소유하는 겹침 창"이 애초에 없고, 스케줄을 처음부터 ENABLED 로 세운다.
   market_excluded_states = [
     "CollectFmpNews", "CollectBigKindsNews", "NormalizeNews", "TagNews", "LoadDocuments",
     "CollectDartDisclosure", "NormalizeDisclosure", "NormalizeDisclosureSegment", "LoadDisclosure",
+    "CollectKisInvestorEstimate", "NormalizeInvestorEstimate", "LoadInvestorIntraday",
   ]
   market_raw_jobs       = [for j in local.raw_ingest_jobs : j if !contains(local.market_excluded_states, j.state)]
   market_normalize_jobs = [for j in local.normalize_jobs : j if !contains(local.market_excluded_states, j.state)]
@@ -319,7 +361,11 @@ locals {
       raw                = local.market_raw_jobs, normalize = local.market_normalize_jobs, feature = local.market_feature_jobs,
       news_raw           = local.news_raw_jobs, news_normalize = local.news_normalize_jobs, news_feature = local.news_feature_jobs,
       disclosure_raw     = local.disclosure_raw_jobs, disclosure_normalize = local.disclosure_normalize_jobs,
-      disclosure_feature = local.disclosure_feature_jobs
+      disclosure_feature = local.disclosure_feature_jobs,
+      # investor_intraday_* 페이즈(ALPHA-769)도 같다 — investor_intraday_pipeline.tf 가 고른 부분집합이다.
+      investor_intraday_raw       = local.investor_intraday_raw_jobs,
+      investor_intraday_normalize = local.investor_intraday_normalize_jobs,
+      investor_intraday_feature   = local.investor_intraday_feature_jobs
     } :
     phase => [
       for job in jobs : {
