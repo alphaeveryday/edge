@@ -41,12 +41,26 @@ class Route:
     breakdown: tuple[tuple[str, float], ...]   # (층, 기여) 전량 - 접지
 
 
-def route_etf(roll, premium=None) -> Route:
-    """`layers.Rollup` (+ 괴리 판정) → 라우팅.
+def route_etf(roll, premium=None) -> Route | None:
+    """`layers.Rollup` (+ 괴리 판정) → 라우팅. **재료가 없으면 None.**
 
     괴리 단독이 **먼저**다: 바스켓이 안 움직였으면 구성종목 이야기가 아니라 ETF
     고유(수급·유동성) 이야기다. 그걸 무시하고 층으로 내려가면 없는 원인을 찾는다.
+
+    `roll` 이 None 인 것은 정상 입력이다 - `decompose` 가 재료 부족을 그렇게 말한다
+    (`layers.decompose(...) -> Rollup | None`). 예전엔 그 None 이 `roll.layers` 에서
+    `AttributeError` 로 터졌고, 호출자가 그것을 삼켜 **층 근거 없이 라우팅한 런**이
+    성공으로 끝났다(2026-08-06 dev 장중 전건 `layer_route=미상`).
+
+    빈 `Route` 를 만들지 않는 이유: '층이 없다'와 '층을 못 봤다'가 같은 값이 되면
+    원장이 거짓말한다. 호출자는 이미 부재를 다룬다 - `pipeline` 의
+    `route_code_of(rt.kind if rt else "")` 가 `PRICE_ONLY` 로 떨어뜨린다.
+
+    괴리 판정도 여기서는 못 쓴다: 층 회계 없이 라우팅을 내는 경로를 열면 ALPHA-671 이
+    닫으려던 문(원장의 route_code 가 실제로 물은 질문과 갈라지는 것)이 다시 열린다.
     """
+    if roll is None:
+        return None
     # **시장 프록시 자신은 섹터로 내려갈 수 없다** (범주 오류). KODEX 200 의 층
     # 분해에는 시장 층이 없다(자기 제외) - 그러면 섹터만 남고 라우팅이 "섹터 화학
     # 60%" 라고 말한다. 형식은 맞지만 직관은 틀렸다: 그것이 시장이다.
@@ -151,6 +165,12 @@ def _selfcheck() -> None:
     class P:
         basket_moved = False
     assert route_etf(R((L("시장", "K", 0.9),), 0.0), premium=P()).kind == "괴리단독"
+
+    # **재료가 없으면 라우팅도 없다.** `decompose` 는 재료 부족을 None 으로 말하고
+    # (`-> Rollup | None`), 호출자는 그 형태를 이미 다룬다. 여기서 빈 Route 를 만들면
+    # '층이 없다'와 '층을 못 봤다'가 같은 값이 되어 원장이 거짓말한다.
+    assert route_etf(None) is None
+    assert route_etf(None, premium=P()) is None
     print("ok")
 
 
