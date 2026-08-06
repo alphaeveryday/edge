@@ -152,8 +152,8 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 | `PGSCHEMA` | 스키마 | `public` |
 | `DEEPSEEK_API_KEY` | 분류·설명 LLM | — (Secrets Manager 주입) |
 | `DEEPSEEK_MODEL` | 모델명 | `deepseek-v4-flash` |
-| `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | (없으면 S3 fallback) |
-| `ALPHAMALE_RESULT_S3_PREFIX` | FK 전제 없을 때 설명 결과 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
+| `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | — (필수, 없으면 런 실패) |
+| `ALPHAMALE_RESULT_S3_PREFIX` | 런 아카이브 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |
 | `CAUSAL_ENABLED` | P0–P9 인과귀속 사용(끄면 단일 프롬프트 경로) | `true` |
 | `CAUSAL_SANDBOX_ENABLED` | 검정 에이전트의 코드 실행. 끄면 축약 경로(고정 추정량) | `true` |

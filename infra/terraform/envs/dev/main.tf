@@ -489,7 +489,8 @@ module "data_pipeline" {
   super_admin_api_url = "https://${var.admin_api_domain}"
 
   # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
-  # explanation_result 가 RDS 로 영속된다(미주입=의도적 S3 폴백). 잠정 번들(ALPHA-406) —
+  # explanation_result 가 RDS 로 영속된다. 미주입은 이제 선택지가 아니다(ALPHA-797 이
+  # S3 폴백을 폐기) — 변수에 기본값이 없어 plan 이 막는다. 잠정 번들(ALPHA-406) —
   # 정식 버저닝은 릴리스 규약 합의 후.
   analysis_release_bundle_version = "dev-mvp-0"
 

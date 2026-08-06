@@ -348,7 +348,7 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
                 (ETF_INSTRUMENT,),
             )
             rows = cur.fetchall()
-            assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다(S3 폴백 아님)"
+            assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다"
             result_id, etype, confidence, status, primary_thread, tdate, bundle = rows[0]
             # **판정 라벨은 데이터가 정한다 - 골든패스가 정하지 않는다.**
             # 옛 계약(`EVENT_SUPPORTED`/`HIGH`)은 fake LLM 이 classic JSON 으로 그렇게

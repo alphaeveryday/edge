@@ -67,7 +67,7 @@
         <mxCell id="n6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑥ 라우팅 (decide_route)&#xa;top1 ≥ 0.5 → CONCENTRATED (단일 종목 주도)&#xa;그 외 → COMMON_FACTOR&#xa;event_search 는 두 경로 모두 True" vertex="1">
           <mxGeometry height="90" width="600" x="520" y="1220" as="geometry" />
         </mxCell>
-        <mxCell id="n7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑦ L1 · route 계보 적재 (트리거 insert 없음)&#xa;obs_id = stable_id(&quot;cob&quot;, trigger_id) · route_id = stable_id(&quot;rte&quot;, obs_id)&#xa;ON CONFLICT DO NOTHING (재실행 멱등)" vertex="1">
+        <mxCell id="n7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑦ L1 · route 계보 적재 + 영속 전제 검사 (트리거 insert 없음)&#xa;obs_id = stable_id(&quot;cob&quot;, trigger_id) · route_id = stable_id(&quot;rte&quot;, obs_id)&#xa;ON CONFLICT DO NOTHING (재실행 멱등)&#xa;store.explanation_prerequisites → {etf_profile, explanation_route, release_bundle}&#xa;결손이면 PipelineError — LLM 앞에서 선다(ALPHA-797, 폴백 없음)" vertex="1">
           <mxGeometry height="90" width="600" x="520" y="1360" as="geometry" />
         </mxCell>
         <mxCell id="w1" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=10;" value="WRITE&#xa;etf_contribution_observation&#xa;etf_contribution_member (종목별 비중·수익·기여·순위)&#xa;explanation_route (route_code · event_search_required)" vertex="1">
@@ -109,14 +109,8 @@
         <mxCell id="s3_trace" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" value="S3 · agent trace&#xa;(내용 없는 파일은 만들지 않는다)" vertex="1">
           <mxGeometry height="70" width="380" x="1300" y="2360" as="geometry" />
         </mxCell>
-        <mxCell id="n14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑬ _persist_explanation&#xa;store.explanation_prerequisites → {etf_profile 존재, explanation_route id, release_bundle}&#xa;primary_thread_id = thread_id 붙은 첫 이벤트 (events[0] 아님 — unthreaded 가 먼저 오면 계보 단절)" vertex="1">
+        <mxCell id="n14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑬ 영속 준비 (전제는 ⑦ 에서 이미 통과)&#xa;primary_thread_id = thread_id 붙은 첫 이벤트 (events[0] 아님 — unthreaded 가 먼저 오면 계보 단절)" vertex="1">
           <mxGeometry height="90" width="600" x="520" y="2490" as="geometry" />
-        </mxCell>
-        <mxCell id="d6" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" value="FK 전제가 다 있나?" vertex="1">
-          <mxGeometry height="80" width="600" x="520" y="2620" as="geometry" />
-        </mxCell>
-        <mxCell id="s3_fb" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=10;fontSize=11;verticalAlign=middle;" value="S3 폴백 · 임의 FK 값을 만들지 않는다&#xa;write_explanation_to_s3(...)&#xa;log(explanation_result.skipped, missing=[...])" vertex="1">
-          <mxGeometry height="80" width="380" x="1300" y="2620" as="geometry" />
         </mxCell>
         <mxCell id="n15" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=12;fontSize=12;verticalAlign=middle;" value="⑭ 한 트랜잭션 (store.persist_explanation)&#xa;explanation_run → explanation_result(DRAFT/게시 게이트)&#xa;→ explanation_run_event_evidence (stage_code=PROMPT)&#xa;→ _fanout_new: 테넌트마다 tenant_delivery NEW 1행 (advisory lock 으로 cursor 직렬화)" vertex="1">
           <mxGeometry height="110" width="600" x="520" y="2760" as="geometry" />
@@ -205,13 +199,7 @@
         <mxCell id="e_x" edge="1" parent="1" source="n13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n14">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e_y" edge="1" parent="1" source="n14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="d6">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_z" edge="1" parent="1" source="d6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=11;" target="s3_fb" value="결손">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="e_aa" edge="1" parent="1" source="d6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=11;" target="n15" value="충족">
+        <mxCell id="e_y" edge="1" parent="1" source="n14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n15">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e_ab" edge="1" parent="1" source="n15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="w2">

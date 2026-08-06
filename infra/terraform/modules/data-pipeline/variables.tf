@@ -84,9 +84,8 @@ variable "analysis_image" {
 }
 
 variable "analysis_release_bundle_version" {
-  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. null 이면 주입 안 함(앱이 S3 fallback)."
+  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. RDS 의 release_bundle(PUBLISHED) 행과 일치해야 한다. 기본값이 없는 이유: 미주입이면 영속 전제 결손으로 런이 실패한다(ALPHA-797 이 S3 폴백을 폐기) — 런타임 exit 1 보다 plan 단계에서 막는 게 싸다."
   type        = string
-  default     = null
 }
 
 # 시각창 집계 Athena 오프로드(ALPHA-780). 둘 다 채워야 자격이 붙는다 — 하나만 주면
