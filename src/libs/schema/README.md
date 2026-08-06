@@ -145,16 +145,27 @@ git config core.hooksPath .githooks
   아래 docker 한 줄로 직접 재생성한다(로컬에 pg18 을 깔 필요 없다):
 
   ```bash
+  chmod -R a+w src/libs/schema/generated   # 컨테이너는 postgres uid(999)로 돈다
   docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
     bash src/libs/schema/scripts/generate-erd.sh
   ```
+
+  `chmod` 을 빼면 리눅스에서 `Permission denied` 로 죽는다 — 산출물이 러너/사용자 uid 소유라
+  컨테이너의 postgres uid 가 truncate 하지 못한다. macOS Docker Desktop 은 bind mount 소유권을
+  가상화해 없어도 도니, **macOS 에서 됐다고 리눅스에서 된다고 볼 수 없다**. CI 스텝도 같은 이유로
+  같은 `chmod` 을 먼저 돌린다.
 
 - 훅은 **opt-in 이라 강제되지 않는다** — 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다. 그래서
   **집행은 CI 가 한다**(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR 에서 ERD 를
   다시 만들어 커밋본과 대조하고, 어긋나면 빨간불로 드러낸다. 훅은 편의이고 CI 가 방어선이다.
   ⚠️ 단 이 레포는 branch protection 이 없어 required check 지정이 불가하다 — 빨간불이 머지를
   **막지는 못한다**(드러내는 데까지다).
+  ⚠️ 집행 범위는 **스크립트가 내는 두 `.dbml` 뿐**이다. `generated/` 의 다른 커밋물(손으로 만든
+  `physical-erd.dbdiagram` 등)은 생성기가 없어 대조 대상이 아니고 계속 낡을 수 있다.
 - 결정성: 클러스터 `--no-locale` + `gen-erd.sql` 의 `ORDER BY COLLATE "C"` + LF 고정
-  (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다.
+  (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다. ⚠️ **서버 버전은 이 목록에 없다** —
+  CI 는 `postgres:18`(마이너 부동)을 쓰고 훅은 로컬에 깔린 pg18 을 쓴다. pg18 마이너가
+  `gen-erd.sql` 이 읽는 `pg_catalog` 출력을 바꾸면 무관한 PR 에서 빨간불이 날 수 있다.
+  그때는 마이너까지 핀한다(지금은 사례가 없어 핀하지 않는다).
 - `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
   문서다 — 예: `src/apps/analysis-engine/docs/logical-erd.dbml`.

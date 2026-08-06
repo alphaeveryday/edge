@@ -14,7 +14,9 @@
 # 한계(감수): paths 필터는 diff의 앞 300개 파일까지만 평가한다(GitHub 제약). 300개 초과 대형 PR에서
 # 스키마 변경이 그 밖에 있으면 이 워크플로가 실행되지 않고 guard·검증이 건너뛰어질 수 있다.
 # 이 창은 배포 파이프라인의 flywayValidate/Migrate가 fail-loud 백스톱으로 닫는다(발견이 배포 시점으로
-# 늦어질 뿐 조용히 통과하지 않는다). required check가 아니어서 이 체크에 머지 차단력이 없는 현 상태에서는
+# 늦어질 뿐 조용히 통과하지 않는다). ⚠️ 단 아래 "파생 ERD 재생성 대조"에는 그 백스톱이 없다 —
+# generate-erd.sh 를 돌리는 곳은 이 스텝과 opt-in 훅뿐이라(schema-migrate.yml 은 안 돈다), 이 창으로
+# 빠진 ERD 드리프트는 dev 에 그대로 착지하고 아무도 알리지 않는다. required check가 아니어서 이 체크에 머지 차단력이 없는 현 상태에서는
 # 감수 가능한 트레이드오프다 — required 도입 시 어차피 위 주의에 따라 무조건 실행으로 되돌린다.
 #
 # guard는 별도 job이 아니라 이 job의 step으로 둔다. 별도 job + needs로 걸면 guard 실패 시 이 job이
@@ -250,13 +252,21 @@ jobs:
       - name: 파생 ERD 재생성 대조
         run: |
           set -euo pipefail
-          # 컨테이너는 postgres uid 로 도는데 워크스페이스는 러너 소유다 — 미리 열지 않으면
-          # 스크립트가 산출물을 못 써서 "차이 없음"처럼 조용히 통과할 수 있다.
+          # 컨테이너는 postgres uid(999)로 도는데 워크스페이스는 러너 소유다 — 미리 열지 않으면
+          # 산출물 리다이렉트가 EACCES 로 죽는다. 그건 조용히 통과하지 않는다(스크립트의
+          # set -e → docker 비0 → 이 스텝 빨강). 즉 이 chmod 는 무증상 통과를 막는 가드가
+          # 아니라 **스텝이 돌게 하는 전제**다 — 무증상 통과를 막는 것은 아래 대조 방식이다.
           chmod -R a+w src/libs/schema/generated
           docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
             bash src/libs/schema/scripts/generate-erd.sh
-          if ! git diff --exit-code --stat -- src/libs/schema/generated/; then
-            echo "::error::generated/*.dbml 이 마이그레이션과 어긋납니다. 재생성해 같은 커밋에 담으세요(implementation.md 체크리스트). 로컬에 pg18 이 없으면: docker run --rm -v \"\$PWD:/repo\" -w /repo --user postgres postgres:18 bash src/libs/schema/scripts/generate-erd.sh"
+          # 대조는 `git diff` 가 아니라 `git status --porcelain` 으로 한다 — diff 는 **추적되지
+          # 않는** 경로를 못 본다. 산출물이 인덱스에서 빠진 채(세트 정리·머지 사고) 스크립트가
+          # 계속 내면 그 파일은 untracked 로 재생성돼 diff 가 비고, 계약 산출물이 사라진 PR 이
+          # 초록으로 통과한다. 세트가 늘어 새 dbml 이 생기는 날도 같은 구멍이다.
+          drift="$(git status --porcelain -- src/libs/schema/generated/)"
+          if [ -n "$drift" ]; then
+            echo "::error::generated/*.dbml 이 마이그레이션과 어긋납니다. 재생성해 같은 커밋에 담으세요(implementation.md 체크리스트). 로컬에 pg18 이 없으면: chmod -R a+w src/libs/schema/generated && docker run --rm -v \"\$PWD:/repo\" -w /repo --user postgres postgres:18 bash src/libs/schema/scripts/generate-erd.sh"
+            echo "$drift"
             git diff -- src/libs/schema/generated/
             exit 1
           fi

@@ -22,6 +22,8 @@ if bash "$root/src/libs/schema/scripts/generate-erd.sh"; then
   echo "[pre-commit] generated/*.dbml 갱신·스테이징 완료."
 else
   echo "[pre-commit] 경고: ERD 재생성 실패(PostgreSQL 18 필요). ERD 가 낡은 채 커밋됩니다." >&2
-  echo "[pre-commit]        pg18 설치 후 'bash src/libs/schema/scripts/generate-erd.sh' 로 재생성해 다시 커밋하세요." >&2
+  echo "[pre-commit]        pg18 을 깔 필요는 없다 — docker 로 재생성해 다시 커밋하세요:" >&2
+  echo "[pre-commit]        chmod -R a+w src/libs/schema/generated && docker run --rm -v \"\$PWD:/repo\" -w /repo --user postgres postgres:18 bash src/libs/schema/scripts/generate-erd.sh" >&2
+  echo "[pre-commit]        안 고쳐도 CI(schema-validate)가 같은 대조로 잡는다." >&2
 fi
 exit 0
