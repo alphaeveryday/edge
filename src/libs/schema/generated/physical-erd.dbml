@@ -193,6 +193,7 @@ Table "etf_contribution_observation" {
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
   "minute_price_trigger_id" text
+  "minute_trigger_kind" text
 }
 
 Table "etf_holding_snapshot" {
@@ -580,6 +581,7 @@ Table "minute_price_trigger" {
   "cooldown_bucket" bigint
   "created_at" timestamptz [not null]
   "anchor_price" numeric(24,6)
+  "trigger_kind" text [not null]
 }
 
 Table "minute_session_open" {
@@ -992,7 +994,7 @@ Ref: "equity_profile".("instrument_id", "instrument_type") > "instrument".("inst
 Ref: "equity_profile"."issuer_actor_id" > "company_profile"."actor_id"
 Ref: "etf_contribution_member"."constituent_instrument_id" > "instrument"."instrument_id"
 Ref: "etf_contribution_member"."contribution_observation_id" > "etf_contribution_observation"."contribution_observation_id"
-Ref: "etf_contribution_observation"."minute_price_trigger_id" > "minute_price_trigger"."trigger_id"
+Ref: "etf_contribution_observation".("minute_price_trigger_id", "minute_trigger_kind") > "minute_price_trigger".("trigger_id", "trigger_kind")
 Ref: "etf_contribution_observation"."price_movement_trigger_id" > "price_movement_trigger"."price_movement_trigger_id"
 Ref: "etf_holding_snapshot"."constituent_instrument_id" > "instrument"."instrument_id"
 Ref: "etf_holding_snapshot"."etf_instrument_id" > "etf_profile"."instrument_id"
