@@ -1073,6 +1073,18 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
     class P:
         basket_moved = False
     assert route_etf(R((L("시장", "K", 0.9),), 0.0), premium=P()).kind == "괴리단독"
+
+    # **재료가 없으면 라우팅도 없다.** `decompose` 는 재료 부족을 `None` 으로 말하고
+    # (`-> Rollup | None`), 호출자는 그 형태를 이미 다룬다. 여기서 빈 Route 를 만들면
+    # '층이 없다' 와 '층을 못 봤다' 가 같은 값이 되어 원장이 거짓말한다.
+    #
+    # 이 두 줄은 `route.py` 의 `_selfcheck()` 에도 있으나 그것은 `__main__` 아래라
+    # **pytest 가 실행하지 않는다**(ALPHA-781). 가드가 제거되거나 premium 분기 뒤로
+    # 밀려도 CI 는 초록인 채, 라이브 재료 부족에서만 AttributeError 가 재발한다.
+    assert route_etf(None) is None
+    assert route_etf(None, premium=P()) is None
+
+
 def test_mixed_workflow_runs_each_material_layer_and_idio_name(monkeypatch):
     """대표 라벨이 혼합이어도 시장·채택 섹터·고유종목 검정을 모두 실행한다."""
     from types import SimpleNamespace as NS
