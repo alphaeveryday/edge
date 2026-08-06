@@ -36,7 +36,7 @@ _BASE_TABLES = (
     "instrument", "instrument_classification", "entity",
     "price_daily", "etf_holding_snapshot", "etf_profile", "price_movement_trigger",
     "explanation_result", "explanation_route", "release_bundle", "tenant",
-    "investor_flow_daily",
+    "investor_flow_daily", "investor_flow_intraday",
 )
 _BANNED = re.compile(
     r"(--|/\*|\*/)"
@@ -73,6 +73,18 @@ SCHEMA = """단일 SQL 표면 (PostgreSQL). **SELECT 하나만.** 조회 키는 
                   net_val_private_fund(사모) · net_val_insurance(보험) · net_val_bank(은행)
                   순매수는 음수가 정상이다. grain 은 **개별주식** - ETF 자체가 아니라
                   구성종목의 수급이다. 기관 세부는 결측 가능(개인·외국인·기관계는 아니다)
+  v_flow_intraday instrument_id · trade_date · asof_slot · 투자자 유형별 **순매수 수량 추정**
+                  net_qty_foreign_est(외국인) · net_qty_institution_est(기관)
+                  net_qty_total_est(합계 = 앞 둘의 합, 실측 확인)
+                  **장중 잠정치다** - 벤더 가집계(`*_fake_*`)라 v_flow 의 EOD 확정치와
+                  어긋날 수 있다. 둘을 같은 값으로 취급하지 마라
+                  asof_slot 은 하루 5슬롯의 **코드** `'1'`~`'5'` (09:30·10:00·11:20·
+                  13:20·14:30 순, 실측). 값은 **장 시작부터의 누적**이라 슬롯 간 차분이
+                  그 구간의 순매수다. 거래가 없던 종목은 그 슬롯 행이 아예 없다
+                  대금·개인·기관 세부는 **없다** - 벤더가 주지 않는다(자리를 파두지 않았다)
+                  ⚠️ **ETF 자체는 비어 있다** - 거래소가 ETF 의 장중 투자자 귀속을
+                  생산하지 않는다(벤더 4종 전수조사로 확정). 채워지는 건 구성종목뿐이라
+                  ETF 를 장중 수급으로 보려면 구성종목 합산뿐이다
   v_liquidity     instrument_id · trade_date · turnover_value · illiq
                   illiq = |r| / 거래대금 × 1e12 (Amihud 2002 비유동성). 수준이 아니라
                   **기준창 대비 차이**로 읽어라 - 절대값은 종목마다 자릿수가 다르다
@@ -125,7 +137,7 @@ def _guard(q: str) -> str:
         raise PipelineError(
             f"기반 테이블 {base.group()!r} 직접 접근 금지 - 시점 클램프를 우회한다. "
             "v_event · v_measure · v_instrument · v_daily · v_hold · v_flow · "
-            "v_liquidity · v_cohort 를 써라.")
+            "v_flow_intraday · v_liquidity · v_cohort 를 써라.")
     # psycopg2 가 `%` 를 자기 플레이스홀더로 읽는다. as_of 가 항상 파라미터로 붙으므로
     # 보간이 언제나 일어나고, 따라서 이 이스케이프도 언제나 필요하다 (causal_data 와 동일).
     return s.replace("%", "%%")
@@ -238,6 +250,21 @@ def _views(as_of: str = "%(as_of)s", trade_date: str = "%(trade_date)s",
                net_val_private_fund, net_val_insurance, net_val_bank,
                net_qty_individual, net_qty_foreign, net_qty_institution_total
         FROM {prefix}investor_flow_daily
+        WHERE trade_date <= {trade_date} AND available_at <= {as_of}
+    ),
+    v_flow_intraday AS (
+        -- 장중 투자자 추정(ALPHA-767·768·769). **v_flow 와 합치지 않는다** - 이건 벤더
+        -- 가집계(`*_fake_*`)라 EOD 확정치와 어긋날 수 있고, 한 뷰에 섞으면 모델이 어느
+        -- 쪽을 봤는지 사후에 구분할 수 없다. 컬럼 이름의 `_est` 가 그 구분을 든다.
+        --
+        -- 시점 클램프는 `asof_slot` 이 아니라 `available_at` 이다. 슬롯은 벤더 원문
+        -- (`bsop_hour_gb`)이고 2026-08-06 dev 실측에서 도메인이 `'1'`~`'5'` **코드**로
+        -- 확인됐다 - 시각 문자열이 아니라 `asof_slot <= AS_OF` 는 TEXT 비교로 항상 거짓이
+        -- 되어 뷰가 늘 빈다. `available_at` 은 수집기의 `fetched_at`(tz-aware)이라 다른
+        -- 뷰와 같은 축이고, "관측이 도달한 시각"이라 PIT 로는 보수적인 쪽이다.
+        SELECT instrument_id, trade_date, asof_slot,
+               net_qty_foreign_est, net_qty_institution_est, net_qty_total_est
+        FROM {prefix}investor_flow_intraday
         WHERE trade_date <= {trade_date} AND available_at <= {as_of}
     ),
     v_pit AS (
@@ -477,7 +504,7 @@ views_sql = _views
 
 # 손으로 쓴 의미 뷰의 이름. 자동 생성기가 **이 이름은 안 만든다** - 같은 이름이
 # 둘이면 CTE 가 영구 뷰를 가리고, 그게 정확히 "표면이 둘로 갈린다" 사고다.
-HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_flow', 'v_hold', 'v_instrument', 'v_link', 'v_liquidity', 'v_measure', 'v_news', 'v_thread')
+HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_flow', 'v_flow_intraday', 'v_hold', 'v_instrument', 'v_link', 'v_liquidity', 'v_measure', 'v_news', 'v_thread')
 
 # 시점 클램프 후보 열. 우선순위 = **정보가 관측자에게 도달한 시각**에 가까운 순.
 # `*_at` 은 타임스탬프(as_of 로 자름), `*_date` 는 날짜(trade_date 로 자름).

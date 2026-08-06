@@ -543,7 +543,15 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     #      기다려야 한다. 예산이 브랜치 수보다 작으면 그 브랜치는 상시 partial 이 된다
     #      (edge-review 지적 — kis 브랜치가 2개에서 3개로 늘었는데 예산이 2였다).
     #      SFN 의 kis 브랜치 수와 이 상수가 같이 움직여야 한다는 계약을 값으로 고정한다.
+    #
+    # ⚠️ **세는 단위는 잡 정의가 아니라 레인이다**(ALPHA-769). 동시 발급은 한 SFN 의 Parallel
+    #    안에서만 일어나는데, `statemachine.tf` 의 잡 리스트에는 그 SFN 이 돌지 않는 정의도
+    #    들어 있다 — 레인 파일들이 같은 리스트를 부분집합 필터로 재사용하기 때문이다(DRY).
+    #    종전 파서는 파일 전체의 `taskdef_key = "kis"` 를 셌고, 그때까지 제외된 잡 중 kis 가
+    #    하나도 없어서 두 수가 우연히 같았다. 장중 수급 레인이 kis 잡을 시장 SFN 밖으로
+    #    가져가면서 갈렸다 — 그대로 두면 **동시에 뜨지도 않는 브랜치 때문에 예산을 올리게 된다**.
     import pathlib as _p
+    import re as _re
 
     from data_pipeline.sources.kis_auth import TOKEN_RATE_LIMIT_MAX_RETRY
 
@@ -556,9 +564,29 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     )
     if tf is None:  # 저장소 밖(패키지만 설치된 환경)에서는 검사할 대상이 없다
         pytest.skip("statemachine.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
-    kis_branches = tf.read_text().count('taskdef_key  = "kis"')
-    assert kis_branches >= 3, f"kis 브랜치 수 파싱 실패({kis_branches}) — 경로·형식 확인"
-    assert TOKEN_RATE_LIMIT_MAX_RETRY > kis_branches - 1, (
-        f"동시 발급자 {kis_branches}개인데 재시도 예산이 {TOKEN_RATE_LIMIT_MAX_RETRY} — "
-        "마지막 브랜치가 자기 차례를 못 받는다"
+    text = tf.read_text()
+    kis_states = _re.findall(r'state\s*=\s*"(\w+)"\s*\n\s*taskdef_key\s*=\s*"kis"', text)
+    assert len(kis_states) >= 3, f"kis 잡 파싱 실패({kis_states}) — 경로·형식 확인"
+
+    excluded_block = _re.search(
+        r"market_excluded_states\s*=\s*\[(.*?)\]", text, _re.S)
+    assert excluded_block, "market_excluded_states 를 못 찾았다 — 파서가 낡았다"
+    excluded = set(_re.findall(r'"(\w+)"', excluded_block.group(1)))
+
+    # 레인별 kis 잡 수. 시장 = 제외되지 않은 것, 나머지는 각 레인 파일이 이름으로 고른 것.
+    per_lane = {"market": [s for s in kis_states if s not in excluded]}
+    for lane_file in ("news_pipeline.tf", "disclosure_pipeline.tf",
+                      "investor_intraday_pipeline.tf"):
+        lane_text = (tf.parent / lane_file).read_text()
+        per_lane[lane_file] = [
+            s for s in kis_states if s in excluded and f'"{s}"' in lane_text
+        ]
+    orphans = [s for s in kis_states
+               if s in excluded and not any(s in v for v in per_lane.values())]
+    assert not orphans, f"시장에서 뺐는데 어느 레인도 안 가진 kis 잡: {orphans}"
+
+    concurrent = max(len(v) for v in per_lane.values())
+    assert TOKEN_RATE_LIMIT_MAX_RETRY > concurrent - 1, (
+        f"동시 발급자 {concurrent}개(레인별 {per_lane})인데 재시도 예산이 "
+        f"{TOKEN_RATE_LIMIT_MAX_RETRY} — 마지막 브랜치가 자기 차례를 못 받는다"
     )

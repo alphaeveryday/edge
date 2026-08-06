@@ -64,13 +64,31 @@ def run(
         "started_at": started_at.isoformat(),
     }
 
-    if not source.enabled:
+    # 어댑터가 "지금은 수집하면 안 된다"고 판단한 사유(선택). 크리덴셜 유무와 별개다 —
+    # 사유를 하나로 합치면 로그의 reason 이 거짓이 되고, 감사 레코드로 못 쓴다(ALPHA-557 선례,
+    # `ingest_raw_etf` 와 같은 형태). 장중 추정(ALPHA-767)이 휴장일·개장 전에 이 경로를 탄다:
+    # 종전엔 어댑터가 `fetch` 안에서 raise 해 `status=error`·exit 1 이었는데, 레인이 평일 cron
+    # 으로 도는 순간(ALPHA-769) **공휴일마다 런이 FAILED** 라 예정된 무산출과 진짜 고장이
+    # 구분되지 않았다. EOD 어댑터엔 이 속성이 없어 `getattr` 이 None 을 돌려주고 동작 불변이다.
+    skip_reason = getattr(source, "skip_reason", None)
+    if not source.enabled or skip_reason:
         # 크리덴셜 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
         # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다(감사 레코드 유실 방지).
-        logger.warning("%s 투자자 수급 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
+        # **크리덴셜 결측이 우선이다.** 둘 다 해당할 때 달력 사유를 택하면 설정 장애가 정상
+        # skip 으로 위장돼 알람도 로그도 안 뜬다 — 고쳐야 할 것이 조용해진다(Rule 12).
+        if not source.enabled:
+            reason = f"{vendor} disabled or missing credentials"
+            logger.warning("%s 투자자 수급 비활성(크리덴셜 미주입) — 수집 건너뜀", vendor)
+        else:
+            # **문구에 "수집 건너뜀" 을 넣지 마라.** tasks.tf 의 raw-ingest-skipped metric filter
+            # 가 그 토큰으로 알람을 울리는데, 그 알람은 "skip 은 비정상"을 전제로 한다. 어댑터가
+            # 낸 skip 은 그 반대다 — 달력상 예정된 정상 상태라, 같은 토큰을 쓰면 휴장일마다
+            # 오경보가 난다. 드러남은 collection_log(status=skipped + reason)가 책임진다.
+            reason = skip_reason
+            logger.info("%s 투자자 수급 대상 시각 아님 — %s", vendor, reason)
         try:
             _write_log(storage, vendor, dataset, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": f"{vendor} disabled or missing credentials",
+                                                               "reason": reason,
                                                                "ops": {"records_out": 0, "failed_records": 0}})
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")

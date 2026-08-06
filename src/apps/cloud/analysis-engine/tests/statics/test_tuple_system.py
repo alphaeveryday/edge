@@ -1334,3 +1334,28 @@ def test_a_unit_cannot_be_explained_by_an_unqualified_exposure():
         assert allow, ly
         # 거래량/수준 같은 종목 특성은 시장·섹터 설명 자격이 없다.
         assert ("거래량", "수준") not in allow, (ly, sorted(allow))
+
+
+def test_v_flow_intraday_는_슬롯이_아니라_available_at_으로_자른다():
+    """WHY: 장중 수급 뷰의 시점 클램프를 `asof_slot` 에 걸면 **뷰가 늘 빈다.**
+
+    `asof_slot` 은 벤더 원문(`bsop_hour_gb`)이고 2026-08-06 dev 실측에서 도메인이
+    `'1'`~`'5'` **코드**임이 확인됐다 - 시각 문자열이 아니다. 반면 `as_of` 는
+    `utcnow_iso()` 가 만든 ISO 타임스탬프라, `asof_slot <= AS_OF` 는 TEXT 비교로
+    `'3' <= '2026-08-06T...'` = 첫 문자 `'3' > '2'` → **항상 거짓**이 된다.
+
+    이 오류가 위험한 건 조용해서다: 질의는 성공하고 0행을 돌려주므로 "그날 수급이
+    없었다"와 구분되지 않는다. 설계 문서(ALPHA-769 티켓 본문)에 이 형태가 적혀 있었고
+    실측이 뒤집었다 - 되돌아가는 변경을 여기서 막는다.
+    """
+    from edge_analysis.adapters.sql_surface import _views
+
+    # 주석을 먼저 걷는다 - 이 CTE 의 주석이 틀린 형태(`asof_slot <= AS_OF`)를 **설명하려고**
+    # 그대로 인용하고 있어서, 원문을 훑으면 산문을 SQL 로 세어 오탐이 난다.
+    raw = _views().split("v_flow_intraday AS (")[1].split("\n    ),")[0]
+    body = "\n".join(ln for ln in raw.splitlines() if not ln.strip().startswith("--"))
+    assert "available_at <= %(as_of)s" in body, (
+        "v_flow_intraday 가 available_at 으로 안 잘린다 - PIT 클램프가 없거나 축이 틀렸다")
+    assert "asof_slot <=" not in body, (
+        "asof_slot 을 시점 클램프로 쓰고 있다 - 코드('1'~'5')와 타임스탬프의 TEXT 비교라 "
+        "항상 거짓이고 뷰가 조용히 빈다")

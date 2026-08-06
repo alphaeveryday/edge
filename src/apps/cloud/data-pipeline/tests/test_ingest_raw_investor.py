@@ -182,3 +182,43 @@ def test_symbol_error_marks_run_partial(tmp_path):
     log = json.loads(storage.get_bytes(logs[0]))
     assert log["status"] == "partial"
     assert log["records_failed_symbols"] == 2
+
+
+def test_어댑터가_낸_skip_사유는_실패가_아니라_skip_이다(tmp_path):
+    """WHY: 장중 추정 어댑터는 휴장일·개장 전에 "지금 수집하면 안 된다"고 판단한다(라벨을
+    지어낼 수 없어서). 종전엔 그 판단이 `fetch` 안의 raise 였고 스텝이 `status=error`·exit 1 로
+    마감했는데, 레인이 **평일 cron** 으로 도는 순간(ALPHA-769) 그 규약은 **공휴일마다 런을
+    FAILED** 로 만든다 — 예정대로 아무것도 없는 날과 진짜 고장이 구분되지 않는다.
+
+    이 테스트가 잠그는 건 그 구분이다: 사유가 있으면 exit 0 + `status=skipped` + **그 사유가
+    로그에 남는다**(조용한 성공 금지, Rule 12). raw 는 한 건도 안 써야 한다 — 사유의 내용이
+    "이 시각의 라벨은 참이 아니다"이므로 쓰면 그게 곧 오염이다.
+    """
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = _source({})
+    source.skip_reason = "2026-08-15 는 KR 거래일이 아니다"  # 어댑터 판단을 세워 둔다
+
+    assert ingest_raw_investor.run(settings, storage, source, "r1") == 0
+    assert storage.list_keys("raw") == []
+    log = json.loads(storage.get_bytes(
+        storage.list_keys("operations_archive/collection_logs/")[0]))
+    assert log["status"] == "skipped"
+    assert log["reason"] == "2026-08-15 는 KR 거래일이 아니다"
+
+
+def test_크리덴셜_결측이_달력_사유보다_우선한다(tmp_path):
+    """WHY: 둘 다 해당할 때 달력 사유를 택하면 **설정 장애가 정상 skip 으로 위장**된다 — 로그의
+    reason 이 "휴장"이라 아무도 키가 빠진 걸 모르고, 거래일이 오면 그제야 전건 실패한다.
+    고쳐야 할 것이 조용해지는 방향이라 우선순위를 값으로 고정한다(`ingest_raw_etf` 와 같은 계약).
+    """
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = _source({}, app_key=None)
+    source.skip_reason = "2026-08-15 는 KR 거래일이 아니다"
+
+    assert ingest_raw_investor.run(settings, storage, source, "r1") == 0
+    log = json.loads(storage.get_bytes(
+        storage.list_keys("operations_archive/collection_logs/")[0]))
+    assert log["status"] == "skipped"
+    assert "missing credentials" in log["reason"]

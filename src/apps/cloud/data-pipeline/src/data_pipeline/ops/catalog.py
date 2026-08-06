@@ -143,9 +143,9 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 27작업(시장 17 + 뉴스 6 + 공시 4). sfn_state_name·cli_command·ecs_task_definition 은
-# statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf 의 실제 state·command_expr·taskdef_key 와 일치해야 한다
-# (test_ops_catalog 이 삼중항으로 대조한다).
+# 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3). sfn_state_name·cli_command·ecs_task_definition 은
+# statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf·investor_intraday_pipeline.tf 의 실제
+# state·command_expr·taskdef_key 와 일치해야 한다 (test_ops_catalog 이 삼중항으로 대조한다).
 # 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
 _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
@@ -435,6 +435,63 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         deadline_offset_seconds=2400, stalled_after_seconds=1800,
         pipeline_type="disclosure",
     ),
+    # ══ 장중 수급 레인 3작업 (pipeline_type="investor-intraday" — 장중 수급 SFN
+    # edge-dev-data-pipeline-investor-intraday, 평일 5슬롯, ALPHA-767·768·769) ═══════════
+    # 공시와 달리 **레인 이동이 아니라 신설**이다 — 시장 SFN 이 이 스텝들을 돈 적이 없다.
+    #
+    # 시간 상수 세 값은 최소 슬롯 간격(09:35→10:05 = 1800s)이 정한다:
+    # * `deadline_offset_seconds` 600/700/800 — 기준은 간격이 아니라 **간격 − Reconciler 주기**다
+    #   (판정은 15분마다 도는 Reconciler 가 하므로 deadline 직후가 아니라 최대 900s 뒤에 찍힌다).
+    #   800+900=1700 < 1800 이라 스테이지 셋 다 "다음 슬롯 예정 전에 판정된다"가 실제로 지켜진다.
+    #   실측(2026-08-06 dev)은 수집 210s·정제 ~90s·적재 ~60s 라 여유가 3배 이상이다.
+    # * `stalled_after_seconds` 900 — SFN 타임아웃(1500s)보다 **낮아야** 한다. 같게 두면 판정이
+    #   `> threshold` 인데 SFN 이 1500s 에 실행을 죽여 경과가 1500 을 넘는 순간이 오지 않아
+    #   **영원히 발화하지 않는다**(공시 레인이 실제로 밟은 함정).
+    #
+    # ⚠️ `kr_trading_calendar=True` — **뉴스·공시 레인과 반대다.** 저 둘은 공휴일에도 소스가
+    # 데이터를 내므로(뉴스 보도·DART 접수) True 면 실제로 돈 실행 결과가 SKIPPED 뒤로 사라진다
+    # (ALPHA-181 의 함정). 장중 투자자 추정은 **비거래일에 존재 자체를 하지 않는다** — 그날
+    # 수집기는 `skip_reason` 으로 돌아서고(kis_investor_estimate) 정제·적재는 빈 입력에 no-op 라,
+    # 가려질 산출이 애초에 없다. 여기서 False 를 택하면 공휴일마다 세 작업이 "기대했는데 증거가
+    # 없다"(0건 + empty_allowed=False → UNKNOWN)로 남아 진짜 결손과 섞인다.
+    CatalogEntry(
+        task_key="INVESTOR_INTRADAY_COLLECTION_KIS", stage="raw",
+        dataset="investor_flow_intraday", required=True,
+        cli_command=("ingest-raw-investor-estimate",),
+        sfn_state_name="CollectKisInvestorEstimate",
+        ecs_task_definition="kis", source_vendor="kis",
+        deadline_offset_seconds=600, stalled_after_seconds=900,
+        kr_trading_calendar=True,
+        pipeline_type="investor-intraday",
+    ),
+    # 정제 의존은 세 선례와 같은 이유로 비운다 — raw 부분 실패는 뒤를 막지 않고(ADR-0030)
+    # 정제는 빈 입력을 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집이 skip·실패한 런에서
+    # **실제로 돌아 성공한 정제**가 BLOCKED 로 오귀속된다.
+    CatalogEntry(
+        task_key="NORMALIZE_INVESTOR_INTRADAY", stage="normalize",
+        dataset="investor_flow_intraday", required=True,
+        cli_command=("normalize-investor-estimate",),
+        sfn_state_name="NormalizeInvestorEstimate",
+        ecs_task_definition="bigkinds",
+        deadline_offset_seconds=700, stalled_after_seconds=900,
+        kr_trading_calendar=True,
+        pipeline_type="investor-intraday",
+    ),
+    # 의존은 이 SFN 의 `InvestorIntradayNormalizeCheckResults` 게이트다 — 시장 레인 작업
+    # (ENRICH_CORP_CODE 등)을 걸 수 없다. 그건 이 런에 존재하지 않아 영영 eligible 이 안 된다
+    # (뉴스·공시 레인이 옛 시장 의존을 복사하지 않은 것과 같은 함정). 이 적재는 instrument 를
+    # `instrument_id` 로 직접 해소하므로 corp_code 축과 무관하다.
+    CatalogEntry(
+        task_key="LOAD_INVESTOR_INTRADAY", stage="feature",
+        dataset="investor_flow_intraday_load", required=True,
+        cli_command=("load-investor-intraday",),
+        sfn_state_name="LoadInvestorIntraday",
+        ecs_task_definition="rds",
+        depends_on=("NORMALIZE_INVESTOR_INTRADAY",),
+        deadline_offset_seconds=800, stalled_after_seconds=900,
+        kr_trading_calendar=True,
+        pipeline_type="investor-intraday",
+    ),
 )
 
 CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
@@ -448,6 +505,12 @@ NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
 # 계획할 뿐이다. 반대 순서(엔트리를 먼저 옮김)는 시장 런이 자기 기대 밖 attempt 를 받아
 # **resolve 경로 없는 LEDGER_GAP** 이 된다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
+# 장중 수급 레인(ALPHA-769). 공시와 달리 **엔트리를 같은 PR 에서 등록한다** — 공시는 시장 SFN 이
+# 이미 돌던 스텝의 소유 레인 이동이라 순서를 나눠야 했지만(엔트리를 먼저 옮기면 시장 런이 자기
+# 기대 밖 attempt 를 받아 resolve 경로 없는 LEDGER_GAP 이 된다), 이 3작업은 **어느 레인도 소유한
+# 적이 없는 신설**이라 뺏어올 기대가 없다. 배포 순서가 어긋나 terraform 이 먼저 떠도 Planner 가
+# 이 레인을 모르는 이미지 위에서 fail-loud 로 죽을 뿐 원장을 오염시키지 않는다.
+INVESTOR_INTRADAY_PIPELINE_TYPE = "investor-intraday"
 
 # `--source` 미지정 시 run.py 가 쓰는 기본 벤더(`args.source or "fmp"`). 벤더 인자가 없는
 # 카탈로그 엔트리는 이 벤더를 뜻한다 — 두 표현(`ingest-raw` 와 `ingest-raw --source fmp`)이

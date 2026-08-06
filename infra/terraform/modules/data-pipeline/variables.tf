@@ -285,6 +285,58 @@ variable "disclosure_state_machine_timeout_seconds" {
   default     = 2400
 }
 
+# 장중 수급 SFN 스케줄(ALPHA-769). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
+#
+# **평일 5슬롯 — 벤더 갱신 시각 + 5분.** 슬롯 수를 우리가 고르는 게 아니라 소스가 정한다:
+# KIS HHPTJ04160200 은 하루 4~5회만 갱신하고 유형별로 시각이 갈린다
+# (외국인 09:30·11:20·13:20·14:30 / 기관 10:00·11:20·13:20·14:30). 합집합이 5개다 —
+# 4개로 줄이면 09:30 외국인 값이 30분 늦게 들어오고, 더 늘려도 같은 값을 다시 받을 뿐이다.
+#
+# **왜 +5분인가 — 정각 반영 지연이 여전히 미관측이다.** 2026-08-06 dev 실측으로 원문 슬롯 필드
+# `bsop_hour_gb` 의 도메인이 `"1"`~`"5"` **코드**임이 확인됐는데(시각 문자열이 아니다), 그래서
+# 이 필드로는 반영 지연을 잴 수 없다. 아는 것은 "14:30 슬롯이 14:51 이전에 이미 확정돼 있었다"
+# (지연 ≤ 21분)뿐이라 여유를 줄일 근거가 없다. 줄이는 비용은 실재하고(첫 슬롯을 놓치면 그날
+# 09:30 값이 다음 슬롯까지 없다) 유지 비용은 0이다 — 응답이 누적이라 늦게 물어도 앞 슬롯이
+# 함께 온다. 좁히려면 정각 근처 관측이 따로 필요하다.
+#
+# **겹침 없음** — 마지막 갱신이 14:30, 마감이 15:30 이라 14:35 이후엔 장중 갱신이 없다.
+# 확정치는 EOD 레인(15:40)이 별도 데이터셋으로 받는다.
+#
+# ⚠️ 슬롯 = cron 엔트리다 — `ops_ledger.tf` 가 cron 의 HH:MM 을 regex 로 파싱해 슬롯 키를 만든다.
+# `rate()` 는 슬롯 키가 안 나와 **쓸 수 없고**, 슬롯 수는 곧 맵 엔트리 수다(공시 레인과 같은 제약).
+variable "investor_intraday_schedule_expressions" {
+  description = "장중 수급 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 평일 5슬롯(벤더 갱신 +5분)."
+  type        = map(string)
+  default = {
+    "s0935" = "cron(35 9 ? * MON-FRI *)"
+    "s1005" = "cron(5 10 ? * MON-FRI *)"
+    "s1125" = "cron(25 11 ? * MON-FRI *)"
+    "s1325" = "cron(25 13 ? * MON-FRI *)"
+    "s1435" = "cron(35 14 ? * MON-FRI *)"
+  }
+}
+
+variable "investor_intraday_schedule_state" {
+  # 공시·뉴스와 달리 기본 DISABLED 로 세우지 않는다 — 그 둘은 시장 SFN 이 돌던 스텝의 소유 레인
+  # 이동이라 "두 레인이 같은 스텝을 동시에 소유하는" 겹침 창을 막아야 했지만, 이 3스텝은 시장
+  # SFN 에 들어간 적이 없는 신설이라 그 창이 존재하지 않는다(investor_intraday_pipeline.tf 도입부).
+  description = "장중 수급 SFN 스케줄 상태. 신설이라 겹침 창이 없어 기본 ENABLED."
+  type        = string
+  default     = "ENABLED"
+}
+
+variable "investor_intraday_state_machine_timeout_seconds" {
+  # **최소 슬롯 간격(09:35→10:05 = 1800s)보다 짧아야** 한 실행이 다음 실행과 겹치지 않는다.
+  # 겹치면 두 실행이 같은 canonical 파티션을 동시에 병합한다.
+  # 값 근거는 실측이다(2026-08-06 dev): 수집 210s + 정제·적재 각 ~90s/~60s = 체인 ≈ 6분.
+  # 여기에 ECS 3연속 기동(기동 실측이 122초까지 오른 적 있다, ALPHA-688)을 더해도 ≈ 12분이다.
+  # 1500s = 정상의 2배 여유이면서 간격 아래. 초과분은 fail-loud 타임아웃이다(무한 대기보다 낫고,
+  # 타임아웃 알람이 잡는다).
+  description = "장중 수급 SFN 실행 타임아웃. 최소 슬롯 간격(30분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
+  type        = number
+  default     = 1500
+}
+
 # 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
 variable "reconcile_schedule_state" {
   description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
