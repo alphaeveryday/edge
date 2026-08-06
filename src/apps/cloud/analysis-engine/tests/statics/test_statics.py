@@ -9,11 +9,8 @@ from datetime import datetime
 import numpy as np
 import pytest
 
-from edge_analysis.statics import (
-    CHANNELS, GateInputs, HypothesisTuple, Row, Share, Trigger,
-    ExposureSource, VocabError, Condition, build_windows,
-    decompose, edge_gate, rank_with_ties, render, route)
-from edge_analysis.statics.frame import validate_edge
+from edge_analysis.statics import CHANNELS, GateInputs, HypothesisTuple, Row, Share, Trigger, ExposureSource, VocabError, Condition, build_windows, decompose, edge_gate, rank_with_ties, render, route
+from edge_analysis.statics.core.frame import validate_edge
 
 O, C = datetime(2026, 7, 15, 9, 0), datetime(2026, 7, 15, 15, 30)
 
@@ -111,7 +108,7 @@ def test_render_table_self_audits():
 def _rows_for_narration():
     from datetime import datetime
     from edge_analysis.statics import Share
-    from edge_analysis.statics.windows import Window
+    from edge_analysis.statics.core.windows import Window
     o = datetime(2026, 6, 1, 9, 0)
     gap = Share(Window("갭", o, o, "gap", ()), 0.02)
     ev = Share(Window("창@10:00", datetime(2026, 6, 1, 10, 0),
@@ -155,7 +152,7 @@ def test_narration_dedupes_unknown_labels():
     from edge_analysis.statics import Row, narrate
     from datetime import datetime
     from edge_analysis.statics import Share
-    from edge_analysis.statics.windows import Window
+    from edge_analysis.statics.core.windows import Window
     evs = tuple(f"e{i}" for i in range(30))
     w = Share(Window("갭", datetime(2026, 6, 1, 9, 0), datetime(2026, 6, 1, 9, 0),
                      "gap", evs), 0.01)

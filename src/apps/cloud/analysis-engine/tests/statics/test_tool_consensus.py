@@ -24,8 +24,8 @@ from __future__ import annotations
 import math
 from datetime import date, timedelta
 
-from edge_analysis.statics.paneltest import MIN_N
-from edge_analysis.statics.tool_consensus import _consensus_revision
+from edge_analysis.statics.core.paneltest import MIN_N
+from edge_analysis.statics.core.tool_consensus import _consensus_revision
 
 DAY = "2026-07-31"
 K0 = date(2025, 6, 2)           # 주간 격자의 시작 (월요일)

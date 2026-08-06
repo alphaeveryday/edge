@@ -13,7 +13,7 @@ import tempfile
 import duckdb
 import pytest
 
-from edge_analysis.statics.duck import (
+from edge_analysis.statics.core.duck import (
     BACKFILL_SETS, CausalLake, backfill_sources, rdb_dsn_from_env, s3_secret_sql,
     session_pragmas)
 

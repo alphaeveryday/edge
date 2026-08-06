@@ -1,9 +1,9 @@
 """인과 흐름 계약 - 간선엔 의도가 실리고, 검정은 결론을 지고, 대상은 유한하다."""
 import pytest
 
-from edge_analysis.statics.causeflow import LayerFact, pick_targets
-from edge_analysis.statics.fsm import GROUND, MENUS, Machine
-from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, Trigger,
+from edge_analysis.statics.core.causeflow import LayerFact, pick_targets
+from edge_analysis.statics.core.fsm import GROUND, MENUS, Machine
+from edge_analysis.statics.core.vocab import (ExposureSource, HypothesisTuple, Trigger,
                                          Condition)
 
 
@@ -37,7 +37,7 @@ def test_hypothesis_machine_unchanged_by_default():
     # 기본 인자면 기존 가설 기계 그대로다 - 파라미터화가 기존 계약을 안 바꾼다.
     m = Machine(catalog=_Cat())
     assert m.allowed() == MENUS[GROUND] + tuple(
-        __import__("edge_analysis.statics.fsm", fromlist=["FREE"]).FREE)
+        __import__("edge_analysis.statics.core.fsm", fromlist=["FREE"]).FREE)
 
 
 def test_tuple_carries_intent():

@@ -16,9 +16,9 @@ from datetime import datetime
 import pytest
 
 from edge_analysis.statics import Row, Share
-from edge_analysis.statics.narrate import (
+from edge_analysis.statics.core.narrate import (
     ADDITIVE_Z, AdditiveBudget, Edge, NarrationError, additive_say, narrate)
-from edge_analysis.statics.windows import Window
+from edge_analysis.statics.core.windows import Window
 
 B = 0.010          # 그 층의 예산 (고유 +1.00%p)
 SIG = 0.004        # σ̂_ε (0.40%p) → 상한 = 1.00 + 1.96×0.40 = 1.784%p
@@ -207,7 +207,7 @@ def test_only_credible_implications_consume_the_budget():
     전부 세면 폐기된 주장이 살아 있는 주장을 모순으로 만든다 - 검산이 자기가
     이미 버린 것에 발목을 잡는다. `run_cell` 이 이 규칙으로 claims 를 모은다.
     """
-    from edge_analysis.statics.verifier import Implication
+    from edge_analysis.statics.core.verifier import Implication
 
     ok = Implication("CONTRACT.SIGNING(MOU) 가 고유층 수익을 +1.130%p 움직였다",
                      0.0113, 0.001, 120, None, "통과", True, True)
@@ -230,7 +230,7 @@ def test_resid_sigma_excludes_today_and_declares_thin_samples():
     """검산이 검산 대상에게 매수당하지 않는다: 오늘의 큰 충격이 σ̂ 를 부풀려
     상한을 저절로 넓히면 그 상한은 아무것도 반증하지 못한다.
     """
-    from edge_analysis.statics.attribute import (
+    from edge_analysis.statics.core.attribute import (
         SIGMA_MIN_N, SIGMA_N, resid_sigma)
 
     class Lake:

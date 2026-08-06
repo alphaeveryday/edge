@@ -11,9 +11,9 @@ p 가 그 오류를 통계로 보증한다. 실제로 재현되지 않는 관계
 """
 import numpy as np
 
-from edge_analysis.statics.paneltest import MIN_N
-from edge_analysis.statics.surface import TOOLS
-from edge_analysis.statics import tool_stability  # noqa: F401 - 등록 부수효과
+from edge_analysis.statics.core.paneltest import MIN_N
+from edge_analysis.statics.core.surface import TOOLS
+from edge_analysis.statics.core import tool_stability  # noqa: F401 - 등록 부수효과
 
 STABILITY = TOOLS["stability"].fn
 

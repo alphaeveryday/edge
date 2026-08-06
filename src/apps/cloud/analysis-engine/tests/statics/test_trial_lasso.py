@@ -22,9 +22,9 @@ import re
 import numpy as np
 import pytest
 
-from edge_analysis.statics.lasso import MISS_MAX
-from edge_analysis.statics.paneltest import FEATURES
-from edge_analysis.statics.trial import (MIN_PAIRS, run_multi, run_trial, say,
+from edge_analysis.statics.core.lasso import MISS_MAX
+from edge_analysis.statics.core.paneltest import FEATURES
+from edge_analysis.statics.core.trial import (MIN_PAIRS, run_multi, run_trial, say,
                                          say_multi)
 
 DAY = "2026-06-01"
@@ -116,7 +116,7 @@ def test_all_features_go_in_as_moderators_and_the_real_one_is_found():
     assert r["verdict"] == "계산됨"
     # SQL 이 **어휘 전량**을 실었다 - 이게 패널 확장의 증거다. 개수를 손으로 박으면
     # 계열족을 늘릴 때마다 이 테스트가 거짓 경보를 낸다(금리 족 추가에서 실제로 그랬다).
-    from edge_analysis.statics.paneltest import FEATURES
+    from edge_analysis.statics.core.paneltest import FEATURES
     assert lake.n_mod(lake.seen[0]) == len(MODS_ALL) == len(FEATURES)
     assert lake.seen[0].count(", t.m") == len(FEATURES)
 

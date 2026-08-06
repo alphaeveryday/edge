@@ -227,7 +227,7 @@ def _seed_layers_backfill(root: pathlib.Path) -> None:
     import datetime as dt
     import math
 
-    from edge_analysis.statics.layers import MARKET_CODE
+    from edge_analysis.statics.core.layers import MARKET_CODE
 
     d0 = dt.date.fromisoformat(TRADE_DATE)
     days = [d0 - dt.timedelta(days=k) for k in range(80, -1, -1)]

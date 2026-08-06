@@ -8,10 +8,10 @@ from .adapters.lake import make_s3_client
 from .adapters.trace import write_agent_trace
 from .config import PipelineError, load_settings
 from .observability import collect_trace, log, record
-from .statics.duck import CausalLake
-from .statics.interval import final_explanation_payload, window_facts
-from .statics.plain import card
-from .statics.record import Verdicts, as_explanation
+from .statics.core.duck import CausalLake
+from .statics.window.interval import final_explanation_payload, window_facts
+from .statics.core.plain import card
+from .statics.window.record import Verdicts, as_explanation
 
 _ROUTE_KIND = {
     "COMMON_FACTOR": "시장",

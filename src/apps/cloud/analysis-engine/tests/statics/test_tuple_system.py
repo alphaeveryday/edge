@@ -11,10 +11,10 @@ import numpy as np
 import pytest
 
 
-from edge_analysis.statics.attribute import _verifiable_event_types
-from edge_analysis.statics.hypothesize import propose, screen_tuples
-from edge_analysis.statics.paneltest import EdgeReport, FEATURES, edge_test
-from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, VocabError,
+from edge_analysis.statics.core.attribute import _verifiable_event_types
+from edge_analysis.statics.core.hypothesize import propose, screen_tuples
+from edge_analysis.statics.core.paneltest import EdgeReport, FEATURES, edge_test
+from edge_analysis.statics.core.vocab import (ExposureSource, HypothesisTuple, VocabError,
                                          MIN_N, SERIES_FAMILIES, Trigger, Condition)
 
 ETYPES = ["COMPANY.PRODUCT.LAUNCH", "MARKET_STRUCTURE.INDEX.INCLUSION"]
@@ -173,7 +173,7 @@ def test_reduction_check_flags_today_misalignment():
 
 
 def test_relation_transmission_edge_tests_but_never_assigns(monkeypatch):
-    from edge_analysis.statics import paneltest
+    from edge_analysis.statics.core import paneltest
     monkeypatch.setattr(paneltest, "_stratified_p", lambda *_args: 0.02)
 
     class RelLake:
@@ -235,7 +235,7 @@ def test_typed_link_relation_uses_ontology_hop_not_industry_proxy():
 
 def test_proxy_schema_never_reads_or_returns_outcomes():
     """proxy 후보 선택은 스키마만 본다. 수익률·n·p를 보면 선택편향이 생긴다."""
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.tools import Catalog
 
     class SchemaLake:
         effective = {}
@@ -252,7 +252,7 @@ def test_proxy_schema_never_reads_or_returns_outcomes():
 
 def test_measurement_schema_is_pure_and_matches_proxy_menu():
     """후보 메뉴를 데이터 결과·커버리지로 좁히면 선택 단계가 다시 수치를 본다."""
-    from edge_analysis.statics.attribute import _measurable
+    from edge_analysis.statics.core.attribute import _measurable
 
     class NoRead:
         def sql(self, _q):
@@ -262,16 +262,16 @@ def test_measurement_schema_is_pure_and_matches_proxy_menu():
 
 def test_outcome_driven_proxy_screen_is_not_a_tool():
     """proxy 선택 전에 결과를 읽는 우회 표면이 남아 있으면 schema 계약은 무의미하다."""
-    from edge_analysis.statics.surface import TOOLS
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.surface import TOOLS
+    from edge_analysis.statics.core.tools import Catalog
 
     assert "grid_screen" not in TOOLS
     assert not hasattr(Catalog, "screen")
 
 def test_selected_proxies_have_one_batch_validation_surface(monkeypatch):
     """LLM 선택 뒤 검정 표면은 하나다. 후보마다 도구를 재호출해 표본을 고르지 않는다."""
-    import edge_analysis.statics.paneltest as pt
-    from edge_analysis.statics.surface import TOOLS
+    import edge_analysis.statics.core.paneltest as pt
+    from edge_analysis.statics.core.surface import TOOLS
 
     ts = [_tuple(), _tuple(trigger=("점", "MARKET_STRUCTURE.INDEX.INCLUSION"))]
     seen = []
@@ -296,7 +296,7 @@ def test_gate_never_produces_magnitude():
     # 예산 검산은 가법 제약이 한다.
     import dataclasses
 
-    from edge_analysis.statics.paneltest import EdgeReport
+    from edge_analysis.statics.core.paneltest import EdgeReport
     r = edge_test(_Lake(), T, "2026-06-01", cell_instrument_id="i0")
     assert r.verdict == "성립"
     assert edge_test(_Lake(effect=0.0), T, "2026-06-01",
@@ -307,7 +307,7 @@ def test_gate_never_produces_magnitude():
 
 
 def test_registry_recall_before_record_and_pit(tmp_path):
-    from edge_analysis.statics.registry import recall, record
+    from edge_analysis.statics.core.registry import recall, record
     assert recall(tmp_path, day="2026-06-02", types=["T1"]) == []   # 첫 소환 = 빈손
     record(tmp_path, day="2026-06-01", cell="c1",
            screens=[{"type": "T1", "exposure": "가격잔차/누적", "n": 100,
@@ -360,7 +360,7 @@ def test_series_trigger_requires_today_firing_for_application():
 
 def test_propose_rejects_unfired_series_trigger():
     # 발화 안 한 계열로 오늘을 설명하는 가설은 방아쇠 날조 - 점의 접지 밖 사건타입과 동급.
-    from edge_analysis.statics.hypothesize import propose
+    from edge_analysis.statics.core.hypothesize import propose
     def ask(system, user):
         assert "오늘 |z|≥2 로 발화한 계열족" in system
         return {"hypotheses": [
@@ -387,7 +387,7 @@ def test_propose_rejects_unfired_series_trigger():
 
 def test_gate_is_two_sided():
     # 방향 채굴 보상(양측 p₂). 부호를 사후에 고르지 못하게 하는 유일한 장치다.
-    from edge_analysis.statics.paneltest import _two_sided
+    from edge_analysis.statics.core.paneltest import _two_sided
     assert _two_sided(0.03) == 0.06 and abs(_two_sided(0.97) - 0.06) < 1e-12  # 대칭
     assert _two_sided(0.5) == 1.0
     r3 = edge_test(_Lake(effect=0.03), _tuple(vuln_family="거래량", vuln_tr="수준"),
@@ -399,7 +399,7 @@ def test_agent_decisions_are_traced_with_raw_submissions():
     # 18R: 거부 사유가 stdout 3건·60자로 잘려 사라지던 것을 trace 로 영속화.
     # collect_trace 밖이면 record 는 no-op - 라이브러리 경로는 영향 없다.
     from edge_analysis.observability import collect_trace
-    from edge_analysis.statics.hypothesize import propose
+    from edge_analysis.statics.core.hypothesize import propose
     def ask(system, user):
         return {"hypotheses": [
             {"conditions": [], "trigger": {"kind": "점", "ident": "지어낸타입"},
@@ -431,7 +431,7 @@ def test_agent_decisions_are_traced_with_raw_submissions():
 
 def test_thin_confirmation_sample_says_so_instead_of_silently_passing():
     # 표본이 얇으면 판정불가 - 사유가 '백필' 좌표를 가리킨다. 조용히 통과하지 않는다.
-    from edge_analysis.statics.paneltest import MIN_N
+    from edge_analysis.statics.core.paneltest import MIN_N
     class ThinLake:
         def sql(self, q):
             if "SELECT z_ar" in q:
@@ -446,7 +446,7 @@ def test_panels_never_touch_base_tables_directly():
     # 뷰 정의 안에 있어야 질의가 우회할 수 없다 - adapters/sql_surface._guard 가
     # 자유 SQL 에 강제하는 규율("기반 테이블 직접 접근 금지")을 패널 SQL 에도 건다.
     import pathlib
-    import edge_analysis.statics.paneltest as pt
+    import edge_analysis.statics.core.paneltest as pt
     src = pathlib.Path(pt.__file__).read_text(encoding="utf-8")
     for base in ("rdb.public.source_event", "rdb.public.price_daily",
                  "rdb.public.event_argument", "rdb.public.instrument_classification"):
@@ -465,7 +465,7 @@ def test_state_machine_hides_tools_and_enforces_order():
     # (1) 그 상태에 없는 도구는 이름조차 존재하지 않는다,
     # (2) 진행은 관측으로만 (가드를 코드가 지킨다),
     # (3) 결정론 브리핑은 상태가 아니다 - 물어볼 값이 없는 질문에 왕복을 안 쓴다.
-    from edge_analysis.statics.fsm import GROUND, SCREEN, Machine
+    from edge_analysis.statics.core.fsm import GROUND, SCREEN, Machine
 
     class FakeCat:
         def __init__(self): self.seen = []
@@ -499,8 +499,8 @@ def test_state_machine_hides_tools_and_enforces_order():
 def test_unreached_table_is_not_absence():
     # 19R 실측: available_at 이 적재 시각이라 06-01 셀에서 document(293,930행)가 0행.
     # '뉴스 없는 날'로 보고하면 거짓 사실이 만들어진다 - 미도달은 부재가 아니다.
-    from edge_analysis.statics.fsm import Machine
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.fsm import Machine
+    from edge_analysis.statics.core.tools import Catalog
 
     class Lake:
         effective = {"document": (0, "2026-07-08 00:00:00")}
@@ -520,7 +520,7 @@ def test_unreached_table_is_not_absence():
 
 def test_tool_catalog_separates_absence_from_error():
     # STORM dyn2 의 실패 양식: 키 오조회를 '사건 없음'으로 믿었다. 둘은 다른 문장이다.
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.tools import Catalog
     c = Catalog(lake=None, ticker="T", instrument_id="i0", day="2026-06-01", types=())
     assert c.events().startswith("사건 없음")                   # 진짜 부재
     c2 = Catalog(lake=None, ticker="T", instrument_id="i0", day="2026-06-01",
@@ -533,8 +533,8 @@ def test_tool_catalog_separates_absence_from_error():
 def test_s3_registry_binds_empty_datasets_too():
     # 20R (사용자 지시): "데이터 없는 것도 일단 스키마 붙여라". 빈 축과 없는 축은
     # 다르다 - 전자는 적재 일감이고 후자만 설계 한계다. 스키마가 그 둘을 가른다.
-    from edge_analysis.statics.duck import S3_SETS
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.duck import S3_SETS
+    from edge_analysis.statics.core.tools import Catalog
 
     kinds = {k for _n, k, _p in S3_SETS}
     # 다섯 형식: hive(parquet 파티션) · glob(parquet 패턴) · ice(Iceberg) ·
@@ -568,7 +568,7 @@ def test_macro_series_trigger_names_which_series_moved():
     # 답이었다(상류 온톨로지 무관). 계열족 하나에 여러 계열이 있으므로 최댓값으로
     # 발화를 판정하되 **누가 움직였는지 이름을 낸다** - 이름 없는 '거시가 튀었다'는
     # 검정 불가능한 문장이다.
-    from edge_analysis.statics.paneltest import Z_ANOM, macro_z
+    from edge_analysis.statics.core.paneltest import Z_ANOM, macro_z
 
     class Lake:
         def __init__(self, rows): self.rows = rows
@@ -593,7 +593,7 @@ def test_flow_series_uses_previous_day_because_aggregate_is_published_after_clos
     # 움직임을 설명하면 그건 원인이 아니라 **동시발생**이고, PIT 위반이다.
     # 어제 수급은 오늘 개장 전에 알려져 있으니 방아쇠 자격이 있다 - 거시(직전 미국
     # 거래일)와 같은 규율.
-    from edge_analysis.statics.paneltest import flow_z
+    from edge_analysis.statics.core.paneltest import flow_z
 
     seen = {}
 
@@ -613,7 +613,7 @@ def test_unmeasured_series_records_why_instead_of_silent_zero():
     # 내가 방금 만든 코드에서 같은 병이 재발했다: 터널이 죽었는데 except 가 0.0 을
     # 돌려줘 '수급 이상 없음'으로 위장됐다. 부재는 **사유와 함께** 남긴다.
     from edge_analysis.observability import collect_trace
-    from edge_analysis.statics.paneltest import flow_z
+    from edge_analysis.statics.core.paneltest import flow_z
 
     class Dead:
         def sql(self, q): raise RuntimeError("Catalog rdb does not exist")
@@ -707,7 +707,7 @@ def test_measurable_state_condition_passes_the_gate():
 # 설명 대상이 층마다 다르므로 y 도 달라야 한다. 하나로 고정하면 시장·섹터 가설이
 # 구조적으로 0 을 받는다 - 시장층이 설명하려는 mkt×β 를 ar_ind 가 이미 뺐으므로.
 def test_layer_selects_its_own_outcome():
-    from edge_analysis.statics.paneltest import LAYER_Y
+    from edge_analysis.statics.core.paneltest import LAYER_Y
     seen = []
 
     class SpyLake:
@@ -736,7 +736,7 @@ def test_unknown_layer_is_rejected_loudly():
 def test_layer_gates_which_exposures_may_explain_it():
     # 시장층 y 는 원수익이고 시장 수익은 전 종목 공통이다 - 종목 고유 피처로는
     # 종목 간 차이를 만들 수 없다. 어휘가 그걸 막아야 관문이지, 아니면 열 목록이다.
-    from edge_analysis.statics.paneltest import LAYER_EXPOSURES
+    from edge_analysis.statics.core.paneltest import LAYER_EXPOSURES
     vol = _h(exposure={"kind": "속성", "ident": "거래량", "transform": "변화"})
     beta = _h(exposure={"kind": "속성", "ident": "거시", "transform": "민감도"})
 
@@ -759,7 +759,7 @@ def test_financials_are_clamped_by_filing_lag_not_collection_date():
     # 파티션 as_of_date 는 **수집일**이지 공시일이 아니다. FY Y 재무를 Y년 중에 쓰면
     # 선견이다. 결산 후 법정 90일 → FY+1년 4월 1일 가용을 행에 박고 뷰가 자른다.
     from edge_analysis.adapters.sql_surface import views_sql
-    from edge_analysis.statics.fin import REPORT_LAG_MONTH, build_sql
+    from edge_analysis.statics.ops.fin import REPORT_LAG_MONTH, build_sql
 
     sql = build_sql({"M000102009": "k"}, __import__("pathlib").Path("/tmp/x.parquet"))
     assert f"make_date(fy + 1, {REPORT_LAG_MONTH}, 1) AS available_from" in sql
@@ -782,7 +782,7 @@ def test_rolling_betas_are_nan_guarded():
     # 부재는 NULL 로 말해야 판정자가 '못 잰다'로 읽는다. 실측: beta_s 364 → 129.
     import re
 
-    from edge_analysis.statics.paneltest import _base
+    from edge_analysis.statics.core.paneltest import _base
     sql = _base("2026-06-01")
     # 열 목록을 **손으로 적으면 새 β 가 조용히 빠진다** - 실측: 금리 민감도를 넣었을 때
     # 이 테스트는 개수만 틀리고 '가드 없는 β' 자체는 못 잡았다. SQL 에서 뽑는다.
@@ -805,7 +805,7 @@ def test_missing_condition_is_not_satisfaction():
     실측(042700 07-31): '공매도/수준 오늘 결측' 이 `충족 True` 로 찍혀 INUS 조건이
     붙은 엣지가 조건 검사 없이 몫을 받았다. 조건이 있는데 못 재면 부적용이다.
     """
-    from edge_analysis.statics.paneltest import EdgeReport
+    from edge_analysis.statics.core.paneltest import EdgeReport
     ok = EdgeReport("성립", 400, 0.01, 0.02, 0.0, 0.9, cond_satisfied=True)
     assert ok.applies_today
     blind = EdgeReport("성립", 400, 0.01, 0.02, 0.0, 0.9,
@@ -833,8 +833,8 @@ def test_bonferroni_threshold_is_stated_not_just_claimed():
     실측: 단순화 커밋에서 m_tests 를 지우고 산문의 '셀 Bonferroni α=0.05/9' 주장만
     남겼다. 검정자는 임계를 모르니 0.05 로 재고, 보정은 허구가 된다.
     """
-    from edge_analysis.statics.gates import edge_gate
-    from edge_analysis.statics.vocab import ALPHA
+    from edge_analysis.statics.core.gates import edge_gate
+    from edge_analysis.statics.core.vocab import ALPHA
     assert edge_gate(400, 0.02) == "성립"                          # m=1
     assert edge_gate(400, 0.02, alpha=ALPHA / 9) == "불성립"       # m=9 → 0.0056
     assert edge_gate(400, 0.004, alpha=ALPHA / 9) == "성립"
@@ -851,7 +851,7 @@ def test_opposite_direction_is_rejection_not_confirmation():
     """
     import numpy as np
 
-    from edge_analysis.statics.paneltest import _two_sided
+    from edge_analysis.statics.core.paneltest import _two_sided
 
     # 반대쪽으로 강하게 유의한 관측: 단측 p1 이 1 에 가깝고 양측은 작다
     assert _two_sided(0.999) < 0.01, "반대쪽 유의가 양측에서 작은 p 로 나온다"
@@ -871,7 +871,7 @@ def test_panel_rows_are_order_deterministic():
     """
     import numpy as np
 
-    from edge_analysis.statics.paneltest import _panel_rows, _stratified_p
+    from edge_analysis.statics.core.paneltest import _panel_rows, _stratified_p
 
     base = [("i2", "2026-01-02", 0.01, 1.0), ("i1", "2026-01-01", -0.02, 2.0),
             ("i1", "2026-01-02", 0.03, 3.0), ("i2", "2026-01-01", 0.00, 4.0)]
@@ -909,9 +909,9 @@ def test_direction_is_an_estimate_never_a_declaration():
     import dataclasses
     import inspect
 
-    from edge_analysis.statics.gates import edge_gate
-    from edge_analysis.statics.paneltest import _stratified_p, edge_test
-    from edge_analysis.statics.vocab import ALPHA, HypothesisTuple
+    from edge_analysis.statics.core.gates import edge_gate
+    from edge_analysis.statics.core.paneltest import _stratified_p, edge_test
+    from edge_analysis.statics.core.vocab import ALPHA, HypothesisTuple
 
     # 어휘에 선언 슬롯이 없다
     assert "sign" not in {f.name for f in dataclasses.fields(HypothesisTuple)}
@@ -932,7 +932,7 @@ def test_cate_interaction_does_not_split_the_sample():
     """
     import numpy as np
 
-    from edge_analysis.statics.paneltest import _cate_interaction
+    from edge_analysis.statics.core.paneltest import _cate_interaction
 
     rng = np.random.default_rng(0)
     n = 600
@@ -961,7 +961,7 @@ def test_exposures_are_point_in_time_not_same_day():
 
     방아쇠는 당일이어야 한다(오늘 튀었나) - 그래서 두 컬럼을 나눈다.
     """
-    from edge_analysis.statics.paneltest import FEATURES, _INNOVATION
+    from edge_analysis.statics.core.paneltest import FEATURES, _INNOVATION
     assert FEATURES[("거래량", "변화")] == "tv_chg_pit", "노출이 당일 판을 쓴다"
     assert _INNOVATION["거래량"] == "tv_chg", "방아쇠는 당일 판이어야 한다"
     assert "tv_chg" not in set(FEATURES.values()), "당일 판이 노출 목록에 남아 있다"
@@ -976,8 +976,8 @@ def test_treatment_refinement_uses_ledger_vocabulary():
 
     원장 실측(2026-08-03): predicate 75종 · stage 33종 · role 70종 · novelty 5종.
     """
-    from edge_analysis.statics.paneltest import refine_sql
-    from edge_analysis.statics.vocab import (ARG_ROLES, NOVELTY, PLACEBO_NOVELTY,
+    from edge_analysis.statics.core.paneltest import refine_sql
+    from edge_analysis.statics.core.vocab import (ARG_ROLES, NOVELTY, PLACEBO_NOVELTY,
                                              PREDICATES, STAGES, Trigger, VocabError)
     assert len(PREDICATES) == 75 and len(STAGES) == 33
     assert len(ARG_ROLES) == 70 and len(NOVELTY) == 5
@@ -1012,8 +1012,8 @@ def test_reduction_dictionary_covers_curated_and_fails_loudly():
     재현 불가하고 산문도 그 이름을 못 쓴다(닫힌 어휘 계약). 환원 실패는 조용히
     '기타' 로 밀지 않는다 - 실패가 곧 **어휘 확장 요청**이다.
     """
-    from edge_analysis.statics.reduce import coverage, reduce_item
-    from edge_analysis.statics.vocab import SERIES_FAMILIES, TRANSFORMS
+    from edge_analysis.statics.core.reduce import coverage, reduce_item
+    from edge_analysis.statics.core.vocab import SERIES_FAMILIES, TRANSFORMS
 
     assert reduce_item("104주로그베타(주간)", "베타") == ("지수잔차", "민감도")
     assert reduce_item("20일누적 차입공매도수량(주)", "차입공매도") == ("공매도", "누적")
@@ -1037,7 +1037,7 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
 
     실측(042700 07-31): 하루의 77% 가 시장인데 9간선 전부 종목 가설이었고 전부 죽었다.
     """
-    from edge_analysis.statics.route import DOMINANT, route_etf
+    from edge_analysis.statics.window.route import DOMINANT, route_etf
 
     class L:
         def __init__(self, k, n, c):
@@ -1077,7 +1077,8 @@ def test_mixed_workflow_runs_each_material_layer_and_idio_name(monkeypatch):
     """대표 라벨이 혼합이어도 시장·채택 섹터·고유종목 검정을 모두 실행한다."""
     from types import SimpleNamespace as NS
 
-    from edge_analysis.statics import etfcell, mkttrial, trial, verifier
+    from edge_analysis.statics.window import etfcell, mkttrial
+    from edge_analysis.statics.core import trial, verifier
 
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(trial, "reduce_market", lambda *a, **k: {})
@@ -1116,7 +1117,7 @@ def test_market_trial_refuses_when_treated_days_are_too_few():
     종목이 처치다(SUTVA). 단위를 거래일로 바꾸면 표본은 처치일 수가 상한이고
     실측 상한은 40일(RULE_CHANGE)이다. 미달은 **판정불가**여야 한다 - 기각이 아니다.
     """
-    from edge_analysis.statics.mkttrial import (MIN_DAYS, say_market_trial,
+    from edge_analysis.statics.window.mkttrial import (MIN_DAYS, say_market_trial,
                                                 say_screen)
 
     thin = {"verdict": "판정불가", "n_days": 3,
@@ -1145,7 +1146,7 @@ def test_route_stub_fields_match_the_real_layer_dataclasses():
     """
     import dataclasses
 
-    from edge_analysis.statics.layers import Layer, Name
+    from edge_analysis.statics.core.layers import Layer, Name
 
     assert {f.name for f in dataclasses.fields(Name)} == {
         "ticker", "label", "weight", "ret", "idio", "contribution"}, \
@@ -1154,7 +1155,7 @@ def test_route_stub_fields_match_the_real_layer_dataclasses():
         f.name for f in dataclasses.fields(Layer)}
 
     # 라우팅이 실물 Name 으로 돌아야 한다 - 기여는 비중 × 수익
-    from edge_analysis.statics.route import route_etf
+    from edge_analysis.statics.window.route import route_etf
 
     class R:
         def __init__(self, layers, idio, names):
@@ -1224,7 +1225,7 @@ def test_each_family_transform_owns_a_distinct_column():
     새로 뗐다. 둘은 뜻이 다르다 - 환율은 이익 경로(수출), 금리는 할인율 경로. 같은
     슬롯에 두면 "환율 민감도" 라 쓰고 금리를 재는 일이 조용히 일어난다.
     """
-    from edge_analysis.statics.paneltest import FEATURES
+    from edge_analysis.statics.core.paneltest import FEATURES
 
     cols = list(FEATURES.values())
     dup = {c for c in cols if cols.count(c) > 1}
@@ -1238,7 +1239,7 @@ def test_every_layer_exposure_is_actually_measurable():
     죽인다 - 어휘와 측정면이 갈리는 그 실패다. 반대도 막는다: 층 목록에 없는 노출을
     시장 층에 쓰면 "종목 거래량이 시장 전체 수익을 설명한다" 가 관문을 통과한다.
     """
-    from edge_analysis.statics.paneltest import FEATURES, LAYER_EXPOSURES
+    from edge_analysis.statics.core.paneltest import FEATURES, LAYER_EXPOSURES
 
     for layer, allowed in LAYER_EXPOSURES.items():
         if allowed is None:
@@ -1258,8 +1259,8 @@ def test_rate_sensitivity_can_explain_the_market_layer():
     실측(2026-07-27, PBR 5분위 × 금리β 중앙값): -0.0142 · -0.0275 · -0.0595 · -0.1251
     - 고PBR(성장주)일수록 음수가 커진다. 할인율 경로의 반증 가능한 예측이 성립했다.
     """
-    from edge_analysis.statics.paneltest import FEATURES, LAYER_EXPOSURES
-    from edge_analysis.statics.vocab import SERIES_FAMILIES, TRANSFORMS
+    from edge_analysis.statics.core.paneltest import FEATURES, LAYER_EXPOSURES
+    from edge_analysis.statics.core.vocab import SERIES_FAMILIES, TRANSFORMS
 
     assert "금리" in SERIES_FAMILIES and "민감도" in TRANSFORMS
     assert ("금리", "민감도") in FEATURES
@@ -1275,8 +1276,8 @@ def test_applied_edge_direction_comes_only_from_the_identified_set():
     '올랐다' 는 주장으로 검사에 들어가고 검사는 그 방향을 지지할 근거를 찾다가
     엉뚱한 도구를 부른다. 방향은 크기가 정하고, 크기가 0 을 품으면 방향이 없다.
     """
-    from edge_analysis.statics.attribute import _measurable
-    from edge_analysis.statics.narrate import Edge
+    from edge_analysis.statics.core.attribute import _measurable
+    from edge_analysis.statics.core.narrate import Edge
 
     lo_pos = Edge(channel="C", event_type="E", verdict="성립", applied=True,
                   iset_lo=0.001, iset_hi=0.004)
@@ -1303,8 +1304,8 @@ def test_the_unit_is_the_hypothesis_not_a_default():
     고유층에서 검정됐다. 업황·정책 뉴스는 시장·산업이 이미 차감된 잔차를 설명해야
     해서 구조적으로 기각됐다 - 어휘에 그 주장을 부를 자리가 없던 것이 원인이다.
     """
-    from edge_analysis.statics.vocab import LAYERS
-    from edge_analysis.statics.paneltest import LAYER_Y
+    from edge_analysis.statics.core.vocab import LAYERS
+    from edge_analysis.statics.core.paneltest import LAYER_Y
 
     # 어휘와 종속변수가 **같은 집합**이어야 한다. 어휘에만 있는 층은 가설을 받고
     # 검정에서 죽는다 - 그게 가장 나쁜 실패 양식이다(합법으로 보이는 판정불가).
@@ -1318,14 +1319,14 @@ def test_the_unit_is_the_hypothesis_not_a_default():
     # 기본값이 아니라 튜플을 따른다: 빈 인자면 t.layer 가 쓰인다.
     import inspect
 
-    from edge_analysis.statics.paneltest import edge_test
+    from edge_analysis.statics.core.paneltest import edge_test
     assert inspect.signature(edge_test).parameters["layer"].default == "", (
         "layer 기본값이 비어 있지 않으면 가설의 단위 선언이 조용히 덮인다")
 
 
 def test_a_unit_cannot_be_explained_by_an_unqualified_exposure():
     """층별 허용 노출이 게이트다 — '종목 거래량이 시장 전체 수익을 설명한다' 는 죽는다."""
-    from edge_analysis.statics.paneltest import LAYER_EXPOSURES
+    from edge_analysis.statics.core.paneltest import LAYER_EXPOSURES
 
     # 고유층은 전부 허용(잔차는 종목 자신이다), 시장·섹터는 목록이 있다.
     assert LAYER_EXPOSURES.get("고유") is None

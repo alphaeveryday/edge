@@ -1,5 +1,5 @@
 """표현력 측정의 계약 — **못 담는 것을 담았다고 하면 측정 자체가 죽는다.**"""
-from edge_analysis.statics.expressive import SLOTS, Reduction, Survey, generate, score
+from edge_analysis.statics.ops.expressive import SLOTS, Reduction, Survey, generate, score
 
 
 def _slots(**over):
@@ -97,8 +97,8 @@ def test_unsaid_slot_is_not_a_vocabulary_failure():
 def test_scorer_prompt_separates_vocabulary_from_measurability():
     # 같은 실측에서 채점자가 '수급 계열족 없음'이라 찍었는데 수급은 어휘에 있다.
     # measurable 목록(4개)을 어휘로 착각한 것 - 프롬프트가 그 둘을 못 박아야 한다.
-    from edge_analysis.statics.expressive import _SCORE
-    from edge_analysis.statics.vocab import SERIES_FAMILIES
+    from edge_analysis.statics.ops.expressive import _SCORE
+    from edge_analysis.statics.core.vocab import SERIES_FAMILIES
 
     assert "수급" in SERIES_FAMILIES
     assert "이 목록은 어휘가 아니다" in _SCORE
@@ -109,7 +109,7 @@ def test_claimed_mapping_is_verified_against_the_closed_vocabulary():
     # 20R 실측: 채점자가 "사상"이라 주장하며 방아쇠에 채널을, 노출에 티커를 넣었다.
     # 그대로 믿으니 환원율이 100%로 부풀었다. 어휘가 닫혀 있으니 코드가 검산한다 -
     # 사람 기준 표본 없이도 이 실패 유형만은 잡힌다.
-    from edge_analysis.statics.expressive import in_vocab
+    from edge_analysis.statics.ops.expressive import in_vocab
 
     assert in_vocab("방아쇠", "COMPANY.PRODUCT.LAUNCH", ["COMPANY.PRODUCT.LAUNCH"])
     assert not in_vocab("방아쇠", "S주식수", [])          # 채널을 방아쇠 슬롯에

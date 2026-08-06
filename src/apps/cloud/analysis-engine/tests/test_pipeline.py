@@ -164,7 +164,7 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         called.update(ticker=ticker, day=day, **kwargs)
         return "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다. 최종 설명입니다."
 
-    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+    monkeypatch.setattr("edge_analysis.statics.window.etfcell.run", fake_statics)
 
     class _MinuteStore(_FakeStore):
         def __init__(self, prereqs):

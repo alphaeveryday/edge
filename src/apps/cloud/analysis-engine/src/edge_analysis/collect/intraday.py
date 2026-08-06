@@ -63,7 +63,7 @@ from typing import Any
 
 from ..adapters.lake import LAKE_PRICE_PREFIX
 from ..config import PipelineError
-from ..statics.duck import s3_secret_sql, session_pragmas
+from ..statics.core.duck import s3_secret_sql, session_pragmas
 
 # v3 는 폐기다(sources.toml 규약) — stable 만 부른다.
 FMP_URL = "https://financialmodelingprep.com/stable/historical-chart/5min"

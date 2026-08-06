@@ -15,8 +15,8 @@ import inspect
 
 import pytest
 
-from edge_analysis.statics import duck, evidence
-from edge_analysis.statics.evidence import _fake_con, say_save, stat_bundle
+from edge_analysis.statics.core import duck, evidence
+from edge_analysis.statics.core.evidence import _fake_con, say_save, stat_bundle
 
 
 
@@ -56,7 +56,7 @@ def test_news_objectset_exposes_event_facts_for_plain_language():
 
 def test_statistical_stock_explanation_always_receives_event_facts():
     """통계가 성립한 날에도 사건 제목·참여자·흐름이 쉬운 설명 재료로 들어간다."""
-    from edge_analysis.statics import attribute
+    from edge_analysis.statics.core import attribute
 
     source = inspect.getsource(attribute.run_cell)
     assert "objs = news_objectset(lake, instrument_id, day)" in source
@@ -65,7 +65,7 @@ def test_statistical_stock_explanation_always_receives_event_facts():
 
 def test_stock_plain_payload_includes_verified_att_effects():
     """쉬운 설명은 엣지 p값뿐 아니라 검증된 ATT 크기와 진단을 받는다."""
-    from edge_analysis.statics import attribute
+    from edge_analysis.statics.core import attribute
 
     source = inspect.getsource(attribute.run_cell)
     assert 'verified_imps' in source
@@ -87,7 +87,8 @@ def test_prose_sites_load_the_bundles_they_just_made(monkeypatch):
     라는 상태를 초록으로 통과시킨다 - 실제로 그 상태였다. 그래서 사용 자리를 소스로
     직접 막는다(test_tuple_system 의 `.pct` 금지와 같은 규율).
     """
-    from edge_analysis.statics import attribute, etfcell
+    from edge_analysis.statics.core import attribute
+    from edge_analysis.statics.window import etfcell
     for fn in (attribute.run_cell, etfcell._dual):
         src = inspect.getsource(fn)
         assert "narrate_plain(" in src, f"{fn.__qualname__} 이 쉬운 설명을 안 만든다"
@@ -131,7 +132,7 @@ def test_load_failure_leaves_a_reason_and_never_kills_the_prose():
     assert line == "(근거 묶음 미적재 - RuntimeError: 커넥션이 죽었다)"
 
     # 산문 조립까지 확인: 사유가 사람이 읽는 자리에 실제로 실린다.
-    from edge_analysis.statics.plain import dual
+    from edge_analysis.statics.core.plain import dual
     out = dual("정직한 설명", "바스켓이 끌었어요 {statistical, ev_x, +1}\n" + line)
     assert "정직한 설명" in out and line in out
 
@@ -200,7 +201,7 @@ def test_bundles_exist_even_with_the_narrative_path_off(monkeypatch):
     전역 상수를 단언하면 스위치를 켜는 날 이 테스트가 깨진다 - 그건 계약이 아니라
     현재 설정을 굳히는 것이다. 스위치를 끈 **상태를 만들어** 검사한다.
     """
-    from edge_analysis.statics.plain import _assemble, context
+    from edge_analysis.statics.core.plain import _assemble, context
     monkeypatch.setattr(evidence, "NARRATIVE_ENABLED", False)
     ctx = context(ticker_name="K", day_log=0.05, idio_log=0.04, route_kind="고유",
                   market_name="코스피", recent={}, established=["시장사건"],

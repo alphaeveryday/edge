@@ -8,8 +8,8 @@ from datetime import datetime
 import pytest
 
 from edge_analysis.statics import Row, Share
-from edge_analysis.statics.narrate import Edge, NarrationError, narrate
-from edge_analysis.statics.windows import Window
+from edge_analysis.statics.core.narrate import Edge, NarrationError, narrate
+from edge_analysis.statics.core.windows import Window
 
 
 def _row(name: str, log_ret: float) -> Row:
@@ -51,8 +51,8 @@ def test_edge_guards_kill_unqualified_sentences():
 def test_refuted_windows_leave_the_unknown_paragraph():
     # 10차 정정: 창의 접지 타입 전부가 패널 기각이면 창도 불성립 - [모른다]로
     # 뭉개면 [아닌 것 먼저]의 엣지 문장("서지 않는다")과 산문 안에서 모순된다.
-    from edge_analysis.statics.attribute import _assign_rows
-    from edge_analysis.statics.windows import Window
+    from edge_analysis.statics.core.attribute import _assign_rows
+    from edge_analysis.statics.core.windows import Window
     from edge_analysis.statics import Share
     ev = Window("창@10:00", datetime(2026, 6, 1, 10), datetime(2026, 6, 1, 10, 15),
                 "event", ("e1",))
@@ -78,8 +78,8 @@ def test_route_rejection_is_spoken_when_factor_weight_is_high():
 def test_repeated_refuted_windows_fold_into_one_sentence():
     # 서술은 목록이 아니라 요약이다 - 같은 타입의 반증 창 5개가 같은 문장 5번이면
     # [아닌 것 먼저]가 벽이 된다 (11차 라이브에서 실측된 결함).
-    from edge_analysis.statics.attribute import _assign_rows
-    from edge_analysis.statics.windows import Window
+    from edge_analysis.statics.core.attribute import _assign_rows
+    from edge_analysis.statics.core.windows import Window
     from edge_analysis.statics import Share
     shares = [Share(Window(f"창{i}", datetime(2026, 6, 1, 10 + i), datetime(2026, 6, 1, 10 + i, 15),
                            "event", (f"e{i}",)), 0.01) for i in range(5)]
@@ -127,7 +127,7 @@ def _gap_row(log_ret: float) -> Row:
 
 def test_gap_covariate_is_partial_identified_never_a_point():
     # 16차 (§9): 갭 공변량도 부분식별 - β CI × 야간 지수 → 설명 구간, 잔여 구간.
-    from edge_analysis.statics.narrate import GapCovariate
+    from edge_analysis.statics.core.narrate import GapCovariate
     rows = [_gap_row(-0.06), _row("잔여1", -0.02)]
     g = GapCovariate(factor_ret=-0.03, n=120, beta_lo=1.0, beta_hi=1.5,
                      explained=(-0.045, -0.03))
@@ -146,7 +146,7 @@ def test_gap_covariate_is_partial_identified_never_a_point():
 
 
 def test_gap_covariate_absence_needs_reason_and_names_backfill():
-    from edge_analysis.statics.narrate import GapCovariate
+    from edge_analysis.statics.core.narrate import GapCovariate
     rows = [_gap_row(-0.06)]
     s = narrate(ticker="T", name="N", day="d", route=None, rows=rows, grounded={},
                 gap_cov=GapCovariate(reason="us_market 10일 - 백필 필요"))
@@ -157,7 +157,7 @@ def test_gap_covariate_absence_needs_reason_and_names_backfill():
 
 
 def test_beta_ci_is_sane_on_synthetic_slope():
-    from edge_analysis.statics.attribute import _beta_ci
+    from edge_analysis.statics.core.attribute import _beta_ci
     import numpy as np
     rng = np.random.default_rng(0)
     x = rng.normal(size=200)
@@ -186,7 +186,7 @@ def test_narration_units_are_additive():
     실측(042700 07-31): 갭 +22.91 · 잔여 +4.13 = 27.04 인데 합계 칸은 +27.98.
     표의 assert 는 로그에서 검산하고 표시는 단순수익이었다.
     """
-    from edge_analysis.statics.narrate import _pct, _pp
+    from edge_analysis.statics.core.narrate import _pct, _pp
     assert _pp(0.2062) == "+20.62%p"          # 로그 그대로
     assert _pct(0.2467) == "+27.98%"          # 하루 총수익만 단순
     # 가법성: 부분의 표시값 합 == 총합의 표시값
@@ -197,10 +197,10 @@ def test_narration_units_are_additive():
 def test_channel_sentence_states_only_what_was_checked():
     """조건이 없고 환원이 미실행인 엣지에 '조건 충족 · 환원 일치'를 찍으면 부재를
     통과로 위장하는 것이다 (실측 042700 07-31 A1)."""
-    from edge_analysis.statics.narrate import Edge, narrate
-    from edge_analysis.statics.render import Row
-    from edge_analysis.statics.tree import Share
-    from edge_analysis.statics.windows import Window
+    from edge_analysis.statics.core.narrate import Edge, narrate
+    from edge_analysis.statics.core.render import Row
+    from edge_analysis.statics.core.tree import Share
+    from edge_analysis.statics.core.windows import Window
     from datetime import datetime
     w = Window("잔여1", datetime(2026, 7, 31, 9), datetime(2026, 7, 31, 15, 35), "residual", ())
     rows = [Row(Share(w, 0.04))]
@@ -214,10 +214,10 @@ def test_channel_sentence_states_only_what_was_checked():
 
 def test_negative_budget_size_keeps_direction():
     """예산이 음수인 층에서 '많아야 +0.00%p' 는 방향을 잃은 어법이다."""
-    from edge_analysis.statics.narrate import Edge, narrate
-    from edge_analysis.statics.render import Row
-    from edge_analysis.statics.tree import Share
-    from edge_analysis.statics.windows import Window
+    from edge_analysis.statics.core.narrate import Edge, narrate
+    from edge_analysis.statics.core.render import Row
+    from edge_analysis.statics.core.tree import Share
+    from edge_analysis.statics.core.windows import Window
     from datetime import datetime
     w = Window("잔여1", datetime(2026, 7, 31, 9), datetime(2026, 7, 31, 15, 35), "residual", ())
     e = Edge(channel="P판가", event_type="거시", verdict="성립", applied=True,
@@ -250,7 +250,7 @@ def test_us_factor_is_sector_matched_not_broad():
     facts 는 이미 반도체 지수를 출력하고 있었는데 gap_covariate 만 광의 지수를 봤다.
     팩터는 적합도가 아니라 **사람이 정한 업종 매핑**으로 고른다.
     """
-    from edge_analysis.statics.attribute import US_FACTOR, US_FACTOR_DEFAULT, _us_factor
+    from edge_analysis.statics.core.attribute import US_FACTOR, US_FACTOR_DEFAULT, _us_factor
 
     class L:
         def __init__(self, code):
@@ -309,14 +309,14 @@ def test_render_folds_but_stays_additive():
     실측(000660 07-29). 접어도 합계 검산은 성립해야 한다 (assert 가 지킨다).
     판정·기여가 붙은 행은 설명의 본체라 접지 않는다.
     """
-    from edge_analysis.statics.render import render
+    from edge_analysis.statics.core.render import render
     rows = [_row(f"창{i}", (i - 20) * 0.001) for i in range(40)]
     txt = render(rows, top=6)
     assert "…나머지" in txt and "접음" in txt
     assert len(txt.splitlines()) < 15, "접기가 안 먹었다"
     assert "-2.00" in txt and "+1.90" in txt           # |몫| 큰 창은 남는다
     # 판정이 붙은 행은 접히지 않는다
-    from edge_analysis.statics.render import Row
+    from edge_analysis.statics.core.render import Row
     keep = Row(rows[0].share, verdict="성립", est=0.001)
     txt2 = render([keep, *rows[1:]], top=2)
     assert "성립" in txt2
@@ -330,7 +330,7 @@ def test_kalman_beta_tracks_regime_jump_and_guards_absence():
     """
     import numpy as np
 
-    from edge_analysis.statics.kbeta import CI_MAX, kalman
+    from edge_analysis.statics.core.kbeta import CI_MAX, kalman
 
     rng = np.random.default_rng(0)
     n = 200
@@ -368,7 +368,7 @@ def test_paragraph_tags_are_unique_per_meaning():
     """
     import re
     from pathlib import Path
-    src = Path(__file__).resolve().parents[2] / "src/edge_analysis/statics/narrate.py"
+    src = Path(__file__).resolve().parents[2] / "src/edge_analysis/statics/core/narrate.py"
     body = src.read_text(encoding="utf-8").split("def narrate(")[1]
     tags = re.findall(r'out\.append\(\s*f?"\[([^\]]+)\]', body)
     # 태그별로 어떤 조건 분기에서 나오는지는 다를 수 있지만, 의미는 하나여야 한다.
@@ -384,7 +384,7 @@ def test_verifier_folds_broken_diagnostics_but_not_unmeasured_placebo():
     영구 침묵한다 - 실측 CONTRACT.SIGNING 에서 짝 0 으로 함의 전량이 접혔고, 그 중
     PREFERRED_BIDDER p=0.000 이 있었다. 미계측은 넘기되 산문에 박는다.
     """
-    from edge_analysis.statics.verifier import Implication, say_implications
+    from edge_analysis.statics.core.verifier import Implication, say_implications
 
     ok = Implication("실적이 고유를 +0.32%p", 0.0032, 0.001, 1221,
                      ("배수", "수준"), "통과", True, True)
@@ -413,7 +413,7 @@ def test_plain_narration_forbids_numbers_and_jargon_by_code():
     """
     import pytest
 
-    from edge_analysis.statics.plain import (SIZE_TOP, PlainError, context, dual,
+    from edge_analysis.statics.core.plain import (SIZE_TOP, PlainError, context, dual,
                                              guard, relation_word, size_word)
 
     ctx = context(ticker_name="KODEX 반도체", day_log=0.25, idio_log=0.006,
@@ -443,7 +443,7 @@ def test_plain_narration_forbids_numbers_and_jargon_by_code():
 
 def test_att_observation_states_impact_without_historical_pattern_story():
     """ATT 통과 문장은 과거 패턴을 재서술하지 않고 확인된 영향만 말한다."""
-    from edge_analysis.statics.observe import _trial
+    from edge_analysis.statics.ops.observe import _trial
 
     _p, obs = _trial({"att": 0.012, "p_adj": 0.01, "pairs": 40,
                       "pretrend_ok": True}, "COMPANY.CONTRACT.SIGNING")
@@ -454,7 +454,7 @@ def test_att_observation_states_impact_without_historical_pattern_story():
 
 def test_plain_prompt_uses_event_facts_not_historical_pattern_jargon():
     """고객 문장은 사건 제목·참여자·진행 위치와 검정된 영향만 말한다."""
-    from edge_analysis.statics.plain import _SYSTEM
+    from edge_analysis.statics.core.plain import _SYSTEM
 
     assert "기사 제목" in _SYSTEM and "역할별 참여자" in _SYSTEM
     assert "사건 흐름" in _SYSTEM and "`스레드`라는 말은 쓰지 마라" in _SYSTEM
@@ -468,8 +468,8 @@ def test_claims_carry_basis_and_evidence_bundle_ids():
     사건 흐름을 사용한 통계 주장은 그 뉴스·사건 흐름 id를 같은 번들에 보존한다.
     """
 
-    from edge_analysis.statics.evidence import narrative_allowed, news_bundle
-    from edge_analysis.statics.plain import PlainError, _assemble, context
+    from edge_analysis.statics.core.evidence import narrative_allowed, news_bundle
+    from edge_analysis.statics.core.plain import PlainError, _assemble, context
     ctx = context(ticker_name="A", day_log=0.05, idio_log=0.04, route_kind="고유",
                   market_name="M", recent={"when": "오후"}, established=["x"],
                   overnight=[], unexplained_top=False)
@@ -512,7 +512,7 @@ def test_claims_carry_basis_and_evidence_bundle_ids():
     # 서사 경로는 통계가 전멸했을 때만 - 성립 엣지가 있으면 검정된 것을 말한다.
     # 지금은 경로 자체가 꺼져 있고, **끈 것을 사유로 말해야** 한다 - 조용히 빠지면
     # '뉴스가 없어서' 와 '경로를 껐어서' 를 구분할 수 없다.
-    import edge_analysis.statics.evidence as ev
+    import edge_analysis.statics.core.evidence as ev
     assert not narrative_allowed(credible=0, applied_edges=1)[0]
     # 스위치를 끄면 사유가 '비활성' 이다 - '뉴스가 없어서' 와 구분된다
     ev.NARRATIVE_ENABLED = False
@@ -534,7 +534,7 @@ def test_plain_prose_cannot_overstate_weak_statistics():
     """
     import pytest
 
-    from edge_analysis.statics.plain import PlainError, _stat_guard
+    from edge_analysis.statics.core.plain import PlainError, _stat_guard
 
     insig = [{"p": 0.232, "att": -0.025}]
     with pytest.raises(PlainError, match="못 가른"):
@@ -559,7 +559,7 @@ def test_recent_window_never_returns_empty_when_windows_exist():
     `최근_시점`이 "" 이 됐다. 그러면 '최근 창을 반드시 말한다' 계약이 무력화되고
     산문은 하루 요약으로 도망갈 수 있다. 창이 있으면 반드시 하나를 고른다.
     """
-    from edge_analysis.statics.plain import recent_window
+    from edge_analysis.statics.core.plain import recent_window
 
     class W:
         def __init__(self, kind, start):
@@ -587,7 +587,7 @@ def test_first_claim_must_state_the_day_direction():
     """
     import pytest
 
-    from edge_analysis.statics.plain import PlainError, _dir_guard, context
+    from edge_analysis.statics.core.plain import PlainError, _dir_guard, context
 
     up = context(ticker_name="KODEX 반도체", day_log=0.0303, idio_log=0.013,
                  route_kind="혼합", market_name="M", recent={"when": "밤사이"},
@@ -619,8 +619,8 @@ def test_each_claim_keeps_machine_direction_out_of_the_user_tag():
     """
     import pytest
 
-    from edge_analysis.statics.evidence import Bundle
-    from edge_analysis.statics.plain import PlainError, _assemble, context
+    from edge_analysis.statics.core.evidence import Bundle
+    from edge_analysis.statics.core.plain import PlainError, _assemble, context
 
     ctx = context(ticker_name="K", day_log=0.05, idio_log=0.04, route_kind="고유",
                   market_name="M", recent={"when": "오후"}, established=["x"],
@@ -668,7 +668,7 @@ def test_recent_window_reads_labels_as_an_event_id_map():
     셀 전체가 죽었다. 위치 대응 자체가 틀렸다 - 창 i 의 사건이 맵의 i 번째일 이유가
     없다. 창은 자기 `event_ids` 로 이름을 찾아야 한다.
     """
-    from edge_analysis.statics.plain import recent_window
+    from edge_analysis.statics.core.plain import recent_window
 
     class W:
         def __init__(self, kind, start, ids):
@@ -705,7 +705,7 @@ def test_moderation_reaches_the_plain_explanation_and_is_not_called_a_cause():
     """
     import pytest
 
-    from edge_analysis.statics.plain import PlainError, _assemble, context
+    from edge_analysis.statics.core.plain import PlainError, _assemble, context
 
     ctx = context(ticker_name="K", day_log=0.03, idio_log=0.02, route_kind="고유",
                   market_name="M", recent={"when": "오후"}, established=["x"],
@@ -732,7 +732,7 @@ def test_moderation_reaches_the_plain_explanation_and_is_not_called_a_cause():
                   ctx, br, [], "c", "d", "")
 
     # 프롬프트가 '원인 금지' 를 실제로 말한다 (선언 = 배선)
-    from edge_analysis.statics.plain import _SYSTEM
+    from edge_analysis.statics.core.plain import _SYSTEM
     assert "조절 조건" in _SYSTEM and '"원인" 이라고 쓰지 마라' in _SYSTEM
 
 
@@ -748,7 +748,7 @@ def test_fabricated_quotes_die_and_real_ones_pass():
     """
     import pytest
 
-    from edge_analysis.statics.plain import PlainError, _assemble, context
+    from edge_analysis.statics.core.plain import PlainError, _assemble, context
 
     ctx = context(ticker_name="K", day_log=0.05, idio_log=0.04, route_kind="고유",
                   market_name="M", recent={"when": "오후"}, established=["계약 체결"],
@@ -799,7 +799,7 @@ def test_the_first_claim_may_state_the_day_without_evidence():
     """
     import pytest
 
-    from edge_analysis.statics.plain import PlainError, _assemble, context
+    from edge_analysis.statics.core.plain import PlainError, _assemble, context
 
     blind = context(ticker_name="K", day_log=0.013, idio_log=0.012, route_kind="고유",
                     market_name="M", recent={"when": "장 열린 직후"}, established=[],
@@ -837,7 +837,7 @@ def test_card_is_one_sentence_not_the_whole_plain_text():
     무엇이 어떻게 됐는지' 를 강제하므로 필요한 것이 거기 있고, 따로 만들면 카드와
     본문이 어긋날 수 있다.
     """
-    from edge_analysis.statics.plain import CARD_MAX, card
+    from edge_analysis.statics.core.plain import CARD_MAX, card
 
     body = ("밤사이 해외 반도체가 내려 오늘 크게 내렸어요. {statistical, ev_a, -1} "
             "국내 소식은 확인되지 않았어요. {none, -, +0}")
@@ -860,7 +860,7 @@ def test_card_is_one_sentence_not_the_whole_plain_text():
 
 
 def test_window_template_accepts_only_required_placeholders():
-    from edge_analysis.statics.plain import fill_window_template
+    from edge_analysis.statics.core.plain import fill_window_template
 
     rendered = fill_window_template(
         "하락은 {top1_name}({top1_return})에 집중됐습니다.",
@@ -878,7 +878,7 @@ def test_window_template_accepts_only_required_placeholders():
     "하락은 {top1_name}와 {top1_name}에 집중됐습니다.",
 ])
 def test_window_template_rejects_model_authored_facts(template):
-    from edge_analysis.statics.plain import PlainError, fill_window_template
+    from edge_analysis.statics.core.plain import PlainError, fill_window_template
 
     with pytest.raises(PlainError):
         fill_window_template(

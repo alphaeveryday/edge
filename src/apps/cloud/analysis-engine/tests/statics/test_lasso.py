@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from edge_analysis.statics.lasso import (LAM_GRID, PI_MIN, lasso, moderate,
+from edge_analysis.statics.core.lasso import (LAM_GRID, PI_MIN, lasso, moderate,
                                         post_ols, stability)
 
 
@@ -66,7 +66,7 @@ def test_near_duplicate_columns_are_pruned_before_fitting():
     말하면서 각각을 과소보고한다. λ 를 어떻게 잡아도(격자 전량 + 0.02·0.05 실측)
     '번갈아 뽑힘' 은 나오지 않았다 - 둘 다 들어가거나 둘 다 죽는다.
     """
-    from edge_analysis.statics.lasso import prune_collinear
+    from edge_analysis.statics.core.lasso import prune_collinear
 
     rng = np.random.default_rng(2)
     n = 400
@@ -157,7 +157,7 @@ def test_ranking_ties_when_subsample_intervals_overlap():
 
 def test_subfits_are_shared_between_pi_and_ranking():
     """Π 와 순위가 **같은 부표본**을 쓴다 - 따로 돌리면 두 배 비용에 다른 표본이다."""
-    from edge_analysis.statics.lasso import stability, subfits
+    from edge_analysis.statics.core.lasso import stability, subfits
 
     y, X, dates = _panel()
     d = subfits(y, X, dates, 0.001, b=30)

@@ -17,7 +17,7 @@ import datetime as dt
 import duckdb
 import pytest
 
-from edge_analysis.statics import athena, layers
+from edge_analysis.statics.core import athena, layers
 
 DAY = "2026-08-04"
 T0, T1 = "13:00:00", "15:30:00"
@@ -330,7 +330,7 @@ def _live_con():
     """실물 Athena 왕복이 되는지 확인하고 연결을 돌려준다. 안 되면 skip."""
     con = duckdb.connect()
     try:
-        from edge_analysis.statics.duck import s3_secret_sql
+        from edge_analysis.statics.core.duck import s3_secret_sql
         con.execute("INSTALL httpfs; LOAD httpfs;")
         con.execute(s3_secret_sql())
         athena.run("SELECT 1 AS one", con=con)

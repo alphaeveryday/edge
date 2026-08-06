@@ -31,9 +31,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from edge_analysis.statics.tool_fin import (BUCKET, FIN, MARKET, MIN_YEARS_Z,
+from edge_analysis.statics.core.tool_fin import (BUCKET, FIN, MARKET, MIN_YEARS_Z,
                                             _fin_item)
-from edge_analysis.statics.vocab import MIN_N
+from edge_analysis.statics.core.vocab import MIN_N
 
 AS_OF = "2026-08-02"
 ITEM = "M000102001"                 # 부채비율 - 수치 항목

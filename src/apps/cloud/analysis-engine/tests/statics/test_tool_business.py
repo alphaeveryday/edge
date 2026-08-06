@@ -6,7 +6,7 @@
      않는 종목에 0 이나 빈 결과를 주면 "집중도 낮음"으로 읽힌다 — 판정불가와
      **몇 종목만 덮는지**가 사유에 들어가야 한다.
 """
-from edge_analysis.statics.tool_business import _business_mix
+from edge_analysis.statics.core.tool_business import _business_mix
 
 DAY = "2026-08-04"
 

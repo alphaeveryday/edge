@@ -5,7 +5,7 @@ import re
 import numpy as np
 import pytest
 
-from edge_analysis.statics.layers import (MARKET_CODE, Rollup, decompose, overlap,
+from edge_analysis.statics.core.layers import (MARKET_CODE, Rollup, decompose, overlap,
                                           residual_rho)
 
 DAYS = [dt.date(2026, 1, 1) + dt.timedelta(d) for d in range(90)]

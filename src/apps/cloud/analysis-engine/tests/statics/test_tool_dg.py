@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import pytest
 
-from edge_analysis.statics import tool_dg
-from edge_analysis.statics.paneltest import MIN_N
-from edge_analysis.statics.tool_dg import _dg_catalog, _dg_probe
+from edge_analysis.statics.core import tool_dg
+from edge_analysis.statics.core.paneltest import MIN_N
+from edge_analysis.statics.core.tool_dg import _dg_catalog, _dg_probe
 
 DAY = "2026-06-01"
 CODE = "S41000060F"

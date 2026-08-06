@@ -12,8 +12,8 @@ from statistics import mean, stdev
 import duckdb
 import pytest
 
-from edge_analysis.statics import paneltest, tool_flow
-from edge_analysis.statics.tool_flow import ACTORS, Z_WINDOW
+from edge_analysis.statics.core import paneltest, tool_flow
+from edge_analysis.statics.core.tool_flow import ACTORS, Z_WINDOW
 
 IID = "inst_TEST"
 TKR = "000660"

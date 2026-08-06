@@ -12,14 +12,14 @@ import json
 
 import pytest
 
-from edge_analysis.statics.registry import need_key, record, roadmap
-from edge_analysis.statics.vocab import (CHANNELS, COMPARATORS, OUTCOME_KINDS,
+from edge_analysis.statics.core.registry import need_key, record, roadmap
+from edge_analysis.statics.core.vocab import (CHANNELS, COMPARATORS, OUTCOME_KINDS,
                                         SERIES_FAMILIES, TRANSFORMS)
 
 
 def _prompt() -> str:
     """실제 발송되는 시스템 프롬프트 - 문자열 상수가 아니라 조립 결과를 본다."""
-    from edge_analysis.statics.hypothesize import propose
+    from edge_analysis.statics.core.hypothesize import propose
     seen: dict[str, str] = {}
 
     def ask(sysmsg: str, user: str) -> dict:
@@ -121,7 +121,7 @@ def test_date_null_loses_attribution_rights():
     되묻는 것이다. 이름표로만 두면 다음 검정기가 조용히 이 귀무를 들고 온다 - 그래서
     `applies_today` 가 읽는다(21R). `sign` 을 쓰기 전용으로 뒀다가 지운 교훈이다.
     """
-    from edge_analysis.statics.paneltest import EdgeReport
+    from edge_analysis.statics.core.paneltest import EdgeReport
 
     kw = dict(n=400, p=0.001, effect_high=0.02, effect_low=0.0,
               today_exposure_pct=0.9)
@@ -132,7 +132,7 @@ def test_date_null_loses_attribution_rights():
 
 def test_pair_permutation_tests_name_their_null():
     """짝 부호 순열 검정기는 자기 귀무를 값으로 남긴다."""
-    from edge_analysis.statics.mkttrial import say_market_trial
+    from edge_analysis.statics.window.mkttrial import say_market_trial
 
     r = {"verdict": "계산됨", "null_kind": "pair", "att": 0.012, "p": 0.003,
          "n_days": 21, "pairs": 63, "treated_all": 28, "pool": 400,
@@ -145,7 +145,7 @@ def test_pair_permutation_tests_name_their_null():
 @pytest.mark.parametrize("bad", ["", "date"])
 def test_missing_or_circular_null_never_assigns(bad):
     """이름표가 비어도 배정되면 게이트가 아니다 - 빈 값은 label 이 아니다."""
-    from edge_analysis.statics.paneltest import EdgeReport
+    from edge_analysis.statics.core.paneltest import EdgeReport
 
     r = EdgeReport("성립", n=400, p=0.001, effect_high=0.02, effect_low=0.0,
                    today_exposure_pct=0.9, null_kind=bad)
@@ -159,8 +159,8 @@ def test_every_advertised_tool_exists_in_the_namespace():
     네임스페이스에 없었다. 모델이 부르면 "그런 도구 없음" 이 돌아오고, 그건 부재가
     아니라 거짓말이다. 광고와 구현을 한 자리에서 검사한다.
     """
-    from edge_analysis.statics.fsm import MENUS
-    from edge_analysis.statics.tools import TOOL_TABLES, Catalog
+    from edge_analysis.statics.core.fsm import MENUS
+    from edge_analysis.statics.core.tools import TOOL_TABLES, Catalog
 
     for stage, menu in MENUS.items():
         for name, blurb in menu:
@@ -187,7 +187,7 @@ def test_args_reports_the_slots_the_trigger_grammar_can_narrow():
             assert "role_code" in q and "novelty_status" in q, q
             return self.rows
 
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.tools import Catalog
 
     rows = [("COMPANY.CONTRACT.SIGNING", "SUPPLIER", "SIGNED", "CONFIRMED", "NEW", 24, 2),
             ("COMPANY.ALLIANCE.PARTNERSHIP", "PARTNER", None, None, None, 284, 0)]
@@ -210,7 +210,7 @@ def test_mislookup_is_told_apart_from_absence():
     '사건 없음'으로 믿었다. 필터가 0 을 만들었으면 필터를 빼고 **무엇이 있는지** 되돌려
     준다 - 그게 오조회 구제다.
     """
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.tools import Catalog
 
     class L:
         """필터 걸린 질의는 0행, 필터 없는 질의는 실제 값을 준다."""
@@ -249,8 +249,8 @@ def test_callable_tool_list_is_derived_from_the_menu():
     그러면 도구 이름 오타 시 "있는 것" 안내에서 `args` 가 사라진다 - 오조회 구제가
     스스로 오조회를 만든다.
     """
-    from edge_analysis.statics.fsm import MENUS
-    from edge_analysis.statics.tools import Catalog
+    from edge_analysis.statics.core.fsm import MENUS
+    from edge_analysis.statics.core.tools import Catalog
 
     names = Catalog.menu_names()
     for stage, menu in MENUS.items():
@@ -266,7 +266,7 @@ def test_member_news_needs_the_base_ctes_and_never_swallows_the_reason():
     삼켰다 → 30일 배치에서 뉴스 인용이 **0/30** 이었다. 배선은 했는데 산출이 0 이면
     '뉴스가 없다' 와 '질의가 죽었다' 가 같아 보인다 - 이 저장소가 가장 싫어하는 실패다.
     """
-    from edge_analysis.statics.etfcell import member_news
+    from edge_analysis.statics.window.etfcell import member_news
 
     class _Name:
         def __init__(self, tk, c):
@@ -310,7 +310,7 @@ def test_multi_signed_material_does_not_constrain_the_claim_sign():
     말하는 것은 보통 하루 방향이고, 최대 괴리 창의 부호는 그와 반대일 수 있다
     (실측: 하루 +9.24%p 인데 그_창_괴리몫 -0.00483).
     """
-    from edge_analysis.statics.plain import _SIGNED_KEY, _assemble, context
+    from edge_analysis.statics.core.plain import _SIGNED_KEY, _assemble, context
 
     assert "그_창_괴리몫" not in _SIGNED_KEY
     ctx = context(ticker_name="K", day_log=0.09, idio_log=0.08, route_kind="고유",
@@ -332,7 +332,7 @@ def test_interval_clamps_instead_of_rejecting_overnight():
     5분봉 첫 봉 시가와 전 거래일 마지막 봉 종가로 **관측 가능**하고, 갭 창은 언제나
     따로 나온다. 질문을 되돌려보내는 대신 자르고 사유를 적는다.
     """
-    from edge_analysis.statics.interval import IntervalError, clamp
+    from edge_analysis.statics.window.interval import IntervalError, clamp
 
     a, b, why = clamp("08:00", "16:00")
     assert (a, b) == ("09:00:00", "15:30:00")
@@ -358,7 +358,7 @@ def test_missing_previous_close_is_not_rendered_as_zero():
     """
     import datetime as dt
 
-    from edge_analysis.statics import interval as iv
+    from edge_analysis.statics.window import interval as iv
 
     class _Lake:
         exists = {"rdb": True}

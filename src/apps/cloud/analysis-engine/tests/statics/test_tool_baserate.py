@@ -14,8 +14,8 @@
 """
 from __future__ import annotations
 
-from edge_analysis.statics.paneltest import MIN_N
-from edge_analysis.statics.tool_baserate import _base_rate
+from edge_analysis.statics.core.paneltest import MIN_N
+from edge_analysis.statics.core.tool_baserate import _base_rate
 
 DAY = "2026-06-01"
 

@@ -8,15 +8,15 @@ vocab 이 닫힌 어휘와 전역 상수 — 구체화 사상 φ 의 정의역.
 설계 SSOT: docs/analysis-engine/causal-attribution-design.md
 P0–P9 와의 관계: P1 지문을 먹이고 P2 어휘를 닫는다 (설계 §20).
 """
-from .frame import PathVerdict, validate_edge
-from .gates import EdgeVerdict, GateInputs, edge_gate, route
-from .narrate import BaseRate, Conditional, NarrationError, narrate
-from .render import Row, render
-from .sem import rank_with_ties
-from .tree import Share, decompose
-from .vocab import (CHANNELS, ExposureSource, HypothesisTuple,
+from .core.frame import PathVerdict, validate_edge
+from .core.gates import EdgeVerdict, GateInputs, edge_gate, route
+from .core.narrate import BaseRate, Conditional, NarrationError, narrate
+from .core.render import Row, render
+from .core.sem import rank_with_ties
+from .core.tree import Share, decompose
+from .core.vocab import (CHANNELS, ExposureSource, HypothesisTuple,
                     SERIES_FAMILIES, TRANSFORMS, Trigger, VocabError, Condition)
-from .windows import Window, build_windows
+from .core.windows import Window, build_windows
 
 __all__ = [
     "BaseRate", "CHANNELS", "Conditional", "EdgeVerdict",

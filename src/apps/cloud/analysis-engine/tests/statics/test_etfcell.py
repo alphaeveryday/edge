@@ -1,4 +1,4 @@
-from edge_analysis.statics.interval import WindowFacts
+from edge_analysis.statics.window.interval import WindowFacts
 
 
 def _facts():
@@ -21,7 +21,7 @@ def _facts():
 
 
 def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
-    from edge_analysis.statics import etfcell
+    from edge_analysis.statics.window import etfcell
 
     calls = []
     monkeypatch.setattr(etfcell, "window_facts", lambda *args: _facts())
@@ -70,7 +70,7 @@ def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
 
 
 def test_model_cannot_replace_the_final_explanation(monkeypatch):
-    from edge_analysis.statics import etfcell
+    from edge_analysis.statics.window import etfcell
 
     monkeypatch.setattr(etfcell, "window_facts", lambda *args: _facts())
     text = etfcell.run(

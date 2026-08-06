@@ -24,11 +24,11 @@ import inspect
 
 import pytest
 
-from edge_analysis.statics import trial as trial_mod
-from edge_analysis.statics import verifier as V
-from edge_analysis.statics.lasso import PI_MIN
-from edge_analysis.statics.paneltest import FEATURES
-from edge_analysis.statics.vocab import PLACEBO_NOVELTY
+from edge_analysis.statics.core import trial as trial_mod
+from edge_analysis.statics.core import verifier as V
+from edge_analysis.statics.core.lasso import PI_MIN
+from edge_analysis.statics.core.paneltest import FEATURES
+from edge_analysis.statics.core.vocab import PLACEBO_NOVELTY
 
 
 class _Lake:

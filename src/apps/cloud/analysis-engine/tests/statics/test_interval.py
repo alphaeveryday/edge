@@ -1,7 +1,7 @@
 import datetime as dt
 from types import SimpleNamespace
 
-from edge_analysis.statics.interval import (
+from edge_analysis.statics.window.interval import (
     BLOCK_ORDER,
     MIN_N,
     ContributionFact,
@@ -137,12 +137,12 @@ def test_window_facts_use_requested_clock_and_pit_cut(monkeypatch):
         calls.append(clock)
         return roll
 
-    monkeypatch.setattr("edge_analysis.statics.interval.decompose", fake_decompose)
+    monkeypatch.setattr("edge_analysis.statics.window.interval.decompose", fake_decompose)
     def fake_premium(lake, ticker, day, **window):
         premium_calls.append(window)
         return SimpleNamespace(premium_move=0.011), "ok"
 
-    monkeypatch.setattr("edge_analysis.statics.interval.premium_5m", fake_premium)
+    monkeypatch.setattr("edge_analysis.statics.window.interval.premium_5m", fake_premium)
     facts = window_facts(_Lake(), "091160", "iid", "2026-08-05", "10:40", "13:20")
 
     assert calls == [("10:40:00", "13:20:00")]
@@ -162,10 +162,10 @@ def test_window_facts_use_requested_clock_and_pit_cut(monkeypatch):
 def test_window_end_event_is_available_for_the_requested_window(monkeypatch):
     """PIT의 available_at <= window_end는 끝 시각 사건을 포함한다."""
     monkeypatch.setattr(
-        "edge_analysis.statics.interval.decompose",
+        "edge_analysis.statics.window.interval.decompose",
         lambda *args, **kwargs: SimpleNamespace(etf_name="T", layers=(), names=()))
     monkeypatch.setattr(
-        "edge_analysis.statics.interval.premium_5m",
+        "edge_analysis.statics.window.interval.premium_5m",
         lambda *args, **kwargs: (None, "없음"))
 
     facts = window_facts(
@@ -174,10 +174,51 @@ def test_window_end_event_is_available_for_the_requested_window(monkeypatch):
     assert "요청창 사건 after" in facts.disclosures
 
 
+
+def test_window_facts_include_top_constituent_events(monkeypatch):
+    """ETF 자체가 아니라 가격 기여 상위 구성종목의 사건도 [4] 후보여야 한다."""
+    roll = SimpleNamespace(
+        etf_name="KODEX 반도체",
+        layers=(),
+        names=(SimpleNamespace(
+            ticker="005930", label="삼성전자",
+            contribution=0.02, ret=0.03),),
+    )
+    monkeypatch.setattr(
+        "edge_analysis.statics.window.interval.decompose", lambda *args, **kwargs: roll)
+    monkeypatch.setattr(
+        "edge_analysis.statics.window.interval.premium_5m",
+        lambda *args, **kwargs: (None, "없음"))
+    monkeypatch.setattr(
+        "edge_analysis.statics.window.etfday.instrument_ids",
+        lambda *_: {"005930": "iid-samsung"})
+
+    class Lake(_Lake):
+        def taus_many(self, instrument_ids, day):
+            assert instrument_ids == ("iid-etf", "iid-samsung")
+            return [(
+                "iid-samsung", dt.datetime(2026, 8, 5, 11, 20),
+                "samsung-event")]
+
+        def taus(self, instrument_id, day):
+            raise AssertionError("구성종목별 N+1 조회를 하면 안 된다")
+
+        def sql(self, query):
+            if "source_event_id IN ('samsung-event')" in query:
+                return [("samsung-event", "삼성전자 공급계약 공시")]
+            return super().sql(query)
+
+    facts = window_facts(
+        Lake(), "091160", "iid-etf", "2026-08-05", "10:40", "13:20")
+
+    assert facts.event_ids == ("samsung-event",)
+    assert facts.final_lines == (
+        "11:20, 삼성전자 공급계약 공시가 있었습니다.",)
+
 def test_clamp_rejects_a_window_empty_after_session_cut():
     """장과 겹치지 않는 요청을 하루 전체로 바꾸지 않는다."""
     import pytest
-    from edge_analysis.statics.interval import IntervalError, clamp
+    from edge_analysis.statics.window.interval import IntervalError, clamp
 
     with pytest.raises(IntervalError, match="자른 뒤 구간이 비었다"):
         clamp("00:00", "00:30")
@@ -230,7 +271,7 @@ def test_final_payload_emits_absence_only_when_optional_blocks_are_empty():
 
 def test_final_explanation_binds_event_financial_and_statistical_db_facts():
     """최종 네 문장은 DB 사실을 그대로 쓰고 시각을 한 번만 표시한다."""
-    from edge_analysis.statics.interval import _final_lines
+    from edge_analysis.statics.window.interval import _final_lines
 
     class Lake:
         def sql(self, query):
@@ -265,10 +306,10 @@ def test_missing_requested_window_return_fails_loud(monkeypatch):
     import pytest
 
     monkeypatch.setattr(
-        "edge_analysis.statics.interval.decompose",
+        "edge_analysis.statics.window.interval.decompose",
         lambda *args, **kwargs: SimpleNamespace(etf_name="T", layers=(), names=()))
     monkeypatch.setattr(
-        "edge_analysis.statics.interval.premium_5m",
+        "edge_analysis.statics.window.interval.premium_5m",
         lambda *args, **kwargs: (None, "없음"))
 
     with pytest.raises(ValueError, match="5분 수익률을 계산하지 못했습니다"):

@@ -16,7 +16,7 @@ from datetime import date, datetime
 import duckdb
 import pytest
 
-from edge_analysis.statics.duck import ROLLUP_FROM, CausalLake
+from edge_analysis.statics.core.duck import ROLLUP_FROM, CausalLake
 
 # 롤업 전/후를 갈라 보려면 경계일이 상수와 묶여 있어야 한다 - 상수를 바꾸면 테스트도
 # 같이 움직이지, 하드코딩된 날짜가 조용히 틀리지 않는다.

@@ -14,9 +14,9 @@
 """
 from __future__ import annotations
 
-import edge_analysis.statics.tool_peer  # noqa: F401 - register 부수효과
-from edge_analysis.statics.surface import TOOLS
-from edge_analysis.statics.tool_peer import MIN_PEERS
+import edge_analysis.statics.core.tool_peer  # noqa: F401 - register 부수효과
+from edge_analysis.statics.core.surface import TOOLS
+from edge_analysis.statics.core.tool_peer import MIN_PEERS
 
 DAY = "2026-06-01"
 TGT = "inst_target"

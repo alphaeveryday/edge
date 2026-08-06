@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from edge_analysis.statics.premium5 import MIN_COVER, Split, Win, premium_5m
+from edge_analysis.statics.window.premium5 import MIN_COVER, Split, Win, premium_5m
 
 
 class _Lake:

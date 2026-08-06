@@ -157,10 +157,10 @@ def run(
     #
     # `event_search` 를 호출자가 정하게 두지 않는다 - 원장 CHECK 가 route_code 와
     # 묶으므로 코드에서 파생한다(`route_code_of`).
-    from .statics.duck import CausalLake
-    from .statics.layers import SESSION_OPEN, decompose as layer_decompose
-    from .statics.record import route_code_of
-    from .statics.route import route_etf
+    from .statics.core.duck import CausalLake
+    from .statics.core.layers import SESSION_OPEN, decompose as layer_decompose
+    from .statics.window.record import route_code_of
+    from .statics.window.route import route_etf
 
     lake = causal_lake if causal_lake is not None else CausalLake()
     day_iso = settings.trade_date.isoformat()
@@ -199,8 +199,8 @@ def run(
     #
     # 레이크는 DuckDB 표면(`CausalLake`)이다 - S3 canonical 과 RDB 를 한 질의에서
     # 조인한다. store 커넥션과 시점이 갈리지 않게 같은 거래일을 쓴다.
-    from .statics.etfcell import run as run_statics
-    from .statics.record import as_explanation, verdicts_from
+    from .statics.window.etfcell import run as run_statics
+    from .statics.window.record import as_explanation, verdicts_from
 
     # 레이크는 **주입**한다 - 이 파일의 계약이 그것이다(도크스트링 첫 문장).
     # 안에서 만들면 제어 흐름을 I/O 없이 못 돌리고, 실제로 그렇게 했다가 파이프라인
@@ -235,7 +235,7 @@ def run(
         honest = plain = text.strip()
     else:
         honest, _, plain = text.partition("[쉬운 설명] 수치 없이 - 방금 왜 움직였나")
-    from .statics.plain import card as _card
+    from .statics.core.plain import card as _card
     headline = _card(plain)
     # 층·라우팅은 위에서 이미 냈다 - 다시 분해하지 않는다(같은 셀에 두 답 금지)
     stage = {"route": (rt.kind if rt else ""), "layers": [
