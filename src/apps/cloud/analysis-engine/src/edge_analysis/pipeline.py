@@ -199,6 +199,14 @@ def run(
     # 뒤에야** 알게 되고, 그때는 결과를 버리기 아까워 S3 폴백으로 접게 된다 - 그 폴백이
     # `explanation_run` 을 안 남겨 소비자의 멱등 프리플라이트(`has_run_for_route`)가
     # 영영 false 로 남고, 재배달이 같은 트리거에 LLM 을 다시 태운다(#554 리뷰).
+    #
+    # ⚠️ **EOD 레인의 폭발 반경이 여기서 바뀐다.** 세 전제 중 `profile` 만 종목별이라
+    # (나머지 둘은 런 전역), 신규 ETF 를 유니버스에 넣고 `etf_profile` 을 안 채우면 그
+    # 한 종목의 비0 종료가 `AnalysisResultCheck`(전량성공 게이트, ADR-0028)를 통해
+    # **유니버스 일일 런 전체**를 실패로 만든다. 이전에는 그 종목만 S3 로 새고 런은
+    # 초록이었다 - 그게 관대한 쪽 오류였다. 설명이 없는 ETF 가 조용히 초록에 묻히면
+    # 아무도 안 채운다. `holdings` 빈·수익률 미착지가 이미 같은 축으로 죽으므로
+    # `profile` 만 예외였던 것을 일반 규칙에 맞춘 것이다(Rule 12).
     prereqs = store.explanation_prerequisites(settings, etf_instrument_id)
     missing = [key for key, value in prereqs.items() if not value]
     if missing:
