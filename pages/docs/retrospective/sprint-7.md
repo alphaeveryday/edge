@@ -168,7 +168,7 @@
     <tr>
       <td>
         <ul>
-          <li>GitHub repository ruleset을 설정하고, 설정 전까지는 머지 전 테스트 통과 여부를 직접 확인함</li>
+          <li>머지 전 테스트 통과 여부를 매번 직접 확인함 — repository ruleset 강제는 현재 계정·플랜에서 설정이 불가해(403) 수동 확인으로 대체함</li>
           <li>멘토링 직후 피드백을 즉시 반영/추가 검토/반영하지 않음/확인 필요로 분류하고, 각 항목에 근거·담당자·기한을 기록함</li>
         </ul>
       </td>
@@ -209,7 +209,15 @@
 
     <div class="retro-actions done">
       <ul>
-        <li>GitHub repository ruleset으로 테스트 통과를 머지 필수 조건으로 강제하고, 설정 전까지는 머지 전 체크 상태를 직접 확인함</li>
+        <li>머지 전 체크 상태를 매번 직접 확인함</li>
+      </ul>
+    </div>
+
+    미달성 — 같은 Action Item의 <strong>repository ruleset 강제</strong>는 적용하지 못했다. 이 저장소의 현재 소유 계정·플랜에서는 rulesets·branch protection API가 <code>403 "Upgrade to GitHub Pro or make this repository public"</code>을 돌려준다(비공개 저장소, 2026-08-06 재확인). 플랜을 올리거나 저장소를 공개로 바꾸기 전까지는 위의 수동 확인이 유일한 수단이다.
+
+    <div class="retro-actions">
+      <ul>
+        <li>GitHub repository ruleset으로 테스트 통과를 머지 필수 조건으로 강제</li>
       </ul>
     </div>
 
