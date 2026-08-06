@@ -260,6 +260,11 @@ locals {
     DUCKDB_TEMP_DIR     = var.analysis_duckdb_temp_dir
     },
     var.analysis_release_bundle_version == null ? {} : { ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version },
+    # 워크그룹 이름만 넘긴다 — IAM 정책이 스코프로 쓰는 유일한 이름이라 여기서 고정한다.
+    # DB·표 이름은 코드 DEFAULTS 에 둔다(IAM 은 glue:Get* 를 "*" 로 주므로 정책과 안 엮인다).
+    # ⛔ EDGE_ATHENA_OUTPUT 은 주입 금지 — 워크그룹이 결과 위치를 강제(Enforce)하므로 같이
+    # 보내면 질의가 시작도 못 한다.
+    var.analysis_athena_workgroup == "" ? {} : { EDGE_ATHENA_WORKGROUP = var.analysis_athena_workgroup },
   )
 
   analysis_secrets = {

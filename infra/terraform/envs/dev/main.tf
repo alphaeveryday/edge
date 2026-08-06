@@ -493,6 +493,12 @@ module "data_pipeline" {
   # 정식 버저닝은 릴리스 규약 합의 후.
   analysis_release_bundle_version = "dev-mvp-0"
 
+  # 시각창 집계 Athena 오프로드(ALPHA-780). 5분봉 Iceberg 정본과 Athena 결과 CSV 가 같은
+  # 버킷에 산다 — **terraform 관리 밖**이라 ARN 만 넘기고 리소스로 잡지 않는다.
+  # 이것 없이는 구간 모드가 DuckDB 폴백(질의당 376MB)으로 떨어져 1분 주기를 못 버틴다.
+  analysis_market_data_bucket_arn = "arn:aws:s3:::market-data-${data.aws_caller_identity.current.account_id}"
+  analysis_athena_workgroup       = "market_data"
+
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
 

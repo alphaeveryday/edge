@@ -89,6 +89,23 @@ variable "analysis_release_bundle_version" {
   default     = null
 }
 
+# 시각창 집계 Athena 오프로드(ALPHA-780). 둘 다 채워야 자격이 붙는다 — 하나만 주면
+# 정책이 반쪽이라 조용히 폴백하므로 함께 비우거나 함께 채운다.
+#
+# 이 버킷은 **이 모듈이 만들지 않는다**(terraform 관리 밖). ARN 을 받기만 하고 소유권을
+# 주장하지 않는다 — `aws_s3_bucket` 리소스를 여기 두면 다음 apply 가 남의 버킷을 집는다.
+variable "analysis_market_data_bucket_arn" {
+  description = "5분봉 Iceberg 표 데이터와 Athena 결과 CSV 가 사는 버킷 ARN. 비우면 Athena 자격을 부여하지 않는다(엔진은 canonical 합집합으로 폴백 — 질의당 376MB 를 컨테이너로 받는다)."
+  type        = string
+  default     = ""
+}
+
+variable "analysis_athena_workgroup" {
+  description = "EDGE_ATHENA_WORKGROUP — 시각창 집계를 보낼 Athena 워크그룹. 결과 위치는 워크그룹이 강제하므로 EDGE_ATHENA_OUTPUT 은 주입하지 않는다(같이 보내면 질의가 시작도 못 한다)."
+  type        = string
+  default     = ""
+}
+
 # ALPHA-470 — analyze 페이즈 Map 팬아웃의 유니버스 배열. 발화 무관 전량 병렬 분석한다.
 # ⚠️ SSOT 는 앱 config `sources.toml [krx_etf.source.etf_map]` 키다 — terraform 이 TOML 을
 # 못 읽어(네이티브 파서 없음) 여기 미러한다. 유니버스 변경(드묾) 시 두 곳을 함께 고쳐야 한다.
