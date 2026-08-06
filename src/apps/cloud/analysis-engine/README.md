@@ -23,6 +23,7 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 **LLM 앞에서 런을 세운다**(`PipelineError`, ALPHA-797). 임의 FK 값도, S3 폴백도 만들지 않는다 — 전제 결손은 설정 누락이라 조용히 우회하면 그 대상의 설명이 영영 없다.
 - **매 런 커버리지 1줄을 로그에 남긴다**(ALPHA-792) — `statics.coverage` 에 `exists`·`unbound` 가 실린다: 5분봉을 Glue Iceberg 로 읽었는지 canonical 합집합으로 폴백했는지(정본은 **그 거래일을 실제로 담을 때만** 정본이다 — 상류 적재가 멈추면 조용히 과거를 보게 되므로, ALPHA-793), 시각창 집계를 Athena 로 보냈는지 DuckDB 로 돌았는지(폴백 사유까지), 층 분해가 왜 `None` 인지. 이 값들은 원래 `CausalLake` 안에만 있어 운영에서 볼 수 없었다. 자격증명은 가린다(DSN 은 `_rdb` 가 원천에서 지우고 로그 쪽이 한 겹 더 받친다).
+  - ⚠️ **커버리지가 설명하지 못하는 `None` 이 하나 있다**(ALPHA-785) — 분해는 됐는데 라우팅(`route_etf`)이 터져 그 분해를 **폐기**한 경우다. 재료 부재와 구분하려면 `statics.layers.failed` 의 `had_rollup`·`discarded_layers` 를 보고, 로그 보존 기간이 지난 뒤에는 원장의 `stage_results.routing_failed` 를 본다(그 런은 확신도도 `LOW` 로 내려간다).
 - **완주한 런마다 런 아카이브 1건을 S3에 남긴다**(평온 종료 포함, ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다). 반대로 **런이 raise 로 끊기면 아카이브도 없다** — 전제 결손·holdings 빈·수익률 미착지가 그 경우다.
 
 ## 구조

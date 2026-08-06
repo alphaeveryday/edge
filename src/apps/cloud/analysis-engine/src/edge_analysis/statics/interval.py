@@ -539,9 +539,36 @@ def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
     return tuple(lines)
 
 
+# "호출자가 층 분해를 모른다" 를 뜻하는 기본값. `None` 을 쓰면 **분해 실패**(라우팅도
+# 못 얻었다)와 구분되지 않고, 그 둘을 겹치면 실패한 창을 여기서 재시도하게 된다.
+ROLL_UNSET = object()
+
+
 def window_facts(lake, ticker: str, instrument_id: str, day: str,
-                 t0: str, t1: str) -> WindowFacts:
-    """원천에서 요청창 하나의 사실만 계산한다."""
+                 t0: str, t1: str, *, roll=ROLL_UNSET) -> WindowFacts:
+    """원천에서 요청창 하나의 사실만 계산한다.
+
+    ``roll`` 은 호출자가 같은 창으로 이미 뽑은 층 분해다. 넘어오면 재질의하지 않는다 -
+    `pipeline` 은 라우팅에서 이 분해로 route_code 를 정해 원장에 넣으므로, 여기서 다시
+    질의하면 그 사이 분봉 canonical 이 정정될 때 **한 explanation 안에서** 라우팅 근거와
+    산문 근거가 갈린다.
+
+    ⚠️ ``None`` 은 "안 넘겼다"가 아니라 **"라우팅도 못 얻었다"** 는 사실이다 - 그때도
+    재질의하지 않는다. 재질의하면 라우팅 시점엔 없던 재료가 그새 착지했을 때 원장은
+    `PRICE_ONLY`(미상)인데 산문에는 층 근거가 실린다 - 이 함수가 막으려는 갈림 그대로다.
+    호출자가 분해를 아예 모르는 경우(`window_batch`·`explain` 단독 호출)만 기본값
+    ``ROLL_UNSET`` 로 남아 직접 계산한다.
+
+    ⚠️ 그중 `window_batch` 는 **이미 있는 route 에 설명을 매단다** — 그 route 를 정한
+    분해가 저장돼 있지 않아 여기서 넘길 것이 없고, 그래서 같은 갈림이 그 경로엔 남아
+    있다(원장의 route_code 는 옛 분해, 산문은 지금 분해). 닫으려면 route 와 함께 그
+    분해를 영속해야 한다 — 이 함수 밖의 일이다.
+
+    ⚠️ 남는 천장: 봉(`_bars`)·괴리(`premium_5m`)는 **여기서 다시 읽는다**. 주입된 분해와
+    그 둘 사이에도 정정이 끼어들 수 있어 층↔봉 스냅샷은 아직 한 벌이 아니다. 이 변경이
+    닫는 것은 원장 route_code ↔ 산문 근거의 갈림이고, 전 사실을 한 스냅샷으로 묶는 것은
+    별개 작업이다(창 하나를 통째로 고정하는 설계가 필요하다).
+    """
     a, b, _why = clamp(t0, t1)
     date = dt.date.fromisoformat(day)
     start = dt.datetime.combine(date, dt.time.fromisoformat(a))
@@ -558,7 +585,8 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
     premium, _premium_note = premium_5m(
         lake, ticker, day, window_start=a, window_end=b)
 
-    roll = decompose(lake, ticker, day, clock=(a, b))
+    if roll is ROLL_UNSET:
+        roll = decompose(lake, ticker, day, clock=(a, b))
     layers = tuple(getattr(roll, "layers", ())) if roll is not None else ()
     names = tuple(getattr(roll, "names", ())) if roll is not None else ()
     contributions = tuple(

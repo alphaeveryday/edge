@@ -159,6 +159,64 @@ def test_window_facts_use_requested_clock_and_pit_cut(monkeypatch):
     assert "09:10" not in text and "13:20 기준" in text
 
 
+def test_injected_rollup_is_used_instead_of_requerying(monkeypatch):
+    """호출자가 준 층 분해가 있으면 **다시 질의하지 않는다**.
+
+    `pipeline` 은 이 분해로 route_code 를 정해 원장에 넣고, 같은 창의 산문을 여기서
+    만든다. 여기서 재질의하면 그 사이 분봉 canonical 이 정정될 때 한 explanation 안의
+    라우팅 근거와 산문 근거가 갈린다 - 재질의하지 않는 것이 계약이다.
+    """
+    calls = []
+
+    def fake_decompose(lake, ticker, day, *, clock=None):   # pragma: no cover - 불려선 안 된다
+        calls.append(clock)
+        return SimpleNamespace(etf_name="재질의", layers=(), names=())
+
+    monkeypatch.setattr("edge_analysis.statics.interval.decompose", fake_decompose)
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.premium_5m",
+        lambda *a, **k: (SimpleNamespace(premium_move=0.0), "ok"))
+
+    injected = SimpleNamespace(
+        etf_name="주입분",
+        layers=(SimpleNamespace(kind="섹터", ret=-0.008, name="KRX 반도체"),),
+        names=(SimpleNamespace(label="삼성전자", contribution=-0.02, ret=-0.03),),
+    )
+    facts = window_facts(_Lake(), "091160", "iid", "2026-08-05", "10:40", "13:20",
+                         roll=injected)
+
+    assert calls == [], "주입분이 있는데 재질의했다"
+    # 주입분이 실제로 쓰였다 - 호출만 안 한 게 아니라 그 값이 사실로 나온다
+    assert facts.sector_name == "KRX 반도체"
+    assert [c.name for c in facts.contributions] == ["삼성전자"]
+
+
+def test_injected_none_rollup_is_not_retried_here(monkeypatch):
+    """`None` 도 전달된 값이다 — **라우팅이 못 얻었다**는 사실이라 재시도하지 않는다.
+
+    재시도하면 라우팅 시점엔 없던 재료가 그새 착지했을 때 원장은 미상(`PRICE_ONLY`)인데
+    산문에는 층 근거가 실린다. 그게 이 주입이 막으려는 갈림 그대로다 — `None` 을 "안
+    넘겼다"로 읽으면 막으려던 구멍이 그 경로로 되살아난다.
+    """
+    calls = []
+
+    def fake_decompose(lake, ticker, day, *, clock=None):   # pragma: no cover - 불려선 안 된다
+        calls.append(clock)
+        return SimpleNamespace(etf_name="재질의", layers=(), names=())
+
+    monkeypatch.setattr("edge_analysis.statics.interval.decompose", fake_decompose)
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.premium_5m",
+        lambda *a, **k: (SimpleNamespace(premium_move=0.0), "ok"))
+
+    facts = window_facts(_Lake(), "091160", "iid", "2026-08-05", "10:40", "13:20",
+                         roll=None)
+
+    assert calls == [], "None 을 미전달로 읽어 재질의했다"
+    assert facts.sector_name is None
+    assert facts.contributions == ()
+
+
 def test_window_end_event_is_available_for_the_requested_window(monkeypatch):
     """PIT의 available_at <= window_end는 끝 시각 사건을 포함한다."""
     monkeypatch.setattr(
