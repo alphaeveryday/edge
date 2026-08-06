@@ -374,7 +374,40 @@ def test_live_clock_panel_shape_and_measured_bytes(syms):
     assert rows and len(rows[0]) == 4
     sym, lrs, dates, vols = rows[0]
     assert sym == "069500"
-    assert len(lrs) == len(dates) == len(vols) > 100
+    # 세 배열은 같은 행의 세 축이라 길이가 어긋나면 계약이 깨진 것이다.
+    assert len(lrs) == len(dates) == len(vols)
+    # 하한은 **거래일** 기준이다. `LOOKBACK_DAYS` 는 달력일이고 KRX 는 주말·휴장일에
+    # 거래하지 않으므로 한 심볼이 얻는 거래일은 그보다 한참 적다(실측 2026-08-04:
+    # 120 달력일 → 82 거래일). `> 100` 은 production 질의가 의도대로 동작하면
+    # **원리적으로 만족될 수 없는** 단언이었고, CI 가 자격증명 부재로 이 테스트를
+    # skip 해 그 모순이 드러나지 않았다.
+    #
+    # 지켜야 할 계약은 "충분히 길다" 가 아니라 **소비자가 층을 세울 수 있다** 이다.
+    # 그 판정은 `layers.decompose` 가 하고, 원시 행 수가 아니라 아래 셋을 본다.
+    assert dates, "행은 왔는데 날짜가 비었다"
     assert all(isinstance(d, dt.date) for d in dates)
     assert dates == sorted(dates)
+
+    # ① 중복 날짜는 표본이 아니다 — `_series` 가 `{date: 수익률}` 로 접으므로 같은
+    #    날이 두 번 오면 행 수만 늘고 표본은 그대로다.
+    assert len(set(dates)) == len(dates), "같은 거래일이 두 번 왔다"
+
+    # ② 당일이 있어야 한다 — `decompose` 는 `d0 not in ser[etf][1]` 이면 **즉시 None**
+    #    이다(`layers.py`). 과거만 잔뜩 와도 층 분해는 전건 실패한다.
+    target = dt.date.fromisoformat(DAY)
+    assert dates[-1] == target, f"당일({target})이 계열에 없다: 마지막 {dates[-1]}"
+
+    # ③ β 표본은 **당일을 뺀 과거 고유 거래일**이다 — `hist = (d < d0)[-BETA_WINDOW:]`
+    #    이고 `len(hist) < MIN_BETA_N` 이면 그 층이 후보에서 빠진다. 하한을 `MIN_BETA_N`
+    #    으로 두면 창을 절반만 긁는 회귀를 통과시키므로, 이 질의가 겨냥한
+    #    `BETA_WINDOW` 를 채우는지로 본다(`LOOKBACK_DAYS` 가 그러라고 120 이다).
+    past = [d for d in dates if d < target]
+    assert len(past) >= layers.BETA_WINDOW, (
+        f"β 창을 못 채운다: 과거 {len(past)}거래일 < {layers.BETA_WINDOW}"
+        f" (하드 하한은 {layers.MIN_BETA_N})")
+
+    # ④ 창의 반대편 — 하한이 사라지면(전량 스캔 회귀, ALPHA-782) 위 단언들은 통과하지만
+    #    날짜가 하한 밖으로 넘친다.
+    floor = target - dt.timedelta(days=athena.LOOKBACK_DAYS)
+    assert dates[0] >= floor, f"이력 하한 밖의 날짜가 왔다: {dates[0]} < {floor}"
     assert int(athena.LAST["result_bytes"]) * 10 < int(athena.LAST["scanned"])
