@@ -7,6 +7,7 @@
 """
 
 import json
+import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
@@ -46,10 +47,10 @@ class FakeClient:
         pass
 
 
-def _source(responses, interval_sec=DEFAULT_INTERVAL_SEC):
+def _source(responses, interval_sec=DEFAULT_INTERVAL_SEC, etf_map=None):
     src = KisInavSource(
         KisNavSourceConfig(app_key="k", app_secret="s"),
-        {"069500": "KR7069500007"},
+        etf_map or {"069500": "KR7069500007"},
         FakeClient(responses),
         interval_sec=interval_sec,
     )
@@ -224,7 +225,11 @@ def _at(monkeypatch, when: datetime):
     class _Clock(datetime):
         @classmethod
         def now(cls, tz=None):
-            return when
+            # ⚠️ tz 를 무시하면 안 된다 — 무시하는 순간 `datetime.now(KST)` 를
+            # `datetime.now()` 로 바꾸는 회귀가 테스트를 통과하고, 운영(UTC 컨테이너)
+            # 에서만 naive−aware TypeError 로 터진다. 그 예외는 관측 격리가 삼켜
+            # 로그에 "행 관측 실패" 만 남는다(수집은 살아 있어 아무도 안 본다).
+            return when if tz is not None else when.replace(tzinfo=None)
 
     monkeypatch.setattr(mod, "datetime", _Clock)
 
@@ -321,12 +326,15 @@ def test_자리수_잘린_라벨이_최신을_탈취하지_못한다(monkeypatch
     with caplog.at_level("INFO"):
         list(src.fetch())
 
-    assert "지연=60초" in caplog.text
     assert "21660" not in caplog.text
     assert "형식 이탈 1/6 행" in caplog.text  # 조용히 버리지 않는다
+    (rec,) = _records(caplog, "벤더 지연")
+    assert rec.args[4] == 60.0
+    # `행=` 은 **쓸 수 있는 행** 수다 — 받은 행(6)을 쓰면 지연을 해석하는 분모가 거짓이 된다.
+    assert rec.args[7] == 5
 
 
-@pytest.mark.parametrize("stamp", ["240000", "153060", "15:30:00", "", "abc123"])
+@pytest.mark.parametrize("stamp", ["240000", "153060", "15:30:00", "abc123", " 153000"])
 def test_시각이_아닌_6자리도_라벨로_받지_않는다(monkeypatch, caplog, stamp):
     """자리수만 보면 `240000`·`153060` 이 통과한다 — 실제 시각인지까지 한 곳에서 판정해야
     호출부가 파싱 실패를 다시 다루지 않는다."""
@@ -440,3 +448,153 @@ def test_시각_라벨이_깨져도_단위_가드는_돈다(monkeypatch, caplog)
 
     assert "지연 관측 불가" in caplog.text          # 시각 축은 실패했는데
     assert "괴리 단위 드리프트 의심" in caplog.text  # 단위 축은 살아서 물었다
+
+
+def _records(caplog, needle: str) -> list:
+    """그 문구를 낸 로그 레코드들 — 값 검증은 문자열이 아니라 `args` 로 한다.
+
+    `caplog.text` 는 전 종목 로그가 섞인 **단일 문자열**이라 "값 하나가 들어 있는가"만
+    보면 다른 ETF 의 로그로도 통과한다. 이 조각은 관측 자체가 산출물이라, 경고가 떴다는
+    1비트가 아니라 **그 줄이 나르는 수치**(카운트·표본·식별자)까지 묶어야 한다.
+    """
+    return [r for r in caplog.records if needle in r.getMessage()]
+
+
+def test_빈_라벨은_결측_판정이_먼저_거른다(monkeypatch, caplog):
+    """`""` 는 `_time_stamp` 가 아니라 `_row_defect`(`_is_blank`)가 격리한다 — 초록의
+    이유가 다르다. 같은 파라미터에 묶어 두면 결측 판정을 손댈 때 이유 없이 빨개진다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row("")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "필수 필드 결측" in caplog.text  # 격리 단계에서 걸렸다
+    assert not _records(caplog, "형식 이탈")  # 관측 단계까지 오지도 않았다
+
+
+def test_격리된_행은_관측_표본에_다시_들어오지_않는다(monkeypatch, caplog):
+    """훅은 `_row_defect` 를 **통과한 행**을 받는다. 원본 output 을 넘기면 이미 격리된
+    행이 형식 이탈로 재계상되고 단위 대조 표본에도 섞인다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    bad = {"bsop_hour": "쓰레기"}  # nav 결측 → 부모가 격리한다
+    src = _source({"069500": _ok([_row("153000"), bad])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "형식 이탈")  # 격리된 행은 관측이 보지 않는다
+    (lag,) = _records(caplog, "벤더 지연")
+    assert lag.args[7] == 1  # 행=1 (받은 행 2가 아니다)
+
+
+def test_지연_로그가_나르는_수치를_전부_묶는다(monkeypatch, caplog):
+    """문자열 부분매칭은 "값 하나가 들어 있는가"만 본다 — 자리가 뒤바뀌어도 통과한다.
+    창·간격·행수·식별자를 args 로 함께 단언해야 왜곡형 회귀가 죽는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok(_window())})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "벤더 지연")
+    assert rec.levelno == logging.INFO  # 1분 레인에 붙으면 매 폴링이라 WARN 이면 안 된다
+    symbol, etf_id, stamp, _recv, lag, window, interval, n, suffix = rec.args
+    assert (symbol, etf_id, stamp) == ("069500", "069500", "153000")
+    assert (lag, window, interval, n) == (60.0, 1800, 60, 5)
+    assert suffix == ""
+
+
+def test_ETF_마다_관측한다(monkeypatch, caplog):
+    """픽스처가 1종이면 훅을 ETF 루프 밖으로 옮겨 첫 종목만 관측하는 회귀가 통과한다.
+    실 유니버스는 33종이다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source(
+        {"069500": _ok([_row("153000")]), "091160": _ok([_row("152000")])},
+        etf_map={"069500": "KR7069500007", "091160": "KR7091160002"},
+    )
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    by_symbol = {r.args[0]: r.args[4] for r in _records(caplog, "벤더 지연")}
+    assert by_symbol == {"069500": 60.0, "091160": 660.0}  # 종목마다, 각자의 지연
+
+
+def test_라벨이_조금_미래여도_사실을_적는다(monkeypatch, caplog):
+    """구간 끝 라벨이면 최신 행이 **몇십 초** 미래인 것이 정상이다 — 도크스트링이 오탐
+    근거로 든 바로 그 구간이라, 임계를 몰래 넓히는 회귀를 여기서 막는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 30, 5, tzinfo=KST))
+    src = _source({"069500": _ok([_row("153100")])})  # −55초
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "벤더 지연")
+    assert rec.args[4] == -55.0
+    assert "미래" in rec.args[8]
+
+
+def _priced(stamp: str, nav: float, price: float, dprt: str) -> dict:
+    return _row(stamp, nav=str(nav), stck_prpr=str(price), dprt=dprt)
+
+
+def test_일부_행만_어긋나도_드리프트를_잡는다(monkeypatch, caplog):
+    """벤더가 일부 시각 구간만 단위를 바꾸는 것이 가장 흔한 드리프트 형태다. 전 행을 보지
+    않거나(첫 행만) "전부 어긋날 때만" 경고하면 그 형태가 통째로 조용하다.
+
+    표본은 **첫 불일치**여야 한다 — 마지막을 담으면 언제 틀어지기 시작했는지 못 읽는다.
+    """
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    ok1, ok2 = _priced("150000", 100000, 105000, "5.0"), _priced("153000", 100000, 105000, "5.0")
+    bad1 = _priced("151000", 100000, 105000, "0.05")   # 비율로 옴
+    bad2 = _priced("152000", 100000, 105000, "0.05")
+    src = _source({"069500": _ok([ok1, bad1, ok2, bad2])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "드리프트 의심")
+    assert rec.levelno == logging.WARNING  # 알람이 붙을 축이다
+    symbol, etf_id, mismatched, checked, at, dprt, expected = rec.args
+    assert (symbol, etf_id) == ("069500", "069500")
+    assert (mismatched, checked) == (2, 4)   # 카운트·자리 뒤바뀜을 함께 막는다
+    assert at == "151000"                    # 마지막이 아니라 첫 불일치
+    assert (dprt, round(expected, 4)) == (0.05, 5.0)  # 어느 쪽이 관측이고 어느 쪽이 가설인지
+
+
+def test_반올림_오차는_드리프트가_아니다(monkeypatch, caplog):
+    """괴리가 크면 벤더 내부 정밀도 차이가 비례해 는다 — 상대 오차를 안 두면(0 으로
+    좁히면) 정상 표본이 매번 드리프트로 잡혀 진짜 신호가 묻힌다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_priced("153000", 100000, 105000, "5.08")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "드리프트 의심")
+
+
+def test_상대_오차가_10퍼센트까지_벌어지면_드리프트다(monkeypatch, caplog):
+    """반대 방향 경계 — 허용 오차를 넓히는 회귀는 가드를 조용히 죽인다. 관대해지는 쪽으로
+    틀리는 것이 이 레포가 반복해 데인 방향이라 양쪽을 다 못박는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_priced("153000", 100000, 105000, "5.5")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert _records(caplog, "드리프트 의심")
+
+
+def test_괴리가_작을_때도_어긋나면_잡는다(monkeypatch, caplog):
+    """실측 표본의 괴리는 0.11% 다 — 절대 오차를 넓히면 **그 구간이 통째로 무방비**가 된다.
+    상대 오차는 큰 괴리에서만 구속하므로 작은 값 쪽을 따로 못박는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 퍼센트 가설은 0.11411 인데 0.05 로 온다 — 반올림으로는 설명 안 되는 차이다.
+    src = _source({"069500": _ok([_row("153000", dprt="0.05")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert _records(caplog, "드리프트 의심")

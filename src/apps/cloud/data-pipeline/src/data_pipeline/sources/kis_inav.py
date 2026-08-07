@@ -82,12 +82,14 @@ def _time_stamp(row: dict) -> str | None:
 
     ⚠️ `or ""` 를 쓰지 않는다 — 그 관용구는 수치 0(자정)을 결측으로 접는다. 25줄 위
     `_is_blank` 도크스트링이 예고한 바로 그 함정이라, 같은 파일에서 다시 밟지 않는다.
+
+    검사는 **두 겹뿐**이다. `None` 분기·`isdigit()`·`strip()` 을 두지 않는 이유가 각각
+    있다: 결측은 `str(None)`="None"(4자)이라 길이에서 걸리고, 비숫자는 `strptime` 이 이미
+    거부하며(`isdigit()` 은 `"²"` 를 통과시켜 오히려 더 약하다), 공백 패딩은 **걸러내는
+    편이 옳다** — 벤더 포맷이 변한 신호라 조용히 흡수하면 그 변화를 못 본다.
     """
-    value = row.get("bsop_hour")
-    if value is None:
-        return None
-    stamp = str(value).strip()
-    if len(stamp) != _STAMP_LEN or not stamp.isdigit():
+    stamp = str(row.get("bsop_hour"))
+    if len(stamp) != _STAMP_LEN:
         return None
     try:
         # 자리수만 보면 `"240000"`·`"153060"` 이 통과한다 — 실제 시각인지까지 **여기서**
@@ -196,7 +198,10 @@ class KisInavSource(KisNavSource):
            이 엔드포인트로는 장중 실시간이 성립하지 않고 웹소켓(`H0STNAV0`)이 유일한
            경로가 된다 — 1분 레인 편입 설계 전체가 여기 걸려 있다.
 
-        2. **괴리율 단위 가드** — `dprt` 는 **퍼센트**다(실측 확정, `_PREMIUM_UNIT` 주석).
+        2. **괴리율 단위 가드** — `dprt` 는 **퍼센트**다(실측 069500·2026-07-25:
+           `stck_prpr/nav − 1` = 0.00114115, ×100 = 0.11411 → 반올림 0.11 = `dprt`.
+           비율 가설이면 0.00 이라 안 맞는다. 교차 근거는 `nav_vrss_prpr` 121.24 =
+           `stck_prpr − nav` 다).
            `sql_surface.v_nav.premium` 은 **비율**이라 벤더가 단위를 바꾸면 canonical 이
            100배 틀린 값을 싣는다. 그래서 값을 나열하지 않고 **어긋날 때만 경고**한다 —
            나열은 드리프트가 나도 로그 모양이 같아 아무도 못 본다.
@@ -289,7 +294,7 @@ class KisInavSource(KisNavSource):
             logger.warning(
                 "iNAV 괴리 단위 드리프트 의심: %s(%s) %d/%d 행 불일치 — "
                 "bsop_hour=%s 에서 dprt=%s 인데 퍼센트 가설은 %.4f 다. "
-                "canonical premium_pct 에 그대로 실으면 안 된다",
+                "이 값을 canonical 에 그대로 실으면 안 된다(단위가 갈린다)",
                 kis_symbol, our_etf_id, mismatched, checked, *sample,
             )
 
