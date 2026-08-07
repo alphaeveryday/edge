@@ -280,6 +280,39 @@ def test_aggregate_window_rejects_empty_foreign_session_or_out_of_range():
     assert caught.value.reason.code == "MINUTE_OUT_OF_WINDOW"
 
 
+def test_requested_slice_refuses_minutes_past_the_requested_clock():
+    # 요청 끝 이후의 분이 한 개라도 섞이면 설명이 미래를 본 것이 된다.
+    spec = window(27, requested_start_minute=12)
+    with pytest.raises(WindowAggregationError) as caught:
+        slice_requested_bars(spec, tuple(minute_bar(m) for m in range(28)))
+    assert caught.value.reason.code == "MINUTE_OUT_OF_WINDOW"
+    assert "09:27" in caught.value.reason.message
+
+
+def test_requested_slice_conserves_the_minute_axis_it_explains():
+    # 두 축이 같은 1분축에서 나오므로 요청 구간의 거래량은 보존되고 끝 가격은 일치해야
+    # 한다. 어긋나면 결손이나 이중계상이 설명에 정상값으로 들어간다.
+    spec = window(27, requested_start_minute=12)
+    minute_bars = tuple(minute_bar(m) for m in range(27))
+
+    state_bars = aggregate_window(spec, minute_bars)
+    requested = slice_requested_bars(spec, minute_bars)
+
+    explained = [bar for bar in minute_bars if bar.source.start >= spec.requested_start]
+    assert sum(bar.volume for bar in requested.bars) == sum(bar.volume for bar in explained)
+    assert requested.bars[0].open == minute_bar(12).open
+    assert requested.bars[-1].close == state_bars[-1].close
+
+
+def test_requested_slice_supports_a_single_minute_request():
+    spec = window(13, requested_start_minute=12)
+
+    requested = slice_requested_bars(spec, tuple(minute_bar(m) for m in range(13)))
+
+    assert [(bar.start.minute, bar.end.minute, bar.observed_minutes)
+            for bar in requested.bars] == [(12, 13, 1)]
+
+
 def test_diagnose_window_reports_complete_weighted_and_mapping_coverage():
     bars = tuple(
         minute_bar(minute, unit)
