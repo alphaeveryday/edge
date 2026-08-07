@@ -4,16 +4,22 @@
 ①각 필드가 **어느 1분봉**에서 와야 하는지(window 축 — record ts 로 정렬하는 회귀를
 ts 역순 입력으로 반증), ②원장 확정 세대만 읽는지(S3 orphan 세대 배제), ③결손 분
 부분 집계, ④버킷 미완 시 산출 없음 + 안 닫힌 이웃 버킷 배제, ⑤늦은 recovery 커밋
-의 재작성과 빈 정정의 재작성(폐기 가격 잔존 금지), ⑥fmp 백필 파티션 보호,
+의 재작성과 빈 정정의 재작성(폐기 가격 잔존 금지), ⑥다른 벤더 파티션 보호,
 ⑦롤업 예외가 1분 커밋(정본)을 깨지 않음, ⑧산출 스키마가 기존 fmp 파일 실측과
 동일함을 고정한다.
+
+EOD 배치(ALPHA-839)는 같은 집계를 다른 진입점으로 부른다 — ⑨배치 산출이 후크 산출과
+**바이트 동일**(계약: 같은 커밋 세대 집합이면 같은 산출), ⑩재실행 멱등, ⑪커밋 0건은
+빈 파일이 아니라 스킵(다른 writer 의 파티션 보호), ⑫원장이 주는 UTC 시각을 KST 로 접음
+(fake 가 안 재현하는 축이라 테스트가 직접 밟는다), ⑬확정 세션에 파생이 없는 거래일
+판정(파일명이 아니라 파티션 축).
 """
 
 from __future__ import annotations
 
 import io
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -30,7 +36,11 @@ from data_pipeline.minute.commit import MinuteCommitter
 from data_pipeline.minute.fake_collector import FakePriceCollector
 from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
-from data_pipeline.minute.rollup import maybe_rollup
+from data_pipeline.minute.rollup import (
+    maybe_rollup,
+    rollup_session,
+    unfilled_finalized_days,
+)
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
 # fmp 백필(~2026-07-31) 뒤의 첫 writer 날짜 — WRITER_SINCE 가드 안쪽이다
@@ -84,9 +94,21 @@ class Fixture:
         window["generation"] = generation
 
     def rollup_at(self, hhmm: str, session_date: str = SESSION_DATE) -> str | None:
+        # window_start 는 session_date 에서 만든다 — 둘을 따로 두면 계획 밖 window 로
+        # 넘어가 버킷 게이트가 먼저 죽고, 정작 보려던 판정에 도달하지 못한다.
+        day = date.fromisoformat(session_date)
         return maybe_rollup(
             self.storage, self.ledger, session_id=self.session_id, market="KR",
-            session_date=session_date, universe=UNIVERSE, window_start=w(hhmm),
+            session_date=session_date, universe=UNIVERSE,
+            window_start=datetime(
+                day.year, day.month, day.day, int(hhmm[:2]), int(hhmm[2:]), tzinfo=KST
+            ),
+        )
+
+    def rollup_session(self, session_date: str = SESSION_DATE) -> str | None:
+        return rollup_session(
+            self.storage, self.ledger, session_id=self.session_id, market="KR",
+            session_date=session_date,
         )
 
     def read_rows(self) -> list[dict]:
@@ -305,3 +327,109 @@ class TestWorkerHook:
         now = datetime(2026, 8, 4, 9, 10, tzinfo=KST)
         assert worker.tick(now) == "PROCESSED"  # WINDOW_FAILED 가 아니다
         assert {win["data_status"] for win in db.windows.values()} == {"VALID"}
+
+
+class TestSessionRollup:
+    """EOD 배치(ALPHA-839) — 후크와 **같은 바이트**를 내야 하고, 원장이 비면 안 쓴다."""
+
+    def test_matches_hook_output_byte_for_byte(self, tmp_path):
+        # 계약이 "같은 커밋 세대 집합이면 같은 산출"이다. 배치가 후크와 다른 바이트를
+        # 내면 마감 산출이 장중 산출을 조용히 갈아치우는 것이라, 자기 대조가 이 티켓의
+        # 핵심 실증이다(실환경 sha256 대조와 같은 판정을 여기서 고정한다).
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904",
+                     "0905", "0906", "0907", "0908", "0909"):
+            fx.commit(hhmm, [bar("500000", hhmm, 100, 110, 90, 100 + int(hhmm[-1]), 3)])
+        assert fx.rollup_at("0909") == DAY_KEY
+        hook_bytes = fx.storage.get_bytes(DAY_KEY)
+
+        assert fx.rollup_session() == DAY_KEY
+        assert fx.storage.get_bytes(DAY_KEY) == hook_bytes
+
+    def test_rerun_is_byte_identical(self, tmp_path):
+        # 백필 재실행이 앞선 산출을 덮어 지운 전례가 있다 — 멱등은 주장이 아니라 단언이다
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            fx.commit(hhmm, [bar("500000", hhmm, 100, 101, 99, 100, 1)])
+        assert fx.rollup_session() == DAY_KEY
+        first = fx.storage.get_bytes(DAY_KEY)
+        assert fx.rollup_session() == DAY_KEY
+        assert fx.storage.get_bytes(DAY_KEY) == first
+
+    def test_no_commits_skips_without_touching_file(self, tmp_path):
+        # `max()` 가 빈 시퀀스로 ValueError 를 내던 자리다. 더 중요한 건 **파일을 안
+        # 건드리는 것** — 원장에 커밋이 없다는 건 그날을 모른다는 뜻이지 그날 봉이
+        # 없다는 뜻이 아니라, 빈 파일로 덮으면 다른 writer 의 산출을 지운다.
+        fx = Fixture(tmp_path)
+        fx.storage.put_bytes(DAY_KEY, b"other-writer")
+        assert fx.rollup_session() is None
+        assert fx.storage.get_bytes(DAY_KEY) == b"other-writer"
+
+    def test_open_bucket_is_not_exposed_as_a_full_bar(self, tmp_path):
+        # 배치엔 버킷 게이트가 없다 — 닫힘 판정을 커밋 지평 하나에 맡긴다. 마지막
+        # 버킷의 커밋이 하나라도 없으면 그 버킷은 통째로 빠져야 한다(부분 봉 금지).
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904", "0905", "0906"):
+            fx.commit(hhmm, [bar("500000", hhmm, 100, 101, 99, 100, 1)])
+        assert fx.rollup_session() == DAY_KEY
+        assert {row["ts"] for row in fx.read_rows()} == {naive("0900")}
+
+    def test_ledger_timestamps_arrive_in_utc(self, tmp_path):
+        # 원장 컬럼은 timestamptz 라 psycopg 는 **UTC-aware** 로 준다. 배치는 그걸 KST
+        # 로 접어야 `%H%M` 키가 커밋·버킷 축과 맞는다 — 안 접으면 UTC 의 HHMM(0000)으로
+        # 찾아 전건 결손이 되고, 산출이 조용히 빈 파일이 된다.
+        # ⚠️ fake 는 계획을 KST-aware 로 심어 이 경로를 안 밟는다(픽스처가 운영과
+        # 다르면 결함이 초록으로 통과한다) — 그래서 여기서 명시적으로 UTC 로 바꾼다.
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            fx.commit(hhmm, [bar("500000", hhmm, 100, 101, 99, 100, 1)])
+        for row in fx.db.windows.values():
+            row["window_start"] = row["window_start"].astimezone(timezone.utc)
+            row["window_end"] = row["window_end"].astimezone(timezone.utc)
+        assert fx.rollup_session() == DAY_KEY
+        assert {row["ts"] for row in fx.read_rows()} == {naive("0900")}
+
+    def test_refuses_partition_owned_by_another_vendor(self, tmp_path):
+        # 후크에 걸린 WRITER_SINCE 가드가 배치 경로에도 걸려야 한다 — 안 걸리면
+        # 과거 --session-date 재실행 하나가 벤더 원본 파티션을 파생본으로 갈아치운다.
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            fx.commit(hhmm, [bar("500000", hhmm, 100, 101, 99, 100, 1)])
+        assert fx.rollup_session(session_date="2026-07-31") is None
+        assert fx.storage.list_keys("canonical/market_data/intraday_5m") == []
+
+
+class TestUnfilledFinalizedDays:
+    """구멍 판정 — 확정된 세션에 파생이 없는 거래일."""
+
+    def finalize(self, fx, session_date: str):
+        for row in fx.db.sessions.values():
+            if row["session_date"] == date.fromisoformat(session_date):
+                row["phase"] = "FINALIZED"
+
+    def unfilled(self, fx) -> list[str]:
+        return unfilled_finalized_days(
+            fx.storage, fx.ledger, market="KR",
+            dataset="price_minute", source_group="toss",
+        )
+
+    def test_finalized_day_without_partition_is_reported(self, tmp_path):
+        fx = Fixture(tmp_path)
+        self.finalize(fx, SESSION_DATE)
+        assert self.unfilled(fx) == [SESSION_DATE]
+
+    def test_partition_filled_by_another_filename_is_not_a_hole(self, tmp_path):
+        # 토스 백필이 같은 파티션에 다른 파일명으로 쓰고 소비자는 파티션 글롭으로 읽는다
+        # — `part-0` 존재로 판정하면 이미 채워진 날(실측 2026-08-03)을 결손으로 보고한다
+        fx = Fixture(tmp_path)
+        self.finalize(fx, SESSION_DATE)
+        fx.storage.put_bytes(
+            f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}"
+            "/part-toss-backfill.parquet", b"x",
+        )
+        assert self.unfilled(fx) == []
+
+    def test_unfinalized_session_is_not_a_hole(self, tmp_path):
+        # 아직 확정 안 된 세션은 "재료가 확정됐는데 파생이 없다"가 성립하지 않는다
+        fx = Fixture(tmp_path)
+        assert self.unfilled(fx) == []

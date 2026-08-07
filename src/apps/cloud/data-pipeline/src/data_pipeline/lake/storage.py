@@ -740,6 +740,20 @@ def canonical_price_minute_prefix(market: str, session_date: str) -> str:
     )
 
 
+def canonical_intraday_5m_prefix(market: str, trade_date: str) -> str:
+    """그 거래일 5분봉 파티션이 사는 프리픽스 — **구멍 판정의 스캔 축** (ALPHA-839).
+
+    키 조립을 두 곳에 두면 한쪽만 옮겨져 스캐너가 없는 prefix 를 훑고 빈 목록을
+    "구멍 없음"으로 확정한다(`canonical_price_minute_prefix` 와 같은 축).
+
+    ⚠️ 파티션에 파일이 `part-0.parquet` 하나뿐이라고 가정하면 안 된다 — 토스 백필이
+    같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓰고(ALPHA-828), 소비자는
+    파티션을 `*.parquet` 글롭으로 읽는다. `part-0` 부재를 구멍으로 읽으면 다른
+    파일명이 채운 거래일(실측 2026-08-03)을 영영 결손으로 보고한다.
+    """
+    return f"canonical/market_data/intraday_5m/market={market}/trade_date={trade_date}/"
+
+
 def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     """5분봉 canonical(dataset=intraday_5m)의 거래일 파일 키 (ALPHA-750).
 
@@ -763,10 +777,7 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     재집계해 통째로 덮어쓴다(결정적·멱등 — 불변 계약을 걸면 장중 갱신·정정 반영이
     영구 차단된다).
     """
-    return (
-        f"canonical/market_data/intraday_5m/market={market}"
-        f"/trade_date={trade_date}/part-0.parquet"
-    )
+    return f"{canonical_intraday_5m_prefix(market, trade_date)}part-0.parquet"
 
 
 def raw_news_minute_page_key(

@@ -517,6 +517,17 @@ class _Cursor:
             for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
                 assert clause in s, f"record_publish_failure SQL 에 {clause} 가 없다"
             self._publish_failure(params)
+        elif s.startswith("SELECT session_date FROM minute_ingestion_session"):
+            # 5분 파생 구멍 판정(ALPHA-839). phase 와 하한 절이 SQL 에서 빠지면 fake 가
+            # Python 으로 재현해 버려 못 잡는다 — 문면을 못 박는다(Rule 9). 하한이
+            # 없으면 이 writer 소관 밖의 옛 거래일이 영영 결손 목록에 남는다.
+            assert "phase = 'FINALIZED'" in s
+            assert "session_date >= %s" in s
+            self._rows = sorted(
+                (row["session_date"],) for row in self.db.sessions.values()
+                if (row["dataset"], row["source_group"]) == (params[0], params[1])
+                and row["phase"] == "FINALIZED" and row["session_date"] >= params[2]
+            )
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 

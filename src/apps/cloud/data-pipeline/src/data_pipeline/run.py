@@ -40,6 +40,7 @@ from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.news_consumer import news_consumer_cli
 from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
+from .minute.rollup import rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
@@ -160,6 +161,10 @@ def main(argv: list[str] | None = None) -> int:
                  # EOD(ALPHA-693): qc-minute-session=drain 끝난 세션의 누락 확정·확정
                  # (DUE 잔존→MISSING, FINALIZED). 원장 DB + storage(orphan 나열) 필요.
                  "qc-minute-session",
+                 # EOD(ALPHA-839): rollup-minute-session=그날 5분 파생을 마감 후 1회
+                 # 확정. 커밋 후크는 "방금 닫힌 버킷"에서만 발화해 지나간 날을 영영 안
+                 # 채운다. 원장 DB + storage(파티션 PUT·구멍 판정) 필요.
+                 "rollup-minute-session",
                  # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
                  # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
                  "plan-minute-session", "drain-minute-session",
@@ -217,13 +222,16 @@ def main(argv: list[str] | None = None) -> int:
                              "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
                              "여기서 바로잡지 않으면 복구 경로가 없다")
     parser.add_argument("--dataset", default=None,
-                        help="plan-minute-session: 세션 dataset(price_minute|news_minute)")
+                        help="plan-minute-session·rollup-minute-session: 세션 dataset"
+                             "(price_minute|news_minute)")
     parser.add_argument("--source-group", default=None,
-                        help="plan-minute-session: 세션 source_group(toss|bigkinds 등)")
+                        help="plan-minute-session·rollup-minute-session: 세션 "
+                             "source_group(toss|bigkinds 등)")
     parser.add_argument("--session-date", default=None,
-                        help="plan-minute-session·price-worker: 세션 날짜 YYYY-MM-DD"
-                             "(price-worker 미지정=오늘 KST — planner 와 같은 값이어야 "
-                             "같은 session_id 가 유도된다)")
+                        help="plan-minute-session·price-worker·rollup-minute-session: "
+                             "세션 날짜 YYYY-MM-DD(price-worker·rollup-minute-session "
+                             "미지정=오늘 KST — planner 와 같은 값이어야 같은 session_id "
+                             "가 유도된다)")
     parser.add_argument("--universe", default=None,
                         help="plan-minute-session·price-worker: 가격 세션의 universe JSON "
                              "경로(둘 다 필수·**같은 파일**). window 범위와 universe_hash 가 "
@@ -292,12 +300,13 @@ def main(argv: list[str] | None = None) -> int:
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step not in ("plan-minute-session", "start-minute-session",
-                         "stop-minute-session") and (
+                         "stop-minute-session", "rollup-minute-session") and (
         args.dataset is not None or args.source_group is not None
     ):
         raise SystemExit(
             "--dataset·--source-group 은 plan-minute-session·start-minute-session·"
-            f"stop-minute-session 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+            f"stop-minute-session·rollup-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step in ("price-consumer", "start-minute-session") and args.session_date is not None:
         raise SystemExit(
@@ -309,13 +318,22 @@ def main(argv: list[str] | None = None) -> int:
             "--universe 는 news-worker 에서 쓰지 않는다 — 뉴스 세션은 소스 단위라 "
             "universe 가 없다(무시되므로 거부)"
         )
+    if args.step == "rollup-minute-session" and args.universe is not None:
+        # 받아서 무시하면 "계획을 이 파일로 다시 세운다"는 오해를 판다 — 배치는 계획을
+        # 원장에서 읽는다(마감 후의 universe 파일은 그날 계획과 갈릴 수 있다).
+        raise SystemExit(
+            "--universe 는 rollup-minute-session 에서 쓰지 않는다 — 계획·커밋은 원장에서 "
+            "읽는다(무시되므로 거부)"
+        )
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
-                         "start-minute-session", "news-worker") and (
+                         "start-minute-session", "news-worker",
+                         "rollup-minute-session") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
-            f"price-consumer·start-minute-session·news-worker 에서만 쓴다 — "
+            f"price-consumer·start-minute-session·news-worker·rollup-minute-session "
+            "에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -358,6 +376,10 @@ def main(argv: list[str] | None = None) -> int:
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
     if args.step == "qc-minute-session":
         return qc_session_cli(settings, session_id=args.session_id)
+    if args.step == "rollup-minute-session":
+        return rollup_session_cli(settings, dataset=args.dataset,
+                                  source_group=args.source_group,
+                                  session_date=args.session_date)
     if args.step == "plan-minute-session":
         return plan_session_cli(
             settings, dataset=args.dataset, source_group=args.source_group,
