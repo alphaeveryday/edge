@@ -9,8 +9,10 @@ from edge_analysis.domain.window import (
     CommittedMinuteWindow,
     MinuteBar,
     WindowAggregationError,
+    WindowCoverage,
     WindowSpec,
     aggregate_window,
+    diagnose_window,
 )
 
 KST = timezone(timedelta(hours=9))
@@ -232,4 +234,79 @@ def test_aggregate_window_rejects_empty_foreign_session_or_out_of_range():
 
     with pytest.raises(WindowAggregationError) as caught:
         aggregate_window(window(1), (minute_bar(1),))
+    assert caught.value.reason.code == "MINUTE_OUT_OF_WINDOW"
+
+
+def test_diagnose_window_reports_complete_weighted_and_mapping_coverage():
+    bars = tuple(
+        minute_bar(minute, unit)
+        for minute in range(2)
+        for unit in ("A", "B")
+    ) + tuple(minute_bar(minute, "X") for minute in range(2))
+
+    result = diagnose_window(
+        window(2), bars, ("A", "B"),
+        weights={"A": 0.4, "B": 0.6},
+        sector_mapped_unit_ids=frozenset({"A"}),
+    )
+
+    assert isinstance(result, WindowCoverage)
+    assert (result.expected_minutes, result.expected_units, result.observed_pairs) == (2, 2, 4)
+    assert result.complete_units == 2 and result.window_min_coverage == 1.0
+    assert result.price_weight_coverage == pytest.approx(1.0)
+    assert result.sector_mapping_coverage == pytest.approx(0.4)
+    assert result.missing_unit_ids == () and result.missing_minutes == ()
+    assert result.unexpected_unit_ids == ("X",)
+
+
+def test_diagnose_window_exposes_partial_and_complete_absence_without_filling_zero():
+    bars = (minute_bar(0, "A"), minute_bar(0, "B"), minute_bar(1, "A"))
+
+    result = diagnose_window(
+        window(2), bars, ("A", "B"),
+        weights={"A": 0.4, "B": 0.6},
+        sector_mapped_unit_ids=frozenset({"A", "B"}),
+    )
+
+    assert result.complete_units == 1
+    assert result.window_min_coverage == pytest.approx(0.5)
+    assert result.price_weight_coverage == pytest.approx(0.4)
+    assert result.sector_mapping_coverage == pytest.approx(1.0)
+    assert result.missing_unit_ids == ("B",)
+    assert result.missing_minutes == (at(9, 1),)
+
+    absent = diagnose_window(window(2), tuple(minute_bar(m, "A") for m in range(2)),
+                             ("A", "B"))
+    assert absent.window_min_coverage == pytest.approx(0.5)
+    assert absent.missing_unit_ids == ("B",)
+    assert absent.price_weight_coverage is None
+    assert absent.sector_mapping_coverage is None
+
+
+def test_diagnose_window_rejects_bad_expectations_weights_and_duplicate_bars():
+    with pytest.raises(ValueError, match="비지 않은"):
+        diagnose_window(window(1), (), ())
+    with pytest.raises(ValueError, match="중복"):
+        diagnose_window(window(1), (), ("A", "A"))
+    with pytest.raises(ValueError, match="expected 밖"):
+        diagnose_window(window(1), (), ("A",), weights={"B": 1.0})
+    with pytest.raises(ValueError, match="유효하지"):
+        diagnose_window(window(1), (), ("A",), weights={"A": float("nan")})
+    with pytest.raises(ValueError, match="bool"):
+        diagnose_window(window(1), (), ("A",), weights={"A": True})
+    with pytest.raises(ValueError, match="합은 양수"):
+        diagnose_window(window(1), (), ("A",), weights={"A": 0.0})
+
+    with pytest.raises(WindowAggregationError) as caught:
+        diagnose_window(window(1), (minute_bar(0), minute_bar(0)), ("A",))
+    assert caught.value.reason.code == "DUPLICATE_MINUTE_BAR"
+
+
+def test_diagnose_window_rejects_foreign_session_and_out_of_window_bars():
+    with pytest.raises(WindowAggregationError) as caught:
+        diagnose_window(window(1), (minute_bar(0, session="foreign"),), ("A",))
+    assert caught.value.reason.code == "MINUTE_SESSION_MISMATCH"
+
+    with pytest.raises(WindowAggregationError) as caught:
+        diagnose_window(window(1), (minute_bar(1),), ("A",))
     assert caught.value.reason.code == "MINUTE_OUT_OF_WINDOW"
