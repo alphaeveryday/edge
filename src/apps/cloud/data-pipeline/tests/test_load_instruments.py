@@ -565,12 +565,19 @@ def test_board_disagreement_between_inputs_does_not_duplicate_the_instrument(
         {"ticker": "066970", "holdings_mic": "XKOS", "profile_mic": "XKRX"}]
 
 
-def test_stale_profile_canonical_fails_loud_instead_of_loading_nothing(tmp_path, monkeypatch):
-    """전종목을 읽었는데 **한 건도 못 쓰면** 비0으로 끝난다(Rule 12).
+def test_stale_profile_canonical_is_recorded_but_does_not_halt_the_pipeline(tmp_path, monkeypatch):
+    """전종목을 읽었는데 **한 건도 못 쓰면** 사유를 남긴다 — 다만 비0으로 끝내지는 않는다.
 
-    WHY: 실제 경로가 있다 — `market_code` 컬럼이 생기기 전에 쓰인 canonical 파티션을 읽으면
-    전 행이 MIC 결측으로 떨어진다. 그때 exit 0 이면 마스터가 안 자란 채 SFN 이 초록이고,
-    "조용한 0건 금지"라는 이 스텝 자신의 계약이 깨진다. 정제를 다시 돌리라는 신호가 필요하다.
+    WHY(남기는 쪽): 실제 경로가 있다 — `market_code`·`share_class` 컬럼이 생기기 전에 쓰인
+    canonical 파티션을 읽으면 전 행이 떨어진다. 아무 흔적이 없으면 마스터가 안 자란 걸
+    아무도 모른다.
+
+    WHY(비0이 아닌 쪽): 이 입력은 SFN 밖·ops 카탈로그 밖의 **수동 전용**이라 낡아 있는 것이
+    정상 상태일 수 있다. 그런데 `LoadInstrumentsCheckExitCode` 의 Default 가 NotifyFailure 라
+    비0을 내면 EnrichCorpCode 와 FeatureParallel 전체(TagNews·LoadDocuments·LoadEtfNav·
+    LoadPriceTriggers·LoadEtfHoldings·LoadEtfFlow)가 **사람이 손으로 정제를 돌릴 때까지 매일
+    밤 안 돈다**. 선택 입력의 낡음이 다섯 로더를 인질로 잡는 건 과하다 — 같은 함수의
+    `etf_profile_incomplete` 와 같은 정책이다(Rule 7: 한 파일에 두 정책을 두지 않는다).
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_instrument_profile(storage, "KR", "2026-08-06", [
@@ -579,11 +586,94 @@ def test_stale_profile_canonical_fails_loud_instead_of_loading_nothing(tmp_path,
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
 
-    assert load_instruments.run(storage, "R1", db=_db()) != 0
+    assert load_instruments.run(storage, "R1", db=_db()) == 0     # ← 파이프라인을 세우지 않는다
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["failures"][0]["reasons"] == ["instrument_profile_all_dropped"]
     assert "normalize-instrument-profile" in log["failures"][0]["error"]
+    assert log["ops"]["failed_records"] >= 2                      # 원장에서는 보인다
+
+
+def test_missing_share_class_column_is_not_counted_as_preferred(tmp_path, monkeypatch):
+    """`share_class` **부재**는 우선주가 아니라 스키마 드리프트다(ALPHA-830).
+
+    WHY: 이 컬럼이 생기기 전 파티션을 읽으면 전 행이 `share_class=None` 이다. 그걸 우선주와
+    한 카운터에 넣으면 로그에 `non_common: 2872` 가 찍히는데, 그 필드의 주석은 "정상값
+    (실측 113/2,872)" 이라 **커진 정상값**으로 읽힌다 — 아무도 안 본다. 전량 탈락 게이트도
+    이 축을 봐야 걸린다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자", share_class=None),
+        _instrument_profile_row("005935", "삼성전자우", share_class="구형우선주")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["instrument_profiles_no_share_class"] == 1
+    assert log["instrument_profiles_non_common"] == 1     # 둘이 합쳐지면 안 된다
+
+
+def test_board_transfer_after_leaving_every_etf_does_not_duplicate(tmp_path, monkeypatch):
+    """구성종목에서 사라진 뒤 이전상장해도 두 번 서지 않는다 — 판정은 **DB** 로 한다.
+
+    WHY: 어떤 종목이 모든 ETF 바스켓에서 빠지면 오늘의 구성종목 스냅샷에 없어, 레이크끼리
+    비교하는 검사는 대상이 사라진다. 그 뒤 이전상장하면 전종목이 새 MIC 를 말하고 자연키가
+    달라 **두 번째 instrument** 가 선다 — 해소 인덱스가 그 티커를 ambiguous 로 보아 그
+    회사가 영구 미해소가 된다. 정체성이 사는 곳은 레이크가 아니라 DB 다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    # 구성종목엔 없다(바스켓에서 빠졌다). 전종목만 새 시장으로 말한다.
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("066970", "엘앤에프", mic="XKRX", board="KOSPI")])
+    conn = _FakeConn(existing=[("XKOS", "066970", "inst_OLD")])   # DB 엔 코스닥으로 있다
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    assert _inserts(conn, "instrument") == []          # 두 번째 instrument 를 만들지 않는다
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["mic_conflicts"] == [
+        {"ticker": "066970", "db_mic": "XKOS", "input_mic": "XKRX"}]
+
+
+def test_rollback_counter_is_truthful_above_the_sample_cap(tmp_path, monkeypatch):
+    """롤백 되감기는 **표본이 아니라 카운터**에서 한다(ALPHA-830).
+
+    WHY: `created_rows` 에 상한이 걸린 뒤로, 되감기를 그 리스트에서 세면 상한을 넘긴 런에서
+    모자라게 되감긴다 — 아무것도 안 쓴 트랜잭션인데 로그가 `created: 2300` 을 주장한다.
+    첫 확대 런이 정확히 그 크기(~2,500종)라 이 경로가 곧 실제 경로다. 기존 롤백 테스트는
+    픽스처가 한두 건이라 상한 아래에서만 돌아 이 결함을 볼 수 없었다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    rows = [_instrument_profile_row(f"{i:06d}", f"종목{i}") for i in range(250)]
+    _write_instrument_profile(storage, "KR", "2026-08-06", rows)
+
+    class _Boom(_FakeConn):
+        def cursor(self):
+            cur = super().cursor()
+            inner = cur.execute
+
+            def execute(sql, params=None):
+                inner(sql, params)
+                if len([1 for s, _ in self.log
+                        if s.upper().startswith("INSERT INTO INSTRUMENT ")]) > 240:
+                    raise RuntimeError("DB 죽음")
+            cur.execute = execute
+            return cur
+
+    conn = _Boom()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) != 0
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["created"] == 0, "롤백됐는데 만들었다고 로그가 주장한다"
+    assert log["created_rows"] == []
+    assert log["ops"]["records_out"] == 0
 
 
 def test_only_the_latest_profile_partition_is_read(tmp_path, monkeypatch):

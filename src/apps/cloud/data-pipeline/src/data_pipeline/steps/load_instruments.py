@@ -220,6 +220,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = 0
     instruments_read = profiles_no_mic = skipped_non_common = 0
+    profiles_no_share_class = 0
     mic_conflicts: list[dict] = []
     etfs_read = etfs_existing = etfs_created = 0
     created_rows: list[dict] = []
@@ -259,14 +260,20 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         # **전건 동일**해서 오늘은 선택이 무의미하지만, 나중에 갈릴 때 조용히 뒤집히지
         # 않도록 순서를 고정하고 테스트로 못박는다.
         mic_by_ticker = {t: m for (m, t) in all_rows}  # 구성종목이 말한 시장(불일치 검출용)
+        # ⚠️ 아래 게이트는 **이 시장분만** 봐야 한다. 위 카운터들은 시장 루프 밖에
+        # 선언된 누적값이라, 시장이 둘 이상이 되면 합계끼리 비교해 엉뚱한 시장을
+        # 지목한다(오늘 LOADED_MARKETS 가 KR 하나뿐이라 안 드러날 뿐이다).
+        market_read = market_no_mic = market_no_share_class = 0
         for profile in _latest_instrument_profile_rows(storage, market):
             instruments_read += 1
+            market_read += 1
             mic, ticker = profile.get("market_code"), profile.get("ticker")
             if not mic or not ticker:
                 # 정제단이 이미 걸렀어야 하는 행. 구성종목의 원화현금(MIC 없음)과 **사유가
                 # 다르므로** 카운터를 따로 둔다 — 저쪽은 매 런 정상적으로 나오는 값이라
                 # 합치면 이쪽의 이상을 원장이 못 본다.
                 profiles_no_mic += 1
+                market_no_mic += 1
                 continue
 
             # **보통주만 마스터에 세운다**(ALPHA-830). `stk_isu_base_info` 는 상장 *종목*
@@ -276,7 +283,15 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             # 엔티티 해소가 그 이름을 **회사명 키로** 등록해(`entity_resolution` 이 COMMON
             # 에만 회사명 키를 건다) "회사명 → 그 회사 보통주" 약속이 깨진다.
             # 우선주를 제대로 세우려면 발행사 actor 로 이어야 하는데 그건 별건이다.
-            if profile.get("share_class") != "보통주":
+            share_class = profile.get("share_class")
+            if share_class is None:
+                # 컬럼 **부재**는 우선주가 아니라 스키마 드리프트다(이 컬럼이 생기기 전
+                # 파티션). 우선주와 한 카운터에 넣으면 2,872 가 "정상값이 커진 것"으로
+                # 보여 아무도 안 본다 — 위 전량 탈락 게이트도 이 축을 봐야 걸린다.
+                profiles_no_share_class += 1
+                market_no_share_class += 1
+                continue
+            if share_class != "보통주":
                 skipped_non_common += 1
                 continue
 
@@ -296,14 +311,27 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             # 소비부가 `or "KRW"` 로 받으므로 싣지 않는다(KR 상장분은 전부 원화).
             all_rows.setdefault((mic, ticker), {"constituent_name": profile.get("display_name")})
 
-        # 전종목 입력을 **읽었는데 한 건도 못 쓴** 상태는 조용한 0건이다(Rule 12). 실제
-        # 경로가 있다: 이 컬럼(market_code)이 생기기 전에 쓰인 canonical 파티션을 읽으면
-        # 전 행이 MIC 결측으로 떨어지는데, 그때 exit 0 이면 마스터가 안 자란 채로 초록이다.
-        if instruments_read and instruments_read == profiles_no_mic:
+        # 전종목 입력을 **읽었는데 한 건도 못 쓴** 상태는 사유와 함께 남긴다. 실제 경로가
+        # 있다: `market_code`·`share_class` 컬럼이 생기기 전에 쓰인 canonical 파티션을 읽으면
+        # 전 행이 그 축에서 떨어진다.
+        #
+        # ⚠️ **비0으로 끝내지 않는다.** 이 입력은 SFN 밖·ops 카탈로그 밖의 수동 전용이라
+        # (README "수집 — 상태머신 밖") 낡아 있는 것이 정상 상태일 수 있다. 그런데
+        # `LoadInstrumentsCheckExitCode` 의 Default 는 NotifyFailure 라, 여기서 비0을 내면
+        # EnrichCorpCode 와 FeatureParallel 전체(TagNews·LoadDocuments·LoadEtfNav·
+        # LoadPriceTriggers·LoadEtfHoldings·LoadEtfFlow)가 **사람이 손으로 정제를 돌릴
+        # 때까지 매일 밤 안 돈다**. 선택 입력의 낡음이 다섯 로더를 인질로 잡는 건 과하다.
+        # 드러남은 `failures` + 전용 카운터(`instrument_profiles_no_mic` 등)가 책임진다 —
+        # 둘 다 `ops.failed_records` 에 들어가 원장에서 보인다(같은 함수의
+        # `etf_profile_incomplete` 와 같은 정책. Rule 7 — 한 파일에 두 정책을 두지 않는다).
+        # 이걸 치명으로 만들려면 먼저 이 입력을 SFN·카탈로그에 넣어 필수 작업으로 세워야 한다.
+        unusable = market_no_mic + market_no_share_class
+        if market_read and market_read == unusable:
             failures.append({"market": market, "reasons": ["instrument_profile_all_dropped"],
-                             "error": f"전종목 {instruments_read}건이 전부 MIC 결측 — "
-                                      "정제 canonical 이 낡았는지 확인(normalize-instrument-profile)"})
-            exit_code = 1
+                             "error": f"전종목 {market_read}건이 전부 사용 불가"
+                                      f"(MIC 결측 {market_no_mic}·주식종류 결측 "
+                                      f"{market_no_share_class}) — 정제 canonical 이 낡았는지 "
+                                      "확인(normalize-instrument-profile)"})
 
         # ETF 마스터(ALPHA-462)는 구성종목과 **독립된 입력**(프로필 canonical)에서 온다 —
         # 구성종목이 비어도(수집 실패·신규 레이크) ETF 는 만들 수 있어야 한다. 둘 다 비었을
@@ -315,7 +343,12 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             logger.info("적재 대상 없음: market=%s", market)
             continue
 
-        created_before = len(created_rows)
+        # 롤백 기준선. **표본 리스트가 아니라 카운터를 되감는다** — `created_rows` 는 상한이
+        # 걸린 표본이라(_CREATED_SAMPLE_LIMIT) 거기서 세면 상한을 넘긴 런에서 되감기가
+        # 모자라고, 롤백된 트랜잭션이 만든 게 있다고 로그가 주장한다(관대한 방향으로 거짓).
+        created_at_market_start = created
+        etfs_created_at_market_start = etfs_created
+        sample_at_market_start = len(created_rows)
 
         # DB 실패를 잡아 사유와 함께 드러낸다 — 안 잡으면 트레이스백으로 죽어 **이 런이 뭘 했는지
         # 로그가 안 남는다**(Rule 12 — 결과는 항상 로그, 형제 정제 스텝과 같은 규약).
@@ -324,9 +357,26 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         try:
             with connect(db) as conn:
                 have = _existing_tickers(conn, {m for m, _ in all_rows})
+                # 이미 적재된 종목이 **어느 시장으로** 서 있는지. 레이크 쪽 비교(위 mic_by_ticker)
+                # 만으로는 못 잡는 경로가 있다: 어떤 종목이 모든 ETF 바스켓에서 빠지면 오늘의
+                # 구성종목 스냅샷에 없어 비교 대상이 사라지는데, 그 뒤 이전상장하면 전종목이
+                # 새 MIC 를 말하고 자연키가 달라 **두 번째 instrument 가 선다**. 정체성이
+                # 사는 곳은 레이크가 아니라 DB 라, 마지막 판정은 DB 로 한다.
+                db_mic_by_ticker = {t: m for (m, t) in have}
                 for (mic, ticker), row in sorted(all_rows.items()):
                     if (mic, ticker) in have:
                         existing += 1
+                        continue
+                    db_mic = db_mic_by_ticker.get(ticker)
+                    if db_mic and db_mic != mic:
+                        # 같은 티커가 DB 엔 다른 시장으로 있다 — 새로 만들면 해소 인덱스가
+                        # 그 티커를 ambiguous 로 보아 그 회사가 영구 미해소가 된다.
+                        # ⚠️ 기존 행의 MIC 를 **고치지는 않는다**: instrument 의 정체성 축을
+                        # 바꾸는 건 ADR-0027 소관이라 별건이다. 그래서 실제 이전상장이면 이
+                        # 충돌이 **매 런 반복 기록**되고 ops.failed_records 가 상시 비0이 된다
+                        # — 버그가 아니라 알려진 천장이다.
+                        mic_conflicts.append({"ticker": ticker, "db_mic": db_mic,
+                                              "input_mic": mic})
                         continue
                     name = row.get("constituent_name") or ticker
                     currency = row.get("currency") or "KRW"
@@ -369,11 +419,9 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             logger.exception("적재 실패(롤백): market=%s", market)
             failures.append({"market": market, "reasons": ["load_error"], "error": str(exc)})
             # 롤백됐으므로 이 시장에서 만든 건 없다 — 카운터를 되돌려 로그가 거짓말하지 않게.
-            created -= sum(1 for r in created_rows[created_before:]
-                           if r.get("instrument_type") != "ETF")
-            etfs_created -= sum(1 for r in created_rows[created_before:]
-                                if r.get("instrument_type") == "ETF")
-            del created_rows[created_before:]
+            created = created_at_market_start
+            etfs_created = etfs_created_at_market_start
+            del created_rows[sample_at_market_start:]
             exit_code = 1
 
     log = {
@@ -383,6 +431,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
         "instrument_profiles_read": instruments_read,
         "instrument_profiles_no_mic": profiles_no_mic,
+        # 0 이 정상. 0 이 아니면 canonical 에 share_class 컬럼이 없다(정제 재실행 필요).
+        "instrument_profiles_no_share_class": profiles_no_share_class,
         # 우선주 계열은 마스터에 세우지 않는다(정상값 — 실측 113/2,872).
         "instrument_profiles_non_common": skipped_non_common,
         # 0 이 정상이다. 0 이 아니면 두 입력이 같은 티커를 다른 시장으로 말한 것.
@@ -397,7 +447,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "ops": {
             "records_out": existing + created + etfs_existing + etfs_created,
             "failed_records": (len(failures) + skipped_no_mic + profiles_no_mic
-                               + len(mic_conflicts)),
+                               + profiles_no_share_class + len(mic_conflicts)),
         },
     }
     try:

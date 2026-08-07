@@ -25,9 +25,16 @@
 > 사건을 온톨로지 라벨로 뽑아(`tagging/`, ALPHA-138) `feature/news/assertions` 에 article_id 멱등
 > 병합 적재까지 완료했다(`tag-news`, ALPHA-365) — `entity_id` 는 NULL 로 두고 `text` 만 남긴다
 > (엔티티 해소·assertion RDB 적재는 후속, ALPHA-190).
-> **종목 마스터 적재(Step4, RDB)** 는 canonical ETF 구성종목을 Cloud Event Store 의
+> **종목 마스터 적재(Step4, RDB)** 는 canonical **두 입력**(ETF 구성종목 + KRX 상장 전종목
+> `instrument_profile`)을 Cloud Event Store 의
 > `entity`/`actor`/`company_profile`/`instrument`/`equity_profile` 로 멱등 적재한다
-> (`load-instruments`, ALPHA-372) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
+> (`load-instruments`, ALPHA-372·830) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
+> 전종목 축에서는 **보통주만** 세운다(우선주는 발행사 연결이 필요해 별건) — 실측 2,872종 중
+> 113종이 우선주 계열이다. 두 입력이 같은 티커를 다른 시장으로 말하면 만들지 않고 기록만
+> 한다(자연키가 `(market_code, ticker)` 라 만들면 같은 종목이 두 번 선다).
+> ⚠️ 전종목 canonical 은 **수동 수집**이라(아래 "상태머신 밖") 낡을 수 있다 — 낡아서 전 행이
+> 못 쓰이면 사유를 로그에 남기되 **비0으로 끝내지는 않는다**. 이 스텝의 exit code 는 뒤따르는
+> FeatureParallel 전체를 좌우해서, 선택 입력의 낡음이 다섯 로더를 세우면 안 되기 때문이다.
 > **가격변동 트리거 적재(RDB)** 는 canonical holdings 가중치와 구성종목 일봉으로 **가중 proxy
 > 수익률**(coverage 정규화 — 분석엔진 L0 와 같은 산식, 정본)을 계산해 absolute gate(3%,
 > `[price_triggers]`) 통과 거래일만 `price_movement_trigger` 로 멱등 적재한다
