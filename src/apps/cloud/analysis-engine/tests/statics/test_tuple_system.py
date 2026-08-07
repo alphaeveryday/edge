@@ -1085,6 +1085,25 @@ def test_etf_routing_sends_questions_to_the_dominant_layer():
     assert route_etf(None, premium=P()) is None
 
 
+def test_dominant_route_includes_exact_55_percent_boundary():
+    """55%는 지배층이고, 바로 아래부터 혼합이다 — 경계가 하루마다 흔들리면 안 된다."""
+    from types import SimpleNamespace as NS
+
+    from edge_analysis.statics.route import route_etf
+
+    dominant = route_etf(NS(
+        etf="TEST", etf_name="T", names=(), rho=None,
+        layers=(NS(kind="시장", name="시장", contribution=0.55),), idio=0.45,
+    ))
+    below = route_etf(NS(
+        etf="TEST", etf_name="T", names=(), rho=None,
+        layers=(NS(kind="시장", name="시장", contribution=0.549999),), idio=0.450001,
+    ))
+
+    assert dominant.kind == "시장" and dominant.share == pytest.approx(0.55)
+    assert below.kind == "혼합" and below.share < 0.55
+
+
 def test_mixed_workflow_runs_each_material_layer_and_idio_name(monkeypatch):
     """대표 라벨이 혼합이어도 시장·채택 섹터·고유종목 검정을 모두 실행한다."""
     from types import SimpleNamespace as NS
@@ -1119,6 +1138,55 @@ def test_mixed_workflow_runs_each_material_layer_and_idio_name(monkeypatch):
 
     assert calls.count(("섹터", "POLICY.CHANGE")) == 2
     assert ("고유", "EVENT.005930") in calls
+
+
+def test_mixed_workflow_includes_exact_20_percent_and_excludes_below(monkeypatch):
+    """혼합은 각 층 20%를 포함하고 바로 아래 층만 제외한다."""
+    from types import SimpleNamespace as NS
+
+    from edge_analysis.statics import etfcell, mkttrial, trial, verifier
+
+    market_calls: list[bool] = []
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        trial, "reduce_market", lambda *a, **k: market_calls.append(True) or {})
+    monkeypatch.setattr(trial, "say_market", lambda _r: "시장")
+    monkeypatch.setattr(mkttrial, "screen_market", lambda *a, **k: {})
+    monkeypatch.setattr(mkttrial, "say_screen", lambda _r: "시장 사건")
+    monkeypatch.setattr(etfcell, "_sector_types", lambda *a: ["POLICY.CHANGE"])
+    monkeypatch.setattr(
+        etfcell, "_observed_types", lambda *_a: ["EVENT.STOCK"])
+    monkeypatch.setattr(
+        verifier, "verify",
+        lambda _lake, _day, *, etype, layer, **_k:
+        (calls.append((layer, etype)) or [], "검정"))
+    monkeypatch.setattr(verifier, "say_implications", lambda _imps: "")
+
+    def selected(market: float, sector: float, idio: float) -> tuple[bool, bool, bool]:
+        market_calls.clear()
+        calls.clear()
+        roll = NS(
+            etf="091160",
+            layers=(
+                NS(kind="시장", name="시장", contribution=market,
+                   beta=1, lo=.8, hi=1.2, ret=market),
+                NS(kind="섹터", name="반도체", contribution=sector,
+                   beta=1, lo=.8, hi=1.2, ret=sector),
+            ),
+            idio=idio,
+            names=(NS(ticker="005930", label="삼성전자",
+                      contribution=1.0, weight=.2),),
+        )
+        etfcell._workflow(object(), roll, NS(kind="혼합", targets=()), "2026-07-31")
+        return (bool(market_calls),
+                any(layer == "섹터" for layer, _ in calls),
+                any(layer == "고유" for layer, _ in calls))
+
+    assert selected(0.20, 0.20, 0.60) == (True, True, True)
+    assert selected(0.40, 0.40, 0.20) == (True, True, True)
+    assert selected(0.199999, 0.20, 0.600001) == (False, True, True)
+    assert selected(0.20, 0.199999, 0.600001) == (True, False, True)
+    assert selected(0.40, 0.400001, 0.199999) == (True, True, False)
 
 
 def test_market_trial_refuses_when_treated_days_are_too_few():
