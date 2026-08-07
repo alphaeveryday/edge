@@ -1188,26 +1188,48 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 세거나 있는 분을 계획 밖으로 버린다.
 # ⚠️ `WRITER_SINCE`(2026-08-04) 이전 파티션은 거부한다 — 그 앞은 fmp·토스 백필의 정본이라
 # 과거 --session-date 재실행 하나가 벤더 원본을 파생본으로 갈아치운다.
-# 출력에 `unfilled_settled_days`(1분 원장이 멈춘 거래일인데 5분 파티션이 빈 날)가 함께
-# 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면 물어볼 곳이 그것뿐이다.
-# ⚠️ 판정 축이 `FINALIZED` 가 **아니라** `DRAINED` 이후 집합(`session_ops.DRAINED_PHASES`)
-# 이다. dev 실측(2026-08-07)에서 FINALIZED 세션은 **0건**이고 전 세션이 DRAINED 에 멈춰
-# 있다 — `qc-minute-session` 이 돌지 않는다. FINALIZED 로 물었으면 이 판정은 영영 빈
-# 목록을 내면서 "구멍 없음"으로 보였다. 같은 실측에서 새 축은 08-04 하나를 잡는다(분모 4).
+# 출력에 결손 판정이 함께 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면
+# 물어볼 곳이 그것뿐이다. 목록이 **둘**인 이유는 처방이 다르기 때문이다:
+#   · `unfilled_settled_days` — 파티션이 비었다 → **1분 재수집**이 필요하다
+#   · `contested_days` — 다른 writer 가 물고 있어 파생이 영구 정지했다 → **소유자 결정**
+#     이 필요하다(우리 part-0 이 이미 있어도 잡는다: 후크가 먼저 쓴 뒤 백필이 끼어들면
+#     그 시점의 **부분본**이 완성본처럼 남는데, 그게 운영에서 더 흔한 순서다)
+#   · `settled_day_count` — 그 **분모**(후보 일수). 빈 목록은 "구멍 없음"과 "본 게 없음"
+#     둘 다라 분모 없이는 못 가른다
+# ⚠️ 판정 축 셋:
+#   · 세션 phase = `session_ops.DRAINED_PHASES` **+ `DRAINING`**. FINALIZED 로 물으면 안
+#     된다 — dev 실측(2026-08-07)에서 FINALIZED 는 **0건**이고 전 세션이 DRAINED 에 멈춰
+#     있다(`qc-minute-session` 이 안 돈다). DRAINING 을 넣는 것은 stop 이 상한 초과한 날이
+#     거기 영구 고착하는데 **그날이 rollup 도 실패할 확률이 가장 높기** 때문이다.
+#   · 날짜 창은 `[WRITER_SINCE, 오늘)` — **`--session-date` 와 무관하게 오늘**이 상한이다.
+#     대상 날짜로 묶으면 과거 하루를 되돌리는 실행에서 감시 창이 가장 좁아진다.
+#   · 파티션은 **타 writer 파일 유무를 먼저** 보고, 없을 때만 우리 산출의 부재를 본다.
+#     한 축으로만 물으면 한쪽이 샌다 — "비었나"만 보면 거부된 날이 영원히 "채워짐"이고,
+#     "우리 part-0 있나"만 보면 후크가 먼저 쓴 뒤 끼어든 날의 부분본을 못 본다.
+# 실측(2026-08-07 dev): `unfilled=['2026-08-04']` · `contested=[]` · 분모 3.
+# ⚠️ 스캔은 rollup **뒤**에 돈다 — 창이 `[WRITER_SINCE, 오늘)` 이라 대상 날짜가 그 안에
+# 있어서, 앞서 돌면 방금 그날을 채운 실행이 같은 출력에서 그날을 결손이라 보고한다.
 # exit: 0=확정(또는 비거래일 no-op) / 1=확정 안 함(세션 없음·커밋 0건·닫힌 버킷 0·다른
-# writer 파일 존재·WRITER_SINCE 이전) / 2=판정 자체를 못 함(설정·인자 결손·DB/S3 장애).
+# writer 파일 존재·WRITER_SINCE 이전 — 전부 재시도로 안 낫는다) / 2=판정 자체를 못 함
+# (설정·인자 결손·DB/S3 장애 — 재시도하면 될 수 있다). 구멍 판정 스캔만 실패하면 rollup
+# 이 성공했을 때만 2 이고, rollup 이 거부했으면 **1 이 이긴다**(두 사실은 독립이다).
+# 우선순위: rollup 예외 → 2 · 정당한 거부(key 없음) → 1 · 스캔 실패만 → 2 · 그 외 0.
 # `--session-date` 미지정=오늘(KST). `--dataset` 은 price_minute 만 받는다 — 뉴스 세션도
 # 390 window 를 계획해서, 열어 두면 뉴스 커밋 지평으로 잘린 5분봉이 가격 파일을 덮는다.
-# 🔴 **스케줄 배선 전 선행 조건 둘**(terraform PR):
-#   ① `aws_iam_role_policy.minute_session` 은 레이크에 읽기만 준다("이 태스크는 레이크에
-#      아무것도 안 만든다"고 주석이 단언한다). 이 스텝은 PUT 을 하므로 `s3:PutObject` 가
-#      필요하다 — 없으면 매일 AccessDenied 로 죽는데 스케줄러는 RunTask 제출까지만 보므로
-#      **조용한 실패**가 된다.
-#   ② `OPS_KR_HOLIDAYS` 를 태스크 정의에 주입해야 한다 — 비면 공휴일이 거래일로 보여
-#      휴장일마다 exit 1 이 뜬다(이 스텝이 피하려는 소음 그 자체).
-# ⚠️ 시각은 stop(20:05 + 상한 1800초 + 확인분 60초 = 최악 20:36) 뒤여야 한다. 그 전에
-# 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어가고, 구멍 판정은 파티션 존재만 보므로
-# 그걸 못 잡는다(후크와의 배타성은 코드가 아니라 스케줄 시각이 진다).
+# 🔴 **스케줄 배선 전 선행 조건**(terraform PR): `aws_iam_role_policy.minute_session` 의
+#   s3 문장은 `["s3:GetObject","s3:ListBucket"]` 뿐이고 주석이 "쓰기는 없다(이 태스크는
+#   레이크에 아무것도 안 만든다)"고 단언한다. 이 스텝은 PUT 을 하므로 권한이 필요하다 —
+#   없으면 매일 AccessDenied 인데 스케줄러는 RunTask 제출까지만 보므로 **조용한 실패**다.
+#   ⚠️ 기존 문장에 `s3:PutObject` 를 **더하지 마라** — 그 Resource 가
+#   `[lake_bucket_arn, "${lake_bucket_arn}/*"]` 라 레이크 **전역 쓰기**가 된다. 별도
+#   문장으로 `"${lake_bucket_arn}/canonical/market_data/intraday_5m/*"` 에 한정한다
+#   (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례다).
+#   `OPS_KR_HOLIDAYS` 는 `aws_ecs_task_definition.minute_session` 에 **이미 주입돼 있다**
+#   — 그 task-def 를 재사용하면 자동 충족이고, 새 task-def 를 파면 필수다.
+# ⚠️ 시각은 stop 뒤여야 한다: cron 20:05 + 상한 1800초 + 확인분 60초 = 최악 20:36 이고,
+# 여기에 stop 태스크 자신의 Fargate 기동(59~122초)이 더 붙어 실제 최악은 ~20:38 이다.
+# 그 전에 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어간다(후크와의 배타성은 코드가
+# 아니라 스케줄 시각이 진다 — 이 스텝은 phase 게이트를 의도적으로 안 건다).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04
