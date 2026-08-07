@@ -1194,8 +1194,20 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 이다. dev 실측(2026-08-07)에서 FINALIZED 세션은 **0건**이고 전 세션이 DRAINED 에 멈춰
 # 있다 — `qc-minute-session` 이 돌지 않는다. FINALIZED 로 물었으면 이 판정은 영영 빈
 # 목록을 내면서 "구멍 없음"으로 보였다. 같은 실측에서 새 축은 08-04 하나를 잡는다(분모 4).
-# exit: 0=확정(또는 비거래일 no-op) / 1=확정 안 함(세션 없음·커밋 0건·WRITER_SINCE 이전)
-# / 2=판정 자체를 못 함. `--session-date` 미지정=오늘(KST).
+# exit: 0=확정(또는 비거래일 no-op) / 1=확정 안 함(세션 없음·커밋 0건·닫힌 버킷 0·다른
+# writer 파일 존재·WRITER_SINCE 이전) / 2=판정 자체를 못 함(설정·인자 결손·DB/S3 장애).
+# `--session-date` 미지정=오늘(KST). `--dataset` 은 price_minute 만 받는다 — 뉴스 세션도
+# 390 window 를 계획해서, 열어 두면 뉴스 커밋 지평으로 잘린 5분봉이 가격 파일을 덮는다.
+# 🔴 **스케줄 배선 전 선행 조건 둘**(terraform PR):
+#   ① `aws_iam_role_policy.minute_session` 은 레이크에 읽기만 준다("이 태스크는 레이크에
+#      아무것도 안 만든다"고 주석이 단언한다). 이 스텝은 PUT 을 하므로 `s3:PutObject` 가
+#      필요하다 — 없으면 매일 AccessDenied 로 죽는데 스케줄러는 RunTask 제출까지만 보므로
+#      **조용한 실패**가 된다.
+#   ② `OPS_KR_HOLIDAYS` 를 태스크 정의에 주입해야 한다 — 비면 공휴일이 거래일로 보여
+#      휴장일마다 exit 1 이 뜬다(이 스텝이 피하려는 소음 그 자체).
+# ⚠️ 시각은 stop(20:05 + 상한 1800초 + 확인분 60초 = 최악 20:36) 뒤여야 한다. 그 전에
+# 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어가고, 구멍 판정은 파티션 존재만 보므로
+# 그걸 못 잡는다(후크와의 배타성은 코드가 아니라 스케줄 시각이 진다).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04

@@ -29,7 +29,10 @@ ts 는 직전 분이라 ts 로 정렬하면 open/close 가 뒤바뀐다). 결손
 집계하고 로그로 남긴다(산출 스키마는 기존 fmp 파일과 동일해야 해서 컬럼로는 안 싣는다).
 
 쓰기는 **그날 전체 재집계 → part-0.parquet 통째 overwrite** 다 — 하루 5분봉은
-≤ 362종×78봉 ≈ 2.8만 행이라 통재작성이 싸고, 부분 파일 병합·순서 문제가 아예 없다.
+≤ 362종×78봉 ≈ 2.8만 행이라 통재작성이 싸고, 우리 파일 안에서는 부분 병합·순서 문제가
+없다. ⚠️ **파티션 안에서는 다르다**(2026-08-07 정정) — 같은 파티션에 다른 writer 가 다른
+파일명으로 쓰고 소비자는 글롭으로 읽으므로, 나란히 놓이면 겹치는 봉이 두 번 세어진다.
+`_rollup_day` 가 타 writer 파일을 발견하면 산출하지 않는 이유다.
 # ponytail: 매 버킷 마감마다 그날 1분 artifact 전부를 다시 읽는다(장 후반 ~390 GET)
 # — 인프로세스 증분 캐시는 이 비용이 실측으로 문제가 될 때 붙인다.
 """
@@ -200,6 +203,20 @@ def _rollup_day(
             session_date, WRITER_SINCE,
         )
         return None
+    day_key = canonical_intraday_5m_key(market, session_date)
+    # ⚠️ 같은 파티션을 **다른 writer 가 다른 파일명으로** 쓸 수 있다(토스 백필의
+    # `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
+    # 읽으므로 우리 `part-0` 을 나란히 놓으면 겹치는 (ticker, ts) 가 **두 번 세어진다**
+    # (거래량 이중계상 → β 패널 오염). 백필은 "쓰는 시점의 part-0" 만 대조하므로 나중에
+    # 우리가 쓰면 그 비겹침 보장이 깨진다. 덮어쓸 수도 지울 수도 없으니 사람이 정한다.
+    foreign = [k for k in storage.list_keys(
+        canonical_intraday_5m_prefix(market, session_date)) if k != day_key]
+    if foreign:
+        logger.error(
+            "5분 롤업 %s: 파티션에 다른 writer 의 파일이 있다 %s — 나란히 쓰면 행이 두 번 "
+            "세어진다. 산출하지 않는다(소유자를 정한 뒤 재실행)", session_date, foreign,
+        )
+        return None
 
     # ── 그날 전체 재집계: **닫힌 버킷**의 커밋된 window 만, window 오름차순 ──
     # (bucket, symbol) → {open,high,low,close,volume}
@@ -223,6 +240,18 @@ def _rollup_day(
     bucket_last: dict[datetime, datetime] = {}  # bucket → 그 버킷의 마지막 계획 분
     for start, _ in planned:  # planned 는 오름차순이라 마지막 대입이 이긴다
         bucket_last[_bucket_of(start)] = start
+    if all(last > horizon for last in bucket_last.values()):
+        # 커밋은 있는데 **닫힌 버킷이 하나도 없다**(예: 09:00 만 커밋되고 세션이 죽었다).
+        # 위 `horizons` 가드는 커밋 0건만 막으므로 여기가 안 막으면 아래 집계가 전부
+        # 걸러져 `aggregates` 가 비고, 그 아래 "빈 파일이라도 쓴다" 경로로 떨어져
+        # **다른 writer 가 채운 파티션을 0행 parquet 로 덮는다**(실측 1,665B).
+        # 그 경로는 "정정이 그날 봉을 지웠다"는 후크 전제용이라 여기 오면 안 된다 —
+        # 닫힌 봉이 없는 것과 봉이 폐기된 것은 다른 사실이다.
+        logger.warning(
+            "5분 롤업 %s: 커밋 지평 %s 까지 닫힌 버킷이 0개 — 산출 없이 건너뛴다(파일 유지)",
+            session_date, horizon.strftime("%H%M"),
+        )
+        return None
     for start, _ in planned:
         if bucket_last[_bucket_of(start)] > horizon:
             continue  # 아직 안 닫힌 버킷 — 부분 관측을 완성 봉처럼 노출하지 않는다
@@ -298,14 +327,14 @@ def _rollup_day(
     )
     sink = io.BytesIO()
     pq.write_table(table, sink)
-    key = canonical_intraday_5m_key(market, session_date)
-    storage.put_bytes(key, sink.getvalue())
-    return key
+    storage.put_bytes(day_key, sink.getvalue())
+    return day_key
 
 
 def unfilled_settled_days(
-    storage: Storage, ledger, *, market: str, dataset: str, source_group: str
-) -> list[str]:
+    storage: Storage, ledger, *, market: str, dataset: str, source_group: str,
+    before: date,
+) -> tuple[list[str], int]:
     """1분 원장이 멈춘 거래일인데 5분 파티션이 비어 있는 날 (ALPHA-839).
 
     5분 파생에는 원장이 없다 — 어느 거래일이 어느 세대집합에서 나왔는지 기록하는 표가
@@ -327,25 +356,48 @@ def unfilled_settled_days(
 
     `WRITER_SINCE` 이전은 애초에 이 writer 의 소관이 아니라 대상에서 뺀다 — 넣으면
     영영 안 지워지는 결손 목록이 되고, 그러면 아무도 안 읽는다.
+
+    ⚠️ 그래도 **자가 해소되지 않는 항목이 남는다** — 워커가 하루 통째로 안 돈 날은 커밋이
+    0건이라 재실행해도 파생이 안 생기고, 매 실행마다 같은 날을 다시 보고한다. 억제 축을
+    두지 않은 것은 의도다: 그건 진짜 구멍이고, 지우려면 1분 재수집이 필요하다.
+
+    반환은 **(결손 거래일, 후보 일수)** 다. 분모를 같이 주는 이유는 빈 목록이 "구멍
+    없음"과 "본 게 없음" 둘 다이기 때문이다 — dataset·source_group·phase·날짜 하한 넷 중
+    하나만 빗나가도 후보가 0이 되고, 그때 목록만 보면 초록으로 읽힌다.
     """
-    settled = _settled_session_dates(ledger, dataset=dataset, source_group=source_group)
-    return [
+    settled = _settled_session_dates(
+        ledger, dataset=dataset, source_group=source_group, before=before
+    )
+    unfilled = [
         trade_date for trade_date in settled
         if not storage.list_keys(canonical_intraday_5m_prefix(market, trade_date))
     ]
+    return unfilled, len(settled)
 
 
-def _settled_session_dates(ledger, *, dataset: str, source_group: str) -> list[str]:
-    """원장이 멈춘 세션의 거래일 — `WRITER_SINCE` 이후만, 오름차순."""
+def _settled_session_dates(
+    ledger, *, dataset: str, source_group: str, before: date
+) -> list[str]:
+    """원장이 더 이상 진행하지 않는 세션의 거래일 — `WRITER_SINCE` 이후·`before` 이전.
+
+    ⚠️ phase 집합에 `DRAINING` 을 **포함한다**. `DRAINED_PHASES` 만 쓰면 `stop` 이 상한
+    초과로 exit 1 한 날이 `DRAINING` 에 영구 고착하는데(ack 할 워커가 이미 없고 다음날
+    start 는 새 session_id 를 만든다), 그날은 rollup 도 실패할 확률이 가장 높다 —
+    **가장 위험한 날이 판정에서 구조적으로 빠진다.**
+
+    ⚠️ 그래서 `before`(보통 오늘 KST)로 **오늘을 뺀다**. 안 빼면 마감 전에 도는 실행이
+    진행 중인 `DRAINING` 을 고착으로 오인해 매일 거짓 양성으로 시작한다. 오늘의 결손은
+    이 판정이 아니라 그 실행 자신의 exit code 와 `key` 가 말한다.
+    """
     from .session_ops import DRAINED_PHASES
 
     with ledger.connect_fn(ledger.db) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT session_date FROM minute_ingestion_session "
             "WHERE dataset = %s AND source_group = %s AND phase = ANY(%s) "
-            "AND session_date >= %s ORDER BY session_date",
-            (dataset, source_group, sorted(DRAINED_PHASES),
-             date.fromisoformat(WRITER_SINCE)),
+            "AND session_date >= %s AND session_date < %s ORDER BY session_date",
+            (dataset, source_group, sorted(DRAINED_PHASES | {"DRAINING"}),
+             date.fromisoformat(WRITER_SINCE), before),
         )
         return [session_date.isoformat() for (session_date,) in cur.fetchall()]
 
@@ -358,33 +410,58 @@ _MARKET = "KR"
 def rollup_session_cli(
     settings, *, dataset: str | None, source_group: str | None, session_date: str | None
 ) -> int:
-    """`run rollup-minute-session [--session-date YYYY-MM-DD]` (EOD 스케줄이 부른다).
+    """`run rollup-minute-session --dataset … --source-group … [--session-date …]`.
 
-    exit: 0=그날 파생을 확정했다(또는 비거래일 no-op) / 1=확정하지 않았다(세션 없음·
-    커밋 0건·`WRITER_SINCE` 이전 — 사유는 출력에 있다) / 2=판정 자체를 못 함(db 설정
-    결손·날짜 형식 오류·DB/S3 장애). 셋으로 가르는 이유는 처방이 다르기 때문이다 —
-    1 은 사람이 봐야 하고 2 는 재시도하면 될 수 있다(`qc-minute-session` 과 같은 규약).
+    EOD 스케줄이 부를 자리다(스케줄 자체는 terraform — 별 PR). 그날 5분 파생을 마감 후
+    한 번 확정하고, 지나간 거래일의 결손을 함께 보고한다.
 
-    ⚠️ dataset·source_group 어휘 오타는 `_resolve` 가 `SystemExit` 으로 내므로 **1** 이다
-    (`stop-minute-session` 과 같은 경로). 2 가 아닌 게 규약상 어색해 보이지만, 오타도
-    "확정하지 않았고 사람이 봐야 한다"에 들어맞고 재시도로 낫지 않는다.
+    exit: 0=확정했다(또는 비거래일 no-op) / 1=확정하지 않았다(세션 없음·커밋 0건·닫힌
+    버킷 0·다른 writer 파일 존재·`WRITER_SINCE` 이전 — 사유는 로그에) / 2=판정 자체를
+    못 함(설정·인자 결손·DB/S3 장애). `qc-minute-session`·`plan-minute-session` 과 같은
+    규약이다 — **인자 결손도 2** 다(`_resolve` 의 `SystemExit`(1) 을 쓰지 않고 여기서
+    검증하는 이유. 1 은 "판정은 됐는데 결과가 나쁘다"라 SFN·운영자가 처방을 못 가른다).
 
-    ⚠️ 세션 phase 를 게이트로 걸지 **않는다**. drain 이 상한 초과로 안 끝난 날에도
-    파생은 나와야 하고(닫힌 버킷만 싣는 규칙이 부분 노출을 이미 막는다), 걸면 stop 이
-    막힌 하루가 파생까지 통째로 잃는다. 대신 phase 를 출력에 실어 드러낸다.
+    ⚠️ 세션 phase 를 게이트로 걸지 **않는다**. drain 이 상한 초과로 안 끝난 날에도 파생은
+    나와야 하고(닫힌 버킷만 싣는 규칙이 부분 노출을 이미 막는다), 걸면 stop 이 막힌 하루가
+    파생까지 통째로 잃는다. 대신 phase 를 출력에 실어 드러낸다.
+    🔴 그 대가로 **후크와의 배타성이 코드에 없다** — 20:05(stop) 이전에 부르면 recovery
+    레인의 늦은 커밋과 같은 `part-0` 을 두고 경합하고, 배치가 나중에 착지하면 그 커밋이
+    빠진 산출이 남는다. 배타성은 스케줄 시각이 진다(terraform PR).
     """
+    import json
+    from datetime import datetime
+
     from ..db import stable_domain_id
     from ..lake import make_storage
     from ..ops.trading_calendar import is_trading_day
     from .repository import MinuteLedger
-    from .session_ops import _resolve
+    from .states import DATASET_PRICE_MINUTE, SOURCE_GROUPS_BY_DATASET
 
     if settings.db is None:
         logger.error(
             "db 설정 없음 — rollup-minute-session 은 세션 원장 필수(DATA_PIPELINE_DB__* 주입)"
         )
         return 2
-    dataset, source_group = _resolve(dataset, source_group)
+    # ⚠️ dataset 을 1분 원장 어휘 전체(`MINUTE_DATASETS`)로 열면 안 된다 — `_rollup_day`
+    # 가 읽는 artifact 키는 **가격 분봉 전용**이고(`canonical_price_minute_artifact_key`)
+    # 뉴스 세션도 390 window 를 계획하므로 `committed` 가 안 빈다. 그러면 뉴스 레인의
+    # 커밋 지평으로 잘린 5분봉이 **가격 레인이 만든 온전한 파일을 덮는다**. `eod.py` 가
+    # orphan 스캔에서 같은 이유로 같은 가드를 둔다(`_PRICE_DATASET`).
+    if dataset != DATASET_PRICE_MINUTE:
+        logger.error(
+            "--dataset 은 %s 여야 한다: %s — 5분 파생은 가격 분봉 canonical 전용 경로다",
+            DATASET_PRICE_MINUTE, dataset,
+        )
+        return 2
+    if source_group not in SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE]:
+        # 오타는 없는 session_id 를 유도해 "세션 없음"으로 보인다 — 지목이 틀린 것과
+        # 그날이 안 돈 것은 처방이 다르다.
+        logger.error(
+            "--source-group 이 %s 의 어휘 밖이다: %s (아는 값 %s)",
+            DATASET_PRICE_MINUTE, source_group,
+            sorted(SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE]),
+        )
+        return 2
     if session_date is None:
         # 마감 후에 도는 스케줄이라 오늘(KST)이 곧 그 거래일이다. 스케줄러가 넘기는
         # 시각은 UTC 라 KST 저녁이 전날로 읽힌다 — 그래서 인자가 아니라 KST 로 잡는다
@@ -396,50 +473,70 @@ def rollup_session_cli(
         except ValueError:
             logger.error("--session-date 가 YYYY-MM-DD 가 아니다: %s", session_date)
             return 2
-    if not is_trading_day(day):
-        # 스케줄이 MON-FRI 라 휴장일에도 뜬다. 그날은 세션 자체가 없어 1(확정 안 됨)이
-        # 되는데, 그건 "결손"이 아니라 정상이다 — 매 휴장일이 빨간 런이 되면 진짜
-        # 결손이 그 소음에 묻힌다.
-        logger.info("5분 롤업 %s: 비거래일 — no-op", day.isoformat())
-        print(json.dumps(
-            {"session_date": day.isoformat(), "trading_day": False, "key": None},
-            ensure_ascii=False, sort_keys=True,
-        ))
-        return 0
 
     session_id = stable_domain_id("msn", dataset, source_group, day.isoformat())
     ledger = MinuteLedger(db=settings.db)
     storage = make_storage(settings.storage)
+    result = {
+        "session_id": session_id, "session_date": day.isoformat(),
+        "trading_day": is_trading_day(day), "phase": None, "key": None,
+        "unfilled_settled_days": None, "settled_day_count": None,
+    }
+    # ⚠️ 구멍 판정을 **rollup 과 다른 try 로 분리한다**. 같은 블록에 두면 PUT 실패
+    # (AccessDenied 등)에서 판정이 계산도 출력도 안 되는데, 이 레인엔 exit≠0 백스톱이
+    # 없어(스케줄러는 RunTask 제출까지만 본다) 그 목록이 유일한 신호다 — 실패한 날에
+    # 꺼지는 감시는 감시가 아니다.
+    exit_code = 0
+    try:
+        unfilled, candidates = unfilled_settled_days(
+            storage, ledger, market=_MARKET, dataset=dataset,
+            source_group=source_group, before=day,
+        )
+        result["unfilled_settled_days"], result["settled_day_count"] = unfilled, candidates
+        if unfilled:
+            # 확정을 막지 않는다 — 오늘 산출과 다른 날의 결손은 별개 사실이고, 여기서
+            # 막으면 과거 구멍 하나가 오늘 파생을 무기한 세운다.
+            logger.warning(
+                "1분 원장이 멈춘 거래일인데 5분 파티션이 빈 날 %d건 / 후보 %d일: %s",
+                len(unfilled), candidates, unfilled,
+            )
+        elif not candidates:
+            # 빈 목록이 "구멍 없음"인지 "본 게 없음"인지 출력만으로는 같다 — 분모 0 은
+            # 판정 축이 빗나갔다는 신호이므로 조용히 넘기지 않는다.
+            logger.warning(
+                "구멍 판정 후보가 0일이다(dataset=%s source_group=%s, %s 이후·%s 이전) — "
+                "판정 축이 원장과 안 맞을 수 있다", dataset, source_group, WRITER_SINCE, day,
+            )
+    except Exception:
+        logger.exception("5분 파생 구멍 판정 실패(rollup 은 계속한다)")
+        exit_code = 2
+
+    if not result["trading_day"]:
+        # 스케줄이 MON-FRI 라 휴장일에도 뜬다. 그날은 세션 자체가 없어 1(확정 안 됨)이
+        # 되는데, 그건 결손이 아니라 정상이다 — 매 휴장일이 빨간 런이 되면 진짜 결손이
+        # 그 소음에 묻힌다. ⚠️ 출력 **형상은 정상 경로와 같게** 유지한다(`eod.py` 규약):
+        # 키가 빠지면 소비자가 없는 키를 0 으로 읽어 "결손 없음"으로 오독한다.
+        logger.info("5분 롤업 %s: 비거래일 — no-op", day.isoformat())
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return exit_code
+
     try:
         snapshot = ledger.session_snapshot(session_id=session_id)
-        key = None if snapshot is None else rollup_session(
-            storage, ledger, session_id=session_id,
-            market=_MARKET, session_date=day.isoformat(),
-        )
-        # 오늘 것과 무관하게 **매번** 훑는다 — 이 판정의 목적이 "안 돌았는데 조용한
-        # 것"을 잡는 것이라, 오늘이 성공한 날에만 보면 정작 못 본 날을 영영 못 본다.
-        unfilled = unfilled_settled_days(
-            storage, ledger, market=_MARKET, dataset=dataset, source_group=source_group
-        )
+        result["phase"] = None if snapshot is None else snapshot.get("phase")
+        if snapshot is None:
+            logger.error(
+                "5분 롤업 %s: 거래일인데 1분 세션이 없다 — Premarket 계획이 안 돌았다"
+                "(session=%s)", day.isoformat(), session_id,
+            )
+        else:
+            result["key"] = rollup_session(
+                storage, ledger, session_id=session_id,
+                market=_MARKET, session_date=day.isoformat(),
+            )
     except Exception:
         logger.exception("5분 롤업 실행 실패: %s", session_id)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 2
 
-    if snapshot is None:
-        logger.error(
-            "5분 롤업 %s: 거래일인데 1분 세션이 없다 — Premarket 계획이 안 돌았다(session=%s)",
-            day.isoformat(), session_id,
-        )
-    if unfilled:
-        # 확정을 막지 않는다 — 오늘 산출과 다른 날의 결손은 별개 사실이고, 여기서 막으면
-        # 과거 구멍 하나가 오늘 파생을 무기한 세운다.
-        logger.warning(
-            "1분 원장이 멈춘 거래일인데 5분 파티션이 빈 날 %d건: %s",
-            len(unfilled), unfilled,
-        )
-    print(json.dumps({
-        "session_id": session_id, "session_date": day.isoformat(), "trading_day": True,
-        "phase": None if snapshot is None else snapshot.get("phase"),
-        "key": key, "unfilled_settled_days": unfilled,
-    }, ensure_ascii=False, sort_keys=True))
-    return 0 if key else 1
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return exit_code or (0 if result["key"] else 1)

@@ -523,12 +523,16 @@ class _Cursor:
             # 없으면 이 writer 소관 밖의 옛 거래일이 영영 결손 목록에 남는다.
             # ⚠️ `phase = 'FINALIZED'` 단일값이면 안 된다 — dev 원장에 FINALIZED 가
             # 0건이라(전 세션 DRAINED 정지) 판정이 영영 빈 목록을 낸다.
+            # ⚠️ 상한(`< %s`)이 SQL 에서 빠지면 오늘이 후보에 들어와 진행 중인 DRAINING 을
+            # 고착으로 오인한다 — 매일 거짓 양성으로 시작한다.
             assert "phase = ANY(%s)" in s
             assert "session_date >= %s" in s
+            assert "session_date < %s" in s
             self._rows = sorted(
                 (row["session_date"],) for row in self.db.sessions.values()
                 if (row["dataset"], row["source_group"]) == (params[0], params[1])
-                and row["phase"] in params[2] and row["session_date"] >= params[3]
+                and row["phase"] in params[2]
+                and params[3] <= row["session_date"] < params[4]
             )
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")

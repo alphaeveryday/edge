@@ -772,7 +772,13 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     - source_vendor: string (fmp 원본과 파생을 가르는 필터 축)
     - available_at: timestamp[us] naive KST = ts + 5분(구간 끝)
 
-    거래일당 1파일(전 종목 행). generation 축 없음 — 파생물이라 원장이 확정한 1분
+    ⚠️ **"거래일당 1파일"이 아니다**(2026-08-07 정정). 이 키는 1분 롤업 writer 의 파일
+    이고, 같은 파티션에 다른 writer 가 다른 파일명으로 쓴다(토스 백필
+    `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
+    읽으므로 **파티션 = 여러 파일의 합집합**이고, 겹치는 (ticker, ts) 는 두 번 세어진다
+    — 비겹침을 보장하는 주체는 각 writer 다(`rollup.WRITER_SINCE`, 롤업의 타 writer 가드).
+
+    generation 축 없음 — 파생물이라 원장이 확정한 1분
     세대에서 언제든 같은 규칙으로 재유도되고, 5분 버킷이 닫힐 때마다 그날 전체를
     재집계해 통째로 덮어쓴다(결정적·멱등 — 불변 계약을 걸면 장중 갱신·정정 반영이
     영구 차단된다).
