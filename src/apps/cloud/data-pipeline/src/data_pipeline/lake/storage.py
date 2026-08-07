@@ -222,8 +222,13 @@ def raw_instrument_profile_partition(
 
     ETF 프로필과 동형(bronze 통일) — 상장 종목의 식별·명칭이라 스냅샷이고, 매 run 이 그
     기준일의 전종목을 수집일(ingest_date) 기준으로 append 한다. **벤더 기준일(basDd)은
-    수집일과 별개로 각 레코드에 보존**한다(ALPHA-829): KRX 는 당일 조회를 막아
-    `basDd < 오늘` 이라 이 둘이 **항상 다르다** — 수집일로 기준일을 대신 읽으면 하루 어긋난다.
+    수집일과 별개로 각 레코드에 보존**한다(ALPHA-829): KRX 가 당일 조회를 막아 basDd 는
+    직전 거래일이므로, 수집일을 기준일로 대신 읽으면 마스터가 하루 앞선 날짜를 주장한다.
+
+    ⚠️ 두 날짜가 **항상 다르지는 않다**. ingest_date 는 UTC, basDd 는 KST 파생이라
+    08:00~09:00 KST(= 전날 23:00~24:00 UTC) 실행에서는 우연히 같은 값이 된다. 그래서
+    "다르니까 구분된다"에 기대지 말고 **각자 자기 축을 쓴다** — canonical 은 행의 basDd 만
+    본다(`canonical_instrument_profile_partition`).
     """
     return (
         f"raw/source={source}/dataset=instrument_profile/market={market}"
@@ -244,7 +249,7 @@ def parse_raw_instrument_profile_key(key: str) -> dict[str, str]:
     """raw instrument_profile 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
 
     ⚠️ 여기엔 **기준일이 없다**. canonical 의 as_of_date 는 키가 아니라 **행의 `bas_dd`**
-    에서 온다(당일 조회 차단 때문에 수집일과 항상 다르다 — 파티션 빌더 주석 참조).
+    에서 온다 — ingest_date 로 대신 읽으면 안 된다(파티션 빌더 주석 참조).
     """
     segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
     return {

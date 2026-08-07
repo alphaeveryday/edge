@@ -122,10 +122,11 @@ def test_stop_fetch_propagates_because_it_is_a_source_wide_problem():
 
 # ------------------------------------------------------------------ raw 스텝
 
-def _ingest(tmp_path, by_board, **kw):
+def _ingest(tmp_path, by_board, *, ingest_date=None, **kw):
     storage = LocalStorage(tmp_path / "lake")
     source = _source(by_board, **kw)
-    return ingest_raw_instrument.run(storage, source, _RUN_ID), storage
+    return (ingest_raw_instrument.run(storage, source, _RUN_ID, ingest_date=ingest_date),
+            storage)
 
 
 def _log(storage, prefix="operations_archive/"):
@@ -162,6 +163,24 @@ def test_gate_catches_a_missing_market_that_row_count_alone_would_miss(tmp_path)
     assert [k for k in storage.list_keys("raw/")] == []
     assert "시장 결손" in _log(storage)["error"]
     assert "['KONEX']" in _log(storage)["error"]
+
+
+def test_gate_blocks_a_plausible_looking_but_truncated_master(tmp_path):
+    """세 시장이 다 있고 형태도 멀쩡한데 **행수만 적은** 마스터를 막는다(ALPHA-829).
+
+    WHY: 이건 행수 하한이 **유일하게** 잡는 실패다. KRX 가 페이징을 도입해 보드마다 100행만
+    돌려주기 시작하면 — 시장 집합 통과, 티커 비율 1.0, 한글명 비율 1.0 — 다른 검사는 전부
+    초록이다. 그렇게 착지한 300종짜리 마스터는 그럴듯해 보이고, 빠진 2,500여 종은 영구
+    미해소가 된다. 이 테스트가 없으면 하한을 0 으로 낮춰도 스위트가 초록이다.
+    """
+    boards = _full_boards(n_kospi=100, n_kosdaq=100, n_konex=100)   # 300 < 하한 2,000
+    code, storage = _ingest(tmp_path, boards)
+    assert code != 0
+    assert [k for k in storage.list_keys("raw/")] == []
+    error = _log(storage)["error"]
+    assert "행수" in error
+    # 다른 검사는 통과했음을 함께 고정한다 — 안 그러면 이 테스트가 무엇을 재는지 모호해진다
+    assert "시장 결손" not in error and "티커" not in error and "한글" not in error
 
 
 def test_gate_lets_one_odd_ticker_through_but_blocks_a_systemic_break(tmp_path):
@@ -214,11 +233,64 @@ def test_healthy_run_writes_raw_and_success_log(tmp_path):
 
 
 def test_disabled_source_skips_without_failing(tmp_path):
-    """크리덴셜 미주입(로컬)은 실패가 아니라 명시적 skip 이다."""
+    """플래그로 끈 소스는 실패가 아니라 명시적 skip 이다."""
     code, storage = _ingest(tmp_path, _full_boards(), enabled=False)
     assert code == 0
     assert [k for k in storage.list_keys("raw/")] == []
     assert _log(storage)["status"] == "skipped"
+
+
+def test_missing_auth_key_skips_instead_of_firing_empty_requests(tmp_path):
+    """인증키가 없으면 **요청을 보내지 않고** skip 한다(ALPHA-829).
+
+    WHY: 시크릿 주입이 누락된 배포에서 `enabled` 가 설정 플래그만 보면 빈 `AUTH_KEY` 로
+    3콜이 나가 4xx→중단(exit 1)이 된다. 그러면 로그에 남는 건 "수집 실패"인데 실제 원인은
+    설정 결손이라, 고쳐야 할 곳이 가려진다. 스텝의 skip 사유 문구가 "disabled or missing
+    credentials" 인데 뒤쪽이 영영 성립하지 않게 되는 것도 같은 문제다(krx_etf 와 같은 계약).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    source = KrxInstrumentSource(
+        KrxInstrumentSourceConfig(enabled=True, auth_key=None),
+        client=FakeClient(_full_boards()), today=date(2026, 8, 7),
+    )
+    assert ingest_raw_instrument.run(storage, source, _RUN_ID) == 0
+    assert source.client.calls == []          # ← 크리덴셜을 안 보면 여기서 3콜이 나간다
+    assert [k for k in storage.list_keys("raw/")] == []
+    assert _log(storage)["status"] == "skipped"
+
+
+def test_a_whole_missing_board_is_blocked_not_saved_as_partial(tmp_path):
+    """시장이 통째로 실패하면 **저장하지 않는다** — partial 로 반쪽 마스터를 남기지 않는다.
+
+    WHY: 격리와 은폐 사이에서 이 데이터셋은 격리 쪽이 아니다. 소비자가 읽는 것은 "그
+    기준일의 전종목"이라, 코넥스가 빠진 마스터는 그 시장 종목을 영구 미해소로 만든다.
+    시장 결손 게이트가 실패 격리보다 **먼저** 판정하는 것이 그 뜻이다.
+    """
+    boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
+    code, storage = _ingest(tmp_path, boards, raise_for={"knx": ValueError("boom")})
+    assert code != 0
+    log = _log(storage)
+    assert log["status"] == "error"
+    assert [k for k in storage.list_keys("raw/")] == []
+    assert "시장 결손" in log["error"]
+    assert [f["board"] for f in log["failed_boards"]] == ["KONEX"]   # 사유는 남는다
+
+
+def test_a_board_that_breaks_midway_still_lands_and_is_marked_partial(tmp_path):
+    """보드가 **행을 내다가** 깨지면 받은 만큼 저장하고 partial 로 드러낸다.
+
+    WHY: 위 테스트와 짝이다. 시장이 아예 없는 것과, 그 시장이 일부만 온 것은 다르다 —
+    후자는 세 시장이 다 있어 게이트를 지나므로 저장되고, 그 불완전함은 **상태로만** 드러난다.
+    조용히 success 로 끝나면 빠진 종목을 아무도 모른다(Rule 12).
+    """
+    boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
+    boards["knx"] = [*boards["knx"], "이건 객체가 아니다"]   # 100행 낸 뒤 깨진다
+    code, storage = _ingest(tmp_path, boards)
+    assert code != 0
+    log = _log(storage)
+    assert log["status"] == "partial"
+    assert log["ops"]["records_out"] == 2100          # 받은 것은 남겼다
+    assert [f["board"] for f in log["failed_boards"]] == ["KONEX"]
 
 
 # ------------------------------------------------------- canonical 정제 스텝
@@ -226,17 +298,22 @@ def test_disabled_source_skips_without_failing(tmp_path):
 def test_canonical_as_of_is_the_vendor_base_date_not_the_ingest_date(tmp_path):
     """canonical 시간축은 **벤더 기준일(bas_dd)**이지 수집일이 아니다(ALPHA-829).
 
-    WHY: KRX 는 당일 조회를 막아 수집일과 기준일이 **항상 다르다**. 수집일을 as_of 로 쓰면
-    마스터가 하루 앞선 날짜를 주장하게 되고, 최신 스냅샷을 읽는 로더가 존재하지 않는
-    거래일의 마스터를 보게 된다. 이 테스트는 08-07 에 수집한 08-06 기준 데이터가
-    `as_of_date=2026-08-06` 에 착지하는 것을 고정한다.
+    WHY: 수집일을 as_of 로 쓰면 마스터가 하루 앞선 날짜를 주장하고, 최신 스냅샷을 읽는
+    로더가 존재하지 않는 거래일의 마스터를 보게 된다.
+
+    ⚠️ 수집일(UTC)을 **고정해서** 잰다. 실제 벽시계에 맡기면 08~09시 KST(= 전날 UTC) 실행
+    에서 두 날짜가 우연히 같아져 이 단언이 어느 쪽 구현에서도 참이 된다 — CI 가 도는 시각에
+    따라 붙었다 떨어졌다 하는 가드는 가드가 아니다.
     """
     boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
-    code, storage = _ingest(tmp_path, boards)
+    code, storage = _ingest(tmp_path, boards, ingest_date="2026-09-30")
     assert code == 0
     assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    raw_keys = [k for k in storage.list_keys("raw/") if k.endswith(".ndjson")]
+    assert "/ingest_date=2026-09-30/" in raw_keys[0]        # 수집일 축
     parts = [k for k in storage.list_keys("canonical/") if k.endswith(".parquet")]
     assert len(parts) == 1
+    # 기준일 축 — 수집일과 **다른 값**이고, 그 값은 벤더가 준 bas_dd 다
     assert "canonical/reference/instrument_profile/market=KR/as_of_date=2026-08-06/" in parts[0]
 
 
@@ -275,6 +352,9 @@ def test_normalize_is_idempotent_across_reruns(tmp_path):
 
     WHY: 마스터가 재실행마다 부풀면 `load_instruments` 가 같은 종목을 여러 번 보고,
     자연키 멱등에 기대는 ID 발번이 무의미해진다.
+
+    ⚠️ 이 테스트만으로는 병합을 못 박지 못한다 — 같은 raw 를 다시 읽어 같은 파일명에
+    덮어쓰므로 병합을 통째로 지워도 수가 같다. 병합 자체는 아래 union 테스트가 본다.
     """
     boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
     _, storage = _ingest(tmp_path, boards)
@@ -282,6 +362,60 @@ def test_normalize_is_idempotent_across_reruns(tmp_path):
     first = len(_canonical_rows(storage))
     assert normalize_instrument_profile.run(storage, "20260807T010000Z") == 0
     assert len(_canonical_rows(storage)) == first
+
+
+def test_second_run_merges_with_what_is_already_in_the_partition(tmp_path):
+    """나중 런만 정제해도 **앞서 착지한 행이 살아남는다**(ALPHA-829).
+
+    WHY: 한 기준일이 여러 런에 걸쳐 채워질 수 있다. 08:00 런이 일부만 남기고(partial),
+    09:00 재시도가 나머지를 새 run_id 로 남긴 뒤 `--input-run-id <두번째>` 로 정제하는
+    경로가 그것이다. 이때 병합이 없으면 파티션이 **두 번째 런의 행만으로 줄어드는데**,
+    로그의 `rows_written` 은 그냥 작아진 수라 정상 런과 구분되지 않는다 — 조용히 마스터가
+    깎인다. 위 재실행 테스트는 같은 raw 를 다시 읽어 이 경로를 못 밟는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    first_boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
+    assert ingest_raw_instrument.run(storage, _source(first_boards), "RUN1") == 0
+    # 첫 런은 정제까지 마쳐 파티션에 착지시킨다(08:00 런이 남긴 것)
+    assert normalize_instrument_profile.run(storage, "NORM0", input_run_id="RUN1") == 0
+
+    # 같은 기준일, 겹치지 않는 종목을 다른 run_id 로 한 번 더 받는다(09:00 재시도)
+    second_boards = {
+        "stk": [_row(f"7{i:05d}", f"신규코스피{i}") for i in range(1000)],
+        "ksq": [_row(f"8{i:05d}", f"신규코스닥{i}") for i in range(1000)],
+        "knx": [_row(f"9{i:05d}", f"신규코넥스{i}") for i in range(100)],
+    }
+    assert ingest_raw_instrument.run(storage, _source(second_boards), "RUN2") == 0
+
+    # 두 번째 런만 정제한다 — 파티션에 이미 있던 첫 런 행이 남아 있어야 한다
+    assert normalize_instrument_profile.run(storage, "NORM1", input_run_id="RUN2") == 0
+    tickers = {r["ticker"] for r in _canonical_rows(storage)}
+    assert "700000" in tickers      # 이번에 정제한 것
+    assert "000000" in tickers      # ← 병합이 없으면 사라진다
+    assert len(tickers) == 4200
+
+
+def test_cross_board_ticker_collision_is_named_before_the_merge_hides_it(tmp_path):
+    """같은 단축코드가 두 시장에서 오면 **이름을 남긴다**(ALPHA-829).
+
+    WHY: `market` 은 항상 "KR" 이라 board 가 파티션을 가르지 않는다. 그래서 충돌이 나면
+    병합이 조용히 한쪽을 덮고(같은 런은 fetched_at 이 같아 나중 것이 이긴다), 종목 하나가
+    잘못된 시장 이름을 달거나 사라진다. 실측 충돌은 0건이지만 그건 우리가 강제하는
+    불변식이 아니라 KRX 의 성질이다 — 깨지는 날 로그에 수만 있으면 어느 종목인지 몰라
+    고칠 수 없다. `top_unresolved` 를 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
+    """
+    boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
+    boards["knx"][0] = _row("000000", "충돌종목")     # 코스피 000000 과 같은 코드
+    _, storage = _ingest(tmp_path, boards)
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    log = _quality_log(storage)
+    assert log["cross_board_ticker_collisions"] == {"000000": ["KONEX", "KOSPI"]}
+
+
+def _quality_log(storage):
+    keys = [k for k in storage.list_keys("operations_archive/")
+            if "instrument_profile" in k and "data_quality" in k]
+    return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
 
 def test_bad_ticker_row_is_dropped_with_a_reason(tmp_path):

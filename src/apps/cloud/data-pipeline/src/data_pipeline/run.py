@@ -652,8 +652,20 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 다르다** — 저쪽은 계정 로그인(mbr_id/pw), 이쪽은 AUTH_KEY 헤더다. 설정이 없으면
         # 조용히 0건 수집하고 성공으로 끝나지 않게 fail-loud 한다(Rule 12).
         #
-        # 날짜창을 받지 않는다: 이 API 는 기준일 하나만 받고 그 값은 달력이 정한다(당일 조회가
-        # 막혀 있어 직전 거래일). 창을 주면 소급된 줄 착각하므로 ETF 프로필과 같은 자리에 둔다.
+        # 날짜창을 **거부한다**: 이 API 는 기준일 하나만 받고 그 값은 달력이 정한다(당일
+        # 조회가 막혀 있어 직전 거래일). 무시하고 돌면 과거를 메우려던 운영자가 직전 거래일
+        # 스냅샷을 받고 exit 0 을 보게 되고, 소급된 줄 착각한다 —
+        # `ingest-raw-investor-estimate` 와 같은 성질·같은 처방이다(Rule 7: 두 선례 중
+        # 거부하는 쪽을 택했다. 무시하는 `ingest-raw-etf-profile` 은 창 개념 자체가 없는
+        # 프로필 조회라 착각할 소급이 없다).
+        # `or` 가 아니라 `is not None` 이다 — 운영 스크립트가 unset 변수를 `--from "$FROM"`
+        # 으로 넘기면 빈 문자열이 되고, falsy 검사면 명시적으로 창을 준 실행이 가드를 지난다.
+        if args.from_date is not None or args.to_date is not None:
+            raise SystemExit(
+                "ingest-raw-instrument 는 --from/--to 를 쓸 수 없다 — 이 API 는 기준일 하나만 "
+                "받고 그 값은 직전 거래일로 고정이다(당일·미래 조회 불가). 과거 기준일 백필이 "
+                "필요하면 별도 티켓으로 소급 인자를 설계한다."
+            )
         if settings.krx_instrument is None:
             raise SystemExit("krx_instrument.source 설정이 없다 — sources.toml 확인")
         return ingest_raw_instrument.run(

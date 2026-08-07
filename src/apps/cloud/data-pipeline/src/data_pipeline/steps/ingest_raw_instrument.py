@@ -83,10 +83,15 @@ def check_sanity(records: list[dict]) -> list[str]:
     return reasons
 
 
-def run(storage: Storage, source, run_id: str) -> int:
-    """수집 실행. 성공 0, 중단/실패/게이트 위반 비0."""
+def run(storage: Storage, source, run_id: str, *, ingest_date: str | None = None) -> int:
+    """수집 실행. 성공 0, 중단/실패/게이트 위반 비0.
+
+    `ingest_date`(UTC 날짜, `YYYY-MM-DD`)는 **테스트가 시각을 고정하는 지점**이다. 운영은
+    비워 두고 벽시계를 쓴다 — 수집일 축과 기준일 축이 갈리는지 재는 테스트가 실제 시각에
+    기대면, 08~09시 KST(= 전날 UTC) 실행에서 두 날짜가 같아져 단언이 무력해진다.
+    """
     started_at = datetime.now(timezone.utc)
-    started_date = started_at.isoformat()[:10]
+    started_date = ingest_date or started_at.isoformat()[:10]
     vendor = source.source_name
     log: dict = {
         "run_id": run_id,
@@ -112,9 +117,14 @@ def run(storage: Storage, source, run_id: str) -> int:
     status, error, reason = "success", None, None
     exit_code = 0
     try:
+        # 스트리밍이 아니라 전량 수집이다 — 중단되면 그때까지 받은 행도 **버린다**.
+        # ETF 구성종목(ingest_raw_etf)은 부분분을 저장하는데, 거기선 ETF 하나가 곧 완결된
+        # 단위라 일부만 있어도 쓸모가 있기 때문이다. 여기서는 다르다: 소비자가 읽는 것은
+        # "그 기준일의 전종목"이고, 시장이 덜 담긴 마스터는 빠진 종목을 **영구 미해소**로
+        # 만든다. 반쪽 마스터를 남기느니 없는 편이 낫다.
         records = list(source.fetch())
     except StopFetch as exc:
-        # 4xx/429 — 인증키 오류·활용신청 미승인이 여기 온다. 부분 수집분은 저장하고 상태로 드러낸다.
+        # 4xx/429 — 인증키 오류·활용신청 미승인이 여기 온다.
         logger.error("종목기본정보 수집 중단(4xx/429): %s", exc)
         status, error, exit_code = "stopped", str(exc), 1
     except Exception as exc:
@@ -123,7 +133,13 @@ def run(storage: Storage, source, run_id: str) -> int:
 
     # ⭐게이트는 **저장 전**이다. 저장 후에 보면 깨진 마스터가 이미 레이크에 있고, 다음 런이
     # 성공하기 전까지 canonical 이 그걸 읽는다.
-    gate_reasons = check_sanity(records) if status == "success" else []
+    #
+    # 조건이 `status == "success"` 가 아니라 `records` 인 것은 **방어**다. 지금은 두 조건이
+    # 같은 결과를 낸다(중단·실패 시 위 `list()` 가 수집분을 통째로 버려 records 가 빈다) —
+    # 그래서 이 선택은 테스트로 구분되지 않는다. 그럼에도 이렇게 두는 이유는, 누군가 위
+    # 수집을 스트리밍으로 바꿔 부분분을 살리는 순간 상태 조건이면 **그 부분분이 검사 없이
+    # 착지**하기 때문이다. 게이트의 안전성을 다른 줄의 구현 세부에 기대게 두지 않는다.
+    gate_reasons = check_sanity(records) if records else []
     if gate_reasons:
         logger.error("종목기본정보 sanity 게이트 위반 — 저장하지 않는다: %s", gate_reasons)
         status, error, exit_code = "error", "; ".join(gate_reasons), 1

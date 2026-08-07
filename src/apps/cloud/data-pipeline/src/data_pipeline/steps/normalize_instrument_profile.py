@@ -9,8 +9,10 @@ raw instrument_profile(KRX OpenAPI `*_isu_base_info`)을 읽어 종목 마스터
 것은 **약명** 쪽이고(엔티티 해소가 여기 붙는다), 법적 명칭은 감사·대조용이라 둘 다 보존한다.
 DART 정식사명(`에스케이바이오팜`)과 다른 축이라는 점이 소스 선택의 근거였다(ALPHA-829).
 
-**시간축은 벤더 기준일(`bas_dd`)이지 수집일이 아니다.** KRX 가 당일 조회를 막아 둘이 항상
-다르다 — 수집일을 as_of 로 쓰면 마스터가 하루 앞선 날짜를 주장하게 된다.
+**시간축은 벤더 기준일(`bas_dd`)이지 수집일이 아니다.** KRX 가 당일 조회를 막아 basDd 는
+직전 거래일이라, 수집일을 as_of 로 쓰면 마스터가 하루 앞선 날짜를 주장한다.
+⚠️ 두 날짜가 항상 다르지는 않다(수집일은 UTC, basDd 는 KST 파생 — 08~09시 KST 실행에서
+우연히 같아진다). "다르니까 구분된다"에 기대지 말고 `bas_dd` 만 읽는다.
 
 `ISU_SRT_CD` 형태 판정은 `parse.krx_short_code` 하나로 간다(ALPHA-463) — 문자 섞인 신형
 단축코드(`0093A0`)도 통과해야 하므로 `isdigit()` 로 거르지 않는다.
@@ -136,7 +138,8 @@ def _fetched_at(row: dict) -> datetime:
 def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     """한 (market, as_of_date) 파티션을 ticker 키로 멱등 병합(최신 fetched_at 우선).
 
-    재실행이 같은 기준일을 다시 받아도 행이 늘지 않는다 — etf_profile 과 같은 모델이다.
+    재실행이 같은 기준일을 다시 받아도 행이 늘지 않고, **한 기준일이 여러 런에 걸쳐
+    채워져도 앞선 행이 살아남는다**(etf_profile 과 같은 모델).
     """
     acc: dict[str, dict] = {}
     for row in [*existing, *new_rows]:
@@ -145,6 +148,22 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
         if prev is None or _fetched_at(row) >= _fetched_at(prev):
             acc[key] = row
     return [acc[k] for k in sorted(acc, key=str)]
+
+
+def _cross_board_collisions(rows: list[dict]) -> dict[str, list[str]]:
+    """같은 ticker 가 서로 다른 board 로 온 경우 — {ticker: [board, ...]}.
+
+    `market` 은 항상 "KR" 이라 board 는 파티션을 가르지 않는다. 그래서 같은 단축코드가 두
+    시장에서 오면 병합이 **조용히 한쪽을 덮는다**(같은 런은 fetched_at 이 같아 나중 것이
+    이긴다). KRX 단축코드는 시장 간 유일한 것으로 알려져 있지만 그건 우리가 강제하는
+    불변식이 아니다 — 깨지면 종목 하나가 잘못된 시장 이름을 달거나 사라지므로, 덮기 전에
+    수를 세어 로그로 드러낸다(Rule 12).
+    """
+    boards_by_ticker: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        if row.get("board"):
+            boards_by_ticker[row["ticker"]].add(row["board"])
+    return {t: sorted(b) for t, b in boards_by_ticker.items() if len(b) > 1}
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
@@ -180,6 +199,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                     continue
                 normalized.append(row)
 
+        collisions = _cross_board_collisions(normalized)
         by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
         for row in normalized:
             by_partition[(row["market"], row["as_of_date"])].append(row)
@@ -198,6 +218,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         logger.exception("종목기본정보 정제 실패")
         failures.append({"reasons": ["normalize_error"], "error": str(exc)})
         parts_written = rows_written = 0
+        collisions = {}
         exit_code = 1
 
     checked_date = started_at.isoformat()[:10]
@@ -208,6 +229,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         "input_run_id": input_run_id,
         "rows_read": rows_read, "rows_normalized": len(normalized),
         "dropped_by_reason": dropped,
+        # 시장 간 단축코드 충돌 — 0 이 정상이다. 0 이 아니면 병합이 한쪽을 덮었다는 뜻이라
+        # 어느 종목인지 이름을 남긴다(개수만으로는 고칠 수 없다).
+        "cross_board_ticker_collisions": collisions,
         "partitions_written": parts_written, "rows_written": rows_written,
         "failures": failures, "exit_code": exit_code,
         "ops": {"records_out": rows_written,

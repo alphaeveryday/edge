@@ -596,6 +596,21 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
 
 **수집 — 상태머신 밖(수동 전용)**
 
+- `ingest-raw-instrument` / `normalize-instrument-profile`(KRX 상장 **전종목** 종목기본정보,
+  ALPHA-829) — **SFN 에 편입돼 있지 않고 ops 카탈로그에도 없다.** 배선은 별도 티켓 소관이라
+  그전까지는 **손으로 돌릴 때만** 수집된다. 카탈로그 등록을 함께 하지 않은 건 의도다 —
+  `required=True` 로 넣으면 원장이 매 런 이 작업의 빈 칸을 만들어 놓고 미이행으로 센다.
+  - 자격증명이 `krx_etf` 와 **다르다**: 저쪽은 계정 로그인(`mbr_id`/`pw` → JSESSIONID),
+    이쪽은 무상태 `AUTH_KEY` 헤더다. 시크릿도 별개(`edge-dev-data-pipeline/krx/api-key`).
+    ```bash
+    DATA_PIPELINE_KRX_INSTRUMENT__SOURCE__AUTH_KEY=... \
+      uv run --package data-pipeline python -m data_pipeline.run ingest-raw-instrument
+    uv run --package data-pipeline python -m data_pipeline.run normalize-instrument-profile
+    ```
+  - ⚠️ **당일 조회가 막혀 있다**(`basDd < 오늘`). 기준일은 달력이 직전 거래일로 정하므로
+    `--from/--to` 는 **거부**한다 — 무시하고 돌면 소급한 줄 착각한다.
+  - ⚠️ 달력을 쓰므로 `OPS_KR_HOLIDAYS` 주입이 필요하다(미주입이면 공휴일을 거래일로 보고
+    0행을 받아 게이트에 걸린다). 위 krx 잡과 같은 요구사항이다.
 - `ingest-raw-inav`(국내 ETF **장중** iNAV, **kis 세트** — 일별 NAV 와 같은 앱키·유니버스)
   — **SFN 에 편입돼 있지 않다.** 위 raw 페이즈 잡 목록에 없고 `statemachine.tf` 에도 없다.
   스케줄 편입은 ALPHA-556 소관이라, 그전까지는 **손으로 돌릴 때만** 수집된다(자동 수집 없음).

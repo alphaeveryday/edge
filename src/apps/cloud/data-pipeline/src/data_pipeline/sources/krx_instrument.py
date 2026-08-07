@@ -75,7 +75,13 @@ class KrxInstrumentSource:
 
     @property
     def enabled(self) -> bool:
-        return self.config.enabled
+        """설정 플래그 **와** 크리덴셜 유무를 함께 본다(krx_etf 와 같은 계약).
+
+        키가 없는데 True 를 돌려주면 빈 `AUTH_KEY` 로 3콜이 나가 4xx→중단(exit 1)이 된다.
+        스텝의 skip 사유 문구가 "disabled or missing credentials" 인데 뒤쪽이 영영 성립하지
+        않게 되는 것도 문제다 — 시크릿 주입 누락이 수집 장애로 위장된다.
+        """
+        return self.config.enabled and bool(self.config.auth_key)
 
     def base_date(self) -> str:
         """질의 기준일 `basDd`(YYYYMMDD).
@@ -92,6 +98,9 @@ class KrxInstrumentSource:
         return list(_ENDPOINT_BY_BOARD)
 
     def fetch(self) -> Iterator[dict]:
+        # 재호출이면 앞선 실패 목록을 비운다 — 안 비우면 두 번째 fetch 가 첫 번째의 실패까지
+        # 세어 런 상태가 실제보다 나빠진다(krx_etf 와 같은 계약).
+        self.fetch_failures = []
         bas_dd = self.base_date()
         fetched_at = datetime.now(timezone.utc).isoformat()
         for board in self.plan():
