@@ -425,6 +425,31 @@ class TestSessionRollup:
         assert fx.rollup_session(session_date="2026-07-31") is None
         assert fx.storage.list_keys("canonical/market_data/intraday_5m") == []
 
+    def test_writer_since_admits_the_kis_backfilled_day(self, tmp_path):
+        """08-03 은 이제 **쓸 수 있다**(ALPHA-846 인하) — 가드의 아래쪽 끝을 못박는다.
+
+        위 테스트는 07-31 이 거부되는 것만 본다. 값을 08-04 로 되돌려도 07-31 은 여전히
+        거부되므로, 그 테스트 하나로는 상수를 아무도 지키지 않는다. 08-03 이 통과하는
+        것이 이 인하가 실제로 반영됐다는 유일한 관측이다 — 안 되면 KIS 소급 수집이
+        1분 canonical 을 다 만들어도 5분 파티션이 영영 안 생긴다.
+        """
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            # artifact 는 08-03 축에 심는다 — 원장 커밋 표시는 window HHMM 축이라
+            # 날짜와 무관하다(그래서 세션 픽스처를 그대로 쓴다)
+            records = [{"unit_id": "500000",
+                        "ts": datetime(2026, 8, 3, int(hhmm[:2]), int(hhmm[2:]), tzinfo=KST),
+                        "open": "100", "high": "101", "low": "99", "close": "100",
+                        "volume": "1", "source": "kis"}]
+            fx.storage.put_bytes(
+                canonical_price_minute_artifact_key("KR", "2026-08-03", hhmm, 1),
+                serialize_records(records),
+            )
+            window = fx.db.windows[(fx.session_id, w(hhmm))]
+            window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
+        assert fx.rollup_session(session_date="2026-08-03") == canonical_intraday_5m_key(
+            "KR", "2026-08-03")
+
 
 class TestUnfilledSettledDays:
     """구멍 판정 — 원장이 멈춘 거래일에 파생이 없는 날."""

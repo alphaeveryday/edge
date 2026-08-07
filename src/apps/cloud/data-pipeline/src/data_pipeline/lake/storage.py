@@ -759,7 +759,7 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
 
     분석엔진(analysis-engine)이 소비하는 기존 데이터셋이다 — FMP 백필
     (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 1분 롤업 writer 는
-    trade_date>=2026-08-04 파티션만 쓰므로 기존 파티션과 겹치지 않는다.
+    `rollup.WRITER_SINCE`(2026-08-03) 이후 파티션만 쓰므로 기존 파티션과 겹치지 않는다.
 
     스키마(dev S3 2026-07-31 part-0.parquet 실측 — 이 컬럼·타입 그대로, 여분 컬럼
     없음: 소비자 스키마 검증과의 충돌을 피하는 게 우선이라 bars_count 류는 넣지

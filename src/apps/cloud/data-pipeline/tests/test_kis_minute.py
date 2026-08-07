@@ -292,13 +292,67 @@ class TestHistoricalCandles:
         return {**row(hour), "stck_bsop_date": "20260731"}
 
     def test_uses_historical_tr_and_date_axis(self):
-        # 당일 TR 로는 과거를 못 받는다 — 날짜 축이 없어 오늘 봉이 오늘 라벨로 돌아온다
+        """당일 TR 로는 과거를 못 받는다 — 날짜 축이 없어 오늘 봉이 오늘 라벨로 돌아온다.
+
+        ⚠️ 쿼리를 **통째로** 못박는다. 파라미터 하나만 골라 단언하면 나머지는 단언
+        표면 밖이라 조용히 뒤집힌다 — `FID_FAKE_TICK_INCU_YN=Y` 는 허봉(체결 없는 가상
+        틱)을 진짜 봉으로 들이는데, 그 봉은 거래량 0·flat 이라 `no_trade`(정상)로 집계돼
+        관측하지 않은 값이 canonical 에 실린다.
+        """
         client, fake = self.hist([TOKEN, ok([row("153000"), self.other_day("152900")])])
         client.candles("005930", window_end=self.at("1530"))
         url, headers = fake.calls[-1]
         assert headers["tr_id"] == "FHKST03010230"
-        assert "FID_INPUT_DATE_1=20260803" in url
-        assert "inquire-time-dailychartprice" in url
+        assert url.endswith(
+            "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+            "?FID_COND_MRKT_DIV_CODE=J&FID_INPUT_ISCD=005930"
+            "&FID_INPUT_HOUR_1=153000&FID_INPUT_DATE_1=20260803"
+            "&FID_PW_DATA_INCU_YN=Y&FID_FAKE_TICK_INCU_YN=N"
+        ), url
+
+    @pytest.mark.parametrize("broken", [
+        "not-a-dict",                              # output2 원소가 객체가 아님
+        {k: v for k, v in row().items() if k != "stck_cntg_hour"},   # 시각 키 누락
+        {**row(), "stck_cntg_hour": 103000},       # 시각이 int
+    ])
+    def test_broken_row_stays_a_shape_error(self, broken):
+        """손상 행은 **`ValueError`** 여야 한다 — collector 가 unit INVALID 로 접는 축.
+
+        원시 dict 를 `parse_minute_row` 앞에서 만지면 `AttributeError`·`KeyError`·
+        `TypeError` 로 새는데, `KisPriceCollector._candle_for` 는 그 셋을 안 잡는다.
+        그러면 종목 하나의 손상 행이 **362종 window 를 통째로** 죽이고, lease 만료
+        재청구가 같은 응답에 같은 예외를 결정적으로 반복해 그 window 가 영영 안 커밋된다.
+        """
+        client, _ = self.hist([TOKEN, ok([broken])])
+        with pytest.raises(ValueError):
+            client.candles("005930", window_end=self.at("1030"))
+
+    def test_duplicate_minute_is_a_shape_error(self):
+        """같은 분이 두 번 오면 실패한다 — 조용히 마지막 것을 고르지 않는다.
+
+        당일 경로는 이 경우를 `select_window_candle` 이 INVALID 로 낸다. 소급 경로가
+        분 단위 dict 로 접으면 그 가드가 **구조적으로 도달 불가**가 되고, 어느 값이
+        canonical 에 실릴지를 벤더의 행 순서가 정한다.
+        """
+        client, _ = self.hist([TOKEN, ok([row("103000"), row("103000", volume="7")])])
+        with pytest.raises(ValueError, match="유일성 위반"):
+            client.candles("005930", window_end=self.at("1030"))
+
+    def test_identical_repeat_of_a_minute_is_not_a_conflict(self):
+        # 값이 같은 재등장은 페이지 겹침일 뿐 데이터 충돌이 아니다 — 막으면 창을
+        # 겹쳐 주는 벤더에서 전 종목이 실패한다(같은 분 **다른 값**만이 충돌이다)
+        client, _ = self.hist([
+            TOKEN, ok([row("103000"), row("103000")]), ok([self.other_day("102900")]),
+        ])
+        assert len(client.candles("005930", window_end=self.at("1030"))) == 1
+
+    def test_extended_hours_window_fails_loud(self):
+        # 페이징이 09:00–15:30 고정이라 시간외 window 는 구조적으로 안 나온다.
+        # ()(=missing) 로 돌려주면 세션이 수렴하지 않아 그날 EOD 파생이 통째로 안 돈다 —
+        # 그리고 그건 종목 하나가 아니라 이 백필 전체의 배선 오류다
+        client, _ = self.hist([TOKEN])
+        with pytest.raises(KisSourceError, match="범위 밖"):
+            client.candles("005930", window_end=datetime(2026, 8, 3, 18, 0, tzinfo=KST))
 
     def test_no_trade_minutes_are_synthesized_flat(self):
         """벤더가 빼먹은 분을 직전 종가 flat·거래량 0 으로 채운다.
@@ -379,8 +433,23 @@ class TestHistoricalCandles:
         with pytest.raises(KisUnitError, match="페이지 예산"):
             client.candles("005930", window_end=self.at("1529"))
 
-    def test_no_progress_response_stops_paging(self):
-        # 벤더가 같은 창을 반복하면 예산까지 헛돈다 — 진전이 없으면 멈춘다
-        client, fake = self.hist([TOKEN, ok([row("153000")]), ok([row("153000")])])
-        assert len(client.candles("005930", window_end=self.at("1530"))) == 1
-        assert len(fake.calls) == 3  # 토큰 1 + 페이지 2 (예산 8 을 다 쓰지 않는다)
+    def test_empty_page_is_not_a_finished_day(self):
+        """빈 응답은 "하루가 끝났다"가 아니라 **아무 정보도 못 얻었다**이다.
+
+        조기 종료하면 잘린 하루가 나오는데, 합성이 사이를 메우므로 그 결손은 4분류에서
+        `no_trade` 로 위장돼 window 가 VALID 로 확정된다. 그리고 실패한 하루는 캐시되지
+        않아야 한다 — 캐시되면 그 종목은 프로세스 수명 내내 빈 하루를 재사용하고
+        재청구가 무효가 된다(두 번째 호출도 실패하는 것이 그 증거다).
+        """
+        empties = [ok([]) for _ in range(MAX_DAY_PAGES)]
+        client, _ = self.hist([TOKEN, *empties, *empties])
+        for _ in range(2):
+            with pytest.raises(KisUnitError, match="페이지 예산"):
+                client.candles("005930", window_end=self.at("1530"))
+
+    def test_repeated_page_is_not_a_finished_day(self):
+        # 같은 창을 반복하는 벤더도 "하루를 끝냈다는 증거"가 없다 — 조용히 잘린 하루를
+        # 돌려주지 않고 예산까지 가서 실패한다(관대한 조기 종료를 두지 않는 이유)
+        client, _ = self.hist([TOKEN, *[ok([row("153000")]) for _ in range(MAX_DAY_PAGES)]])
+        with pytest.raises(KisUnitError, match="페이지 예산"):
+            client.candles("005930", window_end=self.at("1530"))

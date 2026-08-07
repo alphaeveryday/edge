@@ -923,6 +923,38 @@ class TestCollectorSelection:
         assert not isinstance(client, KisHistoricalMinuteClient)
         assert client.tr_id == "FHKST03010200"
 
+    def test_cli_feeds_the_parsed_session_date_to_the_collector(self, monkeypatch):
+        """`--session-date` 가 collector 선택까지 **닿는가** — 이 이음매가 TR 을 정한다.
+
+        `make_price_collector` 는 단위로 검증되지만, CLI 가 오늘 날짜를 넘기면 백필이
+        당일 TR 로 돌고 오늘 봉이 오늘 라벨로 돌아와 **362종 전건이 missing** 이 된다.
+        그때 원장은 "수집은 했는데 벤더가 안 줬다"로 보여 아무도 배선을 의심하지 않는다.
+
+        ⚠️ `SystemExit` 자체는 이 함수의 거의 모든 갈래가 낸다 — 그것만 단언하면 거짓
+        초록이다. **대체 함수가 실제로 불렸는지**를 같이 못박는다.
+        """
+        from types import SimpleNamespace
+
+        from data_pipeline.minute import worker as worker_module
+
+        seen: dict[str, object] = {}
+
+        def capture(options, *, session_date):
+            seen["session_date"] = session_date
+            raise SystemExit("여기서 멈춘다 — 이 뒤는 DB·S3 가 필요하다")
+
+        monkeypatch.setattr(worker_module, "make_price_collector", capture)
+        settings = SimpleNamespace(
+            db=DbConfig(password="x"),
+            minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
+        )
+        with pytest.raises(SystemExit):
+            worker_module.price_worker_cli(
+                settings, session_date="2026-08-03", universe="s3://bucket/universe.json"
+            )
+        assert "session_date" in seen, "make_price_collector 가 불리지 않았다"
+        assert seen["session_date"] == date(2026, 8, 3)
+
     def test_toss_source_still_builds_toss_collector(self):
         from data_pipeline.minute.toss_collector import TossPriceCollector
         from data_pipeline.minute.worker import make_price_collector

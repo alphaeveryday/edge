@@ -1,8 +1,13 @@
-"""KIS(한국투자) 국내주식 당일 분봉 소스 어댑터 (ALPHA-735 — 1분 가격 레인 벤더 교체).
+"""KIS(한국투자) 국내주식 분봉 소스 어댑터 (ALPHA-735 — 1분 가격 레인 벤더 교체).
 
-API: 주식당일분봉조회 `inquire-time-itemchartprice`, tr_id `FHKST03010200`.
+TR 이 둘이고 **계약이 갈린다** — 클래스가 둘인 이유가 그것이다:
 
-형상은 ALPHA-644 스파이크(2026-08-03 실전 도메인 프로브)가 확정한 것이다:
+- `KisMinuteClient` — 당일 `inquire-time-itemchartprice` `FHKST03010200`. 상주 레인용.
+- `KisHistoricalMinuteClient` — 지난 거래일 `inquire-time-dailychartprice`
+  `FHKST03010230`(ALPHA-846). 날짜 축이 있고, **무거래 분 행을 주지 않으며**, 응답이
+  거래일 경계를 넘어 내려간다. 아래 "무거래 분" 항은 **당일 TR 한정**이다.
+
+당일 형상은 ALPHA-644 스파이크(2026-08-03 실전 도메인 프로브)가 확정한 것이다:
 
 - 한 콜 = **30분치**, `FID_INPUT_HOUR_1`(HHMMSS)이 창의 **끝**이고 응답은 최신→과거 역순.
 - 필드: `stck_bsop_date`·`stck_cntg_hour`·`stck_prpr`(종가)·`stck_oprc`·`stck_hgpr`·
@@ -313,15 +318,26 @@ class KisHistoricalMinuteClient(KisMinuteClient):
 
     def candles(self, symbol: str, *, window_end: datetime) -> tuple[Candle, ...]:
         """그 window 의 봉(0개 또는 1개). 하루치는 처음 한 번만 받는다."""
-        asked = window_end.astimezone(KST).date()
-        if asked != self.session_date:
+        asked = window_end.astimezone(KST)
+        if asked.date() != self.session_date:
             # 캐시가 하루에 묶여 있다 — 다른 날짜를 물으면 조용히 남의 날 봉을 준다
             raise ValueError(
                 f"{symbol} 소급 조회 날짜 불일치: 클라이언트 {self.session_date}, "
-                f"요청 {asked}"
+                f"요청 {asked.date()}"
+            )
+        if not DAY_FIRST_HHMMSS < asked.strftime("%H%M%S") <= DAY_LAST_HHMMSS:
+            # 페이징이 09:00–15:30 고정이라 시간외 window 는 **구조적으로** 안 나온다.
+            # 빈 결과로 돌려주면 그 window 가 missing 으로 접혀 "벤더가 안 줬다"로 보이고,
+            # 세션이 수렴하지 않아 그날 EOD 파생이 통째로 안 돈다. 조회 범위와 세션 계획
+            # 범위가 갈린 것은 그 종목 하나의 문제가 아니라 이 백필 전체의 배선 오류다.
+            raise KisSourceError(
+                f"소급 조회 범위 밖 window: {window_end.isoformat()} — 이 클라이언트는 "
+                f"{DAY_FIRST_HHMMSS}~{DAY_LAST_HHMMSS} 만 받는다(시간외 세션 미지원)"
             )
         day = self._days.get(symbol)
         if day is None:
+            # ⚠️ 대입은 `_fetch_day` 가 **성공했을 때만** 일어난다 — 실패한 하루를
+            # 캐시하면 그 종목은 프로세스 수명 내내 빈 하루를 재사용한다(재청구 무효)
             day = {candle.window_end: candle
                    for candle in fill_no_trade_minutes(self._fetch_day(symbol))}
             self._days[symbol] = day
@@ -330,31 +346,52 @@ class KisHistoricalMinuteClient(KisMinuteClient):
         return () if candle is None else (candle,)
 
     def _fetch_day(self, symbol: str) -> tuple[Candle, ...]:
-        """그 거래일 전체 봉(무거래 분 제외 — 채우는 건 호출부)."""
+        """그 거래일 전체 봉(무거래 분 제외 — 채우는 건 호출부).
+
+        ⚠️ 하루를 **끝냈다는 증거 없이는 돌려주지 않는다.** 증거는 둘뿐이다 —
+        경계를 넘은 페이지(직전 거래일이 섞여 왔다)이거나 09:00 에 닿았거나. 그 밖의
+        이유로 페이징이 멈추면(빈 응답·같은 창 반복) 잘린 하루가 되는데, 합성이 사이를
+        메우므로 그 결손은 4분류에서 `no_trade` 로 **위장돼** window 가 VALID 로 확정된다.
+        그래서 관대한 조기 종료를 두지 않고 예산 소진까지 가서 실패로 낸다.
+        """
         hour = DAY_LAST_HHMMSS
-        rows: dict[str, dict] = {}
-        earliest_seen: str | None = None
+        collected: dict[datetime, Candle] = {}
         for _ in range(MAX_DAY_PAGES):
             page = self._rows(symbol, hour)
-            same_day = [r for r in page if r.get("stck_bsop_date") == self._ymd]
-            for row in same_day:
-                rows[row["stck_cntg_hour"]] = row
-            if len(same_day) < len(page) or not same_day:
-                # 경계를 넘었거나(직전 거래일이 섞였다) 그 창에 봉이 없다 — 하루가 끝났다
+            # ⚠️ **먼저 파싱한다.** 원시 dict 를 직접 만지면(`r.get`·`r[...]`·`min()`)
+            # 형상 위반이 `AttributeError`·`KeyError` 로 새는데, collector 는
+            # `ValueError` 만 unit INVALID 로 접는다 — 종목 하나의 손상 행이 window 를
+            # 통째로 죽이고 lease 만료 재청구가 같은 예외를 결정적으로 반복한다.
+            parsed = [parse_minute_row(raw, symbol) for raw in page]
+            same_day = [c for c in parsed
+                        if c.window_end.astimezone(KST).date() == self.session_date]
+            for candle in same_day:
+                previous = collected.get(candle.window_end)
+                if previous is not None and previous != candle:
+                    # 같은 분에 **다른 값**이 오면 어느 쪽이 참인지 우리가 고를 수 없다.
+                    # dict 로 접으면 벤더 행 순서가 값을 정한다(당일 경로는 이 경우를
+                    # `select_window_candle` 이 INVALID 로 낸다 — 축을 맞춘다).
+                    # 값이 같은 재등장은 페이지 겹침일 뿐이라 통과시킨다 — 그건 데이터
+                    # 충돌이 아니고, 막으면 겹쳐 주는 벤더에서 전 종목이 실패한다.
+                    raise ValueError(
+                        f"{symbol} 가 window {candle.window_end.isoformat()} 에 "
+                        f"다른 봉 2건을 줬다 — 유일성 위반")
+                collected[candle.window_end] = candle
+            if len(same_day) < len(page):
+                # 경계를 넘었다(직전 거래일이 섞여 왔다) = 그 날은 다 받았다.
+                # ⚠️ 빈 응답은 여기 안 걸린다(0 < 0 은 거짓) — 그게 맞다. 빈 응답은
+                # "하루가 끝났다"가 아니라 **아무 정보도 못 얻었다**이고, 같은 창을
+                # 예산까지 다시 물은 뒤 실패로 나가야 한다.
                 break
-            earliest = min(r["stck_cntg_hour"] for r in same_day)
-            if earliest_seen is not None and earliest >= earliest_seen:
-                # 진전이 없다 — 벤더가 같은 창을 반복하면 예산까지 헛돈다
-                break
-            earliest_seen = earliest
-            if earliest <= DAY_FIRST_HHMMSS:
-                break
-            hour = (datetime.strptime(earliest, "%H%M%S")
-                    - timedelta(minutes=1)).strftime("%H%M%S")
+            if same_day:
+                earliest = min(c.window_end for c in same_day).strftime("%H%M%S")
+                if earliest <= DAY_FIRST_HHMMSS:
+                    break
+                hour = (datetime.strptime(earliest, "%H%M%S")
+                        - timedelta(minutes=1)).strftime("%H%M%S")
         else:
-            # 예산 소진 = 하루가 안 끝났다. 잘린 하루를 커밋하면 그 결손이 4분류에서
-            # no_trade 로 위장된다(합성이 사이를 메우므로) — 그 종목을 실패로 남긴다.
             raise KisUnitError(
-                f"KIS 소급 분봉 {symbol} {self._ymd}: 페이지 예산({MAX_DAY_PAGES}) 소진"
+                f"KIS 소급 분봉 {symbol} {self._ymd}: 페이지 예산({MAX_DAY_PAGES}) 소진 "
+                "— 하루를 끝냈다는 증거가 없다"
             )
-        return tuple(parse_minute_row(row, symbol) for row in rows.values())
+        return tuple(collected.values())
