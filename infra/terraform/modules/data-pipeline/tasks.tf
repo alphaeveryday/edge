@@ -275,36 +275,6 @@ locals {
   }
 }
 
-resource "aws_ecs_task_definition" "analysis" {
-  family                   = "${var.name}-analysis"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  memory                   = var.analysis_task_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.analysis_task.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
-  }
-
-  # command 미지정: 이미지 ENTRYPOINT(python -m edge_analysis)가 기본 실행 = 오늘(Asia/Seoul).
-  # 특정 trade-date/request-id 재실행은 SFN 라우팅 없이 ecs run-task 로 이 task-def 를 직접
-  # 띄워 Command(=CMD args: --trade-date/--request-id)만 덮는다 — 운영 수동 실행 계약.
-  container_definitions = jsonencode([{
-    name        = local.analysis_container_name
-    image       = var.analysis_image
-    essential   = true
-    environment = [for k, v in local.analysis_env : { name = k, value = v }]
-    secrets     = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis" })
-    }
-  }])
-}
-
 resource "aws_ecs_task_definition" "this" {
   for_each = local.secret_sets
 

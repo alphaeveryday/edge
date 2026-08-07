@@ -230,10 +230,7 @@ resource "aws_iam_role_policy" "sfn" {
       {
         Effect = "Allow"
         Action = ["ecs:RunTask"]
-        Resource = concat(
-          [for task_definition in aws_ecs_task_definition.this : task_definition.arn],
-          [aws_ecs_task_definition.analysis.arn],
-        )
+        Resource = [for task_definition in aws_ecs_task_definition.this : task_definition.arn]
       },
       {
         Effect    = "Allow"

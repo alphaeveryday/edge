@@ -3,11 +3,6 @@ output "state_machine_arn" {
   value       = aws_sfn_state_machine.this.arn
 }
 
-output "analysis_task_definition_family" {
-  description = "analyze 페이즈 ECS task definition family — 특정일 수동 재실행(ecs run-task --trade-date) 대상"
-  value       = aws_ecs_task_definition.analysis.family
-}
-
 output "task_definition_families" {
   description = "data-pipeline ECS task definition families by vendor"
   value       = { for key, task_definition in aws_ecs_task_definition.this : key => task_definition.family }

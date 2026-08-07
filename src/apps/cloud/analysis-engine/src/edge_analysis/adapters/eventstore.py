@@ -254,31 +254,6 @@ class EventStore:
             row = cur.fetchone()
         return (str(row[0]), str(row[1])) if row else None
 
-    def fetch_price_trigger(self, etf_instrument_id: str, trade_date: date):
-        """파이프라인 L0 트리거 소비. ``None`` == 평온(정상 변동).
-
-        이행기 중복이 있으면 최신 detected_at 을 고른다(uq 3번째 키가 detected_at).
-        """
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT price_movement_trigger_id, observed_return, detection_reason,"
-                " absolute_gate_triggered, relative_gate_triggered"
-                " FROM price_movement_trigger"
-                " WHERE etf_instrument_id = %s AND trade_date = %s"
-                " ORDER BY detected_at DESC LIMIT 1",
-                (etf_instrument_id, trade_date.isoformat()),
-            )
-            row = cur.fetchone()
-        if row is None:
-            return None
-        return PriceTrigger(
-            trigger_id=str(row[0]),
-            observed_return=float(row[1]) if row[1] is not None else None,
-            reason=row[2],
-            abs_gate=bool(row[3]),
-            rel_gate=bool(row[4]),
-        )
-
     def fetch_minute_price_trigger(self, trigger_id: str):
         """분봉 트리거 한 행 소비(ALPHA-709) — ``MinuteTriggerRow`` | None.
 

@@ -1,24 +1,28 @@
 """run 오케스트레이션 테스트.
 
-의존성을 fake 로 주입해 I/O 가 아니라 제어 흐름을 고정한다: 트리거 없는 날은 분석
-없이 잔잔히 종료하고, 트리거 있는 날은 설명을 영속하며, FK 전제가 없는 날은 LLM 을
-태우기 전에 선다.
+의존성을 fake 로 주입해 I/O 가 아니라 제어 흐름을 고정한다: 트리거 없는 입력은 분석
+전에 서고, 트리거 있는 입력은 설명을 영속하며, FK 전제가 없는 날은 LLM 을 태우기
+전에 선다.
 """
 
 import json
 import re
+from dataclasses import make_dataclass
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
-from types import SimpleNamespace
 
 from edge_analysis.domain.models import Holding, PriceTrigger
 from edge_analysis.config import PipelineError
 from edge_analysis.pipeline import _redacted, _verdict_reason, run
 from edge_analysis.statics.interval import IntervalError, window_facts
 
-_SETTINGS = SimpleNamespace(
-    trigger_id=None,
+# `run` 이 `dataclasses.replace` 로 트리거 행의 대상·날짜를 덮으므로 설정 대역은
+# 데이터클래스여야 한다. 기본값이 분봉 트리거인 것은 그것이 유일한 진입점이기
+# 때문이다(ALPHA-806).
+_SETTINGS_FIELDS = dict(
+    trigger_id="mpt_1",
     trade_date=date(2026, 7, 16),
     request_id="req-1",
     etf_ticker="091160",
@@ -29,14 +33,13 @@ _SETTINGS = SimpleNamespace(
     # 산업분류 원장을 요구하고 스텁 store 에 그게 없다. 인과 경로 스모크는
     # tests/e2e/test_causal_pipeline.py 가 별도로 검증한다.
 )
+_Settings = make_dataclass("_Settings", list(_SETTINGS_FIELDS))
+_SETTINGS = _Settings(**_SETTINGS_FIELDS)
 
 
 class _FakeLake:
     def load_holdings(self, etf_id, market, trade_date):
         return [Holding("005930", "삼성전자", 1.0)], "2026-07-15"
-
-    def load_returns(self, market, trade_date):
-        return {"005930": 0.05}
 
     def load_prev_closes(self, market, trade_date):
         return {"005930": 70000.0}
@@ -59,8 +62,23 @@ class _FakeStore:
     def resolve_etf_instrument(self, ticker):
         return ("inst_ETF", "테스트 ETF")
 
-    def fetch_price_trigger(self, etf_instrument_id, trade_date):
-        return self._trigger
+    def fetch_minute_price_trigger(self, trigger_id):
+        from datetime import datetime, timezone
+
+        from edge_analysis.adapters.eventstore import MinuteTriggerRow
+        if self._trigger is None:
+            return None
+        return MinuteTriggerRow(
+            gate=self._trigger,
+            ticker="091160",
+            trade_date=date(2026, 7, 16),
+            session_id="ses-1",
+            window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+            generation=1,
+        )
+
+    def fetch_minute_window_meta(self, session_id, window_start):
+        return (1, "d" * 64)
 
     def persist_observation_route(self, trigger_id, decomp, route_code, event_search, entity_index, *, minute=False):
         self.calls.append("obs_route")
@@ -104,13 +122,31 @@ def _outcomes(s3):
     return [json.loads(p["Body"].decode("utf-8")).get("outcome") for p in s3.puts]
 
 
-def test_no_trigger_exits_without_analysis():
-    store = _FakeStore(trigger=None, prereqs=_PREREQS_OK)
+def test_run_without_a_trigger_id_is_refused_before_any_io():
+    """진입점 계약(ALPHA-806): 분봉 트리거 없이는 설명이 시작되지 않는다.
+
+    일봉 경로를 지운 뒤 남은 위험은 '조용히 아무것도 안 하고 0 으로 끝나는' 것이다 —
+    그러면 설명이 없다는 사실이 성공으로 위장된다. 명시적 실패여야 한다.
+    """
+    from dataclasses import replace
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
     s3 = _FakeS3()
 
-    assert _run(store, s3) == 0
-    assert store.calls == []  # observation/route·설명 없음
-    assert _outcomes(s3) == ["normal_variation"]
+    with pytest.raises(PipelineError, match="trigger_id"):
+        run(replace(_SETTINGS, trigger_id=None), lake=_FakeLake(),
+            store=store, client=_FakeClient(), s3=s3)
+    assert store.calls == []
+    assert s3.puts == []
+
+
+def test_missing_trigger_row_is_refused():
+    """트리거 id 는 있는데 행이 없으면 그 런은 성립하지 않는다."""
+    store = _FakeStore(trigger=None, prereqs=_PREREQS_OK)
+
+    with pytest.raises(PipelineError, match="분봉 트리거가 없다"):
+        _run(store, _FakeS3())
+    assert store.calls == []
 
 
 def test_triggered_day_persists_the_explanation():
@@ -228,24 +264,10 @@ class _MinuteFakeStore(_FakeStore):
     """분봉 축 입력을 받는 store — 적재된 route_code 를 들여다볼 수 있다."""
 
     def __init__(self, prereqs):
-        super().__init__(trigger=None, prereqs=prereqs)
+        super().__init__(
+            trigger=PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
+            prereqs=prereqs)
         self.route_code = None
-
-    def fetch_minute_price_trigger(self, trigger_id):
-        from datetime import datetime, timezone
-
-        from edge_analysis.adapters.eventstore import MinuteTriggerRow
-        return MinuteTriggerRow(
-            gate=PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
-            ticker="091160",
-            trade_date=date(2026, 7, 16),
-            session_id="ses-1",
-            window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
-            generation=1,
-        )
-
-    def fetch_minute_window_meta(self, session_id, window_start):
-        return (1, "d" * 64)
 
     def persist_observation_route(self, trigger_id, decomp, route_code,
                                   event_search, entity_index, *, minute=False):
@@ -341,33 +363,6 @@ def test_discard_logging_survives_the_value_that_broke_the_router(
     assert failed and failed[0]["had_rollup"] is True
     # 읽을 수 없는 값은 물음표로 남는다 — 없는 척하지 않는다
     assert failed[0]["discarded_layers"] == ["?"]
-
-
-def test_daily_path_also_hands_over_its_rollup(monkeypatch):
-    """하루(배치) 경로도 같은 분해를 넘긴다 — 여기도 같은 질의를 두 번 부르고 있었다.
-
-    분봉만 고치면 배치 런에서 원장의 route_code 와 산문 층 근거가 계속 갈린다. 두 경로가
-    같은 계약을 쓰는지 여기서 본다(창 인자 유무와 무관하게 `roll` 이 넘어간다).
-    """
-    sentinel = SimpleNamespace(
-        etf="091160", etf_name="테스트 ETF", idio=0.001, rho=0.12,
-        layers=(SimpleNamespace(kind="시장", name="KODEX200", contribution=0.2),),
-        names=(),
-    )
-    seen = {}
-
-    monkeypatch.setattr("edge_analysis.statics.layers.decompose",
-                        lambda *a, **k: sentinel)
-
-    def fake_statics(lake, ticker, day, ask=None, **kwargs):
-        seen.update(kwargs)
-        return "설명"
-
-    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
-
-    assert _run(_FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK), _FakeS3()) == 0
-    # 창 인자는 없고(하루 모드) roll 만 넘어간다
-    assert seen == {"roll": sentinel}, f"하루 경로가 분해를 안 넘겼다: {sorted(seen)}"
 
 
 def test_failed_routing_discards_the_rollup_it_could_not_use(monkeypatch, capsys):
@@ -652,13 +647,14 @@ def test_minute_missing_prev_closes_fails_loud():
 
 
 def test_empty_returns_fail_loud_before_llm():
-    """당일 price_daily 부재(장중)의 빈 returns 가 LLM 까지 가면 etf_return=NULL·
+    """window artifact 미착지의 빈 returns 가 LLM 까지 가면 etf_return=NULL·
     total_priced=0 인 설명이 저장된다(08-03 감사 실측) — 분해 전에 크게 죽어야 하고,
     소비자(ALPHA-719)는 이 타입만 지연 재시도로 가른다."""
     from edge_analysis.config import ReturnsNotReadyError
 
     class _EmptyReturnsLake(_FakeLake):
-        def load_returns(self, market, trade_date):
+        def load_minute_returns(self, market, session_date, trigger_window_hhmm,
+                                trigger_generation, trigger_checksum, prev_closes):
             return {}
 
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
