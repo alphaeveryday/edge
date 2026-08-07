@@ -740,6 +740,20 @@ def canonical_price_minute_prefix(market: str, session_date: str) -> str:
     )
 
 
+def canonical_intraday_5m_prefix(market: str, trade_date: str) -> str:
+    """그 거래일 5분봉 파티션이 사는 프리픽스 — **구멍 판정의 스캔 축** (ALPHA-839).
+
+    키 조립을 두 곳에 두면 한쪽만 옮겨져 스캐너가 없는 prefix 를 훑고 빈 목록을
+    "구멍 없음"으로 확정한다(`canonical_price_minute_prefix` 와 같은 축).
+
+    ⚠️ 파티션에 파일이 `part-0.parquet` 하나뿐이라고 가정하면 안 된다 — 토스 백필이
+    같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓰고(ALPHA-828), 소비자는
+    파티션을 `*.parquet` 글롭으로 읽는다. `part-0` 부재를 구멍으로 읽으면 다른
+    파일명이 채운 거래일(실측 2026-08-03)을 영영 결손으로 보고한다.
+    """
+    return f"canonical/market_data/intraday_5m/market={market}/trade_date={trade_date}/"
+
+
 def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     """5분봉 canonical(dataset=intraday_5m)의 거래일 파일 키 (ALPHA-750).
 
@@ -758,15 +772,18 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     - source_vendor: string (fmp 원본과 파생을 가르는 필터 축)
     - available_at: timestamp[us] naive KST = ts + 5분(구간 끝)
 
-    거래일당 1파일(전 종목 행). generation 축 없음 — 파생물이라 원장이 확정한 1분
+    ⚠️ **"거래일당 1파일"이 아니다**(2026-08-07 정정). 이 키는 1분 롤업 writer 의 파일
+    이고, 같은 파티션에 다른 writer 가 다른 파일명으로 쓴다(토스 백필
+    `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
+    읽으므로 **파티션 = 여러 파일의 합집합**이고, 겹치는 (ticker, ts) 는 두 번 세어진다
+    — 비겹침을 보장하는 주체는 각 writer 다(`rollup.WRITER_SINCE`, 롤업의 타 writer 가드).
+
+    generation 축 없음 — 파생물이라 원장이 확정한 1분
     세대에서 언제든 같은 규칙으로 재유도되고, 5분 버킷이 닫힐 때마다 그날 전체를
     재집계해 통째로 덮어쓴다(결정적·멱등 — 불변 계약을 걸면 장중 갱신·정정 반영이
     영구 차단된다).
     """
-    return (
-        f"canonical/market_data/intraday_5m/market={market}"
-        f"/trade_date={trade_date}/part-0.parquet"
-    )
+    return f"{canonical_intraday_5m_prefix(market, trade_date)}part-0.parquet"
 
 
 def raw_news_minute_page_key(
