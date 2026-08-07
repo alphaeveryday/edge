@@ -94,6 +94,9 @@ class _FakeLake:
     def __init__(self, names, clock_rows):
         self.names, self.clock_rows = names, clock_rows
         self.exists: dict = {}
+        self.unbound: dict = {}
+        # 정본이 요청일을 안 담는다는 판정. 비어 있음 = 담고 있다(= Athena 를 쓴다).
+        self.stale_5m: str = ""
         self.con = object()
         self.asked: list[str] = []
 
@@ -291,6 +294,58 @@ def test_clock_series_falls_back_to_duckdb_and_says_why(monkeypatch):
     seen = lk.exists["clock_panel"]
     assert seen.startswith("DuckDB _CLOCK_SQL") and "워크그룹 없음" in seen
     assert any("bars_5m" in q for q in lk.asked)          # 폴백이 실제로 돌았다
+
+
+def test_a_stale_canon_never_reaches_athena_at_all(monkeypatch):
+    """**낡은 정본은 예외가 아니라 '과거만 있는 패널'로 온다** - 성공으로 받으면 폴백이
+    안 걸리고 요청일 층이 통째로 빠진다(실측 2026-08-07: Iceberg 최신 08-05, 같은 시각
+    canonical 엔 당일이 있었는데 산문은 시장·섹터·구성종목을 전부 '미계측'이라 냈다).
+
+    판정을 여기서 다시 하지 않는 것이 요점이다 - 레이크가 바인드할 때 `iceberg_covers`
+    가 낸 답(`unbound["bars_5m_iceberg"]`)을 읽는다. 같은 판정이 두 곳에 살면 갈리고,
+    갈린 날 한쪽만 낡은 표를 쓴다. 그리고 **질의를 아예 안 보내야** 한다: 정본이 낡은
+    동안은 그게 정상 상태라 왕복 비용이 런마다 곱해진다(`decompose` 가 clock `_series`
+    를 최대 3회 × 한 런이 `decompose` 2회).
+    """
+    called = []
+    monkeypatch.setattr(athena, "clock_panel",
+                        lambda *a, **k: called.append(a) or [])
+    lk = _lake()
+    lk.stale_5m = f"정본에 요청일이 없다 ({DAY} 0행 · 최신 2026-08-02)"
+    # ATTACH·자격증명 실패는 **여기 안 담긴다** — 그건 다른 일감이고 Athena 는 boto3 로
+    # 따로 붙는다. 같이 담으면 권한 사고 때 사유를 '정본이 낡았다'로 잘못 말하고,
+    # 덤으로 멀쩡한 오프로드까지 끈다.
+    lk.unbound = {"bars_5m_iceberg": f"{lk.stale_5m} - canonical 합집합으로 내려간다"}
+    got = layers._series(lk, DAY, KINDS, clock=(T0, T1))
+
+    assert called == []                                   # 왕복을 아예 안 쳤다
+    assert dt.date.fromisoformat(DAY) in got["069500"][1]  # DuckDB 가 당일을 냈다
+    seen = lk.exists["clock_panel"]
+    assert seen.startswith("DuckDB _CLOCK_SQL")
+    # 바인드 때의 사유가 그대로 실려야 '왜 폴백했나'가 한 자리에서 읽힌다.
+    assert "정본이 요청일을 안 담는다" in seen and "최신 2026-08-02" in seen
+    assert any("bars_5m" in q for q in lk.asked)
+
+
+def test_a_fresh_canon_still_goes_to_athena(monkeypatch):
+    """위 가드의 반대편 - 정본이 멀쩡하면 오프로드가 그대로 산다. 이게 없으면 가드가
+    '항상 폴백' 으로 퇴화해도 아무도 못 잡는다(376.4MB 수신이 조용히 상시화된다)."""
+    d = [dt.date(2026, 8, 3), dt.date(2026, 8, 4)]
+    called = []
+    monkeypatch.setattr(athena, "clock_panel", lambda *a, **k: called.append(a) or [
+        ("069500", [0.01, -0.02], d, [100, 100])])
+    # `note()` 는 모듈 전역 `athena.LAST` 를 읽는다 - 안 물리면 앞선 테스트가 채워 둔
+    # 값에 얹혀 통과하고 단독 실행·`-k`·재정렬에서 빨개진다. 가드가 '항상 폴백' 으로
+    # 퇴화하는 것을 잡을 그물이 남의 전역에 매달려 있으면 안 된다.
+    monkeypatch.setattr(athena, "note", lambda: "Athena (7,071행 · 결과 0.379MB)")
+    lk = _lake()
+    # 정본은 멀쩡하고 **다른** 표만 못 묶인 상태 — 그때도 오프로드는 살아야 한다.
+    # 이 줄이 N1(사유를 뭉쳐 읽어 멀쩡한 Athena 를 끄던 결함)의 회귀를 막는다.
+    lk.unbound = {"bars_5m_iceberg": "NoCredentialsError: Unable to locate credentials"}
+    got = layers._series(lk, DAY, KINDS, clock=(T0, T1))
+    assert len(called) == 1
+    assert got["069500"][1] == {d[0]: 0.01, d[1]: -0.02}
+    assert lk.exists["clock_panel"] == "Athena (7,071행 · 결과 0.379MB)"
 
 
 def test_a_lake_without_a_connection_says_so_instead_of_skipping_quietly(monkeypatch):
