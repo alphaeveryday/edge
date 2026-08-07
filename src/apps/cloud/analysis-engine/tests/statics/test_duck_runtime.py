@@ -21,7 +21,9 @@ from edge_analysis.statics.duck import (
 _ENVS = ("EDGE_RDB_DSN", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
          "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE", "AWS_REGION",
          "DUCKDB_S3_CHAIN", "DUCKDB_MEMORY_LIMIT", "DUCKDB_TEMP_DIR",
-         "CAUSAL_BACKFILL_S3")
+         # `off` 로 켜 둔 채 스위트를 돌리면 `_bars_iceberg` 가 첫 줄에서 반환해
+         # iceberg 검사들이 통째로 무의미해진다(질의를 안 내므로 탐침 단언은 에러).
+         "CAUSAL_BACKFILL_S3", "EDGE_BARS_ICEBERG")
 
 
 @pytest.fixture(autouse=True)
@@ -253,7 +255,9 @@ def test_empty_or_stale_iceberg_is_not_treated_as_the_source_of_truth():
     assert iceberg_covers(dt.date(2026, 8, 5), day, 0, 0) is False     # 하루 낡음
     assert iceberg_covers(dt.date(2026, 8, 6), day, 366, 78) is True   # 그날이 있다
     # **최신일이 아니라 그날의 착지가 기준이다.** 상류가 띄엄띄엄 채우면 '최신은
-    # 최신인데 그날은 없는' 상태가 난다 - 실측 8/5 는 12:45 에 끊겼다.
+    # 최신인데 그날은 없는' 상태가 난다.
+    # ⚠️ 이 판정은 **폭만 재고 깊이는 안 잰다** - 실측 8/5 처럼 12:45 에 끊긴 날은
+    # 366종이 다 있어 그대로 통과한다. 세션 절단은 이 가드 밖의 일감이다.
     assert iceberg_covers(dt.date(2026, 8, 7), day, 0, 0) is False
 
 
@@ -342,6 +346,9 @@ def test_stale_iceberg_falls_back_and_says_why():
     assert lk._bars_iceberg() is False
     assert "bars_5m_iceberg" in lk.unbound
     assert "bars_5m" not in lk.exists          # 정본이라 말하지 않는다
+    # **부재 분기의 문구도 고정한다.** 앞 두 삼항을 맞바꾸면 적재가 한 번도 안 돈 날이
+    # "돌다 말았다"(부분 착지)로 보고되는데, 그 스왑을 잡는 단언이 없었다(Rule 9).
+    assert "요청일이 없다" in lk.stale_5m and "0종" in lk.stale_5m
 
 
 def test_partial_landing_says_partial_not_absent():
