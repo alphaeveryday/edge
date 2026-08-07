@@ -1183,6 +1183,7 @@ def test_mixed_workflow_includes_exact_20_percent_and_excludes_below(monkeypatch
                 any(layer == "고유" for layer, _ in calls))
 
     assert selected(0.20, 0.20, 0.60) == (True, True, True)
+    assert selected(0.40, 0.40, 0.20) == (True, True, True)
     assert selected(0.199999, 0.20, 0.600001) == (False, True, True)
     assert selected(0.20, 0.199999, 0.600001) == (True, False, True)
     assert selected(0.40, 0.400001, 0.199999) == (True, True, False)
