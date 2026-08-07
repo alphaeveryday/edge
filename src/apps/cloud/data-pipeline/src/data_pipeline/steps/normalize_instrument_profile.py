@@ -158,6 +158,10 @@ def _cross_board_collisions(rows: list[dict]) -> dict[str, list[str]]:
     이긴다). KRX 단축코드는 시장 간 유일한 것으로 알려져 있지만 그건 우리가 강제하는
     불변식이 아니다 — 깨지면 종목 하나가 잘못된 시장 이름을 달거나 사라지므로, 덮기 전에
     수를 세어 로그로 드러낸다(Rule 12).
+
+    ⚠️ **이번 런이 낸 행들 사이만 본다.** 파티션에 이미 있던 행과의 충돌은 여기 안 잡힌다
+    — 그건 같은 종목의 정상적인 재수집과 형태가 같아서(같은 ticker·다른 fetched_at) 구분할
+    근거가 없다. 이 함수가 잡는 것은 **한 런 안에서 두 시장이 같은 코드를 준** 경우다.
     """
     boards_by_ticker: dict[str, set[str]] = defaultdict(set)
     for row in rows:
@@ -174,6 +178,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     normalized: list[dict] = []
     exit_code = 0
     failures: list[dict] = []
+    collisions: dict[str, list[str]] = {}
 
     try:
         keys = [k for k in storage.list_keys("raw/") if is_raw_instrument_profile_key(k)]
@@ -218,7 +223,6 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         logger.exception("종목기본정보 정제 실패")
         failures.append({"reasons": ["normalize_error"], "error": str(exc)})
         parts_written = rows_written = 0
-        collisions = {}
         exit_code = 1
 
     checked_date = started_at.isoformat()[:10]

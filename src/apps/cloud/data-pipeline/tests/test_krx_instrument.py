@@ -276,6 +276,25 @@ def test_a_whole_missing_board_is_blocked_not_saved_as_partial(tmp_path):
     assert [f["board"] for f in log["failed_boards"]] == ["KONEX"]   # 사유는 남는다
 
 
+def test_every_board_failing_is_an_error_that_names_the_cause(tmp_path):
+    """세 시장이 모두 실패하면 error 로 끝나고 사유가 원인을 가리킨다.
+
+    WHY: 도달 경로가 실재한다 — `OPS_KR_HOLIDAYS` 가 주입되지 않으면 달력이 공휴일을
+    거래일로 보고, 그 기준일로 물으면 세 보드가 전부 0행을 준다(README 가 경고하는 바로
+    그 경우). 이때 로그가 "행수 0 < 하한" 이라고만 말하면 **증상**을 가리키게 되고, 고칠
+    곳이 달력 설정이라는 걸 알 수 없다. 수집 자체가 전멸했다는 사실이 먼저 나와야 한다.
+    """
+    boom = ValueError("0행 — basDd 확인")
+    code, storage = _ingest(tmp_path, _full_boards(),
+                            raise_for={"stk": boom, "ksq": boom, "knx": boom})
+    assert code != 0
+    log = _log(storage)
+    assert log["status"] == "error"
+    assert "모든 시장 수집 실패" in log["error"]      # 증상(행수 0)이 아니라 원인
+    assert log["ops"]["records_out"] == 0
+    assert len(log["failed_boards"]) == 3
+
+
 def test_a_board_that_breaks_midway_still_lands_and_is_marked_partial(tmp_path):
     """보드가 **행을 내다가** 깨지면 받은 만큼 저장하고 partial 로 드러낸다.
 
