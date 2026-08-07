@@ -42,9 +42,13 @@ BARS_ICEBERG_ACCOUNT = "393229433969"
 BARS_ICEBERG = "gl.market_data_kr.edge_intraday_5m"
 BARS_ICEBERG_ENV = "EDGE_BARS_ICEBERG"
 # 정본이 요청일을 '담았다'고 인정하는 최소 착지 종목 수. 근거는 `iceberg_covers`.
-# **env 로 연다**: 정상 폭은 이미 한 번 이동했고(fmp 1,270 → 롤업 366) 또 이동하면
-# 이 값이 전건 폴백을 부른다 - 그때 배포를 기다리면 그 사이 층이 통째로 미계측이다.
-MIN_LANDED_TICKERS = int(os.environ.get("EDGE_MIN_LANDED_TICKERS", "").strip() or 100)
+# **env 로 열지 않는다.** 한 판 열어 봤다가 되돌렸다: `"0"` 은 빈 문자열이 아니라
+# 기본값 폴백을 안 타고, `day_tickers >= 0` 은 항상 참이라 **손잡이 하나가 가드를
+# 통째로 무력화**하는데 그 사실이 아무 데도 안 남는다(`stale_5m` 도 빈 문자열이다).
+# import 시점 `int()` 라 잘못된 값은 이 값을 안 쓰는 경로까지 죽인다는 문제도 있었다.
+# 이건 환경 차이가 아니라 판정 계약이다 - `MIN_BETA_N`·`TAUTOLOGY_CUT` 과 같은 급이고
+# 그것들도 상수다. 정상 폭이 또 이동하면 그때는 근거를 다시 재서 이 값을 고친다.
+MIN_LANDED_TICKERS = 100
 # 시장 층의 프록시. **`layers.MARKET_CODE` 와 같은 값이어야 한다** - import 로 묶을 수는
 # 없다(layers → athena → duck 이라 역방향은 순환이다). 갈리면 이 가드가 엉뚱한 종목을
 # 찾아 정상일을 폴백시키므로, 두 자리가 같은지는 테스트가 지킨다.
@@ -250,6 +254,13 @@ def iceberg_covers(newest, asked_day: str, day_tickers: int = 0,
 
     `asked_day` 가 비면 판정하지 않는다(자가검사·탐색 실행의 기존 동작). **빈 표만은
     기준일과 무관하게 정본이 아니다** — 그건 신선도가 아니라 부재다.
+
+    **비용을 같이 적는다(Rule 12).** 이 판정은 두 자리에서 더 낸다. ① 탐침이
+    `trade_date` 만 읽다가 `ticker` 를 함께 읽는다 - 날짜 술어가 `FILTER` 안이라
+    컬럼 프루닝이 그날로 안 좁혀지고, 그 비용을 `CausalLake` 를 만들 때마다 낸다.
+    ② 폴백이 걸리는 날이 늘어난다(0행인 날 → 100종 미만인 날). `layers._series` 의
+    DuckDB 폴백은 실측 376.4MB × 최대 6회 ≈ **2.26GB/런**이다. 둘 다 정확성을 사는
+    대가이고, 사는 것은 '13종으로 세운 층을 하루의 설명으로 인쇄하지 않음' 이다.
 
     ⚠️ **범위**: 이 판정은 `CausalLake(day=…)` 로 기준일을 받은 레이크에만 선다 -
     실측 23개 생성 지점 중 둘(`pipeline.py`·`window_batch.py`)뿐이고, 나머지 21곳

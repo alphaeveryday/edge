@@ -15,8 +15,8 @@ import duckdb
 import pytest
 
 from edge_analysis.statics.duck import (
-    BACKFILL_SETS, MIN_LANDED_TICKERS, CausalLake, backfill_sources, iceberg_covers,
-    rdb_dsn_from_env, s3_secret_sql, session_pragmas)
+    BACKFILL_SETS, MARKET_PROXY_TICKER, MIN_LANDED_TICKERS, CausalLake,
+    backfill_sources, iceberg_covers, rdb_dsn_from_env, s3_secret_sql, session_pragmas)
 
 _ENVS = ("EDGE_RDB_DSN", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
          "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE", "AWS_REGION",
@@ -296,7 +296,6 @@ def test_market_proxy_constant_does_not_drift_from_layers():
     가드가 엉뚱한 종목을 찾아 **정상일을 전부 폴백**시키고, 그 폴백은 곧 층 미계측이다.
     묶을 수 없는 두 자리는 테스트가 지킨다.
     """
-    from edge_analysis.statics.duck import MARKET_PROXY_TICKER
     from edge_analysis.statics.layers import MARKET_CODE
 
     assert MARKET_PROXY_TICKER == MARKET_CODE
@@ -355,6 +354,23 @@ def test_partial_landing_says_partial_not_absent():
     assert "부분 착지" in lk.stale_5m and "13종" in lk.stale_5m
     assert "요청일이 없다" not in lk.stale_5m
     assert "bars_5m_iceberg" in lk.unbound
+    # **탐침 질의의 형상도 고정한다.** 대역이 SQL 을 안 보고 고정 튜플을 돌려주므로,
+    # 질의를 `count(*)` 로 되돌려도(=이 PR 이 막으려는 그 회귀) 스위트가 초록이다.
+    probe = next(q for q in lk.con.sql if "max(trade_date)" in q)
+    assert "count(DISTINCT ticker)" in probe and MARKET_PROXY_TICKER in probe
+
+
+def test_missing_market_proxy_is_named_as_such():
+    """세 번째 사유도 도달 가능하고, 앞 둘과 다른 문장이어야 한다.
+
+    100종을 넘겨도 시장 프록시가 없으면 층이 안 선다 - '부분 착지'라고 적으면
+    착지 폭을 볼 사람이 폭은 멀쩡한데 왜 막혔는지 못 찾는다.
+    """
+    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-05", day_tks=150, mkt_rows=0)
+
+    assert lk._bars_iceberg() is False
+    assert "시장 프록시가 없다" in lk.stale_5m and MARKET_PROXY_TICKER in lk.stale_5m
+    assert "부분 착지" not in lk.stale_5m
 
 
 def test_stale_iceberg_does_not_pay_the_45day_materialization():

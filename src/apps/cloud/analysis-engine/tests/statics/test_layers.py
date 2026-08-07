@@ -168,6 +168,22 @@ def test_missing_market_layer_leaves_a_reason():
     assert "market_layer" not in lake2.exists
 
 
+def test_market_absence_names_which_absence():
+    """**두 사유는 처방이 다르다** - 계열 부재는 적재 일감, 당일 없음은 신선도다.
+    하나만 검사하면 4분기를 상수 하나로 접어도 스위트가 초록이라 계약이 안 선다.
+
+    나머지 둘(`β 창 결손`·`후보 탈락`)은 이 픽스처로 못 만든다 - `FakeLake` 는 날짜가
+    연속인 계열만 낸다(구멍을 못 뚫고, 짧으면 당일부터 없다). 픽스처를 그 두 가지만을
+    위해 늘리지 않았다 - 실환경 도달성은 `_on()`·`_pick` 쪽 계약이다.
+    """
+    lake = _lake(sector_beta=0.8)
+    lake.exists = {}
+    lake.series[MARKET_CODE]["ret"] = lake.series[MARKET_CODE]["ret"][:60]  # 당일까지 못 온다
+
+    assert decompose(lake, "T", _day()) is not None
+    assert lake.exists["market_layer"] == f"시장 층 없음 - {MARKET_CODE} 당일 없음"
+
+
 def test_market_proxy_explaining_itself_is_not_an_absence():
     """**069500 을 설명할 때 시장 층이 없는 것은 정상이다** - 사유를 적으면 오진이다.
 
