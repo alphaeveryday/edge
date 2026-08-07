@@ -17,6 +17,7 @@ from .kis_nav import KisNavSource
 from .kis_price import KisDailyPriceSource
 from .krx_auth import KrxAuth
 from .krx_etf import KrxEtfSource
+from .krx_instrument import KrxInstrumentSource
 from .yahoo_price import YahooPriceSource
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "KisNavSource",
     "KisAuth",
     "KrxEtfSource",
+    "KrxInstrumentSource",
     "KrxAuth",
     "PoliteClient",
     "StopFetch",

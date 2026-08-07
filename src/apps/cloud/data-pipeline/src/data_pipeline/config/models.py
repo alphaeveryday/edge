@@ -360,6 +360,30 @@ class KrxEtfConfig(BaseModel):
     source: KrxEtfSource
 
 
+class KrxInstrumentSource(BaseModel):
+    """KRX OpenAPI 종목기본정보 소스 — 상장 전종목 단축코드·한글명 (ALPHA-829).
+
+    ⚠️ **`krx_etf` 와 다른 서비스다.** 저쪽은 `data.krx.co.kr` 비공식 경로 + 계정 로그인
+    (mbr_id/pw → JSESSIONID)이고, 여기는 `data-dbg.krx.co.kr` 공식 OpenAPI + 무상태
+    `AUTH_KEY` 헤더다. 자격증명이 서로 대체되지 않으니 설정도 섞지 않는다.
+
+    auth_key 는 커밋되는 파일이 아니라 환경변수로 주입한다:
+        DATA_PIPELINE_KRX_INSTRUMENT__SOURCE__AUTH_KEY=...
+    (운영은 Secrets Manager `edge-dev-data-pipeline/krx/api-key` 의 `authkey` 를 넣는다.)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    auth_key: str | None = None  # 비밀값: env 오버라이드 전용
+
+
+class KrxInstrumentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KrxInstrumentSource
+
+
 class DartFinancialConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
