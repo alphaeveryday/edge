@@ -6,7 +6,7 @@
 # 원칙: merge 자체는 DB를 바꾸지 않는다. dev에 스키마 변경이 머지돼 이 파이프라인이
 # 마이그레이션 task를 실행할 때만 dev DB가 변경된다.
 #
-# 왜 ECS one-off task인가: dev RDS는 private 서브넷 + SG 제한이라 GitHub-hosted 러너(VPC 밖)에서
+# 왜 ECS one-off task인가: dev RDS는 private 서브넷 + SG 제한이라 CI 러너(hosted·self-hosted 모두 VPC 밖)에서
 # 직접 접속할 수 없다. 그래서 러너에서 flyway를 돌리지 않는다. 대신 러너는 OIDC로 AWS 인증 후
 # 마이그레이션 이미지를 ECR에 push하고, VPC 내부에서 도는 ECS Fargate task를 트리거만 한다.
 # Flyway는 그 task 안에서 RDS에 적용된다(infra/terraform/modules/schema-migrate).
@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   migrate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 20
     # 접속값/식별자는 repo-level vars 에서 주입한다(terraform output → GitHub vars). OIDC 신뢰 경계는
     # dev 브랜치(push:dev → sub=ref:refs/heads/dev) — `environment:` 를 쓰지 않는다(ALPHA-313).

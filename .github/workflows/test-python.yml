@@ -36,7 +36,7 @@ concurrency:
 jobs:
   # ── 단위 테스트 (앱별 분리 실행) ─────────────────────────────
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -66,7 +66,7 @@ jobs:
   # 머지 후 deploy-* 에서야 첫 docker build 가 도는 구멍을 막는다 — 패키징·Dockerfile
   # 파손(예: 모듈 트리 개편)이 PR 단계에서 잡힌다.
   image-smoke:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -85,14 +85,14 @@ jobs:
   # 두 코드베이스의 결정적 ID 수렴과 실 스키마 SQL 정합이 검증 대상이다(ALPHA-534).
   # sync 는 무스코프다 — 이 테스트만 의도적으로 두 워크스페이스 멤버를 함께 쓴다.
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      # self-hosted(컨테이너 실행) 러너 시절 services: 미지원("Container feature is not
-      # supported when runner is already running inside container")으로 도입한 docker run
-      # 직접 기동 — github-hosted 에서도 동일하게 동작해 유지한다(schema-validate 와 동일 패턴).
+      # self-hosted 러너가 컨테이너 안에서 돌아 GitHub Actions 서비스 컨테이너(services:)를
+      # 쓸 수 없다("Container feature is not supported when runner is already running inside
+      # container" — DinD 로도 재활성화되지 않는다). DinD 로 직접 Postgres 를 띄운다(schema-validate 와 동일 패턴).
       - name: Start ephemeral Postgres
         run: |
           set -euo pipefail
@@ -114,9 +114,9 @@ jobs:
           exit 1
 
       # 버전은 libs/schema/build.gradle 의 Flyway 플러그인(10.21.0)과 맞춘다.
-      # self-hosted(DinD) 시절 서브경로 bind mount 가 빈 디렉터리로 잡히는 함정을 피해
-      # 루트 $PWD 를 마운트하고 -locations 로 컨테이너 안 경로를 지정한다 — hosted 에서도
-      # 동일하게 동작해 유지한다.
+      # DinD 에선 워크스페이스 서브경로 bind mount 가 빈 디렉터리로 잡히는 함정이 있다
+      # (루트 $PWD 마운트만 실제 내용이 실린다 — gitleaks 와 동일). 루트를 마운트하고
+      # -locations 로 컨테이너 안 경로를 지정한다.
       - name: Flyway migrate (cloud set)
         run: >
           docker run --rm --network host
@@ -141,7 +141,7 @@ jobs:
           # E2E_PGPORT 는 "Start ephemeral Postgres" 스텝이 $GITHUB_ENV 로 넘긴다.
         run: uv run pytest apps/cloud/analysis-engine/tests/e2e -q
 
-      # 1회용 VM 에선 no-op 인 방어적 teardown(영속 러너 시절 도입).
+      # 영속 러너에 컨테이너·포트를 남기지 않는다.
       - name: Tear down ephemeral Postgres
         if: always()
         run: docker rm -f edge-e2e-pg >/dev/null 2>&1 || true
