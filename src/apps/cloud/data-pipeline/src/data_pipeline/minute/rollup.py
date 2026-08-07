@@ -565,6 +565,16 @@ def rollup_session_cli(
     # 오늘 것과 무관하게 **매번** 훑는다 — 이 판정의 목적이 "안 돌았는데 조용한 것"을
     # 잡는 것이라, 오늘이 성공한 날에만 보면 정작 못 본 날을 영영 못 본다.
     scan_before = _scan_before()             # 인자와 로그가 같은 값을 쓴다
+    if WRITER_SINCE > scan_before.isoformat():
+        # 경계가 **아직 오지 않은 날**이면 판정 창 `[WRITER_SINCE, 오늘)` 이 공집합이라
+        # 이 스캔은 구조적으로 0건이다. 소유권을 넘긴 직후의 정상 상태지만(그 구간은
+        # 백필이 채운다), 경계를 옮겨 두고 되돌리는 것을 잊으면 감시가 **조용히** 꺼진
+        # 채로 남는다. 0건이 "구멍 없음"인지 "볼 창이 없음"인지 로그로 갈라 둔다.
+        logger.warning(
+            "5분 구멍 판정: 소유권 경계(%s)가 오늘(%s)보다 뒤다 — 판정 창이 비어 있다. "
+            "그 구간은 벤더 백필 소유이고, 경계가 지나면 자동으로 다시 켜진다",
+            WRITER_SINCE, scan_before.isoformat(),
+        )
     try:
         unfilled, contested, candidates = unfilled_settled_days(
             storage, ledger, market=_MARKET, dataset=dataset,

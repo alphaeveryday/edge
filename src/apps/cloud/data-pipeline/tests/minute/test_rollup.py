@@ -739,6 +739,29 @@ class TestRollupSessionCli:
             self.run(self.settings(tmp_path))
         assert "구멍 판정 후보가 0일이다" in caplog.text
 
+    def test_boundary_in_the_future_says_the_window_is_empty(
+            self, tmp_path, caplog, monkeypatch):
+        """소유권 경계가 아직 안 온 날이면 그 사실을 로그로 말한다.
+
+        WHY: 창 `[WRITER_SINCE, 오늘)` 이 공집합이면 스캔은 구조적으로 0건이다. 소유권을
+        넘긴 직후엔 정상이지만(그 구간은 벤더 백필이 채운다), 경계를 옮겨 두고 되돌리길
+        잊으면 **감시가 조용히 꺼진 채로 남는다**. 0건이 "구멍 없음"인지 "볼 창이 없음"
+        인지 갈리지 않으면 아무도 그 차이를 못 본다(Rule 12).
+
+        이 단언이 없으면 `WRITER_SINCE` 를 몇 년 뒤로 옮겨도 이 파일이 전건 통과한다 —
+        픽스처가 경계에서 파생되고 시계까지 고정돼 있기 때문이다(Rule 9).
+        """
+        import logging
+
+        import data_pipeline.minute.rollup as mod
+
+        self.with_fake_ledger(monkeypatch)
+        # 시계를 경계보다 **앞**으로 되돌린다 — 경계가 미래인 상태 그 자체다.
+        monkeypatch.setattr(mod, "_scan_before", lambda: SESSION_DAY - timedelta(days=1))
+        with caplog.at_level(logging.WARNING):
+            self.run(self.settings(tmp_path))
+        assert "판정 창이 비어 있다" in caplog.text
+
 
 def _scan_boom(*args, **kwargs):
     raise RuntimeError("S3 throttled")

@@ -15,19 +15,17 @@
 롤업 규칙은 `minute/rollup.py` 와 **같은 계약**이다(open=첫 봉 open · high=max ·
 low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=ts+5분).
 
-**왜 별도 파일인가.** `part-0.parquet` 은 그날의 정본이다 — 과거 파티션은 fmp 백필이
-쓴 것이고 2026-08-04 이후는 롤업 writer 가 쓴다. 거기에 끼워 넣으면 롤업이 다음 버킷에서
-지운다. 같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓴다 — 소비자(`duck._s3`)가
-`**/*.parquet` 글롭이라 둘 다 읽는다.
+**왜 별도 파일인가.** `part-0.parquet` 은 롤업이 통째로 덮는 파일이다 — 거기 끼워 넣으면
+다음 재집계에서 지워진다. 같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓴다 —
+소비자(`duck._s3`)가 `**/*.parquet` 글롭이라 둘 다 읽는다. 행이 서로소인 것은 쓰기 전에
+`part-0` 의 티커를 빼서 보장한다.
 
-🔴 **`rollup.WRITER_SINCE`(2026-08-04) 이후 파티션에는 쓰지 마라** (ALPHA-839 이후).
-"어느 쪽도 서로를 안 지운다"는 이제 **틀렸다** — 지우지는 않지만 **상대를 죽인다**.
-`_rollup_day` 가 파티션에서 자기 것 아닌 파일을 보면 산출을 **거부**하므로, 그 날짜에
-이 스크립트가 파일을 놓는 순간 그날 5분 파생이 **후크·EOD 배치 양쪽에서 영구 정지**한다
-(장중에 돌리면 그 시점 이후 봉이 통째로 사라진다). 그 정지는 EOD 배치의
-`unfilled_settled_days` 에 뜨지만, 푸는 것은 사람이 소유자를 정하는 일이다.
-⚠️ `--days` 기본값이 최근 70파티션이고 타깃 선정은 **종목 이력 깊이** 기준이라 날짜를
-안 가린다 — 최근 날짜에 쓰기 쉽다. `--days` 로 창을 좁혀 쓰거나 대상 날짜를 확인해라.
+**소유권 경계는 `rollup.WRITER_SINCE` 하나다.** 그 앞은 이 백필이, 뒤는 롤업이 파티션을
+소유한다. 날짜를 여기 박지 않고 `_trading_days` 가 그 상수를 읽어 달력을 자른다 —
+경계는 옮겨진 적이 있고(ALPHA-836) 주석으로 강제하면 옮길 때 하나만 고쳐진다.
+
+🔴 경계 **뒤** 파티션에 이 스크립트가 파일을 놓으면 `_rollup_day` 의 foreign 가드가 걸려
+그날 5분 파생이 후크·EOD 양쪽에서 **영구 정지**한다. 그래서 가드가 주석이 아니라 코드다.
 # ponytail: 파티션당 1파일 관례를 깬다. 합치려면 롤업 writer 가 이 원천을 알아야 하고
 # 그건 이 백필의 수명(일회성)보다 큰 변경이다 — ALPHA-839 는 병합이 아니라 거부를 골랐다.
 
@@ -235,8 +233,11 @@ def _day_payload(prior_rows: list[dict], existing: set[str],
     if not rows:
         return None
     mine = {r["ticker"] for r in rows}
+    # `existing` 도 뺀다 — 지난 런이 백필 파일에 쓴 티커가 나중에 `part-0` 에도 생기면
+    # 두 파일에 같은 행이 남아 소비자 글롭이 **두 번 센다**. 서로소 보장은 쓰기 시점의
+    # 한 겹뿐이므로 그 겹이 과거분까지 봐야 한다.
     keep = [r for r in prior_rows
-            if r["ticker"] not in mine
+            if r["ticker"] not in mine and r["ticker"] not in existing
             and SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
     return keep + rows, len(rows)
 

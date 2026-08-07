@@ -758,8 +758,15 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     """5분봉 canonical(dataset=intraday_5m)의 거래일 파일 키 (ALPHA-750).
 
     분석엔진(analysis-engine)이 소비하는 기존 데이터셋이다 — FMP 백필
-    (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 1분 롤업 writer 는
-    trade_date>=2026-08-04 파티션만 쓰므로 기존 파티션과 겹치지 않는다.
+    (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 그 뒤를 벤더 백필과
+    1분 롤업이 나눠 쓴다. 경계는 `minute.rollup.WRITER_SINCE` 하나이고, 그 앞은 백필이
+    그 뒤는 롤업이 **파티션을 통째로 소유한다** — 날짜를 여기 박아 두면 경계가 움직일
+    때 이 문장만 거짓이 된다(ALPHA-836 에서 실제로 그랬다).
+
+    한 파티션에 두 writer 의 파일이 공존할 수 있다(`part-0.parquet` + 벤더 백필 파일).
+    소비자는 파티션을 `*.parquet` 글롭으로 읽으므로 **행이 서로소여야 한다** — 백필이
+    쓰기 전에 `part-0` 의 티커를 빼는 것이 그 보장이고, 롤업 쪽은 자기 소유 구간에서
+    낯선 파일을 만나면 산출을 멈춘다(`rollup._rollup_day` 의 foreign 가드).
 
     스키마(dev S3 2026-07-31 part-0.parquet 실측 — 이 컬럼·타입 그대로, 여분 컬럼
     없음: 소비자 스키마 검증과의 충돌을 피하는 게 우선이라 bars_count 류는 넣지

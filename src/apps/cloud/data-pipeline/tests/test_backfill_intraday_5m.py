@@ -126,6 +126,22 @@ def test_payload_merges_prior_landings_instead_of_replacing_them():
     assert {r["ticker"] for r in rows} == {"091170", "091180", "102970"}
 
 
+def test_payload_drops_prior_rows_that_the_authoritative_file_now_owns():
+    """정본이 나중에 가져간 티커는 백필 파일에서 뺀다.
+
+    WHY: 소비자는 파티션을 `*.parquet` 글롭으로 읽는다. 지난 런이 백필 파일에 쓴 티커가
+    나중에 `part-0` 에도 생기면 같은 행이 두 파일에 남아 **두 번 세어진다**. 서로소
+    보장은 쓰기 시점의 한 겹뿐이므로 그 겹이 과거분까지 봐야 한다.
+    """
+    prior = [_row("091170"), _row("091180")]     # 091170 을 정본이 가져갔다
+    candidates = [_row("102970")]
+
+    rows, _ = backfill._day_payload(prior, {"091170"}, candidates)
+
+    assert {r["ticker"] for r in rows} == {"091180", "102970"}, \
+        "정본과 겹치는 행이 백필 파일에 남았다 — 글롭이 두 번 센다"
+
+
 def test_payload_replaces_the_same_ticker_and_drops_off_session_bars():
     """같은 종목은 이번 값으로 갈아끼우고, 남기는 행에 정규장 필터를 다시 건다.
 
