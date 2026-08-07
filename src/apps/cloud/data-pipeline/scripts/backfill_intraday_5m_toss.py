@@ -65,6 +65,8 @@ BUCKET_MINUTES = 5
 SESSION_OPEN, SESSION_CLOSE = time(9, 0), time(15, 30)
 MARKET = "KR"
 PREFIX = "canonical/market_data/intraday_5m/market=KR"
+# 거래일의 **독립 증인**. 5분봉 파티션이 통째로 빠진 날을 이쪽이 안다(ALPHA-836).
+PRICE_DAILY_PREFIX = "canonical/market_data/price_daily/market=KR"
 BACKFILL_NAME = "part-toss-backfill.parquet"
 SOURCE_VENDOR = "toss_backfill"
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
@@ -79,12 +81,11 @@ def _s3():
     return boto3.client("s3")
 
 
-def _partition_days(s3, bucket: str) -> list[str]:
-    """존재하는 파티션 날짜 오름차순. 거래일 달력을 지어내지 않는다 —
-    **이미 파티션이 있는 날**이 곧 우리가 아는 거래일이다."""
+def _partition_days(s3, bucket: str, prefix: str = PREFIX) -> list[str]:
+    """`prefix` 아래 존재하는 파티션 날짜 오름차순."""
     out, token = [], None
     while True:
-        kw = {"Bucket": bucket, "Prefix": f"{PREFIX}/", "Delimiter": "/"}
+        kw = {"Bucket": bucket, "Prefix": f"{prefix}/", "Delimiter": "/"}
         if token:
             kw["ContinuationToken"] = token
         r = s3.list_objects_v2(**kw)
@@ -93,6 +94,43 @@ def _partition_days(s3, bucket: str) -> list[str]:
         token = r.get("NextContinuationToken")
         if not token:
             return sorted(out)
+
+
+def _trading_days(s3, bucket: str) -> list[str]:
+    """거래일 달력 = 5분봉 파티션 **∪** 일봉 파티션 (ALPHA-836).
+
+    5분봉 파티션만으로 달력을 삼던 판이 **통째로 빠진 날을 영영 못 봤다**: 2026-08-03·
+    08-04 는 `price_daily` 에 있는 거래일인데 `intraday_5m` 파티션이 아예 없어 대상
+    목록에 들지도 못했다. 있는 것으로 있어야 할 것을 정의하면 부재가 부재로 안 보인다.
+
+    **교체가 아니라 합집합이다.** `price_daily` 는 파티션이 몇 주치뿐이라(실측 21일)
+    교체하면 창이 그만큼 쪼그라들어 전 종목이 대상이 된다.
+    """
+    return sorted(set(_partition_days(s3, bucket))
+                  | set(_partition_days(s3, bucket, PRICE_DAILY_PREFIX)))
+
+
+def _configured_universe() -> set[str]:
+    """설정이 **수집하기로 선언한** 1분 유니버스 (ALPHA-836).
+
+    S3 `config/minute/universe.json` 이 1분 레인의 운영 정본이지만 백필의 기준으로는
+    쓰지 않는다 — 그건 빌더가 만들어 올려야 갱신되는 파생물이고, 실측 2026-08-07 에
+    그 객체는 08-04 자라 ALPHA-842 가 얹은 섹터 후보 48종이 아직 없었다. 아직 안 올라간
+    것을 기준으로 삼으면 **선언된 대상이 백필에서 또 빠진다** — 이 티켓이 닫으려는
+    바로 그 결함이다. 그래서 선언 자체(`sources.toml`)를 읽는다.
+
+    부재는 빈 집합이다. 이 함수가 없어도 관측 유니버스로 백필은 돌아야 한다 — 설정
+    로드 실패가 백필 전체를 세우지는 않되, 조용히 넘어가지도 않는다.
+    """
+    try:
+        from data_pipeline.config.loader import load_settings
+
+        minute = getattr(load_settings(), "minute_universe", None)
+        return set(getattr(minute, "sector_etf_ids", None) or ())
+    except Exception as e:                                      # noqa: BLE001
+        log.warning("설정 유니버스를 못 읽었다 — 관측 유니버스만 쓴다: %s: %s",
+                    type(e).__name__, str(e)[:120])
+        return set()
 
 
 def _read_day(s3, bucket: str, day: str, name: str = "part-0.parquet"):
@@ -199,7 +237,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     s3 = _s3()
-    days = _partition_days(s3, a.bucket)[-a.days:]
+    days = _trading_days(s3, a.bucket)[-a.days:]
     if not days:
         log.error("파티션이 없다 — 버킷/프리픽스를 확인해라")
         return 1
@@ -236,9 +274,20 @@ def main() -> int:
         for tk in covered[d]:
             coverage[tk] += 1
 
-    universe = present[days[-1]]
+    # 유니버스는 **수집하기로 선언한 것**이지 이미 받아 둔 것이 아니다(ALPHA-836).
+    # `present[days[-1]]` 만 쓰던 판은 한 번도 수집된 적 없는 종목을 영영 못 봤다 —
+    # ALPHA-842 가 얹은 섹터 후보 48종이 정확히 그 자리였다(실측 2026-08-07: 섹터
+    # 계열 80종 중 정본 보유가 FMP 시대 7종·롤업 시대 32종). 날짜 축과 같은 결함이다.
+    #
+    # 관측 쪽은 **실제로 정본이 있는 마지막 날**을 쓴다. 달력이 일봉과의 합집합이 된 뒤로
+    # `days[-1]` 이 5분봉 파티션 없는 날일 수 있고(일봉이 더 최신인 창), 그러면 관측
+    # 유니버스가 통째로 비어 상장 폐지분까지 되살아난 목록만 남는다.
+    latest = next((d for d in reversed(days) if present[d]), None)
+    universe = (present[latest] if latest else set()) | _configured_universe()
     if a.tickers:
-        targets = sorted(set(a.tickers.split(",")) & universe)
+        # **명시 요청은 명시 대상이다.** 교집합을 걸면 아직 안 받아 본 종목을 지정해도
+        # 조용히 0건으로 끝난다 — 백필에서 그건 결손을 성공으로 위장하는 길이다.
+        targets = sorted(set(a.tickers.split(",")))
     else:
         targets = sorted(tk for tk in universe if coverage[tk] < a.min_days)
     log.info("유니버스 %d종 · 백필 대상 %d종 (기준 %d일 미만)",
@@ -286,6 +335,13 @@ def main() -> int:
         # (2026-08-07 실측: 9종만 돌린 재실행이 앞선 85종을 지웠다). 같은 종목은 이번
         # 값으로 갈아끼우고, 남기는 행에도 정규장 필터를 다시 건다 - 필터 없던 판이
         # 쓴 장전·장후 봉이 여기서 함께 걷힌다.
+        if not rows:
+            # **새 행이 0 이면 안 쓴다**(ALPHA-836). 예전엔 keep 이 비지 않으면 그대로
+            # PUT 이 나가 같은 바이트로 파일을 덮었고, 그 PUT 이 라이브 소비자의 읽기와
+            # 경합했다 - 실측 2026-08-07: analysis-engine 이 07-02 백필 파일에서
+            # HTTP 416 Range Not Satisfiable 로 설명 발행에 실패했다. 재실행마다 재발한다.
+            # (정규장 밖 봉 재필터는 `--repair-session-hours` 가 담당하므로 안 잃는다.)
+            continue
         mine = {r["ticker"] for r in rows}
         prior = _read_day(s3, a.bucket, d, BACKFILL_NAME)
         keep = [r for r in (prior.to_pylist() if prior is not None else [])
