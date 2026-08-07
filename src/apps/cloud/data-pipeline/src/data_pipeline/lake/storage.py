@@ -215,6 +215,58 @@ def raw_etf_profile_partition(
     )
 
 
+def raw_instrument_profile_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 종목기본정보(instrument_profile) 파티션 프리픽스 (끝 슬래시 없음).
+
+    ETF 프로필과 동형(bronze 통일) — 상장 종목의 식별·명칭이라 스냅샷이고, 매 run 이 그
+    기준일의 전종목을 수집일(ingest_date) 기준으로 append 한다. **벤더 기준일(basDd)은
+    수집일과 별개로 각 레코드에 보존**한다(ALPHA-829): KRX 는 당일 조회를 막아
+    `basDd < 오늘` 이라 이 둘이 **항상 다르다** — 수집일로 기준일을 대신 읽으면 하루 어긋난다.
+    """
+    return (
+        f"raw/source={source}/dataset=instrument_profile/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
+_RAW_INSTRUMENT_PROFILE_MARKER = "/dataset=instrument_profile/"
+
+
+def is_raw_instrument_profile_key(key: str) -> bool:
+    """raw instrument_profile 데이터 파일 키인지. (part-*.ndjson 만.)"""
+    return (key.startswith("raw/") and _RAW_INSTRUMENT_PROFILE_MARKER in key
+            and key.endswith(".ndjson"))
+
+
+def parse_raw_instrument_profile_key(key: str) -> dict[str, str]:
+    """raw instrument_profile 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    ⚠️ 여기엔 **기준일이 없다**. canonical 의 as_of_date 는 키가 아니라 **행의 `bas_dd`**
+    에서 온다(당일 조회 차단 때문에 수집일과 항상 다르다 — 파티션 빌더 주석 참조).
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def canonical_instrument_profile_partition(market: str, as_of_date: str) -> str:
+    """canonical 종목기본정보 파티션 프리픽스 (끝 슬래시 없음).
+
+    `canonical_etf_profile_partition` 과 같은 모델이다 — 시세가 아니라 **참조 데이터**라
+    reference 존이고, 시간축은 벤더 기준일(as_of_date = KRX `basDd`)이다. 종목 마스터
+    로더는 **최신 기준일 스냅샷**을 읽는다(ETF 프로필·구성종목과 동형).
+
+    ⚠️ as_of_date 는 수집일이 아니다 — raw 빌더 주석 참조.
+    """
+    return f"canonical/reference/instrument_profile/market={market}/as_of_date={as_of_date}"
+
+
 def raw_disclosure_day_prefix(source: str, market: str, ingest_date: str) -> str:
     """raw 공시 **수집일 전체**(run_id 무관) 프리픽스 (끝 슬래시 포함).
 

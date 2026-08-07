@@ -39,6 +39,7 @@ from .models import (
     MinutePriceWorkerConfig,
     MinuteRelayConfig,
     KrxEtfConfig,
+    KrxInstrumentConfig,
     NewsConfig,
     PriceConfig,
     PriceTriggersConfig,
@@ -79,6 +80,9 @@ class Settings(BaseSettings):
     # KRX(국내 ETF 구성종목) 도 독립 벤더라 섹션 생략 가능 — 미설정이면 ingest-raw-etf
     # --source krx 진입점이 fail-loud 한다(US ETF 만 돌리는 환경은 생략 가능).
     krx_etf: KrxEtfConfig | None = None
+    # KRX 공식 OpenAPI 종목기본정보(ALPHA-829) — krx_etf 와 **자격증명·호스트가 모두 다른**
+    # 별개 벤더라 섹션도 따로다. 미설정이면 ingest-raw-instrument 진입점이 fail-loud 한다.
+    krx_instrument: KrxInstrumentConfig | None = None
     # OpenDART 공시(disclosure) 는 재무와 별개 잡·별개 API(list.json/document.xml)다. 미설정이면
     # ingest-raw-disclosure 진입점이 fail-loud 한다(공시를 안 돌리는 환경은 생략 가능).
     dart_disclosure: DartDisclosureConfig | None = None
