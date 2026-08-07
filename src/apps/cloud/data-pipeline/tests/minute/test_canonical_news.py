@@ -81,6 +81,47 @@ class TestCorrection:
         document = db.documents[(SOURCE, ARTICLE_ID)]
         assert db.news_documents[document["document_id"]]["lead_text"] is None
 
+    def test_lead_stamp_marks_who_observed_the_current_lead(self):
+        # ALPHA-696 — 이 시각이 없으면 배치가 자기 레이크의 옛 리드로 되돌릴 근거를 못 가진다.
+        # 리드가 붙은 첫 관측은 **주장**이다(배치가 덮지 못하게 막아야 한다).
+        db = FakeMinuteDB()
+        write(db, vendor_row())
+
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        assert db.news_documents[document["document_id"]]["lead_observed_at"] == OBSERVED
+
+    def test_new_row_without_a_lead_claims_nothing(self):
+        # ⚠️ 리드 없는 새 행에 시각을 찍으면 배치가 **정상 스니펫을 갖고 와도 영구 차단**된다
+        # — ALPHA-628·695 가 되찾아 온 리드를 이 축이 새로 잃는다. NULL = 미주장이라야 배치가
+        # 그 빈 자리를 채울 수 있다.
+        db = FakeMinuteDB()
+        write(db, vendor_row(CONTENT=None))
+
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        assert db.news_documents[document["document_id"]]["lead_observed_at"] is None
+
+    def test_clearing_an_existing_lead_is_a_claim(self):
+        # 반대쪽 — 있던 리드를 지우는 정정은 **지금 알게 된 사실**이다. 여기서 시각이 안 남으면
+        # 배치의 `IS NULL` 절이 열려 옛 리드가 복원되고, 그때부터 배치가 계속 이기는 고착이 된다.
+        db = FakeMinuteDB()
+        write(db, vendor_row())
+        cleared = datetime(2026, 7, 31, 10, 0, tzinfo=KST)
+        write(db, vendor_row(CONTENT=None), observed_at=cleared)
+
+        news = db.news_documents[db.documents[(SOURCE, ARTICLE_ID)]["document_id"]]
+        assert news["lead_text"] is None
+        assert news["lead_observed_at"] == cleared
+
+    def test_reobserving_the_same_lead_does_not_advance_the_stamp(self):
+        # ⚠️ 매 관측마다 밀어 올리면 이 레인이 장중 내내 시각을 끌고 가, 레인이 못 본 진짜
+        # 정정(기사가 목록 1페이지에서 밀려난 경우)을 배치가 영영 못 싣는다 — 축이 무효가 된다.
+        db = FakeMinuteDB()
+        write(db, vendor_row())
+        write(db, vendor_row(), observed_at=datetime(2026, 7, 31, 15, 0, tzinfo=KST))
+
+        news = db.news_documents[db.documents[(SOURCE, ARTICLE_ID)]["document_id"]]
+        assert news["lead_observed_at"] == OBSERVED
+
     def test_arrival_time_is_when_we_observed_not_when_the_window_was_due(self):
         # ⚠️ recovery 는 09:00 창을 12:00 에 처리한다. window_start 를 쓰면 12:00 에 알게 된
         # 기사를 09:00 에 안 것으로 **소급**하고, 이 값을 PIT 시각으로 복사하는 하류
