@@ -33,8 +33,9 @@ ts 는 직전 분이라 ts 로 정렬하면 open/close 가 뒤바뀐다). 결손
 없다. ⚠️ **파티션 안에서는 다르다**(2026-08-07 정정) — 같은 파티션에 다른 writer 가 다른
 파일명으로 쓰고 소비자는 글롭으로 읽으므로, 나란히 놓이면 겹치는 봉이 두 번 세어진다.
 `_rollup_day` 가 타 writer 파일을 발견하면 산출하지 않는 이유다.
-# ponytail: 매 버킷 마감마다 그날 1분 artifact 전부를 다시 읽는다(장 후반 ~390 GET)
-# — 인프로세스 증분 캐시는 이 비용이 실측으로 문제가 될 때 붙인다.
+# ponytail: 매 버킷 마감마다 그날 1분 artifact 전부를 다시 읽고(장 후반 ~390 GET) 타
+# writer 파일 확인에 S3 LIST 를 1회 더 한다(~78회/일) — 인프로세스 증분 캐시는 이 비용이
+# 실측으로 문제가 될 때 붙인다.
 """
 
 from __future__ import annotations
@@ -155,7 +156,10 @@ def rollup_session(
 
     후크와 달리 **버킷 게이트가 없다** — 세션 전체를 대상으로 부르는 자리라 "방금 닫힌
     버킷"이라는 개념이 없고, 닫힌 버킷만 싣는 규칙은 `_rollup_day` 의 커밋 지평이 그대로
-    건다. 산출은 후크의 마지막 산출과 **같은 바이트여야 한다**(같은 커밋 세대 집합).
+    건다. 산출은 후크의 마지막 산출과 **같은 바이트여야 한다** — 단 그 등식은 원장의
+    window 집합이 `plan_session_windows` 산출과 같을 때만 성립한다. 아래 이유로 배치는
+    원장을 정본으로 삼으므로, 둘이 갈린 세션에서는 두 산출이 **의도적으로** 다르다.
+    sha256 불일치를 결함으로 읽기 전에 원장과 계획이 같은지부터 봐라.
 
     ⚠️ 계획·커밋을 **원장에서 읽는다** — `plan_session_windows` 를 다시 부르지 않는다.
     그 함수의 창 범위는 universe JSON 이 정하는데(정규장 390 vs 시간외 720), 그 파일은
@@ -342,37 +346,54 @@ def unfilled_settled_days(
     만드는 대신 **파티션 부재**를 물어보는 것으로 1차를 대신한다: 재료(1분)가 더 이상
     변하지 않는 날에 파생이 없으면 그건 결손이고, 그 판정에 새 표가 필요 없다.
 
-    ⚠️ 판정 축이 `FINALIZED` 가 **아니다**. 의미상으론 그게 정확해 보이지만 dev 실측
+    ⚠️ 세션 축이 `FINALIZED` 가 **아니다**. 의미상으론 그게 정확해 보이지만 dev 실측
     (2026-08-07)에서 `FINALIZED` 세션은 **0건**이다 — 전 세션이 `DRAINED` 에 멈춰 있고
     `qc-minute-session` 이 돌지 않는다. `FINALIZED` 로 물으면 이 판정은 영영 빈 목록을
-    내면서 "구멍 없음"으로 보인다(안 본 것을 0건으로 확정하는 자리다). 축은 **원장이 더
-    이상 움직이지 않는 phase 집합**이고, 그 정의는 `session_ops` 가 이미 갖고 있다 —
-    여기서 다시 세면 두 곳이 갈린다.
+    내면서 "구멍 없음"으로 보인다(안 본 것을 0건으로 확정하는 자리다). 정확한 축과 그
+    확장 사유는 `_settled_session_dates` 에 있다.
 
-    ⚠️ 파티션 판정 축도 `part-0.parquet` 존재가 **아니다**. 같은 파티션을 다른 writer 가
-    다른 파일명으로 채우고(토스 백필 `part-toss-backfill.parquet`, ALPHA-828) 소비자는
-    파티션 글롭으로 읽으므로, `part-0` 만 보면 이미 채워진 날을 구멍으로 보고한다
-    (실측 2026-08-03).
+    ⚠️ 파티션 축이 둘이다. "파티션이 통째로 비었나" 하나로 물으면 `_rollup_day` 가 타
+    writer 파일 때문에 거부한 날이 영원히 "채워짐"으로 보이고(파생은 영영 안 나오는데
+    조용하다), "우리 `part-0` 이 있나" 하나로 물으면 **후크가 먼저 쓴 뒤 백필이 끼어든
+    날**이 빠진다(그때 남는 것은 그 시점에 얼어붙은 부분본이다 — 운영에서 더 흔한 순서다).
+    그래서 타 writer 파일 유무를 먼저 보고, 없을 때만 우리 산출의 부재를 본다.
+    (`WRITER_SINCE` 이전 파티션 — 다른 벤더가 정당하게 소유한 2026-08-03 같은 날 — 은
+    애초에 후보가 아니라 이 축이 오탐을 내지 않는다.)
 
-    `WRITER_SINCE` 이전은 애초에 이 writer 의 소관이 아니라 대상에서 뺀다 — 넣으면
-    영영 안 지워지는 결손 목록이 되고, 그러면 아무도 안 읽는다.
+    `WRITER_SINCE` 이전을 빼는 이유도 같다 — 넣으면 영영 안 지워지는 결손 목록이 되고,
+    그러면 아무도 안 읽는다.
 
-    ⚠️ 그래도 **자가 해소되지 않는 항목이 남는다** — 워커가 하루 통째로 안 돈 날은 커밋이
-    0건이라 재실행해도 파생이 안 생기고, 매 실행마다 같은 날을 다시 보고한다. 억제 축을
-    두지 않은 것은 의도다: 그건 진짜 구멍이고, 지우려면 1분 재수집이 필요하다.
+    ⚠️ 그래도 **자가 해소되지 않는 항목이 두 종류 남는다**: ①워커가 하루 통째로 안 돈 날
+    (커밋 0건이라 재실행해도 파생이 안 생긴다) ②타 writer 가 그 파티션을 물고 있는 날.
+    억제 축을 두지 않은 것은 의도다 — 둘 다 진짜 구멍이고, 각각 1분 재수집과 소유권
+    결정을 필요로 한다.
 
-    반환은 **(결손 거래일, 후보 일수)** 다. 분모를 같이 주는 이유는 빈 목록이 "구멍
-    없음"과 "본 게 없음" 둘 다이기 때문이다 — dataset·source_group·phase·날짜 하한 넷 중
-    하나만 빗나가도 후보가 0이 되고, 그때 목록만 보면 초록으로 읽힌다.
+    반환은 **(결손 거래일, 소유권 충돌 거래일, 후보 일수)** 다.
+
+    두 목록을 가르는 이유는 **처방이 다르기** 때문이다 — 결손은 1분 재수집을 부르고,
+    충돌은 사람이 소유자를 정해야 풀린다. 하나로 합치면 그 구분이 로그 문구에만 남고,
+    로그는 테스트가 못박지 못하는 표면이라 조용히 사라진다.
+
+    분모를 같이 주는 이유는 빈 목록이 "구멍 없음"과 "본 게 없음" 둘 다이기 때문이다 —
+    dataset·source_group·phase·날짜 창 넷 중 하나만 빗나가도 후보가 0이 되고, 그때
+    목록만 보면 초록으로 읽힌다.
     """
     settled = _settled_session_dates(
         ledger, dataset=dataset, source_group=source_group, before=before
     )
-    unfilled = [
-        trade_date for trade_date in settled
-        if not storage.list_keys(canonical_intraday_5m_prefix(market, trade_date))
-    ]
-    return unfilled, len(settled)
+    unfilled, contested = [], []
+    for trade_date in settled:
+        keys = storage.list_keys(canonical_intraday_5m_prefix(market, trade_date))
+        day_key = canonical_intraday_5m_key(market, trade_date)
+        if any(k != day_key for k in keys):
+            # 타 writer 파일이 있으면 `_rollup_day` 가 그날을 **영구 거부**한다.
+            # ⚠️ 우리 part-0 유무와 **무관하게** 잡아야 한다 — 후크가 09:04 에 part-0 를
+            # 쓴 뒤 백필이 끼어드는 순서가 운영에서 더 흔하고, 그때 남는 것은 그 시점에
+            # 얼어붙은 **부분본**이다. `part-0` 존재만 보면 그 부분본이 완성본처럼 보인다.
+            contested.append(trade_date)
+        elif not keys:
+            unfilled.append(trade_date)
+    return unfilled, contested, len(settled)
 
 
 def _settled_session_dates(
@@ -385,9 +406,13 @@ def _settled_session_dates(
     start 는 새 session_id 를 만든다), 그날은 rollup 도 실패할 확률이 가장 높다 —
     **가장 위험한 날이 판정에서 구조적으로 빠진다.**
 
-    ⚠️ 그래서 `before`(보통 오늘 KST)로 **오늘을 뺀다**. 안 빼면 마감 전에 도는 실행이
-    진행 중인 `DRAINING` 을 고착으로 오인해 매일 거짓 양성으로 시작한다. 오늘의 결손은
-    이 판정이 아니라 그 실행 자신의 exit code 와 `key` 가 말한다.
+    ⚠️ `before` 는 **오늘(KST)** 이다 — `--session-date` 로 지목한 대상 날짜가 아니다.
+    오늘을 빼는 이유는 진행 중인 `DRAINING` 을 고착으로 오인하지 않기 위해서고(오늘의
+    결손은 실행 자신의 exit code 와 `key` 가 말한다), **대상 날짜를 빼면 안 되는** 이유는
+    과거 하루를 손으로 되돌리는 실행 — 이 스텝이 존재하는 이유 — 에서 감시 창이 가장
+    좁아지기 때문이다. 실측: 대상일을 넘기면 `--session-date 2026-08-04` 가 하한
+    `>= WRITER_SINCE(08-04)` 와 겹쳐 **후보가 구조적으로 항상 0**이 되고, 분모 경보가
+    거짓으로 뜬다.
     """
     from .session_ops import DRAINED_PHASES
 
@@ -415,11 +440,18 @@ def rollup_session_cli(
     EOD 스케줄이 부를 자리다(스케줄 자체는 terraform — 별 PR). 그날 5분 파생을 마감 후
     한 번 확정하고, 지나간 거래일의 결손을 함께 보고한다.
 
-    exit: 0=확정했다(또는 비거래일 no-op) / 1=확정하지 않았다(세션 없음·커밋 0건·닫힌
-    버킷 0·다른 writer 파일 존재·`WRITER_SINCE` 이전 — 사유는 로그에) / 2=판정 자체를
-    못 함(설정·인자 결손·DB/S3 장애). `qc-minute-session`·`plan-minute-session` 과 같은
-    규약이다 — **인자 결손도 2** 다(`_resolve` 의 `SystemExit`(1) 을 쓰지 않고 여기서
-    검증하는 이유. 1 은 "판정은 됐는데 결과가 나쁘다"라 SFN·운영자가 처방을 못 가른다).
+    exit: 0=확정했다 / 1=확정하지 않았다(세션 없음·커밋 0건·닫힌 버킷 0·다른 writer 파일
+    존재·`WRITER_SINCE` 이전 — 사유는 로그에) / 2=판정 자체를 못 함(설정·인자 결손·
+    DB/S3 장애). `qc-minute-session`·`plan-minute-session` 과 같은 규약이다 — **인자
+    결손도 2** 다(`_resolve` 의 `SystemExit`(1) 을 쓰지 않고 여기서 검증하는 이유.
+    1 은 "판정은 됐는데 결과가 나쁘다"라 SFN·운영자가 처방을 못 가른다).
+
+    ⚠️ **우선순위가 있다 — 마지막 네 줄을 `exit_code or (0 if key else 1)` 로 "정리"하지
+    마라.** rollup 이 산출하지 않았으면(`key is None`) 그건 재시도로 안 낫는 사실이라
+    **1 이 이긴다**. 구멍 판정 스캔의 일시 실패(2)가 그걸 덮으면 "사람이 봐야 한다"가
+    "재시도하면 된다"로 뒤집힌다. 판정 실패가 2 를 내는 것은 **rollup 이 성공했을 때뿐**
+    이고, 그때 남는 유일한 사실이 "감시가 안 돌았다"라서다. 비거래일도 같다 — 휴장은
+    조용해야 하지만 **감시 실패는 휴장과 무관한 사실**이라 그날도 2 로 나간다.
 
     ⚠️ 세션 phase 를 게이트로 걸지 **않는다**. drain 이 상한 초과로 안 끝난 날에도 파생은
     나와야 하고(닫힌 버킷만 싣는 규칙이 부분 노출을 이미 막는다), 걸면 stop 이 막힌 하루가
@@ -480,63 +512,89 @@ def rollup_session_cli(
     result = {
         "session_id": session_id, "session_date": day.isoformat(),
         "trading_day": is_trading_day(day), "phase": None, "key": None,
-        "unfilled_settled_days": None, "settled_day_count": None,
+        "unfilled_settled_days": None, "contested_days": None,
+        "settled_day_count": None,
     }
-    # ⚠️ 구멍 판정을 **rollup 과 다른 try 로 분리한다**. 같은 블록에 두면 PUT 실패
-    # (AccessDenied 등)에서 판정이 계산도 출력도 안 되는데, 이 레인엔 exit≠0 백스톱이
-    # 없어(스케줄러는 RunTask 제출까지만 본다) 그 목록이 유일한 신호다 — 실패한 날에
-    # 꺼지는 감시는 감시가 아니다.
-    exit_code = 0
+    rollup_failed = scan_failed = False
+
+    if result["trading_day"]:
+        # ⚠️ rollup 을 **먼저** 한다. 구멍 스캔의 창이 `[WRITER_SINCE, 오늘)` 이라 대상
+        # 날짜가 그 안에 있으므로, 스캔이 앞서면 **방금 그날을 채운 실행이 같은 출력에서
+        # 그날을 결손이라 보고한다**(한 JSON 안에서 두 필드가 서로를 부정한다).
+        try:
+            snapshot = ledger.session_snapshot(session_id=session_id)
+            result["phase"] = None if snapshot is None else snapshot.get("phase")
+            if snapshot is None:
+                logger.error(
+                    "5분 롤업 %s: 거래일인데 1분 세션이 없다 — Premarket 계획이 안 돌았다"
+                    "(session=%s)", day.isoformat(), session_id,
+                )
+            else:
+                result["key"] = rollup_session(
+                    storage, ledger, session_id=session_id,
+                    market=_MARKET, session_date=day.isoformat(),
+                )
+        except Exception:
+            # ⚠️ 여기서 `return` 하지 않는다 — 아래 스캔이 안 돌면 실패한 날에 감시가
+            # 통째로 꺼진다. 이 레인엔 exit≠0 백스톱이 없어(스케줄러는 RunTask 제출까지만
+            # 본다) 그 목록이 유일한 신호다.
+            logger.exception("5분 롤업 실행 실패: %s", session_id)
+            rollup_failed = True
+
+    # 오늘 것과 무관하게 **매번** 훑는다 — 이 판정의 목적이 "안 돌았는데 조용한 것"을
+    # 잡는 것이라, 오늘이 성공한 날에만 보면 정작 못 본 날을 영영 못 본다.
+    scan_before = datetime.now(KST).date()   # 인자와 로그가 같은 값을 쓴다
     try:
-        unfilled, candidates = unfilled_settled_days(
+        unfilled, contested, candidates = unfilled_settled_days(
             storage, ledger, market=_MARKET, dataset=dataset,
-            source_group=source_group, before=day,
+            source_group=source_group, before=scan_before,
         )
-        result["unfilled_settled_days"], result["settled_day_count"] = unfilled, candidates
+        result["unfilled_settled_days"] = unfilled
+        result["contested_days"] = contested
+        result["settled_day_count"] = candidates
         if unfilled:
-            # 확정을 막지 않는다 — 오늘 산출과 다른 날의 결손은 별개 사실이고, 여기서
-            # 막으면 과거 구멍 하나가 오늘 파생을 무기한 세운다.
             logger.warning(
-                "1분 원장이 멈춘 거래일인데 5분 파티션이 빈 날 %d건 / 후보 %d일: %s",
+                "1분 원장이 멈춘 거래일인데 5분 산출이 없는 날 %d건 / 후보 %d일: %s",
                 len(unfilled), candidates, unfilled,
             )
-        elif not candidates:
+        if contested:
+            # 처방이 다르다 — 이쪽은 재수집이 아니라 **소유자 결정**이라야 풀린다.
+            logger.error(
+                "5분 파티션을 다른 writer 가 물고 있어 파생이 영구 정지한 거래일 %d건: %s",
+                len(contested), contested,
+            )
+        if not candidates:
             # 빈 목록이 "구멍 없음"인지 "본 게 없음"인지 출력만으로는 같다 — 분모 0 은
             # 판정 축이 빗나갔다는 신호이므로 조용히 넘기지 않는다.
             logger.warning(
                 "구멍 판정 후보가 0일이다(dataset=%s source_group=%s, %s 이후·%s 이전) — "
-                "판정 축이 원장과 안 맞을 수 있다", dataset, source_group, WRITER_SINCE, day,
+                "판정 축이 원장과 안 맞을 수 있다",
+                dataset, source_group, WRITER_SINCE, scan_before,
             )
     except Exception:
-        logger.exception("5분 파생 구멍 판정 실패(rollup 은 계속한다)")
-        exit_code = 2
+        logger.exception("5분 파생 구멍 판정 실패")
+        scan_failed = True
 
     if not result["trading_day"]:
         # 스케줄이 MON-FRI 라 휴장일에도 뜬다. 그날은 세션 자체가 없어 1(확정 안 됨)이
         # 되는데, 그건 결손이 아니라 정상이다 — 매 휴장일이 빨간 런이 되면 진짜 결손이
         # 그 소음에 묻힌다. ⚠️ 출력 **형상은 정상 경로와 같게** 유지한다(`eod.py` 규약):
         # 키가 빠지면 소비자가 없는 키를 0 으로 읽어 "결손 없음"으로 오독한다.
+        # 판정이 실패했으면 휴장일이라도 2 다 — 감시가 안 돈 것은 휴장과 무관한 사실이고,
+        # 여기서 0 으로 접으면 "휴장일엔 조용하다"가 "감시 실패도 조용하다"가 된다.
         logger.info("5분 롤업 %s: 비거래일 — no-op", day.isoformat())
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        return exit_code
-
-    try:
-        snapshot = ledger.session_snapshot(session_id=session_id)
-        result["phase"] = None if snapshot is None else snapshot.get("phase")
-        if snapshot is None:
-            logger.error(
-                "5분 롤업 %s: 거래일인데 1분 세션이 없다 — Premarket 계획이 안 돌았다"
-                "(session=%s)", day.isoformat(), session_id,
-            )
-        else:
-            result["key"] = rollup_session(
-                storage, ledger, session_id=session_id,
-                market=_MARKET, session_date=day.isoformat(),
-            )
-    except Exception:
-        logger.exception("5분 롤업 실행 실패: %s", session_id)
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        return 2
+        return 2 if scan_failed else 0
 
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return exit_code or (0 if result["key"] else 1)
+    # ⚠️ 세 사실의 **우선순위**다. 하나의 exit_code 변수로 합치면 rollup 예외(2)와 스캔
+    # 실패(2)가 뭉개져 아래 규칙이 무너진다 — 실제로 그렇게 짰다가 정당한 거부가 2 로
+    # 나갔다.
+    if rollup_failed:
+        return 2                      # 판정 자체를 못 함 — 재시도하면 될 수 있다
+    if result["key"] is None:
+        # rollup 이 **정당하게 거부**했다(타 writer 파일·WRITER_SINCE 이전·닫힌 버킷 0·
+        # 세션 없음) = 재시도로 안 낫는다. 스캔 실패가 이걸 2 로 덮으면 "사람이 봐야
+        # 한다"가 "재시도하면 된다"로 뒤집힌다.
+        return 1
+    return 2 if scan_failed else 0    # 오늘은 됐고 남은 사실은 "감시가 안 돌았다" 뿐

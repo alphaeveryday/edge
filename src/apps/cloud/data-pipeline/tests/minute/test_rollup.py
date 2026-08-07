@@ -434,19 +434,20 @@ class TestUnfilledSettledDays:
             if row["session_date"] == date.fromisoformat(session_date):
                 row["phase"] = phase
 
-    def unfilled(self, fx, before: date = date(2026, 8, 5)) -> list[str]:
-        days, _ = unfilled_settled_days(
+    def scan(self, fx, before: date = date(2026, 8, 5)):
+        return unfilled_settled_days(
             fx.storage, fx.ledger, market="KR",
             dataset="price_minute", source_group="toss", before=before,
         )
-        return days
+
+    def unfilled(self, fx, before: date = date(2026, 8, 5)) -> list[str]:
+        return self.scan(fx, before)[0]
+
+    def contested(self, fx, before: date = date(2026, 8, 5)) -> list[str]:
+        return self.scan(fx, before)[1]
 
     def candidates(self, fx, before: date = date(2026, 8, 5)) -> int:
-        _, n = unfilled_settled_days(
-            fx.storage, fx.ledger, market="KR",
-            dataset="price_minute", source_group="toss", before=before,
-        )
-        return n
+        return self.scan(fx, before)[2]
 
     def test_drained_day_without_partition_is_reported(self, tmp_path):
         # ⚠️ 축이 DRAINED 다. FINALIZED 로 물으면 dev 원장에서 영영 0건이다 — 실측
@@ -456,16 +457,38 @@ class TestUnfilledSettledDays:
         self.settle(fx, SESSION_DATE)
         assert self.unfilled(fx) == [SESSION_DATE]
 
-    def test_partition_filled_by_another_filename_is_not_a_hole(self, tmp_path):
-        # 토스 백필이 같은 파티션에 다른 파일명으로 쓰고 소비자는 파티션 글롭으로 읽는다
-        # — `part-0` 존재로 판정하면 이미 채워진 날(실측 2026-08-03)을 결손으로 보고한다
-        fx = Fixture(tmp_path)
-        self.settle(fx, SESSION_DATE)
+    def foreign(self, fx):
         fx.storage.put_bytes(
             f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}"
             "/part-toss-backfill.parquet", b"x",
         )
+
+    def test_partition_held_by_another_writer_is_contested_not_unfilled(self, tmp_path):
+        # `_rollup_day` 가 타 writer 파일을 보고 산출을 거부한 날은 파티션이 안 빈다 —
+        # "비었나"로 물으면 영원히 "채워짐"으로 보인다(조용한 영구 구멍).
+        # ⚠️ 결손과 **다른 목록**이어야 한다: 처방이 재수집이 아니라 소유자 결정이다.
+        fx = Fixture(tmp_path)
+        self.settle(fx, SESSION_DATE)
+        self.foreign(fx)
+        assert self.contested(fx) == [SESSION_DATE]
         assert self.unfilled(fx) == []
+
+    def test_contested_is_caught_even_when_our_output_already_exists(self, tmp_path):
+        # 🔴 운영에서 더 흔한 순서 — 후크가 09:04 에 part-0 를 쓴 **뒤** 백필이 끼어든다.
+        # 그때 rollup 은 얼어붙고 남는 건 그 시점의 **부분본**인데, "우리 part-0 있나"로만
+        # 물으면 그 부분본이 완성본처럼 보여 영원히 안 잡힌다.
+        fx = Fixture(tmp_path)
+        self.settle(fx, SESSION_DATE)
+        fx.storage.put_bytes(DAY_KEY, b"partial-ours")
+        self.foreign(fx)
+        assert self.contested(fx) == [SESSION_DATE]
+
+    def test_our_own_output_is_not_a_hole(self, tmp_path):
+        # 반대 방향 — 우리 part-0 만 있으면 어느 목록에도 안 든다(위가 항등식이 아님을 못박는다)
+        fx = Fixture(tmp_path)
+        self.settle(fx, SESSION_DATE)
+        fx.storage.put_bytes(DAY_KEY, b"ours")
+        assert self.unfilled(fx) == [] and self.contested(fx) == []
 
     def test_live_session_is_not_a_hole(self, tmp_path):
         # 아직 도는 세션(PLANNED·ACTIVE·DRAINING)은 원장이 움직이는 중이라 "재료가
@@ -502,7 +525,12 @@ class TestUnfilledSettledDays:
 
 
 class TestRollupSessionCli:
-    """CLI 규약 — exit code 와 출력 **형상**. 둘 다 소비자가 오독하기 쉬운 자리다."""
+    """CLI 규약 — exit code 와 출력 **형상**. 둘 다 소비자가 오독하기 쉬운 자리다.
+
+    ⚠️ 모든 테스트가 원장을 fake 로 물린다. 안 물리면 실 psycopg 연결 실패가 `except
+    Exception → 2` 로 뭉개져 **어떤 가드를 지워도 같은 2 가 나온다**(변이로 확인한 거짓
+    초록 — 처음 이 클래스의 3건이 그랬다).
+    """
 
     def settings(self, tmp_path, *, db=True):
         from data_pipeline.config import DbConfig, StorageConfig
@@ -514,17 +542,7 @@ class TestRollupSessionCli:
         s.storage = StorageConfig(backend="local", local_root=str(tmp_path))
         return s
 
-    def run(self, settings, **kw):
-        from data_pipeline.minute.rollup import rollup_session_cli
-
-        kw.setdefault("dataset", "price_minute")
-        kw.setdefault("source_group", "toss")
-        kw.setdefault("session_date", SESSION_DATE)
-        return rollup_session_cli(settings, **kw)
-
     def with_fake_ledger(self, monkeypatch) -> FakeMinuteDB:
-        """원장을 fake 로 물린다 — 안 물리면 DB 연결 실패가 **모든 갈래를 2로 뭉개서**
-        게이트를 지워도 테스트가 초록이다(변이로 확인한 거짓 초록)."""
         import data_pipeline.minute.repository as repo
         from data_pipeline.config import DbConfig
 
@@ -534,27 +552,60 @@ class TestRollupSessionCli:
             db=DbConfig(password="x"), connect_fn=db.connect))
         return db
 
+    def plan(self, db, session_date: str, *, phase: str = "DRAINED") -> str:
+        """원장에 실제 세션을 만든다 — dict 를 손으로 심으면 필드가 빠져 `session_snapshot`
+        이 KeyError 로 죽고, 그게 except 에 잡혀 **테스트가 의도한 경로를 안 밟는다**."""
+        from data_pipeline.config import DbConfig
+        from data_pipeline.minute.repository import MinuteLedger
+
+        ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=db.connect)
+        day = date.fromisoformat(session_date)
+        sid, _ = ledger.plan_session(
+            dataset="price_minute", source_group="toss", session_date=day,
+            universe_version=UNIVERSE.universe_version,
+            universe_hash=UNIVERSE.universe_hash,
+            windows=plan_session_windows(day, universe=UNIVERSE),
+        )
+        db.sessions[sid]["phase"] = phase
+        return sid
+
+    def run(self, settings, **kw):
+        from data_pipeline.minute.rollup import rollup_session_cli
+
+        kw.setdefault("dataset", "price_minute")
+        kw.setdefault("source_group", "toss")
+        kw.setdefault("session_date", SESSION_DATE)
+        return rollup_session_cli(settings, **kw)
+
     def test_news_dataset_is_refused(self, tmp_path, monkeypatch):
-        # 🔴 뉴스 세션도 390 window 를 계획하므로 committed 가 안 빈다. 그대로 돌면 뉴스
-        # 레인의 커밋 지평으로 잘린 5분봉이 **가격 레인이 만든 온전한 파일을 덮는다**.
-        # eod.py 가 orphan 스캔에서 같은 이유로 같은 가드를 둔다.
-        # ⚠️ source_group 은 **price_minute 어휘 안의 값**으로 주고 원장도 물린다.
-        # bigkinds 로 주면 source_group 검증에, 원장을 안 물리면 DB 실패에 먼저 걸려
-        # **dataset 가드를 지워도 2 가 나온다**(엉뚱한 이유로 초록인 테스트).
+        # 뉴스 세션도 390 window 를 계획하므로 committed 가 안 빈다. 그대로 돌면 뉴스
+        # 커밋 지평으로 잘린 5분봉이 **가격 파일을 덮는다**. eod.py 가 orphan 스캔에서
+        # 같은 이유로 같은 가드를 둔다.
+        # ⚠️ source_group 은 price_minute 어휘 안의 값으로 준다 — bigkinds 면 그 검증에
+        # 먼저 걸려 dataset 가드를 지워도 2 가 나온다.
         self.with_fake_ledger(monkeypatch)
         assert self.run(self.settings(tmp_path), dataset="news_minute",
                         source_group="toss") == 2
 
-    def test_unknown_source_group_is_refused(self, tmp_path):
+    def test_unknown_source_group_is_refused(self, tmp_path, monkeypatch):
+        self.with_fake_ledger(monkeypatch)
         assert self.run(self.settings(tmp_path), source_group="nope") == 2
 
-    def test_missing_db_config_is_two(self, tmp_path):
-        # 어휘·설정 결손은 전부 2 다 — qc-minute-session·plan-minute-session 과 같은 규약.
+    def test_missing_db_config_is_two(self, tmp_path, monkeypatch):
+        # 어휘·설정 결손은 전부 2 — qc-minute-session·plan-minute-session 과 같은 규약.
         # 1 로 내면 "판정은 됐는데 결과가 나쁘다"와 구분이 안 된다.
+        self.with_fake_ledger(monkeypatch)
         assert self.run(self.settings(tmp_path, db=False)) == 2
 
-    def test_bad_date_format_is_two(self, tmp_path):
+    def test_bad_date_format_is_two(self, tmp_path, monkeypatch):
+        self.with_fake_ledger(monkeypatch)
         assert self.run(self.settings(tmp_path), session_date="20260804") == 2
+
+    def test_missing_session_is_one_not_two(self, tmp_path, monkeypatch):
+        # 계획이 안 돈 거래일은 재시도로 안 낫는다 = 1. 2 로 내면 SFN·운영자가
+        # "재시도하면 될 실패"로 읽는다.
+        self.with_fake_ledger(monkeypatch)
+        assert self.run(self.settings(tmp_path)) == 1
 
     def test_non_trading_day_keeps_the_full_output_shape(self, tmp_path, capsys,
                                                          monkeypatch):
@@ -562,49 +613,118 @@ class TestRollupSessionCli:
         # 키를 0 으로 읽어 '위반 없음'으로 오독한다." 휴장일 분기가 그걸 어기기 쉽다.
         import json
 
-        import data_pipeline.minute.repository as repo
-        from data_pipeline.config import DbConfig
-
-        db = FakeMinuteDB()
-        real = repo.MinuteLedger
-        monkeypatch.setattr(repo, "MinuteLedger", lambda **kw: real(
-            db=DbConfig(password="x"), connect_fn=db.connect))
+        self.with_fake_ledger(monkeypatch)
         assert self.run(self.settings(tmp_path), session_date="2026-08-08") == 0  # 토요일
         out = json.loads(capsys.readouterr().out)
         assert set(out) == {"session_id", "session_date", "trading_day", "phase",
-                            "key", "unfilled_settled_days", "settled_day_count"}
+                            "key", "unfilled_settled_days", "contested_days",
+                            "settled_day_count"}
         assert out["trading_day"] is False and out["key"] is None
+        assert out["settled_day_count"] == 0        # 판정은 휴장일에도 돈다
+
+    def test_hole_scan_covers_days_after_the_target(self, tmp_path, capsys, monkeypatch):
+        # 🔴 창 상한을 **대상 날짜**로 묶으면 과거 하루를 손으로 되돌리는 실행 — 이 스텝이
+        # 존재하는 이유 — 에서 감시가 가장 좁아진다. 상한은 오늘이어야 한다.
+        import json
+
+        db = self.with_fake_ledger(monkeypatch)
+        for d in ("2026-08-04", "2026-08-05", "2026-08-06"):
+            self.plan(db, d)
+        self.run(self.settings(tmp_path), session_date="2026-08-04")
+        out = json.loads(capsys.readouterr().out)
+        assert out["unfilled_settled_days"] == ["2026-08-04", "2026-08-05", "2026-08-06"]
+        assert out["settled_day_count"] == 3
 
     def test_hole_report_survives_a_rollup_failure(self, tmp_path, capsys, monkeypatch):
         # 🔴 판정을 rollup 과 같은 try 에 두면 PUT 실패(AccessDenied 등)에서 목록이
-        # 계산도 출력도 안 된다. 이 레인엔 exit≠0 백스톱이 없어(스케줄러는 RunTask
-        # 제출까지만 본다) 그 목록이 유일한 신호다 — **실패한 날에 꺼지는 감시는
-        # 감시가 아니다.**
+        # 계산도 출력도 안 된다. 이 레인엔 exit≠0 백스톱이 없어 그 목록이 유일한 신호다
+        # — **실패한 날에 꺼지는 감시는 감시가 아니다.**
         import json
 
         import data_pipeline.minute.rollup as mod
 
         db = self.with_fake_ledger(monkeypatch)
-        settings = self.settings(tmp_path)
-        # 확정된 과거 거래일 하나를 심어 구멍 목록이 비지 않게 한다
-        db.sessions["s-old"] = {
-            "session_id": "s-old", "dataset": "price_minute", "source_group": "toss",
-            "session_date": date(2026, 8, 4), "phase": "DRAINED",
-        }
-        # 그날 세션도 있어야 rollup 이 실제로 불려 죽는다(세션이 없으면 애초에 안 부른다)
-        from data_pipeline.db import stable_domain_id
-        today_id = stable_domain_id("msn", "price_minute", "toss", "2026-08-05")
-        db.sessions[today_id] = {
-            "session_id": today_id, "dataset": "price_minute", "source_group": "toss",
-            "session_date": date(2026, 8, 5), "phase": "DRAINED",
-        }
-        monkeypatch.setattr(mod, "rollup_session", _boom)
-        assert self.run(settings, session_date="2026-08-05") == 2
+        self.plan(db, "2026-08-04")
+        self.plan(db, "2026-08-05")
+        called = []
+
+        def boom(*args, **kwargs):
+            called.append(1)
+            raise RuntimeError("S3 AccessDenied")
+
+        monkeypatch.setattr(mod, "rollup_session", boom)
+        # 예외는 "판정 자체를 못 함"이라 2 다(재시도 가능). 정당한 거부(None)의 1 과 다르다.
+        assert self.run(self.settings(tmp_path), session_date="2026-08-05") == 2
+        assert called, "rollup_session 이 불리지 않았다 — 이 테스트는 의도한 경로를 안 밟았다"
         out = json.loads(capsys.readouterr().out)
-        assert out["key"] is None                       # rollup 은 죽었다
-        assert out["unfilled_settled_days"] == ["2026-08-04"]   # 그래도 판정은 나왔다
-        assert out["settled_day_count"] == 1
+        assert out["key"] is None                                  # rollup 은 죽었다
+        assert out["unfilled_settled_days"] == ["2026-08-04", "2026-08-05"]  # 판정은 나왔다
+        assert out["settled_day_count"] == 2
+
+    def test_scan_failure_does_not_mask_a_legitimate_refusal(self, tmp_path, monkeypatch):
+        # 🔴 판정 스캔의 일시 실패(2)가 rollup 의 정당한 거부(1)를 덮으면 "사람이 봐야
+        # 한다"가 "재시도하면 된다"로 뒤집힌다. 두 사실은 독립이다.
+        import data_pipeline.minute.rollup as mod
+
+        self.with_fake_ledger(monkeypatch)
+        monkeypatch.setattr(mod, "unfilled_settled_days", _scan_boom)
+        # 세션 없음(정당한 거부) = 1. 스캔 실패의 2 가 이걸 덮으면 안 된다.
+        assert self.run(self.settings(tmp_path)) == 1
+
+    def test_scan_failure_is_two_when_rollup_succeeded(self, tmp_path, monkeypatch):
+        # 반대 방향 — rollup 이 성공했으면 남는 사실은 "감시가 안 돌았다" 뿐이고 그건
+        # 재시도로 나을 수 있다 = 2.
+        import data_pipeline.minute.rollup as mod
+
+        db = self.with_fake_ledger(monkeypatch)
+        self.plan(db, SESSION_DATE)
+        monkeypatch.setattr(mod, "unfilled_settled_days", _scan_boom)
+        monkeypatch.setattr(mod, "rollup_session", lambda *a, **k: DAY_KEY)
+        assert self.run(self.settings(tmp_path)) == 2
 
 
-def _boom(*args, **kwargs):
-    raise RuntimeError("S3 AccessDenied")
+    def test_scan_failure_on_a_holiday_is_still_two(self, tmp_path, monkeypatch):
+        # 스케줄이 MON-FRI 라 공휴일마다 뜬다. "휴장일은 조용히 0" 은 맞지만, 그날
+        # S3 가 흔들려 감시가 안 돈 것은 휴장과 **무관한 사실**이다 — 0 으로 접으면
+        # "휴장일엔 조용하다"가 "감시 실패도 조용하다"가 된다.
+        import data_pipeline.minute.rollup as mod
+
+        self.with_fake_ledger(monkeypatch)
+        monkeypatch.setattr(mod, "unfilled_settled_days", _scan_boom)
+        assert self.run(self.settings(tmp_path), session_date="2026-08-08") == 2  # 토요일
+
+
+    def test_log_separates_the_two_prescriptions(self, tmp_path, caplog, monkeypatch):
+        # 🔴 결손(재수집)과 충돌(소유자 결정)은 처방이 다르다. JSON 이 둘을 갈라 싣지만
+        # 로그도 갈라야 운영자가 목록만 보고 잘못된 처방을 고르지 않는다. 로그는 지금까지
+        # 변이가 그냥 통과하던 표면이라 명시로 못박는다.
+        import logging
+
+        db = self.with_fake_ledger(monkeypatch)
+        self.plan(db, "2026-08-04")
+        self.plan(db, "2026-08-05")
+        tmp_path.joinpath(
+            "canonical/market_data/intraday_5m/market=KR/trade_date=2026-08-05"
+        ).mkdir(parents=True)
+        tmp_path.joinpath(
+            "canonical/market_data/intraday_5m/market=KR/trade_date=2026-08-05"
+            "/part-toss-backfill.parquet").write_bytes(b"x")
+        with caplog.at_level(logging.WARNING):
+            self.run(self.settings(tmp_path), session_date="2026-08-06")
+        text = caplog.text
+        assert "5분 산출이 없는 날 1건" in text and "2026-08-04" in text
+        assert "다른 writer 가 물고 있어" in text and "2026-08-05" in text
+
+    def test_zero_denominator_is_warned(self, tmp_path, caplog, monkeypatch):
+        # 분모 0 = "판정 축이 원장과 안 맞는다"는 유일한 신호다. 그 경보 자체가 못박혀야
+        # 한다 — 없애도 아무 테스트가 안 죽으면 그건 가드가 아니라 주석이다.
+        import logging
+
+        self.with_fake_ledger(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            self.run(self.settings(tmp_path))
+        assert "구멍 판정 후보가 0일이다" in caplog.text
+
+
+def _scan_boom(*args, **kwargs):
+    raise RuntimeError("S3 throttled")
