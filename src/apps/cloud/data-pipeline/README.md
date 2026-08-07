@@ -865,6 +865,12 @@ settings.targets.keywords            # ["금리", ...]
   없음 — 실측). 그래서 폴링 창을 겹치게 잡아 같은 시각이 여러 run 에 중복 수집되는 것이 **정상**이며,
   겹침이 유일한 갭 방어 수단이라 raw 는 전부 보존하고 중복 제거는 canonical 소관이다.
   각 행에 `interval_sec`·`our_etf_id`·`market`·`kis_symbol`·`fetched_at` 를 부착한다.
+  ⚠️ 괴리율 `dprt` 는 **퍼센트**다(실측: `stck_prpr/nav − 1` = 0.114115 인 행의 `dprt` = 0.11).
+  분석엔진 `sql_surface` 의 `v_nav.premium` 은 **비율**이라 단위가 갈린다 — canonical 이 같은
+  이름을 쓰면 두 표면을 조인하는 쪽이 100배 틀린 괴리를 본다(ALPHA-845). 수집은 ETF 마다 최신
+  행의 **벤더 지연**(수신시각 − `bsop_hour`)과 이 단위 대조를 로그로 남긴다 — 지연이 창 폭에
+  가까우면 이 API 로 장중 실시간이 성립하지 않고, 지연이 **음수면 전일 오염**이다(응답에 날짜
+  필드가 없어 그 부호가 유일한 신호다).
 - **raw(투자자 수급)** — 확정과 추정을 **다른 dataset 으로 가른다**(iNAV↔NAV 와 같은 이유):
   - EOD 확정 — `raw/source=kis/dataset=investor_flow_daily/market=KR/ingest_date=…/run_id=…/`
     (ALPHA-482). 거래일 grain 확정 순매수. 자연키 날짜는 행의 `stck_bsop_date` 다.
