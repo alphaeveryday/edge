@@ -40,10 +40,6 @@ SESSION_PHASES = frozenset(
 # 처리하는 Worker 가 없어, 하루가 통째로 안 돌면서도 원장은 정상으로 보인다.
 DATASET_PRICE_MINUTE = "price_minute"
 DATASET_NEWS_MINUTE = "news_minute"
-# 장중 추정 NAV(ALPHA-845). 일별 종가 NAV(`etf_nav`, 거래일 grain)와 **다른 축**이다 —
-# 저건 하루 한 점이고 이건 장중 시각 grain 이라, 한 dataset 으로 접으면 canonical 이
-# 행마다 grain 을 되물어야 한다.
-DATASET_ETF_INAV_MINUTE = "etf_inav_minute"
 # dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이다 — 어휘 밖 값으로
 # 세션이 서면 그 소스를 처리하는 어댑터·Worker 배선이 없어 dataset 오타와 같은 모양으로
 # 하루가 조용히 안 돈다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
@@ -57,23 +53,13 @@ SOURCE_GROUPS_BY_DATASET = {
     # 대상이다** — 교체 운용이라 지금은 같은 window 를 두 세션이 다투지 않는다.
     DATASET_PRICE_MINUTE: frozenset({"toss", "kis"}),
     DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
-    # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만). 벤더가
-    # 하나뿐이라 위 "두 번째 소스" 경고는 이 dataset 엔 아직 걸리지 않는다.
-    DATASET_ETF_INAV_MINUTE: frozenset({"kis"}),
 }
 # ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을
 # 한쪽에만 넣게 되고, 그때 정상 입력이 KeyError 로 죽거나(어휘표 누락) 유효한 dataset 이
 # 거부된다(목록 누락). 늘어나는 자리는 위 표 하나다.
 MINUTE_DATASETS = frozenset(SOURCE_GROUPS_BY_DATASET)
 # universe 가 기대 집합·window 범위를 정하는 dataset(ALPHA-684). 뉴스는 소스 단위라 없다.
-# iNAV 는 **같은 universe 객체**를 쓴다 — window 격자를 정하는 축이 `extended_hours_ids`
-# 이고 그건 dataset 이 아니라 종목의 성질이라, 두 번째 universe 파일을 두면 같은 종목의
-# 시간외 여부가 두 곳에서 갈린다(수집 유니버스가 두 축으로 쪼개져 둘 다 낡는 선례 있음).
-# ⚠️ 다만 **기대 집합은 같지 않다** — 구성종목에는 NAV 가 없어 iNAV 의 기대 집합은
-# `unit_ids`(ETF+구성종목+참조계열) 가 아니라 ETF 계열만이다. 그 투영은 Worker 소관이고
-# 아직 없다(ALPHA-845 는 어휘·키까지). universe 를 **읽는** 축과 기대 집합을 **세는**
-# 축을 같은 것으로 보면 구성종목 329종이 매 window 결손으로 잡힌다.
-UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
+UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE})
 
 # ── minute_ingestion_window.data_status ──
 WINDOW_DUE = "DUE"

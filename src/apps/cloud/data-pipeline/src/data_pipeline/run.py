@@ -225,9 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="세션 dataset. plan-minute-session·start/stop 은 "
                              "price_minute|news_minute, rollup-minute-session 은 "
                              "**price_minute 만**(5분 파생은 가격 분봉 canonical 전용 "
-                             "경로라 뉴스 세션을 주면 거부한다). etf_inav_minute 은 "
-                             "어휘에만 있고 **Worker 가 아직 없다**(ALPHA-845) — 계획하면 "
-                             "window 가 아무도 청구하지 않은 채 DUE 로 쌓인다")
+                             "경로라 뉴스 세션을 주면 거부한다)")
     parser.add_argument("--source-group", default=None,
                         help="세션 source_group. price_minute=toss|kis, "
                              "news_minute=bigkinds 등 — dataset 의 어휘 안에서만 받는다")

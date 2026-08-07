@@ -34,6 +34,7 @@ NAV 고 이건 장중 시각 grain 의 추정 NAV 다. 기존 `etf_nav` 테이�
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, time, timedelta, timezone
 
 from ..config import KisNavSource as KisNavSourceConfig
@@ -59,6 +60,43 @@ KST = timezone(timedelta(hours=9))
 # 정규장 개장 시각(KST). 이 전에는 **오늘 iNAV 가 아직 존재하지 않는다** — 그때 부르면 KIS 가
 # 빈 응답이 아니라 직전 거래일 값을 주고, 응답에 날짜가 없어 그게 오늘 것으로 라벨된다.
 MARKET_OPEN = time(9, 0)
+
+
+_STAMP_FORMAT = "%H%M%S"
+_STAMP_LEN = 6  # bsop_hour = HHMMSS
+
+# 괴리율 단위 가드 허용 오차(퍼센트 단위 비교). `dprt` 는 소수 2자리로 와서(실측) 반올림
+# 만으로 최대 0.005 어긋나고, 값이 커지면 벤더 내부 정밀도 차이가 비례해 는다. 막으려는
+# 것은 비율↔퍼센트 100배 드리프트라, 이 범위면 정상 반올림을 통과시키면서 그건 문다.
+_UNIT_REL_TOL = 0.02
+_UNIT_ABS_TOL = 0.01
+
+
+def _time_stamp(row: dict) -> str | None:
+    """행의 시각 라벨(HHMMSS 6자리), 형식을 벗어나면 None.
+
+    **자리수를 여기서 막는다.** `strptime("%H%M%S")` 는 `"9300"` 을 09:30:00 으로 관대하게
+    받아, 선행 0 이 잘린 라벨 한 줄이 사전순 max 를 탈취한다 — 정상 표본의 지연 10초가
+    21660초로 찍히고, 그 수치는 창 폭(1800초)을 훌쩍 넘어 "REST 로는 장중 실시간 불가"
+    라는 **설계 결론을 오염 한 줄로 뒤집는다**. 이 관측이 존재하는 이유가 그 판단 하나다.
+
+    ⚠️ `or ""` 를 쓰지 않는다 — 그 관용구는 수치 0(자정)을 결측으로 접는다. 25줄 위
+    `_is_blank` 도크스트링이 예고한 바로 그 함정이라, 같은 파일에서 다시 밟지 않는다.
+    """
+    value = row.get("bsop_hour")
+    if value is None:
+        return None
+    stamp = str(value).strip()
+    if len(stamp) != _STAMP_LEN or not stamp.isdigit():
+        return None
+    try:
+        # 자리수만 보면 `"240000"`·`"153060"` 이 통과한다 — 실제 시각인지까지 **여기서**
+        # 확정해, 호출부가 파싱 실패를 다시 다루지 않게 한다(판정이 두 곳으로 갈리면
+        # 한쪽만 고쳐진다).
+        datetime.strptime(stamp, _STAMP_FORMAT)
+    except ValueError:
+        return None
+    return stamp
 
 
 def _is_blank(value: object) -> bool:
@@ -158,70 +196,102 @@ class KisInavSource(KisNavSource):
            이 엔드포인트로는 장중 실시간이 성립하지 않고 웹소켓(`H0STNAV0`)이 유일한
            경로가 된다 — 1분 레인 편입 설계 전체가 여기 걸려 있다.
 
-        2. **괴리율 단위** — `dprt` 가 퍼센트(1.0=1%)인지 비율(0.01=1%)인지 모른다.
-           `sql_surface.v_nav.premium` 은 **비율**이라, 단위를 확인 않고 같은 이름으로
-           canonical 에 실으면 두 표면을 조인하는 쪽이 100배 틀린 괴리를 본다. 응답이
-           `stck_prpr`·`nav` 를 함께 주므로 파생값과 대조하면 그 자리에서 갈린다.
+        2. **괴리율 단위 가드** — `dprt` 는 **퍼센트**다(실측 확정, `_PREMIUM_UNIT` 주석).
+           `sql_surface.v_nav.premium` 은 **비율**이라 벤더가 단위를 바꾸면 canonical 이
+           100배 틀린 값을 싣는다. 그래서 값을 나열하지 않고 **어긋날 때만 경고**한다 —
+           나열은 드리프트가 나도 로그 모양이 같아 아무도 못 본다.
 
-        ⚠️ **지연이 음수면 전일 오염이다.** 최신 `bsop_hour` 에 오늘 날짜를 붙였는데
-        미래가 나온다는 건, KIS 가 오늘 데이터가 없어 직전 거래일 값을 준 것이다(응답에
-        날짜 필드가 없어 그것만으로는 구분이 안 된다 — 클래스 도크스트링). 개장 직후
-        창이 전일에 걸치는지도 이 부호로 드러난다.
+        ⚠️ **지연의 부호로 전일 오염을 판정하지 않는다.** 응답에 날짜 필드가 없어 이 콜
+        하나로는 판정이 불가능하고, 부호는 **양방향으로 틀린다**: 라벨이 구간 끝이면 최신
+        행이 정상적으로 미래라 음수가 오탐이고(`_extra_provenance` 가 라벨 규약이 일관되지
+        않다고 적어둔 그 성질이다), 반대로 15:30 이후 실행에서는 전일 잔값이 **양수**로
+        위장한다 — 하필 창 폭과 비슷한 값이라 "REST 불가"의 강한 증거처럼 읽힌다. 여기서는
+        관측한 사실만 남기고 판정은 하지 않는다(Rule 12).
+
+        ⚠️ **두 축은 서로의 실패로 죽지 않는다.** 시각 라벨이 깨져도 단위 가드는 돌고 그
+        반대도 마찬가지다 — return 을 공유하면 라벨 한 줄 때문에 그 ETF 표본이 단위 판정에서
+        통째로 빠진다.
 
         관측 실패도 관측이다 — 조용히 지나가면 "지연이 0" 과 "못 쟀다" 가 같아 보인다.
         """
-        now = datetime.now(KST)
-        if not rows:
-            # 부모가 빈 output 은 이미 fail-loud 하므로, 여기 0건은 **전 행이 결손
-            # 판정으로 걸러진** 경우다. 그 사유는 `_note_failure` 가 이미 남겼고,
-            # 여기서는 그래서 관측이 불가능했다는 사실을 남긴다.
-            logger.warning(
-                "iNAV 관측 불가: %s(%s) 쓸 수 있는 행 0건 — 지연·괴리 단위를 못 쟀다",
-                kis_symbol, our_etf_id,
-            )
-            return
+        self._note_lag(our_etf_id, kis_symbol, rows, datetime.now(KST))
+        self._note_premium_unit(our_etf_id, kis_symbol, rows)
 
-        # 라벨은 HHMMSS 문자열이라 사전순 = 시각순이다(자리수 고정).
-        latest = max(rows, key=lambda r: str(r.get("bsop_hour") or ""))
-        stamp = str(latest.get("bsop_hour") or "")
-        try:
-            observed = datetime.combine(
-                now.date(), datetime.strptime(stamp, "%H%M%S").time(), tzinfo=KST
-            )
-        except ValueError:
+    def _note_lag(
+        self, our_etf_id: str, kis_symbol: str, rows: list[dict], now: datetime
+    ) -> None:
+        """최신 행 기준 벤더 지연. 못 재면 못 쟀다고 남긴다."""
+        stamps = [s for s in (_time_stamp(r) for r in rows) if s is not None]
+        if malformed := len(rows) - len(stamps):
+            # 조용히 버리면 형식 이탈 한 줄이 최신 판정을 흔든 것을 아무도 모른다.
             logger.warning(
-                "iNAV 관측 불가: %s(%s) bsop_hour 형식 미지 %r — 지연을 못 쟀다",
-                kis_symbol, our_etf_id, stamp,
+                "iNAV 시각 라벨 형식 이탈 %d/%d 행: %s(%s) — 최신 행 판정에서 제외했다",
+                malformed, len(rows), kis_symbol, our_etf_id,
+            )
+        if not stamps:
+            logger.warning(
+                "iNAV 지연 관측 불가: %s(%s) 쓸 수 있는 시각 라벨 0건(행 %d)",
+                kis_symbol, our_etf_id, len(rows),
             )
             return
+        # 전부 HHMMSS 6자리로 걸러졌으므로 사전순 = 시각순이다(`_time_stamp` 가 보장).
+        stamp = max(stamps)
+        observed = datetime.combine(
+            now.date(), datetime.strptime(stamp, _STAMP_FORMAT).time(), tzinfo=KST
+        )
         lag_sec = (now - observed).total_seconds()
         logger.info(
-            "iNAV 벤더 지연: %s(%s) 최신=%s 수신=%s 지연=%.0f초 창=%d초(간격 %d×30행)%s",
-            kis_symbol, our_etf_id, stamp, now.strftime("%H%M%S"), lag_sec,
-            self.window_sec, self.interval_sec,
-            " ⚠️전일 오염 의심(지연 음수)" if lag_sec < 0 else "",
+            "iNAV 벤더 지연: %s(%s) 최신=%s 수신=%s 지연=%.0f초 "
+            "창=%d초 간격=%d초 행=%d%s",
+            kis_symbol, our_etf_id, stamp, now.strftime(_STAMP_FORMAT), lag_sec,
+            self.window_sec, self.interval_sec, len(stamps),
+            # 사실만 적는다 — 원인(전일 잔값/구간 끝 라벨)은 이 콜로 못 가른다(도크스트링).
+            " (라벨이 수신시각보다 미래다)" if lag_sec < 0 else "",
         )
 
-        try:
-            nav = float(latest["nav"])
-            price = float(latest["stck_prpr"])
-            dprt = float(latest["dprt"])
-        except (KeyError, TypeError, ValueError) as exc:
-            # `_row_defect` 는 nav 존재만 요구한다 — 괴리 대조에 필요한 셋이 다 수치로
-            # 오는지는 별개라, 못 재면 못 쟀다고 남기고 수집은 계속한다.
+    def _note_premium_unit(
+        self, our_etf_id: str, kis_symbol: str, rows: list[dict]
+    ) -> None:
+        """`dprt` 가 퍼센트 가설을 벗어나면 경고. 맞으면 조용하다.
+
+        전 행을 본다 — 한 행만 보면 그 행이 마침 결측일 때 그 ETF 가 통째로 대조에서
+        빠진다. 정상일 때 로그를 남기지 않는 것은 의도다: 확정된 사실을 ETF·폴링마다
+        되풀이하면 진짜 신호가 자기 소음에 묻힌다(1분 레인에 붙으면 하루 수만 줄이다).
+        """
+        checked = mismatched = 0
+        sample: tuple[object, float, float] | None = None
+        for row in rows:
+            try:
+                nav = float(row["nav"])
+                price = float(row["stck_prpr"])
+                dprt = float(row["dprt"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            # ⚠️ float() 는 "nan"·"inf" 를 **예외 없이** 통과시킨다. 그대로 두면 오염
+            # 표본이 그럴듯한 수치(-100.0000%)로 대조에 섞여 판정을 흔든다.
+            if not all(map(math.isfinite, (nav, price, dprt))) or nav <= 0:
+                continue
+            checked += 1
+            expected_pct = (price / nav - 1.0) * 100.0
+            if not math.isclose(
+                dprt, expected_pct, rel_tol=_UNIT_REL_TOL, abs_tol=_UNIT_ABS_TOL
+            ):
+                mismatched += 1
+                if sample is None:
+                    sample = (row.get("bsop_hour"), dprt, expected_pct)
+        if not checked:
             logger.warning(
-                "iNAV 괴리 단위 대조 불가: %s(%s) — %s", kis_symbol, our_etf_id, exc,
+                "iNAV 괴리 단위 대조 불가: %s(%s) 쓸 수 있는 (nav, 가격, dprt) 삼중 0건(행 %d)",
+                kis_symbol, our_etf_id, len(rows),
             )
             return
-        if nav == 0:
-            logger.warning("iNAV 괴리 단위 대조 불가: %s(%s) nav=0", kis_symbol, our_etf_id)
-            return
-        ratio = price / nav - 1.0
-        logger.info(
-            "iNAV 괴리 단위 대조: %s(%s) dprt=%s / 파생 비율=%.6f 퍼센트=%.4f "
-            "— dprt 가 어느 쪽에 붙는지가 canonical 필드 이름·단위를 정한다",
-            kis_symbol, our_etf_id, dprt, ratio, ratio * 100.0,
-        )
+        if mismatched:
+            logger.warning(
+                "iNAV 괴리 단위 드리프트 의심: %s(%s) %d/%d 행 불일치 — "
+                "bsop_hour=%s 에서 dprt=%s 인데 퍼센트 가설은 %.4f 다. "
+                "canonical premium_pct 에 그대로 실으면 안 된다",
+                kis_symbol, our_etf_id, mismatched, checked, *sample,
+            )
 
     def _extra_provenance(self) -> dict[str, object]:
         """어느 간격으로 뽑은 표본인지 행에 새긴다.

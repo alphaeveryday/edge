@@ -273,10 +273,22 @@ def test_평일_공휴일은_휴장일로_본다(monkeypatch):
 
 
 # ── 응답 집합 관측 (ALPHA-845) ─────────────────────────────────────────
-# 이 API 로 1분 레인을 먹일 수 있는지가 **최신 행이 얼마나 낡았나**에 걸려 있는데, 그걸
-# 한 번도 재지 않았다. 지연이 창 폭(간격×30)에 가까우면 REST 폴링으로는 장중 실시간이
-# 성립하지 않고 웹소켓(H0STNAV0)이 유일한 경로가 된다. 관측이 조용히 빠지면 그 판단을
-# 못 하므로, 로그를 계약으로 고정한다.
+# 이 API 로 1분 레인을 먹일 수 있는지가 **최신 행이 얼마나 낡았나**에 걸려 있는데 한 번도
+# 재지 않았다. 지연이 창 폭(간격×30)에 가까우면 REST 폴링으로는 장중 실시간이 성립하지
+# 않고 웹소켓(H0STNAV0)이 유일한 경로가 된다. 관측 자체가 이 조각의 산출물이라 로그를
+# 계약으로 고정한다 — 값이 틀리는 것도, 관측이 사라지는 것도 여기서 걸려야 한다.
+
+
+def _row(stamp: str, **over) -> dict:
+    """실측 행에서 시각 라벨만 갈아끼운다(나머지는 단위 가드가 볼 수 있게 정합 유지)."""
+    return {**LIVE_ROW, "bsop_hour": stamp, **over}
+
+
+def _window(latest: str = "153000") -> list[dict]:
+    """실응답 형상(30행 고정)의 축소판. **최신 행을 가운데 둔다** — 끝에 두면 `rows[0]`
+    회귀가, 앞에 두면 `rows[-1]` 회귀가 통과한다."""
+    stamps = ["150100", "151500", latest, "152000", "152500"]
+    return [_row(s) for s in stamps]
 
 
 def test_최신_행_기준_벤더_지연을_남긴다(monkeypatch, caplog):
@@ -284,66 +296,147 @@ def test_최신_행_기준_벤더_지연을_남긴다(monkeypatch, caplog):
 
     부모(`_fetch_etf`)가 훅을 부르는 것까지 함께 검증한다 — 훅 호출이 빠지면 어댑터에
     코드가 남아 있어도 관측은 0건이고, 그건 "지연이 0" 과 로그에서 구분되지 않는다.
+    최신이 아닌 행을 고르는 회귀(`rows[0]`·`min`)는 지연 값이 1860초로 벌어져 걸린다.
     """
-    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))  # 최신 행 15:30:00 → 60초
-    src = _source({"069500": _ok([LIVE_ROW])})
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))  # 최신 15:30:00 → 60초
+    src = _source({"069500": _ok(_window())})
 
     with caplog.at_level("INFO"):
         list(src.fetch())
 
     assert "iNAV 벤더 지연" in caplog.text
     assert "지연=60초" in caplog.text
+    # 창과 간격은 **다른 값**이다(1800 = 60×30). 서로 바꿔 쓰는 회귀를 값으로 못박는다 —
+    # 판정 기준이 "지연이 창 폭에 가까운가" 라서 창을 60초로 읽으면 결론이 뒤집힌다.
+    assert "창=1800초 간격=60초" in caplog.text
 
 
-def test_지연이_음수면_전일_오염을_지목한다(monkeypatch, caplog):
-    """응답에 날짜가 없어 최신 bsop_hour 에 **오늘 날짜를 붙인다**. 그게 미래로 나오면
-    오늘 데이터가 아직 없어 KIS 가 직전 거래일 값을 준 것이다(ALPHA-387 과 동형).
-
-    개장 직후 창이 전일에 걸치는지도 이 부호로 드러난다 — 09:10 실행의 창은 08:40 까지
-    뻗는데, KIS 가 장 시작 전 시각을 무엇으로 채우는지 확인된 바 없다.
-    """
-    _at(monkeypatch, datetime(2026, 7, 27, 9, 10, tzinfo=KST))  # 최신 행이 15:30 → 미래
-    src = _source({"069500": _ok([LIVE_ROW])})
-
-    with caplog.at_level("INFO"):
-        list(src.fetch())
-
-    assert "전일 오염 의심" in caplog.text
-
-
-def test_쓸_수_있는_행이_0건이면_관측_실패를_남긴다(monkeypatch, caplog):
-    """전 행이 결손 판정으로 걸러진 경우. 조용히 지나가면 "지연이 0" 과 "못 쟀다" 가
-    같아 보인다 — 소급이 영구 불가한 데이터라 관측 공백을 나중에 메울 수 없다."""
+def test_자리수_잘린_라벨이_최신을_탈취하지_못한다(monkeypatch, caplog):
+    """`"9300"` 은 사전순으로 `"153000"` 보다 크고 strptime 이 09:30:00 으로 **관대하게**
+    받는다. 거르지 않으면 지연 60초 표본이 21660초로 찍히고, 그 값은 창 폭을 훌쩍 넘어
+    "REST 로는 실시간 불가" 라는 결론을 오염 한 줄로 만들어낸다."""
     _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
-    src = _source({"069500": _ok([{"bsop_hour": "153000"}])})  # nav 결측 → 전 행 격리
+    src = _source({"069500": _ok([*_window(), _row("9300")])})
 
     with caplog.at_level("INFO"):
         list(src.fetch())
 
-    assert "iNAV 관측 불가" in caplog.text
+    assert "지연=60초" in caplog.text
+    assert "21660" not in caplog.text
+    assert "형식 이탈 1/6 행" in caplog.text  # 조용히 버리지 않는다
+
+
+@pytest.mark.parametrize("stamp", ["240000", "153060", "15:30:00", "", "abc123"])
+def test_시각이_아닌_6자리도_라벨로_받지_않는다(monkeypatch, caplog, stamp):
+    """자리수만 보면 `240000`·`153060` 이 통과한다 — 실제 시각인지까지 한 곳에서 판정해야
+    호출부가 파싱 실패를 다시 다루지 않는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row(stamp)])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "지연 관측 불가" in caplog.text
     assert "iNAV 벤더 지연" not in caplog.text
 
 
-def test_괴리율은_퍼센트지_비율이_아니다(monkeypatch, caplog):
-    """`dprt` 의 단위를 응답 자체로 못박는다 — canonical 필드 이름·단위가 여기 걸린다.
-
-    실측 행(069500, 2026-07-25)에서 `stck_prpr/nav − 1` = 0.114115 이고 `dprt` = 0.11 이다.
-    **퍼센트로 반올림해야 일치**하고 비율로 보면 0.0 이 돼 어긋난다. `nav_vrss_prpr`
-    (121.24)가 `stck_prpr − nav` 와 정확히 같은 것이 필드 의미의 교차 근거다.
-
-    ⚠️ `sql_surface.v_nav.premium` 은 **비율**이다(close/nav − 1). 같은 이름으로 실으면
-    두 표면을 조인하는 쪽이 100배 틀린 괴리를 본다 — canonical 은 `premium_pct` 다.
-    """
-    nav, price = float(LIVE_ROW["nav"]), float(LIVE_ROW["stck_prpr"])
-    assert round((price / nav - 1.0) * 100.0, 2) == float(LIVE_ROW["dprt"])
-    assert round(price / nav - 1.0, 2) != float(LIVE_ROW["dprt"])
-
+def test_관측이_예외를_던져도_수집은_계속된다(monkeypatch, caplog):
+    """관측은 곁다리지만 **수집은 아니다.** 훅을 감싸지 않으면 예외가 ETF 단위 격리에
+    잡혀 그 ETF 의 행이 통째로 버려지고, 실패 사유 칸에 관측 메시지가 수집 실패인 것처럼
+    박힌다. iNAV 는 소급 조회가 불가라 그 유실이 영구적이다."""
     _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
-    src = _source({"069500": _ok([LIVE_ROW])})
+    src = _source({"069500": _ok(_window())})
+    monkeypatch.setattr(
+        type(src), "_note_rows",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("관측 폭발")),
+    )
+
+    with caplog.at_level("INFO"):
+        rows = list(src.fetch())
+
+    assert len(rows) == 5           # 행이 살아 나온다
+    assert src.fetch_failures == []  # 수집 실패로 기록되지 않는다
+    assert "관측 실패" in caplog.text  # 조용히 넘어가지도 않는다
+
+
+def test_라벨이_미래면_사실만_적고_원인을_단정하지_않는다(monkeypatch, caplog):
+    """응답에 날짜가 없어 이 콜로는 전일 오염을 판정할 수 없다. 부호는 양방향으로 틀린다 —
+    구간 끝 라벨이면 미래가 정상이고(오탐), 15:30 이후 실행에선 전일 잔값이 **양수**로
+    위장한다(미탐). 못 하는 판정을 하는 척하지 않는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 9, 10, tzinfo=KST))  # 최신 15:30 → 미래
+    src = _source({"069500": _ok(_window())})
 
     with caplog.at_level("INFO"):
         list(src.fetch())
 
-    # 로그가 두 가설을 나란히 낸다 — 다른 ETF 에서도 같은지 장중에 눈으로 갈리게.
-    assert "iNAV 괴리 단위 대조" in caplog.text
-    assert "퍼센트=0.1141" in caplog.text
+    assert "라벨이 수신시각보다 미래다" in caplog.text
+    assert "전일 오염" not in caplog.text  # 단정 금지
+
+
+def test_지연이_양수면_미래_문구가_붙지_않는다(monkeypatch, caplog):
+    """부재 단언이 없으면 문구를 무조건 붙이는 회귀가 통과한다 — 그러면 ETF 마다·폴링마다
+    경고가 떠 진짜 신호가 자기 소음에 묻힌다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok(_window())})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "미래" not in caplog.text
+
+
+def test_괴리율이_비율로_오면_단위_드리프트를_경고한다(monkeypatch, caplog):
+    """`dprt` 는 퍼센트다(실측). 벤더가 비율로 바꾸면 canonical `premium_pct` 가 100배
+    틀린 값을 싣는다 — 이 조각이 막으려는 사고가 그것이다. 값을 나열만 하면 드리프트가
+    나도 로그 모양이 같아 아무도 못 본다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    ratio = float(LIVE_ROW["stck_prpr"]) / float(LIVE_ROW["nav"]) - 1.0
+    src = _source({"069500": _ok([_row("153000", dprt=f"{ratio:.6f}")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "괴리 단위 드리프트 의심" in caplog.text
+
+
+def test_퍼센트로_오는_실측_행은_조용히_통과한다(monkeypatch, caplog):
+    """확정된 사실을 ETF·폴링마다 되풀이하지 않는다 — 가드는 어긋날 때만 말한다.
+
+    이 통과 자체가 단위 판정이다: `stck_prpr/nav − 1` = 0.00114115 이고 `dprt` = 0.11 이라
+    **퍼센트 가설(×100 = 0.11411)** 과만 맞는다. 비율 가설이면 위 테스트처럼 경고가 뜬다.
+    """
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok(_window())})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "드리프트" not in caplog.text
+
+
+@pytest.mark.parametrize("nav", ["nan", "inf", "-inf", "-1", "0"])
+def test_유한하지_않거나_양수가_아닌_nav_는_대조에서_뺀다(monkeypatch, caplog, nav):
+    """`float()` 는 `"nan"`·`"inf"` 를 예외 없이 통과시킨다. 그대로 두면 오염 표본이
+    그럴듯한 수치(-100.0000%)로 대조에 섞여 단위 판정을 흔든다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row("153000", nav=nav)])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "괴리 단위 대조 불가" in caplog.text
+    assert "드리프트" not in caplog.text
+
+
+def test_시각_라벨이_깨져도_단위_가드는_돈다(monkeypatch, caplog):
+    """두 축은 서로의 실패로 죽지 않는다 — return 을 공유하면 라벨 한 줄 때문에 그 ETF
+    표본이 단위 판정에서 통째로 빠진다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    ratio = float(LIVE_ROW["stck_prpr"]) / float(LIVE_ROW["nav"]) - 1.0
+    src = _source({"069500": _ok([_row("abc", dprt=f"{ratio:.6f}")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "지연 관측 불가" in caplog.text          # 시각 축은 실패했는데
+    assert "괴리 단위 드리프트 의심" in caplog.text  # 단위 축은 살아서 물었다

@@ -182,8 +182,10 @@ class KisNavSource:
 
         `_row_defect` 는 행 하나를 **버릴지** 정하고 이건 통과한 행 전체를 **본다** —
         응답 집합 수준에서만 보이는 성질(최신 행이 얼마나 낡았나 같은)이 있어서다.
-        관측 전용이라 반환값이 없다: 여기서 수집 성패를 뒤집으면 격리 규약이 두 곳으로
-        갈린다."""
+
+        관측 전용이라 반환값이 없고, **호출부가 예외까지 삼킨다**(`_fetch_etf`). 반환값이
+        없는 것과 성패를 못 뒤집는 것은 별개다 — 감싸지 않으면 오버라이드의 예외 하나가
+        그 ETF 의 행을 통째로 날린다. 계약을 산문이 아니라 구조가 진다."""
 
     def _fetch_etf(
         self, our_etf_id: str, kis_symbol: str, d1: str, d2: str, token: str
@@ -229,7 +231,16 @@ class KisNavSource:
                         # our_etf_id 를 함께 남긴다 — symbol 만으로는 로그 소비자가
                         # 어느 ETF 의 원본 행이 유실됐는지 내부 식별자로 잇지 못한다.
                         self._note_failure(kis_symbol, our_etf_id, defect)
-                self._note_rows(our_etf_id, kis_symbol, rows)
+                try:
+                    self._note_rows(our_etf_id, kis_symbol, rows)
+                except Exception:
+                    # 훅 도크스트링의 "수집 성패를 뒤집지 않는다" 를 **코드로** 강제한다.
+                    # 감싸지 않으면 예외가 fetch() 의 ETF 단위 격리에 잡혀 이 ETF 의 행이
+                    # 통째로 버려지고, 실패 사유 칸에 관측 메시지가 수집 실패인 것처럼
+                    # 박힌다. iNAV 는 소급 조회가 불가라 그 유실이 영구적이다.
+                    logger.exception(
+                        "행 관측 실패 — 수집은 계속한다: %s(%s)", kis_symbol, our_etf_id
+                    )
                 return rows
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
             if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:
