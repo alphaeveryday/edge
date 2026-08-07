@@ -15,7 +15,7 @@ src/
 │   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
 │   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
 │   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
-│   │   └── analysis-engine/  # Python · 같은 SFN 의 analyze 페이즈 → 분석 결과 DB 저장
+│   │   └── analysis-engine/  # Python · 분봉 트리거 큐 상주 소비자 → 분석 결과 DB 저장
 │   └── onprem/               #   edge-onprem (증권사 관리 환경)
 │       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
 │       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
@@ -64,7 +64,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `publication-api` | JVM | **edge-onprem** | 증권사 백엔드가 호출하는 조회 표면 — **Published만 반환** + 조회 시 Exposure 기록 ([contracts/publication-api.md](docs/contracts/publication-api.md)). 온프렘 Published Store(PG) 조회 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 4종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 무효화 단독**(게시본 WITHDRAWN 전이 + `tenant_delivery` INVALIDATION 발번 + `admin_activity_log` 감사) — ALPHA-440·737, session 은 인증 세션 주체 투영 — ALPHA-608) |
 | `data-pipeline` | Python | **edge-cloud** | 통합(시장) 파이프라인 SFN 의 raw 수집→정제→feature 페이즈 담당 + 레인 SFN 3종 단독 소유(뉴스·공시·장중 수급) |
-| `analysis-engine` | Python | **edge-cloud** | 시장 SFN 의 마지막 analyze 페이즈 → 분석 결과를 DB에 저장 |
+| `analysis-engine` | Python | **edge-cloud** | 분봉 트리거 큐를 소비하는 상주 서비스 → 분석 결과를 DB에 저장 (SFN 페이즈 아님 — ALPHA-806) |
 
 sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](docs/adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](docs/implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](docs/adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 
@@ -92,8 +92,10 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 ## 데이터 흐름
 
 ```
-[스케줄러] ─→ Planner ─→ 파이프라인 SFN: raw 수집 ─→ 정제 ─→ feature ─→ analyze ──→ DB
-           (원장 기록 후 시작)         └──── data-pipeline ────┘   (analysis-engine)   │
+[스케줄러] ─→ Planner ─→ 파이프라인 SFN: raw 수집 ─→ 정제 ─→ feature ──────────→ DB
+           (원장 기록 후 시작)         └──── data-pipeline ────┘                    │
+                                                                                │
+[분봉 트리거 큐] ─→ analysis-engine (상주 소비자) ─→ 설명 생성 ──────────────────→ DB
                                                                                 │
    콘솔:  tenant-console-ui → tenant-console-api (읽기/쓰기, 한 테넌트) ─┘
    운영:  super-admin-ui → super-admin-api (읽기/쓰기, cross-tenant) ─┘

@@ -1,8 +1,11 @@
 """run 오케스트레이션 — 트리거 소비 → 분해 → **통계 인과귀속** → 영속.
 
 의존성(lake·store·client·s3)을 주입해 제어 흐름을 I/O 없이 테스트할 수 있다. 엔진은
-파이프라인이 만든 feature 산출물만 읽는다(ADR-0028) — 트리거 행이 없으면 그날은
-'정상 변동'이 일급 답이다.
+파이프라인이 만든 feature 산출물만 읽는다(ADR-0028).
+
+진입점은 **분봉 트리거 하나**다(ALPHA-806). 트리거 없이 도는 일봉 경로는 확정 일봉이
+마감 뒤에야 나와 장중엔 층을 못 세웠고 같은 대상에 다른 답을 냈다 — 트리거가 없으면
+'정상 변동'으로 잔잔히 끝나는 게 아니라 `PipelineError` 로 선다.
 """
 from __future__ import annotations
 
@@ -36,16 +39,19 @@ def run(
     """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다."""
     # 분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다. env 기본값
     # (ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염된다(ALPHA-467 과 같은 축).
-    minute_row = None
-    minute_gate = None
-    if settings.trigger_id:
-        minute_row = store.fetch_minute_price_trigger(settings.trigger_id)
-        if minute_row is None:
-            raise PipelineError(f"분봉 트리거가 없다: {settings.trigger_id}")
-        minute_gate = minute_row.gate
-        settings = replace(
-            settings, etf_ticker=minute_row.ticker, trade_date=minute_row.trade_date
-        )
+    if not settings.trigger_id:
+        # 진입점을 계약으로 막는다(ALPHA-806). 트리거 없이 도는 일봉 설명은 확정 일봉이
+        # 마감 뒤에야 나와 장중엔 원리적으로 층을 못 세웠고(`layer_route=미상`), 같은
+        # 대상에 분봉 경로와 다른 답을 냈다. 설명은 분봉 트리거로만 시작한다.
+        raise PipelineError(
+            "trigger_id 없이 분석을 시작할 수 없다 — 설명은 분봉 트리거로만 시작한다")
+    minute_row = store.fetch_minute_price_trigger(settings.trigger_id)
+    if minute_row is None:
+        raise PipelineError(f"분봉 트리거가 없다: {settings.trigger_id}")
+    minute_gate = minute_row.gate
+    settings = replace(
+        settings, etf_ticker=minute_row.ticker, trade_date=minute_row.trade_date
+    )
     log("start", trade_date=settings.trade_date.isoformat(), request_id=settings.request_id,
         trigger_id=settings.trigger_id)
 
@@ -67,58 +73,47 @@ def run(
         raise PipelineError(
             f"canonical holdings 가 비었다: etf={settings.etf_ticker}"
             f" trade_date={settings.trade_date.isoformat()} — 구성종목 없이 분해·설명 불가")
-    if minute_row is not None:
-        # 분봉 분해 입력(ALPHA-710) — 분모는 **전일 종가**다(ALPHA-747). 트리거 판정이
-        # `intraday-anchor-v2` 로 전일 종가 앵커가 되면서 시가 축은 판정과 갈렸고,
-        # 시가 원장(minute_session_open)은 판정기에서 prev_close 결손 시 폴백으로만
-        # 남아 대개 비어 있다 — 그것을 분해의 필수 입력으로 두면 장중 설명이 전건
-        # 차단된다(08-05 dev 실측: start 709건·분해 0건).
-        # 트리거 window 의 세대·checksum 은 원장의 마지막 커밋 쌍이 정본이다 — 발화 후
-        # 정정이 끼면 최신 커밋이 더 정확한 가격이고, checksum 은 그 세대의 바이트다.
-        trigger_meta = store.fetch_minute_window_meta(
-            minute_row.session_id, minute_row.window_start)
-        if trigger_meta is None:
-            raise ReturnsNotReadyError(
-                f"트리거 window 원장이 없다: session={minute_row.session_id}"
-                f" window={minute_row.window_start.isoformat()} — 커밋 미착지")
-        trigger_generation, trigger_checksum = trigger_meta
-        prev_closes = lake.load_prev_closes(_MARKET, settings.trade_date)
-        if not prev_closes:
-            # 분모가 통째로 없으면 모든 unit 이 None 이 돼 total_priced=0 분해가 정상
-            # 설명으로 영속된다 — 아래 빈 검사는 dict 가 truthy 라 못 잡는다(Rule 12).
-            raise ReturnsNotReadyError(
-                f"직전 거래일 price_daily 파티션이 없다: market={_MARKET}"
-                f" trade_date={settings.trade_date.isoformat()} — 분봉 분해의 분모가"
-                " 없다. 빈 분해를 설명으로 만들지 않는다")
-        returns = lake.load_minute_returns(
-            _MARKET, settings.trade_date.isoformat(),
-            minute_row.window_start.astimezone(KST).strftime("%H%M"),
-            trigger_generation, trigger_checksum, prev_closes,
-        )
-        # 트리거 window 가 INCOMPLETE 면 발화 ETF 행만 있고 구성종목이 통째로 빠질 수
-        # 있다 — dict 는 truthy 라 아래 빈 검사를 통과하고, total_priced=0 분해가 정상
-        # 설명으로 영속된다(원결함의 부활 코너). 정정 세대가 낫게 하는 실패라 재시도.
-        if returns and not any(returns.get(h.ticker) is not None for h in holdings):
-            raise ReturnsNotReadyError(
-                f"구성종목 가격이 0건이다: session={minute_row.session_id}"
-                f" window={minute_row.window_start.isoformat()} — INCOMPLETE window"
-                " 이거나 구성종목 미수집. 빈 분해를 설명으로 만들지 않는다")
+    # 분봉 분해 입력(ALPHA-710) — 분모는 **전일 종가**다(ALPHA-747). 트리거 판정이
+    # `intraday-anchor-v2` 로 전일 종가 앵커가 되면서 시가 축은 판정과 갈렸고,
+    # 시가 원장(minute_session_open)은 판정기에서 prev_close 결손 시 폴백으로만
+    # 남아 대개 비어 있다 — 그것을 분해의 필수 입력으로 두면 장중 설명이 전건
+    # 차단된다(08-05 dev 실측: start 709건·분해 0건).
+    # 트리거 window 의 세대·checksum 은 원장의 마지막 커밋 쌍이 정본이다 — 발화 후
+    # 정정이 끼면 최신 커밋이 더 정확한 가격이고, checksum 은 그 세대의 바이트다.
+    trigger_meta = store.fetch_minute_window_meta(
+        minute_row.session_id, minute_row.window_start)
+    if trigger_meta is None:
+        raise ReturnsNotReadyError(
+            f"트리거 window 원장이 없다: session={minute_row.session_id}"
+            f" window={minute_row.window_start.isoformat()} — 커밋 미착지")
+    trigger_generation, trigger_checksum = trigger_meta
+    prev_closes = lake.load_prev_closes(_MARKET, settings.trade_date)
+    if not prev_closes:
+        # 분모가 통째로 없으면 모든 unit 이 None 이 돼 total_priced=0 분해가 정상
+        # 설명으로 영속된다 — 아래 빈 검사는 dict 가 truthy 라 못 잡는다(Rule 12).
+        raise ReturnsNotReadyError(
+            f"직전 거래일 price_daily 파티션이 없다: market={_MARKET}"
+            f" trade_date={settings.trade_date.isoformat()} — 분봉 분해의 분모가"
+            " 없다. 빈 분해를 설명으로 만들지 않는다")
+    returns = lake.load_minute_returns(
+        _MARKET, settings.trade_date.isoformat(),
+        minute_row.window_start.astimezone(KST).strftime("%H%M"),
+        trigger_generation, trigger_checksum, prev_closes,
+    )
+    # 트리거 window 가 INCOMPLETE 면 발화 ETF 행만 있고 구성종목이 통째로 빠질 수
+    # 있다 — dict 는 truthy 라 아래 빈 검사를 통과하고, total_priced=0 분해가 정상
+    # 설명으로 영속된다(원결함의 부활 코너). 정정 세대가 낫게 하는 실패라 재시도.
+    if returns and not any(returns.get(h.ticker) is not None for h in holdings):
+        raise ReturnsNotReadyError(
+            f"구성종목 가격이 0건이다: session={minute_row.session_id}"
+            f" window={minute_row.window_start.isoformat()} — INCOMPLETE window"
+            " 이거나 구성종목 미수집. 빈 분해를 설명으로 만들지 않는다")
+    if not returns:
         empty_reason = (
             f"분봉 canonical 수익률이 비었다: session={minute_row.session_id}"
             f" window={minute_row.window_start.isoformat()} — window artifact"
             " 미착지(커밋 지연)거나 결손이다. 빈 분해를 설명으로 만들지 않는다"
         )
-    else:
-        returns = lake.load_returns(_MARKET, settings.trade_date)
-        # 당일 파티션이 없으면 `load_returns` 는 **가드 없이 {}** 를 돌려준다 — 그대로
-        # 분해에 넣으면 전 종목 미가격 분해(etf_return=NULL·total_priced=0)가 LLM 까지
-        # 가서 입력 결손이 정상 설명으로 위장된다(Rule 12, 08-03 정합성 감사 실측).
-        empty_reason = (
-            f"canonical price_daily 수익률이 비었다: market={_MARKET}"
-            f" trade_date={settings.trade_date.isoformat()} — 15:40 배치 전이거나"
-            " 파티션 결손이다. 빈 분해를 설명으로 만들지 않는다"
-        )
-    if not returns:
         raise ReturnsNotReadyError(empty_reason)
     decomp = compute_decomposition(holdings, returns)
     log(
@@ -130,19 +125,10 @@ def run(
         proxy_ret=decomp.proxy_ret,
     )
 
-    # L0 게이트는 계산이 아니라 소비다(ALPHA-411) — 행이 없으면 평온한 날.
-    # 분봉 입력이면 게이트가 이미 손에 있다(발화했기에 호출됐다) — 일 단위 조회는
-    # 그 트리거를 못 보므로(테이블이 다르다) 여기서 갈아끼운다.
-    gate = minute_gate or store.fetch_price_trigger(etf_instrument_id, settings.trade_date)
-    if gate is None:
-        write_run_archive(s3, settings, {
-            "outcome": "normal_variation",
-            "trigger": None,
-            "decomposition": decomp_summary(decomp),
-            "holdings_asof": holdings_asof,
-        })
-        log("done", reason="normal_variation", observed_return=decomp.proxy_ret)
-        return 0
+    # L0 게이트는 계산이 아니라 소비다(ALPHA-411). 분봉 입력이면 게이트가 이미 손에
+    # 있다 — 발화했기에 호출됐다. 트리거가 곧 진입 조건이 된 뒤로(ALPHA-806) 게이트
+    # 부재('평온한 날')는 도달할 수 없는 상태다 — 일 단위 조회 폴백과 함께 걷어냈다.
+    gate = minute_gate
 
     # ── 라우팅은 **층 회계**가 정한다 (ALPHA-671) ─────────────────────────────
     # 레거시 `decide_route` 는 구성종목 집중도만 봤다. 그런데 하루를 끈 것이 시장인지
@@ -176,13 +162,10 @@ def run(
     # 창 문자열도 아래 `window` 조립분과 **같은 변수**를 쓴다 - 같은 식을 두 번 적으면
     # 한쪽만 고쳐지는 날이 온다. `roll` 은 `run_statics` 로 넘겨 `window_facts` 가
     # 재계산하지 않게 한다(그 재계산이 갈림의 실제 경로였다).
-    clock = None
-    window_end = None
-    if minute_row is not None:
-        window_end = (
-            minute_row.window_start + timedelta(minutes=5)
-        ).astimezone(KST).strftime("%H:%M")
-        clock = clamp(SESSION_OPEN[:5], window_end)[:2]
+    window_end = (
+        minute_row.window_start + timedelta(minutes=5)
+    ).astimezone(KST).strftime("%H:%M")
+    clock = clamp(SESSION_OPEN[:5], window_end)[:2]
 
     roll = rt = None
     routing_failed = False
@@ -218,7 +201,7 @@ def run(
     route_code, event_search = route_code_of(rt.kind if rt else "")
     ids = store.persist_observation_route(
         gate.trigger_id, decomp, route_code, event_search, entity_index,
-        minute=minute_gate is not None,
+        minute=True,
     )
     log("trigger.consumed", route=route_code, event_search=event_search,
         layer_route=(rt.kind if rt else "미상"), **ids)
@@ -283,29 +266,24 @@ def run(
     window_meta: dict[str, Any] = {}
     with collect_trace() as trace:
         try:
-            window = {}
-            if minute_row is not None:
-                window = {
-                    "instrument_id": etf_instrument_id,
-                    "window_start": SESSION_OPEN[:5],
-                    "window_end": window_end,
-                    "window_meta": window_meta,
-                }
+            window = {
+                "instrument_id": etf_instrument_id,
+                "window_start": SESSION_OPEN[:5],
+                "window_end": window_end,
+                "window_meta": window_meta,
+            }
             # 라우팅이 쓴 그 분해를 그대로 넘긴다 - 같은 창을 두 번 질의하면 그 사이
             # 분봉 canonical 이 정정될 때 route_code 와 산문 근거가 한 explanation 안에서
-            # 갈린다. **창 인자 밖**에 두는 이유: 하루 모드(배치)도 같은 분해를 두 번
-            # 부르고 있었다 - 두 경로가 같은 계약을 쓴다.
+            # 갈린다. **창 인자 밖**에 두는 이유: `roll` 은 창 유무와 독립인 계약이라
+            # `run_statics` 의 어느 갈래로 가든 같은 한 벌이어야 한다.
             #
             # `None` 도 **넘기는 값**이다(재료 부재·질의 실패·라우팅 실패로 폐기). 그때
             # 설명 쪽이 다시 계산하면, 라우팅 시점엔 없던 재료가 그새 착지했을 때 원장은
             # 미상(PRICE_ONLY)인데 산문에는 층 근거가 실린다 - 같은 갈림이다.
             #
-            # ⚠️ 하루 모드에 남는 갈림: 분해는 한 벌이 됐지만 **괴리 판정(`pv`)은 아직
-            # 아니다** - `etfcell` 하루 갈래가 `screen()` 으로 자기 `pv` 를 뽑아
-            # `route_etf(roll, pv)` 로 다시 라우팅하므로, 원장이 `COMMON_FACTOR` 인데
-            # 산문은 `괴리단독` 일 수 있다(이 변경 전에도 그랬다 - 좁혔을 뿐 닫지 못했다).
-            # 닫으려면 라우팅 결과 자체를 넘겨야 하는데, 하루 경로는 ALPHA-785 범위 밖이라
-            # 여기서 손대지 않는다.
+            # `etfcell` 하루 갈래(자기 `pv` 를 뽑아 재라우팅해 원장과 갈리던 코너)는 이
+            # 경로에서 도달 불가다 - `window` 가 무조건 조립되므로 구간 갈래만 탄다.
+            # 그 갈래는 `etfcell` 수동 CLI 로만 남는다(ALPHA-806).
             text = run_statics(lake, settings.etf_ticker, day_iso, ask,
                                roll=roll, **window)
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
@@ -340,10 +318,7 @@ def run(
         # 이름을 `failed` 로 쓰지 않는 이유가 그것이다 - 대개 S3 에 가지도 않았다.
         log("agent_trace.absent", events=len(trace))
 
-    if minute_row is not None:
-        honest = plain = text.strip()
-    else:
-        honest, _, plain = text.partition("[쉬운 설명] 수치 없이 - 방금 왜 움직였나")
+    honest = plain = text.strip()
     from .statics.plain import card as _card
     headline = _card(plain)
     # 층·라우팅은 위에서 이미 냈다 - 다시 분해하지 않는다(같은 셀에 두 답 금지)

@@ -510,8 +510,9 @@ dev 배포 이미지는 `src/apps/cloud/data-pipeline/Dockerfile` 로 빌드해 
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
-만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature → analyze 4페이즈**를
-한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md)) —
+만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature 3페이즈**를
+한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md);
+analyze 페이즈는 ALPHA-806 에서 상주 소비자로 옮겨 나갔다) —
 각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다 —
 단 **raw 는 예외**다(ALPHA-460): 소스 하나가 실패해도 무관한 소스의 정제·분석은 계속 돈다.
 정제가 빈 입력을 정상 성공으로 처리하므로 있는 만큼 처리하면 되기 때문이다. 대신 실패 직후
@@ -756,13 +757,14 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
 
-**analyze(1태스크)** — 구 analysis-engine SFN 의 흡수(ALPHA-408). analysis-engine 이미지의
-ENTRYPOINT 가 그대로 돌며(command 미지정 = 오늘 Asia/Seoul), **feature 산출물만 읽는다**
-(canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument)가 페이즈 경계
-계약이다 — 나중에 수집 빈도가 줄면 이 페이즈만 가격이벤트 기반 비동기 실행으로 떼어낸다.
-특정일(trade_date) 수동 재실행은 SFN 이 아니라 `terraform output data_pipeline_analysis_task_family`
-의 task-def 를 `aws ecs run-task` 로 직접 띄워 Command 를
-`["--trade-date","YYYY-MM-DD","--request-id","manual-..."]` 로 덮는다.
+**analyze 페이즈는 없다(ALPHA-806).** 이 SFN 의 책임은 feature 까지다. 설명은 분봉 트리거
+큐를 소비하는 **상주 서비스**(`minute_services.tf` 의 `analysis-consumer`)만 만든다 — 트리거
+없이 도는 일 단위 팬아웃은 확정 일봉을 기다려야 해서 장중엔 층을 못 세웠고(`layer_route=미상`),
+같은 대상에 분봉 경로와 다른 답을 냈다.
+
+수동 재실행은 **트리거 단건 재처리**다: `analysis-consumer` task-def 를 `aws ecs run-task` 로
+띄워 Command 를 `["--trigger-id","<분봉 트리거 id>"]` 로 덮는다. `--trade-date` 단독 실행 경로는
+없다 — 트리거 행이 대상·거래일의 정본이다.
 
 > ※ task-def 는 시크릿 세트 단위로 만든다(`tasks.tf` 의 `secret_sets` 맵에 키를 넣으면 자동 생성) —
 > 현재 9개: `fmp`·`bigkinds`·`kis`·`dart`·`krx`·`deepseek`·`rds`·`events`(LLM+DB)·`rds_dart`(DB+DART).

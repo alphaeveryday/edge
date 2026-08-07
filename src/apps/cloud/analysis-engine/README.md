@@ -1,9 +1,11 @@
 # analysis-engine
 
-ETF **당일 설명 생성** 파이프라인 (Python, edge-cloud). 대상 ETF 는 `ALPHAMALE_ETF_TICKER`
-(기본 `091160` KODEX 반도체)로 받고, 표시명·구성종목명은 전부 그 ETF 의 canonical holdings·
-마스터에서 파생한다 — KODEX 반도체 하드코딩은 없다(ALPHA-467). run() 은 한 번에 ETF 한 종을 돈다.
-통합 파이프라인 SFN의 analyze 페이즈로 실행되며, 트리거가 없으면 오늘(Asia/Seoul) 기준으로 실행된다.
+ETF **장중 설명 생성** 파이프라인 (Python, edge-cloud). **분봉 트리거 큐를 소비하는 상주
+서비스**로 돌며, 트리거 한 건이 곧 한 번의 실행이다 — 대상 ETF·거래일은 그 트리거 행이
+정본이다. 트리거 없이 시작할 수는 없다(ALPHA-806: 일 단위 실행은 확정 일봉을 기다려야 해서
+장중에 층을 못 세웠고 같은 대상에 다른 답을 냈다). 표시명·구성종목명은 전부 그 ETF 의
+canonical holdings·마스터에서 파생한다 — KODEX 반도체 하드코딩은 없다(ALPHA-467).
+run() 은 한 번에 ETF 한 종을 돈다.
 
 > ALPHA-411·412(완전 분리, ADR-0028) 이후 이 앱은 **feature 산출물의 소비자**다: L0 게이트는
 > `load-price-triggers`가 쓴 `price_movement_trigger`를 소비하고, 이벤트는 `assemble-events`가
@@ -183,7 +185,7 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 
 ## 배포
 
-컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다(ALPHA-408에서 전용 모듈·SFN을 흡수) — 통합 파이프라인 SFN(raw→normalize→feature→**analyze**)의 마지막 페이즈로 돌며, task definition 은 `edge-dev-data-pipeline-analysis`. 특정일 수동 재실행은 이 task-def 를 `aws ecs run-task`로 직접 띄워 `--trade-date`/`--request-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
+컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다 — **분봉 트리거 큐를 소비하는 상주 ECS 서비스**(`minute_services.tf`의 `analysis-consumer`, task definition `edge-dev-data-pipeline-analysis-consumer`)로 돈다. 통합 파이프라인 SFN의 책임은 feature 까지고 analyze 페이즈는 없다(ALPHA-806 — 트리거 없이 도는 일 단위 분석은 장중에 층을 못 세워 분봉 경로와 다른 답을 냈다). 수동 재실행은 트리거 단건 재처리다: 같은 task-def 를 `aws ecs run-task`로 띄워 `--trigger-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
 
 ## 스키마 계약
 

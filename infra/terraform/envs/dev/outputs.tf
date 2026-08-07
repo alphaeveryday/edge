@@ -39,13 +39,8 @@ output "data_pipeline_task_families" {
   value       = module.data_pipeline.task_definition_families
 }
 
-output "data_pipeline_analysis_task_family" {
-  description = "analyze 페이즈 task family — 특정일 수동 재실행: aws ecs run-task 로 이 task-def 를 띄워 Command 를 ['--trade-date','YYYY-MM-DD','--request-id','manual-...'] 로 덮는다"
-  value       = module.data_pipeline.analysis_task_definition_family
-}
-
 output "data_pipeline_log_group" {
-  description = "data-pipeline CloudWatch log group (analyze 포함 — 스트림 접두사 analysis)"
+  description = "data-pipeline CloudWatch log group (상주 설명 소비자 포함 — 스트림 접두사 analysis-consumer)"
   value       = module.data_pipeline.log_group_name
 }
 

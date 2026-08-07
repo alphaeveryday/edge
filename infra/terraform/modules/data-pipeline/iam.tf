@@ -230,10 +230,7 @@ resource "aws_iam_role_policy" "sfn" {
       {
         Effect = "Allow"
         Action = ["ecs:RunTask"]
-        Resource = concat(
-          [for task_definition in aws_ecs_task_definition.this : task_definition.arn],
-          [aws_ecs_task_definition.analysis.arn],
-        )
+        Resource = [for task_definition in aws_ecs_task_definition.this : task_definition.arn]
       },
       {
         Effect    = "Allow"
@@ -244,7 +241,9 @@ resource "aws_iam_role_policy" "sfn" {
       {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
-        Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.analysis_task.arn]
+        # analysis_task 는 뺀다 — 그 역할은 상주 소비자(ECS service)만 쓰고 SFN 은 더 이상
+        # analyze task 를 띄우지 않는다(ALPHA-806). RunTask 축소와 짝을 맞춘다.
+        Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn]
       },
       {
         Effect   = "Allow"

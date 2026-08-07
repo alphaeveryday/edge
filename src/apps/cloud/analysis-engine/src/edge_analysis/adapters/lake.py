@@ -142,35 +142,6 @@ class LakeReader:
                 rows.extend(pq.read_table(io.BytesIO(body), columns=columns).to_pylist())
         return rows
 
-    def load_returns(self, market: str, trade_date: date) -> dict[str, float | None]:
-        """티커별 종가 대비 등락. 직전 파티션을 D-1 로 쓴다."""
-        base = f"{LAKE_PRICE_PREFIX}/market={market}/"
-        dates = self._partition_values(base, "trade_date")
-        today = trade_date.isoformat()
-        if today not in dates:
-            return {}
-        idx = dates.index(today)
-        prev = dates[idx - 1] if idx > 0 else None
-        cur = {
-            str(r["ticker"]): r["close"]
-            for r in self._read_parquet_prefix(f"{base}trade_date={today}/", ["ticker", "close"])
-            if r.get("close") is not None
-        }
-        prv = (
-            {
-                str(r["ticker"]): r["close"]
-                for r in self._read_parquet_prefix(f"{base}trade_date={prev}/", ["ticker", "close"])
-                if r.get("close") is not None
-            }
-            if prev
-            else {}
-        )
-        returns: dict[str, float | None] = {}
-        for ticker, close in cur.items():
-            prev_close = prv.get(ticker)
-            returns[ticker] = (close / prev_close - 1.0) if prev_close and prev_close > 0 else None
-        return returns
-
     def _read_minute_bars(
         self, market: str, session_date: str, window_hhmm: str, generation: int,
         expected_checksum: str | None,

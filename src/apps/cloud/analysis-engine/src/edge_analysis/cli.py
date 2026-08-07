@@ -40,9 +40,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--request-id", default=None, help="caller correlation id")
     parser.add_argument("--trigger-id", default=None,
                         help="분봉 트리거 단건 입력(ALPHA-709) — 대상 ETF·trade_date 를 "
-                             "트리거 행에서 유도한다(--trade-date 무시)")
-    # 서브커맨드를 주지 않으면 종전처럼 설명 파이프라인이 돈다 - Step Functions 의 기동
-    # 커맨드를 바꾸지 않기 위해서다.
+                             "트리거 행에서 유도한다(--trade-date 무시). 설명 실행의 "
+                             "필수 입력이다(ALPHA-806)")
+    # 서브커맨드를 주지 않으면 설명 파이프라인이 돈다. `required=True` 로 못 박지 않는
+    # 이유는 이 인자가 상위 파서에 있어 적재 서브커맨드까지 함께 막기 때문이다 —
+    # 계약은 `pipeline.run` 한 곳이 진다(트리거 없으면 PipelineError).
     sub = parser.add_subparsers(dest="command")
     consume = sub.add_parser(
         "consume-triggers",

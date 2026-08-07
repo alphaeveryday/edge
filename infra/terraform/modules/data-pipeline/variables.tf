@@ -114,23 +114,7 @@ variable "analysis_athena_workgroup" {
   default     = ""
 }
 
-# ALPHA-470 — analyze 페이즈 Map 팬아웃의 유니버스 배열. 발화 무관 전량 병렬 분석한다.
-# ⚠️ SSOT 는 앱 config `sources.toml [krx_etf.source.etf_map]` 키다 — terraform 이 TOML 을
-# 못 읽어(네이티브 파서 없음) 여기 미러한다. 유니버스 변경(드묾) 시 두 곳을 함께 고쳐야 한다.
-variable "analysis_etf_universe" {
-  description = "분석 팬아웃 대상 ETF 티커 배열. sources.toml [krx_etf.source.etf_map] 키의 미러(SSOT=그쪽)."
-  type        = list(string)
-  default = [
-    "069500", "396500", "0167A0", "091160", "395160", "395270", "139260",
-    "091230", "469150", "455850", "474590", "471990", "475300", "0210A0",
-    "0182R0", "471780", "388420", "363580", "494220", "0093A0", "0190G0",
-    "0005G0", "471760", "266370", "486240", "475310", "476260", "261060",
-    "482030", "0176P0", "488210",
-    "300950", "305720",
-  ]
-}
-
-# ── analyze 의 DuckDB 조인층 (Fargate 실행 조건) ────────────────
+# ── 설명 소비자의 DuckDB 조인층 (Fargate 실행 조건) ────────────────
 # 이 셋이 비면 컨테이너에서 S3 뷰가 통째로 안 붙거나 OOM 으로 죽는데, 둘 다 **사유 없는
 # 침묵**으로 나타난다(빈 조인 = 0행 = 판정불가). 그래서 코드 기본값에 맡기지 않고 주입한다.
 variable "analysis_duckdb_s3_chain" {

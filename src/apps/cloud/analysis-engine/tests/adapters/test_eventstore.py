@@ -71,32 +71,17 @@ _DECOMP = Decomposition(
 )
 
 
-def test_missing_trigger_row_means_normal_variation():
-    conn = _FakeConn(trigger_row=None)
-
-    assert EventStore(conn).fetch_price_trigger("inst_ETF", date(2026, 7, 16)) is None
-
-    # 자연키 + 최신 detected_at (이행기 중복 행이 있을 수 있다).
-    sql, params = conn.executed[0]
-    assert "ORDER BY detected_at DESC" in sql
-    assert params == ("inst_ETF", "2026-07-16")
-
-
 def test_lineage_derives_from_the_consumed_trigger_id(monkeypatch):
     import psycopg2.extras
     monkeypatch.setattr(
         psycopg2.extras, "execute_values",
         lambda cur, sql, rows: cur._conn.value_batches.append(list(rows)),
     )
-    conn = _FakeConn(trigger_row=("pmt_01PIPELINEULID", 0.05, "abs|0.0500|>=0.03", True, False))
+    conn = _FakeConn(trigger_row=None)
     store = EventStore(conn)
 
-    gate = store.fetch_price_trigger("inst_ETF", date(2026, 7, 16))
-    assert gate.trigger_id == "pmt_01PIPELINEULID"
-    assert gate.abs_gate is True
-
     ids = store.persist_observation_route(
-        gate.trigger_id, _DECOMP, "CONCENTRATED", True, {"005930": "ent_X"})
+        "pmt_01PIPELINEULID", _DECOMP, "CONCENTRATED", True, {"005930": "ent_X"})
     assert ids["obs_id"] == stable_id("cob", "pmt_01PIPELINEULID")
     assert ids["route_id"] == stable_id("rte", ids["obs_id"])
 

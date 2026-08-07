@@ -217,7 +217,7 @@ locals {
   }
 }
 
-# ── analyze 페이즈 task-def (구 analysis-engine 모듈 흡수, ALPHA-408) ──
+# ── analysis-engine 공유 설정 (상주 소비자 task-def 가 minute_services.tf 에서 쓴다) ──
 # for_each 밖에 따로 두는 이유: 이미지(alphamale)·env 네임스페이스(PG*·ALPHAMALE_*·DEEPSEEK_*)·
 # 컨테이너명이 data-pipeline 계열과 전부 다르다. 시크릿 주입 메커니즘만 같다.
 locals {
@@ -243,8 +243,8 @@ locals {
     PGUSER                = var.db_user
     PGSCHEMA              = "public"
     DEEPSEEK_MODEL        = "deepseek-v4-flash"
-    # fallback 기본값 — SFN analyze Map(ALPHA-470)이 이터레이션마다 유니버스 티커로 덮는다.
-    # 직접 ecs run-task(특정일 수동 재실행) 때만 이 값이 실제로 쓰인다.
+    # 형식상의 기본값 — 실제 대상은 **트리거 행**이 정한다(`pipeline.run` 이 소비한
+    # minute_price_trigger 의 ticker 로 덮는다, ALPHA-806). 이 값이 쓰이는 경로는 없다.
     ALPHAMALE_ETF_TICKER       = "091160"
     ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
     # 백필은 S3 정본만 주입한다. 컨테이너 로컬 경로는 입력·원장으로 쓰지 않는다.
@@ -273,36 +273,6 @@ locals {
     PGPASSWORD       = "${var.db_password_secret_arn}:password::"
     DEEPSEEK_API_KEY = "${var.deepseek_secret_arn}:api_key::"
   }
-}
-
-resource "aws_ecs_task_definition" "analysis" {
-  family                   = "${var.name}-analysis"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  memory                   = var.analysis_task_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.analysis_task.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
-  }
-
-  # command 미지정: 이미지 ENTRYPOINT(python -m edge_analysis)가 기본 실행 = 오늘(Asia/Seoul).
-  # 특정 trade-date/request-id 재실행은 SFN 라우팅 없이 ecs run-task 로 이 task-def 를 직접
-  # 띄워 Command(=CMD args: --trade-date/--request-id)만 덮는다 — 운영 수동 실행 계약.
-  container_definitions = jsonencode([{
-    name        = local.analysis_container_name
-    image       = var.analysis_image
-    essential   = true
-    environment = [for k, v in local.analysis_env : { name = k, value = v }]
-    secrets     = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis" })
-    }
-  }])
 }
 
 resource "aws_ecs_task_definition" "this" {
