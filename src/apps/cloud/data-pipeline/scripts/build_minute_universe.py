@@ -10,6 +10,11 @@
 파티션이 아니라 config `krx_etf.source.etf_map` 이다. 그 로직은 수집 스텝이 이미 갖고
 있어 여기서 재구현하지 않는다(`steps/ingest_price_raw`).
 
+여기에 config `[minute_universe].sector_etf_ids` 를 **합집합으로 얹는다** — 층 분해의 섹터
+후보 ETF 다. holdings 축과 별개인 이유: 그 ETF 들은 자기 분봉만 필요하고 구성종목·NAV 는
+안 받으므로 holdings 에 자기 행이 없다. 안 얹으면 구간(장중) 모드에서 섹터층이 통째로
+빠진다(일봉 경로가 쓰는 KRX 업종지수는 분봉이 없어 구간 모드가 섹터 ETF 로 대체한다).
+
 **이 스크립트는 업로드하지 않는다.** 파일만 만들고, S3 반영은 운영자가 확인 후 한다 —
 universe 는 세션 identity(universe_hash) 축이라 갈아끼우는 순간 그날 계획이 바뀐다.
 
@@ -46,9 +51,19 @@ from data_pipeline.steps.ingest_price_raw import (  # noqa: E402
 )
 
 
-def build(storage, expected_etfs) -> Universe:
-    """holdings → `Universe`. 빈 결과는 만들지 않는다(fail loud)."""
-    etf_ids = sorted(_kr_etf_ids(storage, expected_etfs))
+def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Universe:
+    """holdings(+섹터 후보) → `Universe`. 빈 결과는 만들지 않는다(fail loud).
+
+    `sector_etf_ids` 는 층 분해의 **섹터 후보** ETF(config `[minute_universe]`)다. holdings
+    에서 파생되지 않는다 — 구성종목을 안 받으므로 holdings 에 자기 행이 없다. 그래서
+    합집합으로 얹는다. 이걸 안 얹으면 구간(장중) 모드의 섹터층 후보가 계열 부재로 빠진다:
+    일봉 경로가 쓰는 KRX 업종지수는 분봉이 없어 구간 모드가 섹터 ETF 로 대체하기 때문이다.
+
+    **구성종목은 안 늘어난다.** 아래 차집합이 etf_ids 를 뺀 나머지를 구성종목으로 삼으므로,
+    섹터 ETF 가 다른 ETF 의 보유 종목으로 잡혀 있어도 ETF 축으로 흡수된다(Universe 는
+    두 집합이 겹치면 거부한다).
+    """
+    etf_ids = sorted(_kr_etf_ids(storage, expected_etfs) | set(sector_etf_ids))
     everything = set(_kr_holdings_universe(storage, expected_etfs=expected_etfs))
     # ETF 자기 티커와 구성종목은 겹치면 안 된다(Universe 검증) — ETF 쪽을 뺀 나머지가 구성종목
     constituent_ids = sorted(everything - set(etf_ids))
@@ -75,7 +90,11 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings()
-    universe = build(make_storage(settings.storage), _krx_expected_etfs(settings))
+    universe = build(
+        make_storage(settings.storage),
+        _krx_expected_etfs(settings),
+        () if settings.minute_universe is None else settings.minute_universe.sector_etf_ids,
+    )
     payload = json.dumps(
         {
             "universe_version": universe.universe_version,
@@ -86,9 +105,11 @@ def main() -> None:
     )
     if args.out:
         Path(args.out).write_text(payload + "\n", encoding="utf-8")
+        sector = () if settings.minute_universe is None else settings.minute_universe.sector_etf_ids
         print(
-            f"{args.out}: ETF {len(universe.etf_ids)}종 + 구성종목 "
-            f"{len(universe.constituent_ids)}종 (version={universe.universe_version})",
+            f"{args.out}: ETF {len(universe.etf_ids)}종(섹터 후보 {len(sector)} 포함) + "
+            f"구성종목 {len(universe.constituent_ids)}종 "
+            f"(version={universe.universe_version})",
             file=sys.stderr,
         )
     else:

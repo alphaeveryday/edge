@@ -671,6 +671,43 @@ class MinuteNewsConsumerConfig(BaseModel):
     max_attempts: int = 5
 
 
+class MinuteUniverseConfig(BaseModel):
+    """1분 레인 universe.json 을 **만들 때만** 쓰는 설정 — `build_minute_universe` 전용.
+
+    ⚠️ 이 섹션은 수집 유니버스의 정본이 아니다. 1분 레인의 정본은 S3 객체
+    `config/minute/universe.json` 이고(planner·worker·consumer 가 `--universe` 로 같은
+    객체를 본다), 여기 값은 그 객체를 **생성**하는 입력 하나일 뿐이다 — 이 파일만 고치고
+    S3 를 안 갈면 아무것도 안 바뀐다.
+
+    `[krx_etf.source.etf_map]` 과 다른 축이다: 저기는 "KRX PDF 로 holdings 를 받을 ETF"
+    이고 그 구성종목이 유니버스로 파생된다. 여기 ETF 는 **자기 분봉만** 필요하다 —
+    holdings 도, 구성종목도, NAV 도 받지 않는다. 그래서 etf_map 에 넣으면 안 된다
+    (넣으면 KRX PDF 수집이 48회 늘고 구성종목이 유니버스로 딸려 들어온다).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 층 분해의 **섹터 후보** ETF — 분봉이 있어야 구간(장중) 모드에서 섹터층이 선다.
+    # 일봉 경로는 KRX 업종지수를 섹터 후보로 주입하지만(analysis `layers._krx_sector_candidate`)
+    # 그 지수는 분봉이 없어(수집 원천이 pykrx 일봉이다) 구간 모드가 섹터 ETF 로 대체한다.
+    # 정본은 analysis 쪽 `layers_daily` 의 `kind='sector'` 집합이다 — 둘이 갈리면 여기 없는
+    # 후보가 구간 모드에서 조용히 계열 부재로 빠진다(`_absent(lake, "layers", …)`).
+    sector_etf_ids: tuple[NonBlankStr, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate(self) -> MinuteUniverseConfig:
+        from ..parse import krx_short_code  # 지연 import — config 는 parse 에 의존하지 않는다
+
+        if len(set(self.sector_etf_ids)) != len(self.sector_etf_ids):
+            raise ValueError("sector_etf_ids 에 중복 코드가 있다")
+        # 오타는 로드 시점에 터뜨린다. 통과시키면 그 코드가 universe.json 에 실려
+        # 매분 missing 으로 잡히고, window 가 영구 INCOMPLETE 로 남는다 — 고칠 것은
+        # 오타 하나인데 원인이 400종 결측 뒤에 숨는다(Rule 12).
+        if bad := [c for c in self.sector_etf_ids if krx_short_code(c) is None]:
+            raise ValueError(f"KRX 단축코드가 아닌 값이 있다: {bad[:5]}")
+        return self
+
+
 class PriceTriggersConfig(BaseModel):
     """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
 

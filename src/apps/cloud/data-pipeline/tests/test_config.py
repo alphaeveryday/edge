@@ -291,3 +291,43 @@ def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path)
     from data_pipeline.minute.relay import RelayConfig
 
     RelayConfig(relay_id="r", queue_urls=dict(settings.minute_relay.queue_urls))
+
+
+def test_sector_etf_typo_fails_loud(tmp_path):
+    # WHY: 오타는 조용히 통과하면 universe.json 에 실려 매분 missing 으로 잡히고 그 window 가
+    #      영구 INCOMPLETE 로 남는다 — 고칠 것은 코드 한 글자인데 원인이 400종 결측 뒤에
+    #      숨는다. KRX 단축코드 형태(선두 숫자 + 영숫자 6자)로 로드 시점에 건다.
+    bad = VALID + """
+[minute_universe]
+sector_etf_ids = ["091170", "KODEX은행"]
+"""
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_etf_duplicate_fails_loud(tmp_path):
+    # WHY: 중복은 `Universe` 가 거부한다(멤버십 identity 축). 여기서 안 막으면 build 스크립트가
+    #      돌아야 드러나고, 그때는 이미 운영자가 S3 를 갈아끼우려는 시점이다.
+    bad = VALID + """
+[minute_universe]
+sector_etf_ids = ["091170", "091170"]
+"""
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_etf_list_loads(tmp_path):
+    # WHY: 이 섹션은 1분 universe.json **생성** 입력이다 — 수집 스텝은 안 읽는다. 값이
+    #      튜플로 그대로 서야 build 스크립트가 holdings 파생 ETF 와 합집합할 수 있다.
+    good = VALID + """
+[minute_universe]
+sector_etf_ids = ["091170", "0093A0"]
+"""
+    settings = load_settings(_write(tmp_path, good))
+    assert settings.minute_universe.sector_etf_ids == ("091170", "0093A0")
+
+
+def test_minute_universe_section_is_optional(tmp_path):
+    # WHY: 섹터 후보 없이도 1분 레인은 돌아야 한다(이 축이 생기기 전과 같은 유니버스).
+    #      필수로 만들면 이 섹션이 없는 환경의 로드가 통째로 죽는다.
+    assert load_settings(_write(tmp_path, VALID)).minute_universe is None
