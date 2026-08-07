@@ -458,9 +458,8 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
 
     class _MinuteStore(_FakeStore):
         def __init__(self, prereqs):
-            super().__init__(trigger=None, prereqs=prereqs)  # 일 단위 조회는 비어 있다
+            super().__init__(trigger=None, prereqs=prereqs)  # 트리거는 아래에서 직접 만든다
             self.persist_kwargs = None
-            self.daily_fetches = 0
 
         def fetch_minute_price_trigger(self, trigger_id):
             assert trigger_id == "mpt_1"
@@ -479,10 +478,6 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         def fetch_minute_window_meta(self, session_id, window_start):
             assert session_id == "ses-1"
             return (1, "d" * 64)
-
-        def fetch_price_trigger(self, etf_instrument_id, trade_date):
-            self.daily_fetches += 1
-            return None
 
         def persist_observation_route(self, trigger_id, decomp, route_code,
                                       event_search, entity_index, *, minute=False):
@@ -504,8 +499,6 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
     code = run(settings, lake=_FakeLake(), store=store,
                client=_FakeClient(), s3=s3, causal_lake=object())
     assert code == 0
-    # 일 단위 게이트 조회를 타지 않는다 — 그 테이블엔 이 트리거가 없다
-    assert store.daily_fetches == 0
     assert store.persist_kwargs == {"trigger_id": "mpt_1", "minute": True}
     assert called == {
         "ticker": "091160",

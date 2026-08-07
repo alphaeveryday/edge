@@ -183,7 +183,7 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 
 ## 배포
 
-컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다(ALPHA-408에서 전용 모듈·SFN을 흡수) — 통합 파이프라인 SFN(raw→normalize→feature→**analyze**)의 마지막 페이즈로 돌며, task definition 은 `edge-dev-data-pipeline-analysis`. 특정일 수동 재실행은 이 task-def 를 `aws ecs run-task`로 직접 띄워 `--trade-date`/`--request-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
+컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다 — **분봉 트리거 큐를 소비하는 상주 ECS 서비스**(`minute_services.tf`의 `analysis-consumer`, task definition `edge-dev-data-pipeline-analysis-consumer`)로 돈다. 통합 파이프라인 SFN의 책임은 feature 까지고 analyze 페이즈는 없다(ALPHA-806 — 트리거 없이 도는 일 단위 분석은 장중에 층을 못 세워 분봉 경로와 다른 답을 냈다). 수동 재실행은 트리거 단건 재처리다: 같은 task-def 를 `aws ecs run-task`로 띄워 `--trigger-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
 
 ## 스키마 계약
 
