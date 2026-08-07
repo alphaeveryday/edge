@@ -58,7 +58,13 @@ UNIVERSE = Universe(
 
 
 def _consecutive(n: int) -> list[str]:
-    """`SESSION_DAY` 부터 연속 n일. 달력 판정이 아니라 **연속성**만 보는 자리에 쓴다."""
+    """`SESSION_DAY` 부터 연속 n일.
+
+    ⚠️ **달력 요일은 안 피한다.** `rollup_session_cli` 는 `trading_day` 가 참일 때만
+    rollup 을 부르므로, 경계가 목·금에 놓이면 여기서 나온 뒤쪽 날짜가 주말이 돼 그
+    분기를 못 밟는 테스트가 생긴다. 지금 경계(월요일)에서는 안 걸리고, 걸리면 **조용히
+    통과가 아니라 크게 깨진다** — 그때 그 테스트만 명시적 평일을 쓰면 된다.
+    """
     return [(SESSION_DAY + timedelta(days=i)).isoformat() for i in range(n)]
 
 
@@ -748,8 +754,10 @@ class TestRollupSessionCli:
         잊으면 **감시가 조용히 꺼진 채로 남는다**. 0건이 "구멍 없음"인지 "볼 창이 없음"
         인지 갈리지 않으면 아무도 그 차이를 못 본다(Rule 12).
 
-        이 단언이 없으면 `WRITER_SINCE` 를 몇 년 뒤로 옮겨도 이 파일이 전건 통과한다 —
-        픽스처가 경계에서 파생되고 시계까지 고정돼 있기 때문이다(Rule 9).
+        ⚠️ 이 테스트는 **경고 경로만** 검증한다. 시계를 경계 앞으로 되돌려 상황을
+        합성하므로 `WRITER_SINCE` 가 실제로 어디 있는지는 안 본다 — 경계를 미래에 두고
+        되돌리길 잊는 사고를 잡는 것은 이 단언이 아니라 아래 `test_boundary_is_not_left_
+        in_the_future` 와 런타임 WARNING 이다.
         """
         import logging
 
@@ -761,6 +769,26 @@ class TestRollupSessionCli:
         with caplog.at_level(logging.WARNING):
             self.run(self.settings(tmp_path))
         assert "판정 창이 비어 있다" in caplog.text
+
+
+def test_boundary_is_not_left_in_the_future():
+    """소유권 경계가 **오래도록 미래에 방치되지 않는다**.
+
+    WHY: 경계를 앞당기면 그 구간이 감시에서 빠진다. 넘겨받은 백필이 채우는 동안은
+    정상이지만, 되돌리길 잊으면 감시가 꺼진 채 남는다. 위 테스트는 시계를 합성하므로
+    경계의 **실제 위치**는 안 본다 — 그 자리가 여기다.
+
+    상한을 넉넉히(2주) 두는 이유: 경계를 다음 거래일로 미리 옮기는 것은 정당한 운영
+    행위다(ALPHA-836 이 금요일에 월요일로 옮겼다). 막으려는 것은 그 이동이 아니라
+    **잊힌 이동**이다.
+    """
+    from datetime import date as _date
+
+    boundary = _date.fromisoformat(WRITER_SINCE)
+    assert boundary <= _date.today() + timedelta(days=14), (
+        f"WRITER_SINCE({WRITER_SINCE}) 가 오늘보다 2주 넘게 미래다 — 그 구간의 구멍 "
+        f"감시가 꺼져 있다. 백필이 그 구간을 채웠으면 경계를 되돌려라"
+    )
 
 
 def _scan_boom(*args, **kwargs):
