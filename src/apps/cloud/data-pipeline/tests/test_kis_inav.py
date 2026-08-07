@@ -499,26 +499,28 @@ def test_지연_로그가_나르는_수치를_전부_묶는다(monkeypatch, capl
 
     (rec,) = _records(caplog, "벤더 지연")
     assert rec.levelno == logging.INFO  # 1분 레인에 붙으면 매 폴링이라 WARN 이면 안 된다
-    symbol, etf_id, stamp, _recv, lag, window, interval, n, suffix = rec.args
+    symbol, etf_id, stamp, _recv, lag, window, interval, n, session, suffix = rec.args
     assert (symbol, etf_id, stamp) == ("069500", "069500", "153000")
     assert (lag, window, interval, n) == (60.0, 1800, 60, 5)
+    assert session == "마감후"  # 15:31 은 마감(15:30) 뒤다
     assert suffix == ""
 
 
 def test_ETF_마다_관측한다(monkeypatch, caplog):
     """픽스처가 1종이면 훅을 ETF 루프 밖으로 옮겨 첫 종목만 관측하는 회귀가 통과한다.
     실 유니버스는 33종이다."""
-    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    _at(monkeypatch, datetime(2026, 7, 27, 11, 0, tzinfo=KST))  # 장중
     src = _source(
-        {"069500": _ok([_row("153000")]), "091160": _ok([_row("152000")])},
+        {"069500": _ok([_row("105900")]), "091160": _ok([_row("104900")])},
         etf_map={"069500": "KR7069500007", "091160": "KR7091160002"},
     )
 
     with caplog.at_level("INFO"):
         list(src.fetch())
 
-    by_symbol = {r.args[0]: r.args[4] for r in _records(caplog, "벤더 지연")}
-    assert by_symbol == {"069500": 60.0, "091160": 660.0}  # 종목마다, 각자의 지연
+    hits = _records(caplog, "벤더 지연")
+    assert {r.args[0]: r.args[4] for r in hits} == {"069500": 60.0, "091160": 660.0}
+    assert {r.args[8] for r in hits} == {"장중"}  # 분기가 상수면 여기서 죽는다
 
 
 def test_라벨이_조금_미래여도_사실을_적는다(monkeypatch, caplog):
@@ -532,7 +534,7 @@ def test_라벨이_조금_미래여도_사실을_적는다(monkeypatch, caplog):
 
     (rec,) = _records(caplog, "벤더 지연")
     assert rec.args[4] == -55.0
-    assert "미래" in rec.args[8]
+    assert "미래" in rec.args[9]
 
 
 def _priced(stamp: str, nav: float, price: float, dprt: str) -> dict:
@@ -593,6 +595,122 @@ def test_괴리가_작을_때도_어긋나면_잡는다(monkeypatch, caplog):
     _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
     # 퍼센트 가설은 0.11411 인데 0.05 로 온다 — 반올림으로는 설명 안 되는 차이다.
     src = _source({"069500": _ok([_row("153000", dprt="0.05")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert _records(caplog, "드리프트 의심")
+
+
+def test_마감_후_폴링은_구간이_표시된다(monkeypatch, caplog):
+    """마감 후 지연은 창 폭의 십수 배로 나오는 게 **정상**이다(15:30 값을 23:50 에 받으면
+    30,000초). 마커가 없으면 하루치를 모아 보는 쪽에서 그 값이 "REST 불가"의 증거처럼
+    섞인다 — 도크스트링이 경계한 미탐과 모양이 같은데 이쪽은 정상 동작이다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 23, 50, tzinfo=KST))
+    src = _source({"069500": _ok([_row("153000")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "벤더 지연")
+    assert rec.args[8] == "마감후"
+    assert rec.args[4] == 30000.0
+
+
+def test_라벨_범위가_창_폭을_넘으면_혼재를_지목한다(monkeypatch, caplog):
+    """이 API 는 오늘 데이터가 없으면 전일 행을 반복한다. 전일 15:30 과 당일 09:05 가 섞이면
+    사전순 `max` 가 전일을 "최신"으로 집어 지연 0초가 −22,800초로 찍힌다 — 산출물이 그
+    수치 하나라 결론이 직접 뒤집힌다. 날짜 필드가 없어 직접 확인은 못 하지만 **범위는
+    확인된다**: 응답 창은 계약상 간격×30 이라, 그걸 넘으면 한 창의 행이 아니다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 9, 10, tzinfo=KST))
+    src = _source({"069500": _ok([_row("152900"), _row("153000"), _row("090500")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "라벨 범위가 창 폭을 넘는다")
+    assert rec.levelno == logging.WARNING
+    assert rec.args[2:6] == ("090500", "153000", 23100, 1800)
+
+
+def test_한_창_안의_행은_범위_경고가_없다(monkeypatch, caplog):
+    """정상 응답(창 30분 안)에서 경고가 뜨면 진짜 혼재가 소음에 묻힌다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok(_window())})  # 150100~152500, 폭 1440초 < 1800
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "라벨 범위가 창 폭을 넘는다")
+
+
+def test_대조_표본이_모자라면_드러낸다(monkeypatch, caplog):
+    """29행이 못 쓰는데 남은 1행이 맞으면 지금까진 로그가 0줄이었다 — 표본이 1/30 인데
+    판정은 "정상"으로 보인다. 시각 축은 같은 상황을 "형식 이탈 29/30" 으로 드러낸다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    rows = [_row("150000", dprt=None), _row("151000", nav="nan"), _row("153000")]
+    src = _source({"069500": _ok(rows)})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "표본 부족")
+    # 사유를 가른다 — "필드가 안 왔다"(벤더 계약 변화)와 "값이 이상하다"(데이터 오염)는
+    # 처방이 정반대다. 한 문장으로 뭉개면 둘이 같아 보인다.
+    assert rec.args[2:6] == (1, 3, 1, 1)
+    assert not _records(caplog, "드리프트 의심")
+
+
+def test_대조_불가_사유를_뭉개지_않는다(monkeypatch, caplog):
+    """전건 못 쓸 때도 결측·비수치와 비유한·비양수를 나눠 센다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row("150000", dprt=None), _row("153000", nav="inf")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "대조 불가")
+    assert rec.args[2:5] == (2, 1, 1)  # 행 2 · 결측 1 · 비유한 1
+
+
+def test_소스_전역_중단은_관측_격리가_삼키지_않는다(monkeypatch):
+    """`StopFetch` 는 키·쿼터 문제라 ETF 격리 대상이 아니다(`fetch()` 가 명시적으로 뺀다).
+    관측 격리가 그 계약 **아래층**에서 먼저 먹으면 규약이 두 곳으로 갈려, 소스 전체가
+    멈춰야 할 자리에서 남은 ETF 를 계속 두드린다."""
+    from data_pipeline.sources.http import StopFetch
+
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok(_window())})
+    monkeypatch.setattr(
+        type(src), "_note_rows",
+        lambda *a, **k: (_ for _ in ()).throw(StopFetch("429 quota")),
+    )
+
+    with pytest.raises(StopFetch):
+        list(src.fetch())
+
+
+def test_창을_조금만_넘어도_혼재로_본다(monkeypatch, caplog):
+    """임계는 창 폭 **그 자체**다. 배수로 느슨하게 두면 그 사이 구간이 무방비인데, 창이
+    간격×30 이라는 건 계약이라 1초만 넘어도 한 창의 행이 아니다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 40분(2400초) 폭 — 창 1800초를 넘지만 배수 완화(3600)에는 안 걸린다.
+    src = _source({"069500": _ok([_row("145000"), _row("153000")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "라벨 범위가 창 폭을 넘는다")
+    assert rec.args[4] == 2400
+
+
+def test_괴리가_1bp_아래여도_100배_드리프트를_잡는다(monkeypatch, caplog):
+    """절대 오차가 곧 **사각지대 폭**이다 — 비율↔퍼센트 잔차가 `0.99 × |괴리|` 라,
+    괴리가 `abs_tol/0.99` 보다 작으면 100배 드리프트가 통째로 통과한다. 채권형·MMF형처럼
+    상시 1bp 안에서 도는 ETF 는 그 폭이 곧 계통적 미탐 구간이다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 진짜 괴리 0.008%, dprt 는 비율 표기(0.00008) — 잔차 0.00792.
+    src = _source({"069500": _ok([_priced("153000", 100000, 100008, "0.00008")])})
 
     with caplog.at_level("INFO"):
         list(src.fetch())

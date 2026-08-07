@@ -60,16 +60,23 @@ KST = timezone(timedelta(hours=9))
 # 정규장 개장 시각(KST). 이 전에는 **오늘 iNAV 가 아직 존재하지 않는다** — 그때 부르면 KIS 가
 # 빈 응답이 아니라 직전 거래일 값을 주고, 응답에 날짜가 없어 그게 오늘 것으로 라벨된다.
 MARKET_OPEN = time(9, 0)
+# 정규장 마감. **수집을 막는 경계가 아니다**(마감 후에 오는 건 오늘 종가 구간이라 라벨이
+# 맞다 — `skip_reason`) — 지연 수치를 읽는 쪽이 장중과 마감후를 구분하게 하는 표시일 뿐이다.
+MARKET_CLOSE = time(15, 30)
 
 
 _STAMP_FORMAT = "%H%M%S"
 _STAMP_LEN = 6  # bsop_hour = HHMMSS
 
 # 괴리율 단위 가드 허용 오차(퍼센트 단위 비교). `dprt` 는 소수 2자리로 와서(실측) 반올림
-# 만으로 최대 0.005 어긋나고, 값이 커지면 벤더 내부 정밀도 차이가 비례해 는다. 막으려는
-# 것은 비율↔퍼센트 100배 드리프트라, 이 범위면 정상 반올림을 통과시키면서 그건 문다.
+# 만으로 최대 0.005 어긋나고, 값이 커지면 벤더 내부 정밀도 차이가 비례해 는다.
+#
+# ⚠️ **abs_tol 이 곧 사각지대 폭이다.** 비율↔퍼센트 드리프트의 잔차는 `0.99 × |진짜 괴리|`
+# 라, 괴리가 `abs_tol/0.99` 보다 작은 구간은 100배 드리프트가 통째로 통과한다. 그래서
+# 반올림 오차(0.005)를 겨우 넘는 값으로 조인다 — 0.01 은 근거의 2배였고 사각지대도 2배였다.
+# 채권형·MMF형처럼 상시 1bp 안에서 도는 ETF 는 이 폭이 곧 미탐 구간이다.
 _UNIT_REL_TOL = 0.02
-_UNIT_ABS_TOL = 0.01
+_UNIT_ABS_TOL = 0.006
 
 
 def _time_stamp(row: dict) -> str | None:
@@ -99,6 +106,22 @@ def _time_stamp(row: dict) -> str | None:
     except ValueError:
         return None
     return stamp
+
+
+def _stamp_span_sec(stamps: list[str]) -> int:
+    """라벨 집합이 덮는 시간 폭(초). 한 창의 행인지 판정하는 축이다.
+
+    응답 창은 계약상 `간격 × 30` 이라(모듈 도크스트링 2번), 이 폭이 창을 넘으면 그 행들은
+    한 창에서 온 게 아니다 — 전일 잔값이 섞였다는 뜻이다. 날짜 필드가 없어 직접 확인은
+    불가능하지만, **범위는 확인 가능하다**.
+    """
+    if not stamps:
+        return 0
+    secs = [
+        t.hour * 3600 + t.minute * 60 + t.second
+        for t in (datetime.strptime(s, _STAMP_FORMAT).time() for s in stamps)
+    ]
+    return max(secs) - min(secs)
 
 
 def _is_blank(value: object) -> bool:
@@ -239,7 +262,19 @@ class KisInavSource(KisNavSource):
                 kis_symbol, our_etf_id, len(rows),
             )
             return
-        # 전부 HHMMSS 6자리로 걸러졌으므로 사전순 = 시각순이다(`_time_stamp` 가 보장).
+        # ⚠️ 사전순 = 시각순은 **하루 안에서만** 참이다(`_time_stamp` 가 보장하는 범위).
+        # 이 API 는 오늘 데이터가 없으면 직전 거래일 행을 반복하므로(클래스 도크스트링),
+        # 전일과 당일이 섞이면 `max` 가 전일 15:30 을 "최신"으로 집는다 — 09:10 폴링이
+        # 지연 0초 대신 −22,800초를 기록한다. 응답 창은 계약상 `간격 × 30` 이라,
+        # **라벨 범위가 창 폭을 넘으면 한 창의 행이 아니다**. 그걸로 혼재를 드러낸다.
+        span_sec = _stamp_span_sec(stamps)
+        if span_sec > self.window_sec:
+            logger.warning(
+                "iNAV 라벨 범위가 창 폭을 넘는다: %s(%s) %s~%s(%d초) > 창 %d초 — "
+                "한 창의 행이 아니다(전일 잔값 혼재 의심). 최신 판정이 오염될 수 있다",
+                kis_symbol, our_etf_id, min(stamps), max(stamps), span_sec,
+                self.window_sec,
+            )
         stamp = max(stamps)
         observed = datetime.combine(
             now.date(), datetime.strptime(stamp, _STAMP_FORMAT).time(), tzinfo=KST
@@ -247,9 +282,12 @@ class KisInavSource(KisNavSource):
         lag_sec = (now - observed).total_seconds()
         logger.info(
             "iNAV 벤더 지연: %s(%s) 최신=%s 수신=%s 지연=%.0f초 "
-            "창=%d초 간격=%d초 행=%d%s",
+            "창=%d초 간격=%d초 행=%d 구간=%s%s",
             kis_symbol, our_etf_id, stamp, now.strftime(_STAMP_FORMAT), lag_sec,
             self.window_sec, self.interval_sec, len(stamps),
+            # 마감 후 폴링은 지연이 창 폭의 십수 배로 정상이다 — 마커가 없으면 하루치를
+            # 모아 보는 쪽에서 그 값이 "REST 불가"의 증거처럼 섞인다.
+            "장중" if MARKET_OPEN <= now.time() < MARKET_CLOSE else "마감후",
             # 사실만 적는다 — 원인(전일 잔값/구간 끝 라벨)은 이 콜로 못 가른다(도크스트링).
             " (라벨이 수신시각보다 미래다)" if lag_sec < 0 else "",
         )
@@ -263,7 +301,7 @@ class KisInavSource(KisNavSource):
         빠진다. 정상일 때 로그를 남기지 않는 것은 의도다: 확정된 사실을 ETF·폴링마다
         되풀이하면 진짜 신호가 자기 소음에 묻힌다(1분 레인에 붙으면 하루 수만 줄이다).
         """
-        checked = mismatched = 0
+        checked = mismatched = missing = nonfinite = 0
         sample: tuple[object, float, float] | None = None
         for row in rows:
             try:
@@ -271,10 +309,15 @@ class KisInavSource(KisNavSource):
                 price = float(row["stck_prpr"])
                 dprt = float(row["dprt"])
             except (KeyError, TypeError, ValueError):
+                # 결측·비수치와 아래 비유한·비양수를 **가른다** — 한 문장으로 뭉개면
+                # "필드가 안 왔다"(벤더 계약 변화)와 "값이 이상하다"(데이터 오염)가
+                # 같아 보이고 처방이 정반대다.
+                missing += 1
                 continue
             # ⚠️ float() 는 "nan"·"inf" 를 **예외 없이** 통과시킨다. 그대로 두면 오염
             # 표본이 그럴듯한 수치(-100.0000%)로 대조에 섞여 판정을 흔든다.
             if not all(map(math.isfinite, (nav, price, dprt))) or nav <= 0:
+                nonfinite += 1
                 continue
             checked += 1
             expected_pct = (price / nav - 1.0) * 100.0
@@ -286,10 +329,20 @@ class KisInavSource(KisNavSource):
                     sample = (row.get("bsop_hour"), dprt, expected_pct)
         if not checked:
             logger.warning(
-                "iNAV 괴리 단위 대조 불가: %s(%s) 쓸 수 있는 (nav, 가격, dprt) 삼중 0건(행 %d)",
-                kis_symbol, our_etf_id, len(rows),
+                "iNAV 괴리 단위 대조 불가: %s(%s) 쓸 수 있는 삼중 0건"
+                "(행 %d · 결측·비수치 %d · 비유한·비양수 %d)",
+                kis_symbol, our_etf_id, len(rows), missing, nonfinite,
             )
             return
+        if unusable := missing + nonfinite:
+            # **부분 실패도 관측이다.** 30행 중 29행이 못 쓰는데 남은 1행이 맞으면 지금까진
+            # 아무 로그도 안 남았다 — 표본이 1/30 인데 판정은 "정상"으로 보인다. 시각 축은
+            # 같은 상황을 "형식 이탈 29/30" 으로 드러내는데 이쪽만 새고 있었다.
+            logger.warning(
+                "iNAV 괴리 단위 표본 부족: %s(%s) %d/%d 행만 대조"
+                "(결측·비수치 %d · 비유한·비양수 %d)",
+                kis_symbol, our_etf_id, checked, len(rows), missing, nonfinite,
+            )
         if mismatched:
             logger.warning(
                 "iNAV 괴리 단위 드리프트 의심: %s(%s) %d/%d 행 불일치 — "

@@ -233,6 +233,14 @@ class KisNavSource:
                         self._note_failure(kis_symbol, our_etf_id, defect)
                 try:
                     self._note_rows(our_etf_id, kis_symbol, rows)
+                except StopFetch:
+                    # 소스 전역 신호는 삼키지 않는다. 아래 `fetch()` 가 4xx/429 를 격리
+                    # 대상에서 명시적으로 빼는데(키·쿼터는 중단이 맞다), 그 계약 **아래층**
+                    # 에서 `except Exception` 이 먼저 먹으면 규약이 두 곳으로 갈린다.
+                    # 지금 이 훅은 HTTP 를 안 타 도달 불가지만, 아래 도크스트링이 삼킴을
+                    # 계약으로 못박은 이상 `self.client` 를 쓰는 오버라이드가 붙는 순간
+                    # 조용히 열린다.
+                    raise
                 except Exception:
                     # 훅 도크스트링의 "수집 성패를 뒤집지 않는다" 를 **코드로** 강제한다.
                     # 감싸지 않으면 예외가 fetch() 의 ETF 단위 격리에 잡혀 이 ETF 의 행이
