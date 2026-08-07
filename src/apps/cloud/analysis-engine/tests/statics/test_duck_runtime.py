@@ -251,10 +251,27 @@ def test_empty_or_stale_iceberg_is_not_treated_as_the_source_of_truth():
     day = "2026-08-06"
     assert iceberg_covers(None, day, 0) is False                    # 빈 표
     assert iceberg_covers(dt.date(2026, 8, 5), day, 0) is False     # 하루 낡음
-    assert iceberg_covers(dt.date(2026, 8, 6), day, 78) is True     # 그날이 있다
-    # **최신일이 아니라 그날의 행이 기준이다.** 상류가 띄엄띄엄 채우면 '최신은 최신인데
-    # 그날은 없는' 상태가 난다 - 실측 8/3·8/4 는 13종목, 8/5 는 12:45 에 끊겼다.
+    assert iceberg_covers(dt.date(2026, 8, 6), day, 366) is True    # 그날이 있다
+    # **최신일이 아니라 그날의 착지가 기준이다.** 상류가 띄엄띄엄 채우면 '최신은
+    # 최신인데 그날은 없는' 상태가 난다 - 실측 8/5 는 12:45 에 끊겼다.
     assert iceberg_covers(dt.date(2026, 8, 7), day, 0) is False
+
+
+def test_partial_landing_is_not_the_source_of_truth():
+    """**13종만 착지한 날은 정본이 아니다.** 행 수만 보던 자가 정확히 여기로 샜다.
+
+    실측(Athena 2026-08-07): 8/3·8/4 는 13종뿐이었고 **그 안에 069500(시장)이 있었다**
+    - 행이 있고 시장 지수도 있으니 이전 판정으로는 전부 통과였다. 통과하면 나머지
+    종목은 `_on()` 이 조용히 버리고, 그 13종으로 세운 층이 하루 전체의 설명으로 실린다.
+
+    임계는 관측 분포의 빈 구간이다: 부분 착지 13 · 롤업 정상일 366 · fmp 정상일 1,270.
+    **정상일 폭이 시대마다 다르므로 상한 쪽(1,200)에 기준을 두면 안 된다** - 롤업 시대가
+    통째로 폴백이 된다.
+    """
+    day = "2026-08-03"
+    assert iceberg_covers(dt.date(2026, 8, 3), day, 13) is False    # 실측 부분 착지
+    assert iceberg_covers(dt.date(2026, 8, 5), "2026-08-05", 366) is True   # 롤업 정상일
+    assert iceberg_covers(dt.date(2026, 7, 31), "2026-07-31", 1270) is True  # fmp 정상일
 
 
 def test_freshness_is_not_judged_without_an_asked_day():
@@ -269,21 +286,21 @@ def test_freshness_is_not_judged_without_an_asked_day():
 class _RecordingCon:
     """`_bars_iceberg` 가 내는 SQL 을 받아 적고 `max(trade_date)` 만 답한다."""
 
-    def __init__(self, newest, day_rows):
-        self.newest, self.day_rows, self.sql = newest, day_rows, []
+    def __init__(self, newest, day_tks):
+        self.newest, self.day_tks, self.sql = newest, day_tks, []
 
     def execute(self, q):
         self.sql.append(q)
         return self
 
     def fetchone(self):
-        return (self.newest, self.day_rows)
+        return (self.newest, self.day_tks)
 
 
-def _iceberg_lake(newest, asked_day, day_rows=0):
+def _iceberg_lake(newest, asked_day, day_tks=0):
     lk = CausalLake.__new__(CausalLake)
-    lk.con = _RecordingCon(newest, day_rows)
-    lk.exists, lk.unbound, lk.asked_day = {}, {}, asked_day
+    lk.con = _RecordingCon(newest, day_tks)
+    lk.exists, lk.unbound, lk.asked_day, lk.stale_5m = {}, {}, asked_day, ""
     return lk
 
 
@@ -293,11 +310,23 @@ def test_stale_iceberg_falls_back_and_says_why():
     그리고 폴백은 조용하면 안 된다(Rule 12): 왜 정본을 안 썼는지가 커버리지에 남아야
     `statics.coverage` 로그가 그걸 드러낸다.
     """
-    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-06", day_rows=0)
+    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-06", day_tks=0)
 
     assert lk._bars_iceberg() is False
     assert "bars_5m_iceberg" in lk.unbound
     assert "bars_5m" not in lk.exists          # 정본이라 말하지 않는다
+
+
+def test_partial_landing_says_partial_not_absent():
+    """**부재와 부분 착지는 다른 일감이다** — 없는 것은 적재가 안 돈 것이고, 13종은
+    돌다 만 것이다. 한 문장으로 뭉치면 상류를 볼 사람이 엉뚱한 데를 본다.
+    """
+    lk = _iceberg_lake(dt.date(2026, 8, 3), "2026-08-03", day_tks=13)
+
+    assert lk._bars_iceberg() is False
+    assert "부분 착지" in lk.stale_5m and "13종" in lk.stale_5m
+    assert "요청일이 없다" not in lk.stale_5m
+    assert "bars_5m_iceberg" in lk.unbound
 
 
 def test_stale_iceberg_does_not_pay_the_45day_materialization():
@@ -305,7 +334,7 @@ def test_stale_iceberg_does_not_pay_the_45day_materialization():
 
     판정이 그 물질화 **앞**에 있어야 한다 - 순서가 곧 비용이다.
     """
-    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-06", day_rows=0)
+    lk = _iceberg_lake(dt.date(2026, 8, 5), "2026-08-06", day_tks=0)
     lk._bars_iceberg()
 
     assert not any("_icb_suffix" in q for q in lk.con.sql)
@@ -314,7 +343,7 @@ def test_stale_iceberg_does_not_pay_the_45day_materialization():
 
 def test_fresh_iceberg_still_becomes_the_source_of_truth():
     """폴백이 상시화되면 정본을 둔 이유가 사라진다 — 신선하면 그대로 쓴다."""
-    lk = _iceberg_lake(dt.date(2026, 8, 6), "2026-08-06", day_rows=78)
+    lk = _iceberg_lake(dt.date(2026, 8, 6), "2026-08-06", day_tks=366)
 
     assert lk._bars_iceberg() is True
     assert "Glue Iceberg" in lk.exists["bars_5m"]

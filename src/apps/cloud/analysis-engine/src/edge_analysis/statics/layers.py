@@ -495,6 +495,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     notes = getattr(lake, "exists", None)
     if notes is not None:
         notes.pop("layers", None)
+        notes.pop("market_layer", None)
     ser = _series(lake, day, ("market", "sector"), clock=clock)
     # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다. `kinds` 에 'stock' 을 넣으면
     # 856 종목이 섹터 후보가 되어 겹침 게이트가 종목마다 질의를 돌고, 무엇보다
@@ -566,6 +567,16 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
                   "시장", None)
         if m is not None:
             add(m)
+    else:
+        # **시장 층은 조용히 빠지면 안 된다.** 여기엔 `else` 가 없었다 - 그래서 정본이
+        # 부분 착지한 날(13종) 시장 층이 사라졌는데 산문도 로그도 그 사실을 말하지
+        # 않았고, 남은 섹터·고유가 시장 몫까지 떠안은 채로 인쇄됐다.
+        # 세 사유는 처방이 다르다: 계열 부재는 적재, 당일 없음은 신선도, 창 결손은
+        # 표본(ALPHA-828 백필)이다. 뭉치면 어느 쪽도 못 고친다.
+        why = ("계열 부재" if MARKET_CODE not in ser
+               else "당일 없음" if d0 not in ser[MARKET_CODE][1]
+               else f"β 창 {len(hist)}일 중 결손")
+        _absent(lake, "market_layer", f"시장 층 없음 - {MARKET_CODE} {why}")
 
     # 섹터 후보 자격은 **구성 겹침**이 정한다. 조용히 빼지 않고 사유를 남긴다.
     #   위: 겹치면 같은 것이다 - "반도체가 왜 빠졌냐"에 "반도체가 빠져서"는 설명이 아니다.

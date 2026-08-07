@@ -144,6 +144,28 @@ def test_decompose_tolerates_a_lake_without_coverage_dicts():
     assert decompose(_lake(sector_beta=0.8), "없는종목", _day()) is None
 
 
+def test_missing_market_layer_leaves_a_reason():
+    """**시장 층이 빠지면 사유가 남아야 한다.** 여기엔 `else` 가 없었다.
+
+    정본이 부분 착지한 날(실측 8/3·8/4 13종) 시장 계열이 후보에서 빠지는데, 산문에는
+    그 사실이 없고 남은 섹터·고유가 시장 몫까지 떠안은 채 인쇄된다. 조용한 부재다.
+    사유는 `exists` 에 적는다 — `unbound` 는 `표 → 사유` 라 개수를 세는 소비자가 있다.
+    """
+    lake = _lake(sector_beta=0.8)
+    lake.exists = {}
+    del lake.series[MARKET_CODE]
+
+    r = decompose(lake, "T", _day())
+    assert r is not None and all(x.kind != "시장" for x in r.layers)
+    assert MARKET_CODE in lake.exists["market_layer"]
+
+    # 시장 층이 선 런은 앞 런의 사유를 지운다 - 부재를 안 지우면 지어내는 것과 같다.
+    lake2 = _lake(sector_beta=0.8)
+    lake2.exists = {"market_layer": "앞 호출의 잔재"}
+    assert decompose(lake2, "T", _day()) is not None
+    assert "market_layer" not in lake2.exists
+
+
 def test_market_layer_always_enters_first():
     # 공통충격이 섹터로 새면 섹터 서사가 거짓이 된다 - 시장은 경쟁 없이 먼저 들어간다.
     r = decompose(_lake(sector_beta=0.8), "T", _day())

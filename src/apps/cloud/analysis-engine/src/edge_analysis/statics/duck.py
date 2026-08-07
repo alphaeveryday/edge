@@ -41,6 +41,8 @@ ROLLUP_FROM = "2026-08-04"
 BARS_ICEBERG_ACCOUNT = "393229433969"
 BARS_ICEBERG = "gl.market_data_kr.edge_intraday_5m"
 BARS_ICEBERG_ENV = "EDGE_BARS_ICEBERG"
+# 정본이 요청일을 '담았다'고 인정하는 최소 착지 종목 수. 근거는 `iceberg_covers`.
+MIN_LANDED_TICKERS = 100
 # 로컬로 내려오는 바이트 임계. 넘으면 `lake.heavy` 에 남는다(막지는 않는다).
 # 기본 64MB: 실측으로 새는 것들이 그 위다(층분해 295.7MB · pit_daily 106MB).
 # 0 이면 감시를 끈다 - 프로파일링 자체가 비용이라 배치에서는 끌 수 있어야 한다.
@@ -199,24 +201,46 @@ def rdb_dsn_from_env() -> str:
     return " ".join(parts)
 
 
-def iceberg_covers(newest, asked_day: str, day_rows: int = 0) -> bool:
-    """정본 5분봉 표가 **요청 거래일을 실제로 담고 있는가.** 붙었다 ≠ 그날이 있다.
+def iceberg_covers(newest, asked_day: str, day_tickers: int = 0) -> bool:
+    """정본 5분봉 표가 **요청 거래일을 쓸 만큼 담고 있는가.** 붙었다 ≠ 그날이 있다.
 
     `_bars_iceberg` 는 ATTACH 와 뷰 생성이 되면 성공으로 쳤다. 정본이 비거나 낡아도
     합집합 폴백을 건너뛰므로, 상류 적재가 멈추면 엔진이 조용히 과거만 본다 — 2026-08-06
     실측: 정본은 그날 0행인데 canonical 롤업 산출은 정상이었고, 권한이 붙자 엔진이 낡은
     쪽을 잡아 5분봉을 통째로 잃었다.
 
-    **최신 거래일이 아니라 그날의 행 수를 본다.** `max(trade_date) >= 요청일` 은 표에
-    구멍이 있어도 통과한다 — 실측 8/3·8/4 는 13종목뿐이었고 8/5 는 12:45 에 끊겼다.
-    상류가 띄엄띄엄 채우는 동안 '최신은 최신인데 그날은 없는' 상태가 실제로 났다.
+    **최신 거래일도, 그날의 행 수도 아니라 착지 종목 수를 본다.** 앞의 두 자는 각각
+    한 단계씩 새는 자다:
+
+    - `max(trade_date) >= 요청일` — 표에 구멍이 있어도 통과한다
+    - `그날 행 > 0` — **부분 착지가 그대로 통과한다.** 실측 8/3·8/4 는 13종이었는데
+      그 안에 `069500`(시장)이 들어 있었다. 즉 "시장 지수가 있나" 로도 못 거른다.
+      13종이 통과하면 나머지는 `_on()` 이 조용히 버리고, 남은 층은 그 13종으로 세운
+      것인데 산문은 그 사실을 말하지 않는다 — 이 저장소가 계속 싸워 온 조용한 부재다.
+
+    임계는 지어낸 값이 아니라 **관측 분포의 빈 구간**이다 (Athena 실측 2026-08-07):
+
+    | 구간 | 착지 종목 |
+    |---|---|
+    | 07-20~07-31 (fmp 시대 정상일) | 1,267~1,273 |
+    | 08-05 (1분 롤업 시대 정상일) | 366 |
+    | **08-03·08-04 (부분 착지)** | **13** |
+
+    두 무리 사이가 28배로 벌어져 있어 그 사이 어디를 잘라도 같은 답이 나온다.
+    100 은 부분 착지의 7.7배 · 롤업 정상일의 27% 로 양쪽에 한 자릿수 배율 마진이 있다.
+    **정상일 폭이 시대마다 다르므로**(1,270 vs 366) 티켓이 적은 '1,200종' 같은 절대
+    기준은 못 쓴다 — 롤업 시대 전일이 폴백이 된다.
+
+    장중에도 같은 자가 선다: 08-05 실측에서 **09:00 첫 버킷부터 362종**이었다(롤업이
+    유니버스를 한 번에 쓴다). 종목 수는 장 초반에 램프업하지 않으므로 이 판정이
+    아침에만 유별나게 엄해지지 않는다.
 
     `asked_day` 가 비면 판정하지 않는다(자가검사·탐색 실행의 기존 동작). **빈 표만은
     기준일과 무관하게 정본이 아니다** — 그건 신선도가 아니라 부재다.
     """
     if newest is None:
         return False
-    return True if not asked_day else day_rows > 0
+    return True if not asked_day else day_tickers >= MIN_LANDED_TICKERS
 
 
 def s3_secret_sql() -> str:
@@ -357,16 +381,26 @@ class CausalLake:
                              "(TYPE iceberg, ENDPOINT_TYPE 'glue')")
             # **신선도를 먼저 본다.** 아래 `_icb_suffix` 는 45일을 스캔해 물질화하는데,
             # 낡은 표에 그 값을 치르고 나서 버리면 1분 주기에서 그대로 낭비다.
-            # 최신일과 **그날의 행 수**를 함께 묻는다 - 최신만 보면 표에 구멍이 있어도
-            # 통과한다. `asked_day` 가 없으면 `= NULL` 이 되어 행 수는 0 이고, 그때는
+            # 최신일과 **그날의 착지 종목 수**를 함께 묻는다 - 최신만 보면 표에 구멍이
+            # 있어도 통과하고, 행 수만 보면 **부분 착지가 그대로 통과한다**.
+            # `asked_day` 가 없으면 `= NULL` 이 되어 종목 수는 0 이고, 그때는
             # `iceberg_covers` 가 최신 유무만 본다(기존 동작).
+            # `symbol` 이 아니라 `ticker` 를 센다 - 접미사 없는 심볼이 섞이는 날
+            # (2026-08-05) 같은 종목이 둘로 세어지면 안 된다. 그날 두 값은 366 으로
+            # 같았지만 같다는 것은 관측이지 계약이 아니다.
             day_pred = f"DATE '{self.asked_day}'" if self.asked_day else "NULL"
-            newest, day_rows = self.con.execute(
-                f"SELECT max(trade_date), count(*) FILTER (WHERE trade_date = {day_pred}) "
-                f"FROM {tbl}").fetchone()
-            if not iceberg_covers(newest, self.asked_day, day_rows):
+            newest, day_tks = self.con.execute(
+                f"SELECT max(trade_date), count(DISTINCT ticker) "
+                f"FILTER (WHERE trade_date = {day_pred}) FROM {tbl}").fetchone()
+            if not iceberg_covers(newest, self.asked_day, day_tks):
+                # **부재와 부분 착지를 갈라 적는다** - 처방이 다르다. 없는 것은 적재가
+                # 아예 안 돈 것이고, 13종은 돌다 만 것이다. 뭉쳐서 "요청일이 없다"고
+                # 적으면 상류를 볼 사람이 엉뚱한 데를 본다.
                 self.stale_5m = (
-                    f"정본에 요청일이 없다 ({self.asked_day} {day_rows}행 · 최신 {newest})")
+                    f"정본에 요청일이 없다 ({self.asked_day} 0종 · 최신 {newest})"
+                    if not day_tks else
+                    f"정본의 요청일이 부분 착지다 ({self.asked_day} {day_tks}종 "
+                    f"< {MIN_LANDED_TICKERS}종 · 최신 {newest})")
                 self.unbound["bars_5m_iceberg"] = (
                     f"{self.stale_5m} - canonical 합집합으로 내려간다")
                 return False
