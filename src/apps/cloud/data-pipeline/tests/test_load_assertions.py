@@ -85,6 +85,12 @@ class _FakeCursor:
         elif upper.startswith("INSERT INTO ASSERTION_ARGUMENT"):
             self.rowcount = 0 if (params[0], params[1], params[2]) in conn.existing_arguments else 1
 
+    def executemany(self, sql, seq):
+        # 실제 커서와 같이 **행마다 한 번** 기록한다 — 한 줄로 뭉치면 개념 몇 개가
+        # 세워졌는지, 순서가 FK 를 지켰는지를 테스트가 볼 수 없다.
+        for params in seq:
+            self.execute(sql, params)
+
     def fetchall(self):
         return self._rows
 
@@ -386,8 +392,10 @@ def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch,
     # 안 나타나는 자리가 있다는 뜻이고, 그래서 개수가 아니라 **이름**이 필요하다.
     # (일반적으로 어느 방향으로 틀리는지는 정해져 있지 않다 — 로더의 경고 블록 주석)
     assert res["total"] == 1 and res["rate"] == 1.0
-    # 적재는 그대로 되지만(2행) ALPHA-831 이 걷어낼 몫에는 안 들어간다
-    assert len(_inserts(conn, "assertion_argument")) == 2
+    # 어휘 밖 역할은 해소 축을 모른다 — 계약이 없으면 해소도 없다(ALPHA-831).
+    # ISSUER 쪽 1행만 실린다.
+    assert len(_inserts(conn, "assertion_argument")) == 1
+    assert _inserts(conn, "assertion_argument")[0][1] == "ISSUER"
     assert res["non_entity_resolved"] == 0
     # 로그 파일을 열어야 보이는 수치로 두지 않는다 — 런 로그에서 드러나야 한다(Rule 12).
     # 이 단언이 없으면 WARNING 을 통째로 지워도 위 단언들이 전부 통과한다
@@ -430,12 +438,14 @@ def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch, c
     assert "역할 없는 argument" in warned
 
 
-def test_non_entity_that_resolves_still_loads_and_is_counted_apart(tmp_path, monkeypatch):
-    """비실체 자리가 인덱스에 걸리면 **적재는 그대로 되고** 별도 카운터로 보인다.
+def test_non_entity_role_is_not_loaded_even_if_the_text_matches_a_ticker(tmp_path, monkeypatch):
+    """비실체 자리는 텍스트가 인덱스에 걸려도 **적재하지 않는다**(ALPHA-831).
 
-    WHY: 이 자리의 적재는 이 티켓이 건드리지 않는다 — 여기서 걷어내면 회수율 변화에
-    적재 변화가 섞여 ALPHA-830 의 효과를 못 잰다. 이 수가 곧 역할별 해소 분기
-    (ALPHA-831)가 걷어낼 몫이라 따로 보여야 한다.
+    WHY: 역할이 해소 축을 정한다. `OUTLOOK`(자유서술)에 우연히 "삼성전자"가 들어왔다고
+    그걸 삼성전자 주식으로 해소하면, 전망 문구가 종목 참조로 둔갑해 계보가 거짓이 된다.
+    예전엔 역할과 무관하게 instrument 인덱스 하나에 때려서 이게 실제로 적재됐다 —
+    ALPHA-802 가 `non_entity_resolved` 로 그 수를 세어 뒀고(전량 재실행 실측 4건),
+    이 티켓이 그 경로를 닫는다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
@@ -445,11 +455,11 @@ def test_non_entity_that_resolves_still_loads_and_is_counted_apart(tmp_path, mon
 
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
-    [(_, role, entity_id, _c)] = _inserts(conn, "assertion_argument")
-    assert (role, entity_id) == ("OUTLOOK", "inst_SAMSUNG")  # 적재 불변
+    assert _inserts(conn, "assertion_argument") == []      # ← 더는 실리지 않는다
+    assert _inserts(conn, "document_assertion") == []      # 유일한 인자였으므로 주장도 빠진다
     res = _log(storage)["argument_resolution"]
-    assert res["total"] == 0 and res["rate"] is None       # 분모 밖이다
-    assert res["non_entity_resolved"] == 1
+    assert res["total"] == 0 and res["rate"] is None       # 분모 밖인 것은 그대로
+    assert res["non_entity_resolved"] == 0
 
 
 def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
@@ -486,3 +496,99 @@ def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
     kept = dict(top)
     assert "미등록9" in kept         # 삽입 순서 240/250 · 5회 → 빈도순에서만 살아남는다
     assert "미등록0" not in kept     # 삽입 순서 1/250 · 1회 → 빈도순에서만 잘린다
+
+
+# ── 역할별 해소 3단 사슬 (ALPHA-831) ──────────────────────────────────────
+
+def test_minted_concept_id_matches_assemble_events_exactly(tmp_path, monkeypatch):
+    """같은 멘션·같은 역할이면 **두 writer 가 같은 concept ID** 를 낸다(ALPHA-831 최대 함정).
+
+    WHY: `document_assertion` 계보를 쓰는 writer 가 둘이다(이 스텝·assemble-events). 채번
+    산식이 갈리면 `매출` 이 event 쪽에선 A, assertion 쪽에선 B 가 되어 **같은 개념에 ID 가
+    둘** 생기고, 그 둘을 잇는 조인이 조용히 끊긴다. ALPHA-456 이 assertion_id 에서 이미
+    겪은 실패 양식이라, 여기선 같은 두 함수(`concept_key`+`stable_domain_id`)를 부르는지
+    자체를 고정한다 — 각자 구현하면 salt·구분자 하나에 다시 갈린다.
+    """
+    from edge_ontology import concept_key
+    from data_pipeline.db import stable_domain_id
+    from data_pipeline.entity_resolution import plan_resolution
+
+    for role, mention in (("PRODUCT", "zHBM"), ("GEOGRAPHY", "미국"), ("FACILITY", "용인 클러스터")):
+        entity_id, reason, minted = plan_resolution(_INDEX, role, mention)
+        assert reason == "minted"
+        # assemble-events 가 쓰는 바로 그 산식
+        assert entity_id == stable_domain_id("concept", concept_key(role, mention))
+        assert minted[0] == mention
+
+    # 구분자가 재료 경계를 고정한다(ALPHA-456 과 같은 검사)
+    assert stable_domain_id("concept", "ab") != stable_domain_id("concept", "a")
+
+
+def test_registry_role_is_looked_up_never_minted(tmp_path, monkeypatch):
+    """명부 역할은 **찾기만** 한다 — 못 찾아도 채번하지 않는다(ALPHA-831).
+
+    WHY: 온톨로지가 AUTHORITY 를 REGISTRY 로 둔 근거가 "채번하면 같은 기관이 표기마다
+    다른 엔티티가 된다"이다. 미등재거나 '당국' 같은 모호어를 채번하면 조용한 오해소가
+    되고, 시드된 명부(기관 68곳)의 의미가 사라진다.
+    """
+    from data_pipeline.entity_resolution import plan_resolution
+
+    hit_id, hit_reason, hit_minted = plan_resolution(_INDEX, "AUTHORITY", "공정거래위원회")
+    assert hit_reason == "registry_hit" and hit_id and hit_minted is None
+
+    miss_id, miss_reason, miss_minted = plan_resolution(_INDEX, "AUTHORITY", "듣도보도못한청")
+    assert (miss_id, miss_reason, miss_minted) == (None, "registry_miss", None)
+
+
+def test_measure_roles_are_not_minted_pending_the_ontology_call(tmp_path, monkeypatch):
+    """척도 역할은 채번하지 않고 사유로 남긴다(ALPHA-831 범위 밖).
+
+    WHY: 온톨로지가 METRIC 을 `PRODUCT_OR_CONCEPT` 종에 매핑해 `kind_default: MINT` 로
+    흘려보내지만, **그 종 자신의 `used_for` 에 척도가 없다**. `영업이익`은 삼성전자의
+    영업이익이지 그 자체로 서 있는 개체가 아니다 — 측정 축을 개체로 세우는 건 모델링
+    결정이고 계약이 명시적으로 하지 않았다. 되돌리기가 비싼 쪽(채번)으로 먼저 가지 않는다.
+    """
+    from data_pipeline.entity_resolution import plan_resolution
+
+    for mention in ("영업이익", "매출", "당기순이익"):
+        assert plan_resolution(_INDEX, "METRIC", mention) == (None, "measure_skipped", None)
+
+
+def test_sentence_shaped_value_is_left_unresolved_by_the_length_cap(tmp_path, monkeypatch):
+    """문장형 값은 상한에 걸려 미해소로 남는다(ALPHA-831).
+
+    WHY: 실측상 MINT 축 37,229건 중 31자 초과는 3.3%뿐이고 고유율 87%다 — 재사용되는
+    개념이 아니라 사건 인스턴스 하나다. 게다가 `normalize_name` 이 공백을 지워
+    "차세대영업배전시스템구축을위한…" 이 그대로 `display_name` 이 된다. 상한에 걸린 건
+    미해소로 남겨 되돌리기를 싸게 둔다(채번하면 참조까지 정리해야 한다).
+    """
+    from data_pipeline.entity_resolution import plan_resolution
+
+    long_text = "차세대 모빌리티 개발 및 해외시장 진출 활성화를 위한 상생 금융지원 업무협약"
+    assert plan_resolution(_INDEX, "PROJECT", long_text) == (None, "concept_too_long", None)
+    # 짧은 것은 통과 — 상한이 축 전체를 죽이지 않는다
+    short_id, short_reason, _ = plan_resolution(_INDEX, "PROJECT", "피지컬 AI")
+    assert short_reason == "minted" and short_id
+
+
+def test_minted_concept_rows_are_written_before_the_argument_that_needs_them(
+        tmp_path, monkeypatch):
+    """개념 행이 **argument 보다 먼저** 선다 — FK 순서(ALPHA-831).
+
+    WHY: `assertion_argument.entity_id` 는 `entity` FK 다. 순서가 뒤집히면 없는 부모를
+    가리켜 INSERT 가 터지고, 그 시장의 트랜잭션이 통째로 롤백된다. entity(CONCEPT) →
+    concept → assertion_argument 가 계약이다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("PRODUCT", "zHBM")))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    order = [sql.split()[2].upper() for sql, _p in conn.log if sql.upper().startswith("INSERT INTO ")]
+    assert order.index("ENTITY") < order.index("CONCEPT") < order.index("ASSERTION_ARGUMENT")
+    [(_, role, entity_id, _c)] = _inserts(conn, "assertion_argument")
+    assert role == "PRODUCT" and entity_id.startswith("concept_")
+    assert _log(storage)["concepts_minted"] == 1

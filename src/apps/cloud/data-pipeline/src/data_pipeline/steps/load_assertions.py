@@ -56,7 +56,7 @@ from edge_ontology import load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import load_resolution_index, resolve
+from ..entity_resolution import TOO_LONG, load_resolution_index, plan_resolution
 from ..lake import Storage, feature_news_assertions_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,9 @@ _CREATED_SAMPLE_LIMIT = 50
 # 미해소 상위 표현을 몇 개까지 로그에 남길지. 20 이던 동안 롱테일 구성이 관측되지 않아
 # "마스터를 넓혀야 하는가, 별칭을 넣어야 하는가"를 로그만 보고는 판단할 수 없었다(ALPHA-802).
 _TOP_UNRESOLVED_LIMIT = 200
+
+# 길이 상한에 걸린 값 표본 상한. 상한값이 맞는지 판단하려면 실물이 필요하다.
+_TOO_LONG_SAMPLE_LIMIT = 30
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
@@ -122,6 +125,12 @@ def run(
     args_role_missing = 0
     non_entity_resolved = 0
     unknown_roles: dict[str, int] = {}
+    # 이 런이 채번한 개념: entity_id → (표시명, concept_type). 적재 직전에 한 번에
+    # 세운다 — argument 마다 INSERT 하면 같은 개념에 왕복이 반복된다.
+    pending_concepts: dict[str, tuple[str, str]] = {}
+    concepts_minted = 0
+    # 길이 상한에 걸린 값 표본. 개수만으론 상한이 맞는지 판단할 수 없다.
+    too_long_sample: list[str] = []
     unresolved_texts: dict[str, int] = {}
     created_sample: list[dict] = []
     failures: list[dict] = []
@@ -207,6 +216,41 @@ def run(
                     for sdi, did, avail in cur.fetchall():
                         doc_by_key[(source_code, sdi)] = (did, avail)
 
+            # ⭐개념 행을 **assertion_argument 보다 먼저** 세운다 — entity(CONCEPT) →
+            # concept → assertion_argument 순서가 FK 다. 순서가 뒤집히면 마지막 INSERT 가
+            # 없는 부모를 가리켜 터진다.
+            #
+            # 이 루프가 candidates 전체를 한 번 돌며 채번 계획을 먼저 모은다: argument 를
+            # 보는 것은 아래 적재 루프와 같지만, 개념은 **전량을 모아 한 번에** 세워야
+            # executemany 한 쌍으로 끝난다(assertion 마다 왕복하면 2,400회가 된다).
+            for entry in candidates.values():
+                for argument in entry["arguments"]:
+                    role_code = argument.get("role_code")
+                    if not role_code:
+                        continue
+                    eid, _reason, minted = plan_resolution(
+                        index, str(role_code), argument.get("text"))
+                    if minted is not None and eid is not None:
+                        pending_concepts.setdefault(eid, minted)
+            if pending_concepts:
+                with conn.cursor() as cur:
+                    # ON CONFLICT DO NOTHING — assemble-events 가 같은 개념을 이미 세웠을 수
+                    # 있다. 같은 산식(concept_key+stable_domain_id)을 쓰므로 **같은 행**이고,
+                    # 그게 두 writer 가 한 개념을 공유하는 방식이다.
+                    cur.executemany(
+                        "INSERT INTO entity (entity_id, entity_type, display_name, status)"
+                        " VALUES (%s,'CONCEPT',%s,'ACTIVE') ON CONFLICT (entity_id) DO NOTHING",
+                        [(cid, name) for cid, (name, _k) in sorted(pending_concepts.items())],
+                    )
+                    cur.executemany(
+                        # concept_type 은 엔티티 종별 그대로 — 제품과 위치가 한 통에 섞이면
+                        # 소비자가 구분할 수 없다(assemble-events 와 같은 규약).
+                        "INSERT INTO concept (concept_id, concept_type) VALUES (%s,%s)"
+                        " ON CONFLICT (concept_id) DO NOTHING",
+                        [(cid, kind) for cid, (_n, kind) in sorted(pending_concepts.items())],
+                    )
+                concepts_minted = len(pending_concepts)
+
             for (source_code, article_id, event_type, predicate), entry in sorted(candidates.items()):
                 doc_row = doc_by_key.get((source_code, article_id))
                 if doc_row is None:
@@ -234,7 +278,16 @@ def run(
                         # — 어느 역할인지 이름을 남긴다(실측 0건이라 목록은 짧다).
                         unknown_roles[role_code] = unknown_roles.get(role_code, 0) + 1
 
-                    entity_id, reason = resolve(index, argument.get("text"))
+                    # ⭐역할별 해소 — 온톨로지의 identity 표가 축을 정한다(ALPHA-831).
+                    # 예전엔 역할과 무관하게 instrument 인덱스 하나에 때려서, 티커가 아닌
+                    # 축(명부·채번)은 **구조적으로** 못 붙었다. 채번된 개념은 아래에서
+                    # entity → concept 순서로 세운다(FK).
+                    entity_id, reason, minted = plan_resolution(
+                        index, role_code, argument.get("text"))
+                    if minted is not None and entity_id is not None:
+                        # 같은 런에서 같은 개념이 여러 번 나와도 행은 하나다. ON CONFLICT
+                        # 로도 막히지만, 여기서 접어야 executemany 가 부풀지 않는다.
+                        pending_concepts.setdefault(entity_id, minted)
                     if kind == "entity":
                         # 해소율 분모는 **실체 역할만** 센다. non_entity(TIME·VALUE·TEXT)는
                         # 애초에 실체를 가리키지 않는 자리라, 미해소로 세면 분모가 부풀어
@@ -247,6 +300,9 @@ def run(
                             if isinstance(text, str) and text.strip():
                                 # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
                                 unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
+                                if (reason == TOO_LONG
+                                        and len(too_long_sample) < _TOO_LONG_SAMPLE_LIMIT):
+                                    too_long_sample.append(text.strip())
                     elif kind == "non_entity" and entity_id is not None:
                         # 비실체 자리인데 인덱스에 걸렸다. **지금은 그대로 적재한다** —
                         # 이 자리의 적재는 이 티켓이 건드리지 않는다. 이 수가 곧 역할별
@@ -330,6 +386,12 @@ def run(
         # 해소율 실측(ALPHA-375 완료 조건) — 분모·분자·사유 분포 + 미해소 상위 표현.
         # ⚠️ `total` 은 argument 총수가 아니라 **실체 역할 argument 수**다(ALPHA-802).
         # 나머지 축은 `role_kinds`·`role_missing` 이 따로 말한다 — 넷을 더하면 총수가 된다.
+        # 역할별 해소 축의 성적(ALPHA-831). `**args_by_reason` 에 minted·registry_hit·
+        # measure_skipped·concept_too_long 등이 사유로 섞여 들어온다 — 그게 이 티켓이
+        # 무엇을 회수했고 무엇을 남겼는지 보는 유일한 창이다.
+        "concepts_minted": concepts_minted,
+        # 상한에 걸려 미해소로 남긴 개념의 표본 — 온톨로지가 상한을 조정할 근거다.
+        "concept_too_long_sample": too_long_sample,
         "argument_resolution": {
             # 분모 정의를 로그 자신이 들고 있어야 한다 — 이 필드가 없으면 ALPHA-802 이전에
             # 찍힌 로그(분모=argument 총수)와 이후 로그를 나란히 놓고 비교할 때 정의가
