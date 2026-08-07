@@ -303,40 +303,49 @@ def _rollup_day(
     return key
 
 
-def unfilled_finalized_days(
+def unfilled_settled_days(
     storage: Storage, ledger, *, market: str, dataset: str, source_group: str
 ) -> list[str]:
-    """1분 세션은 `FINALIZED` 인데 그 거래일 5분 파티션이 비어 있는 날 (ALPHA-839).
+    """1분 원장이 멈춘 거래일인데 5분 파티션이 비어 있는 날 (ALPHA-839).
 
     5분 파생에는 원장이 없다 — 어느 거래일이 어느 세대집합에서 나왔는지 기록하는 표가
     없어서, 배치가 조용히 안 돌아도 분석은 계속 답을 낸다(낡은 답을). 세대집합 표를
-    만드는 대신 **파티션 부재**를 물어보는 것으로 1차를 대신한다: 재료(1분)가 확정된
-    날에 파생이 없으면 그건 결손이고, 그 판정에 새 표가 필요 없다.
+    만드는 대신 **파티션 부재**를 물어보는 것으로 1차를 대신한다: 재료(1분)가 더 이상
+    변하지 않는 날에 파생이 없으면 그건 결손이고, 그 판정에 새 표가 필요 없다.
 
-    ⚠️ 판정 축이 `part-0.parquet` 존재가 **아니다**. 같은 파티션을 다른 writer 가 다른
-    파일명으로 채우고(토스 백필 `part-toss-backfill.parquet`, ALPHA-828) 소비자는 파티션
-    글롭으로 읽으므로, `part-0` 만 보면 이미 채워진 날을 구멍으로 보고한다(실측 08-03).
+    ⚠️ 판정 축이 `FINALIZED` 가 **아니다**. 의미상으론 그게 정확해 보이지만 dev 실측
+    (2026-08-07)에서 `FINALIZED` 세션은 **0건**이다 — 전 세션이 `DRAINED` 에 멈춰 있고
+    `qc-minute-session` 이 돌지 않는다. `FINALIZED` 로 물으면 이 판정은 영영 빈 목록을
+    내면서 "구멍 없음"으로 보인다(안 본 것을 0건으로 확정하는 자리다). 축은 **원장이 더
+    이상 움직이지 않는 phase 집합**이고, 그 정의는 `session_ops` 가 이미 갖고 있다 —
+    여기서 다시 세면 두 곳이 갈린다.
+
+    ⚠️ 파티션 판정 축도 `part-0.parquet` 존재가 **아니다**. 같은 파티션을 다른 writer 가
+    다른 파일명으로 채우고(토스 백필 `part-toss-backfill.parquet`, ALPHA-828) 소비자는
+    파티션 글롭으로 읽으므로, `part-0` 만 보면 이미 채워진 날을 구멍으로 보고한다
+    (실측 2026-08-03).
 
     `WRITER_SINCE` 이전은 애초에 이 writer 의 소관이 아니라 대상에서 뺀다 — 넣으면
     영영 안 지워지는 결손 목록이 되고, 그러면 아무도 안 읽는다.
     """
-    finalized = _finalized_session_dates(
-        ledger, dataset=dataset, source_group=source_group
-    )
+    settled = _settled_session_dates(ledger, dataset=dataset, source_group=source_group)
     return [
-        trade_date for trade_date in finalized
+        trade_date for trade_date in settled
         if not storage.list_keys(canonical_intraday_5m_prefix(market, trade_date))
     ]
 
 
-def _finalized_session_dates(ledger, *, dataset: str, source_group: str) -> list[str]:
-    """확정된 세션의 거래일 — `WRITER_SINCE` 이후만, 오름차순."""
+def _settled_session_dates(ledger, *, dataset: str, source_group: str) -> list[str]:
+    """원장이 멈춘 세션의 거래일 — `WRITER_SINCE` 이후만, 오름차순."""
+    from .session_ops import DRAINED_PHASES
+
     with ledger.connect_fn(ledger.db) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT session_date FROM minute_ingestion_session "
-            "WHERE dataset = %s AND source_group = %s AND phase = 'FINALIZED' "
+            "WHERE dataset = %s AND source_group = %s AND phase = ANY(%s) "
             "AND session_date >= %s ORDER BY session_date",
-            (dataset, source_group, date.fromisoformat(WRITER_SINCE)),
+            (dataset, source_group, sorted(DRAINED_PHASES),
+             date.fromisoformat(WRITER_SINCE)),
         )
         return [session_date.isoformat() for (session_date,) in cur.fetchall()]
 
@@ -409,7 +418,7 @@ def rollup_session_cli(
         )
         # 오늘 것과 무관하게 **매번** 훑는다 — 이 판정의 목적이 "안 돌았는데 조용한
         # 것"을 잡는 것이라, 오늘이 성공한 날에만 보면 정작 못 본 날을 영영 못 본다.
-        unfilled = unfilled_finalized_days(
+        unfilled = unfilled_settled_days(
             storage, ledger, market=_MARKET, dataset=dataset, source_group=source_group
         )
     except Exception:
@@ -425,12 +434,12 @@ def rollup_session_cli(
         # 확정을 막지 않는다 — 오늘 산출과 다른 날의 결손은 별개 사실이고, 여기서 막으면
         # 과거 구멍 하나가 오늘 파생을 무기한 세운다.
         logger.warning(
-            "1분 세션은 확정됐는데 5분 파티션이 빈 거래일 %d건: %s",
+            "1분 원장이 멈춘 거래일인데 5분 파티션이 빈 날 %d건: %s",
             len(unfilled), unfilled,
         )
     print(json.dumps({
         "session_id": session_id, "session_date": day.isoformat(), "trading_day": True,
         "phase": None if snapshot is None else snapshot.get("phase"),
-        "key": key, "unfilled_finalized_days": unfilled,
+        "key": key, "unfilled_settled_days": unfilled,
     }, ensure_ascii=False, sort_keys=True))
     return 0 if key else 1

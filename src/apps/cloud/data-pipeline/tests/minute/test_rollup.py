@@ -39,7 +39,7 @@ from data_pipeline.minute.repository import MinuteLedger
 from data_pipeline.minute.rollup import (
     maybe_rollup,
     rollup_session,
-    unfilled_finalized_days,
+    unfilled_settled_days,
 )
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
@@ -399,37 +399,46 @@ class TestSessionRollup:
         assert fx.storage.list_keys("canonical/market_data/intraday_5m") == []
 
 
-class TestUnfilledFinalizedDays:
-    """구멍 판정 — 확정된 세션에 파생이 없는 거래일."""
+class TestUnfilledSettledDays:
+    """구멍 판정 — 원장이 멈춘 거래일에 파생이 없는 날."""
 
-    def finalize(self, fx, session_date: str):
+    def settle(self, fx, session_date: str, phase: str = "DRAINED"):
         for row in fx.db.sessions.values():
             if row["session_date"] == date.fromisoformat(session_date):
-                row["phase"] = "FINALIZED"
+                row["phase"] = phase
 
     def unfilled(self, fx) -> list[str]:
-        return unfilled_finalized_days(
+        return unfilled_settled_days(
             fx.storage, fx.ledger, market="KR",
             dataset="price_minute", source_group="toss",
         )
 
-    def test_finalized_day_without_partition_is_reported(self, tmp_path):
+    def test_drained_day_without_partition_is_reported(self, tmp_path):
+        # ⚠️ 축이 DRAINED 다. FINALIZED 로 물으면 dev 원장에서 영영 0건이다 — 실측
+        # 2026-08-07 기준 FINALIZED 세션이 **한 건도 없고** 전부 DRAINED 에 멈춰 있다
+        # (qc-minute-session 이 안 돈다). 안 본 것을 "구멍 없음"으로 확정하는 자리다.
         fx = Fixture(tmp_path)
-        self.finalize(fx, SESSION_DATE)
+        self.settle(fx, SESSION_DATE)
         assert self.unfilled(fx) == [SESSION_DATE]
 
     def test_partition_filled_by_another_filename_is_not_a_hole(self, tmp_path):
         # 토스 백필이 같은 파티션에 다른 파일명으로 쓰고 소비자는 파티션 글롭으로 읽는다
         # — `part-0` 존재로 판정하면 이미 채워진 날(실측 2026-08-03)을 결손으로 보고한다
         fx = Fixture(tmp_path)
-        self.finalize(fx, SESSION_DATE)
+        self.settle(fx, SESSION_DATE)
         fx.storage.put_bytes(
             f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}"
             "/part-toss-backfill.parquet", b"x",
         )
         assert self.unfilled(fx) == []
 
-    def test_unfinalized_session_is_not_a_hole(self, tmp_path):
-        # 아직 확정 안 된 세션은 "재료가 확정됐는데 파생이 없다"가 성립하지 않는다
+    def test_live_session_is_not_a_hole(self, tmp_path):
+        # 아직 도는 세션(PLANNED·ACTIVE·DRAINING)은 원장이 움직이는 중이라 "재료가
+        # 안 변하는데 파생이 없다"가 성립하지 않는다 — 장중에 오늘이 결손으로 잡히면
+        # 목록이 매일 거짓 양성으로 시작한다.
         fx = Fixture(tmp_path)
+        assert self.unfilled(fx) == []          # 계획 직후 = PLANNED
+        self.settle(fx, SESSION_DATE, phase="ACTIVE")
         assert self.unfilled(fx) == []
+        self.settle(fx, SESSION_DATE, phase="FAILED")   # QC 가 모순을 찾은 날은 본다
+        assert self.unfilled(fx) == [SESSION_DATE]

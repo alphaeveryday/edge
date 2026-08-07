@@ -1188,8 +1188,12 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 세거나 있는 분을 계획 밖으로 버린다.
 # ⚠️ `WRITER_SINCE`(2026-08-04) 이전 파티션은 거부한다 — 그 앞은 fmp·토스 백필의 정본이라
 # 과거 --session-date 재실행 하나가 벤더 원본을 파생본으로 갈아치운다.
-# 출력에 `unfilled_finalized_days`(1분 세션은 FINALIZED 인데 5분 파티션이 빈 거래일)가
-# 함께 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면 물어볼 곳이 그것뿐이다.
+# 출력에 `unfilled_settled_days`(1분 원장이 멈춘 거래일인데 5분 파티션이 빈 날)가 함께
+# 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면 물어볼 곳이 그것뿐이다.
+# ⚠️ 판정 축이 `FINALIZED` 가 **아니라** `DRAINED` 이후 집합(`session_ops.DRAINED_PHASES`)
+# 이다. dev 실측(2026-08-07)에서 FINALIZED 세션은 **0건**이고 전 세션이 DRAINED 에 멈춰
+# 있다 — `qc-minute-session` 이 돌지 않는다. FINALIZED 로 물었으면 이 판정은 영영 빈
+# 목록을 내면서 "구멍 없음"으로 보였다. 같은 실측에서 새 축은 08-04 하나를 잡는다(분모 4).
 # exit: 0=확정(또는 비거래일 no-op) / 1=확정 안 함(세션 없음·커밋 0건·WRITER_SINCE 이전)
 # / 2=판정 자체를 못 함. `--session-date` 미지정=오늘(KST).
 DATA_PIPELINE_DB__PASSWORD=... \
