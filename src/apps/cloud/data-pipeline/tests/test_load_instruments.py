@@ -55,7 +55,13 @@ class _FakeCursor:
     def execute(self, sql, params=None):
         self._log.append((" ".join(sql.split()), params))
         if sql.lstrip().upper().startswith("SELECT"):
-            self._rows = list(self._existing)
+            # ⚠️ **WHERE 절을 지킨다.** 이 페이크가 params 를 무시하던 동안, 프로덕션 질의가
+            # 절대 돌려주지 않을 행을 테스트에 돌려줬다 — 그래서 "다른 시장에 서 있는 같은
+            # 티커"를 보는 가드가 페이크 안에서만 동작하고 실제로는 무력한 채 초록이었다
+            # (ALPHA-830). 페이크가 프로덕션의 결함을 자기 안에서 재현하면 그 결함은 영원히
+            # 안 보인다.
+            mics = params[0] if params else None
+            self._rows = [r for r in self._existing if mics is None or r[0] in mics]
 
     def fetchall(self):
         return self._rows
@@ -562,7 +568,7 @@ def test_board_disagreement_between_inputs_does_not_duplicate_the_instrument(
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["mic_conflicts"] == [
-        {"ticker": "066970", "holdings_mic": "XKOS", "profile_mic": "XKRX"}]
+        {"source": "lake", "ticker": "066970", "known_mic": "XKOS", "input_mic": "XKRX"}]
 
 
 def test_stale_profile_canonical_is_recorded_but_does_not_halt_the_pipeline(tmp_path, monkeypatch):
@@ -637,7 +643,7 @@ def test_board_transfer_after_leaving_every_etf_does_not_duplicate(tmp_path, mon
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["mic_conflicts"] == [
-        {"ticker": "066970", "db_mic": "XKOS", "input_mic": "XKRX"}]
+        {"source": "db", "ticker": "066970", "known_mic": "XKOS", "input_mic": "XKRX"}]
 
 
 def test_rollback_counter_is_truthful_above_the_sample_cap(tmp_path, monkeypatch):
@@ -649,7 +655,11 @@ def test_rollback_counter_is_truthful_above_the_sample_cap(tmp_path, monkeypatch
     픽스처가 한두 건이라 상한 아래에서만 돌아 이 결함을 볼 수 없었다.
     """
     storage = LocalStorage(tmp_path / "lake")
-    rows = [_instrument_profile_row(f"{i:06d}", f"종목{i}") for i in range(250)]
+    # 리터럴을 상한에서 **파생**한다 — 고정 숫자로 두면 상한을 300 으로 조정하는
+    # 순간 픽스처가 상한 아래로 내려가 이 테스트가 깨진 코드에서도 통과한다.
+    total = load_instruments._CREATED_SAMPLE_LIMIT + 50
+    boom_after = load_instruments._CREATED_SAMPLE_LIMIT + 40
+    rows = [_instrument_profile_row(f"{i:06d}", f"종목{i}") for i in range(total)]
     _write_instrument_profile(storage, "KR", "2026-08-06", rows)
 
     class _Boom(_FakeConn):
@@ -660,7 +670,7 @@ def test_rollback_counter_is_truthful_above_the_sample_cap(tmp_path, monkeypatch
             def execute(sql, params=None):
                 inner(sql, params)
                 if len([1 for s, _ in self.log
-                        if s.upper().startswith("INSERT INTO INSTRUMENT ")]) > 240:
+                        if s.upper().startswith("INSERT INTO INSTRUMENT ")]) > boom_after:
                     raise RuntimeError("DB 죽음")
             cur.execute = execute
             return cur
@@ -694,3 +704,28 @@ def test_only_the_latest_profile_partition_is_read(tmp_path, monkeypatch):
 
     assert len(_inserts(conn, "instrument")) == 1
     assert _inserts(conn, "entity")[0][1] == "삼성전자"
+
+
+def test_a_share_class_vocabulary_change_is_caught_not_read_as_a_bigger_normal(
+        tmp_path, monkeypatch):
+    """주식종류 어휘가 통째로 바뀌면 전량 탈락 게이트가 잡는다(ALPHA-830).
+
+    WHY: `share_class` 는 벤더 값을 그대로 통과시킨다 — 검증하는 곳이 없다. KRX 가
+    `보통주` → `보통주식` 으로 바꾸면 전 행이 `non_common` 으로 떨어지는데, 그 카운터의
+    주석은 "정상값(실측 113/2,872)" 이라 로그의 `non_common: 2872` 가 **커진 정상값**으로
+    읽힌다. 아무것도 안 실렸는데 아무도 안 본다 — `no_share_class` 축에서 고친 것과 똑같은
+    실패가 한 분기 옆에 살아 있었다. 세 탈락 축을 다 더해야 게이트가 선다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자", share_class="보통주식"),
+        _instrument_profile_row("000660", "SK하이닉스", share_class="보통주식")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    assert _inserts(conn, "instrument") == []
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["failures"][0]["reasons"] == ["instrument_profile_all_dropped"]
+    assert "비보통주 2" in log["failures"][0]["error"]

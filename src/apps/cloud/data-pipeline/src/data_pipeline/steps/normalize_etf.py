@@ -73,7 +73,8 @@ _KRX_FIELDS = {
 #
 # 매핑 밖 값은 None 이 되고 호출부가 경고를 남긴다(Rule 12 — KRX 가 코드를 늘리면 알아야 한다).
 # MIC **값**은 `parse.KR_MIC_BY_BOARD` 가 SSOT 다(ALPHA-829) — KRX 를 읽는 경로가 둘인데
-# 벤더 어휘가 달라(여기 MKT_ID, 공식 OpenAPI 는 MKT_TP_NM), 값을 각자 들면 한쪽만 고쳐도
+# 시장을 아는 축이 달라(여기 응답의 MKT_ID, 공식 OpenAPI 는 어댑터가 부른 엔드포인트),
+# 값을 각자 들면 한쪽만 고쳐도
 # 안 잡히고 같은 종목이 두 market_code 로 마스터에 두 번 선다. 여기 표는 **벤더 코드→보드**
 # 매핑만 담당한다.
 _KRX_MIC_BY_MKT_ID = {

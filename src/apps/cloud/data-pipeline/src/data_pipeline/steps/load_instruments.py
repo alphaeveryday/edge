@@ -66,6 +66,12 @@ _COUNTRY_BY_MARKET = {"KR": "KR"}
 # 프로필에 시장 코드가 없어(KIS `mket_id_cd` 는 null 실측) 여기서 정한다.
 _MIC_BY_MARKET = {"KR": "XKRX"}
 
+# 시장(지역) → 그 시장의 **전 MIC**. 정체성 조회(`_existing_tickers`)는 이 집합으로 한다 —
+# 입력에 나온 MIC 만 물으면 **다른 시장에 서 있는 같은 티커를 못 본다**. 티커 단위로 보는
+# 조회에선 그게 곧 "이미 있는데 없다고 판정"이라 종목이 두 번 선다(ALPHA-830).
+# 형제 로더들이 같은 이유로 이미 이 상수를 둔다(load_etf_holdings·load_price_daily·load_etf_flow).
+_MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
+
 # 로그에 남길 생성 행 표본 상한. 전종목 확대 첫 런은 ~2,500종을 만드는데(ALPHA-830) 전량을
 # 실으면 품질 로그 하나가 수백 KB 가 된다. 표본은 "무엇이 만들어졌나"를 눈으로 확인하는
 # 용도고 전수는 DB 가 갖고 있다 — 개수(`created`)는 상한과 무관하게 정확하다.
@@ -263,7 +269,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         # ⚠️ 아래 게이트는 **이 시장분만** 봐야 한다. 위 카운터들은 시장 루프 밖에
         # 선언된 누적값이라, 시장이 둘 이상이 되면 합계끼리 비교해 엉뚱한 시장을
         # 지목한다(오늘 LOADED_MARKETS 가 KR 하나뿐이라 안 드러날 뿐이다).
-        market_read = market_no_mic = market_no_share_class = 0
+        market_read = market_no_mic = market_no_share_class = market_non_common = 0
         for profile in _latest_instrument_profile_rows(storage, market):
             instruments_read += 1
             market_read += 1
@@ -293,6 +299,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                 continue
             if share_class != "보통주":
                 skipped_non_common += 1
+                market_non_common += 1
                 continue
 
             # 두 입력이 같은 티커를 **다른 시장**으로 말하면 키가 갈려 같은 종목이 두 번
@@ -303,8 +310,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             # (구성종목이 이기는 규칙과 같은 방향).
             prior_mic = mic_by_ticker.get(ticker)
             if prior_mic and prior_mic != mic:
-                mic_conflicts.append({"ticker": ticker, "holdings_mic": prior_mic,
-                                      "profile_mic": mic})
+                mic_conflicts.append({"source": "lake", "ticker": ticker,
+                                      "known_mic": prior_mic, "input_mic": mic})
                 continue
 
             # 구성종목 행과 같은 키 모양으로 맞춰 아래 소비 루프를 그대로 쓴다. 통화는
@@ -325,12 +332,16 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         # 둘 다 `ops.failed_records` 에 들어가 원장에서 보인다(같은 함수의
         # `etf_profile_incomplete` 와 같은 정책. Rule 7 — 한 파일에 두 정책을 두지 않는다).
         # 이걸 치명으로 만들려면 먼저 이 입력을 SFN·카탈로그에 넣어 필수 작업으로 세워야 한다.
-        unusable = market_no_mic + market_no_share_class
+        # 세 탈락 축을 **다 더한다**. `non_common` 을 빼면 KRX 가 주식종류 어휘를
+        # 바꿨을 때(보통주→보통주식) 전 행이 그 축으로 떨어지는데 게이트가 조용하고,
+        # 로그엔 `non_common: 2872` 가 '정상값이 커진 것'처럼 남는다.
+        unusable = market_no_mic + market_no_share_class + market_non_common
         if market_read and market_read == unusable:
             failures.append({"market": market, "reasons": ["instrument_profile_all_dropped"],
                              "error": f"전종목 {market_read}건이 전부 사용 불가"
                                       f"(MIC 결측 {market_no_mic}·주식종류 결측 "
-                                      f"{market_no_share_class}) — 정제 canonical 이 낡았는지 "
+                                      f"{market_no_share_class}·비보통주 {market_non_common}) — "
+                                      "정제 canonical 이 낡았거나 어휘가 바뀌었는지 "
                                       "확인(normalize-instrument-profile)"})
 
         # ETF 마스터(ALPHA-462)는 구성종목과 **독립된 입력**(프로필 canonical)에서 온다 —
@@ -356,7 +367,10 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         # 시장은 계속 시도한다 — 부분 커밋으로 FK 로 얽힌 마스터가 반쪽으로 남지 않는다.
         try:
             with connect(db) as conn:
-                have = _existing_tickers(conn, {m for m, _ in all_rows})
+                # ⚠️ 입력의 MIC 집합이 아니라 **이 시장의 전 MIC** 로 묻는다. 아래 정체성
+                # 검사가 티커 단위라(`db_mic_by_ticker`), 입력에 없는 MIC 로 서 있는 행을
+                # 못 받으면 그 검사가 조용히 무력해진다 — 넓히는 비용은 행 몇 개뿐이다.
+                have = _existing_tickers(conn, set(_MICS_BY_MARKET.get(market, ())))
                 # 이미 적재된 종목이 **어느 시장으로** 서 있는지. 레이크 쪽 비교(위 mic_by_ticker)
                 # 만으로는 못 잡는 경로가 있다: 어떤 종목이 모든 ETF 바스켓에서 빠지면 오늘의
                 # 구성종목 스냅샷에 없어 비교 대상이 사라지는데, 그 뒤 이전상장하면 전종목이
@@ -375,8 +389,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                         # 바꾸는 건 ADR-0027 소관이라 별건이다. 그래서 실제 이전상장이면 이
                         # 충돌이 **매 런 반복 기록**되고 ops.failed_records 가 상시 비0이 된다
                         # — 버그가 아니라 알려진 천장이다.
-                        mic_conflicts.append({"ticker": ticker, "db_mic": db_mic,
-                                              "input_mic": mic})
+                        mic_conflicts.append({"source": "db", "ticker": ticker,
+                                              "known_mic": db_mic, "input_mic": mic})
                         continue
                     name = row.get("constituent_name") or ticker
                     currency = row.get("currency") or "KRW"
@@ -458,10 +472,12 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         exit_code = 1
 
     logger.info(
-        "load_instruments: read=%d profiles=%d(no_mic=%d non_common=%d conflict=%d) "
+        "load_instruments: read=%d profiles=%d(no_mic=%d no_share_class=%d non_common=%d "
+        "conflict=%d) "
         "skipped_no_mic=%d already=%d created=%d "
         "etfs_read=%d etfs_already=%d etfs_created=%d failures=%d",
-        read, instruments_read, profiles_no_mic, skipped_non_common, len(mic_conflicts),
+        read, instruments_read, profiles_no_mic, profiles_no_share_class,
+        skipped_non_common, len(mic_conflicts),
         skipped_no_mic, existing, created,
         etfs_read, etfs_existing, etfs_created, len(failures),
     )
