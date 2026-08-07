@@ -10,6 +10,12 @@ argument `text` 를 instrument 로 해소하고, 미해소·충돌은 **수치�
 argument 가 전무 해소된 assertion 은 assertion 도 넣지 않는다 — 엔티티 연결 없는 주장은
 event 조립 소비자에게 죽은 행이다.
 
+**역할이 없는 argument 도 뺀다**(ALPHA-802). 예전엔 `ISSUER` 로 채웠는데, `role_code` 에는
+`predicate_source` 같은 출처 칸이 없어 한 번 실리면 지어낸 값과 모델이 뽑은 값을 영영 못
+가린다. 그 argument 가 그 assertion 의 유일한 인자였다면 **assertion 자체가 안 들어간다** —
+"카운터만 바뀐다"가 아닌 유일한 자리다. 다만 추출단(`tagging/extract.py`)이 역할을 어휘
+허용집합으로 이미 거르므로 현행 생산자로는 도달하지 않는다.
+
 **멱등**: 논리 자연키 = `uq_document_assertion_natural (document_id, event_type_code,
 predicate_code)` 에 ON CONFLICT DO NOTHING(원자적 — #130 교훈). 신규면 그 자연키에서
 **결정적으로** 파생한 `asrt_<해시>`(`db.stable_domain_id`, ALPHA-456), 이미 있으면(분석엔진
@@ -175,11 +181,13 @@ def run(
                                 folded += 1
                             entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
 
+        # 역할→종별 계약(`role_bindings_v0_1.yaml`). assemble-events 가 이미 읽는 그 표다
+        # — 같은 계보의 두 writer 가 다른 계약을 보고 있었다(ALPHA-802). 어휘가 깨져 있으면
+        # 여기서 죽는데, 커넥션·트랜잭션을 열기 **전**이라 롤백할 것이 없다.
+        relations = load_relations()
+
         with connect(db) as conn:
             index = load_resolution_index(conn)
-            # 역할→종별 계약(`role_bindings_v0_1.yaml`). assemble-events 가 이미 읽는 그 표다
-            # — 같은 계보의 두 writer 가 다른 계약을 보고 있었다(ALPHA-802).
-            relations = load_relations()
 
             article_ids_by_source: dict[str, set[str]] = {}
             for source_code, article_id, _e, _p in candidates:
@@ -234,10 +242,11 @@ def run(
                             if isinstance(text, str) and text.strip():
                                 # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
                                 unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
-                    elif entity_id is not None:
-                        # 실체 역할이 아닌데 인덱스에 걸렸다. **지금은 그대로 적재한다** —
+                    elif kind == "non_entity" and entity_id is not None:
+                        # 비실체 자리인데 인덱스에 걸렸다. **지금은 그대로 적재한다** —
                         # 이 티켓은 계측만 바꾸고 적재는 건드리지 않는다. 이 수가 곧 역할별
-                        # 해소 분기(ALPHA-831)가 걷어낼 적재량이다.
+                        # 해소 분기(ALPHA-831)가 걷어낼 적재량이다. ⚠️ 어휘 밖은 여기 안
+                        # 넣는다 — 섞으면 ALPHA-831 이 걷어낼 근거가 없는 행까지 세게 된다.
                         non_entity_resolved += 1
                     if entity_id is None:
                         continue
@@ -317,6 +326,10 @@ def run(
         # ⚠️ `total` 은 argument 총수가 아니라 **실체 역할 argument 수**다(ALPHA-802).
         # 나머지 축은 `role_kinds`·`role_missing` 이 따로 말한다 — 넷을 더하면 총수가 된다.
         "argument_resolution": {
+            # 분모 정의를 로그 자신이 들고 있어야 한다 — 이 필드가 없으면 ALPHA-802 이전에
+            # 찍힌 로그(분모=argument 총수)와 이후 로그를 나란히 놓고 비교할 때 정의가
+            # 바뀐 것을 알 방법이 없다. 회수 효과와 분모 변화가 같은 숫자에서 섞인다.
+            "denominator": "entity_roles_only",
             "total": args_total, **args_by_reason, "rate": resolution_rate,
             "top_unresolved": sorted(unresolved_texts.items(),
                                      key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
@@ -345,11 +358,15 @@ def run(
         logger.exception("적재 로그 기록 실패")
         exit_code = 1
 
+    # 아래 둘은 추출단 검증(`tagging/extract.py` 의 허용집합 필터)이 막고 있어야 하는 값이라
+    # 실측 0건이다. 발화했다면 그 계약이 깨진 것이고, 둘 다 **분모 밖으로 빠져** 해소율이
+    # 조용히 좋아 보이는 방향으로 틀린다 — 로그 파일을 열어야 보이는 수치로 두지 않는다(Rule 12).
     if unknown_roles:
-        # 로그 파일을 열어봐야 보이는 수치로 두지 않는다 — 추출단이 어휘 밖 역할을 내기
-        # 시작하면 그 자리는 전부 분모 밖으로 빠져 해소율이 조용히 좋아 보인다(Rule 12).
         logger.warning("load_assertions: 어휘 밖 역할 %d종 — 추출단과 온톨로지가 갈렸다: %s",
                        len(unknown_roles), sorted(unknown_roles))
+    if args_role_missing:
+        logger.warning("load_assertions: 역할 없는 argument %d건 — 그 자리는 적재하지 않았다",
+                       args_role_missing)
     logger.info(
         "load_assertions: rows=%d considered=%d missing_doc=%d no_resolved=%d created=%d"
         " already=%d args_inserted=%d resolution=%s",

@@ -351,29 +351,45 @@ def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkey
     assert res["total"] == 1 and res["resolved"] == 1 and res["rate"] == 1.0
     assert res["role_kinds"] == {"entity": 1, "non_entity": 2, "out_of_vocabulary": 0}
     assert [t for t, _ in res["top_unresolved"]] == []
+    # 로그가 자기 분모 정의를 들고 있어야 ALPHA-802 이전 로그와 나란히 놓고 비교할 수 있다
+    assert res["denominator"] == "entity_roles_only"
 
 
-def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch):
+def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch, caplog):
     """어휘 밖 역할은 **이름까지** 남긴다(ALPHA-802).
 
     WHY: 어휘 밖은 추출단과 온톨로지가 갈렸다는 신호인데, 이 자리는 전부 분모 밖으로
     빠지므로 드리프트가 커질수록 해소율이 **조용히 좋아 보인다**. 개수만 세면 어느
     역할이 샜는지 몰라 고칠 수가 없다 — top_unresolved 를 20개로 자르던 것과 같은
     실패 양식이다(Rule 12).
+
+    어휘 밖이 `non_entity_resolved` 에 섞이지 않는 것도 함께 고정한다. 그 수는 역할별
+    해소 분기(ALPHA-831)가 **걷어낼 적재량**의 근거인데, 어휘 밖은 걷어낼 계약이 없는
+    행이라 섞이면 다음 티켓이 틀린 크기를 보고 계획한다.
     """
     storage = LocalStorage(tmp_path / "lake")
+    # 어휘 밖 역할에 **해소되는** 텍스트를 준다 — 안 그러면 두 카운터의 차이가 안 드러난다
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
-        arguments=_args(("ISSUER", "삼성전자"), ("NOT_A_ROLE", "무언가")))])])
+        arguments=_args(("ISSUER", "삼성전자"), ("NOT_A_ROLE", "SK하이닉스")))])])
     conn = _FakeConn(documents=[("a1", "doc_D1")])
     _setup(monkeypatch, conn)
 
-    assert load_assertions.run(storage, "R1", db=_db()) == 0
+    import logging
+    with caplog.at_level(logging.WARNING, logger=load_assertions.logger.name):
+        assert load_assertions.run(storage, "R1", db=_db()) == 0
 
     res = _log(storage)["argument_resolution"]
     assert res["role_kinds"] == {"entity": 1, "non_entity": 0, "out_of_vocabulary": 1}
     assert res["out_of_vocabulary_roles"] == {"NOT_A_ROLE": 1}
     # 분모는 실체 역할만이라 어휘 밖이 새도 rate 는 떨어지지 않는다 — 그래서 이름이 필요하다
     assert res["total"] == 1 and res["rate"] == 1.0
+    # 적재는 그대로 되지만(2행) ALPHA-831 이 걷어낼 몫에는 안 들어간다
+    assert len(_inserts(conn, "assertion_argument")) == 2
+    assert res["non_entity_resolved"] == 0
+    # 로그 파일을 열어야 보이는 수치로 두지 않는다 — 런 로그에서 드러나야 한다(Rule 12).
+    # 이 단언이 없으면 WARNING 을 통째로 지워도 위 단언들이 전부 통과한다
+    [warned] = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "NOT_A_ROLE" in warned
 
 
 def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch):
@@ -430,12 +446,17 @@ def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
     다르다)"를 가릴 수 없었다. 그 판단이 이 트랙 전체의 분기점이다.
     """
     storage = LocalStorage(tmp_path / "lake")
+    # 상한보다 **많이** 넣어야 상한을 고정한다. 25개만 넣으면 이 단언은 옛 상한 20 만 거부하고
+    # 상한을 25 로 줄이거나 슬라이스를 통째로 지워도 통과한다.
     unknowns = [_assertion(event_type_code=f"E{i}", arguments=_args(("ISSUER", f"미등록{i}")))
-                for i in range(25)]
+                for i in range(250)]
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", unknowns)])
     conn = _FakeConn(documents=[("a1", "doc_D1")])
     _setup(monkeypatch, conn)
 
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
-    assert len(_log(storage)["argument_resolution"]["top_unresolved"]) == 25
+    top = _log(storage)["argument_resolution"]["top_unresolved"]
+    assert len(top) == 200
+    # 잘라 낼 때 빈도순인지도 함께 고정한다 — 임의 순서로 자르면 롱테일이 아니라 표본이 된다
+    assert [c for _, c in top] == sorted((c for _, c in top), reverse=True)
