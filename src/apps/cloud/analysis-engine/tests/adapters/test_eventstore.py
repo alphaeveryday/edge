@@ -438,6 +438,134 @@ def test_explanation_prerequisites_follows_minute_axis_for_trigger_input():
     assert all("price_movement_trigger " not in sql for sql in route_sqls)
 
 
+class _MinuteWindowCursor:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        self._conn.executed.append((" ".join(sql.split()), params))
+        if self._conn.error is not None:
+            raise self._conn.error
+
+    def fetchall(self):
+        return list(self._conn.rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _MinuteWindowConn:
+    def __init__(self, rows=(), error=None):
+        self.rows = list(rows)
+        self.error = error
+        self.executed = []
+
+    def cursor(self):
+        return _MinuteWindowCursor(self)
+
+
+def test_fetch_committed_minute_windows_returns_ordered_kst_coordinates():
+    from datetime import datetime, timedelta, timezone
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    utc = timezone.utc
+    rows = [
+        (datetime(2026, 8, 7, 0, 0, tzinfo=utc),
+         datetime(2026, 8, 7, 0, 1, tzinfo=utc), "VALID", 1, "a" * 64),
+        (datetime(2026, 8, 7, 0, 1, tzinfo=utc),
+         datetime(2026, 8, 7, 0, 2, tzinfo=utc), "INCOMPLETE", 2, "b" * 64),
+    ]
+    conn = _MinuteWindowConn(rows)
+
+    got = EventStore(conn).fetch_committed_minute_windows(
+        "session-1", start, start + timedelta(minutes=2))
+
+    assert [row.start for row in got] == [start, start + timedelta(minutes=1)]
+    assert [row.generation for row in got] == [1, 2]
+    [(sql, params)] = conn.executed
+    assert "ORDER BY window_start" in sql
+    assert params == ("session-1", start, start + timedelta(minutes=2))
+
+
+def test_fetch_committed_minute_windows_retries_while_correction_is_running():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from edge_analysis.config import ReturnsNotReadyError
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    rows = [(start.astimezone(timezone.utc),
+             (start + timedelta(minutes=1)).astimezone(timezone.utc),
+             "CLAIMED", 1, "a" * 64)]
+
+    with pytest.raises(ReturnsNotReadyError, match="CLAIMED"):
+        EventStore(_MinuteWindowConn(rows)).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+
+
+def test_fetch_committed_minute_windows_names_a_missing_middle_coordinate():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    rows = [
+        (start.astimezone(timezone.utc),
+         (start + timedelta(minutes=1)).astimezone(timezone.utc), "VALID", 1, "a" * 64),
+        ((start + timedelta(minutes=2)).astimezone(timezone.utc),
+         (start + timedelta(minutes=3)).astimezone(timezone.utc), "VALID", 1, "c" * 64),
+    ]
+
+    with pytest.raises(PipelineError, match=r"count=1 sample=09:01"):
+        EventStore(_MinuteWindowConn(rows)).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=3))
+
+
+def test_fetch_committed_minute_windows_rejects_duplicate_or_uncommitted_terminal_rows():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    row = (start.astimezone(timezone.utc),
+           (start + timedelta(minutes=1)).astimezone(timezone.utc),
+           "VALID", 1, "a" * 64)
+    with pytest.raises(PipelineError, match="중복"):
+        EventStore(_MinuteWindowConn([row, row])).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+
+    uncommitted = (*row[:2], "MISSING", 0, None)
+    with pytest.raises(PipelineError, match="커밋 좌표 없음"):
+        EventStore(_MinuteWindowConn([uncommitted])).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+
+
+def test_fetch_committed_minute_windows_does_not_hide_database_errors():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=timezone(timedelta(hours=9)))
+    error = RuntimeError("database unavailable")
+
+    with pytest.raises(RuntimeError, match="database unavailable") as caught:
+        EventStore(_MinuteWindowConn(error=error)).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+    assert caught.value is error
+
+
 class _RevertQueryCursor:
     def __init__(self, conn):
         self._conn = conn

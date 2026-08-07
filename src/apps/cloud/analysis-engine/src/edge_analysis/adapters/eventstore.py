@@ -6,10 +6,10 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
-from ..config import KST, Settings
+from ..config import KST, PipelineError, ReturnsNotReadyError, Settings
 from ..domain.models import (
     POLICY_VERSION,
     Decomposition,
@@ -19,6 +19,7 @@ from ..domain.models import (
     Argument,
     PriceTrigger,
 )
+from ..domain.window import CommittedMinuteWindow
 from ..observability import log, stable_id, utcnow_iso
 
 _TITLE_EVIDENCE_TYPE = "TITLE"
@@ -337,6 +338,86 @@ class EventStore:
             )
             row = cur.fetchone()
         return (int(row[0]), row[1]) if row else None
+
+    def fetch_committed_minute_windows(
+        self, session_id: str, start: datetime, end: datetime,
+    ) -> list[CommittedMinuteWindow]:
+        """``[start, end)``의 커밋된 1분 artifact 좌표를 순서대로 반환한다.
+
+        계획 행 자체가 없거나 중간이 비면 원장 불변식 위반이고, ``DUE``/``CLAIMED``는
+        정정·수집이 끝나면 낫는 재시도 축이다. DB 예외는 감싸지 않는다 — 연결 장애와
+        데이터 부재를 같은 ``PipelineError``로 만들면 운영 처방이 갈리지 않는다.
+        """
+        session_id = str(session_id).strip()
+        if not session_id:
+            raise ValueError("session_id가 비었다")
+        for value, field in ((start, "start"), (end, "end")):
+            if value.tzinfo is None or value.utcoffset() != timedelta(hours=9):
+                raise ValueError(f"{field}는 KST(+09:00) aware datetime이어야 한다")
+            if value.second or value.microsecond:
+                raise ValueError(f"{field}는 분 경계여야 한다")
+        if end <= start:
+            raise ValueError("end는 start보다 뒤여야 한다")
+
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT window_start, window_end, data_status, generation, checksum"
+                " FROM minute_ingestion_window"
+                " WHERE session_id = %s AND window_start >= %s AND window_start < %s"
+                " ORDER BY window_start",
+                (session_id, start, end),
+            )
+            rows = cur.fetchall()
+
+        expected = []
+        cursor = start
+        while cursor < end:
+            expected.append(cursor)
+            cursor += timedelta(minutes=1)
+        by_start: dict[datetime, tuple] = {}
+        for row in rows:
+            window_start = row[0].astimezone(KST)
+            if window_start in by_start:
+                raise PipelineError(
+                    f"분봉 원장 window 중복: session={session_id} window={window_start.isoformat()}")
+            by_start[window_start] = row
+
+        missing = [value for value in expected if value not in by_start]
+        if missing:
+            sample = ",".join(value.strftime("%H:%M") for value in missing[:5])
+            raise PipelineError(
+                f"분봉 원장 window 누락: session={session_id} count={len(missing)} sample={sample}")
+
+        out: list[CommittedMinuteWindow] = []
+        for expected_start in expected:
+            row = by_start[expected_start]
+            status, generation, checksum = str(row[2]), int(row[3]), row[4]
+            if status in ("DUE", "CLAIMED"):
+                raise ReturnsNotReadyError(
+                    f"분봉 window 정정·수집 중: session={session_id}"
+                    f" window={expected_start.isoformat()} status={status}")
+            if status not in ("VALID", "VALID_EMPTY", "INCOMPLETE", "MISSING", "INVALID"):
+                raise PipelineError(
+                    f"분봉 원장 status 미지: session={session_id}"
+                    f" window={expected_start.isoformat()} status={status}")
+            if generation < 1 or not checksum:
+                raise PipelineError(
+                    f"분봉 terminal window 커밋 좌표 없음: session={session_id}"
+                    f" window={expected_start.isoformat()} status={status}"
+                    f" generation={generation} checksum={bool(checksum)}")
+            try:
+                out.append(CommittedMinuteWindow(
+                    session_id=session_id,
+                    start=expected_start,
+                    end=row[1].astimezone(KST),
+                    generation=generation,
+                    checksum=str(checksum),
+                ))
+            except ValueError as error:
+                raise PipelineError(
+                    f"분봉 원장 window 계약 위반: session={session_id}"
+                    f" window={expected_start.isoformat()} — {error}") from error
+        return out
 
     def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
         """파이프라인이 조립한 당일 구성종목 source event 를 참여자·측정값까지 붙여 읽는다.
