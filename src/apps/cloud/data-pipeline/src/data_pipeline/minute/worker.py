@@ -436,30 +436,37 @@ def _require_credentials(pair: tuple[str | None, str | None], env_names: str) ->
         )
 
 
-def make_price_collector(options):
-    """설정 `source` → collector. **미지 소스는 기동 거부**(ALPHA-735).
+def make_price_collector(options, *, session_date):
+    """설정 `source` + 세션 날짜 → collector. **미지 소스는 기동 거부**(ALPHA-735).
 
     조용한 폴백을 두지 않는다: 오타 source 로 토스가 끼워지면 원장 source_group 과 갈린
     세션에 다른 벤더의 봉이 실린다. 세션 identity 는 source 로 유도되므로 여기서 막는
     게 유일하게 싼 지점이다.
+
+    ⚠️ **지난 거래일이면 KIS 는 다른 TR 이다**(ALPHA-846). 당일 TR 에는 날짜 축이 없어
+    과거 세션에 물리면 오늘 봉이 오늘 라벨로 돌아와 전 window 가 missing 이 된다 —
+    설정 노브가 아니라 벤더 사실이라 날짜에서 유도한다(끌 수 있게 두면 꺼진 채로 도는
+    백필이 조용히 빈 하루를 만든다).
     """
     from ..sources.http import PoliteClient
     from .states import DATASET_PRICE_MINUTE, SOURCE_GROUPS_BY_DATASET
 
     if options.source == "kis":
-        from ..sources.kis_minute import KisMinuteClient
+        from ..sources.kis_minute import KisHistoricalMinuteClient, KisMinuteClient
         from .kis_collector import KisPriceCollector
 
         _require_credentials(
             (options.app_key, options.app_secret),
             "DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET",
         )
+        # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
+        http = PoliteClient(min_interval=options.min_interval_sec)
+        if session_date < datetime.now(KST).date():
+            return KisPriceCollector(client=KisHistoricalMinuteClient(
+                options.app_key, options.app_secret, http, session_date=session_date,
+            ))
         return KisPriceCollector(
-            client=KisMinuteClient(
-                options.app_key, options.app_secret,
-                # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
-                PoliteClient(min_interval=options.min_interval_sec),
-            )
+            client=KisMinuteClient(options.app_key, options.app_secret, http)
         )
     if options.source == "toss":
         from ..sources.toss import TossOpenApiClient
@@ -515,7 +522,6 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
             "minute_price_worker 설정 없음 — 벤더 자격증명 필수"
             "(DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET 주입)"
         )
-    collector = make_price_collector(options)
     if not universe:
         raise SystemExit(
             "--universe 필요 — planner(plan-minute-session)와 **같은 파일**이어야 원장의 "
@@ -538,6 +544,8 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
         parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
     except ValueError:
         raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
+    # 벤더 TR 선택이 세션 날짜에 걸려 있다(ALPHA-846) — 날짜를 읽은 뒤에 만든다
+    collector = make_price_collector(options, session_date=parsed_day)
     universe_model = load_universe_uri(universe)
     session_id = stable_domain_id(
         "msn", DATASET_PRICE_MINUTE, options.source, parsed_day.isoformat()

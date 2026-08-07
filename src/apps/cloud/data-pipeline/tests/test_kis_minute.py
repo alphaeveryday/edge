@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.kis_minute import (
+    MAX_DAY_PAGES,
+    KisHistoricalMinuteClient,
     KisMinuteClient,
     KisSourceError,
     KisUnitError,
@@ -265,3 +267,109 @@ class TestAuthAxis:
         client.candles("005930", window_end=WINDOW_END)
         client.candles("000660", window_end=WINDOW_END)
         assert sum("tokenP" in url for url, _ in fake.calls) == 1
+
+
+class TestHistoricalCandles:
+    """소급(과거 거래일) 분봉 — `FHKST03010230` (ALPHA-846).
+
+    ⚠️ 이 TR 은 당일 TR 과 **계약이 다르다**(2026-08-08 실측, 08-03 전수):
+    무거래 분 행을 아예 주지 않고(`cntg_vol=0` 행 0건), 응답이 거래일 경계를 넘어
+    직전 거래일로 계속 내려간다. 둘 다 어댑터가 흡수하지 않으면 원장이 관대해지는 쪽으로
+    틀린다 — 전자는 그 분들이 `missing` 이 돼 window 가 영원히 INCOMPLETE 이고,
+    후자는 남의 날 봉이 이 날 canonical 에 실린다.
+    """
+
+    def hist(self, responses, session_date=date(2026, 8, 3)):
+        fake = FakeClient(responses)
+        return KisHistoricalMinuteClient(
+            "app-key", "app-secret", fake, session_date=session_date
+        ), fake
+
+    def at(self, hhmm: str) -> datetime:
+        return datetime(2026, 8, 3, int(hhmm[:2]), int(hhmm[2:]), tzinfo=KST)
+
+    def other_day(self, hour: str) -> dict:
+        return {**row(hour), "stck_bsop_date": "20260731"}
+
+    def test_uses_historical_tr_and_date_axis(self):
+        # 당일 TR 로는 과거를 못 받는다 — 날짜 축이 없어 오늘 봉이 오늘 라벨로 돌아온다
+        client, fake = self.hist([TOKEN, ok([row("153000"), self.other_day("152900")])])
+        client.candles("005930", window_end=self.at("1530"))
+        url, headers = fake.calls[-1]
+        assert headers["tr_id"] == "FHKST03010230"
+        assert "FID_INPUT_DATE_1=20260803" in url
+        assert "inquire-time-dailychartprice" in url
+
+    def test_no_trade_minutes_are_synthesized_flat(self):
+        """벤더가 빼먹은 분을 직전 종가 flat·거래량 0 으로 채운다.
+
+        채우지 않으면 같은 시장 사실(무거래)이 당일 경로에선 `no_trade`(성공), 소급
+        경로에선 `missing`(실패)이 된다 — 439870 은 390분 중 176행뿐이라 하루의 절반이
+        실패로 쌓이고 그 window 는 영원히 INCOMPLETE 다.
+        """
+        client, _ = self.hist([
+            TOKEN, ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
+        ])
+        filled = client.candles("005930", window_end=self.at("1028"))
+        assert len(filled) == 1
+        candle = filled[0]
+        assert candle.volume == Decimal(0)
+        assert candle.traded is False
+        # 직전가 flat — 10:27 봉의 **종가**여야 한다(시가·고가를 쓰면 조용히 다른 값이 된다)
+        assert (candle.open, candle.high, candle.low, candle.close) == (
+            Decimal("72500"), Decimal("72500"), Decimal("72500"), Decimal("72500"))
+        # 관측된 봉은 그대로다 — 합성이 실측을 덮어쓰지 않는다
+        assert client.candles("005930", window_end=self.at("1027"))[0].volume == Decimal("1200")
+
+    def test_fill_does_not_extend_past_observed_range(self):
+        # 첫 체결 앞은 직전가를 모르고, 마지막 관측 뒤는 더 거래됐는지 모른다 —
+        # 채우면 관측하지 않은 구간을 관측한 것처럼 만든다(missing 이 사실에 가깝다)
+        client, _ = self.hist([
+            TOKEN, ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
+        ])
+        assert client.candles("005930", window_end=self.at("1026")) == ()
+        assert client.candles("005930", window_end=self.at("1031")) == ()
+
+    def test_other_trading_day_rows_are_cut(self):
+        # 경계를 넘은 행을 남기면 07-31 봉이 08-03 canonical 에 실린다
+        client, _ = self.hist([
+            TOKEN, ok([row("091000")]), ok([self.other_day("090900"), self.other_day("090800")]),
+        ])
+        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+        assert client.candles("005930", window_end=self.at("0909")) == ()
+
+    def test_day_is_fetched_once_for_all_windows(self):
+        # window 마다 부르면 390 × 362 = 141k 콜이다 — 앱키 유량은 전역이라 그 차이가
+        # 그대로 다른 KIS 스텝의 예산을 먹는다(하루 4콜 × 362종이 설계 근거)
+        client, fake = self.hist([
+            TOKEN, ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
+        ])
+        for hhmm in ("1027", "1028", "1029", "1030"):
+            client.candles("005930", window_end=self.at(hhmm))
+        # 토큰 1 + 페이지 2. FakeClient 는 응답이 동나면 AssertionError 를 내므로
+        # 추가 호출은 이 테스트가 통과하는 것 자체로 배제된다
+        assert len(fake.calls) == 3
+
+    def test_other_session_date_is_refused(self):
+        # 캐시가 하루에 묶여 있다 — 다른 날짜를 받으면 조용히 남의 날 봉을 준다
+        client, _ = self.hist([TOKEN])
+        with pytest.raises(ValueError, match="날짜 불일치"):
+            client.candles("005930", window_end=datetime(2026, 8, 4, 10, 30, tzinfo=KST))
+
+    def test_page_budget_exhaustion_fails_the_unit(self):
+        """하루가 안 끝났는데 예산이 끝나면 **실패**다 — 잘린 하루를 커밋하지 않는다.
+
+        합성이 사이를 메우므로, 여기서 조용히 반환하면 못 받은 구간이 4분류에서
+        `no_trade` 로 위장돼 window 가 VALID 로 확정된다.
+        """
+        # 매 페이지 1분씩만 내려가는 응답 — 경계에도 09:00 에도 못 닿는다
+        pages = [ok([row(f"15{29 - i:02d}00")]) for i in range(MAX_DAY_PAGES + 1)]
+        client, _ = self.hist([TOKEN, *pages])
+        with pytest.raises(KisUnitError, match="페이지 예산"):
+            client.candles("005930", window_end=self.at("1529"))
+
+    def test_no_progress_response_stops_paging(self):
+        # 벤더가 같은 창을 반복하면 예산까지 헛돈다 — 진전이 없으면 멈춘다
+        client, fake = self.hist([TOKEN, ok([row("153000")]), ok([row("153000")])])
+        assert len(client.candles("005930", window_end=self.at("1530"))) == 1
+        assert len(fake.calls) == 3  # 토큰 1 + 페이지 2 (예산 8 을 다 쓰지 않는다)

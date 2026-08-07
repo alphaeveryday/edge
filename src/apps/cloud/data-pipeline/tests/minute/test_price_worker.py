@@ -34,6 +34,8 @@ UNIVERSE = Universe(
     constituent_ids=("100000", "100001"),
 )
 NOW = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # 앞쪽 window 들이 전부 due
+# collector 선택은 **오늘인가 지난 거래일인가**로 갈린다(ALPHA-846) — 당일 축 고정용
+TODAY = datetime.now(KST).date()
 # 시간외(NXT)까지 거래되는 종목이 하나 있는 universe — 세션이 720 window 로 계획된다
 UNIVERSE_EXT = Universe(
     universe_version="univ-test-ext-v1",
@@ -883,18 +885,50 @@ class TestCollectorSelection:
         from data_pipeline.minute.worker import make_price_collector
 
         collector = make_price_collector(
-            self._config(source="kis", app_key="k", app_secret="s")
+            self._config(source="kis", app_key="k", app_secret="s"), session_date=TODAY
         )
         assert isinstance(collector, KisPriceCollector)
         # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
         assert collector.client.client.min_interval == pytest.approx(0.08)
+
+    def test_past_session_date_builds_historical_kis_client(self):
+        """지난 거래일이면 **다른 TR** 이다(ALPHA-846).
+
+        당일 TR 에는 날짜 축이 없어 과거 세션에 물리면 오늘 봉이 오늘 라벨로 돌아오고
+        전 window 가 missing 이 된다 — 그때 원장은 "수집했는데 벤더가 안 줬다"로 보인다.
+        타입만 보면 상속이라 같은 클래스로도 통과하므로 **TR·날짜 파라미터**까지 본다.
+        """
+        from data_pipeline.minute.worker import make_price_collector
+        from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient
+
+        collector = make_price_collector(
+            self._config(source="kis", app_key="k", app_secret="s"),
+            session_date=date(2026, 8, 3),
+        )
+        client = collector.client
+        assert isinstance(client, KisHistoricalMinuteClient)
+        assert client.session_date == date(2026, 8, 3)
+        assert client.tr_id == "FHKST03010230"
+        assert "FID_INPUT_DATE_1=20260803" in client._url("005930", "153000")
+
+    def test_today_session_date_keeps_the_intraday_client(self):
+        # 상주 레인은 그대로여야 한다 — 소급 TR 은 하루를 통째로 캐시하므로 장중에
+        # 물리면 그 프로세스가 첫 tick 의 하루를 끝까지 재사용한다(값이 얼어붙는다)
+        from data_pipeline.minute.worker import make_price_collector
+        from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient
+
+        client = make_price_collector(
+            self._config(source="kis", app_key="k", app_secret="s"), session_date=TODAY
+        ).client
+        assert not isinstance(client, KisHistoricalMinuteClient)
+        assert client.tr_id == "FHKST03010200"
 
     def test_toss_source_still_builds_toss_collector(self):
         from data_pipeline.minute.toss_collector import TossPriceCollector
         from data_pipeline.minute.worker import make_price_collector
 
         collector = make_price_collector(
-            self._config(source="toss", client_id="c", client_secret="s")
+            self._config(source="toss", client_id="c", client_secret="s"), session_date=TODAY
         )
         assert isinstance(collector, TossPriceCollector)
 
@@ -903,20 +937,27 @@ class TestCollectorSelection:
         from data_pipeline.minute.worker import make_price_collector
 
         with pytest.raises(SystemExit, match="APP_KEY"):
-            make_price_collector(self._config(source="kis", client_id="c", client_secret="s"))
+            make_price_collector(
+                self._config(source="kis", client_id="c", client_secret="s"),
+                session_date=TODAY,
+            )
 
     def test_blank_credentials_fail_loud(self):
         # 공백-only 도 결손이다 — 통과시키면 기동은 되고 모든 인증이 실패해 window 실패만 쌓인다
         from data_pipeline.minute.worker import make_price_collector
 
         with pytest.raises(SystemExit, match="자격증명 없음"):
-            make_price_collector(self._config(source="kis", app_key="k", app_secret="  "))
+            make_price_collector(
+                self._config(source="kis", app_key="k", app_secret="  "), session_date=TODAY
+            )
 
     def test_unknown_source_fails_loud(self):
         from data_pipeline.minute.worker import make_price_collector
 
         with pytest.raises(SystemExit, match="알 수 없는 source"):
-            make_price_collector(self._config(source="fmp", app_key="k", app_secret="s"))
+            make_price_collector(
+                self._config(source="fmp", app_key="k", app_secret="s"), session_date=TODAY
+            )
 
     def test_source_default_matches_terraform_session_group(self):
         """config `source` 와 terraform `minute_session_source_group` 기본값은 같아야 한다.
