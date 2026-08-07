@@ -388,7 +388,10 @@ def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch,
     assert res["non_entity_resolved"] == 0
     # 로그 파일을 열어야 보이는 수치로 두지 않는다 — 런 로그에서 드러나야 한다(Rule 12).
     # 이 단언이 없으면 WARNING 을 통째로 지워도 위 단언들이 전부 통과한다
-    [warned] = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    # 로거 이름으로도 좁힌다 — caplog 은 root 에 붙어 남의 WARNING 까지 담으므로, 이름을
+    # 안 거르면 무관한 라이브러리 경고 하나에 언팩이 터져 엉뚱한 이유로 실패한다
+    [warned] = [r.getMessage() for r in caplog.records
+                if r.levelno >= logging.WARNING and r.name == load_assertions.logger.name]
     assert "NOT_A_ROLE" in warned
 
 
@@ -446,9 +449,11 @@ def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
     다르다)"를 가릴 수 없었다. 그 판단이 이 트랙 전체의 분기점이다.
     """
     storage = LocalStorage(tmp_path / "lake")
-    # 상한보다 **많이** 넣어야 상한을 고정한다. 25개만 넣으면 이 단언은 옛 상한 20 만 거부하고
-    # 상한을 25 로 줄이거나 슬라이스를 통째로 지워도 통과한다.
-    unknowns = [_assertion(event_type_code=f"E{i}", arguments=_args(("ISSUER", f"미등록{i}")))
+    # 상한보다 **많이**(250종) 넣어야 상한이 고정된다. 그리고 **빈도가 서로 달라야** 한다 —
+    # 전부 1회면 "내림차순인가"가 어떤 정렬에서도 참인 항등식이 되어 정렬 키를 지워도
+    # 통과한다. 250종에 1~5회를 고루 준다(각 빈도 50종).
+    unknowns = [_assertion(event_type_code=f"E{i}",
+                           arguments=_args(*[("ISSUER", f"미등록{i}")] * (i % 5 + 1)))
                 for i in range(250)]
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", unknowns)])
     conn = _FakeConn(documents=[("a1", "doc_D1")])
@@ -458,5 +463,13 @@ def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
 
     top = _log(storage)["argument_resolution"]["top_unresolved"]
     assert len(top) == 200
-    # 잘라 낼 때 빈도순인지도 함께 고정한다 — 임의 순서로 자르면 롱테일이 아니라 표본이 된다
-    assert [c for _, c in top] == sorted((c for _, c in top), reverse=True)
+    counts = [c for _, c in top]
+    assert counts == sorted(counts, reverse=True)
+    # 상한이 자르는 것은 **빈도 하위**여야 한다 — 5·4·3·2회(각 50종)가 살고 1회는 전멸한다
+    assert counts[0] == 5 and counts[-1] == 2
+    # ⭐이 두 줄이 "빈도순 상위 200"과 "먼저 본 200"을 가른다. 삽입 순서는 event_type_code
+    # 사전순(E0·E1·E10·E100…)이라, 늦게 나오지만 빈도 높은 것이 살아남고 먼저 나오지만
+    # 빈도 1인 것이 잘려야 정렬 키가 실제로 일한 것이다
+    kept = dict(top)
+    assert "미등록249" in kept       # 삽입 순서 끝자락 · 5회
+    assert "미등록0" not in kept     # 삽입 순서 선두 · 1회

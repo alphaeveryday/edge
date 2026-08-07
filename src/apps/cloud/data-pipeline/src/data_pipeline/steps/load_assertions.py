@@ -10,11 +10,14 @@ argument `text` 를 instrument 로 해소하고, 미해소·충돌은 **수치�
 argument 가 전무 해소된 assertion 은 assertion 도 넣지 않는다 — 엔티티 연결 없는 주장은
 event 조립 소비자에게 죽은 행이다.
 
-**역할이 없는 argument 도 뺀다**(ALPHA-802). 예전엔 `ISSUER` 로 채웠는데, `role_code` 에는
-`predicate_source` 같은 출처 칸이 없어 한 번 실리면 지어낸 값과 모델이 뽑은 값을 영영 못
-가린다. 그 argument 가 그 assertion 의 유일한 인자였다면 **assertion 자체가 안 들어간다** —
-"카운터만 바뀐다"가 아닌 유일한 자리다. 다만 추출단(`tagging/extract.py`)이 역할을 어휘
-허용집합으로 이미 거르므로 현행 생산자로는 도달하지 않는다.
+**역할이 없는 argument 도 뺀다**(ALPHA-802). 예전엔 `ISSUER` 로 채웠는데, 적재 후에는
+지어낸 역할과 모델이 뽑은 역할을 가릴 수단이 없다 — 이 테이블엔 출처 컬럼이 없고,
+게다가 아래 `resolved_args` 가 `(역할, entity_id)` 로 접기 때문에 지어낸 ISSUER 가 같은
+엔티티의 **진짜 ISSUER 와 한 행으로 합쳐진다**. feature 존 원본과 대조해도 못 갈라진다.
+그 argument 가 그 assertion 의 유일한 인자였다면 **assertion 자체가 안 들어간다** — 적재
+행 집합이 달라지는 유일한 자리다(어휘가 깨져 런 전체가 exit 1 로 죽는 것은 별개다).
+다만 추출단(`tagging/extract.py`)이 역할을 어휘 허용집합으로 이미 거르므로 현행
+생산자로는 도달하지 않는다.
 
 **멱등**: 논리 자연키 = `uq_document_assertion_natural (document_id, event_type_code,
 predicate_code)` 에 ON CONFLICT DO NOTHING(원자적 — #130 교훈). 신규면 그 자연키에서
@@ -215,9 +218,9 @@ def run(
                     role_code = argument.get("role_code")
                     if not role_code:
                         # 여기서 `or "ISSUER"` 로 채우던 자리다(ALPHA-802). 지어낸 역할은
-                        # 적재 후 모델이 뽑은 값과 구분이 안 된다 — 같은 계보의
-                        # `predicate_code` 는 기본값을 쓰되 `predicate_source` 로 출처를
-                        # 남기는데 역할엔 그 칸이 없다. 채우지 말고 탈락시킨다.
+                        # 적재 후 모델이 뽑은 값과 구분이 안 된다 — 출처 컬럼이 없고,
+                        # 아래 setdefault 가 같은 엔티티의 진짜 ISSUER 와 한 행으로 접는다.
+                        # 채우지 말고 탈락시킨다(모듈 독스트링).
                         args_role_missing += 1
                         continue
                     role_code = str(role_code)
