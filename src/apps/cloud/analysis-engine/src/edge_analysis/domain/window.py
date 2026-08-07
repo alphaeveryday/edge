@@ -154,3 +154,98 @@ class AnalysisReason:
             raise ValueError("reason code는 UPPER_SNAKE_CASE여야 한다")
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "message", _text(self.message, "message"))
+
+
+class WindowAggregationError(ValueError):
+    """1분 입력이 완전한 공통 시간축을 만들 수 없을 때의 구조화 오류."""
+
+    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+        self.reason = AnalysisReason(code, message, retryable)
+        super().__init__(f"{self.reason.code}: {self.reason.message}")
+
+
+def aggregate_window(
+    spec: WindowSpec, minute_bars: tuple[MinuteBar, ...],
+) -> tuple[AggregatedBar, ...]:
+    """공통 1분축을 완전 5분봉과 마지막 부분 봉으로 집계한다.
+
+    구성 unit 하나라도 중간 minute가 빠지면 전체를 거부한다. 서로 다른 길이의 계열을
+    같은 팩터 시점으로 맞추면 결손이 0수익처럼 들어가므로 부분 성공을 만들지 않는다.
+    """
+    if not minute_bars:
+        raise WindowAggregationError("EMPTY_MINUTE_BARS", "분석창 1분봉이 비었다")
+
+    indexed: dict[tuple[datetime, str], MinuteBar] = {}
+    unit_ids: set[str] = set()
+    sources_by_minute: dict[datetime, CommittedMinuteWindow] = {}
+    for bar in minute_bars:
+        source = bar.source
+        if source.session_id != spec.session_id:
+            raise WindowAggregationError(
+                "MINUTE_SESSION_MISMATCH",
+                f"{bar.unit_id} {source.start.isoformat()} session={source.session_id}")
+        if not spec.start <= source.start < spec.end:
+            raise WindowAggregationError(
+                "MINUTE_OUT_OF_WINDOW",
+                f"{bar.unit_id} {source.start.isoformat()} not in "
+                f"[{spec.start.isoformat()}, {spec.end.isoformat()})")
+        key = (source.start, bar.unit_id)
+        if key in indexed:
+            raise WindowAggregationError(
+                "DUPLICATE_MINUTE_BAR", f"{bar.unit_id} {source.start.isoformat()}")
+        prior_source = sources_by_minute.get(source.start)
+        if prior_source is not None and prior_source != source:
+            raise WindowAggregationError(
+                "MINUTE_SOURCE_MISMATCH",
+                f"{source.start.isoformat()}에 서로 다른 generation/checksum")
+        indexed[key] = bar
+        unit_ids.add(bar.unit_id)
+        sources_by_minute[source.start] = source
+
+    expected_minutes: list[datetime] = []
+    cursor = spec.start
+    while cursor < spec.end:
+        expected_minutes.append(cursor)
+        cursor += timedelta(minutes=1)
+    missing = [
+        (minute, unit_id)
+        for minute in expected_minutes
+        for unit_id in sorted(unit_ids)
+        if (minute, unit_id) not in indexed
+    ]
+    if missing:
+        sample = ",".join(
+            f"{unit_id}@{minute.strftime('%H:%M')}" for minute, unit_id in missing[:5])
+        raise WindowAggregationError(
+            "MISSING_MINUTE_BAR", f"count={len(missing)} sample={sample}")
+
+    out: list[AggregatedBar] = []
+    bucket_start = spec.start
+    while bucket_start < spec.end:
+        bucket_end = min(bucket_start + timedelta(minutes=5), spec.end)
+        minutes = []
+        cursor = bucket_start
+        while cursor < bucket_end:
+            minutes.append(cursor)
+            cursor += timedelta(minutes=1)
+        for unit_id in sorted(unit_ids):
+            bars = [indexed[(minute, unit_id)] for minute in minutes]
+            try:
+                out.append(AggregatedBar(
+                    unit_id=unit_id,
+                    start=bucket_start,
+                    end=bucket_end,
+                    observed_minutes=len(minutes),
+                    open=bars[0].open,
+                    high=max(bar.high for bar in bars),
+                    low=min(bar.low for bar in bars),
+                    close=bars[-1].close,
+                    volume=sum((bar.volume for bar in bars), Decimal("0")),
+                    sources=tuple(bar.source for bar in bars),
+                ))
+            except ValueError as error:
+                raise WindowAggregationError(
+                    "AGGREGATED_BAR_INVALID",
+                    f"{unit_id} {bucket_start.isoformat()} — {error}") from error
+        bucket_start = bucket_end
+    return tuple(out)

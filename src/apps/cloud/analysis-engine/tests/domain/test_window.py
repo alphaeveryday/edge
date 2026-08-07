@@ -8,7 +8,9 @@ from edge_analysis.domain.window import (
     AnalysisReason,
     CommittedMinuteWindow,
     MinuteBar,
+    WindowAggregationError,
     WindowSpec,
+    aggregate_window,
 )
 
 KST = timezone(timedelta(hours=9))
@@ -141,3 +143,93 @@ def test_analysis_reason_is_machine_readable_and_human_readable():
         AnalysisReason("window-correcting", "대기")
     with pytest.raises(ValueError, match="message"):
         AnalysisReason("WINDOW_CORRECTING", " ")
+
+
+def minute_bar(minute: int, unit_id: str = "A", *, session: str = "session-1",
+               checksum: str = "a" * 64) -> MinuteBar:
+    start = at(9, minute)
+    source = CommittedMinuteWindow(
+        session, start, start + timedelta(minutes=1), 1, checksum)
+    price = Decimal(100 + minute)
+    return MinuteBar(
+        source, unit_id, price, price + 2, price - 1, price + 1, Decimal(minute + 1))
+
+
+def window(end_minute: int) -> WindowSpec:
+    return WindowSpec("KR", "session-1", DAY, at(9, 0), at(9, end_minute))
+
+
+def test_aggregate_window_builds_complete_five_minute_ohlcv():
+    [bar] = aggregate_window(window(5), tuple(minute_bar(m) for m in range(5)))
+
+    assert (bar.start, bar.end, bar.observed_minutes) == (at(9, 0), at(9, 5), 5)
+    assert (bar.open, bar.high, bar.low, bar.close, bar.volume) == (
+        Decimal("100"), Decimal("106"), Decimal("99"), Decimal("105"), Decimal("15"))
+    assert [source.start.minute for source in bar.sources] == [0, 1, 2, 3, 4]
+
+
+def test_aggregate_window_keeps_the_last_partial_bar():
+    bars = aggregate_window(window(7), tuple(minute_bar(m) for m in range(7)))
+
+    assert [(bar.start.minute, bar.end.minute, bar.observed_minutes) for bar in bars] == [
+        (0, 5, 5), (5, 7, 2)]
+    assert bars[-1].open == Decimal("105")
+    assert bars[-1].close == Decimal("107")
+    assert bars[-1].volume == Decimal("13")
+
+
+def test_aggregate_window_uses_one_common_axis_for_every_unit():
+    inputs = tuple(
+        minute_bar(minute, unit)
+        for minute in range(5)
+        for unit in ("B", "A")
+    )
+
+    bars = aggregate_window(window(5), inputs)
+
+    assert [bar.unit_id for bar in bars] == ["A", "B"]
+    assert all(bar.observed_minutes == 5 for bar in bars)
+
+
+def test_aggregate_window_rejects_missing_or_drifting_units():
+    missing = tuple(minute_bar(m) for m in (0, 1, 3, 4))
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(5), missing)
+    assert caught.value.reason.code == "MISSING_MINUTE_BAR"
+    assert "A@09:02" in caught.value.reason.message
+
+    drift = tuple(minute_bar(m, "A") for m in range(5)) + tuple(
+        minute_bar(m, "B") for m in range(1, 5))
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(5), drift)
+    assert caught.value.reason.code == "MISSING_MINUTE_BAR"
+    assert "B@09:00" in caught.value.reason.message
+
+
+def test_aggregate_window_rejects_duplicate_and_source_mismatch():
+    duplicate = (minute_bar(0), minute_bar(0))
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(1), duplicate)
+    assert caught.value.reason.code == "DUPLICATE_MINUTE_BAR"
+
+    different_source = (
+        minute_bar(0, "A", checksum="a" * 64),
+        minute_bar(0, "B", checksum="b" * 64),
+    )
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(1), different_source)
+    assert caught.value.reason.code == "MINUTE_SOURCE_MISMATCH"
+
+
+def test_aggregate_window_rejects_empty_foreign_session_or_out_of_range():
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(1), ())
+    assert caught.value.reason.code == "EMPTY_MINUTE_BARS"
+
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(1), (minute_bar(0, session="foreign"),))
+    assert caught.value.reason.code == "MINUTE_SESSION_MISMATCH"
+
+    with pytest.raises(WindowAggregationError) as caught:
+        aggregate_window(window(1), (minute_bar(1),))
+    assert caught.value.reason.code == "MINUTE_OUT_OF_WINDOW"
