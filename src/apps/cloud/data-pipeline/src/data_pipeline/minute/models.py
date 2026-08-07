@@ -252,11 +252,19 @@ def plan_session_windows(
 
 
 class Universe(BaseModel):
-    """ETF + 고유 구성종목 universe. version 은 session 의 고정 속성이다(계획 §7)."""
+    """ETF + 고유 구성종목 universe. version 은 session 의 고정 속성이다(계획 §7).
+
+    **수집 축과 판정 축은 같지 않다.** `unit_ids`(수집)는 세 목록의 합이지만 `etf_ids`
+    만이 판정 대상이다 — `price_consumer` 가 `etf_ids` 를 그대로 트리거 판정 집합으로
+    받아(`price_worker_cli`→`PriceTriggerHandler.etf_ids`) 임계 초과분을 발화시키고,
+    `needs_open` 도 이 집합으로 전일 종가 결손을 센다. 그래서 "봉만 받고 싶은" 계열을
+    `etf_ids` 에 얹으면 조용히 발화 대상·기준선 대상이 된다.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     universe_version: NonBlankStr
+    # **판정 대상 ETF.** 여기 있는 것은 전부 트리거 판정을 받는다(위 도크스트링).
     etf_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
     constituent_ids: Annotated[tuple[NonBlankStr, ...], Field(min_length=1)]
     # 08:00–20:00 을 거래하는 unit (NXT 시간외). 나머지는 09:00–15:30 이다. 비어 있으면
@@ -264,26 +272,40 @@ class Universe(BaseModel):
     # 잘못 넣으면 그 종목의 시간외 window 가 영구 INCOMPLETE 이고, 빠뜨리면 그 종목의
     # 시간외 분이 조용히 관측되지 않는다.
     extended_hours_ids: tuple[NonBlankStr, ...] = ()
+    # **참조 계열 ETF — 봉만 받고 판정은 안 한다.** 층 분해의 섹터 후보처럼 남을 설명하는
+    # 대조축으로만 쓰이는 계열이다. `etf_ids` 에 넣으면 안 되는 이유가 둘 있다:
+    #   ① 트리거 — 레버리지·인버스가 임계를 넘겨 구성종목 없는 상품의 설명이 발화된다.
+    #   ② 기준선 — 일봉 유니버스(holdings 파생) 밖이라 `price_daily` 행이 영영 없고,
+    #      `needs_open` 이 상시 비지 않아 매 세션 시가 폴백이 걸린다(정상 세션에서
+    #      첫 window 미커밋이 판정을 막지 않게 한 설계가 되돌려진다).
+    sector_etf_ids: tuple[NonBlankStr, ...] = ()
 
     @model_validator(mode="after")
     def _validate(self) -> Universe:
         etfs, constituents = set(self.etf_ids), set(self.constituent_ids)
-        if len(etfs) != len(self.etf_ids) or len(constituents) != len(self.constituent_ids):
+        sectors = set(self.sector_etf_ids)
+        if (len(etfs) != len(self.etf_ids) or len(constituents) != len(self.constituent_ids)
+                or len(sectors) != len(self.sector_etf_ids)):
             raise ValueError("universe 내부에 중복 ID 가 있다")
         if etfs & constituents:
             raise ValueError(f"ETF/구성종목 ID 가 겹친다: {sorted(etfs & constituents)[:5]}")
+        # 참조 계열이 판정 축에도 있으면 "판정 안 한다"가 거짓이 되고, `unit_ids` 에 같은
+        # 종목이 두 번 실려 완전성 판정의 기대 개수가 어긋난다 — 겹치면 거부한다.
+        if overlap := sectors & (etfs | constituents):
+            raise ValueError(f"참조 계열 ID 가 판정·구성종목 축과 겹친다: {sorted(overlap)[:5]}")
         extended = set(self.extended_hours_ids)
         if len(extended) != len(self.extended_hours_ids):
             raise ValueError("extended_hours_ids 에 중복 ID 가 있다")
         # universe 밖 ID 는 아무 window 에서도 수집되지 않는다 — 오타를 조용히 넘기면
         # 그 종목이 시간외에 안 잡히는 이유를 아무도 못 찾는다
-        if unknown := extended - (etfs | constituents):
+        if unknown := extended - (etfs | constituents | sectors):
             raise ValueError(f"extended_hours_ids 가 universe 밖 ID 를 담았다: {sorted(unknown)[:5]}")
         return self
 
     @property
     def unit_ids(self) -> tuple[str, ...]:
-        return self.etf_ids + self.constituent_ids
+        """**수집** 대상 전량. 판정 대상은 `etf_ids` 뿐이다(클래스 도크스트링)."""
+        return self.etf_ids + self.constituent_ids + self.sector_etf_ids
 
     def units_at(self, window_start: datetime) -> tuple[str, ...]:
         """그 window 에 캔들이 존재해야 하는 unit — 완전성 판정의 기대 집합이다.
@@ -322,11 +344,18 @@ class Universe(BaseModel):
         단 **선언이 없으면 축 자체를 넣지 않는다** — identity 는 "이 universe 가 뜻하는
         기대"이고, 시간외 종목이 없는 universe 의 기대는 이 축이 생기기 전과 같다.
         빈 목록을 넣으면 구성이 똑같은 기존 session 이 배포만으로 다른 hash 가 돼
-        UniverseConflictError 로 그날 재계획·재기동이 통째로 막힌다.
+        UniverseConflictError 로 그날 재계획·재기동이 통째로 막힌다. 참조 계열도 같다.
+
+        두 선택 축이 위치로만 구분되는데도 모호하지 않은 이유: `_validate` 가 extended 를
+        **멤버**로, 참조 계열을 **비멤버**로 강제하므로 같은 값이 두 축에 설 수 없다.
+        (그 결합을 끊으려면 — 예컨대 참조 계열도 멤버로 받게 바꾸면 — 여기에 축 이름을
+        같이 실어야 한다. 지금 넣으면 반증할 수 없는 방어다.)
         """
         parts = [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
         if self.extended_hours_ids:
             parts.append(sorted(self.extended_hours_ids))
+        if self.sector_etf_ids:
+            parts.append(sorted(self.sector_etf_ids))
         return content_checksum(parts)
 
 

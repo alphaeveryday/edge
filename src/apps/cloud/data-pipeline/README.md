@@ -1152,7 +1152,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # universe.json 생성(1분 파이프라인, ALPHA-735) — canonical KR holdings 의 **ETF 별 최신
 # 스냅샷 합집합**(ALPHA-590 규칙)에서 만든다. 손으로 유지하는 목록은 ETF 편입·제외 때마다
 # 조용히 어긋난다. 여기에 config `[minute_universe].sector_etf_ids`(층 분해의 섹터 후보
-# ETF)를 합집합으로 얹는다 — 그 ETF 들은 자기 분봉만 필요해 holdings 에 자기 행이 없다.
+# ETF)를 **참조 계열 축**(`Universe.sector_etf_ids`)으로 얹는다 — 봉만 받고 트리거 판정은
+# 안 받는 계열이다(`etf_ids` 는 price-consumer 의 판정 집합이라 거기 얹으면 발화 대상이 된다).
 # ⚠️ **업로드는 하지 않는다** — universe 는 세션 identity(universe_hash)
 # 축이라, 확인 후 사람이 반영한다(그날 계획이 바뀐다). `--out` 없으면 stdout.
 AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \

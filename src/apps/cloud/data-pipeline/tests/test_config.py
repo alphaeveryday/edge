@@ -293,24 +293,42 @@ def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path)
     RelayConfig(relay_id="r", queue_urls=dict(settings.minute_relay.queue_urls))
 
 
-def test_sector_etf_typo_fails_loud(tmp_path):
-    # WHY: 오타는 조용히 통과하면 universe.json 에 실려 매분 missing 으로 잡히고 그 window 가
-    #      영구 INCOMPLETE 로 남는다 — 고칠 것은 코드 한 글자인데 원인이 400종 결측 뒤에
-    #      숨는다. KRX 단축코드 형태(선두 숫자 + 영숫자 6자)로 로드 시점에 건다.
-    bad = VALID + """
+@pytest.mark.parametrize("value", ["KODEX은행", "ABCDEF", "09117", "09 170"])
+def test_sector_etf_bad_shape_fails_loud(tmp_path, value):
+    # WHY: 형태가 아닌 값이 통과하면 universe.json 에 실려 매분 missing 으로 잡히고 그
+    #      window 가 영구 INCOMPLETE 로 남는다. 판정은 `krx_short_code` 하나로 간다 —
+    #      길이 검사로 대신하면 `ABCDEF` 같은 6자 US 심볼과 6자 한글이 그대로 통과해
+    #      KIS(국내 전용)에 엉뚱한 질의가 나간다. 그래서 6자 위반 값을 함께 넣는다.
+    #      (자릿수를 바꿔 적은 오타는 여기서 못 잡는다 — 형태는 맞기 때문이다.
+    #       그건 첫 런 manifest 의 missing 으로 드러나고, 그 한계는 모델 주석에 있다.)
+    bad = VALID + f"""
 [minute_universe]
-sector_etf_ids = ["091170", "KODEX은행"]
+sector_etf_ids = ["091170", "{value}"]
 """
     with pytest.raises(ConfigError):
         load_settings(_write(tmp_path, bad))
 
 
 def test_sector_etf_duplicate_fails_loud(tmp_path):
-    # WHY: 중복은 `Universe` 가 거부한다(멤버십 identity 축). 여기서 안 막으면 build 스크립트가
-    #      돌아야 드러나고, 그때는 이미 운영자가 S3 를 갈아끼우려는 시점이다.
+    # WHY: 여기가 **중복이 드러나는 유일한 자리**다 — 빌더는 집합 연산이라
+    #      (`sorted(set(sector_etf_ids))`) 중복을 조용히 삼키고 `Universe` 는 애초에
+    #      한 벌만 본다. 중복 한 줄은 대개 "다른 코드를 적으려다 덮어썼다"의 흔적이라,
+    #      삼켜지면 의도한 종목 하나가 아무 신호 없이 유니버스에서 사라진다.
     bad = VALID + """
 [minute_universe]
 sector_etf_ids = ["091170", "091170"]
+"""
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_etf_unknown_key_fails_loud(tmp_path):
+    # WHY: `extra="forbid"` 가 없으면 키 오타(sector_etf_id)가 조용히 로드되고
+    #      sector_etf_ids 는 빈 튜플이 된다 — 48종이 통째로 사라진 채 초록으로 돈다.
+    #      값 오타는 위에서 막는데 키 오타를 안 막으면 같은 결과에 신호만 없다.
+    bad = VALID + """
+[minute_universe]
+sector_etf_id = ["091170"]
 """
     with pytest.raises(ConfigError):
         load_settings(_write(tmp_path, bad))
