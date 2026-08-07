@@ -237,8 +237,9 @@ def run(
                     entity_id, reason = resolve(index, argument.get("text"))
                     if kind == "entity":
                         # 해소율 분모는 **실체 역할만** 센다. non_entity(TIME·VALUE·TEXT)는
-                        # 온톨로지가 "적재하지 않는다"고 정한 자리라, 미해소로 세면 분모가
-                        # 부풀어 뒤따르는 마스터 확대의 효과를 잴 수 없다.
+                        # 애초에 실체를 가리키지 않는 자리라, 미해소로 세면 분모가 부풀어
+                        # 뒤따르는 마스터 확대의 효과를 잴 수 없다. ⚠️ 온톨로지가 "적재하지
+                        # 않는다"고 정한 대상은 `event_argument` 다 — 여기선 분모에서만 뺀다.
                         args_total += 1
                         args_by_reason[reason] = args_by_reason.get(reason, 0) + 1
                         if entity_id is None:
@@ -248,7 +249,7 @@ def run(
                                 unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
                     elif kind == "non_entity" and entity_id is not None:
                         # 비실체 자리인데 인덱스에 걸렸다. **지금은 그대로 적재한다** —
-                        # 이 티켓은 계측만 바꾸고 적재는 건드리지 않는다. 이 수가 곧 역할별
+                        # 이 자리의 적재는 이 티켓이 건드리지 않는다. 이 수가 곧 역할별
                         # 해소 분기(ALPHA-831)가 걷어낼 적재량이다. ⚠️ 어휘 밖은 여기 안
                         # 넣는다 — 섞으면 ALPHA-831 이 걷어낼 근거가 없는 행까지 세게 된다.
                         non_entity_resolved += 1

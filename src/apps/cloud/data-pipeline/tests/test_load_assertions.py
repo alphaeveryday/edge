@@ -359,9 +359,9 @@ def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch,
     """어휘 밖 역할은 **이름까지** 남긴다(ALPHA-802).
 
     WHY: 어휘 밖은 추출단과 온톨로지가 갈렸다는 신호인데, 이 자리는 전부 분모 밖으로
-    빠지므로 드리프트가 커질수록 해소율이 **조용히 좋아 보인다**. 개수만 세면 어느
-    역할이 샜는지 몰라 고칠 수가 없다 — top_unresolved 를 20개로 자르던 것과 같은
-    실패 양식이다(Rule 12).
+    빠져 **해소율을 대표성 없는 수로 만든다**(어느 방향으로 틀리는지는 로그로 알 수
+    없다 — 근거는 로더의 경고 블록 주석). 개수만 세면 어느 역할이 샜는지 몰라 고칠 수가
+    없다 — top_unresolved 를 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
 
     어휘 밖이 `non_entity_resolved` 에 섞이지 않는 것도 함께 고정한다. 그 수는 역할별
     해소 분기(ALPHA-831)가 **걷어낼 적재량**의 근거인데, 어휘 밖은 걷어낼 계약이 없는
@@ -381,7 +381,9 @@ def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch,
     res = _log(storage)["argument_resolution"]
     assert res["role_kinds"] == {"entity": 1, "non_entity": 0, "out_of_vocabulary": 1}
     assert res["out_of_vocabulary_roles"] == {"NOT_A_ROLE": 1}
-    # 분모는 실체 역할만이라 어휘 밖이 새도 rate 는 떨어지지 않는다 — 그래서 이름이 필요하다
+    # 어휘 밖은 분모 밖이라 이 픽스처에선 rate 가 1.0 그대로다 — 드리프트가 rate 에
+    # 안 나타나는 자리가 있다는 뜻이고, 그래서 개수가 아니라 **이름**이 필요하다.
+    # (일반적으로 어느 방향으로 틀리는지는 정해져 있지 않다 — 로더의 경고 블록 주석)
     assert res["total"] == 1 and res["rate"] == 1.0
     # 적재는 그대로 되지만(2행) ALPHA-831 이 걷어낼 몫에는 안 들어간다
     assert len(_inserts(conn, "assertion_argument")) == 2
@@ -395,7 +397,7 @@ def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch,
     assert "NOT_A_ROLE" in warned
 
 
-def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch):
+def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch, caplog):
     """역할이 비면 채우지 않고 탈락시킨다(ALPHA-802).
 
     WHY: `role_code or "ISSUER"` 는 해소되는 텍스트를 만나면 **없던 역할을 만들어**
@@ -410,7 +412,9 @@ def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch):
     conn = _FakeConn(documents=[("a1", "doc_D1")])
     _setup(monkeypatch, conn)
 
-    assert load_assertions.run(storage, "R1", db=_db()) == 0
+    import logging
+    with caplog.at_level(logging.WARNING, logger=load_assertions.logger.name):
+        assert load_assertions.run(storage, "R1", db=_db()) == 0
 
     # 텍스트는 해소되는 값이다 — 폴백이 살아 있으면 여기서 ISSUER 행이 실린다
     assert _inserts(conn, "assertion_argument") == []
@@ -418,14 +422,19 @@ def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch):
     log = _log(storage)
     assert log["argument_resolution"]["role_missing"] == 1
     assert log["skipped_no_resolved_argument"] == 1
+    # 이 스텝에서 **적재 행 집합이 달라지는 유일한 경로**다. 그 사실이 런 로그에도
+    # 떠야 한다 — 이 단언이 없으면 WARNING 을 통째로 지워도 스위트가 초록이다(Rule 12)
+    [warned] = [r.getMessage() for r in caplog.records
+                if r.levelno >= logging.WARNING and r.name == load_assertions.logger.name]
+    assert "1건" in warned
 
 
 def test_non_entity_that_resolves_still_loads_and_is_counted_apart(tmp_path, monkeypatch):
     """비실체 자리가 인덱스에 걸리면 **적재는 그대로 되고** 별도 카운터로 보인다.
 
-    WHY: 이 티켓은 계측만 바꾼다 — 여기서 적재까지 걷어내면 "카운터만 바꿨다"는 PR 의
-    주장이 거짓이 되고, 회수율 변화에 적재 변화가 섞여 ALPHA-830 의 효과를 못 잰다.
-    이 수가 곧 역할별 해소 분기(ALPHA-831)가 걷어낼 몫이라 따로 보여야 한다.
+    WHY: 이 자리의 적재는 이 티켓이 건드리지 않는다 — 여기서 걷어내면 회수율 변화에
+    적재 변화가 섞여 ALPHA-830 의 효과를 못 잰다. 이 수가 곧 역할별 해소 분기
+    (ALPHA-831)가 걷어낼 몫이라 따로 보여야 한다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
