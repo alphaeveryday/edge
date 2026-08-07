@@ -66,6 +66,11 @@ _COUNTRY_BY_MARKET = {"KR": "KR"}
 # 프로필에 시장 코드가 없어(KIS `mket_id_cd` 는 null 실측) 여기서 정한다.
 _MIC_BY_MARKET = {"KR": "XKRX"}
 
+# 로그에 남길 생성 행 표본 상한. 전종목 확대 첫 런은 ~2,500종을 만드는데(ALPHA-830) 전량을
+# 실으면 품질 로그 하나가 수백 KB 가 된다. 표본은 "무엇이 만들어졌나"를 눈으로 확인하는
+# 용도고 전수는 DB 가 갖고 있다 — 개수(`created`)는 상한과 무관하게 정확하다.
+_CREATED_SAMPLE_LIMIT = 200
+
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
@@ -133,7 +138,10 @@ def _insert_equity(conn, *, name: str, mic: str, ticker: str, currency: str, iss
             " currency_code) VALUES (%s, %s, %s, 'EQUITY', %s)",
             (instrument_id, mic, ticker, currency),
         )
-        # 수집 유니버스에 우선주가 없어 전부 보통주다(우선주는 별도 instrument 가 된다).
+        # 전부 보통주다 — 두 입력 모두 보통주만 여기까지 온다. 구성종목은 ETF 유니버스에
+        # 우선주가 없어서, 전종목은 **호출부가 `share_class != "보통주"` 를 걸러서**다
+        # (ALPHA-830). 그 필터가 없으면 `CJ우` 가 COMMON 으로 실려, 회사명 키를 COMMON 에만
+        # 거는 엔티티 해소가 우선주 약명을 회사 이름으로 등록한다.
         cur.execute(
             "INSERT INTO equity_profile (instrument_id, issuer_actor_id, share_class_code)"
             " VALUES (%s, %s, 'COMMON')",
@@ -211,7 +219,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = 0
-    instruments_read = 0
+    instruments_read = profiles_no_mic = skipped_non_common = 0
+    mic_conflicts: list[dict] = []
     etfs_read = etfs_existing = etfs_created = 0
     created_rows: list[dict] = []
     failures: list[dict] = []
@@ -249,16 +258,52 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         # 이름이 남아 이 변경의 증분이 0 이 된다. 2026-08-06 실측상 겹치는 869종의 이름이
         # **전건 동일**해서 오늘은 선택이 무의미하지만, 나중에 갈릴 때 조용히 뒤집히지
         # 않도록 순서를 고정하고 테스트로 못박는다.
+        mic_by_ticker = {t: m for (m, t) in all_rows}  # 구성종목이 말한 시장(불일치 검출용)
         for profile in _latest_instrument_profile_rows(storage, market):
             instruments_read += 1
             mic, ticker = profile.get("market_code"), profile.get("ticker")
             if not mic or not ticker:
-                # 정제단이 이미 걸렀어야 하는 행 — 구성종목의 MIC 결측과 같은 축으로 센다.
-                skipped_no_mic += 1
+                # 정제단이 이미 걸렀어야 하는 행. 구성종목의 원화현금(MIC 없음)과 **사유가
+                # 다르므로** 카운터를 따로 둔다 — 저쪽은 매 런 정상적으로 나오는 값이라
+                # 합치면 이쪽의 이상을 원장이 못 본다.
+                profiles_no_mic += 1
                 continue
+
+            # **보통주만 마스터에 세운다**(ALPHA-830). `stk_isu_base_info` 는 상장 *종목*
+            # 서비스라 우선주까지 준다 — 실측 2,872종 중 113종(구형우선주 78·신형 23·
+            # 종류주권 12). 그대로 넣으면 (1) `CJ우`·`SK우` 같은 **존재하지 않는 회사**가
+            # actor 로 서고 (2) `equity_profile.share_class_code` 가 전부 COMMON 이라
+            # 엔티티 해소가 그 이름을 **회사명 키로** 등록해(`entity_resolution` 이 COMMON
+            # 에만 회사명 키를 건다) "회사명 → 그 회사 보통주" 약속이 깨진다.
+            # 우선주를 제대로 세우려면 발행사 actor 로 이어야 하는데 그건 별건이다.
+            if profile.get("share_class") != "보통주":
+                skipped_non_common += 1
+                continue
+
+            # 두 입력이 같은 티커를 **다른 시장**으로 말하면 키가 갈려 같은 종목이 두 번
+            # 선다(자연키가 (market_code, ticker)). 이전상장(코스닥→유가)이 실제 경로다:
+            # 구성종목은 마지막 ETF 스냅샷의 옛 시장을, 전종목은 새 시장을 말한다.
+            # 조용히 둘 다 만들면 해소기가 그 티커를 ambiguous 로 보고 **영구 미해소**가
+            # 된다 — 이 티켓이 없애려던 바로 그 결과다. 이름을 남기고 전종목 쪽을 버린다
+            # (구성종목이 이기는 규칙과 같은 방향).
+            prior_mic = mic_by_ticker.get(ticker)
+            if prior_mic and prior_mic != mic:
+                mic_conflicts.append({"ticker": ticker, "holdings_mic": prior_mic,
+                                      "profile_mic": mic})
+                continue
+
             # 구성종목 행과 같은 키 모양으로 맞춰 아래 소비 루프를 그대로 쓴다. 통화는
             # 소비부가 `or "KRW"` 로 받으므로 싣지 않는다(KR 상장분은 전부 원화).
             all_rows.setdefault((mic, ticker), {"constituent_name": profile.get("display_name")})
+
+        # 전종목 입력을 **읽었는데 한 건도 못 쓴** 상태는 조용한 0건이다(Rule 12). 실제
+        # 경로가 있다: 이 컬럼(market_code)이 생기기 전에 쓰인 canonical 파티션을 읽으면
+        # 전 행이 MIC 결측으로 떨어지는데, 그때 exit 0 이면 마스터가 안 자란 채로 초록이다.
+        if instruments_read and instruments_read == profiles_no_mic:
+            failures.append({"market": market, "reasons": ["instrument_profile_all_dropped"],
+                             "error": f"전종목 {instruments_read}건이 전부 MIC 결측 — "
+                                      "정제 canonical 이 낡았는지 확인(normalize-instrument-profile)"})
+            exit_code = 1
 
         # ETF 마스터(ALPHA-462)는 구성종목과 **독립된 입력**(프로필 canonical)에서 온다 —
         # 구성종목이 비어도(수집 실패·신규 레이크) ETF 는 만들 수 있어야 한다. 둘 다 비었을
@@ -290,8 +335,10 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                         conn, name=name, mic=mic, ticker=ticker, currency=currency, issuer=actor_id
                     )
                     created += 1
-                    created_rows.append({"ticker": ticker, "market_code": mic, "name": name,
-                                         "actor_id": actor_id, "instrument_id": instrument_id})
+                    if len(created_rows) < _CREATED_SAMPLE_LIMIT:
+                        created_rows.append({"ticker": ticker, "market_code": mic,
+                                             "name": name, "actor_id": actor_id,
+                                             "instrument_id": instrument_id})
 
                 # ETF 자신의 마스터(ALPHA-462). 구성종목과 같은 트랜잭션에 둔다 — 둘 다
                 # 마스터라 반쪽 커밋이 나면 FK 로 얽힌 상태가 남는다.
@@ -333,16 +380,24 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "markets": list(LOADED_MARKETS),
-        "constituents_read": read, "instrument_profiles_read": instruments_read,
-        "skipped_no_mic": skipped_no_mic,
-        "already_present": existing, "created": created, "created_rows": created_rows,
+        "constituents_read": read, "skipped_no_mic": skipped_no_mic,
+        "instrument_profiles_read": instruments_read,
+        "instrument_profiles_no_mic": profiles_no_mic,
+        # 우선주 계열은 마스터에 세우지 않는다(정상값 — 실측 113/2,872).
+        "instrument_profiles_non_common": skipped_non_common,
+        # 0 이 정상이다. 0 이 아니면 두 입력이 같은 티커를 다른 시장으로 말한 것.
+        "mic_conflicts": mic_conflicts,
+        "already_present": existing, "created": created,
+        # ⚠️ 표본이다(상한 _CREATED_SAMPLE_LIMIT) — 전수는 `created` 가 센다.
+        "created_rows": created_rows, "created_rows_limit": _CREATED_SAMPLE_LIMIT,
         "etfs_read": etfs_read, "etfs_already_present": etfs_existing, "etfs_created": etfs_created,
         "failures": failures, "exit_code": exit_code,
         # 원장 관측용 공통 봉투(ALPHA-181). 마스터는 구성종목·ETF 두 축을 한 테이블에 적재하므로
         # 둘을 합친다. MIC 미해소(skipped_no_mic)는 그 종목이 마스터에 안 들어간 유실이다.
         "ops": {
             "records_out": existing + created + etfs_existing + etfs_created,
-            "failed_records": len(failures) + skipped_no_mic,
+            "failed_records": (len(failures) + skipped_no_mic + profiles_no_mic
+                               + len(mic_conflicts)),
         },
     }
     try:
@@ -353,9 +408,11 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         exit_code = 1
 
     logger.info(
-        "load_instruments: read=%d instrument_profiles=%d skipped_no_mic=%d already=%d "
-        "created=%d etfs_read=%d etfs_already=%d etfs_created=%d failures=%d",
-        read, instruments_read, skipped_no_mic, existing, created,
+        "load_instruments: read=%d profiles=%d(no_mic=%d non_common=%d conflict=%d) "
+        "skipped_no_mic=%d already=%d created=%d "
+        "etfs_read=%d etfs_already=%d etfs_created=%d failures=%d",
+        read, instruments_read, profiles_no_mic, skipped_non_common, len(mic_conflicts),
+        skipped_no_mic, existing, created,
         etfs_read, etfs_existing, etfs_created, len(failures),
     )
     return exit_code

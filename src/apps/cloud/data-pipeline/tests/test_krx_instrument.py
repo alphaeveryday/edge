@@ -526,3 +526,22 @@ def test_unknown_board_is_dropped_with_a_reason(tmp_path, monkeypatch):
     assert log["dropped_by_reason"]["unknown_board"] == 1
     assert log["rows_written"] == 9
     assert "000000" not in {r["ticker"] for r in _canonical_rows(storage)}
+
+
+def test_canonical_preserves_the_share_class_verbatim(tmp_path, monkeypatch):
+    """canonical 은 주식종류를 **벤더가 준 대로** 싣는다(ALPHA-829/830).
+
+    WHY: canonical 은 상장 종목을 전부 보존하고, 무엇을 마스터에 세울지는 소비자가 정한다.
+    그 판단의 유일한 근거가 이 필드다 — 여기서 상수로 뭉개거나 빠뜨리면 마스터 로더가
+    우선주를 보통주로 세우고, 존재하지 않는 회사 113개(실측)가 actor 로 선다.
+    """
+    boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
+    boards["stk"][0] = _row("005930", "삼성전자")
+    boards["stk"][1] = _row("005935", "삼성전자우", KIND_STKCERT_TP_NM="구형우선주")
+    boards["stk"][2] = _row("03473K", "SK우", KIND_STKCERT_TP_NM="종류주권")
+    _, storage = _ingest(tmp_path, boards)
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    by_ticker = {r["ticker"]: r for r in _canonical_rows(storage)}
+    assert by_ticker["005930"]["share_class"] == "보통주"
+    assert by_ticker["005935"]["share_class"] == "구형우선주"
+    assert by_ticker["03473K"]["share_class"] == "종류주권"

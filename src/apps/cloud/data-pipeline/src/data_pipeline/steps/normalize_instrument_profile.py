@@ -41,7 +41,8 @@ DATASET = "instrument_profile"
 
 _CANONICAL_COLUMNS = (
     "market", "as_of_date", "ticker", "market_code", "isin", "display_name", "legal_name",
-    "english_name", "board", "security_group", "listed_date", "listed_shares",
+    "english_name", "board", "security_group", "share_class", "listed_date",
+    "listed_shares",
     "fetched_at",
 )
 
@@ -108,7 +109,7 @@ def normalize_row(raw: dict) -> tuple[dict | None, str | None]:
         # 표시명이 없으면 이 데이터셋의 존재 이유가 사라진다(엔티티 해소가 붙을 키가 없다).
         return None, "missing_display_name"
     market = _text(raw.get("market")) or "KR"
-    board = _text(raw.get("board")) or _text(raw.get("MKT_TP_NM"))
+    board = _text(raw.get("board"))
     market_code = KR_MIC_BY_BOARD.get(board or "")
     if not market_code:
         # MIC 없이는 instrument 가 될 수 없다(`instrument.market_code NOT NULL`). 조용히
@@ -129,6 +130,10 @@ def normalize_row(raw: dict) -> tuple[dict | None, str | None]:
         "english_name": _text(raw.get("ISU_ENG_NM")),
         "board": board,
         "security_group": _text(raw.get("SECUGRP_NM")),
+        # 주식종류(보통주·구형우선주·신형우선주·종류주권). canonical 은 상장 **종목**을
+        # 전부 보존하고, 무엇을 마스터에 세울지는 소비자가 정한다 — 실측 2,872종 중
+        # 113종이 우선주 계열이다(ALPHA-830).
+        "share_class": _text(raw.get("KIND_STKCERT_TP_NM")),
         "listed_date": _text(raw.get("LIST_DD")),
         "listed_shares": _text(raw.get("LIST_SHRS")),
         "fetched_at": _text(raw.get("fetched_at")),

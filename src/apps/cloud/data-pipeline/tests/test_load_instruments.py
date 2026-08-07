@@ -362,9 +362,10 @@ def test_최신_기준일_스냅샷만_읽는다(tmp_path, monkeypatch):
 # 상장 전종목의 12%). 뉴스는 ETF 밖 회사도 똑같이 다루므로, 마스터에 없는 회사는 assertion
 # argument 가 붙을 대상 행 자체가 없어 **구조적으로 미해소**다.
 
-_INSTRUMENT_PROFILE_COLUMNS = ("market", "as_of_date", "ticker", "market_code", "isin", "display_name",
-                    "legal_name", "english_name", "board", "security_group", "listed_date",
-                    "listed_shares", "fetched_at")
+_INSTRUMENT_PROFILE_COLUMNS = (
+    "market", "as_of_date", "ticker", "market_code", "isin", "display_name", "legal_name",
+    "english_name", "board", "security_group", "share_class", "listed_date", "listed_shares",
+    "fetched_at")
 
 
 def _write_instrument_profile(storage, market: str, as_of: str, rows: list[dict]) -> None:
@@ -387,6 +388,7 @@ def _instrument_profile_row(ticker: str, name: str, mic: str = "XKRX", board: st
     row = {"market": "KR", "as_of_date": "2026-08-06", "ticker": ticker, "market_code": mic,
            "isin": f"KR7{ticker}00", "display_name": name, "legal_name": f"{name}보통주",
            "english_name": "X", "board": board, "security_group": "주권",
+           "share_class": "보통주",
            "listed_date": "2000/01/01", "listed_shares": "1000000",
            "fetched_at": "2026-08-07T00:00:00+00:00"}
     row.update(over)
@@ -479,18 +481,126 @@ def test_profile_row_without_mic_is_not_an_instrument(tmp_path, monkeypatch):
     """MIC 없는 전종목 행은 종목이 아니다 — 구성종목의 원화현금 처리와 같은 축.
 
     WHY: `instrument.market_code NOT NULL` 이라 넣으면 터진다. 조용히 건너뛰면 몇 종이
-    빠졌는지 아무도 모르므로 `skipped_no_mic` 로 센다(Rule 12).
+    빠졌는지 아무도 모르므로 센다(Rule 12).
+
+    ⭐**구성종목의 `skipped_no_mic` 과 다른 카운터**여야 한다. 저쪽은 원화현금 때문에 매 런
+    정상적으로 1 이상이라, 합치면 이쪽의 이상(정제 canonical 이 낡아 전 행이 떨어지는 것)이
+    정상값에 묻혀 원장에서 안 보인다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("069500", "KODEX200구성", mic="XKRX"),
+        _holding("KRD010010001", "원화현금", mic=None)])          # 구성종목 축의 정상 결측
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자"),
+        _instrument_profile_row("XXXXXX", "미상", mic=None)])     # 전종목 축의 이상
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    assert len(_inserts(conn, "instrument")) == 2                 # 069500 + 005930
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["skipped_no_mic"] == 1                 # 구성종목 축(원화현금)
+    assert log["instrument_profiles_no_mic"] == 1     # 전종목 축 — 합쳐지면 안 된다
+    assert log["instrument_profiles_read"] == 2
+
+
+def test_preferred_shares_do_not_become_phantom_companies(tmp_path, monkeypatch):
+    """우선주는 마스터에 세우지 않는다(ALPHA-830).
+
+    WHY: `stk_isu_base_info` 는 상장 **종목** 서비스라 우선주까지 준다 — 실측 2,872종 중
+    113종(구형우선주 78·신형 23·종류주권 12). 그대로 넣으면 두 가지가 깨진다:
+      1. `CJ우`·`SK우` 같은 **존재하지 않는 회사**가 actor 로 서고, corp_code 도 영영 안 붙는다
+      2. `equity_profile.share_class_code` 가 전부 COMMON 이라, 회사명 키를 COMMON 에만 거는
+         엔티티 해소(`entity_resolution`)가 **우선주 약명을 회사 이름으로 등록**한다 —
+         "회사명 → 그 회사 보통주" 약속이 깨진다
+    우선주를 제대로 세우려면 발행사 actor 로 이어야 하는데 그건 별건이다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_instrument_profile(storage, "KR", "2026-08-06", [
-        _instrument_profile_row("005930", "삼성전자"), _instrument_profile_row("XXXXXX", "미상", mic=None)])
+        _instrument_profile_row("005930", "삼성전자"),
+        _instrument_profile_row("005935", "삼성전자우", share_class="구형우선주"),
+        _instrument_profile_row("00104K", "CJ4우(전환)", share_class="신형우선주"),
+        _instrument_profile_row("03473K", "SK우", share_class="종류주권"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    tickers = [t for (_i, _m, t, _c) in _inserts(conn, "instrument")]
+    assert tickers == ["005930"]
+    assert len(_inserts(conn, "actor")) == 1        # 유령 회사 3개가 안 선다
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["instrument_profiles_non_common"] == 3
+
+
+def test_board_disagreement_between_inputs_does_not_duplicate_the_instrument(
+        tmp_path, monkeypatch):
+    """두 입력이 같은 티커를 다른 시장으로 말하면 **한 번만** 세우고 이름을 남긴다(ALPHA-830).
+
+    WHY: 이전상장(코스닥→유가)이 실제 경로다 — 구성종목 canonical 은 마지막 ETF 스냅샷의
+    옛 시장(XKOS)을, 전종목은 새 시장(XKRX)을 말한다. 자연키가 `(market_code, ticker)` 라
+    둘 다 만들면 **같은 종목이 두 instrument** 로 서고, 해소 인덱스가 그 티커를 ambiguous 로
+    보아 그 회사가 **영구 미해소**가 된다 — 이 티켓이 없애려던 바로 그 결과다.
+    개수만 세면 어느 종목인지 몰라 못 고치므로 이름을 남긴다(Rule 12).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("066970", "엘앤에프", mic="XKOS")])
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("066970", "엘앤에프", mic="XKRX", board="KOSPI")])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
 
     assert load_instruments.run(storage, "R1", db=_db()) == 0
 
     assert len(_inserts(conn, "instrument")) == 1
+    assert _inserts(conn, "instrument")[0][1] == "XKOS"      # 구성종목 쪽이 이긴다
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
-    assert log["skipped_no_mic"] == 1
-    assert log["instrument_profiles_read"] == 2
+    assert log["mic_conflicts"] == [
+        {"ticker": "066970", "holdings_mic": "XKOS", "profile_mic": "XKRX"}]
+
+
+def test_stale_profile_canonical_fails_loud_instead_of_loading_nothing(tmp_path, monkeypatch):
+    """전종목을 읽었는데 **한 건도 못 쓰면** 비0으로 끝난다(Rule 12).
+
+    WHY: 실제 경로가 있다 — `market_code` 컬럼이 생기기 전에 쓰인 canonical 파티션을 읽으면
+    전 행이 MIC 결측으로 떨어진다. 그때 exit 0 이면 마스터가 안 자란 채 SFN 이 초록이고,
+    "조용한 0건 금지"라는 이 스텝 자신의 계약이 깨진다. 정제를 다시 돌리라는 신호가 필요하다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자", mic=None),
+        _instrument_profile_row("000660", "SK하이닉스", mic=None)])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) != 0
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["failures"][0]["reasons"] == ["instrument_profile_all_dropped"]
+    assert "normalize-instrument-profile" in log["failures"][0]["error"]
+
+
+def test_only_the_latest_profile_partition_is_read(tmp_path, monkeypatch):
+    """전종목도 **최신 기준일 스냅샷만** 읽는다 — ETF 프로필과 같은 모델.
+
+    WHY: 과거 기준일까지 훑으면 옛 이름으로 마스터를 만든다(개명·상장폐지분 부활). 이
+    단언이 없으면 `max(dates)` 를 `min` 으로 바꿔도 스위트가 초록이다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-05", [
+        _instrument_profile_row("005930", "옛이름")])
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    assert len(_inserts(conn, "instrument")) == 1
+    assert _inserts(conn, "entity")[0][1] == "삼성전자"
