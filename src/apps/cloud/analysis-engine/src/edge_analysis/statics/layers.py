@@ -561,21 +561,27 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
         basis_now.append(pick.ret)
 
     # 시장은 후보 경쟁 없이 먼저 - 공통충격이 섹터로 새면 섹터 서사가 거짓이 된다.
-    if MARKET_CODE in xs:
-        # 시장은 남은 몫을 줄이든 말든 들어간다 - 공통충격을 섹터·종목이 청구하면 거짓이다.
-        m = _pick(y, {MARKET_CODE: xs[MARKET_CODE]}, nows, meta, [], [], set(),
-                  "시장", None)
-        if m is not None:
-            add(m)
-    else:
-        # **시장 층은 조용히 빠지면 안 된다.** 여기엔 `else` 가 없었다 - 그래서 정본이
-        # 부분 착지한 날(13종) 시장 층이 사라졌는데 산문도 로그도 그 사실을 말하지
-        # 않았고, 남은 섹터·고유가 시장 몫까지 떠안은 채로 인쇄됐다.
-        # 세 사유는 처방이 다르다: 계열 부재는 적재, 당일 없음은 신선도, 창 결손은
-        # 표본(ALPHA-828 백필)이다. 뭉치면 어느 쪽도 못 고친다.
+    # 시장은 남은 몫을 줄이든 말든 들어간다 - 공통충격을 섹터·종목이 청구하면 거짓이다.
+    m = (_pick(y, {MARKET_CODE: xs[MARKET_CODE]}, nows, meta, [], [], set(),
+               "시장", None) if MARKET_CODE in xs else None)
+    if m is not None:
+        add(m)
+    elif etf != MARKET_CODE:
+        # **시장 층은 조용히 빠지면 안 된다.** 사유가 아무 데도 없어서, 정본이 부분
+        # 착지한 날(13종) 시장 층이 사라졌는데 남은 섹터·고유가 시장 몫까지 떠안은
+        # 채로 인쇄됐다. 사유는 처방이 다르므로 갈라 적는다: 계열 부재는 적재,
+        # 당일 없음은 신선도, 창 결손은 표본(ALPHA-828 백필), 후보 탈락은 계열 자체가
+        # 상수라 회귀가 못 서는 경우다. 뭉치면 어느 쪽도 못 고친다.
+        #
+        # **대상이 시장 프록시 자신이면 사유를 적지 않는다** - 그건 부재가 아니라 정상이다.
+        # `xs` 는 대상을 제외하므로(위 `sym != etf`) 069500 을 설명할 때는 시장 층이
+        # 없는 것이 맞고, `route.py` 가 그 경우를 `Route("시장", 1.0, …)` 로 이미 정식
+        # 처리한다(실측 069500 07-29). 여기서 사유를 적으면 정상 런마다 존재하지 않는
+        # 결손을 신고해 **조용한 부재를 시끄러운 오진으로 바꾼다.**
         why = ("계열 부재" if MARKET_CODE not in ser
                else "당일 없음" if d0 not in ser[MARKET_CODE][1]
-               else f"β 창 {len(hist)}일 중 결손")
+               else "β 창 결손" if MARKET_CODE not in xs
+               else "후보 탈락(분산 0)")
         _absent(lake, "market_layer", f"시장 층 없음 - {MARKET_CODE} {why}")
 
     # 섹터 후보 자격은 **구성 겹침**이 정한다. 조용히 빼지 않고 사유를 남긴다.

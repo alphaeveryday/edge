@@ -15,8 +15,8 @@ import duckdb
 import pytest
 
 from edge_analysis.statics.duck import (
-    BACKFILL_SETS, CausalLake, backfill_sources, iceberg_covers, rdb_dsn_from_env,
-    s3_secret_sql, session_pragmas)
+    BACKFILL_SETS, MIN_LANDED_TICKERS, CausalLake, backfill_sources, iceberg_covers,
+    rdb_dsn_from_env, s3_secret_sql, session_pragmas)
 
 _ENVS = ("EDGE_RDB_DSN", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
          "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE", "AWS_REGION",
@@ -249,12 +249,12 @@ def test_empty_or_stale_iceberg_is_not_treated_as_the_source_of_truth():
     Athena·버킷 권한이 붙자 엔진이 낡은 정본을 잡고 5분봉을 통째로 못 봤다.
     """
     day = "2026-08-06"
-    assert iceberg_covers(None, day, 0) is False                    # 빈 표
-    assert iceberg_covers(dt.date(2026, 8, 5), day, 0) is False     # 하루 낡음
-    assert iceberg_covers(dt.date(2026, 8, 6), day, 366) is True    # 그날이 있다
+    assert iceberg_covers(None, day, 0, 0) is False                    # 빈 표
+    assert iceberg_covers(dt.date(2026, 8, 5), day, 0, 0) is False     # 하루 낡음
+    assert iceberg_covers(dt.date(2026, 8, 6), day, 366, 78) is True   # 그날이 있다
     # **최신일이 아니라 그날의 착지가 기준이다.** 상류가 띄엄띄엄 채우면 '최신은
     # 최신인데 그날은 없는' 상태가 난다 - 실측 8/5 는 12:45 에 끊겼다.
-    assert iceberg_covers(dt.date(2026, 8, 7), day, 0) is False
+    assert iceberg_covers(dt.date(2026, 8, 7), day, 0, 0) is False
 
 
 def test_partial_landing_is_not_the_source_of_truth():
@@ -269,9 +269,37 @@ def test_partial_landing_is_not_the_source_of_truth():
     통째로 폴백이 된다.
     """
     day = "2026-08-03"
-    assert iceberg_covers(dt.date(2026, 8, 3), day, 13) is False    # 실측 부분 착지
-    assert iceberg_covers(dt.date(2026, 8, 5), "2026-08-05", 366) is True   # 롤업 정상일
-    assert iceberg_covers(dt.date(2026, 7, 31), "2026-07-31", 1270) is True  # fmp 정상일
+    # 실측 부분 착지. **그 13종에는 069500 이 있었다** - 시장 프록시만 보는 판정으로는
+    # 못 걸렀을 날이고, 그래서 착지 폭을 함께 본다.
+    assert iceberg_covers(dt.date(2026, 8, 3), day, 13, 78) is False
+    assert iceberg_covers(dt.date(2026, 8, 5), "2026-08-05", 366, 78) is True   # 롤업 정상일
+    assert iceberg_covers(dt.date(2026, 7, 31), "2026-07-31", 1270, 78) is True  # fmp 정상일
+    # **경계를 고정한다.** 없으면 임계를 14~366 어디로 옮겨도 스위트가 초록이라
+    # "부분 착지를 막는다" 는 계약을 단언이 하나도 안 지킨다(Rule 9).
+    assert iceberg_covers(dt.date(2026, 8, 3), day, MIN_LANDED_TICKERS - 1, 78) is False
+    assert iceberg_covers(dt.date(2026, 8, 3), day, MIN_LANDED_TICKERS, 78) is True
+
+
+def test_cardinality_alone_does_not_make_a_source_of_truth():
+    """**무엇이 착지했는지도 본다.** 임계 100 은 롤업 정상일(366)의 27%라, 종목 수만
+    보면 '3분의 1만 착지 + 시장 프록시 없음' 이 통과한다 - 그러면 시장 층이 없는 정본을
+    정본으로 확정하고 `stale_5m` 은 빈 문자열이라 Athena 오프로드까지 그대로 탄다.
+    """
+    assert iceberg_covers(dt.date(2026, 8, 5), "2026-08-05", 120, 0) is False
+    assert iceberg_covers(dt.date(2026, 8, 5), "2026-08-05", 120, 78) is True
+
+
+def test_market_proxy_constant_does_not_drift_from_layers():
+    """`duck.MARKET_PROXY_TICKER` 는 `layers.MARKET_CODE` 와 같아야 한다.
+
+    import 로 묶을 수 없다 - layers → athena → duck 이라 역방향은 순환이다. 갈리면
+    가드가 엉뚱한 종목을 찾아 **정상일을 전부 폴백**시키고, 그 폴백은 곧 층 미계측이다.
+    묶을 수 없는 두 자리는 테스트가 지킨다.
+    """
+    from edge_analysis.statics.duck import MARKET_PROXY_TICKER
+    from edge_analysis.statics.layers import MARKET_CODE
+
+    assert MARKET_PROXY_TICKER == MARKET_CODE
 
 
 def test_freshness_is_not_judged_without_an_asked_day():
@@ -279,27 +307,27 @@ def test_freshness_is_not_judged_without_an_asked_day():
 
     다만 **빈 표는 기준일과 무관하게 정본이 아니다.** 그건 신선도가 아니라 부재다.
     """
-    assert iceberg_covers(dt.date(2020, 1, 1), "", 0) is True
-    assert iceberg_covers(None, "", 0) is False
+    assert iceberg_covers(dt.date(2020, 1, 1), "", 0, 0) is True
+    assert iceberg_covers(None, "", 0, 0) is False
 
 
 class _RecordingCon:
     """`_bars_iceberg` 가 내는 SQL 을 받아 적고 `max(trade_date)` 만 답한다."""
 
-    def __init__(self, newest, day_tks):
-        self.newest, self.day_tks, self.sql = newest, day_tks, []
+    def __init__(self, newest, day_tks, mkt_rows):
+        self.newest, self.day_tks, self.mkt_rows, self.sql = newest, day_tks, mkt_rows, []
 
     def execute(self, q):
         self.sql.append(q)
         return self
 
     def fetchone(self):
-        return (self.newest, self.day_tks)
+        return (self.newest, self.day_tks, self.mkt_rows)
 
 
-def _iceberg_lake(newest, asked_day, day_tks=0):
+def _iceberg_lake(newest, asked_day, day_tks=0, mkt_rows=0):
     lk = CausalLake.__new__(CausalLake)
-    lk.con = _RecordingCon(newest, day_tks)
+    lk.con = _RecordingCon(newest, day_tks, mkt_rows)
     lk.exists, lk.unbound, lk.asked_day, lk.stale_5m = {}, {}, asked_day, ""
     return lk
 
@@ -321,7 +349,7 @@ def test_partial_landing_says_partial_not_absent():
     """**부재와 부분 착지는 다른 일감이다** — 없는 것은 적재가 안 돈 것이고, 13종은
     돌다 만 것이다. 한 문장으로 뭉치면 상류를 볼 사람이 엉뚱한 데를 본다.
     """
-    lk = _iceberg_lake(dt.date(2026, 8, 3), "2026-08-03", day_tks=13)
+    lk = _iceberg_lake(dt.date(2026, 8, 3), "2026-08-03", day_tks=13, mkt_rows=78)
 
     assert lk._bars_iceberg() is False
     assert "부분 착지" in lk.stale_5m and "13종" in lk.stale_5m
@@ -343,7 +371,7 @@ def test_stale_iceberg_does_not_pay_the_45day_materialization():
 
 def test_fresh_iceberg_still_becomes_the_source_of_truth():
     """폴백이 상시화되면 정본을 둔 이유가 사라진다 — 신선하면 그대로 쓴다."""
-    lk = _iceberg_lake(dt.date(2026, 8, 6), "2026-08-06", day_tks=366)
+    lk = _iceberg_lake(dt.date(2026, 8, 6), "2026-08-06", day_tks=366, mkt_rows=78)
 
     assert lk._bars_iceberg() is True
     assert "Glue Iceberg" in lk.exists["bars_5m"]

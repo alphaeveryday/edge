@@ -157,13 +157,31 @@ def test_missing_market_layer_leaves_a_reason():
 
     r = decompose(lake, "T", _day())
     assert r is not None and all(x.kind != "시장" for x in r.layers)
-    assert MARKET_CODE in lake.exists["market_layer"]
+    # **사유까지 고정한다.** `MARKET_CODE in …` 만 단언하면 세 사유 중 무엇이 찍혀도
+    # 통과해 "처방이 다르다"는 이 테스트의 계약을 하나도 안 지킨다(Rule 9).
+    assert lake.exists["market_layer"] == f"시장 층 없음 - {MARKET_CODE} 계열 부재"
 
     # 시장 층이 선 런은 앞 런의 사유를 지운다 - 부재를 안 지우면 지어내는 것과 같다.
     lake2 = _lake(sector_beta=0.8)
     lake2.exists = {"market_layer": "앞 호출의 잔재"}
     assert decompose(lake2, "T", _day()) is not None
     assert "market_layer" not in lake2.exists
+
+
+def test_market_proxy_explaining_itself_is_not_an_absence():
+    """**069500 을 설명할 때 시장 층이 없는 것은 정상이다** - 사유를 적으면 오진이다.
+
+    후보 집합 `xs` 는 대상 자신을 제외하므로(`sym != etf`) 시장 프록시 자신의 분해에는
+    시장 층이 없다. `route.py` 가 그 경우를 `Route("시장", 1.0, …)` 로 이미 정식 처리한다
+    (실측 069500 07-29). 여기서 부재를 신고하면 정상 런마다 존재하지 않는 β 결손을
+    가리켜, 커버리지를 보는 사람이 백필(ALPHA-828)을 쫓게 된다 — **조용한 부재를
+    시끄러운 오진으로 바꾸는 것**이라 고치려던 병보다 나쁘다.
+    """
+    lake = _lake(sector_beta=0.8)
+    lake.exists = {}
+
+    assert decompose(lake, MARKET_CODE, _day()) is not None
+    assert "market_layer" not in lake.exists
 
 
 def test_market_layer_always_enters_first():

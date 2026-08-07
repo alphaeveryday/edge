@@ -311,7 +311,9 @@ def test_a_stale_canon_never_reaches_athena_at_all(monkeypatch):
     monkeypatch.setattr(athena, "clock_panel",
                         lambda *a, **k: called.append(a) or [])
     lk = _lake()
-    lk.stale_5m = f"정본에 요청일이 없다 ({DAY} 0행 · 최신 2026-08-02)"
+    # 손으로 쓴 픽스처는 프로덕션이 실제로 만드는 문구여야 한다 — 갈리면 소비자가
+    # truthiness 만 보므로 아무도 안 깨지고(그래서 못 잡고) 픽스처만 조용히 낡는다.
+    lk.stale_5m = f"정본에 요청일이 없다 ({DAY} 0종 · 최신 2026-08-02)"
     # ATTACH·자격증명 실패는 **여기 안 담긴다** — 그건 다른 일감이고 Athena 는 boto3 로
     # 따로 붙는다. 같이 담으면 권한 사고 때 사유를 '정본이 낡았다'로 잘못 말하고,
     # 덤으로 멀쩡한 오프로드까지 끈다.
