@@ -308,6 +308,18 @@ policy_version = "l0-abs-v1"  # 엔진 POLICY_VERSION 과 동일 — 단일 정�
 # consumer 가 --universe 로 같은 객체를 본다), 여기 값은 그걸 만드는 재료다:
 #   scripts/build_minute_universe.py → /tmp/universe.json → (확인) → aws s3 cp
 # 이 파일만 고치고 S3 를 안 갈면 아무것도 안 바뀐다.
+#
+# ⚠️ **순서가 있다: 이미지 먼저, S3 나중.** `Universe` 는 extra="forbid" 라, 새 축
+# (sector_etf_ids)이 든 객체를 옛 이미지가 읽으면 ValidationError 다. 그중 치명적인
+# 것은 planner(plan-minute-session)로, exit 2 면 스케일업을 안 해 그날 레인이 통째로
+# 안 뜬다 — 그리고 스케줄러는 RunTask 제출까지만 보므로 **그 실패가 관측되지 않는다**
+# (README "1분 파이프라인" 참고). 반대 순서(새 이미지 + 옛 객체)는 안전하다: 축이
+# 기본값 ()이라 hash·payload 가 축 도입 전과 바이트로 같다.
+#
+# ⚠️ **장중(세션 ACTIVE)에는 갈지 마라.** 재계획은 UniverseConflictError 로 막히고,
+# 그 뒤 재기동된 worker 는 원장 universe 와 갈려 resident 루프에서 매 틱 blocked 로
+# 도는데 프로세스는 안 죽는다(ECS 는 정상으로 본다). 되돌리려면 옛 객체를 다시 올려야
+# 한다. 반영은 세션 계획 전에.
 [minute_universe]
 # 구간(장중) 모드 섹터층의 후보 ETF. 일봉 경로는 KRX 업종지수를 섹터 후보로 주입하지만
 # (analysis `layers._krx_sector_candidate`) 그 지수는 **분봉이 없어**(수집 원천이 pykrx
@@ -333,7 +345,8 @@ policy_version = "l0-abs-v1"  # 엔진 POLICY_VERSION 과 동일 — 단일 정�
 # 넣으면 KRX 수집이 48회 늘고 각 ETF 구성종목이 1분 유니버스로 딸려 들어온다(329 →
 # 1,000+). 빌더도 이 목록을 `Universe.etf_ids` 가 아니라 **`sector_etf_ids`** 축에
 # 싣는다 — `etf_ids` 는 수집 축이자 `price_consumer` 의 **판정 축**이라, 얹으면 이
-# 48종이 3% 게이트의 발화 대상이 되고(레버리지·인버스가 그 임계를 상시 넘긴다)
+# 48종이 3% 게이트의 발화 대상이 되고(레버리지·인버스는 지수 1.5% 움직임에 그 임계를
+# 넘어 구성종목 없는 상품의 설명이 발화된다)
 # `needs_open` 이 상시 비지 않아 매 세션 시가 폴백이 걸린다. 이 계열은 봉만 받는다.
 #
 # 분류·유동성은 2026-08-07 13:30~14:00 KIS 실측(30분 창)이다. 48종 전부 1분봉이 나온다

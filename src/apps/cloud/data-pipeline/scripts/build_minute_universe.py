@@ -71,7 +71,12 @@ def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Unive
     # 두 설정이 같은 코드를 다르게 말한다 — etf_map 은 "판정해라", 참조 계열은 "봉만
     # 받아라". 한쪽으로 조용히 넘기면 나머지 한쪽이 거짓이 되므로 평균내지 않고 거부한다
     # (Rule 7). 어느 쪽을 지울지는 사람이 정할 일이다.
-    if both := sorted(judged & set(sectors)):
+    #
+    # 대조군은 **config(etf_map) 과 holdings 둘 다**다. holdings 만 보면 그 ETF 의
+    # 스냅샷이 아직 없을 때(신규 편입·KRX 런 실패·소급 상한 초과) 모순이 조용히
+    # 통과한다 — 정작 그때가 사람이 목록을 손대는 시점이다.
+    declared = set(expected_etfs or ()) | judged
+    if both := sorted(declared & set(sectors)):
         raise SystemExit(
             f"같은 ETF 가 etf_map 과 [minute_universe].sector_etf_ids 양쪽에 있다: {both} "
             f"— 판정 대상이면 etf_map 에만, 참조 계열이면 sector_etf_ids 에만 둬라"
@@ -82,8 +87,8 @@ def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Unive
     constituent_ids = sorted(everything - set(etf_ids) - set(sectors))
     if not etf_ids or not constituent_ids:
         raise SystemExit(
-            f"holdings 에서 유니버스를 못 만들었다(ETF {len(etf_ids)}종, 구성종목 "
-            f"{len(constituent_ids)}종) — 레이크 canonical KR holdings 를 확인하라"
+            f"holdings 에서 유니버스를 못 만들었다(판정 ETF {len(etf_ids)}종, "
+            f"구성종목 {len(constituent_ids)}종) — 레이크 canonical KR holdings 를 확인하라"
         )
     # 멤버십에서 유도한다 — 같은 구성이면 같은 버전이라, 재생성이 세션 universe 충돌을
     # 만들지 않는다. 구성이 바뀌면 값이 바뀌어 그 사실이 원장에 드러난다.

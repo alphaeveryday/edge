@@ -80,6 +80,17 @@ def test_etf_declared_on_both_axes_fails_loud(tmp_path):
         build(_storage(tmp_path), frozenset({"091160"}), ("091160",))
 
 
+def test_both_axes_conflict_is_caught_from_config_not_just_holdings(tmp_path):
+    # WHY: 겹침 대조군을 holdings 파생 집합으로만 잡으면, 그 ETF 의 스냅샷이 아직 없을
+    #      때(신규 편입·KRX 런 실패·소급 상한 초과) 모순이 조용히 통과한다 — 그리고
+    #      정작 그때가 사람이 목록을 손대는 시점이다. 정본인 etf_map 축으로도 본다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("005930", "091160")])  # 091170 스냅샷은 아직 없다
+
+    with pytest.raises(SystemExit, match="양쪽에 있다"):
+        build(storage, frozenset({"091160", "091170"}), ("091170",))
+
+
 def test_universe_version_moves_when_sector_set_changes(tmp_path):
     # WHY: universe_version 은 세션 identity 축이다(worker·consumer 가 원장 값과 대조해
     #      갈리면 처리를 거부한다). 참조 계열을 더했는데 version 이 그대로면 새 집합이
@@ -104,9 +115,11 @@ def test_empty_sector_list_reproduces_the_pre_axis_version(tmp_path):
     # 축 도입 전 규칙(`content_checksum([etf_ids, constituent_ids])`)이 내던 값
     assert universe.universe_version == "kr-holdings-1be3dcf0ba65"
     assert universe.sector_etf_ids == ()
-    # hash 도 같은 규율 — 빈 축은 identity 에 안 들어간다
-    assert universe.universe_hash == build(
-        _storage(tmp_path), frozenset({"091160"})).universe_hash
+    # hash 도 같은 규율 — 빈 축은 identity 에 안 들어간다. 여기서 두 build() 를
+    # 비교하면 **항등식**이다(세 번째 인자의 기본값이 곧 빈 튜플이라 같은 호출이다)
+    # — 어떤 구현이어도 통과한다. version 과 마찬가지로 값을 못박는다.
+    assert universe.universe_hash == (
+        "04e0e7ba29b4f21b86c50b1dbc359ac2e3809868b0223a3995896a5bf07541cb")
 
 
 def test_no_holdings_still_fails_loud(tmp_path):
@@ -159,3 +172,14 @@ def test_serialized_payload_carries_every_declared_axis(tmp_path):
     from data_pipeline.minute.models import Universe
 
     assert Universe.model_validate(payload).universe_hash == universe.universe_hash
+
+
+def test_constituents_drained_by_the_sector_axis_fails_loud(tmp_path):
+    # WHY: `not constituent_ids` 쪽 절반은 빈 레이크 테스트로는 안 밟힌다. 이 경로가
+    #      죽으면 pydantic 의 `too_short` 가 대신 나오는데, 그건 "holdings 를 확인하라"는
+    #      처방을 못 준다 — 무엇을 고칠지 모르는 실패는 fail-loud 가 아니다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("091170", "091160")])  # 구성종목이 그 하나뿐
+
+    with pytest.raises(SystemExit, match="구성종목 0종"):
+        build(storage, frozenset({"091160"}), ("091170",))

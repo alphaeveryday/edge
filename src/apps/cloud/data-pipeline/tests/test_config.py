@@ -293,12 +293,13 @@ def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path)
     RelayConfig(relay_id="r", queue_urls=dict(settings.minute_relay.queue_urls))
 
 
-@pytest.mark.parametrize("value", ["KODEX은행", "ABCDEF", "09117", "09 170"])
+@pytest.mark.parametrize("value", ["ABCDEF", "가나다라마바", "09117", "09 170"])
 def test_sector_etf_bad_shape_fails_loud(tmp_path, value):
     # WHY: 형태가 아닌 값이 통과하면 universe.json 에 실려 매분 missing 으로 잡히고 그
-    #      window 가 영구 INCOMPLETE 로 남는다. 판정은 `krx_short_code` 하나로 간다 —
-    #      길이 검사로 대신하면 `ABCDEF` 같은 6자 US 심볼과 6자 한글이 그대로 통과해
-    #      KIS(국내 전용)에 엉뚱한 질의가 나간다. 그래서 6자 위반 값을 함께 넣는다.
+    #      window 가 영구 INCOMPLETE 로 남는다. 판정은 `krx_short_code` 하나로 간다.
+    #      **길이 검사로 대신할 수 없다** — 앞의 두 값은 정확히 6자라 길이는 통과하고,
+    #      그러면 6자 US 심볼과 한글이 KIS(국내 전용)로 질의된다. 그 둘이 이 목록에
+    #      있는 이유가 그것이다(뒤의 둘은 길이·공백 축).
     #      (자릿수를 바꿔 적은 오타는 여기서 못 잡는다 — 형태는 맞기 때문이다.
     #       그건 첫 런 manifest 의 missing 으로 드러나고, 그 한계는 모델 주석에 있다.)
     bad = VALID + f"""

@@ -256,7 +256,7 @@ class Universe(BaseModel):
 
     **수집 축과 판정 축은 같지 않다.** `unit_ids`(수집)는 세 목록의 합이지만 `etf_ids`
     만이 판정 대상이다 — `price_consumer` 가 `etf_ids` 를 그대로 트리거 판정 집합으로
-    받아(`price_worker_cli`→`PriceTriggerHandler.etf_ids`) 임계 초과분을 발화시키고,
+    받아(`price_consumer_cli`→`PriceTriggerHandler.etf_ids`) 임계 초과분을 발화시키고,
     `needs_open` 도 이 집합으로 전일 종가 결손을 센다. 그래서 "봉만 받고 싶은" 계열을
     `etf_ids` 에 얹으면 조용히 발화 대상·기준선 대상이 된다.
     """
@@ -346,10 +346,11 @@ class Universe(BaseModel):
         빈 목록을 넣으면 구성이 똑같은 기존 session 이 배포만으로 다른 hash 가 돼
         UniverseConflictError 로 그날 재계획·재기동이 통째로 막힌다. 참조 계열도 같다.
 
-        두 선택 축이 위치로만 구분되는데도 모호하지 않은 이유: `_validate` 가 extended 를
-        **멤버**로, 참조 계열을 **비멤버**로 강제하므로 같은 값이 두 축에 설 수 없다.
-        (그 결합을 끊으려면 — 예컨대 참조 계열도 멤버로 받게 바꾸면 — 여기에 축 이름을
-        같이 실어야 한다. 지금 넣으면 반증할 수 없는 방어다.)
+        두 선택 축이 위치로만 구분되는데도 모호하지 않은 이유: **한 축만 선언된 두
+        universe 는 같은 parts 를 낼 수 없다.** extended 는 멤버여야 하고(A ⊆ etfs∪const)
+        참조 계열은 비멤버여야 하므로(B ∩ (etfs∪const) = ∅), etfs·const 가 같은 두
+        universe 에서 A = B 는 불가능하다. (`extended_hours_ids` 자체는 참조 계열도 담을
+        수 있다 — 그건 한 universe 안의 얘기라 이 논증과 무관하다.)
         """
         parts = [self.universe_version, sorted(self.etf_ids), sorted(self.constituent_ids)]
         if self.extended_hours_ids:

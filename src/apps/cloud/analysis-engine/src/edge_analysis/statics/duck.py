@@ -631,7 +631,9 @@ class CausalLake:
         분기하므로(causeflow·evidence 의 tau_sidecar) 0행이 '있음'으로 보이면 안 된다.
         대신 사유를 backfill_notes 에 남기고 coverage() 가 그것을 읽는다.
 
-        `layers_daily` = 시장(KODEX200) · 섹터 ETF 32 · 미국 전일 지수 6 의 일봉.
+        `layers_daily` = 시장(KODEX200) · 섹터 ETF 80 · 미국 전일 지수 6 의 일봉.
+        (2026-08-07 실측: kind 별 distinct symbol = market 1 · sector 80 · stock 856 · us 6.
+         "32" 로 적혀 있던 값은 낡았다 — 그중 32종만 1분 레인이 수집 중이었다.)
         KRX 정보데이터시스템이 죽어(2026-08-02 실측) 업종분류 22종을 못 받는 대신
         **섹터를 ETF 로 잡는다** - 관측 가능한 실제 포트폴리오이고 가중치를 시장이
         정하며(우리가 안 정한다 = 왜곡 없음) 보유 비중을 알아 leave-one-out 이 정확하다.
