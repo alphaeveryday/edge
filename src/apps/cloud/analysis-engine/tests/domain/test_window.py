@@ -8,11 +8,13 @@ from edge_analysis.domain.window import (
     AnalysisReason,
     CommittedMinuteWindow,
     MinuteBar,
+    RequestedWindow,
     WindowAggregationError,
     WindowCoverage,
     WindowSpec,
     aggregate_window,
     diagnose_window,
+    slice_requested_bars,
 )
 
 KST = timezone(timedelta(hours=9))
@@ -29,31 +31,39 @@ def committed(minute: int, *, generation: int = 1) -> CommittedMinuteWindow:
         "session-1", start, start + timedelta(minutes=1), generation, "a" * 64)
 
 
-def test_window_spec_is_open_to_requested_kst_minute():
-    spec = WindowSpec(" KR ", " session-1 ", DAY, at(9, 0), at(10, 17))
+def test_window_spec_separates_analysis_and_requested_clocks():
+    spec = WindowSpec(
+        " KR ", " session-1 ", DAY, at(9, 0), at(10, 12), at(10, 17))
 
     assert (spec.market, spec.session_id) == ("KR", "session-1")
-    assert spec.end == at(10, 17)
+    assert spec.analysis_start == at(9, 0)
+    assert (spec.requested_start, spec.requested_end) == (at(10, 12), at(10, 17))
 
 
 @pytest.mark.parametrize(
-    ("start", "end", "message"),
+    ("analysis_start", "requested_start", "requested_end", "message"),
     [
-        (at(9, 1), at(10, 0), "09:00"),
-        (at(9, 0), at(9, 0), "15:30"),
-        (at(9, 0), at(15, 31), "15:30"),
-        (at(9, 0, tz=None), at(10, 0), "KST"),
-        (at(9, 0), at(10, 0, second=1), "분 경계"),
+        (at(9, 1), at(10, 0), at(10, 5), "09:00"),
+        (at(9, 0), at(8, 59), at(10, 0), "requested clock"),
+        (at(9, 0), at(10, 0), at(10, 0), "requested clock"),
+        (at(9, 0), at(10, 0), at(15, 31), "15:30"),
+        (at(9, 0), at(10, 0, tz=None), at(10, 5), "KST"),
+        (at(9, 0), at(10, 0), at(10, 5, second=1), "분 경계"),
     ],
 )
-def test_window_spec_rejects_wrong_axis(start, end, message):
+def test_window_spec_rejects_wrong_axis(
+        analysis_start, requested_start, requested_end, message):
     with pytest.raises(ValueError, match=message):
-        WindowSpec("KR", "session-1", DAY, start, end)
+        WindowSpec(
+            "KR", "session-1", DAY,
+            analysis_start, requested_start, requested_end)
 
 
 def test_window_spec_rejects_a_different_session_date():
     with pytest.raises(ValueError, match="session_date"):
-        WindowSpec("KR", "session-1", DAY - timedelta(days=1), at(9, 0), at(10, 0))
+        WindowSpec(
+            "KR", "session-1", DAY - timedelta(days=1),
+            at(9, 0), at(9, 0), at(10, 0))
 
 
 def test_committed_window_requires_one_minute_generation_and_sha256():
@@ -157,8 +167,10 @@ def minute_bar(minute: int, unit_id: str = "A", *, session: str = "session-1",
         source, unit_id, price, price + 2, price - 1, price + 1, Decimal(minute + 1))
 
 
-def window(end_minute: int) -> WindowSpec:
-    return WindowSpec("KR", "session-1", DAY, at(9, 0), at(9, end_minute))
+def window(end_minute: int, requested_start_minute: int = 0) -> WindowSpec:
+    return WindowSpec(
+        "KR", "session-1", DAY,
+        at(9, 0), at(9, requested_start_minute), at(9, end_minute))
 
 
 def test_aggregate_window_builds_complete_five_minute_ohlcv():
@@ -178,6 +190,37 @@ def test_aggregate_window_keeps_the_last_partial_bar():
     assert bars[-1].open == Decimal("105")
     assert bars[-1].close == Decimal("107")
     assert bars[-1].volume == Decimal("13")
+
+
+def test_requested_window_uses_partial_first_and_last_bars_on_the_exact_clock():
+    spec = window(27, requested_start_minute=12)
+    minute_bars = tuple(minute_bar(m) for m in range(27))
+
+    state_bars = aggregate_window(spec, minute_bars)
+    requested = slice_requested_bars(spec, minute_bars)
+
+    assert state_bars[0].start == at(9, 0)
+    assert isinstance(requested, RequestedWindow)
+    assert [(bar.start.minute, bar.end.minute, bar.observed_minutes)
+            for bar in requested.bars] == [
+        (12, 15, 3), (15, 20, 5), (20, 25, 5), (25, 27, 2)]
+    assert requested.bars[0].sources[0].start == at(9, 12)
+    assert requested.bars[-1].sources[-1].end == at(9, 27)
+
+
+def test_requested_window_preserves_multiple_units_and_aligned_short_end():
+    spec = window(17, requested_start_minute=15)
+    minute_bars = tuple(
+        minute_bar(minute, unit)
+        for minute in range(17)
+        for unit in ("B", "A")
+    )
+
+    requested = slice_requested_bars(spec, minute_bars)
+
+    assert [(bar.unit_id, bar.start.minute, bar.end.minute, bar.observed_minutes)
+            for bar in requested.bars] == [
+        ("A", 15, 17, 2), ("B", 15, 17, 2)]
 
 
 def test_aggregate_window_uses_one_common_axis_for_every_unit():

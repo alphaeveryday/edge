@@ -48,25 +48,30 @@ def _ohlcv(open_: Decimal, high: Decimal, low: Decimal, close: Decimal,
 
 @dataclass(frozen=True, slots=True)
 class WindowSpec:
-    """당일 정규장 시가부터 요청 종료까지인 단일 분석창."""
+    """시가부터 계산하되 요청 clock만 설명하는 두 시간축 계약."""
 
     market: str
     session_id: str
     session_date: date
-    start: datetime
-    end: datetime
+    analysis_start: datetime
+    requested_start: datetime
+    requested_end: datetime
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "market", _text(self.market, "market"))
         object.__setattr__(self, "session_id", _text(self.session_id, "session_id"))
-        start = _kst_minute(self.start, "start")
-        end = _kst_minute(self.end, "end")
-        if start.date() != self.session_date or end.date() != self.session_date:
-            raise ValueError("start/end와 session_date가 다르다")
-        if start.time() != _SESSION_OPEN:
-            raise ValueError("분석창 start는 정규장 시가 09:00이어야 한다")
-        if end <= start or end.time() > _SESSION_CLOSE:
-            raise ValueError("분석창 end는 09:00보다 뒤, 15:30 이하여야 한다")
+        analysis_start = _kst_minute(self.analysis_start, "analysis_start")
+        requested_start = _kst_minute(self.requested_start, "requested_start")
+        requested_end = _kst_minute(self.requested_end, "requested_end")
+        if any(value.date() != self.session_date for value in (
+                analysis_start, requested_start, requested_end)):
+            raise ValueError("시간축과 session_date가 다르다")
+        if analysis_start.time() != _SESSION_OPEN:
+            raise ValueError("analysis_start는 정규장 시가 09:00이어야 한다")
+        if not analysis_start <= requested_start < requested_end:
+            raise ValueError("requested clock은 analysis_start 이후의 비어 있지 않은 구간이어야 한다")
+        if requested_end.time() > _SESSION_CLOSE:
+            raise ValueError("requested_end는 정규장 마감 15:30 이하여야 한다")
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +148,29 @@ class AggregatedBar:
 
 
 @dataclass(frozen=True, slots=True)
+class RequestedWindow:
+    """요청 clock을 정확히 덮는 첫·중간·끝 부분/완성 봉."""
+
+    requested_start: datetime
+    requested_end: datetime
+    bars: tuple[AggregatedBar, ...]
+
+    def __post_init__(self) -> None:
+        start = _kst_minute(self.requested_start, "requested_start")
+        end = _kst_minute(self.requested_end, "requested_end")
+        if start >= end or not self.bars:
+            raise ValueError("요청 설명 봉은 비어 있지 않은 구간이어야 한다")
+        units = {bar.unit_id for bar in self.bars}
+        for unit in units:
+            selected = sorted((bar for bar in self.bars if bar.unit_id == unit),
+                              key=lambda bar: bar.start)
+            if selected[0].start != start or selected[-1].end != end:
+                raise ValueError(f"{unit} 설명 봉이 요청 clock을 끝까지 덮지 않는다")
+            if any(left.end != right.start for left, right in zip(selected, selected[1:])):
+                raise ValueError(f"{unit} 설명 봉이 연속되지 않는다")
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisReason:
     """판정불가·재시도·열화 사유의 기계 코드와 운영자 문장."""
 
@@ -166,17 +194,11 @@ class WindowAggregationError(ValueError):
         super().__init__(f"{self.reason.code}: {self.reason.message}")
 
 
-def aggregate_window(
+def _index_window(
     spec: WindowSpec, minute_bars: tuple[MinuteBar, ...],
-) -> tuple[AggregatedBar, ...]:
-    """공통 1분축을 완전 5분봉과 마지막 부분 봉으로 집계한다.
-
-    구성 unit 하나라도 중간 minute가 빠지면 전체를 거부한다. 서로 다른 길이의 계열을
-    같은 팩터 시점으로 맞추면 결손이 0수익처럼 들어가므로 부분 성공을 만들지 않는다.
-    """
+) -> tuple[dict[tuple[datetime, str], MinuteBar], tuple[str, ...]]:
     if not minute_bars:
         raise WindowAggregationError("EMPTY_MINUTE_BARS", "분석창 1분봉이 비었다")
-
     indexed: dict[tuple[datetime, str], MinuteBar] = {}
     unit_ids: set[str] = set()
     sources_by_minute: dict[datetime, CommittedMinuteWindow] = {}
@@ -186,11 +208,11 @@ def aggregate_window(
             raise WindowAggregationError(
                 "MINUTE_SESSION_MISMATCH",
                 f"{bar.unit_id} {source.start.isoformat()} session={source.session_id}")
-        if not spec.start <= source.start < spec.end:
+        if not spec.analysis_start <= source.start < spec.requested_end:
             raise WindowAggregationError(
                 "MINUTE_OUT_OF_WINDOW",
                 f"{bar.unit_id} {source.start.isoformat()} not in "
-                f"[{spec.start.isoformat()}, {spec.end.isoformat()})")
+                f"[{spec.analysis_start.isoformat()}, {spec.requested_end.isoformat()})")
         key = (source.start, bar.unit_id)
         if key in indexed:
             raise WindowAggregationError(
@@ -205,8 +227,8 @@ def aggregate_window(
         sources_by_minute[source.start] = source
 
     expected_minutes: list[datetime] = []
-    cursor = spec.start
-    while cursor < spec.end:
+    cursor = spec.analysis_start
+    while cursor < spec.requested_end:
         expected_minutes.append(cursor)
         cursor += timedelta(minutes=1)
     missing = [
@@ -220,17 +242,22 @@ def aggregate_window(
             f"{unit_id}@{minute.strftime('%H:%M')}" for minute, unit_id in missing[:5])
         raise WindowAggregationError(
             "MISSING_MINUTE_BAR", f"count={len(missing)} sample={sample}")
+    return indexed, tuple(sorted(unit_ids))
 
+
+def _aggregate_ranges(
+    indexed: Mapping[tuple[datetime, str], MinuteBar],
+    unit_ids: tuple[str, ...],
+    ranges: tuple[tuple[datetime, datetime], ...],
+) -> tuple[AggregatedBar, ...]:
     out: list[AggregatedBar] = []
-    bucket_start = spec.start
-    while bucket_start < spec.end:
-        bucket_end = min(bucket_start + timedelta(minutes=5), spec.end)
+    for bucket_start, bucket_end in ranges:
         minutes = []
         cursor = bucket_start
         while cursor < bucket_end:
             minutes.append(cursor)
             cursor += timedelta(minutes=1)
-        for unit_id in sorted(unit_ids):
+        for unit_id in unit_ids:
             bars = [indexed[(minute, unit_id)] for minute in minutes]
             try:
                 out.append(AggregatedBar(
@@ -249,8 +276,39 @@ def aggregate_window(
                 raise WindowAggregationError(
                     "AGGREGATED_BAR_INVALID",
                     f"{unit_id} {bucket_start.isoformat()} — {error}") from error
-        bucket_start = bucket_end
     return tuple(out)
+
+
+def aggregate_window(
+    spec: WindowSpec, minute_bars: tuple[MinuteBar, ...],
+) -> tuple[AggregatedBar, ...]:
+    """시가부터 요청 끝까지의 상태 계산용 5분축과 마지막 부분 봉."""
+    indexed, unit_ids = _index_window(spec, minute_bars)
+    ranges = []
+    start = spec.analysis_start
+    while start < spec.requested_end:
+        end = min(start + timedelta(minutes=5), spec.requested_end)
+        ranges.append((start, end))
+        start = end
+    return _aggregate_ranges(indexed, unit_ids, tuple(ranges))
+
+
+def slice_requested_bars(
+    spec: WindowSpec, minute_bars: tuple[MinuteBar, ...],
+) -> RequestedWindow:
+    """같은 1분축에서 요청 시작·끝을 정확히 보존한 설명 봉을 만든다."""
+    indexed, unit_ids = _index_window(spec, minute_bars)
+    ranges = []
+    start = spec.requested_start
+    offset = int((start - spec.analysis_start).total_seconds() // 60)
+    first_span = 5 - offset % 5 if offset % 5 else 5
+    while start < spec.requested_end:
+        span = first_span if not ranges else 5
+        end = min(start + timedelta(minutes=span), spec.requested_end)
+        ranges.append((start, end))
+        start = end
+    bars = _aggregate_ranges(indexed, unit_ids, tuple(ranges))
+    return RequestedWindow(spec.requested_start, spec.requested_end, bars)
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,8 +359,8 @@ def diagnose_window(
         raise ValueError("weights 합은 양수여야 한다")
 
     expected_minutes: list[datetime] = []
-    cursor = spec.start
-    while cursor < spec.end:
+    cursor = spec.analysis_start
+    while cursor < spec.requested_end:
         expected_minutes.append(cursor)
         cursor += timedelta(minutes=1)
     expected_minute_set = set(expected_minutes)
