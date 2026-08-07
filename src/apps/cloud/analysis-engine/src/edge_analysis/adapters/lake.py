@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from ..config import Settings
+from ..config import KST, PipelineError, ReturnsNotReadyError, Settings
 from ..domain.models import Holding
+from ..domain.window import CommittedMinuteWindow, MinuteBar
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,86 @@ class LakeReader:
             if isinstance(record, dict) and record.get("unit_id"):
                 rows[str(record["unit_id"])] = record
         return rows
+
+    def load_committed_minute_bars(
+        self, market: str, windows: list[CommittedMinuteWindow],
+    ) -> tuple[MinuteBar, ...]:
+        """원장이 확정한 generation/checksum의 1분봉을 strict하게 읽는다.
+
+        구 단건 reader와 달리 404·형상 위반·중복을 관대하게 접지 않는다. 이 결과는
+        시간축 전체의 입력이므로 한 행을 버리면 구성종목별 봉 수가 갈리고, 그 상태로
+        5분 집계하면 정상처럼 보이는 다른 지평의 수익률이 만들어진다.
+        """
+        import hashlib
+        import json
+
+        from botocore.exceptions import ClientError
+
+        market = str(market).strip()
+        if not market:
+            raise ValueError("market이 비었다")
+        if not windows:
+            return ()
+        if len({window.session_id for window in windows}) != 1:
+            raise PipelineError("커밋 minute windows의 session_id가 다르다")
+        if list(windows) != sorted(windows, key=lambda window: window.start):
+            raise PipelineError("커밋 minute windows가 시간 오름차순이 아니다")
+        if len({window.start for window in windows}) != len(windows):
+            raise PipelineError("커밋 minute windows에 중복 시각이 있다")
+        if len({window.start.date() for window in windows}) != 1:
+            raise PipelineError("커밋 minute windows가 여러 session_date에 걸쳐 있다")
+
+        result: list[MinuteBar] = []
+        for source in windows:
+            session_date = source.start.date().isoformat()
+            window_hhmm = source.start.strftime("%H%M")
+            key = minute_artifact_key(market, session_date, window_hhmm, source.generation)
+            try:
+                body = self._s3.get_object(Bucket=self._bucket, Key=key)["Body"].read()
+            except ClientError as error:
+                if error.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                    raise ReturnsNotReadyError(f"분봉 artifact 미착지: {key}") from error
+                raise
+            if hashlib.sha256(body).hexdigest() != source.checksum:
+                raise ReturnsNotReadyError(f"분봉 artifact checksum 불일치: {key}")
+            try:
+                text = body.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise PipelineError(f"분봉 artifact UTF-8 위반: {key}") from error
+
+            seen: set[str] = set()
+            bars: list[MinuteBar] = []
+            for line_number, line in enumerate(text.splitlines(), 1):
+                if not line.strip():
+                    raise PipelineError(
+                        f"분봉 artifact 빈 NDJSON 행: {key} line={line_number}")
+                try:
+                    record = json.loads(line)
+                    if not isinstance(record, dict):
+                        raise ValueError("레코드가 객체가 아니다")
+                    unit_id = str(record["unit_id"]).strip()
+                    if not unit_id:
+                        raise ValueError("unit_id가 비었다")
+                    if unit_id in seen:
+                        raise ValueError(f"unit_id 중복: {unit_id}")
+                    stamp = datetime.fromisoformat(str(record["ts"]))
+                    if stamp.tzinfo is None or stamp.astimezone(KST) != source.start:
+                        raise ValueError(
+                            f"ts가 원장 window와 다르다: {record['ts']!r}")
+                    values = []
+                    for field in ("open", "high", "low", "close", "volume"):
+                        value = record[field]
+                        if isinstance(value, bool):
+                            raise ValueError(f"{field}가 bool이다")
+                        values.append(Decimal(str(value)))
+                    bar = MinuteBar(source, unit_id, *values)
+                except (KeyError, TypeError, ValueError, InvalidOperation, json.JSONDecodeError) as error:
+                    raise PipelineError(
+                        f"분봉 artifact 형상 위반: {key} line={line_number} — {error}") from error
+                seen.add(unit_id)
+                bars.append(bar)
+            result.extend(sorted(bars, key=lambda bar: bar.unit_id))
+        return tuple(result)
 
     def load_prev_closes(self, market: str, trade_date: date) -> dict[str, float]:
         """직전 거래일 종가 — 분봉 분해의 분모(ALPHA-747).

@@ -309,3 +309,117 @@ def test_checksum_mismatch_is_retry_axis_not_silent_consume():
     with pytest.raises(ReturnsNotReadyError, match="checksum"):
         reader.load_minute_returns(
             "KR", "2026-07-15", "0900", 1, "0" * 64, {"005930": 70000.0})
+
+
+def _strict_body(*rows: dict) -> bytes:
+    return ("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n").encode("utf-8")
+
+
+def _committed(minute: int, body: bytes, *, session: str = "ses-1", generation: int = 1):
+    import hashlib
+    from datetime import datetime, timedelta, timezone
+
+    from edge_analysis.domain.window import CommittedMinuteWindow
+
+    start = datetime(2026, 8, 7, 9, minute, tzinfo=timezone(timedelta(hours=9)))
+    return CommittedMinuteWindow(
+        session, start, start + timedelta(minutes=1), generation,
+        hashlib.sha256(body).hexdigest(),
+    )
+
+
+def _strict_row(unit_id: str, minute: int, **changes) -> dict:
+    row = {
+        "unit_id": unit_id,
+        "ts": f"2026-08-07T00:{minute:02d}:00Z",
+        "open": "100",
+        "high": "103",
+        "low": "99",
+        "close": "102",
+        "volume": "10",
+    }
+    row.update(changes)
+    return row
+
+
+def test_committed_minute_reader_uses_ledger_coordinates_and_decimal_values():
+    from decimal import Decimal
+
+    body0 = _strict_body(_strict_row("B", 0), _strict_row("A", 0))
+    body1 = _strict_body(_strict_row("A", 1, high="105", close="104"))
+    source0, source1 = _committed(0, body0), _committed(1, body1, generation=2)
+    reader = _reader({
+        minute_artifact_key("KR", "2026-08-07", "0900", 1): body0,
+        minute_artifact_key("KR", "2026-08-07", "0901", 2): body1,
+    })
+
+    bars = reader.load_committed_minute_bars("KR", [source0, source1])
+
+    assert [(bar.source.start.minute, bar.unit_id) for bar in bars] == [
+        (0, "A"), (0, "B"), (1, "A")]
+    assert bars[0].open == Decimal("100") and bars[2].close == Decimal("104")
+
+
+def test_committed_minute_reader_404_and_checksum_mismatch_are_retryable():
+    import pytest
+
+    from edge_analysis.config import ReturnsNotReadyError
+
+    body = _strict_body(_strict_row("A", 0))
+    source = _committed(0, body)
+    with pytest.raises(ReturnsNotReadyError, match="미착지"):
+        _reader({}).load_committed_minute_bars("KR", [source])
+
+    wrong = _committed(0, body + b" ")
+    reader = _reader({minute_artifact_key("KR", "2026-08-07", "0900", 1): body})
+    with pytest.raises(ReturnsNotReadyError, match="checksum"):
+        reader.load_committed_minute_bars("KR", [wrong])
+
+
+def test_committed_minute_reader_rejects_wrong_timestamp_and_duplicate_unit():
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    wrong_ts = _strict_body(_strict_row("A", 0, ts="2026-08-07T00:01:00Z"))
+    reader = _reader({minute_artifact_key("KR", "2026-08-07", "0900", 1): wrong_ts})
+    with pytest.raises(PipelineError, match="ts가 원장 window와 다르다"):
+        reader.load_committed_minute_bars("KR", [_committed(0, wrong_ts)])
+
+    duplicate = _strict_body(_strict_row("A", 0), _strict_row("A", 0))
+    reader = _reader({minute_artifact_key("KR", "2026-08-07", "0900", 1): duplicate})
+    with pytest.raises(PipelineError, match="unit_id 중복"):
+        reader.load_committed_minute_bars("KR", [_committed(0, duplicate)])
+
+
+def test_committed_minute_reader_rejects_malformed_ndjson_and_ohlcv():
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    malformed = b"{not-json}\n"
+    reader = _reader({minute_artifact_key("KR", "2026-08-07", "0900", 1): malformed})
+    with pytest.raises(PipelineError, match="형상 위반"):
+        reader.load_committed_minute_bars("KR", [_committed(0, malformed)])
+
+    invalid = _strict_body(_strict_row("A", 0, low="104"))
+    reader = _reader({minute_artifact_key("KR", "2026-08-07", "0900", 1): invalid})
+    with pytest.raises(PipelineError, match="OHLC 범위가 모순"):
+        reader.load_committed_minute_bars("KR", [_committed(0, invalid)])
+
+
+def test_committed_minute_reader_rejects_cross_session_or_unsorted_input():
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    body0 = _strict_body(_strict_row("A", 0))
+    body1 = _strict_body(_strict_row("A", 1))
+    source0 = _committed(0, body0)
+    source1 = _committed(1, body1, session="ses-2")
+    with pytest.raises(PipelineError, match="session_id"):
+        _reader({}).load_committed_minute_bars("KR", [source0, source1])
+
+    source1 = _committed(1, body1)
+    with pytest.raises(PipelineError, match="오름차순"):
+        _reader({}).load_committed_minute_bars("KR", [source1, source0])
