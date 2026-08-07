@@ -57,7 +57,8 @@ test('런 축 사건은 그 런만 연다 — 최근 런 전체를 다시 훑게
   const r = investigate(incident(violation({})), FACTS);
   assert.equal(r.targets.length, 1);
   assert.equal(r.targets[0].kind, 'run');
-  assert.match(r.targets[0].href, /^\/ops\/runs\?run_id=etf-daily%3A2026-08-03T15%3A40/);
+  /* 런 하나는 자기 페이지를 갖는다 — 목록의 선택 상태(?run_id=)가 아니라 경로로 지목한다 */
+  assert.match(r.targets[0].href, /^\/ops\/runs\/etf-daily%3A2026-08-03T15%3A40(\?|$)/);
   assert.match(r.targets[0].href, /fromIncident=R99%230/);
   assert.deepEqual(r.ledger, { incident: 'R99#0', runKey: 'etf-daily:2026-08-03T15:40' });
 });

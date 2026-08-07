@@ -9,10 +9,19 @@
  * 판정·정렬은 여기서 아무것도 새로 만들지 않는다. evaluate() 가 낸 사건과 그 순서 그대로다.
  */
 import { useEffect } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
-import type { Severity } from '../../rules/types';
-import { OUT_OF_SCOPE_INCIDENTS, PIPELINE_INCIDENTS, Info, SEV_TONE, fmt, runbookOf, violationTip } from './shared';
+import type { RuleResult, Severity } from '../../rules/types';
+import { RULES } from '../../rules/rules';
+import {
+  Absent,
+  Info,
+  SEV_TONE,
+  SourceChip,
+  fmt,
+  useConsoleEvaluation,
+  violationTip,
+} from './shared';
 import { incidentHref } from './investigation';
 import '../../styles/ops.css';
 
@@ -23,7 +32,15 @@ const SEV_MEANING: Record<Severity, string> = {
   P2: '기록해 두고 본다',
 };
 const isSeverity = (v: string | null): v is Severity => v === 'P0' || v === 'P1' || v === 'P2';
-const bySeverity = (sev: Severity) => PIPELINE_INCIDENTS.filter((i) => i.sev === sev);
+
+const SCOPE_TIP = [
+  '집계 범위 — 실행·작업 실패, 데이터 결손·신선도, 장중 수집 지연·무증거, 분석 생성 실패,',
+  '원장·관측 불일치. 테넌트 전달·발번은 이 콘솔 소관이 아니라 개수에서 뺀다(룰은 그대로 돈다).',
+  '',
+  '정렬 — evaluate() 가 낸 순서 그대로다(심각도 → 연쇄 크기 → 대표 수치).',
+  '단위가 다른 수치를 가로질러 비교하지 않으므로 같은 심각도 안의 위아래를 조치 우선순위로',
+  '읽지 마라.',
+].join('\n');
 
 export function IncidentsListPage() {
   const [params, setParams] = useSearchParams();
@@ -31,7 +48,8 @@ export function IncidentsListPage() {
   const requested = params.get('severity');
   /* URL 이 선택 상태의 정본이다 — 새로고침·링크 공유가 같은 심각도를 연다. 기본은 P0. */
   const selected: Severity = isSeverity(requested) ? requested : 'P0';
-  const list = bySeverity(selected);
+  const { pipeline, outOfScope, rules, minuteLoaded } = useConsoleEvaluation();
+  const list = pipeline.filter((i) => i.sev === selected);
 
   /* 화면만 P0 로 떨어뜨리면 주소창이 거짓말을 한다(?severity=foo 인데 P0 를 보여줌).
    * 링크를 공유했을 때도 같은 상태가 열리도록 URL 을 정규화한다. */
@@ -51,29 +69,19 @@ export function IncidentsListPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="card card-pad">
-        <p className="t-sm m-0">
-          실행·작업 실패, 데이터 결손·신선도, 장중 수집 지연·무증거, 분석 생성 실패, 원장·관측
-          불일치 — 파이프라인 소관 문제만 봅니다.
-        </p>
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          {/* 전체 개수는 보조 문구로만 — 단순 합계를 핵심 카드로 세우지 않는다 */}
-          규칙이 오늘 잡은 파이프라인 문제는 모두 {PIPELINE_INCIDENTS.length}건입니다
-          {OUT_OF_SCOPE_INCIDENTS.length > 0 &&
-            ` (전달 경계 등 담당 범위 밖 ${OUT_OF_SCOPE_INCIDENTS.length}건 제외)`}
-          . 정렬은 evaluate() 가 낸 순서(심각도 →
-          연쇄 크기 → 대표 수치) 그대로이고, 단위가 다른 수치를 가로질러 비교하지 않으므로 같은 심각도
-          안의 위아래를 조치 우선순위로 읽지 마세요.
-          {' · '}
-          <Link to="/">파이프라인 개요로</Link>
-        </p>
-      </div>
+      {/* 한 줄로 줄인다 — 설명 문단이 길면 정작 봐야 할 사건 카드를 아래로 민다.
+          범위·정렬 규칙처럼 한 번 읽으면 되는 것은 ⓘ 로 내린다. */}
+      <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+        파이프라인 소관 문제 {pipeline.length}건
+        {outOfScope.length > 0 && ` · 담당 범위 밖 ${outOfScope.length}건 제외`}
+        <Info tip={SCOPE_TIP} label="집계 범위와 정렬" />
+      </p>
 
       {/* 선택 컨트롤 — 진짜 버튼이라 Tab·Enter·Space 가 동작하고, 색 외에 표식·aria-pressed 로도 선택을 말한다 */}
       <div className="ops-sev-row" role="group" aria-label="심각도 선택">
         {SEVERITIES.map((sev) => {
           const on = sev === selected;
-          const n = bySeverity(sev).length;
+          const n = pipeline.filter((i) => i.sev === sev).length;
           return (
             <button
               key={sev}
@@ -97,12 +105,9 @@ export function IncidentsListPage() {
       </div>
 
       <div className="card">
+        {/* 심각도·건수·뜻은 바로 위 선택 카드가 이미 말한다 — 여기서 반복하지 않는다 */}
         <div className="card-head">
-          <StatusBadge tone={SEV_TONE[selected]}>{selected}</StatusBadge>
-          <span className="t-label">사건 {list.length}건</span>
-          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            {SEV_MEANING[selected]}
-          </span>
+          <span className="t-label">사건</span>
         </div>
         {list.length === 0 ? (
           <div className="card-pad">
@@ -113,63 +118,74 @@ export function IncidentsListPage() {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="table">
+            <table className="table ops-inc-table">
               <thead>
                 <tr>
                   <th>사건</th>
                   <th className="num">수치</th>
-                  <th>단위</th>
-                  <th>분류</th>
-                  <th>규칙</th>
-                  <th>연쇄</th>
-                  <th>권장 조치</th>
-                  <th>상세</th>
                 </tr>
               </thead>
               <tbody>
                 {list.map((I) => {
-                  const rb = runbookOf(I.root);
+                  /* 수치 칸에는 **양만** 둔다. 룰이 metric 에 상태 문자열(TIMED_OUT·STALE·
+                   * 미귀결)을 넣기도 하는데, 그건 세는 값이 아니라 판정이라 대상 아래
+                   * 배지로 내린다 — 우측 정렬 숫자 열에 섞으면 그 열을 훑을 수 없다. */
+                  const numeric = typeof I.root.metric === 'number';
                   return (
-                    <tr key={I.root.vid}>
+                    /* 행 전체가 과녁이다. 안쪽 버튼은 키보드 도달용으로 남긴다 —
+                       tr 은 Tab 으로 닿지 않는다. */
+                    <tr
+                      key={I.root.vid}
+                      className="ops-run-row"
+                      onClick={() => navigate(incidentHref(I.root))}
+                    >
+                      {/* 대상 + 규칙. 예전에는 룰이 쓴 `title` 을 그대로 냈는데, 어떤 행은
+                          대상(LOAD_ETF_HOLDINGS)이고 어떤 행은 증상(두 표면이 다름)이라
+                          세로로 훑어지지 않았다. 위반이 이미 들고 있는 축으로 통일한다.
+                          층 배지가 앞에 서는 이유: 대상이 룰마다 다른 축이라(런 ID·작업 키·
+                          데이터셋 id) 그 사실을 밝히지 않으면 뒤섞인 것처럼 보인다. */}
                       <td>
-                        {I.root.title}
-                        {I.root.mock && (
-                          <span className="chip" style={{ marginLeft: 6 }}>
-                            MOCK
-                          </span>
-                        )}
-                        {I.root.seed && (
-                          <span className="chip" style={{ marginLeft: 6 }}>
-                            SEED
-                          </span>
-                        )}
+                        <div className="ops-inc-target">
+                          <span className="chip">{I.root.layer}</span>
+                          {/* 대상 자체가 이동 버튼이다 — tr 은 Tab 이 닿지 않아 키보드 경로가
+                              사라진다(예전엔 `상세 →` 링크가 그 역할이었다) */}
+                          <button
+                            type="button"
+                            className="ops-inc-btn mono"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(incidentHref(I.root));
+                            }}
+                          >
+                            {I.root.target}
+                          </button>
+                        </div>
+                        <div className="ops-inc-meta t-xs">
+                          <span>{I.root.ruleName}</span>
+                          <span className="mono">{I.root.rule}</span>
+                          {/* 양이 아닌 metric 은 판정이다 — 수치 칸이 아니라 여기 선다 */}
+                          {!numeric && <span className="chip">{I.root.metric}</span>}
+                          {/* 흡수된 위반이 있을 때만 — `—` 를 열로 세우면 12행이 소음이다 */}
+                          {I.members.length > 0 && (
+                            <span className="chip chip-warn">연쇄 {I.members.length}건</span>
+                          )}
+                          {I.root.mock && <span className="chip">MOCK</span>}
+                          {I.root.seed && <span className="chip">SEED</span>}
+                          <Info tip={violationTip(I.root, I)} label={`${I.root.ruleName} 판정 근거`} />
+                        </div>
                       </td>
-                      <td className="num">{fmt(I.root.metric)}</td>
-                      <td className="col-muted">{I.root.unit}</td>
-                      <td className="col-muted">{I.root.kls}</td>
-                      <td className="mono col-muted">
-                        {I.root.rule}
-                        <Info tip={violationTip(I.root, I)} label={`${I.root.ruleName} 판정 근거`} />
-                      </td>
-                      <td className="col-muted">
-                        {I.members.length > 0 ? (
-                          <span className="chip chip-warn">+{I.members.length}</span>
+                      <td className="num">
+                        {numeric ? (
+                          <>
+                            <span>{fmt(I.root.metric)}</span>{' '}
+                            <span className="ops-inc-unit t-xs" title={I.root.unit}>
+                              {I.root.unit}
+                            </span>
+                          </>
                         ) : (
-                          <span style={{ color: 'var(--fg-4)' }}>—</span>
+                          /* 세는 값이 없다 — 판정은 왼쪽 배지가 이미 말했다 */
+                          <Absent kind="none" />
                         )}
-                      </td>
-                      <td className="col-muted t-xs">
-                        {rb ? <code>{rb.cmd}</code> : '런북 미등록'}
-                      </td>
-                      <td>
-                        {/* (i) 는 판정 근거, 이 버튼이 근거 화면으로 가는 동작 — 둘을 갈라 둔다 */}
-                        <button
-                          type="button"
-                          className="ops-run-btn"
-                          onClick={() => navigate(incidentHref(I.root))}
-                        >
-                          상세 →
-                        </button>
                       </td>
                     </tr>
                   );
@@ -179,6 +195,94 @@ export function IncidentsListPage() {
           </div>
         )}
       </div>
+
+      <RuleCatalog results={rules} minuteLoaded={minuteLoaded} />
+
     </div>
+  );
+}
+
+/* ══ 규칙 목록 ══
+ *
+ * 이 화면의 사건이 어디서 나왔는지 볼 곳이 없었다. 규칙은 `RULES` 배열 하나가 정본이므로
+ * 여기서 그대로 편다 — 화면에 규칙을 다시 적지 않는다(적으면 둘이 어긋난다).
+ *
+ * ⚠️ **평가됨·위반 0** 과 **못 돎** 을 같은 칸에 그리지 않는다. 조용한 규칙은 "괜찮다"이고
+ * 못 돈 규칙은 "모른다"다 — 둘을 합치면 계측 공백이 정상으로 보인다.
+ */
+const RULE_TIP = [
+  '이 콘솔의 사건은 전부 아래 규칙이 낸 것이다. 심각도(P0·P1·P2)는 규칙마다 선언된 값이고',
+  '개수로 계산하지 않는다 — 같은 심각도 안의 순서는 연쇄 크기·수치일 뿐 조치 우선순위가 아니다.',
+  '',
+  '평가됨 · 위반 0 — 규칙이 돌았고 조건에 걸린 것이 없다.',
+  '못 돎 — 그 규칙이 읽을 사실 축이 아예 없다. "괜찮다"가 아니라 "모른다"다.',
+  '',
+  '실시간(R17~R19)은 세션 원장이 스냅샷이 아니라 API 응답이라, 그 응답이 오기 전에는 못 돈다.',
+].join('\n');
+
+function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteLoaded: boolean }) {
+  const meta = new Map(RULES.map((R) => [R.id, R]));
+  const notRun = results.filter((r) => !r.evaluated).length;
+  /* 19행을 펼쳐 두면 정작 봐야 할 사건 카드가 화면 밖으로 밀린다 — 참조용이라 기본은 접는다.
+     native <details> 를 쓴다: 열림 상태 관리도, 접근성 배선도 브라우저가 한다. */
+  return (
+    <details className="card ops-rulecat">
+      <summary className="card-head">
+        <span className="t-label">규칙 {results.length}개</span>
+        {notRun > 0 && <StatusBadge tone="neutral">못 돎 {notRun}</StatusBadge>}
+        <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
+          실시간 축 {minuteLoaded ? '실림' : '없음'}
+        </span>
+      </summary>
+      <div className="card-pad" style={{ paddingBottom: 0 }}>
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          이 화면의 사건은 전부 아래 규칙이 낸 것입니다
+          <Info tip={RULE_TIP} label="규칙과 심각도" />
+        </p>
+      </div>
+      {/* 넓은 표는 자기 안에서 가로 스크롤한다 — 본문이 가로로 밀리지 않게(위 사건 표와 같은 관용구) */}
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>규칙</th>
+              <th>층</th>
+              <th>심각도</th>
+              <th>조건</th>
+              <th>출처</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((r) => {
+              const R = meta.get(r.id);
+              return (
+                <tr key={r.id}>
+                  <td>
+                    <span className="mono">{r.id}</span>{' '}
+                    <span style={{ fontWeight: 600 }}>{r.name}</span>
+                  </td>
+                  <td className="col-muted">{r.layer}</td>
+                  <td>{R && <StatusBadge tone={SEV_TONE[R.base]}>{R.base}</StatusBadge>}</td>
+                  <td className="col-muted t-xs" title={R?.desc}>{R?.desc}</td>
+                  <td>{R && <SourceChip source={R.source} />}</td>
+                  {/* 위반 수를 따로 세우지 않는다 — 0 의 뜻("돌았고 걸린 게 없다")은 숫자가
+                      아니라 문장이어야 하고, 옆 칸의 `못 돎`(모른다)과 갈라 읽혀야 한다.
+                      note 는 title 로 — 두 줄이 되면 19행의 높이가 들쭉날쭉해진다. */}
+                  <td className="col-muted t-xs" title={r.note ?? undefined}>
+                    {r.evaluated
+                      ? r.violations > 0
+                        ? `위반 ${r.violations}건`
+                        : '조건에 걸린 것 없음'
+                      : `못 돎 — ${R?.dep ?? '사실 축 부재'}`}
+                    {r.note && ' *'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }

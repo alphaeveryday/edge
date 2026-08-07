@@ -1,4 +1,6 @@
-/* 규칙 R01~R16 + 인과 간선 7개 — 명세 edge-console-rules.md §2·§3 의 정식 구현 (ALPHA-738).
+/* 규칙 R01~R19 + 인과 간선 7개 — 명세 edge-console-rules.md §2·§3 의 정식 구현 (ALPHA-738).
+ *
+ * R17~R19 는 명세 이후에 붙인 실시간(1분) 레인 규칙이다 — 그 절 아래 주석에 임계값 근거를 적었다.
  *
  * 규칙은 선언 데이터(id/layer/name/desc/kls/base/dep/source) + 조건 함수(run)다.
  * 화면 하단 "규칙 실행 결과" 바는 이 배열에서 자동 생성된다 — 여기 없는 규칙은 화면에 없다.
@@ -488,12 +490,115 @@ export const RULES: Rule[] = [
           drill: ['run', 'task-' + t.task_key] as [string, string],
         })),
   },
+  /* ── 실시간(1분) 수집 R17~R19 ─────────────────────────────────────────────────
+   * 왜 배치 규칙과 따로인가: 원장이 다르다(`minute_ingestion_session/window`). 그리고 이 축은
+   * **facts-snapshot 에 없다** — 화면이 `/sources/minute` 응답을 실어 줄 때만 돈다. 안 실리면
+   * canRun=false 라 "위반 0건"이 아니라 evaluated:false 로 남는다(조용한 규칙과 못 돈 규칙은 다르다).
+   *
+   * 지키는 선:
+   *   · 무증거는 판정이지 원인이 아니다 — "실행체가 죽었다"고 쓰지 않는다. 조건과 다음 확인만.
+   *   · 종료 국면(DRAINED·QC_RUNNING·FINALIZED)의 lease 만료는 정상이다. 실행체는 drain 뒤
+   *     떠나는 게 맞고, 그걸 위반으로 세면 매일 장 마감마다 거짓 P0 가 뜬다.
+   *   · lease 부재(null)는 만료(true)와 다른 사실이라 섞지 않는다 — 기동 증거 자체가 없는 것이고
+   *     "끊겼다"고 말할 근거가 아니다.
+   */
+  {
+    id: 'R17',
+    /* 실시간의 제어 단위는 데이터셋 × 세션 날짜다 — 층 어휘에 '세션'이 없어 데이터셋으로 둔다 */
+    layer: '데이터셋',
+    name: '실시간 실행 증거 끊김',
+    kls: '고장',
+    base: 'P0',
+    desc: '가동 중이어야 할 실시간 세션의 lease 가 만료됐거나 세션이 FAILED 다',
+    dep: null,
+    source: 'DB_LEDGER',
+    canRun: (f) => f.minute != null,
+    /* 임계값이 없다 — 이 사실 자체가 위반이다. 1분 레인은 끊기면 그 시간의 데이터가 영구 결손이라
+     * "몇 건부터"를 둘 자리가 없다. */
+    run: (f) =>
+      (f.minute?.sessions ?? [])
+        .filter((s) => {
+          if (s.phase === 'FAILED') return true;
+          if (s.phase === 'DRAINED' || s.phase === 'QC_RUNNING' || s.phase === 'FINALIZED') return false;
+          return s.leaseExpired === true;
+        })
+        .map((s) => ({
+          target: s.dataset,
+          title: `${s.dataset} 실행 증거 끊김`,
+          metric: 1,
+          unit: '세션',
+          why:
+            s.phase === 'FAILED'
+              ? 'phase=FAILED — 세션이 실패로 닫혔다'
+              : 'lease_expires_at 이 now() 보다 앞선다(서버 DB 시계 판정). 실행체 사망인지 배포·네트워크인지는 이 사실이 답하지 않는다',
+          evidence: `minute_ingestion_session ${f.minute?.date} phase=${s.phase}`,
+          drill: ['dataset', 'ds-' + s.dataset] as [string, string],
+        })),
+  },
+
+  {
+    id: 'R18',
+    layer: '데이터셋',
+    name: '실시간 무증거 창 누적',
+    kls: '무증거',
+    base: 'P1',
+    desc: '기한이 지난 1분 창에 실행·결과 증거가 없다',
+    dep: null,
+    source: 'DB_LEDGER',
+    canRun: (f) => f.minute != null,
+    run: (f) =>
+      (f.minute?.sessions ?? [])
+        /* 임계 5창 — 1분 창이므로 최소 5분치 공백이다. 1~2창은 수집 지연의 흔들림으로 흡수되지만
+         * 5분이면 그 구간 데이터가 없다는 뜻이고, 되돌릴 창구(소급 수집)가 소스마다 없다.
+         * P1 인 이유: 이미 지나간 창이라 즉시 조치로 되살릴 수 없다 — R17(지금 끊김)과 다르다. */
+        .filter((s) => s.overdueNoEvidence >= 5)
+        .map((s) => ({
+          target: s.dataset,
+          title: `${s.dataset} 무증거 창`,
+          metric: s.overdueNoEvidence,
+          unit: '창',
+          why: '기한이 지났는데 증거가 없다 — 안 돌았는지 기록이 안 남았는지는 이 사실이 가르지 않는다',
+          evidence: `minute_ingestion_window ${f.minute?.date} overdue_no_evidence`,
+          drill: ['dataset', 'ds-' + s.dataset] as [string, string],
+        })),
+  },
+
+  {
+    id: 'R19',
+    layer: '데이터셋',
+    name: '실시간 후속 처리 유실',
+    kls: '유실',
+    base: 'P1',
+    desc: '실시간 레인의 후속 처리 작업이 종료 상태 실패(DEAD)로 남았다',
+    dep: null,
+    source: 'DB_LEDGER',
+    canRun: (f) => f.minute != null,
+    run: (f) =>
+      (f.minute?.sessions ?? [])
+        /* 임계 1건 — DEAD 는 재시도가 끝난 **종료 상태**다. 누적치가 아니라 유실 확정이라
+         * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
+        .filter((s) => s.deadJobs >= 1)
+        .map((s) => ({
+          target: s.dataset,
+          title: `${s.dataset} 후속 처리 유실`,
+          metric: s.deadJobs,
+          unit: '건',
+          why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',
+          evidence: `후속 처리 작업 원장 ${f.minute?.date} dead`,
+          drill: ['dataset', 'ds-' + s.dataset] as [string, string],
+        })),
+  },
 ];
 
 /* 인과 간선 — 어떤 위반이 어떤 위반의 결과인가. 카드 = 위반이 아니라 사건.
  *
  * 의도적으로 긋지 않은 간선(명세 §3): R07 수급 결손 → R03 투영 지연.
- * 같은 런에서 났다는 것은 인과가 아니다 — 간선은 메커니즘이 있는 곳에만 긋는다. */
+ * 같은 런에서 났다는 것은 인과가 아니다 — 간선은 메커니즘이 있는 곳에만 긋는다.
+ *
+ * R17(지금 끊김) → R18(무증거 창)·R19(DEAD) 도 긋지 않는다. 메커니즘은 그럴듯하지만 **시간 축이
+ * 다르다** — R18·R19 는 그날 누적이고 R17 은 지금 시점의 사실이다. 응답에 해소 시각이 없어
+ * (decisions §3-1) 이미 복구된 과거 공백과 지금 막힌 것을 가를 수 없다. 지금 끊김이 그날 창
+ * 전부의 원인이라고 말할 근거가 없으므로 흡수하지 않는다. */
 export const EDGES: Edge[] = [
   { c: 'R10', p: 'R11', when: (c) => c.src === 'intraday', why: '소비자가 없어 체인 진입 자체가 없었다' },
   { c: 'R10', p: 'R15', when: (c) => c.src === 'batch', why: '체인 감소분이 곧 분석 실패 ETF 수다' },

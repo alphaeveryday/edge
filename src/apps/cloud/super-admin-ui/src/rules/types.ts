@@ -150,6 +150,35 @@ export interface RunbookEntry {
   note?: string;
 }
 
+/**
+ * 실시간(1분) 수집 세션 한 건 — 규칙이 읽는 **최소 구조**다.
+ *
+ * ⚠️ API DTO(`domains/sources/types.ts` 의 `MinuteSession`)를 여기로 import 하지 않는다.
+ * 규칙은 사실만 읽는 층이고 화면 도메인을 모른다 — 반대로 끌어오면 계층이 뒤집힌다.
+ * 대신 호출자가 DTO 를 이 모양으로 맞춰 넣는다(`minuteFacts` 어댑터).
+ *
+ * `jobs` 는 **그 데이터셋의 후속 처리 원장**이다. 가격은 세션에 붙은 job, 뉴스는 세션 연결
+ * 컬럼이 없어 날짜 축 집계다 — 어느 쪽을 넣을지는 어댑터가 정하고 규칙은 모른다.
+ */
+export interface MinuteSessionFact {
+  dataset: string;
+  /** 원장 어휘 그대로(ACTIVE·DRAINED·QC_RUNNING·FINALIZED·FAILED). 모르는 값은 그대로 둔다 */
+  phase: string;
+  /** 서버(DB 시계) 판정. `null` 은 lease 부재 — 만료(true)와 다른 사실이다 */
+  leaseExpired: boolean | null;
+  /** 기한이 지났는데 실행·결과 증거가 없는 창 수 */
+  overdueNoEvidence: number;
+  /** 후속 처리 원장에서 종료 상태 실패로 남은 건수 */
+  deadJobs: number;
+}
+
+/** 하루치 실시간 세션 — 원장에 `minute_ingestion_session/window` 축이 없으면 통째로 부재다 */
+export interface MinuteFacts {
+  /** 세션 날짜(KST) */
+  date: string;
+  sessions: MinuteSessionFact[];
+}
+
 export interface Facts {
   runs: RunFact[];
   tasks: TaskFact[];
@@ -160,6 +189,12 @@ export interface Facts {
   boundary: BoundaryFact;
   /** ETF별 분석 귀결 원장 — 계측이 없으면 아예 부재(undefined) → R15 evaluated:false */
   etf_ledger?: EtfLedger;
+  /**
+   * 실시간 수집 세션 — **스냅샷에는 없다**(facts-snapshot 은 배치 원장만 담는다).
+   * 화면이 `/sources/minute` 응답을 실어 줄 때만 채워지고, 없으면 R17~R19 는
+   * evaluated:false 다 — "위반 0건"이 아니라 "못 돌았다"로 남는다.
+   */
+  minute?: MinuteFacts;
   /** `"R05.LOAD_DOCUMENTS"` 또는 `"R15"` 키 → 조치. 없으면 "런북 미등록" */
   runbook: Record<string, RunbookEntry>;
   meta: { db: string; aws: string; today: string };

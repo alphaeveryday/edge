@@ -10,14 +10,14 @@
  * 과거 날짜로 다시 돌린다 — 산출 축 숫자에 "어느 런이 만든 것인가"가 붙어야 하는 이유다.
  */
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { retryCap } from '../../rules/rules';
 import type { RunFact, TaskFact } from '../../rules/types';
 import { MOCK_RUN_TASKS } from '../../mock/preview';
 import { MockChip } from '../_shared/MockPreview';
-import { Absent, AxisHeader, F, INCIDENTS, Info, fmt, kst } from './shared';
+import { Absent, AxisHeader, F, Info, fmt, kst, useConsoleEvaluation } from './shared';
 import {
   ABSENCE_LABEL,
   ABSENCE_MEANING,
@@ -28,7 +28,7 @@ import {
   reconcile,
 } from './runObservation';
 import type { Observation } from './runObservation';
-import { incidentHref, ledgerHref } from './investigation';
+import { incidentHref, ledgerHref, runHref } from './investigation';
 import '../../styles/ops.css';
 
 const KIND_LABEL: Record<string, string> = { scheduled: '정규', manual: '수동', backfill: '백필' };
@@ -153,30 +153,61 @@ const AXIS_TIP = [
   `  AWS 관측 없음 — ${ABSENCE_MEANING.awsNotObserved}`,
 ].join('\n');
 
+/**
+ * 최근 런 **목록**. 런을 고르면 그 런의 상세 페이지로 간다.
+ *
+ * 예전에는 이 화면이 목록 + 상세를 한 장에 들고 있었다. 세 가지가 걸렸다:
+ *   · 선택이 `runs[0]` 로 폴백해서 목록만 보러 와도 첫 런의 상세가 강제로 딸려 왔다.
+ *   · 선택이 `replace: true` 라 뒤로가기가 목록이 아니라 화면 밖으로 나갔다.
+ *   · 진입의 다수(격자·현재 실행·구성종목 결손·사건)가 이미 특정 런 직행이라 목록이 소음이었다.
+ *
+ * 옛 주소 `/ops/runs?run_id=X` 는 여기서 상세로 넘긴다 — 사건이 남긴 주소가 끊기면 안 된다.
+ */
 export function RunAxisPage() {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const runs = F.runs;
 
-  /* 사건 카드의 기존 드릴다운(?focus=run-… / task-…)을 계속 받는다 — 지목된 작업이 속한
-   * 런을 골라야 그 작업이 화면에 남는다. 안 그러면 첫 런이 선택돼 지목이 사라진다. */
-  const focus = params.get('focus');
-  const focusedRunId = useMemo(() => {
-    if (!focus) return undefined;
-    if (focus.startsWith('run-')) return focus.slice(4);
-    if (focus.startsWith('task-')) {
-      const key = focus.slice(5);
-      return F.tasks.find((t) => t.task_key === key)?.run_id;
-    }
-    return undefined;
-  }, [focus]);
+  const legacyRunId = params.get('run_id');
+  if (legacyRunId) {
+    const rest = new URLSearchParams(params);
+    rest.delete('run_id');
+    return <Navigate to={runHref(legacyRunId, Object.fromEntries(rest))} replace />;
+  }
 
-  const requested = params.get('run_id');
-  const requestedValid = requested != null && runs.some((r) => r.id === requested);
+  return (
+    <div className="flex flex-col gap-4">
+      <AxisHeader question="오늘 어떤 런이 돌았고, 그 런의 작업은 귀결됐는가?" />
+      {runs.length === 0 ? (
+        <div className="card card-pad">
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>실데이터 0건</p>
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            원장에 기록된 런이 없습니다.
+          </p>
+        </div>
+      ) : (
+        <RunList runs={runs} onSelect={(id) => navigate(runHref(id))} />
+      )}
+    </div>
+  );
+}
+
+/** 런 하나의 상세 — 목록의 선택 상태가 아니라 자기 주소를 갖는 페이지다 */
+export function RunDetailPage() {
+  const { runId = '' } = useParams();
+  const [params] = useSearchParams();
+  const runs = F.runs;
+
+  /* 사건 카드의 드릴다운이 실은 작업을 지목한다(?focus=task-…) — 그 지목은 상세 안에서
+   * 해당 작업을 펼치는 데 쓴다. 런 자체는 주소(:runId)가 정하므로 여기서 다시 고르지 않는다. */
+  const focus = params.get('focus');
+
   /* 사건에서 왔으면 그 사건을 함께 띄운다 — 조사 문맥이 없으면 이 화면이 왜 이 런을 열었는지
    * 알 수 없고, 돌아갈 곳도 사라진다. */
   const fromIncident = params.get('fromIncident');
+  const { incidents } = useConsoleEvaluation();
   const incident = fromIncident
-    ? (INCIDENTS.find((i) => i.root.vid === fromIncident) ?? null)
+    ? (incidents.find((i) => i.root.vid === fromIncident) ?? null)
     : null;
 
   /**
@@ -185,44 +216,34 @@ export function RunAxisPage() {
    * 때 **무관한 최근 실행이 그 사건의 실행처럼** 보인다(관대해지는 쪽 오류). 못 찾았다는 사실을
    * 그대로 낸다.
    */
-  const notFound = requested != null && !requestedValid;
-  const selectedId = notFound
-    ? undefined
-    : (requested ?? undefined) ??
-      (focusedRunId && runs.some((r) => r.id === focusedRunId) ? focusedRunId : undefined) ??
-      runs[0]?.id;
-
-  const selectRun = (id: string) => {
-    const next = new URLSearchParams(params);
-    next.set('run_id', id);
-    /* 지목(focus)은 직전 드릴다운의 것이라 런을 바꾸면 버린다 */
-    next.delete('focus');
-    /* 페이지 이동이 아니라 이 화면의 선택 상태다 — 히스토리를 쌓지 않는다 */
-    setParams(next, { replace: true });
-  };
-
-  const selected = runs.find((r) => r.id === selectedId);
+  const selected = runs.find((r) => r.id === runId);
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="오늘 어떤 런이 돌았고, 그 런의 작업은 귀결됐는가?" />
+      <AxisHeader question="이 실행의 작업은 귀결됐는가?" />
 
-      {incident && (
-        <nav className="t-xs ops-crumb" aria-label="조사 경로">
-          <Link to="/ops/incidents">문제·사건</Link>
-          <span aria-hidden="true">›</span>
-          <Link to={incidentHref(incident.root)}>{incident.root.title}</Link>
-          <span aria-hidden="true">›</span>
-          <span style={{ color: 'var(--fg-1)' }}>실행 {requested}</span>
-        </nav>
-      )}
+      <nav className="t-xs ops-crumb" aria-label="조사 경로">
+        {incident ? (
+          <>
+            <Link to="/ops/incidents">문제·사건</Link>
+            <span aria-hidden="true">›</span>
+            <Link to={incidentHref(incident.root)}>{incident.root.title}</Link>
+          </>
+        ) : (
+          <Link to="/ops/runs">최근 런</Link>
+        )}
+        <span aria-hidden="true">›</span>
+        <span style={{ color: 'var(--fg-1)' }}>실행 {runId}</span>
+      </nav>
 
-      {notFound ? (
-        /* 사건이 준 run_id 를 못 찾았다 — 다른 런을 대신 열지 않는다 */
+      {selected ? (
+        <RunTasks run={selected} focus={focus} />
+      ) : (
+        /* 지목한 run_id 를 못 찾았다 — 다른 런을 대신 열지 않는다 */
         <div className="card card-pad">
           <p className="t-sm m-0" style={{ fontWeight: 600 }}>연결된 실행을 찾지 못했습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            <code>{requested}</code> 가 최근 런 목록에 없습니다. 다른 최근 실행을 대신 선택하지
+            <code>{runId}</code> 가 최근 런 목록에 없습니다. 다른 최근 실행을 대신 선택하지
             않습니다 — 무관한 런이 이 사건의 실행처럼 보이기 때문입니다.{' '}
             {incident ? (
               <Link to={incidentHref(incident.root)}>사건으로 돌아가기</Link>
@@ -231,43 +252,20 @@ export function RunAxisPage() {
             )}
           </p>
         </div>
-      ) : null}
-
-      <RunList runs={runs} selectedId={selectedId} onSelect={selectRun} />
-
-      {notFound ? null : selected ? (
-        <RunTasks run={selected} focus={focus} />
-      ) : (
-        <div className="card card-pad">
-          <p className="t-sm m-0" style={{ fontWeight: 600 }}>
-            실데이터 0건
-          </p>
-          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            원장에 기록된 런이 없습니다. 선택된 런이 없으므로 작업 목록도 표시하지 않습니다.
-          </p>
-        </div>
       )}
     </div>
   );
 }
 
 /* ══ 마스터 — 최근 런 ══ */
-function RunList({
-  runs,
-  selectedId,
-  onSelect,
-}: {
-  runs: RunFact[];
-  selectedId?: string;
-  onSelect: (id: string) => void;
-}) {
+function RunList({ runs, onSelect }: { runs: RunFact[]; onSelect: (id: string) => void }) {
   return (
     <div className="card">
       <div className="card-head">
         <span className="t-label">최근 런</span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-          런을 고르면 아래 작업 목록이 그 런의 것으로 바뀝니다 · DB 원장 투영과 AWS 실행 상태는 별도
-          관측이라 어긋나면 대조 열에 남깁니다
+          런을 고르면 그 런의 상세로 갑니다 · DB 원장 투영과 AWS 실행 상태는 별도 관측이라
+          어긋나면 대조 열에 남깁니다
           <Info tip={AXIS_TIP} label="관측 축·대조·판정 마감" />
         </span>
       </div>
@@ -287,7 +285,6 @@ function RunList({
         </thead>
         <tbody>
           {runs.map((r) => {
-            const on = r.id === selectedId;
             const led = ledgerObservation(r);
             const aws = awsObservation(r);
             const rec = reconcile(r);
@@ -295,11 +292,8 @@ function RunList({
               <tr
                 key={r.id}
                 id={'run-' + r.id}
-                /* 선택 표시는 **자리를 차지하지 않는 축**으로만 한다 — 모든 행이 같은 왼쪽 선
-                 * 공간을 미리 갖고 색만 바뀐다. 예전엔 ▶ 와 "선택됨" 칩이 끼어들어 런 ID 와
-                 * 열 위치가 밀렸다. */
-                className={'ops-run-row' + (on ? ' ops-run-selected' : '')}
-                aria-selected={on}
+                /* 행 전체가 상세로 가는 이동이다 — 선택 상태가 아니라서 표시할 것이 없다 */
+                className="ops-run-row"
                 onClick={() => onSelect(r.id)}
               >
                 <td>
@@ -307,7 +301,6 @@ function RunList({
                   <button
                     type="button"
                     className="mono ops-run-btn"
-                    aria-pressed={on}
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelect(r.id);

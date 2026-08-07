@@ -20,7 +20,8 @@ import { PageSkeleton, StatusBadge } from 'ui-kit';
 import { ApiError } from '../api/client';
 import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
-import { INCIDENTS } from './ops/shared';
+import { useConsoleEvaluation } from './ops/shared';
+import { runHref } from './ops/investigation';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -28,7 +29,8 @@ import '../styles/ops.css';
 
 /** 조사 경로 — 실제 식별자로만 만든다. 사건에서 왔으면 그 문맥을 유지한다 */
 function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string }) {
-  const incident = incidentId ? INCIDENTS.find((i) => i.root.vid === incidentId) : undefined;
+  const { incidents } = useConsoleEvaluation();
+  const incident = incidentId ? incidents.find((i) => i.root.vid === incidentId) : undefined;
   return (
     <nav className="t-xs ops-crumb" aria-label="조사 경로">
       {incidentId ? (
@@ -50,7 +52,7 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
       )}
       {runKey && (
         <>
-          <Link to={`/ops/runs?run_id=${encodeURIComponent(runKey)}`} className="mono">
+          <Link to={runHref(runKey)} className="mono">
             {runKey}
           </Link>
           <span aria-hidden="true">›</span>

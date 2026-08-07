@@ -38,6 +38,7 @@ import type { ApiGap, Issue, Segment, ViewTone } from '../domains/sources/minute
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
+import { runHref } from './ops/investigation';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
 import '../styles/minute.css';
@@ -676,7 +677,7 @@ function BatchRunning({ date }: { date: string }) {
               {view.map((l) => (
                 <li key={l.runKey}>
                   <Link
-                    to={`/ops/runs?run_id=${encodeURIComponent(l.runKey)}`}
+                    to={runHref(l.runKey)}
                     className="mn-runcard"
                   >
                     <span className="t-label">{l.pipelineType}</span>

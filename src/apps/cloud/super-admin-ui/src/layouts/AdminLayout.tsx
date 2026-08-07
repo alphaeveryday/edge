@@ -42,7 +42,6 @@ const NAV_GROUPS: NavGroup[] = [
   {
     group: '파이프라인',
     areas: [
-      { path: '/', label: '개요', icon: 'alertTriangle' },
       { path: '/ops/incidents', label: '문제', icon: 'fileText' },
       {
         path: '/ops/runs',
@@ -158,11 +157,22 @@ export function AdminLayout() {
     pageTitle = 'Cloud 게시·발번 경계';
   } else if (path.startsWith('/overview')) {
     pageTitle = '레인 원장 요약';
-  } else if (path === '/') {
-    /* 상세를 복제하지 않고 "지금 무엇을 봐야 하나"만 짧게 답하는 요약 화면이다 */
+  } else if (path.startsWith('/ops/summary')) {
+    /* 메뉴에서 내린 옛 개요 — 라우트만 살려 둔다 */
     pageTitle = '파이프라인 개요';
   }
-  const showBack = Boolean(tenantId || analysisId);
+
+  /* 상세 화면은 돌아갈 목록이 정해져 있다 — 브라우저 뒤로가기에만 맡기면 링크로 바로 들어온
+   * 사람에게는 돌아갈 곳이 없다. */
+  const backTo = tenantId
+    ? '/tenants'
+    : analysisId
+      ? '/analyses'
+      : /^\/ops\/incidents\/.+/.test(path)
+        ? '/ops/incidents'
+        : /^\/ops\/runs\/.+/.test(path)
+          ? '/ops/runs'
+          : null;
 
   const saveProfile = () => {
     const name = profileDraft.trim();
@@ -329,11 +339,11 @@ export function AdminLayout() {
             background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
           }}
         >
-          {showBack && (
+          {backTo && (
             <button
               className="btn btn-ghost btn-icon"
               aria-label="뒤로"
-              onClick={() => navigate(tenantId ? '/tenants' : '/analyses')}
+              onClick={() => navigate(backTo)}
             >
               <Icon name="arrowLeft" className="ic" />
             </button>

@@ -18,7 +18,6 @@ import { RULES } from '../../rules/rules';
 import {
   Absent,
   F,
-  INCIDENTS,
   Info,
   SEV_TONE,
   SourceChip,
@@ -26,6 +25,7 @@ import {
   fmt,
   kst,
   runbookOf,
+  useConsoleEvaluation,
 } from './shared';
 import { investigate, ledgerHref } from './investigation';
 import '../../styles/ops.css';
@@ -50,7 +50,8 @@ function Fact({ k, children }: { k: string; children: React.ReactNode }) {
 
 export function IncidentDetailPage() {
   const { vid = '' } = useParams();
-  const incident = INCIDENTS.find((i) => i.root.vid === vid);
+  const { incidents, facts } = useConsoleEvaluation();
+  const incident = incidents.find((i) => i.root.vid === vid);
 
   if (!incident) {
     return (
@@ -67,7 +68,8 @@ export function IncidentDetailPage() {
 
   const v = incident.root;
   const rule = RULES.find((r) => r.id === v.rule);
-  const { targets, ledger, ledgerNote } = investigate(incident, F);
+  /* 평가에 쓴 사실 그대로 — 정적 F 로 만들면 실시간 사건이 없는 날짜의 세션을 가리킨다 */
+  const { targets, ledger, ledgerNote } = investigate(incident, facts);
   const ledgerTo = ledgerHref(ledger);
   const rb = runbookOf(v);
 

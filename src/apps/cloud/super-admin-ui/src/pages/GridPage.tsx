@@ -18,12 +18,13 @@
  * 데이터셋 축은 화면 쪽 카탈로그다 — 격자 API 가 dataset 을 주지 않는다(datasetCatalog 참고).
  * 상태·기대 실행 수는 원장 값에서만 센다(dailyRollup 참고) — 주기로 숫자를 지어내지 않는다.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import type { SourceGrid } from '../domains/sources';
-import { useSourceGrid } from '../domains/sources/hooks';
+import type { MinuteStatus, SourceGrid } from '../domains/sources';
+import { useMinuteStatus, useSourceGrid } from '../domains/sources/hooks';
+import { liveness } from '../domains/sources/minuteView';
 import {
   ALL_DATASETS,
   CATALOG_SOURCE,
@@ -37,6 +38,7 @@ import type { DayExecution, DayRollup, DayState } from '../domains/sources/daily
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
+import { runHref } from './ops/investigation';
 import { LoadError } from './_shared/LoadError';
 import '../styles/grid.css';
 
@@ -162,6 +164,9 @@ function FilterRow<T extends string>({
 
 export function GridPage() {
   const { data: grid, isPending, isError, error } = useSourceGrid();
+  /* 실시간 레인의 하루치 세션 — 격자 원장에 없는 행을 세션 원장이 답할 수 있는 만큼만 채운다.
+   * 실패해도 격자는 그린다(세션이 없으면 예전처럼 상태 미제공). */
+  const { data: minute } = useMinuteStatus();
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
@@ -178,7 +183,7 @@ export function GridPage() {
     );
   }
 
-  return <GridBody grid={grid} />;
+  return <GridBody grid={grid} minute={minute} />;
 }
 
 interface Selection {
@@ -187,10 +192,58 @@ interface Selection {
   rollup?: DayRollup;
 }
 
-function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) {
+/**
+ * 실시간 레인의 그날 상태 — 격자 원장(ops_expected_task)에 이 레인의 행이 없으므로,
+ * **세션 원장이 그날의 사실을 줄 때만** 그 판정을 그대로 편다.
+ *
+ * 지키는 선:
+ *   · 세션 응답은 하루치다 — 채워지는 날짜는 응답이 말한 그 하루뿐이고 나머지는 여전히
+ *     `상태 미제공` 이다. 없는 날짜의 판정을 옆 날짜에서 복사하지 않는다.
+ *   · **창 카운트로 그날의 귀결(정상·주의)을 만들지 않는다.** 진행 중인 세션에 완결 판정을
+ *     붙이는 셈이고, 커버리지 분모도 하한이라(minuteView 참고) 근거가 못 된다.
+ *   · 실행체 생존만 편다 — `liveness` 는 phase 와 leaseExpired(서버 DB 시계 판정)의 파생이라
+ *     화면이 새로 만드는 판정이 아니다. 종료 국면·lease 부재는 그날의 귀결을 답하지 않으므로
+ *     null 로 두고 `상태 미제공` 에 맡긴다.
+ */
+function sessionState(
+  d: DatasetEntry,
+  date: string,
+  minute?: MinuteStatus,
+): { state: DayState; basis: string } | null {
+  if (!d.sessionDataset || !minute || minute.date !== date) return null;
+  const s = minute.sessions.find((x) => x.dataset === d.sessionDataset);
+  if (!s) return null;
+  const l = liveness(s);
+  if (l.kind === 'live') return { state: '실행 중', basis: l.basis };
+  /* 살아 있지 않은 것을 상태 미제공으로 덮으면 원장이 관대해지는 쪽으로 틀린다 */
+  if (l.kind === 'broken' || l.kind === 'failed') return { state: '장애', basis: l.basis };
+  return null;
+}
+
+function GridBody({
+  grid,
+  minute,
+  mock = false,
+}: {
+  grid: SourceGrid;
+  minute?: MinuteStatus;
+  mock?: boolean;
+}) {
   const [kindFilter, setKindFilter] = useState<DatasetKindLabel | 'all'>('all');
   const [domainFilter, setDomainFilter] = useState<DatasetDomain | 'all'>('all');
   const [selected, setSelected] = useState<Selection | null>(null);
+
+  /* 상세 카드는 격자 아래에 붙는다 — 데이터셋·날짜가 늘면 접힌 화면 밖이라 박스를 눌러도
+   * 아무 일이 없는 것처럼 보인다(10일 × 10행에서 top 815px 을 쟀다).
+   * `block: 'nearest'` 로 최소한만 굴린다 — 카드를 화면 맨 위로 올리면 어느 박스를 눌렀는지
+   * 시야에서 잃는다. 모션 축소 설정은 존중한다. */
+  useEffect(() => {
+    if (!selected) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document
+      .getElementById('gd-detail')
+      ?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'nearest' });
+  }, [selected]);
 
   /* 필터는 **행**에만 건다 — 슬롯을 걸러 날짜 축까지 바뀌면 필터를 바꿀 때마다 열이 움직인다 */
   const dates = useMemo(() => datesOf(grid.slots), [grid.slots]);
@@ -207,13 +260,13 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
 
   /**
    * 셀 상태 — **데이터 출처를 상태로 만들지 않는다.** 배치든 실시간이든 같은 어휘를 쓰고,
-   * 판정 값이 없을 때만 `상태 미제공` 이다. 실시간은 최근 7일 요약 API 가 없어 실데이터에서는
-   * 전부 여기 해당한다(목 미리보기에서는 목표 구조를 볼 수 있게 목 판정을 쓴다).
+   * 판정 값이 없을 때만 `상태 미제공` 이다. 실시간은 최근 7일 요약 API 가 없어, 세션 응답이 답하는
+   * 하루(sessionState)를 빼면 전부 여기 해당한다(목 미리보기에서는 목표 구조를 볼 수 있게 목 판정).
    */
   const boxState = (d: DatasetEntry, date: string): DayState => {
     const r = at(d.id, date);
     if (r) return r.state;
-    return d.inOpsGrid ? '계획 없음' : '상태 미제공';
+    return sessionState(d, date, minute)?.state ?? (d.inOpsGrid ? '계획 없음' : '상태 미제공');
   };
 
   return (
@@ -304,7 +357,7 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
                             type="button"
                             className={'gd-cellbtn' + (sel ? ' gd-selected' : '')}
                             aria-pressed={sel}
-                            title={boxTip(d, date, r)}
+                            title={boxTip(d, date, r, sessionState(d, date, minute))}
                             aria-label={`${d.label} ${date} ${st} — 그날 실행 목록 보기`}
                             onClick={() => setSelected(sel ? null : { dataset: d, date, rollup: r })}
                           >
@@ -325,19 +378,40 @@ function GridBody({ grid, mock = false }: { grid: SourceGrid; mock?: boolean }) 
             행 축(데이터셋 · 유형 · 도메인 · 수집 주기)은 <b>{CATALOG_SOURCE}</b>입니다 — 격자 응답이
             데이터셋을 주지 않아 화면이 작업을 데이터셋으로 묶습니다. 상태와 기대 실행 수는 원장
             값에서만 셉니다. 실시간 데이터셋의 판정 출처는 <b>minute_ingestion_session/window</b>이고,
-            그 원장에는 최근 7일 일별 요약 엔드포인트가 없어 실데이터에서는 <b>상태 미제공</b>으로
-            둡니다 — 없는 판정을 지어내지 않습니다.
+            그 원장에는 최근 7일 일별 요약 엔드포인트가 없습니다 — 세션 응답이 답하는 <b>하루</b>만
+            그 세션의 실행체 생존(실행 중 · 장애)을 펴고, 나머지 날짜는 <b>상태 미제공</b>으로 둡니다.
+            창 카운트로 그날의 귀결을 만들지 않습니다.
           </p>
         </div>
       </div>
 
-      {selected && <DayDetail sel={selected} mock={mock} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DayDetail
+          sel={selected}
+          live={sessionState(selected.dataset, selected.date, minute)}
+          mock={mock}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }
 
-function boxTip(d: DatasetEntry, date: string, r?: DayRollup): string {
+function boxTip(
+  d: DatasetEntry,
+  date: string,
+  r?: DayRollup,
+  live?: { state: DayState; basis: string } | null,
+): string {
   if (!d.inOpsGrid) {
+    if (live) {
+      return [
+        `${d.label} · ${date} · ${live.state}`,
+        `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'} 세션`,
+        live.basis,
+        '이 날짜의 일별 요약은 여전히 없습니다 — 세션 생존만 편 것이고, 분·poll 단위는 세션 상세가 답합니다',
+      ].join('\n');
+    }
     return [
       `${d.label} · ${date} · 상태 미제공`,
       `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'}`,
@@ -377,7 +451,17 @@ function boxTip(d: DatasetEntry, date: string, r?: DayRollup): string {
  * ⚠️ 런 kind(정규·수동·백필)는 격자 응답에 없다(decisions.md §3-4 계측 부채) — 여기서
  * runKey 모양으로 추측하지 않고 `배치 실행`까지만 단언한다.
  */
-function DayDetail({ sel, mock, onClose }: { sel: Selection; mock: boolean; onClose: () => void }) {
+function DayDetail({
+  sel,
+  live,
+  mock,
+  onClose,
+}: {
+  sel: Selection;
+  live?: { state: DayState; basis: string } | null;
+  mock: boolean;
+  onClose: () => void;
+}) {
   const { dataset: d, date, rollup: r } = sel;
 
   /* 실시간 데이터셋 — 이 격자에는 그날의 판정이 없다. 세션 한 건을 실행 인스턴스로 세우고 보낸다.
@@ -390,15 +474,23 @@ function DayDetail({ sel, mock, onClose }: { sel: Selection; mock: boolean; onCl
           <span className="t-label">
             {d.label} · {date}
           </span>
-          <StatusBadge tone={STATE_TONE['상태 미제공']}>상태 미제공</StatusBadge>
+          <StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>
+            {live?.state ?? '상태 미제공'}
+          </StatusBadge>
           <InfoPopover
             label="판정 출처"
             title="판정 출처"
             text={
               `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '—'}\n\n` +
-              '이 원장에는 최근 7일 일별 요약 엔드포인트가 없어 격자가 이 날짜의 판정 값을 받지 못했다.\n' +
-              '데이터 출처가 다른 것은 운영 상태가 아니므로 상태 어휘로 쓰지 않는다 —\n' +
-              '없는 판정을 지어내는 대신 "상태 미제공"이라고 쓰고 세션 상세로 보낸다.'
+              (live
+                ? '이 원장에는 최근 7일 일별 요약 엔드포인트가 없다. 다만 세션 응답이 이 날짜의\n' +
+                  '세션을 주므로 그 실행체 생존 판정만 그대로 편다:\n' +
+                  `${live.basis}\n\n` +
+                  '창 카운트로 그날의 귀결(정상·주의)을 만들지는 않는다 — 진행 중인 세션에\n' +
+                  '완결 판정을 붙이는 셈이라 근거가 없다. 분·poll 단위는 세션 상세가 답한다.'
+                : '이 원장에는 최근 7일 일별 요약 엔드포인트가 없어 격자가 이 날짜의 판정 값을 받지 못했다.\n' +
+                  '데이터 출처가 다른 것은 운영 상태가 아니므로 상태 어휘로 쓰지 않는다 —\n' +
+                  '없는 판정을 지어내는 대신 "상태 미제공"이라고 쓰고 세션 상세로 보낸다.')
             }
           />
           <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={onClose}>
@@ -424,7 +516,9 @@ function DayDetail({ sel, mock, onClose }: { sel: Selection; mock: boolean; onCl
                   <span className="chip">실시간 세션</span>
                 </td>
                 <td>
-                  <StatusBadge tone={STATE_TONE['상태 미제공']}>상태 미제공</StatusBadge>
+                  <StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>
+                    {live?.state ?? '상태 미제공'}
+                  </StatusBadge>
                 </td>
                 <td>
                   <Link to={href} className="gd-linkbtn">
@@ -529,7 +623,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
   const openTask = (taskKey: string) =>
     /* 원장 근거로 바로 건너뛰지 않는다 — 실행 상세를 거쳐 작업 상세를 연다 */
     navigate(
-      `/ops/runs?run_id=${encodeURIComponent(exec.runKey)}&focus=task-${encodeURIComponent(taskKey)}`,
+      runHref(exec.runKey, { focus: `task-${taskKey}` }),
     );
 
   const problems = c.failed + c.noEvidence;

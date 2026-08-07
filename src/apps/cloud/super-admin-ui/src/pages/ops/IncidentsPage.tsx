@@ -15,7 +15,6 @@
  * 판정은 아무것도 새로 만들지 않는다. 운영 상태의 정상/저하/차단은 응답이 준 두 수치의
  * 직접 비교이고, 사건은 evaluate() 결과를 도메인으로 거른 것뿐이다.
  */
-import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
@@ -23,7 +22,7 @@ import type { Incident } from '../../rules/types';
 import { useMinuteStatus, useSourceOverview } from '../../domains/sources/hooks';
 import { datasetKind, sessionHealth } from '../../domains/sources/minuteView';
 import { MOCK_MINUTE } from '../../mock/preview';
-import { F, Info, PIPELINE_INCIDENTS } from './shared';
+import { F, Info, useConsoleEvaluation } from './shared';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { METRICS } from './trendCatalog';
@@ -164,15 +163,20 @@ interface NowItem {
   cta: string;
 }
 
-function nowItems(sessions: number, batchRunning: number, dataDefects: number): NowItem[] {
-  const p0 = PIPELINE_INCIDENTS.filter((i) => i.sev === 'P0').length;
-  const p1 = PIPELINE_INCIDENTS.filter((i) => i.sev === 'P1').length;
+function nowItems(
+  sessions: number,
+  batchRunning: number,
+  dataDefects: number,
+  pipeline: Incident[],
+): NowItem[] {
+  const p0 = pipeline.filter((i) => i.sev === 'P0').length;
+  const p1 = pipeline.filter((i) => i.sev === 'P1').length;
   return [
     {
       label: '즉시 확인할 문제',
       value: `P0 ${p0} · P1 ${p1}`,
       tone: p0 > 0 ? 'blocked' : p1 > 0 ? 'warn' : 'active',
-      note: `파이프라인 문제 ${PIPELINE_INCIDENTS.length}건`,
+      note: `파이프라인 문제 ${pipeline.length}건`,
       href: '/ops/incidents',
       cta: '문제',
     },
@@ -203,7 +207,15 @@ function nowItems(sessions: number, batchRunning: number, dataDefects: number): 
   ];
 }
 
-function NowStrip({ sessions, batchRunning }: { sessions: number; batchRunning: number }) {
+function NowStrip({
+  sessions,
+  batchRunning,
+  pipeline,
+}: {
+  sessions: number;
+  batchRunning: number;
+  pipeline: Incident[];
+}) {
   /* 데이터 결손·지연은 추이 지표의 판정을 그대로 센다 — 개요가 새 판정을 만들지 않는다 */
   const dataDefects = METRICS.filter(
     (m) => m.group === 'batch' && evaluateMetric(m).kind === 'abnormal',
@@ -219,7 +231,7 @@ function NowStrip({ sessions, batchRunning }: { sessions: number; batchRunning: 
       </div>
       <div className="card-pad">
         <ul className="ops-now">
-          {nowItems(sessions, batchRunning, dataDefects).map((i) => (
+          {nowItems(sessions, batchRunning, dataDefects, pipeline).map((i) => (
             <li key={i.label}>
               <Link to={i.href} className="ops-now-item">
                 <span className="t-label">{i.label}</span>
@@ -244,7 +256,7 @@ function NowStrip({ sessions, batchRunning }: { sessions: number; batchRunning: 
  */
 const TOP_N = 3;
 
-function ImmediateAction({ list }: { list: Incident[] }) {
+function ImmediateAction({ list, total }: { list: Incident[]; total: number }) {
   const navigate = useNavigate();
   const top = list.slice(0, TOP_N);
   return (
@@ -253,7 +265,7 @@ function ImmediateAction({ list }: { list: Incident[] }) {
         <span className="t-label">즉시 조치</span>
         {list.length > 0 && <StatusBadge tone="blocked">P0 {list.length}건</StatusBadge>}
         <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
-          <Link to="/ops/incidents">모든 문제 {PIPELINE_INCIDENTS.length}건 보기 →</Link>
+          <Link to="/ops/incidents">모든 문제 {total}건 보기 →</Link>
         </span>
       </div>
       <div className="card-pad">
@@ -296,7 +308,9 @@ function ImmediateAction({ list }: { list: Incident[] }) {
 
 /* ══ 페이지 ══ */
 export function IncidentsPage() {
-  const [p0] = useState(() => PIPELINE_INCIDENTS.filter((i) => i.sev === 'P0'));
+  /* 실시간 축이 실린 평가 — 사건 목록의 유일한 출처다(shared.useConsoleEvaluation) */
+  const { pipeline } = useConsoleEvaluation();
+  const p0 = pipeline.filter((i) => i.sev === 'P0');
   const minute = useMinuteStatus();
   const overview = useSourceOverview();
   const sessions = minute.data?.sessions.length ?? 0;
@@ -312,8 +326,8 @@ export function IncidentsPage() {
         거래일 {F.meta.today} · DB {hm(F.meta.db)} · AWS/S3 {hm(F.meta.aws)}
       </p>
 
-      <NowStrip sessions={sessions} batchRunning={batchRunning} />
-      <ImmediateAction list={p0} />
+      <NowStrip sessions={sessions} batchRunning={batchRunning} pipeline={pipeline} />
+      <ImmediateAction list={p0} total={pipeline.length} />
       <RealtimeShortcut />
     </div>
   );

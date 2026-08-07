@@ -18,7 +18,7 @@ import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
 import { datasetKind, gapRuns, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_MINUTE, MOCK_REPORT, mockReportForRun } from '../mock/preview';
-import { INCIDENTS } from './ops/shared';
+import { useConsoleEvaluation } from './ops/shared';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
@@ -473,7 +473,8 @@ function LedgerCrumb({
   date?: string;
   report?: SourceReport;
 }) {
-  const incident = incidentId ? INCIDENTS.find((i) => i.root.vid === incidentId) : undefined;
+  const { incidents } = useConsoleEvaluation();
+  const incident = incidentId ? incidents.find((i) => i.root.vid === incidentId) : undefined;
   const runFound = report?.run?.runKey === runKey;
   const taskFound = task !== undefined && (report?.tasks.some((t) => t.taskKey === task) ?? false);
   const crumbs: React.ReactNode[] = [];

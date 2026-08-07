@@ -13,7 +13,7 @@ import { LoginPage } from './pages/LoginPage';
 import { IncidentsPage } from './pages/ops/IncidentsPage';
 import { IncidentsListPage } from './pages/ops/IncidentsListPage';
 import { IncidentDetailPage } from './pages/ops/IncidentDetailPage';
-import { RunAxisPage } from './pages/ops/RunAxisPage';
+import { RunAxisPage, RunDetailPage } from './pages/ops/RunAxisPage';
 import { ChainPage } from './pages/ops/ChainPage';
 import { DatasetPage } from './pages/ops/DatasetPage';
 import { TrendPage } from './pages/ops/TrendPage';
@@ -38,12 +38,17 @@ export function App() {
         <Route element={<AdminLayout />}>
           {/* 규칙 엔진 축(ALPHA-738) — 홈은 사건 목록이고, 각 축은 사이드바의 형제 화면이다.
            * 카드 클릭은 축 화면의 해당 행으로 떨어진다(?focus=…). 이전 레인 원장 요약은 /overview. */}
-          <Route path="/" element={<IncidentsPage />} />
+          {/* 첫 화면은 "지금 걸린 것"이다. 개요는 아래 두 화면의 더 나쁜 사본이었고, 규칙
+              엔진 P0/P1 과 세션 판정을 근거 없이 합쳐 답할 수 없는 질문을 답한 척했다.
+              ⚠️ 라우트·컴포넌트는 살려 둔다(메뉴에서만 뺀 다른 7개와 같은 처리) */}
+          <Route path="/" element={<Navigate to="/ops/incidents" replace />} />
+          <Route path="/ops/summary" element={<IncidentsPage />} />
           {/* 오늘(요약)과 문제·사건(전체 목록)은 역할이 다른 화면이다 */}
           <Route path="/ops/incidents" element={<IncidentsListPage />} />
           {/* 사건 상세 — 조사의 출발점. 라우트라서 뒤로 가기·딥링크가 그대로 동작한다 */}
           <Route path="/ops/incidents/:vid" element={<IncidentDetailPage />} />
           <Route path="/ops/runs" element={<RunAxisPage />} />
+          <Route path="/ops/runs/:runId" element={<RunDetailPage />} />
           <Route path="/ops/chain" element={<ChainPage />} />
           <Route path="/ops/datasets" element={<DatasetPage />} />
           <Route path="/ops/trend" element={<TrendPage />} />

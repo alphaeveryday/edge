@@ -7,6 +7,7 @@
  * 안에서 절대배치하면 설명이 잘린다.
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import '../../styles/info-popover.css';
 
@@ -30,7 +31,13 @@ export function InfoPopover({ text, label, title }: InfoPopoverProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const toggle = () => {
+  /**
+   * ⚠️ 전파를 끊는다. 이 버튼은 표 행·카드처럼 **자기 클릭을 갖는 조상 안**에 놓인다 —
+   * 안 끊으면 설명을 열자마자 그 행이 이동해 팝오버가 사라진다(사건 목록에서 실제로 겪었다).
+   * 조상마다 막지 않고 여기서 한 번 막는다 — 새 소비자가 같은 함정을 다시 밟지 않게.
+   */
+  const toggle = (e: MouseEvent) => {
+    e.stopPropagation();
     if (!open) document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: id }));
     setOpen((v) => !v);
   };

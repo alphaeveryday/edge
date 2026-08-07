@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildReport, evaluate } from './evaluate.ts';
-import type { Facts, RunFact, TaskFact } from './types.ts';
+import type { Facts, MinuteSessionFact, RunFact, TaskFact } from './types.ts';
 
 const NOW = new Date('2026-08-03T16:21:00+09:00');
 
@@ -321,6 +321,79 @@ test('R16 경계 — max_retries=0 은 상한 0회가 아니라 정책 미선언
   assert.equal(hits(f, 'R16').length, 0);
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R16')!;
   assert.equal(rr.evaluated, false);
+});
+
+/* ── 실시간(1분) 레인 R17~R19 ──
+ * 이 축은 스냅샷에 없다 — 화면이 `/sources/minute` 응답을 실을 때만 돈다. 그래서 "축이 없으면
+ * evaluated:false" 가 조건 자체만큼 중요하다(못 돈 규칙과 조용한 규칙이 같아 보이면 안 된다). */
+
+const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
+  dataset: 'price_minute',
+  phase: 'ACTIVE',
+  leaseExpired: false,
+  overdueNoEvidence: 0,
+  deadJobs: 0,
+  ...o,
+});
+const withMinute = (sessions: MinuteSessionFact[]): Facts => {
+  const f = emptyFacts();
+  f.minute = { date: '2026-08-03', sessions };
+  return f;
+};
+
+test('R17~R19 — minute 축이 없으면 evaluated:false (위반 0건이 아니다)', () => {
+  const rep = buildReport(emptyFacts(), NOW);
+  for (const id of ['R17', 'R18', 'R19']) {
+    const rr = rep.rules.find((r) => r.id === id)!;
+    assert.equal(rr.evaluated, false, `${id} 는 못 돈 것이지 조용한 것이 아니다`);
+  }
+});
+
+test('R17 실행 증거 끊김 — 가동 중 lease 만료는 위반, 유효하면 조용', () => {
+  assert.equal(hits(withMinute([session({ leaseExpired: true })]), 'R17').length, 1);
+  assert.equal(hits(withMinute([session({ leaseExpired: false })]), 'R17').length, 0);
+});
+
+test('R17 경계 — 종료 국면의 lease 만료는 위반이 아니다 (매 장 마감 거짓 P0 방지)', () => {
+  /* drain 이후 실행체가 떠나는 것은 정상이다. 이걸 위반으로 세면 거래일마다 P0 가 뜨고,
+   * 그러면 P0 가 신호가 아니라 소음이 된다 — 관대해지는 쪽이 아니라 엄해지는 쪽 오류다. */
+  for (const phase of ['DRAINED', 'QC_RUNNING', 'FINALIZED']) {
+    assert.equal(hits(withMinute([session({ phase, leaseExpired: true })]), 'R17').length, 0, phase);
+  }
+  /* FAILED 는 국면과 무관하게 위반이다 — 세션이 실패로 닫혔다는 사실이다 */
+  assert.equal(hits(withMinute([session({ phase: 'FAILED', leaseExpired: false })]), 'R17').length, 1);
+});
+
+test('R17 경계 — lease 부재(null)는 만료가 아니다 (기동 증거 없음 ≠ 끊김)', () => {
+  assert.equal(hits(withMinute([session({ leaseExpired: null })]), 'R17').length, 0);
+});
+
+test('R18 무증거 창 — 임계 5창. 4창은 조용하고 5창부터 위반', () => {
+  assert.equal(hits(withMinute([session({ overdueNoEvidence: 4 })]), 'R18').length, 0);
+  const v = hits(withMinute([session({ overdueNoEvidence: 5 })]), 'R18');
+  assert.equal(v.length, 1);
+  assert.equal(v[0].metric, 5);
+  assert.equal(v[0].sev, 'P1');
+});
+
+test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반', () => {
+  assert.equal(hits(withMinute([session({ deadJobs: 0 })]), 'R19').length, 0);
+  assert.equal(hits(withMinute([session({ deadJobs: 1 })]), 'R19').length, 1);
+});
+
+test('실시간 위반은 그 데이터셋의 세션으로 드릴다운한다 — 런 축으로 보내지 않는다', () => {
+  const v = hits(withMinute([session({ dataset: 'news_minute', leaseExpired: true })]), 'R17')[0];
+  assert.deepEqual(v.drill, ['dataset', 'ds-news_minute']);
+});
+
+test('R17~R19 는 서로 흡수되지 않는다 — 같은 데이터셋이어도 사건 3건이다', () => {
+  /* 시간 축이 다르다(지금 끊김 vs 그날 누적). 응답에 해소 시각이 없어 지금 끊김이 그날 공백
+   * 전부의 원인이라고 말할 수 없다 — 간선을 그으면 원인을 지어내는 것이다. */
+  const ev = evaluate(
+    withMinute([session({ leaseExpired: true, overdueNoEvidence: 9, deadJobs: 2 })]),
+    NOW,
+  );
+  assert.equal(ev.incidents.length, 3);
 });
 
 /* ── 인과 병합 ── */

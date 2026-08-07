@@ -166,18 +166,8 @@
   border-color: rgba(47, 125, 91, 0.3);
 }
 
-/* 마스터–상세: 런 행 선택.
-   ⚠️ 선택 표시가 **자리를 차지하면 안 된다** — 예전에는 ▶ 표식과 "선택됨" 칩이 끼어들어
-   런 ID 와 열 위치가 밀렸다. 모든 행이 같은 왼쪽 선 공간을 미리 갖고 색만 바뀐다. */
-.ops-run-row > td:first-child {
-  box-shadow: inset 3px 0 0 transparent;
-}
-.ops-run-selected > td {
-  background: var(--accent-tint);
-}
-.ops-run-selected > td:first-child {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
+/* 런 행 — 클릭하면 그 런의 상세 페이지로 간다. 선택 상태가 아니라 이동이라 표식이 없다
+   (마스터–상세를 한 장에 두던 시절의 `.ops-run-selected` 는 소비자가 사라져 지웠다). */
 .ops-run-row { cursor: pointer; }
 .ops-run-btn:focus-visible {
   outline: 2px solid var(--accent);
@@ -666,3 +656,88 @@ button.kpi.ops-sev.ops-sev-on {
 .ops-p0-line:hover { border-color: var(--accent); }
 .ops-p0-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ops-p0-line .ops-lane-link { margin-left: auto; }
+
+/* 규칙 목록 — 참조용이라 접어 둔다. <summary> 는 기본 표식(▸)이 그대로 살아 있어야
+   접힘 여부를 색 아닌 축으로도 말한다(색만으로 상태를 구분하지 않는다). */
+.ops-rulecat > summary {
+  cursor: pointer;
+}
+/* card-head 가 flex 라 기본 ::marker 가 사라진다 — 표식을 직접 그린다.
+   접힘 여부를 색이 아니라 모양으로 말한다. */
+.ops-rulecat > summary::-webkit-details-marker {
+  display: none;
+}
+.ops-rulecat > summary::before {
+  content: '▸';
+  margin-right: 6px;
+  color: var(--fg-3);
+}
+.ops-rulecat[open] > summary::before {
+  content: '▾';
+}
+
+/* 사건 표 — 1280px 에서 데이터셋 이름·런북 명령이 접혀 행 높이가 36 → 55px 로 들쭉날쭉했다.
+   좁으면 **접지 말고 표가 가로로 스크롤**한다(감싸는 div 가 overflow-x:auto). 행 높이가 고르면
+   스캔이 되고, 접히면 어느 행이 긴지가 정보처럼 보인다. */
+.ops-inc-table td,
+.ops-inc-table th {
+  white-space: nowrap;
+}
+
+/* 사건 행 — 대상 한 줄 + 규칙·문맥 한 줄. 열을 8개에서 3개로 줄이면서 가로 스크롤이 사라졌다.
+   ⚠️ 폭을 줄이려고 정보를 지운 게 아니라 **자리를 옮겼다**: 단위·권장 조치·근거 전문은 ⓘ 와
+   사건 상세가 답한다. 열로 세우면 대부분이 `런북 미등록` 처럼 정보량 0인 문구로 폭을 먹는다. */
+.ops-inc-target {
+  font-weight: 600;
+}
+.ops-inc-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--fg-3);
+}
+/* 단위는 길다(`유실 단위(잡별 상이)`) — 잘라 두고 전문은 title 로 남긴다 */
+.ops-inc-unit {
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  color: var(--fg-3);
+}
+
+/* 사건 행 — 대상 줄(층 배지 + 이동 버튼)과 규칙 줄. */
+.ops-inc-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ops-inc-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.ops-inc-btn:hover {
+  color: var(--accent);
+}
+.ops-inc-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 규칙 목록 — 조건 문장이 길어 행 높이가 40~62px 로 들쭉날쭉했다. 한 줄로 자르고 전문은
+   title 로 남긴다: 여기서 조건은 훑는 값이지 읽는 값이 아니다(읽을 거면 rules.ts 다). */
+.ops-rulecat td,
+.ops-rulecat th {
+  white-space: nowrap;
+}
+.ops-rulecat td:nth-child(4) {
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,16 +1,28 @@
 /* 규칙 엔진 화면들의 공통 조각 (ALPHA-738).
  *
- * 규칙 평가는 앱 로드 시 한 번만 돈다 — 여섯 화면이 같은 평가 결과를 읽는다.
+ * 규칙 평가는 `useConsoleEvaluation()` 한 곳에서만 돈다 — 여섯 화면이 같은 결과를 읽는다.
+ * 모듈 상수가 아니라 훅인 이유는 실시간(1분) 세션 축이 스냅샷이 아니라 API 응답이라서다.
  * 스타일은 ui-kit 토큰·프리미티브만 쓴다(자체 팔레트 금지). 색은 상태 신호 전용이고,
  * 출처·목데이터 같은 메타는 무채색 chip 으로 낸다.
  */
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { BadgeTone } from 'ui-kit';
 import { evaluate } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
-import type { Facts, Incident, RunbookEntry, Severity, Violation } from '../../rules/types';
+import type {
+  Evaluation,
+  Facts,
+  Incident,
+  MinuteFacts,
+  RunbookEntry,
+  Severity,
+  Violation,
+} from '../../rules/types';
 import factsJson from '../../rules/facts-snapshot.json';
+import type { MinuteStatus } from '../../domains/sources';
+import { useMinuteStatus } from '../../domains/sources/hooks';
+import { datasetKind } from '../../domains/sources/minuteView';
 
 /* 스냅샷에는 규칙이 읽지 않는 표시 전용 축도 들어 있다.
  *
@@ -50,10 +62,6 @@ interface DeliveryFacts {
 export type ConsoleFacts = Facts & { news_funnel: FunnelStep[]; delivery: DeliveryFacts };
 
 export const F = factsJson as unknown as ConsoleFacts;
-export const EV = evaluate(F);
-export const VIOLATIONS = EV.violations;
-export const INCIDENTS = EV.incidents;
-export const P0 = INCIDENTS.filter((i) => i.sev === 'P0');
 
 
 export const fmt = (n: unknown): string =>
@@ -78,24 +86,21 @@ export function runbookOf(v: Violation): RunbookEntry | undefined {
   return F.runbook[`${v.rule}.${v.target}`] ?? F.runbook[v.rule];
 }
 
-/** L2 툴팁 본문 — 근거·연쇄·조치. 네이티브 title 을 쓴다(GridPage 와 같은 관용구). */
+/**
+ * 목록의 ⓘ — **"이 줄이 왜 사건인가"** 하나만 답한다.
+ *
+ * 예전에는 규칙·층·심각도·대상·목록·마지막 정상·연쇄 전문·조치를 다 담아 사건 상세를 거의
+ * 복제했다. 목록에서 그만큼 읽을 사람은 없고, 읽을 거면 상세로 가는 게 맞다. 그리고 여기 담긴
+ * 값의 다수는 이미 같은 행의 열이 말한다(규칙·층·수치·연쇄).
+ *
+ * 여기서 뺀 것이 사라지지는 않는다 — 대상 목록·마지막 정상·귀결률·조치 명령은 사건 상세가 답한다.
+ */
 export function violationTip(v: Violation, I?: Incident): string {
-  const lines = [
-    `${v.ruleName} (${v.rule}) · ${v.layer} 층 · ${v.sev}`,
-    `대상: ${v.target}`,
-    `왜: ${v.why}`,
-  ];
-  if (v.list) lines.push(`목록: ${v.list.join(' · ')}`);
-  if (v.lastok) lines.push(`마지막 정상: ${kst(v.lastok)} · 귀결률 ${v.okrate}`);
-  lines.push(`근거: ${v.evidence}`);
+  const lines = [`왜: ${v.why}`, `근거: ${v.evidence}`];
   if (I && I.members.length) {
-    lines.push('', `이 사건에 묶인 위반 ${I.members.length}건 — 인과로 연결돼 카드 하나로 세웠다`);
-    for (const m of I.members) lines.push(`  · ${m.v.rule} ${m.v.title} ← ${m.why}`);
+    lines.push('', `인과로 묶인 위반 ${I.members.length}건 — 무엇이 묶였는지는 사건 상세가 답합니다`);
   }
-  const rb = runbookOf(v);
-  lines.push('', `조치: ${rb ? rb.cmd + (rb.note ? ` — ${rb.note}` : '') : '런북 미등록'}`);
-  if (v.mock) lines.push(`MOCK — 이 규칙은 목데이터에 의존한다. 실제 계측: ${v.dep ?? '—'}`);
-  if (v.seed) lines.push('SEED — 로컬 시드 유래');
+  if (v.mock) lines.push('', `MOCK — 이 규칙은 목데이터에 의존합니다. 실제 계측: ${v.dep ?? '—'}`);
   return lines.join('\n');
 }
 
@@ -123,14 +128,65 @@ export function domainOf(v: Violation): string {
  */
 export const OUT_OF_PIPELINE_DOMAINS = new Set(['테넌트 전달']);
 
-/** 파이프라인·분석 소관 사건만. 전달 사건을 파이프라인 P0·심각도 합계에 섞지 않는다. */
-export const PIPELINE_INCIDENTS = INCIDENTS.filter(
-  (i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root)),
-);
-/** 범위 밖 사건 — 숨기지 않고 "여기 소관이 아니다"로 세어 보인다 */
-export const OUT_OF_SCOPE_INCIDENTS = INCIDENTS.filter((i) =>
-  OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root)),
-);
+/**
+ * API DTO → 규칙 사실. **규칙은 화면 도메인을 모른다** — 맞추는 일은 여기서 한 번만 한다.
+ *
+ * `deadJobs` 를 어디서 가져오는지가 이 어댑터의 유일한 판단이다: 뉴스 job 은 세션 연결 컬럼이
+ * 없어 날짜 축 집계(`newsJobs`)이고 가격은 세션에 붙어 있다. 규칙은 그 사정을 모른 채
+ * "이 데이터셋의 DEAD 수"만 받는다.
+ */
+export function minuteFacts(s: MinuteStatus): MinuteFacts {
+  return {
+    date: s.date,
+    sessions: s.sessions.map((x) => ({
+      dataset: x.dataset,
+      phase: x.phase,
+      leaseExpired: x.leaseExpired,
+      overdueNoEvidence: x.windows.overdueNoEvidence,
+      deadJobs: (datasetKind(x.dataset) === 'news' ? s.newsJobs : x.priceJobs).dead,
+    })),
+  };
+}
+
+export interface ConsoleEvaluation extends Evaluation {
+  /** 파이프라인·분석 소관 사건만. 전달 사건을 파이프라인 P0·심각도 합계에 섞지 않는다 */
+  pipeline: Incident[];
+  /** 범위 밖 사건 — 숨기지 않고 "여기 소관이 아니다"로 세어 보인다 */
+  outOfScope: Incident[];
+  /** 실시간 축이 실렸는가. false 면 R17~R19 는 evaluated:false(못 돌았다)다 */
+  minuteLoaded: boolean;
+  /**
+   * 이 평가에 실제로 쓴 사실. 조사 경로(`investigate`)도 **같은 사실**을 읽어야 한다 —
+   * 정적 스냅샷으로 만들면 실시간 사건의 드릴다운이 세션 응답의 날짜가 아니라
+   * 배치 거래일(meta.today)을 가리킨다(그 날짜엔 세션이 없다).
+   */
+  facts: ConsoleFacts;
+}
+
+/**
+ * 콘솔의 사건 평가 — **유일한 출처**다.
+ *
+ * 예전에는 모듈 상수(`INCIDENTS`)였다. 그러면 실시간 레인을 영원히 못 본다: 세션 원장은
+ * 스냅샷이 아니라 API 응답이라 import 시점에 없기 때문이다. `evaluate` 가 순수 함수라
+ * 응답이 도착하면 사실을 합쳐 다시 돌리면 된다 — 판정을 화면에 쓰지 않고 규칙에 쓴다.
+ *
+ * ⚠️ 사건 목록을 두 벌로 두지 않는다. 소비자가 전부 이 훅을 쓰는 이유다 — 한쪽만 실시간을
+ * 보면 목록엔 있는데 상세는 못 여는 사건이 생긴다.
+ */
+export function useConsoleEvaluation(): ConsoleEvaluation {
+  const { data } = useMinuteStatus();
+  return useMemo(() => {
+    const facts: ConsoleFacts = data ? { ...F, minute: minuteFacts(data) } : F;
+    const ev = evaluate(facts);
+    return {
+      ...ev,
+      pipeline: ev.incidents.filter((i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
+      outOfScope: ev.incidents.filter((i) => OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
+      minuteLoaded: data != null,
+      facts,
+    };
+  }, [data]);
+}
 
 /** 드릴다운 대상 — 규칙 위반의 drill 축을 실제 라우트로 옮긴다 */
 export const DRILL_ROUTE: Record<string, string> = {

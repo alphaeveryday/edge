@@ -83,7 +83,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
             id: runId,
             label: `${taskKey} · ${runId}`,
             why: '이 위반이 기록한 run_id 의 작업이다 — 같은 작업명의 다른 런은 열지 않는다',
-            href: `/ops/runs?run_id=${q(runId)}&focus=${q(anchor)}&fromIncident=${q(vid)}`,
+            href: runHref(runId, { focus: anchor, fromIncident: vid }),
           },
         ],
         ledger: {
@@ -109,7 +109,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
               id: runId,
               label: `예정 슬롯 ${runId}`,
               why: '계획된 슬롯인데 ops_pipeline_run 행이 없다 — 조사 대상은 실행이 아니라 슬롯이다',
-              href: `/ops/runs?run_id=${q(runId)}&fromIncident=${q(vid)}`,
+              href: runHref(runId, { fromIncident: vid }),
             },
           ],
           ledger: { incident: vid, runKey: runId },
@@ -124,7 +124,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
             id: runId,
             label: `실행 ${runId}`,
             why: '이 위반이 지목한 런이다 — 최근 런 전체를 다시 훑지 않는다',
-            href: `/ops/runs?run_id=${q(runId)}&fromIncident=${q(vid)}`,
+            href: runHref(runId, { fromIncident: vid }),
           },
         ],
         ledger: { incident: vid, runKey: runId },
@@ -136,7 +136,9 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
   /* ── 데이터셋 축 ── 실시간 데이터셋이면 조사 대상은 그 날짜의 세션이다 */
   if (axis === 'dataset' && anchor.startsWith('ds-')) {
     const datasetId = anchor.slice(3);
-    const date = facts.meta.today;
+    /* 실시간 세션의 날짜는 **세션 응답이 말한 날**이다 — meta.today(배치 스냅샷의 거래일)와
+     * 다를 수 있고, 다르면 드릴다운이 없는 날짜의 세션을 연다. */
+    const date = facts.minute?.date ?? facts.meta.today;
     if (REALTIME_DATASETS.has(datasetId)) {
       return {
         targets: [
@@ -223,6 +225,21 @@ export function ledgerHref(ctx: LedgerContext | null): string | null {
   if (ctx.date) p.set('date', ctx.date);
   const qs = p.toString();
   return qs ? `/sources?${qs}` : null;
+}
+
+/**
+ * 실행 상세 주소 — 런 하나는 **자기 페이지**를 갖는다(목록의 선택 상태가 아니다).
+ *
+ * 주소를 한 곳에서 만든다: 예전에는 `/ops/runs?run_id=` 를 5곳이 각자 조립했고, 경로가 바뀌면
+ * 그중 하나가 조용히 남는다. `run_id` 형태의 옛 주소는 목록 페이지가 이 주소로 넘긴다.
+ *
+ * @param extra `focus`·`fromIncident` 처럼 조사 문맥을 실어 보내는 쿼리
+ */
+export function runHref(runId: string, extra?: Record<string, string | undefined>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(extra ?? {})) if (v) p.set(k, v);
+  const qs = p.toString();
+  return `/ops/runs/${q(runId)}${qs ? `?${qs}` : ''}`;
 }
 
 /** 사건 상세 주소 — vid 가 사건의 식별자다(root 위반 id) */
