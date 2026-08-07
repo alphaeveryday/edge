@@ -354,3 +354,143 @@ def test_최신_기준일_스냅샷만_읽는다(tmp_path, monkeypatch):
     assert load_instruments.run(storage, "R1", db=_db()) == 0
     names = [p[1] for sql, p in conn.log if sql.upper().startswith("INSERT INTO ENTITY")]
     assert names == ["KODEX 200"]
+
+
+# ── KRX 상장 전종목 입력 (ALPHA-830) ───────────────────────────────────────
+#
+# WHY 이 축이 필요한가: 구성종목만 보면 마스터가 ETF 에 담긴 종목만 갖는다(08-06 런 329종 =
+# 상장 전종목의 12%). 뉴스는 ETF 밖 회사도 똑같이 다루므로, 마스터에 없는 회사는 assertion
+# argument 가 붙을 대상 행 자체가 없어 **구조적으로 미해소**다.
+
+_INSTRUMENT_PROFILE_COLUMNS = ("market", "as_of_date", "ticker", "market_code", "isin", "display_name",
+                    "legal_name", "english_name", "board", "security_group", "listed_date",
+                    "listed_shares", "fetched_at")
+
+
+def _write_instrument_profile(storage, market: str, as_of: str, rows: list[dict]) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_instrument_profile_partition
+
+    schema = pa.schema([(c, pa.string()) for c in _INSTRUMENT_PROFILE_COLUMNS])
+    table = pa.Table.from_pylist(
+        [{c: r.get(c) for c in _INSTRUMENT_PROFILE_COLUMNS} for r in rows], schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    storage.put_bytes(
+        f"{canonical_instrument_profile_partition(market, as_of)}/part-00000.parquet",
+        buf.getvalue())
+
+
+def _instrument_profile_row(ticker: str, name: str, mic: str = "XKRX", board: str = "KOSPI", **over) -> dict:
+    row = {"market": "KR", "as_of_date": "2026-08-06", "ticker": ticker, "market_code": mic,
+           "isin": f"KR7{ticker}00", "display_name": name, "legal_name": f"{name}보통주",
+           "english_name": "X", "board": board, "security_group": "주권",
+           "listed_date": "2000/01/01", "listed_shares": "1000000",
+           "fetched_at": "2026-08-07T00:00:00+00:00"}
+    row.update(over)
+    return row
+
+
+def test_instrument_outside_any_etf_still_gets_a_master_row(tmp_path, monkeypatch):
+    """ETF 에 안 담긴 종목도 마스터에 선다 — 이 티켓의 존재 이유다(ALPHA-830).
+
+    WHY: 이 행이 없으면 그 회사를 가리키는 뉴스 assertion 은 붙을 대상이 없어 영구 미해소다.
+    구성종목 canonical 이 비어 있어도(ETF 수집 실패·신규 레이크) 전종목 축만으로 마스터가
+    서야 한다 — 두 입력이 서로의 전제가 아니다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [_instrument_profile_row("068270", "셀트리온")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    (inst_id, mic, ticker, currency) = _inserts(conn, "instrument")[0]
+    assert (mic, ticker, currency) == ("XKRX", "068270", "KRW")
+    # 회사 사슬도 함께 서야 equity_profile FK 가 산다(구성종목 경로와 같은 계약)
+    assert len(_inserts(conn, "company_profile")) == 1
+    assert _inserts(conn, "entity")[1][1] == "셀트리온 보통주"
+
+
+def test_profile_board_decides_the_mic_not_a_market_default(tmp_path, monkeypatch):
+    """코스닥·코넥스 종목은 자기 MIC 로 선다 — 시장 기본값으로 뭉개지 않는다(ALPHA-830).
+
+    WHY: 자연키가 `(market_code, ticker)` 다. 전종목을 전부 XKRX 로 넣으면 이미 XKOS 로
+    적재된 코스닥 종목이 **같은 티커의 두 번째 instrument** 로 다시 서고, 가격·수급·트리거가
+    두 ID 로 갈린다. 실측상 ETF 구성종목 906행 중 432행이 XKOS 다 — 드문 경우가 아니다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("247540", "에코프로비엠", mic="XKOS", board="KOSDAQ"),
+        _instrument_profile_row("260870", "SK시그넷", mic="XKON", board="KONEX"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    got = {(t, m) for (_i, m, t, _c) in _inserts(conn, "instrument")}
+    assert got == {("247540", "XKOS"), ("260870", "XKON")}
+
+
+def test_constituent_name_wins_when_both_inputs_have_the_ticker(tmp_path, monkeypatch):
+    """두 입력이 같은 종목을 주면 **구성종목 쪽 이름이 남는다**(ALPHA-830).
+
+    WHY: 이 순서가 이 변경의 증분을 0 으로 만든다 — 기존 경로가 만들던 이름이 그대로다.
+    2026-08-06 실측상 겹치는 869종의 이름이 전건 동일해 오늘은 무의미하지만, 나중에 갈릴 때
+    조용히 뒤집히면 이미 적재된 마스터와 새 마스터의 이름이 어긋난다. 순서를 못박는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "구성종목이름")])
+    _write_instrument_profile(storage, "KR", "2026-08-06", [_instrument_profile_row("005930", "전종목이름")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    assert len(_inserts(conn, "instrument")) == 1          # 한 번만 선다
+    assert _inserts(conn, "actor")  # 회사도 한 번
+    assert _inserts(conn, "entity")[0][1] == "구성종목이름"
+    assert _inserts(conn, "entity")[1][1] == "구성종목이름 보통주"
+
+
+def test_existing_ticker_from_either_input_is_not_recreated(tmp_path, monkeypatch):
+    """이미 DB 에 있는 종목은 전종목 축으로도 다시 만들지 않는다(ADR-0027).
+
+    WHY: 재실행이 ID 를 바꾸면 그 ID 를 참조하는 가격·수급·트리거 FK 가 전부 끊긴다.
+    입력이 하나 늘었다고 이 불변식이 흔들리면 안 된다 — 기존 329종의 ID 불변이 이 티켓의
+    완료 조건이다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자"), _instrument_profile_row("068270", "셀트리온")])
+    conn = _FakeConn(existing=[("XKRX", "005930", "inst_OLD")])
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    created = {t for (_i, _m, t, _c) in _inserts(conn, "instrument")}
+    assert created == {"068270"}          # 삼성전자는 건드리지 않았다
+
+
+def test_profile_row_without_mic_is_not_an_instrument(tmp_path, monkeypatch):
+    """MIC 없는 전종목 행은 종목이 아니다 — 구성종목의 원화현금 처리와 같은 축.
+
+    WHY: `instrument.market_code NOT NULL` 이라 넣으면 터진다. 조용히 건너뛰면 몇 종이
+    빠졌는지 아무도 모르므로 `skipped_no_mic` 로 센다(Rule 12).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_instrument_profile(storage, "KR", "2026-08-06", [
+        _instrument_profile_row("005930", "삼성전자"), _instrument_profile_row("XXXXXX", "미상", mic=None)])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+
+    assert len(_inserts(conn, "instrument")) == 1
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["skipped_no_mic"] == 1
+    assert log["instrument_profiles_read"] == 2

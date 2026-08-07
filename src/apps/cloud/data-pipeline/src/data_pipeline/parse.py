@@ -93,6 +93,21 @@ def parse_datetime(text: str | None, *, naive_tz: tzinfo = timezone.utc) -> str 
     return parsed.isoformat()
 
 
+# KR 시장(보드) → MIC(ISO 10383). `market_code = MIC` 는 ADR-0027 이 채택한 규약이고,
+# 파티션의 `market=KR` 은 **지역**이라 이 정보를 대신하지 못한다.
+#
+# ⭐**값의 SSOT 가 여기인 이유**: KRX 를 읽는 경로가 둘이고 **벤더 어휘가 서로 다르다** —
+# 비공식 getJsonData 는 `MKT_ID`(STK/KSQ/KNX)로, 공식 OpenAPI 는 `MKT_TP_NM`
+# (KOSPI/KOSDAQ/KONEX)로 같은 사실을 말한다(ALPHA-829). 각자 자기 표를 들면 한쪽만 고쳐도
+# 아무도 못 잡는데, 그 결과는 **같은 종목이 두 market_code 로 갈려 마스터에 두 번 서는 것**
+# 이다(자연키가 `(market_code, ticker)`). 벤더 어휘→보드 이름 매핑은 각 정제단이 갖되,
+# **보드→MIC 값은 여기 하나**를 쓴다.
+KR_MIC_BY_BOARD = {
+    "KOSPI": "XKRX",   # 유가증권시장
+    "KOSDAQ": "XKOS",
+    "KONEX": "XKON",
+}
+
 _KRX_SHORT_CODE = re.compile(r"[0-9][0-9A-Z]{5}\Z")
 
 

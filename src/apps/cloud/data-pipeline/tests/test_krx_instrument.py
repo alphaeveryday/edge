@@ -452,3 +452,77 @@ def test_bad_ticker_row_is_dropped_with_a_reason(tmp_path):
     log = json.loads(storage.get_bytes(quality[0]).decode("utf-8"))
     assert log["dropped_by_reason"]["bad_ticker"] == 1
     assert log["rows_written"] == 2099
+
+
+def test_each_board_lands_on_its_own_mic(tmp_path, monkeypatch):
+    """보드마다 자기 MIC 로 정제된다 — 시장 기본값으로 뭉개지 않는다(ALPHA-829/830).
+
+    WHY: 마스터의 자연키가 `(market_code, ticker)` 다. 전종목을 한 MIC 로 뭉개면 이미
+    XKOS 로 적재된 코스닥 종목이 **같은 티커의 두 번째 instrument** 로 다시 서고, 가격·수급·
+    트리거가 두 ID 로 갈린다. 실측상 ETF 구성종목 906행 중 432행이 XKOS 다.
+
+    ⭐이 단언은 `parse.KR_MIC_BY_BOARD` 의 **값**을 못박는다. 그 표가 SSOT 인 이유는 KRX 를
+    읽는 경로가 둘인데 벤더 어휘가 다르기 때문이다(비공식 getJsonData 는 MKT_ID=STK/KSQ/KNX,
+    공식 OpenAPI 는 MKT_TP_NM=KOSPI/KOSDAQ/KONEX). 값이 갈리면 같은 종목이 두 market_code 로
+    선다 — 구성종목 정제가 같은 값을 내는지는 아래 테스트가 함께 본다.
+    """
+    boards = {"stk": [_row(f"0{i:05d}", f"코스피{i}") for i in range(1000)],
+              "ksq": [_row(f"1{i:05d}", f"코스닥{i}") for i in range(1000)],
+              "knx": [_row(f"2{i:05d}", f"코넥스{i}") for i in range(100)]}
+    _, storage = _ingest(tmp_path, boards)
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    by_ticker = {r["ticker"]: r for r in _canonical_rows(storage)}
+    assert by_ticker["000000"]["market_code"] == "XKRX"
+    assert by_ticker["100000"]["market_code"] == "XKOS"
+    assert by_ticker["200000"]["market_code"] == "XKON"
+
+
+def test_the_two_krx_readers_agree_on_the_mic():
+    """구성종목 정제와 종목기본정보 정제가 **같은 MIC 값**을 낸다(ALPHA-829).
+
+    WHY: 이 저장소가 이미 겪은 실패 양식이다 — 같은 계보를 읽는 두 writer 가 각자 표를
+    들면 한쪽만 고쳐도 아무도 못 잡는다(ALPHA-802 의 role_bindings 가 그랬다). 여기서
+    갈리면 증상은 더 나쁘다: 같은 종목이 두 market_code 로 마스터에 두 번 서고, 자연키
+    멱등이 무의미해진다. 값 SSOT 를 쓰는지 구조로 확인한다.
+    """
+    from data_pipeline.parse import KR_MIC_BY_BOARD
+    from data_pipeline.steps.normalize_etf import _KRX_MIC_BY_MKT_ID
+
+    assert _KRX_MIC_BY_MKT_ID == {
+        "STK": KR_MIC_BY_BOARD["KOSPI"],
+        "KSQ": KR_MIC_BY_BOARD["KOSDAQ"],
+        "KNX": KR_MIC_BY_BOARD["KONEX"],
+    }
+    # 값 자체도 못박는다 — SSOT 를 통째로 바꿔도 위 단언만으론 안 깨진다
+    assert KR_MIC_BY_BOARD == {"KOSPI": "XKRX", "KOSDAQ": "XKOS", "KONEX": "XKON"}
+
+
+def test_unknown_board_is_dropped_with_a_reason(tmp_path, monkeypatch):
+    """모르는 시장은 MIC 없이 통과시키지 않고 사유와 함께 떨군다(Rule 12).
+
+    WHY: `instrument.market_code NOT NULL` 이라 MIC 없는 행은 instrument 가 될 수 없다.
+    임의 기본값(XKRX)으로 채우면 KRX 가 시장을 늘렸을 때 **그 시장 전 종목이 유가증권시장
+    으로 잘못 적재**되고, 조용히 None 으로 두면 마스터 로더가 말없이 버려 종목이 사라진다.
+    둘 다 안 되므로 정제단에서 사유를 남기고 떨군다.
+
+    ⚠️ raw 를 **직접 쓴다**. 현행 어댑터는 board 를 자기 엔드포인트 표에서 채우므로 이 값을
+    낼 수 없다 — 가드가 사는 곳은 정제단이고, 정제단은 어댑터가 아니라 raw 를 읽는다(과거
+    런의 raw 재정제·다른 생산자). 어댑터를 통해 재현하려 들면 픽스처가 통과해 버려 가드를
+    못 잰다.
+    """
+    from data_pipeline.lake import raw_instrument_profile_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    rows = [{**_row(f"0{i:05d}", f"코스피{i}"), "board": "KOSPI", "market": "KR",
+             "bas_dd": "20260806", "fetched_at": "2026-08-07T00:00:00+00:00"}
+            for i in range(10)]
+    rows[0] = {**rows[0], "board": "NEXTRADE", "MKT_TP_NM": "NEXTRADE"}   # 어휘 밖 시장
+    key = f"{raw_instrument_profile_partition('krx', 'KR', '2026-08-07', _RUN_ID)}/part-00000.ndjson"
+    storage.put_bytes(key, "".join(json.dumps(r, ensure_ascii=False) + "\n"
+                                   for r in rows).encode("utf-8"))
+
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    log = _quality_log(storage)
+    assert log["dropped_by_reason"]["unknown_board"] == 1
+    assert log["rows_written"] == 9
+    assert "000000" not in {r["ticker"] for r in _canonical_rows(storage)}

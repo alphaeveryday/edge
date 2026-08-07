@@ -32,7 +32,7 @@ from ..lake import (
     parse_raw_instrument_profile_key,
     quality_log_key,
 )
-from ..parse import krx_short_code
+from ..parse import KR_MIC_BY_BOARD, krx_short_code
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ JOB_NAME = "normalize_instrument_profile"
 DATASET = "instrument_profile"
 
 _CANONICAL_COLUMNS = (
-    "market", "as_of_date", "ticker", "isin", "display_name", "legal_name",
+    "market", "as_of_date", "ticker", "market_code", "isin", "display_name", "legal_name",
     "english_name", "board", "security_group", "listed_date", "listed_shares",
     "fetched_at",
 )
@@ -108,15 +108,26 @@ def normalize_row(raw: dict) -> tuple[dict | None, str | None]:
         # 표시명이 없으면 이 데이터셋의 존재 이유가 사라진다(엔티티 해소가 붙을 키가 없다).
         return None, "missing_display_name"
     market = _text(raw.get("market")) or "KR"
+    board = _text(raw.get("board")) or _text(raw.get("MKT_TP_NM"))
+    market_code = KR_MIC_BY_BOARD.get(board or "")
+    if not market_code:
+        # MIC 없이는 instrument 가 될 수 없다(`instrument.market_code NOT NULL`). 조용히
+        # None 으로 통과시키면 마스터 로더가 그 행을 말없이 버려 종목이 사라진다 —
+        # KRX 가 시장을 늘리면 여기서 사유와 함께 드러나야 한다(Rule 12).
+        return None, "unknown_board"
     return {
         "market": market,
         "as_of_date": as_of_date,
         "ticker": ticker,
+        # 거래소 MIC. **값의 SSOT 는 `parse.KR_MIC_BY_BOARD`** — 구성종목 정제가 벤더
+        # MKT_ID 로 만드는 것과 같은 값이어야 한다. 갈리면 같은 종목이 두 market_code 로
+        # 마스터에 두 번 선다(자연키가 `(market_code, ticker)`).
+        "market_code": market_code,
         "isin": _text(raw.get("ISU_CD")),
         "display_name": display_name,
         "legal_name": _text(raw.get("ISU_NM")),
         "english_name": _text(raw.get("ISU_ENG_NM")),
-        "board": _text(raw.get("board")) or _text(raw.get("MKT_TP_NM")),
+        "board": board,
         "security_group": _text(raw.get("SECUGRP_NM")),
         "listed_date": _text(raw.get("LIST_DD")),
         "listed_shares": _text(raw.get("LIST_SHRS")),

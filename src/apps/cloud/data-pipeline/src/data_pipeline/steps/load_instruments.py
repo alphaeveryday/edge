@@ -1,11 +1,20 @@
-"""종목 마스터 적재 Step4 — canonical ETF 구성종목 → entity/actor/instrument (ALPHA-372).
+"""종목 마스터 적재 Step4 — canonical → entity/actor/instrument (ALPHA-372·830).
 
 **Cloud Event Store 48테이블에 쓰는 첫 스텝이다.** `etf_holding_snapshot`·`price_daily` 가 둘 다
 `instrument` FK 를 요구하므로 여기가 그 선행이다.
 
-`canonical/holdings/etf_holdings/market=KR` 을 읽어 구성종목마다 회사·주식 마스터를 만든다:
+**주식 마스터의 입력은 둘이다**(ALPHA-830):
+  1. `canonical/holdings/etf_holdings/market=KR` — ETF 구성종목
+  2. `canonical/reference/instrument_profile/market=KR` — KRX 상장 **전종목**(ALPHA-829)
+
+②가 없던 동안 마스터는 **ETF 에 담긴 종목만** 가졌다(08-06 런 329종 = 상장 전종목의 12%).
+뉴스는 ETF 에 안 담긴 회사도 똑같이 다루는데, 마스터에 없으면 assertion argument 가 붙을
+대상 행이 없어 구조적으로 미해소였다 — 그 구멍을 ②가 메운다.
+
+둘 다 같은 모양으로 만든다:
   회사: entity(ACTOR) + actor(COMPANY/KR) + company_profile
   주식: entity(INSTRUMENT) + instrument(MIC/EQUITY/KRW) + equity_profile → issuer
+겹치는 종목은 **①이 이긴다**(증분 0). 2026-08-06 실측상 겹치는 869종의 이름이 전건 동일하다.
 
 **왜 마이그레이션이 아니라 로더인가**: ALPHA-362 가 KR 9종을 Flyway INSERT 로 박은 건 부트스트랩
 이었다. 유니버스는 자란다 — KODEX 반도체만 35종이고 KODEX200 은 201종이라, 종목이 늘 때마다
@@ -38,6 +47,7 @@ from ..lake import (
     Storage,
     canonical_etf_holdings_partition,
     canonical_etf_profile_partition,
+    canonical_instrument_profile_partition,
     quality_log_key,
 )
 
@@ -151,6 +161,26 @@ def _latest_profile_rows(storage: Storage, market: str) -> list[dict]:
     return rows
 
 
+def _latest_instrument_profile_rows(storage: Storage, market: str) -> list[dict]:
+    """canonical 종목기본정보의 **최신 기준일** 스냅샷 행(ALPHA-829/830).
+
+    ETF 프로필과 같은 모델이다 — 개명은 새 기준일 파티션이 말하고, 과거까지 훑으면 옛
+    이름으로 마스터를 만든다. ⚠️ 여기 기준일은 **벤더 기준일(KRX basDd)**이지 수집일이
+    아니다(KRX 가 당일 조회를 막아 둘이 갈린다).
+    """
+    marker = canonical_instrument_profile_partition(market, "")  # ".../as_of_date="
+    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    dates.discard("")
+    if not dates:
+        return []
+    rows: list[dict] = []
+    prefix = canonical_instrument_profile_partition(market, max(dates))
+    for key in storage.list_keys(prefix + "/"):
+        if key.endswith(".parquet"):
+            rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+    return rows
+
+
 def _insert_etf(conn, *, name: str, mic: str, ticker: str, currency: str) -> str:
     """ETF 1건 — entity(INSTRUMENT) + instrument(type=ETF) + etf_profile. instrument_id 반환.
 
@@ -181,6 +211,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = 0
+    instruments_read = 0
     etfs_read = etfs_existing = etfs_created = 0
     created_rows: list[dict] = []
     failures: list[dict] = []
@@ -207,6 +238,27 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                         skipped_no_mic += 1
                         continue
                     all_rows.setdefault((mic, ticker), row)
+
+        # KRX 상장 전종목(ALPHA-829/830) — 구성종목과 **독립된 두 번째 입력**이다.
+        #
+        # 왜 필요한가: 구성종목만 보면 마스터가 **ETF 에 담긴 종목만** 갖는다(08-06 런 329종).
+        # 뉴스는 ETF 에 안 담긴 회사도 똑같이 다루는데, 마스터에 없으면 assertion argument 가
+        # 붙을 대상 행 자체가 없어 **구조적으로 미해소**다.
+        #
+        # `setdefault` 라 **구성종목이 이긴다** — 두 경로가 같은 종목을 주면 기존 경로의
+        # 이름이 남아 이 변경의 증분이 0 이 된다. 2026-08-06 실측상 겹치는 869종의 이름이
+        # **전건 동일**해서 오늘은 선택이 무의미하지만, 나중에 갈릴 때 조용히 뒤집히지
+        # 않도록 순서를 고정하고 테스트로 못박는다.
+        for profile in _latest_instrument_profile_rows(storage, market):
+            instruments_read += 1
+            mic, ticker = profile.get("market_code"), profile.get("ticker")
+            if not mic or not ticker:
+                # 정제단이 이미 걸렀어야 하는 행 — 구성종목의 MIC 결측과 같은 축으로 센다.
+                skipped_no_mic += 1
+                continue
+            # 구성종목 행과 같은 키 모양으로 맞춰 아래 소비 루프를 그대로 쓴다. 통화는
+            # 소비부가 `or "KRW"` 로 받으므로 싣지 않는다(KR 상장분은 전부 원화).
+            all_rows.setdefault((mic, ticker), {"constituent_name": profile.get("display_name")})
 
         # ETF 마스터(ALPHA-462)는 구성종목과 **독립된 입력**(프로필 canonical)에서 온다 —
         # 구성종목이 비어도(수집 실패·신규 레이크) ETF 는 만들 수 있어야 한다. 둘 다 비었을
@@ -281,7 +333,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "markets": list(LOADED_MARKETS),
-        "constituents_read": read, "skipped_no_mic": skipped_no_mic,
+        "constituents_read": read, "instrument_profiles_read": instruments_read,
+        "skipped_no_mic": skipped_no_mic,
         "already_present": existing, "created": created, "created_rows": created_rows,
         "etfs_read": etfs_read, "etfs_already_present": etfs_existing, "etfs_created": etfs_created,
         "failures": failures, "exit_code": exit_code,
@@ -300,9 +353,9 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         exit_code = 1
 
     logger.info(
-        "load_instruments: read=%d skipped_no_mic=%d already=%d created=%d "
-        "etfs_read=%d etfs_already=%d etfs_created=%d failures=%d",
-        read, skipped_no_mic, existing, created,
+        "load_instruments: read=%d instrument_profiles=%d skipped_no_mic=%d already=%d "
+        "created=%d etfs_read=%d etfs_already=%d etfs_created=%d failures=%d",
+        read, instruments_read, skipped_no_mic, existing, created,
         etfs_read, etfs_existing, etfs_created, len(failures),
     )
     return exit_code
