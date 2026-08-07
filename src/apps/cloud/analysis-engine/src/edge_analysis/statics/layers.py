@@ -620,7 +620,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
 
     idio = y_now - sum(x.contribution for x in layers)
     names, wsum, wtot, rho, used, halted = _names(
-        lake, etf, day, hist, basis, basis_now, top)
+        lake, etf, day, hist, basis, basis_now, top, clock=clock)
     return Rollup(etf, etf_label(lake, etf, meta.get(etf, etf)), day, y_now,
                   tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, rho, used, wtot,
@@ -631,19 +631,35 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────
 def _names(lake, etf: str, day: str, hist: list, basis: list[np.ndarray],
-           basis_now: list[float], top: int
+           basis_now: list[float], top: int, clock: tuple[str, str] | None
            ) -> tuple[tuple[Name, ...], float | None, float, float | None, int, int]:
     """고유분을 청구하는 상위 종목. **비중 × 고유** 로 순위 - 큰 종목의 작은 움직임과
     작은 종목의 큰 움직임을 같은 자로 잰다.
 
     종목은 **층과 정확히 같은 날짜**에 정렬한다. 하나라도 빠지면 그 종목은 뺀다.
+
+    **`clock` 을 그대로 받아 넘긴다.** 구간 모드에서 이걸 빠뜨리면 두 가지가 한꺼번에
+    깨진다 - 실측 2026-08-07(305720):
+
+    1. **축이 섞인다.** 설명 대상은 구간 수익률인데 종목만 일봉 수익률이 된다. 값이
+       나와도 그 값은 틀렸다 - 같은 자로 잰 게 아니다.
+    2. **전 종목이 조용히 탈락한다.** `hist` 는 대상 ETF 의 **구간 계열**에서 만들어지고
+       (5분봉 축), 일봉 `layers_daily` 는 그 날짜를 다 못 담는다. 실측: 006400 은 일봉이
+       914일이나 있는데 `hist` 의 2026-08-05·08-06 이 없었고, 036830 은 10일뿐이라 45일
+       중 35일이 없었다. `_on` 은 하나만 빠져도 `None` 이므로(위 도크스트링) 25종 전부가
+       `continue` 로 빠져 `n_names=0 · weight_covered=0.00` 이 된다 - 산문은 그것을
+       "구성종목 기여를 계산하지 못했습니다" 로 낸다.
+
+    같은 `decompose` 안의 다른 `_series` 호출 셋은 전부 `clock` 을 넘긴다. 여기만 빠져
+    있었다.
     """
     hold = holdings(lake, etf, day)
     if not hold or not basis:
         return (), None, 0.0, None, 0, 0
     d0 = dt.date.fromisoformat(day)
     # 여기도 `hold` 만 쓴다 - 전량을 읽고 루프에서 버리면 856종목 스캔이 공짜가 아니다.
-    ser = _series(lake, day, ("stock",), only=tuple(tk for tk, _l, _w in hold))
+    ser = _series(lake, day, ("stock",), only=tuple(tk for tk, _l, _w in hold),
+                  clock=clock)
     B, BN = np.column_stack(basis), np.asarray(basis_now)
     out, resid, wsum, wtot, halted = [], [], 0.0, 0.0, 0
     for tk, label, w in hold:
