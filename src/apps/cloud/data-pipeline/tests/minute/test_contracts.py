@@ -224,6 +224,18 @@ class TestSectorReferenceAxis:
         with pytest.raises(ValidationError):
             self._universe(**kwargs)
 
+    def test_extended_hours_may_name_a_reference_series(self):
+        # WHY: 시간외 거래 여부는 **종목별 속성**이라 참조 계열도 가질 수 있다. 멤버십
+        #      검사가 판정·구성종목 축만 보면 그 선언이 "universe 밖 ID" 로 거부돼,
+        #      실제로 시간외에 도는 참조 계열의 그 분을 영영 못 받는다.
+        universe = self._universe(sector_etf_ids=("S1",), extended_hours_ids=("S1",))
+        assert universe.units_at(datetime(2026, 7, 31, 8, 30, tzinfo=KST)) == ("S1",)
+
+    def test_extended_hours_outside_every_axis_still_rejected(self):
+        # 위 완화가 오타까지 통과시키면 안 된다 — 어느 축에도 없는 ID 는 여전히 거부다.
+        with pytest.raises(ValidationError):
+            self._universe(extended_hours_ids=("NOPE",))
+
     def test_declaring_the_axis_moves_identity(self):
         # 기대 유니버스가 달라졌는데 hash 가 같으면 세션 충돌 가드가 그 변경을 같은
         # universe 로 통과시킨다 — 원장 기대와 실제 수집 집합이 조용히 갈린다.

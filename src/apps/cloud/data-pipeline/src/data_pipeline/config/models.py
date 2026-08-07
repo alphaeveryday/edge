@@ -521,8 +521,8 @@ class MinutePriceWorkerConfig(BaseModel):
         한 tick 은 최대 (realtime 1 + recovery budget) 개 window 를 순차 처리하고,
         claim 의 lease_expires_at 은 전부 **tick 시작 시각** 기준이다(가상 시계 계약 —
         tick 안에서 시계를 다시 읽지 않는다). window 하나의 여유를 75초로 잡는다(토스
-        실측 73초+ 가 근거였고, KIS 는 400종 ÷ 12 req/s ≈ 33초라 같은 상수 아래로
-        들어온다 — ALPHA-735). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
+        실측 73초+ 가 근거였고, KIS 는 410 unit ÷ 12 req/s ≈ 34초라 같은 상수 아래로
+        들어온다 — ALPHA-735·842. unit 은 판정 ETF + 구성종목 + 참조 계열의 합이다). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
         attempt 가 탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
         tick 경계에서만 돌므로 fence lease 가 tick 최악보다 짧으면 처리 중 만료된다.
 
