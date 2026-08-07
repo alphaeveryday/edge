@@ -370,7 +370,14 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                 # ⚠️ 입력의 MIC 집합이 아니라 **이 시장의 전 MIC** 로 묻는다. 아래 정체성
                 # 검사가 티커 단위라(`db_mic_by_ticker`), 입력에 없는 MIC 로 서 있는 행을
                 # 못 받으면 그 검사가 조용히 무력해진다 — 넓히는 비용은 행 몇 개뿐이다.
-                have = _existing_tickers(conn, set(_MICS_BY_MARKET.get(market, ())))
+                # `.get(market, ())` 를 쓰지 않는다 — 빈 집합이면 `_existing_tickers` 가
+                # 질의도 없이 {} 를 돌려주고, 그러면 **이미 있는 종목이 하나도 없다**고
+                # 판정해 전 종목을 새 ULID 로 다시 만든다(그 ID 를 참조하던 FK 가 전부
+                # 끊긴다 — ADR-0027 이 금지하는 바로 그 결과). KeyError 로 죽는 편이 낫다:
+                # 아래 except 가 받아 load_error + 비0 + 로그로 드러난다. 형제 매핑
+                # (_COUNTRY_BY_MARKET·_MIC_BY_MARKET)은 빠지면 안전하게 no-op 인데 이것만
+                # 위험한 쪽으로 실패한다.
+                have = _existing_tickers(conn, set(_MICS_BY_MARKET[market]))
                 # 이미 적재된 종목이 **어느 시장으로** 서 있는지. 레이크 쪽 비교(위 mic_by_ticker)
                 # 만으로는 못 잡는 경로가 있다: 어떤 종목이 모든 ETF 바스켓에서 빠지면 오늘의
                 # 구성종목 스냅샷에 없어 비교 대상이 사라지는데, 그 뒤 이전상장하면 전종목이
