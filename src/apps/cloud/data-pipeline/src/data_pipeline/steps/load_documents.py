@@ -82,6 +82,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_no_available_at = 0
     already = created = lead_written = publisher_written = lead_unclaimed = 0
+    lead_attempted = 0
     created_sample: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
@@ -186,7 +187,15 @@ def run(
                     # 덮으면 안 되는 상태다 — 넣으면 옛 리드가 복원되고 시각이 뒤로 밀려
                     # 이후 모든 배치 런이 비교를 통과하는 자기강화 고착이 된다.
                     if doc["lead_text"]:
-                        if not doc["fetched_at"]:
+                        lead_attempted += 1
+                        # ⚠️ `or None` 이 없으면 `""` 가 그대로 바인딩돼 PG 가
+                        # `invalid input syntax for timestamptz: ""` 로 터지고, 커밋
+                        # 경계가 런 전체라 **그날 적재가 통째로 롤백**된다(ALPHA-848).
+                        # 아래 가드는 falsy 를 '값 없음'으로 읽는데 바인딩만 '값'으로
+                        # 읽던 불일치다. canonical 은 `_text()` 가 str 여부만 보증하고
+                        # `_fetched_at()` 은 정렬 키라 빈 값을 걸러 주지 않는다.
+                        fetched_at = doc["fetched_at"] or None
+                        if not fetched_at:
                             # 신선도를 주장하지 못한 채 시도한 건수. rowcount 로 세면
                             # "값이 같아 안 바뀐 것"과 섞여 뜻이 흐려진다 — 노출 자체를
                             # 센다. 이게 크면 그 벤더에서 축이 조용히 무력화되고 있다는
@@ -206,7 +215,7 @@ def run(
                                 "   AND (news_document.lead_observed_at IS NULL"
                                 "        OR news_document.lead_observed_at"
                                 "           <= EXCLUDED.lead_observed_at)",
-                                (doc["lead_text"], doc["fetched_at"], source_code, article_id),
+                                (doc["lead_text"], fetched_at, source_code, article_id),
                             )
                             if lead_cur.rowcount:
                                 lead_written += 1
@@ -257,9 +266,17 @@ def run(
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_no_available_at": skipped_no_available_at,
         "already_present": already, "created": created,
-        # **이번 런이 값을 바꾼** 건수다 — 이미 같은 값이면 UPSERT 의 WHERE 가 막아 안 센다.
-        # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "바뀐 게 없다"이고, 멱등 재실행·
-        # 롤백 런에서도 0 이다. 소스 결손을 보려면 canonical 쪽을 봐야 한다.
+        # 리드가 있어 UPSERT 를 **시도한** 건수. 아래 두 카운터의 분모다(ALPHA-848) —
+        # 없으면 `lead_unclaimed_freshness: 137` 이 137/140(그 벤더에서 축이 죽었다)인지
+        # 137/60,000(잡음)인지 못 가른다.
+        "lead_attempted": lead_attempted,
+        # **이번 런이 값을 바꾼** 건수다 — UPSERT 의 WHERE 가 막으면 안 센다.
+        # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "안 바뀌었다"이고, 멱등 재실행·
+        # 롤백 런에서도 0 이다. ⚠️ 막는 절이 **둘**이라 안 바뀐 이유도 둘이다(ALPHA-848):
+        # ①값이 이미 같다 ②**승자 축에 졌다**(1분 경로가 더 새 리드를 이미 반영했거나 이
+        # canonical 이 더 낡았다). `lead_attempted - lead_text_written` 이 그 합이고, 둘을
+        # 가르려면 행마다 질의가 하나 더 들어 여기서는 안 가른다. 소스 결손을 보려면
+        # canonical 쪽을 봐야 하는 것은 그대로다.
         "lead_text_written": lead_written,
         "publisher_written": publisher_written,
         # canonical `fetched_at` 이 없어 리드 승자 판정에서 신선도를 주장하지

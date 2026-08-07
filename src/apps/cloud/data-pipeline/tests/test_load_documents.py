@@ -10,6 +10,7 @@
 
 import io
 import json
+from datetime import datetime, timezone
 
 from data_pipeline.config import DbConfig
 from data_pipeline.lake import LocalStorage, canonical_news_articles_partition
@@ -18,6 +19,14 @@ from data_pipeline.steps import load_documents
 _COLUMNS = ("article_id", "source_vendor", "market", "title", "url", "normalized_url",
             "normalized_url_hash", "published_at", "publisher", "lead_text", "mentions",
             "fetched_at")
+
+
+def _instant(text: str) -> datetime:
+    """ISO 문자열을 절대 시각으로 — Postgres 의 timestamptz 비교와 같은 축을 만든다.
+    naive 는 UTC 로 본다(수집 어댑터가 전부 aware UTC 를 내므로 실무상 안 나오지만,
+    여기서 조용히 다른 축을 비교하느니 명시한다)."""
+    dt = datetime.fromisoformat(text)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _write_canonical(storage, language: str, date: str, rows: list[dict],
@@ -147,9 +156,15 @@ class _FakeCursor:
             # 승자 판정(ALPHA-696) — 충돌 갈래에서만 걸린다. 저장된 관측이 더 새로우면
             # 이 배치는 진다. `observed` 가 None(=canonical fetched_at 결손)이면 비교는
             # SQL 에서 UNKNOWN 이라 `IS NULL` 절 하나만 남는다.
+            # ⚠️ 비교는 **실제 시각**으로 한다(ALPHA-848). ISO 문자열 부등호는 오프셋이
+            # 다르면 Postgres 와 갈린다 — `2026-07-15T05:00:00+00:00` vs
+            # `2026-07-15T13:00:00+09:00`(=04:00Z)이면 PG 는 배치를 막는데 문자열
+            # 비교는 통과시킨다. 이 파일 기본 `published_at` 이 `+09:00` 이라 다음
+            # 케이스가 그대로 밟는다(`normalize_news._fetched_at` 이 같은 함정을 적어 뒀다).
             if column == "lead_text" and document_id in self._conn.news_document_ids:
                 stored = self._conn.lead_observed_at.get(document_id)
-                if stored is not None and (observed is None or stored > observed):
+                if stored is not None and (observed is None
+                                           or _instant(stored) > _instant(observed)):
                     self.rowcount = 0
                     return
             self.rowcount = 1
@@ -708,3 +723,86 @@ def test_batch_without_a_collection_time_claims_no_freshness(tmp_path, monkeypat
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["lead_unclaimed_freshness"] == 1
+
+
+# ── 빈 문자열 구멍 + 관측 분모 (ALPHA-848) ──────────────────────────────────
+
+def test_empty_fetched_at_does_not_kill_the_whole_run(tmp_path, monkeypatch):
+    """canonical `fetched_at` 이 `""` 여도 런이 죽지 않고 그 행만 미주장으로 처리된다.
+
+    WHY: 커밋 경계가 런 전체라, 셀 하나의 빈 문자열이 timestamptz 파싱 에러를 내면
+    **그날 문서 적재가 통째로 롤백**된다. 가드(`if not fetched_at`)는 falsy 를 '값
+    없음'으로 읽는데 바인딩만 '값'으로 읽던 불일치였다 — 두 판정이 같은 값을 봐야 한다.
+    `_text()` 는 str 여부만 보증하고 `_fetched_at()` 은 정렬 키라 빈 값을 안 거른다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="리드문", fetched_at="",
+                               published_at="2026-07-15T09:00:00+09:00")])
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id})
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    # 리드는 들어갔고, 시각은 **주장하지 않았다**(NULL) — 빈 문자열이 아니다.
+    assert conn.lead_texts[doc_id] == "리드문"
+    assert conn.lead_observed_at[doc_id] is None
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["lead_unclaimed_freshness"] == 1
+    assert log["exit_code"] == 0
+
+
+def test_lead_attempted_is_the_denominator_of_the_unclaimed_counter(tmp_path, monkeypatch):
+    """`lead_unclaimed_freshness` 옆에 시도 수가 같이 남는다.
+
+    WHY: 분자만 있으면 `137` 이 137/140(그 벤더에서 승자 축이 죽었다)인지 137/60,000
+    (잡음)인지 못 가른다 — 이 카운터의 존재 이유가 바로 그 판단이다. 리드가 없어 UPSERT
+    자체를 안 한 기사는 분모에 안 들어간다(그건 소스 결손이지 축 문제가 아니다).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15", [
+        _article("a1", lead_text="리드1", fetched_at="2026-07-15T01:00:00+00:00"),
+        _article("a2", lead_text="리드2", fetched_at=""),          # 주장 못 함
+        _article("a3", lead_text=None, fetched_at=""),             # 리드 없음 → 분모 밖
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["lead_attempted"] == 2
+    assert log["lead_unclaimed_freshness"] == 1
+
+
+def test_offset_only_difference_still_blocks_the_batch(tmp_path, monkeypatch):
+    """픽스처가 시각을 **절대 시각**으로 비교한다 — 오프셋만 다른 쌍에서 PG 와 갈리면 안 된다.
+
+    WHY: `2026-07-15T13:00:00+09:00` 은 `2026-07-15T05:00:00+00:00` 보다 **이르다**(=04:00Z).
+    ISO 문자열 부등호는 `"2026-07-15T13..." > "2026-07-15T05..."` 라 반대로 답해, 실 PG 가
+    막는 되돌림을 픽스처만 통과시킨다. 이 파일 기본 `published_at` 이 `+09:00` 이라
+    다음 케이스가 그대로 밟는 함정이다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="옛 본문 T1",
+                               fetched_at="2026-07-15T13:00:00+09:00")])   # = 04:00Z
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id},
+                     lead_texts={doc_id: "정정된 본문 T2"},
+                     lead_observed_at={doc_id: "2026-07-15T05:00:00+00:00"})  # 더 새롭다
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.lead_texts[doc_id] == "정정된 본문 T2"   # 문자열 비교였다면 되돌아간다

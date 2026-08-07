@@ -128,20 +128,28 @@ class PgArticleReader:
     같은 자연키에 공시 행이 있을 수 있고, 그걸 뉴스 프롬프트에 넣으면 조용히 품질이 무너진다.
 
     ⚠️ **이 리더는 행이 최신이라고 가정한다 — 그 보증은 쓰는 쪽에 있다**(ALPHA-691).
-    지금 이 테이블을 채우는 배치 `load_documents` 는 `ON CONFLICT DO NOTHING` 이라
-    제목·발행시각을 첫 관측값으로 고정하고 리드도 비어 있지 않을 때만 덮는다. 그 상태로
-    정정 기사가 오면 새 job(새 지문)이 **옛 본문을 읽어** 성공한다. 여기서는 막을 수
-    없다 — 읽은 본문이 그 지문의 것인지 확인할 수단이 없기 때문이다(모듈 docstring).
-    그래서 결과에 `prompt_input_checksum` 을 실어 **사후 판별만** 가능하게 해 두고,
-    예방은 `CanonicalWriter` 뉴스 구현체의 계약으로 넘긴다.
+    배치 `load_documents` 는 `ON CONFLICT DO NOTHING` 이라 제목·발행시각을 여전히 첫
+    관측값으로 고정한다. 그 축들은 아직 이 가정에 기대고 있다 — 읽은 본문이 그 지문의
+    것인지 여기서 확인할 수단이 없어(모듈 docstring), 결과에 `prompt_input_checksum` 을
+    실어 **사후 판별만** 가능하게 해 뒀다.
+
+    ✅ **리드는 예방이 착지했다(ALPHA-696).** 예전엔 배치가 리드를 시각 조건 없이 덮어
+    1분 경로의 정정을 레이크의 옛 값으로 되돌렸는데, 이제 `news_document.lead_observed_at`
+    이 승자 축이고 배치는 자기 canonical `fetched_at` 이 더 새로울 때만 덮는다.
+    ⚠️ 그 계약은 **비대칭이 의도**다 — 1분 writer 쪽에는 쓰기 가드를 **달지 마라**.
+    시각으로 내용 쓰기를 막으면 위 P1 이 그대로 돌아온다. 계약 전문은 마이그레이션
+    `V202608071018__add_news_document_lead_observed_at.sql` 에 있다.
     """
 
     db: DbConfig
     connect_fn: Callable = _default_connect
 
     def read(self, *, source_code: str, article_id: str) -> dict | None:
-        # ⚠️ LEFT JOIN 이다 — `news_document` 는 **리드가 있을 때만** 만들어진다
-        # (`load_documents` 의 `if doc["lead_text"]`). INNER JOIN 이면 리드 없는 정상
+        # ⚠️ LEFT JOIN 이다 — `news_document` 행이 **없을 수도, 있는데 리드가 NULL 일
+        # 수도** 있다. 배치는 리드가 있을 때만 그 자식 행을 리드로 채우지만(`if
+        # doc["lead_text"]`), 리드 없는 행 자체는 여러 경로가 만든다 — publisher
+        # UPSERT(ALPHA-695)·`assemble_events` 의 `(document_id)` INSERT. 그 "미주장
+        # 빈 자리"가 곧 ALPHA-696 승자 축의 `IS NULL` 갈래다. INNER JOIN 이면 리드 없는 정상
         # 기사(제목만 있는 단신)가 통째로 "기사 없음"이 돼, 그 job 이 재시도만 하다
         # 예산 소진으로 DEAD 가 된다. 리드는 프롬프트의 선택 입력이다(build_prompt).
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
