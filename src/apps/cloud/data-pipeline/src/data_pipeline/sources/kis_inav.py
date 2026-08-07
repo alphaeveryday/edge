@@ -33,12 +33,15 @@ NAV 고 이건 장중 시각 grain 의 추정 NAV 다. 기존 `etf_nav` 테이�
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, time, timedelta, timezone
 
 from ..config import KisNavSource as KisNavSourceConfig
 from ..ops.trading_calendar import is_trading_day
 from .http import PoliteClient
 from .kis_nav import KisNavSource
+
+logger = logging.getLogger(__name__)
 
 TR_ID_NAV_MINUTE = "FHPST02440100"
 PATH_NAV_MINUTE = "/uapi/etfetn/v1/quotations/nav-comparison-time-trend"
@@ -144,6 +147,81 @@ class KisInavSource(KisNavSource):
             return defect
         missing = [f for f in REQUIRED_ROW_FIELDS if _is_blank(row.get(f))]
         return f"필수 필드 결측: {', '.join(missing)}" if missing else None
+
+    def _note_rows(self, our_etf_id: str, kis_symbol: str, rows: list[dict]) -> None:
+        """응답 집합에서 **설계를 가르는 두 가지**를 관측한다 (ALPHA-845).
+
+        1. **벤더 지연** = 수신 벽시계 − 최신 `bsop_hour`. 이 API 는 "지금 기준 최근 30행"
+           을 주는데, 그 최신 행이 지금 것인지 창 폭(간격×30)만큼 낡은 것인지 **한 번도
+           재지 않았다**. `cls` 가 표본 간격을 지배한다는 관측(같은 라벨이 cls 마다 다른
+           값)에서 신선도를 추론해 왔는데, 그 둘은 별개 축이다. 지연이 창 폭에 가까우면
+           이 엔드포인트로는 장중 실시간이 성립하지 않고 웹소켓(`H0STNAV0`)이 유일한
+           경로가 된다 — 1분 레인 편입 설계 전체가 여기 걸려 있다.
+
+        2. **괴리율 단위** — `dprt` 가 퍼센트(1.0=1%)인지 비율(0.01=1%)인지 모른다.
+           `sql_surface.v_nav.premium` 은 **비율**이라, 단위를 확인 않고 같은 이름으로
+           canonical 에 실으면 두 표면을 조인하는 쪽이 100배 틀린 괴리를 본다. 응답이
+           `stck_prpr`·`nav` 를 함께 주므로 파생값과 대조하면 그 자리에서 갈린다.
+
+        ⚠️ **지연이 음수면 전일 오염이다.** 최신 `bsop_hour` 에 오늘 날짜를 붙였는데
+        미래가 나온다는 건, KIS 가 오늘 데이터가 없어 직전 거래일 값을 준 것이다(응답에
+        날짜 필드가 없어 그것만으로는 구분이 안 된다 — 클래스 도크스트링). 개장 직후
+        창이 전일에 걸치는지도 이 부호로 드러난다.
+
+        관측 실패도 관측이다 — 조용히 지나가면 "지연이 0" 과 "못 쟀다" 가 같아 보인다.
+        """
+        now = datetime.now(KST)
+        if not rows:
+            # 부모가 빈 output 은 이미 fail-loud 하므로, 여기 0건은 **전 행이 결손
+            # 판정으로 걸러진** 경우다. 그 사유는 `_note_failure` 가 이미 남겼고,
+            # 여기서는 그래서 관측이 불가능했다는 사실을 남긴다.
+            logger.warning(
+                "iNAV 관측 불가: %s(%s) 쓸 수 있는 행 0건 — 지연·괴리 단위를 못 쟀다",
+                kis_symbol, our_etf_id,
+            )
+            return
+
+        # 라벨은 HHMMSS 문자열이라 사전순 = 시각순이다(자리수 고정).
+        latest = max(rows, key=lambda r: str(r.get("bsop_hour") or ""))
+        stamp = str(latest.get("bsop_hour") or "")
+        try:
+            observed = datetime.combine(
+                now.date(), datetime.strptime(stamp, "%H%M%S").time(), tzinfo=KST
+            )
+        except ValueError:
+            logger.warning(
+                "iNAV 관측 불가: %s(%s) bsop_hour 형식 미지 %r — 지연을 못 쟀다",
+                kis_symbol, our_etf_id, stamp,
+            )
+            return
+        lag_sec = (now - observed).total_seconds()
+        logger.info(
+            "iNAV 벤더 지연: %s(%s) 최신=%s 수신=%s 지연=%.0f초 창=%d초(간격 %d×30행)%s",
+            kis_symbol, our_etf_id, stamp, now.strftime("%H%M%S"), lag_sec,
+            self.window_sec, self.interval_sec,
+            " ⚠️전일 오염 의심(지연 음수)" if lag_sec < 0 else "",
+        )
+
+        try:
+            nav = float(latest["nav"])
+            price = float(latest["stck_prpr"])
+            dprt = float(latest["dprt"])
+        except (KeyError, TypeError, ValueError) as exc:
+            # `_row_defect` 는 nav 존재만 요구한다 — 괴리 대조에 필요한 셋이 다 수치로
+            # 오는지는 별개라, 못 재면 못 쟀다고 남기고 수집은 계속한다.
+            logger.warning(
+                "iNAV 괴리 단위 대조 불가: %s(%s) — %s", kis_symbol, our_etf_id, exc,
+            )
+            return
+        if nav == 0:
+            logger.warning("iNAV 괴리 단위 대조 불가: %s(%s) nav=0", kis_symbol, our_etf_id)
+            return
+        ratio = price / nav - 1.0
+        logger.info(
+            "iNAV 괴리 단위 대조: %s(%s) dprt=%s / 파생 비율=%.6f 퍼센트=%.4f "
+            "— dprt 가 어느 쪽에 붙는지가 canonical 필드 이름·단위를 정한다",
+            kis_symbol, our_etf_id, dprt, ratio, ratio * 100.0,
+        )
 
     def _extra_provenance(self) -> dict[str, object]:
         """어느 간격으로 뽑은 표본인지 행에 새긴다.

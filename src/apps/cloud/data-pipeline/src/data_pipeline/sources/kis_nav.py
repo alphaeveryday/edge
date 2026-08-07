@@ -177,6 +177,14 @@ class KisNavSource:
         """raw 행에 덧붙일 어댑터 고유 필드. 일별 NAV 는 없다."""
         return {}
 
+    def _note_rows(self, our_etf_id: str, kis_symbol: str, rows: list[dict]) -> None:
+        """한 ETF 의 응답 행이 확정된 뒤 부르는 관측 훅. 기본은 무동작.
+
+        `_row_defect` 는 행 하나를 **버릴지** 정하고 이건 통과한 행 전체를 **본다** —
+        응답 집합 수준에서만 보이는 성질(최신 행이 얼마나 낡았나 같은)이 있어서다.
+        관측 전용이라 반환값이 없다: 여기서 수집 성패를 뒤집으면 격리 규약이 두 곳으로
+        갈린다."""
+
     def _fetch_etf(
         self, our_etf_id: str, kis_symbol: str, d1: str, d2: str, token: str
     ) -> list[dict]:
@@ -221,6 +229,7 @@ class KisNavSource:
                         # our_etf_id 를 함께 남긴다 — symbol 만으로는 로그 소비자가
                         # 어느 ETF 의 원본 행이 유실됐는지 내부 식별자로 잇지 못한다.
                         self._note_failure(kis_symbol, our_etf_id, defect)
+                self._note_rows(our_etf_id, kis_symbol, rows)
                 return rows
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
             if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:

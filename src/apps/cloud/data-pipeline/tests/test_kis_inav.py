@@ -270,3 +270,80 @@ def test_평일_공휴일은_휴장일로_본다(monkeypatch):
     src = _source({"069500": _ok([LIVE_ROW])})
 
     assert "non-trading day" in src.skip_reason
+
+
+# ── 응답 집합 관측 (ALPHA-845) ─────────────────────────────────────────
+# 이 API 로 1분 레인을 먹일 수 있는지가 **최신 행이 얼마나 낡았나**에 걸려 있는데, 그걸
+# 한 번도 재지 않았다. 지연이 창 폭(간격×30)에 가까우면 REST 폴링으로는 장중 실시간이
+# 성립하지 않고 웹소켓(H0STNAV0)이 유일한 경로가 된다. 관측이 조용히 빠지면 그 판단을
+# 못 하므로, 로그를 계약으로 고정한다.
+
+
+def test_최신_행_기준_벤더_지연을_남긴다(monkeypatch, caplog):
+    """수신시각 − 최신 bsop_hour. 이 수치가 REST/웹소켓 갈림길을 정한다.
+
+    부모(`_fetch_etf`)가 훅을 부르는 것까지 함께 검증한다 — 훅 호출이 빠지면 어댑터에
+    코드가 남아 있어도 관측은 0건이고, 그건 "지연이 0" 과 로그에서 구분되지 않는다.
+    """
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))  # 최신 행 15:30:00 → 60초
+    src = _source({"069500": _ok([LIVE_ROW])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "iNAV 벤더 지연" in caplog.text
+    assert "지연=60초" in caplog.text
+
+
+def test_지연이_음수면_전일_오염을_지목한다(monkeypatch, caplog):
+    """응답에 날짜가 없어 최신 bsop_hour 에 **오늘 날짜를 붙인다**. 그게 미래로 나오면
+    오늘 데이터가 아직 없어 KIS 가 직전 거래일 값을 준 것이다(ALPHA-387 과 동형).
+
+    개장 직후 창이 전일에 걸치는지도 이 부호로 드러난다 — 09:10 실행의 창은 08:40 까지
+    뻗는데, KIS 가 장 시작 전 시각을 무엇으로 채우는지 확인된 바 없다.
+    """
+    _at(monkeypatch, datetime(2026, 7, 27, 9, 10, tzinfo=KST))  # 최신 행이 15:30 → 미래
+    src = _source({"069500": _ok([LIVE_ROW])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "전일 오염 의심" in caplog.text
+
+
+def test_쓸_수_있는_행이_0건이면_관측_실패를_남긴다(monkeypatch, caplog):
+    """전 행이 결손 판정으로 걸러진 경우. 조용히 지나가면 "지연이 0" 과 "못 쟀다" 가
+    같아 보인다 — 소급이 영구 불가한 데이터라 관측 공백을 나중에 메울 수 없다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([{"bsop_hour": "153000"}])})  # nav 결측 → 전 행 격리
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "iNAV 관측 불가" in caplog.text
+    assert "iNAV 벤더 지연" not in caplog.text
+
+
+def test_괴리율은_퍼센트지_비율이_아니다(monkeypatch, caplog):
+    """`dprt` 의 단위를 응답 자체로 못박는다 — canonical 필드 이름·단위가 여기 걸린다.
+
+    실측 행(069500, 2026-07-25)에서 `stck_prpr/nav − 1` = 0.114115 이고 `dprt` = 0.11 이다.
+    **퍼센트로 반올림해야 일치**하고 비율로 보면 0.0 이 돼 어긋난다. `nav_vrss_prpr`
+    (121.24)가 `stck_prpr − nav` 와 정확히 같은 것이 필드 의미의 교차 근거다.
+
+    ⚠️ `sql_surface.v_nav.premium` 은 **비율**이다(close/nav − 1). 같은 이름으로 실으면
+    두 표면을 조인하는 쪽이 100배 틀린 괴리를 본다 — canonical 은 `premium_pct` 다.
+    """
+    nav, price = float(LIVE_ROW["nav"]), float(LIVE_ROW["stck_prpr"])
+    assert round((price / nav - 1.0) * 100.0, 2) == float(LIVE_ROW["dprt"])
+    assert round(price / nav - 1.0, 2) != float(LIVE_ROW["dprt"])
+
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([LIVE_ROW])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    # 로그가 두 가설을 나란히 낸다 — 다른 ETF 에서도 같은지 장중에 눈으로 갈리게.
+    assert "iNAV 괴리 단위 대조" in caplog.text
+    assert "퍼센트=0.1141" in caplog.text
