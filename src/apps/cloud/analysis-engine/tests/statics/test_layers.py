@@ -225,3 +225,44 @@ def test_short_history_yields_no_decomposition_not_a_zero():
 
 def test_rollup_is_frozen_dataclass():
     assert Rollup.__dataclass_params__.frozen
+
+
+def test_window_mode_attributes_names_on_the_window_axis(monkeypatch):
+    """**구간 모드면 종목 계열도 구간 축이어야 한다.** 이게 빠지면 두 가지가 한꺼번에
+    깨진다 - 설명 대상은 구간 수익률인데 종목만 일봉이라 **축이 섞이고**(값이 나와도
+    틀렸다), `hist` 가 구간 계열에서 만들어지므로 일봉이 그 날짜를 못 담으면 `_on` 의
+    all-or-nothing 에 **전 종목이 조용히 탈락**한다.
+
+    실측 2026-08-07(305720): 일봉 `layers_daily` 가 08-05·08-06 을 안 담아 25종 전부가
+    빠졌다 - `n_names=0 · weight_covered=0.00`, 산문은 "구성종목 기여를 계산하지
+    못했습니다". `clock` 을 넘기자 같은 런이 `n_names=25 · weight_covered=1.00` 이 됐다.
+
+    `decompose` 안의 다른 `_series` 호출 셋은 전부 `clock` 을 넘긴다. 여기만 빠져 있었다.
+    """
+    from edge_analysis.statics import layers as L
+
+    seen = []
+    monkeypatch.setattr(L, "_series",
+                        lambda lake, day, kinds, **kw: seen.append((kinds, kw.get("clock"))) or {})
+    monkeypatch.setattr(L, "holdings", lambda _l, _e, _d: [("000660", "SK하이닉스", 0.5)])
+    clock = ("09:00:00", "12:00:00")
+    L._names(object(), "T", DAYS[50].isoformat(), [DAYS[49]],
+             [np.array([0.01])], [0.0], 5, clock=clock)
+
+    # 종목 계열을 **구간 축으로** 요청했다. `None` 이면 일봉이라 위 사고가 재발한다.
+    assert seen == [(("stock",), clock)]
+
+
+def test_daily_mode_keeps_asking_the_daily_axis(monkeypatch):
+    """위 가드의 반대편 - 일봉 모드(`clock=None`)는 그대로 일봉을 물어야 한다.
+    이게 없으면 '항상 구간으로 묻기' 퇴화를 아무도 못 잡는다."""
+    from edge_analysis.statics import layers as L
+
+    seen = []
+    monkeypatch.setattr(L, "_series",
+                        lambda lake, day, kinds, **kw: seen.append((kinds, kw.get("clock"))) or {})
+    monkeypatch.setattr(L, "holdings", lambda _l, _e, _d: [("000660", "SK하이닉스", 0.5)])
+    L._names(object(), "T", DAYS[50].isoformat(), [DAYS[49]],
+             [np.array([0.01])], [0.0], 5, None)
+
+    assert seen == [(("stock",), None)]
