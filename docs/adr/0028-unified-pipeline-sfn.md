@@ -25,6 +25,12 @@ SFN 이름이 실제 범위(정제·파생 포함)와 어긋났다. 한편 팀 �
 - **분석 페이즈 계약**: 분석은 feature 산출물만 읽는다(canonical/feature 존 + Cloud Event Store 의
   price_movement_trigger·instrument). 실행은 당분간 날짜 동기(오늘)이며, 비동기 전환 시 이
   페이즈만 가격이벤트 트리거 기반으로 떼어낸다.
+  > **이행됨(ALPHA-806)** — 예고한 비동기 전환이 일어났다. analyze 페이즈는 SFN 에서
+  > 제거됐고 설명은 분봉 트리거 SQS 를 소비하는 **상주 서비스**(`analysis-consumer`)가
+  > 만든다. 이 상태머신은 이제 **3페이즈**(raw→정제→feature)다. 날짜 동기 실행을 남겨둘 수
+  > 없었던 이유: 확정 일봉이 마감 뒤에야 나와 장중엔 층을 원리적으로 못 세웠고
+  > (`layer_route=미상`), 같은 대상에 분봉 경로와 다른 답을 내 원장의 route_code 와 산문이
+  > 갈렸다. **feature 산출물만 읽는다는 계약 자체는 그대로**다 — 바뀐 것은 기동 방식이다.
 - analysis-engine 전용 terraform 모듈·SFN·스케줄은 삭제하고 data-pipeline 모듈로 흡수한다.
   이미지는 분리 유지(alphamale 코드베이스) — 로직/구현 경계는 이미지 경계다.
 - 특정일(trade_date) 수동 분석 재실행은 SFN 입력 라우팅 대신 `aws ecs run-task` 레시피로 한다.

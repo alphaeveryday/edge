@@ -24,7 +24,7 @@ infra/terraform/
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
-    ├── data-pipeline/      # 레인별 Step Functions 배치 4종 — 시장 SFN(raw→normalize→feature→analyze) + 뉴스(ALPHA-553) + 공시(ALPHA-722·724) + 장중 수급(ALPHA-769) (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
+    ├── data-pipeline/      # 레인별 Step Functions 배치 4종 — 시장 SFN(raw→normalize→feature) + 뉴스(ALPHA-553) + 공시(ALPHA-722·724) + 장중 수급(ALPHA-769) + 분봉 트리거 상주 소비자 3종(설명·분봉·수급) (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
