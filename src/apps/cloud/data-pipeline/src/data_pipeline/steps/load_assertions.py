@@ -42,6 +42,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from edge_ontology import load_relations
+
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, resolve
@@ -57,6 +59,10 @@ DATASET = "document_assertion"
 _SOURCE_CODE_BY_LANGUAGE = {"ko": "bigkinds"}
 
 _CREATED_SAMPLE_LIMIT = 50
+
+# 미해소 상위 표현을 몇 개까지 로그에 남길지. 20 이던 동안 롱테일 구성이 관측되지 않아
+# "마스터를 넓혀야 하는가, 별칭을 넣어야 하는가"를 로그만 보고는 판단할 수 없었다(ALPHA-802).
+_TOP_UNRESOLVED_LIMIT = 200
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
@@ -100,6 +106,12 @@ def run(
     created = already = arguments_inserted = 0
     args_total = 0
     args_by_reason: dict[str, int] = {"resolved": 0, "unresolved": 0, "ambiguous": 0}
+    # 역할 종별 분포 — 해소율 분모(`args_total`)는 entity 만 센다. 나머지는 분모 밖에서
+    # 따로 보여야 "왜 분모가 argument 총수와 다른가"가 로그만으로 설명된다(Rule 12).
+    args_by_role_kind: dict[str, int] = {"entity": 0, "non_entity": 0, "out_of_vocabulary": 0}
+    args_role_missing = 0
+    non_entity_resolved = 0
+    unknown_roles: dict[str, int] = {}
     unresolved_texts: dict[str, int] = {}
     created_sample: list[dict] = []
     failures: list[dict] = []
@@ -165,6 +177,9 @@ def run(
 
         with connect(db) as conn:
             index = load_resolution_index(conn)
+            # 역할→종별 계약(`role_bindings_v0_1.yaml`). assemble-events 가 이미 읽는 그 표다
+            # — 같은 계보의 두 writer 가 다른 계약을 보고 있었다(ALPHA-802).
+            relations = load_relations()
 
             article_ids_by_source: dict[str, set[str]] = {}
             for source_code, article_id, _e, _p in candidates:
@@ -189,17 +204,44 @@ def run(
 
                 resolved_args: dict[tuple[str, str], float | None] = {}
                 for argument in entry["arguments"]:
-                    args_total += 1
-                    role_code = argument.get("role_code") or "ISSUER"
-                    entity_id, reason = resolve(index, argument.get("text"))
-                    args_by_reason[reason] = args_by_reason.get(reason, 0) + 1
-                    if entity_id is None:
-                        text = argument.get("text")
-                        if isinstance(text, str) and text.strip():
-                            # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
-                            unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
+                    role_code = argument.get("role_code")
+                    if not role_code:
+                        # 여기서 `or "ISSUER"` 로 채우던 자리다(ALPHA-802). 지어낸 역할은
+                        # 적재 후 모델이 뽑은 값과 구분이 안 된다 — 같은 계보의
+                        # `predicate_code` 는 기본값을 쓰되 `predicate_source` 로 출처를
+                        # 남기는데 역할엔 그 칸이 없다. 채우지 말고 탈락시킨다.
+                        args_role_missing += 1
                         continue
-                    resolved_args.setdefault((str(role_code), entity_id), entry["confidence"])
+                    role_code = str(role_code)
+                    relation = relations.get(role_code)
+                    kind = ("entity" if relation is not None and relation.is_entity else
+                            "non_entity" if relation is not None else "out_of_vocabulary")
+                    args_by_role_kind[kind] += 1
+                    if relation is None:
+                        # 어휘 밖 = 추출단과 온톨로지가 갈렸다는 신호다. 개수만 세면 못 고친다
+                        # — 어느 역할인지 이름을 남긴다(실측 0건이라 목록은 짧다).
+                        unknown_roles[role_code] = unknown_roles.get(role_code, 0) + 1
+
+                    entity_id, reason = resolve(index, argument.get("text"))
+                    if kind == "entity":
+                        # 해소율 분모는 **실체 역할만** 센다. non_entity(TIME·VALUE·TEXT)는
+                        # 온톨로지가 "적재하지 않는다"고 정한 자리라, 미해소로 세면 분모가
+                        # 부풀어 뒤따르는 마스터 확대의 효과를 잴 수 없다.
+                        args_total += 1
+                        args_by_reason[reason] = args_by_reason.get(reason, 0) + 1
+                        if entity_id is None:
+                            text = argument.get("text")
+                            if isinstance(text, str) and text.strip():
+                                # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
+                                unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
+                    elif entity_id is not None:
+                        # 실체 역할이 아닌데 인덱스에 걸렸다. **지금은 그대로 적재한다** —
+                        # 이 티켓은 계측만 바꾸고 적재는 건드리지 않는다. 이 수가 곧 역할별
+                        # 해소 분기(ALPHA-831)가 걷어낼 적재량이다.
+                        non_entity_resolved += 1
+                    if entity_id is None:
+                        continue
+                    resolved_args.setdefault((role_code, entity_id), entry["confidence"])
 
                 if not resolved_args:
                     skipped_no_resolved_argument += 1
@@ -272,9 +314,17 @@ def run(
         "created": created, "already_present": already,
         "arguments_inserted": arguments_inserted,
         # 해소율 실측(ALPHA-375 완료 조건) — 분모·분자·사유 분포 + 미해소 상위 표현.
+        # ⚠️ `total` 은 argument 총수가 아니라 **실체 역할 argument 수**다(ALPHA-802).
+        # 나머지 축은 `role_kinds`·`role_missing` 이 따로 말한다 — 넷을 더하면 총수가 된다.
         "argument_resolution": {
             "total": args_total, **args_by_reason, "rate": resolution_rate,
-            "top_unresolved": sorted(unresolved_texts.items(), key=lambda kv: -kv[1])[:20],
+            "top_unresolved": sorted(unresolved_texts.items(),
+                                     key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
+            "role_kinds": args_by_role_kind,
+            "role_missing": args_role_missing,
+            "out_of_vocabulary_roles": unknown_roles,
+            # 비실체 자리인데 인덱스에 걸려 적재된 수 — ALPHA-831 이 걷어낼 몫이다.
+            "non_entity_resolved": non_entity_resolved,
         },
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
@@ -295,6 +345,11 @@ def run(
         logger.exception("적재 로그 기록 실패")
         exit_code = 1
 
+    if unknown_roles:
+        # 로그 파일을 열어봐야 보이는 수치로 두지 않는다 — 추출단이 어휘 밖 역할을 내기
+        # 시작하면 그 자리는 전부 분모 밖으로 빠져 해소율이 조용히 좋아 보인다(Rule 12).
+        logger.warning("load_assertions: 어휘 밖 역할 %d종 — 추출단과 온톨로지가 갈렸다: %s",
+                       len(unknown_roles), sorted(unknown_roles))
     logger.info(
         "load_assertions: rows=%d considered=%d missing_doc=%d no_resolved=%d created=%d"
         " already=%d args_inserted=%d resolution=%s",
