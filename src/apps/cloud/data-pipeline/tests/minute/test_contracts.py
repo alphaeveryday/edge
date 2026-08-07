@@ -188,6 +188,61 @@ class TestUniverseFixture:
         assert original.universe_hash == reordered.universe_hash
 
 
+class TestSectorReferenceAxis:
+    """참조 계열 축 — **봉은 받고 판정은 안 한다** (ALPHA-842).
+
+    의도: 층 분해의 섹터 후보처럼 남을 설명하는 대조축으로만 쓰이는 ETF 가 있다. 이걸
+    `etf_ids` 에 얹으면 `price_consumer` 가 판정 집합으로 받아(`PriceTriggerHandler`)
+    트리거 발화 대상이 되고, 일봉 유니버스 밖이라 prev_close 가 없어 `needs_open` 이
+    상시 비지 않는다. 수집 축(`unit_ids`)과 판정 축(`etf_ids`)이 갈려 있어야 한다.
+    """
+
+    def _universe(self, **kwargs):
+        return Universe(universe_version="v1", etf_ids=("E1",),
+                        constituent_ids=("C1", "C2"), **kwargs)
+
+    def test_collected_but_not_judged(self):
+        universe = self._universe(sector_etf_ids=("S1", "S2"))
+        assert set(universe.unit_ids) == {"E1", "C1", "C2", "S1", "S2"}
+        assert universe.etf_ids == ("E1",)   # 판정 축은 안 늘어난다
+
+    def test_regular_hours_expect_the_reference_series_too(self):
+        # 수집 대상인데 기대 집합에서 빠지면 그 봉이 와도 '계획 밖'이 되고, 반대로
+        # 기대에만 있고 수집이 없으면 window 가 영원히 INCOMPLETE 다.
+        universe = self._universe(sector_etf_ids=("S1",))
+        at = universe.units_at(datetime(2026, 7, 31, 10, 0, tzinfo=KST))
+        assert "S1" in at
+
+    @pytest.mark.parametrize("kwargs", [
+        {"sector_etf_ids": ("E1",)},   # 판정 축과 겹침
+        {"sector_etf_ids": ("C1",)},   # 구성종목과 겹침
+        {"sector_etf_ids": ("S1", "S1")},
+    ])
+    def test_overlapping_or_duplicate_declaration_rejected(self, kwargs):
+        # 겹치면 "판정 안 한다"가 거짓이 되고, `unit_ids` 에 같은 종목이 두 번 실려
+        # 완전성 판정의 기대 개수가 어긋난다.
+        with pytest.raises(ValidationError):
+            self._universe(**kwargs)
+
+    def test_extended_hours_may_name_a_reference_series(self):
+        # WHY: 시간외 거래 여부는 **종목별 속성**이라 참조 계열도 가질 수 있다. 멤버십
+        #      검사가 판정·구성종목 축만 보면 그 선언이 "universe 밖 ID" 로 거부돼,
+        #      실제로 시간외에 도는 참조 계열의 그 분을 영영 못 받는다.
+        universe = self._universe(sector_etf_ids=("S1",), extended_hours_ids=("S1",))
+        assert universe.units_at(datetime(2026, 7, 31, 8, 30, tzinfo=KST)) == ("S1",)
+
+    def test_extended_hours_outside_every_axis_still_rejected(self):
+        # 위 완화가 오타까지 통과시키면 안 된다 — 어느 축에도 없는 ID 는 여전히 거부다.
+        with pytest.raises(ValidationError):
+            self._universe(extended_hours_ids=("NOPE",))
+
+    def test_declaring_the_axis_moves_identity(self):
+        # 기대 유니버스가 달라졌는데 hash 가 같으면 세션 충돌 가드가 그 변경을 같은
+        # universe 로 통과시킨다 — 원장 기대와 실제 수집 집합이 조용히 갈린다.
+        assert self._universe().universe_hash != self._universe(
+            sector_etf_ids=("S1",)).universe_hash
+
+
 class TestTradingHoursClass:
     """시간대별 기대 유니버스 (ALPHA-684 — 실측 근거 `.dev/toss-openapi-실측.md`).
 

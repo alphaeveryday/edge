@@ -521,8 +521,8 @@ class MinutePriceWorkerConfig(BaseModel):
         한 tick 은 최대 (realtime 1 + recovery budget) 개 window 를 순차 처리하고,
         claim 의 lease_expires_at 은 전부 **tick 시작 시각** 기준이다(가상 시계 계약 —
         tick 안에서 시계를 다시 읽지 않는다). window 하나의 여유를 75초로 잡는다(토스
-        실측 73초+ 가 근거였고, KIS 는 400종 ÷ 12 req/s ≈ 33초라 같은 상수 아래로
-        들어온다 — ALPHA-735). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
+        실측 73초+ 가 근거였고, KIS 는 410 unit ÷ 12 req/s ≈ 34초라 같은 상수 아래로
+        들어온다 — ALPHA-735·842. unit 은 판정 ETF + 구성종목 + 참조 계열의 합이다). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
         attempt 가 탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
         tick 경계에서만 돌므로 fence lease 가 tick 최악보다 짧으면 처리 중 만료된다.
 
@@ -669,6 +669,55 @@ class MinuteNewsConsumerConfig(BaseModel):
     retry_base_seconds: int = 5
     retry_max_seconds: int = 900
     max_attempts: int = 5
+
+
+class MinuteUniverseConfig(BaseModel):
+    """1분 레인 universe.json 을 **만들 때만** 쓰는 설정 — `build_minute_universe` 전용.
+
+    ⚠️ 이 섹션은 수집 유니버스의 정본이 아니다. 1분 레인의 정본은 S3 객체
+    `config/minute/universe.json` 이고(planner·worker·consumer 가 `--universe` 로 같은
+    객체를 본다), 여기 값은 그 객체를 **생성**하는 입력 하나일 뿐이다 — 이 파일만 고치고
+    S3 를 안 갈면 아무것도 안 바뀐다.
+
+    `[krx_etf.source.etf_map]` 과 다른 축이다: 저기는 "KRX PDF 로 holdings 를 받을 ETF"
+    이고 그 구성종목이 유니버스로 파생된다. 여기 ETF 는 **분봉만** 받는다 — holdings 도,
+    구성종목도, NAV 도, **트리거 판정도** 받지 않는다. 그래서 etf_map 에 넣으면 안 되고
+    (KRX PDF 수집이 늘고 구성종목이 유니버스로 딸려 들어온다) `Universe.etf_ids` 에도
+    넣으면 안 된다(그 축은 `price_consumer` 의 판정 집합이다 — `Universe` 도크스트링).
+    빌더가 이 목록을 `Universe.sector_etf_ids` 로 싣는다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 층 분해의 **섹터 후보** ETF — 분봉이 있어야 구간(장중) 모드에서 섹터층이 선다.
+    # 일봉 경로는 KRX 업종지수를 섹터 후보로 주입하지만(analysis `layers._krx_sector_candidate`)
+    # 그 지수는 분봉이 없어(수집 원천이 pykrx 일봉이다) 구간 모드가 섹터 ETF 로 대체한다.
+    #
+    # 정본은 analysis 쪽 `layers_daily` 의 `kind='sector'` 집합이고, **여기와 자동으로
+    # 맞춰지지 않는다**(그 parquet 은 이 레포 밖 산출물이라 로드 시점에 대조할 수 없다).
+    # 갈렸을 때의 증상은 조용하다: `layers._series` 가 `layers_daily` 회원만 후보로
+    # 삼으므로 여기 없는 후보는 애초에 `xs` 에 안 들어가고, 탈락 사유를 남기는 자리
+    # (`twins`·`alien`·`rho_blocked`)는 **들어온 후보만** 기록한다. 사유 없는 부재다.
+    sector_etf_ids: tuple[NonBlankStr, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate(self) -> MinuteUniverseConfig:
+        from ..parse import krx_short_code  # 지연 import — config 는 parse 에 의존하지 않는다
+
+        # 중복을 여기서 막는 이유: **빌더는 집합 연산이라 조용히 삼킨다.** 아래 하류가
+        # 거부해 줄 것이라고 기대하면 안 된다 — 중복 한 줄은 대개 "다른 코드를 적으려다
+        # 덮어썼다"의 흔적이라, 삼켜지면 의도한 종목 하나가 통째로 사라진다.
+        if len(set(self.sector_etf_ids)) != len(self.sector_etf_ids):
+            raise ValueError("sector_etf_ids 에 중복 코드가 있다")
+        # **형태만 본다.** `krx_short_code` 는 정규식(선두 숫자 + 영숫자 대문자 6자)이라
+        # 실재 여부는 모른다 — 자릿수를 바꿔 적은 오타(`091170`→`091710`)는 그대로
+        # 통과하고, 그건 첫 런의 window manifest 에 `missing` 으로 드러난다(etf_map 의
+        # ⚠ 항목이 "첫 런 로그에 드러난다"고 적은 것과 같은 성질). 여기서 막는 것은
+        # 한글·공백·길이 오류처럼 **로드 시점에 확실히 아는 것**뿐이다. 실재 대조를
+        # 하려면 종목 마스터가 필요한데 그건 레이크에 있고 config 로드 경로가 아니다.
+        if bad := [c for c in self.sector_etf_ids if krx_short_code(c) is None]:
+            raise ValueError(f"KRX 단축코드 형태가 아닌 값이 있다: {bad[:5]}")
+        return self
 
 
 class PriceTriggersConfig(BaseModel):

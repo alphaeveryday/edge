@@ -38,6 +38,7 @@ from .models import (
     MinutePriceConsumerConfig,
     MinutePriceWorkerConfig,
     MinuteRelayConfig,
+    MinuteUniverseConfig,
     KrxEtfConfig,
     KrxInstrumentConfig,
     NewsConfig,
@@ -123,6 +124,10 @@ class Settings(BaseSettings):
     # 1분 뉴스 추출 Consumer(ALPHA-713)는 `news-consumer` 스텝만 쓴다 — 미설정이면
     # 그 진입점이 fail-loud 한다.
     minute_news_consumer: MinuteNewsConsumerConfig | None = None
+    # 1분 universe.json **생성** 입력(build_minute_universe). 수집 스텝은 아무도 안 읽는다
+    # — 1분 레인의 유니버스 정본은 S3 객체지 이 섹션이 아니다. 미설정이면 섹터 후보
+    # 없이(=holdings 파생 ETF 만) universe 를 만든다.
+    minute_universe: MinuteUniverseConfig | None = None
     # 1분 News Worker(ALPHA-707)는 `news-worker` 스텝만 쓴다. 기본값이 전부라 섹션이
     # 없어도 기동한다 — 엔드포인트 정본은 [bigkinds_news] 라 이 섹션은 수치뿐이다.
     minute_news_worker: MinuteNewsWorkerConfig = MinuteNewsWorkerConfig()
