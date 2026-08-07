@@ -5,7 +5,9 @@ I/O나 분석 방법을 담지 않는다. 원장이 확정한 1분 artifact를 �
 """
 from __future__ import annotations
 
+import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -249,3 +251,112 @@ def aggregate_window(
                     f"{unit_id} {bucket_start.isoformat()} — {error}") from error
         bucket_start = bucket_end
     return tuple(out)
+
+
+@dataclass(frozen=True, slots=True)
+class WindowCoverage:
+    """집계 전 공통 minute축의 관측·holdings·섹터 매핑 진단."""
+
+    expected_minutes: int
+    expected_units: int
+    observed_pairs: int
+    complete_units: int
+    window_min_coverage: float
+    price_weight_coverage: float | None
+    sector_mapping_coverage: float | None
+    missing_unit_ids: tuple[str, ...]
+    missing_minutes: tuple[datetime, ...]
+    unexpected_unit_ids: tuple[str, ...]
+
+
+def diagnose_window(
+    spec: WindowSpec,
+    minute_bars: tuple[MinuteBar, ...],
+    expected_unit_ids: tuple[str, ...],
+    *,
+    weights: Mapping[str, float] | None = None,
+    sector_mapped_unit_ids: frozenset[str] = frozenset(),
+) -> WindowCoverage:
+    """결손을 채우거나 거부하지 않고 이후 집계가 판단할 수치와 목록을 낸다."""
+    expected = tuple(str(unit).strip() for unit in expected_unit_ids)
+    if not expected or any(not unit for unit in expected):
+        raise ValueError("expected_unit_ids는 비지 않은 unit 목록이어야 한다")
+    if len(set(expected)) != len(expected):
+        raise ValueError("expected_unit_ids에 중복이 있다")
+    expected_set = set(expected)
+
+    normalized_weights: dict[str, float] = {}
+    for unit, raw in (weights or {}).items():
+        unit = str(unit).strip()
+        if isinstance(raw, bool):
+            raise ValueError(f"weight가 bool이다: {unit}")
+        value = float(raw)
+        if unit not in expected_set:
+            raise ValueError(f"weight unit이 expected 밖이다: {unit}")
+        if not unit or not math.isfinite(value) or value < 0:
+            raise ValueError(f"weight가 유효하지 않다: {unit}={raw!r}")
+        normalized_weights[unit] = value
+    total_weight = sum(normalized_weights.values())
+    if normalized_weights and total_weight <= 0:
+        raise ValueError("weights 합은 양수여야 한다")
+
+    expected_minutes: list[datetime] = []
+    cursor = spec.start
+    while cursor < spec.end:
+        expected_minutes.append(cursor)
+        cursor += timedelta(minutes=1)
+    expected_minute_set = set(expected_minutes)
+    observed: set[tuple[datetime, str]] = set()
+    unexpected: set[str] = set()
+    for bar in minute_bars:
+        source = bar.source
+        if source.session_id != spec.session_id:
+            raise WindowAggregationError(
+                "MINUTE_SESSION_MISMATCH",
+                f"{bar.unit_id} {source.start.isoformat()} session={source.session_id}")
+        if source.start not in expected_minute_set:
+            raise WindowAggregationError(
+                "MINUTE_OUT_OF_WINDOW", f"{bar.unit_id} {source.start.isoformat()}")
+        pair = (source.start, bar.unit_id)
+        if pair in observed:
+            raise WindowAggregationError(
+                "DUPLICATE_MINUTE_BAR", f"{bar.unit_id} {source.start.isoformat()}")
+        observed.add(pair)
+        if bar.unit_id not in expected_set:
+            unexpected.add(bar.unit_id)
+
+    per_minute = {
+        minute: sum((minute, unit) in observed for unit in expected_set)
+        for minute in expected_minutes
+    }
+    complete = {
+        unit for unit in expected_set
+        if all((minute, unit) in observed for minute in expected_minutes)
+    }
+    missing_units = tuple(sorted(expected_set - complete))
+    missing_minutes = tuple(
+        minute for minute in expected_minutes if per_minute[minute] < len(expected_set))
+    min_coverage = min(per_minute.values()) / len(expected_set)
+    price_weight_coverage = (
+        sum(weight for unit, weight in normalized_weights.items() if unit in complete)
+        / total_weight
+        if normalized_weights else None
+    )
+    mapped = set(sector_mapped_unit_ids)
+    sector_mapping_coverage = (
+        sum(weight for unit, weight in normalized_weights.items() if unit in mapped)
+        / total_weight
+        if normalized_weights else None
+    )
+    return WindowCoverage(
+        expected_minutes=len(expected_minutes),
+        expected_units=len(expected_set),
+        observed_pairs=sum(pair[1] in expected_set for pair in observed),
+        complete_units=len(complete),
+        window_min_coverage=min_coverage,
+        price_weight_coverage=price_weight_coverage,
+        sector_mapping_coverage=sector_mapping_coverage,
+        missing_unit_ids=missing_units,
+        missing_minutes=missing_minutes,
+        unexpected_unit_ids=tuple(sorted(unexpected)),
+    )
