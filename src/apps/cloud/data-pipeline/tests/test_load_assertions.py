@@ -399,9 +399,10 @@ def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch):
     """역할이 비면 채우지 않고 탈락시킨다(ALPHA-802).
 
     WHY: `role_code or "ISSUER"` 는 해소되는 텍스트를 만나면 **없던 역할을 만들어**
-    적재한다. 같은 계보의 `predicate_code` 는 기본값을 쓰되 `predicate_source` 로 출처를
-    남기는데 역할엔 그 칸이 없다 — 한 번 실리면 모델이 뽑은 값과 사후 분리가 불가능하다.
-    미해소로 남는 편이 틀린 주체로 적재되는 것보다 낫다.
+    적재한다. 이 테이블엔 출처 컬럼이 없고, `resolved_args` 가 `(역할, entity_id)` 로
+    접기 때문에 지어낸 ISSUER 는 같은 엔티티의 진짜 ISSUER 와 **한 행으로 합쳐진다** —
+    합쳐진 뒤에는 feature 원본과 대조해도 못 갈라진다. 미해소로 남는 편이 틀린 주체로
+    적재되는 것보다 낫다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
@@ -468,8 +469,10 @@ def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
     # 상한이 자르는 것은 **빈도 하위**여야 한다 — 5·4·3·2회(각 50종)가 살고 1회는 전멸한다
     assert counts[0] == 5 and counts[-1] == 2
     # ⭐이 두 줄이 "빈도순 상위 200"과 "먼저 본 200"을 가른다. 삽입 순서는 event_type_code
-    # 사전순(E0·E1·E10·E100…)이라, 늦게 나오지만 빈도 높은 것이 살아남고 먼저 나오지만
-    # 빈도 1인 것이 잘려야 정렬 키가 실제로 일한 것이다
+    # 사전순(E0·E1·E10·E100…)이라 인덱스 순서와 다르다 — 늦게 나오지만 빈도 높은 것이
+    # 살아남고, 먼저 나오지만 빈도 1인 것이 잘려야 정렬 키가 실제로 일한 것이다.
+    # ⚠️ 인덱스가 크다고 삽입 순서가 늦지 않다: E249 는 사전순 168번째라 선두 200 안에 들어
+    # "먼저 본 200" 구현에서도 살아남는다 — 아무것도 가르지 못한다. 사전순 240번째인 E9 를 쓴다.
     kept = dict(top)
-    assert "미등록249" in kept       # 삽입 순서 끝자락 · 5회
-    assert "미등록0" not in kept     # 삽입 순서 선두 · 1회
+    assert "미등록9" in kept         # 삽입 순서 240/250 · 5회 → 빈도순에서만 살아남는다
+    assert "미등록0" not in kept     # 삽입 순서 1/250 · 1회 → 빈도순에서만 잘린다
