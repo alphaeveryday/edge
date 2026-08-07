@@ -145,12 +145,16 @@
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
-> (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 에서 만든다.
-> 업로드는 사람이 확인 후 한다: universe 는 세션 identity 축이라 갈아끼우는 순간 그날
-> 계획이 바뀐다). 객체 없이 스케일업하면 worker·consumer 는 기동 거부(fail-loud)다.
+> (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
+> `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는
+> 세션 identity 축이라 갈아끼우는 순간 그날 계획이 바뀐다). 객체 없이 스케일업하면
+> worker·consumer 는 기동 거부(fail-loud)다.
+> ⚠️ **수집 축과 판정 축은 다르다**(ALPHA-842). `unit_ids`(수집) = 판정 ETF + 구성종목 +
+> **참조 계열**(`sector_etf_ids`)이고, 트리거 판정은 `etf_ids` 만 받는다 — 층 분해의 섹터
+> 후보처럼 봉만 필요한 계열을 `etf_ids` 에 얹으면 발화 대상·전일 종가 대조 대상이 된다.
 > **처리량 제약은 벤더 교체로 풀렸다**(ALPHA-735) — 토스는 종목당 1콜 × 363종 ÷ 초당
-> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(기본은 12.5)라 400종이
-> 33초에 든다. 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
+> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(기본은 12.5)라 410 unit 이
+> 34초에 든다(참조 계열 48 편입 후, ALPHA-842). 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
 > BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
 > **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717) — start 가 news_minute 세션도
