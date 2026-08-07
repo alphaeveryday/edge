@@ -424,6 +424,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
 # assertion_argument 로. argument text 는 엔티티 마스터 완전일치(티커·정식명·종목명)로
 # instrument 에 해소하고, 미해소·충돌은 quality log 에 사유별 수치로 남긴다(해소율 실측).
+# 해소율 분모는 **실체 역할 argument 만**이다(ALPHA-802) — 온톨로지가 "적재하지 않는다"고
+# 정한 non_entity(TIME·VALUE·TEXT)를 미해소로 세면 분모가 부풀어 마스터 확대의 효과를
+# 못 잰다. 역할 종별 분포·어휘 밖 역할 이름도 같은 로그에 남는다.
 # 멱등: uq_document_assertion_natural(document_id, event_type, predicate) ON CONFLICT.
 # 전무 해소 주장은 넣지 않는다. modality_code 는 어휘 확정 전까지 비운다(ALPHA-361).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
