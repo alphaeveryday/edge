@@ -58,7 +58,8 @@ _NOT_INSTRUMENTED = {
     "CollectFmpEtf": "FMP bandwidth 한도 소진 → SFN 토글 off",
     "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
-    "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
+    # AnalyzeOne 은 ALPHA-806 에서 state 자체가 사라졌다(analyze 페이즈 제거) — 설명은
+    # SFN 스텝이 아니라 분봉 트리거 큐 상주 소비자가 만든다. 제외 목록에서도 뺀다.
 }
 
 
@@ -168,7 +169,9 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 33 → 36(ALPHA-769): 장중 수급 3잡 신설. **ALPHA-724 와 성격이 다르다** — 공시는 소유
     # 레인만 옮긴 것이라 이 수가 그대로였지만, 여기선 statemachine.tf 잡 리스트에 없던 스텝이
     # 셋 늘었다(ALPHA-767·768 이 만든 층에 배선이 처음 붙는다).
-    assert len(asl_states) == 36, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
+    # 36 → 35(ALPHA-806): analyze 페이즈 제거로 AnalyzeOne 이 사라졌다. 설명은 SFN 스텝이
+    # 아니라 분봉 트리거 큐 상주 소비자가 만든다.
+    assert len(asl_states) == 35, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
 
     registered = {e.sfn_state_name for e in catalog.entries()}
     assert registered <= asl_states, f"ASL 에 없는 state 등록: {registered - asl_states}"
@@ -307,8 +310,8 @@ def test_catalog_matches_asl_command_and_taskdef_per_state():
     그 expected_task 가 영원히 FULFILLED 되지 못한다. state 별로 삼중항을 통째로 대조한다.
     """
     # ⚠️ 파일별로 따로 파싱한다 — 인라인 패턴은 DOTALL 비탐욕이라, 삼중항이 안 갖춰진 state
-    # (AnalyzeOne: 다른 task-def 참조·Command 리터럴 없음)에서 시작한 매치가 이어붙인 다음
-    # 파일의 삼중항까지 건너가 삼키면 뉴스 직렬 2개가 파싱에서 사라진다.
+    # 에서 시작한 매치가 이어붙인 다음 파일의 삼중항까지 건너가 삼키면 뉴스 직렬 2개가
+    # 파싱에서 사라진다.
     asl: dict[str, tuple[str, list[str]]] = {}
     for path in (_STATEMACHINE_TF, _NEWS_PIPELINE_TF):
         tf = path.read_text(encoding="utf-8")

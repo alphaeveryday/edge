@@ -267,6 +267,46 @@ def _seed_layers_backfill(root: pathlib.Path) -> None:
         "weight_pct": [100.0],
         "as_of": [d0]}))
 
+    # 5분봉 백필(`bars/`) — **분봉 트리거 경로가 이걸 읽는다.** 설명이 분봉 트리거로만
+    # 시작하게 된 뒤(ALPHA-806) 층 분해는 늘 **구간 모드**로 돌고, 구간 모드의 가격 축은
+    # `layers_daily` 가 아니라 `bars_5m` 이다(`layers._CLOCK_SQL` — 심볼 명단만 layers_daily
+    # 에서 오고 가격은 5분봉에서 온다). 이게 없으면 `statics.layers.failed` 로 층이 죽어
+    # 판정이 UNCERTAIN 으로 떨어지고, 골든패스가 배포 경로를 한 줄도 안 지난다.
+    #
+    # 구간 집계는 하루·심볼마다 `ln(마지막 close / 첫 open)` 이다. 그래서 첫 슬롯의 open 을
+    # 전일 수준에, 마지막 슬롯의 close 를 당일 수준에 맞추면 **일봉 계열과 같은 로그수익률**
+    # 이 나온다 — 두 축이 같은 요인을 보게 해야 층이 실제로 선다.
+    slots = [dt.time(9, 0)]
+    while slots[-1] < dt.time(10, 35):
+        prev = dt.datetime.combine(d0, slots[-1]) + dt.timedelta(minutes=5)
+        slots.append(prev.time())
+    bars: dict[str, list] = {c: [] for c in
+                             ("symbol", "datetime", "open", "high", "low", "close", "volume")}
+
+    def add_bars(sym: str, level):
+        for i, d in enumerate(days):
+            if i == 0:
+                continue                       # 전일 수준이 없으면 구간 수익을 못 만든다
+            lo, hi = float(level(i - 1)), float(level(i))
+            n = len(slots)
+            for j, t in enumerate(slots):
+                o = lo + (hi - lo) * j / n
+                c = lo + (hi - lo) * (j + 1) / n
+                bars["symbol"].append(sym)
+                bars["datetime"].append(dt.datetime.combine(d, t))
+                bars["open"].append(o)
+                bars["high"].append(max(o, c))
+                bars["low"].append(min(o, c))
+                bars["close"].append(c)
+                # volume 0 은 거래정지로 읽혀 그 날이 계열에서 빠진다(`halt`).
+                bars["volume"].append(1_000.0)
+
+    add_bars(MARKET_CODE, lambda i: mkt[i])
+    add_bars(ETF_TICKER, lambda i: 50.0 * (1.0 + 1.2 * (mkt[i] / 100.0 - 1.0)))
+    add_bars(SAMSUNG_TICKER, lambda i: 70.0 * (1.0 + 1.1 * (mkt[i] / 100.0 - 1.0)))
+    (root / "bars").mkdir(parents=True, exist_ok=True)
+    (root / "bars" / "bars_5m.parquet").write_bytes(_parquet(bars))
+
 
 def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
     """뉴스 1건이 조립→소비→설명→영속까지 한 계보로 이어져야 한다.
