@@ -329,8 +329,9 @@ def _args(*pairs) -> list[dict]:
 def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkeypatch):
     """해소율 분모는 **실체 역할만** 센다(ALPHA-802).
 
-    WHY: 온톨로지 `role_kinds.non_entity`(TIME·VALUE·TEXT)는 "적재하지 않는다"고 이미
-    정해진 자리다. 그걸 미해소로 세면 분모가 30.7%(08-05 실측) 부풀고, 그 부푼 분모
+    WHY: 온톨로지 `role_kinds.non_entity`(TIME·VALUE·TEXT)는 실체를 가리키지 않는
+    자리다(온톨로지가 "적재하지 않는다"고 정한 대상은 `event_argument` — 여기선 분모에서만
+    뺀다. assertion_argument 에는 아직 실리고, 그건 아래 네 번째 테스트가 못박는다). 그걸 미해소로 세면 분모가 30.7%(08-05 실측) 부풀고, 그 부푼 분모
     위에서는 뒤따르는 마스터 확대(ALPHA-830)가 실제로 몇 %를 회수했는지 잴 수 없다 —
     개선과 분모 변화가 같은 숫자 안에서 섞인다.
 
@@ -426,7 +427,7 @@ def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch, c
     # 떠야 한다 — 이 단언이 없으면 WARNING 을 통째로 지워도 스위트가 초록이다(Rule 12)
     [warned] = [r.getMessage() for r in caplog.records
                 if r.levelno >= logging.WARNING and r.name == load_assertions.logger.name]
-    assert "1건" in warned
+    assert "역할 없는 argument" in warned
 
 
 def test_non_entity_that_resolves_still_loads_and_is_counted_apart(tmp_path, monkeypatch):
