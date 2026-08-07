@@ -69,7 +69,13 @@ SOURCE_VENDOR = "1m_rollup"
 # 이 날짜부터의 trade_date 파티션만 쓴다 — 그 전은 fmp 백필(~2026-07-31)의
 # 정본 파티션이라, 과거 --session-date 재실행이 part-0.parquet 를 덮으면 벤더
 # 원본이 유실된다. 비겹침은 주석이 아니라 코드로 강제한다.
-WRITER_SINCE = "2026-08-04"
+#
+# ⚠️ 08-04 → 08-03 인하(ALPHA-846). 08-04 였던 이유는 fmp 범위가 아니라 **08-03 의
+# 1분 레인이 toss 34종뿐이었다**는 것이었다 — 그 빈약한 산출로 파티션을 만들면 08-04~07
+# 과 형상이 다른 하루가 "채워짐"으로 남는다. KIS 소급 수집이 그날을 362종 kis 세션으로
+# 다시 만들면서 그 근거가 사라졌다. 08-03 에는 fmp·토스 어느 파티션도 없다(실측) —
+# 남은 겹침 위험은 아래 '타 writer 파일' 가드가 계속 진다.
+WRITER_SINCE = "2026-08-03"
 
 
 def _committed_generations(ledger, session_id: str) -> dict[str, int]:
