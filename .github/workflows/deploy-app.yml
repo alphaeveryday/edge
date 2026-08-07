@@ -45,7 +45,7 @@ permissions:
 jobs:
   deploy:
     name: deploy ${{ inputs.app }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     # gradle 콜드 빌드(~10분) + 이미지 push + 롤아웃 대기까지 포함한 상한.
     timeout-minutes: 30
     # OIDC 신뢰 경계 = dev 브랜치(push:dev 트리거이므로 sub=ref:refs/heads/dev). `environment:` 를 쓰지
