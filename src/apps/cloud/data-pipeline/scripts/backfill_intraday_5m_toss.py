@@ -57,6 +57,7 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src"))
 
+from data_pipeline.minute.rollup import WRITER_SINCE  # noqa: E402
 from data_pipeline.sources.toss import TossOpenApiClient  # noqa: E402
 
 KST = timezone(timedelta(hours=9))
@@ -106,8 +107,14 @@ def _trading_days(s3, bucket: str) -> list[str]:
     **교체가 아니라 합집합이다.** `price_daily` 는 파티션이 몇 주치뿐이라(실측 21일)
     교체하면 창이 그만큼 쪼그라들어 전 종목이 대상이 된다.
     """
-    return sorted(set(_partition_days(s3, bucket))
-                  | set(_partition_days(s3, bucket, PRICE_DAILY_PREFIX)))
+    days = (set(_partition_days(s3, bucket))
+            | set(_partition_days(s3, bucket, PRICE_DAILY_PREFIX)))
+    # **소유권 경계를 코드로 건다.** 이전 판은 "파티션이 없으면 대상이 아니다"라는
+    # 우연에 기대 롤업 구간을 안 건드렸는데, 달력이 합집합이 되면서 그 우연이 사라졌다 —
+    # 하필 파티션이 빠진 날이 곧 롤업 시대의 날이라, 가드가 없으면 백필이 가장 위험한
+    # 파티션을 정조준한다. 거기 낯선 파일을 쓰면 `rollup._rollup_day` 의 foreign 가드가
+    # 걸려 그날 5분 파생이 후크·EOD 양쪽에서 **영구 정지**한다.
+    return sorted(d for d in days if d < WRITER_SINCE)
 
 
 def _configured_universe() -> set[str]:
@@ -119,18 +126,20 @@ def _configured_universe() -> set[str]:
     것을 기준으로 삼으면 **선언된 대상이 백필에서 또 빠진다** — 이 티켓이 닫으려는
     바로 그 결함이다. 그래서 선언 자체(`sources.toml`)를 읽는다.
 
-    부재는 빈 집합이다. 이 함수가 없어도 관측 유니버스로 백필은 돌아야 한다 — 설정
-    로드 실패가 백필 전체를 세우지는 않되, 조용히 넘어가지도 않는다.
+    **방어적 getattr 로 감싸지 않는다.** 섹션·필드가 사라지면 AttributeError 로 터지게
+    두는 편이 낫다 — `or ()` 로 접으면 선언된 종목이 **경고 한 줄 없이** 백필에서 빠지고,
+    그건 이 티켓이 닫으려는 결함이 다른 문으로 되돌아오는 것이다.
+
+    잡는 것은 **ImportError 뿐**이다(스크립트가 패키지 밖에서 돌 수 있다). 로더는
+    검증 실패를 `ConfigError` 로 드러내는 계약이므로(`config/loader.load_settings`)
+    그것까지 삼키면 스키마 위반이 WARNING 한 줄 뒤 exit 0 으로 지나간다(Rule 7·12).
     """
     try:
         from data_pipeline.config.loader import load_settings
-
-        minute = getattr(load_settings(), "minute_universe", None)
-        return set(getattr(minute, "sector_etf_ids", None) or ())
-    except Exception as e:                                      # noqa: BLE001
-        log.warning("설정 유니버스를 못 읽었다 — 관측 유니버스만 쓴다: %s: %s",
-                    type(e).__name__, str(e)[:120])
+    except ImportError as e:
+        log.warning("설정 모듈을 못 읽었다 — 관측 유니버스만 쓴다: %s", e)
         return set()
+    return set(load_settings().minute_universe.sector_etf_ids)
 
 
 def _read_day(s3, bucket: str, day: str, name: str = "part-0.parquet"):
@@ -205,6 +214,31 @@ SCHEMA = pa.schema([
     ("low", pa.float64()), ("close", pa.float64()), ("volume", pa.int64()),
     ("source_vendor", pa.string()), ("available_at", pa.timestamp("us")),
 ])
+
+
+def _day_payload(prior_rows: list[dict], existing: set[str],
+                 candidates: list[dict]) -> tuple[list[dict], int] | None:
+    """그날 쓸 행과 **새로 추가되는 수**. 새 행이 없으면 `None` — 쓰지 않는다는 뜻이다.
+
+    **새 행이 0 이면 안 쓴다**(ALPHA-836). 예전엔 남길 행(`keep`)이 비지 않으면 그대로
+    PUT 이 나가 같은 바이트로 파일을 덮었고, 그 PUT 이 라이브 소비자의 읽기와 경합했다 —
+    실측 2026-08-07: analysis-engine 이 07-02 백필 파일에서 HTTP 416 Range Not
+    Satisfiable 로 설명 발행에 실패했다. 재실행마다 재발한다. (정규장 밖 봉 재필터는
+    `--repair-session-hours` 가 독립적으로 담당하므로 그 경로는 안 잃는다.)
+
+    **앞선 착지분과 합쳐서 쓴다.** 이 파일은 파티션당 하나이고 `put_object` 는 통째로
+    덮는다 — 이번 실행분만 쓰면 지난 런이 채운 종목이 소리 없이 사라진다(실측: 9종만
+    돌린 재실행이 앞선 85종을 지웠다). 같은 종목은 이번 값으로 갈아끼우고, 남기는 행에도
+    정규장 필터를 다시 건다 — 필터 없던 판이 쓴 장전·장후 봉이 여기서 함께 걷힌다.
+    """
+    rows = [r for r in candidates if r["ticker"] not in existing]
+    if not rows:
+        return None
+    mine = {r["ticker"] for r in rows}
+    keep = [r for r in prior_rows
+            if r["ticker"] not in mine
+            and SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
+    return keep + rows, len(rows)
 
 
 def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool) -> int:
@@ -283,11 +317,17 @@ def main() -> int:
     # `days[-1]` 이 5분봉 파티션 없는 날일 수 있고(일봉이 더 최신인 창), 그러면 관측
     # 유니버스가 통째로 비어 상장 폐지분까지 되살아난 목록만 남는다.
     latest = next((d for d in reversed(days) if present[d]), None)
+    if latest is None:
+        # 관측 축이 통째로 비었다 — 좁은 창이 전부 일봉-only 인 경우다. 설정 선언분만
+        # 남으므로 대상이 조용히 쪼그라든다. 날짜 축엔 가드가 있는데(위 `if not days`)
+        # 여기만 무음이면 정상 실행과 구분이 안 된다.
+        log.warning("창 %d일에 5분봉 정본이 하나도 없다 — 설정 선언분만 대상이 된다", len(days))
     universe = (present[latest] if latest else set()) | _configured_universe()
     if a.tickers:
         # **명시 요청은 명시 대상이다.** 교집합을 걸면 아직 안 받아 본 종목을 지정해도
         # 조용히 0건으로 끝난다 — 백필에서 그건 결손을 성공으로 위장하는 길이다.
-        targets = sorted(set(a.tickers.split(",")))
+        # 교집합이 하던 공백·빈 값 스크러빙은 여기서 명시적으로 한다.
+        targets = sorted({t.strip() for t in a.tickers.split(",") if t.strip()})
     else:
         targets = sorted(tk for tk in universe if coverage[tk] < a.min_days)
     log.info("유니버스 %d종 · 백필 대상 %d종 (기준 %d일 미만)",
@@ -329,29 +369,16 @@ def main() -> int:
     total = 0
     for d in sorted(per_day):
         existing = _tickers_present(_read_day(s3, a.bucket, d))
-        rows = [r for r in per_day[d] if r["ticker"] not in existing]
-        # **앞선 착지분과 합쳐서 쓴다.** 이 파일은 파티션당 하나이고 `put_object` 는
-        # 통째로 덮는다 - 이번 실행분만 쓰면 지난 런이 채운 종목이 소리 없이 사라진다
-        # (2026-08-07 실측: 9종만 돌린 재실행이 앞선 85종을 지웠다). 같은 종목은 이번
-        # 값으로 갈아끼우고, 남기는 행에도 정규장 필터를 다시 건다 - 필터 없던 판이
-        # 쓴 장전·장후 봉이 여기서 함께 걷힌다.
-        if not rows:
-            # **새 행이 0 이면 안 쓴다**(ALPHA-836). 예전엔 keep 이 비지 않으면 그대로
-            # PUT 이 나가 같은 바이트로 파일을 덮었고, 그 PUT 이 라이브 소비자의 읽기와
-            # 경합했다 - 실측 2026-08-07: analysis-engine 이 07-02 백필 파일에서
-            # HTTP 416 Range Not Satisfiable 로 설명 발행에 실패했다. 재실행마다 재발한다.
-            # (정규장 밖 봉 재필터는 `--repair-session-hours` 가 담당하므로 안 잃는다.)
-            continue
-        mine = {r["ticker"] for r in rows}
         prior = _read_day(s3, a.bucket, d, BACKFILL_NAME)
-        keep = [r for r in (prior.to_pylist() if prior is not None else [])
-                if r["ticker"] not in mine
-                and SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
-        n = _write_day(s3, a.bucket, d, keep + rows, a.dry_run)
-        total += len(rows)
-        if rows:
-            log.info("%s ← %d행 (파일 총 %d행)%s", d, len(rows), n,
-                     " (dry-run)" if a.dry_run else "")
+        payload = _day_payload(prior.to_pylist() if prior is not None else [],
+                               existing, per_day[d])
+        if payload is None:
+            continue
+        keep_and_new, fresh = payload
+        n = _write_day(s3, a.bucket, d, keep_and_new, a.dry_run)
+        total += fresh
+        log.info("%s ← %d행 (파일 총 %d행)%s", d, fresh, n,
+                 " (dry-run)" if a.dry_run else "")
     log.info("완료 — %d일 · %d행 추가%s", len(per_day), total,
              " (dry-run)" if a.dry_run else "")
     return 0

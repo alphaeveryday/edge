@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import io
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -37,15 +37,18 @@ from data_pipeline.minute.fake_collector import FakePriceCollector
 from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
 from data_pipeline.minute.rollup import (
+    WRITER_SINCE,
     maybe_rollup,
     rollup_session,
     unfilled_settled_days,
 )
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
-# fmp 백필(~2026-07-31) 뒤의 첫 writer 날짜 — WRITER_SINCE 가드 안쪽이다
-SESSION_DAY = date(2026, 8, 4)
-SESSION_DATE = "2026-08-04"
+# **롤업이 소유하는 첫 날**. 날짜를 박지 않고 경계에서 파생시킨다 — 소유권 경계는
+# 옮겨진 적이 있고(ALPHA-836) 앞으로도 옮겨진다. 박아 두면 경계가 움직일 때마다
+# 이 파일 전체가 "가드 밖"으로 떨어져 무더기로 깨진다.
+SESSION_DATE = WRITER_SINCE
+SESSION_DAY = date.fromisoformat(SESSION_DATE)
 DAY_KEY = canonical_intraday_5m_key("KR", SESSION_DATE)
 UNIVERSE = Universe(
     universe_version="univ-test-v1",
@@ -54,8 +57,13 @@ UNIVERSE = Universe(
 )
 
 
+def _consecutive(n: int) -> list[str]:
+    """`SESSION_DAY` 부터 연속 n일. 달력 판정이 아니라 **연속성**만 보는 자리에 쓴다."""
+    return [(SESSION_DAY + timedelta(days=i)).isoformat() for i in range(n)]
+
+
 def w(hhmm: str) -> datetime:
-    return datetime(2026, 8, 4, int(hhmm[:2]), int(hhmm[2:]), tzinfo=KST)
+    return datetime.combine(SESSION_DAY, time(int(hhmm[:2]), int(hhmm[2:])), tzinfo=KST)
 
 
 def naive(hhmm: str) -> datetime:
@@ -305,7 +313,7 @@ class TestWorkerHook:
 
         db = FakeMinuteDB()
         worker = self.build_worker(db, tmp_path)
-        self.run_until_idle(worker, datetime(2026, 8, 4, 9, 10, tzinfo=KST))
+        self.run_until_idle(worker, datetime.combine(SESSION_DAY, time(9, 10), tzinfo=KST))
         rows = pq.read_table(
             io.BytesIO(worker.storage.get_bytes(DAY_KEY))
         ).to_pylist()
@@ -324,7 +332,7 @@ class TestWorkerHook:
         monkeypatch.setattr(worker_module, "maybe_rollup", boom)
         db = FakeMinuteDB()
         worker = self.build_worker(db, tmp_path, windows=3)
-        now = datetime(2026, 8, 4, 9, 10, tzinfo=KST)
+        now = datetime.combine(SESSION_DAY, time(9, 10), tzinfo=KST)
         assert worker.tick(now) == "PROCESSED"  # WINDOW_FAILED 가 아니다
         assert {win["data_status"] for win in db.windows.values()} == {"VALID"}
 
@@ -434,19 +442,19 @@ class TestUnfilledSettledDays:
             if row["session_date"] == date.fromisoformat(session_date):
                 row["phase"] = phase
 
-    def scan(self, fx, before: date = date(2026, 8, 5)):
+    def scan(self, fx, before: date = SESSION_DAY + timedelta(days=1)):
         return unfilled_settled_days(
             fx.storage, fx.ledger, market="KR",
             dataset="price_minute", source_group="toss", before=before,
         )
 
-    def unfilled(self, fx, before: date = date(2026, 8, 5)) -> list[str]:
+    def unfilled(self, fx, before: date = SESSION_DAY + timedelta(days=1)) -> list[str]:
         return self.scan(fx, before)[0]
 
-    def contested(self, fx, before: date = date(2026, 8, 5)) -> list[str]:
+    def contested(self, fx, before: date = SESSION_DAY + timedelta(days=1)) -> list[str]:
         return self.scan(fx, before)[1]
 
-    def candidates(self, fx, before: date = date(2026, 8, 5)) -> int:
+    def candidates(self, fx, before: date = SESSION_DAY + timedelta(days=1)) -> int:
         return self.scan(fx, before)[2]
 
     def test_drained_day_without_partition_is_reported(self, tmp_path):
@@ -544,12 +552,17 @@ class TestRollupSessionCli:
 
     def with_fake_ledger(self, monkeypatch) -> FakeMinuteDB:
         import data_pipeline.minute.repository as repo
+        import data_pipeline.minute.rollup as mod
         from data_pipeline.config import DbConfig
 
         db = FakeMinuteDB()
         real = repo.MinuteLedger
         monkeypatch.setattr(repo, "MinuteLedger", lambda **kw: real(
             db=DbConfig(password="x"), connect_fn=db.connect))
+        # **시계를 잡는다.** 구멍 판정 창은 `[WRITER_SINCE, 오늘)` 이라, 소유권 경계가
+        # 미래로 옮겨진 동안(ALPHA-836) 실제 오늘로는 창이 통째로 비어 이 클래스의
+        # 판정을 하나도 못 밟는다 — 그러면 "구멍이 없다"와 "볼 창이 없다"가 구분되지 않는다.
+        monkeypatch.setattr(mod, "_scan_before", lambda: SESSION_DAY + timedelta(days=7))
         return db
 
     def plan(self, db, session_date: str, *, phase: str = "DRAINED") -> str:
@@ -628,11 +641,11 @@ class TestRollupSessionCli:
         import json
 
         db = self.with_fake_ledger(monkeypatch)
-        for d in ("2026-08-04", "2026-08-05", "2026-08-06"):
+        for d in _consecutive(3):
             self.plan(db, d)
-        self.run(self.settings(tmp_path), session_date="2026-08-04")
+        self.run(self.settings(tmp_path), session_date=_consecutive(3)[0])
         out = json.loads(capsys.readouterr().out)
-        assert out["unfilled_settled_days"] == ["2026-08-04", "2026-08-05", "2026-08-06"]
+        assert out["unfilled_settled_days"] == _consecutive(3)
         assert out["settled_day_count"] == 3
 
     def test_hole_report_survives_a_rollup_failure(self, tmp_path, capsys, monkeypatch):
@@ -644,8 +657,8 @@ class TestRollupSessionCli:
         import data_pipeline.minute.rollup as mod
 
         db = self.with_fake_ledger(monkeypatch)
-        self.plan(db, "2026-08-04")
-        self.plan(db, "2026-08-05")
+        self.plan(db, _consecutive(2)[0])
+        self.plan(db, _consecutive(2)[1])
         called = []
 
         def boom(*args, **kwargs):
@@ -654,11 +667,13 @@ class TestRollupSessionCli:
 
         monkeypatch.setattr(mod, "rollup_session", boom)
         # 예외는 "판정 자체를 못 함"이라 2 다(재시도 가능). 정당한 거부(None)의 1 과 다르다.
-        assert self.run(self.settings(tmp_path), session_date="2026-08-05") == 2
+        # 대상 날짜는 **계획된 세션이 있는 날**이어야 한다 — 없으면 rollup 이 예외 전에
+        # "세션 없음"으로 정당하게 거부해(1) 이 테스트가 의도한 경로를 안 밟는다.
+        assert self.run(self.settings(tmp_path), session_date=_consecutive(2)[1]) == 2
         assert called, "rollup_session 이 불리지 않았다 — 이 테스트는 의도한 경로를 안 밟았다"
         out = json.loads(capsys.readouterr().out)
         assert out["key"] is None                                  # rollup 은 죽었다
-        assert out["unfilled_settled_days"] == ["2026-08-04", "2026-08-05"]  # 판정은 나왔다
+        assert out["unfilled_settled_days"] == _consecutive(2)   # 판정은 나왔다
         assert out["settled_day_count"] == 2
 
     def test_scan_failure_does_not_mask_a_legitimate_refusal(self, tmp_path, monkeypatch):
@@ -701,19 +716,18 @@ class TestRollupSessionCli:
         import logging
 
         db = self.with_fake_ledger(monkeypatch)
-        self.plan(db, "2026-08-04")
-        self.plan(db, "2026-08-05")
-        tmp_path.joinpath(
-            "canonical/market_data/intraday_5m/market=KR/trade_date=2026-08-05"
-        ).mkdir(parents=True)
-        tmp_path.joinpath(
-            "canonical/market_data/intraday_5m/market=KR/trade_date=2026-08-05"
-            "/part-toss-backfill.parquet").write_bytes(b"x")
+        self.plan(db, _consecutive(2)[0])
+        self.plan(db, _consecutive(2)[1])
+        unfilled_day, contested_day = _consecutive(2)
+        partition = (f"canonical/market_data/intraday_5m/market=KR"
+                     f"/trade_date={contested_day}")
+        tmp_path.joinpath(partition).mkdir(parents=True)
+        tmp_path.joinpath(partition, "part-toss-backfill.parquet").write_bytes(b"x")
         with caplog.at_level(logging.WARNING):
-            self.run(self.settings(tmp_path), session_date="2026-08-06")
+            self.run(self.settings(tmp_path), session_date=_consecutive(3)[2])
         text = caplog.text
-        assert "5분 산출이 없는 날 1건" in text and "2026-08-04" in text
-        assert "다른 writer 가 물고 있어" in text and "2026-08-05" in text
+        assert "5분 산출이 없는 날 1건" in text and unfilled_day in text
+        assert "다른 writer 가 물고 있어" in text and contested_day in text
 
     def test_zero_denominator_is_warned(self, tmp_path, caplog, monkeypatch):
         # 분모 0 = "판정 축이 원장과 안 맞는다"는 유일한 신호다. 그 경보 자체가 못박혀야
