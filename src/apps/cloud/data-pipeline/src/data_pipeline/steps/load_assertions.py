@@ -56,7 +56,14 @@ from edge_ontology import load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import TOO_LONG, load_resolution_index, plan_resolution
+from ..entity_resolution import (
+    MINTED,
+    REGISTRY_HIT,
+    RESOLVED,
+    TOO_LONG,
+    load_resolution_index,
+    plan_resolution,
+)
 from ..lake import Storage, feature_news_assertions_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -76,6 +83,10 @@ _TOP_UNRESOLVED_LIMIT = 200
 
 # 길이 상한에 걸린 값 표본 상한. 상한값이 맞는지 판단하려면 실물이 필요하다.
 _TOO_LONG_SAMPLE_LIMIT = 30
+
+# 해소 성공으로 세는 사유. 축이 늘면 여기 더한다 — 분모(`args_total`)는 축과 무관하게
+# 실체 역할 전부라, 여기 빠뜨린 축은 조용히 미해소로 집계된다.
+_RESOLVED_REASONS = (RESOLVED, REGISTRY_HIT, MINTED)
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
@@ -223,7 +234,12 @@ def run(
             # 이 루프가 candidates 전체를 한 번 돌며 채번 계획을 먼저 모은다: argument 를
             # 보는 것은 아래 적재 루프와 같지만, 개념은 **전량을 모아 한 번에** 세워야
             # executemany 한 쌍으로 끝난다(assertion 마다 왕복하면 2,400회가 된다).
-            for entry in candidates.values():
+            for (source_code, article_id, _e, _p), entry in candidates.items():
+                # 아래 적재 루프와 **같은 조건**으로 거른다. 문서 행이 없으면 그
+                # 주장은 안 실리는데(missing_document — 정상 경로다), 여기서
+                # 채번하면 참조 없는 개념 마스터만 남는다.
+                if (source_code, article_id) not in doc_by_key:
+                    continue
                 for argument in entry["arguments"]:
                     role_code = argument.get("role_code")
                     if not role_code:
@@ -284,10 +300,6 @@ def run(
                     # entity → concept 순서로 세운다(FK).
                     entity_id, reason, minted = plan_resolution(
                         index, role_code, argument.get("text"))
-                    if minted is not None and entity_id is not None:
-                        # 같은 런에서 같은 개념이 여러 번 나와도 행은 하나다. ON CONFLICT
-                        # 로도 막히지만, 여기서 접어야 executemany 가 부풀지 않는다.
-                        pending_concepts.setdefault(entity_id, minted)
                     if kind == "entity":
                         # 해소율 분모는 **실체 역할만** 센다. non_entity(TIME·VALUE·TEXT)는
                         # 애초에 실체를 가리키지 않는 자리라, 미해소로 세면 분모가 부풀어
@@ -304,10 +316,10 @@ def run(
                                         and len(too_long_sample) < _TOO_LONG_SAMPLE_LIMIT):
                                     too_long_sample.append(text.strip())
                     elif kind == "non_entity" and entity_id is not None:
-                        # 비실체 자리인데 인덱스에 걸렸다. **지금은 그대로 적재한다** —
-                        # 이 자리의 적재는 이 티켓이 건드리지 않는다. 이 수가 곧 역할별
-                        # 해소 분기(ALPHA-831)가 걷어낼 적재량이다. ⚠️ 어휘 밖은 여기 안
-                        # 넣는다 — 섞으면 ALPHA-831 이 걷어낼 근거가 없는 행까지 세게 된다.
+                        # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
+                        # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
+                        # 것은 0 이 "이번 런엔 없었다"가 아니라 **"그 경로가 닫혔다"**를
+                        # 뜻하기 때문이다 — 0 이 아니게 되면 분기가 새는 것이다.
                         non_entity_resolved += 1
                     if entity_id is None:
                         continue
@@ -365,11 +377,19 @@ def run(
         logger.exception("assertion 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
         created = already = arguments_inserted = 0
+        # 채번도 같은 트랜잭션이라 롤백된다 — 되돌리지 않으면 로그가 만들지
+        # 않은 개념 마스터를 만들었다고 주장한다(ALPHA-830 에서 겪은 것과 같은 자리).
+        concepts_minted = 0
         created_sample = []
         exit_code = 1
 
     resolution_denominator = args_total
-    resolution_rate = (args_by_reason["resolved"] / resolution_denominator
+    # ⭐분자는 **붙은 것 전부**다 — 티커(resolved)·명부(registry_hit)·채번(minted).
+    # 예전엔 `resolved` 하나만 셌는데, 역할별 축이 생기면서 명부·채번으로 붙은 argument 가
+    # 분모엔 들어가고 분자엔 안 들어갔다. 그러면 **이 티켓이 성공할수록 해소율이 떨어진다** —
+    # 회수를 재려고 만든 지표가 회수를 반대로 보고한다(ALPHA-831).
+    resolved_any = sum(args_by_reason.get(k, 0) for k in _RESOLVED_REASONS)
+    resolution_rate = (resolved_any / resolution_denominator
                        if resolution_denominator else None)
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
@@ -398,12 +418,15 @@ def run(
             # 바뀐 것을 알 방법이 없다. 회수 효과와 분모 변화가 같은 숫자에서 섞인다.
             "denominator": "entity_roles_only",
             "total": args_total, **args_by_reason, "rate": resolution_rate,
+            # rate 의 분자에 무엇이 들었는지 — 축이 늘면 값이 바뀌므로 로그가 스스로 말한다
+            "rate_numerator": list(_RESOLVED_REASONS), "resolved_any": resolved_any,
             "top_unresolved": sorted(unresolved_texts.items(),
                                      key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
             "role_kinds": args_by_role_kind,
             "role_missing": args_role_missing,
             "out_of_vocabulary_roles": unknown_roles,
-            # 비실체 자리인데 인덱스에 걸려 적재된 수 — ALPHA-831 이 걷어낼 몫이다.
+            # 비실체가 인덱스로 해소된 수. **0 이 정상이고 계약이다**(ALPHA-831 이
+            # 그 경로를 닫았다) — 0 이 아니면 역할별 분기가 샌 것이다.
             "non_entity_resolved": non_entity_resolved,
         },
         "created_rows_sample": created_sample,
@@ -431,7 +454,7 @@ def run(
     # 남은 쪽보다 잘 해소되면 해소율이 내려가고 아니면 올라간다. 방향을 못 쓰니 발화 사실
     # 자체를 띄운다: 로그 파일을 열어야 보이는 수치로 두지 않는다(Rule 12).
     if unknown_roles:
-        logger.warning("load_assertions: 어휘 밖 역할 %d종 — 추출단과 온톨로지가 갈렸다: %s",
+        logger.warning("load_assertions: 어휘 밖 역할 %d종 — 추출단과 온톨로지가 갈렸다. 그 자리는 적재하지 않았다: %s",
                        len(unknown_roles), sorted(unknown_roles))
     if args_role_missing:
         logger.warning("load_assertions: 역할 없는 argument %d건 — 그 자리는 적재하지 않았다",

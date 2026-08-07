@@ -509,19 +509,29 @@ def test_minted_concept_id_matches_assemble_events_exactly(tmp_path, monkeypatch
     겪은 실패 양식이라, 여기선 같은 두 함수(`concept_key`+`stable_domain_id`)를 부르는지
     자체를 고정한다 — 각자 구현하면 salt·구분자 하나에 다시 갈린다.
     """
-    from edge_ontology import concept_key
-    from data_pipeline.db import stable_domain_id
-    from data_pipeline.entity_resolution import plan_resolution
+    import inspect
 
-    for role, mention in (("PRODUCT", "zHBM"), ("GEOGRAPHY", "미국"), ("FACILITY", "용인 클러스터")):
+    from data_pipeline.entity_resolution import mint_concept, plan_resolution
+    from data_pipeline.steps import assemble_events
+
+    for role, mention in (("PRODUCT", "zHBM"), ("GEOGRAPHY", "미국"),
+                          ("FACILITY", "용인  클러스터")):
         entity_id, reason, minted = plan_resolution(_INDEX, role, mention)
         assert reason == "minted"
-        # assemble-events 가 쓰는 바로 그 산식
-        assert entity_id == stable_domain_id("concept", concept_key(role, mention))
-        assert minted[0] == mention
+        # 채번 결과는 공유 함수가 낸 값 그대로여야 한다
+        assert entity_id == mint_concept(role, mention.strip())[0]
+        # display_name 도 같은 식 — 다르면 먼저 쓴 writer 가 컬럼을 이긴다(ALPHA-538 동형).
+        # 내부 공백이 둘인 값을 일부러 넣는다(양쪽 식이 갈리면 여기서 깨진다).
+        assert minted[0] == mention.strip()
 
-    # 구분자가 재료 경계를 고정한다(ALPHA-456 과 같은 검사)
-    assert stable_domain_id("concept", "ab") != stable_domain_id("concept", "a")
+    # ⭐**두 writer 가 같은 함수를 부르는지를 구조로 확인한다.** 값 비교만 하면 각자
+    # 조립한 산식이 우연히 같을 때 통과하고, 한쪽 호출부의 접두사가 바뀌는 순간 갈린다
+    # (ALPHA-456 이 assertion_id 에서 겪은 실패 양식). sibling 소스에 채번 원시함수
+    # 호출이 남아 있으면 그건 산식을 다시 조립한 것이다.
+    src = inspect.getsource(assemble_events)
+    assert "mint_concept(" in src, "assemble-events 가 공유 채번 함수를 안 쓴다"
+    assert 'stable_domain_id("concept"' not in src, "sibling 이 채번 산식을 다시 조립했다"
+    assert "concept_key(" not in src, "sibling 이 채번 키를 다시 만든다"
 
 
 def test_registry_role_is_looked_up_never_minted(tmp_path, monkeypatch):
@@ -539,6 +549,15 @@ def test_registry_role_is_looked_up_never_minted(tmp_path, monkeypatch):
     miss_id, miss_reason, miss_minted = plan_resolution(_INDEX, "AUTHORITY", "듣도보도못한청")
     assert (miss_id, miss_reason, miss_minted) == (None, "registry_miss", None)
 
+    # ⭐`mint_fallback` 이 선 역할은 예외다 — 온톨로지가 EXCHANGE·MARKET 에만 그걸 켰다.
+    # 미등재 해외 거래소(나스닥)를 채번으로 건지되, 등재분은 명부 ID 로 간다. 이 갈래가
+    # 없으면 같은 거래소가 AUTHORITY 자리와 EXCHANGE 자리에서 다른 엔티티가 된다.
+    krx_id, krx_reason, _ = plan_resolution(_INDEX, "EXCHANGE", "한국거래소")
+    assert krx_reason == "registry_hit" and krx_id and not krx_id.startswith("concept_")
+    nasdaq_id, nasdaq_reason, nasdaq_minted = plan_resolution(_INDEX, "EXCHANGE", "나스닥")
+    assert nasdaq_reason == "minted" and nasdaq_id.startswith("concept_")
+    assert nasdaq_minted[1] == "INDEX_OR_EXCHANGE"
+
 
 def test_measure_roles_are_not_minted_pending_the_ontology_call(tmp_path, monkeypatch):
     """척도 역할은 채번하지 않고 사유로 남긴다(ALPHA-831 범위 밖).
@@ -550,8 +569,12 @@ def test_measure_roles_are_not_minted_pending_the_ontology_call(tmp_path, monkey
     """
     from data_pipeline.entity_resolution import plan_resolution
 
-    for mention in ("영업이익", "매출", "당기순이익"):
-        assert plan_resolution(_INDEX, "METRIC", mention) == (None, "measure_skipped", None)
+    # ⚠️ **역할을 변주한다.** 셋 다 METRIC 으로 두면 판별 차원이 상수라, 집합을
+    # {"METRIC"} 하나로 줄여도 통과한다 — 재는 것이 집합인데 역할이 안 변하면 못 잰다.
+    for role in ("METRIC", "INDICATOR", "POLICY_RATE", "CURRENCY_PAIR"):
+        assert plan_resolution(_INDEX, role, "영업이익") == (None, "measure_skipped", None)
+    # 같은 종(PRODUCT_OR_CONCEPT)인데 척도가 아닌 역할은 정상 채번 — 종 전체를 끈 게 아니다
+    assert plan_resolution(_INDEX, "PRODUCT", "영업이익")[1] == "minted"
 
 
 def test_sentence_shaped_value_is_left_unresolved_by_the_length_cap(tmp_path, monkeypatch):
@@ -564,11 +587,16 @@ def test_sentence_shaped_value_is_left_unresolved_by_the_length_cap(tmp_path, mo
     """
     from data_pipeline.entity_resolution import plan_resolution
 
+    from data_pipeline.entity_resolution import MAX_CONCEPT_CHARS
+
+    # 경계를 **상한에서 파생**한다 — 고정 길이 문자열이면 상한을 31 로 바꿔도 통과한다.
+    at_cap = "가" * MAX_CONCEPT_CHARS
+    over_cap = "가" * (MAX_CONCEPT_CHARS + 1)
+    assert plan_resolution(_INDEX, "PROJECT", at_cap)[1] == "minted"
+    assert plan_resolution(_INDEX, "PROJECT", over_cap) == (None, "concept_too_long", None)
+    # 실물도 한 번 — 상한이 잡으려던 것이 이 모양이다
     long_text = "차세대 모빌리티 개발 및 해외시장 진출 활성화를 위한 상생 금융지원 업무협약"
     assert plan_resolution(_INDEX, "PROJECT", long_text) == (None, "concept_too_long", None)
-    # 짧은 것은 통과 — 상한이 축 전체를 죽이지 않는다
-    short_id, short_reason, _ = plan_resolution(_INDEX, "PROJECT", "피지컬 AI")
-    assert short_reason == "minted" and short_id
 
 
 def test_minted_concept_rows_are_written_before_the_argument_that_needs_them(
@@ -592,3 +620,85 @@ def test_minted_concept_rows_are_written_before_the_argument_that_needs_them(
     [(_, role, entity_id, _c)] = _inserts(conn, "assertion_argument")
     assert role == "PRODUCT" and entity_id.startswith("concept_")
     assert _log(storage)["concepts_minted"] == 1
+
+
+def test_resolution_rate_counts_every_axis_that_actually_attached(tmp_path, monkeypatch):
+    """해소율 분자는 **붙은 것 전부**다 — 티커·명부·채번(ALPHA-831).
+
+    WHY: 분모(`args_total`)는 축과 무관하게 실체 역할 전부를 센다. 분자가 `resolved`
+    하나만 세면 명부·채번으로 붙은 argument 가 분모엔 들고 분자엔 안 들어, **이 티켓이
+    성공할수록 해소율이 떨어진다**. 회수를 재려고 만든 지표가 회수를 반대로 보고하는 것이라,
+    ALPHA-802 가 분모를 정직하게 만든 작업이 통째로 무의미해진다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("ISSUER", "삼성전자"),        # 티커 축
+                        ("AUTHORITY", "공정거래위원회"),  # 명부 축
+                        ("PRODUCT", "zHBM"),          # 채번 축
+                        ("ISSUER", "미등록회사")))])])   # 미해소
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    res = _log(storage)["argument_resolution"]
+    assert res["total"] == 4
+    assert res["resolved"] == 1 and res["registry_hit"] == 1 and res["minted"] == 1
+    assert res["resolved_any"] == 3
+    assert res["rate"] == 0.75          # 분자가 resolved 하나면 0.25 가 된다
+    assert set(res["rate_numerator"]) == {"resolved", "registry_hit", "minted"}
+
+
+def test_rollback_does_not_claim_minted_concepts(tmp_path, monkeypatch):
+    """롤백되면 채번 카운터도 0 이다(ALPHA-831).
+
+    WHY: 개념 행은 argument 와 **같은 트랜잭션**이다. `connect()` 가 예외에 rollback 하므로
+    한 행도 안 남는데, 카운터를 안 되돌리면 로그가 "개념 마스터를 1,210개 늘렸다"고 주장한다.
+    운영자는 그 로그를 보고 마스터가 확장된 줄 알고 재확인을 안 한다 — ALPHA-830 에서
+    `created` 로 똑같이 겪은 자리다(Rule 12).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("PRODUCT", "zHBM")))])])
+
+    class _Boom(_FakeConn):
+        def cursor(self):
+            cur = super().cursor()
+            inner = cur.execute
+
+            def execute(sql, params=None):
+                inner(sql, params)
+                if sql.lstrip().upper().startswith("INSERT INTO ASSERTION_ARGUMENT"):
+                    raise RuntimeError("DB 죽음")
+            cur.execute = execute
+            return cur
+
+    conn = _Boom(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) != 0
+    log = _log(storage)
+    assert log["concepts_minted"] == 0, "롤백됐는데 개념을 세웠다고 로그가 주장한다"
+    assert log["created"] == 0 and log["arguments_inserted"] == 0
+
+
+def test_no_concept_is_minted_for_an_assertion_that_cannot_be_loaded(tmp_path, monkeypatch):
+    """적재 안 될 주장에는 채번하지 않는다 — 고아 개념 금지(ALPHA-831).
+
+    WHY: 채번 루프와 적재 루프가 둘로 나뉘어 있다. 문서 행이 없으면 그 주장은 안 실리는데
+    (`missing_document` — 모듈 독스트링이 "다음 런이 자연 회복한다"고 적은 **정상 경로**다),
+    채번 루프가 그 조건을 안 보면 참조 없는 개념 마스터만 남는다. 두 루프의 거르는 조건이
+    같아야 한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("PRODUCT", "zHBM")))])])
+    conn = _FakeConn(documents=[])          # load-documents 가 아직 안 돌았다
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    assert _inserts(conn, "entity") == [], "참조 없는 개념 마스터가 남았다"
+    assert _inserts(conn, "concept") == []
+    log = _log(storage)
+    assert log["missing_document"] == 1 and log["concepts_minted"] == 0

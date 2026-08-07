@@ -45,11 +45,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
-from edge_ontology import (ProcessRegistry, concept_key, load_process_registry,
+from edge_ontology import (ProcessRegistry, load_process_registry,
                            resolve_authority, role_entity_kind)
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
+from ..entity_resolution import mint_concept
 from ..events.amounts import BASIS_VALUES, parse_amount, parse_basis
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 from ..tagging.ontology import default_predicate, identity_roles
@@ -486,9 +487,12 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
             # 집합이라 레지스트리가 불가능하다. 멘션에서 결정적으로 채번하고 concept 행을
             # 함께 세운다(적재부가 FK 순서를 지킨다). 채번 산식은 stable_domain_id 하나뿐 —
             # 다른 writer 와 갈리면 같은 개념에 다른 ID 가 나온다.
-            key = concept_key(role, mention.strip())
-            if key:
-                entity_id = stable_domain_id("concept", key)
+            # ⭐채번은 `entity_resolution.mint_concept` 하나가 소유한다 — load-assertions 와
+            # 같은 함수여야 같은 개념에 같은 ID 가 난다(ALPHA-831). 여기서 산식을 다시
+            # 조립하면 접두사 하나에 갈린다.
+            coined = mint_concept(role, mention.strip())
+            if coined:
+                entity_id, _key = coined
                 # concept_type 은 종별 그대로 — 위치·규칙·제품이 한 통에 섞이면
                 # 소비자가 구분할 수 없다.
                 minted_concepts[entity_id] = (mention.strip(), role_entity_kind(role))

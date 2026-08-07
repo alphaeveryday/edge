@@ -80,8 +80,10 @@ def load_resolution_index(conn) -> ResolutionIndex:
 def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
     """argument 텍스트 1건을 **instrument 인덱스로** 해소 — (entity_id | None, 사유).
 
-    티커 축(`identity.scheme = NONE`) 전용이다. 명부·채번 축은 인덱스 종류가 달라 여기
-    안 온다 — 역할별 분기는 `plan_resolution` 이 한다(ALPHA-831).
+    **이 함수는 역할을 모른다** — 텍스트를 instrument 인덱스에 대볼 뿐이다. 역할별 축
+    분기는 `plan_resolution` 이 하고, 배치 적재(`load_assertions`)는 그쪽을 쓴다.
+    ⚠️ 다만 이 함수가 티커 축 전용인 것은 **아니다**: 1분 실시간 레인
+    (`minute/event_assembly`)은 아직 역할과 무관하게 여기로 온다 — 그쪽 전환은 별건이다.
 
     사유는 호출부(로더)가 quality log 에 분포로 남긴다(Rule 12 — 미해소는 침묵하지
     않는다). 비문자열·공백뿐 텍스트는 unresolved 다.
@@ -100,12 +102,10 @@ def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
 # 채번할 개념 이름의 길이 상한(정규화 후 문자 수). 온톨로지에 하한(MIN_CONCEPT_CHARS=2)은
 # 있는데 상한이 없다 — 짧은 이름엔 무해하지만 긴 값에선 두 가지가 깨진다(ALPHA-831 실측):
 #
-#   1. **개념이 아니라 사건 인스턴스가 된다.** "차세대 모빌리티 개발 및 해외시장 진출
-#      활성화를 위한 상생 금융지원 업무협약" 은 그 협약 한 건이지 재사용되는 개념이 아니다.
-#      MINT 축 37,229건 중 31자 초과는 **3.3%(1,210건)뿐**이고 고유율이 87%다 — 거의 전부
-#      한 번 쓰이고 만다.
-#   2. **정규화가 뭉갠다.** `normalize_name` 이 공백을 지워서 그 상태 그대로
-#      `entity.display_name` 에 들어간다("차세대영업배전시스템구축을위한…").
+# **개념이 아니라 사건 인스턴스가 된다.** "차세대 모빌리티 개발 및 해외시장 진출 활성화를
+# 위한 상생 금융지원 업무협약" 은 그 협약 한 건이지 재사용되는 개념이 아니다. MINT 축
+# 37,229건 중 **30자 초과는 3.3%(1,210건)뿐**이고 그 구간 고유율이 87%다 — 거의 전부 한 번
+# 쓰이고 만다. 채번하면 개념 마스터가 일회용 행으로 부푼다.
 #
 # ⚠️ **이 값은 "무엇을 개념으로 볼 것인가"의 선이라 온톨로지 소관이다.** 여기서 30 을 고른
 # 것은 실측 꼬리(3.3%)만 자르는 보수적 값이라서고, 상한에 걸린 건 **미해소로 남긴다** —
@@ -122,8 +122,10 @@ MAX_CONCEPT_CHARS = 30
 # `영업이익`은 삼성전자의 영업이익이지 그 자체로 서 있는 개체가 아니다 — 측정 축을 개체로
 # 세우는 건 모델링 결정이고 계약이 **명시적으로 하지 않았다**(종 매핑의 부수 효과다).
 # 그래서 여기선 미해소로 남기고 사유를 카운트한다. 결정은 온톨로지 소관(ALPHA-831 코멘트).
+# ⚠️ 넷 다 `PRODUCT_OR_CONCEPT`(실체·MINT)인 것을 어휘에서 확인하고 넣었다. `RATE` 는
+# 비실체(VALUE)라 위 is_entity 게이트에서 이미 걸러지므로 여기 넣어도 도달하지 않는다.
 MEASURE_ROLES = frozenset({
-    "METRIC", "INDICATOR", "POLICY_RATE", "CURRENCY_PAIR", "RATE",
+    "METRIC", "INDICATOR", "POLICY_RATE", "CURRENCY_PAIR",
 })
 
 # 해소 계획 사유 — quality log 의 축이 된다.
@@ -133,6 +135,28 @@ REGISTRY_MISS = "registry_miss"
 MEASURE_SKIPPED = "measure_skipped"
 TOO_LONG = "concept_too_long"
 NOT_RESOLVABLE = "not_resolvable"
+
+
+def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
+    """멘션 → (concept entity_id, 정규화 키). 채번 대상이 아니면 None.
+
+    ⭐**두 writer 의 유일한 채번 지점이다**(`load_assertions`·`assemble_events`). 산식을
+    각자 조립하면 — 같은 `concept_key`·`stable_domain_id` 를 쓰더라도 — 접두사나 인자
+    하나가 갈리는 순간 같은 개념에 ID 가 둘 생기고 조인이 조용히 끊긴다. ALPHA-456 이
+    `assertion_id` 에서 겪은 그 일이라, "같은 함수를 쓴다"를 **호출부 합의가 아니라
+    한 함수**로 강제한다(ALPHA-831).
+
+    길이 상한은 여기 두지 않는다 — 그건 "무엇을 개념으로 볼 것인가"의 정책이고 호출부마다
+    다를 수 있다. 여기는 산식만 소유한다.
+    """
+    from edge_ontology import concept_key
+
+    from .db import stable_domain_id
+
+    key = concept_key(role_code, mention)
+    if not key:
+        return None
+    return stable_domain_id("concept", key), key
 
 
 def plan_resolution(
@@ -156,16 +180,18 @@ def plan_resolution(
     entity(CONCEPT) → concept → assertion_argument 순서로 FK 를 세운다 — 이 함수는 DB 를
     모른다(순수 함수라 테스트가 쉽고, 트랜잭션 경계는 호출부 소유다).
     """
-    from edge_ontology import concept_key, load_relations, resolve_authority
-
-    from .db import stable_domain_id
+    from edge_ontology import load_relations, resolve_authority
 
     relation = load_relations().get(role_code)
     if relation is None or not relation.is_entity:
         # 비실체·어휘 밖 — 애초에 해소 대상이 아니다(ALPHA-802 가 계측에서 분리해 둔다).
         return None, NOT_RESOLVABLE, None
 
-    mention = " ".join(text.split()) if isinstance(text, str) else ""
+    # ⚠️ `strip()` 이다 — `assemble_events` 가 채번 개념의 display_name 으로 쓰는 것과
+    # **같은 식**이어야 한다. 둘 다 같은 entity_id 에 ON CONFLICT DO NOTHING 으로 쓰므로,
+    # 식이 다르면 먼저 쓴 쪽이 이겨 display_name 이 실행 순서를 탄다(ALPHA-538 이
+    # document_assertion 에서 없앤 바로 그 의존). 해시 키는 concept_key 가 따로 정규화한다.
+    mention = text.strip() if isinstance(text, str) else ""
 
     # ── REGISTRY: 명부에서 찾기만 한다(새 엔티티를 만들지 않는다)
     if load_relations().sections_for(role_code):
@@ -184,9 +210,10 @@ def plan_resolution(
     # ── MINT: 채번
     if role_code in MEASURE_ROLES:
         return None, MEASURE_SKIPPED, None
-    key = concept_key(role_code, mention)
-    if not key:
+    coined = mint_concept(role_code, mention)
+    if coined is None:
         return None, UNRESOLVED, None
+    entity_id, key = coined
     if len(key) > MAX_CONCEPT_CHARS:
         return None, TOO_LONG, None
-    return stable_domain_id("concept", key), MINTED, (mention, relation.entity_kind)
+    return entity_id, MINTED, (mention, relation.entity_kind)
