@@ -172,7 +172,9 @@ SESSION_OPEN, SESSION_CLOSE = "09:00:00", "15:30:00"
 _CLOCK_NAMES = ("SELECT symbol, any_value(name) FROM layers_daily "
                 "WHERE kind IN {kinds} GROUP BY symbol")
 
-# 시각창 집계는 **언제나 Athena 로 보낸다** - 심볼 수로 가르지 않는다.
+# 시각창 집계는 **심볼 수로 가르지 않는다** - 몇 종목이든 Athena 로 보낸다.
+# (예외는 하나뿐이다: 정본이 요청일을 안 담으면 `_series` 가 왕복을 아예 안 친다.
+#  받아 봐야 과거만 있는 패널이라 폴백이 확정이다 - 그 판정은 `duck.stale_5m` 이 낸다.)
 #
 # 가르려 했다가 실측이 막았다(2026-08-05 · `bars_5m` = Glue Iceberg 재배선 이후):
 # DuckDB 경로가 읽는 바이트는 심볼 1·4·8·81 에서 **376,395,649 B · 729파일로 한 바이트도
@@ -267,6 +269,33 @@ def _series(lake, day: str, kinds: tuple[str, ...],
         # Athena 엔 회원 표가 없으니 그 교집합을 **여기서** 만들어 넘긴다.
         want = tuple(sorted(set(syms) & names.keys())) if syms else tuple(sorted(names))
         rows, note, why = None, "", ""
+        # **낡은 정본은 예외가 아니라 '과거만 있는 패널'로 온다.** 그걸 성공으로 받으면
+        # 아래 폴백이 안 걸리고 요청일 층이 통째로 빠진다 - 실측 2026-08-07: Iceberg 최신
+        # 08-05 인데 같은 시각 canonical 엔 당일이 있었고, 산문은 시장·섹터·구성종목을
+        # 전부 '미계측'이라고 냈다.
+        #
+        # 판정을 여기서 다시 하지 않는다. Athena 와 `bars_5m` 은 **같은 물리 표**를 보고
+        # (`duck.BARS_ICEBERG` == `athena` 의 DB·TABLE 기본값), 레이크가 바인드할 때
+        # `duck.iceberg_covers` 가 이미 그 답을 냈다. 같은 판정이 두 곳에 살면 언젠가
+        # 갈리고, 갈린 날 한쪽만 조용히 낡은 표를 쓴다. 그 답을 **읽어서** 쓴다.
+        #
+        # **이 교환은 비싸다 — 아낀 쪽만 적지 않는다(Rule 12).** 아끼는 것은 버려질 Athena
+        # 왕복(고정 2.03초)이고, 무는 것은 그 자리를 메우는 DuckDB 폴백이다: 아래 note 가
+        # 적는 실측 376.4MB 를 런마다 최대 6회(`decompose` 가 clock `_series` 를 최대 3회
+        # × 한 런이 `decompose` 를 2회) = **약 2.26GB/런**. 정본이 낡은 동안은 그게 정상
+        # 상태이므로 이 값은 예외가 아니라 상시다. 그래도 무는 이유는 그 대가가 '층이 있음'
+        # 이기 때문이다 - 안 물면 시장·섹터·구성종목이 통째로 미계측이다.
+        # 증폭 요인: `_CLOCK_SQL` 은 `trade_date >=` 하한이 없어 표 전 이력을 읽는다.
+        # 대체되는 Athena 경로는 `LOOKBACK_DAYS` 로 묶여 있었다 - 하한을 다는 것이 다음 일감.
+        #
+        # **낡음만 읽는다.** `unbound["bars_5m_iceberg"]` 에는 ATTACH·자격증명 실패도 같이
+        # 담기는데 그건 다른 일감이고, Athena 는 boto3 로 따로 붙으므로 그때까지 오프로드를
+        # 끌 이유가 없다 - 끄면 위 2.26GB 를 얻는 것 없이 문다.
+        #
+        # **범위**: `stale_5m` 은 `CausalLake(day=…)` 로 기준일을 받은 레이크에만 선다
+        # (`pipeline.py`·`window_batch.py` 둘뿐). 맨생성하는 CLI·탐색 진입점 20여 곳에서는
+        # 판정 자체가 없어 이 가드가 안 탄다 - "이제 낡은 정본은 안 쓴다" 가 아니다.
+        stale = getattr(lake, "stale_5m", "")
         try:
             # 연결이 없는 레이크(테스트 대역)는 결과 CSV 를 받을 데가 없다. 그것도
             # 부재이므로 **같은 예외로** 말한다 - 조용히 건너뛰면 왜 로컬로 돌았는지가
@@ -274,6 +303,8 @@ def _series(lake, day: str, kinds: tuple[str, ...],
             con = getattr(lake, "con", None)
             if con is None:
                 raise _athena.AthenaUnavailable("DuckDB 연결 없음 - 결과를 받을 데가 없다")
+            if stale:
+                raise _athena.AthenaUnavailable(f"정본이 요청일을 안 담는다 - {stale}")
             rows = _athena.clock_panel(day, kinds, clock[0], clock[1], con=con, only=want)
             note = _athena.note()
         except _athena.AthenaUnavailable as e:

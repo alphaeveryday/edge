@@ -301,6 +301,11 @@ class CausalLake:
         self.cols: dict[str, list[str]] = {}    # 표 → 열 (자동 뷰 생성의 입력)
         self.bound: dict[str, str | None] = {}  # 표 → 클램프 열 (None = 시점 불변 차원)
         self.unbound: dict[str, str] = {}       # 표 → 못 묶은 사유 (침묵 금지)
+        # **정본이 요청일을 안 담는다**는 판정만 여기 남는다 — `unbound["bars_5m_iceberg"]`
+        # 과 갈라 두는 이유가 있다. 그 키에는 ATTACH·자격증명 실패도 같이 담기는데, 둘은
+        # 처방이 다르다: 낡음은 상류 적재 일감이고 ATTACH 실패는 권한 일감이다. 뭉쳐서
+        # 읽으면 소비자가 "정본이 낡았다"고 잘못 말한다(이 저장소가 계속 싸워 온 유형).
+        self.stale_5m: str = ""
         self.backfill_notes: dict[str, str] = {}  # 백필 세트 → 못 읽은/0행인 사유
         self.day: str = ""                      # 지금 뷰가 잘려 있는 기준일
         # 5분봉 **정본 신선도**의 기준일. `day` 와 다르다: 그건 뷰를 자르는 시점이고
@@ -360,9 +365,10 @@ class CausalLake:
                 f"SELECT max(trade_date), count(*) FILTER (WHERE trade_date = {day_pred}) "
                 f"FROM {tbl}").fetchone()
             if not iceberg_covers(newest, self.asked_day, day_rows):
+                self.stale_5m = (
+                    f"정본에 요청일이 없다 ({self.asked_day} {day_rows}행 · 최신 {newest})")
                 self.unbound["bars_5m_iceberg"] = (
-                    f"정본에 요청일이 없다 ({self.asked_day} {day_rows}행 · 최신 {newest}) "
-                    "- canonical 합집합으로 내려간다")
+                    f"{self.stale_5m} - canonical 합집합으로 내려간다")
                 return False
             # 2026-08-05 하루만 상류 롤업이 접미사 없는 심볼을 쓴다(실측 14,842행 ·
             # 362종목). 접미사를 추측하면 KQ 가 깨지므로 같은 표의 접미사 붙은 행에서
