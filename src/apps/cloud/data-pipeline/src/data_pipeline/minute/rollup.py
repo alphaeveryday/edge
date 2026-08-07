@@ -352,9 +352,13 @@ def rollup_session_cli(
     """`run rollup-minute-session [--session-date YYYY-MM-DD]` (EOD 스케줄이 부른다).
 
     exit: 0=그날 파생을 확정했다(또는 비거래일 no-op) / 1=확정하지 않았다(세션 없음·
-    커밋 0건·`WRITER_SINCE` 이전 — 사유는 출력에 있다) / 2=판정 자체를 못 함(설정·인자
-    결손·DB/S3 장애). 셋으로 가르는 이유는 처방이 다르기 때문이다 — 1 은 사람이 봐야
-    하고 2 는 재시도하면 될 수 있다(`qc-minute-session` 과 같은 규약).
+    커밋 0건·`WRITER_SINCE` 이전 — 사유는 출력에 있다) / 2=판정 자체를 못 함(db 설정
+    결손·날짜 형식 오류·DB/S3 장애). 셋으로 가르는 이유는 처방이 다르기 때문이다 —
+    1 은 사람이 봐야 하고 2 는 재시도하면 될 수 있다(`qc-minute-session` 과 같은 규약).
+
+    ⚠️ dataset·source_group 어휘 오타는 `_resolve` 가 `SystemExit` 으로 내므로 **1** 이다
+    (`stop-minute-session` 과 같은 경로). 2 가 아닌 게 규약상 어색해 보이지만, 오타도
+    "확정하지 않았고 사람이 봐야 한다"에 들어맞고 재시도로 낫지 않는다.
 
     ⚠️ 세션 phase 를 게이트로 걸지 **않는다**. drain 이 상한 초과로 안 끝난 날에도
     파생은 나와야 하고(닫힌 버킷만 싣는 규칙이 부분 노출을 이미 막는다), 걸면 stop 이

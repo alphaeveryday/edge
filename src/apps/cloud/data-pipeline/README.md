@@ -93,7 +93,13 @@
 > 불일치 하나뿐이고 나머지는 예산이 판정한다), **EOD 세션 QC**(ALPHA-693 — drain 이 끝난
 > 세션의 `DUE` 잔존을 `MISSING` 으로 확정하고 `FINALIZED` 로 닫는다. `run qc-minute-session`.
 > 확정은 **도래한 window 만**이고 계획의 양 끝·연속성이 어긋나면 확정 대신 `FAILED` 다 —
-> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다), **뉴스 canonical
+> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다), **EOD 5분봉 확정**
+> (ALPHA-839 — 5분 파생의 생산자는 둘이고 집계는 하나다: 커밋 후크 `maybe_rollup` 이
+> 장중 즉시성을, `run rollup-minute-session` 이 마감 후 1회 확정을 맡는다. 후크만으로는
+> **지나간 거래일이 영영 안 채워진다** — 발화 조건이 "방금 커밋된 window" 라 그날 마지막
+> 버킷 뒤엔 다음 커밋이 없다. 배치는 계획·커밋을 원장에서 읽고, 커밋이 0건이면 빈 파일을
+> 쓰지 않고 스킵한다 — 원장에 커밋이 없는 것과 그날 봉이 폐기된 것은 다른 사실이라,
+> 빈 파일로 덮으면 다른 writer 가 채운 파티션을 지운다), **뉴스 canonical
 > writer**(ALPHA-691 — 7B 가 **읽던** PG `document`+`news_document` 를 실제로 **쓰는** 쪽.
 > commit 트랜잭션의 커서로 `(source_code, article_id)` upsert 하고, 정규화는 배치 정제
 > `_normalize` 를 재사용한다. ⚠️ 시각 축 규칙이 둘로 갈린다: **내용은 이번 관측 값**으로
@@ -1172,6 +1178,23 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # exit: 0=확정 / 1=원장이 스스로와 모순(사람이 봐야 한다) / 2=판정 자체를 못 함(재시도 가능).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run qc-minute-session --session-id <session_id>
+# EOD 5분봉 확정(1분 파이프라인, ALPHA-839) — 그날 5분 파생을 마감 후 한 번 확정한다.
+# 커밋 후크(`minute/rollup.py:maybe_rollup`)는 "방금 커밋된 window 의 버킷이 닫혔을 때"만
+# 발화해 **지나간 거래일을 영영 안 채운다** — 마지막 버킷 뒤에 온 정정이나 통째로 안 돈
+# 날에는 다음 커밋이 없다. 집계는 후크와 **같은 함수**(`_rollup_day`)라 같은 커밋 세대
+# 집합이면 산출이 바이트까지 같다(재실행도 멱등).
+# ⚠️ 계획·커밋을 **원장에서 읽는다** — `--universe` 를 받지 않는다(거부한다). 마감 후의
+# universe 파일은 수동 편집 대상이라 그날 계획과 갈릴 수 있고, 갈리면 없는 분을 결손으로
+# 세거나 있는 분을 계획 밖으로 버린다.
+# ⚠️ `WRITER_SINCE`(2026-08-04) 이전 파티션은 거부한다 — 그 앞은 fmp·토스 백필의 정본이라
+# 과거 --session-date 재실행 하나가 벤더 원본을 파생본으로 갈아치운다.
+# 출력에 `unfilled_finalized_days`(1분 세션은 FINALIZED 인데 5분 파티션이 빈 거래일)가
+# 함께 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면 물어볼 곳이 그것뿐이다.
+# exit: 0=확정(또는 비거래일 no-op) / 1=확정 안 함(세션 없음·커밋 0건·WRITER_SINCE 이전)
+# / 2=판정 자체를 못 함. `--session-date` 미지정=오늘(KST).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run rollup-minute-session --dataset price_minute \
+    --source-group kis --session-date 2026-08-04
 # 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
 # 있어야 하고(위 plan-minute-session — `--session-date`·`--universe` 를 **같은 값**으로),
 # 갈리면 다른 session_id 가 유도되거나 Worker 가 처리를 거부한다. SIGTERM 은 tick
