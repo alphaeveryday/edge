@@ -495,6 +495,7 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
     notes = getattr(lake, "exists", None)
     if notes is not None:
         notes.pop("layers", None)
+        notes.pop("market_layer", None)
     ser = _series(lake, day, ("market", "sector"), clock=clock)
     # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다. `kinds` 에 'stock' 을 넣으면
     # 856 종목이 섹터 후보가 되어 겹침 게이트가 종목마다 질의를 돌고, 무엇보다
@@ -560,12 +561,30 @@ def decompose(lake, etf: str, day: str, *, max_layers: int = MAX_LAYERS,
         basis_now.append(pick.ret)
 
     # 시장은 후보 경쟁 없이 먼저 - 공통충격이 섹터로 새면 섹터 서사가 거짓이 된다.
-    if MARKET_CODE in xs:
-        # 시장은 남은 몫을 줄이든 말든 들어간다 - 공통충격을 섹터·종목이 청구하면 거짓이다.
-        m = _pick(y, {MARKET_CODE: xs[MARKET_CODE]}, nows, meta, [], [], set(),
-                  "시장", None)
-        if m is not None:
-            add(m)
+    # 시장은 남은 몫을 줄이든 말든 들어간다 - 공통충격을 섹터·종목이 청구하면 거짓이다.
+    m = (_pick(y, {MARKET_CODE: xs[MARKET_CODE]}, nows, meta, [], [], set(),
+               "시장", None) if MARKET_CODE in xs else None)
+    if m is not None:
+        add(m)
+    elif etf != MARKET_CODE:
+        # **시장 층은 조용히 빠지면 안 된다.** 여기엔 사유가 아무 데도 없어서, 시장
+        # 층이 빠진 런과 시장 기여가 0 인 런이 산출물에서 구분되지 않았다 - 남은
+        # 섹터·고유가 시장 몫까지 떠안은 채로 인쇄된다.
+        # (부분 착지한 날을 예로 들면 안 된다: 실측 8/3·8/4 의 13종에는 `069500` 이
+        #  **있었다**. 그날 막히는 것은 대상 계열이지 시장 계열이 아니다.)
+        # 사유는 처방이 다르므로 갈라 적는다: 계열 부재는 적재, 당일 없음은 신선도,
+        # 창 결손은 표본(ALPHA-828 백필), 후보 탈락은 회귀가 못 서는 경우다.
+        #
+        # **대상이 시장 프록시 자신이면 사유를 적지 않는다** - 그건 부재가 아니라 정상이다.
+        # `xs` 는 대상을 제외하므로(위 `sym != etf`) 069500 을 설명할 때는 시장 층이
+        # 없는 것이 맞고, `route.py` 가 그 경우를 `Route("시장", 1.0, …)` 로 이미 정식
+        # 처리한다(실측 069500 07-29). 여기서 사유를 적으면 정상 런마다 존재하지 않는
+        # 결손을 신고해 **조용한 부재를 시끄러운 오진으로 바꾼다.**
+        why = ("계열 부재" if MARKET_CODE not in ser
+               else "당일 없음" if d0 not in ser[MARKET_CODE][1]
+               else "β 창 결손" if MARKET_CODE not in xs
+               else "후보 탈락")   # `_pick` 이 회귀를 못 세운 경우 - 사유를 지어내지 않는다
+        _absent(lake, "market_layer", f"시장 층 없음 - {MARKET_CODE} {why}")
 
     # 섹터 후보 자격은 **구성 겹침**이 정한다. 조용히 빼지 않고 사유를 남긴다.
     #   위: 겹치면 같은 것이다 - "반도체가 왜 빠졌냐"에 "반도체가 빠져서"는 설명이 아니다.
