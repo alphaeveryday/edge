@@ -338,6 +338,17 @@ class TestHistoricalCandles:
         assert len(client.candles("005930", window_end=self.at("0910"))) == 1
         assert client.candles("005930", window_end=self.at("0909")) == ()
 
+    def test_boundary_page_ends_paging(self):
+        """경계를 넘은 응답이 곧 "그 날은 다 받았다"는 신호다 — 한 페이지에 두 날이
+        섞여 있어도 더 부르지 않는다.
+
+        ⚠️ 이 계약은 **혼합 페이지**에서만 갈린다(전건이 남의 날이면 '봉이 없다'와
+        구분되지 않는다). 안 멈추면 09:00 아래로 계속 물어 예산까지 헛돈다.
+        """
+        client, fake = self.hist([TOKEN, ok([row("091000"), self.other_day("090900")])])
+        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+        assert len(fake.calls) == 2  # 토큰 1 + 페이지 1
+
     def test_day_is_fetched_once_for_all_windows(self):
         # window 마다 부르면 390 × 362 = 141k 콜이다 — 앱키 유량은 전역이라 그 차이가
         # 그대로 다른 KIS 스텝의 예산을 먹는다(하루 4콜 × 362종이 설계 근거)
