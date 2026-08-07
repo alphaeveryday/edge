@@ -428,7 +428,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # (PgNewsCanonicalWriter)도 쓰기 때문이다. news_document.lead_observed_at 이 미주장(NULL)
 # 이거나 이 런의 canonical fetched_at 이 그보다 새로울 때만 이긴다. fetched_at 이 결손이면
 # 신선도를 주장하지 않고(published_at 폴백 금지) 그 노출을 로그의 lead_unclaimed_freshness
-# 로 센다. publisher 는 별도 축이라 이 가드가 없다.
+# 로 센다(결손엔 빈 문자열도 포함 — 분모는 같은 로그의 lead_attempted, ALPHA-848).
+# publisher 는 별도 축이라 이 가드가 없다.
 # --from/--to 는 published_date
 # 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \

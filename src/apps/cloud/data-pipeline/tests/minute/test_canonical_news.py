@@ -100,6 +100,21 @@ class TestCorrection:
         document = db.documents[(SOURCE, ARTICLE_ID)]
         assert db.news_documents[document["document_id"]]["lead_observed_at"] is None
 
+    def test_whitespace_only_lead_claims_nothing(self):
+        # ALPHA-848 — 위 테스트의 구멍. 정본 정규화(`normalize_news:199`)는
+        # `" ".join(lead.split())` 이라 공백뿐인 리드에 **`None` 이 아니라 `""`** 를 낸다.
+        # `is None` 으로 가르면 실질 빈 리드가 축을 선점해, 배치가 진짜 스니펫을 갖고 와도
+        # 자기 `fetched_at` 이 더 오래됐으면 영구 차단된다 — 위 테스트가 막으려던 바로
+        # 그 상태가 `""` 로 우회된다. 배치는 `if doc["lead_text"]` 라 `""` 를 쓰지도 않아
+        # 아무도 그 자리를 채우지 못한다.
+        db = FakeMinuteDB()
+        write(db, vendor_row(CONTENT="   "))
+
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        row = db.news_documents[document["document_id"]]
+        assert not row["lead_text"], "공백 리드가 실질 값으로 저장됐다(전제가 깨졌다)"
+        assert row["lead_observed_at"] is None
+
     def test_clearing_an_existing_lead_is_a_claim(self):
         # 반대쪽 — 있던 리드를 지우는 정정은 **지금 알게 된 사실**이다. 여기서 시각이 안 남으면
         # 배치의 `IS NULL` 절이 열려 옛 리드가 복원되고, 그때부터 배치가 계속 이기는 고착이 된다.

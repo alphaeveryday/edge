@@ -207,7 +207,12 @@ class PgNewsCanonicalWriter:
         #    ⚠️ 충돌 갈래는 `EXCLUDED.lead_observed_at` 이 아니라 **관측 시각 자체**를
         #    쓴다. `EXCLUDED` 를 물려받으면 리드를 지우는 정정에서 시각이 NULL 로 지워져,
         #    배치의 `IS NULL` 절이 열리고 옛 리드가 복원된다.
-        _insert_stamp = None if normalized["lead_text"] is None else observed_at
+        #    ⚠️ 가르는 축은 `is None` 이 아니라 **falsy** 다(ALPHA-848). 정본 정규화
+        #    (`normalize_news:199`)가 `" ".join(lead.split())` 이라 공백뿐인 리드는
+        #    `None` 이 아니라 `""` 를 낸다. `is None` 으로 가르면 실질 빈 리드에 시각이
+        #    찍혀, 배치가 진짜 스니펫을 갖고 와도 자기 `fetched_at` 이 더 오래됐으면
+        #    영구 차단된다 — 이 규칙이 막으려던 바로 그 상태다.
+        _insert_stamp = observed_at if normalized["lead_text"] else None
         cur.execute(
             """
             INSERT INTO news_document (document_id, lead_text, lead_observed_at)
