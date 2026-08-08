@@ -83,7 +83,8 @@ export const kst = (iso?: string | null): string =>
 export const SEV_TONE: Record<Severity, BadgeTone> = { P0: 'blocked', P1: 'warn', P2: 'neutral' };
 
 export function runbookOf(v: Violation): RunbookEntry | undefined {
-  return F.runbook[`${v.rule}.${v.target}`] ?? F.runbook[v.rule];
+  /* 키는 표시 문자열이 아니라 안정 식별자다 — target 을 사람이 읽을 문구로 바꿔도 런북이 끊기면 안 된다 */
+  return F.runbook[`${v.rule}.${v.targetId}`] ?? F.runbook[v.rule];
 }
 
 /**

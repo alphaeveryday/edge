@@ -89,13 +89,20 @@ export function IncidentDetailPage() {
           <span className="t-h3">{v.title}</span>
           <span className="chip chip-accent">{domainOf(v)}</span>
           <span className="chip">{v.kls}</span>
+          {/* 판정 어휘는 양이 아니다 — 수치 자리가 아니라 배지로 선다(목록과 같은 규약) */}
+          {v.state && <span className="chip">{v.state}</span>}
           {v.mock && <span className="chip">MOCK</span>}
           {v.seed && <span className="chip">SEED</span>}
           {rule && <SourceChip source={rule.source} />}
         </div>
         <div className="card-pad">
           <p className="t-sm m-0">
-            <b>{fmt(v.metric)}</b> <span style={{ color: 'var(--fg-3)' }}>{v.unit}</span> ·{' '}
+            {/* 세는 값이 없는 위반은 수치를 지어내지 않는다 — 판정은 위 배지가 이미 말했다 */}
+            {v.metric != null && (
+              <>
+                <b>{fmt(v.metric)}</b> <span style={{ color: 'var(--fg-3)' }}>{v.unit}</span> ·{' '}
+              </>
+            )}
             <span style={{ color: 'var(--fg-2)' }}>{v.why}</span>
           </p>
 
@@ -120,7 +127,14 @@ export function IncidentDetailPage() {
               />
             </Fact>
             <Fact k="영향 범위">
-              {v.list ? `${v.list.length}건 — ${v.list.join(' · ')}` : `${fmt(v.metric)} ${v.unit}`}
+              {v.list ? (
+                `${v.list.length}건 — ${v.list.join(' · ')}`
+              ) : v.metric != null ? (
+                `${fmt(v.metric)} ${v.unit ?? ''}`
+              ) : (
+                /* 범위를 세는 계측이 없다 — 대상 하나라고 단정하지 않는다 */
+                <Absent kind="none" />
+              )}
             </Fact>
             {v.lastok && (
               <Fact k="마지막 정상">

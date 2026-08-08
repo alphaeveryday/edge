@@ -176,7 +176,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
       targets: [
         {
           kind: 'queue',
-          id: v.target,
+          id: v.targetId,
           label: `큐 ${v.target}`,
           why: '실행이 아니라 큐·소비자 배선이 근거다 — 관련 실행이 존재하지 않는다',
           href: `/ops/chain?focus=${q(anchor)}&fromIncident=${q(vid)}`,
@@ -201,7 +201,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
       ? [
           {
             kind: 'output',
-            id: v.target,
+            id: v.targetId,
             label: v.title,
             why: '이 사건의 기준 축은 산출·흐름이라 실행 하나로 좁혀지지 않는다',
             href: `${href}?focus=${q(anchor)}&fromIncident=${q(vid)}`,

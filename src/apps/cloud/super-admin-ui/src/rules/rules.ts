@@ -69,9 +69,10 @@ export const RULES: Rule[] = [
         .map((r) => ({
           target: r.id,
           title: '마감 초과 · 원장 미귀결',
-          metric: '미귀결',
-          unit: r.kind === 'manual' ? '수동 런' : '정규 런',
-          why: `마감 ${kst(r.deadline)} 경과, 원장 상태 없음 (AWS는 ${r.aws_status || '—'})`,
+          /* 세는 값이 없다 — 이 위반은 양이 아니라 판정 하나다 */
+          metric: null,
+          state: '미귀결',
+          why: `${r.kind === 'manual' ? '수동 런' : '정규 런'} · 마감 ${kst(r.deadline)} 경과, 원장 상태 없음 (AWS는 ${r.aws_status || '—'})`,
           evidence: 'ops_pipeline_run.orchestration_status IS NULL',
           drill: ['run', 'run-' + r.id] as [string, string],
         })),
@@ -92,8 +93,8 @@ export const RULES: Rule[] = [
         .map((r) => ({
           target: r.id,
           title: '두 표면이 다름',
-          metric: `${r.aws_status} ≠ ${r.ledger_status}`,
-          unit: 'AWS · 원장',
+          metric: null,
+          state: `${r.aws_status} ≠ ${r.ledger_status}`,
           why: `AWS ${r.aws_status} ${kst(r.aws_stop)} vs 원장 ${r.ledger_status} ${kst(r.ledger_updated)}`,
           evidence: 'stepfunctions 최종 상태 vs ops_pipeline_run',
           drill: ['run', 'run-' + r.id] as [string, string],
@@ -123,8 +124,8 @@ export const RULES: Rule[] = [
         .map((r) => ({
           target: r.id,
           title: '런 ' + (r.ledger_status || r.aws_status),
-          metric: (r.ledger_status || r.aws_status) as string,
-          unit: r.lane,
+          metric: null,
+          state: (r.ledger_status || r.aws_status) as string,
           why: `${r.lane} ${r.id.split('T')[1] || ''} 슬롯`,
           evidence: 'ops_pipeline_run.orchestration_status',
           drill: ['run', 'run-' + r.id] as [string, string],
@@ -148,9 +149,11 @@ export const RULES: Rule[] = [
         .map((t) => ({
           target: t.task_key,
           title: t.task_key,
-          metric: t.task_outcome ?? '판정 없음',
-          unit: `${t.stage} · ${t.pipeline_type}`,
-          why: t.task_outcome === 'FAILED' ? '실행됐으나 실패' : '상류 실패로 미실행(PENDING)',
+          metric: null,
+          state: t.task_outcome ?? '판정 없음',
+          why: `${t.stage} · ${t.pipeline_type} — ${
+            t.task_outcome === 'FAILED' ? '실행됐으나 실패' : '상류 실패로 미실행(PENDING)'
+          }`,
           cause: t.task_outcome !== 'FAILED',
           evidence: 'ops_expected_task.task_outcome',
           lastok: t.last_ok,
@@ -176,8 +179,8 @@ export const RULES: Rule[] = [
           target: t.task_key,
           title: t.task_key,
           metric: t.failed_records as number,
-          unit: '유실 단위(잡별 상이)',
-          why: 'ops.failed_records — 스텝의 유실 판정값이며 skipped_*를 직접 더한 값이 아니다',
+          unit: '건',
+          why: 'ops.failed_records — 스텝의 유실 판정값이며 skipped_*를 직접 더한 값이 아니다. 무엇 1건인지는 잡마다 다르다',
           runId: t.run_id,
           evidence: 'ops_expected_task.data_status + failed_records',
           drill: ['run', 'task-' + t.task_key] as [string, string],
@@ -210,7 +213,7 @@ export const RULES: Rule[] = [
           target: t.task_key,
           title: t.task_key,
           metric: (t.completeness_expected as number) - (t.completeness_received ?? 0),
-          unit: '엔티티 결손',
+          unit: '엔티티',
           why: `${t.completeness_received}/${t.completeness_expected} — 기대 대비 부족`,
           runId: t.run_id,
           evidence: 'ops_expected_task.completeness',
@@ -245,9 +248,9 @@ export const RULES: Rule[] = [
         .map((d) => ({
           target: d.id,
           title: d.id,
-          metric: 'STALE',
-          unit: `기대 ${d.expected_as_of} · 실제 ${d.actual_as_of}`,
-          why: '분석이 오래된 스냅샷 위에서 돈다',
+          metric: null,
+          state: 'STALE',
+          why: `기대 ${d.expected_as_of} · 실제 ${d.actual_as_of} — 분석이 오래된 스냅샷 위에서 돈다`,
           evidence: 'DatasetContract.actual_as_of',
           mock: !!d.mock,
           drill: ['dataset', 'ds-' + d.id] as [string, string],
@@ -269,8 +272,8 @@ export const RULES: Rule[] = [
         .map((d) => ({
           target: d.id,
           title: d.id,
-          metric: '판정 불가',
-          unit: '신선도',
+          metric: null,
+          state: '판정 불가',
           why: d.unverifiable as string,
           evidence: '—',
           drill: ['dataset', 'ds-' + d.id] as [string, string],
@@ -299,11 +302,13 @@ export const RULES: Rule[] = [
           if (v == null) return;
           if (prev != null && v < prev) {
             out.push({
-              target: `${src}:${s.id}`,
+              /* 대상은 어느 인접 단계에서 줄었는가다. `batch:c.res` 는 앵커용 id 라 targetId 로 내린다 */
+              target: `${prevLabel} → ${s.label}`,
+              targetId: `${src}:${s.id}`,
               title: `${prevLabel} → ${s.label}`,
               metric: prev - v,
-              unit: '유실',
-              why: `${prev} → ${v}`,
+              unit: '건',
+              why: `${prev} → ${v} 로 줄었다 — 설계된 감소가 아니다`,
               src,
               evidence: '산출 체인 인접 단계 비교',
               drill: ['chain', 'chain-' + s.id],
@@ -335,8 +340,8 @@ export const RULES: Rule[] = [
           target: q.name,
           title: q.purpose || q.name,
           metric: q.visible,
-          unit: '메시지 대기',
-          why: '발행은 성공, 소비 자체가 시작되지 않음 — 런타임 실패가 아니라 배선 부재',
+          unit: '메시지',
+          why: '대기 중인데 소비 자체가 시작되지 않음 — 런타임 실패가 아니라 배선 부재(발행은 성공)',
           evidence: 'SQS visible/in-flight + ECS 서비스 목록',
           mock: !!q.sub_mock,
           drill: ['chain', 'q-' + q.name] as [string, string],
@@ -380,11 +385,15 @@ export const RULES: Rule[] = [
       f.outputs
         .filter((o) => o.base && Math.abs((o.today - o.base) / o.base) >= 0.25)
         .map((o) => ({
-          target: o.id,
+          /* `o.pub` 은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
+          target: o.label,
+          targetId: o.id,
           title: o.label,
-          metric: `${Math.round(((o.today - (o.base as number)) / (o.base as number)) * 100)}%`,
-          unit: `${o.today.toLocaleString('ko-KR')} / 평소 ${(o.base as number).toLocaleString('ko-KR')} ${o.unit}`,
-          why: '분포 밖 — 원인은 다른 규칙이 지목한다',
+          /* 편차율은 양이다 — 부호를 살린 수로 두고 단위는 %. 문자열 `'-50%'` 로 만들면
+           * 정렬(크기순)과 표의 숫자 열이 이 값을 못 쓴다 */
+          metric: Math.round(((o.today - (o.base as number)) / (o.base as number)) * 100),
+          unit: '%',
+          why: `오늘 ${o.today.toLocaleString('ko-KR')} · 평소(중앙값) ${(o.base as number).toLocaleString('ko-KR')} ${o.unit} — 분포 밖, 원인은 다른 규칙이 지목한다`,
           evidence: '30일 시계열 중앙값',
           drill: ['trend', 'out-' + o.id] as [string, string],
         })),
@@ -404,7 +413,8 @@ export const RULES: Rule[] = [
       const out: ReturnType<Rule['run']> = [];
       if (b.published_without_delivery > 0) {
         out.push({
-          target: 'pub_no_delivery',
+          target: '게시됐는데 미발번',
+          targetId: 'pub_no_delivery',
           title: '게시됐는데 미발번',
           metric: b.published_without_delivery,
           unit: '건',
@@ -415,11 +425,16 @@ export const RULES: Rule[] = [
       }
       if (b.delivery_now_nonpublished > 0) {
         out.push({
-          target: 'delivery_nonpub',
+          target: '전달됐는데 현재 비게시',
+          targetId: 'delivery_nonpub',
           title: '전달됐는데 현재 비게시',
           metric: b.delivery_now_nonpublished,
           unit: '건',
-          why: b.seed_note ?? '',
+          /* 규약 이후 `why` 는 문맥의 유일한 운반자다 — 빈 문자열이면 상세·ⓘ 에서 '왜'가 통째로
+           * 빈다. seed_note 부재는 "사유가 없다"가 아니라 기록이 없는 것이다(R15 와 같은 처리) */
+          why:
+            b.seed_note ??
+            '시드 유래 여부를 가릴 기록이 없다 — 전달·게시 어느 쪽이 뒤집혔는지는 이 사실이 답하지 않는다',
           seed: true,
           sev: 'P2',
           evidence: 'tenant_delivery ⋈ explanation_result',
@@ -446,11 +461,15 @@ export const RULES: Rule[] = [
       return bad.length
         ? [
             {
-              target: 'analyze.failed',
+              target: 'ETF 분석',
+              targetId: 'analyze.failed',
               title: 'ETF 분석 실패',
               metric: bad.length,
-              unit: 'ETF 설명 미생성',
-              why: bad[0].error ?? '',
+              unit: 'ETF',
+              /* error 가 null 인 것은 "오류가 없다"가 아니라 원장이 사유를 안 남긴 것이다 */
+              why: bad[0].error
+                ? `설명 미생성 — ${bad[0].error}`
+                : '설명 미생성 — per-ETF 원장에 오류 사유 기록이 없다',
               list: bad.map((r) => r.name),
               mock: !!f.etf_ledger?.mock,
               evidence: 'ETF별 분석 원장(목)',
@@ -481,9 +500,9 @@ export const RULES: Rule[] = [
         .map((t) => ({
           target: t.task_key,
           title: t.task_key + ' 재시도 소진',
-          metric: `${t.attempts}/${retryCap(t)}`,
-          unit: '시도 / 상한',
-          why: '자동 회복 여지 없음 — 수동 개입 필요',
+          metric: t.attempts ?? 0,
+          unit: '시도',
+          why: `정책 상한 ${retryCap(t)}회 도달 — 자동 회복 여지 없음, 수동 개입 필요`,
           mock: !!t.retry_mock,
           runId: t.run_id,
           evidence: 'ops_task_attempt 수 vs 정책 상한',
@@ -602,14 +621,14 @@ export const RULES: Rule[] = [
 export const EDGES: Edge[] = [
   { c: 'R10', p: 'R11', when: (c) => c.src === 'intraday', why: '소비자가 없어 체인 진입 자체가 없었다' },
   { c: 'R10', p: 'R15', when: (c) => c.src === 'batch', why: '체인 감소분이 곧 분석 실패 ETF 수다' },
-  { c: 'R05', p: 'R04', when: (c, p) => c.runId === p.target, why: '런이 죽어 작업이 귀결되지 못했다' },
-  { c: 'R06', p: 'R04', when: (c, p) => c.runId === p.target, why: '같은 런의 유실' },
-  { c: 'R16', p: 'R04', when: (c, p) => c.runId === p.target, why: '런 타임아웃 안에서 시도가 소진됐다' },
+  { c: 'R05', p: 'R04', when: (c, p) => c.runId === p.targetId, why: '런이 죽어 작업이 귀결되지 못했다' },
+  { c: 'R06', p: 'R04', when: (c, p) => c.runId === p.targetId, why: '같은 런의 유실' },
+  { c: 'R16', p: 'R04', when: (c, p) => c.runId === p.targetId, why: '런 타임아웃 안에서 시도가 소진됐다' },
   {
     c: 'R05',
     p: 'R05',
     when: (c, p) => !!c.cause && !p.cause && c.runId === p.runId,
     why: '상류 실패로 미실행',
   },
-  { c: 'R02', p: 'R03', when: (c, p) => c.target === p.target, why: '원장 투영이 안 돼 마감 판정이 열려 있다' },
+  { c: 'R02', p: 'R03', when: (c, p) => c.targetId === p.targetId, why: '원장 투영이 안 돼 마감 판정이 열려 있다' },
 ];
