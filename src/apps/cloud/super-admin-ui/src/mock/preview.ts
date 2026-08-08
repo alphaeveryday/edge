@@ -229,9 +229,13 @@ export const MOCK_MINUTE: MinuteStatus = {
   date: MOCK_TRADING_DATE,
   sessions: [
     {
-      sessionId: 'mock-session-price-krx',
+      sessionId: 'mock-session-price-kis',
       dataset: 'price_minute',
-      sourceGroup: 'KRX',
+      /* 어휘 정본은 `data_pipeline/minute/states.py` 의 `SOURCE_GROUPS_BY_DATASET` 다
+       * (`price_minute` = {toss, kis}). 목이라도 **존재할 수 없는 벤더**를 그리면 운영자가
+       * 사건 대상(`R17:price_minute/…`)으로 그 이름을 본다 — MockChip 은 값이 목이라고
+       * 말할 뿐 그 값이 어휘 밖이라고는 안 말한다. */
+      sourceGroup: 'kis',
       phase: 'ACTIVE',
       universeVersion: 'v2026-08-03',
       /* 09:00~15:30 = 390분. 아래 창 집계의 합과 반드시 같아야 한다 —

@@ -12,7 +12,7 @@
  *     (스냅샷은 평가 시점만 안다).
  *   · 실행이 없는 사건은 실행 화면으로 보내지 않는다 — investigate() 가 그렇게 판정한다.
  */
-import { Link, useParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { RULES } from '../../rules/rules';
 import {
@@ -26,8 +26,10 @@ import {
   kst,
   runbookOf,
   useConsoleEvaluation,
+  useFocusRow,
 } from './shared';
-import { investigate, ledgerHref } from './investigation';
+import { isKnownVid, notRunReason, unevaluatedFor } from './notRun';
+import { incidentHref, incidentOfVid, investigate, ledgerHref } from './investigation';
 import '../../styles/ops.css';
 
 const TARGET_LABEL: Record<string, string> = {
@@ -49,19 +51,66 @@ function Fact({ k, children }: { k: string; children: React.ReactNode }) {
 }
 
 export function IncidentDetailPage() {
-  const { vid = '' } = useParams();
-  const { incidents, facts } = useConsoleEvaluation();
-  const incident = incidents.find((i) => i.root.vid === vid);
+  const vid = useSearchParams()[0].get('vid') ?? '';
+  /* `?focus=<vid>` 로 들어오면 아래 연쇄 표의 그 줄을 지목한다(흡수된 위반의 링크가 보내는 곳).
+   * 훅이라 **조기 반환보다 앞에서** 부른다. */
+  useFocusRow();
+  const ev = useConsoleEvaluation();
+  const { incidents, facts } = ev;
+  const found = incidentOfVid(incidents, vid);
+  /* 흡수된 위반은 **단독 사건이 아니다** — 여기서 그 vid 로 사건 화면을 만들지 않고 뿌리로 보낸다 */
+  const incident = found && !found.member ? found.incident : undefined;
 
   if (!incident) {
+    /* 공유 링크의 도착지다 — 여기서 "해소"라고 단정하면 이 PR 이 없애려던 오독을 이 PR 이 낸다.
+     * 사건이 안 보이는 이유는 **넷**이다. 어느 쪽인지 화면이 아는데도 한 문장으로 덮으면,
+     * 안 보이는 것 전부가 "괜찮아졌다"로 읽힌다.
+     *
+     *   ① 그 위반이 살아 있는데 인과 간선으로 **다른 사건에 흡수**됐다 — 뿌리로 보내야 한다.
+     *      `incidents[]` 는 뿌리만 담아서 이 조회로는 안 잡힌다. 어제 뿌리였던 vid 가 오늘
+     *      부모가 걸리면 멤버로 내려가므로, 어제 공유한 링크가 정확히 이 분기로 온다.
+     *   ② 그 규칙이 판정을 못 했다 — 해소가 아니라 **걸렸는지조차 모른다**.
+     *   ③ 그런 규칙이 애초에 없다(개명·삭제·손으로 친 주소) — "돌았다"를 연역할 수 없다.
+     *   ④ 규칙은 돌았고 안 걸렸다 — 이때만 해소·낡은 링크를 말할 수 있다. */
+    const absorbed = found?.member ? found.incident : undefined;
+    const notRun = unevaluatedFor(ev, vid);
     return (
       <div className="card card-pad">
-        <p className="t-sm m-0">이 사건을 찾을 수 없습니다.</p>
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          사건 식별자 <code>{vid || '(없음)'}</code> 가 지금 평가 결과에 없습니다 — 규칙이 더는 걸리지
-          않거나(해소) 링크가 낡았습니다. 다른 사건으로 대체해 보여주지 않습니다.{' '}
-          <Link to="/ops/incidents">문제·사건으로</Link>
+        <p className="t-sm m-0">
+          {absorbed ? '이 위반은 단독 사건이 아닙니다.' : '이 사건을 찾을 수 없습니다.'}
         </p>
+        {absorbed ? (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            <code>{vid}</code> 는 지금도 규칙에 걸려 있습니다 — 해소된 것이 아니라 인과 간선으로{' '}
+            <b>{absorbed.root.title}</b> 사건에 흡수됐습니다. 조치는 그 뿌리 하나입니다.{' '}
+            {/* 뿌리 화면에서 이 위반 줄을 지목한다 — 뿌리만 열면 원래 주소가 가리키던 사실이
+                연쇄 표 어딘가로 사라진다(`useFocusRow` 가 그 줄로 스크롤·강조한다) */}
+            <Link to={`${incidentHref(absorbed.root)}&focus=${encodeURIComponent(vid)}`}>
+              그 사건에서 이 위반 보기 →
+            </Link>
+          </p>
+        ) : notRun ? (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            사건 식별자 <code>{vid}</code> 를 낼 규칙은 <span className="mono">{notRun.id}</span>{' '}
+            {notRun.name} 입니다. 이 규칙이 이번 평가에서{' '}
+            <b style={{ color: 'var(--down)' }}>판정을 못 했습니다</b> (
+            {notRunReason(notRun, ev.axisFetch)}) — 위반이 하나도 실리지 않아, 해소됐는지 아직 걸려
+            있는지 여기서는 알 수 없습니다. <Link to="/ops/incidents">문제·사건으로</Link>
+          </p>
+        ) : !isKnownVid(vid) ? (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            사건 식별자 <code>{vid || '(없음)'}</code> 는 이 콘솔의 규칙이 낸 형태가 아닙니다 —
+            규칙이 개명·삭제됐거나 주소가 잘못됐습니다. 규칙이 판정한 결과가 아니므로{' '}
+            <b>무엇이 있었는지는 여기서 알 수 없습니다</b>.{' '}
+            <Link to="/ops/incidents">문제·사건으로</Link>
+          </p>
+        ) : (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            사건 식별자 <code>{vid}</code> 가 지금 평가 결과에 없습니다 — 규칙은 돌았고 더는 걸리지
+            않거나(해소) 링크가 낡았습니다. 다른 사건으로 대체해 보여주지 않습니다.{' '}
+            <Link to="/ops/incidents">문제·사건으로</Link>
+          </p>
+        )}
       </div>
     );
   }
@@ -178,7 +227,8 @@ export function IncidentDetailPage() {
             </thead>
             <tbody>
               {incident.members.map((m) => (
-                <tr key={m.v.vid}>
+                /* id 는 `useFocusRow` 가 찾는 축이다 — 흡수된 위반의 딥링크가 이 줄로 온다 */
+                <tr key={m.v.vid} id={m.v.vid}>
                   <td className="mono">{m.v.rule}</td>
                   <td>{m.v.title}</td>
                   <td className="mono col-muted">{m.v.target}</td>

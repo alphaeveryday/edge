@@ -157,19 +157,40 @@ export interface RunbookEntry {
  * 규칙은 사실만 읽는 층이고 화면 도메인을 모른다 — 반대로 끌어오면 계층이 뒤집힌다.
  * 대신 호출자가 DTO 를 이 모양으로 맞춰 넣는다(`minuteFacts` 어댑터).
  *
- * `jobs` 는 **그 데이터셋의 후속 처리 원장**이다. 가격은 세션에 붙은 job, 뉴스는 세션 연결
- * 컬럼이 없어 날짜 축 집계다 — 어느 쪽을 넣을지는 어댑터가 정하고 규칙은 모른다.
+ * `deadJobs` 는 **그 데이터셋의 후속 처리 원장**이다. 가격은 세션에 붙은 job, 뉴스는 세션 연결
+ * 컬럼이 없어 날짜 축 집계다 — 어느 쪽을 읽을지는 어댑터가 정한다. 다만 **그 값이 어느 축인지는
+ * 규칙이 알아야 한다**(`deadJobsByDate`): 모르면 날짜 축 집계를 벤더마다 복제해 같은 사실을
+ * 여러 사건으로 낸다. 출처는 어댑터 소관, 입도는 규칙 소관이다.
  */
 export interface MinuteSessionFact {
   dataset: string;
+  /**
+   * 세션 identity 의 두 번째 축 — 한 세션은 `(dataset, sourceGroup, date)` 다.
+   * 데이터셋만으로는 안 갈린다(같은 `news_minute` 를 벤더별로 따로 돌린다).
+   */
+  sourceGroup: string;
   /** 원장 어휘 그대로(ACTIVE·DRAINED·QC_RUNNING·FINALIZED·FAILED). 모르는 값은 그대로 둔다 */
   phase: string;
   /** 서버(DB 시계) 판정. `null` 은 lease 부재 — 만료(true)와 다른 사실이다 */
   leaseExpired: boolean | null;
   /** 기한이 지났는데 실행·결과 증거가 없는 창 수 */
   overdueNoEvidence: number;
-  /** 후속 처리 원장에서 종료 상태 실패로 남은 건수 */
-  deadJobs: number;
+  /**
+   * 후속 처리 원장에서 종료 상태 실패로 남은 건수.
+   *
+   * **`null` 은 0이 아니다** — 이 데이터셋의 job 원장을 이 응답이 주지 않는다는 뜻이다(어휘 밖
+   * 데이터셋이 오면 어댑터가 어느 원장을 읽어야 할지 모른다). 0으로 채우면 원장 부재가
+   * "봤고 괜찮다"로 그려진다 — 이 콘솔이 없애려는 칸 혼동 그 자체다.
+   */
+  deadJobs: number | null;
+  /**
+   * 그 수가 **세션 축이 아니라 `(dataset, date)` 집계**인가 — 벤더로 못 가른다.
+   *
+   * 뉴스 job 은 세션 연결 컬럼이 없어 날짜 축 집계 하나뿐이다. 그걸 세션마다 실으면 벤더가
+   * 둘인 날 **같은 사실이 벤더 수만큼 복제되어** 독립 사건이 된다(DEAD 3건이 6건으로 읽힌다).
+   * 규칙은 이 플래그를 보고 대상을 데이터셋으로 낸다 — 값의 입도와 사건 식별자의 입도를 맞춘다.
+   */
+  deadJobsByDate?: boolean;
 }
 
 /** 하루치 실시간 세션 — 원장에 `minute_ingestion_session/window` 축이 없으면 통째로 부재다 */
@@ -212,8 +233,12 @@ export interface Facts {
 export interface RawViolation {
   /** 사람이 읽을 대상 — 표 셀에 그대로 선다. 내부 id 를 넣지 않는다 */
   target: string;
-  /** 안정 식별자 — 런북 키 `${rule}.${targetId}` · 간선 매칭 · 사건 키.
-   *  생략하면 `target` 이 그 역할을 겸한다(작업 키·데이터셋 id·큐 이름처럼 이미 둘 다인 경우). */
+  /** 안정 식별자 — **무엇이 고장났나**. 런북 키 `${rule}.${targetId}` · 간선 매칭.
+   *  생략하면 `target` 이 그 역할을 겸한다(작업 키·데이터셋 id·큐 이름처럼 이미 둘 다인 경우).
+   *
+   *  ⚠️ **여기에 시각·날짜를 넣지 마라.** 런북은 "이 대상이 고장나면 이렇게 조치한다"라
+   *  날짜와 무관한데, 날짜가 섞이면 키가 매일 달라져 **어떤 런북도 등록할 수 없게 된다**.
+   *  시점 축은 `scope` 다. */
   targetId?: string;
   title: string;
   /** 세는 값. **양이 아니면 `null`** — 판정 문자열은 `state` 로 간다 */
@@ -236,6 +261,14 @@ export interface RawViolation {
   kls?: string;
   /** 인과 간선 매칭용 — 이 위반이 속한 런 */
   runId?: string;
+  /**
+   * 사건 식별자의 **시점 범위** — 이 위반이 어느 실행 인스턴스의 것인가.
+   *
+   * `targetId`(무엇이) 와 다른 축이다. 배치는 런 키가 그 역할을 겸하므로 생략하고, 런이 없는
+   * 실시간 세션만 세션 날짜를 싣는다. 정규화(`scope ?? runId`)는 **엔진이 한 번만** 한다 —
+   * 소비자가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다(`targetId` 와 같은 규약).
+   */
+  scope?: string;
   /** R05: FULFILLED 실패가 아니라 상류 미실행(PENDING) 파생 여부 */
   cause?: boolean;
   /** R10: 어느 피드 갈래인가 (batch | intraday) */
@@ -250,12 +283,28 @@ export interface Violation extends RawViolation {
   /** 항상 채워진다 — 엔진이 `raw.targetId ?? raw.target` 으로 정규화한다.
    *  소비자(런북 키·간선·조사 경로)는 이 필드만 보면 되고 폴백을 각자 쓰지 않는다. */
   targetId: string;
+  /** 엔진이 `raw.scope ?? raw.runId` 로 정규화한 값 — 소비자는 이 필드만 본다.
+   *  범위가 없는 대상(큐·산출처럼 실행에 안 매인 것)은 `undefined` 다. */
+  scope?: string;
   rule: string;
   ruleName: string;
   layer: Layer;
   kls: string;
   sev: Severity;
   dep: string | null;
+  /**
+   * 사건 식별자 — 딥링크(`/ops/incidents/detail?vid=…`)가 쥐는 축이다.
+   * `${rule}:${targetId}` + 범위가 있으면 `@${scope ?? runId}`.
+   *
+   * **위치 인덱스(`R05#0`)였다.** 앞 위반이 해소되면 뒤가 당겨져 공유된 링크가 404 도 없이
+   * **다른 사건**을 열었다. 정적 스냅샷은 이걸 못 보여준다 — 위반 집합이 안 바뀌기 때문이다.
+   *
+   * `targetId` 만으로는 부족하다: **대상이 `task_key` 인 규칙**(오늘 R05·R06·R07·R16)은 같은
+   * 작업이 여러 런에 걸리면 겹친다 — 전부 `runId` 를 들고 있어 그게 범위가 된다. 목록이 아니라
+   * 이 성질이 기준이다: 작업 축 규칙이 하나 늘면 그 규칙도 범위를 실어야 한다.
+   * 런이 없는 실시간 R17~R19 는
+   * 세션 날짜를 `scope` 로 싣는다 — `targetId` 에 넣으면 런북 키가 매일 달라진다.
+   */
   vid: string;
 }
 
@@ -276,6 +325,15 @@ export interface Rule {
   source: FactSource;
   /** 필요한 사실 축이 아예 없으면 false → 리포트에 evaluated:false (돌지 못함 ≠ 조용함) */
   canRun?: (f: Facts) => boolean;
+  /**
+   * `canRun` 이 거짓일 때 **모자란 축이 무엇인가**. 화면이 그 축의 조회 상태(대기·실패)를
+   * 사유로 붙여도 되는지 이걸로 판단한다 — 없으면 안 붙인다.
+   *
+   * 이게 없던 동안 화면은 `dep: null` 인 규칙 전부에 실시간 응답 상태를 붙였다. R12 의 축은
+   * SQS(`f.queues`)라 실시간 응답과 무관한데도 "조회 실패"라고 썼다 — 장애를 미배선으로 읽는
+   * 오독의 정확한 역방향이다. (규칙별 사유 문장 자체는 A2 범위. 여기서는 **축만** 밝힌다.)
+   */
+  axis?: 'minute';
   /** 이 규칙이 읽는 사실이 목으로 채워져 있는가 (위반 0건이어도 표시하기 위함) */
   mockBacked?: (f: Facts) => boolean;
   /** 리포트 note — 예: R07 "분모 배선 작업 3/27" */
@@ -303,6 +361,15 @@ export interface RuleResult {
   name: string;
   layer: Layer;
   evaluated: boolean;
+  /**
+   * `evaluated:false` 의 **종류**. 화면이 문구로 추측하지 않게 구조로 낸다.
+   *
+   * - `axis` — 그 규칙이 읽을 사실 축이 아예 없다(계측 공백). "괜찮다"가 아니라 "모른다".
+   * - `identity` — 축은 있었는데 **응답이 사건을 못 가르게** 줬다(식별자 충돌·빈 범위).
+   *   계측 공백이 아니라 **계약 위반**이라 뜻이 다르다 — 같은 칸에 그리면 응답 결함이
+   *   "아직 계측이 없구나"로 읽힌다. 사유는 `note` 에 있다.
+   */
+  notRun?: 'axis' | 'identity';
   violations: number;
   depends_on_mock: boolean;
   note: string | null;

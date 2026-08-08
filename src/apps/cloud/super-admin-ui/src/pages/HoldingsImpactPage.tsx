@@ -21,6 +21,7 @@ import { ApiError } from '../api/client';
 import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { useConsoleEvaluation } from './ops/shared';
+import { incidentHref, incidentOfVid } from './ops/investigation';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -29,7 +30,8 @@ import '../styles/ops.css';
 /** 조사 경로 — 실제 식별자로만 만든다. 사건에서 왔으면 그 문맥을 유지한다 */
 function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string }) {
   const { incidents } = useConsoleEvaluation();
-  const incident = incidentId ? incidents.find((i) => i.root.vid === incidentId) : undefined;
+  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다 */
+  const incident = incidentId ? (incidentOfVid(incidents, incidentId)?.incident ?? undefined) : undefined;
   return (
     <nav className="t-xs ops-crumb" aria-label="조사 경로">
       {incidentId ? (
@@ -37,7 +39,7 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
           <Link to="/ops/incidents">문제·사건</Link>
           <span aria-hidden="true">›</span>
           {incident ? (
-            <Link to={`/ops/incidents/${encodeURIComponent(incidentId)}`}>{incident.root.title}</Link>
+            <Link to={incidentHref(incident.root)}>{incident.root.title}</Link>
           ) : (
             <span>사건 {incidentId} (확인되지 않음)</span>
           )}

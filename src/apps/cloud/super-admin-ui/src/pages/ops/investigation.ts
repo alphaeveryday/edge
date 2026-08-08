@@ -38,6 +38,11 @@ export interface LedgerContext {
   dataset?: string;
   /** 실시간 세션 축 — 세션 날짜(KST) */
   date?: string;
+  /**
+   * 실시간 세션 축 — 벤더. 세션 identity 가 `(dataset, sourceGroup, date)` 라 이게 없으면
+   * 원장 화면이 데이터셋만 보고 **다른 벤더의 세션 행**을 집는다(사건은 벤더로 갈렸는데).
+   */
+  sourceGroup?: string;
 }
 
 export interface Investigation {
@@ -139,19 +144,45 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
     /* 실시간 세션의 날짜는 **세션 응답이 말한 날**이다 — meta.today(배치 스냅샷의 거래일)와
      * 다를 수 있고, 다르면 드릴다운이 없는 날짜의 세션을 연다. */
     const date = facts.minute?.date ?? facts.meta.today;
+    /* `targetId` 는 세션의 대상 축 `dataset/sourceGroup` 이다 — 앵커(`ds-…`)에는 벤더가 없어
+     * 그것만 보면 어느 벤더의 세션인지 못 좁힌다. 없으면 **안 싣는다**(부재를 값으로 만들지 않는다). */
+    const vendor = v.targetId.split('/')[1];
     if (REALTIME_DATASETS.has(datasetId)) {
       return {
         targets: [
           {
             kind: 'session',
             id: datasetId,
-            label: `실시간 세션 ${datasetId} · ${date}`,
-            why: '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다',
+            /* 사건이 지목한 것은 대개 벤더까지 갈린 세션이다(`targetId` = `dataset/sourceGroup`).
+             * 다만 **벤더로 못 가르는 값**(날짜 축 집계)의 사건은 대상이 `(데이터셋, 날짜)` 라,
+             * 라벨이 그걸 "세션"이라 부르면 없는 실체를 지목한다. */
+            label: vendor
+              ? `실시간 세션 ${v.targetId} · ${date}`
+              : `실시간 데이터셋 ${datasetId} · ${date} (세션 전체)`,
+            why:
+              '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다.' +
+              /* 라벨은 벤더까지 말하는데 세션 화면은 아직 벤더로 안 좁힌다 — 약속과 도착지가
+               * 어긋난 상태를 문구로 밝힌다(좁히는 것은 화면 배선 PR 소관). */
+              (vendor
+                ? ' 세션 화면은 아직 벤더로 좁히지 못해 이 데이터셋의 세션을 모두 보여준다.'
+                : ' 이 사건의 수는 벤더로 갈리지 않아 그 날짜의 세션 전체가 대상이다.'),
             href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
           },
         ],
-        ledger: { incident: vid, dataset: datasetId, date },
-        ledgerNote: null,
+        /* `targetId` 는 `dataset/sourceGroup` 이다(세션의 대상 축) — 벤더를 여기서 꺼내 넘긴다.
+         * 앵커(`ds-…`)에는 벤더가 없어 그것만 보면 어느 세션인지 못 좁힌다. */
+        ledger: {
+          incident: vid,
+          dataset: datasetId,
+          date,
+          ...(vendor ? { sourceGroup: vendor } : {}),
+        },
+        /* ⚠️ 벤더가 없으면 **원장 화면이 세션 하나로 못 좁힌다**(벤더가 둘이면 고르기를 거부한다).
+         * 그 사실을 여기서 밝히지 않으면, 도착한 화면이 "source_group 을 실어 주세요"라고
+         * **이 사건에서는 불가능한 조치**를 지시한다 — 그 수가 벤더로 안 갈리는 값이라서다. */
+        ledgerNote: vendor
+          ? null
+          : '이 사건의 수는 날짜 축 집계라 세션 하나로 좁혀지지 않는다 — 원장 화면에서 벤더를 골라야 세션 행이 선다.',
       };
     }
     return {
@@ -223,6 +254,7 @@ export function ledgerHref(ctx: LedgerContext | null): string | null {
   if (ctx.task) p.set('task', ctx.task);
   if (ctx.dataset) p.set('dataset', ctx.dataset);
   if (ctx.date) p.set('date', ctx.date);
+  if (ctx.sourceGroup) p.set('sourceGroup', ctx.sourceGroup);
   const qs = p.toString();
   return qs ? `/sources?${qs}` : null;
 }
@@ -250,6 +282,12 @@ export const RUN_DETAIL_UNAVAILABLE = '실행 상세는 아직 실 데이터를 
  * ⚠️ **실 API 화면에서 부르지 마라** — 위 `RUN_DETAIL_UNAVAILABLE` 참조. 지금 이 함수의
  * 정당한 호출처는 스냅샷 런만 다루는 자리(사건 조사 경로 · 실행 목록의 선택)뿐이다.
  *
+ * ⚠️ **사건 딥링크와 달리 경로형으로 남는다** — 그리고 그건 런 키 모양에 기대고 있다.
+ * CloudFront SPA fallback(`spa-rewrite.js`)은 마지막 경로 조각의 점(.)으로 정적 파일을
+ * 가르는데, `ops_pipeline_run.run_key` 는 `etf-daily:2026-08-03T15:40` 꼴(레인·콜론·날짜)이라
+ * 점이 없다. **원장이 그 불변식을 보증하지는 않는다** — 런 키에 점이 들 수 있게 되면(벤더 축이
+ * 붙는 등) 이 주소도 `incidentHref` 처럼 쿼리로 옮겨야 한다.
+ *
  * @param extra `focus`·`fromIncident` 처럼 조사 문맥을 실어 보내는 쿼리
  */
 export function runHref(runId: string, extra?: Record<string, string | undefined>): string {
@@ -259,5 +297,35 @@ export function runHref(runId: string, extra?: Record<string, string | undefined
   return `/ops/runs/${q(runId)}${qs ? `?${qs}` : ''}`;
 }
 
-/** 사건 상세 주소 — vid 가 사건의 식별자다(root 위반 id) */
-export const incidentHref = (v: Violation): string => `/ops/incidents/${encodeURIComponent(v.vid)}`;
+/**
+ * 사건 상세 주소 — vid 가 사건의 식별자다(root 위반 id).
+ *
+ * **경로가 아니라 쿼리다.** CloudFront 의 SPA fallback 은 마지막 경로 조각의 점(.)으로
+ * 정적 파일 여부를 가르는데(`spa-rewrite.js`), 대상 id 에 점이 든 사건이 있어 경로에 두면
+ * 공유 링크가 하드로드에서 죽는다. 쿼리스트링은 그 판별을 안 탄다.
+ */
+export const incidentHref = (v: Violation): string =>
+  `/ops/incidents/detail?vid=${q(v.vid)}`;
+
+/**
+ * 이 `vid` 를 담은 사건 — **뿌리든 흡수된 멤버든**.
+ *
+ * `incidents[]` 는 뿌리만 담는다. 그래서 `i.root.vid === vid` 만 보면, 인과 간선으로 흡수된
+ * 위반의 링크가 "그런 사건 없음"으로 떨어진다 — 그 위반은 **지금도 규칙에 걸려 있는데**.
+ * 어제 뿌리였던 vid 는 오늘 부모가 걸리면 멤버로 내려가므로, 어제 공유한 주소가 정확히 그
+ * 경로로 온다. 소비자마다 다시 짜면 한 곳만 빠뜨려도 그 화면에서만 사건이 사라진다.
+ *
+ * `member` 는 "찾긴 했는데 이 vid 가 뿌리가 아니다"라는 뜻이다 — 화면이 그 사실을 밝혀야
+ * 운영자가 "왜 다른 제목이 뜨지"를 묻지 않는다.
+ */
+export function incidentOfVid(
+  incidents: Incident[],
+  vid: string,
+): { incident: Incident; member: boolean } | null {
+  /* 빈 vid 를 따로 막지 않는다 — 아래 두 조회가 자연히 못 찾는다(`evaluate` 가 빈 축을
+   * `identity` 로 세우므로 vid 가 `''` 인 위반은 애초에 없다). 가드를 두면 "검증됐다"로 읽힌다. */
+  const root = incidents.find((i) => i.root.vid === vid);
+  if (root) return { incident: root, member: false };
+  const owner = incidents.find((i) => i.members.some((m) => m.v.vid === vid));
+  return owner ? { incident: owner, member: true } : null;
+}

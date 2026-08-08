@@ -245,7 +245,13 @@ function GapEvidence({
             </p>
             {/* 사건·실행·세션이 같은 원장 근거 화면을 쓴다 — 화면마다 원장 UI 를 만들지 않는다 */}
             <p className="t-xs m-0" style={{ marginTop: 6 }}>
-              <Link to={`/sources?dataset=${encodeURIComponent(s.dataset)}&date=${encodeURIComponent(date)}`}>
+              {/* 벤더(source_group)를 반드시 싣는다 — 세션 identity 는 `(dataset, sourceGroup, date)`
+                  라, 이 축을 버리면 원장 화면이 `ofDataset[0]` 으로 **남의 벤더 세션 행**
+                  (sessionId·phase·lease)을 아무 경고 없이 세운다. 사건 경로(`investigate`)는
+                  이미 싣고 있는데 여기가 두 번째 생산자였다. */}
+              <Link
+                to={`/sources?dataset=${encodeURIComponent(s.dataset)}&date=${encodeURIComponent(date)}&sourceGroup=${encodeURIComponent(s.sourceGroup)}`}
+              >
                 원장 근거 보기 →
               </Link>{' '}
               <span style={{ color: 'var(--fg-3)' }}>

@@ -8,21 +8,20 @@
 import { useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { BadgeTone } from 'ui-kit';
-import { evaluate } from '../../rules/evaluate';
+import { evaluate, runbookOf as lookupRunbook } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
+import type { AxisFetch } from './notRun';
+import { axisOf, minuteFacts } from './consoleFacts';
 import type {
   Evaluation,
   Facts,
   Incident,
-  MinuteFacts,
   RunbookEntry,
   Severity,
   Violation,
 } from '../../rules/types';
 import factsJson from '../../rules/facts-snapshot.json';
-import type { MinuteStatus } from '../../domains/sources';
 import { useMinuteStatus } from '../../domains/sources/hooks';
-import { datasetKind } from '../../domains/sources/minuteView';
 
 /* 스냅샷에는 규칙이 읽지 않는 표시 전용 축도 들어 있다.
  *
@@ -82,9 +81,9 @@ export const kst = (iso?: string | null): string =>
 /** 심각도 → 배지 톤. P0=차단, P1=주의, P2=중립 (ui-kit 시맨틱 그대로) */
 export const SEV_TONE: Record<Severity, BadgeTone> = { P0: 'blocked', P1: 'warn', P2: 'neutral' };
 
+/** 스냅샷 위의 런북 조회 — 키 공식은 규칙 층(`rules/evaluate`)이 한 벌만 갖는다 */
 export function runbookOf(v: Violation): RunbookEntry | undefined {
-  /* 키는 표시 문자열이 아니라 안정 식별자다 — target 을 사람이 읽을 문구로 바꿔도 런북이 끊기면 안 된다 */
-  return F.runbook[`${v.rule}.${v.targetId}`] ?? F.runbook[v.rule];
+  return lookupRunbook(F, v);
 }
 
 /**
@@ -129,33 +128,16 @@ export function domainOf(v: Violation): string {
  */
 export const OUT_OF_PIPELINE_DOMAINS = new Set(['테넌트 전달']);
 
-/**
- * API DTO → 규칙 사실. **규칙은 화면 도메인을 모른다** — 맞추는 일은 여기서 한 번만 한다.
- *
- * `deadJobs` 를 어디서 가져오는지가 이 어댑터의 유일한 판단이다: 뉴스 job 은 세션 연결 컬럼이
- * 없어 날짜 축 집계(`newsJobs`)이고 가격은 세션에 붙어 있다. 규칙은 그 사정을 모른 채
- * "이 데이터셋의 DEAD 수"만 받는다.
- */
-export function minuteFacts(s: MinuteStatus): MinuteFacts {
-  return {
-    date: s.date,
-    sessions: s.sessions.map((x) => ({
-      dataset: x.dataset,
-      phase: x.phase,
-      leaseExpired: x.leaseExpired,
-      overdueNoEvidence: x.windows.overdueNoEvidence,
-      deadJobs: (datasetKind(x.dataset) === 'news' ? s.newsJobs : x.priceJobs).dead,
-    })),
-  };
-}
-
 export interface ConsoleEvaluation extends Evaluation {
   /** 파이프라인·분석 소관 사건만. 전달 사건을 파이프라인 P0·심각도 합계에 섞지 않는다 */
   pipeline: Incident[];
   /** 범위 밖 사건 — 숨기지 않고 "여기 소관이 아니다"로 세어 보인다 */
   outOfScope: Incident[];
-  /** 실시간 축이 실렸는가. false 면 R17~R19 는 evaluated:false(못 돌았다)다 */
-  minuteLoaded: boolean;
+  /**
+   * 그 실시간 축을 **왜** 못 실었는가. `못 돎` 문장의 뜻이 여기 달려 있다 —
+   * 응답 대기·조회 실패를 "계측이 없다"로 그리면 운영자가 **API 장애를 미배선으로 읽는다**.
+   */
+  axisFetch: AxisFetch;
   /**
    * 이 평가에 실제로 쓴 사실. 조사 경로(`investigate`)도 **같은 사실**을 읽어야 한다 —
    * 정적 스냅샷으로 만들면 실시간 사건의 드릴다운이 세션 응답의 날짜가 아니라
@@ -175,7 +157,10 @@ export interface ConsoleEvaluation extends Evaluation {
  * 보면 목록엔 있는데 상세는 못 여는 사건이 생긴다.
  */
 export function useConsoleEvaluation(): ConsoleEvaluation {
-  const { data } = useMinuteStatus();
+  /* `isError` 를 같이 꺼내는 이유: 실시간 축 부재의 뜻이 셋이다 — 도착 전 · 조회 실패 ·
+   * (응답은 왔는데) 축이 없다. `data` 만 보면 셋이 한 문장으로 뭉쳐, 응답 대기와 API 장애가
+   * 화면에서 "계측 없음"과 구분되지 않는다. */
+  const { data, isError } = useMinuteStatus();
   return useMemo(() => {
     const facts: ConsoleFacts = data ? { ...F, minute: minuteFacts(data) } : F;
     const ev = evaluate(facts);
@@ -183,11 +168,14 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
       ...ev,
       pipeline: ev.incidents.filter((i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
       outOfScope: ev.incidents.filter((i) => OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
-      minuteLoaded: data != null,
+      axisFetch: axisOf(data != null, isError),
       facts,
     };
-  }, [data]);
+  }, [data, isError]);
 }
+
+/* 판정을 못 한 규칙을 묻는 헬퍼는 `./notRun` 에 있다 — **JSX 가 없는 모듈이라야
+ * `node --test` 가 import 한다.** 여기 두는 동안은 그 판단들의 변이가 하나도 안 잡혔다. */
 
 /* `DRILL_ROUTE`·`drillHref` 를 지웠다 (ALPHA-738 단계 3). 소비자가 0이었고, 살아나면
  * `run` 축 위반을 `/ops/runs?focus=…` 로 보내 실행 상세 링크 규약을 우회한다

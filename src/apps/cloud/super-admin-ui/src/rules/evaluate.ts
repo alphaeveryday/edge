@@ -4,7 +4,15 @@
  * 정렬: 심각도 → 연쇄 크기 → 대표 위반의 수치 (명세 §2-3).
  */
 import { EDGES, RULES } from './rules.ts';
-import type { Evaluation, Facts, Incident, RuleResult, Severity, Violation } from './types.ts';
+import type {
+  Evaluation,
+  Facts,
+  Incident,
+  RuleResult,
+  RunbookEntry,
+  Severity,
+  Violation,
+} from './types.ts';
 
 const SEV: Record<Severity, number> = { P0: 0, P1: 1, P2: 2 };
 
@@ -13,41 +21,113 @@ export function snapshotNow(f: Facts): Date {
   return new Date(f.meta.db);
 }
 
+/**
+ * 사건 식별자 — 위치가 아니라 **대상 + 시점 범위**가 정한다(`Violation.vid` 규약 참조).
+ * 같은 `task_key` 가 여러 런에 걸리므로 범위를 실어야 갈린다.
+ */
+function vidOf(rule: string, targetId: string, scope?: string): string {
+  return `${rule}:${targetId}` + (scope ? `@${scope}` : '');
+}
+
+/**
+ * `vid` 를 낸 규칙 id — **`vidOf` 의 역함수라 같은 파일에 둔다.**
+ *
+ * 소비자(화면이 딥링크의 규칙을 되찾는 자리)가 구분자를 자기 쪽에 다시 적으면, 여기 구분자를
+ * 바꾸는 순간 **조용히 아무것도 못 찾는다** — 그리고 화면은 "못 찾았다"를 "그 규칙은 돌았다"로
+ * 읽는다(거짓 음성). 둘을 붙여 두면 왕복 단언 하나가 그 표류를 잡는다.
+ *
+ * 규칙 id 에 `:` 가 없다는 것이 전제고 `rules.test.ts` 가 단언한다. 형태가 아니면 빈 문자열 —
+ * 호출자는 "모르는 식별자"로 갈라야지 "그 규칙은 돌았다"로 읽으면 안 된다.
+ */
+export function ruleOfVid(vid: string): string {
+  const i = vid.indexOf(':');
+  return i < 0 ? '' : vid.slice(0, i);
+}
+
+/**
+ * 런북 조회 — 대상 단위(`R05.LOAD_DOCUMENTS`) 우선, 없으면 규칙 단위 폴백.
+ *
+ * 키가 **`targetId` 만** 쓰는 것이 규약이다(시점 축 `scope` 는 안 들어간다) — 날짜가 섞이면
+ * 키가 매일 달라져 어떤 조치도 등록할 수 없다. 화면이 이 공식을 따로 적으면 그 복제본이 낡으므로
+ * 규칙 층에 한 벌만 둔다.
+ */
+export function runbookOf(f: Facts, v: Violation): RunbookEntry | undefined {
+  return f.runbook[`${v.rule}.${v.targetId}`] ?? f.runbook[v.rule];
+}
+
 export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
   const violations: Violation[] = [];
   const ruleResults: RuleResult[] = [];
 
   for (const R of RULES) {
-    const evaluated = R.canRun ? R.canRun(f) : true;
-    let count = 0;
+    let evaluated = R.canRun ? R.canRun(f) : true;
+    /** 사건 식별자가 위반을 못 가른 사유 — 있으면 이 규칙은 `못 돎` 이 된다 */
+    let collision: string | null = null;
+    /* 규칙 단위로 모았다가 마지막에 편입한다 — 충돌이 나면 이 규칙의 위반은 **하나도** 안 싣기
+     * 때문이다. 반쯤 실으면 어떤 사건이 빠졌는지 화면이 말할 수 없다. */
+    const mine: Violation[] = [];
     if (evaluated) {
       for (const raw of R.run(f, { now })) {
-        violations.push({
+        /* 규약: 표시용 target 과 키용 targetId 를 여기서 한 번만 정규화한다 —
+         * 소비자(런북 키·간선·조사 경로)가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다 */
+        const targetId = raw.targetId ?? raw.target;
+        /* 범위도 같은 규약으로 한 번만 정규화하고 **위반에 값으로 남긴다** — 계산만 하고 버리면
+         * 범위를 알아야 하는 소비자(리포트 조인 등)가 `scope ?? runId` 를 각자 다시 쓴다. */
+        const scope = raw.scope ?? raw.runId;
+        /* 빈 문자열은 '범위 없음'이 아니라 **망가진 사실**이다. `??` 는 통과시키고 아래 truthy
+         * 검사는 '없음'으로 읽어, 둘이 갈리면 범위 없는 vid 가 조용히 성립한다. 그 vid 는 같은
+         * 스냅샷 안에서 겹치지 않으면 안 잡히고, 내일 다른 런이 또 `''` 로 오면 어제 공유한
+         * 링크가 오늘 사건을 연다 — 충돌 검사로는 못 잡는 시간 축 충돌이다. */
+        /* 대상 축도 같은 구멍이다 — `targetId: ''` 는 `??` 를 통과해 `R13:` 이라는 정상처럼
+         * 보이는 vid 를 만든다. 위반이 하나면 충돌도 안 나 그대로 나간다. */
+        if (targetId === '' || scope === '') {
+          const axis = targetId === '' ? '대상 축(targetId)' : `범위 축(${targetId})`;
+          collision = `${R.id}: ${axis}이 빈 문자열이다 — '없음'과 구분되지 않아 사건 키를 못 만든다`;
+          break;
+        }
+        const vid = vidOf(R.id, targetId, scope);
+        /* 겹치면 이 규칙을 `못 돎` 으로 세운다. 뒤에 온 위반을 버리거나 번호를 붙여 비키면
+         * 위치 인덱스가 이름만 바꿔 되살아나므로 그 둘은 답이 아니다. 그렇다고 던지면 평가가
+         * 통째로 죽어 **나머지 18규칙의 사건까지 화면에서 사라진다** — 파이프라인이 깨진 날
+         * 콘솔이 통째로 오류 카드가 된다. vid 는 규칙 id 로 시작하니 충돌은 언제나 한 규칙
+         * 안에서만 나고(규칙 간 검사는 죽은 분기다), 그 규칙만 세우면 사유는 그대로 보이면서
+         * 나머지는 산다. */
+        if (mine.some((v) => v.vid === vid)) {
+          collision = `${R.id}: 사건 식별자 충돌 ${vid} — 대상 축이 이 위반들을 못 가른다(실어야 할 identity 축이 빠졌다)`;
+          break;
+        }
+        mine.push({
           ...raw,
-          /* 규약: 표시용 target 과 키용 targetId 를 여기서 한 번만 정규화한다 —
-           * 소비자(런북 키·간선·조사 경로)가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다 */
-          targetId: raw.targetId ?? raw.target,
+          targetId,
+          scope,
           rule: R.id,
           ruleName: R.name,
           layer: R.layer,
           kls: raw.kls ?? R.kls,
           sev: raw.sev ?? R.base,
           dep: R.dep,
-          vid: `${R.id}#${count}`,
+          vid,
         });
-        count++;
       }
     }
+    if (collision) {
+      /* 위반 0건이 아니라 **못 돎** 이다 — "봤고 괜찮다"와 같은 칸에 그리면 계약 위반이 정상으로 보인다 */
+      evaluated = false;
+      mine.length = 0;
+    }
+    violations.push(...mine);
     ruleResults.push({
       id: R.id,
       name: R.name,
       layer: R.layer,
       evaluated,
-      violations: count,
+      /* 못 돎의 종류를 **구조로** 낸다 — 화면이 문구를 파싱해 추측하면 새 사유가 생길 때마다
+       * 조용히 틀린 칸에 그린다. `identity` 는 계측 공백이 아니라 응답의 계약 위반이다. */
+      notRun: evaluated ? undefined : collision ? 'identity' : 'axis',
+      violations: mine.length,
       depends_on_mock:
-        evaluated &&
-        (violations.some((v) => v.rule === R.id && v.mock) || !!R.mockBacked?.(f)),
-      note: R.note?.(f) ?? R.dep,
+        evaluated && (mine.some((v) => v.mock) || !!R.mockBacked?.(f)),
+      note: collision ?? R.note?.(f) ?? R.dep,
     });
   }
 
@@ -101,11 +181,15 @@ export interface Report {
   as_of: { db: string; aws: string; trade_date: string };
   rules: RuleResult[];
   violations: {
+    /** 사건 키 — `incidents[].root`·`members[].vid`·`absorbed_into` 와 조인하는 축 */
+    vid: string;
     rule: string;
     /** 사람이 읽을 대상 */
     target: string;
-    /** 안정 식별자 — 런북 키·사건 키가 쓰는 축. `target` 과 같을 수 있다 */
+    /** 안정 식별자 — **런북 키**가 쓰는 축(시점이 없다). `target` 과 같을 수 있다 */
     target_id: string;
+    /** 시점 범위 — 배치는 런 키, 실시간은 세션 날짜. 없으면 범위 없는 대상이다 */
+    scope: string | null;
     severity: Severity;
     /** 세는 값. 양이 아닌 위반은 `null` 이고 판정은 `state` 에 있다 */
     metric: number | null;
@@ -123,14 +207,18 @@ export interface Report {
     root: string;
     severity: Severity;
     size: number;
-    /** `root` 가 키(`rule:targetId`)라 멤버도 같은 축으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다 */
-    members: { rule: string; target_id: string; cause: string }[];
+    /** `root` 가 사건 키(`vid`)라 **멤버도 같은 축**으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다.
+     *  `rule`·`target_id` 만 내던 때가 있었는데, 같은 작업이 두 런에 걸리면 멤버 두 줄이 글자
+     *  하나 안 틀리게 같아져 root 만 갈리고 멤버는 합쳐 보였다. */
+    members: { vid: string; rule: string; target_id: string; cause: string }[];
   }[];
 }
 
 export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
   const ev = evaluate(f, now);
-  const key = (v: Violation) => `${v.rule}:${v.targetId}`;
+  /* 사건 키는 화면과 같은 축(`vid`)이다 — 리포트가 자기 키를 따로 조립하면 런 축이 빠져
+   * 같은 작업의 다른 런이 한 사건으로 보인다(화면에서는 갈리는데 리포트에서만 합쳐진다) */
+  const key = (v: Violation) => v.vid;
   const absorbedInto = new Map<Violation, Violation>();
   for (const I of ev.incidents) for (const m of I.members) absorbedInto.set(m.v, I.root);
   const ruleSource = new Map(RULES.map((R) => [R.id, R.source]));
@@ -139,9 +227,11 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
     as_of: { db: f.meta.db, aws: f.meta.aws, trade_date: f.meta.today },
     rules: ev.rules,
     violations: ev.violations.map((v) => ({
+      vid: v.vid,
       rule: v.rule,
       target: v.target,
       target_id: v.targetId,
+      scope: v.scope ?? null,
       severity: v.sev,
       metric: v.metric,
       unit: v.unit ?? null,
@@ -158,7 +248,12 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
       root: key(I.root),
       severity: I.sev,
       size: I.size,
-      members: I.members.map((m) => ({ rule: m.v.rule, target_id: m.v.targetId, cause: m.why })),
+      members: I.members.map((m) => ({
+        vid: m.v.vid,
+        rule: m.v.rule,
+        target_id: m.v.targetId,
+        cause: m.why,
+      })),
     })),
   };
 }

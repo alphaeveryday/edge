@@ -23,6 +23,7 @@ import { useMinuteStatus, useSourceOverview } from '../../domains/sources/hooks'
 import { datasetKind, sessionHealth } from '../../domains/sources/minuteView';
 import { MOCK_MINUTE } from '../../mock/preview';
 import { F, Info, useConsoleEvaluation } from './shared';
+import { unevaluatedRules } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { METRICS } from './trendCatalog';
@@ -168,6 +169,7 @@ function nowItems(
   batchRunning: number,
   dataDefects: number,
   pipeline: Incident[],
+  unevaluated: number,
 ): NowItem[] {
   const p0 = pipeline.filter((i) => i.sev === 'P0').length;
   const p1 = pipeline.filter((i) => i.sev === 'P1').length;
@@ -175,8 +177,11 @@ function nowItems(
     {
       label: '즉시 확인할 문제',
       value: `P0 ${p0} · P1 ${p1}`,
-      tone: p0 > 0 ? 'blocked' : p1 > 0 ? 'warn' : 'active',
-      note: `파이프라인 문제 ${pipeline.length}건`,
+      /* 못 돈 규칙이 있으면 **초록을 쓰지 않는다** — 0 은 "괜찮다"가 아니라 "덜 봤다"다 */
+      tone: p0 > 0 ? 'blocked' : p1 > 0 ? 'warn' : unevaluated > 0 ? 'neutral' : 'active',
+      note:
+        `파이프라인 문제 ${pipeline.length}건` +
+        (unevaluated > 0 ? ` · 규칙 ${unevaluated}개는 판정 못 함` : ''),
       href: '/ops/incidents',
       cta: '문제',
     },
@@ -211,10 +216,12 @@ function NowStrip({
   sessions,
   batchRunning,
   pipeline,
+  unevaluated,
 }: {
   sessions: number;
   batchRunning: number;
   pipeline: Incident[];
+  unevaluated: number;
 }) {
   /* 데이터 결손·지연은 추이 지표의 판정을 그대로 센다 — 개요가 새 판정을 만들지 않는다 */
   const dataDefects = METRICS.filter(
@@ -231,7 +238,7 @@ function NowStrip({
       </div>
       <div className="card-pad">
         <ul className="ops-now">
-          {nowItems(sessions, batchRunning, dataDefects, pipeline).map((i) => (
+          {nowItems(sessions, batchRunning, dataDefects, pipeline, unevaluated).map((i) => (
             <li key={i.label}>
               <Link to={i.href} className="ops-now-item">
                 <span className="t-label">{i.label}</span>
@@ -256,7 +263,18 @@ function NowStrip({
  */
 const TOP_N = 3;
 
-function ImmediateAction({ list, total }: { list: Incident[]; total: number }) {
+function ImmediateAction({
+  list,
+  total,
+  unevaluated,
+}: {
+  list: Incident[];
+  total: number;
+  /* 판정을 못 한 규칙 수 — **"P0 0건"을 말하기 전에 물어야 하는 것**이다. 규칙이 못 돌면
+   * 그 규칙의 P0 는 이 목록에 애초에 오르지 않으므로, 0을 "지금 개입할 것이 없다"로
+   * 그리면 계측 공백·조회 실패가 초록으로 보인다. */
+  unevaluated: number;
+}) {
   const navigate = useNavigate();
   const top = list.slice(0, TOP_N);
   return (
@@ -271,7 +289,9 @@ function ImmediateAction({ list, total }: { list: Incident[]; total: number }) {
       <div className="card-pad">
         {list.length === 0 ? (
           <p className="t-sm m-0">
-            즉시 개입이 필요한 문제가 없습니다 — P0 0건.
+            {unevaluated === 0
+              ? '즉시 개입이 필요한 문제가 없습니다 — 규칙 전건이 판정했고 P0 0건입니다.'
+              : `판정한 규칙 중 P0 는 0건입니다 — 다만 규칙 ${unevaluated}개는 판정을 못 해 그 P0 는 걸렸는지조차 모릅니다.`}
           </p>
         ) : (
           <ul className="ops-p0-lines">
@@ -309,8 +329,10 @@ function ImmediateAction({ list, total }: { list: Incident[]; total: number }) {
 /* ══ 페이지 ══ */
 export function IncidentsPage() {
   /* 실시간 축이 실린 평가 — 사건 목록의 유일한 출처다(shared.useConsoleEvaluation) */
-  const { pipeline } = useConsoleEvaluation();
+  const ev = useConsoleEvaluation();
+  const { pipeline } = ev;
   const p0 = pipeline.filter((i) => i.sev === 'P0');
+  const unevaluated = unevaluatedRules(ev);
   const minute = useMinuteStatus();
   const overview = useSourceOverview();
   const sessions = minute.data?.sessions.length ?? 0;
@@ -326,8 +348,13 @@ export function IncidentsPage() {
         거래일 {F.meta.today} · DB {hm(F.meta.db)} · AWS/S3 {hm(F.meta.aws)}
       </p>
 
-      <NowStrip sessions={sessions} batchRunning={batchRunning} pipeline={pipeline} />
-      <ImmediateAction list={p0} total={pipeline.length} />
+      <NowStrip
+        sessions={sessions}
+        batchRunning={batchRunning}
+        pipeline={pipeline}
+        unevaluated={unevaluated.length}
+      />
+      <ImmediateAction list={p0} total={pipeline.length} unevaluated={unevaluated.length} />
       <RealtimeShortcut />
     </div>
   );

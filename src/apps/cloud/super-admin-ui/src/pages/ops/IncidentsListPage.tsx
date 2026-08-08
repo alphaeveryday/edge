@@ -22,6 +22,8 @@ import {
   useConsoleEvaluation,
   violationTip,
 } from './shared';
+import type { AxisFetch } from './notRun';
+import { notRunReason, unevaluatedRules } from './notRun';
 import { incidentHref } from './investigation';
 import '../../styles/ops.css';
 
@@ -37,6 +39,11 @@ const SCOPE_TIP = [
   '집계 범위 — 실행·작업 실패, 데이터 결손·신선도, 장중 수집 지연·무증거, 분석 생성 실패,',
   '원장·관측 불일치. 테넌트 전달·발번은 이 콘솔 소관이 아니라 개수에서 뺀다(룰은 그대로 돈다).',
   '',
+  '이 개수는 판정된 규칙에 한한 수다 — 못 돈 규칙의 사건은 걸렸는지 모르므로 세지 않는다.',
+  '못 돈 규칙은 위반을 하나도 안 내므로 그 사건이 이 콘솔 소관이었을지도 알 수 없다 —',
+  '옆의 "응답 결함으로 못 센 규칙"은 그래서 소관으로 좁힌 수가 아니다. 무엇이 못 돌았는지는',
+  '아래 규칙 목록이 줄마다 말한다.',
+  '',
   '정렬 — evaluate() 가 낸 순서 그대로다(심각도 → 연쇄 크기 → 대표 수치).',
   '단위가 다른 수치를 가로질러 비교하지 않으므로 같은 심각도 안의 위아래를 조치 우선순위로',
   '읽지 마라.',
@@ -48,8 +55,13 @@ export function IncidentsListPage() {
   const requested = params.get('severity');
   /* URL 이 선택 상태의 정본이다 — 새로고침·링크 공유가 같은 심각도를 연다. 기본은 P0. */
   const selected: Severity = isSeverity(requested) ? requested : 'P0';
-  const { pipeline, outOfScope, rules, minuteLoaded } = useConsoleEvaluation();
+  const ev = useConsoleEvaluation();
+  const { pipeline, outOfScope, rules } = ev;
   const list = pipeline.filter((i) => i.sev === selected);
+  /* 이 화면의 개수·빈 목록 문장은 **판정된 규칙에 한한 사실**이다. 못 돈 규칙이 있으면 개수는
+   * 하한이고 "없다"는 "모른다"가 된다 — 그걸 안 밝히면 계측 공백과 응답 결함이 정상으로 읽힌다. */
+  const unevaluated = unevaluatedRules(ev);
+  const badResponse = unevaluated.filter((r) => r.notRun === 'identity');
 
   /* 화면만 P0 로 떨어뜨리면 주소창이 거짓말을 한다(?severity=foo 인데 P0 를 보여줌).
    * 링크를 공유했을 때도 같은 상태가 열리도록 URL 을 정규화한다. */
@@ -74,6 +86,10 @@ export function IncidentsListPage() {
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         파이프라인 소관 문제 {pipeline.length}건
         {outOfScope.length > 0 && ` · 담당 범위 밖 ${outOfScope.length}건 제외`}
+        {/* 응답 결함은 "위반 0"이 아니라 "못 셌다"다 — 이 수에 안 들어간다는 사실을 수 옆에 둔다.
+            `못 돎`(계측 공백)은 평상시에도 0이 아니라 여기 세우면 소음이 되므로 ⓘ 와 규칙 목록이
+            맡는다. 여기 서는 것은 어제까진 없다가 오늘 생기는 것뿐이다. */}
+        {badResponse.length > 0 && ` · 응답 결함으로 못 센 규칙 ${badResponse.length}개`}
         <Info tip={SCOPE_TIP} label="집계 범위와 정렬" />
       </p>
 
@@ -113,7 +129,19 @@ export function IncidentsListPage() {
           <div className="card-pad">
             <p className="t-sm m-0">{selected} 로 걸린 사건이 없습니다.</p>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-              규칙이 이 심각도로 판정한 것이 오늘 없다는 뜻입니다 — 다른 심각도를 골라 보세요.
+              {/* "판정한 것이 없다"는 판정을 **한** 규칙에 대해서만 참이다. 못 돈 규칙이 있으면
+                  그 규칙의 사건은 심각도와 무관하게 이 목록에 아예 오르지 않는다 — 빈 목록을
+                  "오늘 조용하다"로 읽게 두면 계측 공백이 정상으로 보인다.
+                  ⚠️ 전체 규칙 수를 분모로 쓰지 않는다. 이 목록은 **소관 사건**만 담는데
+                  규칙 수는 범위 밖(R14 등)까지 세서, 그 규칙이 걸린 날 "걸린 것이 없다"가
+                  거짓이 된다 — 주장을 소관으로 좁히면 분모가 아예 필요 없다. */}
+              {`판정한 규칙 중 이 심각도로 걸린 소관 사건이 없다는 뜻입니다${
+                unevaluated.length > 0
+                  ? ` — 다만 규칙 ${unevaluated.length}개는 판정을 못 해${
+                      badResponse.length > 0 ? `(응답 결함 ${badResponse.length}개 포함)` : ''
+                    } 걸렸는지조차 모릅니다`
+                  : ''
+              }.${outOfScope.length > 0 ? ' 담당 범위 밖 사건은 맨 위 줄이 따로 셉니다.' : ''}`}
             </p>
           </div>
         ) : (
@@ -195,7 +223,7 @@ export function IncidentsListPage() {
         )}
       </div>
 
-      <RuleCatalog results={rules} minuteLoaded={minuteLoaded} />
+      <RuleCatalog results={rules} axisFetch={ev.axisFetch} />
 
     </div>
   );
@@ -215,13 +243,26 @@ const RULE_TIP = [
   '',
   '평가됨 · 위반 0 — 규칙이 돌았고 조건에 걸린 것이 없다.',
   '못 돎 — 그 규칙이 읽을 사실 축이 아예 없다. "괜찮다"가 아니라 "모른다"다.',
+  '응답 결함 — 축은 있었는데 응답이 사건을 못 가르게 줬다(식별자 충돌·빈 키). 계측 공백이',
+  '  아니라 계약 위반이고, 그 규칙의 위반은 하나도 안 실린다 — 사유는 그 줄이 그대로 말한다.',
   '',
   '실시간(R17~R19)은 세션 원장이 스냅샷이 아니라 API 응답이라, 그 응답이 오기 전에는 못 돈다.',
 ].join('\n');
 
-function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteLoaded: boolean }) {
+/** 실시간 축 상태 라벨 — `stale` 은 "실렸지만 낡았다"다(판정은 섰고 마지막 조회가 실패했다) */
+const AXIS_LABEL: Record<AxisFetch, string> = {
+  loaded: '실림',
+  stale: '실림 · 마지막 갱신 실패(판정이 낡았다)',
+  pending: '응답 대기',
+  error: '조회 실패',
+};
+
+function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch: AxisFetch }) {
   const meta = new Map(RULES.map((R) => [R.id, R]));
-  const notRun = results.filter((r) => !r.evaluated).length;
+  /* 두 종류를 한 숫자로 합치지 않는다 — 응답 결함(계약 위반)이 평상시에도 0 이 아닌
+     `못 돎`(계측 공백) 카운트에 섞이면 증분을 아무도 못 본다. */
+  const notRun = results.filter((r) => r.notRun === 'axis').length;
+  const badResponse = results.filter((r) => r.notRun === 'identity');
   /* 19행을 펼쳐 두면 정작 봐야 할 사건 카드가 화면 밖으로 밀린다 — 참조용이라 기본은 접는다.
      native <details> 를 쓴다: 열림 상태 관리도, 접근성 배선도 브라우저가 한다. */
   return (
@@ -229,8 +270,14 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
       <summary className="card-head">
         <span className="t-label">규칙 {results.length}개</span>
         {notRun > 0 && <StatusBadge tone="neutral">못 돎 {notRun}</StatusBadge>}
+        {badResponse.length > 0 && (
+          <StatusBadge tone="blocked">응답 결함 {badResponse.length}</StatusBadge>
+        )}
+        {/* 네 상태를 넷으로 그린다. 하나로 뭉치면 조회 실패가 계측 공백처럼 읽히고, `stale` 을
+            '조회 실패' 로 접으면 **판정은 섰는데(위반 N건) 축은 실패**라는 모순된 화면이 된다 —
+            그 사실("판정이 낡았다")이 이 상태를 만든 이유다. */}
         <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
-          실시간 축 {minuteLoaded ? '실림' : '없음'}
+          실시간 축 {AXIS_LABEL[axisFetch]}
         </span>
       </summary>
       <div className="card-pad" style={{ paddingBottom: 0 }}>
@@ -267,14 +314,25 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
                   <td>{R && <SourceChip source={R.source} />}</td>
                   {/* 위반 수를 따로 세우지 않는다 — 0 의 뜻("돌았고 걸린 게 없다")은 숫자가
                       아니라 문장이어야 하고, 옆 칸의 `못 돎`(모른다)과 갈라 읽혀야 한다.
-                      note 는 title 로 — 두 줄이 되면 19행의 높이가 들쭉날쭉해진다. */}
+                      note 는 title 로 — 두 줄이 되면 19행의 높이가 들쭉날쭉해진다.
+                      ⚠️ **응답 결함만은 본문으로 낸다.** 사유가 호버에만 있으면 이 표가 기본
+                      접힘이라 아무도 못 보고, 그 자리에 `R.dep` 를 그리면 "사실 축 부재"라는
+                      **거짓**이 선다 — 축은 멀쩡했고 응답이 사건을 못 가르게 준 것이다. */}
                   <td className="col-muted t-xs" title={r.note ?? undefined}>
-                    {r.evaluated
-                      ? r.violations > 0
-                        ? `위반 ${r.violations}건`
-                        : '조건에 걸린 것 없음'
-                      : `못 돎 — ${R?.dep ?? '사실 축 부재'}`}
-                    {r.note && ' *'}
+                    {r.evaluated ? (
+                      r.violations > 0 ? (
+                        `위반 ${r.violations}건`
+                      ) : (
+                        '조건에 걸린 것 없음'
+                      )
+                    ) : (
+                      <span style={r.notRun === 'identity' ? { color: 'var(--down)' } : undefined}>
+                        {notRunReason(r, axisFetch)}
+                      </span>
+                    )}
+                    {/* 못 돈 규칙의 `note` 도 있으면 표시한다 — `identity` 만 본문이 사유를
+                        이미 담으므로 그때만 뺀다(예전엔 못 돈 규칙 전부에서 사라졌다) */}
+                    {r.notRun !== 'identity' && r.note && ' *'}
                   </td>
                 </tr>
               );

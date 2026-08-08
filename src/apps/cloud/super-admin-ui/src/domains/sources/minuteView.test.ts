@@ -32,7 +32,9 @@ type SessionOverride = Omit<Partial<MinuteSession>, 'windows'> & {
 const session = (o: SessionOverride = {}): MinuteSession => ({
   sessionId: 's1',
   dataset: 'price_minute',
-  sourceGroup: 'KRX',
+  /* 어휘 정본(`states.py` `SOURCE_GROUPS_BY_DATASET`) — 어휘 밖 값을 쓰면 초록이
+   * 프로덕션 상태를 증명하지 못한다 */
+  sourceGroup: 'kis',
   phase: 'ACTIVE',
   universeVersion: 'v1',
   expectedWindowCount: 10,

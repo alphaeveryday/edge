@@ -7,7 +7,8 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildReport, evaluate } from './evaluate.ts';
+import { buildReport, evaluate, ruleOfVid, runbookOf } from './evaluate.ts';
+import { RULES } from './rules.ts';
 import type { Facts, MinuteSessionFact, RunFact, TaskFact, Violation } from './types.ts';
 
 const NOW = new Date('2026-08-03T16:21:00+09:00');
@@ -381,6 +382,7 @@ test('R16 경계 — max_retries=0 은 상한 0회가 아니라 정책 미선언
 
 const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
   dataset: 'price_minute',
+  sourceGroup: 'kis',
   phase: 'ACTIVE',
   leaseExpired: false,
   overdueNoEvidence: 0,
@@ -426,6 +428,39 @@ test('R18 무증거 창 — 임계 5창. 4창은 조용하고 5창부터 위반'
   assert.equal(v.length, 1);
   assert.equal(v[0].metric, 5);
   assert.equal(v[0].sev, 'P1');
+});
+
+test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 두 사건으로 서면 6건으로 읽힌다)', () => {
+  /* 뉴스 job 은 세션 연결 컬럼이 없어 `(dataset, date)` 집계 하나뿐이다. 벤더 축이 생기기 전에는
+   * 대상이 데이터셋이라 겹쳤는데, 벤더를 실으면서 **같은 사실이 벤더 수만큼 독립 사건**이 됐다.
+   * 값의 입도가 사건의 입도를 정한다는 규약을 여기서 못박는다. */
+  /* 오늘 뉴스 벤더는 `bigkinds` 하나다(`states.py` 의 `SOURCE_GROUPS_BY_DATASET`) — 이 단언이
+   * 지키는 것은 **벤더가 늘 때** 조용히 두 배로 세지 않는다는 불변식이다. */
+  const f = withMinute([
+    session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3, deadJobsByDate: true }),
+    session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3, deadJobsByDate: true }),
+  ]);
+  const vs = hits(f, 'R19');
+  assert.equal(vs.length, 1, '벤더마다 복제됐다 — DEAD 3건이 6건으로 읽힌다');
+  assert.equal(vs[0].targetId, 'news_minute', '벤더로 못 가르는 값에 벤더 대상을 붙였다');
+  assert.equal(vs[0].metric, 3);
+  /* 문구가 아니라 **주장의 방향**을 본다: 불가능("못 가른다")이 아니라 지금 응답의 한계로 말해야
+   * 한다 — 원장에는 축이 있다(`news_extraction_job.source_code`). 불가능으로 못박으면 아무도
+   * 그 쿼리를 고치지 않는다. */
+  assert.match(vs[0].why, /지금 응답이 날짜 축으로만/, '한계의 주체가 응답이 아니라 원장이 됐다');
+  assert.doesNotMatch(vs[0].why, /가르지 못한다/, '불가능으로 못박았다 — 원장에는 벤더 축이 있다');
+
+  /* 세션 축인 값(가격)은 그대로 벤더별로 갈린다 — 두 경로가 한 규칙 안에 있다 */
+  /* 가격은 {toss, kis} **교체 운용**이라 교체일에 같은 날짜의 세션이 둘이다 — 실제로 가능한
+   * 다벤더 상태이고, 그 값(priceJobs)은 세션 축이라 벤더별로 갈리는 게 맞다. */
+  const price = withMinute([
+    session({ dataset: 'price_minute', sourceGroup: 'kis', deadJobs: 2 }),
+    session({ dataset: 'price_minute', sourceGroup: 'toss', deadJobs: 1 }),
+  ]);
+  assert.deepEqual(hits(price, 'R19').map((v) => v.targetId), [
+    'price_minute/kis',
+    'price_minute/toss',
+  ]);
 });
 
 test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반', () => {
@@ -543,7 +578,7 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
   assert.ok(news, '뉴스 런 사건이 사라졌다 — 사건 키 축(targetId)이 바뀌었는지 본다');
   assert.equal(news.size, 8);
 
-  /* **런북 키 회귀 검출기.** 조회는 `${rule}.${targetId}`(shared.tsx) 인데 그걸 지키는 단언이
+  /* **런북 키 회귀 검출기.** 조회는 `${rule}.${targetId}`(`runbookOf`, rules/evaluate.ts) 인데 그걸 지키는 단언이
    * 룰 테스트에도 화면 테스트에도 없었다 — R07 의 `target` 을 사람이 읽을 문구로 다듬으면
    * 테스트는 전건 초록인 채 조치 칸만 조용히 `런북 미등록` 이 된다(리뷰가 변이로 실증).
    * 이 규약이 "target 은 라벨로 바꿔라"라는 압력을 새로 만들었으므로 그 자리에 가드를 둔다.
@@ -571,4 +606,212 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
     'R11.price-explanation-realtime',
     'R16.ASSEMBLE_EVENTS',
   ]);
+});
+
+/* ── 사건 식별자(vid) — 위치가 아니라 대상 × 시점 (ALPHA-738 단계 4 선행) ──────────
+ * 이 절이 지키는 의도: **정적 스냅샷이 가리고 있던 것**을 픽스처로 드러낸다. 스냅샷은 위반
+ * 집합이 안 바뀌고(→ 위치 인덱스 표류를 못 보여준다), 같은 task_key 가 여러 런에 걸린 경우가
+ * 없고(→ 키 충돌을 못 보여준다), minute 축이 아예 없다. 실 응답에서는 날마다 반복된다. */
+
+test('vid — 앞 위반이 해소돼도 뒤 위반의 사건 식별자는 그대로다', () => {
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'A', task_outcome: 'FAILED' }),
+    task({ task_key: 'B', task_outcome: 'FAILED' }),
+  ];
+  const before = hits(f, 'R05').find((v) => v.targetId === 'B')!.vid;
+
+  // A 만 해소됐다 — B 에 관한 사실은 아무것도 안 변했다
+  f.tasks = [task({ task_key: 'B', task_outcome: 'FAILED' })];
+  const after = hits(f, 'R05')[0].vid;
+
+  assert.equal(after, before, '앞 위반이 사라지자 B 의 딥링크가 다른 사건을 가리키게 됐다');
+});
+
+test('vid — 같은 작업 키가 두 런에 걸려도 사건이 갈린다 (런까지 실어야 갈린다)', () => {
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:00', task_outcome: 'FAILED' }),
+    task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:30', task_outcome: 'FAILED' }),
+  ];
+  /* 개수만 세면 순번으로 갈려도 통과한다 — 무엇으로 갈렸는지를 값으로 못박는다 */
+  assert.deepEqual(
+    hits(f, 'R05').map((v) => v.vid),
+    [
+      'R05:LOAD_DOCUMENTS@news:2026-08-03T15:00',
+      'R05:LOAD_DOCUMENTS@news:2026-08-03T15:30',
+    ],
+  );
+});
+
+test('규칙 id 는 유일하다 — 충돌 검사를 규칙 안으로 좁힌 근거이고, 화면이 vid→규칙을 되찾는 축이다', () => {
+  /* 이 단언이 없으면 두 곳이 조용히 무너진다. (1) 평가기가 vid 충돌을 **규칙 단위**로만 본다
+   * (규칙 간 `seen` 을 지운 논거가 "vid 는 규칙 id 로 시작한다"였다). (2) 화면이
+   * `ruleOfVid(vid)` 로 규칙 id 를 잘라 되찾는다(`pages/ops/notRun.ts` 의 `unevaluatedFor`).
+   * id 가 겹치면 전자는 충돌을 못 잡고 후자는 남의 규칙 사유를 그린다. */
+  assert.equal(new Set(RULES.map((R) => R.id)).size, RULES.length, '규칙 id 가 겹친다');
+  /* 유일성만으로는 접두사 논거가 안 선다: id 에 구분자가 들어가면 `A:` + `t` 가 `B:` + `t'` 와
+   * 같아질 수 있다(A='R1', B='R1:x'). 구분자를 안 쓰는 것이 그 가정의 나머지 절반이다. */
+  assert.ok(
+    RULES.every((R) => !R.id.includes(':')),
+    '규칙 id 에 vid 구분자(:)가 들어갔다 — 규칙 접두사가 서로 갈리지 않는다',
+  );
+});
+
+test('실시간 축을 읽는 규칙과 `axis: minute` 표기 집합이 같다 (손으로 붙이는 표기는 반드시 낡는다)', () => {
+  /* 화면은 `axis === 'minute'` 인 규칙에만 조회 상태(대기·실패)를 사유로 붙인다. 그 표기가
+   * 규칙마다 손으로 붙는 값이면, 새 실시간 규칙이나 리팩터가 한 줄을 빠뜨리는 순간 그 규칙이
+   * **API 장애를 "사실 축 부재"로** 말한다 — 고쳤던 오독의 원상복귀다. 표기와 실제 의존을
+   * 집합으로 대조해 그 표류를 잡는다(개별 규칙 이름을 하드코딩하면 그 규칙만 지켜진다). */
+  const withoutMinute = emptyFacts();
+  const withMinuteAxis: Facts = {
+    ...emptyFacts(),
+    minute: { date: '2026-08-03', sessions: [session({})] },
+  };
+  const readsMinute = RULES.filter(
+    (R) => R.canRun != null && !R.canRun(withoutMinute) && R.canRun(withMinuteAxis),
+  ).map((R) => R.id);
+  const marked = RULES.filter((R) => R.axis === 'minute').map((R) => R.id);
+  assert.deepEqual(marked, readsMinute, '실시간 축 표기와 실제 의존이 어긋난다');
+  assert.ok(readsMinute.length >= 3, '실시간 규칙을 하나도 못 찾았다 — 픽스처가 축을 안 채운다');
+});
+
+test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수 있다 (소비자가 구분자를 다시 적지 않는다)', () => {
+  /* 이 단언이 없으면 `vidOf` 의 구분자를 바꿔도 154개가 전부 초록이다. 그 사이 화면의
+   * `unevaluatedFor` 는 **영원히 아무것도 못 찾고**, 못 찾은 것을 "그 규칙은 돌았다(해소)"로
+   * 그린다 — 아무것도 안 깨지면서 거짓 음성만 나가는 모양이다. 생산자·소비자를 여기서 묶는다. */
+  const f = emptyFacts();
+  f.runs = [run({ id: 'news:2026-08-03T15:30', ledger_status: 'TIMED_OUT' })]; // 대상에 콜론
+  f.tasks = [task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:30', task_outcome: 'FAILED' })];
+  f.outputs = [{ id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' }]; // 대상에 점
+  f.minute = {
+    date: '2026-08-03',
+    sessions: [
+      session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }), // 슬래시 + @범위
+    ],
+  };
+
+  const vs = evaluate(f, NOW).violations;
+  assert.ok(vs.length >= 4, '왕복을 재려면 여러 축의 vid 가 있어야 한다');
+  for (const v of vs) {
+    assert.equal(ruleOfVid(v.vid), v.rule, `되찾기 실패: ${v.vid}`);
+  }
+  /* vid 가 아닌 문자열은 규칙 id 를 주지 않는다 — 호출자가 "모르는 식별자"로 갈라야 한다 */
+  assert.equal(ruleOfVid('R17'), '');
+  assert.equal(ruleOfVid(''), '');
+});
+
+test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 산다', () => {
+  /* 도달 경로를 **제약 없는 축**에서 고른다. `tasks` 의 중복은 원장이 막는다
+   * (`uq_ops_expected_task_run_key UNIQUE (pipeline_run_id, task_key)`) — 거기서 재현하면
+   * DB 가 이미 막는 것을 테스트하는 셈이다. `outputs` 는 엔드포인트가 조립하는 축이라
+   * 유일성을 보증하는 제약이 없다(`datasets`·`chain.stages` 도 같다). */
+  const f = emptyFacts();
+  f.outputs = [
+    { id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' },
+    { id: 'o.pub', label: '게시(중복 행)', today: 20, base: 100, unit: '건' },
+  ];
+  /* 다른 규칙이 낼 위반 — 충돌한 규칙 때문에 **이게 사라지면 안 된다**. 던져서 평가를 통째로
+   * 죽이면 파이프라인이 깨진 날 콘솔이 오류 카드 하나가 되고, 정작 볼 사건이 전부 없어진다. */
+  f.runs = [run({ id: 'dead', ledger_status: 'TIMED_OUT' })];
+
+  const rep = buildReport(f, NOW);
+  const r13 = rep.rules.find((r) => r.id === 'R13')!;
+  /* 위반 0건이 아니라 **못 돎** 이다 — 뒤엣것을 버리거나 번호를 붙여 비키면 위치 인덱스가
+   * 이름만 바꿔 되살아나므로 그 둘은 답이 아니다. */
+  assert.equal(r13.evaluated, false);
+  assert.equal(r13.violations, 0);
+  /* **못 돎의 종류를 구조로 낸다.** 화면이 문구를 파싱하게 두면 안 되고, 무엇보다 이건
+   * 계측 공백(`axis`)이 아니라 **응답의 계약 위반**이다 — 같은 칸에 그리면 "아직 계측이
+   * 없구나"로 읽힌다(계약 §「배선 시 함께」가 막으려던 오독이 한 층 아래로 옮겨간다).
+   * 화면은 이 필드로 갈라 그리고, 사유는 호버가 아니라 본문으로 낸다. */
+  assert.equal(r13.notRun, 'identity');
+  assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.pub/);
+  /* 계측 부재는 같은 `evaluated:false` 여도 종류가 다르다 — 둘이 구분되지 않으면 이 필드가 무의미하다 */
+  assert.equal(rep.rules.find((r) => r.id === 'R17')!.notRun, 'axis'); // minute 축 부재
+  /* 충돌한 규칙의 위반은 하나도 안 실린다 — 반쯤 실으면 무엇이 빠졌는지 화면이 못 말한다 */
+  assert.equal(rep.violations.filter((v) => v.rule === 'R13').length, 0);
+  // 나머지는 그대로 산다
+  assert.deepEqual(rep.violations.filter((v) => v.rule === 'R04').map((v) => v.target), ['dead']);
+});
+
+test('범위가 빈 문자열이면 위반 하나만으로도 못 돎이다 (충돌해야 잡히면 시간 축 표류를 놓친다)', () => {
+  /* `TaskFact.run_id` 는 `string` 필수라 `''` 가 타입상 합법이다. `??` 는 `''` 를 통과시키는데
+   * vid 조립의 truthy 검사는 '없음'으로 읽는다 — 가드와 사용처가 falsy 를 다르게 읽는 자리다.
+   *
+   * ⚠️ 이걸 **충돌 검사에 맡기면 안 된다**. 위반이 하나뿐이면 겹치지 않아 `R05:T` 라는 정상처럼
+   * 보이는 vid 가 나가고, 내일 다른 런이 또 `''` 로 오면 어제 공유한 링크가 오늘 사건을 연다 —
+   * 한 스냅샷 안 충돌이 아니라 **시간 축을 가로지르는** 충돌이라 `seen` 이 영원히 못 잡는다.
+   * 그래서 모양 검사여야 한다: 위반 **하나**로 재현한다. */
+  const f = emptyFacts();
+  f.tasks = [task({ task_key: 'T', run_id: '', task_outcome: 'FAILED' })];
+  const r05 = buildReport(f, NOW).rules.find((r) => r.id === 'R05')!;
+  assert.equal(r05.evaluated, false, '빈 범위가 정상 vid 로 통과했다 — 내일 다른 런과 겹친다');
+  assert.equal(r05.notRun, 'identity');
+  assert.match(r05.note ?? '', /빈 문자열/);
+});
+
+test('대상 축이 빈 문자열이어도 못 돎이다 (사건 키의 나머지 절반에 같은 구멍이 있었다)', () => {
+  /* `targetId: ''` 는 `??` 를 통과해 `R13:` 이라는 정상처럼 보이는 vid 를 만든다. 범위 축만
+   * 막으면 같은 뿌리의 구멍이 대상 축에 그대로 남는다 — 위반이 하나면 충돌도 안 난다. */
+  const f = emptyFacts();
+  f.outputs = [{ id: '', label: '게시', today: 10, base: 100, unit: '건' }];
+  const r13 = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
+  assert.equal(r13.evaluated, false, '빈 대상 축이 정상 vid 로 통과했다');
+  assert.equal(r13.notRun, 'identity');
+  assert.match(r13.note ?? '', /대상 축/);
+});
+
+test('리포트 — 사건 키 축이 root·members·violations 에서 같다 (한쪽만 바꾸면 조인이 끊긴다)', () => {
+  /* `root` 만 vid 로 올리고 `members` 를 `{rule, target_id}` 로 두면, 같은 작업이 두 런에
+   * 걸린 날 멤버 두 줄이 **글자 하나 안 틀리게 같아진다** — root 만 갈리고 멤버는 합쳐 보인다.
+   * 그게 이 변경이 없애려던 상황이다. */
+  const f = emptyFacts();
+  const runId = 'news:2026-08-03T15:30';
+  f.runs = [run({ id: runId, lane: 'news', ledger_status: 'TIMED_OUT' })];
+  f.tasks = [task({ task_key: 'LOAD_DOCUMENTS', run_id: runId, task_outcome: 'FAILED' })];
+
+  const rep = buildReport(f, NOW);
+  const inc = rep.incidents.find((i) => i.members.length > 0)!;
+  const member = inc.members[0];
+  assert.equal(member.vid, `R05:LOAD_DOCUMENTS@${runId}`);
+  /* 멤버 vid 로 위반 행을 실제로 찾을 수 있어야 한다 — 조인이 성립하는지가 계약이다 */
+  const joined = rep.violations.find((v) => v.vid === member.vid);
+  assert.ok(joined, '멤버 vid 로 위반 행을 못 찾는다 — 리포트 안에서 조인이 끊겼다');
+  assert.equal(joined.absorbed_into, inc.root);
+  /* 범위를 값으로도 낸다 — 소비자가 `scope ?? run_id` 를 다시 조립하지 않아야 한다 */
+  assert.equal(joined.scope, runId);
+});
+
+test('R17 — 같은 데이터셋이라도 벤더가 다르면 다른 세션이다 (sourceGroup 을 버리면 겹친다)', () => {
+  /* 실제로 가능한 다벤더 상태는 **가격 레인 교체일**이다 — `price_minute` = {toss, kis} 이고
+   * 교체 운용이라 바꾸는 날 같은 날짜에 두 세션 행이 남는다(`states.py` 어휘 정본). */
+  const f = withMinute([
+    session({ dataset: 'price_minute', sourceGroup: 'kis', leaseExpired: true }),
+    session({ dataset: 'price_minute', sourceGroup: 'toss', leaseExpired: true }),
+  ]);
+  assert.deepEqual(
+    hits(f, 'R17').map((v) => v.vid),
+    ['R17:price_minute/kis@2026-08-03', 'R17:price_minute/toss@2026-08-03'],
+  );
+});
+
+test('R17 — 런북 키에는 날짜가 없다 (날짜가 섞이면 어떤 조치도 등록 못 한다)', () => {
+  /* 런북은 "이 대상이 고장나면 이렇게 조치한다"라 날짜와 무관하다. 세션 identity 의 날짜를
+   * `targetId` 에 넣으면 키(`${rule}.${targetId}`)가 매일 달라져 **영구히 매칭 불가**가 된다.
+   * 그래서 날짜는 `scope`(사건 키 전용)로 가고 `targetId` 는 대상만 담는다. */
+  const f = withMinute([session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true })]);
+  const v = hits(f, 'R17')[0];
+  assert.equal(v.targetId, 'news_minute/bigkinds');
+  assert.doesNotMatch(v.targetId, /\d{4}-\d{2}-\d{2}/, 'targetId 에 날짜가 들어갔다 — 런북 키가 매일 바뀐다');
+  /* 그리고 그 키로 등록한 런북이 실제로 잡혀야 한다 — 부재 검사만으로는 폴백에 가려진다 */
+  f.runbook = { 'R17.news_minute/bigkinds': { cmd: 'restart-session bigkinds' } };
+  assert.equal(runbookOf(f, hits(f, 'R17')[0])?.cmd, 'restart-session bigkinds');
+});
+
+test('R17 — 사건 키는 날짜에 고정된다 (어제 공유한 링크가 오늘 세션을 열면 안 된다)', () => {
+  const d1 = withMinute([session({ leaseExpired: true })]);
+  const d2 = withMinute([session({ leaseExpired: true })]);
+  d2.minute!.date = '2026-08-04';
+  assert.notEqual(hits(d1, 'R17')[0].vid, hits(d2, 'R17')[0].vid);
 });

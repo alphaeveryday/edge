@@ -19,6 +19,7 @@ import { datasetKind, gapRuns, liveness, segments } from '../domains/sources/min
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_MINUTE, MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
+import { incidentHref, incidentOfVid } from './ops/investigation';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
@@ -474,7 +475,8 @@ function LedgerCrumb({
   report?: SourceReport;
 }) {
   const { incidents } = useConsoleEvaluation();
-  const incident = incidentId ? incidents.find((i) => i.root.vid === incidentId) : undefined;
+  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다 */
+  const incident = incidentId ? (incidentOfVid(incidents, incidentId)?.incident ?? undefined) : undefined;
   const runFound = report?.run?.runKey === runKey;
   const taskFound = task !== undefined && (report?.tasks.some((t) => t.taskKey === task) ?? false);
   const crumbs: React.ReactNode[] = [];
@@ -483,7 +485,7 @@ function LedgerCrumb({
     crumbs.push(<Link key="list" to="/ops/incidents">문제·사건</Link>);
     crumbs.push(
       incident ? (
-        <Link key="inc" to={`/ops/incidents/${encodeURIComponent(incidentId)}`}>
+        <Link key="inc" to={incidentHref(incident.root)}>
           {incident.root.title}
         </Link>
       ) : (
@@ -594,25 +596,85 @@ function LedgerNoContext() {
 /**
  * 실시간 세션의 원장 근거 — ops 원장이 아니라 `minute_ingestion_*` 이 답하는 문맥이다.
  * 같은 화면·같은 문맥 규약을 쓰되 조회하는 원장이 다르다는 사실을 그대로 밝힌다.
+ *
+ * `sourceGroup` 이 문맥에 있으면 그걸로 좁힌다. 세션 identity 는 `(dataset, sourceGroup, date)`
+ * 라 데이터셋만으로 고르면 벤더가 다른 세션 행(sessionId·phase·lease)이 아무 경고 없이 선다 —
+ * 사건은 벤더로 갈렸는데 근거는 남의 것을 보여주는 셈이다.
+ *
+ * ⚠️ **목 폴백 판정은 데이터셋 축으로만 한다.** 벤더까지 넣어 `real` 을 재면, 실 응답에
+ * 그 벤더가 없을 때 목으로 떨어져 **목 세션의 sessionId·phase·lease** 가 서거나 "세션이
+ * 계획되지 않았다는 사실입니다"라는 거짓 단언이 난다. 좁힘은 view 를 고른 **뒤에** 한다.
  */
-function RealtimeLedger({ dataset, date }: { dataset: string; date?: string }) {
+function RealtimeLedger({
+  dataset,
+  date,
+  sourceGroup,
+}: {
+  dataset: string;
+  date?: string;
+  sourceGroup?: string;
+}) {
   const { data, isPending, isError, error } = useMinuteStatus(date, true);
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
   const real = data.sessions.some((s) => s.dataset === dataset);
   const view = real ? data : MOCK_MINUTE;
-  const session = view.sessions.find((s) => s.dataset === dataset);
+  const ofDataset = view.sessions.filter((s) => s.dataset === dataset);
+  /* 벤더가 문맥에 없는데 후보가 둘 이상이면 **고르지 않는다.** 예전엔 조용히 `[0]` 을 집어,
+   * 손으로 친 주소나 벤더를 빠뜨린 링크가 남의 세션 행(sessionId·phase·lease)을 근거처럼
+   * 세웠다. 생산자마다 주석을 다는 것보다 소비자 한 곳에서 막는 게 짧다. */
+  const ambiguous = !sourceGroup && ofDataset.length > 1;
+  const session = sourceGroup
+    ? ofDataset.find((s) => s.sourceGroup === sourceGroup)
+    : ambiguous
+      ? undefined
+      : ofDataset[0];
   const kindLabel = datasetKind(dataset) === 'news' ? 'poll' : '창';
 
   if (!session) {
     return (
       <div className="card card-pad">
-        <p className="t-sm m-0">이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</p>
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          세션이 계획되지 않았다는 사실입니다(비거래일 · 미가동 · 레인 미편입) — 다른 날짜나 다른
-          데이터셋의 세션으로 대체하지 않습니다.
+        <p className="t-sm m-0">
+          {ambiguous ? (
+            <>어느 <span className="mono">{dataset}</span> 세션인지 문맥이 없습니다.</>
+          ) : (
+            <>이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</>
+          )}
         </p>
+        {ambiguous && (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            이 날짜에 세션이 {ofDataset.length}개입니다 — 아무거나 골라 근거로 세우지 않습니다.
+            벤더를 고르세요:{' '}
+            {ofDataset.map((s, i) => (
+              <span key={s.sourceGroup}>
+                {i > 0 && ' · '}
+                <Link
+                  to={`/sources?dataset=${encodeURIComponent(dataset)}${date ? `&date=${encodeURIComponent(date)}` : ''}&sourceGroup=${encodeURIComponent(s.sourceGroup)}`}
+                  className="mono"
+                >
+                  {s.sourceGroup}
+                </Link>
+              </span>
+            ))}
+          </p>
+        )}
+        {/* 부재 문장은 **고를 수 없는 게 아니라 없는** 경우에만 쓴다(위 갈래와 배타다) */}
+        {!ambiguous && (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            {/* ⚠️ **부재는 `real` 로만 가른다.** 목 폴백일 때 `ofDataset` 은 목의 행이라, 그걸로
+                 "이 데이터셋의 세션은 있다"를 말하면 실 응답엔 없는 세션의 존재를 단언하게 된다.
+                 `ofDataset.length > 0` 를 같이 묻지 않는 이유: `real` 이면 `view === data` 라
+                 그 필터가 반드시 하나 이상을 낸다 — 둘을 묶으면 죽은 항이 조건처럼 보인다. */}
+            {real
+              ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
+                   벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
+                `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`
+              : /* 어느 응답의 부재인지 밝힌다 — 이 화면의 나머지 카드는 지금 목 미리보기를 그리고
+                   있어서, 밝히지 않으면 목이 말한 부재로 읽힌다. */
+                '실 응답에 이 데이터셋의 세션 행이 없습니다 — 계획되지 않았다는 뜻입니다(비거래일 · 미가동 · 레인 미편입). 다른 날짜나 다른 데이터셋의 세션으로 대체하지 않습니다.'}
+          </p>
+        )}
       </div>
     );
   }
@@ -765,6 +827,7 @@ export function SourcesPage() {
   const incidentId = searchParams.get('incident')?.trim() || undefined;
   const dataset = searchParams.get('dataset')?.trim() || undefined;
   const date = searchParams.get('date')?.trim() || undefined;
+  const sourceGroup = searchParams.get('sourceGroup')?.trim() || undefined;
 
   const realtime = dataset !== undefined && REALTIME_DATASETS.has(dataset) && runKey === undefined;
   /* 문맥이 하나도 없으면 조회 자체를 하지 않는다 — 전체 덤프를 만들지 않기 위해서다 */
@@ -782,6 +845,7 @@ export function SourcesPage() {
     ...(focusTask ? ([['작업(task_key)', focusTask]] as [string, string][]) : []),
     ...(dataset ? ([['데이터셋', dataset]] as [string, string][]) : []),
     ...(date ? ([['세션 날짜', date]] as [string, string][]) : []),
+    ...(sourceGroup ? ([['벤더(source_group)', sourceGroup]] as [string, string][]) : []),
   ];
 
   /* 실시간 문맥 — ops 원장이 아니라 minute 원장이 답한다 */
@@ -790,7 +854,7 @@ export function SourcesPage() {
       <div className="flex flex-col gap-4">
         <LedgerCrumb incidentId={incidentId} dataset={dataset} date={date} />
         <LedgerScope rows={[...scope, ['원장', 'minute_ingestion_session · minute_ingestion_window']]} />
-        <RealtimeLedger dataset={dataset!} date={date} />
+        <RealtimeLedger dataset={dataset!} date={date} sourceGroup={sourceGroup} />
       </div>
     );
   }
