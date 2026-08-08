@@ -299,3 +299,94 @@ class TestRunGate:
             session_date=today, max_ticks=None,
         )
         assert code == 0
+
+    def test_bounded_는_개장_전에_기다리지_않는다(self, monkeypatch, tmp_path):
+        """확인 명령(`--max-ticks 3`)은 즉답이어야 한다 — 개장 전이라고 기다리면
+        README 의 확인이 장 시작까지 멈춰 선다. 그리고 exit 1 이라야 "한 window 도
+        못 봤다"가 초록으로 안 지나간다."""
+        today = datetime.now(KST).date().isoformat()
+        code, reached = self._run(
+            monkeypatch, tmp_path,
+            skip_reason="before market open (KST 07:45 < 09:00)", session_date=today,
+        )
+        assert reached == []
+        assert code == 1
+
+    def test_상주_모드는_개장_전에_종료하지_않고_기다린다(self, monkeypatch, tmp_path):
+        """⭐ start-minute-session 은 07:45 에 올리는데(가격 레인 시간외 첫 window 08:00)
+        iNAV 하한은 09:00 이다. 여기서 종료하면 ECS 가 desired 1 을 유지해 개장까지
+        ~75분 재기동 루프를 돈다 — ECS 백오프가 첫 정상 기동을 09:00 뒤로 밀 수 있고
+        iNAV window 는 소급이 불가라 그만큼 영구 결손이다.
+
+        기다린 **뒤에는 실제로 수집 경로로 들어가야** 한다 — 그냥 안 죽고 도는 것은
+        재기동 루프와 증상만 다르고 결과가 같다."""
+        import data_pipeline.minute.worker as module
+        import data_pipeline.sources.kis_inav as kis_inav
+
+        today = datetime.now(KST).date().isoformat()
+        reasons = ["before market open (KST 07:45 < 09:00)",
+                   "before market open (KST 08:30 < 09:00)",
+                   None]
+
+        class StubSource:
+            def __init__(self, *a, **k):
+                self.interval_sec = 60
+
+            @property
+            def skip_reason(self):
+                return reasons.pop(0) if len(reasons) > 1 else reasons[0]
+
+        slept = []
+        reached = []
+
+        def _ledger(**kwargs):
+            reached.append(1)
+            raise AssertionError("게이트를 지나 수집 경로에 도달했다")
+
+        monkeypatch.setattr(kis_inav, "KisInavSource", StubSource)
+        monkeypatch.setattr(module, "MinuteLedger", _ledger)
+        import time as _time
+        monkeypatch.setattr(_time, "sleep", lambda s: slept.append(s))
+        universe_file = tmp_path / "u.json"
+        universe_file.write_text(UNIVERSE.model_dump_json(), encoding="utf-8")
+
+        import pytest
+        with pytest.raises(AssertionError, match="수집 경로에 도달"):
+            module.inav_worker_cli(
+                self._settings(), session_date=today,
+                universe=str(universe_file), max_ticks=None,
+            )
+
+        assert reached == [1], "개장 뒤엔 대기를 끝내고 수집으로 들어가야 한다"
+        assert slept == [20, 20], "개장 전 관측마다 tick_seconds 만큼 잔다(종료가 아니라)"
+
+    def test_대기_중_비거래일로_바뀌면_종료한다(self, monkeypatch, tmp_path):
+        """자정을 넘겨 날짜가 바뀌는 경우다 — 기다려도 안 열리는 사유로 바뀌면 빠져나와야
+        한다. 접두어만 보고 무조건 계속 자면 그 컨테이너는 영원히 안 죽는다."""
+        import data_pipeline.minute.worker as module
+        import data_pipeline.sources.kis_inav as kis_inav
+
+        today = datetime.now(KST).date().isoformat()
+        reasons = ["before market open (KST 23:59 < 09:00)", "non-trading day (KST ...)"]
+
+        class StubSource:
+            def __init__(self, *a, **k):
+                self.interval_sec = 60
+
+            @property
+            def skip_reason(self):
+                return reasons.pop(0) if len(reasons) > 1 else reasons[0]
+
+        monkeypatch.setattr(kis_inav, "KisInavSource", StubSource)
+        monkeypatch.setattr(module, "MinuteLedger",
+                            lambda **k: (_ for _ in ()).throw(AssertionError("도달하면 안 된다")))
+        import time as _time
+        monkeypatch.setattr(_time, "sleep", lambda s: None)
+        universe_file = tmp_path / "u.json"
+        universe_file.write_text(UNIVERSE.model_dump_json(), encoding="utf-8")
+
+        code = module.inav_worker_cli(
+            self._settings(), session_date=today,
+            universe=str(universe_file), max_ticks=None,
+        )
+        assert code == 0
