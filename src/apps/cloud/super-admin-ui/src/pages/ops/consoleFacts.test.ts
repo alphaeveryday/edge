@@ -33,21 +33,35 @@ const status = (sessions: MinuteStatus['sessions'], newsDead = 0): MinuteStatus 
   ({ date: '2026-08-03', sessions, newsJobs: JOBS(newsDead) }) as unknown as MinuteStatus;
 
 test('세션 identity 의 두 축을 다 옮긴다 — 벤더를 버리면 사건 키가 겹쳐 딥링크가 남의 세션을 연다', () => {
-  const f = minuteFacts(
-    status([session('news_minute', 'bigkinds'), session('news_minute', 'naver')]),
-  );
+  /* 어휘 정본은 `data_pipeline/minute/states.py` 의 `SOURCE_GROUPS_BY_DATASET` 다:
+   * `price_minute` = {toss, kis}(교체 운용) · `news_minute` = {bigkinds} 하나. 그래서 **같은
+   * 날짜에 세션이 둘인 실제 상태는 가격 레인 교체일**이다 — 픽스처도 그걸 쓴다(어휘 밖 값을
+   * 쓰면 초록이 프로덕션 상태를 증명하지 못한다). */
+  const f = minuteFacts(status([session('price_minute', 'kis'), session('price_minute', 'toss')]));
   assert.deepEqual(
     f.sessions.map((s) => `${s.dataset}/${s.sourceGroup}`),
-    ['news_minute/bigkinds', 'news_minute/naver'],
+    ['price_minute/kis', 'price_minute/toss'],
   );
-  /* 빈 벤더를 통과시키지 않는지도 여기서 본다 — `''` 는 `targetId === ''` 가드를 우회하는
-   * 합성 축이 되어 정상처럼 보이는 vid 를 만든다(가드는 합성 **전** 조각을 못 본다). */
-  for (const s of f.sessions) assert.ok(s.sourceGroup, '벤더 축이 비었다');
+  /* ⚠️ 여기서 **빈 벤더 가드는 검사하지 않는다.** 어댑터는 `sourceGroup` 을 그대로 옮길 뿐이고,
+   * 합성 축(`dataset/sourceGroup`)의 조각 가드는 아직 없다 — 계약 문서 §「배선 시 함께 해야
+   * 하는 것」에 🔴 로 남아 있다. 여기 "가드를 본다"는 단언을 두면(픽스처가 늘 값을 채우므로
+   * 실패할 수 없다) 문서와 테스트가 반대를 말하고, 배선자가 "이미 검사됨"으로 읽는다. */
+});
+
+test('어휘 밖 데이터셋의 job 원장은 0이 아니라 모름이다 — 부재를 "봤고 괜찮다"로 접지 않는다', () => {
+  /* 세 번째 실시간 데이터셋(`inav_minute`)이 붙는 날의 모양이다. `datasetKind` 가 'other' 를
+   * 내는데 어댑터가 `priceJobs` 로 접으면, 응답에 그 원장 행이 없어 **0**이 되고 R19 가
+   * `평가됨 · 조건에 걸린 것 없음` 을 낸다 — 원장 부재가 정상으로 그려진다. */
+  const f = minuteFacts(status([session('inav_minute', 'kis')]));
+  assert.equal(f.sessions[0].deadJobs, null, '모르는 원장을 0으로 채웠다');
+  assert.equal(f.sessions[0].deadJobsByDate, undefined);
 });
 
 test('뉴스 DEAD 는 날짜 축 집계라고 밝힌다 — 안 밝히면 규칙이 벤더마다 같은 사실을 복제한다', () => {
+  /* 오늘 뉴스 벤더는 `bigkinds` 하나다(어휘 정본). 이 단언이 지키는 것은 **벤더가 늘 때**
+   * 날짜 축 집계가 세션마다 복제되지 않는다는 불변식이다 — 그때 규칙이 조용히 두 배로 센다. */
   const f = minuteFacts(
-    status([session('news_minute', 'bigkinds'), session('news_minute', 'naver')], 3),
+    status([session('news_minute', 'bigkinds'), session('news_minute', 'future_vendor')], 3),
   );
   /* 두 세션 다 같은 값(3)을 받는다 — 그래서 **축을 밝히는 것**이 유일한 방어다 */
   assert.deepEqual(f.sessions.map((s) => s.deadJobs), [3, 3]);
@@ -55,7 +69,7 @@ test('뉴스 DEAD 는 날짜 축 집계라고 밝힌다 — 안 밝히면 규칙
 });
 
 test('가격 DEAD 는 세션에 붙은 값이라 날짜 축 표기가 없다 (두 축을 뭉치면 방어가 사라진다)', () => {
-  const f = minuteFacts(status([session('price_minute', 'KRX', 4)], 99));
+  const f = minuteFacts(status([session('price_minute', 'kis', 4)], 99));
   assert.equal(f.sessions[0].deadJobs, 4, '가격은 세션 job 을 읽어야 한다(날짜 집계 99 가 아니다)');
   assert.equal(f.sessions[0].deadJobsByDate, undefined);
 });

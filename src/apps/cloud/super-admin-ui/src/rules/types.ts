@@ -157,8 +157,10 @@ export interface RunbookEntry {
  * 규칙은 사실만 읽는 층이고 화면 도메인을 모른다 — 반대로 끌어오면 계층이 뒤집힌다.
  * 대신 호출자가 DTO 를 이 모양으로 맞춰 넣는다(`minuteFacts` 어댑터).
  *
- * `jobs` 는 **그 데이터셋의 후속 처리 원장**이다. 가격은 세션에 붙은 job, 뉴스는 세션 연결
- * 컬럼이 없어 날짜 축 집계다 — 어느 쪽을 넣을지는 어댑터가 정하고 규칙은 모른다.
+ * `deadJobs` 는 **그 데이터셋의 후속 처리 원장**이다. 가격은 세션에 붙은 job, 뉴스는 세션 연결
+ * 컬럼이 없어 날짜 축 집계다 — 어느 쪽을 읽을지는 어댑터가 정한다. 다만 **그 값이 어느 축인지는
+ * 규칙이 알아야 한다**(`deadJobsByDate`): 모르면 날짜 축 집계를 벤더마다 복제해 같은 사실을
+ * 여러 사건으로 낸다. 출처는 어댑터 소관, 입도는 규칙 소관이다.
  */
 export interface MinuteSessionFact {
   dataset: string;
@@ -173,8 +175,14 @@ export interface MinuteSessionFact {
   leaseExpired: boolean | null;
   /** 기한이 지났는데 실행·결과 증거가 없는 창 수 */
   overdueNoEvidence: number;
-  /** 후속 처리 원장에서 종료 상태 실패로 남은 건수 */
-  deadJobs: number;
+  /**
+   * 후속 처리 원장에서 종료 상태 실패로 남은 건수.
+   *
+   * **`null` 은 0이 아니다** — 이 데이터셋의 job 원장을 이 응답이 주지 않는다는 뜻이다(어휘 밖
+   * 데이터셋이 오면 어댑터가 어느 원장을 읽어야 할지 모른다). 0으로 채우면 원장 부재가
+   * "봤고 괜찮다"로 그려진다 — 이 콘솔이 없애려는 칸 혼동 그 자체다.
+   */
+  deadJobs: number | null;
   /**
    * 그 수가 **세션 축이 아니라 `(dataset, date)` 집계**인가 — 벤더로 못 가른다.
    *

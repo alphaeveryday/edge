@@ -249,6 +249,14 @@ const RULE_TIP = [
   '실시간(R17~R19)은 세션 원장이 스냅샷이 아니라 API 응답이라, 그 응답이 오기 전에는 못 돈다.',
 ].join('\n');
 
+/** 실시간 축 상태 라벨 — `stale` 은 "실렸지만 낡았다"다(판정은 섰고 마지막 조회가 실패했다) */
+const AXIS_LABEL: Record<AxisFetch, string> = {
+  loaded: '실림',
+  stale: '실림 · 마지막 갱신 실패(판정이 낡았다)',
+  pending: '응답 대기',
+  error: '조회 실패',
+};
+
 function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch: AxisFetch }) {
   const meta = new Map(RULES.map((R) => [R.id, R]));
   /* 두 종류를 한 숫자로 합치지 않는다 — 응답 결함(계약 위반)이 평상시에도 0 이 아닌
@@ -265,10 +273,11 @@ function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch:
         {badResponse.length > 0 && (
           <StatusBadge tone="blocked">응답 결함 {badResponse.length}</StatusBadge>
         )}
-        {/* "없음" 하나로 뭉치면 조회 실패가 계측 공백처럼 읽힌다 — 대기·실패를 갈라 낸다 */}
+        {/* 네 상태를 넷으로 그린다. 하나로 뭉치면 조회 실패가 계측 공백처럼 읽히고, `stale` 을
+            '조회 실패' 로 접으면 **판정은 섰는데(위반 N건) 축은 실패**라는 모순된 화면이 된다 —
+            그 사실("판정이 낡았다")이 이 상태를 만든 이유다. */}
         <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
-          실시간 축{' '}
-          {axisFetch === 'loaded' ? '실림' : axisFetch === 'pending' ? '응답 대기' : '조회 실패'}
+          실시간 축 {AXIS_LABEL[axisFetch]}
         </span>
       </summary>
       <div className="card-pad" style={{ paddingBottom: 0 }}>

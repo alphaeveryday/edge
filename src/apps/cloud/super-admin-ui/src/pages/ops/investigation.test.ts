@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { incidentHref, investigate, ledgerHref } from './investigation.ts';
+import { incidentHref, incidentOfVid, investigate, ledgerHref } from './investigation.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
 const FACTS = {
@@ -65,6 +65,26 @@ const base = (o: Partial<Violation>) =>
 const VID = 'R99:t@etf-daily:2026-08-03T15:40';
 
 const incident = (v: Violation): Incident => ({ root: v, members: [], sev: v.sev, size: 1 });
+
+test('사건 조회는 흡수된 위반의 vid 로도 찾는다 — 뿌리만 보면 살아 있는 위반이 "없는 것"이 된다', () => {
+  /* `incidents[]` 는 뿌리만 담는다. 소비자 4곳이 이 함수를 쓰는데 단언이 없으면, member 탐색을
+   * 지우거나 `member` 를 항상 false 로 만들어도 아무것도 안 깨진다 — 후자는 **흡수된 vid 가
+   * 뿌리 사건 상세를 통째로 그리게** 만들고(URL 은 멤버인데 내용은 뿌리), 안내는 영구 미표시다. */
+  const root = base({ rule: 'R04', targetId: 'run-1', vid: 'R04:run-1' });
+  const child = base({ rule: 'R05', targetId: 'T1', vid: 'R05:T1@run-1' });
+  const I: Incident = { root, members: [{ v: child, why: '이 런이 실패해서' }], sev: 'P0', size: 2 };
+
+  const asRoot = incidentOfVid([I], 'R04:run-1');
+  assert.equal(asRoot?.incident, I);
+  assert.equal(asRoot?.member, false, '뿌리인데 멤버라고 했다 — 화면이 "흡수됐다"를 잘못 낸다');
+
+  const asMember = incidentOfVid([I], 'R05:T1@run-1');
+  assert.equal(asMember?.incident, I, '흡수된 위반의 vid 로 사건을 못 찾았다');
+  assert.equal(asMember?.member, true, '멤버인데 뿌리라고 했다 — 뿌리 상세가 멤버 주소로 그려진다');
+
+  assert.equal(incidentOfVid([I], 'R13:o.pub'), null, '없는 vid 에 사건을 붙였다');
+  assert.equal(incidentOfVid([], 'R04:run-1'), null);
+});
 
 test('런 축 사건은 그 런만 연다 — 최근 런 전체를 다시 훑게 하지 않는다', () => {
   const r = investigate(incident(violation({})), FACTS);

@@ -382,7 +382,7 @@ test('R16 경계 — max_retries=0 은 상한 0회가 아니라 정책 미선언
 
 const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
   dataset: 'price_minute',
-  sourceGroup: 'KRX',
+  sourceGroup: 'kis',
   phase: 'ACTIVE',
   leaseExpired: false,
   overdueNoEvidence: 0,
@@ -434,24 +434,32 @@ test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 
   /* 뉴스 job 은 세션 연결 컬럼이 없어 `(dataset, date)` 집계 하나뿐이다. 벤더 축이 생기기 전에는
    * 대상이 데이터셋이라 겹쳤는데, 벤더를 실으면서 **같은 사실이 벤더 수만큼 독립 사건**이 됐다.
    * 값의 입도가 사건의 입도를 정한다는 규약을 여기서 못박는다. */
+  /* 오늘 뉴스 벤더는 `bigkinds` 하나다(`states.py` 의 `SOURCE_GROUPS_BY_DATASET`) — 이 단언이
+   * 지키는 것은 **벤더가 늘 때** 조용히 두 배로 세지 않는다는 불변식이다. */
   const f = withMinute([
     session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3, deadJobsByDate: true }),
-    session({ dataset: 'news_minute', sourceGroup: 'naver', deadJobs: 3, deadJobsByDate: true }),
+    session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3, deadJobsByDate: true }),
   ]);
   const vs = hits(f, 'R19');
   assert.equal(vs.length, 1, '벤더마다 복제됐다 — DEAD 3건이 6건으로 읽힌다');
   assert.equal(vs[0].targetId, 'news_minute', '벤더로 못 가르는 값에 벤더 대상을 붙였다');
   assert.equal(vs[0].metric, 3);
-  assert.match(vs[0].why, /벤더로 가르지 못한다/, '못 가른다는 사실을 화면이 알 수 있어야 한다');
+  /* 문구가 아니라 **주장의 방향**을 본다: 불가능("못 가른다")이 아니라 지금 응답의 한계로 말해야
+   * 한다 — 원장에는 축이 있다(`news_extraction_job.source_code`). 불가능으로 못박으면 아무도
+   * 그 쿼리를 고치지 않는다. */
+  assert.match(vs[0].why, /지금 응답이 날짜 축으로만/, '한계의 주체가 응답이 아니라 원장이 됐다');
+  assert.doesNotMatch(vs[0].why, /가르지 못한다/, '불가능으로 못박았다 — 원장에는 벤더 축이 있다');
 
   /* 세션 축인 값(가격)은 그대로 벤더별로 갈린다 — 두 경로가 한 규칙 안에 있다 */
+  /* 가격은 {toss, kis} **교체 운용**이라 교체일에 같은 날짜의 세션이 둘이다 — 실제로 가능한
+   * 다벤더 상태이고, 그 값(priceJobs)은 세션 축이라 벤더별로 갈리는 게 맞다. */
   const price = withMinute([
-    session({ dataset: 'price_minute', sourceGroup: 'KRX', deadJobs: 2 }),
-    session({ dataset: 'price_minute', sourceGroup: 'TOSS', deadJobs: 1 }),
+    session({ dataset: 'price_minute', sourceGroup: 'kis', deadJobs: 2 }),
+    session({ dataset: 'price_minute', sourceGroup: 'toss', deadJobs: 1 }),
   ]);
   assert.deepEqual(hits(price, 'R19').map((v) => v.targetId), [
-    'price_minute/KRX',
-    'price_minute/TOSS',
+    'price_minute/kis',
+    'price_minute/toss',
   ]);
 });
 
@@ -650,6 +658,24 @@ test('규칙 id 는 유일하다 — 충돌 검사를 규칙 안으로 좁힌 �
   );
 });
 
+test('실시간 축을 읽는 규칙과 `axis: minute` 표기 집합이 같다 (손으로 붙이는 표기는 반드시 낡는다)', () => {
+  /* 화면은 `axis === 'minute'` 인 규칙에만 조회 상태(대기·실패)를 사유로 붙인다. 그 표기가
+   * 규칙마다 손으로 붙는 값이면, 새 실시간 규칙이나 리팩터가 한 줄을 빠뜨리는 순간 그 규칙이
+   * **API 장애를 "사실 축 부재"로** 말한다 — 고쳤던 오독의 원상복귀다. 표기와 실제 의존을
+   * 집합으로 대조해 그 표류를 잡는다(개별 규칙 이름을 하드코딩하면 그 규칙만 지켜진다). */
+  const withoutMinute = emptyFacts();
+  const withMinuteAxis: Facts = {
+    ...emptyFacts(),
+    minute: { date: '2026-08-03', sessions: [session({})] },
+  };
+  const readsMinute = RULES.filter(
+    (R) => R.canRun != null && !R.canRun(withoutMinute) && R.canRun(withMinuteAxis),
+  ).map((R) => R.id);
+  const marked = RULES.filter((R) => R.axis === 'minute').map((R) => R.id);
+  assert.deepEqual(marked, readsMinute, '실시간 축 표기와 실제 의존이 어긋난다');
+  assert.ok(readsMinute.length >= 3, '실시간 규칙을 하나도 못 찾았다 — 픽스처가 축을 안 채운다');
+});
+
 test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수 있다 (소비자가 구분자를 다시 적지 않는다)', () => {
   /* 이 단언이 없으면 `vidOf` 의 구분자를 바꿔도 154개가 전부 초록이다. 그 사이 화면의
    * `unevaluatedFor` 는 **영원히 아무것도 못 찾고**, 못 찾은 것을 "그 규칙은 돌았다(해소)"로
@@ -758,13 +784,15 @@ test('리포트 — 사건 키 축이 root·members·violations 에서 같다 (�
 });
 
 test('R17 — 같은 데이터셋이라도 벤더가 다르면 다른 세션이다 (sourceGroup 을 버리면 겹친다)', () => {
+  /* 실제로 가능한 다벤더 상태는 **가격 레인 교체일**이다 — `price_minute` = {toss, kis} 이고
+   * 교체 운용이라 바꾸는 날 같은 날짜에 두 세션 행이 남는다(`states.py` 어휘 정본). */
   const f = withMinute([
-    session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }),
-    session({ dataset: 'news_minute', sourceGroup: 'naver', leaseExpired: true }),
+    session({ dataset: 'price_minute', sourceGroup: 'kis', leaseExpired: true }),
+    session({ dataset: 'price_minute', sourceGroup: 'toss', leaseExpired: true }),
   ]);
   assert.deepEqual(
     hits(f, 'R17').map((v) => v.vid),
-    ['R17:news_minute/bigkinds@2026-08-03', 'R17:news_minute/naver@2026-08-03'],
+    ['R17:price_minute/kis@2026-08-03', 'R17:price_minute/toss@2026-08-03'],
   );
 });
 

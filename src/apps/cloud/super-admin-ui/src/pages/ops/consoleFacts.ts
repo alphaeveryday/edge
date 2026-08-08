@@ -22,7 +22,8 @@ export function minuteFacts(s: MinuteStatus): MinuteFacts {
   return {
     date: s.date,
     sessions: s.sessions.map((x) => {
-      const news = datasetKind(x.dataset) === 'news';
+      const kind = datasetKind(x.dataset);
+      const news = kind === 'news';
       return {
         dataset: x.dataset,
         /* 세션 identity 는 `(dataset, sourceGroup, date)` 다 — 여기서 버리면 규칙이 벤더가 다른
@@ -31,7 +32,10 @@ export function minuteFacts(s: MinuteStatus): MinuteFacts {
         phase: x.phase,
         leaseExpired: x.leaseExpired,
         overdueNoEvidence: x.windows.overdueNoEvidence,
-        deadJobs: (news ? s.newsJobs : x.priceJobs).dead,
+        /* 어휘 밖 데이터셋(`other`)은 **어느 원장을 읽어야 할지 모른다** — `priceJobs` 로 접으면
+         * 응답에 행이 없어 0이 되고, 화면이 그걸 "봤고 괜찮다"로 그린다. 세 번째 실시간
+         * 데이터셋(`inav_minute`)이 붙는 날 정확히 그 모양이 된다. 모름은 `null` 로 낸다. */
+        deadJobs: kind === 'other' ? null : (news ? s.newsJobs : x.priceJobs).dead,
         ...(news ? { deadJobsByDate: true } : {}),
       };
     }),

@@ -617,7 +617,9 @@ export const RULES: Rule[] = [
         (f.minute?.sessions ?? [])
           /* 임계 1건 — DEAD 는 재시도가 끝난 **종료 상태**다. 누적치가 아니라 유실 확정이라
            * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
-          .filter((s) => s.deadJobs >= 1)
+          /* `null` 은 0이 아니라 **모름**이다 — 어느 원장을 읽어야 할지 모르는 데이터셋을
+           * "봤고 괜찮다"로 접지 않는다. 판정 대상에서 빠질 뿐이다(R17·R18 은 그대로 돈다). */
+          .filter((s) => s.deadJobs != null && s.deadJobs >= 1)
           .flatMap((s) => {
             /* ⚠️ **값의 입도가 사건의 입도를 정한다.** 뉴스 job 은 세션 연결 컬럼이 없어
              * `(dataset, date)` 집계 하나뿐이다(어댑터가 `deadJobsByDate` 로 밝힌다). 그걸
@@ -634,7 +636,10 @@ export const RULES: Rule[] = [
                   title: `${s.dataset} 후속 처리 유실`,
                   metric: s.deadJobs,
                   unit: '건',
-                  why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다. 이 수는 날짜 축 집계라 벤더로 가르지 못한다',
+                  /* "못 가른다"가 아니라 **지금 응답이 안 가른다**. 원장에는 축이 있다
+                   * (`news_extraction_job.source_code`) — 조회가 날짜 창만 걸고 GROUP BY 를
+                   * 안 한다. 불가능으로 못박으면 아무도 그 쿼리를 고치지 않는다. */
+                  why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다. 이 수는 지금 응답이 날짜 축으로만 주어 벤더로 갈리지 않는다',
                   evidence: `후속 처리 작업 원장 ${date} dead (데이터셋·날짜 집계)`,
                   drill: ['dataset', 'ds-' + s.dataset] as [string, string],
                 },

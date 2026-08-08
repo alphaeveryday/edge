@@ -642,21 +642,39 @@ function RealtimeLedger({
             <>이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</>
           )}
         </p>
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          {/* ⚠️ **부재는 `real` 로만 가른다.** 목 폴백일 때 `ofDataset` 은 목의 행이라, 그걸로
-               "이 데이터셋의 세션은 있다"를 말하면 실 응답엔 없는 세션의 존재를 단언하게 된다.
-               `ofDataset.length > 0` 를 같이 묻지 않는 이유: `real` 이면 `view === data` 라
-               그 필터가 반드시 하나 이상을 낸다 — 둘을 묶으면 죽은 항이 조건처럼 보인다. */}
-          {ambiguous
-            ? `이 데이터셋의 세션이 ${ofDataset.length}개(${ofDataset.map((s) => s.sourceGroup).join(' · ')})라 어느 벤더인지 알 수 없습니다 — 아무거나 골라 보여주지 않습니다. 주소에 source_group 을 실어 주세요.`
-            : real
-            ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
-                 벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
-              `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`
-            : /* 어느 응답의 부재인지 밝힌다 — 이 화면의 나머지 카드는 지금 목 미리보기를 그리고
-                 있어서, 밝히지 않으면 목이 말한 부재로 읽힌다. */
-              '실 응답에 이 데이터셋의 세션 행이 없습니다 — 계획되지 않았다는 뜻입니다(비거래일 · 미가동 · 레인 미편입). 다른 날짜나 다른 데이터셋의 세션으로 대체하지 않습니다.'}
-        </p>
+        {ambiguous && (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            이 날짜에 세션이 {ofDataset.length}개입니다 — 아무거나 골라 근거로 세우지 않습니다.
+            벤더를 고르세요:{' '}
+            {ofDataset.map((s, i) => (
+              <span key={s.sourceGroup}>
+                {i > 0 && ' · '}
+                <Link
+                  to={`/sources?dataset=${encodeURIComponent(dataset)}${date ? `&date=${encodeURIComponent(date)}` : ''}&sourceGroup=${encodeURIComponent(s.sourceGroup)}`}
+                  className="mono"
+                >
+                  {s.sourceGroup}
+                </Link>
+              </span>
+            ))}
+          </p>
+        )}
+        {/* 부재 문장은 **고를 수 없는 게 아니라 없는** 경우에만 쓴다(위 갈래와 배타다) */}
+        {!ambiguous && (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            {/* ⚠️ **부재는 `real` 로만 가른다.** 목 폴백일 때 `ofDataset` 은 목의 행이라, 그걸로
+                 "이 데이터셋의 세션은 있다"를 말하면 실 응답엔 없는 세션의 존재를 단언하게 된다.
+                 `ofDataset.length > 0` 를 같이 묻지 않는 이유: `real` 이면 `view === data` 라
+                 그 필터가 반드시 하나 이상을 낸다 — 둘을 묶으면 죽은 항이 조건처럼 보인다. */}
+            {real
+              ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
+                   벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
+                `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`
+              : /* 어느 응답의 부재인지 밝힌다 — 이 화면의 나머지 카드는 지금 목 미리보기를 그리고
+                   있어서, 밝히지 않으면 목이 말한 부재로 읽힌다. */
+                '실 응답에 이 데이터셋의 세션 행이 없습니다 — 계획되지 않았다는 뜻입니다(비거래일 · 미가동 · 레인 미편입). 다른 날짜나 다른 데이터셋의 세션으로 대체하지 않습니다.'}
+          </p>
+        )}
       </div>
     );
   }

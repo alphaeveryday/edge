@@ -153,14 +153,19 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
           {
             kind: 'session',
             id: datasetId,
-            /* 사건이 지목한 것은 벤더까지 갈린 세션이다(`targetId` = `dataset/sourceGroup`) —
-             * 라벨이 데이터셋만 말하면 어느 벤더를 여는지 모른 채 이동한다 */
-            label: `실시간 세션 ${v.targetId} · ${date}`,
+            /* 사건이 지목한 것은 대개 벤더까지 갈린 세션이다(`targetId` = `dataset/sourceGroup`).
+             * 다만 **벤더로 못 가르는 값**(날짜 축 집계)의 사건은 대상이 `(데이터셋, 날짜)` 라,
+             * 라벨이 그걸 "세션"이라 부르면 없는 실체를 지목한다. */
+            label: vendor
+              ? `실시간 세션 ${v.targetId} · ${date}`
+              : `실시간 데이터셋 ${datasetId} · ${date} (세션 전체)`,
             why:
               '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다.' +
               /* 라벨은 벤더까지 말하는데 세션 화면은 아직 벤더로 안 좁힌다 — 약속과 도착지가
                * 어긋난 상태를 문구로 밝힌다(좁히는 것은 화면 배선 PR 소관). */
-              (vendor ? ' 세션 화면은 아직 벤더로 좁히지 못해 이 데이터셋의 세션을 모두 보여준다.' : ''),
+              (vendor
+                ? ' 세션 화면은 아직 벤더로 좁히지 못해 이 데이터셋의 세션을 모두 보여준다.'
+                : ' 이 사건의 수는 벤더로 갈리지 않아 그 날짜의 세션 전체가 대상이다.'),
             href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
           },
         ],
@@ -172,7 +177,12 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
           date,
           ...(vendor ? { sourceGroup: vendor } : {}),
         },
-        ledgerNote: null,
+        /* ⚠️ 벤더가 없으면 **원장 화면이 세션 하나로 못 좁힌다**(벤더가 둘이면 고르기를 거부한다).
+         * 그 사실을 여기서 밝히지 않으면, 도착한 화면이 "source_group 을 실어 주세요"라고
+         * **이 사건에서는 불가능한 조치**를 지시한다 — 그 수가 벤더로 안 갈리는 값이라서다. */
+        ledgerNote: vendor
+          ? null
+          : '이 사건의 수는 날짜 축 집계라 세션 하나로 좁혀지지 않는다 — 원장 화면에서 벤더를 골라야 세션 행이 선다.',
       };
     }
     return {
@@ -312,7 +322,8 @@ export function incidentOfVid(
   incidents: Incident[],
   vid: string,
 ): { incident: Incident; member: boolean } | null {
-  if (!vid) return null;
+  /* 빈 vid 를 따로 막지 않는다 — 아래 두 조회가 자연히 못 찾는다(`evaluate` 가 빈 축을
+   * `identity` 로 세우므로 vid 가 `''` 인 위반은 애초에 없다). 가드를 두면 "검증됐다"로 읽힌다. */
   const root = incidents.find((i) => i.root.vid === vid);
   if (root) return { incident: root, member: false };
   const owner = incidents.find((i) => i.members.some((m) => m.v.vid === vid));

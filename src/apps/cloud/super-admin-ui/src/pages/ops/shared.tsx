@@ -133,8 +133,6 @@ export interface ConsoleEvaluation extends Evaluation {
   pipeline: Incident[];
   /** 범위 밖 사건 — 숨기지 않고 "여기 소관이 아니다"로 세어 보인다 */
   outOfScope: Incident[];
-  /** 실시간 축이 실렸는가. false 면 R17~R19 는 evaluated:false(못 돌았다)다 */
-  minuteLoaded: boolean;
   /**
    * 그 실시간 축을 **왜** 못 실었는가. `못 돎` 문장의 뜻이 여기 달려 있다 —
    * 응답 대기·조회 실패를 "계측이 없다"로 그리면 운영자가 **API 장애를 미배선으로 읽는다**.
@@ -170,7 +168,6 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
       ...ev,
       pipeline: ev.incidents.filter((i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
       outOfScope: ev.incidents.filter((i) => OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
-      minuteLoaded: data != null,
       axisFetch: axisOf(data != null, isError),
       facts,
     };
