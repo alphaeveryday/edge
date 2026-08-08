@@ -43,7 +43,6 @@ export function runbookOf(f: Facts, v: Violation): RunbookEntry | undefined {
 export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
   const violations: Violation[] = [];
   const ruleResults: RuleResult[] = [];
-  const seen = new Set<string>();
 
   for (const R of RULES) {
     let evaluated = R.canRun ? R.canRun(f) : true;
@@ -64,8 +63,11 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
          * 검사는 '없음'으로 읽어, 둘이 갈리면 범위 없는 vid 가 조용히 성립한다. 그 vid 는 같은
          * 스냅샷 안에서 겹치지 않으면 안 잡히고, 내일 다른 런이 또 `''` 로 오면 어제 공유한
          * 링크가 오늘 사건을 연다 — 충돌 검사로는 못 잡는 시간 축 충돌이다. */
-        if (scope === '') {
-          collision = `${R.id}: 범위 축이 빈 문자열이다(${targetId}) — '없음'과 구분되지 않아 사건 키를 못 만든다`;
+        /* 대상 축도 같은 구멍이다 — `targetId: ''` 는 `??` 를 통과해 `R13:` 이라는 정상처럼
+         * 보이는 vid 를 만든다. 위반이 하나면 충돌도 안 나 그대로 나간다. */
+        if (targetId === '' || scope === '') {
+          const axis = targetId === '' ? '대상 축(targetId)' : `범위 축(${targetId})`;
+          collision = `${R.id}: ${axis}이 빈 문자열이다 — '없음'과 구분되지 않아 사건 키를 못 만든다`;
           break;
         }
         const vid = vidOf(R.id, targetId, scope);
@@ -73,8 +75,9 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
          * 위치 인덱스가 이름만 바꿔 되살아나므로 그 둘은 답이 아니다. 그렇다고 던지면 평가가
          * 통째로 죽어 **나머지 18규칙의 사건까지 화면에서 사라진다** — 파이프라인이 깨진 날
          * 콘솔이 통째로 오류 카드가 된다. vid 는 규칙 id 로 시작하니 충돌은 언제나 한 규칙
-         * 안에서만 나고, 그 규칙만 세우면 사유는 그대로 보이면서 나머지는 산다. */
-        if (seen.has(vid) || mine.some((v) => v.vid === vid)) {
+         * 안에서만 나고(규칙 간 검사는 죽은 분기다), 그 규칙만 세우면 사유는 그대로 보이면서
+         * 나머지는 산다. */
+        if (mine.some((v) => v.vid === vid)) {
           collision = `${R.id}: 사건 식별자 충돌 ${vid} — 대상 축이 이 위반들을 못 가른다(실어야 할 identity 축이 빠졌다)`;
           break;
         }
@@ -97,15 +100,15 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
       evaluated = false;
       mine.length = 0;
     }
-    for (const v of mine) {
-      seen.add(v.vid);
-      violations.push(v);
-    }
+    violations.push(...mine);
     ruleResults.push({
       id: R.id,
       name: R.name,
       layer: R.layer,
       evaluated,
+      /* 못 돎의 종류를 **구조로** 낸다 — 화면이 문구를 파싱해 추측하면 새 사유가 생길 때마다
+       * 조용히 틀린 칸에 그린다. `identity` 는 계측 공백이 아니라 응답의 계약 위반이다. */
+      notRun: evaluated ? undefined : collision ? 'identity' : 'axis',
       violations: mine.length,
       depends_on_mock:
         evaluated && (mine.some((v) => v.mock) || !!R.mockBacked?.(f)),

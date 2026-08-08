@@ -156,7 +156,11 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
             /* 사건이 지목한 것은 벤더까지 갈린 세션이다(`targetId` = `dataset/sourceGroup`) —
              * 라벨이 데이터셋만 말하면 어느 벤더를 여는지 모른 채 이동한다 */
             label: `실시간 세션 ${v.targetId} · ${date}`,
-            why: '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다',
+            why:
+              '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다.' +
+              /* 라벨은 벤더까지 말하는데 세션 화면은 아직 벤더로 안 좁힌다 — 약속과 도착지가
+               * 어긋난 상태를 문구로 밝힌다(좁히는 것은 화면 배선 PR 소관). */
+              (vendor ? ' 세션 화면은 아직 벤더로 좁히지 못해 이 데이터셋의 세션을 모두 보여준다.' : ''),
             href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
           },
         ],
@@ -267,6 +271,12 @@ export const RUN_DETAIL_UNAVAILABLE = '실행 상세는 아직 실 데이터를 
  *
  * ⚠️ **실 API 화면에서 부르지 마라** — 위 `RUN_DETAIL_UNAVAILABLE` 참조. 지금 이 함수의
  * 정당한 호출처는 스냅샷 런만 다루는 자리(사건 조사 경로 · 실행 목록의 선택)뿐이다.
+ *
+ * ⚠️ **사건 딥링크와 달리 경로형으로 남는다** — 그리고 그건 런 키 모양에 기대고 있다.
+ * CloudFront SPA fallback(`spa-rewrite.js`)은 마지막 경로 조각의 점(.)으로 정적 파일을
+ * 가르는데, `ops_pipeline_run.run_key` 는 `etf-daily:2026-08-03T15:40` 꼴(레인·콜론·날짜)이라
+ * 점이 없다. **원장이 그 불변식을 보증하지는 않는다** — 런 키에 점이 들 수 있게 되면(벤더 축이
+ * 붙는 등) 이 주소도 `incidentHref` 처럼 쿼리로 옮겨야 한다.
  *
  * @param extra `focus`·`fromIncident` 처럼 조사 문맥을 실어 보내는 쿼리
  */

@@ -595,13 +595,14 @@ function LedgerNoContext() {
 /**
  * 실시간 세션의 원장 근거 — ops 원장이 아니라 `minute_ingestion_*` 이 답하는 문맥이다.
  * 같은 화면·같은 문맥 규약을 쓰되 조회하는 원장이 다르다는 사실을 그대로 밝힌다.
- */
-/**
- * 실시간 원장 근거 — 세션 하나를 세운다.
  *
- * `sourceGroup` 이 문맥에 있으면 **반드시** 그걸로 좁힌다. 세션 identity 는
- * `(dataset, sourceGroup, date)` 라 데이터셋만으로 고르면 벤더가 다른 세션 행(sessionId·phase·
- * lease)이 아무 경고 없이 선다 — 사건은 벤더로 갈렸는데 근거는 남의 것을 보여주는 셈이다.
+ * `sourceGroup` 이 문맥에 있으면 그걸로 좁힌다. 세션 identity 는 `(dataset, sourceGroup, date)`
+ * 라 데이터셋만으로 고르면 벤더가 다른 세션 행(sessionId·phase·lease)이 아무 경고 없이 선다 —
+ * 사건은 벤더로 갈렸는데 근거는 남의 것을 보여주는 셈이다.
+ *
+ * ⚠️ **목 폴백 판정은 데이터셋 축으로만 한다.** 벤더까지 넣어 `real` 을 재면, 실 응답에
+ * 그 벤더가 없을 때 목으로 떨어져 **목 세션의 sessionId·phase·lease** 가 서거나 "세션이
+ * 계획되지 않았다는 사실입니다"라는 거짓 단언이 난다. 좁힘은 view 를 고른 **뒤에** 한다.
  */
 function RealtimeLedger({
   dataset,
@@ -616,11 +617,12 @@ function RealtimeLedger({
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
-  const match = (s: { dataset: string; sourceGroup: string }) =>
-    s.dataset === dataset && (sourceGroup === undefined || s.sourceGroup === sourceGroup);
-  const real = data.sessions.some(match);
+  const real = data.sessions.some((s) => s.dataset === dataset);
   const view = real ? data : MOCK_MINUTE;
-  const session = view.sessions.find(match);
+  const ofDataset = view.sessions.filter((s) => s.dataset === dataset);
+  const session = sourceGroup
+    ? ofDataset.find((s) => s.sourceGroup === sourceGroup)
+    : ofDataset[0];
   const kindLabel = datasetKind(dataset) === 'news' ? 'poll' : '창';
 
   if (!session) {
@@ -628,8 +630,11 @@ function RealtimeLedger({
       <div className="card card-pad">
         <p className="t-sm m-0">이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          세션이 계획되지 않았다는 사실입니다(비거래일 · 미가동 · 레인 미편입) — 다른 날짜나 다른
-          데이터셋의 세션으로 대체하지 않습니다.
+          {ofDataset.length > 0
+            ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
+                 벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
+              `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`
+            : '세션이 계획되지 않았다는 사실입니다(비거래일 · 미가동 · 레인 미편입) — 다른 날짜나 다른 데이터셋의 세션으로 대체하지 않습니다.'}
         </p>
       </div>
     );
@@ -801,6 +806,7 @@ export function SourcesPage() {
     ...(focusTask ? ([['작업(task_key)', focusTask]] as [string, string][]) : []),
     ...(dataset ? ([['데이터셋', dataset]] as [string, string][]) : []),
     ...(date ? ([['세션 날짜', date]] as [string, string][]) : []),
+    ...(sourceGroup ? ([['벤더(source_group)', sourceGroup]] as [string, string][]) : []),
   ];
 
   /* 실시간 문맥 — ops 원장이 아니라 minute 원장이 답한다 */

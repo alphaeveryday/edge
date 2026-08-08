@@ -215,13 +215,18 @@ const RULE_TIP = [
   '',
   '평가됨 · 위반 0 — 규칙이 돌았고 조건에 걸린 것이 없다.',
   '못 돎 — 그 규칙이 읽을 사실 축이 아예 없다. "괜찮다"가 아니라 "모른다"다.',
+  '응답 결함 — 축은 있었는데 응답이 사건을 못 가르게 줬다(식별자 충돌·빈 키). 계측 공백이',
+  '  아니라 계약 위반이고, 그 규칙의 위반은 하나도 안 실린다 — 사유는 그 줄이 그대로 말한다.',
   '',
   '실시간(R17~R19)은 세션 원장이 스냅샷이 아니라 API 응답이라, 그 응답이 오기 전에는 못 돈다.',
 ].join('\n');
 
 function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteLoaded: boolean }) {
   const meta = new Map(RULES.map((R) => [R.id, R]));
-  const notRun = results.filter((r) => !r.evaluated).length;
+  /* 두 종류를 한 숫자로 합치지 않는다 — 응답 결함(계약 위반)이 평상시에도 0 이 아닌
+     `못 돎`(계측 공백) 카운트에 섞이면 증분을 아무도 못 본다. */
+  const notRun = results.filter((r) => r.notRun === 'axis').length;
+  const badResponse = results.filter((r) => r.notRun === 'identity');
   /* 19행을 펼쳐 두면 정작 봐야 할 사건 카드가 화면 밖으로 밀린다 — 참조용이라 기본은 접는다.
      native <details> 를 쓴다: 열림 상태 관리도, 접근성 배선도 브라우저가 한다. */
   return (
@@ -229,6 +234,9 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
       <summary className="card-head">
         <span className="t-label">규칙 {results.length}개</span>
         {notRun > 0 && <StatusBadge tone="neutral">못 돎 {notRun}</StatusBadge>}
+        {badResponse.length > 0 && (
+          <StatusBadge tone="blocked">응답 결함 {badResponse.length}</StatusBadge>
+        )}
         <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
           실시간 축 {minuteLoaded ? '실림' : '없음'}
         </span>
@@ -267,14 +275,23 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
                   <td>{R && <SourceChip source={R.source} />}</td>
                   {/* 위반 수를 따로 세우지 않는다 — 0 의 뜻("돌았고 걸린 게 없다")은 숫자가
                       아니라 문장이어야 하고, 옆 칸의 `못 돎`(모른다)과 갈라 읽혀야 한다.
-                      note 는 title 로 — 두 줄이 되면 19행의 높이가 들쭉날쭉해진다. */}
+                      note 는 title 로 — 두 줄이 되면 19행의 높이가 들쭉날쭉해진다.
+                      ⚠️ **응답 결함만은 본문으로 낸다.** 사유가 호버에만 있으면 이 표가 기본
+                      접힘이라 아무도 못 보고, 그 자리에 `R.dep` 를 그리면 "사실 축 부재"라는
+                      **거짓**이 선다 — 축은 멀쩡했고 응답이 사건을 못 가르게 준 것이다. */}
                   <td className="col-muted t-xs" title={r.note ?? undefined}>
-                    {r.evaluated
-                      ? r.violations > 0
-                        ? `위반 ${r.violations}건`
-                        : '조건에 걸린 것 없음'
-                      : `못 돎 — ${R?.dep ?? '사실 축 부재'}`}
-                    {r.note && ' *'}
+                    {r.evaluated ? (
+                      r.violations > 0 ? (
+                        `위반 ${r.violations}건`
+                      ) : (
+                        '조건에 걸린 것 없음'
+                      )
+                    ) : r.notRun === 'identity' ? (
+                      <span style={{ color: 'var(--down)' }}>응답 결함 — {r.note}</span>
+                    ) : (
+                      `못 돎 — ${R?.dep ?? '사실 축 부재'}`
+                    )}
+                    {r.evaluated && r.note && ' *'}
                   </td>
                 </tr>
               );

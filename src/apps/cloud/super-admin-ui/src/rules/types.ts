@@ -334,6 +334,15 @@ export interface RuleResult {
   name: string;
   layer: Layer;
   evaluated: boolean;
+  /**
+   * `evaluated:false` 의 **종류**. 화면이 문구로 추측하지 않게 구조로 낸다.
+   *
+   * - `axis` — 그 규칙이 읽을 사실 축이 아예 없다(계측 공백). "괜찮다"가 아니라 "모른다".
+   * - `identity` — 축은 있었는데 **응답이 사건을 못 가르게** 줬다(식별자 충돌·빈 범위).
+   *   계측 공백이 아니라 **계약 위반**이라 뜻이 다르다 — 같은 칸에 그리면 응답 결함이
+   *   "아직 계측이 없구나"로 읽힌다. 사유는 `note` 에 있다.
+   */
+  notRun?: 'axis' | 'identity';
   violations: number;
   depends_on_mock: boolean;
   note: string | null;

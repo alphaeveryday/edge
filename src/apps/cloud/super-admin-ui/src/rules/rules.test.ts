@@ -630,7 +630,14 @@ test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 �
    * 이름만 바꿔 되살아나므로 그 둘은 답이 아니다. */
   assert.equal(r13.evaluated, false);
   assert.equal(r13.violations, 0);
+  /* **못 돎의 종류를 구조로 낸다.** 화면이 문구를 파싱하게 두면 안 되고, 무엇보다 이건
+   * 계측 공백(`axis`)이 아니라 **응답의 계약 위반**이다 — 같은 칸에 그리면 "아직 계측이
+   * 없구나"로 읽힌다(계약 §「배선 시 함께」가 막으려던 오독이 한 층 아래로 옮겨간다).
+   * 화면은 이 필드로 갈라 그리고, 사유는 호버가 아니라 본문으로 낸다. */
+  assert.equal(r13.notRun, 'identity');
   assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.pub/);
+  /* 계측 부재는 같은 `evaluated:false` 여도 종류가 다르다 — 둘이 구분되지 않으면 이 필드가 무의미하다 */
+  assert.equal(rep.rules.find((r) => r.id === 'R17')!.notRun, 'axis'); // minute 축 부재
   /* 충돌한 규칙의 위반은 하나도 안 실린다 — 반쯤 실으면 무엇이 빠졌는지 화면이 못 말한다 */
   assert.equal(rep.violations.filter((v) => v.rule === 'R13').length, 0);
   // 나머지는 그대로 산다
@@ -649,7 +656,19 @@ test('범위가 빈 문자열이면 위반 하나만으로도 못 돎이다 (충
   f.tasks = [task({ task_key: 'T', run_id: '', task_outcome: 'FAILED' })];
   const r05 = buildReport(f, NOW).rules.find((r) => r.id === 'R05')!;
   assert.equal(r05.evaluated, false, '빈 범위가 정상 vid 로 통과했다 — 내일 다른 런과 겹친다');
+  assert.equal(r05.notRun, 'identity');
   assert.match(r05.note ?? '', /빈 문자열/);
+});
+
+test('대상 축이 빈 문자열이어도 못 돎이다 (사건 키의 나머지 절반에 같은 구멍이 있었다)', () => {
+  /* `targetId: ''` 는 `??` 를 통과해 `R13:` 이라는 정상처럼 보이는 vid 를 만든다. 범위 축만
+   * 막으면 같은 뿌리의 구멍이 대상 축에 그대로 남는다 — 위반이 하나면 충돌도 안 난다. */
+  const f = emptyFacts();
+  f.outputs = [{ id: '', label: '게시', today: 10, base: 100, unit: '건' }];
+  const r13 = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
+  assert.equal(r13.evaluated, false, '빈 대상 축이 정상 vid 로 통과했다');
+  assert.equal(r13.notRun, 'identity');
+  assert.match(r13.note ?? '', /대상 축/);
 });
 
 test('리포트 — 사건 키 축이 root·members·violations 에서 같다 (한쪽만 바꾸면 조인이 끊긴다)', () => {
