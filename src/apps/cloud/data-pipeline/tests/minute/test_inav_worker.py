@@ -361,14 +361,23 @@ class TestRunGate:
         assert reached == [1], "개장 뒤엔 대기를 끝내고 수집으로 들어가야 한다"
         assert slept == [20, 20], "개장 전 관측마다 tick_seconds 만큼 잔다(종료가 아니라)"
 
-    def test_대기_중_비거래일로_바뀌면_종료한다(self, monkeypatch, tmp_path):
-        """자정을 넘겨 날짜가 바뀌는 경우다 — 기다려도 안 열리는 사유로 바뀌면 빠져나와야
-        한다. 접두어만 보고 무조건 계속 자면 그 컨테이너는 영원히 안 죽는다."""
+    def test_기다릴_수_없는_사유로_바뀌면_대기를_끝낸다(self, monkeypatch, tmp_path):
+        """대기 루프의 탈출구가 "사유 소멸" 하나뿐이면, `skip_reason` 어휘에 **영영 안
+        걷히는 사유**가 하나 늘어나는 날 그 컨테이너는 영원히 안 죽는다. 접두어가 맞는
+        동안만 자고 나머지는 즉시 나온다는 것을 고정한다.
+
+        ⚠️ 이 전이 자체는 지금 어휘에선 도달 불가다 — `skip_reason` 은 `now < 09:00`
+        일 때만 개장전 사유를 주므로 대기 중 비거래일로 바뀌려면 자정을 넘어야 하는데,
+        그러려면 23:59 에 대기 중이어야 하고 그 시각엔 진입을 안 한다(`worker.py` 의
+        대기 주석과 같은 논증). 그래서 검증하는 것은 "자정 전이"가 아니라 **탈출구의
+        존재**다 — 어휘가 늘면 그때 도달 가능해진다."""
         import data_pipeline.minute.worker as module
         import data_pipeline.sources.kis_inav as kis_inav
 
         today = datetime.now(KST).date().isoformat()
-        reasons = [f"{SKIP_BEFORE_OPEN} (KST 23:59 < 09:00)", "non-trading day (KST ...)"]
+        # 08:59 — 실제로 대기가 성립하는 시각. 23:59 로 두면 읽는 사람이 도달 가능한
+        # 전이라고 믿게 된다(그 시각엔 개장전 사유가 아예 안 나온다).
+        reasons = [f"{SKIP_BEFORE_OPEN} (KST 08:59 < 09:00)", "non-trading day (KST ...)"]
 
         class StubSource:
             def __init__(self, *a, **k):
