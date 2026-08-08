@@ -111,17 +111,23 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # `PoliteClient` 기본 `min_interval=1.0` 이라 **목록만 window 당 14~22초**이고, 본문(ZIP)은
 # **신규 대상 건당 1초**가 더 붙는다(같은 client 를 쓰고 seen-map 이 재다운로드만 막는다).
 #
-# 🔴 **그래서 backlog tick 은 60초 예산을 넘긴다.** 공용 tick 골격은 realtime 1건 +
+# ⚠️ **한 tick 은 1분보다 오래 걸린다.** 공용 tick 골격은 realtime 1건 +
 # `recovery_budget_per_tick`(가격 2·뉴스 1)을 **한 tick 안에서** 처리하므로
-# (`worker.MinuteWorkerLoop.tick`) tick 당 window 2~3개 = **28~66초**다. `lease_seconds`
-# 기본 60 안에 커밋을 못 끝내면 그 커밋은 claim 검증에서 거부되고 recovery 는 영구히 못
-# 따라잡는다. "여유가 크지 않다"가 아니라 **넘긴다** — 후속 Worker PR 이 실측으로 정할 값이다
-# (현 SFN 은 슬롯 간격 3600초가 이걸 통째로 가리고 있었다).
+# (`worker.MinuteWorkerLoop.tick`) tick 당 window 2~3개 = **28~66초**다. 그 자체는 이 레인의
+# 정상이다 — 토스 실측 tick 이 이미 73초+ 이고, backlog 도 굶지 않는다(분당 2~3 window 처리
+# vs 분당 1 도착). ⭐ 실제 요구는 **lease 가 최악 tick 을 덮는 것**이고 `lease_seconds` 기본
+# 300 이 그 처방이다(`worker.WorkerConfig` 주석이 60 을 ALPHA-706 근거로 기각한 기록이다 —
+# 뉴스 기본 60 은 poll 이 훨씬 싸서 성립하는 값이라 공시가 빌려 쓸 수 없다).
+# → 후속 Worker PR 의 성공기준: `config.models` 의 `_leases_cover_worst_poll`
+# (뉴스)·`_leases_cover_worst_tick`(가격) **동형 검증자**를 공시에도 세워 lease 가 최악
+# tick 을 못 덮는 설정이 **load 시점 ValueError** 로 죽게 한다. 현 SFN 은 슬롯 간격
+# 3600초가 이 축을 통째로 가리고 있었다.
 #
 # 일 총량은 720 **window** × 14~22 ≈ 1만~1.6만 콜(tick 수와 무관하다 — window 수가 축이다)로
 # 현 10슬롯(140~220콜)의 ~70배이고, 한 DART 앱키를 **세 스텝이 공유한다**
-# (`ingest-raw-disclosure`·`ingest-raw-financial`·`enrich-corp-code` — task-def env_set 둘에
-# 같은 시크릿이 실린다). `"020" 일 사용한도 초과`는 `STOP_STATUS_CODES` 라 닿으면 레인이 선다.
+# (`ingest-raw-disclosure`·`ingest-raw-financial`·`enrich-corp-code` — task-def 는
+# `secret_sets` 의 `dart`·`rds_dart` 둘이 같은 시크릿을 싣는다).
+# `"020" 일 사용한도 초과`는 `STOP_STATUS_CODES` 라 닿으면 레인이 선다.
 # 좁히는 축은 셋이다 — **창을 당일로**(세션 첫 tick 만 D-1 포함) ·
 # `recovery_budget_per_tick` · dataset 별 격자 폭.
 EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_DISCLOSURE_MINUTE})
