@@ -43,7 +43,12 @@ from .jobs import JobLedger
 from .models import KST
 from .repository import MinuteLedger
 from .session_cli import plan_session_cli
-from .states import DATASET_NEWS_MINUTE, MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
+from .states import (
+    DATASET_NEWS_MINUTE,
+    MINUTE_DATASETS,
+    SCALED_DATASETS,
+    SOURCE_GROUPS_BY_DATASET,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +177,16 @@ def _resolve(dataset: str | None, source_group: str | None) -> tuple[str, str]:
     """어휘 검증 — session_id 가 이 둘에서 결정적으로 유도되므로 오타는 없는 세션을 가리킨다."""
     if dataset not in MINUTE_DATASETS:
         raise SystemExit(f"--dataset 이 1분 원장 어휘 밖이다: {dataset} (아는 값 {sorted(MINUTE_DATASETS)})")
+    if dataset not in SCALED_DATASETS:
+        # ⚠️ 어휘에 있다고 스케일 주체는 아니다. start/stop 이 올리고 내리는 서비스
+        # 목록은 **공용**이라, 이 세션이 소유하지 않은 서비스를 건드리게 된다 — 특히
+        # stop 은 phase 게이트가 이 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는
+        # 전역이라 **살아 있는 price-worker 를 내린다**. 배선이 생기면 여기 추가한다.
+        raise SystemExit(
+            f"--dataset {dataset!r} 는 상주 서비스를 소유하지 않는다 — "
+            f"start/stop-minute-session 대상이 아니다(아는 값 {sorted(SCALED_DATASETS)}). "
+            f"계획·수집은 plan-minute-session 과 그 dataset 의 worker 로 한다"
+        )
     allowed = SOURCE_GROUPS_BY_DATASET[dataset]
     if source_group not in allowed:
         raise SystemExit(

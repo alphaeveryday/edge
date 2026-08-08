@@ -39,6 +39,7 @@ class FakeClient:
         self.responses = responses  # {kis_symbol: <payload dict | Exception>}
         self.queries = []  # 요청 쿼리스트링(창·tr_id 검증용)
         self.headers = []
+        self.slept = []  # 백오프 호출 기록 — 유량 완화가 실제로 걸리는지
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
         assert method == "GET"
@@ -51,7 +52,7 @@ class FakeClient:
         return json.dumps(payload)
 
     def _sleep(self, seconds):  # EGW00201 재시도 경로에서 호출 — 테스트는 즉시 통과
-        pass
+        self.slept.append(seconds)
 
 
 def _source(responses, etf_map=None, from_date=None, to_date=None):
@@ -175,3 +176,21 @@ def test_자격증명_없으면_비활성():
     config = KisNavSourceConfig(app_key=None, app_secret=None)
     src = KisNavSource(config, {"069500": "KR7069500007"}, FakeClient({}))
     assert src.enabled is False
+
+
+# ── 유량 재시도 (ALPHA-851) ──────────────────────────────────────
+
+
+def test_유량_재시도가_세어지고_백오프도_걸린다():
+    """유량은 **앱키 전역**이라 iNAV 폴링이 1분 가격 레인을 굶길 수 있다. 카운터가 0 으로
+    굳으면 그 압력이 window 결과에서 사라지고, 백오프가 빠지면 카운터가 보고하려던
+    완화 자체가 없어진다 — 둘을 한 단언에 묶는다."""
+    rate = {"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "초당 거래건수 초과"}
+    src = _source({"069500": rate})
+
+    with pytest.raises(ValueError):
+        src._fetch_etf("069500", "069500", "", "", "TOKEN")
+
+    # 예산 5회 중 마지막은 재시도하지 않고 raise 한다 → 증가분·수면 각 4회
+    assert src.retry_count == 4
+    assert len(src.client.slept) == 4

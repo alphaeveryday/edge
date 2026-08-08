@@ -907,8 +907,14 @@ settings.targets.keywords            # ["금리", ...]
   ×100 = 0.11411 → 반올림 0.11 = `dprt`. 비율 가설이면 0.00 이라 안 맞는다. 교차 근거로
   `nav_vrss_prpr` 121.24 = `stck_prpr − nav`). 분석엔진 `sql_surface` 의 `v_nav.premium` 은
   **비율**이라 단위가 갈린다 — canonical 이 같은 이름을 쓰면 두 표면을 조인하는 쪽이 100배
-  틀린 괴리를 본다. ⚠️ **아직 canonical 필드는 없다**(iNAV 는 raw 까지만 있다) — 만들 때
-  `premium` 이라는 이름을 쓰지 말고 단위를 이름에 담아라(ALPHA-845).
+  틀린 괴리를 본다. 그래서 canonical 레코드는 **`premium_pct`** 로 단위를 이름에 담는다
+  (ALPHA-851 — `minute/inav_collect.record_of`: `unit_id`·`ts`·`nav`·`market_price`·
+  `premium_pct`, 거기에 Worker 가 `source` 를 얹는다). `fetched_at` 는 **싣지 않는다** —
+  canonical artifact 의 checksum 이 곧 세대 identity 라 실행 시각이 섞이면 값이 같은
+  재실행마다 checksum 이 달라져 `ArtifactImmutabilityError` 가 난다(raw 는 반대로 붙인다).
+  키는 `canonical/market_data/etf_inav_minute/market=KR/session_date=…/window=HHMM/
+  generation=…/inav.ndjson` 이다. ⚠️ **아직 쓰는 주체가 없다** — 계약(키·레코드 형상·
+  window 확정)은 섰지만 Worker·CLI 가 없어 이 prefix 에는 아무 파일도 없다.
   이 스텝은 **산출물이 로그**다(raw 는 무변형 보존이라 판단 재료가 로그뿐이다). 그래서
   로그 사전이 곧 계약이다 — ETF 마다 다음이 나온다:
 
@@ -1223,6 +1229,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 그 파일에서 나온다(무엇을 정본으로 볼지는 운영자가 정한다 — CLI 는 찾아 나서지 않는다).
 # exit: 0=계획됨 / 1=계획하면 안 되는 상태(다른 universe 로 고정·이미 drain 이후) /
 # 2=계획 자체를 못 함(설정·인자 결손·어휘 밖 dataset·source_group·DB 장애).
+# ⚠️ iNAV 세션(`--dataset etf_inav_minute --source-group kis`)도 `--universe` 를 쓰지만
+# 격자는 **항상 390**이다 — 어댑터 하한이 09:00 이라(`kis_inav.MARKET_OPEN`) 시간외를
+# 계획하면 매 거래일 08:00~08:59 의 60 window 가 아무도 못 채운 채 DUE 로 남고, iNAV 는
+# 소급이 불가라 영구 결손이다. 시간외 종목이 든 universe 를 줘도 안 넓힌다.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04 --universe /path/universe.json
@@ -1383,6 +1393,19 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719) — 상주 서비스 7종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
+#
+# ⚠️ **iNAV 세션은 이 명령의 대상이 아니다**(어휘엔 있어도 거부, **exit 1** — 실측).
+#   ⚠️ 같은 부류의 오류에 `plan-minute-session` 은 2 를 낸다(어휘 밖 dataset). 이쪽은
+#   `SystemExit(문자열)` 이라 1 로 떨어지는 것이고 **의도된 구분이 아니다** — 정리 대상.
+#   여기서 올리고 내리는
+# 서비스 목록은 dataset 별이 아니라 **공용**이라, iNAV 로 stop 을 부르면 phase 게이트는 그
+# 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가
+# 내려간다**. 계획(plan-minute-session)은 열려 있고 스케일만 막는다 — 어휘와 스케일 권한은
+# 다른 축이다(`states.SCALED_DATASETS`).
+#   ⚠️ 같은 가드가 `--dataset news_minute` 도 거부한다(전엔 받았다). 뉴스 레인은
+#   `--dataset` 이 아니라 `MINUTE_SESSION_NEWS_SOURCE_GROUP` 토글로 이 명령에 얹히고
+#   terraform 의 `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만,
+#   손으로 치던 사람은 여기서 막힌다.
 #
 # start: 거래일 판정(OPS_KR_HOLIDAYS) → plan-minute-session(오늘 KST 고정) → desired 0→1.
 # ⚠️ 비거래일이면 아무것도 하지 않고 exit 0. 계획이 실패하면 **올리지 않고** 그 exit 를

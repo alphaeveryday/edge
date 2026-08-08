@@ -740,6 +740,38 @@ def canonical_price_minute_prefix(market: str, session_date: str) -> str:
     )
 
 
+def canonical_etf_inav_minute_artifact_key(
+    market: str, session_date: str, window_start_hhmm: str, generation: int
+) -> str:
+    """장중 iNAV window artifact 의 **결정적·불변** 키 (ALPHA-851).
+
+    `canonical_price_minute_artifact_key` 와 같은 규약이다 — run_id 없음(같은 window
+    재실행 = 같은 key 에 같은 바이트 PUT 하는 no-op), 불변성은 generation 이 진다,
+    벤더는 파티션 축이 아니라 레코드 컬럼.
+
+    분봉과 **dataset 을 나눈다**. 같은 (market, session_date, window) 라도 담는 것이
+    다르고(캔들 OHLCV vs NAV·괴리), 무엇보다 **완전성 기대 집합이 다르다** — 구성종목에는
+    NAV 가 없다. 한 artifact 에 섞으면 그 window 가 "봉은 다 왔는데 NAV 는 ETF 것만
+    왔다"를 표현할 수 없어 매 window INCOMPLETE 가 된다.
+
+    ⚠️ orphan 스캐너(`minute/commit.py`)는 아직 price prefix 를 하드코딩하고 `eod.py` 는
+    비-price dataset 을 정직하게 건너뛴다 — **이 prefix 는 아직 아무도 훑지 않는다**.
+    규약이 같다고 스캐너가 따라오지 않는다.
+    """
+    return (
+        f"{canonical_etf_inav_minute_prefix(market, session_date)}"
+        f"window={window_start_hhmm}/generation={generation}/inav.ndjson"
+    )
+
+
+def canonical_etf_inav_minute_prefix(market: str, session_date: str) -> str:
+    """그 (market, session_date) iNAV canonical 이 사는 프리픽스."""
+    return (
+        f"canonical/market_data/etf_inav_minute/market={market}"
+        f"/session_date={session_date}/"
+    )
+
+
 def canonical_intraday_5m_prefix(market: str, trade_date: str) -> str:
     """그 거래일 5분봉 파티션이 사는 프리픽스 — **구멍 판정의 스캔 축** (ALPHA-839).
 

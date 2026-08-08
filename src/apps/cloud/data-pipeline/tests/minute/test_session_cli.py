@@ -102,7 +102,7 @@ class TestPlan:
         assert session["universe_version"] == "univ-fixture-v1"
 
     def test_extended_universe_plans_720_windows(self, ledger_db, capsys):
-        # ⚠️ 이 반례가 없으면 CLI 가 실수로 `plan_session_windows(universe=None)` 을 불러도
+        # ⚠️ 이 반례가 없으면 CLI 가 실수로 `plan_session_windows(universe=None, extended_hours=True)` 을 불러도
         # 통과한다(선언 없는 fixture 는 어느 쪽이든 390). 실제 시간외 universe 에서는
         # 720 중 330 window 가 조용히 누락된다.
         code = plan_session_cli(
@@ -113,6 +113,27 @@ class TestPlan:
         assert (code, payload["window_count"]) == (0, 720)
         assert payload["windows"]["first"].endswith("08:00:00+09:00")
         assert payload["windows"]["last"].endswith("20:00:00+09:00")
+
+    def test_inav_session_stays_at_390_on_the_same_extended_universe(
+        self, ledger_db, capsys
+    ):
+        """**같은 fixture** 로 dataset 만 바꾼다 — 위 720 테스트와 짝이다.
+
+        `plan_session_windows` 를 직접 부르는 테스트는 순수 함수만 보고, `EXTENDED_HOURS_
+        DATASETS` 상수를 보는 테스트는 상수만 본다. 둘을 잇는 **배선**(이 CLI 가 유일한
+        운영 호출부다)은 어느 쪽도 안 지나서, 여기를 `extended_hours=True` 로 바꿔도
+        전 스위트가 통과했다. iNAV 어댑터의 하한은 09:00 이라 그렇게 계획되면 매 거래일
+        08:00~08:59 의 60 window 가 아무도 못 채운 채 DUE 로 남고, 소급이 불가라 영구
+        결손이다.
+        """
+        code = plan_session_cli(
+            make_settings(), dataset="etf_inav_minute", source_group="kis",
+            session_date="2026-07-31", universe=str(FIXTURES / "universe_extended.json"),
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert (code, payload["window_count"]) == (0, 390)
+        assert payload["windows"]["first"].endswith("09:00:00+09:00")
+        assert payload["windows"]["last"].endswith("15:30:00+09:00")
 
     def test_unknown_dataset_is_rejected(self, ledger_db):
         # 오타를 뉴스로 흘리면 그 dataset 을 처리할 Worker 가 없어 하루가 통째로 안 도는데

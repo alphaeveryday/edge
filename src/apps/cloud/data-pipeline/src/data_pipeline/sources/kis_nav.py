@@ -80,6 +80,10 @@ class KisNavSource:
         self.fetch_failures: list[dict] = []
         # 직전 fetch 가 계획한(매핑된) 대상 수. 활성인데 0이면 스텝이 skip 으로 드러낸다.
         self.planned_etfs: int | None = None
+        # 실제 EGW00201 재시도 수. 유량은 **앱키 전역**이라(초당 20) 이 소스가 1분 가격
+        # 레인과 같은 한도를 나눠 쓴다 — 0 으로 고정하면 iNAV 폴링이 가격 레인을 굶기고
+        # 있어도 관측에서 통째로 사라진다(`price_collect` 의 retry_count 와 같은 축).
+        self.retry_count = 0
 
     @property
     def enabled(self) -> bool:
@@ -218,12 +222,19 @@ class KisNavSource:
             body = self.client.request("GET", url, headers=headers, decode=True)
             data = json.loads(body)  # 깨진 JSON → ETF 단위 실패로 전파
             if not isinstance(data, dict):
+                # 본문이 dict 조차 아니면 잘린 응답·프록시 오류 페이지 같은 **전송
+                # 사고**다 — `kis_minute` 이 같은 조건을 `KisUnitError` 로 돌리는 이유이고
+                # 테스트로 고정돼 있다(`test_envelope_shape_error_is_transient_not_cached`).
                 raise ValueError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
             if data.get("rt_cd") == "0":
                 # 이 엔드포인트는 output2 가 아니라 단일 output 배열이다(라이브 실측).
                 # 키 누락·비-list 는 rt_cd=0 인데도 이상(스키마 드리프트)이라 fail-loud.
                 output = data.get("output")
                 if not isinstance(output, list):
+                    # 봉투 수준 형상 위반이다 — **전송 사고 축**으로 남긴다.
+                    # `kis_minute` 이 같은 조건(`output2 이상`·`응답이 객체가 아님`)을
+                    # 묶어서 `KisUnitError` 로 돌리는 것과 같은 선이고, 이 레포는
+                    # 봉투 수준(전송)과 행·값 수준(INVALID)을 그렇게 가른다.
                     raise ValueError(f"KIS rt_cd=0 인데 output 이상: {type(output).__name__}")
                 if not output:
                     raise ValueError("empty output — 응답 창에 데이터가 없거나 잘못된 종목코드")
@@ -258,6 +269,7 @@ class KisNavSource:
                 return rows
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
             if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:
+                self.retry_count += 1
                 self.client._sleep(0.7 * (attempt + 1))
                 continue
             raise ValueError(

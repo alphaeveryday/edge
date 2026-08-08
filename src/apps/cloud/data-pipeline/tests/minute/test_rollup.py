@@ -89,7 +89,7 @@ class Fixture:
         self.db = FakeMinuteDB()
         self.storage = LocalStorage(root=tmp_path)
         self.ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=self.db.connect)
-        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE, extended_hours=True)
         self.session_id, _ = self.ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DAY,
             universe_version=UNIVERSE.universe_version,
@@ -289,7 +289,7 @@ class TestWorkerHook:
 
     def build_worker(self, db, tmp_path, windows=5):
         ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE, extended_hours=True)
         session_id, _ = ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DAY,
             universe_version=UNIVERSE.universe_version,
@@ -502,7 +502,9 @@ class TestUnfilledSettledDays:
 
         owned = sorted(WRITER_OWNED_BEFORE_SINCE)[0]
         fx = Fixture(tmp_path)
-        planned = plan_session_windows(date.fromisoformat(owned), universe=UNIVERSE)
+        planned = plan_session_windows(
+            date.fromisoformat(owned), universe=UNIVERSE, extended_hours=True
+        )
         fx.ledger.plan_session(
             dataset="price_minute", source_group="toss",
             session_date=date.fromisoformat(owned),
@@ -528,7 +530,9 @@ class TestUnfilledSettledDays:
         assert scan_lower() < older < WRITER_SINCE, "넓힌 창 **안**이어야 필터가 걸린다"
         assert older not in WRITER_OWNED_BEFORE_SINCE
         fx = Fixture(tmp_path)
-        planned = plan_session_windows(date.fromisoformat(older), universe=UNIVERSE)
+        planned = plan_session_windows(
+            date.fromisoformat(older), universe=UNIVERSE, extended_hours=True
+        )
         fx.ledger.plan_session(
             dataset="price_minute", source_group="toss",
             session_date=date.fromisoformat(older),
@@ -658,7 +662,7 @@ class TestRollupSessionCli:
             dataset="price_minute", source_group="toss", session_date=day,
             universe_version=UNIVERSE.universe_version,
             universe_hash=UNIVERSE.universe_hash,
-            windows=plan_session_windows(day, universe=UNIVERSE),
+            windows=plan_session_windows(day, universe=UNIVERSE, extended_hours=True),
         )
         db.sessions[sid]["phase"] = phase
         return sid

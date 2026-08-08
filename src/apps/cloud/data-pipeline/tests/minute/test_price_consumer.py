@@ -113,7 +113,7 @@ class ScriptedCollector:
 def build_pipeline(db, tmp_path, *, prices, windows=2, universe=UNIVERSE,
                    recovery_budget=2):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-    planned = plan_session_windows(SESSION_DATE, universe=universe)
+    planned = plan_session_windows(SESSION_DATE, universe=universe, extended_hours=True)
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
         universe_version=universe.universe_version, universe_hash=universe.universe_hash,
@@ -771,7 +771,7 @@ class TestAdversarialInputs:
         db = FakeMinuteDB()
         # 720 계획의 앞부분: 08:00(시간외, 개별주만) + 09:00·09:01(정규장)
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DATE, universe=universe_ext)
+        planned = plan_session_windows(SESSION_DATE, universe=universe_ext, extended_hours=True)
         chosen = [planned[0]] + [w for w in planned
                                  if w[0].astimezone(KST).hour == 9][:2]
         session_id, _ = ledger.plan_session(
@@ -925,7 +925,7 @@ class TestAdversarialInputs:
         )
         db = FakeMinuteDB()
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DATE, universe=universe_ext)
+        planned = plan_session_windows(SESSION_DATE, universe=universe_ext, extended_hours=True)
         session_id, _ = ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
             universe_version=universe_ext.universe_version,

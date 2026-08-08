@@ -38,7 +38,7 @@ _OPEN = datetime(2026, 7, 31, 9, 0, tzinfo=KST)
 # 계획의 양 끝을 보는 게이트를 만들 수 없고, 그 게이트가 빠진 채로도 테스트가 초록이다 —
 # 즉 "첫 분이 통째로 빠진 계획"의 반례를 영영 못 만든다.
 UNIVERSE = Universe(universe_version="v1", etf_ids=("E1",), constituent_ids=("C1",))
-WINDOW_PAIRS = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+WINDOW_PAIRS = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_hours=True)
 WINDOWS = tuple(start for start, _ in WINDOW_PAIRS)
 
 
@@ -296,7 +296,7 @@ class TestInvariantViolations:
             universe_version="v1", etf_ids=("E1",), constituent_ids=("C1",),
             extended_hours_ids=("C1",),
         )
-        pairs = plan_session_windows(SESSION_DATE, universe=extended)
+        pairs = plan_session_windows(SESSION_DATE, universe=extended, extended_hours=True)
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
         session_id, _ = ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
