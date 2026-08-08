@@ -24,6 +24,9 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
       for (const raw of R.run(f, { now })) {
         violations.push({
           ...raw,
+          /* 규약: 표시용 target 과 키용 targetId 를 여기서 한 번만 정규화한다 —
+           * 소비자(런북 키·간선·조사 경로)가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다 */
+          targetId: raw.targetId ?? raw.target,
           rule: R.id,
           ruleName: R.name,
           layer: R.layer,
@@ -80,7 +83,10 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
     // 사건 심각도 = 뿌리와 구성원 중 최고 심각도(연쇄가 뿌리보다 심각할 수 있다)
     I.sev = I.members.reduce<Severity>((s, m) => (SEV[m.v.sev] < SEV[s] ? m.v.sev : s), I.root.sev);
   }
-  const mag = (v: Violation) => (typeof v.metric === 'number' ? v.metric : 0);
+  /* 정렬은 크기순이다 — 부호가 아니라 절댓값을 쓴다. `metric` 이 수로 정규화되면서
+   * 편차율(-50%)이 들어오는데, 원값으로 재면 큰 감소가 목록 맨 아래로 간다.
+   * 세는 값이 없는 위반(metric:null)은 0 — 크기로 다투지 않고 심각도·연쇄 크기로 갈린다. */
+  const mag = (v: Violation) => Math.abs(v.metric ?? 0);
   incidents.sort(
     (a, b) => SEV[a.sev] - SEV[b.sev] || b.size - a.size || mag(b.root) - mag(a.root),
   );
@@ -96,10 +102,15 @@ export interface Report {
   rules: RuleResult[];
   violations: {
     rule: string;
+    /** 사람이 읽을 대상 */
     target: string;
+    /** 안정 식별자 — 런북 키·사건 키가 쓰는 축. `target` 과 같을 수 있다 */
+    target_id: string;
     severity: Severity;
-    metric: number | string;
-    unit: string;
+    /** 세는 값. 양이 아닌 위반은 `null` 이고 판정은 `state` 에 있다 */
+    metric: number | null;
+    unit: string | null;
+    state: string | null;
     why: string;
     evidence: string;
     run_id: string | null;
@@ -112,13 +123,14 @@ export interface Report {
     root: string;
     severity: Severity;
     size: number;
-    members: { rule: string; target: string; cause: string }[];
+    /** `root` 가 키(`rule:targetId`)라 멤버도 같은 축으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다 */
+    members: { rule: string; target_id: string; cause: string }[];
   }[];
 }
 
 export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
   const ev = evaluate(f, now);
-  const key = (v: Violation) => `${v.rule}:${v.target}`;
+  const key = (v: Violation) => `${v.rule}:${v.targetId}`;
   const absorbedInto = new Map<Violation, Violation>();
   for (const I of ev.incidents) for (const m of I.members) absorbedInto.set(m.v, I.root);
   const ruleSource = new Map(RULES.map((R) => [R.id, R.source]));
@@ -129,9 +141,11 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
     violations: ev.violations.map((v) => ({
       rule: v.rule,
       target: v.target,
+      target_id: v.targetId,
       severity: v.sev,
       metric: v.metric,
-      unit: v.unit,
+      unit: v.unit ?? null,
+      state: v.state ?? null,
       why: v.why,
       evidence: v.evidence,
       run_id: v.runId ?? null,
@@ -144,7 +158,7 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
       root: key(I.root),
       severity: I.sev,
       size: I.size,
-      members: I.members.map((m) => ({ rule: m.v.rule, target: m.v.target, cause: m.why })),
+      members: I.members.map((m) => ({ rule: m.v.rule, target_id: m.v.targetId, cause: m.why })),
     })),
   };
 }

@@ -127,10 +127,9 @@ export function IncidentsListPage() {
               </thead>
               <tbody>
                 {list.map((I) => {
-                  /* 수치 칸에는 **양만** 둔다. 룰이 metric 에 상태 문자열(TIMED_OUT·STALE·
-                   * 미귀결)을 넣기도 하는데, 그건 세는 값이 아니라 판정이라 대상 아래
-                   * 배지로 내린다 — 우측 정렬 숫자 열에 섞으면 그 열을 훑을 수 없다. */
-                  const numeric = typeof I.root.metric === 'number';
+                  /* 수치 칸에는 **양만** 선다. 판정 어휘(TIMED_OUT·STALE·미귀결)는 룰이
+                   * `state` 로 따로 내므로 여기서 `typeof` 로 갈라 추측하지 않는다 —
+                   * 그건 대상 아래 배지 자리다. 우측 정렬 숫자 열에 섞으면 훑을 수 없다. */
                   return (
                     /* 행 전체가 과녁이다. 안쪽 버튼은 키보드 도달용으로 남긴다 —
                        tr 은 Tab 으로 닿지 않는다. */
@@ -163,8 +162,8 @@ export function IncidentsListPage() {
                         <div className="ops-inc-meta t-xs">
                           <span>{I.root.ruleName}</span>
                           <span className="mono">{I.root.rule}</span>
-                          {/* 양이 아닌 metric 은 판정이다 — 수치 칸이 아니라 여기 선다 */}
-                          {!numeric && <span className="chip">{I.root.metric}</span>}
+                          {/* 판정은 수치 칸이 아니라 여기 선다 */}
+                          {I.root.state && <span className="chip">{I.root.state}</span>}
                           {/* 흡수된 위반이 있을 때만 — `—` 를 열로 세우면 12행이 소음이다 */}
                           {I.members.length > 0 && (
                             <span className="chip chip-warn">연쇄 {I.members.length}건</span>
@@ -175,7 +174,7 @@ export function IncidentsListPage() {
                         </div>
                       </td>
                       <td className="num">
-                        {numeric ? (
+                        {I.root.metric != null ? (
                           <>
                             <span>{fmt(I.root.metric)}</span>{' '}
                             <span className="ops-inc-unit t-xs" title={I.root.unit}>

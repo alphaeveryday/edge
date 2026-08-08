@@ -32,7 +32,15 @@ const FACTS = {
   meta: { db: '', aws: '', today: '2026-08-03' },
 } as unknown as Facts;
 
-const violation = (o: Partial<Violation>): Violation =>
+/* `targetId` 는 **스프레드 뒤에** 정규화한다 — `evaluate()` 가 하는 것과 같은 순서다.
+ * 앞에 박아 두면 `violation({ target: 'q1' })` 이 엉뚱한 targetId 를 들고 돌아 픽스처가
+ * 운영 형상을 재현하지 못한다(그러면 이 파일의 단언은 코드가 아니라 픽스처를 검사한다). */
+const violation = (o: Partial<Violation>): Violation => {
+  const v = base(o);
+  return { ...v, targetId: v.targetId ?? v.target } as Violation;
+};
+
+const base = (o: Partial<Violation>) =>
   ({
     vid: 'R99#0',
     rule: 'R99',
@@ -96,10 +104,21 @@ test('런 행이 없는 슬롯은 실행이 아니라 예정 슬롯이고, 원�
 
 test('큐 사건은 실행 화면을 거치지 않고 원장 근거도 없다고 말한다', () => {
   const r = investigate(
-    incident(violation({ layer: '큐', drill: ['chain', 'q-price-explanation-realtime'], target: 'price-explanation-realtime' })),
+    /* R11 의 실제 형상 그대로다 — 큐는 이름 자체가 식별자이자 사람이 읽을 대상이라
+     * `targetId` 를 따로 두지 않는다(엔진이 `target` 으로 폴백한다). 픽스처가 룰이 만들지 않는
+     * 라벨을 지어내면 그 단언은 코드가 아니라 픽스처를 검사한다. */
+    incident(
+      violation({
+        layer: '큐',
+        drill: ['chain', 'q-price-explanation-realtime'],
+        target: 'price-explanation-realtime',
+      }),
+    ),
     FACTS,
   );
   assert.equal(r.targets[0].kind, 'queue');
+  /* 조사 문맥은 **식별자**로만 넘긴다(모듈 주석) — 받는 화면이 조회할 키가 있어야 한다 */
+  assert.equal(r.targets[0].id, 'price-explanation-realtime');
   assert.doesNotMatch(r.targets[0].href, /\/ops\/runs/);
   assert.equal(r.ledger, null, '없는 원장 근거를 만들지 않는다');
   assert.equal(ledgerHref(r.ledger), null);
@@ -117,6 +136,18 @@ test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 
   assert.equal(r.targets[0].kind, 'dataset');
   assert.equal(r.ledger?.runKey, undefined, '런 키를 지어내지 않는다');
   assert.match(r.ledgerNote ?? '', /실행에 매여 있지 않아/);
+});
+
+test('산출 축 사건도 조사 대상 id 는 식별자다 — 표시 문구를 실어 보내지 않는다', () => {
+  /* R13(산출 이상)은 `target` 이 라벨('게시 ETF')이고 `targetId` 가 산출 id('o.pub')다.
+   * 라벨을 넘기면 추이 화면이 조회할 키가 없어 지목이 조용히 빈 화면이 된다. */
+  const r = investigate(
+    incident(violation({ layer: '산출', drill: ['trend', 'out-o.pub'], target: '게시 ETF', targetId: 'o.pub' })),
+    FACTS,
+  );
+  assert.equal(r.targets[0].kind, 'output');
+  assert.equal(r.targets[0].id, 'o.pub');
+  assert.equal(r.ledger, null, '산출 축은 원장 근거로 좁힐 문맥이 없다');
 });
 
 test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원장 열기를 만들지 않는다', () => {

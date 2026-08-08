@@ -201,12 +201,28 @@ export interface Facts {
   [extra: string]: unknown;
 }
 
-/** 규칙 run() 이 만드는 원시 위반 — 엔진이 rule 메타를 붙여 Violation 으로 만든다 */
+/** 규칙 run() 이 만드는 원시 위반 — 엔진이 rule 메타를 붙여 Violation 으로 만든다.
+ *
+ * **필드 규약 — 한 필드는 한 용도다.** 이전에는 세 필드가 서로의 일을 했다: `unit` 이 레인
+ * 이름(`news`)과 비교 문장(`기대 … 실제 …`)을 담고, `metric` 이 `'-50%'`·`'STALE'` 같은
+ * 문자열을 담고, `target` 이 `'o.pub'` 같은 내부 id 였다. 그래서 화면이
+ * `typeof metric === 'number'` 로 용도를 **추측해서** 갈라 그렸다 — 룰이 새 문자열을 넣으면
+ * 화면이 조용히 다르게 그린다. 규약을 여기 박아 그 추측을 없앤다.
+ */
 export interface RawViolation {
+  /** 사람이 읽을 대상 — 표 셀에 그대로 선다. 내부 id 를 넣지 않는다 */
   target: string;
+  /** 안정 식별자 — 런북 키 `${rule}.${targetId}` · 간선 매칭 · 사건 키.
+   *  생략하면 `target` 이 그 역할을 겸한다(작업 키·데이터셋 id·큐 이름처럼 이미 둘 다인 경우). */
+  targetId?: string;
   title: string;
-  metric: number | string;
-  unit: string;
+  /** 세는 값. **양이 아니면 `null`** — 판정 문자열은 `state` 로 간다 */
+  metric: number | null;
+  /** `metric` 의 단위. `metric` 이 `null` 이면 단위도 없다. 문맥을 여기 넣지 않는다 */
+  unit?: string;
+  /** 룰이 내린 판정 어휘(`STALE`·`TIMED_OUT`·`미귀결`) — 세는 값이 아니라 상태다 */
+  state?: string;
+  /** 문맥 — 기대 대비 실제, 비교 대상, 어느 레인인가. 단위 자리에 문장을 넣지 않는다 */
   why: string;
   evidence: string;
   drill: [tab: string, anchor: string];
@@ -231,6 +247,9 @@ export interface RawViolation {
 }
 
 export interface Violation extends RawViolation {
+  /** 항상 채워진다 — 엔진이 `raw.targetId ?? raw.target` 으로 정규화한다.
+   *  소비자(런북 키·간선·조사 경로)는 이 필드만 보면 되고 폴백을 각자 쓰지 않는다. */
+  targetId: string;
   rule: string;
   ruleName: string;
   layer: Layer;

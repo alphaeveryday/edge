@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildReport, evaluate } from './evaluate.ts';
-import type { Facts, MinuteSessionFact, RunFact, TaskFact } from './types.ts';
+import type { Facts, MinuteSessionFact, RunFact, TaskFact, Violation } from './types.ts';
 
 const NOW = new Date('2026-08-03T16:21:00+09:00');
 
@@ -45,8 +45,35 @@ const task = (o: Partial<TaskFact>): TaskFact => ({
   ...o,
 });
 
+/**
+ * 위반 필드 규약(types.ts `RawViolation`)을 **구조로** 검사한다.
+ *
+ * 지키는 의도: 한 필드가 세 용도로 돌아가는 것을 막는다. 판정 문자열(`STALE`·`TIMED_OUT`)이
+ * 다시 `metric` 에 들어오면 화면이 `typeof` 로 용도를 추측해야 하고, 문맥 문장이 `unit` 에
+ * 들어오면(수치 없이 단위만) 숫자 열이 문단이 된다. 문구를 검사하지 않는 이유는 문구가 늘
+ * 바뀌기 때문이다 — 타입 관계는 안 바뀐다.
+ */
+function assertContract(v: Violation) {
+  /* ⚠️ 이건 빈 `target` 을 막을 뿐 **targetId 표류를 막지 못한다** — 엔진이 늘 `target` 으로
+   * 폴백하므로 룰이 `targetId` 를 지워도 여기선 안 깨진다. 그 축은 아래 런북 키 단언이 지킨다. */
+  assert.ok(v.targetId, `${v.rule}: targetId 가 비었다`);
+  /* `why` 는 규약 이후 문맥의 유일한 운반자다 — 비면 상세·ⓘ 의 '왜'가 통째로 빈다 */
+  assert.ok(v.why, `${v.rule}: why 가 비었다 — 문맥을 실을 다른 필드가 없다`);
+  assert.ok(
+    v.metric === null || typeof v.metric === 'number',
+    `${v.rule}: metric 은 수 아니면 null 이다 (받은 값 ${JSON.stringify(v.metric)})`,
+  );
+  assert.equal(
+    v.unit != null,
+    v.metric != null,
+    `${v.rule}: unit 은 metric 이 있을 때만 있다 (metric=${JSON.stringify(v.metric)} unit=${JSON.stringify(v.unit)})`,
+  );
+}
+
 function hits(f: Facts, rule: string) {
-  return evaluate(f, NOW).violations.filter((v) => v.rule === rule);
+  const vs = evaluate(f, NOW).violations.filter((v) => v.rule === rule);
+  vs.forEach(assertContract);
+  return vs;
 }
 
 test('R01 계획 슬롯 미기동 — planned+행 없음이면 위반, 행이 있으면 조용', () => {
@@ -188,13 +215,16 @@ test('R10 체인 손실 — 인접 감소만 위반, 갈래(src)가 기록된다
     ],
   };
   const v = hits(f, 'R10');
+  /* 앵커·런북 키가 매달리는 축은 표시 문구가 아니라 `targetId` 다 — 라벨을 바꿔도 안 끊긴다 */
   assert.deepEqual(
-    v.map((x) => [x.target, x.metric]),
+    v.map((x) => [x.targetId, x.metric]),
     [
       ['batch:c.run', 4],
       ['intraday:c.obs', 65],
     ],
   );
+  /* 표에 서는 것은 사람이 읽을 인접 단계다 — `batch:c.run` 을 그대로 그리면 대상이 뭔지 모른다 */
+  assert.deepEqual(v.map((x) => x.target), ['관측 → 런', '장중 트리거 → 관측']);
 });
 
 test('R10 경계 — blind(관측 불가) 단계는 0으로 세지 않고 비교 축에서 빠진다', () => {
@@ -250,7 +280,10 @@ test('R13 산출 이상 — ±25% 이상만, 기준(base) 없으면 평가 대�
     { id: 'nobase', label: '신규', today: 5, base: null, unit: '건' },
   ];
   const v = hits(f, 'R13');
-  assert.deepEqual(v.map((x) => [x.target, x.metric]), [['half', '-50%']]);
+  /* 편차율은 **양이다** — 문자열 `'-50%'` 로 두면 정렬(크기순)과 숫자 열이 이 값을 못 쓴다.
+   * 대상은 라벨(사람이 읽을 것), 키는 산출 id(`half`) 로 갈린다. */
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric, x.unit]), [['half', -50, '%']]);
+  assert.deepEqual(v.map((x) => x.target), ['게시']);
 });
 
 test('R14 전달 정합 — 게시·미발번은 P0, 시드 유래 비게시 전달은 P2+seed 로 강등', () => {
@@ -262,11 +295,20 @@ test('R14 전달 정합 — 게시·미발번은 P0, 시드 유래 비게시 전
   };
   const v = hits(f, 'R14');
   assert.equal(v.length, 2);
+  /* 사건 키·흡수 조인이 매달리는 축 — 표시 문구로 갈리면 조인이 문장에 걸린다.
+   * `assertContract` 는 이걸 못 잡는다(엔진이 target 으로 폴백해 늘 채워진다) */
+  assert.deepEqual(v.map((x) => x.targetId), ['pub_no_delivery', 'delivery_nonpub']);
   assert.equal(v[0].sev, 'P0');
   assert.equal(v[1].sev, 'P2');
   assert.equal(v[1].seed, true);
   f.boundary = { published_without_delivery: 0, delivery_now_nonpublished: 0 };
   assert.equal(hits(f, 'R14').length, 0);
+
+  /* seed_note 가 없는 사실 — 시드가 걷히면 실제로 이 모양이 된다. `why` 는 규약 이후 문맥의
+   * 유일한 운반자라 비면 상세·ⓘ 의 '왜'가 통째로 빈다. 이 케이스가 없으면 `assertContract` 의
+   * why 단언이 **자기가 막으려는 결함을 못 잡는다**(픽스처·스냅샷 둘 다 seed_note 를 준다). */
+  f.boundary = { published_without_delivery: 0, delivery_now_nonpublished: 1 };
+  assert.match(hits(f, 'R14')[0].why, /기록이 없다/, '기록 부재를 사유 없음으로 그리지 않는다');
 });
 
 test('R15 ETF 분석 실패 — FAILED 행들이 위반 1건으로 집계되고 목록이 남는다', () => {
@@ -282,7 +324,17 @@ test('R15 ETF 분석 실패 — FAILED 행들이 위반 1건으로 집계되고 
   const v = hits(f, 'R15');
   assert.equal(v.length, 1);
   assert.equal(v[0].metric, 2);
+  /* 룰 단위 런북(`R15`)으로 폴백하더라도 사건 키는 식별자여야 한다 — R14 와 같은 이유 */
+  assert.equal(v[0].targetId, 'analyze.failed');
   assert.deepEqual(v[0].list, ['A', 'B']);
+  /* 원장이 사유를 안 남긴 실패 — R14 와 같은 이유로 이 갈래를 밟는 픽스처가 있어야 한다.
+   * `error: null` 을 "오류가 없다"로 읽으면 실패인데 사유가 빈 채로 화면에 선다. */
+  f.etf_ledger = {
+    rows: [{ etf: 'd', name: 'D', triggered: true, outcome: 'FAILED', error: null }],
+    mock: true,
+  };
+  assert.match(hits(f, 'R15')[0].why, /기록이 없다/, '사유 부재를 사유 없음으로 그리지 않는다');
+
   f.etf_ledger = { rows: [{ etf: 'c', name: 'C', triggered: true, outcome: 'FULFILLED' }] };
   assert.equal(hits(f, 'R15').length, 0);
 });
@@ -306,7 +358,7 @@ test('R16 재시도 소진 — 상한 도달+미귀결만, FULFILLED·정책 미
   assert.deepEqual(hits(f, 'R16').map((v) => v.target), ['spent']);
 });
 
-test('R16 경계 — 정책 필드가 전무하면 evaluated:false (분모 없이 2/3 표기 금지)', () => {
+test('R16 경계 — 정책 필드가 전무하면 evaluated:false (없는 상한을 분모로 그리지 않는다)', () => {
   const f = emptyFacts();
   f.tasks = [task({ task_key: 'no-policy', task_outcome: 'FAILED', attempts: 5, max_retries: null })];
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R16')!;
@@ -439,6 +491,21 @@ test('정렬 — 심각도 → 연쇄 크기 → 수치. 사건 심각도는 구
   assert.equal(ev.incidents[0].root.rule, 'R12'); // P0 먼저
 });
 
+test('정렬 3순위 — 수치는 크기순이다. 부호가 아니라 절댓값으로 잰다', () => {
+  /* 편차율이 수로 정규화되면서 음수 metric 이 생겼다. 원값으로 재면 **가장 큰 감소가 맨 아래로**
+   * 간다 — 목록이 심각한 것부터라는 전제를 깨는데, 심각도·연쇄 크기가 같아 아무 단언도 안 밟는다. */
+  const f = emptyFacts();
+  f.outputs = [
+    { id: 'small', label: '작은 증가', today: 130, base: 100, unit: '건' }, // +30%
+    { id: 'big', label: '큰 감소', today: 50, base: 100, unit: '건' }, // -50%
+  ];
+  const order = evaluate(f, NOW).incidents.map((i) => i.root.targetId);
+  /* 목록 전체를 deepEqual 하면 "빈 사실에서 다른 룰이 안 걸린다"에까지 기대게 된다 —
+   * 검사하려는 건 3순위 비교자 하나다. 둘의 상대 순서만 본다(둘 다 있는지 먼저 확인). */
+  assert.ok(order.includes('big') && order.includes('small'), `둘 다 걸려야 한다: ${order}`);
+  assert.ok(order.indexOf('big') < order.indexOf('small'), `크기순이 아니다: ${order}`);
+});
+
 /* ── 리뷰 계약 §5 ── */
 
 test('리포트 — evaluated:false 와 violations:0 이 구분되고, 흡수 위반에 absorbed_into 가 붙는다', () => {
@@ -464,10 +531,44 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
     readFileSync(new URL('./facts-snapshot.json', import.meta.url), 'utf8'),
   ) as Facts;
   const ev = evaluate(facts);
+  /* 픽스처가 아니라 **동봉 스냅샷 위에서** 규약을 전수 검사한다 — 픽스처는 룰이 만든 값의
+   * 한 갈래만 밟지만 스냅샷은 실제로 걸린 29건 전부를 준다 */
+  ev.violations.forEach(assertContract);
   assert.equal(ev.violations.length, 29);
   assert.equal(ev.incidents.length, 20);
   assert.equal(ev.incidents.filter((i) => i.sev === 'P0').length, 5);
   // 뉴스 런 타임아웃 사건이 연쇄 +7 로 병합된다 (명세 §2-2의 예시 그대로)
-  const news = ev.incidents.find((i) => i.root.target === 'news:2026-08-03T15:30')!;
+  const news = ev.incidents.find((i) => i.root.targetId === 'news:2026-08-03T15:30');
+  /* `!` 로 넘기면 실패가 다음 줄의 TypeError 로 나와 무엇이 틀렸는지 안 읽힌다 */
+  assert.ok(news, '뉴스 런 사건이 사라졌다 — 사건 키 축(targetId)이 바뀌었는지 본다');
   assert.equal(news.size, 8);
+
+  /* **런북 키 회귀 검출기.** 조회는 `${rule}.${targetId}`(shared.tsx) 인데 그걸 지키는 단언이
+   * 룰 테스트에도 화면 테스트에도 없었다 — R07 의 `target` 을 사람이 읽을 문구로 다듬으면
+   * 테스트는 전건 초록인 채 조치 칸만 조용히 `런북 미등록` 이 된다(리뷰가 변이로 실증).
+   * 이 규약이 "target 은 라벨로 바꿔라"라는 압력을 새로 만들었으므로 그 자리에 가드를 둔다.
+   *
+   * ⚠️ 방향을 조심해야 한다. 계약은 **위반 → 런북**(위반이 나면 그 키로 조회된다)이지 그 역이
+   * 아니다. "모든 런북 항목에 지금 살아 있는 위반이 있어야 한다"로 쓰면 아직 안 터진 상황의
+   * 조치를 미리 등록하는 정상적인 사용이 거짓 실패가 된다(R12 DLQ·R17 실시간 런북 — §6-9 의
+   * 큐에 있는 작업이다). 그래서 "지금 붙는 키의 집합"을 고정한다 — 29·20·5 와 같은 종의
+   * 스냅샷 회귀값이다.
+   *
+   * **안 잡는 것**: 걸린 룰에 오타 난 키를 새로 등록하는 것(`R05.TYPO`)은 애초에 안 붙으므로
+   * 집합이 안 변해 통과한다. 그걸 잡으려면 "걸린 룰의 키는 그 룰의 targetId 중 하나여야 한다"로
+   * 써야 하는데, 그 형태는 **걸린 룰의 건강한 target 에 런북을 미리 등록**하는 것을 거짓 실패로
+   * 만든다(`R05.LOAD_PRICE_DAILY` 류 — 실측). 가드를 두 개 쌓지 않고 하나만 두되,
+   * **오탐이 없는 게 아니라 오탐의 방향을 고른 것**이다: 안 걸린 룰의 선등록은 통과시키고,
+   * 걸린 위반의 런북 등록은 아래 목록 갱신을 요구한다(29건 중 21건이 `런북 미등록` 이라
+   * 그쪽이 더 잦은 편집이다 — 실패는 읽히는 deepEqual diff 다). */
+  const produced = new Set(ev.violations.map((v) => `${v.rule}.${v.targetId}`));
+  const matched = Object.keys(facts.runbook).filter((k) => k.includes('.') && produced.has(k));
+  assert.deepEqual(matched.sort(), [
+    'R05.ASSEMBLE_EVENTS',
+    'R05.LOAD_DOCUMENTS',
+    'R07.INVESTOR_COLLECTION_KIS',
+    'R08.investor_flow',
+    'R11.price-explanation-realtime',
+    'R16.ASSEMBLE_EVENTS',
+  ]);
 });
