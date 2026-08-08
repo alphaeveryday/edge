@@ -176,56 +176,68 @@ def _block_kinds(meta):
     return [block["kind"] for block in meta["blocks"]]
 
 
-def test_significant_and_applicable_verdict_reaches_statistics(monkeypatch):
-    """성립 + 오늘 적용만 StatisticFact 로 승격돼 산문에 실린다."""
+JARGON = ("방아쇠", "노출", "성립", "판정불가", "유의", "p=", "패널", "고유층")
+
+
+def _clean(text: str) -> bool:
+    """고객 산문에 통계 어휘가 없다 - 근거 명세 v3 §0(카드에 통계 어휘 금지)."""
+    return not any(w in text for w in JARGON)
+
+
+def test_significant_verdict_lands_in_the_buffer_not_the_prose(monkeypatch):
+    """성립+오늘 적용 검정도 **고객 산문에는 안 실린다**(ALPHA-876) - 레코드는
+    stage_results 버퍼(stat_tests)에 남아 근거 포맷(통계검정 레코드 §3)의 입력이
+    된다. 검정 원문이 산문에 다시 나타나면 이 테스트가 깨져야 한다(Rule 9)."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9)])
 
-    assert "statistics" in _block_kinds(meta)
-    assert "CONTRACT.SIGNING 방아쇠 × Q수량" in text
-    assert "효과 +1.50%p" in text and "p=0.0010" in text
-    assert "성립 (n=120, p=0.0010) · 오늘 적용" in text
+    assert _clean(text), f"고객 산문에 통계 어휘가 노출됐다: {text}"
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "성립" and rec["applies_today"] is True
+    assert rec["n"] == 120 and rec["p"] == 0.001
+    assert rec["trigger"] == "CONTRACT.SIGNING" and rec["layer"] == "고유"
 
 
-def test_insignificant_hypothesis_is_stated_not_promoted(monkeypatch):
-    """비유의는 산문에 '유의하지 않았다' 로 **명시**되고, 통계 블록에는 못 오른다.
-    비유의 가설이 StatisticFact 로 실리면 이 테스트가 깨져야 한다(Rule 9)."""
+def test_insignificant_verdict_is_recorded_not_rendered(monkeypatch):
+    """비유의도 버퍼에 사실로 남되(숨기지 않음 - Rule 12) 산문에는 없다."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("불성립", 120, 0.4, 0.01, -0.002, 0.5)])
 
-    assert "statistics" not in _block_kinds(meta)
-    assert "유의하지 않았다 (n=120, p=0.4000)" in text
-    assert "영향 없음이 아니라 못 가름" in text
-    assert "· 오늘 적용" not in text
+    assert _clean(text)
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "불성립" and rec["applies_today"] is False
 
 
-def test_undecidable_never_masquerades_as_significant(monkeypatch):
-    """판정불가는 사유와 함께 판정불가로 남는다 - 유의로 위장하면 깨진다."""
+def test_undecidable_keeps_its_reason_in_the_buffer(monkeypatch):
+    """판정불가는 사유와 함께 버퍼에 남는다 - 유의로 위장하면 깨진다."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("판정불가", 10, None, None, None, None,
                    reason="패널 표본 n=10 < 30 - 백필이 필요하다")])
 
-    assert "statistics" not in _block_kinds(meta)
-    assert "판정불가 — 패널 표본 n=10 < 30" in text
-    assert "· 오늘 적용" not in text and "효과" not in text
+    assert _clean(text)
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "판정불가"
+    assert "패널 표본" in rec["reason"]
 
 
-def test_established_but_inapplicable_stays_out_of_statistics(monkeypatch):
-    """패널 성립이어도 오늘 조건 미충족이면 승격되지 않고 그 사실이 명시된다."""
+def test_established_but_inapplicable_is_flagged_in_the_buffer(monkeypatch):
+    """패널 성립이어도 오늘 조건 미충족이면 applies_today=False 로 남는다."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9,
                    cond_satisfied=False)])
 
-    assert "statistics" not in _block_kinds(meta)
-    assert "패널에서는 성립했으나 오늘 적용 불가 — 오늘 조건 미충족" in text
+    assert _clean(text)
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "성립" and rec["applies_today"] is False
+    assert rec["reason"], "적용불가 사유가 비었다"
 
 
 def test_missing_layers_raise_instead_of_returning_prose():

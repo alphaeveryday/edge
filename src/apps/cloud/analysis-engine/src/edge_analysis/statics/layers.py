@@ -96,6 +96,10 @@ class Rollup:
     twins: tuple[str, ...]      # 겹쳐서 뺀 ETF (동어반복) - 조용히 빼지 않는다
     alien: tuple[str, ...]      # 안 겹쳐서 뺀 ETF (근거 없음)
     halted: int                 # 거래정지로 뺀 종목 수 - 수익률 0 을 참으로 쓰면 거짓
+    # 등락 폭(breadth) - **측정된 전 구성종목** 기준(ALPHA-876). top-N 으로 자른
+    # `names` 로 세면 "구성종목 5종목 중" 같은 거짓 분모가 산문에 나간다(실측 08-08).
+    advancers: int = 0
+    decliners: int = 0
 
     @property
     def coverage(self) -> float:
@@ -383,20 +387,20 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
         layers.append(Layer(code, nm, "섹터", s_now, s_now - market_now, ov))
 
     idio = y_now - sum(x.contribution for x in layers)
-    names, wsum, wtot, halted = _names(lake, etf, day, layers, top, clock=clock,
-                                       intraday=intraday)
+    names, wsum, wtot, halted, adv, dec = _names(lake, etf, day, layers, top,
+                                                 clock=clock, intraday=intraday)
     return Rollup(etf, etf_label(lake, etf, meta.get(etf, etf)), day, y_now,
                   tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, len(names), wtot,
                   tuple(sorted(meta.get(t, t) for t in twins)),
-                  tuple(sorted(meta.get(t, t) for t in alien)), halted)
+                  tuple(sorted(meta.get(t, t) for t in alien)), halted, adv, dec)
 
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────
 def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
            clock: tuple[str, str] | None,
            intraday: dict[str, tuple[float, bool]] | None = None,
-           ) -> tuple[tuple[Name, ...], float | None, float, int]:
+           ) -> tuple[tuple[Name, ...], float | None, float, int, int, int]:
     """고유분을 청구하는 상위 종목. **비중 × 고유** 로 순위 - 큰 종목의 작은 움직임과
     작은 종목의 큰 움직임을 같은 자로 잰다.
 
@@ -409,7 +413,7 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
     """
     hold = holdings(lake, etf, day)
     if not hold or not layers:
-        return (), None, 0.0, 0
+        return (), None, 0.0, 0, 0, 0
     # 커밋 봉 모드(ALPHA-866)에서는 구성종목도 **intraday 만이 정본**이다 - 레이크를
     # 아예 안 읽는다. 원장이 결손으로 떨어뜨린 unit 이 레이크(스테일 폴백 경로)에서
     # 되살아나면 dropped_units 와 귀속이 서로 다른 세계를 말한다. 이름은 `hold` 의
@@ -423,6 +427,7 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
                       clock=clock)
     base = sum(x.contribution for x in layers)
     out, wsum, wtot, halted = [], 0.0, 0.0, 0
+    adv = dec = 0
     for tk, label, w in hold:
         if tk not in ser:
             continue
@@ -431,13 +436,15 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
             halted += 1
             continue
         e = r_now - base
+        adv += 1 if r_now > 0 else 0
+        dec += 1 if r_now < 0 else 0
         out.append(Name(tk, label, w, r_now, e, w * e))
         wsum += w * r_now
         wtot += w
     if not out:
-        return (), None, 0.0, halted
+        return (), None, 0.0, halted, 0, 0
     out.sort(key=lambda n: -abs(n.contribution))
-    return tuple(out[:top]), wsum, wtot, halted
+    return tuple(out[:top]), wsum, wtot, halted, adv, dec
 
 
 @lru_cache(maxsize=8192)

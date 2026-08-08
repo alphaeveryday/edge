@@ -695,8 +695,15 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         window_end=b[:5],
         header_return=header_return,
         window_return=measured,
-        advancers=sum(1 for item in names if float(item.ret) > 0),
-        decliners=sum(1 for item in names if float(item.ret) < 0),
+        # breadth 는 **측정된 전 구성종목**이다(ALPHA-876) - top-N `names` 로 세면
+        # "구성종목 5종목 중" 같은 거짓 분모가 나간다. 전수 집계는 rollup 이 갖고,
+        # 없는 주입 rollup(레거시 대역)만 names 로 최저선을 지킨다.
+        advancers=(sum(1 for item in names if float(item.ret) > 0)
+                   if getattr(roll, "advancers", None) is None
+                   else int(roll.advancers)),
+        decliners=(sum(1 for item in names if float(item.ret) < 0)
+                   if getattr(roll, "decliners", None) is None
+                   else int(roll.decliners)),
         market_return=None if market is None else float(market.ret),
         sector_name=None if sector is None else str(sector.name),
         sector_return=None if sector is None else float(sector.ret),
