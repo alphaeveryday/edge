@@ -544,7 +544,7 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
   assert.ok(news, '뉴스 런 사건이 사라졌다 — 사건 키 축(targetId)이 바뀌었는지 본다');
   assert.equal(news.size, 8);
 
-  /* **런북 키 회귀 검출기.** 조회는 `${rule}.${targetId}`(shared.tsx) 인데 그걸 지키는 단언이
+  /* **런북 키 회귀 검출기.** 조회는 `${rule}.${targetId}`(`runbookOf`, rules/evaluate.ts) 인데 그걸 지키는 단언이
    * 룰 테스트에도 화면 테스트에도 없었다 — R07 의 `target` 을 사람이 읽을 문구로 다듬으면
    * 테스트는 전건 초록인 채 조치 칸만 조용히 `런북 미등록` 이 된다(리뷰가 변이로 실증).
    * 이 규약이 "target 은 라벨로 바꿔라"라는 압력을 새로 만들었으므로 그 자리에 가드를 둔다.
@@ -610,7 +610,7 @@ test('vid — 같은 작업 키가 두 런에 걸려도 사건이 갈린다 (런
   );
 });
 
-test('vid 충돌 — 대상 축이 위반을 못 가르면 조용히 넘기지 않고 죽는다', () => {
+test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 산다', () => {
   /* 도달 경로를 **제약 없는 축**에서 고른다. `tasks` 의 중복은 원장이 막는다
    * (`uq_ops_expected_task_run_key UNIQUE (pipeline_run_id, task_key)`) — 거기서 재현하면
    * DB 가 이미 막는 것을 테스트하는 셈이다. `outputs` 는 엔드포인트가 조립하는 축이라
@@ -620,20 +620,57 @@ test('vid 충돌 — 대상 축이 위반을 못 가르면 조용히 넘기지 �
     { id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' },
     { id: 'o.pub', label: '게시(중복 행)', today: 20, base: 100, unit: '건' },
   ];
-  /* 뒤엣것을 버리거나 번호를 붙여 비키면 위치 인덱스가 이름만 바꿔 되살아난다. */
-  assert.throws(() => evaluate(f, NOW), /사건 식별자 충돌: R13:o\.pub/);
+  /* 다른 규칙이 낼 위반 — 충돌한 규칙 때문에 **이게 사라지면 안 된다**. 던져서 평가를 통째로
+   * 죽이면 파이프라인이 깨진 날 콘솔이 오류 카드 하나가 되고, 정작 볼 사건이 전부 없어진다. */
+  f.runs = [run({ id: 'dead', ledger_status: 'TIMED_OUT' })];
+
+  const rep = buildReport(f, NOW);
+  const r13 = rep.rules.find((r) => r.id === 'R13')!;
+  /* 위반 0건이 아니라 **못 돎** 이다 — 뒤엣것을 버리거나 번호를 붙여 비키면 위치 인덱스가
+   * 이름만 바꿔 되살아나므로 그 둘은 답이 아니다. */
+  assert.equal(r13.evaluated, false);
+  assert.equal(r13.violations, 0);
+  assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.pub/);
+  /* 충돌한 규칙의 위반은 하나도 안 실린다 — 반쯤 실으면 무엇이 빠졌는지 화면이 못 말한다 */
+  assert.equal(rep.violations.filter((v) => v.rule === 'R13').length, 0);
+  // 나머지는 그대로 산다
+  assert.deepEqual(rep.violations.filter((v) => v.rule === 'R04').map((v) => v.target), ['dead']);
 });
 
-test('vid 충돌 — 런이 빈 문자열이면 범위가 없는 것으로 읽혀 병합된다 (와이어의 falsy 함정)', () => {
-  /* `TaskFact.run_id` 는 `string` 필수라 `''` 가 타입상 합법이다. 범위가 `''` 면
-   * `scope ?? runId` 는 값을 주지만 `vid` 조립의 truthy 검사가 '없음'으로 읽어 두 위반이
-   * 같은 키가 된다 — 가드와 사용처가 falsy 를 다르게 읽는 그 자리다. 삼키지 않고 죽어야 한다. */
+test('범위가 빈 문자열이면 위반 하나만으로도 못 돎이다 (충돌해야 잡히면 시간 축 표류를 놓친다)', () => {
+  /* `TaskFact.run_id` 는 `string` 필수라 `''` 가 타입상 합법이다. `??` 는 `''` 를 통과시키는데
+   * vid 조립의 truthy 검사는 '없음'으로 읽는다 — 가드와 사용처가 falsy 를 다르게 읽는 자리다.
+   *
+   * ⚠️ 이걸 **충돌 검사에 맡기면 안 된다**. 위반이 하나뿐이면 겹치지 않아 `R05:T` 라는 정상처럼
+   * 보이는 vid 가 나가고, 내일 다른 런이 또 `''` 로 오면 어제 공유한 링크가 오늘 사건을 연다 —
+   * 한 스냅샷 안 충돌이 아니라 **시간 축을 가로지르는** 충돌이라 `seen` 이 영원히 못 잡는다.
+   * 그래서 모양 검사여야 한다: 위반 **하나**로 재현한다. */
   const f = emptyFacts();
-  f.tasks = [
-    task({ task_key: 'T', run_id: '', task_outcome: 'FAILED' }),
-    task({ task_key: 'T', run_id: '', task_outcome: 'PENDING' }),
-  ];
-  assert.throws(() => evaluate(f, NOW), /사건 식별자 충돌: R05:T/);
+  f.tasks = [task({ task_key: 'T', run_id: '', task_outcome: 'FAILED' })];
+  const r05 = buildReport(f, NOW).rules.find((r) => r.id === 'R05')!;
+  assert.equal(r05.evaluated, false, '빈 범위가 정상 vid 로 통과했다 — 내일 다른 런과 겹친다');
+  assert.match(r05.note ?? '', /빈 문자열/);
+});
+
+test('리포트 — 사건 키 축이 root·members·violations 에서 같다 (한쪽만 바꾸면 조인이 끊긴다)', () => {
+  /* `root` 만 vid 로 올리고 `members` 를 `{rule, target_id}` 로 두면, 같은 작업이 두 런에
+   * 걸린 날 멤버 두 줄이 **글자 하나 안 틀리게 같아진다** — root 만 갈리고 멤버는 합쳐 보인다.
+   * 그게 이 변경이 없애려던 상황이다. */
+  const f = emptyFacts();
+  const runId = 'news:2026-08-03T15:30';
+  f.runs = [run({ id: runId, lane: 'news', ledger_status: 'TIMED_OUT' })];
+  f.tasks = [task({ task_key: 'LOAD_DOCUMENTS', run_id: runId, task_outcome: 'FAILED' })];
+
+  const rep = buildReport(f, NOW);
+  const inc = rep.incidents.find((i) => i.members.length > 0)!;
+  const member = inc.members[0];
+  assert.equal(member.vid, `R05:LOAD_DOCUMENTS@${runId}`);
+  /* 멤버 vid 로 위반 행을 실제로 찾을 수 있어야 한다 — 조인이 성립하는지가 계약이다 */
+  const joined = rep.violations.find((v) => v.vid === member.vid);
+  assert.ok(joined, '멤버 vid 로 위반 행을 못 찾는다 — 리포트 안에서 조인이 끊겼다');
+  assert.equal(joined.absorbed_into, inc.root);
+  /* 범위를 값으로도 낸다 — 소비자가 `scope ?? run_id` 를 다시 조립하지 않아야 한다 */
+  assert.equal(joined.scope, runId);
 });
 
 test('R17 — 같은 데이터셋이라도 벤더가 다르면 다른 세션이다 (sourceGroup 을 버리면 겹친다)', () => {

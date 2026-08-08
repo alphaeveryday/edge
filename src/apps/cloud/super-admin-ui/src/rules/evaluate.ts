@@ -46,29 +46,42 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
   const seen = new Set<string>();
 
   for (const R of RULES) {
-    const evaluated = R.canRun ? R.canRun(f) : true;
-    let count = 0;
+    let evaluated = R.canRun ? R.canRun(f) : true;
+    /** 사건 식별자가 위반을 못 가른 사유 — 있으면 이 규칙은 `못 돎` 이 된다 */
+    let collision: string | null = null;
+    /* 규칙 단위로 모았다가 마지막에 편입한다 — 충돌이 나면 이 규칙의 위반은 **하나도** 안 싣기
+     * 때문이다. 반쯤 실으면 어떤 사건이 빠졌는지 화면이 말할 수 없다. */
+    const mine: Violation[] = [];
     if (evaluated) {
       for (const raw of R.run(f, { now })) {
         /* 규약: 표시용 target 과 키용 targetId 를 여기서 한 번만 정규화한다 —
          * 소비자(런북 키·간선·조사 경로)가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다 */
         const targetId = raw.targetId ?? raw.target;
-        /* 범위 정규화도 `targetId` 와 같은 규약 — 엔진이 한 번만 한다. 배치는 런 키가
-         * 범위를 겸하고, 런이 없는 실시간만 `scope`(세션 날짜)를 따로 싣는다. */
-        const vid = vidOf(R.id, targetId, raw.scope ?? raw.runId);
-        /* fail loud — 겹치면 딥링크가 조용히 다른 사건을 연다. 그게 위치 인덱스를 버린 이유이므로
-         * 뒤에 온 위반을 버리거나 번호를 붙여 비키면 같은 결함을 다른 모양으로 되살린다.
-         * 화면은 AdminLayout 의 ErrorBoundary 가 받는다(소비자 6곳 전부 그 경계 안이다). */
-        if (seen.has(vid)) {
-          throw new Error(
-            `사건 식별자 충돌: ${vid} — ${R.id} 의 대상 축(targetId${raw.scope ?? raw.runId ? '·범위' : ''})이 ` +
-              `이 위반들을 못 가른다. 규칙이 실어야 할 identity 축이 빠졌다.`,
-          );
+        /* 범위도 같은 규약으로 한 번만 정규화하고 **위반에 값으로 남긴다** — 계산만 하고 버리면
+         * 범위를 알아야 하는 소비자(리포트 조인 등)가 `scope ?? runId` 를 각자 다시 쓴다. */
+        const scope = raw.scope ?? raw.runId;
+        /* 빈 문자열은 '범위 없음'이 아니라 **망가진 사실**이다. `??` 는 통과시키고 아래 truthy
+         * 검사는 '없음'으로 읽어, 둘이 갈리면 범위 없는 vid 가 조용히 성립한다. 그 vid 는 같은
+         * 스냅샷 안에서 겹치지 않으면 안 잡히고, 내일 다른 런이 또 `''` 로 오면 어제 공유한
+         * 링크가 오늘 사건을 연다 — 충돌 검사로는 못 잡는 시간 축 충돌이다. */
+        if (scope === '') {
+          collision = `${R.id}: 범위 축이 빈 문자열이다(${targetId}) — '없음'과 구분되지 않아 사건 키를 못 만든다`;
+          break;
         }
-        seen.add(vid);
-        violations.push({
+        const vid = vidOf(R.id, targetId, scope);
+        /* 겹치면 이 규칙을 `못 돎` 으로 세운다. 뒤에 온 위반을 버리거나 번호를 붙여 비키면
+         * 위치 인덱스가 이름만 바꿔 되살아나므로 그 둘은 답이 아니다. 그렇다고 던지면 평가가
+         * 통째로 죽어 **나머지 18규칙의 사건까지 화면에서 사라진다** — 파이프라인이 깨진 날
+         * 콘솔이 통째로 오류 카드가 된다. vid 는 규칙 id 로 시작하니 충돌은 언제나 한 규칙
+         * 안에서만 나고, 그 규칙만 세우면 사유는 그대로 보이면서 나머지는 산다. */
+        if (seen.has(vid) || mine.some((v) => v.vid === vid)) {
+          collision = `${R.id}: 사건 식별자 충돌 ${vid} — 대상 축이 이 위반들을 못 가른다(실어야 할 identity 축이 빠졌다)`;
+          break;
+        }
+        mine.push({
           ...raw,
           targetId,
+          scope,
           rule: R.id,
           ruleName: R.name,
           layer: R.layer,
@@ -77,19 +90,26 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
           dep: R.dep,
           vid,
         });
-        count++;
       }
+    }
+    if (collision) {
+      /* 위반 0건이 아니라 **못 돎** 이다 — "봤고 괜찮다"와 같은 칸에 그리면 계약 위반이 정상으로 보인다 */
+      evaluated = false;
+      mine.length = 0;
+    }
+    for (const v of mine) {
+      seen.add(v.vid);
+      violations.push(v);
     }
     ruleResults.push({
       id: R.id,
       name: R.name,
       layer: R.layer,
       evaluated,
-      violations: count,
+      violations: mine.length,
       depends_on_mock:
-        evaluated &&
-        (violations.some((v) => v.rule === R.id && v.mock) || !!R.mockBacked?.(f)),
-      note: R.note?.(f) ?? R.dep,
+        evaluated && (mine.some((v) => v.mock) || !!R.mockBacked?.(f)),
+      note: collision ?? R.note?.(f) ?? R.dep,
     });
   }
 
@@ -143,11 +163,15 @@ export interface Report {
   as_of: { db: string; aws: string; trade_date: string };
   rules: RuleResult[];
   violations: {
+    /** 사건 키 — `incidents[].root`·`members[].vid`·`absorbed_into` 와 조인하는 축 */
+    vid: string;
     rule: string;
     /** 사람이 읽을 대상 */
     target: string;
-    /** 안정 식별자 — 런북 키·사건 키가 쓰는 축. `target` 과 같을 수 있다 */
+    /** 안정 식별자 — **런북 키**가 쓰는 축(시점이 없다). `target` 과 같을 수 있다 */
     target_id: string;
+    /** 시점 범위 — 배치는 런 키, 실시간은 세션 날짜. 없으면 범위 없는 대상이다 */
+    scope: string | null;
     severity: Severity;
     /** 세는 값. 양이 아닌 위반은 `null` 이고 판정은 `state` 에 있다 */
     metric: number | null;
@@ -165,8 +189,10 @@ export interface Report {
     root: string;
     severity: Severity;
     size: number;
-    /** `root` 가 사건 키(`vid`)라 멤버도 같은 축으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다 */
-    members: { rule: string; target_id: string; cause: string }[];
+    /** `root` 가 사건 키(`vid`)라 **멤버도 같은 축**으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다.
+     *  `rule`·`target_id` 만 내던 때가 있었는데, 같은 작업이 두 런에 걸리면 멤버 두 줄이 글자
+     *  하나 안 틀리게 같아져 root 만 갈리고 멤버는 합쳐 보였다. */
+    members: { vid: string; rule: string; target_id: string; cause: string }[];
   }[];
 }
 
@@ -183,9 +209,11 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
     as_of: { db: f.meta.db, aws: f.meta.aws, trade_date: f.meta.today },
     rules: ev.rules,
     violations: ev.violations.map((v) => ({
+      vid: v.vid,
       rule: v.rule,
       target: v.target,
       target_id: v.targetId,
+      scope: v.scope ?? null,
       severity: v.sev,
       metric: v.metric,
       unit: v.unit ?? null,
@@ -202,7 +230,12 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
       root: key(I.root),
       severity: I.sev,
       size: I.size,
-      members: I.members.map((m) => ({ rule: m.v.rule, target_id: m.v.targetId, cause: m.why })),
+      members: I.members.map((m) => ({
+        vid: m.v.vid,
+        rule: m.v.rule,
+        target_id: m.v.targetId,
+        cause: m.why,
+      })),
     })),
   };
 }

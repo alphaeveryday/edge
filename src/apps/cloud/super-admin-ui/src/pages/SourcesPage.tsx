@@ -19,6 +19,7 @@ import { datasetKind, gapRuns, liveness, segments } from '../domains/sources/min
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_MINUTE, MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
+import { incidentHref } from './ops/investigation';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
@@ -483,7 +484,7 @@ function LedgerCrumb({
     crumbs.push(<Link key="list" to="/ops/incidents">문제·사건</Link>);
     crumbs.push(
       incident ? (
-        <Link key="inc" to={`/ops/incidents/${encodeURIComponent(incidentId)}`}>
+        <Link key="inc" to={incidentHref(incident.root)}>
           {incident.root.title}
         </Link>
       ) : (
@@ -595,14 +596,31 @@ function LedgerNoContext() {
  * 실시간 세션의 원장 근거 — ops 원장이 아니라 `minute_ingestion_*` 이 답하는 문맥이다.
  * 같은 화면·같은 문맥 규약을 쓰되 조회하는 원장이 다르다는 사실을 그대로 밝힌다.
  */
-function RealtimeLedger({ dataset, date }: { dataset: string; date?: string }) {
+/**
+ * 실시간 원장 근거 — 세션 하나를 세운다.
+ *
+ * `sourceGroup` 이 문맥에 있으면 **반드시** 그걸로 좁힌다. 세션 identity 는
+ * `(dataset, sourceGroup, date)` 라 데이터셋만으로 고르면 벤더가 다른 세션 행(sessionId·phase·
+ * lease)이 아무 경고 없이 선다 — 사건은 벤더로 갈렸는데 근거는 남의 것을 보여주는 셈이다.
+ */
+function RealtimeLedger({
+  dataset,
+  date,
+  sourceGroup,
+}: {
+  dataset: string;
+  date?: string;
+  sourceGroup?: string;
+}) {
   const { data, isPending, isError, error } = useMinuteStatus(date, true);
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
-  const real = data.sessions.some((s) => s.dataset === dataset);
+  const match = (s: { dataset: string; sourceGroup: string }) =>
+    s.dataset === dataset && (sourceGroup === undefined || s.sourceGroup === sourceGroup);
+  const real = data.sessions.some(match);
   const view = real ? data : MOCK_MINUTE;
-  const session = view.sessions.find((s) => s.dataset === dataset);
+  const session = view.sessions.find(match);
   const kindLabel = datasetKind(dataset) === 'news' ? 'poll' : '창';
 
   if (!session) {
@@ -765,6 +783,7 @@ export function SourcesPage() {
   const incidentId = searchParams.get('incident')?.trim() || undefined;
   const dataset = searchParams.get('dataset')?.trim() || undefined;
   const date = searchParams.get('date')?.trim() || undefined;
+  const sourceGroup = searchParams.get('sourceGroup')?.trim() || undefined;
 
   const realtime = dataset !== undefined && REALTIME_DATASETS.has(dataset) && runKey === undefined;
   /* 문맥이 하나도 없으면 조회 자체를 하지 않는다 — 전체 덤프를 만들지 않기 위해서다 */
@@ -790,7 +809,7 @@ export function SourcesPage() {
       <div className="flex flex-col gap-4">
         <LedgerCrumb incidentId={incidentId} dataset={dataset} date={date} />
         <LedgerScope rows={[...scope, ['원장', 'minute_ingestion_session · minute_ingestion_window']]} />
-        <RealtimeLedger dataset={dataset!} date={date} />
+        <RealtimeLedger dataset={dataset!} date={date} sourceGroup={sourceGroup} />
       </div>
     );
   }

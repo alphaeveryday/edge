@@ -267,6 +267,9 @@ export interface Violation extends RawViolation {
   /** 항상 채워진다 — 엔진이 `raw.targetId ?? raw.target` 으로 정규화한다.
    *  소비자(런북 키·간선·조사 경로)는 이 필드만 보면 되고 폴백을 각자 쓰지 않는다. */
   targetId: string;
+  /** 엔진이 `raw.scope ?? raw.runId` 로 정규화한 값 — 소비자는 이 필드만 본다.
+   *  범위가 없는 대상(큐·산출처럼 실행에 안 매인 것)은 `undefined` 다. */
+  scope?: string;
   rule: string;
   ruleName: string;
   layer: Layer;
@@ -274,7 +277,7 @@ export interface Violation extends RawViolation {
   sev: Severity;
   dep: string | null;
   /**
-   * 사건 식별자 — 딥링크(`/ops/incidents?vid=…`)가 쥐는 축이다.
+   * 사건 식별자 — 딥링크(`/ops/incidents/detail?vid=…`)가 쥐는 축이다.
    * `${rule}:${targetId}` + 범위가 있으면 `@${scope ?? runId}`.
    *
    * **위치 인덱스(`R05#0`)였다.** 앞 위반이 해소되면 뒤가 당겨져 공유된 링크가 404 도 없이

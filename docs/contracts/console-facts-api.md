@@ -108,21 +108,32 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 
 - `canRun` 이 없는 규칙 3건(R03·R10·R13) — 소스가 없는데 `평가됨 · 위반 0` 이 된다
 - `meta.awsUnobservedRuns` — R03 의 부분 관측
-- 사건 식별자(`vid`)가 **위치 인덱스**(`${rule}#${순번}`)다 — 앞 위반이 해소되면 뒤가 당겨져
-  공유한 딥링크가 404 도 없이 다른 사건을 연다. 대체 키는 `${rule}:${targetId}` 인데 그것만으로는
-  부족하다 — **R05·R06·R16 은 `target` 이 `task_key` 라 같은 작업이 여러 런에 걸리면 충돌한다**
-  (셋 다 `runId` 를 들고 있으니 붙인다). 실시간 R17~R19 는 `runId` 가 없고 세션 identity 가
-  `(dataset, source_group, session_date)` 인데 **어댑터가 `source_group` 을 버린다** — 실어야 한다.
-  **충돌 시 fail loud.**
-  ⚠️ 스냅샷은 이 충돌을 못 보여준다 — 같은 `task_key` 가 둘 이상 런에 걸린 경우가 없고 minute
-  축은 아예 없다. 격자 30일치 실 응답에서는 날마다 반복된다.
+- ✅ **사건 식별자(`vid`) — 해소됨**(ALPHA-738, `rules/evaluate.ts`). 위치 인덱스(`${rule}#${순번}`)
+  였고 앞 위반이 해소되면 뒤가 당겨져 공유한 딥링크가 다른 사건을 열었다. 지금은
+  `${rule}:${targetId}` + 범위가 있으면 `@${scope ?? runId}` 다.
+  **두 축을 가른다**: `targetId` 는 *무엇이 고장났나*(런북 키 `${rule}.${targetId}` 가 쓰는 축이라
+  **날짜가 들어가면 안 된다** — 키가 매일 달라져 어떤 조치도 등록 못 한다), `scope` 는 *어느 실행
+  인스턴스인가*. 배치는 런 키가 범위를 겸하고, 실시간 R17~R19 는 `targetId=dataset/sourceGroup` ·
+  `scope=세션 날짜`(어댑터가 버리던 `source_group` 을 싣는다).
+  충돌 시 **그 규칙만 `못 돎`** 으로 세운다 — 던지면 나머지 18규칙의 사건까지 화면에서 사라진다.
+  범위가 빈 문자열이면 충돌 없이도 `못 돎` 이다(`''` 를 '없음'으로 읽으면 시간 축 충돌이 난다).
+  ⚠️ **딥링크는 경로가 아니라 쿼리다**(`/ops/incidents/detail?vid=…`). CloudFront SPA fallback
+  (`infra/terraform/modules/static-site/spa-rewrite.js`)이 **마지막 경로 조각의 점(.)** 으로 정적
+  파일을 가르는데, 대상 id 에 점이 든 사건이 있다(`R13:o.pub`·`R15:analyze.failed`). 경로에 두면
+  공유 링크·새로고침만 죽는다. **새 라우트에 점이 들 수 있는 파라미터를 경로로 두지 마라.**
 - R02 가 `kind` 부재를 "정규 런"으로 단정한다 — 모름이 가장 강한 주장으로 기본값이 잡힌다
 - `chain`·`outputs` 축 옵셔널화 (위 부재 규약). **`datasets` 는 넣지 마라** — 작업에서 파생하는
   축이라 못 보내는 축이 아니고, 옵셔널로 만들면 `canRun` 이 없는 R09 가 `평가됨 · 위반 0` 이 된다
 - 평가기의 `note`(`R.note?.(f)`)가 `if (evaluated)` **밖**이라 `canRun` 이 못 막는 진입점이다.
   오늘 안 터지는 건 `note` 보유 룰이 R07 하나뿐이고 그게 필수 축(`tasks`)을 읽어서다 —
   옵셔널 축을 읽는 `note` 가 하나라도 붙으면 죽는다. `evaluated &&` 안으로 넣거나 널 가드를 규약화한다
-- 화면 12곳이 사실을 **동기적으로** 읽는다(하나는 import 시점) — 비동기 전환이 필요하다
+- 화면 12곳이 사실을 **동기적으로** 읽는다 — 비동기 전환이 필요하다. 그중 하나는 **import 시점**
+  이다: `pages/ops/trendCatalog.ts` 의 `METRICS`(모듈 최상위 `export const`)가 평가되며
+  `output('o.doc')!.today`(`:273`·`:275`)·`output('o.trig')!.today`(`:452`·`:453`)를 읽는다.
+  축이 비면 렌더가 아니라 **모듈 평가**에서 죽어 `AdminLayout` 의 ErrorBoundary 밖이다(흰 화면).
+  `buildMetrics(facts)` 로 뒤집으면서 **그 `!` 4개를 같이 없애야** 한다. 같은 파일의
+  `chain('c.res') ?? 0`(`:367`·`:395`)은 부재를 0 으로 그려 "결과 생성률 0%" 라는 거짓 경보를
+  낸다 — `coverageMetric`·`lagMetric` 이 쓰는 `comparisonType: 'uninstrumented'` 규약을 따라야 한다.
 - **실행 상세로 가는 링크를 되살려야 한다.** 배선 전까지는 그 화면이 스냅샷 런만 해소해서
   실 API 화면(실행 이력 `/grid` · 현재 실행 `/minute` · 구성종목 결손)의 런을 못 연다.
   그래서 진입점 3곳을 끊고 사유 문구(`RUN_DETAIL_UNAVAILABLE`)를 세워 뒀다. 배선하면서

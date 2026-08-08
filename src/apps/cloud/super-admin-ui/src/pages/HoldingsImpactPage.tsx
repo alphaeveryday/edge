@@ -21,6 +21,7 @@ import { ApiError } from '../api/client';
 import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { useConsoleEvaluation } from './ops/shared';
+import { incidentHref } from './ops/investigation';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -37,7 +38,7 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
           <Link to="/ops/incidents">문제·사건</Link>
           <span aria-hidden="true">›</span>
           {incident ? (
-            <Link to={`/ops/incidents/${encodeURIComponent(incidentId)}`}>{incident.root.title}</Link>
+            <Link to={incidentHref(incident.root)}>{incident.root.title}</Link>
           ) : (
             <span>사건 {incidentId} (확인되지 않음)</span>
           )}

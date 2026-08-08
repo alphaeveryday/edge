@@ -45,7 +45,7 @@ const base = (o: Partial<Violation>) =>
   ({
     /* 엔진이 실제로 내는 모양(`${rule}:${targetId}[@${scope}]`)이다 — 여기에 옛 위치 인덱스
      * (`R99#0`)를 두면 이 파일이 프로덕션 형상을 한 번도 안 밟는다. */
-    vid: 'R99:t@etf-daily:2026-08-03T15:40',
+    vid: VID,
     rule: 'R99',
     ruleName: '테스트',
     layer: '런',
@@ -62,6 +62,8 @@ const base = (o: Partial<Violation>) =>
     ...o,
   }) as Violation;
 
+const VID = 'R99:t@etf-daily:2026-08-03T15:40';
+
 const incident = (v: Violation): Incident => ({ root: v, members: [], sev: v.sev, size: 1 });
 
 test('런 축 사건은 그 런만 연다 — 최근 런 전체를 다시 훑게 하지 않는다', () => {
@@ -70,8 +72,8 @@ test('런 축 사건은 그 런만 연다 — 최근 런 전체를 다시 훑게
   assert.equal(r.targets[0].kind, 'run');
   /* 런 하나는 자기 페이지를 갖는다 — 목록의 선택 상태(?run_id=)가 아니라 경로로 지목한다 */
   assert.match(r.targets[0].href, /^\/ops\/runs\/etf-daily%3A2026-08-03T15%3A40(\?|$)/);
-  assert.match(r.targets[0].href, /fromIncident=R99%3At%40etf-daily%3A2026-08-03T15%3A40/);
-  assert.deepEqual(r.ledger, { incident: 'R99:t@etf-daily:2026-08-03T15:40', runKey: 'etf-daily:2026-08-03T15:40' });
+  assert.match(r.targets[0].href, new RegExp(`fromIncident=${encodeURIComponent(VID).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.deepEqual(r.ledger, { incident: VID, runKey: 'etf-daily:2026-08-03T15:40' });
 });
 
 test('작업 축은 위반이 기록한 run_id 로만 연다 — 없으면 런을 추측하지 않는다', () => {
@@ -100,7 +102,7 @@ test('런 행이 없는 슬롯은 실행이 아니라 예정 슬롯이고, 원�
     FACTS,
   );
   assert.equal(r.targets[0].kind, 'slot');
-  assert.deepEqual(r.ledger, { incident: 'R99:t@etf-daily:2026-08-03T15:40', runKey: 'etf-daily:2026-07-28T15:40' });
+  assert.deepEqual(r.ledger, { incident: VID, runKey: 'etf-daily:2026-07-28T15:40' });
   /* 작업·시도 행이 있는 것처럼 보이면 안 된다 */
   assert.match(r.ledgerNote ?? '', /행이 없다/);
 });
@@ -131,7 +133,22 @@ test('실시간 데이터셋 사건은 1분 창이 아니라 그 날짜의 세�
   const r = investigate(incident(violation({ drill: ['dataset', 'ds-price_minute'] })), FACTS);
   assert.equal(r.targets[0].kind, 'session');
   assert.equal(r.targets[0].href, '/minute?date=2026-08-03&dataset=price_minute');
-  assert.deepEqual(r.ledger, { incident: 'R99:t@etf-daily:2026-08-03T15:40', dataset: 'price_minute', date: '2026-08-03' });
+  assert.deepEqual(r.ledger, { incident: VID, dataset: 'price_minute', date: '2026-08-03' });
+});
+
+test('실시간 세션 사건은 벤더를 원장 문맥에 싣는다 — 데이터셋만 넘기면 남의 세션 행이 선다', () => {
+  /* 세션 identity 는 `(dataset, sourceGroup, date)` 다. 사건은 벤더로 갈렸는데 원장 근거가
+   * 데이터셋만 받으면 `SourcesPage` 의 `.find(s => s.dataset === …)` 가 **첫 벤더**를 집는다 —
+   * bigkinds 사건에서 naver 세션의 sessionId·phase·lease 가 아무 경고 없이 선다. */
+  const r = investigate(
+    incident(violation({ target: 'news_minute / bigkinds', targetId: 'news_minute/bigkinds', drill: ['dataset', 'ds-news_minute'] })),
+    FACTS,
+  );
+  assert.equal(r.ledger?.sourceGroup, 'bigkinds');
+  assert.match(ledgerHref(r.ledger)!, /sourceGroup=bigkinds/);
+  /* 라벨도 벤더를 말해야 한다 — 목적지가 벤더를 좁히는 마당에 라벨만 데이터셋이면 어느
+   * 세션을 여는지 모른 채 이동한다 */
+  assert.match(r.targets[0].label, /news_minute\/bigkinds/);
 });
 
 test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 런까지 좁히지 않는다', () => {
@@ -228,6 +245,10 @@ test('사건 딥링크 — 점 든 대상이어도 경로 조각에 점이 없�
     /\./,
     `경로 마지막 조각에 점이 있으면 CDN 이 정적 파일로 읽는다 — ${href}`,
   );
+  /* 점을 없애는 가장 쉬운 방법은 경로를 목록 주소로 만드는 것인데, 그러면 **목록 화면이
+   * 잡고 vid 를 무시한다** — 딥링크가 조용히 다른 것을 여는, 이 변경이 없애려던 결함이다.
+   * 점 검사만 두면 그 회귀가 통과한다(변이로 실증). */
+  assert.notEqual(path, '/ops/incidents', `목록 주소다 — 사건 상세가 아니라 목록이 열린다 (${href})`);
   /* 값이 사라지지도 않아야 한다 — 점 없는 경로를 만드느라 식별자를 잘라내면 딥링크가 무의미하다 */
   assert.equal(new URLSearchParams(href.split('?')[1]).get('vid'), 'R13:o.pub');
 });

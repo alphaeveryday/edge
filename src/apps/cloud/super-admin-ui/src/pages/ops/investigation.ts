@@ -38,6 +38,11 @@ export interface LedgerContext {
   dataset?: string;
   /** 실시간 세션 축 — 세션 날짜(KST) */
   date?: string;
+  /**
+   * 실시간 세션 축 — 벤더. 세션 identity 가 `(dataset, sourceGroup, date)` 라 이게 없으면
+   * 원장 화면이 데이터셋만 보고 **다른 벤더의 세션 행**을 집는다(사건은 벤더로 갈렸는데).
+   */
+  sourceGroup?: string;
 }
 
 export interface Investigation {
@@ -139,6 +144,9 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
     /* 실시간 세션의 날짜는 **세션 응답이 말한 날**이다 — meta.today(배치 스냅샷의 거래일)와
      * 다를 수 있고, 다르면 드릴다운이 없는 날짜의 세션을 연다. */
     const date = facts.minute?.date ?? facts.meta.today;
+    /* `targetId` 는 세션의 대상 축 `dataset/sourceGroup` 이다 — 앵커(`ds-…`)에는 벤더가 없어
+     * 그것만 보면 어느 벤더의 세션인지 못 좁힌다. 없으면 **안 싣는다**(부재를 값으로 만들지 않는다). */
+    const vendor = v.targetId.split('/')[1];
     if (REALTIME_DATASETS.has(datasetId)) {
       return {
         targets: [
@@ -152,7 +160,14 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
             href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
           },
         ],
-        ledger: { incident: vid, dataset: datasetId, date },
+        /* `targetId` 는 `dataset/sourceGroup` 이다(세션의 대상 축) — 벤더를 여기서 꺼내 넘긴다.
+         * 앵커(`ds-…`)에는 벤더가 없어 그것만 보면 어느 세션인지 못 좁힌다. */
+        ledger: {
+          incident: vid,
+          dataset: datasetId,
+          date,
+          ...(vendor ? { sourceGroup: vendor } : {}),
+        },
         ledgerNote: null,
       };
     }
@@ -225,6 +240,7 @@ export function ledgerHref(ctx: LedgerContext | null): string | null {
   if (ctx.task) p.set('task', ctx.task);
   if (ctx.dataset) p.set('dataset', ctx.dataset);
   if (ctx.date) p.set('date', ctx.date);
+  if (ctx.sourceGroup) p.set('sourceGroup', ctx.sourceGroup);
   const qs = p.toString();
   return qs ? `/sources?${qs}` : null;
 }
