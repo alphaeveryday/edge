@@ -110,13 +110,16 @@ def test_decompose_distinguishes_short_history_from_missing_series():
     assert str(MIN_BETA_N) in lake.exists["layers"]
 
 
-def test_min_beta_sample_is_one_number_across_the_two_definitions():
+def test_the_two_min_sample_constants_do_not_drift_apart():
     """`layers` 와 `attribute` 의 최소 표본이 같은 값이다 (ALPHA-849).
 
-    WHY: 두 모듈이 각자 상수를 들고 있다(순환 import 를 피하려고). 갈리면 같은 런에서
-    **층은 서는데 갭 귀속만 부재**가 되고, 산문은 "층은 봤는데 갭은 모른다"로 인쇄된다 —
-    재료가 같은데 판정이 갈리는 것이라 운영자가 원인을 찾을 데가 없다. 한쪽만 고치는
-    변경이 조용히 통과하지 않도록 여기서 묶는다.
+    WHY: 두 모듈이 각자 상수를 들고 있다(순환 import 회피). 한쪽만 고치는 변경이 조용히
+    통과하는 것을 막는다 — 그게 이 단언이 잡는 전부다.
+
+    ⚠️ 값이 같다고 **두 판정이 같이 서는 것은 아니다.** 세는 것이 다르다: `layers` 는
+    `[-BETA_WINDOW:]` 로 60일에 캡이 걸린 수익률 계열이고, `attribute` 는 LIMIT 없는
+    갭×미국팩터 쌍의 전 이력이다. 재료가 다르므로 값이 같아도 한쪽만 서는 날은 남는다 —
+    그건 이 상수로 못 닫고, 이 테스트도 그것까지는 약속하지 않는다.
     """
     from edge_analysis.statics.attribute import MIN_BETA_N as ATTRIBUTE_MIN
 
@@ -125,24 +128,31 @@ def test_min_beta_sample_is_one_number_across_the_two_definitions():
     )
 
 
-def test_a_series_shorter_than_the_old_requirement_still_stands():
-    """옛 요건(40)에는 못 미치지만 새 요건(20)은 넘는 계열이 **층으로 선다**.
+def test_a_series_below_the_old_requirement_is_no_longer_refused(caplog):
+    """옛 요건(40)에 못 미치는 표본이 **표본 부족으로 거부되지 않는다** (ALPHA-849).
 
-    WHY: 요건을 낮춘 목적이 이것이다 — 상장이 늦어 40일을 물리적으로 못 채우는 계열
-    (실측 0210A0, 33거래일)이 후보에서 빠지면 그 ETF 는 섹터 층이 통째로 없다. 값만
-    바꾸고 이 경로를 안 태우면 "낮췄다"는 주장이 코드로 확인되지 않는다.
+    WHY: 요건을 낮춘 목적이다 — 상장이 늦어 40일을 물리적으로 못 채우는 계열(실측
+    0210A0, 33거래일이 최대)은 `len(hist) < MIN_BETA_N` 에서 통째로 잘려 그 ETF 의 분해가
+    아예 없었다. 값만 바꾸고 이 경로를 안 태우면 "낮췄다"가 코드로 확인되지 않는다.
+
+    ⚠️ **"섹터 층이 뜬다"를 단언하지 않는다.** 층 구성은 커버리지가 정한다 — 시장 하나로
+    목표(`COVER_TARGET`)를 넘기면 섹터는 호출조차 안 된다(실측: 같은 픽스처가 hist 43·28
+    에선 섹터를 세우고 38·32 에선 시장만 세운다 — 표본 길이가 아니라 그날 시장 기여가
+    갈랐다). 그건 설계된 예산 제한이지 이 티켓이 건드리는 축이 아니다.
     """
-    assert MIN_BETA_N <= 33 < 40, "이 테스트의 전제(33일 계열)가 요건과 안 맞는다"
+    assert MIN_BETA_N < 32 < 40, "이 테스트의 전제(32일 표본)가 요건과 안 맞는다"
 
     lake = _lake()
     lake.exists = {}
+    # `_series` 가 np.diff 로 첫 날을 잃고 당일을 빼므로 hist 는 34가 아니라 32다.
     for m in lake.series.values():
-        m["ret"] = m["ret"][:33]
+        m["ret"] = m["ret"][:34]
 
-    roll = decompose(lake, "T", DAYS[33].isoformat())
+    roll = decompose(lake, "T", DAYS[34].isoformat())
 
-    assert roll is not None, "33거래일 계열이 표본 부족으로 빠졌다 — 요건 완화가 안 먹었다"
-    assert "표본 부족" not in lake.exists.get("layers", "")
+    assert roll is not None, "32거래일 표본이 거부됐다 — 요건 완화가 안 먹었다"
+    assert "layers" not in lake.exists, (
+        f"표본 부족 사유가 남았다: {lake.exists.get('layers')}")
 
 
 def test_decompose_does_not_pollute_unbound_which_counts_tables():
