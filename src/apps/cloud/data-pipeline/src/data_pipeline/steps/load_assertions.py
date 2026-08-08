@@ -63,7 +63,13 @@ from edge_ontology import load_authority_registry, load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import TOO_LONG, load_resolution_index, plan_resolution
+from ..entity_resolution import (
+    MEASURE_SKIPPED,
+    POLICY_EXCLUDED_REASONS,
+    TOO_LONG,
+    load_resolution_index,
+    plan_resolution,
+)
 from ..lake import Storage, feature_news_assertions_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -83,6 +89,15 @@ _TOP_UNRESOLVED_LIMIT = 200
 
 # 길이 상한에 걸린 값 표본 상한. 상한값이 맞는지 판단하려면 실물이 필요하다.
 _TOO_LONG_SAMPLE_LIMIT = 30
+# 척도 표현 상위 **종** 수. **제외는 표본에서 빼는 것이지 안 보이게 하는 것이 아니다**
+# — 척도를 개체로 세울 것인가는 온톨로지가 열어 둔 결정이고(entity_resolution 의 상한·척도
+# 주석), 그 판단의 입력이 "어떤 척도 표현이 얼마나 오는가"다.
+# ⚠️ **위 `too_long` 표본과 자료구조가 다르다.** 그쪽은 "상한값이 맞나 실물을 본다"라
+# 원문 목록이면 되고 그 구간 고유율이 87% 라 중복이 안 쌓인다. 척도는 정반대다 —
+# `MEASURE_ROLES` 4역할의 어휘가 좁아 **중복이 보장**되므로, 원문을 그냥 담으면 상한이
+# 한 표현의 복사본으로 소진돼 나머지 종이 로그에서 통째로 사라진다(실측: 4종 100건에서
+# 30칸 전부 "영업이익"). 빈도 dict 로 세어 상위 종을 남긴다.
+_MEASURE_SAMPLE_LIMIT = 30
 
 
 
@@ -139,6 +154,7 @@ def run(
     concepts_minted = 0
     # 길이 상한에 걸린 값 표본. 개수만으론 상한이 맞는지 판단할 수 없다.
     too_long_sample: list[str] = []
+    measure_texts: dict[str, int] = {}
     unresolved_texts: dict[str, int] = {}
     created_sample: list[dict] = []
     failures: list[dict] = []
@@ -314,11 +330,20 @@ def run(
                         if entity_id is None:
                             text = argument.get("text")
                             if isinstance(text, str) and text.strip():
+                                text = text.strip()
                                 # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
-                                unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
+                                # ⚠️ **정책상 제외한 사유는 빼고 센다**(ALPHA-857) — 척도·
+                                # 문장꼴은 "못 붙인 것"이 아니라 "안 붙이기로 한 것"이라,
+                                # 섞이면 이 목록이 이미 기각한 방향(매출을 개념으로 추가)을
+                                # 1순위로 추천한다. 제외분은 **각자 카운터와 표본**이
+                                # 받는다 — 표본까지 없애면 이 PR 이 관측면을 지운 게 된다.
+                                if reason not in POLICY_EXCLUDED_REASONS:
+                                    unresolved_texts[text] = unresolved_texts.get(text, 0) + 1
                                 if (reason == TOO_LONG
                                         and len(too_long_sample) < _TOO_LONG_SAMPLE_LIMIT):
-                                    too_long_sample.append(text.strip())
+                                    too_long_sample.append(text)
+                                if reason == MEASURE_SKIPPED:
+                                    measure_texts[text] = measure_texts.get(text, 0) + 1
                     elif kind == "non_entity" and entity_id is not None:
                         # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
                         # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
@@ -419,6 +444,8 @@ def run(
         "concepts_minted": concepts_minted,
         # 상한에 걸려 미해소로 남긴 개념의 표본 — 온톨로지가 상한을 조정할 근거다.
         "concept_too_long_sample": too_long_sample,
+        "measure_skipped_sample": sorted(measure_texts.items(),
+                                         key=lambda kv: -kv[1])[:_MEASURE_SAMPLE_LIMIT],
         "argument_resolution": {
             # 분모 정의를 로그 자신이 들고 있어야 한다 — 이 필드가 없으면 ALPHA-802 이전에
             # 찍힌 로그(분모=argument 총수)와 이후 로그를 나란히 놓고 비교할 때 정의가
@@ -429,8 +456,12 @@ def run(
             # 분자는 **붙은 것을 직접 센 수**다(사유 허용목록이 아니다). 어느 사유로
             # 붙었는지는 위 `**args_by_reason` 분포가 그대로 말한다.
             "resolved_any": resolved_any,
-            "top_unresolved": sorted(unresolved_texts.items(),
-                                     key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
+            # ⚠️ 이름이 바뀌었다(ALPHA-857, 옛 `top_unresolved`). **회수 가능한 것만**
+            # 담기 때문이다 — 정책 제외(척도·문장꼴)는 빠진다. 같은 이름에 다른 의미를
+            # 두면 옛 로그와 말없이 어긋난다(이 트랙이 `rate`·`concepts_minted` 로 두 번 겪었다).
+            "top_unresolved_recoverable": sorted(unresolved_texts.items(),
+                                                 key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
+            "policy_excluded_reasons": sorted(POLICY_EXCLUDED_REASONS),
             "role_kinds": args_by_role_kind,
             "role_missing": args_role_missing,
             "out_of_vocabulary_roles": unknown_roles,

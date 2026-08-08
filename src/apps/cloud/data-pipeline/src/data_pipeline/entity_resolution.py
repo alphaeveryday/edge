@@ -141,6 +141,13 @@ MEASURE_SKIPPED = "measure_skipped"
 TOO_LONG = "concept_too_long"
 NOT_RESOLVABLE = "not_resolvable"
 
+# **붙이기로 해 놓고 못 붙인 것이 아니라, 안 붙이기로 정한 것**. 미해소 표본은 "무엇을 더
+# 붙일 수 있게 만들까"의 근거라, 정책상 제외한 것이 섞이면 다음 사람을 **이미 기각한
+# 방향으로 민다**(ALPHA-857 실측: 척도가 상위 1·2·4·7위를 차지했다).
+# ⚠️ 여기 없는 사유는 표본에 **들어간다** — 새 축이 늘어도 조용히 사라지지 않는 쪽이
+# 기본값이어야 한다. 빠뜨리면 시끄럽게 보이지, 조용히 없어지지 않는다.
+POLICY_EXCLUDED_REASONS = frozenset({MEASURE_SKIPPED, TOO_LONG})
+
 
 def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
     """멘션 → (concept entity_id, 정규화 키). 채번 대상이 아니면 None.

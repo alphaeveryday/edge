@@ -203,8 +203,8 @@ def test_unresolved_only_assertion_is_skipped_and_counted(tmp_path, monkeypatch)
     res = log["argument_resolution"]
     assert res["total"] == 2 and res["unresolved"] == 1 and res["ambiguous"] == 1
     assert res["rate"] == 0.0
-    assert ["미등록회사", 1] in [list(x) for x in res["top_unresolved"]] or \
-           ("미등록회사", 1) in [tuple(x) for x in res["top_unresolved"]]
+    assert ["미등록회사", 1] in [list(x) for x in res["top_unresolved_recoverable"]] or \
+           ("미등록회사", 1) in [tuple(x) for x in res["top_unresolved_recoverable"]]
 
 
 def test_partial_assertion_is_not_persisted_as_confirmed(tmp_path, monkeypatch):
@@ -342,7 +342,7 @@ def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkey
     개선과 분모 변화가 같은 숫자 안에서 섞인다.
 
     "2분기"가 별칭 후보 목록에 오르지 않는 것까지 함께 고정한다. 비실체 표현이 섞이면
-    top_unresolved 가 마스터 확대 판단의 근거로 못 쓰인다.
+    top_unresolved_recoverable 이 마스터 확대 판단의 근거로 못 쓰인다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
@@ -357,7 +357,7 @@ def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkey
     res = _log(storage)["argument_resolution"]
     assert res["total"] == 1 and res["resolved"] == 1 and res["rate"] == 1.0
     assert res["role_kinds"] == {"entity": 1, "non_entity": 2, "out_of_vocabulary": 0}
-    assert [t for t, _ in res["top_unresolved"]] == []
+    assert [t for t, _ in res["top_unresolved_recoverable"]] == []
     # 로그가 자기 분모 정의를 들고 있어야 ALPHA-802 이전 로그와 나란히 놓고 비교할 수 있다
     assert res["denominator"] == "entity_roles_only"
 
@@ -368,7 +368,7 @@ def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch,
     WHY: 어휘 밖은 추출단과 온톨로지가 갈렸다는 신호인데, 이 자리는 전부 분모 밖으로
     빠져 **해소율을 대표성 없는 수로 만든다**(어느 방향으로 틀리는지는 로그로 알 수
     없다 — 근거는 로더의 경고 블록 주석). 개수만 세면 어느 역할이 샜는지 몰라 고칠 수가
-    없다 — top_unresolved 를 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
+    없다 — 표본을 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
 
     어휘 밖이 `non_entity_resolved` 에 섞이지 않는 것도 함께 고정한다. 그 수는 역할별
     해소 분기(ALPHA-831)가 **걷어낼 적재량**의 근거인데, 어휘 밖은 걷어낼 계약이 없는
@@ -533,7 +533,87 @@ def test_non_entity_role_is_not_loaded_even_if_the_text_matches_a_ticker(tmp_pat
     assert res["non_entity_resolved"] == 0
 
 
-def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
+def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monkeypatch):
+    """정책상 제외한 사유는 미해소 표본에 **안 들어간다**(ALPHA-857).
+
+    WHY: 이 표본의 용도는 하나다 — "무엇을 더 붙일 수 있게 만들까"의 근거. 그래서 상위에
+    오른 표현이 곧 다음 작업 후보가 된다. ALPHA-831 이 사유 축을 늘리면서 "붙이려는데 못
+    붙인 것"과 "안 붙이기로 정한 것"이 한 통에 섞였고, 후자가 빈도가 높아 **상위 1·2·4·7
+    위를 차지**했다(08-08 dev 실측: 미해소 56,370 중 11,699건(20.8%)이 정책 제외).
+    그 목록을 보면 "매출을 개념으로 추가하자"는 결론이 나오는데, 이 트랙에서 검토하고
+    **기각한** 방향이다. 로그가 다음 사람을 이미 아니라고 판단한 쪽으로 밀면 안 된다.
+
+    회수 가능한 축은 **그대로 남아야** 한다 — 좁히다 같이 지우면 이 표본이 존재할 이유가
+    사라진다. 그래서 이 자리에 도달할 수 있는 회수 사유 **셋을 전부**(unresolved·ambiguous·
+    registry_miss) 픽스처에 태운다. 둘만 태우면 나머지 하나가 제외 집합에 조용히 추가돼도
+    스위트가 초록이다 — 특히 `ambiguous` 는 마스터에 이름이 있는데 대는 곳이 둘이라는
+    뜻이라 **회수 가능성이 가장 높은** 축이고, 그게 표본에서 사라지면 아무도 모른다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    long_name = "가" * 60          # concept_too_long — 상한이 바뀌어도 넉넉히 초과한다
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("METRIC", "영업이익"),          # measure_skipped — 정책 제외
+                        ("METRIC", "영업이익"),          # (빈도 차를 줘야 순위가 고정된다)
+                        ("METRIC", "매출"),             # measure_skipped — 정책 제외
+                        ("PROJECT", long_name),        # concept_too_long — 정책 제외
+                        ("ISSUER", "미등록회사"),        # unresolved — 회수 가능
+                        ("ISSUER", "충돌이름"),          # ambiguous — 회수 가능
+                        ("AUTHORITY", "없는기관"),       # registry_miss — 회수 가능
+                        ("ISSUER", "삼성전자")))])])     # 적재가 되도록 하나는 붙인다
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    res = _log(storage)["argument_resolution"]
+    sample = {t for t, _ in res["top_unresolved_recoverable"]}
+    # 다섯 자리가 각자 다른 사유를 탔는지 먼저 확인한다 — 안 그러면 아래 단언이
+    # "그 경로를 안 밟아서" 통과할 수 있다(픽스처가 계약을 못 밟는 고전적 함정)
+    assert res["measure_skipped"] == 3 and res["concept_too_long"] == 1
+    assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
+
+    assert not {"매출", "영업이익"} & sample, "척도가 표본에 남았다 — 기각한 방향을 추천한다"
+    assert long_name not in sample, "상한 초과 문장이 표본에 남았다"
+    assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 가능한 축까지 같이 지웠다"
+
+    # 제외분이 **사라지는 게 아니라 자기 자리로** 간다. 이게 없으면 이 PR 은 척도 표현의
+    # 텍스트를 로그에서 통째로 지운 것이 된다 — 수(11,699)는 남지만 "무엇이 대부분인가"를
+    # 못 보게 되고, 그게 온톨로지가 "척도를 개체로 세울까"를 판단할 입력이다.
+    log = _log(storage)
+    assert long_name in log["concept_too_long_sample"]
+    # ⚠️ **빈도까지** 못박는다. 원문 목록으로 담으면 어휘가 좁은 척도는 상한이 한 표현의
+    # 복사본으로 소진돼 나머지 종이 사라진다 — 존재만 단언하면 그 깨진 모양도 통과한다.
+    assert [tuple(x) for x in log["measure_skipped_sample"]] == [("영업이익", 2), ("매출", 1)]
+
+    # 무엇을 뺐는지 로그가 스스로 말한다 — 조용히 좁히면 "왜 매출이 안 보이지"가 된다.
+    # ⚠️ 상수와 비교하면 **항등식**이라 멤버십이 안 잡힌다(양변이 같은 값을 참조한다).
+    # 리터럴로 못박아, 제외 집합이 넓어질 때 여기서 걸려 근거를 대게 한다.
+    assert set(res["policy_excluded_reasons"]) == {"measure_skipped", "concept_too_long"}
+
+
+def test_sample_keys_are_trimmed_so_frequency_ranking_survives(tmp_path, monkeypatch):
+    """표본 키는 공백을 턴다 — 안 그러면 빈도 순위가 갈린다(ALPHA-857).
+
+    WHY: 이 표본의 **유일한** 용도가 빈도 순위다(무엇을 먼저 붙일 수 있게 만들까). 같은
+    표현이 앞뒤 공백 유무로 별개 행이 되면 빈도가 쪼개져, 상위에 와야 할 표현이 밀린다.
+    수치는 멀쩡해 보이고 순위만 틀리는 형태라 로그만 봐서는 못 잡는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    # 같은 표현을 공백 변형으로 세 번 — 턴다면 3, 안 턴다면 1/1/1 로 갈린다
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        event_type_code=f"E{i}",
+        arguments=_args(("ISSUER", v), ("ISSUER", "삼성전자")))
+        for i, v in enumerate(("미등록회사", " 미등록회사", "미등록회사 "))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    sample = dict(_log(storage)["argument_resolution"]["top_unresolved_recoverable"])
+    assert sample == {"미등록회사": 3}, sample
+
+
+def test_unresolved_sample_keeps_the_long_tail(tmp_path, monkeypatch):
     """미해소 상위 표현을 200개까지 남긴다(ALPHA-802).
 
     WHY: 상한이 20 이던 동안 롱테일 구성이 관측되지 않아, 로그만 보고는 "마스터를
@@ -553,7 +633,7 @@ def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
 
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
-    top = _log(storage)["argument_resolution"]["top_unresolved"]
+    top = _log(storage)["argument_resolution"]["top_unresolved_recoverable"]
     assert len(top) == 200
     counts = [c for _, c in top]
     assert counts == sorted(counts, reverse=True)

@@ -421,7 +421,7 @@ def test_cross_board_ticker_collision_is_named_before_the_merge_hides_it(tmp_pat
     병합이 조용히 한쪽을 덮고(같은 런은 fetched_at 이 같아 나중 것이 이긴다), 종목 하나가
     잘못된 시장 이름을 달거나 사라진다. 실측 충돌은 0건이지만 그건 우리가 강제하는
     불변식이 아니라 KRX 의 성질이다 — 깨지는 날 로그에 수만 있으면 어느 종목인지 몰라
-    고칠 수 없다. `top_unresolved` 를 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
+    고칠 수 없다. 미해소 표본을 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
     """
     boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
     boards["knx"][0] = _row("000000", "충돌종목")     # 코스피 000000 과 같은 코드
