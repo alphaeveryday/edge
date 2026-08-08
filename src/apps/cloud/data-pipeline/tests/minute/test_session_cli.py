@@ -135,6 +135,37 @@ class TestPlan:
         assert payload["windows"]["first"].endswith("09:00:00+09:00")
         assert payload["windows"]["last"].endswith("15:30:00+09:00")
 
+    def test_공시_세션은_universe_없이_시간외_격자로_계획된다(self, ledger_db, capsys):
+        """DART 당일접수는 07:30~18:00 이라 정규장 격자면 **16·17·18시가 계획에서 빠진다**
+        — 현 SFN 레인이 그 3슬롯을 돌고 있어서 그대로 컷오버하면 그 접수분이 다음 거래일
+        아침까지 안 들어온다(ALPHA-875).
+
+        공시는 소스 단위라 universe 가 없다. `universe and universe.extended_hours_ids` 로
+        게이트를 두면 universe=None 이 falsy 라 `EXTENDED_HOURS_DATASETS` 에 넣어도 격자가
+        조용히 390 에 머문다 — 위 iNAV 테스트와 정확히 반대 방향의 배선 반례다.
+        """
+        code = plan_session_cli(
+            make_settings(), dataset="disclosure_minute", source_group="dart",
+            session_date="2026-07-31", universe=None,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert (code, payload["window_count"]) == (0, 720)
+        assert payload["windows"]["first"].endswith("08:00:00+09:00")
+        assert payload["windows"]["last"].endswith("20:00:00+09:00")
+
+    def test_뉴스_세션은_같은_경로에서_정규장_격자로_남는다(self, ledger_db, capsys):
+        """공시와 **같은 호출 형태**(universe=None)로 dataset 만 바꾼다 — 위 720 테스트와
+        짝이다. `EXTENDED_HOURS_DATASETS` 게이트를 통째로 걷어내는 구현은 위 테스트만으로
+        통과하고, 그러면 뉴스가 아무도 안 채우는 시간외 window 330개를 매일 DUE 로 쌓는다.
+        """
+        code = plan_session_cli(
+            make_settings(), dataset="news_minute", source_group="bigkinds",
+            session_date="2026-07-31", universe=None,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert (code, payload["window_count"]) == (0, 390)
+        assert payload["windows"]["first"].endswith("09:00:00+09:00")
+
     def test_unknown_dataset_is_rejected(self, ledger_db):
         # 오타를 뉴스로 흘리면 그 dataset 을 처리할 Worker 가 없어 하루가 통째로 안 도는데
         # 원장은 정상으로 보인다

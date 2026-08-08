@@ -44,6 +44,11 @@ DATASET_NEWS_MINUTE = "news_minute"
 # 저건 하루 한 점이고 이건 장중 시각 grain 이라, 한 dataset 으로 접으면 canonical 이
 # 행마다 grain 을 되물어야 한다.
 DATASET_ETF_INAV_MINUTE = "etf_inav_minute"
+# 공시(ALPHA-875). **window 단위 산출물이 없는 dataset 이다** — 증분 커서가 없어 매 tick 이
+# 그날 날짜창 전체를 다시 읽는다(`sources/dart_disclosure.py`). 그래서 window 는 "그 분에
+# 한 번 폴링했다"는 원장 단위이고, 완전성은 window 가 아니라 런 사이 rcept_no 집합 비교가
+# 진다(`steps/ingest_raw_disclosure.py` 모듈 주석). 뉴스가 같은 성질이다.
+DATASET_DISCLOSURE_MINUTE = "disclosure_minute"
 # dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이다 — 어휘 밖 값으로
 # 세션이 서면 그 소스를 처리하는 어댑터·Worker 배선이 없어 dataset 오타와 같은 모양으로
 # 하루가 조용히 안 돈다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
@@ -59,6 +64,8 @@ SOURCE_GROUPS_BY_DATASET = {
     DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
     # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만).
     DATASET_ETF_INAV_MINUTE: frozenset({"kis"}),
+    # 공시는 OpenDART 단독이다 — 국내 전자공시의 원 접수처가 하나다.
+    DATASET_DISCLOSURE_MINUTE: frozenset({"dart"}),
 }
 # ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을
 # 한쪽에만 넣게 되고, 그때 정상 입력이 KeyError 로 죽거나(어휘표 누락) 유효한 dataset 이
@@ -70,7 +77,21 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # 09:00 이고(`kis_inav.MARKET_OPEN`) 그 하한은 앞으로 못 내린다(파티션 `ingest_date` 가
 # UTC 스탬프라 09:00 KST 미만은 파티션이 전날로 붙는다). 격자만 08:00 로 넓히면 매 거래일
 # 60 window 가 아무도 못 채우는 채로 DUE 에 남고, iNAV 는 소급이 불가라 영구 결손이다.
-EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE})
+#
+# **공시는 쓴다**(ALPHA-875) — 안 넓히면 현 SFN 레인이 덮는 구간을 잃는다: DART 당일접수는
+# 07:30~18:00 이라 09:00~15:30 격자는 16·17·18시 접수분을 다음 거래일 아침까지 못 본다.
+# iNAV 를 막은 두 근거가 공시에는 **둘 다 안 걸린다**:
+# ① 파티션 `ingest_date` 가 UTC 인 것은 같지만 그걸 읽는 소비자가 없다 —
+#    `normalize_disclosure`·`_segment` 는 `raw/` 를 전량 스캔해 `ingest_date` 로 고르지 않고,
+#    본문 seen-map 은 이미 UTC 2일을 훑는다(`ingest_raw_disclosure._DOC_LOOKBACK_DAYS`, 그
+#    상수의 주석이 바로 이 09:00 경계를 근거로 2를 골랐다).
+# ② "아무도 못 채우는 window" 가 안 생긴다 — 매 tick 이 날짜창 전체를 재독하므로 08:00
+#    tick 도 자기 window 를 채운다(그 시각 접수분이 0건이면 VALID_EMPTY 다).
+# ⚠️ 알려진 천장 둘: 07:30~08:00 접수분은 격자 밖이라 08:00 tick 이 창 재독으로 줍고(지연
+# ≤30분, 유실 아님), 18:00~20:00 은 접수가 끝난 구간이라 빈 폴링이다.
+# ponytail: 격자 상수(`EXTENDED_OPEN`/`CLOSE`)가 공용이라 dataset 별로 좁히지 않았다 —
+# 빈 폴링의 벤더 콜이 실제로 문제가 되면 dataset 별 격자 폭을 그때 도입하라.
+EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_DISCLOSURE_MINUTE})
 # **상주 서비스를 스케일하는 세션**의 dataset. `start/stop-minute-session` 이 올리고
 # 내리는 서비스 목록은 dataset 별이 아니라 **공용**이라, 여기 없는 dataset 으로 stop 을
 # 부르면 phase 게이트는 그 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라

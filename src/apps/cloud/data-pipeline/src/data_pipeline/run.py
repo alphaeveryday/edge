@@ -42,6 +42,7 @@ from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.rollup import rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
+from .minute.states import MINUTE_DATASETS
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
 from .minute.price_consumer import price_consumer_cli
@@ -223,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
                              "여기서 바로잡지 않으면 복구 경로가 없다")
     parser.add_argument("--dataset", default=None,
                         help="세션 dataset. plan-minute-session 은 "
-                             "price_minute|news_minute|etf_inav_minute, "
+                             # 어휘를 산문으로 베끼지 않는다 — 표(states.SOURCE_GROUPS_BY_
+                             # DATASET)가 SSOT 라 dataset 이 늘 때 여기가 조용히 낡는다
+                             f"{'|'.join(sorted(MINUTE_DATASETS))}, "
                              "start/stop-minute-session 은 **price_minute 만**"
                              "(공용 서비스 목록을 스케일하므로 그 세션이 서비스를 "
                              "소유해야 한다 — states.SCALED_DATASETS), "
