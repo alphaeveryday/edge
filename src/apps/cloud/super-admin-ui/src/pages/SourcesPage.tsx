@@ -630,7 +630,10 @@ function RealtimeLedger({
       <div className="card card-pad">
         <p className="t-sm m-0">이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          {ofDataset.length > 0
+          {/* ⚠️ `real` 을 같이 물어야 한다. 목 폴백일 때 `ofDataset` 은 **목의 행**이라, 그걸로
+               "이 데이터셋의 세션은 있다"를 말하면 실 응답엔 없는 세션의 존재를 단언하게 된다
+               (실 응답에 그 데이터셋 행이 하나라도 있었다면 `real` 이 참이다). */}
+          {real && ofDataset.length > 0
             ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
                  벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
               `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`

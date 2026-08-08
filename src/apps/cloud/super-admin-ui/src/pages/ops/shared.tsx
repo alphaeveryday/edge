@@ -10,11 +10,13 @@ import { useSearchParams } from 'react-router-dom';
 import type { BadgeTone } from 'ui-kit';
 import { evaluate, runbookOf as lookupRunbook } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
+import { RULES } from '../../rules/rules';
 import type {
   Evaluation,
   Facts,
   Incident,
   MinuteFacts,
+  RuleResult,
   RunbookEntry,
   Severity,
   Violation,
@@ -190,6 +192,35 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
       facts,
     };
   }, [data]);
+}
+
+/* ── 판정을 못 한 규칙 ──
+ *
+ * 부재를 말하는 화면 문장(…없습니다 · 해소 · 판정한 것이 없다)은 **전부 이걸 먼저 물어야 한다.**
+ * 규칙이 못 돌면 그 규칙의 사건은 없는 게 아니라 **걸렸는지조차 모르는** 것이다. 화면마다 문구를
+ * 고치면 매번 한 곳이 남는다 — 그래서 판정도 문장도 여기 한 벌만 둔다.
+ *
+ * 두 종류를 한 함수가 같이 낸다: `axis`(사실 축 부재 = 계측 공백)와 `identity`(응답이 사건을
+ * 못 가르게 줬다 = 계약 위반). 뜻은 다르지만 **"이 규칙은 아무 답도 안 했다"는 같아서**, 부재
+ * 문장을 쓰는 자리에서 한쪽만 물으면 나머지 한쪽이 그대로 거짓말을 한다.
+ */
+export function unevaluatedRules(ev: ConsoleEvaluation): RuleResult[] {
+  return ev.rules.filter((r) => !r.evaluated);
+}
+
+/** 이 사건 식별자를 낼 규칙이 이번 평가에서 못 돌았는가.
+ *  `vid` 는 `${rule}:…` 로 시작한다(엔진 `vidOf`) — 규칙 id 가 유일하다는 것이 이 매칭의 전제고,
+ *  그 전제는 `rules.test.ts` 가 단언한다. */
+export function unevaluatedFor(ev: ConsoleEvaluation, vid: string): RuleResult | undefined {
+  return unevaluatedRules(ev).find((r) => vid.startsWith(`${r.id}:`));
+}
+
+/** 못 돈 사유 한 줄 — 종류는 `notRun` 이 구조로 가른다(문구를 파싱해 추측하지 않는다).
+ *  `axis` 는 `note` 가 아니라 `dep` 를 낸다: note 는 리포트 주석 자리라 사유가 아닐 수 있다. */
+export function notRunReason(r: RuleResult): string {
+  return r.notRun === 'identity'
+    ? `응답 결함 — ${r.note}`
+    : `못 돎 — ${RULES.find((R) => R.id === r.id)?.dep ?? '사실 축 부재'}`;
 }
 
 /* `DRILL_ROUTE`·`drillHref` 를 지웠다 (ALPHA-738 단계 3). 소비자가 0이었고, 살아나면

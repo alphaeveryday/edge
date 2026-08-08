@@ -24,7 +24,9 @@ import {
   domainOf,
   fmt,
   kst,
+  notRunReason,
   runbookOf,
+  unevaluatedFor,
   useConsoleEvaluation,
 } from './shared';
 import { investigate, ledgerHref } from './investigation';
@@ -50,18 +52,33 @@ function Fact({ k, children }: { k: string; children: React.ReactNode }) {
 
 export function IncidentDetailPage() {
   const vid = useSearchParams()[0].get('vid') ?? '';
-  const { incidents, facts } = useConsoleEvaluation();
+  const ev = useConsoleEvaluation();
+  const { incidents, facts } = ev;
   const incident = incidents.find((i) => i.root.vid === vid);
 
   if (!incident) {
+    /* 공유 링크의 도착지다 — 여기서 "해소"라고 단정하면 이 PR 이 없애려던 오독을 이 PR 이 낸다.
+     * 사건이 안 보이는 이유는 둘이다: 규칙이 돌았는데 안 걸렸거나(해소), 규칙이 **아예 판정을
+     * 못 했거나**. 뒤엣것은 걸렸는지조차 모르는 상태라 같은 문장으로 덮으면 거짓이다. */
+    const notRun = unevaluatedFor(ev, vid);
     return (
       <div className="card card-pad">
         <p className="t-sm m-0">이 사건을 찾을 수 없습니다.</p>
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-          사건 식별자 <code>{vid || '(없음)'}</code> 가 지금 평가 결과에 없습니다 — 규칙이 더는 걸리지
-          않거나(해소) 링크가 낡았습니다. 다른 사건으로 대체해 보여주지 않습니다.{' '}
-          <Link to="/ops/incidents">문제·사건으로</Link>
-        </p>
+        {notRun ? (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            사건 식별자 <code>{vid}</code> 를 낼 규칙은 <span className="mono">{notRun.id}</span>{' '}
+            {notRun.name} 입니다. 이 규칙이 이번 평가에서{' '}
+            <b style={{ color: 'var(--down)' }}>판정을 못 했습니다</b> ({notRunReason(notRun)}) — 위반이
+            하나도 실리지 않아, 해소됐는지 아직 걸려 있는지 여기서는 알 수 없습니다.{' '}
+            <Link to="/ops/incidents">문제·사건으로</Link>
+          </p>
+        ) : (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            사건 식별자 <code>{vid || '(없음)'}</code> 가 지금 평가 결과에 없습니다 — 규칙은 돌았고
+            더는 걸리지 않거나(해소) 링크가 낡았습니다. 다른 사건으로 대체해 보여주지 않습니다.{' '}
+            <Link to="/ops/incidents">문제·사건으로</Link>
+          </p>
+        )}
       </div>
     );
   }

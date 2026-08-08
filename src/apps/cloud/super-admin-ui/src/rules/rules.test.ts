@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildReport, evaluate, runbookOf } from './evaluate.ts';
+import { RULES } from './rules.ts';
 import type { Facts, MinuteSessionFact, RunFact, TaskFact, Violation } from './types.ts';
 
 const NOW = new Date('2026-08-03T16:21:00+09:00');
@@ -607,6 +608,20 @@ test('vid — 같은 작업 키가 두 런에 걸려도 사건이 갈린다 (런
       'R05:LOAD_DOCUMENTS@news:2026-08-03T15:00',
       'R05:LOAD_DOCUMENTS@news:2026-08-03T15:30',
     ],
+  );
+});
+
+test('규칙 id 는 유일하다 — 충돌 검사를 규칙 안으로 좁힌 근거이고, 화면이 vid→규칙을 되찾는 축이다', () => {
+  /* 이 단언이 없으면 두 곳이 조용히 무너진다. (1) 평가기가 vid 충돌을 **규칙 단위**로만 본다
+   * (규칙 간 `seen` 을 지운 논거가 "vid 는 규칙 id 로 시작한다"였다). (2) 화면이
+   * `vid.startsWith(`${id}:`)` 로 못 돈 규칙을 되찾는다(`ops/shared` 의 `unevaluatedFor`).
+   * id 가 겹치면 전자는 충돌을 못 잡고 후자는 남의 규칙 사유를 그린다. */
+  assert.equal(new Set(RULES.map((R) => R.id)).size, RULES.length, '규칙 id 가 겹친다');
+  /* 유일성만으로는 접두사 논거가 안 선다: id 에 구분자가 들어가면 `A:` + `t` 가 `B:` + `t'` 와
+   * 같아질 수 있다(A='R1', B='R1:x'). 구분자를 안 쓰는 것이 그 가정의 나머지 절반이다. */
+  assert.ok(
+    RULES.every((R) => !R.id.includes(':')),
+    '규칙 id 에 vid 구분자(:)가 들어갔다 — 규칙 접두사가 서로 갈리지 않는다',
   );
 });
 

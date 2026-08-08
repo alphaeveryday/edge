@@ -19,6 +19,8 @@ import {
   SEV_TONE,
   SourceChip,
   fmt,
+  notRunReason,
+  unevaluatedRules,
   useConsoleEvaluation,
   violationTip,
 } from './shared';
@@ -37,6 +39,9 @@ const SCOPE_TIP = [
   '집계 범위 — 실행·작업 실패, 데이터 결손·신선도, 장중 수집 지연·무증거, 분석 생성 실패,',
   '원장·관측 불일치. 테넌트 전달·발번은 이 콘솔 소관이 아니라 개수에서 뺀다(룰은 그대로 돈다).',
   '',
+  '이 개수는 판정된 규칙에 한한 수다 — 못 돈 규칙(계측 공백·응답 결함)의 사건은 걸렸는지',
+  '모르므로 세지 않는다. 무엇이 못 돌았는지는 아래 규칙 목록이 줄마다 말한다.',
+  '',
   '정렬 — evaluate() 가 낸 순서 그대로다(심각도 → 연쇄 크기 → 대표 수치).',
   '단위가 다른 수치를 가로질러 비교하지 않으므로 같은 심각도 안의 위아래를 조치 우선순위로',
   '읽지 마라.',
@@ -48,8 +53,13 @@ export function IncidentsListPage() {
   const requested = params.get('severity');
   /* URL 이 선택 상태의 정본이다 — 새로고침·링크 공유가 같은 심각도를 연다. 기본은 P0. */
   const selected: Severity = isSeverity(requested) ? requested : 'P0';
-  const { pipeline, outOfScope, rules, minuteLoaded } = useConsoleEvaluation();
+  const ev = useConsoleEvaluation();
+  const { pipeline, outOfScope, rules, minuteLoaded } = ev;
   const list = pipeline.filter((i) => i.sev === selected);
+  /* 이 화면의 개수·빈 목록 문장은 **판정된 규칙에 한한 사실**이다. 못 돈 규칙이 있으면 개수는
+   * 하한이고 "없다"는 "모른다"가 된다 — 그걸 안 밝히면 계측 공백과 응답 결함이 정상으로 읽힌다. */
+  const unevaluated = unevaluatedRules(ev);
+  const badResponse = unevaluated.filter((r) => r.notRun === 'identity');
 
   /* 화면만 P0 로 떨어뜨리면 주소창이 거짓말을 한다(?severity=foo 인데 P0 를 보여줌).
    * 링크를 공유했을 때도 같은 상태가 열리도록 URL 을 정규화한다. */
@@ -74,6 +84,10 @@ export function IncidentsListPage() {
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         파이프라인 소관 문제 {pipeline.length}건
         {outOfScope.length > 0 && ` · 담당 범위 밖 ${outOfScope.length}건 제외`}
+        {/* 응답 결함은 "위반 0"이 아니라 "못 셌다"다 — 이 수에 안 들어간다는 사실을 수 옆에 둔다.
+            `못 돎`(계측 공백)은 평상시에도 0이 아니라 여기 세우면 소음이 되므로 ⓘ 와 규칙 목록이
+            맡는다. 여기 서는 것은 어제까진 없다가 오늘 생기는 것뿐이다. */}
+        {badResponse.length > 0 && ` · 응답 결함으로 못 센 규칙 ${badResponse.length}개`}
         <Info tip={SCOPE_TIP} label="집계 범위와 정렬" />
       </p>
 
@@ -113,7 +127,17 @@ export function IncidentsListPage() {
           <div className="card-pad">
             <p className="t-sm m-0">{selected} 로 걸린 사건이 없습니다.</p>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-              규칙이 이 심각도로 판정한 것이 오늘 없다는 뜻입니다 — 다른 심각도를 골라 보세요.
+              {/* "판정한 것이 없다"는 판정을 **한** 규칙에 대해서만 참이다. 못 돈 규칙이 있으면
+                  그 규칙의 사건은 심각도와 무관하게 이 목록에 아예 오르지 않는다 — 빈 목록을
+                  "오늘 조용하다"로 읽게 두면 계측 공백이 정상으로 보인다. */}
+              {`돈 규칙 ${rules.length - unevaluated.length}개 중 이 심각도로 걸린 것이 없다는 ` +
+                `뜻입니다${
+                  unevaluated.length > 0
+                    ? ` — 나머지 ${unevaluated.length}개는 판정을 못 해${
+                        badResponse.length > 0 ? `(응답 결함 ${badResponse.length}개 포함)` : ''
+                      } 걸렸는지조차 모릅니다`
+                    : ''
+                }. 다른 심각도는 위 카드의 건수로 알 수 있습니다.`}
             </p>
           </div>
         ) : (
@@ -286,10 +310,10 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
                       ) : (
                         '조건에 걸린 것 없음'
                       )
-                    ) : r.notRun === 'identity' ? (
-                      <span style={{ color: 'var(--down)' }}>응답 결함 — {r.note}</span>
                     ) : (
-                      `못 돎 — ${R?.dep ?? '사실 축 부재'}`
+                      <span style={r.notRun === 'identity' ? { color: 'var(--down)' } : undefined}>
+                        {notRunReason(r)}
+                      </span>
                     )}
                     {r.evaluated && r.note && ' *'}
                   </td>
