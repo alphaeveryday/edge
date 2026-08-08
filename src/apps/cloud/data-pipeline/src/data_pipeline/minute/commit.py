@@ -488,7 +488,7 @@ class MinuteCommitter:
             if generation is None:
                 raise CommitRejectedError("window 갱신 실패 — claim 검증과 모순")
             # 가격의 GenerationMismatch 검사가 없는 이유: 뉴스 artifact key 는 세대가
-            # 아니라 attempt 축이라(news_poll_manifest_key) 세대 예측이 틀릴 여지가
+            # 아니라 attempt 축이라(minute_poll_manifest_key) 세대 예측이 틀릴 여지가
             # 없다. window generation 은 poll 마다 오르는 기록값일 뿐이다.
             job_ids = []
             for observation, outcome in enqueued:

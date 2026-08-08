@@ -120,10 +120,41 @@ def run(
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
-    """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
+    """배치 진입점 — 수집 실행. 성공 0, 중단/실패 비0 반환(SFN·CLI 가 쓰는 계약).
 
     from_date/to_date 는 소스에 넘길 수집 날짜창(YYYY-MM-DD). None 이면 소스 기본(최신분) —
     스케줄 증분·백필 창은 run 엔트리가 정해 넘긴다(뉴스와 동형).
+    """
+    return collect(settings, storage, source, run_id, from_date, to_date)["exit_code"]
+
+
+def collect(
+    settings: Settings,
+    storage: Storage,
+    source: DisclosureSourceAdapter,
+    run_id: str,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    """`run` 과 같은 수집을 하고 **관측을 돌려준다** (ALPHA-875 — 1분 레인이 쓴다).
+
+    반환:
+      - `exit_code` : `run` 이 그대로 내보내는 값
+      - `log`       : collection_log 에 쓴 payload 그대로(원장 판정 입력)
+      - `rcept_nos` : 이 폴링이 관측한 rcept_no 정렬 튜플. **window checksum 의 재료**다 —
+                      이 소스는 증분 커서가 없어 매 tick 이 날짜창 전체를 재독하므로, 같은
+                      집합을 다시 봤다면 같은 값이어야 세대가 유지된다(`commit_disclosure_window`).
+                      raw 메타 바이트를 해시하면 `fetched_at` 이 매 tick 달라 세대가 늘 증가한다.
+      - `raw_keys`  : 이 런이 쓴 메타 ndjson 키. 정제 스텝에 그대로 넘겨 `raw/` 전량 스캔을
+                      **아예 없앤다**(분 단위로는 그 스캔이 못 돈다).
+      - `list_truncated` : 목록을 **끝까지 못 읽었나**(`_stop_early` → `_segment_truncated`).
+                      `status` 로는 이걸 알 수 없다 — `partial` 은 본문 fetch 실패나 남의 회사
+                      malformed 행 하나로도 서고(그때 목록은 온전히 읽혔다), 절단도 같은
+                      `partial` 이 된다. "창을 다 읽었나"를 묻는 소비자는 이 값을 봐야 한다.
+
+    ⚠️ 로그를 S3 에서 되읽지 않고 돌려주는 이유: 로그 키의 `started_date` 는 **UTC 날짜**라
+    (`collection_log_key`) 호출자가 키를 재구성하려면 그 날짜를 맞혀야 하는데, UTC 자정이
+    09:00 KST — 즉 이 레인 격자의 **한복판**이다. 개장 시각 tick 마다 키를 틀릴 수 있다.
     """
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]  # = ingest_date
@@ -145,14 +176,17 @@ def run(
         # 대가는 **아래 terminal 경로가 이미 같은 값으로 치르고 있다** — 여기만 exit 0 이면
         # 같은 장애가 어느 줄에서 났느냐로 결과가 갈린다(뒤집으려면 저장소 15곳을 함께).
         logger.warning("%s 공시 비활성(api_key 미주입) — 수집 건너뜀", vendor)
+        skipped = {**log, "status": "skipped",
+                   "reason": f"{vendor} disabled or no api_key",
+                   "ops": {"records_out": 0, "failed_records": 0}}
         try:
-            _write_log(storage, vendor, started_date, run_id, {**log, "status": "skipped",
-                                                               "reason": f"{vendor} disabled or no api_key",
-                                                               "ops": {"records_out": 0, "failed_records": 0}})
+            _write_log(storage, vendor, started_date, run_id, skipped)
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
-            return 1
-        return 0
+            return {"exit_code": 1, "log": skipped, "rcept_nos": (), "raw_keys": [],
+                    "list_truncated": False}
+        return {"exit_code": 0, "log": skipped, "rcept_nos": (), "raw_keys": [],
+                "list_truncated": False}
 
     # 메타(공시목록 행)는 market 별 ndjson 으로, 본문(document.xml ZIP)은 rcept_no 별 객체로
     # 버퍼링했다가 저장 단계에서 한 번에 쓴다 — put 실패를 한 곳에서 계약대로 처리하려는 것.
@@ -262,11 +296,15 @@ def run(
     # 메타(ndjson)만 저장 단계에서 쓴다 — 본문은 위에서 즉시 저장됨. put 실패도 계약
     # ("결과는 항상 collection_log") 안에서 삼켜 status=error 로 남긴다.
     saved = saved_targets = 0
+    raw_keys: list[str] = []
     try:
         for market, records in sorted(partitions.items()):
             key = f"{raw_disclosure_partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             storage.put_bytes(key, lines.encode("utf-8"))
+            # 쓴 키를 남긴다 — 1분 레인의 정제가 이걸 그대로 받아 `raw/` 전량 스캔을 건너뛴다.
+            # put 성공분만 담는다: 실패한 파티션을 정제 입력으로 넘기면 없는 객체를 읽는다.
+            raw_keys.append(key)
             saved += len(records)
             # 원장이 세는 산출은 **대상 건수**다(아래 ops 주석). 전량과 갈라 두지 않으면
             # 비대상 메타가 늘 있어서 "전건 실패"가 영영 관측되지 않는다.
@@ -311,61 +349,72 @@ def run(
     # ⚠️ 재무제표와 달리 "매핑 대상 있는데 0행=error" 가드는 두지 않는다 — 공시는 특정 corp 의
     # 빈 날짜창(대상 유형 공시 없음)이 정상이라(뉴스형), 빈 응답을 이상으로 보면 오탐이다.
 
+    # 관측한 rcept_no 집합 — window checksum 의 재료다(위 반환 계약). 소스가 rcept_no
+    # 결측/비문자열 행을 yield 전에 걸러내므로(`dart_disclosure._scan_window` 의 rcept 게이트)
+    # 여기 담기는 행은 전부 유효한 값을 갖는다. 그래도 형상을 다시 확인한다 — 저 게이트가
+    # 느슨해지는 순간 조용히 빈 문자열이 checksum 에 섞여 두 다른 관측이 같은 값을 낸다.
+    observed_rcept_nos = tuple(sorted({
+        record["rcept_no"].strip()
+        for records in partitions.values()
+        for record in records
+        if isinstance(record.get("rcept_no"), str) and record["rcept_no"].strip()
+    }))
+    payload = {
+        **log,
+        "status": status,
+        "error": error,
+        "reason": reason,
+        "records_fetched": fetched,
+        # 전량(유니버스) / 그중 대상. 둘을 갈라 둬야 "보존은 늘었는데 대상은 0"이 보인다.
+        "records_saved": saved,
+        "records_saved_target": saved_targets,
+        # 보존해도 못 쓰는 행(비대상 + rcept_no 결측/비문자열)을 뺀 수 — 0건이 아니라
+        # 수치로 남긴다(Rule 12). 실패가 아니라 별도 축이라 ops.failed_records 와 무관하다.
+        "rows_dropped_malformed": getattr(source, "dropped_malformed", 0),
+        "documents_saved": documents_saved,
+        # 이미 있어서 **안 받은** 본문 수(ALPHA-720). 안 세면 "본문이 0건"과 "재다운로드를
+        # 0건으로 줄였다"가 documents_saved=0 하나로 접혀 구분되지 않는다.
+        "documents_reused": documents_reused,
+        # 인자가 아니라 **실제로 수집한 창**을 남긴다 — 시작일만 준 백필은 소스가 끝을
+        # 오늘로 확정하므로, 인자(None)만 기록하면 어떤 창이었는지 복원되지 않고 런 사이
+        # rcept_no 집합 비교(완전성 근거)가 성립하지 않는다.
+        "window_from": source.resolved_window[0],
+        "window_to": source.resolved_window[1],
+        "records_failed_targets": len(failed_targets),
+        "failed_targets": failed_targets,
+        "partitions": len(partitions),
+        # 창 전체 규모 관측 — 소스가 신고한 건수(1페이지 total_count)와 실제로 훑은 행 수.
+        # **판정이 아니다**: 목록은 수집 중에도 자라(접수 피크 16시) 페이지 경계가 밀리므로,
+        # 둘의 차이는 절단일 수도 유입일 수도 있다. 어느 쪽인지 모르는 값으로 완전성을
+        # 단언하지 않고 기록만 남긴다 — 나중에 사람이 볼 수 있게(Rule 12).
+        "list_total_count": getattr(source, "list_total_count", None),
+        "list_rows_seen": getattr(source, "list_rows_seen", 0),
+        # 감쇠 두 축(ALPHA-865). `list_rows_seen → universe_matched` 가 유니버스가 자른
+        # 몫이고 `universe_matched → type_matched` 가 유형이 자른 몫이다. 통과분(records_
+        # saved)만 남기면 둘이 한 숫자로 접혀 "대상을 넓히면 얼마나 늘어나는가"에 답할 수
+        # 없다 — 실측(2026-08-07) 867 → 저장 1 의 내역이 그래서 복원되지 않았다.
+        # `is_target` 을 정한 **필터 기준**을 같이 남긴다. 이 값은 설정 파생 판정이라
+        # 필터를 넓히면 같은 report_nm 에 다른 is_target 이 붙은 행이 파티션에 섞이는데,
+        # 기준을 안 적으면 어느 런이 어느 기준이었는지 복원되지 않는다 — 이 티켓의 전제
+        # ("보존해 뒀다가 나중에 넓혀 재파싱")가 바로 그 복원 가능성에 걸려 있다.
+        "report_name_filters": list(getattr(source, "report_name_filters", [])),
+        "universe_matched": getattr(source, "universe_matched", 0),
+        "type_matched": getattr(source, "type_matched", 0),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
+        # records_out 은 메타 건수로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
+        #
+        # ⚠️ **`saved` 가 아니라 `saved_targets` 다**(ALPHA-865). 메타를 전량 보존하게
+        # 되면서 `saved` 는 유니버스 전량(~100/일)이 됐는데, `failed_records` 는 여전히
+        # 대상 스코프다. 둘을 섞으면 ops/entry.py 가 명문화한 "산출과 유실은 같은
+        # 스코프에서 와야 한다(비대칭 금지)"를 깨서, 유실 비율이 ~30배 축소돼 보이고
+        # 콘솔 그리드(GridPage)가 실제 1건인 날 "산출 97"을 띄운다. 비대상 메타는 이
+        # 런이 하기로 한 일이 아니라 부산물이라 산출로 세지 않는다 — 보존 사실은
+        # records_saved 가 따로 기록한다.
+        "ops": {"records_out": saved_targets, "failed_records": len(failed_targets)},
+    }
     try:
-        _write_log(storage, vendor, started_date, run_id, {
-            **log,
-            "status": status,
-            "error": error,
-            "reason": reason,
-            "records_fetched": fetched,
-            # 전량(유니버스) / 그중 대상. 둘을 갈라 둬야 "보존은 늘었는데 대상은 0"이 보인다.
-            "records_saved": saved,
-            "records_saved_target": saved_targets,
-            # 보존해도 못 쓰는 행(비대상 + rcept_no 결측/비문자열)을 뺀 수 — 0건이 아니라
-            # 수치로 남긴다(Rule 12). 실패가 아니라 별도 축이라 ops.failed_records 와 무관하다.
-            "rows_dropped_malformed": getattr(source, "dropped_malformed", 0),
-            "documents_saved": documents_saved,
-            # 이미 있어서 **안 받은** 본문 수(ALPHA-720). 안 세면 "본문이 0건"과 "재다운로드를
-            # 0건으로 줄였다"가 documents_saved=0 하나로 접혀 구분되지 않는다.
-            "documents_reused": documents_reused,
-            # 인자가 아니라 **실제로 수집한 창**을 남긴다 — 시작일만 준 백필은 소스가 끝을
-            # 오늘로 확정하므로, 인자(None)만 기록하면 어떤 창이었는지 복원되지 않고 런 사이
-            # rcept_no 집합 비교(완전성 근거)가 성립하지 않는다.
-            "window_from": source.resolved_window[0],
-            "window_to": source.resolved_window[1],
-            "records_failed_targets": len(failed_targets),
-            "failed_targets": failed_targets,
-            "partitions": len(partitions),
-            # 창 전체 규모 관측 — 소스가 신고한 건수(1페이지 total_count)와 실제로 훑은 행 수.
-            # **판정이 아니다**: 목록은 수집 중에도 자라(접수 피크 16시) 페이지 경계가 밀리므로,
-            # 둘의 차이는 절단일 수도 유입일 수도 있다. 어느 쪽인지 모르는 값으로 완전성을
-            # 단언하지 않고 기록만 남긴다 — 나중에 사람이 볼 수 있게(Rule 12).
-            "list_total_count": getattr(source, "list_total_count", None),
-            "list_rows_seen": getattr(source, "list_rows_seen", 0),
-            # 감쇠 두 축(ALPHA-865). `list_rows_seen → universe_matched` 가 유니버스가 자른
-            # 몫이고 `universe_matched → type_matched` 가 유형이 자른 몫이다. 통과분(records_
-            # saved)만 남기면 둘이 한 숫자로 접혀 "대상을 넓히면 얼마나 늘어나는가"에 답할 수
-            # 없다 — 실측(2026-08-07) 867 → 저장 1 의 내역이 그래서 복원되지 않았다.
-            # `is_target` 을 정한 **필터 기준**을 같이 남긴다. 이 값은 설정 파생 판정이라
-            # 필터를 넓히면 같은 report_nm 에 다른 is_target 이 붙은 행이 파티션에 섞이는데,
-            # 기준을 안 적으면 어느 런이 어느 기준이었는지 복원되지 않는다 — 이 티켓의 전제
-            # ("보존해 뒀다가 나중에 넓혀 재파싱")가 바로 그 복원 가능성에 걸려 있다.
-            "report_name_filters": list(getattr(source, "report_name_filters", [])),
-            "universe_matched": getattr(source, "universe_matched", 0),
-            "type_matched": getattr(source, "type_matched", 0),
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-            # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
-            # records_out 은 메타 건수로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
-            #
-            # ⚠️ **`saved` 가 아니라 `saved_targets` 다**(ALPHA-865). 메타를 전량 보존하게
-            # 되면서 `saved` 는 유니버스 전량(~100/일)이 됐는데, `failed_records` 는 여전히
-            # 대상 스코프다. 둘을 섞으면 ops/entry.py 가 명문화한 "산출과 유실은 같은
-            # 스코프에서 와야 한다(비대칭 금지)"를 깨서, 유실 비율이 ~30배 축소돼 보이고
-            # 콘솔 그리드(GridPage)가 실제 1건인 날 "산출 97"을 띄운다. 비대상 메타는 이
-            # 런이 하기로 한 일이 아니라 부산물이라 산출로 세지 않는다 — 보존 사실은
-            # records_saved 가 따로 기록한다.
-            "ops": {"records_out": saved_targets, "failed_records": len(failed_targets)},
-        })
+        _write_log(storage, vendor, started_date, run_id, payload)
     except Exception:
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
         exit_code = exit_code or 1
@@ -375,7 +424,17 @@ def run(
         status, fetched, saved, saved_targets, documents_saved, documents_reused,
         len(failed_targets), getattr(source, "dropped_malformed", 0), len(partitions),
     )
-    return exit_code
+    return {
+        "exit_code": exit_code,
+        "log": payload,
+        "rcept_nos": observed_rcept_nos,
+        "raw_keys": raw_keys,
+        # 목록을 끝까지 못 읽었나. `fetch()` 는 절단되면 뒤 세그먼트를 돌지 않고 즉시
+        # 돌아오므로(그 자리에서 `_segment_truncated` 를 세운 채) 순회가 끝난 뒤의 이 값이
+        # 곧 "이 창이 온전한가"다. **로그에는 넣지 않는다** — 배치 경로의 collection_log
+        # 바이트를 이 PR 이 바꾸지 않게 한다(절단은 이미 failed_targets 사유로 남는다).
+        "list_truncated": bool(getattr(source, "_segment_truncated", False)),
+    }
 
 
 def _write_log(storage: Storage, vendor: str, started_date: str, run_id: str, payload: dict) -> None:
