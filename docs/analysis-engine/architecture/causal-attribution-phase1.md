@@ -59,6 +59,10 @@ $$R_p(E)=\sum_i w_i\,R_{\text{peer}(i)},\qquad \text{peer}(i)\not\ni i$$
 
 ETF 수익률 $\sum_i w_i R_i$ 와 피어 $\sum_i w_i R_{\text{peer}(i)}$ 는 **서로 다른 종목 집합**이라 순환이 없다. 개별 종목도 $\text{peer}(i)$ 가 정의상 자기를 제외하므로 leave-one-out 이 자동이다.
 
+> ⚠️ **스키마가 더 이상 이 모양이 아니다 (ALPHA-853, 2026-08-08).** `price_decomposition_peer` 는 삭제됐고 `price_decomposition` 의 `peer_*` 는 `sector_*` 로 개명됐다. 구현이 **시장 + 시장직교 섹터 층** 모형(`statics/layers.py`)으로 정착했고, 그 모형에서 섹터는 **층 하나**이지 순위·가중치를 갖는 구성원 목록이 아니기 때문이다. 그 표는 정의만 있고 생산자·소비자·행이 전부 0 이었다.
+>
+> **이 절의 피어 바스켓 모형이 기각된 것은 아니다** — 스키마가 그것을 더 이상 전제하지 않을 뿐이다. 되살리려면 `price_decomposition_peer` 복원 마이그레이션이 선행조건에 먼저 들어가야 하고, 두 모형 중 무엇을 쓸지는 **이 문서 소유자의 결정**이다. 아래 서술은 그 전제 위에서 읽어라.
+
 스키마는 이미 이 모양이다 — `price_decomposition_peer` 가 `peer_rank` · `peer_weight_ratio` · `peer_orthogonal_return` 을 담고, 피어 선정은 `policy_version` 이 버전 관리한다. **직교화(`orthogonal`)가 컬럼명에 박혀 있다** — 시장 성분을 뺀 뒤의 피어 수익률이라 시장 leg 와 이중계상되지 않는다.
 
 **미결: 동종 집합 선정 정책.** `instrument` 에 업종 컬럼이 없고 구현체도 아직 없다(`analysis-engine` 에 `peer` 코드 0건). 후보는 상관 기반 랭킹 · `concept` 계층 · 외부 업종 매핑이며, `peer_rank` 가 랭킹을 전제하므로 상관 기반이 스키마와 가장 정합적이다. **1단계 선행조건 11번.**

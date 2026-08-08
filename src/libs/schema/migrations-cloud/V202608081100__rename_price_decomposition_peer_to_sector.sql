@@ -21,15 +21,30 @@ ALTER TABLE price_decomposition RENAME COLUMN peer_explained_return TO sector_ex
 
 ALTER INDEX ix_price_decomposition_benchmark RENAME TO ix_price_decomposition_sector_series;
 
+-- 제약명도 같이 옮긴다. 인덱스만 고치면 개명 후 스키마에서 FK 를 찾은 사람이
+-- `fk_..._benchmark` 를 보고 "benchmark 라는 다른 개념이 있나" 를 묻는다 — 이 변경이
+-- 없애려던 "이름이 거짓말을 한다" 상태가 절반 남는 것이다.
+ALTER TABLE price_decomposition
+    RENAME CONSTRAINT fk_price_decomposition_benchmark TO fk_price_decomposition_sector_series;
+
 COMMENT ON TABLE price_decomposition IS
 '가격관찰을 시장·섹터 층으로 분해한 계산 결과. 가격관찰과 1:N 관계를 가진다. 섹터 항은 시장에 직교화된 잔차다(중복 청구 금지).';
 
 COMMENT ON COLUMN price_decomposition.sector_series_id IS
 '섹터 층으로 쓴 계열의 식별자. 무엇과 비교했는지가 값과 함께 남아야 사후에 재현된다.';
+COMMENT ON COLUMN price_decomposition.sector_raw_return IS
+'섹터 계열의 원수익률(직교화 전). 시장과 겹친 부분을 아직 품고 있어 이 값만으로 기여를 청구하면 시장 몫을 이중계상한다 — 배분은 sector_orthogonal_return 이 한다.';
 COMMENT ON COLUMN price_decomposition.sector_orthogonal_return IS
 '시장에 직교화한 섹터 수익률. 원계열(sector_raw_return)과 갈라 두는 이유는 "시장이 민 건지 섹터가 민 건지"의 배분이 이 값으로만 결정되기 때문이다.';
+COMMENT ON COLUMN price_decomposition.sector_explained_return IS
+'섹터 층이 설명한 몫 = β_섹터 × sector_orthogonal_return. market_explained_return 과 더해도 중복이 없다(직교화의 목적).';
 
 -- 피어 목록 표는 통째로 버린다. 우리 모형에서 섹터는 **층 하나**이고 순위·가중치를 갖는
 -- 구성원 목록이 아니다. 남겨 두면 영영 안 채워지는 표가 ERD 에 남아 모형을 오해시킨다.
--- (행 0 · FK 참조 0 · 소비자 0 — 되돌리려면 이 파일을 역으로 적으면 된다.)
+-- 행 0 · 이 표를 참조하는 FK 0 (나가는 FK 2건뿐) · 코드 소비자 0.
+--
+-- ⚠️ **되돌리기는 대칭이 아니다.** RENAME 4건과 제약·인덱스 개명은 역으로 적으면 되지만
+-- DROP 은 역이 없다 — 복원하려면 `V202607150001__replace_analysis_mart_with_etf_explanation
+-- _schema.sql` 의 924~946(CREATE TABLE + PK + CHECK 2 + UNIQUE 1)과 1565~1574(FK 2건 +
+-- 인덱스 + COMMENT)를 그대로 다시 적어야 한다. 데이터 손실은 없다(행 0).
 DROP TABLE IF EXISTS price_decomposition_peer;
