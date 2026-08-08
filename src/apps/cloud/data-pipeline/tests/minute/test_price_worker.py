@@ -647,6 +647,10 @@ class TestPriceWorkerCli:
         assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
         keys = [k for k in LocalStorage(root=tmp_path).list_keys("") if k.endswith("bars.ndjson")]
         assert len(keys) == 3  # canonical 존에 artifact 가 실제로 남았다
+        # ⚠️ `SESSION_DATE` 는 **지난 거래일**이라 이 실행은 백필 경로다 — 발행이 없어야
+        # 한다(ALPHA-863). 이 한 줄이 CLI 배선(`is_backfill=is_backfill`)을 붙잡는다:
+        # 상수 False 로 바꾸면 여기서 죽는다. 수집·적재는 위 세 단언이 그대로 지킨다.
+        assert db.outbox == {}
 
 
 class TestPriceWorkerConfig:
@@ -999,6 +1003,54 @@ class TestCollectorSelection:
         assert "session_date" in seen, "make_price_collector 가 불리지 않았다"
         assert seen["session_date"] == date(2026, 8, 3)
 
+    @pytest.mark.parametrize(
+        "session_date, expected",
+        [(date(2026, 8, 3), True), (TODAY, False)],
+        ids=["past-day", "today"],
+    )
+    def test_cli_wires_the_backfill_verdict_into_the_worker(
+        self, monkeypatch, session_date, expected
+    ):
+        """CLI 가 백필 판정을 **Worker 설정까지** 내려보내는가(ALPHA-863).
+
+        `make_price_collector` 가 옳게 판정하는 것과 그 값이 커밋 경로에 닿는 것은 다른
+        사실이다. 이음매가 끊기면(예: `is_backfill=False` 상수) 벤더 선택은 소급인데
+        발행은 실시간으로 나가 — 이 티켓이 막으려는 바로 그 상태다.
+
+        **양방향을 다 묻는다**: 과거일에서만 참이면 상수 True 회귀가, 당일에서만 거짓이면
+        상수 False 회귀가 남는다. 한쪽만 보는 단언은 갈리는 구간을 안 밟는다.
+        """
+        from types import SimpleNamespace
+
+        from data_pipeline.minute import models as models_module
+        from data_pipeline.minute import worker as worker_module
+
+        seen: dict[str, object] = {}
+
+        def capture(**kwargs):
+            seen["config"] = kwargs["config"]
+            raise SystemExit("여기서 멈춘다 — 이 뒤는 DB·S3 가 필요하다")
+
+        monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE)
+        monkeypatch.setattr(worker_module, "make_price_collector",
+                            lambda options, *, session_date: (object(), session_date < TODAY))
+        monkeypatch.setattr(worker_module, "MinuteLedger", lambda db=None: SimpleNamespace(
+            session_snapshot=lambda **_: {"phase": "ACTIVE"}))
+        monkeypatch.setattr(worker_module, "MinuteCommitter", lambda db=None: object())
+        monkeypatch.setattr("data_pipeline.lake.storage.make_storage", lambda config: object())
+        monkeypatch.setattr(worker_module, "PriceWorker", capture)
+        settings = SimpleNamespace(
+            db=DbConfig(password="x"), storage=None,
+            minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
+        )
+        with pytest.raises(SystemExit):
+            worker_module.price_worker_cli(
+                settings, session_date=session_date.isoformat(),
+                universe="s3://bucket/universe.json",
+            )
+        assert "config" in seen, "PriceWorker 가 구성되지 않았다"
+        assert seen["config"].is_backfill is expected
+
     def test_backfill_refuses_an_extended_hours_universe_at_startup(self, monkeypatch):
         """시간외 universe 로는 소급 백필이 **구조적으로** 불가하다 — 기동에서 거부한다.
 
@@ -1021,6 +1073,38 @@ class TestCollectorSelection:
             minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
         )
         with pytest.raises(SystemExit, match="시간외 universe"):
+            worker_module.price_worker_cli(
+                settings, session_date="2026-08-03", universe="s3://bucket/universe.json"
+            )
+
+    def test_extended_hours_refusal_does_not_follow_the_date_to_other_vendors(
+        self, monkeypatch
+    ):
+        """시간외 거부는 **소급 TR 의 사실**이다 — 날짜만 보고 토스까지 막지 않는다.
+
+        백필 판정을 날짜 축으로 통일하면서(ALPHA-863) 이 게이트가 같이 넓어지면, 토스
+        과거일 세션이 *"소급 TR 은 09:00–15:30 만 준다"* 는 **거짓 사유**로 기동을
+        거부당한다. 토스는 window 끝 시각으로 임의 과거 구간을 받으므로 시간외 window
+        가 구조적 결손이 아니다.
+
+        같은 날짜·같은 universe 로 KIS 는 거부되고(위 테스트) 토스는 이 게이트를
+        지나간다 — 갈리는 것은 벤더 축뿐이다.
+        """
+        from types import SimpleNamespace
+
+        from data_pipeline.minute import models as models_module
+        from data_pipeline.minute import worker as worker_module
+
+        monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE_EXT)
+        monkeypatch.setattr(worker_module, "MinuteLedger", lambda db=None: SimpleNamespace(
+            session_snapshot=lambda **_: None))
+        settings = SimpleNamespace(
+            db=DbConfig(password="x"),
+            minute_price_worker=self._config(
+                source="toss", client_id="c", client_secret="s"),
+        )
+        # 게이트를 지나 **세션 조회**까지 가서 죽는다 — 그 문구가 곧 "여기는 안 막혔다"
+        with pytest.raises(SystemExit, match="세션 없음"):
             worker_module.price_worker_cli(
                 settings, session_date="2026-08-03", universe="s3://bucket/universe.json"
             )

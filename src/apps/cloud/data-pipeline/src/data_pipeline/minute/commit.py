@@ -132,6 +132,12 @@ class MinuteCommitter:
         기본값을 두지 않는 이유는 `WorkerConfig.is_backfill` 과 같다 — 빠뜨린 호출부가
         조용히 실시간으로 발행되면 안 된다.
 
+        ⚠️ 알려진 천장: 이걸 끄면 그 날짜의 **정정(generation+1) 재판정도 같이 닫힌다**.
+        라이브가 일부 수집한 날을 백필이 옳은 데이터로 덮어써도 새 판정은 안 돈다.
+        실손은 "gen-1 에서 발화 안 했는데 gen-2 면 발화했을 종목"뿐이다 — 이미 발화한
+        종목은 `minute_price_trigger` 의 ON CONFLICT DO NOTHING 이라 이 변경 전에도
+        재판정이 no-op 였다. 그 하루를 다시 판정해야 하면 발행 경로를 따로 세워라.
+
         ⚠️ 이 판정을 여기서 `window_start` 로 유도하지 않는다. EOD drain 이 자정을 넘기면
         살아 있는 당일 세션의 마지막 window 들이 그 순간 과거일로 보여 발행이 끊긴다 —
         벽시계는 CLI 기동에서 한 번만 읽고(`make_price_collector`) 그 값을 내려보낸다.

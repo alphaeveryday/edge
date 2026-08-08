@@ -568,7 +568,12 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     # (ALPHA-863 — 되물으면 배선 변경이 판정을 조용히 뒤집는다).
     collector, is_backfill = make_price_collector(options, session_date=parsed_day)
     universe_model = load_universe_uri(universe)
-    if is_backfill and universe_model.extended_hours_ids:
+    if is_backfill and options.source == "kis" and universe_model.extended_hours_ids:
+        # ⚠️ 이 게이트만은 **벤더 축이 남아 있다**(ALPHA-863). 백필 판정 자체는 날짜
+        # 하나지만, 거부 사유는 소급 TR 의 사실이라 다른 벤더에 옮겨 붙이면 거짓이
+        # 된다 — 토스는 window 끝 시각으로 임의 과거 구간을 받으므로 시간외도 구조적
+        # 결손이 아니다. `source` 는 바로 위에서 collector 를 고른 그 값이다.
+        #
         # 소급 TR 은 정규장(09:00–15:30)만 페이징한다. 시간외 종목이 있으면 세션은
         # 720 window 로 계획되는데, 그 330개는 **구조적으로** 봉이 안 나온다 —
         # 런타임 거부는 `_process` 의 catch-all 이 window 실패로 접어(소스 전역 실패가

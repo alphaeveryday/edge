@@ -1326,7 +1326,7 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 # 소급 TR 로 하루를 한 번에 받아 캐시하므로 첫 window 에 362종 × 4페이지 ≈ 1,450콜이
 # 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다.
 #
-# 🔴 **과거일 백필 선행조건 둘 + 알아둘 것 하나** — 안 지키면 조용히가 아니라 크게 터진다:
+# 🔴 **과거일 백필 선행조건 하나 + 알아둘 것 둘** — 1) 을 안 지키면 태스크가 크게 터진다:
 #  1) 그 날짜의 1분 canonical prefix 가 **비어 있어야 한다**. artifact 키에는 벤더·세션
 #     축이 없어(ALPHA-705) 다른 벤더 세션이 같은 generation 을 이미 썼으면
 #     `ArtifactImmutabilityError` 로 태스크가 죽고 ECS 가 같은 window 에서 재기동한다:
