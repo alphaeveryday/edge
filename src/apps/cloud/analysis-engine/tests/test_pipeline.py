@@ -1157,8 +1157,10 @@ def test_layer_accounting_receives_committed_bar_returns(monkeypatch):
 
 def test_missing_market_proxy_bars_degrade_the_market_layer_not_the_run(monkeypatch):
     """시장 프록시 봉 결손은 다른 unit 과 같은 계약이다 — 떨어뜨리고 기록하되 런은
-    진행한다(런을 죽이는 결손은 발화 ETF 자신뿐). `intraday` 에 시장이 빠지므로
-    층 회계는 시장 층 부재 사유를 남기는 기존 경로를 탄다.
+    진행한다(런을 죽이는 결손은 발화 ETF 자신뿐). 여기서는 배선만 본다: `intraday`
+    에 시장이 빠진다는 것. 그때 층 회계가 레이크로 내려가지 않고 부재 사유를 남기는
+    계약은 test_layers 의 intraday_mode_market_gap 테스트가 실물 `decompose` 로
+    고정한다.
     """
     class _NoMarketLake(_FakeLake):
         def load_committed_minute_bars(self, market, windows):
