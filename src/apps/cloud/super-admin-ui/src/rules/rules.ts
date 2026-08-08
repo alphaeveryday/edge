@@ -7,7 +7,7 @@
  *
  * 시각 비교는 ctx.now 를 쓴다(벽시계 직접 참조 금지) — 스냅샷 평가가 재현 가능해야 한다.
  */
-import type { Edge, Rule, TaskFact } from './types.ts';
+import type { Edge, MinuteSessionFact, Rule, TaskFact } from './types.ts';
 
 /** 재시도 정책 상한 — 없으면 null.
  *
@@ -29,6 +29,17 @@ const kst = (iso?: string | null): string =>
         hour12: false,
       }).format(new Date(iso))
     : '—';
+
+/** 세션을 사람이 읽는 이름 — 화면(MinutePage)이 쓰는 표기와 같다 */
+const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`;
+
+/**
+ * 세션의 **대상 축** — 무엇이 고장났나. `dataset/sourceGroup` 이고 **날짜가 없다**.
+ *
+ * 데이터셋만으로는 안 갈린다(같은 `news_minute` 를 벤더별로 따로 돌린다). 날짜를 여기 넣으면
+ * 런북 키 `${rule}.${targetId}` 가 매일 달라져 어떤 조치도 등록할 수 없다 — 시점은 `scope` 다.
+ */
+const sessionTarget = (s: MinuteSessionFact) => `${s.dataset}/${s.sourceGroup}`;
 
 export const RULES: Rule[] = [
   {
@@ -542,8 +553,10 @@ export const RULES: Rule[] = [
           return s.leaseExpired === true;
         })
         .map((s) => ({
-          target: s.dataset,
-          title: `${s.dataset} 실행 증거 끊김`,
+          target: sessionLabel(s),
+          targetId: sessionTarget(s),
+          scope: f.minute!.date,
+          title: `${sessionLabel(s)} 실행 증거 끊김`,
           metric: 1,
           unit: '세션',
           why:
@@ -572,8 +585,10 @@ export const RULES: Rule[] = [
          * P1 인 이유: 이미 지나간 창이라 즉시 조치로 되살릴 수 없다 — R17(지금 끊김)과 다르다. */
         .filter((s) => s.overdueNoEvidence >= 5)
         .map((s) => ({
-          target: s.dataset,
-          title: `${s.dataset} 무증거 창`,
+          target: sessionLabel(s),
+          targetId: sessionTarget(s),
+          scope: f.minute!.date,
+          title: `${sessionLabel(s)} 무증거 창`,
           metric: s.overdueNoEvidence,
           unit: '창',
           why: '기한이 지났는데 증거가 없다 — 안 돌았는지 기록이 안 남았는지는 이 사실이 가르지 않는다',
@@ -598,8 +613,10 @@ export const RULES: Rule[] = [
          * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
         .filter((s) => s.deadJobs >= 1)
         .map((s) => ({
-          target: s.dataset,
-          title: `${s.dataset} 후속 처리 유실`,
+          target: sessionLabel(s),
+          targetId: sessionTarget(s),
+          scope: f.minute!.date,
+          title: `${sessionLabel(s)} 후속 처리 유실`,
           metric: s.deadJobs,
           unit: '건',
           why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',

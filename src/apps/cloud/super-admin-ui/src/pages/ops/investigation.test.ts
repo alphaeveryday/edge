@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { investigate, ledgerHref } from './investigation.ts';
+import { incidentHref, investigate, ledgerHref } from './investigation.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
 const FACTS = {
@@ -43,7 +43,9 @@ const violation = (o: Partial<Violation>): Violation => {
 
 const base = (o: Partial<Violation>) =>
   ({
-    vid: 'R99#0',
+    /* 엔진이 실제로 내는 모양(`${rule}:${targetId}[@${scope}]`)이다 — 여기에 옛 위치 인덱스
+     * (`R99#0`)를 두면 이 파일이 프로덕션 형상을 한 번도 안 밟는다. */
+    vid: 'R99:t@etf-daily:2026-08-03T15:40',
     rule: 'R99',
     ruleName: '테스트',
     layer: '런',
@@ -68,8 +70,8 @@ test('런 축 사건은 그 런만 연다 — 최근 런 전체를 다시 훑게
   assert.equal(r.targets[0].kind, 'run');
   /* 런 하나는 자기 페이지를 갖는다 — 목록의 선택 상태(?run_id=)가 아니라 경로로 지목한다 */
   assert.match(r.targets[0].href, /^\/ops\/runs\/etf-daily%3A2026-08-03T15%3A40(\?|$)/);
-  assert.match(r.targets[0].href, /fromIncident=R99%230/);
-  assert.deepEqual(r.ledger, { incident: 'R99#0', runKey: 'etf-daily:2026-08-03T15:40' });
+  assert.match(r.targets[0].href, /fromIncident=R99%3At%40etf-daily%3A2026-08-03T15%3A40/);
+  assert.deepEqual(r.ledger, { incident: 'R99:t@etf-daily:2026-08-03T15:40', runKey: 'etf-daily:2026-08-03T15:40' });
 });
 
 test('작업 축은 위반이 기록한 run_id 로만 연다 — 없으면 런을 추측하지 않는다', () => {
@@ -80,7 +82,7 @@ test('작업 축은 위반이 기록한 run_id 로만 연다 — 없으면 런�
   assert.equal(withRun.targets[0].kind, 'run');
   /* 원장 문맥에 작업·데이터셋까지 실린다 — 원장이 그 범위로 좁혀야 근거가 된다 */
   assert.deepEqual(withRun.ledger, {
-    incident: 'R99#0',
+    incident: 'R99:t@etf-daily:2026-08-03T15:40',
     runKey: 'etf-daily:2026-08-03T15:40',
     task: 'INVESTOR_COLLECTION_KIS',
     dataset: 'investor_flow',
@@ -98,7 +100,7 @@ test('런 행이 없는 슬롯은 실행이 아니라 예정 슬롯이고, 원�
     FACTS,
   );
   assert.equal(r.targets[0].kind, 'slot');
-  assert.deepEqual(r.ledger, { incident: 'R99#0', runKey: 'etf-daily:2026-07-28T15:40' });
+  assert.deepEqual(r.ledger, { incident: 'R99:t@etf-daily:2026-08-03T15:40', runKey: 'etf-daily:2026-07-28T15:40' });
   /* 작업·시도 행이 있는 것처럼 보이면 안 된다 */
   assert.match(r.ledgerNote ?? '', /행이 없다/);
 });
@@ -129,7 +131,7 @@ test('실시간 데이터셋 사건은 1분 창이 아니라 그 날짜의 세�
   const r = investigate(incident(violation({ drill: ['dataset', 'ds-price_minute'] })), FACTS);
   assert.equal(r.targets[0].kind, 'session');
   assert.equal(r.targets[0].href, '/minute?date=2026-08-03&dataset=price_minute');
-  assert.deepEqual(r.ledger, { incident: 'R99#0', dataset: 'price_minute', date: '2026-08-03' });
+  assert.deepEqual(r.ledger, { incident: 'R99:t@etf-daily:2026-08-03T15:40', dataset: 'price_minute', date: '2026-08-03' });
 });
 
 test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 런까지 좁히지 않는다', () => {
@@ -207,4 +209,25 @@ test('실 API 화면 3곳은 실행 상세로 가는 길을 만들지 않는다 
       `${rel} 이 실행 상세 주소를 직접 조립한다 — 헬퍼를 우회해도 결과는 같다`,
     );
   }
+});
+
+
+/* ── 사건 딥링크는 CDN 을 통과해야 한다 ──────────────────────────────────────────
+ * CloudFront 의 SPA fallback(`infra/terraform/modules/static-site/spa-rewrite.js`)은
+ * **마지막 경로 조각에 점(.)이 있으면 정적 파일**로 갈라 index.html 을 안 준다. 대상 id 에
+ * 점이 든 사건이 실재하므로(산출 `o.pub` · ETF 원장 `analyze.failed` · 체인 `batch:c.pub`)
+ * vid 를 경로에 두면 **공유 링크와 새로고침만** 죽는다 — 앱 안 클릭은 서버를 안 타서 멀쩡하다.
+ * 그게 vid 를 안정화한 목적 자체라, 여기서 경로 모양을 못박는다. */
+test('사건 딥링크 — 점 든 대상이어도 경로 조각에 점이 없다 (CDN SPA fallback 통과)', () => {
+  const dotted = violation({ rule: 'R13', target: '게시', targetId: 'o.pub' });
+  const href = incidentHref({ ...dotted, vid: 'R13:o.pub' });
+
+  const path = href.split('?')[0];
+  assert.doesNotMatch(
+    path.split('/').pop()!,
+    /\./,
+    `경로 마지막 조각에 점이 있으면 CDN 이 정적 파일로 읽는다 — ${href}`,
+  );
+  /* 값이 사라지지도 않아야 한다 — 점 없는 경로를 만드느라 식별자를 잘라내면 딥링크가 무의미하다 */
+  assert.equal(new URLSearchParams(href.split('?')[1]).get('vid'), 'R13:o.pub');
 });

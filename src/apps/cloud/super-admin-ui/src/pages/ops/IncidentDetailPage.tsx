@@ -12,7 +12,7 @@
  *     (스냅샷은 평가 시점만 안다).
  *   · 실행이 없는 사건은 실행 화면으로 보내지 않는다 — investigate() 가 그렇게 판정한다.
  */
-import { Link, useParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { RULES } from '../../rules/rules';
 import {
@@ -49,7 +49,7 @@ function Fact({ k, children }: { k: string; children: React.ReactNode }) {
 }
 
 export function IncidentDetailPage() {
-  const { vid = '' } = useParams();
+  const vid = useSearchParams()[0].get('vid') ?? '';
   const { incidents, facts } = useConsoleEvaluation();
   const incident = incidents.find((i) => i.root.vid === vid);
 

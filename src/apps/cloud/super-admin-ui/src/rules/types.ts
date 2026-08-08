@@ -162,6 +162,11 @@ export interface RunbookEntry {
  */
 export interface MinuteSessionFact {
   dataset: string;
+  /**
+   * 세션 identity 의 두 번째 축 — 한 세션은 `(dataset, sourceGroup, date)` 다.
+   * 데이터셋만으로는 안 갈린다(같은 `news_minute` 를 벤더별로 따로 돌린다).
+   */
+  sourceGroup: string;
   /** 원장 어휘 그대로(ACTIVE·DRAINED·QC_RUNNING·FINALIZED·FAILED). 모르는 값은 그대로 둔다 */
   phase: string;
   /** 서버(DB 시계) 판정. `null` 은 lease 부재 — 만료(true)와 다른 사실이다 */
@@ -212,8 +217,12 @@ export interface Facts {
 export interface RawViolation {
   /** 사람이 읽을 대상 — 표 셀에 그대로 선다. 내부 id 를 넣지 않는다 */
   target: string;
-  /** 안정 식별자 — 런북 키 `${rule}.${targetId}` · 간선 매칭 · 사건 키.
-   *  생략하면 `target` 이 그 역할을 겸한다(작업 키·데이터셋 id·큐 이름처럼 이미 둘 다인 경우). */
+  /** 안정 식별자 — **무엇이 고장났나**. 런북 키 `${rule}.${targetId}` · 간선 매칭.
+   *  생략하면 `target` 이 그 역할을 겸한다(작업 키·데이터셋 id·큐 이름처럼 이미 둘 다인 경우).
+   *
+   *  ⚠️ **여기에 시각·날짜를 넣지 마라.** 런북은 "이 대상이 고장나면 이렇게 조치한다"라
+   *  날짜와 무관한데, 날짜가 섞이면 키가 매일 달라져 **어떤 런북도 등록할 수 없게 된다**.
+   *  시점 축은 `scope` 다. */
   targetId?: string;
   title: string;
   /** 세는 값. **양이 아니면 `null`** — 판정 문자열은 `state` 로 간다 */
@@ -236,6 +245,14 @@ export interface RawViolation {
   kls?: string;
   /** 인과 간선 매칭용 — 이 위반이 속한 런 */
   runId?: string;
+  /**
+   * 사건 식별자의 **시점 범위** — 이 위반이 어느 실행 인스턴스의 것인가.
+   *
+   * `targetId`(무엇이) 와 다른 축이다. 배치는 런 키가 그 역할을 겸하므로 생략하고, 런이 없는
+   * 실시간 세션만 세션 날짜를 싣는다. 정규화(`scope ?? runId`)는 **엔진이 한 번만** 한다 —
+   * 소비자가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다(`targetId` 와 같은 규약).
+   */
+  scope?: string;
   /** R05: FULFILLED 실패가 아니라 상류 미실행(PENDING) 파생 여부 */
   cause?: boolean;
   /** R10: 어느 피드 갈래인가 (batch | intraday) */
@@ -256,6 +273,17 @@ export interface Violation extends RawViolation {
   kls: string;
   sev: Severity;
   dep: string | null;
+  /**
+   * 사건 식별자 — 딥링크(`/ops/incidents?vid=…`)가 쥐는 축이다.
+   * `${rule}:${targetId}` + 범위가 있으면 `@${scope ?? runId}`.
+   *
+   * **위치 인덱스(`R05#0`)였다.** 앞 위반이 해소되면 뒤가 당겨져 공유된 링크가 404 도 없이
+   * **다른 사건**을 열었다. 정적 스냅샷은 이걸 못 보여준다 — 위반 집합이 안 바뀌기 때문이다.
+   *
+   * `targetId` 만으로는 부족하다: R05·R06·R16 의 대상은 `task_key` 라 같은 작업이 여러 런에
+   * 걸리면 겹친다(셋 다 `runId` 를 들고 있어 그게 범위가 된다). 런이 없는 실시간 R17~R19 는
+   * 세션 날짜를 `scope` 로 싣는다 — `targetId` 에 넣으면 런북 키가 매일 달라진다.
+   */
   vid: string;
 }
 

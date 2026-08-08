@@ -145,7 +145,9 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
           {
             kind: 'session',
             id: datasetId,
-            label: `실시간 세션 ${datasetId} · ${date}`,
+            /* 사건이 지목한 것은 벤더까지 갈린 세션이다(`targetId` = `dataset/sourceGroup`) —
+             * 라벨이 데이터셋만 말하면 어느 벤더를 여는지 모른 채 이동한다 */
+            label: `실시간 세션 ${v.targetId} · ${date}`,
             why: '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다',
             href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
           },
@@ -259,5 +261,12 @@ export function runHref(runId: string, extra?: Record<string, string | undefined
   return `/ops/runs/${q(runId)}${qs ? `?${qs}` : ''}`;
 }
 
-/** 사건 상세 주소 — vid 가 사건의 식별자다(root 위반 id) */
-export const incidentHref = (v: Violation): string => `/ops/incidents/${encodeURIComponent(v.vid)}`;
+/**
+ * 사건 상세 주소 — vid 가 사건의 식별자다(root 위반 id).
+ *
+ * **경로가 아니라 쿼리다.** CloudFront 의 SPA fallback 은 마지막 경로 조각의 점(.)으로
+ * 정적 파일 여부를 가르는데(`spa-rewrite.js`), 대상 id 에 점이 든 사건이 있어 경로에 두면
+ * 공유 링크가 하드로드에서 죽는다. 쿼리스트링은 그 판별을 안 탄다.
+ */
+export const incidentHref = (v: Violation): string =>
+  `/ops/incidents/detail?vid=${q(v.vid)}`;

@@ -8,7 +8,7 @@
 import { useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { BadgeTone } from 'ui-kit';
-import { evaluate } from '../../rules/evaluate';
+import { evaluate, runbookOf as lookupRunbook } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
 import type {
   Evaluation,
@@ -82,9 +82,9 @@ export const kst = (iso?: string | null): string =>
 /** 심각도 → 배지 톤. P0=차단, P1=주의, P2=중립 (ui-kit 시맨틱 그대로) */
 export const SEV_TONE: Record<Severity, BadgeTone> = { P0: 'blocked', P1: 'warn', P2: 'neutral' };
 
+/** 스냅샷 위의 런북 조회 — 키 공식은 규칙 층(`rules/evaluate`)이 한 벌만 갖는다 */
 export function runbookOf(v: Violation): RunbookEntry | undefined {
-  /* 키는 표시 문자열이 아니라 안정 식별자다 — target 을 사람이 읽을 문구로 바꿔도 런북이 끊기면 안 된다 */
-  return F.runbook[`${v.rule}.${v.targetId}`] ?? F.runbook[v.rule];
+  return lookupRunbook(F, v);
 }
 
 /**
@@ -141,6 +141,9 @@ export function minuteFacts(s: MinuteStatus): MinuteFacts {
     date: s.date,
     sessions: s.sessions.map((x) => ({
       dataset: x.dataset,
+      /* 세션 identity 는 `(dataset, sourceGroup, date)` 다 — 여기서 버리면 규칙이 벤더가 다른
+       * 두 세션을 한 대상으로 보고, 사건 식별자가 겹쳐 딥링크가 다른 세션을 연다 */
+      sourceGroup: x.sourceGroup,
       phase: x.phase,
       leaseExpired: x.leaseExpired,
       overdueNoEvidence: x.windows.overdueNoEvidence,

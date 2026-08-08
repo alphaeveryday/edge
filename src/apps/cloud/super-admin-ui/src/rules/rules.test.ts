@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildReport, evaluate } from './evaluate.ts';
+import { buildReport, evaluate, runbookOf } from './evaluate.ts';
 import type { Facts, MinuteSessionFact, RunFact, TaskFact, Violation } from './types.ts';
 
 const NOW = new Date('2026-08-03T16:21:00+09:00');
@@ -381,6 +381,7 @@ test('R16 경계 — max_retries=0 은 상한 0회가 아니라 정책 미선언
 
 const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
   dataset: 'price_minute',
+  sourceGroup: 'KRX',
   phase: 'ACTIVE',
   leaseExpired: false,
   overdueNoEvidence: 0,
@@ -571,4 +572,97 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
     'R11.price-explanation-realtime',
     'R16.ASSEMBLE_EVENTS',
   ]);
+});
+
+/* ── 사건 식별자(vid) — 위치가 아니라 대상 × 시점 (ALPHA-738 단계 4 선행) ──────────
+ * 이 절이 지키는 의도: **정적 스냅샷이 가리고 있던 것**을 픽스처로 드러낸다. 스냅샷은 위반
+ * 집합이 안 바뀌고(→ 위치 인덱스 표류를 못 보여준다), 같은 task_key 가 여러 런에 걸린 경우가
+ * 없고(→ 키 충돌을 못 보여준다), minute 축이 아예 없다. 실 응답에서는 날마다 반복된다. */
+
+test('vid — 앞 위반이 해소돼도 뒤 위반의 사건 식별자는 그대로다', () => {
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'A', task_outcome: 'FAILED' }),
+    task({ task_key: 'B', task_outcome: 'FAILED' }),
+  ];
+  const before = hits(f, 'R05').find((v) => v.targetId === 'B')!.vid;
+
+  // A 만 해소됐다 — B 에 관한 사실은 아무것도 안 변했다
+  f.tasks = [task({ task_key: 'B', task_outcome: 'FAILED' })];
+  const after = hits(f, 'R05')[0].vid;
+
+  assert.equal(after, before, '앞 위반이 사라지자 B 의 딥링크가 다른 사건을 가리키게 됐다');
+});
+
+test('vid — 같은 작업 키가 두 런에 걸려도 사건이 갈린다 (런까지 실어야 갈린다)', () => {
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:00', task_outcome: 'FAILED' }),
+    task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:30', task_outcome: 'FAILED' }),
+  ];
+  /* 개수만 세면 순번으로 갈려도 통과한다 — 무엇으로 갈렸는지를 값으로 못박는다 */
+  assert.deepEqual(
+    hits(f, 'R05').map((v) => v.vid),
+    [
+      'R05:LOAD_DOCUMENTS@news:2026-08-03T15:00',
+      'R05:LOAD_DOCUMENTS@news:2026-08-03T15:30',
+    ],
+  );
+});
+
+test('vid 충돌 — 대상 축이 위반을 못 가르면 조용히 넘기지 않고 죽는다', () => {
+  /* 도달 경로를 **제약 없는 축**에서 고른다. `tasks` 의 중복은 원장이 막는다
+   * (`uq_ops_expected_task_run_key UNIQUE (pipeline_run_id, task_key)`) — 거기서 재현하면
+   * DB 가 이미 막는 것을 테스트하는 셈이다. `outputs` 는 엔드포인트가 조립하는 축이라
+   * 유일성을 보증하는 제약이 없다(`datasets`·`chain.stages` 도 같다). */
+  const f = emptyFacts();
+  f.outputs = [
+    { id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' },
+    { id: 'o.pub', label: '게시(중복 행)', today: 20, base: 100, unit: '건' },
+  ];
+  /* 뒤엣것을 버리거나 번호를 붙여 비키면 위치 인덱스가 이름만 바꿔 되살아난다. */
+  assert.throws(() => evaluate(f, NOW), /사건 식별자 충돌: R13:o\.pub/);
+});
+
+test('vid 충돌 — 런이 빈 문자열이면 범위가 없는 것으로 읽혀 병합된다 (와이어의 falsy 함정)', () => {
+  /* `TaskFact.run_id` 는 `string` 필수라 `''` 가 타입상 합법이다. 범위가 `''` 면
+   * `scope ?? runId` 는 값을 주지만 `vid` 조립의 truthy 검사가 '없음'으로 읽어 두 위반이
+   * 같은 키가 된다 — 가드와 사용처가 falsy 를 다르게 읽는 그 자리다. 삼키지 않고 죽어야 한다. */
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'T', run_id: '', task_outcome: 'FAILED' }),
+    task({ task_key: 'T', run_id: '', task_outcome: 'PENDING' }),
+  ];
+  assert.throws(() => evaluate(f, NOW), /사건 식별자 충돌: R05:T/);
+});
+
+test('R17 — 같은 데이터셋이라도 벤더가 다르면 다른 세션이다 (sourceGroup 을 버리면 겹친다)', () => {
+  const f = withMinute([
+    session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }),
+    session({ dataset: 'news_minute', sourceGroup: 'naver', leaseExpired: true }),
+  ]);
+  assert.deepEqual(
+    hits(f, 'R17').map((v) => v.vid),
+    ['R17:news_minute/bigkinds@2026-08-03', 'R17:news_minute/naver@2026-08-03'],
+  );
+});
+
+test('R17 — 런북 키에는 날짜가 없다 (날짜가 섞이면 어떤 조치도 등록 못 한다)', () => {
+  /* 런북은 "이 대상이 고장나면 이렇게 조치한다"라 날짜와 무관하다. 세션 identity 의 날짜를
+   * `targetId` 에 넣으면 키(`${rule}.${targetId}`)가 매일 달라져 **영구히 매칭 불가**가 된다.
+   * 그래서 날짜는 `scope`(사건 키 전용)로 가고 `targetId` 는 대상만 담는다. */
+  const f = withMinute([session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true })]);
+  const v = hits(f, 'R17')[0];
+  assert.equal(v.targetId, 'news_minute/bigkinds');
+  assert.doesNotMatch(v.targetId, /\d{4}-\d{2}-\d{2}/, 'targetId 에 날짜가 들어갔다 — 런북 키가 매일 바뀐다');
+  /* 그리고 그 키로 등록한 런북이 실제로 잡혀야 한다 — 부재 검사만으로는 폴백에 가려진다 */
+  f.runbook = { 'R17.news_minute/bigkinds': { cmd: 'restart-session bigkinds' } };
+  assert.equal(runbookOf(f, hits(f, 'R17')[0])?.cmd, 'restart-session bigkinds');
+});
+
+test('R17 — 사건 키는 날짜에 고정된다 (어제 공유한 링크가 오늘 세션을 열면 안 된다)', () => {
+  const d1 = withMinute([session({ leaseExpired: true })]);
+  const d2 = withMinute([session({ leaseExpired: true })]);
+  d2.minute!.date = '2026-08-04';
+  assert.notEqual(hits(d1, 'R17')[0].vid, hits(d2, 'R17')[0].vid);
 });

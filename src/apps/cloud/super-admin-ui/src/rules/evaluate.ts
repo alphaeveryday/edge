@@ -4,7 +4,15 @@
  * 정렬: 심각도 → 연쇄 크기 → 대표 위반의 수치 (명세 §2-3).
  */
 import { EDGES, RULES } from './rules.ts';
-import type { Evaluation, Facts, Incident, RuleResult, Severity, Violation } from './types.ts';
+import type {
+  Evaluation,
+  Facts,
+  Incident,
+  RuleResult,
+  RunbookEntry,
+  Severity,
+  Violation,
+} from './types.ts';
 
 const SEV: Record<Severity, number> = { P0: 0, P1: 1, P2: 2 };
 
@@ -13,27 +21,61 @@ export function snapshotNow(f: Facts): Date {
   return new Date(f.meta.db);
 }
 
+/**
+ * 사건 식별자 — 위치가 아니라 **대상 + 시점 범위**가 정한다(`Violation.vid` 규약 참조).
+ * 같은 `task_key` 가 여러 런에 걸리므로 범위를 실어야 갈린다.
+ */
+function vidOf(rule: string, targetId: string, scope?: string): string {
+  return `${rule}:${targetId}` + (scope ? `@${scope}` : '');
+}
+
+/**
+ * 런북 조회 — 대상 단위(`R05.LOAD_DOCUMENTS`) 우선, 없으면 규칙 단위 폴백.
+ *
+ * 키가 **`targetId` 만** 쓰는 것이 규약이다(시점 축 `scope` 는 안 들어간다) — 날짜가 섞이면
+ * 키가 매일 달라져 어떤 조치도 등록할 수 없다. 화면이 이 공식을 따로 적으면 그 복제본이 낡으므로
+ * 규칙 층에 한 벌만 둔다.
+ */
+export function runbookOf(f: Facts, v: Violation): RunbookEntry | undefined {
+  return f.runbook[`${v.rule}.${v.targetId}`] ?? f.runbook[v.rule];
+}
+
 export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
   const violations: Violation[] = [];
   const ruleResults: RuleResult[] = [];
+  const seen = new Set<string>();
 
   for (const R of RULES) {
     const evaluated = R.canRun ? R.canRun(f) : true;
     let count = 0;
     if (evaluated) {
       for (const raw of R.run(f, { now })) {
+        /* 규약: 표시용 target 과 키용 targetId 를 여기서 한 번만 정규화한다 —
+         * 소비자(런북 키·간선·조사 경로)가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다 */
+        const targetId = raw.targetId ?? raw.target;
+        /* 범위 정규화도 `targetId` 와 같은 규약 — 엔진이 한 번만 한다. 배치는 런 키가
+         * 범위를 겸하고, 런이 없는 실시간만 `scope`(세션 날짜)를 따로 싣는다. */
+        const vid = vidOf(R.id, targetId, raw.scope ?? raw.runId);
+        /* fail loud — 겹치면 딥링크가 조용히 다른 사건을 연다. 그게 위치 인덱스를 버린 이유이므로
+         * 뒤에 온 위반을 버리거나 번호를 붙여 비키면 같은 결함을 다른 모양으로 되살린다.
+         * 화면은 AdminLayout 의 ErrorBoundary 가 받는다(소비자 6곳 전부 그 경계 안이다). */
+        if (seen.has(vid)) {
+          throw new Error(
+            `사건 식별자 충돌: ${vid} — ${R.id} 의 대상 축(targetId${raw.scope ?? raw.runId ? '·범위' : ''})이 ` +
+              `이 위반들을 못 가른다. 규칙이 실어야 할 identity 축이 빠졌다.`,
+          );
+        }
+        seen.add(vid);
         violations.push({
           ...raw,
-          /* 규약: 표시용 target 과 키용 targetId 를 여기서 한 번만 정규화한다 —
-           * 소비자(런북 키·간선·조사 경로)가 각자 폴백을 쓰면 한 곳만 빠뜨려도 키가 갈린다 */
-          targetId: raw.targetId ?? raw.target,
+          targetId,
           rule: R.id,
           ruleName: R.name,
           layer: R.layer,
           kls: raw.kls ?? R.kls,
           sev: raw.sev ?? R.base,
           dep: R.dep,
-          vid: `${R.id}#${count}`,
+          vid,
         });
         count++;
       }
@@ -123,14 +165,16 @@ export interface Report {
     root: string;
     severity: Severity;
     size: number;
-    /** `root` 가 키(`rule:targetId`)라 멤버도 같은 축으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다 */
+    /** `root` 가 사건 키(`vid`)라 멤버도 같은 축으로 낸다 — 조인이 표시 문자열에 걸리면 안 된다 */
     members: { rule: string; target_id: string; cause: string }[];
   }[];
 }
 
 export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
   const ev = evaluate(f, now);
-  const key = (v: Violation) => `${v.rule}:${v.targetId}`;
+  /* 사건 키는 화면과 같은 축(`vid`)이다 — 리포트가 자기 키를 따로 조립하면 런 축이 빠져
+   * 같은 작업의 다른 런이 한 사건으로 보인다(화면에서는 갈리는데 리포트에서만 합쳐진다) */
+  const key = (v: Violation) => v.vid;
   const absorbedInto = new Map<Violation, Violation>();
   for (const I of ev.incidents) for (const m of I.members) absorbedInto.set(m.v, I.root);
   const ruleSource = new Map(RULES.map((R) => [R.id, R.source]));

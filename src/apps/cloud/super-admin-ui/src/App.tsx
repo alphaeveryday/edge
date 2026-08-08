@@ -46,7 +46,13 @@ export function App() {
           {/* 오늘(요약)과 문제·사건(전체 목록)은 역할이 다른 화면이다 */}
           <Route path="/ops/incidents" element={<IncidentsListPage />} />
           {/* 사건 상세 — 조사의 출발점. 라우트라서 뒤로 가기·딥링크가 그대로 동작한다 */}
-          <Route path="/ops/incidents/:vid" element={<IncidentDetailPage />} />
+          {/* 사건 상세는 vid 를 **쿼리**로 받는다 — 경로에 두면 CDN 이 못 넘긴다.
+              CloudFront SPA fallback(infra/terraform/modules/static-site/spa-rewrite.js)은
+              "마지막 경로 조각에 점(.)이 있으면 정적 파일"로 갈라, 대상 id 에 점이 든 사건
+              (`R13:o.pub`·`R15:analyze.failed`)의 딥링크가 하드로드에서 index.html 을 못 받는다.
+              앱 안 클릭은 서버를 안 타서 멀쩡하고 **공유 링크·새로고침만** 깨진다 — 이 화면이
+              존재하는 이유가 정확히 공유 링크라 경로에 둘 수 없다. */}
+          <Route path="/ops/incidents/detail" element={<IncidentDetailPage />} />
           <Route path="/ops/runs" element={<RunAxisPage />} />
           <Route path="/ops/runs/:runId" element={<RunDetailPage />} />
           <Route path="/ops/chain" element={<ChainPage />} />
