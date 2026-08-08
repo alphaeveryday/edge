@@ -10,6 +10,11 @@
 
 ⚠️ 토스와 달리 `lookback` 이 없다 — KIS 는 한 콜이 늘 30분치라 recovery 여유가 콜 수와
 무관하게 붙는다(창을 넓히는 노브가 없어도 과거 window 재청구가 그대로 된다).
+
+⚠️ 이 collector 는 클라이언트를 **둘** 받는다(ALPHA-846). 지난 거래일이면
+`KisHistoricalMinuteClient` 가 오는데 그쪽은 30분치가 아니라 **하루를 한 번에** 받아
+캐시하고 window 별로 나눠 준다 — 첫 window 에 콜이 몰리고(362종 × 4페이지) 그 뒤는
+벤더 호출이 0이다. 계약(그 window 의 봉 0~1개)은 같아서 이 파일은 안 갈린다.
 """
 
 from __future__ import annotations

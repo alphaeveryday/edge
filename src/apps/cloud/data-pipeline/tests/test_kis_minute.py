@@ -9,6 +9,8 @@
 1. **`stck_cntg_hour` 는 구간의 끝** — `window_start = 라벨 − 1분`, 시간대는 KST 고정.
    뒤집히면 전 구간이 한 칸 밀린 채 커밋되는데 봉 수는 그대로라 어떤 게이트도 안 걸린다.
 2. **무거래 분도 행이 온다**(`cntg_vol=0`) — 행 부재(missing)와 다른 축이다.
+   ⚠️ 이건 **당일 TR 한정**이다. 소급 TR(`FHKST03010230`)은 그 분을 아예 안 주고,
+   어댑터가 직전 종가 flat 으로 채워 같은 축으로 만든다(`TestHistoricalCandles`).
 3. **초당한도는 200 본문 `EGW00201`** — HTTP 429 가 아니라 어댑터가 재시도한다.
 4. **소스 전역(키·권한) 실패와 종목 단위 실패를 예외 타입으로 가른다** — 섞이면 400종
    missing 인 INCOMPLETE 가 매분 쌓이는데 고칠 건 설정 하나다.
@@ -269,6 +271,22 @@ class TestAuthAxis:
         assert sum("tokenP" in url for url, _ in fake.calls) == 1
 
 
+def test_paging_bounds_track_the_session_clock():
+    """`DAY_FIRST/LAST_HHMMSS` 는 `models.SESSION_OPEN/CLOSE` 의 두 번째 사본이다.
+
+    레이어상 `sources/` 가 `minute/` 를 import 할 수 없어 상수를 합칠 수 없다. 갈리면
+    조용하지 않고 **무한 재청구**가 된다: planner 가 새 범위로 window 를 만들고, 소급
+    클라이언트는 그 window 를 범위 밖으로 거부하며, 그 `KisSourceError` 는 `_process` 의
+    catch-all 에 window 실패로 접혀 lease 만료 → 재청구 → 재실패로 세션이 안 마른다.
+    기동 게이트는 `extended_hours_ids` 만 보므로 이 축은 못 잡는다.
+    """
+    from data_pipeline.minute.models import SESSION_CLOSE, SESSION_OPEN
+    from data_pipeline.sources.kis_minute import DAY_FIRST_HHMMSS, DAY_LAST_HHMMSS
+
+    assert DAY_FIRST_HHMMSS == SESSION_OPEN.strftime("%H%M%S")
+    assert DAY_LAST_HHMMSS == SESSION_CLOSE.strftime("%H%M%S")
+
+
 class TestHistoricalCandles:
     """소급(과거 거래일) 분봉 — `FHKST03010230` (ALPHA-846).
 
@@ -390,14 +408,29 @@ class TestHistoricalCandles:
         # 관측된 봉은 그대로다 — 합성이 실측을 덮어쓰지 않는다
         assert client.candles("005930", window_end=self.at("1027"))[0].volume == Decimal("1200")
 
-    def test_fill_does_not_extend_past_observed_range(self):
-        # 첫 체결 앞은 직전가를 모르고, 마지막 관측 뒤는 더 거래됐는지 모른다 —
-        # 채우면 관측하지 않은 구간을 관측한 것처럼 만든다(missing 이 사실에 가깝다)
+    def test_fill_does_not_reach_before_the_first_observation(self):
+        # 첫 체결 앞은 그 종목의 그날 가격을 아직 모른다(직전가가 없다) — 채우면 없는
+        # 값을 지어내는 것이고, missing 이 사실에 가장 가깝다
         client, _ = self.hist([
             TOKEN, ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
         ])
         assert client.candles("005930", window_end=self.at("1026")) == ()
-        assert client.candles("005930", window_end=self.at("1031")) == ()
+
+    def test_fill_reaches_the_session_close(self):
+        """마지막 관측 뒤는 **채운다** — 마감된 하루에선 "그 위에 봉이 없다"가 관측이다.
+
+        페이징이 15:30 부터 내려오므로 첫 페이지가 그걸 증명한다. 내부 갭과 인식론적으로
+        같은 자리다. 안 채우면 그 window 들이 362종 중 한 종목 때문에 INCOMPLETE 로
+        확정되고, `claim_due_window` 는 DUE·만료 CLAIMED 만 보므로 재청구도 안 돼 굳는다
+        (08-03 실측: 3종이 15:15·15:17·15:19 에 끝나 합계 39분).
+        """
+        client, _ = self.hist([
+            TOKEN, ok([row("152800"), row("152700")]), ok([self.other_day("152600")]),
+        ])
+        for hhmm in ("1529", "1530"):
+            [candle] = client.candles("005930", window_end=self.at(hhmm))
+            assert candle.volume == Decimal(0), hhmm
+            assert candle.close == Decimal("72500"), hhmm
 
     def test_other_trading_day_rows_are_cut(self):
         # 경계를 넘은 행을 남기면 07-31 봉이 08-03 canonical 에 실린다
@@ -435,18 +468,6 @@ class TestHistoricalCandles:
         client, _ = self.hist([TOKEN])
         with pytest.raises(ValueError, match="날짜 불일치"):
             client.candles("005930", window_end=datetime(2026, 8, 4, 10, 30, tzinfo=KST))
-
-    def test_page_budget_exhaustion_fails_the_unit(self):
-        """하루가 안 끝났는데 예산이 끝나면 **실패**다 — 잘린 하루를 커밋하지 않는다.
-
-        합성이 사이를 메우므로, 여기서 조용히 반환하면 못 받은 구간이 4분류에서
-        `no_trade` 로 위장돼 window 가 VALID 로 확정된다.
-        """
-        # 매 페이지 1분씩만 내려가는 응답 — 경계에도 09:00 에도 못 닿는다
-        pages = [ok([row(f"15{29 - i:02d}00")]) for i in range(MAX_DAY_PAGES + 1)]
-        client, _ = self.hist([TOKEN, *pages])
-        with pytest.raises(KisUnitError, match="페이지 예산"):
-            client.candles("005930", window_end=self.at("1529"))
 
     def test_empty_page_is_not_a_finished_day(self):
         """빈 응답은 "하루가 끝났다"가 아니라 **아무 정보도 못 얻었다**이다.
@@ -491,6 +512,60 @@ class TestHistoricalCandles:
             with pytest.raises(KisUnitError):
                 client.candles("005930", window_end=self.at(hhmm))
         assert len(fake.calls) == after_first, "실패한 하루를 다시 받았다"
+
+    # ⚠️ 문자열이되 형식만 다른 값(`"2026-08-03"`)은 못 잡는다 — 파싱 없이는 "남의 날"과
+    # 구분되지 않는다. 여기서 막는 건 **형이 아예 다른** 경우다.
+    @pytest.mark.parametrize("bad_date", [20260803, None, ["20260803"]])
+    def test_non_string_trade_date_is_a_shape_error_not_another_day(self, bad_date):
+        """거래일 필드의 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**.
+
+        그 행이 빠지면 `len(same_day) < len(page)` 가 성립하고, 그건 경계를 넘었다는
+        신호라 페이징이 끝나며, 빈 하루가 **성공으로** 캐시된다 — 예외도 ERROR 로그도
+        없이 362종 전건 missing 인 window 390개가 커밋되고 하루가 "벤더가 안 줬다"로
+        남는다. 원장이 관대해지는 쪽으로 틀리는 바로 그 방향이다.
+        """
+        client, _ = self.hist([TOKEN, ok([{**row("1030" + "00"), "stck_bsop_date": bad_date}])])
+        with pytest.raises(ValueError, match="거래일이 문자열이 아니다"):
+            client.candles("005930", window_end=self.at("1030"))
+
+    def test_transport_failure_is_not_cached(self):
+        """전송·유량 실패는 **캐시하지 않는다** — 다음 window 가 다시 받아야 한다.
+
+        EGW00201 소진·5xx·JSON 손상·토큰 만료는 전부 재시도로 풀리는 축이다. 캐시하면
+        15:40 배치와 겹친 몇 초가 그 종목의 **하루 전체**를 죽이고, 되돌릴 길이 없다 —
+        INCOMPLETE 로 커밋된 window 는 재청구 대상(DUE·만료 CLAIMED)이 아니고 재계획도
+        `DO NOTHING` 이라 재기동해도 구멍이 그대로다.
+
+        ⚠️ 두 번째 호출이 **성공하는 것**으로 못박는다. 예외 타입만 보면 캐시된 값을
+        되던지는 것과 구분되지 않는다.
+        """
+        client, _ = self.hist([
+            TOKEN, err("40580000", "일시 거절"),
+            ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
+        ])
+        with pytest.raises(KisUnitError):
+            client.candles("005930", window_end=self.at("1030"))
+        assert len(client.candles("005930", window_end=self.at("1030"))) == 1
+
+    def test_cached_failure_is_reraised_fresh_not_the_same_object(self):
+        # 저장한 예외 객체를 다시 raise 하면 traceback 이 raise 마다 2프레임씩 자란다 —
+        # `_candle_for` 가 ValueError 를 logger.exception 으로 찍으므로 390 window 면
+        # 종목 하나가 로그를 15만 줄 쓴다
+        client, _ = self.hist([TOKEN, ok([row("103000"), row("103000", volume="7")])])
+        depths = []
+        for _ in range(3):
+            with pytest.raises(ValueError) as caught:
+                client.candles("005930", window_end=self.at("1030"))
+            depth = 0
+            tb = caught.value.__traceback__
+            while tb is not None:
+                depth += 1
+                tb = tb.tb_next
+            depths.append(depth)
+        # 첫 raise 는 `_fetch_day` 안에서 나 한 프레임 깊다 — 그 뒤가 **자라지 않는 것**이
+        # 계약이다(객체를 되던지면 raise 마다 2프레임씩 늘어난다)
+        assert len(set(depths[1:])) == 1, f"traceback 이 자란다: {depths}"
+        assert depths[-1] <= depths[0], depths
 
     def test_repeated_page_is_not_a_finished_day(self):
         # 같은 창을 반복하는 벤더도 "하루를 끝냈다는 증거"가 없다 — 조용히 잘린 하루를

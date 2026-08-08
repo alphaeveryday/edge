@@ -60,7 +60,7 @@ RATE_STREAK_LIMIT = 5
 # ⚠️ 만료 응답 형상은 **실측 대상이 아니었다**(24시간 상주 실증 전) — 코드가 안 맞으면
 # 재발급이 안 걸려 그 window 들이 실패로 드러난다(조용한 성공은 아니다, Rule 12).
 TOKEN_EXPIRED_CODES = ("EGW00121", "EGW00123")
-# 봉 하나가 덮는 길이. 이 어댑터는 1분봉 전용이다(FHKST03010200 이 분봉 TR).
+# 봉 하나가 덮는 길이. 이 어댑터는 1분봉 전용이다(두 TR 다 분봉이다).
 INTERVAL_SECONDS = 60
 
 KST = timezone(timedelta(hours=9))
@@ -79,6 +79,15 @@ class KisSourceError(RuntimeError):
 
 class KisUnitError(RuntimeError):
     """그 **종목 하나**의 실패 — 재시도로 풀릴 수 있다(collector 가 missing 으로 분류)."""
+
+
+class KisDayIncompleteError(KisUnitError):
+    """소급 조회가 그 **하루를 끝내지 못했다** — 재시도해도 같은 응답이 온다.
+
+    `KisUnitError` 와 분리하는 이유는 캐시 여부다: 전송·유량 실패는 다음 window 에서
+    풀리므로 캐시하면 몇 초의 장애가 하루를 죽이는데, 이건 응답의 형상 자체라 재청구가
+    같은 페이지 예산을 다시 태울 뿐이다(종목당 최대 8콜 × 390 window).
+    """
 
 
 def parse_minute_row(raw: dict, symbol: str) -> Candle:
@@ -239,8 +248,10 @@ DAY_FIRST_HHMMSS = "090000"
 MAX_DAY_PAGES = 8
 
 
-def fill_no_trade_minutes(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
-    """관측한 봉 **사이**의 빈 분을 직전 종가 flat·거래량 0 으로 채운다.
+def fill_no_trade_minutes(
+    candles: tuple[Candle, ...], *, until: datetime | None = None
+) -> tuple[Candle, ...]:
+    """첫 관측 **이후**의 빈 분을 직전 종가 flat·거래량 0 으로 채운다.
 
     🔴 소급 TR 은 무거래 분 행을 **주지 않는다**(2026-08-08 실측: 08-03 전 종목
     `cntg_vol=0` 행 0건, 저유동 439870 은 390분 중 176행뿐). 당일 TR 은 같은 분을
@@ -248,36 +259,49 @@ def fill_no_trade_minutes(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
     `no_trade`(성공) 와 `missing`(실패) 으로 갈린다 — 그 window 는 영원히 INCOMPLETE 이고
     한산한 종목은 canonical 에서 하루의 대부분이 사라진다(`price_collect` 4분류 참조).
 
-    ⚠️ **사이만 채운다.** 첫 관측 앞은 그 종목의 가격을 아직 모르고(직전가가 없다),
-    마지막 관측 뒤는 그날 더 거래됐는지 모른다 — 둘 다 `missing` 으로 남는 게 사실에
-    가깝다. 채우면 관측하지 않은 구간을 관측한 것처럼 만든다.
+    ⚠️ **첫 관측 앞은 안 채운다** — 그 종목의 그날 가격을 아직 모른다(직전가가 없다).
+    거기서 `missing` 은 사실에 가장 가깝고, 채우면 없는 값을 지어내는 것이다.
+
+    ⚠️ 반대로 **꼬리(`until`)는 채운다**. 마감된 거래일에서는 "마지막 관측 위에 봉이
+    없다"가 관측이다 — 페이징이 하루의 끝(15:30)부터 내려오므로 첫 페이지가 그걸 증명한다.
+    내부 갭과 인식론적으로 같은 자리라 다르게 다룰 이유가 없다. 실측 규모: 08-03 362종
+    중 **3종**만 15:30 전에 끝나고(15:15·15:17·15:19) 합계 39분이다. 안 채우면 그 39
+    window 가 362종 중 한 종목 때문에 INCOMPLETE 로 확정되는데, 재청구 대상도 아니라
+    (`claim_due_window` 는 DUE·만료 CLAIMED 만 본다) 그대로 굳는다.
     """
     ordered = sorted(candles, key=lambda candle: candle.window_end)
     filled: list[Candle] = []
     for candle in ordered:
         if filled:
-            previous = filled[-1]
-            gap = int(
-                (candle.window_end - previous.window_end).total_seconds()
-            ) // INTERVAL_SECONDS
-            for step in range(1, gap):
-                close = previous.close
-                filled.append(build_candle(
-                    previous.symbol,
-                    window_end=previous.window_end + timedelta(
-                        seconds=INTERVAL_SECONDS * step),
-                    span_seconds=INTERVAL_SECONDS,
-                    values={"open": close, "high": close, "low": close, "close": close},
-                    volume=Decimal(0),
-                ))
+            _extend_flat(filled, upto=candle.window_end)
         filled.append(candle)
+    if filled and until is not None:
+        # half-open 이 아니라 **포함**이다 — 15:30 은 그날 마지막 window 의 끝이다
+        _extend_flat(filled, upto=until + timedelta(seconds=INTERVAL_SECONDS))
     return tuple(filled)
+
+
+def _extend_flat(filled: list[Candle], *, upto: datetime) -> None:
+    """`filled` 의 마지막 봉 뒤부터 `upto` **직전**까지 직전 종가 flat 으로 잇는다."""
+    previous = filled[-1]
+    steps = int((upto - previous.window_end).total_seconds()) // INTERVAL_SECONDS
+    close = previous.close
+    for step in range(1, steps):
+        filled.append(build_candle(
+            previous.symbol,
+            window_end=previous.window_end + timedelta(seconds=INTERVAL_SECONDS * step),
+            span_seconds=INTERVAL_SECONDS,
+            values={"open": close, "high": close, "low": close, "close": close},
+            volume=Decimal(0),
+        ))
 
 
 class KisHistoricalMinuteClient(KisMinuteClient):
     """지난 거래일 분봉 — `FHKST03010230`. 하루를 한 번 받아 window 별로 나눠 준다.
 
-    당일 클라이언트와 갈리는 것은 셋뿐이고, 셋 다 벤더 형상 차이라 여기서 흡수한다:
+    당일 클라이언트와 갈리는 축은 다섯이고, 전부 벤더 형상 차이라 여기서 흡수한다
+    (아래 셋 + 세션 날짜 고정·범위 밖 window 거부, 그리고 무거래 분 합성은
+    `fill_no_trade_minutes`):
 
     1. **TR·날짜 축** — `FID_INPUT_DATE_1` 로 과거일을 지정한다. 당일 TR 에는 이 축이
        아예 없어서 과거 날짜를 물으면 오늘 봉이 오늘 라벨로 돌아온다(그 window 의
@@ -302,7 +326,12 @@ class KisHistoricalMinuteClient(KisMinuteClient):
         super().__init__(app_key, app_secret, client, env)
         self.session_date = session_date
         self._ymd = session_date.strftime("%Y%m%d")
+        self._day_last_window_end = datetime.strptime(
+            self._ymd + DAY_LAST_HHMMSS, "%Y%m%d%H%M%S").replace(tzinfo=KST)
         self._days: dict[str, dict[datetime, Candle]] = {}
+        # 결정적 실패의 (클래스, 메시지) — 객체를 들고 있으면 재raise 마다 traceback 이
+        # 자란다. 전송·유량 실패는 여기 안 들어온다(재시도로 풀리는 축이라 캐시 금지).
+        self._failures: dict[str, tuple[type[Exception], str]] = {}
 
     def _url(self, symbol: str, hour: str) -> str:
         params = {
@@ -334,26 +363,37 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                 f"소급 조회 범위 밖 window: {window_end.isoformat()} — 이 클라이언트는 "
                 f"{DAY_FIRST_HHMMSS}~{DAY_LAST_HHMMSS} 만 받는다(시간외 세션 미지원)"
             )
+        failure = self._failures.get(symbol)
+        if failure is not None:
+            # ⚠️ 저장한 예외 **객체**를 다시 raise 하면 `__traceback__` 이 raise 마다
+            # 2프레임씩 자란다 — `_candle_for` 가 `ValueError` 를 `logger.exception` 으로
+            # 찍으므로 390 window 면 종목 하나가 로그 15만 줄을 쓴다. 새로 만들어 던진다.
+            raise failure[0](failure[1])
         day = self._days.get(symbol)
         if day is None:
-            # ⚠️ **실패도 캐시한다.** 안 하면 재청구가 window 마다 하루 페이징을 처음부터
-            # 다시 태운다 — 못 받는 종목 하나가 390 window × 최대 8페이지 = 3,121콜을
-            # 산출 0으로 쓰고, 그 예산은 앱키 전역이라 다른 KIS 스텝에서 빠진다.
-            # 재시도 경계는 window 재청구가 아니라 **프로세스 재기동**이다: 백필은 일회성
-            # 실행이고, 그 실행 안에서 같은 응답이 반복될 뿐이라 재시도의 산출이 없다.
-            # 소스 전역 실패(KisSourceError)는 캐시하지 않는다 — 그건 종목의 사실이
-            # 아니라 설정·유량의 사실이고, 이미 window 를 통째로 세운다.
+            # ⚠️ **결정적 실패만 캐시한다.** 같은 응답이 같은 실패를 내는 축(형상 위반·
+            # 유일성 위반·하루 미완)은 재청구해도 산출이 없는데, 안 막으면 못 받는 종목
+            # 하나가 390 window × 최대 8페이지 = 3,121콜을 앱키 전역 예산에서 태운다.
+            #
+            # 🔴 전송·유량 실패(`KisUnitError`)는 **캐시하지 않는다**. EGW00201 소진·
+            # 5xx·JSON 손상·토큰 만료는 전부 재시도로 풀리는 축인데, 캐시하면 15:40
+            # 배치와 겹친 몇 초가 그 종목의 **하루 전체**를 죽인다. 그리고 그건 되돌릴
+            # 길이 없다 — INCOMPLETE 로 커밋된 window 는 `claim_due_window` 의 재청구
+            # 대상(DUE·만료 CLAIMED)이 아니고, 재계획도 `DO NOTHING` 이라 재기동해도
+            # 구멍이 그대로다.
+            #
+            # 소스 전역 실패(`KisSourceError`)도 캐시하지 않는다 — 종목의 사실이 아니라
+            # 설정·유량의 사실이고, 이미 window 를 통째로 세운다.
             try:
-                day = {candle.window_end: candle
-                       for candle in fill_no_trade_minutes(self._fetch_day(symbol))}
-            except (KisUnitError, ValueError) as error:
-                self._days[symbol] = error
+                day = {candle.window_end: candle for candle in fill_no_trade_minutes(
+                    self._fetch_day(symbol), until=self._day_last_window_end)}
+            except (KisDayIncompleteError, ValueError) as error:
+                self._failures[symbol] = (type(error), str(error))
                 raise
             self._days[symbol] = day
-        if isinstance(day, Exception):
-            raise day
         candle = day.get(window_end)
-        # 빈 결과는 정상이다 — 첫 체결 전이면 그 분은 collector 가 missing 으로 센다
+        # 빈 결과는 정상이다 — 남는 경우는 **첫 체결 전**뿐이다(꼬리는 15:30 까지
+        # 채우고, 그 사이는 합성이 메운다). collector 가 missing 으로 센다.
         return () if candle is None else (candle,)
 
     def _fetch_day(self, symbol: str) -> tuple[Candle, ...]:
@@ -379,7 +419,15 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                 if not isinstance(raw, dict):
                     raise ValueError(
                         f"{symbol} 소급 분봉 행이 객체가 아니다: {type(raw).__name__}")
-                if raw.get("stck_bsop_date") != self._ymd:
+                trade_date = raw.get("stck_bsop_date")
+                if not isinstance(trade_date, str):
+                    # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 그 행이
+                    # 빠져 `len(same_day) < len(page)` 가 성립하고, 그건 경계를 넘었다는
+                    # 신호라 페이징이 끝나며, 빈 하루가 **성공으로** 캐시된다. 예외도
+                    # ERROR 로그도 없이 362종 전건 missing 인 window 390개가 커밋된다.
+                    raise ValueError(
+                        f"{symbol} 소급 분봉 행의 거래일이 문자열이 아니다: {trade_date!r}")
+                if trade_date != self._ymd:
                     continue
                 same_day.append(parse_minute_row(raw, symbol))
             for candle in same_day:
@@ -407,7 +455,7 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                 hour = (datetime.strptime(earliest, "%H%M%S")
                         - timedelta(minutes=1)).strftime("%H%M%S")
         else:
-            raise KisUnitError(
+            raise KisDayIncompleteError(
                 f"KIS 소급 분봉 {symbol} {self._ymd}: 페이지 예산({MAX_DAY_PAGES}) 소진 "
                 "— 하루를 끝냈다는 증거가 없다"
             )

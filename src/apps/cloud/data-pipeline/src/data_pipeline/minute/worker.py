@@ -549,7 +549,13 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     # 벤더 TR 선택이 세션 날짜에 걸려 있어(ALPHA-846) 날짜를 읽은 뒤여야 한다.
     collector = make_price_collector(options, session_date=parsed_day)
     universe_model = load_universe_uri(universe)
-    if universe_model.extended_hours_ids and parsed_day < datetime.now(KST).date():
+    # ⚠️ "지난 거래일인가"를 여기서 **다시 묻지 않는다** — `datetime.now` 를 두 번 읽으면
+    # 자정 경계에서 collector 는 당일 TR 인데 게이트는 소급으로 판정해 정상 재기동이
+    # 그 순간에만 거부된다. 실제로 무엇을 골랐는지 collector 에게 묻는다.
+    from ..sources.kis_minute import KisHistoricalMinuteClient
+    is_backfill = isinstance(
+        getattr(collector, "client", None), KisHistoricalMinuteClient)
+    if is_backfill and universe_model.extended_hours_ids:
         # 소급 TR 은 정규장(09:00–15:30)만 페이징한다. 시간외 종목이 있으면 세션은
         # 720 window 로 계획되는데, 그 330개는 **구조적으로** 봉이 안 나온다 —
         # 런타임 거부는 `_process` 의 catch-all 이 window 실패로 접어(소스 전역 실패가
