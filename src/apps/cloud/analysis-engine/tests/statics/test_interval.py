@@ -412,3 +412,131 @@ def test_factor_block_admits_when_no_layer_stood():
     text = render_block_plan(build_block_plan(_facts()))
     assert "층 미계측" in text
     assert "시장 요인" not in text
+
+
+# ── 가설 제안 사건 문맥 (ALPHA-885) ──────────────────────────────────────
+class _ContextLake:
+    """직전 거래일~창 끝 스레드 문맥 조회의 가짜 표면.
+
+    질의는 내용 표식으로 분기한다 - thread_context 의 각 조회(캘린더·τ·상세·인자·
+    수치·리드·직전 스레드)가 무엇을 묻는지가 이 분기 목록이다.
+    """
+
+    exists = {"rdb": True}
+
+    def __init__(self, *, fail_detail: bool = False):
+        self.fail_detail = fail_detail
+        self.queries: list[str] = []
+
+    def taus(self, iid, day):
+        if day == "2026-08-05":
+            return [
+                (dt.datetime(2026, 8, 5, 10, 31), "e1"),
+                # τ > as_of(13:20) - PIT 위반. 문맥에 실리면 깨져야 한다.
+                (dt.datetime(2026, 8, 5, 14, 50), "e_future"),
+            ]
+        return [(dt.datetime(2026, 8, 4, 16, 0), "e0")]
+
+    def sql(self, q):
+        self.queries.append(q)
+        if "max(CAST(ts AS DATE))" in q:
+            return [("2026-08-04",)]
+        if self.fail_detail:
+            if q.lstrip().startswith("WITH") or "event_argument" in q \
+                    or "event_measure" in q:
+                raise RuntimeError("표면 죽음")
+            if "FROM rdb.public.source_event WHERE source_event_id IN" in q:
+                return [("e1", "CONTRACT.SIGNING"), ("e0", "CONTRACT.SIGNING")]
+            raise RuntimeError("표면 죽음")
+        if q.lstrip().startswith("WITH"):
+            # base(views_sql)가 기반 테이블명을 전부 품으므로 본문 SELECT 로만 가른다.
+            if "any_value(n.lead_text)" in q:
+                return [("e1", "SK하이닉스가 공급계약 해지를 공시했다.")]
+            if "SELECT DISTINCT e.thread_id" in q:
+                return [("th1", "2026-07-30 09:00:00", "CONTRACT.SIGNING",
+                         "공급계약 루머 보도")]
+            assert "SELECT DISTINCT e.source_event_id" in q, f"예상 밖 질의: {q[-160:]}"
+            assert "e_future" not in q, "PIT 위반 사건이 상세 조회에 들어갔다"
+            return [
+                ("e1", "CONTRACT.SIGNING", "SK하이닉스 공급계약 해지", "th1",
+                 "FOLLOW_UP_STAGE", "CONFIRMED"),
+                ("e0", "CONTRACT.SIGNING", "공급계약 협상 착수", "th1",
+                 "FIRST_IN_THREAD", "RUMORED"),
+            ]
+        if "FROM rdb.public.event_argument ea" in q:
+            return [("e1", "ISSUER", "SK하이닉스")]
+        if "FROM rdb.public.event_measure" in q:
+            return [("e1", "CONTRACT_AMOUNT", 3200.0, "억원")]
+        raise AssertionError(f"예상 밖 질의: {q[:120]}")
+
+
+def test_thread_context_carries_titles_and_prev_day_events():
+    """창 안 사건(제목·τ)과 **직전 거래일 사건**이 구분 표기로 실린다.
+
+    수집 구간이 창 안뿐이면 밤사이·전일 장중 재료가 통째로 빠진다(ALPHA-885 정정).
+    제목·τ 가 안 실리면 제안이 타입 코드만 보고 가설을 세운다 - 그게 고칠 대상이다.
+    """
+    from edge_analysis.statics.interval import thread_context
+
+    blocks, n, fails = thread_context(
+        _ContextLake(), "iid", "2026-08-05", "13:20", ("e1",))
+
+    text = "\n\n".join(blocks)
+    assert n == 2 and fails == 0
+    assert "[설명창 안] 08-05 10:31 CONTRACT.SIGNING — SK하이닉스 공급계약 해지" in text
+    assert "[직전 거래일~창 시작] 08-04 16:00" in text and "공급계약 협상 착수" in text
+    assert "리드: SK하이닉스가 공급계약 해지를 공시했다." in text
+    assert "인자: ISSUER=SK하이닉스" in text
+    assert "수치: CONTRACT_AMOUNT=3200.0 억원" in text
+    assert "스레드(CONFIRMED·FOLLOW_UP_STAGE): 직전 2026-07-30 09:00" in text
+
+
+def test_thread_context_excludes_pit_violating_events():
+    """τ > as_of 사건은 문맥에 못 들어온다 - 실리면 PIT 위반이다."""
+    from edge_analysis.statics.interval import thread_context
+
+    blocks, n, _fails = thread_context(
+        _ContextLake(), "iid", "2026-08-05", "13:20", ("e1",))
+
+    text = "\n".join(blocks)
+    assert "e_future" not in text and "14:50" not in text
+    assert n == 2
+
+
+def test_thread_context_falls_back_to_type_codes_on_lookup_failure():
+    """표면 조회가 죽어도 사건은 타입 코드로 남고 실패 수가 보고된다.
+
+    조회 실패가 사건 존재를 지우면, 침묵 폴백이 실행마다 제안 입력을 흔든다 -
+    그 관측 라인이 이 반환값(fails)이다.
+    """
+    from edge_analysis.statics.interval import thread_context
+
+    blocks, n, fails = thread_context(
+        _ContextLake(fail_detail=True), "iid", "2026-08-05", "13:20", ("e1",))
+
+    text = "\n".join(blocks)
+    assert n == 2 and fails >= 1
+    assert "CONTRACT.SIGNING" in text, "타입 코드 폴백이 사라졌다"
+    assert "[설명창 안]" in text and "[직전 거래일~창 시작]" in text
+
+
+def test_thread_context_caps_events_and_says_the_overflow():
+    """상한 초과분은 "외 N건" 으로 말한다 - 조용한 절단 금지."""
+    from edge_analysis.statics.interval import thread_context
+
+    class _Many(_ContextLake):
+        def taus(self, iid, day):
+            if day != "2026-08-05":
+                return []
+            return [(dt.datetime(2026, 8, 5, 9, i + 1), f"e{i}") for i in range(5)]
+
+        def sql(self, q):
+            if "max(CAST(ts AS DATE))" in q:
+                return [("2026-08-04",)]
+            return []
+
+    blocks, n, _fails = thread_context(
+        _Many(), "iid", "2026-08-05", "13:20", (), max_events=3)
+
+    assert n == 3
+    assert blocks[-1] == "외 2건 - 상한 3건 초과 (수집 구간 사건 5건)"
