@@ -14,8 +14,8 @@ OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집
 ⚠️ **메타는 유니버스 행 전량이고, 본문만 대상 유형이다**(ALPHA-865). 소스는 report_nm 으로
 행을 버리지 않고 `is_target` 플래그만 달아 보내므로(목록 질의는 어차피 전 유형을 훑어 버려도
 콜이 안 준다) 이 스텝이 그 플래그로 **본문 다운로드만** 제한한다 — 본문은 행당 1콜이라
-제한하지 않으면 하루 ~11콜이 universe_matched 만큼(수십~100/일 규모)이 된다. 감쇠 두 축은 collection_log 의
-`universe_matched`·`type_matched` 가 따로 센다.
+제한하지 않으면 본문 콜이 하루 ~11건에서 `universe_matched` 만큼(수십~100/일 규모)으로 뛴다.
+감쇠 두 축은 collection_log 의 `universe_matched`·`type_matched` 가 따로 센다.
 
 ⚠️ **이 스텝은 완전성을 판정하지 않는다.** 소스가 남기는 `list_total_count`·`list_rows_seen`
 은 창 규모의 **관측**이지 판정이 아니다 — 목록은 수집 중에도 자라(접수 피크 16시) 페이지
@@ -200,8 +200,9 @@ def run(
             if not record.get("is_target"):
                 # 비대상 유형 — 메타만 남기고 본문은 받지 않는다(ALPHA-865). 목록은 어차피
                 # 전 유형을 훑으므로 이 행을 저장해도 API 콜은 안 늘지만, 본문은 행당 1콜이라
-                # 여기서 제한하지 않으면 하루 ~11콜이 universe_matched 만큼(수십~100/일 규모)이 된다. 정제는 report_nm 으로
-                # 라우팅하므로 이 행들은 records_skipped_type 으로 빠진다.
+                # 여기서 제한하지 않으면 본문 콜이 하루 ~11건에서 universe_matched 만큼
+                # (수십~100/일 규모)으로 뛴다. 정제는 report_nm 으로 라우팅하므로 이 행들은
+                # records_skipped_type 으로 빠진다.
                 #
                 # 두 필드를 **명시적으로 None** 으로 둔다(키를 빼지 않는다) — 대상 행의 본문
                 # 실패 경로가 이미 그 관례이고, 여기서만 키가 없으면 나중에 이 raw 를 다시
@@ -294,7 +295,10 @@ def run(
     if status == "success" and real_failures:
         if saved_targets == 0:
             status, exit_code = "error", 1
-            error = f"모든 수집 대상 실패 ({len(real_failures)}건)"
+            # "모든 대상 실패"라고 쓰지 않는다 — 실패 목록에는 유형 판정 **앞**에서 잡히는
+            # 행(남의 회사 malformed row·stock_code 비문자열)도 섞여, 대상 0건인 정상 날에
+            # 그 1건만 있어도 그 문구는 거짓이 된다. 두 사실을 그대로 적는다.
+            error = f"대상 저장 0건 · 실패 {len(real_failures)}건"
         else:
             status, exit_code = "partial", 1
 
@@ -342,6 +346,11 @@ def run(
             # 몫이고 `universe_matched → type_matched` 가 유형이 자른 몫이다. 통과분(records_
             # saved)만 남기면 둘이 한 숫자로 접혀 "대상을 넓히면 얼마나 늘어나는가"에 답할 수
             # 없다 — 실측(2026-08-07) 867 → 저장 1 의 내역이 그래서 복원되지 않았다.
+            # `is_target` 을 정한 **필터 기준**을 같이 남긴다. 이 값은 설정 파생 판정이라
+            # 필터를 넓히면 같은 report_nm 에 다른 is_target 이 붙은 행이 파티션에 섞이는데,
+            # 기준을 안 적으면 어느 런이 어느 기준이었는지 복원되지 않는다 — 이 티켓의 전제
+            # ("보존해 뒀다가 나중에 넓혀 재파싱")가 바로 그 복원 가능성에 걸려 있다.
+            "report_name_filters": list(getattr(source, "report_name_filters", [])),
             "universe_matched": getattr(source, "universe_matched", 0),
             "type_matched": getattr(source, "type_matched", 0),
             "finished_at": datetime.now(timezone.utc).isoformat(),

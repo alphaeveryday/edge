@@ -47,7 +47,8 @@ class FakeSource:
     def __init__(self, records=(), *, enabled=True, planned=1,
                  doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
                  list_total_count=None, list_rows_seen=0, resolved_window=None,
-                 universe_matched=0, type_matched=0, dropped_malformed=0):
+                 universe_matched=0, type_matched=0, dropped_malformed=0,
+                 report_name_filters=("공급계약", "사업보고서")):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
@@ -59,6 +60,8 @@ class FakeSource:
         self.universe_matched = universe_matched
         self.type_matched = type_matched
         self.dropped_malformed = dropped_malformed
+        # 실 소스는 설정에서 받는다 — 스텝이 이걸 로그로 옮겨 `is_target` 의 기준을 남긴다.
+        self.report_name_filters = list(report_name_filters)
         # 실제로 수집한 창 — 인자와 다를 수 있다(시작일만 준 창은 소스가 끝을 확정한다)
         self.resolved_window = resolved_window or (None, None)
         self._doc_fail = doc_fail
@@ -474,7 +477,7 @@ def test_window_scale_observed_in_collection_log(tmp_path):
 def test_non_target_meta_saved_without_downloading_body(tmp_path):
     # WHY: 이 스텝이 유형 플래그로 지키는 것은 **비용** 하나다 — 메타는 전량 남기되(나중에
     #      대상을 넓힐 때 재수집 불필요) 본문은 대상만 받는다(행당 1콜이라 안 막으면 하루
-    #      ~11콜이 ~1,000콜이 된다). 둘을 따로 묻는다: 저장은 2행인가(보존), 본문 요청은
+    #      ~11콜이 universe_matched 만큼(수십~100/일)이 된다). 둘을 따로 묻는다: 저장은 2행인가(보존), 본문 요청은
     #      대상 하나뿐인가(비용). 저장만 보면 본문을 다 받아도 통과하고, 요청만 보면 비대상
     #      메타를 버려도 통과한다.
     source = FakeSource(records=[
@@ -509,6 +512,48 @@ def test_non_target_row_is_not_a_partial_run(tmp_path):
     assert log["ops"]["failed_records"] == 0
     assert log["documents_saved"] == 0
     assert log["records_saved"] == 2
+
+
+def test_step_survives_malformed_rcept_no_on_non_target_row(tmp_path):
+    # WHY: 소스가 형상을 보장하게 됐지만 스텝이 그 보장에 **의존하지 않는지**를 따로 묻는다.
+    #      한때 `rcept_no = (record.get("rcept_no") or "").strip()` 이 is_target 게이트 위에
+    #      있어, truthy 비문자열(int)이 `or ""` 를 통과해 `.strip()` 에서 터졌다 — 그 한 건이
+    #      status=error·exit 1 로 **창의 남은 페이지를 통째로 못 받게** 만들었다.
+    #      계층별로 따로 물어야 한다: 소스 테스트는 소스만 증명한다. 백필·다른 생산자가 이
+    #      스텝에 먹이는 순간 소스 가드는 경로에 없다.
+    source = FakeSource(records=[
+        _rec(12345, report_nm="주주총회소집결의", is_target=False),  # truthy 비문자열
+        _rec("OK"),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0                       # 창이 죽지 않는다
+    log = _log(storage, "r1")
+    assert log["status"] == "success"
+    assert log["records_saved"] == 2       # 결함 행도 메타는 남는다
+    assert source.doc_requests == ["OK"]   # 본문은 대상만
+
+
+def test_missing_is_target_key_is_treated_as_non_target(tmp_path):
+    # WHY: 스텝 게이트(`not record.get("is_target")`)는 False·None·**키 부재**를 한 값으로
+    #      접는다. 지금 소스가 항상 플래그를 채우므로 무해하지만, 그건 **우연이지 의도가
+    #      아니고** 우연은 다음 수정이 조용히 뒤집는다. 방향도 안전하지만은 않다 — 플래그가
+    #      통째로 사라지면 전 행이 비대상이 되어 본문 0건인데 status=success 로 끝난다
+    #      ("안 받는 쪽"이 아니라 "아무것도 안 하고 성공이라 말하는 쪽").
+    #      그때 `type_matched>0` 인데 `documents_saved+reused==0` 이 사람에게 드러나는
+    #      유일한 신호라, 이 취급이 의도임을 여기서 고정한다.
+    rec = _rec("NOFLAG")
+    del rec["is_target"]
+    source = FakeSource(records=[rec])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert source.doc_requests == []       # 본문을 안 받는다
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 1       # 메타는 남는다
+    assert log["ops"]["records_out"] == 0  # 산출로는 안 센다
 
 
 def test_ops_records_out_counts_targets_not_universe(tmp_path):
@@ -551,7 +596,9 @@ def test_all_targets_failed_is_error_even_with_non_target_meta(tmp_path):
     assert log["records_saved"] == 1          # 비대상 메타는 저장됐다
     assert log["records_saved_target"] == 0   # 대상은 하나도 못 건졌다
     assert log["status"] == "error"           # → partial 이 아니라 error 다
-    assert "모든 수집 대상 실패" in log["error"]
+    # 문구도 단언한다 — 실패 목록엔 유형 판정 앞에서 잡히는 남의 행도 섞이므로 "모든 대상
+    # 실패"는 대상 0건인 정상 날에 거짓이 된다. 두 사실(대상 저장 0 · 실패 N)을 그대로 적는다.
+    assert log["error"] == "대상 저장 0건 · 실패 1건"
 
 
 def test_attenuation_axes_recorded_in_collection_log(tmp_path):
@@ -559,7 +606,7 @@ def test_attenuation_axes_recorded_in_collection_log(tmp_path):
     #      끊겨도 다른 테스트는 전부 통과한다(판정에 안 쓰는 관측값이라 게이트가 없다).
     #      list_rows_seen 과 **다른 값**으로 넣어 세 축이 각각 제 자리에 실리는지 고정한다.
     source = FakeSource(records=[_rec("A1")], list_rows_seen=867,
-                        universe_matched=97, type_matched=1)
+                        universe_matched=97, type_matched=1, dropped_malformed=5)
 
     code, storage = _run(tmp_path, source)
 
@@ -568,3 +615,10 @@ def test_attenuation_axes_recorded_in_collection_log(tmp_path):
     assert log["list_rows_seen"] == 867
     assert log["universe_matched"] == 97
     assert log["type_matched"] == 1
+    # "버리되 0건 아님"(Rule 12)이 이 수정의 요지인데, 그 수치가 로그까지 가는 경로도
+    # 같은 무증 지대에 있다 — 상수 0 으로 박아도 나머지는 전부 초록이었다. 다른 셋과
+    # **다른 값**이라야 어느 필드를 실었는지 이 단언이 가린다.
+    assert log["rows_dropped_malformed"] == 5
+    # `is_target` 을 정한 기준도 함께 — 없으면 나중에 필터를 넓혔을 때 어느 런이 어느
+    # 기준이었는지 복원되지 않아 "보존해 뒀다가 재파싱"이라는 이 티켓의 전제가 깨진다.
+    assert log["report_name_filters"] == ["공급계약", "사업보고서"]

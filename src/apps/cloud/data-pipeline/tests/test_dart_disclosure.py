@@ -222,17 +222,26 @@ def test_counters_reset_between_fetches(tmp_path):
     # WHY: 카운터 리셋은 같은 인스턴스로 fetch 를 두 번 부르는 테스트가 없으면 **지워도
     #      전부 초록**이다(변이로 확인됨). 스텝은 런당 한 번만 부르지만, 리셋이 조용히
     #      죽으면 백필처럼 재사용하는 경로에서 감쇠 수치가 누적돼 거짓이 된다.
+    #      픽스처에 **결함 행 둘을 섞는다** — 정상 행만 두면 dropped_malformed·fetch_failures
+    #      가 양쪽 런에서 0 이라 리셋을 지워도 0==0 으로 통과한다(그게 이 자리가 무증이던 이유).
     client = FakeClient(list_pages={1: _page([
         _row("단일판매ㆍ공급계약체결", rcept_no="A1"),
         _row("주주총회소집결의", rcept_no="B2"),
+        {"stock_code": "005930", "report_nm": "현금ㆍ현물배당결정", "rcept_no": 12345},  # 비대상 결함
+        {"stock_code": "005930", "report_nm": "단일판매ㆍ공급계약체결"},                  # 대상 결함
     ])})
     source = _source(tmp_path, client, api_key="k")
 
+    def snapshot():
+        return (source.list_rows_seen, source.universe_matched, source.type_matched,
+                source.dropped_malformed, len(source.fetch_failures))
+
     list(source.fetch(["005930"]))
-    first = (source.list_rows_seen, source.universe_matched, source.type_matched)
+    first = snapshot()
+    assert first[3] == 1 and first[4] == 1  # 결함 축 둘 다 0 이 아니다(리셋을 실제로 물을 수 있다)
     list(source.fetch(["005930"]))
 
-    assert (source.list_rows_seen, source.universe_matched, source.type_matched) == first
+    assert snapshot() == first
 
 
 def test_target_row_carries_derived_provenance(tmp_path):
