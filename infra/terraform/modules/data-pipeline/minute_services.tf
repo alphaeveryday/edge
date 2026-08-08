@@ -3,8 +3,9 @@
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
 # (DB 오류는 프로세스가 죽어서 드러낸다 — 각 *_cli 계약).
-# news-worker 포함(ALPHA-717) — 세션 오케스트레이션이 news 세션(news_minute/bigkinds)도
-# 계획·드레인한다(MINUTE_SESSION_NEWS_SOURCE_GROUP).
+# 승객 생산자 2종 포함 — 세션 오케스트레이션이 그 세션도 함께 계획·드레인한다:
+# news-worker(ALPHA-717, news_minute/bigkinds) · inav-worker(ALPHA-882, etf_inav_minute/kis).
+# 둘 다 공용 스케일 목록에서 빠지고 자기 목록으로 올라간다(local.minute_passenger_workers).
 #
 # ⚠️ desired_count 는 **세션 오케스트레이션이 런타임에 바꾸는 값**이다 —
 # lifecycle ignore_changes 가 없으면 무관한 apply 가 장중에 워커를 내린다.
@@ -175,7 +176,36 @@ locals {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
       }
     }
+    # 장중 iNAV 생산자(ALPHA-851/882) — 소비자가 없다. `commit_inav_window` 가 job·outbox
+    # 를 일부러 안 만들어(가격 것을 빌려 쓰면 NAV 가 price-analysis-realtime 으로 나가
+    # 설명이 발화된다) 이 레인은 canonical 까지만 간다. 큐도 안 늘어난다.
+    # ⚠️ 질의 심볼(`krx_etf.source.etf_map`)은 동봉 sources.toml 이 정본이라 env 가 없다 —
+    # 세션 유니버스(`--universe`)와 **다른 출처**이고, 갈리면 etf_map 에 없는 unit 이 매
+    # window invalid 로 드러난다(조용히 missing 으로 접지 않는다).
+    inav-worker = {
+      command = ["inav-worker", "--universe", local.minute_universe_uri]
+      environment = merge(local.env, local.db_env, {
+        # 토큰 공유 캐시(ALPHA-573) — price-worker 와 **같은 앱키를 쓴다**. 상주 워커엔
+        # 없으면 안 된다: 매 기동 발급이 분당 1회 제한에 걸리고, 가격 레인·15:40 배치와
+        # 발급을 다툰다.
+        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+      })
+      # 일별 NAV(tasks.tf ingest-raw-nav)와 **같은 자격증명 쌍**이다 — 벤더도 TR 계열도
+      # 같아서 그릇을 나눌 이유가 없다. 미주입이면 워커가 기동에서 죽는다(fail-loud).
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD                = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+      }
+    }
   }
+
+  # 공용 스케일 목록에서 빼는 **생산자**들 — 자기 세션이 선 날만 올라간다(세션 부재
+  # 기동 거부 → 하루 종일 재기동 루프 방지). 소비자는 여기 안 넣는다: 빈 큐 폴링은
+  # 무해하고 backfill 소비는 세션 무관이다.
+  # ⚠️ 이 목록과 아래 MINUTE_SESSION_*_WORKER_SERVICES 는 **짝이다** — 여기서 빼고
+  # 자기 목록에 안 넣으면 그 워커는 아무도 안 올린다(레인이 조용히 안 돈다).
+  minute_passenger_workers = ["news-worker", "inav-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -353,14 +383,22 @@ resource "aws_ecs_task_definition" "minute_session" {
       # 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일) 안에서 다음
       # 세션이 집는다.
       MINUTE_SESSION_SERVICES = join(",", concat(
-        [for key, service in aws_ecs_service.minute : service.name if key != "news-worker"],
+        [for key, service in aws_ecs_service.minute : service.name
+        if !contains(local.minute_passenger_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
       MINUTE_SESSION_NEWS_WORKER_SERVICES = aws_ecs_service.minute["news-worker"].name
+      MINUTE_SESSION_INAV_WORKER_SERVICES = aws_ecs_service.minute["inav-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
-      # 뉴스 세션 편입(ALPHA-717) — start 가 news_minute 세션도 계획, stop 이 함께 드레인.
+      # 승객 세션 편입 — start 가 그 세션도 계획하고 stop 이 함께 드레인한다. 비우면
+      # 그 레인만 미편입이고 구동 레인(가격)은 그대로 돈다.
+      # ⚠️ 승객은 `--dataset` 인자가 **아니다**(그건 구동 레인 전용 — states.SCALED_DATASETS).
+      # 자기 워커를 소유해도 인자로는 못 온다: `_scale` 이 dataset 을 안 보고 공용 목록을
+      # 내려서, stop 을 승객 dataset 으로 부르면 살아 있는 price-worker 가 내려간다.
       MINUTE_SESSION_NEWS_SOURCE_GROUP = var.minute_session_news_source_group
+      # iNAV 세션 편입(ALPHA-882)
+      MINUTE_SESSION_INAV_SOURCE_GROUP = var.minute_session_inav_source_group
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
@@ -462,9 +500,9 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
   cpu                      = var.task_cpu
   # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
   # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
-  memory                   = var.analysis_task_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.analysis_task.arn
+  memory             = var.analysis_task_memory
+  execution_role_arn = aws_iam_role.execution.arn
+  task_role_arn      = aws_iam_role.analysis_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"

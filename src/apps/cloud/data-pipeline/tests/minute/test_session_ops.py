@@ -699,3 +699,76 @@ class TestTwoPassengers:
             {"desiredCount": 0, "forceNewDeployment": False, "services": None},
             {"desiredCount": 0, "forceNewDeployment": False, "services": ["svc-inav-worker"]},
         ], "토글이 꺼져 있어도 목록에 있으면 내린다"
+
+
+def _module_tf() -> str | None:
+    """`minute_services.tf` 본문 — 저장소 체크아웃에서만 있다(패키지 설치 환경엔 없다)."""
+    from pathlib import Path as _P
+    here = _P(__file__).resolve()
+    rel = "infra/terraform/modules/data-pipeline/minute_services.tf"
+    return next((p / rel).read_text() for p in here.parents if (p / rel).exists())
+
+
+def test_승객_토글_env_이름이_terraform_과_일치한다():
+    """⚠️ **이 드리프트는 완전히 조용하다.** terraform 이 심는 env 이름과 코드가 읽는
+    이름이 갈리면 `_passenger_source_group` 이 None 을 돌려주고, 그 레인은 계획도
+    스케일업도 없이 **exit 0** 으로 지나간다 — 실패가 아니라 부재라 알람도 안 뜬다.
+    그 날 iNAV 는 통째로 안 도는데 스케줄 기록은 초록이다(Rule 12).
+
+    이름은 terraform 이 정본이고 코드가 따라간다(`_services` 주석과 같은 결) — 그래서
+    대조 방향은 "코드 상수가 tf 에 실제로 있는가"다.
+    """
+    try:
+        text = _module_tf()
+    except StopIteration:
+        pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    for dataset, (env_group, env_services) in session_ops.PASSENGER_LANES.items():
+        assert f"{env_group} =" in text, f"{dataset} 토글 env 가 terraform 에 없다: {env_group}"
+        assert f"{env_services} =" in text, \
+            f"{dataset} 워커 목록 env 가 terraform 에 없다: {env_services}"
+
+
+def test_승객_생산자는_공용_스케일_목록에서_빠진다():
+    """공용 목록에 남으면 **그 세션이 안 선 날에도** 올라가 기동 거부 재기동 루프를
+    돈다(비용·알람 소음). 승객 워커는 자기 목록으로만 올라간다.
+
+    terraform 의 제외 목록(`minute_passenger_workers`)과 코드의 `PASSENGER_LANES` 는
+    짝이다 — 서비스만 추가하고 제외를 빠뜨리는 것이 이 배선의 기본 실수다.
+    """
+    try:
+        text = _module_tf()
+    except StopIteration:
+        pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    import re
+    block = re.search(r"minute_passenger_workers\s*=\s*\[([^\]]*)\]", text)
+    assert block, "공용 목록 제외가 terraform 에서 사라졌다 — 승객 워커가 매일 올라간다"
+    excluded = set(re.findall(r'"([^"]+)"', block.group(1)))
+    assert excluded == {"news-worker", "inav-worker"}, \
+        f"승객 생산자와 제외 목록이 갈렸다: {excluded}"
+    # 제외된 워커는 **자기 목록**에 반드시 있어야 한다 — 빼고 안 넣으면 아무도 안 올린다
+    for worker in excluded:
+        assert f'aws_ecs_service.minute["{worker}"].name' in text, \
+            f"{worker} 가 공용에서 빠졌는데 자기 목록 env 에도 없다 — 그 레인이 조용히 안 돈다"
+
+
+def test_iNAV_토글_기본값이_어휘_안이다():
+    """어휘 밖 기본값이면 apply 는 통과하고 **다음 아침 오케스트레이터가 죽는다** —
+    가격 레인까지 그날 통째로 안 뜬다. plan 보다 여기서 막는 게 싸다."""
+    from pathlib import Path as _P
+    from data_pipeline.minute.states import (
+        DATASET_ETF_INAV_MINUTE, SOURCE_GROUPS_BY_DATASET)
+    import re
+
+    here = _P(__file__).resolve()
+    rel = "infra/terraform/modules/data-pipeline/variables.tf"
+    root = next((p for p in here.parents if (p / rel).exists()), None)
+    if root is None:
+        pytest.skip("variables.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    block = re.search(
+        r'variable\s+"minute_session_inav_source_group"\s*\{[^}]*default\s*=\s*"([^"]+)"',
+        (root / rel).read_text())
+    assert block, "minute_session_inav_source_group 기본값을 못 찾았다"
+    assert block.group(1) in SOURCE_GROUPS_BY_DATASET[DATASET_ETF_INAV_MINUTE]

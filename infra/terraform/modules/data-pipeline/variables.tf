@@ -528,12 +528,20 @@ variable "minute_session_news_source_group" {
   default     = "bigkinds"
 }
 
+variable "minute_session_inav_source_group" {
+  description = "etf_inav_minute 세션의 source_group(ALPHA-882). 비우면 iNAV 레인 미편입 — start 가 iNAV 세션을 계획하지 않고 inav-worker 도 올리지 않는다"
+  type        = string
+  # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만). 어휘 밖 값은
+  # 오케스트레이터가 기동에서 거부한다(`_passenger_source_group`).
+  default     = "kis"
+}
+
 variable "minute_session_source_group" {
   description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
   type        = string
   # kis(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다. 이 기본값은
   # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
-  default     = "kis"
+  default = "kis"
 }
 
 variable "super_admin_api_url" {
