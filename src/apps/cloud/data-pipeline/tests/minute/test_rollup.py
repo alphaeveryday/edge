@@ -439,6 +439,34 @@ class TestSessionRollup:
         assert fx.rollup_session(session_date="2026-07-31") is None
         assert fx.storage.list_keys("canonical/market_data/intraday_5m") == []
 
+    def test_writer_owns_a_backfilled_day_before_the_boundary(self, tmp_path):
+        """경계 **앞**이라도 롤업이 온전한 계열을 갖게 된 날은 롤업이 쓴다.
+
+        경계의 뜻은 날짜가 아니라 **재료**다(ALPHA-836). 재료가 나중에 생긴 날
+        (ALPHA-846 의 KIS 소급 수집)은 그 정의상 롤업 소유인데, 날짜 하나로는 표현할
+        수 없다 — 경계를 내리면 재료가 여전히 없는 08-04~08-09 까지 딸려 온다.
+
+        ⚠️ 위 `test_refuses_partition_owned_by_another_vendor`(07-31 거부)만으로는 이
+        예외가 실제로 뚫리는지 알 수 없다 — 예외를 통째로 지워도 07-31 은 계속 거부된다.
+        """
+        from data_pipeline.minute.rollup import WRITER_OWNED_BEFORE_SINCE
+
+        owned = sorted(WRITER_OWNED_BEFORE_SINCE)[0]
+        assert owned < WRITER_SINCE, "예외가 경계 앞이어야 의미가 있다"
+        fx = Fixture(tmp_path)
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            records = [{"unit_id": "500000",
+                        "ts": datetime.combine(date.fromisoformat(owned),
+                                               time(int(hhmm[:2]), int(hhmm[2:])), tzinfo=KST),
+                        "open": "100", "high": "101", "low": "99", "close": "100",
+                        "volume": "1", "source": "kis"}]
+            fx.storage.put_bytes(
+                canonical_price_minute_artifact_key("KR", owned, hhmm, 1),
+                serialize_records(records))
+            window = fx.db.windows[(fx.session_id, w(hhmm))]
+            window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
+        assert fx.rollup_session(session_date=owned) == canonical_intraday_5m_key("KR", owned)
+
 class TestUnfilledSettledDays:
     """구멍 판정 — 원장이 멈춘 거래일에 파생이 없는 날."""
 

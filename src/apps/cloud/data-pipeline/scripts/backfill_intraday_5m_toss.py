@@ -25,8 +25,9 @@ low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=t
 소비자(`duck._s3`)가 `**/*.parquet` 글롭이라 둘 다 읽는다. 행이 서로소인 것은 쓰기 전에
 `part-0` 의 티커를 빼서 보장한다.
 
-**소유권 경계는 `rollup.WRITER_SINCE` 하나다.** 그 앞은 이 백필이, 뒤는 롤업이 파티션을
-소유한다. 날짜를 여기 박지 않고 `_trading_days` 가 그 상수를 읽어 달력을 자른다 —
+**소유권은 `rollup.writer_owns()` 하나가 정한다.** 기본은 `WRITER_SINCE` 경계고(앞은 이
+백필, 뒤는 롤업), 경계 앞이라도 롤업이 온전한 계열을 갖게 된 날은 예외로 롤업 소유다
+(`WRITER_OWNED_BEFORE_SINCE` — 2026-08-03 이 ALPHA-846 의 KIS 소급 수집으로 그렇게 됐다). 날짜를 여기 박지 않고 `_trading_days` 가 그 상수를 읽어 달력을 자른다 —
 경계는 옮겨진 적이 있고(ALPHA-836) 주석으로 강제하면 옮길 때 하나만 고쳐진다.
 
 🔴 경계 **뒤** 파티션에 이 스크립트가 파일을 놓으면 `_rollup_day` 의 foreign 가드가 걸려
@@ -60,7 +61,7 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src"))
 
-from data_pipeline.minute.rollup import WRITER_SINCE  # noqa: E402
+from data_pipeline.minute.rollup import WRITER_SINCE, writer_owns  # noqa: E402
 from data_pipeline.sources.toss import TossOpenApiClient  # noqa: E402
 
 KST = timezone(timedelta(hours=9))
@@ -117,7 +118,7 @@ def _trading_days(s3, bucket: str) -> list[str]:
     # 하필 파티션이 빠진 날이 곧 롤업 시대의 날이라, 가드가 없으면 백필이 가장 위험한
     # 파티션을 정조준한다. 거기 낯선 파일을 쓰면 `rollup._rollup_day` 의 foreign 가드가
     # 걸려 그날 5분 파생이 후크·EOD 양쪽에서 **영구 정지**한다.
-    return sorted(d for d in days if d < WRITER_SINCE)
+    return sorted(d for d in days if not writer_owns(d))
 
 
 def _configured_universe() -> set[str]:

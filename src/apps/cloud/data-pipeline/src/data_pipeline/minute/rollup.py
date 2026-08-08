@@ -81,6 +81,24 @@ SOURCE_VENDOR = "1m_rollup"
 # 다시 생기고, 그때는 백필이 못 건드린다 — 경계를 계속 미는 것은 답이 아니다.
 WRITER_SINCE = "2026-08-10"
 
+# 경계 **앞**이지만 롤업이 소유하는 날. 경계의 뜻이 날짜가 아니라 **재료**라는 위 정의를
+# 그대로 따른 결과다 — 재료가 나중에 생긴 날은 그 정의상 롤업 소유가 맞는데, 날짜 하나로는
+# 표현할 수 없다(경계를 내리면 08-04~08-09 까지 딸려 온다. 그 날들은 여전히 재료가 없다).
+#
+# 2026-08-03: ALPHA-846 의 KIS 소급 수집이 **410종**(etf 33 + 구성 329 + 섹터 48) 1분
+# canonical 을 만들었다 — 경계 뒤의 어떤 날보다 온전하다(390 window 전건 커밋, 결측은
+# 4종 63 unit-window = 0.04%). 토스 백필이 얹었던 49종은 이 410종의 부분집합이라
+# 소유권을 넘겨도 잃는 종목이 없다.
+#
+# ⚠️ 여기에 날짜를 더하려면 그날 1분 원장에 **그 계열이 실제로 있는지** 먼저 확인해라.
+# 없는 날을 넣으면 백필이 손을 떼는데 롤업은 만들 재료가 없어 그날이 통째로 빈다.
+WRITER_OWNED_BEFORE_SINCE = frozenset({"2026-08-03"})
+
+
+def writer_owns(session_date: str) -> bool:
+    """그날 5분 파티션을 롤업이 소유하나 — 경계 하나가 아니라 **경계 + 예외**다."""
+    return session_date >= WRITER_SINCE or session_date in WRITER_OWNED_BEFORE_SINCE
+
 
 def _committed_generations(ledger, session_id: str) -> dict[str, int]:
     """window(HHMM, KST 축) → 원장이 확정한 현재 세대. commit.py orphan 스캔과 같은 축."""
@@ -211,10 +229,10 @@ def _rollup_day(
     후크와 EOD 배치가 공유하는 유일한 집계 경로다 — 규칙이 두 벌이 되면 장중 산출과
     마감 산출이 갈리고, 갈린 날은 어느 쪽이 맞는지 물어볼 곳이 없다.
     """
-    if session_date < WRITER_SINCE:  # ISO 문자열이라 사전순 = 시간순
+    if not writer_owns(session_date):  # ISO 문자열이라 사전순 = 시간순
         logger.warning(
-            "5분 롤업 %s: 다른 벤더의 정본 파티션(< %s) — 덮어쓰지 않는다",
-            session_date, WRITER_SINCE,
+            "5분 롤업 %s: 다른 벤더의 정본 파티션(< %s, 예외 %s) — 덮어쓰지 않는다",
+            session_date, WRITER_SINCE, sorted(WRITER_OWNED_BEFORE_SINCE),
         )
         return None
     day_key = canonical_intraday_5m_key(market, session_date)

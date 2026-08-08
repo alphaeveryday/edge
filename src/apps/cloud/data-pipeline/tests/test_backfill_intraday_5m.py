@@ -96,6 +96,26 @@ def test_calendar_stops_at_the_rollup_ownership_boundary():
     assert days == ["2026-07-31"], f"롤업 소유 구간이 대상에 들어왔다: {days}"
 
 
+def test_calendar_also_drops_a_backfilled_day_before_the_boundary():
+    """경계 **앞**이라도 롤업이 소유하게 된 날은 백필이 손을 뗀다.
+
+    WHY: 소유권은 `writer_owns()` 하나가 정하고 경계는 그중 기본값일 뿐이다. 예외를
+    여기서 안 보면 두 writer 가 같은 파티션을 다투고, 그러면 롤업 쪽 foreign 가드가
+    걸려 그날 5분 파생이 영구 정지한다 — 위 테스트가 막으려던 사고가 경계 앞에서
+    똑같이 난다(2026-08-03 이 ALPHA-846 의 KIS 소급 수집으로 그렇게 됐다).
+    """
+    owned = sorted(__import__('data_pipeline.minute.rollup', fromlist=['x']).WRITER_OWNED_BEFORE_SINCE)[0]
+    assert owned < backfill.WRITER_SINCE, "예외가 경계 앞이어야 의미가 있다"
+    s3 = _FakeS3({
+        backfill.PREFIX: ["2026-07-31"],
+        backfill.PRICE_DAILY_PREFIX: ["2026-07-31", owned],
+    })
+
+    days = backfill._trading_days(s3, "bkt")
+
+    assert days == ["2026-07-31"], f"롤업이 소유하게 된 날이 대상에 남았다: {days}"
+
+
 # ── 쓰기 판정 ──────────────────────────────────────────────────────────────
 
 def test_no_payload_when_nothing_is_new():
