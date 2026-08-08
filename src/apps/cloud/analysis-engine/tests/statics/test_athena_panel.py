@@ -156,7 +156,7 @@ def test_panel_bounds_the_history_so_the_row_cap_is_not_blown():
     where = sql.split("WHERE", 1)[1].split("GROUP BY", 1)[0]
     assert f"trade_date <= DATE '{DAY}'" in where
     assert "trade_date >= DATE" in where
-    # 60거래일을 채울 만큼은 남긴다 - 짧으면 MIN_BETA_N(40) 미달로 층이 조용히 빠진다.
+    # 60거래일을 채울 만큼은 남긴다 - 짧으면 MIN_BETA_N 미달로 층이 조용히 빠진다.
     # 주말·공휴일을 감안하면 60거래일에 최소 ~88 달력일이 든다.
     assert athena.LOOKBACK_DAYS >= 88
 

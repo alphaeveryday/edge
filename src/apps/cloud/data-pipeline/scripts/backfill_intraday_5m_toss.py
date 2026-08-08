@@ -1,11 +1,12 @@
 """토스 1분봉 → 5분봉 canonical 과거 백필 (분석엔진 β 표본 복구용).
 
 **왜 필요한가.** `analysis-engine` 의 구간 층분해는 같은 시각창을 과거 60거래일에서
-회귀해 β 를 얻는다(`layers.BETA_WINDOW`·`MIN_BETA_N=40`). 5분봉 이력이 40거래일에 못
-미치는 종목은 층이 통째로 빠지고 산문이 "시장 미계측 · 섹터 미계측 · 구성종목 0종목"
-을 낸다 — 재료 부재이지 분석 실패가 아닌데 화면에는 구분이 안 보인다.
+회귀해 β 를 얻는다(`layers.BETA_WINDOW`·`MIN_BETA_N`). 이력이 그 최소 표본에 못 미치는
+종목은 층이 통째로 빠지고 산문이 "시장 미계측 · 섹터 미계측 · 구성종목 0종목"을 낸다 —
+재료 부재이지 분석 실패가 아닌데 화면에는 구분이 안 보인다. 요건 값을 여기 적지 않는다:
+그건 저쪽 판단으로 움직인다(ALPHA-849 에서 40→20).
 
-실측 2026-08-07: 1분 레인 유니버스 362종 중 **67종이 40거래일 미만**이다. fmp 백필
+실측 2026-08-07: 1분 레인 유니버스 362종 중 **67종이 당시 요건(40거래일) 미만**이다. fmp 백필
 (~2026-07-31)은 그 종목들을 안 담았고, 1분 롤업은 2026-08-05 에 시작했다. 그 사이를
 메우는 원천이 없다 — 이 스크립트가 그 자리다.
 
@@ -260,8 +261,10 @@ def main() -> int:
     ap.add_argument("--bucket", default=DEFAULT_BUCKET)
     ap.add_argument("--days", type=int, default=70,
                     help="거슬러 볼 파티션 수. β 는 60거래일 창이라 여유를 둔다")
-    ap.add_argument("--min-days", type=int, default=40,
-                    help="이만큼 이력이 있으면 대상에서 뺀다 (layers.MIN_BETA_N)")
+    ap.add_argument("--min-days", type=int, default=20,
+                    help="이만큼 이력이 있으면 대상에서 뺀다 (analysis-engine 의 "
+                         "layers.MIN_BETA_N 과 같은 뜻. 그쪽이 움직이면 여기도 옮겨라 — "
+                         "레포가 달라 import 로 못 묶는다)")
     ap.add_argument("--tickers", default="", help="쉼표 구분. 비우면 자동 판정")
     ap.add_argument("--call-budget", type=int, default=140,
                     help="종목당 최대 콜. 70거래일×390분÷200 ≈ 137")
