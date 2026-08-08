@@ -32,8 +32,7 @@ from datetime import datetime
 
 from ..sources.candle import to_decimal
 from ..sources.http import StopFetch
-from ..sources.kis_inav import KST, INTERVAL_STEP_SEC, KisInavSource
-from ..sources.kis_nav import KisNavShapeError
+from ..sources.kis_inav import KST, KisInavSource
 from .models import CollectionRequest, CollectionResult, content_checksum
 from .price_collect import Outcome, status_of
 
@@ -45,6 +44,9 @@ logger = logging.getLogger(__name__)
 _VALUE_FIELDS = (("nav", "nav"), ("market_price", "stck_prpr"), ("premium_pct", "dprt"))
 # 이 값이 없으면 담을 게 없다 — `kis_inav.REQUIRED_ROW_FIELDS` 가 이미 행 단위로 거른다.
 _REQUIRED_VALUE = "nav"
+# 이 레인의 window 길이(초). 벤더 어휘가 아니라 **우리 격자**다 — 표본 간격이 이와 같아야
+# `bsop_hour` 라벨이 window 라벨과 맞는다.
+_LANE_INTERVAL_SEC = 60
 
 
 def window_label(window_start: datetime) -> str:
@@ -187,13 +189,13 @@ class KisInavCollector:
     """
 
     def __init__(self, source: KisInavSource, clock: Callable[[], datetime]):
-        # 격자 상수(`INTERVAL_STEP_SEC`)에 건다 — 값이 같은 하한(`MIN_INTERVAL_SEC`)에
-        # 걸면, 벤더가 30초 코드를 더해 하한이 내려가는 날 **정상 설정(60)이 거부되고
-        # 30초 설정이 통과**한다. 그 30초는 라벨 절반이 1분 격자에 안 맞아 이 가드가
-        # 막으려던 바로 그 결과(전 unit 매 window missing)를 낸다.
-        if source.interval_sec != INTERVAL_STEP_SEC:
+        # **레인 상수**에 건다. 벤더 어휘 상수(`MIN_INTERVAL_SEC`·`INTERVAL_STEP_SEC`)는
+        # 둘 다 "KIS 가 무엇을 받아주는가"에서 나온 값이라, 벤더가 30초 코드를 더하는 날
+        # 함께 30 으로 내려간다 — 그러면 정상 설정(60)이 거부되고 30초가 통과해 이 가드가
+        # 막으려던 결과를 가드가 만든다. 이 60 은 벤더와 무관하다: **우리 window 가 1분**이다.
+        if source.interval_sec != _LANE_INTERVAL_SEC:
             raise SystemExit(
-                f"1분 레인의 iNAV 는 interval_sec={INTERVAL_STEP_SEC} 만 쓴다"
+                f"1분 레인의 iNAV 는 interval_sec={_LANE_INTERVAL_SEC} 만 쓴다"
                 f"(받은 값 {source.interval_sec}) — 다른 간격이면 표본 라벨이 1분 격자에"
                 " 안 맞아 전 unit 이 매 window missing 이 된다"
             )
@@ -239,15 +241,12 @@ class KisInavCollector:
         except StopFetch:
             logger.error("KIS iNAV 소스 전역 실패 — 수집 중단", exc_info=True)
             raise
-        except KisNavShapeError:
-            # 형상 위반은 **재시도로 안 풀린다**(`kis_collector` 가 `ValueError` 를
-            # INVALID 로 가르는 것과 같은 경계). missing 으로 접으면 벤더가 `output` 키
-            # 이름 하나만 바꿔도 전 unit 이 매 window "벤더가 안 줬다"로 기록되고,
-            # 우리 파서가 깨진 사실은 원장 어디에도 안 남는다.
-            logger.exception("KIS iNAV 응답 형상 위반 %s(%s) — invalid", unit_id, symbol)
-            return Outcome.INVALID
         except Exception as error:
-            # 남은 종목 단위 실패(요청 실패·깨진 JSON·rt_cd 오류·빈 output)는 전부
-            # 재시도로 풀릴 수 있는 축이다.
+            # 종목 단위 실패(요청 실패·깨진 JSON·rt_cd 오류·빈 output·**봉투 형상
+            # 위반**)는 전부 재시도 축이다. 봉투를 INVALID 로 올리면 안 되는 이유는
+            # 블라스트 반경이다 — `status_of` 는 invalid 하나로 **window 전체**를
+            # INVALID 로 만들고 INVALID 는 재청구 대상이 아닌데, iNAV 는 소급이 불가라
+            # 그 분이 전 종목에 대해 영구히 없어진다. 스키마 드리프트는 한 응답의
+            # 모양이 아니라 **전 unit·전 window 지속**으로 드러난다.
             logger.error("KIS iNAV 실패 %s(%s): %s", unit_id, symbol, error)
             return Outcome.MISSING

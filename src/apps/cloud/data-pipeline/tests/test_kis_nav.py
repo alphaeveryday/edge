@@ -39,6 +39,7 @@ class FakeClient:
         self.responses = responses  # {kis_symbol: <payload dict | Exception>}
         self.queries = []  # 요청 쿼리스트링(창·tr_id 검증용)
         self.headers = []
+        self.slept = []  # 백오프 호출 기록 — 유량 완화가 실제로 걸리는지
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
         assert method == "GET"
@@ -51,7 +52,7 @@ class FakeClient:
         return json.dumps(payload)
 
     def _sleep(self, seconds):  # EGW00201 재시도 경로에서 호출 — 테스트는 즉시 통과
-        pass
+        self.slept.append(seconds)
 
 
 def _source(responses, etf_map=None, from_date=None, to_date=None):
@@ -177,43 +178,19 @@ def test_자격증명_없으면_비활성():
     assert src.enabled is False
 
 
-# ── 봉투 형상 위반의 **축 분류** (ALPHA-851 라운드2) ─────────────────
-# 예외 타입이 곧 재시도 여부다. 타입을 되돌려도(ValueError) 메시지가 같아 기존 단언은
-# 전부 통과했다 — 그래서 **타입 자체**를 raise 지점에서 못박는다.
+# ── 유량 재시도 (ALPHA-851) ──────────────────────────────────────
 
 
-def test_rt_cd_0_인데_output_이_비_list_면_스키마_드리프트_축이다():
-    """본문이 유효 JSON 이고 `rt_cd="0"` 까지 있으면 그 응답은 **KIS 가 준 것**이다 —
-    프록시가 끼운 오류 페이지가 아니다. 거기서 `output` 이 list 가 아니면 스키마
-    드리프트로 읽는다(재시도로 안 풀린다). 이 타입이 1분 레인의 invalid 판정을 만든다."""
-    from data_pipeline.sources.kis_nav import KisNavShapeError
-
-    src = _source({"069500": {"rt_cd": "0", "output": {"nav": "1"}}})
-    with pytest.raises(KisNavShapeError):
-        src._fetch_etf("069500", "069500", "", "", "TOKEN")
-
-
-def test_본문이_객체가_아니면_전송_사고_축으로_남는다():
-    """잘린 응답·프록시 오류 페이지가 압도적이라 재시도 축이다 — `kis_minute` 이 같은
-    조건을 `KisUnitError` 로 돌리는 것과 같은 판단(그쪽은 테스트로 고정돼 있다).
-    이걸 드리프트 축으로 올리면 **몇 초짜리 전송 사고가 window 를 INVALID 로 굳힌다**."""
-    from data_pipeline.sources.kis_nav import KisNavShapeError
-
-    src = _source({"069500": [1, 2, 3]})  # dict 가 아닌 본문
-    with pytest.raises(ValueError) as caught:
-        src._fetch_etf("069500", "069500", "", "", "TOKEN")
-    assert not isinstance(caught.value, KisNavShapeError)
-
-
-def test_유량_재시도가_실제로_세어진다():
-    """유량은 **앱키 전역**이라 iNAV 폴링이 1분 가격 레인을 굶길 수 있다. 이 카운터가
-    0 으로 굳으면 그 압력이 window 결과에서 통째로 사라진다(`retry_count` 를 지워도
-    전 스위트가 통과했다)."""
+def test_유량_재시도가_세어지고_백오프도_걸린다():
+    """유량은 **앱키 전역**이라 iNAV 폴링이 1분 가격 레인을 굶길 수 있다. 카운터가 0 으로
+    굳으면 그 압력이 window 결과에서 사라지고, 백오프가 빠지면 카운터가 보고하려던
+    완화 자체가 없어진다 — 둘을 한 단언에 묶는다."""
     rate = {"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "초당 거래건수 초과"}
     src = _source({"069500": rate})
 
     with pytest.raises(ValueError):
         src._fetch_etf("069500", "069500", "", "", "TOKEN")
 
-    # 예산 5회 중 마지막은 재시도하지 않고 raise 한다 → 증가분은 4
+    # 예산 5회 중 마지막은 재시도하지 않고 raise 한다 → 증가분·수면 각 4회
     assert src.retry_count == 4
+    assert len(src.client.slept) == 4

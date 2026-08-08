@@ -222,10 +222,13 @@ def main(argv: list[str] | None = None) -> int:
                              "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
                              "여기서 바로잡지 않으면 복구 경로가 없다")
     parser.add_argument("--dataset", default=None,
-                        help="세션 dataset. plan-minute-session·start/stop 은 "
-                             "price_minute|news_minute, rollup-minute-session 은 "
-                             "**price_minute 만**(5분 파생은 가격 분봉 canonical 전용 "
-                             "경로라 뉴스 세션을 주면 거부한다)")
+                        help="세션 dataset. plan-minute-session 은 "
+                             "price_minute|news_minute|etf_inav_minute, "
+                             "start/stop-minute-session 은 **price_minute 만**"
+                             "(공용 서비스 목록을 스케일하므로 그 세션이 서비스를 "
+                             "소유해야 한다 — states.SCALED_DATASETS), "
+                             "rollup-minute-session 도 **price_minute 만**"
+                             "(5분 파생은 가격 분봉 canonical 전용 경로다)")
     parser.add_argument("--source-group", default=None,
                         help="세션 source_group. price_minute=toss|kis, "
                              "news_minute=bigkinds 등 — dataset 의 어휘 안에서만 받는다")

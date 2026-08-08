@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -23,7 +24,6 @@ from data_pipeline.minute.models import KST, CollectionRequest
 from data_pipeline.minute.price_collect import Outcome
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.kis_inav import KisInavSource
-from data_pipeline.sources.kis_nav import KisNavShapeError
 
 NOW = datetime(2026, 8, 10, 9, 31, 5, tzinfo=KST)
 
@@ -161,18 +161,26 @@ class FakeAuth:
 
 
 class FakeClient:
+    """`body` 가 주어지면 그 본문을 돌려준다 — 봉투 처리를 `_fetch_etf` 부터 끝까지 태운다.
+    없으면 HTTP 를 타면 안 되는 테스트(=`_fetch_etf` 를 대체한 쪽)라 즉시 터뜨린다."""
+
+    def __init__(self, body=None):
+        self.body = body
+
     def request(self, method, url, *, headers=None, data=None, decode=True):
-        raise AssertionError("이 테스트는 _fetch_etf 를 대체하므로 HTTP 를 타지 않는다")
+        if self.body is None:
+            raise AssertionError("이 테스트는 _fetch_etf 를 대체하므로 HTTP 를 타지 않는다")
+        return json.dumps(self.body)
 
     def _sleep(self, seconds):
         pass
 
 
-def make_collector(etf_map=None, interval_sec=60, fetch=None):
+def make_collector(etf_map=None, interval_sec=60, fetch=None, body=None):
     source = KisInavSource(
         KisNavSourceConfig(app_key="k", app_secret="s"),
         etf_map if etf_map is not None else {"069500": "KR7069500007"},
-        FakeClient(),
+        FakeClient(body),
         interval_sec=interval_sec,
     )
     source.auth = FakeAuth()
@@ -265,15 +273,24 @@ class TestVendorBlankAndDrift:
 
         assert records == () and manifest["invalid"] == ["069500"]
 
-    def test_응답_형상_위반은_missing_이_아니라_invalid(self):
-        """벤더가 `output` 키 이름을 바꾸면(자기 엔드포인트끼리도 `output`/`output2` 로
-        갈린다) 재시도로 안 풀린다. missing 으로 접으면 전 unit 이 매 window "벤더가 안
-        줬다"로 기록되고, 우리 파서가 깨진 사실은 원장 어디에도 안 남는다."""
-        def shape_drift(*args, **kwargs):
-            raise KisNavShapeError("KIS rt_cd=0 인데 output 이상: NoneType")
+    @pytest.mark.parametrize("body", [
+        {"rt_cd": "0", "output": {"nav": "1"}},   # list 가 아니다
+        {"rt_cd": "0", "output": None},           # null
+        {"rt_cd": "0"},                           # 키 자체가 없다
+        {"rt_cd": "0", "output": []},             # 비었다
+        [1, 2, 3],                                # 본문이 객체조차 아니다
+    ])
+    def test_봉투_형상_위반은_전부_재시도_축이다(self, body):
+        """봉투 수준은 **한 축이다.** 이 레포의 선은 봉투(전송 사고)↔행·값(INVALID)이고
+        (`kis_minute` 이 같은 조건들을 묶어 `KisUnitError` 로 돌린다), 봉투를 INVALID 로
+        올리면 안 되는 이유는 **블라스트 반경**이다: `status_of` 는 invalid 하나로 window
+        전체를 INVALID 로 만들고 INVALID 는 재청구 대상이 아닌데, iNAV 는 소급이 불가라
+        그 분이 **전 종목에 대해** 영구히 사라진다.
 
-        collector = make_collector(fetch=shape_drift)
+        인코딩으로 축을 가르지 않는 것도 여기서 못박는다 — `output` 이 없는 것과 빈
+        것은 같은 벤더 상태(`rt_cd=0`, 쓸 게 없다)다."""
+        collector = make_collector(body=body)
         result, records, manifest = collector.collect(request_for(31, ("069500",)), NOW)
 
-        assert manifest["invalid"] == ["069500"] and manifest["missing"] == []
-        assert result.status == "INVALID"  # INCOMPLETE(재시도 축)와 갈린다
+        assert manifest["missing"] == ["069500"] and manifest["invalid"] == []
+        assert result.status == "INCOMPLETE" and records == ()
