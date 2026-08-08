@@ -573,7 +573,7 @@ def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:
 
     🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다.** 읽는 쪽은 유니버스 뿌리로
     한 번 걸러라 — `ingest_price_raw._krx_expected_etfs(settings)` 가 그 정본이고,
-    data-pipeline 의 소비자 다섯은 전부 그걸 통해 읽는다(`expected_etfs` 인자 — 다만 **어느
+    data-pipeline 의 소비자는 전부 그걸 통해 읽는다(`expected_etfs` 인자 — 다만 **어느
     파티션을 보는지는 소비자마다 다르다**: `_kr_holdings_universe` 는 ETF 별 최신 스냅샷의
     소급 합집합, `_holdings_name_index` 는 `max(as_of)` 하나다. 뿌리 ETF 수집이 부분 실패한
     날은 그래서 두 집합이 갈린다).

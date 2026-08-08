@@ -800,6 +800,11 @@ def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는�
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("005930", "삼성전자", etf_id="091170"),
         _holding("000660", "SK하이닉스", etf_id="091170"),
+        # ⚠️ **운영 파티션 모양을 담는다.** KR canonical 에는 원화현금(MIC 없음) 행이 매 런
+        #    정상적으로 들어온다. 이 행이 없으면 게이트를 `foreign == read` 로 잘못 짜도
+        #    테스트가 통과한다 — 실제로 그렇게 짰다가 리뷰에서 잡혔다(그 형태는 운영에서
+        #    영원히 안 터진다. 게이트가 필요한 바로 그 상황에서 죽는다).
+        _holding("KRW", "원화현금", mic=None),
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
@@ -807,5 +812,38 @@ def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는�
     load_instruments.run(storage, "R1", db=_db(), expected_etfs=frozenset({"091160"}))
 
     log = _quality(storage)
-    assert any(f.get("reasons") == ["constituents_all_foreign"] for f in log["failures"]), \
-        "구성종목 전량 탈락이 아무 신호도 안 남겼다"
+    [gate] = [f for f in log["failures"] if f.get("reasons") == ["constituents_all_foreign"]]
+    # 사유를 축별로 적는다 — "3건 전부 사용 불가"만 남으면 원화현금 때문인지 어휘가 갈린
+    # 것인지 구분이 안 된다.
+    assert "MIC 결측 1" in gate["error"] and "뿌리 밖 2" in gate["error"]
+
+
+def test_전량_탈락_게이트는_시장별로_본다(tmp_path, monkeypatch):
+    """게이트 카운터는 **이 시장분**이어야 한다 — 누적값이면 건강한 시장이 병든 시장을 가린다.
+
+    같은 파일의 형제 게이트(`instrument_profile_all_dropped`)가 이미 같은 이유로 `market_*`
+    지역 카운터를 따로 센다. 이 게이트는 처음에 루프 밖 누적값을 썼고, `LOADED_MARKETS` 가
+    `("KR",)` 하나라 **변이가 초록으로 통과했다** — 시장을 늘리는 순간 조용히 깨지는 형태다.
+
+    그래서 시장을 둘로 늘려 본다. KR 은 정상, US 는 전량 뿌리 밖 → US 만 게이트에 걸려야
+    한다. 누적값으로 보면 KR 행이 분모를 부풀려 US 의 전멸이 안 잡힌다.
+    """
+    monkeypatch.setattr(load_instruments, "LOADED_MARKETS", ("KR", "US"))
+    monkeypatch.setattr(load_instruments, "_COUNTRY_BY_MARKET", {"KR": "KR", "US": "US"})
+    monkeypatch.setattr(load_instruments, "_MIC_BY_MARKET", {"KR": "XKRX", "US": "XNAS"})
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
+    _write_canonical(storage, "US", "2026-07-15", [
+        _holding("NVDA", "NVIDIA", mic="XNAS", market="US", etf_id="091170"),
+        _holding("AAPL", "Apple", mic="XNAS", market="US", etf_id="091170"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    load_instruments.run(storage, "R1", db=_db(), expected_etfs=frozenset({"091160"}))
+
+    gates = [f for f in _quality(storage)["failures"]
+             if f.get("reasons") == ["constituents_all_foreign"]]
+    assert [g["market"] for g in gates] == ["US"], \
+        "건강한 KR 이 US 의 전량 탈락을 가렸거나, 멀쩡한 KR 을 지목했다"

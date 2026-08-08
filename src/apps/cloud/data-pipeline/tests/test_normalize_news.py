@@ -755,5 +755,8 @@ def test_멘션_사전은_유니버스_뿌리_ETF_의_구성종목만_담는다(
     [r] = _canonical_rows(storage, "2026-07-01")
     assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "042700"}], (
         "참조 계열의 동명이가 기존 이름을 지웠거나, 유니버스 밖 회사가 멘션에 붙었다")
-    # 사전 크기까지 본다 — 멘션 결과만 보면 '사전엔 들어왔는데 이 기사엔 안 걸린' 경우를 놓친다.
-    assert _quality_log(storage)["mention_index_names"] == 1
+    # 사전 **내용**까지 본다. 크기(==1)만 보면 무필터에서도 참이다 — 한미반도체가 동명이로
+    # 빠지고 케이비금융 하나가 남아 역시 1이 된다. 남은 이름이 무엇인지를 물어야 한다.
+    log = _quality_log(storage)
+    assert log["mention_index_names"] == 1
+    assert log["mention_index_ambiguous_names"] == [], "참조 계열의 동명이가 배제를 유발했다"
