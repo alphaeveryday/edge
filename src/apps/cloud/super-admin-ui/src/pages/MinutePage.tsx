@@ -38,7 +38,7 @@ import type { ApiGap, Issue, Segment, ViewTone } from '../domains/sources/minute
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
-import { runHref } from './ops/investigation';
+import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
 import '../styles/minute.css';
@@ -676,10 +676,7 @@ function BatchRunning({ date }: { date: string }) {
             <ul className="mn-runlist">
               {view.map((l) => (
                 <li key={l.runKey}>
-                  <Link
-                    to={runHref(l.runKey)}
-                    className="mn-runcard"
-                  >
+                  <div className="mn-runcard">
                     <span className="t-label">{l.pipelineType}</span>
                     <StatusBadge tone={l.opsStatus === 'DEGRADED' ? 'warn' : 'env'}>
                       {l.orchestrationStatus ?? l.opsStatus}
@@ -694,8 +691,8 @@ function BatchRunning({ date }: { date: string }) {
                     <span className="t-xs" style={{ color: 'var(--fg-4)' }}>
                       시작·경과·heartbeat 계측 없음
                     </span>
-                    <span className="t-xs mn-runcard-go">실행 상세 →</span>
-                  </Link>
+                    <span className="t-xs mn-runcard-go">{RUN_DETAIL_UNAVAILABLE}</span>
+                  </div>
                 </li>
               ))}
             </ul>

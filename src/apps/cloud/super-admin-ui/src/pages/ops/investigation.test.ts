@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { investigate, ledgerHref } from './investigation.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
@@ -157,4 +158,53 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
     ledgerHref({ incident: 'R07#0', runKey: 'etf-daily:2026-08-03T15:40', task: 'A', dataset: 'd' }),
     '/sources?incident=R07%230&runKey=etf-daily%3A2026-08-03T15%3A40&task=A&dataset=d',
   );
+});
+
+/* 실 API 화면은 실행 상세로 링크하지 않는다 (ALPHA-738 단계 3).
+ *
+ * 이 단언이 지키는 의도: 실행 상세는 앱 번들 안 `rules/facts-snapshot.json` 의 런 6건만
+ * 해소한다. 실 API 화면의 런 키는 거기 없어 그 화면이 부재를 말하는데, 그건 **없다는 사실이
+ * 아니라 이 화면이 못 읽는다는 사실**이다. 링크가 남아 있으면 사용자는 전자로 읽는다.
+ * facts 엔드포인트(ADR-0049)가 붙기 전까지 진입점이 없어야 한다.
+ *
+ * 문구가 아니라 **구조**로 검사한다 — 본문 텍스트로 부재를 검사하면 이 파일이나 대상 파일의
+ * 주석에 적힌 `runHref`·`/ops/runs/` 가 걸린다. 그래서 블록 주석을 먼저 걷어낸다.
+ *
+ * 두 축을 함께 본다. import 바인딩만 보면 주소를 **직접 조립**해 우회할 수 있고(`<Link
+ * to={`/ops/runs/${runKey}`}>`), 리터럴만 보면 헬퍼 경유를 놓친다.
+ *
+ * 알려진 천장(의도한 것): ① 대상 3파일이 하드코딩이라 **새로 생기는 실 API 화면은 안 본다**
+ * ② 배럴 재수출 경유는 못 잡는다. 둘 다 지금 형상에 없고, 막으려면 전 파일 스캔 + 화면
+ * 분류가 필요해 값이 안 맞는다. */
+test('실 API 화면 3곳은 실행 상세로 가는 길을 만들지 않는다 — 그 화면은 스냅샷만 해소한다', () => {
+  const REAL_API_PAGES = ['../GridPage.tsx', '../MinutePage.tsx', '../HoldingsImpactPage.tsx'];
+  for (const rel of REAL_API_PAGES) {
+    /* 주석은 사실이 아니라 서술이다 — 부재 단언의 입력에서 뺀다. 블록 주석과 줄 주석
+     * 둘 다 건다(줄 주석은 줄머리만 — `http://` 같은 URL 을 잘라 뒤를 숨기지 않게). */
+    const src = readFileSync(new URL(rel, import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '');
+
+    /* 경로 뒤 접미사를 반드시 허용한다 — 이 레포는 `from './investigation.ts'` 처럼
+     * 확장자를 명시하는 곳이 있어서, `investigation` 에서 닫으면 그게 통째로 새 나간다. */
+    const mod = /['"][^'"]*ops\/investigation[^'"]*['"]/.source;
+    const named = [...src.matchAll(new RegExp(String.raw`import\s*\{([^}]*)\}\s*from\s*${mod}`, 'g'))]
+      .flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0]));
+    assert.ok(
+      !named.includes('runHref'),
+      `${rel} 이 runHref 를 import 한다 — 실행 상세는 이 화면의 런을 해소하지 못한다`,
+    );
+    /* 네임스페이스·동적 import 는 바인딩 이름이 안 보여 위 검사를 통과한다 */
+    assert.ok(
+      !new RegExp(String.raw`import\s*\*\s*as\s+\w+\s*from\s*${mod}`).test(src) &&
+        !new RegExp(String.raw`import\s*\(\s*${mod}`).test(src),
+      `${rel} 이 investigation 을 통째로 들여온다 — runHref 를 이름 없이 쓸 수 있다`,
+    );
+    /* 헬퍼를 안 쓰고 주소를 직접 조립하는 우회. 실행 **목록** `/ops/runs`(끝 슬래시 없음)는
+     * 정당하므로 안 걸린다 — 걸리는 건 특정 런을 지목하는 `/ops/runs/` 뿐이다. */
+    assert.ok(
+      !src.includes('/ops/runs/'),
+      `${rel} 이 실행 상세 주소를 직접 조립한다 — 헬퍼를 우회해도 결과는 같다`,
+    );
+  }
 });

@@ -123,6 +123,20 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
   오늘 안 터지는 건 `note` 보유 룰이 R07 하나뿐이고 그게 필수 축(`tasks`)을 읽어서다 —
   옵셔널 축을 읽는 `note` 가 하나라도 붙으면 죽는다. `evaluated &&` 안으로 넣거나 널 가드를 규약화한다
 - 화면 12곳이 사실을 **동기적으로** 읽는다(하나는 import 시점) — 비동기 전환이 필요하다
+- **실행 상세로 가는 링크를 되살려야 한다.** 배선 전까지는 그 화면이 스냅샷 런만 해소해서
+  실 API 화면(실행 이력 `/grid` · 현재 실행 `/minute` · 구성종목 결손)의 런을 못 연다.
+  그래서 진입점 3곳을 끊고 사유 문구(`RUN_DETAIL_UNAVAILABLE`)를 세워 뒀다. 배선하면서
+  같이 하지 않으면 실 응답이 붙은 뒤에도 세 화면은 "못 읽습니다"를 단 채 남는다.
+  적용 기준은 "상세냐 목록이냐"가 아니라 **그 자리에서 사용자가 특정 런 identity 를 쥐고
+  있는가**다. 쥔 자리에서 스냅샷 런 축으로 내보내면 "이 실행은 없다"로 읽힌다. 안 쥔 자리
+  (`SourcesPage` 의 조사 문맥 없음 분기 등)는 목록이 정확히 그 용도라 대상이 아니다.
+
+  되돌릴 자리 — **상수를 참조하는 곳은 컴파일러가 잡지만 순수 문구는 아무것도 안 잡는다.**
+  | | |
+  |---|---|
+  | 컴파일러가 잡음 | `pages/ops/investigation.ts` 의 `RUN_DETAIL_UNAVAILABLE` 과 그 사용처(`GridPage`·`MinutePage`), 부재를 강제하는 `pages/ops/investigation.test.ts` 단언 |
+  | 순수 문구 — 손으로 찾아야 함 | `GridPage.tsx` 격자 힌트("배치 실행은 여기까지입니다")·표 아래 문단 · `RunAxisPage.tsx` **부재 안내 2곳**(빈 목록 · 미해소 상세) · `HoldingsImpactPage.tsx` 조사 경로와 404 분기 |
+  | 접근성 | `styles/minute.css` — 링크가 아니게 되면서 `.mn-runcard` 의 `:hover`·`:focus-visible` 을 지웠다. 카드를 다시 `<Link>` 로 만들면서 안 되살리면 **포커스 링 없는 링크**가 된다(이 앱의 `styles/` 에 전역 `a:focus-visible` 이 없다) |
 
 ## 남은 계측 부채
 

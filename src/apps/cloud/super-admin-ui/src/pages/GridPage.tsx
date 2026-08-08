@@ -19,7 +19,7 @@
  * 상태·기대 실행 수는 원장 값에서만 센다(dailyRollup 참고) — 주기로 숫자를 지어내지 않는다.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type { MinuteStatus, SourceGrid } from '../domains/sources';
@@ -38,7 +38,7 @@ import type { DayExecution, DayRollup, DayState } from '../domains/sources/daily
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
-import { runHref } from './ops/investigation';
+import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { LoadError } from './_shared/LoadError';
 import '../styles/grid.css';
 
@@ -306,7 +306,7 @@ function GridBody({
               <b>박스</b> 선택 → 그 데이터셋·날짜의 실행 목록
             </span>
             <span>
-              실행 목록에서 <b>배치 실행</b>은 실행 상세로, <b>실시간 세션</b>은 세션 상세로 갑니다
+              실행 목록에서 <b>실시간 세션</b>은 세션 상세로 갑니다 — <b>배치 실행</b>은 여기까지입니다
             </span>
             <span style={{ marginLeft: 'auto' }}>
               분·poll 단위 상태는 <Link to="/minute">현재 실행</Link>이 답합니다
@@ -445,8 +445,9 @@ function boxTip(
  * 기본은 접힘이되 **문제 있는 실행만 펼친다** — 정상 실행까지 펼치면 하루 10회 × 작업 3개가
  * 다시 30행 평탄화가 된다. 일별 배지만 두고 어느 실행이 장애인지 못 찾는 상태로 두지 않는다.
  *
- * 작업을 고르면 **실행 상세**(/ops/runs)로 간다 — 원장 근거로 바로 건너뛰지 않는다.
- * 정식 순서: 실행 이력 → 실행 목록 → 실행 상세 → 작업 상세 → 원장 근거.
+ * 정식 조사 순서는 실행 이력 → 실행 목록 → 실행 상세 → 작업 상세 → 원장 근거지만,
+ * **실행 상세로 가는 진입점은 지금 없다** — 그 화면이 스냅샷만 읽어 이 격자의 런을
+ * 해소하지 못한다(`RUN_DETAIL_UNAVAILABLE`). 여기서 답할 수 있는 데까지가 이 표다.
  *
  * ⚠️ 런 kind(정규·수동·백필)는 격자 응답에 없다(decisions.md §3-4 계측 부채) — 여기서
  * runKey 모양으로 추측하지 않고 `배치 실행`까지만 단언한다.
@@ -618,13 +619,7 @@ function DayDetail({
 function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
   const problem = exec.state === '장애' || exec.state === '주의';
   const [open, setOpen] = useState(problem);
-  const navigate = useNavigate();
   const c = exec.counts;
-  const openTask = (taskKey: string) =>
-    /* 원장 근거로 바로 건너뛰지 않는다 — 실행 상세를 거쳐 작업 상세를 연다 */
-    navigate(
-      runHref(exec.runKey, { focus: `task-${taskKey}` }),
-    );
 
   const problems = c.failed + c.noEvidence;
   const facts = [
@@ -653,6 +648,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
         </span>
       </button>
       {open && (
+        <>
         <div style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead>
@@ -664,7 +660,6 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                 <th className="num">산출</th>
                 <th className="num">유실</th>
                 <th>사유</th>
-                <th>상세</th>
               </tr>
             </thead>
             <tbody>
@@ -683,16 +678,19 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                   <td className="num">{t.recordsOut ?? '—'}</td>
                   <td className="num">{t.failedRecords ?? '—'}</td>
                   <td className="col-muted t-xs">{t.reason ?? '—'}</td>
-                  <td>
-                    <button type="button" className="gd-linkbtn" onClick={() => openTask(t.taskKey)}>
-                      실행 상세 →
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {/* 행마다 반복하지 않는다 — 값이 행에 따라 변하지 않는 사실이고, 표 안에 두면
+          * 스크린리더가 작업 수만큼 같은 문장을 읽는다. 빈 칸으로 두지도 않는다.
+          * 가로 스크롤 박스 **밖**에 둔다 — 안에 두면 줄바꿈 폭을 표가 정해서, 표가
+          * 넓은 화면에서는 이 문장을 끝까지 읽으려고 가로 스크롤해야 한다. */}
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', padding: '6px 0 2px' }}>
+          {RUN_DETAIL_UNAVAILABLE} — 이 표가 이 실행에 대해 답할 수 있는 전부입니다.
+        </p>
+        </>
       )}
     </li>
   );
