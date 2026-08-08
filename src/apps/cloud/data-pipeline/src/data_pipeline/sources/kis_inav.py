@@ -54,6 +54,9 @@ MARKET_DIV_INAV = "E"
 # 있었지만 수용은 정의된 동작이 아니다(어휘 밖 값에 벤더가 무엇을 하는지 미정의).
 DEFAULT_INTERVAL_SEC = 60
 MIN_INTERVAL_SEC = 60  # 벤더 문서 어휘의 하한(=1분)
+# 어휘가 **분 단위**라 격자도 60초다. 하한과 값이 같지만 다른 축이다 — 하한을 내리는
+# 변경이 격자까지 함께 흔들면 안 된다.
+INTERVAL_STEP_SEC = 60
 # 응답 행 수. **문서화된 계약**이다 — "실전계좌의 경우, 한 번의 호출에 최근 30건까지".
 # ⚠️ 단서가 "실전계좌"라 모의계좌는 다를 수 있다.
 ROWS_PER_CALL = 30
@@ -181,12 +184,19 @@ class KisInavSource(KisNavSource):
         # 일별 NAV 와 같은 KIS 자격증명·유니버스를 쓴다(kis_nav.source 재사용) — 같은 벤더의
         # 같은 계정이라 섹션을 쪼개면 앱키가 두 곳에서 갱신돼야 한다.
         super().__init__(config, etf_map, client)
-        if interval_sec < MIN_INTERVAL_SEC:
+        if interval_sec < MIN_INTERVAL_SEC or interval_sec % INTERVAL_STEP_SEC:
             # 어휘 밖 값에 KIS 가 무엇을 돌려주는지 **정의돼 있지 않다**. 수용되더라도
             # 그 응답의 의미를 우리가 단언할 수 없어, 확인 안 된 값을 흘려보내지 않는다.
+            #
+            # ⚠️ 하한만 막으면 90 이 통과한다 — 그 값은 `FID_HOUR_CLS_CODE` 로 나가고
+            # `_extra_provenance` 가 **모든 raw 행의 자연키에 각인**하는데, iNAV 는 소급
+            # 재질의가 불가라 틀린 각인이 영구적이다. `_median_gap_sec` 이 나중에 경고해도
+            # raw 는 이미 쓰였다. 전체 열거(60·180·…·7200)는 문서가 "…" 로 생략해 우리가
+            # 모르니, **아는 만큼만** 막는다 — 어휘가 분 단위라 분의 배수가 아니면 확실히
+            # 어휘 밖이다(배수인데 어휘 밖인 값은 이 가드를 통과한다. 그건 남는 구멍이다).
             raise ValueError(
-                f"interval_sec 은 {MIN_INTERVAL_SEC} 이상이어야 한다(벤더 어휘 "
-                f"60:1분·180:3분·…·7200:120분): {interval_sec}"
+                f"interval_sec 은 {MIN_INTERVAL_SEC} 이상의 {INTERVAL_STEP_SEC}초 배수여야 "
+                f"한다(벤더 어휘 60:1분·180:3분·…·7200:120분): {interval_sec}"
             )
         self.interval_sec = interval_sec
 

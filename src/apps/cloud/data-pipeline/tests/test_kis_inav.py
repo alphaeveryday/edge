@@ -918,3 +918,60 @@ def test_현재가가_0_인_행도_대조에서_뺀다(monkeypatch, caplog):
 
     assert not _records(caplog, "드리프트 의심")   # 거짓 경고가 없고
     assert "괴리 단위 대조 불가" in caplog.text   # 표본이 0건인 사실은 남는다
+
+
+@pytest.mark.parametrize("bad", [61, 90, 100, 7199])
+def test_분의_배수가_아닌_간격은_생성에서_막는다(bad):
+    """하한만 막으면 90 이 통과한다. 그 값은 `FID_HOUR_CLS_CODE` 로 나가고
+    `_extra_provenance` 가 **모든 raw 행의 자연키에 각인**하는데, iNAV 는 소급 재질의가
+    불가라 틀린 각인이 영구적이다 — 간격 가드가 나중에 경고해도 raw 는 이미 쓰였다."""
+    with pytest.raises(ValueError, match="배수"):
+        KisInavSource(
+            KisNavSourceConfig(app_key="k", app_secret="s"),
+            {"069500": "KR7069500007"},
+            FakeClient({}),
+            interval_sec=bad,
+        )
+
+
+def test_결손_한_칸이_간격_판정을_끌지_않는다(monkeypatch, caplog):
+    """중앙값을 쓰는 이유가 이것이다 — 30행 중 한 칸이 빠지면 간격은 `60,60,120,60…` 이
+    되는데, 최대값으로 재면 정상 응답마다 `표본 간격이 요청과 다르다` 가 뜬다. 그 자기
+    소음이 진짜 신호를 덮는다(이 파일이 반복해서 피하려는 실패 방식)."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 153200 한 칸이 빠졌다 → 간격 [60, 120, 60]
+    src = _source({"069500": _ok([_row(s) for s in
+                                  ("153000", "153100", "153300", "153400")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "표본 간격이 요청과 다르다")
+
+
+def test_절반만_지켜진_격자는_어긋난_값으로_드러난다(monkeypatch, caplog):
+    """반대 방향 — 최소값으로 재면 벤더가 `FID_HOUR_CLS_CODE` 를 절반만 지켜도 '준수'로
+    읽힌다. 그 경우 raw 의 interval_sec 이 거짓이 되는데 아무도 모른다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 간격 [60, 120, 120] → 중앙값 120 ≠ 요청 60
+    src = _source({"069500": _ok([_row(s) for s in
+                                  ("153000", "153100", "153300", "153500")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "표본 간격이 요청과 다르다")
+    assert rec.args[2] == 60 and rec.args[3] == 120  # 요청 60 / 실측 120
+
+
+def test_같은_라벨_중복은_간격_0_으로_세지_않는다(monkeypatch, caplog):
+    """`sorted(set(...))` 의 set 이 없으면 중복 라벨이 간격 0 을 만들고, 중복이 둘이면
+    중앙값 자체가 0 이 돼 정상 격자가 어긋난 것으로 보고된다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row(s) for s in
+                                  ("153000", "153000", "153100", "153100")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "표본 간격이 요청과 다르다")
