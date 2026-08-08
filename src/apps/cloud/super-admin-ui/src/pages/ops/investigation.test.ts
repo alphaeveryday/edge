@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { investigate, ledgerHref } from './investigation.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
@@ -157,4 +158,26 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
     ledgerHref({ incident: 'R07#0', runKey: 'etf-daily:2026-08-03T15:40', task: 'A', dataset: 'd' }),
     '/sources?incident=R07%230&runKey=etf-daily%3A2026-08-03T15%3A40&task=A&dataset=d',
   );
+});
+
+/* 실 API 화면은 실행 상세로 링크하지 않는다 (ALPHA-738 단계 3).
+ *
+ * 이 단언이 지키는 의도: 실행 상세는 앱 번들 안 `rules/facts-snapshot.json` 의 런 6건만
+ * 해소한다. 실 API 화면의 런 키는 거기 없어 "연결된 실행을 찾지 못했습니다"로 끝나는데,
+ * 그건 **없다는 사실이 아니라 이 화면이 못 읽는다는 사실**이다. 링크가 남아 있으면 사용자는
+ * 전자로 읽는다. facts 엔드포인트(ADR-0049)가 붙기 전까지 진입점이 없어야 한다.
+ *
+ * 문구가 아니라 **import 바인딩**으로 검사한다 — 본문 텍스트로 부재를 검사하면 이 파일이나
+ * 대상 파일의 주석에 적힌 `runHref` 가 걸린다. */
+test('실 API 화면 3곳은 runHref 를 import 하지 않는다 — 실행 상세는 스냅샷만 해소한다', () => {
+  const REAL_API_PAGES = ['../GridPage.tsx', '../MinutePage.tsx', '../HoldingsImpactPage.tsx'];
+  for (const rel of REAL_API_PAGES) {
+    const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+    const bindings = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'[^']*investigation[^']*'/g)]
+      .flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0]));
+    assert.ok(
+      !bindings.includes('runHref'),
+      `${rel} 이 runHref 를 import 한다 — 실행 상세는 이 화면의 런을 해소하지 못한다`,
+    );
+  }
 });

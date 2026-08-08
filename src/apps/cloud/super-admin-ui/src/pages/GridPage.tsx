@@ -19,7 +19,7 @@
  * 상태·기대 실행 수는 원장 값에서만 센다(dailyRollup 참고) — 주기로 숫자를 지어내지 않는다.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type { MinuteStatus, SourceGrid } from '../domains/sources';
@@ -38,7 +38,7 @@ import type { DayExecution, DayRollup, DayState } from '../domains/sources/daily
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
-import { runHref } from './ops/investigation';
+import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { LoadError } from './_shared/LoadError';
 import '../styles/grid.css';
 
@@ -445,8 +445,9 @@ function boxTip(
  * 기본은 접힘이되 **문제 있는 실행만 펼친다** — 정상 실행까지 펼치면 하루 10회 × 작업 3개가
  * 다시 30행 평탄화가 된다. 일별 배지만 두고 어느 실행이 장애인지 못 찾는 상태로 두지 않는다.
  *
- * 작업을 고르면 **실행 상세**(/ops/runs)로 간다 — 원장 근거로 바로 건너뛰지 않는다.
- * 정식 순서: 실행 이력 → 실행 목록 → 실행 상세 → 작업 상세 → 원장 근거.
+ * 정식 조사 순서는 실행 이력 → 실행 상세 → 작업 상세 → 원장 근거지만, **실행 상세로 가는
+ * 진입점은 지금 없다** — 그 화면이 스냅샷만 읽어 이 격자의 런을 해소하지 못한다
+ * (`RUN_DETAIL_UNAVAILABLE`). 여기서 답할 수 있는 데까지가 이 표다.
  *
  * ⚠️ 런 kind(정규·수동·백필)는 격자 응답에 없다(decisions.md §3-4 계측 부채) — 여기서
  * runKey 모양으로 추측하지 않고 `배치 실행`까지만 단언한다.
@@ -618,13 +619,7 @@ function DayDetail({
 function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
   const problem = exec.state === '장애' || exec.state === '주의';
   const [open, setOpen] = useState(problem);
-  const navigate = useNavigate();
   const c = exec.counts;
-  const openTask = (taskKey: string) =>
-    /* 원장 근거로 바로 건너뛰지 않는다 — 실행 상세를 거쳐 작업 상세를 연다 */
-    navigate(
-      runHref(exec.runKey, { focus: `task-${taskKey}` }),
-    );
 
   const problems = c.failed + c.noEvidence;
   const facts = [
@@ -683,11 +678,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                   <td className="num">{t.recordsOut ?? '—'}</td>
                   <td className="num">{t.failedRecords ?? '—'}</td>
                   <td className="col-muted t-xs">{t.reason ?? '—'}</td>
-                  <td>
-                    <button type="button" className="gd-linkbtn" onClick={() => openTask(t.taskKey)}>
-                      실행 상세 →
-                    </button>
-                  </td>
+                  <td className="col-muted t-xs">{RUN_DETAIL_UNAVAILABLE}</td>
                 </tr>
               ))}
             </tbody>

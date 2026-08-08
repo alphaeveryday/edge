@@ -228,10 +228,23 @@ export function ledgerHref(ctx: LedgerContext | null): string | null {
 }
 
 /**
+ * 실행 상세로 못 가는 이유 — 실 API 화면에서 이 문구를 그대로 쓴다.
+ *
+ * 실행 상세(`/ops/runs`)는 앱 번들 안 `rules/facts-snapshot.json` 의 런 6건만 해소한다.
+ * 실 API 화면(실행 이력 `/grid` · 현재 실행 `/minute` · 구성종목 결손)의 런은 거기 없어
+ * "연결된 실행을 찾지 못했습니다"로 끝난다 — 없는 게 아니라 **이 화면이 아직 못 읽는 것**이다.
+ * facts 엔드포인트가 붙으면(ADR-0049) 링크를 되살린다.
+ */
+export const RUN_DETAIL_UNAVAILABLE = '실행 상세는 아직 실 데이터를 읽지 못합니다';
+
+/**
  * 실행 상세 주소 — 런 하나는 **자기 페이지**를 갖는다(목록의 선택 상태가 아니다).
  *
  * 주소를 한 곳에서 만든다: 예전에는 `/ops/runs?run_id=` 를 5곳이 각자 조립했고, 경로가 바뀌면
  * 그중 하나가 조용히 남는다. `run_id` 형태의 옛 주소는 목록 페이지가 이 주소로 넘긴다.
+ *
+ * ⚠️ **실 API 화면에서 부르지 마라** — 위 `RUN_DETAIL_UNAVAILABLE` 참조. 지금 이 함수의
+ * 정당한 호출처는 스냅샷을 함께 읽는 화면(사건 상세 · 실행 목록)뿐이다.
  *
  * @param extra `focus`·`fromIncident` 처럼 조사 문맥을 실어 보내는 쿼리
  */

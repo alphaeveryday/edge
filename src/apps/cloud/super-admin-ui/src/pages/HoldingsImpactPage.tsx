@@ -21,7 +21,7 @@ import { ApiError } from '../api/client';
 import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { useConsoleEvaluation } from './ops/shared';
-import { runHref } from './ops/investigation';
+import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -52,9 +52,10 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
       )}
       {runKey && (
         <>
-          <Link to={runHref(runKey)} className="mono">
+          {/* 링크가 아니다 — 실행 상세는 스냅샷만 읽어 이 실 API 런을 해소하지 못한다 */}
+          <span className="mono" title={RUN_DETAIL_UNAVAILABLE}>
             {runKey}
-          </Link>
+          </span>
           <span aria-hidden="true">›</span>
           <Link to={`/sources?runKey=${encodeURIComponent(runKey)}`}>ETF 구성종목</Link>
           <span aria-hidden="true">›</span>
