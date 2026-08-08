@@ -1360,12 +1360,20 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 질의 심볼은 `[krx_etf.source.etf_map]` 에서 온다(세션 universe 와 **다른 출처**다) —
 # 갈리면 그 unit 이 매 window invalid 로 드러난다(조용히 missing 으로 접지 않는다).
 # 자격증명은 일별 NAV 와 같은 쌍이다(같은 벤더·같은 계정).
+#
+# 🔴 **`--session-date` 는 오늘만 받는다**(다른 워커와 다르다 — 그쪽은 지난 거래일을
+# 받는다). 이 벤더에는 소급 질의 경로가 아예 없고 응답 행에 날짜가 없어(`bsop_hour` =
+# HHMMSS), 과거 날짜로 돌리면 **지금 값이 그 날짜의 불변 artifact 로 굳는다**. 되돌릴
+# 방법이 없어(재수집 불가) 기동에서 거부한다. 그래서 아래 예시는 날짜를 안 준다(=오늘).
+# 🔴 **휴장일·개장 전은 수집 전에 멈춘다**(KIS 가 빈 응답이 아니라 직전 거래일 행을
+# 그대로 주기 때문 — 2026-07-25 실측). exit 은 모드로 갈린다: 상주(`--max-ticks` 없음)는
+# **0**(스케줄러가 휴장일을 정상 통과), bounded 는 **1**(확인 게이트라 "한 window 도 못
+# 봤다"를 성공으로 보고하지 않는다).
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
-  python -m data_pipeline.run inav-worker --session-date 2026-08-10 \
-    --universe /path/universe.json --max-ticks 3
+  python -m data_pipeline.run inav-worker --universe /path/universe.json --max-ticks 3
 # ⚠️ 토큰 만료(24h) 재발급 경로가 **아직 없다** — 수동 bounded 실행에서는 안 만나지만
 # 상주 전환(세션 자동 편입) 때 반드시 붙여야 한다(`KisAuth.invalidate`).
 
