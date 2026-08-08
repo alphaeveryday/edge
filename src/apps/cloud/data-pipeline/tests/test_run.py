@@ -239,8 +239,9 @@ def test_inav_interval_은_기본값과_명시값_모두_어댑터로_전달된�
     assert captured["interval_sec"] == run_mod.DEFAULT_INTERVAL_SEC
     assert captured["etf_map"], "iNAV 유니버스가 비어 있으면 수집 대상이 0이다"
 
-    assert main(["ingest-raw-inav", "--interval-sec", "10"]) == 0
-    assert captured["interval_sec"] == 10
+    # 벤더 어휘는 분 단위다(60:1분·180:3분·…·7200:120분) — 어휘 안의 값으로 고정한다.
+    assert main(["ingest-raw-inav", "--interval-sec", "180"]) == 0
+    assert captured["interval_sec"] == 180
 
 
 def test_inav_interval_0_은_조용히_기본값이_되지_않는다(monkeypatch):
