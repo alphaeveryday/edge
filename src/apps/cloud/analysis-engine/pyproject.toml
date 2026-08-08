@@ -15,6 +15,8 @@ dependencies = [
     "duckdb>=1.1",          # S3(canonical)+RDB 크로스 스토어 조인 표면
     "numpy>=1.26",          # 패널 회귀·순열 검정
     "psycopg[binary]>=3.1", # 계보 적재·근거 묶음 (psycopg2 와 별 API - 둘 다 쓴다)
+    "pykalman>=0.10.1",     # kbeta fit_qr: 로컬레벨 EM (ALPHA-803). scipy 를 끌고
+                            # 온다 - 이미지 크기 영향은 PR 에서 판단 (실측은 PR 본문)
 ]
 
 [build-system]
