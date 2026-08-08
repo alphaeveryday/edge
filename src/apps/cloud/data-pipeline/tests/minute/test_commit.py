@@ -69,6 +69,21 @@ def commit_kwargs(session_id, claim, token, *, checksum="c" * 64):
 
 
 class TestCommitPriceWindow:
+    def test_emit_outbox_has_no_default(self):
+        """`emit_outbox` 에 기본값을 두지 않는다 — 빠뜨린 호출부는 죽어야 한다.
+
+        docstring 이 이 계약을 선언하는데 잡는 장치가 `WorkerConfig` 쪽에만 있었다.
+        기본 True 가 붙으면 두 번째 커밋 경로(EOD 재커밋·복구 툴)가 인자를 빠뜨렸을 때
+        백필이 조용히 실시간으로 발행되고, 게이트도 테스트도 아무 신호를 안 낸다.
+        """
+        import inspect
+
+        parameter = inspect.signature(
+            MinuteCommitter.commit_price_window
+        ).parameters["emit_outbox"]
+        assert parameter.default is inspect.Parameter.empty
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
     def test_emit_outbox_false_skips_only_the_event(self):
         """`emit_outbox=False` 는 발행 event 만 뺀다 — window·job 은 그대로다(ALPHA-863).
 

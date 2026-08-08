@@ -143,7 +143,10 @@ class MinuteCommitter:
 
         ⚠️ 이 판정을 여기서 `window_start` 로 유도하지 않는다. EOD drain 이 자정을 넘기면
         살아 있는 당일 세션의 마지막 window 들이 그 순간 과거일로 보여 발행이 끊긴다 —
-        벽시계는 CLI 기동에서 한 번만 읽고(`make_price_collector`) 그 값을 내려보낸다.
+        판정은 CLI 기동에서 `make_price_collector` 가 한 번 내리고 그 값이 내려온다.
+        (`--session-date` 를 안 주면 CLI 가 세션 날짜를 정하려고 벽시계를 한 번 더 읽는다
+        — 그 두 읽기 사이에 자정이 끼면 "오늘" 워커가 백필로 판정된다. 창이 마이크로초고
+        스케줄이 그 시각에 워커를 안 띄워 실질 위험은 없으나, "한 번만 읽는다"는 아니다.)
 
         멱등성은 아래에서 나온다 — 재실행 같은 checksum 이면 generation 불변 →
         같은 job_id/event_id → ON CONFLICT no-op(outbox 재발행 없음). correction 은
