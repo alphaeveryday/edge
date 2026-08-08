@@ -66,10 +66,20 @@ BUCKET_MINUTES = 5
 # 롤업 파생"임만 드러낸다.
 SOURCE_VENDOR = "1m_rollup"
 
-# 이 날짜부터의 trade_date 파티션만 쓴다 — 그 전은 fmp 백필(~2026-07-31)의
-# 정본 파티션이라, 과거 --session-date 재실행이 part-0.parquet 를 덮으면 벤더
-# 원본이 유실된다. 비겹침은 주석이 아니라 코드로 강제한다.
-WRITER_SINCE = "2026-08-04"
+# 파티션 **소유권 경계**. 이 날짜부터는 롤업이 쓰고, 그 전은 벤더 백필이 쓴다.
+# 비겹침은 주석이 아니라 코드로 강제한다 — 과거 --session-date 재실행이
+# part-0.parquet 를 덮으면 벤더 원본이 유실된다.
+#
+# 경계는 "롤업이 돌기 시작한 날"이 아니라 **롤업이 온전한 계열을 갖는 날**이다
+# (ALPHA-836). 08-04~08-09 를 롤업 소유로 두면 그 구간의 섹터 후보 48종을 아무도
+# 못 채운다: 롤업의 입력은 1분 canonical 인데 그 종목들은 그때 수집 유니버스에
+# 없었고(ALPHA-842 가 뒤늦게 얹었다), 원장에 재료가 없으니 재집계로도 안 생긴다.
+# 반면 토스 백필은 그 구간을 받을 수 있다 — 그래서 소유권을 넘긴다.
+#
+# ⚠️ 08-10 부터 롤업이 80종을 담으려면 S3 `config/minute/universe.json` 이 그전에
+# 갱신돼야 한다(`build_minute_universe` 재실행). 안 하면 같은 결손이 경계 뒤에서
+# 다시 생기고, 그때는 백필이 못 건드린다 — 경계를 계속 미는 것은 답이 아니다.
+WRITER_SINCE = "2026-08-10"
 
 
 def _committed_generations(ledger, session_id: str) -> dict[str, int]:
@@ -335,6 +345,17 @@ def _rollup_day(
     return day_key
 
 
+def _scan_before() -> date:
+    """구멍 판정 창의 상한 = 오늘(KST).
+
+    한 줄짜리를 함수로 뺀 이유는 **시계가 유일한 숨은 입력**이기 때문이다. 판정 창은
+    `[WRITER_SINCE, 오늘)` 이라 소유권 경계가 움직이면(ALPHA-836) 창이 통째로 비는
+    구간이 생기고, 테스트가 그 상황과 정상 상황을 가르려면 시계를 잡을 자리가 있어야
+    한다. 인라인이면 `datetime` 모듈째 대체하는 수밖에 없고 그건 다른 용법까지 흔든다.
+    """
+    return datetime.now(KST).date()
+
+
 def unfilled_settled_days(
     storage: Storage, ledger, *, market: str, dataset: str, source_group: str,
     before: date,
@@ -410,9 +431,9 @@ def _settled_session_dates(
     오늘을 빼는 이유는 진행 중인 `DRAINING` 을 고착으로 오인하지 않기 위해서고(오늘의
     결손은 실행 자신의 exit code 와 `key` 가 말한다), **대상 날짜를 빼면 안 되는** 이유는
     과거 하루를 손으로 되돌리는 실행 — 이 스텝이 존재하는 이유 — 에서 감시 창이 가장
-    좁아지기 때문이다. 실측: 대상일을 넘기면 `--session-date 2026-08-04` 가 하한
-    `>= WRITER_SINCE(08-04)` 와 겹쳐 **후보가 구조적으로 항상 0**이 되고, 분모 경보가
-    거짓으로 뜬다.
+    좁아지기 때문이다. 실측: 대상일을 넘기면 하한(`>= WRITER_SINCE`)과 상한이 겹쳐
+    **후보가 구조적으로 항상 0**이 되고, 분모 경보가 거짓으로 뜬다. 날짜를 여기 적지
+    않는다 — 경계는 옮겨지고(ALPHA-836), 박아 두면 옮길 때 하나만 고쳐진다.
     """
     from .session_ops import DRAINED_PHASES
 
@@ -543,7 +564,17 @@ def rollup_session_cli(
 
     # 오늘 것과 무관하게 **매번** 훑는다 — 이 판정의 목적이 "안 돌았는데 조용한 것"을
     # 잡는 것이라, 오늘이 성공한 날에만 보면 정작 못 본 날을 영영 못 본다.
-    scan_before = datetime.now(KST).date()   # 인자와 로그가 같은 값을 쓴다
+    scan_before = _scan_before()             # 인자와 로그가 같은 값을 쓴다
+    if WRITER_SINCE > scan_before.isoformat():
+        # 경계가 **아직 오지 않은 날**이면 판정 창 `[WRITER_SINCE, 오늘)` 이 공집합이라
+        # 이 스캔은 구조적으로 0건이다. 소유권을 넘긴 직후의 정상 상태지만(그 구간은
+        # 백필이 채운다), 경계를 옮겨 두고 되돌리는 것을 잊으면 감시가 **조용히** 꺼진
+        # 채로 남는다. 0건이 "구멍 없음"인지 "볼 창이 없음"인지 로그로 갈라 둔다.
+        logger.warning(
+            "5분 구멍 판정: 소유권 경계(%s)가 오늘(%s)보다 뒤다 — 판정 창이 비어 있다. "
+            "그 구간은 벤더 백필 소유이고, 경계가 지나면 자동으로 다시 켜진다",
+            WRITER_SINCE, scan_before.isoformat(),
+        )
     try:
         unfilled, contested, candidates = unfilled_settled_days(
             storage, ledger, market=_MARKET, dataset=dataset,

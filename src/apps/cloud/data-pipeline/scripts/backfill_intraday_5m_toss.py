@@ -15,19 +15,17 @@
 롤업 규칙은 `minute/rollup.py` 와 **같은 계약**이다(open=첫 봉 open · high=max ·
 low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=ts+5분).
 
-**왜 별도 파일인가.** `part-0.parquet` 은 그날의 정본이다 — 과거 파티션은 fmp 백필이
-쓴 것이고 2026-08-04 이후는 롤업 writer 가 쓴다. 거기에 끼워 넣으면 롤업이 다음 버킷에서
-지운다. 같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓴다 — 소비자(`duck._s3`)가
-`**/*.parquet` 글롭이라 둘 다 읽는다.
+**왜 별도 파일인가.** `part-0.parquet` 은 롤업이 통째로 덮는 파일이다 — 거기 끼워 넣으면
+다음 재집계에서 지워진다. 같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓴다 —
+소비자(`duck._s3`)가 `**/*.parquet` 글롭이라 둘 다 읽는다. 행이 서로소인 것은 쓰기 전에
+`part-0` 의 티커를 빼서 보장한다.
 
-🔴 **`rollup.WRITER_SINCE`(2026-08-04) 이후 파티션에는 쓰지 마라** (ALPHA-839 이후).
-"어느 쪽도 서로를 안 지운다"는 이제 **틀렸다** — 지우지는 않지만 **상대를 죽인다**.
-`_rollup_day` 가 파티션에서 자기 것 아닌 파일을 보면 산출을 **거부**하므로, 그 날짜에
-이 스크립트가 파일을 놓는 순간 그날 5분 파생이 **후크·EOD 배치 양쪽에서 영구 정지**한다
-(장중에 돌리면 그 시점 이후 봉이 통째로 사라진다). 그 정지는 EOD 배치의
-`unfilled_settled_days` 에 뜨지만, 푸는 것은 사람이 소유자를 정하는 일이다.
-⚠️ `--days` 기본값이 최근 70파티션이고 타깃 선정은 **종목 이력 깊이** 기준이라 날짜를
-안 가린다 — 최근 날짜에 쓰기 쉽다. `--days` 로 창을 좁혀 쓰거나 대상 날짜를 확인해라.
+**소유권 경계는 `rollup.WRITER_SINCE` 하나다.** 그 앞은 이 백필이, 뒤는 롤업이 파티션을
+소유한다. 날짜를 여기 박지 않고 `_trading_days` 가 그 상수를 읽어 달력을 자른다 —
+경계는 옮겨진 적이 있고(ALPHA-836) 주석으로 강제하면 옮길 때 하나만 고쳐진다.
+
+🔴 경계 **뒤** 파티션에 이 스크립트가 파일을 놓으면 `_rollup_day` 의 foreign 가드가 걸려
+그날 5분 파생이 후크·EOD 양쪽에서 **영구 정지**한다. 그래서 가드가 주석이 아니라 코드다.
 # ponytail: 파티션당 1파일 관례를 깬다. 합치려면 롤업 writer 가 이 원천을 알아야 하고
 # 그건 이 백필의 수명(일회성)보다 큰 변경이다 — ALPHA-839 는 병합이 아니라 거부를 골랐다.
 
@@ -57,6 +55,7 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src"))
 
+from data_pipeline.minute.rollup import WRITER_SINCE  # noqa: E402
 from data_pipeline.sources.toss import TossOpenApiClient  # noqa: E402
 
 KST = timezone(timedelta(hours=9))
@@ -65,6 +64,8 @@ BUCKET_MINUTES = 5
 SESSION_OPEN, SESSION_CLOSE = time(9, 0), time(15, 30)
 MARKET = "KR"
 PREFIX = "canonical/market_data/intraday_5m/market=KR"
+# 거래일의 **독립 증인**. 5분봉 파티션이 통째로 빠진 날을 이쪽이 안다(ALPHA-836).
+PRICE_DAILY_PREFIX = "canonical/market_data/price_daily/market=KR"
 BACKFILL_NAME = "part-toss-backfill.parquet"
 SOURCE_VENDOR = "toss_backfill"
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
@@ -79,12 +80,11 @@ def _s3():
     return boto3.client("s3")
 
 
-def _partition_days(s3, bucket: str) -> list[str]:
-    """존재하는 파티션 날짜 오름차순. 거래일 달력을 지어내지 않는다 —
-    **이미 파티션이 있는 날**이 곧 우리가 아는 거래일이다."""
+def _partition_days(s3, bucket: str, prefix: str = PREFIX) -> list[str]:
+    """`prefix` 아래 존재하는 파티션 날짜 오름차순."""
     out, token = [], None
     while True:
-        kw = {"Bucket": bucket, "Prefix": f"{PREFIX}/", "Delimiter": "/"}
+        kw = {"Bucket": bucket, "Prefix": f"{prefix}/", "Delimiter": "/"}
         if token:
             kw["ContinuationToken"] = token
         r = s3.list_objects_v2(**kw)
@@ -93,6 +93,51 @@ def _partition_days(s3, bucket: str) -> list[str]:
         token = r.get("NextContinuationToken")
         if not token:
             return sorted(out)
+
+
+def _trading_days(s3, bucket: str) -> list[str]:
+    """거래일 달력 = 5분봉 파티션 **∪** 일봉 파티션 (ALPHA-836).
+
+    5분봉 파티션만으로 달력을 삼던 판이 **통째로 빠진 날을 영영 못 봤다**: 2026-08-03·
+    08-04 는 `price_daily` 에 있는 거래일인데 `intraday_5m` 파티션이 아예 없어 대상
+    목록에 들지도 못했다. 있는 것으로 있어야 할 것을 정의하면 부재가 부재로 안 보인다.
+
+    **교체가 아니라 합집합이다.** `price_daily` 는 파티션이 몇 주치뿐이라(실측 21일)
+    교체하면 창이 그만큼 쪼그라들어 전 종목이 대상이 된다.
+    """
+    days = (set(_partition_days(s3, bucket))
+            | set(_partition_days(s3, bucket, PRICE_DAILY_PREFIX)))
+    # **소유권 경계를 코드로 건다.** 이전 판은 "파티션이 없으면 대상이 아니다"라는
+    # 우연에 기대 롤업 구간을 안 건드렸는데, 달력이 합집합이 되면서 그 우연이 사라졌다 —
+    # 하필 파티션이 빠진 날이 곧 롤업 시대의 날이라, 가드가 없으면 백필이 가장 위험한
+    # 파티션을 정조준한다. 거기 낯선 파일을 쓰면 `rollup._rollup_day` 의 foreign 가드가
+    # 걸려 그날 5분 파생이 후크·EOD 양쪽에서 **영구 정지**한다.
+    return sorted(d for d in days if d < WRITER_SINCE)
+
+
+def _configured_universe() -> set[str]:
+    """설정이 **수집하기로 선언한** 1분 유니버스 (ALPHA-836).
+
+    S3 `config/minute/universe.json` 이 1분 레인의 운영 정본이지만 백필의 기준으로는
+    쓰지 않는다 — 그건 빌더가 만들어 올려야 갱신되는 파생물이고, 실측 2026-08-07 에
+    그 객체는 08-04 자라 ALPHA-842 가 얹은 섹터 후보 48종이 아직 없었다. 아직 안 올라간
+    것을 기준으로 삼으면 **선언된 대상이 백필에서 또 빠진다** — 이 티켓이 닫으려는
+    바로 그 결함이다. 그래서 선언 자체(`sources.toml`)를 읽는다.
+
+    **방어적 getattr 로 감싸지 않는다.** 섹션·필드가 사라지면 AttributeError 로 터지게
+    두는 편이 낫다 — `or ()` 로 접으면 선언된 종목이 **경고 한 줄 없이** 백필에서 빠지고,
+    그건 이 티켓이 닫으려는 결함이 다른 문으로 되돌아오는 것이다.
+
+    잡는 것은 **ImportError 뿐**이다(스크립트가 패키지 밖에서 돌 수 있다). 로더는
+    검증 실패를 `ConfigError` 로 드러내는 계약이므로(`config/loader.load_settings`)
+    그것까지 삼키면 스키마 위반이 WARNING 한 줄 뒤 exit 0 으로 지나간다(Rule 7·12).
+    """
+    try:
+        from data_pipeline.config.loader import load_settings
+    except ImportError as e:
+        log.warning("설정 모듈을 못 읽었다 — 관측 유니버스만 쓴다: %s", e)
+        return set()
+    return set(load_settings().minute_universe.sector_etf_ids)
 
 
 def _read_day(s3, bucket: str, day: str, name: str = "part-0.parquet"):
@@ -169,6 +214,34 @@ SCHEMA = pa.schema([
 ])
 
 
+def _day_payload(prior_rows: list[dict], existing: set[str],
+                 candidates: list[dict]) -> tuple[list[dict], int] | None:
+    """그날 쓸 행과 **새로 추가되는 수**. 새 행이 없으면 `None` — 쓰지 않는다는 뜻이다.
+
+    **새 행이 0 이면 안 쓴다**(ALPHA-836). 예전엔 남길 행(`keep`)이 비지 않으면 그대로
+    PUT 이 나가 같은 바이트로 파일을 덮었고, 그 PUT 이 라이브 소비자의 읽기와 경합했다 —
+    실측 2026-08-07: analysis-engine 이 07-02 백필 파일에서 HTTP 416 Range Not
+    Satisfiable 로 설명 발행에 실패했다. 재실행마다 재발한다. (정규장 밖 봉 재필터는
+    `--repair-session-hours` 가 독립적으로 담당하므로 그 경로는 안 잃는다.)
+
+    **앞선 착지분과 합쳐서 쓴다.** 이 파일은 파티션당 하나이고 `put_object` 는 통째로
+    덮는다 — 이번 실행분만 쓰면 지난 런이 채운 종목이 소리 없이 사라진다(실측: 9종만
+    돌린 재실행이 앞선 85종을 지웠다). 같은 종목은 이번 값으로 갈아끼우고, 남기는 행에도
+    정규장 필터를 다시 건다 — 필터 없던 판이 쓴 장전·장후 봉이 여기서 함께 걷힌다.
+    """
+    rows = [r for r in candidates if r["ticker"] not in existing]
+    if not rows:
+        return None
+    mine = {r["ticker"] for r in rows}
+    # `existing` 도 뺀다 — 지난 런이 백필 파일에 쓴 티커가 나중에 `part-0` 에도 생기면
+    # 두 파일에 같은 행이 남아 소비자 글롭이 **두 번 센다**. 서로소 보장은 쓰기 시점의
+    # 한 겹뿐이므로 그 겹이 과거분까지 봐야 한다.
+    keep = [r for r in prior_rows
+            if r["ticker"] not in mine and r["ticker"] not in existing
+            and SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
+    return keep + rows, len(rows)
+
+
 def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool) -> int:
     if not rows:
         return 0
@@ -199,7 +272,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     s3 = _s3()
-    days = _partition_days(s3, a.bucket)[-a.days:]
+    days = _trading_days(s3, a.bucket)[-a.days:]
     if not days:
         log.error("파티션이 없다 — 버킷/프리픽스를 확인해라")
         return 1
@@ -236,9 +309,26 @@ def main() -> int:
         for tk in covered[d]:
             coverage[tk] += 1
 
-    universe = present[days[-1]]
+    # 유니버스는 **수집하기로 선언한 것**이지 이미 받아 둔 것이 아니다(ALPHA-836).
+    # `present[days[-1]]` 만 쓰던 판은 한 번도 수집된 적 없는 종목을 영영 못 봤다 —
+    # ALPHA-842 가 얹은 섹터 후보 48종이 정확히 그 자리였다(실측 2026-08-07: 섹터
+    # 계열 80종 중 정본 보유가 FMP 시대 7종·롤업 시대 32종). 날짜 축과 같은 결함이다.
+    #
+    # 관측 쪽은 **실제로 정본이 있는 마지막 날**을 쓴다. 달력이 일봉과의 합집합이 된 뒤로
+    # `days[-1]` 이 5분봉 파티션 없는 날일 수 있고(일봉이 더 최신인 창), 그러면 관측
+    # 유니버스가 통째로 비어 상장 폐지분까지 되살아난 목록만 남는다.
+    latest = next((d for d in reversed(days) if present[d]), None)
+    if latest is None:
+        # 관측 축이 통째로 비었다 — 좁은 창이 전부 일봉-only 인 경우다. 설정 선언분만
+        # 남으므로 대상이 조용히 쪼그라든다. 날짜 축엔 가드가 있는데(위 `if not days`)
+        # 여기만 무음이면 정상 실행과 구분이 안 된다.
+        log.warning("창 %d일에 5분봉 정본이 하나도 없다 — 설정 선언분만 대상이 된다", len(days))
+    universe = (present[latest] if latest else set()) | _configured_universe()
     if a.tickers:
-        targets = sorted(set(a.tickers.split(",")) & universe)
+        # **명시 요청은 명시 대상이다.** 교집합을 걸면 아직 안 받아 본 종목을 지정해도
+        # 조용히 0건으로 끝난다 — 백필에서 그건 결손을 성공으로 위장하는 길이다.
+        # 교집합이 하던 공백·빈 값 스크러빙은 여기서 명시적으로 한다.
+        targets = sorted({t.strip() for t in a.tickers.split(",") if t.strip()})
     else:
         targets = sorted(tk for tk in universe if coverage[tk] < a.min_days)
     log.info("유니버스 %d종 · 백필 대상 %d종 (기준 %d일 미만)",
@@ -280,22 +370,16 @@ def main() -> int:
     total = 0
     for d in sorted(per_day):
         existing = _tickers_present(_read_day(s3, a.bucket, d))
-        rows = [r for r in per_day[d] if r["ticker"] not in existing]
-        # **앞선 착지분과 합쳐서 쓴다.** 이 파일은 파티션당 하나이고 `put_object` 는
-        # 통째로 덮는다 - 이번 실행분만 쓰면 지난 런이 채운 종목이 소리 없이 사라진다
-        # (2026-08-07 실측: 9종만 돌린 재실행이 앞선 85종을 지웠다). 같은 종목은 이번
-        # 값으로 갈아끼우고, 남기는 행에도 정규장 필터를 다시 건다 - 필터 없던 판이
-        # 쓴 장전·장후 봉이 여기서 함께 걷힌다.
-        mine = {r["ticker"] for r in rows}
         prior = _read_day(s3, a.bucket, d, BACKFILL_NAME)
-        keep = [r for r in (prior.to_pylist() if prior is not None else [])
-                if r["ticker"] not in mine
-                and SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
-        n = _write_day(s3, a.bucket, d, keep + rows, a.dry_run)
-        total += len(rows)
-        if rows:
-            log.info("%s ← %d행 (파일 총 %d행)%s", d, len(rows), n,
-                     " (dry-run)" if a.dry_run else "")
+        payload = _day_payload(prior.to_pylist() if prior is not None else [],
+                               existing, per_day[d])
+        if payload is None:
+            continue
+        keep_and_new, fresh = payload
+        n = _write_day(s3, a.bucket, d, keep_and_new, a.dry_run)
+        total += fresh
+        log.info("%s ← %d행 (파일 총 %d행)%s", d, fresh, n,
+                 " (dry-run)" if a.dry_run else "")
     log.info("완료 — %d일 · %d행 추가%s", len(per_day), total,
              " (dry-run)" if a.dry_run else "")
     return 0
