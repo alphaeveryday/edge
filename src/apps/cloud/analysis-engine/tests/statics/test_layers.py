@@ -110,6 +110,41 @@ def test_decompose_distinguishes_short_history_from_missing_series():
     assert str(MIN_BETA_N) in lake.exists["layers"]
 
 
+def test_min_beta_sample_is_one_number_across_the_two_definitions():
+    """`layers` 와 `attribute` 의 최소 표본이 같은 값이다 (ALPHA-849).
+
+    WHY: 두 모듈이 각자 상수를 들고 있다(순환 import 를 피하려고). 갈리면 같은 런에서
+    **층은 서는데 갭 귀속만 부재**가 되고, 산문은 "층은 봤는데 갭은 모른다"로 인쇄된다 —
+    재료가 같은데 판정이 갈리는 것이라 운영자가 원인을 찾을 데가 없다. 한쪽만 고치는
+    변경이 조용히 통과하지 않도록 여기서 묶는다.
+    """
+    from edge_analysis.statics.attribute import MIN_BETA_N as ATTRIBUTE_MIN
+
+    assert MIN_BETA_N == ATTRIBUTE_MIN, (
+        f"layers({MIN_BETA_N}) != attribute({ATTRIBUTE_MIN}) — 한쪽만 옮겼다"
+    )
+
+
+def test_a_series_shorter_than_the_old_requirement_still_stands():
+    """옛 요건(40)에는 못 미치지만 새 요건(20)은 넘는 계열이 **층으로 선다**.
+
+    WHY: 요건을 낮춘 목적이 이것이다 — 상장이 늦어 40일을 물리적으로 못 채우는 계열
+    (실측 0210A0, 33거래일)이 후보에서 빠지면 그 ETF 는 섹터 층이 통째로 없다. 값만
+    바꾸고 이 경로를 안 태우면 "낮췄다"는 주장이 코드로 확인되지 않는다.
+    """
+    assert MIN_BETA_N <= 33 < 40, "이 테스트의 전제(33일 계열)가 요건과 안 맞는다"
+
+    lake = _lake()
+    lake.exists = {}
+    for m in lake.series.values():
+        m["ret"] = m["ret"][:33]
+
+    roll = decompose(lake, "T", DAYS[33].isoformat())
+
+    assert roll is not None, "33거래일 계열이 표본 부족으로 빠졌다 — 요건 완화가 안 먹었다"
+    assert "표본 부족" not in lake.exists.get("layers", "")
+
+
 def test_decompose_does_not_pollute_unbound_which_counts_tables():
     """사유를 `unbound` 에 넣으면 안 된다 — 거긴 `표 → 못 묶은 사유` 이고 소비자가 있다.
 

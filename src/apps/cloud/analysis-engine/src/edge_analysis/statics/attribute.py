@@ -104,7 +104,12 @@ def resid_sigma(lake, instrument_id: str, day: str) -> tuple[float | None, str]:
     return float(rows[0][0]), ""
 
 
-MIN_BETA_N = 40     # 갭 β 추정의 최소 표본 (60d 창 기준 - 이보다 얇으면 부재 선언)
+# 갭 β 의 최소 표본 (60d 창 기준 - 이보다 얇으면 부재 선언).
+# **`layers.MIN_BETA_N` 과 같은 값이어야 한다**(ALPHA-849). 갈리면 같은 런에서 층은
+# 서는데 갭 귀속만 부재가 되고, 산문은 "층은 봤는데 갭은 모른다"는 상태로 인쇄된다 -
+# 재료가 같은데 판정이 갈리는 것이라 운영자가 원인을 찾을 데가 없다.
+# 여기서 import 하지 않는 이유는 순환(`layers` → `attribute`)이다.
+MIN_BETA_N = 20
 
 
 def _beta_ci(xs, ys) -> tuple[float, float] | None:
