@@ -169,7 +169,12 @@ def test_attenuation_counted_on_two_axes(tmp_path):
     assert source.type_matched == 1      # 유형이 거기서 2행을 더 잘랐다
 
 
-@pytest.mark.parametrize("bad_rcept", [12345, ["A"], {"a": 1}, None, "", "   "])
+_ABSENT = object()  # "키가 아예 없다" — 명시적 None 과 다른 입력이라 따로 둔다
+
+
+@pytest.mark.parametrize(
+    "bad_rcept", [12345, ["A"], {"a": 1}, True, None, _ABSENT, "", "   "]
+)
 def test_malformed_rcept_no_dropped_whatever_the_type(tmp_path, bad_rcept):
     # WHY: 한때 이 검사를 **대상 행에만** 걸었다가 결함 둘을 만들어 되돌렸다.
     #      ① 비대상 행을 보존하는 유일한 이유가 "대상을 넓힐 때 재수집 불필요"인데 rcept_no
@@ -178,9 +183,10 @@ def test_malformed_rcept_no_dropped_whatever_the_type(tmp_path, bad_rcept):
     #      ② truthy 비문자열(int·list·dict)은 소비자의 `(x or "").strip()` 을 통과 못 해
     #         **창 전체를 죽인다**(각도 H — crash-before-gate). 실제로 밟은 회귀다.
     #      falsy(None·"")와 truthy 비문자열을 **함께** 넣는 이유: `or ""` 로 흡수되는 것만
-    #      테스트하면 실제로 터지는 쪽을 한 번도 안 밟는다.
+    #      테스트하면 실제로 터지는 쪽을 한 번도 안 밟는다. 키 부재(`_ABSENT`)와 명시적
+    #      `None` 도 따로 넣는다 — 하나로 접으면 둘 중 한 입력을 영영 안 밟는다.
     row = {"stock_code": "005930", "report_nm": "주주총회소집결의"}
-    if bad_rcept is not None:
+    if bad_rcept is not _ABSENT:
         row["rcept_no"] = bad_rcept
     client = FakeClient(list_pages={1: _page([
         row,

@@ -296,8 +296,11 @@ def raw_disclosure_partition(
     순회 안에서 **내용이 완전히 같은 행**은 접는다(페이지 경계 이동 중복 — 접지 않으면 같은
     문서를 두 번 내려받는다). 그래서 collection_log 의 `list_rows_seen`(벤더가 건넨 행 수)과
     이 파티션의 행 수는 다를 수 있다 — 서로 다른 질문에 대한 답이고 둘 다 참이라, 그 차이를
-    유실로 대사하면 안 된다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url·
-    document_raw_path 가 그대로 보존돼 canonical/파싱이 쓴다. 공시서류 원본 본문은 ndjson 에
+    유실로 대사하면 안 된다. 각 행에 rcept_no(문서키)·corp_code·stock_code·source_url 이
+    그대로 보존돼 canonical/파싱이 쓴다. `document_raw_path` 는 **대상 유형 행만** 값을
+    갖는다(ALPHA-865) — 파티션에는 유니버스 행이 전량 들어오고 유형은 `is_target` 플래그로
+    실리는데, 본문은 대상만 받기 때문이다. 비대상 행은 `document_raw_path`·`body_format` 이
+    명시적 None 이다(키 부재가 아니라). 공시서류 원본 본문은 ndjson 에
     못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션 아래 별도 객체로 둔다
     (raw_disclosure_document_key 참고).
     """
