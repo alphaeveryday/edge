@@ -85,15 +85,70 @@ class GenerationMismatchError(RuntimeError):
 
 @dataclass
 class MinuteCommitter:
-    """window commit 경계 — 가격(commit_price_window)·뉴스(commit_news_window).
+    """window commit 경계 — 가격(commit_price_window)·iNAV(commit_inav_window)·
+    뉴스(commit_news_window).
 
-    두 조합은 같은 `_tx` 조각(fence·window·job·outbox)을 쓰지만 순서와 내용이 달라
+    세 조합은 같은 `_tx` 조각(fence·window·job·outbox)을 쓰지만 순서와 내용이 달라
     합치지 않는다: 가격은 window 단위 canonical 분봉 1건, 뉴스는 기사 N건의 관측
-    판정·job N개다.
+    판정·job N개, iNAV 는 하위 소비자가 없어 window 확정에서 멈춘다.
     """
 
     db: DbConfig
     connect_fn: Callable = _default_connect
+
+    def _confirm_window_tx(
+        self,
+        cur,
+        *,
+        session_id: str,
+        window_start: datetime,
+        worker_id: str,
+        fence_token: int,
+        claim_token: int,
+        artifact_generation: int,
+        **outcome,
+    ) -> int:
+        """fence/phase → claim 검증 → window 결과 확정 → 세대 대조. 가격·iNAV 공유부.
+
+        여기까지가 "artifact 를 PUT 한 그 attempt 가 지금도 이 window 의 주인인가"를
+        확정하는 부분이고, 그 뒤(job·outbox)는 dataset 마다 다르다. 뉴스는 claim 과
+        결과 확정 사이에 관측 원장·canonical 이 끼어 이 조각을 쓰지 않는다.
+        """
+        phase = MinuteLedger._fenced_phase(cur, session_id, fence_token)
+        if phase not in ("ACTIVE", "DRAINING"):
+            raise CommitRejectedError(
+                f"fence 무효(phase={phase}) — session {session_id} commit 거부"
+            )
+        # claim 을 **쓰기 전에** 검증한다 — stale claim 을 여기서 명시적으로
+        # 거부해야 "다른 attempt 소유" 사유가 뭉개지지 않는다(아래 outcome 갱신
+        # 실패는 불변식 위반으로만 남는다)
+        cur.execute(
+            """
+            SELECT claimed_by, claim_token FROM minute_ingestion_window
+            WHERE session_id = %s AND window_start = %s
+            FOR UPDATE
+            """,
+            (session_id, window_start),
+        )
+        row = cur.fetchone()
+        if row is None or row[0] != worker_id or row[1] != claim_token:
+            raise CommitRejectedError(
+                f"claim 무효(window {window_start}) — 다른 attempt 의 소유다"
+            )
+        generation = MinuteLedger._record_window_outcome_tx(
+            cur, session_id=session_id, window_start=window_start,
+            worker_id=worker_id, claim_token=claim_token, **outcome,
+        )
+        if generation is None:
+            # 위 FOR UPDATE 검증을 통과했으면 도달 불가 — 도달했다면 버그다
+            raise CommitRejectedError("window 갱신 실패 — claim 검증과 모순")
+        if generation != artifact_generation:
+            # 예외 → 트랜잭션 rollback — S3 의 잘못된 세대 artifact 만 남고
+            # (immutable·무해) DB 는 그대로다. Worker 가 맞는 세대로 재PUT·재commit.
+            raise GenerationMismatchError(
+                f"artifact 세대 {artifact_generation} ≠ DB 확정 세대 {generation}"
+            )
+        return generation
 
     def commit_price_window(
         self,
@@ -159,30 +214,10 @@ class MinuteCommitter:
         회복된다. 순서 통일은 실측(계획 §16)에서 빈도가 나오면 한다.
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            phase = MinuteLedger._fenced_phase(cur, session_id, fence_token)
-            if phase not in ("ACTIVE", "DRAINING"):
-                raise CommitRejectedError(
-                    f"fence 무효(phase={phase}) — session {session_id} commit 거부"
-                )
-            # claim 을 **쓰기 전에** 검증한다 — stale claim 을 여기서 명시적으로
-            # 거부해야 "다른 attempt 소유" 사유가 뭉개지지 않는다(아래 outcome 갱신
-            # 실패는 불변식 위반으로만 남는다)
-            cur.execute(
-                """
-                SELECT claimed_by, claim_token FROM minute_ingestion_window
-                WHERE session_id = %s AND window_start = %s
-                FOR UPDATE
-                """,
-                (session_id, window_start),
-            )
-            row = cur.fetchone()
-            if row is None or row[0] != worker_id or row[1] != claim_token:
-                raise CommitRejectedError(
-                    f"claim 무효(window {window_start}) — 다른 attempt 의 소유다"
-                )
-            generation = MinuteLedger._record_window_outcome_tx(
+            generation = self._confirm_window_tx(
                 cur, session_id=session_id, window_start=window_start,
-                worker_id=worker_id, claim_token=claim_token, data_status=data_status,
+                worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
+                artifact_generation=artifact_generation, data_status=data_status,
                 expected_unit_count=expected_unit_count,
                 succeeded_unit_count=succeeded_unit_count,
                 failed_unit_count=failed_unit_count, record_count=record_count,
@@ -190,15 +225,6 @@ class MinuteCommitter:
                 manifest_checksum=manifest_checksum, missing_units=missing_units,
                 stage_timestamps=stage_timestamps,
             )
-            if generation is None:
-                # 위 FOR UPDATE 검증을 통과했으면 도달 불가 — 도달했다면 버그다
-                raise CommitRejectedError("window 갱신 실패 — claim 검증과 모순")
-            if generation != artifact_generation:
-                # 예외 → 트랜잭션 rollback — S3 의 잘못된 세대 artifact 만 남고
-                # (immutable·무해) DB 는 그대로다. Worker 가 맞는 세대로 재PUT·재commit.
-                raise GenerationMismatchError(
-                    f"artifact 세대 {artifact_generation} ≠ DB 확정 세대 {generation}"
-                )
             job_id, _ = JobLedger._insert_price_job_tx(
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
@@ -213,6 +239,53 @@ class MinuteCommitter:
                              "window_start": window_start, "generation": generation},
                 )
             return generation
+
+    def commit_inav_window(
+        self,
+        *,
+        session_id: str,
+        window_start: datetime,
+        worker_id: str,
+        fence_token: int,
+        claim_token: int,
+        data_status: str,
+        expected_unit_count: int,
+        succeeded_unit_count: int,
+        failed_unit_count: int,
+        record_count: int,
+        checksum: str,
+        manifest_uri: str,
+        manifest_checksum: str,
+        missing_units: list[str] | None,
+        stage_timestamps: dict[str, datetime | str],
+        artifact_generation: int,
+    ) -> int:
+        """iNAV window 하나를 확정하고 generation 을 돌려준다 (ALPHA-851).
+
+        가격과 **같은 서명에서 job/outbox 만 없다** — 그런데도 `commit_price_window`
+        를 재사용하면 안 된다. 저건 `_insert_price_job_tx` 와 `PRICE_EVENT_TYPE` 을
+        하드코딩해서, NAV window 가 `price-analysis-realtime` 으로 발행되고 **설명이
+        발화된다**(그 소비자는 봉을 기대하는데 우리가 넣는 건 NAV 다).
+
+        iNAV 는 지금 하위 소비자가 없어 window 확정에서 멈춘다. 소비자가 생기면
+        job kind·event type 을 **여기서** 붙인다 — 가격 것을 빌려 쓰지 않는다.
+
+        canonical 은 호출자가 이미 PUT 한 S3 artifact 다(분봉과 같은 규약, ALPHA-701).
+        멱등성도 같은 데서 나온다 — 같은 checksum 이면 generation 불변이라 재실행이
+        window 를 흔들지 않는다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            return self._confirm_window_tx(
+                cur, session_id=session_id, window_start=window_start,
+                worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
+                artifact_generation=artifact_generation, data_status=data_status,
+                expected_unit_count=expected_unit_count,
+                succeeded_unit_count=succeeded_unit_count,
+                failed_unit_count=failed_unit_count, record_count=record_count,
+                checksum=checksum, manifest_uri=manifest_uri,
+                manifest_checksum=manifest_checksum, missing_units=missing_units,
+                stage_timestamps=stage_timestamps,
+            )
 
     def commit_news_window(
         self,

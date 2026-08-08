@@ -28,6 +28,7 @@ from data_pipeline.minute.commit import (
 )
 from data_pipeline.minute.models import KST, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
+from data_pipeline.minute.states import DATASET_ETF_INAV_MINUTE
 
 _DB = DbConfig(password="x")
 SESSION_DATE = date(2026, 7, 31)
@@ -193,6 +194,102 @@ class TestCommitPriceWindow:
         )
         [event] = db.outbox.values()
         assert event["status"] == "NEW" and event["published_at"] is None
+
+
+def ready_inav_session():
+    """iNAV 세션. 격자는 390(시간외 없음)·source_group 은 kis — 운영 설정과 같은 축이다.
+
+    가격 세션을 빌려 쓰면 dataset 이 갈린 채 통과해, 나중에 dataset 별 분기가 생겼을 때
+    이 테스트가 그 분기를 **안 밟는다**.
+    """
+    db = FakeMinuteDB()
+    ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+    session_id, _ = ledger.plan_session(
+        dataset=DATASET_ETF_INAV_MINUTE, source_group="kis", session_date=SESSION_DATE,
+        universe_version="v1", universe_hash="a" * 64,
+        windows=plan_session_windows(
+            SESSION_DATE, universe=None, extended_hours=False
+        )[:10],
+    )
+    token = ledger.acquire_worker_fence(
+        session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+    )
+    claim = ledger.claim_due_window(
+        session_id=session_id, worker_id="w1", fence_token=token,
+        now=NOW, lease_seconds=60, lane="recovery",
+    )
+    return db, ledger, session_id, token, claim
+
+
+def inav_commit_kwargs(session_id, claim, token, *, checksum="c" * 64):
+    """가격과 **같은 서명에서 발행 축 둘만 빠진다** — 그 둘이 곧 이 dataset 의 차이다."""
+    kwargs = commit_kwargs(session_id, claim, token, checksum=checksum)
+    del kwargs["trigger_schema_version"], kwargs["destination"]
+    return kwargs
+
+
+def _redue(db, ledger, session_id, token, claim):
+    """커밋된 window 를 DUE 로 되돌려 재청구 — 정정 시나리오(GenerationGuard 와 같은 손)."""
+    db.windows[(session_id, claim["window_start"])]["data_status"] = "DUE"
+    return ledger.claim_due_window(
+        session_id=session_id, worker_id="w1", fence_token=token,
+        now=NOW, lease_seconds=60, lane="recovery",
+    )
+
+
+class TestCommitInavWindow:
+    """iNAV 는 하위 소비자가 없어 **window 확정에서 멈춘다** (ALPHA-851).
+
+    `commit_price_window` 를 재사용하면 `_insert_price_job_tx`·`PRICE_EVENT_TYPE` 이
+    하드코딩돼 NAV window 가 `price-analysis-realtime` 으로 나가고, 봉을 기대하는
+    소비자가 그걸 받아 **설명이 발화된다**.
+    """
+
+    def test_확정만_하고_job_도_outbox_도_만들지_않는다(self):
+        db, ledger, session_id, token, claim = ready_inav_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        before = db.connect_calls
+
+        generation = committer.commit_inav_window(
+            **inav_commit_kwargs(session_id, claim, token)
+        )
+
+        assert db.connect_calls == before + 1  # 한 트랜잭션
+        assert generation == 1
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "VALID" and window["generation"] == 1
+        assert db.jobs == {} and db.outbox == {}
+
+    def test_정정은_세대를_올리되_여전히_발행하지_않는다(self):
+        """세대는 **DB 가 확정한 값**이다 — 넘긴 `artifact_generation` 을 그대로 되돌려
+        주면 정정 한 번이 지나도 알아채지 못한다. 발행 부재만 단언하면 "아무것도 안 하는"
+        구현도 통과한다(제거형 변이와 축이 같다)."""
+        db, ledger, session_id, token, claim = ready_inav_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        committer.commit_inav_window(**inav_commit_kwargs(session_id, claim, token))
+
+        reclaim = _redue(db, ledger, session_id, token, claim)
+        kwargs = inav_commit_kwargs(session_id, reclaim, token, checksum="e" * 64)
+        kwargs["artifact_generation"] = 2
+
+        assert committer.commit_inav_window(**kwargs) == 2
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["generation"] == 2 and window["checksum"] == "e" * 64
+        assert db.jobs == {} and db.outbox == {}
+
+    def test_세대가_어긋나면_거부된다(self):
+        """artifact 를 PUT 한 세대와 DB 확정 세대가 갈리면 그 artifact 는 orphan 이 된다 —
+        가격과 같은 가드가 이 경로에도 걸려야 한다(공유부를 우회해 결과만 쓰면 새는 축)."""
+        db, ledger, session_id, token, claim = ready_inav_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        committer.commit_inav_window(**inav_commit_kwargs(session_id, claim, token))
+
+        reclaim = _redue(db, ledger, session_id, token, claim)
+        kwargs = inav_commit_kwargs(session_id, reclaim, token)  # 같은 checksum → 세대 1
+        kwargs["artifact_generation"] = 2
+
+        with pytest.raises(GenerationMismatchError):
+            committer.commit_inav_window(**kwargs)
 
 
 class TestOrphanDetection:
