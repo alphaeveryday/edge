@@ -259,3 +259,52 @@ def test_rollup_is_frozen_dataclass():
     assert isinstance(r, Rollup)
     with pytest.raises(AttributeError):
         r.total = 0.0
+
+
+# ── 1분봉 실측 주입 (ALPHA-866) ───────────────────────────────────────────
+def test_intraday_overrides_target_and_market_returns():
+    """대상·시장의 구간수익은 호출자가 커밋된 1분봉에서 계산한 값이 선다 - 레이크
+    `bars_5m` 은 정본이 낡으면 폴백으로 내려가는 별도 경로라, 발화를 만든 봉과 층
+    판정이 다른 가격을 보면 안 된다. 이름은 레이크 것을 지킨다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(),
+                  intraday={"T": (0.02, False), MARKET_CODE: (0.01, False)})
+    assert r.total == pytest.approx(0.02, abs=1e-12)
+    m = next(x for x in r.layers if x.kind == "시장")
+    assert m.contribution == pytest.approx(0.01, abs=1e-12)
+    assert m.name == "KODEX 200", "이름은 레이크 것 - 수익률만 갈아 끼운다"
+    assert r.total == pytest.approx(
+        sum(x.contribution for x in r.layers) + r.idio, abs=1e-12)
+
+
+def test_intraday_erects_the_market_layer_when_the_lake_is_stale():
+    """레이크에 시장 계열이 아예 없어도(스테일 정본) 1분봉 실측이 시장 층을 세운다 -
+    '레이크가 낡아서' 시장 층이 빠지면 남은 층이 시장 몫까지 떠안는다."""
+    lake = _lake()
+    del lake.series[MARKET_CODE]
+    r = decompose(lake, "T", _day(), intraday={MARKET_CODE: (0.01, False)})
+    m = next(x for x in r.layers if x.kind == "시장")
+    assert m.ret == pytest.approx(0.01, abs=1e-12)
+    assert "market_layer" not in lake.exists, "층이 섰는데 부재 사유가 남으면 오진이다"
+
+
+def test_intraday_constituents_do_not_enter_the_sector_pool():
+    """`intraday` 에 실려 온 구성종목은 섹터 후보 풀에 못 들어간다 - 들어가면
+    '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다. 종목 귀속(`_names`)에는 선다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(), intraday={"a": (0.5, False)})
+    sec = next(x for x in r.layers if x.kind == "섹터")
+    assert sec.code == "SEC", "구성종목이 섹터 후보를 밀어내면 안 된다"
+    a = next(n for n in r.names if n.ticker == "a")
+    base = sum(x.contribution for x in r.layers)
+    assert a.ret == pytest.approx(0.5, abs=1e-12)
+    assert a.idio == pytest.approx(0.5 - base, abs=1e-12)
+
+
+def test_intraday_halt_excludes_the_name_and_counts_it():
+    """1분봉 실측의 정지 판정(구간 거래량 0)도 레이크 판정과 같은 계약을 탄다 -
+    빼되, 뺐다는 사실을 센다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(), intraday={"a": (0.1, True)})
+    assert all(n.ticker != "a" for n in r.names)
+    assert r.halted == 1
