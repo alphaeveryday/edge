@@ -502,7 +502,9 @@ class TestUnfilledSettledDays:
 
         owned = sorted(WRITER_OWNED_BEFORE_SINCE)[0]
         fx = Fixture(tmp_path)
-        planned = plan_session_windows(date.fromisoformat(owned), universe=UNIVERSE)
+        planned = plan_session_windows(
+            date.fromisoformat(owned), universe=UNIVERSE, extended_hours=True
+        )
         fx.ledger.plan_session(
             dataset="price_minute", source_group="toss",
             session_date=date.fromisoformat(owned),
@@ -528,7 +530,9 @@ class TestUnfilledSettledDays:
         assert scan_lower() < older < WRITER_SINCE, "넓힌 창 **안**이어야 필터가 걸린다"
         assert older not in WRITER_OWNED_BEFORE_SINCE
         fx = Fixture(tmp_path)
-        planned = plan_session_windows(date.fromisoformat(older), universe=UNIVERSE)
+        planned = plan_session_windows(
+            date.fromisoformat(older), universe=UNIVERSE, extended_hours=True
+        )
         fx.ledger.plan_session(
             dataset="price_minute", source_group="toss",
             session_date=date.fromisoformat(older),
