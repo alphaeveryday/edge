@@ -56,7 +56,12 @@
 > (ALPHA-735 — 1분 레인의 **기본 벤더**. `FHKST03010200` 당일 분봉, 종목당 1콜에 30분치,
 > `stck_cntg_hour` 도 구간의 끝이라 축은 토스와 같다. 4분류 판정은 벤더 무관부
 > `minute/price_collect.py` 하나를 공유하고 각 collector 는 "그 window 의 봉 하나를 어떻게
-> 얻는가"만 갖는다),
+> 얻는가"만 갖는다.
+> ⚠️ **TR 이 둘이다**(ALPHA-846): 세션 날짜가 지난 거래일이면 소급 TR `FHKST03010230`
+> (`KisHistoricalMinuteClient`)로 간다 — 당일 TR 에는 날짜 축이 없어 과거 세션에 물리면
+> 오늘 봉이 오늘 라벨로 돌아와 전 window 가 missing 이 된다. 설정 노브가 아니라 벤더
+> 사실이라 **날짜에서 유도**한다. 소급 TR 은 무거래 분 행을 주지 않아 어댑터가 직전 종가
+> flat 으로 채우고, 응답이 거래일 경계를 넘으므로 `stck_bsop_date` 로 자른다),
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
@@ -1282,6 +1287,24 @@ DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2 \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
+# ⚠️ `--session-date` 가 **지난 거래일이면 벤더 TR 과 콜 형상이 바뀐다**(ALPHA-846) —
+# 소급 TR 로 하루를 한 번에 받아 캐시하므로 첫 window 에 362종 × 4페이지 ≈ 1,450콜이
+# 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다.
+#
+# 🔴 **과거일 백필 선행조건 셋** — 안 지키면 조용히가 아니라 크게 터지거나, 라이브를 오염시킨다:
+#  1) 그 날짜의 1분 canonical prefix 가 **비어 있어야 한다**. artifact 키에는 벤더·세션
+#     축이 없어(ALPHA-705) 다른 벤더 세션이 같은 generation 을 이미 썼으면
+#     `ArtifactImmutabilityError` 로 태스크가 죽고 ECS 가 같은 window 에서 재기동한다:
+#       aws s3 ls --recursive \
+#         s3://<lake>/canonical/market_data/price_minute/market=KR/session_date=<날짜>/
+#  2) 커밋마다 **price job + outbox 이벤트**가 나간다(`commit_price_window`, 조건 없음).
+#     Relay 가 뜨는 순간 그 390건이 오늘의 실시간 판정 큐로 흘러가 과거 봉으로 트리거가
+#     돌고 설명(LLM)까지 이어진다. 소급 판정을 원하지 않으면 백필 직후 그 세션의 outbox
+#     행을 `status='DEAD'` + `last_error` 로 격리해라(Relay 는 `NEW` 만 집는다).
+#  3) 종가 단일가 구간(15:21~15:29)의 값이 **당일 레인과 다르다**. 당일 TR 은 그 9분을
+#     마감 체결 봉의 복제로 채우고(거래량까지 반복 — 5분 마지막 두 버킷이 부풀려진다),
+#     소급 경로는 체결이 없었다는 사실대로 직전 종가 flat·거래량 0 으로 채운다. 백필한
+#     하루만 그 두 버킷이 다르게(더 정확하게) 나온다.
 # 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
 # canonical 로 판정한다(LLM 0). 임계는 price_triggers 의 abs_threshold(발화)·
 # revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은

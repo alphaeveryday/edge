@@ -34,6 +34,8 @@ UNIVERSE = Universe(
     constituent_ids=("100000", "100001"),
 )
 NOW = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # 앞쪽 window 들이 전부 due
+# collector 선택은 **오늘인가 지난 거래일인가**로 갈린다(ALPHA-846) — 당일 축 고정용
+TODAY = datetime.now(KST).date()
 # 시간외(NXT)까지 거래되는 종목이 하나 있는 universe — 세션이 720 window 로 계획된다
 UNIVERSE_EXT = Universe(
     universe_version="univ-test-ext-v1",
@@ -883,18 +885,111 @@ class TestCollectorSelection:
         from data_pipeline.minute.worker import make_price_collector
 
         collector = make_price_collector(
-            self._config(source="kis", app_key="k", app_secret="s")
+            self._config(source="kis", app_key="k", app_secret="s"), session_date=TODAY
         )
         assert isinstance(collector, KisPriceCollector)
         # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
         assert collector.client.client.min_interval == pytest.approx(0.08)
+
+    def test_past_session_date_builds_historical_kis_client(self):
+        """지난 거래일이면 **다른 TR** 이다(ALPHA-846).
+
+        당일 TR 에는 날짜 축이 없어 과거 세션에 물리면 오늘 봉이 오늘 라벨로 돌아오고
+        전 window 가 missing 이 된다 — 그때 원장은 "수집했는데 벤더가 안 줬다"로 보인다.
+        타입만 보면 상속이라 같은 클래스로도 통과하므로 **TR·날짜 파라미터**까지 본다.
+        """
+        from data_pipeline.minute.worker import make_price_collector
+        from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient
+
+        collector = make_price_collector(
+            self._config(source="kis", app_key="k", app_secret="s"),
+            session_date=date(2026, 8, 3),
+        )
+        client = collector.client
+        assert isinstance(client, KisHistoricalMinuteClient)
+        assert client.session_date == date(2026, 8, 3)
+        assert client.tr_id == "FHKST03010230"
+        assert "FID_INPUT_DATE_1=20260803" in client._url("005930", "153000")
+
+    def test_today_session_date_keeps_the_intraday_client(self):
+        # 상주 레인은 그대로여야 한다 — 소급 TR 은 하루를 통째로 캐시하므로 장중에
+        # 물리면 그 프로세스가 첫 tick 의 하루를 끝까지 재사용한다(값이 얼어붙는다)
+        from data_pipeline.minute.worker import make_price_collector
+        from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient
+
+        client = make_price_collector(
+            self._config(source="kis", app_key="k", app_secret="s"), session_date=TODAY
+        ).client
+        assert not isinstance(client, KisHistoricalMinuteClient)
+        assert client.tr_id == "FHKST03010200"
+
+    def test_cli_feeds_the_parsed_session_date_to_the_collector(self, monkeypatch):
+        """`--session-date` 가 collector 선택까지 **닿는가** — 이 이음매가 TR 을 정한다.
+
+        `make_price_collector` 는 단위로 검증되지만, CLI 가 오늘 날짜를 넘기면 백필이
+        당일 TR 로 돌고 오늘 봉이 오늘 라벨로 돌아와 **362종 전건이 missing** 이 된다.
+        그때 원장은 "수집은 했는데 벤더가 안 줬다"로 보여 아무도 배선을 의심하지 않는다.
+
+        ⚠️ `SystemExit` 자체는 이 함수의 거의 모든 갈래가 낸다 — 그것만 단언하면 거짓
+        초록이다. **대체 함수가 실제로 불렸는지**를 같이 못박는다.
+        """
+        from types import SimpleNamespace
+
+        from data_pipeline.minute import worker as worker_module
+
+        seen: dict[str, object] = {}
+
+        def capture(options, *, session_date):
+            seen["session_date"] = session_date
+            raise SystemExit("여기서 멈춘다 — 이 뒤는 DB·S3 가 필요하다")
+
+        from data_pipeline.minute import models as models_module
+
+        monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE)
+        monkeypatch.setattr(worker_module, "make_price_collector", capture)
+        settings = SimpleNamespace(
+            db=DbConfig(password="x"),
+            minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
+        )
+        with pytest.raises(SystemExit):
+            worker_module.price_worker_cli(
+                settings, session_date="2026-08-03", universe="s3://bucket/universe.json"
+            )
+        assert "session_date" in seen, "make_price_collector 가 불리지 않았다"
+        assert seen["session_date"] == date(2026, 8, 3)
+
+    def test_backfill_refuses_an_extended_hours_universe_at_startup(self, monkeypatch):
+        """시간외 universe 로는 소급 백필이 **구조적으로** 불가하다 — 기동에서 거부한다.
+
+        소급 TR 은 09:00–15:30 만 페이징하는데 시간외 종목이 있으면 세션은 720 window
+        로 계획된다. 런타임 거부로 두면 그 330개가 `_process` 의 catch-all 에 window
+        실패로 접혀(이 레인은 소스 전역 실패를 전파하지 않는다) 매 tick 재청구·재실패로
+        세션이 영영 안 마르고, 상주 진입점은 무한 루프한다.
+
+        ⚠️ `SystemExit` 는 이 함수의 거의 모든 갈래가 낸다 — **문구**를 같이 못박는다.
+        """
+        from types import SimpleNamespace
+
+        from data_pipeline.minute import worker as worker_module
+
+        from data_pipeline.minute import models as models_module
+
+        monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE_EXT)
+        settings = SimpleNamespace(
+            db=DbConfig(password="x"),
+            minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
+        )
+        with pytest.raises(SystemExit, match="시간외 universe"):
+            worker_module.price_worker_cli(
+                settings, session_date="2026-08-03", universe="s3://bucket/universe.json"
+            )
 
     def test_toss_source_still_builds_toss_collector(self):
         from data_pipeline.minute.toss_collector import TossPriceCollector
         from data_pipeline.minute.worker import make_price_collector
 
         collector = make_price_collector(
-            self._config(source="toss", client_id="c", client_secret="s")
+            self._config(source="toss", client_id="c", client_secret="s"), session_date=TODAY
         )
         assert isinstance(collector, TossPriceCollector)
 
@@ -903,20 +998,27 @@ class TestCollectorSelection:
         from data_pipeline.minute.worker import make_price_collector
 
         with pytest.raises(SystemExit, match="APP_KEY"):
-            make_price_collector(self._config(source="kis", client_id="c", client_secret="s"))
+            make_price_collector(
+                self._config(source="kis", client_id="c", client_secret="s"),
+                session_date=TODAY,
+            )
 
     def test_blank_credentials_fail_loud(self):
         # 공백-only 도 결손이다 — 통과시키면 기동은 되고 모든 인증이 실패해 window 실패만 쌓인다
         from data_pipeline.minute.worker import make_price_collector
 
         with pytest.raises(SystemExit, match="자격증명 없음"):
-            make_price_collector(self._config(source="kis", app_key="k", app_secret="  "))
+            make_price_collector(
+                self._config(source="kis", app_key="k", app_secret="  "), session_date=TODAY
+            )
 
     def test_unknown_source_fails_loud(self):
         from data_pipeline.minute.worker import make_price_collector
 
         with pytest.raises(SystemExit, match="알 수 없는 source"):
-            make_price_collector(self._config(source="fmp", app_key="k", app_secret="s"))
+            make_price_collector(
+                self._config(source="fmp", app_key="k", app_secret="s"), session_date=TODAY
+            )
 
     def test_source_default_matches_terraform_session_group(self):
         """config `source` 와 terraform `minute_session_source_group` 기본값은 같아야 한다.

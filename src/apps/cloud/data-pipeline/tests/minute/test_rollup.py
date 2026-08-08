@@ -439,7 +439,6 @@ class TestSessionRollup:
         assert fx.rollup_session(session_date="2026-07-31") is None
         assert fx.storage.list_keys("canonical/market_data/intraday_5m") == []
 
-
 class TestUnfilledSettledDays:
     """구멍 판정 — 원장이 멈춘 거래일에 파생이 없는 날."""
 
