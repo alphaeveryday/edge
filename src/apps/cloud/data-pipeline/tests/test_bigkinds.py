@@ -37,8 +37,14 @@ def _row(news_id: str = "01100101.20260707153000000", **extra) -> dict:
     }
 
 
-def _ok(rows: list[dict], **extra) -> str:
-    return json.dumps({"resultList": rows, **extra}, ensure_ascii=False)
+def _ok(rows: list[dict], *, total: int | None = None, **extra) -> str:
+    # 실물 응답은 매 페이지에 `totalCount`(그 창의 전체 건수)를 싣는다 — 절단 판정의 정본이다.
+    # 픽스처가 이걸 빼면 어댑터가 '판정 불가' 경로로 새 버려 정상 경로를 아예 안 밟는다.
+    # 여러 페이지짜리 시나리오는 total 을 명시한다(페이지 하나만 보고는 합을 알 수 없다).
+    return json.dumps(
+        {"resultList": rows, "totalCount": len(rows) if total is None else total, **extra},
+        ensure_ascii=False,
+    )
 
 
 def _source(responses, *, enabled=True, page_size=2, max_pages=3,
@@ -155,8 +161,8 @@ def test_partial_page_does_not_end_pagination():
     #      나머지가 조용히 유실되고 status=success 로 위장된다(Rule 12). 종료는 빈 페이지나
     #      isLimitPage 명시 신호로만 한다.
     src = _source({
-        1: _ok([_row("01100101.20260707153000000")]),  # page_size=2 인데 1건만 반환
-        2: _ok([_row("01100101.20260707153100000"), _row("01100101.20260707153200000")]),
+        1: _ok([_row("01100101.20260707153000000")], total=3),  # page_size=2 인데 1건만 반환
+        2: _ok([_row("01100101.20260707153100000"), _row("01100101.20260707153200000")], total=3),
     }, page_size=2, max_pages=5)
 
     records = list(src.fetch([], "2026-07-07", "2026-07-07"))
@@ -232,18 +238,50 @@ def test_stop_fetch_propagates():
         list(src.fetch([], "2026-07-07", "2026-07-07"))
 
 
-def test_max_pages_truncation_is_noted():
-    # WHY: 검색 결과가 max_pages 를 초과하면 뒷부분이 절단될 수 있다. 조용히 버리지 않고
-    #      kind=truncation 으로 기록해 로그엔 남기되(fail loud), 스텝은 성공으로 본다
-    #      (ALPHA-351 — 다음 창에서 이어받음). 진짜 실패와 구분되는 태그다.
+def test_truncation_reports_exact_loss_count():
+    # WHY: 절단은 조용히 버리지 않고 kind=truncation 으로 남기되 스텝은 성공으로 본다
+    #      (ALPHA-351). 종전 경고는 "MAX_PAGES 도달 — 창 절단 **가능**"이라 추측이었고,
+    #      그래서 매일 울려도 아무도 안 봤다(ALPHA-541: 2주 방치). 알람으로 쓰려면 몇 건을
+    #      잃었는지가 경고 안에 있어야 한다 — totalCount 가 그 답을 준다.
     src = _source({
-        1: _ok([_row("01100101.20260707153000000")]),
-        2: _ok([_row("01100101.20260707153100000")]),
+        1: _ok([_row("01100101.20260707153000000")], total=5),
+        2: _ok([_row("01100101.20260707153100000")], total=5),
     }, page_size=1, max_pages=2)
     records = list(src.fetch([], "2026-07-07", "2026-07-07"))
+
     assert len(records) == 2
-    trunc = [f for f in src.fetch_failures if "MAX_PAGES" in f["error"]]
-    assert trunc and all(f["kind"] == "truncation" for f in trunc)
+    assert [f["kind"] for f in src.fetch_failures] == ["truncation"]
+    # 존재가 아니라 **값**을 묻는다 — 5건 중 2건 수집이면 유실은 3이다. 어느 하나라도
+    # 어긋나면(총량·수집분·차이) 경고가 알람으로서 쓸모없어진다.
+    error = src.fetch_failures[0]["error"]
+    assert "5건 중 2건 수집" in error and "3건 유실" in error
+    assert "MAX_PAGES(2) 소진" in error  # 왜 멈췄는지 = 캡을 올려 될 일인지 가른다
+
+
+def test_reaching_total_count_is_not_truncation():
+    # WHY: 절단 판정을 '페이지 소진'이 아니라 totalCount 도달로 바꾼 핵심. 캡에 딱 맞게
+    #      끝나도 전량을 받았으면 경고가 없어야 한다 — 안 그러면 알람이 매일 울려 다시
+    #      아무도 안 보는 상태로 돌아간다(종전 구현은 여기서 무조건 경고를 냈다).
+    src = _source({
+        1: _ok([_row("01100101.20260707153000000")], total=2),
+        2: _ok([_row("01100101.20260707153100000")], total=2),
+    }, page_size=1, max_pages=2)
+    records = list(src.fetch([], "2026-07-07", "2026-07-07"))
+
+    assert len(records) == 2
+    assert not src.fetch_failures
+
+
+def test_missing_total_count_is_noted_as_undecidable():
+    # WHY: totalCount 가 판정의 유일한 근거라, 벤더가 그 필드를 빼면 완주했는지 알 길이
+    #      없다. 그 경우를 '완주'로 넘기면 절단이 조용해진다 — 절단이 아니라 **판정 불가**로
+    #      남긴다(Rule 12). 판정 근거가 사라진 것 자체가 알려야 할 사건이다.
+    src = _source({1: json.dumps({"resultList": [_row()]}, ensure_ascii=False)}, max_pages=1)
+    records = list(src.fetch([], "2026-07-07", "2026-07-07"))
+
+    assert len(records) == 1
+    assert [f["kind"] for f in src.fetch_failures] == ["truncation"]
+    assert "totalCount 없음" in src.fetch_failures[0]["error"]
 
 
 def test_disabled_depends_only_on_config():

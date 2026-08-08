@@ -68,6 +68,51 @@ resource "aws_cloudwatch_metric_alarm" "raw_ingest_skipped" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
+# 수집 창이 절단돼 그날 데이터에 구멍이 난 런을 드러낸다(ALPHA-541).
+#
+# **왜 알람이 필요한가**: 절단(kind=truncation)은 의도적으로 성공 취급이다 — 데이터는
+# 유효하고 겹치는 다음 슬롯이 이어받는다는 전제였다(ALPHA-351). 그 전제가 안 통하는 자리가
+# 있다: 하루를 닫는 런이 절단되면 이어받을 다음 창이 없다. 그런데 raw 전량성공 게이트가
+# 없어져(ADR-0030) 절단은 WARNING 한 줄로만 남고, 실제로 **2026-07-24부터 매일 3슬롯 전부
+# 절단된 채 2주간 아무도 모른 채 흘렀다**(ALPHA-541 방치 기간).
+#
+# 패턴이 "수집 절단" 인 이유 — 이 토큰은 `sources/bigkinds.py` 가 **정확한 유실 건수를 아는
+# 경우에만** 낸다(응답의 totalCount 대비 실수집). 다른 수집기의 "MAX_PAGES 도달 — 창 절단
+# **가능**" 은 일부러 뺐다: 그건 절단 여부를 모른다는 추측이라, 알람으로 올리면 확인할 수
+# 없는 경보가 된다. 그 소스들에 같은 정확도를 주는 건 별건이다(그때 이 패턴에 합류시켜라).
+#
+# ⚠️ 문구 토큰 의존이다 — `bigkinds.py` 의 절단 경고 문구를 바꿀 땐 이 필터를 같이 고쳐라
+# (바로 위 raw_ingest_skipped 필터와 같은 취약성). 정상 상태의 기대 발화는 0 이다.
+resource "aws_cloudwatch_log_metric_filter" "collection_truncated" {
+  name           = "${var.name}-collection-truncated"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "\"수집 절단\""
+
+  # namespace 를 var.name 으로 가르는 이유는 raw_ingest_skipped 주석과 동일하다.
+  metric_transformation {
+    name      = "CollectionTruncated"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "collection_truncated" {
+  alarm_name        = "${var.name}-collection-truncated"
+  alarm_description = "수집 창이 절단돼 그 창의 기사 일부가 raw 에 없다 — 런은 exit 0 으로 성공한다. 유실 건수는 경고 본문에 있고, 하루를 닫는 런이면 이어받을 다음 창이 없으므로 구간을 좁혀 재실행할 것."
+  namespace         = "edge/${var.name}"
+  metric_name       = "CollectionTruncated"
+
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # 평상시가 곧 결측이라 notBreaching 이어야 INSUFFICIENT_DATA 로 눌러앉지 않는다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
 resource "aws_security_group" "task" {
   name        = "${var.name}-task"
   description = "data-pipeline raw ingest tasks ${var.name}"

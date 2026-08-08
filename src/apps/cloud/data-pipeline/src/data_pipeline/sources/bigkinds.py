@@ -143,15 +143,27 @@ class BigKindsNewsSource:
         end_date: str,
         fetched_at: str,
     ) -> Iterator[dict]:
-        truncated = True
+        # 절단 판정의 정본은 `totalCount`(응답이 주는 그 창의 전체 건수)다 — 페이지 소진
+        # 여부가 아니다. 종전엔 "MAX_PAGES 를 다 돌았다"를 절단 **가능**으로 올렸는데, 그건
+        # 추측이라 알람으로 못 쓴다(경고가 매일 울려도 몇 건을 잃었는지 아무도 모른다).
+        # totalCount 는 실측으로 정확하다 — 08-04 창의 totalCount 6,355 를 끝까지 훑으면
+        # 64 page 째가 55행이고 65 page 가 빈 페이지다(63×100+55 = 6,355 일치).
+        stop_reason = f"MAX_PAGES({self.max_pages}) 소진"
+        total: int | None = None
+        served = 0
         for page in range(self.max_pages):
             payload = self._search(start_date, end_date, page)
             rows = payload.get("resultList")
             if not isinstance(rows, list):
                 raise ValueError(f"BigKinds resultList 이상: {type(rows).__name__}")
+            if total is None and isinstance(payload.get("totalCount"), int):
+                total = payload["totalCount"]
             if not rows:
-                truncated = False
+                stop_reason = "빈 페이지"
                 break
+            # 벤더가 **내보낸** 행 수다(아래 malformed 스킵과 무관) — 절단은 "우리가 다 읽었나"
+            # 이지 "다 파싱했나"가 아니다. 파싱 실패는 그 자리에서 따로 failure 로 남는다.
+            served += len(rows)
             for row in rows:
                 if not isinstance(row, dict):
                     self._note_failure(f"malformed row: {type(row).__name__}", page=page)
@@ -166,11 +178,19 @@ class BigKindsNewsSource:
             # 페이지가 있는데도 조용히 멈춰 success 로 위장된다(미수집 은폐). 종료는 명시
             # 신호(isLimitPage)나 빈 페이지로만 판정한다 — 비용은 창당 요청 1개 추가뿐.
             if payload.get("isLimitPage"):
-                truncated = False
+                stop_reason = "isLimitPage(벤더 상한)"
                 break
-        if truncated:
+        if total is None:
+            # 판정 근거 자체가 없다 — 벤더가 필드를 뺐거나 형이 바뀐 경우다. 조용히 완주로
+            # 넘기지 않는다(Rule 12): 절단이 아니라 **절단 여부를 모른다**고 남긴다.
             self._note_failure(
-                f"MAX_PAGES({self.max_pages}) 도달 — 창 절단 가능(구간 좁혀 재실행)",
+                f"수집 절단 판정 불가 — totalCount 없음 ({served}건 수집, 중단: {stop_reason})",
+                kind="truncation",
+            )
+        elif served < total:
+            self._note_failure(
+                f"수집 절단 — {total}건 중 {served}건 수집, {total - served}건 유실 "
+                f"(중단: {stop_reason})",
                 kind="truncation",
             )
 
