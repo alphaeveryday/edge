@@ -450,12 +450,17 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-disclosure
 
 # assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
-# assertion_argument 로. argument text 는 엔티티 마스터 완전일치(티커·정식명·종목명)로
-# instrument 에 해소하고, 미해소·충돌은 quality log 에 사유별 수치로 남긴다(해소율 실측).
+# assertion_argument 로. **해소 축은 역할이 정한다**(ALPHA-831) — 온톨로지 identity 표를
+# 읽어 셋으로 갈린다: NONE=instrument 완전일치(티커·정식명·종목명) / REGISTRY=시드된 기관
+# 명부 조회(못 찾아도 채번 안 함) / MINT=멘션에서 결정적 채번. 미해소·충돌은 quality log 에
+# 사유별 수치로 남긴다(해소율 실측).
+# ⚠️ **쓰기 표면이 넷이다**: 채번 경로가 entity(CONCEPT)·concept 마스터 행을 함께 만든다
+# (FK 순서로 argument 보다 먼저). 채번 산식은 entity_resolution.mint_concept **하나**이고
+# assemble-events 도 그걸 부른다 — 갈리면 같은 개념에 ID 가 둘 생긴다.
 # 해소율 분모는 **실체 역할 argument 만**이다(ALPHA-802) — 실체를 가리키지 않는
 # non_entity(TIME·VALUE·TEXT)를 미해소로 세면 분모가 부풀어 마스터 확대의 효과를 못 잰다.
-# ⚠️ 분모에서만 뺀다: 온톨로지가 "적재하지 않는다"고 정한 대상은 event_argument 이고,
-# 이 스텝의 assertion_argument 에는 아직 실린다(걷어내는 건 ALPHA-831).
+# 분자는 **붙은 것 전부**다(resolved+registry_hit+minted) — 07-31 이전 값과 정의가 다르다.
+# non_entity 는 이제 적재도 안 한다(ALPHA-831 — 예전엔 분모에서만 뺐다).
 # 역할 종별 분포·어휘 밖 역할 이름도 같은 로그에 남는다.
 # 멱등: uq_document_assertion_natural(document_id, event_type, predicate) ON CONFLICT.
 # 전무 해소 주장은 넣지 않는다. modality_code 는 어휘 확정 전까지 비운다(ALPHA-361).
@@ -751,7 +756,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   돌아 canonical 풀스캔을 견디지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다 곱해진다
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
-  엔티티 해소·해소율은 quality log 로 남는다
+  역할별 엔티티 해소(ALPHA-831 — 명부·채번 축 포함)와 해소율은 quality log 로 남고,
+  채번 경로는 entity·concept 마스터 행도 만든다
 - `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
   분석엔진 추출 체인의 이식: canonical 뉴스 제목 분류(LLM) → document/assertion/source_event
   계보 조립 → event_thread threading. **배치=catch-up 이다(ALPHA-730)** — event 의 실시간 정본은
