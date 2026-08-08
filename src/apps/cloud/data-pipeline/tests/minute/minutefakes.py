@@ -258,7 +258,13 @@ class _Cursor:
 
             assert "SET lead_text = EXCLUDED.lead_text" in s, \
                 "news_document upsert 가 리드를 갱신하지 않는다"
-            assert "news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text" in s, \
+            # ALPHA-860 — 비교도 falsy 로 한다. 맨 `IS DISTINCT FROM` 은 `NULL ↔ ''` 를
+            # 리드 변경으로 잡아 실질 빈 리드가 승자 축을 선점한다(뿌리는 `normalize_news`
+            # 에서 접었지만, 이미 `''` 로 저장된 레거시 행이 남아 여기도 접어야 한다).
+            assert ("COALESCE(news_document.lead_text, '')" in s
+                    and "COALESCE(EXCLUDED.lead_text, '')" in s), \
+                "빈 리드끼리의 전이가 리드 변경으로 잡힌다 — 빈 자리가 승자 축을 먹는다(ALPHA-860)"
+            assert "IS DISTINCT FROM" in s, \
                 "같은 리드에도 UPDATE 하면 멱등 집계가 거짓이 된다"
             # ALPHA-696 승자 축. 구조로 못박는 이유: 아래 세 가지는 전부 **결과가 같아
             # 보이는 회귀**라 값 단언만으로는 안 걸린다.
@@ -593,7 +599,10 @@ class _Cursor:
                                            "lead_observed_at": insert_stamp}
             self.rowcount = 1
             return
-        if existing["lead_text"] == lead_text:
+        # ⚠️ 비교축은 운영 `WHERE` 와 같이 **falsy 로 접는다**(ALPHA-860) — `COALESCE(…,'')`
+        # 가 `NULL ↔ ''` 를 같은 값으로 보므로 여기서 `==` 만 쓰면 픽스처가 운영보다 관대해져
+        # 그 갈래를 아예 안 밟는 테스트가 된다.
+        if (existing["lead_text"] or "") == (lead_text or ""):
             self.rowcount = 0   # WHERE 가 막는다 — 시각도 안 움직인다
             return
         # 충돌 갱신 갈래 — 리드가 움직였으므로 시각은 **관측 시각 자체**로 찍되,

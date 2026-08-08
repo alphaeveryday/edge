@@ -528,6 +528,20 @@ def test_lead_text_absent_is_none_not_gate_failure(tmp_path):
     assert r["lead_text"] is None
 
 
+def test_whitespace_only_lead_is_absent_not_empty_string(tmp_path):
+    # WHY: 공백뿐인 리드는 **결측과 같은 사실**인데 `" ".join(lead.split())` 은 `""` 를 낸다.
+    # 그 `""` 가 `news_document.lead_text` 로 흘러가면 승자 축(`lead_observed_at`)을 선점해,
+    # 배치가 진짜 스니펫을 갖고 와도 자기 `fetched_at` 이 더 오래됐으면 영구 차단된다
+    # (ALPHA-860). 소비처마다 falsy 가드를 다는 대신 — ALPHA-848 이 두 곳에 달았고 이게
+    # 세 번째 자리였다 — 정규화 경계에서 한 번 접는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row(text="   \t\n  ")])
+    assert normalize_news.run(storage, "RUN1") == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert r["lead_text"] is None, "공백뿐인 리드가 빈 문자열로 남아 축을 선점할 수 있다"
+
+
 # ── 종목명 탐지 매핑 (ALPHA-416) ────────────────────────────
 
 
