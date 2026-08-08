@@ -68,9 +68,12 @@ def wiring(monkeypatch):
     monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-worker,svc-relay,svc-consumer")
     monkeypatch.setenv(session_ops.ENV_GATE_QUEUES, "https://q/price")
     monkeypatch.delenv(session_ops.ENV_DRAIN_TIMEOUT, raising=False)
-    # 기본은 단일(가격) 레인 — 뉴스 편입 케이스는 개별 테스트가 명시로 켠다
-    monkeypatch.delenv(session_ops.ENV_NEWS_SOURCE_GROUP, raising=False)
-    monkeypatch.delenv(session_ops.ENV_NEWS_WORKER_SERVICES, raising=False)
+    # 기본은 단일(가격) 레인 — 선택 레인 편입 케이스는 개별 테스트가 명시로 켠다.
+    # ⚠️ 표(_OPTIONAL_LANES)에서 돌려 지운다 — 레인을 늘리며 여기 한 줄을 빠뜨리면 호스트
+    # env 가 새어 테스트 결과가 개발자 환경에 따라 갈린다(그 상태가 가장 늦게 발견된다).
+    for _lane in session_ops._OPTIONAL_LANES:
+        monkeypatch.delenv(_lane.source_env, raising=False)
+        monkeypatch.delenv(_lane.services_env, raising=False)
     monkeypatch.setattr(
         session_ops, "_scale",
         lambda *, desired, force, services=None: ecs.update_service(
@@ -293,6 +296,78 @@ def test_non_finite_timeout_is_rejected(monkeypatch, raw):
     monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, raw)
     with pytest.raises(SystemExit):
         session_ops._drain_timeout_sec()
+
+
+class TestDisclosureLane:
+    """공시 세션 편입(ALPHA-875) — 뉴스와 **같은 축**이다. 두 레인이 표 하나를 도므로 여기서
+    보는 것은 "공시가 그 표에 제대로 들어갔나"이고, 축 자체의 반례는 TestNewsLane 이 든다."""
+
+    def test_두_선택_레인이_함께_계획되고_각자_목록으로_올라간다(self, monkeypatch, wiring):
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_SOURCE_GROUP, "dart")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_WORKER_SERVICES, "svc-disclosure-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        calls = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: calls.append(k) or 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss",
+            universe="s3://b/u.json")
+
+        assert rc == 0
+        assert [c["dataset"] for c in calls] == [
+            "price_minute", "news_minute", "disclosure_minute"]
+        # 공시도 유니버스를 쓰지 않는다(소스 단위 — 유니버스는 기대 집합이 아니라 필터다)
+        assert calls[2]["source_group"] == "dart" and calls[2]["universe"] is None
+        assert wiring.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
+            {"desiredCount": 1, "forceNewDeployment": True,
+             "services": ["svc-disclosure-worker"]},
+        ], "각 생산자는 자기 세션이 선 뒤 자기 목록으로만 올라간다"
+
+    def test_공시_계획_실패는_공시_워커만_막는다(self, monkeypatch, wiring):
+        """레인이 둘이 되면서 생긴 축 — 한 레인의 실패가 **다른 선택 레인**까지 막으면
+        안 된다(뉴스 실패가 가격을 안 막는 것과 같은 이유, 한 겹 더)."""
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_SOURCE_GROUP, "dart")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_WORKER_SERVICES, "svc-disclosure-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        monkeypatch.setattr(
+            session_ops, "plan_session_cli",
+            lambda settings, **k: 2 if k["dataset"] == "disclosure_minute" else 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss",
+            universe="s3://b/u.json")
+
+        assert rc == 2, "공시 실패가 exit 에 실려야 스케줄 기록에 남는다"
+        assert wiring.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
+        ], "뉴스는 올라가고 공시만 안 올라간다"
+
+    def test_토글이_꺼져도_떠_있는_서비스는_내린다(self, monkeypatch, wiring):
+        """어제 켜고 오늘 끈 경우 — 토글로 스케일다운을 가두면 그 서비스를 아무도 안 내려
+        계속 돈다(세션 없이 도는 Worker 는 기동 거부 루프다)."""
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_WORKER_SERVICES, "svc-disclosure-worker")
+        monkeypatch.delenv(session_ops.ENV_DISCLOSURE_SOURCE_GROUP, raising=False)
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+        ledger = FakeLedger(["DRAINED"])
+        ledger.request_drain = lambda *, session_id, now: True
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+
+        rc = session_ops.stop_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss")
+
+        assert rc == 0
+        assert {"desiredCount": 0, "forceNewDeployment": False,
+                "services": ["svc-disclosure-worker"]} in wiring.calls
 
 
 class TestNewsLane:

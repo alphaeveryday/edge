@@ -518,7 +518,16 @@ module "data_pipeline" {
   # 병행 신설(ALPHA-722)은 DISABLED 로 세워 plan 으로 검증했다(뉴스 레인 553 PR1→PR2 와 같은 순서).
   # ⚠️ 이 스케줄이 켜지면 `OPS_DISCLOSURE_SCHED_HHMM` 도 함께 주입된다(ops_ledger.tf 조건부) —
   # 그때부터 Reconciler 가 공시 슬롯 결측을 판정한다.
-  disclosure_schedule_state = "ENABLED"
+  #
+  # ── 두 번째 컷오버(ALPHA-875): SFN 10슬롯 → 1분 레인 ──
+  # 724 가 시장 SFN → 공시 SFN 으로 옮긴 그 스텝들을 이제 **1분 세션**이 소유한다. 같은
+  # 이유로 같은 apply 다: 두 레인의 CLI 가 글자 그대로 같아, 한쪽만 먼저 가면
+  # `catalog.by_cli` 가 먼저 온 엔트리를 돌려줘 한쪽이 영구 MISSED 가 된다.
+  # 🔴 **순서는 Worker → 스케줄이다.** 스케줄을 먼저 내리면 그 사이 매 거래일이 공시 전건
+  # 결손인데 EOD QC 는 `ok=True`·exit 0 으로 확정한다(MISSING 은 위반이 아니라 판정 결과다).
+  # 그래서 이 apply 는 `minute_session_disclosure_source_group`(= 1분 레인 켜기)과
+  # 아래 DISABLED 가 **한 트랜잭션**이어야 한다.
+  disclosure_schedule_state = "DISABLED"
 
   # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
   # ENABLED 라 이 줄은 **명시일 뿐 값을 바꾸지 않는다** — 그래도 적는 이유는 위 두 레인과 나란히
