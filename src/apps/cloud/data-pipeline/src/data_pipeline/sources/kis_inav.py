@@ -48,11 +48,15 @@ TR_ID_NAV_MINUTE = "FHPST02440100"
 PATH_NAV_MINUTE = "/uapi/etfetn/v1/quotations/nav-comparison-time-trend"
 # 일별(kis_nav.MARKET_DIV="J")과 갈린다 — 실측으로 확정한 값이다. 바꾸면 전건 rt_cd=2.
 MARKET_DIV_INAV = "E"
-# FID_HOUR_CLS_CODE(초). 1콜=30행 고정이라 조회 창 = 이 값 × 30.
-# 60(=1분, 창 30분)에서 시작한다 — 갱신 주기가 30초 이하인 것까지만 실측으로 확정됐고,
-# 그보다 잘게 의미가 있는지는 장중 cls=1 측정이 정한다(ALPHA-556 열린 결정).
+# FID_HOUR_CLS_CODE(초). 1콜=30행이라 조회 창 = 이 값 × 30.
+# ⚠️ **초 단위 임의값이 아니다.** 벤더 문서의 어휘는 `60:1분, 180:3분, …, 7200:120분` —
+# 즉 **분 단위**이고 하한이 60 이다. 초기 실측에서 1·5·10·15·30 이 "수용됐다"는 관측이
+# 있었지만 수용은 정의된 동작이 아니다(어휘 밖 값에 벤더가 무엇을 하는지 미정의).
 DEFAULT_INTERVAL_SEC = 60
-ROWS_PER_CALL = 30  # 응답 고정 행 수(실측) — 창 = interval_sec × 이 값.
+MIN_INTERVAL_SEC = 60  # 벤더 문서 어휘의 하한(=1분)
+# 응답 행 수. **문서화된 계약**이다 — "실전계좌의 경우, 한 번의 호출에 최근 30건까지".
+# ⚠️ 단서가 "실전계좌"라 모의계좌는 다를 수 있다.
+ROWS_PER_CALL = 30
 # 행 식별에 필요한 필드 — 시각 축(bsop_hour)과 값(nav). 없으면 저장해도 못 쓴다.
 REQUIRED_ROW_FIELDS = ("bsop_hour", "nav")
 
@@ -177,9 +181,13 @@ class KisInavSource(KisNavSource):
         # 일별 NAV 와 같은 KIS 자격증명·유니버스를 쓴다(kis_nav.source 재사용) — 같은 벤더의
         # 같은 계정이라 섹션을 쪼개면 앱키가 두 곳에서 갱신돼야 한다.
         super().__init__(config, etf_map, client)
-        if interval_sec < 1:
-            # KIS 가 0·음수에 무엇을 돌려주는지 모른다 — 확인 안 된 값을 흘려보내지 않는다.
-            raise ValueError(f"interval_sec 은 1 이상이어야 한다: {interval_sec}")
+        if interval_sec < MIN_INTERVAL_SEC:
+            # 어휘 밖 값에 KIS 가 무엇을 돌려주는지 **정의돼 있지 않다**. 수용되더라도
+            # 그 응답의 의미를 우리가 단언할 수 없어, 확인 안 된 값을 흘려보내지 않는다.
+            raise ValueError(
+                f"interval_sec 은 {MIN_INTERVAL_SEC} 이상이어야 한다(벤더 어휘 "
+                f"60:1분·180:3분·…·7200:120분): {interval_sec}"
+            )
         self.interval_sec = interval_sec
 
     @property

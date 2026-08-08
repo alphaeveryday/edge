@@ -75,11 +75,11 @@ def test_시장코드는_E_다_일별의_J_가_아니다():
 def test_간격이_KIS_파라미터로_전달된다():
     """간격이 곧 조회 창(간격×30)이라 배선이 끊기면 폴링 주기와 창이 어긋나 갭이 난다.
     iNAV 는 소급이 안 돼 그 갭이 영구 유실이다."""
-    src = _source({"069500": _ok([LIVE_ROW])}, interval_sec=10)
+    src = _source({"069500": _ok([LIVE_ROW])}, interval_sec=180)
     list(src.fetch())
 
-    assert src.client.queries[0]["FID_HOUR_CLS_CODE"] == ["10"]
-    assert src.window_sec == 300  # 10초 × 30행 = 5분치
+    assert src.client.queries[0]["FID_HOUR_CLS_CODE"] == ["180"]
+    assert src.window_sec == 5400  # 180초(3분) × 30행 = 90분치
 
 
 def test_날짜_파라미터를_싣지_않는다():
@@ -97,10 +97,10 @@ def test_날짜_파라미터를_싣지_않는다():
 def test_간격이_행에_각인된다():
     """같은 bsop_hour 라벨이라도 간격이 다르면 값이 다르다(실측) — 이 필드가 없으면
     후속 canonical 의 자연키가 간격을 바꾸는 순간 조용히 덮어쓴다."""
-    src = _source({"069500": _ok([LIVE_ROW])}, interval_sec=30)
+    src = _source({"069500": _ok([LIVE_ROW])}, interval_sec=180)
     records = list(src.fetch())
 
-    assert records[0]["interval_sec"] == 30
+    assert records[0]["interval_sec"] == 180
 
 
 def test_원본_행을_무변형_보존하고_provenance_를_붙인다():
@@ -119,7 +119,7 @@ def test_원본_행을_무변형_보존하고_provenance_를_붙인다():
     assert records[0]["fetched_at"]
 
 
-@pytest.mark.parametrize("bad", [0, -1])
+@pytest.mark.parametrize("bad", [0, -1, 1, 30, 59])
 def test_간격이_1_미만이면_생성에서_막는다(bad):
     """KIS 가 0·음수에 무엇을 주는지 확인된 바 없다 — 미확인 값을 조용히 흘리지 않는다."""
     with pytest.raises(ValueError, match="interval_sec"):
