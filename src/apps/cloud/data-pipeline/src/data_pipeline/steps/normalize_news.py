@@ -196,7 +196,14 @@ def _normalize(vendor: str, record: dict) -> dict:
         # 안 나오는 기사가 많다. BigKinds CONTENT 는 200~256자 스니펫이고 FMP text 는 더 길 수
         # 있는데, 여기선 자르지 않고 온 만큼 보존한다(절단 기준은 소비처가 정한다). 본문 전문
         # 크롤은 여전히 범위 밖 — 리드는 이미 raw 에 있어 공짜다.
-        "lead_text": " ".join(lead.split()) if lead else None,
+        # ⚠️ 끝의 `or None` 이 **실질 빈 리드를 없는 리드로 접는다**(ALPHA-860). 공백뿐인
+        # CONTENT 는 `" ".join([])` 로 `""` 가 되는데, 그 `""` 가 `news_document.lead_text`
+        # 에 실리면 승자 축(`lead_observed_at`)을 선점해 배치가 진짜 스니펫을 갖고 와도 영구
+        # 차단된다 — 소비처마다 falsy 가드를 다는 대신(ALPHA-848 이 두 곳, 860 이 세 번째
+        # 자리였다) 경계에서 한 번 접는다.
+        # ⚠️ 윗줄 `title` 은 이 접기가 필요 없다 — `quality.validate_news_meta` 의
+        # `missing_title` 이 `_blank()` 로 **blocking** 판정해 그 job 자체가 안 흐른다.
+        "lead_text": " ".join((lead or "").split()) or None,
         "mentions": _mentions(record, market),
         "fetched_at": _text(record, "fetched_at"),
     }

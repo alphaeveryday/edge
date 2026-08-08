@@ -118,7 +118,12 @@
 > **`GREATEST` 로 앞으로만** 간다(ALPHA-858) — 두 축 다 단조다. 그래서 `lead_observed_at`
 > 은 엄밀히는 *관측 시각의 상한*이고, 마이그레이션의 정의문("지금 저장된 리드 상태를 누가
 > 언제 관측했는가")은 역행 관측이 낀 경우를 모른다. 적용된 마이그레이션은 수정하지 않으므로
-> 그 예외는 여기와 `canonical_news.py` 리드 UPSERT 주석에 있다),
+> 그 예외는 여기와 `canonical_news.py` 리드 UPSERT 주석에 있다.
+> ⚠️ **비교축도 falsy 로 접는다**(ALPHA-860) — `NULL ↔ ''` 는 움직임이 아니다. 뿌리는
+> `normalize_news` 가 공백뿐인 리드를 `None` 으로 접는 것이고(그래서 canonical `lead_text`
+> 는 결코 빈 문자열이 아니다 — 하류가 기대도 되는 불변식이다), 충돌 갈래의 `COALESCE` 는
+> 레이크·PG 에 남은 옛 `''` 행 때문에 있다. 마이그레이션 ②가 "지워지는 것도 움직임"이라고
+> 열거한 것은 이 예외를 모른다),
 > **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
 > `run drain-minute-session`. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
@@ -937,7 +942,8 @@ settings.targets.keywords            # ["금리", ...]
   인덱스 상태는 quality_log 에 남는다.
   FMP 는 ingest 병합 mentions[] 그대로(영문 기사라 한글 이름 탐지 무의미).
   `lead_text` 는 벤더 리드(BigKinds `CONTENT` 200~256자 스니펫·FMP `text`)를 자르지 않고 통과시킨
-  것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님). 본문 전문 크롤은 범위 밖이다.
+  것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님. **공백뿐이어도 NULL 로 접는다**,
+  ALPHA-860 — 그래서 canonical `lead_text` 는 결코 빈 문자열이 아니다). 본문 전문 크롤은 범위 밖이다.
 - **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
   에 태깅 결과를 **article_id 키로 멱등 병합**(입력 canonical 과 같은 파티션 축이라 한 canonical
   파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제). **canonical 이 아니라 feature

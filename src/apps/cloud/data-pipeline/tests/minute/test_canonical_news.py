@@ -101,19 +101,43 @@ class TestCorrection:
         assert db.news_documents[document["document_id"]]["lead_observed_at"] is None
 
     def test_whitespace_only_lead_claims_nothing(self):
-        # ALPHA-848 — 위 테스트의 구멍. 정본 정규화(`normalize_news:199`)는
-        # `" ".join(lead.split())` 이라 공백뿐인 리드에 **`None` 이 아니라 `""`** 를 낸다.
-        # `is None` 으로 가르면 실질 빈 리드가 축을 선점해, 배치가 진짜 스니펫을 갖고 와도
-        # 자기 `fetched_at` 이 더 오래됐으면 영구 차단된다 — 위 테스트가 막으려던 바로
-        # 그 상태가 `""` 로 우회된다. 배치는 `if doc["lead_text"]` 라 `""` 를 쓰지도 않아
-        # 아무도 그 자리를 채우지 못한다.
+        # ALPHA-848 — 위 테스트의 구멍이었다. 실질 빈 리드가 축을 선점하면 배치가 진짜
+        # 스니펫을 갖고 와도 자기 `fetched_at` 이 더 오래됐으면 영구 차단된다.
+        # ⚠️ 막는 층이 ALPHA-860 에서 **경계로 옮겨졌다** — 정규화가 `or None` 으로 접으므로
+        # 여기까지 `""` 가 오지 않는다. 이 테스트는 이제 그 접기가 1분 경로에도 적용되는지를
+        # 지킨다(`_normalize` 를 배치와 공유한다는 사실이 깨지면 여기서 걸린다).
         db = FakeMinuteDB()
         write(db, vendor_row(CONTENT="   "))
 
         document = db.documents[(SOURCE, ARTICLE_ID)]
         row = db.news_documents[document["document_id"]]
-        assert not row["lead_text"], "공백 리드가 실질 값으로 저장됐다(전제가 깨졌다)"
+        assert row["lead_text"] is None, "공백 리드가 정규화 경계에서 안 접혔다(ALPHA-860)"
         assert row["lead_observed_at"] is None
+
+    def test_a_legacy_empty_string_lead_is_not_reclaimed_by_absence(self):
+        # ALPHA-860 — 뿌리(`normalize_news` 의 `or None`)는 **레거시를 못 고친다.** 마이그레이션
+        # 이전에 `""` 로 저장된 행은 그대로 남는데, 거기에 결측 리드가 오면 `IS DISTINCT FROM`
+        # 이 `'' → NULL` 을 움직임으로 잡아 시각을 **다시** 찍는다. 그러면 배치가 진짜 스니펫을
+        # 갖고 와도 차단 기간만 연장된다. 빈 것에서 빈 것으로 가는 건 움직임이 아니다.
+        db = FakeMinuteDB()
+        write(db, vendor_row())                                  # 진짜 리드 → 시각 = OBSERVED
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        news = db.news_documents[document["document_id"]]
+        news["lead_text"] = ""                                   # 레거시 형상을 손으로 만든다
+
+        later = datetime(2026, 7, 31, 14, 0, tzinfo=KST)
+        written = write(db, vendor_row(CONTENT=None), observed_at=later)   # 결측 리드가 온다
+        assert written == 0, "아무것도 안 썼는데 썼다고 센다 — 반환 계약이 거짓말한다"
+
+        news = db.news_documents[document["document_id"]]
+        assert news["lead_observed_at"] == OBSERVED, \
+            "빈 리드끼리의 전이가 축을 다시 선점했다(ALPHA-860)"
+        # ⚠️ 옆 축도 같이 지킨다. `lead_changed` 를 안 접으면 `None != ''` 가 참이 되어
+        # 리드 보정이 `available_at` 을 앞으로 민다 — 게다가 위 `COALESCE` 가 UPDATE 를
+        # 막아 `previous_lead` 가 영원히 `''` 라 재입고마다 반복하고 수렴하지 않는다.
+        # `available_at` 은 PIT 클램프 축이라 그만큼 as-of 구간에서 문서가 사라진다.
+        assert db.documents[(SOURCE, ARTICLE_ID)]["available_at"] == OBSERVED, \
+            "리드가 안 움직였는데 도달 시각이 밀렸다(ALPHA-860)"
 
     def test_clearing_an_existing_lead_is_a_claim(self):
         # 반대쪽 — 있던 리드를 지우는 정정은 **지금 알게 된 사실**이다. 여기서 시각이 안 남으면

@@ -213,11 +213,15 @@ class PgNewsCanonicalWriter:
         #    ⚠️ 충돌 갈래는 `EXCLUDED.lead_observed_at` 이 아니라 **관측 시각 자체**를
         #    쓴다. `EXCLUDED` 를 물려받으면 리드를 지우는 정정에서 시각이 NULL 로 지워져,
         #    배치의 `IS NULL` 절이 열리고 옛 리드가 복원된다.
-        #    ⚠️ 가르는 축은 `is None` 이 아니라 **falsy** 다(ALPHA-848). 정본 정규화
-        #    (`normalize_news:199`)가 `" ".join(lead.split())` 이라 공백뿐인 리드는
-        #    `None` 이 아니라 `""` 를 낸다. `is None` 으로 가르면 실질 빈 리드에 시각이
-        #    찍혀, 배치가 진짜 스니펫을 갖고 와도 자기 `fetched_at` 이 더 오래됐으면
-        #    영구 차단된다 — 이 규칙이 막으려던 바로 그 상태다.
+        #    ⚠️ 가르는 축은 `is None` 이 아니라 **falsy** 다(ALPHA-848). 한때 정본 정규화가
+        #    공백뿐인 리드에 `None` 이 아니라 `""` 를 냈고, `is None` 으로 가르면 실질 빈
+        #    리드에 시각이 찍혀 배치가 진짜 스니펫을 갖고 와도 영구 차단됐다.
+        #    ⭐ **그 `""` 는 이제 안 온다** — ALPHA-860 이 `normalize_news`(`lead_text` 항목,
+        #    `or None`)에서 접었다. 그래서 여기 falsy 는 지금 `is not None` 과 동치이고
+        #    **순수 방어층**이다. 되돌리지는 마라: 축을 좁히면 뿌리가 다시 새는 날 여기서
+        #    안 걸린다. 아직 살아 있는 falsy 경로는 레거시를 보는 둘이다 — 아래 ④의 SQL
+        #    접기(PG 의 옛 `''` 행)와 `load_documents` 의 `if doc["lead_text"]`(레이크 구
+        #    파티션의 `''`).
         # ③ **시각은 `GREATEST` 로 앞으로만 간다**(ALPHA-858). 마이그레이션 계약 ③의 ⭐
         #    문단이 남긴 후속이다 — 그 파일의 "후속 코드 PR 이 이어받는 것 셋" 목록이 아니다
         #    (그 셋은 원시 `fetched_at` 적재·quality_log 카운터·수용한 거래 하나이고, 앞의
@@ -262,6 +266,15 @@ class PgNewsCanonicalWriter:
         #    카운터를 붙였다 — "안 세면 볼 계기가 없다"). 침묵을 택한 것이지 없는 게 아니다.
         #    붙일 거면 `RETURNING lead_observed_at` 이 반환값 != `observed_at` 을 왕복 추가
         #    없이 준다. ALPHA-858 에서 범위 밖으로 뒀다.
+        # ④ **비교도 falsy 로 한다**(ALPHA-860). `IS DISTINCT FROM` 만 쓰면 `NULL ↔ ''` 가
+        #    리드 변경으로 잡혀 실질 빈 리드가 시각을 찍는다 — ②가 막으려던 상태가 그대로
+        #    난다. `COALESCE(...,'')` 로 양쪽을 접으면 그 전이만 죽고, `real → NULL`·
+        #    `real → ''`(진짜 지우는 정정)과 `NULL → real`·`'' → real`(진짜 붙는 정정)은
+        #    그대로 발화한다. 빈 것에서 빈 것으로 가는 건 '움직임'이 아니다.
+        #    ⚠️ 뿌리는 `normalize_news` 의 `lead_text` 항목에서 접었다(`or None`). 여기가
+        #    여전히 필요한 건
+        #    **레거시** 때문이다 — 이미 `''` 로 저장된 행이 `None` 으로 정정될 때 재스탬프되는
+        #    것을 이 절이 막는다. 뿌리만으로는 그 행을 못 건드린다.
         _insert_stamp = observed_at if normalized["lead_text"] else None
         cur.execute(
             """
@@ -271,7 +284,8 @@ class PgNewsCanonicalWriter:
             ON CONFLICT (document_id) DO UPDATE
             SET lead_text = EXCLUDED.lead_text,
                 lead_observed_at = GREATEST(news_document.lead_observed_at, %s)
-            WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text
+            WHERE COALESCE(news_document.lead_text, '')
+                  IS DISTINCT FROM COALESCE(EXCLUDED.lead_text, '')
             """,
             (
                 normalized["lead_text"], _insert_stamp,
@@ -283,7 +297,13 @@ class PgNewsCanonicalWriter:
         # 자식 행이 없던 문서(배치가 리드 없이 넣은 형상)의 previous_lead 는 None 이므로,
         # NULL 리드를 처음 만드는 건 변경이 아니고(도착 시각이 안 움직인다) 실제 리드가
         # 처음 붙는 건 변경이다(움직인다 — 그 리드는 지금 알게 된 것이다).
-        lead_changed = normalized["lead_text"] != previous_lead
+        # ⚠️ 비교축은 위 SQL `WHERE` 와 **같이 접는다**(ALPHA-860). 안 접으면 레거시 `''` 행에
+        # 결측 리드가 올 때 `None != ''` 로 참이 되어 아래 보정이 `available_at` 을 앞으로
+        # 민다 — 리드는 안 움직였는데 문서 도달 시각만 미래로 간다. 게다가 위 `COALESCE` 가
+        # 그 UPDATE 를 막으므로 `previous_lead` 는 영원히 `''` 라 **재입고마다 반복**하고
+        # 수렴하지 않는다. `available_at` 은 PIT 클램프 축이라(`v_news`·`assemble_events`·
+        # `load_assertions` 가 복사) 그만큼 as-of 구간에서 문서가 사라진다.
+        lead_changed = (normalized["lead_text"] or "") != (previous_lead or "")
         if lead_changed and not changed:
             # 리드만 바뀐 정정이다 — 그래도 도착 시각은 따라가야 한다(내용이 바뀌었으므로).
             # document 의 비교 절은 리드를 못 보기 때문에 여기서 맞춘다.
