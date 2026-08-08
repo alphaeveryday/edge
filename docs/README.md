@@ -30,6 +30,8 @@
 | [architecture/information-architecture.md](architecture/information-architecture.md) | **[뷰]** 콘솔 정보구조 트리(위젯·고객사·슈퍼어드민) | 콘솔 IA를 훑을 때 (상세: console-ia) |
 | [architecture/cloud-architecture.md](architecture/cloud-architecture.md) | **[뷰]** AWS 클라우드 인프라 구성도 | 클라우드 배치를 훑을 때 (상세: infra/terraform/README·adr/0034·0028) |
 | [analysis-engine/ontology/ontology-system-spec.md](analysis-engine/ontology/ontology-system-spec.md) | 온톨로지 4층·선언 규칙·로더 게이트·DB 사상 SSOT | 온톨로지 리소스·로더·소비자를 변경할 때 |
+| [design/data-source-unification-spec.md](design/data-source-unification-spec.md) | 분석 소비 데이터 표면 전수표·존 통일 원칙·백필→포워드 전환 목록·수집 파이프라인 스펙 (ALPHA-879) | 데이터 소스를 새로 상시화하거나 수작업 백필을 정리할 때 |
+| [design/open-source-backfill.md](design/open-source-backfill.md) | 오픈소스 백필 수집 방법 기록 (2026-08-02 일회성 — 적재 규약·벤더 함정) | 그 백필 데이터의 출처·함정이 궁금할 때 |
 
 > **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
 
