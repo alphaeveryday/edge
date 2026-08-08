@@ -53,6 +53,12 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
             raise ValueError("요청창 설명에는 instrument_id·window_start·window_end가 필요하다")
         facts = window_facts(
             lake, etf, instrument_id, day, window_start, window_end, roll=roll)
+        stats, causal = _window_paneltest(lake, instrument_id, day, ask, facts)
+        if stats or causal:
+            import dataclasses
+            facts = dataclasses.replace(
+                facts, statistics=facts.statistics + stats,
+                causal=facts.causal + causal)
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
@@ -137,6 +143,92 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
     if ask is None:
         return honest
     return _dual(lake, roll, r, day, honest, ask, split, imps)
+
+
+def _no_apply_reason(r) -> str:
+    """성립했으나 `applies_today` 가 아닌 사유. `EdgeReport.applies_today` 의
+    조건과 거울이다 - 여기가 갈리면 산문이 판정과 다른 사유를 말한다."""
+    if not r.assignable:
+        return "몫 배정 비지원"
+    if r.null_kind == "date":
+        return "날짜 귀무 - 귀속 자격 없음"
+    if not r.cond_measurable:
+        return "조건 오늘 측정불가 (결측은 충족이 아니다)"
+    if r.cond_satisfied is False:
+        return "오늘 조건 미충족"
+    if r.reduction.startswith("불일치"):
+        return f"환원 검사 {r.reduction}"
+    if r.trigger_fired is False:
+        return r.trigger_note or "오늘 방아쇠 미발화"
+    return "오늘 적용 요건 미충족"
+
+
+def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
+                      ) -> tuple[tuple, tuple[str, ...]]:
+    """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → (statistics, causal).
+
+    계약 세 줄:
+      1. LLM 은 **제안만** 한다 - 판정은 `edge_gate`·`applies_today`(코드)다.
+         LLM 출력이 검정을 우회해 산문에 직행하는 경로는 없다: statistics 에
+         실리는 claim 도 닫힌 어휘 슬롯의 결정론 조합이다.
+      2. **유의(성립 + 오늘 적용)만** StatisticFact 로 승격한다. 불성립·판정불가·
+         적용불가는 causal 라인에 **사실로 명시**한다(Rule 12) - 숨기지 않는다.
+      3. 방아쇠 재료(창 안 사건 타입 또는 오늘 발화 계열족)가 없으면 LLM 을
+         부르지 않는다 - 재료 없는 가설은 소원이고, 호출 자체가 비용이다.
+    """
+    if ask is None:
+        return (), ()
+    from .hypothesize import propose
+    from .interval import StatisticFact, _etypes
+    from .paneltest import FEATURES, Z_ANOM, edge_tests, series_z
+
+    try:
+        ets = _etypes(lake, list(facts.event_ids))
+    except Exception:                           # noqa: BLE001 - 부재는 빈 목록
+        ets = []
+    try:
+        fired = sorted(f for f, z in series_z(lake, instrument_id, day).items()
+                       if abs(z) >= Z_ANOM)
+    except Exception:                           # noqa: BLE001 - 부재는 빈 목록
+        fired = []
+    if not ets and not fired:
+        return (), ()
+
+    brief = (f"[셀] {facts.ticker} {facts.name} · {day} "
+             f"요청창 {facts.window_start}~{facts.window_end} "
+             f"수익 {facts.window_return * 100:+.2f}%\n"
+             f"창 안 사건 타입: {ets or '없음'} · 오늘 발화 계열족: {fired or '없음'}")
+    try:
+        tuples, rejected = propose(ask, facts=brief, event_types=ets,
+                                   measurable=sorted(FEATURES),
+                                   series_families=fired)
+    except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
+        return (), (f"가설 제안 실패 — {type(e).__name__}: {str(e)[:80]}",)
+    if not tuples:
+        return (), ("검정할 유효 가설이 없다 — "
+                    + (f"제안 전부 거부됨 ({len(rejected)}건)" if rejected
+                       else "가설이 제안되지 않았다"),)
+
+    stats: list[StatisticFact] = []
+    causal: list[str] = []
+    for t, r in edge_tests(lake, tuples, day, cell_instrument_id=instrument_id):
+        claim = (f"{t.trigger.ident} 방아쇠 × {t.channel} × "
+                 f"노출 {t.exposure.ident}/{t.exposure.transform} ({t.layer}층)")
+        if r.verdict == "성립" and r.applies_today:
+            stats.append(StatisticFact(
+                claim=f"{claim} — 패널 검정 성립, 오늘 적용.", n=r.n,
+                effect=(None if r.effect_high is None
+                        else r.effect_high - r.effect_low), p=r.p))
+            causal.append(f"{claim}: 성립 (n={r.n}, p={r.p:.4f}) · 오늘 적용")
+        elif r.verdict == "성립":
+            causal.append(f"{claim}: 패널에서는 성립했으나 오늘 적용 불가 — "
+                          + _no_apply_reason(r))
+        elif r.verdict == "불성립":
+            causal.append(f"{claim}: 유의하지 않았다 "
+                          f"(n={r.n}, p={r.p:.4f}) — 영향 없음이 아니라 못 가름")
+        else:
+            causal.append(f"{claim}: 판정불가 — {r.reason or '사유 미상'}")
+    return tuple(stats), tuple(causal)
 
 
 def _dual(lake, roll, r, day: str, honest: str, ask, split=None,

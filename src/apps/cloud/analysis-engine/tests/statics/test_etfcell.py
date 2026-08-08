@@ -133,6 +133,101 @@ def test_model_cannot_replace_the_final_explanation(monkeypatch):
     assert "삼성전자" not in text
 
 
+def _tuple():
+    from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple,
+                                             Trigger)
+    return HypothesisTuple(
+        conditions=(), trigger=Trigger("점", "CONTRACT.SIGNING"),
+        channel="Q수량", exposure=ExposureSource("속성", "거래량", "수준"),
+        outcome="수익률", layer="고유")
+
+
+def _wire(monkeypatch, reports):
+    """요청창 갈래에 가설→검정 사슬을 스텁으로 배선한다. 판정(EdgeReport)만 주입 -
+    승격·명시 규율은 실제 코드(`_window_paneltest`)가 돈다."""
+    import dataclasses
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(
+        _facts(), final_lines=(), event_ids=("e1",),
+        disclosures=("10:31, 공급계약 공시",))
+    monkeypatch.setattr(etfcell, "window_facts", lambda *a, **k: facts)
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {})
+    tup = _tuple()
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda ask, **kw: ([tup] * len(reports), []))
+    monkeypatch.setattr("edge_analysis.statics.paneltest.edge_tests",
+                        lambda lake, tuples, day, cell_instrument_id="":
+                        [(tup, r) for r in reports])
+
+    meta = {}
+    text = etfcell.run(
+        object(), "091160", "2026-08-05", lambda *_: {},
+        instrument_id="iid", window_start="10:40", window_end="13:20",
+        window_meta=meta)
+    return text, meta
+
+
+def _block_kinds(meta):
+    return [block["kind"] for block in meta["blocks"]]
+
+
+def test_significant_and_applicable_verdict_reaches_statistics(monkeypatch):
+    """성립 + 오늘 적용만 StatisticFact 로 승격돼 산문에 실린다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    text, meta = _wire(monkeypatch, [
+        EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9)])
+
+    assert "statistics" in _block_kinds(meta)
+    assert "CONTRACT.SIGNING 방아쇠 × Q수량" in text
+    assert "효과 +1.50%p" in text and "p=0.0010" in text
+    assert "성립 (n=120, p=0.0010) · 오늘 적용" in text
+
+
+def test_insignificant_hypothesis_is_stated_not_promoted(monkeypatch):
+    """비유의는 산문에 '유의하지 않았다' 로 **명시**되고, 통계 블록에는 못 오른다.
+    비유의 가설이 StatisticFact 로 실리면 이 테스트가 깨져야 한다(Rule 9)."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    text, meta = _wire(monkeypatch, [
+        EdgeReport("불성립", 120, 0.4, 0.01, -0.002, 0.5)])
+
+    assert "statistics" not in _block_kinds(meta)
+    assert "유의하지 않았다 (n=120, p=0.4000)" in text
+    assert "영향 없음이 아니라 못 가름" in text
+    assert "· 오늘 적용" not in text
+
+
+def test_undecidable_never_masquerades_as_significant(monkeypatch):
+    """판정불가는 사유와 함께 판정불가로 남는다 - 유의로 위장하면 깨진다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    text, meta = _wire(monkeypatch, [
+        EdgeReport("판정불가", 10, None, None, None, None,
+                   reason="패널 표본 n=10 < 30 - 백필이 필요하다")])
+
+    assert "statistics" not in _block_kinds(meta)
+    assert "판정불가 — 패널 표본 n=10 < 30" in text
+    assert "· 오늘 적용" not in text and "효과" not in text
+
+
+def test_established_but_inapplicable_stays_out_of_statistics(monkeypatch):
+    """패널 성립이어도 오늘 조건 미충족이면 승격되지 않고 그 사실이 명시된다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    text, meta = _wire(monkeypatch, [
+        EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9,
+                   cond_satisfied=False)])
+
+    assert "statistics" not in _block_kinds(meta)
+    assert "패널에서는 성립했으나 오늘 적용 불가 — 오늘 조건 미충족" in text
+
+
 def test_missing_layers_raise_instead_of_returning_prose():
     """**부재는 예외로 말한다.**
 
