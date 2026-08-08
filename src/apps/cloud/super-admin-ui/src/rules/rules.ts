@@ -543,6 +543,7 @@ export const RULES: Rule[] = [
     dep: null,
     source: 'DB_LEDGER',
     canRun: (f) => f.minute != null,
+    axis: 'minute',
     /* 임계값이 없다 — 이 사실 자체가 위반이다. 1분 레인은 끊기면 그 시간의 데이터가 영구 결손이라
      * "몇 건부터"를 둘 자리가 없다. */
     run: (f) =>
@@ -578,6 +579,7 @@ export const RULES: Rule[] = [
     dep: null,
     source: 'DB_LEDGER',
     canRun: (f) => f.minute != null,
+    axis: 'minute',
     run: (f) =>
       (f.minute?.sessions ?? [])
         /* 임계 5창 — 1분 창이므로 최소 5분치 공백이다. 1~2창은 수집 지연의 흔들림으로 흡수되지만
@@ -607,22 +609,53 @@ export const RULES: Rule[] = [
     dep: null,
     source: 'DB_LEDGER',
     canRun: (f) => f.minute != null,
-    run: (f) =>
-      (f.minute?.sessions ?? [])
-        /* 임계 1건 — DEAD 는 재시도가 끝난 **종료 상태**다. 누적치가 아니라 유실 확정이라
-         * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
-        .filter((s) => s.deadJobs >= 1)
-        .map((s) => ({
-          target: sessionLabel(s),
-          targetId: sessionTarget(s),
-          scope: f.minute!.date,
-          title: `${sessionLabel(s)} 후속 처리 유실`,
-          metric: s.deadJobs,
-          unit: '건',
-          why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',
-          evidence: `후속 처리 작업 원장 ${f.minute?.date} dead`,
-          drill: ['dataset', 'ds-' + s.dataset] as [string, string],
-        })),
+    axis: 'minute',
+    run: (f) => {
+      const date = f.minute?.date ?? '';
+      const byDate = new Set<string>();
+      return (
+        (f.minute?.sessions ?? [])
+          /* 임계 1건 — DEAD 는 재시도가 끝난 **종료 상태**다. 누적치가 아니라 유실 확정이라
+           * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
+          .filter((s) => s.deadJobs >= 1)
+          .flatMap((s) => {
+            /* ⚠️ **값의 입도가 사건의 입도를 정한다.** 뉴스 job 은 세션 연결 컬럼이 없어
+             * `(dataset, date)` 집계 하나뿐이다(어댑터가 `deadJobsByDate` 로 밝힌다). 그걸
+             * 세션마다 내면 벤더 둘인 날 같은 3건이 두 사건으로 서서 6건으로 읽히고, 어느
+             * 벤더 소관인지 근거도 없다 — 모르는 것을 벤더별로 복제하는 셈이다. */
+            if (s.deadJobsByDate) {
+              if (byDate.has(s.dataset)) return [];
+              byDate.add(s.dataset);
+              return [
+                {
+                  target: s.dataset,
+                  targetId: s.dataset,
+                  scope: date,
+                  title: `${s.dataset} 후속 처리 유실`,
+                  metric: s.deadJobs,
+                  unit: '건',
+                  why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다. 이 수는 날짜 축 집계라 벤더로 가르지 못한다',
+                  evidence: `후속 처리 작업 원장 ${date} dead (데이터셋·날짜 집계)`,
+                  drill: ['dataset', 'ds-' + s.dataset] as [string, string],
+                },
+              ];
+            }
+            return [
+              {
+                target: sessionLabel(s),
+                targetId: sessionTarget(s),
+                scope: date,
+                title: `${sessionLabel(s)} 후속 처리 유실`,
+                metric: s.deadJobs,
+                unit: '건',
+                why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',
+                evidence: `후속 처리 작업 원장 ${date} dead`,
+                drill: ['dataset', 'ds-' + s.dataset] as [string, string],
+              },
+            ];
+          })
+      );
+    },
   },
 ];
 

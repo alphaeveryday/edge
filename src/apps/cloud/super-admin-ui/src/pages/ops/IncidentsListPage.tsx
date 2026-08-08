@@ -141,7 +141,7 @@ export function IncidentsListPage() {
                       badResponse.length > 0 ? `(응답 결함 ${badResponse.length}개 포함)` : ''
                     } 걸렸는지조차 모릅니다`
                   : ''
-              }. 담당 범위 밖 사건은 맨 위 줄이 따로 셉니다.`}
+              }.${outOfScope.length > 0 ? ' 담당 범위 밖 사건은 맨 위 줄이 따로 셉니다.' : ''}`}
             </p>
           </div>
         ) : (
@@ -321,7 +321,9 @@ function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch:
                         {notRunReason(r, axisFetch)}
                       </span>
                     )}
-                    {r.evaluated && r.note && ' *'}
+                    {/* 못 돈 규칙의 `note` 도 있으면 표시한다 — `identity` 만 본문이 사유를
+                        이미 담으므로 그때만 뺀다(예전엔 못 돈 규칙 전부에서 사라졌다) */}
+                    {r.notRun !== 'identity' && r.note && ' *'}
                   </td>
                 </tr>
               );

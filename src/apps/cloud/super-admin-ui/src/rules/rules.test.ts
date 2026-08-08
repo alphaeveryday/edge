@@ -430,6 +430,31 @@ test('R18 무증거 창 — 임계 5창. 4창은 조용하고 5창부터 위반'
   assert.equal(v[0].sev, 'P1');
 });
 
+test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 두 사건으로 서면 6건으로 읽힌다)', () => {
+  /* 뉴스 job 은 세션 연결 컬럼이 없어 `(dataset, date)` 집계 하나뿐이다. 벤더 축이 생기기 전에는
+   * 대상이 데이터셋이라 겹쳤는데, 벤더를 실으면서 **같은 사실이 벤더 수만큼 독립 사건**이 됐다.
+   * 값의 입도가 사건의 입도를 정한다는 규약을 여기서 못박는다. */
+  const f = withMinute([
+    session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3, deadJobsByDate: true }),
+    session({ dataset: 'news_minute', sourceGroup: 'naver', deadJobs: 3, deadJobsByDate: true }),
+  ]);
+  const vs = hits(f, 'R19');
+  assert.equal(vs.length, 1, '벤더마다 복제됐다 — DEAD 3건이 6건으로 읽힌다');
+  assert.equal(vs[0].targetId, 'news_minute', '벤더로 못 가르는 값에 벤더 대상을 붙였다');
+  assert.equal(vs[0].metric, 3);
+  assert.match(vs[0].why, /벤더로 가르지 못한다/, '못 가른다는 사실을 화면이 알 수 있어야 한다');
+
+  /* 세션 축인 값(가격)은 그대로 벤더별로 갈린다 — 두 경로가 한 규칙 안에 있다 */
+  const price = withMinute([
+    session({ dataset: 'price_minute', sourceGroup: 'KRX', deadJobs: 2 }),
+    session({ dataset: 'price_minute', sourceGroup: 'TOSS', deadJobs: 1 }),
+  ]);
+  assert.deepEqual(hits(price, 'R19').map((v) => v.targetId), [
+    'price_minute/KRX',
+    'price_minute/TOSS',
+  ]);
+});
+
 test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반', () => {
   assert.equal(hits(withMinute([session({ deadJobs: 0 })]), 'R19').length, 0);
   assert.equal(hits(withMinute([session({ deadJobs: 1 })]), 'R19').length, 1);
@@ -614,7 +639,7 @@ test('vid — 같은 작업 키가 두 런에 걸려도 사건이 갈린다 (런
 test('규칙 id 는 유일하다 — 충돌 검사를 규칙 안으로 좁힌 근거이고, 화면이 vid→규칙을 되찾는 축이다', () => {
   /* 이 단언이 없으면 두 곳이 조용히 무너진다. (1) 평가기가 vid 충돌을 **규칙 단위**로만 본다
    * (규칙 간 `seen` 을 지운 논거가 "vid 는 규칙 id 로 시작한다"였다). (2) 화면이
-   * `vid.startsWith(`${id}:`)` 로 못 돈 규칙을 되찾는다(`ops/shared` 의 `unevaluatedFor`).
+   * `ruleOfVid(vid)` 로 규칙 id 를 잘라 되찾는다(`pages/ops/notRun.ts` 의 `unevaluatedFor`).
    * id 가 겹치면 전자는 충돌을 못 잡고 후자는 남의 규칙 사유를 그린다. */
   assert.equal(new Set(RULES.map((R) => R.id)).size, RULES.length, '규칙 id 가 겹친다');
   /* 유일성만으로는 접두사 논거가 안 선다: id 에 구분자가 들어가면 `A:` + `t` 가 `B:` + `t'` 와

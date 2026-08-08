@@ -19,7 +19,7 @@ import { datasetKind, gapRuns, liveness, segments } from '../domains/sources/min
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_MINUTE, MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
-import { incidentHref } from './ops/investigation';
+import { incidentHref, incidentOfVid } from './ops/investigation';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
@@ -475,7 +475,8 @@ function LedgerCrumb({
   report?: SourceReport;
 }) {
   const { incidents } = useConsoleEvaluation();
-  const incident = incidentId ? incidents.find((i) => i.root.vid === incidentId) : undefined;
+  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다 */
+  const incident = incidentId ? (incidentOfVid(incidents, incidentId)?.incident ?? undefined) : undefined;
   const runFound = report?.run?.runKey === runKey;
   const taskFound = task !== undefined && (report?.tasks.some((t) => t.taskKey === task) ?? false);
   const crumbs: React.ReactNode[] = [];
@@ -620,21 +621,35 @@ function RealtimeLedger({
   const real = data.sessions.some((s) => s.dataset === dataset);
   const view = real ? data : MOCK_MINUTE;
   const ofDataset = view.sessions.filter((s) => s.dataset === dataset);
+  /* 벤더가 문맥에 없는데 후보가 둘 이상이면 **고르지 않는다.** 예전엔 조용히 `[0]` 을 집어,
+   * 손으로 친 주소나 벤더를 빠뜨린 링크가 남의 세션 행(sessionId·phase·lease)을 근거처럼
+   * 세웠다. 생산자마다 주석을 다는 것보다 소비자 한 곳에서 막는 게 짧다. */
+  const ambiguous = !sourceGroup && ofDataset.length > 1;
   const session = sourceGroup
     ? ofDataset.find((s) => s.sourceGroup === sourceGroup)
-    : ofDataset[0];
+    : ambiguous
+      ? undefined
+      : ofDataset[0];
   const kindLabel = datasetKind(dataset) === 'news' ? 'poll' : '창';
 
   if (!session) {
     return (
       <div className="card card-pad">
-        <p className="t-sm m-0">이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</p>
+        <p className="t-sm m-0">
+          {ambiguous ? (
+            <>어느 <span className="mono">{dataset}</span> 세션인지 문맥이 없습니다.</>
+          ) : (
+            <>이 날짜에 <span className="mono">{dataset}</span> 세션 행이 없습니다.</>
+          )}
+        </p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
           {/* ⚠️ **부재는 `real` 로만 가른다.** 목 폴백일 때 `ofDataset` 은 목의 행이라, 그걸로
                "이 데이터셋의 세션은 있다"를 말하면 실 응답엔 없는 세션의 존재를 단언하게 된다.
                `ofDataset.length > 0` 를 같이 묻지 않는 이유: `real` 이면 `view === data` 라
                그 필터가 반드시 하나 이상을 낸다 — 둘을 묶으면 죽은 항이 조건처럼 보인다. */}
-          {real
+          {ambiguous
+            ? `이 데이터셋의 세션이 ${ofDataset.length}개(${ofDataset.map((s) => s.sourceGroup).join(' · ')})라 어느 벤더인지 알 수 없습니다 — 아무거나 골라 보여주지 않습니다. 주소에 source_group 을 실어 주세요.`
+            : real
             ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
                  벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
               `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`

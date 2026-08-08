@@ -11,19 +11,17 @@ import type { BadgeTone } from 'ui-kit';
 import { evaluate, runbookOf as lookupRunbook } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
 import type { AxisFetch } from './notRun';
+import { axisOf, minuteFacts } from './consoleFacts';
 import type {
   Evaluation,
   Facts,
   Incident,
-  MinuteFacts,
   RunbookEntry,
   Severity,
   Violation,
 } from '../../rules/types';
 import factsJson from '../../rules/facts-snapshot.json';
-import type { MinuteStatus } from '../../domains/sources';
 import { useMinuteStatus } from '../../domains/sources/hooks';
-import { datasetKind } from '../../domains/sources/minuteView';
 
 /* 스냅샷에는 규칙이 읽지 않는 표시 전용 축도 들어 있다.
  *
@@ -130,29 +128,6 @@ export function domainOf(v: Violation): string {
  */
 export const OUT_OF_PIPELINE_DOMAINS = new Set(['테넌트 전달']);
 
-/**
- * API DTO → 규칙 사실. **규칙은 화면 도메인을 모른다** — 맞추는 일은 여기서 한 번만 한다.
- *
- * `deadJobs` 를 어디서 가져오는지가 이 어댑터의 유일한 판단이다: 뉴스 job 은 세션 연결 컬럼이
- * 없어 날짜 축 집계(`newsJobs`)이고 가격은 세션에 붙어 있다. 규칙은 그 사정을 모른 채
- * "이 데이터셋의 DEAD 수"만 받는다.
- */
-export function minuteFacts(s: MinuteStatus): MinuteFacts {
-  return {
-    date: s.date,
-    sessions: s.sessions.map((x) => ({
-      dataset: x.dataset,
-      /* 세션 identity 는 `(dataset, sourceGroup, date)` 다 — 여기서 버리면 규칙이 벤더가 다른
-       * 두 세션을 한 대상으로 보고, 사건 식별자가 겹쳐 딥링크가 다른 세션을 연다 */
-      sourceGroup: x.sourceGroup,
-      phase: x.phase,
-      leaseExpired: x.leaseExpired,
-      overdueNoEvidence: x.windows.overdueNoEvidence,
-      deadJobs: (datasetKind(x.dataset) === 'news' ? s.newsJobs : x.priceJobs).dead,
-    })),
-  };
-}
-
 export interface ConsoleEvaluation extends Evaluation {
   /** 파이프라인·분석 소관 사건만. 전달 사건을 파이프라인 P0·심각도 합계에 섞지 않는다 */
   pipeline: Incident[];
@@ -196,7 +171,7 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
       pipeline: ev.incidents.filter((i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
       outOfScope: ev.incidents.filter((i) => OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
       minuteLoaded: data != null,
-      axisFetch: data != null ? 'loaded' : isError ? 'error' : 'pending',
+      axisFetch: axisOf(data != null, isError),
       facts,
     };
   }, [data, isError]);

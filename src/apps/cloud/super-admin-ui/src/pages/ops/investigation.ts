@@ -296,3 +296,25 @@ export function runHref(runId: string, extra?: Record<string, string | undefined
  */
 export const incidentHref = (v: Violation): string =>
   `/ops/incidents/detail?vid=${q(v.vid)}`;
+
+/**
+ * 이 `vid` 를 담은 사건 — **뿌리든 흡수된 멤버든**.
+ *
+ * `incidents[]` 는 뿌리만 담는다. 그래서 `i.root.vid === vid` 만 보면, 인과 간선으로 흡수된
+ * 위반의 링크가 "그런 사건 없음"으로 떨어진다 — 그 위반은 **지금도 규칙에 걸려 있는데**.
+ * 어제 뿌리였던 vid 는 오늘 부모가 걸리면 멤버로 내려가므로, 어제 공유한 주소가 정확히 그
+ * 경로로 온다. 소비자마다 다시 짜면 한 곳만 빠뜨려도 그 화면에서만 사건이 사라진다.
+ *
+ * `member` 는 "찾긴 했는데 이 vid 가 뿌리가 아니다"라는 뜻이다 — 화면이 그 사실을 밝혀야
+ * 운영자가 "왜 다른 제목이 뜨지"를 묻지 않는다.
+ */
+export function incidentOfVid(
+  incidents: Incident[],
+  vid: string,
+): { incident: Incident; member: boolean } | null {
+  if (!vid) return null;
+  const root = incidents.find((i) => i.root.vid === vid);
+  if (root) return { incident: root, member: false };
+  const owner = incidents.find((i) => i.members.some((m) => m.v.vid === vid));
+  return owner ? { incident: owner, member: true } : null;
+}

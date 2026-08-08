@@ -28,7 +28,7 @@ import {
   reconcile,
 } from './runObservation';
 import type { Observation } from './runObservation';
-import { incidentHref, ledgerHref, runHref } from './investigation';
+import { incidentHref, incidentOfVid, ledgerHref, runHref } from './investigation';
 import '../../styles/ops.css';
 
 const KIND_LABEL: Record<string, string> = { scheduled: '정규', manual: '수동', backfill: '백필' };
@@ -212,7 +212,8 @@ export function RunDetailPage() {
   const fromIncident = params.get('fromIncident');
   const { incidents } = useConsoleEvaluation();
   const incident = fromIncident
-    ? (incidents.find((i) => i.root.vid === fromIncident) ?? null)
+    ? /* 흡수된 위반의 vid 로 와도 찾는다 — 뿌리만 보면 breadcrumb 이 죽은 텍스트가 된다 */
+      (incidentOfVid(incidents, fromIncident)?.incident ?? null)
     : null;
 
   /**

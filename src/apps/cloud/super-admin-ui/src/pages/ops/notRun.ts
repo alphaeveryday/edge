@@ -16,8 +16,12 @@ import type { RuleResult } from '../../rules/types.ts';
 /**
  * 실시간 축 응답의 상태. **`못 돎`(axis) 을 읽는 뜻이 이 값에 달려 있다** — 응답이 아직 없거나
  * 실패한 것을 "계측이 없다"로 그리면, 운영자가 **API 장애를 미배선으로 읽는다**.
+ *
+ * `stale` = 데이터는 있는데 마지막 조회가 실패했다(react-query 는 에러에도 직전 값을 남긴다).
+ * 판정은 서지만 그 판정이 **낡았다** — "실림"과 같은 칸에 그리면 낡은 사실이 현재로 읽힌다.
+ * 값을 만드는 곳은 `consoleFacts.axisOf` 다(그쪽이 테스트가 붙는 자리).
  */
-export type AxisFetch = 'loaded' | 'pending' | 'error';
+export type AxisFetch = 'loaded' | 'stale' | 'pending' | 'error';
 
 /** 판정을 못 한 규칙 전부 — 종류(`notRun`)는 호출자가 필요할 때만 가른다.
  *
@@ -49,6 +53,9 @@ export function unevaluatedFor(
 /**
  * 못 돈 사유 한 줄 — 종류는 `notRun` 이 **구조로** 가른다(문구를 파싱해 추측하지 않는다).
  *
+ * `fetch` 에 기본값을 두지 않는다: 하필 그 기본값이 "축이 이번 응답에 없다"라, 인자를 빠뜨린
+ * 다음 소비자가 **조용히 거짓 문장으로 회귀**한다. 필수로 두면 tsc 가 잡는다.
+ *
  * `axis` 의 사유를 `dep` 로만 쓰지 않는 이유: `dep` 는 "어떤 계측이 없는가"라는 **정적 속성**이고,
  * 화면이 묻는 건 "이번에 왜 안 돌았나"다. R12·R17~R19 는 `dep: null` 이라 — 빠진 계측이 없다는
  * 뜻이다 — 거기에 "사실 축 부재"를 쓰면 **자기 데이터와 모순된 문장**이 선다. 그 규칙들이 못 도는
@@ -57,11 +64,16 @@ export function unevaluatedFor(
  * ⚠️ `note` 를 사유로 쓰지 않는다(`identity` 제외) — `evaluate` 에서 `note` 는
  * `collision ?? R.note?.(f) ?? R.dep` 라 리포트 주석이 실려 있을 수 있다.
  */
-export function notRunReason(r: RuleResult, fetch: AxisFetch = 'loaded'): string {
+export function notRunReason(r: RuleResult, fetch: AxisFetch): string {
   if (r.notRun === 'identity') return `응답 결함 — ${r.note ?? '사유 미기록'}`;
-  const dep = RULES.find((R) => R.id === r.id)?.dep;
-  if (dep) return `못 돎 — ${dep}`;
-  if (fetch === 'pending') return '아직 못 돎 — 이 규칙이 읽을 응답이 도착하지 않았다';
-  if (fetch === 'error') return '못 돎 — 이 규칙이 읽을 응답을 못 받았다(조회 실패)';
+  const R = RULES.find((X) => X.id === r.id);
+  if (R?.dep) return `못 돎 — ${R.dep}`;
+  /* 조회 상태를 사유로 붙이는 건 **그 축을 읽는 규칙에만** 이다. `dep: null` 이라는 사실은
+   * "이 규칙이 실시간 응답을 읽는다"를 함의하지 않는다 — R12 의 축은 SQS 라, 실시간 조회가
+   * 실패한 날 R12 에 "조회 실패"라고 쓰면 이 함수가 없애려던 오독을 반대 방향으로 낸다. */
+  if (R?.axis === 'minute') {
+    if (fetch === 'pending') return '아직 못 돎 — 이 규칙이 읽을 응답이 도착하지 않았다';
+    if (fetch === 'error') return '못 돎 — 이 규칙이 읽을 응답을 못 받았다(조회 실패)';
+  }
   return '못 돎 — 이 규칙이 읽을 사실 축이 이번 응답에 없다';
 }

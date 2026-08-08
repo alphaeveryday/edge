@@ -175,6 +175,14 @@ export interface MinuteSessionFact {
   overdueNoEvidence: number;
   /** 후속 처리 원장에서 종료 상태 실패로 남은 건수 */
   deadJobs: number;
+  /**
+   * 그 수가 **세션 축이 아니라 `(dataset, date)` 집계**인가 — 벤더로 못 가른다.
+   *
+   * 뉴스 job 은 세션 연결 컬럼이 없어 날짜 축 집계 하나뿐이다. 그걸 세션마다 실으면 벤더가
+   * 둘인 날 **같은 사실이 벤더 수만큼 복제되어** 독립 사건이 된다(DEAD 3건이 6건으로 읽힌다).
+   * 규칙은 이 플래그를 보고 대상을 데이터셋으로 낸다 — 값의 입도와 사건 식별자의 입도를 맞춘다.
+   */
+  deadJobsByDate?: boolean;
 }
 
 /** 하루치 실시간 세션 — 원장에 `minute_ingestion_session/window` 축이 없으면 통째로 부재다 */
@@ -309,6 +317,15 @@ export interface Rule {
   source: FactSource;
   /** 필요한 사실 축이 아예 없으면 false → 리포트에 evaluated:false (돌지 못함 ≠ 조용함) */
   canRun?: (f: Facts) => boolean;
+  /**
+   * `canRun` 이 거짓일 때 **모자란 축이 무엇인가**. 화면이 그 축의 조회 상태(대기·실패)를
+   * 사유로 붙여도 되는지 이걸로 판단한다 — 없으면 안 붙인다.
+   *
+   * 이게 없던 동안 화면은 `dep: null` 인 규칙 전부에 실시간 응답 상태를 붙였다. R12 의 축은
+   * SQS(`f.queues`)라 실시간 응답과 무관한데도 "조회 실패"라고 썼다 — 장애를 미배선으로 읽는
+   * 오독의 정확한 역방향이다. (규칙별 사유 문장 자체는 A2 범위. 여기서는 **축만** 밝힌다.)
+   */
+  axis?: 'minute';
   /** 이 규칙이 읽는 사실이 목으로 채워져 있는가 (위반 0건이어도 표시하기 위함) */
   mockBacked?: (f: Facts) => boolean;
   /** 리포트 note — 예: R07 "분모 배선 작업 3/27" */
