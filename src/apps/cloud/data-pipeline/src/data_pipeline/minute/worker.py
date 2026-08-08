@@ -31,6 +31,7 @@ from datetime import datetime
 
 from ..lake.storage import (
     Storage,
+    canonical_etf_inav_minute_artifact_key,
     canonical_price_minute_artifact_key,
     minute_window_manifest_key,
 )
@@ -53,6 +54,27 @@ from .repository import MinuteLedger
 from .rollup import maybe_rollup
 
 logger = logging.getLogger(__name__)
+
+
+def universe_matches(ledger: MinuteLedger, session_id: str, universe: Universe) -> bool:
+    """원장이 고정한 universe 와 내 설정이 같은가 — window 를 처리할 자격.
+
+    session 의 universe 는 생성 시 고정되는데(v0.7 10.1) 기대 집합은 **내 설정**으로
+    계산한다. 둘이 갈리면 ① 원장이 고정한 종목이 조용히 누락되거나 ② 거래시간 밖이 된
+    window 에서 `units_at` 이 터진다.
+
+    window 계획 범위가 그 universe 와 맞는지는 보지 않는다 — 계획과 hash 를 같은
+    universe 에서 뽑는 것은 planner 의 불변식이다(그 진입점에서 강제한다).
+    """
+    ledger_plan = ledger.session_universe(session_id=session_id)
+    mine = (universe.universe_version, universe.universe_hash)
+    if ledger_plan == mine:
+        return True
+    logger.error(
+        "session %s 의 계획 %s 와 내 설정 %s 가 다르다 — 정지",
+        session_id, ledger_plan, mine,
+    )
+    return False
 
 
 @dataclass
@@ -91,6 +113,138 @@ class MinuteWorkerLoop:
 
     def _process(self, claim: dict, now: datetime) -> bool:
         raise NotImplementedError
+
+    # ── window 처리 공유부 (가격·iNAV) ────────────────────────
+    # 뉴스는 이 조각을 쓰지 않는다(기사 N건 축이라 window 단위 artifact 가 없다).
+    # 갈리는 곳은 넷뿐이라 아래 훅으로 열고 나머지는 한 벌로 둔다 — 복제하면 이 파일
+    # 상단이 경고하는 divergence 가 정확히 그 형태로 생긴다(한쪽만 고쳐진다).
+
+    def _expected_units(self, window_start: datetime) -> tuple[str, ...]:
+        """그 window 에 **값이 있어야 하는** unit — 완전성 판정의 기대 집합."""
+        raise NotImplementedError
+
+    def _artifact_key(self, window_hhmm: str, generation: int) -> str:
+        """이 dataset 의 canonical artifact 키(세대 포함)."""
+        raise NotImplementedError
+
+    def _commit(self, claim: dict, *, result, records: tuple, units: dict,
+                generation: int, artifact_checksum: str, manifest_key: str,
+                manifest_checksum: str) -> None:
+        """확정 트랜잭션. dataset 마다 job/outbox 축이 달라 공유하지 않는다."""
+        raise NotImplementedError
+
+    def _after_commit(self, claim: dict) -> None:
+        """커밋 뒤 파생(가격의 5분 롤업). 기본은 없음."""
+
+    def _predict_generation(self, claim: dict, artifact_checksum: str,
+                            units: dict[str, list[str]],
+                            expected_unit_ids: tuple[str, ...]) -> tuple[int, str, bytes, str]:
+        """결정적 세대 예측 → (generation, artifact_key, manifest_bytes, manifest_checksum).
+
+        세대 identity 는 records+manifest 두 checksum 이다(ALPHA-666) — manifest 는
+        artifact_key(세대 포함)를 담으므로 세대 후보를 바꾸면 재산출해야 한다.
+        """
+        cfg = self.config
+        window_hhmm = claim["window_start"].astimezone(KST).strftime("%H%M")
+
+        def manifest_for(generation: int) -> tuple[str, bytes, str]:
+            artifact_key = self._artifact_key(window_hhmm, generation)
+            manifest = build_window_manifest(
+                dataset=cfg.dataset, session_id=self.session_id,
+                window_start=claim["window_start"], window_end=claim["window_end"],
+                generation=generation,
+                expected_unit_ids=list(expected_unit_ids), units=units,
+                artifact_key=artifact_key, artifact_checksum=artifact_checksum,
+            )
+            data = serialize_manifest(manifest)
+            return artifact_key, data, sha256_bytes(data)
+
+        current = claim["generation"]
+        if current == 0 or artifact_checksum != claim["checksum"]:
+            generation = current + 1 if current else 1
+            return (generation, *manifest_for(generation))
+        # records 동일 — manifest 까지 같아야 세대 유지
+        artifact_key, data, manifest_checksum = manifest_for(current)
+        if manifest_checksum == claim["manifest_checksum"]:
+            return current, artifact_key, data, manifest_checksum
+        generation = current + 1
+        return (generation, *manifest_for(generation))
+
+    def _process_window(self, claim: dict, now: datetime) -> bool:
+        """collect → 분할 검증 → artifact/manifest PUT → 확정. 예외 정책까지 공유부다."""
+        cfg = self.config
+        try:
+            expected_unit_ids = self._expected_units(claim["window_start"])
+            request = CollectionRequest(
+                dataset=cfg.dataset, window_start=claim["window_start"],
+                window_end=claim["window_end"], run_id=cfg.run_id,
+                session_id=self.session_id, execution_mode="resident",
+                universe_version=cfg.universe.universe_version,
+                unit_ids=expected_unit_ids, failure_injection=None,
+            )
+            result, records, manifest_units = self.collector.collect(request, now)
+            # 4분류 전체를 통과시킨다 — invalid 를 버리면 완전분할 검증이 터져
+            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다. 미지 분류는
+            # 여기서 터뜨린다: 걸러서 넘기면 manifest 검증(미지 키)이 실행되지 않아
+            # 우리가 이해 못 한 관측이 증거에서 사라진 채 window 가 성공 커밋된다
+            if unknown := set(manifest_units) - UNIT_CLASSES:
+                raise ValueError(f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}")
+            units = {cls: list(manifest_units.get(cls, [])) for cls in sorted(UNIT_CLASSES)}
+            # 원장에 실리는 수량(result)과 증거로 남는 분할(manifest)이 같은 관측을
+            # 말하는지 대조한다 — 각자의 validator 는 상대를 모르므로, 어긋나면
+            # "missing_units 는 있는데 VALID·failed=0" 같은 성공 위장이 커밋된다
+            failed = len(units["missing"]) + len(units["invalid"])
+            succeeded = len(units["received"]) + len(units["no_trade"])
+            if (succeeded, failed) != (result.succeeded_count, result.failed_count):
+                raise ValueError(
+                    f"collector 의 result 수량({result.succeeded_count}/{result.failed_count})과 "
+                    f"manifest 분할({succeeded}/{failed})이 다르다"
+                )
+            # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
+            # 소비자는 저장된 파일을 재해시해 검증하므로 result_checksum(의미 해시)을
+            # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라
+            # 이 값도 데이터 identity 로 동등하다.
+            # 벤더 축은 canonical 키에서 빠졌다(ALPHA-705) — 소비자가 벤더를 알 수
+            # 있도록 레코드 컬럼으로 싣는다. checksum 은 이 최종 형상에서 나온다.
+            records = tuple(dict(record, source=cfg.source) for record in records)
+            artifact_bytes = serialize_records(list(records))
+            artifact_checksum = sha256_bytes(artifact_bytes)
+            generation, artifact_key, manifest_bytes, manifest_checksum = (
+                self._predict_generation(claim, artifact_checksum, units, expected_unit_ids)
+            )
+            put_immutable(self.storage, artifact_key, artifact_bytes)
+            manifest_key = minute_window_manifest_key(
+                cfg.dataset, cfg.source, cfg.market, cfg.session_date,
+                claim["window_start"].astimezone(KST).strftime("%H%M"), generation,
+            )
+            put_immutable(self.storage, manifest_key, manifest_bytes)
+            self._commit(
+                claim, result=result, records=records, units=units,
+                generation=generation, artifact_checksum=artifact_checksum,
+                manifest_key=manifest_key, manifest_checksum=manifest_checksum,
+            )
+            self._after_commit(claim)
+            return True
+        except (GenerationMismatchError, ArtifactImmutabilityError):
+            # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
+            # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
+            # ⚠️ collector 계약 위반(미지 분류·수량 불일치)은 여기 넣지 않는다: 전파하면
+            # drain 이 release/ack 을 못 거쳐 세션이 DRAINING 에 고착되고, 교체 Worker 가
+            # 같은 window 로 크래시 루프를 돈다. 그건 window 실패로 격리하고 잔여 판정은
+            # drain 반납 → EOD QC 가 한다(지정된 판정 장치에 위임).
+            raise
+        except CommitRejectedError:
+            # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
+            # 다음 heartbeat 주기 tick 이 STOPPED 로 정지시킨다.
+            logger.warning("window %s commit 거부 — claim/fence 상실", claim["window_start"])
+            return False
+        except Exception:
+            # 한 window 의 실패를 다음 window 로 전파하지 않는다 — claim 은 lease 만료로
+            # 재청구되고, 실패 자체는 크게 기록한다(조용한 폐기 금지, Rule 12)
+            logger.exception(
+                "window %s 처리 실패 — lease 만료 후 재시도된다", claim["window_start"]
+            )
+            return False
 
     def _session_ready(self) -> bool:
         """원장에 고정된 session 속성과 내 설정이 맞는가 — window 를 처리할 자격.
@@ -271,163 +425,146 @@ class PriceWorker(MinuteWorkerLoop):
     _last_heartbeat: datetime | None = field(default=None, repr=False)
 
     def _session_ready(self) -> bool:
-        """원장이 고정한 universe 와 내 설정이 같은가.
-
-        session 의 universe 는 생성 시 고정되는데(v0.7 10.1) 기대 집합은 **내 설정**으로
-        계산한다. 둘이 갈리면
-        ① 시간외 window 를 다른 종목 집합으로 VALID 확정해 원장이 고정한 종목이 조용히
-        누락되거나 ② 거래시간 밖이 된 window 에서 `units_at` 이 터진다.
-
-        window 계획 범위가 그 universe 와 맞는지는 보지 않는다 — 계획과 hash 를 같은
-        universe 에서 뽑는 것은 planner 의 불변식이다(그 진입점에서 강제한다).
-        """
-        cfg = self.config
-        ledger_plan = self.ledger.session_universe(session_id=self.session_id)
-        mine = (cfg.universe.universe_version, cfg.universe.universe_hash)
-        if ledger_plan == mine:
-            return True
-        logger.error(
-            "session %s 의 계획 %s 와 내 설정 %s 가 다르다 — 정지",
-            self.session_id, ledger_plan, mine,
-        )
-        return False
-
-    def _predict_generation(self, claim: dict, artifact_checksum: str,
-                            units: dict[str, list[str]],
-                            expected_unit_ids: tuple[str, ...]) -> tuple[int, str, bytes, str]:
-        """결정적 세대 예측 → (generation, artifact_key, manifest_bytes, manifest_checksum).
-
-        세대 identity 는 records+manifest 두 checksum 이다(ALPHA-666) — manifest 는
-        artifact_key(세대 포함)를 담으므로 세대 후보를 바꾸면 재산출해야 한다.
-        """
-        cfg = self.config
-        window_hhmm = claim["window_start"].astimezone(KST).strftime("%H%M")
-
-        def manifest_for(generation: int) -> tuple[str, bytes, str]:
-            artifact_key = canonical_price_minute_artifact_key(
-                cfg.market, cfg.session_date, window_hhmm, generation
-            )
-            manifest = build_window_manifest(
-                dataset=cfg.dataset, session_id=self.session_id,
-                window_start=claim["window_start"], window_end=claim["window_end"],
-                generation=generation,
-                expected_unit_ids=list(expected_unit_ids), units=units,
-                artifact_key=artifact_key, artifact_checksum=artifact_checksum,
-            )
-            data = serialize_manifest(manifest)
-            return artifact_key, data, sha256_bytes(data)
-
-        current = claim["generation"]
-        if current == 0 or artifact_checksum != claim["checksum"]:
-            generation = current + 1 if current else 1
-            return (generation, *manifest_for(generation))
-        # records 동일 — manifest 까지 같아야 세대 유지
-        artifact_key, data, manifest_checksum = manifest_for(current)
-        if manifest_checksum == claim["manifest_checksum"]:
-            return current, artifact_key, data, manifest_checksum
-        generation = current + 1
-        return (generation, *manifest_for(generation))
+        return universe_matches(self.ledger, self.session_id, self.config.universe)
 
     def _process(self, claim: dict, now: datetime) -> bool:
+        return self._process_window(claim, now)
+
+    def _expected_units(self, window_start: datetime) -> tuple[str, ...]:
+        # 기대 유니버스는 **그 window 의 시각**이 정한다 — 전 종목을 매 window 에
+        # 넘기면 15:30 이 마지막인 종목이 시간외 window 마다 missing 으로 잡혀
+        # INCOMPLETE 가 영원히 재시도된다(2026-08-02 dev 실증)
+        return self.config.universe.units_at(window_start)
+
+    def _artifact_key(self, window_hhmm: str, generation: int) -> str:
+        return canonical_price_minute_artifact_key(
+            self.config.market, self.config.session_date, window_hhmm, generation
+        )
+
+    def _commit(self, claim: dict, *, result, records: tuple, units: dict,
+                generation: int, artifact_checksum: str, manifest_key: str,
+                manifest_checksum: str) -> None:
+        cfg = self.config
+        self.committer.commit_price_window(
+            session_id=self.session_id, window_start=claim["window_start"],
+            worker_id=cfg.worker_id, fence_token=self.fence_token,
+            claim_token=claim["claim_token"], data_status=result.status,
+            expected_unit_count=result.expected_count,
+            succeeded_unit_count=result.succeeded_count,
+            failed_unit_count=result.failed_count, record_count=len(records),
+            checksum=artifact_checksum, manifest_uri=manifest_key,
+            manifest_checksum=manifest_checksum,
+            missing_units=units["missing"] or None,
+            stage_timestamps=result.stage_timestamps,
+            trigger_schema_version=cfg.trigger_schema_version,
+            destination=cfg.destination, artifact_generation=generation,
+            emit_outbox=not cfg.is_backfill,
+        )
+
+    def _after_commit(self, claim: dict) -> None:
+        # 5분봉 롤업 파생(ALPHA-750) — 1분 커밋(정본)은 이미 끝났다. 롤업 실패를
+        # window 실패로 접으면 lease 만료 후 정상 수집이 재시도되므로, 여기서
+        # 격리하고 크게 기록만 한다(조용한 skip 금지 — Rule 12).
         cfg = self.config
         try:
-            # 기대 유니버스는 **그 window 의 시각**이 정한다 — 전 종목을 매 window 에
-            # 넘기면 15:30 이 마지막인 종목이 시간외 window 마다 missing 으로 잡혀
-            # INCOMPLETE 가 영원히 재시도된다(2026-08-02 dev 실증)
-            expected_unit_ids = cfg.universe.units_at(claim["window_start"])
-            request = CollectionRequest(
-                dataset=cfg.dataset, window_start=claim["window_start"],
-                window_end=claim["window_end"], run_id=cfg.run_id,
-                session_id=self.session_id, execution_mode="resident",
-                universe_version=cfg.universe.universe_version,
-                unit_ids=expected_unit_ids, failure_injection=None,
+            maybe_rollup(
+                self.storage, self.ledger, session_id=self.session_id,
+                market=cfg.market, session_date=cfg.session_date,
+                universe=cfg.universe, window_start=claim["window_start"],
             )
-            result, records, manifest_units = self.collector.collect(request, now)
-            # 4분류 전체를 통과시킨다 — invalid 를 버리면 완전분할 검증이 터져
-            # 정당한 INVALID 결과가 일시 실패로 위장돼 영구 재시도된다. 미지 분류는
-            # 여기서 터뜨린다: 걸러서 넘기면 manifest 검증(미지 키)이 실행되지 않아
-            # 우리가 이해 못 한 관측이 증거에서 사라진 채 window 가 성공 커밋된다
-            if unknown := set(manifest_units) - UNIT_CLASSES:
-                raise ValueError(f"collector 가 미지 unit 분류를 냈다: {sorted(unknown)}")
-            units = {cls: list(manifest_units.get(cls, [])) for cls in sorted(UNIT_CLASSES)}
-            # 원장에 실리는 수량(result)과 증거로 남는 분할(manifest)이 같은 관측을
-            # 말하는지 대조한다 — 각자의 validator 는 상대를 모르므로, 어긋나면
-            # "missing_units 는 있는데 VALID·failed=0" 같은 성공 위장이 커밋된다
-            failed = len(units["missing"]) + len(units["invalid"])
-            succeeded = len(units["received"]) + len(units["no_trade"])
-            if (succeeded, failed) != (result.succeeded_count, result.failed_count):
-                raise ValueError(
-                    f"collector 의 result 수량({result.succeeded_count}/{result.failed_count})과 "
-                    f"manifest 분할({succeeded}/{failed})이 다르다"
-                )
-            # window/manifest 의 checksum 은 **저장되는 artifact 바이트**의 sha256 이다 —
-            # 소비자는 bars.ndjson 을 재해시해 검증하므로 result_checksum(의미 해시)을
-            # 쓰면 모든 정상 window 가 불일치로 판정된다. serialize_records 가 결정적이라
-            # 이 값도 데이터 identity 로 동등하다.
-            # 벤더 축은 canonical 키에서 빠졌다(ALPHA-705) — 소비자가 벤더를 알 수
-            # 있도록 레코드 컬럼으로 싣는다. checksum 은 이 최종 형상에서 나온다.
-            records = tuple(dict(record, source=cfg.source) for record in records)
-            artifact_bytes = serialize_records(list(records))
-            artifact_checksum = sha256_bytes(artifact_bytes)
-            generation, artifact_key, manifest_bytes, manifest_checksum = (
-                self._predict_generation(claim, artifact_checksum, units, expected_unit_ids)
-            )
-            put_immutable(self.storage, artifact_key, artifact_bytes)
-            manifest_key = minute_window_manifest_key(
-                cfg.dataset, cfg.source, cfg.market, cfg.session_date,
-                claim["window_start"].astimezone(KST).strftime("%H%M"), generation,
-            )
-            put_immutable(self.storage, manifest_key, manifest_bytes)
-            self.committer.commit_price_window(
-                session_id=self.session_id, window_start=claim["window_start"],
-                worker_id=cfg.worker_id, fence_token=self.fence_token,
-                claim_token=claim["claim_token"], data_status=result.status,
-                expected_unit_count=result.expected_count,
-                succeeded_unit_count=result.succeeded_count,
-                failed_unit_count=result.failed_count, record_count=len(records),
-                checksum=artifact_checksum, manifest_uri=manifest_key,
-                manifest_checksum=manifest_checksum,
-                missing_units=units["missing"] or None,
-                stage_timestamps=result.stage_timestamps,
-                trigger_schema_version=cfg.trigger_schema_version,
-                destination=cfg.destination, artifact_generation=generation,
-                emit_outbox=not cfg.is_backfill,
-            )
-            # 5분봉 롤업 파생(ALPHA-750) — 1분 커밋(정본)은 이미 끝났다. 롤업 실패를
-            # window 실패로 접으면 lease 만료 후 정상 수집이 재시도되므로, 여기서
-            # 격리하고 크게 기록만 한다(조용한 skip 금지 — Rule 12).
-            try:
-                maybe_rollup(
-                    self.storage, self.ledger, session_id=self.session_id,
-                    market=cfg.market, session_date=cfg.session_date,
-                    universe=cfg.universe, window_start=claim["window_start"],
-                )
-            except Exception:
-                logger.exception(
-                    "5분 롤업 실패 — window %s (1분 레인은 계속, 재유도는 그 버킷의 "
-                    "다음 커밋 또는 재실행 소관)", claim["window_start"],
-                )
-            return True
-        except (GenerationMismatchError, ArtifactImmutabilityError):
-            # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
-            # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
-            # ⚠️ collector 계약 위반(미지 분류·수량 불일치)은 여기 넣지 않는다: 전파하면
-            # drain 이 release/ack 을 못 거쳐 세션이 DRAINING 에 고착되고, 교체 Worker 가
-            # 같은 window 로 크래시 루프를 돈다. 그건 window 실패로 격리하고 잔여 판정은
-            # drain 반납 → EOD QC 가 한다(지정된 판정 장치에 위임).
-            raise
-        except CommitRejectedError:
-            # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
-            # 다음 heartbeat 주기 tick 이 STOPPED 로 정지시킨다.
-            logger.warning("window %s commit 거부 — claim/fence 상실", claim["window_start"])
-            return False
         except Exception:
-            # 한 window 의 실패를 다음 window 로 전파하지 않는다 — claim 은 lease 만료로
-            # 재청구되고, 실패 자체는 크게 기록한다(조용한 폐기 금지, Rule 12)
             logger.exception(
-                "window %s 처리 실패 — lease 만료 후 재시도된다", claim["window_start"]
+                "5분 롤업 실패 — window %s (1분 레인은 계속, 재유도는 그 버킷의 "
+                "다음 커밋 또는 재실행 소관)", claim["window_start"],
             )
-            return False
+
+
+@dataclass
+class InavWorkerConfig:
+    """iNAV Worker 설정. `WorkerConfig` 와 **일부러 다르다** — 가격의 발행 축
+    (`trigger_schema_version`·`destination`·`is_backfill`)이 이 dataset 엔 없다.
+    없는 축에 더미를 채우면 나중에 그 값이 의미 있는 것처럼 읽힌다.
+    """
+
+    worker_id: str
+    dataset: str
+    source: str
+    market: str
+    session_date: str  # YYYY-MM-DD — artifact key 축
+    universe: Universe
+    run_id: str
+    lease_seconds: int = 300
+    session_lease_seconds: int = 300
+    heartbeat_every_seconds: int = 60
+    # 🔴 **0 이 기본값이다.** recovery lane 은 **최고령** due window 부터 집는데
+    # (`claim_due_window` ORDER BY ASC), 이 벤더는 "지금 기준 최근 30행"만 준다 —
+    # 창(30분) 밖의 오래된 window 를 집으면 라벨이 안 맞아 매번 missing 으로 끝나고,
+    # 그 window 가 계속 최고령이라 **다음 tick 도 같은 것을 집는다**. 복구는 못 하면서
+    # 앱키 전역 쿼터만 태우고 최신 분 처리를 민다.
+    #
+    # ⚠️ 흔한 오해: "과거 window 재청구는 벤더가 지금 값을 줘서 틀린 값을 커밋한다".
+    # **그건 아니다** — 수집기가 `bsop_hour` 라벨로 행을 고르므로(`select_window_row`),
+    # 창 안이면 그 분의 **올바른 값**이 응답에 실제로 들어 있고 창 밖이면 매칭 실패로
+    # missing 이 된다. 틀린 값이 실릴 경로는 없다. 문제는 정확성이 아니라 **지평**이다.
+    # 그래서 올바른 복구는 "창 폭 안의 due window 만 재청구"이고, 그건 원장에 지평
+    # 필터가 필요하다(`claim_due_window` 에 없다). 그 전까지는 0 이다.
+    recovery_budget_per_tick: int = 0
+
+
+@dataclass
+class InavWorker(MinuteWorkerLoop):
+    """장중 iNAV Worker (ALPHA-851). 가격과 같은 골격, 다른 훅 넷."""
+
+    session_id: str
+    ledger: MinuteLedger
+    committer: MinuteCommitter
+    storage: Storage
+    collector: object
+    config: InavWorkerConfig
+    fence_token: int | None = None
+    stopping: bool = False
+    _last_heartbeat: datetime | None = field(default=None, repr=False)
+
+    def _session_ready(self) -> bool:
+        return universe_matches(self.ledger, self.session_id, self.config.universe)
+
+    def _process(self, claim: dict, now: datetime) -> bool:
+        return self._process_window(claim, now)
+
+    def _expected_units(self, window_start: datetime) -> tuple[str, ...]:
+        """NAV 가 존재하는 unit 만 — **구성종목에는 NAV 가 없다**.
+
+        `units_at` 을 그대로 쓰면 410종을 기대해 매 window 가 INCOMPLETE 다(구성종목이
+        영원히 missing). 시각 게이트는 그대로 태우고(거래시간 밖 window 를 조용히 빈
+        집합으로 만들지 않는다 — `units_at` 이 거기서 raise 한다) 그 결과에서 ETF 계열만
+        남긴다. 참조 계열(`sector_etf_ids`)도 ETF 라 NAV 가 있다.
+        """
+        universe = self.config.universe
+        nav_units = set(universe.etf_ids) | set(universe.sector_etf_ids)
+        return tuple(u for u in universe.units_at(window_start) if u in nav_units)
+
+    def _artifact_key(self, window_hhmm: str, generation: int) -> str:
+        return canonical_etf_inav_minute_artifact_key(
+            self.config.market, self.config.session_date, window_hhmm, generation
+        )
+
+    def _commit(self, claim: dict, *, result, records: tuple, units: dict,
+                generation: int, artifact_checksum: str, manifest_key: str,
+                manifest_checksum: str) -> None:
+        # job·outbox 없음 — iNAV 는 하위 소비자가 없어 window 확정에서 멈춘다.
+        self.committer.commit_inav_window(
+            session_id=self.session_id, window_start=claim["window_start"],
+            worker_id=self.config.worker_id, fence_token=self.fence_token,
+            claim_token=claim["claim_token"], data_status=result.status,
+            expected_unit_count=result.expected_count,
+            succeeded_unit_count=result.succeeded_count,
+            failed_unit_count=result.failed_count, record_count=len(records),
+            checksum=artifact_checksum, manifest_uri=manifest_key,
+            manifest_checksum=manifest_checksum,
+            missing_units=units["missing"] or None,
+            stage_timestamps=result.stage_timestamps,
+            artifact_generation=generation,
+        )
 
 
 def _require_credentials(pair: tuple[str | None, str | None], env_names: str) -> None:
@@ -675,4 +812,123 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     # 확인 게이트다 — 실패가 있었거나, **한 window 도 못 본 채 차단만 됐으면**(경쟁
     # fence·universe 불일치) 성공으로 보고하지 않는다. 전부 IDLE(이미 다 처리된 세션)은
     # 정상이다.
+    return 1 if failed or (blocked and not processed) else 0
+
+
+def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
+                    max_ticks: int | None = None, tick_seconds: int = 20) -> int:
+    """장중 iNAV Worker 진입점 — `python -m data_pipeline.run inav-worker` (ALPHA-851).
+
+    `price_worker_cli` 와 같은 계약이다: SIGTERM/SIGINT 는 tick 경계에서 멈추고(fence
+    lease 즉시 반납), DB 오류는 삼키지 않는다 — 삼키면 수집이 멈춘 걸 아무도 모른 채
+    프로세스만 살아 있다.
+
+    세션·유니버스 축도 같다. 다만 **수집 유니버스는 두 곳에서 온다**: 세션 identity 와
+    기대 집합은 `--universe`(planner 와 같은 파일)가, KIS 질의 심볼은
+    `krx_etf.source.etf_map` 이 준다. 둘이 갈리면 `etf_map` 에 없는 unit 이 매 window
+    invalid 로 드러난다(`inav_collect._rows_for` — 조용히 missing 으로 접지 않는다).
+    """
+    import os
+    import signal
+    import socket
+    import time
+    from datetime import timezone
+
+    from ..db import stable_domain_id
+    from ..lake.storage import make_storage
+    from ..sources.http import PoliteClient
+    from ..sources.kis_inav import DEFAULT_INTERVAL_SEC, KisInavSource
+    from .inav_collect import KisInavCollector
+    from .models import load_universe_uri
+    from .states import DATASET_ETF_INAV_MINUTE
+
+    if settings.db is None:
+        raise SystemExit("db 설정 없음 — inav-worker 는 1분 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    if settings.kis_nav is None:
+        raise SystemExit("kis_nav.source 설정 없음 — iNAV 는 일별 NAV 와 같은 KIS 자격증명을 쓴다")
+    if settings.krx_etf is None:
+        raise SystemExit("krx_etf.source 설정 없음 — iNAV 질의 심볼(etf_map)의 출처다")
+    _require_credentials(
+        (settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret),
+        "DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY/__APP_SECRET",
+    )
+    if not universe:
+        raise SystemExit(
+            "--universe 필요 — planner(plan-minute-session)와 **같은 파일**이어야 원장의 "
+            "universe 와 일치한다(갈리면 Worker 가 처리를 거부한다 — _session_ready)"
+        )
+    day = session_date or datetime.now(KST).strftime("%Y-%m-%d")
+    try:
+        # strptime 고정 — date.fromisoformat 은 3.11+ 에서 주 날짜를 다른 연도로 읽는다
+        parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
+    except ValueError:
+        raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
+    universe_model = load_universe_uri(universe)
+    session_id = stable_domain_id(
+        "msn", DATASET_ETF_INAV_MINUTE, "kis", parsed_day.isoformat()
+    )
+    ledger = MinuteLedger(db=settings.db)
+    if ledger.session_snapshot(session_id=session_id) is None:
+        raise SystemExit(
+            f"세션 없음: {DATASET_ETF_INAV_MINUTE}/kis/{parsed_day} — "
+            "plan-minute-session --dataset etf_inav_minute 이 먼저 돌아야 한다"
+        )
+    worker_id = f"iw-{socket.gethostname()}-{os.getpid()}"
+    collector = KisInavCollector(
+        KisInavSource(
+            settings.kis_nav.source,
+            settings.krx_etf.source.etf_map,
+            # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
+            PoliteClient(min_interval=0.5),
+            interval_sec=DEFAULT_INTERVAL_SEC,
+        ),
+        clock=lambda: datetime.now(timezone.utc),
+    )
+    worker = InavWorker(
+        session_id=session_id,
+        ledger=ledger,
+        committer=MinuteCommitter(db=settings.db),
+        storage=make_storage(settings.storage),
+        collector=collector,
+        config=InavWorkerConfig(
+            worker_id=worker_id,
+            dataset=DATASET_ETF_INAV_MINUTE,
+            source="kis",
+            market="KR",  # 1분 트랙은 KR 전용(price 와 같은 이유 — 오타가 다른 prefix 에 쓴다)
+            session_date=parsed_day.isoformat(),
+            universe=universe_model,
+            run_id=worker_id,
+        ),
+    )
+    for received in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(received, lambda *_: worker.request_stop())
+    logger.info("inav-worker 시작: session=%s worker=%s", session_id, worker_id)
+    ticks = failed = processed = blocked = 0
+    while max_ticks is None or ticks < max_ticks:
+        state = worker.tick(datetime.now(timezone.utc))
+        ticks += 1
+        failed += state == "WINDOW_FAILED"
+        processed += state in ("PROCESSED", "WINDOW_FAILED")
+        if state == "STOPPED":
+            if worker.stopping:
+                logger.info("inav-worker 종료(SIGTERM) — %d tick, WINDOW_FAILED %d", ticks, failed)
+                # 상주 모드의 SIGTERM 은 정상 종료다. bounded 모드는 확인 게이트라
+                # 끝까지 돌지 못한 것이므로 성공으로 보고하지 않는다(price 와 동형).
+                return 0 if max_ticks is None else 1
+            blocked += 1
+            time.sleep(tick_seconds)
+            continue
+        if state == "DRAINED":
+            failed += getattr(worker, "drain_window_failures", 0)
+            blocked += getattr(worker, "drain_blocked", 0)
+            logger.info("inav-worker 종료(DRAINED) — %d tick, 처리 %d, WINDOW_FAILED %d",
+                        ticks, processed, failed)
+            return 1 if failed or (blocked and not processed) else 0
+        if state in ("IDLE", "DRAINING"):
+            time.sleep(tick_seconds)
+    failed += getattr(worker, "drain_window_failures", 0)
+    blocked += getattr(worker, "drain_blocked", 0)
+    logger.info("inav-worker 종료(max-ticks %d) — 처리 %d, WINDOW_FAILED %d, 차단 %d",
+                ticks, processed, failed, blocked)
+    # 확인 게이트다 — 실패가 있었거나, **한 window 도 못 본 채 차단만 됐으면** 성공이 아니다.
     return 1 if failed or (blocked and not processed) else 0
