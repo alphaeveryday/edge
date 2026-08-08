@@ -60,6 +60,38 @@ def _returns_from_bars(
             for unit, bar in last.items()}
 
 
+def _intraday_returns(
+    bars: tuple[AggregatedBar, ...],
+) -> dict[str, tuple[float, bool]]:
+    """상태축 봉 → unit 별 (구간 log수익률, 정지 여부) — 층 회계의 `intraday` 입력.
+
+    라우팅은 방금 발화를 만든 **커밋된 그 봉**으로 판정해야 한다(ALPHA-866). 레이크
+    `bars_5m` 은 정본(Iceberg)이 낡으면 canonical 합집합으로 내려가는 별도 경로라,
+    층 회계만 그쪽을 보면 판정과 발화가 서로 다른 가격을 본 날이 생긴다.
+
+    시가·종가가 유한 양수가 아닌 unit 은 뺀다 — 지어내느니 부재로 남겨 `decompose`
+    가 사유를 적게 한다. 정지 판정은 구간 거래량 합 ≤ 0 (`layers._series` 와 같은 결:
+    정지일의 수익률 0 은 거짓이다).
+    """
+    first: dict[str, AggregatedBar] = {}
+    last: dict[str, AggregatedBar] = {}
+    volume: dict[str, float] = {}
+    for bar in bars:
+        head = first.get(bar.unit_id)
+        if head is None or bar.start < head.start:
+            first[bar.unit_id] = bar
+        tail = last.get(bar.unit_id)
+        if tail is None or bar.end > tail.end:
+            last[bar.unit_id] = bar
+        volume[bar.unit_id] = volume.get(bar.unit_id, 0.0) + float(bar.volume)
+    out: dict[str, tuple[float, bool]] = {}
+    for unit, head in first.items():
+        opened, closed = float(head.open), float(last[unit].close)
+        if math.isfinite(opened) and math.isfinite(closed) and opened > 0 and closed > 0:
+            out[unit] = (math.log(closed / opened), volume[unit] <= 0)
+    return out
+
+
 def _ratio(numerator: float, base: float | None) -> float | None:
     """`numerator/base - 1` — 유한하지 않으면 `None`(미가격).
 
@@ -220,7 +252,13 @@ def run(
     # DLQ 축도 아닌 채 `except Exception` 으로 새서 잘못된 사유로 남는다 — 어제까지
     # 통과하던 holdings 가 오늘 런을 죽이면 안 된다. 분해(`compute_decomposition`)는
     # 원본 holdings 를 그대로 쓴다: 여기 정규화는 진단 입력의 계약을 맞추는 것뿐이다.
-    needed = tuple(dict.fromkeys((settings.etf_ticker, *(h.ticker for h in holdings))))
+    # 시장 프록시도 분석 unit 이다(ALPHA-866) - 층 회계의 시장 층이 이 봉으로 선다.
+    # 069500 은 수집 universe 의 판정 ETF 라 artifact 에 항상 실려 온다. 결손이면 다른
+    # unit 처럼 떨어뜨리고 기록한다 - 시장 층만 부재 사유를 안고 런은 진행한다(런을
+    # 죽이는 결손은 발화 ETF 자신뿐, 아래 가드).
+    from .statics.layers import MARKET_CODE
+    needed = tuple(dict.fromkeys(
+        (settings.etf_ticker, MARKET_CODE, *(h.ticker for h in holdings))))
     needed_set = set(needed)  # 봉마다 다시 만들면 16만 봉 × 수백 종목이 그대로 낭비다
     scoped = tuple(bar for bar in minute_bars if bar.unit_id in needed_set)
     # 비중도 같은 이유로 거른다 - 0·음수·비유한 비중은 `diagnose_window` 가 거부하고,
@@ -358,7 +396,7 @@ def run(
     # 분봉 트리거는 **구간 모드**로 층을 가른다. 하루 모드는 당일 일봉을 요구하는데
     # (`decompose` 는 `d0` 가 계열에 없으면 None) 확정 일봉은 마감 뒤에 나온다 - 장중엔
     # 원리적으로 못 채운다. 2026-08-06 장중 전건이 그 자리에서 `layer_route=미상` 이었다.
-    # 구간 모드는 같은 시각창의 과거 60일에서 β 를 뽑아 5분봉만으로 선다(`_series`).
+    # 구간 모드는 당일 봉만으로 선다(β=1 회계, ALPHA-862 - 표본이 필요 없다).
     #
     # 창과 층 분해를 **여기서 한 번만** 만들어 라우팅과 설명이 나눠 쓴다. 두 번 계산하면
     # 둘이 조용히 갈라지고, 그러면 원장의 route_code 가 산문이 설명한 창과 달라진다.
@@ -378,8 +416,14 @@ def run(
 
     roll = rt = None
     routing_failed = False
+    # 대상·시장·구성종목의 구간 수익은 **방금 집계한 상태축 봉**에서 낸다(ALPHA-866).
+    # 발화를 만든 그 봉과 층 판정이 같은 가격을 봐야 하고, 그래야 레이크 정본(Iceberg)
+    # 스테일 폴백이 이 축들에 낄 자리가 없다. 섹터 후보만 레이크에 남는다(참조 계열은
+    # 분석 unit 밖 - 후속 PR).
+    intraday = _intraday_returns(state_bars)
     try:
-        roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock)
+        roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock,
+                               intraday=intraday)
         rt = route_etf(roll)
     except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
         # **분해까지 됐어도 라우팅이 터지면 그 분해는 버린다.** `route_etf` 가 던지면

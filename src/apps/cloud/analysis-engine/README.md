@@ -24,7 +24,7 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 ```
 
 - `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 **LLM 앞에서 런을 세운다**(`PipelineError`, ALPHA-797). 임의 FK 값도, S3 폴백도 만들지 않는다 — 전제 결손은 설정 누락이라 조용히 우회하면 그 대상의 설명이 영영 없다.
-- **매 런 커버리지 1줄을 로그에 남긴다**(ALPHA-792) — `statics.coverage` 에 `exists`·`unbound` 가 실린다: 5분봉을 Glue Iceberg 로 읽었는지 canonical 합집합으로 폴백했는지(정본은 **그 거래일을 쓸 만큼 담을 때만** 정본이다 — 상류 적재가 멈추면 조용히 과거를 보게 되므로, ALPHA-793. '쓸 만큼' 은 착지 종목 수 ≥ 100 **그리고** 시장 프록시(069500)가 있음이다 — 행 하나만 보던 판정은 13종만 착지한 날을 통과시켰고, 그 13종에도 시장 지수는 있었으므로 둘 중 하나로는 못 거른다, ALPHA-833. 폭만 재고 **세션 깊이는 안 잰다** — 장중에 끊긴 날은 이 판정 밖이다), 층 분해가 왜 `None` 인지, 분해는 됐는데 **시장 층이 왜 빠졌는지**(`exists["market_layer"]` — 대상이 시장 프록시 자신이면 부재가 아니라 정상이라 안 적는다, ALPHA-833). 층은 **β=1 회계**다(ALPHA-862) — 시각창 집계는 요청일 하루만 DuckDB 로 직독하고(Athena 오프로드·60일 β 표본 폐지), 시변 β·ρ 판정은 칼만(ALPHA-803)이 가져온다. 이 값들은 원래 `CausalLake` 안에만 있어 운영에서 볼 수 없었다. 자격증명은 가린다(DSN 은 `_rdb` 가 원천에서 지우고 로그 쪽이 한 겹 더 받친다).
+- **매 런 커버리지 1줄을 로그에 남긴다**(ALPHA-792) — `statics.coverage` 에 `exists`·`unbound` 가 실린다: 5분봉을 Glue Iceberg 로 읽었는지 canonical 합집합으로 폴백했는지(정본은 **그 거래일을 쓸 만큼 담을 때만** 정본이다 — 상류 적재가 멈추면 조용히 과거를 보게 되므로, ALPHA-793. '쓸 만큼' 은 착지 종목 수 ≥ 100 **그리고** 시장 프록시(069500)가 있음이다 — 행 하나만 보던 판정은 13종만 착지한 날을 통과시켰고, 그 13종에도 시장 지수는 있었으므로 둘 중 하나로는 못 거른다, ALPHA-833. 폭만 재고 **세션 깊이는 안 잰다** — 장중에 끊긴 날은 이 판정 밖이다), 층 분해가 왜 `None` 인지, 분해는 됐는데 **시장 층이 왜 빠졌는지**(`exists["market_layer"]` — 대상이 시장 프록시 자신이면 부재가 아니라 정상이라 안 적는다, ALPHA-833). 층은 **β=1 회계**다(ALPHA-862) — 대상·시장·구성종목의 구간수익은 **커밋된 상태축 1분봉**에서 직접 계산해 주입하고(ALPHA-866 — 이 세 축엔 레이크 폴백이 없다: 결손이면 부재 사유로 남는다), 섹터 후보만 요청일 하루를 DuckDB 로 직독한다(Athena 오프로드·60일 β 표본 폐지). 시변 β·ρ 판정은 칼만(ALPHA-803)이 가져온다. 이 값들은 원래 `CausalLake` 안에만 있어 운영에서 볼 수 없었다. 자격증명은 가린다(DSN 은 `_rdb` 가 원천에서 지우고 로그 쪽이 한 겹 더 받친다).
   - ⚠️ **커버리지가 설명하지 못하는 `None` 이 하나 있다**(ALPHA-785) — 분해는 됐는데 라우팅(`route_etf`)이 터져 그 분해를 **폐기**한 경우다. 재료 부재와 구분하려면 `statics.layers.failed` 의 `had_rollup`·`discarded_layers` 를 보고, 로그 보존 기간이 지난 뒤에는 원장의 `stage_results.routing_failed` 를 본다(그 런은 확신도도 `LOW` 로 내려간다).
 - **완주한 런마다 런 아카이브 1건을 S3에 남긴다**(평온 종료 포함, ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다). 반대로 **런이 raise 로 끊기면 아카이브도 없다** — 전제 결손·holdings 빈·수익률 미착지가 그 경우다.
 
@@ -46,7 +46,7 @@ src/edge_analysis/
   causal/     contracts · p0_question … p9_registry · run    # P0–P9 귀속 파이프라인
               graph · verify · sandbox · chain · engine · stats · fit   # 검정 실행 기계
   statics/    frame · windows · tree · gates · render · vocab   # 정적 층 — LLM 이전에 코드가 고정하는 전부
-              duck · athena · interval · layers · route · etfcell   # 5분봉·시각창 집계 표면(Athena↔DuckDB)·층 분해·라우팅
+              duck · interval · layers · route · etfcell   # 5분봉·시각창 집계 표면(DuckDB)·층 분해·라우팅
               (그 외 tool_* · paneltest · premium … — 어휘·설계 SSOT 는 statics/__init__ 과
                docs/analysis-engine/causal-attribution-design.md)
 ```

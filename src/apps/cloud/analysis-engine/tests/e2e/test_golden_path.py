@@ -413,10 +413,27 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
         MINUTE_COUNT = 91  # 09:00 ~ 10:30 (발화 분 포함)
         TRIGGER_MINUTE = 90  # 10:30
 
-        def _price_at(minute: int) -> dict[str, str]:
+        def _price_at(minute: int) -> dict[str, tuple[str, str]]:
+            # (open, close). 시장 프록시(069500)도 artifact 에 싣는다 — 실물 수집
+            # universe 가 그렇고, 층 회계의 시장 층은 **커밋 봉만** 본다(ALPHA-866,
+            # 레이크 폴백 금지). 가격은 ETF 의 정확히 ×20 — 상태축 구간 log 수익이
+            # 같아져 층 회계가 시장 100% 로 서고, 라우팅이 PRICE_ONLY 로 남는 계보를
+            # 고정한다.
+            #
+            # 첫 분(09:00)은 **분 안에서 움직인다**(ETF 10000→10050 · 시장 ×20).
+            # 전 봉이 플랫이면 첫 발화(09:00→09:01)의 상태축 수익이 전부 0 이라 층
+            # 판정이 혼합으로 접힌다 — 발화가 났다는 픽스처가 무변동을 말하면 안 된다.
+            if minute == 0:
+                return {ETF_TICKER: ("10000.0", "10050.0"),
+                        SAMSUNG_TICKER: ("70100.0", "70100.0"),
+                        "069500": ("200000.0", "201000.0")}
             if minute >= TRIGGER_MINUTE:
-                return {ETF_TICKER: "10300.0", SAMSUNG_TICKER: "73500.0"}
-            return {ETF_TICKER: "10050.0", SAMSUNG_TICKER: "70100.0"}
+                return {ETF_TICKER: ("10300.0", "10300.0"),
+                        SAMSUNG_TICKER: ("73500.0", "73500.0"),
+                        "069500": ("206000.0", "206000.0")}
+            return {ETF_TICKER: ("10050.0", "10050.0"),
+                    SAMSUNG_TICKER: ("70100.0", "70100.0"),
+                    "069500": ("201000.0", "201000.0")}
 
         minute_windows: list[tuple[str, str, bytes]] = []
         for minute in range(MINUTE_COUNT):
@@ -429,9 +446,10 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
                 # strict reader 는 ts·OHLCV 전부를 요구한다 — 원장 window 와 ts 가
                 # 어긋나거나 필드가 빠지면 형상 위반으로 죽는다(관대한 구 reader 와 다름).
                 {"unit_id": unit, "ts": stamp.isoformat().replace("+00:00", "Z"),
-                 "open": price, "high": price, "low": price, "close": price,
+                 "open": open_, "high": max(open_, close, key=float),
+                 "low": min(open_, close, key=float), "close": close,
                  "volume": "10"}
-                for unit, price in _price_at(minute).items()
+                for unit, (open_, close) in _price_at(minute).items()
             ])
             s3.objects[
                 canonical_price_minute_artifact_key("KR", TRADE_DATE, hhmm, 1)] = body

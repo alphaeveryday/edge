@@ -259,3 +259,89 @@ def test_rollup_is_frozen_dataclass():
     assert isinstance(r, Rollup)
     with pytest.raises(AttributeError):
         r.total = 0.0
+
+
+# ── 1분봉 실측 주입 (ALPHA-866) ───────────────────────────────────────────
+def test_intraday_overrides_target_and_market_returns():
+    """대상·시장의 구간수익은 호출자가 커밋된 1분봉에서 계산한 값이 선다 - 레이크
+    `bars_5m` 은 정본이 낡으면 폴백으로 내려가는 별도 경로라, 발화를 만든 봉과 층
+    판정이 다른 가격을 보면 안 된다. 이름은 레이크 것을 지킨다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(),
+                  intraday={"T": (0.02, False), MARKET_CODE: (0.01, False)})
+    assert r.total == pytest.approx(0.02, abs=1e-12)
+    m = next(x for x in r.layers if x.kind == "시장")
+    assert m.contribution == pytest.approx(0.01, abs=1e-12)
+    assert m.name == "KODEX 200", "이름은 레이크 것 - 수익률만 갈아 끼운다"
+    assert r.total == pytest.approx(
+        sum(x.contribution for x in r.layers) + r.idio, abs=1e-12)
+
+
+def test_intraday_erects_the_market_layer_when_the_lake_is_stale():
+    """레이크에 시장 계열이 아예 없어도(스테일 정본) 1분봉 실측이 시장 층을 세운다 -
+    '레이크가 낡아서' 시장 층이 빠지면 남은 층이 시장 몫까지 떠안는다."""
+    lake = _lake()
+    del lake.series[MARKET_CODE]
+    r = decompose(lake, "T", _day(),
+                  intraday={"T": (0.02, False), MARKET_CODE: (0.01, False)})
+    m = next(x for x in r.layers if x.kind == "시장")
+    assert m.ret == pytest.approx(0.01, abs=1e-12)
+    assert "market_layer" not in lake.exists, "층이 섰는데 부재 사유가 남으면 오진이다"
+
+
+def test_intraday_constituents_do_not_enter_the_sector_pool():
+    """`intraday` 에 실려 온 구성종목은 섹터 후보 풀에 못 들어간다 - 들어가면
+    '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다. 종목 귀속(`_names`)에는 선다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(), intraday={
+        "T": (0.02, False), MARKET_CODE: (0.01, False),
+        "a": (0.5, False), "b": (0.0, False), "c": (0.0, False)})
+    sec = next(x for x in r.layers if x.kind == "섹터")
+    assert sec.code == "SEC", "구성종목이 섹터 후보를 밀어내면 안 된다"
+    a = next(n for n in r.names if n.ticker == "a")
+    base = sum(x.contribution for x in r.layers)
+    assert a.ret == pytest.approx(0.5, abs=1e-12)
+    assert a.idio == pytest.approx(0.5 - base, abs=1e-12)
+
+
+def test_intraday_halt_excludes_the_name_and_counts_it():
+    """1분봉 실측의 정지 판정(구간 거래량 0)도 레이크 판정과 같은 계약을 탄다 -
+    빼되, 뺐다는 사실을 센다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(), intraday={
+        "T": (0.02, False), MARKET_CODE: (0.01, False),
+        "a": (0.1, True), "b": (0.0, False), "c": (0.0, False)})
+    assert all(n.ticker != "a" for n in r.names)
+    assert r.halted == 1
+
+
+def test_intraday_mode_market_gap_does_not_fall_back_to_the_lake():
+    """커밋 봉 모드에서 시장 결손이면 시장 층을 **세우지 않는다** - 레이크에 시장
+    계열이 멀쩡히 있어도. 내려가면 발화를 만든 봉과 판정이 다른 가격을 보는 갈림이
+    결손일마다 조용히 부활하고, 원장 어디에도 그 표식이 없다(Rule 12). 차감 기준이
+    없으니 섹터도 안 선다."""
+    lake = _lake()                    # 레이크에는 시장 계열이 멀쩡히 있다
+    r = decompose(lake, "T", _day(), intraday={"T": (0.02, False)})
+    assert r is not None
+    assert all(x.kind != "시장" for x in r.layers)
+    assert "커밋 1분봉 결손" in lake.exists["market_layer"]
+    assert all(x.kind != "섹터" for x in r.layers)
+
+
+def test_intraday_mode_target_gap_is_absence_not_a_lake_read():
+    """커밋 봉 모드에서 대상 자신이 결손이면 분해는 부재다 - 레이크의 대상 계열로
+    지어내지 않는다. 부재 사유가 남는다."""
+    lake = _lake()
+    r = decompose(lake, "T", _day(), intraday={MARKET_CODE: (0.01, False)})
+    assert r is None
+    assert "layers" in lake.exists
+
+
+def test_intraday_mode_names_exclude_units_the_ledger_dropped():
+    """원장이 결손으로 떨어뜨린 구성종목은 귀속에서도 빠진다 - 레이크에 그 종목이
+    있어도 되살리지 않는다. dropped_units 와 귀속이 같은 세계를 말해야 한다."""
+    lake = _lake()                    # 레이크에는 a·b·c 전부 있다
+    r = decompose(lake, "T", _day(), intraday={
+        "T": (0.02, False), MARKET_CODE: (0.01, False), "a": (0.3, False)})
+    assert {n.ticker for n in r.names} == {"a"}
+    assert r.weight_covered == pytest.approx(0.5, abs=1e-12), "커버리지가 얇음을 수치로 말해야 한다"

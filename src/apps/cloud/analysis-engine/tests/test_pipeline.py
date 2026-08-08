@@ -80,13 +80,16 @@ class _FakeLake:
         """
         requested_start = _TRIGGER_WINDOW_START.astimezone(KST)
         bars = []
-        for window in windows:  # noqa: B007 — 아래 dict 로 unit 두 개를 만든다
+        for window in windows:  # noqa: B007 — 아래 dict 로 unit 세 개를 만든다
             for unit, (open_, close) in {
                 "005930": (Decimal("73500"), Decimal("73500")),
                 "091160": (
                     Decimal("10400"),
                     Decimal("10200") if window.start >= requested_start else Decimal("10400"),
                 ),
+                # 시장 프록시 — 수집 universe 의 판정 ETF 라 artifact 에 항상 실려
+                # 온다. 층 회계의 시장 층이 이 봉으로 선다(ALPHA-866).
+                "069500": (Decimal("250000"), Decimal("252500")),
             }.items():
                 bars.append(MinuteBar(
                     source=window, unit_id=unit,
@@ -556,13 +559,14 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
     assert (window["window_start"], window["as_of"]) == ("09:00", "10:31")
     # 두 축의 좌표가 원장에 남아야 한다 — 남기지 않으면 나중에 "그 시점에 무엇을
     # 몇 개 봤나" 를 되짚을 방법이 없다. 그날 첫 발화라 두 축이 같은 구간을 덮는다:
-    # 09:00~10:31 = 91분 = 5분봉 19개(마지막이 1분짜리 부분 봉) × 2 unit.
+    # 09:00~10:31 = 91분 = 5분봉 19개(마지막이 1분짜리 부분 봉) × 3 unit(발화 ETF·
+    # 구성종목·시장 프록시 — ALPHA-866 이후 시장도 분석 unit 이다).
     assert {k: window[k] for k in (
         "analysis_start", "requested_start", "requested_end", "committed_windows",
         "state_bars", "requested_bars", "window_min_coverage", "dropped_units",
     )} == {
         "analysis_start": "09:00", "requested_start": "09:00", "requested_end": "10:31",
-        "committed_windows": 91, "state_bars": 38, "requested_bars": 38,
+        "committed_windows": 91, "state_bars": 57, "requested_bars": 57,
         "window_min_coverage": 1.0, "dropped_units": [],
     }
     # 분모가 갈려야 두 축이 서로 다른 것을 말한다: 오늘 여기까지 +2%(10200/10000)인데
@@ -1116,3 +1120,69 @@ def test_a_measured_run_is_still_published(monkeypatch):
 
     assert _run(store, _FakeS3()) == 0
     assert store.explanation_kwargs["publishable"] is True
+
+
+def test_layer_accounting_receives_committed_bar_returns(monkeypatch):
+    """층 회계의 대상·시장·구성종목 구간수익은 **커밋된 상태축 봉**에서 온다(ALPHA-866).
+
+    레이크 `bars_5m` 은 정본(Iceberg)이 낡으면 canonical 로 내려가는 별도 경로다 —
+    라우팅이 그쪽을 보면 발화를 만든 가격과 판정 가격이 갈린 날이 생긴다. 여기 값이
+    다시 레이크 질의로 바뀌면 이 테스트가 깨진다.
+    """
+    import math as _math
+    seen = {}
+
+    def fake_decompose(lake, etf, day, *, clock=None, intraday=None, **kwargs):
+        seen.update(clock=clock, intraday=intraday)
+        return None
+
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose", fake_decompose)
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        lambda *_a, **_kw: "고정 산출")
+
+    store = _MinuteFakeStore(_PREREQS_OK)
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+    assert run(settings, lake=_FakeLake(), store=store, client=_FakeClient(),
+               s3=_FakeS3(), causal_lake=object()) == 0
+
+    intraday = seen["intraday"]
+    # 상태축(09:00~요청 끝)의 시가→종가 log 수익 — 발화를 만든 바로 그 봉이다.
+    assert intraday["069500"][0] == pytest.approx(_math.log(252500 / 250000), abs=1e-12)
+    assert intraday["069500"][1] is False, "거래량이 있는데 정지로 접히면 안 된다"
+    assert intraday["091160"][0] == pytest.approx(_math.log(10200 / 10400), abs=1e-12)
+    assert intraday["005930"][0] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_missing_market_proxy_bars_degrade_the_market_layer_not_the_run(monkeypatch):
+    """시장 프록시 봉 결손은 다른 unit 과 같은 계약이다 — 떨어뜨리고 기록하되 런은
+    진행한다(런을 죽이는 결손은 발화 ETF 자신뿐). 여기서는 배선만 본다: `intraday`
+    에 시장이 빠진다는 것. 그때 층 회계가 레이크로 내려가지 않고 부재 사유를 남기는
+    계약은 test_layers 의 intraday_mode_market_gap 테스트가 실물 `decompose` 로
+    고정한다.
+    """
+    class _NoMarketLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            return tuple(bar for bar in super().load_committed_minute_bars(market, windows)
+                         if bar.unit_id != "069500")
+
+    seen = {}
+
+    def fake_decompose(lake, etf, day, *, clock=None, intraday=None, **kwargs):
+        seen.update(intraday=intraday)
+        return None
+
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose", fake_decompose)
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        lambda *_a, **_kw: "고정 산출")
+
+    store = _MinuteFakeStore(_PREREQS_OK)
+    from dataclasses import make_dataclass
+    _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
+    settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
+    assert run(settings, lake=_NoMarketLake(), store=store, client=_FakeClient(),
+               s3=_FakeS3(), causal_lake=object()) == 0
+    assert "069500" not in seen["intraday"]
+    window = store.explanation.raw["stage_results"]["window"]
+    assert window["dropped_units"] == ["069500"], "결손이 원장에 안 남았다"
