@@ -1402,6 +1402,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가
 # 내려간다**. 계획(plan-minute-session)은 열려 있고 스케일만 막는다 — 어휘와 스케일 권한은
 # 다른 축이다(`states.SCALED_DATASETS`).
+#   ⚠️ 같은 가드가 `--dataset news_minute` 도 거부한다(전엔 받았다). 뉴스 레인은
+#   `--dataset` 이 아니라 `MINUTE_SESSION_NEWS_SOURCE_GROUP` 토글로 이 명령에 얹히고
+#   terraform 의 `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만,
+#   손으로 치던 사람은 여기서 막힌다.
 #
 # start: 거래일 판정(OPS_KR_HOLIDAYS) → plan-minute-session(오늘 KST 고정) → desired 0→1.
 # ⚠️ 비거래일이면 아무것도 하지 않고 exit 0. 계획이 실패하면 **올리지 않고** 그 exit 를

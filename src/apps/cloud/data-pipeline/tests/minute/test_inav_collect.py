@@ -129,6 +129,20 @@ class TestRecordShape:
         assert record["premium_pct"] == "1.00"
         assert "premium" not in record and "dprt" not in record
 
+    def test_값이_바뀌면_checksum_도_바뀐다(self):
+        """**정정이 성립하는 근거다.** 원장은 `checksum` 과 `manifest_checksum` 이 둘 다
+        같을 때만 generation 을 유지한다(`_record_window_outcome_tx`). NAV 값만 정정된
+        재수집은 4분류가 그대로라 manifest 가 안 바뀌므로, checksum 이 값에 안 걸리면
+        generation 이 1 에 머물고 정정본이 같은 키를 겨눠 **조용히 no-op 이거나
+        ArtifactImmutabilityError** 가 된다. 위 '재실행은 같다' 단언만으로는 값과 무관한
+        checksum 도 통과한다 — 두 단언이 짝이어야 축이 고정된다."""
+        corrected = {"069500": [row("093100", "999.0", "202", "1.00")]}
+        first, _, manifest_a = collect(request_for(31, ("069500",)))
+        second, _, manifest_b = collect(request_for(31, ("069500",)), rows=corrected)
+
+        assert manifest_a == manifest_b            # 4분류는 그대로인데
+        assert first.result_checksum != second.result_checksum  # checksum 은 갈린다
+
     def test_fetched_at_이_없어_재실행_checksum_이_같다(self):
         """checksum 은 곧 세대 identity 다 — 실행 시각이 섞이면 값이 같은 재실행마다
         checksum 이 달라져 `ArtifactImmutabilityError` 로 그 window 가 막힌다."""

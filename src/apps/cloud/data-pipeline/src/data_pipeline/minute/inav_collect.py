@@ -32,7 +32,7 @@ from datetime import datetime
 
 from ..sources.candle import to_decimal
 from ..sources.http import StopFetch
-from ..sources.kis_inav import KST, MIN_INTERVAL_SEC, KisInavSource
+from ..sources.kis_inav import KST, INTERVAL_STEP_SEC, KisInavSource
 from ..sources.kis_nav import KisNavShapeError
 from .models import CollectionRequest, CollectionResult, content_checksum
 from .price_collect import Outcome, status_of
@@ -187,9 +187,13 @@ class KisInavCollector:
     """
 
     def __init__(self, source: KisInavSource, clock: Callable[[], datetime]):
-        if source.interval_sec != MIN_INTERVAL_SEC:
+        # 격자 상수(`INTERVAL_STEP_SEC`)에 건다 — 값이 같은 하한(`MIN_INTERVAL_SEC`)에
+        # 걸면, 벤더가 30초 코드를 더해 하한이 내려가는 날 **정상 설정(60)이 거부되고
+        # 30초 설정이 통과**한다. 그 30초는 라벨 절반이 1분 격자에 안 맞아 이 가드가
+        # 막으려던 바로 그 결과(전 unit 매 window missing)를 낸다.
+        if source.interval_sec != INTERVAL_STEP_SEC:
             raise SystemExit(
-                f"1분 레인의 iNAV 는 interval_sec={MIN_INTERVAL_SEC} 만 쓴다"
+                f"1분 레인의 iNAV 는 interval_sec={INTERVAL_STEP_SEC} 만 쓴다"
                 f"(받은 값 {source.interval_sec}) — 다른 간격이면 표본 라벨이 1분 격자에"
                 " 안 맞아 전 unit 이 매 window missing 이 된다"
             )

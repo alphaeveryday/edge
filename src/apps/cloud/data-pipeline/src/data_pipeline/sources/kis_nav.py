@@ -54,8 +54,18 @@ class KisNavShapeError(ValueError):
     재시도 축(missing)으로 접으면 벤더가 키 이름 하나만 바꿔도 전 unit 이 매 window
     "벤더가 안 줬다"로 기록되고, 원장에는 우리 파서가 깨진 사실이 남지 않는다.
 
-    rt_cd 오류·빈 output 은 **여기 넣지 않는다** — 일시 거절·창에 데이터 없음이라
-    재시도로 풀리는 축이다(`kis_minute` 이 `KisUnitError` 로 가르는 것과 같은 경계).
+    **`rt_cd=0` 인데 `output` 이 list 가 아닌 경우만** 이 타입이다. rt_cd 오류·빈 output
+    (일시 거절·창에 데이터 없음)은 물론이고, **본문이 dict 조차 아닌 경우도 아니다** —
+    그건 잘린 응답·프록시 오류 페이지 쪽이 압도적이라 재시도 축이 맞다.
+
+    ⚠️ **`kis_minute` 과 여기서 갈린다.** 저쪽은 두 봉투 조건(`output2 이상`·`응답이
+    객체가 아님`)을 **묶어서** 전송 사고로 본다(테스트로 고정 — `test_envelope_shape_
+    error_is_transient_not_cached`). 여기서 하나만 떼는 근거는 `rt_cd`다: 본문이 유효한
+    JSON 이고 `rt_cd="0"` 까지 들어 있으면 그 응답은 **KIS 가 준 것**이지 프록시가 끼운
+    오류 페이지가 아니다(잘린 본문이 우연히 유효 JSON 경계에 떨어질 확률은 무시할 만하다).
+    거기서 `output` 이 없거나 list 가 아니면 스키마 드리프트로 읽는 게 맞다.
+    저쪽 규칙이 더 넓고 테스트도 있으므로, 이 갈림은 **의도된 것으로 여기 적어 둔다**
+    (Rule 7 — 충돌은 평균 내지 말고 표면화). 저쪽을 이쪽에 맞출지는 별개 판단이다.
     """
 
 
@@ -236,7 +246,11 @@ class KisNavSource:
             body = self.client.request("GET", url, headers=headers, decode=True)
             data = json.loads(body)  # 깨진 JSON → ETF 단위 실패로 전파
             if not isinstance(data, dict):
-                raise KisNavShapeError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
+                # ⚠️ 여기는 **재시도 축으로 남긴다**(`KisNavShapeError` 아님). 본문이 dict
+                # 조차 아니면 잘린 응답·프록시 오류 페이지 같은 **전송 사고**가 압도적이다 —
+                # `kis_minute` 이 같은 조건을 `KisUnitError`(전송 사고 축)로 돌리는 이유이고
+                # 테스트로 고정돼 있다(`test_envelope_shape_error_is_transient_not_cached`).
+                raise ValueError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
             if data.get("rt_cd") == "0":
                 # 이 엔드포인트는 output2 가 아니라 단일 output 배열이다(라이브 실측).
                 # 키 누락·비-list 는 rt_cd=0 인데도 이상(스키마 드리프트)이라 fail-loud.
