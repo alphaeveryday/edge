@@ -1,6 +1,6 @@
 """DartDisclosureSource 어댑터 테스트 — 공시목록 필터·provenance·status·문서 원본.
 
-공시목록(list.json)은 전 유형을 주므로 report_nm 부분일치로 대상만 낸다. 실측 표기(가운뎃점
+공시목록(list.json)은 전 유형을 주므로 report_nm 부분일치는 그 플래그를 정한다. 실측 표기(가운뎃점
 ㆍ·꼬리 공백·[기재정정] 접두)와 malformed 입력에서 게이트가 뚫리지 않는지(각도 H)를 검증한다.
 각 테스트는 '왜 이 동작이 중요한가'를 주석으로 남긴다(AGENTS Rule 9).
 """
@@ -129,10 +129,12 @@ def _source(tmp_path, client, **override):
     return DartDisclosureSource(config, client)
 
 
-def test_filters_by_report_name_and_attaches_provenance(tmp_path):
-    # WHY: 공시목록은 전 유형을 준다 — 대상 유형(공급계약·사업보고서)만 내고, 무관 유형은
-    #      버려야 후속이 본문을 무의미하게 재수집하지 않는다. 그리고 list.json 이 안 주는
-    #      source_url 은 rcept_no 로 구성해 붙여야(파생 provenance) 다운스트림이 원문을 연다.
+def test_report_type_flags_rows_instead_of_dropping_them(tmp_path):
+    # WHY: 유형으로 **버리면** 나중에 대상을 넓힐 때 그 기간을 통째로 재수집해야 한다 —
+    #      목록 질의는 어차피 전 유형을 페이지네이션하므로 버려서 아끼는 호출이 0이다
+    #      (비싼 것은 본문이고 그건 스텝이 플래그로 막는다, ALPHA-865). 그래서 유형은
+    #      탈락 조건이 아니라 `is_target` 플래그여야 한다.
+    #      순서·값을 따로 묻는다: 세 행이 다 나오는가(존재), 플래그가 유형과 맞는가(값).
     client = FakeClient(list_pages={1: _page([
         _row("단일판매ㆍ공급계약체결              ", rcept_no="A1"),  # 대상(공급계약) + 꼬리공백·ㆍ
         _row("주주총회소집결의", rcept_no="B2"),                     # 비대상
@@ -142,13 +144,121 @@ def test_filters_by_report_name_and_attaches_provenance(tmp_path):
 
     records = list(source.fetch(["005930"]))
 
-    assert [r["rcept_no"] for r in records] == ["A1", "C3"]  # 대상만, 비대상 제외
-    r = records[0]
+    assert [r["rcept_no"] for r in records] == ["A1", "B2", "C3"]  # 전량 — 유형으로 안 버린다
+    assert [r["is_target"] for r in records] == [True, False, True]
+    assert source.fetch_failures == []
+
+
+def test_attenuation_counted_on_two_axes(tmp_path):
+    # WHY: 통과분만 세면 유니버스가 자른 몫과 유형이 자른 몫이 한 숫자로 접혀, "대상을
+    #      넓히면 얼마나 늘어나는가"에 답할 수 없다(실측 867행 → 저장 1건의 내역이 그래서
+    #      복원되지 않았다). 두 축을 따로 세는지 **서로 다른 값**으로 확인한다 — 셋이 같은
+    #      값이면 어느 카운터가 어느 축인지 이 테스트가 못 가린다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결", rcept_no="A1"),                        # 유니버스 O · 유형 O
+        _row("주주총회소집결의", rcept_no="B2"),                             # 유니버스 O · 유형 X
+        _row("현금ㆍ현물배당결정", rcept_no="B3"),                           # 유니버스 O · 유형 X
+        _row("단일판매ㆍ공급계약체결", rcept_no="T1", stock_code="000660"),   # 유니버스 X
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"]))
+
+    assert source.list_rows_seen == 4   # 벤더가 건넨 전부
+    assert source.universe_matched == 3  # 유니버스가 1행을 잘랐다
+    assert source.type_matched == 1      # 유형이 거기서 2행을 더 잘랐다
+
+
+_ABSENT = object()  # "키가 아예 없다" — 명시적 None 과 다른 입력이라 따로 둔다
+
+
+@pytest.mark.parametrize(
+    "bad_rcept", [12345, ["A"], {"a": 1}, True, None, _ABSENT, "", "   "]
+)
+def test_malformed_rcept_no_dropped_whatever_the_type(tmp_path, bad_rcept):
+    # WHY: 한때 이 검사를 **대상 행에만** 걸었다가 결함 둘을 만들어 되돌렸다.
+    #      ① 비대상 행을 보존하는 유일한 이유가 "대상을 넓힐 때 재수집 불필요"인데 rcept_no
+    #         없는 행은 그 확장을 못 받는다(본문 키·canonical 정체성이 rcept_no 다) —
+    #         보존됐는데 영원히 못 쓰는 행이 된다.
+    #      ② truthy 비문자열(int·list·dict)은 소비자의 `(x or "").strip()` 을 통과 못 해
+    #         **창 전체를 죽인다**(각도 H — crash-before-gate). 실제로 밟은 회귀다.
+    #      falsy(None·"")와 truthy 비문자열을 **함께** 넣는 이유: `or ""` 로 흡수되는 것만
+    #      테스트하면 실제로 터지는 쪽을 한 번도 안 밟는다. 키 부재(`_ABSENT`)와 명시적
+    #      `None` 도 따로 넣는다 — 하나로 접으면 둘 중 한 입력을 영영 안 밟는다.
+    row = {"stock_code": "005930", "report_nm": "주주총회소집결의"}
+    if bad_rcept is not _ABSENT:
+        row["rcept_no"] = bad_rcept
+    client = FakeClient(list_pages={1: _page([
+        row,
+        _row("단일판매ㆍ공급계약체결", rcept_no="OK"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["rcept_no"] for r in records] == ["OK"]  # 못 쓰는 행은 안 나온다
+    assert source.dropped_malformed == 1              # 조용히 버리지 않는다
+
+
+def test_dropped_non_target_row_is_not_counted_as_a_failure(tmp_path):
+    # WHY: `ops.records_out` 은 대상 스코프인데 `failed_records` 에 비대상 결함을 섞으면
+    #      두 값의 분모가 갈려 원장 계약("산출과 유실은 같은 스코프에서", ops/entry.py)을
+    #      깬다. 그렇다고 버리기만 하면 Rule 12 위반이라 **별도 축**으로 센다 — 두 통이
+    #      각각 제 것만 담는지 확인한다(하나만 보면 섞여도 통과한다).
+    client = FakeClient(list_pages={1: _page([
+        {"stock_code": "005930", "report_nm": "주주총회소집결의", "rcept_no": 12345},
+        {"stock_code": "005930", "report_nm": "단일판매ㆍ공급계약체결", "rcept_no": 999},
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"]))
+
+    assert source.dropped_malformed == 1          # 비대상 → 별도 축
+    assert len(source.fetch_failures) == 1        # 대상 → 실패
+    assert "rcept_no" in source.fetch_failures[0]["error"]
+
+
+def test_counters_reset_between_fetches(tmp_path):
+    # WHY: 카운터 리셋은 같은 인스턴스로 fetch 를 두 번 부르는 테스트가 없으면 **지워도
+    #      전부 초록**이다(변이로 확인됨). 스텝은 런당 한 번만 부르지만, 리셋이 조용히
+    #      죽으면 백필처럼 재사용하는 경로에서 감쇠 수치가 누적돼 거짓이 된다.
+    #      픽스처에 **결함 행 둘을 섞는다** — 정상 행만 두면 dropped_malformed·fetch_failures
+    #      가 양쪽 런에서 0 이라 리셋을 지워도 0==0 으로 통과한다(그게 이 자리가 무증이던 이유).
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결", rcept_no="A1"),
+        _row("주주총회소집결의", rcept_no="B2"),
+        {"stock_code": "005930", "report_nm": "현금ㆍ현물배당결정", "rcept_no": 12345},  # 비대상 결함
+        {"stock_code": "005930", "report_nm": "단일판매ㆍ공급계약체결"},                  # 대상 결함
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    def snapshot():
+        return (source.list_rows_seen, source.universe_matched, source.type_matched,
+                source.dropped_malformed, len(source.fetch_failures))
+
+    list(source.fetch(["005930"]))
+    first = snapshot()
+    assert first[3] == 1 and first[4] == 1  # 결함 축 둘 다 0 이 아니다(리셋을 실제로 물을 수 있다)
+    list(source.fetch(["005930"]))
+
+    assert snapshot() == first
+
+
+def test_target_row_carries_derived_provenance(tmp_path):
+    # WHY: list.json 은 source_url 을 안 준다 — rcept_no 로 구성해 붙여야(파생 provenance)
+    #      다운스트림이 원문을 연다. 우리 축(our_ticker·market)과 벤더 축(stock_code)이 둘 다
+    #      실려야 후속이 조인할 수 있다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결              ", rcept_no="A1"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    r = list(source.fetch(["005930"]))[0]
+
     assert r["market"] == "KR" and r["our_ticker"] == "005930"
     assert r["stock_code"] == "005930"
     assert r["source_url"] == "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=A1"
     assert "fetched_at" in r
-    assert source.fetch_failures == []
 
 
 def test_foreign_rows_filtered_without_touching_corpcode(tmp_path):
@@ -198,7 +308,8 @@ def test_row_repeated_across_shifted_pages_collapses(tmp_path):
 
     records = list(source.fetch(["005930"]))
 
-    assert [r["rcept_no"] for r in records] == ["DUP", "NEW"]
+    # 비대상(X)도 이제 나온다 — 접히는 것은 **완전히 같은 행**(DUP)뿐이지 유형이 아니다.
+    assert [r["rcept_no"] for r in records] == ["DUP", "X", "NEW"]
 
 
 def test_long_backfill_window_is_split_for_the_3month_limit(tmp_path):

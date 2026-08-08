@@ -5,10 +5,17 @@
     {base_url}/list.json?crtfc_key=&bgn_de=&end_de=&page_no=&page_count=  # 공시목록
     {base_url}/document.xml?crtfc_key=&rcept_no=              # 공시서류 원본(ZIP)
 
-**날짜창의 시장 전체 공시목록**을 페이지네이션하며 유니버스(stock_code)와 report_nm 부분일치로
-대상만 낸다(공시목록은 전 종목·전 유형을 준다). 공시서류 원본 본문(document.xml)은 step 이
+**날짜창의 시장 전체 공시목록**을 페이지네이션하며 유니버스(stock_code)로 우리 종목 행만
+낸다(공시목록은 전 종목·전 유형을 준다). 공시서류 원본 본문(document.xml)은 step 이
 rcept_no 별로 fetch_document 로 받아 별도 객체에 무변형 저장한다 — 이 어댑터의 fetch() 는 메타
 행만 낸다.
+
+⚠️ **report_nm 유형은 탈락 조건이 아니라 `is_target` 플래그다**(ALPHA-865). 목록 질의는 유형과
+무관하게 창 전체를 페이지네이션하므로 여기서 비대상 행을 버려도 **호출이 하나도 줄지 않는다** —
+버리면 나중에 대상 유형을 넓힐 때 그 기간을 통째로 재수집해야 할 뿐이다. 비싼 것은 본문
+(document.xml, 행당 1콜)이고 그쪽만 스텝이 플래그로 제한하므로, 증거는 남기고 비용은 그대로다.
+정제 스텝은 원래부터 report_nm 으로 라우팅해 왔어서(normalize_disclosure*) 비대상 행은
+`records_skipped_type` 으로 빠진다 — 그쪽은 손댈 것이 없다.
 
 ⚠️ `corp_code` 는 **선택 파라미터**다(실측 2026-08-03). 종목별로 질의하면 호출 수가 유니버스
 크기에 비례해(311 종 = 311 콜, PoliteClient 1.0s ⇒ ~311초) 어떤 잦은 실행도 불가능한데, 생략하면
@@ -176,6 +183,19 @@ class DartDisclosureSource:
         # 쪽이든 엄격한 쪽이든 거짓이 된다. 스텝은 이 값을 collection_log 에 기록만 한다.
         self.list_total_count: int | None = None
         self.list_rows_seen: int = 0
+        # 감쇠를 **두 축으로 갈라** 센다(ALPHA-865). 목록은 시장 전체라 우리 것이 되기까지
+        # 필터를 둘 지나는데(유니버스 → 유형), 통과분만 세면 어느 쪽이 얼마나 잘랐는지
+        # 사후에 복원되지 않는다 — 대상을 넓힐지 판단하려면 두 감쇠가 따로 보여야 한다.
+        #
+        # ⚠️ 둘 다 **필터 지점에서** 센다 — 뒤에 오는 중복 접기(fingerprint)·rcept 게이트는
+        # 반영되지 않으므로 `type_matched` 는 "raw 에 앉은 대상 행 수"가 아니다(`list_rows_seen`
+        # 이 raw 행 수와 다른 것과 같은 이유). 답해야 할 질문이 "필터가 얼마나 자르나"라서
+        # 필터 지점이 맞는 자리다. 저장된 행 수는 스텝의 records_saved 가 따로 센다.
+        self.universe_matched: int = 0
+        self.type_matched: int = 0
+        # 보존해도 못 쓰는 행(비대상 + rcept_no 결측/비문자열)을 뺀 수. fetch_failures 와
+        # 따로 두는 이유는 위 rcept 게이트 주석에 있다 — 스코프가 다르면 원장 분모가 갈린다.
+        self.dropped_malformed: int = 0
         # 실제로 수집한 날짜창 — 인자와 다를 수 있다(시작일만 준 창은 끝을 오늘로 확정한다).
         # 스텝이 이걸 collection_log 에 남겨야 어떤 창이었는지 사후에 복원된다.
         self.resolved_window: tuple[str | None, str | None] = (None, None)
@@ -243,10 +263,17 @@ class DartDisclosureSource:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> Iterator[dict]:
-        """날짜창의 시장 전체 공시목록을 페이지네이션해 유니버스∩대상 유형 메타 행을 낸다."""
+        """날짜창의 시장 전체 공시목록을 페이지네이션해 유니버스 메타 행을 낸다.
+
+        대상 유형(report_nm) 여부는 버리는 기준이 아니라 각 행의 `is_target` 이다 — 본문을
+        받을지는 스텝이 그 플래그로 정한다(모듈 docstring).
+        """
         self.fetch_failures = []
         self.list_total_count = None
         self.list_rows_seen = 0
+        self.universe_matched = 0
+        self.type_matched = 0
+        self.dropped_malformed = 0
         self.resolved_window = (from_date, to_date)
         plan = self.plan(symbols)
         self.planned_symbols = len(plan)
@@ -287,7 +314,7 @@ class DartDisclosureSource:
         end_de: str | None,
         fetched_at: str,
     ) -> Iterator[dict]:
-        """한 세그먼트를 페이지 끝까지 훑어 대상 행을 낸다.
+        """한 세그먼트를 페이지 끝까지 훑어 유니버스 행을 낸다(유형은 플래그로 딸려 나간다).
 
         **완전성을 판정하지 않는다.** 이 루프가 하는 일은 두 가지다: ① 끝까지 읽었는가(못
         읽었으면 크게 말한다) ② 무엇을 봤는가(기록만 한다). 응답이 자기에 대해 하는 말
@@ -366,23 +393,51 @@ class DartDisclosureSource:
                 our_ticker = allowed.get(stock_code)
                 if our_ticker is None:
                     continue
+                self.universe_matched += 1
                 # 필드 타입도 행 단위로 격리한다 — 비문자열 report_nm/rcept_no 가 .strip()
                 # 에서 터지면 창 전체가 죽는다(각도 H — crash-before-gate).
                 report_nm = row.get("report_nm")
                 if not isinstance(report_nm, str):
+                    # 유형을 판정할 수 없는 행은 남겨도 재파싱이 불가능하다(무엇인지 모른다)
+                    # — 보존 대상이 아니라 형상 결함이라 실패로 드러내고 뺀다.
                     self._note_failure(
                         stock_code, our_ticker,
                         f"report_nm 비문자열: {type(report_nm).__name__}", page=page,
                     )
                     continue
-                if not self._is_target(report_nm):
-                    continue
+                # 유형은 **탈락 조건이 아니라 플래그**다(ALPHA-865). 목록 질의는 이미 전
+                # 유형을 받아오므로 여기서 버려도 호출은 하나도 안 준다 — 버리면 나중에
+                # 대상을 넓힐 때 그 기간을 통째로 재수집해야 할 뿐이다. 본문(document.xml)
+                # 다운로드만 대상으로 제한하면 비용은 그대로 두고 증거는 남는다(스텝이
+                # 이 플래그를 보고 고른다).
+                is_target = self._is_target(report_nm)
+                if is_target:
+                    self.type_matched += 1
                 rcept_no = row.get("rcept_no")
                 if not isinstance(rcept_no, str) or not rcept_no.strip():
-                    self._note_failure(
-                        stock_code, our_ticker,
-                        "대상 공시인데 rcept_no 결측/비문자열", page=page,
-                    )
+                    # 형상 검사는 유형과 **무관하게** 건다. 한때 대상 행에만 걸었다가 결함
+                    # 둘을 만들어 되돌렸다: ① 비대상 행을 남기는 유일한 이유가 "대상을 넓힐
+                    # 때 재수집 불필요"인데 rcept_no 없는 행은 그 확장을 못 받는다(본문 객체
+                    # 키도 canonical 병합 정체성도 rcept_no 다) ② 비문자열 rcept_no 가 소비자
+                    # 의 `.strip()` 에서 터져 창 전체를 죽인다(각도 H — crash-before-gate).
+                    #
+                    # 다만 **어느 통에 세느냐는 유형이 정한다.** 대상 행의 결측은 이 런이 하기로
+                    # 한 일의 실패라 fetch_failures 로 가고, 비대상 행은 부산물이라 별도 통에
+                    # 센다 — 섞으면 `ops.failed_records`(대상 스코프)와 `records_out` 의 분모가
+                    # 갈려 원장 계약을 깬다(ops/entry.py "산출과 유실은 같은 스코프에서"). 통을
+                    # 나누되 **버리진 않는다**: 0건이 아니라 수치로 남는다(Rule 12).
+                    if is_target:
+                        self._note_failure(
+                            stock_code, our_ticker,
+                            "대상 공시인데 rcept_no 결측/비문자열", page=page,
+                        )
+                    else:
+                        self.dropped_malformed += 1
+                        logger.info(
+                            "비대상 행 rcept_no 결측/비문자열 — 보존해도 못 쓰는 행이라 뺀다:"
+                            " stock_code=%s page=%s type=%s",
+                            stock_code, page, type(rcept_no).__name__,
+                        )
                     continue
                 fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
                 if fingerprint in seen:
@@ -391,6 +446,7 @@ class DartDisclosureSource:
                 record = dict(row)
                 record["our_ticker"] = our_ticker
                 record["market"] = "KR"
+                record["is_target"] = is_target
                 # stock_code 는 손대지 않는다 — dict(row) 가 벤더 원본을 그대로 담고 있다
                 # (bronze 무변형). 우리 축은 our_ticker 가 담는다.
                 record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no.strip())

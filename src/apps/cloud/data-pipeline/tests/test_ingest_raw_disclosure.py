@@ -1,6 +1,6 @@
 """ingest_raw_disclosure 스텝 테스트 — 메타 ndjson + 본문 ZIP 이중 저장·뉴스형 상태기계.
 
-핵심 계약: 공시 raw 도 ingest_date/run_id 파티션에 메타를 전부 보존하고, 본문(document.xml
+핵심 계약: 공시 raw 도 ingest_date/run_id 파티션에 **유니버스 행 메타를 전부** 보존하고, 본문(document.xml
 ZIP)은 rcept_no 별 객체로 무변형 저장한다. 특히 특정 corp 의 빈 날짜창은 정상(뉴스형) —
 재무의 '0행=error' 가드를 두지 않는다. 각 테스트는 '왜'를 주석으로 남긴다(AGENTS Rule 9).
 """
@@ -26,10 +26,14 @@ symbols = ["005930", "091160", "NVDA"]
 """
 
 
-def _rec(rcept_no, report_nm="단일판매ㆍ공급계약체결", market="KR") -> dict:
+def _rec(rcept_no, report_nm="단일판매ㆍ공급계약체결", market="KR", is_target=True) -> dict:
+    # `is_target` 은 실 소스가 매 행에 다는 플래그다(ALPHA-865) — 픽스처가 이걸 빼면 스텝의
+    # 본문 분기가 **한 번도 안 밟히는** 경로가 되어, 비대상 행을 어떻게 다루는지 아무 테스트도
+    # 검증하지 못한다(픽스처는 운영 산출 모양을 그대로 흉내내야 한다).
     return {
         "market": market, "our_ticker": "005930", "stock_code": "005930",
         "corp_code": "00126380", "report_nm": report_nm, "rcept_no": rcept_no,
+        "is_target": is_target,
         "source_url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
         "fetched_at": "2026-07-10T00:00:00+00:00",
     }
@@ -42,7 +46,9 @@ class FakeSource:
 
     def __init__(self, records=(), *, enabled=True, planned=1,
                  doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
-                 list_total_count=None, list_rows_seen=0, resolved_window=None):
+                 list_total_count=None, list_rows_seen=0, resolved_window=None,
+                 universe_matched=0, type_matched=0, dropped_malformed=0,
+                 report_name_filters=("공급계약", "사업보고서")):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
@@ -50,6 +56,12 @@ class FakeSource:
         # 창 규모 관측 — 실 소스가 fetch 중에 채운다. 스텝은 이걸 로그로 옮기기만 한다.
         self.list_total_count = list_total_count
         self.list_rows_seen = list_rows_seen
+        # 감쇠 두 축(ALPHA-865) — 마찬가지로 소스가 채우고 스텝은 옮기기만 한다.
+        self.universe_matched = universe_matched
+        self.type_matched = type_matched
+        self.dropped_malformed = dropped_malformed
+        # 실 소스는 설정에서 받는다 — 스텝이 이걸 로그로 옮겨 `is_target` 의 기준을 남긴다.
+        self.report_name_filters = list(report_name_filters)
         # 실제로 수집한 창 — 인자와 다를 수 있다(시작일만 준 창은 소스가 끝을 확정한다)
         self.resolved_window = resolved_window or (None, None)
         self._doc_fail = doc_fail
@@ -460,3 +472,181 @@ def test_window_scale_observed_in_collection_log(tmp_path):
     log = _log(storage, "r1")
     assert log["list_total_count"] == 1069
     assert log["list_rows_seen"] == 1069
+
+
+def test_non_target_meta_saved_without_downloading_body(tmp_path):
+    # WHY: 이 스텝이 유형 플래그로 지키는 것은 **비용** 하나다 — 메타는 전량 남기되(나중에
+    #      대상을 넓힐 때 재수집 불필요) 본문은 대상만 받는다(행당 1콜이라 안 막으면 하루
+    #      ~11콜이 universe_matched 만큼(수십~100/일)이 된다). 둘을 따로 묻는다: 저장은 2행인가(보존), 본문 요청은
+    #      대상 하나뿐인가(비용). 저장만 보면 본문을 다 받아도 통과하고, 요청만 보면 비대상
+    #      메타를 버려도 통과한다.
+    source = FakeSource(records=[
+        _rec("KEEP"),
+        _rec("SKIP", report_nm="주주총회소집결의", is_target=False),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert source.doc_requests == ["KEEP"]  # 비대상 본문은 요청조차 하지 않는다
+    key = next(k for k in storage.list_keys("raw") if k.endswith(".ndjson"))
+    rows = [json.loads(line) for line in storage.get_bytes(key).decode().splitlines()]
+    assert [r["rcept_no"] for r in rows] == ["KEEP", "SKIP"]  # 메타는 전량
+    # 두 필드를 **따로** 묻는다 — 하나만 보면 나머지 한 줄을 지우는 변이가 안 잡힌다.
+    # `[...]` 첨자라 키가 아예 없으면 KeyError 로 죽는다: "부재 vs 명시적 None"까지 가린다
+    # (README 가 명문화한 계약이 정확히 그 구분이다).
+    assert rows[1]["document_raw_path"] is None  # 안 받은 것을 받은 척하지 않는다
+    assert rows[1]["body_format"] is None
+
+
+def test_non_target_row_is_not_a_partial_run(tmp_path):
+    # WHY: 비대상 행은 본문이 없는 게 **정상**이다. 이걸 본문 수집 실패와 같은 신호로 묶으면
+    #      유형 필터를 푼 순간 모든 런이 partial(exit 1)이 되어 SFN 이 매 슬롯 raw 부분실패를
+    #      알린다 — 알림이 상시 켜지면 진짜 실패가 묻힌다.
+    source = FakeSource(records=[
+        _rec("SKIP1", report_nm="주주총회소집결의", is_target=False),
+        _rec("SKIP2", report_nm="현금ㆍ현물배당결정", is_target=False),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["status"] == "success"
+    assert log["ops"]["failed_records"] == 0
+    assert log["documents_saved"] == 0
+    assert log["records_saved"] == 2
+
+
+def test_step_survives_malformed_rcept_no_on_non_target_row(tmp_path):
+    # WHY: 소스가 형상을 보장하게 됐지만 스텝이 그 보장에 **의존하지 않는지**를 따로 묻는다.
+    #      한때 `rcept_no = (record.get("rcept_no") or "").strip()` 이 is_target 게이트 위에
+    #      있어, truthy 비문자열(int)이 `or ""` 를 통과해 `.strip()` 에서 터졌다 — 그 한 건이
+    #      status=error·exit 1 로 **창의 남은 페이지를 통째로 못 받게** 만들었다.
+    #      계층별로 따로 물어야 한다: 소스 테스트는 소스만 증명한다. 백필·다른 생산자가 이
+    #      스텝에 먹이는 순간 소스 가드는 경로에 없다.
+    source = FakeSource(records=[
+        _rec(12345, report_nm="주주총회소집결의", is_target=False),  # truthy 비문자열
+        _rec("OK"),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0                       # 창이 죽지 않는다
+    log = _log(storage, "r1")
+    assert log["status"] == "success"
+    assert log["records_saved"] == 2       # 결함 행도 메타는 남는다
+    assert source.doc_requests == ["OK"]   # 본문은 대상만
+
+
+def test_missing_is_target_key_is_treated_as_non_target(tmp_path):
+    # WHY: 스텝 게이트(`not record.get("is_target")`)는 False·None·**키 부재**를 한 값으로
+    #      접는다. 지금 소스가 항상 플래그를 채우므로 무해하지만, 그건 **우연이지 의도가
+    #      아니고** 우연은 다음 수정이 조용히 뒤집는다. 방향도 안전하지만은 않다 — 플래그가
+    #      통째로 사라지면 전 행이 비대상이 되어 본문 0건인데 status=success 로 끝난다
+    #      ("안 받는 쪽"이 아니라 "아무것도 안 하고 성공이라 말하는 쪽").
+    #      그때 `type_matched>0` 인데 `documents_saved+reused==0` 이 사람에게 드러나는
+    #      유일한 신호라, 이 취급이 의도임을 여기서 고정한다.
+    rec = _rec("NOFLAG")
+    del rec["is_target"]
+    source = FakeSource(records=[rec])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert source.doc_requests == []       # 본문을 안 받는다
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 1       # 메타는 남는다
+    assert log["ops"]["records_out"] == 0  # 산출로는 안 센다
+
+
+def test_unknown_filter_basis_is_empty_not_invented(tmp_path):
+    # WHY: 이 필드의 존재 이유는 "이 런이 어느 기준이었나"의 **감사성**이다. 소스가 기준을
+    #      안 주면 빈 목록이어야 한다 — 폴백이 그럴듯한 목록을 지어내면 기준 미상인 런이
+    #      **거짓 기준을 찍고**, 나중에 필터를 넓혔을 때 그 런을 잘못 분류한다(모르는 것을
+    #      아는 것처럼 적는 쪽이 값이 없는 것보다 나쁘다).
+    #      기준을 가진 소스만 테스트하면 폴백 경로를 한 번도 안 밟는다.
+    source = FakeSource(records=[_rec("A1")])
+    del source.report_name_filters
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert _log(storage, "r1")["report_name_filters"] == []
+
+
+def test_ops_records_out_counts_targets_not_universe(tmp_path):
+    # WHY: 메타를 전량 보존하게 되면서 `saved` 가 유니버스 전량이 됐는데 `failed_records` 는
+    #      대상 스코프 그대로다. 둘을 섞으면 ops/entry.py 가 명문화한 "산출과 유실은 같은
+    #      스코프에서 와야 한다(비대칭 금지)"가 깨져 유실 비율이 축소돼 보이고, 콘솔 그리드가
+    #      실제 1건인 날 "산출 N"을 띄운다. **두 값이 서로 다른 수**여야 이 계약이 고정된다 —
+    #      같으면 어느 쪽을 실었는지 이 테스트가 못 가린다.
+    source = FakeSource(records=[
+        _rec("KEEP"),
+        _rec("S1", report_nm="주주총회소집결의", is_target=False),
+        _rec("S2", report_nm="현금ㆍ현물배당결정", is_target=False),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 3          # 보존은 전량
+    assert log["records_saved_target"] == 1   # 대상은 하나
+    assert log["ops"]["records_out"] == 1     # 원장이 세는 산출 = 대상 스코프
+
+
+def test_all_targets_failed_is_error_even_with_non_target_meta(tmp_path):
+    # WHY: `saved == 0 → status="error"` 분기가 비대상 메타 때문에 **도달 불가**가 됐었다 —
+    #      대상이 전건 실패한 런이 "일부 실패(partial)"라고 말한다. 판정 기준을 대상 스코프로
+    #      되돌렸는지 확인한다. 이 어휘가 죽으면 "수집이 통째로 실패했다"를 표현할 수단이
+    #      영영 없어진다(이 스텝이 status 어휘를 길게 정당화해 둔 그 어휘다).
+    # 대상 행이 **소스에서** 전부 떨어진 모양 — 벤더가 rcept_no 를 드리프트시키면 실제로
+    # 이렇게 된다(본문 fetch 실패는 메타를 보존하므로 이 경로가 아니다).
+    # 비대상 행을 **둘** 넣어 saved(2)와 실패 건수(1)를 갈라 놓는다 — 같은 값이면 문구의
+    # 숫자를 `saved` 로 바꾸는 변이가 통과한다(전체 문자열 일치도 그건 못 가린다).
+    source = FakeSource(records=[
+        _rec("SKIP1", report_nm="주주총회소집결의", is_target=False),
+        _rec("SKIP2", report_nm="현금ㆍ현물배당결정", is_target=False),
+    ])
+    source.fetch_failures = [
+        {"symbol": "005930", "rcept_no": None, "error": "대상 공시인데 rcept_no 결측/비문자열"},
+    ]
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 1
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 2          # 비대상 메타는 저장됐다
+    assert log["records_saved_target"] == 0   # 대상은 하나도 못 건졌다
+    assert log["status"] == "error"           # → partial 이 아니라 error 다
+    # 문구도 단언한다 — 실패 목록엔 유형 판정 앞에서 잡히는 남의 행도 섞이므로 "모든 대상
+    # 실패"는 대상 0건인 정상 날에 거짓이 된다. 두 사실(대상 저장 0 · 실패 N)을 그대로 적는다.
+    assert log["error"] == "대상 저장 0건 · 실패 1건"
+
+
+def test_attenuation_axes_recorded_in_collection_log(tmp_path):
+    # WHY: 두 감쇠 축(유니버스·유형)은 소스가 세고 스텝은 옮기기만 하는데, 옮기는 자리가
+    #      끊겨도 다른 테스트는 전부 통과한다(판정에 안 쓰는 관측값이라 게이트가 없다).
+    #      list_rows_seen 과 **다른 값**으로 넣어 세 축이 각각 제 자리에 실리는지 고정한다.
+    # 필터 목록도 **기본값이 아닌 값**으로 넘긴다 — 기대값이 픽스처 기본과 같으면
+    # `getattr` 폴백을 그 목록으로 바꾸거나 소스를 안 읽고 상수를 박아도 통과한다
+    # (다른 축에 이미 쓰는 원칙인데 이 축에만 빠져 있었다).
+    source = FakeSource(records=[_rec("A1")], list_rows_seen=867,
+                        universe_matched=97, type_matched=1, dropped_malformed=5,
+                        report_name_filters=["공급계약", "사업보고서", "배당"])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["list_rows_seen"] == 867
+    assert log["universe_matched"] == 97
+    assert log["type_matched"] == 1
+    # "버리되 0건 아님"(Rule 12)이 이 수정의 요지인데, 그 수치가 로그까지 가는 경로도
+    # 같은 무증 지대에 있다 — 상수 0 으로 박아도 나머지는 전부 초록이었다. 다른 셋과
+    # **다른 값**이라야 어느 필드를 실었는지 이 단언이 가린다.
+    assert log["rows_dropped_malformed"] == 5
+    # `is_target` 을 정한 기준도 함께 — 없으면 나중에 필터를 넓혔을 때 어느 런이 어느
+    # 기준이었는지 복원되지 않아 "보존해 뒀다가 재파싱"이라는 이 티켓의 전제가 깨진다.
+    assert log["report_name_filters"] == ["공급계약", "사업보고서", "배당"]
