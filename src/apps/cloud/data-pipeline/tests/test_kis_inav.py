@@ -14,7 +14,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from data_pipeline.config import KisNavSource as KisNavSourceConfig
-from data_pipeline.sources.kis_inav import DEFAULT_INTERVAL_SEC, KisInavSource
+from data_pipeline.sources.kis_inav import (
+    DEFAULT_INTERVAL_SEC,
+    ROWS_PER_CALL,
+    KisInavSource,
+)
 
 # 라이브 실측 행(2026-07-25, 069500, cls=60). 필드명·문자열 타입을 그대로 고정한다.
 # 일별 응답과 달리 **날짜 필드가 없다** — bsop_hour(HHMMSS)뿐인 것이 이 API 의 성질이다.
@@ -846,3 +850,71 @@ def test_개장_전_폴링은_구간이_따로_표시된다(monkeypatch, caplog)
     (rec,) = _records(caplog, "벤더 지연")
     assert rec.args[8] == "개장전"
     assert rec.levelno == logging.INFO  # 장중이 아니라 격상 대상이 아니다
+
+
+# ── 관측이 자기 자신에 대해 틀리는 축 (리뷰 3건) ─────────────────────
+# 이 조각의 산출물은 로그뿐이라, 로그가 거짓이면 그건 부수적 흠이 아니라 **산출물이
+# 틀린 것**이다. 셋 다 "무언가 빠졌다"가 아니라 "수치가 틀렸다" 쪽이라 부재 단언으로는
+# 안 잡히고, 값을 묶어야 잡힌다.
+
+
+def test_행_수_대조는_벤더가_준_수로_한다(monkeypatch, caplog):
+    """`rows` 는 `_row_defect` 가 거르고 남은 것이다. 그걸로 재면 **우리가 버린 행을
+    벤더의 계약 위반으로 고발**한다 — 30행 중 2행에 nav 가 비어 왔을 뿐인데 "28행(계약
+    30) · 창 1800초가 실제와 어긋난다"가 찍히고 둘 다 거짓이다. 읽는 쪽은 30행 계약이
+    깨졌고 그 런의 지연÷창 비율이 전부 잘못 조정됐다고 결론 낸다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 벤더는 계약대로 30행을 줬고, 그중 2행만 nav 가 비었다
+    rows = [_row(f"15{i:02d}00") for i in range(30)]
+    rows[3]["nav"] = ""
+    rows[7]["nav"] = ""
+    src = _source({"069500": _ok(rows)})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "필수 필드 결측" in caplog.text        # 버려진 2행은 따로 고발되고
+    assert not _records(caplog, "행 수가 계약과 다르다")  # 벤더는 무고하다
+
+
+def test_행_수가_실제로_모자라면_그_수를_남긴다(monkeypatch, caplog):
+    """위 테스트가 경고를 통째로 죽이는 회귀(`if False`)를 통과시키지 않게, 진짜 위반에서
+    **그 수치까지** 묶는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row(f"15{i:02d}00") for i in range(20)])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "행 수가 계약과 다르다")
+    assert rec.args[2] == 20 and rec.args[3] == ROWS_PER_CALL
+
+
+def test_라벨이_전건_깨져도_행_수는_대조한다(monkeypatch, caplog):
+    """형상 축을 지연 축 **안**에 두면 라벨이 전건 깨진 응답에서 행 수 대조가 안 돈다 —
+    하필 벤더가 스키마를 바꿨을 가능성이 가장 큰 경우라, **가장 의심스러운 응답이 검사를
+    통째로 건너뛴다**. 행 수는 라벨이 필요 없다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 12행 · 라벨 형식이 전부 계약 밖(6자리가 아니다)
+    src = _source({"069500": _ok([_row("15:30:00") for _ in range(12)])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert "지연 관측 불가" in caplog.text  # 시각 축은 못 쟀지만
+    (rec,) = _records(caplog, "행 수가 계약과 다르다")  # 형상 축은 살아서 물었다
+    assert rec.args[2] == 12
+
+
+def test_현재가가_0_인_행도_대조에서_뺀다(monkeypatch, caplog):
+    """`nav` 만 양수 검사를 하면 `price=0` 이 `(0/nav−1)×100 = −100.0000%` 로 대조에
+    섞인다 — 바로 그 값을 막으려고 유한성 검사가 있는데 다른 문으로 들어오는 셈이다.
+    정상 표본에 붙는 거짓 드리프트 경고는 결국 가드를 끄게 만든다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row("153000", stck_prpr="0", dprt="0.00")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "드리프트 의심")   # 거짓 경고가 없고
+    assert "괴리 단위 대조 불가" in caplog.text   # 표본이 0건인 사실은 남는다

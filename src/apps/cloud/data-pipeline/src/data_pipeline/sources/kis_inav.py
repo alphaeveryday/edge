@@ -246,8 +246,16 @@ class KisInavSource(KisNavSource):
         missing = [f for f in REQUIRED_ROW_FIELDS if _is_blank(row.get(f))]
         return f"필수 필드 결측: {', '.join(missing)}" if missing else None
 
-    def _note_rows(self, our_etf_id: str, kis_symbol: str, rows: list[dict]) -> None:
-        """응답 집합에서 **설계를 가르는 두 가지**를 관측한다 (ALPHA-845).
+    def _note_rows(
+        self, our_etf_id: str, kis_symbol: str, rows: list[dict], received_count: int
+    ) -> None:
+        """응답 집합에서 **설계를 가르는 셋**을 관측한다 (ALPHA-845).
+
+        0. **응답 형상** — 행 수와 표본 간격이 우리가 믿는 계약대로인가(`_note_shape`).
+           `rows` 는 `_row_defect` 를 통과한 것뿐이라 행 수 대조는 **`received_count`**
+           (벤더가 실제로 준 행 수)로 한다. 필터 후 수로 재면 우리가 버린 행을 벤더의
+           계약 위반으로 고발하고, 같은 로그가 "창 폭 계산이 틀렸다"까지 주장한다 —
+           둘 다 거짓이고, 이 조각의 산출물은 로그뿐이라 읽는 쪽이 그대로 믿는다.
 
         1. **벤더 지연** = 수신 벽시계 − 최신 `bsop_hour`. 이 API 는 "지금 기준 최근 30행"
            을 주는데, 그 최신 행이 지금 것인지 창 폭(간격×30)만큼 낡은 것인지 **한 번도
@@ -271,9 +279,11 @@ class KisInavSource(KisNavSource):
         위장한다 — 하필 창 폭과 비슷한 값이라 "REST 불가"의 강한 증거처럼 읽힌다. 여기서는
         관측한 사실만 남기고 판정은 하지 않는다(Rule 12).
 
-        ⚠️ **두 축은 서로의 실패로 죽지 않는다.** 시각 라벨이 깨져도 단위 가드는 돌고 그
+        ⚠️ **세 축은 서로의 실패로 죽지 않는다.** 시각 라벨이 깨져도 단위 가드는 돌고 그
         반대도 마찬가지다 — return 을 공유하면 라벨 한 줄 때문에 그 ETF 표본이 단위 판정에서
-        통째로 빠진다.
+        통째로 빠진다. 형상 축을 지연 축 **안**에 두면 같은 함정이 다시 열린다: 라벨이 전건
+        깨진 응답은 벤더가 스키마를 바꿨을 가능성이 가장 큰 경우인데, 하필 그때 행 수
+        대조가 안 돌아 **가장 의심스러운 응답이 형상 검사를 통째로 건너뛴다**.
 
         관측 실패도 관측이다 — 조용히 지나가면 "지연이 0" 과 "못 쟀다" 가 같아 보인다.
         """
@@ -282,6 +292,8 @@ class KisInavSource(KisNavSource):
         # "경고 없음"과 구분이 안 된다. 도크스트링의 독립 계약을 구조가 지게 한다.
         now = datetime.now(KST)
         for axis, run in (
+            ("응답 형상",
+             lambda: self._note_shape(our_etf_id, kis_symbol, rows, received_count)),
             ("지연", lambda: self._note_lag(our_etf_id, kis_symbol, rows, now)),
             ("괴리 단위", lambda: self._note_premium_unit(our_etf_id, kis_symbol, rows)),
         ):
@@ -296,9 +308,15 @@ class KisInavSource(KisNavSource):
                 )
 
     def _note_shape(
-        self, our_etf_id: str, kis_symbol: str, rows: list[dict], stamps: list[str]
+        self, our_etf_id: str, kis_symbol: str, rows: list[dict], received_count: int
     ) -> None:
         """응답이 **우리가 믿는 형상**대로 왔는가 — 행 수와 표본 간격.
+
+        ⚠️ 행 수는 **벤더가 준 수**(`received_count`)로 잰다. `rows` 는 `_row_defect` 가
+        거르고 남은 것이라, 그걸로 재면 우리가 버린 행을 벤더의 계약 위반으로 고발한다 —
+        30행 중 2행에 `nav` 가 비어 왔을 뿐인데 "28행(계약 30) · 창 1800초가 실제와
+        어긋난다"가 찍히고, 둘 다 거짓이다(벤더는 30행을 줬고 창 폭도 맞다). 버려진 행은
+        `_note_failure` 가 따로 남기므로 여기서 겹쳐 셀 이유도 없다.
 
         둘 다 `window_sec` 의 입력이고, `window_sec` 은 판정 분모(지연÷창)이자 혼재 임계다.
         그래서 벤더가 어느 쪽을 바꿔도 **두 축이 같은 방향(관대)으로 함께 틀린다** — 20행이
@@ -310,12 +328,17 @@ class KisInavSource(KisNavSource):
         한다. 그 필드는 자연키의 일부라(같은 라벨이라도 간격이 다르면 값이 다르다), 없는
         것보다 틀린 값이 나쁘다.
         """
-        if len(rows) != ROWS_PER_CALL:
+        if received_count != ROWS_PER_CALL:
             logger.warning(
                 "iNAV 응답 행 수가 계약과 다르다: %s(%s) %d행(계약 %d) — "
                 "창 %d초는 계약 행수로 계산한 값이라 실제와 어긋난다",
-                kis_symbol, our_etf_id, len(rows), ROWS_PER_CALL, self.window_sec,
+                kis_symbol, our_etf_id, received_count, ROWS_PER_CALL, self.window_sec,
             )
+        # 간격은 라벨이 있어야 잰다 — 없으면 `_median_gap_sec` 이 None 을 주고 조용히
+        # 넘어간다(라벨 결손 자체는 `_note_lag` 가 고발한다). 행 수 대조는 그와 **무관하게**
+        # 이미 위에서 끝났다: 라벨이 전건 깨진 응답이야말로 벤더가 형상을 바꿨을 가능성이
+        # 가장 큰 경우라, 그때 행 수를 안 재면 가장 의심스러운 응답이 검사를 건너뛴다.
+        stamps = [s for s in (_time_stamp(r) for r in rows) if s is not None]
         if (observed := _median_gap_sec(stamps)) is not None and observed != self.interval_sec:
             logger.warning(
                 "iNAV 표본 간격이 요청과 다르다: %s(%s) 요청 %d초 / 실측 %d초 — "
@@ -340,7 +363,6 @@ class KisInavSource(KisNavSource):
                 kis_symbol, our_etf_id, len(rows),
             )
             return
-        self._note_shape(our_etf_id, kis_symbol, rows, stamps)
         # ⚠️ 사전순 = 시각순은 **하루 안에서만** 참이다(`_time_stamp` 가 보장하는 범위).
         # 응답 창은 계약상 `간격 × 30` 이라 **라벨 범위가 창 폭을 넘으면 한 창의 행이 아니다**.
         # ⚠️ 이 가드가 잡는 것은 **혼재뿐이다.** 전일 데이터가 *통째로* 반복되면(이 API 의
@@ -419,7 +441,11 @@ class KisInavSource(KisNavSource):
                 continue
             # ⚠️ float() 는 "nan"·"inf" 를 **예외 없이** 통과시킨다. 그대로 두면 오염
             # 표본이 그럴듯한 수치(-100.0000%)로 대조에 섞여 판정을 흔든다.
-            if not all(map(math.isfinite, (nav, price, dprt))) or nav <= 0:
+            # `price <= 0` 도 같이 뺀다 — 안 빼면 `(0/nav − 1)×100 = −100.0000%` 가
+            # 대조에 섞여, 바로 위 주석이 막으려는 그 값이 다른 문으로 들어온다.
+            # 정상 표본에 붙는 거짓 드리프트 경고는 결국 가드를 끄게 만들고, 그러면
+            # 관대한 쪽으로 착지한다(`_UNIT_ABS_TOL` 주석과 같은 논리).
+            if not all(map(math.isfinite, (nav, price, dprt))) or nav <= 0 or price <= 0:
                 nonfinite += 1
                 continue
             checked += 1

@@ -177,11 +177,17 @@ class KisNavSource:
         """raw 행에 덧붙일 어댑터 고유 필드. 일별 NAV 는 없다."""
         return {}
 
-    def _note_rows(self, our_etf_id: str, kis_symbol: str, rows: list[dict]) -> None:
+    def _note_rows(
+        self, our_etf_id: str, kis_symbol: str, rows: list[dict], received_count: int
+    ) -> None:
         """한 ETF 의 응답 행이 확정된 뒤 부르는 관측 훅. 기본은 무동작.
 
         `_row_defect` 는 행 하나를 **버릴지** 정하고 이건 통과한 행 전체를 **본다** —
         응답 집합 수준에서만 보이는 성질(최신 행이 얼마나 낡았나 같은)이 있어서다.
+
+        `rows` 는 걸러진 뒤고 `received_count` 는 **벤더가 준 행 수**다. 둘을 함께 주는
+        이유: "벤더가 계약대로 줬는가"와 "그중 우리가 쓸 수 있는 게 몇인가"는 다른 질문이고,
+        걸러진 수로 전자를 재면 우리가 버린 행이 벤더의 위반으로 보고된다.
 
         관측 전용이라 반환값이 없고, **호출부가 예외까지 삼킨다**(`_fetch_etf`). 반환값이
         없는 것과 성패를 못 뒤집는 것은 별개다 — 감싸지 않으면 오버라이드의 예외 하나가
@@ -232,7 +238,7 @@ class KisNavSource:
                         # 어느 ETF 의 원본 행이 유실됐는지 내부 식별자로 잇지 못한다.
                         self._note_failure(kis_symbol, our_etf_id, defect)
                 try:
-                    self._note_rows(our_etf_id, kis_symbol, rows)
+                    self._note_rows(our_etf_id, kis_symbol, rows, len(output))
                 except StopFetch:
                     # 소스 전역 신호는 삼키지 않는다. 아래 `fetch()` 가 4xx/429 를 격리
                     # 대상에서 명시적으로 빼는데(키·쿼터는 중단이 맞다), 그 계약 **아래층**
