@@ -2,7 +2,8 @@
 
 β=1 고정 뒤의 계약은 셋이다: (1) 합 항등식이 부동소수 오차 안에서 정확하다,
 (2) 층 기여는 회귀가 아니라 **회계**다 - 시장은 그대로, 섹터는 시장 차감,
-(3) 섹터 후보는 적합이 아니라 **구성 겹침**이 정한다. 회귀·ρ·표본 게이트가
+(3) 섹터는 **KRX 업종지수뿐**이다(ALPHA-877) - 프록시 ETF 겹침 선택은 폐기했고,
+업종지수 분봉이 없는 구간 모드는 정직 부재다. 회귀·ρ·표본 게이트가
 있던 자리의 검정은 칼만(ALPHA-803)이 신뢰구간과 함께 다시 가져온다.
 """
 import datetime as dt
@@ -21,16 +22,25 @@ def _prices(rets: np.ndarray) -> list[float]:
 
 
 class FakeLake:
-    """`layers_daily` 와 `s3_etf_holdings` 두 질의 모양만 응답한다."""
+    """`layers_daily`·`s3_etf_holdings`·KRX 표(`sector_*`)·`bars_5m` 질의 모양만 응답한다."""
 
-    def __init__(self, series: dict, holds: dict):
-        self.series, self.holds = series, holds
+    def __init__(self, series: dict, holds: dict, krx=None):
+        # krx = (업종지수 코드, [전일 종가, 당일 종가]). None 이면 KRX 표 부재.
+        self.series, self.holds, self.krx = series, holds, krx
         self.exists: dict = {}
 
     def sql(self, q: str):
+        if "FROM bars_5m" in q:
+            # 구간 모드 5분봉. **pick 필터를 일부러 무시한다** - 섹터 ETF 계열이
+            # 패널에 실려 와도 층이 안 서야 하는 계약을 더 세게 시험하기 위해서다.
+            return [[s, m["lr5"], 1e6]
+                    for s, m in self.series.items() if "lr5" in m]
         if "FROM layers_daily" in q:
             kinds = re.search(r"kind IN \(([^)]*)\)", q).group(1)
             want = {k.strip().strip("'") for k in kinds.split(",")}
+            if "list(close" not in q:     # 구간 모드의 이름 조회(_CLOCK_NAMES)
+                return [[s, m["name"]] for s, m in self.series.items()
+                        if m["kind"] in want]
             only = re.search(r"symbol IN \(([^)]*)\)", q)
             picked = ({s.strip().strip("'") for s in only.group(1).split(",")}
                       if only else None)
@@ -42,7 +52,11 @@ class FakeLake:
             etf = re.search(r"etf_id = '([^']+)'", q).group(1)
             return [[t, f"종목{t}", w * 100.0] for t, w in self.holds.get(etf, {}).items()]
         if "FROM sector_member" in q or "FROM sector_index" in q:
-            return []                     # KRX 표 부재 - 후보 없음으로 접힌다
+            if not self.krx:
+                return []                 # KRX 표 부재 - 후보 없음으로 접힌다
+            code, closes = self.krx
+            day = re.search(r"trade_date <= DATE '([^']+)'", q).group(1)
+            return [[day, closes[-1], code], ["전일", closes[-2], code]]
         if "FROM s3_etf_profile" in q:
             return []
         raise AssertionError(f"예상 못 한 질의: {q[:60]}")
@@ -74,6 +88,16 @@ def _lake():
                  "ret": 1.0 * mkt + (0.8 * sec if tk in "abc" else 0.0)
                         + rng.normal(0, 0.01, n)}
     return FakeLake(S, H)
+
+
+def _krx_lake():
+    """KRX 표까지 있는 레이크 - 업종지수 '1013'(전기전자·코스피), 당일 +2%."""
+    lake = _lake()
+    lake.krx = ("1013", [100.0, 102.0])
+    return lake
+
+
+KRX_RET = float(np.log(102.0 / 100.0))
 
 
 def _day(n: int = 80) -> str:
@@ -116,13 +140,13 @@ def test_sector_contribution_is_market_subtracted():
     배분 순서 논쟁이 그대로 돌아온다. `ret` 은 원 수익률로 남긴다: 산문이
     "섹터 +1.2% (시장 차감 +0.4%p)" 를 말할 재료다.
     """
-    lake = _lake()
+    lake = _krx_lake()
     r = decompose(lake, "T", _day())
     s = next(x for x in r.layers if x.kind == "섹터")
-    assert s.code == "SEC"
-    assert s.ret == pytest.approx(_now(lake, "SEC"), abs=1e-12)
+    assert s.code == "KRX:1013"
+    assert s.ret == pytest.approx(KRX_RET, abs=1e-12)
     assert s.contribution == pytest.approx(
-        _now(lake, "SEC") - _now(lake, MARKET_CODE), abs=1e-12)
+        KRX_RET - _now(lake, MARKET_CODE), abs=1e-12)
 
 
 # ── 부재는 침묵이 아니다 ──────────────────────────────────────────────────
@@ -185,34 +209,48 @@ def test_decompose_tolerates_a_lake_without_coverage_dicts():
     assert decompose(lake, "T", _day()) is not None
 
 
-# ── 섹터 후보: 겹침이 자격이다 ─────────────────────────────────────────────
-def test_twin_etf_is_barred_as_tautology():
-    """겹침 ≥ TAUTOLOGY_CUT 은 같은 것이다 - "반도체가 왜 빠졌냐"에 "반도체가
-    빠져서"는 설명이 아니다. 조용히 빼지 않고 twins 로 남긴다."""
-    r = decompose(_lake(), "T", _day())
-    assert any("쌍둥이" in t for t in r.twins)
-    assert all(x.code != "TWIN" for x in r.layers)
-
-
-def test_unrelated_etf_is_barred_even_when_it_fits():
-    """겹침 < MIN_OVERLAP 은 근거가 없다 - 게임 ETF 가 2차전지를 "설명"하는 일이
-    실제로 있었다. 산술이 맞아도 아무도 안 믿는다."""
-    r = decompose(_lake(), "T", _day())
-    assert any("무관ETF" in a for a in r.alien)
-    assert all(x.code != "ALIEN" for x in r.layers)
-
-
-def test_sector_is_picked_by_overlap_not_by_fit():
-    """후보 선정은 구성 겹침이지 적합이 아니다(ALPHA-862 에서 회귀 선택 폐지).
-
-    적합으로 고르면 '가장 잘 맞는 무엇'이 섹터를 참칭한다 - 042700 07-31 에서
-    삼성전자가 섹터로 뽑힌 그 실수. 겹침은 포트폴리오 사실이라 데이터가 우연히
-    맞아도 안 바뀐다.
-    """
-    r = decompose(_lake(), "T", _day())
+# ── 섹터 후보: KRX 업종지수뿐이다 (ALPHA-877) ─────────────────────────────
+def test_sector_is_the_krx_industry_index_never_a_proxy_etf():
+    """섹터의 최종형은 KRX 업종지수다 - 겹침이 좋은 섹터 ETF(SEC 0.15)가 패널에
+    있어도 층을 참칭하지 못한다. 지수는 KRX 가 산출하고 업종은 구성종목 최빈이
+    정하므로 어느 쪽도 우리 선택이 아니다."""
+    r = decompose(_krx_lake(), "T", _day())
     s = next(x for x in r.layers if x.kind == "섹터")
-    assert s.code == "SEC"
-    assert s.overlap == pytest.approx(0.15)
+    assert s.code == "KRX:1013"
+    assert "전기전자" in s.name
+    assert all(x.code not in ("SEC", "TWIN", "ALIEN") for x in r.layers)
+
+
+def test_daily_without_krx_tables_leaves_sector_absent_with_reason():
+    """KRX 표가 없으면 섹터 층은 부재다 - 프록시 ETF 폴백으로 조용히 메우지 않는다
+    (폐기한 겹침 선택이 몰래 돌아오면 여기서 잡힌다). 사유가 커버리지에 남는다."""
+    lake = _lake()                        # SEC(겹침 0.15)가 패널에 멀쩡히 있다
+    r = decompose(lake, "T", _day())
+    assert r is not None
+    assert any(x.kind == "시장" for x in r.layers)
+    assert all(x.kind != "섹터" for x in r.layers)
+    assert r.twins == () and r.alien == ()
+    assert "업종지수 후보 없음" in lake.exists["sector_layer"]
+
+
+def test_clock_mode_sector_layer_is_honestly_absent():
+    """구간 모드의 섹터 층은 정직 부재다(ALPHA-877) - 업종지수는 분봉이 없고,
+    섹터 ETF 5분봉이 패널에 실려 와도 층이 서면 안 된다(프록시 ETF 겹침 선택이
+    몰래 부활하면 여기서 깨진다). 사유가 남고 시장+고유 2층 회계는 그대로 선다."""
+    lake = _krx_lake()                    # KRX 일봉 표까지 있어도 분봉은 아니다
+    lake.series["T"]["lr5"] = 0.02
+    lake.series[MARKET_CODE]["lr5"] = 0.01
+    lake.series["SEC"]["lr5"] = 0.015     # 프록시 후보였던 섹터 ETF 의 구간수익
+    lake.series["TWIN"]["lr5"] = 0.02
+    r = decompose(lake, "T", _day(), clock=("09:00:00", "10:00:00"))
+    assert r is not None
+    m = next(x for x in r.layers if x.kind == "시장")
+    assert m.contribution == pytest.approx(0.01, abs=1e-12)
+    assert all(x.kind != "섹터" for x in r.layers)
+    assert r.twins == () and r.alien == ()
+    assert "업종지수 분봉 미수집" in lake.exists["sector_layer"]
+    assert sum(x.contribution for x in r.layers) + r.idio == pytest.approx(
+        r.total, abs=1e-12), "2층 회계 항등식은 그대로 선다"
 
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────
@@ -289,15 +327,17 @@ def test_intraday_erects_the_market_layer_when_the_lake_is_stale():
     assert "market_layer" not in lake.exists, "층이 섰는데 부재 사유가 남으면 오진이다"
 
 
-def test_intraday_constituents_do_not_enter_the_sector_pool():
-    """`intraday` 에 실려 온 구성종목은 섹터 후보 풀에 못 들어간다 - 들어가면
-    '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다. 종목 귀속(`_names`)에는 선다."""
-    lake = _lake()
+def test_intraday_constituents_do_not_become_a_layer():
+    """`intraday` 에 실려 온 구성종목은 층이 못 된다 - 종목이 층을 참칭하면
+    '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다. 섹터는 KRX 업종지수뿐이고,
+    구성종목은 종목 귀속(`_names`)에만 선다."""
+    lake = _krx_lake()
     r = decompose(lake, "T", _day(), intraday={
         "T": (0.02, False), MARKET_CODE: (0.01, False),
         "a": (0.5, False), "b": (0.0, False), "c": (0.0, False)})
     sec = next(x for x in r.layers if x.kind == "섹터")
-    assert sec.code == "SEC", "구성종목이 섹터 후보를 밀어내면 안 된다"
+    assert sec.code == "KRX:1013", "구성종목이 섹터 자리를 차지하면 안 된다"
+    assert all(x.code not in ("a", "b", "c") for x in r.layers)
     a = next(n for n in r.names if n.ticker == "a")
     base = sum(x.contribution for x in r.layers)
     assert a.ret == pytest.approx(0.5, abs=1e-12)
@@ -347,26 +387,15 @@ def test_intraday_mode_names_exclude_units_the_ledger_dropped():
     assert r.weight_covered == pytest.approx(0.5, abs=1e-12), "커버리지가 얇음을 수치로 말해야 한다"
 
 
-# ── 광역 ETF 2층 · 섹터 후보 위생 (ALPHA-871) ─────────────────────────────
+# ── 광역 ETF 2층 (ALPHA-871) ──────────────────────────────────────────────
 def test_broad_market_target_folds_the_sector_layer():
     """대상이 시장과 ≥80% 겹치면 섹터를 세우지 않는다 - 시장의 부분집합에 섹터를
-    세우면 시장 몫을 두 번 나눠 갖는 동어반복이다. 접은 사실은 커버리지에 남는다."""
-    lake = _lake()
+    세우면 시장 몫을 두 번 나눠 갖는 동어반복이다. KRX 업종지수 후보(ALPHA-877)에도
+    같은 규칙이 선다. 접은 사실은 커버리지에 남는다."""
+    lake = _krx_lake()                    # 안 접으면 KRX 섹터가 설 재료가 있다
     lake.holds["T"] = dict(lake.holds[MARKET_CODE])   # 시장과 완전 겹침
     r = decompose(lake, "T", _day())
     assert r is not None
     assert any(x.kind == "시장" for x in r.layers)
     assert all(x.kind != "섹터" for x in r.layers)
     assert "시장+고유 2층" in lake.exists["sector_layer"]
-
-
-def test_excluded_series_never_becomes_the_sector():
-    """SECTOR_EXCLUDE 계열은 겹침이 최적이어도 섹터 후보가 못 된다 - 이력을 못 믿는
-    계열이 층을 참칭하면 산술이 맞아도 재료가 거짓이다."""
-    lake = _lake()
-    lake.series["0210A0"] = {"name": "신상장ETF", "kind": "sector",
-                             "ret": lake.series["SEC"]["ret"]}
-    lake.holds["0210A0"] = {"a": 0.2, "x": 0.8}       # SEC(0.15)보다 높은 겹침 0.2
-    r = decompose(lake, "T", _day())
-    sec = next(x for x in r.layers if x.kind == "섹터")
-    assert sec.code == "SEC", "제외 계열이 섹터로 뽑혔다"
