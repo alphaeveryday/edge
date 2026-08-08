@@ -450,7 +450,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 뉴스 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-news":
-        return normalize_news.run(storage, run_id, args.input_run_id)
+        return normalize_news.run(storage, run_id, args.input_run_id,
+                                  expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
     # 공시 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-disclosure":
@@ -475,7 +476,12 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 적재(load-*)는 canonical 을 읽어 **DB 에 쓰는** 스텝이라 수집 창·벤더가 없다. DB 설정이
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
     if args.step == "load-instruments":
-        return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db))
+        # ⚠️ `_krx_expected_etfs` 는 **KR 전용 정본**(krx_etf.source.etf_map)이다. 이 스텝은
+        # LOADED_MARKETS 를 순회하는데 오늘 그 값이 ("KR",)라 맞아떨어진다 — US 를 더하면
+        # US 구성종목이 전량 뿌리 밖으로 빠진다(failed_records 에도 안 잡혀 조용하다).
+        # 시장을 늘릴 때 이 인자도 시장별로 갈라야 한다. load-etf-holdings 도 같다.
+        return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db),
+                                    expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
 
     # corp_code enrichment 은 DB(미충전 KR 회사)를 읽고 OpenDART corpCode.xml 로 채운다 —
     # 마스터 적재도 공시 적재도 아닌 별개 관심사라 별도 스텝(ALPHA-491). db + DART 소스 둘 다 필요.
@@ -535,6 +541,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return load_etf_holdings.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
+            expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
         )
 
     # 투자자 수급 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
@@ -593,6 +600,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return load_price_triggers.run(
             storage, run_id, db=db_config_from_env(settings.db),
             config=settings.price_triggers, from_date=args.from_date, to_date=args.to_date,
+            expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
         )
 
     # 태깅은 canonical 을 읽는 스텝이라 수집 날짜창의 의미가 다르다 — raw 를 가져올 창이 아니라

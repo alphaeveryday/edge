@@ -221,10 +221,11 @@ def _insert_etf(conn, *, name: str, mic: str, ticker: str, currency: str) -> str
     return instrument_id
 
 
-def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
+def run(storage: Storage, run_id: str, *, db: DbConfig,
+        expected_etfs: frozenset[str] | None = None) -> int:
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
-    read = skipped_no_mic = existing = created = 0
+    read = skipped_no_mic = existing = created = skipped_foreign_etf = 0
     instruments_read = profiles_no_mic = skipped_non_common = 0
     profiles_no_share_class = 0
     mic_conflicts: list[dict] = []
@@ -241,6 +242,10 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
             continue
 
         all_rows: dict[tuple[str, str], dict] = {}
+        # 이 시장분만 세는 지역 카운터 — 아래 게이트가 쓴다. 위 누적값(read·skipped_*)을 쓰면
+        # 시장이 둘 이상일 때 합계끼리 비교해 엉뚱한 시장을 지목한다(같은 파일의
+        # instrument_profile_all_dropped 게이트가 이미 같은 이유로 market_* 를 따로 센다).
+        market_read = market_no_mic = market_foreign = 0
         dates = _partition_dates(storage, market)
         if dates:
             prefix = canonical_etf_holdings_partition(market, dates[-1])
@@ -249,11 +254,39 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                     continue
                 for row in _read_parquet_rows(storage.get_bytes(key)):
                     read += 1
+                    market_read += 1
                     mic, ticker = row.get("constituent_mic"), row.get("constituent_ticker")
                     if not mic or not ticker:
                         skipped_no_mic += 1
+                        market_no_mic += 1
+                        continue
+                    if expected_etfs is not None and row.get("etf_id") not in expected_etfs:
+                        # 마스터 시딩 축은 분석 유니버스다 — 유니버스 뿌리 밖 ETF 의 구성종목을
+                        # 주워 담으면 수집하지도 분석하지도 않는 회사가 마스터에 선다.
+                        # (KRX 상장 전종목 입력은 아래 별개 축이라 이 필터와 무관하다.)
+                        # ⚠️ mic/ticker 가드 **뒤**다 — 앞에 두면 etf_id 결측 행이 여기로 새어
+                        # skipped_no_mic(유실)에서 빠진다.
+                        skipped_foreign_etf += 1
+                        market_foreign += 1
                         continue
                     all_rows.setdefault((mic, ticker), row)
+            # 읽었는데 **한 행도 못 쓴** 상태 — 아래 instrument_profile_all_dropped 와 같은
+            # 게이트고, 그쪽 도크스트링의 두 규율을 그대로 따른다: (1) 탈락 축을 **다 더한다**
+            # (2) 시장별 지역 카운터로 본다. 축 하나만 보면 게이트가 죽는다 — KR canonical 에는
+            # 원화현금(MIC 없음) 행이 **매 런 정상적으로** 들어와 no_mic 이 0이 아니므로,
+            # foreign == read 는 실제로 성립하지 않는다(그게 이 게이트가 필요한 바로 그 상황이다).
+            #
+            # 왜 필요한가: etf_id 어휘가 config 와 갈리면(오타·정규화 변경) 구성종목 축이 통째로
+            # 빠지는데, KRX 전종목 축이 마스터를 덮어 줘 런은 초록으로 끝난다 — 그때 "구성종목이
+            # 이긴다"는 이름 우선순위가 말없이 사라진다. 침묵이 결함이다(Rule 12).
+            # 비0으로 끝내지 않는 것도 형제 게이트와 같은 정책이다(한 파일에 두 정책 금지, Rule 7).
+            unusable = market_no_mic + market_foreign
+            if market_read and market_read == unusable:
+                failures.append({"market": market, "reasons": ["constituents_all_foreign"],
+                                 "error": f"구성종목 {market_read}건이 전부 사용 불가"
+                                          f"(MIC 결측 {market_no_mic}·유니버스 뿌리 밖 "
+                                          f"{market_foreign}) — etf_id 어휘가 "
+                                          "krx_etf.source.etf_map 과 갈렸는지 확인"})
 
         # KRX 상장 전종목(ALPHA-829/830) — 구성종목과 **독립된 두 번째 입력**이다.
         #
@@ -450,6 +483,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "markets": list(LOADED_MARKETS),
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
+        "skipped_foreign_etf": skipped_foreign_etf,
         "instrument_profiles_read": instruments_read,
         "instrument_profiles_no_mic": profiles_no_mic,
         # 0 이 정상. 0 이 아니면 canonical 에 share_class 컬럼이 없다(정제 재실행 필요).

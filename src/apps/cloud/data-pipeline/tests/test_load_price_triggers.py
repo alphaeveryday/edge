@@ -462,11 +462,18 @@ def test_unknown_etf_filter_fails_loud(tmp_path, monkeypatch):
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
     conn = _FakeConn(master={"091160": "inst_ETF"})
 
-    assert _run(storage, conn, monkeypatch, etf_ticker="09116O") == 1  # 오타 티커
+    # ⚠️ `expected_etfs` 를 **운영과 같이 넘긴다**. 안 넘기면(=None) 뿌리 검사가 통째로 꺼져
+    #    KR 파이프라인이 절대 안 도는 설정 형태를 못 박게 된다 — 그러면 이 테스트가 사유
+    #    문자열을 더 이상 지키지 못한다(리뷰 지적).
+    assert _run(storage, conn, monkeypatch, etf_ticker="09116O",
+                expected_etfs=frozenset({_ETF})) == 1  # 오타 티커
     assert _inserts(conn) == []
     log = _quality_log(storage)
     assert log["exit_code"] == 1
     assert log["etf_tickers"] == []
+    # 오타는 뿌리에도 없으므로 두 사유가 다 성립한다 — **마스터 미등록이 이긴다.**
+    # 뿌리 사유를 주면 처방이 "etf_map 에 추가하라"가 되어, 존재하지도 않는 티커를 config 에
+    # 넣으라는 안내가 된다.
     assert log["failures"][0]["reasons"] == ["unknown_etf_filter"]
     assert log["failures"][0]["etf_ids"] == ["09116O"]
 
@@ -561,3 +568,52 @@ def test_트리거_적재도_etf_profile_선행을_스스로_보장한다(tmp_pa
     idx_profile = src.index("ensure_etf_profile(conn, etf_instrument_id)")
     idx_insert = src.index("INSERT INTO price_movement_trigger")
     assert idx_profile < idx_insert, "프로필 보장이 트리거 INSERT 보다 먼저여야 한다"
+
+
+def test_유니버스_뿌리_밖_ETF_는_미등록으로_세지_않는다(tmp_path, monkeypatch):
+    """`expected_etfs` 밖 ETF 는 트리거 유니버스에 들어오기 **전에** 빠진다 (ALPHA-855 선행).
+
+    바로 위 테스트(`..._absent_from_master_is_skipped_not_fatal`)가 고정한 동작은 "마스터
+    시드가 **누락**된 ETF"용이다 — 그건 고쳐야 할 결손이라 수치로 드러나는 게 맞다. 반면
+    폐지 ETF 의 옛 행과 참조 계열 ETF 는 마스터에 없는 것이 **정상**이라, 같은 자리로 흘려
+    보내면 매 런 `skipped_unknown_etf` 가 서고 `ops.failed_records>0` → 원장이 영구
+    INCOMPLETE 다. 두 사실을 한 카운터로 뭉개면 진짜 시드 누락을 못 본다.
+    """
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage)                        # _ETF — 뿌리
+    _default_holdings(storage, etf="091170")          # 참조 계열 — 같은 파티션에 섞인다
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn(master={})
+
+    assert _run(storage, conn, monkeypatch, etf_ticker=None,
+                expected_etfs=frozenset({_ETF})) == 0
+
+    log = _quality_log(storage)
+    # 뿌리 _ETF 만 미등록으로 잡힌다 — 참조 계열은 애초에 후보가 아니다.
+    assert log["skipped_unknown_etf"] == 1
+    assert log["failures"][0]["etf_ids"] == [_ETF], "참조 계열이 미등록 목록에 섞였다"
+
+
+def test_뿌리_밖_ETF_를_지목한_단일_실행은_fail_loud(tmp_path, monkeypatch):
+    """`--etf-ticker` 가 유니버스 뿌리 밖이면 빈 성공이 아니라 exit 1 이다 (ALPHA-855 선행).
+
+    기존 가드는 "마스터에 있나"만 봤다. 필터가 생기면 **마스터엔 있는데 뿌리 밖**인 ETF 가
+    새 구멍이 된다 — `_holdings_by_etf` 가 그 ETF 를 걸러 holdings 가 비고, 매 대상일이
+    `missing_holdings`(유실 아님)로 잡혀 **exit 0 · 트리거 0건**으로 끝난다. 오타 티커와
+    정확히 같은 실패(요청한 백필이 수행 안 된 걸 탐지 못 함)라 처방도 같아야 한다.
+
+    참조 계열 48종이 바로 운영자가 `--etf-ticker` 로 지목할 법한 집합이다.
+    """
+    storage = LocalStorage(tmp_path)
+    _default_holdings(storage, etf="091170")
+    _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
+    _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
+    conn = _FakeConn(master={"091170": "inst-091170"})   # 마스터엔 있다
+
+    assert _run(storage, conn, monkeypatch, etf_ticker="091170",
+                expected_etfs=frozenset({_ETF})) == 1
+
+    log = _quality_log(storage)
+    assert log["failures"][0]["reasons"] == ["etf_filter_out_of_universe_root"]
+    assert _inserts(conn) == []

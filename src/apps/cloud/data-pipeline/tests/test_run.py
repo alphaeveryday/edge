@@ -514,3 +514,39 @@ def test_absurd_window_days_fails_loud(monkeypatch):
         main(["assemble-events", "--run-id", "R", "--window-days", "800000"])
     assert "상한" in str(err.value)
     assert "window" not in captured
+
+
+@pytest.mark.parametrize(("step", "module", "argv"), [
+    ("load-etf-holdings", "load_etf_holdings", ["load-etf-holdings"]),
+    ("load-price-triggers", "load_price_triggers", ["load-price-triggers"]),
+    ("normalize-news", "normalize_news", ["normalize-news"]),
+    ("load-instruments", "load_instruments", ["load-instruments"]),
+])
+def test_canonical_holdings_consumers_get_the_universe_root_filter(monkeypatch, step, module, argv):
+    """canonical holdings 를 읽는 스텝은 **전부** 유니버스 뿌리 필터를 받는다 (ALPHA-855 선행).
+
+    이 파티션의 etf_id 집합은 분석 유니버스가 아니다 — 폐지 ETF 의 옛 행이 소급 상한만큼
+    남아 있고, 참조 계열 ETF 도 곧 들어온다. 안 거르면 마스터에 없는 ETF 가 매 런
+    `failed_records` 로 잡혀 `load_etf_holdings`·`load_price_triggers` 원장이 **영구
+    INCOMPLETE** 가 되고, 멘션 사전과 종목 마스터에 분석 유니버스 밖 회사가 선다.
+
+    **배선을 값으로 고정하는 이유**: 스텝 안의 필터는 인자가 안 넘어와도(기본 None)
+    그대로 통과한다 — 기능이 통째로 무력화된 채 전건 초록으로 도는 형태다. 스텝 단위
+    테스트가 아니라 진입점에서 잡아야 하는 종류다.
+    """
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    captured = {}
+
+    def _spy(*args, **kwargs):
+        captured["expected_etfs"] = kwargs.get("expected_etfs", "인자가 아예 안 왔다")
+        return 0
+
+    monkeypatch.setattr(getattr(run_mod, module), "run", _spy)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+    assert main(argv) == 0
+
+    settings = run_mod.load_settings(None)
+    assert captured["expected_etfs"] == frozenset(settings.krx_etf.source.etf_map)
+    assert captured["expected_etfs"], "필터가 비면 전량 통과라 안 건 것과 같다"

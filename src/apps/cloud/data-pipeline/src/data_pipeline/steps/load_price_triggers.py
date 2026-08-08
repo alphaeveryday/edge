@@ -97,9 +97,11 @@ def _closes(storage: Storage, market: str, trade_date: str) -> dict[str, float]:
 
 
 def _holdings_by_etf(
-    storage: Storage, market: str, as_of_date: str
+    storage: Storage, market: str, as_of_date: str,
+    expected_etfs: frozenset[str] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
-    """해당 기준일 스냅샷을 etf_id → [(구성종목 티커, 가중치 fraction)] 로 그룹핑.
+    """해당 기준일 스냅샷 중 **유니버스 뿌리 안** ETF 를 etf_id → [(구성종목 티커, 가중치
+    fraction)] 로 그룹핑(`expected_etfs`=None 이면 전량).
 
     파티션 parquet 을 **한 번만** 읽고 ETF 별로 나눈다 — ETF 마다 다시 읽으면 유니버스가
     31종일 때 같은 파일을 31번 재파싱한다(스냅샷당 O(ETF)).
@@ -112,6 +114,11 @@ def _holdings_by_etf(
         for row in _read_parquet_rows(storage.get_bytes(key)):
             etf_id = row.get("etf_id")
             if not etf_id or not row.get("constituent_ticker"):
+                continue
+            if expected_etfs is not None and etf_id not in expected_etfs:
+                # 유니버스 뿌리 밖(폐지분·참조 계열)은 트리거 대상이 아니다. 여기서 안 빼면
+                # 아래 `unknown = holdings_etf_ids - master.keys()` 가 매 런 그만큼을
+                # skipped_unknown_etf 로 세고 원장이 영구 INCOMPLETE 가 된다.
                 continue
             weight_pct = _num(row.get("weight_pct"))
             if weight_pct is None or weight_pct < 0:
@@ -211,6 +218,7 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
+    expected_etfs: frozenset[str] | None = None,
     config: PriceTriggersConfig,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -246,7 +254,8 @@ def run(
     def holdings_of(as_of: str) -> dict[str, list[tuple[str, float]]]:
         """as_of 스냅샷의 etf_id → holdings. 파티션은 스냅샷당 1회만 파싱(다중 ETF 재파싱 방지)."""
         if as_of not in holdings_cache:
-            holdings_cache[as_of] = _holdings_by_etf(storage, config.market, as_of)
+            holdings_cache[as_of] = _holdings_by_etf(
+                storage, config.market, as_of, expected_etfs)
         return holdings_cache[as_of]
 
     try:
@@ -268,7 +277,8 @@ def run(
             mic = _MIC_BY_MARKET.get(config.market)
             master = _etf_instrument_ids(conn, mic) if mic else {}
 
-            # 트리거 대상 유니버스 = 전 holdings 스냅샷에 등장한 etf_id ∩ 마스터. holdings 가
+            # 트리거 대상 유니버스 = 전 holdings 스냅샷의 etf_id ∩ **유니버스 뿌리**(expected_etfs —
+    # `_holdings_by_etf` 가 선필터) ∩ 마스터. holdings 가
             # 있어야 proxy 분해가 되고, 마스터에 있어야 FK(etf_instrument_id→etf_profile)가
             # 꽂힌다. holdings 에 있으나 마스터에 없는 ETF 는 그 ETF 만 skip+카운트한다 —
             # 1종 시드 누락이 나머지 유니버스를 죽이면 안 된다(구 missing_etf_master 는 런
@@ -279,14 +289,30 @@ def run(
                 # 롤백시키면 필터가 격리를 못 하는 셈이 된다(홀딩스는 아래 date 루프가 대상
                 # ETF 것만 지연 로드). 마스터에 없으면 fail-loud — 오타난 티커가 빈 성공 실행으로
                 # 조용히 끝나면 요청한 백필이 수행 안 된 걸 탐지 못 한다(Rule 12).
-                if config.etf_ticker in master:
+                # 유니버스 뿌리 밖도 같은 처방이다 — 마스터엔 있는데 뿌리 밖인 ETF 를 지목하면
+                # `_holdings_by_etf` 가 그 ETF 를 걸러 holdings 가 빈다. 그러면 매 대상일이
+                # `missing_holdings`(유실 아님)로 잡혀 **exit 0 · 트리거 0건**으로 끝난다 —
+                # 요청한 백필이 수행 안 된 것을 탐지 못 하는, 오타와 정확히 같은 실패다.
+                # 참조 계열 48종이 바로 운영자가 --etf-ticker 로 지목할 법한 집합이다.
+                # **마스터 미등록을 먼저 본다.** 오타 티커는 정의상 뿌리에도 없으므로, 뿌리
+                # 검사를 앞에 두면 모든 오타가 "유니버스 뿌리 밖"으로 보고된다 — 그 처방은
+                # "etf_map 에 추가하라"라, 존재하지도 않는 티커를 config 에 넣으라는 말이 된다.
+                # 마스터 미등록이 더 구체적이고 더 실행가능한 신호다.
+                out_of_root = expected_etfs is not None and config.etf_ticker not in expected_etfs
+                if config.etf_ticker not in master:
+                    reason = "unknown_etf_filter"
+                elif out_of_root:
+                    reason = "etf_filter_out_of_universe_root"
+                else:
+                    reason = None
+                if reason is None:
                     universe = [config.etf_ticker]
                 else:
                     logger.error(
-                        "etf_ticker 필터=%s 가 instrument 마스터에 없다 — 티커 오타이거나 마스터"
-                        " 미적재. 빈 실행으로 끝내지 않고 fail-loud 한다", config.etf_ticker)
-                    failures.append({"reasons": ["unknown_etf_filter"],
-                                     "etf_ids": [config.etf_ticker]})
+                        "etf_ticker 필터=%s 를 실행할 수 없다(%s) — 티커 오타·마스터 미적재이거나"
+                        " 유니버스 뿌리(krx_etf.source.etf_map) 밖이다. 빈 실행으로 끝내지 않고"
+                        " fail-loud 한다", config.etf_ticker, reason)
+                    failures.append({"reasons": [reason], "etf_ids": [config.etf_ticker]})
                     exit_code = 1
                     universe = []
             else:

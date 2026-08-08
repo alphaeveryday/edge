@@ -573,6 +573,24 @@ def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:
     as_of_date) 중 market·as_of_date 가 파티션, (etf_id,constituent_ticker)가 파티션 내 행
     키다. 벤더는 시장이 가른다(US=fmp, KR=krx)라 source_vendor 는 파티션이 아니라 컬럼
     (provenance)이고, market-스코프 파티션이라 한 파티션엔 한 벤더만 온다(교차 충돌 불가).
+
+    🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다.** 읽는 쪽은 유니버스 뿌리로
+    한 번 걸러라 — `ingest_price_raw._krx_expected_etfs(settings)` 가 그 정본이고,
+    data-pipeline 의 소비자는 전부 그걸 통해 읽는다(`expected_etfs` 인자 — 다만 **어느
+    파티션을 보는지는 소비자마다 다르다**: `_kr_holdings_universe` 는 ETF 별 최신 스냅샷의
+    소급 합집합, `_holdings_name_index` 는 `max(as_of)` 하나다. 뿌리 ETF 수집이 부분 실패한
+    날은 그래서 두 집합이 갈린다).
+    ⚠️ analysis-engine 은 아직 아니다 — `adapters/lake.py` 는 요청 ETF 단건 스코프라
+    오늘은 무해하고, `statics/duck.py` 는 프리픽스 전체를 뷰로 등록한다(뿌리 검사 없음).
+
+    두 가지가 여기 섞여 들어온다. (1) **폐지·제외된 ETF** 의 옛 행 — 파티션은 지워지지
+    않으므로 config 에서 뺀 ETF 가 소급 상한만큼 살아 있다. (2) **참조 계열 ETF** — 층
+    분해의 겹침 게이트가 명부를 필요로 해서 받는 계열로, 판정·적재·탐지 축이 아니다.
+    1분 레인은 이미 축을 갈라 뒀고(`[minute_universe].sector_etf_ids`, ALPHA-842) 일배치
+    수집 축의 편입은 ALPHA-855 다 — 그때 이 파티션에 48종이 들어온다. 안 거르면 마스터에
+    없는 ETF 가 매 런 `failed_records` 로 잡혀 원장이 **영구 INCOMPLETE** 가 되거나
+    (`load_etf_holdings`·`load_price_triggers`), 분석 유니버스 밖 종목이 멘션 사전에
+    들어간다(`normalize_news`).
     """
     return f"canonical/holdings/etf_holdings/market={market}/as_of_date={as_of_date}"
 

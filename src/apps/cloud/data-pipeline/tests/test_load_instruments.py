@@ -92,6 +92,12 @@ def _fake_connect(conn):
     return _c
 
 
+def _quality(storage) -> dict:
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    assert len(keys) == 1, keys
+    return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
 def _db() -> DbConfig:
     return DbConfig(password="x")
 
@@ -729,3 +735,115 @@ def test_a_share_class_vocabulary_change_is_caught_not_read_as_a_bigger_normal(
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["failures"][0]["reasons"] == ["instrument_profile_all_dropped"]
     assert "비보통주 2" in log["failures"][0]["error"]
+
+
+def test_유니버스_뿌리_밖_ETF_의_구성종목은_마스터에_시딩하지_않는다(tmp_path, monkeypatch):
+    """마스터 시딩 축은 분석 유니버스다 (ALPHA-855 선행).
+
+    이 스텝의 입력은 둘이다 — canonical 구성종목과 KRX 상장 전종목. 앞엣것은 "우리가 보는
+    ETF 가 담은 회사"라는 뜻이라 유니버스 뿌리로 걸러야 한다. 안 거르면 참조 계열 ETF
+    (명부만 받는 축)의 구성종목이 딸려 와, 가격도 수급도 수집하지 않는 회사가 마스터에
+    선다 — 그 행은 어느 계열에도 붙지 못한 채 남는다.
+
+    (뒤엣 KRX 전종목 축은 이 필터와 무관하다 — 거긴 애초에 ETF 축이 아니다.)
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자"),                      # etf_id 기본값 091160 — 뿌리
+        _holding("105560", "KB금융", etf_id="091170"),       # 참조 계열
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
+
+    tickers = sorted(t for (_id, _mic, t, _cur) in _inserts(conn, "instrument"))
+    assert tickers == ["005930"], "참조 계열 구성종목이 마스터에 시딩됐다"
+
+
+def test_MIC_결측_행은_대상_밖으로_재분류되지_않는다(tmp_path, monkeypatch):
+    """`etf_id` 결측 행은 `skipped_no_mic`(유실)에 남는다 — 검사 **순서**가 의미다.
+
+    유니버스 뿌리 검사는 `x not in expected_etfs` 라 etf_id 가 없는 행도 참이 된다.
+    mic/ticker 가드보다 앞에 두면 그 행이 `skipped_foreign_etf`(유실 아님)로 새고
+    `ops.failed_records` 에서 빠진다 — MIC 해소 유실을 원장이 못 본다.
+
+    같은 주장이 `load_etf_holdings` 쪽엔 테스트가 있는데 여기엔 없었다(리뷰 지적):
+    주석만 있고 변이가 초록으로 통과했다. 주장은 테스트로 못 박는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자"),
+        _holding("105560", "KB금융", mic=None, etf_id=None),  # MIC 도 etf_id 도 없다
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
+
+    log = _quality(storage)
+    assert log["skipped_no_mic"] == 1, "MIC 유실 행이 '대상 밖'으로 재분류됐다"
+    assert log["skipped_foreign_etf"] == 0
+
+
+def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는다(tmp_path, monkeypatch):
+    """읽었는데 **한 행도 못 쓴** 상태는 fail-loud 다.
+
+    옆 축(`instrument_profile_all_dropped`)이 이미 같은 이유로 게이트를 갖고 있다.
+    etf_id 어휘가 config 와 갈리면(오타·정규화 변경) 구성종목 축이 통째로 빠지는데,
+    KRX 전종목 축이 마스터를 덮어 주는 바람에 런은 초록으로 끝난다 — 그러면
+    "구성종목이 이긴다"는 이름 우선순위가 말없이 사라진다. 침묵이 결함이다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자", etf_id="091170"),
+        _holding("000660", "SK하이닉스", etf_id="091170"),
+        # ⚠️ **운영 파티션 모양을 담는다.** KR canonical 에는 원화현금(MIC 없음) 행이 매 런
+        #    정상적으로 들어온다. 이 행이 없으면 게이트를 `foreign == read` 로 잘못 짜도
+        #    테스트가 통과한다 — 실제로 그렇게 짰다가 리뷰에서 잡혔다(그 형태는 운영에서
+        #    영원히 안 터진다. 게이트가 필요한 바로 그 상황에서 죽는다).
+        _holding("KRW", "원화현금", mic=None),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    load_instruments.run(storage, "R1", db=_db(), expected_etfs=frozenset({"091160"}))
+
+    log = _quality(storage)
+    [gate] = [f for f in log["failures"] if f.get("reasons") == ["constituents_all_foreign"]]
+    # 사유를 축별로 적는다 — "3건 전부 사용 불가"만 남으면 원화현금 때문인지 어휘가 갈린
+    # 것인지 구분이 안 된다.
+    assert "MIC 결측 1" in gate["error"] and "뿌리 밖 2" in gate["error"]
+
+
+def test_전량_탈락_게이트는_시장별로_본다(tmp_path, monkeypatch):
+    """게이트 카운터는 **이 시장분**이어야 한다 — 누적값이면 건강한 시장이 병든 시장을 가린다.
+
+    같은 파일의 형제 게이트(`instrument_profile_all_dropped`)가 이미 같은 이유로 `market_*`
+    지역 카운터를 따로 센다. 이 게이트는 처음에 루프 밖 누적값을 썼고, `LOADED_MARKETS` 가
+    `("KR",)` 하나라 **변이가 초록으로 통과했다** — 시장을 늘리는 순간 조용히 깨지는 형태다.
+
+    그래서 시장을 둘로 늘려 본다. KR 은 정상, US 는 전량 뿌리 밖 → US 만 게이트에 걸려야
+    한다. 누적값으로 보면 KR 행이 분모를 부풀려 US 의 전멸이 안 잡힌다.
+    """
+    monkeypatch.setattr(load_instruments, "LOADED_MARKETS", ("KR", "US"))
+    monkeypatch.setattr(load_instruments, "_COUNTRY_BY_MARKET", {"KR": "KR", "US": "US"})
+    monkeypatch.setattr(load_instruments, "_MIC_BY_MARKET", {"KR": "XKRX", "US": "XNAS"})
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
+    _write_canonical(storage, "US", "2026-07-15", [
+        _holding("NVDA", "NVIDIA", mic="XNAS", market="US", etf_id="091170"),
+        _holding("AAPL", "Apple", mic="XNAS", market="US", etf_id="091170"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    load_instruments.run(storage, "R1", db=_db(), expected_etfs=frozenset({"091160"}))
+
+    gates = [f for f in _quality(storage)["failures"]
+             if f.get("reasons") == ["constituents_all_foreign"]]
+    assert [g["market"] for g in gates] == ["US"], \
+        "건강한 KR 이 US 의 전량 탈락을 가렸거나, 멀쩡한 KR 을 지목했다"

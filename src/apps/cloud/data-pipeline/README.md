@@ -403,7 +403,9 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50 --window-days 3
 #   기간 지정(백필): ... run tag-news --from 2026-07-01 --to 2026-07-08   # 미지정=풀스캔
 
-# 종목 마스터 적재(Step4, RDB) — canonical ETF 구성종목(market=KR)의 **최신 기준일**을 읽어
+# 종목 마스터 적재(Step4, RDB) — canonical ETF 구성종목(market=KR)의 **최신 기준일** 중
+# **유니버스 뿌리(`krx_etf.source.etf_map`) 안 ETF 만** 읽어(뿌리 밖 구성종목을 주워 담으면
+# 수집하지도 분석하지도 않는 회사가 마스터에 선다 — KRX 상장 전종목 축은 이 필터와 무관)
 # entity/actor/company_profile/instrument/equity_profile 을 만든다. 이 저장소가 Cloud Event
 # Store 48테이블에 쓰는 첫 경로다.
 #
@@ -426,6 +428,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run enrich-corp-code
 
+# 대상 ETF 는 holdings ∩ **유니버스 뿌리**(`krx_etf.source.etf_map`) ∩ instrument 마스터다 —
+# 뿌리 밖(폐지분·참조 계열)을 안 빼면 "마스터 시드 누락"과 "애초에 대상 아님"이
+# skipped_unknown_etf 한 카운터로 뭉개져 진짜 결손을 못 본다.
 # 가격변동 트리거 적재(RDB, ALPHA-411) — canonical holdings 가중치 × 구성종목 일봉 수익률의
 # coverage 정규화 proxy(분석엔진 L0 산식 정본)가 absolute gate(abs_threshold=3%)를 넘는
 # 거래일만 price_movement_trigger 로. holdings 는 거래일 이하 최신 스냅샷, 없으면 가장 이른
@@ -987,7 +992,8 @@ settings.targets.keywords            # ["금리", ...]
   article_id 가 같은 정규화 제목이면 **exact 병합 없이 duplicate_signal 로깅만**(URL 충돌은 곧 같은
   id 라 자동 병합). fuzzy 클러스터는 다운스트림 news_dedup_cluster 소관. mentions 는 JSON 문자열로 보존.
   **종목 매핑은 정규화의 일이다(ALPHA-416)**: BigKinds 행의 mentions 는 canonical ETF holdings
-  최신 스냅샷(KR)의 종목명 인덱스로 제목+리드에서 substring 탐지해 합성한다(구 raw 의
+  최신 스냅샷(KR) **중 유니버스 뿌리(`krx_etf.source.etf_map`) 안 ETF 의 구성종목** 종목명
+  인덱스로 제목+리드에서 substring 탐지해 합성한다(구 raw 의
   `our_ticker` provenance 와 union — 이행기 호환). 이름 비교는 **NFKC 정규화 후 substring**
   (인덱스·기사 텍스트 양쪽 — 저장소 관례). **동명이(같은 이름, 다른 ticker)는 어느 쪽도 고르지
   않고 인덱스에서 뺀다**(ALPHA-448) — 이름을 키로 덮어쓰면 parquet 나열 순서가 승자를 정해
@@ -1029,6 +1035,12 @@ settings.targets.keywords            # ["금리", ...]
   KRX `trd_dd`(우리가 지정). **market-스코프 파티션이라 한 파티션엔 한 벤더만**(US=fmp·KR=krx disjoint)
   → 가격의 벤더 교차 충돌 가드가 불필요하다. 같은 키 재적재는 최신 fetched_at 우선. `weight_pct·shares·
   market_value` 는 참고 필드(KRX 해외기초는 대시(-)→null), `source_vendor`(fmp|krx)는 컬럼(provenance).
+  🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다** — 파티션은 지워지지 않아 config 에서 뺀
+  ETF 의 옛 행이 남고, 참조 계열(명부만 필요한 ETF)도 섞여 들어온다. 읽는 쪽은 유니버스 뿌리
+  (`krx_etf.source.etf_map` 키)로 한 번 거른다 — `ingest-price-raw`·`load-etf-holdings`·
+  `load-price-triggers`·`normalize-news`·`load-instruments` 다섯이 같은 정본
+  (`_krx_expected_etfs`)을 `expected_etfs` 인자로 받는다. 안 거르면 마스터에 없는 ETF 가 매 런
+  `failed_records` 로 잡혀 원장이 **영구 INCOMPLETE** 가 된다.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=
@@ -1128,7 +1140,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   `"ops": {"records_out": N, "failed_records": M}` 를 남긴다. 관측(`ops/entry.py:_observe_from_log`)은
   **이 봉투만** 읽으므로 task_key 별 분기가 없다 — 새 작업을 카탈로그에 등록해도 리더를 안 고친다.
   봉투가 스텝 안에 사는 이유: 어느 카운터가 유실인지는 스텝만 안다(적재의
-  `skipped_unknown_instrument` 는 유실, `skipped_self`·`gated_out`·`already_tagged` 는 정상 동작).
+  `skipped_unknown_etf`·`skipped_unknown_instrument` 는 유실, `skipped_self`·
+  `skipped_foreign_etf`(유니버스 뿌리 밖 ETF 의 행)·`gated_out`·`already_tagged` 는 정상 동작).
   ⚠️ **스코프 규칙** — 산출과 유실은 *이 런이 재판정한 범위*에서 함께 온다. 재판정 없이 건너뛴
   항목은 산출로도 유실로도 세지 않는다(세면 옛 실패가 산출로 뒤집힌다). 그래서 매 런 입력을 다시
   읽고 다시 거르는 스텝(수집·정제·적재)은 기존 행도 산출로 세지만, 처리분을 건너뛰는 스텝
@@ -1252,7 +1265,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04 --universe /path/universe.json
 # universe.json 생성(1분 파이프라인, ALPHA-735) — canonical KR holdings 의 **ETF 별 최신
-# 스냅샷 합집합**(ALPHA-590 규칙)에서 만든다. 손으로 유지하는 목록은 ETF 편입·제외 때마다
+# 스냅샷 합집합**(ALPHA-590 규칙) **∩ 유니버스 뿌리(`krx_etf.source.etf_map`)** 에서 만든다
+# — 파티션에 남은 폐지분·참조 계열은 여기 안 든다. 손으로 유지하는 목록은 ETF 편입·제외 때마다
 # 조용히 어긋난다. 여기에 config `[minute_universe].sector_etf_ids`(층 분해의 섹터 후보
 # ETF)를 **참조 계열 축**(`Universe.sector_etf_ids`)으로 얹는다 — 봉만 받고 트리거 판정은
 # 안 받는 계열이다(`etf_ids` 는 price-consumer 의 판정 집합이라 거기 얹으면 발화 대상이 된다).
