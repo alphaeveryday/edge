@@ -26,12 +26,17 @@
 |---|---|
 | `types.ts` | Facts(사실)·Violation·Incident·리포트 타입 — **위반 필드 규약**(`target`/`targetId`/`metric`/`unit`/`state`/`why`)이 `RawViolation` 주석에 있다. 정본은 거기다 |
 | `rules.ts` | RULES 19종(선언 데이터 + 조건 함수) · EDGES 7개 |
-| `evaluate.ts` | 위반 수집 → 인과 병합(사건) → 정렬 · 리뷰 계약 §5 JSON(`buildReport`) |
+| `evaluate.ts` | 위반 수집 → 인과 병합(사건) → 정렬 · 리뷰 계약 §5 JSON(`buildReport`) · 사건 키 조립(`vidOf`)과 **그 역함수**(`ruleOfVid`) — 소비자가 구분자를 다시 적으면 조용히 아무것도 못 찾는다 |
 | `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분). **단계 4에서 `/api/v1/console/facts` fetch 로 교체된다**(ADR-0049) |
 | `cli.ts` | `pnpm eval:rules` — UI 없이 §5 JSON 산출 |
 | `rules.test.ts` | `pnpm test:rules` — 규칙당 위반/비위반 픽스처 + 경계 케이스 (node:test) |
 
 Node 직접 실행(cli·test)을 위해 모듈 내부 import 는 `.ts` 확장자를 쓴다(tsconfig `allowImportingTsExtensions`).
+
+⚠️ 이 제약은 **이 폴더 밖에도 적용된다.** `pnpm test:rules` 는 `src/**/*.test.ts` 를 돌리므로
+`node --test` 가 읽는 모듈이 화면 쪽에도 있다(`pages/ops/notRun.ts`·`consoleFacts.ts` — 규칙
+결과를 읽는 순수 판단들). **JSX 를 쓰는 파일에 그런 판단을 두면 node 가 import 자체를 못 해
+변이가 하나도 안 잡힌다** — 그래서 판단은 `.ts` 로 내리고 import 에 확장자를 붙인다.
 
 ## 명세와 다르게 구현한 지점 (구현 노트)
 
