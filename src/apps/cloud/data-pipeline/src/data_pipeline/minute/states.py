@@ -117,7 +117,8 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # 정상이다 — 토스 실측 tick 이 이미 73초+ 이고, backlog 도 굶지 않는다(분당 2~3 window 처리
 # vs 분당 1 도착). ⭐ 실제 요구는 **lease 가 최악 tick 을 덮는 것**이고 `lease_seconds` 기본
 # 300 이 그 처방이다(`worker.WorkerConfig` 주석이 60 을 ALPHA-706 근거로 기각한 기록이다 —
-# 뉴스 기본 60 은 poll 이 훨씬 싸서 성립하는 값이라 공시가 빌려 쓸 수 없다).
+# 런타임 dataclass 기본 60 은 **뉴스** 것이고 poll 이 훨씬 싸서 성립하는 값이라 공시가
+# 빌려 쓸 수 없다. 배포가 주입하는 설정 기본은 또 다른 층이다 — `config.models` 쪽).
 # → 후속 Worker PR 의 성공기준: `config.models` 의 `_leases_cover_worst_poll`
 # (뉴스)·`_leases_cover_worst_tick`(가격) **동형 검증자**를 공시에도 세워 lease 가 최악
 # tick 을 못 덮는 설정이 **load 시점 ValueError** 로 죽게 한다. 현 SFN 은 슬롯 간격
@@ -128,8 +129,10 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # (`ingest-raw-disclosure`·`ingest-raw-financial`·`enrich-corp-code` — task-def 는
 # `secret_sets` 의 `dart`·`rds_dart` 둘이 같은 시크릿을 싣는다).
 # `"020" 일 사용한도 초과`는 `STOP_STATUS_CODES` 라 닿으면 레인이 선다.
-# 좁히는 축은 셋이다 — **창을 당일로**(세션 첫 tick 만 D-1 포함) ·
-# `recovery_budget_per_tick` · dataset 별 격자 폭.
+# ⚠️ **콜을 줄이는 축과 tick 을 줄이는 축은 다르다.** 일 총량을 줄이는 것은 둘 —
+# **창을 당일로**(세션 첫 tick 만 D-1 포함, 절반) · dataset 별 격자 폭(window 수).
+# `recovery_budget_per_tick` 은 **일 총량을 안 줄인다**(720 window 는 그대로다) —
+# 줄이는 것은 tick 하나의 길이뿐이니 lease 예산과 짝으로만 만진다.
 EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_DISCLOSURE_MINUTE})
 # **상주 서비스를 스케일하는 세션**의 dataset. `start/stop-minute-session` 이 올리고
 # 내리는 서비스 목록은 dataset 별이 아니라 **공용**이라, 여기 없는 dataset 으로 stop 을

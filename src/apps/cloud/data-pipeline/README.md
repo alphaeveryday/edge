@@ -1260,6 +1260,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 🔴 그 소득은 **날짜창을 세션 날짜(KST)에서 유도**할 때만 실현된다 — `--from/--to` 를
 # 생략한 증분 기본창은 UTC 라 08:00 KST tick 이 `[D-2, D-1]` 을 질의한다(세션 날짜가 창 밖).
 DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run plan-minute-session --dataset disclosure_minute \
+    --source-group dart --session-date 2026-08-10   # universe 없음 · 720 window
+DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04 --universe /path/universe.json
 # universe.json 생성(1분 파이프라인, ALPHA-735) — canonical KR holdings 의 **ETF 별 최신
