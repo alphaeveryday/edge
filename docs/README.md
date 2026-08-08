@@ -19,6 +19,7 @@
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
 | [contracts/publication-api.md](contracts/publication-api.md) | MTS/HTS 연동 방식 — Publication API | 증권사 연동 접점을 만질 때 |
+| [contracts/console-facts-api.md](contracts/console-facts-api.md) | Super Admin Console facts API — 규칙 엔진이 읽는 사실 계약 ([adr/0049](adr/0049-console-facts-endpoint.md)) | 콘솔 규칙 엔진의 입력을 만질 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 | 노출 이력·감사 재현을 만질 때 |

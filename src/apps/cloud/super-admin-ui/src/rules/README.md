@@ -27,7 +27,7 @@
 | `types.ts` | Facts(사실)·Violation·Incident·리포트 타입 — **위반 필드 규약**(`target`/`targetId`/`metric`/`unit`/`state`/`why`)이 `RawViolation` 주석에 있다. 정본은 거기다 |
 | `rules.ts` | RULES 19종(선언 데이터 + 조건 함수) · EDGES 7개 |
 | `evaluate.ts` | 위반 수집 → 인과 병합(사건) → 정렬 · 리뷰 계약 §5 JSON(`buildReport`) |
-| `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분) |
+| `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분). **단계 4에서 `/api/v1/console/facts` fetch 로 교체된다**(ADR-0049) |
 | `cli.ts` | `pnpm eval:rules` — UI 없이 §5 JSON 산출 |
 | `rules.test.ts` | `pnpm test:rules` — 규칙당 위반/비위반 픽스처 + 경계 케이스 (node:test) |
 
@@ -51,7 +51,9 @@ Node 직접 실행(cli·test)을 위해 모듈 내부 import 는 `.ts` 확장자
    기계 검증할 수 있게 위반 항목에 뿌리 사건 키를 붙였다.
 5. **실행 위치** — 명세는 "서버 쪽이 자연스럽다" 했으나 UI 워크스페이스의 순수 TS 모듈 + node CLI 로 구현했다.
    사실 소스가 아직 정적 스냅샷(목 포함)이라 서버 이식의 이득이 없고, §5 JSON 은 CLI 로 UI 없이 나온다.
-   API 가 사실을 주기 시작하면 이 모듈을 그대로 서버(또는 BFF)로 옮기거나 스냅샷 import 를 fetch 로 바꾼다.
+   **이 선택은 닫혔다** — 엔드포인트가 사실만 주고 평가는 여기 남는다
+   ([ADR-0049](../../../../../../docs/adr/0049-console-facts-endpoint.md), 계약은
+   [docs/contracts/console-facts-api.md](../../../../../../docs/contracts/console-facts-api.md)).
 6. **구 홈 잔존** — 이전 `OverviewPage`(실데이터 레인 요약)는 `/overview` 에 "레인 원장 요약"으로 남겼다.
    규칙 엔진은 정적 스냅샷 위에서 돌고 저 화면은 실 API 를 읽는다 — 축이 달라 대체가 아니라 병존이다.
 7. **`max_retries: 0` = 정책 미선언** — 원장은 재시도 정책이 없음을 `0` 으로 적는다(SFN Retry 블록 0개,
