@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import dataclasses
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -355,14 +356,23 @@ def test_news_and_market_same_minute_are_separate_runs():
     assert len(db.runs) == 2
 
 
-def test_news_tasks_are_due_on_non_trading_weekday():
-    # WHY: 뉴스 SFN 은 공휴일에도 돈다(평일 크론) — kr_trading_calendar 를 하나라도 True 로
-    #      복사해 오면 그날 실행 결과가 SKIPPED 뒤로 통째로 사라진다(ALPHA-181 함정).
-    db = FakeOpsDB()
-    plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED, sfn_client=FakeSfn(),
-             pipeline_type="news", holidays=frozenset({"2026-07-24"}))
-    for row in db.etasks.values():
-        assert row["plan_status"] == states.PLAN_DUE, row["task_key"]
+def test_news_tasks_are_due_on_any_non_trading_day():
+    # WHY: 뉴스 SFN 은 비거래일에도 돈다 — kr_trading_calendar 를 하나라도 True 로 복사해 오면
+    #      그날 실행 결과가 SKIPPED 뒤로 통째로 사라진다(ALPHA-181 함정).
+    #      ⭐ 축이 둘이다(ALPHA-874): **평일 공휴일**과 **주말**. 크론이 주 7일이 되면서 주말이
+    #      실제로 들어오는데, `is_trading_day` 는 토·일을 무조건 비거래일로 본다 — 그래서 크론을
+    #      넓히는 것만으로는 부족하고 이 False 가 함께 성립해야 토요일 런이 실일을 한다.
+    for label, sched, holidays in [
+        ("평일 공휴일", _SCHED, frozenset({"2026-07-24"})),
+        # 2026-08-01(토) 15:00 KST = 06:00 UTC.
+        ("주말", datetime(2026, 8, 1, 6, 0, tzinfo=timezone.utc), frozenset()),
+    ]:
+        db = FakeOpsDB()
+        plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=sched, sfn_client=FakeSfn(),
+                 pipeline_type="news", holidays=holidays)
+        assert db.etasks, label
+        for row in db.etasks.values():
+            assert row["plan_status"] == states.PLAN_DUE, f"{label}/{row['task_key']}"
 
 
 def test_due_slots_returns_all_past_news_slots_of_the_day(monkeypatch):
@@ -503,6 +513,137 @@ def test_malformed_disclosure_sched_env_fails_loud(monkeypatch):
     monkeypatch.setenv("OPS_DISCLOSURE_SCHED_HHMM", "09:00,10-00")
     with pytest.raises(SystemExit, match="OPS_DISCLOSURE_SCHED_HHMM"):
         entry._lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM")
+
+
+def test_due_slots_weekend_is_per_lane(monkeypatch):
+    # WHY(ALPHA-874): 뉴스 크론만 주 7일이고 시장·공시는 MON-FRI 다. 주말 건너뛰기가 레인
+    #      무관 상수면 어느 쪽이든 반드시 틀린다 — 상수 "건너뛴다"(종전)면 뉴스 주말 런의
+    #      PLANNER_MISSING 탐지가 0 이 되고(조용한 축소), 상수 "안 건너뛴다"면 평일 전용
+    #      레인이 매 토·일 거짓 결측을 연다. **같은 순간에 두 레인이 다른 날을 물어야** 그
+    #      플래그가 실제로 레인별로 읽히고 있다는 뜻이다.
+    monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
+    monkeypatch.setenv("OPS_NEWS_SCHED_WEEKEND", "true")
+    monkeypatch.setenv("OPS_DISCLOSURE_SCHED_HHMM", "09:00,10:00")
+    monkeypatch.delenv("OPS_DISCLOSURE_SCHED_WEEKEND", raising=False)
+    monkeypatch.delenv("OPS_DAILY_SCHED_WEEKEND", raising=False)
+
+    sat = datetime(2026, 8, 1, 15, 45, tzinfo=planner_mod.KST)
+    assert sat.weekday() == 5, "픽스처가 토요일이 아니면 이 테스트는 아무것도 안 가린다"
+    due = entry._due_slots(sat)
+
+    # 뉴스는 그 토요일 **자신의** 지난 슬롯을 문다(23:50 은 아직 예정 전이라 빠진다).
+    assert [k for k, _ in due if k.startswith("news:")] == [
+        "news:2026-08-01T15:00", "news:2026-08-01T15:30",
+    ]
+    # 평일 전용 레인은 토요일 슬롯을 지어내지 않고 직전 금요일(07-31)로 떨어진다 — 오탐 0.
+    assert [k for k, _ in due if k.startswith("disclosure:")] == [
+        "disclosure:2026-07-31T09:00", "disclosure:2026-07-31T10:00",
+    ]
+    assert [k for k, _ in due if k.startswith(f"{PIPELINE_TYPE}:")] == [
+        f"{PIPELINE_TYPE}:2026-07-31T15:40",
+    ]
+    # grace(30분)는 주말에도 슬롯별로 계산된다 — 요일 축이 붙었다고 판정이 무뎌지면 안 된다.
+    grace = dict(due)
+    assert grace["news:2026-08-01T15:00"] is True
+    assert grace["news:2026-08-01T15:30"] is False
+
+
+def test_malformed_weekend_env_fails_loud(monkeypatch):
+    # WHY(ALPHA-874): 값이 있는데 못 읽었을 때 조용히 평일 전용으로 떨어지면 그 레인 주말 런의
+    #      결측 탐지가 소리 없이 사라진다 — `_lane_sched_hhmms` 와 정확히 같은 축이다(Rule 12).
+    #      terraform 이 `tostring(bool)` 로 넣으므로 우리 표기는 소문자 둘뿐이다.
+    monkeypatch.setenv("OPS_NEWS_SCHED_WEEKEND", "True")
+    with pytest.raises(SystemExit, match="OPS_NEWS_SCHED_WEEKEND"):
+        entry._lane_sched_weekend("OPS_NEWS_SCHED_WEEKEND")
+    # 미주입은 손상이 아니라 **종전 동작**(평일 전용)이다 — 플래그를 아직 안 넣은 배포가
+    # 여기서 죽으면 안 된다. HH:MM 의 "미주입 = 판정 없음" 과 같은 결.
+    monkeypatch.delenv("OPS_NEWS_SCHED_WEEKEND", raising=False)
+    assert entry._lane_sched_weekend("OPS_NEWS_SCHED_WEEKEND") is False
+    monkeypatch.setenv("OPS_NEWS_SCHED_WEEKEND", "false")
+    assert entry._lane_sched_weekend("OPS_NEWS_SCHED_WEEKEND") is False
+    monkeypatch.setenv("OPS_NEWS_SCHED_WEEKEND", "true")
+    assert entry._lane_sched_weekend("OPS_NEWS_SCHED_WEEKEND") is True
+
+
+def _ledger_tf() -> str:
+    """주석을 걷어낸 ops_ledger.tf — 배선을 뗄 때 가장 흔한 형태가 삭제가 아니라 주석 처리라,
+    원문을 훑으면 주석에 남은 옛 줄로 단언이 초록을 유지한다(`_strip_hcl_comments` 규율)."""
+    return test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "ops_ledger.tf").read_text(encoding="utf-8"))
+
+
+def test_news_cron_runs_every_day_of_week():
+    # WHY(ALPHA-874): 수집 창이 `[어제, 오늘]` 2일이라 어떤 날은 그날이나 다음 날에 런이
+    #      있어야 덮인다. MON-FRI 면 일요일은 월요일 런이 덮지만 **토요일은 토·일 모두 런이
+    #      없어 매주 통째로 빈다**(2026-08-01 raw 파티션 0 실증). 요일을 되돌리는 변경은
+    #      코드 어디에서도 안 깨지고 조용히 그 구멍을 되살리므로 여기서 붙든다.
+    #      ⚠️ 이 화이트리스트는 커버리지가 아니라 **정책**을 고정한다 — `MON-SAT` 도 거부한다.
+    #      토요일만 더하는 게 사실 최소 수정이지만 원장의 주말 플래그가 이진이라 표현할 수 없고
+    #      (variables.tf 주석), 그 표기는 terraform plan 에서 죽는다. 여기서도 같이 막아 둔다.
+    #      ⚠️ **일(day-of-month)까지 함께 든다.** 요일만 보면 `cron(0 15 1 * ? *)`(매달 1일만)
+    #      이 통과하는데, 그건 요일 필드가 `?` 라 주말 플래그가 true 로 잡혀 **매달 28일가량
+    #      × 3슬롯**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"news_schedule_expressions"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "news_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
+    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', block.group(1)))
+    assert dom_dow and dom_dow <= {("*", "?"), ("?", "*")}, (
+        f"뉴스 크론의 (일, 요일)이 {sorted(dom_dow)} — 매일 도는 형태가 아니다. 원장이 표현할 수 "
+        "있는 값은 MON-FRI 와 주 7일 둘뿐이고, 둘 중 하나는 `?` 다(AWS 가 `*` 를 두 필드에 "
+        "동시에 쓰는 것을 금지한다)")
+
+
+def test_every_sched_hhmm_env_has_a_weekend_sibling():
+    # WHY(ALPHA-874): 슬롯 시각만 주입하고 요일 플래그를 빠뜨리면 그 레인은 미주입 기본값인
+    #      **평일 전용**으로 조용히 굳는다 — 크론이 주말에도 도는 레인이면 주말 결측 탐지가
+    #      0 이 되고 아무도 모른다. 레인이 늘 때 한쪽만 배선하는 것을 여기서 막는다.
+    tf = _ledger_tf()
+    lanes = set(re.findall(r"\bOPS_(\w+)_SCHED_HHMM\b", tf))
+    assert lanes, "OPS_*_SCHED_HHMM 주입을 못 찾았다 — 파서가 낡았다"
+    missing = {n for n in lanes if not re.search(rf"\bOPS_{n}_SCHED_WEEKEND\s*=", tf)}
+    assert not missing, f"요일 플래그가 없는 레인: {sorted(missing)} — 주말 판정이 조용히 꺼진다"
+
+
+def test_tf_weekend_flag_direction_and_per_lane_wiring():
+    """WHY(ALPHA-874): 플래그가 **존재하는가**만 보면 그 값이 무엇인지는 아무도 안 잡는다.
+
+    실제로 뚫린 구멍이다 — 리뷰 변이에서 `news_schedule_weekend` 를 `"false"` 상수로 바꾸거나
+    요일 판정을 반전시켜도 전 스위트가 초록이었다. 그 배포는 이 티켓이 고치려는 상태(주말 결측
+    탐지 0) 또는 그 반대(평일 전용 레인에 매 토·일 닫히지 않는 오탐 16건)를 그대로 만든다.
+    파이썬 쪽은 변이가 전부 잡히는데 terraform 쪽만 비어 있던, Rule 12 의 그 실패 방향이다.
+
+    그래서 값을 만드는 두 조각을 따로 든다: **방향표**(어느 요일 표기가 주말인가)와
+    **레인별 배선**(각 레인이 표를 거쳐 자기 cron 을 읽는가). 표를 뒤집으면 앞이, 상수로
+    박거나 남의 변수를 읽으면 뒤가 빨개진다.
+    """
+    tf = _ledger_tf()
+    table = re.search(r"_day_weekend\s*=\s*\{(.*?)\n  \}", tf, re.S)
+    assert table, "_day_weekend 표를 못 찾았다 — 파서가 낡았다"
+    direction = dict(re.findall(r'"([^"]+)"\s*=\s*(true|false)', table.group(1)))
+    # 표 **전체**를 든다 — 일부 행만 들면 안 든 행이 뒤집혀도 초록이다. 실제로 그랬다: `"?"` 만
+    # 잠갔더니 크론을 `? * * *`(테스트가 허용하는 합법 편집)로 쓰고 `"*"` 를 false 로 뒤집는
+    # 조합이 전 스위트 초록인 채 주말 결측 탐지를 0 으로 만들었다. 키 집합이 느는 것도 여기서
+    # 걸려야 한다 — 표에 값을 더하는 것은 이진 플래그로 표현 가능한 범위를 넓히는 판단이다.
+    assert direction == {
+        "?|MON-FRI": "false", "*|?": "true", "?|*": "true",
+    }, direction
+
+    # 레인별 배선: 각 local 이 표를 거치고 **자기** 스케줄 변수를 읽는가.
+    segments = re.split(r"\n  (?=\w+_schedule_weekend\s*=)", tf)
+    wired = {m.group(1): seg for seg in segments
+             if (m := re.match(r"\s*(\w+)_schedule_weekend\s*=", seg))}
+    expected_source = {
+        "daily": "var.schedule_expression",
+        "news": "var.news_schedule_expressions",
+        "disclosure": "var.disclosure_schedule_expressions",
+        "investor_intraday": "var.investor_intraday_schedule_expressions",
+    }
+    assert set(wired) == set(expected_source), f"레인 구성이 바뀌었다: {sorted(wired)}"
+    for lane, source in expected_source.items():
+        body = wired[lane]
+        assert "local._day_weekend[" in body, f"{lane}: 표를 안 거친다(상수로 박혔나?)"
+        assert source in body, f"{lane}: {source} 가 아니라 남의 cron 을 읽는다"
 
 
 def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):

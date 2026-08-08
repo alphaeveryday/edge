@@ -233,8 +233,9 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
 #   ① 23:50 런은 체인이 10분+ 걸려 자정을 넘기면 assemble 이 '다음 날'만 처리해 그날 늦은 뉴스가
 #      조립에서 밀린다 — today-implicit 스텝 + assemble 단일일 창의 성질이고, assemble 창 재설계는
 #      정준영 질의 대기다([[assemble-window-overnight-gap]]).
-#   ② 평일(MON-FRI) 크론이라 주말 뉴스는 자동 처리 안 됨 — 기존 시장 스케줄(cron 40 15 MON-FRI)과
-#      같은 pre-existing 속성이라 회귀는 아니다.
+#   ② **해소됨(ALPHA-874)** — 크론을 주 7일로 넓혔다. 실제 구멍은 주말 전체가 아니라 **토요일
+#      하나**였다: 수집 창이 `[어제, 오늘]` 2일이라 일요일은 월요일 런이 덮었고, 토요일만 토·일
+#      모두 런이 없었다(2026-08-01 raw 파티션 0 실증).
 #   ③ instrument 마스터가 비었거나(최초 배포·시장 SFN 마스터 실패) 갱신 중이면 assemble 이 그 ticker
 #      뉴스를 유니버스 밖으로 드롭하고 exit 0 — 마스터는 시장 SFN 단일 writer 라 steady-state 엔
 #      채워져 있다(문서화된 교차 SFN 읽기전용 계약, ADR-0005).

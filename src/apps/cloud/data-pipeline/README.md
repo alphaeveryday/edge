@@ -570,8 +570,8 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
 뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)로 **분리 완료**다 — 시장
-레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(평일 15:00·15:30·23:50 KST,
-dev ENABLED 컷오버)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
+레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 15:00·15:30·23:50
+KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
 AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
 시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
 뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다 — 시장 analyze 는
@@ -1209,8 +1209,18 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
   판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(공시 최대 10개·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
-- 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 평일"의 **그날 지난 스케줄 슬롯 전부**를
-  대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). ⚠️ 수동 슬롯은
+- **주말은 레인마다 다르다**(ALPHA-874) — 뉴스 크론만 주 7일이고 시장·공시·장중 수급은 MON-FRI 다.
+  그래서 `OPS_DAILY_SCHED_WEEKEND`·`OPS_NEWS_SCHED_WEEKEND`·`OPS_DISCLOSURE_SCHED_WEEKEND`·
+  `OPS_INVESTOR_INTRADAY_SCHED_WEEKEND` 가 HH:MM 과 **같은 cron 의 일·요일 필드**에서 파생돼 함께
+  주입된다(`"true"`/`"false"`, `entry._lane_sched_weekend`). 이게 없으면 주말 건너뛰기가 레인 무관
+  상수가 되어 어느 쪽이든 틀린다 — 상수 "건너뛴다"면 주 7일 레인의 결측 탐지가 **조용히 0** 이 되고,
+  상수 "안 건너뛴다"면 MON-FRI 레인이 매 토·일 거짓 PLANNER_MISSING 을 연다(뜰 런이 없어 `run_present`
+  로 영영 RESOLVE 되지 않는다). ⚠️ 이 형제에는 위의 ENABLED 조건이 **없다** — HH:MM 이 빈 값이면
+  `_due_slots` 가 그 레인을 먼저 건너뛰므로 플래그만 남아도 무해하다. 미주입이면 `False`(=평일 전용,
+  종전 동작)이고, `"true"`/`"false"` 외의 값은 fail-loud 다.
+- 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 **예정일**"의 **그날 지난 스케줄 슬롯 전부**를
+  대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). 평일 전용 레인이면
+  그 예정일이 주말을 건너뛴 직전 평일이다. ⚠️ 수동 슬롯은
   여전히 `OPS_RUN_KEY` 로 지정해야 대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히
   남는다(ALPHA-565).
 
