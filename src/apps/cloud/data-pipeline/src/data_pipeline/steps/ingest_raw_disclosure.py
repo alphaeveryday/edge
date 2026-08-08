@@ -14,7 +14,7 @@ OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집
 ⚠️ **메타는 유니버스 행 전량이고, 본문만 대상 유형이다**(ALPHA-865). 소스는 report_nm 으로
 행을 버리지 않고 `is_target` 플래그만 달아 보내므로(목록 질의는 어차피 전 유형을 훑어 버려도
 콜이 안 준다) 이 스텝이 그 플래그로 **본문 다운로드만** 제한한다 — 본문은 행당 1콜이라
-제한하지 않으면 하루 ~11콜이 ~1,000콜이 된다. 감쇠 두 축은 collection_log 의
+제한하지 않으면 하루 ~11콜이 universe_matched 만큼(수십~100/일 규모)이 된다. 감쇠 두 축은 collection_log 의
 `universe_matched`·`type_matched` 가 따로 센다.
 
 ⚠️ **이 스텝은 완전성을 판정하지 않는다.** 소스가 남기는 `list_total_count`·`list_rows_seen`
@@ -197,11 +197,10 @@ def run(
         for record in source.fetch(symbols, from_date, to_date):
             fetched += 1
             market = record["market"]
-            rcept_no = (record.get("rcept_no") or "").strip()
             if not record.get("is_target"):
                 # 비대상 유형 — 메타만 남기고 본문은 받지 않는다(ALPHA-865). 목록은 어차피
                 # 전 유형을 훑으므로 이 행을 저장해도 API 콜은 안 늘지만, 본문은 행당 1콜이라
-                # 여기서 제한하지 않으면 하루 ~11콜이 ~1,000콜이 된다. 정제는 report_nm 으로
+                # 여기서 제한하지 않으면 하루 ~11콜이 universe_matched 만큼(수십~100/일 규모)이 된다. 정제는 report_nm 으로
                 # 라우팅하므로 이 행들은 records_skipped_type 으로 빠진다.
                 #
                 # 두 필드를 **명시적으로 None** 으로 둔다(키를 빼지 않는다) — 대상 행의 본문
@@ -211,6 +210,10 @@ def run(
                 record["body_format"] = None
                 partitions[market].append(record)
                 continue
+            # 게이트 **뒤**에서 읽는다 — 소스가 형상(비어있지 않은 str)을 보장하지만, 위에
+            # 두면 그 보장이 깨지는 순간 `.strip()` 이 창 전체를 죽인다(비대상 행에 비문자열
+            # rcept_no 가 오던 회귀를 실제로 밟았다). 대상 행만 이 값을 쓴다.
+            rcept_no = (record.get("rcept_no") or "").strip()
             if market not in doc_index:
                 doc_index[market] = _existing_documents(storage, vendor, market, started_date)
             existing_key = doc_index[market].get(rcept_no)
@@ -257,13 +260,16 @@ def run(
 
     # 메타(ndjson)만 저장 단계에서 쓴다 — 본문은 위에서 즉시 저장됨. put 실패도 계약
     # ("결과는 항상 collection_log") 안에서 삼켜 status=error 로 남긴다.
-    saved = 0
+    saved = saved_targets = 0
     try:
         for market, records in sorted(partitions.items()):
             key = f"{raw_disclosure_partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
             storage.put_bytes(key, lines.encode("utf-8"))
             saved += len(records)
+            # 원장이 세는 산출은 **대상 건수**다(아래 ops 주석). 전량과 갈라 두지 않으면
+            # 비대상 메타가 늘 있어서 "전건 실패"가 영영 관측되지 않는다.
+            saved_targets += sum(1 for r in records if r.get("is_target"))
     except Exception as exc:
         logger.exception("raw 메타 저장 실패")
         status, error, exit_code = "error", str(exc), 1
@@ -286,7 +292,7 @@ def run(
     failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
     real_failures = failed_targets
     if status == "success" and real_failures:
-        if saved == 0:
+        if saved_targets == 0:
             status, exit_code = "error", 1
             error = f"모든 수집 대상 실패 ({len(real_failures)}건)"
         else:
@@ -308,7 +314,12 @@ def run(
             "error": error,
             "reason": reason,
             "records_fetched": fetched,
+            # 전량(유니버스) / 그중 대상. 둘을 갈라 둬야 "보존은 늘었는데 대상은 0"이 보인다.
             "records_saved": saved,
+            "records_saved_target": saved_targets,
+            # 보존해도 못 쓰는 행(비대상 + rcept_no 결측/비문자열)을 뺀 수 — 0건이 아니라
+            # 수치로 남긴다(Rule 12). 실패가 아니라 별도 축이라 ops.failed_records 와 무관하다.
+            "rows_dropped_malformed": getattr(source, "dropped_malformed", 0),
             "documents_saved": documents_saved,
             # 이미 있어서 **안 받은** 본문 수(ALPHA-720). 안 세면 "본문이 0건"과 "재다운로드를
             # 0건으로 줄였다"가 documents_saved=0 하나로 접혀 구분되지 않는다.
@@ -335,17 +346,25 @@ def run(
             "type_matched": getattr(source, "type_matched", 0),
             "finished_at": datetime.now(timezone.utc).isoformat(),
             # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
-            # records_out 은 메타 건수(saved)로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
-            "ops": {"records_out": saved, "failed_records": len(failed_targets)},
+            # records_out 은 메타 건수로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
+            #
+            # ⚠️ **`saved` 가 아니라 `saved_targets` 다**(ALPHA-865). 메타를 전량 보존하게
+            # 되면서 `saved` 는 유니버스 전량(~100/일)이 됐는데, `failed_records` 는 여전히
+            # 대상 스코프다. 둘을 섞으면 ops/entry.py 가 명문화한 "산출과 유실은 같은
+            # 스코프에서 와야 한다(비대칭 금지)"를 깨서, 유실 비율이 ~30배 축소돼 보이고
+            # 콘솔 그리드(GridPage)가 실제 1건인 날 "산출 97"을 띄운다. 비대상 메타는 이
+            # 런이 하기로 한 일이 아니라 부산물이라 산출로 세지 않는다 — 보존 사실은
+            # records_saved 가 따로 기록한다.
+            "ops": {"records_out": saved_targets, "failed_records": len(failed_targets)},
         })
     except Exception:
         logger.exception("collection_log 기록 실패 — 스토리지 장애로 감사 로그 유실")
         exit_code = exit_code or 1
     logger.info(
-        "ingest_raw_disclosure 완료: status=%s fetched=%d saved=%d docs=%d reused=%d"
-        " failed=%d partitions=%d",
-        status, fetched, saved, documents_saved, documents_reused,
-        len(failed_targets), len(partitions),
+        "ingest_raw_disclosure 완료: status=%s fetched=%d saved=%d(대상 %d) docs=%d reused=%d"
+        " failed=%d dropped=%d partitions=%d",
+        status, fetched, saved, saved_targets, documents_saved, documents_reused,
+        len(failed_targets), getattr(source, "dropped_malformed", 0), len(partitions),
     )
     return exit_code
 

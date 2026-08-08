@@ -1,6 +1,6 @@
 """ingest_raw_disclosure 스텝 테스트 — 메타 ndjson + 본문 ZIP 이중 저장·뉴스형 상태기계.
 
-핵심 계약: 공시 raw 도 ingest_date/run_id 파티션에 메타를 전부 보존하고, 본문(document.xml
+핵심 계약: 공시 raw 도 ingest_date/run_id 파티션에 **유니버스 행 메타를 전부** 보존하고, 본문(document.xml
 ZIP)은 rcept_no 별 객체로 무변형 저장한다. 특히 특정 corp 의 빈 날짜창은 정상(뉴스형) —
 재무의 '0행=error' 가드를 두지 않는다. 각 테스트는 '왜'를 주석으로 남긴다(AGENTS Rule 9).
 """
@@ -47,7 +47,7 @@ class FakeSource:
     def __init__(self, records=(), *, enabled=True, planned=1,
                  doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
                  list_total_count=None, list_rows_seen=0, resolved_window=None,
-                 universe_matched=0, type_matched=0):
+                 universe_matched=0, type_matched=0, dropped_malformed=0):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
@@ -58,6 +58,7 @@ class FakeSource:
         # 감쇠 두 축(ALPHA-865) — 마찬가지로 소스가 채우고 스텝은 옮기기만 한다.
         self.universe_matched = universe_matched
         self.type_matched = type_matched
+        self.dropped_malformed = dropped_malformed
         # 실제로 수집한 창 — 인자와 다를 수 있다(시작일만 준 창은 소스가 끝을 확정한다)
         self.resolved_window = resolved_window or (None, None)
         self._doc_fail = doc_fail
@@ -508,6 +509,49 @@ def test_non_target_row_is_not_a_partial_run(tmp_path):
     assert log["ops"]["failed_records"] == 0
     assert log["documents_saved"] == 0
     assert log["records_saved"] == 2
+
+
+def test_ops_records_out_counts_targets_not_universe(tmp_path):
+    # WHY: 메타를 전량 보존하게 되면서 `saved` 가 유니버스 전량이 됐는데 `failed_records` 는
+    #      대상 스코프 그대로다. 둘을 섞으면 ops/entry.py 가 명문화한 "산출과 유실은 같은
+    #      스코프에서 와야 한다(비대칭 금지)"가 깨져 유실 비율이 축소돼 보이고, 콘솔 그리드가
+    #      실제 1건인 날 "산출 N"을 띄운다. **두 값이 서로 다른 수**여야 이 계약이 고정된다 —
+    #      같으면 어느 쪽을 실었는지 이 테스트가 못 가린다.
+    source = FakeSource(records=[
+        _rec("KEEP"),
+        _rec("S1", report_nm="주주총회소집결의", is_target=False),
+        _rec("S2", report_nm="현금ㆍ현물배당결정", is_target=False),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 3          # 보존은 전량
+    assert log["records_saved_target"] == 1   # 대상은 하나
+    assert log["ops"]["records_out"] == 1     # 원장이 세는 산출 = 대상 스코프
+
+
+def test_all_targets_failed_is_error_even_with_non_target_meta(tmp_path):
+    # WHY: `saved == 0 → status="error"` 분기가 비대상 메타 때문에 **도달 불가**가 됐었다 —
+    #      대상이 전건 실패한 런이 "일부 실패(partial)"라고 말한다. 판정 기준을 대상 스코프로
+    #      되돌렸는지 확인한다. 이 어휘가 죽으면 "수집이 통째로 실패했다"를 표현할 수단이
+    #      영영 없어진다(이 스텝이 status 어휘를 길게 정당화해 둔 그 어휘다).
+    # 대상 행이 **소스에서** 전부 떨어진 모양 — 벤더가 rcept_no 를 드리프트시키면 실제로
+    # 이렇게 된다(본문 fetch 실패는 메타를 보존하므로 이 경로가 아니다).
+    source = FakeSource(records=[_rec("SKIP", report_nm="주주총회소집결의", is_target=False)])
+    source.fetch_failures = [
+        {"symbol": "005930", "rcept_no": None, "error": "대상 공시인데 rcept_no 결측/비문자열"},
+    ]
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 1
+    log = _log(storage, "r1")
+    assert log["records_saved"] == 1          # 비대상 메타는 저장됐다
+    assert log["records_saved_target"] == 0   # 대상은 하나도 못 건졌다
+    assert log["status"] == "error"           # → partial 이 아니라 error 다
+    assert "모든 수집 대상 실패" in log["error"]
 
 
 def test_attenuation_axes_recorded_in_collection_log(tmp_path):

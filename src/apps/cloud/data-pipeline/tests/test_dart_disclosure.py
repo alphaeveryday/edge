@@ -1,6 +1,6 @@
 """DartDisclosureSource 어댑터 테스트 — 공시목록 필터·provenance·status·문서 원본.
 
-공시목록(list.json)은 전 유형을 주므로 report_nm 부분일치로 대상만 낸다. 실측 표기(가운뎃점
+공시목록(list.json)은 전 유형을 주므로 report_nm 부분일치는 그 플래그를 정한다. 실측 표기(가운뎃점
 ㆍ·꼬리 공백·[기재정정] 접두)와 malformed 입력에서 게이트가 뚫리지 않는지(각도 H)를 검증한다.
 각 테스트는 '왜 이 동작이 중요한가'를 주석으로 남긴다(AGENTS Rule 9).
 """
@@ -169,22 +169,64 @@ def test_attenuation_counted_on_two_axes(tmp_path):
     assert source.type_matched == 1      # 유형이 거기서 2행을 더 잘랐다
 
 
-def test_non_target_row_without_rcept_no_is_not_a_failure(tmp_path):
-    # WHY: 비대상 행은 본문도 안 받고 정제도 안 타므로 rcept_no 결측이 아무것도 막지 않는다 —
-    #      그걸 실패로 세면 유형 필터를 푼 순간 **원장이 없는 결측을 세기 시작한다**(남의 회사
-    #      행을 유니버스 필터 뒤로 미룬 것과 같은 이유). 대상 행의 결측은 여전히 실패다
-    #      (test_target_with_missing_rcept_no_noted_not_yielded).
+@pytest.mark.parametrize("bad_rcept", [12345, ["A"], {"a": 1}, None, "", "   "])
+def test_malformed_rcept_no_dropped_whatever_the_type(tmp_path, bad_rcept):
+    # WHY: 한때 이 검사를 **대상 행에만** 걸었다가 결함 둘을 만들어 되돌렸다.
+    #      ① 비대상 행을 보존하는 유일한 이유가 "대상을 넓힐 때 재수집 불필요"인데 rcept_no
+    #         없는 행은 그 확장을 못 받는다(본문 키·canonical 정체성이 rcept_no 다) —
+    #         보존됐는데 영원히 못 쓰는 행이 된다.
+    #      ② truthy 비문자열(int·list·dict)은 소비자의 `(x or "").strip()` 을 통과 못 해
+    #         **창 전체를 죽인다**(각도 H — crash-before-gate). 실제로 밟은 회귀다.
+    #      falsy(None·"")와 truthy 비문자열을 **함께** 넣는 이유: `or ""` 로 흡수되는 것만
+    #      테스트하면 실제로 터지는 쪽을 한 번도 안 밟는다.
+    row = {"stock_code": "005930", "report_nm": "주주총회소집결의"}
+    if bad_rcept is not None:
+        row["rcept_no"] = bad_rcept
     client = FakeClient(list_pages={1: _page([
-        {"stock_code": "005930", "report_nm": "주주총회소집결의"},  # 비대상 + rcept_no 없음
+        row,
         _row("단일판매ㆍ공급계약체결", rcept_no="OK"),
     ])})
     source = _source(tmp_path, client, api_key="k")
 
     records = list(source.fetch(["005930"]))
 
-    assert [r["is_target"] for r in records] == [False, True]
-    assert source.fetch_failures == []          # 결측이지만 실패가 아니다
-    assert records[0]["source_url"] is None     # 못 만든 URL 을 지어내지도 않는다
+    assert [r["rcept_no"] for r in records] == ["OK"]  # 못 쓰는 행은 안 나온다
+    assert source.dropped_malformed == 1              # 조용히 버리지 않는다
+
+
+def test_dropped_non_target_row_is_not_counted_as_a_failure(tmp_path):
+    # WHY: `ops.records_out` 은 대상 스코프인데 `failed_records` 에 비대상 결함을 섞으면
+    #      두 값의 분모가 갈려 원장 계약("산출과 유실은 같은 스코프에서", ops/entry.py)을
+    #      깬다. 그렇다고 버리기만 하면 Rule 12 위반이라 **별도 축**으로 센다 — 두 통이
+    #      각각 제 것만 담는지 확인한다(하나만 보면 섞여도 통과한다).
+    client = FakeClient(list_pages={1: _page([
+        {"stock_code": "005930", "report_nm": "주주총회소집결의", "rcept_no": 12345},
+        {"stock_code": "005930", "report_nm": "단일판매ㆍ공급계약체결", "rcept_no": 999},
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"]))
+
+    assert source.dropped_malformed == 1          # 비대상 → 별도 축
+    assert len(source.fetch_failures) == 1        # 대상 → 실패
+    assert "rcept_no" in source.fetch_failures[0]["error"]
+
+
+def test_counters_reset_between_fetches(tmp_path):
+    # WHY: 카운터 리셋은 같은 인스턴스로 fetch 를 두 번 부르는 테스트가 없으면 **지워도
+    #      전부 초록**이다(변이로 확인됨). 스텝은 런당 한 번만 부르지만, 리셋이 조용히
+    #      죽으면 백필처럼 재사용하는 경로에서 감쇠 수치가 누적돼 거짓이 된다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결", rcept_no="A1"),
+        _row("주주총회소집결의", rcept_no="B2"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"]))
+    first = (source.list_rows_seen, source.universe_matched, source.type_matched)
+    list(source.fetch(["005930"]))
+
+    assert (source.list_rows_seen, source.universe_matched, source.type_matched) == first
 
 
 def test_target_row_carries_derived_provenance(tmp_path):

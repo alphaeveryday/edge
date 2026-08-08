@@ -186,8 +186,16 @@ class DartDisclosureSource:
         # 감쇠를 **두 축으로 갈라** 센다(ALPHA-865). 목록은 시장 전체라 우리 것이 되기까지
         # 필터를 둘 지나는데(유니버스 → 유형), 통과분만 세면 어느 쪽이 얼마나 잘랐는지
         # 사후에 복원되지 않는다 — 대상을 넓힐지 판단하려면 두 감쇠가 따로 보여야 한다.
+        #
+        # ⚠️ 둘 다 **필터 지점에서** 센다 — 뒤에 오는 중복 접기(fingerprint)·rcept 게이트는
+        # 반영되지 않으므로 `type_matched` 는 "raw 에 앉은 대상 행 수"가 아니다(`list_rows_seen`
+        # 이 raw 행 수와 다른 것과 같은 이유). 답해야 할 질문이 "필터가 얼마나 자르나"라서
+        # 필터 지점이 맞는 자리다. 저장된 행 수는 스텝의 records_saved 가 따로 센다.
         self.universe_matched: int = 0
         self.type_matched: int = 0
+        # 보존해도 못 쓰는 행(비대상 + rcept_no 결측/비문자열)을 뺀 수. fetch_failures 와
+        # 따로 두는 이유는 위 rcept 게이트 주석에 있다 — 스코프가 다르면 원장 분모가 갈린다.
+        self.dropped_malformed: int = 0
         # 실제로 수집한 날짜창 — 인자와 다를 수 있다(시작일만 준 창은 끝을 오늘로 확정한다).
         # 스텝이 이걸 collection_log 에 남겨야 어떤 창이었는지 사후에 복원된다.
         self.resolved_window: tuple[str | None, str | None] = (None, None)
@@ -265,6 +273,7 @@ class DartDisclosureSource:
         self.list_rows_seen = 0
         self.universe_matched = 0
         self.type_matched = 0
+        self.dropped_malformed = 0
         self.resolved_window = (from_date, to_date)
         plan = self.plan(symbols)
         self.planned_symbols = len(plan)
@@ -405,16 +414,30 @@ class DartDisclosureSource:
                 if is_target:
                     self.type_matched += 1
                 rcept_no = row.get("rcept_no")
-                has_rcept = isinstance(rcept_no, str) and bool(rcept_no.strip())
-                if is_target and not has_rcept:
-                    # 대상인데 문서키가 없으면 본문도 정제도 불가능하다 — 실패로 드러낸다.
-                    # 비대상 행은 세지 않는다: 본문을 받지도 정제하지도 않으므로 결측이
-                    # 아무것도 막지 않는데, 실패로 세면 원장이 없는 결측을 세게 된다
-                    # (남의 회사 행을 유니버스 필터 뒤로 미룬 것과 같은 이유).
-                    self._note_failure(
-                        stock_code, our_ticker,
-                        "대상 공시인데 rcept_no 결측/비문자열", page=page,
-                    )
+                if not isinstance(rcept_no, str) or not rcept_no.strip():
+                    # 형상 검사는 유형과 **무관하게** 건다. 한때 대상 행에만 걸었다가 결함
+                    # 둘을 만들어 되돌렸다: ① 비대상 행을 남기는 유일한 이유가 "대상을 넓힐
+                    # 때 재수집 불필요"인데 rcept_no 없는 행은 그 확장을 못 받는다(본문 객체
+                    # 키도 canonical 병합 정체성도 rcept_no 다) ② 비문자열 rcept_no 가 소비자
+                    # 의 `.strip()` 에서 터져 창 전체를 죽인다(각도 H — crash-before-gate).
+                    #
+                    # 다만 **어느 통에 세느냐는 유형이 정한다.** 대상 행의 결측은 이 런이 하기로
+                    # 한 일의 실패라 fetch_failures 로 가고, 비대상 행은 부산물이라 별도 통에
+                    # 센다 — 섞으면 `ops.failed_records`(대상 스코프)와 `records_out` 의 분모가
+                    # 갈려 원장 계약을 깬다(ops/entry.py "산출과 유실은 같은 스코프에서"). 통을
+                    # 나누되 **버리진 않는다**: 0건이 아니라 수치로 남는다(Rule 12).
+                    if is_target:
+                        self._note_failure(
+                            stock_code, our_ticker,
+                            "대상 공시인데 rcept_no 결측/비문자열", page=page,
+                        )
+                    else:
+                        self.dropped_malformed += 1
+                        logger.info(
+                            "비대상 행 rcept_no 결측/비문자열 — 보존해도 못 쓰는 행이라 뺀다:"
+                            " stock_code=%s page=%s type=%s",
+                            stock_code, page, type(rcept_no).__name__,
+                        )
                     continue
                 fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
                 if fingerprint in seen:
@@ -426,9 +449,7 @@ class DartDisclosureSource:
                 record["is_target"] = is_target
                 # stock_code 는 손대지 않는다 — dict(row) 가 벤더 원본을 그대로 담고 있다
                 # (bronze 무변형). 우리 축은 our_ticker 가 담는다.
-                record["source_url"] = (
-                    VIEWER_URL.format(rcept_no=rcept_no.strip()) if has_rcept else None
-                )
+                record["source_url"] = VIEWER_URL.format(rcept_no=rcept_no.strip())
                 record["fetched_at"] = fetched_at
                 yield record
             # 순회를 계속할지 — 여기가 "끝까지 읽었는가"를 판정하는 **유일한 자리**다.
