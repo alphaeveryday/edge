@@ -544,9 +544,22 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
         parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
     except ValueError:
         raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
-    # 벤더 TR 선택이 세션 날짜에 걸려 있다(ALPHA-846) — 날짜를 읽은 뒤에 만든다
+    # ⚠️ universe 파일 읽기보다 **먼저** 만든다 — 자격증명 결손은 기동에서 죽어야 하고
+    # (`_require_credentials`), 뒤로 미루면 파일 오류가 그 판정을 가린다.
+    # 벤더 TR 선택이 세션 날짜에 걸려 있어(ALPHA-846) 날짜를 읽은 뒤여야 한다.
     collector = make_price_collector(options, session_date=parsed_day)
     universe_model = load_universe_uri(universe)
+    if universe_model.extended_hours_ids and parsed_day < datetime.now(KST).date():
+        # 소급 TR 은 정규장(09:00–15:30)만 페이징한다. 시간외 종목이 있으면 세션은
+        # 720 window 로 계획되는데, 그 330개는 **구조적으로** 봉이 안 나온다 —
+        # 런타임 거부는 `_process` 의 catch-all 이 window 실패로 접어(소스 전역 실패가
+        # 전파되지 않는 레인이다) 매 tick 재청구·재실패로 세션이 영영 안 마른다.
+        # 그건 종목 하나가 아니라 이 백필 전체가 불가하다는 뜻이라 기동에서 거부한다.
+        raise SystemExit(
+            f"소급 백필은 시간외 universe 를 지원하지 않는다 — "
+            f"extended_hours_ids {len(universe_model.extended_hours_ids)}종 "
+            f"(세션 계획이 08:00–20:00 인데 소급 TR 은 09:00–15:30 만 준다)"
+        )
     session_id = stable_domain_id(
         "msn", DATASET_PRICE_MINUTE, options.source, parsed_day.isoformat()
     )

@@ -943,6 +943,9 @@ class TestCollectorSelection:
             seen["session_date"] = session_date
             raise SystemExit("여기서 멈춘다 — 이 뒤는 DB·S3 가 필요하다")
 
+        from data_pipeline.minute import models as models_module
+
+        monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE)
         monkeypatch.setattr(worker_module, "make_price_collector", capture)
         settings = SimpleNamespace(
             db=DbConfig(password="x"),
@@ -954,6 +957,32 @@ class TestCollectorSelection:
             )
         assert "session_date" in seen, "make_price_collector 가 불리지 않았다"
         assert seen["session_date"] == date(2026, 8, 3)
+
+    def test_backfill_refuses_an_extended_hours_universe_at_startup(self, monkeypatch):
+        """시간외 universe 로는 소급 백필이 **구조적으로** 불가하다 — 기동에서 거부한다.
+
+        소급 TR 은 09:00–15:30 만 페이징하는데 시간외 종목이 있으면 세션은 720 window
+        로 계획된다. 런타임 거부로 두면 그 330개가 `_process` 의 catch-all 에 window
+        실패로 접혀(이 레인은 소스 전역 실패를 전파하지 않는다) 매 tick 재청구·재실패로
+        세션이 영영 안 마르고, 상주 진입점은 무한 루프한다.
+
+        ⚠️ `SystemExit` 는 이 함수의 거의 모든 갈래가 낸다 — **문구**를 같이 못박는다.
+        """
+        from types import SimpleNamespace
+
+        from data_pipeline.minute import worker as worker_module
+
+        from data_pipeline.minute import models as models_module
+
+        monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE_EXT)
+        settings = SimpleNamespace(
+            db=DbConfig(password="x"),
+            minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
+        )
+        with pytest.raises(SystemExit, match="시간외 universe"):
+            worker_module.price_worker_cli(
+                settings, session_date="2026-08-03", universe="s3://bucket/universe.json"
+            )
 
     def test_toss_source_still_builds_toss_collector(self):
         from data_pipeline.minute.toss_collector import TossPriceCollector

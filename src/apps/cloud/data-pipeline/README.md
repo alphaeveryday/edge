@@ -56,7 +56,12 @@
 > (ALPHA-735 — 1분 레인의 **기본 벤더**. `FHKST03010200` 당일 분봉, 종목당 1콜에 30분치,
 > `stck_cntg_hour` 도 구간의 끝이라 축은 토스와 같다. 4분류 판정은 벤더 무관부
 > `minute/price_collect.py` 하나를 공유하고 각 collector 는 "그 window 의 봉 하나를 어떻게
-> 얻는가"만 갖는다),
+> 얻는가"만 갖는다.
+> ⚠️ **TR 이 둘이다**(ALPHA-846): 세션 날짜가 지난 거래일이면 소급 TR `FHKST03010230`
+> (`KisHistoricalMinuteClient`)로 간다 — 당일 TR 에는 날짜 축이 없어 과거 세션에 물리면
+> 오늘 봉이 오늘 라벨로 돌아와 전 window 가 missing 이 된다. 설정 노브가 아니라 벤더
+> 사실이라 **날짜에서 유도**한다. 소급 TR 은 무거래 분 행을 주지 않아 어댑터가 직전 종가
+> flat 으로 채우고, 응답이 거래일 경계를 넘으므로 `stck_bsop_date` 로 자른다),
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
@@ -1264,6 +1269,9 @@ DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2 \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
+# ⚠️ `--session-date` 가 **지난 거래일이면 벤더 TR 과 콜 형상이 바뀐다**(ALPHA-846) —
+# 소급 TR 로 하루를 한 번에 받아 캐시하므로 첫 window 에 362종 × 4페이지 ≈ 1,450콜이
+# 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다.
 # 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
 # canonical 로 판정한다(LLM 0). 임계는 price_triggers 의 abs_threshold(발화)·
 # revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은

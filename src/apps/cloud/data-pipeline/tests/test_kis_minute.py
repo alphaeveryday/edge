@@ -327,6 +327,17 @@ class TestHistoricalCandles:
         with pytest.raises(ValueError):
             client.candles("005930", window_end=self.at("1030"))
 
+    def test_broken_row_of_another_trading_day_is_not_our_problem(self):
+        """어차피 버릴 07-31 행의 하자로 08-03 수집이 죽으면 안 된다.
+
+        경계 페이지에는 늘 남의 날 행이 섞여 온다(그게 종료 신호다). 그 행까지 파싱하면
+        `build_candle` 의 정합(가격 > 0 · low ≤ open/close ≤ high)을 전부 통과해야 하고,
+        하나만 깨져도 이 종목이 INVALID 로 접힌다 — 우리가 쓰지도 않을 데이터 때문에.
+        """
+        broken_foreign = {**self.other_day("152900"), "stck_lwpr": "99999"}
+        client, _ = self.hist([TOKEN, ok([row("091000"), broken_foreign])])
+        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+
     def test_duplicate_minute_is_a_shape_error(self):
         """같은 분이 두 번 오면 실패한다 — 조용히 마지막 것을 고르지 않는다.
 
@@ -364,14 +375,18 @@ class TestHistoricalCandles:
         client, _ = self.hist([
             TOKEN, ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
         ])
-        filled = client.candles("005930", window_end=self.at("1028"))
-        assert len(filled) == 1
-        candle = filled[0]
-        assert candle.volume == Decimal(0)
-        assert candle.traded is False
-        # 직전가 flat — 10:27 봉의 **종가**여야 한다(시가·고가를 쓰면 조용히 다른 값이 된다)
-        assert (candle.open, candle.high, candle.low, candle.close) == (
-            Decimal("72500"), Decimal("72500"), Decimal("72500"), Decimal("72500"))
+        # ⚠️ 갭의 **모든** 분을 묻는다. 하나만 묻으면 끝 경계(`range` 상한)가 단언 표면
+        # 밖이라, 갭마다 마지막 1분이 안 채워져도 초록이다 — 176행 종목이면 하루
+        # ~175 window 가 그 한 분 때문에 INCOMPLETE 로 남는다.
+        for hhmm in ("1028", "1029"):
+            filled = client.candles("005930", window_end=self.at(hhmm))
+            assert len(filled) == 1, hhmm
+            candle = filled[0]
+            assert candle.volume == Decimal(0)
+            assert candle.traded is False
+            # 직전가 flat — 10:27 봉의 **종가**여야 한다(시가·고가를 쓰면 조용히 다른 값)
+            assert (candle.open, candle.high, candle.low, candle.close) == (
+                Decimal("72500"), Decimal("72500"), Decimal("72500"), Decimal("72500")), hhmm
         # 관측된 봉은 그대로다 — 합성이 실측을 덮어쓰지 않는다
         assert client.candles("005930", window_end=self.at("1027"))[0].volume == Decimal("1200")
 
@@ -437,15 +452,45 @@ class TestHistoricalCandles:
         """빈 응답은 "하루가 끝났다"가 아니라 **아무 정보도 못 얻었다**이다.
 
         조기 종료하면 잘린 하루가 나오는데, 합성이 사이를 메우므로 그 결손은 4분류에서
-        `no_trade` 로 위장돼 window 가 VALID 로 확정된다. 그리고 실패한 하루는 캐시되지
-        않아야 한다 — 캐시되면 그 종목은 프로세스 수명 내내 빈 하루를 재사용하고
-        재청구가 무효가 된다(두 번째 호출도 실패하는 것이 그 증거다).
+        `no_trade` 로 위장돼 window 가 VALID 로 확정된다 — 못 받은 구간이 "거래가 없었다"
+        가 된다. 빈 하루를 돌려주는 것도 같은 위장이라 실패로 나간다.
+
+        (실패를 프로세스 안에서 어떻게 기억하는지는
+        `test_failed_day_is_cached_so_it_does_not_reprice_every_window` 가 못박는다.)
         """
-        empties = [ok([]) for _ in range(MAX_DAY_PAGES)]
-        client, _ = self.hist([TOKEN, *empties, *empties])
-        for _ in range(2):
-            with pytest.raises(KisUnitError, match="페이지 예산"):
-                client.candles("005930", window_end=self.at("1530"))
+        client, _ = self.hist([TOKEN, *[ok([]) for _ in range(MAX_DAY_PAGES)]])
+        with pytest.raises(KisUnitError, match="페이지 예산"):
+            client.candles("005930", window_end=self.at("1530"))
+
+    def test_reaching_the_session_open_ends_paging(self):
+        """종료 증거는 둘이다 — 경계를 넘은 페이지, 그리고 **09:00 도달**.
+
+        신규 테스트가 전부 경계 arm 으로만 끝나면 09:00 arm 은 무증거다. 벤더가 그 종목
+        첫 봉 아래에서 이전 거래일을 안 섞어 주는 세계에서는 이 arm 이 **유일한** 종료
+        경로라, 깨지면 362종 전건이 예산 소진 실패로 나간다.
+        """
+        client, fake = self.hist([TOKEN, ok([row("091000"), row("090000")])])
+        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+        assert len(fake.calls) == 2  # 토큰 1 + 페이지 1 — 09:00 을 봤으니 더 안 묻는다
+
+    def test_failed_day_is_cached_so_it_does_not_reprice_every_window(self):
+        """실패한 하루도 캐시한다 — 안 하면 window 마다 페이징을 처음부터 다시 태운다.
+
+        못 받는 종목 하나가 390 window × 최대 8페이지 = 3,121콜을 산출 0으로 쓰고, 그
+        예산은 앱키 전역이라 다른 KIS 스텝에서 빠진다. 재시도 경계는 window 재청구가
+        아니라 프로세스 재기동이다(백필은 일회성 실행이라 같은 응답이 반복될 뿐이다).
+
+        ⚠️ `KisUnitError` 자체는 여러 경로가 낸다 — **호출 수**를 같이 못박는다.
+        캐시가 없으면 두 번째 window 가 페이지를 다시 받아 호출이 늘어난다.
+        """
+        client, fake = self.hist([TOKEN, *[ok([]) for _ in range(MAX_DAY_PAGES)]])
+        with pytest.raises(KisUnitError):
+            client.candles("005930", window_end=self.at("1530"))
+        after_first = len(fake.calls)
+        for hhmm in ("1529", "1528", "1527"):
+            with pytest.raises(KisUnitError):
+                client.candles("005930", window_end=self.at(hhmm))
+        assert len(fake.calls) == after_first, "실패한 하루를 다시 받았다"
 
     def test_repeated_page_is_not_a_finished_day(self):
         # 같은 창을 반복하는 벤더도 "하루를 끝냈다는 증거"가 없다 — 조용히 잘린 하루를

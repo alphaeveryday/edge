@@ -336,11 +336,22 @@ class KisHistoricalMinuteClient(KisMinuteClient):
             )
         day = self._days.get(symbol)
         if day is None:
-            # ⚠️ 대입은 `_fetch_day` 가 **성공했을 때만** 일어난다 — 실패한 하루를
-            # 캐시하면 그 종목은 프로세스 수명 내내 빈 하루를 재사용한다(재청구 무효)
-            day = {candle.window_end: candle
-                   for candle in fill_no_trade_minutes(self._fetch_day(symbol))}
+            # ⚠️ **실패도 캐시한다.** 안 하면 재청구가 window 마다 하루 페이징을 처음부터
+            # 다시 태운다 — 못 받는 종목 하나가 390 window × 최대 8페이지 = 3,121콜을
+            # 산출 0으로 쓰고, 그 예산은 앱키 전역이라 다른 KIS 스텝에서 빠진다.
+            # 재시도 경계는 window 재청구가 아니라 **프로세스 재기동**이다: 백필은 일회성
+            # 실행이고, 그 실행 안에서 같은 응답이 반복될 뿐이라 재시도의 산출이 없다.
+            # 소스 전역 실패(KisSourceError)는 캐시하지 않는다 — 그건 종목의 사실이
+            # 아니라 설정·유량의 사실이고, 이미 window 를 통째로 세운다.
+            try:
+                day = {candle.window_end: candle
+                       for candle in fill_no_trade_minutes(self._fetch_day(symbol))}
+            except (KisUnitError, ValueError) as error:
+                self._days[symbol] = error
+                raise
             self._days[symbol] = day
+        if isinstance(day, Exception):
+            raise day
         candle = day.get(window_end)
         # 빈 결과는 정상이다 — 첫 체결 전이면 그 분은 collector 가 missing 으로 센다
         return () if candle is None else (candle,)
@@ -358,13 +369,19 @@ class KisHistoricalMinuteClient(KisMinuteClient):
         collected: dict[datetime, Candle] = {}
         for _ in range(MAX_DAY_PAGES):
             page = self._rows(symbol, hour)
-            # ⚠️ **먼저 파싱한다.** 원시 dict 를 직접 만지면(`r.get`·`r[...]`·`min()`)
-            # 형상 위반이 `AttributeError`·`KeyError` 로 새는데, collector 는
-            # `ValueError` 만 unit INVALID 로 접는다 — 종목 하나의 손상 행이 window 를
-            # 통째로 죽이고 lease 만료 재청구가 같은 예외를 결정적으로 반복한다.
-            parsed = [parse_minute_row(raw, symbol) for raw in page]
-            same_day = [c for c in parsed
-                        if c.window_end.astimezone(KST).date() == self.session_date]
+            # 남의 날 행은 **파싱하지 않는다** — 어차피 버릴 07-31 행 하나의 정합 하자로
+            # 08-03 수집이 INVALID 가 되면 안 된다. 대신 dict 여부는 여기서 못박는다:
+            # 원시 값을 그냥 만지면(`raw.get`) 비-dict 가 `AttributeError` 로 새는데,
+            # collector 는 `ValueError` 만 unit INVALID 로 접어서 종목 하나의 손상 행이
+            # window 를 통째로 죽이고 재청구가 같은 예외를 결정적으로 반복한다.
+            same_day = []
+            for raw in page:
+                if not isinstance(raw, dict):
+                    raise ValueError(
+                        f"{symbol} 소급 분봉 행이 객체가 아니다: {type(raw).__name__}")
+                if raw.get("stck_bsop_date") != self._ymd:
+                    continue
+                same_day.append(parse_minute_row(raw, symbol))
             for candle in same_day:
                 previous = collected.get(candle.window_end)
                 if previous is not None and previous != candle:
