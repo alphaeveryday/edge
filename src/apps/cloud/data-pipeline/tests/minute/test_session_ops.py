@@ -68,9 +68,12 @@ def wiring(monkeypatch):
     monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-worker,svc-relay,svc-consumer")
     monkeypatch.setenv(session_ops.ENV_GATE_QUEUES, "https://q/price")
     monkeypatch.delenv(session_ops.ENV_DRAIN_TIMEOUT, raising=False)
-    # 기본은 단일(가격) 레인 — 뉴스 편입 케이스는 개별 테스트가 명시로 켠다
-    monkeypatch.delenv(session_ops.ENV_NEWS_SOURCE_GROUP, raising=False)
-    monkeypatch.delenv(session_ops.ENV_NEWS_WORKER_SERVICES, raising=False)
+    # 기본은 단일(구동) 레인 — 승객 편입 케이스는 개별 테스트가 명시로 켠다.
+    # ⚠️ 표 전체를 훑어 지운다: 레인이 늘 때 여기 한 줄을 빠뜨리면 개발자 셸의 env 가
+    # 전 테스트에 새어 들어와, 켠 적 없는 레인이 계획되는 채로 초록이 된다.
+    for _env_group, _env_services in session_ops.PASSENGER_LANES.values():
+        monkeypatch.delenv(_env_group, raising=False)
+        monkeypatch.delenv(_env_services, raising=False)
     monkeypatch.setattr(
         session_ops, "_scale",
         lambda *, desired, force, services=None: ecs.update_service(
@@ -493,3 +496,206 @@ class TestNewsLane:
         assert sorted(ledger.attempted) == sorted([price_id, news_id]), \
             "첫 실패에서 끊으면 뒤 레인이 drain 을 영영 못 받는다"
         assert wiring.calls == [], "부분 드레인 상태에서 내리면 안 된다"
+
+
+class TestInavLane:
+    """iNAV 세션 편입(ALPHA-882) — 뉴스와 같은 승객 축이다.
+
+    뉴스와 갈리는 지점만 여기서 고정한다. 공통 축(계획 순서·워커 분리·게이트 참여)은
+    `TestNewsLane` 이 이미 잡고 있고, 표(`PASSENGER_LANES`)로 접혀 있어 한쪽만 도는
+    경로가 없다 — **승객이 둘일 때 생기는 것**이 이 클래스의 관심사다.
+    """
+
+    def test_start_plans_inav_session_too(self, monkeypatch, wiring):
+        monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
+        monkeypatch.setenv(session_ops.ENV_INAV_WORKER_SERVICES, "svc-inav-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        calls = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: calls.append(k) or 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+        assert rc == 0
+        assert [c["dataset"] for c in calls] == ["price_minute", "etf_inav_minute"]
+        assert calls[1]["source_group"] == "kis"
+        # ⚠️ universe 는 **planner 에만** None 이다 — worker 는 `--universe` 를 따로 받는다
+        # (terraform command). 여기서 넘기면 iNAV 격자가 가격 유니버스로 계획된다.
+        assert calls[1]["universe"] is None
+        assert wiring.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
+        ], "inav-worker 는 공용 목록이 아니라 자기 목록으로 올라간다"
+
+    def test_bad_inav_source_group_fails_loud(self, monkeypatch, wiring):
+        """iNAV 는 KIS 단독이다 — 토스는 분봉 API 에 NAV 축이 없다."""
+        monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "toss")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        with pytest.raises(SystemExit, match="etf_inav_minute 어휘 밖이다"):
+            session_ops.start_session_cli(
+                FakeSettings(), dataset="price_minute", source_group="kis",
+                universe="s3://b/u.json")
+
+    def test_toggle_without_service_list_fails_before_planning(self, monkeypatch, wiring):
+        """계획만 서고 올릴 서비스가 없으면 그 레인은 하루 종일 PLANNED 로 남는다 —
+        그리고 그 사실이 드러나는 자리가 없다. 계획 **전에** 죽어야 한다."""
+        monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        planned = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: planned.append(k) or 0)
+
+        with pytest.raises(SystemExit, match="MINUTE_SESSION_INAV_WORKER_SERVICES 가 비었다"):
+            session_ops.start_session_cli(
+                FakeSettings(), dataset="price_minute", source_group="kis",
+                universe="s3://b/u.json")
+        assert planned == [], "배선 결손은 세션을 만들기 전에 죽어야 한다"
+
+
+class TestTwoPassengers:
+    """승객이 둘이 된 뒤에만 나타나는 축 (ALPHA-882).
+
+    뉴스 하나였을 때는 `return news_exit` 로 충분했다. 둘이 되면 exit 하나에 실패
+    둘을 실어야 하고, 레인끼리 서로의 스케일업을 막으면 안 된다.
+    """
+
+    @pytest.fixture
+    def both(self, monkeypatch, wiring):
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+        monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
+        monkeypatch.setenv(session_ops.ENV_INAV_WORKER_SERVICES, "svc-inav-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        return wiring
+
+    def test_both_lanes_plan_and_scale(self, monkeypatch, both):
+        calls = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: calls.append(k) or 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+        assert rc == 0
+        assert [c["dataset"] for c in calls] == [
+            "price_minute", "news_minute", "etf_inav_minute"]
+        assert both.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
+        ]
+
+    def test_first_failure_survives_a_later_success(self, monkeypatch, both):
+        """⭐ 이 PR 이 막는 회귀다. 승객마다 exit 를 **덮어쓰면**(`rc = plan(...)` 을
+        루프 안에서) 뒤에 성공한 iNAV 가 앞의 뉴스 실패를 0 으로 지운다 — 스케줄
+        기록만 보는 사람에겐 그 날 뉴스 레인이 정상으로 보인다(Rule 12).
+
+        순서에 기대지 않도록 반대 방향도 아래 테스트가 함께 고정한다.
+        """
+        monkeypatch.setattr(
+            session_ops, "plan_session_cli",
+            lambda settings, **k: 2 if k["dataset"] == "news_minute" else 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+        assert rc == 2, "뒤 레인의 성공이 앞 레인의 실패를 덮으면 안 된다"
+
+    def test_later_failure_is_not_swallowed_by_an_earlier_success(self, monkeypatch, both):
+        """반대 방향 — 앞이 성공하고 뒤가 실패해도 exit 에 실려야 한다. 위 테스트만
+        있으면 `return passenger_exits[첫_레인]` 같은 구현이 통과한다."""
+        monkeypatch.setattr(
+            session_ops, "plan_session_cli",
+            lambda settings, **k: 2 if k["dataset"] == "etf_inav_minute" else 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+        assert rc == 2
+
+    def test_one_lane_failure_does_not_block_the_other_worker(self, monkeypatch, both):
+        """레인은 서로 독립이다 — 뉴스 계획이 실패해도 iNAV 워커는 올라가야 한다.
+        승객 전체를 한 플래그로 묶으면 한 레인의 실패가 나머지를 통째로 세운다."""
+        monkeypatch.setattr(
+            session_ops, "plan_session_cli",
+            lambda settings, **k: 2 if k["dataset"] == "news_minute" else 0)
+
+        session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+        assert both.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
+        ], "뉴스 워커는 빠지고 iNAV 워커는 올라가야 한다"
+
+    def test_stop_gates_on_all_three_sessions(self, monkeypatch, both):
+        """iNAV 가 ACTIVE 인데 내리면 그 window 가 결손된다 — iNAV 는 소급이 불가라
+        영구 결손이다(가격·뉴스와 달리 되받을 길이 없다)."""
+        monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, "0.01")
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+
+        from datetime import datetime as _dt
+        from data_pipeline.db import stable_domain_id
+        from data_pipeline.minute.models import KST as _KST
+        day = _dt.now(_KST).date().isoformat()
+        ids = {
+            stable_domain_id("msn", "price_minute", "kis", day): "DRAINED",
+            stable_domain_id("msn", "news_minute", "bigkinds", day): "DRAINED",
+            stable_domain_id("msn", "etf_inav_minute", "kis", day): "ACTIVE",
+        }
+
+        class ThreeLaneLedger:
+            def __init__(self):
+                self.drained = []
+
+            def session_snapshot(self, *, session_id):
+                return {"phase": ids[session_id]}
+
+            def request_drain(self, *, session_id, now):
+                self.drained.append(session_id)
+                return True
+
+        ledger = ThreeLaneLedger()
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+
+        rc = session_ops.stop_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis")
+
+        assert rc == 1, "iNAV 가 안 끝났는데 내리면 영구 결손이다"
+        assert sorted(ledger.drained) == sorted(ids), "세 세션 모두 drain 요청"
+        assert both.calls == []
+
+    def test_stop_scales_down_listed_workers_even_when_toggle_is_off(
+            self, monkeypatch, wiring):
+        """편입 롤백(토글만 끄고 목록은 남긴 채 배포)에서 그 워커가 desired 1 로 떠
+        있는 채 아무도 안 내리면 밤새 돈다. 내리는 방향은 과하게 잡아도 안전하다."""
+        monkeypatch.setenv(session_ops.ENV_INAV_WORKER_SERVICES, "svc-inav-worker")
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+
+        class OneLaneLedger:
+            def session_snapshot(self, *, session_id):
+                return {"phase": "DRAINED"}
+
+            def request_drain(self, *, session_id, now):
+                return True
+
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: OneLaneLedger())
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+
+        rc = session_ops.stop_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis")
+
+        assert rc == 0
+        assert wiring.calls == [
+            {"desiredCount": 0, "forceNewDeployment": False, "services": None},
+            {"desiredCount": 0, "forceNewDeployment": False, "services": ["svc-inav-worker"]},
+        ], "토글이 꺼져 있어도 목록에 있으면 내린다"
