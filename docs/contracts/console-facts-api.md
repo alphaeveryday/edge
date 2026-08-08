@@ -123,6 +123,13 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
   오늘 안 터지는 건 `note` 보유 룰이 R07 하나뿐이고 그게 필수 축(`tasks`)을 읽어서다 —
   옵셔널 축을 읽는 `note` 가 하나라도 붙으면 죽는다. `evaluated &&` 안으로 넣거나 널 가드를 규약화한다
 - 화면 12곳이 사실을 **동기적으로** 읽는다(하나는 import 시점) — 비동기 전환이 필요하다
+- **실행 상세로 가는 링크를 되살려야 한다.** 배선 전까지는 그 화면이 스냅샷 런만 해소해서
+  실 API 화면(실행 이력 `/grid` · 현재 실행 `/minute` · 구성종목 결손)의 런을 못 연다.
+  그래서 진입점 3곳을 끊고 사유 문구(`RUN_DETAIL_UNAVAILABLE`)를 세워 뒀다. 배선하면서
+  같이 하지 않으면 실 응답이 붙은 뒤에도 세 화면은 "못 읽습니다"를 단 채 남는다.
+  되돌릴 자리: `pages/GridPage.tsx` · `pages/MinutePage.tsx` · `pages/HoldingsImpactPage.tsx`
+  의 조사 경로, `pages/ops/RunAxisPage.tsx` 의 미해소 안내, `pages/ops/investigation.ts` 의
+  `RUN_DETAIL_UNAVAILABLE`, 그리고 그 부재를 강제하는 `pages/ops/investigation.test.ts` 단언.
 
 ## 남은 계측 부채
 

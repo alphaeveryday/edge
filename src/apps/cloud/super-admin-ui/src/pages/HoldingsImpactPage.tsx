@@ -21,7 +21,6 @@ import { ApiError } from '../api/client';
 import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { useConsoleEvaluation } from './ops/shared';
-import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -52,10 +51,12 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
       )}
       {runKey && (
         <>
-          {/* 링크가 아니다 — 실행 상세는 스냅샷만 읽어 이 실 API 런을 해소하지 못한다 */}
-          <span className="mono" title={RUN_DETAIL_UNAVAILABLE}>
-            {runKey}
-          </span>
+          {/* 링크가 아니다 — 실행 상세는 스냅샷만 읽어 이 실 API 런을 해소하지 못한다.
+           * 사유를 `title` 로만 달지 않는다: 비대화형 span 의 title 은 탭 순서에 없고
+           * 스크린리더가 기본 설정에서 읽지 않아 마우스 사용자만 받는다. 여기는 조사 경로
+           * 라벨이라 클릭을 시도할 자리가 아니고, 사유는 실행 이력·현재 실행이 보이는
+           * 텍스트로 낸다. */}
+          <span className="mono">{runKey}</span>
           <span aria-hidden="true">›</span>
           <Link to={`/sources?runKey=${encodeURIComponent(runKey)}`}>ETF 구성종목</Link>
           <span aria-hidden="true">›</span>
@@ -83,11 +84,11 @@ export function HoldingsImpactPage() {
           <p className="t-sm m-0" style={{ fontWeight: 600 }}>조사할 실행이 지정되지 않았습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             구성종목 결손 상세는 특정 <code>etf-daily</code> 실행의 기대 목록을 기준으로 계산합니다 —
-            실행이 정해지지 않으면 최신 런을 임의로 골라 보여주지 않습니다. 실행 상세에서 ETF
+            실행이 정해지지 않으면 최신 런을 임의로 골라 보여주지 않습니다. 실행 원장에서 ETF
             구성종목 결손을 선택해 주세요.
           </p>
           <p className="t-xs m-0" style={{ marginTop: 8 }}>
-            <Link to="/ops/runs">실행 목록으로 이동 →</Link>
+            <Link to="/sources">실행 원장으로 이동 →</Link>
           </p>
         </div>
       </div>
@@ -103,8 +104,10 @@ export function HoldingsImpactPage() {
           <div className="card card-pad">
             <p className="t-sm m-0" style={{ fontWeight: 600 }}>지정한 실행을 찾을 수 없습니다</p>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+              {/* 실행 **목록**으로 보내지 않는다 — 그 화면은 스냅샷 런만 세워서, 실 런키를
+                * 들고 온 사용자가 거기서도 자기 실행을 못 보고 "없다"로 한 번 더 읽는다. */}
               <code>{runKey}</code> 의 기대 목록이 원장에 없습니다. 다른 실행으로 대체하지
-              않습니다. <Link to="/ops/runs">실행 목록으로 이동 →</Link>
+              않습니다. <Link to="/sources">실행 원장으로 이동 →</Link>
             </p>
           </div>
         </div>

@@ -225,7 +225,6 @@ details[open] > .mn-summary::before {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-surface);
-  color: inherit;
 }
 /* 링크가 아니다 — 실행 상세는 스냅샷만 읽어 이 런을 해소하지 못한다(RUN_DETAIL_UNAVAILABLE).
  * hover/focus 강조와 accent 색을 남기면 눌리는 것처럼 보인다. */

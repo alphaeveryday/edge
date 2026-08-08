@@ -189,16 +189,9 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
   }, [data]);
 }
 
-/** 드릴다운 대상 — 규칙 위반의 drill 축을 실제 라우트로 옮긴다 */
-export const DRILL_ROUTE: Record<string, string> = {
-  run: '/ops/runs',
-  chain: '/ops/chain',
-  dataset: '/ops/datasets',
-  trend: '/ops/trend',
-  delivery: '/ops/delivery',
-};
-export const drillHref = (v: Violation): string =>
-  `${DRILL_ROUTE[v.drill[0]] ?? '/'}?focus=${encodeURIComponent(v.drill[1])}`;
+/* `DRILL_ROUTE`·`drillHref` 를 지웠다 (ALPHA-738 단계 3). 소비자가 0이었고, 살아나면
+ * `run` 축 위반을 `/ops/runs?focus=…` 로 보내 실행 상세 링크 규약을 우회한다
+ * (investigation.ts 의 `RUN_DETAIL_UNAVAILABLE`). 조사 경로는 `investigate()` 하나다. */
 
 /** `?focus=<id>` 로 들어오면 그 행으로 스크롤하고 잠깐 강조한다 (L3) */
 export function useFocusRow(): string | null {

@@ -160,6 +160,8 @@ const AXIS_TIP = [
  *   · 선택이 `runs[0]` 로 폴백해서 목록만 보러 와도 첫 런의 상세가 강제로 딸려 왔다.
  *   · 선택이 `replace: true` 라 뒤로가기가 목록이 아니라 화면 밖으로 나갔다.
  *   · 진입의 다수(격자·현재 실행·구성종목 결손·사건)가 이미 특정 런 직행이라 목록이 소음이었다.
+ *     ⚠️ 이 셋째 근거는 지금 사건 하나만 남았다 — 나머지 셋은 실 API 화면이라 링크를 끊었다
+ *     (`RUN_DETAIL_UNAVAILABLE`). 분리 자체는 앞의 두 근거로 여전히 선다.
  *
  * 옛 주소 `/ops/runs?run_id=X` 는 여기서 상세로 넘긴다 — 사건이 남긴 주소가 끊기면 안 된다.
  */
@@ -239,12 +241,18 @@ export function RunDetailPage() {
       {selected ? (
         <RunTasks run={selected} focus={focus} />
       ) : (
-        /* 지목한 run_id 를 못 찾았다 — 다른 런을 대신 열지 않는다 */
+        /* 지목한 run_id 를 못 찾았다 — 다른 런을 대신 열지 않는다.
+         *
+         * ⚠️ "없다"고 말하지 않는다. 이 화면의 런 축은 앱 번들 안 정적 스냅샷이라(shared.tsx 의
+         * `F`) 실제로 돈 실행 대부분이 여기 없다. 북마크·이전에 공유된 딥링크는 진입점을
+         * 끊은 뒤에도 여기 도달하므로(ALPHA-738 단계 3), 부재의 사유를 목적지가 말한다. */
         <div className="card card-pad">
-          <p className="t-sm m-0" style={{ fontWeight: 600 }}>연결된 실행을 찾지 못했습니다</p>
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>이 화면은 이 실행을 읽지 못합니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            <code>{runId}</code> 가 최근 런 목록에 없습니다. 다른 최근 실행을 대신 선택하지
-            않습니다 — 무관한 런이 이 사건의 실행처럼 보이기 때문입니다.{' '}
+            실행 상세는 아직 실 원장이 아니라 앱에 동봉된 스냅샷의 런 {F.runs.length}건만
+            해소합니다 — <code>{runId}</code> 가 그 안에 없다는 뜻이지, 그 실행이 없었다는
+            뜻이 아닙니다. 다른 최근 실행을 대신 선택하지 않습니다 — 무관한 런이 이 사건의
+            실행처럼 보이기 때문입니다.{' '}
             {incident ? (
               <Link to={incidentHref(incident.root)}>사건으로 돌아가기</Link>
             ) : (
