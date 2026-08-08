@@ -21,6 +21,7 @@ from data_pipeline.lake.storage import (
 from data_pipeline.minute.commit import MinuteCommitter
 from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
+from data_pipeline.sources.kis_inav import SKIP_BEFORE_OPEN
 from data_pipeline.minute.states import DATASET_ETF_INAV_MINUTE
 from data_pipeline.minute.worker import InavWorker, InavWorkerConfig
 
@@ -307,7 +308,7 @@ class TestRunGate:
         today = datetime.now(KST).date().isoformat()
         code, reached = self._run(
             monkeypatch, tmp_path,
-            skip_reason="before market open (KST 07:45 < 09:00)", session_date=today,
+            skip_reason=f"{SKIP_BEFORE_OPEN} (KST 07:45 < 09:00)", session_date=today,
         )
         assert reached == []
         assert code == 1
@@ -324,8 +325,8 @@ class TestRunGate:
         import data_pipeline.sources.kis_inav as kis_inav
 
         today = datetime.now(KST).date().isoformat()
-        reasons = ["before market open (KST 07:45 < 09:00)",
-                   "before market open (KST 08:30 < 09:00)",
+        reasons = [f"{SKIP_BEFORE_OPEN} (KST 07:45 < 09:00)",
+                   f"{SKIP_BEFORE_OPEN} (KST 08:30 < 09:00)",
                    None]
 
         class StubSource:
@@ -367,7 +368,7 @@ class TestRunGate:
         import data_pipeline.sources.kis_inav as kis_inav
 
         today = datetime.now(KST).date().isoformat()
-        reasons = ["before market open (KST 23:59 < 09:00)", "non-trading day (KST ...)"]
+        reasons = [f"{SKIP_BEFORE_OPEN} (KST 23:59 < 09:00)", "non-trading day (KST ...)"]
 
         class StubSource:
             def __init__(self, *a, **k):

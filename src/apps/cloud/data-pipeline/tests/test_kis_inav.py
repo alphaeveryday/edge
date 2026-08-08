@@ -18,6 +18,7 @@ from data_pipeline.sources.kis_inav import (
     DEFAULT_INTERVAL_SEC,
     ROWS_PER_CALL,
     KisInavSource,
+    SKIP_BEFORE_OPEN,
 )
 
 # 라이브 실측 행(2026-07-25, 069500, cls=60). 필드명·문자열 타입을 그대로 고정한다.
@@ -243,7 +244,10 @@ def _at(monkeypatch, when: datetime):
     [
         (datetime(2026, 7, 25, 14, 0, tzinfo=KST), "non-trading day"),   # 토
         (datetime(2026, 7, 26, 14, 0, tzinfo=KST), "non-trading day"),   # 일
-        (datetime(2026, 7, 27, 8, 59, tzinfo=KST), "before market open"),  # 월, 개장 1분 전
+        # ⚠️ 상수를 쓴다 — 상주 Worker 가 이 **접두어**로 "기다릴 사유"를 가른다
+        # (worker.inav_worker_cli). 리터럴로 두면 메시지 앞에 뭘 붙여도 이 테스트는
+        # 초록인데 워커는 종료해서 07:45~09:00 재기동 루프가 조용히 돌아온다.
+        (datetime(2026, 7, 27, 8, 59, tzinfo=KST), SKIP_BEFORE_OPEN),  # 월, 개장 1분 전
     ],
 )
 def test_오늘_데이터가_없는_시점은_수집하지_않는다(monkeypatch, when, expected):
@@ -251,7 +255,8 @@ def test_오늘_데이터가_없는_시점은_수집하지_않는다(monkeypatch
     _at(monkeypatch, when)
     src = _source({"069500": _ok([LIVE_ROW])})
 
-    assert expected in src.skip_reason
+    # `in` 이 아니라 `startswith` — 소비자(worker)가 접두어로 판정한다
+    assert src.skip_reason.startswith(expected)
 
 
 @pytest.mark.parametrize(

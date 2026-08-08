@@ -919,6 +919,14 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
     # 걸어 **첫 정상 기동이 09:00 을 넘길 수 있고**, iNAV window 는 소급이 불가라 그만큼이
     # 영구 결손이다. price-worker 는 같은 시각에 떠도 IDLE tick 으로 자므로 이 문제가 없다 —
     # 상주 프로세스는 "아직 할 일이 없다" 를 종료가 아니라 대기로 표현해야 한다.
+    # ⚠️ 세션 확인은 **대기 뒤**에 둔다(리뷰에서 앞으로 옮기자는 제안이 있었으나 되돌렸다).
+    # 앞에 두면 휴장일 skip 이 DB 를 먼저 때려 `exit 0` 대신 "세션 없음" SystemExit 이
+    # 되고, README 가 문서화한 휴장일 계약이 깨진다(위 테스트가 그걸 막는다).
+    # 대가는 계획 실패일의 기동 거부가 09:00 에 드러나는 것뿐인데, 그 경로는 사실상
+    # 안 닿는다 — start 는 승객 계획이 exit 0 일 때만 그 워커를 올린다. 대기에 별도
+    # 상한을 두지 않는 것도 같은 이유다: 진입 조건이 `now < 09:00` 이라 **구조적으로**
+    # 같은 날 09:00 에 끝난다(자정을 넘으려면 23:59 에 대기 중이어야 하는데 그 시각엔
+    # skip_reason 이 None 이라 진입 자체를 안 한다).
     while (reason := source.skip_reason) is not None:
         if max_ticks is not None:
             # ⚠️ **bounded 모드는 확인 게이트다**(price 와 같은 규약) — "돌렸는데 한 window
