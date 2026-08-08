@@ -799,14 +799,14 @@ Table "price_daily" {
 Table "price_decomposition" {
   "price_decomposition_id" text [pk]
   "price_observation_id" text [not null]
-  "benchmark_series_id" text [not null]
+  "sector_series_id" text [not null]
   "target_return" float8
   "market_return" float8
-  "peer_raw_return" float8
-  "peer_orthogonal_return" float8
+  "sector_raw_return" float8
+  "sector_orthogonal_return" float8
   "intercept_contribution_return" float8
   "market_explained_return" float8
-  "peer_explained_return" float8
+  "sector_explained_return" float8
   "explained_return" float8
   "residual_return" float8
   "volume_abnormality" float8
@@ -817,19 +817,6 @@ Table "price_decomposition" {
   "model_version" varchar(50) [not null]
   "evaluation_as_of" timestamptz [not null]
   "input_uri" text
-}
-
-Table "price_decomposition_peer" {
-  "price_decomposition_id" text [not null]
-  "peer_instrument_id" text [not null]
-  "peer_rank" int
-  "peer_weight_ratio" float8
-  "peer_return" float8
-  "peer_orthogonal_return" float8
-
-  indexes {
-    ("price_decomposition_id", "peer_instrument_id") [pk]
-  }
 }
 
 Table "price_movement_trigger" {
@@ -1049,10 +1036,8 @@ Ref: "ops_expected_task"."pipeline_run_id" > "ops_pipeline_run"."pipeline_run_id
 Ref: "ops_expected_task"."expectation_snapshot_id" > "ops_expectation_snapshot"."expectation_snapshot_id"
 Ref: "ops_task_attempt"."expected_task_id" > "ops_expected_task"."expected_task_id"
 Ref: "price_daily"."instrument_id" > "instrument"."instrument_id"
-Ref: "price_decomposition"."benchmark_series_id" > "market_series"."market_series_id"
+Ref: "price_decomposition"."sector_series_id" > "market_series"."market_series_id"
 Ref: "price_decomposition"."price_observation_id" > "price_observation"."price_observation_id"
-Ref: "price_decomposition_peer"."price_decomposition_id" > "price_decomposition"."price_decomposition_id"
-Ref: "price_decomposition_peer"."peer_instrument_id" > "instrument"."instrument_id"
 Ref: "price_movement_trigger"."etf_instrument_id" > "etf_profile"."instrument_id"
 Ref: "price_observation"."instrument_id" > "instrument"."instrument_id"
 Ref: "price_observation"."price_movement_trigger_id" > "price_movement_trigger"."price_movement_trigger_id"
