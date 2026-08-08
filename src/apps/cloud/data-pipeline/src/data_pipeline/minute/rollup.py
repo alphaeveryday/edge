@@ -81,6 +81,33 @@ SOURCE_VENDOR = "1m_rollup"
 # 다시 생기고, 그때는 백필이 못 건드린다 — 경계를 계속 미는 것은 답이 아니다.
 WRITER_SINCE = "2026-08-10"
 
+# 경계 **앞**이지만 롤업이 소유하는 날. 경계의 뜻이 날짜가 아니라 **재료**라는 위 정의를
+# 그대로 따른 결과다 — 재료가 나중에 생긴 날은 그 정의상 롤업 소유가 맞는데, 날짜 하나로는
+# 표현할 수 없다(경계를 내리면 08-04~08-09 까지 딸려 온다. 그 날들은 여전히 재료가 없다).
+#
+# 2026-08-03: ALPHA-846 의 KIS 소급 수집이 **410종**(etf 33 + 구성 329 + 섹터 48) 1분
+# canonical 을 만들었다 — 경계 뒤의 어떤 날보다 온전하다(390 window 전건 커밋, 결측은
+# 4종 63 unit-window = 0.04%). 토스 백필이 얹었던 49종은 이 410종의 부분집합이라
+# 소유권을 넘겨도 잃는 종목이 없다.
+#
+# ⚠️ 여기에 날짜를 더하려면 그날 1분 원장에 **그 계열이 실제로 있는지** 먼저 확인해라.
+# 없는 날을 넣으면 백필이 손을 떼는데 롤업은 만들 재료가 없어 그날이 통째로 빈다.
+WRITER_OWNED_BEFORE_SINCE = frozenset({"2026-08-03"})
+
+
+def writer_owns(session_date: str) -> bool:
+    """그날 5분 파티션을 롤업이 소유하나 — 경계 하나가 아니라 **경계 + 예외**다."""
+    return session_date >= WRITER_SINCE or session_date in WRITER_OWNED_BEFORE_SINCE
+
+
+def scan_lower() -> str:
+    """구멍 판정 창의 하한 — 롤업이 소유하는 **가장 이른** 날.
+
+    경고 문구와 SQL 하한이 같은 값을 써야 한다. 경계만 보면 예외일이 창에 들어왔는데도
+    "판정 창이 비어 있다"고 경고해, 도는 감시를 안 도는 것으로 읽게 만든다.
+    """
+    return min({WRITER_SINCE, *WRITER_OWNED_BEFORE_SINCE})
+
 
 def _committed_generations(ledger, session_id: str) -> dict[str, int]:
     """window(HHMM, KST 축) → 원장이 확정한 현재 세대. commit.py orphan 스캔과 같은 축."""
@@ -211,10 +238,10 @@ def _rollup_day(
     후크와 EOD 배치가 공유하는 유일한 집계 경로다 — 규칙이 두 벌이 되면 장중 산출과
     마감 산출이 갈리고, 갈린 날은 어느 쪽이 맞는지 물어볼 곳이 없다.
     """
-    if session_date < WRITER_SINCE:  # ISO 문자열이라 사전순 = 시간순
+    if not writer_owns(session_date):  # ISO 문자열이라 사전순 = 시간순
         logger.warning(
-            "5분 롤업 %s: 다른 벤더의 정본 파티션(< %s) — 덮어쓰지 않는다",
-            session_date, WRITER_SINCE,
+            "5분 롤업 %s: 다른 벤더의 정본 파티션(< %s, 예외 %s) — 덮어쓰지 않는다",
+            session_date, WRITER_SINCE, sorted(WRITER_OWNED_BEFORE_SINCE),
         )
         return None
     day_key = canonical_intraday_5m_key(market, session_date)
@@ -378,10 +405,11 @@ def unfilled_settled_days(
     조용하다), "우리 `part-0` 이 있나" 하나로 물으면 **후크가 먼저 쓴 뒤 백필이 끼어든
     날**이 빠진다(그때 남는 것은 그 시점에 얼어붙은 부분본이다 — 운영에서 더 흔한 순서다).
     그래서 타 writer 파일 유무를 먼저 보고, 없을 때만 우리 산출의 부재를 본다.
-    (`WRITER_SINCE` 이전 파티션 — 다른 벤더가 정당하게 소유한 2026-08-03 같은 날 — 은
-    애초에 후보가 아니라 이 축이 오탐을 내지 않는다.)
+    (백필이 소유하는 날 — 2026-07-31 같은 — 은 애초에 후보가 아니라 이 축이 오탐을
+    내지 않는다. 소유 여부는 `writer_owns` 하나가 정하므로, 경계 **앞**이라도 예외일은
+    후보에 들어온다.)
 
-    `WRITER_SINCE` 이전을 빼는 이유도 같다 — 넣으면 영영 안 지워지는 결손 목록이 되고,
+    백필 소유일을 빼는 이유도 같다 — 넣으면 영영 안 지워지는 결손 목록이 되고,
     그러면 아무도 안 읽는다.
 
     ⚠️ 그래도 **자가 해소되지 않는 항목이 두 종류 남는다**: ①워커가 하루 통째로 안 돈 날
@@ -420,7 +448,12 @@ def unfilled_settled_days(
 def _settled_session_dates(
     ledger, *, dataset: str, source_group: str, before: date
 ) -> list[str]:
-    """원장이 더 이상 진행하지 않는 세션의 거래일 — `WRITER_SINCE` 이후·`before` 이전.
+    """원장이 더 이상 진행하지 않는 세션의 거래일 — **롤업이 소유하는 날**·`before` 이전.
+
+    🔴 창을 `WRITER_SINCE` 로만 잡으면 **소유권과 감시가 갈린다**. 예외일
+    (`WRITER_OWNED_BEFORE_SINCE`)은 정의상 경계보다 앞이므로, 롤업 소유가 되면서 동시에
+    이 판정에서 영구 제외된다 — 그날이 비어 있어도 매일 `unfilled=[] contested=[]` 로
+    초록이 나고, 백필은 이미 손을 뗐으니 채울 주체도 없다. **소유하는 날은 감시한다.**
 
     ⚠️ phase 집합에 `DRAINING` 을 **포함한다**. `DRAINED_PHASES` 만 쓰면 `stop` 이 상한
     초과로 exit 1 한 날이 `DRAINING` 에 영구 고착하는데(ack 할 워커가 이미 없고 다음날
@@ -443,9 +476,11 @@ def _settled_session_dates(
             "WHERE dataset = %s AND source_group = %s AND phase = ANY(%s) "
             "AND session_date >= %s AND session_date < %s ORDER BY session_date",
             (dataset, source_group, sorted(DRAINED_PHASES | {"DRAINING"}),
-             date.fromisoformat(WRITER_SINCE), before),
+             date.fromisoformat(scan_lower()), before),
         )
-        return [session_date.isoformat() for (session_date,) in cur.fetchall()]
+        # 하한은 예외까지 담게 **넓히고**, 소유 판정은 `writer_owns` 하나로 한다 — 넓힌
+        # 구간에는 백필 소유일도 섞여 오므로 여기서 다시 걸러야 두 축이 안 갈린다.
+        return [d.isoformat() for (d,) in cur.fetchall() if writer_owns(d.isoformat())]
 
 
 # ⚠️ 1분 트랙은 KR 전용이라 market 을 CLI 인자로 열지 않는다 — 오타 하나가 **없는
@@ -565,15 +600,15 @@ def rollup_session_cli(
     # 오늘 것과 무관하게 **매번** 훑는다 — 이 판정의 목적이 "안 돌았는데 조용한 것"을
     # 잡는 것이라, 오늘이 성공한 날에만 보면 정작 못 본 날을 영영 못 본다.
     scan_before = _scan_before()             # 인자와 로그가 같은 값을 쓴다
-    if WRITER_SINCE > scan_before.isoformat():
-        # 경계가 **아직 오지 않은 날**이면 판정 창 `[WRITER_SINCE, 오늘)` 이 공집합이라
+    if scan_lower() > scan_before.isoformat():
+        # 창의 하한이 **아직 오지 않은 날**이면 판정 창 `[하한, 오늘)` 이 공집합이라
         # 이 스캔은 구조적으로 0건이다. 소유권을 넘긴 직후의 정상 상태지만(그 구간은
         # 백필이 채운다), 경계를 옮겨 두고 되돌리는 것을 잊으면 감시가 **조용히** 꺼진
         # 채로 남는다. 0건이 "구멍 없음"인지 "볼 창이 없음"인지 로그로 갈라 둔다.
         logger.warning(
-            "5분 구멍 판정: 소유권 경계(%s)가 오늘(%s)보다 뒤다 — 판정 창이 비어 있다. "
-            "그 구간은 벤더 백필 소유이고, 경계가 지나면 자동으로 다시 켜진다",
-            WRITER_SINCE, scan_before.isoformat(),
+            "5분 구멍 판정: 창 하한(%s)이 오늘(%s)보다 뒤다 — 판정 창이 비어 있다. "
+            "그 구간은 벤더 백필 소유이고, 하한이 지나면 자동으로 다시 켜진다",
+            scan_lower(), scan_before.isoformat(),
         )
     try:
         unfilled, contested, candidates = unfilled_settled_days(
@@ -624,7 +659,7 @@ def rollup_session_cli(
     if rollup_failed:
         return 2                      # 판정 자체를 못 함 — 재시도하면 될 수 있다
     if result["key"] is None:
-        # rollup 이 **정당하게 거부**했다(타 writer 파일·WRITER_SINCE 이전·닫힌 버킷 0·
+        # rollup 이 **정당하게 거부**했다(타 writer 파일·백필 소유일·닫힌 버킷 0·
         # 세션 없음) = 재시도로 안 낫는다. 스캔 실패가 이걸 2 로 덮으면 "사람이 봐야
         # 한다"가 "재시도하면 된다"로 뒤집힌다.
         return 1

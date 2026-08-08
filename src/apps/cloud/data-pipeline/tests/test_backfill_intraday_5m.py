@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from data_pipeline.minute import rollup
+
 _SPEC = importlib.util.spec_from_file_location(
     "backfill_intraday_5m_toss",
     Path(__file__).resolve().parents[1] / "scripts" / "backfill_intraday_5m_toss.py",
@@ -85,7 +87,7 @@ def test_calendar_stops_at_the_rollup_ownership_boundary():
     없으면 대상이 아니다"라는 **우연**에 기대 이 구간을 안 건드렸고, 달력이 합집합이
     되면서 그 우연이 사라졌다.
     """
-    after = backfill.WRITER_SINCE
+    after = rollup.WRITER_SINCE
     s3 = _FakeS3({
         backfill.PREFIX: ["2026-07-31"],
         backfill.PRICE_DAILY_PREFIX: ["2026-07-31", after, "2099-01-01"],
@@ -94,6 +96,26 @@ def test_calendar_stops_at_the_rollup_ownership_boundary():
     days = backfill._trading_days(s3, "bkt")
 
     assert days == ["2026-07-31"], f"롤업 소유 구간이 대상에 들어왔다: {days}"
+
+
+def test_calendar_also_drops_a_backfilled_day_before_the_boundary():
+    """경계 **앞**이라도 롤업이 소유하게 된 날은 백필이 손을 뗀다.
+
+    WHY: 소유권은 `writer_owns()` 하나가 정하고 경계는 그중 기본값일 뿐이다. 예외를
+    여기서 안 보면 두 writer 가 같은 파티션을 다투고, 그러면 롤업 쪽 foreign 가드가
+    걸려 그날 5분 파생이 영구 정지한다 — 위 테스트가 막으려던 사고가 경계 앞에서
+    똑같이 난다(2026-08-03 이 ALPHA-846 의 KIS 소급 수집으로 그렇게 됐다).
+    """
+    owned = sorted(rollup.WRITER_OWNED_BEFORE_SINCE)[0]
+    assert owned < rollup.WRITER_SINCE, "예외가 경계 앞이어야 의미가 있다"
+    s3 = _FakeS3({
+        backfill.PREFIX: ["2026-07-31"],
+        backfill.PRICE_DAILY_PREFIX: ["2026-07-31", owned],
+    })
+
+    days = backfill._trading_days(s3, "bkt")
+
+    assert days == ["2026-07-31"], f"롤업이 소유하게 된 날이 대상에 남았다: {days}"
 
 
 # ── 쓰기 판정 ──────────────────────────────────────────────────────────────
