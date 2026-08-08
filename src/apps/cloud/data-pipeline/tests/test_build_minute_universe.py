@@ -1,0 +1,185 @@
+"""build_minute_universe — 참조 계열(섹터 후보) ETF 축.
+
+각 테스트는 '왜 이 동작이 중요한가'를 주석으로 남긴다 — AGENTS Rule 9.
+"""
+
+import importlib.util
+import io
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
+from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+
+_SPEC = importlib.util.spec_from_file_location(
+    "build_minute_universe",
+    Path(__file__).resolve().parents[1] / "scripts" / "build_minute_universe.py",
+)
+build_minute_universe = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(build_minute_universe)
+build = build_minute_universe.build
+
+
+def _holdings(storage, as_of: str, rows: list[tuple[str, str]]) -> None:
+    """canonical KR holdings 스냅샷 — (constituent_ticker, etf_id) 쌍."""
+    schema = pa.schema([("etf_id", pa.string()), ("constituent_ticker", pa.string())])
+    table = pa.Table.from_pylist(
+        [{"etf_id": e, "constituent_ticker": c} for c, e in rows], schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    storage.put_bytes(
+        f"{canonical_etf_holdings_partition('KR', as_of)}/part-00000.parquet", buf.getvalue())
+
+
+def _storage(tmp_path) -> LocalStorage:
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("005930", "091160"), ("000660", "091160")])
+    return storage
+
+
+def test_sector_etfs_are_collected_but_not_judged(tmp_path):
+    # WHY: 구간(장중) 모드의 섹터층은 섹터 ETF 로 선다 — 일봉 경로가 쓰는 KRX 업종지수는
+    #      분봉이 없기 때문이다. 그래서 봉은 받아야 한다(`unit_ids`). 그런데 `etf_ids` 는
+    #      `price_consumer` 의 **판정 집합**이라(PriceTriggerHandler.etf_ids) 거기 얹으면
+    #      이 계열이 트리거 발화 대상이 된다 — 레버리지·인버스가 3% 게이트를 상시 넘겨
+    #      구성종목 없는 상품의 설명이 발화되고, 일봉 유니버스 밖이라 prev_close 가 없어
+    #      `needs_open` 이 상시 비지 않는다. 수집 축과 판정 축을 갈라야 한다.
+    universe = build(_storage(tmp_path), frozenset({"091160"}), ("091170", "102970"))
+
+    assert set(universe.sector_etf_ids) == {"091170", "102970"}
+    assert set(universe.etf_ids) == {"091160"}          # 판정 축은 안 늘어난다
+    assert {"091170", "102970"} <= set(universe.unit_ids)  # 수집은 된다
+    # 참조 계열은 **자기 분봉만** 받는다 — 구성종목은 한 종도 안 늘어난다.
+    assert set(universe.constituent_ids) == {"005930", "000660"}
+
+
+def test_sector_etf_that_is_also_a_constituent_lands_on_the_sector_axis(tmp_path):
+    # WHY: `Universe` 는 세 축이 겹치면 거부한다. 섹터 ETF 가 다른 ETF 의 보유 종목으로
+    #      잡혀 있으면(ETF-of-ETF·현금성 편입) 두 축에 동시에 들어가 universe 생성이
+    #      통째로 죽는다 — 참조 계열 축이 이겨야 하고, 판정 축으로 새면 안 된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("005930", "091160"), ("091170", "091160")])
+
+    universe = build(storage, frozenset({"091160"}), ("091170",))
+
+    assert set(universe.sector_etf_ids) == {"091170"}
+    assert set(universe.etf_ids) == {"091160"}
+    assert set(universe.constituent_ids) == {"005930"}
+
+
+def test_etf_declared_on_both_axes_fails_loud(tmp_path):
+    # WHY: 두 설정이 같은 코드를 다르게 말하는 상태다 — etf_map 은 "판정해라",
+    #      sector_etf_ids 는 "봉만 받아라". 어느 쪽으로든 조용히 넘기면 나머지 선언이
+    #      거짓이 된다(참조 계열로 넘기면 트리거 대상이 소리 없이 사라지고, 판정 축으로
+    #      넘기면 레버리지·인버스가 3% 게이트에 실린다). 평균내지 않고 사람에게 넘긴다.
+    with pytest.raises(SystemExit, match="양쪽에 있다"):
+        build(_storage(tmp_path), frozenset({"091160"}), ("091160",))
+
+
+def test_both_axes_conflict_is_caught_from_config_not_just_holdings(tmp_path):
+    # WHY: 겹침 대조군을 holdings 파생 집합으로만 잡으면, 그 ETF 의 스냅샷이 아직 없을
+    #      때(신규 편입·KRX 런 실패·소급 상한 초과) 모순이 조용히 통과한다 — 그리고
+    #      정작 그때가 사람이 목록을 손대는 시점이다. 정본인 etf_map 축으로도 본다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("005930", "091160")])  # 091170 스냅샷은 아직 없다
+
+    with pytest.raises(SystemExit, match="양쪽에 있다"):
+        build(storage, frozenset({"091160", "091170"}), ("091170",))
+
+
+def test_universe_version_moves_when_sector_set_changes(tmp_path):
+    # WHY: universe_version 은 세션 identity 축이다(worker·consumer 가 원장 값과 대조해
+    #      갈리면 처리를 거부한다). 참조 계열을 더했는데 version 이 그대로면 새 집합이
+    #      옛 세션에 그대로 붙어, 기대 유니버스와 실제 수집 집합이 조용히 갈린다.
+    storage = _storage(tmp_path)
+
+    before = build(storage, frozenset({"091160"}), ())
+    after = build(storage, frozenset({"091160"}), ("091170",))
+    other = build(storage, frozenset({"091160"}), ("102970",))
+
+    assert before.universe_version != after.universe_version
+    assert after.universe_version != other.universe_version
+
+
+def test_empty_sector_list_reproduces_the_pre_axis_version(tmp_path):
+    # WHY: 이 축이 생기기 전에 착지한 universe 와 **같은 값**이 나와야 한다. 빈 축을
+    #      무조건 checksum 에 넣으면 구성이 똑같은 기존 session 이 배포만으로 다른
+    #      version 을 얻어 그날 재계획이 UniverseConflictError 로 막힌다.
+    #      두 build() 를 비교하면 둘 다 같이 흔들려 못 잡는다 — 값을 못박는다.
+    universe = build(_storage(tmp_path), frozenset({"091160"}), ())
+
+    # 축 도입 전 규칙(`content_checksum([etf_ids, constituent_ids])`)이 내던 값
+    assert universe.universe_version == "kr-holdings-1be3dcf0ba65"
+    assert universe.sector_etf_ids == ()
+    # hash 도 같은 규율 — 빈 축은 identity 에 안 들어간다. 여기서 두 build() 를
+    # 비교하면 **항등식**이다(세 번째 인자의 기본값이 곧 빈 튜플이라 같은 호출이다)
+    # — 어떤 구현이어도 통과한다. version 과 마찬가지로 값을 못박는다.
+    assert universe.universe_hash == (
+        "04e0e7ba29b4f21b86c50b1dbc359ac2e3809868b0223a3995896a5bf07541cb")
+
+
+def test_no_holdings_still_fails_loud(tmp_path):
+    # WHY: 참조 계열만으로 축이 차면 "holdings 를 못 읽었다"가 가려진다 — 구성종목 0 인
+    #      유니버스가 만들어져 그날 1분 수집이 몇 종으로 쪼그라든 채 초록으로 돈다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    with pytest.raises(SystemExit, match="유니버스를 못 만들었다"):
+        build(storage, frozenset({"091160"}), ("091170", "102970"))
+
+
+def test_settings_wiring_reaches_the_universe(tmp_path):
+    # WHY: build() 만 직접 부르는 테스트는 **기능이 통째로 무력화된 채 초록으로 도는**
+    #      경우를 못 잡는다 — main() 이 설정에서 목록을 안 꺼내면 섹터 후보 48종이
+    #      universe.json 에서 조용히 사라지고 어느 테스트도 실패하지 않는다.
+    settings = SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),
+        minute_universe=SimpleNamespace(sector_etf_ids=("091170", "102970")),
+    )
+
+    universe = build_minute_universe.build_from_settings(settings, _storage(tmp_path))
+
+    assert set(universe.sector_etf_ids) == {"091170", "102970"}
+
+
+def test_settings_wiring_without_the_section(tmp_path):
+    # WHY: 섹션은 선택 항목이다. 미설정을 못 견디면 이 축이 없는 환경의 빌드가 통째로 죽는다.
+    settings = SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),
+        minute_universe=None,
+    )
+
+    assert build_minute_universe.build_from_settings(
+        settings, _storage(tmp_path)).sector_etf_ids == ()
+
+
+def test_serialized_payload_carries_every_declared_axis(tmp_path):
+    # WHY: 산출물이 손으로 나열한 필드 목록이면 축이 하나 늘 때 조용히 빠진다 — 그러면
+    #      universe.json 에 참조 계열이 없어 수집이 예전 집합 그대로 돈다. 그리고 선언
+    #      없는 축은 키 자체가 없어야 한다(빈 축을 생략하는 hash 규율과 같은 축).
+    #      **스크립트가 쓰는 그 함수**를 부른다 — model_dump 를 직접 부르면 스크립트가
+    #      손 나열로 되돌아가도 이 테스트는 초록이다.
+    universe = build(_storage(tmp_path), frozenset({"091160"}), ("091170",))
+
+    payload = json.loads(build_minute_universe.payload_of(universe))
+
+    assert payload["sector_etf_ids"] == ["091170"]
+    assert "extended_hours_ids" not in payload
+    # 이 payload 로 다시 세운 universe 는 identity 가 같아야 한다(왕복 무손실)
+    from data_pipeline.minute.models import Universe
+
+    assert Universe.model_validate(payload).universe_hash == universe.universe_hash
+
+
+def test_constituents_drained_by_the_sector_axis_fails_loud(tmp_path):
+    # WHY: `not constituent_ids` 쪽 절반은 빈 레이크 테스트로는 안 밟힌다. 이 경로가
+    #      죽으면 pydantic 의 `too_short` 가 대신 나오는데, 그건 "holdings 를 확인하라"는
+    #      처방을 못 준다 — 무엇을 고칠지 모르는 실패는 fail-loud 가 아니다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("091170", "091160")])  # 구성종목이 그 하나뿐
+
+    with pytest.raises(SystemExit, match="구성종목 0종"):
+        build(storage, frozenset({"091160"}), ("091170",))

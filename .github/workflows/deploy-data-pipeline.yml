@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     # 빌드(~5분) + 상주 서비스 6종 롤아웃 대기(각 10분 상한, 순차 최악 60분) 수용
     timeout-minutes: 80
     steps:

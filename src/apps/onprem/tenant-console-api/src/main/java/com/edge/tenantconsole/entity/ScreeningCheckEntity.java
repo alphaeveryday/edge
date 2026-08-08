@@ -25,6 +25,11 @@ public class ScreeningCheckEntity {
 	@Column(name = "analysis_item_id")
 	private String analysisItemId;
 
+	/** 판정 당시 정책 버전 — 기준(임계값)의 출처다. 오늘의 설정으로 과거 판정을 다시
+	 * 라벨링하면 감사 재현이 어긋난다(정책은 불변 버전, ADR-0018). */
+	@Column(name = "policy_version_id")
+	private Long policyVersionId;
+
 	@Column(name = "screening_rule_id")
 	private Long screeningRuleId;
 
@@ -40,10 +45,11 @@ public class ScreeningCheckEntity {
 	}
 
 	/** 테스트 픽스처용 — 실제 인스턴스는 Hibernate 가 조회로 생성한다. */
-	public ScreeningCheckEntity(long screeningCheckId, String analysisItemId, Long screeningRuleId,
-			String result, String matchedText, OffsetDateTime checkedAt) {
+	public ScreeningCheckEntity(long screeningCheckId, String analysisItemId, Long policyVersionId,
+			Long screeningRuleId, String result, String matchedText, OffsetDateTime checkedAt) {
 		this.screeningCheckId = screeningCheckId;
 		this.analysisItemId = analysisItemId;
+		this.policyVersionId = policyVersionId;
 		this.screeningRuleId = screeningRuleId;
 		this.result = result;
 		this.matchedText = matchedText;
@@ -56,6 +62,10 @@ public class ScreeningCheckEntity {
 
 	public String getAnalysisItemId() {
 		return analysisItemId;
+	}
+
+	public Long getPolicyVersionId() {
+		return policyVersionId;
 	}
 
 	public Long getScreeningRuleId() {

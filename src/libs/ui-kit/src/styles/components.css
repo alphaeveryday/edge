@@ -207,6 +207,9 @@
 .switch.on { background: var(--accent); }
 .switch.on::after { left: 17px; }
 .switch.disabled { background: var(--gray-200); cursor: not-allowed; }
+/* 켜짐 + 조작 불가 — 켜짐(accent)을 유지하되 톤을 낮춰 "지금 켜져 있고 내가 못 바꾼다"로
+   읽히게 한다. 여기서 회색으로 떨어뜨리면 꺼짐과 구분되지 않는다(ALPHA-766). */
+.switch.on.disabled { background: var(--accent-border); }
 
 /* ---------- MODAL / TOAST ---------- */
 @keyframes edge-fade-in { from { opacity: 0; } to { opacity: 1; } }

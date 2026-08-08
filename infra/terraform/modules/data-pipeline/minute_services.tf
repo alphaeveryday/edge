@@ -460,7 +460,9 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = var.task_cpu
-  memory                   = var.task_memory
+  # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
+  # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
+  memory                   = var.analysis_task_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.analysis_task.arn
 

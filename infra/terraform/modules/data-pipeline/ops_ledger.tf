@@ -44,6 +44,19 @@ locals {
   disclosure_schedule_hhmm = var.disclosure_schedule_state != "ENABLED" ? "" : join(",", sort([
     for hm in local._disclosure_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
   ]))
+
+  # 장중 수급 레인 슬롯 목록(ALPHA-769) — 앞 셋과 같은 이유로 cron 에서 뽑는다.
+  _investor_intraday_cron_hms = [
+    for k in sort(keys(var.investor_intraday_schedule_expressions)) :
+    regex("^cron\\(([0-9]+) ([0-9]+) ", var.investor_intraday_schedule_expressions[k])
+  ]
+  # 공시와 같은 ENABLED 조건을 건다. 이 레인은 기본이 ENABLED 라 평소엔 항상 값이 나오지만,
+  # 조건 자체가 필요한 이유는 같다: 누군가 스케줄을 끄면(사고 대응·비용) 슬롯 기준만 남아
+  # Reconciler 가 뜰 리 없는 슬롯을 매번 결측으로 판정해 **참인 PLANNER_MISSING** 을 하루 5개씩
+  # 연다(실제로 안 돌았으니 resolve 되지 않는다). 끄는 행위 하나로 두 사실이 함께 꺼져야 한다.
+  investor_intraday_schedule_hhmm = var.investor_intraday_schedule_state != "ENABLED" ? "" : join(",", sort([
+    for hm in local._investor_intraday_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
+  ]))
 }
 
 # ── Planner/Reconciler 전용 task 역할 ──
@@ -68,6 +81,7 @@ resource "aws_iam_role_policy" "ops_task" {
           aws_sfn_state_machine.this.arn,
           aws_sfn_state_machine.news.arn,
           aws_sfn_state_machine.disclosure.arn,
+          aws_sfn_state_machine.investor_intraday.arn,
         ]
       },
       {
@@ -78,6 +92,7 @@ resource "aws_iam_role_policy" "ops_task" {
           "${replace(aws_sfn_state_machine.this.arn, ":stateMachine:", ":execution:")}:*",
           "${replace(aws_sfn_state_machine.news.arn, ":stateMachine:", ":execution:")}:*",
           "${replace(aws_sfn_state_machine.disclosure.arn, ":stateMachine:", ":execution:")}:*",
+          "${replace(aws_sfn_state_machine.investor_intraday.arn, ":stateMachine:", ":execution:")}:*",
         ]
       },
       {
@@ -133,6 +148,9 @@ resource "aws_ecs_task_definition" "ops" {
       # 무해하고, 없으면 fail-loud 다). 슬롯 기준은 스케줄이 켜졌을 때만 — 위 locals 참조.
       OPS_DISCLOSURE_STATE_MACHINE_ARN = aws_sfn_state_machine.disclosure.arn
       OPS_DISCLOSURE_SCHED_HHMM        = local.disclosure_schedule_hhmm
+      # 장중 수급 레인(ALPHA-769) — 공시와 같은 규약(ARN 상시, 슬롯 기준은 ENABLED 조건부).
+      OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN = aws_sfn_state_machine.investor_intraday.arn
+      OPS_INVESTOR_INTRADAY_SCHED_HHMM        = local.investor_intraday_schedule_hhmm
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

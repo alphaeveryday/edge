@@ -217,7 +217,7 @@ locals {
   }
 }
 
-# ── analyze 페이즈 task-def (구 analysis-engine 모듈 흡수, ALPHA-408) ──
+# ── analysis-engine 공유 설정 (상주 소비자 task-def 가 minute_services.tf 에서 쓴다) ──
 # for_each 밖에 따로 두는 이유: 이미지(alphamale)·env 네임스페이스(PG*·ALPHAMALE_*·DEEPSEEK_*)·
 # 컨테이너명이 data-pipeline 계열과 전부 다르다. 시크릿 주입 메커니즘만 같다.
 locals {
@@ -226,6 +226,13 @@ locals {
   # 결과 prefix — env(ALPHAMALE_RESULT_S3_PREFIX)와 analysis task 역할의 PutObject 스코프가
   # 어긋나지 않게 한 곳에서 고정한다.
   analysis_result_s3_prefix = "operations_archive/etf_explanations/"
+
+  # 백필 parquet prefix — 결과 prefix 와 같은 이유로 한 곳에서 고정한다. 레이크 버킷 안이라
+  # analysis task 역할의 버킷 전체 Get/List(iam.tf)가 이미 덮는다(추가 정책 불필요).
+  # 결과 prefix 와 달리 **후행 슬래시가 없다**: 이 값은 IAM 스코프가 아니라 코드가 파일명을
+  # 이어붙이는 루트라, 슬래시를 남기면 `…/backfill//pit_daily.parquet` 가 되고 S3 는 그
+  # 빈 세그먼트를 키의 일부로 봐서 조용히 0파일을 돌려준다.
+  analysis_backfill_s3_prefix = "analysis/backfill"
 
   analysis_env = merge({
     AWS_REGION            = var.region
@@ -236,48 +243,36 @@ locals {
     PGUSER                = var.db_user
     PGSCHEMA              = "public"
     DEEPSEEK_MODEL        = "deepseek-v4-flash"
-    # fallback 기본값 — SFN analyze Map(ALPHA-470)이 이터레이션마다 유니버스 티커로 덮는다.
-    # 직접 ecs run-task(특정일 수동 재실행) 때만 이 값이 실제로 쓰인다.
+    # 형식상의 기본값 — 실제 대상은 **트리거 행**이 정한다(`pipeline.run` 이 소비한
+    # minute_price_trigger 의 ticker 로 덮는다, ALPHA-806). 이 값이 쓰이는 경로는 없다.
     ALPHAMALE_ETF_TICKER       = "091160"
     ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
+    # 백필은 S3 정본만 주입한다. 컨테이너 로컬 경로는 입력·원장으로 쓰지 않는다.
+    CAUSAL_BACKFILL_S3 = "s3://${var.lake_bucket_name}/${local.analysis_backfill_s3_prefix}"
+    # Fargate 의 자격증명은 컨테이너 메타데이터 엔드포인트(instance 체인)에서만 온다 —
+    # sso·config 만 있는 체인은 ~/.aws 가 없는 컨테이너에서 전량 실패해 S3 뷰가 통째로 빠진다.
+    # ⚠️ AWS_PROFILE 은 여기 **없어야 한다**: 있으면 코드가 PROFILE 절을 붙이고 존재하지 않는
+    # 프로필을 찾다 죽는다(컨테이너에 프로필 파일이 없다).
+    DUCKDB_S3_CHAIN = var.analysis_duckdb_s3_chain
+    # 태스크보다 낮은 메모리 상한에서 넘친 계산만 /tmp로 spill한다. 임시 파일은 입력·산출물
+    # 정본이 아니며, Fargate 기본 임시 스토리지 20GiB면 1.5GB 엔진에 충분하다.
+    DUCKDB_MEMORY_LIMIT = var.analysis_duckdb_memory_limit
+    DUCKDB_TEMP_DIR     = var.analysis_duckdb_temp_dir
+    # 조건부 주입이 아니다 — 변수가 nullable=false 라 항상 값이 있고, 없으면 런이 선다
+    # (ALPHA-797 이 미주입 = S3 폴백 모드를 폐기).
+    ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version
     },
-    var.analysis_release_bundle_version == null ? {} : { ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version },
+    # 워크그룹 이름만 넘긴다 — IAM 정책이 스코프로 쓰는 유일한 이름이라 여기서 고정한다.
+    # DB·표 이름은 코드 DEFAULTS 에 둔다(IAM 은 glue:Get* 를 "*" 로 주므로 정책과 안 엮인다).
+    # ⛔ EDGE_ATHENA_OUTPUT 은 주입 금지 — 워크그룹이 결과 위치를 강제(Enforce)하므로 같이
+    # 보내면 질의가 시작도 못 한다.
+    var.analysis_athena_workgroup == "" ? {} : { EDGE_ATHENA_WORKGROUP = var.analysis_athena_workgroup },
   )
 
   analysis_secrets = {
     PGPASSWORD       = "${var.db_password_secret_arn}:password::"
     DEEPSEEK_API_KEY = "${var.deepseek_secret_arn}:api_key::"
   }
-}
-
-resource "aws_ecs_task_definition" "analysis" {
-  family                   = "${var.name}-analysis"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.analysis_task.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
-  }
-
-  # command 미지정: 이미지 ENTRYPOINT(python -m edge_analysis)가 기본 실행 = 오늘(Asia/Seoul).
-  # 특정 trade-date/request-id 재실행은 SFN 라우팅 없이 ecs run-task 로 이 task-def 를 직접
-  # 띄워 Command(=CMD args: --trade-date/--request-id)만 덮는다 — 운영 수동 실행 계약.
-  container_definitions = jsonencode([{
-    name        = local.analysis_container_name
-    image       = var.analysis_image
-    essential   = true
-    environment = [for k, v in local.analysis_env : { name = k, value = v }]
-    secrets     = [for k, v in local.analysis_secrets : { name = k, valueFrom = v }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis" })
-    }
-  }])
 }
 
 resource "aws_ecs_task_definition" "this" {

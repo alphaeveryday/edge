@@ -1,0 +1,119 @@
+---
+name: causeflow
+description: 종목 하루 변동의 인과 설명을 하네스 안에서 한 번에 만든다 — 정적분해(시장·섹터·고유) → 메인 에이전트가 경쟁가설 튜플(간선마다 검정 의도) → 코드 심사 → 검정 서브에이전트 병렬 → 구조방정식 + 직관 설명. "오늘 왜 움직였어", "인과 설명 만들어줘", "causeflow 돌려줘", 종목·날짜의 하루 귀속 요청 시 사용. 원격 모델 직렬 파이프라인(causeflow CLI 전체 실행)의 하네스 병렬판 — 직렬 1시간+ 를 ~15분으로 줄인다(실측). ETF 하루 요약은 etfday, 층 분해만은 layers 소관.
+---
+
+# causeflow — 하루 인과 설명 (하네스 병렬 오케스트레이션)
+
+**역할 분담이 이 스킬의 전부다**: 결정론(층·사실·심사·패널)은 CLI 코드가, 가설과
+구조방정식은 **메인 에이전트(너)** 가 컨텍스트를 유지한 채, 간선 검정은 **서브에이전트
+병렬**이 맡는다. 원격 모델 왕복은 0회.
+
+설계 SSOT: `docs/analysis-engine/causal-attribution-design.md`. 어휘·심사·패널의
+구현은 `src/edge_analysis/statics/{vocab,hypothesize,judge,causeflow}.py` — 스킬과
+코드가 충돌하면 코드가 이긴다.
+
+## 전제
+
+```bash
+ENGINE=D:/Github/edge-dyntool/src/apps/cloud/analysis-engine
+PY=D:/Github/edge/src/.venv/Scripts/python.exe
+ENV='PYTHONPATH=src CAUSAL_BACKFILL_DIR="D:/Github/edge-dyntool/.tmp/causal-backfill" EDGE_RDB_DSN="host=127.0.0.1 port=15432 dbname=edge user=edge password=<secretsmanager edge-dev-rds>"'
+```
+
+- RDS 터널 필수: `Catalog "rdb" does not exist` 가 나오면 `hub restart rds-tunnel` 후 12초 대기.
+- 작업 디렉터리: `.tmp/cf/<ticker>_<day>/` 를 만들어 산출물을 모은다.
+- **여러 셀을 연달아 돌릴 때**: `serve` 상주 프로세스(hub start, ready.log="READY")로
+  facts 를 부리면 레이크 부팅을 세션당 1회만 낸다. stdin JSON 한 줄
+  (`{"op":"facts",...}` → `DONE facts <s>`). 단 **prep 은 병렬 CLI 가 더 빠르다**
+  (실측: 서버 직렬 299초 vs 프로세스 풀 161초) - prep 은 CLI 로 돌려라.
+  eval 커널 상주는 **구조적으로 불가**: 하네스 커널(Python 3.14.2)에서 맨
+  `import numpy` 가 C 확장 DLL 로드에서 인터럽트 불능 행 (faulthandler 스택 +
+  최소 재현으로 확정, 하네스 이슈로 보고됨). 레이크 문제가 아니다 - serve 를 써라.
+
+## 1. 사실 (결정론 · ~3분 · CLI 1회)
+
+```bash
+cd $ENGINE && $ENV $PY -m edge_analysis.statics.causeflow facts <ticker.KS> <instrument_id> <YYYY-MM-DD> > .tmp/cf/<..>/facts.txt
+```
+
+산출: 층 분해(시장 β·섹터 β·고유) · 밤사이 미국장 · 수급(원인 아니라 회계 라벨) ·
+시간 분해 · 계열 z 전체 · **코스피 중 미국 설명 몫 구간** · 대상 ≤3 · 접지(사건타입·발화 계열).
+
+## 2. 경쟁가설 (메인 에이전트 = 너)
+
+대상마다 **경쟁가설 3개**를 서로 다른 채널로 낸다. JSON envelope 를 대상별로 저장:
+
+```json
+{"event_types": [...facts 의 접지 목록, 시장·섹터 대상은 []...],
+ "series_families": [...고유: 발화 계열만 · 시장/섹터: 발화 ∪ {"거시","수급","지수잔차"}...],
+ "hypotheses": [ {"vulnerabilities": [], "trigger": {"kind": "점|계열", "ident": "..."},
+                  "channel": "...", "exposure": {"kind": "속성", "ident": "계열족", "transform": "변환"},
+                  "outcome": "수익률", "sign": 1, "reduction_note": "...",
+                  "intent": "무엇이 사실이면 성립인가 - 반증 조건까지"} , ×3 ] }
+```
+
+규칙: 어휘는 닫혀 있다(`vocab.py`) · **intent 는 반증 조건을 포함**해야 한다(예: "거시가
+오늘 발화했어야 성립. z<2 면 기각") · 기각될 가설을 일부러 섞어라 — 기각이 곧 "아닌 것
+먼저"의 재료다. 심사:
+
+```bash
+$ENV $PY -m edge_analysis.statics.causeflow validate .tmp/cf/<..>/env_<T>.json
+```
+
+간선 전부를 **edges.json 하나**({"M1": envelope, "M2": …})로 모아 `prep` 한 방:
+
+```bash
+$ENV $PY -m edge_analysis.statics.causeflow prep <ticker.KS> <iid> <day>   .tmp/cf/<..>/ .tmp/cf/<..>/edges.json
+```
+
+심사([REJ] 면 종료코드 1 - 고쳐서 재실행) + env_<ID>.json 분할 + 패널 계산을
+프로세스 풀(≤4)로 **내장 병렬** 처리한다. 측정 불가 노출(n=0)은 코드가 자동
+프로브(거래량/변화·가격잔차/누적) - 판정자마다 같은 발견을 재발명하지 않는다.
+산출: `env_<ID>.json` + `panel_<ID>.txt`. 실측: 2간선 10.6초(웜), 9간선 ~1분.
+
+## 3. 검정 (서브에이전트 병렬 · task 1배치 · CLI 없음)
+
+간선 수만큼 **한 배치**로 띄운다. 판정자는 파일 3개(facts.txt · env_<ID>.json ·
+panel_<ID>.txt)만 읽는 **순수 추론**이다 - bash 불필요, `agent: "scout"` 로 띄워
+빠른 모델을 쓴다. context 에 공통 계약, tasks[i] 에 간선 지정. 계약 원문:
+
+- 수치는 facts.txt 와 panel_<ID>.txt 에 있는 것만 인용. **판정불가는 희소** — n 작다고
+  도망가지 말고 오늘 사실(창·발화·미국장)로 기울여라. 재료가 정말 상충할 때만 + 사유.
+- 성립 → `se`(kind 0/1|시계열|수준 · name · value · **meaning**) 필수. 기각 → `cut_reason`
+  필수(가설 에이전트에게 보고된다).
+- panel 의 '코드 참고 의견'은 참고일 뿐 결론은 네가 진다. 자동 프로브 블록이 있으면
+  그것이 특징 선택의 결과다 - 원 노출 미측정 사실을 결론에 명시하라.
+- 출력: `{"edge","causal":true|false|null,"confidence","conclusion","se":{},"cut_reason"}` JSON 하나.
+
+DAG 맥락(경쟁 간선 목록·공통요인·통제됨: 시장차감·산업이중차감)을 context 에 싣는다.
+
+## 4. 갱신 (최대 2라운드)
+
+성립이 0개인 대상만: 기각 사유(cut_reason)를 모아 **새 가설구조**를 낸다(끊긴
+채널·방아쇠 반복 금지). 2단계→3단계 반복. 전 대상에 성립이 있으면 건너뛴다.
+
+## 5. 구조방정식 + 직관 설명 (메인 에이전트 = 너)
+
+성립 간선의 se 재료로만 방정식을 세운다. 항등식 검산 필수:
+
+```
+r(종목) = β_m×코스피 + β_s×섹터⊥ + e   ← facts 의 층 숫자 그대로, 합이 하루와 일치
+코스피  = 미국 몫 구간 + 국내잔차       ← 성립 간선의 se
+```
+
+설명 규율(narrate 계약의 이식): **아닌 것 먼저**(기각 간선) · 비자명 연결 한 문장
+강조(최종 목표: 일반 투자자가 못 떠올리는 인과) · 숫자는 재료에 있는 것만 · 미설명
+잔여를 숨기지 않고 "줄이는 것은 서사가 아니라 데이터"로 끝낸다.
+산출: `.tmp/cf/<..>/result.md` (DAG 판정 전문 + 방정식 + 설명).
+
+## 실측 기준선
+
+- 000660 07-29: 가설 9 → 성립 4·기각 5·판정불가 0. 판정자가 CLI 직접 실행하던 판:
+  벽시계 ~15분(검정 최장 10.5분). 원격 직렬 파이프라인은 38분에 간선 4/9.
+- 005930 07-30: 가설 9 → 성립 2·기각 7·판정불가 0 · ~12분. 역β 로테이션(-0.41 ×
+  테마⊥ -4.77% = +1.96%p) 발견 - "반도체 급락일의 삼성 방어는 구조다".
+- 000660 07-30(3세대): facts 119초 + panels 샤딩 171초 + scout 판정 24~42초 ≈ 6분.
+  가설 9 → 성립 3·기각 6·판정불가 0. scout 가 거울상 식별 논증을 폈다.
+- prep 도입 후 산식: facts 2분 + edges.json 작성 + prep ~1분 + scout ~40초 + SEM
+  = **~4분대**. 셀당 에이전트 동작 다섯 수: facts → edges.json → prep → 판정 배치 → SEM.

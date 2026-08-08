@@ -72,7 +72,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 
 ### 배포 시 마이그레이션은 VPC 내부 ECS one-off task에서 실행한다
 
-운영/스테이징 RDS는 private 서브넷 + SG 제한이라 **GitHub-hosted 러너(VPC 밖)에서 직접 접속할 수 없다.**
+운영/스테이징 RDS는 private 서브넷 + SG 제한이라 **CI 러너(hosted·self-hosted 모두 VPC 밖)에서 직접 접속할 수 없다.**
 그래서 배포 워크플로는 러너에서 Flyway를 돌리지 않는다. 대신:
 
 1. 러너가 **OIDC로 AWS 인증**(장기 액세스 키 없음).
@@ -123,13 +123,39 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 - `cleanDisabled = true` — `flyway clean` 금지(데이터 전체 삭제 방지).
 - `validateMigrationNaming = true` — 파일명 규칙 위반 시 실패.
 
+## 락 예산 — 장중에 쓰이는 표를 만질 때 (ALPHA-799)
+
+`schema-migrate` 는 이 경로가 바뀐 dev push 마다 **즉시** 돈다 — 장 시간 게이트가 없다.
+그런데 장중 파이프라인은 `minute_price_trigger` 에 매분 INSERT 하고, 분석엔진은
+autocommit=False 라 런의 첫 문장이 잡은 ACCESS SHARE 가 S3 왕복을 지나서야 풀린다.
+그 뒤에 **무한정 대기하는 DDL** 이 끼면 그 뒤의 매분 INSERT 가 전부 줄을 선다
+(head-of-line blocking). 마이그레이션 task 폴링 상한이 1080초라 최악 18분간 안 드러난다.
+
+그런 표에 ACCESS EXCLUSIVE 를 잡는 DDL 을 쓸 때는 파일 선두에 락 상한을 건다:
+
+```sql
+SET LOCAL lock_timeout = '3s';
+```
+
+- **`SET LOCAL` 이다.** 맨 `SET` 은 Flyway 가 한 런을 한 커넥션으로 처리하기 때문에 세션에
+  남아, **뒤따르는 모든 마이그레이션이 그 값을 물려받는다**(실측: 후속 파일에서
+  `current_setting('lock_timeout')` = `3s`). 남의 파일이 자기 SQL 에 없는 이유로 죽는다.
+- **실패는 안전하다.** PG 는 DDL 이 트랜잭션이라 타임아웃 실패가 통째로 롤백되고
+  `flyway_schema_history` 에 기록도 안 남는다 — 재시도에 `flyway repair` 가 필요 없다
+  (실측: 충돌 락 보유 중 `flywayMigrate` → `55P03` 로 3.4초 만에 실패, history 무기록,
+  락 해제 후 재실행이 그대로 성공).
+- **획득 대기만 묶는다.** 락을 잡은 뒤의 **보유 시간**은 안 묶는다. 표를 재작성하는 DDL
+  (`ADD COLUMN ... GENERATED ... STORED` 등)이나 인덱스를 짓는 `ADD CONSTRAINT ... UNIQUE`
+  는 보유 시간이 행 수에 비례하므로, 그런 문장은 **파일을 갈라** 다른 표의 락 수명에
+  묶이지 않게 한다(Flyway 는 마이그레이션 하나를 한 트랜잭션으로 감싼다).
+
 ## 물리 ERD 자동 생성 (파생물)
 
 Flyway 마이그레이션이 스키마 SSOT 이므로, 물리 ERD 는 사람이 그리지 않고 **마이그레이션에서 생성**한다.
 `scripts/generate-erd.sh` 가 임시 pg18 클러스터에 두 세트를 적용하고 `scripts/gen-erd.sql`
 (pg_catalog → dbdiagram.io DBML, 외부 도구 없음)로 추출한다. 산출물은 `generated/` 에 커밋된다:
 
-- `generated/physical-erd.dbml` — cloud 세트(`migrations/`)
+- `generated/physical-erd.dbml` — cloud 세트(`migrations-cloud/`)
 - `generated/physical-erd-onprem.dbml` — 온프렘 세트(`migrations-onprem/`)
 
 **자동 갱신 — pre-commit 훅.** 마이그레이션을 바꿔 커밋하면 훅이 ERD 를 재생성해 그 커밋에 포함한다.
@@ -142,9 +168,30 @@ git config core.hooksPath .githooks
 - 훅(`.githooks/pre-commit`)은 **스키마 마이그레이션이 스테이징된 커밋에서만** `generate-erd.sh` 를
   돌려 `generated/*.dbml` 을 갱신·스테이징한다(일반 커밋은 즉시 통과).
 - **의존: PostgreSQL 18**(initdb·pg_ctl·psql). 없으면 훅은 커밋을 막지 않고 경고만 한다 — 이 경우
-  pg18 설치 후 `bash src/libs/schema/scripts/generate-erd.sh` 로 직접 재생성한다.
-- 훅은 **opt-in 이라 강제되지 않는다**(CI 게이트 없음). 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다.
+  아래 docker 한 줄로 직접 재생성한다(로컬에 pg18 을 깔 필요 없다):
+
+  ```bash
+  chmod -R a+w src/libs/schema/generated   # 컨테이너는 postgres uid(999)로 돈다
+  docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
+    bash src/libs/schema/scripts/generate-erd.sh
+  ```
+
+  `chmod` 을 빼면 리눅스에서 `Permission denied` 로 죽는다 — 산출물이 러너/사용자 uid 소유라
+  컨테이너의 postgres uid 가 truncate 하지 못한다. macOS Docker Desktop 은 bind mount 소유권을
+  가상화해 없어도 도니, **macOS 에서 됐다고 리눅스에서 된다고 볼 수 없다**. CI 스텝도 같은 이유로
+  같은 `chmod` 을 먼저 돌린다.
+
+- 훅은 **opt-in 이라 강제되지 않는다** — 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다. 그래서
+  **집행은 CI 가 한다**(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR 에서 ERD 를
+  다시 만들어 커밋본과 대조하고, 어긋나면 빨간불로 드러낸다. 훅은 편의이고 CI 가 방어선이다.
+  ⚠️ 단 이 레포는 branch protection 이 없어 required check 지정이 불가하다 — 빨간불이 머지를
+  **막지는 못한다**(드러내는 데까지다).
+  ⚠️ 집행 범위는 **스크립트가 내는 두 `.dbml` 뿐**이다. `generated/` 의 다른 커밋물(손으로 만든
+  `physical-erd.dbdiagram` 등)은 생성기가 없어 대조 대상이 아니고 계속 낡을 수 있다.
 - 결정성: 클러스터 `--no-locale` + `gen-erd.sql` 의 `ORDER BY COLLATE "C"` + LF 고정
-  (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다.
+  (`.gitattributes`)으로 OS/로케일과 무관하게 바이트 동일하다. ⚠️ **서버 버전은 이 목록에 없다** —
+  CI 는 `postgres:18`(마이너 부동)을 쓰고 훅은 로컬에 깔린 pg18 을 쓴다. pg18 마이너가
+  `gen-erd.sql` 이 읽는 `pg_catalog` 출력을 바꾸면 무관한 PR 에서 빨간불이 날 수 있다.
+  그때는 마이너까지 핀한다(지금은 사례가 없어 핀하지 않는다).
 - `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
   문서다 — 예: `src/apps/analysis-engine/docs/logical-erd.dbml`.

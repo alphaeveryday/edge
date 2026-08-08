@@ -84,25 +84,55 @@ variable "analysis_image" {
 }
 
 variable "analysis_release_bundle_version" {
-  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. null 이면 주입 안 함(앱이 S3 fallback)."
+  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. RDS 의 release_bundle(PUBLISHED) 행과 일치해야 한다. 기본값도 null 도 없는 이유: 미주입이면 영속 전제 결손으로 런이 실패한다(ALPHA-797 이 S3 폴백을 폐기) — 런타임 exit 1 보다 plan 단계에서 막는 게 싸다."
   type        = string
-  default     = null
+  nullable    = false
+
+  # nullable=false 는 누락·명시적 null 만 막는다 — 빈 문자열은 통과해 런타임 exit 1 이
+  # 되므로(코드가 `if bundle:` 로 거른다) description 이 내건 "plan 에서 막는다"가
+  # 그 한 갈래에서만 깨진다. 둘은 서로 대신하지 못한다.
+  validation {
+    condition     = var.analysis_release_bundle_version != ""
+    error_message = "release_bundle(PUBLISHED) 행과 일치하는 번들 버전이 필요하다 — 빈 값은 런타임 exit 1 이다(ALPHA-797)."
+  }
 }
 
-# ALPHA-470 — analyze 페이즈 Map 팬아웃의 유니버스 배열. 발화 무관 전량 병렬 분석한다.
-# ⚠️ SSOT 는 앱 config `sources.toml [krx_etf.source.etf_map]` 키다 — terraform 이 TOML 을
-# 못 읽어(네이티브 파서 없음) 여기 미러한다. 유니버스 변경(드묾) 시 두 곳을 함께 고쳐야 한다.
-variable "analysis_etf_universe" {
-  description = "분석 팬아웃 대상 ETF 티커 배열. sources.toml [krx_etf.source.etf_map] 키의 미러(SSOT=그쪽)."
-  type        = list(string)
-  default = [
-    "069500", "396500", "0167A0", "091160", "395160", "395270", "139260",
-    "091230", "469150", "455850", "474590", "471990", "475300", "0210A0",
-    "0182R0", "471780", "388420", "363580", "494220", "0093A0", "0190G0",
-    "0005G0", "471760", "266370", "486240", "475310", "476260", "261060",
-    "482030", "0176P0", "488210",
-    "300950", "305720",
-  ]
+# 시각창 집계 Athena 오프로드(ALPHA-780). 둘 다 채워야 자격이 붙는다 — 하나만 주면
+# 정책이 반쪽이라 조용히 폴백하므로 함께 비우거나 함께 채운다.
+#
+# 이 버킷은 **이 모듈이 만들지 않는다**(terraform 관리 밖). ARN 을 받기만 하고 소유권을
+# 주장하지 않는다 — `aws_s3_bucket` 리소스를 여기 두면 다음 apply 가 남의 버킷을 집는다.
+variable "analysis_market_data_bucket_arn" {
+  description = "5분봉 Iceberg 표 데이터와 Athena 결과 CSV 가 사는 버킷 ARN. 비우면 Athena 자격을 부여하지 않는다(엔진은 canonical 합집합으로 폴백 — 질의당 376MB 를 컨테이너로 받는다)."
+  type        = string
+  default     = ""
+}
+
+variable "analysis_athena_workgroup" {
+  description = "EDGE_ATHENA_WORKGROUP — 시각창 집계를 보낼 Athena 워크그룹. 결과 위치는 워크그룹이 강제하므로 EDGE_ATHENA_OUTPUT 은 주입하지 않는다(같이 보내면 질의가 시작도 못 한다)."
+  type        = string
+  default     = ""
+}
+
+# ── 설명 소비자의 DuckDB 조인층 (Fargate 실행 조건) ────────────────
+# 이 셋이 비면 컨테이너에서 S3 뷰가 통째로 안 붙거나 OOM 으로 죽는데, 둘 다 **사유 없는
+# 침묵**으로 나타난다(빈 조인 = 0행 = 판정불가). 그래서 코드 기본값에 맡기지 않고 주입한다.
+variable "analysis_duckdb_s3_chain" {
+  description = "DUCKDB_S3_CHAIN — DuckDB CREDENTIAL_CHAIN 순서. Fargate 는 컨테이너 자격증명 엔드포인트(instance)로만 붙으므로 그 항목이 반드시 있어야 한다(sso;config;env 만으로는 S3 뷰 전량 실패)."
+  type        = string
+  default     = "env;instance;config;sso"
+}
+
+variable "analysis_duckdb_memory_limit" {
+  description = "DUCKDB_MEMORY_LIMIT — task_memory 보다 낮아야 DuckDB 가 DUCKDB_TEMP_DIR 로 spill 하며 버틴다. 같거나 크면 컨테이너 한도를 먼저 쳐서 OOMKilled(사유 없는 exit 137)로 끝난다."
+  type        = string
+  default     = "1.5GB"
+}
+
+variable "analysis_duckdb_temp_dir" {
+  description = "DUCKDB_TEMP_DIR — spill 위치. 컨테이너 파일시스템에서 쓰기 가능한 곳은 /tmp(Fargate 임시 스토리지)뿐이다."
+  type        = string
+  default     = "/tmp"
 }
 
 variable "task_cpu" {
@@ -111,8 +141,21 @@ variable "task_cpu" {
 }
 
 variable "task_memory" {
-  type    = number
-  default = 2048
+  description = "수집·정제·ops·1분 상주 task-def 의 Fargate 메모리(MiB)."
+  type        = number
+  default     = 2048
+}
+
+# analyze 만 4096 (ALPHA-671). DuckDB 조인층이 `pit_daily`(101MB) 위에 윈도우 함수와 CTE
+# 전개를 얹는데 피크가 실측되지 않았고 OOMKilled 전력이 있다. OOM 은 exit 137 만 남기고 어느
+# 질의였는지 말하지 않아 원인 추적이 런 재현에 달린다 — 그 침묵을 메모리로 산다.
+# **공유 `task_memory` 를 올리지 않은 이유**: 1분 상주 서비스 2개가 24시간 켜져 있어서
+# 전량 인상은 analyze 한 번 실행값이 아니라 상주 요금이 된다(월 $1 이 아니다).
+# 1024 CPU 의 Fargate 유효 조합(2048~8192, 1GB 단위) 안이다.
+variable "analysis_task_memory" {
+  description = "analyze task-def 전용 Fargate 메모리(MiB). DuckDB 피크가 상한을 정한다."
+  type        = number
+  default     = 4096
 }
 
 variable "cpu_architecture" {
@@ -234,6 +277,58 @@ variable "disclosure_state_machine_timeout_seconds" {
   default     = 2400
 }
 
+# 장중 수급 SFN 스케줄(ALPHA-769). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
+#
+# **평일 5슬롯 — 벤더 갱신 시각 + 5분.** 슬롯 수를 우리가 고르는 게 아니라 소스가 정한다:
+# KIS HHPTJ04160200 은 하루 4~5회만 갱신하고 유형별로 시각이 갈린다
+# (외국인 09:30·11:20·13:20·14:30 / 기관 10:00·11:20·13:20·14:30). 합집합이 5개다 —
+# 4개로 줄이면 09:30 외국인 값이 30분 늦게 들어오고, 더 늘려도 같은 값을 다시 받을 뿐이다.
+#
+# **왜 +5분인가 — 정각 반영 지연이 여전히 미관측이다.** 2026-08-06 dev 실측으로 원문 슬롯 필드
+# `bsop_hour_gb` 의 도메인이 `"1"`~`"5"` **코드**임이 확인됐는데(시각 문자열이 아니다), 그래서
+# 이 필드로는 반영 지연을 잴 수 없다. 아는 것은 "14:30 슬롯이 14:51 이전에 이미 확정돼 있었다"
+# (지연 ≤ 21분)뿐이라 여유를 줄일 근거가 없다. 줄이는 비용은 실재하고(첫 슬롯을 놓치면 그날
+# 09:30 값이 다음 슬롯까지 없다) 유지 비용은 0이다 — 응답이 누적이라 늦게 물어도 앞 슬롯이
+# 함께 온다. 좁히려면 정각 근처 관측이 따로 필요하다.
+#
+# **겹침 없음** — 마지막 갱신이 14:30, 마감이 15:30 이라 14:35 이후엔 장중 갱신이 없다.
+# 확정치는 EOD 레인(15:40)이 별도 데이터셋으로 받는다.
+#
+# ⚠️ 슬롯 = cron 엔트리다 — `ops_ledger.tf` 가 cron 의 HH:MM 을 regex 로 파싱해 슬롯 키를 만든다.
+# `rate()` 는 슬롯 키가 안 나와 **쓸 수 없고**, 슬롯 수는 곧 맵 엔트리 수다(공시 레인과 같은 제약).
+variable "investor_intraday_schedule_expressions" {
+  description = "장중 수급 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 평일 5슬롯(벤더 갱신 +5분)."
+  type        = map(string)
+  default = {
+    "s0935" = "cron(35 9 ? * MON-FRI *)"
+    "s1005" = "cron(5 10 ? * MON-FRI *)"
+    "s1125" = "cron(25 11 ? * MON-FRI *)"
+    "s1325" = "cron(25 13 ? * MON-FRI *)"
+    "s1435" = "cron(35 14 ? * MON-FRI *)"
+  }
+}
+
+variable "investor_intraday_schedule_state" {
+  # 공시·뉴스와 달리 기본 DISABLED 로 세우지 않는다 — 그 둘은 시장 SFN 이 돌던 스텝의 소유 레인
+  # 이동이라 "두 레인이 같은 스텝을 동시에 소유하는" 겹침 창을 막아야 했지만, 이 3스텝은 시장
+  # SFN 에 들어간 적이 없는 신설이라 그 창이 존재하지 않는다(investor_intraday_pipeline.tf 도입부).
+  description = "장중 수급 SFN 스케줄 상태. 신설이라 겹침 창이 없어 기본 ENABLED."
+  type        = string
+  default     = "ENABLED"
+}
+
+variable "investor_intraday_state_machine_timeout_seconds" {
+  # **최소 슬롯 간격(09:35→10:05 = 1800s)보다 짧아야** 한 실행이 다음 실행과 겹치지 않는다.
+  # 겹치면 두 실행이 같은 canonical 파티션을 동시에 병합한다.
+  # 값 근거는 실측이다(2026-08-06 dev): 수집 210s + 정제·적재 각 ~90s/~60s = 체인 ≈ 6분.
+  # 여기에 ECS 3연속 기동(기동 실측이 122초까지 오른 적 있다, ALPHA-688)을 더해도 ≈ 12분이다.
+  # 1500s = 정상의 2배 여유이면서 간격 아래. 초과분은 fail-loud 타임아웃이다(무한 대기보다 낫고,
+  # 타임아웃 알람이 잡는다).
+  description = "장중 수급 SFN 실행 타임아웃. 최소 슬롯 간격(30분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
+  type        = number
+  default     = 1500
+}
+
 # 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
 variable "reconcile_schedule_state" {
   description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
@@ -349,6 +444,7 @@ variable "us_fmp_enabled" {
   type        = bool
   default     = false
 }
+
 
 variable "minute_universe_uri" {
   description = "1분 파이프라인 universe 정본 객체 URI(ALPHA-711). 비우면 레이크 버킷의 config/minute/universe.json — planner·worker·consumer 가 같은 객체를 봐야 한다"

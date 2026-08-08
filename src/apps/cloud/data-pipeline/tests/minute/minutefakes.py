@@ -260,6 +260,20 @@ class _Cursor:
                 "news_document upsert 가 리드를 갱신하지 않는다"
             assert "news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text" in s, \
                 "같은 리드에도 UPDATE 하면 멱등 집계가 거짓이 된다"
+            # ALPHA-696 승자 축. 구조로 못박는 이유: 아래 세 가지는 전부 **결과가 같아
+            # 보이는 회귀**라 값 단언만으로는 안 걸린다.
+            lead_where = s.split("ON CONFLICT", 1)[1].split("WHERE", 1)[1]
+            assert "lead_observed_at" not in lead_where, \
+                "리드 쓰기가 시각으로 막혀 있다 — 1분 경로는 가드를 걸지 않는다(ALPHA-696 ①)"
+            assert "lead_observed_at = EXCLUDED.lead_observed_at" not in s, \
+                ("충돌 갈래가 EXCLUDED 를 물려받으면 리드를 지우는 정정에서 시각이 NULL 로"
+                 " 지워져 배치가 옛 리드를 복원한다(ALPHA-696 ②)")
+            # ⚠️ 앞길 트립와이어: 마이그레이션이 후속으로 권한 축 승급
+            # (`SET lead_observed_at = GREATEST(news_document.lead_observed_at, %s)`)은
+            # 이 리터럴을 안 갖는다. 그 PR 이 여기를 같이 고쳐야 한다 — 지금 형태를 못박는
+            # 것이 의도다(가드가 조용히 사라지는 것보다 낫다).
+            assert "lead_observed_at = %s" in s, \
+                "충돌 갈래가 관측 시각 자체를 안 쓴다(ALPHA-696 ②)"
             self._upsert_news_document(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
@@ -517,6 +531,23 @@ class _Cursor:
             for clause in ("claimed_by = %s", "status = 'NEW'", "claim_expires_at = %s"):
                 assert clause in s, f"record_publish_failure SQL 에 {clause} 가 없다"
             self._publish_failure(params)
+        elif s.startswith("SELECT session_date FROM minute_ingestion_session"):
+            # 5분 파생 구멍 판정(ALPHA-839). phase 집합과 하한 절이 SQL 에서 빠지면 fake
+            # 가 Python 으로 재현해 버려 못 잡는다 — 문면을 못 박는다(Rule 9). 하한이
+            # 없으면 이 writer 소관 밖의 옛 거래일이 영영 결손 목록에 남는다.
+            # ⚠️ `phase = 'FINALIZED'` 단일값이면 안 된다 — dev 원장에 FINALIZED 가
+            # 0건이라(전 세션 DRAINED 정지) 판정이 영영 빈 목록을 낸다.
+            # ⚠️ 상한(`< %s`)이 SQL 에서 빠지면 오늘이 후보에 들어와 진행 중인 DRAINING 을
+            # 고착으로 오인한다 — 매일 거짓 양성으로 시작한다.
+            assert "phase = ANY(%s)" in s
+            assert "session_date >= %s" in s
+            assert "session_date < %s" in s
+            self._rows = sorted(
+                (row["session_date"],) for row in self.db.sessions.values()
+                if (row["dataset"], row["source_group"]) == (params[0], params[1])
+                and row["phase"] in params[2]
+                and params[3] <= row["session_date"] < params[4]
+            )
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
 
@@ -548,17 +579,24 @@ class _Cursor:
         self.rowcount = 1
 
     def _upsert_news_document(self, p):
-        lead_text, source_code, article_id = p
+        lead_text, insert_stamp, source_code, article_id, observed_at = p
         document = self.db.documents.get((source_code, article_id))
         if document is None:
             self.rowcount = 0   # INSERT … SELECT 가 0행 — 부모가 없으면 아무것도 안 쓴다
             return
         key = document["document_id"]
         existing = self.db.news_documents.get(key)
-        if existing is not None and existing["lead_text"] == lead_text:
-            self.rowcount = 0
+        if existing is None:
+            # INSERT 갈래 — 시각은 **값으로** 갈린다(리드 없는 새 행엔 안 찍는다).
+            self.db.news_documents[key] = {"document_id": key, "lead_text": lead_text,
+                                           "lead_observed_at": insert_stamp}
+            self.rowcount = 1
             return
-        self.db.news_documents[key] = {"document_id": key, "lead_text": lead_text}
+        if existing["lead_text"] == lead_text:
+            self.rowcount = 0   # WHERE 가 막는다 — 시각도 안 움직인다
+            return
+        # 충돌 갱신 갈래 — 리드가 움직였으므로 시각은 **관측 시각 자체**로 찍는다.
+        existing.update(lead_text=lead_text, lead_observed_at=observed_at)
         self.rowcount = 1
 
     def _insert_session(self, p):

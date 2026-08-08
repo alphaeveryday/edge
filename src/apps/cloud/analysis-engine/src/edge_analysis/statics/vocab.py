@@ -1,0 +1,308 @@
+"""닫힌 어휘와 가설 튜플 — 구체화 사상 φ 의 정의역.
+
+어휘가 열리면 φ 가 함수가 아니게 되고(같은 가설이 여러 실행으로 갈라진다),
+그 분기 하나하나가 숨은 다중비교다. 그래서 여기 없는 값은 **생성 시점에 죽는다** —
+검정에 닿기 전에. 확장은 사람이 하는 스키마 변경이지 에이전트 재량이 아니다.
+
+설계 근거: docs/analysis-engine/causal-attribution-design.md §5–§7.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+# ── 어휘 ────────────────────────────────────────────────────────────────
+# 채널: 충격이 가치에 닿는 경로. 산업을 가로지르므로(환 노출 ∋ 조선·화학·반도체)
+# 자명하지 않은 연결의 원천이고, 노출이 연속이라 용량-반응 반증이 성립한다.
+CHANNELS = frozenset({
+    "Q수량", "P판가", "C원가", "FX환", "R금리신용", "S주식수", "π확률", "K위험"})
+
+# 계열충격 방아쇠·조건·노출이 딛는 계열의 족.
+#   주주·주식수·공매도 는 PIT 스냅샷(pit_snapshot, 248 거래일 · 전종목)이 열었다.
+#   주식수는 S주식수 채널의 **관측변수** - 그 전까지 이 채널은 라벨로만 존재했다.
+#   레버리지·수익성·성장 은 재무제표(financial_statements, FY2000~ · 1,941종목)가
+#   열었다. 회계연도 값이라 **가장 느린 상태** - 방아쇠가 아니라 조건 자리다(SVB).
+SERIES_FAMILIES = frozenset({
+    "가격잔차", "수급", "거래량", "거시", "지수잔차", "배수", "재무파생", "운영", "신용",
+    "주주", "주식수", "공매도", "레버리지", "수익성", "성장", "섹터", "국면",
+    # **금리**를 거시에서 떼어낸다. 하나의 (거시,민감도) 슬롯에 환율과 금리를 같이
+    # 담을 수 없다 - 계열족×변환이 열 하나를 정하는 구조이므로 족이 갈려야 한다.
+    # 그리고 둘은 뜻이 다르다: 환율은 이익 경로(수출), 금리는 할인율 경로(밸류에이션).
+    # 금융 설명 기준이 요구하는 '가격 밖 정박' 이 정확히 이 자리다 - 지수는 가격이라
+    # "시장이 내려서 내렸다" 를 못 넘지만, 금리는 외생 상태다.
+    "금리"})
+
+# 같은 계열도 변환에 따라 역할이 다르다: 수급 누적=조건, 수급 당일 변화=방아쇠.
+#   민감도: 공통 계열(거시·지수)은 하루에 값이 하나라 횡단면 분산이 0 이다 -
+#   그 자체로는 어떤 종목의 움직임도 설명하지 못한다. 종목마다 다른 것은
+#   **그 계열에 대한 민감도**(롤링 회귀 기울기)이고, 그것이 채널이 뜻하는 바다
+#   (FX환 노출 = 환율 민감도). 공통 충격은 노출 이질성을 통해서만 설명이 된다.
+TRANSFORMS = frozenset({"수준", "변화", "누적", "변동성", "갭", "민감도"})
+
+MODERATOR_STATES = frozenset({"포지셔닝", "기대수준", "밸류", "국면", "서사단계"})
+
+# DML 역할 태그. 매개를 통제 목록에 넣으면 효과가 흐르는 길을 막는다(나쁜 통제).
+FEATURE_ROLES = frozenset({"처치강도", "조절자", "교란", "매개"})
+
+# 검정기가 실제로 읽는 결과만 받는다. 전이·되돌림은 종속변수와 귀무가 배선될 때
+# 함께 열어야 한다 - 이름만 받아 수익률을 대신 검정하면 다른 주장을 검정한 셈이다.
+OUTCOME_KINDS = frozenset({"수익률"})
+
+# 단위(층) - ``paneltest.LAYER_Y`` 와 같은 세 값이어야 한다.
+LAYERS = frozenset({"시장", "섹터", "고유"})
+
+TRIGGER_KINDS = frozenset({"점", "계열"})
+EXPOSURE_SOURCE_KINDS = frozenset({"속성", "관계"})
+
+# 조건 술어의 종류. 처치변수 = 방아쇠(주 술어) ∧ 조건들 - 코드에서 이미 연언이다
+# (edge_test 가 방아쇠로 행을 고르고 조건 mask 로 한 번 더 거른다). 종류를 나눈 것은
+# **무엇을 재야 하는가**가 다르기 때문이다:
+#   상태 → 계열족 시계열의 백분위 (느린 원인, 기존 취약성)
+#   사건 → 최근 N 거래일 내 그 사건타입 발생 여부 (사건이 만든 느린 상태)
+#   관계 → 타입 있는 1홉 위의 집중도 백분위 (구조가 만든 느린 상태)
+CONDITION_KINDS = frozenset({"상태", "사건", "관계"})
+
+# 관계 노출의 닫힌 어휘 (19R). 객체 타입 사이의 **타입 있는 1홉**이고, 각자
+# `v_link.link_type` 또는 속성 동일성에 실측으로 대응한다. 자유 문자열을 받던
+# 자리다 - 받아 봐야 검정기가 SAME_INDUSTRY 아니면 전부 거부했으므로, 어휘가
+# 열려 있다는 인상만 주고 실제로는 침묵하는 거부였다.
+#   실측 쌍(2026-07-30 기준): 공급망 102 · 제휴 244 · 공동발행 332 · 지분 24
+RELATIONS = frozenset({
+    "SAME_INDUSTRY",   # 속성 동일성 - 관계가 아니라 대리(교란에 약하다)
+    "SUPPLY_CHAIN",    # CUSTOMER ↔ SUPPLIER
+    "PARTNERSHIP",     # PARTNER ↔ PARTNER_2
+    "OWNERSHIP",       # INVESTOR ↔ TARGET_COMPANY
+    "CO_ISSUER",       # 같은 사건에 공동 발행 - 가장 약한 결합
+})
+COMPARATORS = frozenset({">=", "<="})
+
+# ── 전역 상수 — 가설별 지정 금지. 바꾸면 전 실험 재실행. ─────────────────
+W_MINUTES = 15          # 사건 창 길이
+EXPOSURE_CUT = 0.80     # 노출 상위 절단 백분위
+MIN_N = 30              # 이보다 얇으면 판정불가
+ALPHA = 0.05
+FOLDS = 5               # 폴드 A(게이트) / B(계수) 교차적합
+FACTOR_MODEL = "market_only"  # 정적 제거는 시장 β 만 — 부호 갈리는 요인은 채널로 남긴다
+
+
+class VocabError(ValueError):
+    """어휘 밖 값. 가설 생성 시점에 죽어야 검정이 오염되지 않는다."""
+
+
+def _need(value: str, vocab: frozenset[str], slot: str) -> str:
+    if value not in vocab:
+        raise VocabError(f"{slot}={value!r} 는 닫힌 어휘 밖이다. 허용: {sorted(vocab)}")
+    return value
+
+
+# ── 튜플 부품 ───────────────────────────────────────────────────────────
+@dataclass(frozen=True, slots=True)
+class Condition:
+    """처치의 **조건 술어** — 왜 이 회사·얼마나. 수준은 단독 원인이 될 수 없다
+    ("어제도 나빴는데 어제는 안 빠졌다") — 방아쇠와 결합해서만 쓴다(INUS).
+
+    처치변수 = 방아쇠(주 술어) ∧ 조건들. 방아쇠는 완화 불가(없으면 처치 자체가
+    없다)이고 조건은 완화 가능하다(§14 조절자 모드 - 충족 클래스가 얇으면 엣지
+    존재는 전체 패널로 검정하고 조건은 교호 대비로 보고한다).
+
+    종류가 셋인 이유는 **재는 방법**이 다르기 때문이다. 셋 다 "느린 상태"라는
+    점은 같다 - 빠른 것은 방아쇠 슬롯으로 간다.
+      상태: ident=계열족   → 그 계열 시계열의 백분위 (기존 취약성)
+      사건: ident=사건타입 → 최근 lookback 거래일 내 발생 여부 (0/1)
+      관계: ident=관계     → 타입 있는 1홉 위 집중도의 백분위
+    """
+    ident: str              # 상태 → 계열족 · 사건 → 사건타입 id · 관계 → 관계
+    transform: str = "수준"  # 상태·관계
+    comparator: str = ">="   # 상태·관계
+    percentile: float = 0.5  # 상태·관계 임계 백분위 (0,1)
+    kind: str = "상태"
+    lookback: int = 60      # 사건: 최근 N 거래일 (0 이하 금지)
+
+    def __post_init__(self) -> None:
+        _need(self.kind, CONDITION_KINDS, "조건.종류")
+        if self.kind == "상태":
+            _need(self.ident, SERIES_FAMILIES, "조건.계열족")
+            _need(self.transform, TRANSFORMS, "조건.변환")
+        elif self.kind == "관계":
+            _need(self.ident, RELATIONS, "조건.관계")
+        elif not self.ident.strip():
+            raise VocabError("사건 조건은 사건타입 id 가 필요하다")
+        if self.kind in ("상태", "관계"):
+            _need(self.comparator, COMPARATORS, "조건.비교")
+            if not 0.0 < self.percentile < 1.0:
+                raise VocabError(f"임계 백분위 {self.percentile} 는 (0,1) 밖이다")
+        elif self.lookback < 1:
+            raise VocabError(f"사건 조건의 회고 창은 1 이상이다: {self.lookback}")
+
+    @property
+    def key(self) -> str:
+        """패널 피처 키 · 서술용 한 조각. 종류마다 읽히는 모양이 다르다."""
+        if self.kind == "사건":
+            return f"사건:{self.ident}/최근{self.lookback}일"
+        return f"{self.ident}/{self.transform}"
+
+
+# ── 처치 구체화 어휘 (원장 실측에서 닫는다) ──────────────────────────────
+# 사건타입 53 만으로는 처치가 거칠다. 이 넷은 **이미 원장에 있었고 튜플만 안 썼다**.
+# 어휘를 늘리는 것이 아니라 **이미 있는 것을 노출**하는 것이라 사람의 스키마 변경이
+# 아니다 - 값 목록이 원장의 DISTINCT 다 (2026-08-03 실측).
+PREDICATES = frozenset({
+    "ACQUIRE", "ADOPT", "APPOINT", "APPROVE", "ASSIGN", "BUY", "CARVE_OUT", "CERTIFY",
+    "CHARGE", "CLEAR", "CONSOLIDATE", "CUT", "DECLARE", "DISMISS", "DISSOLVE", "EASE",
+    "ENFORCE", "ENTER", "ENTER_INTO", "EXCLUDE", "EXIT", "EXPAND", "FALL", "FILE",
+    "FINE", "FORM", "HALT", "IMPOSE", "INCLUDE", "INCREASE", "INITIATE", "INJECT",
+    "INTERVENE", "INTRODUCE", "INVESTIGATE", "ISSUE", "LAUNCH", "LIFT", "LIST",
+    "LOWER", "MAINTAIN", "MERGE", "NOMINATE", "OCCUR", "OVERTURN", "PRICE",
+    "PURCHASE", "RAISE", "REACH", "RECORD", "REDUCE", "REJECT", "RELEASE", "REMOVE",
+    "REPEAL", "REPLACE", "REPORT", "REPURCHASE", "RESIGN", "RESTRUCTURE", "RESUME",
+    "REVISE", "RISE", "RULE", "SELL", "SET", "SETTLE", "SIGN", "SPIN_OFF", "SPLIT",
+    "SUSPEND", "TAKE_OVER", "UNVEIL", "UPHOLD", "WITHDRAW"})
+
+# 단계가 효과를 가른다: MOU_LOI 1088 vs DEFINITIVE_SIGNED 2160 은 같은 처치가 아니다.
+STAGES = frozenset({
+    "ANNOUNCED", "APPOINTED", "CANCELLED", "CHARGED", "CLOSED", "COMPLETED",
+    "CONCEPT", "CUSTOMER_QUAL", "DEFINITIVE_SIGNED", "DISCONTINUED", "DISMISSED",
+    "EFFECTIVE", "EXECUTING", "EXITED", "FILED", "INVESTIGATED", "LIFTED",
+    "MASS_PRODUCTION", "MOU_LOI", "NOMINATED", "OCCURRED", "ONGOING",
+    "PREFERRED_BIDDER", "PRICED", "PROPOSED", "PROTOTYPE_DEMO", "REJECTED",
+    "RESOLVED", "RULED", "RUMORED", "SAMPLING", "SHIPPING", "WITHDRAWN"})
+
+# 인수 역할 70종. 값 역할(CONSENSUS_VALUE·NEW_VALUE·GUIDANCE_RANGE 등)도 있지만
+# 추출 커버리지가 얇다(CONSENSUS_VALUE 3건) - `mention_text` 에 원문이 남아 있어
+# 나중에 파싱할 수 있다. 지금은 **주체 역할**(ISSUER·PARTNER·SUPPLIER…)이 쓸 만하다.
+ARG_ROLES = frozenset({
+    "ACQUIRER", "AMOUNT", "ANALYST_FIRM", "ANNOUNCED_DATE", "AUTHORITY",
+    "CAPACITY_SHARE", "CENTRAL_BANK", "CHANGE_VALUE", "COMMODITY", "CONSENSUS_VALUE",
+    "CONTRACT_OBJECT", "COURT", "CUSTOMER", "DEBT_INSTRUMENT", "DEFENDANT",
+    "DRIVER_HINT", "DURATION", "EFFECTIVE_DATE", "EXCHANGE", "FACILITY", "GEOGRAPHY",
+    "GUIDANCE_RANGE", "HAZARD", "INDEX", "INDICATOR", "INDUSTRY", "INTEREST_RATE",
+    "INVESTOR", "ISSUER", "LEGAL_ISSUE", "LOCATION", "MATURITY_DATE", "MEMBER",
+    "MERGING_ENTITY", "METRIC", "NEW_VALUE", "OLD_VALUE", "OPERATOR", "OUTLOOK",
+    "PARENT", "PARTNER", "PARTNER_2", "PATHOGEN", "PAYMENT_DATE", "PENALTY_VALUE",
+    "PERIOD", "PERSON", "PLAINTIFF", "POSITION", "PRICE", "PRODUCT",
+    "PRODUCT_FAMILY", "PRODUCT_OR_SCOPE", "PROJECT", "QUANTITY", "RATED_ENTITY",
+    "RATING_AGENCY", "RATIONALE", "REASON", "REPORTING_PERIOD", "RULE", "SELLER",
+    "SERVICE", "SPUNOFF_UNIT", "STANDARD", "SUPPLIER", "TARGET", "TARGET_COMPANY",
+    "TARGET_PRICE", "UNDERWRITER"})
+
+# **재보도는 위약 처치다**: 같은 사태의 재방송에는 새 정보가 없으므로 ATT≈0 이어야
+# 한다. 유의하면 설계 실패 - 층 구조에서 공짜로 얻는 위약과 같은 종류의 반증이다.
+NOVELTY = frozenset({
+    "CORRECTION", "DUPLICATE_REBROADCAST", "FIRST_IN_THREAD",
+    "FOLLOW_UP_STAGE", "UNKNOWN"})
+PLACEBO_NOVELTY = "DUPLICATE_REBROADCAST"
+
+
+@dataclass(frozen=True, slots=True)
+class Trigger:
+    """빠른 원인 — 왜 지금. 점(사건타입) 또는 계열충격(계열족 × 전역 임계).
+    시간 스케일이 슬롯을 정한다: 수개월 걸친 금리 급등은 방아쇠가 아니라
+    조건 생성기다(SVB).
+
+    **처치 구체화 슬롯 넷** (전부 선택 · 비우면 그 축은 전체):
+      사건타입만으로는 처치가 너무 거칠다. `CONTRACT.SIGNING` 하나에 MOU 와 확정
+      계약이 섞이고, `EARNINGS.RESULT_RELEASE` 하나에 신규 보도와 재보도가 섞인다.
+      그러면 ATT 는 서로 다른 두 처치의 평균이라 0 으로 수렴한다 - 실측 증상:
+      6+6 가설 전멸, 성립-적용 0개.
+
+      이 어휘는 **이미 원장에 있었고 튜플만 안 썼다** (사용자 지적):
+        predicate 75종 (LAUNCH 4033 · RELEASE 3034 · ENTER_INTO 1438 …)
+        stage     33종 (MOU_LOI 1088 vs DEFINITIVE_SIGNED 2160 - 단계가 효과를 가른다)
+        role      70종 (ISSUER 18578 · PARTNER 2515 - 내가 주체인가 상대인가)
+        novelty    5종 (FIRST_IN_THREAD 1289 vs DUPLICATE_REBROADCAST 7737)
+
+      **재보도는 위약 처치다**: 같은 사태의 재방송에는 새 정보가 없으므로 ATT≈0
+      이어야 한다. 유의하면 설계 실패다 - 공짜로 얻는 반증이다.
+    """
+    kind: str               # 점 | 계열
+    ident: str              # 점 → 사건타입 id · 계열 → 계열족
+    predicate: str = ""     # 술어 (source_event.predicate_code)
+    stage: str = ""         # 생애단계 (source_event.lifecycle_stage)
+    role: str = ""          # 이 종목의 역할 (event_argument.role_code)
+    novelty: str = ""       # 신규성 (event_thread_link.novelty_status)
+
+    def __post_init__(self) -> None:
+        _need(self.kind, TRIGGER_KINDS, "방아쇠.종류")
+        if self.kind == "계열":
+            _need(self.ident, SERIES_FAMILIES, "방아쇠.계열족")
+            if any((self.predicate, self.stage, self.role, self.novelty)):
+                raise VocabError("계열 방아쇠에는 사건 구체화 슬롯이 없다")
+        elif not self.ident.strip():
+            raise VocabError("점 방아쇠는 사건타입 id 가 필요하다")
+        for v, allowed, nm in ((self.predicate, PREDICATES, "술어"),
+                               (self.stage, STAGES, "생애단계"),
+                               (self.role, ARG_ROLES, "역할"),
+                               (self.novelty, NOVELTY, "신규성")):
+            if v:
+                _need(v, allowed, f"방아쇠.{nm}")
+
+
+@dataclass(frozen=True, slots=True)
+class ExposureSource:
+    """대상군·위약군을 유도하는 노출의 출처. 검정자가 비교군을 고르지 못하게
+    가설이 여기 못 박는다. 관계 노출은 교란에 약하므로(사외이사 겹침 ≈ 같은
+    지역·규모의 대리) 위약 = 같은 속성 ∧ 관계 없음 이 강제된다."""
+    kind: str               # 속성 | 관계
+    ident: str              # 속성 → 계열족 · 관계 → 온톨로지 경로 (예: "SUPPLIES_TO")
+    transform: str = "수준"  # 속성일 때만 의미
+    hops: int = 1           # 관계일 때만 의미
+
+    def __post_init__(self) -> None:
+        _need(self.kind, EXPOSURE_SOURCE_KINDS, "노출원.종류")
+        if self.kind == "속성":
+            _need(self.ident, SERIES_FAMILIES, "노출원.계열족")
+            _need(self.transform, TRANSFORMS, "노출원.변환")
+        elif self.ident not in RELATIONS:
+            raise VocabError(f"관계 노출원은 닫힌 관계 어휘여야 한다: {sorted(RELATIONS)}")
+        if self.hops < 1:
+            raise VocabError("홉수는 1 이상이다")
+
+
+@dataclass(frozen=True, slots=True)
+class HypothesisTuple:
+    """가설 하나 = 엣지 하나. 자유 텍스트 없음 — 산문은 검정할 수 없다.
+
+    가설 에이전트의 계약: 슬롯 채우기만. id 생성·수치·새 어휘 금지.
+    검사 실패는 폐기+재시도이지 자동 보정이 아니다(보정이 곧 대필이다).
+    동시 다중 원인은 튜플 여러 개 — 몫 배분은 시간 분해 트리가 한다.
+    """
+    conditions: tuple[Condition, ...]
+    trigger: Trigger
+    channel: str
+    exposure: ExposureSource
+    # from_role·to_role 은 제거했다 (18R): 닫힌 어휘를 자칭하면서 검증 없는 자유
+    # 텍스트 슬롯 2개를 열어뒀고, 라이브 트레이스에서 에이전트가 계열족 이름을
+    # ("운영"→"운영") 채워 넣는 게 잡혔다. 어디서도 쓰이지 않았다. 관계 노출이
+    # 몫 배정 가능해지면(창 정렬, 백필 #5) 온톨로지 역할 어휘로 닫아서 되살린다.
+    outcome: str            # 현재 수익률만 지원
+    # **단위(층)** — 이 뉴스가 어느 층을 움직였다는 주장인가. 시장 · 섹터 · 고유.
+    #
+    # 왜 가설이 정하는가: 층마다 종속변수가 다르다(시장 원수익 · 섹터 시장차감 ·
+    # 고유 이중차감). "반도체 업황 뉴스가 섹터를 움직였다" 와 "그 종목만 움직였다"
+    # 는 **다른 주장**이고 다른 y 로 검정된다. 층을 코드가 고정하면(예전 `layer=
+    # "고유"` 기본값) 모든 가설이 '이 종목만' 을 주장하게 되어, 섹터 뉴스는 영원히
+    # 고유층에서 기각된다 - 어휘가 그 주장을 못 부르는 것이 원인이었다.
+    #
+    # 남용은 `LAYER_EXPOSURES`(paneltest)가 막는다: 층마다 그 층을 설명할 자격이
+    # 있는 노출만 허용한다. '종목 거래량이 시장 전체 수익을 설명한다' 는 여기서 죽는다.
+    layer: str = "고유"
+    # sign 은 제거했다 (21R): 우리가 찾는 것은 **유효한 CATE** 이고 방향은 그 추정량의
+    # 산물이다(상위−하위). 모델이 방향을 미리 선언하게 하면 (a) 게이트는 이미 양측이라
+    # 아무 일도 하지 않고(17R), (b) 산문이 '방향 반대' 를 불성립으로 읽을 여지만 남고,
+    # (c) 오늘 하루를 본 뒤 고르는 방향은 사전등록이 아니라 방향 채굴이다.
+    reduction_note: str = ""  # 환원 근거 (토큰→타입). 자유 텍스트가 아니라 감사 메모.
+    intent: str = ""          # **이 튜플로 검정하려는 인과 주장** 한 문장 - 간선에 실려
+                              # 검정 에이전트에게 전달된다. 무엇이 사실이면 성립인가.
+
+    def __post_init__(self) -> None:
+        _need(self.channel, CHANNELS, "채널")
+        _need(self.outcome, OUTCOME_KINDS, "결과종류")
+        _need(self.layer, LAYERS, "단위")
+
+
+__all__ = [
+    "ALPHA", "CHANNELS", "COMPARATORS", "CONDITION_KINDS", "Condition",
+    "EXPOSURE_CUT", "EXPOSURE_SOURCE_KINDS", "ExposureSource",
+    "FACTOR_MODEL", "FEATURE_ROLES", "FOLDS", "HypothesisTuple", "LAYERS",
+    "MIN_N", "MODERATOR_STATES", "OUTCOME_KINDS", "RELATIONS", "SERIES_FAMILIES",
+    "PREDICATES", "STAGES", "ARG_ROLES", "NOVELTY", "PLACEBO_NOVELTY",
+    "TRANSFORMS", "TRIGGER_KINDS", "Trigger", "VocabError", "W_MINUTES"]

@@ -77,6 +77,7 @@
 
 - `generated/`는 **손으로 고치지 않는다.** 항상 `schema`(마이그레이션/정의)로부터 생성한다.
 - 재생성은 스키마 변경과 **동일 PR**에 포함한다 — 정의와 모델이 어긋난 채 머지되면 안 된다.
+  집행은 pre-commit 훅(opt-in)이 아니라 **CI**다(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR에서 두 DBML을 재생성해 커밋본과 대조하고 어긋나면 빨간불을 낸다. 단 이 레포는 branch protection이 없어 required check 지정이 불가하므로 **드러내는 데까지**다 — 머지를 막지는 못한다.
 - Flyway SQL이 계약 SSOT이고, DBML은 물리 구조를 검토하기 위한 파생물이다.
 
 ## 5. 현행 CD (지속적 배포)

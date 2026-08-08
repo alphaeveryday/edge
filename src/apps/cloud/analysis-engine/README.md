@@ -1,9 +1,11 @@
 # analysis-engine
 
-ETF **당일 설명 생성** 파이프라인 (Python, edge-cloud). 대상 ETF 는 `ALPHAMALE_ETF_TICKER`
-(기본 `091160` KODEX 반도체)로 받고, 표시명·구성종목명은 전부 그 ETF 의 canonical holdings·
-마스터에서 파생한다 — KODEX 반도체 하드코딩은 없다(ALPHA-467). run() 은 한 번에 ETF 한 종을 돈다.
-통합 파이프라인 SFN의 analyze 페이즈로 실행되며, 트리거가 없으면 오늘(Asia/Seoul) 기준으로 실행된다.
+ETF **장중 설명 생성** 파이프라인 (Python, edge-cloud). **분봉 트리거 큐를 소비하는 상주
+서비스**로 돌며, 트리거 한 건이 곧 한 번의 실행이다 — 대상 ETF·거래일은 그 트리거 행이
+정본이다. 트리거 없이 시작할 수는 없다(ALPHA-806: 일 단위 실행은 확정 일봉을 기다려야 해서
+장중에 층을 못 세웠고 같은 대상에 다른 답을 냈다). 표시명·구성종목명은 전부 그 ETF 의
+canonical holdings·마스터에서 파생한다 — KODEX 반도체 하드코딩은 없다(ALPHA-467).
+run() 은 한 번에 ETF 한 종을 돈다.
 
 > ALPHA-411·412(완전 분리, ADR-0028) 이후 이 앱은 **feature 산출물의 소비자**다: L0 게이트는
 > `load-price-triggers`가 쓴 `price_movement_trigger`를 소비하고, 이벤트는 `assemble-events`가
@@ -21,8 +23,10 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
   → 분석 에이전트(DeepSeek) → explanation_result (DRAFT)
 ```
 
-- `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 임의 값을 만들지 않고 결과를 S3에 쓰고 로그로 알린다.
-- **매 런(평온 종료 포함) 런 아카이브 1건을 S3에 남긴다**(ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다).
+- `explanation_result` FK 전제(etf_profile·explanation_route·release_bundle)가 없으면 **LLM 앞에서 런을 세운다**(`PipelineError`, ALPHA-797). 임의 FK 값도, S3 폴백도 만들지 않는다 — 전제 결손은 설정 누락이라 조용히 우회하면 그 대상의 설명이 영영 없다.
+- **매 런 커버리지 1줄을 로그에 남긴다**(ALPHA-792) — `statics.coverage` 에 `exists`·`unbound` 가 실린다: 5분봉을 Glue Iceberg 로 읽었는지 canonical 합집합으로 폴백했는지(정본은 **그 거래일을 쓸 만큼 담을 때만** 정본이다 — 상류 적재가 멈추면 조용히 과거를 보게 되므로, ALPHA-793. '쓸 만큼' 은 착지 종목 수 ≥ 100 **그리고** 시장 프록시(069500)가 있음이다 — 행 하나만 보던 판정은 13종만 착지한 날을 통과시켰고, 그 13종에도 시장 지수는 있었으므로 둘 중 하나로는 못 거른다, ALPHA-833. 폭만 재고 **세션 깊이는 안 잰다** — 장중에 끊긴 날은 이 판정 밖이다), 시각창 집계를 Athena 로 보냈는지 DuckDB 로 돌았는지(폴백 사유까지), 층 분해가 왜 `None` 인지, 분해는 됐는데 **시장 층이 왜 빠졌는지**(`exists["market_layer"]` — 계열 부재·당일 없음·β 창 결손·후보 탈락을 갈라 적는다. 대상이 시장 프록시 자신이면 부재가 아니라 정상이라 안 적는다, ALPHA-833). 이 값들은 원래 `CausalLake` 안에만 있어 운영에서 볼 수 없었다. 자격증명은 가린다(DSN 은 `_rdb` 가 원천에서 지우고 로그 쪽이 한 겹 더 받친다).
+  - ⚠️ **커버리지가 설명하지 못하는 `None` 이 하나 있다**(ALPHA-785) — 분해는 됐는데 라우팅(`route_etf`)이 터져 그 분해를 **폐기**한 경우다. 재료 부재와 구분하려면 `statics.layers.failed` 의 `had_rollup`·`discarded_layers` 를 보고, 로그 보존 기간이 지난 뒤에는 원장의 `stage_results.routing_failed` 를 본다(그 런은 확신도도 `LOW` 로 내려간다).
+- **완주한 런마다 런 아카이브 1건을 S3에 남긴다**(평온 종료 포함, ALPHA-415) — `{result prefix}/runs/etf=…/trade_date=…/{request_id}.json`. 분해 요약·소비 트리거·route·이벤트·LLM 원문(verdict/key_evidence/unexplained — explanation_result 매핑에서 손실되는 필드)·영속 결과가 담긴다. 기록 실패는 런을 죽이지 않는다(관측은 본업이 아니다). 반대로 **런이 raise 로 끊기면 아카이브도 없다** — 전제 결손·holdings 빈·수익률 미착지가 그 경우다.
 
 ## 구조
 
@@ -31,7 +35,7 @@ price_movement_trigger 소비 (행 없음 = 평온 → 종료)
 
 ```
 src/edge_analysis/
-  __main__.py · cli.py · config.py · observability.py · pipeline.py
+  __main__.py · cli.py · config.py · observability.py · pipeline.py · window_batch.py
   domain/     models.py · decomposition.py · packet.py       # 순수, stdlib top-level import
   adapters/   lake · eventstore · llm · archive · readonly · trace · universe · price_daily
               causal_data   # 인과 조회 표면(코호트·정렬열·비중). PIT 를 코드가 바인딩한다
@@ -41,6 +45,10 @@ src/edge_analysis/
               domain_docs   # 「사업의 내용」 RAG 조회 (버킷 없으면 미부착)
   causal/     contracts · p0_question … p9_registry · run    # P0–P9 귀속 파이프라인
               graph · verify · sandbox · chain · engine · stats · fit   # 검정 실행 기계
+  statics/    frame · windows · tree · gates · render · vocab   # 정적 층 — LLM 이전에 코드가 고정하는 전부
+              duck · athena · interval · layers · route · etfcell   # 5분봉·시각창 집계 표면(Athena↔DuckDB)·층 분해·라우팅
+              (그 외 tool_* · paneltest · premium … — 어휘·설계 SSOT 는 statics/__init__ 과
+               docs/analysis-engine/causal-attribution-design.md)
 ```
 
 ### 인과귀속 P0–P9 (`causal/`)
@@ -115,14 +123,24 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
 # 게시 게이트는 발화(route) 축(ALPHA-710) — 하루 다건 발화는 발화마다 게시되고,
 # 같은 route 재실행만 DRAFT 보존이다. 분해 입력도 분봉 축이다: 트리거 window artifact
-# 의 close 를 세션 시가 window(minute_session_open.source_window)의 open 과 합성해
-# 구성종목 장중 수익률을 파생한다 — 판정과 같은 축(시가 대비).
+# 의 close 를 canonical price_daily **직전 거래일** 종가로 나눠 구성종목 장중 수익률을
+# 파생한다 — 판정(intraday-anchor-v2)과 같은 축(전일 종가 대비, ALPHA-747). 갭이
+# 기여에 포함된다. 시가 원장(minute_session_open)은 분해가 쓰지 않는다.
+# ⚠️ 소비자가 같은 트리거를 처리 중이면 이 수동 실행은 **exit 1 로 양보한다**(route
+# advisory lock, ALPHA-779) — 겹쳐 돌면 같은 트리거에 LLM 이 이중 과금된다. 재실행
+# 자체를 막지는 않는다: 경합이 없으면 그대로 돈다.
 python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 
 # 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
 # --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
 # explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
-# 분봉 window·시가 원장 미준비는 ReturnsNotReady 로 120초 지연 재시도(짧은 커밋 지연).
+# 프리플라이트는 **처리가 끝나야** 참이라 처리 중 재배달은 못 거른다 — 그 창은 route
+# advisory lock 이 닫는다(ALPHA-779, 락이 프리플라이트보다 먼저). 진 쪽은 메시지를
+# 지우지 않고 처리 예산(900초)만큼 되돌린다: 지우면 이긴 쪽의 재배달 안전망이 사라지고,
+# 짧게 되돌리면 재배달이 receive 예산(16)을 태운다.
+# 분봉 window 원장·직전 거래일 파티션 미준비는 ReturnsNotReady 로 120초 지연 재시도.
+# 그 사유는 `logger.info` 라 CLI 가 basicConfig(INFO) 를 건다 — 없으면 루트 기본
+# WARNING 에 삼켜져 실패가 로그에 `start` 만 남긴다(08-05 실측 709건).
 # 같은 큐의 ExposureReverted(가격이 전일 종가 1% 이내로 복귀, ALPHA-746)는 그 종목·세션의
 # 분봉 기원 PUBLISHED 설명을 super-admin 무효화 API(로그인 세션 → /analyses/{run}/invalidate)
 # 로 회수한다 — 엔진이 DB 를 직접 쓰지 않는다(INVALIDATION 발화자 단일화, ALPHA-440).
@@ -135,29 +153,39 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
 
 | 변수 | 용도 | 기본값 |
 |---|---|---|
-| `AWS_REGION` | S3/Secrets 리전 | `ap-northeast-2` |
+| `AWS_REGION` | S3/Secrets/DuckDB 리전. 하드코딩이 아니라 env 다 — 비면 다른 리전 배포에서 S3 뷰가 전량 NoSuchBucket 으로 빠진다 | `ap-northeast-2` |
 | `ALPHAMALE_LAKE_BUCKET` | canonical 뉴스 S3 버킷 | `edge-dev-pipeline-lake` |
 | `PGHOST`·`PGPORT`·`PGDATABASE`·`PGUSER`·`PGPASSWORD` | edge Postgres(Cloud Event Store) | — |
 | `PGSCHEMA` | 스키마 | `public` |
 | `DEEPSEEK_API_KEY` | 분류·설명 LLM | — (Secrets Manager 주입) |
 | `DEEPSEEK_MODEL` | 모델명 | `deepseek-v4-flash` |
-| `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | (없으면 S3 fallback) |
-| `ALPHAMALE_RESULT_S3_PREFIX` | FK 전제 없을 때 설명 결과 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
+| `ALPHAMALE_RELEASE_BUNDLE_VERSION` | explanation_run 번들 고정 | — (필수, 없으면 런 실패) |
+| `ALPHAMALE_RESULT_S3_PREFIX` | 런 아카이브 저장 위치 | `s3://<bucket>/operations_archive/etf_explanations/` |
 | `ALPHAMALE_ETF_TICKER` | 대상 ETF | `091160` |
 | `CAUSAL_ENABLED` | P0–P9 인과귀속 사용(끄면 단일 프롬프트 경로) | `true` |
 | `CAUSAL_SANDBOX_ENABLED` | 검정 에이전트의 코드 실행. 끄면 축약 경로(고정 추정량) | `true` |
 | `CAUSAL_REGISTRY_ROOT` | P9 메커니즘 레지스트리 경로. 비면 소환 기록을 남기지 않는다 — 단일 사례 귀속은 반복으로만 검정력을 얻으므로 이 경로가 비면 그 축적이 통째로 없다 | (없음) |
+| `EDGE_RDB_DSN` | Postgres DSN(`host=… port=… dbname=…`). **비면 위 `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` 로 조립한다** — 조립도 불가면 `coverage()["rdb"]=False` + 사유. 그 상태에선 사건 축 없이 갭+잔여만 남아 전 셀이 `PRICE_ONLY` 로 기운다 | (PG* 에서 조립) |
+| `CAUSAL_BACKFILL_S3` | 백필 parquet(`pit_daily`·`fin_annual`·`flow_daily`·`sector_*`)의 S3 1순위 경로(후행 슬래시 없음). **비면 `v_pit`/`v_fin` 이 빈 스키마로 등록되고 판정이 사유 없이 0행** — "데이터가 없다"와 "통계가 안 섰다"가 같은 문장으로 나온다 | `s3://<bucket>/analysis/backfill` |
+| `CAUSAL_BACKFILL_DIR` | 위 백필의 로컬 경로 겸 trace·ledger 쓰기 위치. 컨테이너에서 기본값(CWD 상대 `.tmp/causal-backfill`)은 쓰기 불가라 프롬프트 원문·원장이 조용히 유실된다 | `/tmp/causal-backfill` (로컬 기본 `.tmp/causal-backfill`) |
+| `DUCKDB_S3_CHAIN` | DuckDB `CREDENTIAL_CHAIN` 순서. Fargate 는 컨테이너 자격증명 엔드포인트(`instance`)로만 붙는다 — `sso;config;env` 만 두면 `~/.aws` 가 없는 컨테이너에서 **S3 뷰 전량이 조용히 미등록**된다 | `env;instance;config;sso` |
+| `DUCKDB_MEMORY_LIMIT` | DuckDB 메모리 상한. task 메모리보다 낮아야 `DUCKDB_TEMP_DIR` 로 spill 하며 버틴다 — 비면 컨테이너 한도를 먼저 쳐서 **OOMKilled(exit 137, 어느 질의였는지 로그에 안 남는다)** | `1.5GB` |
+| `DUCKDB_TEMP_DIR` | spill 위치. 컨테이너에서 쓰기 가능한 곳은 `/tmp` 뿐 — 비면 spill 이 실패해 위 OOM 과 같은 결말 | `/tmp` |
+| `AWS_PROFILE` | ⚠️ **컨테이너에는 넘기지 않는다.** 있으면 코드가 `PROFILE '…'` 절을 붙이고 프로필 파일이 없는 컨테이너에서 S3 접속이 죽는다. 로컬 개발에서만 쓴다 | (컨테이너 미주입) |
 | `EDGE_DOMAIN_BUCKET` | 도메인 문서(「사업의 내용」) RAG 저장소. 비면 조회 도구 미부착 | (없음) |
 | `EDGE_AWS_PROFILE` | 도메인 문서 버킷 접근 프로파일 (교차 계정일 때) | (기본 자격증명) |
 | `CANONICAL_MANIFEST` | 생성 매니페스트(`infra/canonical/pit-manifest.yml`) 경로. 비면 재무·컨센서스·지배구조 어휘가 표면에 안 실린다 | (없음) |
 | `CANONICAL_DATABASE` | canonical PIT 질의가 도는 Glue 데이터베이스 | (없음) — 예: `edge_lake_draft` |
 | `CANONICAL_ATHENA_OUTPUT` | Athena 결과 저장 `s3://` 경로 | (없음) |
+| `EDGE_ATHENA_WORKGROUP` | 시각창 집계 Athena 오프로드 워크그룹(ALPHA-780). **IAM 정책이 스코프로 쓰는 유일한 이름**이라 terraform 이 이 값만 주입한다 — 정책과 갈리면 질의 제출이 AccessDenied 다 | `market_data` |
+| `EDGE_ATHENA_DB` · `EDGE_ATHENA_BARS_TABLE` | 시각창 패널 질의가 읽는 Glue 데이터베이스·5분봉 표. IAM 은 `glue:Get*` 를 `"*"` 로 주므로 정책과 안 엮여 컨테이너에 주입하지 않는다(코드 기본값) | `market_data_kr` · `edge_intraday_5m` |
+| `EDGE_ATHENA_OUTPUT` | ⚠️ **컨테이너에는 넘기지 않는다.** 워크그룹이 결과 위치를 강제(`EnforceWorkGroupConfiguration=True`)하므로 같이 보내면 질의가 시작조차 못 한다. 코드는 이 값이 **설정됐을 때만** `ResultConfiguration` 을 붙인다 — 평소엔 워크그룹에 맡기고 실제 위치는 응답에서 확인한다 | (컨테이너 미주입) |
 | `SUPER_ADMIN_API_URL` | ExposureReverted 회수 집행 대상(ALPHA-746) — super-admin-api base URL. 소비자 전용 | (없음 — 비면 회수 경로 fail-loud) |
 | `SUPER_ADMIN_EMAIL`·`SUPER_ADMIN_PASSWORD` | 회수용 운영자 자격 (SSM SecureString 주입 — `/edge-dev-data-pipeline/super-admin/operator-email`·`operator-password`) | — |
 
 ## 배포
 
-컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다(ALPHA-408에서 전용 모듈·SFN을 흡수) — 통합 파이프라인 SFN(raw→normalize→feature→**analyze**)의 마지막 페이즈로 돌며, task definition 은 `edge-dev-data-pipeline-analysis`. 특정일 수동 재실행은 이 task-def 를 `aws ecs run-task`로 직접 띄워 `--trade-date`/`--request-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
+컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다 — **분봉 트리거 큐를 소비하는 상주 ECS 서비스**(`minute_services.tf`의 `analysis-consumer`, task definition `edge-dev-data-pipeline-analysis-consumer`)로 돈다. 통합 파이프라인 SFN의 책임은 feature 까지고 analyze 페이즈는 없다(ALPHA-806 — 트리거 없이 도는 일 단위 분석은 장중에 층을 못 세워 분봉 경로와 다른 답을 냈다). 수동 재실행은 트리거 단건 재처리다: 같은 task-def 를 `aws ecs run-task`로 띄워 `--trigger-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
 
 ## 스키마 계약
 

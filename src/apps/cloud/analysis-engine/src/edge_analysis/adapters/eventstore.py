@@ -6,10 +6,10 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
-from ..config import KST, Settings
+from ..config import KST, PipelineError, ReturnsNotReadyError, Settings
 from ..domain.models import (
     POLICY_VERSION,
     Decomposition,
@@ -19,6 +19,7 @@ from ..domain.models import (
     Argument,
     PriceTrigger,
 )
+from ..domain.window import CommittedMinuteWindow
 from ..observability import log, stable_id, utcnow_iso
 
 _TITLE_EVIDENCE_TYPE = "TITLE"
@@ -50,6 +51,16 @@ class MinuteTriggerRow(NamedTuple):
     session_id: str
     window_start: datetime
     generation: int
+
+
+class WindowCandidate(NamedTuple):
+    """오늘 분봉 계보가 이미 성립해 요청창 설명을 매달 수 있는 ETF."""
+
+    instrument_id: str
+    ticker: str
+    name: str
+    route_id: str
+    route_code: str
 
 
 def minute_observation_id(trigger_id: str) -> str:
@@ -94,6 +105,39 @@ class EventStore:
         """커넥션을 닫는다."""
         self._conn.close()
 
+    def try_lock_route(self, route_id: str) -> bool:
+        """이 route 를 이 커넥션이 소유하는가 — 재배달 동시 처리 차단(ALPHA-779).
+
+        `has_run_for_route` 프리플라이트는 **처리가 끝나야** 참이 된다. 가시성
+        (`PROCESSING_VISIBILITY_SECONDS`)을 넘긴 처리는 SQS 가 재배달하고, 재배달본은
+        아직 run 이 없어 프리플라이트를 통과한다 → 같은 트리거에 LLM 이중 과금.
+        태스크가 1대여도 샌다 — 순차 처리가 방어막이 아니라 **만료가 순차성을 깬다**.
+
+        세션 락이라 **해제 코드가 없다** — 커넥션에 매달려 `close()` 로 풀린다.
+        ⚠️ 커넥션 풀을 도입하면 이 설계가 깨진다(락이 반납된 커넥션을 타고 다음 메시지로
+        샌다). 그때는 명시적 `pg_advisory_unlock` 이 필요하다.
+
+        UNIQUE 제약이 아닌 이유: route 당 run 다건은 **의도된 계약**이다(무효화 후 재실행,
+        ADR-0045) — 제약을 걸면 daily 재실행이 통째로 막힌다.
+
+        천장: 락은 **커넥션이 살아 있는 동안만** 소유권이다. 처리 중 backend 종료·failover·
+        네트워크 단절이 나면 서버는 락을 즉시 풀지만 이 프로세스는 다음 DB 접근 전까지
+        모르고 LLM 을 계속 태운다 — 그 창에선 이중 과금이 다시 가능하다. 닫으려면 LLM
+        호출 경계마다 소유권 재확인이 필요한데, 이 물량(하루 수십 건)에 그 기계는 과잉이라
+        받아들인 천장이다.
+
+        반대편 천장: 프로세스가 **죽지 않고 얼면** 락이 안 풀린다(커넥션이 살아 있어서다).
+        그 route 의 재배달은 매번 튕기다 receive 예산을 태우고 DLQ 로 간다 — 그 트리거의
+        설명은 수동 복구 전까지 없다. 락 없는 지금이라면 재배달본이 대신 만들었을 것이라,
+        이 한 갈래는 교환에서 잃는 쪽이다. 조용한 이중 과금보다 드러나는 DLQ 를 택했다.
+        태스크가 죽거나 재시작하면 커넥션이 끊겨 락은 풀린다 — 얼되 살아 있는 경우만이다.
+        """
+        with self._conn.cursor() as cur:
+            # hashtext 는 32비트라 충돌 가능하나 **동시에 쥔 락 사이에서만** 문제라
+            # 실질 0 이다(같은 파일의 tenant-delivery-fanout 락이 이미 같은 방식).
+            cur.execute("SELECT pg_try_advisory_lock(hashtext(%s)::bigint)", (route_id,))
+            return bool(cur.fetchone()[0])
+
     def has_run_for_route(self, route_id: str) -> bool:
         """이 route 로 이미 설명 run 이 확정됐는가 — 분봉 소비자의 멱등 프리플라이트(ALPHA-719).
 
@@ -108,6 +152,28 @@ class EventStore:
                 (route_id,),
             )
             return cur.fetchone() is not None
+
+    def window_candidates(self, trade_date: date) -> list[WindowCandidate]:
+        """당일 분봉 trigger→observation→route가 모두 있는 ETF의 최신 route."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT ON (i.ticker) i.instrument_id,"
+                " regexp_replace(i.ticker, '\\.(KS|KQ)$', ''),"
+                " e.display_name, r.explanation_route_id, r.route_code"
+                " FROM minute_price_trigger m"
+                " JOIN etf_contribution_observation o"
+                "   ON o.minute_price_trigger_id = m.trigger_id"
+                " JOIN explanation_route r"
+                "   ON r.contribution_observation_id = o.contribution_observation_id"
+                " JOIN instrument i"
+                "   ON regexp_replace(i.ticker, '\\.(KS|KQ)$', '') = m.entity_id"
+                " JOIN etf_profile p ON p.instrument_id = i.instrument_id"
+                " JOIN entity e ON e.entity_id = i.instrument_id"
+                " WHERE (m.window_start AT TIME ZONE 'Asia/Seoul')::date = %s"
+                " ORDER BY i.ticker, m.window_start DESC",
+                (trade_date,),
+            )
+            return [WindowCandidate(*map(str, row)) for row in cur.fetchall()]
 
     def find_published_minute_run_ids(
         self, entity_id: str, session_id: str, until_window_start: datetime,
@@ -150,26 +216,6 @@ class EventStore:
             return [str(row[0]) for row in cur.fetchall()]
 
     # -- 읽기 --------------------------------------------------------------- #
-    def causal_data(self):
-        """인과 설계용 조회 표면. **같은 커넥션**을 공유한다 - PIT 기준이 갈리면 안 된다.
-
-        `_conn` 을 밖으로 내보내지 않는다. 인과 엔진이 필요한 것은 코호트·정렬열·비중이고
-        그건 `CausalData` 의 계약이다.
-        """
-        from .causal_data import CausalData
-        return CausalData(self._conn)
-
-    def sql_surface(self, *, as_of: str, trade_date):
-        """P2·P3·P5 의 자유 질의 표면. **같은 커넥션**을 공유한다.
-
-        고정 함수 표면(`causal_data`)과 나란히 두는 이유: 검정은 무엇을 잴지 정해진
-        뒤의 일이라 고정 함수가 맞지만, 가설을 세우는 단계는 무엇을 물어야 할지 모르는
-        상태다 - 물음의 모양을 미리 정해 주면 모델이 그 모양으로 표현 가능한 답만 찾는다.
-        시점 클램프는 뷰 안에 있으므로 두 표면의 PIT 기준이 갈리지 않는다.
-        """
-        from .sql_surface import SqlSurface
-        return SqlSurface(self._conn, as_of=as_of, trade_date=trade_date)
-
     def load_entity_index(self) -> dict[str, str]:
         """ticker -> instrument entity_id (KR 시드 전 종목).
 
@@ -207,31 +253,6 @@ class EventStore:
             )
             row = cur.fetchone()
         return (str(row[0]), str(row[1])) if row else None
-
-    def fetch_price_trigger(self, etf_instrument_id: str, trade_date: date):
-        """파이프라인 L0 트리거 소비. ``None`` == 평온(정상 변동).
-
-        이행기 중복이 있으면 최신 detected_at 을 고른다(uq 3번째 키가 detected_at).
-        """
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT price_movement_trigger_id, observed_return, detection_reason,"
-                " absolute_gate_triggered, relative_gate_triggered"
-                " FROM price_movement_trigger"
-                " WHERE etf_instrument_id = %s AND trade_date = %s"
-                " ORDER BY detected_at DESC LIMIT 1",
-                (etf_instrument_id, trade_date.isoformat()),
-            )
-            row = cur.fetchone()
-        if row is None:
-            return None
-        return PriceTrigger(
-            trigger_id=str(row[0]),
-            observed_return=float(row[1]) if row[1] is not None else None,
-            reason=row[2],
-            abs_gate=bool(row[3]),
-            rel_gate=bool(row[4]),
-        )
 
     def fetch_minute_price_trigger(self, trigger_id: str):
         """분봉 트리거 한 행 소비(ALPHA-709) — ``MinuteTriggerRow`` | None.
@@ -273,33 +294,6 @@ class EventStore:
             generation=int(row[9]),
         )
 
-    def fetch_minute_open_window(self, session_id: str, entity_id: str):
-        """트리거 대상 ETF 의 세션 시가가 확정된 window 좌표 — (window_start, generation) | None.
-
-        분봉 분해(ALPHA-710)의 기준가 축이다: ETF 트리거 판정이 쓴 것과 **같은**
-        시가 window 의 artifact 에서 구성종목 시가를 읽어야 두 축이 갈리지 않는다
-        (minute_session_open 은 ETF 만 담으므로 구성종목 시가는 artifact 에서 파생).
-        generation 은 원장(minute_ingestion_window)이 정본이다 — artifact 는 불변이라
-        정정 진행 중이어도 커밋된 세대는 안전하게 읽힌다.
-
-        ponytail: 시가 확정 **당시** 세대는 원장에 없어 현재 세대를 쓴다 — 확정 후
-        정정(드묾)이 끼면 ETF 시가(불변, 구세대)와 구성종목 시가(신세대)의 세대가
-        갈릴 수 있다. 해소는 minute_session_open 에 확정 세대 기록(파이프라인 후속).
-        """
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT o.source_window, w.generation, w.checksum"
-                " FROM minute_session_open o"
-                " JOIN minute_ingestion_window w"
-                "   ON w.session_id = o.session_id AND w.window_start = o.source_window"
-                " WHERE o.session_id = %s AND o.entity_id = %s AND o.status = 'OPEN'"
-                "   AND w.generation >= 1"
-                "   AND w.data_status NOT IN ('DUE', 'CLAIMED')",
-                (session_id, entity_id),
-            )
-            row = cur.fetchone()
-        return (row[0], int(row[1]), row[2]) if row else None
-
     def fetch_minute_window_meta(self, session_id: str, window_start):
         """window 의 커밋 결과 상태 (generation, checksum) | None — artifact 읽기 좌표.
 
@@ -319,6 +313,86 @@ class EventStore:
             )
             row = cur.fetchone()
         return (int(row[0]), row[1]) if row else None
+
+    def fetch_committed_minute_windows(
+        self, session_id: str, start: datetime, end: datetime,
+    ) -> list[CommittedMinuteWindow]:
+        """``[start, end)``의 커밋된 1분 artifact 좌표를 순서대로 반환한다.
+
+        계획 행 자체가 없거나 중간이 비면 원장 불변식 위반이고, ``DUE``/``CLAIMED``는
+        정정·수집이 끝나면 낫는 재시도 축이다. DB 예외는 감싸지 않는다 — 연결 장애와
+        데이터 부재를 같은 ``PipelineError``로 만들면 운영 처방이 갈리지 않는다.
+        """
+        session_id = str(session_id).strip()
+        if not session_id:
+            raise ValueError("session_id가 비었다")
+        for value, field in ((start, "start"), (end, "end")):
+            if value.tzinfo is None or value.utcoffset() != timedelta(hours=9):
+                raise ValueError(f"{field}는 KST(+09:00) aware datetime이어야 한다")
+            if value.second or value.microsecond:
+                raise ValueError(f"{field}는 분 경계여야 한다")
+        if end <= start:
+            raise ValueError("end는 start보다 뒤여야 한다")
+
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT window_start, window_end, data_status, generation, checksum"
+                " FROM minute_ingestion_window"
+                " WHERE session_id = %s AND window_start >= %s AND window_start < %s"
+                " ORDER BY window_start",
+                (session_id, start, end),
+            )
+            rows = cur.fetchall()
+
+        expected = []
+        cursor = start
+        while cursor < end:
+            expected.append(cursor)
+            cursor += timedelta(minutes=1)
+        by_start: dict[datetime, tuple] = {}
+        for row in rows:
+            window_start = row[0].astimezone(KST)
+            if window_start in by_start:
+                raise PipelineError(
+                    f"분봉 원장 window 중복: session={session_id} window={window_start.isoformat()}")
+            by_start[window_start] = row
+
+        missing = [value for value in expected if value not in by_start]
+        if missing:
+            sample = ",".join(value.strftime("%H:%M") for value in missing[:5])
+            raise PipelineError(
+                f"분봉 원장 window 누락: session={session_id} count={len(missing)} sample={sample}")
+
+        out: list[CommittedMinuteWindow] = []
+        for expected_start in expected:
+            row = by_start[expected_start]
+            status, generation, checksum = str(row[2]), int(row[3]), row[4]
+            if status in ("DUE", "CLAIMED"):
+                raise ReturnsNotReadyError(
+                    f"분봉 window 정정·수집 중: session={session_id}"
+                    f" window={expected_start.isoformat()} status={status}")
+            if status not in ("VALID", "VALID_EMPTY", "INCOMPLETE", "MISSING", "INVALID"):
+                raise PipelineError(
+                    f"분봉 원장 status 미지: session={session_id}"
+                    f" window={expected_start.isoformat()} status={status}")
+            if generation < 1 or not checksum:
+                raise PipelineError(
+                    f"분봉 terminal window 커밋 좌표 없음: session={session_id}"
+                    f" window={expected_start.isoformat()} status={status}"
+                    f" generation={generation} checksum={bool(checksum)}")
+            try:
+                out.append(CommittedMinuteWindow(
+                    session_id=session_id,
+                    start=expected_start,
+                    end=row[1].astimezone(KST),
+                    generation=generation,
+                    checksum=str(checksum),
+                ))
+            except ValueError as error:
+                raise PipelineError(
+                    f"분봉 원장 window 계약 위반: session={session_id}"
+                    f" window={expected_start.isoformat()} — {error}") from error
+        return out
 
     def fetch_event_contexts(self, trade_date: date, tickers: list[str]) -> list[EventContext]:
         """파이프라인이 조립한 당일 구성종목 source event 를 참여자·측정값까지 붙여 읽는다.
@@ -434,7 +508,7 @@ class EventStore:
 
         route 조회는 **입력 축을 따라간다** — 분봉 실행(settings.trigger_id)의 계보는
         minute_price_trigger_id 에 매달리므로, 일 단위 (etf, trade_date) 조인으로
-        찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 **다른** 일 단위 트리거 route
+        찾으면 없거나(전제 누락으로 런 실패) 같은 날의 **다른** 일 단위 트리거 route
         가 잡혀 남의 계보에 영속된다(ALPHA-709 리뷰 실측).
         """
         with self._conn.cursor() as cur:
@@ -555,9 +629,10 @@ class EventStore:
         bundle: str | None,
         primary_thread_id: str | None,
         events: list[EventContext],
+        run_reason: str = "DAILY",
+        publishable: bool = True,
     ) -> dict[str, str | int | None]:
-        """explanation_run + explanation_result(게시 게이트) + 근거 lineage + fan-out 을
-        한 트랜잭션으로 적재한다(FK 전제는 충족 가정, ALPHA-493)."""
+        """explanation_run + explanation_result + 근거 lineage를 한 트랜잭션으로 적재한다."""
         import json
 
         from psycopg2.extras import execute_values
@@ -574,8 +649,10 @@ class EventStore:
             explanation_as_of, route_id,
         )
         result_id = stable_id("res", run_id)
+        raw = dict(explanation.raw)
+        stage = raw.pop("stage_results", {}) or {}
         stage_results = json.dumps(
-            {"events": event_count, "raw": explanation.raw}, ensure_ascii=False
+            {"events": event_count, **stage, "raw": raw}, ensure_ascii=False
         )
         with self._conn.cursor() as cur:
             cur.execute(
@@ -583,7 +660,7 @@ class EventStore:
                 " bundle_version, explanation_as_of, run_reason, run_status, finished_at)"
                 " VALUES (%s,%s,%s,%s,%s,'SUCCEEDED',now())"
                 " ON CONFLICT (explanation_run_id) DO NOTHING",
-                (run_id, route_id, bundle, explanation_as_of, "DAILY"),
+                (run_id, route_id, bundle, explanation_as_of, run_reason),
             )
             # 게시 게이트·cursor 채번 직렬화(ALPHA-493) — analyze 동시 실행이 같은 날
             # PUBLISHED 를 이중 게시하거나 같은 테넌트 cursor 를 겹쳐 뽑지 못하게 전역 락
@@ -605,10 +682,17 @@ class EventStore:
                 " explanation_type, summary, confidence_level, stage_results,"
                 " publication_status, headline)"
                 " SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                # `%s = FALSE` 는 **표면 부재**다. 게시 규칙("발화당 첫 결과가 게시본")은
+                # "첫 결과가 그 발화의 최선"을 전제하는데, 내용 없는 결과가 먼저 오면 그
+                # 전제가 깨진다 - 자리를 선점하고 재실행분을 DRAFT 로 밀어낸다. 무효화된
+                # 게시본이 자리를 안 지키는 것과 결이 같다(ADR-0045): **내용 없는 결과도
+                # 자리를 지킬 이유가 없다.** DRAFT 로 떨어지면 아래 fan-out 게이트가
+                # PUBLISHED 만 보므로 테넌트 전파도 함께 멈춘다.
                 " CASE WHEN EXISTS (SELECT 1 FROM explanation_result p"
                 "   JOIN explanation_run r ON r.explanation_run_id = p.explanation_run_id"
                 "   WHERE r.explanation_route_id = %s"
                 "     AND p.publication_status = 'PUBLISHED')"
+                "   OR %s = FALSE"
                 " THEN 'DRAFT' ELSE 'PUBLISHED' END, %s"
                 " ON CONFLICT (explanation_result_id) DO NOTHING"
                 " RETURNING publication_status",
@@ -616,7 +700,7 @@ class EventStore:
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
                     explanation.summary, explanation.confidence_level, stage_results,
-                    route_id,
+                    route_id, publishable,
                     explanation.headline,
                 ),
             )
@@ -675,10 +759,12 @@ class EventStore:
             fanout_tenants=fanout_tenants,
         )
         if publication_status == "DRAFT":
-            # 같은 발화(route) 재실행 — 게시분이 이미 있어 DRAFT 보존만 하고 발번하지 않았다.
+            # DRAFT 사유가 둘이다 — 같은 발화 재실행(게시분이 이미 있다)과 표면 부재
+            # (내용 없는 결과라 자리를 안 준다). 한 사유로 뭉치면 "왜 안 나갔나"에
+            # 못 답한다(Rule 12 — 부재를 사유와 함께 드러낸다).
             log(
                 "explanation_result.publish_skipped",
-                reason="route_already_published",
+                reason="route_already_published" if publishable else "surface_absent",
                 etf_instrument_id=etf_instrument_id,
                 trade_date=settings.trade_date.isoformat(),
                 explanation_result_id=result_id,

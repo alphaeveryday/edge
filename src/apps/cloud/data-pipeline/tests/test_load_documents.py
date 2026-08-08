@@ -10,6 +10,7 @@
 
 import io
 import json
+from datetime import datetime, timezone
 
 from data_pipeline.config import DbConfig
 from data_pipeline.lake import LocalStorage, canonical_news_articles_partition
@@ -18,6 +19,14 @@ from data_pipeline.steps import load_documents
 _COLUMNS = ("article_id", "source_vendor", "market", "title", "url", "normalized_url",
             "normalized_url_hash", "published_at", "publisher", "lead_text", "mentions",
             "fetched_at")
+
+
+def _instant(text: str) -> datetime:
+    """ISO 문자열을 절대 시각으로 — Postgres 의 timestamptz 비교와 같은 축을 만든다.
+    naive 는 UTC 로 본다(수집 어댑터가 전부 aware UTC 를 내므로 실무상 안 나오지만,
+    여기서 조용히 다른 축을 비교하느니 명시한다)."""
+    dt = datetime.fromisoformat(text)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _write_canonical(storage, language: str, date: str, rows: list[dict],
@@ -60,7 +69,9 @@ class _FakeCursor:
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
         self._conn.log.append((flat, params))
-        head = flat.upper()
+        # 괄호 주변 공백은 의미가 없으므로 정규화한다 — 아래 WHERE 전문 동등 비교가
+        # 무해한 재배치에 깨지지 않게. 결합자·괄호·절 순서 민감도는 **의도한 것**이다.
+        head = flat.upper().replace("( ", "(").replace(" )", ")")
         if head.startswith("INSERT INTO DOCUMENT"):
             self._conn.document_inserts += 1
             if (self._conn.fail_after is not None
@@ -82,8 +93,37 @@ class _FakeCursor:
                     f"UPSERT SET 컬럼이 INSERT 컬럼({column})과 다르다: {flat}")
             # 계산값을 그대로 넣는 옛 형태(VALUES)도 해석한다 — 그쪽으로 되돌아가면 픽스처가
             # 터지는 대신 **갈린 id 가 값으로 드러나** 회귀 테스트가 실패 이유를 말해 준다.
+            # ALPHA-696 승자 축은 **리드 문에만** 붙는다. publisher 는 같은 UPSERT 패턴의
+            # 별도 축이고 이 가드가 다스린 적이 없다 — 붙이면 무관한 컬럼의 시각으로
+            # ALPHA-695 승격이 막힌다. 구조로 못박는다(값으로는 안 드러난다).
+            observed = None
+            if column == "publisher":
+                assert "LEAD_OBSERVED_AT" not in head, \
+                    "publisher UPSERT 에 리드 관측 시각 가드가 붙었다(ALPHA-696 범위 밖)"
+            elif "DO UPDATE" in head:
+                # ⚠️ SET 에 시각이 빠져도 이 픽스처는 `observed` 를 늘 저장하므로 **적극적으로
+                # 가린다**. 그 회귀는 운영에서 조용하다: 배치가 정당하게 이겨 리드를 쓰는데
+                # 시각은 1분 경로의 옛 주장이 남아, 이후 그보다 이른 `fetched_at` 을 가진
+                # 배치 런이 전부 차단된다 — **배치가 한 적 없는 주장이 배치 자신의 낡은
+                # 리드를 보호**한다. 그래서 값이 아니라 문면으로 못박는다.
+                assert ("SET LEAD_TEXT = EXCLUDED.LEAD_TEXT,"
+                        " LEAD_OBSERVED_AT = EXCLUDED.LEAD_OBSERVED_AT") in head, \
+                    "배치가 리드만 쓰고 관측 시각을 안 남긴다 — 회복 경로가 죽는다"
+                where = head.split("ON CONFLICT", 1)[1].split("WHERE", 1)[1]
+                # ⚠️ 부분문자열 존재만 보면 **결합자**(AND/OR·괄호)가 안 걸린다. `AND` 를
+                # `OR` 로 바꾸거나 괄호만 지워도(그때는 AND 가 더 강하게 묶인다) 리드가 완전히
+                # 같은데도 UPDATE 가 나가, 이 파일이 계약으로 못박은 "*_written 은 이번 런이
+                # 값을 바꾼 건수"가 멱등 재실행에서 거짓이 된다. 절 전문을 그대로 본다.
+                assert where.strip() == (
+                    "NEWS_DOCUMENT.LEAD_TEXT IS DISTINCT FROM EXCLUDED.LEAD_TEXT"
+                    " AND (NEWS_DOCUMENT.LEAD_OBSERVED_AT IS NULL"
+                    " OR NEWS_DOCUMENT.LEAD_OBSERVED_AT <= EXCLUDED.LEAD_OBSERVED_AT)"
+                ), f"배치 리드 가드의 WHERE 전문이 계약(ALPHA-696 ③)과 다르다: {where.strip()}"
             if " VALUES " in head:
                 document_id, value = params
+            elif column == "lead_text":
+                value, observed, source_code, source_document_id = params
+                document_id = self._conn.documents.get((source_code, source_document_id))
             else:
                 value, source_code, source_document_id = params
                 document_id = self._conn.documents.get((source_code, source_document_id))
@@ -113,8 +153,24 @@ class _FakeCursor:
             if store.get(document_id, _ABSENT) == value and guard in head:
                 self.rowcount = 0
                 return
+            # 승자 판정(ALPHA-696) — 충돌 갈래에서만 걸린다. 저장된 관측이 더 새로우면
+            # 이 배치는 진다. `observed` 가 None(=canonical fetched_at 결손)이면 비교는
+            # SQL 에서 UNKNOWN 이라 `IS NULL` 절 하나만 남는다.
+            # ⚠️ 비교는 **실제 시각**으로 한다(ALPHA-848). ISO 문자열 부등호는 오프셋이
+            # 다르면 Postgres 와 갈린다 — `2026-07-15T05:00:00+00:00` vs
+            # `2026-07-15T13:00:00+09:00`(=04:00Z)이면 PG 는 배치를 막는데 문자열
+            # 비교는 통과시킨다. 이 파일 기본 `published_at` 이 `+09:00` 이라 다음
+            # 케이스가 그대로 밟는다(`normalize_news._fetched_at` 이 같은 함정을 적어 뒀다).
+            if column == "lead_text" and document_id in self._conn.news_document_ids:
+                stored = self._conn.lead_observed_at.get(document_id)
+                if stored is not None and (observed is None
+                                           or _instant(stored) > _instant(observed)):
+                    self.rowcount = 0
+                    return
             self.rowcount = 1
             store[document_id] = value
+            if column == "lead_text":
+                self._conn.lead_observed_at[document_id] = observed
             rows.append((document_id, value))
             self._conn.news_document_ids.add(document_id)
 
@@ -128,6 +184,7 @@ class _FakeCursor:
 class _FakeConn:
     def __init__(self, existing: list[tuple] | dict[tuple, str] | None = None,
                  lead_texts: dict[str, str | None] | None = None,
+                 lead_observed_at: dict[str, object] | None = None,
                  fail_after: int | None = None):
         self.log: list = []
         self.fail_after, self.document_inserts = fail_after, 0
@@ -140,6 +197,9 @@ class _FakeConn:
         # document_id → 기존 news_document.lead_text. `assemble_events` 가 id 만 먼저 넣어둔
         # 행은 None 으로 심는다 — 그게 UPSERT 가 존재하는 이유다.
         self.lead_texts: dict[str, str | None] = dict(lead_texts or {})
+        # document_id → 지금 저장된 리드를 관측한 시각(ALPHA-696). 1분 경로가 쓴 행은
+        # 값이 있고, 아무도 주장하지 않은 자리는 None 이다 — 배치의 승자 판정이 이걸 본다.
+        self.lead_observed_at: dict[str, object] = dict(lead_observed_at or {})
         # publisher 는 lead_text 와 같은 UPSERT 규칙의 별도 축(ALPHA-695).
         self.publishers: dict[str, str | None] = {}
         self.news_document_publishers: list[tuple[str, str]] = []
@@ -525,7 +585,8 @@ def test_rollback_does_not_claim_lead_texts_it_never_kept(tmp_path, monkeypatch)
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "ko", "2026-07-15",
-                     [_article("a1", lead_text="리드문"), _article("a2", lead_text="리드문2")])
+                     [_article("a1", lead_text="리드문", fetched_at=None),
+                      _article("a2", lead_text="리드문2")])
     conn = _FakeConn(fail_after=1)   # a1 은 통과, a2 의 document INSERT 에서 터진다
     monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
 
@@ -536,6 +597,12 @@ def test_rollback_does_not_claim_lead_texts_it_never_kept(tmp_path, monkeypatch)
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["created"] == 0
     assert log["lead_text_written"] == 0, "롤백됐는데 스니펫을 채웠다고 로그가 주장한다"
+    # 반대 방향도 고정한다 — `lead_unclaimed_freshness` 는 **쓰기 수가 아니라 관측 노출
+    # 수**라 롤백에서 지우면 안 된다(ALPHA-696). 지우면 canonical `fetched_at` 이 결손이라
+    # 축이 무력화되는 중인 벤더가 하필 DB 장애로 죽은 런에서 0 을 보고해, 진단이 가장
+    # 필요한 순간에 근거가 사라진다. 위 세 줄과 같이 두는 이유가 그 대비다.
+    assert log["lead_unclaimed_freshness"] == 1, \
+        "롤백이 관측 노출 수까지 지웠다 — 축이 무력화된 것을 볼 자리가 없어진다"
 
 
 def test_missing_lead_text_writes_no_news_document_row(tmp_path, monkeypatch):
@@ -549,3 +616,193 @@ def test_missing_lead_text_writes_no_news_document_row(tmp_path, monkeypatch):
                               to_date="2026-07-15") == 0
 
     assert _news_doc_inserts(conn) == []
+
+
+# ── 두 생산자 승자 규칙 (ALPHA-696) ──────────────────────────────────────────
+#
+# 이 표에는 생산자가 둘이다 — 이 배치와 1분 `PgNewsCanonicalWriter`. 아래 넷은 전부
+# **결과가 그럴듯해 보이는 회귀**라, 규칙이 SQL 에서 빠져도 다른 테스트는 초록이다.
+
+def test_batch_does_not_revert_a_fresher_minute_correction(tmp_path, monkeypatch):
+    """1분 경로가 반영한 정정을 레이크의 옛 값으로 되돌리면 안 된다.
+
+    WHY: 되돌리면 원장은 새 지문(fp2)을 확정했는데 Consumer 는 옛 본문을 읽는다 —
+    ALPHA-691 이 고치려던 P1 그대로고, 읽은 본문이 그 지문의 것인지 확인할 수단이
+    없어 **아무도 탐지하지 못한다**. 이 배치가 이기는 유일한 근거는 자기 관측이
+    더 새롭다는 것뿐이다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="옛 본문 T1",
+                               fetched_at="2026-07-15T01:00:00+00:00")])
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id},
+                     lead_texts={doc_id: "정정된 본문 T2"},
+                     lead_observed_at={doc_id: "2026-07-15T04:00:00+00:00"})
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.lead_texts[doc_id] == "정정된 본문 T2"
+    assert conn.news_documents == []            # 쓰기 자체가 안 나갔다
+
+
+def test_batch_wins_once_its_own_collection_is_newer(tmp_path, monkeypatch):
+    """반대쪽 — 일일 수집이 그 기사를 다시 담으면 배치가 다시 이겨야 한다.
+
+    WHY: 정상 회복 경로다. "1분 경로가 무조건 이긴다"로 짜면 1분 레인이 안 도는
+    벤더·과거 백필에서 리드가 영영 고정되고, 정규화 규칙이 고쳐져도 반영할 길이 없다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="재수집된 본문 T3",
+                               fetched_at="2026-07-15T06:00:00+00:00")])
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id},
+                     lead_texts={doc_id: "정정된 본문 T2"},
+                     lead_observed_at={doc_id: "2026-07-15T04:00:00+00:00"})
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.lead_texts[doc_id] == "재수집된 본문 T3"
+
+
+def test_batch_still_fills_a_seat_nobody_claimed(tmp_path, monkeypatch):
+    """아무도 관측을 주장하지 않은 빈 자리는 그대로 채운다.
+
+    WHY: `assemble_events` 는 `document_id` 만으로 행을 먼저 만든다. 그 자리를 시각
+    가드가 막으면 ALPHA-628 이 되찾아 온 리드 승격이 통째로 죽는다 — P1 하나를
+    닫으면서 유실 경로를 새로 여는 것이다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="승격되어야 할 스니펫")])
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id},
+                     lead_texts={doc_id: None})     # 시각은 심지 않는다 = 미주장
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.lead_texts[doc_id] == "승격되어야 할 스니펫"
+
+
+def test_batch_without_a_collection_time_claims_no_freshness(tmp_path, monkeypatch):
+    """`fetched_at` 이 없으면 신선도를 주장하지 못한다 — 그리고 그 사실이 세어진다.
+
+    WHY: `available_at` 은 `fetched_at or published_at` 이라 결손 시 **미래 발행일**이
+    들어온다. 그 값을 축으로 쓰면 미래 시각이 박혀 이 행의 리드 승격이 영구 차단된다.
+    그래서 결손이면 미주장으로 두는데, 그러면 그 벤더에서 축이 조용히 무력화되므로
+    노출 건수를 로그에 남긴다(Rule 12 — 안 세면 볼 계기가 없다).
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="레이크 스니펫", fetched_at=None)])
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id},
+                     lead_texts={doc_id: "1분 경로가 쓴 본문"},
+                     lead_observed_at={doc_id: "2026-07-15T04:00:00+00:00"})
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.lead_texts[doc_id] == "1분 경로가 쓴 본문"   # 주장 못 했으니 진다
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["lead_unclaimed_freshness"] == 1
+
+
+# ── 빈 문자열 구멍 + 관측 분모 (ALPHA-848) ──────────────────────────────────
+
+def test_empty_fetched_at_does_not_kill_the_whole_run(tmp_path, monkeypatch):
+    """canonical `fetched_at` 이 `""` 여도 런이 죽지 않고 그 행만 미주장으로 처리된다.
+
+    WHY: 커밋 경계가 런 전체라, 셀 하나의 빈 문자열이 timestamptz 파싱 에러를 내면
+    **그날 문서 적재가 통째로 롤백**된다. 가드(`if not fetched_at`)는 falsy 를 '값
+    없음'으로 읽는데 바인딩만 '값'으로 읽던 불일치였다 — 두 판정이 같은 값을 봐야 한다.
+    `_text()` 는 str 여부만 보증하고 `_fetched_at()` 은 정렬 키라 빈 값을 안 거른다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="리드문", fetched_at="",
+                               published_at="2026-07-15T09:00:00+09:00")])
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id})
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    # 리드는 들어갔고, 시각은 **주장하지 않았다**(NULL) — 빈 문자열이 아니다.
+    assert conn.lead_texts[doc_id] == "리드문"
+    assert conn.lead_observed_at[doc_id] is None
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["lead_unclaimed_freshness"] == 1
+    assert log["exit_code"] == 0
+
+
+def test_lead_attempted_is_the_denominator_of_the_unclaimed_counter(tmp_path, monkeypatch):
+    """`lead_unclaimed_freshness` 옆에 시도 수가 같이 남는다.
+
+    WHY: 분자만 있으면 `137` 이 137/140(그 벤더에서 승자 축이 죽었다)인지 137/60,000
+    (잡음)인지 못 가른다 — 이 카운터의 존재 이유가 바로 그 판단이다. 리드가 없어 UPSERT
+    자체를 안 한 기사는 분모에 안 들어간다(그건 소스 결손이지 축 문제가 아니다).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15", [
+        _article("a1", lead_text="리드1", fetched_at="2026-07-15T01:00:00+00:00"),
+        _article("a2", lead_text="리드2", fetched_at=""),          # 주장 못 함
+        _article("a3", lead_text=None, fetched_at=""),             # 리드 없음 → 분모 밖
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["lead_attempted"] == 2
+    assert log["lead_unclaimed_freshness"] == 1
+
+
+def test_offset_only_difference_still_blocks_the_batch(tmp_path, monkeypatch):
+    """픽스처가 시각을 **절대 시각**으로 비교한다 — 오프셋만 다른 쌍에서 PG 와 갈리면 안 된다.
+
+    WHY: `2026-07-15T13:00:00+09:00` 은 `2026-07-15T05:00:00+00:00` 보다 **이르다**(=04:00Z).
+    ISO 문자열 부등호는 `"2026-07-15T13..." > "2026-07-15T05..."` 라 반대로 답해, 실 PG 가
+    막는 되돌림을 픽스처만 통과시킨다. 이 파일 기본 `published_at` 이 `+09:00` 이라
+    다음 케이스가 그대로 밟는 함정이다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="옛 본문 T1",
+                               fetched_at="2026-07-15T13:00:00+09:00")])   # = 04:00Z
+    doc_id = stable_domain_id("doc", "bigkinds", "a1")
+    conn = _FakeConn(existing={("bigkinds", "a1"): doc_id},
+                     lead_texts={doc_id: "정정된 본문 T2"},
+                     lead_observed_at={doc_id: "2026-07-15T05:00:00+00:00"})  # 더 새롭다
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "run-1", db=_db(), from_date="2026-07-15",
+                              to_date="2026-07-15") == 0
+
+    assert conn.lead_texts[doc_id] == "정정된 본문 T2"   # 문자열 비교였다면 되돌아간다

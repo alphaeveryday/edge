@@ -8,11 +8,12 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 33개 중 27개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+**등록 범위: ECS Task state 36개 중 30개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
 뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27 → **ALPHA-724 공시 레인
-컷오버로 소유 레인 이동(총계 27 유지)**). state 수 33 = 시장 SFN
-31 + 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents — 병렬 브랜치 4개는 statemachine.tf
-잡 정의를 재사용해 이름이 겹치지 않는다). 미등록 state 는 카탈로그에 없어 expected_task 가 안
+컷오버로 소유 레인 이동(총계 27 유지)** → **ALPHA-769 장중 수급 레인 신설로 27→30**). state 수
+36 = 시장 SFN 31 + 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents — 병렬 브랜치 4개는
+statemachine.tf 잡 정의를 재사용해 이름이 겹치지 않는다) + 장중 수급 3(ALPHA-769 가 잡 리스트에
+새로 더한 것 — 공시·뉴스가 소유만 옮겨 총계를 안 바꾼 것과 다르다). 미등록 state 는 카탈로그에 없어 expected_task 가 안
 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result 소관이라 카탈로그에 넣지 않는다.
 
@@ -39,8 +40,8 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 잠깐의 MISSED 는 자가 해소되지만 **미등록 유예는 잊히면 조용히 영구화된다**(공시가 원장 밖에서
 도는데 화면에 아무 흔적이 없다) — 그래서 관대한 쪽이 아니라 시끄러운 쪽을 골랐다(Rule 12).
 
-**레인(pipeline_type) 축**(ALPHA-591·724): 카탈로그는 시장 레인(`etf-daily`, 17작업)·뉴스 레인
-(`news`, 6작업)·공시 레인(`disclosure`, 4작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
+**레인(pipeline_type) 축**(ALPHA-591·724·769): 카탈로그는 시장 레인(`etf-daily`, 17작업)·뉴스 레인
+(`news`, 6작업)·공시 레인(`disclosure`, 4작업)·장중 수급 레인(`investor-intraday`, 3작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 3슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
@@ -51,9 +52,8 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 |---|---|---|
 | `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
-| `analysis` | AnalyzeOne | 다른 이미지·다른 진입점이라 `run.py` 를 안 타고 `run_id` 도 안 받는다. 게다가 Map 팬아웃 31종이 한 state 이름으로 뭉쳐 Reconciler 가 마지막 occurrence 로 판정하므로(30 실패 + 1 성공 = FULFILLED) **등록하는 순간 거짓 초록**이 된다 |
 
-**등록 27작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
+**등록 30작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
 ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
@@ -143,9 +143,9 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 27작업(시장 17 + 뉴스 6 + 공시 4). sfn_state_name·cli_command·ecs_task_definition 은
-# statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf 의 실제 state·command_expr·taskdef_key 와 일치해야 한다
-# (test_ops_catalog 이 삼중항으로 대조한다).
+# 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3). sfn_state_name·cli_command·ecs_task_definition 은
+# statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf·investor_intraday_pipeline.tf 의 실제
+# state·command_expr·taskdef_key 와 일치해야 한다 (test_ops_catalog 이 삼중항으로 대조한다).
 # 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
 _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
@@ -435,6 +435,75 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         deadline_offset_seconds=2400, stalled_after_seconds=1800,
         pipeline_type="disclosure",
     ),
+    # ══ 장중 수급 레인 3작업 (pipeline_type="investor-intraday" — 장중 수급 SFN
+    # edge-dev-data-pipeline-investor-intraday, 평일 5슬롯, ALPHA-767·768·769) ═══════════
+    # 공시와 달리 **레인 이동이 아니라 신설**이다 — 시장 SFN 이 이 스텝들을 돈 적이 없다.
+    #
+    # 시간 상수 세 값은 최소 슬롯 간격(09:35→10:05 = 1800s)이 정한다:
+    # * `deadline_offset_seconds` 600/700/800 — 기준은 간격이 아니라 **간격 − Reconciler 주기**다
+    #   (판정은 15분마다 도는 Reconciler 가 하므로 deadline 직후가 아니라 최대 900s 뒤에 찍힌다).
+    #   800+900=1700 < 1800 이라 스테이지 셋 다 "다음 슬롯 예정 전에 판정된다"가 실제로 지켜진다.
+    #   실측(2026-08-06 dev)은 수집 210s·정제 ~90s·적재 ~60s 라 여유가 3배 이상이다.
+    # * `stalled_after_seconds` 900 — SFN 타임아웃(1500s)보다 **낮아야** 한다. 같게 두면 판정이
+    #   `> threshold` 인데 SFN 이 1500s 에 실행을 죽여 경과가 1500 을 넘는 순간이 오지 않아
+    #   **영원히 발화하지 않는다**(공시 레인이 실제로 밟은 함정).
+    #
+    # ⚠️ `kr_trading_calendar` 가 **작업마다 다르다** — 수집·정제는 True, 적재는 False.
+    # 기준은 레인이 아니라 "그 작업이 공휴일에 **실제로 일을 하는가**"다(ALPHA-181 의 함정은
+    # 실제로 돌아서 값을 만든 실행이 SKIPPED 뒤로 사라지는 것이다).
+    #
+    # * 수집 True — 장중 투자자 추정은 **비거래일에 존재 자체를 하지 않는다.** 그날 어댑터는
+    #   `skip_reason` 으로 돌아서고(kis_investor_estimate) 받는 행이 0이다. False 로 두면
+    #   공휴일마다 "기대했는데 증거가 없다"(0건 + empty_allowed=False → UNKNOWN)가 쌓여 진짜
+    #   결손과 섞인다.
+    # * 정제 True — `--input-run-id $.run_id` 로 **그 런이 수집한 raw 만** 읽으므로(run.py)
+    #   공휴일엔 입력이 진짜 0건이다. 가려질 산출이 없다.
+    # * 적재 **False** — 여기만 다르다. `load-investor-intraday` 는 창 인자 없이 도는
+    #   **canonical 전량 스캔**이라(load_investor_intraday.py) 공휴일에도 실일을 한다:
+    #   앞선 슬롯이 RDS 장애로 실패해 남은 백로그를 이 스캔이 줍는다 — 그게 창을 안 붙인
+    #   이유이기도 하다(statemachine.tf 의 LoadInvestorIntraday 주석). True 로 두면 그 회수
+    #   실행에 attempt 가 아예 안 붙고(wrapper 가 PLAN_SKIPPED 를 그냥 통과시킨다), 다시
+    #   실패해도 원장에 **어느 작업이 실패했는지 자리조차 없다**. 화면엔 "휴장이라 안 했다"로
+    #   남는데 실제로는 실패한 것이다(Rule 12). 공휴일 정상 런은 `already=N` 이 records_out
+    #   으로 세어져 UNKNOWN 도 아니다.
+    CatalogEntry(
+        task_key="INVESTOR_INTRADAY_COLLECTION_KIS", stage="raw",
+        dataset="investor_flow_intraday", required=True,
+        cli_command=("ingest-raw-investor-estimate",),
+        sfn_state_name="CollectKisInvestorEstimate",
+        ecs_task_definition="kis", source_vendor="kis",
+        deadline_offset_seconds=600, stalled_after_seconds=900,
+        kr_trading_calendar=True,
+        pipeline_type="investor-intraday",
+    ),
+    # 정제 의존은 세 선례와 같은 이유로 비운다 — raw 부분 실패는 뒤를 막지 않고(ADR-0030)
+    # 정제는 빈 입력을 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집이 skip·실패한 런에서
+    # **실제로 돌아 성공한 정제**가 BLOCKED 로 오귀속된다.
+    CatalogEntry(
+        task_key="NORMALIZE_INVESTOR_INTRADAY", stage="normalize",
+        dataset="investor_flow_intraday", required=True,
+        cli_command=("normalize-investor-estimate",),
+        sfn_state_name="NormalizeInvestorEstimate",
+        ecs_task_definition="bigkinds",
+        deadline_offset_seconds=700, stalled_after_seconds=900,
+        kr_trading_calendar=True,
+        pipeline_type="investor-intraday",
+    ),
+    # 의존은 이 SFN 의 `InvestorIntradayNormalizeCheckResults` 게이트다 — 시장 레인 작업
+    # (ENRICH_CORP_CODE 등)을 걸 수 없다. 그건 이 런에 존재하지 않아 영영 eligible 이 안 된다
+    # (뉴스·공시 레인이 옛 시장 의존을 복사하지 않은 것과 같은 함정). 이 적재는 instrument 를
+    # `instrument_id` 로 직접 해소하므로 corp_code 축과 무관하다.
+    CatalogEntry(
+        task_key="LOAD_INVESTOR_INTRADAY", stage="feature",
+        dataset="investor_flow_intraday_load", required=True,
+        cli_command=("load-investor-intraday",),
+        sfn_state_name="LoadInvestorIntraday",
+        ecs_task_definition="rds",
+        depends_on=("NORMALIZE_INVESTOR_INTRADAY",),
+        deadline_offset_seconds=800, stalled_after_seconds=900,
+        kr_trading_calendar=False,  # 창 없는 전량 스캔이라 공휴일에도 실일을 한다 — 위 주석
+        pipeline_type="investor-intraday",
+    ),
 )
 
 CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
@@ -448,6 +517,12 @@ NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
 # 계획할 뿐이다. 반대 순서(엔트리를 먼저 옮김)는 시장 런이 자기 기대 밖 attempt 를 받아
 # **resolve 경로 없는 LEDGER_GAP** 이 된다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
+# 장중 수급 레인(ALPHA-769). 공시와 달리 **엔트리를 같은 PR 에서 등록한다** — 공시는 시장 SFN 이
+# 이미 돌던 스텝의 소유 레인 이동이라 순서를 나눠야 했지만(엔트리를 먼저 옮기면 시장 런이 자기
+# 기대 밖 attempt 를 받아 resolve 경로 없는 LEDGER_GAP 이 된다), 이 3작업은 **어느 레인도 소유한
+# 적이 없는 신설**이라 뺏어올 기대가 없다. 배포 순서가 어긋나 terraform 이 먼저 떠도 Planner 가
+# 이 레인을 모르는 이미지 위에서 fail-loud 로 죽을 뿐 원장을 오염시키지 않는다.
+INVESTOR_INTRADAY_PIPELINE_TYPE = "investor-intraday"
 
 # `--source` 미지정 시 run.py 가 쓰는 기본 벤더(`args.source or "fmp"`). 벤더 인자가 없는
 # 카탈로그 엔트리는 이 벤더를 뜻한다 — 두 표현(`ingest-raw` 와 `ingest-raw --source fmp`)이

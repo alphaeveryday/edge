@@ -78,9 +78,9 @@ export function ExplanationsPage() {
               <tr key={it.id} className="cursor-pointer" onClick={() => navigate(`/explanations/${it.id}`)}>
                 <StockCell name={it.name} code={it.code} />
                 <StatusCell it={it} showServing />
-                <ConfidenceCell it={it} />
-                <td className="col-muted num">{it.explanationAsOf}</td>
-                <td className="col-muted num">{it.receivedRelative}</td>
+                <ConfidenceCell level={it.confidence} />
+                <td className="col-muted t-data">{it.explanationAsOf}</td>
+                <td className="col-muted t-data">{it.receivedRelative}</td>
                 <td className="text-right" style={{ color: 'var(--fg-4)' }}>
                   <Icon name="chevronRight" size={14} />
                 </td>

@@ -21,8 +21,16 @@ public record ReviewItemResponse(
 		String confidenceLevel,
 		String status,
 		String receivedAt,
-		java.util.List<String> reviewReasons
+		java.util.List<String> reviewReasons,
+		/** 룰 무관 판정의 실측·판정 당시 기준 — 목록도 상세와 같은 사유 문구를 만든다(ALPHA-774). */
+		java.util.List<GateCheckResponse> gateChecks
 ) {
+
+	@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	public record GateCheckResponse(String matchedText, Integer minSourceCount,
+			String minConfidence) {
+	}
 	public static ReviewItemResponse from(ReviewListEntry entry) {
 		var i = entry.item();
 		return new ReviewItemResponse(
@@ -30,6 +38,10 @@ public record ReviewItemResponse(
 				i.tradeDate() == null ? null : i.tradeDate().toString(),
 				i.summary(), i.headline(), i.confidenceLevel(), i.status(),
 				i.receivedAt() == null ? null : i.receivedAt().toString(),
-				entry.reviewReasons());
+				entry.reviewReasons(),
+				entry.gateChecks().stream()
+						.map(g -> new GateCheckResponse(g.matchedText(), g.minSourceCount(),
+								g.minConfidence()))
+						.toList());
 	}
 }

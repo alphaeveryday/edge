@@ -85,6 +85,25 @@ def raw_investor_partition(
     )
 
 
+def raw_investor_estimate_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 장중 투자자 추정(investor_flow_intraday) 파티션 프리픽스 (끝 슬래시 없음).
+
+    `raw_investor_partition`(EOD 확정)과 **다른 dataset** 이다 — 값이 가집계 추정이고 시간축이
+    거래일이 아니라 그날의 슬롯(`bsop_hour_gb`)이라, 한 데이터셋에 담으면 소비자가 잠정과
+    확정을 구분할 수 없다(`.dev/etf-flow-collection-plan.md` §2.5).
+
+    파티션 축은 EOD 와 같다(수집일 기준 run_id 별 append) — 하루에 여러 슬롯 런이 각자
+    run_id 로 쌓이고, 슬롯 간 중복(응답이 그날 슬롯을 누적해 주는 성질)의 정리는 canonical
+    소관이다(bronze 무변형).
+    """
+    return (
+        f"raw/source={source}/dataset=investor_flow_intraday/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
 def raw_financial_partition(
     source: str, market: str, ingest_date: str, run_id: str
 ) -> str:
@@ -196,6 +215,63 @@ def raw_etf_profile_partition(
     )
 
 
+def raw_instrument_profile_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 종목기본정보(instrument_profile) 파티션 프리픽스 (끝 슬래시 없음).
+
+    ETF 프로필과 동형(bronze 통일) — 상장 종목의 식별·명칭이라 스냅샷이고, 매 run 이 그
+    기준일의 전종목을 수집일(ingest_date) 기준으로 append 한다. **벤더 기준일(basDd)은
+    수집일과 별개로 각 레코드에 보존**한다(ALPHA-829): KRX 가 당일 조회를 막아 basDd 는
+    직전 거래일이므로, 수집일을 기준일로 대신 읽으면 마스터가 하루 앞선 날짜를 주장한다.
+
+    ⚠️ 두 날짜가 **항상 다르지는 않다**. ingest_date 는 UTC, basDd 는 KST 파생이라
+    08:00~09:00 KST(= 전날 23:00~24:00 UTC) 실행에서는 우연히 같은 값이 된다. 그래서
+    "다르니까 구분된다"에 기대지 말고 **각자 자기 축을 쓴다** — canonical 은 행의 basDd 만
+    본다(`canonical_instrument_profile_partition`).
+    """
+    return (
+        f"raw/source={source}/dataset=instrument_profile/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
+_RAW_INSTRUMENT_PROFILE_MARKER = "/dataset=instrument_profile/"
+
+
+def is_raw_instrument_profile_key(key: str) -> bool:
+    """raw instrument_profile 데이터 파일 키인지. (part-*.ndjson 만.)"""
+    return (key.startswith("raw/") and _RAW_INSTRUMENT_PROFILE_MARKER in key
+            and key.endswith(".ndjson"))
+
+
+def parse_raw_instrument_profile_key(key: str) -> dict[str, str]:
+    """raw instrument_profile 키에서 파티션 값(source·market·ingest_date·run_id) 추출.
+
+    ⚠️ 여기엔 **기준일이 없다**. canonical 의 as_of_date 는 키가 아니라 **행의 `bas_dd`**
+    에서 온다 — ingest_date 로 대신 읽으면 안 된다(파티션 빌더 주석 참조).
+    """
+    segs = dict(seg.split("=", 1) for seg in key.split("/") if "=" in seg)
+    return {
+        "source": segs["source"],
+        "market": segs["market"],
+        "ingest_date": segs["ingest_date"],
+        "run_id": segs["run_id"],
+    }
+
+
+def canonical_instrument_profile_partition(market: str, as_of_date: str) -> str:
+    """canonical 종목기본정보 파티션 프리픽스 (끝 슬래시 없음).
+
+    `canonical_etf_profile_partition` 과 같은 모델이다 — 시세가 아니라 **참조 데이터**라
+    reference 존이고, 시간축은 벤더 기준일(as_of_date = KRX `basDd`)이다. 종목 마스터
+    로더는 **최신 기준일 스냅샷**을 읽는다(ETF 프로필·구성종목과 동형).
+
+    ⚠️ as_of_date 는 수집일이 아니다 — raw 빌더 주석 참조.
+    """
+    return f"canonical/reference/instrument_profile/market={market}/as_of_date={as_of_date}"
+
+
 def raw_disclosure_day_prefix(source: str, market: str, ingest_date: str) -> str:
     """raw 공시 **수집일 전체**(run_id 무관) 프리픽스 (끝 슬래시 포함).
 
@@ -298,6 +374,22 @@ def parse_raw_investor_key(key: str) -> dict[str, str]:
     }
 
 
+# ── raw 장중 투자자 추정 스캔(정제 입력) ────────────────
+# EOD 와 **다른 dataset** 이라 마커만 다르다. 키 파싱은 `parse_raw_investor_key` 를 그대로 쓴다 —
+# 경로 규약(source·market·ingest_date·run_id)이 같고, 그 함수는 `key=value` 세그먼트만 취하므로
+# dataset 에 무관하다(복제하면 두 벌이 따로 낡는다).
+_RAW_INVESTOR_ESTIMATE_MARKER = "/dataset=investor_flow_intraday/"
+
+
+def is_raw_investor_estimate_key(key: str) -> bool:
+    """raw investor_flow_intraday 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return (
+        key.startswith("raw/")
+        and _RAW_INVESTOR_ESTIMATE_MARKER in key
+        and key.endswith(".ndjson")
+    )
+
+
 def canonical_investor_flow_partition(market: str, trade_date: str) -> str:
     """canonical 투자자 수급 파티션 프리픽스 (끝 슬래시 없음).
 
@@ -307,6 +399,19 @@ def canonical_investor_flow_partition(market: str, trade_date: str) -> str:
     ticker 가 파티션 내 행 키다. 벤더(kis)는 시장이 가르므로 컬럼(provenance)이지 파티션이 아니다.
     """
     return f"canonical/market_data/investor_flow_daily/market={market}/trade_date={trade_date}"
+
+
+def canonical_investor_flow_intraday_partition(market: str, trade_date: str) -> str:
+    """canonical 장중 투자자 추정 파티션 프리픽스 (끝 슬래시 없음).
+
+    EOD(`canonical_investor_flow_partition`)와 파티션 축은 같지만(market·trade_date) **다른
+    데이터셋**이다 — 값이 가집계 추정이라 확정치와 섞이면 소비자가 어느 쪽을 본 것인지 사후에
+    구분할 수 없다(`.dev/etf-flow-collection-plan.md` §2.5).
+
+    정체성 키는 **한 축 많다**: (market, ticker, trade_date, asof_slot). 하루 4~5 슬롯이 한
+    종목·한 날짜에 공존하므로 파티션 안의 행 키가 ticker 단독이 아니라 (ticker, asof_slot) 이다.
+    """
+    return f"canonical/market_data/investor_flow_intraday/market={market}/trade_date={trade_date}"
 
 
 # ── raw news 스캔(정제 입력) ─────────────────────────────
@@ -635,12 +740,33 @@ def canonical_price_minute_prefix(market: str, session_date: str) -> str:
     )
 
 
+def canonical_intraday_5m_prefix(market: str, trade_date: str) -> str:
+    """그 거래일 5분봉 파티션이 사는 프리픽스 — **구멍 판정의 스캔 축** (ALPHA-839).
+
+    키 조립을 두 곳에 두면 한쪽만 옮겨져 스캐너가 없는 prefix 를 훑고 빈 목록을
+    "구멍 없음"으로 확정한다(`canonical_price_minute_prefix` 와 같은 축).
+
+    ⚠️ 파티션에 파일이 `part-0.parquet` 하나뿐이라고 가정하면 안 된다 — 토스 백필이
+    같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓰고(ALPHA-828), 소비자는
+    파티션을 `*.parquet` 글롭으로 읽는다. `part-0` 부재를 구멍으로 읽으면 다른
+    파일명이 채운 거래일(실측 2026-08-03)을 영영 결손으로 보고한다.
+    """
+    return f"canonical/market_data/intraday_5m/market={market}/trade_date={trade_date}/"
+
+
 def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     """5분봉 canonical(dataset=intraday_5m)의 거래일 파일 키 (ALPHA-750).
 
     분석엔진(analysis-engine)이 소비하는 기존 데이터셋이다 — FMP 백필
-    (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 1분 롤업 writer 는
-    trade_date>=2026-08-04 파티션만 쓰므로 기존 파티션과 겹치지 않는다.
+    (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 그 뒤를 벤더 백필과
+    1분 롤업이 나눠 쓴다. 경계는 `minute.rollup.WRITER_SINCE` 하나이고, 그 앞은 백필이
+    그 뒤는 롤업이 **파티션을 통째로 소유한다** — 날짜를 여기 박아 두면 경계가 움직일
+    때 이 문장만 거짓이 된다(ALPHA-836 에서 실제로 그랬다).
+
+    한 파티션에 두 writer 의 파일이 공존할 수 있다(`part-0.parquet` + 벤더 백필 파일).
+    소비자는 파티션을 `*.parquet` 글롭으로 읽으므로 **행이 서로소여야 한다** — 백필이
+    쓰기 전에 `part-0` 의 티커를 빼는 것이 그 보장이고, 롤업 쪽은 자기 소유 구간에서
+    낯선 파일을 만나면 산출을 멈춘다(`rollup._rollup_day` 의 foreign 가드).
 
     스키마(dev S3 2026-07-31 part-0.parquet 실측 — 이 컬럼·타입 그대로, 여분 컬럼
     없음: 소비자 스키마 검증과의 충돌을 피하는 게 우선이라 bars_count 류는 넣지
@@ -653,15 +779,18 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     - source_vendor: string (fmp 원본과 파생을 가르는 필터 축)
     - available_at: timestamp[us] naive KST = ts + 5분(구간 끝)
 
-    거래일당 1파일(전 종목 행). generation 축 없음 — 파생물이라 원장이 확정한 1분
+    ⚠️ **"거래일당 1파일"이 아니다**(2026-08-07 정정). 이 키는 1분 롤업 writer 의 파일
+    이고, 같은 파티션에 다른 writer 가 다른 파일명으로 쓴다(토스 백필
+    `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
+    읽으므로 **파티션 = 여러 파일의 합집합**이고, 겹치는 (ticker, ts) 는 두 번 세어진다
+    — 비겹침을 보장하는 주체는 각 writer 다(`rollup.WRITER_SINCE`, 롤업의 타 writer 가드).
+
+    generation 축 없음 — 파생물이라 원장이 확정한 1분
     세대에서 언제든 같은 규칙으로 재유도되고, 5분 버킷이 닫힐 때마다 그날 전체를
     재집계해 통째로 덮어쓴다(결정적·멱등 — 불변 계약을 걸면 장중 갱신·정정 반영이
     영구 차단된다).
     """
-    return (
-        f"canonical/market_data/intraday_5m/market={market}"
-        f"/trade_date={trade_date}/part-0.parquet"
-    )
+    return f"{canonical_intraday_5m_prefix(market, trade_date)}part-0.parquet"
 
 
 def raw_news_minute_page_key(
