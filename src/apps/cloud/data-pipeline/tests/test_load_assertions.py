@@ -552,7 +552,9 @@ def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monk
     storage = LocalStorage(tmp_path / "lake")
     long_name = "가" * 60          # concept_too_long — 상한이 바뀌어도 넉넉히 초과한다
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
-        arguments=_args(("METRIC", "매출"),            # measure_skipped — 정책 제외
+        arguments=_args(("METRIC", "영업이익"),          # measure_skipped — 정책 제외
+                        ("METRIC", "영업이익"),          # (빈도 차를 줘야 순위가 고정된다)
+                        ("METRIC", "매출"),             # measure_skipped — 정책 제외
                         ("PROJECT", long_name),        # concept_too_long — 정책 제외
                         ("ISSUER", "미등록회사"),        # unresolved — 회수 가능
                         ("ISSUER", "충돌이름"),          # ambiguous — 회수 가능
@@ -567,10 +569,10 @@ def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monk
     sample = {t for t, _ in res["top_unresolved_recoverable"]}
     # 다섯 자리가 각자 다른 사유를 탔는지 먼저 확인한다 — 안 그러면 아래 단언이
     # "그 경로를 안 밟아서" 통과할 수 있다(픽스처가 계약을 못 밟는 고전적 함정)
-    assert res["measure_skipped"] == 1 and res["concept_too_long"] == 1
+    assert res["measure_skipped"] == 3 and res["concept_too_long"] == 1
     assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
 
-    assert "매출" not in sample, "척도가 표본에 남았다 — 기각한 방향을 추천한다"
+    assert not {"매출", "영업이익"} & sample, "척도가 표본에 남았다 — 기각한 방향을 추천한다"
     assert long_name not in sample, "상한 초과 문장이 표본에 남았다"
     assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 가능한 축까지 같이 지웠다"
 
@@ -579,7 +581,9 @@ def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monk
     # 못 보게 되고, 그게 온톨로지가 "척도를 개체로 세울까"를 판단할 입력이다.
     log = _log(storage)
     assert long_name in log["concept_too_long_sample"]
-    assert "매출" in log["measure_skipped_sample"]
+    # ⚠️ **빈도까지** 못박는다. 원문 목록으로 담으면 어휘가 좁은 척도는 상한이 한 표현의
+    # 복사본으로 소진돼 나머지 종이 사라진다 — 존재만 단언하면 그 깨진 모양도 통과한다.
+    assert [tuple(x) for x in log["measure_skipped_sample"]] == [("영업이익", 2), ("매출", 1)]
 
     # 무엇을 뺐는지 로그가 스스로 말한다 — 조용히 좁히면 "왜 매출이 안 보이지"가 된다.
     # ⚠️ 상수와 비교하면 **항등식**이라 멤버십이 안 잡힌다(양변이 같은 값을 참조한다).
