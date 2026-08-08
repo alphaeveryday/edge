@@ -8,6 +8,7 @@ window 확정(분석 누락) 또는 window 확정 없는 event(유령 분석). �
 
 from __future__ import annotations
 
+import inspect
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -222,10 +223,20 @@ def ready_inav_session():
 
 
 def inav_commit_kwargs(session_id, claim, token, *, checksum="c" * 64):
-    """가격과 **같은 서명에서 발행 축 둘만 빠진다** — 그 둘이 곧 이 dataset 의 차이다."""
-    kwargs = commit_kwargs(session_id, claim, token, checksum=checksum)
-    del kwargs["trigger_schema_version"], kwargs["destination"]
-    return kwargs
+    """가격 kwargs 에서 **iNAV 서명이 실제로 받는 것만** 남긴다.
+
+    ⚠️ 뺄 목록을 손으로 유지하면 안 된다. 처음엔 `trigger_schema_version`·`destination`
+    둘을 `del` 했는데, 가격 쪽에 `emit_outbox`(ALPHA-863)가 늘면서 그게 조용히 딸려가
+    **로컬은 초록인데 머지 커밋에서만** TypeError 로 터졌다(텍스트 충돌이 없어 rebase 도
+    깨끗했다). 서명에서 유도하면 가격 쪽 인자가 늘어도 안 새고, iNAV 가 새 인자를 요구하면
+    그때는 값이 없어 시끄럽게 죽는다.
+    """
+    accepted = inspect.signature(MinuteCommitter.commit_inav_window).parameters
+    return {
+        key: value
+        for key, value in commit_kwargs(session_id, claim, token, checksum=checksum).items()
+        if key in accepted
+    }
 
 
 def _redue(db, ledger, session_id, token, claim):
