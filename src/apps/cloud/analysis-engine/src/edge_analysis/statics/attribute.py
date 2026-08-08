@@ -106,13 +106,9 @@ def resid_sigma(lake, instrument_id: str, day: str) -> tuple[float | None, str]:
 
 # 갭 β 의 최소 표본 - 이보다 얇으면 부재 선언.
 #
-# ⚠️ **`layers.MIN_BETA_N` 과 같은 숫자지만 세는 것이 다르다.** 저기 `hist` 는
-# `[-BETA_WINDOW:]` 로 60거래일에 캡이 걸리고(그래서 20 은 "창의 1/3"), 여기 `hist` 는
-# `gap_covariate` 질의에 LIMIT 이 없어 **전 이력**이다(그래서 20 은 "역사상 20일").
-# 값을 맞춰 두는 이유는 두 판정이 같은 런에서 갈리는 것을 줄이려는 것이지 두 표본이
-# 같아서가 아니다 - 재료 자체가 다르므로(층은 수익률 계열, 여기는 갭×미국팩터 쌍)
-# 값이 같아도 한쪽만 서는 날은 남는다. 그건 이 상수로 못 닫는다.
-# 여기서 import 하지 않는 이유는 순환(`layers` → `attribute`)이다.
+# 층 β(ALPHA-862 폐지)와 같은 숫자였지만 세는 것이 달랐다 - 여기 `hist` 는
+# `gap_covariate` 질의에 LIMIT 이 없어 **전 이력**이고(그래서 20 은 "역사상 20일"),
+# 지금 이 상수의 소유자는 갭 축(`gap_covariate`·`market_source`)뿐이다.
 MIN_BETA_N = 20
 
 
@@ -544,9 +540,10 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     import os
     from .registry import recall, record
     shares, labels, after_close = load_cell(lake, ticker, instrument_id, day)
-    from .layers import overnight as _overnight
+    # `overnight` 은 이 모듈 소유다(ALPHA-862 이관) - 지역 import 로 옛 자리를
+    # 가리키면 모듈 로드·테스트는 통과하고 라이브 첫 호출에서만 죽는다.
     facts, types = cell_facts(ticker, day, shares, labels, after_close,
-                              _overnight(lake, day))
+                              overnight(lake, day))
     root = os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")
 
     tuples: list[HypothesisTuple] = []

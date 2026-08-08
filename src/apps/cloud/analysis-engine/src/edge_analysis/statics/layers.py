@@ -175,12 +175,12 @@ def _series(lake, day: str, kinds: tuple[str, ...],
                       vol is not None and float(vol) <= 0)
                 for sym, lr, vol in rows if lr is not None}
     pick = f" AND symbol IN ({lit})" if syms else ""
+    d0 = dt.date.fromisoformat(day)
     rows = lake.sql(
         "SELECT symbol, any_value(name), list(close ORDER BY date), "
         "       list(CAST(date AS DATE) ORDER BY date), list(volume ORDER BY date) "
         f"FROM layers_daily WHERE kind IN {kinds} AND date <= DATE '{day}'{pick} "
         "GROUP BY symbol")
-    d0 = dt.date.fromisoformat(day)
     out = {}
     for sym, nm, closes, dates, vols in rows:
         # 당일 수익률에는 마지막 두 값이면 된다(분모 = 직전 종가). 당일 행이 없으면
@@ -223,9 +223,10 @@ def _krx_sector_candidate(lake, etf: str, day: str):
               SELECT code, count(*) n FROM latest
               GROUP BY 1 ORDER BY 2 DESC LIMIT 1
             )
-            SELECT si.trade_date, si.close, (SELECT code FROM m) AS code
+            SELECT si.trade_date, any_value(si.close), any_value((SELECT code FROM m))
             FROM sector_index si WHERE si.code = (SELECT code FROM m)
-              AND si.trade_date <= DATE '{day}' ORDER BY 1 DESC LIMIT 2""")
+              AND si.trade_date <= DATE '{day}'
+            GROUP BY si.trade_date ORDER BY 1 DESC LIMIT 2""")
     except Exception:                               # noqa: BLE001 - 부재는 후보 없음
         return None
     if len(rows) < 2 or rows[0][2] is None:
@@ -250,7 +251,6 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     층은 **KR 섹터 ETF** 다(KRX 업종지수는 5분봉이 없다 - 실측 0건). 후보 선정은
     구성 겹침 최대이지 적합이 아니다.
     """
-    d0 = dt.date.fromisoformat(day)
     # 이번 호출의 판정으로 덮는다. 한 런이 `decompose` 를 두 번 부르므로(라우팅·설명)
     # 앞 호출의 실패가 남으면 뒤 호출이 성공해도 커버리지가 실패를 말한다 — 부재를
     # 안 지우는 것은 부재를 지어내는 것과 같다.
@@ -319,7 +319,11 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
                 # 적합이 아니다 - 적합으로 고르면 섹터가 아니라 '가장 잘 맞는
                 # 무엇'이 된다(ALPHA-862 에서 회귀 선택을 걷어낸 이유와 같다).
                 sector, best_ov = (s_, nm, s_now, ov), ov
-    if sector is not None and (MARKET_CODE in ser or etf == MARKET_CODE):
+    # **시장 층이 섰을 때만** 섹터를 세운다. 차감 기준이 없으면 섹터가 시장 몫까지
+    # 전액 청구하고, 산문은 "(시장 차감)" 이라 적는다 - 일어나지 않은 차감을 말하는
+    # 거짓이다. 대상이 시장 프록시 자신일 때도 같은 이유로 섹터를 안 세운다: 그
+    # 경우는 route 가 "시장 100%" 로 정식 처리하는 정상 경로다(069500 07-29).
+    if sector is not None and layers:
         code, nm, s_now, ov = sector
         # β=1 시장 차감 - 시장과 겹치는 몫을 빼야 "시장이 민 건지 섹터가 민 건지"
         # 배분 순서 논쟁이 없다. 회귀 직교화의 단위계수판이다.
