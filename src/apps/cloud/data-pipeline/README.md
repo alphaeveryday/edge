@@ -266,8 +266,16 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 
 # 국내 공시(disclosure) 원본저장(Step1) — OpenDART 공시목록(list.json) + 공시서류 원본
 # (document.xml). 재무제표(fnlttSinglAcnt)와 다른 API·별개 잡이다. **날짜창의 시장 전체**
-# 공시목록을 페이지네이션해 유니버스(stock_code)∩대상 유형(공급계약·사업보고서, report_nm
-# 부분일치)만 추리고, 매칭 공시의 원문 본문을 rcept_no별 ZIP(euc-kr HTML)로 무변형 저장한다.
+# 공시목록을 페이지네이션해 유니버스(stock_code) 행을 **전량** 메타로 남기고, 그중 대상 유형
+# (공급계약·사업보고서, report_nm 부분일치)의 원문 본문만 rcept_no별 ZIP(euc-kr HTML)로 무변형
+# 저장한다. ⚠️ **유형은 탈락 조건이 아니라 행마다 실리는 `is_target` 플래그다**(ALPHA-865) —
+# 목록 질의는 유형과 무관하게 창 전체를 훑으므로 비대상 행을 버려도 콜이 하나도 안 주는데,
+# 버리면 나중에 대상을 넓힐 때 그 기간을 통째로 재수집해야 한다. 비싼 것은 본문(행당 1콜)이라
+# 그쪽만 제한한다. 비대상 행은 `document_raw_path`·`body_format` 이 명시적 None 이고, 감쇠는
+# collection_log 의 `universe_matched`(유니버스 통과)·`type_matched`(유형까지 통과)가 갈라 센다.
+# `is_target` 을 정한 기준은 같은 로그의 `report_name_filters` 에 남는다(필터를 넓힌 뒤 어느
+# 런이 어느 기준이었는지 복원하려면 필요하다). 정제는 원래부터 report_nm 으로 라우팅해 와서
+# 비대상 행은 `records_skipped_type` 으로 빠진다 — 정제 스텝은 손댈 것이 없다.
 # 날짜창은 뉴스와 동형(미지정=증분 어제~오늘, 백필은 --from/--to). 인증키는 env 주입.
 # 수집 대상은 canonical KR holdings ETF 별 최신 파티션 합집합의 **구성종목** ∪ targets
 # (가격과 같은 축, ALPHA-477 — 합집합 규칙은 ALPHA-590). KRX 단축코드는 list 행의 stock_code 와 항등이라 심볼맵 없이 수집되고,
@@ -880,7 +888,14 @@ settings.targets.keywords            # ["금리", ...]
   **다른 API**다 — 공시는 개별 공시서류(공급계약·사업부문 등)를 다룬다. 메타 행은 `part-*.ndjson`
   에, 공시서류 원본 본문(document.xml)은 ndjson 에 못 섞는 바이너리(euc-kr HTML ZIP)라 같은 파티션
   아래 **`documents/{rcept_no}.zip` 로 받은 ZIP 을 무변형 저장**하고, 메타 행의 `document_raw_path`
-  가 그 객체를 가리킨다(메타↔본문 링크). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
+  가 그 객체를 가리킨다(메타↔본문 링크). ⚠️ **메타는 유니버스 행 전량이지만 본문은 대상 유형만**
+  이다(ALPHA-865) — 유형은 행마다 실리는 `is_target` 플래그이고, 비대상 행은 `document_raw_path`·
+  `body_format` 이 명시적 None 이다(키 부재가 아니다). 예외 하나: `rcept_no` 가 결측·비문자열인
+  행은 유형과 무관하게 뺀다 — 본문 객체 키도 canonical 병합 정체성도 rcept_no 라 **보존해도
+  영영 못 쓰는 행**이고, 조용히 버리지 않고 `rows_dropped_malformed` 로 센다. 그래서 이 데이터셋은
+  `records_saved`(보존 전량)와 `ops.records_out`(대상 건수 = `records_saved_target`)이 **의도적으로
+  다른 첫 로그**다 — 유실(`failed_records`)이 대상 스코프라 산출도 같은 스코프여야 한다(아래 ops
+  봉투의 스코프 규칙). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
   (ALPHA-720): 같은 수집일(UTC 기준 ±1일)에 이미 받아 둔 본문은 다시 내려받지 않고 **기존 키를
   가리킨다** — 증분 커서가 없어 매 실행이 날짜창 전체를 재독하므로, 장치가 없으면 하루 여러 번
   도는 레인이 같은 ZIP 을 슬롯 수만큼 받는다. 메타는 그래도 **전건 저장**한다(창 전체 관측이
