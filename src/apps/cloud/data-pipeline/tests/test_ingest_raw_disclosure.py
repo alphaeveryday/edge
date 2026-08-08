@@ -492,7 +492,11 @@ def test_non_target_meta_saved_without_downloading_body(tmp_path):
     key = next(k for k in storage.list_keys("raw") if k.endswith(".ndjson"))
     rows = [json.loads(line) for line in storage.get_bytes(key).decode().splitlines()]
     assert [r["rcept_no"] for r in rows] == ["KEEP", "SKIP"]  # 메타는 전량
+    # 두 필드를 **따로** 묻는다 — 하나만 보면 나머지 한 줄을 지우는 변이가 안 잡힌다.
+    # `[...]` 첨자라 키가 아예 없으면 KeyError 로 죽는다: "부재 vs 명시적 None"까지 가린다
+    # (README 가 명문화한 계약이 정확히 그 구분이다).
     assert rows[1]["document_raw_path"] is None  # 안 받은 것을 받은 척하지 않는다
+    assert rows[1]["body_format"] is None
 
 
 def test_non_target_row_is_not_a_partial_run(tmp_path):
@@ -556,6 +560,21 @@ def test_missing_is_target_key_is_treated_as_non_target(tmp_path):
     assert log["ops"]["records_out"] == 0  # 산출로는 안 센다
 
 
+def test_unknown_filter_basis_is_empty_not_invented(tmp_path):
+    # WHY: 이 필드의 존재 이유는 "이 런이 어느 기준이었나"의 **감사성**이다. 소스가 기준을
+    #      안 주면 빈 목록이어야 한다 — 폴백이 그럴듯한 목록을 지어내면 기준 미상인 런이
+    #      **거짓 기준을 찍고**, 나중에 필터를 넓혔을 때 그 런을 잘못 분류한다(모르는 것을
+    #      아는 것처럼 적는 쪽이 값이 없는 것보다 나쁘다).
+    #      기준을 가진 소스만 테스트하면 폴백 경로를 한 번도 안 밟는다.
+    source = FakeSource(records=[_rec("A1")])
+    del source.report_name_filters
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert _log(storage, "r1")["report_name_filters"] == []
+
+
 def test_ops_records_out_counts_targets_not_universe(tmp_path):
     # WHY: 메타를 전량 보존하게 되면서 `saved` 가 유니버스 전량이 됐는데 `failed_records` 는
     #      대상 스코프 그대로다. 둘을 섞으면 ops/entry.py 가 명문화한 "산출과 유실은 같은
@@ -584,7 +603,12 @@ def test_all_targets_failed_is_error_even_with_non_target_meta(tmp_path):
     #      영영 없어진다(이 스텝이 status 어휘를 길게 정당화해 둔 그 어휘다).
     # 대상 행이 **소스에서** 전부 떨어진 모양 — 벤더가 rcept_no 를 드리프트시키면 실제로
     # 이렇게 된다(본문 fetch 실패는 메타를 보존하므로 이 경로가 아니다).
-    source = FakeSource(records=[_rec("SKIP", report_nm="주주총회소집결의", is_target=False)])
+    # 비대상 행을 **둘** 넣어 saved(2)와 실패 건수(1)를 갈라 놓는다 — 같은 값이면 문구의
+    # 숫자를 `saved` 로 바꾸는 변이가 통과한다(전체 문자열 일치도 그건 못 가린다).
+    source = FakeSource(records=[
+        _rec("SKIP1", report_nm="주주총회소집결의", is_target=False),
+        _rec("SKIP2", report_nm="현금ㆍ현물배당결정", is_target=False),
+    ])
     source.fetch_failures = [
         {"symbol": "005930", "rcept_no": None, "error": "대상 공시인데 rcept_no 결측/비문자열"},
     ]
@@ -593,7 +617,7 @@ def test_all_targets_failed_is_error_even_with_non_target_meta(tmp_path):
 
     assert code == 1
     log = _log(storage, "r1")
-    assert log["records_saved"] == 1          # 비대상 메타는 저장됐다
+    assert log["records_saved"] == 2          # 비대상 메타는 저장됐다
     assert log["records_saved_target"] == 0   # 대상은 하나도 못 건졌다
     assert log["status"] == "error"           # → partial 이 아니라 error 다
     # 문구도 단언한다 — 실패 목록엔 유형 판정 앞에서 잡히는 남의 행도 섞이므로 "모든 대상
@@ -605,8 +629,12 @@ def test_attenuation_axes_recorded_in_collection_log(tmp_path):
     # WHY: 두 감쇠 축(유니버스·유형)은 소스가 세고 스텝은 옮기기만 하는데, 옮기는 자리가
     #      끊겨도 다른 테스트는 전부 통과한다(판정에 안 쓰는 관측값이라 게이트가 없다).
     #      list_rows_seen 과 **다른 값**으로 넣어 세 축이 각각 제 자리에 실리는지 고정한다.
+    # 필터 목록도 **기본값이 아닌 값**으로 넘긴다 — 기대값이 픽스처 기본과 같으면
+    # `getattr` 폴백을 그 목록으로 바꾸거나 소스를 안 읽고 상수를 박아도 통과한다
+    # (다른 축에 이미 쓰는 원칙인데 이 축에만 빠져 있었다).
     source = FakeSource(records=[_rec("A1")], list_rows_seen=867,
-                        universe_matched=97, type_matched=1, dropped_malformed=5)
+                        universe_matched=97, type_matched=1, dropped_malformed=5,
+                        report_name_filters=["공급계약", "사업보고서", "배당"])
 
     code, storage = _run(tmp_path, source)
 
@@ -621,4 +649,4 @@ def test_attenuation_axes_recorded_in_collection_log(tmp_path):
     assert log["rows_dropped_malformed"] == 5
     # `is_target` 을 정한 기준도 함께 — 없으면 나중에 필터를 넓혔을 때 어느 런이 어느
     # 기준이었는지 복원되지 않아 "보존해 뒀다가 재파싱"이라는 이 티켓의 전제가 깨진다.
-    assert log["report_name_filters"] == ["공급계약", "사업보고서"]
+    assert log["report_name_filters"] == ["공급계약", "사업보고서", "배당"]
