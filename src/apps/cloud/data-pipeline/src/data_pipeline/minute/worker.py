@@ -292,7 +292,14 @@ class MinuteWorkerLoop:
                 # 자격 없음이 반환값(DRAINING)에 안 실린다 — bounded 확인 게이트가
                 # "자격도 없었는데 성공"으로 판정하지 않게 카운터로 남긴다
                 self.drain_blocked = getattr(self, "drain_blocked", 0) + 1
-            for _ in range(self.config.recovery_budget_per_tick):
+            # ⚠️ **drain 회수는 backlog recovery 와 다른 일인데 노브를 공유하고 있었다**
+            # (ALPHA-851 리뷰). `recovery_budget_per_tick = 0` 인 dataset(iNAV)에서 이
+            # 루프가 0회 돌면 CLAIMED 가 남고, `ack_drain` 은 CLAIMED 잔존 시 거부하므로
+            # 세션이 **DRAINING 에 영구 고착**된다 — EOD 가 그 dataset 에서 영영 시작되지
+            # 않고 상주 진입점은 sleep 루프를 무한히 돈다. 위 도크스트링이 요구하는 그
+            # 회수다. backlog 를 안 쫓는 dataset 도 **drain 수렴은 선택이 아니다.**
+            reclaim_budget = max(1, self.config.recovery_budget_per_tick)
+            for _ in range(reclaim_budget):
                 claim = self.ledger.claim_due_window(
                     session_id=self.session_id, worker_id=self.config.worker_id,
                     fence_token=self.fence_token, now=now,
@@ -817,6 +824,30 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     return 1 if failed or (blocked and not processed) else 0
 
 
+def inav_run_blocked(parsed_day, today, skip_reason: str | None) -> str | None:
+    """이 실행을 막아야 하는 사유, 돌려도 되면 None (ALPHA-851 리뷰).
+
+    두 축 다 **같은 결함으로 이어진다**: 벤더 응답 행에는 날짜가 없고(`bsop_hour` 는
+    HHMMSS 뿐) 소급 질의 경로도 없다(`_query_params` 가 날짜를 안 싣는다). 그래서 언제
+    돌리든 응답은 "지금 기준 최근 30행"이고, 라벨은 **어느 날짜의 window 와도 1:1로
+    맞는다** — 틀린 날짜로 돌리면 오늘 값이 그 날짜의 **불변** canonical artifact 로
+    굳고, 이 소스는 재수집이 불가라 되돌릴 방법이 없다.
+
+    * **과거·미래 날짜** — 운영자 실수다. 이 벤더에 소급이 아예 없으므로 오늘이 아닌
+      날짜로는 옳은 값을 만들 수 없다.
+    * **휴장일·개장 전** — KIS 는 빈 응답이 아니라 **직전 거래일 행을 그대로** 준다
+      (2026-07-25 토요일 실행이 7/24 데이터 930행을 적재한 실측). raw 스텝은 이미
+      `skip_reason` 으로 막는데(`ingest_raw_etf`), canonical 경로는 그 가드를 안 지났다
+      — 가드가 소비자 한쪽에만 있던 형태다.
+    """
+    if parsed_day != today:
+        return (
+            f"--session-date {parsed_day} 가 오늘({today})이 아니다 — 이 벤더는 소급 질의가 "
+            "불가하고 응답 행에 날짜가 없어, 지금 값이 그 날짜의 불변 artifact 로 굳는다"
+        )
+    return skip_reason
+
+
 def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
                     max_ticks: int | None = None, tick_seconds: int = 20) -> int:
     """장중 iNAV Worker 진입점 — `python -m data_pipeline.run inav-worker` (ALPHA-851).
@@ -866,6 +897,21 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
     except ValueError:
         raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
     universe_model = load_universe_uri(universe)
+    source = KisInavSource(
+        settings.kis_nav.source,
+        settings.krx_etf.source.etf_map,
+        # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
+        PoliteClient(min_interval=0.5),
+        interval_sec=DEFAULT_INTERVAL_SEC,
+    )
+    # ⚠️ **수집 전에 막는다.** 틀린 날짜·휴장일에 돌면 지금 값이 그 날짜의 **불변**
+    # artifact 로 굳고, 이 소스는 재수집이 불가라 되돌릴 길이 없다(`inav_run_blocked`).
+    blocked = inav_run_blocked(parsed_day, datetime.now(KST).date(), source.skip_reason)
+    if blocked is not None:
+        # 휴장일·개장 전은 **실패가 아니라 skip 이다**(raw 스텝과 같은 규약, ALPHA-557) —
+        # 스케줄러가 붙으면 휴장일마다 정상적으로 지나간다. 조용히는 아니다(Rule 12).
+        logger.warning("inav-worker 실행 안 함 — %s", blocked)
+        return 0
     session_id = stable_domain_id(
         "msn", DATASET_ETF_INAV_MINUTE, "kis", parsed_day.isoformat()
     )
@@ -876,16 +922,7 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
             "plan-minute-session --dataset etf_inav_minute 이 먼저 돌아야 한다"
         )
     worker_id = f"iw-{socket.gethostname()}-{os.getpid()}"
-    collector = KisInavCollector(
-        KisInavSource(
-            settings.kis_nav.source,
-            settings.krx_etf.source.etf_map,
-            # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
-            PoliteClient(min_interval=0.5),
-            interval_sec=DEFAULT_INTERVAL_SEC,
-        ),
-        clock=lambda: datetime.now(timezone.utc),
-    )
+    collector = KisInavCollector(source, clock=lambda: datetime.now(timezone.utc))
     worker = InavWorker(
         session_id=session_id,
         ledger=ledger,

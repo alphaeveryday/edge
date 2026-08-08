@@ -176,3 +176,59 @@ def test_재실행은_같은_키에_같은_바이트다(tmp_path):
 
     assert LocalStorage(root=tmp_path).get_bytes(key) == first
     assert db.windows[(session_id, window_start)]["generation"] == 1
+
+
+def test_drain_은_recovery_예산이_0_이어도_수렴한다(tmp_path):
+    """🔴 이 둘은 **다른 일인데 노브를 공유했다**(리뷰 지적). backlog 를 안 쫓는 것과
+    drain 중 고아 CLAIMED 회수는 별개인데, `tick()` 이 같은 `recovery_budget_per_tick`
+    으로 두 루프를 돌린다.
+
+    0 이면 회수 루프가 0회 돌고, `ack_drain` 은 CLAIMED 잔존 시 거부하므로 세션이
+    **DRAINING 에 영구 고착**된다 — EOD 가 그 dataset 에서 영영 시작되지 않고 상주
+    진입점은 sleep 루프를 무한히 돈다. 도달 경로는 평범하다: ACTIVE 에서 실패한 window
+    는 claim 이 release 되지 않아 lease(기본 300초) 동안 CLAIMED 인데, 그 사이 EOD 가
+    drain 을 걸면 그대로 봉인된다.
+    """
+    db = FakeMinuteDB()
+    worker, ledger, session_id, _ = build_worker(db, tmp_path, windows=2)
+    worker.tick(NOW)  # fence 획득 + 첫 window 처리
+
+    # 죽은 attempt 가 남긴 고아 CLAIMED — lease 는 이미 만료됐다
+    window_start = ledger.session_window_rows(session_id=session_id)[1][0]
+    row = db.windows[(session_id, window_start)]
+    row.update(data_status="CLAIMED", claimed_by="dead-worker", claim_token=99,
+               lease_expires_at=NOW - timedelta(seconds=1))
+    ledger.request_drain(session_id=session_id, now=NOW)
+
+    states = [worker.tick(NOW + timedelta(seconds=60 + i)) for i in range(4)]
+
+    assert "DRAINED" in states, f"drain 이 수렴하지 않았다: {states}"
+    assert db.windows[(session_id, window_start)]["data_status"] != "CLAIMED"
+
+
+class TestRunGate:
+    """틀린 날짜·휴장일에 돌면 **지금 값이 그 날짜의 불변 artifact 로 굳는다** — 벤더
+    응답에 날짜가 없고(`bsop_hour` = HHMMSS) 소급 질의 경로도 없어서, 라벨이 어느 날짜의
+    window 와도 1:1로 맞는다. 이 소스는 재수집이 불가라 되돌릴 방법이 없다.
+
+    벽시계를 안 읽는 순수 함수로 빼서 가상 시계 없이 못박는다.
+    """
+
+    def test_오늘이_아니면_막는다(self):
+        from data_pipeline.minute.worker import inav_run_blocked
+
+        today = date(2026, 8, 10)
+        assert inav_run_blocked(date(2026, 8, 7), today, None) is not None   # 과거
+        assert inav_run_blocked(date(2026, 8, 11), today, None) is not None  # 미래
+        assert inav_run_blocked(today, today, None) is None
+
+    def test_휴장일_개장전_사유는_그대로_전달된다(self):
+        """raw 스텝은 이미 `skip_reason` 으로 막는데 canonical 경로는 그 가드를 안 지났다
+        — KIS 는 휴장일에 빈 응답이 아니라 **직전 거래일 행을 그대로** 준다(실측)."""
+        from data_pipeline.minute.worker import inav_run_blocked
+
+        today = date(2026, 8, 10)
+        assert inav_run_blocked(today, today, "non-trading day (KST 2026-08-10)") == (
+            "non-trading day (KST 2026-08-10)"
+        )
+        assert inav_run_blocked(today, today, "before market open (KST 08:50 < 09:00)") is not None
