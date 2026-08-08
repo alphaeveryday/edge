@@ -26,10 +26,14 @@ symbols = ["005930", "091160", "NVDA"]
 """
 
 
-def _rec(rcept_no, report_nm="단일판매ㆍ공급계약체결", market="KR") -> dict:
+def _rec(rcept_no, report_nm="단일판매ㆍ공급계약체결", market="KR", is_target=True) -> dict:
+    # `is_target` 은 실 소스가 매 행에 다는 플래그다(ALPHA-865) — 픽스처가 이걸 빼면 스텝의
+    # 본문 분기가 **한 번도 안 밟히는** 경로가 되어, 비대상 행을 어떻게 다루는지 아무 테스트도
+    # 검증하지 못한다(픽스처는 운영 산출 모양을 그대로 흉내내야 한다).
     return {
         "market": market, "our_ticker": "005930", "stock_code": "005930",
         "corp_code": "00126380", "report_nm": report_nm, "rcept_no": rcept_no,
+        "is_target": is_target,
         "source_url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
         "fetched_at": "2026-07-10T00:00:00+00:00",
     }
@@ -42,7 +46,8 @@ class FakeSource:
 
     def __init__(self, records=(), *, enabled=True, planned=1,
                  doc_fail=frozenset(), doc_bytes=b"PK\x03\x04body", stop=False,
-                 list_total_count=None, list_rows_seen=0, resolved_window=None):
+                 list_total_count=None, list_rows_seen=0, resolved_window=None,
+                 universe_matched=0, type_matched=0):
         self._records = list(records)
         self.enabled = enabled
         self.planned_symbols = planned
@@ -50,6 +55,9 @@ class FakeSource:
         # 창 규모 관측 — 실 소스가 fetch 중에 채운다. 스텝은 이걸 로그로 옮기기만 한다.
         self.list_total_count = list_total_count
         self.list_rows_seen = list_rows_seen
+        # 감쇠 두 축(ALPHA-865) — 마찬가지로 소스가 채우고 스텝은 옮기기만 한다.
+        self.universe_matched = universe_matched
+        self.type_matched = type_matched
         # 실제로 수집한 창 — 인자와 다를 수 있다(시작일만 준 창은 소스가 끝을 확정한다)
         self.resolved_window = resolved_window or (None, None)
         self._doc_fail = doc_fail
@@ -460,3 +468,59 @@ def test_window_scale_observed_in_collection_log(tmp_path):
     log = _log(storage, "r1")
     assert log["list_total_count"] == 1069
     assert log["list_rows_seen"] == 1069
+
+
+def test_non_target_meta_saved_without_downloading_body(tmp_path):
+    # WHY: 이 스텝이 유형 플래그로 지키는 것은 **비용** 하나다 — 메타는 전량 남기되(나중에
+    #      대상을 넓힐 때 재수집 불필요) 본문은 대상만 받는다(행당 1콜이라 안 막으면 하루
+    #      ~11콜이 ~1,000콜이 된다). 둘을 따로 묻는다: 저장은 2행인가(보존), 본문 요청은
+    #      대상 하나뿐인가(비용). 저장만 보면 본문을 다 받아도 통과하고, 요청만 보면 비대상
+    #      메타를 버려도 통과한다.
+    source = FakeSource(records=[
+        _rec("KEEP"),
+        _rec("SKIP", report_nm="주주총회소집결의", is_target=False),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    assert source.doc_requests == ["KEEP"]  # 비대상 본문은 요청조차 하지 않는다
+    key = next(k for k in storage.list_keys("raw") if k.endswith(".ndjson"))
+    rows = [json.loads(line) for line in storage.get_bytes(key).decode().splitlines()]
+    assert [r["rcept_no"] for r in rows] == ["KEEP", "SKIP"]  # 메타는 전량
+    assert rows[1]["document_raw_path"] is None  # 안 받은 것을 받은 척하지 않는다
+
+
+def test_non_target_row_is_not_a_partial_run(tmp_path):
+    # WHY: 비대상 행은 본문이 없는 게 **정상**이다. 이걸 본문 수집 실패와 같은 신호로 묶으면
+    #      유형 필터를 푼 순간 모든 런이 partial(exit 1)이 되어 SFN 이 매 슬롯 raw 부분실패를
+    #      알린다 — 알림이 상시 켜지면 진짜 실패가 묻힌다.
+    source = FakeSource(records=[
+        _rec("SKIP1", report_nm="주주총회소집결의", is_target=False),
+        _rec("SKIP2", report_nm="현금ㆍ현물배당결정", is_target=False),
+    ])
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["status"] == "success"
+    assert log["ops"]["failed_records"] == 0
+    assert log["documents_saved"] == 0
+    assert log["records_saved"] == 2
+
+
+def test_attenuation_axes_recorded_in_collection_log(tmp_path):
+    # WHY: 두 감쇠 축(유니버스·유형)은 소스가 세고 스텝은 옮기기만 하는데, 옮기는 자리가
+    #      끊겨도 다른 테스트는 전부 통과한다(판정에 안 쓰는 관측값이라 게이트가 없다).
+    #      list_rows_seen 과 **다른 값**으로 넣어 세 축이 각각 제 자리에 실리는지 고정한다.
+    source = FakeSource(records=[_rec("A1")], list_rows_seen=867,
+                        universe_matched=97, type_matched=1)
+
+    code, storage = _run(tmp_path, source)
+
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["list_rows_seen"] == 867
+    assert log["universe_matched"] == 97
+    assert log["type_matched"] == 1

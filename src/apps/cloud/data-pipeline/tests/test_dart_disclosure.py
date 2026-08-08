@@ -129,10 +129,12 @@ def _source(tmp_path, client, **override):
     return DartDisclosureSource(config, client)
 
 
-def test_filters_by_report_name_and_attaches_provenance(tmp_path):
-    # WHY: 공시목록은 전 유형을 준다 — 대상 유형(공급계약·사업보고서)만 내고, 무관 유형은
-    #      버려야 후속이 본문을 무의미하게 재수집하지 않는다. 그리고 list.json 이 안 주는
-    #      source_url 은 rcept_no 로 구성해 붙여야(파생 provenance) 다운스트림이 원문을 연다.
+def test_report_type_flags_rows_instead_of_dropping_them(tmp_path):
+    # WHY: 유형으로 **버리면** 나중에 대상을 넓힐 때 그 기간을 통째로 재수집해야 한다 —
+    #      목록 질의는 어차피 전 유형을 페이지네이션하므로 버려서 아끼는 호출이 0이다
+    #      (비싼 것은 본문이고 그건 스텝이 플래그로 막는다, ALPHA-865). 그래서 유형은
+    #      탈락 조건이 아니라 `is_target` 플래그여야 한다.
+    #      순서·값을 따로 묻는다: 세 행이 다 나오는가(존재), 플래그가 유형과 맞는가(값).
     client = FakeClient(list_pages={1: _page([
         _row("단일판매ㆍ공급계약체결              ", rcept_no="A1"),  # 대상(공급계약) + 꼬리공백·ㆍ
         _row("주주총회소집결의", rcept_no="B2"),                     # 비대상
@@ -142,13 +144,64 @@ def test_filters_by_report_name_and_attaches_provenance(tmp_path):
 
     records = list(source.fetch(["005930"]))
 
-    assert [r["rcept_no"] for r in records] == ["A1", "C3"]  # 대상만, 비대상 제외
-    r = records[0]
+    assert [r["rcept_no"] for r in records] == ["A1", "B2", "C3"]  # 전량 — 유형으로 안 버린다
+    assert [r["is_target"] for r in records] == [True, False, True]
+    assert source.fetch_failures == []
+
+
+def test_attenuation_counted_on_two_axes(tmp_path):
+    # WHY: 통과분만 세면 유니버스가 자른 몫과 유형이 자른 몫이 한 숫자로 접혀, "대상을
+    #      넓히면 얼마나 늘어나는가"에 답할 수 없다(실측 867행 → 저장 1건의 내역이 그래서
+    #      복원되지 않았다). 두 축을 따로 세는지 **서로 다른 값**으로 확인한다 — 셋이 같은
+    #      값이면 어느 카운터가 어느 축인지 이 테스트가 못 가린다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결", rcept_no="A1"),                        # 유니버스 O · 유형 O
+        _row("주주총회소집결의", rcept_no="B2"),                             # 유니버스 O · 유형 X
+        _row("현금ㆍ현물배당결정", rcept_no="B3"),                           # 유니버스 O · 유형 X
+        _row("단일판매ㆍ공급계약체결", rcept_no="T1", stock_code="000660"),   # 유니버스 X
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    list(source.fetch(["005930"]))
+
+    assert source.list_rows_seen == 4   # 벤더가 건넨 전부
+    assert source.universe_matched == 3  # 유니버스가 1행을 잘랐다
+    assert source.type_matched == 1      # 유형이 거기서 2행을 더 잘랐다
+
+
+def test_non_target_row_without_rcept_no_is_not_a_failure(tmp_path):
+    # WHY: 비대상 행은 본문도 안 받고 정제도 안 타므로 rcept_no 결측이 아무것도 막지 않는다 —
+    #      그걸 실패로 세면 유형 필터를 푼 순간 **원장이 없는 결측을 세기 시작한다**(남의 회사
+    #      행을 유니버스 필터 뒤로 미룬 것과 같은 이유). 대상 행의 결측은 여전히 실패다
+    #      (test_target_with_missing_rcept_no_noted_not_yielded).
+    client = FakeClient(list_pages={1: _page([
+        {"stock_code": "005930", "report_nm": "주주총회소집결의"},  # 비대상 + rcept_no 없음
+        _row("단일판매ㆍ공급계약체결", rcept_no="OK"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    records = list(source.fetch(["005930"]))
+
+    assert [r["is_target"] for r in records] == [False, True]
+    assert source.fetch_failures == []          # 결측이지만 실패가 아니다
+    assert records[0]["source_url"] is None     # 못 만든 URL 을 지어내지도 않는다
+
+
+def test_target_row_carries_derived_provenance(tmp_path):
+    # WHY: list.json 은 source_url 을 안 준다 — rcept_no 로 구성해 붙여야(파생 provenance)
+    #      다운스트림이 원문을 연다. 우리 축(our_ticker·market)과 벤더 축(stock_code)이 둘 다
+    #      실려야 후속이 조인할 수 있다.
+    client = FakeClient(list_pages={1: _page([
+        _row("단일판매ㆍ공급계약체결              ", rcept_no="A1"),
+    ])})
+    source = _source(tmp_path, client, api_key="k")
+
+    r = list(source.fetch(["005930"]))[0]
+
     assert r["market"] == "KR" and r["our_ticker"] == "005930"
     assert r["stock_code"] == "005930"
     assert r["source_url"] == "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=A1"
     assert "fetched_at" in r
-    assert source.fetch_failures == []
 
 
 def test_foreign_rows_filtered_without_touching_corpcode(tmp_path):
@@ -198,7 +251,8 @@ def test_row_repeated_across_shifted_pages_collapses(tmp_path):
 
     records = list(source.fetch(["005930"]))
 
-    assert [r["rcept_no"] for r in records] == ["DUP", "NEW"]
+    # 비대상(X)도 이제 나온다 — 접히는 것은 **완전히 같은 행**(DUP)뿐이지 유형이 아니다.
+    assert [r["rcept_no"] for r in records] == ["DUP", "X", "NEW"]
 
 
 def test_long_backfill_window_is_split_for_the_3month_limit(tmp_path):
