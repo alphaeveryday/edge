@@ -331,7 +331,9 @@ ObjectSet DSL(`data_pipeline/semantic/objectset.py`)은 다른 앱에 있고 이
 ## 19. 데이터 현황 (2026-08-01 실측)과 블로커
 
 ```
-있음   5분봉 916거래일 (종목별 편차 큼: 삼성전자 906일 · **ETF 43일** → 구간 β 가 MIN_BETA_N 40 에서 막힘)
+있음   5분봉 916거래일 (종목별 편차 큼: 삼성전자 906일 · ETF 43일 — 당시 MIN_BETA_N 40 에서
+       막혔으나 **해소됨**: ALPHA-836 백필로 섹터 계열 79/80 이 40일을 넘겼고 ALPHA-849 가
+       요건을 20 으로 낮춰 80/80 이다)
        사건 30,785 (τ 초 단위) · event_argument 37,729 · 스레드 1,214 · RDB 64표
        **금리곡선 292일 12만기** (month1~year30) · **환율 1,464행** (DXY·EURUSD·USDJPY·USDKRW)
        **해외지수 1,758행** (SPY·QQQ·SOXX·SMH·^GSPC·^NDX) — 셋 다 `available_at` PIT

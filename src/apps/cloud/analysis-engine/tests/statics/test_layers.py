@@ -110,6 +110,51 @@ def test_decompose_distinguishes_short_history_from_missing_series():
     assert str(MIN_BETA_N) in lake.exists["layers"]
 
 
+def test_the_two_min_sample_constants_do_not_drift_apart():
+    """`layers` 와 `attribute` 의 최소 표본이 같은 값이다 (ALPHA-849).
+
+    WHY: 두 모듈이 각자 상수를 들고 있다(순환 import 회피). 한쪽만 고치는 변경이 조용히
+    통과하는 것을 막는다 — 그게 이 단언이 잡는 전부다.
+
+    ⚠️ 값이 같다고 **두 판정이 같이 서는 것은 아니다.** 세는 것이 다르다: `layers` 는
+    `[-BETA_WINDOW:]` 로 60일에 캡이 걸린 수익률 계열이고, `attribute` 는 LIMIT 없는
+    갭×미국팩터 쌍의 전 이력이다. 재료가 다르므로 값이 같아도 한쪽만 서는 날은 남는다 —
+    그건 이 상수로 못 닫고, 이 테스트도 그것까지는 약속하지 않는다.
+    """
+    from edge_analysis.statics.attribute import MIN_BETA_N as ATTRIBUTE_MIN
+
+    assert MIN_BETA_N == ATTRIBUTE_MIN, (
+        f"layers({MIN_BETA_N}) != attribute({ATTRIBUTE_MIN}) — 한쪽만 옮겼다"
+    )
+
+
+def test_a_series_below_the_old_requirement_is_no_longer_refused(caplog):
+    """옛 요건(40)에 못 미치는 표본이 **표본 부족으로 거부되지 않는다** (ALPHA-849).
+
+    WHY: 요건을 낮춘 목적이다 — 상장이 늦어 40일을 물리적으로 못 채우는 계열(실측
+    0210A0, 33거래일이 최대)은 `len(hist) < MIN_BETA_N` 에서 통째로 잘려 그 ETF 의 분해가
+    아예 없었다. 값만 바꾸고 이 경로를 안 태우면 "낮췄다"가 코드로 확인되지 않는다.
+
+    ⚠️ **"섹터 층이 뜬다"를 단언하지 않는다.** 층 구성은 커버리지가 정한다 — 시장 하나로
+    목표(`COVER_TARGET`)를 넘기면 섹터는 호출조차 안 된다(실측: 같은 픽스처가 hist 43·28
+    에선 섹터를 세우고 38·32 에선 시장만 세운다 — 표본 길이가 아니라 그날 시장 기여가
+    갈랐다). 그건 설계된 예산 제한이지 이 티켓이 건드리는 축이 아니다.
+    """
+    assert MIN_BETA_N < 32 < 40, "이 테스트의 전제(32일 표본)가 요건과 안 맞는다"
+
+    lake = _lake()
+    lake.exists = {}
+    # `_series` 가 np.diff 로 첫 날을 잃고 당일을 빼므로 hist 는 34가 아니라 32다.
+    for m in lake.series.values():
+        m["ret"] = m["ret"][:34]
+
+    roll = decompose(lake, "T", DAYS[34].isoformat())
+
+    assert roll is not None, "32거래일 표본이 거부됐다 — 요건 완화가 안 먹었다"
+    assert "layers" not in lake.exists, (
+        f"표본 부족 사유가 남았다: {lake.exists.get('layers')}")
+
+
 def test_decompose_does_not_pollute_unbound_which_counts_tables():
     """사유를 `unbound` 에 넣으면 안 된다 — 거긴 `표 → 못 묶은 사유` 이고 소비자가 있다.
 

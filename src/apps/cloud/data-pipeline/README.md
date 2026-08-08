@@ -110,7 +110,12 @@
 > `_normalize` 를 재사용한다. ⚠️ 시각 축 규칙이 둘로 갈린다: **내용은 이번 관측 값**으로
 > 쓰고 **`available_at` 은 GREATEST 로 앞으로만** 간다 — 시각으로 내용 쓰기를 막으면 배치가
 > 미래 `published_at` 을 실은 행에서 정정이 유실되고, 시각을 뒤로 밀면 과거 as-of 구간에서
-> 문서가 사라진다), **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
+> 문서가 사라진다. **배치와의 승자 규칙은 ALPHA-696 이 `news_document.lead_observed_at`
+> 으로 정했다** — 이 경로는 쓰기 가드 없이 쓰되 리드 상태가 움직였을 때만 그 시각을 찍고,
+> 배치는 미주장이거나 자기 canonical `fetched_at` 이 더 새로울 때만 덮는다. 비대칭이
+> 의도이고, 계약 전문은 마이그레이션
+> `V202608071018__add_news_document_lead_observed_at.sql` 에 있다),
+> **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
 > `run drain-minute-session`. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
 > 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
@@ -424,6 +429,12 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 그래서 이 문서를 참조하는 행은 계산값이 아니라 **자연키로 되읽은 id** 에 붙여야 한다(ALPHA-628).
 # 이 스텝이 함께 채우는 news_document.lead_text(분석엔진 프롬프트의 스니펫 축)·publisher
 # (언론사, ALPHA-695)가 그 규칙을 쓴다.
+# ⚠️ lead_text 는 **무조건 덮지 않는다**(ALPHA-696) — 이 표엔 1분 뉴스 레인
+# (PgNewsCanonicalWriter)도 쓰기 때문이다. news_document.lead_observed_at 이 미주장(NULL)
+# 이거나 이 런의 canonical fetched_at 이 그보다 새로울 때만 이긴다. fetched_at 이 결손이면
+# 신선도를 주장하지 않고(published_at 폴백 금지) 그 노출을 로그의 lead_unclaimed_freshness
+# 로 센다(결손엔 빈 문자열도 포함 — 분모는 같은 로그의 lead_attempted, ALPHA-848).
+# publisher 는 별도 축이라 이 가드가 없다.
 # --from/--to 는 published_date
 # 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
@@ -1206,8 +1217,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # ⚠️ 계획·커밋을 **원장에서 읽는다** — `--universe` 를 받지 않는다(거부한다). 마감 후의
 # universe 파일은 수동 편집 대상이라 그날 계획과 갈릴 수 있고, 갈리면 없는 분을 결손으로
 # 세거나 있는 분을 계획 밖으로 버린다.
-# ⚠️ `WRITER_SINCE`(2026-08-04) 이전 파티션은 거부한다 — 그 앞은 fmp·토스 백필의 정본이라
-# 과거 --session-date 재실행 하나가 벤더 원본을 파생본으로 갈아치운다.
+# ⚠️ `WRITER_SINCE` 이전 파티션은 거부한다 — 그 앞은 fmp·토스 백필의 정본이라 과거
+# --session-date 재실행 하나가 벤더 원본을 파생본으로 갈아치운다. 날짜를 여기 적지
+# 않는다: 경계는 옮겨진다(ALPHA-836 — 롤업이 온전한 계열을 갖는 날로 이동했다).
 # 출력에 결손 판정이 함께 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면
 # 물어볼 곳이 그것뿐이다. 목록이 **둘**인 이유는 처방이 다르기 때문이다:
 #   · `unfilled_settled_days` — 파티션이 비었다 → **1분 재수집**이 필요하다

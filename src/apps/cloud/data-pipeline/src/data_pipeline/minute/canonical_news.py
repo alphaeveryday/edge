@@ -39,15 +39,20 @@ T1 을 읽는다 — 이 모듈이 막으려던 P1 그대로다. 그래서 규�
 - **내용**(제목·발행시각·URL·언어·리드)은 이번 관측 값으로 쓴다. 1분 경로의 관측은 라이브
   소스의 현재 상태다.
 - **시각**은 `GREATEST` 로 앞으로만 간다. 뒤로 밀면 과거 as-of 구간에서 문서가 사라진다.
+  ⚠️ 이 단조 보장은 **`available_at` 한정**이다. 아래 `lead_observed_at`(ALPHA-696 승자 축)
+  은 관측 시각을 그냥 찍으므로 아직 구조적으로 단조가 아니다 — 배치 가드가 그 값을 보니
+  같은 것으로 읽지 마라. 승급(`GREATEST`)은 마이그레이션 주석이 후속으로 남겨 두었다.
 
-⚠️ **이 writer 가 못 막는 것 둘**(리뷰 확인, 코드로 해결 불가):
+✅ **배치가 리드를 되돌리던 것은 해소됐다(ALPHA-696).** 예전엔 `load_documents` 가
+`news_document` 리드를 시각 조건 없이 덮어, 레이크 canonical 이 아직 옛 본문(T1)이면 그
+값으로 회귀했다. 이제 `lead_observed_at` 이 승자 축이고, 배치는 그 값이 **미주장(NULL)이거나**
+자기 canonical `fetched_at` 이 더 새로울 때만 이긴다 — NULL 갈래가 드문 경우가 아니다
+(`assemble_events` 가 먼저 만든 빈 자리·마이그레이션 이전 행이 전부 그렇다). 이 모듈이 지켜야 할 몫은 아래 리드 UPSERT 주석에 있다 — **쓰기
+가드는 안 걸고, 시각은 리드 상태가 움직였을 때만 찍는다.**
 
-① **배치가 나중에 돌면 리드를 되돌릴 수 있다.** `load_documents` 의 `document` INSERT 는
-`DO NOTHING` 이라 안전하지만 `news_document` 리드는 조건 없이 덮는다 — 레이크 canonical 이
-아직 옛 본문(T1)이면 그 값으로 회귀하고, 그러면 이 모듈이 고치려던 P1 이 재현된다.
-어느 생산자가 이기는지는 두 파이프라인에 걸친 결정이라 별건이다(ALPHA-696).
+⚠️ **이 writer 가 여전히 못 막는 것**(리뷰 확인, 코드로 해결 불가):
 
-② **기사 행은 하나뿐이라 지문별 job 의 입력을 보존하지 못한다.** 같은 article_id 에 지문이
+**기사 행은 하나뿐이라 지문별 job 의 입력을 보존하지 못한다.** 같은 article_id 에 지문이
 다른 job 이 둘 이상 살아 있으면(같은 창의 URL 동일·본문 상이, 또는 앞 job 소비 전 정정),
 이 행은 마지막 **쓰기**의 본문만 남긴다. 위 모델에서 내용은 시각으로 안 막히므로, 지연된
 커밋(다른 NEWS_ID 가 같은 article_id 로 수렴한 경우 원장의 stale 판정도 서로를 못 본다)이
@@ -183,16 +188,46 @@ class PgNewsCanonicalWriter:
         # 옛 값을 그대로 남기는데, 그건 이 티켓이 고치려는 바로 그 증상이다.
         # document_id 를 서브쿼리로 집는 이유: 위 UPDATE 가 no-op 이면 RETURNING 이 비고,
         # 파이썬이 유도한 id 는 **기존 행의 id 와 다를 수 있다**(다른 경로가 만든 행).
+        # ⚠️ **`lead_observed_at` 은 이 경로의 승자 주장이다(ALPHA-696).** 배치
+        # `load_documents` 는 이 값보다 자기 canonical `fetched_at` 이 새로울 때만 리드를
+        # 덮는다 — 그래서 정정이 레이크의 옛 값으로 되돌아가지 않는다. 계약 전문은
+        # `V202608071018__add_news_document_lead_observed_at.sql` 에 있고, 규칙 둘만
+        # 여기서 지킨다:
+        #
+        # ① **쓰기 가드는 걸지 않는다.** 내용은 언제나 이번 관측이 이긴다 — 시각으로
+        #    내용 쓰기를 막으면 모듈 docstring 이 되돌렸다고 적은 그 P1 이 돌아온다.
+        # ② **시각은 리드 상태가 실제로 움직였을 때만 찍는다.** `WHERE` 절이 충돌 갈래를
+        #    막으므로 재관측이 같은 리드를 주면 시각도 안 움직인다 — 안 그러면 이 레인이
+        #    같은 T1 을 장중 내내 재관측하며 시각만 밀어 올려, 레인이 못 본 진짜 정정을
+        #    배치가 영영 못 싣는다.
+        #    ⚠️ 새 행을 만드는 INSERT 갈래는 `WHERE` 가 막아 주지 않으므로 값으로 가른다
+        #    (`_insert_stamp`) — **리드가 없는 새 행에는 시각을 안 찍는다**(아무도 주장한
+        #    적 없는 빈 자리로 남겨 배치가 채울 수 있게). 리드가 붙는 것도 지워지는 것도
+        #    움직임이라 그 둘은 찍는다(`available_at` 이 쓰는 비대칭과 같은 규칙).
+        #    ⚠️ 충돌 갈래는 `EXCLUDED.lead_observed_at` 이 아니라 **관측 시각 자체**를
+        #    쓴다. `EXCLUDED` 를 물려받으면 리드를 지우는 정정에서 시각이 NULL 로 지워져,
+        #    배치의 `IS NULL` 절이 열리고 옛 리드가 복원된다.
+        #    ⚠️ 가르는 축은 `is None` 이 아니라 **falsy** 다(ALPHA-848). 정본 정규화
+        #    (`normalize_news:199`)가 `" ".join(lead.split())` 이라 공백뿐인 리드는
+        #    `None` 이 아니라 `""` 를 낸다. `is None` 으로 가르면 실질 빈 리드에 시각이
+        #    찍혀, 배치가 진짜 스니펫을 갖고 와도 자기 `fetched_at` 이 더 오래됐으면
+        #    영구 차단된다 — 이 규칙이 막으려던 바로 그 상태다.
+        _insert_stamp = observed_at if normalized["lead_text"] else None
         cur.execute(
             """
-            INSERT INTO news_document (document_id, lead_text)
-            SELECT document_id, %s FROM document
+            INSERT INTO news_document (document_id, lead_text, lead_observed_at)
+            SELECT document_id, %s, %s FROM document
             WHERE source_code = %s AND source_document_id = %s
             ON CONFLICT (document_id) DO UPDATE
-            SET lead_text = EXCLUDED.lead_text
+            SET lead_text = EXCLUDED.lead_text,
+                lead_observed_at = %s
             WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text
             """,
-            (normalized["lead_text"], source_code, article_id),
+            (
+                normalized["lead_text"], _insert_stamp,
+                source_code, article_id,
+                observed_at,
+            ),
         )
         # rowcount 는 "행을 만들었다"도 1 이라 내용 변경과 구분되지 않는다 — **값**으로 본다.
         # 자식 행이 없던 문서(배치가 리드 없이 넣은 형상)의 previous_lead 는 None 이므로,
