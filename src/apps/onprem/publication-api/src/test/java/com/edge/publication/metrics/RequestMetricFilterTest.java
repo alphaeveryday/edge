@@ -6,6 +6,7 @@ import com.edge.publication.entity.ServingRequestMetric;
 import com.edge.publication.exposure.ExposureLogRecorder;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
+import com.edge.publication.repository.PolicyVersionRepository;
 import com.edge.publication.repository.ServingRequestMetricRepository;
 import com.edge.publication.repository.ServingScopeRepository;
 import com.edge.publication.service.ExplanationService;
@@ -43,6 +44,10 @@ class RequestMetricFilterTest {
 	// 제공 범위 판정은 실 DB 통합 테스트(ExplanationScopeIntegrationTest) 소관 — 메트릭 계약
 	// 검증은 행 부재(전부 제공)로 둔다.
 	private static final ServingScopeRepository ALLOW_ALL_SCOPES = (scopeType, scopeKey) -> Optional.empty();
+
+	// 면책 문구 조회도 마찬가지 — 실 DB 통합 테스트(ExplanationDisclaimerIntegrationTest) 소관이라
+	// 여기서는 정책 미발행(기본 문구)으로 둔다.
+	private static final PolicyVersionRepository NO_POLICY = Optional::empty;
 
 	private static final PublishedExplanation SEED = new PublishedExplanation(
 			1L, "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
@@ -93,7 +98,8 @@ class RequestMetricFilterTest {
 	@BeforeEach
 	void setUp() {
 		metrics = new CapturingMetrics();
-		ExplanationService service = new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES);
+		ExplanationService service = new ExplanationService(
+				new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES, NO_POLICY);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -171,7 +177,7 @@ class RequestMetricFilterTest {
 		// 상태(200)를 기록하면 실패 요청이 성공으로 적재돼 Dashboard 에러율이 왜곡된다.
 		MockMvc failing = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
-						new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES)))
+						new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
 					throw new RuntimeException("boom");
 				})
@@ -215,7 +221,7 @@ class RequestMetricFilterTest {
 		// 어휘(SERV*·COMMON*)만 집계한다는 계약이 깨진다 — 미상(NULL)으로 수렴해야 한다.
 		MockMvc numericCode = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
-						new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES)))
+						new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
 					HttpServletResponse res = (HttpServletResponse) response;
 					res.setStatus(400);

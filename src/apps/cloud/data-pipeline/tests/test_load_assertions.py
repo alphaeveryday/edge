@@ -320,3 +320,169 @@ def test_assertion_id_is_derived_from_the_natural_key(tmp_path, monkeypatch):
     assert assertion_id == assemble_events._stable_id("asrt", *natural_key)
     # 구분자가 재료 경계를 고정한다("ab"+"c" 와 "a"+"bc" 가 같은 값이 되면 안 된다)
     assert stable_domain_id("asrt", "ab", "c") != stable_domain_id("asrt", "a", "bc")
+
+
+def _args(*pairs) -> list[dict]:
+    return [{"role_code": r, "text": t, "entity_id": None} for r, t in pairs]
+
+
+def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkeypatch):
+    """해소율 분모는 **실체 역할만** 센다(ALPHA-802).
+
+    WHY: 온톨로지 `role_kinds.non_entity`(TIME·VALUE·TEXT)는 실체를 가리키지 않는
+    자리다(온톨로지가 "적재하지 않는다"고 정한 대상은 `event_argument` — 여기선 분모에서만
+    뺀다. assertion_argument 에는 아직 실리고, 그건 아래 네 번째 테스트가 못박는다). 그걸 미해소로 세면 분모가 30.7%(08-05 실측) 부풀고, 그 부푼 분모
+    위에서는 뒤따르는 마스터 확대(ALPHA-830)가 실제로 몇 %를 회수했는지 잴 수 없다 —
+    개선과 분모 변화가 같은 숫자 안에서 섞인다.
+
+    "2분기"가 별칭 후보 목록에 오르지 않는 것까지 함께 고정한다. 비실체 표현이 섞이면
+    top_unresolved 가 마스터 확대 판단의 근거로 못 쓰인다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("ISSUER", "삼성전자"),
+                        ("REPORTING_PERIOD", "2분기"),
+                        ("ACTUAL_VALUE", "1조원")))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    res = _log(storage)["argument_resolution"]
+    assert res["total"] == 1 and res["resolved"] == 1 and res["rate"] == 1.0
+    assert res["role_kinds"] == {"entity": 1, "non_entity": 2, "out_of_vocabulary": 0}
+    assert [t for t, _ in res["top_unresolved"]] == []
+    # 로그가 자기 분모 정의를 들고 있어야 ALPHA-802 이전 로그와 나란히 놓고 비교할 수 있다
+    assert res["denominator"] == "entity_roles_only"
+
+
+def test_out_of_vocabulary_role_is_named_not_just_counted(tmp_path, monkeypatch, caplog):
+    """어휘 밖 역할은 **이름까지** 남긴다(ALPHA-802).
+
+    WHY: 어휘 밖은 추출단과 온톨로지가 갈렸다는 신호인데, 이 자리는 전부 분모 밖으로
+    빠져 **해소율을 대표성 없는 수로 만든다**(어느 방향으로 틀리는지는 로그로 알 수
+    없다 — 근거는 로더의 경고 블록 주석). 개수만 세면 어느 역할이 샜는지 몰라 고칠 수가
+    없다 — top_unresolved 를 20개로 자르던 것과 같은 실패 양식이다(Rule 12).
+
+    어휘 밖이 `non_entity_resolved` 에 섞이지 않는 것도 함께 고정한다. 그 수는 역할별
+    해소 분기(ALPHA-831)가 **걷어낼 적재량**의 근거인데, 어휘 밖은 걷어낼 계약이 없는
+    행이라 섞이면 다음 티켓이 틀린 크기를 보고 계획한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    # 어휘 밖 역할에 **해소되는** 텍스트를 준다 — 안 그러면 두 카운터의 차이가 안 드러난다
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("ISSUER", "삼성전자"), ("NOT_A_ROLE", "SK하이닉스")))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger=load_assertions.logger.name):
+        assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    res = _log(storage)["argument_resolution"]
+    assert res["role_kinds"] == {"entity": 1, "non_entity": 0, "out_of_vocabulary": 1}
+    assert res["out_of_vocabulary_roles"] == {"NOT_A_ROLE": 1}
+    # 어휘 밖은 분모 밖이라 이 픽스처에선 rate 가 1.0 그대로다 — 드리프트가 rate 에
+    # 안 나타나는 자리가 있다는 뜻이고, 그래서 개수가 아니라 **이름**이 필요하다.
+    # (일반적으로 어느 방향으로 틀리는지는 정해져 있지 않다 — 로더의 경고 블록 주석)
+    assert res["total"] == 1 and res["rate"] == 1.0
+    # 적재는 그대로 되지만(2행) ALPHA-831 이 걷어낼 몫에는 안 들어간다
+    assert len(_inserts(conn, "assertion_argument")) == 2
+    assert res["non_entity_resolved"] == 0
+    # 로그 파일을 열어야 보이는 수치로 두지 않는다 — 런 로그에서 드러나야 한다(Rule 12).
+    # 이 단언이 없으면 WARNING 을 통째로 지워도 위 단언들이 전부 통과한다
+    # 로거 이름으로도 좁힌다 — caplog 은 root 에 붙어 남의 WARNING 까지 담으므로, 이름을
+    # 안 거르면 무관한 라이브러리 경고 하나에 언팩이 터져 엉뚱한 이유로 실패한다
+    [warned] = [r.getMessage() for r in caplog.records
+                if r.levelno >= logging.WARNING and r.name == load_assertions.logger.name]
+    assert "NOT_A_ROLE" in warned
+
+
+def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch, caplog):
+    """역할이 비면 채우지 않고 탈락시킨다(ALPHA-802).
+
+    WHY: `role_code or "ISSUER"` 는 해소되는 텍스트를 만나면 **없던 역할을 만들어**
+    적재한다. 이 테이블엔 출처 컬럼이 없고, `resolved_args` 가 `(역할, entity_id)` 로
+    접기 때문에 지어낸 ISSUER 는 같은 엔티티의 진짜 ISSUER 와 **한 행으로 합쳐진다** —
+    합쳐진 뒤에는 feature 원본과 대조해도 못 갈라진다. 미해소로 남는 편이 틀린 주체로
+    적재되는 것보다 낫다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args((None, "삼성전자")))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger=load_assertions.logger.name):
+        assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    # 텍스트는 해소되는 값이다 — 폴백이 살아 있으면 여기서 ISSUER 행이 실린다
+    assert _inserts(conn, "assertion_argument") == []
+    assert _inserts(conn, "document_assertion") == []
+    log = _log(storage)
+    assert log["argument_resolution"]["role_missing"] == 1
+    assert log["skipped_no_resolved_argument"] == 1
+    # 이 스텝에서 **적재 행 집합이 달라지는 유일한 경로**다. 그 사실이 런 로그에도
+    # 떠야 한다 — 이 단언이 없으면 WARNING 을 통째로 지워도 스위트가 초록이다(Rule 12)
+    [warned] = [r.getMessage() for r in caplog.records
+                if r.levelno >= logging.WARNING and r.name == load_assertions.logger.name]
+    assert "역할 없는 argument" in warned
+
+
+def test_non_entity_that_resolves_still_loads_and_is_counted_apart(tmp_path, monkeypatch):
+    """비실체 자리가 인덱스에 걸리면 **적재는 그대로 되고** 별도 카운터로 보인다.
+
+    WHY: 이 자리의 적재는 이 티켓이 건드리지 않는다 — 여기서 걷어내면 회수율 변화에
+    적재 변화가 섞여 ALPHA-830 의 효과를 못 잰다. 이 수가 곧 역할별 해소 분기
+    (ALPHA-831)가 걷어낼 몫이라 따로 보여야 한다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("OUTLOOK", "삼성전자")))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    [(_, role, entity_id, _c)] = _inserts(conn, "assertion_argument")
+    assert (role, entity_id) == ("OUTLOOK", "inst_SAMSUNG")  # 적재 불변
+    res = _log(storage)["argument_resolution"]
+    assert res["total"] == 0 and res["rate"] is None       # 분모 밖이다
+    assert res["non_entity_resolved"] == 1
+
+
+def test_top_unresolved_keeps_the_long_tail(tmp_path, monkeypatch):
+    """미해소 상위 표현을 200개까지 남긴다(ALPHA-802).
+
+    WHY: 상한이 20 이던 동안 롱테일 구성이 관측되지 않아, 로그만 보고는 "마스터를
+    넓혀야 하는가(표기가 맞는데 종목이 없다), 별칭을 넣어야 하는가(종목은 있는데 표기가
+    다르다)"를 가릴 수 없었다. 그 판단이 이 트랙 전체의 분기점이다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    # 상한보다 **많이**(250종) 넣어야 상한이 고정된다. 그리고 **빈도가 서로 달라야** 한다 —
+    # 전부 1회면 "내림차순인가"가 어떤 정렬에서도 참인 항등식이 되어 정렬 키를 지워도
+    # 통과한다. 250종에 1~5회를 고루 준다(각 빈도 50종).
+    unknowns = [_assertion(event_type_code=f"E{i}",
+                           arguments=_args(*[("ISSUER", f"미등록{i}")] * (i % 5 + 1)))
+                for i in range(250)]
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", unknowns)])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    top = _log(storage)["argument_resolution"]["top_unresolved"]
+    assert len(top) == 200
+    counts = [c for _, c in top]
+    assert counts == sorted(counts, reverse=True)
+    # 상한이 자르는 것은 **빈도 하위**여야 한다 — 5·4·3·2회(각 50종)가 살고 1회는 전멸한다
+    assert counts[0] == 5 and counts[-1] == 2
+    # ⭐이 두 줄이 "빈도순 상위 200"과 "먼저 본 200"을 가른다. 삽입 순서는 event_type_code
+    # 사전순(E0·E1·E10·E100…)이라 인덱스 순서와 다르다 — 늦게 나오지만 빈도 높은 것이
+    # 살아남고, 먼저 나오지만 빈도 1인 것이 잘려야 정렬 키가 실제로 일한 것이다.
+    # ⚠️ 인덱스가 크다고 삽입 순서가 늦지 않다: E249 는 사전순 168번째라 선두 200 안에 들어
+    # "먼저 본 200" 구현에서도 살아남는다 — 아무것도 가르지 못한다. 사전순 240번째인 E9 를 쓴다.
+    kept = dict(top)
+    assert "미등록9" in kept         # 삽입 순서 240/250 · 5회 → 빈도순에서만 살아남는다
+    assert "미등록0" not in kept     # 삽입 순서 1/250 · 1회 → 빈도순에서만 잘린다

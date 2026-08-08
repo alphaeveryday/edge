@@ -11,11 +11,13 @@ from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth
 from .kis_etf_profile import KisEtfProfileSource
 from .kis_investor import KisInvestorSource
+from .kis_investor_estimate import KisInvestorEstimateSource
 from .kis_inav import KisInavSource
 from .kis_nav import KisNavSource
 from .kis_price import KisDailyPriceSource
 from .krx_auth import KrxAuth
 from .krx_etf import KrxEtfSource
+from .krx_instrument import KrxInstrumentSource
 from .yahoo_price import YahooPriceSource
 
 __all__ = [
@@ -29,10 +31,12 @@ __all__ = [
     "KisDailyPriceSource",
     "KisEtfProfileSource",
     "KisInvestorSource",
+    "KisInvestorEstimateSource",
     "KisInavSource",
     "KisNavSource",
     "KisAuth",
     "KrxEtfSource",
+    "KrxInstrumentSource",
     "KrxAuth",
     "PoliteClient",
     "StopFetch",

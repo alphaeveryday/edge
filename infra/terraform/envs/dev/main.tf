@@ -489,12 +489,20 @@ module "data_pipeline" {
   super_admin_api_url = "https://${var.admin_api_domain}"
 
   # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
-  # explanation_result 가 RDS 로 영속된다(미주입=의도적 S3 폴백). 잠정 번들(ALPHA-406) —
+  # explanation_result 가 RDS 로 영속된다. 미주입은 이제 선택지가 아니다(ALPHA-797 이
+  # S3 폴백을 폐기) — 변수에 기본값이 없어 plan 이 막는다. 잠정 번들(ALPHA-406) —
   # 정식 버저닝은 릴리스 규약 합의 후.
   analysis_release_bundle_version = "dev-mvp-0"
 
+  # 시각창 집계 Athena 오프로드(ALPHA-780). 5분봉 Iceberg 정본과 Athena 결과 CSV 가 같은
+  # 버킷에 산다 — **terraform 관리 밖**이라 ARN 만 넘기고 리소스로 잡지 않는다.
+  # 이것 없이는 구간 모드가 DuckDB 폴백(질의당 376MB)으로 떨어져 1분 주기를 못 버틴다.
+  analysis_market_data_bucket_arn = "arn:aws:s3:::market-data-${data.aws_caller_identity.current.account_id}"
+  analysis_athena_workgroup       = "market_data"
+
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
+
 
   # 컷오버(ALPHA-553 PR2): 뉴스 레인 스케줄(15:00·15:30·23:50 KST 평일). 시장 SFN 의 뉴스 스텝
   # 제거와 **같은 apply** 로 켠다 — 같은 event 를 두 SFN 이 동시에 쓰는 겹침 창이 구조적으로
@@ -511,6 +519,16 @@ module "data_pipeline" {
   # ⚠️ 이 스케줄이 켜지면 `OPS_DISCLOSURE_SCHED_HHMM` 도 함께 주입된다(ops_ledger.tf 조건부) —
   # 그때부터 Reconciler 가 공시 슬롯 결측을 판정한다.
   disclosure_schedule_state = "ENABLED"
+
+  # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
+  # ENABLED 라 이 줄은 **명시일 뿐 값을 바꾸지 않는다** — 그래도 적는 이유는 위 두 레인과 나란히
+  # 놓여야 "dev 에서 어떤 레인이 도는가"를 이 파일 하나로 읽을 수 있어서다.
+  # 공시·뉴스처럼 DISABLED 신설 → 별도 apply 컷오버를 밟지 않는 이유: 이 3스텝은 시장 SFN 이
+  # 돌던 것을 뺏어오는 게 아니라 **배선이 0이던 신설**이라(ALPHA-767·768) 두 레인이 같은 스텝을
+  # 동시에 소유하는 겹침 창이 없다.
+  # ⚠️ 이 스케줄이 켜져 있으므로 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 도 함께 주입된다
+  # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다.
+  investor_intraday_schedule_state = "ENABLED"
 
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를

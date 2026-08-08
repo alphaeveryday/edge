@@ -17,12 +17,16 @@ _NEWS_PIPELINE_TF = _TF_MODULE / "news_pipeline.tf"
 # 읽는다 — 나중에 직렬 꼬리가 붙으면 그때 **자동으로** 역방향 검사 대상이 되게(이 테스트의
 # 존재 이유가 "새 SFN 잡이 아무도 모르게 미계측로 남는 것"을 막는 것이다).
 _DISCLOSURE_PIPELINE_TF = _TF_MODULE / "disclosure_pipeline.tf"
+# 장중 수급 SFN(ALPHA-769)도 공시와 같이 직렬 state 가 없어 지금은 여기서 잡히는 state 가 0개다.
+# 그래도 함께 읽는 이유는 같다 — 나중에 직렬 꼬리가 붙으면 **자동으로** 역방향 검사 대상이 되게.
+_INVESTOR_INTRADAY_PIPELINE_TF = _TF_MODULE / "investor_intraday_pipeline.tf"
 
 
 def _combined_tf() -> str:
     return (_STATEMACHINE_TF.read_text(encoding="utf-8")
             + _NEWS_PIPELINE_TF.read_text(encoding="utf-8")
-            + _DISCLOSURE_PIPELINE_TF.read_text(encoding="utf-8"))
+            + _DISCLOSURE_PIPELINE_TF.read_text(encoding="utf-8")
+            + _INVESTOR_INTRADAY_PIPELINE_TF.read_text(encoding="utf-8"))
 
 
 def test_content_hash_is_deterministic():
@@ -54,7 +58,8 @@ _NOT_INSTRUMENTED = {
     "CollectFmpEtf": "FMP bandwidth 한도 소진 → SFN 토글 off",
     "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
-    "AnalyzeOne": "다른 이미지(run.py 미경유)·Map 팬아웃 31종이 한 state 로 뭉쳐 거짓 초록",
+    # AnalyzeOne 은 ALPHA-806 에서 state 자체가 사라졌다(analyze 페이즈 제거) — 설명은
+    # SFN 스텝이 아니라 분봉 트리거 큐 상주 소비자가 만든다. 제외 목록에서도 뺀다.
 }
 
 
@@ -90,25 +95,28 @@ def _hcl_number(tf: str, name: str) -> int:
     return int(value.group(1))
 
 
-def disclosure_slot_interval_seconds() -> int:
-    """공시 cron 맵에서 **실제 최소 슬롯 간격**을 계산한다(분 단위 cron 을 KST 시각으로).
+def lane_slot_interval_seconds(prefix: str = "disclosure") -> int:
+    """다슬롯 레인의 cron 맵에서 **실제 최소 슬롯 간격**을 계산한다(분 단위 cron 을 KST 시각으로).
 
     테스트가 3600 을 하드코딩하면 cron 에 30분 슬롯을 하나 더해도 통과한다 — 그때 deadline·
     STALLED 임계는 다음 슬롯 뒤로 밀려 판정이 무의미해지는데 아무도 모른다(edge-review).
+
+    `prefix` 로 레인을 고른다(ALPHA-769 에 장중 수급 레인이 붙으며 일반화). 복제하지 않는
+    이유는 이 계산이 곧 계약이라서다 — 레인마다 베끼면 한쪽만 고쳐진 채 갈린다.
     """
     tf = _strip_hcl_comments((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
-    block = re.search(r'variable\s+"disclosure_schedule_expressions"\s*\{(.*?)^\}', tf,
+    block = re.search(rf'variable\s+"{prefix}_schedule_expressions"\s*\{{(.*?)^\}}', tf,
                       re.M | re.S)
-    assert block, "disclosure_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
+    assert block, f"{prefix}_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
     minutes = sorted(int(h) * 60 + int(m)
                      for m, h in re.findall(r'"cron\((\d+) (\d+) ', block.group(1)))
     assert len(minutes) >= 2, f"슬롯이 {len(minutes)}개 — 간격을 잴 수 없다"
     return min(b - a for a, b in zip(minutes, minutes[1:])) * 60
 
 
-def disclosure_sfn_timeout_seconds() -> int:
+def lane_sfn_timeout_seconds(prefix: str = "disclosure") -> int:
     return _hcl_number((_TF_MODULE / "variables.tf").read_text(encoding="utf-8"),
-                       "disclosure_state_machine_timeout_seconds")
+                       f"{prefix}_state_machine_timeout_seconds")
 
 
 def reconcile_period_seconds() -> int:
@@ -158,7 +166,12 @@ def test_catalog_and_asl_task_states_match_both_ways():
     asl_states = _asl_task_states(_combined_tf())
     # 31 → 33(ALPHA-591): 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents)를 포함해
     # 두 SFN 파일을 함께 센다 — 뉴스 잡 4개의 `state = "…"` 정의는 statemachine.tf 에 있다.
-    assert len(asl_states) == 33, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
+    # 33 → 36(ALPHA-769): 장중 수급 3잡 신설. **ALPHA-724 와 성격이 다르다** — 공시는 소유
+    # 레인만 옮긴 것이라 이 수가 그대로였지만, 여기선 statemachine.tf 잡 리스트에 없던 스텝이
+    # 셋 늘었다(ALPHA-767·768 이 만든 층에 배선이 처음 붙는다).
+    # 36 → 35(ALPHA-806): analyze 페이즈 제거로 AnalyzeOne 이 사라졌다. 설명은 SFN 스텝이
+    # 아니라 분봉 트리거 큐 상주 소비자가 만든다.
+    assert len(asl_states) == 35, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
 
     registered = {e.sfn_state_name for e in catalog.entries()}
     assert registered <= asl_states, f"ASL 에 없는 state 등록: {registered - asl_states}"
@@ -168,10 +181,14 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 21 → 27(ALPHA-591). ALPHA-724 는 공시 4작업의 **소유 레인만** 옮겨 총계가 그대로다 —
     # 커버리지를 숫자로 고정해 조용한 축소를 막는 절이다(Rule 12). 레인별 몫을 함께 고정하는
     # 이유가 여기 있다: 총계만 보면 레인 이동과 "한 레인이 통째로 사라짐"이 구분되지 않는다.
-    assert len(registered) == 27
+    # 27 → 30(ALPHA-769): 장중 수급 3작업 신설. 시장 17 은 그대로다 — 이 셋은 시장 SFN 이 돌던
+    # 것을 뺏어온 게 아니라 배선이 0이던 신설이라, 레인 이동이었다면 반드시 줄었어야 할 숫자가
+    # 안 줄어야 맞다(그 구분을 이 절이 든다).
+    assert len(registered) == 30
     assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
     assert len(catalog.entries("disclosure")) == 4
+    assert len(catalog.entries("investor-intraday")) == 3
     # 자기 기록이 불가능한 등록 작업은 이제 **0개**다(ALPHA-596 이 krx·dart, ALPHA-610 이
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
     # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
@@ -293,8 +310,8 @@ def test_catalog_matches_asl_command_and_taskdef_per_state():
     그 expected_task 가 영원히 FULFILLED 되지 못한다. state 별로 삼중항을 통째로 대조한다.
     """
     # ⚠️ 파일별로 따로 파싱한다 — 인라인 패턴은 DOTALL 비탐욕이라, 삼중항이 안 갖춰진 state
-    # (AnalyzeOne: 다른 task-def 참조·Command 리터럴 없음)에서 시작한 매치가 이어붙인 다음
-    # 파일의 삼중항까지 건너가 삼키면 뉴스 직렬 2개가 파싱에서 사라진다.
+    # 에서 시작한 매치가 이어붙인 다음 파일의 삼중항까지 건너가 삼키면 뉴스 직렬 2개가
+    # 파싱에서 사라진다.
     asl: dict[str, tuple[str, list[str]]] = {}
     for path in (_STATEMACHINE_TF, _NEWS_PIPELINE_TF):
         tf = path.read_text(encoding="utf-8")

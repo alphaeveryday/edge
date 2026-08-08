@@ -360,6 +360,30 @@ class KrxEtfConfig(BaseModel):
     source: KrxEtfSource
 
 
+class KrxInstrumentSource(BaseModel):
+    """KRX OpenAPI 종목기본정보 소스 — 상장 전종목 단축코드·한글명 (ALPHA-829).
+
+    ⚠️ **`krx_etf` 와 다른 서비스다.** 저쪽은 `data.krx.co.kr` 비공식 경로 + 계정 로그인
+    (mbr_id/pw → JSESSIONID)이고, 여기는 `data-dbg.krx.co.kr` 공식 OpenAPI + 무상태
+    `AUTH_KEY` 헤더다. 자격증명이 서로 대체되지 않으니 설정도 섞지 않는다.
+
+    auth_key 는 커밋되는 파일이 아니라 환경변수로 주입한다:
+        DATA_PIPELINE_KRX_INSTRUMENT__SOURCE__AUTH_KEY=...
+    (운영은 Secrets Manager `edge-dev-data-pipeline/krx/api-key` 의 `authkey` 를 넣는다.)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    auth_key: str | None = None  # 비밀값: env 오버라이드 전용
+
+
+class KrxInstrumentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: KrxInstrumentSource
+
+
 class DartFinancialConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -452,9 +476,22 @@ class MinutePriceWorkerConfig(BaseModel):
     # 기본은 kis 다(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다.
     # ⚠️ terraform `minute_session_source_group` 과 **같은 값**이어야 한다(session_id 유도 축).
     source: NonBlankStr = "kis"
-    # KIS 호출 간격(초). 실측 상한은 14.8 req/s(≈0.068초)지만 그 유량은 **앱키 단위 전역**
-    # 이라 15:40 배치의 kis 스텝과 나눠 쓴다 — 기본은 12 req/s 로 마진을 두고, 경합이
-    # 보이면 재배포 없이 env 로 올린다. toss 소스에는 쓰이지 않는다(어댑터가 자기 상수).
+    # KIS 호출 간격(초). 기본 0.08 → 12.5 req/s. 그 유량은 **앱키 단위 전역**이라 다른 kis
+    # 스텝과 나눠 쓴다 — 경합이 보이면 재배포 없이 env 로 올린다. toss 소스에는 쓰이지
+    # 않는다(어댑터가 자기 상수).
+    #
+    # ⚠️ **마진 근거가 ALPHA-769 로 바뀌었다.** 종전엔 경합 상대가 15:40 배치뿐이라 시간대가
+    # 안 겹치는 것이 마진의 근거였다(1분 세션은 15:30 종료). 이제 장중 수급 레인이 세션
+    # **안**에서 돈다 — 슬롯 5개(09:35·10:05·11:25·13:25·14:35)가 전부 07:45~15:30 구간이고,
+    # 같은 앱키다(tasks.tf 배치 kis ↔ minute_services.tf 워커가 같은 시크릿).
+    # 그 수집기는 `KIS_MIN_INTERVAL_SEC=0.5`(run.py) → 2 req/s 이고 슬롯당 ~210초 동안 돈다.
+    # 즉 하루 5회, 각 ~3.5분씩 제시 유량이 12.5+2 = **14.5 req/s** 다.
+    # ponytail: 헤드룸 0.5 req/s. 여기서 재는 축은 **레포 예산선 15/s** 이지 벤더 한도가
+    # 아니다 — EGW00201 이 세는 한도는 앱키당 **20/s** 이고, 레포가 그 아래 15/s 를 예산으로
+    # 잡는다(`sources/http.py _respect_interval` — pace 가 발신 시각을 보장하지 못하는 대가를
+    # 마진으로 치른다). 14.8 req/s 는 1분 수집기의 **달성 실측치**(kis_minute)지 거절 임계가
+    # 아니다. 1분 레인에 EGW00201 이 보이기 시작하면 여기(0.08)를 먼저 늘려라 — 장중 수급은
+    # 하루 5회뿐이라 그쪽 간격을 늘리는 것보다 값이 크다.
     min_interval_sec: float = Field(default=0.08, gt=0, le=5)
     # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
     # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
@@ -484,8 +521,8 @@ class MinutePriceWorkerConfig(BaseModel):
         한 tick 은 최대 (realtime 1 + recovery budget) 개 window 를 순차 처리하고,
         claim 의 lease_expires_at 은 전부 **tick 시작 시각** 기준이다(가상 시계 계약 —
         tick 안에서 시계를 다시 읽지 않는다). window 하나의 여유를 75초로 잡는다(토스
-        실측 73초+ 가 근거였고, KIS 는 400종 ÷ 12 req/s ≈ 33초라 같은 상수 아래로
-        들어온다 — ALPHA-735). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
+        실측 73초+ 가 근거였고, KIS 는 410 unit ÷ 12 req/s ≈ 34초라 같은 상수 아래로
+        들어온다 — ALPHA-735·842. unit 은 판정 ETF + 구성종목 + 참조 계열의 합이다). 이를 넘게 잡으면 뒤쪽 claim 이 처리 중 만료돼 다른
         attempt 가 탈취하고 원래 commit 이 거부된다. session fence 도 같은 축이다 — heartbeat 은
         tick 경계에서만 돌므로 fence lease 가 tick 최악보다 짧으면 처리 중 만료된다.
 
@@ -632,6 +669,55 @@ class MinuteNewsConsumerConfig(BaseModel):
     retry_base_seconds: int = 5
     retry_max_seconds: int = 900
     max_attempts: int = 5
+
+
+class MinuteUniverseConfig(BaseModel):
+    """1분 레인 universe.json 을 **만들 때만** 쓰는 설정 — `build_minute_universe` 전용.
+
+    ⚠️ 이 섹션은 수집 유니버스의 정본이 아니다. 1분 레인의 정본은 S3 객체
+    `config/minute/universe.json` 이고(planner·worker·consumer 가 `--universe` 로 같은
+    객체를 본다), 여기 값은 그 객체를 **생성**하는 입력 하나일 뿐이다 — 이 파일만 고치고
+    S3 를 안 갈면 아무것도 안 바뀐다.
+
+    `[krx_etf.source.etf_map]` 과 다른 축이다: 저기는 "KRX PDF 로 holdings 를 받을 ETF"
+    이고 그 구성종목이 유니버스로 파생된다. 여기 ETF 는 **분봉만** 받는다 — holdings 도,
+    구성종목도, NAV 도, **트리거 판정도** 받지 않는다. 그래서 etf_map 에 넣으면 안 되고
+    (KRX PDF 수집이 늘고 구성종목이 유니버스로 딸려 들어온다) `Universe.etf_ids` 에도
+    넣으면 안 된다(그 축은 `price_consumer` 의 판정 집합이다 — `Universe` 도크스트링).
+    빌더가 이 목록을 `Universe.sector_etf_ids` 로 싣는다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 층 분해의 **섹터 후보** ETF — 분봉이 있어야 구간(장중) 모드에서 섹터층이 선다.
+    # 일봉 경로는 KRX 업종지수를 섹터 후보로 주입하지만(analysis `layers._krx_sector_candidate`)
+    # 그 지수는 분봉이 없어(수집 원천이 pykrx 일봉이다) 구간 모드가 섹터 ETF 로 대체한다.
+    #
+    # 정본은 analysis 쪽 `layers_daily` 의 `kind='sector'` 집합이고, **여기와 자동으로
+    # 맞춰지지 않는다**(그 parquet 은 이 레포 밖 산출물이라 로드 시점에 대조할 수 없다).
+    # 갈렸을 때의 증상은 조용하다: `layers._series` 가 `layers_daily` 회원만 후보로
+    # 삼으므로 여기 없는 후보는 애초에 `xs` 에 안 들어가고, 탈락 사유를 남기는 자리
+    # (`twins`·`alien`·`rho_blocked`)는 **들어온 후보만** 기록한다. 사유 없는 부재다.
+    sector_etf_ids: tuple[NonBlankStr, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate(self) -> MinuteUniverseConfig:
+        from ..parse import krx_short_code  # 지연 import — config 는 parse 에 의존하지 않는다
+
+        # 중복을 여기서 막는 이유: **빌더는 집합 연산이라 조용히 삼킨다.** 아래 하류가
+        # 거부해 줄 것이라고 기대하면 안 된다 — 중복 한 줄은 대개 "다른 코드를 적으려다
+        # 덮어썼다"의 흔적이라, 삼켜지면 의도한 종목 하나가 통째로 사라진다.
+        if len(set(self.sector_etf_ids)) != len(self.sector_etf_ids):
+            raise ValueError("sector_etf_ids 에 중복 코드가 있다")
+        # **형태만 본다.** `krx_short_code` 는 정규식(선두 숫자 + 영숫자 대문자 6자)이라
+        # 실재 여부는 모른다 — 자릿수를 바꿔 적은 오타(`091170`→`091710`)는 그대로
+        # 통과하고, 그건 첫 런의 window manifest 에 `missing` 으로 드러난다(etf_map 의
+        # ⚠ 항목이 "첫 런 로그에 드러난다"고 적은 것과 같은 성질). 여기서 막는 것은
+        # 한글·공백·길이 오류처럼 **로드 시점에 확실히 아는 것**뿐이다. 실재 대조를
+        # 하려면 종목 마스터가 필요한데 그건 레이크에 있고 config 로드 경로가 아니다.
+        if bad := [c for c in self.sector_etf_ids if krx_short_code(c) is None]:
+            raise ValueError(f"KRX 단축코드 형태가 아닌 값이 있다: {bad[:5]}")
+        return self
 
 
 class PriceTriggersConfig(BaseModel):

@@ -291,3 +291,62 @@ def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path)
     from data_pipeline.minute.relay import RelayConfig
 
     RelayConfig(relay_id="r", queue_urls=dict(settings.minute_relay.queue_urls))
+
+
+@pytest.mark.parametrize("value", ["ABCDEF", "가나다라마바", "09117", "09 170"])
+def test_sector_etf_bad_shape_fails_loud(tmp_path, value):
+    # WHY: 형태가 아닌 값이 통과하면 universe.json 에 실려 매분 missing 으로 잡히고 그
+    #      window 가 영구 INCOMPLETE 로 남는다. 판정은 `krx_short_code` 하나로 간다.
+    #      **길이 검사로 대신할 수 없다** — 앞의 두 값은 정확히 6자라 길이는 통과하고,
+    #      그러면 6자 US 심볼과 한글이 KIS(국내 전용)로 질의된다. 그 둘이 이 목록에
+    #      있는 이유가 그것이다(뒤의 둘은 길이·공백 축).
+    #      (자릿수를 바꿔 적은 오타는 여기서 못 잡는다 — 형태는 맞기 때문이다.
+    #       그건 첫 런 manifest 의 missing 으로 드러나고, 그 한계는 모델 주석에 있다.)
+    bad = VALID + f"""
+[minute_universe]
+sector_etf_ids = ["091170", "{value}"]
+"""
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_etf_duplicate_fails_loud(tmp_path):
+    # WHY: 여기가 **중복이 드러나는 유일한 자리**다 — 빌더는 집합 연산이라
+    #      (`sorted(set(sector_etf_ids))`) 중복을 조용히 삼키고 `Universe` 는 애초에
+    #      한 벌만 본다. 중복 한 줄은 대개 "다른 코드를 적으려다 덮어썼다"의 흔적이라,
+    #      삼켜지면 의도한 종목 하나가 아무 신호 없이 유니버스에서 사라진다.
+    bad = VALID + """
+[minute_universe]
+sector_etf_ids = ["091170", "091170"]
+"""
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_etf_unknown_key_fails_loud(tmp_path):
+    # WHY: `extra="forbid"` 가 없으면 키 오타(sector_etf_id)가 조용히 로드되고
+    #      sector_etf_ids 는 빈 튜플이 된다 — 48종이 통째로 사라진 채 초록으로 돈다.
+    #      값 오타는 위에서 막는데 키 오타를 안 막으면 같은 결과에 신호만 없다.
+    bad = VALID + """
+[minute_universe]
+sector_etf_id = ["091170"]
+"""
+    with pytest.raises(ConfigError):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_etf_list_loads(tmp_path):
+    # WHY: 이 섹션은 1분 universe.json **생성** 입력이다 — 수집 스텝은 안 읽는다. 값이
+    #      튜플로 그대로 서야 build 스크립트가 holdings 파생 ETF 와 합집합할 수 있다.
+    good = VALID + """
+[minute_universe]
+sector_etf_ids = ["091170", "0093A0"]
+"""
+    settings = load_settings(_write(tmp_path, good))
+    assert settings.minute_universe.sector_etf_ids == ("091170", "0093A0")
+
+
+def test_minute_universe_section_is_optional(tmp_path):
+    # WHY: 섹터 후보 없이도 1분 레인은 돌아야 한다(이 축이 생기기 전과 같은 유니버스).
+    #      필수로 만들면 이 섹션이 없는 환경의 로드가 통째로 죽는다.
+    assert load_settings(_write(tmp_path, VALID)).minute_universe is None

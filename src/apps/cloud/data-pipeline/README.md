@@ -25,9 +25,16 @@
 > 사건을 온톨로지 라벨로 뽑아(`tagging/`, ALPHA-138) `feature/news/assertions` 에 article_id 멱등
 > 병합 적재까지 완료했다(`tag-news`, ALPHA-365) — `entity_id` 는 NULL 로 두고 `text` 만 남긴다
 > (엔티티 해소·assertion RDB 적재는 후속, ALPHA-190).
-> **종목 마스터 적재(Step4, RDB)** 는 canonical ETF 구성종목을 Cloud Event Store 의
+> **종목 마스터 적재(Step4, RDB)** 는 canonical **두 입력**(ETF 구성종목 + KRX 상장 전종목
+> `instrument_profile`)을 Cloud Event Store 의
 > `entity`/`actor`/`company_profile`/`instrument`/`equity_profile` 로 멱등 적재한다
-> (`load-instruments`, ALPHA-372) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
+> (`load-instruments`, ALPHA-372·830) — **이 저장소가 Cloud Event Store 48테이블에 쓰는 첫 경로**다.
+> 전종목 축에서는 **보통주만** 세운다(우선주는 발행사 연결이 필요해 별건) — 실측 2,872종 중
+> 113종이 우선주 계열이다. 두 입력이 같은 티커를 다른 시장으로 말하면 만들지 않고 기록만
+> 한다(자연키가 `(market_code, ticker)` 라 만들면 같은 종목이 두 번 선다).
+> ⚠️ 전종목 canonical 은 **수동 수집**이라(아래 "상태머신 밖") 낡을 수 있다 — 낡아서 전 행이
+> 못 쓰이면 사유를 로그에 남기되 **비0으로 끝내지는 않는다**. 이 스텝의 exit code 는 뒤따르는
+> FeatureParallel 전체를 좌우해서, 선택 입력의 낡음이 다섯 로더를 세우면 안 되기 때문이다.
 > **가격변동 트리거 적재(RDB)** 는 canonical holdings 가중치와 구성종목 일봉으로 **가중 proxy
 > 수익률**(coverage 정규화 — 분석엔진 L0 와 같은 산식, 정본)을 계산해 absolute gate(3%,
 > `[price_triggers]`) 통과 거래일만 `price_movement_trigger` 로 멱등 적재한다
@@ -64,7 +71,20 @@
 > 같은 규칙에서 나온다 — 시간외 종목이 있으면 08:00~20:00 = 720 window, 없으면 390.
 > ⚠️ 상품군 축이 **아니다**: 개별주 001527 도 15:30 이 마지막이라, 클래스는 규칙이 아니라
 > universe 가 선언한다. ⛔ **2026-08-02 결정: 장외는 제외한다** — 선언을 빈 채로 두면
-> 전 종목 정규장 390 window 이고, 정규장 390분은 실측상 전 종목이 빈틈없이 채워진다),
+> 전 종목 정규장 390 window 이고, 정규장 390분은 실측상 전 종목이 빈틈없이 채워진다.
+> ⚠️ **종가 단일가 접수 구간에 걸친 window 는 전부 15:31 에 집힌다**(`window_end` 가
+> 15:21~15:30 인 10개 — ALPHA-763 이 마감 창 하나에 건 것을 ALPHA-773 이 구간 전체로
+> 넓혔다. `models.scheduled_at_for`). 그 구간(15:20~15:30)은 주문만 받고 체결이 없는데
+> **묻는 시각에 따라 벤더 답이 갈린다**: 즉시 물으면 마감 창은 미완성 봉(vol 0·직전가)이
+> 오고(08-03 실측 34종 중 25종이 일봉 종가와 불일치), 앞선 창들은 직전 체결 봉이
+> **거래량째 복제**돼 와 5분봉 롤업 거래량을 부풀린다(08-05 실측 362/362 종목, 마지막
+> 버킷 중앙 1.37배·최대 60배). 마감 뒤에 물으면 각각 정확한 종가와 `vol 0`(무거래)이
+> 온다. 창을 안 만드는 게 아니라 claim 시각만 미루므로 원장에 구멍이 없고, KIS 는 한
+> 콜이 `window_end` 로 끝나는 30분치라 콜 수도 안 는다. window INSERT 는 `DO NOTHING`
+> 이라 **이미 계획된 세션엔 소급되지 않는다** — 당일 적용이 필요하면 그 행의
+> `scheduled_at` 을 직접 UPDATE 한다. ⚠️ 이 지연은 마감 봉이 접수 구간 창보다 **먼저**
+> 처리되는 순서 역전을 만든다(realtime lane 이 최신을 먼저 집는다) — 무거래 봉이 더
+> 최신 앵커와 대조돼 허위 발화가 나갈 수 있고, 판정단 처방은 ALPHA-776 이다),
 > **뉴스 추출 Consumer handler**(ALPHA-689 — kernel 위에 `tagging/extract` 를 job 단위로
 > 부르는 배선: 기사 정본은 PG `document`+`news_document` 자연키, 결과는 feature 존 불변
 > artifact 이고 반환값이 그 바이트의 sha256 이다. artifact key 축은
@@ -73,13 +93,24 @@
 > 불일치 하나뿐이고 나머지는 예산이 판정한다), **EOD 세션 QC**(ALPHA-693 — drain 이 끝난
 > 세션의 `DUE` 잔존을 `MISSING` 으로 확정하고 `FINALIZED` 로 닫는다. `run qc-minute-session`.
 > 확정은 **도래한 window 만**이고 계획의 양 끝·연속성이 어긋나면 확정 대신 `FAILED` 다 —
-> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다), **뉴스 canonical
+> 결손은 판정 결과지만 원장이 스스로와 모순이면 판정을 믿을 수 없다), **EOD 5분봉 확정**
+> (ALPHA-839 — 5분 파생의 생산자는 둘이고 집계는 하나다: 커밋 후크 `maybe_rollup` 이
+> 장중 즉시성을, `run rollup-minute-session` 이 마감 후 1회 확정을 맡는다. 후크만으로는
+> **지나간 거래일이 영영 안 채워진다** — 발화 조건이 "방금 커밋된 window" 라 그날 마지막
+> 버킷 뒤엔 다음 커밋이 없다. 배치는 계획·커밋을 원장에서 읽고, 커밋이 0건이면 빈 파일을
+> 쓰지 않고 스킵한다 — 원장에 커밋이 없는 것과 그날 봉이 폐기된 것은 다른 사실이라,
+> 빈 파일로 덮으면 다른 writer 가 채운 파티션을 지운다), **뉴스 canonical
 > writer**(ALPHA-691 — 7B 가 **읽던** PG `document`+`news_document` 를 실제로 **쓰는** 쪽.
 > commit 트랜잭션의 커서로 `(source_code, article_id)` upsert 하고, 정규화는 배치 정제
 > `_normalize` 를 재사용한다. ⚠️ 시각 축 규칙이 둘로 갈린다: **내용은 이번 관측 값**으로
 > 쓰고 **`available_at` 은 GREATEST 로 앞으로만** 간다 — 시각으로 내용 쓰기를 막으면 배치가
 > 미래 `published_at` 을 실은 행에서 정정이 유실되고, 시각을 뒤로 밀면 과거 as-of 구간에서
-> 문서가 사라진다), **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
+> 문서가 사라진다. **배치와의 승자 규칙은 ALPHA-696 이 `news_document.lead_observed_at`
+> 으로 정했다** — 이 경로는 쓰기 가드 없이 쓰되 리드 상태가 움직였을 때만 그 시각을 찍고,
+> 배치는 미주장이거나 자기 canonical `fetched_at` 이 더 새로울 때만 덮는다. 비대칭이
+> 의도이고, 계약 전문은 마이그레이션
+> `V202608071018__add_news_document_lead_observed_at.sql` 에 있다),
+> **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
 > `run drain-minute-session`. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
 > 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
@@ -125,12 +156,16 @@
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
-> (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 에서 만든다.
-> 업로드는 사람이 확인 후 한다: universe 는 세션 identity 축이라 갈아끼우는 순간 그날
-> 계획이 바뀐다). 객체 없이 스케일업하면 worker·consumer 는 기동 거부(fail-loud)다.
+> (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
+> `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는
+> 세션 identity 축이라 갈아끼우는 순간 그날 계획이 바뀐다). 객체 없이 스케일업하면
+> worker·consumer 는 기동 거부(fail-loud)다.
+> ⚠️ **수집 축과 판정 축은 다르다**(ALPHA-842). `unit_ids`(수집) = 판정 ETF + 구성종목 +
+> **참조 계열**(`sector_etf_ids`)이고, 트리거 판정은 `etf_ids` 만 받는다 — 층 분해의 섹터
+> 후보처럼 봉만 필요한 계열을 `etf_ids` 에 얹으면 발화 대상·전일 종가 대조 대상이 된다.
 > **처리량 제약은 벤더 교체로 풀렸다**(ALPHA-735) — 토스는 종목당 1콜 × 363종 ÷ 초당
-> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(마진 두고 12)라 400종이
-> 33초에 든다. 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
+> 5회 ≈ 73초라 60초 창을 못 맞췄고, KIS 는 실측 14.8 req/s(기본은 12.5)라 410 unit 이
+> 34초에 든다(참조 계열 48 편입 후, ALPHA-842). 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
 > BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
 > **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717) — start 가 news_minute 세션도
@@ -389,6 +424,12 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 그래서 이 문서를 참조하는 행은 계산값이 아니라 **자연키로 되읽은 id** 에 붙여야 한다(ALPHA-628).
 # 이 스텝이 함께 채우는 news_document.lead_text(분석엔진 프롬프트의 스니펫 축)·publisher
 # (언론사, ALPHA-695)가 그 규칙을 쓴다.
+# ⚠️ lead_text 는 **무조건 덮지 않는다**(ALPHA-696) — 이 표엔 1분 뉴스 레인
+# (PgNewsCanonicalWriter)도 쓰기 때문이다. news_document.lead_observed_at 이 미주장(NULL)
+# 이거나 이 런의 canonical fetched_at 이 그보다 새로울 때만 이긴다. fetched_at 이 결손이면
+# 신선도를 주장하지 않고(published_at 폴백 금지) 그 노출을 로그의 lead_unclaimed_freshness
+# 로 센다(결손엔 빈 문자열도 포함 — 분모는 같은 로그의 lead_attempted, ALPHA-848).
+# publisher 는 별도 축이라 이 가드가 없다.
 # --from/--to 는 published_date
 # 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
@@ -411,6 +452,11 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
 # assertion_argument 로. argument text 는 엔티티 마스터 완전일치(티커·정식명·종목명)로
 # instrument 에 해소하고, 미해소·충돌은 quality log 에 사유별 수치로 남긴다(해소율 실측).
+# 해소율 분모는 **실체 역할 argument 만**이다(ALPHA-802) — 실체를 가리키지 않는
+# non_entity(TIME·VALUE·TEXT)를 미해소로 세면 분모가 부풀어 마스터 확대의 효과를 못 잰다.
+# ⚠️ 분모에서만 뺀다: 온톨로지가 "적재하지 않는다"고 정한 대상은 event_argument 이고,
+# 이 스텝의 assertion_argument 에는 아직 실린다(걷어내는 건 ALPHA-831).
+# 역할 종별 분포·어휘 밖 역할 이름도 같은 로그에 남는다.
 # 멱등: uq_document_assertion_natural(document_id, event_type, predicate) ON CONFLICT.
 # 전무 해소 주장은 넣지 않는다. modality_code 는 어휘 확정 전까지 비운다(ALPHA-361).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
@@ -475,8 +521,9 @@ dev 배포 이미지는 `src/apps/cloud/data-pipeline/Dockerfile` 로 빌드해 
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
-만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature → analyze 4페이즈**를
-한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md)) —
+만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature 3페이즈**를
+한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md);
+analyze 페이즈는 ALPHA-806 에서 상주 소비자로 옮겨 나갔다) —
 각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다 —
 단 **raw 는 예외**다(ALPHA-460): 소스 하나가 실패해도 무관한 소스의 정제·분석은 계속 돈다.
 정제가 빈 입력을 정상 성공으로 처리하므로 있는 만큼 처리하면 되기 때문이다. 대신 실패 직후
@@ -507,6 +554,18 @@ PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서를 
 붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
 돌게 된 지금은 창 밖으로 밀린 canonical 을 자동으로 주워올 경로가 그것뿐이다. 특히 아래
 issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
+
+**장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`, ALPHA-769)도 같은 형태다 —
+`CollectKisInvestorEstimate → NormalizeInvestorEstimate → LoadInvestorIntraday` 를 평일 5슬롯
+(09:35·10:05·11:25·13:25·14:35 KST)으로 돈다. **다만 컷오버가 아니라 신설이다**: 이 3스텝은
+시장 SFN 이 한 번도 돈 적이 없어(ALPHA-767·768 이 층만 만들고 배선을 안 붙였다) 두 레인이 같은
+스텝을 동시에 소유하는 겹침 창이 없고, 그래서 스케줄을 처음부터 ENABLED 로 세웠다. 슬롯 수는
+우리가 고른 게 아니라 소스가 정한다 — 벤더 갱신이 하루 4~5회뿐이고 유형별로 시각이 갈려
+합집합이 5개다(+5분은 정각 반영 지연이 미관측이라 둔 여유).
+
+⚠️ 이 레인의 `LoadInvestorIntraday` 도 **창 없이 돈다** — 공시와 같은 이유(풀스캔이 백로그 회수
+경로)이고, 그 때문에 **공휴일에도 실일을 한다**. 원장 카탈로그에서 이 작업만
+`kr_trading_calendar=False` 인 근거가 그것이다(수집·정제는 비거래일에 대상 자체가 없어 True).
 
 ⚠️ **컷오버가 필요한 이유는 성능이 아니라 원장 정체성이다.** 작업 정체성의 정본은
 `catalog.by_cli(step, source)` 인데 두 레인의 CLI 가 글자 그대로 같아(`ingest-raw-disclosure`
@@ -566,6 +625,21 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
 
 **수집 — 상태머신 밖(수동 전용)**
 
+- `ingest-raw-instrument` / `normalize-instrument-profile`(KRX 상장 **전종목** 종목기본정보,
+  ALPHA-829) — **SFN 에 편입돼 있지 않고 ops 카탈로그에도 없다.** 배선은 별도 티켓 소관이라
+  그전까지는 **손으로 돌릴 때만** 수집된다. 카탈로그 등록을 함께 하지 않은 건 의도다 —
+  `required=True` 로 넣으면 원장이 매 런 이 작업의 빈 칸을 만들어 놓고 미이행으로 센다.
+  - 자격증명이 `krx_etf` 와 **다르다**: 저쪽은 계정 로그인(`mbr_id`/`pw` → JSESSIONID),
+    이쪽은 무상태 `AUTH_KEY` 헤더다. 시크릿도 별개(`edge-dev-data-pipeline/krx/api-key`).
+    ```bash
+    DATA_PIPELINE_KRX_INSTRUMENT__SOURCE__AUTH_KEY=... \
+      uv run --package data-pipeline python -m data_pipeline.run ingest-raw-instrument
+    uv run --package data-pipeline python -m data_pipeline.run normalize-instrument-profile
+    ```
+  - ⚠️ **당일 조회가 막혀 있다**(`basDd < 오늘`). 기준일은 달력이 직전 거래일로 정하므로
+    `--from/--to` 는 **거부**한다 — 무시하고 돌면 소급한 줄 착각한다.
+  - ⚠️ 달력을 쓰므로 `OPS_KR_HOLIDAYS` 주입이 필요하다(미주입이면 공휴일을 거래일로 보고
+    0행을 받아 게이트에 걸린다). 위 krx 잡과 같은 요구사항이다.
 - `ingest-raw-inav`(국내 ETF **장중** iNAV, **kis 세트** — 일별 NAV 와 같은 앱키·유니버스)
   — **SFN 에 편입돼 있지 않다.** 위 raw 페이즈 잡 목록에 없고 `statemachine.tf` 에도 없다.
   스케줄 편입은 ALPHA-556 소관이라, 그전까지는 **손으로 돌릴 때만** 수집된다(자동 수집 없음).
@@ -582,6 +656,63 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
     종가 구간이라 라벨이 맞다. 휴장일 집합은 Planner·KRX 와 같은 `OPS_KR_HOLIDAYS` 를 공유한다
     (`kis` task-def 에도 주입). 이 skip 은 **정상 상태**라 raw-ingest-skipped 알람 토큰을 쓰지
     않는다 — 드러남은 collection_log 가 맡는다.
+- `ingest-raw-investor-estimate`(종목별 **장중** 투자자 추정, **kis 세트** — EOD 투자자 수급과
+  같은 앱키·같은 유니버스, ALPHA-767) — **장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`,
+  평일 5슬롯 09:35·10:05·11:25·13:25·14:35 KST)의 raw 스텝이다(ALPHA-769). dataset 은 `investor_flow_intraday` 로
+  EOD(`investor_flow_daily`)와 **갈라 둔다** — 값이 가집계 추정(`*_fake_*`)이고 시간축이
+  거래일이 아니라 그날의 슬롯(`bsop_hour_gb`)이라, 한 데이터셋에 섞으면 소비자가 잠정과
+  확정을 구분할 수 없다.
+  - EOD(`FHPTJ04160001`)와 **tr_id·파라미터가 갈린다**: 장중은 `HHPTJ04160200` 이고 종목코드
+    하나(`MKSC_SHRN_ISCD`)만 받는다 — 날짜 파라미터가 아예 없다.
+  - **갱신은 하루 4회**(외국인 09:30·11:20·13:20·14:30 / 기관 10:00·11:20·13:20·14:30) —
+    합집합 5슬롯이 레인 스케줄의 근거다.
+  - ⭐ **응답이 누적이다**(2026-08-06 dev 실측): 한 콜이 그날 슬롯 **전부**를 준다(14:51 한 번에
+    325종목 1,574행 = 종목당 최대 5행). 그래서 슬롯을 하나 놓쳐도 다음 슬롯이 회수하고, 레인이
+    `retry 0` 을 쓰는 근거가 된다. 슬롯 필드 `bsop_hour_gb` 의 도메인도 같은 실측에서 **`"1"`~
+    `"5"` 한 자리 코드**로 확인됐다(`"0930"` 같은 시각 문자열이 아니다 — 슬롯 1 은 기관값이
+    284/284 전건 0이라 09:30 외국인 갱신에 대응한다). 값은 장 시작부터의 **누적 순매수**라
+    슬롯 간 차분이 그 구간의 순매수이고, 거래가 없던 종목은 그 슬롯 행이 아예 없다.
+  - ⚠️ **ETF 자체는 0행이다.** 거래소가 ETF 의 장중 투자자 귀속을 생산하지 않는다(KIS 장중
+    투자자 4종 전수조사로 확정). 우리 유니버스는 ETF **구성종목**(개별주식)이라 적용되지만,
+    holdings 유니버스에 섞여 오는 ETF 자신은 빈 응답이 정상이다.
+  - ⚠️ **소급 백필이 없다**(iNAV 와 같다). 날짜 지정이 없어 오늘치만 오고, 놓친 슬롯은 그날
+    안에서만 회복된다. 그래서 `--from/--to` 를 주면 **실행을 거부**한다.
+  - **기준일 가드**: 응답에 날짜 필드가 없어 거래일을 수집 시각(KST)으로 붙이는데, 비거래일·
+    개장 전에 KIS 가 직전 슬롯을 주면 어제 데이터가 오늘 거래일로 굳는다(위 iNAV·ALPHA-387 과
+    같은 함정). 그래서 **거래일이고 첫 슬롯(09:30 KST) 이후**일 때만 수집한다.
+  - **가드는 iNAV 와 같은 `skip_reason` 규약이다**(ALPHA-769 에서 통일). 못 돌 시각이면
+    `status=skipped`·exit 0 으로 마감하고 사유를 collection_log 에 남긴다. 종전엔 예외를 올려
+    `status=error`·exit 1 이었는데, 레인이 **평일 cron** 이라 그대로 두면 공휴일마다 런이
+    FAILED 여서 예정된 무산출과 진짜 고장이 구분되지 않는다. 기제는 공유 스텝
+    (`ingest_raw_investor`)에 심었고 EOD 어댑터엔 이 속성이 없어 동작이 불변이다. 어댑터의
+    `fetch` 는 여전히 같은 사유로 raise 한다 — **직접 호출자**를 위한 것이고, 조건은
+    `skip_reason` 하나가 정본이라 두 경로가 갈릴 수 없다.
+  - **뒤 두 스텝도 같은 레인이다**(ALPHA-768·769): `normalize-investor-estimate`(raw → canonical
+    `investor_flow_intraday`) → `load-investor-intraday`(→ 동명 테이블). EOD 체인
+    (`normalize-investor` → `load-etf-flow`)과 스텝을 **복제하지 않고 갈랐다** — 정체성 키에
+    `asof_slot` 이 붙어 병합 키·PK·창 프루닝이 전부 달라 인자로 갈아끼울 수 없다(수집 스텝은
+    저장 위치만 달라 인자로 갈랐던 것과 대조). 레인이 자동으로 돌리지만 세 스텝을 손으로 이어
+    돌려도 체인이 닫힌다 — 복구·검증용이다
+    (`src/` 에서. 수집은 KIS 앱키, 적재는 DB 접속이 필요하다 — 위 각 절의 env 와 같다):
+    ```bash
+    # 수집 — 거래일이고 09:30(KST) 이후일 때만. 아니면 사유를 남기고 skip(exit 0)한다
+    DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET=... \
+      uv run --package data-pipeline python -m data_pipeline.run ingest-raw-investor-estimate
+    # 정제 — --input-run-id 로 한 슬롯 런만 좁힐 수 있다(미지정=전체 raw, 멱등)
+    uv run --package data-pipeline python -m data_pipeline.run normalize-investor-estimate
+    # 적재 — 창 미지정 = trade_date 전체 스캔 + 멱등. 선행: 이 테이블의 Flyway 적용 완료
+    DATA_PIPELINE_DB__HOST=127.0.0.1 DATA_PIPELINE_DB__PASSWORD=... \
+      uv run --package data-pipeline python -m data_pipeline.run load-investor-intraday
+    ```
+    - **컬럼은 추정 수량 3개뿐**(`net_qty_foreign_est`·`net_qty_institution_est`·
+      `net_qty_total_est`). 벤더가 `frgn`·`orgn`·`sum` 가집계 수량만 주고 개인·기관 세분·
+      순매수 대금을 안 준다 — EOD 의 백만원→원 환산도 `currency` 태깅도 대상이 없다.
+      `_est` 접미사는 표면에서 잠정임이 읽히게 하는 장치다.
+    - ⚠️ `asof_slot` 은 **TEXT 로 원문 보존**한다. `bsop_hour_gb` 의 도메인이 미관측이라
+      ("0930" 같은 시각인지 "1"~"5" 코드인지) 시각으로 파싱하면 정체성 키를 잘못 가정하는데,
+      이 소스는 소급 재조회가 없어 사후 정정이 불가하다. 실측으로 좁힌 뒤 좁힌다.
+    - 정정 정책은 **최신값 덮어쓰기**(형제 로더와 같은 모델) — 벤더가 가집계를 고치면
+      canonical 이 최신 `fetched_at` 으로 수렴하고 마트는 `DO UPDATE` 로 따라간다.
 
 **정제(normalize, 6잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
@@ -637,13 +768,14 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 재무(financial)는 canonical 스텝이 아직 없어 정제 페이즈에서 제외한다(raw-only). 앞 페이즈가
 partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonical 을 쌓지 않는다.
 
-**analyze(1태스크)** — 구 analysis-engine SFN 의 흡수(ALPHA-408). analysis-engine 이미지의
-ENTRYPOINT 가 그대로 돌며(command 미지정 = 오늘 Asia/Seoul), **feature 산출물만 읽는다**
-(canonical/feature 존 + Cloud Event Store 의 price_movement_trigger·instrument)가 페이즈 경계
-계약이다 — 나중에 수집 빈도가 줄면 이 페이즈만 가격이벤트 기반 비동기 실행으로 떼어낸다.
-특정일(trade_date) 수동 재실행은 SFN 이 아니라 `terraform output data_pipeline_analysis_task_family`
-의 task-def 를 `aws ecs run-task` 로 직접 띄워 Command 를
-`["--trade-date","YYYY-MM-DD","--request-id","manual-..."]` 로 덮는다.
+**analyze 페이즈는 없다(ALPHA-806).** 이 SFN 의 책임은 feature 까지다. 설명은 분봉 트리거
+큐를 소비하는 **상주 서비스**(`minute_services.tf` 의 `analysis-consumer`)만 만든다 — 트리거
+없이 도는 일 단위 팬아웃은 확정 일봉을 기다려야 해서 장중엔 층을 못 세웠고(`layer_route=미상`),
+같은 대상에 분봉 경로와 다른 답을 냈다.
+
+수동 재실행은 **트리거 단건 재처리**다: `analysis-consumer` task-def 를 `aws ecs run-task` 로
+띄워 Command 를 `["--trigger-id","<분봉 트리거 id>"]` 로 덮는다. `--trade-date` 단독 실행 경로는
+없다 — 트리거 행이 대상·거래일의 정본이다.
 
 > ※ task-def 는 시크릿 세트 단위로 만든다(`tasks.tf` 의 `secret_sets` 맵에 키를 넣으면 자동 생성) —
 > 현재 9개: `fmp`·`bigkinds`·`kis`·`dart`·`krx`·`deepseek`·`rds`·`events`(LLM+DB)·`rds_dart`(DB+DART).
@@ -746,6 +878,21 @@ settings.targets.keywords            # ["금리", ...]
   없음 — 실측). 그래서 폴링 창을 겹치게 잡아 같은 시각이 여러 run 에 중복 수집되는 것이 **정상**이며,
   겹침이 유일한 갭 방어 수단이라 raw 는 전부 보존하고 중복 제거는 canonical 소관이다.
   각 행에 `interval_sec`·`our_etf_id`·`market`·`kis_symbol`·`fetched_at` 를 부착한다.
+- **raw(투자자 수급)** — 확정과 추정을 **다른 dataset 으로 가른다**(iNAV↔NAV 와 같은 이유):
+  - EOD 확정 — `raw/source=kis/dataset=investor_flow_daily/market=KR/ingest_date=…/run_id=…/`
+    (ALPHA-482). 거래일 grain 확정 순매수. 자연키 날짜는 행의 `stck_bsop_date` 다.
+  - 장중 추정 — `raw/source=kis/dataset=investor_flow_intraday/market=KR/ingest_date=…/run_id=…/`
+    (ALPHA-767). 그날 슬롯 grain 가집계(`*_fake_*`) 추정. **응답에 날짜 필드가 없어**
+    `asof_date`(수집 시각의 KST 날짜)를 provenance 로 부착하는 것이 필수다 — 없으면 canonical
+    이 어느 거래일 스냅샷인지 복원할 수 없다(KRX holdings 의 `trd_dd` 와 같은 형태).
+    각 행에 `our_ticker`·`market`·`kis_symbol`·`asof_date`·`fetched_at` 를 붙인다.
+    슬롯 응답이 그날 것을 누적해 오므로 슬롯 간 중복은 **정상**이고 정리는 canonical 소관이다.
+- **canonical(장중 투자자 추정, 정제 Step2)** — `canonical/market_data/investor_flow_intraday/
+  market=…/trade_date=…/part-*.parquet` 에 게이트 통과 행을 **(market,ticker,trade_date,asof_slot)
+  키로 멱등 병합**(ALPHA-768). EOD 확정(`investor_flow_daily`)과 파티션 축은 같지만 **행 키가
+  한 축 많다** — 하루 4~5 슬롯이 한 종목·한 날짜에 공존하므로 ticker 단독으로 병합하면 마지막
+  슬롯이 앞을 덮어 장중 추이가 사라진다. 거래일은 raw 의 `asof_date`(수집이 붙인 provenance)가
+  주고, 같은 슬롯 재관측은 최신 fetched_at 이 이긴다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
@@ -870,10 +1017,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 27작업 =
-  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4**(ALPHA-724 가
-  공시 4작업의 소유 레인을 옮겼다 — 총계는 그대로)(ECS Task state 33개 중 — 시장 SFN 31 +
-  뉴스 SFN 직렬 2. ALPHA-181 → 578 → 553 PR2 → 591). 레인은 `CatalogEntry.pipeline_type` 축이고
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4 + 장중 수급 레인
+  (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
+  ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
+  늘어난다)(ECS Task state 36개 중 — 시장 SFN 31 + 뉴스 SFN 직렬 2 + 장중 수급 3.
+  ALPHA-181 → 578 → 553 PR2 → 591 → 769). 레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
   `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외는 ① `fmp` 수집
@@ -890,8 +1039,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 27작업이 전부 자기
-  원장을 직접 쓴다. 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
+  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 30작업이 전부 자기
+  원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
   을 내는 별건이다). 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다.
@@ -942,10 +1091,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 ### 실행 흐름 (스펙 §5)
 
 ```
-EventBridge(daily·news×3) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
+EventBridge(daily·news×3·공시×10·장중수급×5) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
                                               → commit → 결정적 execution_name → SFN StartExecution
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
-각 ECS 태스크(27작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+각 ECS 태스크(30작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
 ```
 
@@ -965,11 +1114,12 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   그 슬롯으로 **흡수**되고 `created=False` 로 드러난다 — 새로 도는 게 없다는 뜻이니 로그를 보라.
 - 키 형식의 출처는 `planner.slot_run_key` **하나**다. Reconciler 의 `_due_slots` 도 그 함수를 쓴다 —
   두 곳에서 조립하면 어긋나는 순간 없는 슬롯을 찾아 **실제 런이 영영 대조되지 않는다**. 같은
-  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM`·`OPS_DISCLOSURE_SCHED_HHMM` 은 별도
-  변수가 아니라 terraform 이 각 스케줄 cron 에서 뽑고, cron 을 KST 로 읽으므로
-  `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시 것만 **스케줄이 ENABLED 일 때만
-  주입한다**(ALPHA-722) — 슬롯 기준은 Reconciler 에게 "이 시각엔 런이 있어야 한다"는 주장이라,
-  꺼진 채 넣으면 뜰 리 없는 슬롯을 매시간 결측으로 판정해 **참인** PLANNER_MISSING 을 연다.
+  이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM`·`OPS_DISCLOSURE_SCHED_HHMM`·
+  `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 각 스케줄 cron 에서
+  뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시와
+  장중 수급 것만 **스케줄이 ENABLED 일 때만 주입한다**(ALPHA-722·769) — 슬롯 기준은 Reconciler
+  에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
+  판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(공시 최대 10개·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
 - 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 평일"의 **그날 지난 스케줄 슬롯 전부**를
   대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). ⚠️ 수동 슬롯은
@@ -1024,8 +1174,17 @@ DATA_PIPELINE_DB__PASSWORD=... \
     --source-group kis --session-date 2026-08-04 --universe /path/universe.json
 # universe.json 생성(1분 파이프라인, ALPHA-735) — canonical KR holdings 의 **ETF 별 최신
 # 스냅샷 합집합**(ALPHA-590 규칙)에서 만든다. 손으로 유지하는 목록은 ETF 편입·제외 때마다
-# 조용히 어긋난다. ⚠️ **업로드는 하지 않는다** — universe 는 세션 identity(universe_hash)
+# 조용히 어긋난다. 여기에 config `[minute_universe].sector_etf_ids`(층 분해의 섹터 후보
+# ETF)를 **참조 계열 축**(`Universe.sector_etf_ids`)으로 얹는다 — 봉만 받고 트리거 판정은
+# 안 받는 계열이다(`etf_ids` 는 price-consumer 의 판정 집합이라 거기 얹으면 발화 대상이 된다).
+# ⚠️ **업로드는 하지 않는다** — universe 는 세션 identity(universe_hash)
 # 축이라, 확인 후 사람이 반영한다(그날 계획이 바뀐다). `--out` 없으면 stdout.
+# ⚠️ **새 축을 담은 객체는 이미지 배포 뒤에 올린다.** Universe 는 extra="forbid" 라
+# 옛 이미지가 읽으면 ValidationError 이고, planner 가 exit 2 면 스케일업을 안 해 그날
+# 레인이 안 뜬다(그 실패는 관측되지 않는다 — 위 "exit≠0 은 관측되지 않는다" 참고).
+# 반대 순서는 안전하다(축 기본값이 ()이라 옛 객체는 그대로 읽힌다).
+# ⚠️ **세션이 ACTIVE 인 장중에는 갈지 않는다** — 재계획은 UniverseConflictError 로
+# 막히고, 재기동된 worker 는 원장과 갈려 매 틱 blocked 로 돌면서도 안 죽는다.
 AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
   uv run python apps/cloud/data-pipeline/scripts/build_minute_universe.py --out /tmp/universe.json
@@ -1045,6 +1204,62 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # exit: 0=확정 / 1=원장이 스스로와 모순(사람이 봐야 한다) / 2=판정 자체를 못 함(재시도 가능).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run qc-minute-session --session-id <session_id>
+# EOD 5분봉 확정(1분 파이프라인, ALPHA-839) — 그날 5분 파생을 마감 후 한 번 확정한다.
+# 커밋 후크(`minute/rollup.py:maybe_rollup`)는 "방금 커밋된 window 의 버킷이 닫혔을 때"만
+# 발화해 **지나간 거래일을 영영 안 채운다** — 마지막 버킷 뒤에 온 정정이나 통째로 안 돈
+# 날에는 다음 커밋이 없다. 집계는 후크와 **같은 함수**(`_rollup_day`)라 같은 커밋 세대
+# 집합이면 산출이 바이트까지 같다(재실행도 멱등).
+# ⚠️ 계획·커밋을 **원장에서 읽는다** — `--universe` 를 받지 않는다(거부한다). 마감 후의
+# universe 파일은 수동 편집 대상이라 그날 계획과 갈릴 수 있고, 갈리면 없는 분을 결손으로
+# 세거나 있는 분을 계획 밖으로 버린다.
+# ⚠️ `WRITER_SINCE` 이전 파티션은 거부한다 — 그 앞은 fmp·토스 백필의 정본이라 과거
+# --session-date 재실행 하나가 벤더 원본을 파생본으로 갈아치운다. 날짜를 여기 적지
+# 않는다: 경계는 옮겨진다(ALPHA-836 — 롤업이 온전한 계열을 갖는 날로 이동했다).
+# 출력에 결손 판정이 함께 실린다 — 5분 파생엔 원장이 없어서 배치가 조용히 안 돌면
+# 물어볼 곳이 그것뿐이다. 목록이 **둘**인 이유는 처방이 다르기 때문이다:
+#   · `unfilled_settled_days` — 파티션이 비었다 → **1분 재수집**이 필요하다
+#   · `contested_days` — 다른 writer 가 물고 있어 파생이 영구 정지했다 → **소유자 결정**
+#     이 필요하다(우리 part-0 이 이미 있어도 잡는다: 후크가 먼저 쓴 뒤 백필이 끼어들면
+#     그 시점의 **부분본**이 완성본처럼 남는데, 그게 운영에서 더 흔한 순서다)
+#   · `settled_day_count` — 그 **분모**(후보 일수). 빈 목록은 "구멍 없음"과 "본 게 없음"
+#     둘 다라 분모 없이는 못 가른다
+# ⚠️ 판정 축 셋:
+#   · 세션 phase = `session_ops.DRAINED_PHASES` **+ `DRAINING`**. FINALIZED 로 물으면 안
+#     된다 — dev 실측(2026-08-07)에서 FINALIZED 는 **0건**이고 전 세션이 DRAINED 에 멈춰
+#     있다(`qc-minute-session` 이 안 돈다). DRAINING 을 넣는 것은 stop 이 상한 초과한 날이
+#     거기 영구 고착하는데 **그날이 rollup 도 실패할 확률이 가장 높기** 때문이다.
+#   · 날짜 창은 `[WRITER_SINCE, 오늘)` — **`--session-date` 와 무관하게 오늘**이 상한이다.
+#     대상 날짜로 묶으면 과거 하루를 되돌리는 실행에서 감시 창이 가장 좁아진다.
+#   · 파티션은 **타 writer 파일 유무를 먼저** 보고, 없을 때만 우리 산출의 부재를 본다.
+#     한 축으로만 물으면 한쪽이 샌다 — "비었나"만 보면 거부된 날이 영원히 "채워짐"이고,
+#     "우리 part-0 있나"만 보면 후크가 먼저 쓴 뒤 끼어든 날의 부분본을 못 본다.
+# 실측(2026-08-07 dev): `unfilled=['2026-08-04']` · `contested=[]` · 분모 3.
+# ⚠️ 스캔은 rollup **뒤**에 돈다 — 창이 `[WRITER_SINCE, 오늘)` 이라 대상 날짜가 그 안에
+# 있어서, 앞서 돌면 방금 그날을 채운 실행이 같은 출력에서 그날을 결손이라 보고한다.
+# exit: 0=확정(또는 비거래일 no-op) / 1=확정 안 함(세션 없음·커밋 0건·닫힌 버킷 0·다른
+# writer 파일 존재·WRITER_SINCE 이전 — 전부 재시도로 안 낫는다) / 2=판정 자체를 못 함
+# (설정·인자 결손·DB/S3 장애 — 재시도하면 될 수 있다). 구멍 판정 스캔만 실패하면 rollup
+# 이 성공했을 때만 2 이고, rollup 이 거부했으면 **1 이 이긴다**(두 사실은 독립이다).
+# 우선순위: rollup 예외 → 2 · 정당한 거부(key 없음) → 1 · 스캔 실패만 → 2 · 그 외 0.
+# `--session-date` 미지정=오늘(KST). `--dataset` 은 price_minute 만 받는다 — 뉴스 세션도
+# 390 window 를 계획해서, 열어 두면 뉴스 커밋 지평으로 잘린 5분봉이 가격 파일을 덮는다.
+# 🔴 **스케줄 배선 전 선행 조건**(terraform PR): `aws_iam_role_policy.minute_session` 의
+#   s3 문장은 `["s3:GetObject","s3:ListBucket"]` 뿐이고 주석이 "쓰기는 없다(이 태스크는
+#   레이크에 아무것도 안 만든다)"고 단언한다. 이 스텝은 PUT 을 하므로 권한이 필요하다 —
+#   없으면 매일 AccessDenied 인데 스케줄러는 RunTask 제출까지만 보므로 **조용한 실패**다.
+#   ⚠️ 기존 문장에 `s3:PutObject` 를 **더하지 마라** — 그 Resource 가
+#   `[lake_bucket_arn, "${lake_bucket_arn}/*"]` 라 레이크 **전역 쓰기**가 된다. 별도
+#   문장으로 `"${lake_bucket_arn}/canonical/market_data/intraday_5m/*"` 에 한정한다
+#   (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례다).
+#   `OPS_KR_HOLIDAYS` 는 `aws_ecs_task_definition.minute_session` 에 **이미 주입돼 있다**
+#   — 그 task-def 를 재사용하면 자동 충족이고, 새 task-def 를 파면 필수다.
+# ⚠️ 시각은 stop 뒤여야 한다: cron 20:05 + 상한 1800초 + 확인분 60초 = 최악 20:36 이고,
+# 여기에 stop 태스크 자신의 Fargate 기동(59~122초)이 더 붙어 실제 최악은 ~20:38 이다.
+# 그 전에 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어간다(후크와의 배타성은 코드가
+# 아니라 스케줄 시각이 진다 — 이 스텝은 phase 게이트를 의도적으로 안 건다).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run rollup-minute-session --dataset price_minute \
+    --source-group kis --session-date 2026-08-04
 # 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
 # 있어야 하고(위 plan-minute-session — `--session-date`·`--universe` 를 **같은 값**으로),
 # 갈리면 다른 session_id 가 유도되거나 Worker 가 처리를 거부한다. SIGTERM 은 tick
@@ -1123,11 +1338,11 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 7개(daily·뉴스 3슬롯
-=plan-run, reconcile, 1분 세션 start·stop) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **22개**(daily 1·뉴스 3·
+공시 10·장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
 (전용 IAM 역할 — 레이크 읽기 + 상주 서비스 7종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
-daily·뉴스 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
-(뉴스는 ALPHA-591 에서 전환). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
+네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
+(뉴스는 ALPHA-591 에서 전환, 공시·장중 수급은 처음부터). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).
 
 ### 복구 절차

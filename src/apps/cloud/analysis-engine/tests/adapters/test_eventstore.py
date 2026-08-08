@@ -71,32 +71,17 @@ _DECOMP = Decomposition(
 )
 
 
-def test_missing_trigger_row_means_normal_variation():
-    conn = _FakeConn(trigger_row=None)
-
-    assert EventStore(conn).fetch_price_trigger("inst_ETF", date(2026, 7, 16)) is None
-
-    # 자연키 + 최신 detected_at (이행기 중복 행이 있을 수 있다).
-    sql, params = conn.executed[0]
-    assert "ORDER BY detected_at DESC" in sql
-    assert params == ("inst_ETF", "2026-07-16")
-
-
 def test_lineage_derives_from_the_consumed_trigger_id(monkeypatch):
     import psycopg2.extras
     monkeypatch.setattr(
         psycopg2.extras, "execute_values",
         lambda cur, sql, rows: cur._conn.value_batches.append(list(rows)),
     )
-    conn = _FakeConn(trigger_row=("pmt_01PIPELINEULID", 0.05, "abs|0.0500|>=0.03", True, False))
+    conn = _FakeConn(trigger_row=None)
     store = EventStore(conn)
 
-    gate = store.fetch_price_trigger("inst_ETF", date(2026, 7, 16))
-    assert gate.trigger_id == "pmt_01PIPELINEULID"
-    assert gate.abs_gate is True
-
     ids = store.persist_observation_route(
-        gate.trigger_id, _DECOMP, "CONCENTRATED", True, {"005930": "ent_X"})
+        "pmt_01PIPELINEULID", _DECOMP, "CONCENTRATED", True, {"005930": "ent_X"})
     assert ids["obs_id"] == stable_id("cob", "pmt_01PIPELINEULID")
     assert ids["route_id"] == stable_id("rte", ids["obs_id"])
 
@@ -426,7 +411,7 @@ def test_fetch_minute_price_trigger_missing_row_is_none():
 
 def test_explanation_prerequisites_follows_minute_axis_for_trigger_input():
     """분봉 실행의 route 전제는 minute_price_trigger_id 축으로 찾는다 — 일 단위
-    (etf, trade_date) 조인으로 찾으면 없거나(전제 누락으로 S3 폴백) 같은 날의 다른
+    (etf, trade_date) 조인으로 찾으면 없거나(전제 누락으로 런 실패) 같은 날의 다른
     일 단위 트리거 route 가 잡혀 남의 계보에 영속된다(ALPHA-709)."""
     conn = _MinuteFakeConn()
     settings = SimpleNamespace(trade_date=date(2026, 7, 16),
@@ -436,6 +421,134 @@ def test_explanation_prerequisites_follows_minute_axis_for_trigger_input():
                   if sql.startswith("SELECT er.explanation_route_id")]
     assert route_sqls and all("minute_price_trigger_id" in sql for sql in route_sqls)
     assert all("price_movement_trigger " not in sql for sql in route_sqls)
+
+
+class _MinuteWindowCursor:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        self._conn.executed.append((" ".join(sql.split()), params))
+        if self._conn.error is not None:
+            raise self._conn.error
+
+    def fetchall(self):
+        return list(self._conn.rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _MinuteWindowConn:
+    def __init__(self, rows=(), error=None):
+        self.rows = list(rows)
+        self.error = error
+        self.executed = []
+
+    def cursor(self):
+        return _MinuteWindowCursor(self)
+
+
+def test_fetch_committed_minute_windows_returns_ordered_kst_coordinates():
+    from datetime import datetime, timedelta, timezone
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    utc = timezone.utc
+    rows = [
+        (datetime(2026, 8, 7, 0, 0, tzinfo=utc),
+         datetime(2026, 8, 7, 0, 1, tzinfo=utc), "VALID", 1, "a" * 64),
+        (datetime(2026, 8, 7, 0, 1, tzinfo=utc),
+         datetime(2026, 8, 7, 0, 2, tzinfo=utc), "INCOMPLETE", 2, "b" * 64),
+    ]
+    conn = _MinuteWindowConn(rows)
+
+    got = EventStore(conn).fetch_committed_minute_windows(
+        "session-1", start, start + timedelta(minutes=2))
+
+    assert [row.start for row in got] == [start, start + timedelta(minutes=1)]
+    assert [row.generation for row in got] == [1, 2]
+    [(sql, params)] = conn.executed
+    assert "ORDER BY window_start" in sql
+    assert params == ("session-1", start, start + timedelta(minutes=2))
+
+
+def test_fetch_committed_minute_windows_retries_while_correction_is_running():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from edge_analysis.config import ReturnsNotReadyError
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    rows = [(start.astimezone(timezone.utc),
+             (start + timedelta(minutes=1)).astimezone(timezone.utc),
+             "CLAIMED", 1, "a" * 64)]
+
+    with pytest.raises(ReturnsNotReadyError, match="CLAIMED"):
+        EventStore(_MinuteWindowConn(rows)).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+
+
+def test_fetch_committed_minute_windows_names_a_missing_middle_coordinate():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    rows = [
+        (start.astimezone(timezone.utc),
+         (start + timedelta(minutes=1)).astimezone(timezone.utc), "VALID", 1, "a" * 64),
+        ((start + timedelta(minutes=2)).astimezone(timezone.utc),
+         (start + timedelta(minutes=3)).astimezone(timezone.utc), "VALID", 1, "c" * 64),
+    ]
+
+    with pytest.raises(PipelineError, match=r"count=1 sample=09:01"):
+        EventStore(_MinuteWindowConn(rows)).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=3))
+
+
+def test_fetch_committed_minute_windows_rejects_duplicate_or_uncommitted_terminal_rows():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from edge_analysis.config import PipelineError
+
+    kst = timezone(timedelta(hours=9))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=kst)
+    row = (start.astimezone(timezone.utc),
+           (start + timedelta(minutes=1)).astimezone(timezone.utc),
+           "VALID", 1, "a" * 64)
+    with pytest.raises(PipelineError, match="중복"):
+        EventStore(_MinuteWindowConn([row, row])).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+
+    uncommitted = (*row[:2], "MISSING", 0, None)
+    with pytest.raises(PipelineError, match="커밋 좌표 없음"):
+        EventStore(_MinuteWindowConn([uncommitted])).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+
+
+def test_fetch_committed_minute_windows_does_not_hide_database_errors():
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=timezone(timedelta(hours=9)))
+    error = RuntimeError("database unavailable")
+
+    with pytest.raises(RuntimeError, match="database unavailable") as caught:
+        EventStore(_MinuteWindowConn(error=error)).fetch_committed_minute_windows(
+            "session-1", start, start + timedelta(minutes=1))
+    assert caught.value is error
 
 
 class _RevertQueryCursor:
@@ -486,3 +599,30 @@ def test_find_published_minute_run_ids_scopes_to_minute_published_session():
     assert "trg.window_start <= %s" in sql             # 복귀 이후 재발화 보호
     assert "price_movement_trigger" not in sql.replace("minute_price_trigger", "")
     assert params == ("091160", "ses-1", until)        # 종목·세션·상한 좌표
+
+
+def test_surface_absent_result_is_drafted_and_not_fanned_out(capsys):
+    """표면 부재 런은 **게시본 자리를 차지하지 않는다.**
+
+    게시 규칙("발화당 첫 결과가 게시본")은 첫 결과가 그 발화의 최선임을 전제한다. 내용
+    없는 판정불가가 먼저 오면 자리를 선점하고, 데이터가 들어온 뒤 재실행해도 DRAFT 로
+    밀린다. 무효화된 게시본이 자리를 안 지키는 것과 같은 근거다(ADR-0045).
+
+    사유도 갈라 적는다 — "이미 게시됨"과 "내용이 없음"은 다른 처방이다.
+    """
+    conn = _FakeConn(result_insert_row=("DRAFT",))
+
+    ids = EventStore(conn).persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "판정불가 — 표면 부재"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None,
+        events=[_event("evt_1", None)], publishable=False,
+    )
+
+    result_sql, params = next((s, p) for s, p in conn.executed
+                              if s.startswith("INSERT INTO explanation_result"))
+    assert "OR %s = FALSE" in result_sql          # 게시 판정이 이 플래그를 본다
+    assert False in params                        # 그리고 실제로 전달된다
+    assert not any(s.startswith("INSERT INTO tenant_delivery") for s, _ in conn.executed)
+    assert (ids["publication_status"], ids["fanout_tenants"]) == ("DRAFT", 0)
+    assert conn.committed                         # 계보는 남는다
+    assert "surface_absent" in capsys.readouterr().out

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import pathlib
 import os
 from dataclasses import replace
 from datetime import date
@@ -35,6 +36,10 @@ ETF_INSTRUMENT = "inst_01KXJB6W2EFJF0AGPMWG967ZSZ"
 SAMSUNG_TICKER = "005930"
 SAMSUNG_INSTRUMENT = "inst_01KXJB6W2EFQRP1D5TBRF0EBEK"
 TRIGGER_ID = "trg_e2e_0001"
+# 발화 두 건 — 같은 날 다른 window 다. 첫 발화(09:00)로 게시·재실행 게이트를 보고,
+# 둘째(10:30)로 **다른 발화는 재게시된다**를 본다. 게이트 축이 (etf, 거래일)이 아니라
+# 발화(route)임을 두 축으로 조인다(ALPHA-710).
+MINUTE_TRIGGER_OPEN = "mtrg_e2e_0000"
 MINUTE_TRIGGER_ID = "mtrg_e2e_0001"
 BUNDLE_VERSION = "e2e-bundle-1"
 REQUEST_ID = "e2e-req-1"
@@ -212,7 +217,98 @@ def _seed_event_store(conn) -> None:
 # --------------------------------------------------------------------------- #
 # 골든패스
 # --------------------------------------------------------------------------- #
-def test_news_assembly_to_persisted_explanation(tmp_path):
+def _seed_layers_backfill(root: pathlib.Path) -> None:
+    """`layers_daily` 백필을 심는다 — **없으면 골든패스가 아무것도 검증하지 않는다.**
+
+    실측(CI): 백필이 없으면 `statics.layers.failed` 로 층 분해가 죽고 라우팅이
+    `PRICE_ONLY`, 판정이 `UNCERTAIN` 으로 떨어진다. 그 상태의 골든패스는 '데이터가
+    없을 때 정직하게 모른다고 한다' 만 확인한다 - 새 배포 경로(층 분해 -> 라우팅 ->
+    시행)는 한 줄도 안 지난다.
+
+    `BETA_WINDOW=60` 이므로 그보다 긴 이력이 필요하다. 시장(069500)·ETF(091160)·
+    구성종목(005930)을 같은 요인으로 만들어 층이 실제로 서게 한다.
+    """
+    import datetime as dt
+    import math
+
+    from edge_analysis.statics.layers import MARKET_CODE
+
+    d0 = dt.date.fromisoformat(TRADE_DATE)
+    days = [d0 - dt.timedelta(days=k) for k in range(80, -1, -1)]
+    rows: dict[str, list] = {c: [] for c in
+                             ("symbol", "name", "date", "close", "volume", "kind")}
+
+    def add(sym: str, nm: str, kind: str, f):
+        for i, d in enumerate(days):
+            rows["symbol"].append(sym)
+            rows["name"].append(nm)
+            rows["date"].append(d)
+            rows["close"].append(float(f(i)))
+            rows["volume"].append(1_000_000.0)
+            rows["kind"].append(kind)
+
+    # 시장은 완만한 사인, ETF·구성종목은 그 위에 β 를 얹는다 - 층이 서려면 공통요인이
+    # 실제로 있어야 한다(합성이라도 구조는 진짜여야 검증이 뜻을 가진다).
+    mkt = [100.0 * (1.0 + 0.01 * math.sin(i / 5.0)) for i in range(len(days))]
+    add(MARKET_CODE, "KODEX 200", "market", lambda i: mkt[i])
+    add(ETF_TICKER, "KODEX 반도체", "sector",
+        lambda i: 50.0 * (1.0 + 1.2 * (mkt[i] / 100.0 - 1.0)))
+    add(SAMSUNG_TICKER, "삼성전자", "stock",
+        lambda i: 70.0 * (1.0 + 1.1 * (mkt[i] / 100.0 - 1.0)))
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "layers_daily.parquet").write_bytes(_parquet(rows))
+    # holdings 도 심는다. S3 자격증명이 없는 CI 에서는 `s3_etf_holdings` 가 미등록이고
+    # `holdings()` 는 이 백필로 폴백한다 - 이게 없으면 구성종목 귀속이 서지 않는다.
+    (root / "etf_holdings_fmp.parquet").write_bytes(_parquet({
+        "etf_id": [ETF_TICKER],
+        "constituent_ticker": [SAMSUNG_TICKER],
+        "constituent_name": ["삼성전자"],
+        "weight_pct": [100.0],
+        "as_of": [d0]}))
+
+    # 5분봉 백필(`bars/`) — **분봉 트리거 경로가 이걸 읽는다.** 설명이 분봉 트리거로만
+    # 시작하게 된 뒤(ALPHA-806) 층 분해는 늘 **구간 모드**로 돌고, 구간 모드의 가격 축은
+    # `layers_daily` 가 아니라 `bars_5m` 이다(`layers._CLOCK_SQL` — 심볼 명단만 layers_daily
+    # 에서 오고 가격은 5분봉에서 온다). 이게 없으면 `statics.layers.failed` 로 층이 죽어
+    # 판정이 UNCERTAIN 으로 떨어지고, 골든패스가 배포 경로를 한 줄도 안 지난다.
+    #
+    # 구간 집계는 하루·심볼마다 `ln(마지막 close / 첫 open)` 이다. 그래서 첫 슬롯의 open 을
+    # 전일 수준에, 마지막 슬롯의 close 를 당일 수준에 맞추면 **일봉 계열과 같은 로그수익률**
+    # 이 나온다 — 두 축이 같은 요인을 보게 해야 층이 실제로 선다.
+    slots = [dt.time(9, 0)]
+    while slots[-1] < dt.time(10, 35):
+        prev = dt.datetime.combine(d0, slots[-1]) + dt.timedelta(minutes=5)
+        slots.append(prev.time())
+    bars: dict[str, list] = {c: [] for c in
+                             ("symbol", "datetime", "open", "high", "low", "close", "volume")}
+
+    def add_bars(sym: str, level):
+        for i, d in enumerate(days):
+            if i == 0:
+                continue                       # 전일 수준이 없으면 구간 수익을 못 만든다
+            lo, hi = float(level(i - 1)), float(level(i))
+            n = len(slots)
+            for j, t in enumerate(slots):
+                o = lo + (hi - lo) * j / n
+                c = lo + (hi - lo) * (j + 1) / n
+                bars["symbol"].append(sym)
+                bars["datetime"].append(dt.datetime.combine(d, t))
+                bars["open"].append(o)
+                bars["high"].append(max(o, c))
+                bars["low"].append(min(o, c))
+                bars["close"].append(c)
+                # volume 0 은 거래정지로 읽혀 그 날이 계열에서 빠진다(`halt`).
+                bars["volume"].append(1_000.0)
+
+    add_bars(MARKET_CODE, lambda i: mkt[i])
+    add_bars(ETF_TICKER, lambda i: 50.0 * (1.0 + 1.2 * (mkt[i] / 100.0 - 1.0)))
+    add_bars(SAMSUNG_TICKER, lambda i: 70.0 * (1.0 + 1.1 * (mkt[i] / 100.0 - 1.0)))
+    (root / "bars").mkdir(parents=True, exist_ok=True)
+    (root / "bars" / "bars_5m.parquet").write_bytes(_parquet(bars))
+
+
+def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
     """뉴스 1건이 조립→소비→설명→영속까지 한 계보로 이어져야 한다.
 
     실패가 의미하는 것: 두 앱의 결정적 ID 산식이 갈라졌거나(수렴 파괴), 어느 한쪽 SQL 이
@@ -258,6 +354,9 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         # -- 2) 하류: 엔진이 트리거·이벤트를 소비해 설명을 영속(RDS 경로) ----------
         s3 = FakeS3()
         _seed_engine_lake(s3)
+        # 백필을 심고 물린다 - 이게 없으면 아래 단언이 '데이터 없음' 을 고정한다
+        _seed_layers_backfill(tmp_path / "backfill")
+        monkeypatch.setenv("CAUSAL_BACKFILL_DIR", str(tmp_path / "backfill"))
         settings = Settings(
             trade_date=date.fromisoformat(TRADE_DATE),
             request_id=REQUEST_ID,
@@ -274,11 +373,87 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             # 이 골든패스는 이전(비인과) 경로의 계약을 고정한다 — fake 가 classic
             # explanation JSON 을 반환하므로 인과 하네스(설계 제안 계약)와 맞지 않는다.
             # 인과 경로 e2e 는 ALPHA-620/622 소관(공인 OFF 모드, config.py 주석 참조).
-            causal_enabled=False,
         )
-        store = EventStore.connect(settings)
+        # 통계 표면 산출을 주입한다. 이 픽스처엔 **5분봉이 없고**(로컬 백필에 `bars/` 가
+        # 없고 CI 엔 S3 자격증명도 없다) 합성 이력으로는 어느 검정도 못 세운다 — 위
+        # 주석이 이미 그렇게 적었다. 그대로 두면 `run_statics` 가 표면 부재로 죽고,
+        # ALPHA-795 이후 그런 런은 **게시도 발번도 하지 않아** 이 골든패스가 지키려는
+        # 계보(게시 → 전 테넌트 outbox)를 통째로 못 밟는다.
+        #
+        # 그래서 statics 를 흉내내지 않고 **경계로 취급해** 고정 산출을 준다 — S3·LLM 을
+        # fake 로 두는 것과 같은 축이다. 표면 부재 자체의 계약은 단위 테스트가 지킨다.
+        monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                            lambda *_a, **_k: "[ETF] 091160 시장 주도 · e2e 고정 산출")
+
+        # 분봉 원장·artifact 시드 — 설명의 유일한 진입점이 분봉 트리거다(ALPHA-806).
+        # 두 window(09:00·10:30)를 깔고 각각에 발화를 매단다.
+        open_window = f"{TRADE_DATE}T00:00:00+00:00"     # 09:00 KST — 세션 시가 window
+        trigger_window = f"{TRADE_DATE}T01:30:00+00:00"  # 10:30 KST
+        # 분봉 canonical artifact — **data-pipeline 의 키 빌더로 쓴다**: 엔진 리더의
+        # 미러 전사(lake.minute_artifact_key)와의 수렴을 이 읽기가 고정한다(PIPELINE_ID
+        # 수렴과 같은 축). 삼성 장중 수익률 73500/70000−1 = 5% — 일봉 시드(≈2.94%)와
+        # 다른 값이라, 아래 분해 단언이 분봉 축을 실제로 탔음을 구분해 증명한다.
+        # 원장 checksum = 커밋된 바이트의 sha256 — 엔진이 대조하므로 실물과 같이 시드.
+        import hashlib
+
+        from data_pipeline.lake.storage import canonical_price_minute_artifact_key
+
+        def _bars(*rows: dict) -> bytes:
+            return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
+
+        open_bars = _bars(
+            {"unit_id": ETF_TICKER, "open": "10000.0", "close": "10050.0"},
+            {"unit_id": SAMSUNG_TICKER, "open": "70000.0", "close": "70100.0"},
+        )
+        trigger_bars = _bars(
+            {"unit_id": ETF_TICKER, "open": "10250.0", "close": "10300.0"},
+            {"unit_id": SAMSUNG_TICKER, "open": "73400.0", "close": "73500.0"},
+        )
+        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "0900", 1)] = open_bars
+        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "1030", 1)] = trigger_bars
+        with seed_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO minute_ingestion_session (session_id, dataset, source_group,"
+                " session_date, universe_version, universe_hash, expected_window_count)"
+                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 2)",
+                (TRADE_DATE, "0" * 64),
+            )
+            # 분봉 분해 입력의 원장 전제 — 트리거 window 의 세대·checksum 은
+            # minute_ingestion_window 가 정본이다. 분모는 원장이 아니라 canonical
+            # price_daily 직전 파티션(PREV_DATE)이다(ALPHA-747) — 그래서 여기에
+            # minute_session_open 시드가 **없는 것이 계약**이다: 있으면 시가 축으로
+            # 되돌아간 회귀가 초록으로 통과한다.
+            for window_start, bars_bytes in ((open_window, open_bars),
+                                             (trigger_window, trigger_bars)):
+                cur.execute(
+                    "INSERT INTO minute_ingestion_window (session_id, window_start,"
+                    " window_end, scheduled_at, data_status, generation, checksum)"
+                    " VALUES ('ses-e2e', %s, %s::timestamptz + interval '1 minute',"
+                    " %s, 'VALID', 1, %s)",
+                    (window_start, window_start, window_start,
+                     hashlib.sha256(bars_bytes).hexdigest()),
+                )
+            # window_start 가 대상·거래일의 정본이다 — 엔진이 여기서 파생한다.
+            # 정책 버전은 운영 판정기와 같아야 한다(ALPHA-745 anchor v2) — v1 을
+            # 시드한 채 전일 종가 분해를 기대하면 픽스처가 축 불일치를 인증한다.
+            for trigger_id, window, open_px, close_px, bucket in (
+                (MINUTE_TRIGGER_OPEN, open_window, 10000, 10050, 0),
+                (MINUTE_TRIGGER_ID, trigger_window, 10000, 10300, 1),
+            ):
+                cur.execute(
+                    "INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id,"
+                    " window_start, generation, detection_policy_version, open_price,"
+                    " close_price, change_rate, threshold, cooldown_bucket)"
+                    " VALUES (%s, %s, 'ses-e2e', %s, 1, 'intraday-anchor-v2',"
+                    " %s, %s, 0.03, 0.02, %s)",
+                    (trigger_id, ETF_TICKER, window, open_px, close_px, bucket),
+                )
+        seed_conn.commit()
+
+        first_run = replace(settings, trigger_id=MINUTE_TRIGGER_OPEN)
+        store = EventStore.connect(first_run)
         try:
-            assert run(settings, lake=LakeReader(s3, settings.lake_bucket),
+            assert run(first_run, lake=LakeReader(s3, first_run.lake_bucket),
                        store=store, client=FakeAnalysisClient(), s3=s3) == 0
         finally:
             store.close()
@@ -294,9 +469,26 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 (ETF_INSTRUMENT,),
             )
             rows = cur.fetchall()
-            assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다(S3 폴백 아님)"
+            assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다"
             result_id, etype, confidence, status, primary_thread, tdate, bundle = rows[0]
-            assert (etype, confidence, status) == ("EVENT_SUPPORTED", "HIGH", "PUBLISHED")
+            # **판정 라벨은 데이터가 정한다 - 골든패스가 정하지 않는다.**
+            # 옛 계약(`EVENT_SUPPORTED`/`HIGH`)은 fake LLM 이 classic JSON 으로 그렇게
+            # 선언했기 때문에 성립했다. 지금은 `record.Verdicts` 가 게이트 산출에서
+            # 라벨을 낸다: `EVENT_SUPPORTED` 는 적용된 엣지·성립 함의·유의한 시장사건이
+            # **하나라도 있어야** 나온다. 합성 픽스처(구성종목 1·뉴스 1·패널 이력 없음)
+            # 로는 어느 검정도 설 수 없으므로 도달 불가다 - 그걸 단언하면 통계가 아니라
+            # 픽스처의 빈약함을 고정하는 것이다.
+            #
+            # 그래서 이 골든패스가 지키는 것은 **계보와 정직성**이다: 층 회계가 서고
+            # (시장 100%) 라우팅이 그것을 반영해 `PRICE_ONLY` 로 기록되는가.
+            # 백필이 없으면 층 분해가 죽어 `UNCERTAIN` 이 되므로 이 단언이 그 회귀를
+            # 잡는다(실측: CI 에서 정확히 그렇게 실패했다).
+            assert status == "PUBLISHED"
+            assert etype == "PRICE_ONLY", (
+                f"층 회계가 서면 PRICE_ONLY 다 - {etype} 는 층 분해가 죽었다는 뜻이다"
+                " (백필 부재 -> statics.layers.failed -> UNCERTAIN)")
+            assert confidence in ("LOW", "MEDIUM"), (
+                f"사건 근거가 없으면 HIGH 가 될 수 없다: {confidence}")
             assert primary_thread == thread_id, "엔진이 소비한 thread 가 조립 산출물과 다르다"
             assert (tdate.isoformat(), bundle) == (TRADE_DATE, BUNDLE_VERSION)
 
@@ -330,13 +522,13 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             )
 
             cur.execute(
-                "SELECT o.price_movement_trigger_id, m.constituent_instrument_id"
+                "SELECT o.minute_price_trigger_id, m.constituent_instrument_id"
                 " FROM etf_contribution_observation o"
                 " JOIN etf_contribution_member m"
                 " ON m.contribution_observation_id = o.contribution_observation_id"
             )
-            assert cur.fetchall() == [(TRIGGER_ID, SAMSUNG_INSTRUMENT)], (
-                "분해 계보가 파이프라인 트리거 행에 매달리지 않았다"
+            assert cur.fetchall() == [(MINUTE_TRIGGER_OPEN, SAMSUNG_INSTRUMENT)], (
+                "분해 계보가 소비한 분봉 트리거 행에 매달리지 않았다"
             )
 
         [archive_key] = [k for k in s3.objects if "/runs/" in k]
@@ -357,7 +549,7 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
         # 막아야 한다 — 재실행분은 DRAFT 보존, outbox 는 불변이어야 정정이 아닌 재실행이
         # 온프렘에 중복 전달되지 않는다. as_of 는 마이크로초 정밀이라 같은 초 재실행도
         # 새 result grain 으로 게이트를 태운다(sleep 불요).
-        rerun = replace(settings, request_id="e2e-req-2")
+        rerun = replace(first_run, request_id="e2e-req-2")
         store2 = EventStore.connect(rerun)
         try:
             assert run(rerun, lake=LakeReader(s3, rerun.lake_bucket),
@@ -376,69 +568,15 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             cur.execute("SELECT count(*) FROM tenant_delivery")
             assert cur.fetchone() == (2,), "재실행이 outbox 에 중복 NEW 를 발번했다"
 
-        # -- 5) 같은 날 **다른 발화**(분봉 트리거): 발화 축 재게시(ALPHA-710) ------
-        # 게시 게이트 축은 (etf, trade_date)가 아니라 발화(route)다 — 분봉 트리거가
-        # 같은 날 두 번째로 발화하면 새 PUBLISHED 가 나가고 outbox 도 발번돼야 한다.
-        # 같은 날 다건 PUBLISHED 는 서빙층(publication-api)이 최근 게시 시각 우선으로
-        # 흡수한다. 이 단언이 깨지면 장중 설명이 생성만 되고 MTS 에 안 뜬다.
-        open_window = f"{TRADE_DATE}T00:00:00+00:00"     # 09:00 KST — 세션 시가 window
-        trigger_window = f"{TRADE_DATE}T01:30:00+00:00"  # 10:30 KST
-        # 분봉 canonical artifact — **data-pipeline 의 키 빌더로 쓴다**: 엔진 리더의
-        # 미러 전사(lake.minute_artifact_key)와의 수렴을 이 읽기가 고정한다(PIPELINE_ID
-        # 수렴과 같은 축). 삼성 장중 수익률 73500/70000−1 = 5% — 일봉 시드(≈2.94%)와
-        # 다른 값이라, 아래 분해 단언이 분봉 축을 실제로 탔음을 구분해 증명한다.
-        # 원장 checksum = 커밋된 바이트의 sha256 — 엔진이 대조하므로 실물과 같이 시드.
-        import hashlib
-
-        from data_pipeline.lake.storage import canonical_price_minute_artifact_key
-
-        def _bars(*rows: dict) -> bytes:
-            return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
-
-        open_bars = _bars(
-            {"unit_id": ETF_TICKER, "open": "10000.0", "close": "10050.0"},
-            {"unit_id": SAMSUNG_TICKER, "open": "70000.0", "close": "70100.0"},
-        )
-        trigger_bars = _bars(
-            {"unit_id": ETF_TICKER, "open": "10250.0", "close": "10300.0"},
-            {"unit_id": SAMSUNG_TICKER, "open": "73400.0", "close": "73500.0"},
-        )
-        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "0900", 1)] = open_bars
-        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "1030", 1)] = trigger_bars
-        with seed_conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO minute_ingestion_session (session_id, dataset, source_group,"
-                " session_date, universe_version, universe_hash, expected_window_count)"
-                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 2)",
-                (TRADE_DATE, "0" * 64),
-            )
-            # 분봉 분해 입력(ALPHA-710)의 원장 전제 — 시가·트리거 window 의 세대·checksum
-            # 은 minute_ingestion_window 가 정본이고, ETF 세션 시가는 minute_session_open.
-            for window_start, bars_bytes in ((open_window, open_bars),
-                                             (trigger_window, trigger_bars)):
-                cur.execute(
-                    "INSERT INTO minute_ingestion_window (session_id, window_start,"
-                    " window_end, scheduled_at, data_status, generation, checksum)"
-                    " VALUES ('ses-e2e', %s, %s::timestamptz + interval '1 minute',"
-                    " %s, 'VALID', 1, %s)",
-                    (window_start, window_start, window_start,
-                     hashlib.sha256(bars_bytes).hexdigest()),
-                )
-            cur.execute(
-                "INSERT INTO minute_session_open (session_id, entity_id, status,"
-                " open_price, source_window) VALUES ('ses-e2e', %s, 'OPEN', 10000, %s)",
-                (ETF_TICKER, open_window),
-            )
-            # window_start 01:30Z = 10:30 KST — 엔진이 trade_date 를 여기서 파생한다.
-            cur.execute(
-                "INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id,"
-                " window_start, generation, detection_policy_version, open_price,"
-                " close_price, change_rate, threshold, cooldown_bucket)"
-                " VALUES (%s, %s, 'ses-e2e', %s, 1, 'intraday-abs-v1',"
-                " 10000, 10300, 0.03, 0.02, 1)",
-                (MINUTE_TRIGGER_ID, ETF_TICKER, trigger_window),
-            )
-        seed_conn.commit()
+        # -- 5) 같은 날 **다른 발화**(10:30 window): 발화 축 재게시(ALPHA-710) ------
+        # 게시 게이트 축은 (etf, trade_date)가 아니라 발화(route)다 — 같은 날 두 번째로
+        # 발화하면 새 PUBLISHED 가 나가고 outbox 도 발번돼야 한다. 같은 날 다건 PUBLISHED
+        # 는 서빙층(publication-api)이 최근 게시 시각 우선으로 흡수한다. 이 단언이 깨지면
+        # 장중 설명이 생성만 되고 MTS 에 안 뜬다.
+        #
+        # 삼성 장중 수익률 73500/70000−1 = 5% — 첫 발화(70100/70000)와 다른 값이라
+        # 아래 분해 단언이 이 window 를 실제로 탔음을 구분해 증명한다.
+        #
         # sleep 없이 곧장 실행 — 직전 게시와 같은 초에 게시돼도 as_of 마이크로초
         # 정밀이라 grain 부분 유니크와 충돌하지 않아야 한다(같은 초 두 발화 게시).
         minute_run = replace(settings, request_id="e2e-req-3",
@@ -466,9 +604,12 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
             assert cur.fetchall() == [("e2e-tenant-a", 2, 2), ("e2e-tenant-b", 2, 2)], (
                 "두 번째 발화의 게시가 전 테넌트 outbox 로 발번되지 않았다"
             )
-            # 분해 입력이 분봉 축(ALPHA-710)임을 값으로 증명 — 삼성 장중 수익률은
-            # 트리거 window close/세션 시가 = 73500/70000−1 = 5%. 일봉 축이면
-            # 70000/68000−1 ≈ 2.94% 가 나와 이 단언이 깨진다.
+            # 분해 입력이 분봉 축 + **전일 종가 분모**(ALPHA-747)임을 값으로 증명 —
+            # 삼성 수익률은 트리거 window close/전일 종가 = 73500/68000−1 ≈ 8.088%.
+            # 세 축이 전부 다른 값이라 이 단언 하나가 셋을 가른다:
+            #   일봉 축      70000/68000−1 ≈ 2.94%
+            #   분봉·시가 축 73500/70000−1 = 5%    (구 ALPHA-710 축)
+            #   분봉·전일 축 73500/68000−1 ≈ 8.09% (지금)
             cur.execute(
                 "SELECT m.constituent_return FROM etf_contribution_observation o"
                 " JOIN etf_contribution_member m"
@@ -477,8 +618,8 @@ def test_news_assembly_to_persisted_explanation(tmp_path):
                 (MINUTE_TRIGGER_ID,),
             )
             [(minute_ret,)] = cur.fetchall()
-            assert abs(float(minute_ret) - 0.05) < 1e-9, (
-                f"분봉 분해가 일봉 축을 탔다: {minute_ret}"
+            assert abs(float(minute_ret) - (73500 / 68000 - 1)) < 1e-9, (
+                f"분봉 분해가 전일 종가 분모를 안 썼다: {minute_ret}"
             )
 
         # -- 6) 1분 추출 → event 단건 조립(ALPHA-727) -----------------------------

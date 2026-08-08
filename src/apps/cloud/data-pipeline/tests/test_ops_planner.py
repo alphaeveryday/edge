@@ -463,8 +463,8 @@ def test_disclosure_lane_owns_the_four_disclosure_tasks(monkeypatch):
     #   ② stalled **<** SFN 타임아웃(같으면 안 된다). 판정이 `> threshold` 인데 SFN 이 정확히
     #      타임아웃에 실행을 죽이므로, 같게 두면 경과가 임계를 넘는 순간이 오지 않아
     #      **영원히 발화하지 않는다**(있으나 마나 한 신호를 계약으로 못박는 셈).
-    slot_interval = test_ops_catalog.disclosure_slot_interval_seconds()
-    sfn_timeout = test_ops_catalog.disclosure_sfn_timeout_seconds()
+    slot_interval = test_ops_catalog.lane_slot_interval_seconds("disclosure")
+    sfn_timeout = test_ops_catalog.lane_sfn_timeout_seconds("disclosure")
     reconcile_period = test_ops_catalog.reconcile_period_seconds()
     for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE):
         assert e.deadline_offset_seconds + reconcile_period < slot_interval, e.task_key
@@ -578,3 +578,65 @@ def test_snapshot_created_when_universe_provided():
     assert ledger.find_expected_task(
         run_id=result.pipeline_run_id, task_key="NORMALIZE_PRICE"
     )["expected_count"] is None
+
+
+def test_장중_수급_레인_임계가_슬롯_간격과_타임아웃_안에_있다():
+    """WHY(ALPHA-769): 공시 레인이 같은 축을 테스트로 드는데(위 테스트) 장중 수급 레인은
+    카탈로그 주석에서 **손으로 계산만** 했다 — 주석은 슬롯이나 타임아웃이 바뀌어도 안 깨진다.
+
+    임계는 terraform 의 실제 값에서 뽑는다. 두 계약은 공시와 같은 이유로 같은 형태다:
+      ① deadline + Reconciler 주기 < 최소 슬롯 간격 — 판정을 찍는 건 15분마다 도는
+         Reconciler 라, 주기를 빼면 "한 슬롯의 결측이 다음 슬롯 예정 전에 드러난다"가
+         산술적으로 거짓인데 통과한다.
+      ② stalled **<** SFN 타임아웃(같으면 안 된다) — 판정이 `> threshold` 인데 SFN 이 정확히
+         타임아웃에 실행을 죽이므로, 같게 두면 경과가 임계를 넘는 순간이 오지 않아 영원히
+         발화하지 않는다.
+    """
+    slot_interval = test_ops_catalog.lane_slot_interval_seconds("investor_intraday")
+    sfn_timeout = test_ops_catalog.lane_sfn_timeout_seconds("investor_intraday")
+    reconcile_period = test_ops_catalog.reconcile_period_seconds()
+    entries = catalog.entries(catalog.INVESTOR_INTRADAY_PIPELINE_TYPE)
+    assert entries, "장중 수급 레인 엔트리가 0개다"
+    for e in entries:
+        assert e.deadline_offset_seconds + reconcile_period < slot_interval, e.task_key
+        assert e.stalled_after_seconds < sfn_timeout, e.task_key
+
+
+def test_장중_수급_레인은_달력_플래그가_작업마다_다르다():
+    """WHY(ALPHA-769): `kr_trading_calendar` 세 갈래가 이 레인 설계의 핵심 판단인데 어느
+    테스트도 안 들고 있었다 — 세 값 중 무엇을 뒤집어도 전 스위트가 초록이었다(edge-review).
+
+    **공시 레인은 전 엔트리 False 를 못박는다(위 테스트). 여기가 갈리는 지점이라 명시한다**
+    (Rule 7 — 규약이 충돌하면 고르고 이유를 남긴다). 기준은 레인이 아니라 **그 작업이
+    공휴일에 실제로 일을 하는가**다. ALPHA-181 함정은 "실제로 돌아 값을 만든 실행이 SKIPPED
+    뒤로 사라지는 것"이지 "평일 cron 이면 무조건 False"가 아니다.
+
+    * 수집·정제 True — 장중 투자자 추정은 **비거래일에 존재 자체를 하지 않는다.** 어댑터가
+      `skip_reason` 으로 돌아서고(0건), 정제는 `--input-run-id` 로 그 런의 raw 만 읽어 진짜
+      0건이다. False 로 두면 `empty_allowed=False` 라 **공휴일마다 UNKNOWN 이 2건씩** 쌓여
+      (실측: `derive_data_status` 가 0건·완료·empty_allowed=False → UNKNOWN) 진짜 결손과 섞인다.
+    * 적재 False — 창 인자 없이 도는 **canonical 전량 스캔**이라 공휴일에도 실일을 한다(앞
+      슬롯이 실패해 남은 백로그를 줍는다). True 면 그 회수 실행에 attempt 가 안 붙어, 다시
+      실패해도 원장에 자리조차 없다(Rule 12).
+    """
+    by_key = {e.task_key: e for e in catalog.entries(catalog.INVESTOR_INTRADAY_PIPELINE_TYPE)}
+    assert set(by_key) == {
+        "INVESTOR_INTRADAY_COLLECTION_KIS",
+        "NORMALIZE_INVESTOR_INTRADAY",
+        "LOAD_INVESTOR_INTRADAY",
+    }, "레인 구성이 바뀌었다 — 달력 판단을 다시 하라"
+    assert by_key["INVESTOR_INTRADAY_COLLECTION_KIS"].kr_trading_calendar is True
+    assert by_key["NORMALIZE_INVESTOR_INTRADAY"].kr_trading_calendar is True
+    # 창 없는 전량 스캔이라 공휴일에도 실일을 한다 — SKIPPED 뒤로 가리면 안 된다.
+    assert by_key["LOAD_INVESTOR_INTRADAY"].kr_trading_calendar is False
+    # 그 근거(창 인자 부재)가 terraform 에 그대로 있는지 함께 든다 — 나중에 `--from/--to` 를
+    # 붙이면 전량 스캔이 아니게 되고, 그때는 이 레인도 공시처럼 전부 False 가 아니라 반대로
+    # 적재를 True 로 되돌려야 한다. 근거가 코드에서 사라졌는데 값만 남는 것을 막는다.
+    # ⚠️ **주석을 먼저 걷는다.** 배선을 뗄 때 가장 흔한 형태가 삭제가 아니라 주석 처리인데,
+    # 원문을 그대로 훑으면 창 인자를 붙이면서 옛 줄을 주석에 남긴 변경이 그대로 통과한다 —
+    # 근거는 사라졌는데 단언만 초록이다(`test_ops_catalog._strip_hcl_comments` 와 같은 규율).
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+    assert "States.Array('load-investor-intraday', '--run-id', $.run_id)" in sm, (
+        "load-investor-intraday 의 command 가 바뀌었다 — 창 인자가 붙었다면 "
+        "'공휴일에도 전량 스캔으로 실일을 한다'는 False 의 근거가 사라진다")

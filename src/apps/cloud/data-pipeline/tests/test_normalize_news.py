@@ -89,6 +89,7 @@ def test_bigkinds_maps_vendor_fields_and_date_from_news_id(tmp_path):
     assert row["title"] == "SK하이닉스 신규 계약"
     assert row["publisher"] == "테스트신문"
     assert row["published_at"][:10] == "2026-07-01"  # NEWS_ID .20260701… 에서 파생
+    assert row["published_at"] == "2026-07-01T15:30:00+09:00"  # NEWS_ID 벽시계는 KST
     assert row["market"] == "KR"
 
 

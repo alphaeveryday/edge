@@ -1,4 +1,4 @@
-"""주 DB 쓰기가 아닌 S3 산출물: 런 아카이브와 FK-결여 설명 폴백.
+"""주 DB 쓰기가 아닌 S3 산출물: 런 아카이브.
 
 런 아카이브는 매 런의 중간 산출물(분해·소비 트리거·LLM 원문)을 남겨 트리거 없는 잔잔한
 날도 감사 가능하게 한다(ALPHA-415). 쓰기 실패는 로그만 남기고 삼킨다 — 관측이 분석
@@ -10,16 +10,16 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from ..config import PipelineError, Settings
+from ..config import Settings
 from ..domain.models import Decomposition, EventContext
 from ..observability import log, utcnow_iso
 
 _DEFAULT_PREFIX = "operations_archive/etf_explanations/"
 
-# FK-결여 폴백은 이벤트 제목을 남기고, 런 아카이브는 novelty 도 남긴다. 둘 다 나머지는
-# 의도적으로 버린다.
-_FALLBACK_EVENT_FIELDS = ("source_event_id", "thread_id", "event_type_code", "ticker", "title")
-_ARCHIVE_EVENT_FIELDS = (*_FALLBACK_EVENT_FIELDS[:4], "novelty_status", "title")
+# 런 아카이브는 이벤트 제목과 novelty 를 남긴다. 나머지는 의도적으로 버린다.
+_ARCHIVE_EVENT_FIELDS = (
+    "source_event_id", "thread_id", "event_type_code", "ticker", "novelty_status", "title",
+)
 
 
 def _result_prefix(settings: Settings) -> str:
@@ -87,30 +87,3 @@ def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | 
     location = f"s3://{bucket}/{key}"
     log("run_archive.stored", s3=location)
     return location
-
-
-def write_explanation_to_s3(
-    s3, settings: Settings, explanation: dict[str, Any], events: list[EventContext]
-) -> str:
-    """DB FK 전제가 없을 때 설명을 S3 에 영속한다."""
-    prefix = _result_prefix(settings)
-    if not prefix.startswith("s3://"):
-        raise PipelineError(f"result prefix must be an s3:// URI, got {prefix!r}")
-    bucket, key_prefix = _split_s3_uri(prefix)
-    key = (
-        f"{key_prefix}/etf={settings.etf_ticker}/"
-        f"trade_date={settings.trade_date.isoformat()}/{settings.request_id}.json"
-    )
-    body = json.dumps(
-        {
-            "etf_ticker": settings.etf_ticker,
-            "trade_date": settings.trade_date.isoformat(),
-            "request_id": settings.request_id,
-            "generated_at": utcnow_iso(),
-            "explanation": explanation,
-            "events": [_event_dict(e, _FALLBACK_EVENT_FIELDS) for e in events],
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
-    s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
-    return f"s3://{bucket}/{key}"

@@ -6,4 +6,5 @@ import type { ScreeningRepository } from './repository';
 export const screeningRepository: ScreeningRepository = realScreeningRepository;
 
 export * from './types';
+export * from './labels';
 export type { ScreeningRepository } from './repository';

@@ -40,6 +40,7 @@ from ..lake import (
     parse_raw_etf_key,
     quality_log_key,
 )
+from ..parse import KR_MIC_BY_BOARD
 from ..quality import BLOCKING_REASONS_ETF, validate_etf_holding
 
 logger = logging.getLogger(__name__)
@@ -71,10 +72,15 @@ _KRX_FIELDS = {
 # 중 **28종이 코스닥**이라, 시장을 지역으로 뭉개면 다운스트림이 틀린 거래소로 적재한다.
 #
 # 매핑 밖 값은 None 이 되고 호출부가 경고를 남긴다(Rule 12 — KRX 가 코드를 늘리면 알아야 한다).
+# MIC **값**은 `parse.KR_MIC_BY_BOARD` 가 SSOT 다(ALPHA-829) — KRX 를 읽는 경로가 둘인데
+# 시장을 아는 축이 달라(여기 응답의 MKT_ID, 공식 OpenAPI 는 어댑터가 부른 엔드포인트),
+# 값을 각자 들면 한쪽만 고쳐도
+# 안 잡히고 같은 종목이 두 market_code 로 마스터에 두 번 선다. 여기 표는 **벤더 코드→보드**
+# 매핑만 담당한다.
 _KRX_MIC_BY_MKT_ID = {
-    "STK": "XKRX",  # 유가증권시장(KOSPI)
-    "KSQ": "XKOS",  # 코스닥
-    "KNX": "XKON",  # 코넥스
+    "STK": KR_MIC_BY_BOARD["KOSPI"],  # 유가증권시장
+    "KSQ": KR_MIC_BY_BOARD["KOSDAQ"],
+    "KNX": KR_MIC_BY_BOARD["KONEX"],
 }
 
 

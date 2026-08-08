@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from .adapters.classification import (
     read_industry_csv,
     source_stamp,
 )
-from .adapters.eventstore import EventStore
+from .adapters.eventstore import EventStore, minute_route_id
 from .adapters.lake import LakeReader, make_s3_client
 from .adapters.llm import DeepSeekClient
 from .adapters.price_daily import (
@@ -39,9 +40,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--request-id", default=None, help="caller correlation id")
     parser.add_argument("--trigger-id", default=None,
                         help="분봉 트리거 단건 입력(ALPHA-709) — 대상 ETF·trade_date 를 "
-                             "트리거 행에서 유도한다(--trade-date 무시)")
-    # 서브커맨드를 주지 않으면 종전처럼 설명 파이프라인이 돈다 - Step Functions 의 기동
-    # 커맨드를 바꾸지 않기 위해서다.
+                             "트리거 행에서 유도한다(--trade-date 무시). 설명 실행의 "
+                             "필수 입력이다(ALPHA-806)")
+    # 서브커맨드를 주지 않으면 설명 파이프라인이 돈다. `required=True` 로 못 박지 않는
+    # 이유는 이 인자가 상위 파서에 있어 적재 서브커맨드까지 함께 막기 때문이다 —
+    # 계약은 `pipeline.run` 한 곳이 진다(트리거 없으면 PipelineError).
     sub = parser.add_subparsers(dest="command")
     consume = sub.add_parser(
         "consume-triggers",
@@ -52,6 +55,12 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     consume.add_argument("--max-polls", type=int, default=None,
                          help="receive 횟수 상한(미지정=상주). 로컬·검증용 — 봉투 계약 "
                               "위반이 있었으면 exit 1")
+    window = sub.add_parser(
+        "run-window-universe",
+        help="기존 분봉 계보가 있는 당일 ETF를 요청창으로 Cloud-only 재분석.",
+    )
+    window.add_argument("--window-start", required=True, help="HH:MM")
+    window.add_argument("--window-end", required=True, help="HH:MM")
     loader = sub.add_parser(
         "load-classification",
         help="Load the FMP industry map into instrument_classification.",
@@ -245,6 +254,11 @@ def query_command(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """설정 로드·어댑터 조립·실행. 실패(PipelineError)는 로그 + 비0 종료."""
+    # 루트 로거 기본은 WARNING 이라, 설정이 없으면 `logger.info` 가 통째로 삼켜진다 —
+    # 상주 소비자가 ReturnsNotReady **사유**를 info 로 찍으므로 실패 709건이 로그에
+    # `start` 만 남긴 실측이 있다(08-05, ALPHA-747). 진단 가능성이 관측의 최소 조건이다.
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s %(message)s", force=True)
     args = parse_args(argv)
     try:
         if args.command == "consume-triggers":
@@ -258,6 +272,10 @@ def main(argv: list[str] | None = None) -> int:
                     "큐 URL 이 없다 — --queue-url 또는 EDGE_EXPLANATION_QUEUE_URL 주입"
                 )
             return consume_triggers(queue_url, max_polls=args.max_polls)
+        if args.command == "run-window-universe":
+            from .window_batch import run_window_universe
+            return run_window_universe(
+                args.trade_date, args.window_start, args.window_end, args.request_id)
         if args.command == "load-classification":
             return load_classification_command(args)
         if args.command == "load-universe":
@@ -273,6 +291,12 @@ def main(argv: list[str] | None = None) -> int:
         client = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_model)
         store = EventStore.connect(settings)
         try:
+            if args.trigger_id and not store.try_lock_route(minute_route_id(args.trigger_id)):
+                # 소비자가 같은 트리거를 쥐고 있다 — 수동 실행이 그 위에 겹치면 LLM 이
+                # 이중 과금된다(ALPHA-779). 소비자 쪽만 락을 잡으면 이 문서화된 경로가
+                # 그대로 뚫려 있다. 재실행 자체를 막지는 않는다: 경합이 없으면 잡힌다.
+                raise PipelineError(
+                    f"소비자가 처리 중인 트리거다 — 끝난 뒤 재실행하라: {args.trigger_id}")
             return run(settings, lake=lake, store=store, client=client, s3=s3)
         finally:
             store.close()

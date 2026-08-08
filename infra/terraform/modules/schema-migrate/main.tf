@@ -1,6 +1,6 @@
 # 스키마 마이그레이션 one-off 실행기 (ECS Fargate task).
 #
-# GitHub-hosted 러너는 VPC 밖이라 private RDS 에 직접 접속할 수 없다. 그래서 Flyway 는
+# CI 러너는 hosted·self-hosted 모두 VPC 밖이라 private RDS 에 직접 접속할 수 없다. 그래서 Flyway 는
 # 이 VPC 내부 task 에서 실행한다. GitHub Actions 는 OIDC 로 인증해 이 task 를 RunTask 로
 # 트리거하기만 한다(별도 github-oidc-deploy 모듈이 그 권한을 만든다).
 #

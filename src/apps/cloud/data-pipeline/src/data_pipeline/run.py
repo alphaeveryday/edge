@@ -1,9 +1,9 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|normalize-etf-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
+         |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N] [--window-days N]
@@ -40,6 +40,7 @@ from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.news_consumer import news_consumer_cli
 from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
+from .minute.rollup import rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
@@ -48,6 +49,7 @@ from .minute.worker import price_worker_cli
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
+    raw_investor_estimate_partition,
     raw_etf_nav_partition,
     raw_etf_profile_partition,
 )
@@ -62,9 +64,11 @@ from .sources import (
     KisDailyPriceSource,
     KisEtfProfileSource,
     KisInavSource,
+    KisInvestorEstimateSource,
     KisInvestorSource,
     KisNavSource,
     KrxEtfSource,
+    KrxInstrumentSource,
     PoliteClient,
     YahooPriceSource,
 )
@@ -79,19 +83,23 @@ from .steps import (
     load_etf_holdings,
     load_etf_nav,
     load_instruments,
+    load_investor_intraday,
     load_price_daily,
     load_price_triggers,
     ingest_raw,
     ingest_raw_disclosure,
     ingest_raw_etf,
     ingest_raw_financial,
+    ingest_raw_instrument,
     ingest_raw_investor,
     normalize_disclosure,
     normalize_disclosure_segment,
     normalize_etf,
     normalize_etf_nav,
     normalize_etf_profile,
+    normalize_instrument_profile,
     normalize_investor,
+    normalize_investor_estimate,
     normalize_news,
     normalize_price,
     tag_news,
@@ -134,12 +142,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
-                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile",
-                 "ingest-raw-investor",
-                 "normalize-price", "normalize-investor",
+                 "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile", "ingest-raw-instrument",
+                 "ingest-raw-investor", "ingest-raw-investor-estimate",
+                 "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
-                 "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-assertions", "assemble-events",
+                 "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
+                 "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
@@ -153,6 +161,10 @@ def main(argv: list[str] | None = None) -> int:
                  # EOD(ALPHA-693): qc-minute-session=drain 끝난 세션의 누락 확정·확정
                  # (DUE 잔존→MISSING, FINALIZED). 원장 DB + storage(orphan 나열) 필요.
                  "qc-minute-session",
+                 # EOD(ALPHA-839): rollup-minute-session=그날 5분 파생을 마감 후 1회
+                 # 확정. 커밋 후크는 "방금 닫힌 버킷"에서만 발화해 지나간 날을 영영 안
+                 # 채운다. 원장 DB + storage(파티션 PUT·구멍 판정) 필요.
+                 "rollup-minute-session",
                  # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
                  # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
                  "plan-minute-session", "drain-minute-session",
@@ -210,13 +222,18 @@ def main(argv: list[str] | None = None) -> int:
                              "배선이 어긋난 채 커밋된 행은 그 값이 컬럼에 박혀 있어 "
                              "여기서 바로잡지 않으면 복구 경로가 없다")
     parser.add_argument("--dataset", default=None,
-                        help="plan-minute-session: 세션 dataset(price_minute|news_minute)")
+                        help="세션 dataset. plan-minute-session·start/stop 은 "
+                             "price_minute|news_minute, rollup-minute-session 은 "
+                             "**price_minute 만**(5분 파생은 가격 분봉 canonical 전용 "
+                             "경로라 뉴스 세션을 주면 거부한다)")
     parser.add_argument("--source-group", default=None,
-                        help="plan-minute-session: 세션 source_group(toss|bigkinds 등)")
+                        help="세션 source_group. price_minute=toss|kis, "
+                             "news_minute=bigkinds 등 — dataset 의 어휘 안에서만 받는다")
     parser.add_argument("--session-date", default=None,
-                        help="plan-minute-session·price-worker: 세션 날짜 YYYY-MM-DD"
-                             "(price-worker 미지정=오늘 KST — planner 와 같은 값이어야 "
-                             "같은 session_id 가 유도된다)")
+                        help="plan-minute-session·price-worker·rollup-minute-session: "
+                             "세션 날짜 YYYY-MM-DD(price-worker·rollup-minute-session "
+                             "미지정=오늘 KST — planner 와 같은 값이어야 같은 session_id "
+                             "가 유도된다)")
     parser.add_argument("--universe", default=None,
                         help="plan-minute-session·price-worker: 가격 세션의 universe JSON "
                              "경로(둘 다 필수·**같은 파일**). window 범위와 universe_hash 가 "
@@ -285,12 +302,13 @@ def main(argv: list[str] | None = None) -> int:
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step not in ("plan-minute-session", "start-minute-session",
-                         "stop-minute-session") and (
+                         "stop-minute-session", "rollup-minute-session") and (
         args.dataset is not None or args.source_group is not None
     ):
         raise SystemExit(
             "--dataset·--source-group 은 plan-minute-session·start-minute-session·"
-            f"stop-minute-session 에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
+            f"stop-minute-session·rollup-minute-session 에서만 쓴다 — "
+            f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step in ("price-consumer", "start-minute-session") and args.session_date is not None:
         raise SystemExit(
@@ -302,13 +320,22 @@ def main(argv: list[str] | None = None) -> int:
             "--universe 는 news-worker 에서 쓰지 않는다 — 뉴스 세션은 소스 단위라 "
             "universe 가 없다(무시되므로 거부)"
         )
+    if args.step == "rollup-minute-session" and args.universe is not None:
+        # 받아서 무시하면 "계획을 이 파일로 다시 세운다"는 오해를 판다 — 배치는 계획을
+        # 원장에서 읽는다(마감 후의 universe 파일은 그날 계획과 갈릴 수 있다).
+        raise SystemExit(
+            "--universe 는 rollup-minute-session 에서 쓰지 않는다 — 계획·커밋은 원장에서 "
+            "읽는다(무시되므로 거부)"
+        )
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
-                         "start-minute-session", "news-worker") and (
+                         "start-minute-session", "news-worker",
+                         "rollup-minute-session") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
-            f"price-consumer·start-minute-session·news-worker 에서만 쓴다 — "
+            f"price-consumer·start-minute-session·news-worker·rollup-minute-session "
+            "에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -351,6 +378,10 @@ def main(argv: list[str] | None = None) -> int:
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
     if args.step == "qc-minute-session":
         return qc_session_cli(settings, session_id=args.session_id)
+    if args.step == "rollup-minute-session":
+        return rollup_session_cli(settings, dataset=args.dataset,
+                                  source_group=args.source_group,
+                                  session_date=args.session_date)
     if args.step == "plan-minute-session":
         return plan_session_cli(
             settings, dataset=args.dataset, source_group=args.source_group,
@@ -401,6 +432,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # source= 가 규정하고(현재 kis), 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-investor":
         return normalize_investor.run(storage, run_id, args.input_run_id)
+    # 장중 투자자 추정 정제(ALPHA-768)도 raw 만 읽는다 — EOD 와 **다른 데이터셋**이라 스텝이
+    # 따로다(정체성 키에 슬롯이 붙어 병합 규칙이 다르다). --input-run-id 는 한 슬롯 런의 raw 만
+    # 좁히는 축이고, 미지정이면 전체를 다시 훑어도 멱등이라 결과가 같다.
+    if args.step == "normalize-investor-estimate":
+        return normalize_investor_estimate.run(storage, run_id, args.input_run_id)
     # 뉴스 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-news":
@@ -422,6 +458,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
     if args.step == "normalize-etf-profile":
         return normalize_etf_profile.run(storage, run_id, args.input_run_id)
+
+    if args.step == "normalize-instrument-profile":
+        return normalize_instrument_profile.run(storage, run_id, args.input_run_id)
 
     # 적재(load-*)는 canonical 을 읽어 **DB 에 쓰는** 스텝이라 수집 창·벤더가 없다. DB 설정이
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
@@ -492,6 +531,15 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
     if args.step == "load-etf-flow":
         return load_etf_flow.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
+        )
+
+    # 장중 투자자 추정 적재(ALPHA-768)도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-etf-flow
+    # 와 같다(canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip). 창은 **거래일** 축이라
+    # 하루를 지정하면 그날의 슬롯 전부가 대상이다(슬롯 단위 창은 없다).
+    if args.step == "load-investor-intraday":
+        return load_investor_intraday.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
         )
@@ -621,6 +669,60 @@ def _dispatch(args, settings, storage, run_id) -> int:
             settings, storage, profile_source, run_id,
             dataset="etf_profile", partition=raw_etf_profile_partition,
             job_name="ingest_raw_etf_profile",
+        )
+
+    if args.step == "ingest-raw-instrument":
+        # KRX 공식 OpenAPI 종목기본정보(ALPHA-829). `ingest-raw-etf --source krx` 와 **자격증명이
+        # 다르다** — 저쪽은 계정 로그인(mbr_id/pw), 이쪽은 AUTH_KEY 헤더다. 설정이 없으면
+        # 조용히 0건 수집하고 성공으로 끝나지 않게 fail-loud 한다(Rule 12).
+        #
+        # 날짜창을 **거부한다**: 이 API 는 기준일 하나만 받고 그 값은 달력이 정한다(당일
+        # 조회가 막혀 있어 직전 거래일). 무시하고 돌면 과거를 메우려던 운영자가 직전 거래일
+        # 스냅샷을 받고 exit 0 을 보게 되고, 소급된 줄 착각한다 —
+        # `ingest-raw-investor-estimate` 와 같은 성질·같은 처방이다(Rule 7: 두 선례 중
+        # 거부하는 쪽을 택했다. 무시하는 `ingest-raw-etf-profile` 은 창 개념 자체가 없는
+        # 프로필 조회라 착각할 소급이 없다).
+        # `or` 가 아니라 `is not None` 이다 — 운영 스크립트가 unset 변수를 `--from "$FROM"`
+        # 으로 넘기면 빈 문자열이 되고, falsy 검사면 명시적으로 창을 준 실행이 가드를 지난다.
+        if args.from_date is not None or args.to_date is not None:
+            raise SystemExit(
+                "ingest-raw-instrument 는 --from/--to 를 쓸 수 없다 — 이 API 는 기준일 하나만 "
+                "받고 그 값은 직전 거래일로 고정이다(당일·미래 조회 불가). 과거 기준일 백필이 "
+                "필요하면 별도 티켓으로 소급 인자를 설계한다."
+            )
+        if settings.krx_instrument is None:
+            raise SystemExit("krx_instrument.source 설정이 없다 — sources.toml 확인")
+        return ingest_raw_instrument.run(
+            storage, KrxInstrumentSource(settings.krx_instrument.source), run_id)
+
+    if args.step == "ingest-raw-investor-estimate":
+        # 장중 투자자 추정(ALPHA-767) — EOD 확정(`ingest-raw-investor`)과 **별개 데이터셋**이다.
+        # 날짜창 블록 **앞**에 둔다: 이 API 는 날짜 파라미터가 없어 창을 계산할 이유가 없다
+        # (ETF 프로필 분기와 같은 자리·같은 이유).
+        #
+        # 창을 준 실행은 **거부한다** — 무시하고 돌면 갭을 메우려던 운영자가 오늘치를 받고
+        # exit 0 을 보게 되고, 소급이 영구 불가한 구간을 복구한 줄 착각한다(iNAV 와 같은
+        # 성질·같은 처방, Rule 12).
+        # `or` 가 아니라 `is not None` 이다 — 운영 스크립트가 unset 변수를 `--from "$FROM"`
+        # 으로 넘기면 빈 문자열이 되고, falsy 검사면 **명시적으로 창을 준 실행이 가드를 지나
+        # 오늘치를 받고 exit 0** 이 된다(소급된 줄 착각). 값의 유무로 판정한다(Rule 12).
+        if args.from_date is not None or args.to_date is not None:
+            raise SystemExit(
+                "ingest-raw-investor-estimate 는 --from/--to 를 쓸 수 없다 — 이 API 는 날짜 "
+                "지정이 없고 오늘치 장중 추정만 준다(소급 백필 불가). 갭은 폴링 슬롯으로만 막는다."
+            )
+        # 자격증명·유니버스를 EOD 와 **공유**한다(같은 KIS 앱키·같은 구성종목 축) — iNAV 가
+        # kis_nav 섹션을 재사용하는 선례와 같다. 별도 섹션을 두면 같은 비밀값을 두 env 로
+        # 주입해야 해서, 한쪽만 주입된 배포에서 이 소스가 조용히 비활성된다.
+        if settings.kis_investor is None:
+            raise SystemExit("kis_investor.source 설정이 없다 — sources.toml 확인")
+        estimate_source = KisInvestorEstimateSource(
+            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+        )
+        return ingest_raw_investor.run(
+            settings, storage, estimate_source, run_id,
+            dataset="investor_flow_intraday", partition=raw_investor_estimate_partition,
+            job_name="ingest_raw_investor_estimate",
         )
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).

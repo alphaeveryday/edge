@@ -17,6 +17,8 @@ export interface ReviewItem {
   receivedAt: string | null;
   /** screening_check(result=REVIEW)의 rule_type 파생 */
   reviewReasons: string[];
+  /** 룰 무관 판정 재료 — 목록도 상세와 같은 사유 문구를 만든다(ALPHA-774). */
+  gateChecks: GateCheck[];
 }
 
 /** 근거 문서 — 경계면 계약 형상(event-bundle) 그대로. */
@@ -29,10 +31,22 @@ export interface ReviewEvidence {
   sourceUri: string | null;
 }
 
+/** 목록의 룰 무관 판정 재료 — 상세와 같은 사유 문구를 만들기 위한 최소 필드(ALPHA-774). */
+export interface GateCheck {
+  matchedText: string | null;
+  minSourceCount: number | null;
+  minConfidence: string | null;
+}
+
 export interface ReviewCheck {
   result: 'PASS' | 'REVIEW' | 'BLOCK';
   ruleType: string | null;
   matchedText: string | null;
+  /** 판정 당시 정책 — 검수 사유 문구의 기준 출처다(오늘 설정이 아니라 그때 값, ALPHA-774).
+   * 버전 조회 실패 시 셋 다 null 이고 화면은 실측값만 보여준다. */
+  policyVersionNo: number | null;
+  minSourceCount: number | null;
+  minConfidence: string | null;
   checkedAt: string | null;
 }
 
