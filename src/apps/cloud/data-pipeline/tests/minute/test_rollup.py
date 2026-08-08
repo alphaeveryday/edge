@@ -490,6 +490,54 @@ class TestUnfilledSettledDays:
     def candidates(self, fx, before: date = SESSION_DAY + timedelta(days=1)) -> int:
         return self.scan(fx, before)[2]
 
+    def test_owned_day_before_the_boundary_is_watched(self, tmp_path):
+        """🔴 소유하는 날은 **감시한다** — 소유권과 판정 창이 갈리면 안 된다.
+
+        예외일(`WRITER_OWNED_BEFORE_SINCE`)은 정의상 경계보다 앞이라, 창을
+        `WRITER_SINCE` 로 잡으면 롤업 소유가 되면서 동시에 감시에서 영구 제외된다.
+        그러면 그날이 비어 있어도 매일 `unfilled=[] contested=[]` 로 초록이 나고,
+        백필은 이미 손을 뗐으니 채울 주체도 없다 — 아무도 못 보는 구멍이 된다.
+        """
+        from data_pipeline.minute.rollup import WRITER_OWNED_BEFORE_SINCE
+
+        owned = sorted(WRITER_OWNED_BEFORE_SINCE)[0]
+        fx = Fixture(tmp_path)
+        planned = plan_session_windows(date.fromisoformat(owned), universe=UNIVERSE)
+        fx.ledger.plan_session(
+            dataset="price_minute", source_group="toss",
+            session_date=date.fromisoformat(owned),
+            universe_version=UNIVERSE.universe_version,
+            universe_hash=UNIVERSE.universe_hash, windows=planned,
+        )
+        self.settle(fx, owned)
+        assert owned in self.unfilled(fx), "롤업이 소유하는 날이 판정 창 밖이다"
+
+    def test_backfill_owned_day_stays_out_of_the_scan(self, tmp_path):
+        """반대 방향 — 백필이 소유하는 날은 후보가 아니다.
+
+        ⚠️ 날짜를 **예외일과 경계 사이**에서 고른다. 그 밖(예: 07-31)이면 SQL 하한이
+        혼자 걸러 필터를 지워도 초록이다 — 넓힌 창에 섞여 들어오는 구간이 여기뿐이라
+        `writer_owns` 재필터가 실제로 하중을 받는 자리도 여기다.
+        """
+        from data_pipeline.minute.rollup import (
+            WRITER_OWNED_BEFORE_SINCE,
+            scan_lower,
+        )
+
+        older = (date.fromisoformat(scan_lower()) + timedelta(days=1)).isoformat()
+        assert scan_lower() < older < WRITER_SINCE, "넓힌 창 **안**이어야 필터가 걸린다"
+        assert older not in WRITER_OWNED_BEFORE_SINCE
+        fx = Fixture(tmp_path)
+        planned = plan_session_windows(date.fromisoformat(older), universe=UNIVERSE)
+        fx.ledger.plan_session(
+            dataset="price_minute", source_group="toss",
+            session_date=date.fromisoformat(older),
+            universe_version=UNIVERSE.universe_version,
+            universe_hash=UNIVERSE.universe_hash, windows=planned,
+        )
+        self.settle(fx, older)
+        assert older not in self.unfilled(fx)
+
     def test_drained_day_without_partition_is_reported(self, tmp_path):
         # ⚠️ 축이 DRAINED 다. FINALIZED 로 물으면 dev 원장에서 영영 0건이다 — 실측
         # 2026-08-07 기준 FINALIZED 세션이 **한 건도 없고** 전부 DRAINED 에 멈춰 있다
@@ -774,28 +822,54 @@ class TestRollupSessionCli:
 
     def test_boundary_in_the_future_says_the_window_is_empty(
             self, tmp_path, caplog, monkeypatch):
-        """소유권 경계가 아직 안 온 날이면 그 사실을 로그로 말한다.
+        """판정 창의 하한이 아직 안 온 날이면 그 사실을 로그로 말한다.
 
-        WHY: 창 `[WRITER_SINCE, 오늘)` 이 공집합이면 스캔은 구조적으로 0건이다. 소유권을
-        넘긴 직후엔 정상이지만(그 구간은 벤더 백필이 채운다), 경계를 옮겨 두고 되돌리길
+        WHY: 창 `[하한, 오늘)` 이 공집합이면 스캔은 구조적으로 0건이다. 소유권을 넘긴
+        직후엔 정상이지만(그 구간은 벤더 백필이 채운다), 경계를 옮겨 두고 되돌리길
         잊으면 **감시가 조용히 꺼진 채로 남는다**. 0건이 "구멍 없음"인지 "볼 창이 없음"
         인지 갈리지 않으면 아무도 그 차이를 못 본다(Rule 12).
 
-        ⚠️ 이 테스트는 **경고 경로만** 검증한다. 시계를 경계 앞으로 되돌려 상황을
-        합성하므로 `WRITER_SINCE` 가 실제로 어디 있는지는 안 본다 — 경계를 미래에 두고
-        되돌리길 잊는 사고를 잡는 것은 이 단언이 아니라 아래 `test_boundary_is_not_left_
-        in_the_future` 와 런타임 WARNING 이다.
+        ⚠️ 하한은 `WRITER_SINCE` 가 아니라 `scan_lower()` 다 — 경계 **앞**의 예외일
+        (`WRITER_OWNED_BEFORE_SINCE`)이 창을 그만큼 넓히기 때문이다. 경계로 물으면
+        예외일이 창에 들어와 감시가 도는데도 "비어 있다"고 경고한다(도는 감시를 안 도는
+        것으로 읽게 만든다).
+
+        ⚠️ 이 테스트는 **경고 경로만** 검증한다. 시계를 하한 앞으로 되돌려 상황을
+        합성하므로 경계가 실제로 어디 있는지는 안 본다 — 그건 아래
+        `test_boundary_is_not_left_in_the_future` 와 런타임 WARNING 이 본다.
         """
         import logging
 
         import data_pipeline.minute.rollup as mod
 
         self.with_fake_ledger(monkeypatch)
-        # 시계를 경계보다 **앞**으로 되돌린다 — 경계가 미래인 상태 그 자체다.
-        monkeypatch.setattr(mod, "_scan_before", lambda: SESSION_DAY - timedelta(days=1))
+        # 시계를 창 **하한**보다 앞으로 되돌린다 — 창이 공집합인 상태 그 자체다.
+        lower = date.fromisoformat(mod.scan_lower())
+        monkeypatch.setattr(mod, "_scan_before", lambda: lower - timedelta(days=1))
         with caplog.at_level(logging.WARNING):
             self.run(self.settings(tmp_path))
         assert "판정 창이 비어 있다" in caplog.text
+
+
+    def test_exception_day_inside_the_window_is_not_called_empty(
+            self, tmp_path, caplog, monkeypatch):
+        """예외일이 창에 들어와 있으면 "비어 있다"고 말하지 않는다.
+
+        ⚠️ 위 테스트는 시계를 하한 **밖**으로 보내므로 경고 조건이 `WRITER_SINCE` 든
+        `scan_lower()` 든 똑같이 발화한다 — 둘을 가르는 구간은 **예외일과 경계 사이**뿐이다
+        (오늘이 실제로 거기 있다). 경계로 물으면 감시가 도는데도 안 돈다고 말한다.
+        """
+        import logging
+
+        import data_pipeline.minute.rollup as mod
+
+        self.with_fake_ledger(monkeypatch)
+        between = date.fromisoformat(mod.scan_lower()) + timedelta(days=1)
+        assert between.isoformat() < mod.WRITER_SINCE, "경계 **앞**이어야 갈린다"
+        monkeypatch.setattr(mod, "_scan_before", lambda: between)
+        with caplog.at_level(logging.WARNING):
+            self.run(self.settings(tmp_path))
+        assert "판정 창이 비어 있다" not in caplog.text
 
 
 def test_boundary_is_not_left_in_the_future():

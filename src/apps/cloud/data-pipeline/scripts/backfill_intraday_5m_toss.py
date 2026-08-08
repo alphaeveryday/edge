@@ -61,7 +61,7 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src"))
 
-from data_pipeline.minute.rollup import WRITER_SINCE, writer_owns  # noqa: E402
+from data_pipeline.minute.rollup import writer_owns  # noqa: E402
 from data_pipeline.sources.toss import TossOpenApiClient  # noqa: E402
 
 KST = timezone(timedelta(hours=9))

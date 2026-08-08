@@ -759,8 +759,8 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
 
     분석엔진(analysis-engine)이 소비하는 기존 데이터셋이다 — FMP 백필
     (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 그 뒤를 벤더 백필과
-    1분 롤업이 나눠 쓴다. 경계는 `minute.rollup.WRITER_SINCE` 하나이고, 그 앞은 백필이
-    그 뒤는 롤업이 **파티션을 통째로 소유한다** — 날짜를 여기 박아 두면 경계가 움직일
+    1분 롤업이 나눠 쓴다. 소유는 `minute.rollup.writer_owns()` 하나가 정하고(기본은 `WRITER_SINCE`
+    경계 + 경계 앞 예외 집합), 백필과 롤업이 **파티션을 통째로 나눠 소유한다** — 날짜를 여기 박아 두면 경계가 움직일
     때 이 문장만 거짓이 된다(ALPHA-836 에서 실제로 그랬다).
 
     한 파티션에 두 writer 의 파일이 공존할 수 있다(`part-0.parquet` + 벤더 백필 파일).
@@ -783,7 +783,7 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     이고, 같은 파티션에 다른 writer 가 다른 파일명으로 쓴다(토스 백필
     `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
     읽으므로 **파티션 = 여러 파일의 합집합**이고, 겹치는 (ticker, ts) 는 두 번 세어진다
-    — 비겹침을 보장하는 주체는 각 writer 다(`rollup.WRITER_SINCE`, 롤업의 타 writer 가드).
+    — 비겹침을 보장하는 주체는 각 writer 다(`rollup.writer_owns()`, 롤업의 타 writer 가드).
 
     generation 축 없음 — 파생물이라 원장이 확정한 1분
     세대에서 언제든 같은 규칙으로 재유도되고, 5분 버킷이 닫힐 때마다 그날 전체를
