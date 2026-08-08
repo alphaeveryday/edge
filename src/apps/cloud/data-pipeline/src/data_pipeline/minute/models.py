@@ -220,10 +220,16 @@ def plan_session_windows(
 ) -> tuple[tuple[datetime, datetime], ...]:
     """하루의 명시적 1분 half-open window 목록 (KST).
 
-    범위는 universe 가 정한다 — 시간외 거래 종목이 하나라도 있으면 08:00–20:00(720개),
-    없으면 정규장 09:00–15:30(390개)다. 계획 범위와 window 별 기대 유니버스
-    (`Universe.units_at`)는 **같은 규칙**에서 나와야 한다: 계획이 더 넓으면 기대가 빈
-    window 가 생기고, 좁으면 시간외 분이 아예 관측되지 않는다.
+    universe 가 있는 dataset 의 범위는 universe 가 정한다 — 시간외 거래 종목이 하나라도
+    있으면 08:00–20:00(720개), 없으면 정규장 09:00–15:30(390개)다. 계획 범위와 window 별
+    기대 유니버스(`Universe.units_at`)는 **같은 규칙**에서 나와야 한다: 계획이 더 넓으면
+    기대가 빈 window 가 생기고, 좁으면 시간외 분이 아예 관측되지 않는다.
+
+    **universe 가 없는 소스 단위 dataset(뉴스·공시)은 `extended_hours` 만이 범위를 정한다**
+    (ALPHA-875). 그쪽은 기대 집합이 universe 에서 나오지 않아 "기대가 빈 window" 라는 실패
+    모드 자체가 없다 — window 하나는 "그 분에 소스를 한 번 폴링했다"이고, 소스가 그 시각에
+    낸 것이 0건이면 그게 `VALID_EMPTY` 다. universe 를 함께 요구하면 그 dataset 은
+    `extended_hours=True` 를 줘도 격자가 영원히 09:00–15:30 에 갇힌다.
 
     `universe` 는 기본값 없이 **항상 명시**한다(가격 universe 가 없는 뉴스 세션은
     `None`). 기본값을 두면 시간외 종목이 있는 세션의 planner 가 인자를 빠뜨렸을 때
@@ -239,7 +245,12 @@ def plan_session_windows(
     tz 는 KST 고정이다 — 거래시간 상수가 KST 로 정의됐고, `units_at` 도 KST 로 읽는다.
     한쪽만 다른 tz 로 부르면 계획과 기대가 통째로 어긋난다.
     """
-    extended = extended_hours and bool(universe and universe.extended_hours_ids)
+    # universe 가 **없으면** 넓힐지를 `extended_hours` 하나가 결정한다(위 docstring) —
+    # `universe and …` 로 접으면 universe=None 이 falsy 라 소스 단위 dataset 이 조용히
+    # 정규장 격자로 떨어진다.
+    extended = extended_hours and (
+        universe is None or bool(universe.extended_hours_ids)
+    )
     open_at = datetime.combine(
         session_date, EXTENDED_OPEN if extended else SESSION_OPEN, tzinfo=KST
     )

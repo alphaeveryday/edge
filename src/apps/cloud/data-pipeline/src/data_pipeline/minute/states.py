@@ -44,6 +44,11 @@ DATASET_NEWS_MINUTE = "news_minute"
 # 저건 하루 한 점이고 이건 장중 시각 grain 이라, 한 dataset 으로 접으면 canonical 이
 # 행마다 grain 을 되물어야 한다.
 DATASET_ETF_INAV_MINUTE = "etf_inav_minute"
+# 공시(ALPHA-875). **window 단위 산출물이 없는 dataset 이다** — 증분 커서가 없어 매 tick 이
+# 그날 날짜창 전체를 다시 읽는다(`sources/dart_disclosure.py`). 그래서 window 는 "그 분에
+# 한 번 폴링했다"는 원장 단위이고, 완전성은 window 가 아니라 런 사이 rcept_no 집합 비교가
+# 진다(`steps/ingest_raw_disclosure.py` 모듈 주석). 뉴스가 같은 성질이다.
+DATASET_DISCLOSURE_MINUTE = "disclosure_minute"
 # dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이다 — 어휘 밖 값으로
 # 세션이 서면 그 소스를 처리하는 어댑터·Worker 배선이 없어 dataset 오타와 같은 모양으로
 # 하루가 조용히 안 돈다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
@@ -59,6 +64,8 @@ SOURCE_GROUPS_BY_DATASET = {
     DATASET_NEWS_MINUTE: frozenset({"bigkinds"}),
     # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만).
     DATASET_ETF_INAV_MINUTE: frozenset({"kis"}),
+    # 공시는 OpenDART 단독이다 — 국내 전자공시의 원 접수처가 하나다.
+    DATASET_DISCLOSURE_MINUTE: frozenset({"dart"}),
 }
 # ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을
 # 한쪽에만 넣게 되고, 그때 정상 입력이 KeyError 로 죽거나(어휘표 누락) 유효한 dataset 이
@@ -70,7 +77,63 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # 09:00 이고(`kis_inav.MARKET_OPEN`) 그 하한은 앞으로 못 내린다(파티션 `ingest_date` 가
 # UTC 스탬프라 09:00 KST 미만은 파티션이 전날로 붙는다). 격자만 08:00 로 넓히면 매 거래일
 # 60 window 가 아무도 못 채우는 채로 DUE 에 남고, iNAV 는 소급이 불가라 영구 결손이다.
-EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE})
+#
+# **공시는 쓴다**(ALPHA-875) — 안 넓히면 현 SFN 레인이 덮는 구간을 잃는다: DART 당일접수는
+# 07:30~18:00 이라 09:00~15:30 격자는 16·17·18시 접수분을 다음 거래일 아침까지 못 본다.
+# iNAV 를 막은 두 근거가 공시에는 **둘 다 안 걸린다**:
+# ① 파티션 `ingest_date` 가 UTC 인 것은 같지만 그걸 읽는 소비자가 없다 —
+#    `normalize_disclosure`·`_segment` 는 `raw/` 를 전량 스캔해 `ingest_date` 로 고르지 않고,
+#    본문 seen-map 은 이미 UTC 2일을 훑는다(`ingest_raw_disclosure._DOC_LOOKBACK_DAYS`, 그
+#    상수의 주석이 바로 이 09:00 경계를 근거로 2를 골랐다).
+# ② "아무도 못 채우는 window" 가 안 생긴다 — 매 tick 이 날짜창 전체를 재독하므로 08:00
+#    tick 도 자기 window 를 채운다(그 시각 접수분이 0건이면 VALID_EMPTY 다).
+#
+# 🔴 **후속 Worker PR 의 성공기준: 날짜창을 세션 날짜(KST)에서 유도해야 한다.** ① 은 파티션
+# 축만 반박하고, 같은 UTC 시계가 여기선 파티션 키가 아니라 **질의 파라미터**를 만든다 —
+# `run.py` 의 스케줄 증분 기본창(`default_window(now_utc)`)을 쓰면 08:00 KST = 23:00 UTC(D-1)
+# 이라 창이 `[D-2, D-1]` 이 되어 **세션 날짜 D 가 창 밖이다**. 그러면 08:00~08:59 의 60 window
+# 가 "직전 이틀 재독"으로 VALID 확정되는데 그 분들이 속한 날짜는 질의하지 않았고(Rule 12 성공
+# 위장의 모양), 07:30 접수분은 09:00 window 에서 처음 보인다(비가격 dataset 은
+# `scheduled_at_for` 가 `window_end` 를 그대로 줘 09:01 부터 claim 가능 — 약 91분).
+# ⚠️ 그 60 window 는 **one-shot 가정의 수치**다. 그 기본창은 `main()` 안에서 한 번 평가되므로
+# Worker 를 상주로 만들면 창이 **기동 시각에 동결**돼 그날 720 window 전부가 `[D-2, D-1]` 을
+# 재독한다. 격자를 넓힌 소득이 통째로 창 유도에 걸려 있다.
+# ⚠️ 18:00~20:00 은 **당일접수가 끝난 구간**이라 새 접수가 없다 — 0건이 오는 구간이 **아니다**.
+# 익일접수(18:00~19:00)는 계속 들어오지만 그 `rcept_dt` 가 다음 날이라 그날 창에 없고
+# (`sources/dart_disclosure.py` 실측 2026-08-03), 그 120 tick 도 창 전체를 재독한다.
+#
+# ponytail: 격자 상수(`EXTENDED_OPEN`/`CLOSE`)가 공용이라 dataset 별로 좁히지 않았다. 좁힐
+# 판단의 근거는 **tick 전체의 벤더 비용**이지 18:00 이후의 빈 폴링이 아니다 —
+# **window 하나가 창 전체 재독**이라 list.json 14~22콜이다(하루 700~1,070건 실측 ·
+# `page_count` 기본 100 · 기본 증분 창 2일. 근거는 `config.models` 의 `max_pages` 주석이고
+# "기본 증분 창만도 ~18 페이지"로 같은 수를 독립 기록한다. ⚠️ `sources/dart_disclosure`
+# 모듈 주석의 "하루 4~11 콜"은 하한이 어느 실측에서도 안 나오는 낡은 값이다 — 청소 대상).
+# `PoliteClient` 기본 `min_interval=1.0` 이라 **목록만 window 당 14~22초**이고, 본문(ZIP)은
+# **신규 대상 건당 1초**가 더 붙는다(같은 client 를 쓰고 seen-map 이 재다운로드만 막는다).
+#
+# ⚠️ **한 tick 은 1분보다 오래 걸린다.** 공용 tick 골격은 realtime 1건 +
+# `recovery_budget_per_tick`(가격 2·뉴스 1)을 **한 tick 안에서** 처리하므로
+# (`worker.MinuteWorkerLoop.tick`) tick 당 window 2~3개 = **28~66초**다. 그 자체는 이 레인의
+# 정상이다 — 토스 실측 tick 이 이미 73초+ 이고, backlog 도 굶지 않는다(분당 2~3 window 처리
+# vs 분당 1 도착). ⭐ 실제 요구는 **lease 가 최악 tick 을 덮는 것**이고 `lease_seconds` 기본
+# 300 이 그 처방이다(`worker.WorkerConfig` 주석이 60 을 ALPHA-706 근거로 기각한 기록이다 —
+# 런타임 dataclass 기본 60 은 **뉴스** 것이고 poll 이 훨씬 싸서 성립하는 값이라 공시가
+# 빌려 쓸 수 없다. 배포가 주입하는 설정 기본은 또 다른 층이다 — `config.models` 쪽).
+# → 후속 Worker PR 의 성공기준: `config.models` 의 `_leases_cover_worst_poll`
+# (뉴스)·`_leases_cover_worst_tick`(가격) **동형 검증자**를 공시에도 세워 lease 가 최악
+# tick 을 못 덮는 설정이 **load 시점 ValueError** 로 죽게 한다. 현 SFN 은 슬롯 간격
+# 3600초가 이 축을 통째로 가리고 있었다.
+#
+# 일 총량은 720 **window** × 14~22 ≈ 1만~1.6만 콜(tick 수와 무관하다 — window 수가 축이다)로
+# 현 10슬롯(140~220콜)의 ~70배이고, 한 DART 앱키를 **세 스텝이 공유한다**
+# (`ingest-raw-disclosure`·`ingest-raw-financial`·`enrich-corp-code` — task-def 는
+# `secret_sets` 의 `dart`·`rds_dart` 둘이 같은 시크릿을 싣는다).
+# `"020" 일 사용한도 초과`는 `STOP_STATUS_CODES` 라 닿으면 레인이 선다.
+# ⚠️ **콜을 줄이는 축과 tick 을 줄이는 축은 다르다.** 일 총량을 줄이는 것은 둘 —
+# **창을 당일로**(세션 첫 tick 만 D-1 포함, 절반) · dataset 별 격자 폭(window 수).
+# `recovery_budget_per_tick` 은 **일 총량을 안 줄인다**(720 window 는 그대로다) —
+# 줄이는 것은 tick 하나의 길이뿐이니 lease 예산과 짝으로만 만진다.
+EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_DISCLOSURE_MINUTE})
 # **상주 서비스를 스케일하는 세션**의 dataset. `start/stop-minute-session` 이 올리고
 # 내리는 서비스 목록은 dataset 별이 아니라 **공용**이라, 여기 없는 dataset 으로 stop 을
 # 부르면 phase 게이트는 그 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라

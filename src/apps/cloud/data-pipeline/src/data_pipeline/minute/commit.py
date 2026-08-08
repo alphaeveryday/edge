@@ -86,11 +86,13 @@ class GenerationMismatchError(RuntimeError):
 @dataclass
 class MinuteCommitter:
     """window commit 경계 — 가격(commit_price_window)·iNAV(commit_inav_window)·
-    뉴스(commit_news_window).
+    뉴스(commit_news_window)·공시(commit_disclosure_window).
 
-    세 조합은 같은 `_tx` 조각(fence·window·job·outbox)을 쓰지만 순서와 내용이 달라
+    네 조합은 같은 `_tx` 조각(fence·window·job·outbox)을 쓰지만 순서와 내용이 달라
     합치지 않는다: 가격은 window 단위 canonical 분봉 1건, 뉴스는 기사 N건의 관측
-    판정·job N개, iNAV 는 하위 소비자가 없어 window 확정에서 멈춘다.
+    판정·job N개, iNAV·공시는 하위 소비자가 없어 window 확정에서 멈춘다. iNAV 와 공시가
+    지금 같은 모양인 것은 **소비자가 아직 없다는 우연의 일치**라 합치지 않는다 — 각자
+    소비자가 붙을 때 job kind·event type 이 서로 다른 자리에 붙는다.
     """
 
     db: DbConfig
@@ -108,7 +110,7 @@ class MinuteCommitter:
         artifact_generation: int,
         **outcome,
     ) -> int:
-        """fence/phase → claim 검증 → window 결과 확정 → 세대 대조. 가격·iNAV 공유부.
+        """fence/phase → claim 검증 → window 결과 확정 → 세대 대조. 가격·iNAV·공시 공유부.
 
         여기까지가 "artifact 를 PUT 한 그 attempt 가 지금도 이 window 의 주인인가"를
         확정하는 부분이고, 그 뒤(job·outbox)는 dataset 마다 다르다. 뉴스는 claim 과
@@ -284,6 +286,61 @@ class MinuteCommitter:
                 failed_unit_count=failed_unit_count, record_count=record_count,
                 checksum=checksum, manifest_uri=manifest_uri,
                 manifest_checksum=manifest_checksum, missing_units=missing_units,
+                stage_timestamps=stage_timestamps,
+            )
+
+    def commit_disclosure_window(
+        self,
+        *,
+        session_id: str,
+        window_start: datetime,
+        worker_id: str,
+        fence_token: int,
+        claim_token: int,
+        source_code: str,
+        data_status: str,
+        record_count: int,
+        checksum: str,
+        manifest_uri: str,
+        manifest_checksum: str,
+        stage_timestamps: dict[str, datetime | str],
+        artifact_generation: int,
+    ) -> int:
+        """공시 폴링 한 건을 확정하고 generation 을 돌려준다 (ALPHA-875).
+
+        공시는 아직 하위 소비자가 없어(레일 결정 ALPHA-873 대기) iNAV 와 같이 window
+        확정에서 멈춘다. 그런데도 `commit_inav_window` 를 빌려 쓰지 않는다 — 소비자가
+        붙는 날 job kind·event type 을 **여기서** 붙여야 하고, 그때 iNAV 것을 고치면
+        NAV window 가 공시 큐로 나간다(`commit_inav_window` 가 가격 것을 안 빌린 이유와
+        같은 축이다).
+
+        **unit 은 소스 하나다**(뉴스와 같은 축) — 공시는 유니버스가 기대 집합을 정하지
+        않아 unit 을 종목으로 셀 수 없다. `record_count` 는 그 폴링이 관측한 메타 행 수고,
+        완전성 판정은 window 가 아니라 런 사이 rcept_no 집합 비교가 진다
+        (`steps/ingest_raw_disclosure.py` 모듈 주석).
+
+        실패 unit 은 `data_status` 에서 유도한다 — 두 인자로 받으면 "INVALID 인데 실패 0"
+        같은 모순 조합이 커밋된다. `INCOMPLETE`(부분 실패)를 실패로 세지 않는 것도 뉴스와
+        같다: 그건 그 폴링의 산출이 온전치 않다는 뜻이고 소스 장애는 아니라, 실패로 세면
+        QC 가 "소스가 죽었다"로 오독한다.
+
+        ⚠️ 뉴스와 달리 **세대 대조를 유지한다**. 뉴스가 그 검사를 뺀 근거는 artifact key 가
+        세대 축이 아니라는 것이었는데, 여기서 그 검사는 key 규약이 아니라 **claim 과 commit
+        사이에 다른 attempt 가 이 window 를 확정했는지**를 잡는다 — 매 tick 이 날짜창 전체를
+        재독하는 성질 때문에 두 attempt 의 관측이 겹치는 것이 정상이라 그 경합이 실재한다.
+        예측 규칙은 가격과 같다(claim 이 준 checksum 과 같으면 불변, 다르면 +1).
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            return self._confirm_window_tx(
+                cur, session_id=session_id, window_start=window_start,
+                worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
+                artifact_generation=artifact_generation, data_status=data_status,
+                expected_unit_count=1,
+                succeeded_unit_count=0 if data_status == WINDOW_INVALID else 1,
+                failed_unit_count=1 if data_status == WINDOW_INVALID else 0,
+                record_count=record_count, checksum=checksum,
+                manifest_uri=manifest_uri, manifest_checksum=manifest_checksum,
+                missing_units=[source_code] if data_status == WINDOW_INVALID else None,
                 stage_timestamps=stage_timestamps,
             )
 
