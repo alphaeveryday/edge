@@ -92,6 +92,12 @@ def _fake_connect(conn):
     return _c
 
 
+def _quality(storage) -> dict:
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    assert len(keys) == 1, keys
+    return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
 def _db() -> DbConfig:
     return DbConfig(password="x")
 
@@ -754,3 +760,52 @@ def test_유니버스_뿌리_밖_ETF_의_구성종목은_마스터에_시딩하�
 
     tickers = sorted(t for (_id, _mic, t, _cur) in _inserts(conn, "instrument"))
     assert tickers == ["005930"], "참조 계열 구성종목이 마스터에 시딩됐다"
+
+
+def test_MIC_결측_행은_대상_밖으로_재분류되지_않는다(tmp_path, monkeypatch):
+    """`etf_id` 결측 행은 `skipped_no_mic`(유실)에 남는다 — 검사 **순서**가 의미다.
+
+    유니버스 뿌리 검사는 `x not in expected_etfs` 라 etf_id 가 없는 행도 참이 된다.
+    mic/ticker 가드보다 앞에 두면 그 행이 `skipped_foreign_etf`(유실 아님)로 새고
+    `ops.failed_records` 에서 빠진다 — MIC 해소 유실을 원장이 못 본다.
+
+    같은 주장이 `load_etf_holdings` 쪽엔 테스트가 있는데 여기엔 없었다(리뷰 지적):
+    주석만 있고 변이가 초록으로 통과했다. 주장은 테스트로 못 박는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자"),
+        _holding("105560", "KB금융", mic=None, etf_id=None),  # MIC 도 etf_id 도 없다
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
+
+    log = _quality(storage)
+    assert log["skipped_no_mic"] == 1, "MIC 유실 행이 '대상 밖'으로 재분류됐다"
+    assert log["skipped_foreign_etf"] == 0
+
+
+def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는다(tmp_path, monkeypatch):
+    """읽었는데 **한 행도 못 쓴** 상태는 fail-loud 다.
+
+    옆 축(`instrument_profile_all_dropped`)이 이미 같은 이유로 게이트를 갖고 있다.
+    etf_id 어휘가 config 와 갈리면(오타·정규화 변경) 구성종목 축이 통째로 빠지는데,
+    KRX 전종목 축이 마스터를 덮어 주는 바람에 런은 초록으로 끝난다 — 그러면
+    "구성종목이 이긴다"는 이름 우선순위가 말없이 사라진다. 침묵이 결함이다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자", etf_id="091170"),
+        _holding("000660", "SK하이닉스", etf_id="091170"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    load_instruments.run(storage, "R1", db=_db(), expected_etfs=frozenset({"091160"}))
+
+    log = _quality(storage)
+    assert any(f.get("reasons") == ["constituents_all_foreign"] for f in log["failures"]), \
+        "구성종목 전량 탈락이 아무 신호도 안 남겼다"

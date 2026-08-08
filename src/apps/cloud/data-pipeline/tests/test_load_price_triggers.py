@@ -462,11 +462,18 @@ def test_unknown_etf_filter_fails_loud(tmp_path, monkeypatch):
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
     conn = _FakeConn(master={"091160": "inst_ETF"})
 
-    assert _run(storage, conn, monkeypatch, etf_ticker="09116O") == 1  # 오타 티커
+    # ⚠️ `expected_etfs` 를 **운영과 같이 넘긴다**. 안 넘기면(=None) 뿌리 검사가 통째로 꺼져
+    #    KR 파이프라인이 절대 안 도는 설정 형태를 못 박게 된다 — 그러면 이 테스트가 사유
+    #    문자열을 더 이상 지키지 못한다(리뷰 지적).
+    assert _run(storage, conn, monkeypatch, etf_ticker="09116O",
+                expected_etfs=frozenset({_ETF})) == 1  # 오타 티커
     assert _inserts(conn) == []
     log = _quality_log(storage)
     assert log["exit_code"] == 1
     assert log["etf_tickers"] == []
+    # 오타는 뿌리에도 없으므로 두 사유가 다 성립한다 — **마스터 미등록이 이긴다.**
+    # 뿌리 사유를 주면 처방이 "etf_map 에 추가하라"가 되어, 존재하지도 않는 티커를 config 에
+    # 넣으라는 안내가 된다.
     assert log["failures"][0]["reasons"] == ["unknown_etf_filter"]
     assert log["failures"][0]["etf_ids"] == ["09116O"]
 

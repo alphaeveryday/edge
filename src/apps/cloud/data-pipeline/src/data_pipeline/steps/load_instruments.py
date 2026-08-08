@@ -263,6 +263,14 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
                         skipped_foreign_etf += 1
                         continue
                     all_rows.setdefault((mic, ticker), row)
+            if read and skipped_foreign_etf == read:
+                # 읽었는데 **한 행도 못 쓴** 상태 — 옆 축(instrument_profile_all_dropped)이
+                # 이미 같은 이유로 게이트를 갖고 있다. etf_id 어휘가 config 와 갈리면
+                # (오타·정규화 변경) 전량이 조용히 빠지고, KRX 전종목 축이 덮어 주는 바람에
+                # 런은 초록으로 끝난다 — 그때 "구성종목이 이긴다"는 이름 우선순위가 말없이
+                # 사라진다. 침묵이 결함이다(Rule 12).
+                failures.append({"market": market, "reasons": ["constituents_all_foreign"],
+                                 "read": read})
 
         # KRX 상장 전종목(ALPHA-829/830) — 구성종목과 **독립된 두 번째 입력**이다.
         #

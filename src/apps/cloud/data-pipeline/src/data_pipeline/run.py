@@ -466,6 +466,10 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 적재(load-*)는 canonical 을 읽어 **DB 에 쓰는** 스텝이라 수집 창·벤더가 없다. DB 설정이
     # 없으면 조용히 0건 적재하고 성공으로 끝나지 않게 여기서 fail-loud 한다(Rule 12).
     if args.step == "load-instruments":
+        # ⚠️ `_krx_expected_etfs` 는 **KR 전용 정본**(krx_etf.source.etf_map)이다. 이 스텝은
+        # LOADED_MARKETS 를 순회하는데 오늘 그 값이 ("KR",)라 맞아떨어진다 — US 를 더하면
+        # US 구성종목이 전량 뿌리 밖으로 빠진다(failed_records 에도 안 잡혀 조용하다).
+        # 시장을 늘릴 때 이 인자도 시장별로 갈라야 한다. load-etf-holdings 도 같다.
         return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db),
                                     expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
 

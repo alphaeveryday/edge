@@ -294,11 +294,20 @@ def run(
                 # `missing_holdings`(유실 아님)로 잡혀 **exit 0 · 트리거 0건**으로 끝난다 —
                 # 요청한 백필이 수행 안 된 것을 탐지 못 하는, 오타와 정확히 같은 실패다.
                 # 참조 계열 48종이 바로 운영자가 --etf-ticker 로 지목할 법한 집합이다.
+                # **마스터 미등록을 먼저 본다.** 오타 티커는 정의상 뿌리에도 없으므로, 뿌리
+                # 검사를 앞에 두면 모든 오타가 "유니버스 뿌리 밖"으로 보고된다 — 그 처방은
+                # "etf_map 에 추가하라"라, 존재하지도 않는 티커를 config 에 넣으라는 말이 된다.
+                # 마스터 미등록이 더 구체적이고 더 실행가능한 신호다.
                 out_of_root = expected_etfs is not None and config.etf_ticker not in expected_etfs
-                if config.etf_ticker in master and not out_of_root:
+                if config.etf_ticker not in master:
+                    reason = "unknown_etf_filter"
+                elif out_of_root:
+                    reason = "etf_filter_out_of_universe_root"
+                else:
+                    reason = None
+                if reason is None:
                     universe = [config.etf_ticker]
                 else:
-                    reason = "etf_filter_out_of_universe_root" if out_of_root else "unknown_etf_filter"
                     logger.error(
                         "etf_ticker 필터=%s 를 실행할 수 없다(%s) — 티커 오타·마스터 미적재이거나"
                         " 유니버스 뿌리(krx_etf.source.etf_map) 밖이다. 빈 실행으로 끝내지 않고"
