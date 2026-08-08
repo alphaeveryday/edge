@@ -99,54 +99,11 @@ def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
     return entity_id, RESOLVED
 
 
-# 채번할 개념 이름의 길이 상한(정규화 후 문자 수). 온톨로지에 하한(MIN_CONCEPT_CHARS=2)은
-# 있는데 상한이 없다 — 짧은 이름엔 무해하지만 긴 값에선 두 가지가 깨진다(ALPHA-831 실측):
-#
-# **개념이 아니라 사건 인스턴스가 된다.** "차세대 모빌리티 개발 및 해외시장 진출 활성화를
-# 위한 상생 금융지원 업무협약" 은 그 협약 한 건이지 재사용되는 개념이 아니다. MINT 축
-# 37,229건 중 **30자 초과는 3.3%(1,210건)뿐**이고 그 구간 고유율이 87%다 — 거의 전부 한 번
-# 쓰이고 만다.
-#
-# ⚠️ **이 상한이 사는 것은 "이 스텝의 argument 가 그 행을 만들지 않는다"까지다.** 채번 함수
-# (`mint_concept`)에는 상한이 없고 assemble-events 도 안 건다 — 문장꼴 멘션은 event 조립
-# 경로로는 여전히 `entity`/`concept` 에 들어온다. 마스터 자체를 지키려면 상한이 채번 함수나
-# 온톨로지로 올라가야 하고, 그건 이 티켓 밖이다(ALPHA-831 은 argument 회수가 범위다).
-#
-# ⚠️ **이 값은 "무엇을 개념으로 볼 것인가"의 선이라 온톨로지 소관이다.** 여기서 30 을 고른
-# 것은 실측 꼬리(3.3%)만 자르는 보수적 값이라서고, 상한에 걸린 건 **미해소로 남긴다** —
-# 되돌리기가 싸다(채번해 버리면 참조까지 정리해야 한다). 로그에 잘린 수와 표본을 남기니
-# 온톨로지 쪽이 그 근거로 조정하면 된다.
-MAX_CONCEPT_CHARS = 30
-
-# 채번하지 않는 역할 — **척도**다. 온톨로지가 이들을 `PRODUCT_OR_CONCEPT` 종에 매핑해
-# `kind_default: MINT` 로 흘려보내지만, **그 종 자신의 정의에 척도가 없다**
-# (`entity_kinds_v0_1.yaml` 의 `used_for`: "product launches, demand/supply/technology
-# standards, commodity/product spillover"). `concept` 테이블 주석("제품·산업·사업부문·
-# 테마·매크로")도 마찬가지다.
-#
-# `영업이익`은 삼성전자의 영업이익이지 그 자체로 서 있는 개체가 아니다 — 측정 축을 개체로
-# 세우는 건 모델링 결정이고 계약이 **명시적으로 하지 않았다**(종 매핑의 부수 효과다).
-# 그래서 여기선 미해소로 남기고 사유를 카운트한다. 결정은 온톨로지 소관(ALPHA-831 코멘트).
-# ⚠️ 넷 다 `PRODUCT_OR_CONCEPT`(실체·MINT)인 것을 어휘에서 확인하고 넣었다. `RATE` 는
-# 비실체(VALUE)라 위 is_entity 게이트에서 이미 걸러지므로 여기 넣어도 도달하지 않는다.
-MEASURE_ROLES = frozenset({
-    "METRIC", "INDICATOR", "POLICY_RATE", "CURRENCY_PAIR",
-})
-
 # 해소 계획 사유 — quality log 의 축이 된다.
 MINTED = "minted"
 REGISTRY_HIT = "registry_hit"
 REGISTRY_MISS = "registry_miss"
-MEASURE_SKIPPED = "measure_skipped"
-TOO_LONG = "concept_too_long"
 NOT_RESOLVABLE = "not_resolvable"
-
-# **붙이기로 해 놓고 못 붙인 것이 아니라, 안 붙이기로 정한 것**. 미해소 표본은 "무엇을 더
-# 붙일 수 있게 만들까"의 근거라, 정책상 제외한 것이 섞이면 다음 사람을 **이미 기각한
-# 방향으로 민다**(ALPHA-857 실측: 척도가 상위 1·2·4·7위를 차지했다).
-# ⚠️ 여기 없는 사유는 표본에 **들어간다** — 새 축이 늘어도 조용히 사라지지 않는 쪽이
-# 기본값이어야 한다. 빠뜨리면 시끄럽게 보이지, 조용히 없어지지 않는다.
-POLICY_EXCLUDED_REASONS = frozenset({MEASURE_SKIPPED, TOO_LONG})
 
 
 def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
@@ -158,8 +115,11 @@ def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
     `assertion_id` 에서 겪은 그 일이라, "같은 함수를 쓴다"를 **호출부 합의가 아니라
     한 함수**로 강제한다(ALPHA-831).
 
-    길이 상한은 여기 두지 않는다 — 그건 "무엇을 개념으로 볼 것인가"의 정책이고 호출부마다
-    다를 수 있다. 여기는 산식만 소유한다.
+    ⚠️ **정책을 호출부에 두지 마라.** 한때 "무엇을 개념으로 볼 것인가는 호출부마다 다를
+    수 있다"는 근거로 척도 제외·길이 상한을 `plan_resolution` 에 뒀는데, `assemble_events`
+    에는 안 걸려 **같은 멘션이 입력 경로에 따라 갈렸다**(ALPHA-861 이 되돌렸다). 정책이
+    필요하면 두 writer 를 한 번에 덮는 `concept_key`(온톨로지)에 둔다 — 그 판단은
+    ALPHA-859. 여기는 산식만 소유한다.
     """
     from edge_ontology import concept_key
 
@@ -219,13 +179,14 @@ def plan_resolution(
     if not load_relations().can_mint(role_code):
         return (*resolve(index, text), None)
 
-    # ── MINT: 채번
-    if role_code in MEASURE_ROLES:
-        return None, MEASURE_SKIPPED, None
+    # ── MINT: 채번. **온톨로지가 정한 것만 판단한다** — 어떤 멘션을 개념으로 볼지는
+    # `concept_key` 소관이고(하한·숫자만 배제), 이 함수는 그 판정을 그대로 따른다.
+    # ⚠️ 한때 여기에 척도 역할 제외와 길이 상한이 있었다(ALPHA-831). 온톨로지에 근거가
+    # 없었고, `assemble_events` 에는 안 걸려 **같은 멘션이 입력 경로에 따라 갈렸다** —
+    # 정책이 필요한지는 ALPHA-859 가 판단하고, 필요하면 두 writer 를 한 번에 덮도록
+    # `concept_key` 에 둔다. 여기(호출부)에 두면 그 갈림이 그대로 재발한다(ALPHA-861).
     coined = mint_concept(role_code, mention)
     if coined is None:
         return None, UNRESOLVED, None
-    entity_id, key = coined
-    if len(key) > MAX_CONCEPT_CHARS:
-        return None, TOO_LONG, None
+    entity_id, _key = coined
     return entity_id, MINTED, (mention, relation.entity_kind)

@@ -203,8 +203,8 @@ def test_unresolved_only_assertion_is_skipped_and_counted(tmp_path, monkeypatch)
     res = log["argument_resolution"]
     assert res["total"] == 2 and res["unresolved"] == 1 and res["ambiguous"] == 1
     assert res["rate"] == 0.0
-    assert ["미등록회사", 1] in [list(x) for x in res["top_unresolved_recoverable"]] or \
-           ("미등록회사", 1) in [tuple(x) for x in res["top_unresolved_recoverable"]]
+    assert ["미등록회사", 1] in [list(x) for x in res["top_unresolved"]] or \
+           ("미등록회사", 1) in [tuple(x) for x in res["top_unresolved"]]
 
 
 def test_partial_assertion_is_not_persisted_as_confirmed(tmp_path, monkeypatch):
@@ -342,7 +342,7 @@ def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkey
     개선과 분모 변화가 같은 숫자 안에서 섞인다.
 
     "2분기"가 별칭 후보 목록에 오르지 않는 것까지 함께 고정한다. 비실체 표현이 섞이면
-    top_unresolved_recoverable 이 마스터 확대 판단의 근거로 못 쓰인다.
+    top_unresolved 가 마스터 확대 판단의 근거로 못 쓰인다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
@@ -357,7 +357,7 @@ def test_non_entity_roles_are_out_of_the_resolution_denominator(tmp_path, monkey
     res = _log(storage)["argument_resolution"]
     assert res["total"] == 1 and res["resolved"] == 1 and res["rate"] == 1.0
     assert res["role_kinds"] == {"entity": 1, "non_entity": 2, "out_of_vocabulary": 0}
-    assert [t for t, _ in res["top_unresolved_recoverable"]] == []
+    assert [t for t, _ in res["top_unresolved"]] == []
     # 로그가 자기 분모 정의를 들고 있어야 ALPHA-802 이전 로그와 나란히 놓고 비교할 수 있다
     assert res["denominator"] == "entity_roles_only"
 
@@ -533,64 +533,6 @@ def test_non_entity_role_is_not_loaded_even_if_the_text_matches_a_ticker(tmp_pat
     assert res["non_entity_resolved"] == 0
 
 
-def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monkeypatch):
-    """정책상 제외한 사유는 미해소 표본에 **안 들어간다**(ALPHA-857).
-
-    WHY: 이 표본의 용도는 하나다 — "무엇을 더 붙일 수 있게 만들까"의 근거. 그래서 상위에
-    오른 표현이 곧 다음 작업 후보가 된다. ALPHA-831 이 사유 축을 늘리면서 "붙이려는데 못
-    붙인 것"과 "안 붙이기로 정한 것"이 한 통에 섞였고, 후자가 빈도가 높아 **상위 1·2·4·7
-    위를 차지**했다(08-08 dev 실측: 미해소 56,370 중 11,699건(20.8%)이 정책 제외).
-    그 목록을 보면 "매출을 개념으로 추가하자"는 결론이 나오는데, 이 트랙에서 검토하고
-    **기각한** 방향이다. 로그가 다음 사람을 이미 아니라고 판단한 쪽으로 밀면 안 된다.
-
-    회수 가능한 축은 **그대로 남아야** 한다 — 좁히다 같이 지우면 이 표본이 존재할 이유가
-    사라진다. 그래서 이 자리에 도달할 수 있는 회수 사유 **셋을 전부**(unresolved·ambiguous·
-    registry_miss) 픽스처에 태운다. 둘만 태우면 나머지 하나가 제외 집합에 조용히 추가돼도
-    스위트가 초록이다 — 특히 `ambiguous` 는 마스터에 이름이 있는데 대는 곳이 둘이라는
-    뜻이라 **회수 가능성이 가장 높은** 축이고, 그게 표본에서 사라지면 아무도 모른다.
-    """
-    storage = LocalStorage(tmp_path / "lake")
-    long_name = "가" * 60          # concept_too_long — 상한이 바뀌어도 넉넉히 초과한다
-    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
-        arguments=_args(("METRIC", "영업이익"),          # measure_skipped — 정책 제외
-                        ("METRIC", "영업이익"),          # (빈도 차를 줘야 순위가 고정된다)
-                        ("METRIC", "매출"),             # measure_skipped — 정책 제외
-                        ("PROJECT", long_name),        # concept_too_long — 정책 제외
-                        ("ISSUER", "미등록회사"),        # unresolved — 회수 가능
-                        ("ISSUER", "충돌이름"),          # ambiguous — 회수 가능
-                        ("AUTHORITY", "없는기관"),       # registry_miss — 회수 가능
-                        ("ISSUER", "삼성전자")))])])     # 적재가 되도록 하나는 붙인다
-    conn = _FakeConn(documents=[("a1", "doc_D1")])
-    _setup(monkeypatch, conn)
-
-    assert load_assertions.run(storage, "R1", db=_db()) == 0
-
-    res = _log(storage)["argument_resolution"]
-    sample = {t for t, _ in res["top_unresolved_recoverable"]}
-    # 다섯 자리가 각자 다른 사유를 탔는지 먼저 확인한다 — 안 그러면 아래 단언이
-    # "그 경로를 안 밟아서" 통과할 수 있다(픽스처가 계약을 못 밟는 고전적 함정)
-    assert res["measure_skipped"] == 3 and res["concept_too_long"] == 1
-    assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
-
-    assert not {"매출", "영업이익"} & sample, "척도가 표본에 남았다 — 기각한 방향을 추천한다"
-    assert long_name not in sample, "상한 초과 문장이 표본에 남았다"
-    assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 가능한 축까지 같이 지웠다"
-
-    # 제외분이 **사라지는 게 아니라 자기 자리로** 간다. 이게 없으면 이 PR 은 척도 표현의
-    # 텍스트를 로그에서 통째로 지운 것이 된다 — 수(11,699)는 남지만 "무엇이 대부분인가"를
-    # 못 보게 되고, 그게 온톨로지가 "척도를 개체로 세울까"를 판단할 입력이다.
-    log = _log(storage)
-    assert long_name in log["concept_too_long_sample"]
-    # ⚠️ **빈도까지** 못박는다. 원문 목록으로 담으면 어휘가 좁은 척도는 상한이 한 표현의
-    # 복사본으로 소진돼 나머지 종이 사라진다 — 존재만 단언하면 그 깨진 모양도 통과한다.
-    assert [tuple(x) for x in log["measure_skipped_sample"]] == [("영업이익", 2), ("매출", 1)]
-
-    # 무엇을 뺐는지 로그가 스스로 말한다 — 조용히 좁히면 "왜 매출이 안 보이지"가 된다.
-    # ⚠️ 상수와 비교하면 **항등식**이라 멤버십이 안 잡힌다(양변이 같은 값을 참조한다).
-    # 리터럴로 못박아, 제외 집합이 넓어질 때 여기서 걸려 근거를 대게 한다.
-    assert set(res["policy_excluded_reasons"]) == {"measure_skipped", "concept_too_long"}
-
-
 def test_sample_keys_are_trimmed_so_frequency_ranking_survives(tmp_path, monkeypatch):
     """표본 키는 공백을 턴다 — 안 그러면 빈도 순위가 갈린다(ALPHA-857).
 
@@ -609,7 +551,7 @@ def test_sample_keys_are_trimmed_so_frequency_ranking_survives(tmp_path, monkeyp
 
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
-    sample = dict(_log(storage)["argument_resolution"]["top_unresolved_recoverable"])
+    sample = dict(_log(storage)["argument_resolution"]["top_unresolved"])
     assert sample == {"미등록회사": 3}, sample
 
 
@@ -633,7 +575,7 @@ def test_unresolved_sample_keeps_the_long_tail(tmp_path, monkeypatch):
 
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
-    top = _log(storage)["argument_resolution"]["top_unresolved_recoverable"]
+    top = _log(storage)["argument_resolution"]["top_unresolved"]
     assert len(top) == 200
     counts = [c for _, c in top]
     assert counts == sorted(counts, reverse=True)
@@ -650,6 +592,81 @@ def test_unresolved_sample_keeps_the_long_tail(tmp_path, monkeypatch):
 
 
 # ── 역할별 해소 3단 사슬 (ALPHA-831) ──────────────────────────────────────
+
+def test_every_recoverable_axis_stays_in_the_unresolved_sample(tmp_path, monkeypatch):
+    """회수 가능한 축 **셋 전부**가 미해소 표본에 남는다(ALPHA-857 → 861 로 이관).
+
+    WHY: 이 표본의 유일한 용도는 "무엇을 더 붙일 수 있게 만들까"의 근거다. 축 하나가
+    조용히 빠져도 로그는 멀쩡해 보이고 순위만 틀린다 — 특히 `ambiguous` 는 마스터에
+    이름은 있는데 대는 곳이 둘이라는 뜻이라 **회수 가능성이 가장 높은** 축이고, 그게
+    빠지면 표본이 존재 이유를 잃는다.
+
+    ⚠️ 이 단언은 원래 ALPHA-857 의 정책 제외 테스트 안에 함께 있었는데, ALPHA-861 이
+    그 테스트를 통째로 지우면서 **정책과 무관한 이 절반까지 같이 갔다**. 그때 리뷰가
+    변이로 잡았다(회수 축 둘을 표본에서 빼도 스위트가 초록이었다). 정책은 사라져도
+    "회수 축은 전부 남는다"는 계약은 남는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("ISSUER", "미등록회사"),        # unresolved
+                        ("ISSUER", "충돌이름"),          # ambiguous — 인덱스에 두 번 온 이름
+                        ("AUTHORITY", "없는기관"),       # registry_miss
+                        ("ISSUER", "삼성전자")))])])     # 적재가 되도록 하나는 붙인다
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    res = _log(storage)["argument_resolution"]
+    # 세 자리가 각자 다른 사유를 탔는지 먼저 — 안 그러면 아래가 "그 경로를 안 밟아서" 통과한다
+    assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
+    sample = {t for t, _ in res["top_unresolved"]}
+    assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 축 하나가 표본에서 빠졌다"
+
+
+def test_no_writer_local_policy_narrows_minting(tmp_path, monkeypatch):
+    """채번 여부는 **온톨로지만** 정한다 — 이 writer 가 따로 좁히지 않는다(ALPHA-861).
+
+    WHY: 한때 여기에 척도 역할 제외(`MEASURE_ROLES`)와 개념 길이 상한
+    (`MAX_CONCEPT_CHARS`)이 있었다. 둘 다 온톨로지에 근거가 없었고 — `role_kinds` 는
+    척도 4역할을 **명시적으로 나열해** `PRODUCT_OR_CONCEPT`(MINT)에 넣었고 `concept_key`
+    에는 상한이 아예 없다 — **`assemble_events` 에는 안 걸려 있었다**. 그래서 같은 멘션이
+    EOD 배치로 오면 미해소, event 조립·1분 레인으로 오면 개념이 됐다. 08-08 dev 실측에서
+    `매출`·`영업이익` 은 이미 `concept` 행으로 서서 `event_argument` 580건이 참조 중이었다
+    — 막은 것은 한쪽 경로의 연결뿐이었고, 정작 ALPHA-831 이 없애려던 "두 writer 가 갈린다"를
+    정책 쪽에 다시 만들어 놓은 셈이었다.
+
+    정책이 필요한지는 ALPHA-859 가 판단하고, 필요하면 **`concept_key`(온톨로지)** 에 둔다 —
+    두 writer 가 다 그 함수를 부르므로 한 곳이면 전부 덮는다. 이 테스트는 그 규칙이
+    다시 **호출부로 내려오는 것**을 막는다.
+    """
+    from data_pipeline.entity_resolution import mint_concept, plan_resolution
+
+    # ⚠️ **길이 축의 사거리를 적어 둔다.** 고정 길이 하나만 태우면 이 테스트가 막는 것은
+    # "정책의 호출부 복귀"가 아니라 "상한 ≤ 그 길이"다 — 60 만 태우면 상한 61 로 부활시켜도
+    # 통과한다(ALPHA-861 리뷰가 변이로 실증). 자릿수를 벌려 현실적 상한을 전부 덮는다.
+    cases = [("METRIC", "매출"), ("METRIC", "영업이익"), ("INDICATOR", "소비자물가지수"),
+             ("POLICY_RATE", "기준금리"), ("CURRENCY_PAIR", "원/달러"),
+             ("PROJECT", "가" * 60), ("PROJECT", "가" * 500)]
+    for role, mention in cases:
+        # 온톨로지가 채번 대상으로 보는 것부터 확인한다 — 아니면 아래 단언이
+        # "그 경로를 안 밟아서" 통과한다
+        coined = mint_concept(role, mention)
+        # ⚠️ 이 줄은 **온톨로지도 함께 못박는다**. ALPHA-859 가 위 독스트링이 지정한
+        # 자리(`concept_key`)에 상한을 넣으면 여기서 깨진다 — 그건 오탐이 아니라
+        # "정책이 옳은 자리로 옮겨졌다"는 신호다. 그때 이 테스트의 길이 케이스를 뺀다.
+        assert coined is not None, f"{role}/{mention} 이 온톨로지에서 채번 대상이 아니다"
+        entity_id, reason, minted = plan_resolution(_INDEX, role, mention)
+        assert reason == "minted", f"{role}/{mention} → {reason} (writer 가 따로 좁혔다)"
+        assert entity_id == coined[0]
+        assert minted[0] == mention
+
+    # 사유 어휘에서도 사라졌는지 — 상수만 지우고 분기를 남기면 다른 이름으로 되살아난다
+    import data_pipeline.entity_resolution as er
+    for gone in ("MEASURE_ROLES", "MEASURE_SKIPPED", "MAX_CONCEPT_CHARS", "TOO_LONG",
+                 "POLICY_EXCLUDED_REASONS"):
+        assert not hasattr(er, gone), f"{gone} 이 남아 있다"
+
 
 def test_minted_concept_id_matches_assemble_events_exactly(tmp_path, monkeypatch):
     """같은 멘션·같은 역할이면 **두 writer 가 같은 concept ID** 를 낸다(ALPHA-831 최대 함정).
@@ -706,50 +723,6 @@ def test_registry_role_is_looked_up_never_minted(tmp_path, monkeypatch):
     nasdaq_id, nasdaq_reason, nasdaq_minted = plan_resolution(_INDEX, "EXCHANGE", "나스닥")
     assert nasdaq_reason == "minted" and nasdaq_id.startswith("concept_")
     assert nasdaq_minted[1] == "INDEX_OR_EXCHANGE"
-
-
-def test_measure_roles_are_not_minted_pending_the_ontology_call(tmp_path, monkeypatch):
-    """척도 역할은 채번하지 않고 사유로 남긴다(ALPHA-831 범위 밖).
-
-    WHY: 온톨로지가 METRIC 을 `PRODUCT_OR_CONCEPT` 종에 매핑해 `kind_default: MINT` 로
-    흘려보내지만, **그 종 자신의 `used_for` 에 척도가 없다**. `영업이익`은 삼성전자의
-    영업이익이지 그 자체로 서 있는 개체가 아니다 — 측정 축을 개체로 세우는 건 모델링
-    결정이고 계약이 명시적으로 하지 않았다. 되돌리기가 비싼 쪽(채번)으로 먼저 가지 않는다.
-    """
-    from data_pipeline.entity_resolution import plan_resolution
-
-    # ⚠️ **역할을 변주한다.** 셋 다 METRIC 으로 두면 판별 차원이 상수라, 집합을
-    # {"METRIC"} 하나로 줄여도 통과한다 — 재는 것이 집합인데 역할이 안 변하면 못 잰다.
-    for role in ("METRIC", "INDICATOR", "POLICY_RATE", "CURRENCY_PAIR"):
-        assert plan_resolution(_INDEX, role, "영업이익") == (None, "measure_skipped", None)
-    # 같은 종(PRODUCT_OR_CONCEPT)인데 척도가 아닌 역할은 정상 채번 — 종 전체를 끈 게 아니다
-    assert plan_resolution(_INDEX, "PRODUCT", "영업이익")[1] == "minted"
-
-
-def test_sentence_shaped_value_is_left_unresolved_by_the_length_cap(tmp_path, monkeypatch):
-    """문장형 값은 상한에 걸려 미해소로 남는다(ALPHA-831).
-
-    WHY: 실측상 MINT 축 37,229건 중 **30자 초과는 3.3%(1,210건)뿐**이고 그 구간 고유율이
-    87%다 — 재사용되는 개념이 아니라 사건 인스턴스 하나다. 상한에 걸린 건 미해소로 남겨
-    되돌리기를 싸게 둔다(채번하면 참조까지 정리해야 한다).
-
-    ⚠️ 이 테스트가 못박는 것은 `MAX_CONCEPT_CHARS == 30` 이 **아니다**. 경계를 상한에서
-    파생하므로 고정되는 것은 아래 실물 문장(32자)이 잘린다는 것, 즉 **상한 < 32** 뿐이다.
-    값 자체는 "무엇을 개념으로 볼 것인가"의 선이라 온톨로지 소관이고, 그쪽이 조정할 때
-    테스트를 같이 고치게 만들지 않으려고 일부러 느슨하게 뒀다.
-    """
-    from data_pipeline.entity_resolution import plan_resolution
-
-    from data_pipeline.entity_resolution import MAX_CONCEPT_CHARS
-
-    # 경계를 **상한에서 파생**한다 — 고정 길이 문자열이면 상한을 31 로 바꿔도 통과한다.
-    at_cap = "가" * MAX_CONCEPT_CHARS
-    over_cap = "가" * (MAX_CONCEPT_CHARS + 1)
-    assert plan_resolution(_INDEX, "PROJECT", at_cap)[1] == "minted"
-    assert plan_resolution(_INDEX, "PROJECT", over_cap) == (None, "concept_too_long", None)
-    # 실물도 한 번 — 상한이 잡으려던 것이 이 모양이다
-    long_text = "차세대 모빌리티 개발 및 해외시장 진출 활성화를 위한 상생 금융지원 업무협약"
-    assert plan_resolution(_INDEX, "PROJECT", long_text) == (None, "concept_too_long", None)
 
 
 def test_minted_concept_rows_are_written_before_the_argument_that_needs_them(
