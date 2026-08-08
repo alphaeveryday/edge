@@ -80,6 +80,10 @@ class KisNavSource:
         self.fetch_failures: list[dict] = []
         # 직전 fetch 가 계획한(매핑된) 대상 수. 활성인데 0이면 스텝이 skip 으로 드러낸다.
         self.planned_etfs: int | None = None
+        # 실제 EGW00201 재시도 수. 유량은 **앱키 전역**이라(초당 20) 이 소스가 1분 가격
+        # 레인과 같은 한도를 나눠 쓴다 — 0 으로 고정하면 iNAV 폴링이 가격 레인을 굶기고
+        # 있어도 관측에서 통째로 사라진다(`price_collect` 의 retry_count 와 같은 축).
+        self.retry_count = 0
 
     @property
     def enabled(self) -> bool:
@@ -258,6 +262,7 @@ class KisNavSource:
                 return rows
             # 초당한도는 HTTP 429 가 아니라 본문 코드로 온다 — 운반 계층이 모르니 여기서 재시도.
             if data.get("msg_cd") == RATE_MSG_CD and attempt < MAX_RATE_RETRY - 1:
+                self.retry_count += 1
                 self.client._sleep(0.7 * (attempt + 1))
                 continue
             raise ValueError(
