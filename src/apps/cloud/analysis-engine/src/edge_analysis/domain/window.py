@@ -198,8 +198,7 @@ def _index_window(
     spec: WindowSpec, minute_bars: tuple[MinuteBar, ...],
 ) -> tuple[dict[tuple[datetime, str], MinuteBar], tuple[str, ...]]:
     if not minute_bars:
-        raise WindowAggregationError(
-            "EMPTY_MINUTE_BARS", "분석창 1분봉이 비었다", retryable=True)
+        raise WindowAggregationError("EMPTY_MINUTE_BARS", "분석창 1분봉이 비었다")
     indexed: dict[tuple[datetime, str], MinuteBar] = {}
     unit_ids: set[str] = set()
     sources_by_minute: dict[datetime, CommittedMinuteWindow] = {}
@@ -241,10 +240,8 @@ def _index_window(
     if missing:
         sample = ",".join(
             f"{unit_id}@{minute.strftime('%H:%M')}" for minute, unit_id in missing[:5])
-        # 결손은 수집·정정이 착지하면 낫는다(재시도 축) — 원장 불변식 위반인 나머지
-        # 코드와 달리 DLQ 로 보내면 늦게 온 1분 하나에 그 창의 설명이 영영 없어진다.
         raise WindowAggregationError(
-            "MISSING_MINUTE_BAR", f"count={len(missing)} sample={sample}", retryable=True)
+            "MISSING_MINUTE_BAR", f"count={len(missing)} sample={sample}")
     return indexed, tuple(sorted(unit_ids))
 
 

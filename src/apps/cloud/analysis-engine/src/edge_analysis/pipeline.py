@@ -175,6 +175,14 @@ def run(
     # 를 그대로 넘기는 경로가 이 계약이다. 값이 없는 트리거 경로만 아래로 유도한다.
     analysis_start = datetime.combine(settings.trade_date, SESSION_OPEN_TIME, tzinfo=KST)
     if explain_window is not None:
+        # **naive 는 거부한다.** `.astimezone()` 은 naive 를 시스템 로컬로 **가정**한다 —
+        # UTC 컨테이너에서 `datetime(2026,7,16,0,12)` 가 09:12 KST 가 되어 모든 검사를
+        # 통과하고, 호출자는 묻지 않은 창의 설명을 정상 산출로 받는다. 신뢰경계의 새
+        # 입력이라 조용히 재해석하지 않는다.
+        for value in explain_window:
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise PipelineError(
+                    f"explain_window 는 tz-aware 여야 한다: {value.isoformat()}")
         requested_start, requested_end = (
             value.astimezone(KST) for value in explain_window)
     else:
@@ -185,6 +193,9 @@ def run(
         fired = minute_row.window_start.astimezone(KST)
         previous = store.fetch_previous_trigger_window(
             minute_row.ticker, minute_row.session_id, minute_row.window_start)
+        # `store` 는 주입 seam 이다 — 구상 어댑터가 KST 로 주더라도 여기서 한 번 더
+        # 맞춘다. `WindowSpec` 이 +09:00 아닌 값을 거부하므로, 안 맞추면 대역이나 다른
+        # 구현 하나가 전 발화를 세운다.
         requested_start = previous.astimezone(KST) if previous else analysis_start
         requested_end = fired + timedelta(minutes=1)
     spec = WindowSpec(
@@ -204,13 +215,22 @@ def run(
     # 섹터 후보 410종)을 담는데, 집계는 "관측된 모든 unit × 모든 분"을 요구한다 -
     # 좁히지 않으면 이 ETF 와 무관한 섹터 후보 하나가 09:07 에 안 온 날, 그날 이후
     # 발화가 전부 죽는다. 무관한 종목의 결손이 우리 설명을 막을 이유가 없다.
-    needed = (settings.etf_ticker, *(h.ticker for h in holdings))
-    scoped = tuple(bar for bar in minute_bars if bar.unit_id in set(needed))
+    # `dict.fromkeys` 로 **중복을 접는다**(순서 보존). holdings 파티션에 같은 티커가
+    # 두 줄 있으면 `diagnose_window` 가 순수 ValueError 로 죽는데, 그건 재시도 축도
+    # DLQ 축도 아닌 채 `except Exception` 으로 새서 잘못된 사유로 남는다 — 어제까지
+    # 통과하던 holdings 가 오늘 런을 죽이면 안 된다. 분해(`compute_decomposition`)는
+    # 원본 holdings 를 그대로 쓴다: 여기 정규화는 진단 입력의 계약을 맞추는 것뿐이다.
+    needed = tuple(dict.fromkeys((settings.etf_ticker, *(h.ticker for h in holdings))))
+    needed_set = set(needed)  # 봉마다 다시 만들면 16만 봉 × 수백 종목이 그대로 낭비다
+    scoped = tuple(bar for bar in minute_bars if bar.unit_id in needed_set)
+    # 비중도 같은 이유로 거른다 - 0·음수·비유한 비중은 `diagnose_window` 가 거부하고,
+    # 전부 걸러져 비면 `weights` 를 아예 넘기지 않는다(합이 양수여야 한다는 계약).
+    # 그때 `price_weight_coverage` 만 None 이 되고 나머지 진단은 그대로 선다.
+    weights = {h.ticker: h.weight for h in holdings
+               if math.isfinite(h.weight) and h.weight > 0}
     # 집계 **전에** 진단한다 - 결손을 채우거나 거부하지 않고 수치로 남긴다. 집계가
     # 죽으면 사유가 예외 문자열뿐인데, 그때 필요한 것은 "어느 unit 이 몇 분 빠졌나"다.
-    coverage = diagnose_window(
-        spec, scoped, needed, weights={h.ticker: h.weight for h in holdings},
-    )
+    coverage = diagnose_window(spec, scoped, needed, weights=weights or None)
     # **결손 unit 은 떨어뜨리고 진행한다.** 벤더 미제공은 그 window 가 INCOMPLETE 로
     # terminal 커밋되므로 재시도가 낫게 하지 않는다 - 완비를 요구하면 벤더 사고 하나에
     # 그날 상품이 멈춘다. 대신 무엇을 얼마나 잃었는지 원장에 남긴다: 분해는 이미
@@ -236,20 +256,15 @@ def run(
             f" session={minute_row.session_id} — 빈 분해를 설명으로 만들지 않는다")
     # 상태축과 설명축을 **여기서 한 번에** 만든다. 두 번 계산하면 그 사이 canonical
     # 정정이 끼어 원장의 route_code 와 산문이 갈린다(ALPHA-785 가 닫은 그 갈림).
-    # 재시도 가능한 집계 실패(결손·빈 입력)는 `ReturnsNotReadyError` 로 옮긴다 -
-    # consumer 는 그 타입만 지연 재시도로 가르고(ALPHA-719) 나머지는 DLQ 다. 늦게 온
-    # 1분 하나로 그 창의 설명을 영구히 잃지 않기 위한 배선이다. 원장 불변식 위반
-    # (session 불일치·중복·구간 이탈)은 재시도가 낫게 하지 않으므로 그대로 터뜨린다.
-    try:
-        state_bars = aggregate_window(spec, scoped)
-        requested = slice_requested_bars(spec, scoped)
-    except WindowAggregationError as error:
-        if not error.reason.retryable:
-            raise
-        raise ReturnsNotReadyError(
-            f"분석창 1분봉이 아직 완비되지 않았다: session={minute_row.session_id}"
-            f" {spec.analysis_start.isoformat()}~{spec.requested_end.isoformat()}"
-            f" — {error.reason.code}: {error.reason.message}") from error
+    #
+    # 여기 도달하는 `WindowAggregationError` 는 **전부 원장 불변식 위반**이다 - 결손은
+    # 위에서 이미 떨어뜨렸고(그래서 남은 unit 은 구간을 다 채운다), 빈 입력은 발화 ETF
+    # 결손 가드가 먼저 잡는다. 남는 것은 같은 분에 서로 다른 generation/checksum 이
+    # 오거나 집계 봉 자체가 계약을 어기는 경우뿐이고, 그건 재시도가 낫게 하지 않는다.
+    # 그래서 감싸지 않고 그대로 터뜨려 DLQ 로 보낸다 - 재시도 축으로 접으면 32분을
+    # 무의미하게 쓴 뒤 잘못된 사유로 남는다.
+    state_bars = aggregate_window(spec, scoped)
+    requested = slice_requested_bars(spec, scoped)
     # **분해는 요청축이 답한다** - "그 구간에 왜 움직였나"가 질문이므로 분자는 요청 끝의
     # 가격이다. 상태축은 같은 질문의 배경("오늘 여기까지 어떻게 왔나")이라 축이 다르다.
     returns = _returns_from_bars(requested.bars, prev_closes)
@@ -268,8 +283,11 @@ def run(
         "state_bars": len(state_bars),
         "requested_bars": len(requested.bars),
         "window_min_coverage": round(coverage.window_min_coverage, 4),
-        # 무엇을 얼마나 못 봤나 — 이것이 원장에 없으면 40% 를 못 본 설명과 전부 본
-        # 설명이 구분되지 않는다. 임계는 이 분포를 보고 나중에 정한다.
+        # 무엇을 얼마나 못 봤나. **이 둘은 분해(RDB `price_decomposition`)의 커버리지지
+        # 산문의 커버리지가 아니다** - 산문은 `run_statics` 가 5분봉 레이크에서 다시
+        # 읽어 쓰므로 여기서 떨어뜨린 종목을 그쪽은 볼 수 있다. 임계는 이 분포를 보고
+        # 나중에 정한다. (`decomp.top1/top3` 은 가격 있는 부분집합의 몫이라 떨어뜨린
+        # 뒤에는 집중도가 실제보다 높게 잡힌다 - 같이 읽을 때 감안한다.)
         "price_weight_coverage": (round(coverage.price_weight_coverage, 4)
                                   if coverage.price_weight_coverage is not None else None),
         "dropped_units": sorted(dropped),
@@ -277,14 +295,25 @@ def run(
         "etf_window_return": _window_return(requested.bars, settings.etf_ticker),
     }
     log("window.two_axis", **window_state)
-    # 트리거 window 가 INCOMPLETE 면 발화 ETF 행만 있고 구성종목이 통째로 빠질 수
-    # 있다 — dict 는 truthy 라 아래 빈 검사를 통과하고, total_priced=0 분해가 정상
-    # 설명으로 영속된다(원결함의 부활 코너). 정정 세대가 낫게 하는 실패라 재시도.
+    # 구성종목 가격이 하나도 없으면 total_priced=0 분해가 정상 설명으로 영속된다 —
+    # returns dict 는 truthy 라 아래 빈 검사가 못 잡는다(원결함의 부활 코너).
+    #
+    # **처방이 갈린다.** 같은 증상에 원인이 둘이고 재시도가 낫게 하는 것은 하나뿐이다:
+    #   ① 전 종목이 결손으로 떨어졌다 → 벤더 미제공이고 그 window 는 INCOMPLETE 로
+    #      terminal 커밋이다. 재시도해도 안 온다 — 32분을 쓴 뒤 잘못된 사유로 DLQ 에
+    #      남느니 지금 그 사유로 죽는다. (1종만 빠지면 위에서 떨어뜨리고 진행한다 —
+    #      전부 빠진 것은 커버리지가 0 이라 분해가 성립하지 않는 다른 문제다.)
+    #   ② 봉은 있는데 분모(전일 종가)가 없다 → 파티션이 늦은 것이라 재시도가 낫게 한다.
     if returns and not any(returns.get(h.ticker) is not None for h in holdings):
+        if all(h.ticker in dropped for h in holdings):
+            raise PipelineError(
+                f"구성종목이 전부 1분봉 결손이다: session={minute_row.session_id}"
+                f" dropped={len(dropped)}/{len(holdings)} — 벤더 미제공은 window 가"
+                " INCOMPLETE 로 확정돼 재시도가 낫게 하지 않는다")
         raise ReturnsNotReadyError(
             f"구성종목 가격이 0건이다: session={minute_row.session_id}"
-            f" window={minute_row.window_start.isoformat()} — INCOMPLETE window"
-            " 이거나 구성종목 미수집. 빈 분해를 설명으로 만들지 않는다")
+            f" window={minute_row.window_start.isoformat()} — 봉은 있으나 직전 거래일"
+            " 종가가 없다. 빈 분해를 설명으로 만들지 않는다")
     if not returns:
         empty_reason = (
             f"분봉 canonical 수익률이 비었다: session={minute_row.session_id}"

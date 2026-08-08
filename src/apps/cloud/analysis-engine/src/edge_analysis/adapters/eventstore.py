@@ -297,15 +297,20 @@ class EventStore:
     def fetch_previous_trigger_window(
         self, entity_id: str, session_id: str, window_start: datetime,
     ) -> datetime | None:
-        """같은 대상·세션의 **직전 발화** window_start | None(그날 첫 발화).
+        """같은 대상·세션에서 이 시각 **직전 트리거 행**의 window_start | None.
 
-        트리거 경로에서 설명 구간의 시작이다(ALPHA-854) — 발화는 "지난 설명 이후
-        무슨 일이 있었나"에 답하므로 창이 직전 발화에서 시작한다. 창이 전부 과거라
-        아직 수집 안 된 분을 기다리지 않는다.
+        트리거 경로에서 설명 구간의 시작이다(ALPHA-854) — 창이 직전 트리거에서
+        시작해 이번 트리거 분에서 끝나므로 전부 과거고, 아직 수집 안 된 분을
+        기다리지 않는다.
 
-        발화 여부만 본다 — 그 발화의 **설명 성공 여부는 보지 않는다**. 실패한 발화를
-        건너뛰면 같은 구간이 두 번 설명되고, 원장의 발화 축(ALPHA-710)과도 어긋난다.
+        **종류를 가리지 않는다**(V202608061020 의 "구간 시작 = 가장 최근 행, 종류
+        무관"과 같은 축). 그래서 REVERT 행도 구간을 끊는다 — 회수는 그 지점에서
+        노출이 바뀌었다는 뜻이라 다음 설명이 그 뒤부터인 것이 맞다. 발화의 **설명
+        성공 여부도 보지 않는다**: 실패한 발화를 건너뛰면 같은 구간이 두 번 설명되고
+        원장의 발화 축(ALPHA-710)과도 어긋난다.
+
         UNIQUE(entity_id, session_id, window_start) 인덱스를 그대로 탄다.
+        반환은 KST aware — 호출부가 다시 변환하지 않는다.
         """
         entity_id = str(entity_id).strip()
         session_id = str(session_id).strip()

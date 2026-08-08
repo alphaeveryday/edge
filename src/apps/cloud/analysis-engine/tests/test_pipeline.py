@@ -599,26 +599,21 @@ def test_missing_minute_trigger_fails_loud():
 
 
 def test_minute_returns_without_constituent_prices_fail_loud():
-    """INCOMPLETE 트리거 window 는 발화 ETF 행만 담을 수 있다 — returns dict 가
-    truthy 라 빈 검사를 통과하면 total_priced=0 분해가 정상 설명로 영속된다(원결함의
-    부활 코너). 구성종목 가격 0건은 분해 전에 ReturnsNotReady 로 죽어야 한다."""
+    """**봉은 있는데 분모가 없는** 경우는 재시도 축이다 — 결손(terminal)과 갈린다.
+
+    returns dict 는 `{"005930": None}` 이라 truthy 다. 빈 검사를 통과하면
+    total_priced=0 분해가 정상 설명으로 영속된다(원결함의 부활 코너). 원인은 직전
+    거래일 파티션이 그 종목만 늦은 것이라 재시도가 낫게 한다 — 전 종목 봉 결손
+    (`test_all_constituents_dropped_is_terminal_not_retried`)과 처방이 다르다.
+    """
     from edge_analysis.adapters.eventstore import MinuteTriggerRow
     from edge_analysis.config import ReturnsNotReadyError
 
-    class _EtfOnlyLake(_FakeLake):
-        """ETF 자신의 봉만 착지 — holdings(005930)와 무교집합."""
+    class _NoConstituentPrevCloseLake(_FakeLake):
+        """봉은 ETF·구성종목 다 있으나 구성종목의 전일 종가만 없다."""
 
         def load_prev_closes(self, market, trade_date):
             return {"091160": 10000.0}
-
-        def load_committed_minute_bars(self, market, windows):
-            price = Decimal("10300")
-            return tuple(
-                MinuteBar(source=window, unit_id="091160",
-                          open=price, high=price, low=price, close=price,
-                          volume=Decimal("1000"))
-                for window in windows
-            )
 
     class _MinuteOnlyStore(_FakeStore):
         def fetch_minute_price_trigger(self, trigger_id):
@@ -633,8 +628,9 @@ def test_minute_returns_without_constituent_prices_fail_loud():
     _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
     settings = _DcSettings(**{**_SETTINGS.__dict__, "trigger_id": "mpt_1"})
     store = _MinuteOnlyStore(trigger=None, prereqs=_PREREQS_OK)
-    with pytest.raises(ReturnsNotReadyError, match="구성종목"):
-        run(settings, lake=_EtfOnlyLake(), store=store, client=_FakeClient(), s3=_FakeS3())
+    with pytest.raises(ReturnsNotReadyError, match="직전 거래일 종가가 없다"):
+        run(settings, lake=_NoConstituentPrevCloseLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
     assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
 
 
@@ -760,6 +756,32 @@ def test_constituent_gap_drops_that_unit_instead_of_killing_the_day(monkeypatch)
     assert window["price_weight_coverage"] == pytest.approx(0.6)
 
 
+@pytest.mark.parametrize("bad_holdings,why", [
+    ([Holding("005930", "삼성전자", 0.6), Holding("005930", "삼성전자", 0.4)],
+     "holdings 파티션에 같은 티커가 두 줄"),
+    ([Holding("005930", "삼성전자", 0.0)], "비중이 전부 0"),
+    ([Holding("005930", "삼성전자", float("nan"))], "비중이 비유한"),
+])
+def test_dirty_holdings_do_not_kill_the_run(bad_holdings, why, monkeypatch):
+    """어제까지 통과하던 holdings 가 오늘 런을 죽이면 안 된다.
+
+    `diagnose_window` 는 expected_unit_ids 중복·비중 합 ≤ 0 을 **순수 ValueError**
+    로 거부한다 — `WindowAggregationError` 도 `PipelineError` 도 아니라 재시도 축도
+    DLQ 축도 아닌 채 `except Exception` 으로 새서 "일시 장애" 로 잘못 분류된다.
+    holdings 는 우리가 만든 게 아니라 벤더 파티션에서 온 것이므로, 그 더러움이
+    설명을 멈추는 축이 되면 안 된다. 분해 자체는 원본 holdings 를 그대로 쓴다.
+    """
+    class _DirtyHoldingsLake(_FakeLake):
+        def load_holdings(self, etf_id, market, trade_date):
+            return list(bad_holdings), "2026-07-15"
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        lambda *_a, **_kw: "고정 산출")
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    assert run(_SETTINGS, lake=_DirtyHoldingsLake(), store=store,
+               client=_FakeClient(), s3=_FakeS3()) == 0, why
+
+
 def test_missing_trigger_etf_bars_fail_loud():
     """발화 ETF **자신**이 결손이면 죽는다 — 구성종목 결손과 다른 축이다.
 
@@ -781,12 +803,12 @@ def test_missing_trigger_etf_bars_fail_loud():
     assert store.calls == [], "분해 전에 죽어야 한다"
 
 
-def test_empty_scope_is_retryable_not_dlq():
-    """쓸 unit 이 하나도 안 남으면 **재시도 축**이다(ALPHA-719).
+def test_empty_bars_fail_loud_before_llm():
+    """봉이 통째로 안 오면 발화 ETF 결손 가드가 먼저 잡는다 — 재시도 축이다.
 
-    `WindowAggregationError` 는 ValueError 라 consumer 가 DLQ 로 보낸다 —
-    `ReturnsNotReadyError` 만 지연 재시도로 가른다. 원장 불변식 위반(session 불일치·
-    중복)은 반대로 재시도가 낫게 하지 않으니 그대로 터져야 한다.
+    빈 입력으로 `aggregate_window` 까지 가면 `WindowAggregationError`(ValueError)가
+    나오는데 consumer 는 그걸 DLQ 로 보낸다. 커밋 지연은 재시도가 낫게 하는 축이라
+    `ReturnsNotReadyError` 로 나와야 한다(ALPHA-719).
     """
     from edge_analysis.config import ReturnsNotReadyError
 
@@ -795,33 +817,85 @@ def test_empty_scope_is_retryable_not_dlq():
             return ()
 
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
-    with pytest.raises(ReturnsNotReadyError):
+    with pytest.raises(ReturnsNotReadyError, match="발화 ETF 자신"):
         run(_SETTINGS, lake=_NoBarsLake(), store=store,
             client=_FakeClient(), s3=_FakeS3())
     assert store.calls == []
 
 
-def test_ledger_invariant_violation_is_not_folded_into_retry():
-    """비재시도 코드는 재시도 축으로 접히면 안 된다 — `if not retryable: raise` 고정.
+def test_all_constituents_dropped_is_terminal_not_retried():
+    """전 구성종목 결손은 재시도가 낫게 하지 않는다 — 1종 결손과 처방이 갈린다.
 
-    이 단언이 없으면 `except WindowAggregationError` 를 무조건 `ReturnsNotReadyError`
-    로 감싸도 전 테스트가 초록이다. 그러면 session 불일치·중복 같은 원장 불변식
-    위반이 32분간 무의미하게 재시도된 뒤 잘못된 사유로 DLQ 에 남는다 — 운영 처방이
-    갈리지 않는다.
+    벤더 미제공은 그 window 가 INCOMPLETE 로 **terminal** 커밋된다. 1종만 빠지면
+    떨어뜨리고 진행하지만, 전부 빠지면 커버리지가 0 이라 분해가 성립하지 않는다.
+    그때 재시도 축으로 접으면 32분(16회 재배달)을 쓴 뒤 "returns 미준비"라는 틀린
+    사유로 DLQ 에 남는다 — 같은 원인에 정반대 처방을 주면 운영이 무엇을 고쳐야
+    할지 모른다(Rule 7).
     """
-    from edge_analysis.domain.window import WindowAggregationError
-
-    class _DuplicateBarLake(_FakeLake):
+    class _NoConstituentBarsLake(_FakeLake):
         def load_committed_minute_bars(self, market, windows):
             bars = super().load_committed_minute_bars(market, windows)
-            return bars + (bars[0],)  # 같은 (분, unit) 두 번 — 원장 불변식 위반
+            # ETF 자신은 완비, 구성종목만 마지막 분이 빠졌다 → 구성종목이 전부 떨어진다.
+            return tuple(b for b in bars if not (
+                b.unit_id == "005930" and b.source is windows[-1]))
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    with pytest.raises(PipelineError, match="전부 1분봉 결손"):
+        run(_SETTINGS, lake=_NoConstituentBarsLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
+    assert store.calls == []
+
+
+def test_naive_explain_window_is_rejected():
+    """naive datetime 은 거부한다 — 조용히 시스템 로컬로 재해석하면 안 된다.
+
+    `.astimezone()` 은 naive 를 로컬 시각으로 **가정**한다. UTC 컨테이너에서
+    `datetime(2026,7,16,0,12)` 가 09:12 KST 가 되어 모든 검사를 통과하고, 호출자는
+    묻지 않은 창의 설명을 정상 산출로 받는다. 신뢰경계의 새 입력이다.
+    """
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    with pytest.raises(PipelineError, match="tz-aware"):
+        run(_SETTINGS, lake=_FakeLake(), store=store, client=_FakeClient(),
+            s3=_FakeS3(),
+            explain_window=(datetime(2026, 7, 16, 10, 12),
+                            datetime(2026, 7, 16, 10, 30)))
+    assert store.calls == []
+
+
+def test_ledger_invariant_violation_reaches_dlq_not_the_retry_axis():
+    """집계가 던지는 불변식 위반은 **감싸지 않고** 그대로 나가야 한다.
+
+    결손은 위에서 이미 떨어뜨렸으므로 `aggregate_window` 까지 오는 것은 재시도가
+    낫게 하지 않는 것뿐이다. 그걸 `ReturnsNotReadyError` 로 접으면 32분(16회 재배달)
+    을 무의미하게 쓴 뒤 "returns 미준비"라는 **틀린 사유**로 DLQ 에 남는다.
+
+    `MINUTE_SOURCE_MISMATCH` 를 쓰는 이유: `diagnose_window` 가 보지 않는 유일한
+    코드라 정말 `aggregate_window` 에서 나온다. 중복·session 불일치로 겨누면
+    `diagnose_window` 가 먼저 죽여서, 감싸기를 되살려도 테스트가 안 깨진다.
+    """
+    from edge_analysis.domain.window import CommittedMinuteWindow, WindowAggregationError
+
+    class _SourceMismatchLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            bars = list(super().load_committed_minute_bars(market, windows))
+            # 같은 분인데 generation 이 다른 좌표 — 두 세대가 한 시간축에 섞였다.
+            odd = replace_window(bars[0].source, generation=2)
+            bars[0] = MinuteBar(source=odd, unit_id=bars[0].unit_id,
+                                open=bars[0].open, high=bars[0].high,
+                                low=bars[0].low, close=bars[0].close,
+                                volume=bars[0].volume)
+            return tuple(bars)
+
+    def replace_window(window, *, generation):
+        return CommittedMinuteWindow(
+            session_id=window.session_id, start=window.start, end=window.end,
+            generation=generation, checksum=window.checksum)
 
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
     with pytest.raises(WindowAggregationError) as caught:
-        run(_SETTINGS, lake=_DuplicateBarLake(), store=store,
+        run(_SETTINGS, lake=_SourceMismatchLake(), store=store,
             client=_FakeClient(), s3=_FakeS3())
-    assert caught.value.reason.code == "DUPLICATE_MINUTE_BAR"
-    assert caught.value.reason.retryable is False
+    assert caught.value.reason.code == "MINUTE_SOURCE_MISMATCH"
     assert store.calls == []
 
 
