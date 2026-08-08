@@ -290,9 +290,12 @@ def _row(stamp: str, **over) -> dict:
 
 
 def _window(latest: str = "153000") -> list[dict]:
-    """실응답 형상(30행 고정)의 축소판. **최신 행을 가운데 둔다** — 끝에 두면 `rows[0]`
-    회귀가, 앞에 두면 `rows[-1]` 회귀가 통과한다."""
-    stamps = ["150100", "151500", latest, "152000", "152500"]
+    """실응답 형상의 축소판 — **요청 간격(60초) 격자**여야 한다. 임의 간격으로 두면
+    간격 가드가 정당하게 물어, 그 경고가 모든 테스트에 상시로 껴 신호가 죽는다.
+
+    **최신 행을 가운데 둔다** — 끝에 두면 `rows[0]` 회귀가, 앞에 두면 `rows[-1]` 회귀가
+    통과한다."""
+    stamps = ["152700", "152800", latest, "152900", "152600"]
     return [_row(s) for s in stamps]
 
 
@@ -704,15 +707,142 @@ def test_창을_조금만_넘어도_혼재로_본다(monkeypatch, caplog):
     assert rec.args[4] == 2400
 
 
-def test_괴리가_1bp_아래여도_100배_드리프트를_잡는다(monkeypatch, caplog):
-    """절대 오차가 곧 **사각지대 폭**이다 — 비율↔퍼센트 잔차가 `0.99 × |괴리|` 라,
-    괴리가 `abs_tol/0.99` 보다 작으면 100배 드리프트가 통째로 통과한다. 채권형·MMF형처럼
-    상시 1bp 안에서 도는 ETF 는 그 폭이 곧 계통적 미탐 구간이다."""
+def test_절사_표기_표본을_드리프트로_잡지_않는다(monkeypatch, caplog):
+    """허용 오차를 **못 조이는** 이유를 못박는다.
+
+    `dprt` 2자리 표기가 반올림인지 절사인지가 미실측이다 — 실측 표본(0.114115 → "0.11")은
+    두 가설이 같은 값을 내 구분되지 않는다. 절사면 오차 상한이 0.00999 라, 반올림 상한
+    (0.005)에 맞춰 조이면 **정상 표본의 40%가 드리프트로 잡힌다**(스윕 실측). 소음이 가드를
+    끄게 만들면 결국 관대해지는 쪽으로 착지한다.
+    """
     _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
-    # 진짜 괴리 0.008%, dprt 는 비율 표기(0.00008) — 잔차 0.00792.
-    src = _source({"069500": _ok([_priced("153000", 100000, 100008, "0.00008")])})
+    # 괴리 0.1199% 가 절사로 "0.11" 이 된 행 — 잔차 0.0099.
+    src = _source({"069500": _ok([_priced("153000", 100000, 100119.9, "0.11")])})
 
     with caplog.at_level("INFO"):
         list(src.fetch())
 
-    assert _records(caplog, "드리프트 의심")
+    assert not _records(caplog, "드리프트 의심")
+
+
+def test_계약과_다른_행_수를_드러낸다(monkeypatch, caplog):
+    """`ROWS_PER_CALL` 은 창 계산에만 쓰이고 응답과 대조된 적이 없다. 20행이 오면 실창은
+    1200초인데 1800 으로 찍혀 판정(지연÷창)이 1.5배 관대해지고, **같은 배수로 혼재 임계도
+    죽는다** — 두 축이 상수 하나에 걸려 같은 방향으로 틀린다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok([_row(f"1{h:02d}000") for h in range(20, 40)])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "행 수가 계약과 다르다")
+    assert rec.levelno == logging.WARNING
+    assert rec.args[2:4] == (20, 30)
+
+
+def test_요청과_다른_표본_간격을_드러낸다(monkeypatch, caplog):
+    """`interval_sec` 은 우리가 **보낸 요청값**이지 측정값이 아니다. 벤더가
+    `FID_HOUR_CLS_CODE` 를 무시해 성기게 주면 범위 가드에도 안 걸려 완전 침묵하고,
+    거짓 `interval_sec` 이 raw 행에 각인된다 — 그 필드는 자연키의 일부다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    # 요청 60초인데 실제로는 300초 격자로 온다.
+    stamps = ["1500%02d" % 0, "150500", "151000", "151500", "152000"]
+    src = _source({"069500": _ok([_row(t) for t in stamps])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "표본 간격이 요청과 다르다")
+    assert rec.args[2:4] == (60, 300)
+
+
+def test_장중에_창_폭을_넘는_지연은_경고다(monkeypatch, caplog):
+    """전량 오염(전일 30행 통째)은 범위 가드에 안 걸린다 — 범위가 정상 창 안이라서다.
+    그때 INFO 로 두면 **부분 혼재는 WARN 인데 전량 오염이 조용해** WARN 만 보는 쪽에서
+    가장 나쁜 경우가 통째로 사라진다. 원인은 못 가르지만 이상이라는 것은 말할 수 있다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 9, 10, tzinfo=KST))
+    src = _source({"069500": _ok([_row("152900"), _row("153000")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "벤더 지연")
+    assert rec.levelno == logging.WARNING
+    assert rec.args[8] == "장중"
+
+
+def test_개장_전_라벨을_관측으로_남긴다(monkeypatch, caplog):
+    """창이 뒤로 뻗으면 개장 이전 시각을 요구한다(09:10 실행의 창은 08:40 까지). KIS 가
+    그 구간을 무엇으로 채우는지는 **이 조각이 재려는 열린 질문**이라 오류로 단정하지
+    않는다 — 다만 최신 행만 찍으면 그 사실이 로그에서 사라진다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 9, 10, tzinfo=KST))
+    src = _source({"069500": _ok([_row("084000"), _row("085000"), _row("090500")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "개장 전 라벨")
+    assert rec.levelno == logging.INFO  # 오류가 아니다
+    assert rec.args[0:2] == (2, 3)
+    assert rec.args[4] == "084000"
+
+
+def test_한_축이_던져도_다른_축은_돈다(monkeypatch, caplog):
+    """"두 축은 서로의 실패로 죽지 않는다"를 `return` 만으로 지키면 **예외**에는 안 걸린다.
+    앞 축이 던지면 뒤 축이 통째로 안 도는데, 단위 가드는 정상일 때 조용해서 "경고 없음"과
+    구분되지 않는다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    ratio = float(LIVE_ROW["stck_prpr"]) / float(LIVE_ROW["nav"]) - 1.0
+    src = _source({"069500": _ok([_row("153000", dprt=f"{ratio:.6f}")])})
+    monkeypatch.setattr(
+        type(src), "_note_lag",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("지연 축 폭발")),
+    )
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert _records(caplog, "지연 관측 실패")       # 죽은 축은 죽었다고 남기고
+    assert _records(caplog, "드리프트 의심")        # 살아 있는 축은 돈다
+
+
+def test_대조_불가_시_빠진_필드_이름을_남긴다(monkeypatch, caplog):
+    """벤더가 `dprt` 를 개명하면 단위 가드가 통째로 사라지는데 런은 초록이다(그 필드는
+    행 식별 요건이 아니라 격리도 안 된다). 최소한 무엇이 빠졌는지는 말해야 한다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    rows = [{k: v for k, v in _row("153000").items() if k != "dprt"}]
+    src = _source({"069500": _ok(rows)})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "대조 불가")
+    assert rec.args[5] == "dprt"
+
+
+def test_요청대로_온_간격은_조용하다(monkeypatch, caplog):
+    """어긋날 때만 말하는 가드다 — 정상에도 뜨면 ETF·폴링마다 경고가 나 진짜 신호가 묻힌다."""
+    _at(monkeypatch, datetime(2026, 7, 27, 15, 31, tzinfo=KST))
+    src = _source({"069500": _ok(_window())})  # 150100~152500, 요청과 같은 60초 격자
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    assert not _records(caplog, "표본 간격이 요청과 다르다")
+
+
+def test_개장_전_폴링은_구간이_따로_표시된다(monkeypatch, caplog):
+    """개장 전과 마감 후는 의미가 정반대다 — 개장 전 = 전일 값 확정, 마감 후 = 오늘 값 정상.
+    한 라벨로 접으면 08:50 폴링의 `지연=-23400초` 가 마감 후 정상값처럼 읽힌다.
+
+    배선된 경로는 `skip_reason` 이 09:00 이전을 막지만, 수동 CLI·백필은 스텝을 우회한다.
+    """
+    _at(monkeypatch, datetime(2026, 7, 27, 8, 50, tzinfo=KST))
+    src = _source({"069500": _ok([_row("153000")])})
+
+    with caplog.at_level("INFO"):
+        list(src.fetch())
+
+    (rec,) = _records(caplog, "벤더 지연")
+    assert rec.args[8] == "개장전"
+    assert rec.levelno == logging.INFO  # 장중이 아니라 격상 대상이 아니다
