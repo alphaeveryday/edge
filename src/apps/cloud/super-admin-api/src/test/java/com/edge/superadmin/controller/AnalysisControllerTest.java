@@ -4,6 +4,7 @@ import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.auth.SessionOperator;
 import com.edge.superadmin.repository.AnalysisRepository.AnalysisRow;
 import com.edge.superadmin.repository.AnalysisRepository.EvidenceRow;
+import com.edge.superadmin.repository.AnalysisRepository.ResultBlock;
 import com.edge.superadmin.service.AnalysisService;
 import com.edge.superadmin.support.FakeAnalysisRepository;
 import com.edge.superadmin.support.FakeAnalysisWriteRepository;
@@ -43,6 +44,11 @@ class AnalysisControllerTest {
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-27T15:52:00+09:00"),
 			"반도체 업황 회복 기대가 확산되며 상승.", "HIGH", "PUBLISHED",
+			// 고객 노출 문장 블록(ALPHA-878) — 순서·refs 가 그대로 화면 계약으로 흐른다
+			List.of(new ResultBlock("H", "헤더", "KODEX 반도체 -3.42% 하락",
+							List.of("bars_5m:091160")),
+					new ResultBlock("4", "이벤트 병치", "공급계약 해지 공시가 있었습니다.",
+							List.of("source_event:ev-1", "analysis_evidence_bundle:b-1"))),
 			List.of(new EvidenceRow("NEWS", "반도체 수출 반등", "BIGKINDS",
 							OffsetDateTime.parse("2026-07-27T09:10:00+09:00")),
 					new EvidenceRow("DISCLOSURE", null, "DART", null)),
@@ -52,21 +58,21 @@ class AnalysisControllerTest {
 	private static final AnalysisRow PENDING_ROW = new AnalysisRow(
 			"run-2", "TIGER 2차전지", "305540", "XKRX", 0.0518, "RUNNING",
 			OffsetDateTime.parse("2026-07-27T15:40:00+09:00"), null, null, null, null,
-			List.of(), 0);
+			List.of(), List.of(), 0);
 
 	/** SUCCEEDED 인데 본문이 빈 원장 불일치 — 엔진이 "" 를 저장할 수 있다. null 과 동급 결측. */
 	private static final AnalysisRow MISMATCH_ROW = new AnalysisRow(
 			"run-3", "KODEX 200", "069500", "XKRX", -0.031, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-26T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-26T15:50:00+09:00"), "   ", null, "DRAFT",
-			List.of(), 0);
+			List.of(), List.of(), 0);
 
 	/** 무효화로 게시가 내려간 완료 런 — 실행 상태(COMPLETED)와 게시 상태(WITHDRAWN)는 별개 축. */
 	private static final AnalysisRow WITHDRAWN_ROW = new AnalysisRow(
 			"run-4", "TIGER 미국나스닥100", "133690", "XNAS", 0.0812, "SUCCEEDED",
 			OffsetDateTime.parse("2026-07-25T15:40:00+09:00"),
 			OffsetDateTime.parse("2026-07-25T15:52:00+09:00"),
-			"엔진 원본 설명.", "LOW", "WITHDRAWN", List.of(), 0);
+			"엔진 원본 설명.", "LOW", "WITHDRAWN", List.of(), List.of(), 0);
 
 	private static final SessionOperator OPERATOR = new SessionOperator("ops@edge.io", "운영자");
 
@@ -111,13 +117,33 @@ class AnalysisControllerTest {
 				.andExpect(jsonPath("$.result[0].evidence.length()").value(2))
 				// 표시 상한에 잘린 런 — 총 건수는 실린 2건이 아니라 57건이다(화면 문구의 근거)
 				.andExpect(jsonPath("$.result[0].evidenceTotal").value(57))
-				.andExpect(jsonPath("$.result[0].evidence[0].type").value("뉴스"))
+				// 근거 유형은 영문 코드 그대로 — 한글 번역이 API 에서 나오면 코드↔라벨
+				// 계약(근거 포맷 명세 §10.3) 위반이다. 라벨은 UI labels.ts 소관(ALPHA-878)
+				.andExpect(jsonPath("$.result[0].evidence[0].type").value("NEWS"))
 				.andExpect(jsonPath("$.result[0].evidence[0].time").value("2026-07-27 09:10"))
-				.andExpect(jsonPath("$.result[0].evidence[1].type").value("공시"))
+				.andExpect(jsonPath("$.result[0].evidence[1].type").value("DISCLOSURE"))
 				// 발행시각·제목 없는 공시 — NULL 을 시각처럼 그리지도, UI 계약(title: string)을
 				// 깨지도 않는다
 				.andExpect(jsonPath("$.result[0].evidence[1].time").value("—"))
 				.andExpect(jsonPath("$.result[0].evidence[1].title").value("(제목 없음)"));
+	}
+
+	/**
+	 * 고객 노출 문장 블록(ALPHA-878) — 원장 순서·refs 그대로 나가고, 블록 없는 런은 빈
+	 * 배열이다(누락이 아니라 "고객에게 나간 문장이 없다"는 사실).
+	 */
+	@Test
+	void 고객_노출_문장_블록은_순서와_근거참조를_그대로_나른다() throws Exception {
+		mvc.perform(get("/api/v1/analyses"))
+				.andExpect(jsonPath("$.result[0].resultBlocks.length()").value(2))
+				.andExpect(jsonPath("$.result[0].resultBlocks[0].code").value("H"))
+				.andExpect(jsonPath("$.result[0].resultBlocks[0].title").value("헤더"))
+				.andExpect(jsonPath("$.result[0].resultBlocks[0].text")
+						.value("KODEX 반도체 -3.42% 하락"))
+				.andExpect(jsonPath("$.result[0].resultBlocks[0].evidenceRefs[0]")
+						.value("bars_5m:091160"))
+				.andExpect(jsonPath("$.result[0].resultBlocks[1].evidenceRefs.length()").value(2))
+				.andExpect(jsonPath("$.result[1].resultBlocks.length()").value(0));
 	}
 
 	/** SUCCEEDED 런에 본문이 없거나 비면 원장 불일치 — 빈 완료로 숨기지 않는다(Rule 12). */

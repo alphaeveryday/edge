@@ -1,5 +1,8 @@
 package com.edge.superadmin.repository;
 
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Isolation;
@@ -32,12 +35,16 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	private static final int LIST_LIMIT = 200;
 
 	/**
-	 * 런당 근거 표시 상한. 한 설명이 프롬프트에 싣는 사건 수가 수십~수백 건이라(dev 실측 평균
-	 * 56 · 최대 485) 상한이 없으면 목록 응답 하나가 {@code LIST_LIMIT} 배로 부푼다. 잘라낸
-	 * 만큼은 {@code evidenceTotal} 이 말해 준다 — 화면의 건수가 표시 건수로 축소되면 근거가
-	 * 그것뿐인 것처럼 읽힌다.
+	 * 런당 <b>유형별</b> 근거 표시 상한(ALPHA-878 C4). 한 설명이 프롬프트에 싣는 사건 수가
+	 * 수십~수백 건이라(dev 실측 평균 56 · 최대 485) 상한이 없으면 목록 응답 하나가
+	 * {@code LIST_LIMIT} 배로 부푼다. 잘라낸 만큼은 {@code evidenceTotal} 이 말해 준다 —
+	 * 화면의 건수가 표시 건수로 축소되면 근거가 그것뿐인 것처럼 읽힌다.
+	 *
+	 * <p>런 전체 단일 상한이 아니라 유형별인 이유: §1 정렬(통계검정이 맨 뒤)에 전체 상한을
+	 * 얹으면 잘릴 때 정확히 통계검정이 먼저 사라진다 — 근거 창의 핵심을 상한 정책의 첫
+	 * 희생자 자리에 놓는 배치다(근거 포맷 명세 §10.2). 통계검정은 상한 자체에서 뺀다.
 	 */
-	private static final int EVIDENCE_LIMIT_PER_RUN = 20;
+	private static final int EVIDENCE_LIMIT_PER_TYPE = 20;
 
 	/**
 	 * 트리거→기여관찰→경로→런이 전부 1:1 체인이라(각 FK 에 UNIQUE) 행이 불어나지 않는다.
@@ -60,7 +67,8 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			           AS observed_return,
 			       COALESCE(tr.detected_at, mt.created_at) AS detected_at,
 			       e.display_name, i.ticker, i.market_code,
-			       res.summary, res.confidence_level, res.publication_status
+			       res.summary, res.confidence_level, res.publication_status,
+			       res.stage_results #>> '{final_explanation,blocks}' AS result_blocks
 			  FROM explanation_run er
 			  JOIN explanation_route rt ON rt.explanation_route_id = er.explanation_route_id
 			  JOIN etf_contribution_observation co
@@ -92,23 +100,31 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 	 * 안에서 같은 런 집합을 본다. {@code document_id} 는 정렬 동률 해소용으로만 SELECT 에
 	 * 남는다(published_at 은 NULL 허용·비유일).
 	 *
-	 * <p>런당 {@code EVIDENCE_LIMIT_PER_RUN} 건으로 자르되 {@code evidence_total} 을 같이 낸다
-	 * — 자른 사실을 표시 층이 알아야 "N건" 이 표시 건수로 둔갑하지 않는다. 상한은 DISTINCT
-	 * <b>뒤</b>에 걸린다(문서 단위로 20건이지 lineage 행 20건이 아니다).
+	 * <p>정렬은 유형 고정 순서 → 유형 내부 시간순(근거 포맷 명세 §1, ALPHA-878 C3). 유형
+	 * 순서는 {@link AnalysisRepository.EvidenceType} 선언 순서에서 CASE 로 생성된다 — 현행
+	 * 소스는 공시·뉴스뿐이지만 비문서 유형이 UNION 으로 붙어도(C1) 정렬 키가 이미 선다.
+	 * 유형 내부는 §1 이 말하는 {@code ref} 오름차순의 대리로 {@code published_at ASC NULLS
+	 * LAST, document_id} 를 쓴다 — 콘솔 lineage 에는 ref 가 아직 없다.
+	 *
+	 * <p>유형별 {@code EVIDENCE_LIMIT_PER_TYPE} 건으로 자르되(통계검정은 상한 밖 — 상수
+	 * 주석 참조) {@code evidence_total} 을 같이 낸다 — 자른 사실을 표시 층이 알아야 "N건" 이
+	 * 표시 건수로 둔갑하지 않는다. 상한은 DISTINCT <b>뒤</b>에 걸린다(문서 단위로 유형당
+	 * 20건이지 lineage 행 20건이 아니다).
 	 */
 	private static final String EVIDENCE_SQL = """
-			SELECT explanation_run_id, document_type, title, source_code, published_at,
+			SELECT explanation_run_id, evidence_type, title, source_code, published_at,
 			       evidence_total
 			  FROM (
-			       SELECT explanation_run_id, document_id, document_type, title,
+			       SELECT explanation_run_id, document_id, evidence_type, title,
 			              source_code, published_at,
-			              ROW_NUMBER() OVER (PARTITION BY explanation_run_id
+			              %s AS type_rank,
+			              ROW_NUMBER() OVER (PARTITION BY explanation_run_id, evidence_type
 			                                 ORDER BY published_at ASC NULLS LAST, document_id)
-			                  AS document_rank,
+			                  AS type_seq,
 			              COUNT(*) OVER (PARTITION BY explanation_run_id) AS evidence_total
 			         FROM (
-			              SELECT DISTINCT explanation_run_id, document_id, document_type, title,
-			                     source_code, published_at
+			              SELECT DISTINCT explanation_run_id, document_id,
+			                     document_type AS evidence_type, title, source_code, published_at
 			                FROM (
 			                   SELECT ree.explanation_run_id, d.document_id, d.document_type,
 			                          d.title, d.source_code, d.published_at
@@ -129,14 +145,46 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			                      LIMIT %d)
 			              ) documents
 			       ) ranked
-			 WHERE document_rank <= %d
-			 ORDER BY explanation_run_id, document_rank
-			""".formatted(LIST_LIMIT, EVIDENCE_LIMIT_PER_RUN);
+			 WHERE type_seq <= %d OR evidence_type = 'STAT_TEST'
+			 ORDER BY explanation_run_id, type_rank, published_at ASC NULLS LAST, document_id
+			""".formatted(AnalysisRepository.EvidenceType.rankCase("evidence_type"),
+			LIST_LIMIT, EVIDENCE_LIMIT_PER_TYPE);
 
 	private final JdbcTemplate jdbc;
+	private final ObjectMapper mapper;
 
-	public JdbcAnalysisRepository(JdbcTemplate jdbc) {
+	public JdbcAnalysisRepository(JdbcTemplate jdbc, ObjectMapper mapper) {
 		this.jdbc = jdbc;
+		this.mapper = mapper;
+	}
+
+	/**
+	 * {@code final_explanation.blocks} JSON → 고객 노출 문장 블록(ALPHA-878). 여기가 고객
+	 * 비노출 경계다 — {@code stage_results} 의 다른 키(stat_tests 버퍼·plain·layers 등 내부
+	 * 산출)는 SQL 이 애초에 꺼내지 않고, 블록에서도 {@code block_code·block_title·text·
+	 * evidence_refs} 만 나른다. 깨진 JSON 은 조용히 빈 목록으로 뭉개지 않고 런 ID 와 함께
+	 * 터뜨린다(Rule 12) — 원장 불일치가 빈 화면 뒤로 숨으면 운영자가 못 본다.
+	 */
+	private List<ResultBlock> parseResultBlocks(String json, String runId) {
+		if (json == null) {
+			return List.of();
+		}
+		try {
+			List<ResultBlock> blocks = new ArrayList<>();
+			for (JsonNode node : mapper.readTree(json)) {
+				List<String> refs = new ArrayList<>();
+				node.path("evidence_refs").forEach(ref -> refs.add(ref.asText()));
+				blocks.add(new ResultBlock(
+						node.path("block_code").asText(""),
+						node.path("block_title").asText(""),
+						node.path("text").asText(""),
+						List.copyOf(refs)));
+			}
+			return List.copyOf(blocks);
+		} catch (JacksonException e) {
+			throw new IllegalStateException(
+					"final_explanation.blocks 파싱 실패 — explanation_run " + runId, e);
+		}
 	}
 
 	@Override
@@ -148,7 +196,7 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 			String runId = rs.getString("explanation_run_id");
 			evidenceByRun.computeIfAbsent(runId, k -> new ArrayList<>())
 					.add(new EvidenceRow(
-							rs.getString("document_type"),
+							rs.getString("evidence_type"),
 							rs.getString("title"),
 							rs.getString("source_code"),
 							rs.getObject("published_at", OffsetDateTime.class)));
@@ -168,6 +216,7 @@ public class JdbcAnalysisRepository implements AnalysisRepository {
 					rs.getString("summary"),
 					rs.getString("confidence_level"),
 					rs.getString("publication_status"),
+					parseResultBlocks(rs.getString("result_blocks"), runId),
 					List.copyOf(evidenceByRun.getOrDefault(runId, List.of())),
 					totalByRun.getOrDefault(runId, 0));
 		});

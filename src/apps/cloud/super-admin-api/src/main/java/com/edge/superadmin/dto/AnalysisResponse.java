@@ -1,5 +1,6 @@
 package com.edge.superadmin.dto;
 
+import com.edge.superadmin.repository.AnalysisRepository;
 import com.edge.superadmin.repository.AnalysisRepository.AnalysisRow;
 import com.edge.superadmin.repository.AnalysisRepository.EvidenceRow;
 
@@ -21,7 +22,7 @@ import java.util.List;
 public record AnalysisResponse(String id, String name, String code, String market, int direction,
 		double changePct, String status, String basisTime, String basisTimeAbs, String doneTime,
 		String confidence, String publicationStatus, String result,
-		List<EvidenceResponse> evidence, int evidenceTotal) {
+		List<BlockResponse> resultBlocks, List<EvidenceResponse> evidence, int evidenceTotal) {
 
 	/** 표시는 KST 로 통일한다 — 원장 시각은 TIMESTAMPTZ 라 시장별 현지시각은 보존돼 있지 않다. */
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
@@ -33,17 +34,27 @@ public record AnalysisResponse(String id, String name, String code, String marke
 	public record EvidenceResponse(String type, String title, String source, String time) {
 
 		public static EvidenceResponse from(EvidenceRow e) {
-			// document_type 은 CHECK 로 NEWS|DISCLOSURE 뿐 — 새 값이 생기면 라벨 없이
-			// 코드가 그대로 노출된다(숨기는 것보다 낫다).
-			String type = switch (e.documentType()) {
-				case "NEWS" -> "뉴스";
-				case "DISCLOSURE" -> "공시";
-				default -> e.documentType();
-			};
+			// type 은 EvidenceType 영문 코드 그대로 — 한글 라벨·chip 축약은 UI labels.ts 의
+			// EVIDENCE_TYPE_LABEL 매핑이 만든다(근거 포맷 명세 §10.3 코드↔라벨 계약,
+			// ALPHA-878). 미지 코드는 라벨 없이 그대로 노출된다(숨기는 것보다 낫다).
 			// document.title 은 NULL 허용 — UI 계약(title: string)을 깨지 않게 표시 폴백을 준다
-			return new EvidenceResponse(type, e.title() == null ? "(제목 없음)" : e.title(),
+			return new EvidenceResponse(e.evidenceType(),
+					e.title() == null ? "(제목 없음)" : e.title(),
 					e.sourceCode(),
 					e.publishedAt() == null ? "—" : format(DOC_TIME, e.publishedAt()));
+		}
+	}
+
+	/**
+	 * 고객 산문에 실제로 나간 블록 한 건(ALPHA-878) — 원장 {@code final_explanation.blocks}
+	 * 를 순서 그대로 나른다. 내부 산출(stat_tests 버퍼·stage_results 원시값)은 저장 계층이
+	 * 이미 걸렀다({@code AnalysisRepository.ResultBlock}).
+	 */
+	public record BlockResponse(String code, String title, String text,
+			List<String> evidenceRefs) {
+
+		public static BlockResponse from(AnalysisRepository.ResultBlock b) {
+			return new BlockResponse(b.code(), b.title(), b.text(), b.evidenceRefs());
 		}
 	}
 
@@ -63,6 +74,7 @@ public record AnalysisResponse(String id, String name, String code, String marke
 				row.confidenceLevel(),
 				row.publicationStatus(),
 				result(row.runStatus(), row.summary()),
+				row.resultBlocks().stream().map(BlockResponse::from).toList(),
 				row.evidence().stream().map(EvidenceResponse::from).toList(),
 				// 표시 상한에 잘린 만큼을 화면이 알아야 "N건"이 총 건수를 말할 수 있다.
 				row.evidenceTotal());
