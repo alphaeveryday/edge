@@ -1342,6 +1342,41 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04
+# 상주 iNAV Worker(1분 파이프라인, ALPHA-851) — 장중 추정 NAV 를 window 단위 canonical
+# artifact 로 확정한다. 세션이 먼저 계획돼 있어야 한다
+# (plan-minute-session --dataset etf_inav_minute --source-group kis — `--universe` 는
+# price 와 **같은 파일**을 쓴다. 세션 identity·기대 집합이 거기서 나온다).
+#
+# 가격 Worker 와 갈리는 곳 넷:
+#  · **기대 집합은 ETF 계열뿐이다**(`etf_ids + sector_etf_ids`) — 구성종목에는 NAV 가
+#    없다. `units_at` 전체를 기대하면 매 window 가 INCOMPLETE 다.
+#  · **job·outbox 를 만들지 않는다** — 하위 소비자가 없어 window 확정에서 멈춘다.
+#    (가격 것을 빌려 쓰면 NAV 가 price-analysis-realtime 으로 나가 설명이 발화된다.)
+#  · **복구를 하지 않는다**(`recovery_budget_per_tick = 0`, 2026-08-08 결정) — iNAV 는
+#    추정값이라 분 단위 완전성 요구가 낮다. 놓친 분은 놓친 채로 두고 결손은 원장이
+#    드러낸다(`/api/v1/sources/minute` 의 overdue_no_evidence).
+#  · 격자는 **390**(09:00–15:30) — 어댑터 하한이 09:00 이라 시간외를 계획하지 않는다.
+#
+# 질의 심볼은 `[krx_etf.source.etf_map]` 에서 온다(세션 universe 와 **다른 출처**다) —
+# 갈리면 그 unit 이 매 window invalid 로 드러난다(조용히 missing 으로 접지 않는다).
+# 자격증명은 일별 NAV 와 같은 쌍이다(같은 벤더·같은 계정).
+#
+# 🔴 **`--session-date` 는 오늘만 받는다**(다른 워커와 다르다 — 그쪽은 지난 거래일을
+# 받는다). 이 벤더에는 소급 질의 경로가 아예 없고 응답 행에 날짜가 없어(`bsop_hour` =
+# HHMMSS), 과거 날짜로 돌리면 **지금 값이 그 날짜의 불변 artifact 로 굳는다**. 되돌릴
+# 방법이 없어(재수집 불가) 기동에서 거부한다. 그래서 아래 예시는 날짜를 안 준다(=오늘).
+# 🔴 **휴장일·개장 전은 수집 전에 멈춘다**(KIS 가 빈 응답이 아니라 직전 거래일 행을
+# 그대로 주기 때문 — 2026-07-25 실측). exit 은 모드로 갈린다: 상주(`--max-ticks` 없음)는
+# **0**(스케줄러가 휴장일을 정상 통과), bounded 는 **1**(확인 게이트라 "한 window 도 못
+# 봤다"를 성공으로 보고하지 않는다).
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
+KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
+  python -m data_pipeline.run inav-worker --universe /path/universe.json --max-ticks 3
+# ⚠️ 토큰 만료(24h) 재발급 경로가 **아직 없다** — 수동 bounded 실행에서는 안 만나지만
+# 상주 전환(세션 자동 편입) 때 반드시 붙여야 한다(`KisAuth.invalidate`).
+
 # 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
 # 있어야 하고(위 plan-minute-session — `--session-date`·`--universe` 를 **같은 값**으로),
 # 갈리면 다른 session_id 가 유도되거나 Worker 가 처리를 거부한다. SIGTERM 은 tick

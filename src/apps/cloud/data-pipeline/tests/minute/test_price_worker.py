@@ -1184,3 +1184,26 @@ class TestCollectorSelection:
         )
         assert block, "minute_session_source_group 기본값을 못 찾았다"
         assert block.group(1) == self._config().source
+
+
+def test_drain_회수는_설정된_예산만큼_돈다(tmp_path):
+    """바닥(`max(1, …)`)만 못박으면 `reclaim_budget = 1` 로 상수화해도 통과한다 — 그러면
+    고아 CLAIMED 가 2건 이상인 세션의 drain 이 tick 당 1건씩만 줄어 EOD 정지 기한 대비
+    지연이 배로 늘어난다(ALPHA-851 라운드2 지적)."""
+    db = FakeMinuteDB()
+    worker, ledger, session_id = build_worker(db, tmp_path, windows=3)
+    worker.tick(NOW)  # fence 획득
+
+    rows = ledger.session_window_rows(session_id=session_id)
+    orphans = [r[0] for r in rows][1:3]
+    for window_start in orphans:
+        db.windows[(session_id, window_start)].update(
+            data_status="CLAIMED", claimed_by="dead", claim_token=99,
+            lease_expires_at=NOW - timedelta(seconds=1),
+        )
+    ledger.request_drain(session_id=session_id, now=NOW)
+
+    # 예산 2 → **한 tick**에 둘 다 회수돼 그 자리에서 DRAINED 로 수렴한다
+    assert worker.config.recovery_budget_per_tick == 2
+    assert worker.tick(NOW + timedelta(seconds=61)) == "DRAINED"
+    assert all(db.windows[(session_id, w)]["data_status"] != "CLAIMED" for w in orphans)

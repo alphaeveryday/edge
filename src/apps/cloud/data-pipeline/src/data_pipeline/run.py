@@ -45,7 +45,7 @@ from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
 from .minute.price_consumer import price_consumer_cli
-from .minute.worker import price_worker_cli
+from .minute.worker import inav_worker_cli, price_worker_cli
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
@@ -175,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
                  # 1분 Price Worker(ALPHA-706): 상주 수집 루프(ECS Service). 원장 DB +
                  # 토스 자격증명 + storage(artifact PUT) + --universe(planner 와 동일 파일).
                  "price-worker",
+                 # 1분 iNAV Worker(ALPHA-851): 장중 추정 NAV 상주 수집 루프. 원장 DB +
+                 # KIS 자격증명(kis_nav) + etf_map(krx_etf) + storage + --universe.
+                 # ⚠️ 하위 소비자가 없다 — window 확정에서 멈추고 job·outbox 를 안 만든다.
+                 "inav-worker",
                  # 1분 가격 판정 Consumer(ALPHA-711): Price Job SQS 소비 상주 루프.
                  # 원장 DB + 큐 설정 + storage(artifact GET) + --universe(판정 대상).
                  "price-consumer",
@@ -272,11 +276,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.max_ticks is not None:
         if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
-                             "news-consumer", "news-worker"):
+                             "news-consumer", "news-worker", "inav-worker"):
             raise SystemExit(
                 "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
-                f"news-consumer·news-worker 에서만 쓴다 — 이 스텝({args.step})에서는 "
-                "무시되므로 거부한다"
+                f"news-consumer·news-worker·inav-worker 에서만 쓴다 — 이 스텝({args.step})"
+                "에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
@@ -332,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
                          "start-minute-session", "news-worker",
-                         "rollup-minute-session") and (
+                         "rollup-minute-session", "inav-worker") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
@@ -401,6 +405,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "price-worker":
         return price_worker_cli(settings, session_date=args.session_date,
                                 universe=args.universe, max_ticks=args.max_ticks)
+    if args.step == "inav-worker":
+        return inav_worker_cli(settings, session_date=args.session_date,
+                               universe=args.universe, max_ticks=args.max_ticks)
     if args.step == "price-consumer":
         return price_consumer_cli(settings, universe=args.universe,
                                   max_ticks=args.max_ticks)
