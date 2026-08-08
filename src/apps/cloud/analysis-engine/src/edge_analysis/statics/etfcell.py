@@ -265,6 +265,12 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         records.append({
             "stage": "test",
             "trigger": t.trigger.ident,
+            # 근거 포맷 §5 게이트 재료(ALPHA-888): 계열 방아쇠는 발화를 명시
+            # 확인해야 한다 — applies_today 는 trigger_fired=None(미계측)을
+            # `is not False` 로 통과시키므로, 유도기가 원값을 직접 본다.
+            "trigger_kind": t.trigger.kind,
+            "trigger_fired": r.trigger_fired,
+            "null_kind": r.null_kind,
             "channel": t.channel,
             "exposure": f"{t.exposure.ident}/{t.exposure.transform}",
             "layer": t.layer,

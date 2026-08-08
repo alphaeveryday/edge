@@ -578,9 +578,13 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         meta.update({
             "window_start": kwargs["window_start"],
             "as_of": kwargs["window_end"],
+            # 근거 게이트(ALPHA-888, §5)가 블록마다 근거 행을 요구한다 — 부재
+            # 고지(N)만 있는 카드는 예외라 행 0개로 성립한다. 빈 blocks 는 실물
+            # payload 계약 위반이라 빌드가 죽는다.
             "final_explanation": {
-                "rendered_text": "[H] 헤더\n\n[N] 부재",
-                "blocks": [],
+                "rendered_text": "[N] 부재",
+                "blocks": [{"block_code": "N", "block_title": "부재 고지",
+                            "evidence_refs": []}],
             },
         })
         called.update(ticker=ticker, day=day, **kwargs)
@@ -656,9 +660,12 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
     # "그 구간에 왜 움직였나" 에 답하지 못한다.
     assert window["etf_day_return"] == pytest.approx(0.02)
     assert window["etf_window_return"] == pytest.approx(10200 / 10400 - 1)
+    # 블록↔근거 표(ALPHA-888): 파이프라인이 블록마다 evidence_row_refs 를 단다 —
+    # 부재 고지는 근거 행이 없는 것이 계약이다(§7 게이트 예외).
     assert store.explanation.raw["stage_results"]["final_explanation"] == {
-        "rendered_text": "[H] 헤더\n\n[N] 부재",
-        "blocks": [],
+        "rendered_text": "[N] 부재",
+        "blocks": [{"block_code": "N", "block_title": "부재 고지",
+                    "evidence_refs": [], "evidence_row_refs": []}],
     }
     trace = store.explanation.raw["stage_results"]["analysis_trace"]
     assert trace["s3_uri"].endswith("/req-1.json")
