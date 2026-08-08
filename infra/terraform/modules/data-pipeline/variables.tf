@@ -541,7 +541,7 @@ variable "minute_session_source_group" {
   type        = string
   # kis(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다. 이 기본값은
   # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
-  default = "kis"
+  default     = "kis"
 }
 
 variable "super_admin_api_url" {

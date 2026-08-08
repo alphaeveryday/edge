@@ -49,6 +49,7 @@ from .states import (
     MINUTE_DATASETS,
     SCALED_DATASETS,
     SOURCE_GROUPS_BY_DATASET,
+    UNIVERSE_DATASETS,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,18 +277,31 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # ⚠️ 승객 계획이 실패해도 **구동 레인 스케일업은 한다**: 가격 레인까지 세우면 승객
     # 결손이 하루치 가격 결손으로 번진다. 그 승객의 워커는 세션 부재로 기동 거부 루프를
     # 돌아 실패가 드러나고, exit 는 승객 실패를 그대로 실어 스케줄 기록에 남긴다.
+    # ⚠️ **구동 레인을 승객 계획보다 먼저 올린다.** 위 문단이 내건 "승객이 실패해도
+    # 구동 레인은 진행한다"를 exit code 경로에서만이 아니라 **예외 경로에서도** 성립
+    # 시킨다 — `plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라 universe
+    # 객체를 읽는 S3 의 botocore ClientError 는 그대로 뚫고 나온다. 뒤에 두면 그 한 번에
+    # 가격 레인이 통째로 안 뜬다.
+    _scale(desired=1, force=True)
+
     passenger_exits = {}
     for passenger_dataset, group in passengers:
         passenger_exits[passenger_dataset] = plan_session_cli(
             settings, dataset=passenger_dataset, source_group=group,
-            session_date=today.isoformat(), universe=None,
+            session_date=today.isoformat(),
+            # ⚠️ **승객이라고 universe 가 다 None 인 게 아니다.** 뉴스는 소스 단위라
+            # 안 쓰지만 iNAV 는 `UNIVERSE_DATASETS` 라 planner 가 없으면 **거부한다**
+            # (exit 2 → 그 레인이 매 거래일 통째로 안 선다). 그리고 통과시키더라도
+            # 원장에 universe_version="none" 이 박혀 Worker 의 `_session_ready` 가
+            # 영영 False 다 — 두 축 모두에서 틀린다. worker 의 `--universe` 와 **같은
+            # 객체**여야 한다(terraform 이 둘에 같은 URI 를 준다).
+            universe=universe if passenger_dataset in UNIVERSE_DATASETS else None,
         )
         if passenger_exits[passenger_dataset] != 0:
             logger.error("%s 세션 계획 실패(exit %d) — 구동 레인은 진행하고 그 워커는 "
                          "올리지 않는다(세션 부재 재기동 루프 방지)",
                          passenger_dataset, passenger_exits[passenger_dataset])
 
-    _scale(desired=1, force=True)
     for passenger_dataset, _ in passengers:
         # 승객 생산자는 자기 세션이 섰을 때만 — 계획 실패 날 올리면 기동 거부 루프만 돈다.
         # 레인별로 판정한다: 뉴스가 실패해도 iNAV 는 올라가야 한다(서로 독립이다).
@@ -322,6 +336,11 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     dataset, source_group = _resolve(dataset, source_group)
     day = datetime.now(KST).date()
     lanes = [(dataset, source_group), *_passengers()]
+    # ⚠️ 승객 워커 목록을 **게이트 전에 전부 해석한다.** 이 조회는 배선 결손에서
+    # SystemExit 이라(토글은 켜졌는데 목록이 빔), 스케일다운 루프 안에서 처음 부르면
+    # 공용 서비스를 0 으로 내린 **뒤** 죽어서 나머지 승객 워커가 밤새 desired 1 로
+    # 남는다 — 게다가 exit 는 "stop 전체 실패" 로 읽힌다. start 가 쓰는 순서와 같다.
+    passenger_workers = {ds: _passenger_worker_services(ds) for ds in PASSENGER_LANES}
     ids = {lane: stable_domain_id("msn", lane[0], lane[1], day.isoformat()) for lane in lanes}
 
     ledger = MinuteLedger(db=settings.db)
@@ -400,8 +419,7 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     # 토글 여부와 무관하게 **목록에 있는 것은 내린다** — 토글만 끄고 목록을 남긴 채
     # 배포되면(편입 롤백) 그 워커가 desired 1 로 떠 있는 채 아무도 안 내린다. 내리는
     # 방향은 과하게 잡아도 안전하다(이미 0 이면 no-op).
-    for passenger_dataset in PASSENGER_LANES:
-        workers = _passenger_worker_services(passenger_dataset)
+    for workers in passenger_workers.values():
         if workers:
             _scale(desired=0, force=False, services=workers)
     logger.info("세션 종료: sessions=%s — 게이트 전건 비었음", session_ids)

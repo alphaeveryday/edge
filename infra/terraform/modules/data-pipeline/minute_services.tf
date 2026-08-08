@@ -144,9 +144,10 @@ locals {
     # 뉴스 추출 Consumer 2종(ALPHA-713) — 핸들러·스텝이 같고 큐 URL 만 다르다(커널이
     # queue_url 하나만 받으므로 다중 큐 개조 대신 서비스를 분리한다 — 커널 무수정).
     # LLM 설정은 tag-news 관례(LLM_* env, base_url·model 은 코드 기본값=DeepSeek).
-    # 이 맵에 든 것만으로 세션 오케스트레이션의 스케일 대상이 된다(MINUTE_SESSION_SERVICES
-    # 가 이 맵에서 파생) — 생산자(news-worker, ALPHA-707)가 세션 결속이라 소비자도 같은
-    # 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
+    # 이 맵에 들어야 세션 오케스트레이션의 스케일 대상이 된다 — 다만 **공용 목록**
+    # (MINUTE_SESSION_SERVICES)은 여기서 승객 생산자를 뺀 나머지다(minute_passenger_workers).
+    # 소비자 2종은 공용에 남는다: 생산자(news-worker, ALPHA-707)가 세션 결속이라 소비자도
+    # 같은 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
     news-consumer-realtime = {
       command = ["news-consumer"]
       environment = merge(local.env, local.db_env, {
@@ -374,8 +375,9 @@ resource "aws_ecs_task_definition" "minute_session" {
 
       MINUTE_SESSION_CLUSTER = var.cluster_arn
       # 서비스명을 코드에서 다시 조립하지 않는다 — rename 이 조용한 no-op 스케일링이 된다.
-      # ⚠️ news-worker 는 공용 목록에서 뺀다 — 뉴스 세션 계획이 **성공한 날만** 올린다
-      # (실패 날 올리면 세션 부재 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음).
+      # ⚠️ 승객 생산자(local.minute_passenger_workers — news-worker·inav-worker)는 공용
+      # 목록에서 뺀다 — 자기 세션 계획이 **성공한 날만** 올린다(실패 날 올리면 세션 부재
+      # 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음). 각자 아래 자기 목록으로 간다.
       # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
       # analysis-consumer(ALPHA-719)도 세션 결속이다 — 트리거는 장중에만 발생하고,
       # ReturnsNotReady 는 분봉 입력의 120초 재시도(ALPHA-710)라 세션 안에 풀린다. ⚠️설명 큐는
@@ -500,9 +502,9 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
   cpu                      = var.task_cpu
   # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
   # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
-  memory             = var.analysis_task_memory
-  execution_role_arn = aws_iam_role.execution.arn
-  task_role_arn      = aws_iam_role.analysis_task.arn
+  memory                   = var.analysis_task_memory
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.analysis_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"

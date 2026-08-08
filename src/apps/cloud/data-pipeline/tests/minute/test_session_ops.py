@@ -521,9 +521,10 @@ class TestInavLane:
         assert rc == 0
         assert [c["dataset"] for c in calls] == ["price_minute", "etf_inav_minute"]
         assert calls[1]["source_group"] == "kis"
-        # ⚠️ universe 는 **planner 에만** None 이다 — worker 는 `--universe` 를 따로 받는다
-        # (terraform command). 여기서 넘기면 iNAV 격자가 가격 유니버스로 계획된다.
-        assert calls[1]["universe"] is None
+        # ⚠️ iNAV 는 universe 를 **받아야 한다** — 뉴스와 갈리는 지점이다. 안 넘기면
+        # planner 가 거부해 exit 2 고(그 레인이 매일 안 선다), 통과시켜도 원장에
+        # universe_version="none" 이 박혀 Worker 가 영영 처리를 시작 안 한다.
+        assert calls[1]["universe"] == "s3://b/u.json"
         assert wiring.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
@@ -772,3 +773,90 @@ def test_iNAV_토글_기본값이_어휘_안이다():
         (root / rel).read_text())
     assert block, "minute_session_inav_source_group 기본값을 못 찾았다"
     assert block.group(1) in SOURCE_GROUPS_BY_DATASET[DATASET_ETF_INAV_MINUTE]
+
+
+def test_승객의_universe_인자가_UNIVERSE_DATASETS_축을_따른다(monkeypatch, wiring):
+    """⭐ 승객을 표로 접으면서 **레인마다 갈리는 축**을 하나로 뭉갠 자리다.
+
+    뉴스는 소스 단위라 universe 를 안 쓰고(주면 planner 가 거부), iNAV 는
+    `UNIVERSE_DATASETS` 라 없으면 거부한다. 즉 상수 None 도 상수 universe 도 둘 다
+    틀린다 — 판정이 dataset 별이어야 한다.
+
+    `dataset in UNIVERSE_DATASETS` 를 그대로 기대값으로 쓴다. 레인이 늘 때 이 테스트가
+    자동으로 그 레인을 덮고, 축이 뒤집히면(예: 조건을 `not in` 으로) 전건 빨개진다.
+    """
+    from data_pipeline.minute.states import UNIVERSE_DATASETS
+
+    for env_group, env_services in session_ops.PASSENGER_LANES.values():
+        monkeypatch.setenv(env_services, "svc-x")
+    monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+    monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
+    monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+    calls = []
+    monkeypatch.setattr(session_ops, "plan_session_cli",
+                        lambda settings, **k: calls.append(k) or 0)
+
+    session_ops.start_session_cli(
+        FakeSettings(), dataset="price_minute", source_group="kis",
+        universe="s3://b/u.json")
+
+    seen = {c["dataset"]: c["universe"] for c in calls}
+    assert set(seen) == {"price_minute", *session_ops.PASSENGER_LANES}
+    for dataset in session_ops.PASSENGER_LANES:
+        expected = "s3://b/u.json" if dataset in UNIVERSE_DATASETS else None
+        assert seen[dataset] == expected, (
+            f"{dataset}: universe 축이 UNIVERSE_DATASETS 와 갈렸다 — "
+            f"기대 {expected!r}, 실제 {seen[dataset]!r}")
+
+
+def test_승객_계획이_예외로_죽어도_구동_레인은_올라간다(monkeypatch, wiring):
+    """`plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라 universe 객체를 읽는
+    S3 의 botocore ClientError 는 그대로 뚫고 나온다. 구동 레인 스케일업이 승객 계획
+    **뒤**에 있으면 그 한 번에 가격 레인이 통째로 안 뜬다 — 승객 결손이 하루치 가격
+    결손으로 번지는 것이 이 모듈이 가장 피하려는 결과다."""
+    monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
+    monkeypatch.setenv(session_ops.ENV_INAV_WORKER_SERVICES, "svc-inav-worker")
+    monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+
+    def plan(settings, **k):
+        if k["dataset"] == "price_minute":
+            return 0
+        raise RuntimeError("botocore ClientError: AccessDenied on GetObject")
+
+    monkeypatch.setattr(session_ops, "plan_session_cli", plan)
+
+    with pytest.raises(RuntimeError):
+        session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+    assert wiring.calls == [
+        {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+    ], "승객 계획의 예외가 구동 레인 스케일업을 삼키면 안 된다"
+
+
+def test_stop_은_승객_배선_결손에도_부분_스케일다운을_안_남긴다(monkeypatch, wiring):
+    """토글은 켜졌는데 워커 목록이 빈 배선에서, 그 조회를 스케일다운 루프 안에서 처음
+    하면 공용 서비스를 0 으로 내린 **뒤** SystemExit 이라 나머지 승객 워커가 밤새
+    desired 1 로 남는다. 게이트 전에 전부 해석하면 아무것도 안 내린 채 죽는다."""
+    monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")   # 켜고
+    monkeypatch.delenv(session_ops.ENV_NEWS_WORKER_SERVICES, raising=False)  # 목록은 빔
+    monkeypatch.setenv(session_ops.ENV_INAV_WORKER_SERVICES, "svc-inav-worker")
+    monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+    monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+
+    class Ledger:
+        def session_snapshot(self, *, session_id):
+            return {"phase": "DRAINED"}
+
+        def request_drain(self, *, session_id, now):
+            return True
+
+    monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: Ledger())
+    monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+
+    with pytest.raises(SystemExit):
+        session_ops.stop_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis")
+
+    assert wiring.calls == [], "배선 결손은 아무것도 내리기 전에 죽어야 한다"
