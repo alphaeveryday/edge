@@ -63,7 +63,8 @@ from edge_ontology import load_authority_registry, load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import TOO_LONG, load_resolution_index, plan_resolution
+from ..entity_resolution import (POLICY_EXCLUDED_REASONS, TOO_LONG,
+                                 load_resolution_index, plan_resolution)
 from ..lake import Storage, feature_news_assertions_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -314,11 +315,17 @@ def run(
                         if entity_id is None:
                             text = argument.get("text")
                             if isinstance(text, str) and text.strip():
+                                text = text.strip()
                                 # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
-                                unresolved_texts[text.strip()] = unresolved_texts.get(text.strip(), 0) + 1
+                                # ⚠️ **정책상 제외한 사유는 빼고 센다**(ALPHA-857) — 척도·
+                                # 문장꼴은 "못 붙인 것"이 아니라 "안 붙이기로 한 것"이라,
+                                # 섞이면 이 목록이 이미 기각한 방향(매출을 개념으로 추가)을
+                                # 1순위로 추천한다. 제외분은 자기 카운터·표본이 센다.
+                                if reason not in POLICY_EXCLUDED_REASONS:
+                                    unresolved_texts[text] = unresolved_texts.get(text, 0) + 1
                                 if (reason == TOO_LONG
                                         and len(too_long_sample) < _TOO_LONG_SAMPLE_LIMIT):
-                                    too_long_sample.append(text.strip())
+                                    too_long_sample.append(text)
                     elif kind == "non_entity" and entity_id is not None:
                         # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
                         # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
@@ -429,8 +436,12 @@ def run(
             # 분자는 **붙은 것을 직접 센 수**다(사유 허용목록이 아니다). 어느 사유로
             # 붙었는지는 위 `**args_by_reason` 분포가 그대로 말한다.
             "resolved_any": resolved_any,
-            "top_unresolved": sorted(unresolved_texts.items(),
-                                     key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
+            # ⚠️ 이름이 바뀌었다(ALPHA-857, 옛 `top_unresolved`). **회수 가능한 것만**
+            # 담기 때문이다 — 정책 제외(척도·문장꼴)는 빠진다. 같은 이름에 다른 의미를
+            # 두면 옛 로그와 말없이 어긋난다(이 트랙이 `rate`·`concepts_minted` 로 두 번 겪었다).
+            "top_unresolved_recoverable": sorted(unresolved_texts.items(),
+                                                 key=lambda kv: -kv[1])[:_TOP_UNRESOLVED_LIMIT],
+            "policy_excluded_reasons": sorted(POLICY_EXCLUDED_REASONS),
             "role_kinds": args_by_role_kind,
             "role_missing": args_role_missing,
             "out_of_vocabulary_roles": unknown_roles,
