@@ -45,10 +45,11 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
         </>
       ) : (
         <>
-          {/* 실행 **목록**이 아니라 원장이다 — 아래 404 분기와 같은 이유로, 실 API 런키를
-            * 들고 온 사용자를 스냅샷 런만 세우는 목록으로 보내면 "없다"로 읽힌다. 한 화면이
-            * 두 목적지를 말하지 않게 한다. */}
-          <Link to="/sources">실행 원장</Link>
+          {/* 실행 **목록**이 아니라 원장 근거다 — 아래 404 분기와 같은 이유로, 실 API
+            * 런키를 들고 온 사용자를 스냅샷 런만 세우는 목록으로 보내면 "없다"로 읽힌다.
+            * 이름은 그 화면이 자기를 부르는 이름을 쓴다(AdminLayout 의 페이지 제목 =
+            * `원장 근거`) — 링크 텍스트와 도착지 제목이 다르면 잘못 온 줄 안다. */}
+          <Link to="/sources">원장 근거</Link>
           <span aria-hidden="true">›</span>
         </>
       )}
@@ -87,12 +88,18 @@ export function HoldingsImpactPage() {
           <p className="t-sm m-0" style={{ fontWeight: 600 }}>조사할 실행이 지정되지 않았습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             구성종목 결손 상세는 특정 <code>etf-daily</code> 실행의 기대 목록을 기준으로 계산합니다 —
-            실행이 정해지지 않으면 최신 런을 임의로 골라 보여주지 않습니다. 실행 원장에서 런을
-            먼저 지목하면 — 그 실행이 구성종목 결손 상태일 때 — 거기서 이 화면으로 오는 길이
-            열립니다. 문맥 없이 여는 원장에는 그 선택지가 없습니다.
+            실행이 정해지지 않으면 최신 런을 임의로 골라 보여주지 않습니다.
+          </p>
+          {/* 없는 동선을 약속하지 않는다. 실 API 런을 고를 수 있는 **목록형 진입점은 지금
+            * 없고**, 있는 것은 원장 근거의 런 키 직접 입력 폼뿐이다. 그 사실을 그대로 쓴다 —
+            * "원장에서 런을 지목하면"이라고 쓰면 없는 목록을 찾게 만든다. */}
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 6 }}>
+            런 키를 알고 있다면 <b>원장 근거</b>의 <b>런 키로 직접 열기</b>에 입력해 그 실행의
+            원장을 열 수 있습니다. 거기서 그 실행이 구성종목 결손 상태이면 이 화면으로 오는
+            링크가 생깁니다.
           </p>
           <p className="t-xs m-0" style={{ marginTop: 8 }}>
-            <Link to="/sources">실행 원장으로 이동 →</Link>
+            <Link to="/sources">원장 근거로 이동 →</Link>
           </p>
         </div>
       </div>
@@ -106,7 +113,12 @@ export function HoldingsImpactPage() {
         <div className="flex flex-col gap-4">
           <Crumb runKey={runKey} incidentId={incidentId} />
           <div className="card card-pad">
-            <p className="t-sm m-0" style={{ fontWeight: 600 }}>지정한 실행을 찾을 수 없습니다</p>
+            {/* 원장 근거의 404 도 "지정한 실행을 찾을 수 없습니다"라고 말한다 — 이 화면의
+              * 주장은 그보다 좁으니(런이 아니라 그 런의 **기대 목록**) 제목에서 갈라 둔다.
+              * 안 그러면 링크를 눌러 같은 문장을 다시 보고 같은 벽으로 읽는다. */}
+            <p className="t-sm m-0" style={{ fontWeight: 600 }}>
+              이 실행의 기대 목록을 찾을 수 없습니다
+            </p>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
               {/* 실행 **목록**으로 보내지 않는다 — 그 화면은 스냅샷 런만 세워서, 실 런키를
                 * 들고 온 사용자가 거기서도 자기 실행을 못 보고 "없다"로 한 번 더 읽는다.
@@ -115,7 +127,9 @@ export function HoldingsImpactPage() {
                 * 키를 사용자가 폼에 다시 타이핑하게 두지 않는다. */}
               <code>{runKey}</code> 의 기대 목록이 원장에 없습니다. 다른 실행으로 대체하지
               않습니다.{' '}
-              <Link to={`/sources?runKey=${encodeURIComponent(runKey)}`}>이 실행의 원장 보기 →</Link>
+              <Link to={`/sources?runKey=${encodeURIComponent(runKey)}`}>
+                이 실행의 원장 근거 보기 →
+              </Link>
             </p>
           </div>
         </div>
