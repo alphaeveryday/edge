@@ -39,6 +39,69 @@ from .paneltest import (ALPHA, MIN_N, PERMS, SEED, _base, _panel_rows,
                         _pctile, _two_sided)
 from .paneltest import FEATURES, LAYER_Y
 
+# ── 시장 사건 분절점 (구 `causeflow` 에서 이관, ALPHA-862) ───────────────────
+# 그 모듈은 P0-P9 인과 파이프라인으로 교체된 뒤 배선이 0 이라 지웠다. 여기서만
+# 쓰던 세 조각을 소유권째 가져온다 - 안 쓰는 638줄을 남겨 두는 것보다 낫다.
+
+_GROUND_SQL = """
+SELECT e.event_type_code, e.role_code, any_value(e.title) AS title,
+       coalesce(min(sc.published_kst), min(CAST(e.available_at AS TIMESTAMP))) AS t,
+       min(sc.published_kst) IS NOT NULL AS t_exact,
+       any_value(th.novelty_status), any_value(th.thread_key), any_value(th.current_stage),
+       min(e.trade_date) AS td
+FROM v_event e
+LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
+{promote}
+WHERE e.instrument_id = '{iid}'
+  AND e.trade_date > DATE '{since}' AND e.trade_date <= DATE '{day}'
+GROUP BY e.source_event_id, e.event_type_code, e.role_code
+ORDER BY t
+"""
+
+# 시장 전체 사건 = 종목 원인이 아니다. 서킷브레이커·거시지표·정책은 **시장층의
+# 왜**이고, 고유층 가설의 후보가 되면 시장 충격을 종목 사건으로 위장한다.
+# 실측(000660 07-29): 10:17 코스피 서킷브레이커(낙폭 8%)가 종목에 role=MEMBER 로
+# 붙어 있는데 산문이 종목 사건과 한 줄에 섞어 놓았다.
+_MARKET_WIDE = ("MARKET_STRUCTURE.", "MACRO.", "POLICY.")
+
+_PROMOTE = """
+LEFT JOIN rdb.public.event_evidence ev ON ev.source_event_id = e.source_event_id
+LEFT JOIN rdb.public.document_assertion da ON da.assertion_id = ev.assertion_id
+LEFT JOIN rdb.public.document doc ON doc.document_id = da.document_id
+LEFT JOIN tau_sidecar sc ON sc.article_id = doc.source_document_id
+"""
+
+
+def prev_trading_day(lake, day: str) -> str:
+    """직전 거래일. 그 다음부터 오늘까지가 갭의 정당한 원인 구간이다."""
+    rows = lake.sql(f"""SELECT max(CAST(ts AS DATE)) FROM bars_5m
+                        WHERE CAST(ts AS DATE) < DATE '{day}'""")
+    return str(rows[0][0]) if rows and rows[0][0] else day
+
+
+def market_event_marks(lake, instrument_id: str, day: str) -> list[str]:
+    """시장 사건(서킷브레이커·거시·정책)의 당일 시각 = 경로 분절점.
+
+    임의 등분하면 '왜 이 구간에서' 에 답이 없고, 종목 사건으로 자르면 시장 충격을
+    종목 이야기로 위장한다. 분절은 **시장 사건**이 한다.
+    """
+    from ..adapters.sql_surface import views_sql
+
+    since = prev_trading_day(lake, day)
+    # 뷰 표면만 (피처 CTE 없이) — 접지 조회는 파생 피처가 필요 없다.
+    base = "WITH " + views_sql(
+        f"TIMESTAMP '{day} 23:59:59'", f"DATE '{day}'", "rdb.public.")
+    try:
+        rows = lake.sql((base + _GROUND_SQL).format(
+            iid=instrument_id, day=day, since=since,
+            promote=_PROMOTE if lake.exists.get("tau_sidecar") else ""))
+    except Exception:                               # noqa: BLE001
+        return []
+    out = {str(r[3])[11:16] for r in rows
+           if r[0].startswith(_MARKET_WIDE) and str(r[8]) == day and r[4]}
+    return sorted(m for m in out if "09:00" < m < "15:30")
+
+
 # 매칭 캘리퍼 — 전역 상수. 셀별 조정 금지 (조정하면 대조군을 고르는 셈이다).
 CAL_LOGCAP = 0.75      # |Δln(시총)| 상한 ≈ 2.1배
 CAL_BETA = 0.40        # |Δβ_m| 상한
@@ -661,9 +724,9 @@ def reduce_market(lake, day: str, *, symbol: str = "") -> dict:
     검정 결과가 아니라 **환원 결과**라 판정을 붙이지 않는다 - 회계와 사실이다.
     """
     from .attribute import gap_covariate
-    from .causeflow import _prev_trading_day
-    from .layers import market_source, overnight
-    out: dict = {"day": day, "since": _prev_trading_day(lake, day)}
+
+    from .attribute import market_source, overnight
+    out: dict = {"day": day, "since": prev_trading_day(lake, day)}
     try:
         out["overnight"] = sorted(overnight(lake, day), key=lambda x: -abs(x[1]))[:4]
     except Exception as e:                          # noqa: BLE001
@@ -719,7 +782,7 @@ def say_market(r: dict, iid: str = "", lake=None) -> str:
         out.append(f"     코스피 중 그 팩터로 설명되는 몫 "
                    f"[{ms[0] * 100:+.2f}, {ms[1] * 100:+.2f}]%p")
     if lake is not None and iid:
-        from .causeflow import market_event_marks
+
         marks = market_event_marks(lake, iid, r["day"])
         out.append("  ② 장중 시장 사건 τ: " + (" · ".join(marks) if marks else "없음"))
     out.append("  ③ 국면: 계열족 `국면/수준` (시장 20일 변동성) 을 조절자로 넣어 검정한다")

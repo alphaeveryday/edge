@@ -81,7 +81,7 @@ class Verdicts:
     significant_market: int = 0     # 유의한 시장 사건 시행
     undecided: int = 0              # 판정불가
     route_kind: str = ""            # 시장 | 섹터 | 고유 | 혼합 | 괴리단독
-    idio_qualified: bool = True     # 고유 자격 (잔차 공통상관)
+    degraded: bool = False          # 산출 경로가 자기 산출을 폐기했다(예: 라우팅 실패)
     bundles: tuple[str, ...] = ()   # 근거 묶음 id
 
     @property
@@ -98,8 +98,14 @@ class Verdicts:
 
     @property
     def confidence_level(self) -> str:
-        """확신도. 고유 자격 미달·판정불가 다수는 LOW 로 내린다 - 숨기지 않는다."""
-        if not self.idio_qualified:
+        """확신도. 폐기·판정불가 다수는 LOW 로 내린다 - 숨기지 않는다.
+
+        고유 자격(ρ) 강등은 ALPHA-862 로 없어졌다 - ρ 게이트 자체가 층 회계에서
+        빠졌고, 그 판정은 칼만(ALPHA-803)이 신뢰구간과 함께 다시 가져온다.
+        `degraded` 강등은 ρ 와 무관한 별개 사실이라 남는다: 산출 경로가 자기
+        산출을 폐기한 런이 더 확신 있게 영속되면 안 된다(Rule 12).
+        """
+        if self.degraded:
             return "LOW"
         if self.applied_edges or self.credible:
             return "HIGH" if self.undecided == 0 else "MEDIUM"
@@ -122,8 +128,8 @@ def _selfcheck() -> None:
     assert all(Verdicts(route_kind=k).explanation_type in TYPES
                for k in ("시장", "섹터", "고유", "혼합", "괴리단독", ""))
 
-    # 고유 자격 미달은 무조건 LOW - 숨기지 않는다
-    assert Verdicts(applied_edges=3, idio_qualified=False).confidence_level == "LOW"
+    # 폐기 강등 - 산출 경로가 자기 산출을 버린 런은 무조건 LOW
+    assert Verdicts(applied_edges=3, degraded=True).confidence_level == "LOW"
     assert Verdicts(applied_edges=1).confidence_level == "HIGH"
     assert Verdicts(applied_edges=1, undecided=2).confidence_level == "MEDIUM"
     assert Verdicts(undecided=4).confidence_level == "LOW"
@@ -172,7 +178,7 @@ def as_explanation(honest: str, headline: str, v: Verdicts, stage: dict):
     })
 
 
-def verdicts_from(text: str, *, route_kind: str, idio_qualified: bool,
+def verdicts_from(text: str, *, route_kind: str, degraded: bool = False,
                   bundles: tuple[str, ...] = ()) -> Verdicts:
     """산출 산문 → 판정 요약. **게이트가 낸 어휘만 센다** - '유의' 를 그냥 세면
     '무유의' 줄에도 걸린다."""
@@ -181,4 +187,4 @@ def verdicts_from(text: str, *, route_kind: str, idio_qualified: bool,
         credible=text.count("[함의]") - text.count("[함의] 없음"),
         significant_market=text.count("**유의**"),
         undecided=text.count("판정불가"),
-        route_kind=route_kind, idio_qualified=idio_qualified, bundles=bundles)
+        route_kind=route_kind, degraded=degraded, bundles=bundles)

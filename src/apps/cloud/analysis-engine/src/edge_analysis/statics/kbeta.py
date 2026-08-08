@@ -346,8 +346,22 @@ def _resid_rho(members, idx, ok: np.ndarray, rm: np.ndarray,
         res.append(v - X @ beta)
     if len(res) < 3:
         return None, len(res)
-    from .layers import residual_rho
-    return residual_rho(res), len(res)
+    return _residual_rho(res), len(res)
+
+
+def _residual_rho(resid: list[np.ndarray]) -> float | None:
+    """잔차 평균 횡단면 상관. **ρ≈0 이어야 '고유'라 부를 자격이 생긴다** -
+    남아 있으면 이름 없는 공통요인이 있다는 직접 증거다.
+
+    구 `layers.residual_rho` 의 이관(ALPHA-862) - 층 회계에서 ρ 게이트가 빠진 뒤
+    이 판정은 칼만 축 소유다.
+    """
+    if len(resid) < 3:
+        return None
+    m = np.corrcoef(np.vstack(resid))
+    iu = np.triu_indices_from(m, k=1)
+    v = m[iu][np.isfinite(m[iu])]
+    return float(v.mean()) if len(v) else None
 
 
 def path_layers3(res: dict) -> list[tuple[str, float, float, float, float, float]]:

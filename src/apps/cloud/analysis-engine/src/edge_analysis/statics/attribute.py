@@ -106,13 +106,9 @@ def resid_sigma(lake, instrument_id: str, day: str) -> tuple[float | None, str]:
 
 # 갭 β 의 최소 표본 - 이보다 얇으면 부재 선언.
 #
-# ⚠️ **`layers.MIN_BETA_N` 과 같은 숫자지만 세는 것이 다르다.** 저기 `hist` 는
-# `[-BETA_WINDOW:]` 로 60거래일에 캡이 걸리고(그래서 20 은 "창의 1/3"), 여기 `hist` 는
-# `gap_covariate` 질의에 LIMIT 이 없어 **전 이력**이다(그래서 20 은 "역사상 20일").
-# 값을 맞춰 두는 이유는 두 판정이 같은 런에서 갈리는 것을 줄이려는 것이지 두 표본이
-# 같아서가 아니다 - 재료 자체가 다르므로(층은 수익률 계열, 여기는 갭×미국팩터 쌍)
-# 값이 같아도 한쪽만 서는 날은 남는다. 그건 이 상수로 못 닫는다.
-# 여기서 import 하지 않는 이유는 순환(`layers` → `attribute`)이다.
+# 층 β(ALPHA-862 폐지)와 같은 숫자였지만 세는 것이 달랐다 - 여기 `hist` 는
+# `gap_covariate` 질의에 LIMIT 이 없어 **전 이력**이고(그래서 20 은 "역사상 20일"),
+# 지금 이 상수의 소유자는 갭 축(`gap_covariate`·`market_source`)뿐이다.
 MIN_BETA_N = 20
 
 
@@ -209,6 +205,82 @@ def _us_factor(lake, tk6: str, day: str) -> str:
     except Exception:                               # noqa: BLE001 - 부재는 기본값
         pass
     return US_FACTOR_DEFAULT
+
+
+# ── 밤사이 미국장 (구 `layers` 에서 이관, ALPHA-862) ─────────────────────────
+# 층 β 는 폐지됐지만 이 둘은 **갭 축**이다 - 재료가 다르다(층은 구간 수익률 계열,
+# 여기는 코스피×미국팩터 일봉 쌍). 갭 β 규율을 소유한 이 모듈이 맡는다.
+
+_SRC_WINDOW = 60   # 회귀 창(거래일). 당일 제외 - 오늘 충격이 β 를 오염시키면 안 된다
+
+
+def overnight(lake, day: str) -> list[tuple[str, float]]:
+    """한국 개장 전에 **이미 확정된** 미국장 수익률 [(이름, 수익률)].
+
+    한국 09:00 KST 개장 시점에 미국 전 세션은 끝나 있다 - 그래서 갭의 정당한 원인
+    후보이고, 장중 국내 사건보다 시간적으로 앞선다. 미국 날짜가 한국 날짜보다
+    같거나 앞선 마지막 세션만 쓴다(선견 금지).
+    """
+    rows = lake.sql(
+        "SELECT symbol, any_value(name), list(close ORDER BY date), "
+        "       list(CAST(date AS DATE) ORDER BY date) "
+        f"FROM layers_daily WHERE kind = 'us' AND date < DATE '{day}' GROUP BY symbol")
+    out = []
+    for _sym, nm, closes, dates in rows:
+        if len(closes) < 2 or closes[-2] <= 0:
+            continue
+        out.append((nm, float(closes[-1] / closes[-2] - 1.0), dates[-1]))
+    if not out:
+        return []
+    last = max(d for *_x, d in out)
+    return [(nm, r) for nm, r, d in out if d == last]
+
+
+def _daily_log_returns(lake, day: str, kind: str) -> dict[str, tuple[str, dict]]:
+    """{symbol: (name, {date: log수익률})} - `layers_daily` 일봉. 당일 포함."""
+    rows = lake.sql(
+        "SELECT symbol, any_value(name), list(close ORDER BY date), "
+        "       list(CAST(date AS DATE) ORDER BY date) "
+        f"FROM layers_daily WHERE kind = '{kind}' AND date <= DATE '{day}' "
+        "GROUP BY symbol")
+    out = {}
+    for sym, nm, closes, dates in rows:
+        if len(closes) < 2 or any(c <= 0 for c in closes):
+            continue
+        out[sym] = (nm, {dates[i]: math.log(closes[i] / closes[i - 1])
+                         for i in range(1, len(closes))})
+    return out
+
+
+def market_source(lake, day: str, proxy: str = "S&P500") -> tuple[float, float] | None:
+    """오늘 코스피 수익률 중 **밤사이 미국장으로 설명되는 몫** [lo, hi] (%가 아닌 비율).
+
+    투자자가 실제로 묻는 것은 "코스피가 왜 빠졌나" 다. 밤사이 미국 지수를 보여만
+    주고 안 쓰면 그 질문에 답이 없다. 점이 아니라 구간인 이유는 β 추정 오차를
+    숨기지 않기 위해서다 - 이 모듈의 갭 공변량과 같은 규율이다.
+    """
+    from .layers import MARKET_CODE
+
+    import datetime as _dtm
+    us = _daily_log_returns(lake, day, "us")
+    mkt = _daily_log_returns(lake, day, "market")
+    tgt = next((v for _k, v in us.items() if v[0] == proxy), None)
+    if tgt is None or MARKET_CODE not in mkt:
+        return None
+    d0 = _dtm.date.fromisoformat(day)
+    km, um = mkt[MARKET_CODE][1], tgt[1]
+    # 한국 D 일의 개장 전에 확정된 미국 세션 = 미국 날짜 < D 중 마지막.
+    prev = {d: max((u for u in um if u < d), default=None) for d in km if d <= d0}
+    pairs = [(km[d], um[prev[d]]) for d in sorted(km)
+             if d < d0 and prev.get(d) is not None][-_SRC_WINDOW:]
+    if len(pairs) < MIN_BETA_N or d0 not in km or prev.get(d0) is None:
+        return None
+    ci = _beta_ci([b for _a, b in pairs], [a for a, _b in pairs])
+    if ci is None:
+        return None
+    u_now = um[prev[d0]]
+    a, c = ci[0] * u_now, ci[1] * u_now
+    return (min(a, c), max(a, c))
 
 
 def gap_covariate(lake, ticker: str, day: str, gap_share: float):
@@ -468,9 +540,10 @@ def run_cell(lake: CausalLake, ask, ticker: str, instrument_id: str, day: str) -
     import os
     from .registry import recall, record
     shares, labels, after_close = load_cell(lake, ticker, instrument_id, day)
-    from .layers import overnight as _overnight
+    # `overnight` 은 이 모듈 소유다(ALPHA-862 이관) - 지역 import 로 옛 자리를
+    # 가리키면 모듈 로드·테스트는 통과하고 라이브 첫 호출에서만 죽는다.
     facts, types = cell_facts(ticker, day, shares, labels, after_close,
-                              _overnight(lake, day))
+                              overnight(lake, day))
     root = os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")
 
     tuples: list[HypothesisTuple] = []

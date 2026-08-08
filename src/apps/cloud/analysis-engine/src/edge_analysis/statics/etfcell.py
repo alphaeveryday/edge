@@ -126,11 +126,7 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                f"{roll.total * 100:+.2f}%p (로그)")
     out.append(f"  귀속 커버리지 {roll.weight_covered:.0%} · 구성종목 {roll.n_names}"
                + (f" · 추적오차 {roll.rollup_gap * 100:+.2f}%p" if roll.rollup_gap else "")
-               + (f" · 잔차 공통상관 ρ={roll.rho:+.3f}" if roll.rho is not None else "")
                + (f" · 동어반복 제외 {len(roll.twins)}" if roll.twins else ""))
-    if roll.rho is not None and abs(roll.rho) > 0.20:
-        out.append(f"  **고유 자격 없음** (ρ={roll.rho:+.3f}) — 이름 없는 공통요인이 "
-                   "남아 있다. 아래 고유 몫은 상한으로 읽어라")
 
     r = route_etf(roll, pv)
     out.append(say_route(r))
@@ -195,7 +191,8 @@ def _dual(lake, roll, r, day: str, honest: str, ask, split=None,
         # ETF 는 창이 없다(5분봉 부재) - 밤사이가 하루의 시작이므로 그것을 시점으로.
         recent={"when": "밤사이", "events": facts[:1]},
         established=facts, overnight=over,
-        unexplained_top=False, idio_qualified=roll.rho is None or abs(roll.rho) < 0.20)
+        # ρ 게이트는 층 회계에서 빠졌다(ALPHA-862) - 고유 자격 판정은 칼만이 가져온다.
+        unexplained_top=False)
     # 통계 재료. **수치는 재료에만** 있고 산문에는 못 들어간다(코드가 막는다).
     # 밤사이 환원도 통계다(β 구간 × 팩터 수익) - 이것을 참조 가능한 근거로 안 주면
     # '밤사이 미국 반도체가 올라서' 라는 주장이 접지 실패로 즉사한다(실측 2회).
@@ -387,8 +384,8 @@ def _workflow(lake, roll, r, day: str,
     from .verifier import say_implications, verify
     for sec in sectors:
         out.append(f"[워크플로우] 섹터 공통 처치 — {sec.name} "
-                   f"(β {sec.beta:.2f} [{sec.lo:.2f}, {sec.hi:.2f}] · "
-                   f"층 수익 {sec.ret * 100:+.2f}%p)")
+                   f"(층 수익 {sec.ret * 100:+.2f}% · 시장 차감 "
+                   f"{sec.contribution * 100:+.2f}%p)")
         ets = _sector_types(lake, day)
         if not ets:
             out.append("  그날 2종목 이상에 닿은 타입이 없다 - 섹터 공통 처치를 "
