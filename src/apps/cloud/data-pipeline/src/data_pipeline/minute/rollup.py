@@ -160,7 +160,10 @@ def maybe_rollup(
     여기는 **발화 게이트만** 본다 — 집계·쓰기는 `_rollup_day` 다(EOD 배치와 공유).
     """
     planned = plan_session_windows(
-        datetime.strptime(session_date, "%Y-%m-%d").date(), universe=universe
+        datetime.strptime(session_date, "%Y-%m-%d").date(), universe=universe,
+        # 롤업은 가격 분봉 전용이라(이 모듈이 dataset 을 상수로 리젝트한다) 격자도
+        # 가격 규칙 그대로다.
+        extended_hours=True,
     )
     bucket = _bucket_of(window_start)
     members = [

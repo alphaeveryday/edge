@@ -28,7 +28,12 @@ from datetime import datetime, timezone
 
 from .models import load_universe_uri, plan_session_windows
 from .repository import MinuteLedger, SessionFinalizedError, UniverseConflictError
-from .states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET, UNIVERSE_DATASETS
+from .states import (
+    EXTENDED_HOURS_DATASETS,
+    MINUTE_DATASETS,
+    SOURCE_GROUPS_BY_DATASET,
+    UNIVERSE_DATASETS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +93,13 @@ def plan_session_cli(
         logger.error("universe 를 읽을 수 없다: %s", error)
         return 2
 
-    windows = plan_session_windows(planned_date, universe=universe_model)
+    # 시간외 격자는 **그 dataset 이 시간외를 수집할 수 있을 때만** 넓힌다 — iNAV 는
+    # 하한이 09:00 이라 08:00~08:59 를 계획하면 매 거래일 60 window 가 아무도 못 채운
+    # 채 DUE 로 남고, 소급이 불가라 영구 결손이 된다.
+    windows = plan_session_windows(
+        planned_date, universe=universe_model,
+        extended_hours=dataset in EXTENDED_HOURS_DATASETS,
+    )
     ledger = MinuteLedger(db=settings.db)
     try:
         session_id, created = ledger.plan_session(

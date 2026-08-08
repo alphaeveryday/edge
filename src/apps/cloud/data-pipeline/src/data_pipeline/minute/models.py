@@ -216,7 +216,7 @@ class CollectionResult(BaseModel):
 
 
 def plan_session_windows(
-    session_date: date, *, universe: Universe | None
+    session_date: date, *, universe: Universe | None, extended_hours: bool
 ) -> tuple[tuple[datetime, datetime], ...]:
     """하루의 명시적 1분 half-open window 목록 (KST).
 
@@ -230,10 +230,16 @@ def plan_session_windows(
     390개만 계획되고, Worker 는 claim 할 행 자체가 없어 시간외 구간이 **아무 실패
     신호 없이** 누락된다.
 
+    `extended_hours` 도 **기본값이 없다** — 같은 이유다. 기본 True 를 두면 시간외를
+    수집할 수 없는 dataset(iNAV 의 하한은 09:00)의 호출자가 인자를 빠뜨렸을 때 격자만
+    08:00 로 넓어지고, 그 60 window 는 아무도 못 채운 채 매 거래일 DUE 로 쌓인다.
+    `extended_hours=False` 는 그럴 때 쓴다 — universe 에 시간외 종목이 있어도 격자를 넓히지 않는다.
+    넓히면 그 dataset 의 어댑터가 영원히 못 채우는 window 가 매일 DUE 로 쌓인다.
+
     tz 는 KST 고정이다 — 거래시간 상수가 KST 로 정의됐고, `units_at` 도 KST 로 읽는다.
     한쪽만 다른 tz 로 부르면 계획과 기대가 통째로 어긋난다.
     """
-    extended = bool(universe and universe.extended_hours_ids)
+    extended = extended_hours and bool(universe and universe.extended_hours_ids)
     open_at = datetime.combine(
         session_date, EXTENDED_OPEN if extended else SESSION_OPEN, tzinfo=KST
     )

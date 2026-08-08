@@ -48,7 +48,7 @@ UNIVERSE_EXT = Universe(
 def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
                  universe=UNIVERSE, first_window=0, is_backfill=False):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-    planned = plan_session_windows(SESSION_DATE, universe=universe)
+    planned = plan_session_windows(SESSION_DATE, universe=universe, extended_hours=True)
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
         universe_version=universe.universe_version, universe_hash=universe.universe_hash,
@@ -619,7 +619,7 @@ class TestPriceWorkerCli:
         from data_pipeline.minute.worker import price_worker_cli
         db = FakeMinuteDB()
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_hours=True)
         ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
             universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
@@ -688,7 +688,7 @@ class TestPriceWorkerConfig:
         from types import SimpleNamespace
         db = FakeMinuteDB()
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_hours=True)
         session_id, _ = ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
             universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
@@ -776,7 +776,7 @@ class TestPriceWorkerConfig:
         from data_pipeline.minute.worker import PriceWorker, price_worker_cli
         db = FakeMinuteDB()
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_hours=True)
         ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
             universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
@@ -823,7 +823,7 @@ class TestPriceWorkerConfig:
         from data_pipeline.minute.worker import PriceWorker, price_worker_cli
         db = FakeMinuteDB()
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_hours=True)
         ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
             universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,

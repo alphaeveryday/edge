@@ -30,7 +30,7 @@ from data_pipeline.minute.repository import (
 
 _DB = DbConfig(password="x")
 SESSION_DATE = date(2026, 7, 31)
-WINDOWS = plan_session_windows(SESSION_DATE, universe=None)
+WINDOWS = plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)
 NOW = datetime(2026, 7, 31, 9, 5, tzinfo=KST)  # 장중 — 앞쪽 window 들이 due
 
 

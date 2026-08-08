@@ -147,7 +147,7 @@ class TestResultContract:
 
 class TestSessionWindows:
     def test_390_windows_fixed(self):
-        windows = plan_session_windows(SESSION_DATE, universe=None)
+        windows = plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)
         assert len(windows) == WINDOWS_PER_SESSION == 390
         # half-open 연속: 이전 end == 다음 start, 장 시작·마감 경계 고정
         assert windows[0][0] == datetime(2026, 7, 31, 9, 0, tzinfo=KST)
@@ -264,7 +264,7 @@ class TestTradingHoursClass:
         커밋된다(08-03 실측: 0005G0 수집 43,710 V=0 vs 소급 43,305 V=140, 일봉 43,305).
         지연이 0 이면 그 회귀가 그대로 돌아온다.
         """
-        windows = plan_session_windows(SESSION_DATE, universe=None)
+        windows = plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)
         close_end = windows[-1][1]
         assert close_end == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert scheduled_at_for(close_end, dataset="price_minute") == close_end + timedelta(
@@ -299,7 +299,7 @@ class TestTradingHoursClass:
         """
         settled = datetime(2026, 7, 31, 15, 30, tzinfo=KST) + timedelta(
             seconds=FINAL_WINDOW_SETTLE_SEC)
-        auction = [we for _, we in plan_session_windows(SESSION_DATE, universe=None)
+        auction = [we for _, we in plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)
                    if CLOSING_AUCTION_OPEN < we.astimezone(KST).time() <= SESSION_CLOSE]
         assert len(auction) == 10, "15:21~15:30 으로 끝나는 창 10개"
         # 기준은 각 window_end 가 아니라 **마감 시각**이다 — 구간 전체가 같은 한 번의
@@ -326,13 +326,13 @@ class TestTradingHoursClass:
 
     def test_non_close_windows_are_scheduled_at_window_end(self):
         """접수 구간 밖 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""
-        windows = plan_session_windows(SESSION_DATE, universe=None)
+        windows = plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)
         assert all(scheduled_at_for(we, dataset="price_minute") == we for _, we in windows[:-10])
 
     def test_extended_session_also_defers_its_1530_window(self):
         """시간외 세션(720)에도 15:30 로 끝나는 window 가 있고 거기에도 걸린다 —
         단일가 체결 시각은 세션 길이와 무관하다. 마지막(20:00) window 는 대상이 아니다."""
-        windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))
+        windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)), extended_hours=True)
         by_end = {we: scheduled_at_for(we, dataset="price_minute") for _, we in windows}
         close = datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert by_end[close] == close + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
@@ -344,7 +344,7 @@ class TestTradingHoursClass:
         assert all(by_end[we] == we for we in after_close)
 
     def test_extended_universe_plans_720_windows(self):
-        windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)))
+        windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)), extended_hours=True)
         assert len(windows) == WINDOWS_PER_EXTENDED_SESSION == 720
         assert windows[0][0] == datetime(2026, 7, 31, 8, 0, tzinfo=KST)
         assert windows[-1][1] == datetime(2026, 7, 31, 20, 0, tzinfo=KST)
@@ -352,8 +352,8 @@ class TestTradingHoursClass:
 
     def test_no_extended_units_keeps_390(self):
         # 클래스가 선언되지 않은 universe 는 지금까지의 정규장 계획 그대로다
-        assert len(plan_session_windows(SESSION_DATE, universe=self._universe())) == 390
-        assert len(plan_session_windows(SESSION_DATE, universe=None)) == WINDOWS_PER_SESSION
+        assert len(plan_session_windows(SESSION_DATE, universe=self._universe(), extended_hours=True)) == 390
+        assert len(plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)) == WINDOWS_PER_SESSION
 
     def test_units_at_narrows_outside_regular_hours(self):
         universe = self._universe(("C1",))
@@ -392,7 +392,7 @@ class TestTradingHoursClass:
         # 계획(plan_session_windows)과 기대(units_at)가 같은 규칙에서 나온다는 성질 —
         # 갈리면 Worker 가 기대 0 인 window 를 영원히 재시도한다
         for universe in (self._universe(), self._universe(("C1", "C2"))):
-            for window_start, _ in plan_session_windows(SESSION_DATE, universe=universe):
+            for window_start, _ in plan_session_windows(SESSION_DATE, universe=universe, extended_hours=True):
                 assert universe.units_at(window_start)
 
     def test_extended_ids_must_be_in_universe(self):

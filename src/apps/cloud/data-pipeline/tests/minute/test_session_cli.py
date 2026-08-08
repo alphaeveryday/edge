@@ -102,7 +102,7 @@ class TestPlan:
         assert session["universe_version"] == "univ-fixture-v1"
 
     def test_extended_universe_plans_720_windows(self, ledger_db, capsys):
-        # ⚠️ 이 반례가 없으면 CLI 가 실수로 `plan_session_windows(universe=None)` 을 불러도
+        # ⚠️ 이 반례가 없으면 CLI 가 실수로 `plan_session_windows(universe=None, extended_hours=True)` 을 불러도
         # 통과한다(선언 없는 fixture 는 어느 쪽이든 390). 실제 시간외 universe 에서는
         # 720 중 330 window 가 조용히 누락된다.
         code = plan_session_cli(

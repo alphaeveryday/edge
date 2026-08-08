@@ -43,7 +43,7 @@ def ready_session():
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
         universe_version="v1", universe_hash="a" * 64,
-        windows=plan_session_windows(SESSION_DATE, universe=None)[:10],
+        windows=plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)[:10],
     )
     token = ledger.acquire_worker_fence(
         session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300

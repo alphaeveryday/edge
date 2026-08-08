@@ -89,7 +89,7 @@ class Fixture:
         self.db = FakeMinuteDB()
         self.storage = LocalStorage(root=tmp_path)
         self.ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=self.db.connect)
-        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE, extended_hours=True)
         self.session_id, _ = self.ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DAY,
             universe_version=UNIVERSE.universe_version,
@@ -289,7 +289,7 @@ class TestWorkerHook:
 
     def build_worker(self, db, tmp_path, windows=5):
         ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=db.connect)
-        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE)
+        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE, extended_hours=True)
         session_id, _ = ledger.plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DAY,
             universe_version=UNIVERSE.universe_version,
@@ -658,7 +658,7 @@ class TestRollupSessionCli:
             dataset="price_minute", source_group="toss", session_date=day,
             universe_version=UNIVERSE.universe_version,
             universe_hash=UNIVERSE.universe_hash,
-            windows=plan_session_windows(day, universe=UNIVERSE),
+            windows=plan_session_windows(day, universe=UNIVERSE, extended_hours=True),
         )
         db.sessions[sid]["phase"] = phase
         return sid
