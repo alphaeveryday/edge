@@ -106,7 +106,6 @@ REGISTRY_MISS = "registry_miss"
 NOT_RESOLVABLE = "not_resolvable"
 
 
-
 def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
     """멘션 → (concept entity_id, 정규화 키). 채번 대상이 아니면 None.
 
@@ -116,8 +115,11 @@ def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
     `assertion_id` 에서 겪은 그 일이라, "같은 함수를 쓴다"를 **호출부 합의가 아니라
     한 함수**로 강제한다(ALPHA-831).
 
-    길이 상한은 여기 두지 않는다 — 그건 "무엇을 개념으로 볼 것인가"의 정책이고 호출부마다
-    다를 수 있다. 여기는 산식만 소유한다.
+    ⚠️ **정책을 호출부에 두지 마라.** 한때 "무엇을 개념으로 볼 것인가는 호출부마다 다를
+    수 있다"는 근거로 척도 제외·길이 상한을 `plan_resolution` 에 뒀는데, `assemble_events`
+    에는 안 걸려 **같은 멘션이 입력 경로에 따라 갈렸다**(ALPHA-861 이 되돌렸다). 정책이
+    필요하면 두 writer 를 한 번에 덮는 `concept_key`(온톨로지)에 둔다 — 그 판단은
+    ALPHA-859. 여기는 산식만 소유한다.
     """
     from edge_ontology import concept_key
 

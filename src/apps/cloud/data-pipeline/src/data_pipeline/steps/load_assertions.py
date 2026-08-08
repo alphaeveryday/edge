@@ -82,8 +82,6 @@ _CREATED_SAMPLE_LIMIT = 50
 _TOP_UNRESOLVED_LIMIT = 200
 
 
-
-
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
     import pyarrow.parquet as pq
@@ -135,7 +133,7 @@ def run(
     # 세운다 — argument 마다 INSERT 하면 같은 개념에 왕복이 반복된다.
     pending_concepts: dict[str, tuple[str, str]] = {}
     concepts_minted = 0
-    # 길이 상한에 걸린 값 표본. 개수만으론 상한이 맞는지 판단할 수 없다.
+    # 미해소 표현 → 빈도. 별칭 축 도입 판단의 근거다(ALPHA-802).
     unresolved_texts: dict[str, int] = {}
     created_sample: list[dict] = []
     failures: list[dict] = []

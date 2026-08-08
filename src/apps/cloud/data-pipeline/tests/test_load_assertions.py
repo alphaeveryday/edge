@@ -593,6 +593,37 @@ def test_unresolved_sample_keeps_the_long_tail(tmp_path, monkeypatch):
 
 # ── 역할별 해소 3단 사슬 (ALPHA-831) ──────────────────────────────────────
 
+def test_every_recoverable_axis_stays_in_the_unresolved_sample(tmp_path, monkeypatch):
+    """회수 가능한 축 **셋 전부**가 미해소 표본에 남는다(ALPHA-857 → 861 로 이관).
+
+    WHY: 이 표본의 유일한 용도는 "무엇을 더 붙일 수 있게 만들까"의 근거다. 축 하나가
+    조용히 빠져도 로그는 멀쩡해 보이고 순위만 틀린다 — 특히 `ambiguous` 는 마스터에
+    이름은 있는데 대는 곳이 둘이라는 뜻이라 **회수 가능성이 가장 높은** 축이고, 그게
+    빠지면 표본이 존재 이유를 잃는다.
+
+    ⚠️ 이 단언은 원래 ALPHA-857 의 정책 제외 테스트 안에 함께 있었는데, ALPHA-861 이
+    그 테스트를 통째로 지우면서 **정책과 무관한 이 절반까지 같이 갔다**. 그때 리뷰가
+    변이로 잡았다(회수 축 둘을 표본에서 빼도 스위트가 초록이었다). 정책은 사라져도
+    "회수 축은 전부 남는다"는 계약은 남는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("ISSUER", "미등록회사"),        # unresolved
+                        ("ISSUER", "충돌이름"),          # ambiguous — 인덱스에 두 번 온 이름
+                        ("AUTHORITY", "없는기관"),       # registry_miss
+                        ("ISSUER", "삼성전자")))])])     # 적재가 되도록 하나는 붙인다
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    res = _log(storage)["argument_resolution"]
+    # 세 자리가 각자 다른 사유를 탔는지 먼저 — 안 그러면 아래가 "그 경로를 안 밟아서" 통과한다
+    assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
+    sample = {t for t, _ in res["top_unresolved"]}
+    assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 축 하나가 표본에서 빠졌다"
+
+
 def test_no_writer_local_policy_narrows_minting(tmp_path, monkeypatch):
     """채번 여부는 **온톨로지만** 정한다 — 이 writer 가 따로 좁히지 않는다(ALPHA-861).
 
@@ -611,14 +642,19 @@ def test_no_writer_local_policy_narrows_minting(tmp_path, monkeypatch):
     """
     from data_pipeline.entity_resolution import mint_concept, plan_resolution
 
-    long_name = "가" * 60          # 옛 상한(30)의 두 배
+    # ⚠️ **길이 축의 사거리를 적어 둔다.** 고정 길이 하나만 태우면 이 테스트가 막는 것은
+    # "정책의 호출부 복귀"가 아니라 "상한 ≤ 그 길이"다 — 60 만 태우면 상한 61 로 부활시켜도
+    # 통과한다(ALPHA-861 리뷰가 변이로 실증). 자릿수를 벌려 현실적 상한을 전부 덮는다.
     cases = [("METRIC", "매출"), ("METRIC", "영업이익"), ("INDICATOR", "소비자물가지수"),
              ("POLICY_RATE", "기준금리"), ("CURRENCY_PAIR", "원/달러"),
-             ("PROJECT", long_name)]
+             ("PROJECT", "가" * 60), ("PROJECT", "가" * 500)]
     for role, mention in cases:
         # 온톨로지가 채번 대상으로 보는 것부터 확인한다 — 아니면 아래 단언이
         # "그 경로를 안 밟아서" 통과한다
         coined = mint_concept(role, mention)
+        # ⚠️ 이 줄은 **온톨로지도 함께 못박는다**. ALPHA-859 가 위 독스트링이 지정한
+        # 자리(`concept_key`)에 상한을 넣으면 여기서 깨진다 — 그건 오탐이 아니라
+        # "정책이 옳은 자리로 옮겨졌다"는 신호다. 그때 이 테스트의 길이 케이스를 뺀다.
         assert coined is not None, f"{role}/{mention} 이 온톨로지에서 채번 대상이 아니다"
         entity_id, reason, minted = plan_resolution(_INDEX, role, mention)
         assert reason == "minted", f"{role}/{mention} → {reason} (writer 가 따로 좁혔다)"
