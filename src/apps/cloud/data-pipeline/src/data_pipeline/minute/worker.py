@@ -466,6 +466,10 @@ def make_price_collector(options, *, session_date) -> tuple[object, bool]:
     from .states import DATASET_PRICE_MINUTE, SOURCE_GROUPS_BY_DATASET
 
     is_backfill = session_date < datetime.now(KST).date()
+    # ⚠️ **벤더를 여기에 더하는 사람에게**: 그 어댑터의 과거일 경로가 정규장만 준다면
+    # `price_worker_cli` 의 시간외 universe 거부 게이트에 그 source 도 넣어라. 안 넣으면
+    # 시간외 window 가 구조적으로 안 나오는데 기동은 통과해, 그 window 들이 매 tick
+    # 재청구·재실패하며 세션이 영영 안 마른다(그 게이트가 존재하는 이유다).
     if options.source == "kis":
         from ..sources.kis_minute import KisHistoricalMinuteClient, KisMinuteClient
         from .kis_collector import KisPriceCollector

@@ -134,9 +134,12 @@ class MinuteCommitter:
 
         ⚠️ 알려진 천장: 이걸 끄면 그 날짜의 **정정(generation+1) 재판정도 같이 닫힌다**.
         라이브가 일부 수집한 날을 백필이 옳은 데이터로 덮어써도 새 판정은 안 돈다.
-        실손은 "gen-1 에서 발화 안 했는데 gen-2 면 발화했을 종목"뿐이다 — 이미 발화한
-        종목은 `minute_price_trigger` 의 ON CONFLICT DO NOTHING 이라 이 변경 전에도
-        재판정이 no-op 였다. 그 하루를 다시 판정해야 하면 발행 경로를 따로 세워라.
+        gen-1 job 이 **이미 처리된 뒤**라면 실손은 "gen-1 에서 발화 안 했는데 gen-2 면
+        발화했을 종목"뿐이다 — 이미 발화한 종목은 `minute_price_trigger` 의 ON CONFLICT
+        DO NOTHING 이라 이 변경 전에도 재판정이 no-op 였다. 다만 gen-1 event 가 아직
+        큐에 있는 채(Relay 적체·Consumer 정지) 재커밋되면 그 메시지는 세대 대조에서
+        `DEAD('STALE')` 로 격리되고 gen-2 는 event 가 없어 **그 window 는 아무것도 발화하지
+        않는다**. 그 하루를 다시 판정해야 하면 발행 경로를 따로 세워라.
 
         ⚠️ 이 판정을 여기서 `window_start` 로 유도하지 않는다. EOD drain 이 자정을 넘기면
         살아 있는 당일 세션의 마지막 window 들이 그 순간 과거일로 보여 발행이 끊긴다 —
