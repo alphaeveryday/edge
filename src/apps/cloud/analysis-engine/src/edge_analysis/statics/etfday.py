@@ -16,7 +16,8 @@ from __future__ import annotations
 import sys
 
 from .duck import CausalLake
-from .layers import Rollup, decompose, market_source, overnight
+from .attribute import market_source, overnight
+from .layers import Rollup, decompose
 
 
 def _pct(x: float) -> str:
@@ -43,8 +44,9 @@ def headline(lake, r: Rollup) -> str:
     for x in r.layers:
         tag = "코스피" if x.kind == "시장" else "섹터"
         ov = "" if x.kind == "시장" else f" (구성 {x.overlap * 100:.0f}% 겹침)"
-        L.append(f"     {tag} {x.name}{ov} {_pct(x.ret)}% × 민감도 β{x.beta:.2f}"
-                 f"[{x.lo:.2f},{x.hi:.2f}] = {_pct(x.contribution)}%p")
+        L.append(f"     {tag} {x.name}{ov} {_pct(x.ret)}%"
+                 f" = {_pct(x.contribution)}%p"
+                 + ("" if x.kind == "시장" else " (시장 차감)"))
         if x.kind == "시장" and src is not None:
             lo, hi = src
             # 코스피가 왜 움직였나 - 밤사이 미국으로 설명되는 몫. 점이 아니라 구간이 정직하다.
@@ -66,9 +68,6 @@ def headline(lake, r: Rollup) -> str:
         L.append(f"  후보에서 뺀 ETF: 구성이 겹쳐 동어반복 {len(r.twins)}종"
                  f" · 구성이 안 겹쳐 근거 없음 {len(r.alien)}종"
                  " — 적합도가 아니라 구성 겹침이 후보 자격을 정한다")
-    if r.rho is not None and abs(r.rho) >= 0.15:
-        L.append(f"  ⚠ 종목 잔차 공통상관 ρ={r.rho:+.3f} - 이름 없는 공통요인이 남아 있다."
-                 " 아래 '고유'는 아직 고유가 아니다")
     if r.halted:
         L.append(f"  ⚠ 거래정지 {r.halted}종목 제외 - 그날 수익률 0 은 참이 아니다")
     if r.rollup_gap is not None and abs(r.rollup_gap) > 0.005:

@@ -217,7 +217,7 @@ def test_backfill_absence_is_falsy_and_carries_a_reason(tmp_path, monkeypatch):
     CausalLake._backfill(lk, tmp_path)
 
     # 0행을 문자열로 승격하면 exists.get(name) 참/거짓 분기가 전부 뒤집힌다
-    # (causeflow·evidence 의 tau_sidecar). 부재는 falsy 로 남되 사유는 남긴다.
+    # (evidence 의 tau_sidecar). 부재는 falsy 로 남되 사유는 남긴다.
     assert all(lk.exists[n] == 0 for n in BACKFILL_SETS)
     assert not any(lk.exists[n] for n in BACKFILL_SETS)
     assert "S3 실패" in lk.backfill_notes["layers_daily"]

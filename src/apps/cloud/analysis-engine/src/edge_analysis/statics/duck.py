@@ -56,7 +56,7 @@ BARS_ICEBERG_ENV = "EDGE_BARS_ICEBERG"
 # 그것들도 상수다. 정상 폭이 또 이동하면 그때는 근거를 다시 재서 이 값을 고친다.
 MIN_LANDED_TICKERS = 100
 # 시장 층의 프록시. **`layers.MARKET_CODE` 와 같은 값이어야 한다** - import 로 묶을 수는
-# 없다(layers → athena → duck 이라 역방향은 순환이다). 갈리면 이 가드가 엉뚱한 종목을
+# 없다(레이크 기반층이 분석층을 되부르는 방향 역전 - ALPHA-862 로 athena 는 삭제). 갈리면 이 가드가 엉뚱한 종목을
 # 찾아 정상일을 폴백시키므로, 두 자리가 같은지는 테스트가 지킨다.
 MARKET_PROXY_TICKER = "069500"
 # 로컬로 내려오는 바이트 임계. 넘으면 `lake.heavy` 에 남는다(막지는 않는다).
@@ -270,7 +270,7 @@ def iceberg_covers(newest, asked_day: str, day_tickers: int = 0,
 
     ⚠️ **범위**: 이 판정은 `CausalLake(day=…)` 로 기준일을 받은 레이크에만 선다 -
     실측 23개 생성 지점 중 둘(`pipeline.py`·`window_batch.py`)뿐이고, 나머지 21곳
-    (`causeflow` 6곳 포함)은 `asked_day` 가 비어 판정 자체가 없다. "이제 부분 착지한
+    은 `asked_day` 가 비어 판정 자체가 없다. "이제 부분 착지한
     정본은 안 쓴다" 는 그 21곳에는 참이 아니다.
     """
     if newest is None:
@@ -639,7 +639,7 @@ class CausalLake:
         없어도 기본값이 있다(DEFAULTS[BACKFILL_S3_ENV]) = 컨테이너에도 원천이 있다.
         어느 경로로 읽었는지 exists 에 남긴다: "S3 (1,004,392행)" / "로컬 (1,004,392행)".
         0행은 문자열로 승격하지 않는다 - 하류가 `exists.get(name)` 의 참/거짓으로
-        분기하므로(causeflow·evidence 의 tau_sidecar) 0행이 '있음'으로 보이면 안 된다.
+        분기하므로(evidence 의 tau_sidecar) 0행이 '있음'으로 보이면 안 된다.
         대신 사유를 backfill_notes 에 남기고 coverage() 가 그것을 읽는다.
 
         `layers_daily` = 시장(KODEX200) · 섹터 ETF 80 · 미국 전일 지수 6 의 일봉.

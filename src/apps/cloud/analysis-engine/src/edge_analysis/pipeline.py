@@ -193,10 +193,8 @@ def run(
         log("statics.layers.failed", error=f"{type(exc).__name__}: {exc}",
             discarded_layers=discarded, had_rollup=roll is not None)
         roll = None
-        # 폐기가 **확신도를 올려서는 안 된다**. 아래 `idio_qualified` 는 `roll is None`
-        # 을 "분해가 아예 없다 → 자격을 따질 대상도 없다(관대하게 True)" 로 읽는데,
-        # 폐기된 None 은 뜻이 다르다 - 층을 봤는데 라우팅이 깨진 것이다. 구분하지 않으면
-        # 실패한 런이 오히려 더 높은 확신도로 영속된다(Rule 12).
+        # 라우팅 폐기는 원장에 `routing_failed` 로 남긴다 - 층을 봤는데 라우팅이 깨진
+        # 런과 재료가 없던 런은 층 필드가 똑같이 비므로 이 값 없이는 구분이 안 된다.
         routing_failed = True
     route_code, event_search = route_code_of(rt.kind if rt else "")
     ids = store.persist_observation_route(
@@ -325,7 +323,7 @@ def run(
     stage = {"route": (rt.kind if rt else ""), "layers": [
         {"kind": x.kind, "name": x.name, "contribution": x.contribution}
         for x in (roll.layers if roll else ())],
-        "idio": (roll.idio if roll else None), "rho": (roll.rho if roll else None),
+        "idio": (roll.idio if roll else None),
         # **왜 층이 비었는지**를 원장이 스스로 말한다. 라우팅 실패로 폐기한 경우와 재료가
         # 없던 경우는 위 필드가 똑같이 비지만 확신도가 갈린다(폐기면 LOW) - 이 값이 없으면
         # explanation_result 만 보는 감사·재처리 소비자가 그 차이를 재현하지 못하고 로그를
@@ -348,8 +346,9 @@ def run(
     stage["analysis_trace"] = trace_manifest
     verdicts = verdicts_from(
         text, route_kind=(rt.kind if rt else ""),
-        idio_qualified=bool(not routing_failed and (
-            roll is None or roll.rho is None or abs(roll.rho) < 0.20)),
+        # 폐기가 확신도를 올리면 안 된다(Rule 12) - 라우팅이 깨져 분해를 버린 런이
+        # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다.
+        degraded=routing_failed,
         bundles=tuple(sorted(set(payload_bundles or re.findall(
             r"\bev_[0-9a-f]{16}\b", text)))))
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)

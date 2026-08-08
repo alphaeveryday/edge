@@ -409,9 +409,9 @@ def test_failed_routing_discards_the_rollup_it_could_not_use(monkeypatch, capsys
                s3=_FakeS3(), causal_lake=object()) == 0
     assert store.route_code == "PRICE_ONLY"
     assert seen["roll"] is None, "원장이 못 쓴 분해를 산문이 썼다"
-    # **폐기가 확신도를 올리면 안 된다.** `idio_qualified` 는 `roll is None` 을 "따질
-    # 대상이 없다"로 읽어 관대한 True 를 주는데, 폐기된 None 은 뜻이 다르다 — 구분하지
-    # 않으면 라우팅이 깨진 런이 오히려 더 확신 있게 영속된다(Rule 12).
+    # **폐기가 확신도를 올리면 안 된다.** 라우팅이 깨져 분해를 버린 런이 "따질
+    # 대상이 없다"는 이유로 더 확신 있게 영속되면 안 된다(Rule 12) — ρ 강등이
+    # 없어진 뒤로(ALPHA-862) 이 강등은 `Verdicts.degraded` 가 맡는다.
     assert store.explanation.confidence_level == "LOW"
     # 원장이 **스스로** 사유를 말한다 — 로그는 보존 기간이 있고 원장은 남는다
     assert store.explanation.raw["stage_results"]["routing_failed"] is True

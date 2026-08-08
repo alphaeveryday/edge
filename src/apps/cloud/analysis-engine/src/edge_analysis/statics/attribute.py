@@ -211,6 +211,82 @@ def _us_factor(lake, tk6: str, day: str) -> str:
     return US_FACTOR_DEFAULT
 
 
+# ── 밤사이 미국장 (구 `layers` 에서 이관, ALPHA-862) ─────────────────────────
+# 층 β 는 폐지됐지만 이 둘은 **갭 축**이다 - 재료가 다르다(층은 구간 수익률 계열,
+# 여기는 코스피×미국팩터 일봉 쌍). 갭 β 규율을 소유한 이 모듈이 맡는다.
+
+_SRC_WINDOW = 60   # 회귀 창(거래일). 당일 제외 - 오늘 충격이 β 를 오염시키면 안 된다
+
+
+def overnight(lake, day: str) -> list[tuple[str, float]]:
+    """한국 개장 전에 **이미 확정된** 미국장 수익률 [(이름, 수익률)].
+
+    한국 09:00 KST 개장 시점에 미국 전 세션은 끝나 있다 - 그래서 갭의 정당한 원인
+    후보이고, 장중 국내 사건보다 시간적으로 앞선다. 미국 날짜가 한국 날짜보다
+    같거나 앞선 마지막 세션만 쓴다(선견 금지).
+    """
+    rows = lake.sql(
+        "SELECT symbol, any_value(name), list(close ORDER BY date), "
+        "       list(CAST(date AS DATE) ORDER BY date) "
+        f"FROM layers_daily WHERE kind = 'us' AND date < DATE '{day}' GROUP BY symbol")
+    out = []
+    for _sym, nm, closes, dates in rows:
+        if len(closes) < 2 or closes[-2] <= 0:
+            continue
+        out.append((nm, float(closes[-1] / closes[-2] - 1.0), dates[-1]))
+    if not out:
+        return []
+    last = max(d for *_x, d in out)
+    return [(nm, r) for nm, r, d in out if d == last]
+
+
+def _daily_log_returns(lake, day: str, kind: str) -> dict[str, tuple[str, dict]]:
+    """{symbol: (name, {date: log수익률})} - `layers_daily` 일봉. 당일 포함."""
+    rows = lake.sql(
+        "SELECT symbol, any_value(name), list(close ORDER BY date), "
+        "       list(CAST(date AS DATE) ORDER BY date) "
+        f"FROM layers_daily WHERE kind = '{kind}' AND date <= DATE '{day}' "
+        "GROUP BY symbol")
+    out = {}
+    for sym, nm, closes, dates in rows:
+        if len(closes) < 2 or any(c <= 0 for c in closes):
+            continue
+        out[sym] = (nm, {dates[i]: math.log(closes[i] / closes[i - 1])
+                         for i in range(1, len(closes))})
+    return out
+
+
+def market_source(lake, day: str, proxy: str = "S&P500") -> tuple[float, float] | None:
+    """오늘 코스피 수익률 중 **밤사이 미국장으로 설명되는 몫** [lo, hi] (%가 아닌 비율).
+
+    투자자가 실제로 묻는 것은 "코스피가 왜 빠졌나" 다. 밤사이 미국 지수를 보여만
+    주고 안 쓰면 그 질문에 답이 없다. 점이 아니라 구간인 이유는 β 추정 오차를
+    숨기지 않기 위해서다 - 이 모듈의 갭 공변량과 같은 규율이다.
+    """
+    from .layers import MARKET_CODE
+
+    import datetime as _dtm
+    us = _daily_log_returns(lake, day, "us")
+    mkt = _daily_log_returns(lake, day, "market")
+    tgt = next((v for _k, v in us.items() if v[0] == proxy), None)
+    if tgt is None or MARKET_CODE not in mkt:
+        return None
+    d0 = _dtm.date.fromisoformat(day)
+    km, um = mkt[MARKET_CODE][1], tgt[1]
+    # 한국 D 일의 개장 전에 확정된 미국 세션 = 미국 날짜 < D 중 마지막.
+    prev = {d: max((u for u in um if u < d), default=None) for d in km if d <= d0}
+    pairs = [(km[d], um[prev[d]]) for d in sorted(km)
+             if d < d0 and prev.get(d) is not None][-_SRC_WINDOW:]
+    if len(pairs) < MIN_BETA_N or d0 not in km or prev.get(d0) is None:
+        return None
+    ci = _beta_ci([b for _a, b in pairs], [a for a, _b in pairs])
+    if ci is None:
+        return None
+    u_now = um[prev[d0]]
+    a, c = ci[0] * u_now, ci[1] * u_now
+    return (min(a, c), max(a, c))
+
+
 def gap_covariate(lake, ticker: str, day: str, gap_share: float):
     """§9: 갭은 더 잘리지 않으므로 공변량으로만 좁힌다 - 그리고 그 좁힘도
     **부분식별**이다. β 의 CI × 직전 미국 세션 수익률 → 갭 몫의 설명 구간.

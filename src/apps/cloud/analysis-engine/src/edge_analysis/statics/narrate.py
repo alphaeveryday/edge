@@ -205,7 +205,6 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
             market_src: tuple[str, float, float] | None = None,
             peers: tuple[str, int, float, float] | None = None,
             path_segs: tuple = (),
-            idio_rho: tuple[float, int, bool] | None = None,
             conditional: Conditional | None = None,
             additive: AdditiveBudget | None = None,
             baserate: BaseRate | None = None) -> str:
@@ -330,16 +329,6 @@ def narrate(*, ticker: str, name: str, day: str, route: Route | None, rows: list
         # 말했다 - 데이터는 알고 있는데 글이 모른 것이다.
         tot_abs = sum(abs(v) for _k, v in layers) or 1.0
         bits = [f"{k} {_pp(v)} ({abs(v) / tot_abs * 100:.0f}%)" for k, v in layers]
-        # **'고유' 라 부를 자격.** layers.py L20 이 "ρ≈0 일 때만 고유라 부를 자격이
-        # 생긴다" 고 선언하는데 배선이 없었다 - 선언=배선 위반. 잔차가 구성원 사이에서
-        # 여전히 동조하면 이름 없는 공통요인이 남은 것이고, 그걸 고유라 부르면 종목
-        # 사건으로 설명하려 든다.
-        if idio_rho is not None:
-            rv, rn, rok = idio_rho
-            out.append(f"[고유 자격] 구성원 {rn}종목 잔차 공통상관 ρ={rv:+.3f} — "
-                       + ("ρ≈0 이라 **고유라 부를 자격이 있다**" if rok else
-                          "**자격 없음: 이름 없는 공통요인이 남아 있다** — 층이 하나 "
-                          "부족하고 그 몫이 조용히 고유로 흘러든다"))
         out.append("[층] " + " · ".join(bits) + " — **항등식이지 인과가 아니다**"
                    + (f". 인과 엣지가 청구할 수 있는 것은 고유 {_pp(idio_budget)} 뿐 — "
                       "나머지는 이 종목 사건으로 만들어질 수 없는 몫이다"
