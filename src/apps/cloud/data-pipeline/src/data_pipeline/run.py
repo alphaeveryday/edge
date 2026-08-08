@@ -42,7 +42,7 @@ from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.rollup import rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
-from .minute.states import MINUTE_DATASETS
+from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
 from .minute.price_consumer import price_consumer_cli
@@ -233,8 +233,13 @@ def main(argv: list[str] | None = None) -> int:
                              "rollup-minute-session 도 **price_minute 만**"
                              "(5분 파생은 가격 분봉 canonical 전용 경로다)")
     parser.add_argument("--source-group", default=None,
-                        help="세션 source_group. price_minute=toss|kis, "
-                             "news_minute=bigkinds 등 — dataset 의 어휘 안에서만 받는다")
+                        # `--dataset` 과 같은 이유로 표에서 조립한다 — 산문 예시는 dataset 이
+                        # 늘 때 낡고, 그게 곧 "어휘 안에서만 받는다"는 안내를 거짓으로 만든다
+                        help="세션 source_group(dataset 의 어휘 안에서만 받는다): "
+                             + ", ".join(
+                                 f"{dataset}={'|'.join(sorted(groups))}"
+                                 for dataset, groups in sorted(SOURCE_GROUPS_BY_DATASET.items())
+                             ))
     parser.add_argument("--session-date", default=None,
                         help="plan-minute-session·price-worker·rollup-minute-session: "
                              "세션 날짜 YYYY-MM-DD(price-worker·rollup-minute-session "

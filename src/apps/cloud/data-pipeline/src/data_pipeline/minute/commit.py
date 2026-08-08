@@ -110,7 +110,7 @@ class MinuteCommitter:
         artifact_generation: int,
         **outcome,
     ) -> int:
-        """fence/phase → claim 검증 → window 결과 확정 → 세대 대조. 가격·iNAV 공유부.
+        """fence/phase → claim 검증 → window 결과 확정 → 세대 대조. 가격·iNAV·공시 공유부.
 
         여기까지가 "artifact 를 PUT 한 그 attempt 가 지금도 이 window 의 주인인가"를
         확정하는 부분이고, 그 뒤(job·outbox)는 dataset 마다 다르다. 뉴스는 claim 과

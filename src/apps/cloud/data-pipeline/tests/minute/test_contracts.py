@@ -352,8 +352,9 @@ class TestTradingHoursClass:
 
     def test_no_extended_units_keeps_390(self):
         # 클래스가 선언되지 않은 universe 는 지금까지의 정규장 계획 그대로다
+        # universe=None 쪽 짝은 아래 `test_universe_없는_dataset_은…` 이 양방향으로 본다 —
+        # 여기 남기면 `extended_hours=False` 라 어떤 universe 로도 참인 항진명제가 된다
         assert len(plan_session_windows(SESSION_DATE, universe=self._universe(), extended_hours=True)) == 390
-        assert len(plan_session_windows(SESSION_DATE, universe=None, extended_hours=False)) == WINDOWS_PER_SESSION
 
     def test_universe_없는_dataset_은_extended_hours_하나가_격자를_정한다(self):
         """소스 단위 dataset(뉴스·공시)은 universe 가 없어 `extended_hours_ids` 선언이

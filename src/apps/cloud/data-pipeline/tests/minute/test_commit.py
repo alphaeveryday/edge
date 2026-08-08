@@ -385,6 +385,27 @@ class TestCommitDisclosureWindow:
         # 축은 unit(=소스)이다 — 여기에 rcept_no 를 넣으면 unit 집합과 대조하는 QC 가 어긋난다
         assert window["missing_units"] == ["dart"]
 
+    def test_VALID_EMPTY_도_소스_성공이다(self):
+        """**지배적 케이스다** — 넓힌 격자(720)에서 접수가 없는 분이 대다수이고, 18:00 이후
+        120 window 는 당일접수가 끝나 전부 여기로 온다.
+
+        이 케이스가 없으면 실패 유도를 "VALID·INCOMPLETE 만 성공" 으로 좁히는 변이가 전
+        스위트를 통과하는데, 그러면 접수 없는 분마다 DART 가 실패 unit 으로 지목돼
+        (`missing_units=["dart"]`) 이 유도를 둔 이유(QC 의 "소스가 죽었다" 오독 방지)가
+        정확히 지배적 케이스에서 뒤집힌다.
+        """
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+
+        committer.commit_disclosure_window(**disclosure_commit_kwargs(
+            session_id, claim, token, data_status="VALID_EMPTY", record_count=0,
+        ))
+
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "VALID_EMPTY"
+        assert (window["succeeded_unit_count"], window["failed_unit_count"]) == (1, 0)
+        assert window["missing_units"] is None
+
     def test_INCOMPLETE_는_소스_실패로_세지_않는다(self):
         """부분 실패(본문 결측 등)는 그 폴링의 산출이 온전치 않다는 뜻이고 소스 장애가
         아니다 — 실패로 세면 QC 가 "DART 가 죽었다"로 오독한다(뉴스의 truncated 와 같은 축).
