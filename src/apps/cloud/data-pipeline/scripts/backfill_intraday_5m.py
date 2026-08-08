@@ -498,8 +498,8 @@ def main() -> int:
                     help="어느 벤더로 받고 어느 파일에 쓸지. 벤더마다 파일이 갈리므로 "
                          "(part-<vendor>-backfill.parquet) 서로 덮지 않는다. kis 는 "
                          "소급 TR(FHKST03010230)이라 앱키 전역 유량을 쓴다 — 같은 앱키를 "
-                         "쓰는 15:40 시장 런이 끝난 뒤에 돌려라(이 백필만 ~46분이라 "
-                         "15:31 에 시작하면 그 창을 관통한다)")
+                         "쓰는 15:40 시장 런이 끝난 뒤에 돌려라(48종 180거래일 전량이면 "
+                         "~46분이라 15:31 에 시작하면 그 창을 관통한다)")
     ap.add_argument("--days", type=int, default=70,
                     help="거슬러 볼 파티션 수. β 는 60거래일 창이라 여유를 둔다")
     ap.add_argument("--min-days", type=int, default=20,
