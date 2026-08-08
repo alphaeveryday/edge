@@ -159,9 +159,10 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 7종
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 8종
 > price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713) +
-> news-worker(ALPHA-717) + analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
+> news-worker(ALPHA-717) + inav-worker(ALPHA-882 — 장중 iNAV 생산자. 소비자가 없어
+> 큐는 안 늘어난다) + analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
 > apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
@@ -186,11 +187,22 @@
 > 34초에 든다(참조 계열 48 편입 후, ALPHA-842). 토스 adapter 는 대체 소스로 남는다(`source=toss`). ⚠️ 뉴스 Consumer 는 실행 표면이 생겼고(ALPHA-713 —
 > `run news-consumer`), **생산자도 실행 표면이 생겼다**(ALPHA-707 — `run news-worker`,
 > BigKinds 실호출 feed. 1분 주기 성립은 ALPHA-645 스파이크 실측). news-worker 는
-> **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717) — start 가 news_minute 세션도
-> 계획하고(`MINUTE_SESSION_NEWS_SOURCE_GROUP`), news-worker 는 **뉴스 세션이 선 날만**
-> 별도 목록(`MINUTE_SESSION_NEWS_WORKER_SERVICES`)으로 올라간다(계획 실패 날 올리면
-> 세션 부재 기동 거부 루프 — 가격 레인은 그와 무관하게 진행). stop 은 존재하는 세션
-> 전부를 드레인하고 매 폴링 세션 존재를 재확인한다. 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
+> **서비스·세션 오케스트레이션까지 편입됐다**(ALPHA-717). iNAV 도 **같은 모양으로**
+> 편입됐다(ALPHA-882) — 둘 다 구동 레인(price_minute) 스케줄의 **승객**이고, 늘어나는
+> 자리는 `session_ops.PASSENGER_LANES` 표 하나다:
+>
+> | 승객 | 토글 env | 워커 목록 env |
+> |---|---|---|
+> | news_minute | `MINUTE_SESSION_NEWS_SOURCE_GROUP` | `MINUTE_SESSION_NEWS_WORKER_SERVICES` |
+> | etf_inav_minute | `MINUTE_SESSION_INAV_SOURCE_GROUP` | `MINUTE_SESSION_INAV_WORKER_SERVICES` |
+>
+> start 가 그 세션도 계획하고, 승객 생산자는 **자기 세션이 선 날만** 별도 목록으로
+> 올라간다(계획 실패 날 올리면 세션 부재 기동 거부 루프 — 구동 레인은 그와 무관하게
+> 진행하고, 레인끼리도 독립이라 뉴스가 실패해도 iNAV 는 올라간다). stop 은 존재하는
+> 세션 전부를 드레인하고 매 폴링 세션 존재를 재확인한다.
+> ⚠️ **승객이 되는 것과 `SCALED_DATASETS` 에 드는 것은 다른 축이다** — 승객은 자기
+> 워커를 소유해도 `--dataset` 인자로는 못 온다(`_scale` 이 dataset 을 안 보고 공용
+> 목록을 내리므로, 그러면 살아 있는 price-worker 가 내려간다). 차단 시그니처(403·429·400+HTML)는 BlockedFeedError 로 갈리고
 > 쿨다운(기본 300초) 동안 poll 이 억제된다 — 처방은 재시도가 아니라 pacing 상향·중지다.
 > 후속 단계는 `minute/__init__.py` docstring 참조.
 
@@ -1404,16 +1416,26 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # HHMMSS), 과거 날짜로 돌리면 **지금 값이 그 날짜의 불변 artifact 로 굳는다**. 되돌릴
 # 방법이 없어(재수집 불가) 기동에서 거부한다. 그래서 아래 예시는 날짜를 안 준다(=오늘).
 # 🔴 **휴장일·개장 전은 수집 전에 멈춘다**(KIS 가 빈 응답이 아니라 직전 거래일 행을
-# 그대로 주기 때문 — 2026-07-25 실측). exit 은 모드로 갈린다: 상주(`--max-ticks` 없음)는
-# **0**(스케줄러가 휴장일을 정상 통과), bounded 는 **1**(확인 게이트라 "한 window 도 못
-# 봤다"를 성공으로 보고하지 않는다).
+# 그대로 주기 때문 — 2026-07-25 실측). **멈추는 방식이 셋으로 갈린다**(ALPHA-882):
+#   휴장일 · 상주(`--max-ticks` 없음) → exit **0**  (스케줄러가 정상 통과)
+#   휴장일 · bounded                  → exit **1**  (확인 게이트라 "한 window 도 못
+#                                                    봤다"를 성공으로 보고하지 않는다)
+#   개장 전 · 상주                    → **종료하지 않고 09:00 까지 기다린다**
+#   개장 전 · bounded                 → exit **1**  (확인은 즉답이어야 한다)
+# ⚠️ 개장 전 상주 실행은 **블록된다** — 07:45 에 손으로 돌리면 09:00 까지 75분을 기다린다.
+# 확인용으로 돌릴 거면 `--max-ticks` 를 준다(즉답). 상주가 기다리는 이유는 그게 ECS
+# 서비스의 모습이기 때문이다: 종료하면 desired 1 을 유지하는 ECS 가 재기동 루프를 돌고,
+# 백오프가 첫 정상 기동을 09:00 뒤로 밀어 소급 불가한 window 를 잃는다.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run inav-worker --universe /path/universe.json --max-ticks 3
-# ⚠️ 토큰 만료(24h) 재발급 경로가 **아직 없다** — 수동 bounded 실행에서는 안 만나지만
-# 상주 전환(세션 자동 편입) 때 반드시 붙여야 한다(`KisAuth.invalidate`).
+# 🔴 토큰 만료(24h) 재발급 경로가 **아직 없다**. 상주 전환은 ALPHA-882 로 이미 일어났고
+# (세션 자동 편입 + inav-worker 서비스), 재발급은 **ALPHA-889 로 이연됐다** — 즉 지금
+# dev 는 그 구멍을 안은 채 돈다. 만료되면 `StopFetch` 가 window 실패로 삼켜져(worker.py
+# 의 `except Exception`) 그날 남은 window 가 전부 MISSING 이고, iNAV 는 소급이 불가라
+# 영구 결손이다. 증상은 **전 종목 동시 MISSING + `EGW00121`** 로 로그에서 구분된다.
 
 # 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
 # 있어야 하고(위 plan-minute-session — `--session-date`·`--universe` 를 **같은 값**으로),
@@ -1478,22 +1500,25 @@ DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-rea
 # 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719) — 상주 서비스 7종의 desired_count
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·882) — 상주 서비스 8종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
-# ⚠️ **iNAV 세션은 이 명령의 대상이 아니다**(어휘엔 있어도 거부, **exit 1** — 실측).
+# ⚠️ **`--dataset` 은 구동 레인(price_minute)만 받는다.** news_minute·etf_inav_minute 은
+# 어휘엔 있어도 인자로는 거부된다(**exit 1** — 실측).
 #   ⚠️ 같은 부류의 오류에 `plan-minute-session` 은 2 를 낸다(어휘 밖 dataset). 이쪽은
 #   `SystemExit(문자열)` 이라 1 로 떨어지는 것이고 **의도된 구분이 아니다** — 정리 대상.
 #   여기서 올리고 내리는
-# 서비스 목록은 dataset 별이 아니라 **공용**이라, iNAV 로 stop 을 부르면 phase 게이트는 그
-# 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가
-# 내려간다**. 계획(plan-minute-session)은 열려 있고 스케일만 막는다 — 어휘와 스케일 권한은
-# 다른 축이다(`states.SCALED_DATASETS`).
-#   ⚠️ 같은 가드가 `--dataset news_minute` 도 거부한다(전엔 받았다). 뉴스 레인은
-#   `--dataset` 이 아니라 `MINUTE_SESSION_NEWS_SOURCE_GROUP` 토글로 이 명령에 얹히고
-#   terraform 의 `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만,
-#   손으로 치던 사람은 여기서 막힌다.
+# 서비스 목록은 dataset 별이 아니라 **공용**이고 `_scale` 은 dataset 을 아예 안 봐서,
+# 승객 dataset 으로 stop 을 부르면 phase 게이트는 그 세션만 보고(claim 0 → 즉시 통과)
+# 큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가 내려간다**.
+#   ⚠️ **자기 워커를 소유해도 이 조건은 안 풀린다**(ALPHA-882) — 소유와 구동 레인은
+#   다른 축이다(`states.SCALED_DATASETS`). news_minute 이 news-worker 를, etf_inav_minute
+#   이 inav-worker 를 소유하는 지금도 둘 다 인자로는 못 온다.
+# **두 레인 다 이 명령에 얹혀 계획·드레인된다** — 인자가 아니라 아래 토글 env 로 켠다
+# (`MINUTE_SESSION_NEWS_SOURCE_GROUP`·`MINUTE_SESSION_INAV_SOURCE_GROUP`). terraform 의
+# `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만, 손으로 치던
+# 사람은 `--dataset` 에서 막힌다.
 #
 # start: 거래일 판정(OPS_KR_HOLIDAYS) → plan-minute-session(오늘 KST 고정) → desired 0→1.
 # ⚠️ 비거래일이면 아무것도 하지 않고 exit 0. 계획이 실패하면 **올리지 않고** 그 exit 를
@@ -1506,6 +1531,8 @@ MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
+MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
+MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group kis --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
@@ -1520,6 +1547,8 @@ MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
+MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
+MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
 MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime,https://sqs.../edge-dev-data-pipeline-news-extraction-realtime \
 MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
@@ -1527,7 +1556,7 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **22개**(daily 1·뉴스 3·
 공시 10·장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
-(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 7종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
+(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 8종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환, 공시·장중 수급은 처음부터). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).
