@@ -294,25 +294,37 @@ class EventStore:
             generation=int(row[9]),
         )
 
-    def fetch_minute_window_meta(self, session_id: str, window_start):
-        """window 의 커밋 결과 상태 (generation, checksum) | None — artifact 읽기 좌표.
+    def fetch_previous_trigger_window(
+        self, entity_id: str, session_id: str, window_start: datetime,
+    ) -> datetime | None:
+        """같은 대상·세션에서 이 시각 **직전 트리거 행**의 window_start | None.
 
-        트리거 행의 generation 대신 이걸 쓰는 이유: 발화 후 정정이 끼면 최신 커밋
-        세대가 더 정확한 가격이고, ledger 의 checksum 은 그 세대의 바이트에 대한
-        것이라 쌍이 갈리지 않는다. **정정 진행 중(DUE·CLAIMED)은 None** — 재claim 은
-        generation·checksum 을 옛 커밋 쌍으로 남겨두지만(#485 단서), 정정이 걸렸다는
-        것은 그 가격이 틀렸을 개연성이라 price_consumer 와 같은 처방(지연 재시도)으로
-        커밋 뒤에 소비한다.
+        트리거 경로에서 설명 구간의 시작이다(ALPHA-854) — 창이 직전 트리거에서
+        시작해 이번 트리거 분에서 끝나므로 전부 과거고, 아직 수집 안 된 분을
+        기다리지 않는다.
+
+        **종류를 가리지 않는다**(V202608061020 의 "구간 시작 = 가장 최근 행, 종류
+        무관"과 같은 축). 그래서 REVERT 행도 구간을 끊는다 — 회수는 그 지점에서
+        노출이 바뀌었다는 뜻이라 다음 설명이 그 뒤부터인 것이 맞다. 발화의 **설명
+        성공 여부도 보지 않는다**: 실패한 발화를 건너뛰면 같은 구간이 두 번 설명되고
+        원장의 발화 축(ALPHA-710)과도 어긋난다.
+
+        UNIQUE(entity_id, session_id, window_start) 인덱스를 그대로 탄다.
+        반환은 KST aware — 호출부가 다시 변환하지 않는다.
         """
+        entity_id = str(entity_id).strip()
+        session_id = str(session_id).strip()
+        if not entity_id or not session_id:
+            raise ValueError("entity_id·session_id가 비었다")
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT generation, checksum FROM minute_ingestion_window"
-                " WHERE session_id = %s AND window_start = %s AND generation >= 1"
-                " AND data_status NOT IN ('DUE', 'CLAIMED')",
-                (session_id, window_start),
+                "SELECT window_start FROM minute_price_trigger"
+                " WHERE entity_id = %s AND session_id = %s AND window_start < %s"
+                " ORDER BY window_start DESC LIMIT 1",
+                (entity_id, session_id, window_start),
             )
             row = cur.fetchone()
-        return (int(row[0]), row[1]) if row else None
+        return row[0].astimezone(KST) if row else None
 
     def fetch_committed_minute_windows(
         self, session_id: str, start: datetime, end: datetime,

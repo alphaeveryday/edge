@@ -18,7 +18,7 @@ import json
 import pathlib
 import os
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -401,30 +401,57 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
         def _bars(*rows: dict) -> bytes:
             return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
 
-        open_bars = _bars(
-            {"unit_id": ETF_TICKER, "open": "10000.0", "close": "10050.0"},
-            {"unit_id": SAMSUNG_TICKER, "open": "70000.0", "close": "70100.0"},
-        )
-        trigger_bars = _bars(
-            {"unit_id": ETF_TICKER, "open": "10250.0", "close": "10300.0"},
-            {"unit_id": SAMSUNG_TICKER, "open": "73400.0", "close": "73500.0"},
-        )
-        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "0900", 1)] = open_bars
-        s3.objects[canonical_price_minute_artifact_key("KR", TRADE_DATE, "1030", 1)] = trigger_bars
+        # 설명이 **09:00~발화 분 전 구간**의 1분봉을 요구한다(ALPHA-854 두 축) — 트리거
+        # window 두 개만 깔면 원장 결손으로 서고, 그건 이 골든패스가 지키려는 계보를
+        # 못 밟는다. 09:00~10:30 91분을 실물처럼 전부 깐다.
+        #
+        # 발화 분을 **넘겨 깔지 않는다**: 창이 발화 분에서 끝나므로 그 뒤 분은 실물에서
+        # 아직 수집 전이다. 넉넉히 깔면 미래를 읽어도 초록인 픽스처가 된다.
+        #
+        # 가격은 두 발화를 **구분되게** 준다: 09:00 창은 삼성 70100, 10:30 창은 73500.
+        # 아래 분해 단언(73500/68000)이 두 번째 발화의 축을 실제로 탔음을 증명한다.
+        MINUTE_COUNT = 91  # 09:00 ~ 10:30 (발화 분 포함)
+        TRIGGER_MINUTE = 90  # 10:30
+
+        def _price_at(minute: int) -> dict[str, str]:
+            if minute >= TRIGGER_MINUTE:
+                return {ETF_TICKER: "10300.0", SAMSUNG_TICKER: "73500.0"}
+            return {ETF_TICKER: "10050.0", SAMSUNG_TICKER: "70100.0"}
+
+        minute_windows: list[tuple[str, str, bytes]] = []
+        for minute in range(MINUTE_COUNT):
+            # 09:00 KST = 그날 00:00 UTC — 원장 window_start 와 artifact ts 의 정본.
+            stamp = datetime.combine(
+                date.fromisoformat(TRADE_DATE), datetime.min.time(),
+                tzinfo=timezone.utc) + timedelta(minutes=minute)
+            hhmm = (stamp + timedelta(hours=9)).strftime("%H%M")
+            body = _bars(*[
+                # strict reader 는 ts·OHLCV 전부를 요구한다 — 원장 window 와 ts 가
+                # 어긋나거나 필드가 빠지면 형상 위반으로 죽는다(관대한 구 reader 와 다름).
+                {"unit_id": unit, "ts": stamp.isoformat().replace("+00:00", "Z"),
+                 "open": price, "high": price, "low": price, "close": price,
+                 "volume": "10"}
+                for unit, price in _price_at(minute).items()
+            ])
+            s3.objects[
+                canonical_price_minute_artifact_key("KR", TRADE_DATE, hhmm, 1)] = body
+            minute_windows.append((stamp.isoformat(), hhmm, body))
+
+        open_window = minute_windows[0][0]
+        trigger_window = minute_windows[TRIGGER_MINUTE][0]
         with seed_conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO minute_ingestion_session (session_id, dataset, source_group,"
                 " session_date, universe_version, universe_hash, expected_window_count)"
-                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, 2)",
-                (TRADE_DATE, "0" * 64),
+                " VALUES ('ses-e2e', 'price_minute', 'KR', %s, 'u-e2e', %s, %s)",
+                (TRADE_DATE, "0" * 64, MINUTE_COUNT),
             )
             # 분봉 분해 입력의 원장 전제 — 트리거 window 의 세대·checksum 은
             # minute_ingestion_window 가 정본이다. 분모는 원장이 아니라 canonical
             # price_daily 직전 파티션(PREV_DATE)이다(ALPHA-747) — 그래서 여기에
             # minute_session_open 시드가 **없는 것이 계약**이다: 있으면 시가 축으로
             # 되돌아간 회귀가 초록으로 통과한다.
-            for window_start, bars_bytes in ((open_window, open_bars),
-                                             (trigger_window, trigger_bars)):
+            for window_start, _hhmm, bars_bytes in minute_windows:
                 cur.execute(
                     "INSERT INTO minute_ingestion_window (session_id, window_start,"
                     " window_end, scheduled_at, data_status, generation, checksum)"
