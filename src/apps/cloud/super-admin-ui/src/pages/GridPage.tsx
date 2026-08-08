@@ -648,6 +648,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
         </span>
       </button>
       {open && (
+        <>
         <div style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead>
@@ -681,12 +682,15 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
               ))}
             </tbody>
           </table>
-          {/* 행마다 반복하지 않는다 — 값이 행에 따라 변하지 않는 사실이고, 표 안에 두면
-            * 스크린리더가 작업 수만큼 같은 문장을 읽는다. 빈 칸으로 두지도 않는다. */}
-          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', padding: '6px 0 2px' }}>
-            {RUN_DETAIL_UNAVAILABLE} — 이 표가 이 실행에 대해 답할 수 있는 전부입니다.
-          </p>
         </div>
+        {/* 행마다 반복하지 않는다 — 값이 행에 따라 변하지 않는 사실이고, 표 안에 두면
+          * 스크린리더가 작업 수만큼 같은 문장을 읽는다. 빈 칸으로 두지도 않는다.
+          * 가로 스크롤 박스 **밖**에 둔다 — 안에 두면 줄바꿈 폭을 표가 정해서, 표가
+          * 넓은 화면에서는 이 문장을 끝까지 읽으려고 가로 스크롤해야 한다. */}
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', padding: '6px 0 2px' }}>
+          {RUN_DETAIL_UNAVAILABLE} — 이 표가 이 실행에 대해 답할 수 있는 전부입니다.
+        </p>
+        </>
       )}
     </li>
   );

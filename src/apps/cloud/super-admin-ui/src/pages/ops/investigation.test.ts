@@ -163,9 +163,9 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
 /* 실 API 화면은 실행 상세로 링크하지 않는다 (ALPHA-738 단계 3).
  *
  * 이 단언이 지키는 의도: 실행 상세는 앱 번들 안 `rules/facts-snapshot.json` 의 런 6건만
- * 해소한다. 실 API 화면의 런 키는 거기 없어 "연결된 실행을 찾지 못했습니다"로 끝나는데,
- * 그건 **없다는 사실이 아니라 이 화면이 못 읽는다는 사실**이다. 링크가 남아 있으면 사용자는
- * 전자로 읽는다. facts 엔드포인트(ADR-0049)가 붙기 전까지 진입점이 없어야 한다.
+ * 해소한다. 실 API 화면의 런 키는 거기 없어 그 화면이 부재를 말하는데, 그건 **없다는 사실이
+ * 아니라 이 화면이 못 읽는다는 사실**이다. 링크가 남아 있으면 사용자는 전자로 읽는다.
+ * facts 엔드포인트(ADR-0049)가 붙기 전까지 진입점이 없어야 한다.
  *
  * 문구가 아니라 **구조**로 검사한다 — 본문 텍스트로 부재를 검사하면 이 파일이나 대상 파일의
  * 주석에 적힌 `runHref`·`/ops/runs/` 가 걸린다. 그래서 블록 주석을 먼저 걷어낸다.
@@ -179,10 +179,15 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
 test('실 API 화면 3곳은 실행 상세로 가는 길을 만들지 않는다 — 그 화면은 스냅샷만 해소한다', () => {
   const REAL_API_PAGES = ['../GridPage.tsx', '../MinutePage.tsx', '../HoldingsImpactPage.tsx'];
   for (const rel of REAL_API_PAGES) {
-    /* 주석은 사실이 아니라 서술이다 — 부재 단언의 입력에서 뺀다 */
-    const src = readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    /* 주석은 사실이 아니라 서술이다 — 부재 단언의 입력에서 뺀다. 블록 주석과 줄 주석
+     * 둘 다 건다(줄 주석은 줄머리만 — `http://` 같은 URL 을 잘라 뒤를 숨기지 않게). */
+    const src = readFileSync(new URL(rel, import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '');
 
-    const mod = /['"][^'"]*ops\/investigation['"]/.source;
+    /* 경로 뒤 접미사를 반드시 허용한다 — 이 레포는 `from './investigation.ts'` 처럼
+     * 확장자를 명시하는 곳이 있어서, `investigation` 에서 닫으면 그게 통째로 새 나간다. */
+    const mod = /['"][^'"]*ops\/investigation[^'"]*['"]/.source;
     const named = [...src.matchAll(new RegExp(String.raw`import\s*\{([^}]*)\}\s*from\s*${mod}`, 'g'))]
       .flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0]));
     assert.ok(

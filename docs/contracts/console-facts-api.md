@@ -130,6 +130,9 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
   되돌릴 자리: `pages/GridPage.tsx` · `pages/MinutePage.tsx` · `pages/HoldingsImpactPage.tsx`
   의 조사 경로, `pages/ops/RunAxisPage.tsx` 의 미해소 안내, `pages/ops/investigation.ts` 의
   `RUN_DETAIL_UNAVAILABLE`, 그리고 그 부재를 강제하는 `pages/ops/investigation.test.ts` 단언.
+  ⚠️ `styles/minute.css` 도 같이 되돌려라 — 링크가 아니게 되면서 `.mn-runcard` 의
+  `:hover`·`:focus-visible` 을 지웠다. 카드를 다시 `<Link>` 로 만들면서 이걸 안 되살리면
+  **포커스 링 없는 링크**가 된다(이 앱의 `styles/` 에 전역 `a:focus-visible` 이 없다).
 
 ## 남은 계측 부채
 

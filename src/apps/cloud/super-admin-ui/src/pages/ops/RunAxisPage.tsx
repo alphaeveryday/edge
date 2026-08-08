@@ -181,10 +181,13 @@ export function RunAxisPage() {
     <div className="flex flex-col gap-4">
       <AxisHeader question="오늘 어떤 런이 돌았고, 그 런의 작업은 귀결됐는가?" />
       {runs.length === 0 ? (
+        /* 상세 분기(아래)와 같은 `F` 를 읽는다 — 한쪽만 "스냅샷"이라 말하면 같은
+         * 데이터원이 화면에 따라 원장이 됐다 안 됐다 한다 */
         <div className="card card-pad">
-          <p className="t-sm m-0" style={{ fontWeight: 600 }}>실데이터 0건</p>
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>보여줄 런이 없습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            원장에 기록된 런이 없습니다.
+            이 목록은 아직 실 원장이 아니라 앱에 동봉된 스냅샷을 읽습니다 — 그 안에 런이
+            없다는 뜻이지, 원장에 기록된 런이 없다는 뜻이 아닙니다.
           </p>
         </div>
       ) : (
@@ -346,7 +349,10 @@ function RunList({ runs, onSelect }: { runs: RunFact[]; onSelect: (id: string) =
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
           같은 거래일에 정규·수동·백필·재실행이 함께 있을 수 있어 런은 날짜가 아니라{' '}
           <code>run_id</code> 로 지목합니다. 실행 방식(kind)은 아직 원장에 기록되지 않아 이 열은 목값이고,
-          그런 런에는 행마다 <b>MOCK</b> 을 붙입니다 — 나머지 값은 운영 원장·AWS 제어면 스냅샷입니다.
+          {/* "스냅샷"을 한 화면에서 두 뜻으로 쓰지 않는다 — 상세 분기는 같은 단어를
+            * "앱에 동봉된 정적 파일"로 쓴다. 여기서 말하려던 건 관측 시점이다. */}
+          그런 런에는 행마다 <b>MOCK</b> 을 붙입니다 — 나머지 값은 운영 원장·AWS 제어면을 한 시점에
+          떠 온 관측값입니다.
         </p>
       </div>
     </div>

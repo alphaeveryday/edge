@@ -45,7 +45,10 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
         </>
       ) : (
         <>
-          <Link to="/ops/runs">실행</Link>
+          {/* 실행 **목록**이 아니라 원장이다 — 아래 404 분기와 같은 이유로, 실 API 런키를
+            * 들고 온 사용자를 스냅샷 런만 세우는 목록으로 보내면 "없다"로 읽힌다. 한 화면이
+            * 두 목적지를 말하지 않게 한다. */}
+          <Link to="/sources">실행 원장</Link>
           <span aria-hidden="true">›</span>
         </>
       )}
@@ -84,8 +87,9 @@ export function HoldingsImpactPage() {
           <p className="t-sm m-0" style={{ fontWeight: 600 }}>조사할 실행이 지정되지 않았습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             구성종목 결손 상세는 특정 <code>etf-daily</code> 실행의 기대 목록을 기준으로 계산합니다 —
-            실행이 정해지지 않으면 최신 런을 임의로 골라 보여주지 않습니다. 실행 원장에서 ETF
-            구성종목 결손을 선택해 주세요.
+            실행이 정해지지 않으면 최신 런을 임의로 골라 보여주지 않습니다. 실행 원장에서 런을
+            먼저 지목하면 — 그 실행이 구성종목 결손 상태일 때 — 거기서 이 화면으로 오는 길이
+            열립니다. 문맥 없이 여는 원장에는 그 선택지가 없습니다.
           </p>
           <p className="t-xs m-0" style={{ marginTop: 8 }}>
             <Link to="/sources">실행 원장으로 이동 →</Link>
@@ -105,9 +109,13 @@ export function HoldingsImpactPage() {
             <p className="t-sm m-0" style={{ fontWeight: 600 }}>지정한 실행을 찾을 수 없습니다</p>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
               {/* 실행 **목록**으로 보내지 않는다 — 그 화면은 스냅샷 런만 세워서, 실 런키를
-                * 들고 온 사용자가 거기서도 자기 실행을 못 보고 "없다"로 한 번 더 읽는다. */}
+                * 들고 온 사용자가 거기서도 자기 실행을 못 보고 "없다"로 한 번 더 읽는다.
+                * 그리고 `runKey` 를 버리지 않는다: 404 는 "이 런의 **기대 목록**이 없다"는
+                * 좁은 주장이고 `/sources/report?runKey=` 는 얼마든지 답한다. 화면에 떠 있는
+                * 키를 사용자가 폼에 다시 타이핑하게 두지 않는다. */}
               <code>{runKey}</code> 의 기대 목록이 원장에 없습니다. 다른 실행으로 대체하지
-              않습니다. <Link to="/sources">실행 원장으로 이동 →</Link>
+              않습니다.{' '}
+              <Link to={`/sources?runKey=${encodeURIComponent(runKey)}`}>이 실행의 원장 보기 →</Link>
             </p>
           </div>
         </div>
