@@ -131,8 +131,14 @@ def run(
     # 심볼 단위로 격리한 실패를 런 상태에 반영한다(격리≠은폐 — fail loud).
     #  - 저장분 있고 일부 실패 → partial(성공했지만 온전치 않음)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
-    #  - MAX_PAGES 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로 본다
-    #    (ALPHA-351). 절단도 아래 로그(failed_symbols)엔 남겨 fail-loud 는 유지한다.
+    #  - 절단(kind=truncation)은 **받은 데이터가 유효**하므로 성공으로 본다(ALPHA-351) —
+    #    받은 만큼은 쓸 수 있고, 런을 실패시켜도 못 받은 부분이 돌아오지는 않는다.
+    #    ⚠️ "다음 창이 이어받는다"는 근거로 쓰지 마라(ALPHA-541). bigkinds 는 이 태그로 셋을
+    #    올리고 그중 둘은 자동 회복이 없다: ① 벤더측 조기 종료(isLimitPage·빈 페이지)로
+    #    totalCount 에 못 미친 경우 — 다음 창도 같은 자리에서 끊긴다 ② totalCount 결측으로
+    #    완전성 **판정 자체가 불가**한 경우. 그래서 exit 0 의 대가로 알람을 붙였다
+    #    (`collection-truncated`) — 대응은 창을 좁힌 수동 재실행(`--from/--to`)이다.
+    #    절단은 아래 로그(failed_symbols)에도 남겨 fail-loud 를 유지한다.
     failed_symbols = getattr(source, "fetch_failures", [])
     real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
     if status == "success" and real_failures:

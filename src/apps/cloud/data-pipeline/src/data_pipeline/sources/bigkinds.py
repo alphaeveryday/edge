@@ -85,6 +85,18 @@ def search_page(
     return payload
 
 
+def _is_count(value: object) -> bool:
+    """건수로 쓸 수 있는 값인가 — 절단 판정의 근거로 삼기 전 검사한다.
+
+    `bool` 을 배제하는 게 핵심이다: 파이썬에서 `True` 는 `int` 의 서브클래스라
+    `isinstance(True, int)` 가 참이고, `total=True` 면 `served < 1` 이 되어 비어 있지 않은
+    모든 런이 '완주'로 인증된다 — 절단도 '판정 불가'도 둘 다 조용해진다(가장 나쁜 조합).
+    벤더가 이 필드를 "더 있는가" 플래그로 바꾸면 실제로 그 모양이 된다. 음수도 같은 이유로
+    배제한다. 여기서 걸러진 값은 완주가 아니라 **판정 불가**로 흘러 알람을 탄다.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 class BigKindsNewsSource:
     source_name = "bigkinds"
     preserve_all_rows = True  # raw 전량 보존: ingest_raw 의 FMP dedup/mention merge 를 끈다.
@@ -143,15 +155,27 @@ class BigKindsNewsSource:
         end_date: str,
         fetched_at: str,
     ) -> Iterator[dict]:
-        truncated = True
+        # 절단 판정의 정본은 `totalCount`(응답이 주는 그 창의 전체 건수)다 — 페이지 소진
+        # 여부가 아니다. 종전엔 "MAX_PAGES 를 다 돌았다"를 절단 **가능**으로 올렸는데, 그건
+        # 추측이라 알람으로 못 쓴다(경고가 매일 울려도 몇 건을 잃었는지 아무도 모른다).
+        # totalCount 는 실측으로 정확하다 — 08-04 창의 totalCount 6,355 를 끝까지 훑으면
+        # 64 page 째가 55행이고 65 page 가 빈 페이지다(63×100+55 = 6,355 일치).
+        stop_reason = f"MAX_PAGES({self.max_pages}) 소진"
+        total: int | None = None
+        served = 0
         for page in range(self.max_pages):
             payload = self._search(start_date, end_date, page)
             rows = payload.get("resultList")
             if not isinstance(rows, list):
                 raise ValueError(f"BigKinds resultList 이상: {type(rows).__name__}")
+            if total is None and _is_count(payload.get("totalCount")):
+                total = payload["totalCount"]
             if not rows:
-                truncated = False
+                stop_reason = "빈 페이지"
                 break
+            # 벤더가 **내보낸** 행 수다(아래 malformed 스킵과 무관) — 절단은 "우리가 다 읽었나"
+            # 이지 "다 파싱했나"가 아니다. 파싱 실패는 그 자리에서 따로 failure 로 남는다.
+            served += len(rows)
             for row in rows:
                 if not isinstance(row, dict):
                     self._note_failure(f"malformed row: {type(row).__name__}", page=page)
@@ -166,11 +190,19 @@ class BigKindsNewsSource:
             # 페이지가 있는데도 조용히 멈춰 success 로 위장된다(미수집 은폐). 종료는 명시
             # 신호(isLimitPage)나 빈 페이지로만 판정한다 — 비용은 창당 요청 1개 추가뿐.
             if payload.get("isLimitPage"):
-                truncated = False
+                stop_reason = "isLimitPage(벤더 상한)"
                 break
-        if truncated:
+        if total is None:
+            # 판정 근거 자체가 없다 — 벤더가 필드를 뺐거나 형이 바뀐 경우다. 조용히 완주로
+            # 넘기지 않는다(Rule 12): 절단이 아니라 **절단 여부를 모른다**고 남긴다.
             self._note_failure(
-                f"MAX_PAGES({self.max_pages}) 도달 — 창 절단 가능(구간 좁혀 재실행)",
+                f"수집 절단 판정 불가 — totalCount 없음 ({served}건 수집, 중단: {stop_reason})",
+                kind="truncation",
+            )
+        elif served < total:
+            self._note_failure(
+                f"수집 절단 — {total}건 중 {served}건 수집, {total - served}건 유실 "
+                f"(중단: {stop_reason})",
                 kind="truncation",
             )
 
