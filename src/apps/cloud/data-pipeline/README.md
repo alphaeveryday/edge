@@ -1324,7 +1324,8 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
     --universe /path/universe.json
 # ⚠️ `--session-date` 가 **지난 거래일이면 벤더 TR 과 콜 형상이 바뀐다**(ALPHA-846) —
 # 소급 TR 로 하루를 한 번에 받아 캐시하므로 첫 window 에 362종 × 4페이지 ≈ 1,450콜이
-# 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다.
+# 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다. 그 거부는
+# **KIS 한정**이다 — 소급 TR 이 정규장만 주기 때문이라, 임의 과거 구간을 받는 토스는 안 막는다.
 #
 # 🔴 **과거일 백필 선행조건 하나 + 알아둘 것 둘** — 1) 을 안 지키면 태스크가 크게 터진다:
 #  1) 그 날짜의 1분 canonical prefix 가 **비어 있어야 한다**. artifact 키에는 벤더·세션

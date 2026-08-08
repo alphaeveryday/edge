@@ -7,7 +7,8 @@ v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 *
     → claim 검증(window 행 잠금)
     → canonical upsert (뉴스만 — CanonicalWriter 경계 뒤)
     → window checksum/generation 확정 (_record_window_outcome_tx)
-    → price job + PriceWindowCommitted outbox (_insert_*_tx)
+    → price job + PriceWindowCommitted outbox (_insert_*_tx — outbox 는 조건부,
+      과거일 백필 세션은 job 만 쓴다: ALPHA-863, `commit_price_window` 참조)
     → commit
 
 트랜잭션이 통째로 성공하거나 통째로 없던 일이 된다 — S3 성공/DB 실패의 잔재(orphan)는
