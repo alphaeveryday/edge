@@ -408,7 +408,16 @@ class KisHistoricalMinuteClient(KisMinuteClient):
         hour = DAY_LAST_HHMMSS
         collected: dict[datetime, Candle] = {}
         for _ in range(MAX_DAY_PAGES):
-            page = self._rows(symbol, hour)
+            try:
+                page = self._rows(symbol, hour)
+            except ValueError as error:
+                # 🔴 **봉투 수준** 형상 위반(`output2 이상`·`응답이 객체가 아님`)은 잘린
+                # 본문·프록시 오류 페이지 같은 **전송 사고**에 가깝다 — 깨진 JSON 이
+                # `KisUnitError` 로 가는 것과 같은 축인데 이 둘만 ValueError 로 남아
+                # 있다. 그대로 두면 하루 캐시가 결정적 실패로 오인해(행 형상 위반과
+                # 구분이 안 된다) 몇 초의 전송 사고가 그 종목의 하루 전체를 죽인다.
+                raise KisUnitError(
+                    f"KIS 소급 분봉 {symbol} 응답 봉투 이상: {error}") from error
             # 남의 날 행은 **파싱하지 않는다** — 어차피 버릴 07-31 행 하나의 정합 하자로
             # 08-03 수집이 INVALID 가 되면 안 된다. 대신 dict 여부는 여기서 못박는다:
             # 원시 값을 그냥 만지면(`raw.get`) 비-dict 가 `AttributeError` 로 새는데,
@@ -429,7 +438,16 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                         f"{symbol} 소급 분봉 행의 거래일이 문자열이 아니다: {trade_date!r}")
                 if trade_date != self._ymd:
                     continue
-                same_day.append(parse_minute_row(raw, symbol))
+                candle = parse_minute_row(raw, symbol)
+                if candle.window_end.second or candle.window_end.microsecond:
+                    # 분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 같은 오프셋으로 밀어
+                    # 계획된 window 키와 어긋나게 만든다 — 예외도 로그도 없이 그 종목의
+                    # 하루가 통째로 missing 이 된다(실측 재현: 09:03:30 한 봉이 389개를
+                    # 죽인다). 벤더가 그렇게 준 적은 없지만 가드가 없었다.
+                    raise ValueError(
+                        f"{symbol} 소급 분봉 봉 시각이 분 격자 밖이다: "
+                        f"{candle.window_end.isoformat()}")
+                same_day.append(candle)
             for candle in same_day:
                 previous = collected.get(candle.window_end)
                 if previous is not None and previous != candle:

@@ -547,6 +547,35 @@ class TestHistoricalCandles:
             client.candles("005930", window_end=self.at("1030"))
         assert len(client.candles("005930", window_end=self.at("1030"))) == 1
 
+    def test_envelope_shape_error_is_transient_not_cached(self):
+        """봉투 수준 형상 위반은 **전송 사고 축**이다 — 캐시하면 안 된다.
+
+        `output2 이상`·`응답이 객체가 아님` 은 잘린 본문·프록시 오류 페이지에서 나는데,
+        깨진 JSON 은 이미 `KisUnitError` 로 갈린다. 이 둘만 `ValueError` 로 남아 있어
+        하루 캐시가 행 형상 위반과 구분하지 못하면, 몇 초의 전송 사고가 그 종목의
+        하루 전체를 죽이고 되돌릴 길이 없다(INCOMPLETE 는 재청구 대상이 아니다).
+
+        ⚠️ 두 번째 호출이 **성공하는 것**으로 못박는다 — 예외 타입만 보면 캐시된 값을
+        되던지는 것과 구분되지 않는다.
+        """
+        client, _ = self.hist([
+            TOKEN, json.dumps({"rt_cd": "0", "output2": {}}),
+            ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
+        ])
+        with pytest.raises(KisUnitError, match="봉투 이상"):
+            client.candles("005930", window_end=self.at("1030"))
+        assert len(client.candles("005930", window_end=self.at("1030"))) == 1
+
+    def test_bar_off_the_minute_grid_is_a_shape_error(self):
+        """분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 밀어 하루를 조용히 죽인다.
+
+        09:03:30 봉이 하나 오면 이후 합성이 통째로 :30 오프셋으로 생성돼 계획된 390
+        window 중 389개가 키 불일치로 `missing` 이 된다 — 예외도 ERROR 로그도 없이.
+        """
+        client, _ = self.hist([TOKEN, ok([row("090100"), {**row(), "stck_cntg_hour": "090330"}])])
+        with pytest.raises(ValueError, match="분 격자 밖"):
+            client.candles("005930", window_end=self.at("0901"))
+
     def test_cached_failure_is_reraised_fresh_not_the_same_object(self):
         # 저장한 예외 객체를 다시 raise 하면 traceback 이 raise 마다 2프레임씩 자란다 —
         # `_candle_for` 가 ValueError 를 logger.exception 으로 찍으므로 390 window 면
