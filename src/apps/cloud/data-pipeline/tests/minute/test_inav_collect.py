@@ -23,6 +23,7 @@ from data_pipeline.minute.models import KST, CollectionRequest
 from data_pipeline.minute.price_collect import Outcome
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.kis_inav import KisInavSource
+from data_pipeline.sources.kis_nav import KisNavShapeError
 
 NOW = datetime(2026, 8, 10, 9, 31, 5, tzinfo=KST)
 
@@ -223,3 +224,42 @@ class TestKisBinding:
         collector.collect(request_for(32), NOW)
 
         assert len(issued) == 1  # 2 window × 2 종목인데 발급은 한 번
+
+
+class TestVendorBlankAndDrift:
+    """KIS 는 **키를 빼는 게 아니라 빈 문자열을 보낸다** — 위 결측 테스트가 키 부재만
+    써서, 빈 문자열 분기를 지워도(`if raw is None:`) 전 스위트가 통과했다."""
+
+    def test_빈_문자열_괴리는_행을_죽이지_않는다(self):
+        """`_row_defect` 는 `bsop_hour`·`nav` 만 요구하므로 이 행은 수집까지 온다.
+        빈 문자열 분기가 없으면 `to_decimal("")` 이 터져 그 unit 이 invalid 가 되고,
+        **소급이 불가한 그 분의 NAV 가 영구히 사라진다** — 도크스트링이 막으려는 그 축이다."""
+        rows = {"069500": [{"bsop_hour": "093100", "nav": "200.0",
+                            "stck_prpr": "", "dprt": ""}]}
+        result, records, manifest = collect(request_for(31, ("069500",)), rows=rows)
+
+        assert manifest["received"] == ["069500"] and result.status == "VALID"
+        [record] = records
+        assert record["nav"] == "200.0"
+        assert record["market_price"] is None and record["premium_pct"] is None
+
+    def test_빈_문자열_nav_는_행을_살릴_수_없다(self):
+        """비대칭의 반대편 — nav 가 빈 문자열이면 담을 값이 없다. 위 테스트만 있으면
+        `_REQUIRED_VALUE` 판정을 지워도 통과한다(둘 다 None 으로 살아버린다)."""
+        rows = {"069500": [{"bsop_hour": "093100", "nav": "", "stck_prpr": "505"}]}
+        _, records, manifest = collect(request_for(31, ("069500",)), rows=rows)
+
+        assert records == () and manifest["invalid"] == ["069500"]
+
+    def test_응답_형상_위반은_missing_이_아니라_invalid(self):
+        """벤더가 `output` 키 이름을 바꾸면(자기 엔드포인트끼리도 `output`/`output2` 로
+        갈린다) 재시도로 안 풀린다. missing 으로 접으면 전 unit 이 매 window "벤더가 안
+        줬다"로 기록되고, 우리 파서가 깨진 사실은 원장 어디에도 안 남는다."""
+        def shape_drift(*args, **kwargs):
+            raise KisNavShapeError("KIS rt_cd=0 인데 output 이상: NoneType")
+
+        collector = make_collector(fetch=shape_drift)
+        result, records, manifest = collector.collect(request_for(31, ("069500",)), NOW)
+
+        assert manifest["invalid"] == ["069500"] and manifest["missing"] == []
+        assert result.status == "INVALID"  # INCOMPLETE(재시도 축)와 갈린다

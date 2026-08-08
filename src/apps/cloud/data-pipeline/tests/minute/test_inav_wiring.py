@@ -82,3 +82,8 @@ def test_canonical_키가_프리픽스에서_자라고_분봉과_갈린다():
     # 정정은 새 generation → 새 key 라 원본을 안 덮는다. run_id 는 없다(재실행 no-op).
     assert key != canonical_etf_inav_minute_artifact_key("KR", "2026-08-10", "0931", 2)
     assert key == canonical_etf_inav_minute_artifact_key("KR", "2026-08-10", "0931", 1)
+    # ⚠️ **window 축을 명시로 못박는다.** 위 단언은 전부 한 window 안에서만 비교해서,
+    # 키에서 `window=` 세그먼트를 통째로 빼도 전건 통과했다. 그러면 하루 390 window 가
+    # 한 키를 다투고 09:32 가 09:31 위에 ArtifactImmutabilityError 를 내거나 덮어쓴다.
+    assert "window=0931" in key
+    assert key != canonical_etf_inav_minute_artifact_key("KR", "2026-08-10", "0932", 1)

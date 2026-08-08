@@ -45,6 +45,20 @@ MAX_RATE_RETRY = 5
 KST = timezone(timedelta(hours=9))
 
 
+class KisNavShapeError(ValueError):
+    """`rt_cd=0` 인데 응답 형상이 계약 밖 — **재시도로 안 풀린다**.
+
+    `ValueError` 를 상속하는 것이 핵심이다. 배치 경로(`fetch`)는 `except Exception` 으로
+    ETF 단위 격리를 하므로 동작이 그대로고, **재시도 여부를 판정해야 하는 호출자만**
+    이 타입으로 갈라 본다(1분 레인의 `minute/inav_collect.py`). 그쪽에서 형상 위반을
+    재시도 축(missing)으로 접으면 벤더가 키 이름 하나만 바꿔도 전 unit 이 매 window
+    "벤더가 안 줬다"로 기록되고, 원장에는 우리 파서가 깨진 사실이 남지 않는다.
+
+    rt_cd 오류·빈 output 은 **여기 넣지 않는다** — 일시 거절·창에 데이터 없음이라
+    재시도로 풀리는 축이다(`kis_minute` 이 `KisUnitError` 로 가르는 것과 같은 경계).
+    """
+
+
 def _yyyymmdd(date_str: str | None) -> str | None:
     """수집 창 날짜(YYYY-MM-DD) → KIS 파라미터 형식(YYYYMMDD). None 은 그대로 None."""
     return date_str.replace("-", "") if date_str else None
@@ -222,13 +236,15 @@ class KisNavSource:
             body = self.client.request("GET", url, headers=headers, decode=True)
             data = json.loads(body)  # 깨진 JSON → ETF 단위 실패로 전파
             if not isinstance(data, dict):
-                raise ValueError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
+                raise KisNavShapeError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
             if data.get("rt_cd") == "0":
                 # 이 엔드포인트는 output2 가 아니라 단일 output 배열이다(라이브 실측).
                 # 키 누락·비-list 는 rt_cd=0 인데도 이상(스키마 드리프트)이라 fail-loud.
                 output = data.get("output")
                 if not isinstance(output, list):
-                    raise ValueError(f"KIS rt_cd=0 인데 output 이상: {type(output).__name__}")
+                    raise KisNavShapeError(
+                        f"KIS rt_cd=0 인데 output 이상: {type(output).__name__}"
+                    )
                 if not output:
                     raise ValueError("empty output — 응답 창에 데이터가 없거나 잘못된 종목코드")
                 # 못 쓰는 행이 섞여도 한 행이 ETF 전체를 끊지 않게 — 기록 후 스킵.

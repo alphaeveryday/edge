@@ -33,6 +33,7 @@ from datetime import datetime
 from ..sources.candle import to_decimal
 from ..sources.http import StopFetch
 from ..sources.kis_inav import KST, MIN_INTERVAL_SEC, KisInavSource
+from ..sources.kis_nav import KisNavShapeError
 from .models import CollectionRequest, CollectionResult, content_checksum
 from .price_collect import Outcome, status_of
 
@@ -234,8 +235,15 @@ class KisInavCollector:
         except StopFetch:
             logger.error("KIS iNAV 소스 전역 실패 — 수집 중단", exc_info=True)
             raise
+        except KisNavShapeError:
+            # 형상 위반은 **재시도로 안 풀린다**(`kis_collector` 가 `ValueError` 를
+            # INVALID 로 가르는 것과 같은 경계). missing 으로 접으면 벤더가 `output` 키
+            # 이름 하나만 바꿔도 전 unit 이 매 window "벤더가 안 줬다"로 기록되고,
+            # 우리 파서가 깨진 사실은 원장 어디에도 안 남는다.
+            logger.exception("KIS iNAV 응답 형상 위반 %s(%s) — invalid", unit_id, symbol)
+            return Outcome.INVALID
         except Exception as error:
-            # 어댑터는 종목 단위 실패를 예외로 올린다(요청 실패·깨진 JSON·rt_cd 오류·
-            # 빈 output) — 전부 재시도로 풀릴 수 있는 축이다.
+            # 남은 종목 단위 실패(요청 실패·깨진 JSON·rt_cd 오류·빈 output)는 전부
+            # 재시도로 풀릴 수 있는 축이다.
             logger.error("KIS iNAV 실패 %s(%s): %s", unit_id, symbol, error)
             return Outcome.MISSING
