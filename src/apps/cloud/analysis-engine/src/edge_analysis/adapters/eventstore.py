@@ -792,6 +792,81 @@ class EventStore:
             "fanout_tenants": fanout_tenants,
         }
 
+    def persist_hypothesis_trials(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        minute_price_trigger_id: str,
+        trade_date: date,
+        ticker: str,
+        explanation_run_id: str | None = None,
+    ) -> int:
+        """가설 원장(hypothesis_trial) upsert — 단일 writer 는 이 리포지토리다(ADR-0005).
+
+        trial_id 는 (trigger_id, stage, 정체성)의 결정적 해시다. 정체성은 TESTED 면
+        튜플 슬롯(방아쇠·채널·노출·층·조건), REJECTED 면 기각 사유 원문 — 같은 트리거
+        재실행이 같은 id 로 수렴해 중복 행이 쌓이지 않는다(멱등 축 = PK).
+        (trigger, run) UNIQUE 축을 안 쓴 이유: run_id 는 벽시계 재료라 재배달·재실행마다
+        새 값이고 그 축은 재실행마다 행을 쌓는다. DO UPDATE 라 재실행이 판정·통계·run
+        연결을 최신으로 덮는다(정정 후 재실행이 낡은 판정을 남기지 않는다).
+
+        같은 배치 안의 동일 id 는 마지막 것만 남긴다 — ON CONFLICT DO UPDATE 는 한
+        문장에서 같은 행을 두 번 못 건드린다(cannot affect row a second time).
+        실패는 롤백 후 그대로 올린다 — 원장 실패로 런을 죽일지는 호출부가 정한다.
+        """
+        import json
+
+        from psycopg2.extras import Json, execute_values
+
+        if not rows:
+            return 0
+        by_id: dict[str, tuple] = {}
+        for row in rows:
+            stage = str(row.get("stage", ""))
+            if stage == "TESTED":
+                identity = json.dumps(
+                    {k: row.get(k) for k in
+                     ("trigger_slot", "channel", "exposure", "layer", "conditions")},
+                    ensure_ascii=False, sort_keys=True)
+            else:
+                identity = str(row.get("reason") or "")
+            trial_id = stable_id("hyt", minute_price_trigger_id, stage, identity)
+            conditions = row.get("conditions")
+            by_id[trial_id] = (
+                trial_id, minute_price_trigger_id, explanation_run_id,
+                trade_date.isoformat(), ticker, stage,
+                row.get("trigger_slot"), row.get("channel"), row.get("exposure"),
+                row.get("layer"),
+                Json(conditions) if conditions is not None else None,
+                row.get("verdict"), row.get("applies_today"),
+                row.get("n"), row.get("p"),
+                row.get("effect_low"), row.get("effect_high"),
+                str(row.get("reason") or ""),
+            )
+        try:
+            with self._conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    "INSERT INTO hypothesis_trial (trial_id, minute_price_trigger_id,"
+                    " explanation_run_id, trade_date, ticker, stage, trigger_slot,"
+                    " channel, exposure, layer, conditions, verdict, applies_today,"
+                    " n, p, effect_low, effect_high, reason) VALUES %s"
+                    " ON CONFLICT (trial_id) DO UPDATE SET"
+                    " explanation_run_id = EXCLUDED.explanation_run_id,"
+                    " verdict = EXCLUDED.verdict,"
+                    " applies_today = EXCLUDED.applies_today,"
+                    " n = EXCLUDED.n, p = EXCLUDED.p,"
+                    " effect_low = EXCLUDED.effect_low,"
+                    " effect_high = EXCLUDED.effect_high,"
+                    " reason = EXCLUDED.reason",
+                    list(by_id.values()),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return len(by_id)
+
     @staticmethod
     def _fanout_new(cur, explanation_result_id: str) -> int:
         """게시된 설명을 전 테넌트 outbox 로 NEW 발번한다 — 게시와 같은 트랜잭션.
