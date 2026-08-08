@@ -146,6 +146,11 @@ class _FakeStore:
         self.calls.append("persist_explanation")
         return {"persisted": "rds", "explanation_result_id": "res_1", "run_id": "run_1"}
 
+    def persist_hypothesis_trials(self, rows, **kwargs):
+        self.calls.append("persist_hypothesis_trials")
+        self.trials = (rows, kwargs)
+        return len(rows)
+
 
 class _FakeClient:
     def complete_json(self, system, user):
@@ -368,6 +373,83 @@ def test_routing_rollup_is_handed_to_the_explanation_path(monkeypatch):
     # 실패 쪽 단언만으로는 못 잡는다 — 그 회귀는 유효한 런을 통째로 LOW 로 만든다.
     assert store.explanation.raw["stage_results"]["routing_failed"] is False
     assert store.explanation.confidence_level != "LOW"
+
+
+_TRIAL_ROW = {"stage": "REJECTED", "verdict": "REJECTED", "reason": "[1] 채널 중복"}
+
+
+def _statics_with_hypothesis_path(trials):
+    """가설 경로를 밟은 척하는 statics 대역 — trace 에 LLM 원문을 남기고
+    window_meta 에 검정 버퍼·원장 행을 올린다(실제 `_window_paneltest` 의 산출 축)."""
+    def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        from edge_analysis.observability import record
+        record("llm.request", seq=1, system="너는 인과 가설 에이전트다", user="brief")
+        record("llm.response", seq=1, response={"hypotheses": []})
+        kwargs["window_meta"]["stat_tests"] = [{"stage": "test", "verdict": "성립"}]
+        kwargs["window_meta"]["hypothesis_trials"] = list(trials)
+        return "설명"
+    return fake_statics
+
+
+def test_hypothesis_trials_are_persisted_with_the_run_id(monkeypatch):
+    """window_meta 로 올라온 가설 원장 행이 store 로 간다(ALPHA-881) — etfcell 은
+    store 를 모르므로 이 배선이 끊기면 원장은 영원히 빈다. 행은 stage_results 에
+    중복 적재되지 않는다(DB 표가 정본)."""
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        _statics_with_hypothesis_path([_TRIAL_ROW]))
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+
+    assert _run(store, _FakeS3()) == 0
+    assert "persist_hypothesis_trials" in store.calls
+    rows, kwargs = store.trials
+    assert rows == [_TRIAL_ROW]
+    assert kwargs["minute_price_trigger_id"] == "mpt_1"
+    # run 연결 — 설명 영속(run 확정) 뒤에 원장을 쓰는 이유다.
+    assert kwargs["explanation_run_id"] == "run_1"
+    assert store.calls.index("persist_explanation") < store.calls.index(
+        "persist_hypothesis_trials")
+    stage = store.explanation.raw["stage_results"]
+    assert "hypothesis_trials" not in stage.get("window", {})
+    assert stage["window"]["stat_tests"]           # 검정 버퍼는 그대로 남는다
+
+
+def test_hypothesis_ledger_failure_does_not_kill_the_run(monkeypatch, capsys):
+    """원장 DB 실패는 런을 죽이지 않되 **로그로 드러난다**(Rule 12) — 설명은 이미
+    영속됐고 원장 결손은 멱등 재실행이 메운다. 조용히 삼키면 결손이 안 보인다."""
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        _statics_with_hypothesis_path([_TRIAL_ROW]))
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+
+    def _boom(rows, **kwargs):
+        raise RuntimeError("db down")
+
+    store.persist_hypothesis_trials = _boom
+
+    assert _run(store, _FakeS3()) == 0             # 런은 산다
+    assert "persist_explanation" in store.calls
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    failed = [e for e in events if e.get("event") == "hypothesis_trial.persist_failed"]
+    assert failed and "db down" in failed[0]["error"] and failed[0]["rows"] == 1
+
+
+def test_hypothesis_path_run_leaves_a_trace_file(monkeypatch):
+    """가설 경로 런(LLM 원문이 record 된 런)의 trace 가 S3 traces/ 로 남는다.
+
+    `write_agent_trace` 에 인과 전용 게이트가 생겨 propose 원문이 버려지면 여기가
+    깨진다 — 원장 행만 있고 프롬프트 원문이 없으면 "왜 그 가설이었나"를 못 되짚는다."""
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        _statics_with_hypothesis_path([_TRIAL_ROW]))
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    traces = [p for p in s3.puts if "/traces/" in p["Key"]]
+    assert traces, "가설 경로 런이 trace 파일을 안 남겼다"
+    events = json.loads(traces[0]["Body"].decode("utf-8"))["events"]
+    kinds = [e["event"] for e in events]
+    assert "llm.request" in kinds and "llm.response" in kinds
+    assert store.explanation.raw["stage_results"]["analysis_trace"]["event_count"] >= 2
 
 
 class _HostileField:

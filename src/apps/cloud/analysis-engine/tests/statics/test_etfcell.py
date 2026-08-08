@@ -142,7 +142,7 @@ def _tuple():
         outcome="수익률", layer="고유")
 
 
-def _wire(monkeypatch, reports):
+def _wire(monkeypatch, reports, rejected=()):
     """요청창 갈래에 가설→검정 사슬을 스텁으로 배선한다. 판정(EdgeReport)만 주입 -
     승격·명시 규율은 실제 코드(`_window_paneltest`)가 돈다."""
     import dataclasses
@@ -159,7 +159,7 @@ def _wire(monkeypatch, reports):
                         lambda lake, iid, day: {})
     tup = _tuple()
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
-                        lambda ask, **kw: ([tup] * len(reports), []))
+                        lambda ask, **kw: ([tup] * len(reports), list(rejected)))
     monkeypatch.setattr("edge_analysis.statics.paneltest.edge_tests",
                         lambda lake, tuples, day, cell_instrument_id="":
                         [(tup, r) for r in reports])
@@ -238,6 +238,89 @@ def test_established_but_inapplicable_is_flagged_in_the_buffer(monkeypatch):
     [rec] = meta["stat_tests"]
     assert rec["verdict"] == "성립" and rec["applies_today"] is False
     assert rec["reason"], "적용불가 사유가 비었다"
+
+
+def test_rejected_proposals_become_ledger_rows(monkeypatch):
+    """기각 제안은 REJECTED+사유로 원장 행이 된다 — 기각이 침묵되면 깨진다(ALPHA-881).
+
+    이전에는 유효 튜플이 하나라도 있으면 rejected 목록이 통째로 사라졌다: "무엇이
+    제안됐고 왜 죽었나"가 로그 보존 기간과 함께 증발한다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    why = "[1] 접지 밖 사건타입 날조: 'EVT_FAKE'"
+    _text, meta = _wire(monkeypatch, [
+        EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9)], rejected=[why])
+
+    trials = meta["hypothesis_trials"]
+    rejected = [t for t in trials if t["stage"] == "REJECTED"]
+    assert rejected == [{"stage": "REJECTED", "verdict": "REJECTED", "reason": why}]
+    # 검정 행도 같은 원장에 있다 — 기각만 남고 검정이 사라지면 그것도 침묵이다.
+    assert [t["stage"] for t in trials] == ["REJECTED", "TESTED"]
+
+
+def test_tested_verdicts_are_stored_as_english_codes(monkeypatch):
+    """원장 저장은 영문 코드 원칙 — 한글 판정이 그대로 새면 DB CHECK 가 거부한다.
+
+    stage_results 버퍼(stat_tests)는 한글 원값을 유지한다 — 두 소비자의 계약이 다르다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    _text, meta = _wire(monkeypatch, [
+        EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9),
+        EdgeReport("불성립", 120, 0.4, 0.01, -0.002, 0.5),
+        EdgeReport("판정불가", 10, None, None, None, None, reason="표본부족"),
+    ])
+
+    tested = [t for t in meta["hypothesis_trials"] if t["stage"] == "TESTED"]
+    assert [t["verdict"] for t in tested] == [
+        "ESTABLISHED", "NOT_ESTABLISHED", "UNDECIDABLE"]
+    assert all(t["verdict"] not in ("성립", "불성립", "판정불가") for t in tested)
+    # 슬롯 원값(닫힌 어휘)이 행에 실린다 — 원장만 보고 튜플을 복원할 수 있어야 한다.
+    assert tested[0]["trigger_slot"] == "점:CONTRACT.SIGNING"
+    assert tested[0]["exposure"] == "거래량/수준" and tested[0]["layer"] == "고유"
+
+
+def test_all_rejected_proposals_still_reach_the_ledger(monkeypatch):
+    """전부 기각돼 검정이 0건이어도 기각 행은 남는다 — 빈손 런이 무기록 런으로
+    위장되면 안 된다(Rule 12)."""
+    _text, meta = _wire(monkeypatch, [], rejected=["[1] 채널 중복: Q수량"])
+
+    assert [t["stage"] for t in meta["hypothesis_trials"]] == ["REJECTED"]
+    assert meta["hypothesis_trials"][0]["reason"] == "[1] 채널 중복: Q수량"
+    # stat_tests 버퍼의 '가설없음' 계약은 그대로다.
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "가설없음"
+
+
+def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
+    """가설 제안 호출의 프롬프트·응답 원문이 trace 버퍼에 남는다(ALPHA-881).
+
+    `TracingClient` 가 propose 의 ask 지점을 감싸므로, collect_trace 안에서 요청창
+    갈래를 돌리면 llm.request/response 가 쌓여야 한다 — 이 사슬이 끊기면 가설이
+    왜 그렇게 나왔는지 되짚을 원문이 없다."""
+    import dataclasses
+
+    from edge_analysis.adapters.llm import TracingClient
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {})
+
+    class _Client:
+        def complete_json(self, system, user):
+            return {"hypotheses": []}   # 빈 제안 — 검정 없이 propose 만 돈다
+
+    ask = TracingClient(_Client()).complete_json
+    with collect_trace() as trace:
+        etfcell._window_paneltest(object(), "iid", "2026-08-05", ask, facts)
+
+    requests = [e for e in trace if e.get("event") == "llm.request"]
+    assert requests, "propose 프롬프트가 trace 에 없다"
+    assert "인과 가설 에이전트" in str(requests[0]["system"])
+    assert any(e.get("event") == "llm.response" for e in trace)
 
 
 def test_missing_layers_raise_instead_of_returning_prose():

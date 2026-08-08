@@ -426,6 +426,28 @@ Table "explanation_run_event_price_observation" {
   }
 }
 
+Table "hypothesis_trial" {
+  "trial_id" text [pk]
+  "minute_price_trigger_id" text [not null]
+  "explanation_run_id" text
+  "trade_date" date [not null]
+  "ticker" text [not null]
+  "stage" varchar(16) [not null]
+  "trigger_slot" text
+  "channel" text
+  "exposure" text
+  "layer" text
+  "conditions" jsonb
+  "verdict" varchar(20)
+  "applies_today" boolean
+  "n" int
+  "p" float8
+  "effect_low" float8
+  "effect_high" float8
+  "reason" text [not null]
+  "created_at" timestamptz [not null]
+}
+
 Table "instrument" {
   "instrument_id" text [pk]
   "entity_type" varchar(20)

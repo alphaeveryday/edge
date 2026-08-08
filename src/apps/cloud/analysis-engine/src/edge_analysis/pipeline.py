@@ -592,6 +592,10 @@ def run(
         # 최종 문자열에서 다시 파싱하지 않고 추적한다.
         "plain": plain.strip().lstrip("=").strip()}
     final_payload = window_meta.pop("final_explanation", None)
+    # 가설 원장 행(ALPHA-881)은 DB 표(hypothesis_trial)가 정본이다 — stage_results 에
+    # 같은 내용을 또 실으면 두 벌이 되어 어느 쪽을 믿을지 갈린다. 여기서 빼서
+    # run 확정 뒤 store 로 보낸다(run_id 연결이 필요해 persist_explanation 뒤다).
+    trial_rows = window_meta.pop("hypothesis_trials", None) or ()
     if window_meta:
         stage["window"] = window_meta
     if final_payload is not None:
@@ -621,6 +625,21 @@ def run(
         events=events,
         publishable=surface_ok,
     )
+    if trial_rows:
+        # DB 실패가 런을 죽이지 않는다 — 설명은 이미 영속됐고, 원장 결손은 재실행이
+        # 멱등으로 메운다. 조용히 삼키지 않는다(Rule 12): 사유를 로그로 드러낸다.
+        try:
+            stored_trials = store.persist_hypothesis_trials(
+                list(trial_rows),
+                minute_price_trigger_id=settings.trigger_id,
+                trade_date=settings.trade_date,
+                ticker=settings.etf_ticker,
+                explanation_run_id=outcome.get("run_id"),
+            )
+            log("hypothesis_trial.stored", rows=stored_trials)
+        except Exception as exc:            # noqa: BLE001 — 원장 실패는 로그로 드러낸다
+            log("hypothesis_trial.persist_failed",
+                error=f"{type(exc).__name__}: {exc}", rows=len(trial_rows))
     write_run_archive(s3, settings, {
         "outcome": "explained",
         "trigger": asdict(gate),
