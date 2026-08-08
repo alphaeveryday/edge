@@ -750,7 +750,15 @@ def _dispatch(args, settings, storage, run_id) -> int:
         elif vendor == "bigkinds":
             if settings.bigkinds_news is None:
                 raise SystemExit("bigkinds_news 설정이 없다 — sources.toml 확인")
-            source = BigKindsNewsSource(settings.bigkinds_news, PoliteClient(min_interval=1.0))
+            # timeout 45s — 1분 레인이 **같은 엔드포인트**에서 실측한 값과 맞춘다(ALPHA-645,
+            # `MinuteNewsWorkerConfig.timeout_sec` 주석: "스파이크에서 단발 read 20초 초과를
+            # 실측했다 … 기본 10초는 느린 꼬리를 실패로 접는다"). 배치는 기본 10초를 쓰고
+            # 있었는데, 창당 페이지가 40 → 최대 126 으로 늘어 그 꼬리를 밟을 기대 횟수가
+            # 3배가 됐다 — 재시도까지 소진되면 런이 partial(exit 1)로 끝나고 그 지점에서
+            # 중도 이탈해 절단 판정 자체가 안 돈다.
+            source = BigKindsNewsSource(
+                settings.bigkinds_news, PoliteClient(min_interval=1.0, timeout=45.0)
+            )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|bigkinds)")
         return ingest_raw.run(settings, storage, source, run_id, from_date, to_date)
