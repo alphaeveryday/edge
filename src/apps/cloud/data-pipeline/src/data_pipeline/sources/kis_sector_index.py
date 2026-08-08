@@ -22,9 +22,23 @@ API: 업종분봉조회 `inquire-time-indexchartprice`, tr_id `FHKUP03500200`.
    13건 전건 불일치. 뒤집으면 전 구간이 정확히 1분 밀린 채 조용히 커밋된다.
 4. **응답에 봉이 아닌 행이 섞인다** — `stck_cntg_hour` 가 `999999`·`888888` 인 두 줄이
    **날짜마다** 붙는다(OHLC 넷이 전부 그날 종가인 요약 행). 페이지는 102행 = 봉 100 +
-   센티넬 2. 위치가 아니라 라벨로 걸러야 한다.
+   센티넬 2 이고, 응답이 두 날짜에 걸치면 센티넬도 두 쌍이라 104행이다. 위치가 아니라
+   라벨로 걸러야 한다.
 5. **필드명이 다르다** — `bstp_nmix_prpr/oprc/hgpr/lwpr`(주식은 `stck_*`). 그래서
    `kis_minute.parse_minute_row` 를 쓸 수 없다.
+6. 🔴 **`cntg_vol` 은 "거래가 있었나"의 답이 아니다.** 지수는 자기가 체결되지 않고
+   구성종목이 체결된다 — 그래서 거래량이 0 인 분에도 지수가 움직인다. 실측(45종 ×
+   100봉 = 4,500봉, 2026-08-09): 거래량>0 이 3,806 · **거래량 0 인데 OHLC 가 움직인
+   것이 175(3.9%)** · 거래량 0 & flat 이 519. 저유동 업종(1007 종이·목재)에서는 그게
+   상시다.
+
+   ⚠️ **그래서 `price_collect` 의 4분류를 그대로 쓰면 안 된다.** 그쪽은 `volume==0`
+   인데 flat 이 아닌 봉을 `invalid` 로 접고(`collect_units`, "우리가 아는 형상이
+   아니다"), `status_of` 는 invalid 하나로 window 전체를 INVALID 로 만든다 — 이
+   dataset 은 **매 window 가 INVALID** 가 되어 단 한 칸도 확정되지 않는다. 주식에서
+   그 규칙이 옳은 이유(체결이 없으면 가격이 못 움직인다)가 지수에는 성립하지 않는다.
+   소비단은 iNAV 와 같이 **`no_trade` 축 없이** 가야 한다(`inav_collect` 는 스냅샷이라
+   그 축이 없고, 여기는 축이 거짓이라 없다 — 결론이 같다).
 
 🔴 **소급 경로를 만들지 않는다.** 두 길이 다 막혀 있다: 이 TR 은 창 이동 수단이 없고,
 소급 TR `FHKST03010230` 에 `div=U` 를 주면 `rt_cd=0` 인데 **일봉이 온다**(날짜당 3행,
@@ -39,6 +53,7 @@ API: 업종분봉조회 `inquire-time-indexchartprice`, tr_id `FHKUP03500200`.
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -76,8 +91,14 @@ _INDEX_FIELDS = (("open", "bstp_nmix_oprc"), ("high", "bstp_nmix_hgpr"),
                  ("low", "bstp_nmix_lwpr"), ("close", "bstp_nmix_prpr"))
 
 
-def parse_index_row(raw: dict, symbol: str, *, interval_sec: int) -> Candle:
+def parse_index_row(raw: dict, unit_id: str, *, interval_sec: int) -> Candle:
     """`output2` 행 하나 → `Candle`. 필드가 빠지거나 형이 다르면 즉시 raise 한다.
+
+    ⚠️ **`unit_id` 는 우리 축(KRX 업종코드)이다** — 질의에 쓴 KIS 코드가 아니다.
+    `Candle.symbol` 이 그대로 `price_collect.record_of` 의 `unit_id` 가 돼 canonical 에
+    실리는데, 거기 벤더 코드가 앉으면 일봉 `sector_index`(KRX 코드 축)와 **어떤 조인에도
+    안 걸린다**. 번역은 `KisSectorIndexClient.candles` 가 지고 여기로는 우리 축만 온다
+    (`inav_collect.record_of` 가 `unit_id` 를 따로 받는 것과 같은 이유).
 
     ⚠️ **`stck_cntg_hour` 는 구간의 시작이다**(모듈 도크스트링 3번) — 주식과 반대라
     `window_end = 라벨 + interval` 이다. `kis_minute.parse_minute_row` 가 같은 이름의
@@ -86,43 +107,62 @@ def parse_index_row(raw: dict, symbol: str, *, interval_sec: int) -> Candle:
     응답에 시간대 표기가 없어 **KST 로 고정**한다(KRX 로컬 지수 전용 TR).
     """
     if not isinstance(raw, dict):
-        raise ValueError(f"{symbol} 지수 분봉 행이 객체가 아니다: {type(raw).__name__}")
+        raise ValueError(f"{unit_id} 지수 분봉 행이 객체가 아니다: {type(raw).__name__}")
     day, label = raw.get("stck_bsop_date"), raw.get("stck_cntg_hour")
     if not isinstance(day, str) or not isinstance(label, str):
-        raise ValueError(f"{symbol} 지수 분봉 행에 날짜·시각이 없다: {raw!r}")
+        raise ValueError(f"{unit_id} 지수 분봉 행에 날짜·시각이 없다: {raw!r}")
     if len(day) != _YMD_LEN:
         # 자리수를 여기서 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열을 보므로
         # 날짜가 짧으면 시각 자리를 잘라 먹고도 파싱에 성공할 수 있다(`"2026087"` +
         # `"103000"`). 그러면 라벨이 조용히 다른 분으로 읽힌다.
-        raise ValueError(f"{symbol} 지수 분봉 거래일 자리수가 다르다: {day!r}")
+        raise ValueError(f"{unit_id} 지수 분봉 거래일 자리수가 다르다: {day!r}")
     try:
         start = datetime.strptime(day + label, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
-        raise ValueError(f"{symbol} 지수 분봉 시각 형식 오류: {day!r} {label!r}") from error
+        raise ValueError(f"{unit_id} 지수 분봉 시각 형식 오류: {day!r} {label!r}") from error
     if start.second:
         # 분 격자를 벗어난 라벨은 그대로 두면 어느 window 에도 안 맞아 **전건 missing** 이
         # 되는데, 원장에는 "벤더가 안 줬다"로 보여 원인이 형상 변화임을 가린다.
-        raise ValueError(f"{symbol} 지수 분봉 라벨이 분 격자 밖이다: {start.isoformat()}")
-    values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _INDEX_FIELDS}
-    # 지수의 `cntg_vol` 은 그 구간의 체결 수량이다. 0 인 분이 정상이라 `no_trade` 축은
-    # 주식과 같이 간다(`price_collect` 4분류를 벤더별로 나누지 않는다).
-    volume = to_decimal(raw.get("cntg_vol"), "cntg_vol", symbol)
-    return build_candle(symbol, window_end=start + timedelta(seconds=interval_sec),
+        raise ValueError(f"{unit_id} 지수 분봉 라벨이 분 격자 밖이다: {start.isoformat()}")
+    values = {name: to_decimal(raw.get(key), key, unit_id) for name, key in _INDEX_FIELDS}
+    # ⚠️ 벤더가 준 값을 그대로 싣는다(bronze 무변형). 다만 **이 값은 "거래가 있었나"의
+    # 답이 아니다** — 모듈 도크스트링 6번의 실측을 보고, `Candle.traded` 를 그 뜻으로
+    # 읽는 소비자를 붙이지 마라. 0 인 분에도 지수는 움직인다.
+    volume = to_decimal(raw.get("cntg_vol"), "cntg_vol", unit_id)
+    return build_candle(unit_id, window_end=start + timedelta(seconds=interval_sec),
                         span_seconds=interval_sec, values=values, volume=volume)
 
 
 class KisSectorIndexClient(KisMinuteClient):
     """업종지수 분봉 조회 — 지수당 1콜(100분치). 새 HTTP·재시도 코드는 없다.
 
-    부모와 갈리는 것은 `_url`(질의 파라미터)과 `candles`(창을 못 고른다) 둘뿐이다.
+    부모와 갈리는 것은 `_url`(질의 파라미터)·`candles`(창을 못 고른다), 그리고
+    **코드 번역**이다.
+
+    ⚠️ **번역이 이 클래스 안에서 끝난다.** 부모(가격 레인)는 `unit_id` 가 곧 벤더
+    질의 심볼이라 이 축이 없는데, 지수는 둘이 다르다. 경계를 밖으로 미루면 두 사고 중
+    하나가 반드시 난다 — collector 가 KRX 코드를 그대로 `FID_INPUT_ISCD` 에 실어
+    **남의 지수를 조용히 받거나**(모듈 도크스트링 1번), 번역은 하되 `Candle.symbol` 에
+    KIS 코드가 남아 canonical 의 `unit_id` 가 벤더 코드가 된다(일봉 `sector_index` 와
+    조인 불가). 들어오는 것도 나가는 것도 **KRX 업종코드**이고, KIS 코드는 URL 안에서만
+    산다.
     """
 
     tr_id = TR_ID_INDEX_MINUTE
     path = PATH_INDEX_MINUTE
 
-    def __init__(self, app_key: str, app_secret: str, client, *, env: str = "prod",
+    def __init__(self, app_key: str, app_secret: str, client,
+                 index_map: dict[str, str], *, env: str = "prod",
                  interval_sec: int = LANE_INTERVAL_SEC):
         super().__init__(app_key, app_secret, client, env)
+        if not index_map:
+            # 빈 맵으로 기동하면 전 unit 이 "맵에 없다"로 떨어져 매 window 가 죽는다.
+            # 설정 결손을 수집 실패로 위장하지 않는다(Rule 12).
+            raise SystemExit(
+                "업종지수 index_map 이 비었다 — [minute_sector_index.index_map] 을 주입해라")
+        # 우리 축(KRX 업종코드) → KIS 질의 코드. 사본을 든다: 호출자가 나중에 고쳐도
+        # 이 클라이언트가 도는 중에 질의 대상이 바뀌면 안 된다.
+        self.index_map = dict(index_map)
         if interval_sec != LANE_INTERVAL_SEC:
             # **레인 상수**에 건다(`inav_collect.KisInavCollector` 와 같은 가드). 다른
             # 간격이면 라벨이 1분 격자에 아예 안 얹혀 전 지수가 매 window missing 인데,
@@ -149,8 +189,11 @@ class KisSectorIndexClient(KisMinuteClient):
         }
         return self.base + self.path + "?" + urllib.parse.urlencode(params)
 
-    def candles(self, symbol: str, *, window_end: datetime) -> tuple[Candle, ...]:
-        """그 거래일의 봉 전부(최근 100분치 중). 창은 **못 고른다**.
+    def candles(self, unit_id: str, *, window_end: datetime) -> tuple[Candle, ...]:
+        """그 거래일의 봉 전부(최근 100봉 중). 창은 **못 고른다**.
+
+        `unit_id` 는 **KRX 업종코드**다(클래스 도크스트링) — 여기서 KIS 코드로 번역해
+        질의하고, 돌려주는 `Candle.symbol` 은 다시 KRX 업종코드다.
 
         부모는 `window_end` 를 벤더에 보내 창을 고정하는데(400종을 도는 사이 최신 봉이
         넘어가는 것을 막는 장치다) 이 TR 에는 그 수단이 없다. 대신 페이지가 100분치라
@@ -158,8 +201,9 @@ class KisSectorIndexClient(KisMinuteClient):
         하던 일을 페이지 폭이 대신한다.
 
         **남의 날의 `값` 하자는 오늘을 죽이지 않는다**(`KisHistoricalMinuteClient._fetch_day`
-        와 같은 축). 장 초반에는 페이지가 직전 거래일 꼬리까지 뻗는데(09:30 의 페이지는
-        07:50 부터다), 어차피 버릴 그 행 하나의 OHLC 정합 하자로 오늘 수집이 통째로
+        와 같은 축). 페이지는 벽시계 100분이 아니라 **최근 100봉**이라 장 초반에는 직전
+        거래일 꼬리까지 뻗는다(09:30 이면 오늘 30봉 + 전 거래일 마지막 70봉). 어차피
+        버릴 그 행 하나의 OHLC 정합 하자로 오늘 수집이 통째로
         INVALID 가 되면 안 된다. 단 **형상 위반은 날짜와 무관하게 실패시킨다** — 행이
         dict 가 아니거나 거래일이 문자열이 아니면 그 행이 어느 날 것인지조차 모르고,
         그건 벤더가 스키마를 바꿨다는 신호다(형제가 같은 조건을 raise 로 낸다).
@@ -171,18 +215,33 @@ class KisSectorIndexClient(KisMinuteClient):
         대상이 아니고 이 소스는 소급이 불가라 그 1분이 45종 전체에 대해 영구히 없어진다
         (`inav_collect._rows_for` 가 같은 이유로 봉투를 재시도 축에 두었다).
         """
+        kis_code = self.index_map.get(unit_id)
+        if kis_code is None:
+            # 유니버스와 매핑이 갈렸다 — **재시도로 안 풀린다**(매 window 반복). 재시도
+            # 축(missing)으로 접으면 벤더가 안 준 것처럼 보여 원인이 설정임을 가린다
+            # (`inav_collect._rows_for` 가 같은 조건을 같은 축으로 낸다).
+            raise ValueError(
+                f"{unit_id} 는 index_map 에 없다 — 유니버스와 수집 매핑이 갈렸다")
         asked = (window_end - timedelta(seconds=self.interval_sec)).astimezone(KST)
         ymd = asked.strftime("%Y%m%d")
         try:
-            rows = self._rows(symbol, str(self.interval_sec))
+            rows = self._rows(kis_code, str(self.interval_sec))
+        except json.JSONDecodeError:
+            # ⚠️ 토큰 발급 응답의 JSON 손상은 여기로 오면 안 된다. `_call` 이
+            # `self._headers()` 를 try 안에서 평가하고 그 경로가 `KisAuth.token()` →
+            # `json.loads` 라, 아래 `except ValueError` 가 **인증 축 사고까지** 삼킨다
+            # (`JSONDecodeError` 는 `ValueError` 서브클래스다). 삼키면 메시지가 엉뚱한
+            # 엔드포인트를 가리키고, 45 unit 이 매 window 토큰 발급을 다시 두드린다.
+            # 부모와 같은 축(ValueError)으로 그대로 올린다.
+            raise
         except ValueError as error:
             raise KisUnitError(
-                f"KIS 지수 분봉 {symbol} 응답 봉투 이상: {error}") from error
+                f"KIS 지수 분봉 {unit_id}({kis_code}) 응답 봉투 이상: {error}") from error
         bars: dict[datetime, Candle] = {}
         for raw in rows:
             if not isinstance(raw, dict):
                 raise ValueError(
-                    f"{symbol} 지수 분봉 행이 객체가 아니다: {type(raw).__name__}")
+                    f"{unit_id} 지수 분봉 행이 객체가 아니다: {type(raw).__name__}")
             label = raw.get("stck_cntg_hour")
             if label in SENTINEL_LABELS:
                 # 계약이다(날짜마다 한 쌍) — 조용히 버린다. 아래 형식 이탈과 **가르는**
@@ -201,17 +260,17 @@ class KisSectorIndexClient(KisMinuteClient):
                 # 짧은 날짜는 구조적으로 "남의 날"이 된다 — 파서의 자리수 가드는 그래서
                 # 이 경로에서 영영 안 닿는다(형이 맞는 형상 위반이 조용한 문으로 샌다).
                 raise ValueError(
-                    f"{symbol} 지수 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
+                    f"{unit_id} 지수 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
             if trade_date != ymd:
                 continue
-            candle = parse_index_row(raw, symbol, interval_sec=self.interval_sec)
+            candle = parse_index_row(raw, unit_id, interval_sec=self.interval_sec)
             previous = bars.get(candle.window_end)
             if previous is not None and previous != candle:
                 # 같은 분에 **다른 값**이 오면 어느 쪽이 참인지 우리가 고를 수 없다.
                 # dict 로 접으면 벤더 행 순서가 값을 정한다(소급 경로가 같은 조건을
                 # 유일성 위반으로 내는 것과 축을 맞춘다). 값이 같은 재등장은 통과시킨다.
                 raise ValueError(
-                    f"{symbol} 가 window {candle.window_end.isoformat()} 에 "
+                    f"{unit_id} 가 window {candle.window_end.isoformat()} 에 "
                     f"지수 봉 2건을 줬다 — 유일성 위반")
             bars[candle.window_end] = candle
         if not bars:
@@ -219,6 +278,6 @@ class KisSectorIndexClient(KisMinuteClient):
             # 다만 조용하지는 않게 남긴다: **틀린 지수코드도 여기로 온다**(KIS 가
             # `rt_cd=0` 에 빈 `output2` 를 준다, 도크스트링 1번). 그 둘은 지속 여부로만
             # 갈리므로 판정하지 않고 사실만 적는다(Rule 12).
-            logger.info("지수 %s 의 %s 봉이 페이지에 0건이다(응답 %d행)",
-                        symbol, ymd, len(rows))
+            logger.info("지수 %s(%s) 의 %s 봉이 페이지에 0건이다(응답 %d행)",
+                        unit_id, kis_code, ymd, len(rows))
         return tuple(bars.values())

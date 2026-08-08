@@ -3,7 +3,7 @@
 응답 payload 는 2026-08-08~09 라이브 실측(1005·2118·1001·2001 등 45종 전건 프로브)에서
 구성했다. 여기서 고정하는 건 "우리가 실측으로 안다고 적어둔 것"이다.
 
-고정하는 계약 다섯:
+고정하는 계약 일곱:
 
 1. ⭐ **`stck_cntg_hour` 는 구간의 시작** — 주식 당일 TR(구간 **끝**)과 **반대 축**이다.
    1005 의 1분봉 5개를 5분봉에 합성 대조해 확정했다(시작 가설 13건 연속 일치, 끝 가설
@@ -16,6 +16,10 @@
 4. **필수 질의 파라미터** — `FID_ETC_CLS_CODE`·`FID_PW_DATA_INCU_YN` 이 빠지면 벤더가
    `rt_cd=2 INPUT FIELD NOT FOUND` 로 전건 튕긴다. `FID_INPUT_HOUR_1` 은 **간격(초)** 다.
 5. **필드명이 주식과 다르다**(`bstp_nmix_*`) — 그래서 주식 파서를 못 쓴다.
+6. **코드 번역이 어댑터 안에서 끝난다** — 들어오고 나가는 것은 KRX 업종코드, KIS 코드는
+   URL 안에서만 산다. 이 축이 새면 남의 지수를 받거나 canonical 이 조인 불가가 된다.
+7. 🔴 **`cntg_vol` 은 "거래가 있었나"의 답이 아니다** — 거래량 0 인데 지수가 움직이는
+   봉이 실측 4,500 중 175(3.9%)다. 주식용 4분류를 그대로 쓰면 매 window 가 INVALID 다.
 """
 
 from __future__ import annotations
@@ -102,9 +106,17 @@ class FakeClient:
         self.slept.append(seconds)
 
 
-def make_client(responses, **kwargs):
+# 우리 축(KRX 업종코드) → KIS 질의 코드. 실제 표의 한 줄 그대로다 — 두 값이 **달라야**
+# 번역이 일어났는지 아닌지를 테스트가 가릴 수 있다.
+UNIT_ID, KIS_CODE = "1005", "0005"
+INDEX_MAP = {UNIT_ID: KIS_CODE}
+
+
+def make_client(responses, index_map=None, **kwargs):
     fake = FakeClient(responses)
-    return KisSectorIndexClient("app-key", "app-secret", fake, **kwargs), fake
+    client = KisSectorIndexClient("app-key", "app-secret", fake,
+                                  INDEX_MAP if index_map is None else index_map, **kwargs)
+    return client, fake
 
 
 def query_of(url: str) -> dict[str, str]:
@@ -118,7 +130,7 @@ class TestParse:
         같은 행을 두 파서에 넣어 대조한다. 한쪽만 단언하면 "우연히 맞는 값"을 고정할 수
         있는데, 두 파서의 **차이**는 이 축이 뒤집힐 때만 사라진다.
         """
-        candle = parse_index_row(row("103000"), "0005", interval_sec=LANE_INTERVAL_SEC)
+        candle = parse_index_row(row("103000"), UNIT_ID, interval_sec=LANE_INTERVAL_SEC)
         assert candle.window_start == datetime(2026, 8, 7, 10, 30, tzinfo=KST)
         assert candle.window_end == datetime(2026, 8, 7, 10, 31, tzinfo=KST)
 
@@ -130,7 +142,7 @@ class TestParse:
         assert candle.window_end - stock.window_end == timedelta(seconds=LANE_INTERVAL_SEC)
 
     def test_values_are_decimal_from_index_fields(self):
-        candle = parse_index_row(row(close="5047.39"), "0005",
+        candle = parse_index_row(row(close="5047.39"), UNIT_ID,
                                  interval_sec=LANE_INTERVAL_SEC)
         # float 를 거치면 5047.389999… 가 된다 — 정밀도가 곧 값이다
         assert candle.close == Decimal("5047.39")
@@ -138,10 +150,25 @@ class TestParse:
         assert candle.volume == Decimal("80")
         assert candle.currency is None  # 지수에 통화가 없다 — 지어내지 않는다
 
-    def test_zero_volume_row_is_not_traded(self):
-        # 체결 0 인 분도 봉은 온다 — collector 가 no_trade(성공)로 센다(missing 아님)
-        assert parse_index_row(row(volume="0"), "0005",
-                               interval_sec=LANE_INTERVAL_SEC).traded is False
+    def test_zero_volume_with_moving_price_is_a_valid_index_bar(self):
+        """🔴 거래량 0 인데 OHLC 가 움직이는 봉이 **정상이다** — 지수의 성질이다.
+
+        지수는 자기가 체결되지 않고 구성종목이 체결된다. 실측(45종 × 100봉): 4,500 중
+        175 봉(3.9%)이 이 형상이고 저유동 업종에서는 상시다.
+
+        ⚠️ `price_collect.collect_units` 는 같은 형상을 `invalid` 로 접고 `status_of` 가
+        window 전체를 INVALID 로 만든다 — 그 4분류를 그대로 물리면 이 dataset 은 **단 한
+        window 도 확정되지 않는다**. 이 단언이 그 배선을 막는 표지다.
+        """
+        moved = {**row(volume="0"), "bstp_nmix_oprc": "215.15",
+                 "bstp_nmix_hgpr": "215.42", "bstp_nmix_lwpr": "215.04",
+                 "bstp_nmix_prpr": "215.30"}   # 1007 종이·목재 15:04 실측
+        candle = parse_index_row(moved, UNIT_ID, interval_sec=LANE_INTERVAL_SEC)
+        assert candle.volume == Decimal(0)
+        assert candle.open != candle.close      # flat 이 아니다 — 주식이면 invalid 다
+        # `traded` 는 volume>0 이라 False 를 주는데, 이 dataset 에서 그건 "거래 없음"이
+        # 아니다. 그 뜻으로 읽는 소비자를 붙이지 마라(모듈 도크스트링 7번).
+        assert candle.traded is False
 
     @pytest.mark.parametrize("broken", [
         {**row(), "stck_cntg_hour": "999999"},        # 센티넬이 파서까지 새면 형식 오류
@@ -155,7 +182,7 @@ class TestParse:
     def test_broken_row_raises(self, broken):
         # 조용히 기본값으로 접으면 그 window 가 '정상 수집'으로 커밋된다(Rule 12)
         with pytest.raises(ValueError):
-            parse_index_row(broken, "0005", interval_sec=LANE_INTERVAL_SEC)
+            parse_index_row(broken, UNIT_ID, interval_sec=LANE_INTERVAL_SEC)
 
     def test_stock_field_names_are_not_accepted(self):
         """주식 필드명(`stck_prpr`)으로 온 행은 값을 못 찾아 실패해야 한다.
@@ -167,7 +194,7 @@ class TestParse:
                         "stck_prpr": "100", "stck_oprc": "100", "stck_hgpr": "100",
                         "stck_lwpr": "100", "cntg_vol": "1"}
         with pytest.raises(ValueError):
-            parse_index_row(stock_shaped, "0005", interval_sec=LANE_INTERVAL_SEC)
+            parse_index_row(stock_shaped, UNIT_ID, interval_sec=LANE_INTERVAL_SEC)
 
 
 class TestQuery:
@@ -178,7 +205,7 @@ class TestQuery:
         0 인데 `bstp_nmix_*` 가 없는 응답이 와서 전 지수가 INVALID 로 접힌다.
         """
         client, fake = make_client([TOKEN, ok([row()])])
-        client.candles("0005", window_end=WINDOW_END)
+        client.candles(UNIT_ID, window_end=WINDOW_END)
         url, headers = fake.calls[-1]
         assert "inquire-time-indexchartprice" in url
         assert "inquire-time-itemchartprice" not in url
@@ -187,11 +214,13 @@ class TestQuery:
     def test_required_params_present(self):
         """넷 다 있어야 한다 — 빠지면 벤더가 `INPUT FIELD NOT FOUND` 로 전건 튕긴다."""
         client, fake = make_client([TOKEN, ok([row()])])
-        client.candles("0005", window_end=WINDOW_END)
+        client.candles(UNIT_ID, window_end=WINDOW_END)
         query = query_of(fake.calls[-1][0])
         assert query["FID_COND_MRKT_DIV_CODE"] == "U"   # 주식의 "J" 가 아니다
-        assert query["FID_INPUT_ISCD"] == "0005"
-        assert query["FID_ETC_CLS_CODE"]                # 빈 문자열도 안 된다
+        # 질의에는 **KIS 코드**가 실린다 — 우리 축을 그대로 실으면 남의 지수가 온다
+        assert query["FID_INPUT_ISCD"] == KIS_CODE
+        assert query["FID_INPUT_ISCD"] != UNIT_ID
+        assert query["FID_ETC_CLS_CODE"] == "0"         # 값 축이다 — 다른 지수 클래스를 부르면 안 된다
         assert query["FID_PW_DATA_INCU_YN"]
 
     def test_input_hour_carries_interval_not_a_clock_time(self):
@@ -203,8 +232,8 @@ class TestQuery:
         무시하고 최신 100봉을 주므로 **응답으로는 끝내 티가 안 난다**.
         """
         client, fake = make_client([TOKEN, ok([row()]), ok([row()])])
-        client.candles("0005", window_end=WINDOW_END)
-        client.candles("0005", window_end=WINDOW_END + timedelta(minutes=17))
+        client.candles(UNIT_ID, window_end=WINDOW_END)
+        client.candles(UNIT_ID, window_end=WINDOW_END + timedelta(minutes=17))
         first, second = fake.calls[-2][0], fake.calls[-1][0]
         assert query_of(first)["FID_INPUT_HOUR_1"] == str(LANE_INTERVAL_SEC)
         assert first == second
@@ -213,15 +242,42 @@ class TestQuery:
         # 다른 간격이면 라벨이 1분 격자에 안 얹혀 전 지수가 매 window missing 인데,
         # 원장에는 "벤더가 안 준다"로 보인다 — 기동에서 막는다
         with pytest.raises(SystemExit):
-            KisSectorIndexClient("k", "s", FakeClient([]), interval_sec=300)
+            KisSectorIndexClient("k", "s", FakeClient([]), INDEX_MAP, interval_sec=300)
 
 
 class TestCandles:
+    def test_query_uses_vendor_code_but_candle_carries_our_code(self):
+        """🔴 번역의 양쪽 끝을 한 번에 고정한다 — 어느 쪽이 새도 조용히 틀린다.
+
+        질의에 우리 축이 실리면 **남의 지수**가 오고(KIS 는 `rt_cd=0` 을 준다), 봉에
+        벤더 축이 남으면 canonical 의 `unit_id` 가 KIS 코드가 돼 일봉 `sector_index`
+        와 조인이 안 된다. 두 코드가 다른 표를 써야 이 단언이 축을 가린다.
+        """
+        client, fake = make_client([TOKEN, ok([row("103000")])])
+        candles = client.candles(UNIT_ID, window_end=WINDOW_END)
+        assert query_of(fake.calls[-1][0])["FID_INPUT_ISCD"] == KIS_CODE
+        assert [c.symbol for c in candles] == [UNIT_ID]
+
+    def test_unit_outside_the_map_is_not_a_vendor_failure(self):
+        """맵에 없는 unit 은 **설정이 갈린 것**이다 — 재시도 축(missing)으로 접지 않는다.
+
+        접으면 벤더가 안 준 것처럼 보여 매 window 반복되는데 고칠 건 config 한 줄이다
+        (`inav_collect._rows_for` 가 같은 조건을 같은 축으로 낸다).
+        """
+        client, fake = make_client([])
+        with pytest.raises(ValueError, match="index_map 에 없다"):
+            client.candles("9999", window_end=WINDOW_END)
+        assert fake.calls == []   # 모르는 코드로 벤더를 두드리지 않는다
+
+    def test_empty_index_map_is_rejected_at_startup(self):
+        with pytest.raises(SystemExit):
+            make_client([], index_map={})
+
     def test_sentinel_rows_are_dropped(self):
         """`999999`·`888888` 은 봉이 아니다 — 남기면 없는 시각의 봉이 하루 두 번 실린다."""
         rows = [sentinel(label) for label in sorted(SENTINEL_LABELS)] + [row("103000")]
         client, _ = make_client([TOKEN, ok(rows)])
-        candles = client.candles("0005", window_end=WINDOW_END)
+        candles = client.candles(UNIT_ID, window_end=WINDOW_END)
         assert [c.window_start.strftime("%H%M%S") for c in candles] == ["103000"]
 
     def test_sentinels_of_other_days_are_dropped_too(self):
@@ -229,7 +285,7 @@ class TestCandles:
         rows = [sentinel("999999"), sentinel("888888"), row("103000"),
                 sentinel("999999", day="20260806"), sentinel("888888", day="20260806")]
         client, _ = make_client([TOKEN, ok(rows)])
-        assert len(client.candles("0005", window_end=WINDOW_END)) == 1
+        assert len(client.candles(UNIT_ID, window_end=WINDOW_END)) == 1
 
     def test_other_trading_day_rows_are_not_parsed(self):
         """남의 날 행은 **파싱조차 안 한다** — 그 행의 하자가 오늘을 죽이면 안 된다.
@@ -239,7 +295,7 @@ class TestCandles:
         """
         broken_yesterday = {**row("152900", day="20260806"), "bstp_nmix_oprc": None}
         client, _ = make_client([TOKEN, ok([broken_yesterday, row("103000")])])
-        candles = client.candles("0005", window_end=WINDOW_END)
+        candles = client.candles(UNIT_ID, window_end=WINDOW_END)
         assert [c.window_start.date().isoformat() for c in candles] == ["2026-08-07"]
 
     def test_same_window_with_different_values_is_rejected(self):
@@ -247,12 +303,12 @@ class TestCandles:
         client, _ = make_client([TOKEN, ok([row("103000", close="5047.39"),
                                             row("103000", close="5048.00")])])
         with pytest.raises(ValueError, match="유일성"):
-            client.candles("0005", window_end=WINDOW_END)
+            client.candles(UNIT_ID, window_end=WINDOW_END)
 
     def test_identical_duplicate_row_passes(self):
         # 값이 같은 재등장은 데이터 충돌이 아니다 — 막으면 겹쳐 주는 벤더에서 전건 실패한다
         client, _ = make_client([TOKEN, ok([row("103000"), row("103000")])])
-        assert len(client.candles("0005", window_end=WINDOW_END)) == 1
+        assert len(client.candles(UNIT_ID, window_end=WINDOW_END)) == 1
 
     def test_envelope_violation_is_transient_not_invalid(self):
         """봉투 이상은 **재시도 축**이다 — INVALID 로 올리면 window 전체가 죽는다.
@@ -264,7 +320,7 @@ class TestCandles:
         envelope = json.dumps({"rt_cd": "0", "output1": {}, "output2": {"안": "list"}})
         client, _ = make_client([TOKEN, envelope])
         with pytest.raises(KisUnitError):
-            client.candles("0005", window_end=WINDOW_END)
+            client.candles(UNIT_ID, window_end=WINDOW_END)
 
     @pytest.mark.parametrize("broken_date", [None, 20260807, ["20260807"]])
     def test_non_string_trade_date_is_not_silently_another_day(self, broken_date):
@@ -278,13 +334,26 @@ class TestCandles:
                 for label in ("103000", "103100")]
         client, _ = make_client([TOKEN, ok(rows)])
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
-            client.candles("0005", window_end=WINDOW_END)
+            client.candles(UNIT_ID, window_end=WINDOW_END)
 
     def test_short_trade_date_does_not_eat_the_time_label(self):
         """날짜 자리수가 짧으면 라벨이 조용히 다른 분으로 읽힌다 — `strptime` 은 연접을 본다."""
         client, _ = make_client([TOKEN, ok([{**row("103000"), "stck_bsop_date": "2026087"}])])
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
-            client.candles("0005", window_end=WINDOW_END)
+            client.candles(UNIT_ID, window_end=WINDOW_END)
+
+    def test_token_json_damage_is_not_relabelled_as_an_envelope_fault(self):
+        """토큰 발급 응답의 JSON 손상까지 봉투로 되감으면 안 된다.
+
+        `_call` 이 `_headers()` 를 try 안에서 평가하고 그 경로가 `KisAuth.token()` →
+        `json.loads` 라, `except ValueError` 가 넓으면 **인증 축 사고**가 unit 단위
+        재시도로 접힌다 — 메시지가 엉뚱한 엔드포인트를 가리키고 45 unit 이 매 window
+        토큰 발급을 다시 두드린다.
+        """
+        client, _ = make_client(["<html>proxy error</html>"])
+        with pytest.raises(ValueError) as caught:
+            client.candles(UNIT_ID, window_end=WINDOW_END)
+        assert not isinstance(caught.value, KisUnitError)
 
     def test_empty_page_is_not_an_error(self):
         """빈 페이지는 실패가 아니다 — 개장 직후 첫 봉 전이 정상적으로 여기다.
@@ -293,14 +362,14 @@ class TestCandles:
         지속 여부로만 갈리므로 어댑터가 판정하지 않는다.
         """
         client, _ = make_client([TOKEN, ok([])])
-        assert client.candles("0005", window_end=WINDOW_END) == ()
+        assert client.candles(UNIT_ID, window_end=WINDOW_END) == ()
 
     def test_whole_session_page_yields_every_minute(self):
         """페이지의 봉이 하나도 안 새는지 — 격자 전체로 센다(표본 한 칸이 아니라)."""
         labels = [f"{9 + (m // 60):02d}{m % 60:02d}00" for m in range(100)]
         rows = [sentinel("999999")] + [row(label) for label in labels]
         client, _ = make_client([TOKEN, ok(rows)])
-        candles = client.candles("0005", window_end=datetime(2026, 8, 7, 9, 1, tzinfo=KST))
+        candles = client.candles(UNIT_ID, window_end=datetime(2026, 8, 7, 9, 1, tzinfo=KST))
         assert sorted(c.window_start.strftime("%H%M%S") for c in candles) == sorted(labels)
 
 
@@ -404,6 +473,15 @@ class TestConfigValidator:
         kis_values = set(index_map.values())
         krx_keys = set(index_map)
         assert kis_values & {k for k in krx_keys if k.startswith("1")}
+
+    def test_untranslated_row_is_rejected(self):
+        """🔴 `"1008" = "1008"` — 자리수·대역·중복을 전부 통과하는 "번역 누락"이다.
+
+        KIS `1008` 은 KOSDAQ 지수라 그 자리에 남의 지수가 조용히 실린다. KOSPI 24행 중
+        10행이 이 구멍에 있었다(대역이 겹치는 코드들).
+        """
+        with pytest.raises(ValueError, match="번역이 빠졌나"):
+            self._make({"1008": "1008"})
 
     def test_empty_map_is_rejected(self):
         # 빈 맵은 "받을 게 없다"가 아니라 배선 누락이다 — Worker 가 매 window 를 빈

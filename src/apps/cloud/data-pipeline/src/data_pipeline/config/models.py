@@ -771,16 +771,24 @@ class MinuteSectorIndexConfig(BaseModel):
                          if not (len(v) == 4 and v.isdigit())):
             raise ValueError(f"KIS 지수코드 형태(숫자 4자리)가 아니다: {bad[:5]}")
         # ⚠️ **자리수만 보면 한 줄을 뒤집어 적어도 통과한다.** 두 코드계가 형태로 겹치기
-        # 때문이다(KIS 값 대역 `1006`~`1033` ∩ KRX KOSPI 키 대역 `1005`~`1047`). 뒤집힌
-        # 줄은 개수도 45 그대로고 값 중복도 안 나서 로드가 정상인데, canonical 의
-        # `unit_id` 가 벤더 코드가 돼 **일봉 `sector_index` 와 어떤 조인에도 안 걸린다**
-        # (그 업종은 동시에 표에서 사라진다). 대역 첫 자리는 두 축을 확실히 가른다:
-        # KRX 업종코드는 KOSPI `1xxx`·KOSDAQ `2xxx` 이고, KIS 지수코드는 KOSPI 업종
-        # `0xxx`·KOSDAQ 업종 `1xxx` 다.
+        # 때문이다(KIS 값 대역 `1006`~`1033` ∩ KRX KOSPI 키 대역 `1005`~`1047`; 실제로
+        # 14개 코드가 이 표에서 키이면서 동시에 값이다). 뒤집힌 줄은 개수도 45 그대로고
+        # 값 중복도 안 나서 로드가 정상인데, canonical 의 `unit_id` 가 벤더 코드가 돼
+        # **일봉 `sector_index` 와 어떤 조인에도 안 걸린다**(그 업종은 동시에 표에서
+        # 사라진다). 대역 첫 자리가 **뒤바뀜은** 가른다: KRX 업종코드는 KOSPI `1xxx`·
+        # KOSDAQ `2xxx` 이고, KIS 지수코드는 KOSPI 업종 `0xxx`·KOSDAQ 업종 `1xxx` 다.
         if bad := sorted(k for k in self.index_map if k[0] not in "12"):
             raise ValueError(f"KRX 업종코드 대역(1xxx·2xxx)이 아니다 — 키·값이 뒤집혔나: {bad[:5]}")
         if bad := sorted(v for v in self.index_map.values() if v[0] not in "01"):
             raise ValueError(f"KIS 지수코드 대역(0xxx·1xxx)이 아니다 — 키·값이 뒤집혔나: {bad[:5]}")
+        # ⚠️ **대역만으로는 "번역을 잊은" 줄을 못 잡는다.** `"1008" = "1008"`(화학)은
+        # 자리수·대역·중복을 전부 통과하는데, KIS `1008` 은 KOSDAQ 지수라 그 자리에 남의
+        # 지수가 조용히 실린다 — 이 트랙을 헤매게 한 오류의 모양 그대로다. KOSPI 24행 중
+        # 10행이 이 구멍에 있었다. 자기 자신을 가리키는 줄은 **번역이 안 된 것**이다:
+        # 실제 표에 `키 == 값` 인 줄은 하나도 없다(KIS 는 자기 번호를 따로 쓴다).
+        if bad := sorted(k for k, v in self.index_map.items() if k == v):
+            raise ValueError(
+                f"KRX 업종코드를 KIS 지수코드 자리에 그대로 적었다 — 번역이 빠졌나: {bad[:5]}")
         return self
 
 
