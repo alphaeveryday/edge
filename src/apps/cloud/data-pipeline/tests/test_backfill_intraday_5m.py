@@ -777,7 +777,7 @@ def test_failure_tally_is_reported_even_when_the_run_aborts(caplog):
 
         def candles(self, symbol, *, window_end):
             # 첫날은 unit 실패로 합계에 쌓이고, 둘째 날에 전역 실패가 런을 끊는다
-            if symbol == "A":
+            if symbol in ("A", "B"):
                 raise KisDayIncompleteError("페이지 예산 소진")
             raise KisSourceError("유량 승격 — 앱키 전역")
 
@@ -787,7 +787,7 @@ def test_failure_tally_is_reported_even_when_the_run_aborts(caplog):
     caplog.clear()
     try:
         with caplog.at_level(logging.WARNING), pytest.raises(KisSourceError):
-            list(backfill._collect_kis(days, ["A", "B"], {d: set() for d in days},
+            list(backfill._collect_kis(days, ["A", "B", "C"], {d: set() for d in days},
                                        _Args(vendor="kis")))
     finally:
         monkey.undo()
@@ -796,4 +796,64 @@ def test_failure_tally_is_reported_even_when_the_run_aborts(caplog):
              if "수집 실패 (종목,날짜)" in r.getMessage()]
     assert tally, "중단된 런에서 실패 합계가 사라졌다"
     # **개수를 묻는다** — 존재만 보면 카운터를 상수로 박아도 통과한다
-    assert "1건" in tally[0], tally[0]
+    assert "2건" in tally[0], tally[0]
+
+
+def test_collectors_skip_ticker_days_another_vendor_already_covers():
+    """수집기가 `covered` 를 **실제로 소비한다** — 이중계상 방지선의 마지막 마디.
+
+    이 축은 세 마디다: 재료(`_backfilled_tickers` 가 벤더를 합산) → 전달(`main` 이 그걸
+    넘김) → **소비**(수집기가 그만큼 뺌). 앞 둘은 잠겨 있었는데 소비가 안 잠겨 있어
+    `want = list(targets)` 변이가 스위트를 통과했다.
+
+    쓰기 시점은 2선 방어가 못 된다 — `_day_payload` 의 `existing` 은 `part-0` 만 보고
+    **상대 벤더 파일을 영영 안 읽는다**. 그래서 이 필터가 유일한 방어선이고, 뚫리면
+    KIS 가 토스 보유 71일을 다시 받아 같은 (ticker, ts) 가 두 파일에 남는다 →
+    소비자 글롭이 두 번 센다(거래량 이중계상 → β 오염).
+    """
+    from data_pipeline.sources.candle import build_candle
+
+    d1, d2 = "2026-04-20", "2026-04-21"
+
+    def _one_candle(symbol, *, window_end):
+        if window_end.strftime("%H:%M") != "09:01":
+            return ()
+        return (build_candle(symbol, window_end=window_end, span_seconds=60,
+                             values={"open": 1, "high": 1, "low": 1, "close": 1},
+                             volume=0),)
+
+    class _Client:
+        auth = object()
+        candles = staticmethod(_one_candle)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(backfill, "KisHistoricalMinuteClient", lambda *a, **k: _Client())
+    monkey.setattr(backfill.boto3, "client", lambda *_a, **_k: _Secrets())
+    try:
+        # A 는 d1 을 **상대 벤더가 이미 채웠다** → 그날 A 를 다시 받으면 안 된다
+        got = dict(backfill._collect_kis([d1, d2], ["A", "B"],
+                                         {d1: {"A"}, d2: set()}, _Args(vendor="kis")))
+    finally:
+        monkey.undo()
+
+    assert {r["ticker"] for r in got[d1]} == {"B"}, "이미 덮인 (종목,날짜)를 다시 받았다"
+    assert {r["ticker"] for r in got[d2]} == {"A", "B"}
+
+    # 토스 경로도 같은 필터를 진다 — 날짜 축으로 뺀다
+    def _fake_fetch(_c, tk, _newest, _oldest, _budget):
+        return [c for d in (d1, d2)
+                for c in _one_candle(tk, window_end=datetime.fromisoformat(
+                    f"{d}T09:01:00+09:00"))]
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(backfill, "_fetch_back", _fake_fetch)
+    monkey.setattr(backfill, "TossOpenApiClient", lambda **_k: object())
+    monkey.setattr(backfill.boto3, "client", lambda *_a, **_k: _TossSecrets())
+    try:
+        out = dict(backfill._collect_toss([d1, d2], ["A"], {d1: {"A"}, d2: set()},
+                                          _Args(vendor="toss", call_budget=10)))
+    finally:
+        monkey.undo()
+
+    assert d1 not in out or not out[d1], "토스가 이미 덮인 날을 다시 받았다"
+    assert {r["ticker"] for r in out[d2]} == {"A"}

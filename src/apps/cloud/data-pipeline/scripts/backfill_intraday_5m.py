@@ -434,7 +434,9 @@ def _collect_kis(days, targets, covered, a):
             if not want:
                 continue
             # 클라이언트 자체는 하루마다 새로 만든다 — 봉 캐시가 날짜에 묶여 있어 재사용하면
-            # 남의 날 봉이 된다(클라이언트가 스스로 ValueError 로 막지만 만들 이유가 없다).
+            # 남의 날 봉이 된다. ⚠️ 클라이언트의 `session_date` 가드는 `ValueError` 라
+            # **아래 catch 가 이제 그걸 삼킨다**(전 판은 안 삼켰다) — 그 가드를 안전망으로
+            # 세지 마라. 아래 catch 주석에 그 대가를 적어 뒀다.
             client = KisHistoricalMinuteClient(
                 sec["app_key"], sec["app_secret"], http,
                 session_date=date.fromisoformat(d),
@@ -459,6 +461,14 @@ def _collect_kis(days, targets, covered, a):
                     # 승격된다. 이 둘을 갈라 잡으면 손상 행 하나가 런을 죽이는데, 그
                     # 예외는 응답 형상의 함수라 **결정적**이라서 재실행이 같은 날짜에서
                     # 다시 죽는다 — 그 뒤 날짜를 영영 못 넘는다.
+                    #
+                    # 🔴 대가: 이 catch 는 위 열거보다 **한 칸 넓다**. 같은 경로의
+                    # `session_date` 불일치 가드도 `ValueError` 라 여기 걸리는데 그건
+                    # unit 이 아니라 **우리 배선 오류**다 — 걸리면 전 종목이 "건너뛴다"로
+                    # 흘러 아래 합계가 "상장 전 날짜"라고 오진한다. 지금은 도달 불가다
+                    # (클라이언트를 `d` 로 만들고 같은 `d` 만 묻는다). 그 둘이 갈리는
+                    # 코드가 생기면 여기부터 좁혀라. 형제 가드인 범위 밖 window 는
+                    # `KisSourceError` 라 지금도 올라간다 — 같은 부류가 다르게 행동한다.
                     #
                     # 🔴 **`KisSourceError` 는 안 잡는다.** 어댑터가 그 둘을 일부러 갈라 놨다
                     # (`kis_minute`: 전역 = 자격증명·권한·유량, unit = 그 종목 하나). 전역을
