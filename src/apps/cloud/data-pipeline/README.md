@@ -114,7 +114,11 @@
 > 으로 정했다** — 이 경로는 쓰기 가드 없이 쓰되 리드 상태가 움직였을 때만 그 시각을 찍고,
 > 배치는 미주장이거나 자기 canonical `fetched_at` 이 더 새로울 때만 덮는다. 비대칭이
 > 의도이고, 계약 전문은 마이그레이션
-> `V202608071018__add_news_document_lead_observed_at.sql` 에 있다),
+> `V202608071018__add_news_document_lead_observed_at.sql` 에 있다. ⚠️ 그 시각도
+> **`GREATEST` 로 앞으로만** 간다(ALPHA-858) — 두 축 다 단조다. 그래서 `lead_observed_at`
+> 은 엄밀히는 *관측 시각의 상한*이고, 마이그레이션의 정의문("지금 저장된 리드 상태를 누가
+> 언제 관측했는가")은 역행 관측이 낀 경우를 모른다. 적용된 마이그레이션은 수정하지 않으므로
+> 그 예외는 여기와 `canonical_news.py` 리드 UPSERT 주석에 있다),
 > **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
 > `run drain-minute-session`. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.

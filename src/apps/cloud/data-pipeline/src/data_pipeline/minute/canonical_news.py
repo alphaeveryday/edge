@@ -39,9 +39,14 @@ T1 을 읽는다 — 이 모듈이 막으려던 P1 그대로다. 그래서 규�
 - **내용**(제목·발행시각·URL·언어·리드)은 이번 관측 값으로 쓴다. 1분 경로의 관측은 라이브
   소스의 현재 상태다.
 - **시각**은 `GREATEST` 로 앞으로만 간다. 뒤로 밀면 과거 as-of 구간에서 문서가 사라진다.
-  ⚠️ 이 단조 보장은 **`available_at` 한정**이다. 아래 `lead_observed_at`(ALPHA-696 승자 축)
-  은 관측 시각을 그냥 찍으므로 아직 구조적으로 단조가 아니다 — 배치 가드가 그 값을 보니
-  같은 것으로 읽지 마라. 승급(`GREATEST`)은 마이그레이션 주석이 후속으로 남겨 두었다.
+  `available_at` 과 `lead_observed_at`(ALPHA-696 승자 축) 둘 다 그렇다 — 후자의 승급은
+  ALPHA-858 에서 착지했다. ⚠️ 두 축을 **같은 것으로 읽지는 마라**: 단조 방식만 같고 의미가
+  다르다(도달 시각 vs 리드 관측 시각). 찍는 조건은 둘 다 "내용이 실제로 움직였을 때만"
+  이되 **보는 범위가 다르다** — `available_at` 은 문서 축(제목·발행시각·URL·언어) 또는
+  리드가 움직였을 때, `lead_observed_at` 은 리드가 움직였을 때만이다. 어느 쪽도 매 관측이
+  아니다 — 같은 기사 재관측이면 `document` UPSERT 의 `WHERE` 가 막고 리드도 안 움직인다.
+  (마이그레이션 ②가 "매 관측마다 갱신"을 축 무효화 실패 모드로 금지한 건 `lead_observed_at`
+  한정이지만, 두 축 다 그렇게 굴지 않는다는 건 위 두 `WHERE` 로 확인된다.)
 
 ✅ **배치가 리드를 되돌리던 것은 해소됐다(ALPHA-696).** 예전엔 `load_documents` 가
 `news_document` 리드를 시각 조건 없이 덮어, 레이크 canonical 이 아직 옛 본문(T1)이면 그
@@ -191,8 +196,9 @@ class PgNewsCanonicalWriter:
         # ⚠️ **`lead_observed_at` 은 이 경로의 승자 주장이다(ALPHA-696).** 배치
         # `load_documents` 는 이 값보다 자기 canonical `fetched_at` 이 새로울 때만 리드를
         # 덮는다 — 그래서 정정이 레이크의 옛 값으로 되돌아가지 않는다. 계약 전문은
-        # `V202608071018__add_news_document_lead_observed_at.sql` 에 있고, 규칙 둘만
-        # 여기서 지킨다:
+        # `V202608071018__add_news_document_lead_observed_at.sql` 에 있다. 아래 ①② 는 그
+        # 계약의 ①② 와 1:1 이고, ③ 은 **이 파일 고유 번호**다 — 마이그레이션 계약 ③(배치
+        # 가드)과는 다른 규칙이니 번호로 교차참조하지 마라:
         #
         # ① **쓰기 가드는 걸지 않는다.** 내용은 언제나 이번 관측이 이긴다 — 시각으로
         #    내용 쓰기를 막으면 모듈 docstring 이 되돌렸다고 적은 그 P1 이 돌아온다.
@@ -212,6 +218,50 @@ class PgNewsCanonicalWriter:
         #    `None` 이 아니라 `""` 를 낸다. `is None` 으로 가르면 실질 빈 리드에 시각이
         #    찍혀, 배치가 진짜 스니펫을 갖고 와도 자기 `fetched_at` 이 더 오래됐으면
         #    영구 차단된다 — 이 규칙이 막으려던 바로 그 상태다.
+        # ③ **시각은 `GREATEST` 로 앞으로만 간다**(ALPHA-858). 마이그레이션 계약 ③의 ⭐
+        #    문단이 남긴 후속이다 — 그 파일의 "후속 코드 PR 이 이어받는 것 셋" 목록이 아니다
+        #    (그 셋은 원시 `fetched_at` 적재·quality_log 카운터·수용한 거래 하나이고, 앞의
+        #    둘은 #600 에 실렸다).
+        #    `observed_at` 은 벽시계(`self.clock()`)라 컨테이너 시계가 뒤로 조정되면 이 축이
+        #    역행한다. 그러면 배치의 `저장값 <= 자기 fetched_at` 절이 열려 **1분 경로가 반영한
+        #    정정을 배치가 레이크의 옛 리드로 되돌린다** — ALPHA-696 이 막으려던 P1 재현이다.
+        #    배치 쪽은 자기 값이 더 새로울 때만 쓰므로 이미 구조적으로 단조고, 이 한 단어로
+        #    축 전체가 단조가 된다. ②는 안 깨진다 — 앞으로 가는 관측은 그대로 통과하고,
+        #    `WHERE` 가 여전히 "리드가 안 움직이면 시각도 안 움직인다"를 지킨다.
+        #    ⭐ 막는 건 시계 skew 만이 아니다. `FOR UPDATE OF d` 는 `document` 만 잠그고
+        #    (배치의 `document` INSERT 는 `ON CONFLICT DO NOTHING` 이라 이 락에 안 걸린다),
+        #    READ COMMITTED 의 `ON CONFLICT DO UPDATE` 는 동시 커밋된 최신 행으로 재평가하므로,
+        #    전에는 **트랜잭션 도중 배치가 커밋한 주장 아래로 시각을 끌어내려** 배치에 재승리를
+        #    넘기는 경로가 있었다. 그것도 같이 닫힌다.
+        #    ⚠️ 단 도달성은 **선두가설이지 실증이 아니다.** 성립 조건은 `배치 fetched_at >
+        #    이번 observed_at` 인데, `fetched_at` 은 레이크 수집 시각(과거)이고 `observed_at`
+        #    은 지금 벽시계라 보통은 반대다 — 컨테이너 간 시계 skew 이거나 우리 트랜잭션
+        #    경과가 레이크 collect→load 지연을 넘을 때만 열린다.
+        #    ⚠️ 그리고 이건 마이그레이션 ⭐ 문단과 **결론이 갈린다** — 그쪽은 같은 READ
+        #    COMMITTED 재평가를 역행 경로의 *반증* 근거로 들었다. 갈리는 지점은 그 반증이
+        #    `SET` 이 저장값과 무관한 상수 `%s` 라는 점을 안 본 데 있다. 뒤집는 쪽이 이 주석
+        #    이라는 사실을 적어 둔다(둘을 나란히 읽는 사람이 모순으로 본다).
+        #    ⚠️ `GREATEST` 는 NULL 을 **무시**한다(PG 16 실측) — 미주장(NULL) 자리에 리드가
+        #    처음 붙는 충돌 갈래에서 이번 관측 시각이 그대로 찍힌다. `COALESCE` 로 바꾸지 마라.
+        #    ⚠️ **이 값은 이제 엄밀히는 "관측 시각의 상한"이다.** 역행 관측이 한 번 끼면
+        #    저장된 시각은 *지금 저장된 리드를 본 시각*이 아니다(그 리드는 뒤늦은 관측이 쓴
+        #    것이고 시각은 앞선 것이 남는다). ②의 목적(배치가 못 덮게 주장을 남긴다)은 오히려
+        #    강해지므로 계약은 유지되지만, 마이그레이션 본문·`COMMENT ON COLUMN` 의 정의문
+        #    ("지금 저장된 리드 상태를 누가 언제 관측했는가")은 그 예외를 모른다 — 적용된
+        #    마이그레이션은 수정 금지라 이 사실은 여기와 README 에 남긴다.
+        #    ⚠️ 대가는 **전방 skew 의 영구 고착**이다 — 시계가 한 번 미래로 튀면 배치가 다시는
+        #    못 덮는다. 대가를 과대평가하지는 마라: 자가 치유는 **리드가 다시 바뀔 때만**
+        #    일어났고(같은 리드 재관측은 위 `WHERE` 가 막아 시각이 안 움직인다), 리드가 안
+        #    바뀌면 이 변경 전에도 이미 영구였다.
+        #    ⚠️ 다만 수용 근거를 **성질 논증으로 읽지 마라.** "옆 축 `available_at` 도 같다"는
+        #    유비는 약하다 — 그쪽은 PIT 축이라 전방 skew 의 피해가 "그 문서가 늦게 보인다"로
+        #    자기제한적인데, 이 축은 **쓰기 중재 축**이라 피해가 "다른 생산자의 영구 실권"이다.
+        #    실제 근거는 확률뿐이다: 값의 출처가 벤더 데이터가 아니라 우리 컨테이너 시계다.
+        #    ⚠️ 그리고 **이 고착에는 탐지 수단이 없다.** `GREATEST` 가 역행을 흡수하면 아무
+        #    신호도 안 남는다(ALPHA-696 이 다른 무력화 모드에는 `lead_unclaimed_freshness`
+        #    카운터를 붙였다 — "안 세면 볼 계기가 없다"). 침묵을 택한 것이지 없는 게 아니다.
+        #    붙일 거면 `RETURNING lead_observed_at` 이 반환값 != `observed_at` 을 왕복 추가
+        #    없이 준다. ALPHA-858 에서 범위 밖으로 뒀다.
         _insert_stamp = observed_at if normalized["lead_text"] else None
         cur.execute(
             """
@@ -220,7 +270,7 @@ class PgNewsCanonicalWriter:
             WHERE source_code = %s AND source_document_id = %s
             ON CONFLICT (document_id) DO UPDATE
             SET lead_text = EXCLUDED.lead_text,
-                lead_observed_at = %s
+                lead_observed_at = GREATEST(news_document.lead_observed_at, %s)
             WHERE news_document.lead_text IS DISTINCT FROM EXCLUDED.lead_text
             """,
             (
