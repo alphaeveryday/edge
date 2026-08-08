@@ -251,6 +251,33 @@ class KrxEtfSource(BaseModel):
     # our_etf_id → KRX ISIN(표준코드). US(FMP 심볼)와 달리 KRX 는 ISIN 으로 질의한다. 이 맵의
     # 키가 곧 수집 유니버스다(targets 무관) — 매핑 없는 ETF 는 수집하지 않는다(생략 = 제외).
     etf_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+    # 참조 계열 ETF 의 명부 — **holdings 만 받고 유니버스 파생에는 안 들어간다**(ALPHA-855).
+    #
+    # 왜 `etf_map` 이 아닌 별도 맵인가: `etf_map` 의 키는 KRX 수집 대상이자 **유니버스 파생의
+    # 뿌리**다(`ingest_price_raw._krx_expected_etfs`). 넣으면 일봉 가격·투자자 수급·공시 제외
+    # 집합·1분 `constituent_ids` 넷이 같이 는다 — 48종의 구성종목 합집합이 1,000종 규모라
+    # 1분 수집이 410 → 1,400 unit 로 뛰고(226490 KODEX 코스피 혼자 725종) KIS 실측 상한
+    # (60초 창 약 890 unit)을 넘긴다. 이 맵은 어느 파생에도 안 들어간다: `plan()` 만 두 맵의
+    # 합집합을 보고, `_krx_expected_etfs` 는 `etf_map` 만 본다.
+    #
+    # 받는 이유는 층 분해의 겹침 게이트(`layers.overlap`)다 — 후보 ETF 의 명부·비중이 있어야
+    # 동어반복(같은 포트폴리오로 자신을 설명)을 걸러낸다. 없으면 FMP 폴백 하나뿐인데 그
+    # 스냅샷이 2026-01-28 단건이다.
+    reference_etf_map: dict[str, NonBlankStr] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_maps_are_disjoint(self) -> KrxEtfSource:
+        # 같은 ETF 가 양쪽에 있으면 `plan()` 이 그 ETF 를 두 번 계획해 KRX 를 두 번 부른다.
+        # 그보다 큰 문제는 **두 선언이 서로 다른 말을 한다**는 것이다 — `etf_map` 은 "유니버스
+        # 뿌리로 삼아라", 이쪽은 "명부만 받아라". 조용히 한쪽으로 넘기면 나머지 한쪽이 거짓이
+        # 되므로 평균내지 않고 거부한다(Rule 7). 어느 쪽을 지울지는 사람이 정할 일이다.
+        # `build_minute_universe` 가 etf_map ↔ sector_etf_ids 에 건 것과 같은 규율이다.
+        if both := sorted(set(self.etf_map) & set(self.reference_etf_map)):
+            raise ValueError(
+                f"같은 ETF 가 etf_map 과 reference_etf_map 양쪽에 있다: {both} "
+                f"— 유니버스 뿌리면 etf_map 에만, 참조 계열이면 reference_etf_map 에만 둬라"
+            )
+        return self
 
 
 class DartFinancialSource(BaseModel):
@@ -684,8 +711,9 @@ class MinuteUniverseConfig(BaseModel):
     S3 를 안 갈면 아무것도 안 바뀐다.
 
     `[krx_etf.source.etf_map]` 과 다른 축이다: 저기는 "KRX PDF 로 holdings 를 받을 ETF"
-    이고 그 구성종목이 유니버스로 파생된다. 여기 ETF 는 **분봉만** 받는다 — holdings 도,
-    구성종목도, NAV 도, **트리거 판정도** 받지 않는다. 그래서 etf_map 에 넣으면 안 되고
+    이고 **그 구성종목이 유니버스로 파생된다**. 여기 ETF 는 분봉을 받고, holdings 도
+    `[krx_etf.source.reference_etf_map]` 으로 따로 받는다(ALPHA-855 — 층 분해의 겹침 게이트가
+    명부를 쓴다). 받지 않는 것은 **구성종목 수집·NAV·트리거 판정**이다. 그래서 etf_map 에 넣으면 안 되고
     (KRX PDF 수집이 늘고 구성종목이 유니버스로 딸려 들어온다) `Universe.etf_ids` 에도
     넣으면 안 된다(그 축은 `price_consumer` 의 판정 집합이다 — `Universe` 도크스트링).
     빌더가 이 목록을 `Universe.sector_etf_ids` 로 싣는다.

@@ -506,10 +506,15 @@ def test_malformed_disclosure_sched_env_fails_loud(monkeypatch):
 
 
 def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):
-    """WHY: 세 수집기의 분모는 실행 결과가 아니라 공통 etf_map 정본이어야 누락을 잡는다.
+    """WHY: 세 수집기의 분모는 실행 결과가 아니라 config 정본이어야 누락을 잡는다.
 
     Planner CLI에서 provider를 빼먹으면 planner 모듈의 훅이 있어도 운영 snapshot은 0건이고,
-    반대로 모든 작업에 주면 아직 entity grain이 다른 작업까지 잘못된 3종 분모로 판정된다.
+    반대로 모든 작업에 주면 아직 entity grain이 다른 작업까지 잘못된 분모로 판정된다.
+
+    ⚠️ **세 작업의 분모가 더는 같지 않다**(ALPHA-855). NAV·프로필은 `etf_map` 이지만
+    구성종목 수집은 `krx_etf.plan()` 이 참조 계열까지 받으므로 두 맵의 합집합이다. 같은 값을
+    주면 구성종목 쪽 기대가 실제보다 작아져 `missing = max(expected - received, 0)` 이
+    **영원히 0** 으로 굳는다 — 뿌리가 통째로 빠져도 완전성이 만점으로 보인다.
     """
     captured = {}
     fake_ledger = object()
@@ -530,8 +535,12 @@ def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):
     monkeypatch.setattr(entry.planner, "plan_run", fake_plan_run)
     settings = SimpleNamespace(
         krx_etf=SimpleNamespace(
-            source=SimpleNamespace(etf_map={"396500": "KR7396500001",
-                                            "069500": "KR7069500007"})
+            source=SimpleNamespace(
+                etf_map={"396500": "KR7396500001", "069500": "KR7069500007"},
+                # 픽스처가 운영 설정 모양을 담아야 이 분기를 실제로 밟는다 — 필드를 빼면
+                # 두 분모가 갈리는지 아닌지를 아예 못 묻는다.
+                reference_etf_map={"091170": "KR7091170001"},
+            )
         )
     )
 
@@ -547,11 +556,16 @@ def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):
         if provider(item.task_key) is not None
     }
     assert snapshotted == targets
-    for task_key in targets:
+    # NAV·프로필은 뿌리만. 구성종목은 참조 계열까지 — 어댑터가 실제로 계획하는 집합이다.
+    for task_key in ("NAV_COLLECTION_KIS", "ETF_PROFILE_COLLECTION_KIS"):
         assert provider(task_key) == {
             "entity_kind": "ticker",
             "entity_ids": ["069500", "396500"],
         }
+    assert provider("ETF_HOLDINGS_COLLECTION_KRX") == {
+        "entity_kind": "ticker",
+        "entity_ids": ["069500", "091170", "396500"],
+    }
 
 
 def test_snapshot_created_when_universe_provided():

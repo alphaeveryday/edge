@@ -44,10 +44,11 @@ class FakeClient:
         return json.dumps(payload)
 
 
-def _source(responses, etf_map=None, auth=None):
+def _source(responses, etf_map=None, auth=None, reference_etf_map=None):
     config = KrxEtfSourceConfig(
         mbr_id="id", pw="pw",
         etf_map=etf_map if etf_map is not None else {"069500": "KR7069500007"},
+        reference_etf_map=reference_etf_map or {},
     )
     src = KrxEtfSource(config, FakeClient(responses))
     src.auth = auth or FakeAuth()
@@ -134,6 +135,47 @@ def test_plan_maps_and_sets_planned_count():
     list(src.fetch())
     assert src.planned_etfs == 2
     assert src.plan() == [("069500", "KR7069500007"), ("360750", "KR7360750004")]
+
+
+def test_plan_collects_reference_etfs_too():
+    """참조 계열도 **수집**은 한다 — 안 들어가는 곳은 유니버스 파생이다 (ALPHA-855).
+
+    두 축을 헷갈리면 고치는 방향이 반대가 된다: "유니버스에 넣지 마라"를 "수집하지 마라"로
+    읽으면 명부가 영영 안 들어오고, `overlap()` 은 FMP 폴백(2026-01-28 단건)에 남는다.
+    이 어댑터가 아는 것은 "무엇을 KRX 에 물을까" 하나뿐이고, 그 답은 두 맵의 합집합이다.
+
+    **행까지 확인한다** — plan 만 보면 합집합을 계획해 놓고 fetch 루프가 한쪽을 거르는
+    회귀를 못 잡는다(계획과 산출은 다른 사실이다).
+    """
+    src = _source(
+        {"KR7069500007": {"output": [{"x": 1}]}, "KR7091170001": {"output": [{"x": 2}]}},
+        etf_map={"069500": "KR7069500007"},
+        reference_etf_map={"091170": "KR7091170001"},
+    )
+    rows = list(src.fetch())
+
+    assert src.plan() == [("069500", "KR7069500007"), ("091170", "KR7091170001")]
+    assert src.planned_etfs == 2
+    assert sorted(r["our_etf_id"] for r in rows) == ["069500", "091170"]
+    assert src.fetch_failures == []
+
+
+def test_plan_puts_universe_roots_before_reference_series():
+    """수집 **순서**는 뿌리 먼저다 — 상한에 닿으면 참조 계열이 잘려야 한다 (ALPHA-855).
+
+    `plan()` 순서가 곧 수집 순서이고, `--deadline-sec` 에 닿으면 뒤쪽이 통째로 미시도로
+    잘린다(`_note_unattempted`). 두 맵을 합쳐 정렬하면 참조 계열 코드가 앞에 몰려 **뿌리가
+    뒤로 밀린다** — 혼잡일에 잃는 것이 "명부만 필요한 계열"이 아니라 일봉·수급·공시·1분
+    유니버스의 뿌리가 된다. KRX 는 trdDd 백필 수단이 없어 그날 못 받으면 그날로 끝이다.
+
+    코드값으로 고른 픽스처다: 뿌리를 참조 계열보다 **사전순 뒤**에 둬서, 합쳐 정렬하면
+    반드시 순서가 뒤집히게 했다. 그래야 이 단언이 정렬 방식을 실제로 가른다.
+    """
+    src = _source({}, etf_map={"396500": "KR7396500001"},
+                  reference_etf_map={"091170": "KR7091170001"})
+
+    assert src.plan() == [("396500", "KR7396500001"), ("091170", "KR7091170001")]
+
 
 
 def test_empty_output_isolated_as_failure():
