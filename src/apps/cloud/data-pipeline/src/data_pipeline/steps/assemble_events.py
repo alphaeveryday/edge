@@ -485,8 +485,7 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
         if entity_id is None:
             # 개념·위치·규칙·지수처럼 persistence_key 가 정규화 문자열인 종별은 열린
             # 집합이라 레지스트리가 불가능하다. 멘션에서 결정적으로 채번하고 concept 행을
-            # 함께 세운다(적재부가 FK 순서를 지킨다). 채번 산식은 stable_domain_id 하나뿐 —
-            # 다른 writer 와 갈리면 같은 개념에 다른 ID 가 나온다.
+            # 함께 세운다(적재부가 FK 순서를 지킨다).
             # ⭐채번은 `entity_resolution.mint_concept` 하나가 소유한다 — load-assertions 와
             # 같은 함수여야 같은 개념에 같은 ID 가 난다(ALPHA-831). 여기서 산식을 다시
             # 조립하면 접두사 하나에 갈린다.

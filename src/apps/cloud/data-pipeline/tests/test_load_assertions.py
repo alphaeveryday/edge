@@ -438,6 +438,77 @@ def test_missing_role_is_dropped_not_invented_as_issuer(tmp_path, monkeypatch, c
     assert "역할 없는 argument" in warned
 
 
+def test_broken_ontology_fails_before_the_transaction_opens(tmp_path, monkeypatch):
+    """온톨로지가 깨져 있으면 **커넥션을 열기 전에** 실패로 끝난다.
+
+    WHY: 이 스텝은 계약 자원을 둘 읽는다 — 역할표(`load_relations`)와 기관 명부
+    (`load_authority_registry`). 둘 중 하나라도 트랜잭션 안에서 처음 건드리면 깨진 어휘가
+    **열린 트랜잭션 한복판**에서 터진다. 그러면 부분 적재를 되감아야 하고, 그 롤백이
+    실패하는 경로까지 새로 생긴다. 경계 밖에서 죽으면 되감을 것이 애초에 없다.
+
+    두 자원 **각각**을 깨뜨린다 — 한쪽만 검사하면 나머지 하나가 트랜잭션 안으로
+    미끄러져도 초록이다(실제로 명부가 그 상태였다).
+    """
+    for resource in ("load_relations", "load_authority_registry"):
+        # ⚠️ **매 회차 패치를 되돌린다.** 한 monkeypatch 를 루프 내내 쓰면 2회차가
+        # 1회차의 깨진 자원을 그대로 물려받아, 두 번째 축이 **첫 번째 이유로** 초록이
+        # 된다(이 테스트가 실제로 그랬다). 축을 하나씩만 깨야 축이 하나씩 고정된다.
+        with monkeypatch.context() as mp:
+            storage = LocalStorage(tmp_path / f"lake-{resource}")
+            _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion()])])
+            conn = _FakeConn(documents=[("a1", "doc_D1")])
+            _setup(mp, conn)
+
+            def _boom(*a, **k):
+                raise ValueError("어휘가 깨졌다")
+
+            mp.setattr(load_assertions, resource, _boom)
+            # 커넥션이 열렸는지를 기록한다 — 열렸다면 그 예외는 트랜잭션 안에서 난 것이다
+            opened: list = []
+            real_connect = load_assertions.connect
+            mp.setattr(load_assertions, "connect",
+                       lambda cfg: (opened.append(cfg), real_connect(cfg))[1])
+
+            assert load_assertions.run(storage, "R1", db=_db()) != 0, \
+                f"{resource} 가 깨졌는데 적재가 성공으로 끝났다"
+            assert opened == [], f"{resource} 검증이 트랜잭션 안으로 미끄러졌다"
+            assert conn.log == [], "커넥션을 열지도 않았는데 SQL 이 돌았다"
+
+
+def test_a_leaking_non_entity_branch_is_warned_not_only_counted(tmp_path, monkeypatch,
+                                                                 caplog):
+    """비실체가 해소되면 **경고로 운다** — 계약 위반은 품질 로그를 열어야 보이면 안 된다.
+
+    WHY: ALPHA-831 이 이 경로를 닫아 `non_entity_resolved == 0` 이 **계약**이 됐다. 0 이
+    아니면 역할별 분기가 샌 것이고, 그건 전망 문구가 종목 참조로 둔갑해 계보가 거짓이
+    된다는 뜻이다. 그런 위반이 S3 품질 로그의 한 필드로만 남으면 아무도 안 본다 —
+    옆자리 두 형제(`unknown_roles`·`role_missing`)와 같은 자리에서 울어야 한다(Rule 12).
+
+    분기를 닫아 놨으므로 공개 경로로는 이 상태를 만들 수 없다. 해소기를 갈아 끼워
+    **가드가 실제로 우는지**만 본다 — 백스톱은 도달 불가라고 안 검사하면 조용히 죽는다.
+    """
+    import logging
+
+    from data_pipeline.entity_resolution import resolve
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        arguments=_args(("ISSUER", "삼성전자"), ("OUTLOOK", "삼성전자")))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+    # 역할과 무관하게 붙이던 옛 해소기 — ALPHA-831 이전의 그 동작이다
+    monkeypatch.setattr(load_assertions, "plan_resolution",
+                        lambda index, role, text: (*resolve(index, text), None))
+
+    with caplog.at_level(logging.WARNING, logger=load_assertions.logger.name):
+        assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    assert _log(storage)["argument_resolution"]["non_entity_resolved"] == 1
+    warned = [r.getMessage() for r in caplog.records
+              if r.levelno >= logging.WARNING and r.name == load_assertions.logger.name]
+    assert any("비실체가 인덱스로 해소" in m for m in warned), warned
+
+
 def test_non_entity_role_is_not_loaded_even_if_the_text_matches_a_ticker(tmp_path, monkeypatch):
     """비실체 자리는 텍스트가 인덱스에 걸려도 **적재하지 않는다**(ALPHA-831).
 
@@ -506,11 +577,9 @@ def test_minted_concept_id_matches_assemble_events_exactly(tmp_path, monkeypatch
     WHY: `document_assertion` 계보를 쓰는 writer 가 둘이다(이 스텝·assemble-events). 채번
     산식이 갈리면 `매출` 이 event 쪽에선 A, assertion 쪽에선 B 가 되어 **같은 개념에 ID 가
     둘** 생기고, 그 둘을 잇는 조인이 조용히 끊긴다. ALPHA-456 이 assertion_id 에서 이미
-    겪은 실패 양식이라, 여기선 같은 두 함수(`concept_key`+`stable_domain_id`)를 부르는지
-    자체를 고정한다 — 각자 구현하면 salt·구분자 하나에 다시 갈린다.
+    겪은 실패 양식이라, 여기선 **같은 한 함수**(`mint_concept`)를 부르는지 자체를 고정한다.
+    "같은 원시함수를 각자 조립"으로는 부족했다 — 접두사 하나만 달라도 다시 갈린다.
     """
-    import inspect
-
     from data_pipeline.entity_resolution import mint_concept, plan_resolution
     from data_pipeline.steps import assemble_events
 
@@ -524,14 +593,14 @@ def test_minted_concept_id_matches_assemble_events_exactly(tmp_path, monkeypatch
         # 내부 공백이 둘인 값을 일부러 넣는다(양쪽 식이 갈리면 여기서 깨진다).
         assert minted[0] == mention.strip()
 
-    # ⭐**두 writer 가 같은 함수를 부르는지를 구조로 확인한다.** 값 비교만 하면 각자
-    # 조립한 산식이 우연히 같을 때 통과하고, 한쪽 호출부의 접두사가 바뀌는 순간 갈린다
-    # (ALPHA-456 이 assertion_id 에서 겪은 실패 양식). sibling 소스에 채번 원시함수
-    # 호출이 남아 있으면 그건 산식을 다시 조립한 것이다.
-    src = inspect.getsource(assemble_events)
-    assert "mint_concept(" in src, "assemble-events 가 공유 채번 함수를 안 쓴다"
-    assert 'stable_domain_id("concept"' not in src, "sibling 이 채번 산식을 다시 조립했다"
-    assert "concept_key(" not in src, "sibling 이 채번 키를 다시 만든다"
+    # ⭐**두 writer 가 같은 함수를 부르는지를 구조로 확인한다.** 위 값 비교만으로는
+    # 부족하다 — 각자 조립한 산식이 우연히 같으면 통과하고, 한쪽 접두사가 바뀌는 순간
+    # 갈린다(ALPHA-456 실패 양식). 문면(`getsource`) 대조는 쓰지 않는다: 이 저장소에서
+    # **"없어야 한다"를 소스 텍스트로 검사하면 없앤 이유를 밝힌 주석이 걸려** 여섯 번
+    # 재발했다. 이름공간은 주석이 못 바꾼다.
+    assert assemble_events.mint_concept is mint_concept, "sibling 이 다른 채번 함수를 쓴다"
+    # 채번 키 함수가 sibling 스코프에 없으면 산식을 **다시 조립할 수단 자체가 없다**.
+    assert not hasattr(assemble_events, "concept_key"), "sibling 이 채번 키를 다시 만든다"
 
 
 def test_registry_role_is_looked_up_never_minted(tmp_path, monkeypatch):
@@ -580,10 +649,14 @@ def test_measure_roles_are_not_minted_pending_the_ontology_call(tmp_path, monkey
 def test_sentence_shaped_value_is_left_unresolved_by_the_length_cap(tmp_path, monkeypatch):
     """문장형 값은 상한에 걸려 미해소로 남는다(ALPHA-831).
 
-    WHY: 실측상 MINT 축 37,229건 중 31자 초과는 3.3%뿐이고 고유율 87%다 — 재사용되는
-    개념이 아니라 사건 인스턴스 하나다. 게다가 `normalize_name` 이 공백을 지워
-    "차세대영업배전시스템구축을위한…" 이 그대로 `display_name` 이 된다. 상한에 걸린 건
-    미해소로 남겨 되돌리기를 싸게 둔다(채번하면 참조까지 정리해야 한다).
+    WHY: 실측상 MINT 축 37,229건 중 **30자 초과는 3.3%(1,210건)뿐**이고 그 구간 고유율이
+    87%다 — 재사용되는 개념이 아니라 사건 인스턴스 하나다. 상한에 걸린 건 미해소로 남겨
+    되돌리기를 싸게 둔다(채번하면 참조까지 정리해야 한다).
+
+    ⚠️ 이 테스트가 못박는 것은 `MAX_CONCEPT_CHARS == 30` 이 **아니다**. 경계를 상한에서
+    파생하므로 고정되는 것은 아래 실물 문장(32자)이 잘린다는 것, 즉 **상한 < 32** 뿐이다.
+    값 자체는 "무엇을 개념으로 볼 것인가"의 선이라 온톨로지 소관이고, 그쪽이 조정할 때
+    테스트를 같이 고치게 만들지 않으려고 일부러 느슨하게 뒀다.
     """
     from data_pipeline.entity_resolution import plan_resolution
 
@@ -646,7 +719,9 @@ def test_resolution_rate_counts_every_axis_that_actually_attached(tmp_path, monk
     assert res["resolved"] == 1 and res["registry_hit"] == 1 and res["minted"] == 1
     assert res["resolved_any"] == 3
     assert res["rate"] == 0.75          # 분자가 resolved 하나면 0.25 가 된다
-    assert set(res["rate_numerator"]) == {"resolved", "registry_hit", "minted"}
+    # 분자가 **어느 사유로** 붙었는지는 위 세 줄이 그대로 말한다(1+1+1=3). 예전엔 사유
+    # 허용목록을 로그에 싣고 그 목록을 여기서 대조했는데, 그건 코드가 아는 사실의 사본이라
+    # 축이 늘 때 같이 드리프트한다 — 지금은 붙은 것을 직접 세므로 목록 자체가 없다.
 
 
 def test_rollback_does_not_claim_minted_concepts(tmp_path, monkeypatch):

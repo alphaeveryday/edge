@@ -83,7 +83,7 @@ def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
     **이 함수는 역할을 모른다** — 텍스트를 instrument 인덱스에 대볼 뿐이다. 역할별 축
     분기는 `plan_resolution` 이 하고, 배치 적재(`load_assertions`)는 그쪽을 쓴다.
     ⚠️ 다만 이 함수가 티커 축 전용인 것은 **아니다**: 1분 실시간 레인
-    (`minute/event_assembly`)은 아직 역할과 무관하게 여기로 온다 — 그쪽 전환은 별건이다.
+    (`minute/event_assembly`)은 아직 역할과 무관하게 여기로 온다 — 그쪽 전환은 ALPHA-852.
 
     사유는 호출부(로더)가 quality log 에 분포로 남긴다(Rule 12 — 미해소는 침묵하지
     않는다). 비문자열·공백뿐 텍스트는 unresolved 다.
@@ -105,7 +105,12 @@ def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
 # **개념이 아니라 사건 인스턴스가 된다.** "차세대 모빌리티 개발 및 해외시장 진출 활성화를
 # 위한 상생 금융지원 업무협약" 은 그 협약 한 건이지 재사용되는 개념이 아니다. MINT 축
 # 37,229건 중 **30자 초과는 3.3%(1,210건)뿐**이고 그 구간 고유율이 87%다 — 거의 전부 한 번
-# 쓰이고 만다. 채번하면 개념 마스터가 일회용 행으로 부푼다.
+# 쓰이고 만다.
+#
+# ⚠️ **이 상한이 사는 것은 "이 스텝의 argument 가 그 행을 만들지 않는다"까지다.** 채번 함수
+# (`mint_concept`)에는 상한이 없고 assemble-events 도 안 건다 — 문장꼴 멘션은 event 조립
+# 경로로는 여전히 `entity`/`concept` 에 들어온다. 마스터 자체를 지키려면 상한이 채번 함수나
+# 온톨로지로 올라가야 하고, 그건 이 티켓 밖이다(ALPHA-831 은 argument 회수가 범위다).
 #
 # ⚠️ **이 값은 "무엇을 개념으로 볼 것인가"의 선이라 온톨로지 소관이다.** 여기서 30 을 고른
 # 것은 실측 꼬리(3.3%)만 자르는 보수적 값이라서고, 상한에 걸린 건 **미해소로 남긴다** —
@@ -170,9 +175,9 @@ def plan_resolution(
       REGISTRY  `resolve_authority(role, mention)` — 시드된 명부 조회. **못 찾으면 채번하지
                 않는다**(온톨로지 근거: 지어내면 같은 기관이 표기마다 다른 엔티티가 된다).
                 단 `mint_fallback` 이 선 역할(EXCHANGE·MARKET)은 아래 채번으로 내려간다.
-      MINT      `concept_key` + `stable_domain_id` — **assemble-events 와 같은 두 함수**를
-                부른다. 각자 구현하면 salt·구분자 하나에 산식이 갈리고, 같은 개념에 ID 가
-                둘 생겨 조인이 조용히 끊긴다(ALPHA-456 이 겪은 실패 양식).
+      MINT      `mint_concept` — **assemble-events 와 같은 그 함수**를 부른다. "같은 원시
+                함수를 각자 조립"으로는 부족했다: 접두사 하나만 달라도 산식이 갈려 같은
+                개념에 ID 가 둘 생기고 조인이 조용히 끊긴다(ALPHA-456 이 겪은 실패 양식).
       NONE      instrument 인덱스(`resolve`). 못 붙으면 미해소 — 채번하면 상장사가 유령으로
                 갈린다는 게 온톨로지가 NONE 을 고른 이유다.
 
