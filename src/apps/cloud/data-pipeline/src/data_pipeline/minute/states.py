@@ -93,8 +93,11 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # `run.py` 의 스케줄 증분 기본창(`default_window(now_utc)`)을 쓰면 08:00 KST = 23:00 UTC(D-1)
 # 이라 창이 `[D-2, D-1]` 이 되어 **세션 날짜 D 가 창 밖이다**. 그러면 08:00~08:59 의 60 window
 # 가 "직전 이틀 재독"으로 VALID 확정되는데 그 분들이 속한 날짜는 질의하지 않았고(Rule 12 성공
-# 위장의 모양), 07:30 접수분은 09:00 tick 에서 처음 보인다(지연 최대 90분). 격자를 넓힌 소득이
-# 창 유도에 걸려 있다.
+# 위장의 모양), 07:30 접수분은 09:00 window 에서 처음 보인다(비가격 dataset 은
+# `scheduled_at_for` 가 `window_end` 를 그대로 줘 09:01 부터 claim 가능 — 약 91분).
+# ⚠️ 그 60 window 는 **one-shot 가정의 수치**다. 그 기본창은 `main()` 안에서 한 번 평가되므로
+# Worker 를 상주로 만들면 창이 **기동 시각에 동결**돼 그날 720 window 전부가 `[D-2, D-1]` 을
+# 재독한다. 격자를 넓힌 소득이 통째로 창 유도에 걸려 있다.
 # ⚠️ 18:00~20:00 은 **당일접수가 끝난 구간**이라 새 접수가 없다 — 0건이 오는 구간이 **아니다**.
 # 익일접수(18:00~19:00)는 계속 들어오지만 그 `rcept_dt` 가 다음 날이라 그날 창에 없고
 # (`sources/dart_disclosure.py` 실측 2026-08-03), 그 120 tick 도 창 전체를 재독한다.
@@ -102,11 +105,13 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # ponytail: 격자 상수(`EXTENDED_OPEN`/`CLOSE`)가 공용이라 dataset 별로 좁히지 않았다. 좁힐
 # 판단의 근거는 **tick 전체의 벤더 비용**이지 18:00 이후의 빈 폴링이 아니다 —
 # 창 재독 1회 = list.json 7~11콜(하루 ~1,069건 실측 · `page_count` 기본 100)이고 기본 증분
-# 창이 2일이라 tick 당 14~22콜, `PoliteClient` 기본 `min_interval=1.0` 이라 **tick 당 14~22초**
-# 다(60초 예산에 여유가 크지 않다 — 현 SFN 은 슬롯 간격 3600초가 이걸 가리고 있었다).
+# 창이 2일이라 tick 당 14~22콜, `PoliteClient` 기본 `min_interval=1.0` 이라 **목록만 tick 당
+# 14~22초**다. 본문(ZIP)은 여기에 **신규 대상 건당 1초**가 더 붙는다(같은 client 를 쓰고
+# seen-map 이 재다운로드만 막는다) — 접수가 몰리는 분은 그만큼 길어지므로 60초 예산의 실제
+# 여유는 이 합으로 봐야 한다(현 SFN 은 슬롯 간격 3600초가 이걸 가리고 있었다).
 # 일 총량은 720 tick × 14~22 ≈ 1만~1.6만 콜로 현 10슬롯(140~220콜)의 ~70배이고, 앱키를
-# 재무제표 수집이 공유하며 `"020" 일 사용한도 초과`는 `STOP_STATUS_CODES` 라 닿으면 레인이
-# 선다. 좁히는 축은 둘이다 — **창을 당일로**(세션 첫 tick 만 D-1 포함) 또는 dataset 별 격자 폭.
+# 재무제표 수집·`enrich-corp-code` 가 공유하며(같은 시크릿을 task-def 셋이 받는다)
+# `"020" 일 사용한도 초과`는 `STOP_STATUS_CODES` 라 닿으면 레인이 선다. 좁히는 축은 둘이다 — **창을 당일로**(세션 첫 tick 만 D-1 포함) 또는 dataset 별 격자 폭.
 EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_DISCLOSURE_MINUTE})
 # **상주 서비스를 스케일하는 세션**의 dataset. `start/stop-minute-session` 이 올리고
 # 내리는 서비스 목록은 dataset 별이 아니라 **공용**이라, 여기 없는 dataset 으로 stop 을
