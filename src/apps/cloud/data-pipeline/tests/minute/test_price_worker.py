@@ -46,7 +46,7 @@ UNIVERSE_EXT = Universe(
 
 
 def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
-                 universe=UNIVERSE, first_window=0):
+                 universe=UNIVERSE, first_window=0, is_backfill=False):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
     planned = plan_session_windows(SESSION_DATE, universe=universe)
     session_id, _ = ledger.plan_session(
@@ -64,6 +64,7 @@ def build_worker(db, tmp_path, *, scenario=None, worker_id="w1", windows=3,
             worker_id=worker_id, dataset="price_minute", source="toss", market="KR",
             session_date="2026-07-31", universe=universe, run_id="run_t",
             trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            is_backfill=is_backfill,
             # 만료 시나리오를 61초 점프로 검증하는 픽스처라 명시한다 — 운영 기본값은
             # 토스 tick 상한(73초+) 위로 올라갔다(ALPHA-706)
             lease_seconds=60,
@@ -93,6 +94,42 @@ class TestHappyPath:
         keys = worker.storage.list_keys("")
         assert sum(k.endswith("bars.ndjson") for k in keys) == 3
         assert sum(k.endswith("manifest.json") for k in keys) == 3
+
+    def test_worker_config_has_no_default_for_the_backfill_axis(self):
+        """`is_backfill` 에 기본값을 두지 않는다 — 빠뜨린 구성 지점은 죽어야 한다.
+
+        기본 False 를 두면 새 구성 지점이 이 축을 빠뜨렸을 때 조용히 실시간으로 판정돼
+        과거 봉이 트리거·설명(LLM)을 돌린다. 기본값 있는 옵셔널 인자가 회귀를 숨기는
+        형태를 이 트랙에서 이미 밟았다 — 결정을 계약으로 고정한다.
+        """
+        with pytest.raises(TypeError, match="is_backfill"):
+            WorkerConfig(
+                worker_id="w1", dataset="price_minute", source="toss", market="KR",
+                session_date="2026-07-31", universe=UNIVERSE, run_id="run_t",
+                trigger_schema_version="trig-1",
+                destination="price-analysis-realtime",
+            )
+
+    def test_backfill_session_writes_the_ledger_but_no_realtime_event(self, tmp_path):
+        """과거일 백필은 수집·원장은 그대로, **발행만** 안 한다(ALPHA-863).
+
+        outbox 는 곧 `price-analysis-realtime` 이고 그 소비자는 "지금 이 종목이
+        움직인다"를 판정한다 — 백필 커밋이 거기로 나가면 며칠 전 봉으로 트리거와
+        설명(LLM)이 돈다. 08-08 08-03 재수집에서 실제로 나서 390건을 손으로 DEAD
+        격리해 막았고, ALPHA-856(251거래일)이면 그 창이 없다.
+
+        위 happy path 와 **같은 시나리오·같은 window 수**다 — 갈리는 것은 이 축뿐이라
+        job 3·artifact 3 을 같이 못박아 "발행만 빠졌다"를 증명한다. 수집까지 멈추면
+        백필 자체가 무의미해지므로 그쪽으로 넘어간 회귀도 여기서 죽는다.
+        """
+        db = FakeMinuteDB()
+        worker, _, _ = build_worker(db, tmp_path, is_backfill=True)
+        assert run_until_idle(worker, NOW) == ["PROCESSED", "IDLE"]
+        assert db.outbox == {}  # Relay 가 집을 것이 없다
+        assert {w["data_status"] for w in db.windows.values()} == {"VALID"}
+        assert len(db.jobs) == 3  # 백필 흔적은 job·window 원장에 그대로 남는다
+        keys = worker.storage.list_keys("")
+        assert sum(k.endswith("bars.ndjson") for k in keys) == 3
 
     def test_lanes_realtime_newest_plus_recovery_oldest(self, tmp_path):
         # 한 tick = 최신 1(realtime) + 최고령 budget(recovery) — 최신 분이 backlog 에
@@ -884,10 +921,11 @@ class TestCollectorSelection:
         from data_pipeline.minute.kis_collector import KisPriceCollector
         from data_pipeline.minute.worker import make_price_collector
 
-        collector = make_price_collector(
+        collector, is_backfill = make_price_collector(
             self._config(source="kis", app_key="k", app_secret="s"), session_date=TODAY
         )
         assert isinstance(collector, KisPriceCollector)
+        assert is_backfill is False
         # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
         assert collector.client.client.min_interval == pytest.approx(0.08)
 
@@ -901,10 +939,11 @@ class TestCollectorSelection:
         from data_pipeline.minute.worker import make_price_collector
         from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient
 
-        collector = make_price_collector(
+        collector, is_backfill = make_price_collector(
             self._config(source="kis", app_key="k", app_secret="s"),
             session_date=date(2026, 8, 3),
         )
+        assert is_backfill is True
         client = collector.client
         assert isinstance(client, KisHistoricalMinuteClient)
         assert client.session_date == date(2026, 8, 3)
@@ -917,9 +956,11 @@ class TestCollectorSelection:
         from data_pipeline.minute.worker import make_price_collector
         from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient
 
-        client = make_price_collector(
+        collector, is_backfill = make_price_collector(
             self._config(source="kis", app_key="k", app_secret="s"), session_date=TODAY
-        ).client
+        )
+        client = collector.client
+        assert is_backfill is False
         assert not isinstance(client, KisHistoricalMinuteClient)
         assert client.tr_id == "FHKST03010200"
 
@@ -988,10 +1029,28 @@ class TestCollectorSelection:
         from data_pipeline.minute.toss_collector import TossPriceCollector
         from data_pipeline.minute.worker import make_price_collector
 
-        collector = make_price_collector(
+        collector, is_backfill = make_price_collector(
             self._config(source="toss", client_id="c", client_secret="s"), session_date=TODAY
         )
         assert isinstance(collector, TossPriceCollector)
+        assert is_backfill is False
+
+    def test_backfill_verdict_is_the_date_not_the_vendor(self):
+        """과거일 판정은 **날짜**에서 나온다 — 소급 TR 이 없는 벤더도 백필이다(ALPHA-863).
+
+        토스에는 소급 클라이언트가 없어 collector 타입은 당일과 똑같다. 판정을 벤더
+        구현으로 되물으면(옛 `isinstance(getattr(collector, "client", …))`) 여기서 조용히
+        False 가 되고, 과거일 토스 백필의 커밋이 오늘의 실시간 판정 큐로 나간다.
+        """
+        from data_pipeline.minute.toss_collector import TossPriceCollector
+        from data_pipeline.minute.worker import make_price_collector
+
+        collector, is_backfill = make_price_collector(
+            self._config(source="toss", client_id="c", client_secret="s"),
+            session_date=date(2026, 8, 3),
+        )
+        assert isinstance(collector, TossPriceCollector)  # 벤더 축은 안 갈린다
+        assert is_backfill is True  # 날짜 축은 갈린다
 
     def test_kis_without_app_key_fails_loud(self):
         # 토스 자격증명만 주입된 채 source 만 바뀐 배포 — 첫 벤더 호출이 아니라 기동에서 죽는다

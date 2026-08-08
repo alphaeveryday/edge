@@ -304,7 +304,7 @@ class TestWorkerHook:
                 worker_id="w1", dataset="price_minute", source="toss", market="KR",
                 session_date=SESSION_DATE, universe=UNIVERSE, run_id="run_t",
                 trigger_schema_version="trig-1",
-                destination="price-analysis-realtime",
+                destination="price-analysis-realtime", is_backfill=False,
             ),
         )
 

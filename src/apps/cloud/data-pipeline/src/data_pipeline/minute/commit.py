@@ -115,11 +115,26 @@ class MinuteCommitter:
         trigger_schema_version: str,
         destination: str,
         artifact_generation: int,
+        emit_outbox: bool,
     ) -> int:
         """한 트랜잭션에 window/job/outbox 를 확정하고 generation 을 돌려준다.
 
         가격의 canonical 은 호출자가 이미 PUT 한 S3 artifact 다 — 여기서는 DB 에
         canonical 을 쓰지 않는다(ALPHA-701).
+
+        `emit_outbox=False` 면 window/job 만 쓰고 발행 event 를 **안 만든다**(ALPHA-863).
+        outbox 는 곧 `price-analysis-realtime` 이고 그 소비자는 "지금 이 종목이 움직인다"를
+        판정하므로, 과거일 백필 세션의 커밋이 여기로 나가면 며칠 전 봉으로 트리거와
+        설명(LLM)이 돈다. 그 판정은 Relay 가 `status='NEW'` 를 집는 순간 시작돼 되돌릴
+        창이 없다 — 안 내는 것이 유일하게 확실한 차단이고, 백필이 무엇을 수집했는지는
+        window·job 원장에 그대로 남는다.
+
+        기본값을 두지 않는 이유는 `WorkerConfig.is_backfill` 과 같다 — 빠뜨린 호출부가
+        조용히 실시간으로 발행되면 안 된다.
+
+        ⚠️ 이 판정을 여기서 `window_start` 로 유도하지 않는다. EOD drain 이 자정을 넘기면
+        살아 있는 당일 세션의 마지막 window 들이 그 순간 과거일로 보여 발행이 끊긴다 —
+        벽시계는 CLI 기동에서 한 번만 읽고(`make_price_collector`) 그 값을 내려보낸다.
 
         멱등성은 아래에서 나온다 — 재실행 같은 checksum 이면 generation 불변 →
         같은 job_id/event_id → ON CONFLICT no-op(outbox 재발행 없음). correction 은
@@ -175,14 +190,15 @@ class MinuteCommitter:
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
             )
-            JobLedger._insert_outbox_tx(
-                cur,
-                event_id=build_event_id(PRICE_EVENT_TYPE, job_id),
-                event_type=PRICE_EVENT_TYPE, destination=destination,
-                aggregate_id=job_id, generation=generation,
-                payload={"job_id": job_id, "session_id": session_id,
-                         "window_start": window_start, "generation": generation},
-            )
+            if emit_outbox:
+                JobLedger._insert_outbox_tx(
+                    cur,
+                    event_id=build_event_id(PRICE_EVENT_TYPE, job_id),
+                    event_type=PRICE_EVENT_TYPE, destination=destination,
+                    aggregate_id=job_id, generation=generation,
+                    payload={"job_id": job_id, "session_id": session_id,
+                             "window_start": window_start, "generation": generation},
+                )
             return generation
 
     def commit_news_window(

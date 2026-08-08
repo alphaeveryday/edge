@@ -128,6 +128,7 @@ def build_pipeline(db, tmp_path, *, prices, windows=2, universe=UNIVERSE,
             worker_id="w1", dataset="price_minute", source="toss", market="KR",
             session_date="2026-07-31", universe=universe, run_id="run_t",
             trigger_schema_version="trig-1", destination="price-analysis-realtime",
+            is_backfill=False,
             lease_seconds=60, recovery_budget_per_tick=recovery_budget,
         ),
     )
@@ -794,7 +795,7 @@ class TestAdversarialInputs:
                 session_date="2026-07-31", universe=universe_ext, run_id="run_t",
                 trigger_schema_version="trig-1",
                 destination="price-analysis-realtime", lease_seconds=60,
-                recovery_budget_per_tick=3,
+                is_backfill=False, recovery_budget_per_tick=3,
             ),
         )
         worker.tick(NOW)
@@ -940,6 +941,7 @@ class TestAdversarialInputs:
                 session_date="2026-07-31", universe=universe_ext, run_id="run_t",
                 trigger_schema_version="trig-1",
                 destination="price-analysis-realtime", lease_seconds=60,
+                is_backfill=False,
             ),
         )
 

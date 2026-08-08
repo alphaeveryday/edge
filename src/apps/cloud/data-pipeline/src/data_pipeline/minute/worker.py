@@ -66,6 +66,11 @@ class WorkerConfig:
     run_id: str
     trigger_schema_version: str
     destination: str
+    # 과거일 세션인가 — 참이면 commit 이 실시간 판정 outbox 를 내지 않는다(ALPHA-863).
+    # ⚠️ **기본값을 두지 않는다**: 기본 False 면 새 구성 지점이 이 축을 빠뜨렸을 때
+    # 조용히 실시간으로 판정돼 과거 봉이 트리거·설명(LLM)을 돌린다 — 08-08 에 실제로
+    # 났고 outbox 390건을 손으로 DEAD 격리해 막았다. 빠뜨리면 TypeError 로 죽어야 한다.
+    is_backfill: bool
     # ⚠️ window claim lease 는 **tick 상한보다 길어야** 한다 — 토스 실측 tick 은 73초+
     # (363종 ÷ 초당 5회)라, 60 으로 두면 자기 claim 이 in-flight 중 만료돼 recovery
     # lane 이 같은 window 를 재청구하고 원래 attempt 의 commit 이 거부된다(ALPHA-706).
@@ -386,6 +391,7 @@ class PriceWorker(MinuteWorkerLoop):
                 stage_timestamps=result.stage_timestamps,
                 trigger_schema_version=cfg.trigger_schema_version,
                 destination=cfg.destination, artifact_generation=generation,
+                emit_outbox=not cfg.is_backfill,
             )
             # 5분봉 롤업 파생(ALPHA-750) — 1분 커밋(정본)은 이미 끝났다. 롤업 실패를
             # window 실패로 접으면 lease 만료 후 정상 수집이 재시도되므로, 여기서
@@ -436,8 +442,8 @@ def _require_credentials(pair: tuple[str | None, str | None], env_names: str) ->
         )
 
 
-def make_price_collector(options, *, session_date):
-    """설정 `source` + 세션 날짜 → collector. **미지 소스는 기동 거부**(ALPHA-735).
+def make_price_collector(options, *, session_date) -> tuple[object, bool]:
+    """설정 `source` + 세션 날짜 → `(collector, is_backfill)`. **미지 소스는 기동 거부**(ALPHA-735).
 
     조용한 폴백을 두지 않는다: 오타 source 로 토스가 끼워지면 원장 source_group 과 갈린
     세션에 다른 벤더의 봉이 실린다. 세션 identity 는 source 로 유도되므로 여기서 막는
@@ -447,10 +453,19 @@ def make_price_collector(options, *, session_date):
     과거 세션에 물리면 오늘 봉이 오늘 라벨로 돌아와 전 window 가 missing 이 된다 —
     설정 노브가 아니라 벤더 사실이라 날짜에서 유도한다(끌 수 있게 두면 꺼진 채로 도는
     백필이 조용히 빈 하루를 만든다).
+
+    ⚠️ `is_backfill` 을 **같이 돌려주는** 이유(ALPHA-863): 이 판정은 벤더 선택뿐 아니라
+    시간외 기동 게이트와 outbox 발행 여부까지 가르는데, 호출부가 collector 를 뜯어
+    되물으면(`isinstance(getattr(collector, "client", None), …)`) 배선이 바뀔 때 **아무
+    신호 없이** False 로 접힌다. 벽시계는 여기서 **한 번만** 읽는다 — 두 번 읽으면 자정
+    경계에서 collector 는 당일 TR 인데 게이트는 소급으로 판정한다.
+
+    벤더 무관이다: 소급 TR 이 없는 토스도 과거일 세션이면 실시간 판정 대상이 아니다.
     """
     from ..sources.http import PoliteClient
     from .states import DATASET_PRICE_MINUTE, SOURCE_GROUPS_BY_DATASET
 
+    is_backfill = session_date < datetime.now(KST).date()
     if options.source == "kis":
         from ..sources.kis_minute import KisHistoricalMinuteClient, KisMinuteClient
         from .kis_collector import KisPriceCollector
@@ -461,13 +476,13 @@ def make_price_collector(options, *, session_date):
         )
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
         http = PoliteClient(min_interval=options.min_interval_sec)
-        if session_date < datetime.now(KST).date():
+        if is_backfill:
             return KisPriceCollector(client=KisHistoricalMinuteClient(
                 options.app_key, options.app_secret, http, session_date=session_date,
-            ))
+            )), is_backfill
         return KisPriceCollector(
             client=KisMinuteClient(options.app_key, options.app_secret, http)
-        )
+        ), is_backfill
     if options.source == "toss":
         from ..sources.toss import TossOpenApiClient
         from .toss_collector import TossPriceCollector
@@ -481,7 +496,7 @@ def make_price_collector(options, *, session_date):
                 client_id=options.client_id, client_secret=options.client_secret
             ),
             lookback=options.lookback,
-        )
+        ), is_backfill
     raise SystemExit(
         f"알 수 없는 source {options.source!r} — 이 벤더의 어댑터가 없다"
         f"(가능: {sorted(SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE])})"
@@ -547,14 +562,12 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     # ⚠️ universe 파일 읽기보다 **먼저** 만든다 — 자격증명 결손은 기동에서 죽어야 하고
     # (`_require_credentials`), 뒤로 미루면 파일 오류가 그 판정을 가린다.
     # 벤더 TR 선택이 세션 날짜에 걸려 있어(ALPHA-846) 날짜를 읽은 뒤여야 한다.
-    collector = make_price_collector(options, session_date=parsed_day)
-    universe_model = load_universe_uri(universe)
     # ⚠️ "지난 거래일인가"를 여기서 **다시 묻지 않는다** — `datetime.now` 를 두 번 읽으면
     # 자정 경계에서 collector 는 당일 TR 인데 게이트는 소급으로 판정해 정상 재기동이
-    # 그 순간에만 거부된다. 실제로 무엇을 골랐는지 collector 에게 묻는다.
-    from ..sources.kis_minute import KisHistoricalMinuteClient
-    is_backfill = isinstance(
-        getattr(collector, "client", None), KisHistoricalMinuteClient)
+    # 그 순간에만 거부된다. 무엇을 골랐는지는 collector 를 뜯어 되묻지 않고 같이 받는다
+    # (ALPHA-863 — 되물으면 배선 변경이 판정을 조용히 뒤집는다).
+    collector, is_backfill = make_price_collector(options, session_date=parsed_day)
+    universe_model = load_universe_uri(universe)
     if is_backfill and universe_model.extended_hours_ids:
         # 소급 TR 은 정규장(09:00–15:30)만 페이징한다. 시간외 종목이 있으면 세션은
         # 720 window 로 계획되는데, 그 330개는 **구조적으로** 봉이 안 나온다 —
@@ -596,6 +609,7 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
             run_id=worker_id,
             trigger_schema_version=options.trigger_schema_version,
             destination=options.destination,
+            is_backfill=is_backfill,
             lease_seconds=options.lease_seconds,
             session_lease_seconds=options.session_lease_seconds,
             heartbeat_every_seconds=options.heartbeat_every_seconds,
