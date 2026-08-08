@@ -154,6 +154,13 @@ test('실시간 데이터셋 사건은 1분 창이 아니라 그 날짜의 세�
   assert.equal(r.targets[0].kind, 'session');
   assert.equal(r.targets[0].href, '/minute?date=2026-08-03&dataset=price_minute');
   assert.deepEqual(r.ledger, { incident: VID, dataset: 'price_minute', date: '2026-08-03' });
+
+  /* 벤더가 없는 대상은 **세션 하나로 안 좁혀진다**(원장 화면이 후보가 둘이면 고르기를 거부한다).
+   * 그 사실을 여기서 안 실으면 도착한 화면이 "source_group 을 실어 주세요"라는 — 이 사건에서는
+   * 불가능한 — 조치를 지시한다. 그리고 라벨이 그걸 "세션"이라 부르면 없는 실체를 지목한다.
+   * 두 줄 다 이 라운드가 판 것이라 단언 없이 두면 다음 정리에서 조용히 되돌아간다. */
+  assert.match(r.ledgerNote ?? '', /세션 하나로 좁혀지지 않는다/, '좁혀지지 않는 이유를 안 실었다');
+  assert.match(r.targets[0].label, /실시간 데이터셋/, '벤더 없는 대상을 "세션"이라 불렀다');
 });
 
 test('실시간 세션 사건은 벤더를 원장 문맥에 싣는다 — 데이터셋만 넘기면 남의 세션 행이 선다', () => {
