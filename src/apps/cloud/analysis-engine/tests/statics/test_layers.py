@@ -345,3 +345,28 @@ def test_intraday_mode_names_exclude_units_the_ledger_dropped():
         "T": (0.02, False), MARKET_CODE: (0.01, False), "a": (0.3, False)})
     assert {n.ticker for n in r.names} == {"a"}
     assert r.weight_covered == pytest.approx(0.5, abs=1e-12), "커버리지가 얇음을 수치로 말해야 한다"
+
+
+# ── 광역 ETF 2층 · 섹터 후보 위생 (ALPHA-871) ─────────────────────────────
+def test_broad_market_target_folds_the_sector_layer():
+    """대상이 시장과 ≥80% 겹치면 섹터를 세우지 않는다 - 시장의 부분집합에 섹터를
+    세우면 시장 몫을 두 번 나눠 갖는 동어반복이다. 접은 사실은 커버리지에 남는다."""
+    lake = _lake()
+    lake.holds["T"] = dict(lake.holds[MARKET_CODE])   # 시장과 완전 겹침
+    r = decompose(lake, "T", _day())
+    assert r is not None
+    assert any(x.kind == "시장" for x in r.layers)
+    assert all(x.kind != "섹터" for x in r.layers)
+    assert "시장+고유 2층" in lake.exists["sector_layer"]
+
+
+def test_excluded_series_never_becomes_the_sector():
+    """SECTOR_EXCLUDE 계열은 겹침이 최적이어도 섹터 후보가 못 된다 - 이력을 못 믿는
+    계열이 층을 참칭하면 산술이 맞아도 재료가 거짓이다."""
+    lake = _lake()
+    lake.series["0210A0"] = {"name": "신상장ETF", "kind": "sector",
+                             "ret": lake.series["SEC"]["ret"]}
+    lake.holds["0210A0"] = {"a": 0.2, "x": 0.8}       # SEC(0.15)보다 높은 겹침 0.2
+    r = decompose(lake, "T", _day())
+    sec = next(x for x in r.layers if x.kind == "섹터")
+    assert sec.code == "SEC", "제외 계열이 섹터로 뽑혔다"

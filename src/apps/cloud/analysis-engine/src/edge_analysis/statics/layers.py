@@ -31,6 +31,13 @@ TOP_NAMES = 5         # 고유분을 배정할 종목 수
 MARKET_CODE = "069500"
 TAUTOLOGY_CUT = 0.30  # 이만큼 겹치면 같은 것이다 - 섹터 후보에서 뺀다 (동어반복 금지)
 MIN_OVERLAP = 0.05    # 이만큼도 안 겹치면 "왜 이게 설명하냐"에 답이 없다 (우연 적합 금지)
+# 대상이 시장과 이만큼 겹치면 광역(broad) ETF 다 - 섹터 층을 접고 시장+고유 2층으로
+# 간다(ALPHA-871). 시장의 부분집합에 '섹터'를 세우면 시장 몫을 두 번 나눠 갖는
+# 동어반복이고, 그때 섹터가 청구하는 차감은 산술은 맞아도 아무것도 설명하지 않는다.
+BROAD_MARKET_CUT = 0.80
+# 섹터 후보에서 항상 빼는 계열 - 데이터 위생(ALPHA-871). 0210A0 은 상장이 늦어
+# 이력이 최소(2026-08 실측 33일)라 계열 자체를 아직 못 믿는다.
+SECTOR_EXCLUDE = frozenset({"0210A0"})
 
 KRX_PREFIX = "KRX:"   # KRX 업종지수 후보의 코드 접두 (겹침 게이트 면제 표식)
 
@@ -265,6 +272,7 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     if notes is not None:
         notes.pop("layers", None)
         notes.pop("market_layer", None)
+        notes.pop("sector_layer", None)
     ser = _series(lake, day, ("market", "sector"), clock=clock)
     # 1분봉 실측이 레이크 값을 **덮는다** - 이름은 레이크 것을 지키고(수익률만 갈아
     # 끼운다), 레이크에 아예 없는 심볼(스테일 정본)은 코드를 이름 삼아 세운다.
@@ -327,18 +335,27 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     twins, alien = set(), set()
     sector = None       # (code, name, ret, overlap)
     meta = {k: v[0] for k, v in ser.items()}
+    # **광역 ETF 는 섹터 층을 접는다**(ALPHA-871). 시장과 ≥BROAD_MARKET_CUT 겹치는
+    # 대상은 시장의 부분집합이라 섹터가 시장 몫을 두 번 나눠 갖는 동어반복이 된다 -
+    # 시장+고유 2층으로 가고, 접었다는 사실은 커버리지에 남긴다(조용한 생략 금지).
+    broad = (layers and etf != MARKET_CODE
+             and overlap(lake, etf, MARKET_CODE, day) >= BROAD_MARKET_CUT)
+    if broad and notes is not None:
+        notes["sector_layer"] = (
+            f"생략: 시장과 구성 겹침 ≥{BROAD_MARKET_CUT:.0%} - 시장+고유 2층")
     # KRX 업종지수가 있으면 **그것만** 쓴다 - 지수는 KRX 가 산출하고 업종은 구성종목
     # 최빈이 정하므로 어느 쪽도 우리 선택이 아니다. 구간 모드는 KRX 5분봉이 없어
     # 섹터 ETF 로 간다.
-    krx = None if clock is not None else _krx_sector_candidate(lake, etf, day)
+    krx = (None if (clock is not None or broad)
+           else _krx_sector_candidate(lake, etf, day))
     if krx is not None:
         code, nm, s_now = krx
         meta[code] = nm
         sector = (code, nm, s_now, 0.0)
-    else:
+    elif not broad:
         best_ov = 0.0
         for s_, (nm, s_now, s_halt) in ser.items():
-            if s_ in (etf, MARKET_CODE) or s_halt:
+            if s_ in (etf, MARKET_CODE) or s_ in SECTOR_EXCLUDE or s_halt:
                 continue
             ov = overlap(lake, etf, s_, day)
             if ov >= TAUTOLOGY_CUT:

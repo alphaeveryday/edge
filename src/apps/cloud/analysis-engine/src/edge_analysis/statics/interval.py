@@ -70,7 +70,13 @@ class WindowFacts:
     market_return: float | None
     sector_name: str | None
     sector_return: float | None
-    path: str
+    # 층 기여회계(ALPHA-871) - [3] 블록이 상대비교 대신 이 값을 말한다. 셋 다 층
+    # rollup 프레임(상태축)의 %p 며, 시장+섹터+고유 = rollup.total 이 항등식이다.
+    market_contribution: float | None = None
+    sector_contribution: float | None = None
+    idio_contribution: float | None = None
+    path: str = ""
+
     contributions: tuple[ContributionFact, ...] = ()
     nav_gap: float | None = None
     anomaly: str | None = None
@@ -138,16 +144,21 @@ def build_block_plan(facts: WindowFacts) -> tuple[OutputBlock, ...]:
         )),
         OutputBlock("path", (facts.path,)),
     ]
-    relative = []
-    relative.append(
-        "시장 미계측 — 요청창 시장 수익률을 계산하지 못했습니다."
-        if facts.market_return is None else
-        f"시장 대비 {_pct(facts.window_return - facts.market_return)}p")
-    relative.append(
-        "섹터 미계측 — 요청창 섹터 수익률을 계산하지 못했습니다."
-        if facts.sector_return is None else
-        f"{facts.sector_name} 대비 {_pct(facts.window_return - facts.sector_return)}p")
-    blocks.append(OutputBlock("relative", tuple(relative)))
+    # 기여회계(ALPHA-871) - 상대비교("X 대비 +n%p")는 층 회계와 다른 프레임이고
+    # 프록시 상품명을 산문에 노출했다. 층 rollup 의 기여를 그대로 말한다: 항이 곧
+    # 항등식(시장+섹터+고유 = 층 프레임의 구간수익)의 조각이라 검산 가능하다.
+    # 프록시·지수명은 쓰지 않는다 - 섹터 소스가 바뀌어도(업종지수 1분봉 전환 예정)
+    # 산문 형식이 불변이어야 한다.
+    if facts.market_contribution is None:
+        relative = ("층 미계측 — 시장 층이 서지 않았습니다.",)
+    else:
+        parts = [f"시장 요인 {_pct(facts.market_contribution)}p"]
+        if facts.sector_contribution is not None:
+            parts.append(f"섹터 요인 {_pct(facts.sector_contribution)}p")
+        if facts.idio_contribution is not None:
+            parts.append(f"고유 요인 {_pct(facts.idio_contribution)}p")
+        relative = (" · ".join(parts),)
+    blocks.append(OutputBlock("relative", relative))
     if facts.anomaly:
         blocks.append(OutputBlock("anomaly", (facts.anomaly,)))
     if facts.disclosures:
@@ -223,7 +234,7 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
               plan["contribution"].evidence_ids),
         block("2", "시간 구간", plan["path"].lines, ("S3.bars_5m",),
               (f"bars_5m:{facts.ticker}",)),
-        block("3", "상대 비교", plan["relative"].lines,
+        block("3", "요인 분해", plan["relative"].lines,
               ("S3.bars_5m", "S3.layers_daily")),
     ]
     optional_keys = ("disclosure", "flow", "news", "statistics", "causal")
@@ -613,10 +624,12 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
     measured = window_return
     direction = "상승" if measured > 0 else "하락" if measured < 0 else "보합"
     evidence = ["구성종목 실시간 시세"]
+    # 산문에 프록시·지수 상품명을 싣지 않는다(ALPHA-871) - 실체는 lineage 와 층
+    # rollup 에 남는다. 이름 오염(layers_daily 41/80)의 사용자 노출 경로도 이걸로 닫힌다.
     if market is not None:
-        evidence.append(str(getattr(market, "name", "시장")))
+        evidence.append("시장 계열")
     if sector is not None:
-        evidence.append(str(sector.name))
+        evidence.append("섹터 계열")
     if event_ids:
         evidence.append("요청창 사건")
     lineage = (
@@ -656,6 +669,19 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         market_return=None if market is None else float(market.ret),
         sector_name=None if sector is None else str(sector.name),
         sector_return=None if sector is None else float(sector.ret),
+        # `getattr` 인 이유: 주입 rollup 은 형이 강제되지 않는다(레거시 대역·테스트
+        # fake). 기여가 없으면 층 미계측으로 접는다 - 지어내지 않는다.
+        market_contribution=(float(market.contribution)
+                             if market is not None
+                             and getattr(market, "contribution", None) is not None
+                             else None),
+        sector_contribution=(float(sector.contribution)
+                             if sector is not None
+                             and getattr(sector, "contribution", None) is not None
+                             else None),
+        idio_contribution=(float(roll.idio)
+                           if roll is not None and getattr(roll, "idio", None) is not None
+                           else None),
         path=f"{a[:5]}부터 {b[:5]}까지 {direction}했습니다.",
         contributions=contributions,
         nav_gap=None if premium is None else float(premium.premium_move),

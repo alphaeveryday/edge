@@ -11,6 +11,8 @@ def _facts():
         header_return=-0.062, window_return=-0.041,
         advancers=12, decliners=18, market_return=-0.002,
         sector_name="KRX 반도체", sector_return=-0.008,
+        market_contribution=-0.002, sector_contribution=-0.006,
+        idio_contribution=-0.033,
         path="10:40부터 13:20까지 하락했습니다.",
         lineage=({"view": "bars_5m"},),
         final_lines=(
@@ -94,8 +96,7 @@ def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
         "[1] 구성종목 기여를 계산하지 못했습니다.\n"
         "구성종목 30종목 중 12종목 상승 · 18종목 하락\n\n"
         "[2] 10:40부터 13:20까지 하락했습니다.\n\n"
-        "[3] 시장 대비 -3.90%p\n"
-        "KRX 반도체 대비 -3.30%p\n\n"
+        "[3] 시장 요인 -0.20%p · 섹터 요인 -0.60%p · 고유 요인 -3.30%p\n\n"
         "[4] "
     )
     assert text.split("[4] ", 1)[1].splitlines() == [
