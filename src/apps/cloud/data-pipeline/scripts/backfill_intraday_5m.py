@@ -1,4 +1,4 @@
-"""토스 1분봉 → 5분봉 canonical 과거 백필 (분석엔진 β 표본 복구용).
+"""1분봉 → 5분봉 canonical 과거 백필 (분석엔진 β 표본 복구용). 벤더는 `--vendor`.
 
 **왜 필요한가.** `analysis-engine` 의 구간 층분해는 같은 시각창을 과거 60거래일에서
 회귀해 β 를 얻는다(`layers.BETA_WINDOW`·`MIN_BETA_N`). 이력이 그 최소 표본에 못 미치는
@@ -10,18 +10,25 @@
 (~2026-07-31)은 그 종목들을 안 담았고, 1분 롤업은 2026-08-05 에 시작했다. 그 사이를
 메우는 원천이 없다 — 이 스크립트가 그 자리다.
 
-**왜 토스인가.** 이 스크립트를 쓸 때 레포에 있던 KIS 분봉 어댑터는 당일 TR
-(`FHKST03010200`) 하나였고 그 TR 에는 날짜 파라미터가 없다.
-⚠️ **"KIS 는 과거를 못 준다"로 읽지 마라** — 소급 TR `FHKST03010230` 이 따로 있고
-ALPHA-846 이 그걸 `KisHistoricalMinuteClient` 로 붙였다. 다만 그 경로의 유니버스는
-S3 `config/minute/universe.json`(362종)이라 섹터 후보 48종을 못 담는다 — 그게
-소유권 경계를 이 백필 쪽에 둔 이유다(ALPHA-836). 토스는 `before` 로 과거를 거슬러 준다(실측: 305720 이
-2025-09 까지 나온다). 5분봉 API 는 어느 벤더에도 없으므로 1분을 받아 롤업한다 —
+**벤더가 둘인 이유.** 처음엔 토스뿐이었다 — 그때 레포의 KIS 어댑터는 당일 TR
+(`FHKST03010200`) 하나였고 그 TR 에는 날짜 파라미터가 없다. 지금은 소급 TR
+`FHKST03010230` 이 `KisHistoricalMinuteClient` 로 붙어 있고(ALPHA-846), 그쪽이 더
+정확하다 — 토스는 fmp·KIS 어느 쪽과도 값이 다르다(종가 일치율 35%). 그래서 새로
+받는 구간은 KIS 로 간다(ALPHA-856).
+
+⚠️ **이미 착지한 토스 파일은 건드리지 않는다.** 벤더마다 파일이 갈리므로(`VENDORS`)
+서로 덮지 않고, 결손 판정(`_backfilled_tickers`)이 두 벤더를 **합쳐서** 세므로 같은
+날짜를 두 벌 받지도 않는다. 남는 것은 벤더가 갈리는 날짜 경계의 **이음매**인데, 그건
+데이터 품질 판단이라 코드가 아니라 사람이 정한다.
+
+페이징 축이 벤더마다 다르다 — 토스는 `before` 로 과거를 거슬러 주고(실측: 305720 이
+2025-09 까지), 소급 TR 은 **하루에 묶여** 그날을 통째로 캐시한다. `_collect_toss` 는
+티커-major, `_collect_kis` 는 날짜-major 인 이유가 그것뿐이다. 5분봉 API 는 어느 벤더에도 없으므로 1분을 받아 롤업한다 —
 롤업 규칙은 `minute/rollup.py` 와 **같은 계약**이다(open=첫 봉 open · high=max ·
 low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=ts+5분).
 
 **왜 별도 파일인가.** `part-0.parquet` 은 롤업이 통째로 덮는 파일이다 — 거기 끼워 넣으면
-다음 재집계에서 지워진다. 같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓴다 —
+다음 재집계에서 지워진다. 같은 파티션에 `part-<vendor>-backfill.parquet` 로 따로 쓴다 —
 소비자(`duck._s3`)가 `**/*.parquet` 글롭이라 둘 다 읽는다. 행이 서로소인 것은 쓰기 전에
 `part-0` 의 티커를 빼서 보장한다.
 
@@ -39,7 +46,8 @@ low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=t
 있으면 `_panel` 류 집계가 조용히 두 번 센다. 스킵은 콜도 아낀다.
 
 실행:
-    AWS_PROFILE=edge uv run python scripts/backfill_intraday_5m_toss.py --days 70
+    AWS_PROFILE=edge uv run python scripts/backfill_intraday_5m.py --days 70
+    ... --vendor kis       # 소급 TR. 앱키 전역 유량이라 **장 마감 후에만**
     ... --dry-run          # 무엇을 몇 콜 받을지만 계산하고 끝낸다
     ... --tickers 395270,0190G0
 """
@@ -52,7 +60,7 @@ import json
 import logging
 import sys
 from collections import defaultdict
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 import boto3
@@ -62,19 +70,31 @@ import pyarrow.parquet as pq
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src"))
 
 from data_pipeline.minute.rollup import writer_owns  # noqa: E402
+from data_pipeline.sources.http import PoliteClient  # noqa: E402
+from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient  # noqa: E402
 from data_pipeline.sources.toss import TossOpenApiClient  # noqa: E402
 
 KST = timezone(timedelta(hours=9))
 BUCKET_MINUTES = 5
 # 정규장 경계. 봉의 **구간 시작** 기준이라 마지막 봉은 15:25(=15:25~15:30)다.
 SESSION_OPEN, SESSION_CLOSE = time(9, 0), time(15, 30)
+# 정규장 분 수(09:00~15:30). 소급 클라이언트에 window 를 하나씩 물을 때의 횟수다.
+SESSION_MINUTES = 390
 MARKET = "KR"
 PREFIX = "canonical/market_data/intraday_5m/market=KR"
 # 거래일의 **독립 증인**. 5분봉 파티션이 통째로 빠진 날을 이쪽이 안다(ALPHA-836).
 PRICE_DAILY_PREFIX = "canonical/market_data/price_daily/market=KR"
-BACKFILL_NAME = "part-toss-backfill.parquet"
-SOURCE_VENDOR = "toss_backfill"
+# 벤더 축(ALPHA-856). 파일명이 곧 소유자 표시다 — 파티션에 나란히 놓이므로 누가 쓴
+# 행인지 산출물만 보고 갈릴 수 있어야 한다. `part-0` 은 롤업 소유라 어느 벤더도 안 쓴다.
+VENDORS = {
+    "toss": {"file": "part-toss-backfill.parquet", "vendor": "toss_backfill"},
+    "kis": {"file": "part-kis-backfill.parquet", "vendor": "kis_backfill"},
+}
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
+KIS_SECRET = "edge-dev-data-pipeline/kis/oauth"
+# 소급 TR 은 한 콜 120봉이라 하루 4콜이다(실측). 간격이 곧 유량 상한이고 앱키 전역이라
+# 다른 KIS 스텝과 나눠 쓴다 — 장중에 돌리지 마라(1분 레인이 6.8 req/s 를 쓴다).
+KIS_MIN_INTERVAL = 0.08
 DEFAULT_BUCKET = "edge-dev-pipeline-lake"
 # 토스 count 상한(`toss.MAX_COUNT`). 하루 390분이라 종목당 2콜 남짓으로 하루가 닫힌다.
 PAGE = 200
@@ -156,6 +176,20 @@ def _read_day(s3, bucket: str, day: str, name: str = "part-0.parquet"):
 
 def _tickers_present(table) -> set[str]:
     return set(table.column("ticker").to_pylist()) if table is not None else set()
+
+
+def _backfilled_tickers(s3, bucket: str, day: str) -> set[str]:
+    """그날 백필 파일들이 이미 가진 종목 — **모든 벤더를 합친다**(ALPHA-856).
+
+    내 벤더 파일만 세면 다른 벤더가 이미 채운 날짜를 다시 받아 나란히 쓴다. 파일이
+    갈려 있어 덮이지도 않으므로 같은 (ticker, ts) 가 두 벌로 남고, 소비자는 파티션을
+    `*.parquet` 글롭으로 읽으니 집계가 **조용히 두 번 센다**(거래량 이중계상 → β 오염).
+    2026-04-23~08-07 을 토스가 이미 갖고 있는 채로 KIS 를 도는 것이 그 자리다.
+    """
+    found: set[str] = set()
+    for spec in VENDORS.values():
+        found |= _tickers_present(_read_day(s3, bucket, day, spec["file"]))
+    return found
 
 
 def _roll(candles) -> list[dict]:
@@ -248,7 +282,8 @@ def _day_payload(prior_rows: list[dict], existing: set[str],
     return keep + rows, len(rows)
 
 
-def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool) -> int:
+def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool,
+               name: str) -> int:
     if not rows:
         return 0
     tbl = pa.Table.from_pylist(rows, schema=SCHEMA)
@@ -256,14 +291,120 @@ def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool) -> int:
         return tbl.num_rows
     buf = io.BytesIO()
     pq.write_table(tbl, buf, compression="snappy")
-    s3.put_object(Bucket=bucket, Key=f"{PREFIX}/trade_date={day}/{BACKFILL_NAME}",
+    s3.put_object(Bucket=bucket, Key=f"{PREFIX}/trade_date={day}/{name}",
                   Body=buf.getvalue())
     return tbl.num_rows
+
+
+def _collect_toss(days, targets, covered, a) -> dict[str, list[dict]]:
+    """티커-major — 토스는 `before` 커서 하나로 날짜를 가로질러 거슬러 올라간다."""
+    sec = json.loads(boto3.client("secretsmanager")
+                     .get_secret_value(SecretId=TOSS_SECRET)["SecretString"])
+    client = TossOpenApiClient(client_id=sec["client_id"], client_secret=sec["client_secret"])
+    vendor = VENDORS["toss"]["vendor"]
+
+    newest = datetime.fromisoformat(days[-1]).replace(hour=15, minute=31, tzinfo=KST)
+    per_day: dict[str, list[dict]] = defaultdict(list)
+    for i, tk in enumerate(targets, 1):
+        want = [d for d in days if tk not in covered[d]]
+        if not want:
+            continue
+        try:
+            candles = _fetch_back(client, tk, newest, want[0], a.call_budget)
+        except Exception as e:                                  # noqa: BLE001
+            # 한 종목의 실패로 나머지를 버리지 않는다. 조용히 넘기지도 않는다.
+            log.error("[%d/%d] %s 수집 실패 — 건너뛴다: %s: %s",
+                      i, len(targets), tk, type(e).__name__, str(e)[:120])
+            continue
+        by_day: dict[str, list] = defaultdict(list)
+        for c in candles:
+            by_day[c.window_end.astimezone(KST).date().isoformat()].append(c)
+        added = 0
+        for d in want:
+            rows = _roll(by_day.get(d, []))
+            for r in rows:
+                r |= {"ticker": tk, "source_symbol": tk, "source_vendor": vendor}
+            per_day[d] += rows
+            added += len(rows)
+        log.info("[%d/%d] %s — 결손 %d일 · 캔들 %d · 5분봉 %d",
+                 i, len(targets), tk, len(want), len(candles), added)
+    return per_day
+
+
+def _day_candles_kis(client, symbol: str, day: str) -> list:
+    """그 하루의 1분 캔들 전부. 첫 호출이 하루를 받아 캐시하고 나머지는 조회다.
+
+    window 를 하나씩 묻는 이유는 **워커와 같은 길을 타기 위해서다** — 범위 가드(시간외
+    거부)·무거래 분 합성(`fill_no_trade_minutes`)·결정적 실패 캐시가 전부 그 경로에
+    걸려 있다. 하루 캐시를 직접 들여다보면 그 셋을 우회하고, 그러면 백필과 수집 레인이
+    같은 벤더 응답에서 다른 봉을 만든다.
+    """
+    base = datetime.fromisoformat(day).replace(hour=9, minute=0, tzinfo=KST)
+    out = []
+    for i in range(SESSION_MINUTES):
+        out += client.candles(symbol, window_end=base + timedelta(minutes=i + 1))
+    return out
+
+
+def _collect_kis(days, targets, covered, a) -> dict[str, list[dict]]:
+    """날짜-major — 소급 클라이언트가 **하루에 묶여 있다**(`session_date` 고정).
+
+    토스처럼 티커-major 로 돌면 종목마다 날짜 수만큼 클라이언트를 만들어야 하고, 하루
+    캐시가 매번 버려져 콜이 페이지 수만큼 곱해진다. 날짜를 바깥에 두면 클라이언트 하나가
+    그날 48종을 다 담고, 그날이 끝나면 통째로 버려 메모리도 하루치로 묶인다.
+    """
+    sec = json.loads(boto3.client("secretsmanager")
+                     .get_secret_value(SecretId=KIS_SECRET)["SecretString"])
+    vendor = VENDORS["kis"]["vendor"]
+    # 🔴 **HTTP 클라이언트와 인증은 날짜를 가로질러 공유한다.** 둘 다 클라이언트마다
+    # 새로 만들면 하루가 바뀔 때 (1) `KisAuth._token` 메모리 캐시가 버려져 토큰을
+    # 재발급하는데 KIS 는 **발급이 분당 1회**라 하루당 ~70초를 순수 대기로 태우고
+    # (실측 2026-08-08 dry-run: 매 날짜마다 "분당 1회 제한" 경고), 180일이면 3.5시간이
+    # 되어 실제 수집 시간(~46분)보다 길어진다. (2) `PoliteClient` 의 pacing 상태도
+    # 리셋돼 날짜 경계마다 간격 없이 버스트가 나간다 — 앱키 전역 한도라 그 버스트가
+    # 다른 KIS 스텝의 예산을 먹는다.
+    http = PoliteClient(min_interval=KIS_MIN_INTERVAL)
+    auth = None
+    per_day: dict[str, list[dict]] = defaultdict(list)
+    for i, d in enumerate(days, 1):
+        want = [tk for tk in targets if tk not in covered[d]]
+        if not want:
+            continue
+        # 클라이언트 자체는 하루마다 새로 만든다 — 봉 캐시가 날짜에 묶여 있어 재사용하면
+        # 남의 날 봉이 된다(클라이언트가 스스로 ValueError 로 막지만 만들 이유가 없다).
+        client = KisHistoricalMinuteClient(
+            sec["app_key"], sec["app_secret"], http,
+            session_date=date.fromisoformat(d),
+        )
+        if auth is None:
+            auth = client.auth
+        else:
+            client.auth = auth
+        added = 0
+        for tk in want:
+            try:
+                candles = _day_candles_kis(client, tk, d)
+            except Exception as e:                              # noqa: BLE001
+                # 종목 하나의 실패로 그날을 버리지 않는다. 조용히 넘기지도 않는다.
+                log.error("[%d/%d] %s %s 수집 실패 — 건너뛴다: %s: %s",
+                          i, len(days), d, tk, type(e).__name__, str(e)[:120])
+                continue
+            rows = _roll(candles)
+            for r in rows:
+                r |= {"ticker": tk, "source_symbol": tk, "source_vendor": vendor}
+            per_day[d] += rows
+            added += len(rows)
+        log.info("[%d/%d] %s — 대상 %d종 · 5분봉 %d", i, len(days), d, len(want), added)
+    return per_day
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bucket", default=DEFAULT_BUCKET)
+    ap.add_argument("--vendor", choices=sorted(VENDORS), default="toss",
+                    help="어느 벤더로 받고 어느 파일에 쓸지. 벤더마다 파일이 갈리므로 "
+                         "(part-<vendor>-backfill.parquet) 서로 덮지 않는다. kis 는 "
+                         "소급 TR(FHKST03010230)이라 앱키 전역 유량을 쓴다 — 장 마감 후에만")
     ap.add_argument("--days", type=int, default=70,
                     help="거슬러 볼 파티션 수. β 는 60거래일 창이라 여유를 둔다")
     ap.add_argument("--min-days", type=int, default=20,
@@ -279,6 +420,7 @@ def main() -> int:
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    backfill_name = VENDORS[a.vendor]["file"]
     s3 = _s3()
     days = _trading_days(s3, a.bucket)[-a.days:]
     if not days:
@@ -291,7 +433,7 @@ def main() -> int:
         # 걷어낸다 - 원본 응답이 아니라 파생물이라 같은 규칙으로 다시 유도하면 그만이다.
         cut = 0
         for d in days:
-            t = _read_day(s3, a.bucket, d, BACKFILL_NAME)
+            t = _read_day(s3, a.bucket, d, backfill_name)
             if t is None:
                 continue
             rows = [r for r in t.to_pylist()
@@ -299,7 +441,7 @@ def main() -> int:
             if len(rows) == t.num_rows:
                 continue
             cut += t.num_rows - len(rows)
-            n = _write_day(s3, a.bucket, d, rows, a.dry_run)
+            n = _write_day(s3, a.bucket, d, rows, a.dry_run, backfill_name)
             log.info("%s 정규장 밖 %d행 제거 → %d행%s",
                      d, t.num_rows - len(rows), n, " (dry-run)" if a.dry_run else "")
         log.info("복구 완료 — 총 %d행 제거%s", cut, " (dry-run)" if a.dry_run else "")
@@ -313,7 +455,7 @@ def main() -> int:
     coverage: dict[str, int] = defaultdict(int)
     for d in days:
         present[d] = _tickers_present(_read_day(s3, a.bucket, d))
-        covered[d] = present[d] | _tickers_present(_read_day(s3, a.bucket, d, BACKFILL_NAME))
+        covered[d] = present[d] | _backfilled_tickers(s3, a.bucket, d)
         for tk in covered[d]:
             coverage[tk] += 1
 
@@ -345,46 +487,19 @@ def main() -> int:
         log.info("채울 것이 없다")
         return 0
 
-    sec = json.loads(boto3.client("secretsmanager")
-                     .get_secret_value(SecretId=TOSS_SECRET)["SecretString"])
-    client = TossOpenApiClient(client_id=sec["client_id"], client_secret=sec["client_secret"])
-
-    newest = datetime.fromisoformat(days[-1]).replace(hour=15, minute=31, tzinfo=KST)
-    per_day: dict[str, list[dict]] = defaultdict(list)
-    for i, tk in enumerate(targets, 1):
-        want = [d for d in days if tk not in covered[d]]
-        if not want:
-            continue
-        try:
-            candles = _fetch_back(client, tk, newest, want[0], a.call_budget)
-        except Exception as e:                                  # noqa: BLE001
-            # 한 종목의 실패로 나머지를 버리지 않는다. 조용히 넘기지도 않는다.
-            log.error("[%d/%d] %s 수집 실패 — 건너뛴다: %s: %s",
-                      i, len(targets), tk, type(e).__name__, str(e)[:120])
-            continue
-        by_day: dict[str, list] = defaultdict(list)
-        for c in candles:
-            by_day[c.window_end.astimezone(KST).date().isoformat()].append(c)
-        added = 0
-        for d in want:
-            rows = _roll(by_day.get(d, []))
-            for r in rows:
-                r |= {"ticker": tk, "source_symbol": tk, "source_vendor": SOURCE_VENDOR}
-            per_day[d] += rows
-            added += len(rows)
-        log.info("[%d/%d] %s — 결손 %d일 · 캔들 %d · 5분봉 %d",
-                 i, len(targets), tk, len(want), len(candles), added)
+    per_day = (_collect_kis if a.vendor == "kis" else _collect_toss)(
+        days, targets, covered, a)
 
     total = 0
     for d in sorted(per_day):
         existing = _tickers_present(_read_day(s3, a.bucket, d))
-        prior = _read_day(s3, a.bucket, d, BACKFILL_NAME)
+        prior = _read_day(s3, a.bucket, d, backfill_name)
         payload = _day_payload(prior.to_pylist() if prior is not None else [],
                                existing, per_day[d])
         if payload is None:
             continue
         keep_and_new, fresh = payload
-        n = _write_day(s3, a.bucket, d, keep_and_new, a.dry_run)
+        n = _write_day(s3, a.bucket, d, keep_and_new, a.dry_run, backfill_name)
         total += fresh
         log.info("%s ← %d행 (파일 총 %d행)%s", d, fresh, n,
                  " (dry-run)" if a.dry_run else "")

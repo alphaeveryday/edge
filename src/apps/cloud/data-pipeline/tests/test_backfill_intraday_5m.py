@@ -1,4 +1,4 @@
-"""backfill_intraday_5m_toss — 결손을 결손으로 보는가 (ALPHA-836).
+"""backfill_intraday_5m — 결손을 결손으로 보는가 (ALPHA-836).
 
 이 백필이 못 채우던 두 자리는 뿌리가 같다: **이미 있는 것으로 있어야 할 것을 정의**했다.
 날짜 축은 "파티션이 곧 달력", 종목 축은 "정본에 있는 종목이 곧 유니버스"였다. 둘 다
@@ -19,8 +19,8 @@ import pytest
 from data_pipeline.minute import rollup
 
 _SPEC = importlib.util.spec_from_file_location(
-    "backfill_intraday_5m_toss",
-    Path(__file__).resolve().parents[1] / "scripts" / "backfill_intraday_5m_toss.py",
+    "backfill_intraday_5m",
+    Path(__file__).resolve().parents[1] / "scripts" / "backfill_intraday_5m.py",
 )
 backfill = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(backfill)
@@ -42,7 +42,7 @@ def _row(ticker: str, hour: int = 9, minute: int = 0) -> dict:
     ts = datetime(2026, 7, 30, hour, minute)
     return {"ticker": ticker, "source_symbol": ticker, "ts": ts,
             "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10,
-            "source_vendor": backfill.SOURCE_VENDOR,
+            "source_vendor": backfill.VENDORS["toss"]["vendor"],
             "available_at": datetime(2026, 7, 30, hour, minute + 5)}
 
 
@@ -234,3 +234,116 @@ def test_configured_universe_survives_a_missing_module_but_says_so(caplog):
 
     assert any("관측 유니버스만" in r.message for r in caplog.records), \
         "설정 부재가 무음으로 지나갔다"
+
+
+# ── 벤더 축 (ALPHA-856) ─────────────────────────────────────────────────────
+
+def test_vendor_files_do_not_collide():
+    """벤더마다 **다른 파일**에 쓴다 — 같으면 나중 벤더가 앞 벤더를 덮어 지운다.
+
+    파티션은 `*.parquet` 글롭으로 읽히므로 파일이 갈리면 두 벤더가 공존하고, 같으면
+    한쪽이 사라진다. 토스 백필 71일이 이미 착지해 있는 상태에서 KIS 를 얹는 것이
+    ALPHA-856 이라 이 축이 곧 데이터 보존이다.
+    """
+    files = [v["file"] for v in backfill.VENDORS.values()]
+    vendors = [v["vendor"] for v in backfill.VENDORS.values()]
+    assert len(set(files)) == len(files), f"파일명이 겹친다: {files}"
+    assert len(set(vendors)) == len(vendors), f"source_vendor 가 겹친다: {vendors}"
+    # `part-0` 은 롤업 소유다 — 어느 벤더도 그 이름을 쓰면 안 된다(재집계가 지운다)
+    assert "part-0.parquet" not in files
+
+
+def test_coverage_counts_every_vendor_not_just_mine(monkeypatch):
+    """결손 판정이 **모든 벤더**의 백필 파일을 합쳐서 센다.
+
+    내 벤더 파일만 세면 다른 벤더가 이미 채운 날짜를 다시 받아 나란히 쓴다 — 파일이
+    갈려 있어 덮이지도 않으므로 같은 (ticker, ts) 가 두 벌로 남고 집계가 조용히 두 번
+    센다. 2026-04-23~08-07 71일을 토스가 갖고 있는 채로 KIS 를 도는 것이 ALPHA-856 이라
+    이 자리가 곧 이중계상 방지선이다.
+
+    벤더가 늘어도 안 낡도록 **VENDORS 에서 기대값을 유도한다** — 목록을 테스트에
+    베껴 적으면 새 벤더가 추가될 때 이 단언만 조용히 옛 목록을 지킨다.
+    """
+    per_file = {spec["file"]: f"T{i}" for i, spec in enumerate(backfill.VENDORS.values())}
+    assert len(per_file) >= 2, "벤더가 하나면 이 회귀를 못 잡는다"
+
+    import pyarrow as pa
+
+    monkeypatch.setattr(
+        backfill, "_read_day",
+        lambda _s3, _b, _d, name="part-0.parquet": pa.table({"ticker": [per_file[name]]}),
+    )
+    assert backfill._backfilled_tickers(None, "bkt", "2026-04-23") == set(per_file.values())
+
+
+def test_kis_asks_every_regular_session_minute():
+    """소급 경로가 정규장 **390분을 빠짐없이** 묻는다.
+
+    ⚠️ 하루 캐시를 직접 들여다보지 않고 `candles(window_end=…)` 를 하나씩 부르는 것이
+    의도다 — 범위 가드·무거래 분 합성·결정적 실패 캐시가 전부 그 경로에 걸려 있어,
+    우회하면 백필과 1분 수집 레인이 같은 벤더 응답에서 **다른 봉**을 만든다.
+
+    **존재가 아니라 모양·개수·경계를 묻는다**: 첫 window 는 09:01(=09:00~09:01),
+    마지막은 15:30(=15:25~15:30). 한 칸 밀리면 하루가 통째로 어긋난다.
+    """
+    asked: list[datetime] = []
+
+    class _Client:
+        def candles(self, symbol, *, window_end):
+            asked.append(window_end)
+            return ()
+
+    got = backfill._day_candles_kis(_Client(), "091170", "2026-04-22")
+    assert got == []
+    assert len(asked) == backfill.SESSION_MINUTES == 390
+    assert asked[0].strftime("%Y-%m-%d %H:%M") == "2026-04-22 09:01"
+    assert asked[-1].strftime("%Y-%m-%d %H:%M") == "2026-04-22 15:30"
+    # 1분 간격이고 건너뛴 분이 없다
+    assert {(b - a).total_seconds() for a, b in zip(asked, asked[1:])} == {60.0}
+    assert all(w.utcoffset().total_seconds() == 9 * 3600 for w in asked), "KST 축이 아니다"
+
+
+def test_kis_issues_one_token_across_every_day(monkeypatch):
+    """날짜가 바뀌어도 **토큰을 다시 발급하지 않는다**(ALPHA-856).
+
+    KIS 는 토큰 발급이 **분당 1회**다. 날짜마다 클라이언트를 새로 만들면서 인증까지
+    새로 만들면 하루당 ~70초를 순수 대기로 태우고(2026-08-08 dry-run 실측), 180거래일
+    이면 3.5시간 — 실제 수집 시간(~46분)보다 길어진다. HTTP 클라이언트도 같이 공유해야
+    pacing 상태가 날짜 경계에서 리셋되지 않는다(앱키 전역 한도라 버스트가 남의 예산이다).
+
+    **개수가 아니라 동일성을 묻는다** — 인스턴스가 하나여도 auth 를 새로 달면 회귀다.
+    """
+    made = []
+
+    class _Auth:
+        pass
+
+    class _Client:
+        def __init__(self, key, secret, http, *, session_date):
+            self.session_date = session_date
+            self.http = http
+            self.auth = _Auth()          # 진짜 클라이언트처럼 스스로 만든다
+            made.append(self)
+
+        def candles(self, symbol, *, window_end):
+            return ()
+
+    monkeypatch.setattr(backfill, "KisHistoricalMinuteClient", _Client)
+    monkeypatch.setattr(backfill.boto3, "client", lambda *_a, **_k: _Secrets())
+    days = ["2026-04-17", "2026-04-20", "2026-04-21"]
+    backfill._collect_kis(days, ["091170"], {d: set() for d in days},
+                          _Args(vendor="kis"))
+
+    assert len(made) == len(days), "날짜마다 클라이언트를 만들어야 한다(봉 캐시가 날짜에 묶임)"
+    assert len({id(c.auth) for c in made}) == 1, "날짜마다 인증을 새로 만들면 토큰을 재발급한다"
+    assert len({id(c.http) for c in made}) == 1, "HTTP 클라이언트가 갈리면 pacing 이 리셋된다"
+
+
+class _Secrets:
+    def get_secret_value(self, SecretId):            # noqa: N803
+        return {"SecretString": '{"app_key": "k", "app_secret": "s"}'}
+
+
+class _Args:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
