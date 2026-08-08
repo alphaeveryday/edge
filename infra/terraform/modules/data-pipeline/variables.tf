@@ -221,6 +221,10 @@ variable "news_state_machine_timeout_seconds" {
   # 겹치면 두 뉴스 실행이 AssembleEvents 에서 같은 미threaded event 를 동시 처리해 prior-count·
   # lifecycle_stage 레이스가 난다(edge-review P1). 25분(1500s)=8분 실측에 여유 + 30분 간격 아래.
   # 초과분은 fail-loud 타임아웃(무한 LLM 을 조용한 레이스보다 낫게 — 타임아웃 알람이 잡는다).
+  # ⚠️ 위 "8분 실측"은 **BigKinds 수집이 40 page 에서 잘리던 때**의 값이다(ALPHA-541 이전).
+  # 캡이 실제 창(2일, 108~126 page)에 맞춰지면서 raw 스텝만 최소 +86초 늘었다 — 상한을 올릴
+  # 수는 없으므로(30분 간격이 묶는다) **다음 실측 때 이 여유를 다시 재라**. 넘으면 States.Timeout
+  # 이라 정의 안 NewsNotifyFailure 를 안 타고 죽는다(news_pipeline.tf 의 타임아웃 알람이 그 자리).
   description = "뉴스 SFN 실행 타임아웃. 인접 스케줄 간격(30분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
   type        = number
   default     = 1500

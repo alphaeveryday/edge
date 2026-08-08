@@ -200,8 +200,13 @@ DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
 # (미지정=fmp). 인증키 없음. resultList[] row 원본 필드는 그대로 저장하고, market·
 # bigkinds_query·fetched_at 같은 수집 provenance 만 붙인다.
 # **카테고리 주도 전체 수집**(검색어 없음, ALPHA-417) — 경제 대분류(sources.toml
-# `category_codes`, 필수)의 그날 뉴스 전체를 받는다. 종목 연결(mentions)은 수집이 아니라
+# `category_codes`, 필수)의 창 안 뉴스 전체를 받는다. 종목 연결(mentions)은 수집이 아니라
 # 정규화의 종목명 탐지(ALPHA-416) 산출물이다.
+# 창 미지정 = **`[어제, 오늘]` 2일**(다른 증분 스텝과 같은 `default_window`). 하루가 아니다 —
+# 깊이가 2배라 `max_pages` 산정이 여기 걸린다(sources.toml 주석이 근거 SSOT).
+# 받아야 할 건수는 응답의 `totalCount` 가 정본이고, 못 채우면 유실 건수와 함께 절단 경고를
+# 낸다(kind=truncation, exit 0). 그 경고는 `<name>-collection-truncated` 알람이 받는다
+# (dev = `edge-dev-data-pipeline-collection-truncated`).
 uv run --package data-pipeline python -m data_pipeline.run ingest-raw --source bigkinds
 
 # 가격(OHLCV 일봉) 원본저장(Step1) — FMP EOD. 날짜창 미지정 = 증분(5일 소급~오늘,
