@@ -1335,18 +1335,19 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
     --universe /path/universe.json
 # ⚠️ `--session-date` 가 **지난 거래일이면 벤더 TR 과 콜 형상이 바뀐다**(ALPHA-846) —
 # 소급 TR 로 하루를 한 번에 받아 캐시하므로 첫 window 에 362종 × 4페이지 ≈ 1,450콜이
-# 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다.
+# 몰리고(그 뒤 window 는 벤더 호출 0), 시간외 universe 는 기동에서 거부된다. 그 거부는
+# **KIS 한정**이다 — 소급 TR 이 정규장만 주기 때문이라, 임의 과거 구간을 받는 토스는 안 막는다.
 #
-# 🔴 **과거일 백필 선행조건 셋** — 안 지키면 조용히가 아니라 크게 터지거나, 라이브를 오염시킨다:
+# 🔴 **과거일 백필 선행조건 하나 + 알아둘 것 둘** — 1) 을 안 지키면 태스크가 크게 터진다:
 #  1) 그 날짜의 1분 canonical prefix 가 **비어 있어야 한다**. artifact 키에는 벤더·세션
 #     축이 없어(ALPHA-705) 다른 벤더 세션이 같은 generation 을 이미 썼으면
 #     `ArtifactImmutabilityError` 로 태스크가 죽고 ECS 가 같은 window 에서 재기동한다:
 #       aws s3 ls --recursive \
 #         s3://<lake>/canonical/market_data/price_minute/market=KR/session_date=<날짜>/
-#  2) 커밋마다 **price job + outbox 이벤트**가 나간다(`commit_price_window`, 조건 없음).
-#     Relay 가 뜨는 순간 그 390건이 오늘의 실시간 판정 큐로 흘러가 과거 봉으로 트리거가
-#     돌고 설명(LLM)까지 이어진다. 소급 판정을 원하지 않으면 백필 직후 그 세션의 outbox
-#     행을 `status='DEAD'` + `last_error` 로 격리해라(Relay 는 `NEW` 만 집는다).
+#  2) 과거일 세션은 **outbox 이벤트를 안 낸다**(ALPHA-863) — 커밋은 window·job 만 쓴다.
+#     판정은 `--session-date` 하나이고(`make_price_collector` 가 `is_backfill` 로 돌려준다)
+#     벤더와 무관하다. 그러니 백필 뒤 `dataset_commit_outbox` 에 행이 없는 것이 정상이고,
+#     수동 DEAD 격리도 필요 없다. 무엇을 수집했는지는 window·job 원장에 그대로 남는다.
 #  3) 종가 단일가 구간(15:21~15:29)의 값이 **당일 레인과 다르다**. 당일 TR 은 그 9분을
 #     마감 체결 봉의 복제로 채우고(거래량까지 반복 — 5분 마지막 두 버킷이 부풀려진다),
 #     소급 경로는 체결이 없었다는 사실대로 직전 종가 flat·거래량 0 으로 채운다. 백필한

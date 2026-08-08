@@ -64,11 +64,44 @@ def commit_kwargs(session_id, claim, token, *, checksum="c" * 64):
         manifest_uri="operations_archive/m.json", manifest_checksum="d" * 64,
         missing_units=None, stage_timestamps={"collection_started_at": NOW},
         trigger_schema_version="trig-1", destination="price-analysis-realtime",
-        artifact_generation=1,
+        artifact_generation=1, emit_outbox=True,
     )
 
 
 class TestCommitPriceWindow:
+    def test_emit_outbox_has_no_default(self):
+        """`emit_outbox` 에 기본값을 두지 않는다 — 빠뜨린 호출부는 죽어야 한다.
+
+        docstring 이 이 계약을 선언하는데 잡는 장치가 `WorkerConfig` 쪽에만 있었다.
+        기본 True 가 붙으면 두 번째 커밋 경로(EOD 재커밋·복구 툴)가 인자를 빠뜨렸을 때
+        백필이 조용히 실시간으로 발행되고, 게이트도 테스트도 아무 신호를 안 낸다.
+        """
+        import inspect
+
+        parameter = inspect.signature(
+            MinuteCommitter.commit_price_window
+        ).parameters["emit_outbox"]
+        assert parameter.default is inspect.Parameter.empty
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+    def test_emit_outbox_false_skips_only_the_event(self):
+        """`emit_outbox=False` 는 발행 event 만 뺀다 — window·job 은 그대로다(ALPHA-863).
+
+        같은 트랜잭션이라 가드를 잘못 걸면 job 까지 사라져 백필이 무엇을 수집했는지
+        아무 데도 안 남는다. **셋을 따로 묻는다**: outbox 는 0, job 은 1, window 는 확정.
+        """
+        db, ledger, session_id, token, claim = ready_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        before = db.connect_calls
+        generation = committer.commit_price_window(
+            **{**commit_kwargs(session_id, claim, token), "emit_outbox": False}
+        )
+        assert generation == 1
+        assert db.outbox == {}
+        assert len(db.jobs) == 1
+        assert db.windows[(session_id, claim["window_start"])]["data_status"] == "VALID"
+        assert db.connect_calls == before + 1  # 여전히 한 트랜잭션
+
     def test_happy_path_commits_all_in_one_transaction(self):
         db, ledger, session_id, token, claim = ready_session()
         committer = MinuteCommitter(db=_DB, connect_fn=db.connect)

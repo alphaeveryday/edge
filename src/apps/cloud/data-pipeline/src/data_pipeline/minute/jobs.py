@@ -270,6 +270,10 @@ class JobLedger:
         retry 자격·시각의 권위는 이 테이블뿐이다 — SQS receive 는 wake-up 일 뿐(12.4).
         price 는 claim 직후 window 의 현재 generation 과 대조해 낮으면 DEAD('STALE')
         CAS 하고 None — correction commit 이 새 generation job 을 이미 만들었다.
+
+        ⚠️ price 로 이 폴링을 쓰려면 백필 축을 여기서 다시 걸러야 한다 — 과거일 세션
+        차단(ALPHA-863)은 job 이 아니라 **event 를 안 만드는 것**으로 되어 있어, job 을
+        직접 집는 소비자가 붙으면 그 가드가 조용히 무효가 된다(백필 job 행은 남는다).
         """
         table = _JOB_TABLES[kind]
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:

@@ -7,7 +7,8 @@ v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 *
     → claim 검증(window 행 잠금)
     → canonical upsert (뉴스만 — CanonicalWriter 경계 뒤)
     → window checksum/generation 확정 (_record_window_outcome_tx)
-    → price job + PriceWindowCommitted outbox (_insert_*_tx)
+    → price job + PriceWindowCommitted outbox (_insert_*_tx — outbox 는 조건부,
+      과거일 백필 세션은 job 만 쓴다: ALPHA-863, `commit_price_window` 참조)
     → commit
 
 트랜잭션이 통째로 성공하거나 통째로 없던 일이 된다 — S3 성공/DB 실패의 잔재(orphan)는
@@ -115,11 +116,38 @@ class MinuteCommitter:
         trigger_schema_version: str,
         destination: str,
         artifact_generation: int,
+        emit_outbox: bool,
     ) -> int:
         """한 트랜잭션에 window/job/outbox 를 확정하고 generation 을 돌려준다.
 
         가격의 canonical 은 호출자가 이미 PUT 한 S3 artifact 다 — 여기서는 DB 에
         canonical 을 쓰지 않는다(ALPHA-701).
+
+        `emit_outbox=False` 면 window/job 만 쓰고 발행 event 를 **안 만든다**(ALPHA-863).
+        outbox 는 곧 `price-analysis-realtime` 이고 그 소비자는 "지금 이 종목이 움직인다"를
+        판정하므로, 과거일 백필 세션의 커밋이 여기로 나가면 며칠 전 봉으로 트리거와
+        설명(LLM)이 돈다. 그 판정은 Relay 가 `status='NEW'` 를 집는 순간 시작돼 되돌릴
+        창이 없다 — 안 내는 것이 유일하게 확실한 차단이고, 백필이 무엇을 수집했는지는
+        window·job 원장에 그대로 남는다.
+
+        기본값을 두지 않는 이유는 `WorkerConfig.is_backfill` 과 같다 — 빠뜨린 호출부가
+        조용히 실시간으로 발행되면 안 된다.
+
+        ⚠️ 알려진 천장: 이걸 끄면 그 날짜의 **정정(generation+1) 재판정도 같이 닫힌다**.
+        라이브가 일부 수집한 날을 백필이 옳은 데이터로 덮어써도 새 판정은 안 돈다.
+        gen-1 job 이 **이미 처리된 뒤**라면 실손은 "gen-1 에서 발화 안 했는데 gen-2 면
+        발화했을 종목"뿐이다 — 이미 발화한 종목은 `minute_price_trigger` 의 ON CONFLICT
+        DO NOTHING 이라 이 변경 전에도 재판정이 no-op 였다. 다만 gen-1 event 가 아직
+        큐에 있는 채(Relay 적체·Consumer 정지) 재커밋되면 그 메시지는 세대 대조에서
+        `DEAD('STALE')` 로 격리되고 gen-2 는 event 가 없어 **그 window 는 아무것도 발화하지
+        않는다**. 그 하루를 다시 판정해야 하면 발행 경로를 따로 세워라.
+
+        ⚠️ 이 판정을 여기서 `window_start` 로 유도하지 않는다. EOD drain 이 자정을 넘기면
+        살아 있는 당일 세션의 마지막 window 들이 그 순간 과거일로 보여 발행이 끊긴다 —
+        판정은 CLI 기동에서 `make_price_collector` 가 한 번 내리고 그 값이 내려온다.
+        (`--session-date` 를 안 주면 CLI 가 세션 날짜를 정하려고 벽시계를 한 번 더 읽는다
+        — 그 두 읽기 사이에 자정이 끼면 "오늘" 워커가 백필로 판정된다. 창이 마이크로초고
+        스케줄이 그 시각에 워커를 안 띄워 실질 위험은 없으나, "한 번만 읽는다"는 아니다.)
 
         멱등성은 아래에서 나온다 — 재실행 같은 checksum 이면 generation 불변 →
         같은 job_id/event_id → ON CONFLICT no-op(outbox 재발행 없음). correction 은
@@ -175,14 +203,15 @@ class MinuteCommitter:
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
             )
-            JobLedger._insert_outbox_tx(
-                cur,
-                event_id=build_event_id(PRICE_EVENT_TYPE, job_id),
-                event_type=PRICE_EVENT_TYPE, destination=destination,
-                aggregate_id=job_id, generation=generation,
-                payload={"job_id": job_id, "session_id": session_id,
-                         "window_start": window_start, "generation": generation},
-            )
+            if emit_outbox:
+                JobLedger._insert_outbox_tx(
+                    cur,
+                    event_id=build_event_id(PRICE_EVENT_TYPE, job_id),
+                    event_type=PRICE_EVENT_TYPE, destination=destination,
+                    aggregate_id=job_id, generation=generation,
+                    payload={"job_id": job_id, "session_id": session_id,
+                             "window_start": window_start, "generation": generation},
+                )
             return generation
 
     def commit_news_window(
