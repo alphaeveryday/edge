@@ -496,18 +496,20 @@ class InavWorkerConfig:
     lease_seconds: int = 300
     session_lease_seconds: int = 300
     heartbeat_every_seconds: int = 60
-    # 🔴 **0 이 기본값이다.** recovery lane 은 **최고령** due window 부터 집는데
-    # (`claim_due_window` ORDER BY ASC), 이 벤더는 "지금 기준 최근 30행"만 준다 —
-    # 창(30분) 밖의 오래된 window 를 집으면 라벨이 안 맞아 매번 missing 으로 끝나고,
-    # 그 window 가 계속 최고령이라 **다음 tick 도 같은 것을 집는다**. 복구는 못 하면서
-    # 앱키 전역 쿼터만 태우고 최신 분 처리를 민다.
+    # 🔴 **0 이다 — 이 dataset 은 복구를 하지 않는다**(2026-08-08 결정). iNAV 는 추정
+    # NAV 라 분 단위 완전성 요구가 낮다: 놓친 분은 놓친 채로 두고, 결손은 원장이 드러낸다
+    # (`overdue_no_evidence`). **이건 미착수가 아니라 채택된 방침이다** — "복구가 빠졌네"
+    # 로 읽고 채우지 마라.
     #
+    # 그래도 두 사실은 남겨 둔다. 나중에 요구가 바뀌면 여기서부터 다시 판단하면 된다.
     # ⚠️ 흔한 오해: "과거 window 재청구는 벤더가 지금 값을 줘서 틀린 값을 커밋한다".
     # **그건 아니다** — 수집기가 `bsop_hour` 라벨로 행을 고르므로(`select_window_row`),
-    # 창 안이면 그 분의 **올바른 값**이 응답에 실제로 들어 있고 창 밖이면 매칭 실패로
-    # missing 이 된다. 틀린 값이 실릴 경로는 없다. 문제는 정확성이 아니라 **지평**이다.
-    # 그래서 올바른 복구는 "창 폭 안의 due window 만 재청구"이고, 그건 원장에 지평
-    # 필터가 필요하다(`claim_due_window` 에 없다). 그 전까지는 0 이다.
+    # 창(30분) 안이면 그 분의 **올바른 값**이 응답에 실제로 들어 있고 창 밖이면 매칭
+    # 실패로 missing 이 된다. 틀린 값이 실릴 경로는 없다.
+    # ⚠️ 막는 이유는 정확성이 아니라 **지평**이다: recovery 는 최고령 due 부터 집는데
+    # (`claim_due_window` ORDER BY ASC) 창 밖 window 는 못 채우면서 계속 최고령이라
+    # 매 tick 같은 것을 집어 앱키 전역 쿼터만 태우고 최신 분을 민다. 켜려면 원장에
+    # "창 폭 안의 due 만" 이라는 지평 필터가 먼저 필요하다.
     recovery_budget_per_tick: int = 0
 
 

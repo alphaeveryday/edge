@@ -143,11 +143,12 @@ def test_job_도_outbox_도_만들지_않는다(tmp_path):
 
 
 def test_recovery_lane_은_기본으로_돌지_않는다(tmp_path):
-    """recovery 는 **최고령** due 부터 집는데 이 벤더는 최근 30분만 준다 — 창 밖 window
-    를 집으면 못 채우면서 같은 것을 매 tick 다시 집어 쿼터만 태우고 최신 분을 민다.
+    """**채택된 방침이다**(2026-08-08) — iNAV 는 추정 NAV 라 분 단위 완전성 요구가 낮아
+    복구를 두지 않는다. 놓친 분은 놓친 채로 두고 결손은 원장이 드러낸다.
 
-    ⚠️ 값이 틀리게 실릴 위험은 **없다**(수집기가 라벨로 고른다). 막는 이유는 정확성이
-    아니라 지평이다 — 그래서 원장에 지평 필터가 생기면 이 값을 올릴 수 있다."""
+    이 단언이 있는 이유: 기본값이 조용히 2 로 돌아오면(공유 `WorkerConfig` 를 다시 쓰게
+    되는 등) recovery 가 최고령 due 부터 집는데, 창(30분) 밖 window 는 못 채우면서 계속
+    최고령이라 매 tick 같은 것을 집어 앱키 전역 쿼터만 태우고 최신 분을 민다."""
     db = FakeMinuteDB()
     worker, _, _, collector = build_worker(db, tmp_path, windows=3)
 
