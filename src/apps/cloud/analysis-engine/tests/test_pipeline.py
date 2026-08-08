@@ -8,12 +8,15 @@
 import json
 import re
 from dataclasses import make_dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from edge_analysis.domain.models import Holding, PriceTrigger
+from edge_analysis.domain.window import CommittedMinuteWindow, MinuteBar
+from edge_analysis.config import KST
 from edge_analysis.config import PipelineError
 from edge_analysis.pipeline import _redacted, _verdict_reason, run
 from edge_analysis.statics.interval import IntervalError, window_facts
@@ -37,16 +40,58 @@ _Settings = make_dataclass("_Settings", list(_SETTINGS_FIELDS))
 _SETTINGS = _Settings(**_SETTINGS_FIELDS)
 
 
+_TRIGGER_WINDOW_START = datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc)
+
+
+def _committed_windows():
+    """09:00 ~ 트리거 창 끝(10:35 KST)을 빈틈없이 덮는 1분 커밋 좌표.
+
+    `aggregate_window` 는 상태축 전 구간의 결손을 거부하므로(MISSING_MINUTE_BAR)
+    대역도 구간 전체를 내야 한다 — 트리거 창 5분만 내면 배선이 아니라 대역이
+    파이프라인을 세운다.
+    """
+    start = datetime(2026, 7, 16, 9, 0, tzinfo=KST)
+    end = _TRIGGER_WINDOW_START.astimezone(KST) + timedelta(minutes=5)
+    out = []
+    cursor = start
+    while cursor < end:
+        out.append(CommittedMinuteWindow(
+            session_id="ses-1", start=cursor, end=cursor + timedelta(minutes=1),
+            generation=1, checksum="d" * 64))
+        cursor += timedelta(minutes=1)
+    return out
+
+
 class _FakeLake:
     def load_holdings(self, etf_id, market, trade_date):
         return [Holding("005930", "삼성전자", 1.0)], "2026-07-15"
 
     def load_prev_closes(self, market, trade_date):
-        return {"005930": 70000.0}
+        return {"005930": 70000.0, "091160": 10000.0}
 
-    def load_minute_returns(self, market, session_date, trigger_window_hhmm,
-                            trigger_generation, trigger_checksum, prev_closes):
-        return {"005930": 0.05}
+    def load_committed_minute_bars(self, market, windows):
+        """구성종목 + 발화 ETF 자신의 봉 — 실제 분봉 레인이 그렇다(unit_ids 에 둘 다).
+
+        구성종목은 73500 고정(전일 70000 대비 +5%)으로 구 `load_minute_returns` 대역이
+        내던 0.05 를 재현한다. ETF 는 **요청 창에서 꺾이는 경로**를 준다 — 요청 전엔
+        10400, 요청 창에선 10200 으로 내려온다. 두 축이 같은 종가를 분자로 쓰므로,
+        분모가 갈리지 않으면 같은 수가 두 번 적힐 뿐임을 이 경로가 드러낸다.
+        """
+        requested_start = _TRIGGER_WINDOW_START.astimezone(KST)
+        bars = []
+        for window in windows:
+            for unit, (open_, close) in {
+                "005930": (Decimal("73500"), Decimal("73500")),
+                "091160": (
+                    Decimal("10400"),
+                    Decimal("10200") if window.start >= requested_start else Decimal("10400"),
+                ),
+            }.items():
+                bars.append(MinuteBar(
+                    source=window, unit_id=unit,
+                    open=open_, high=max(open_, close), low=min(open_, close),
+                    close=close, volume=Decimal("1000")))
+        return tuple(bars)
 
 
 class _FakeStore:
@@ -63,8 +108,6 @@ class _FakeStore:
         return ("inst_ETF", "테스트 ETF")
 
     def fetch_minute_price_trigger(self, trigger_id):
-        from datetime import datetime, timezone
-
         from edge_analysis.adapters.eventstore import MinuteTriggerRow
         if self._trigger is None:
             return None
@@ -73,12 +116,12 @@ class _FakeStore:
             ticker="091160",
             trade_date=date(2026, 7, 16),
             session_id="ses-1",
-            window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+            window_start=_TRIGGER_WINDOW_START,
             generation=1,
         )
 
-    def fetch_minute_window_meta(self, session_id, window_start):
-        return (1, "d" * 64)
+    def fetch_committed_minute_windows(self, session_id, start, end):
+        return _committed_windows()
 
     def persist_observation_route(self, trigger_id, decomp, route_code, event_search, entity_index, *, minute=False):
         self.calls.append("obs_route")
@@ -463,21 +506,15 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
 
         def fetch_minute_price_trigger(self, trigger_id):
             assert trigger_id == "mpt_1"
-            from datetime import datetime, timezone
-
             from edge_analysis.adapters.eventstore import MinuteTriggerRow
             return MinuteTriggerRow(
                 gate=PriceTrigger("mpt_1", 0.061, "intraday", abs_gate=True, rel_gate=False),
                 ticker="091160",
                 trade_date=date(2026, 7, 16),
                 session_id="ses-1",
-                window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+                window_start=_TRIGGER_WINDOW_START,
                 generation=1,
             )
-
-        def fetch_minute_window_meta(self, session_id, window_start):
-            assert session_id == "ses-1"
-            return (1, "d" * 64)
 
         def persist_observation_route(self, trigger_id, decomp, route_code,
                                       event_search, entity_index, *, minute=False):
@@ -504,13 +541,30 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         "ticker": "091160",
         "day": "2026-07-16",
         "instrument_id": "inst_ETF",
-        "window_start": "09:00",
+        # 설명은 **요청 clock** 을 덮는다(ALPHA-854) — 09:00 을 넘기면 사용자가 묻지
+        # 않은 구간이 산문에 들어간다. 09:00 은 상태 계산축의 시작일 뿐이다.
+        "window_start": "10:30",
         "window_end": "10:35",
         "roll": None,   # 레이크 부재로 라우팅 분해가 실패했다 — 넘길 것이 없다
     }
-    assert store.explanation.raw["stage_results"]["window"] == {
-        "window_start": "09:00", "as_of": "10:35",
+    window = store.explanation.raw["stage_results"]["window"]
+    assert (window["window_start"], window["as_of"]) == ("10:30", "10:35")
+    # 두 축의 좌표가 원장에 남아야 한다 — 남기지 않으면 나중에 "그 시점에 무엇을
+    # 몇 개 봤나" 를 되짚을 방법이 없다. 09:00~10:35 = 95분 = 5분봉 19개 × 2 unit,
+    # 요청 창 10:30~10:35 = 1개 × 2 unit.
+    assert {k: window[k] for k in (
+        "analysis_start", "requested_start", "requested_end",
+        "committed_windows", "state_bars", "requested_bars", "window_min_coverage",
+    )} == {
+        "analysis_start": "09:00", "requested_start": "10:30", "requested_end": "10:35",
+        "committed_windows": 95, "state_bars": 38, "requested_bars": 2,
+        "window_min_coverage": 1.0,
     }
+    # 분모가 갈려야 두 축이 서로 다른 것을 말한다: 오늘 여기까지 +2%(10200/10000)인데
+    # 요청 창 **안에서는** −1.9%(10200/10400) 다. 같은 분모로 재면 둘 다 +2% 로 적혀
+    # "그 구간에 왜 움직였나" 에 답하지 못한다.
+    assert window["etf_day_return"] == pytest.approx(0.02)
+    assert window["etf_window_return"] == pytest.approx(10200 / 10400 - 1)
     assert store.explanation.raw["stage_results"]["final_explanation"] == {
         "rendered_text": "[H] 헤더\n\n[N] 부재",
         "blocks": [],
@@ -543,26 +597,32 @@ def test_minute_returns_without_constituent_prices_fail_loud():
     """INCOMPLETE 트리거 window 는 발화 ETF 행만 담을 수 있다 — returns dict 가
     truthy 라 빈 검사를 통과하면 total_priced=0 분해가 정상 설명로 영속된다(원결함의
     부활 코너). 구성종목 가격 0건은 분해 전에 ReturnsNotReady 로 죽어야 한다."""
-    from datetime import datetime, timezone
-
     from edge_analysis.adapters.eventstore import MinuteTriggerRow
     from edge_analysis.config import ReturnsNotReadyError
 
     class _EtfOnlyLake(_FakeLake):
-        def load_minute_returns(self, *args, **kwargs):
-            return {"091160": 0.03}  # ETF 자신뿐 — holdings(005930)와 무교집합
+        """ETF 자신의 봉만 착지 — holdings(005930)와 무교집합."""
+
+        def load_prev_closes(self, market, trade_date):
+            return {"091160": 10000.0}
+
+        def load_committed_minute_bars(self, market, windows):
+            price = Decimal("10300")
+            return tuple(
+                MinuteBar(source=window, unit_id="091160",
+                          open=price, high=price, low=price, close=price,
+                          volume=Decimal("1000"))
+                for window in windows
+            )
 
     class _MinuteOnlyStore(_FakeStore):
         def fetch_minute_price_trigger(self, trigger_id):
             return MinuteTriggerRow(
                 gate=PriceTrigger("mpt_1", 0.03, "intraday", abs_gate=True, rel_gate=False),
                 ticker="091160", trade_date=date(2026, 7, 16), session_id="ses-1",
-                window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+                window_start=_TRIGGER_WINDOW_START,
                 generation=1,
             )
-
-        def fetch_minute_window_meta(self, session_id, window_start):
-            return (1, None)
 
     from dataclasses import make_dataclass
     _DcSettings = make_dataclass("_DcSettings", list(_SETTINGS.__dict__))
@@ -575,8 +635,6 @@ def test_minute_returns_without_constituent_prices_fail_loud():
 
 def _minute_store_cls():
     """분봉 트리거 하나만 돌려주는 store fake — 시가 원장 표면은 **의도적으로 없다**."""
-    from datetime import datetime, timezone
-
     from edge_analysis.adapters.eventstore import MinuteTriggerRow
 
     class _MinuteOnlyStore(_FakeStore):
@@ -584,7 +642,7 @@ def _minute_store_cls():
             return MinuteTriggerRow(
                 gate=PriceTrigger("mpt_1", 0.03, "intraday", abs_gate=True, rel_gate=False),
                 ticker="091160", trade_date=date(2026, 7, 16), session_id="ses-1",
-                window_start=datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc),
+                window_start=_TRIGGER_WINDOW_START,
                 generation=1,
             )
 
@@ -593,9 +651,6 @@ def _minute_store_cls():
                 "분해가 시가 원장(minute_session_open)을 다시 필수 입력으로 삼았다 —"
                 " 그 원장은 판정기(intraday-anchor-v2)에서 폴백으로 밀려 대개 비어 있고,"
                 " 필수로 두면 장중 설명이 전건 차단된다(ALPHA-747)")
-
-        def fetch_minute_window_meta(self, session_id, window_start):
-            return (1, None)
 
     return _MinuteOnlyStore
 
@@ -626,7 +681,7 @@ def test_minute_missing_prev_closes_fails_loud():
         def load_prev_closes(self, market, trade_date):
             return {}
 
-        def load_minute_returns(self, *args, **kwargs):
+        def load_committed_minute_bars(self, *args, **kwargs):
             raise AssertionError("분모 없이 분해를 시도했다")
 
     from dataclasses import make_dataclass
@@ -645,16 +700,90 @@ def test_empty_returns_fail_loud_before_llm():
     소비자(ALPHA-719)는 이 타입만 지연 재시도로 가른다."""
     from edge_analysis.config import ReturnsNotReadyError
 
-    class _EmptyReturnsLake(_FakeLake):
-        def load_minute_returns(self, market, session_date, trigger_window_hhmm,
-                                trigger_generation, trigger_checksum, prev_closes):
-            return {}
+    class _EmptyBarsLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            return ()
 
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
     s3 = _FakeS3()
     with pytest.raises(ReturnsNotReadyError):
-        run(_SETTINGS, lake=_EmptyReturnsLake(), store=store, client=_FakeClient(), s3=s3)
+        run(_SETTINGS, lake=_EmptyBarsLake(), store=store, client=_FakeClient(), s3=s3)
     assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
+
+
+def test_late_minute_bar_is_retryable_not_dlq():
+    """상태축 결손은 **재시도 축**이다 — 그 판정을 여기서 고정한다(ALPHA-854).
+
+    창이 5분에서 09:00~요청끝으로 넓어지면서 결손 표면이 95배가 됐다. 늦게 착지한
+    1분 하나가 `WindowAggregationError`(ValueError) 로 새면 consumer 는
+    `ReturnsNotReadyError` 만 지연 재시도로 가르므로(ALPHA-719) DLQ 로 가고, 그 창의
+    설명은 정정이 와도 영영 만들어지지 않는다. 원장 불변식 위반은 반대로 재시도가
+    낫게 하지 않으니 그대로 터져야 한다 — 두 축을 섞으면 운영 처방이 갈리지 않는다.
+    """
+    from edge_analysis.config import ReturnsNotReadyError
+
+    class _OneMinuteLateLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            bars = super().load_committed_minute_bars(market, windows)
+            return bars[:-1]  # 마지막 1분만 아직 안 왔다
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    with pytest.raises(ReturnsNotReadyError, match="MISSING_MINUTE_BAR"):
+        run(_SETTINGS, lake=_OneMinuteLateLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
+    assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
+
+
+@pytest.mark.parametrize("numerator,base,why", [
+    (100.0, float("inf"), "inf 분모는 close/inf=0.0 이라 -100% 수익률로 위장한다"),
+    (100.0, float("nan"), "nan 은 비교가 전부 False 라 양수 게이트를 '통과'한다"),
+    (100.0, 0.0, "0 분모를 0 수익률로 접으면 미가격이 '변동 없음'이 된다"),
+    (100.0, -50.0, "음수 분모는 부호가 뒤집힌 수익률을 만든다"),
+    (100.0, None, "분모 결측(전일 미상장)"),
+    (9e14, 1e-300, "유한 피연산자끼리도 나눗셈이 오버플로해 inf 가 실린다"),
+])
+def test_ratio_folds_non_finite_arithmetic_to_unpriced(numerator, base, why):
+    """분해에 실리면 안 되는 산술은 전부 `None`(미가격)이다.
+
+    구 `load_minute_returns` 가 지키던 계약을 두 축 배선이 넘겨받았다(ALPHA-854).
+    통과값으로 강제(coerce-to-passing)되면 오염된 수익률이 기여 순위와 proxy 를
+    오염시키는데, 그건 산문에서 '정상 설명'과 구분되지 않는다.
+    """
+    from edge_analysis.pipeline import _ratio
+
+    assert _ratio(numerator, base) is None, why
+
+
+def test_ratio_keeps_direction_and_magnitude():
+    """정상 입력은 부호와 크기를 보존한다 — 위 폴딩이 전부 None 을 내는 것으로
+    '통과'하지 않게 고정한다."""
+    from edge_analysis.pipeline import _ratio
+
+    assert _ratio(73500.0, 70000.0) == pytest.approx(0.05)
+    assert _ratio(190000.0, 200000.0) == pytest.approx(-0.05)
+
+
+def test_infinite_prev_close_is_unpriced_not_minus_one_hundred_percent():
+    """`inf` 분모는 미가격이다 — `close/inf = 0.0` 이 -100% 수익률로 위장하면 안 된다.
+
+    분모는 parquet 의 raw float 이고 `_price` 는 `float("Infinity")` 를 그대로
+    통과시킨다. 양수·truthy 게이트만으론 안 걸려서, 손상 레코드 하나가 전일 대비
+    -100% 라는 '정상 수익률'로 인증돼 분해에 실린다(coerce-to-passing). 구
+    `load_minute_returns` 가 지키던 계약이라 두 축 배선에서 잃으면 안 된다.
+    """
+    from edge_analysis.config import ReturnsNotReadyError
+
+    class _InfPrevCloseLake(_FakeLake):
+        def load_prev_closes(self, market, trade_date):
+            return {"005930": float("inf"), "091160": 10000.0}
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    # 구성종목이 전부 미가격 → 분해 전에 죽는다. -100% 로 위장하면 여기서 안 죽고
+    # 그 값이 그대로 설명이 된다.
+    with pytest.raises(ReturnsNotReadyError, match="구성종목"):
+        run(_SETTINGS, lake=_InfPrevCloseLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
+    assert store.calls == []
 
 
 def test_verdict_message_carries_the_reason_not_the_exception_type():

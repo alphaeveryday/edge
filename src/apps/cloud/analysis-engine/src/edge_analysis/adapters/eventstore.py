@@ -294,26 +294,6 @@ class EventStore:
             generation=int(row[9]),
         )
 
-    def fetch_minute_window_meta(self, session_id: str, window_start):
-        """window 의 커밋 결과 상태 (generation, checksum) | None — artifact 읽기 좌표.
-
-        트리거 행의 generation 대신 이걸 쓰는 이유: 발화 후 정정이 끼면 최신 커밋
-        세대가 더 정확한 가격이고, ledger 의 checksum 은 그 세대의 바이트에 대한
-        것이라 쌍이 갈리지 않는다. **정정 진행 중(DUE·CLAIMED)은 None** — 재claim 은
-        generation·checksum 을 옛 커밋 쌍으로 남겨두지만(#485 단서), 정정이 걸렸다는
-        것은 그 가격이 틀렸을 개연성이라 price_consumer 와 같은 처방(지연 재시도)으로
-        커밋 뒤에 소비한다.
-        """
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT generation, checksum FROM minute_ingestion_window"
-                " WHERE session_id = %s AND window_start = %s AND generation >= 1"
-                " AND data_status NOT IN ('DUE', 'CLAIMED')",
-                (session_id, window_start),
-            )
-            row = cur.fetchone()
-        return (int(row[0]), row[1]) if row else None
-
     def fetch_committed_minute_windows(
         self, session_id: str, start: datetime, end: datetime,
     ) -> list[CommittedMinuteWindow]:

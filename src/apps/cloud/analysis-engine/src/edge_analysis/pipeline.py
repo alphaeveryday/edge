@@ -9,9 +9,10 @@
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from .adapters.archive import archived_events, decomp_summary, write_run_archive
@@ -22,9 +23,71 @@ from .adapters.trace import write_agent_trace
 from .config import KST, PipelineError, ReturnsNotReadyError, Settings
 from .domain.decomposition import compute_decomposition
 from .domain.models import EventContext
+from .domain.window import (
+    AggregatedBar,
+    WindowAggregationError,
+    WindowSpec,
+    aggregate_window,
+    diagnose_window,
+    slice_requested_bars,
+)
 from .observability import collect_trace, log
 
 _MARKET = "KR"
+# 정규장 시가 — 상태 계산축의 시작. `domain.window` 가 같은 값을 계약으로 강제한다
+# (`WindowSpec` 이 09:00 아닌 analysis_start 를 거부한다) — 여기 값이 갈리면 생성이 죽는다.
+SESSION_OPEN_TIME = time(9, 0)
+BUCKET_MINUTES = 5
+
+
+def _returns_from_bars(
+    bars: tuple[AggregatedBar, ...], prev_closes: dict[str, float],
+) -> dict[str, float | None]:
+    """설명축 봉 → unit 별 **전일 종가 대비** 수익률.
+
+    분모가 전일 종가인 것은 트리거 판정과 같은 앵커라서다(ALPHA-747 `intraday-anchor-v2`).
+    시가 축을 쓰면 판정과 분해가 갈리고, 그 갈림은 산문에서 안 보인다.
+
+    분자는 그 unit 의 **마지막 봉 close** 다 — 설명축은 요청 clock 을 정확히 덮으므로
+    마지막 봉의 close 가 곧 요청 끝 시점의 가격이다. 분모가 없거나 0 이면 `None` 을
+    넣는다: 0 으로 접으면 미가격이 '변동 없음'으로 위장돼 total_priced 를 부풀린다.
+    """
+    last: dict[str, AggregatedBar] = {}
+    for bar in bars:
+        current = last.get(bar.unit_id)
+        if current is None or bar.end > current.end:
+            last[bar.unit_id] = bar
+    return {unit: _ratio(float(bar.close), prev_closes.get(unit))
+            for unit, bar in last.items()}
+
+
+def _ratio(numerator: float, base: float | None) -> float | None:
+    """`numerator/base - 1` — 유한하지 않으면 `None`(미가격).
+
+    분모는 parquet 에서 온 raw float 다. `_price` 는 `float("Infinity")` 를 그대로
+    통과시키므로 유한성을 여기서 본다: `inf` 분모는 `close/inf = 0.0` 이 돼 **-100%
+    수익률**로 위장하고 양수 게이트를 그냥 지난다. 결과도 검사한다 — 유한 피연산자
+    끼리도 나눗셈이 오버플로할 수 있어(분모 1e-300) 피연산자 게이트만으론 `inf` 가
+    분해에 실린다. 구 `load_minute_returns` 가 지키던 계약을 두 축 배선으로 옮겨온
+    것이다(ALPHA-854).
+    """
+    if base is None or not math.isfinite(base) or base <= 0:
+        return None
+    if not math.isfinite(numerator) or numerator <= 0:
+        return None
+    ratio = numerator / base - 1.0
+    return ratio if math.isfinite(ratio) else None
+
+
+def _window_return(
+    bars: tuple[AggregatedBar, ...], unit_id: str,
+) -> float | None:
+    """요청 구간 **안에서**의 수익률 - 분모가 그 구간 첫 봉의 시가다."""
+    selected = sorted((bar for bar in bars if bar.unit_id == unit_id),
+                      key=lambda bar: bar.start)
+    if not selected:
+        return None
+    return _ratio(float(selected[-1].close), float(selected[0].open))
 
 
 def run(
@@ -80,13 +143,10 @@ def run(
     # 차단된다(08-05 dev 실측: start 709건·분해 0건).
     # 트리거 window 의 세대·checksum 은 원장의 마지막 커밋 쌍이 정본이다 — 발화 후
     # 정정이 끼면 최신 커밋이 더 정확한 가격이고, checksum 은 그 세대의 바이트다.
-    trigger_meta = store.fetch_minute_window_meta(
-        minute_row.session_id, minute_row.window_start)
-    if trigger_meta is None:
-        raise ReturnsNotReadyError(
-            f"트리거 window 원장이 없다: session={minute_row.session_id}"
-            f" window={minute_row.window_start.isoformat()} — 커밋 미착지")
-    trigger_generation, trigger_checksum = trigger_meta
+    # 트리거 window 단건의 세대·checksum 조회는 두 축 배선 뒤로 필요 없어졌다(ALPHA-854) —
+    # `fetch_committed_minute_windows` 가 구간 전체의 확정 좌표를 주고
+    # `load_committed_minute_bars` 가 그 generation·checksum 으로 strict 하게 읽는다.
+    # 같은 검사를 두 곳에 두면 한쪽만 고쳐지는 날이 온다.
     prev_closes = lake.load_prev_closes(_MARKET, settings.trade_date)
     if not prev_closes:
         # 분모가 통째로 없으면 모든 unit 이 None 이 돼 total_priced=0 분해가 정상
@@ -95,11 +155,78 @@ def run(
             f"직전 거래일 price_daily 파티션이 없다: market={_MARKET}"
             f" trade_date={settings.trade_date.isoformat()} — 분봉 분해의 분모가"
             " 없다. 빈 분해를 설명으로 만들지 않는다")
-    returns = lake.load_minute_returns(
-        _MARKET, settings.trade_date.isoformat(),
-        minute_row.window_start.astimezone(KST).strftime("%H%M"),
-        trigger_generation, trigger_checksum, prev_closes,
+    # ── 두 시간축(ALPHA-854) ─────────────────────────────────────────────
+    # 트리거 window 한 개(5분)만 보던 것을 **09:00~요청끝** 으로 넓힌다. 5분 조각만으로는
+    # "왜 움직였나"에 답할 수 없다 - 그날의 경로가 있어야 상태가 선다. 동시에 설명은
+    # **요청 clock 을 정확히** 덮어야 한다: 사용자가 안 물은 구간을 산문에 넣지 않는다.
+    #
+    #   상태 계산축  09:00 ~ requested_end   `aggregate_window`   (5분 격자, 마지막 부분 봉)
+    #   설명축       requested_start ~ end   `slice_requested_bars` (첫·끝 부분 봉)
+    #
+    # 요청 시작을 5분 격자로 **내리지 않는다** - 10:12 요청이면 첫 봉이 10:12~10:15(3분)다.
+    # 계약과 그 검정은 `domain/window.py` 가 소유한다(ALPHA-620, PR #593).
+    spec = WindowSpec(
+        market=_MARKET, session_id=minute_row.session_id,
+        session_date=settings.trade_date,
+        analysis_start=datetime.combine(settings.trade_date, SESSION_OPEN_TIME, tzinfo=KST),
+        requested_start=minute_row.window_start.astimezone(KST),
+        requested_end=(minute_row.window_start + timedelta(minutes=BUCKET_MINUTES)
+                       ).astimezone(KST),
     )
+    # 좌표가 비거나 중간이 빈 경우는 어댑터가 이미 갈라 던진다 - 계획 행 누락은 원장
+    # 불변식 위반(PipelineError), 정정·수집 중(DUE/CLAIMED)은 재시도 축이다. 여기서
+    # 같은 검사를 또 두면 한쪽만 고쳐지는 날이 온다.
+    committed = store.fetch_committed_minute_windows(
+        minute_row.session_id, spec.analysis_start, spec.requested_end)
+    minute_bars = lake.load_committed_minute_bars(_MARKET, committed)
+    # 집계 **전에** 진단한다 - 결손을 채우거나 거부하지 않고 수치로 남긴다. 집계가
+    # 죽으면 사유가 예외 문자열뿐인데, 그때 필요한 것은 "어느 unit 이 몇 분 빠졌나"다.
+    coverage = diagnose_window(
+        spec, minute_bars, tuple(h.ticker for h in holdings),
+        weights={h.ticker: h.weight for h in holdings},
+    )
+    log("window.coverage", expected_minutes=coverage.expected_minutes,
+        expected_units=coverage.expected_units, observed_pairs=coverage.observed_pairs,
+        complete_units=coverage.complete_units,
+        window_min_coverage=round(coverage.window_min_coverage, 4))
+    # 상태축과 설명축을 **여기서 한 번에** 만든다. 두 번 계산하면 그 사이 canonical
+    # 정정이 끼어 원장의 route_code 와 산문이 갈린다(ALPHA-785 가 닫은 그 갈림).
+    # 재시도 가능한 집계 실패(결손·빈 입력)는 `ReturnsNotReadyError` 로 옮긴다 -
+    # consumer 는 그 타입만 지연 재시도로 가르고(ALPHA-719) 나머지는 DLQ 다. 늦게 온
+    # 1분 하나로 그 창의 설명을 영구히 잃지 않기 위한 배선이다. 원장 불변식 위반
+    # (session 불일치·중복·구간 이탈)은 재시도가 낫게 하지 않으므로 그대로 터뜨린다.
+    try:
+        state_bars = aggregate_window(spec, minute_bars)
+        requested = slice_requested_bars(spec, minute_bars)
+    except WindowAggregationError as error:
+        if not error.reason.retryable:
+            raise
+        raise ReturnsNotReadyError(
+            f"분석창 1분봉이 아직 완비되지 않았다: session={minute_row.session_id}"
+            f" {spec.analysis_start.isoformat()}~{spec.requested_end.isoformat()}"
+            f" — {error.reason.code}: {error.reason.message}") from error
+    # **분해는 요청축이 답한다** - "그 구간에 왜 움직였나"가 질문이므로 분자는 요청 끝의
+    # 가격이다. 상태축은 같은 질문의 배경("오늘 여기까지 어떻게 왔나")이라 축이 다르다.
+    returns = _returns_from_bars(requested.bars, prev_closes)
+    # 두 축의 좌표를 원장에 남긴다. 봉은 재생성 가능하지만 "그때 어느 세대를 몇 개
+    # 봤나" 는 이 기록에만 남는다.
+    #
+    # 두 수익률은 **분모가 다르다**. 상태축의 값은 전일 종가 대비(오늘 여기까지),
+    # 요청축의 값은 요청 시작 시가 대비(그 구간에서)다. 분자는 둘 다 requested_end
+    # 의 종가라 분모를 갈라야만 두 축이 서로 다른 것을 말한다 - 둘 다 전일 종가로
+    # 재면 같은 수가 두 번 적힐 뿐이다.
+    window_state = {
+        "analysis_start": spec.analysis_start.strftime("%H:%M"),
+        "requested_start": spec.requested_start.strftime("%H:%M"),
+        "requested_end": spec.requested_end.strftime("%H:%M"),
+        "committed_windows": len(committed),
+        "state_bars": len(state_bars),
+        "requested_bars": len(requested.bars),
+        "window_min_coverage": round(coverage.window_min_coverage, 4),
+        "etf_day_return": returns.get(settings.etf_ticker),
+        "etf_window_return": _window_return(requested.bars, settings.etf_ticker),
+    }
+    log("window.two_axis", **window_state)
     # 트리거 window 가 INCOMPLETE 면 발화 ETF 행만 있고 구성종목이 통째로 빠질 수
     # 있다 — dict 는 truthy 라 아래 빈 검사를 통과하고, total_priced=0 분해가 정상
     # 설명으로 영속된다(원결함의 부활 코너). 정정 세대가 낫게 하는 실패라 재시도.
@@ -162,9 +289,12 @@ def run(
     # 창 문자열도 아래 `window` 조립분과 **같은 변수**를 쓴다 - 같은 식을 두 번 적으면
     # 한쪽만 고쳐지는 날이 온다. `roll` 은 `run_statics` 로 넘겨 `window_facts` 가
     # 재계산하지 않게 한다(그 재계산이 갈림의 실제 경로였다).
-    window_end = (
-        minute_row.window_start + timedelta(minutes=5)
-    ).astimezone(KST).strftime("%H:%M")
+    #
+    # 창은 **`spec` 에서 파생한다**(ALPHA-854) - 위에서 봉을 집계한 그 축이다. 여기서
+    # `minute_row.window_start` 로 다시 계산하면 요청 clock 이 트리거 window 와 다른 날
+    # (요청 구간 분석)에 층 분해와 설명 봉이 서로 다른 창을 보게 된다.
+    window_start_hhmm = spec.requested_start.strftime("%H:%M")
+    window_end = spec.requested_end.strftime("%H:%M")
     clock = clamp(SESSION_OPEN[:5], window_end)[:2]
 
     roll = rt = None
@@ -263,12 +393,18 @@ def run(
     # PUBLISHED 로 만드는데("첫 결과가 그 발화의 최선"), 판정불가가 먼저 오면 그 전제가
     # 깨진다 - 데이터가 들어온 뒤 재실행해도 DRAFT 로 밀린다. 여기서만 그 사실을 안다.
     surface_ok = True
-    window_meta: dict[str, Any] = {}
+    # 두 축 좌표를 미리 싣는다(ALPHA-854) - 설명이 실패해도 "어느 창을 어느 세대로 봤나"
+    # 는 남아야 한다. 아래 `run_statics` 가 이 dict 에 자기 산출을 더하고, 최종적으로
+    # `stage["window"]` 로 원장에 들어간다.
+    window_meta: dict[str, Any] = dict(window_state)
     with collect_trace() as trace:
         try:
+            # **설명은 요청 clock 을 덮는다**(ALPHA-854). 여기가 `SESSION_OPEN` 이던 자리다 -
+            # 시가부터 서술하면 사용자가 묻지 않은 구간이 산문에 들어간다. 상태는 09:00 부터
+            # 계산하되(`state_bars`) 말하는 구간은 요청분이라는 것이 두 축의 요지다.
             window = {
                 "instrument_id": etf_instrument_id,
-                "window_start": SESSION_OPEN[:5],
+                "window_start": window_start_hhmm,
                 "window_end": window_end,
                 "window_meta": window_meta,
             }

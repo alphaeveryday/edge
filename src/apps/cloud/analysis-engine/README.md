@@ -122,10 +122,15 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 분봉 트리거 단건(ALPHA-709) — 대상 ETF·trade_date 를 minute_price_trigger 행에서
 # 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
 # 게시 게이트는 발화(route) 축(ALPHA-710) — 하루 다건 발화는 발화마다 게시되고,
-# 같은 route 재실행만 DRAFT 보존이다. 분해 입력도 분봉 축이다: 트리거 window artifact
-# 의 close 를 canonical price_daily **직전 거래일** 종가로 나눠 구성종목 장중 수익률을
-# 파생한다 — 판정(intraday-anchor-v2)과 같은 축(전일 종가 대비, ALPHA-747). 갭이
-# 기여에 포함된다. 시가 원장(minute_session_open)은 분해가 쓰지 않는다.
+# 같은 route 재실행만 DRAFT 보존이다. 분해 입력은 **두 시간축**이다(ALPHA-854):
+#   상태 계산축 09:00~요청끝 · 설명축 요청 clock 구간 — 둘 다 09:00~요청끝의 확정
+#   1분봉(minute_ingestion_window 좌표로 strict 하게 읽는다)에서 한 번에 만든다.
+# 분해가 답하는 것은 설명축이다: 그 구간 마지막 봉의 close 를 canonical price_daily
+# **직전 거래일** 종가로 나눠 구성종목 수익률을 파생한다 — 판정(intraday-anchor-v2)과
+# 같은 축(전일 종가 대비, ALPHA-747). 갭이 기여에 포함된다. 요청 시작은 5분 격자로
+# 내리지 않는다(10:12 요청이면 첫 봉이 10:12~10:15). 상태축 결손은 재시도 축이고
+# (ReturnsNotReady) 원장 불변식 위반은 DLQ 다. 시가 원장(minute_session_open)은
+# 분해가 쓰지 않는다.
 # ⚠️ 소비자가 같은 트리거를 처리 중이면 이 수동 실행은 **exit 1 로 양보한다**(route
 # advisory lock, ALPHA-779) — 겹쳐 돌면 같은 트리거에 LLM 이 이중 과금된다. 재실행
 # 자체를 막지는 않는다: 경합이 없으면 그대로 돈다.
