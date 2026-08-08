@@ -211,24 +211,91 @@ class TestRunGate:
     응답에 날짜가 없고(`bsop_hour` = HHMMSS) 소급 질의 경로도 없어서, 라벨이 어느 날짜의
     window 와도 1:1로 맞는다. 이 소스는 재수집이 불가라 되돌릴 방법이 없다.
 
-    벽시계를 안 읽는 순수 함수로 빼서 가상 시계 없이 못박는다.
+    ⚠️ **술어가 아니라 가드를 잡는다.** 앞선 판(순수 함수만 직접 호출)은 CLI 의 호출부를
+    통째로 우회시켜도(`if False:`) 전 스위트가 통과했다 — 고치려던 결함("가드가 소비자
+    한쪽에만 있다")이 한 층 위에서 그대로 재현된 것이다. 그래서 여기서는 **CLI 를 돌려**
+    수집 경로에 도달하지 않는 것까지 단언한다.
     """
 
-    def test_오늘이_아니면_막는다(self):
-        from data_pipeline.minute.worker import inav_run_blocked
+    def _settings(self):
+        class Src:
+            app_key, app_secret = "k", "s"
 
-        today = date(2026, 8, 10)
-        assert inav_run_blocked(date(2026, 8, 7), today, None) is not None   # 과거
-        assert inav_run_blocked(date(2026, 8, 11), today, None) is not None  # 미래
-        assert inav_run_blocked(today, today, None) is None
+        class Section:
+            source = Src()
 
-    def test_휴장일_개장전_사유는_그대로_전달된다(self):
-        """raw 스텝은 이미 `skip_reason` 으로 막는데 canonical 경로는 그 가드를 안 지났다
-        — KIS 는 휴장일에 빈 응답이 아니라 **직전 거래일 행을 그대로** 준다(실측)."""
-        from data_pipeline.minute.worker import inav_run_blocked
+        class KrxSource:
+            etf_map = {"069500": "KR7069500007"}
 
-        today = date(2026, 8, 10)
-        assert inav_run_blocked(today, today, "non-trading day (KST 2026-08-10)") == (
-            "non-trading day (KST 2026-08-10)"
+        class Krx:
+            source = KrxSource()
+
+        class Settings:
+            db = DbConfig(password="x")
+            kis_nav = Section()
+            krx_etf = Krx()
+            storage = None
+
+        return Settings()
+
+    def _run(self, monkeypatch, tmp_path, *, skip_reason, session_date, max_ticks=3):
+        """CLI 를 실제로 돌린다. 게이트를 지나면 원장에 닿으므로, 원장 생성이 곧
+        '수집 경로에 도달했다'는 신호다 — 거기서 터뜨려 도달을 검출한다."""
+        import data_pipeline.minute.worker as module
+        import data_pipeline.sources.kis_inav as kis_inav
+
+        class StubSource:
+            def __init__(self, *a, **k):
+                self.interval_sec = 60
+
+            @property
+            def skip_reason(self):
+                return skip_reason
+
+        reached = []
+
+        def _ledger(**kwargs):
+            reached.append(1)
+            raise AssertionError("게이트를 지나 수집 경로에 도달했다")
+
+        monkeypatch.setattr(kis_inav, "KisInavSource", StubSource)
+        monkeypatch.setattr(module, "MinuteLedger", _ledger)
+        universe_file = tmp_path / "u.json"
+        universe_file.write_text(UNIVERSE.model_dump_json(), encoding="utf-8")
+        code = module.inav_worker_cli(
+            self._settings(), session_date=session_date,
+            universe=str(universe_file), max_ticks=max_ticks,
         )
-        assert inav_run_blocked(today, today, "before market open (KST 08:50 < 09:00)") is not None
+        return code, reached
+
+    def test_오늘이_아니면_기동을_거부한다(self, monkeypatch, tmp_path):
+        """운영자 입력 오류다 — 환경 skip 의 exit 0 을 물려주면 날짜를 훑는 래퍼가
+        **아무것도 안 쓰고 전건 초록**으로 끝난다."""
+        import pytest
+
+        yesterday = (datetime.now(KST).date() - timedelta(days=1)).isoformat()
+        with pytest.raises(SystemExit, match="오늘"):
+            self._run(monkeypatch, tmp_path, skip_reason=None, session_date=yesterday)
+
+    def test_휴장일은_수집_경로에_닿기_전에_멈춘다(self, monkeypatch, tmp_path):
+        """KIS 는 휴장일에 빈 응답이 아니라 **직전 거래일 행을 그대로** 준다(실측) —
+        라벨이 그날 window 와 1:1로 맞아 세션 전체가 전일 NAV 로 굳는다."""
+        today = datetime.now(KST).date().isoformat()
+        code, reached = self._run(
+            monkeypatch, tmp_path, skip_reason="non-trading day (KST %s)" % today,
+            session_date=today,
+        )
+
+        assert reached == []          # 원장에 닿지도 않았다
+        assert code == 1              # bounded 는 확인 게이트다 — 아래 테스트가 짝이다
+
+    def test_상주_모드의_휴장일_skip_만_정상_종료다(self, monkeypatch, tmp_path):
+        """`--max-ticks` 없는 상주 실행은 스케줄러가 휴장일마다 정상으로 지나가야 하지만,
+        bounded 실행은 "돌렸는데 한 window 도 못 봤다"를 성공으로 보고하면 안 된다 —
+        README 의 확인 명령이 휴장일마다 초록으로 통과한다."""
+        today = datetime.now(KST).date().isoformat()
+        code, _ = self._run(
+            monkeypatch, tmp_path, skip_reason="non-trading day",
+            session_date=today, max_ticks=None,
+        )
+        assert code == 0

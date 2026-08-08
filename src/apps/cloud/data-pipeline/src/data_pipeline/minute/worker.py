@@ -824,8 +824,8 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     return 1 if failed or (blocked and not processed) else 0
 
 
-def inav_run_blocked(parsed_day, today, skip_reason: str | None) -> str | None:
-    """이 실행을 막아야 하는 사유, 돌려도 되면 None (ALPHA-851 리뷰).
+def inav_date_rejected(parsed_day, today) -> str | None:
+    """오늘이 아닌 `--session-date` 를 거부하는 사유, 오늘이면 None (ALPHA-851 리뷰).
 
     두 축 다 **같은 결함으로 이어진다**: 벤더 응답 행에는 날짜가 없고(`bsop_hour` 는
     HHMMSS 뿐) 소급 질의 경로도 없다(`_query_params` 가 날짜를 안 싣는다). 그래서 언제
@@ -833,19 +833,17 @@ def inav_run_blocked(parsed_day, today, skip_reason: str | None) -> str | None:
     맞는다** — 틀린 날짜로 돌리면 오늘 값이 그 날짜의 **불변** canonical artifact 로
     굳고, 이 소스는 재수집이 불가라 되돌릴 방법이 없다.
 
-    * **과거·미래 날짜** — 운영자 실수다. 이 벤더에 소급이 아예 없으므로 오늘이 아닌
-      날짜로는 옳은 값을 만들 수 없다.
-    * **휴장일·개장 전** — KIS 는 빈 응답이 아니라 **직전 거래일 행을 그대로** 준다
-      (2026-07-25 토요일 실행이 7/24 데이터 930행을 적재한 실측). raw 스텝은 이미
-      `skip_reason` 으로 막는데(`ingest_raw_etf`), canonical 경로는 그 가드를 안 지났다
-      — 가드가 소비자 한쪽에만 있던 형태다.
+    이건 **운영자 입력 오류**다 — 이 벤더에 소급이 아예 없으므로 오늘이 아닌 날짜로는
+    옳은 값을 만들 수 없다. 그래서 호출부가 `SystemExit` 로 올린다(이 함수의 다른 입력
+    오류와 같은 축). 휴장일·개장 전은 **환경 조건**이라 다른 문(`skip_reason`)이 맡는다 —
+    둘을 한 반환값에 접으면 위험한 입력이 환경 skip 의 exit 0 을 물려받는다.
     """
     if parsed_day != today:
         return (
             f"--session-date {parsed_day} 가 오늘({today})이 아니다 — 이 벤더는 소급 질의가 "
             "불가하고 응답 행에 날짜가 없어, 지금 값이 그 날짜의 불변 artifact 로 굳는다"
         )
-    return skip_reason
+    return None
 
 
 def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
@@ -905,13 +903,20 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
         interval_sec=DEFAULT_INTERVAL_SEC,
     )
     # ⚠️ **수집 전에 막는다.** 틀린 날짜·휴장일에 돌면 지금 값이 그 날짜의 **불변**
-    # artifact 로 굳고, 이 소스는 재수집이 불가라 되돌릴 길이 없다(`inav_run_blocked`).
-    blocked = inav_run_blocked(parsed_day, datetime.now(KST).date(), source.skip_reason)
-    if blocked is not None:
+    # artifact 로 굳고, 이 소스는 재수집이 불가라 되돌릴 길이 없다.
+    if (rejected := inav_date_rejected(parsed_day, datetime.now(KST).date())) is not None:
+        # 운영자 입력 오류다 — 이 함수의 다른 입력 오류(형식·결손 설정)와 같이 죽는다.
+        # 환경 skip 의 exit 0 을 물려주면 날짜를 훑는 래퍼가 **아무것도 안 쓰고 전건
+        # 초록**으로 끝난다(라운드2 지적).
+        raise SystemExit(rejected)
+    if (reason := source.skip_reason) is not None:
         # 휴장일·개장 전은 **실패가 아니라 skip 이다**(raw 스텝과 같은 규약, ALPHA-557) —
         # 스케줄러가 붙으면 휴장일마다 정상적으로 지나간다. 조용히는 아니다(Rule 12).
-        logger.warning("inav-worker 실행 안 함 — %s", blocked)
-        return 0
+        logger.warning("inav-worker 실행 안 함 — %s", reason)
+        # ⚠️ **bounded 모드는 확인 게이트다**(price 와 같은 규약) — "돌렸는데 한 window 도
+        # 못 봤다"를 성공으로 보고하면 README 의 `--max-ticks 3` 확인 명령이 휴장일마다
+        # 초록으로 통과한다. 상주 모드의 skip 만 정상 종료다.
+        return 0 if max_ticks is None else 1
     session_id = stable_domain_id(
         "msn", DATASET_ETF_INAV_MINUTE, "kis", parsed_day.isoformat()
     )
