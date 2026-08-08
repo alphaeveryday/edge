@@ -414,9 +414,15 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
         TRIGGER_MINUTE = 90  # 10:30
 
         def _price_at(minute: int) -> dict[str, str]:
+            # 시장 프록시(069500)도 artifact 에 싣는다 — 실물 수집 universe 가 그렇고,
+            # 층 회계의 시장 층은 **커밋 봉만** 본다(ALPHA-866, 레이크 폴백 금지).
+            # 가격은 ETF 의 정확히 ×20 — 구간 log 수익이 같아져 층 회계가 시장 100%
+            # 로 서고, 라우팅이 PRICE_ONLY 로 남는 계보를 고정한다.
             if minute >= TRIGGER_MINUTE:
-                return {ETF_TICKER: "10300.0", SAMSUNG_TICKER: "73500.0"}
-            return {ETF_TICKER: "10050.0", SAMSUNG_TICKER: "70100.0"}
+                return {ETF_TICKER: "10300.0", SAMSUNG_TICKER: "73500.0",
+                        "069500": "206000.0"}
+            return {ETF_TICKER: "10050.0", SAMSUNG_TICKER: "70100.0",
+                    "069500": "201000.0"}
 
         minute_windows: list[tuple[str, str, bytes]] = []
         for minute in range(MINUTE_COUNT):
