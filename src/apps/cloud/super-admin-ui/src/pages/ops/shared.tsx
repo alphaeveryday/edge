@@ -10,13 +10,12 @@ import { useSearchParams } from 'react-router-dom';
 import type { BadgeTone } from 'ui-kit';
 import { evaluate, runbookOf as lookupRunbook } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
-import { RULES } from '../../rules/rules';
+import type { AxisFetch } from './notRun';
 import type {
   Evaluation,
   Facts,
   Incident,
   MinuteFacts,
-  RuleResult,
   RunbookEntry,
   Severity,
   Violation,
@@ -162,6 +161,11 @@ export interface ConsoleEvaluation extends Evaluation {
   /** 실시간 축이 실렸는가. false 면 R17~R19 는 evaluated:false(못 돌았다)다 */
   minuteLoaded: boolean;
   /**
+   * 그 실시간 축을 **왜** 못 실었는가. `못 돎` 문장의 뜻이 여기 달려 있다 —
+   * 응답 대기·조회 실패를 "계측이 없다"로 그리면 운영자가 **API 장애를 미배선으로 읽는다**.
+   */
+  axisFetch: AxisFetch;
+  /**
    * 이 평가에 실제로 쓴 사실. 조사 경로(`investigate`)도 **같은 사실**을 읽어야 한다 —
    * 정적 스냅샷으로 만들면 실시간 사건의 드릴다운이 세션 응답의 날짜가 아니라
    * 배치 거래일(meta.today)을 가리킨다(그 날짜엔 세션이 없다).
@@ -180,7 +184,10 @@ export interface ConsoleEvaluation extends Evaluation {
  * 보면 목록엔 있는데 상세는 못 여는 사건이 생긴다.
  */
 export function useConsoleEvaluation(): ConsoleEvaluation {
-  const { data } = useMinuteStatus();
+  /* `isError` 를 같이 꺼내는 이유: 실시간 축 부재의 뜻이 셋이다 — 도착 전 · 조회 실패 ·
+   * (응답은 왔는데) 축이 없다. `data` 만 보면 셋이 한 문장으로 뭉쳐, 응답 대기와 API 장애가
+   * 화면에서 "계측 없음"과 구분되지 않는다. */
+  const { data, isError } = useMinuteStatus();
   return useMemo(() => {
     const facts: ConsoleFacts = data ? { ...F, minute: minuteFacts(data) } : F;
     const ev = evaluate(facts);
@@ -189,39 +196,14 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
       pipeline: ev.incidents.filter((i) => !OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
       outOfScope: ev.incidents.filter((i) => OUT_OF_PIPELINE_DOMAINS.has(domainOf(i.root))),
       minuteLoaded: data != null,
+      axisFetch: data != null ? 'loaded' : isError ? 'error' : 'pending',
       facts,
     };
-  }, [data]);
+  }, [data, isError]);
 }
 
-/* ── 판정을 못 한 규칙 ──
- *
- * 부재를 말하는 화면 문장(…없습니다 · 해소 · 판정한 것이 없다)은 **전부 이걸 먼저 물어야 한다.**
- * 규칙이 못 돌면 그 규칙의 사건은 없는 게 아니라 **걸렸는지조차 모르는** 것이다. 화면마다 문구를
- * 고치면 매번 한 곳이 남는다 — 그래서 판정도 문장도 여기 한 벌만 둔다.
- *
- * 두 종류를 한 함수가 같이 낸다: `axis`(사실 축 부재 = 계측 공백)와 `identity`(응답이 사건을
- * 못 가르게 줬다 = 계약 위반). 뜻은 다르지만 **"이 규칙은 아무 답도 안 했다"는 같아서**, 부재
- * 문장을 쓰는 자리에서 한쪽만 물으면 나머지 한쪽이 그대로 거짓말을 한다.
- */
-export function unevaluatedRules(ev: ConsoleEvaluation): RuleResult[] {
-  return ev.rules.filter((r) => !r.evaluated);
-}
-
-/** 이 사건 식별자를 낼 규칙이 이번 평가에서 못 돌았는가.
- *  `vid` 는 `${rule}:…` 로 시작한다(엔진 `vidOf`) — 규칙 id 가 유일하다는 것이 이 매칭의 전제고,
- *  그 전제는 `rules.test.ts` 가 단언한다. */
-export function unevaluatedFor(ev: ConsoleEvaluation, vid: string): RuleResult | undefined {
-  return unevaluatedRules(ev).find((r) => vid.startsWith(`${r.id}:`));
-}
-
-/** 못 돈 사유 한 줄 — 종류는 `notRun` 이 구조로 가른다(문구를 파싱해 추측하지 않는다).
- *  `axis` 는 `note` 가 아니라 `dep` 를 낸다: note 는 리포트 주석 자리라 사유가 아닐 수 있다. */
-export function notRunReason(r: RuleResult): string {
-  return r.notRun === 'identity'
-    ? `응답 결함 — ${r.note}`
-    : `못 돎 — ${RULES.find((R) => R.id === r.id)?.dep ?? '사실 축 부재'}`;
-}
+/* 판정을 못 한 규칙을 묻는 헬퍼는 `./notRun` 에 있다 — **JSX 가 없는 모듈이라야
+ * `node --test` 가 import 한다.** 여기 두는 동안은 그 판단들의 변이가 하나도 안 잡혔다. */
 
 /* `DRILL_ROUTE`·`drillHref` 를 지웠다 (ALPHA-738 단계 3). 소비자가 0이었고, 살아나면
  * `run` 축 위반을 `/ops/runs?focus=…` 로 보내 실행 상세 링크 규약을 우회한다

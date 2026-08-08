@@ -24,12 +24,11 @@ import {
   domainOf,
   fmt,
   kst,
-  notRunReason,
   runbookOf,
-  unevaluatedFor,
   useConsoleEvaluation,
 } from './shared';
-import { investigate, ledgerHref } from './investigation';
+import { isKnownVid, notRunReason, unevaluatedFor } from './notRun';
+import { incidentHref, investigate, ledgerHref } from './investigation';
 import '../../styles/ops.css';
 
 const TARGET_LABEL: Record<string, string> = {
@@ -58,24 +57,47 @@ export function IncidentDetailPage() {
 
   if (!incident) {
     /* 공유 링크의 도착지다 — 여기서 "해소"라고 단정하면 이 PR 이 없애려던 오독을 이 PR 이 낸다.
-     * 사건이 안 보이는 이유는 둘이다: 규칙이 돌았는데 안 걸렸거나(해소), 규칙이 **아예 판정을
-     * 못 했거나**. 뒤엣것은 걸렸는지조차 모르는 상태라 같은 문장으로 덮으면 거짓이다. */
+     * 사건이 안 보이는 이유는 **넷**이다. 어느 쪽인지 화면이 아는데도 한 문장으로 덮으면,
+     * 안 보이는 것 전부가 "괜찮아졌다"로 읽힌다.
+     *
+     *   ① 그 위반이 살아 있는데 인과 간선으로 **다른 사건에 흡수**됐다 — 뿌리로 보내야 한다.
+     *      `incidents[]` 는 뿌리만 담아서 이 조회로는 안 잡힌다. 어제 뿌리였던 vid 가 오늘
+     *      부모가 걸리면 멤버로 내려가므로, 어제 공유한 링크가 정확히 이 분기로 온다.
+     *   ② 그 규칙이 판정을 못 했다 — 해소가 아니라 **걸렸는지조차 모른다**.
+     *   ③ 그런 규칙이 애초에 없다(개명·삭제·손으로 친 주소) — "돌았다"를 연역할 수 없다.
+     *   ④ 규칙은 돌았고 안 걸렸다 — 이때만 해소·낡은 링크를 말할 수 있다. */
+    const absorbed = ev.incidents.find((i) => i.members.some((m) => m.v.vid === vid));
     const notRun = unevaluatedFor(ev, vid);
     return (
       <div className="card card-pad">
-        <p className="t-sm m-0">이 사건을 찾을 수 없습니다.</p>
-        {notRun ? (
+        <p className="t-sm m-0">
+          {absorbed ? '이 위반은 단독 사건이 아닙니다.' : '이 사건을 찾을 수 없습니다.'}
+        </p>
+        {absorbed ? (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            <code>{vid}</code> 는 지금도 규칙에 걸려 있습니다 — 해소된 것이 아니라 인과 간선으로{' '}
+            <b>{absorbed.root.title}</b> 사건에 흡수됐습니다. 조치는 그 뿌리 하나입니다.{' '}
+            <Link to={incidentHref(absorbed.root)}>그 사건 열기 →</Link>
+          </p>
+        ) : notRun ? (
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             사건 식별자 <code>{vid}</code> 를 낼 규칙은 <span className="mono">{notRun.id}</span>{' '}
             {notRun.name} 입니다. 이 규칙이 이번 평가에서{' '}
-            <b style={{ color: 'var(--down)' }}>판정을 못 했습니다</b> ({notRunReason(notRun)}) — 위반이
-            하나도 실리지 않아, 해소됐는지 아직 걸려 있는지 여기서는 알 수 없습니다.{' '}
+            <b style={{ color: 'var(--down)' }}>판정을 못 했습니다</b> (
+            {notRunReason(notRun, ev.axisFetch)}) — 위반이 하나도 실리지 않아, 해소됐는지 아직 걸려
+            있는지 여기서는 알 수 없습니다. <Link to="/ops/incidents">문제·사건으로</Link>
+          </p>
+        ) : !isKnownVid(vid) ? (
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            사건 식별자 <code>{vid || '(없음)'}</code> 는 이 콘솔의 규칙이 낸 형태가 아닙니다 —
+            규칙이 개명·삭제됐거나 주소가 잘못됐습니다. 규칙이 판정한 결과가 아니므로{' '}
+            <b>무엇이 있었는지는 여기서 알 수 없습니다</b>.{' '}
             <Link to="/ops/incidents">문제·사건으로</Link>
           </p>
         ) : (
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            사건 식별자 <code>{vid || '(없음)'}</code> 가 지금 평가 결과에 없습니다 — 규칙은 돌았고
-            더는 걸리지 않거나(해소) 링크가 낡았습니다. 다른 사건으로 대체해 보여주지 않습니다.{' '}
+            사건 식별자 <code>{vid}</code> 가 지금 평가 결과에 없습니다 — 규칙은 돌았고 더는 걸리지
+            않거나(해소) 링크가 낡았습니다. 다른 사건으로 대체해 보여주지 않습니다.{' '}
             <Link to="/ops/incidents">문제·사건으로</Link>
           </p>
         )}

@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildReport, evaluate, runbookOf } from './evaluate.ts';
+import { buildReport, evaluate, ruleOfVid, runbookOf } from './evaluate.ts';
 import { RULES } from './rules.ts';
 import type { Facts, MinuteSessionFact, RunFact, TaskFact, Violation } from './types.ts';
 
@@ -623,6 +623,31 @@ test('규칙 id 는 유일하다 — 충돌 검사를 규칙 안으로 좁힌 �
     RULES.every((R) => !R.id.includes(':')),
     '규칙 id 에 vid 구분자(:)가 들어갔다 — 규칙 접두사가 서로 갈리지 않는다',
   );
+});
+
+test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수 있다 (소비자가 구분자를 다시 적지 않는다)', () => {
+  /* 이 단언이 없으면 `vidOf` 의 구분자를 바꿔도 154개가 전부 초록이다. 그 사이 화면의
+   * `unevaluatedFor` 는 **영원히 아무것도 못 찾고**, 못 찾은 것을 "그 규칙은 돌았다(해소)"로
+   * 그린다 — 아무것도 안 깨지면서 거짓 음성만 나가는 모양이다. 생산자·소비자를 여기서 묶는다. */
+  const f = emptyFacts();
+  f.runs = [run({ id: 'news:2026-08-03T15:30', ledger_status: 'TIMED_OUT' })]; // 대상에 콜론
+  f.tasks = [task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:30', task_outcome: 'FAILED' })];
+  f.outputs = [{ id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' }]; // 대상에 점
+  f.minute = {
+    date: '2026-08-03',
+    sessions: [
+      session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }), // 슬래시 + @범위
+    ],
+  };
+
+  const vs = evaluate(f, NOW).violations;
+  assert.ok(vs.length >= 4, '왕복을 재려면 여러 축의 vid 가 있어야 한다');
+  for (const v of vs) {
+    assert.equal(ruleOfVid(v.vid), v.rule, `되찾기 실패: ${v.vid}`);
+  }
+  /* vid 가 아닌 문자열은 규칙 id 를 주지 않는다 — 호출자가 "모르는 식별자"로 갈라야 한다 */
+  assert.equal(ruleOfVid('R17'), '');
+  assert.equal(ruleOfVid(''), '');
 });
 
 test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 산다', () => {

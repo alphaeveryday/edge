@@ -174,8 +174,17 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
   assert.equal(ledgerHref(null), null);
   assert.equal(ledgerHref({}), null);
   assert.equal(
-    ledgerHref({ incident: 'R07#0', runKey: 'etf-daily:2026-08-03T15:40', task: 'A', dataset: 'd' }),
-    '/sources?incident=R07%230&runKey=etf-daily%3A2026-08-03T15%3A40&task=A&dataset=d',
+    /* 사건 키는 **프로덕션 형상**으로 쓴다(`${rule}:${targetId}@${scope}`). 옛 위치 인덱스
+     * (`R07#0`)를 두면 이 파일이 실제 vid 를 한 번도 안 밟고, `#` → `%23` 만 증명한 채
+     * 실제로 도는 `:` → `%3A` · `@` → `%40` 왕복은 아무 단언도 안 잡는다. */
+    ledgerHref({
+      incident: 'R07:INVESTOR_COLLECTION_KIS@etf-daily:2026-08-03T15:40',
+      runKey: 'etf-daily:2026-08-03T15:40',
+      task: 'A',
+      dataset: 'd',
+    }),
+    '/sources?incident=R07%3AINVESTOR_COLLECTION_KIS%40etf-daily%3A2026-08-03T15%3A40' +
+      '&runKey=etf-daily%3A2026-08-03T15%3A40&task=A&dataset=d',
   );
 });
 

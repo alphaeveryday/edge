@@ -30,6 +30,21 @@ function vidOf(rule: string, targetId: string, scope?: string): string {
 }
 
 /**
+ * `vid` 를 낸 규칙 id — **`vidOf` 의 역함수라 같은 파일에 둔다.**
+ *
+ * 소비자(화면이 딥링크의 규칙을 되찾는 자리)가 구분자를 자기 쪽에 다시 적으면, 여기 구분자를
+ * 바꾸는 순간 **조용히 아무것도 못 찾는다** — 그리고 화면은 "못 찾았다"를 "그 규칙은 돌았다"로
+ * 읽는다(거짓 음성). 둘을 붙여 두면 왕복 단언 하나가 그 표류를 잡는다.
+ *
+ * 규칙 id 에 `:` 가 없다는 것이 전제고 `rules.test.ts` 가 단언한다. 형태가 아니면 빈 문자열 —
+ * 호출자는 "모르는 식별자"로 갈라야지 "그 규칙은 돌았다"로 읽으면 안 된다.
+ */
+export function ruleOfVid(vid: string): string {
+  const i = vid.indexOf(':');
+  return i < 0 ? '' : vid.slice(0, i);
+}
+
+/**
  * 런북 조회 — 대상 단위(`R05.LOAD_DOCUMENTS`) 우선, 없으면 규칙 단위 폴백.
  *
  * 키가 **`targetId` 만** 쓰는 것이 규약이다(시점 축 `scope` 는 안 들어간다) — 날짜가 섞이면

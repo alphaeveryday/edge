@@ -19,11 +19,11 @@ import {
   SEV_TONE,
   SourceChip,
   fmt,
-  notRunReason,
-  unevaluatedRules,
   useConsoleEvaluation,
   violationTip,
 } from './shared';
+import type { AxisFetch } from './notRun';
+import { notRunReason, unevaluatedRules } from './notRun';
 import { incidentHref } from './investigation';
 import '../../styles/ops.css';
 
@@ -39,8 +39,10 @@ const SCOPE_TIP = [
   '집계 범위 — 실행·작업 실패, 데이터 결손·신선도, 장중 수집 지연·무증거, 분석 생성 실패,',
   '원장·관측 불일치. 테넌트 전달·발번은 이 콘솔 소관이 아니라 개수에서 뺀다(룰은 그대로 돈다).',
   '',
-  '이 개수는 판정된 규칙에 한한 수다 — 못 돈 규칙(계측 공백·응답 결함)의 사건은 걸렸는지',
-  '모르므로 세지 않는다. 무엇이 못 돌았는지는 아래 규칙 목록이 줄마다 말한다.',
+  '이 개수는 판정된 규칙에 한한 수다 — 못 돈 규칙의 사건은 걸렸는지 모르므로 세지 않는다.',
+  '못 돈 규칙은 위반을 하나도 안 내므로 그 사건이 이 콘솔 소관이었을지도 알 수 없다 —',
+  '옆의 "응답 결함으로 못 센 규칙"은 그래서 소관으로 좁힌 수가 아니다. 무엇이 못 돌았는지는',
+  '아래 규칙 목록이 줄마다 말한다.',
   '',
   '정렬 — evaluate() 가 낸 순서 그대로다(심각도 → 연쇄 크기 → 대표 수치).',
   '단위가 다른 수치를 가로질러 비교하지 않으므로 같은 심각도 안의 위아래를 조치 우선순위로',
@@ -54,7 +56,7 @@ export function IncidentsListPage() {
   /* URL 이 선택 상태의 정본이다 — 새로고침·링크 공유가 같은 심각도를 연다. 기본은 P0. */
   const selected: Severity = isSeverity(requested) ? requested : 'P0';
   const ev = useConsoleEvaluation();
-  const { pipeline, outOfScope, rules, minuteLoaded } = ev;
+  const { pipeline, outOfScope, rules } = ev;
   const list = pipeline.filter((i) => i.sev === selected);
   /* 이 화면의 개수·빈 목록 문장은 **판정된 규칙에 한한 사실**이다. 못 돈 규칙이 있으면 개수는
    * 하한이고 "없다"는 "모른다"가 된다 — 그걸 안 밝히면 계측 공백과 응답 결함이 정상으로 읽힌다. */
@@ -129,15 +131,17 @@ export function IncidentsListPage() {
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
               {/* "판정한 것이 없다"는 판정을 **한** 규칙에 대해서만 참이다. 못 돈 규칙이 있으면
                   그 규칙의 사건은 심각도와 무관하게 이 목록에 아예 오르지 않는다 — 빈 목록을
-                  "오늘 조용하다"로 읽게 두면 계측 공백이 정상으로 보인다. */}
-              {`돈 규칙 ${rules.length - unevaluated.length}개 중 이 심각도로 걸린 것이 없다는 ` +
-                `뜻입니다${
-                  unevaluated.length > 0
-                    ? ` — 나머지 ${unevaluated.length}개는 판정을 못 해${
-                        badResponse.length > 0 ? `(응답 결함 ${badResponse.length}개 포함)` : ''
-                      } 걸렸는지조차 모릅니다`
-                    : ''
-                }. 다른 심각도는 위 카드의 건수로 알 수 있습니다.`}
+                  "오늘 조용하다"로 읽게 두면 계측 공백이 정상으로 보인다.
+                  ⚠️ 전체 규칙 수를 분모로 쓰지 않는다. 이 목록은 **소관 사건**만 담는데
+                  규칙 수는 범위 밖(R14 등)까지 세서, 그 규칙이 걸린 날 "걸린 것이 없다"가
+                  거짓이 된다 — 주장을 소관으로 좁히면 분모가 아예 필요 없다. */}
+              {`판정한 규칙 중 이 심각도로 걸린 소관 사건이 없다는 뜻입니다${
+                unevaluated.length > 0
+                  ? ` — 다만 규칙 ${unevaluated.length}개는 판정을 못 해${
+                      badResponse.length > 0 ? `(응답 결함 ${badResponse.length}개 포함)` : ''
+                    } 걸렸는지조차 모릅니다`
+                  : ''
+              }. 담당 범위 밖 사건은 맨 위 줄이 따로 셉니다.`}
             </p>
           </div>
         ) : (
@@ -219,7 +223,7 @@ export function IncidentsListPage() {
         )}
       </div>
 
-      <RuleCatalog results={rules} minuteLoaded={minuteLoaded} />
+      <RuleCatalog results={rules} axisFetch={ev.axisFetch} />
 
     </div>
   );
@@ -245,7 +249,7 @@ const RULE_TIP = [
   '실시간(R17~R19)은 세션 원장이 스냅샷이 아니라 API 응답이라, 그 응답이 오기 전에는 못 돈다.',
 ].join('\n');
 
-function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteLoaded: boolean }) {
+function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch: AxisFetch }) {
   const meta = new Map(RULES.map((R) => [R.id, R]));
   /* 두 종류를 한 숫자로 합치지 않는다 — 응답 결함(계약 위반)이 평상시에도 0 이 아닌
      `못 돎`(계측 공백) 카운트에 섞이면 증분을 아무도 못 본다. */
@@ -261,8 +265,10 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
         {badResponse.length > 0 && (
           <StatusBadge tone="blocked">응답 결함 {badResponse.length}</StatusBadge>
         )}
+        {/* "없음" 하나로 뭉치면 조회 실패가 계측 공백처럼 읽힌다 — 대기·실패를 갈라 낸다 */}
         <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
-          실시간 축 {minuteLoaded ? '실림' : '없음'}
+          실시간 축{' '}
+          {axisFetch === 'loaded' ? '실림' : axisFetch === 'pending' ? '응답 대기' : '조회 실패'}
         </span>
       </summary>
       <div className="card-pad" style={{ paddingBottom: 0 }}>
@@ -312,7 +318,7 @@ function RuleCatalog({ results, minuteLoaded }: { results: RuleResult[]; minuteL
                       )
                     ) : (
                       <span style={r.notRun === 'identity' ? { color: 'var(--down)' } : undefined}>
-                        {notRunReason(r)}
+                        {notRunReason(r, axisFetch)}
                       </span>
                     )}
                     {r.evaluated && r.note && ' *'}
