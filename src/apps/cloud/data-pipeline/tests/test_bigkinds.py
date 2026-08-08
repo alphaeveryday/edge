@@ -6,6 +6,7 @@
 """
 
 import json
+import logging
 
 import pytest
 from pydantic import ValidationError
@@ -282,6 +283,64 @@ def test_missing_total_count_is_noted_as_undecidable():
     assert len(records) == 1
     assert [f["kind"] for f in src.fetch_failures] == ["truncation"]
     assert "totalCount 없음" in src.fetch_failures[0]["error"]
+
+
+@pytest.mark.parametrize("bad_total", [True, -1], ids=["bool", "negative"])
+def test_unusable_total_count_does_not_certify_completion(bad_total):
+    # WHY: bool 은 파이썬에서 int 의 서브클래스다. 소박한 `isinstance(x, int)` 게이트에
+    #      `totalCount: true` 가 들어오면 total=1 이 되어 `served < 1` 이 거짓 → 비어 있지
+    #      않은 모든 런이 '완주'로 인증된다. 절단도 판정 불가도 **둘 다** 조용해지는, 결측
+    #      필드보다 나쁜 상태다(벤더가 이 필드를 "더 있음" 플래그로 바꾸면 실제 그 모양).
+    #      쓸 수 없는 값은 완주가 아니라 판정 불가로 흘러야 한다.
+    src = _source({
+        1: json.dumps({"resultList": [_row()], "totalCount": bad_total}, ensure_ascii=False),
+    }, page_size=1, max_pages=1)
+    records = list(src.fetch([], "2026-07-07", "2026-07-07"))
+
+    assert len(records) == 1
+    assert [f["kind"] for f in src.fetch_failures] == ["truncation"]
+    assert "totalCount 없음" in src.fetch_failures[0]["error"]
+
+
+def test_vendor_side_early_stop_below_total_is_truncation():
+    # WHY: 절단은 우리 캡에 걸릴 때만 나는 게 아니다 — 벤더가 자기 상한(isLimitPage)이나 빈
+    #      페이지로 **totalCount 보다 적게 주고 끝내는** 경로가 있고, 종전 구현은 그 두 신호를
+    #      무조건 '완주'로 읽어 유실을 통째로 놓쳤다. 캡을 아무리 올려도 안 잡히는 자리라
+    #      이 테스트가 없으면 "알람이 시끄럽다"는 이유로 판정을 MAX_PAGES 로 좁히는 수정이
+    #      전 테스트 초록인 채 통과한다.
+    src = _source({
+        1: _ok([_row("01100101.20260707153000000")], total=500, isLimitPage=True),
+    }, page_size=1, max_pages=99)
+    records = list(src.fetch([], "2026-07-07", "2026-07-07"))
+
+    assert len(records) == 1
+    assert len(src.client.requests) == 1  # 상한 신호에서 멈춘다(추가 요청 없음)
+    assert [f["kind"] for f in src.fetch_failures] == ["truncation"]
+    error = src.fetch_failures[0]["error"]
+    assert "500건 중 1건 수집" in error and "499건 유실" in error
+    assert "isLimitPage" in error  # 캡이 아니라 벤더가 끊었다 = 캡 상향으로 못 고친다
+
+
+@pytest.mark.parametrize(
+    "responses, page_size, max_pages",
+    [
+        ({1: _ok([_row()], total=5)}, 1, 1),                       # 유실 건수를 아는 경우
+        ({1: json.dumps({"resultList": [_row()]}, ensure_ascii=False)}, 1, 1),  # 판정 불가
+    ],
+    ids=["known_loss", "undecidable"],
+)
+def test_truncation_log_line_carries_the_alarm_token(caplog, responses, page_size, max_pages):
+    # WHY: 이 경고의 소비자는 사람이 아니라 **CloudWatch 메트릭 필터**다
+    #      (`infra/terraform/modules/data-pipeline/tasks.tf` 의 collection_truncated,
+    #      pattern = "수집 절단"). 필터는 fetch_failures 가 아니라 **로그 라인**을 읽으므로,
+    #      문구를 바꾸거나 _note_failure 가 reason 대신 kind 를 찍도록 리팩터링하면 알람이
+    #      영구히 0 이 되는데 나머지 단언은 전부 초록이다 — ALPHA-541 이 2주 방치된 그 모양
+    #      그대로 되돌아간다. 토큰이 실제 로그 레코드에 실리는지를 여기서 못박는다.
+    src = _source(responses, page_size=page_size, max_pages=max_pages)
+    with caplog.at_level(logging.WARNING, logger="data_pipeline.sources.bigkinds"):
+        list(src.fetch([], "2026-07-07", "2026-07-07"))
+
+    assert any("수집 절단" in message for message in caplog.messages)
 
 
 def test_disabled_depends_only_on_config():

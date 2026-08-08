@@ -76,7 +76,10 @@ class BigKindsNewsSource(BaseModel):
     base_url: NonBlankStr = "https://www.bigkinds.or.kr/api/news/search.do"
     enabled: bool = True
     page_size: int = Field(default=100, ge=1, le=100)
-    max_pages: int = Field(default=40, ge=1, le=100)
+    # 상한 200 — 스케줄 런의 창이 `[어제, 오늘]` 2일이라 실측 요구가 108~126 page 다
+    # (sources.toml 의 max_pages 주석이 근거 SSOT). 종전 상한 100 은 하루 창을 전제한
+    # 값이라, 올바른 값을 **설정조차 할 수 없었다**. 200 은 그 위의 폭주 방지선이다.
+    max_pages: int = Field(default=40, ge=1, le=200)
     # 수집 범위를 정하는 BigKinds 카테고리 대분류 코드 — **필수(최소 1개)**. 검색어가 없으므로
     # 카테고리마저 비면 전체 뉴스 firehose 다 — 로드 시점에 거부한다(fail loud). 우리 소비자
     # (태깅)는 경제 사건만 쓴다.

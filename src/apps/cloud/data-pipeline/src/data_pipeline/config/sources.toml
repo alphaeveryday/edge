@@ -41,18 +41,21 @@ enabled = true
 # ingest-raw --source bigkinds 로 선택(미지정=fmp). CONTENT 는 BigKinds 응답 원본 필드로
 # 그대로 저장한다(본문 전문 크롤·요약·절단 없음).
 # **카테고리 주도 전체 수집(ALPHA-417)** — 검색어 없이(searchKey="") 카테고리의 그날 뉴스
-# 전체를 받는다. 종목 매핑은 정규화의 종목명 탐지(ALPHA-416) 소관. page_size 100 = API 상한,
-# max_pages 40 = 일 최대 4,000건 안전 상한(초과는 truncation 로그 + 다음 창 이어받기).
-# PoliteClient 1초 간격이면 하루 최대 ~40요청 — 구 종목별 수집(9종목×5페이지)과 비슷한 부하.
+# 전체를 받는다. 종목 매핑은 정규화의 종목명 탐지(ALPHA-416) 소관. page_size 100 = API 상한.
 [bigkinds_news]
 base_url = "https://www.bigkinds.or.kr/api/news/search.do"
 enabled = true
 page_size = 100
 # 수집 경계가 아니라 **폭주 방지 상한**이다 — 실제 깊이는 응답의 `totalCount` 가 정한다
 # (bigkinds.py `_paginate`). 빈 페이지에서 멈추므로 한산한 슬롯이 이 값 때문에 더 요청하지
-# 않는다. 값의 근거: 경제 대분류 하루 총량 실측 6,107~6,355건(2026-08-04~06) = 62~64 page.
-# 하루를 닫는 런(어제 날짜 전량 스윕)이 여기 걸리면 안 되므로 그 위로 여유를 둔다.
-max_pages = 80
+# 않는다.
+#
+# 값의 근거 — **창은 하루가 아니라 이틀이다.** 스케줄 런은 창을 안 넘기고, 그러면
+# `run.py:740` 이 `default_window(utc_now, DEFAULT_LOOKBACK_DAYS=1)` = `[어제, 오늘]` 로
+# 채운다(`sources/bigkinds.py` 의 "오늘" 폴백은 이 경로에서 도달하지 않는다). 그 2일 창의
+# 실측 totalCount 는 10,745~12,578건(2026-08-03~07) = **108~126 page** 다. 하루 총량
+# (6,107~6,355 = 62~64 page)으로 잡으면 매 런이 절단돼 절단 알람이 매일 울린다.
+max_pages = 160
 # 경제 대분류만 수집한다. 소비자(tag-news)는 경제 사건만 쓴다 — 온톨로지에 없는 유형은
 # 버려지는 게 아니라 가장 가까운 라벨로 굴절돼 조용히 오분류된다(ALPHA-360).
 # `002…` = 경제 대분류(2026-07-14 라이브 실측). CATEGORY 는 멀티라벨이라 경제를 **포함**하면

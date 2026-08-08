@@ -85,6 +85,18 @@ def search_page(
     return payload
 
 
+def _is_count(value: object) -> bool:
+    """건수로 쓸 수 있는 값인가 — 절단 판정의 근거로 삼기 전 검사한다.
+
+    `bool` 을 배제하는 게 핵심이다: 파이썬에서 `True` 는 `int` 의 서브클래스라
+    `isinstance(True, int)` 가 참이고, `total=True` 면 `served < 1` 이 되어 비어 있지 않은
+    모든 런이 '완주'로 인증된다 — 절단도 '판정 불가'도 둘 다 조용해진다(가장 나쁜 조합).
+    벤더가 이 필드를 "더 있는가" 플래그로 바꾸면 실제로 그 모양이 된다. 음수도 같은 이유로
+    배제한다. 여기서 걸러진 값은 완주가 아니라 **판정 불가**로 흘러 알람을 탄다.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 class BigKindsNewsSource:
     source_name = "bigkinds"
     preserve_all_rows = True  # raw 전량 보존: ingest_raw 의 FMP dedup/mention merge 를 끈다.
@@ -156,7 +168,7 @@ class BigKindsNewsSource:
             rows = payload.get("resultList")
             if not isinstance(rows, list):
                 raise ValueError(f"BigKinds resultList 이상: {type(rows).__name__}")
-            if total is None and isinstance(payload.get("totalCount"), int):
+            if total is None and _is_count(payload.get("totalCount")):
                 total = payload["totalCount"]
             if not rows:
                 stop_reason = "빈 페이지"
