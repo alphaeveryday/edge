@@ -781,8 +781,9 @@ def canonical_intraday_5m_prefix(market: str, trade_date: str) -> str:
     키 조립을 두 곳에 두면 한쪽만 옮겨져 스캐너가 없는 prefix 를 훑고 빈 목록을
     "구멍 없음"으로 확정한다(`canonical_price_minute_prefix` 와 같은 축).
 
-    ⚠️ 파티션에 파일이 `part-0.parquet` 하나뿐이라고 가정하면 안 된다 — 토스 백필이
-    같은 파티션에 `part-toss-backfill.parquet` 로 따로 쓰고(ALPHA-828), 소비자는
+    ⚠️ 파티션에 파일이 `part-0.parquet` 하나뿐이라고 가정하면 안 된다 — 과거 백필이
+    같은 파티션에 `part-<vendor>-backfill.parquet` 로 벤더마다 따로 쓰고(ALPHA-828
+    토스 · ALPHA-856 KIS), 소비자는
     파티션을 `*.parquet` 글롭으로 읽는다. `part-0` 부재를 구멍으로 읽으면 다른
     파일명이 채운 거래일(실측 2026-08-03)을 영영 결손으로 보고한다.
     """
@@ -815,8 +816,8 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     - available_at: timestamp[us] naive KST = ts + 5분(구간 끝)
 
     ⚠️ **"거래일당 1파일"이 아니다**(2026-08-07 정정). 이 키는 1분 롤업 writer 의 파일
-    이고, 같은 파티션에 다른 writer 가 다른 파일명으로 쓴다(토스 백필
-    `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
+    이고, 같은 파티션에 다른 writer 가 다른 파일명으로 쓴다(과거 백필이 벤더마다
+    `part-<vendor>-backfill.parquet`, ALPHA-828 토스·ALPHA-856 KIS). 소비자는 파티션을 `*.parquet` 글롭으로
     읽으므로 **파티션 = 여러 파일의 합집합**이고, 겹치는 (ticker, ts) 는 두 번 세어진다
     — 비겹침을 보장하는 주체는 각 writer 다(`rollup.writer_owns()`, 롤업의 타 writer 가드).
 

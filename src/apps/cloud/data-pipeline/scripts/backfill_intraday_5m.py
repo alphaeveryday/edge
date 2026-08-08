@@ -45,10 +45,12 @@ low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=t
 **겹치면 안 쓴다.** (ticker, day) 가 이미 `part-0` 에 있으면 건너뛴다 — 같은 봉이 두 벌
 있으면 `_panel` 류 집계가 조용히 두 번 센다. 스킵은 콜도 아낀다.
 
-실행:
-    AWS_PROFILE=edge uv run python scripts/backfill_intraday_5m.py --days 70
-    ... --vendor kis       # 소급 TR. 앱키 전역 유량이라 **장 마감 후에만**
-    ... --dry-run          # 무엇을 몇 콜 받을지만 계산하고 끝낸다
+실행: `--vendor` 에 **기본값을 두지 않는다**. 위가 "KIS 가 더 정확하다"로 끝나는데
+기본이 토스면 문서를 그대로 친 사람이 방금 틀렸다고 적은 벤더로 받고, 결손 판정이 두
+벤더를 합쳐 세므로(`_backfilled_tickers`) 그 (종목, 날짜)는 이후 KIS 실행에서 탈락한다
+— 되돌리는 길이 S3 수동 삭제뿐이다. 고르게 만든다(ALPHA-863 의 `emit_outbox` 와 같은 이유).
+    AWS_PROFILE=edge uv run python scripts/backfill_intraday_5m.py --vendor kis --days 70
+    ... --dry-run          # **쓰기만** 건너뛴다 — 수집은 그대로 돌아 콜을 다 태운다
     ... --tickers 395270,0190G0
 """
 
@@ -71,7 +73,10 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]
 
 from data_pipeline.minute.rollup import writer_owns  # noqa: E402
 from data_pipeline.sources.http import PoliteClient  # noqa: E402
-from data_pipeline.sources.kis_minute import KisHistoricalMinuteClient  # noqa: E402
+from data_pipeline.sources.kis_minute import (  # noqa: E402
+    KisHistoricalMinuteClient,
+    KisUnitError,
+)
 from data_pipeline.sources.toss import TossOpenApiClient  # noqa: E402
 
 KST = timezone(timedelta(hours=9))
@@ -93,7 +98,12 @@ VENDORS = {
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
 KIS_SECRET = "edge-dev-data-pipeline/kis/oauth"
 # 소급 TR 은 한 콜 120봉이라 하루 4콜이다(실측). 간격이 곧 유량 상한이고 앱키 전역이라
-# 다른 KIS 스텝과 나눠 쓴다 — 장중에 돌리지 마라(1분 레인이 6.8 req/s 를 쓴다).
+# 다른 KIS 스텝과 나눠 쓴다. **1분 가격 워커와 같은 간격**이다 — 0.08 → 12.5 req/s 이고
+# 레포 예산선은 15/s, 벤더 한도(EGW00201)는 20/s 다(`config/models.py:min_interval_sec`).
+# 장중이면 1분 레인이 이미 12.5 를 쓰므로 이걸 얹는 순간 예산선을 넘는다 — 돌리지 마라.
+# 값을 베낀 것이라 저쪽이 움직이면 여기만 옛 값을 지킨다. 그 드리프트는 코드가 아니라
+# 테스트가 잡는다(`test_kis_interval_tracks_the_minute_lane`) — 런타임 import 를 더하면
+# `_configured_universe` 의 ImportError 관용이 죽는다.
 KIS_MIN_INTERVAL = 0.08
 DEFAULT_BUCKET = "edge-dev-pipeline-lake"
 # 토스 count 상한(`toss.MAX_COUNT`). 하루 390분이라 종목당 2콜 남짓으로 하루가 닫힌다.
@@ -296,8 +306,13 @@ def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool,
     return tbl.num_rows
 
 
-def _collect_toss(days, targets, covered, a) -> dict[str, list[dict]]:
-    """티커-major — 토스는 `before` 커서 하나로 날짜를 가로질러 거슬러 올라간다."""
+def _collect_toss(days, targets, covered, a):
+    """티커-major — 토스는 `before` 커서 하나로 날짜를 가로질러 거슬러 올라간다.
+
+    `(날짜, 행)` 을 내는 **제너레이터**다(`_collect_kis` 와 같은 계약). 다만 커서가
+    날짜를 가로지르므로 티커를 다 돌기 전에는 어느 날짜도 확정되지 않는다 — 그래서
+    끝에서 한 번에 낸다. 즉시성은 KIS 경로에서만 실효가 있다.
+    """
     sec = json.loads(boto3.client("secretsmanager")
                      .get_secret_value(SecretId=TOSS_SECRET)["SecretString"])
     client = TossOpenApiClient(client_id=sec["client_id"], client_secret=sec["client_secret"])
@@ -328,7 +343,7 @@ def _collect_toss(days, targets, covered, a) -> dict[str, list[dict]]:
             added += len(rows)
         log.info("[%d/%d] %s — 결손 %d일 · 캔들 %d · 5분봉 %d",
                  i, len(targets), tk, len(want), len(candles), added)
-    return per_day
+    yield from sorted(per_day.items())
 
 
 def _day_candles_kis(client, symbol: str, day: str) -> list:
@@ -346,12 +361,54 @@ def _day_candles_kis(client, symbol: str, day: str) -> list:
     return out
 
 
-def _collect_kis(days, targets, covered, a) -> dict[str, list[dict]]:
+def _warn_partial_days(day: str, counts: dict[str, int]) -> list[str]:
+    """그날 격자보다 봉이 적게 나온 종목을 드러낸다. 반환은 그 종목들(테스트용).
+
+    🔴 소급 TR 은 **첫 체결 앞 분을 안 준다** — `fill_no_trade_minutes` 도 "첫 관측 앞은
+    안 채운다"가 의도다(없는 값을 지어내지 않는다). 토스는 무거래도 flat 봉을 주므로
+    하루가 늘 꽉 찼고, 그래서 "그 종목이 그날 파일에 있다 = 그날이 온전하다"가 참이었다.
+    벤더 축이 그 전제를 깼다: 한산한 종목은 부분본으로 착지하는데 `coverage` 는 그걸
+    온전한 하루로 세므로 ① 재실행이 영영 안 고치고(`covered` 가 막는다) ② `--min-days`
+    판정이 부분본 20일을 이력으로 인정한다.
+
+    ⚠️ **격자는 상수 78 이 아니다.** 그날 나온 최대값으로 잡는다 — 개장이 밀리는 날이
+    실재하고(실측 2025-11-13: 10:00 개장·67봉. 그날 fmp 시대 `part-0` 도 10:00 시작
+    67격자라 두 원천이 일치한다), 78 로 박으면 그런 날 전 종목이 거짓 경고가 된다.
+
+    🔴 **반대로 전 종목이 균일하게 짧은 날은 이 판정이 구조상 못 본다.** 격자를 관측에서
+    유도하므로 결손이 균일하면 같이 내려간다 — 폐장이 밀리는 날이 그 자리다(우리는
+    15:30 까지만 묻고 어댑터도 그 위를 거부한다). 이 경고의 침묵을 "온전하다"로 읽지
+    마라. `counts` 가 **성공한 종목만** 담는 것도 같은 축이다(실패는 위에서 따로 센다).
+
+    떨어뜨리지는 않는다 — 받은 봉은 사실이고, 얼마나 짧아야 버릴지는 β 를 쓰는 쪽
+    판단이다(ALPHA-869·이음매와 같은 자리). 여기서는 보이게만 한다(Rule 12).
+    실측 2026-08-08: 섹터 48종 중 279540 이 2025-11-13 에 39/67, 2025-09-01 에 70/78.
+    """
+    if not counts:
+        # 전 종목이 실패한 날. `max(())` 를 막는 것이 이 가드의 전부다 — 1종만 남은
+        # 날은 그 값이 곧 격자라 `short` 가 정의상 비므로 따로 걸 것이 없다.
+        return []
+    grid = max(counts.values())
+    short = sorted((n, tk) for tk, n in counts.items() if n < grid)
+    if short:
+        log.warning("%s 부분본 %d종 (격자 %d봉) — 최소 %s",
+                    day, len(short), grid,
+                    ", ".join(f"{tk}:{n}" for n, tk in short[:3]))
+    return [tk for _n, tk in short]
+
+
+def _collect_kis(days, targets, covered, a):
     """날짜-major — 소급 클라이언트가 **하루에 묶여 있다**(`session_date` 고정).
 
     토스처럼 티커-major 로 돌면 종목마다 날짜 수만큼 클라이언트를 만들어야 하고, 하루
     캐시가 매번 버려져 콜이 페이지 수만큼 곱해진다. 날짜를 바깥에 두면 클라이언트 하나가
     그날 48종을 다 담고, 그날이 끝나면 통째로 버려 메모리도 하루치로 묶인다.
+
+    ⭐ **하루가 끝날 때마다 `(날짜, 행)` 을 낸다** — 모아서 돌려주면 호출부가 마지막에야
+    쓰므로, 중간에 전역 실패(`KisSourceError`)가 올라오는 순간 그때까지 받은 날이 통째로
+    사라진다. 180거래일 × 48종은 ~46분짜리 런이라 그 손실이 크고, 티켓의 "재개 가능 —
+    중간에 죽으면 받은 날은 남기고 이어서"가 바로 이 자리다. 다음 실행은 `covered` 가
+    이미 쓴 날을 걸러 주므로 이어받는다.
     """
     sec = json.loads(boto3.client("secretsmanager")
                      .get_secret_value(SecretId=KIS_SECRET)["SecretString"])
@@ -365,46 +422,84 @@ def _collect_kis(days, targets, covered, a) -> dict[str, list[dict]]:
     # 다른 KIS 스텝의 예산을 먹는다.
     http = PoliteClient(min_interval=KIS_MIN_INTERVAL)
     auth = None
-    per_day: dict[str, list[dict]] = defaultdict(list)
-    for i, d in enumerate(days, 1):
-        want = [tk for tk in targets if tk not in covered[d]]
-        if not want:
-            continue
-        # 클라이언트 자체는 하루마다 새로 만든다 — 봉 캐시가 날짜에 묶여 있어 재사용하면
-        # 남의 날 봉이 된다(클라이언트가 스스로 ValueError 로 막지만 만들 이유가 없다).
-        client = KisHistoricalMinuteClient(
-            sec["app_key"], sec["app_secret"], http,
-            session_date=date.fromisoformat(d),
-        )
-        if auth is None:
-            auth = client.auth
-        else:
-            client.auth = auth
-        added = 0
-        for tk in want:
-            try:
-                candles = _day_candles_kis(client, tk, d)
-            except Exception as e:                              # noqa: BLE001
-                # 종목 하나의 실패로 그날을 버리지 않는다. 조용히 넘기지도 않는다.
-                log.error("[%d/%d] %s %s 수집 실패 — 건너뛴다: %s: %s",
-                          i, len(days), d, tk, type(e).__name__, str(e)[:120])
+    # 실패한 (종목, 날짜) 수. 상장 전 날짜가 여기 쌓인다 — 실측 2026-08-08: 섹터 48종을
+    # 2025-07-29 에 물으면 **12종**이 `KisDayIncompleteError` 로 떨어진다(2026-04-22 는
+    # 48/48 성공). 그 종목들은 산출이 0이라 `covered` 에도 안 들어가므로 재실행마다
+    # 같은 자리에서 (종목,날짜)당 MAX_DAY_PAGES 콜을 다시 태운다. 합계를 안 내면 그
+    # 낭비가 ERROR 로그 사이에 흩어져 안 보인다.
+    failed = 0
+    try:
+        for i, d in enumerate(days, 1):
+            want = [tk for tk in targets if tk not in covered[d]]
+            if not want:
                 continue
-            rows = _roll(candles)
-            for r in rows:
-                r |= {"ticker": tk, "source_symbol": tk, "source_vendor": vendor}
-            per_day[d] += rows
-            added += len(rows)
-        log.info("[%d/%d] %s — 대상 %d종 · 5분봉 %d", i, len(days), d, len(want), added)
-    return per_day
+            # 클라이언트 자체는 하루마다 새로 만든다 — 봉 캐시가 날짜에 묶여 있어 재사용하면
+            # 남의 날 봉이 된다(클라이언트가 스스로 ValueError 로 막지만 만들 이유가 없다).
+            client = KisHistoricalMinuteClient(
+                sec["app_key"], sec["app_secret"], http,
+                session_date=date.fromisoformat(d),
+            )
+            if auth is None:
+                auth = client.auth
+            else:
+                client.auth = auth
+            added = 0
+            counts: dict[str, int] = {}
+            day_rows: list[dict] = []
+            for tk in want:
+                try:
+                    candles = _day_candles_kis(client, tk, d)
+                except (KisUnitError, ValueError) as e:
+                    # 종목 하나의 실패로 그날을 버리지 않는다. 조용히 넘기지도 않는다.
+                    #
+                    # ⚠️ **`ValueError` 도 unit 축이다** — 어댑터가 그렇게 설계했다
+                    # (`kis_minute`: *"collector 는 ValueError 만 unit INVALID 로 접어서"*).
+                    # 행 형상 위반(비-dict 행·날짜 필드 타입·분 격자 밖·같은 window 에 다른
+                    # 봉)은 **맨 ValueError 로 올라온다**. 봉투 수준만 `KisUnitError` 로
+                    # 승격된다. 이 둘을 갈라 잡으면 손상 행 하나가 런을 죽이는데, 그
+                    # 예외는 응답 형상의 함수라 **결정적**이라서 재실행이 같은 날짜에서
+                    # 다시 죽는다 — 그 뒤 날짜를 영영 못 넘는다.
+                    #
+                    # 🔴 **`KisSourceError` 는 안 잡는다.** 어댑터가 그 둘을 일부러 갈라 놨다
+                    # (`kis_minute`: 전역 = 자격증명·권한·유량, unit = 그 종목 하나). 전역을
+                    # 여기서 접으면 앱키 하나가 틀렸을 때 48종 × N일이 전부 ERROR 로 흐른 뒤
+                    # "완료 — 0일 · 0행 추가" 와 **exit 0** 이 된다 — 스케줄러도 운영자도
+                    # 성공한 런과 구분하지 못한다. 고칠 것은 설정 하나인데 재시도 대상처럼
+                    # 보이면 아무도 고치러 가지 않는다(Rule 12).
+                    #
+                    # 상장 전 날짜는 `KisDayIncompleteError`(=unit)라 여기로 온다 — 그건
+                    # 정말 그 종목·그날의 사실이므로 건너뛰는 것이 맞다.
+                    log.error("[%d/%d] %s %s 수집 실패 — 건너뛴다: %s: %s",
+                              i, len(days), d, tk, type(e).__name__, str(e)[:120])
+                    failed += 1
+                    continue
+                rows = _roll(candles)
+                for r in rows:
+                    r |= {"ticker": tk, "source_symbol": tk, "source_vendor": vendor}
+                day_rows += rows
+                added += len(rows)
+                counts[tk] = len(rows)
+            log.info("[%d/%d] %s — 대상 %d종 · 5분봉 %d", i, len(days), d, len(want), added)
+            _warn_partial_days(d, counts)
+            if day_rows:
+                yield d, day_rows
+    finally:
+        # 🔴 `finally` 다. 전역 실패가 올라오거나 호출부가 제너레이터를 버리면 이
+        # 요약이 **가장 알고 싶은 순간에** 안 나온다 — 루프 뒤에 두던 판이 그랬다.
+        if failed:
+            log.warning("수집 실패 (종목,날짜) %d건 — 상장 전 날짜가 대부분이다. 산출이 "
+                        "0이라 다음 실행도 같은 자리에서 콜을 태운다", failed)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bucket", default=DEFAULT_BUCKET)
-    ap.add_argument("--vendor", choices=sorted(VENDORS), default="toss",
+    ap.add_argument("--vendor", choices=sorted(VENDORS), required=True,
                     help="어느 벤더로 받고 어느 파일에 쓸지. 벤더마다 파일이 갈리므로 "
                          "(part-<vendor>-backfill.parquet) 서로 덮지 않는다. kis 는 "
-                         "소급 TR(FHKST03010230)이라 앱키 전역 유량을 쓴다 — 장 마감 후에만")
+                         "소급 TR(FHKST03010230)이라 앱키 전역 유량을 쓴다 — 같은 앱키를 "
+                         "쓰는 15:40 시장 런이 끝난 뒤에 돌려라(이 백필만 ~46분이라 "
+                         "15:31 에 시작하면 그 창을 관통한다)")
     ap.add_argument("--days", type=int, default=70,
                     help="거슬러 볼 파티션 수. β 는 60거래일 창이라 여유를 둔다")
     ap.add_argument("--min-days", type=int, default=20,
@@ -413,8 +508,11 @@ def main() -> int:
                          "레포가 달라 import 로 못 묶는다)")
     ap.add_argument("--tickers", default="", help="쉼표 구분. 비우면 자동 판정")
     ap.add_argument("--call-budget", type=int, default=140,
-                    help="종목당 최대 콜. 70거래일×390분÷200 ≈ 137")
-    ap.add_argument("--dry-run", action="store_true")
+                    help="종목당 최대 콜 — **toss 전용**이다(70거래일×390분÷200 ≈ 137). "
+                         "kis 는 하루 단위로 받아 (종목, 날짜)당 상한이 소급 클라이언트의 "
+                         "MAX_DAY_PAGES 라 이 값을 안 본다")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="**쓰기만** 건너뛴다. 수집은 그대로 돌아 콜을 다 태운다")
     ap.add_argument("--repair-session-hours", action="store_true",
                     help="이미 쓴 백필 파일에서 정규장 밖 봉을 걷어낸다(재수집 없음)")
     a = ap.parse_args()
@@ -447,7 +545,8 @@ def main() -> int:
         log.info("복구 완료 — 총 %d행 제거%s", cut, " (dry-run)" if a.dry_run else "")
         return 0
 
-    # 하루씩 읽어 (ticker→보유일수) 를 센다. 파일 하나가 ~370KB 라 70일이면 26MB 다.
+    # 하루씩 읽어 (ticker→보유일수) 를 센다. 파티션당 파일이 최대 3개다
+    # (`part-0` + 벤더별 백필) — 파일 하나 ~370KB 라 70일이면 GET 210회·~78MB.
     # **백필 파일도 같이 센다.** 정본만 세면 이미 채운 종목·날짜를 매번 다시 받고,
     # 그 재수집이 아래 병합을 거치지 않던 판에서는 앞선 착지분을 덮어 지웠다.
     present: dict[str, set[str]] = {}       # 정본(part-0)에 있는 종목 — 쓰기 스킵 기준
@@ -487,23 +586,26 @@ def main() -> int:
         log.info("채울 것이 없다")
         return 0
 
-    per_day = (_collect_kis if a.vendor == "kis" else _collect_toss)(
-        days, targets, covered, a)
-
-    total = 0
-    for d in sorted(per_day):
+    # **하루가 나오는 대로 쓴다.** 수집기가 제너레이터라 여기서 소비하는 동안 쓰기가
+    # 섞여 들어간다 — 중간에 전역 실패가 올라와도 이미 착지한 날은 남고, 다음 실행이
+    # `covered` 로 그날들을 걸러 이어받는다. 모아서 쓰던 판은 ~46분짜리 런이 마지막에
+    # 죽으면 전부 잃었다.
+    total = days_written = 0
+    for d, rows in (_collect_kis if a.vendor == "kis" else _collect_toss)(
+            days, targets, covered, a):
         existing = _tickers_present(_read_day(s3, a.bucket, d))
         prior = _read_day(s3, a.bucket, d, backfill_name)
         payload = _day_payload(prior.to_pylist() if prior is not None else [],
-                               existing, per_day[d])
+                               existing, rows)
         if payload is None:
             continue
         keep_and_new, fresh = payload
         n = _write_day(s3, a.bucket, d, keep_and_new, a.dry_run, backfill_name)
         total += fresh
+        days_written += 1
         log.info("%s ← %d행 (파일 총 %d행)%s", d, fresh, n,
                  " (dry-run)" if a.dry_run else "")
-    log.info("완료 — %d일 · %d행 추가%s", len(per_day), total,
+    log.info("완료 — %d일 · %d행 추가%s", days_written, total,
              " (dry-run)" if a.dry_run else "")
     return 0
 

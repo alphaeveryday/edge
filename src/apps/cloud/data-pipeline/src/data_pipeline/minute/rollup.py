@@ -248,8 +248,8 @@ def _rollup_day(
         )
         return None
     day_key = canonical_intraday_5m_key(market, session_date)
-    # ⚠️ 같은 파티션을 **다른 writer 가 다른 파일명으로** 쓸 수 있다(토스 백필의
-    # `part-toss-backfill.parquet`, ALPHA-828). 소비자는 파티션을 `*.parquet` 글롭으로
+    # ⚠️ 같은 파티션을 **다른 writer 가 다른 파일명으로** 쓸 수 있다(과거 백필이 벤더마다
+    # `part-<vendor>-backfill.parquet`, ALPHA-828 토스·ALPHA-856 KIS). 소비자는 파티션을 `*.parquet` 글롭으로
     # 읽으므로 우리 `part-0` 을 나란히 놓으면 겹치는 (ticker, ts) 가 **두 번 세어진다**
     # (거래량 이중계상 → β 패널 오염). 백필은 "쓰는 시점의 part-0" 만 대조하므로 나중에
     # 우리가 쓰면 그 비겹침 보장이 깨진다. 덮어쓸 수도 지울 수도 없으니 사람이 정한다.
