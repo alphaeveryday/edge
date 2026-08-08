@@ -294,6 +294,33 @@ class EventStore:
             generation=int(row[9]),
         )
 
+    def fetch_previous_trigger_window(
+        self, entity_id: str, session_id: str, window_start: datetime,
+    ) -> datetime | None:
+        """같은 대상·세션의 **직전 발화** window_start | None(그날 첫 발화).
+
+        트리거 경로에서 설명 구간의 시작이다(ALPHA-854) — 발화는 "지난 설명 이후
+        무슨 일이 있었나"에 답하므로 창이 직전 발화에서 시작한다. 창이 전부 과거라
+        아직 수집 안 된 분을 기다리지 않는다.
+
+        발화 여부만 본다 — 그 발화의 **설명 성공 여부는 보지 않는다**. 실패한 발화를
+        건너뛰면 같은 구간이 두 번 설명되고, 원장의 발화 축(ALPHA-710)과도 어긋난다.
+        UNIQUE(entity_id, session_id, window_start) 인덱스를 그대로 탄다.
+        """
+        entity_id = str(entity_id).strip()
+        session_id = str(session_id).strip()
+        if not entity_id or not session_id:
+            raise ValueError("entity_id·session_id가 비었다")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT window_start FROM minute_price_trigger"
+                " WHERE entity_id = %s AND session_id = %s AND window_start < %s"
+                " ORDER BY window_start DESC LIMIT 1",
+                (entity_id, session_id, window_start),
+            )
+            row = cur.fetchone()
+        return row[0].astimezone(KST) if row else None
+
     def fetch_committed_minute_windows(
         self, session_id: str, start: datetime, end: datetime,
     ) -> list[CommittedMinuteWindow]:

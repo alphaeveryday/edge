@@ -123,14 +123,22 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 유도한다(--trade-date 무시). 계보는 minute_price_trigger_id 축에 영속된다.
 # 게시 게이트는 발화(route) 축(ALPHA-710) — 하루 다건 발화는 발화마다 게시되고,
 # 같은 route 재실행만 DRAFT 보존이다. 분해 입력은 **두 시간축**이다(ALPHA-854):
-#   상태 계산축 09:00~요청끝 · 설명축 요청 clock 구간 — 둘 다 09:00~요청끝의 확정
-#   1분봉(minute_ingestion_window 좌표로 strict 하게 읽는다)에서 한 번에 만든다.
+#   상태 계산축 09:00~구간끝 · 설명축 [구간시작, 구간끝) — 둘 다 같은 확정 1분봉
+#   (minute_ingestion_window 좌표로 strict 하게 읽는다)에서 한 번에 만든다.
+# 설명 구간은 **호출자가 정한다**(`run(..., explain_window=...)`). 값이 없는 트리거
+# 경로만 [직전 발화(없으면 09:00), 발화 분 끝) 으로 유도한다 — 발화는 "지난 설명 이후
+# 무슨 일이 있었나"에 답하므로 창이 전부 과거다. 끝을 발화 분 뒤로 두면 아직 수집 전인
+# 분을 요구해 매 발화가 지연 재시도로 접히고, 마감 직전 발화는 15:30 을 넘겨 DLQ 로 간다.
+# 요청 시작은 5분 격자로 내리지 않는다(10:12 요청이면 첫 봉이 10:12~10:15).
 # 분해가 답하는 것은 설명축이다: 그 구간 마지막 봉의 close 를 canonical price_daily
 # **직전 거래일** 종가로 나눠 구성종목 수익률을 파생한다 — 판정(intraday-anchor-v2)과
-# 같은 축(전일 종가 대비, ALPHA-747). 갭이 기여에 포함된다. 요청 시작은 5분 격자로
-# 내리지 않는다(10:12 요청이면 첫 봉이 10:12~10:15). 상태축 결손은 재시도 축이고
-# (ReturnsNotReady) 원장 불변식 위반은 DLQ 다. 시가 원장(minute_session_open)은
-# 분해가 쓰지 않는다.
+# 같은 축(전일 종가 대비, ALPHA-747). 갭이 기여에 포함된다.
+# 입력 unit 은 **대상 ETF + 구성종목**으로 좁힌다. 그 중 구간을 다 못 채운 종목은
+# 떨어뜨리고 진행하며(벤더 미제공은 window 가 INCOMPLETE 로 terminal 커밋돼 재시도가
+# 낫게 하지 않는다), 무엇을 얼마나 잃었는지 `stage_results.window` 에 남긴다
+# (`dropped_units`·`price_weight_coverage`). 대상 ETF 자신의 결손만 fail-loud 다.
+# 원장 불변식 위반(session 불일치·중복)은 DLQ, 빈 입력은 재시도 축이다.
+# 시가 원장(minute_session_open)은 분해가 쓰지 않는다.
 # ⚠️ 소비자가 같은 트리거를 처리 중이면 이 수동 실행은 **exit 1 로 양보한다**(route
 # advisory lock, ALPHA-779) — 겹쳐 돌면 같은 트리거에 LLM 이 이중 과금된다. 재실행
 # 자체를 막지는 않는다: 경합이 없으면 그대로 돈다.

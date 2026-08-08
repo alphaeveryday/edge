@@ -401,13 +401,16 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
         def _bars(*rows: dict) -> bytes:
             return ("\n".join(json.dumps(r) for r in rows) + "\n").encode()
 
-        # 설명이 **09:00~요청끝 전 구간**의 1분봉을 요구한다(ALPHA-854 두 축) — 트리거
+        # 설명이 **09:00~발화 분 전 구간**의 1분봉을 요구한다(ALPHA-854 두 축) — 트리거
         # window 두 개만 깔면 원장 결손으로 서고, 그건 이 골든패스가 지키려는 계보를
-        # 못 밟는다. 09:00~10:34 95분을 실물처럼 전부 깐다.
+        # 못 밟는다. 09:00~10:30 91분을 실물처럼 전부 깐다.
+        #
+        # 발화 분을 **넘겨 깔지 않는다**: 창이 발화 분에서 끝나므로 그 뒤 분은 실물에서
+        # 아직 수집 전이다. 넉넉히 깔면 미래를 읽어도 초록인 픽스처가 된다.
         #
         # 가격은 두 발화를 **구분되게** 준다: 09:00 창은 삼성 70100, 10:30 창은 73500.
         # 아래 분해 단언(73500/68000)이 두 번째 발화의 축을 실제로 탔음을 증명한다.
-        MINUTE_COUNT = 95  # 09:00 ~ 10:34
+        MINUTE_COUNT = 91  # 09:00 ~ 10:30 (발화 분 포함)
         TRIGGER_MINUTE = 90  # 10:30
 
         def _price_at(minute: int) -> dict[str, str]:

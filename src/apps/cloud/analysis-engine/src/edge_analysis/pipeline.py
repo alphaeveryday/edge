@@ -37,7 +37,6 @@ _MARKET = "KR"
 # 정규장 시가 — 상태 계산축의 시작. `domain.window` 가 같은 값을 계약으로 강제한다
 # (`WindowSpec` 이 09:00 아닌 analysis_start 를 거부한다) — 여기 값이 갈리면 생성이 죽는다.
 SESSION_OPEN_TIME = time(9, 0)
-BUCKET_MINUTES = 5
 
 
 def _returns_from_bars(
@@ -98,8 +97,14 @@ def run(
     client: AnalysisClient,
     s3,
     causal_lake=None,
+    explain_window: tuple[datetime, datetime] | None = None,
 ) -> int:
-    """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다."""
+    """당일 파이프라인을 실행하고 종료 코드(성공=0)를 반환한다.
+
+    `explain_window` 는 설명이 덮을 [시작, 끝) 구간이다(KST aware). 값이 없으면
+    트리거 경로의 기본값 — 직전 발화(없으면 09:00)부터 이번 발화 분 끝까지 — 으로
+    유도한다. 상태 계산축(09:00~구간 끝)은 이 인자와 무관하게 고정이다.
+    """
     # 분봉 트리거 단건 입력(ALPHA-709) — 트리거 행이 대상·날짜의 정본이다. env 기본값
     # (ETF·오늘)으로 다른 대상을 분석하면 계보가 조용히 오염된다(ALPHA-467 과 같은 축).
     if not settings.trigger_id:
@@ -165,13 +170,29 @@ def run(
     #
     # 요청 시작을 5분 격자로 **내리지 않는다** - 10:12 요청이면 첫 봉이 10:12~10:15(3분)다.
     # 계약과 그 검정은 `domain/window.py` 가 소유한다(ALPHA-620, PR #593).
+    #
+    # 설명 구간은 **호출자가 정한다**(`explain_window`). 어드민이 "10:12~10:30 설명해줘"
+    # 를 그대로 넘기는 경로가 이 계약이다. 값이 없는 트리거 경로만 아래로 유도한다.
+    analysis_start = datetime.combine(settings.trade_date, SESSION_OPEN_TIME, tzinfo=KST)
+    if explain_window is not None:
+        requested_start, requested_end = (
+            value.astimezone(KST) for value in explain_window)
+    else:
+        # 발화는 "지난 설명 이후 무슨 일이 있었나"에 답한다 - 그래서 창이 직전 발화에서
+        # 시작해 **이번 발화 분에서 끝난다**. 끝을 발화 분 뒤로 두면(예: +5분) 아직
+        # 수집 전인 분을 요구해 매 발화가 지연 재시도로 접히고, 마감 직전 발화는
+        # 15:30 을 넘겨 통째로 DLQ 로 간다. 창은 전부 과거여야 한다.
+        fired = minute_row.window_start.astimezone(KST)
+        previous = store.fetch_previous_trigger_window(
+            minute_row.ticker, minute_row.session_id, minute_row.window_start)
+        requested_start = previous.astimezone(KST) if previous else analysis_start
+        requested_end = fired + timedelta(minutes=1)
     spec = WindowSpec(
         market=_MARKET, session_id=minute_row.session_id,
         session_date=settings.trade_date,
-        analysis_start=datetime.combine(settings.trade_date, SESSION_OPEN_TIME, tzinfo=KST),
-        requested_start=minute_row.window_start.astimezone(KST),
-        requested_end=(minute_row.window_start + timedelta(minutes=BUCKET_MINUTES)
-                       ).astimezone(KST),
+        analysis_start=analysis_start,
+        requested_start=requested_start,
+        requested_end=requested_end,
     )
     # 좌표가 비거나 중간이 빈 경우는 어댑터가 이미 갈라 던진다 - 계획 행 누락은 원장
     # 불변식 위반(PipelineError), 정정·수집 중(DUE/CLAIMED)은 재시도 축이다. 여기서
@@ -179,16 +200,40 @@ def run(
     committed = store.fetch_committed_minute_windows(
         minute_row.session_id, spec.analysis_start, spec.requested_end)
     minute_bars = lake.load_committed_minute_bars(_MARKET, committed)
+    # **분석이 쓰는 unit 으로 좁힌다.** artifact 는 수집 universe 전량(ETF·구성종목·
+    # 섹터 후보 410종)을 담는데, 집계는 "관측된 모든 unit × 모든 분"을 요구한다 -
+    # 좁히지 않으면 이 ETF 와 무관한 섹터 후보 하나가 09:07 에 안 온 날, 그날 이후
+    # 발화가 전부 죽는다. 무관한 종목의 결손이 우리 설명을 막을 이유가 없다.
+    needed = (settings.etf_ticker, *(h.ticker for h in holdings))
+    scoped = tuple(bar for bar in minute_bars if bar.unit_id in set(needed))
     # 집계 **전에** 진단한다 - 결손을 채우거나 거부하지 않고 수치로 남긴다. 집계가
     # 죽으면 사유가 예외 문자열뿐인데, 그때 필요한 것은 "어느 unit 이 몇 분 빠졌나"다.
     coverage = diagnose_window(
-        spec, minute_bars, tuple(h.ticker for h in holdings),
-        weights={h.ticker: h.weight for h in holdings},
+        spec, scoped, needed, weights={h.ticker: h.weight for h in holdings},
     )
+    # **결손 unit 은 떨어뜨리고 진행한다.** 벤더 미제공은 그 window 가 INCOMPLETE 로
+    # terminal 커밋되므로 재시도가 낫게 하지 않는다 - 완비를 요구하면 벤더 사고 하나에
+    # 그날 상품이 멈춘다. 대신 무엇을 얼마나 잃었는지 원장에 남긴다: 분해는 이미
+    # 미가격 unit 을 다루고(`coverage`·`total_priced`), 근거가 얼마나 얇은지는 그
+    # 수치가 말한다. 임계(몇 이하면 판정불가)는 실측 분포를 보고 정한다 - 지금은 막지
+    # 않는다(감으로 박은 임계가 조용히 설명을 죽이는 것이 더 나쁘다).
+    dropped = set(coverage.missing_unit_ids)
+    if dropped:
+        scoped = tuple(bar for bar in scoped if bar.unit_id not in dropped)
     log("window.coverage", expected_minutes=coverage.expected_minutes,
         expected_units=coverage.expected_units, observed_pairs=coverage.observed_pairs,
         complete_units=coverage.complete_units,
-        window_min_coverage=round(coverage.window_min_coverage, 4))
+        window_min_coverage=round(coverage.window_min_coverage, 4),
+        price_weight_coverage=(round(coverage.price_weight_coverage, 4)
+                               if coverage.price_weight_coverage is not None else None),
+        dropped_units=sorted(dropped)[:20], dropped_count=len(dropped),
+        missing_minutes=len(coverage.missing_minutes))
+    if settings.etf_ticker in dropped:
+        # 발화 대상 자신이 결손이면 설명할 대상이 없다. 구성종목 결손과 달리 이건
+        # 커버리지를 낮추는 문제가 아니라 분자가 없는 문제다.
+        raise ReturnsNotReadyError(
+            f"발화 ETF 자신의 1분봉이 결손이다: {settings.etf_ticker}"
+            f" session={minute_row.session_id} — 빈 분해를 설명으로 만들지 않는다")
     # 상태축과 설명축을 **여기서 한 번에** 만든다. 두 번 계산하면 그 사이 canonical
     # 정정이 끼어 원장의 route_code 와 산문이 갈린다(ALPHA-785 가 닫은 그 갈림).
     # 재시도 가능한 집계 실패(결손·빈 입력)는 `ReturnsNotReadyError` 로 옮긴다 -
@@ -196,8 +241,8 @@ def run(
     # 1분 하나로 그 창의 설명을 영구히 잃지 않기 위한 배선이다. 원장 불변식 위반
     # (session 불일치·중복·구간 이탈)은 재시도가 낫게 하지 않으므로 그대로 터뜨린다.
     try:
-        state_bars = aggregate_window(spec, minute_bars)
-        requested = slice_requested_bars(spec, minute_bars)
+        state_bars = aggregate_window(spec, scoped)
+        requested = slice_requested_bars(spec, scoped)
     except WindowAggregationError as error:
         if not error.reason.retryable:
             raise
@@ -223,6 +268,11 @@ def run(
         "state_bars": len(state_bars),
         "requested_bars": len(requested.bars),
         "window_min_coverage": round(coverage.window_min_coverage, 4),
+        # 무엇을 얼마나 못 봤나 — 이것이 원장에 없으면 40% 를 못 본 설명과 전부 본
+        # 설명이 구분되지 않는다. 임계는 이 분포를 보고 나중에 정한다.
+        "price_weight_coverage": (round(coverage.price_weight_coverage, 4)
+                                  if coverage.price_weight_coverage is not None else None),
+        "dropped_units": sorted(dropped),
         "etf_day_return": returns.get(settings.etf_ticker),
         "etf_window_return": _window_return(requested.bars, settings.etf_ticker),
     }

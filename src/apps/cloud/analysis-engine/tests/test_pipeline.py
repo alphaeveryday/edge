@@ -43,15 +43,16 @@ _SETTINGS = _Settings(**_SETTINGS_FIELDS)
 _TRIGGER_WINDOW_START = datetime(2026, 7, 16, 1, 30, tzinfo=timezone.utc)
 
 
-def _committed_windows():
-    """09:00 ~ 트리거 창 끝(10:35 KST)을 빈틈없이 덮는 1분 커밋 좌표.
+def _committed_windows(end=None):
+    """09:00 ~ 트리거 창 끝(기본 10:35 KST)을 빈틈없이 덮는 1분 커밋 좌표.
 
     `aggregate_window` 는 상태축 전 구간의 결손을 거부하므로(MISSING_MINUTE_BAR)
     대역도 구간 전체를 내야 한다 — 트리거 창 5분만 내면 배선이 아니라 대역이
     파이프라인을 세운다.
     """
     start = datetime(2026, 7, 16, 9, 0, tzinfo=KST)
-    end = _TRIGGER_WINDOW_START.astimezone(KST) + timedelta(minutes=5)
+    if end is None:
+        end = _TRIGGER_WINDOW_START.astimezone(KST) + timedelta(minutes=5)
     out = []
     cursor = start
     while cursor < end:
@@ -79,7 +80,7 @@ class _FakeLake:
         """
         requested_start = _TRIGGER_WINDOW_START.astimezone(KST)
         bars = []
-        for window in windows:
+        for window in windows:  # noqa: B007 — 아래 dict 로 unit 두 개를 만든다
             for unit, (open_, close) in {
                 "005930": (Decimal("73500"), Decimal("73500")),
                 "091160": (
@@ -120,8 +121,11 @@ class _FakeStore:
             generation=1,
         )
 
+    def fetch_previous_trigger_window(self, entity_id, session_id, window_start):
+        return None  # 그날 첫 발화 — 설명 구간이 09:00 에서 시작한다
+
     def fetch_committed_minute_windows(self, session_id, start, end):
-        return _committed_windows()
+        return _committed_windows(end=end)
 
     def persist_observation_route(self, trigger_id, decomp, route_code, event_search, entity_index, *, minute=False):
         self.calls.append("obs_route")
@@ -541,24 +545,25 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         "ticker": "091160",
         "day": "2026-07-16",
         "instrument_id": "inst_ETF",
-        # 설명은 **요청 clock** 을 덮는다(ALPHA-854) — 09:00 을 넘기면 사용자가 묻지
-        # 않은 구간이 산문에 들어간다. 09:00 은 상태 계산축의 시작일 뿐이다.
-        "window_start": "10:30",
-        "window_end": "10:35",
+        # 그날 **첫 발화**라 설명 구간이 09:00 에서 시작하고, 발화 분(10:30)에서
+        # 끝난다 — "지난 설명 이후 무슨 일이 있었나". 끝을 10:35 로 두면 아직 수집
+        # 전인 분을 요구해 매 발화가 지연 재시도로 접힌다.
+        "window_start": "09:00",
+        "window_end": "10:31",
         "roll": None,   # 레이크 부재로 라우팅 분해가 실패했다 — 넘길 것이 없다
     }
     window = store.explanation.raw["stage_results"]["window"]
-    assert (window["window_start"], window["as_of"]) == ("10:30", "10:35")
+    assert (window["window_start"], window["as_of"]) == ("09:00", "10:31")
     # 두 축의 좌표가 원장에 남아야 한다 — 남기지 않으면 나중에 "그 시점에 무엇을
-    # 몇 개 봤나" 를 되짚을 방법이 없다. 09:00~10:35 = 95분 = 5분봉 19개 × 2 unit,
-    # 요청 창 10:30~10:35 = 1개 × 2 unit.
+    # 몇 개 봤나" 를 되짚을 방법이 없다. 그날 첫 발화라 두 축이 같은 구간을 덮는다:
+    # 09:00~10:31 = 91분 = 5분봉 19개(마지막이 1분짜리 부분 봉) × 2 unit.
     assert {k: window[k] for k in (
-        "analysis_start", "requested_start", "requested_end",
-        "committed_windows", "state_bars", "requested_bars", "window_min_coverage",
+        "analysis_start", "requested_start", "requested_end", "committed_windows",
+        "state_bars", "requested_bars", "window_min_coverage", "dropped_units",
     )} == {
-        "analysis_start": "09:00", "requested_start": "10:30", "requested_end": "10:35",
-        "committed_windows": 95, "state_bars": 38, "requested_bars": 2,
-        "window_min_coverage": 1.0,
+        "analysis_start": "09:00", "requested_start": "09:00", "requested_end": "10:31",
+        "committed_windows": 91, "state_bars": 38, "requested_bars": 38,
+        "window_min_coverage": 1.0, "dropped_units": [],
     }
     # 분모가 갈려야 두 축이 서로 다른 것을 말한다: 오늘 여기까지 +2%(10200/10000)인데
     # 요청 창 **안에서는** −1.9%(10200/10400) 다. 같은 분모로 재면 둘 다 +2% 로 적혀
@@ -711,27 +716,192 @@ def test_empty_returns_fail_loud_before_llm():
     assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
 
 
-def test_late_minute_bar_is_retryable_not_dlq():
-    """상태축 결손은 **재시도 축**이다 — 그 판정을 여기서 고정한다(ALPHA-854).
+def test_constituent_gap_drops_that_unit_instead_of_killing_the_day(monkeypatch):
+    """구성종목 결손은 **그 종목만** 떨어뜨리고 설명은 나온다(ALPHA-854).
 
-    창이 5분에서 09:00~요청끝으로 넓어지면서 결손 표면이 95배가 됐다. 늦게 착지한
-    1분 하나가 `WindowAggregationError`(ValueError) 로 새면 consumer 는
-    `ReturnsNotReadyError` 만 지연 재시도로 가르므로(ALPHA-719) DLQ 로 가고, 그 창의
-    설명은 정정이 와도 영영 만들어지지 않는다. 원장 불변식 위반은 반대로 재시도가
-    낫게 하지 않으니 그대로 터져야 한다 — 두 축을 섞으면 운영 처방이 갈리지 않는다.
+    벤더가 어떤 종목의 어떤 분을 안 주면 그 window 는 INCOMPLETE 로 **terminal**
+    커밋된다 — 재시도가 낫게 하지 않는다. 완비를 요구하면 벤더 사고 한 건에 그날
+    이후 발화가 전부 죽고 상품이 멈춘다. 대신 무엇을 얼마나 잃었는지 원장에 남겨
+    근거가 얼마나 얇은지 드러낸다.
+
+    임계(커버리지 몇 이하면 판정불가)는 **여기서 정하지 않는다** — 실측 분포를 보고
+    정할 일이고, 감으로 박은 임계가 조용히 설명을 죽이는 것이 더 나쁘다.
+    """
+    class _GappyLake(_FakeLake):
+        def load_holdings(self, etf_id, market, trade_date):
+            return [Holding("005930", "삼성전자", 0.6),
+                    Holding("000660", "SK하이닉스", 0.4)], "2026-07-15"
+
+        def load_prev_closes(self, market, trade_date):
+            return {"005930": 70000.0, "000660": 200000.0, "091160": 10000.0}
+
+        def load_committed_minute_bars(self, market, windows):
+            bars = list(super().load_committed_minute_bars(market, windows))
+            price = Decimal("190000")
+            for index, window in enumerate(windows):
+                if index == 3:
+                    continue  # 000660 만 네 번째 분이 통째로 없다(벤더 미제공)
+                bars.append(MinuteBar(
+                    source=window, unit_id="000660", open=price, high=price,
+                    low=price, close=price, volume=Decimal("10")))
+            return tuple(bars)
+
+    seen = {}
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
+                        lambda *_a, **kw: seen.update(kw) or "고정 산출")
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    assert run(_SETTINGS, lake=_GappyLake(), store=store,
+               client=_FakeClient(), s3=_FakeS3()) == 0
+    window = store.explanation.raw["stage_results"]["window"]
+    assert window["dropped_units"] == ["000660"], "결손 종목이 원장에 안 남았다"
+    # 비중 0.6 만 남았다 — 근거가 얼마나 얇은지 수치로 드러나야 한다. 이걸 안 남기면
+    # 40% 를 못 본 설명과 전부 본 설명이 구분되지 않는다.
+    assert window["price_weight_coverage"] == pytest.approx(0.6)
+
+
+def test_missing_trigger_etf_bars_fail_loud():
+    """발화 ETF **자신**이 결손이면 죽는다 — 구성종목 결손과 다른 축이다.
+
+    구성종목이 빠지면 커버리지가 낮아질 뿐이지만, 대상 ETF 가 빠지면 설명할 분자
+    자체가 없다. 그걸 떨어뜨리고 진행하면 etf_return=NULL 인 설명이 영속된다.
     """
     from edge_analysis.config import ReturnsNotReadyError
 
-    class _OneMinuteLateLake(_FakeLake):
+    class _NoEtfBarsLake(_FakeLake):
         def load_committed_minute_bars(self, market, windows):
             bars = super().load_committed_minute_bars(market, windows)
-            return bars[:-1]  # 마지막 1분만 아직 안 왔다
+            return tuple(b for b in bars
+                         if not (b.unit_id == "091160" and b.source is windows[3]))
 
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
-    with pytest.raises(ReturnsNotReadyError, match="MISSING_MINUTE_BAR"):
-        run(_SETTINGS, lake=_OneMinuteLateLake(), store=store,
+    with pytest.raises(ReturnsNotReadyError, match="발화 ETF 자신"):
+        run(_SETTINGS, lake=_NoEtfBarsLake(), store=store,
             client=_FakeClient(), s3=_FakeS3())
-    assert store.calls == [], "분해 전에 죽어야 한다 — 계보·설명이 만들어지면 안 된다"
+    assert store.calls == [], "분해 전에 죽어야 한다"
+
+
+def test_empty_scope_is_retryable_not_dlq():
+    """쓸 unit 이 하나도 안 남으면 **재시도 축**이다(ALPHA-719).
+
+    `WindowAggregationError` 는 ValueError 라 consumer 가 DLQ 로 보낸다 —
+    `ReturnsNotReadyError` 만 지연 재시도로 가른다. 원장 불변식 위반(session 불일치·
+    중복)은 반대로 재시도가 낫게 하지 않으니 그대로 터져야 한다.
+    """
+    from edge_analysis.config import ReturnsNotReadyError
+
+    class _NoBarsLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            return ()
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    with pytest.raises(ReturnsNotReadyError):
+        run(_SETTINGS, lake=_NoBarsLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
+    assert store.calls == []
+
+
+def test_ledger_invariant_violation_is_not_folded_into_retry():
+    """비재시도 코드는 재시도 축으로 접히면 안 된다 — `if not retryable: raise` 고정.
+
+    이 단언이 없으면 `except WindowAggregationError` 를 무조건 `ReturnsNotReadyError`
+    로 감싸도 전 테스트가 초록이다. 그러면 session 불일치·중복 같은 원장 불변식
+    위반이 32분간 무의미하게 재시도된 뒤 잘못된 사유로 DLQ 에 남는다 — 운영 처방이
+    갈리지 않는다.
+    """
+    from edge_analysis.domain.window import WindowAggregationError
+
+    class _DuplicateBarLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            bars = super().load_committed_minute_bars(market, windows)
+            return bars + (bars[0],)  # 같은 (분, unit) 두 번 — 원장 불변식 위반
+
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    with pytest.raises(WindowAggregationError) as caught:
+        run(_SETTINGS, lake=_DuplicateBarLake(), store=store,
+            client=_FakeClient(), s3=_FakeS3())
+    assert caught.value.reason.code == "DUPLICATE_MINUTE_BAR"
+    assert caught.value.reason.retryable is False
+    assert store.calls == []
+
+
+def test_explain_window_spans_previous_trigger_to_this_one(monkeypatch):
+    """설명 구간은 [직전 발화, 이번 발화 분 끝) 이다 — 창이 전부 **과거**여야 한다.
+
+    발화는 "지난 설명 이후 무슨 일이 있었나"에 답한다. 끝을 발화 분 뒤로 두면(예:
+    +5분) 아직 수집 전인 분을 요구해 매 발화가 지연 재시도로 접히고(설명이 5분 늦고
+    receive 예산을 태운다), 마감 직전 발화는 15:30 을 넘겨 `WindowSpec` 이 순수
+    ValueError 로 거부한다 — consumer 가 재시도 축으로 못 가려 **매 세션 마지막 4분의
+    발화가 통째로 DLQ** 다. 15:29 발화로 그 경계까지 함께 고정한다.
+    """
+    from datetime import datetime as _dt
+
+    from edge_analysis.adapters.eventstore import MinuteTriggerRow
+
+    fired = _dt(2026, 7, 16, 6, 29, tzinfo=timezone.utc)      # 15:29 KST — 마지막 window
+    previous = _dt(2026, 7, 16, 5, 20, tzinfo=timezone.utc)   # 14:20 KST — 직전 발화
+
+    class _LateLake(_FakeLake):
+        def load_committed_minute_bars(self, market, windows):
+            price = Decimal("73500")
+            return tuple(
+                MinuteBar(source=window, unit_id=unit,
+                          open=price, high=price, low=price, close=price,
+                          volume=Decimal("1000"))
+                for window in windows for unit in ("005930", "091160")
+            )
+
+    class _LateStore(_FakeStore):
+        def fetch_minute_price_trigger(self, trigger_id):
+            return MinuteTriggerRow(
+                gate=_TRIGGER, ticker="091160", trade_date=date(2026, 7, 16),
+                session_id="ses-1", window_start=fired, generation=1)
+
+        def fetch_previous_trigger_window(self, entity_id, session_id, window_start):
+            assert window_start == fired
+            return previous
+
+        def fetch_committed_minute_windows(self, session_id, start, end):
+            assert end.strftime("%H:%M") == "15:30", (
+                f"요청 끝이 마감을 넘었다: {end.strftime('%H:%M')} — 세션 계획에 없는"
+                " window 를 요구해 발화가 DLQ 로 간다")
+            assert start.strftime("%H:%M") == "09:00", "상태축은 항상 09:00 부터다"
+            return _committed_windows(end=end)
+
+    captured = {}
+    monkeypatch.setattr(
+        "edge_analysis.statics.etfcell.run",
+        lambda *_a, **kw: captured.update(kw) or "고정 산출")
+
+    store = _LateStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    assert run(_SETTINGS, lake=_LateLake(), store=store,
+               client=_FakeClient(), s3=_FakeS3()) == 0
+    assert (captured["window_start"], captured["window_end"]) == ("14:20", "15:30")
+
+
+def test_explicit_explain_window_overrides_the_trigger_default(monkeypatch):
+    """호출자가 창을 주면 원장을 뒤지지 않는다 — 어드민이 임의 clock 을 넘기는 경로.
+
+    유도는 트리거 경로의 **기본값**일 뿐이다. 이 계약이 없으면 PR 9/10 의 "10:12~
+    10:30 설명해줘"가 갈 곳이 없다.
+    """
+    class _NoPreviousLookupStore(_FakeStore):
+        def fetch_previous_trigger_window(self, *args):
+            raise AssertionError("창을 받았는데도 원장을 뒤졌다")
+
+    captured = {}
+    monkeypatch.setattr(
+        "edge_analysis.statics.etfcell.run",
+        lambda *_a, **kw: captured.update(kw) or "고정 산출")
+
+    store = _NoPreviousLookupStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    assert run(_SETTINGS, lake=_FakeLake(), store=store,
+               client=_FakeClient(), s3=_FakeS3(),
+               explain_window=(datetime(2026, 7, 16, 10, 12, tzinfo=KST),
+                               datetime(2026, 7, 16, 10, 30, tzinfo=KST))) == 0
+    # 10:12 를 5분 격자로 **내리지 않는다** — 사용자가 안 물은 10:10~10:12 가 산문에
+    # 들어가면 안 된다.
+    assert (captured["window_start"], captured["window_end"]) == ("10:12", "10:30")
 
 
 @pytest.mark.parametrize("numerator,base,why", [
