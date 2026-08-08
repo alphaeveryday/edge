@@ -770,6 +770,17 @@ class MinuteSectorIndexConfig(BaseModel):
         if bad := sorted(v for v in self.index_map.values()
                          if not (len(v) == 4 and v.isdigit())):
             raise ValueError(f"KIS 지수코드 형태(숫자 4자리)가 아니다: {bad[:5]}")
+        # ⚠️ **자리수만 보면 한 줄을 뒤집어 적어도 통과한다.** 두 코드계가 형태로 겹치기
+        # 때문이다(KIS 값 대역 `1006`~`1033` ∩ KRX KOSPI 키 대역 `1005`~`1047`). 뒤집힌
+        # 줄은 개수도 45 그대로고 값 중복도 안 나서 로드가 정상인데, canonical 의
+        # `unit_id` 가 벤더 코드가 돼 **일봉 `sector_index` 와 어떤 조인에도 안 걸린다**
+        # (그 업종은 동시에 표에서 사라진다). 대역 첫 자리는 두 축을 확실히 가른다:
+        # KRX 업종코드는 KOSPI `1xxx`·KOSDAQ `2xxx` 이고, KIS 지수코드는 KOSPI 업종
+        # `0xxx`·KOSDAQ 업종 `1xxx` 다.
+        if bad := sorted(k for k in self.index_map if k[0] not in "12"):
+            raise ValueError(f"KRX 업종코드 대역(1xxx·2xxx)이 아니다 — 키·값이 뒤집혔나: {bad[:5]}")
+        if bad := sorted(v for v in self.index_map.values() if v[0] not in "01"):
+            raise ValueError(f"KIS 지수코드 대역(0xxx·1xxx)이 아니다 — 키·값이 뒤집혔나: {bad[:5]}")
         return self
 
 

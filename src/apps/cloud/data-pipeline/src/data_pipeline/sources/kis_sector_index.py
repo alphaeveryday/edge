@@ -44,7 +44,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 from .candle import Candle, build_candle, to_decimal
-from .kis_minute import KisMinuteClient
+from .kis_minute import KisMinuteClient, KisUnitError
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,9 @@ SENTINEL_LABELS = frozenset({"999999", "888888"})
 # 이 레인의 window 길이(초). **벤더 어휘가 아니라 우리 격자다** — 라벨 간격이 이와 같아야
 # 라벨이 window 격자에 얹힌다(`inav_collect._LANE_INTERVAL_SEC` 와 같은 축).
 LANE_INTERVAL_SEC = 60
+# `stck_bsop_date` 자리수(YYYYMMDD). 파서와 창 필터가 **같은 값**을 봐야 한다 — 갈리면
+# 한쪽만 통과하는 형상이 생기고, 그 틈으로 새는 것은 늘 조용한 쪽이다.
+_YMD_LEN = 8
 
 KST = timezone(timedelta(hours=9))
 
@@ -87,6 +90,11 @@ def parse_index_row(raw: dict, symbol: str, *, interval_sec: int) -> Candle:
     day, label = raw.get("stck_bsop_date"), raw.get("stck_cntg_hour")
     if not isinstance(day, str) or not isinstance(label, str):
         raise ValueError(f"{symbol} 지수 분봉 행에 날짜·시각이 없다: {raw!r}")
+    if len(day) != _YMD_LEN:
+        # 자리수를 여기서 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열을 보므로
+        # 날짜가 짧으면 시각 자리를 잘라 먹고도 파싱에 성공할 수 있다(`"2026087"` +
+        # `"103000"`). 그러면 라벨이 조용히 다른 분으로 읽힌다.
+        raise ValueError(f"{symbol} 지수 분봉 거래일 자리수가 다르다: {day!r}")
     try:
         start = datetime.strptime(day + label, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
@@ -149,14 +157,27 @@ class KisSectorIndexClient(KisMinuteClient):
         같은 window 를 100분 안에 다시 물어도 그 봉이 아직 페이지에 있다 — 창 고정이
         하던 일을 페이지 폭이 대신한다.
 
-        **남의 날 행은 파싱하지 않는다**(`KisHistoricalMinuteClient._fetch_day` 와 같은
-        축). 장 초반에는 페이지가 직전 거래일 꼬리까지 뻗는데(09:30 의 페이지는 07:50
-        부터다), 어차피 버릴 그 행 하나의 정합 하자로 오늘 수집이 통째로 INVALID 가
-        되면 안 된다.
+        **남의 날의 `값` 하자는 오늘을 죽이지 않는다**(`KisHistoricalMinuteClient._fetch_day`
+        와 같은 축). 장 초반에는 페이지가 직전 거래일 꼬리까지 뻗는데(09:30 의 페이지는
+        07:50 부터다), 어차피 버릴 그 행 하나의 OHLC 정합 하자로 오늘 수집이 통째로
+        INVALID 가 되면 안 된다. 단 **형상 위반은 날짜와 무관하게 실패시킨다** — 행이
+        dict 가 아니거나 거래일이 문자열이 아니면 그 행이 어느 날 것인지조차 모르고,
+        그건 벤더가 스키마를 바꿨다는 신호다(형제가 같은 조건을 raise 로 낸다).
+
+        ⚠️ **봉투 수준 이상은 `KisUnitError` 로 되감는다.** 부모 `_rows` 는 `rt_cd=0`
+        인데 `output2` 가 list 가 아닌 경우를 맨 `ValueError` 로 내는데, 그건 잘린 본문·
+        프록시 오류 페이지 같은 **전송 사고**다. 그대로 새면 collector 가 `INVALID` 로
+        접고 `status_of` 가 **window 전체**를 INVALID 로 만드는데, INVALID 는 재청구
+        대상이 아니고 이 소스는 소급이 불가라 그 1분이 45종 전체에 대해 영구히 없어진다
+        (`inav_collect._rows_for` 가 같은 이유로 봉투를 재시도 축에 두었다).
         """
         asked = (window_end - timedelta(seconds=self.interval_sec)).astimezone(KST)
         ymd = asked.strftime("%Y%m%d")
-        rows = self._rows(symbol, str(self.interval_sec))
+        try:
+            rows = self._rows(symbol, str(self.interval_sec))
+        except ValueError as error:
+            raise KisUnitError(
+                f"KIS 지수 분봉 {symbol} 응답 봉투 이상: {error}") from error
         bars: dict[datetime, Candle] = {}
         for raw in rows:
             if not isinstance(raw, dict):
@@ -168,7 +189,20 @@ class KisSectorIndexClient(KisMinuteClient):
                 # 이유는 도크스트링 4번에 있다: 아는 비-봉을 모르는 이탈과 한 통에 담으면
                 # 벤더의 라벨 규약 변경이 정상 소음에 묻힌다.
                 continue
-            if raw.get("stck_bsop_date") != ymd:
+            trade_date = raw.get("stck_bsop_date")
+            if not isinstance(trade_date, str) or len(trade_date) != _YMD_LEN:
+                # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 전 행이
+                # `continue` 로 떨어져 `bars` 가 비고, 그건 예외도 ERROR 로그도 없이
+                # 45종 전건 missing 인 INCOMPLETE window 로 굳는다 — 원장에는 "벤더가
+                # 안 줬다"로 보여 원인이 스키마 변화임을 가린다. 이 파일의 `start.second`
+                # 가드와 같은 논거이고, 형제(`_fetch_day`)도 같은 조건을 raise 로 낸다.
+                #
+                # ⚠️ **자리수도 여기서 본다.** 아래 비교는 8자리 `ymd` 와의 정확 일치라
+                # 짧은 날짜는 구조적으로 "남의 날"이 된다 — 파서의 자리수 가드는 그래서
+                # 이 경로에서 영영 안 닿는다(형이 맞는 형상 위반이 조용한 문으로 샌다).
+                raise ValueError(
+                    f"{symbol} 지수 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
+            if trade_date != ymd:
                 continue
             candle = parse_index_row(raw, symbol, interval_sec=self.interval_sec)
             previous = bars.get(candle.window_end)

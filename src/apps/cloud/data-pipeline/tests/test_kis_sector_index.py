@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data_pipeline.sources.kis_minute import parse_minute_row
+from data_pipeline.sources.kis_minute import KisUnitError, parse_minute_row
 from data_pipeline.sources.kis_sector_index import (
     LANE_INTERVAL_SEC,
     SENTINEL_LABELS,
@@ -84,11 +84,13 @@ class FakeClient:
 
     def __init__(self, responses):
         self.responses = list(responses)
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, dict]] = []
         self.slept: list[float] = []
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
-        self.calls.append(url)
+        # 헤더를 버리면 `tr_id` 축이 통째로 관측 밖이 된다 — 서브클래스의 존재 이유 중
+        # 하나가 그 상수다(엔드포인트·질의·행 형상 셋 중 하나).
+        self.calls.append((url, dict(headers or {})))
         if not self.responses:
             raise AssertionError(f"예상 밖 추가 호출: {url}")
         item = self.responses.pop(0)
@@ -169,11 +171,24 @@ class TestParse:
 
 
 class TestQuery:
+    def test_endpoint_is_the_index_tr_not_the_stock_one(self):
+        """엔드포인트·`tr_id` 를 고정한다 — 이 서브클래스가 존재하는 이유 중 하나다.
+
+        주식 것(`FHKST03010200` / `inquire-time-itemchartprice`)이 남으면 `rt_cd` 는
+        0 인데 `bstp_nmix_*` 가 없는 응답이 와서 전 지수가 INVALID 로 접힌다.
+        """
+        client, fake = make_client([TOKEN, ok([row()])])
+        client.candles("0005", window_end=WINDOW_END)
+        url, headers = fake.calls[-1]
+        assert "inquire-time-indexchartprice" in url
+        assert "inquire-time-itemchartprice" not in url
+        assert headers["tr_id"] == "FHKUP03500200"
+
     def test_required_params_present(self):
         """넷 다 있어야 한다 — 빠지면 벤더가 `INPUT FIELD NOT FOUND` 로 전건 튕긴다."""
         client, fake = make_client([TOKEN, ok([row()])])
         client.candles("0005", window_end=WINDOW_END)
-        query = query_of(fake.calls[-1])
+        query = query_of(fake.calls[-1][0])
         assert query["FID_COND_MRKT_DIV_CODE"] == "U"   # 주식의 "J" 가 아니다
         assert query["FID_INPUT_ISCD"] == "0005"
         assert query["FID_ETC_CLS_CODE"]                # 빈 문자열도 안 된다
@@ -182,14 +197,17 @@ class TestQuery:
     def test_input_hour_carries_interval_not_a_clock_time(self):
         """`FID_INPUT_HOUR_1` 은 간격(초)이다 — 주식처럼 HHMMSS 를 실으면 안 된다.
 
-        window_end(10:31)의 HHMMSS 표기가 실리면 안 된다는 것까지 못박는다: 그 값이
-        실려도 벤더는 무시하고 최신 100봉을 주므로 **응답으로는 티가 안 난다**.
+        **window 를 바꿔도 질의가 같아야** 이 축이 고정된다. 상수 하나만 대조하면
+        `!= window_end.strftime(...)` 같은 단언은 실패할 입력이 없어 아무것도 안 막는다
+        — 반대로 window 가 질의에 새면 두 URL 이 갈려 여기서 잡힌다. 새어도 벤더는
+        무시하고 최신 100봉을 주므로 **응답으로는 끝내 티가 안 난다**.
         """
-        client, fake = make_client([TOKEN, ok([row()])])
+        client, fake = make_client([TOKEN, ok([row()]), ok([row()])])
         client.candles("0005", window_end=WINDOW_END)
-        query = query_of(fake.calls[-1])
-        assert query["FID_INPUT_HOUR_1"] == str(LANE_INTERVAL_SEC)
-        assert query["FID_INPUT_HOUR_1"] != WINDOW_END.strftime("%H%M%S")
+        client.candles("0005", window_end=WINDOW_END + timedelta(minutes=17))
+        first, second = fake.calls[-2][0], fake.calls[-1][0]
+        assert query_of(first)["FID_INPUT_HOUR_1"] == str(LANE_INTERVAL_SEC)
+        assert first == second
 
     def test_non_lane_interval_is_rejected_at_startup(self):
         # 다른 간격이면 라벨이 1분 격자에 안 얹혀 전 지수가 매 window missing 인데,
@@ -235,6 +253,38 @@ class TestCandles:
         # 값이 같은 재등장은 데이터 충돌이 아니다 — 막으면 겹쳐 주는 벤더에서 전건 실패한다
         client, _ = make_client([TOKEN, ok([row("103000"), row("103000")])])
         assert len(client.candles("0005", window_end=WINDOW_END)) == 1
+
+    def test_envelope_violation_is_transient_not_invalid(self):
+        """봉투 이상은 **재시도 축**이다 — INVALID 로 올리면 window 전체가 죽는다.
+
+        `status_of` 는 invalid 하나로 window 를 INVALID 로 만들고 INVALID 는 재청구
+        대상이 아닌데, 이 소스는 소급이 불가하다 → 잘린 본문 1건이 45종의 그 1분을
+        영구히 지운다. `inav_collect._rows_for` 가 같은 이유로 봉투를 재시도 축에 뒀다.
+        """
+        envelope = json.dumps({"rt_cd": "0", "output1": {}, "output2": {"안": "list"}})
+        client, _ = make_client([TOKEN, envelope])
+        with pytest.raises(KisUnitError):
+            client.candles("0005", window_end=WINDOW_END)
+
+    @pytest.mark.parametrize("broken_date", [None, 20260807, ["20260807"]])
+    def test_non_string_trade_date_is_not_silently_another_day(self, broken_date):
+        """거래일 형상 위반이 "남의 날"로 흘러선 안 된다 — 전건이 조용히 사라진다.
+
+        벤더가 이 필드를 개명하면 102행 전부가 날짜 필터에 떨어져 `bars` 가 비고, 그건
+        예외도 ERROR 도 없이 45종 전건 missing 인 INCOMPLETE 로 굳는다. 원장에는
+        "벤더가 안 줬다"로 보인다.
+        """
+        rows = [{**row(label), "stck_bsop_date": broken_date}
+                for label in ("103000", "103100")]
+        client, _ = make_client([TOKEN, ok(rows)])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles("0005", window_end=WINDOW_END)
+
+    def test_short_trade_date_does_not_eat_the_time_label(self):
+        """날짜 자리수가 짧으면 라벨이 조용히 다른 분으로 읽힌다 — `strptime` 은 연접을 본다."""
+        client, _ = make_client([TOKEN, ok([{**row("103000"), "stck_bsop_date": "2026087"}])])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles("0005", window_end=WINDOW_END)
 
     def test_empty_page_is_not_an_error(self):
         """빈 페이지는 실패가 아니다 — 개장 직후 첫 봉 전이 정상적으로 여기다.
@@ -323,6 +373,37 @@ class TestConfigValidator:
     def test_malformed_code_is_rejected(self, index_map, expected):
         with pytest.raises(ValueError, match=expected):
             self._make(index_map)
+
+    def test_swapped_key_and_value_is_rejected(self):
+        """🔴 한 줄을 뒤집어 적어도 자리수 검사는 전부 통과한다 — 대역이 겹치기 때문이다.
+
+        뒤집힌 줄은 개수도 값 중복도 정상이라 로드가 통과하는데, canonical 의 `unit_id`
+        가 벤더 코드가 돼 일봉 `sector_index` 와 **어떤 조인에도 안 걸린다**. 동시에 그
+        업종은 표에서 사라진다.
+        """
+        with pytest.raises(ValueError, match="뒤집혔나"):
+            self._make({"0005": "1005"})
+
+    def test_kospi200_namespace_code_is_rejected_as_a_value(self):
+        """값 대역도 따로 막는다 — 키 대역 검사만으로는 이 오타가 안 걸린다.
+
+        KIS 의 `2xxx` 는 업종이 아니라 KOSPI200 계열이다. 거기 코드를 붙여 넣으면
+        (형태는 완벽한 숫자 4자리다) 그 업종 자리에 **KOSPI200 하위지수**가 실린다 —
+        이번 트랙을 헤매게 한 그 오류의 모양 그대로다.
+        """
+        with pytest.raises(ValueError, match="뒤집혔나"):
+            self._make({"1005": "2001"})
+
+    def test_kosdaq_kis_code_band_overlaps_krx_kospi_band(self):
+        """위 단언이 자리수로 못 잡는 이유를 못박는다 — 대역이 실제로 겹친다.
+
+        겹치지 않는다면 자리수 검사만으로 충분하고 대역 검사는 죽은 코드다. 겹치는
+        한에서만 그 가드가 산다 — 표가 바뀌어 겹침이 사라지면 여기서 알게 된다.
+        """
+        index_map = TestConfigMap._config().index_map
+        kis_values = set(index_map.values())
+        krx_keys = set(index_map)
+        assert kis_values & {k for k in krx_keys if k.startswith("1")}
 
     def test_empty_map_is_rejected(self):
         # 빈 맵은 "받을 게 없다"가 아니라 배선 누락이다 — Worker 가 매 window 를 빈
