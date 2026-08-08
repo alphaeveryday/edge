@@ -1,7 +1,10 @@
 """KR 거래일 판정 (ALPHA-530, 스펙 §5·§3.3).
 
-비거래일 가격 수집은 Planner 에서 SKIPPED(NON_TRADING_DAY)로 처리한다. 스케줄 cron 이 이미
-MON-FRI 라(statemachine.tf) 주말은 대개 안 들어오지만, **평일 공휴일**은 여기서 잡아야 한다.
+비거래일 가격 수집은 Planner 에서 SKIPPED(NON_TRADING_DAY)로 처리한다. `kr_trading_calendar=True`
+인 레인들(시장·장중 수급)의 cron 이 MON-FRI 라(statemachine.tf) 그쪽 주말은 대개 안 들어오고,
+**평일 공휴일**이 여기서 잡을 몫이다.
+⚠️ 뉴스 레인만은 주 7일 크론이라(ALPHA-874) 주말이 실제로 들어온다 — 다만 뉴스 작업은 전부
+`kr_trading_calendar=False` 라 이 판정이 그 실행을 SKIPPED 로 접지 않는다(catalog.py 참조).
 
 ⚠️ ponytail: 공휴일 원천 데이터가 코드에 없다(조사 결과). 주말 판정은 확실하고 테스트 가능한
 핵심이라 그걸 정본으로 두고, 공휴일은 **오버라이드 가능한 정적 집합**으로 둔다(env

@@ -324,8 +324,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     #   (병렬 브랜치 4개는 statemachine.tf 잡 정의 재사용이라 이름 그대로).
     # * depends_on 은 뉴스 SFN 의 게이트 축으로 다시 그렸다 — 옛 시장 의존(LOAD_ASSERTIONS ←
     #   feature 7개 등)을 복사하면 뉴스 런에 존재하지 않는 작업을 기다려 영영 eligible 이 안 된다.
-    # * `kr_trading_calendar` 전부 False — 뉴스 SFN 은 공휴일에도 돈다(평일 크론). True 면 실행
-    #   결과가 SKIPPED 뒤로 통째로 사라진다(ALPHA-181 의 함정).
+    # * `kr_trading_calendar` 전부 False — 뉴스 SFN 은 공휴일에도 돈다(주 7일 크론이라
+    #   ALPHA-874 이후로는 **주말에도** 돈다). True 면 실행 결과가 SKIPPED 뒤로 통째로
+    #   사라진다(ALPHA-181 의 함정) — 요일이 넓어진 만큼 이 False 가 더 중요해졌다.
     CatalogEntry(
         # 뉴스는 휴장일에도 나온다 — kr_trading_calendar=False(비거래일에도 DUE).
         task_key="NEWS_COLLECTION_BIGKINDS", stage="raw", dataset="stock_news", required=True,

@@ -57,6 +57,54 @@ locals {
   investor_intraday_schedule_hhmm = var.investor_intraday_schedule_state != "ENABLED" ? "" : join(",", sort([
     for hm in local._investor_intraday_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
   ]))
+
+  # 레인별 "주말에도 도는가"(ALPHA-874) — HH:MM 과 같은 이유로 **cron 의 일·요일 필드에서
+  # 파생**한다. cron 은 6필드다: cron(분 시 **일** 월 **요일** 연). 별도 변수로 두면 스케줄과
+  # 어긋나는 순간 Reconciler 가 주말을 잘못 본다. 그리고 **두 방향 다 비싸다**:
+  # * 평일 전용 레인을 주말에 기대 → 매 토·일 거짓 PLANNER_MISSING. 뜰 런이 없으니
+  #   `run_present` 로 영영 RESOLVE 되지 않는다(주말 하루당 16개가 영구 OPEN).
+  # * 주말에도 도는 레인을 평일 전용으로 판정 → 그 레인의 주말 결측 탐지가 **조용히 0**.
+  #
+  # 그래서 표기를 추측하지 않고 **표에서 찾는다.** 표에 없는 표기는 맵 인덱스가 **plan 단계에서
+  # 죽인다** — 배포된 뒤 닫히지 않는 이슈를 여느니 apply 전에 멈추는 쪽이 싸다
+  # (`schedule_timezone` 의 validation 과 같은 자세, Rule 12). 표현 가능한 값이 둘뿐인 것은
+  # 플래그가 이진이기 때문이고, 그 근거는 variables.tf 의 뉴스 스케줄 주석에 있다.
+  #
+  # ⭐ 키는 요일 하나가 아니라 **(일, 요일) 쌍**이다. 실제로 쓰이는 표기는 둘 중 하나가 `?`
+  # (무의미)라 날짜 선택의 의미가 두 필드 사이를 오간다 — `? * MON-FRI` 는 요일이, `* * ?` 는
+  # 일이 정한다. 요일만 키로 쓰면 `cron(0 15 1 * ? *)`(매월 1일)·`L`·`15W` 가 전부 "매일"로
+  # 통과해, 원장이 매일 슬롯을 기대하는데 런은 한 달에 한 번 뜨는 상태가 된다(= 닫히지 않는
+  # 이슈가 매일). 이 관찰이 틀려도 설계는 안전하다: 표가 화이트리스트라 예상 못 한 **(일, 요일)**
+  # 조합은 키 부재로 plan 에서 죽지 조용히 통과하지 않는다. ⚠️ 키에 **월·연은 없다** — 월·연을
+  # 제한한 크론(`* 1 ? *` 같은)은 두 층 모두 조용히 통과한다. 그런 스케줄을 쓸 이유가 이 네
+  # 레인엔 없어 표를 늘리지 않았다(늘리면 키가 배로 는다, Rule 2).
+  #
+  # ⚠️ 표에 값을 더할 때: AWS 요일은 **1=SUN** 이라 `1-5` 는 평일이 아니라 SUN-THU 다.
+  # "평일이니까"로 false 를 넣으면 정확히 반대로 판정한다. 동의어(`2-6`·소문자·`SUN-SAT`)도
+  # 넣지 마라 — 표기 스타일이 하나뿐인 레포에서 얻는 게 없고, AWS 의 평가 의미와 이 표가 갈릴
+  # 여지만 는다. 못 쓰는 표기를 만나면 표를 늘리기 전에 **그 스케줄이 이진 플래그로 표현되는지**
+  # 부터 따져라(MON-SAT 처럼 표현 불가인 것이 대부분이다).
+  _day_weekend = {
+    "?|MON-FRI" = false # 평일 전용
+    "*|?"       = true  # 매일 — AWS 문서의 "매일" 형 cron(m h * * ? *)
+    "?|*"       = true  # 매일(요일 전부)
+  }
+  _cron_day_re = "^cron\\([^ ]+ [^ ]+ ([^ ]+) [^ ]+ ([^ ]+) " # (일, 요일)
+
+  # 맵 레인은 `one(distinct(...))` — 한 레인의 슬롯끼리 표기가 다르면 plan 에서 죽는다. 위 HH:MM
+  # 모델에 요일 축이 없어 혼합은 애초에 표현할 수 없고, 조용히 한쪽으로 접으면 그 레인의 판정이
+  # 어느 방향으로든 틀린 채 배포된다. ⚠️ 부수효과로 **빈 맵도 plan 에서 죽는다**(`one([])`=null
+  # → Invalid index). 레인을 끄려면 맵을 비우지 말고 `*_schedule_state` 를 DISABLED 로 둬라.
+  daily_schedule_weekend = tostring(local._day_weekend[join("|", regex(local._cron_day_re, var.schedule_expression))])
+  news_schedule_weekend = tostring(local._day_weekend[one(distinct([
+    for e in values(var.news_schedule_expressions) : join("|", regex(local._cron_day_re, e))
+  ]))])
+  disclosure_schedule_weekend = tostring(local._day_weekend[one(distinct([
+    for e in values(var.disclosure_schedule_expressions) : join("|", regex(local._cron_day_re, e))
+  ]))])
+  investor_intraday_schedule_weekend = tostring(local._day_weekend[one(distinct([
+    for e in values(var.investor_intraday_schedule_expressions) : join("|", regex(local._cron_day_re, e))
+  ]))])
 }
 
 # ── Planner/Reconciler 전용 task 역할 ──
@@ -140,17 +188,25 @@ resource "aws_ecs_task_definition" "ops" {
       OPS_CLUSTER_ARN = var.cluster_arn
       OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
       # Reconciler 의 "예정 지난 슬롯" 판정 기준 — 위 locals 가 cron 에서 뽑는다(드리프트 불가).
-      OPS_DAILY_SCHED_HHMM = local.daily_schedule_hhmm
+      # `_WEEKEND` 는 같은 cron 의 일·요일 필드에서 나온다(ALPHA-874) — 시각만으로는
+      # 그 슬롯이 주말에도 예정된 것인지 알 수 없어, 없으면 레인 구분 없이 주말을 통째로 건너뛴다.
+      OPS_DAILY_SCHED_HHMM    = local.daily_schedule_hhmm
+      OPS_DAILY_SCHED_WEEKEND = local.daily_schedule_weekend
       # 뉴스 레인(ALPHA-591): Planner 의 뉴스 SFN ARN + Reconciler 의 뉴스 3슬롯 판정 기준.
       OPS_NEWS_STATE_MACHINE_ARN = aws_sfn_state_machine.news.arn
       OPS_NEWS_SCHED_HHMM        = local.news_schedule_hhmm
+      OPS_NEWS_SCHED_WEEKEND     = local.news_schedule_weekend
       # 공시 레인(ALPHA-722). ARN 은 상시 주입한다(Planner 가 그 레인으로 뜰 때만 읽으므로
       # 무해하고, 없으면 fail-loud 다). 슬롯 기준은 스케줄이 켜졌을 때만 — 위 locals 참조.
+      # `_WEEKEND` 엔 그 조건이 없다: 슬롯 기준이 빈 값이면 그 레인은 판정 대상에서 통째로
+      # 빠지므로(entry.py `_due_slots`) 요일 플래그만 남아도 아무것도 기대되지 않는다.
       OPS_DISCLOSURE_STATE_MACHINE_ARN = aws_sfn_state_machine.disclosure.arn
       OPS_DISCLOSURE_SCHED_HHMM        = local.disclosure_schedule_hhmm
+      OPS_DISCLOSURE_SCHED_WEEKEND     = local.disclosure_schedule_weekend
       # 장중 수급 레인(ALPHA-769) — 공시와 같은 규약(ARN 상시, 슬롯 기준은 ENABLED 조건부).
       OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN = aws_sfn_state_machine.investor_intraday.arn
       OPS_INVESTOR_INTRADAY_SCHED_HHMM        = local.investor_intraday_schedule_hhmm
+      OPS_INVESTOR_INTRADAY_SCHED_WEEKEND     = local.investor_intraday_schedule_weekend
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
