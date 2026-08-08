@@ -237,14 +237,17 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
         block("3", "요인 분해", plan["relative"].lines,
               ("S3.bars_5m", "S3.layers_daily")),
     ]
-    optional_keys = ("disclosure", "flow", "news", "statistics", "causal")
-    optional = tuple(
-        line
-        for key in optional_keys
-        for line in (plan[key].lines if key in plan else ())
-    )
-    if facts.final_lines or optional:
-        lines = facts.final_lines or optional
+    def _lines(*keys: str) -> tuple[str, ...]:
+        return tuple(line for key in keys
+                     for line in (plan[key].lines if key in plan else ()))
+
+    # 사건 계열(공시·수급·보도)은 final_lines 가 이미 접었으면 중복하지 않는다.
+    # 검정 계열(statistics·causal)은 **항상 병치한다** - 판정은 코드 산출이고,
+    # final_lines 뒤에 숨으면 유의·비유의 사실이 산문에서 사라진다(Rule 12).
+    optional = (facts.final_lines or _lines("disclosure", "flow", "news")) \
+        + _lines("statistics", "causal")
+    if optional:
+        lines = optional
         systems = (
             *(("RDB.source_event",) if facts.event_ids else ()),
             *(("RDB.analysis_evidence_bundle",) if facts.final_bundle_ids else ()),
@@ -489,6 +492,34 @@ def _mapping(value) -> dict:
     return {}
 
 
+def _event_lines(lake, event_ids: tuple[str, ...],
+                 event_times: dict[str, dt.datetime]) -> tuple[str, ...]:
+    """PIT 통과 사건의 (시각, 요지) 라인 - disclosure 블록 계약.
+
+    입력은 `window_facts` 가 이미 클램프한 사건뿐이다(τ ∈ [창 시작, 창 끝]) -
+    여기서 미래 사건이 들어오면 그 자체가 PIT 위반이다. 제목 조회가 실패하거나
+    비면 id 라인으로 폴백한다 - 사건이 있었다는 사실을 조회 실패가 지우면 안 된다.
+    """
+    if not event_ids:
+        return ()
+    ids = ",".join(_literal(eid) for eid in event_ids)
+    try:
+        titles = {str(r[0]): str(r[1]) for r in lake.sql(
+            "SELECT source_event_id, title FROM rdb.public.source_event "
+            f"WHERE source_event_id IN ({ids})") if r[1]}
+    except Exception:  # noqa: BLE001 - 제목 부재는 id 폴백으로 말한다
+        titles = {}
+    out = []
+    for eid in event_ids:
+        title = titles.get(eid)
+        if not title:
+            out.append(f"요청창 사건 {eid}")
+            continue
+        tau = event_times.get(eid)
+        out.append(f"{tau:%H:%M}, {title.rstrip('.')}" if tau else title)
+    return tuple(out)
+
+
 def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
                  event_times: dict[str, dt.datetime], window_return: float,
                  market_return: float | None,
@@ -685,7 +716,7 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         path=f"{a[:5]}부터 {b[:5]}까지 {direction}했습니다.",
         contributions=contributions,
         nav_gap=None if premium is None else float(premium.premium_move),
-        disclosures=tuple(f"요청창 사건 {eid}" for eid in event_ids),
+        disclosures=_event_lines(lake, event_ids, event_times),
         evidence=tuple(evidence),
         lineage=lineage,
         final_lines=final_lines,

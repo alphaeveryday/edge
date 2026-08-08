@@ -232,6 +232,56 @@ def test_window_end_event_is_available_for_the_requested_window(monkeypatch):
     assert "요청창 사건 after" in facts.disclosures
 
 
+def test_future_and_unknown_tau_events_never_surface(monkeypatch):
+    """PIT 클램프의 반례: 요청 끝(as_of) 뒤에 관측된 사건·시각 미상(자정 폴백)
+    사건이 표면에 오르면 이 테스트가 깨져야 한다 - 미래 관측이 산문에 들어오는
+    순간 PIT 위반이다."""
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.decompose",
+        lambda *args, **kwargs: SimpleNamespace(etf_name="T", layers=(), names=()))
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.premium_5m",
+        lambda *args, **kwargs: (None, "없음"))
+
+    class FutureLake(_Lake):
+        def taus(self, instrument_id, day):
+            return [
+                (dt.datetime(2026, 8, 5, 14, 0), "future"),     # as_of 뒤 관측
+                (dt.datetime(2026, 8, 5, 0, 0), "unknown_tau"),  # 자정 = 시각 미상
+            ]
+
+    facts = window_facts(
+        FutureLake(), "091160", "iid", "2026-08-05", "10:40", "13:20")
+
+    assert facts.event_ids == ()
+    assert facts.disclosures == ()
+    text = render_block_plan(build_block_plan(facts))
+    assert "future" not in text and "unknown_tau" not in text
+    assert "해당 구간에 확인된 공시·보도는 없습니다." in text
+
+
+def test_disclosure_lines_carry_time_and_gist(monkeypatch):
+    """창 안 사건은 id 가 아니라 **시각 + 요지**로 disclosure 블록에 오른다."""
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.decompose",
+        lambda *args, **kwargs: SimpleNamespace(etf_name="T", layers=(), names=()))
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.premium_5m",
+        lambda *args, **kwargs: (None, "없음"))
+
+    class TitledLake(_Lake):
+        def sql(self, query):
+            if "SELECT source_event_id, title" in query and "LIMIT 1" not in query:
+                return [("inside", "유상증자 결정 공시."), ("after", None)]
+            return super().sql(query)
+
+    facts = window_facts(
+        TitledLake(), "091160", "iid", "2026-08-05", "10:40", "13:20")
+
+    # 제목이 있으면 시각+요지, 없으면 id 폴백 - 조회 실패가 사건을 지우지 않는다.
+    assert facts.disclosures == ("10:45, 유상증자 결정 공시", "요청창 사건 after")
+
+
 def test_clamp_rejects_a_window_empty_after_session_cut():
     """장과 겹치지 않는 요청을 하루 전체로 바꾸지 않는다."""
     import pytest
