@@ -331,3 +331,34 @@ def test_missing_requested_window_return_fails_loud(monkeypatch):
 
     with pytest.raises(ValueError, match="5분 수익률을 계산하지 못했습니다"):
         window_facts(_Lake(), "091160", "iid", "2026-08-05", "11:00", "11:05")
+
+# ── 기여회계 산문 (ALPHA-871) ─────────────────────────────────────────────
+def test_factor_block_states_the_layer_accounting_without_proxy_names():
+    """[3] 은 층 기여회계다 - "시장 요인 X%p · 섹터 요인 Y%p · 고유 요인 Z%p".
+
+    상대비교("X 대비")는 층 회계와 다른 프레임이고 프록시 상품명을 노출했다
+    (이름 오염 41/80 이 사용자에게 보이던 경로). 섹터 소스가 업종지수 1분봉으로
+    바뀌어도 이 형식은 불변이어야 한다 - 상품명이 다시 나타나면 이 테스트가 깨진다.
+    """
+    text = render_block_plan(build_block_plan(_facts(
+        market_contribution=-0.002, sector_contribution=-0.006,
+        idio_contribution=-0.033)))
+    assert "시장 요인 -0.20%p · 섹터 요인 -0.60%p · 고유 요인 -3.30%p" in text
+    assert "KRX 반도체" not in text, "프록시·지수명이 산문에 노출됐다"
+    assert "시장 대비" not in text and "대비 " not in text
+
+
+def test_factor_block_omits_the_sector_term_when_no_sector_layer_stood():
+    """섹터 층이 없으면 항을 생략한다 - 0 으로 지어내지 않는다."""
+    text = render_block_plan(build_block_plan(_facts(
+        market_contribution=-0.002, sector_contribution=None,
+        idio_contribution=-0.039)))
+    assert "시장 요인 -0.20%p · 고유 요인 -3.90%p" in text
+    assert "섹터 요인" not in text
+
+
+def test_factor_block_admits_when_no_layer_stood():
+    """층이 아예 없으면 미계측을 말한다 - 빈 회계를 0 요인으로 위장하지 않는다."""
+    text = render_block_plan(build_block_plan(_facts()))
+    assert "층 미계측" in text
+    assert "시장 요인" not in text
