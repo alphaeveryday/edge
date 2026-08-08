@@ -268,12 +268,13 @@ class _Cursor:
             assert "lead_observed_at = EXCLUDED.lead_observed_at" not in s, \
                 ("충돌 갈래가 EXCLUDED 를 물려받으면 리드를 지우는 정정에서 시각이 NULL 로"
                  " 지워져 배치가 옛 리드를 복원한다(ALPHA-696 ②)")
-            # ⚠️ 앞길 트립와이어: 마이그레이션이 후속으로 권한 축 승급
-            # (`SET lead_observed_at = GREATEST(news_document.lead_observed_at, %s)`)은
-            # 이 리터럴을 안 갖는다. 그 PR 이 여기를 같이 고쳐야 한다 — 지금 형태를 못박는
-            # 것이 의도다(가드가 조용히 사라지는 것보다 낫다).
-            assert "lead_observed_at = %s" in s, \
-                "충돌 갈래가 관측 시각 자체를 안 쓴다(ALPHA-696 ②)"
+            # ALPHA-858 — 축 승급이 착지했다(위 트립와이어가 예고한 그 PR). 여전히 **관측
+            # 시각 자체**를 쓰되(②) `GREATEST` 로 감싸 뒤로 못 가게 한다. 이 리터럴을 못박는
+            # 이유는 앞의 셋과 같다: `GREATEST` 가 빠져도 **정상 시나리오는 전부 통과**한다
+            # (시계가 앞으로만 가는 한 결과가 같다). 값 단언만으로는 회귀가 안 걸린다.
+            assert "lead_observed_at = GREATEST(news_document.lead_observed_at, %s)" in s, \
+                ("충돌 갈래의 시각이 단조가 아니다 — 시계가 뒤로 조정되면 배치의 `<=` 절이"
+                 " 열려 옛 리드가 복원된다(ALPHA-858)")
             self._upsert_news_document(params)
         elif s.startswith("INSERT INTO news_source_item"):
             self._insert_source_item(params)
@@ -595,8 +596,16 @@ class _Cursor:
         if existing["lead_text"] == lead_text:
             self.rowcount = 0   # WHERE 가 막는다 — 시각도 안 움직인다
             return
-        # 충돌 갱신 갈래 — 리드가 움직였으므로 시각은 **관측 시각 자체**로 찍는다.
-        existing.update(lead_text=lead_text, lead_observed_at=observed_at)
+        # 충돌 갱신 갈래 — 리드가 움직였으므로 시각은 **관측 시각 자체**로 찍되,
+        # `GREATEST` 로 앞으로만 간다(ALPHA-858).
+        # ⚠️ 저장값이 `None`(미주장 자리)일 수 있다 — 리드 없이 만들어진 행에 리드가 처음
+        # 붙는 갈래다. PG 의 `GREATEST` 는 NULL 을 **무시**하므로(실측) 이번 관측이 그대로
+        # 찍힌다. 파이썬 `max(None, x)` 는 `TypeError` 라 그 의미를 여기서 명시로 옮긴다 —
+        # 픽스처가 운영 SQL 과 다르게 굴면 그 경로를 아예 안 밟는 테스트가 된다.
+        stored = existing["lead_observed_at"]
+        existing.update(lead_text=lead_text,
+                        lead_observed_at=observed_at if stored is None
+                        else max(stored, observed_at))
         self.rowcount = 1
 
     def _insert_session(self, p):

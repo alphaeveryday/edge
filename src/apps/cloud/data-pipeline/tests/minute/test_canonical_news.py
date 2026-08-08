@@ -137,6 +137,42 @@ class TestCorrection:
         news = db.news_documents[db.documents[(SOURCE, ARTICLE_ID)]["document_id"]]
         assert news["lead_observed_at"] == OBSERVED
 
+    def test_an_unclaimed_slot_takes_the_first_real_lead_stamp(self):
+        # 미주장(NULL) 자리에 리드가 처음 붙는 충돌 갈래 — ALPHA-858 전까지 이 경로를 밟는
+        # 테스트가 없었다. 배치가 채우기 전에 1분 레인이 먼저 스니펫을 잡는 흔한 형상이고,
+        # 여기서 시각이 안 찍히면 이후 배치가 자기 옛 리드로 언제든 덮어쓴다.
+        # ⚠️ 단조 가드가 저장값 NULL 을 만나는 유일한 자리이기도 하다 — PG 의 `GREATEST` 는
+        # NULL 을 무시하지만 파이썬 `max(None, x)` 는 TypeError 다. 픽스처가 운영 SQL 과
+        # 갈리면 이 갈래가 조용히 검증 밖으로 빠진다.
+        db = FakeMinuteDB()
+        write(db, vendor_row(CONTENT=None))            # 리드 없는 새 행 = 미주장
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        assert db.news_documents[document["document_id"]]["lead_observed_at"] is None
+
+        later = datetime(2026, 7, 31, 11, 0, tzinfo=KST)
+        write(db, vendor_row(), observed_at=later)      # 이제 진짜 리드가 붙는다
+
+        news = db.news_documents[document["document_id"]]
+        assert news["lead_text"] == "삼성전자가 테슬라에 칩을 공급한다."
+        assert news["lead_observed_at"] == later, "미주장 자리에 첫 주장이 안 찍혔다"
+
+    def test_a_backward_clock_does_not_drag_the_stamp_back(self):
+        # ALPHA-858 — `observed_at` 은 벽시계라 컨테이너 시계가 뒤로 조정되면 이 축이 역행한다.
+        # 그러면 배치의 `저장값 <= 자기 fetched_at` 절이 열려 **1분 경로가 반영한 정정을 배치가
+        # 레이크의 옛 리드로 되돌린다** — ALPHA-696 이 막으려던 P1 재현이다.
+        # ⚠️ 내용은 여전히 이번 관측이 이긴다(계약 ①). 막는 건 시각뿐이다 — 시각으로 내용
+        # 쓰기를 막으면 모듈 docstring 이 되돌렸다고 적은 그 P1 이 반대편에서 돌아온다.
+        db = FakeMinuteDB()
+        write(db, vendor_row())                         # 시각 = OBSERVED(09:00:30)
+        skewed = datetime(2026, 7, 31, 8, 0, tzinfo=KST)   # 시계가 한 시간 뒤로
+        write(db, vendor_row(CONTENT="공급 규모가 3조원으로 정정됐다."), observed_at=skewed)
+
+        news = db.news_documents[db.documents[(SOURCE, ARTICLE_ID)]["document_id"]]
+        assert news["lead_text"] == "공급 규모가 3조원으로 정정됐다.", \
+            "내용 쓰기가 시각으로 막혔다 — 1분 경로는 쓰기 가드를 걸지 않는다(ALPHA-696 ①)"
+        assert news["lead_observed_at"] == OBSERVED, \
+            "시각이 뒤로 밀렸다 — 배치가 옛 리드를 복원할 창이 열린다(ALPHA-858)"
+
     def test_arrival_time_is_when_we_observed_not_when_the_window_was_due(self):
         # ⚠️ recovery 는 09:00 창을 12:00 에 처리한다. window_start 를 쓰면 12:00 에 알게 된
         # 기사를 09:00 에 안 것으로 **소급**하고, 이 값을 PIT 시각으로 복사하는 하류
