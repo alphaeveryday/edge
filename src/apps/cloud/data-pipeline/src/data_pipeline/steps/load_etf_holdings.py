@@ -124,6 +124,7 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
+    expected_etfs: frozenset[str] | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
@@ -134,7 +135,7 @@ def run(
     """
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_unknown_etf = 0
-    skipped_unknown_constituent = skipped_bad_weight = skipped_self = 0
+    skipped_unknown_constituent = skipped_bad_weight = skipped_self = skipped_foreign_etf = 0
     already = created = updated = profiles_created = 0
     created_sample: list[dict] = []
     unknown_etfs: set[str] = set()
@@ -167,6 +168,17 @@ def run(
                             # constituent_mic 결측은 여기서 막지 않는다 — 비상장(원화현금 등)은
                             # MIC 이 없고 아래 해소에서 자연히 unknown 으로 걸린다.
                             skipped_missing_identity += 1
+                            continue
+                        if expected_etfs is not None and etf_id not in expected_etfs:
+                            # 유니버스 뿌리가 아닌 ETF(폐지분·참조 계열)는 **유실이 아니라
+                            # 대상 밖**이다 — 세되 failed_records 에는 안 넣는다. 넣으면
+                            # 마스터에 없는 ETF 가 매 런 잡혀 원장이 영구 INCOMPLETE 다
+                            # (skipped_self 를 유실로 세지 않는 것과 같은 판단).
+                            #
+                            # ⚠️ **정체성 가드 뒤에 둔다.** 앞에 두면 etf_id 결측 행이
+                            # `x not in expected_etfs` 를 만족해 skipped_missing_identity
+                            # 대신 여기로 새고, 그 순간 유실이 유실로 안 세어진다.
+                            skipped_foreign_etf += 1
                             continue
                         fetched_at = row.get("fetched_at")
                         ratio, weight_ok = _weight_ratio(row.get("weight_pct"))
@@ -278,13 +290,16 @@ def run(
         "unknown_constituents": sorted(unknown_constituents),
         "skipped_bad_weight": skipped_bad_weight,
         "skipped_self": skipped_self,
+        "skipped_foreign_etf": skipped_foreign_etf,
         "etf_profiles_created": profiles_created,
         "already_present": already, "created": created, "updated": updated,
         "weight_sum_anomalies": weight_sum_anomalies,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
         # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ `skipped_self`(ETF 가 자기 자신을 보유로 들고 온
-        # 행 제외)는 **정상 동작이지 유실이 아니다** — 유실로 세면 매 런 INCOMPLETE 가 된다.
+        # 행 제외)와 `skipped_foreign_etf`(유니버스 뿌리 밖 ETF 의 행)는 **정상 동작이지 유실이
+        # 아니다** — 유실로 세면 매 런 INCOMPLETE 가 된다. 다만 세어서 로그에는 남긴다:
+        # 0 이 아닌 값은 "파티션에 대상 밖 ETF 가 있다"는 사실이라 조용히 버리면 안 된다.
         "ops": {
             "records_out": already + created + updated,
             "failed_records": (len(failures) + skipped_missing_identity + skipped_unknown_etf

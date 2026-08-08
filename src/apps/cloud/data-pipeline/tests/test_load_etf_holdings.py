@@ -412,3 +412,58 @@ def test_적재_실패는_롤백되고_로그에_남는다(tmp_path, monkeypatch
     assert log["created"] == 0
     assert log["failures"][0]["reasons"] == ["load_error"]
     assert "connection refused" in log["failures"][0]["error"]
+
+
+def test_유니버스_뿌리_밖_ETF_행은_유실이_아니라_대상_밖이다(tmp_path, monkeypatch):
+    """`expected_etfs` 밖 ETF 의 행은 건너뛰되 **failed_records 로 세지 않는다** (ALPHA-855 선행).
+
+    canonical holdings 파티션에는 유니버스 뿌리가 아닌 etf_id 가 섞인다 — 폐지 ETF 의 옛
+    행(파티션은 안 지워진다)과 참조 계열 ETF(명부만 받는 축)다. 이 둘을 안 거르면 마스터에
+    ETF 행이 없어 전량 `skipped_unknown_etf` 로 잡히고, 그 값이 `ops.failed_records` 에
+    들어가 이 작업이 **매 런 INCOMPLETE** 가 된다(참조 계열 48종이면 하루 ~5,000행).
+
+    비교 대상은 `skipped_self` 다 — "정상 동작이지 유실이 아니다"라는 같은 판단이고, 같이
+    수치로는 남긴다(0 이 아니면 파티션에 대상 밖 ETF 가 있다는 사실이다).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _hold_row("091160", "005930"),   # 뿌리
+        _hold_row("091170", "005930"),   # 참조 계열 — 마스터에 ETF 행이 없다
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
+
+    log = _log(storage)
+    assert log["skipped_foreign_etf"] == 1
+    assert log["skipped_unknown_etf"] == 0, "대상 밖 ETF 가 미등록으로 재분류되면 안 된다"
+    assert log["ops"]["failed_records"] == 0, "대상 밖은 유실이 아니다 — 원장이 INCOMPLETE 가 된다"
+    assert [p[1] for p in _inserts(conn)] == ["inst_samsung"]  # 뿌리 ETF 행만 적재
+
+
+def test_정체성_없는_행은_대상_밖으로_재분류되지_않는다(tmp_path, monkeypatch):
+    """`etf_id` 결측 행은 `skipped_missing_identity`(유실)로 남는다 (ALPHA-855 선행).
+
+    **순서가 의미다.** 유니버스 뿌리 검사는 `x not in expected_etfs` 라, etf_id 가 없는 행도
+    참이 된다 — 정체성 가드보다 앞에 두면 손상 행이 `skipped_foreign_etf`(유실 아님)로 새고
+    `ops.failed_records` 에서 빠진다. 즉 필터를 켠 순간 Rule 12 그물 하나가 조용히 꺼진다.
+    오늘은 생산자(`normalize_etf`)가 정체성 없는 행을 막아 방어 경로지만, 이 카운터의
+    **존재 이유가 그 방어**라 순서를 테스트로 못 박는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _hold_row("091160", "005930"),
+        _hold_row(None, "000660"),        # 정체성 없음 — 뿌리 밖으로 새면 안 된다
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
+
+    log = _log(storage)
+    assert log["skipped_missing_identity"] == 1, "손상 행이 '대상 밖'으로 재분류됐다"
+    assert log["skipped_foreign_etf"] == 0
+    assert log["ops"]["failed_records"] == 1, "유실이 유실로 안 세어진다"

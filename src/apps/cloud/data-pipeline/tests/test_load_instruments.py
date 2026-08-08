@@ -729,3 +729,28 @@ def test_a_share_class_vocabulary_change_is_caught_not_read_as_a_bigger_normal(
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
     assert log["failures"][0]["reasons"] == ["instrument_profile_all_dropped"]
     assert "비보통주 2" in log["failures"][0]["error"]
+
+
+def test_유니버스_뿌리_밖_ETF_의_구성종목은_마스터에_시딩하지_않는다(tmp_path, monkeypatch):
+    """마스터 시딩 축은 분석 유니버스다 (ALPHA-855 선행).
+
+    이 스텝의 입력은 둘이다 — canonical 구성종목과 KRX 상장 전종목. 앞엣것은 "우리가 보는
+    ETF 가 담은 회사"라는 뜻이라 유니버스 뿌리로 걸러야 한다. 안 거르면 참조 계열 ETF
+    (명부만 받는 축)의 구성종목이 딸려 와, 가격도 수급도 수집하지 않는 회사가 마스터에
+    선다 — 그 행은 어느 계열에도 붙지 못한 채 남는다.
+
+    (뒤엣 KRX 전종목 축은 이 필터와 무관하다 — 거긴 애초에 ETF 축이 아니다.)
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자"),                      # etf_id 기본값 091160 — 뿌리
+        _holding("105560", "KB금융", etf_id="091170"),       # 참조 계열
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
+
+    tickers = sorted(t for (_id, _mic, t, _cur) in _inserts(conn, "instrument"))
+    assert tickers == ["005930"], "참조 계열 구성종목이 마스터에 시딩됐다"

@@ -221,10 +221,11 @@ def _insert_etf(conn, *, name: str, mic: str, ticker: str, currency: str) -> str
     return instrument_id
 
 
-def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
+def run(storage: Storage, run_id: str, *, db: DbConfig,
+        expected_etfs: frozenset[str] | None = None) -> int:
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
-    read = skipped_no_mic = existing = created = 0
+    read = skipped_no_mic = existing = created = skipped_foreign_etf = 0
     instruments_read = profiles_no_mic = skipped_non_common = 0
     profiles_no_share_class = 0
     mic_conflicts: list[dict] = []
@@ -252,6 +253,14 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
                     mic, ticker = row.get("constituent_mic"), row.get("constituent_ticker")
                     if not mic or not ticker:
                         skipped_no_mic += 1
+                        continue
+                    if expected_etfs is not None and row.get("etf_id") not in expected_etfs:
+                        # 마스터 시딩 축은 분석 유니버스다 — 유니버스 뿌리 밖 ETF 의 구성종목을
+                        # 주워 담으면 수집하지도 분석하지도 않는 회사가 마스터에 선다.
+                        # (KRX 상장 전종목 입력은 아래 별개 축이라 이 필터와 무관하다.)
+                        # ⚠️ mic/ticker 가드 **뒤**다 — 앞에 두면 etf_id 결측 행이 여기로 새어
+                        # skipped_no_mic(유실)에서 빠진다.
+                        skipped_foreign_etf += 1
                         continue
                     all_rows.setdefault((mic, ticker), row)
 
@@ -450,6 +459,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig) -> int:
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "markets": list(LOADED_MARKETS),
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
+        "skipped_foreign_etf": skipped_foreign_etf,
         "instrument_profiles_read": instruments_read,
         "instrument_profiles_no_mic": profiles_no_mic,
         # 0 이 정상. 0 이 아니면 canonical 에 share_class 컬럼이 없다(정제 재실행 필요).

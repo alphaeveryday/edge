@@ -545,7 +545,8 @@ def test_whitespace_only_lead_is_absent_not_empty_string(tmp_path):
 # ── 종목명 탐지 매핑 (ALPHA-416) ────────────────────────────
 
 
-def _write_holdings(storage, as_of_date: str, names: list[tuple[str, str]]) -> None:
+def _write_holdings(storage, as_of_date: str, names: list[tuple[str, str]],
+                    etf_id: str = "091160") -> None:
     """canonical ETF holdings 스냅샷 픽스처 — 탐지 인덱스의 이름 출처."""
     import io
     import pyarrow as pa
@@ -553,14 +554,16 @@ def _write_holdings(storage, as_of_date: str, names: list[tuple[str, str]]) -> N
 
     from data_pipeline.lake import canonical_etf_holdings_partition
 
-    schema = pa.schema([("constituent_name", pa.string()), ("constituent_ticker", pa.string())])
+    schema = pa.schema([("constituent_name", pa.string()), ("constituent_ticker", pa.string()),
+                        ("etf_id", pa.string())])
     table = pa.Table.from_pylist(
-        [{"constituent_name": n, "constituent_ticker": t} for n, t in names], schema=schema
+        [{"constituent_name": n, "constituent_ticker": t, "etf_id": etf_id} for n, t in names],
+        schema=schema,
     )
     buf = io.BytesIO()
     pq.write_table(table, buf)
     prefix = canonical_etf_holdings_partition("KR", as_of_date)
-    storage.put_bytes(f"{prefix}/part-00000.parquet", buf.getvalue())
+    storage.put_bytes(f"{prefix}/part-{etf_id}.parquet", buf.getvalue())
 
 
 def test_bigkinds_mentions_detected_from_holdings_names(tmp_path):
@@ -713,7 +716,7 @@ def test_holdings_index_load_failure_is_fail_loud_but_still_normalizes(tmp_path,
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("bigkinds", "KR"), [_bk_row()])
     monkeypatch.setattr(normalize_news, "_holdings_name_index",
-                        lambda s: (_ for _ in ()).throw(OSError("s3 read failed")))
+                        lambda s, e=None: (_ for _ in ()).throw(OSError("s3 read failed")))
 
     assert normalize_news.run(storage, "RUN1") == 1
 
@@ -721,3 +724,36 @@ def test_holdings_index_load_failure_is_fail_loud_but_still_normalizes(tmp_path,
     assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "000660"}]
     log = _quality_log(storage)
     assert "s3 read failed" in log["mention_index_error"]
+
+
+def test_멘션_사전은_유니버스_뿌리_ETF_의_구성종목만_담는다(tmp_path):
+    """탐지 범위는 **분석 유니버스**여야 한다 (ALPHA-855 선행).
+
+    `_holdings_name_index` 도크스트링이 그 전제를 명시한다 — "holdings 유니버스가 곧 분석
+    유니버스라 탐지 범위가 다운스트림 in_universe 필터와 정합한다". 참조 계열 ETF 가
+    같은 파티션에 들어오면 그 전제가 깨진다: 사전이 329 → 1,000종대로 불어 가격·수급
+    계열이 없는 회사에 mention 이 붙는다.
+
+    **동명이 배제까지 본다** — 이게 조용한 쪽이다. 새로 들어온 구성종목이 기존 이름과
+    같은 이름을 가지면 `len(tickers) > 1` 로 **양쪽 다** 사전에서 빠져, 어제 태깅되던
+    기사가 오늘 아무 신호 없이 안 태깅된다.
+
+    ⚠️ **`run()` 을 통과시킨다.** private `_holdings_name_index` 를 직접 부르면 인자가
+    `run` 에서 그 함수까지 실제로 흐르는지는 안 본다 — 실측으로, 그 배선이 빠진 채 이
+    테스트가 통과한 적이 있다(필터가 죽어 있는데 전건 초록).
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-06-30", [("한미반도체", "042700")], etf_id="091160")
+    _write_holdings(storage, "2026-06-30", [("한미반도체", "999999"), ("케이비금융", "105560")],
+                    etf_id="091170")  # 참조 계열 — 동명이 하나 + 유니버스 밖 하나
+    _write_raw(storage, _raw_key("bigkinds", "KR"),
+               [_bk_row(TITLE="한미반도체 신고가, 케이비금융도 올랐다", our_ticker=None)])
+
+    assert normalize_news.run(storage, "RUN1", None,
+                              expected_etfs=frozenset({"091160"})) == 0
+
+    [r] = _canonical_rows(storage, "2026-07-01")
+    assert json.loads(r["mentions"]) == [{"market": "KR", "ticker": "042700"}], (
+        "참조 계열의 동명이가 기존 이름을 지웠거나, 유니버스 밖 회사가 멘션에 붙었다")
+    # 사전 크기까지 본다 — 멘션 결과만 보면 '사전엔 들어왔는데 이 기사엔 안 걸린' 경우를 놓친다.
+    assert _quality_log(storage)["mention_index_names"] == 1

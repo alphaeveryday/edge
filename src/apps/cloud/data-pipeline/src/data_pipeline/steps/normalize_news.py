@@ -105,11 +105,16 @@ def _match_text(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).split())
 
 
-def _holdings_name_index(storage: Storage) -> tuple[str | None, dict[str, dict], list[str]]:
+def _holdings_name_index(
+    storage: Storage, expected_etfs: frozenset[str] | None = None
+) -> tuple[str | None, dict[str, dict], list[str]]:
     """canonical ETF holdings **최신 스냅샷(KR)** 에서 `종목명 → {market,ticker}` 인덱스를 만든다
     (ALPHA-416). 이름 출처를 holdings 로 두는 이유 — normalize 는 레이크만 읽는 설계 전제라
-    DB(entity 마스터)를 붙일 수 없고, holdings 유니버스가 곧 분석 유니버스(load-instruments
-    시딩 원천)라 탐지 범위가 다운스트림 in_universe 필터와 정합한다.
+    DB(entity 마스터)를 붙일 수 없고, **유니버스 뿌리로 거른** holdings 가 곧 분석 유니버스
+    (load-instruments 시딩과 같은 축)라 탐지 범위가 다운스트림 in_universe 필터와 정합한다.
+
+    ⚠️ 파티션 자체는 유니버스가 아니다(`canonical_etf_holdings_partition` 도크스트링) —
+    `expected_etfs` 를 안 넘기면 폐지분·참조 계열이 사전에 섞인다.
 
     스냅샷이 없으면 (None, {}, []) — 탐지는 no-op 이 되고 구 raw 의 our_ticker 경로만 남는다
     (신규 레이크에서 정상). 반환: (as_of_date, index, 동명이로 제외된 이름들)."""
@@ -125,6 +130,11 @@ def _holdings_name_index(storage: Storage) -> tuple[str | None, dict[str, dict],
         if not key.endswith(".parquet"):
             continue
         for row in _read_parquet_rows(storage.get_bytes(key)):
+            if expected_etfs is not None and row.get("etf_id") not in expected_etfs:
+                # 탐지 범위는 **분석 유니버스**여야 한다(이 함수 도크스트링의 전제). 참조 계열
+                # ETF 의 구성종목까지 넣으면 사전이 329 → 1,000종대로 불어, 가격·수급 계열이
+                # 없는 회사에 mention 이 붙고 동명이 배제로 기존 이름이 조용히 빠진다.
+                continue
             name, ticker = row.get("constituent_name"), row.get("constituent_ticker")
             if not (isinstance(name, str) and isinstance(ticker, str) and ticker.strip()):
                 continue
@@ -371,7 +381,8 @@ def _write_canonical(storage: Storage, passing: list[dict], signals: list[dict])
     return parts_written, rows_written
 
 
-def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
+def run(storage: Storage, run_id: str, input_run_id: str | None = None,
+        expected_etfs: frozenset[str] | None = None) -> int:
     """raw stock_news → 정규화 → 게이트 → canonical 멱등 병합 + quality_log. 성공 0, 장애 시 비0.
 
     input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다(ALPHA-389 —
@@ -395,7 +406,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     name_index_error: str | None = None
     ambiguous_names: list[str] = []
     try:
-        holdings_as_of, name_index, ambiguous_names = _holdings_name_index(storage)
+        holdings_as_of, name_index, ambiguous_names = _holdings_name_index(storage, expected_etfs)
     except Exception as exc:
         logger.exception("holdings 이름 인덱스 로드 실패 — 이번 런은 탐지 없이 정규화")
         holdings_as_of, name_index, name_index_error = None, {}, str(exc)

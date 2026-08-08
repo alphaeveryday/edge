@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 def _krx_expected_etfs(settings: Settings) -> frozenset[str] | None:
-    """수집 유니버스의 ETF 전체 집합 = config `krx_etf.source.etf_map` 의 키(ALPHA-590).
+    """**유니버스 뿌리** — 수집·정제·적재가 공유하는 ETF 전체 집합 = config
+    `krx_etf.source.etf_map` 의 키(ALPHA-590). canonical holdings 를 읽는 소비자는 전부
+    이걸로 한 번 거른다(`canonical_etf_holdings_partition` 도크스트링).
 
     holdings 파티션이 아니라 config 가 정본이다 — 파티션은 수집 결과라 부분 실패로 줄 수
     있지만 ETF 목록 자체는 설정이라 절대 줄면 안 된다. `krx_etf` 섹션 자체가 없으면 정본이
