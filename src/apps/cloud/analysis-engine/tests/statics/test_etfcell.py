@@ -342,3 +342,102 @@ def test_missing_layers_raise_instead_of_returning_prose():
 
     with pytest.raises(PipelineError, match="층 분해 불가"):
         etfcell.run(_NoLayers(), "091160", "2026-08-06", lambda *_a, **_k: {})
+
+
+# ── 제안 접지: 스레드 문맥 (ALPHA-885) ────────────────────────────────────
+def _capture_propose(monkeypatch, facts, context=None):
+    """propose 에 실리는 facts 문자열을 붙잡는다. context 는 thread_context 스텁."""
+    from edge_analysis.statics import etfcell
+
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"] if eids else [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {"거래량": 3.0})
+    if context is not None:
+        monkeypatch.setattr("edge_analysis.statics.interval.thread_context",
+                            lambda *a, **k: context)
+    seen = {}
+
+    def fake_propose(ask, **kw):
+        seen.update(kw)
+        return [], []
+
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose", fake_propose)
+    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
+    return seen
+
+
+def test_thread_context_reaches_the_proposal_prompt(monkeypatch):
+    """창 안 사건이 있으면 제안 프롬프트에 스레드 문맥(제목·τ)이 실린다.
+
+    안 실리면 제안이 타입 코드 목록만 보고 가설을 세운다 - 그게 ALPHA-885 가
+    고치는 결함이므로, 문맥이 빠지면 이 테스트가 깨져야 한다(Rule 9).
+    """
+    import dataclasses
+
+    block = ("[설명창 안] 08-05 10:31 CONTRACT.SIGNING — SK하이닉스 공급계약 해지\n"
+             "  스레드(CONFIRMED·FOLLOW_UP_STAGE): 직전 07-30 09:00 루머 보도")
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    seen = _capture_propose(monkeypatch, facts, context=((block,), 1, 0))
+
+    assert "[사건 문맥" in seen["facts"], "스레드 문맥 섹션이 프롬프트에 없다"
+    assert "10:31" in seen["facts"] and "SK하이닉스 공급계약 해지" in seen["facts"]
+    # 검정의 점 방아쇠 접지는 그대로 창 안 축이다 - 제안 문맥 확장이 검정 계약을
+    # 흔들면 안 된다.
+    assert seen["event_types"] == ["CONTRACT.SIGNING"]
+
+
+def test_no_events_keeps_the_current_brief(monkeypatch):
+    """사건 0·계열만 발화면 brief 는 현행 그대로다 - 스레드가 없는데 문맥 섹션을
+    지어내면 안 된다."""
+    import dataclasses
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    seen = _capture_propose(monkeypatch, facts, context=((), 0, 0))
+
+    assert "[사건 문맥" not in seen["facts"]
+    assert "창 안 사건 타입: 없음" in seen["facts"]
+    assert "오늘 발화 계열족: ['거래량']" in seen["facts"]
+
+
+def test_context_counts_and_failures_are_logged(monkeypatch):
+    """제안 입력에 실린 사건 수·조회 실패 수가 log 이벤트로 남는다.
+
+    방아쇠 판정이 침묵 폴백이라 실행마다 결과가 흔들려도 원인을 못 짚던 문제의
+    관측 라인이다 - 이 이벤트가 사라지면 깨져야 한다.
+    """
+    import dataclasses
+
+    from edge_analysis.observability import collect_trace
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    with collect_trace() as trace:
+        _capture_propose(monkeypatch, facts, context=(("블록",), 3, 2))
+
+    [ev] = [e for e in trace if e.get("event") == "hypothesis.context"]
+    assert ev["events"] == 3 and ev["lookup_failures"] == 2
+    assert ev["in_window"] == 1
+
+
+def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):
+    """_etypes·series_z 예외 삼킴에 로그 한 줄이 남는다 - 완전 침묵 폴백 금지."""
+    import dataclasses
+
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics import etfcell
+
+    def boom(*a, **k):
+        raise RuntimeError("RDB 부재")
+
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", boom)
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", boom)
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    with collect_trace() as trace:
+        out = etfcell._window_paneltest(
+            object(), "iid", "2026-08-05", lambda *_: {}, facts)
+
+    assert out == ((), ()), "재료 없음 - LLM 미호출 계약이 흔들렸다"
+    events = {e.get("event") for e in trace}
+    assert "hypothesis.etypes_failed" in events
+    assert "hypothesis.series_z_failed" in events

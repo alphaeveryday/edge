@@ -196,26 +196,41 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     """
     if ask is None:
         return (), ()
+    from ..observability import log
     from .hypothesize import propose
-    from .interval import _etypes
+    from .interval import _etypes, thread_context
     from .paneltest import FEATURES, Z_ANOM, edge_tests, series_z
 
     try:
         ets = _etypes(lake, list(facts.event_ids))
-    except Exception:                           # noqa: BLE001 - 부재는 빈 목록
+    except Exception as e:                      # noqa: BLE001 - 부재는 빈 목록
+        # 침묵 폴백이 방아쇠 판정을 흔든다(실행마다 결과가 다른데 이유가 안 남는다) -
+        # 빈 목록 폴백은 유지하되 사유는 로그로 드러낸다.
+        log("hypothesis.etypes_failed", error=f"{type(e).__name__}: {str(e)[:80]}")
         ets = []
     try:
         fired = sorted(f for f, z in series_z(lake, instrument_id, day).items()
                        if abs(z) >= Z_ANOM)
-    except Exception:                           # noqa: BLE001 - 부재는 빈 목록
+    except Exception as e:                      # noqa: BLE001 - 부재는 빈 목록
+        log("hypothesis.series_z_failed", error=f"{type(e).__name__}: {str(e)[:80]}")
         fired = []
     if not ets and not fired:
         return (), ()
+
+    # 제안 접지(ALPHA-885): 직전 거래일부터 요청창 끝까지의 스레드 문맥. 검정의
+    # 점 방아쇠 접지(`ets`, 창 안)는 그대로다 - 문맥은 제안에만 실린다.
+    context, n_ctx, n_fail = thread_context(
+        lake, instrument_id, day, facts.window_end, facts.event_ids)
+    log("hypothesis.context", events=n_ctx, lookup_failures=n_fail,
+        in_window=len(facts.event_ids))
 
     brief = (f"[셀] {facts.ticker} {facts.name} · {day} "
              f"요청창 {facts.window_start}~{facts.window_end} "
              f"수익 {facts.window_return * 100:+.2f}%\n"
              f"창 안 사건 타입: {ets or '없음'} · 오늘 발화 계열족: {fired or '없음'}")
+    if context:
+        brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
+                  f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),

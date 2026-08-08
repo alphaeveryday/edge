@@ -480,6 +480,171 @@ def _literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+# 제안 문맥 상한 - 사건 수(확장 구간 기준)와 사건당 줄 수. 초과분은 "외 N건" 으로
+# 말한다 - 조용한 절단 금지(Rule 12).
+CONTEXT_MAX_EVENTS = 8
+CONTEXT_MAX_LINES = 6
+
+
+def thread_context(lake, instrument_id: str, day: str, as_of_time: str,
+                   window_event_ids: tuple[str, ...] = (),
+                   *, max_events: int = CONTEXT_MAX_EVENTS,
+                   ) -> tuple[tuple[str, ...], int, int]:
+    """가설 제안용 사건 문맥 - **직전 거래일부터 요청창 끝(as_of)까지**, PIT 클램프.
+
+    반환: (사건당 텍스트 블록, 실린 사건 수, 조회 실패 수). 창 안 사건(ALPHA-885 원안)
+    만 보면 밤사이·개장 전 공시와 전일 장중 사건이 통째로 빠진다 - 갭과 오늘 움직임을
+    끄는 재료가 그쪽에 있다. 그래서 수집 구간은 [직전 거래일, as_of] 이고, 창 안/밖은
+    블록 머리에 구분 표기한다. **검정의 점 방아쇠 접지(`_etypes`, 창 안)는 그대로다** -
+    여기는 제안 문맥만이다. 제안 접지와 검정 방아쇠를 섞으면 paneltest 의 PIT 계약이
+    흔들린다.
+
+    PIT: 사건 τ ≤ as_of. 표면 조회는 `sql_surface.views_sql` 의 클램프된 뷰
+    (available_at·evaluated_at ≤ as_of)를 쓴다 - 미래 스레드 링크·제목이 못 들어온다.
+    조회 실패는 그 사건만 타입 코드로 폴백한다 - 실패가 사건 존재를 지우지 않는다.
+    """
+    from .trial import prev_trading_day
+    fails = 0
+    as_of = dt.datetime.combine(dt.date.fromisoformat(day),
+                                dt.time.fromisoformat(as_of_time))
+    inside = {str(e) for e in window_event_ids}
+
+    # ── 수집: 직전 거래일 + 오늘, τ ≤ as_of ──
+    days = [day]
+    try:
+        prev = prev_trading_day(lake, day)
+        if prev != day:
+            days.insert(0, prev)
+    except Exception:                               # noqa: BLE001 - 캘린더 부재도 실패다
+        fails += 1
+    events: list[tuple[str, dt.datetime | None]] = []
+    seen: set[str] = set()
+    for d in days:
+        try:
+            rows = lake.taus(instrument_id, d)
+        except Exception:                           # noqa: BLE001
+            fails += 1
+            continue
+        for tau, eid in rows:
+            eid = str(eid)
+            if eid in seen or (tau is not None and tau > as_of):
+                continue                            # τ > as_of 는 PIT 위반 - 배제
+            seen.add(eid)
+            events.append((eid, tau))
+    # 수집이 통째로 실패해도 창 안 사건 id 는 남긴다 - 실패가 존재를 지우면 안 된다.
+    for eid in window_event_ids:
+        if str(eid) not in seen:
+            seen.add(str(eid))
+            events.append((str(eid), None))
+    if not events:
+        return (), 0, fails
+    events.sort(key=lambda x: (x[1] is None, x[1] or as_of))
+    shown = events[:max_events]
+    ids = ",".join(_literal(e) for e, _t in shown)
+
+    # ── 표면 조회: PIT 클램프된 뷰(views_sql) 하나로 제목·스레드·리드를 붙인다 ──
+    from ..adapters.sql_surface import views_sql
+    base = "WITH " + views_sql(f"TIMESTAMP '{day} {as_of_time}:00'",
+                               f"DATE '{day}'", "rdb.public.")
+    detail: dict[str, tuple[str, str, str, str, str]] = {}
+    try:
+        for eid, et, title, tid, novelty, stage in lake.sql(base + f"""
+            SELECT DISTINCT e.source_event_id, e.event_type_code, e.title,
+                   e.thread_id, e.novelty_status, th.current_stage
+            FROM v_event e
+            LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
+            WHERE e.source_event_id IN ({ids})"""):
+            detail[str(eid)] = (str(et or ""), str(title or ""), str(tid or ""),
+                                str(novelty or ""), str(stage or ""))
+    except Exception:                               # noqa: BLE001 - 타입 코드 폴백
+        fails += 1
+        try:
+            for eid, et in lake.sql(
+                    "SELECT source_event_id, event_type_code "
+                    f"FROM rdb.public.source_event WHERE source_event_id IN ({ids})"):
+                detail[str(eid)] = (str(et or ""), "", "", "", "")
+        except Exception:                           # noqa: BLE001
+            fails += 1
+    args: dict[str, list[str]] = {}
+    try:
+        for eid, role, name in lake.sql(
+                "SELECT ea.source_event_id, ea.role_code, "
+                "coalesce(en.display_name, ea.entity_id) "
+                "FROM rdb.public.event_argument ea "
+                "LEFT JOIN rdb.public.entity en ON en.entity_id = ea.entity_id "
+                f"WHERE ea.source_event_id IN ({ids}) ORDER BY ea.role_code"):
+            args.setdefault(str(eid), []).append(f"{role}={name}")
+    except Exception:                               # noqa: BLE001
+        fails += 1
+    measures: dict[str, list[str]] = {}
+    try:
+        for eid, role, value, unit in lake.sql(
+                "SELECT source_event_id, role_code, value, unit "
+                f"FROM rdb.public.event_measure WHERE source_event_id IN ({ids})"):
+            measures.setdefault(str(eid), []).append(
+                f"{role}={value}" + (f" {unit}" if unit else ""))
+    except Exception:                               # noqa: BLE001
+        fails += 1
+    leads: dict[str, str] = {}
+    try:
+        for eid, lead in lake.sql(base + f"""
+            SELECT en.source_event_id, any_value(n.lead_text)
+            FROM v_event_news en JOIN v_news n ON n.document_id = en.document_id
+            WHERE en.source_event_id IN ({ids}) AND n.lead_text IS NOT NULL
+            GROUP BY 1"""):
+            if lead:
+                leads[str(eid)] = str(lead)
+    except Exception:                               # noqa: BLE001
+        fails += 1
+    prior: dict[str, list[str]] = {}
+    tids = sorted({d[2] for d in detail.values() if d[2]})
+    if tids:
+        try:
+            tlit = ",".join(_literal(t) for t in tids)
+            for tid, avail, et, title in lake.sql(base + f"""
+                SELECT DISTINCT e.thread_id, e.available_at, e.event_type_code, e.title
+                FROM v_event e
+                WHERE e.thread_id IN ({tlit})
+                  AND e.source_event_id NOT IN ({ids})
+                ORDER BY e.available_at DESC"""):
+                bucket = prior.setdefault(str(tid), [])
+                if len(bucket) < 2:                 # 같은 스레드 직전 사건 1~2건
+                    bucket.append(f"{str(avail)[:16]} {et}"
+                                  + (f" — {str(title)[:60]}" if title else ""))
+        except Exception:                           # noqa: BLE001
+            fails += 1
+
+    # ── 조립: 사건당 3~6줄 결정론 블록 ──
+    out: list[str] = []
+    for eid, tau in shown:
+        et, title, tid, novelty, stage = detail.get(eid, ("", "", "", "", ""))
+        scope = "설명창 안" if eid in inside else "직전 거래일~창 시작"
+        when = (f"{tau:%m-%d %H:%M}"
+                if tau is not None and tau.time() != UNKNOWN_TAU else "시각미상")
+        if not et and not title:
+            head = f"[{scope}] {when} 사건 {eid} (조회 실패 - 타입·제목 미상)"
+        else:
+            head = f"[{scope}] {when} {et or '타입미상'}"
+            if title:
+                head += f" — {title[:80]}"
+        lines = [head]
+        if lead := leads.get(eid):
+            lines.append(f"  리드: {lead[:100]}")
+        if a := args.get(eid):
+            lines.append("  인자: " + " · ".join(a[:4]))
+        if m := measures.get(eid):
+            lines.append("  수치: " + " · ".join(m[:2]))
+        if tid:
+            pv = prior.get(tid) or []
+            lines.append(f"  스레드({stage or '단계미상'}·{novelty or '신규성미상'})"
+                         + ((": 직전 " + " / ".join(pv)) if pv else ": 직전 사건 없음"))
+        out.append("\n".join(lines[:CONTEXT_MAX_LINES]))
+    if more := len(events) - len(shown):
+        out.append(f"외 {more}건 - 상한 {max_events}건 초과 "
+                   f"(수집 구간 사건 {len(events)}건)")
+    return tuple(out), len(shown), fails
+
+
 def _mapping(value) -> dict:
     if isinstance(value, dict):
         return value
