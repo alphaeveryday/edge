@@ -99,6 +99,11 @@ class Rollup:
     # `names` 로 세면 "구성종목 5종목 중" 같은 거짓 분모가 산문에 나간다(실측 08-08).
     advancers: int = 0
     decliners: int = 0
+    # 시변 β (칼만, ALPHA-803 2단계) - 구간/커밋 봉 모드에서 시장 기여가
+    # Σ β_t·r_m,t 로 섰을 때만 채워진다. 비면 β=1 회계이고, 그 폴백의 사유는
+    # `lake.exists["market_beta"]` 에 남는다(조용한 폴백 금지, Rule 12).
+    beta_quarters: tuple[float, ...] = ()   # β_t 경로 4분할 평균
+    beta_ci: float | None = None            # 시장 기여 신뢰폭 (±, 수익률 단위)
 
     @property
     def coverage(self) -> float:
@@ -249,10 +254,64 @@ def _krx_sector_candidate(lake, etf: str, day: str):
             math.log(float(c_now) / float(c_prev)))
 
 
+def _market_beta(lake, etf: str, day: str, paths: dict | None,
+                 ) -> tuple[float, tuple[float, ...], float] | None:
+    """칼만 시변 β 시장 기여 (Σ β_t·r_m,t) - 구간/커밋 봉 모드 전용(ALPHA-803 2단계).
+
+    Q·R·β0 은 전부 **전일 5분봉**(레이크 `bars_5m` 직전 파티션)에서 온다(선견 금지,
+    `kbeta` 서문의 규율 그대로 - 매일 전일 하루로 재피팅하는 롤링). 어떤 이유로든
+    못 서면 None 을 돌려주고 사유를 `lake.exists["market_beta"]` 에 "시장 층 β=1
+    폴백 - …" 로 남긴다 - β=1 로 접는 것 자체는 정당하지만 조용히 접으면 시변 β 가
+    선 런과 구분되지 않는다(Rule 12).
+    """
+    def fall(why: str) -> None:
+        notes = getattr(lake, "exists", None)
+        if notes is not None:
+            notes["market_beta"] = f"시장 층 β=1 폴백 - {why}"
+
+    if not paths or etf not in paths or MARKET_CODE not in paths:
+        fall("구간 봉 수익 계열 미제공")
+        return None
+    try:
+        rows = lake.sql(rf"""
+            SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, ts, close
+            FROM bars_5m
+            WHERE trade_date = (SELECT max(trade_date) FROM bars_5m
+                                WHERE trade_date < DATE '{day}')
+              AND close > 0
+              AND regexp_replace(symbol, '\.(KS|KQ)$', '')
+                  IN ('{etf}', '{MARKET_CODE}')
+            ORDER BY ts""")
+    except Exception as e:              # noqa: BLE001 - 표 부재·질의 실패는 폴백 사유
+        fall(f"전일 5분봉 질의 실패: {type(e).__name__}")
+        return None
+    closes: dict[str, dict] = {}
+    for sym, ts, close in rows:
+        closes.setdefault(str(sym), {})[ts] = float(close)
+    s_map = closes.get(etf, {})
+    m_map = closes.get(MARKET_CODE, {})
+    common = sorted(s_map.keys() & m_map.keys())
+    if len(common) < 2:
+        fall(f"전일 5분봉 부재 (대상·시장 정렬 {len(common)}봉)")
+        return None
+    import numpy as np
+    from .kbeta import wired_beta
+    res = wired_beta(np.array([s_map[t] for t in common]),
+                     np.array([m_map[t] for t in common]),
+                     paths[etf], paths[MARKET_CODE])
+    if res.get("verdict") != "성립":
+        fall(str(res.get("reason", "?")))
+        return None
+    quarters = tuple(float(np.mean(chunk))
+                     for chunk in np.array_split(res["beta"], 4) if len(chunk))
+    return float(res["contribution"]), quarters, float(res["ci"])
+
+
 # ── 층 회계 ───────────────────────────────────────────────────────────────
 def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
               clock: tuple[str, str] | None = None,
-              intraday: dict[str, tuple[float, bool]] | None = None) -> Rollup | None:
+              intraday: dict[str, tuple[float, bool]] | None = None,
+              paths: dict[str, tuple[float, ...]] | None = None) -> Rollup | None:
     """ETF 구간을 시장·섹터·고유로 가른다. **회계이지 추정이 아니다(β=1, ALPHA-862).**
 
     설명 대상은 **ETF 자신의 수익률**이다 (관측 가능). 구성종목 가중합과의 차이는
@@ -267,6 +326,12 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     에서 같은 clock 구간으로 계산한 값이다(ALPHA-866). 있는 심볼은 레이크 `bars_5m`
     대신 이 값이 선다: 라우팅은 방금 발화를 만든 바로 그 봉으로 판정해야 하고, 그래야
     정본(Iceberg) 스테일 폴백이 시장·대상·종목 축에 낄 자리가 없다.
+
+    `paths` 는 `{맨코드: 구간 봉단위 log수익 경로}` - 구간/커밋 봉 모드에서 시장 층을
+    시변 β 로 세우는 재료다(ALPHA-803 2단계). 대상·시장 두 경로가 서고 전일 5분봉이
+    있으면 시장 기여가 β=1 의 r_m 대신 **Σ β_t·r_m,t (경로 적분)** 이 된다. 고유는
+    잔여 정의라 항등식(층 합 + 고유 = 구간수익)은 그대로다. 못 서면 β=1 로 접되
+    사유를 남긴다(`_market_beta`). 일 모드는 이 인자와 무관하게 불변이다.
     """
     # 이번 호출의 판정으로 덮는다. 한 런이 `decompose` 를 두 번 부르므로(라우팅·설명)
     # 앞 호출의 실패가 남으면 뒤 호출이 성공해도 커버리지가 실패를 말한다 — 부재를
@@ -276,6 +341,7 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
         notes.pop("layers", None)
         notes.pop("market_layer", None)
         notes.pop("sector_layer", None)
+        notes.pop("market_beta", None)
     # 대상·시장 두 심볼만 읽는다 - 섹터 ETF 후보 풀이 사라진 뒤로(ALPHA-877) 전
     # 계열을 읽을 이유가 없다. 대상 ETF 자신이 layers_daily 에 'sector' kind 로
     # 실려 있어 kinds 는 그대로 둔다.
@@ -333,6 +399,19 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
                  if intraday is not None
                  else f"시장 층 없음 - {MARKET_CODE} 당일 계열 부재"))
 
+    # ── 시변 β (칼만, ALPHA-803 2단계) - 구간/커밋 봉 모드의 시장 층만 ─────────
+    # 시장 기여를 β=1 의 r_m 에서 Σ β_t·r_m,t (경로 적분)로 바꾼다. 섹터 차감
+    # 기준(market_now)은 그대로다 - 섹터 층은 877 상태(β=1 차감·구간 모드 정직
+    # 부재)를 유지한다. 일 모드(clock·intraday 둘 다 없음)는 닿지 않는다.
+    beta_quarters: tuple[float, ...] = ()
+    beta_ci: float | None = None
+    if layers and (clock is not None or intraday is not None):
+        wired = _market_beta(lake, etf, day, paths)
+        if wired is not None:
+            contrib, beta_quarters, beta_ci = wired
+            layers[0] = Layer(MARKET_CODE, layers[0].name, "시장",
+                              market_now, contrib)
+
     meta = {k: v[0] for k, v in ser.items()}
     # **광역 ETF 는 섹터 층을 접는다**(ALPHA-871). 시장과 ≥BROAD_MARKET_CUT 겹치는
     # 대상은 시장의 부분집합이라 섹터가 시장 몫을 두 번 나눠 갖는 동어반복이 된다 -
@@ -374,7 +453,7 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     return Rollup(etf, etf_label(lake, etf, meta.get(etf, etf)), day, y_now,
                   tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, len(names), wtot,
-                  (), (), halted, adv, dec)
+                  (), (), halted, adv, dec, beta_quarters, beta_ci)
 
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────

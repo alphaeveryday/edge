@@ -92,6 +92,41 @@ def _intraday_returns(
     return out
 
 
+def _return_paths(
+    bars: tuple[AggregatedBar, ...], units: tuple[str, ...],
+) -> dict[str, tuple[float, ...]]:
+    """상태축 봉 → unit 별 봉단위 log수익 경로 - 칼만 시변 β(ALPHA-803)의 입력.
+
+    봉 시작시각의 **교집합**에 정렬한다 - ETF·시장이 같은 t 의 수익을 봐야 β 관측식
+    y_t = β_t·x_t 가 선다. 각 unit 의 첫 수익은 log(close/open), 이후는 인접 close
+    비 - 합이 정확히 그 구간의 log수익이라 Σ β_t·r_m,t 가 경로 적분으로 회계에
+    들어간다. 요청 unit 이 빠졌거나 비정상 가격이 끼면 빈 dict 를 돌려준다 -
+    지어내느니 부재로 남겨 `decompose` 가 β=1 폴백 사유를 적게 한다(Rule 12).
+    """
+    per: dict[str, dict] = {unit: {} for unit in units}
+    for bar in bars:
+        if bar.unit_id in per:
+            per[bar.unit_id][bar.start] = bar
+    if any(not series for series in per.values()):
+        return {}
+    common = sorted(set.intersection(*(set(d) for d in per.values())))
+    out: dict[str, tuple[float, ...]] = {}
+    for unit, series in per.items():
+        rets: list[float] = []
+        prev: float | None = None
+        for start in common:
+            bar = series[start]
+            base = float(bar.open) if prev is None else prev
+            close = float(bar.close)
+            if not (math.isfinite(base) and base > 0
+                    and math.isfinite(close) and close > 0):
+                return {}
+            rets.append(math.log(close / base))
+            prev = close
+        out[unit] = tuple(rets)
+    return out
+
+
 def _ratio(numerator: float, base: float | None) -> float | None:
     """`numerator/base - 1` — 유한하지 않으면 `None`(미가격).
 
@@ -384,7 +419,7 @@ def run(
     # 묶으므로 코드에서 파생한다(`route_code_of`).
     from .statics.duck import CausalLake
     from .statics.interval import clamp
-    from .statics.layers import SESSION_OPEN, decompose as layer_decompose
+    from .statics.layers import MARKET_CODE, SESSION_OPEN, decompose as layer_decompose
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
@@ -421,9 +456,13 @@ def run(
     # 스테일 폴백이 이 축들에 낄 자리가 없다. 섹터 후보만 레이크에 남는다(참조 계열은
     # 분석 unit 밖 - 후속 PR).
     intraday = _intraday_returns(state_bars)
+    # 시변 β(ALPHA-803 2단계)의 재료 - 같은 상태축 봉에서 뽑은 대상·시장의 봉단위
+    # 수익 경로다. 층 회계가 시장 기여를 Σ β_t·r_m,t 로 세우고, 못 서면 β=1 폴백
+    # 사유를 커버리지에 남긴다(`layers._market_beta`).
+    paths = _return_paths(state_bars, (settings.etf_ticker, MARKET_CODE))
     try:
         roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock,
-                               intraday=intraday)
+                               intraday=intraday, paths=paths)
         rt = route_etf(roll)
     except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
         # **분해까지 됐어도 라우팅이 터지면 그 분해는 버린다.** `route_etf` 가 던지면

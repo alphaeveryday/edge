@@ -76,6 +76,10 @@ class WindowFacts:
     sector_contribution: float | None = None
     idio_contribution: float | None = None
     path: str = ""
+    # 시변 β 경로 요약(칼만, ALPHA-803 2단계) - 가설 제안 입력(brief)에 실리는
+    # **결정론 문자열**이다. 층이 β=1 폴백이면 빈 문자열이고, 그 사유는
+    # `lake.exists["market_beta"]` 에 있다. 산문 블록 형식은 바꾸지 않는다.
+    beta_path: str = ""
 
     contributions: tuple[ContributionFact, ...] = ()
     nav_gap: float | None = None
@@ -746,6 +750,22 @@ def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
     return tuple(lines)
 
 
+def beta_path_line(quarters: tuple[float, ...], contribution: float | None,
+                   ci: float | None) -> str:
+    """시변 β 경로의 결정론 요약 한 줄 - 가설 제안 입력(`WindowFacts.beta_path`)용.
+
+    형식 고정: "장중 β 1.14→1.02→1.49→0.80 · 시장 기여 -1.69%p [±0.12]".
+    같은 입력이면 같은 문자열이다(§13 재실행 결정론) - LLM 프롬프트에 실리므로
+    포맷이 흔들리면 제안 재현이 흔들린다. β=1 폴백(quarters 비어 있음)이면 빈
+    문자열 - 없는 경로를 요약하지 않는다.
+    """
+    if not quarters or contribution is None:
+        return ""
+    arrow = "→".join(f"{q:.2f}" for q in quarters)
+    tail = "" if ci is None else f" [±{ci * 100:.2f}]"
+    return f"장중 β {arrow} · 시장 기여 {contribution * 100:+.2f}%p{tail}"
+
+
 # "호출자가 층 분해를 모른다" 를 뜻하는 기본값. `None` 을 쓰면 **분해 실패**(라우팅도
 # 못 얻었다)와 구분되지 않고, 그 둘을 겹치면 실패한 창을 여기서 재시도하게 된다.
 ROLL_UNSET = object()
@@ -886,6 +906,12 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
                            if roll is not None and getattr(roll, "idio", None) is not None
                            else None),
         path=f"{a[:5]}부터 {b[:5]}까지 {direction}했습니다.",
+        beta_path=beta_path_line(
+            tuple(getattr(roll, "beta_quarters", ()) or ()),
+            (float(market.contribution)
+             if market is not None
+             and getattr(market, "contribution", None) is not None else None),
+            getattr(roll, "beta_ci", None)),
         contributions=contributions,
         nav_gap=None if premium is None else float(premium.premium_move),
         disclosures=_event_lines(lake, event_ids, event_times),

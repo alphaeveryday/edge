@@ -131,6 +131,50 @@ def kalman(y: np.ndarray, x: np.ndarray, b0: float, p0: float,
     return b, p
 
 
+MIN_PATH = 3            # 구간 봉 수익 계열이 이보다 짧으면 필터를 세우지 않는다
+
+
+def wired_beta(prev_s, prev_m, y, x) -> dict:
+    """전일 5분봉 종가 두 계열(시각 정렬됨) + 구간 수익 계열 → β_t 경로와 시장 기여.
+
+    구간(clock)·커밋 봉 배선 전용(ALPHA-803 2단계). `intraday_beta` 와 같은 규율
+    (선견 금지 - Q·R·β0 전부 전일)이되, 재료를 yfinance 가 아니라 호출자(레이크
+    `bars_5m` 전일 파티션·상태축 봉)에게서 받는다. 실패는 {"verdict": "판정불가",
+    "reason": …} - β=1 폴백 여부와 그 기록은 호출자(`layers.decompose`) 몫이다
+    (Rule 12: 조용한 폴백 금지).
+
+    반환(성립): beta·var 경로, contribution = Σ β_t·x_t (경로 적분),
+    ci = 1.96·√(Σ x_t²·P_t) (필터 분산 P_t 에서 유도한 기여 신뢰폭).
+    """
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    if len(y) != len(x) or len(y) < MIN_PATH:
+        return {"verdict": "판정불가",
+                "reason": f"구간 봉 {min(len(y), len(x))} < {MIN_PATH}"}
+    try:
+        Q, R = fit_qr(prev_s)
+    except Exception as e:              # noqa: BLE001 - EM·표본 실패는 사유로
+        return {"verdict": "판정불가", "reason": f"fit_qr 실패: {e}"}
+    ys, xs = _logret(prev_s), _logret(prev_m)
+    ok = np.isfinite(ys) & np.isfinite(xs)
+    ys, xs = ys[ok], xs[ok]
+    if len(xs) < MIN_BARS - 1:
+        return {"verdict": "판정불가",
+                "reason": f"전일 정렬 수익 {len(xs)} < {MIN_BARS - 1}"}
+    sxx = float(xs @ xs)
+    var_m = float(np.var(xs, ddof=1))
+    if sxx <= 0 or var_m <= 0:
+        return {"verdict": "판정불가", "reason": "전일 시장 분산 0"}
+    b0 = float(ys @ xs / sxx)
+    resid = ys - b0 * xs
+    se0 = float(np.sqrt((resid @ resid) / max(len(ys) - 1, 1) / sxx))
+    q, r = beta_filter_params(Q, R, b0, var_m)
+    b, p = kalman(y, x, b0, se0 * se0, q, r)
+    return {"verdict": "성립", "beta": b, "var": p, "b0": b0, "q": q, "r": r,
+            "contribution": float(b @ x),
+            "ci": float(1.96 * np.sqrt(float(p @ (x * x))))}
+
+
 def intraday_beta(symbol: str, day: str, *, market: str = "KOSPI") -> dict:
     """당일 시점별 β_t + CI. 재료가 없으면 사유와 함께 판정불가.
 
