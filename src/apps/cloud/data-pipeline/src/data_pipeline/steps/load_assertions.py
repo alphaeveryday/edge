@@ -63,8 +63,13 @@ from edge_ontology import load_authority_registry, load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import (POLICY_EXCLUDED_REASONS, TOO_LONG,
-                                 load_resolution_index, plan_resolution)
+from ..entity_resolution import (
+    MEASURE_SKIPPED,
+    POLICY_EXCLUDED_REASONS,
+    TOO_LONG,
+    load_resolution_index,
+    plan_resolution,
+)
 from ..lake import Storage, feature_news_assertions_partition, quality_log_key
 
 logger = logging.getLogger(__name__)
@@ -84,6 +89,11 @@ _TOP_UNRESOLVED_LIMIT = 200
 
 # 길이 상한에 걸린 값 표본 상한. 상한값이 맞는지 판단하려면 실물이 필요하다.
 _TOO_LONG_SAMPLE_LIMIT = 30
+# 정책 제외 사유별 표본 상한. **제외는 표본에서 빼는 것이지 안 보이게 하는 것이 아니다**
+# — 척도를 개체로 세울 것인가는 온톨로지가 열어 둔 결정이고(entity_resolution 의 상한·척도
+# 주석), 그 판단의 입력이 "어떤 척도 표현이 얼마나 오는가"다. 수만 남기고 텍스트를 지우면
+# 그 결정을 다시 재려고 매번 파티션을 다시 읽어야 한다(ALPHA-857 리뷰).
+_MEASURE_SAMPLE_LIMIT = 30
 
 
 
@@ -140,6 +150,7 @@ def run(
     concepts_minted = 0
     # 길이 상한에 걸린 값 표본. 개수만으론 상한이 맞는지 판단할 수 없다.
     too_long_sample: list[str] = []
+    measure_sample: list[str] = []
     unresolved_texts: dict[str, int] = {}
     created_sample: list[dict] = []
     failures: list[dict] = []
@@ -320,12 +331,16 @@ def run(
                                 # ⚠️ **정책상 제외한 사유는 빼고 센다**(ALPHA-857) — 척도·
                                 # 문장꼴은 "못 붙인 것"이 아니라 "안 붙이기로 한 것"이라,
                                 # 섞이면 이 목록이 이미 기각한 방향(매출을 개념으로 추가)을
-                                # 1순위로 추천한다. 제외분은 자기 카운터·표본이 센다.
+                                # 1순위로 추천한다. 제외분은 **각자 카운터와 표본**이
+                                # 받는다 — 표본까지 없애면 이 PR 이 관측면을 지운 게 된다.
                                 if reason not in POLICY_EXCLUDED_REASONS:
                                     unresolved_texts[text] = unresolved_texts.get(text, 0) + 1
                                 if (reason == TOO_LONG
                                         and len(too_long_sample) < _TOO_LONG_SAMPLE_LIMIT):
                                     too_long_sample.append(text)
+                                if (reason == MEASURE_SKIPPED
+                                        and len(measure_sample) < _MEASURE_SAMPLE_LIMIT):
+                                    measure_sample.append(text)
                     elif kind == "non_entity" and entity_id is not None:
                         # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
                         # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
@@ -426,6 +441,7 @@ def run(
         "concepts_minted": concepts_minted,
         # 상한에 걸려 미해소로 남긴 개념의 표본 — 온톨로지가 상한을 조정할 근거다.
         "concept_too_long_sample": too_long_sample,
+        "measure_skipped_sample": measure_sample,
         "argument_resolution": {
             # 분모 정의를 로그 자신이 들고 있어야 한다 — 이 필드가 없으면 ALPHA-802 이전에
             # 찍힌 로그(분모=argument 총수)와 이후 로그를 나란히 놓고 비교할 때 정의가

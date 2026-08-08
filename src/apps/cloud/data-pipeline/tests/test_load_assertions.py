@@ -543,17 +543,19 @@ def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monk
     그 목록을 보면 "매출을 개념으로 추가하자"는 결론이 나오는데, 이 트랙에서 검토하고
     **기각한** 방향이다. 로그가 다음 사람을 이미 아니라고 판단한 쪽으로 밀면 안 된다.
 
-    회수 가능한 축(미해소·명부 부재)은 **그대로 남아야** 한다 — 좁히다 같이 지우면
-    이 표본이 존재할 이유가 사라진다. 그래서 양쪽을 한 픽스처에서 함께 고정한다.
+    회수 가능한 축은 **그대로 남아야** 한다 — 좁히다 같이 지우면 이 표본이 존재할 이유가
+    사라진다. 그래서 이 자리에 도달할 수 있는 회수 사유 **셋을 전부**(unresolved·ambiguous·
+    registry_miss) 픽스처에 태운다. 둘만 태우면 나머지 하나가 제외 집합에 조용히 추가돼도
+    스위트가 초록이다 — 특히 `ambiguous` 는 마스터에 이름이 있는데 대는 곳이 둘이라는
+    뜻이라 **회수 가능성이 가장 높은** 축이고, 그게 표본에서 사라지면 아무도 모른다.
     """
-    from data_pipeline.entity_resolution import POLICY_EXCLUDED_REASONS
-
     storage = LocalStorage(tmp_path / "lake")
     long_name = "가" * 60          # concept_too_long — 상한이 바뀌어도 넉넉히 초과한다
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
         arguments=_args(("METRIC", "매출"),            # measure_skipped — 정책 제외
                         ("PROJECT", long_name),        # concept_too_long — 정책 제외
                         ("ISSUER", "미등록회사"),        # unresolved — 회수 가능
+                        ("ISSUER", "충돌이름"),          # ambiguous — 회수 가능
                         ("AUTHORITY", "없는기관"),       # registry_miss — 회수 가능
                         ("ISSUER", "삼성전자")))])])     # 적재가 되도록 하나는 붙인다
     conn = _FakeConn(documents=[("a1", "doc_D1")])
@@ -566,15 +568,45 @@ def test_deliberate_exclusions_stay_out_of_the_recoverable_sample(tmp_path, monk
     # 다섯 자리가 각자 다른 사유를 탔는지 먼저 확인한다 — 안 그러면 아래 단언이
     # "그 경로를 안 밟아서" 통과할 수 있다(픽스처가 계약을 못 밟는 고전적 함정)
     assert res["measure_skipped"] == 1 and res["concept_too_long"] == 1
-    assert res["unresolved"] == 1 and res["registry_miss"] == 1
+    assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
 
     assert "매출" not in sample, "척도가 표본에 남았다 — 기각한 방향을 추천한다"
     assert long_name not in sample, "상한 초과 문장이 표본에 남았다"
-    assert sample == {"미등록회사", "없는기관"}, "회수 가능한 축까지 같이 지웠다"
-    # 제외분이 사라지는 게 아니라 **자기 자리로** 간다 — 길이 초과 표본은 그대로 남는다
-    assert long_name in _log(storage)["concept_too_long_sample"]
-    # 무엇을 뺐는지 로그가 스스로 말한다 — 조용히 좁히면 "왜 매출이 안 보이지"가 된다
-    assert set(res["policy_excluded_reasons"]) == set(POLICY_EXCLUDED_REASONS)
+    assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 가능한 축까지 같이 지웠다"
+
+    # 제외분이 **사라지는 게 아니라 자기 자리로** 간다. 이게 없으면 이 PR 은 척도 표현의
+    # 텍스트를 로그에서 통째로 지운 것이 된다 — 수(11,699)는 남지만 "무엇이 대부분인가"를
+    # 못 보게 되고, 그게 온톨로지가 "척도를 개체로 세울까"를 판단할 입력이다.
+    log = _log(storage)
+    assert long_name in log["concept_too_long_sample"]
+    assert "매출" in log["measure_skipped_sample"]
+
+    # 무엇을 뺐는지 로그가 스스로 말한다 — 조용히 좁히면 "왜 매출이 안 보이지"가 된다.
+    # ⚠️ 상수와 비교하면 **항등식**이라 멤버십이 안 잡힌다(양변이 같은 값을 참조한다).
+    # 리터럴로 못박아, 제외 집합이 넓어질 때 여기서 걸려 근거를 대게 한다.
+    assert set(res["policy_excluded_reasons"]) == {"measure_skipped", "concept_too_long"}
+
+
+def test_sample_keys_are_trimmed_so_frequency_ranking_survives(tmp_path, monkeypatch):
+    """표본 키는 공백을 턴다 — 안 그러면 빈도 순위가 갈린다(ALPHA-857).
+
+    WHY: 이 표본의 **유일한** 용도가 빈도 순위다(무엇을 먼저 붙일 수 있게 만들까). 같은
+    표현이 앞뒤 공백 유무로 별개 행이 되면 빈도가 쪼개져, 상위에 와야 할 표현이 밀린다.
+    수치는 멀쩡해 보이고 순위만 틀리는 형태라 로그만 봐서는 못 잡는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    # 같은 표현을 공백 변형으로 세 번 — 턴다면 3, 안 턴다면 1/1/1 로 갈린다
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(
+        event_type_code=f"E{i}",
+        arguments=_args(("ISSUER", v), ("ISSUER", "삼성전자")))
+        for i, v in enumerate(("미등록회사", " 미등록회사", "미등록회사 "))])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    sample = dict(_log(storage)["argument_resolution"]["top_unresolved_recoverable"])
+    assert sample == {"미등록회사": 3}, sample
 
 
 def test_unresolved_sample_keeps_the_long_tail(tmp_path, monkeypatch):
