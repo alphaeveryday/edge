@@ -200,6 +200,32 @@ class TestPlan:
             session_date="2026-W01-1", universe=None,
         ) == 2
 
+    def test_업종지수_세션은_universe_없이_정규장_격자로_계획된다(self, ledger_db, capsys):
+        """공시와 **같은 호출 형태**(universe=None)인데 격자는 390 이어야 한다 — 위
+        공시 720 테스트와 짝이다.
+
+        이 dataset 은 형상이 하이브리드다: universe 축은 공시(소스 단위)인데 격자는
+        iNAV(정규장)다. 한쪽만 보고 배선하면 `EXTENDED_HOURS_DATASETS` 에 같이 넣게
+        되고, 그러면 아무도 못 채우는 시간외 330 window 가 매일 DUE 로 쌓인다 — 이
+        소스는 소급이 불가라 영구 결손이다.
+        """
+        code = plan_session_cli(
+            make_settings(), dataset="sector_index_minute", source_group="kis",
+            session_date="2026-07-31", universe=None,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert (code, payload["window_count"]) == (0, 390)
+        assert payload["windows"]["first"].endswith("09:00:00+09:00")
+        assert payload["windows"]["last"].endswith("15:30:00+09:00")
+
+    def test_universe_on_a_sector_index_session_is_rejected(self, ledger_db):
+        # 기대 집합은 config 의 index_map 이다 — 파일을 조용히 무시하면 운영자는 그게
+        # 반영된 줄 안다(뉴스·공시와 같은 규약).
+        assert plan_session_cli(
+            make_settings(), dataset="sector_index_minute", source_group="kis",
+            session_date="2026-07-31", universe=str(FIXTURES / "universe_348.json"),
+        ) == 2
+
     def test_universe_on_a_news_session_is_rejected(self, ledger_db):
         # 조용히 무시하면 운영자는 그 파일이 반영된 줄 안다
         assert plan_session_cli(

@@ -32,6 +32,7 @@ from datetime import datetime
 from ..lake.storage import (
     Storage,
     canonical_etf_inav_minute_artifact_key,
+    canonical_sector_index_minute_artifact_key,
     canonical_price_minute_artifact_key,
     minute_window_manifest_key,
 )
@@ -136,6 +137,16 @@ class MinuteWorkerLoop:
     def _after_commit(self, claim: dict) -> None:
         """커밋 뒤 파생(가격의 5분 롤업). 기본은 없음."""
 
+    def _universe_version(self) -> str:
+        """이 window 요청이 기록할 universe 세대.
+
+        기본은 설정의 universe 다(가격·iNAV). **universe 를 안 쓰는 dataset**은 이걸
+        `"none"` 으로 덮는다 — planner 가 그 세션에 적는 값과 같아야 한다
+        (`session_cli`: `universe_model is None` 이면 version·hash 가 `"none"`).
+        갈리면 요청과 원장이 다른 세대를 말하고, 그 불일치는 아무도 안 본다.
+        """
+        return self.config.universe.universe_version
+
     def _predict_generation(self, claim: dict, artifact_checksum: str,
                             units: dict[str, list[str]],
                             expected_unit_ids: tuple[str, ...]) -> tuple[int, str, bytes, str]:
@@ -179,7 +190,7 @@ class MinuteWorkerLoop:
                 dataset=cfg.dataset, window_start=claim["window_start"],
                 window_end=claim["window_end"], run_id=cfg.run_id,
                 session_id=self.session_id, execution_mode="resident",
-                universe_version=cfg.universe.universe_version,
+                universe_version=self._universe_version(),
                 unit_ids=expected_unit_ids, failure_injection=None,
             )
             result, records, manifest_units = self.collector.collect(request, now)
@@ -576,6 +587,93 @@ class InavWorker(MinuteWorkerLoop):
         )
 
 
+@dataclass
+class SectorIndexWorkerConfig:
+    """업종지수 Worker 설정 (ALPHA-887). `InavWorkerConfig` 와 **한 곳이 다르다**:
+    `universe` 가 없다 — 이 dataset 은 `UNIVERSE_DATASETS` 밖이라 planner 가
+    `--universe` 를 거부하고, 기대 집합은 config 의 `index_map` 이 준다.
+    """
+
+    worker_id: str
+    dataset: str
+    source: str
+    market: str
+    session_date: str  # YYYY-MM-DD — artifact key 축
+    # KRX 업종코드 45종. **정렬된 튜플**로 받는다 — 기대 집합의 순서가 checksum 에 새면
+    # 같은 멤버십이 다른 세대를 만든다(collector 가 다시 정렬하지만 여기서도 고정한다).
+    unit_ids: tuple[str, ...]
+    run_id: str
+    lease_seconds: int = 300
+    session_lease_seconds: int = 300
+    heartbeat_every_seconds: int = 60
+    # 🔴 **0 이다 — iNAV 와 같은 방침**(그 설정의 긴 주석이 논거다). 이 소스는 소급이
+    # 아예 불가라(`kis_sector_index` 도크스트링: 소급 TR 은 일봉으로 degrade) 놓친 분은
+    # 놓친 채로 두고 결손은 원장이 드러낸다. **미착수가 아니라 채택된 방침이다.**
+    # ⚠️ 여기를 켜면 iNAV 와 같은 지평 문제를 그대로 만난다 — recovery 는 최고령 due 부터
+    # 집는데(`claim_due_window` ORDER BY ASC) 페이지(그날 최근 100봉) 밖 window 는 못
+    # 채우면서 계속 최고령이라 매 tick 같은 것을 집어 앱키 쿼터만 태운다.
+    recovery_budget_per_tick: int = 0
+
+
+@dataclass
+class SectorIndexWorker(MinuteWorkerLoop):
+    """장중 업종지수 Worker (ALPHA-887). 가격과 같은 골격, 다른 훅 넷 + universe 훅."""
+
+    session_id: str
+    ledger: MinuteLedger
+    committer: MinuteCommitter
+    storage: Storage
+    collector: object
+    config: SectorIndexWorkerConfig
+    fence_token: int | None = None
+    stopping: bool = False
+    _last_heartbeat: datetime | None = field(default=None, repr=False)
+
+    # `_session_ready` 는 기본값(True)을 쓴다 — 대조할 universe 해시가 없다. 세션이
+    # 존재하는지는 CLI 가 기동에서 확인하고, 그 뒤로는 dataset·source 축이 session_id
+    # 에 이미 박혀 있다(`stable_domain_id`).
+
+    def _universe_version(self) -> str:
+        # planner 가 이 세션에 적은 값과 같아야 한다(`session_cli` — universe 없으면 "none")
+        return "none"
+
+    def _process(self, claim: dict, now: datetime) -> bool:
+        return self._process_window(claim, now)
+
+    def _expected_units(self, window_start: datetime) -> tuple[str, ...]:
+        """config 의 45종 전부 — **시각 게이트가 없다**.
+
+        가격·iNAV 는 `universe.units_at(window_start)` 로 거래시간 밖 window 에서 raise
+        하는데, 여기엔 universe 가 없다. 격자 자체가 정규장 390 window 로 제한되므로
+        (`EXTENDED_HOURS_DATASETS` 밖) planner 가 거래시간 밖 window 를 아예 안 만든다 —
+        그 게이트는 여기가 아니라 거기에 있다.
+        """
+        return self.config.unit_ids
+
+    def _artifact_key(self, window_hhmm: str, generation: int) -> str:
+        return canonical_sector_index_minute_artifact_key(
+            self.config.market, self.config.session_date, window_hhmm, generation
+        )
+
+    def _commit(self, claim: dict, *, result, records: tuple, units: dict,
+                generation: int, artifact_checksum: str, manifest_key: str,
+                manifest_checksum: str) -> None:
+        # job·outbox 없음 — 지금 하위 소비자가 없어 window 확정에서 멈춘다.
+        self.committer.commit_sector_index_window(
+            session_id=self.session_id, window_start=claim["window_start"],
+            worker_id=self.config.worker_id, fence_token=self.fence_token,
+            claim_token=claim["claim_token"], data_status=result.status,
+            expected_unit_count=result.expected_count,
+            succeeded_unit_count=result.succeeded_count,
+            failed_unit_count=result.failed_count, record_count=len(records),
+            checksum=artifact_checksum, manifest_uri=manifest_key,
+            manifest_checksum=manifest_checksum,
+            missing_units=units["missing"] or None,
+            stage_timestamps=result.stage_timestamps,
+            artifact_generation=generation,
+        )
+
+
 def _require_credentials(pair: tuple[str | None, str | None], env_names: str) -> None:
     """자격증명 결손을 **기동에서** 거부한다.
 
@@ -844,6 +942,151 @@ def inav_date_rejected(parsed_day, today) -> str | None:
             "불가하고 응답 행에 날짜가 없어, 지금 값이 그 날짜의 불변 artifact 로 굳는다"
         )
     return None
+
+
+def sector_index_date_rejected(parsed_day, today) -> str | None:
+    """오늘이 아닌 `--session-date` 를 거부하는 사유, 오늘이면 None (ALPHA-887).
+
+    `inav_date_rejected` 와 **근거가 다르다.** iNAV 는 응답에 날짜가 아예 없어 오늘
+    값이 그 날짜로 굳는데, 업종지수 행에는 `stck_bsop_date` 가 있어 어댑터가 남의 날을
+    걸러낸다 — 틀린 값이 실릴 경로는 없다. 막는 이유는 **결손이 굳는 것**이다: 이 TR 에
+    날짜 파라미터가 없어(`_query_params`) 과거일로 돌리면 응답은 여전히 "지금 기준 최근
+    100봉"이고 그중 그 날짜 행은 0건이다. 그러면 45종 전건 missing 인 INCOMPLETE 가 그
+    날짜의 390 window 에 커밋되는데, 이 소스는 소급이 불가라(소급 TR 은 일봉으로
+    degrade) 그 원장을 나중에 채울 방법이 없다.
+
+    미래 날짜도 같이 막힌다 — 그쪽은 아직 오지 않은 값이라 더 명백하다.
+    """
+    if parsed_day != today:
+        return (
+            f"--session-date {parsed_day} 가 오늘({today})이 아니다 — 이 TR 은 날짜 질의가 "
+            "불가해 과거일로 돌리면 45종 전건 missing 이 그 날짜 원장에 굳고, 소급이 "
+            "없어 채울 방법이 없다"
+        )
+    return None
+
+
+def sector_index_worker_cli(settings, *, session_date: str | None,
+                            max_ticks: int | None = None, tick_seconds: int = 20) -> int:
+    """장중 업종지수 Worker 진입점 — `python -m data_pipeline.run sector-index-worker`.
+
+    `inav_worker_cli` 와 같은 계약이다: SIGTERM/SIGINT 는 tick 경계에서 멈추고, DB 오류는
+    삼키지 않는다. **`--universe` 가 없는 것이 다르다** — 이 dataset 은 `UNIVERSE_DATASETS`
+    밖이라 planner 도 `--universe` 를 거부하고, 기대 집합 45종은
+    `[minute_sector_index.index_map]` 이 준다. 그 config 가 곧 정본이라 이미지 배포가
+    반영이다(S3 를 갈 일이 없다).
+
+    자격증명은 `minute_price_worker` 것을 **재사용한다** — 같은 KIS 앱키이고(쿼터가 앱키
+    전역이라 어차피 한 계정이다), 같은 값을 두 번째 비밀값 표면으로 늘리면 배포에서
+    한쪽만 주입되는 사고만 는다.
+    """
+    import os
+    import signal
+    import socket
+    import time
+    from datetime import timezone
+
+    from ..db import stable_domain_id
+    from ..lake.storage import make_storage
+    from ..sources.http import PoliteClient
+    from ..sources.kis_sector_index import KisSectorIndexClient
+    from .sector_index_collect import KisSectorIndexCollector
+    from .states import DATASET_SECTOR_INDEX_MINUTE
+
+    if settings.db is None:
+        raise SystemExit(
+            "db 설정 없음 — sector-index-worker 는 1분 원장 필수(DATA_PIPELINE_DB__* 주입)")
+    if settings.minute_sector_index is None:
+        # config 가 기대 집합의 정본이다 — 미설정으로 돌면 unit 0종이라 매 window 가
+        # 빈 성공(VALID_EMPTY)으로 확정된다. 그건 "받을 게 없다"가 아니라 배선 누락이다.
+        raise SystemExit(
+            "[minute_sector_index.index_map] 설정 없음 — 이 dataset 의 기대 집합 정본이다"
+            "(미설정으로 돌면 매 window 가 빈 성공으로 확정된다)")
+    if settings.minute_price_worker is None:
+        raise SystemExit(
+            "minute_price_worker 설정 없음 — 업종지수는 그 KIS 자격증명을 함께 쓴다")
+    _require_credentials(
+        (settings.minute_price_worker.app_key, settings.minute_price_worker.app_secret),
+        "DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET",
+    )
+    day = session_date or datetime.now(KST).strftime("%Y-%m-%d")
+    try:
+        # strptime 고정 — date.fromisoformat 은 3.11+ 에서 주 날짜를 다른 연도로 읽는다
+        parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
+    except ValueError:
+        raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
+    # ⚠️ **수집 전에 막는다** — 위 함수의 도크스트링이 근거다.
+    if (rejected := sector_index_date_rejected(
+            parsed_day, datetime.now(KST).date())) is not None:
+        raise SystemExit(rejected)
+    session_id = stable_domain_id(
+        "msn", DATASET_SECTOR_INDEX_MINUTE, "kis", parsed_day.isoformat()
+    )
+    ledger = MinuteLedger(db=settings.db)
+    if ledger.session_snapshot(session_id=session_id) is None:
+        raise SystemExit(
+            f"세션 없음: {DATASET_SECTOR_INDEX_MINUTE}/kis/{parsed_day} — "
+            "plan-minute-session --dataset sector_index_minute 이 먼저 돌아야 한다"
+        )
+    index_map = settings.minute_sector_index.index_map
+    worker_id = f"sw-{socket.gethostname()}-{os.getpid()}"
+    client = KisSectorIndexClient(
+        settings.minute_price_worker.app_key, settings.minute_price_worker.app_secret,
+        # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
+        PoliteClient(min_interval=0.5),
+        index_map,
+    )
+    worker = SectorIndexWorker(
+        session_id=session_id,
+        ledger=ledger,
+        committer=MinuteCommitter(db=settings.db),
+        storage=make_storage(settings.storage),
+        collector=KisSectorIndexCollector(
+            client, clock=lambda: datetime.now(timezone.utc)),
+        config=SectorIndexWorkerConfig(
+            worker_id=worker_id,
+            dataset=DATASET_SECTOR_INDEX_MINUTE,
+            source="kis",
+            market="KR",  # 1분 트랙은 KR 전용(price 와 같은 이유 — 오타가 다른 prefix 에 쓴다)
+            session_date=parsed_day.isoformat(),
+            unit_ids=tuple(sorted(index_map)),
+            run_id=worker_id,
+        ),
+    )
+    for received in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(received, lambda *_: worker.request_stop())
+    logger.info("sector-index-worker 시작: session=%s worker=%s 기대 %d종",
+                session_id, worker_id, len(index_map))
+    ticks = failed = processed = blocked = 0
+    while max_ticks is None or ticks < max_ticks:
+        state = worker.tick(datetime.now(timezone.utc))
+        ticks += 1
+        failed += state == "WINDOW_FAILED"
+        processed += state in ("PROCESSED", "WINDOW_FAILED")
+        if state == "STOPPED":
+            if worker.stopping:
+                logger.info("sector-index-worker 종료(SIGTERM) — %d tick, WINDOW_FAILED %d",
+                            ticks, failed)
+                # 상주 모드의 SIGTERM 은 정상 종료다. bounded 모드는 확인 게이트라
+                # 끝까지 돌지 못한 것이므로 성공으로 보고하지 않는다(iNAV 와 동형).
+                return 0 if max_ticks is None else 1
+            blocked += 1
+            time.sleep(tick_seconds)
+            continue
+        if state == "DRAINED":
+            failed += getattr(worker, "drain_window_failures", 0)
+            blocked += getattr(worker, "drain_blocked", 0)
+            logger.info("sector-index-worker 종료(DRAINED) — %d tick, 처리 %d, WINDOW_FAILED %d",
+                        ticks, processed, failed)
+            return 1 if failed or (blocked and not processed) else 0
+        if state in ("IDLE", "DRAINING"):
+            time.sleep(tick_seconds)
+    failed += getattr(worker, "drain_window_failures", 0)
+    blocked += getattr(worker, "drain_blocked", 0)
+    logger.info("sector-index-worker 종료(max-ticks %d) — 처리 %d, WINDOW_FAILED %d, 차단 %d",
+                ticks, processed, failed, blocked)
+    # 확인 게이트다 — 실패가 있었거나, **한 window 도 못 본 채 차단만 됐으면** 성공이 아니다.
+    return 1 if failed or (blocked and not processed) else 0
 
 
 def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
