@@ -323,8 +323,14 @@ function RunList({ runs, onSelect }: { runs: RunFact[]; onSelect: (id: string) =
                   {r.mock && <MockChip />}
                 </td>
                 <td className="col-muted">{LANE_LABEL[r.lane] ?? r.lane}</td>
+                {/* `kind` 는 계측이 없어 실 응답에서 빠진다 — 부재를 '정규'로 그리면 없는
+                    사실을 단정한다. 부재 4구분의 '계측 없음' 칸으로 낸다. */}
                 <td>
-                  <span className="chip">{KIND_LABEL[r.kind] ?? r.kind}</span>
+                  {r.kind ? (
+                    <span className="chip">{KIND_LABEL[r.kind] ?? r.kind}</span>
+                  ) : (
+                    <Absent kind="uninstrumented" />
+                  )}
                 </td>
                 <td className="col-muted">{r.trading_date}</td>
                 <td className="col-muted">{slotTime(r.id) ?? <Absent kind="none" />}</td>
@@ -349,11 +355,15 @@ function RunList({ runs, onSelect }: { runs: RunFact[]; onSelect: (id: string) =
       <div className="card-pad" style={{ paddingTop: 0 }}>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
           같은 거래일에 정규·수동·백필·재실행이 함께 있을 수 있어 런은 날짜가 아니라{' '}
-          <code>run_id</code> 로 지목합니다. 실행 방식(kind)은 아직 원장에 기록되지 않아 이 열은 목값이고,
-          {/* "스냅샷"을 한 화면에서 두 뜻으로 쓰지 않는다 — 상세 분기는 같은 단어를
+          <code>run_id</code> 로 지목합니다. 실행 방식(kind)은 원장이 기록하지 않는 축이라 이 열은{' '}
+          <b>계측 없음</b> 으로 설 수 있습니다 — 값이 없는 것이지 정규 런이라는 뜻이 아닙니다.
+          {/* ⚠️ 이 문장은 같은 열의 셀이 그리는 부재 어휘와 **같아야** 한다. 예전에는 셀이
+            * '계측 없음'을 그리는데 캡션은 "목값 · MOCK"이라 말해 한 열에 두 어휘가 섰다.
+            * 순수 문구라 컴파일러도 테스트도 안 잡는다 — 셀을 고치면 여기도 같이 본다.
+            * "스냅샷"을 한 화면에서 두 뜻으로 쓰지 않는다 — 상세 분기는 같은 단어를
             * "앱에 동봉된 정적 파일"로 쓴다. 여기서 말하려던 건 관측 시점이다. */}
-          그런 런에는 행마다 <b>MOCK</b> 을 붙입니다 — 나머지 값은 운영 원장·AWS 제어면을 한 시점에
-          떠 온 관측값입니다.
+          목값에 기댄 행에는 <b>MOCK</b> 이 따로 붙습니다 — 나머지 값은 운영 원장·AWS 제어면을 한
+          시점에 떠 온 관측값입니다.
         </p>
       </div>
     </div>
@@ -614,7 +624,8 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
       <div className="card-pad" style={{ paddingBottom: 0 }}>
         <p className="t-sm m-0">
           <b>{LANE_LABEL[run.lane] ?? run.lane}</b> · {run.trading_date} ·{' '}
-          {slotTime(run.id) ?? '예정 시각 없음'} · {KIND_LABEL[run.kind] ?? run.kind}{' '}
+          {slotTime(run.id) ?? '예정 시각 없음'} ·{' '}
+          {run.kind ? KIND_LABEL[run.kind] ?? run.kind : <Absent kind="uninstrumented" />}{' '}
           {/* 두 축을 각각 낸다 — 하나로 합치지 않는다 */}
           <ObservationCell obs={led} at="갱신" /> <ObservationCell obs={aws} at="종료" />{' '}
           <StatusBadge tone={rec.tone}>

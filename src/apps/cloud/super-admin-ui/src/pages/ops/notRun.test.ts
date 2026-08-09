@@ -109,3 +109,30 @@ test('픽스처가 진짜 규칙 축을 밟는다 — 가짜 id 면 dep 분기�
     assert.ok(RULES.some((X) => X.id === r.id), `${r.id} 가 RULES 에 없다 — 픽스처가 낡았다`);
   }
 });
+
+test('canRun 을 가진 규칙은 사유가 서로 갈린다 — 두 규칙이 같은 문장을 받으면 어느 축인지 못 읽는다', () => {
+  /* A2 의 물음: "`canRun` 이 거짓인 **사유 문장**이 없다". 규칙마다 따로 문장을 손으로 다는 대신
+   * **집합 불변식**으로 잡는다 — 손으로 유지되는 표기는 반드시 낡고, 새로 붙는 규칙은 아무도
+   * 안 본다. 사유 없이 붙은 규칙은 폴백 문장을 받아 여기서 R12 와 충돌한다.
+   *
+   * `axis` 를 가진 규칙(R17~R19)은 제외한다 — 그쪽은 **같은 축·같은 조회 상태라 같은 문장이
+   * 맞다**. 사유가 갈려야 하는 것은 축이 서로 다른 쪽이다. */
+  const gated = RULES.filter((R) => R.canRun && !R.axis);
+  assert.ok(gated.length >= 7, `canRun 규칙이 줄었다(${gated.length}) — 픽스처가 아니라 규칙이 낡았다`);
+  const byReason = new Map<string, string[]>();
+  for (const R of gated) {
+    const why = notRunReason({ ...ev.rules[0], id: R.id, name: R.name }, 'loaded');
+    byReason.set(why, [...(byReason.get(why) ?? []), R.id]);
+  }
+  const shared = [...byReason].filter(([, ids]) => ids.length > 1);
+  assert.deepEqual(shared, [], `사유 문장이 겹친다 — ${JSON.stringify(shared)}`);
+
+  /* 유일성만으로는 모자란다 — 두 규칙의 `dep` 를 **서로 바꿔도** 유일성은 유지된다. 각 규칙이
+   * **자기** 사유를 받는지(남의 것이 아니라) 왕복으로 단언한다: 문장은 그 규칙의 `dep` 를 담아야
+   * 한다. `notRunReason` 이 `RULES.find` 로 규칙을 되찾으므로 그 조회가 어긋나면 여기서 깨진다. */
+  for (const R of gated) {
+    if (!R.dep) continue;
+    const why = notRunReason({ ...ev.rules[0], id: R.id, name: R.name }, 'loaded');
+    assert.ok(why.includes(R.dep), `${R.id} 가 남의 사유를 받았다: ${why}`);
+  }
+});

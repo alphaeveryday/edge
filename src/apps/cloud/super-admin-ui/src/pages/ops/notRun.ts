@@ -62,7 +62,9 @@ export function unevaluatedFor(
  * 진짜 이유는 실시간 응답이 아직 없거나 실패한 것이고, 그건 `fetch` 가 답한다.
  *
  * ⚠️ `note` 를 사유로 쓰지 않는다(`identity` 제외) — `evaluate` 에서 `note` 는
- * `collision ?? R.note?.(f) ?? R.dep` 라 리포트 주석이 실려 있을 수 있다.
+ * `collision ?? (evaluated ? R.note?.(f) ?? null : R.dep)` 라 **돈 규칙이면 리포트 주석**이
+ * 실려 있다. 못 돈 규칙에서는 `dep` 과 같은 값이지만, 그걸 근거로 쓰면 `note` 의 세 갈래 중
+ * 하나만 보고 단정하는 것이라 갈래가 늘 때 조용히 틀린다. 사유는 `RULES` 에서 직접 읽는다.
  */
 export function notRunReason(r: RuleResult, fetch: AxisFetch): string {
   if (r.notRun === 'identity') return `응답 결함 — ${r.note ?? '사유 미기록'}`;

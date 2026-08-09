@@ -145,7 +145,11 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
      * 다를 수 있고, 다르면 드릴다운이 없는 날짜의 세션을 연다. */
     const date = facts.minute?.date ?? facts.meta.today;
     /* `targetId` 는 세션의 대상 축 `dataset/sourceGroup` 이다 — 앵커(`ds-…`)에는 벤더가 없어
-     * 그것만 보면 어느 벤더의 세션인지 못 좁힌다. 없으면 **안 싣는다**(부재를 값으로 만들지 않는다). */
+     * 그것만 보면 어느 벤더의 세션인지 못 좁힌다. 없으면 **안 싣는다**(부재를 값으로 만들지 않는다).
+     *
+     * ⚠️ 빈 조각은 여기 안 온다 — `rules.ts` 의 `sessionTarget` 이 조각이 비면 합성 자체를
+     * 안 하고, 그 위반은 엔진에서 `못 돎(identity)` 으로 접힌다. 그 가드가 없으면
+     * `price_minute/` 가 여기서 `vendor === ''` 로 떨어져 **벤더 없는 사건**으로 읽힌다. */
     const vendor = v.targetId.split('/')[1];
     if (REALTIME_DATASETS.has(datasetId)) {
       return {
@@ -154,8 +158,9 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
             kind: 'session',
             id: datasetId,
             /* 사건이 지목한 것은 대개 벤더까지 갈린 세션이다(`targetId` = `dataset/sourceGroup`).
-             * 다만 **벤더로 못 가르는 값**(날짜 축 집계)의 사건은 대상이 `(데이터셋, 날짜)` 라,
-             * 라벨이 그걸 "세션"이라 부르면 없는 실체를 지목한다. */
+             * 다만 **벤더를 안 지목하는** 사건이 있다 — R19 의 날짜 축 집계가 그렇고, 같은
+             * 데이터셋 id 를 쓰는 계약 축 규칙(R08·R09)도 그렇다. 라벨이 그걸 "세션"이라
+             * 부르면 없는 실체를 지목한다. */
             label: vendor
               ? `실시간 세션 ${v.targetId} · ${date}`
               : `실시간 데이터셋 ${datasetId} · ${date} (세션 전체)`,
@@ -165,7 +170,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
                * 어긋난 상태를 문구로 밝힌다(좁히는 것은 화면 배선 PR 소관). */
               (vendor
                 ? ' 세션 화면은 아직 벤더로 좁히지 못해 이 데이터셋의 세션을 모두 보여준다.'
-                : ' 이 사건의 수는 벤더로 갈리지 않아 그 날짜의 세션 전체가 대상이다.'),
+                : ' 이 사건은 벤더를 지목하지 않아 그 날짜의 세션 전체가 대상이다.'),
             href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
           },
         ],
@@ -179,10 +184,14 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
         },
         /* ⚠️ 벤더가 없으면 **원장 화면이 세션 하나로 못 좁힌다**(벤더가 둘이면 고르기를 거부한다).
          * 그 사실을 여기서 밝히지 않으면, 도착한 화면이 "source_group 을 실어 주세요"라고
-         * **이 사건에서는 불가능한 조치**를 지시한다 — 그 수가 벤더로 안 갈리는 값이라서다. */
+         * **이 사건에서는 불가능한 조치**를 지시한다 — 위반이 벤더를 안 들고 있어서다.
+         *
+         * 문장은 **아는 것까지만** 말한다: "그 수가 날짜 축 집계라서"라고 쓰면 R19 의 사정을
+         * 벤더 부재 전체에 갖다 붙이는 것이다 — 세는 값이 아예 없는 R09(판정 불가)도 같은
+         * 데이터셋 id 로 여기 오고, 그때 그 문장은 거짓이다. */
         ledgerNote: vendor
           ? null
-          : '이 사건의 수는 날짜 축 집계라 세션 하나로 좁혀지지 않는다 — 원장 화면에서 벤더를 골라야 세션 행이 선다.',
+          : '이 사건은 벤더를 지목하지 않아 세션 하나로 좁혀지지 않는다 — 원장 화면에서 벤더를 골라야 세션 행이 선다.',
       };
     }
     return {
