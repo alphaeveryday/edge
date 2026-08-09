@@ -4,16 +4,30 @@
  * 소비자 수신은 측정된 지표가 아니라 **관측 범위 밖**이라 KPI 로 세우지 않고 안내로만 남긴다 —
  * 숫자 자리에 두면 0건·실패와 구분되지 않는다.
  */
-import { Absent, AxisHeader, F, fmt, useFocusRow } from './shared';
+import { Absent, AxisHeader, ConsoleGate, fmt, useConsoleFactsQuery, useFocusRow } from './shared';
+import { axisOf } from './consoleFacts';
+import { FETCH_LABEL, fetchTip } from './notRun';
+import { useTenants } from '../../domains/tenants/hooks';
 import '../../styles/ops.css';
 
 export function DeliveryPage() {
   useFocusRow();
-  const b = F.boundary;
+  /* 테넌트 축은 `facts` 에 없다 — 발번 원장과 다른 표면이라 그쪽에서 직접 읽는다.
+   * 손으로 박은 수(`0 (+시드 1)`)를 두면 실 응답이 붙는 날 거짓이 된다. */
+  const tenants = useTenants();
+  const q = useConsoleFactsQuery();
+  if (!q.ready) return <ConsoleGate q={q} />;
+  const b = q.facts.boundary;
+  /* 🔴 `tenants.data` 존재만 보면 **stale 을 현재 값으로** 그린다 — react-query 는 에러에도
+   * 직전 데이터를 남기므로, 값이 있다는 것이 "이번에 읽었다"를 뜻하지 않는다. 사실 축과 같은
+   * 판별자(`axisOf`)를 쓴다: 여기만 다른 관용구를 쓰면 한쪽만 고쳐진다. */
+  const tenantFetch = axisOf(tenants.data != null, tenants.isError);
+  const production = tenants.data?.filter((t) => t.env === 'Production').length ?? null;
 
   return (
     <div className="flex flex-col gap-4">
       <AxisHeader
+        q={q}
         question="Cloud 게시된 설명이 테넌트로 빠짐없이 발번됐는가?"
         note="Cloud 게시 → tenant_delivery 발번 구간만 답합니다"
       />
@@ -33,11 +47,27 @@ export function DeliveryPage() {
         </div>
         <div className="kpi">
           <div className="kpi-label">운영 테넌트</div>
+          {/* 이 수는 테넌트 원장(`/tenants`)이 답한다 — 조회 상태를 값으로 접지 않는다.
+              `0` 으로 그리면 "운영 테넌트가 없다"가 되는데, 못 읽은 것과 다른 사실이다. */}
           <div className="kpi-value">
-            0 <span className="t-xs" style={{ fontWeight: 500, color: 'var(--fg-3)' }}>(+시드 1)</span>
+            {tenantFetch === 'loaded' ? (
+              production
+            ) : (
+              <span className="t-sm" style={{ color: 'var(--fg-3)' }} title={fetchTip('테넌트 원장 조회(/tenants)', tenantFetch)}>
+                {FETCH_LABEL[tenantFetch]}
+              </span>
+            )}
           </div>
           <div className="kpi-sub">
-            <span className="chip">SEED</span> 로컬 시드 — 기대 fan-out 분모가 아닙니다
+            env=Production 인 테넌트 수 — <b>기대 fan-out 분모가 아닙니다</b>(아래 참조)
+            {/* `stale` 은 값을 지우지 않고 **낡았다는 사실을 옆에 둔다** — 직전 응답은
+                실측이었고, 그걸 버리면 아는 것까지 잃는다. */}
+            {tenantFetch === 'stale' && production !== null && (
+              <>
+                {' · '}
+                <b style={{ color: 'var(--warn)' }}>직전 응답 {production} (마지막 조회 실패)</b>
+              </>
+            )}
           </div>
         </div>
       </div>

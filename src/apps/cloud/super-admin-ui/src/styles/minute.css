@@ -226,6 +226,8 @@ details[open] > .mn-summary::before {
   border-radius: var(--radius-sm);
   background: var(--bg-surface);
 }
-/* 링크가 아니다 — 실행 상세는 스냅샷만 읽어 이 런을 해소하지 못한다(RUN_DETAIL_UNAVAILABLE).
+/* 링크가 아니다 — 실행 상세는 최근 조회일 하루만 읽어 이 런을 해소하지 못한다(RUN_DETAIL_UNAVAILABLE).
+ * 링크로 되살릴 때 :hover·:focus-visible 을 **같이** 되살려야 한다 — 이 앱의 styles/ 에
+ * 전역 a:focus-visible 이 없어 포커스 링 없는 링크가 된다.
  * hover/focus 강조와 accent 색을 남기면 눌리는 것처럼 보인다. */
 .mn-runcard-go { margin-left: auto; color: var(--fg-4); }

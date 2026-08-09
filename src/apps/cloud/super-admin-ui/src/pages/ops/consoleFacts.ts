@@ -60,6 +60,18 @@ export function axisOf(hasData: boolean, isError: boolean): AxisFetch {
 }
 
 /**
+ * 배치 사실 축의 조회 상태 — **응답 결함은 규칙별 `못 돎` 이 아니라 화면 단위 조회 실패다**
+ * (계약 §「B 의 선행 조건」). 검증기가 거부한 응답은 축이 안 온 것과 다른 사실이라 `error` 로
+ * 접는다: 축 부재는 규칙이 `canRun` 으로 답하고, 망가진 응답은 부분적으로도 못 믿는다.
+ *
+ * `stale` 은 `axisOf` 와 같은 뜻이다 — 직전 응답은 검증을 통과했는데 마지막 조회가 실패했다.
+ * 여기서 `loaded` 로 접으면 1분마다 갱신되는 화면에서 낡은 판정이 현재 사실처럼 그려진다.
+ */
+export function factsAxis(parse: FactsParse | null, isError: boolean): AxisFetch {
+  return axisOf(parse?.ok === true, isError || parse?.ok === false);
+}
+
+/**
  * AWS 제어면 관측 시각의 **부재 종류** — 값이 아니라 종류를 답한다.
  *
  * 부재가 두 형상이고 뜻이 다르다(계약 §부재를 싣는 규약): 키가 없으면 **미배선**(조회를 시도조차
@@ -103,6 +115,73 @@ export type FactsParse = { ok: true; facts: Facts } | { ok: false; reason: strin
 type Check = (v: unknown) => boolean;
 const text: Check = (v) => typeof v === 'string';
 const nullableText: Check = (v) => v === null || text(v);
+/**
+ * 날짜·시각 — **문자열인지만 보면 부족하다.**
+ *
+ * 이 값들은 곧장 포매터로 간다: `kst()` 는 `new Date(iso)` 를 `Intl` 에 넘기고, 값이 파싱되지
+ * 않으면 `RangeError: Invalid time value` 로 **렌더가 죽는다**. 그러면 응답 결함이 화면 단위
+ * 조회 실패가 아니라 정체불명의 붕괴로 나온다 — 이 경계가 존재하는 이유의 정반대다.
+ * 날짜 축이 조용히 틀리는 쪽도 있다: `tradingLag` 는 두 문자열을 사전순 비교해 형식이 깨지면
+ * **지연 0** 을 실측처럼 낸다.
+ *
+ * ⛔ **`Date.parse` 를 게이트로 쓰지 않는다.** 두 방향으로 다 틀린다(실측):
+ *   · 너무 관대 — `'2026'`·`'Aug 3 2026'` 을 받고, 특히 `'2026-02-30T12:00Z'` 를 **3월 2일로
+ *     굴려** 통과시킨다. 없는 날이 조용히 **다른 실재 날**이 되어 화면에 실측처럼 선다.
+ *   · 너무 엄격 — Java 가 낼 수 있는 초 단위 오프셋(`+09:00:30`)에 `NaN` 을 준다. 검증기가
+ *     과하면 정상 응답을 통째로 버리고, 그날의 사고가 화면에서 사라진다.
+ *
+ * 그래서 **서버 문법을 전사하되, 소비자가 읽을 수 있는 범위까지만** 받는다 — 그 둘은 같지
+ * 않다. 통과시킨 값은 곧장 `new Date()` → `Intl` 로 가므로, **JS 가 못 읽는 문자열을 받는 것은
+ * 거부하는 것보다 나쁘다**: 거부는 사유가 붙은 화면 단위 조회 실패지만, 통과는 `RangeError` 로
+ * 렌더가 죽는 정체불명의 붕괴다.
+ *
+ * ⚠️ 그래서 **초 단위 오프셋(`+09:00:30`)은 받지 않는다.** Java `OffsetDateTime` 이 이론상 낼 수
+ * 있지만 `new Date()` 가 `Invalid Date` 를 주고(실측) `kst()` 가 그 자리에서 던진다. 이 원장의
+ * 시각은 Postgres `timestamptz` 를 KST 세션으로 읽은 값이라 오프셋이 항상 `+09:00`·`Z` 다 —
+ * 도달 경로가 없는 형태를 받아 주려다 렌더를 죽이는 쪽을 택할 이유가 없다.
+ * ⚠️ 확장 연도(`+010000-01-01`·음수 연도)도 같은 이유로 안 받는다.
+ */
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** 오프셋은 `Z` 또는 `±HH:MM` 만 — 시 ≤ 18, 분 < 60 은 아래에서 따로 본다(정규식은 못 센다). */
+const INSTANT_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * 달력에 실재하는 날인가 — `2026-02-30` 을 걸러내는 유일한 검사다(정규식은 못 본다).
+ *
+ * ⚠️ `Date.UTC(y, …)` 를 쓰면 안 된다 — **연도 0~99 를 1900+ 로 보정**해서 `0050-01-01` 이
+ * 1950년이 되고, 문법상 멀쩡한 값이 조용히 거부된다(실측). `setUTCFullYear` 는 그 보정이 없다.
+ */
+const realDate = (y: number, m: number, d: number): boolean => {
+  const t = new Date(0);
+  t.setUTCFullYear(y, m - 1, d);
+  t.setUTCHours(0, 0, 0, 0);
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+};
+
+const isoDate: Check = (v) => {
+  if (!text(v)) return false;
+  const m = DATE_RE.exec(v as string);
+  return m !== null && realDate(+m[1], +m[2], +m[3]);
+};
+const isoInstant: Check = (v) => {
+  if (!text(v)) return false;
+  const m = INSTANT_RE.exec(v as string);
+  if (m === null || !realDate(+m[1], +m[2], +m[3])) return false;
+  /* 24:00 은 ISO 가 허용하지만 `OffsetDateTime` 은 안 낸다 — 굳이 받아 시각 축을 흐리지 않는다 */
+  if (!(+m[4] < 24 && +m[5] < 60 && (m[6] === undefined || +m[6] < 60))) return false;
+  /* 🔴 오프셋도 **범위를 센다.** 정규식은 자릿수만 보므로 `+99:99` 가 통과하는데, 그 값은
+   * `new Date()` 가 `Invalid Date` 를 주고 `kst()` 가 던진다 — 이 경계가 없애려던 붕괴 그대로다.
+   * `m[7]` 이 없으면 `Z` 다(오프셋 캡처가 안 잡힌 경우 — `null` 이 아니라 `undefined` 다).
+   * ⚠️ 상한은 `<= 18` 이 아니라 **정확히 ±18:00** 이다. `<= 18` 로 두면 `+18:59` 가 통과하는데
+   * `ZoneOffset` 은 그 값을 만들지 못한다 — 계약 밖 값을 받아 주는 쪽으로 새던 자리다. */
+  if (m[7] === undefined) return true;
+  const oh = +m[8];
+  const om = +m[9];
+  return om < 60 && (oh < 18 ? true : oh === 18 && om === 0);
+};
+const nullableDate: Check = (v) => v === null || isoDate(v);
+const nullableInstant: Check = (v) => v === null || isoInstant(v);
 const bool: Check = (v) => typeof v === 'boolean';
 /** 서버가 그 슬롯에만 싣는 필드 — 없는 것이 정상이다(필드 단위 `NON_NULL`). */
 const optionalBool: Check = (v) => v === undefined || bool(v);
@@ -128,20 +207,20 @@ const nullableRatio: Check = (v) => v === null || ratio(v);
  * 배포가 화면을 멈춘다. 표는 "이 필드들이 이 타입이어야 한다"만 말한다.
  * 표가 낡는 것은 `consoleFacts.test.ts` 의 집합 불변식이 막는다(픽스처의 키 ⊆ 표의 키). */
 export const RUN_FIELDS: Record<string, Check> = {
-  id: text, lane: nullableText, tradingDate: nullableText, ledgerStatus: nullableText,
-  ledgerUpdated: nullableText, deadline: nullableText,
+  id: text, lane: nullableText, tradingDate: nullableDate, ledgerStatus: nullableText,
+  ledgerUpdated: nullableInstant, deadline: nullableInstant,
   planned: optionalBool, noRunRow: optionalBool,
 };
 export const TASK_FIELDS: Record<string, Check> = {
-  taskKey: text, runId: text, pipelineType: text, tradingDate: nullableText, stage: text,
+  taskKey: text, runId: text, pipelineType: text, tradingDate: nullableDate, stage: text,
   dataset: nullableText, required: bool, planStatus: text, taskOutcome: nullableText,
   dataStatus: nullableText, recordsOut: nullableCount, failedRecords: nullableCount,
   completenessExpected: nullableCount, completenessReceived: nullableCount,
   completenessMissing: nullableCount, attempts: count,
 };
 export const DATASET_FIELDS: Record<string, Check> = {
-  id: text, contract: bool, expectedAsOf: nullableText, actualAsOf: nullableText,
-  collectedAt: nullableText, unverifiable: nullableText,
+  id: text, contract: bool, expectedAsOf: nullableDate, actualAsOf: nullableDate,
+  collectedAt: nullableInstant, unverifiable: nullableText,
 };
 export const OUTPUT_FIELDS: Record<string, Check> = {
   id: text, label: text, unit: text, today: count, base: nullableRatio,
@@ -149,7 +228,7 @@ export const OUTPUT_FIELDS: Record<string, Check> = {
 export const BOUNDARY_FIELDS: Record<string, Check> = {
   publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
 };
-export const META_FIELDS: Record<string, Check> = { db: text, today: text };
+export const META_FIELDS: Record<string, Check> = { db: isoInstant, today: isoDate };
 
 /** 배열 원소는 **객체**여야 한다 — `[null]`·`[1]`·`[[]]` 가 여기서 걸린다. */
 const isRow = (v: unknown): v is Record<string, unknown> =>

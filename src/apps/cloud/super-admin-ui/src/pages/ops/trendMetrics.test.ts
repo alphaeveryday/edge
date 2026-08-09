@@ -13,7 +13,13 @@ import { test } from 'node:test';
 import { buildSeries, businessDays, evaluateMetric, formatValue } from './trendMetrics.ts';
 import type { ComparisonType, Metric } from './trendMetrics.ts';
 import { median } from './trendSeries.ts';
-import { METRICS, tradingLag } from './trendCatalog.ts';
+import { buildMetrics, tradingLag } from './trendCatalog.ts';
+import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
+import type { Facts } from '../../rules/types.ts';
+
+/* 카탈로그 계약(분류·라벨·드릴다운)은 **축이 전부 있는** 사실 위에서 검사한다 — 스냅샷이
+ * 그 모양을 가진 유일한 픽스처다. 축이 없을 때의 거동은 `trendCatalog.test.ts` 가 본다. */
+const METRICS = buildMetrics(factsJson as unknown as Facts);
 
 const metric = (o: Partial<Metric>): Metric => ({
   id: 'm',
@@ -25,7 +31,6 @@ const metric = (o: Partial<Metric>): Metric => ({
   threshold: 0.25,
   direction: 'stable',
   source: 'DB_LEDGER',
-  isMock: true,
   series: [],
   help: '',
   drill: { href: '/', label: '상세' },

@@ -6,7 +6,18 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isKnownVid, notRunReason, unevaluatedFor, unevaluatedRules } from './notRun.ts';
+import {
+  FETCH_LABEL,
+  fetchTip,
+  isCurrent,
+  isKnownVid,
+  notRunReason,
+  unevaluatedFor,
+  unevaluatedRules,
+  unreadAxes,
+  unreadNote,
+} from './notRun.ts';
+import type { AxisFetch } from './notRun.ts';
 import { RULES } from '../../rules/rules.ts';
 import type { RuleResult } from '../../rules/types.ts';
 
@@ -135,4 +146,56 @@ test('canRun 을 가진 규칙은 사유가 서로 갈린다 — 두 규칙이 �
     const why = notRunReason({ ...ev.rules[0], id: R.id, name: R.name }, 'loaded');
     assert.ok(why.includes(R.dep), `${R.id} 가 남의 사유를 받았다: ${why}`);
   }
+});
+
+/* ── 조회 상태 어휘 ──────────────────────────────────────────────────────────
+ * 화면 다섯 곳(현재 상태 줄·사건 목록·사건 상세·조사 crumb 2곳)이 "현재형으로 말해도 되는가"를
+ * 이 두 함수에 위임한다. 단언이 없으면 필터를 뒤집어도 아무도 모른다 — 실제로 한 라운드 동안
+ * 그 상태였다. 여기서 못박는 것은 **선택·순서·빈 결과** 셋이다. */
+
+const ALL: AxisFetch[] = ['loaded', 'stale', 'pending', 'error'];
+
+test('현재형으로 말해도 되는 상태는 `loaded` **하나뿐**이다', () => {
+  /* 🔴 `!== 'stale'` 로 쓰면 `pending`·`error` 가 샌다 — 그때는 값이 아예 없어 호출부가
+   * `?? 0` 으로 접고, 그 0 이 "오늘 세션 없음" 같은 현재형 단정으로 그려진다. */
+  assert.deepEqual(ALL.filter(isCurrent), ['loaded'], '현재형 자격을 넓혔다');
+});
+
+test('읽히지 않은 축만 **이름과 상태를 달고** 나온다 — 비면 전부 이번에 읽힌 것이다', () => {
+  assert.deepEqual(unreadAxes({ 사실: 'loaded', 실시간: 'loaded' }), []);
+  /* 순서는 넘긴 순서 그대로여야 한다 — 화면이 축을 나열하는 순서가 곧 이 순서다 */
+  assert.deepEqual(
+    unreadAxes({ 사실: 'stale', 실시간: 'loaded', 개요: 'pending' }),
+    [
+      { name: '사실', fetch: 'stale' },
+      { name: '개요', fetch: 'pending' },
+    ],
+    '선택·순서 중 하나가 어긋났다',
+  );
+});
+
+test('🔴 축이 전부 읽혔을 때만 `null` 이다 — 그때만 화면이 현재형으로 말한다', () => {
+  assert.equal(unreadNote({ 사실: 'loaded', 실시간: 'loaded', 개요: 'loaded' }), null);
+  /* 네 상태 중 `loaded` 를 뺀 셋은 **전부** 문장을 내야 한다. 하나라도 빠지면 그 상태에서
+   * 화면이 조용히 현재형으로 돌아간다 — 집합으로 순회해 새 상태가 늘어도 걸리게 한다. */
+  for (const f of ALL) {
+    const note = unreadNote({ 사실: f });
+    if (f === 'loaded') continue;
+    assert.notEqual(note, null, `${f} 에서 문장이 없다`);
+    assert.ok(note!.includes('사실'), `${f} 문장이 축 이름을 안 말한다`);
+    assert.ok(note!.includes(FETCH_LABEL[f]), `${f} 문장이 상태를 안 말한다`);
+  }
+});
+
+test('여러 축이 안 읽히면 **전부** 이름을 말한다 — 하나로 뭉뚱그리면 엉뚱한 API 를 본다', () => {
+  const note = unreadNote({ 사실: 'stale', 실시간: 'error' });
+  assert.ok(note !== null);
+  assert.ok(note.includes('사실') && note.includes('실시간'), `축 이름이 빠졌다 — ${note}`);
+});
+
+test('`fetchTip` 은 축 이름을 앞에 단다 — 어휘를 공유하되 축은 호출자가 붙인다', () => {
+  /* 어휘(`FETCH_TIP`)에 "사실 축"을 박아 두면 테넌트 조회가 실패한 순간 반대 API 를 의심한다 */
+  const tip = fetchTip('테넌트 원장 조회(/tenants)', 'error');
+  assert.ok(tip.startsWith('테넌트 원장 조회(/tenants)'), tip);
+  assert.ok(!tip.includes('사실 축'), '어휘에 남의 축 이름이 박혀 있다');
 });

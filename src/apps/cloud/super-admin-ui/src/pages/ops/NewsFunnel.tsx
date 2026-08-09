@@ -11,11 +11,13 @@
  */
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import { Absent, F, fmt } from './shared';
+import { Absent, fmt } from './shared';
+import { FUNNEL, FUNNEL_DATE, FUNNEL_ORIGIN } from './newsFunnelSnapshot';
+import type { FunnelStep } from './newsFunnelSnapshot';
 import { InfoPopover } from '../_shared/InfoPopover';
 import '../../styles/ops.css';
 
-type Step = (typeof F.news_funnel)[number];
+type Step = FunnelStep;
 
 interface StepNote {
   /** 짧은 상태 — 판단에 필요한 것만 */
@@ -97,18 +99,27 @@ export function stepNotes(s: Step): StepNote[] {
   return out;
 }
 
+/**
+ * 🔴 **이 카드만 응답이 아니라 스냅샷을 읽는다.** `news_funnel` 은 `/console/facts` 밖 축이라
+ * (계약 §「범위 결정」) 같은 화면의 다른 표와 **날짜가 다르다**. 그래서 거래일 자리에 응답의
+ * `meta.today` 를 쓰지 않고 스냅샷 자신의 날짜를 쓰고, 출처를 칩으로 세운다 — 안 밝히면
+ * 운영자가 오늘 값으로 읽는다.
+ */
 export function NewsFunnel() {
-  const funnel = F.news_funnel;
+  const funnel = FUNNEL;
   return (
     <div className="card" id="news-funnel">
       <div className="card-head">
-        <span className="t-label">뉴스 처리 퍼널</span>
+        <span className="t-label">
+          뉴스 처리 퍼널 <span className="chip chip-warn">스냅샷</span>
+        </span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-          거래일 {F.meta.today} · 단계별 처리량과 감소
+          {FUNNEL_DATE} 스냅샷 · 단계별 처리량과 감소
           <InfoPopover
             label="뉴스 처리 퍼널"
             title="뉴스 처리 퍼널"
             text={
+              `⚠️ ${FUNNEL_ORIGIN}\n\n` +
               '레코드 사이의 lineage 가 아니라 **단계별 집계**입니다 — 그래서 "계보"라 부르지 않습니다.\n' +
               '레코드 관계(분석 결과 ↔ assertion ↔ source event ↔ 원문)는 근거·계보 화면이 답합니다.\n\n' +
               '단계마다 단위가 다릅니다(기사 · 문서 · event) — 빼기 전에 각 행의 ⓘ 를 보세요.\n' +

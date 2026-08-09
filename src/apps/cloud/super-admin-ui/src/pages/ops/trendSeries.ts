@@ -27,9 +27,16 @@ export function extent(values: number[], extra: number[] = []): [number, number]
   return [lo - pad, hi + pad];
 }
 
-/** 계열을 0~1 좌표로 — SVG 는 이 값에 폭·높이만 곱한다. 마지막 점이 오늘이다 */
+/**
+ * 계열을 0~1 좌표로 — SVG 는 이 값에 폭·높이만 곱한다. **마지막 점이 오늘이다.**
+ *
+ * 점이 하나면 그 점도 오늘이므로 오른쪽 끝(x=1)에 둔다. 왼쪽 끝에 두면 같은 "오늘"이 계열
+ * 길이에 따라 화면 반대편에 그려진다 — 기준(`base`)이 없는 날 계열이 정확히 한 점이다.
+ */
 export function points(values: number[], range: [number, number]): { x: number; y: number }[] {
   const [lo, hi] = range;
-  const span = values.length > 1 ? values.length - 1 : 1;
-  return values.map((v, i) => ({ x: i / span, y: 1 - (v - lo) / (hi - lo) }));
+  return values.map((v, i) => ({
+    x: values.length > 1 ? i / (values.length - 1) : 1,
+    y: 1 - (v - lo) / (hi - lo),
+  }));
 }

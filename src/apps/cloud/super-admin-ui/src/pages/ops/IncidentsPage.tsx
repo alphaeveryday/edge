@@ -18,15 +18,17 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import type { Incident } from '../../rules/types';
+import type { Facts, Incident } from '../../rules/types';
 import { useMinuteStatus, useSourceOverview } from '../../domains/sources/hooks';
 import { datasetKind, sessionHealth } from '../../domains/sources/minuteView';
 import { MOCK_MINUTE } from '../../mock/preview';
-import { AwsObservedAt, F, Info, useConsoleEvaluation } from './shared';
-import { unevaluatedRules } from './notRun';
+import { AwsObservedAt, ConsoleGate, Info, useConsoleEvaluation } from './shared';
+import { axisOf } from './consoleFacts';
+import { FETCH_LABEL, isCurrent, unevaluatedRules, unreadNote } from './notRun';
+import type { AxisFetch } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
-import { METRICS } from './trendCatalog';
+import { buildMetrics } from './trendCatalog';
 import '../../styles/ops.css';
 
 const SCOPE_TIP = [
@@ -164,48 +166,81 @@ interface NowItem {
   cta: string;
 }
 
+/**
+ * 현재 상태 줄.
+ *
+ * 🔴 **이번에 안 읽힌 축에는 초록을 쓰지 않는다.** 초록(`active`)은 "봤고 괜찮다"라는 가장 강한
+ * 주장인데, 상단이 "지금 상태를 모른다"고 경고하는 화면에서 결론이 초록이면 둘 중 하나는
+ * 거짓이다. 값을 지우지는 않는다(직전 관측은 아는 것이다): **톤만 내리고 그 사실을 적는다.**
+ */
 function nowItems(
   sessions: number,
   batchRunning: number,
   dataDefects: number,
   pipeline: Incident[],
   unevaluated: number,
+  fetches: { facts: AxisFetch; minute: AxisFetch; overview: AxisFetch },
 ): NowItem[] {
+  /**
+   * 🔴 **카드마다 딛는 축이 다르다.** 불리언 하나로 네 카드를 처리하면 두 방향으로 틀린다:
+   * 실시간만 안 읽혔는데 개요 기반 카드까지 "직전 응답"이 되고, 반대로 개요만 안 읽혔는데
+   * 사실 기반 카드가 아무 표기 없이 초록으로 남는다.
+   *
+   * ⚠️ 판별자는 `stale` 이 아니라 **`loaded` 인가**다 — `pending`·`error` 는 값이 아예 없어
+   * 호출부가 `?? 0` 으로 접는데, 그 0 이 "오늘 세션 없음"이라는 **현재형 단정**으로 그려진다.
+   * ⚠️ 막는 것은 "지금 그렇다"를 주장하는 톤(`active`·`env`)뿐이다 — 경고·차단은 안 읽혔어도
+   * 여전히 봐야 할 것이라 톤을 내리면 묻힌다.
+   */
+  const card = (fetch: AxisFetch, tone: NowItem['tone'], note: string) => {
+    if (isCurrent(fetch)) return { tone, note };
+    const claimsNow = tone === 'active' || tone === 'env';
+    return { tone: claimsNow ? ('neutral' as const) : tone, note: `${FETCH_LABEL[fetch]} · ${note}` };
+  };
+  /* 두 축 위에 선 카드는 **덜 신선한 쪽**을 따른다 — 하나라도 안 읽혔으면 현재형이 아니다 */
+  const worse = (a: AxisFetch, b: AxisFetch): AxisFetch => (isCurrent(a) ? b : a);
   const p0 = pipeline.filter((i) => i.sev === 'P0').length;
   const p1 = pipeline.filter((i) => i.sev === 'P1').length;
   return [
     {
       label: '즉시 확인할 문제',
       value: `P0 ${p0} · P1 ${p1}`,
-      /* 못 돈 규칙이 있으면 **초록을 쓰지 않는다** — 0 은 "괜찮다"가 아니라 "덜 봤다"다 */
-      tone: p0 > 0 ? 'blocked' : p1 > 0 ? 'warn' : unevaluated > 0 ? 'neutral' : 'active',
-      note:
+      /* 못 돈 규칙이 있으면 **초록을 쓰지 않는다** — 0 은 "괜찮다"가 아니라 "덜 봤다"다.
+       * 이 카드는 사실·실시간 **둘 다** 위에 선다(R17~R19 가 실시간을 읽는다). */
+      ...card(
+        worse(fetches.facts, fetches.minute),
+        p0 > 0 ? 'blocked' : p1 > 0 ? 'warn' : unevaluated > 0 ? 'neutral' : 'active',
         `파이프라인 문제 ${pipeline.length}건` +
-        (unevaluated > 0 ? ` · 규칙 ${unevaluated}개는 판정 못 함` : ''),
+          (unevaluated > 0 ? ` · 규칙 ${unevaluated}개는 판정 못 함` : ''),
+      ),
       href: '/ops/incidents',
       cta: '문제',
     },
     {
       label: '실행 중인 배치',
       value: `${batchRunning}건`,
-      tone: batchRunning > 0 ? 'env' : 'neutral',
-      note: batchRunning > 0 ? '레인 원장 기준 진행 중' : '지금 도는 배치 없음',
+      ...card(
+        fetches.overview,
+        batchRunning > 0 ? 'env' : 'neutral',
+        batchRunning > 0 ? '레인 원장 기준 진행 중' : '지금 도는 배치 없음',
+      ),
       href: '/minute',
       cta: '현재 실행',
     },
     {
       label: '장중 수집 세션',
       value: `${sessions}개`,
-      tone: sessions > 0 ? 'active' : 'neutral',
-      note: sessions > 0 ? '데이터셋별 상태는 아래에서' : '오늘 세션 없음',
+      ...card(
+        fetches.minute,
+        sessions > 0 ? 'active' : 'neutral',
+        sessions > 0 ? '데이터셋별 상태는 아래에서' : '오늘 세션 없음',
+      ),
       href: '/minute',
       cta: '현재 실행',
     },
     {
       label: '데이터 결손·지연',
       value: `${dataDefects}건`,
-      tone: dataDefects > 0 ? 'warn' : 'active',
-      note: '완전성·기준일 지연 지표 기준',
+      ...card(fetches.facts, dataDefects > 0 ? 'warn' : 'active', '완전성·기준일 지연 지표 기준'),
       href: '/ops/trend',
       cta: '추이',
     },
@@ -213,18 +248,27 @@ function nowItems(
 }
 
 function NowStrip({
+  facts,
+  fetches,
   sessions,
   batchRunning,
   pipeline,
   unevaluated,
 }: {
+  facts: Facts;
+  /* 🔴 이 줄의 수치는 **이번 조회의 것이 아닐 수 있다**(캐시이거나 아예 없다). 축을 안 받으면
+   * 상단은 "지금 상태를 모른다"고 경고하는데 여기 `0건` 은 초록으로 서서 한 화면이 반대말을
+   * 한다. 카드마다 축이 달라 불리언 하나로는 못 접는다. */
+  fetches: { facts: AxisFetch; minute: AxisFetch; overview: AxisFetch };
   sessions: number;
   batchRunning: number;
   pipeline: Incident[];
   unevaluated: number;
 }) {
-  /* 데이터 결손·지연은 추이 지표의 판정을 그대로 센다 — 개요가 새 판정을 만들지 않는다 */
-  const dataDefects = METRICS.filter(
+  /* 데이터 결손·지연은 추이 지표의 판정을 그대로 센다 — 개요가 새 판정을 만들지 않는다.
+   * 지표는 이제 응답에서 만들어지므로 **같은 사실**을 넘겨야 한다(따로 읽으면 두 화면이
+   * 다른 시각의 사실로 다른 수를 말한다). */
+  const dataDefects = buildMetrics(facts).filter(
     (m) => m.group === 'batch' && evaluateMetric(m).kind === 'abnormal',
   ).length;
   return (
@@ -238,7 +282,7 @@ function NowStrip({
       </div>
       <div className="card-pad">
         <ul className="ops-now">
-          {nowItems(sessions, batchRunning, dataDefects, pipeline, unevaluated).map((i) => (
+          {nowItems(sessions, batchRunning, dataDefects, pipeline, unevaluated, fetches).map((i) => (
             <li key={i.label}>
               <Link to={i.href} className="ops-now-item">
                 <span className="t-label">{i.label}</span>
@@ -263,10 +307,29 @@ function NowStrip({
  */
 const TOP_N = 3;
 
+/**
+ * P0 0건의 뜻은 **조회 상태에 달려 있다.**
+ *
+ * 🔴 `stale`(직전 응답은 있으나 마지막 조회 실패)에서 "즉시 개입이 필요한 문제가 없습니다"를
+ * 그대로 쓰면, 화면 맨 위의 조회 실패 경고와 **핵심 결론이 정반대 말을 한다**. 없다고 말할 수
+ * 있는 것은 이번에 실제로 물어봤을 때뿐이다.
+ */
+function noP0Sentence(unevaluated: number, stale: boolean): string {
+  if (stale) {
+    return unevaluated === 0
+      ? '직전 응답에는 P0 가 0건이었습니다 — 마지막 조회가 실패해 지금도 그런지는 알 수 없습니다.'
+      : `직전 응답의 P0 는 0건이었고, 그때도 규칙 ${unevaluated}개는 판정을 못 했습니다 — 마지막 조회가 실패해 지금 상태는 알 수 없습니다.`;
+  }
+  return unevaluated === 0
+    ? '즉시 개입이 필요한 문제가 없습니다 — 규칙 전건이 판정했고 P0 0건입니다.'
+    : `판정한 규칙 중 P0 는 0건입니다 — 다만 규칙 ${unevaluated}개는 판정을 못 해 그 P0 는 걸렸는지조차 모릅니다.`;
+}
+
 function ImmediateAction({
   list,
   total,
   unevaluated,
+  stale,
 }: {
   list: Incident[];
   total: number;
@@ -274,6 +337,9 @@ function ImmediateAction({
    * 그 규칙의 P0 는 이 목록에 애초에 오르지 않으므로, 0을 "지금 개입할 것이 없다"로
    * 그리면 계측 공백·조회 실패가 초록으로 보인다. */
   unevaluated: number;
+  /* 두 축 중 하나라도 낡았는가 — "P0 0건"을 **현재형으로 말해도 되는가**를 정한다.
+   * ⚠️ 이름을 `fetch` 로 두지 마라: 전역 `fetch` 를 가려 tsc 가 엉뚱한 자리를 가리킨다. */
+  stale: boolean;
 }) {
   const navigate = useNavigate();
   const top = list.slice(0, TOP_N);
@@ -288,11 +354,7 @@ function ImmediateAction({
       </div>
       <div className="card-pad">
         {list.length === 0 ? (
-          <p className="t-sm m-0">
-            {unevaluated === 0
-              ? '즉시 개입이 필요한 문제가 없습니다 — 규칙 전건이 판정했고 P0 0건입니다.'
-              : `판정한 규칙 중 P0 는 0건입니다 — 다만 규칙 ${unevaluated}개는 판정을 못 해 그 P0 는 걸렸는지조차 모릅니다.`}
-          </p>
+          <p className="t-sm m-0">{noP0Sentence(unevaluated, stale)}</p>
         ) : (
           <ul className="ops-p0-lines">
             {top.map((I) => (
@@ -330,11 +392,22 @@ function ImmediateAction({
 export function IncidentsPage() {
   /* 실시간 축이 실린 평가 — 사건 목록의 유일한 출처다(shared.useConsoleEvaluation) */
   const ev = useConsoleEvaluation();
-  const { pipeline } = ev;
-  const p0 = pipeline.filter((i) => i.sev === 'P0');
-  const unevaluated = unevaluatedRules(ev);
   const minute = useMinuteStatus();
   const overview = useSourceOverview();
+  if (!ev.ready) return <ConsoleGate q={ev} />;
+  const { pipeline, facts } = ev;
+  const p0 = pipeline.filter((i) => i.sev === 'P0');
+  const unevaluated = unevaluatedRules(ev);
+  /* 🔴 이 화면의 결론은 **세 조회** 위에 서 있다 — 사실(P0·규칙)·실시간(세션)·개요(배치 실행).
+   * 두 축만 세면 개요가 낡은 날 `실행 중인 배치` 배지가 현재 사실처럼 남는다. */
+  const fetches = {
+    facts: ev.fetch,
+    minute: ev.axisFetch,
+    overview: axisOf(overview.data != null, overview.isError),
+  };
+  /* 상단 한 줄은 합쳐 말하고(어느 축이 왜 안 읽혔는지 이름으로), 카드는 각자 자기 축을 본다 */
+  const unread = unreadNote({ 사실: fetches.facts, 실시간: fetches.minute, 개요: fetches.overview });
+  const stale = unread !== null;
   const sessions = minute.data?.sessions.length ?? 0;
   const batchRunning =
     overview.data?.lanes.filter(
@@ -345,17 +418,25 @@ export function IncidentsPage() {
     <div className="flex flex-col gap-4">
       {/* 기준 시각만 — 규칙 엔진 설명은 하단 탐지 상태에 있다 */}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-        거래일 {F.meta.today} · DB {hm(F.meta.db)} · AWS/S3{' '}
-        <AwsObservedAt format={hm} />
+        조회일 {facts.meta.today} · DB {hm(facts.meta.db)} · AWS/S3{' '}
+        <AwsObservedAt meta={facts.meta} format={hm} />
+        {unread && <b style={{ color: 'var(--warn)' }}> · {unread}</b>}
       </p>
 
       <NowStrip
+        facts={facts}
+        fetches={fetches}
         sessions={sessions}
         batchRunning={batchRunning}
         pipeline={pipeline}
         unevaluated={unevaluated.length}
       />
-      <ImmediateAction list={p0} total={pipeline.length} unevaluated={unevaluated.length} />
+      <ImmediateAction
+        list={p0}
+        total={pipeline.length}
+        unevaluated={unevaluated.length}
+        stale={stale}
+      />
       <RealtimeShortcut />
     </div>
   );

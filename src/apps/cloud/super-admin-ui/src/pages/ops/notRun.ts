@@ -23,6 +23,69 @@ import type { RuleResult } from '../../rules/types.ts';
  */
 export type AxisFetch = 'loaded' | 'stale' | 'pending' | 'error';
 
+/**
+ * 조회 상태의 **어휘 한 벌**. 화면마다 따로 쓰면 갈리고, 갈리면 한쪽만 고쳐진다.
+ *
+ * ⚠️ 넷을 셋 이하로 접지 마라. 특히 `stale` 을 `loaded` 에 합치면 **판정은 섰는데 그 근거가
+ * 직전 응답**이라는 사실이 사라지고, `error` 에 합치면 서 있는 판정을 없는 것처럼 그린다.
+ */
+export const FETCH_LABEL: Record<AxisFetch, string> = {
+  loaded: '실림',
+  stale: '낡음 — 마지막 조회 실패',
+  pending: '응답 대기',
+  error: '조회 실패',
+};
+
+/**
+ * 그 상태에서 **무엇을 주장할 수 없는가**. 부재 문구 옆의 `title` 이 이걸 쓴다.
+ *
+ * ⚠️ **축 이름을 박지 않는다.** 이 어휘를 쓰는 자리가 셋인데 축이 서로 다르다 —
+ * 배치 사실(`/console/facts`) · 실시간 세션(`/sources/minute`) · 테넌트(`/tenants`).
+ * 문장에 "사실 축"이라고 쓰면 테넌트 조회가 실패한 순간 운영자가 **반대 API 를 의심한다**.
+ * 축은 호출자가 붙인다(`fetchTip`).
+ */
+export const FETCH_TIP: Record<AxisFetch, string> = {
+  loaded: '이번 조회가 성공했다 — 이 값은 지금 사실이다.',
+  stale: '직전 응답은 있으나 마지막 조회가 실패했다 — 지금도 그런지는 알 수 없다.',
+  pending: '응답이 아직 도착하지 않았다 — 없다는 뜻이 아니다.',
+  error: '못 읽었다 — 없다는 뜻이 아니다.',
+};
+
+/** 축 이름을 앞에 붙인 사유 한 줄 — 어느 조회가 실패했는지 화면이 말해야 한다. */
+export const fetchTip = (axis: string, fetch: AxisFetch): string =>
+  `${axis} — ${FETCH_TIP[fetch]}`;
+
+/**
+ * **이번에 읽힌 축만 현재형으로 말할 수 있다.** 그건 `loaded` 하나뿐이다.
+ *
+ * ⚠️ `!== 'stale'` 로 쓰면 안 된다 — `pending`·`error` 는 값이 아예 없어 호출부가 `?? 0` 으로
+ * 접는데, 그 0 이 "오늘 세션 없음"·"지금 도는 배치 없음" 같은 **현재형 단정**으로 그려진다.
+ * 낡은 값보다 없는 값이 더 조용히 거짓이 되는 자리다.
+ */
+export const isCurrent = (f: AxisFetch): boolean => f === 'loaded';
+
+/**
+ * **신선함은 축마다 따로다.** 한 화면의 결론이 여러 조회 위에 서 있으면(사건 목록·현재 상태
+ * 줄은 사실·실시간·개요를 합친다) 그중 **하나라도** 이번에 안 읽혔으면 현재형으로 못 말한다.
+ *
+ * 🔴 불리언 하나로 접으면 두 방향으로 틀린다: 한 축만 보면 다른 축의 사건이 현재형으로 서고,
+ * 뭉뚱그리면 **어느 조회가 왜** 안 됐는지를 못 말해 운영자가 엉뚱한 API 를 본다. 그래서 이름을
+ * 달아 넘기고 **읽히지 않은 축의 이름 + 상태**를 돌려준다 — 비면 전부 이번에 읽힌 것이다.
+ */
+export function unreadAxes(axes: Record<string, AxisFetch>): { name: string; fetch: AxisFetch }[] {
+  return Object.entries(axes)
+    .filter(([, f]) => !isCurrent(f))
+    .map(([name, fetch]) => ({ name, fetch }));
+}
+
+/** 읽히지 않은 축이 있으면 그 사실을 한 문장으로 — 없으면 `null`(현재형으로 말해도 된다). */
+export function unreadNote(axes: Record<string, AxisFetch>): string | null {
+  const unread = unreadAxes(axes);
+  if (unread.length === 0) return null;
+  const parts = unread.map(({ name, fetch }) => `${name} ${FETCH_LABEL[fetch]}`);
+  return `${parts.join(' · ')} — 아래 값은 이번 조회의 결과가 아니고, 지금 상태는 알 수 없습니다`;
+}
+
 /** 판정을 못 한 규칙 전부 — 종류(`notRun`)는 호출자가 필요할 때만 가른다.
  *
  *  `identity`(응답이 사건을 못 가르게 줬다)만 묻지 않는 이유: 부재를 말하는 문장 앞에서는
