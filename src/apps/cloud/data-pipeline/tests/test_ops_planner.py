@@ -585,16 +585,49 @@ def test_news_cron_runs_every_day_of_week():
     #      (variables.tf 주석), 그 표기는 terraform plan 에서 죽는다. 여기서도 같이 막아 둔다.
     #      ⚠️ **일(day-of-month)까지 함께 든다.** 요일만 보면 `cron(0 15 1 * ? *)`(매달 1일만)
     #      이 통과하는데, 그건 요일 필드가 `?` 라 주말 플래그가 true 로 잡혀 **매달 28일가량
-    #      × 3슬롯**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
-    tf = test_ops_catalog._strip_hcl_comments(
-        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
-    block = re.search(r'variable\s+"news_schedule_expressions"\s*\{(.*?)^\}', tf, re.M | re.S)
-    assert block, "news_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
-    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', block.group(1)))
+    #      × 슬롯 수**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
+    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', _news_cron_block()))
     assert dom_dow and dom_dow <= {("*", "?"), ("?", "*")}, (
         f"뉴스 크론의 (일, 요일)이 {sorted(dom_dow)} — 매일 도는 형태가 아니다. 원장이 표현할 수 "
         "있는 값은 MON-FRI 와 주 7일 둘뿐이고, 둘 중 하나는 `?` 다(AWS 가 `*` 를 두 필드에 "
         "동시에 쓰는 것을 금지한다)")
+
+
+def _news_cron_block() -> str:
+    """주석을 걷어낸 `news_schedule_expressions` 기본값 본문(`_ledger_tf` 와 같은 규율)."""
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"news_schedule_expressions"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "news_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
+    return block.group(1)
+
+
+def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
+    # WHY(ALPHA-893): 08:10 슬롯은 **09:00 KST 이전**이라 창 날짜가 UTC 로 뽑히면 그 런의 창이
+    #      [D-2, D-1] 이 되어 그날 기사를 한 건도 안 가져온다 — 에러 없이 조용히 헛돈다
+    #      (ALPHA-883 이 창을 벤더 달력으로 바꿔 성립시킨 슬롯이다). 두 사실이 **다른 층에**
+    #      있어(크론은 terraform, 달력은 run.py) 한쪽만 되돌려도 아무것도 안 깨진다 —
+    #      그 결합을 여기서 붙든다. 시각 리터럴을 못박지 않는 이유는 08:05·08:20 도 똑같이
+    #      정당하기 때문이다. 지켜야 할 것은 "09:00 이전 슬롯이 있다면 그 창이 KST 여야 한다"다.
+    from data_pipeline import run as run_mod
+
+    slots = [(int(h), int(m)) for m, h in
+             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+    assert slots, "뉴스 크론에서 슬롯 시각을 못 뽑았다 — 파서가 낡았다"
+
+    early = [(h, m) for h, m in slots if (h, m) < (9, 0)]
+    assert early, (
+        "09:00 KST 이전 뉴스 슬롯이 사라졌다. 배치가 장중 수집(뉴스 분 격자 09:00~) 시작 전에 "
+        "밤새 밀린 것을 털어 첫 수집을 1페이지로 유지한다는 ALPHA-893 의 결정이 배선에서 빠진 "
+        "것이다 — 의도한 변경이면 이 단언과 variables.tf 주석을 함께 고쳐라")
+    for hour, minute in early:
+        at = datetime(2026, 7, 3, hour, minute, tzinfo=run_mod.KST)
+        window = run_mod.default_window(
+            at.astimezone(run_mod.window_calendar_tz("ingest-raw", "bigkinds")))
+        assert window[1] == "2026-07-03", (
+            f"{hour:02d}:{minute:02d} 슬롯의 창이 {window} — 그날(07-03)이 끝 날짜가 아니다. "
+            "창 날짜가 벤더 달력(KST)이 아니라 프로세스 시계(UTC)로 뽑히면 이 슬롯은 "
+            "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
 
 
 def test_every_sched_hhmm_env_has_a_weekend_sibling():

@@ -19,7 +19,7 @@
 # (시장 스케줄이 DISABLED→ENABLED 컷오버를 ALPHA-489 로 한 것과 같은 순서).
 #
 # 운영 원장(ALPHA-591) 편입: 뉴스 스케줄은 daily 와 같이 **Planner(plan-run) 경유**다 —
-# OPS_PIPELINE_TYPE=news 로 자체 레인(카탈로그 6작업·하루 3슬롯 기대)을 계획하고 뉴스 SFN 을
+# OPS_PIPELINE_TYPE=news 로 자체 레인(카탈로그 6작업·하루 2슬롯 기대, ALPHA-893)을 계획하고 뉴스 SFN 을
 # 멱등 시작한다. Reconciler 가 "런 자체가 안 떴다"(PLANNER_MISSING)까지 탐지한다.
 
 locals {
@@ -258,7 +258,10 @@ resource "aws_scheduler_schedule" "news" {
   # StartExecution 하므로, EventBridge 의 드문 중복 재전달이 같은 run_key 로 수렴해 run 1개다.
   # run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
   # jsonencode 이스케이프 우회는 OPS_SCHEDULED_TIME env 한 곳만 남는다.
-  # (재시도는 여전히 0 이다 — 아래 retry_policy 주석: 슬롯 간 비중첩 불변식이 이유.)
+  # (재시도는 여전히 0 이다 — 아래 retry_policy 주석. ⚠️ 이유였던 슬롯 간 비중첩 불변식은
+  #  ALPHA-893 에서 사실상 무의미해졌다: 최소 간격이 30분에서 8시간 20분으로 넓어졌다.
+  #  "불가능"은 아니다 — RunTask 제출~컨테이너 기동은 어디에도 안 묶여 있어 앞 런이 8시간
+  #  넘게 밀리면 원리상 겹칠 수 있다. 그 여지가 실무상 사라졌다는 뜻으로 읽어라.)
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn

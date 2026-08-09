@@ -27,7 +27,7 @@ PIT 안전성 표기: ✅ = 시점 클램프/파티션이 선견을 구조적으
 | `s3_investor_flow` | `canonical/market_data/investor_flow_daily` | `normalize-investor` (KIS EOD) | 일배치 | ✅ |
 | `investor_flow_intraday` | `canonical/market_data/investor_flow_intraday` | 장중 수급 레인(평일 5슬롯) | 하루 5슬롯 | ✅ asof_slot 축 분리로 잠정/확정 구분 |
 | `s3_etf_nav` | `canonical/market_data/etf_nav` | `normalize-etf-nav` (KIS) | 일배치 | ✅ |
-| `s3_news_articles` / `s3_assertions` | `canonical/news/news_articles` / `feature/news/assertions` | 뉴스 레인(하루 3슬롯) + 1분 뉴스 canonical writer | 슬롯·분 단위 | ⚠️ `available_at` 이 다수 행에서 적재 시각(τ 승격은 사이드카 의존 — §1.4) |
+| `s3_news_articles` / `s3_assertions` | `canonical/news/news_articles` / `feature/news/assertions` | 뉴스 레인(하루 2슬롯 — 08:10·23:50, ALPHA-893) + 1분 뉴스 canonical writer | 슬롯·분 단위 | ⚠️ `available_at` 이 다수 행에서 적재 시각(τ 승격은 사이드카 의존 — §1.4) |
 | `s3_etf_holdings` / `s3_etf_profile` | `canonical/holdings/etf_holdings` / `canonical/reference/etf_profile` | `normalize-etf`(KRX·FMP) / etf-profile(KIS) | 일배치 | ✅ as_of_date · 단 duck 은 유니버스 뿌리 필터 없이 프리픽스 전체를 읽음(🔴 storage.py 주석) |
 | `s3_supply_fact` / `s3_segment_fact` | `canonical/disclosures/*` | 공시 레인 | 일배치 | ✅ report_date |
 
