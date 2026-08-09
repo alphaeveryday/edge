@@ -797,7 +797,7 @@ class MinuteUniverseConfig(BaseModel):
 
     `[krx_etf.source.etf_map]` 과 다른 축이다: 저기는 "KRX PDF 로 holdings 를 받을 ETF"
     이고 그 구성종목이 유니버스로 파생된다. 여기 ETF 는 **분봉만** 받는다 — holdings 도,
-    구성종목도, NAV 도, **트리거 판정도** 받지 않는다. 그래서 etf_map 에 넣으면 안 되고
+    구성종목도, **트리거 판정도** 받지 않는다. 그래서 etf_map 에 넣으면 안 되고
     (KRX PDF 수집이 늘고 구성종목이 유니버스로 딸려 들어온다) `Universe.etf_ids` 에도
     넣으면 안 된다(그 축은 `price_consumer` 의 판정 집합이다 — `Universe` 도크스트링).
     빌더가 이 목록을 `Universe.sector_etf_ids` 로 싣는다.
@@ -805,15 +805,27 @@ class MinuteUniverseConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # 층 분해의 **섹터 후보** ETF — 분봉이 있어야 구간(장중) 모드에서 섹터층이 선다.
-    # 일봉 경로는 KRX 업종지수를 섹터 후보로 주입하지만(analysis `layers._krx_sector_candidate`)
-    # 그 지수는 분봉이 없어(수집 원천이 pykrx 일봉이다) 구간 모드가 섹터 ETF 로 대체한다.
+    # 층 분해의 **섹터 후보** 였던 참조 계열 ETF — 🔴 **그 소비는 폐기됐다.** 세운 근거
+    # 둘이 다 무너졌다: ① "업종지수는 분봉이 없다"는 거짓이다(ALPHA-887 이 dataset
+    # `sector_index_minute` 으로 1분봉을 수집한다 — 다만 구간 모드가 읽는 5분 롤업이
+    # 없고 소급도 안 돼 아직 그쪽으로 못 옮긴다), ② ALPHA-877 이 프록시 섹터 ETF 후보
+    # 선택을 폐지해 analysis `layers.decompose` 는 clock 모드에서 이 목록과 무관하게
+    # 섹터층을 무조건 부재 처리한다. 채워도 구간 섹터층은 서지 않는다.
     #
-    # 정본은 analysis 쪽 `layers_daily` 의 `kind='sector'` 집합이고, **여기와 자동으로
-    # 맞춰지지 않는다**(그 parquet 은 이 레포 밖 산출물이라 로드 시점에 대조할 수 없다).
-    # 갈렸을 때의 증상은 조용하다: `layers._series` 가 `layers_daily` 회원만 후보로
-    # 삼으므로 여기 없는 후보는 애초에 `xs` 에 안 들어가고, 탈락 사유를 남기는 자리
-    # (`twins`·`alien`·`rho_blocked`)는 **들어온 후보만** 기록한다. 사유 없는 부재다.
+    # 그래도 축은 살아 있다 — `Universe.unit_ids` 로 1분봉을 받고, 5분 롤업(`minute/
+    # rollup.py`)이 필터 없이 집계한다. 걷으려면 그 둘을 같이 봐야 한다.
+    #
+    # 🔴 **iNAV 는 기대만 하고 못 받는다(2026-08-09 확인 · ALPHA-903).**
+    # `InavWorker._expected_units` 는 `etf_ids | sector_etf_ids` 인데 iNAV 심볼 맵은
+    # `krx_etf.source.etf_map` 뿐이고(`worker.py` iNAV 진입점), 빌더가 두 축의 겹침을
+    # **거부**하므로 이 48종은 구조적으로 맵 밖이다 → `inav_collect._rows_for` 가 매
+    # window `Outcome.INVALID` 를 낸다. 기대 집합에서 빼든 심볼 맵을 넓히든 별건이다.
+    #
+    # ⚠️ 아래 "layers_daily 와 갈리면 조용하다"는 경고는 **폐기된 전제 위에 있었다** —
+    # `layers._series` 는 이제 대상·시장 두 심볼만 읽고(ALPHA-877), `twins`·`alien` 은
+    # 항상 빈 튜플이며 `rho_blocked` 는 아예 없다(ALPHA-862 가 ρ 게이트를 걷었다).
+    # 목록이 `layers_daily` 와 갈려도 층 분해에는 아무 영향이 없다 — 이 축은 수집 집합일
+    # 뿐이다.
     sector_etf_ids: tuple[NonBlankStr, ...] = ()
 
     @model_validator(mode="after")

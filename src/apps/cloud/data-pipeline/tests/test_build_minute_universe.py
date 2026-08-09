@@ -42,8 +42,9 @@ def _storage(tmp_path) -> LocalStorage:
 
 
 def test_sector_etfs_are_collected_but_not_judged(tmp_path):
-    # WHY: 구간(장중) 모드의 섹터층은 섹터 ETF 로 선다 — 일봉 경로가 쓰는 KRX 업종지수는
-    #      분봉이 없기 때문이다. 그래서 봉은 받아야 한다(`unit_ids`). 그런데 `etf_ids` 는
+    # WHY: 이 축을 세운 근거(구간 섹터층을 섹터 ETF 로 세운다)는 폐기됐다 — ALPHA-877 이
+    #      프록시 후보 선택을 걷었고 ALPHA-887 이 업종지수 1분봉을 수집한다. 그래도 봉은
+    #      받아야 한다(`unit_ids` — 5분 롤업과 iNAV 기대 집합이 매달려 있다). 그런데 `etf_ids` 는
     #      `price_consumer` 의 **판정 집합**이라(PriceTriggerHandler.etf_ids) 거기 얹으면
     #      이 계열이 트리거 발화 대상이 된다 — 레버리지·인버스가 3% 게이트를 상시 넘겨
     #      구성종목 없는 상품의 설명이 발화되고, 일봉 유니버스 밖이라 prev_close 가 없어

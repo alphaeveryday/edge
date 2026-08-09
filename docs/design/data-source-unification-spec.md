@@ -118,7 +118,7 @@ duck.py `backfill_sources` docstring).
 | # | 항목 | 왜 지금 | 난이도 |
 |---|---|---|---|
 | ① | **KRX 업종지수 일봉 + 업종 분류 스냅샷** (`sector_index`·`sector_member` 공백 메우기 + 상시화) | 2026-08-03 이후 공백이 매일 자란다. 일봉 경로의 섹터층(`layers._krx_sector_candidate`)과 kbeta·attribute·tool_peer 가 직접 소비 — 공백 구간은 섹터층이 조용히 부재 | 하 — pykrx 소급 가능이라 급하지 않은 대신 싸다 |
-| ② | **KRX 업종지수 분봉** (장중 섹터층의 전제) | ✅ **수집 배선 완료**(ALPHA-887) — KIS 업종 TR `FHKUP03500200` 이 실재한다(시장구분 `U`). 45종을 `sector_index_minute` dataset 으로 1분 레인에 편입했다. ⚠️ 레포 곳곳의 "KRX 지수는 5분봉이 없다"(layers.py 등)는 **분봉 부재의 근거가 못 된다** — 다만 **소급은 진짜 불가**하다(소급 TR 이 일봉으로 degrade). 남은 일은 **소비 전환**이다: 구간 모드 섹터층이 아직 섹터 ETF 대체를 쓴다 | 중 — 수집 완료, 소비 표면 전환이 잔여 |
+| ② | **KRX 업종지수 분봉** (장중 섹터층의 전제) | ✅ **수집 배선 완료**(ALPHA-887) — KIS 업종 TR `FHKUP03500200` 이 실재한다(시장구분 `U`). 45종을 `sector_index_minute` dataset 으로 1분 레인에 편입했다. ⚠️ 레포 곳곳의 "KRX 지수는 5분봉이 없다"(layers.py 등)는 **분봉 부재의 근거가 못 된다** — 다만 **소급은 진짜 불가**하다(소급 TR 이 일봉으로 degrade). 남은 일은 **소비 전환**이다 — 다만 "구간 모드가 섹터 ETF 대체를 쓴다"도 거짓이다: ALPHA-877 이 프록시 후보 선택을 폐지해 `layers.decompose` 는 clock 모드에서 `sector_etf_ids` 와 무관하게 섹터층을 무조건 부재 처리한다(그 축은 봉·5분 롤업·iNAV 로만 살아 있다). 즉 구간 섹터층은 **지금 아무것도 안 선다** | 중 — 수집 완료, 소비 표면 전환이 잔여 |
 | ③ | **`layers_daily` 정규 생산 경로 또는 폐기** | 레포 밖 산출물 786k행에 시장·섹터·종목·미국 층 전부가 매달려 있고 이름 오염(41/80) 이력. **권고: 폐기·유도 대체** — market/sector/stock 층은 `canonical/market_data/price_daily`(KIS 가 ETF 자기 종가 포함 수집)에서, us 층은 ①과 별개로 `index_daily` 포워드(⑤)에서 유도 가능. 유도 뷰로 대체되면 이름은 `s3_etf_profile`·마스터가 정본(이미 그 방향 — layers.py) | 중 — 소비처가 12+ 파일이라 뷰 호환(같은 스키마 symbol·kind·date·close·name)으로 대체해야 한다 |
 | ④ | **FX·해외지수·금리 일봉 포워드** (`fx_daily`·`index_daily`·`rates_daily`) | 2026-07-31 이후 공백. 거시 계열 방아쇠(`paneltest.macro_z`)의 입력 — 공백이면 방아쇠가 침묵 | 하 — FMP 일봉 수집기(`ingest-price-raw`)와 동형, 심볼만 다르다. FMP 공용키 한도(ALPHA-558) 재확인 필요 |
 | ⑤ | **투자자 수급 롱포맷·프로그램매매 포워드** (`investor_value_daily`·`program_trading_daily`) | 수급 계열 방아쇠(`flow_z`) 입력, 2026-07-31 이후 공백. 단 EOD 수급(`investor_flow_daily`)이 상시라 **부분 중복** — 13유형 롱포맷·프로그램매매만 진짜 공백 | 하 — KIS 기존 세트 재사용 |
@@ -177,8 +177,9 @@ duck.py `backfill_sources` docstring).
   - ⭐ **라벨이 구간의 시작이다** — 주식 당일 TR(구간 **끝**)과 **반대 축**이다.
   - 🔴 **소급은 불가하다.** 소급 TR 은 일봉으로 degrade 한다 — 놓친 분은 영구 결손이라
     이 dataset 은 복구 예산이 0 이고 오늘이 아닌 `--session-date` 를 기동에서 거부한다.
-  - ⛔ 부재 시 갈래(섹터 ETF 대체를 확정 설계로 명문화)는 **채택되지 않았다**. 다만 대체
-    자체는 남는다 — 소비 표면 전환(③)은 아직이다.
+  - ⛔ 부재 시 갈래(섹터 ETF 대체를 확정 설계로 명문화)는 **채택되지 않았다**. 대체 동작
+    자체도 이미 없다 — ALPHA-877 이 프록시 후보 선택을 폐지해 구간 섹터층은 정직 부재이고
+    `sector_etf_ids` 는 봉·5분 롤업·iNAV 축으로만 남았다. 소비 표면 전환은 아직이다.
 - **주기·트리거·완전성**: 1분 레인 세션 원장(window·manifest) 계약을 그대로 받는다 —
   별도 완전성 장치 불필요. 단 **기대 집합이 universe 가 아니라 config** 라
   (`UNIVERSE_DATASETS` 밖) 그 정체성을 세션에 따로 고정한다(`config_set_identity`).

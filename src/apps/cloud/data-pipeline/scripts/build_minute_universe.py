@@ -10,11 +10,25 @@
 파티션이 아니라 config `krx_etf.source.etf_map` 이다. 그 로직은 수집 스텝이 이미 갖고
 있어 여기서 재구현하지 않는다(`steps/ingest_price_raw`).
 
-여기에 config `[minute_universe].sector_etf_ids` 를 **참조 계열 축**으로 얹는다 — 층 분해의
-섹터 후보 ETF 다. holdings 축과 별개인 이유: `krx_etf.source.etf_map` 밖이라 그 ETF 의
-구성종목을 수집하지 않고, 따라서 canonical KR holdings 에 자기 행이 없다. 안 얹으면
-구간(장중) 모드에서 섹터층이 통째로 빠진다(일봉 경로가 쓰는 KRX 업종지수는 분봉이 없어
-구간 모드가 섹터 ETF 로 대체한다).
+여기에 config `[minute_universe].sector_etf_ids` 를 **참조 계열 축**으로 얹는다. holdings
+축과 별개인 이유: `krx_etf.source.etf_map` 밖이라 그 ETF 의 구성종목을 수집하지 않고,
+따라서 canonical KR holdings 에 자기 행이 없다.
+
+🔴 **배선은 살아 있고 원래 소비만 0 이다.** 이 축을 세운 근거는 "일봉 경로가 쓰는 KRX
+업종지수는 분봉이 없으니 구간 모드가 섹터 ETF 로 대체한다"였는데 **두 절이 다 거짓이
+됐다**: ① 업종지수 1분봉은 ALPHA-887 이 수집한다(dataset `sector_index_minute`) — 다만
+구간 모드가 읽는 5분 롤업이 없고 소급도 안 돼 그쪽으로 아직 못 옮긴다, ② ALPHA-877 이
+프록시 섹터 ETF 후보 선택 자체를 폐지해 analysis `layers.decompose` 는 clock 모드에서
+이 목록과 무관하게 섹터층을 무조건 부재 처리한다. **채워도 구간 섹터층은 서지 않는다.**
+
+그래도 축을 지금 걷으면 안 된다 — 다른 소비가 붙어 있다: `Universe.unit_ids` 가 실어
+1분봉을 받고(`minute/models.py`), 그 1분봉은 필터 없이 5분으로 집계된다(`minute/rollup.py`
+는 `unit_id` 로 버킷한다). 걷으려면 그 둘을 같이 봐야 한다 — ALPHA-887 소비 전환의 몫.
+
+🔴 **iNAV 는 기대만 하고 못 받는다(2026-08-09 확인 · ALPHA-903).** `InavWorker._expected_units`
+는 `etf_ids | sector_etf_ids` 인데 iNAV 심볼 맵은 `krx_etf.source.etf_map` 뿐이고, 아래
+`build` 가 두 축의 겹침을 **거부**하므로 이 48종은 구조적으로 맵 밖이다 — 매 window
+`Outcome.INVALID` 다(`minute/inav_collect.py`). 기대 집합에서 빼든 심볼 맵을 넓히든 별건.
 
 **이 스크립트는 업로드하지 않는다.** 파일만 만들고, S3 반영은 운영자가 확인 후 한다 —
 universe 는 세션 identity(universe_hash) 축이라 갈아끼우는 순간 그날 계획이 바뀐다.
@@ -55,8 +69,10 @@ from data_pipeline.steps.ingest_price_raw import (  # noqa: E402
 def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Universe:
     """holdings(+참조 계열) → `Universe`. 빈 결과는 만들지 않는다(fail loud).
 
-    `sector_etf_ids` 는 층 분해의 **섹터 후보** ETF(config `[minute_universe]`)다. holdings
-    에서 파생되지 않는다 — `etf_map` 밖이라 그 ETF 의 구성종목을 수집하지 않고, 따라서
+    `sector_etf_ids` 는 층 분해의 섹터 후보 **였던** 참조 계열 ETF(config
+    `[minute_universe]`)다 — 그 소비는 폐기됐고(모듈 도크스트링) 봉 수집만 남았다
+    (iNAV 는 기대만 하고 못 받는다 — ALPHA-903).
+    holdings 에서 파생되지 않는다 — `etf_map` 밖이라 그 ETF 의 구성종목을 수집하지 않고, 따라서
     canonical KR holdings 에 자기 행이 없다. 그래서 따로 얹는다.
 
     **`etf_ids` 가 아니라 `sector_etf_ids` 축이다.** `etf_ids` 는 수집 축이자 **판정 축**

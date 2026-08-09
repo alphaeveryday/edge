@@ -3,7 +3,8 @@
 β=1 고정 뒤의 계약은 셋이다: (1) 합 항등식이 부동소수 오차 안에서 정확하다,
 (2) 층 기여는 회귀가 아니라 **회계**다 - 시장은 그대로, 섹터는 시장 차감,
 (3) 섹터는 **KRX 업종지수뿐**이다(ALPHA-877) - 프록시 ETF 겹침 선택은 폐기했고,
-업종지수 분봉이 없는 구간 모드는 정직 부재다. 회귀·ρ·표본 게이트가
+업종지수 5분봉이 없는 구간 모드는 정직 부재다(1분봉은 ALPHA-887 이 수집하나 5분
+롤업·소급이 없어 이 경로가 못 읽는다). 회귀·ρ·표본 게이트가
 있던 자리의 검정은 칼만(ALPHA-803)이 신뢰구간과 함께 다시 가져온다.
 """
 import datetime as dt
@@ -234,10 +235,11 @@ def test_daily_without_krx_tables_leaves_sector_absent_with_reason():
 
 
 def test_clock_mode_sector_layer_is_honestly_absent():
-    """구간 모드의 섹터 층은 정직 부재다(ALPHA-877) - 업종지수는 분봉이 없고,
-    섹터 ETF 5분봉이 패널에 실려 와도 층이 서면 안 된다(프록시 ETF 겹침 선택이
-    몰래 부활하면 여기서 깨진다). 사유가 남고 시장+고유 2층 회계는 그대로 선다."""
-    lake = _krx_lake()                    # KRX 일봉 표까지 있어도 분봉은 아니다
+    """구간 모드의 섹터 층은 정직 부재다(ALPHA-877) - 업종지수 5분봉이 없고(1분봉은
+    ALPHA-887 이 수집하나 롤업·소급이 없어 이 경로가 못 읽는다), 섹터 ETF 5분봉이
+    패널에 실려 와도 층이 서면 안 된다(프록시 ETF 겹침 선택이 몰래 부활하면 여기서
+    깨진다). 사유가 남고 시장+고유 2층 회계는 그대로 선다."""
+    lake = _krx_lake()                    # KRX 일봉 표까지 있어도 5분봉은 아니다
     lake.series["T"]["lr5"] = 0.02
     lake.series[MARKET_CODE]["lr5"] = 0.01
     lake.series["SEC"]["lr5"] = 0.015     # 프록시 후보였던 섹터 ETF 의 구간수익
@@ -248,7 +250,12 @@ def test_clock_mode_sector_layer_is_honestly_absent():
     assert m.contribution == pytest.approx(0.01, abs=1e-12)
     assert all(x.kind != "섹터" for x in r.layers)
     assert r.twins == () and r.alien == ()
-    assert "업종지수 분봉 미수집" in lake.exists["sector_layer"]
+    # 사유는 근거를 **둘 다** 담아야 한다: "5분 롤업만 붙이면 된다"로 읽히면 다음
+    # 사람이 과거 구간까지 되는 줄 알고 소급 없는 dataset 위에 소비를 얹는다.
+    why = lake.exists["sector_layer"]
+    assert "5분봉 없음" in why and "소급 불가" in why, why
+    # 옛 문구 "분봉 미수집" 은 ALPHA-887 이후 거짓이다 — 되살아나면 여기서 깨진다.
+    assert "미수집" not in why, why
     assert sum(x.contribution for x in r.layers) + r.idio == pytest.approx(
         r.total, abs=1e-12), "2층 회계 항등식은 그대로 선다"
 
