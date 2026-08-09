@@ -219,7 +219,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     try:
         from .objectset_tools import NewsScope, ObjectSetRuntime
         object_runtime = ObjectSetRuntime(
-            lake, as_of=f"{day}T{facts.window_end}:59.999999",
+            lake, as_of=f"{day}T{facts.window_end}:00",
             news_scope=NewsScope(instrument_id, prev_trading_day(lake, day)))
         object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
         threads = object_runtime.call("news.find_threads", {"limit": 40})

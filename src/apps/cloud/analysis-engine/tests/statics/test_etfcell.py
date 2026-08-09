@@ -8,7 +8,11 @@ from edge_analysis.statics.interval import WindowFacts
 def _object_lake():
     con = duckdb.connect()
     con.execute("CREATE VIEW v_instrument AS SELECT 'iid' AS instrument_id")
-    return type("ObjectLake", (), {"con": con, "bound": {"instrument": None}})()
+    return type("ObjectLake", (), {
+        "con": con,
+        "bound": {"instrument": None},
+        "sql": lambda _self, _query: [("2026-08-04",)],
+    })()
 
 
 def _facts():
@@ -340,6 +344,12 @@ def test_window_paneltest_abstains_before_asking_when_objectset_is_unavailable(m
                         lambda lake, eids: ["CONTRACT.SIGNING"])
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
                         lambda lake, iid, day: {})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+    monkeypatch.setattr(
+        "edge_analysis.statics.objectset_tools.ObjectSetRuntime",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("surface unavailable")),
+    )
     calls = []
     stage_results, trials = etfcell._window_paneltest(
         object(), "iid", "2026-08-05", lambda *_: calls.append(1) or {}, facts)
@@ -350,7 +360,7 @@ def test_window_paneltest_abstains_before_asking_when_objectset_is_unavailable(m
         "stage": "propose",
         "verdict": "판정불가",
         "reason": "OBJECTSET_UNAVAILABLE",
-        "error_type": "ValueError",
+        "error_type": "RuntimeError",
     },)
 
 
@@ -563,7 +573,8 @@ def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):
         out = etfcell._window_paneltest(
             object(), "iid", "2026-08-05", lambda *_: {}, facts)
 
-    assert out == ((), ()), "재료 없음 - LLM 미호출 계약이 흔들렸다"
+    assert out[0][0]["reason"] == "OBJECTSET_UNAVAILABLE"
+    assert out[1] == ()
     events = {e.get("event") for e in trace}
     assert "hypothesis.etypes_failed" in events
     assert "hypothesis.series_z_failed" in events

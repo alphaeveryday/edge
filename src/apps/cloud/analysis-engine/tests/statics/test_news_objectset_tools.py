@@ -28,6 +28,8 @@ class _NewsLake:
               ('thr_1', 'COMPANY.CONTRACT.SIGNING', TIMESTAMP '2026-08-07 09:50:00'),
               ('thr_delayed', 'COMPANY.CONTRACT.SIGNING', TIMESTAMP '2026-08-07 09:00:00'),
               ('thr_rejected', 'COMPANY.CONTRACT.SIGNING', TIMESTAMP '2026-08-07 09:00:00'),
+              ('thr_exact', 'COMPANY.CONTRACT.SIGNING', TIMESTAMP '2026-08-07 09:00:00'),
+              ('thr_next', 'COMPANY.CONTRACT.SIGNING', TIMESTAMP '2026-08-07 09:00:00'),
               ('thr_future', 'COMPANY.CONTRACT.SIGNING', TIMESTAMP '2026-08-07 15:00:00')
             ) t(thread_id, event_type_code, opened_at)
         """)
@@ -37,6 +39,8 @@ class _NewsLake:
               ('evt_old', 'thr_1', 'FOLLOW_UP_STAGE', TIMESTAMP '2026-08-05 10:00:00'),
               ('evt_delayed', 'thr_delayed', 'FIRST_IN_THREAD', TIMESTAMP '2026-08-07 15:00:00'),
               ('evt_rejected', 'thr_rejected', 'FIRST_IN_THREAD', TIMESTAMP '2026-08-07 11:00:00'),
+              ('evt_exact', 'thr_exact', 'FIRST_IN_THREAD', TIMESTAMP '2026-08-07 12:05:00'),
+              ('evt_next', 'thr_next', 'FIRST_IN_THREAD', TIMESTAMP '2026-08-07 12:05:01'),
               ('evt_future', 'thr_1', 'FOLLOW_UP_STAGE', TIMESTAMP '2026-08-07 15:00:00')
             ) t(source_event_id, thread_id, novelty_status, evaluated_at)
         """)
@@ -45,6 +49,8 @@ class _NewsLake:
               ('evt_1', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'ACTIVE', DATE '2026-08-07', TIMESTAMP '2026-08-07 10:00:00'),
               ('evt_delayed', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'ACTIVE', DATE '2026-08-07', TIMESTAMP '2026-08-07 09:10:00'),
               ('evt_rejected', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'REJECTED', DATE '2026-08-07', TIMESTAMP '2026-08-07 11:00:00'),
+              ('evt_exact', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'ACTIVE', DATE '2026-08-07', TIMESTAMP '2026-08-07 12:05:00'),
+              ('evt_next', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'ACTIVE', DATE '2026-08-07', TIMESTAMP '2026-08-07 12:05:01'),
               ('evt_old', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'ACTIVE', DATE '2026-08-05', TIMESTAMP '2026-08-05 10:00:00'),
               ('evt_future', 'NEWS', 'COMPANY.CONTRACT.SIGNING', 'ACTIVE', DATE '2026-08-07', TIMESTAMP '2026-08-07 15:00:00')
             ) t(source_event_id, source_class, event_type_code, event_status, event_date, available_at)
@@ -68,6 +74,8 @@ class _NewsLake:
               ('ev_late_doc', 'evt_1', 'assert_late', 'BODY', 'late enrichment', 0.8),
               ('ev_old', 'evt_old', 'assert_old', 'TITLE', 'old contract', 0.95),
               ('ev_rejected', 'evt_rejected', 'assert_rejected', 'TITLE', 'bad extraction', 0.9),
+              ('ev_exact', 'evt_exact', 'assert_exact', 'TITLE', 'exact cutoff', 0.9),
+              ('ev_next', 'evt_next', 'assert_next', 'TITLE', 'next second', 0.9),
               ('ev_future', 'evt_future', 'assert_future', 'TITLE', 'future follow-up', 0.95)
             ) t(evidence_id, source_event_id, assertion_id, evidence_type, evidence_text, link_confidence)
         """)
@@ -90,6 +98,8 @@ class _NewsLake:
               ('assert_late', 'doc_late', TIMESTAMP '2026-08-07 15:00:00'),
               ('assert_old', 'doc_old', TIMESTAMP '2026-08-05 10:00:00'),
               ('assert_rejected', 'doc_rejected', TIMESTAMP '2026-08-07 11:00:00'),
+              ('assert_exact', 'doc_exact', TIMESTAMP '2026-08-07 12:05:00'),
+              ('assert_next', 'doc_next', TIMESTAMP '2026-08-07 12:05:01'),
               ('assert_future', 'doc_future', TIMESTAMP '2026-08-07 15:00:00')
             ) t(assertion_id, document_id, available_at)
         """)
@@ -99,6 +109,8 @@ class _NewsLake:
               ('doc_late', TIMESTAMP '2026-08-07 15:00:00'),
               ('doc_old', TIMESTAMP '2026-08-05 10:00:00'),
               ('doc_rejected', TIMESTAMP '2026-08-07 11:00:00'),
+              ('doc_exact', TIMESTAMP '2026-08-07 12:05:00'),
+              ('doc_next', TIMESTAMP '2026-08-07 12:05:01'),
               ('doc_future', TIMESTAMP '2026-08-07 15:00:00')
             ) t(document_id, available_at)
         """)
@@ -138,6 +150,15 @@ def test_news_contract_advertises_hierarchy_and_schema_without_executable_fields
     assert '"query"' not in encoded
     assert '"view_name"' not in encoded
     assert all(spec["input_schema"]["additionalProperties"] is False for spec in news)
+
+
+def test_news_cutoff_includes_exact_instant_and_excludes_the_next_second():
+    runtime = ObjectSetRuntime(_NewsLake(), as_of="2026-08-07T12:05:00")
+    threads = _call(runtime, "news.find_threads", {"limit": 10})["threads"]
+
+    ids = {row["thread_id"] for row in threads}
+    assert "thr_exact" in ids
+    assert "thr_next" not in ids
 
 
 def test_thread_to_event_to_argument_and_evidence_keeps_one_intraday_clock():

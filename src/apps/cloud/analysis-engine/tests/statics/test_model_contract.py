@@ -2,7 +2,10 @@
 
 import pytest
 
-from edge_analysis.statics.model_contract import (ModelSchemaError, ModelShapeError,
+from edge_analysis.statics.model_contract import (MAX_MODEL_LIST_ITEMS,
+                                                   MAX_MODEL_RESPONSE_BYTES,
+                                                   ModelLimitError, ModelSchemaError,
+                                                   ModelShapeError, list_field,
                                                    validate_model_output)
 
 
@@ -95,3 +98,23 @@ def test_verifier_stage_uses_the_shared_model_contract(monkeypatch):
     with pytest.raises(ModelSchemaError):
         verifier.design(lambda *_: {"sql": "SELECT 1"}, object(),
                         etype="COMPANY.PRODUCT.LAUNCH", day="2026-08-05", layer="고유")
+
+
+def test_oversized_model_response_fails_before_it_can_reach_an_archive():
+    with pytest.raises(ModelLimitError, match="MODEL_LIMIT_REJECTED"):
+        validate_model_output({"hypotheses": ["x" * MAX_MODEL_RESPONSE_BYTES]})
+
+
+def test_non_json_values_fail_at_the_model_boundary():
+    with pytest.raises(ModelShapeError, match="JSON-serializable"):
+        validate_model_output({"hypotheses": [{"value": object()}]})
+
+
+def test_unbounded_rejected_hypotheses_fail_instead_of_growing_the_ledger():
+    output = {"hypotheses": [{}] * (MAX_MODEL_LIST_ITEMS + 1)}
+    with pytest.raises(ModelLimitError, match="MODEL_LIMIT_REJECTED"):
+        list_field(output, "hypotheses")
+
+    from edge_analysis.statics.hypothesize import propose
+    with pytest.raises(ModelLimitError, match="MODEL_LIMIT_REJECTED"):
+        propose(lambda *_: output, facts="x", event_types=[])
