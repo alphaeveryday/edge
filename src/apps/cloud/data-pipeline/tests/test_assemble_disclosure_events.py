@@ -1,6 +1,11 @@
 """DART typed fact → canonical event 조립 테스트 (ALPHA-895)."""
 
+import json
+from contextlib import contextmanager
+
+from data_pipeline.config import DbConfig
 from data_pipeline.db import stable_domain_id
+from data_pipeline.lake import LocalStorage
 from data_pipeline.steps import assemble_disclosure_events
 
 
@@ -158,3 +163,34 @@ def test_fetch_maps_issuer_and_counterparty_to_common_instruments():
     assert fact["customer_instrument_id"] == "inst_customer"
     query = next(sql for sql, _ in conn.log if sql.upper().startswith("SELECT SC.FACT_ID"))
     assert query.upper().count("SHARE_CLASS_CODE = 'COMMON'") == 2
+
+
+def test_run_surfaces_required_identity_loss_in_quality_log(tmp_path, monkeypatch):
+    """필수 identity가 빠졌는데 exit 0이면 worker가 window를 VALID로 확정해 영구 유실된다.
+    정상 조립 수와 결손 수를 로그에 남기고 비0으로 실패시켜 재처리 가능하게 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _Conn()
+
+    @contextmanager
+    def fake_connect(_db):
+        yield conn
+
+    monkeypatch.setattr(assemble_disclosure_events, "connect", fake_connect, raising=False)
+    monkeypatch.setattr(assemble_disclosure_events, "fetch_facts",
+                        lambda *_args, **_kwargs: [_fact(), _fact(document_id="bad")])
+    monkeypatch.setattr(
+        assemble_disclosure_events, "persist_facts",
+        lambda *_args, **_kwargs: {"created": 1, "already": 0, "unknown_thread": 0,
+                                  "skipped_required": 1})
+
+    exit_code = assemble_disclosure_events.run(
+        storage, "R1", db=DbConfig(password="x"),
+        from_date="2026-08-01", to_date="2026-08-09")
+
+    assert exit_code == 1
+    keys = [key for key in storage.list_keys("operations_archive/") if key.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["facts_read"] == 2
+    assert log["created"] == 1
+    assert log["skipped_required"] == 1
+    assert log["exit_code"] == 1

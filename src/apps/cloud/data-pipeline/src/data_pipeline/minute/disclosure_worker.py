@@ -67,7 +67,8 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import DbConfig, Settings
 from ..lake.storage import Storage, minute_poll_manifest_key
-from ..steps import ingest_raw_disclosure, load_disclosure, normalize_disclosure
+from ..steps import (assemble_disclosure_events, ingest_raw_disclosure, load_disclosure,
+                     normalize_disclosure)
 from ..steps import normalize_disclosure_segment
 from .artifacts import (
     ArtifactImmutabilityError,
@@ -282,6 +283,11 @@ class DisclosureWorker(MinuteWorkerLoop):
                     self.storage, run_id, db=cfg.db,
                     from_date=query_from, to_date=query_to,
                 )
+                if step_exits["load"] == 0:
+                    step_exits["assemble"] = assemble_disclosure_events.run(
+                        self.storage, run_id, db=cfg.db,
+                        from_date=query_from, to_date=query_to,
+                    )
 
             data_status = _classify(raw_status, step_exits, rcept_nos)
             manifest = build_poll_manifest(

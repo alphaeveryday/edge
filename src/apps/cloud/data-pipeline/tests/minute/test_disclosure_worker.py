@@ -54,7 +54,7 @@ class SpyStorage(LocalStorage):
 
 
 class StubSteps:
-    """4스텝을 대신하는 스텁 — 무엇을 어떤 인자로 불렀는지 기록한다."""
+    """5스텝을 대신하는 스텁 — 무엇을 어떤 인자로 불렀는지 기록한다."""
 
     def __init__(self, *, rcept_nos=("20260810000001", "20260810000002"),
                  status="success", exit_code=0, raw_keys=None, truncated=False):
@@ -71,6 +71,7 @@ class StubSteps:
         self.normalize_calls: list[dict] = []
         self.segment_calls: list[dict] = []
         self.load_calls: list[dict] = []
+        self.assemble_calls: list[dict] = []
 
     def collect(self, settings, storage, source, run_id, from_date=None, to_date=None):
         self.collect_windows.append((from_date, to_date))
@@ -96,12 +97,17 @@ class StubSteps:
         self.load_calls.append({"run_id": run_id, "from": from_date, "to": to_date})
         return 0
 
+    def assemble(self, storage, run_id, *, db, from_date=None, to_date=None):
+        self.assemble_calls.append({"run_id": run_id, "from": from_date, "to": to_date})
+        return 0
+
 
 def install(monkeypatch, steps: StubSteps) -> StubSteps:
     monkeypatch.setattr(dw.ingest_raw_disclosure, "collect", steps.collect)
     monkeypatch.setattr(dw.normalize_disclosure, "run", steps.normalize)
     monkeypatch.setattr(dw.normalize_disclosure_segment, "run", steps.segment)
     monkeypatch.setattr(dw.load_disclosure, "run", steps.load)
+    monkeypatch.setattr(dw.assemble_disclosure_events, "run", steps.assemble)
     return steps
 
 
@@ -161,6 +167,8 @@ def test_질의_창이_세션_날짜에서_나온다_벽시계가_아니다(tmp_
     assert steps.load_calls
     for call in steps.load_calls:
         assert call["to"] == SESSION_DATE
+    assert steps.assemble_calls
+    assert steps.assemble_calls == steps.load_calls
 
 
 def test_창_폭은_당일이고_세션_첫_tick만_D_1을_포함한다(tmp_path, monkeypatch):
@@ -505,7 +513,8 @@ def test_manifest_키는_attempt_축이라_재시도가_불변_위반이_아니�
     manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
     assert manifest["rcept_nos"] == ["20260810000001", "20260810000002"]
     assert manifest["query_window"] == ["2026-08-09", SESSION_DATE]
-    assert manifest["step_exits"] == {"ingest": 0, "load": 0, "normalize": 0, "segment": 0}
+    assert manifest["step_exits"] == {
+        "assemble": 0, "ingest": 0, "load": 0, "normalize": 0, "segment": 0}
 
 
 def test_run_id_는_session_window_attempt_에서_결정적으로_나온다(tmp_path, monkeypatch):

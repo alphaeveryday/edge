@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import date
+from datetime import datetime, timezone
 
-from ..db import stable_domain_id
+from ..config import DbConfig
+from ..db import connect, stable_domain_id
+from ..lake import Storage, quality_log_key
 from .assemble_events import thread_events
 
 EVENT_TYPE = "COMPANY.CONTRACT.SIGNING"
 PREDICATE = "SIGN"
 STAGE = "DEFINITIVE_SIGNED"
+DATASET = "disclosure_event"
+logger = logging.getLogger(__name__)
 
 _FACT_COLUMNS = (
     "fact_id", "document_id", "rcept_no", "report_date", "available_at",
@@ -226,3 +233,41 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
     unknown = thread_events(conn, pending)
     return {"created": len(pending), "already": len(events) - len(pending),
             "unknown_thread": unknown, "skipped_required": skipped_required}
+
+
+def run(storage: Storage, run_id: str, *, db: DbConfig,
+        from_date: str | None = None, to_date: str | None = None) -> int:
+    """기간 내 typed supply facts를 조립한다. 기간 미지정은 전체 보관분이다."""
+    started_at = datetime.now(timezone.utc)
+    facts_read = 0
+    result = {"created": 0, "already": 0, "unknown_thread": 0,
+              "skipped_required": 0}
+    failures = []
+    try:
+        with connect(db) as conn:
+            facts = fetch_facts(conn, from_date=from_date, to_date=to_date)
+            facts_read = len(facts)
+            result = persist_facts(conn, facts)
+    except Exception as exc:
+        logger.exception("DART 공시 이벤트 조립 실패(롤백)")
+        failures.append({"reason": "assembly_error", "error": str(exc)})
+
+    exit_code = 1 if failures or result["skipped_required"] else 0
+    log = {
+        "job": "assemble_disclosure_events", "run_id": run_id,
+        "started_at": started_at.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "from_date": from_date, "to_date": to_date, "facts_read": facts_read,
+        **result, "failures": failures, "exit_code": exit_code,
+        "ops": {"records_out": result["created"] + result["already"],
+                "failed_records": len(failures) + result["skipped_required"]},
+    }
+    try:
+        storage.put_bytes(
+            quality_log_key(DATASET, started_at.date().isoformat(), run_id),
+            json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+    except Exception:
+        logger.exception("DART 공시 이벤트 조립 로그 기록 실패")
+        exit_code = 1
+    return exit_code
