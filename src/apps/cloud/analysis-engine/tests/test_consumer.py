@@ -255,19 +255,20 @@ def test_lock_precedes_duplicate_preflight():
     assert calls == ["lock", "preflight", "close"]
 
 
-def test_archive_failure_is_retried_then_only_completed_delivery_is_deduplicated(monkeypatch):
-    """S3 실패 delivery는 complete gate를 세우지 않아 두 번째가 실행되고, 세 번째만 skip한다."""
+def test_db_failure_after_archive_retries_same_key_then_deduplicates_completion(monkeypatch):
+    """DB 실패 orphan은 같은 key로 overwrite되고, 완료 뒤 세 번째만 skip한다."""
     import edge_analysis.consumer as consumer_module
-    from edge_analysis.adapters.archive import RunArchiveError
+    from edge_analysis.adapters.archive import write_run_archive
 
-    state = {"complete": False, "deliveries": 0, "closes": 0}
+    state = {"complete": set(), "deliveries": 0, "closes": 0}
+    puts = []
 
     class StatefulStore:
         def try_lock_route(self, route_id):
             return True
 
         def has_run_for_route(self, route_id):
-            return state["complete"]
+            return route_id in state["complete"]
 
         def close(self):
             state["closes"] += 1
@@ -278,28 +279,37 @@ def test_archive_failure_is_retried_then_only_completed_delivery_is_deduplicated
 
     def delivery(settings, **kwargs):
         state["deliveries"] += 1
+        write_run_archive(kwargs["s3"], settings, {"outcome": "explained"})
         if state["deliveries"] == 1:
-            raise RunArchiveError("first S3 put failed")
-        state["complete"] = True       # models the post-archive DB transaction
+            raise RuntimeError("DB commit failed after archive")
+        state["complete"].add(consumer_module.minute_route_id(settings.trigger_id))
         return 0
 
-    from types import SimpleNamespace
-    fake_settings = SimpleNamespace(
-        lake_bucket="bucket", deepseek_api_key="key", deepseek_model="model")
-    monkeypatch.setattr(consumer_module, "load_settings", lambda **_: fake_settings)
+    class FakeS3:
+        def put_object(self, **kwargs):
+            puts.append(kwargs)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "key")
+    monkeypatch.setenv("ALPHAMALE_LAKE_BUCKET", "bucket")
     monkeypatch.setattr(consumer_module, "EventStore", StatefulStore)
-    monkeypatch.setattr(consumer_module, "make_s3_client", lambda settings: object())
+    monkeypatch.setattr(consumer_module, "make_s3_client", lambda settings: FakeS3())
     monkeypatch.setattr(consumer_module, "LakeReader", lambda *args: object())
     monkeypatch.setattr(consumer_module, "DeepSeekClient", lambda *args: object())
     monkeypatch.setattr(consumer_module, "run", delivery)
 
-    with pytest.raises(RunArchiveError, match="first S3 put failed"):
+    with pytest.raises(RuntimeError, match="DB commit failed after archive"):
         consumer_module.process_trigger("t1")
     assert not state["complete"]
     assert consumer_module.process_trigger("t1") == "explained"
-    assert state["complete"]
     assert consumer_module.process_trigger("t1") == "skipped_duplicate"
-    assert state == {"complete": True, "deliveries": 2, "closes": 3}
+    assert consumer_module.process_trigger("other/한글/" + "x" * 500) == "explained"
+
+    keys = [put["Key"] for put in puts]
+    assert keys[0] == keys[1], "같은 trigger retry가 orphan archive를 overwrite하지 않는다"
+    assert keys[2] != keys[1], "다른 trigger가 같은 archive key에 충돌한다"
+    request_names = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
+    assert all(name.isascii() and len(name) <= 64 and "/" not in name for name in request_names)
+    assert state["deliveries"] == 3 and state["closes"] == 4
 
 
 def test_lock_failure_skips_the_pipeline_entirely():
