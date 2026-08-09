@@ -26,9 +26,10 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .models import load_universe_uri, plan_session_windows
+from .models import config_set_identity, load_universe_uri, plan_session_windows
 from .repository import MinuteLedger, SessionFinalizedError, UniverseConflictError
 from .states import (
+    DATASET_SECTOR_INDEX_MINUTE,
     EXTENDED_HOURS_DATASETS,
     MINUTE_DATASETS,
     SOURCE_GROUPS_BY_DATASET,
@@ -100,12 +101,27 @@ def plan_session_cli(
         planned_date, universe=universe_model,
         extended_hours=dataset in EXTENDED_HOURS_DATASETS,
     )
+    # 기대 집합 정체성을 세션에 **고정한다**. universe 를 쓰는 dataset 은 그 파일이,
+    # config 가 정본인 dataset(업종지수)은 그 표가 준다 — 둘 다 없으면 "none" 이다
+    # (뉴스·공시는 소스 단위라 기대 집합 자체가 없다).
+    if universe_model is not None:
+        expected_version, expected_hash = (universe_model.universe_version,
+                                           universe_model.universe_hash)
+    elif dataset == DATASET_SECTOR_INDEX_MINUTE:
+        if settings.minute_sector_index is None:
+            logger.error("[minute_sector_index.index_map] 설정 없음 — "
+                         "이 dataset 의 기대 집합 정본이다(미설정으로 계획하면 Worker 가 "
+                         "무엇을 기대할지 원장에 안 남는다)")
+            return 2
+        expected_version, expected_hash = config_set_identity(
+            settings.minute_sector_index.index_map)
+    else:
+        expected_version, expected_hash = "none", "none"
     ledger = MinuteLedger(db=settings.db)
     try:
         session_id, created = ledger.plan_session(
             dataset=dataset, source_group=source_group, session_date=planned_date,
-            universe_version="none" if universe_model is None else universe_model.universe_version,
-            universe_hash="none" if universe_model is None else universe_model.universe_hash,
+            universe_version=expected_version, universe_hash=expected_hash,
             windows=windows,
         )
     except (UniverseConflictError, SessionFinalizedError) as error:

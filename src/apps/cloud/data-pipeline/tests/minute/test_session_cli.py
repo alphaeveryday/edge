@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
+from data_pipeline.config.models import MinuteSectorIndexConfig
 from data_pipeline.minute.repository import SessionFinalizedError, UniverseConflictError
 from data_pipeline.minute.session_cli import drain_session_cli, plan_session_cli
 
@@ -32,14 +33,21 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeSettings:
-    """`Settings` 전체를 만들지 않는다 — 이 CLI 가 보는 건 `db` 하나다."""
+    """`Settings` 전체를 만들지 않는다 — 이 CLI 가 보는 건 `db` 와, 기대 집합이 config 인
+    dataset 의 그 표(`minute_sector_index`)뿐이다."""
 
-    def __init__(self, db):
+    def __init__(self, db, minute_sector_index=None):
         self.db = db
+        self.minute_sector_index = minute_sector_index
 
 
-def make_settings(db_ok=True):
-    return FakeSettings(DbConfig(password="x") if db_ok else None)
+# 실제 config 클래스를 쓴다 — dict 로 흉내 내면 검증기가 막는 형태(키·값 뒤집힘 등)가
+# 픽스처에서 통과해, 이 CLI 가 부를 수 있는 함수를 실제보다 넓게 만든다.
+SECTOR_INDEX = MinuteSectorIndexConfig(index_map={"1005": "0005", "2118": "1118"})
+
+
+def make_settings(db_ok=True, *, sector_index=SECTOR_INDEX):
+    return FakeSettings(DbConfig(password="x") if db_ok else None, sector_index)
 
 
 @pytest.fixture
@@ -198,6 +206,61 @@ class TestPlan:
         assert plan_session_cli(
             make_settings(), dataset="news_minute", source_group="bigkinds",
             session_date="2026-W01-1", universe=None,
+        ) == 2
+
+    def test_업종지수_세션은_universe_없이_정규장_격자로_계획된다(self, ledger_db, capsys):
+        """공시와 **같은 호출 형태**(universe=None)인데 격자는 390 이어야 한다 — 위
+        공시 720 테스트와 짝이다.
+
+        이 dataset 은 형상이 하이브리드다: universe 축은 공시(소스 단위)인데 격자는
+        iNAV(정규장)다. 한쪽만 보고 배선하면 `EXTENDED_HOURS_DATASETS` 에 같이 넣게
+        되고, 그러면 아무도 못 채우는 시간외 330 window 가 매일 DUE 로 쌓인다 — 이
+        소스는 소급이 불가라 영구 결손이다.
+        """
+        code = plan_session_cli(
+            make_settings(), dataset="sector_index_minute", source_group="kis",
+            session_date="2026-07-31", universe=None,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert (code, payload["window_count"]) == (0, 390)
+        assert payload["windows"]["first"].endswith("09:00:00+09:00")
+        assert payload["windows"]["last"].endswith("15:30:00+09:00")
+
+    def test_업종지수_세션은_config_정체성을_원장에_고정한다(self, ledger_db, capsys):
+        """🔴 기대 집합이 config 라 **세션에 고정할 축이 따로 없다** — 안 적으면 오전에
+        45종으로 확정한 세션의 남은 window 를 오후에 44종 이미지가 정상 VALID 로 이어
+        채운다(Codex 리뷰 P2). Worker 는 이 값과 자기 config 를 대조해 거부한다.
+        """
+        from data_pipeline.minute.models import config_set_identity
+
+        code = plan_session_cli(
+            make_settings(), dataset="sector_index_minute", source_group="kis",
+            session_date="2026-07-31", universe=None,
+        )
+        capsys.readouterr()
+        version, digest = config_set_identity(SECTOR_INDEX.index_map)
+        assert code == 0
+        session = ledger_db.sessions[next(iter(ledger_db.sessions))]
+        # ⚠️ **튜플 전체**를 잰다 — 운영 CLI·Worker 가 `(version, hash)` 를 통째로 대조하므로
+        # version 만 단언하면 hash 만 틀어지는 회귀가 통과하고, 그러면 매 기동이 SystemExit
+        # 인데 테스트는 초록이다(리뷰 라운드 2).
+        assert (session["universe_version"], session["universe_hash"]) == (version, digest)
+        assert version != "none"   # "none" 이면 어떤 config 변경도 대조가 안 된다
+
+    def test_업종지수_세션은_index_map_없이는_계획되지_않는다(self, ledger_db):
+        """미설정으로 계획하면 Worker 가 무엇을 기대할지 원장에 안 남는다 — 그러면
+        어떤 이미지로 이어 붙여도 대조가 통과한다."""
+        assert plan_session_cli(
+            make_settings(sector_index=None), dataset="sector_index_minute",
+            source_group="kis", session_date="2026-07-31", universe=None,
+        ) == 2
+
+    def test_universe_on_a_sector_index_session_is_rejected(self, ledger_db):
+        # 기대 집합은 config 의 index_map 이다 — 파일을 조용히 무시하면 운영자는 그게
+        # 반영된 줄 안다(뉴스·공시와 같은 규약).
+        assert plan_session_cli(
+            make_settings(), dataset="sector_index_minute", source_group="kis",
+            session_date="2026-07-31", universe=str(FIXTURES / "universe_348.json"),
         ) == 2
 
     def test_universe_on_a_news_session_is_rejected(self, ledger_db):

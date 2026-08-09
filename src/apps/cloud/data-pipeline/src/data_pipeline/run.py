@@ -47,7 +47,11 @@ from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
 from .minute.price_consumer import price_consumer_cli
-from .minute.worker import inav_worker_cli, price_worker_cli
+from .minute.worker import (
+    inav_worker_cli,
+    price_worker_cli,
+    sector_index_worker_cli,
+)
 from .lake import (
     make_storage,
     raw_etf_inav_partition,
@@ -264,7 +268,13 @@ def main(argv: list[str] | None = None) -> int:
                  # 1분 Disclosure Worker(ALPHA-875): 공시 체인 4스텝을 한 tick 에 도는 상주
                  # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
                  # ⚠️ 수집만이 아니라 collect→normalize×2→load 를 한 window 에서 돈다.
-                 "disclosure-worker"],
+                 "disclosure-worker",
+                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 45종 분봉 상주 루프.
+                 # 원장 DB + storage + [minute_sector_index.index_map] 정본 +
+                 # minute_price_worker 의 KIS 자격증명(같은 앱키). universe 없음 —
+                 # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
+                 # ⚠️ 하위 소비자가 없다 — window 확정에서 멈추고 job·outbox 를 안 만든다.
+                 "sector-index-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -361,10 +371,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_ticks is not None:
         if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
                              "news-consumer", "news-worker", "inav-worker",
-                             "disclosure-worker"):
+                             "disclosure-worker", "sector-index-worker"):
             raise SystemExit(
                 "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
-                f"news-consumer·news-worker·inav-worker·disclosure-worker 에서만 쓴다 — "
+                "news-consumer·news-worker·inav-worker·disclosure-worker·"
+                f"sector-index-worker 에서만 쓴다 — "
                 f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
@@ -419,6 +430,14 @@ def main(argv: list[str] | None = None) -> int:
             "--universe 는 disclosure-worker 에서 쓰지 않는다 — 공시 세션은 소스 단위이고 "
             "수집 유니버스는 canonical holdings 에서 파생된다(무시되므로 거부)"
         )
+    if args.step == "sector-index-worker" and args.universe is not None:
+        # 업종지수도 universe 밖이다 — 기대 집합 45종은 config 정본
+        # (`[minute_sector_index.index_map]`)이고, universe.json 은 지수를 아예 모른다
+        # (ETF 명부에도 구성종목에도 없다). planner 도 같은 조건으로 거부한다.
+        raise SystemExit(
+            "--universe 는 sector-index-worker 에서 쓰지 않는다 — 기대 집합은 config 의 "
+            "index_map 이 준다(무시되므로 거부)"
+        )
     if args.step == "rollup-minute-session" and args.universe is not None:
         # 받아서 무시하면 "계획을 이 파일로 다시 세운다"는 오해를 판다 — 배치는 계획을
         # 원장에서 읽는다(마감 후의 universe 파일은 그날 계획과 갈릴 수 있다).
@@ -429,13 +448,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
                          "start-minute-session", "news-worker",
                          "rollup-minute-session", "inav-worker",
-                         "disclosure-worker") and (
+                         "disclosure-worker", "sector-index-worker") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
             "price-consumer·start-minute-session·news-worker·rollup-minute-session·"
-            "inav-worker·disclosure-worker 에서만 쓴다 — "
+            "inav-worker·disclosure-worker·sector-index-worker 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -512,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "disclosure-worker":
         return disclosure_worker_cli(settings, session_date=args.session_date,
                                      max_ticks=args.max_ticks)
+    if args.step == "sector-index-worker":
+        return sector_index_worker_cli(settings, session_date=args.session_date,
+                                       max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)

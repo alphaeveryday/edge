@@ -280,6 +280,9 @@ class TestTradingHoursClass:
         걸면 realtime 뉴스 레인이 15:30 에 1분씩 늦어진다(추출·조립이 그만큼 밀린다)."""
         close = datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert scheduled_at_for(close, dataset="news_minute") == close
+        # 업종지수도 같다 — 지수는 종가 단일가로 정정되지 않고(구성종목 체결의 함수다),
+        # 이 소스는 소급이 불가라 1분을 늦추면 그만큼 페이지 밖으로 밀릴 뿐이다.
+        assert scheduled_at_for(close, dataset="sector_index_minute") == close
         assert scheduled_at_for(close, dataset="price_minute") != close
 
     def test_naive_window_end_is_rejected(self):

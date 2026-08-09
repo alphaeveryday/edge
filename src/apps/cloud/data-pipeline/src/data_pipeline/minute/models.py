@@ -139,6 +139,22 @@ def content_checksum(payload: object) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def config_set_identity(mapping: dict[str, str]) -> tuple[str, str]:
+    """config 가 정본인 기대 집합의 `(version, hash)` — 세션에 고정할 정체성 (ALPHA-887).
+
+    universe 를 쓰는 dataset 은 `Universe.universe_version`/`universe_hash` 가 이 자리를
+    맡고, 원장이 그걸 세션에 못박아 **장중에 기대 집합이 바뀌면 Worker 가 거부한다**.
+    기대 집합이 config 인 dataset(업종지수)에는 그 축이 없어서, 안 만들면 오전에 45종으로
+    확정한 세션의 남은 window 를 오후에 44종 이미지가 **정상 VALID 로** 이어 채운다 —
+    한 세션 안에서 기대 집합이 갈리는데 원장에는 아무 신호가 없다(Codex 리뷰 P2).
+
+    키·값을 **둘 다** 넣는다. 키만 보면 KIS 코드 한 줄을 고친 재배포(같은 45종을 다른
+    지수로 질의)가 같은 해시로 통과한다 — 그게 이 표에서 가장 조용한 오류다.
+    """
+    digest = content_checksum(sorted(mapping.items()))
+    return f"cfg-{digest[:12]}", digest
+
+
 # ── 공통 계약 (계획 §4) ──
 
 # strict=True: '3'(str)·True(bool) 가 수량으로 조용히 강제되는 것을 막는다

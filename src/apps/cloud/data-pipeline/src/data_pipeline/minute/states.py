@@ -49,6 +49,11 @@ DATASET_ETF_INAV_MINUTE = "etf_inav_minute"
 # 한 번 폴링했다"는 원장 단위이고, 완전성은 window 가 아니라 런 사이 rcept_no 집합 비교가
 # 진다(`steps/ingest_raw_disclosure.py` 모듈 주석). 뉴스가 같은 성질이다.
 DATASET_DISCLOSURE_MINUTE = "disclosure_minute"
+# KRX 업종지수 45종 1분봉(ALPHA-887). 일봉 `sector_index` 와 **같은 unit_id 축**(KRX
+# 업종코드)이고 grain 만 다르다 — 벤더 코드(KIS 지수번호)는 어댑터 URL 안에서만 산다.
+# 🔴 기대 집합이 universe 가 아니라 **config**(`[minute_sector_index.index_map]`)다.
+# 지수는 ETF 명부에도 구성종목에도 없어서 universe.json 이 이 45종을 모른다.
+DATASET_SECTOR_INDEX_MINUTE = "sector_index_minute"
 # dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이다 — 어휘 밖 값으로
 # 세션이 서면 그 소스를 처리하는 어댑터·Worker 배선이 없어 dataset 오타와 같은 모양으로
 # 하루가 조용히 안 돈다. 지금 이 트랙이 실제로 가진 어댑터만 담는다(늘 때 여기 한 곳).
@@ -66,6 +71,9 @@ SOURCE_GROUPS_BY_DATASET = {
     DATASET_ETF_INAV_MINUTE: frozenset({"kis"}),
     # 공시는 OpenDART 단독이다 — 국내 전자공시의 원 접수처가 하나다.
     DATASET_DISCLOSURE_MINUTE: frozenset({"dart"}),
+    # 업종지수는 KIS 단독이다 — KRX 는 지수 분봉 API 를 열지 않고(일봉만), 토스에는
+    # 지수 축이 없다. 소급 조회도 불가라(`kis_sector_index` 도크스트링) 벤더가 늘 이거다.
+    DATASET_SECTOR_INDEX_MINUTE: frozenset({"kis"}),
 }
 # ⚠️ 아는 dataset 목록을 따로 적지 않고 **위 표에서 파생**한다 — 두 벌이면 새 dataset 을
 # 한쪽에만 넣게 되고, 그때 정상 입력이 KeyError 로 죽거나(어휘표 누락) 유효한 dataset 이
