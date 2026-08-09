@@ -17,7 +17,9 @@
 1. ObjectSet 계약을 analysis-engine 이미지에 포함되는 경량 모듈로 편입한다.
 2. 생성·필터·설명·affordance·관계 이동·관측 도구를 구조화 schema로 제공한다.
 3. `as_of`, lineage, PIT gap 불변식과 SQL 비노출 테스트를 추가한다.
-4. 기존 경로와 고정 fixture differential을 실행한다.
+4. P2 가설 탐색 호출부를 ObjectSet으로 전환하고 SQL-shaped 모델 응답이 실행되지 않음을
+   검증한다. SQL 구현 파일은 후속 shadow/삭제 PR을 위해 남긴다.
+5. 기존 경로와 고정 fixture differential을 실행한다.
 
 완료 주장: LLM은 SQL 없이 시점 고정 객체 집합을 합성할 수 있다.
 
@@ -36,9 +38,9 @@
 
 완료 주장: 뉴스 관계는 실제 사건 argument와 선언된 schema에만 근거한다.
 
-## PR 4 — LLM 구조화 도구 컷오버
+## PR 4 — 나머지 LLM 단계 구조화 도구 컷오버
 
-1. P2·P3·P5 입력에서 SQL을 제거하고 구조화 도구만 주입한다.
+1. P3·P5와 나머지 LLM 입력에서 SQL을 제거하고 구조화 도구만 주입한다(P2는 PR2 완료).
 2. SQL 필드와 verifier에 없는 수치를 결정적 schema/lineage guard로 거부한다.
 3. 고정 평가 셋과 shadow replay로 신규 경로를 비교한다.
 

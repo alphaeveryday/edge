@@ -29,6 +29,7 @@ Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
 MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPHA-886 2단계)
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
+MAX_OBJECT_ROUNDS = 4               # 구조화 객체 탐색도 무한 루프를 허용하지 않는다
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 
@@ -251,6 +252,18 @@ hypotheses JSON 으로 답하라 — sql 과 hypotheses 를 한 응답에 섞지
 _SQL_DONE = ("\n\n[sql] 왕복 상한 소진 — 추가 조회 없이 지금 아는 것만으로 "
              "hypotheses JSON 을 내라.")
 
+_OBJECT_OFFER = """
+
+[ObjectSet 탐색 도구 · 선택] 가설을 내기 전에 시점 고정 객체 집합을 조사할 수 있다.
+도구 호출은 {{"tool": "objectset.create", "arguments": {{"kind": "..."}}}} 모양의
+JSON 하나로 답한다. 실행 결과의 handle을 다음 호출에 쓴다. 모델이 기준시각이나 저장소
+이름을 정하지 않는다. 조회가 끝나면 hypotheses JSON을 답한다.
+도구 계약:
+{specs}"""
+
+_OBJECT_DONE = ("\n\n[ObjectSet] 왕복 상한 소진 — 추가 탐색 없이 지금 아는 것만으로 "
+                "hypotheses JSON 을 내라.")
+
 
 def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
               budget: int, deadline: float) -> tuple[dict, str, int, int]:
@@ -278,10 +291,44 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
     return out, user, used, rejects
 
 
+def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], dict],
+                 budget: int) -> tuple[dict, str, int, int]:
+    """Run bounded structured tool calls; executable text is never an argument shape."""
+    used = rejects = 0
+    out = ask(system, user)
+    forbidden = {"sql", "query", "view_name"}
+    while isinstance(out, dict):
+        name = str(out.get("tool") or "").strip()
+        bad_keys = sorted(forbidden & set(out))
+        if not name and not bad_keys:
+            break
+        if used >= budget:
+            user += _OBJECT_DONE
+            out = ask(system, user)
+            break
+        used += 1
+        if bad_keys:
+            res = {"ok": False, "error": {
+                "code": "MODEL_SCHEMA_REJECTED",
+                "message": "executable query fields are not accepted; use an advertised ObjectSet tool"}}
+            record("objectset.model_rejected", keys=bad_keys)
+        else:
+            arguments = out.get("arguments")
+            res = call(name, arguments if isinstance(arguments, dict) else {})
+        if not res.get("ok"):
+            rejects += 1
+        # Do not echo the raw model arguments. The validated result is the observation.
+        user += (f"\n\n[ObjectSet 결과 {used}/{budget}] 도구: {name or 'schema'}\n"
+                 + json.dumps(res, ensure_ascii=False))
+        out = ask(system, user)
+    return out, user, used, rejects
+
+
 def propose(ask: Ask, *, facts: str, event_types: list[str],
             measurable: list[tuple[str, str]] = (),
             series_families: list[str] = (),
             n: int = 3, sql_tool: dict | None = None,
+            object_tools: dict | None = None,
             ) -> tuple[list[HypothesisTuple], list[str]]:
     """튜플 후보를 받는다. 반환: (유효 튜플들, 거부 사유들 - 감사용).
 
@@ -306,16 +353,27 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                             layer_exposures=_layer_menu(),
                             series_families=sorted(series_families),
                             measurable=sorted(measurable), n=n)
-    if sql_tool:
+    if sql_tool and object_tools:
+        raise ValueError("sql_tool and object_tools cannot be enabled together")
+    if object_tools:
+        system += _OBJECT_OFFER.format(specs=json.dumps(
+            object_tools["specs"], ensure_ascii=False, separators=(",", ":")))
+    elif sql_tool:
         system += _SQL_OFFER.format(cap=MAX_SQL_ROUNDS, desc=sql_tool["description"])
     rejected: list[str] = []
     valid: list[HypothesisTuple] = []
     base = facts
     sql_used = sql_rejects = 0
+    object_used = object_rejects = 0
     deadline = time.monotonic() + SQL_TIMEBOX_S
     for turn in range(MAX_ASKS):
         user = base
-        if sql_tool:
+        if object_tools:
+            out, base, u, rj = _object_loop(
+                ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used)
+            object_used += u
+            object_rejects += rj
+        elif sql_tool:
             out, base, u, rj = _sql_loop(ask, system, user, sql_tool["call"],
                                          MAX_SQL_ROUNDS - sql_used, deadline)
             sql_used += u
@@ -339,7 +397,11 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     if sql_tool:
         # 왕복 수·거부 수 한 줄 — 질의 원문·결과는 sqltool 이 이미 record 로 남긴다.
         record("hypothesize.sql_rounds", rounds=sql_used, rejected=sql_rejects)
+    if object_tools:
+        record("hypothesize.objectset_rounds", rounds=object_used,
+               rejected=object_rejects)
     return valid, rejected
 
 
-__all__ = ["Ask", "MAX_ASKS", "MAX_SQL_ROUNDS", "explore", "propose", "screen_tuples"]
+__all__ = ["Ask", "MAX_ASKS", "MAX_OBJECT_ROUNDS", "MAX_SQL_ROUNDS",
+           "explore", "propose", "screen_tuples"]

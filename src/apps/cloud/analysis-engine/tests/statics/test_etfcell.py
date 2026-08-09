@@ -1,7 +1,14 @@
 import pytest
+import duckdb
 
 from edge_analysis.config import PipelineError
 from edge_analysis.statics.interval import WindowFacts
+
+
+def _object_lake():
+    con = duckdb.connect()
+    con.execute("CREATE VIEW v_instrument AS SELECT 'iid' AS instrument_id")
+    return type("ObjectLake", (), {"con": con, "bound": {"instrument": None}})()
 
 
 def _facts():
@@ -323,12 +330,9 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
     assert any(e.get("event") == "llm.response" for e in trace)
 
 
-def test_window_paneltest_wires_the_sql_tool_only_when_the_lake_can(monkeypatch):
-    """레이크가 툴 표면을 만들 수 있으면 propose 에 sql_tool 이 실리고, 스텁·구형
-    레이크면 None 으로 현행 주입식만 돈다(ALPHA-886 2단계 하위호환)."""
+def test_window_paneltest_wires_objectset_only_when_the_lake_can(monkeypatch):
+    """Bound lakes receive structured ObjectSet tools; a stub gets no query tool."""
     import dataclasses
-    import types
-
     from edge_analysis.statics import etfcell
 
     facts = dataclasses.replace(_facts(), event_ids=("e1",))
@@ -340,13 +344,15 @@ def test_window_paneltest_wires_the_sql_tool_only_when_the_lake_can(monkeypatch)
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
                         lambda ask, **kw: (seen.update(kw), ([], []))[1])
 
-    lake = types.SimpleNamespace(bound={"price_daily": "available_at"})
+    lake = _object_lake()
     etfcell._window_paneltest(lake, "iid", "2026-08-05", lambda *_: {}, facts)
-    assert seen["sql_tool"] is not None and seen["sql_tool"]["name"] == "sql"
+    assert seen["object_tools"] is not None
+    assert seen["object_tools"]["specs"][0]["name"] == "objectset.create"
+    assert "sql_tool" not in seen
 
     seen.clear()
     etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
-    assert seen["sql_tool"] is None
+    assert seen["object_tools"] is None
 
 
 def test_missing_layers_raise_instead_of_returning_prose():
@@ -390,7 +396,8 @@ def _capture_propose(monkeypatch, facts, context=None):
         return [], []
 
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose", fake_propose)
-    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
+    lake = _object_lake()
+    etfcell._window_paneltest(lake, "iid", "2026-08-05", lambda *_: {}, facts)
     return seen
 
 
@@ -425,6 +432,20 @@ def test_no_events_keeps_the_current_brief(monkeypatch):
     assert "[사건 문맥" not in seen["facts"]
     assert "창 안 사건 타입: 없음" in seen["facts"]
     assert "오늘 발화 계열족: ['거래량']" in seen["facts"]
+
+
+def test_hypothesis_path_injects_objectset_tools_instead_of_the_sql_tool(monkeypatch):
+    """The live P2 path must not hand executable query text to model output."""
+    import dataclasses
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    seen = _capture_propose(monkeypatch, facts, context=((), 0, 0))
+
+    assert "object_tools" in seen
+    assert [spec["name"] for spec in seen["object_tools"]["specs"]][:2] == [
+        "objectset.create", "objectset.filter"]
+    assert "sql_tool" not in seen
+    assert seen["object_tools"]["call"].__self__.as_of == "2026-08-05T13:20:59.999999"
 
 
 def test_context_counts_and_failures_are_logged(monkeypatch):

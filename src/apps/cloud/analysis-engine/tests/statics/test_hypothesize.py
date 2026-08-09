@@ -131,3 +131,50 @@ def test_real_sqltool_keeps_the_query_audit_record():
 
     assert any(e.get("event") == "sqltool.query" for e in trace)
     assert "[sql 결과 1/" in ask.users[1] and '"rows": [[7]]' in ask.users[1]
+
+
+def _object_tools(call) -> dict:
+    return {
+        "specs": [{"name": "objectset.create", "description": "create a set",
+                   "input_schema": {"type": "object"}}],
+        "call": call,
+    }
+
+
+def test_objectset_result_lands_in_next_prompt_without_a_query_text_contract():
+    calls: list[tuple[str, dict]] = []
+
+    def call(name: str, arguments: dict) -> dict:
+        calls.append((name, arguments))
+        return {"ok": True, "handle": "os_123", "lineage_id": "lin_123"}
+
+    ask = _Ask([
+        {"tool": "objectset.create", "arguments": {"kind": "price_daily"}},
+        {"hypotheses": []},
+    ])
+    with collect_trace() as trace:
+        propose(ask, facts="f", event_types=["CONTRACT.SIGNING"],
+                measurable=[("수급", "누적")], object_tools=_object_tools(call))
+
+    assert calls == [("objectset.create", {"kind": "price_daily"})]
+    assert "[ObjectSet 결과 1/" in ask.users[1]
+    assert '"lineage_id": "lin_123"' in ask.users[1]
+    assert all('{"sql"' not in system.lower() for system in ask.systems)
+    [obs] = [e for e in trace if e.get("event") == "hypothesize.objectset_rounds"]
+    assert obs["rounds"] == 1 and obs["rejected"] == 0
+
+
+def test_objectset_mode_rejects_and_audits_a_model_sql_field():
+    calls: list[tuple[str, dict]] = []
+    ask = _Ask([{"sql": "SELECT * FROM secret"}, {"hypotheses": []}])
+
+    with collect_trace() as trace:
+        propose(ask, facts="f", event_types=["CONTRACT.SIGNING"],
+                measurable=[("수급", "누적")],
+                object_tools=_object_tools(lambda name, args: calls.append((name, args))))
+
+    assert calls == []
+    assert all("SELECT * FROM secret" not in user for user in ask.users[1:])
+    assert "MODEL_SCHEMA_REJECTED" in ask.users[1]
+    [obs] = [e for e in trace if e.get("event") == "hypothesize.objectset_rounds"]
+    assert obs["rounds"] == 1 and obs["rejected"] == 1

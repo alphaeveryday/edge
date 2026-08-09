@@ -38,7 +38,13 @@ RDB 카탈로그에서 모든 테이블을 자동 공개하되 알려진 분석 
 
 ObjectSet 계약을 analysis-engine이 의존할 수 있는 경량 패키지 경계로 옮긴다. 생성, 필터,
 관계 이동, affordance 열거, 객체 관측을 구조화 도구로 제공한다. `as_of`와 lineage는 handle에
-붙으며 LLM이 변경할 수 없다. 기존 SQL 경로는 shadow 비교를 위해 아직 남긴다.
+붙으며 LLM이 변경할 수 없다. P2 가설 탐색 호출부는 이 PR에서 ObjectSet으로 전환한다.
+기존 SQL 구현은 shadow 비교를 위해 아직 남기되 활성 P2 호출부에는 주입하지 않는다.
+
+현재 RDB/S3 결합에는 데이터셋 단위 불변 snapshot version 정본이 없다. `as_of` 클램프를
+snapshot version인 것처럼 포장하지 않고 응답에 `NO_DATASET_VERSION:<dataset>` PIT gap을
+남긴다. 버전 공급 계약(`dataset_versions`)은 열어 두되 실제 정본이 생기기 전에는
+replay 동일성을 `VERIFIED`로 주장하지 않는다.
 
 ### PR 3 — 뉴스 thread/event/argument 도구
 
@@ -46,9 +52,10 @@ ObjectSet 계약을 analysis-engine이 의존할 수 있는 경량 패키지 경
 사건 타입별 허용 role, cardinality, object kind, measure/unit을 조회하는 schema 도구를 추가한다.
 미해소 argument는 버리지 않고 `resolved=false`와 원문 surface로 반환한다.
 
-### PR 4 — LLM 구조화 도구 컷오버
+### PR 4 — 나머지 LLM 단계 구조화 도구 컷오버
 
-P2·P3·P5에서 자유 SQL 인자와 SQL 응답 schema를 제거한다. ObjectSet, 뉴스 탐색, 검증 도구만
+P3·P5와 그 밖의 LLM 단계에서 자유 SQL 인자와 SQL 응답 schema를 제거한다. P2는 PR2에서
+먼저 전환한다. ObjectSet, 뉴스 탐색, 검증 도구만
 주입한다. 검증 수치와 판정은 verifier ledger에서만 최종 설명으로 전달된다. 기존 경로와
 shadow replay를 수행하되 사용자 결과에는 신규 경로만 사용한다.
 

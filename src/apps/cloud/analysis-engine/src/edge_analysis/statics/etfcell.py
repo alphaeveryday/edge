@@ -228,17 +228,20 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     if context:
         brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
                   f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
-    # sql 탐색 툴(ALPHA-886 2단계) — 레이크가 툴 표면을 못 만들면(구형·스텁) 주입식만.
+    # 구조화 객체 탐색 — 모델은 저장소 이름·질의문·기준시각을 고르지 않는다.
+    # 레이크가 표면을 못 만들면(구형 스텁 포함) 주입식 facts만으로 진행하되 사유를 남긴다.
     try:
-        from .sqltool import tool_spec
-        sql_tool = tool_spec(lake)
+        from .objectset_tools import ObjectSetRuntime
+        object_runtime = ObjectSetRuntime(
+            lake, as_of=f"{day}T{facts.window_end}:59.999999")
+        object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
     except Exception as e:                      # noqa: BLE001 - 부재는 툴 없이 진행
-        log("hypothesis.sqltool_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
-        sql_tool = None
+        log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
+        object_tools = None
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),
-                                   series_families=fired, sql_tool=sql_tool)
+                                   series_families=fired, object_tools=object_tools)
     except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
         return ({"stage": "propose", "verdict": "제안실패",
                  "reason": f"{type(e).__name__}: {str(e)[:80]}"},), ()
