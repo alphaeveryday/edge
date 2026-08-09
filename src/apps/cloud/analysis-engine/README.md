@@ -157,6 +157,10 @@ python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 # 같은 큐의 ExposureReverted(가격이 전일 종가 1% 이내로 복귀, ALPHA-746)는 그 종목·세션의
 # 분봉 기원 PUBLISHED 설명을 super-admin 무효화 API(로그인 세션 → /analyses/{run}/invalidate)
 # 로 회수한다 — 엔진이 DB 를 직접 쓰지 않는다(INVALIDATION 발화자 단일화, ALPHA-440).
+# 메시지마다 `consumer.message`(outcome·event_type·elapsed_s) 한 줄을 남긴다(ALPHA-908) —
+# 수신부터 처분까지의 **점유 시간**이고 성공 갈래만이 아니다(deferred·locked·failed·
+# malformed 도 큐를 점유한다). 이 레인의 대수를 정하는 입력이라 outcome·event_type 으로
+# 갈라 백분위를 낸다. 다만 SIGTERM 뒤 stopTimeout 안에 안 끝난 처리는 이 줄이 없다.
 # --max-polls 는 검증용: 계약 위반·처리 실패가 있으면 exit 1.
 EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
   python -m edge_analysis consume-triggers --max-polls 3
