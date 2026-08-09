@@ -527,6 +527,22 @@ module "data_pipeline" {
   # 결손인데 EOD QC 는 `ok=True`·exit 0 으로 확정한다(MISSING 은 위반이 아니라 판정 결과다).
   # 그래서 이 apply 는 `minute_session_disclosure_source_group`(= 1분 레인 켜기)과
   # 아래 DISABLED 가 **한 트랜잭션**이어야 한다.
+  #
+  # 🔴 **그런데 한 apply 는 필요조건일 뿐 충분조건이 아니다**(Codex P1). 같은 apply 는
+  # *이중 소유*만 막고 **그날치 공백**은 못 막는다: dev 머지는 terraform-apply 를 즉시
+  # 태우는데(`terraform-apply.yml` — push:dev + infra 경로), 새 `disclosure-worker` 서비스는
+  # `desired_count = 0` 으로 태어나고 그 값을 올리는 주체는 **아침 07:45 의
+  # `start-minute-session` 하나뿐**이다(terraform 은 `ignore_changes`). 즉 거래일 07:45 이후에
+  # apply 가 착지하면, 그 순간 SFN 은 꺼지는데 워커는 **다음 거래일 아침까지 안 뜬다** —
+  # 그날 남은 공시 창이 통째로 생산자 없이 지나간다.
+  #
+  # 코드로 막지 않는다(apply 시각을 terraform 이 알 수 없고, 조건부 apply 는 더 나쁜 상태를
+  # 만든다). **운영 순서로 막는다** — 셋 중 하나:
+  #   ① 비거래일에 머지한다(제일 싸다. 주말이면 SFN 크론이 MON-FRI 라 잃는 창도 없다)
+  #   ② 거래일이면 **07:45 KST 전**에 착지시킨다(그날 세션이 공시 레인을 포함해 계획된다)
+  #   ③ 이미 지났으면 apply 뒤 `start-minute-session` 을 **수동으로 한 번** 돌린다
+  #      (`plan_session` 이 멱등이라 안전하다. 대가: 공용 목록에 force-new-deployment 가
+  #       걸려 가격·소비자 서비스가 롤링 재기동된다 — tick 경계에서 멈추므로 손실은 없다)
   disclosure_schedule_state = "DISABLED"
 
   # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
