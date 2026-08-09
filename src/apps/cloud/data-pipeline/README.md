@@ -616,12 +616,14 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
 (카탈로그 절 참고).
 
-공시 레인도 같은 형태로 **분리 중**이다 — `edge-dev-data-pipeline-disclosure`(ALPHA-722)가
-세워졌고 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
-LoadDisclosure → AssembleDisclosureEvents` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개).
-시장 SFN 에서 공시 체인이 빠졌고 이 스케줄이 ENABLED 다 — 공시는 이제 **이 레인에서만**
-수집·정제·적재·이벤트 조립된다(15:40 런은 공시를 돌리지 않는다). 뉴스 레인이
-PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서를 밟았다.
+공시 레인도 같은 형태로 분리됐다가 **한 번 더 옮겨 갔다** —
+`edge-dev-data-pipeline-disclosure`(ALPHA-722)가 세워져
+`CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
+LoadDisclosure → AssembleDisclosureEvents` 를 돌았고(부분집합 필터 재사용, 새 state 정의 0개),
+시장 SFN 에서 공시 체인이 빠졌다(15:40 런은 공시를 돌리지 않는다). ⚠️ **그 다음이 현재
+상태다: ALPHA-875 가 공시를 1분 세션으로 넘겼다** — 이 SFN 스케줄은 이제 DISABLED 이고
+(`disclosure_schedule_state`, dev `main.tf`) 카탈로그 공시 엔트리도 0 이다. 공시 실행과
+결손은 ops 원장이 아니라 `minute_ingestion_window` 에서 본다(`disclosure-worker`).
 
 ⚠️ `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
 붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
@@ -1163,8 +1165,9 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 **SFN 원장 밖 1분 세션으로** 보낸 몫이라
-  공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 36개 중 — 시장 SFN 31 +
-  뉴스 SFN 직렬 2 + 장중 수급 3. ALPHA-181 → 578 → 553 PR2 → 591 → 769 → 875).
+  공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 35개 중 — 시장 SFN 30 +
+  뉴스 SFN 직렬 2 + 장중 수급 3. 36→35 는 ALPHA-806 이 AnalyzeOne 을 걷어낸 몫이다.
+  ALPHA-181 → 578 → 553 PR2 → 591 → 769 → 806 → 875).
   레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
@@ -1186,7 +1189,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
-  을 내는 별건이다). 수집 커버리지는 시장 레인 11개 중 6개 + 뉴스 레인 1개(BigKinds)다.
+  을 내는 별건이다). 수집 커버리지는 시장 레인 10개 중 5개 + 뉴스 레인 1개(BigKinds) + 장중
+  수급 1개(KIS 투자자 추정)다 — 공시(DART)는 ALPHA-875 로 여기서 빠졌다.
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다 —
   `instrumented=True`↔`tasks.tf` DB env 배선 대조 포함(어긋나면 그 작업이 조용히 계측 없이 돈다).
   MVP 3작업(ALPHA-530)이었던 것:
