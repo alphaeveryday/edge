@@ -23,16 +23,17 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64]
-    # 빌드(~5분) + 롤링 대상 8종 대기(각 10분 상한, 순차 최악 80분) 수용.
+    # 빌드(~5분) + 롤링 대상 9종 대기(각 10분 상한, 순차 최악 90분) 수용.
     # ⚠️ 다른 문서의 "상주 서비스 9종"과 **다른 수가 맞다** — 저건 세션 오케스트레이션이
     # 스케일하는 집합(analysis-consumer 포함)이고, 여기는 **data-pipeline 이미지를 쓰는
     # 것만**이다. analysis-consumer 는 analysis-engine 이미지라 deploy-analysis-engine.yml
     # 소관이고, 여기 넣으면 이 이미지 push 가 남의 서비스를 재배포한다.
     # ⚠️ 이 값은 **위 for 루프의 서비스 수에 걸려 있다** — 6종(최악 65분)에 80 이었고
-    # ALPHA-890 이 8종(최악 85분)으로 늘리며 함께 올렸다. 목록을 늘리면 여기도 늘려라.
+    # ALPHA-890 이 8종(최악 85분)으로, ALPHA-911 이 9종(최악 95분)으로 늘리며 함께
+    # 올렸다(여유 15분 유지). 목록을 늘리면 여기도 늘려라.
     # 안 늘리면 마지막 서비스가 롤링되기 전에 job 이 잘리는데, 그건 "배포 실패"가 아니라
     # **일부만 새 이미지인 채 빨간불**이라 원인이 목록 증설이라는 게 안 드러난다.
-    timeout-minutes: 100
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -92,7 +93,8 @@ jobs:
                      edge-dev-data-pipeline-news-consumer-backfill \
                      edge-dev-data-pipeline-news-worker \
                      edge-dev-data-pipeline-disclosure-worker \
-                     edge-dev-data-pipeline-inav-worker; do
+                     edge-dev-data-pipeline-inav-worker \
+                     edge-dev-data-pipeline-sector-index-worker; do
             # 이 블록은 opt-in 게이트 뒤라 서비스·권한이 이미 서 있다는 선언 위에서
             # 돈다 — 명령 실패(AccessDenied·만료·스로틀)도, ACTIVE 가 아닌 상태도
             # 배선 결함이므로 삼키지 않는다(그 둘을 skip 으로 접으면 옛 이미지를
