@@ -653,9 +653,12 @@ const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
   deadJobs: 0,
   ...o,
 });
-const withMinute = (sessions: MinuteSessionFact[], deadJobsByDate: string[] = []): Facts => {
+const withMinute = (
+  sessions: MinuteSessionFact[],
+  deadJobsByDataset: Record<string, number | null> = {},
+): Facts => {
   const f = emptyFacts();
-  f.minute = { date: '2026-08-03', sessions, deadJobsByDate };
+  f.minute = { date: '2026-08-03', sessions, deadJobsByDataset };
   return f;
 };
 
@@ -702,12 +705,12 @@ test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 
    * 지키는 것은 **벤더가 늘 때** 조용히 두 배로 세지 않는다는 불변식이다. */
   const f = withMinute(
     [
-      session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3 }),
-      session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3 }),
+      session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: null }),
+      session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: null }),
     ],
-    /* 축은 **데이터셋 집합**으로 온다 — 세션 플래그였을 때는 벤더마다 따로 붙어, 한쪽만 true 인
-     * 상태(같은 데이터셋의 두 세션이 다른 축)가 표현 가능했다. 지금은 그게 표현 불가다. */
-    ['news_minute'],
+    /* 값이 **세션 밖**에 하나로 선다 — 세션마다 실려 있던 동안은 벤더 수만큼 복제할 여지가
+     * 구조적으로 남아 있었다. 지금은 실을 자리가 하나뿐이라 표현 불가다. */
+    { news_minute: 3 },
   );
   const vs = hits(f, 'R19');
   assert.equal(vs.length, 1, '벤더마다 복제됐다 — DEAD 3건이 6건으로 읽힌다');
@@ -746,11 +749,17 @@ test('합성 대상 축의 조각이 비면 못 돎이다 — 합성 후 문자�
   assert.equal(r17.violations, 0);
   /* 조각이 빈 vid 는 **하나도** 안 나간다 — 나가면 딥링크가 그걸 열 수 있게 된다 */
   assert.deepEqual(rep.violations.filter((v) => v.vid.includes('/@')).map((v) => v.vid), []);
-  /* 데이터셋 축으로 대상을 내는 R19 는 벤더를 안 쓰므로 그대로 돈다 — 규칙 하나만 세운다 */
-  const both = withMinute([session({ sourceGroup: '', deadJobs: 2, leaseExpired: true })], ['price_minute']);
+  /* 날짜 축으로 대상을 내는 사건은 벤더를 안 쓰므로 조각이 비어도 그대로 돈다 — 규칙 하나만
+   * 세운다. (같은 데이터셋의 세션 축 값은 `null` 이다 — 그 원장은 세션에 안 붙어 있다.) */
+  const both = withMinute(
+    [session({ sourceGroup: '', deadJobs: null, leaseExpired: true })],
+    { price_minute: 2 },
+  );
   const rep2 = buildReport(both, NOW);
   assert.equal(rep2.rules.find((r) => r.id === 'R17')!.notRun, 'identity');
-  assert.equal(rep2.rules.find((r) => r.id === 'R19')!.evaluated, true);
+  const r19 = rep2.rules.find((r) => r.id === 'R19')!;
+  assert.equal(r19.evaluated, true);
+  assert.equal(r19.violations, 1, '벤더가 빈 세션 때문에 날짜 축 사건까지 사라졌다');
 
   /* 조각이 **문자열이 아닌** 경우도 같다 — `[]` 는 truthy 라 `Boolean` 검사를 통과하는데
    * join 하면 빈 문자열이 되어 `price_minute/` 가 나간다. 응답은 런타임 검증을 안 거친다. */
@@ -794,23 +803,69 @@ test('R19 — `deadJobs: null`(모름)과 `0`(실측 0)이 판정에서 갈린�
   assert.match(mixed.note ?? '', /inav_minute/, '판정에서 빠진 데이터셋을 안 밝혔다');
 });
 
-test('R19 — 축 선언(`deadJobsByDate`)이 없으면 못 돎이다 (빈 집합으로 접으면 벤더 복제가 되살아난다)', () => {
-  /* 타입은 필수지만 응답은 런타임 검증을 안 거친다. 빠진 것을 `new Set(undefined)` 로 접으면
-   * 날짜 축 뉴스 DEAD 가 조용히 **세션 축으로 재분류**되고, 벤더가 둘인 날 같은 3건이 두 사건이
-   * 된다 — 이 규칙이 막으려던 결함 그 자체라 선언이 없으면 판정하지 않는다. */
+test('R19 — 날짜 축 맵 자체가 없으면 못 돎이다 (빈 맵으로 접으면 세션 축 재분류가 되살아난다)', () => {
+  /* 타입은 필수지만 응답은 런타임 검증을 안 거친다. 빠진 것을 `?? {}` 로 접으면 날짜 축
+   * 데이터셋이 조용히 **세션 축으로 재분류**되고(맵에 없으면 세션 축이므로), 벤더가 둘인 날
+   * 같은 3건이 두 사건이 된다 — 이 규칙이 막으려던 결함 그 자체다. */
   const f = withMinute([
     session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3 }),
     session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3 }),
   ]);
-  delete (f.minute as { deadJobsByDate?: unknown }).deadJobsByDate;
+  delete (f.minute as { deadJobsByDataset?: unknown }).deadJobsByDataset;
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R19')!;
-  assert.equal(rr.evaluated, false, '축 선언 부재를 빈 집합으로 접었다');
-  assert.equal(rr.violations, 0, '벤더마다 복제된 사건이 나갔다');
+  assert.equal(rr.evaluated, false, '맵 부재를 빈 맵으로 접었다');
+  assert.equal(rr.violations, 0, '세션 축으로 재분류돼 벤더마다 복제된 사건이 나갔다');
 });
 
-test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반', () => {
+test('🔴 R19 — 뉴스 세션이 없는 날에도 그날 DEAD 가 사건으로 선다', () => {
+  /* 값이 세션에 매달려 있던 동안, 그날 그 데이터셋의 세션이 없으면 값이 실릴 자리가 없어
+   * 유실이 통째로 사라졌다(`평가됨 · 위반 0`). 세션이 없는 날은 실제로 있다 — 아침 planner
+   * 전 · 비거래일 · **뉴스 계획만 실패한 날**(가격은 세우고 news-worker 는 안 올리는, 코드가
+   * 의도적으로 만드는 경로). 하필 그날이 R19 가 가장 시끄러워야 할 날이다. */
+  const noSession = withMinute([], { news_minute: 3 });
+  const vs = hits(noSession, 'R19');
+  assert.equal(vs.length, 1, '세션이 없다고 유실을 못 본 척했다');
+  assert.equal(vs[0].targetId, 'news_minute');
+  assert.equal(vs[0].metric, 3);
+  assert.equal(vs[0].scope, '2026-08-03', '날짜 축 사건인데 시점 범위가 없다');
+
+  /* 가격 세션만 있는 날도 같다 — 뉴스 계획만 실패한 날의 실제 모양이다 */
+  const priceOnly = withMinute([session({ deadJobs: 0 })], { news_minute: 3 });
+  assert.deepEqual(hits(priceOnly, 'R19').map((v) => v.targetId), ['news_minute']);
+});
+
+test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반 (두 축 모두)', () => {
   assert.equal(hits(withMinute([session({ deadJobs: 0 })]), 'R19').length, 0);
   assert.equal(hits(withMinute([session({ deadJobs: 1 })]), 'R19').length, 1);
+  /* 날짜 축도 같은 임계다 — 0건은 "봤는데 없었다"이지 위반이 아니다 */
+  assert.equal(hits(withMinute([], { news_minute: 0 }), 'R19').length, 0);
+  assert.equal(hits(withMinute([], { news_minute: 1 }), 'R19').length, 1);
+});
+
+test('R19 — 같은 데이터셋을 두 축으로 두 번 세지 않는다 (세션에 낡은 값이 남아 있어도)', () => {
+  /* 맵에 있으면 **날짜 축**이다. 그 데이터셋의 세션이 값을 들고 있어도(응답이 두 자리에 다 실어
+   * 주거나 낡은 값이 남았거나) 사건은 하나여야 한다 — 두 번 세면 같은 유실이 두 배로 읽히고,
+   * 그게 이 축을 세션에서 떼어낸 이유 자체다. */
+  const f = withMinute(
+    [session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 5 })],
+    { news_minute: 3 },
+  );
+  const vs = hits(f, 'R19');
+  assert.deepEqual(vs.map((v) => [v.targetId, v.metric]), [['news_minute', 3]]);
+});
+
+test('R19 — 날짜 축 값이 `null`(모름)이면 그 데이터셋을 note 가 밝힌다', () => {
+  /* 맵에 있는데 값이 모름인 경우 — 그 데이터셋은 판정에서 빠진다. 세션 축 모름과 같은 대우를
+   * 받아야 한다: 안 밝히면 그 유실이 "0건"에 흡수돼 보인다. */
+  const only = buildReport(withMinute([], { news_minute: null }), NOW).rules.find((r) => r.id === 'R19')!;
+  assert.equal(only.evaluated, false, '판정할 원장이 하나도 없는데 평가됨으로 섰다');
+
+  const mixed = buildReport(
+    withMinute([session({ deadJobs: 0 })], { news_minute: null }),
+    NOW,
+  ).rules.find((r) => r.id === 'R19')!;
+  assert.equal(mixed.evaluated, true);
+  assert.match(mixed.note ?? '', /news_minute/, '날짜 축 모름이 침묵했다');
 });
 
 test('실시간 위반은 그 데이터셋의 세션으로 드릴다운한다 — 런 축으로 보내지 않는다', () => {
@@ -1049,7 +1104,7 @@ test('실시간 축을 읽는 규칙과 `axis: minute` 표기 집합이 같다 (
   const withoutMinute = emptyFacts();
   const withMinuteAxis: Facts = {
     ...emptyFacts(),
-    minute: { date: '2026-08-03', sessions: [session({})], deadJobsByDate: [] },
+    minute: { date: '2026-08-03', sessions: [session({})], deadJobsByDataset: {} },
   };
   const readsMinute = RULES.filter(
     (R) => R.canRun != null && !R.canRun(withoutMinute) && R.canRun(withMinuteAxis),
@@ -1072,7 +1127,7 @@ test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수
     sessions: [
       session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }), // 슬래시 + @범위
     ],
-    deadJobsByDate: [],
+    deadJobsByDataset: {},
   };
 
   const vs = evaluate(f, NOW).violations;
