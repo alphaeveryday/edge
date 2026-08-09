@@ -87,6 +87,15 @@ ENV_INAV_WORKER_SERVICES = "MINUTE_SESSION_INAV_WORKER_SERVICES"
 # 이미 가르므로 여기 넣는 것만으로 맞는다.
 ENV_SECTOR_INDEX_SOURCE_GROUP = "MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP"
 ENV_SECTOR_INDEX_WORKER_SERVICES = "MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES"
+# 설명 소비자(analysis-consumer, ALPHA-719) — 공용 목록에서 떼어 자기 목록으로 둔다
+# (ALPHA-910). 수명은 그대로 세션에 묶이지만(start 에서 1, stop 에서 0), 소유 축이
+# 분리돼야 그 desired 를 오토스케일링에 넘길 수 있다: 공용에 있으면 스케일러가 큐 깊이로
+# 올린 값을 매일 밤 stop 이 0 으로 덮어써 둘 다 틀린다.
+# ⚠️ 선택 레인 목록과 달리 **토글이 없다** — 이 서비스는 늘 세션과 함께 뜬다. 그런데도
+# **빈 값에 죽지 않는다**: 그 상태가 컷오버 중(구 task-def)이고 그때는 공용 목록이 아직
+# 소비자를 싣고 있다. 근거는 `_analysis_services` 도크스트링에 있다 — 여기가 아니라
+# 거기가 계약의 자리다(주석은 가드가 아니다).
+ENV_ANALYSIS_SERVICES = "MINUTE_SESSION_ANALYSIS_SERVICES"
 
 
 class _OptionalLane(NamedTuple):
@@ -133,7 +142,36 @@ def _services() -> list[str]:
         # 빈 값으로 통과시키면 "스케일링 성공(0건)" 이 되어 아침에 아무것도 안 뜬 채
         # 스케줄은 초록으로 보인다 — 배선 결손은 여기서 죽는다.
         raise SystemExit(f"{ENV_SERVICES} 가 비었다 — 스케일할 ECS 서비스명을 쉼표로 주입한다")
-    return names
+    # 설명 소비자는 자기 목록이 소유한다(ALPHA-910) — terraform 이 아직 공용에도 싣고 있어도
+    # **여기서 뺀다**. 소유 축을 코드가 정해야 배포 순서와 무관하게 축이 하나로 유지된다:
+    # 남겨두면 같은 서비스에 desired 를 두 번 쓰고(force 라 배포도 두 번), 그 상태로
+    # 오토스케일링을 붙이면 공용 경로가 스케일러의 desired 를 계속 되돌린다.
+    owned = set(_analysis_services())
+    rest = [name for name in names if name not in owned]
+    if not rest:
+        # ⚠️ 위 빈 값 검사만으로는 부족하다 — **빼기가 목록을 비울 수 있다.** 통과시키면
+        # 가격 워커·relay 를 하나도 안 올린 채 소비자만 올리고 exit 0 이 되어, 위 가드가
+        # 막으려던 "스케일링 성공(0건)" 이 그대로 재현된다(빈 값이 아니라 다른 원인으로).
+        raise SystemExit(
+            f"{ENV_SERVICES} 가 {ENV_ANALYSIS_SERVICES} 를 빼고 나면 빈다 — "
+            f"공용 목록에 설명 소비자만 실렸다(공용={names}, 소유={sorted(owned)})"
+        )
+    return rest
+
+
+def _analysis_services() -> list[str]:
+    """설명 소비자의 서비스 목록. **비어 있을 수 있다** — 그 상태가 컷오버 중이다.
+
+    ⚠️ 다른 목록들과 달리 빈 값에 죽지 않는다. terraform 과 이미지 CD 는 각자 `push: dev`
+    로 발화하는 독립 워크플로라 어느 쪽이 먼저 착지할지 모르는데, 여기서 죽으면 이 이미지가
+    apply 보다 먼저 뜬 날 **거래일 판정 전에** 오케스트레이터가 끝나 1분 파이프라인이 통째로
+    안 뜬다. 빈 값은 배선 결손이 아니라 **구 task-def** 이고, 그때는 공용 목록이 아직
+    소비자를 싣고 있어 스케일은 그대로 된다(terraform 이 그래서 공용에서 안 뺐다).
+    공용 목록에서 실제로 빼는 시점(오토스케일링 부착)에 이 관대함을 회수한다 — 그때는
+    빈 값이 곧 "아무도 안 올린다"가 되므로 `_services` 와 같은 fail-loud 로 바꾼다.
+    """
+    raw = os.environ.get(ENV_ANALYSIS_SERVICES, "")
+    return [n.strip() for n in raw.split(",") if n.strip()]
 
 
 def _lane_worker_services(lane: _OptionalLane) -> list[str]:
@@ -295,6 +333,12 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # universe 객체를 읽는 S3 의 botocore ClientError 는 그대로 뚫고 나온다. 뒤에 두면 그
     # 한 번에 가격 레인이 통째로 안 뜬다. universe 를 읽는 레인이 생긴 지금 실재하는 경로다.
     _scale(desired=1, force=True)
+    # 설명 소비자는 가격 레인과 **같은 조건**으로 바로 뒤에 올린다(ALPHA-910) — 공용 목록에
+    # 얹혀 있던 때와 순서·시각·force 가 같다. 선택 레인처럼 자기 계획 성공을 기다리지 않는다:
+    # 이 서비스는 세션 원장을 안 보고 큐만 폴링해서, 세션이 없어도 기동을 거부하지 않는다.
+    # 목록이 비면 구 task-def 다 — 위 공용 스케일이 이미 이 서비스를 덮었으니 건너뛴다.
+    if analysis_services := _analysis_services():
+        _scale(desired=1, force=True, services=analysis_services)
 
     lane_exits = {}
     for lane, group in lane_groups:
@@ -453,6 +497,10 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         time.sleep(POLL_INTERVAL_SEC)
 
     _scale(desired=0, force=False)
+    # 설명 소비자 — 공용 목록에 얹혀 있던 때와 **같은 자리에서** 내린다(ALPHA-910). 게이트가
+    # 이 서비스의 큐를 안 보는 것도 그대로다(설명 큐는 게이트 밖 — `_gate_pending` 주석).
+    if analysis_services := _analysis_services():
+        _scale(desired=0, force=False, services=analysis_services)
     # ⚠️ 토글과 무관하게 **목록이 있으면 내린다** — 토글을 끈 날 그 서비스가 떠 있으면
     # 아무도 안 내려 계속 돈다(어제 켜고 오늘 끈 경우가 정확히 그 모양이다). 내리는 방향은
     # 과하게 잡아도 안전하다(이미 0 이면 no-op). 목록은 위에서 이미 해석해 뒀다.

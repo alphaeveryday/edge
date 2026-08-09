@@ -176,6 +176,15 @@
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
+> ⚠️ **analysis-consumer 는 소유 축이 따로다**(ALPHA-910 — `MINUTE_SESSION_ANALYSIS_SERVICES`).
+> 수명은 공용과 같지만(07:45→1 · 20:05→0) 축이 갈려야 그 desired 를 오토스케일링에 넘길 수
+> 있다: 공용 경로가 남아 있으면 스케일러가 큐 깊이로 올린 값을 매일 밤 stop 이 덮어쓴다.
+> **축을 가르는 주체는 terraform 이 아니라 코드다** — `_services()` 가 공용 목록에서 이
+> 이름을 빼낸다. terraform 은 공용에도 그대로 싣는데, 그건 컷오버 안전망이다: 이 파일의
+> apply 와 이미지 CD 는 각자 `push: dev` 로 도는 독립 워크플로라 어느 쪽이 먼저 착지할지
+> 모르고, 공용에서 빼면 apply 가 늦은 날 구 이미지가 소비자를 아무 목록으로도 안 올린다.
+> 그래서 이 env 가 비어도 **죽지 않는다**(구 task-def = 공용이 덮는 상태). 공용 목록에서
+> 실제로 빼는 것과 이 관대함을 fail-loud 로 회수하는 것은 오토스케일링 부착 PR 소관이다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
 > (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
 > `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는
@@ -1646,7 +1655,8 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
-MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill,edge-dev-data-pipeline-analysis-consumer \
+MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
@@ -1662,7 +1672,8 @@ MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
 # **내리지 않았다**(사람이 원장을 본다) / 2=요청 자체를 못 함(설정·DB).
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
-MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill,edge-dev-data-pipeline-analysis-consumer \
+MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
