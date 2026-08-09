@@ -195,8 +195,9 @@ class PgNewsCanonicalWriter:
         # document_id 를 서브쿼리로 집는 이유: 위 UPDATE 가 no-op 이면 RETURNING 이 비고,
         # 파이썬이 유도한 id 는 **기존 행의 id 와 다를 수 있다**(다른 경로가 만든 행).
         # ⚠️ **`lead_observed_at` 은 이 경로의 승자 주장이다(ALPHA-696).** 배치
-        # `load_documents` 는 이 값보다 자기 canonical `fetched_at` 이 새로울 때만 리드를
-        # 덮는다 — 그래서 정정이 레이크의 옛 값으로 되돌아가지 않는다. 계약 전문은
+        # `load_documents` 는 이 값이 **미주장(NULL)이거나** 자기 canonical `fetched_at`
+        # 이 그보다 앞서지 않을 때만 리드를 덮는다(`<=` — 동시각은 배치가 이긴다).
+        # 그래서 **시각을 찍어 둔** 정정은 레이크의 옛 값으로 되돌아가지 않는다. 계약 전문은
         # `V202608071018__add_news_document_lead_observed_at.sql` 에 있다. 아래 ①② 는 그
         # 계약의 ①② 와 1:1 이고, ③ 은 **이 파일 고유 번호**다 — 마이그레이션 계약 ③(배치
         # 가드)과는 다른 규칙이니 번호로 교차참조하지 마라:

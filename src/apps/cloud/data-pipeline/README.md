@@ -1247,7 +1247,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 ### 실행 흐름 (스펙 §5)
 
 ```
-EventBridge(daily·news×3·장중수급×5 — 공시 10슬롯은 ALPHA-875 컷오버로 DISABLED, 1분 세션이 소유) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
+EventBridge(daily·news×2(00:10·08:10)·장중수급×5 — 공시 10슬롯은 ALPHA-875 컷오버로 DISABLED, 1분 세션이 소유) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
                                               → commit → 결정적 execution_name → SFN StartExecution
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
 각 ECS 태스크(26작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
