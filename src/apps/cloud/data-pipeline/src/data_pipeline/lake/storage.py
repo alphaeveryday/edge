@@ -866,11 +866,14 @@ def raw_news_minute_page_key(
     )
 
 
-def news_poll_manifest_key(
+def minute_poll_manifest_key(
     dataset: str, source: str, market: str, session_date: str,
     window_start_hhmm: str, attempt: int,
 ) -> str:
-    """뉴스 poll 판정 기록의 키 (ALPHA-669).
+    """1분 레인 poll 판정 기록의 키 (ALPHA-669 뉴스 · ALPHA-875 공시).
+
+    **window 단위 산출물이 없는 dataset** 이 쓴다 — 라이브 소스를 매 분 폴링해 관측을 남기는
+    쪽(뉴스·공시)이고, `dataset=` 으로 갈리므로 소비자가 늘어도 이 함수 하나다.
 
     가격 manifest 와 달리 축이 generation 이 아니라 **attempt** 다 — 라이브 소스라
     같은 window 의 재poll 은 다른 관측을 낳는데, DB 가 확정하는 generation 은 커밋이

@@ -624,6 +624,118 @@ class MinuteNewsWorkerConfig(BaseModel):
         return self
 
 
+class MinuteDisclosureWorkerConfig(BaseModel):
+    """1분 Disclosure Worker 상주 설정 — `disclosure-worker` 스텝만 쓴다(ALPHA-875).
+
+    `[minute_news_worker]` 와 같은 분업이다: 엔드포인트·유형 필터·`page_count`·`max_pages` 의
+    정본은 `[dart_disclosure.source]`(배치 수집과 공유)이고, 여기는 **1분 루프의 수치**만 둔다.
+    두 벌이면 유형 필터가 한쪽만 바뀌어 배치와 1분 레인이 다른 공시를 걷는다.
+
+    ⚠️ **pacing 이 여기 처음 생긴다.** 종전엔 `run.py` 가 `PoliteClient()` 를 인자 없이 만들어
+    (기본 min_interval=1.0) 재배포 없이는 조일 수 없었다 — 공시는 DART 앱키를 세 스텝
+    (`ingest-raw-disclosure`·`ingest-raw-financial`·`enrich-corp-code`)과 나눠 쓰고
+    `"020" 일 사용한도 초과`가 `STOP_STATUS_CODES` 라, 닿으면 레인이 선다. env 로 조인다:
+        DATA_PIPELINE_MINUTE_DISCLOSURE_WORKER__MIN_INTERVAL_SEC=1.5
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: NonBlankStr = "dart"
+    # 벤더 요청 간격(초) — PoliteClient.min_interval 로 주입되는 pacing 의 정본.
+    # 기본 1.0 은 종전 `PoliteClient()` 무인자 기본과 **같은 값**이다(이 PR 이 유량을 바꾸지
+    # 않는다 — 손잡이만 만든다). 올리면 window 하나가 길어지므로 lease 검증이 같이 움직인다.
+    min_interval_sec: float = Field(default=1.0, ge=0.2, le=30)
+    # 종전 `PoliteClient()` 기본과 같은 10초. list.json 은 실측 ~0.9초/페이지(ALPHA-714 의
+    # 슬롯당 6.3초 ÷ 7페이지)라 여유가 크다 — 느린 꼬리가 보이면 여기를 올린다.
+    timeout_sec: float = Field(default=10.0, gt=0, le=120)
+    # window 하나(=날짜창 전체 재독)가 읽을 list.json 페이지 예산. **벤더의 `page_count` 가
+    # 아니다** — 그건 페이지당 건수(100)이고 이건 "한 window 가 몇 페이지를 넘기는가"다.
+    #
+    # ⭐ 이 값은 **실제 순회 상한으로 주입된다**(`disclosure_worker_cli` 가 이 워커의 소스
+    # 설정에 `max_pages` 로 덮어쓴다). 안 그러면 실제 상한은 벤더 섹션의 500(백필용)이고,
+    # 아래 검증자는 이 값으로 계산하니 **검증이 초록인데 실제 tick 이 lease 를 넘는다.**
+    #
+    # 기본 60 의 유도: 평상시 필요분은 하루 700~1,070건(실측) × 2일 ÷ page_count 100 =
+    # **14~22 페이지**다. 60 은 그 위로 헤드룸을 둔 값으로 하루 3,000건(실측 피크의 ~3배,
+    # 3월 사업보고서 접수 급증 대비)까지 절단 없이 덮는다. 아래 검증자가 이 값으로 lease 를
+    # 재므로 올릴 때는 lease·session_lease 가 따라 올라간다 — 그게 이 노브의 대가다.
+    # ⚠️ **창 폭·일 건수 파생값**이다. 창을 당일로만 좁히면 필요분이 절반이 되고, 유형 필터를
+    # 넓혀도 목록 질의는 전 유형을 훑으니 **안 변한다**(감쇠는 저장 단계에서 일어난다).
+    # 상수로 박힌 초(예: 22초)를 쓰지 않는 이유가 이것이다 — 창을 바꾼 순간 낡는다.
+    max_pages_per_window: int = Field(default=60, ge=1, le=500)
+    # 한 window 가 **새로** 받을 본문(document.xml, 행당 1콜) 예산. 정상 tick 은 0~1건이다:
+    # 분당 신규 대상 공시가 그 규모고(실측 한 슬롯 `records_saved_target=1`), 이미 받아 둔
+    # 본문은 seen-map 이 재다운로드를 막는다(ALPHA-720 — UTC 2일 창).
+    # ⚠️ **콜드 스타트는 이 예산을 넘는다** — seen-map 이 빈 첫 컷오버일·장기 중단 복귀에는
+    # 그날 대상 전량을 한 window 가 받는다. 거기까지 덮지 않는 건 의도다: 그 경우의 정확성은
+    # claim/fence CAS 가 지키고(탈취된 attempt 의 commit 이 거부될 뿐), 이 검증자는 **평상시**
+    # 설정 오류를 거르는 게이트다(뉴스·가격 검증자가 폭주를 안 덮는 것과 같은 단서).
+    max_documents_per_window: int = Field(default=5, ge=0, le=1000)
+    # window claim lease — tick 최악 소요 **위**여야 한다(아래 검증자). 하한 90 은 가격과
+    # 같은 축이고, 기본 300 은 ALPHA-706 이 60 을 기각하고 정한 값이다.
+    # window claim lease — tick 최악 소요 **위**여야 한다(아래 검증자). 기본 300 은 가격·뉴스
+    # 와 같은 값이고 ALPHA-706 이 60 을 기각하고 정한 축이다. 기본 예산(60페이지)의 최악
+    # tick 은 280초라 300 안에 들어온다 — 예산을 올리면 여기도 올려야 load 가 통과한다.
+    lease_seconds: int = Field(default=300, ge=90, le=3600)
+    # ⚠️ 가격·뉴스의 300 을 **빌려 쓰지 않는다**. fence 는 heartbeat 주기(60) + 최악 tick
+    # (280)을 덮어야 하므로 340 이 하한이고, 300 이면 기본 설정이 자기 검증에 걸린다.
+    # 공시 window 가 형제들보다 비싼 것(창 전체 재독)이 그대로 이 층에 나타난 값이다.
+    session_lease_seconds: int = Field(default=600, ge=60, le=7200)
+    heartbeat_every_seconds: int = Field(default=60, ge=5, le=300)
+    # 하한 1 — DRAINING 수렴은 recovery lane 만 연다(만료 고아 CLAIMED 회수). 0 이면
+    # ack_drain 이 영구 거부돼 세션이 DRAINING 에 고착된다(worker.tick 의 drain 분기).
+    # 기본 1 은 뉴스와 같다: backlog window 하나마다 창 전체 재독이 한 번 더 나가므로
+    # (벤더 콜이 가장 비싼 축) 가격의 2 를 빌려 쓰지 않는다.
+    recovery_budget_per_tick: int = Field(default=1, ge=1, le=10)
+    tick_seconds: float = Field(default=5.0, gt=0, le=60)
+
+    @model_validator(mode="after")
+    def _leases_cover_worst_tick(self) -> MinuteDisclosureWorkerConfig:
+        """lease 는 한 tick 의 최악 소요 위여야 한다(뉴스 `_leases_cover_worst_poll` 동형).
+
+        ⚠️ **한 tick 은 window 하나가 아니다** — 공용 골격이 realtime 1 + `recovery_budget_per_tick`
+        을 한 tick 안에서 순차 처리한다(`worker.MinuteWorkerLoop.tick`). window 당 값을 tick
+        예산으로 쓰면 여유가 있다는 결론이 나오는데 실제로는 초과다.
+
+        window 하나 = 목록 `max_pages_per_window` 페이지 + 신규 본문 `max_documents_per_window`
+        건이고, **둘 다 같은 `PoliteClient` 를 쓴다**(간격이 합쳐 걸린다).
+
+        콜당 예산 = 간격 + RTT 여유 **1초**. 뉴스 검증자의 5초를 빌려 오지 않는다 — 그 상수는
+        BigKinds RTT p50 1.4초·스파이크 20초+ 실측에서 나온 값이고, DART list.json 은 실측
+        **슬롯당 6.3초 ÷ 7페이지 ≈ 0.9초/페이지**(ALPHA-714)로 min_interval 1.0 에 이미 묶여
+        있다(RTT 가 간격 대기 안에 흡수된다). 5초를 쓰면 페이지가 22개라 22배로 부풀어, 정상
+        설정이 거부된다 — 형제의 상수를 층 확인 없이 투사하면 나는 오류다.
+
+        정확성은 이 검증이 지키지 않는다 — claim/fence CAS 가 지킨다(탈취된 attempt 의 commit
+        이 거부될 뿐 이중 커밋은 없다). 이건 명백히 틀린 설정을 **load 시점**에 거르는 게이트다.
+        현 SFN 은 슬롯 간격 3600초가 이 축을 통째로 가리고 있었다.
+        """
+        call_budget = self.min_interval_sec + 1.0
+        worst_window = (
+            (self.max_pages_per_window + self.max_documents_per_window) * call_budget
+            + self.timeout_sec
+        )
+        worst_tick = (1 + self.recovery_budget_per_tick) * worst_window
+        if self.lease_seconds < worst_tick:
+            # 분해식이 인쇄된 숫자를 **재현해야** 한다 — timeout 은 곱셈 안에 있다(window
+            # 하나당 1회). 밖에 있는 것처럼 적으면 운영자가 다른 값을 유도한다.
+            raise ValueError(
+                f"lease_seconds({self.lease_seconds}) < tick 최악 소요({worst_tick:.0f}초 = "
+                f"(1+budget {self.recovery_budget_per_tick}) × ((페이지 "
+                f"{self.max_pages_per_window} + 본문 {self.max_documents_per_window}) × 콜 "
+                f"예산 {call_budget:.1f}s + timeout {self.timeout_sec:.0f}s) = "
+                f"{1 + self.recovery_budget_per_tick} × {worst_window:.0f}s) — "
+                "in-flight claim 이 만료된다. 창/예산을 줄이거나 lease 를 늘려라"
+            )
+        if self.heartbeat_every_seconds + worst_tick > self.session_lease_seconds:
+            raise ValueError(
+                f"session_lease_seconds({self.session_lease_seconds}) < heartbeat 주기"
+                f"({self.heartbeat_every_seconds}) + tick 최악 소요({worst_tick:.0f}초) — "
+                "fence 가 처리 중 만료돼 정상 수집이 거부된다"
+            )
+        return self
+
+
 class MinutePriceConsumerConfig(BaseModel):
     """1분 가격 판정 Consumer 상주 설정 — `price-consumer` 스텝만 쓴다(ALPHA-711).
 

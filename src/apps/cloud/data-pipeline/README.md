@@ -369,6 +369,11 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-news
 # rcept_no 로 멱등 병합 적재한다(같은 rcept_no 최신 fetched_at 우선). --input-run-id 로 특정 수집
 # 런의 raw 만 읽어 적재(SFN 경로; 미지정=전체 백필, 둘 다 멱등). 파서는 팀원(정준영)
 # 검증 프로토타입 이식 — graph 투영·theme 링킹은 범위 밖(analysis-engine 소관).
+# ⚠️ 입력 선택 축이 셋이다(CLI 는 앞 둘만 노출): 전체 스캔 / `--input-run-id` 스코프 /
+# **키 직접 전달**(`run(..., raw_keys=[...])` — 1분 레인 전용, ALPHA-875). 앞 둘은 `raw/` 를
+# 전량 LIST 한 뒤 거르므로 하루 720 window 가 돌 수 없어, Worker 는 방금 쓴 키를 그대로 넘겨
+# LIST 를 0 으로 만든다. 넘긴 키는 **걸러지지 않는다** — 규약 밖 키는 `raw_read_error` + exit 1
+# 로 크게 남는다(미리 걸러내면 전건 탈락이 exit 0·0행으로 조용히 성공처럼 보인다).
 uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure
 #   특정 런만: ... run normalize-disclosure --input-run-id 20260701T000000Z
 
@@ -789,7 +794,12 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
   dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
   **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721) — 형제 로더들은 하루 1회만
-  돌아 canonical 풀스캔을 견디지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다 곱해진다
+  돌아 canonical 풀스캔을 견디지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다 곱해진다.
+  그 레인이 실제로 붙었다(ALPHA-875 `disclosure-worker`) — 1분 레인은 이 함수를 **질의 날짜창으로
+  좁혀** 부른다. ⚠️ 좁혀지는 것은 parquet GET 뿐이다: `_read_facts` 가 `report_date=` 프리픽스
+  **전체**를 LIST 한 뒤 날짜를 거르므로 window 당 2 LIST(supply·segment)가 남고 그 비용은
+  report_date 파티션 수에 비례해 자란다. 거래일당 +1 이라 당장은 견디지만, 줄이려면 창에서
+  파티션 프리픽스를 만들어 그 날짜만 LIST 해야 한다
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   역할별 엔티티 해소(ALPHA-831 — 명부·채번 축 포함)와 해소율은 quality log 로 남고,
@@ -908,7 +918,13 @@ settings.targets.keywords            # ["금리", ...]
   (ALPHA-720): 같은 수집일(UTC 기준 ±1일)에 이미 받아 둔 본문은 다시 내려받지 않고 **기존 키를
   가리킨다** — 증분 커서가 없어 매 실행이 날짜창 전체를 재독하므로, 장치가 없으면 하루 여러 번
   도는 레인이 같은 ZIP 을 슬롯 수만큼 받는다. 메타는 그래도 **전건 저장**한다(창 전체 관측이
-  완전성 근거다 — 접으면 런 사이 rcept_no 집합 비교가 성립하지 않는다). 재사용 건수는
+  완전성 근거다 — 접으면 런 사이 rcept_no 집합 비교가 성립하지 않는다).
+  ⚠️ 1분 레인(ALPHA-875)이 붙으면서 그 "슬롯 수"가 하루 10 → **720 window** 가 됐다 — 본문은
+  seen-map 이 막지만 **메타는 설계상 매 window 가 창 전체를 다시 쓴다**. 즉 이 존의 하루 메타
+  량이 ~70배이고(하루 수십만 행 규모), `ingest_date` 프리픽스의 `run_id=` 파티션도 그만큼 늘어
+  seen-map LIST 가 하루 안에서 점점 커진다. 대가를 알고 택한 형상이지만(완전성 근거를 스스로
+  없앨 수 없다) `raw_keys` 없이 부르는 배치 경로(`normalize-disclosure` 풀스캔·백필)는 그
+  커진 존을 훑게 된다. 재사용 건수는
   collection_log 의 `documents_reused` 로 드러나고, 본문 fetch 가 실패한 건은 객체가 없어
   다음 실행이 자동 재시도한다. list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.
@@ -1478,6 +1494,22 @@ DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-rea
 # 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
+# 상주 Disclosure Worker(1분 파이프라인, ALPHA-875) — 공시를 매분 폴링한다. **수집만이 아니라
+# 체인 전체**를 한 window 에서 돈다: collect → normalize(공급계약) → normalize(사업부문)
+# → load. CLI 가 아니라 스텝 함수를 부르므로 `catalog.by_cli` 동시 소유 충돌이 없다.
+# 세션이 먼저 계획돼 있어야 한다(plan-minute-session --dataset disclosure_minute
+# --source-group dart — universe 없음. 격자는 08:00~20:00 720개 — DART 접수 07:30~18:00).
+# 엔드포인트·유형 필터 정본은 [dart_disclosure.source](배치와 공유), pacing·예산은
+# [minute_disclosure_worker](기본: interval 1s·timeout 10s·페이지 예산 60·본문 예산 5).
+# ⚠️ 페이지 예산은 이 워커의 소스 `max_pages` 로 **주입**된다 — 벤더 섹션의 500(백필용)이
+# 그대로면 lease 검증이 실제보다 짧은 tick 을 통과시킨다.
+# 질의 날짜창은 **세션 날짜(KST)** 에서 나온다: 매 tick 당일, 세션 첫 tick 만 D-1 포함
+# (중단 캐치업 — 일 콜을 절반으로 줄인다). --max-ticks 는 로컬 확인용 — WINDOW_FAILED 가
+# 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
+# ⚠️ 한 tick 이 1분을 넘는 것은 이 레인의 정상이다(dev 실측 window 당 ~14초·tick 당 ~27초).
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
+  python -m data_pipeline.run disclosure-worker --session-date 2026-08-07 --max-ticks 3
 # 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719) — 상주 서비스 7종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.

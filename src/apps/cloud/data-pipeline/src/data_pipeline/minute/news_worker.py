@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 
 from ..lake.storage import (
     Storage,
-    news_poll_manifest_key,
+    minute_poll_manifest_key,
     raw_news_minute_page_key,
 )
 from .bigkinds_feed import BlockedFeedError
@@ -259,7 +259,7 @@ class NewsWorker(MinuteWorkerLoop):
             # truncated(INCOMPLETE) 로 끝난다. 관측 0건이면 anchor 를 건드리지 않는다.
             saw_articles = bool(outcome.next_anchor_ids)
             head_anchor_ids = outcome.next_anchor_ids if saw_articles else head_ids
-            manifest_key = news_poll_manifest_key(
+            manifest_key = minute_poll_manifest_key(
                 cfg.dataset, cfg.source_code, cfg.market, cfg.session_date,
                 window_hhmm, claim["attempt_count"],
             )

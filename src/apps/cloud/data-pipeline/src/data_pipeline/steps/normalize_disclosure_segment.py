@@ -191,17 +191,29 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
     return parts_written, rows_written
 
 
-def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
+def run(
+    storage: Storage,
+    run_id: str,
+    input_run_id: str | None = None,
+    *,
+    raw_keys: list[str] | None = None,
+) -> int:
     """raw disclosures → 사업보고서 사업부문 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 장애 시 비0. input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 적재한다
-    (ALPHA-389 — SFN 경로). 미지정이면 전체를 읽는다 — 백필·복구 수단."""
+    (ALPHA-389 — SFN 경로). 미지정이면 전체를 읽는다 — 백필·복구 수단.
+
+    `raw_keys` 를 주면 스캔을 건너뛰고 그 키만 읽는다 — 근거는 `normalize_disclosure.run` 의
+    같은 인자 설명에 있다(ALPHA-875, 1분 레인은 버킷 전량 LIST 를 매 tick 돌릴 수 없다)."""
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_report_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
 
-    raw_keys = [k for k in storage.list_keys("raw/") if is_raw_disclosure_key(k)]
-    if input_run_id is not None:
-        raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
+    if raw_keys is None:
+        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_disclosure_key(k)]
+        if input_run_id is not None:
+            raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
+    # 넘겨받은 키는 거르지 않는다 — 근거는 `normalize_disclosure.run` 의 같은 자리에 있다
+    # (규약 밖 키는 아래 루프가 사유 + exit 1 로 크게 남긴다).
 
     read = routed = skipped_type = segments_extracted = 0
     failures: list[dict] = []

@@ -233,20 +233,38 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
     return parts_written, rows_written
 
 
-def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
+def run(
+    storage: Storage,
+    run_id: str,
+    input_run_id: str | None = None,
+    *,
+    raw_keys: list[str] | None = None,
+) -> int:
     """raw disclosures → 공급계약 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 장애 시 비0.
 
     input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다(ALPHA-389 —
     SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다(가격·뉴스 정제와 동형).
+
+    `raw_keys` 를 주면 **스캔을 아예 건너뛰고** 그 키만 읽는다(ALPHA-875 — 1분 레인). 기본
+    경로(`list_keys("raw/")`)는 버킷 전량 스캔이라 분 단위로는 못 돈다: 하루 720 tick 이
+    매번 raw 존 전체를 LIST 하고, 그 비용은 레이크가 자랄수록 커진다. 1분 Worker 는 방금
+    쓴 키를 알고 있으므로(`ingest_raw_disclosure.collect` 의 `raw_keys`) 좁힐 게 아니라
+    **넘겨준다** — 프리픽스로 좁히는 방식보다 정확하고(추측 없음) LIST 가 0 이다.
+    배치 경로는 인자를 안 줘서 동작이 그대로다.
     """
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_report_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
 
-    raw_keys = [k for k in storage.list_keys("raw/") if is_raw_disclosure_key(k)]
-    if input_run_id is not None:
-        raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
+    if raw_keys is None:
+        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_disclosure_key(k)]
+        if input_run_id is not None:
+            raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
+    # 넘겨받은 키는 **거르지 않는다.** 규약 밖 키는 아래 루프의 `parse_raw_disclosure_key`
+    # 에서 `raw_read_error` 사유 + `exit_code = 1` 로 크게 남는다 — 미리 걸러내면 그 loud
+    # 경로를 조용한 폐기로 바꾼다(카운터도 사유도 없이 사라지고, 전건이 걸러지면
+    # `records_read=0` 에 exit 0 이라 호출자가 VALID 로 확정한다 — Rule 12 위반).
 
     read = routed = skipped_type = 0
     failures: list[dict] = []  # blocking·본문/파싱 실패 — canonical 제외 대상

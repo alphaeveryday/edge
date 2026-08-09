@@ -38,6 +38,7 @@ from .config import load_settings
 from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.news_consumer import news_consumer_cli
+from .minute.disclosure_worker import disclosure_worker_cli
 from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.rollup import rollup_session_cli
@@ -190,7 +191,11 @@ def main(argv: list[str] | None = None) -> int:
                  # 1분 News Worker(ALPHA-707): BigKinds 매분 폴링 상주 루프(ECS Service).
                  # 원장 DB + storage(raw page·manifest PUT) + [bigkinds_news] 정본.
                  # universe 없음 — 뉴스 세션은 소스 단위다.
-                 "news-worker"],
+                 "news-worker",
+                 # 1분 Disclosure Worker(ALPHA-875): 공시 체인 4스텝을 한 tick 에 도는 상주
+                 # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
+                 # ⚠️ 수집만이 아니라 collect→normalize×2→load 를 한 window 에서 돈다.
+                 "disclosure-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -284,11 +289,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.max_ticks is not None:
         if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
-                             "news-consumer", "news-worker", "inav-worker"):
+                             "news-consumer", "news-worker", "inav-worker",
+                             "disclosure-worker"):
             raise SystemExit(
                 "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
-                f"news-consumer·news-worker·inav-worker 에서만 쓴다 — 이 스텝({args.step})"
-                "에서는 무시되므로 거부한다"
+                f"news-consumer·news-worker·inav-worker·disclosure-worker 에서만 쓴다 — "
+                f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
@@ -335,6 +341,13 @@ def main(argv: list[str] | None = None) -> int:
             "--universe 는 news-worker 에서 쓰지 않는다 — 뉴스 세션은 소스 단위라 "
             "universe 가 없다(무시되므로 거부)"
         )
+    if args.step == "disclosure-worker" and args.universe is not None:
+        # 공시도 소스 단위다 — 유니버스는 기대 집합이 아니라 목록 **필터**이고, 그 정본은
+        # canonical holdings 파생이라(`universe_from_holdings`) 파일 인자가 아니다.
+        raise SystemExit(
+            "--universe 는 disclosure-worker 에서 쓰지 않는다 — 공시 세션은 소스 단위이고 "
+            "수집 유니버스는 canonical holdings 에서 파생된다(무시되므로 거부)"
+        )
     if args.step == "rollup-minute-session" and args.universe is not None:
         # 받아서 무시하면 "계획을 이 파일로 다시 세운다"는 오해를 판다 — 배치는 계획을
         # 원장에서 읽는다(마감 후의 universe 파일은 그날 계획과 갈릴 수 있다).
@@ -344,13 +357,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
                          "start-minute-session", "news-worker",
-                         "rollup-minute-session", "inav-worker") and (
+                         "rollup-minute-session", "inav-worker",
+                         "disclosure-worker") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
-            f"price-consumer·start-minute-session·news-worker·rollup-minute-session "
-            "에서만 쓴다 — "
+            "price-consumer·start-minute-session·news-worker·rollup-minute-session·"
+            "inav-worker·disclosure-worker 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -424,6 +438,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "news-worker":
         return news_worker_cli(settings, session_date=args.session_date,
                                max_ticks=args.max_ticks)
+    if args.step == "disclosure-worker":
+        return disclosure_worker_cli(settings, session_date=args.session_date,
+                                     max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)
