@@ -300,17 +300,32 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     for lane, group in lane_groups:
         if group is None:
             continue
-        lane_exits[lane] = plan_session_cli(
-            settings, dataset=lane.dataset, source_group=group,
-            session_date=today.isoformat(),
-            # ⚠️ **선택 레인이라고 universe 가 다 None 인 게 아니다.** 뉴스·공시는 소스
-            # 단위라 안 쓰지만 iNAV 는 `UNIVERSE_DATASETS` 라 planner 가 없으면 **거부한다**
-            # (exit 2 → 그 레인이 매 거래일 통째로 안 선다). 통과시키더라도 원장에
-            # universe_version="none" 이 박혀 Worker 의 `_session_ready` 가 영영 False 다 —
-            # 두 축 모두에서 틀린다. worker 의 `--universe` 와 **같은 객체**여야 한다
-            # (terraform 이 둘에 같은 URI 를 준다).
-            universe=universe if lane.dataset in UNIVERSE_DATASETS else None,
-        )
+        # ⚠️ **예외도 레인 단위로 격리한다**(ALPHA-887). 아래 문단이 "레인별로 판정한다 —
+        # 서로 독립이다"라고 선언하는데, 그 독립은 여태 **exit code 에서만** 성립했다:
+        # `plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라 universe 객체를 읽는
+        # S3 의 botocore ClientError 는 그대로 뚫고 나오고, 그러면 **뒤에 오는 레인은
+        # 계획조차 안 된다**. iNAV 가 마지막이던 동안은 뒤가 없어 안 드러났는데, 업종지수가
+        # 뒤에 붙으면서 실재하는 경로가 됐다 — 그 소스는 소급이 불가해 그날이 영구 결손이다.
+        # 순서에 기대는 대신(다음 레인이 또 뒤에 붙는다) 여기서 끊는다.
+        try:
+            lane_exits[lane] = plan_session_cli(
+                settings, dataset=lane.dataset, source_group=group,
+                session_date=today.isoformat(),
+                # ⚠️ **선택 레인이라고 universe 가 다 None 인 게 아니다.** 뉴스·공시는 소스
+                # 단위라 안 쓰지만 iNAV 는 `UNIVERSE_DATASETS` 라 planner 가 없으면 **거부한다**
+                # (exit 2 → 그 레인이 매 거래일 통째로 안 선다). 통과시키더라도 원장에
+                # universe_version="none" 이 박혀 Worker 의 `_session_ready` 가 영영 False 다 —
+                # 두 축 모두에서 틀린다. worker 의 `--universe` 와 **같은 객체**여야 한다
+                # (terraform 이 둘에 같은 URI 를 준다).
+                universe=universe if lane.dataset in UNIVERSE_DATASETS else None,
+            )
+        except Exception:
+            # 삼키지 않는다 — 트레이스백을 남기고 **이 레인만** 실패로 접는다(Rule 12).
+            # exit 는 아래 첫 실패 코드로 실려 스케줄 기록에도 남는다.
+            logger.exception("%s 세션 계획이 예외로 죽었다 — 이 레인만 접고 나머지는 계속한다",
+                             lane.dataset)
+            lane_exits[lane] = 1
+            continue
         if lane_exits[lane] != 0:
             logger.error("%s 세션 계획 실패(exit %d) — 가격 레인은 진행하고 그 Worker 는 "
                          "올리지 않는다(세션 부재 재기동 루프 방지)",

@@ -93,14 +93,24 @@ def test_워커가_KIS_자격증명을_블록_안에서_받는다():
     """
     text = _minute_services_tf()
     block = re.search(r"\n    sector-index-worker = \{.*?\n    \}\n", text, re.S).group(0)
-    for name in ("DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY",
-                 "DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET",
-                 "DATA_PIPELINE_DB__PASSWORD",
-                 "KIS_TOKEN_CACHE_PARAM"):
+    # ⚠️ **이름만 세지 않는다.** 이름의 존재는 계약보다 약한 단언이다 — `APP_KEY` 가
+    # `:app_secret::` 을 가리켜도 이름과 `=` 는 그대로 남아 통과한다(Rule 9: 단언이
+    # 지키려는 계약의 반례를 실제로 거부해야 한다). 그래서 **가리키는 곳까지** 본다.
+    expected = {
+        "DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY": r"secret\.kis\.arn\}:app_key::",
+        "DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET": r"secret\.kis\.arn\}:app_secret::",
+        "DATA_PIPELINE_DB__PASSWORD": r"db_password_secret_arn\}:password::",
+    }
+    for name, target in expected.items():
         # `NAME =` 를 그대로 찾지 않는다 — terraform fmt 가 `=` 를 형제 키 길이에 맞춰
         # 정렬해 공백 수가 배선과 무관하게 바뀐다.
-        assert re.search(rf"{name}\s*=", block), \
-            f"sector-index-worker 블록에 {name} 이 없다 — 기동에서 죽거나 가드가 퇴화한다"
+        found = re.search(rf"{name}\s*=\s*\"([^\"]+)\"", block)
+        assert found, f"sector-index-worker 블록에 {name} 이 없다 — 기동에서 죽는다"
+        assert re.search(target, found.group(1)), \
+            f"{name} 이 엉뚱한 곳을 가리킨다: {found.group(1)} — 기동하거나 남의 값을 받는다"
+    # 토큰 캐시는 값이 local 참조라 이름·대입만 본다(문자열이 아니라 검사 형태가 다르다).
+    assert re.search(r"KIS_TOKEN_CACHE_PARAM\s*=", block), \
+        "sector-index-worker 가 토큰 공유 캐시를 안 받는다 — 매 기동 발급이 분당 1회 제한에 걸린다"
 
 
 def test_기대_집합이_universe_가_아니다():
