@@ -1,19 +1,17 @@
-"""propose 의 sql 탐색 왕복 계약 (ALPHA-886 2단계) — 각 반례가 지키는 규칙:
+"""Hypothesis model-tool boundary regression tests.
 
-  · 모델이 sql 을 요청하면 실행 결과가 **다음 왕복 프롬프트**에 실린다 — 안 실리면
-    조회가 제안에 닿지 못하고 툴은 장식이 된다
-  · 왕복 상한 초과는 **정직 종료**다 — 조용히 끊으면 무응답과 못 가른다
-  · 거부(allowlist 등)는 reason 그대로 되먹임된다 — 오류도 관측이다
-  · 툴 미주입(구형 호출자)은 현행 주입식 단발과 동일하다 — 하위호환
-  · 질의 감사 record(sqltool.query)와 왕복 관측(hypothesize.sql_rounds)이 남는다
+The legacy ``sql_tool`` parameter remains until its removal PR, but model-produced SQL
+must fail before that callable can execute. ObjectSet calls remain structured and bounded.
 """
 from __future__ import annotations
 
 import duckdb
+import pytest
 
 from edge_analysis.observability import collect_trace
 from edge_analysis.statics import sqltool
-from edge_analysis.statics.hypothesize import MAX_ASKS, MAX_SQL_ROUNDS, propose
+from edge_analysis.statics.hypothesize import MAX_ASKS, propose
+from edge_analysis.statics.model_contract import ModelSchemaError
 
 
 class _Ask:
@@ -40,7 +38,7 @@ def _propose(ask, tool):
 
 
 def test_sql_result_lands_in_the_next_prompt():
-    """조회 결과가 다음 왕복 프롬프트에 실려야 조회가 제안 재료가 된다."""
+    """Even an offered legacy SQL tool cannot bypass the model-output contract."""
     calls: list[str] = []
 
     def call(sql: str) -> dict:
@@ -49,13 +47,9 @@ def test_sql_result_lands_in_the_next_prompt():
 
     ask = _Ask([{"sql": "SELECT count(*) AS c FROM v_price_daily"},
                 {"hypotheses": []}])
-    _propose(ask, _tool(call))
-
-    assert calls == ["SELECT count(*) AS c FROM v_price_daily"]
-    assert "[탐색 도구" in ask.systems[0] and "읽기 전용 DuckDB SQL." in ask.systems[0]
-    assert "[sql 결과 1/" in ask.users[1] and "42" in ask.users[1]
-    # 첫 프롬프트에는 아직 결과가 없다 — 실린 위치가 '다음' 왕복이다.
-    assert "[sql 결과" not in ask.users[0]
+    with pytest.raises(ModelSchemaError):
+        _propose(ask, _tool(call))
+    assert calls == []
 
 
 def test_round_cap_is_an_honest_termination():
@@ -67,14 +61,9 @@ def test_round_cap_is_an_honest_termination():
         return {"ok": True, "rows": []}
 
     ask = _Ask([{"sql": "SELECT 1"}] * 20)   # 모델이 끝없이 조회만 하려 든다
-    with collect_trace() as trace:
-        valid, _rej = _propose(ask, _tool(call))
-
-    assert len(calls) == MAX_SQL_ROUNDS      # 상한 너머 실행은 없다
-    assert valid == []
-    assert any("왕복 상한 소진" in u for u in ask.users)
-    [obs] = [e for e in trace if e.get("event") == "hypothesize.sql_rounds"]
-    assert obs["rounds"] == MAX_SQL_ROUNDS and obs["rejected"] == 0
+    with pytest.raises(ModelSchemaError):
+        _propose(ask, _tool(call))
+    assert calls == []
 
 
 def test_rejection_reason_is_fed_back_verbatim():
@@ -85,12 +74,8 @@ def test_rejection_reason_is_fed_back_verbatim():
         return {"ok": False, "reason": reason}
 
     ask = _Ask([{"sql": "SELECT * FROM secret"}, {"hypotheses": []}])
-    with collect_trace() as trace:
+    with pytest.raises(ModelSchemaError):
         _propose(ask, _tool(call))
-
-    assert reason in ask.users[1]
-    [obs] = [e for e in trace if e.get("event") == "hypothesize.sql_rounds"]
-    assert obs["rounds"] == 1 and obs["rejected"] == 1
 
 
 def test_without_tool_the_flow_is_the_current_single_shot():
@@ -115,9 +100,8 @@ def test_tool_offered_but_unused_costs_nothing():
     assert obs["rounds"] == 0
 
 
-def test_real_sqltool_keeps_the_query_audit_record():
-    """실제 sqltool 을 물렸을 때 질의 감사(sqltool.query)가 trace 에 남는다 —
-    왕복 관측 한 줄이 질의 원문 감사를 대체하는 게 아니라 얹힌다."""
+def test_real_sqltool_is_not_called_by_model_output():
+    """The concrete legacy adapter is also blocked, not only a test double."""
     class _Lake:
         def __init__(self) -> None:
             self.con = duckdb.connect()
@@ -126,11 +110,9 @@ def test_real_sqltool_keeps_the_query_audit_record():
 
     tool = sqltool.tool_spec(_Lake())
     ask = _Ask([{"sql": "SELECT n FROM v_price_daily"}, {"hypotheses": []}])
-    with collect_trace() as trace:
+    with collect_trace() as trace, pytest.raises(ModelSchemaError):
         _propose(ask, tool)
-
-    assert any(e.get("event") == "sqltool.query" for e in trace)
-    assert "[sql 결과 1/" in ask.users[1] and '"rows": [[7]]' in ask.users[1]
+    assert not any(e.get("event") == "sqltool.query" for e in trace)
 
 
 def _object_tools(call) -> dict:
@@ -168,13 +150,11 @@ def test_objectset_mode_rejects_and_audits_a_model_sql_field():
     calls: list[tuple[str, dict]] = []
     ask = _Ask([{"sql": "SELECT * FROM secret"}, {"hypotheses": []}])
 
-    with collect_trace() as trace:
+    with collect_trace() as trace, pytest.raises(ModelSchemaError):
         propose(ask, facts="f", event_types=["CONTRACT.SIGNING"],
                 measurable=[("수급", "누적")],
                 object_tools=_object_tools(lambda name, args: calls.append((name, args))))
 
     assert calls == []
-    assert all("SELECT * FROM secret" not in user for user in ask.users[1:])
-    assert "MODEL_SCHEMA_REJECTED" in ask.users[1]
-    [obs] = [e for e in trace if e.get("event") == "hypothesize.objectset_rounds"]
-    assert obs["rounds"] == 1 and obs["rejected"] == 1
+    [obs] = [e for e in trace if e.get("event") == "llm.model_schema_rejected"]
+    assert obs["code"] == "MODEL_SCHEMA_REJECTED" and obs["keys"] == ["sql"]

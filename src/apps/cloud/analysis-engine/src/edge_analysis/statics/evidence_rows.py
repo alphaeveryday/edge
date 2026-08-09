@@ -72,7 +72,7 @@ class EvidenceBuild:
     rows: tuple[EvidenceRow, ...]
     stat_records: dict[int, StatTestRecord]     # ref → 원 레코드 (영속용, §3.1)
     block_refs: dict[str, tuple[int, ...]]      # block_code → refs (§7 표)
-    skipped: tuple[str, ...]                    # 행이 못 된 검정의 사유 (통과 실패 포함)
+    skipped: tuple[dict, ...]                   # 원 검정 + 행이 못 된 사유 (감사 손실 방지)
 
 
 def _mmdd(day: str) -> str:
@@ -116,7 +116,7 @@ def _gate_reason(rec: dict) -> str | None:
 
 
 def _stat_records(stat_tests: list[dict] | tuple, sector_name: str | None,
-                  ) -> tuple[list[StatTestRecord], list[str]]:
+                  ) -> tuple[list[StatTestRecord], list[dict]]:
     """stat_tests 버퍼(etfcell) → 통과분의 `StatTestRecord` + 탈락 사유 목록.
 
     현재 버퍼는 `paneltest.edge_tests` 산출(SENSITIVE_STOCKS/TUPLE_PANEL)만 담는다.
@@ -126,20 +126,22 @@ def _stat_records(stat_tests: list[dict] | tuple, sector_name: str | None,
     tested = [r for r in stat_tests if r.get("stage") == "test"]
     k = max(1, len(tested))
     records: list[StatTestRecord] = []
-    skipped: list[str] = []
+    skipped: list[dict] = []
     for rec in stat_tests:
         ident = f"{rec.get('trigger')}×{rec.get('channel')}·{rec.get('exposure')}"
         why = _gate_reason(rec)
         if why is not None:
-            skipped.append(f"{ident}: {why}")
+            skipped.append({"record": dict(rec), "reason": f"{ident}: {why}"})
             continue
         trigger_label = _TRIGGER_LABEL.get((str(rec["trigger"]), str(rec["channel"])))
         if trigger_label is None:
-            skipped.append(f"{ident}: 방아쇠 카드 표기 미배선 — §3.7 대상 어휘 밖")
+            skipped.append({"record": dict(rec),
+                            "reason": f"{ident}: 방아쇠 카드 표기 미배선 — §3.7 대상 어휘 밖"})
             continue
         channel_label = _CHANNEL_LABEL.get(str(rec["channel"]))
         if channel_label is None:
-            skipped.append(f"{ident}: 채널 카드 이름 미배선(vocab.CHANNELS 밖)")
+            skipped.append({"record": dict(rec),
+                            "reason": f"{ident}: 채널 카드 이름 미배선(vocab.CHANNELS 밖)"})
             continue
         exposure = str(rec.get("exposure") or "")
         family, _, transform = exposure.partition("/")
@@ -148,13 +150,15 @@ def _stat_records(stat_tests: list[dict] | tuple, sector_name: str | None,
         elif (family, transform) == ("섹터", "민감도") and sector_name:
             target, freq, measure = f"KRX {sector_name}", "일봉", "수익률"
         else:
-            skipped.append(f"{ident}: 노출 계열의 series 이름 미배선 — §3.7 대상 어휘 밖")
+            skipped.append({"record": dict(rec),
+                            "reason": f"{ident}: 노출 계열의 series 이름 미배선 — §3.7 대상 어휘 밖"})
             continue
         effect_high = rec.get("effect_high")
         effect_low = rec.get("effect_low")
         if rec.get("p") is None or rec.get("n") is None or effect_high is None \
                 or effect_low is None:
-            skipped.append(f"{ident}: n·p·effect 없이 검정 행을 만들 수 없다")
+            skipped.append({"record": dict(rec),
+                            "reason": f"{ident}: n·p·effect 없이 검정 행을 만들 수 없다"})
             continue
         records.append(StatTestRecord(
             ref=0,      # 채번은 build_evidence_rows 정렬 후에 한다
@@ -267,6 +271,7 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     sector_stat = tuple(ref for ref, rec in stat_records.items()
                         if rec.method == "SENSITIVE_STOCKS")
     other_stat = tuple(ref for ref in stat_records if ref not in sector_stat)
+    all_stat = tuple(stat_records)
     news_keys = tuple(key for key in refs if key.startswith("news:"))
     block_refs: dict[str, tuple[int, ...]] = {}
     for b in blocks:
@@ -279,7 +284,9 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
             # 검정은 몫의 설명이라 [3]에 붙는다(§7 케이스 B — 사건 병치가 아니다).
             block_refs[code] = _refs("price_etf", "price_layers") + sector_stat
         elif code == "4":
-            block_refs[code] = _refs(*news_keys) + other_stat
+            required = str(b.get("evidence_requirement") or "")
+            block_refs[code] = _refs(*news_keys) + (
+                all_stat if required == "CAUSAL_STAT_TEST" else other_stat)
         elif code == "N":
             block_refs[code] = ()       # 부재 고지 — 게이트 예외(§7)
         else:
@@ -290,6 +297,10 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
         code = str(b.get("block_code"))
         if code == "N":
             continue
+        if b.get("evidence_requirement") == "CAUSAL_STAT_TEST" and not any(
+                ref in stat_records for ref in block_refs.get(code, ())):
+            raise EvidenceFormatError(
+                f"블록 [{code}] CAUSAL_STAT_TEST 요구를 적격 STAT_TEST 행이 만족하지 못했다")
         if not block_refs.get(code):
             raise EvidenceFormatError(
                 f"근거 0인 문장 — 블록 [{code}] {b.get('block_title')!r} 에 근거 행을 "

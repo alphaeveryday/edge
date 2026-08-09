@@ -300,13 +300,17 @@ class Survey:
 def generate(ask, machine, *, facts: str, n: int = 4) -> list[str]:
     """자유 산문 가설. **어휘를 안 준다** - 주면 자기검열이 일어나 분모가 오염된다."""
     from .hypothesize import explore
+    from .model_contract import ModelContractError, ask_checked, list_field
     seen = explore(ask, machine, facts=facts)
     try:
-        out = ask("너는 분석가다. JSON 으로만 답한다.", _GEN.format(n=n, seen=seen))
+        out = ask_checked(ask, "너는 분석가다. JSON 으로만 답한다.",
+                          _GEN.format(n=n, seen=seen))
+    except ModelContractError:
+        raise
     except Exception as e:                          # noqa: BLE001 - 실패도 관측
         trace("expressive.generate_failed", why=f"{type(e).__name__}: {e}")
         return []
-    hyps = [str(h).strip() for h in (out.get("hypotheses") or []) if str(h).strip()]
+    hyps = [str(h).strip() for h in list_field(out, "hypotheses") if str(h).strip()]
     for h in hyps:
         trace("expressive.free_hypothesis", prose=h[:600])
     return hyps
@@ -320,17 +324,22 @@ def score(ask, prose: str, *, event_types: list[str],
     **둘은 다르다**: 어휘엔 있는데 이 셀에 없는 타입은 '어휘 구멍'이 아니라
     '이 셀 미접지'다 - 전자는 스키마 일감이고 후자는 데이터/셀 선택 문제다.
     """
+    from .model_contract import ModelContractError, ask_checked, object_field
+
     known = tuple(vocab_types) or tuple(event_types)
     sys_p = _SCORE.format(channels=sorted(CHANNELS), event_types=known,
                           families=sorted(SERIES_FAMILIES), transforms=sorted(TRANSFORMS),
                           relations=sorted(RELATIONS), outcomes=sorted(OUTCOME_KINDS),
                           measurable=sorted(FEATURES), prose=prose)
     try:
-        out = ask("너는 환원 채점자다. JSON 으로만 답한다. '불가'를 두려워하지 마라.", sys_p)
+        out = ask_checked(
+            ask, "너는 환원 채점자다. JSON 으로만 답한다. '불가'를 두려워하지 마라.", sys_p)
+    except ModelContractError:
+        raise
     except Exception as e:                          # noqa: BLE001
         trace("expressive.score_failed", why=f"{type(e).__name__}: {e}")
         return None
-    slots = out.get("slots") or {}
+    slots = object_field(out, "slots")
     clean = {}
     for s in SLOTS:
         v = slots.get(s) or {}

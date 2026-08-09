@@ -21,6 +21,7 @@ import time
 from typing import Callable
 
 from ..observability import record
+from .model_contract import ModelContractError, ask_checked, list_field, object_field
 from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, HypothesisTuple,
                     LAYERS, OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS,
                     Trigger, VocabError)
@@ -137,8 +138,10 @@ def explore(ask: Ask, machine, *, facts: str, max_turns: int = 4) -> str:
         user = _EXPLORE.format(menu=machine.menu(),
                                seen="\n".join(seen[-8:]) or "  (아직 없음)")
         try:
-            pick = ask("너는 관측자다. 부를 도구를 JSON 으로만 답한다.",
-                       facts + "\n\n" + user)
+            pick = ask_checked(ask, "너는 관측자다. 부를 도구를 JSON 으로만 답한다.",
+                               facts + "\n\n" + user)
+        except ModelContractError:
+            raise
         except Exception as e:                     # noqa: BLE001 - 실패도 관측
             seen.append(f"[호출 실패] {type(e).__name__}: {e}")
             break
@@ -274,11 +277,11 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
     가른다(정직 종료). 질의 실패는 reason 그대로 되먹인다 — 오류도 관측이다.
     """
     used = rejects = 0
-    out = ask(system, user)
+    out = ask_checked(ask, system, user)
     while isinstance(out, dict) and str(out.get("sql") or "").strip():
         if used >= budget or time.monotonic() >= deadline:
             user += _SQL_DONE
-            out = ask(system, user)
+            out = ask_checked(ask, system, user)
             break
         used += 1
         sql = str(out["sql"]).strip()
@@ -287,7 +290,7 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
             rejects += 1
         user += (f"\n\n[sql 결과 {used}/{budget}] 질의: {sql}\n"
                  + json.dumps(res, ensure_ascii=False))
-        out = ask(system, user)
+        out = ask_checked(ask, system, user)
     return out, user, used, rejects
 
 
@@ -295,32 +298,24 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
                  budget: int) -> tuple[dict, str, int, int]:
     """Run bounded structured tool calls; executable text is never an argument shape."""
     used = rejects = 0
-    out = ask(system, user)
-    forbidden = {"sql", "query", "view_name"}
+    out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
-        bad_keys = sorted(forbidden & set(out))
-        if not name and not bad_keys:
+        if not name:
             break
         if used >= budget:
             user += _OBJECT_DONE
-            out = ask(system, user)
+            out = ask_checked(ask, system, user)
             break
         used += 1
-        if bad_keys:
-            res = {"ok": False, "error": {
-                "code": "MODEL_SCHEMA_REJECTED",
-                "message": "executable query fields are not accepted; use an advertised ObjectSet tool"}}
-            record("objectset.model_rejected", keys=bad_keys)
-        else:
-            arguments = out.get("arguments")
-            res = call(name, arguments if isinstance(arguments, dict) else {})
+        arguments = object_field(out, "arguments")
+        res = call(name, arguments)
         if not res.get("ok"):
             rejects += 1
         # Do not echo the raw model arguments. The validated result is the observation.
         user += (f"\n\n[ObjectSet 결과 {used}/{budget}] 도구: {name or 'schema'}\n"
                  + json.dumps(res, ensure_ascii=False))
-        out = ask(system, user)
+        out = ask_checked(ask, system, user)
     return out, user, used, rejects
 
 
@@ -379,8 +374,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
             sql_used += u
             sql_rejects += rj
         else:
-            out = ask(system, user)
-        valid, rej = screen_tuples(out.get("hypotheses") or [],
+            out = ask_checked(ask, system, user)
+        valid, rej = screen_tuples(list_field(out, "hypotheses"),
                                    event_types=event_types,
                                    series_families=list(series_families),
                                    measurable=(measurable or None))

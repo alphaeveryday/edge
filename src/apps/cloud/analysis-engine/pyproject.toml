@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "ETF 당일 설명 생성 파이프라인 (S3 → Cloud Event Store)"
 requires-python = ">=3.12"
 dependencies = [
+    "pytz>=2024.1",         # DuckDB Python TIMESTAMPTZ conversion (Postgres RDB boundary)
     "boto3>=1.34",          # S3 canonical lake 읽기 + 결과 s3 fallback
     "pyarrow>=17",          # canonical news parquet 읽기
     "pandas>=2.2",          # 경량 데이터 정리
@@ -17,7 +18,11 @@ dependencies = [
     "psycopg[binary]>=3.1", # 계보 적재·근거 묶음 (psycopg2 와 별 API - 둘 다 쓴다)
     "pykalman>=0.10.1",     # kbeta fit_qr: 로컬레벨 EM (ALPHA-803). scipy 를 끌고
                             # 온다 - 이미지 크기 영향은 PR 에서 판단 (실측은 PR 본문)
+    "edge-ontology",        # news event role/measure schema SSOT (workspace member)
 ]
+
+[tool.uv.sources]
+edge-ontology = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -178,13 +178,19 @@ def as_explanation(honest: str, headline: str, v: Verdicts, stage: dict):
     })
 
 
-def verdicts_from(text: str, *, route_kind: str, degraded: bool = False,
+def verdicts_from(*, route_kind: str, evidence_build=None,
+                  hypothesis_trials: tuple[dict, ...] | list[dict] = (),
+                  degraded: bool = False,
                   bundles: tuple[str, ...] = ()) -> Verdicts:
-    """산출 산문 → 판정 요약. **게이트가 낸 어휘만 센다** - '유의' 를 그냥 세면
-    '무유의' 줄에도 걸린다."""
+    """Build verdicts from post-gate verifier ledgers, never customer prose."""
+    stat_records = getattr(evidence_build, "stat_records", {}) if evidence_build else {}
+    credible = len(stat_records)
     return Verdicts(
-        applied_edges=text.count("→ **오늘 적용**"),
-        credible=text.count("[함의]") - text.count("[함의] 없음"),
-        significant_market=text.count("**유의**"),
-        undecided=text.count("판정불가"),
+        applied_edges=credible,
+        credible=credible,
+        significant_market=sum(
+            1 for row in stat_records.values() if getattr(row, "basis", None) == "MARKET"),
+        undecided=sum(
+            1 for row in hypothesis_trials
+            if row.get("stage") == "TESTED" and row.get("verdict") == "UNDECIDABLE"),
         route_kind=route_kind, degraded=degraded, bundles=bundles)

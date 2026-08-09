@@ -646,12 +646,17 @@ def run(
     # 영속·게시하지 않는 것이 계약이라 조용한 통과가 없다(표면 부재 런은
     # final_payload 가 없어 이 게이트를 타지 않는다 — 죽일 문장 자체가 없다).
     evidence_build = None
+    stat_test_rows = tuple(window_meta.get("stat_tests") or ())
+    scoped_news_events = list(window_meta.pop("news_events", ()) or ())
+    events = _canonical_event_contexts(events, scoped_news_events)
+    log("events.canonical", events=len(events), scoped=len(scoped_news_events))
+    stage["event_count"] = len(events)
     if final_payload is not None:
         from .statics.evidence_rows import build_evidence_rows
         evidence_build = build_evidence_rows(
             blocks=final_payload["blocks"],
             lineage=window_meta.get("lineage") or (),
-            stat_tests=window_meta.get("stat_tests") or (),
+            stat_tests=stat_test_rows,
             events=[{"source_event_id": e.source_event_id, "title": e.title,
                      "available_at": e.available_at} for e in events],
             ticker=settings.etf_ticker,
@@ -669,7 +674,7 @@ def run(
         if evidence_build.skipped:
             # 통과 못 한 검정은 행이 없다(§0) — 침묵이 아니라 사유를 로그로 드러낸다.
             log("evidence_row.tests_skipped", count=len(evidence_build.skipped),
-                reasons=list(evidence_build.skipped)[:8])
+                reasons=[item["reason"] for item in evidence_build.skipped[:8]])
     # 가설 원장 행(ALPHA-881)은 DB 표(hypothesis_trial)가 정본이다 — stage_results 에
     # 같은 내용을 또 실으면 두 벌이 되어 어느 쪽을 믿을지 갈린다. 여기서 빼서
     # run 확정 뒤 store 로 보낸다(run_id 연결이 필요해 persist_explanation 뒤다).
@@ -678,23 +683,49 @@ def run(
         stage["window"] = window_meta
     if final_payload is not None:
         stage["final_explanation"] = final_payload
-    payload_bundles = tuple(
-        ref.removeprefix("analysis_evidence_bundle:")
-        for block in ((final_payload or {}).get("blocks") or ())
-        for ref in (block.get("evidence_refs") or ())
-        if ref.startswith("analysis_evidence_bundle:")
-    )
     stage["analysis_trace"] = trace_manifest
     verdicts = verdicts_from(
-        text, route_kind=(rt.kind if rt else ""),
+        route_kind=(rt.kind if rt else ""),
+        evidence_build=evidence_build,
+        hypothesis_trials=trial_rows,
         # 폐기가 확신도를 올리면 안 된다(Rule 12) - 라우팅이 깨져 분해를 버린 런이
         # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다.
         degraded=routing_failed,
-        bundles=tuple(sorted(set(payload_bundles or re.findall(
-            r"\bev_[0-9a-f]{16}\b", text)))))
+    )
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,
         confidence=explanation.confidence_level, bundles=len(verdicts.bundles))
+    persistence_plan = store.plan_explanation(
+        settings, etf_instrument_id, route_id=prereqs["route"])
+    # Required audit archive is the completion barrier.  The consumer's duplicate gate is an
+    # explanation_run, so publishing first would make an S3 failure permanently non-retryable.
+    # The planned IDs make an archive orphan self-contained; the deterministic request key lets
+    # a retry overwrite it before starting its own DB transaction.
+    write_run_archive(s3, settings, {
+        "outcome": "explained",
+        "trigger": asdict(gate),
+        "route_code": route_code,
+        "decomposition": decomp_summary(decomp),
+        "holdings_asof": holdings_asof,
+        "events": archived_events(events),
+        "explanation": explanation.raw,
+        "verification": {
+            "hypothesis_trials": list(trial_rows),
+            "stat_tests": list(stat_test_rows),
+            "evidence": {
+                "rows": ([asdict(row) for row in evidence_build.rows]
+                         if evidence_build is not None else []),
+                "skipped": (list(evidence_build.skipped)
+                            if evidence_build is not None else []),
+            },
+        },
+        "persistence_plan": {
+            "state": "PLANNED",
+            "explanation_as_of": persistence_plan.explanation_as_of,
+            "run_id": persistence_plan.run_id,
+            "result_id": persistence_plan.result_id,
+        },
+    })
     outcome = store.persist_explanation(
         settings, etf_instrument_id, explanation,
         route_id=prereqs["route"],
@@ -702,6 +733,7 @@ def run(
         primary_thread_id=_primary_thread_id(events),
         events=events,
         publishable=surface_ok,
+        plan=persistence_plan,
     )
     if trial_rows:
         # DB 실패가 런을 죽이지 않는다 — 설명은 이미 영속됐고, 원장 결손은 재실행이
@@ -734,16 +766,6 @@ def run(
         except Exception as exc:            # noqa: BLE001 — 원장 실패는 로그로 드러낸다
             log("evidence_row.persist_failed",
                 error=f"{type(exc).__name__}: {exc}", rows=len(evidence_build.rows))
-    write_run_archive(s3, settings, {
-        "outcome": "explained",
-        "trigger": asdict(gate),
-        "route_code": route_code,
-        "decomposition": decomp_summary(decomp),
-        "holdings_asof": holdings_asof,
-        "events": archived_events(events),
-        "explanation": explanation.raw,
-        "persistence": outcome,
-    })
     # 발화 스냅샷 대시보드 재생성(ALPHA-894) — 런마다 전량 재조회·덮어쓰기(멱등).
     # 실패는 런을 죽이지 않는다: 설명은 이미 영속됐고 다음 런이 다시 만든다.
     # 조용히 삼키지 않는다(Rule 12) — `report.regenerate_failed` 로 드러낸다.
@@ -806,3 +828,32 @@ def _primary_thread_id(events: list[EventContext]) -> str | None:
     edge-review). ``None`` 은 목록의 **어떤** 이벤트도 스레드되지 않았을 때만.
     """
     return next((e.thread_id for e in events if e.thread_id), None)
+
+
+def _canonical_event_contexts(
+    trigger_events: list[EventContext], scoped_events: list[dict[str, Any]],
+) -> list[EventContext]:
+    """Merge event sources once; trigger context wins and scoped evidence fills gaps."""
+    merged = {
+        str(row["source_event_id"]): EventContext(
+            source_event_id=str(row["source_event_id"]),
+            event_type_code=str(row.get("event_type_code") or ""),
+            available_at=str(row.get("available_at") or ""),
+            entity_id="", ticker="",
+            thread_id=(str(row["thread_id"]) if row.get("thread_id") else None),
+            novelty_status="", title=str(row.get("title") or ""),
+            evidence_id=(str(row["evidence_id"]) if row.get("evidence_id") else None),
+        )
+        for row in scoped_events
+    }
+    for event in trigger_events:
+        scoped = merged.get(event.source_event_id)
+        merged[event.source_event_id] = event if scoped is None else replace(
+            event,
+            event_type_code=event.event_type_code or scoped.event_type_code,
+            available_at=event.available_at or scoped.available_at,
+            thread_id=event.thread_id or scoped.thread_id,
+            title=event.title or scoped.title,
+            evidence_id=event.evidence_id or scoped.evidence_id,
+        )
+    return [merged[key] for key in sorted(merged)]

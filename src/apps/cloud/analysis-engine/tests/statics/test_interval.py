@@ -305,6 +305,18 @@ def test_statistics_begin_at_minimum_sample_boundary():
     assert "p=0.0040" in text
 
 
+def test_statistical_output_declares_a_structural_evidence_requirement():
+    payload = final_explanation_payload(_facts(statistics=(StatisticFact(
+        claim="계약 체결 뒤 평균 수익률", n=MIN_N,
+        effect=0.013, p=0.004, evidence_ids=("s1",),
+    ),)))
+
+    statistical = next(block for block in payload["blocks"]
+                       if block["block_code"] == "4")
+    assert statistical["evidence_requirement"] == "CAUSAL_STAT_TEST"
+    assert statistical["source_systems"] == ["ANALYSIS.stat_tests"]
+
+
 
 def test_final_payload_uses_named_blocks_and_traceable_references():
     """최종 JSONB는 H→4 순서와 근거 조회키를 동시에 보존한다."""
@@ -314,7 +326,6 @@ def test_final_payload_uses_named_blocks_and_traceable_references():
         disclosures=("요청창 사건 evt_1",),
         final_lines=("14:20, 공급계약 공시가 있었습니다.",),
         event_ids=("evt_1",),
-        final_bundle_ids=("ev_0123456789abcdef",),
     )
 
     payload = final_explanation_payload(facts)
@@ -323,9 +334,8 @@ def test_final_payload_uses_named_blocks_and_traceable_references():
     assert payload["rendered_text"].startswith("[H] KODEX 반도체")
     assert "\n\n[4] 14:20, 공급계약 공시가 있었습니다." in payload["rendered_text"]
     event = payload["blocks"][-1]
-    assert event["source_systems"] == ["RDB.source_event", "RDB.analysis_evidence_bundle"]
-    assert event["evidence_refs"] == [
-        "source_event:evt_1", "analysis_evidence_bundle:ev_0123456789abcdef"]
+    assert event["source_systems"] == ["RDB.source_event"]
+    assert event["evidence_refs"] == ["source_event:evt_1"]
 
 
 def test_final_payload_emits_absence_only_when_optional_blocks_are_empty():
@@ -336,36 +346,36 @@ def test_final_payload_emits_absence_only_when_optional_blocks_are_empty():
     assert payload["blocks"][-1]["block_title"] == "부재 고지"
     assert "확인된 공시·보도는 없습니다" in payload["blocks"][-1]["text"]
 
-def test_final_explanation_binds_event_financial_and_statistical_db_facts():
-    """최종 네 문장은 DB 사실을 그대로 쓰고 시각을 한 번만 표시한다."""
+def test_final_explanation_never_reads_a_prior_analysis_output():
+    """A previous run's output must never become evidence for the current run."""
     from edge_analysis.statics.interval import _final_lines
 
     class Lake:
+        def __init__(self):
+            self.queries = []
+
         def sql(self, query):
+            self.queries.append(query)
             if "source_event" in query:
                 return [("e1", "SK하이닉스 공급계약 해지 공시")]
             if "s3_supply_fact" in query:
                 return [(320_000_000_000, 0.9)]
             if "analysis_evidence_bundle" in query:
-                return [("ev_0123456789abcdef",
-                         {"n": 41, "mean_excess": -0.031,
-                          "position": "중앙값 부근"})]
+                raise AssertionError("prior output relation was read")
             raise AssertionError(query)
 
+    lake = Lake()
     lines = _final_lines(
-        Lake(), "000660", "2026-08-05", ("e1",),
+        lake, "000660", "2026-08-05", ("e1",),
         {"e1": dt.datetime(2026, 8, 5, 10, 31)},
-        window_return=-0.038, market_return=-0.002,
     )
 
     assert lines == (
         "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다.",
         "계약금액 3,200억원, 최근 연매출 대비 0.9% 규모입니다.",
-        "시장 요인을 제거한 기준으로, 조건이 비슷한 과거 41건의 공시 당일 "
-        "초과수익률은 평균 -3.1%였습니다.",
-        "오늘 이 종목의 초과수익률은 -3.6%로, 과거 분포의 중앙값 부근입니다.",
     )
     assert " ".join(lines).count("10:31") == 1
+    assert not any("analysis_evidence_bundle" in query for query in lake.queries)
 
 
 def test_missing_requested_window_return_fails_loud(monkeypatch):

@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from ..config import PipelineError
 from .route import route_etf, say_route
@@ -34,6 +35,39 @@ from .interval import (
     final_explanation_payload,
     window_facts,
 )
+
+
+def _thread_news_lines(rows: list[dict]) -> tuple[str, ...]:
+    """Render one stable customer sentence per thread without dropping event lineage."""
+    def canonical_key(row: dict) -> tuple[str, ...]:
+        return tuple(str(row.get(field) or "") for field in (
+            "available_at", "title", "evidence_id", "event_type_code",
+            "thread_id", "source_event_id",
+        ))
+
+    grouped: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        event_id = str(row["source_event_id"])
+        thread_id = str(row.get("thread_id") or event_id)
+        events = grouped.setdefault(thread_id, {})
+        current = events.get(event_id)
+        if current is None or canonical_key(row) > canonical_key(current):
+            events[event_id] = row
+
+    lines = []
+    for thread_id in sorted(grouped):
+        events = grouped[thread_id]
+        representative = max(
+            events.values(),
+            key=lambda row: (str(row.get("available_at") or ""),
+                             str(row["source_event_id"])),
+        )
+        available_at = str(representative.get("available_at") or "")
+        clock = available_at[11:16] if len(available_at) >= 16 else available_at
+        title = str(representative["title"])
+        prefix = f"{clock}, {title}" if clock else title
+        lines.append(f"{prefix} (관련 기사 {len(events)}건)")
+    return tuple(lines)
 
 
 def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
@@ -56,8 +90,18 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         # 카드에 통계 어휘 금지·완성 문장 저장 금지. 레코드는 stage_results 버퍼
         # (`stat_tests`)에만 보존하고, 근거 포맷 구현 시 통계검정 레코드(§3)의
         # 입력이 된다. 산문 승격은 그 포맷의 렌더 계층 몫이다.
+        scoped_news: list[dict] = []
         stat_tests, hypothesis_trials = _window_paneltest(
-            lake, instrument_id, day, ask, facts)
+            lake, instrument_id, day, ask, facts, news_out=scoped_news)
+        if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
+            raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
+        if scoped_news:
+            facts = replace(
+                facts,
+                news=_thread_news_lines(scoped_news),
+                event_ids=tuple(sorted(set(facts.event_ids) | {
+                    str(row["source_event_id"]) for row in scoped_news})),
+            )
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
@@ -81,6 +125,8 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                     for block in plan
                 ],
                 "lineage": list(facts.lineage),
+                "news_events": [{key: value for key, value in row.items() if key != "line"}
+                                for row in scoped_news],
                 "final_explanation": final_payload,
             })
         return final
@@ -171,6 +217,7 @@ _VERDICT_CODE = {"성립": "ESTABLISHED", "불성립": "NOT_ESTABLISHED",
 
 
 def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
+                      news_out: list[dict] | None = None,
                       ) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
     """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → **레코드 버퍼**.
 
@@ -189,12 +236,12 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
       3. 방아쇠 재료(창 안 사건 타입 또는 오늘 발화 계열족)가 없으면 LLM 을
          부르지 않는다 - 재료 없는 가설은 소원이고, 호출 자체가 비용이다.
     """
-    if ask is None:
-        return (), ()
     from ..observability import log
     from .hypothesize import propose
     from .interval import _etypes, thread_context
+    from .model_contract import ModelContractError
     from .paneltest import FEATURES, Z_ANOM, edge_tests, series_z
+    from .trial import prev_trading_day
 
     try:
         ets = _etypes(lake, list(facts.event_ids))
@@ -209,13 +256,120 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     except Exception as e:                      # noqa: BLE001 - 부재는 빈 목록
         log("hypothesis.series_z_failed", error=f"{type(e).__name__}: {str(e)[:80]}")
         fired = []
-    if not ets and not fired:
+    object_runtime = None
+    object_tools = None
+    scoped_context: tuple[str, ...] = ()
+    scoped_count = 0
+    structured_ready = False
+    try:
+        from .objectset_tools import NewsScope, ObjectSetRuntime
+        object_runtime = ObjectSetRuntime(
+            lake, as_of=f"{day}T{facts.window_end}:00",
+            news_scope=NewsScope(instrument_id, prev_trading_day(lake, day)))
+        object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
+        threads = object_runtime.call("news.find_threads", {"limit": 40})
+        if not threads.get("ok"):
+            code = str(threads.get("error", {}).get("code") or "EXECUTION_FAILED")
+            log("hypothesis.objectset_unavailable", tool="news.find_threads", code=code)
+            return ({"stage": "propose", "verdict": "판정불가",
+                     "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+        events = object_runtime.call(
+            "news.list_events", {"handle": threads["handle"], "limit": 40})
+        if not events.get("ok"):
+            code = str(events.get("error", {}).get("code") or "EXECUTION_FAILED")
+            log("hypothesis.objectset_unavailable", tool="news.list_events", code=code)
+            return ({"stage": "propose", "verdict": "판정불가",
+                     "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+        rows = events.get("events", [])
+        thread_by_event: dict[str, str] = {}
+        for thread in threads.get("threads", []):
+            thread_id = str(thread.get("thread_id") or "")
+            if not thread_id:
+                continue
+            selected_thread = object_runtime.call(
+                "news.get_thread", {"thread_id": thread_id})
+            if not selected_thread.get("ok"):
+                code = str(selected_thread.get("error", {}).get("code")
+                           or "EXECUTION_FAILED")
+                log("hypothesis.objectset_unavailable", tool="news.get_thread", code=code)
+                return ({"stage": "propose", "verdict": "판정불가",
+                         "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+            thread_events = object_runtime.call(
+                "news.list_events", {"handle": selected_thread["handle"], "limit": 40})
+            if not thread_events.get("ok"):
+                code = str(thread_events.get("error", {}).get("code")
+                           or "EXECUTION_FAILED")
+                log("hypothesis.objectset_unavailable", tool="news.list_events", code=code)
+                return ({"stage": "propose", "verdict": "판정불가",
+                         "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+            for thread_event in thread_events.get("events", []):
+                thread_by_event[str(thread_event["source_event_id"])] = thread_id
+        structured_ready = True
+        scoped_count = len(rows)
+        ets = sorted(set(ets) | {
+            str(row["event_type_code"]) for row in rows
+            if row.get("event_type_code")})
+        scoped_context = tuple(
+            f'{row.get("available_at", "")} {row.get("event_type_code", "")} '
+            f'{row.get("source_event_id", "")}' for row in rows)
+        discovered: list[dict] = []
+        for row in rows:
+            narrowed = object_runtime.call("objectset.filter", {
+                "handle": events["handle"], "field": "source_event_id",
+                "operator": "eq", "value": row["source_event_id"],
+            })
+            if not narrowed.get("ok"):
+                code = str(narrowed.get("error", {}).get("code") or "EXECUTION_FAILED")
+                log("hypothesis.objectset_unavailable", tool="objectset.filter", code=code)
+                return ({"stage": "propose", "verdict": "판정불가",
+                         "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+            grounded = object_runtime.call(
+                "news.get_event_evidence", {"handle": narrowed["handle"], "limit": 20})
+            if not grounded.get("ok"):
+                code = str(grounded.get("error", {}).get("code") or "EXECUTION_FAILED")
+                log("hypothesis.objectset_unavailable",
+                    tool="news.get_event_evidence", code=code)
+                return ({"stage": "propose", "verdict": "판정불가",
+                         "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+            evidence = [item for item in grounded.get("evidence", [])
+                        if item.get("evidence_type") in {"TITLE", "SUMMARY"}
+                        and str(item.get("evidence_text") or "").strip()]
+            if not evidence:
+                log("hypothesis.objectset_unavailable",
+                    tool="news.get_event_evidence", code="EVIDENCE_UNAVAILABLE")
+                return ({"stage": "propose", "verdict": "판정불가",
+                         "reason": "OBJECTSET_UNAVAILABLE",
+                         "error_type": "EVIDENCE_UNAVAILABLE"},), ()
+            chosen = next((item for item in evidence
+                           if item.get("evidence_type") == "TITLE"), evidence[0])
+            title = str(chosen["evidence_text"]).strip()
+            available_at = str(row.get("available_at") or "")
+            clock = available_at[11:16] if len(available_at) >= 16 else available_at
+            discovered.append({
+                "source_event_id": str(row["source_event_id"]),
+                "event_type_code": str(row.get("event_type_code") or ""),
+                "title": title,
+                "available_at": available_at,
+                "thread_id": thread_by_event.get(str(row["source_event_id"])),
+                "evidence_id": str(chosen.get("evidence_id") or "") or None,
+                "line": f"{clock}, {title}" if clock else title,
+            })
+        if news_out is not None:
+            news_out.extend(discovered)
+    except Exception as e:                      # noqa: BLE001 - structured abstention
+        log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
+        return ({"stage": "propose", "verdict": "판정불가",
+                 "reason": "OBJECTSET_UNAVAILABLE", "error_type": type(e).__name__},), ()
+    if ask is None or (not ets and not fired):
         return (), ()
 
     # 제안 접지(ALPHA-885): 직전 거래일부터 요청창 끝까지의 스레드 문맥. 검정의
     # 점 방아쇠 접지(`ets`, 창 안)는 그대로다 - 문맥은 제안에만 실린다.
-    context, n_ctx, n_fail = thread_context(
-        lake, instrument_id, day, facts.window_end, facts.event_ids)
+    if structured_ready:
+        context, n_ctx, n_fail = scoped_context, scoped_count, 0
+    else:
+        context, n_ctx, n_fail = thread_context(
+            lake, instrument_id, day, facts.window_end, facts.event_ids)
     log("hypothesis.context", events=n_ctx, lookup_failures=n_fail,
         in_window=len(facts.event_ids))
 
@@ -228,20 +382,12 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     if context:
         brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
                   f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
-    # 구조화 객체 탐색 — 모델은 저장소 이름·질의문·기준시각을 고르지 않는다.
-    # 레이크가 표면을 못 만들면(구형 스텁 포함) 주입식 facts만으로 진행하되 사유를 남긴다.
-    try:
-        from .objectset_tools import ObjectSetRuntime
-        object_runtime = ObjectSetRuntime(
-            lake, as_of=f"{day}T{facts.window_end}:59.999999")
-        object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
-    except Exception as e:                      # noqa: BLE001 - 부재는 툴 없이 진행
-        log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
-        object_tools = None
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),
                                    series_families=fired, object_tools=object_tools)
+    except ModelContractError:
+        raise
     except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
         return ({"stage": "propose", "verdict": "제안실패",
                  "reason": f"{type(e).__name__}: {str(e)[:80]}"},), ()

@@ -507,7 +507,8 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
         with seed_conn.cursor() as cur:
             cur.execute(
                 "SELECT r.explanation_result_id, r.explanation_type, r.confidence_level,"
-                " r.publication_status, r.primary_thread_id, r.trade_date, n.bundle_version"
+                " r.publication_status, r.primary_thread_id, r.trade_date, n.bundle_version,"
+                " n.explanation_run_id, n.explanation_as_of"
                 " FROM explanation_result r JOIN explanation_run n"
                 " ON n.explanation_run_id = r.explanation_run_id"
                 " WHERE r.etf_instrument_id = %s",
@@ -515,7 +516,8 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
             )
             rows = cur.fetchall()
             assert len(rows) == 1, "설명은 정확히 1건 RDS 로 영속돼야 한다"
-            result_id, etype, confidence, status, primary_thread, tdate, bundle = rows[0]
+            (result_id, etype, confidence, status, primary_thread, tdate, bundle,
+             run_id, explanation_as_of) = rows[0]
             # **판정 라벨은 데이터가 정한다 - 골든패스가 정하지 않는다.**
             # 옛 계약(`EVENT_SUPPORTED`/`HIGH`)은 fake LLM 이 classic JSON 으로 그렇게
             # 선언했기 때문에 성립했다. 지금은 `record.Verdicts` 가 게이트 산출에서
@@ -583,8 +585,13 @@ def test_news_assembly_to_persisted_explanation(tmp_path, monkeypatch):
         )
         archive = json.loads(s3.objects[archive_key])
         assert archive["outcome"] == "explained"
-        assert archive["persistence"]["persisted"] == "rds"
-        assert archive["persistence"]["publication_status"] == "PUBLISHED"
+        assert "persistence" not in archive, (
+            "DB commit 전 archive가 persisted/PUBLISHED를 완료 사실처럼 주장한다")
+        plan = archive["persistence_plan"]
+        assert plan["state"] == "PLANNED"
+        assert (plan["result_id"], plan["run_id"], plan["explanation_as_of"]) == (
+            result_id, run_id, explanation_as_of.isoformat()), (
+            "archive-first 계획 ID가 실제 DB run/result로 수렴하지 않았다")
         assert [e["source_event_id"] for e in archive["events"]] == [evt_id], (
             "엔진이 소비한 이벤트가 조립 단계의 결정적 ID 와 수렴하지 않는다"
         )

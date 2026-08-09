@@ -230,6 +230,26 @@ class TestBuildGate:
         with pytest.raises(EvidenceFormatError, match=r"근거 0인 문장"):
             _build(_blocks(tail=_EVENT_BLOCK))     # 사건도 검정도 없다
 
+    def test_news_row_cannot_satisfy_a_causal_numeric_block(self):
+        causal = {
+            "block_code": "4", "block_title": "이벤트 병치",
+            "evidence_requirement": "CAUSAL_STAT_TEST",
+            "evidence_refs": ["source_event:ev_001"],
+        }
+        with pytest.raises(EvidenceFormatError, match="STAT_TEST"):
+            _build(_blocks(tail=causal), events=_EVENTS)
+
+    def test_eligible_stat_test_satisfies_a_causal_numeric_block(self):
+        causal = {
+            "block_code": "4", "block_title": "이벤트 병치",
+            "evidence_requirement": "CAUSAL_STAT_TEST",
+            "evidence_refs": ["source_event:ev_001"],
+        }
+        out = _build(_blocks(tail=causal), events=_EVENTS, stat_tests=[_FX_PASS])
+        stat_refs = {row.ref for row in out.rows if row.type == "STAT_TEST"}
+        assert stat_refs
+        assert stat_refs.issubset(out.block_refs["4"])
+
     def test_missing_bars_lineage_kills_header_sentence(self):
         """lineage 가 비면 가격 행이 없고, 헤더 문장이 근거 0으로 죽는다(§5)."""
         with pytest.raises(EvidenceFormatError, match=r"근거 0인 문장"):

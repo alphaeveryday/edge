@@ -5,10 +5,12 @@
 """
 
 import json
+import pytest
 from datetime import date
 from types import SimpleNamespace
 
-from edge_analysis.adapters.archive import decomp_summary, write_run_archive
+from edge_analysis.adapters.archive import (MAX_RUN_ARCHIVE_BYTES, RunArchiveError,
+                                             decomp_summary, write_run_archive)
 from edge_analysis.domain.models import Decomposition, Member
 
 _SETTINGS = SimpleNamespace(
@@ -50,8 +52,23 @@ def test_archive_lands_under_the_result_prefix_runs_path():
     assert body["trade_date"] == "2026-07-16"
 
 
-def test_archive_write_failure_returns_none_instead_of_raising():
-    assert write_run_archive(_FakeS3(fail=True), _SETTINGS, {"outcome": "explained"}) is None
+def test_archive_write_failure_is_required_and_propagates():
+    with pytest.raises(RunArchiveError, match="S3 down"):
+        write_run_archive(_FakeS3(fail=True), _SETTINGS, {"outcome": "explained"})
+
+
+def test_analysis_run_archive_accepts_boundary_and_rejects_one_byte_over():
+    base_s3 = _FakeS3()
+    write_run_archive(base_s3, _SETTINGS, {"padding": ""})
+    base_size = len(base_s3.puts[0]["Body"])
+    padding = "x" * (MAX_RUN_ARCHIVE_BYTES - base_size)
+
+    boundary_s3 = _FakeS3()
+    write_run_archive(boundary_s3, _SETTINGS, {"padding": padding})
+    assert len(boundary_s3.puts[0]["Body"]) == MAX_RUN_ARCHIVE_BYTES
+
+    with pytest.raises(RunArchiveError, match="RUN_ARCHIVE_TOO_LARGE"):
+        write_run_archive(_FakeS3(), _SETTINGS, {"padding": padding + "x"})
 
 
 def test_decomp_summary_caps_members_at_ten():

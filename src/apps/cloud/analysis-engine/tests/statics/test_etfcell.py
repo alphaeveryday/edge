@@ -5,10 +5,33 @@ from edge_analysis.config import PipelineError
 from edge_analysis.statics.interval import WindowFacts
 
 
+@pytest.fixture(autouse=True)
+def _structured_news_boundary(monkeypatch):
+    """Unit tests unrelated to news receive a successful, empty structured boundary."""
+    class _Runtime:
+        def __init__(self, *_args, **kwargs): self.as_of = kwargs["as_of"]
+        def tool_specs(self):
+            return [{"name": "objectset.create"}, {"name": "objectset.filter"}]
+        def call(self, name, _arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": []}
+            if name == "news.list_events":
+                return {"ok": True, "handle": "os_events", "events": []}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+
+
 def _object_lake():
     con = duckdb.connect()
     con.execute("CREATE VIEW v_instrument AS SELECT 'iid' AS instrument_id")
-    return type("ObjectLake", (), {"con": con, "bound": {"instrument": None}})()
+    return type("ObjectLake", (), {
+        "con": con,
+        "bound": {"instrument": None},
+        "sql": lambda _self, _query: [("2026-08-04",)],
+    })()
 
 
 def _facts():
@@ -173,7 +196,7 @@ def _wire(monkeypatch, reports, rejected=()):
 
     meta = {}
     text = etfcell.run(
-        object(), "091160", "2026-08-05", lambda *_: {},
+        _object_lake(), "091160", "2026-08-05", lambda *_: {},
         instrument_id="iid", window_start="10:40", window_end="13:20",
         window_meta=meta)
     return text, meta
@@ -322,7 +345,7 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
 
     ask = TracingClient(_Client()).complete_json
     with collect_trace() as trace:
-        etfcell._window_paneltest(object(), "iid", "2026-08-05", ask, facts)
+        etfcell._window_paneltest(_object_lake(), "iid", "2026-08-05", ask, facts)
 
     requests = [e for e in trace if e.get("event") == "llm.request"]
     assert requests, "propose 프롬프트가 trace 에 없다"
@@ -330,8 +353,8 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
     assert any(e.get("event") == "llm.response" for e in trace)
 
 
-def test_window_paneltest_wires_objectset_only_when_the_lake_can(monkeypatch):
-    """Bound lakes receive structured ObjectSet tools; a stub gets no query tool."""
+def test_window_paneltest_abstains_before_asking_when_objectset_is_unavailable(monkeypatch):
+    """No ObjectSet means no safe model surface, so the LLM must not be called."""
     import dataclasses
     from edge_analysis.statics import etfcell
 
@@ -340,19 +363,108 @@ def test_window_paneltest_wires_objectset_only_when_the_lake_can(monkeypatch):
                         lambda lake, eids: ["CONTRACT.SIGNING"])
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
                         lambda lake, iid, day: {})
-    seen: dict = {}
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+    monkeypatch.setattr(
+        "edge_analysis.statics.objectset_tools.ObjectSetRuntime",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("surface unavailable")),
+    )
+    calls = []
+    stage_results, trials = etfcell._window_paneltest(
+        object(), "iid", "2026-08-05", lambda *_: calls.append(1) or {}, facts)
+
+    assert calls == []
+    assert trials == ()
+    assert stage_results == ({
+        "stage": "propose",
+        "verdict": "판정불가",
+        "reason": "OBJECTSET_UNAVAILABLE",
+        "error_type": "RuntimeError",
+    },)
+
+
+def test_scoped_news_execution_failure_is_not_treated_as_empty_news(monkeypatch):
+    """A failed lookup must stop before the LLM can turn it into a false absence claim."""
+    import dataclasses
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {"volume": 4.0})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, _name, _arguments):
+            return {"ok": False, "error": {
+                "code": "EXECUTION_FAILED", "message": "object operation failed"}}
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
-                        lambda ask, **kw: (seen.update(kw), ([], []))[1])
+                        lambda *_a, **_k: pytest.fail("LLM must not run after lookup failure"))
 
-    lake = _object_lake()
-    etfcell._window_paneltest(lake, "iid", "2026-08-05", lambda *_: {}, facts)
-    assert seen["object_tools"] is not None
-    assert seen["object_tools"]["specs"][0]["name"] == "objectset.create"
-    assert "sql_tool" not in seen
+    stage_results, trials = etfcell._window_paneltest(
+        object(), "ETF", "2026-08-05", lambda *_: {}, facts)
 
-    seen.clear()
-    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
-    assert seen["object_tools"] is None
+    assert trials == ()
+    assert stage_results[0]["reason"] == "OBJECTSET_UNAVAILABLE"
+    assert stage_results[0]["error_type"] == "EXECUTION_FAILED"
+
+
+def test_event_listing_failure_after_thread_discovery_stays_fail_closed(monkeypatch):
+    """Thread success cannot mask a failed event lookup as an empty news window."""
+    import dataclasses
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: facts)
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {"volume": 4.0})
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, name, _arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": [{
+                    "thread_id": "thr_1", "event_type_code": "COMPANY.CONTRACT.SIGNING"}]}
+            if name == "news.list_events":
+                return {"ok": False, "error": {
+                    "code": "EXECUTION_FAILED", "message": "object operation failed"}}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    calls = []
+    ask = lambda *_: calls.append(1) or {}
+
+    stage_results, trials = etfcell._window_paneltest(
+        object(), "ETF", "2026-08-05", ask, facts)
+
+    assert calls == []
+    assert trials == ()
+    assert stage_results[0]["reason"] == "OBJECTSET_UNAVAILABLE"
+    assert stage_results[0]["error_type"] == "EXECUTION_FAILED"
+    with pytest.raises(PipelineError, match="OBJECTSET_UNAVAILABLE"):
+        etfcell.run(object(), "305720", "2026-08-05", ask,
+                    instrument_id="ETF", window_start="09:00", window_end="13:20")
+    assert calls == []
+
+
+def test_window_run_does_not_render_normal_explanation_after_objectset_failure(monkeypatch):
+    """Structured abstention is a failed run, not a successful customer explanation."""
+    from edge_analysis.config import PipelineError
+    from edge_analysis.statics import etfcell
+
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: _facts())
+    monkeypatch.setattr(etfcell, "_window_paneltest", lambda *_a, **_k: (({
+        "stage": "propose", "reason": "OBJECTSET_UNAVAILABLE",
+        "error_type": "EXECUTION_FAILED"},), ()))
+
+    with pytest.raises(PipelineError, match="OBJECTSET_UNAVAILABLE"):
+        etfcell.run(object(), "305720", "2026-08-05", lambda *_: {},
+                    instrument_id="ETF", window_start="09:00", window_end="13:20")
 
 
 def test_missing_layers_raise_instead_of_returning_prose():
@@ -387,8 +499,27 @@ def _capture_propose(monkeypatch, facts, context=None):
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
                         lambda lake, iid, day: {"거래량": 3.0})
     if context is not None:
-        monkeypatch.setattr("edge_analysis.statics.interval.thread_context",
-                            lambda *a, **k: context)
+        class _Runtime:
+            def __init__(self, *_args, **kwargs): self.as_of = kwargs["as_of"]
+            def tool_specs(self):
+                return [{"name": "objectset.create"}, {"name": "objectset.filter"}]
+            def call(self, name, _arguments):
+                if name == "news.find_threads":
+                    return {"ok": True, "handle": "os_threads", "threads": []}
+                if name == "news.list_events":
+                    rows = [{"source_event_id": f"evt_{i}",
+                             "event_type_code": "CONTRACT.SIGNING",
+                             "available_at": "2026-08-05T10:31:00"}
+                            for i in range(context[1])]
+                    return {"ok": True, "handle": "os_events", "events": rows}
+                if name == "objectset.filter":
+                    return {"ok": True, "handle": "os_one_event"}
+                if name == "news.get_event_evidence":
+                    return {"ok": True, "handle": "os_evidence", "evidence": [{
+                        "source_event_id": "evt", "evidence_type": "TITLE",
+                        "evidence_text": "grounded event title"}]}
+                raise AssertionError(name)
+        monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
     seen = {}
 
     def fake_propose(ask, **kw):
@@ -415,7 +546,7 @@ def test_thread_context_reaches_the_proposal_prompt(monkeypatch):
     seen = _capture_propose(monkeypatch, facts, context=((block,), 1, 0))
 
     assert "[사건 문맥" in seen["facts"], "스레드 문맥 섹션이 프롬프트에 없다"
-    assert "10:31" in seen["facts"] and "SK하이닉스 공급계약 해지" in seen["facts"]
+    assert "10:31" in seen["facts"] and "evt_0" in seen["facts"]
     # 검정의 점 방아쇠 접지는 그대로 창 안 축이다 - 제안 문맥 확장이 검정 계약을
     # 흔들면 안 된다.
     assert seen["event_types"] == ["CONTRACT.SIGNING"]
@@ -445,7 +576,7 @@ def test_hypothesis_path_injects_objectset_tools_instead_of_the_sql_tool(monkeyp
     assert [spec["name"] for spec in seen["object_tools"]["specs"]][:2] == [
         "objectset.create", "objectset.filter"]
     assert "sql_tool" not in seen
-    assert seen["object_tools"]["call"].__self__.as_of == "2026-08-05T13:20:59.999999"
+    assert seen["object_tools"]["call"].__self__.as_of == "2026-08-05T13:20:00"
 
 
 def test_context_counts_and_failures_are_logged(monkeypatch):
@@ -463,8 +594,337 @@ def test_context_counts_and_failures_are_logged(monkeypatch):
         _capture_propose(monkeypatch, facts, context=(("블록",), 3, 2))
 
     [ev] = [e for e in trace if e.get("event") == "hypothesis.context"]
-    assert ev["events"] == 3 and ev["lookup_failures"] == 2
+    assert ev["events"] == 3 and ev["lookup_failures"] == 0
     assert ev["in_window"] == 1
+
+
+def test_constituent_scoped_news_bypasses_empty_publication_search_gate(monkeypatch):
+    """The route's empty publication event list must not hide grounded constituent news."""
+    import dataclasses
+
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics import etfcell
+    from edge_analysis.statics.objectset_tools import NewsScope
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+    seen = {}
+
+    class _Runtime:
+        def __init__(self, _lake, *, as_of, news_scope):
+            seen["as_of"] = as_of
+            seen["scope"] = news_scope
+
+        def tool_specs(self):
+            return []
+
+        def call(self, name, arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": [{
+                    "thread_id": "thr_constituent",
+                    "event_type_code": "COMPANY.CONTRACT.SIGNING",
+                }]}
+            if name == "news.get_thread":
+                return {"ok": True, "handle": "os_constituent_thread", "thread": {
+                    "thread_id": "thr_constituent"}}
+            if name == "news.list_events":
+                return {"ok": True, "handle": "os_events", "events": [{
+                    "source_event_id": "evt_constituent",
+                    "event_type_code": "COMPANY.CONTRACT.SIGNING",
+                    "available_at": "2026-08-05T12:30:00",
+                }]}
+            if name == "objectset.filter":
+                return {"ok": True, "handle": "os_constituent_event"}
+            if name == "news.get_event_evidence":
+                return {"ok": True, "handle": "os_evidence", "evidence": [{
+                    "source_event_id": "evt_constituent", "evidence_type": "TITLE",
+                    "evidence_text": "constituent contract headline"}]}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda ask, **kwargs: (seen.update(kwargs), ([], []))[1])
+
+    with collect_trace() as trace:
+        etfcell._window_paneltest(object(), "ETF", "2026-08-05", lambda *_: {}, facts)
+
+    assert seen["as_of"] == "2026-08-05T13:20:00"
+    assert seen["scope"] == NewsScope("ETF", "2026-08-04")
+    assert seen["event_types"] == ["COMPANY.CONTRACT.SIGNING"]
+    assert "evt_constituent" in seen["facts"]
+    [context] = [row for row in trace if row.get("event") == "hypothesis.context"]
+    assert context["events"] == 1 and context["in_window"] == 0
+
+
+def test_structured_news_reaches_final_block_and_news_evidence_rows(monkeypatch):
+    """Successful scoped news must reach the customer payload, not an absence block."""
+    import dataclasses
+
+    from edge_analysis.statics import etfcell
+    from edge_analysis.statics.evidence_rows import build_evidence_rows
+
+    facts = dataclasses.replace(
+        _facts(), event_ids=(), disclosures=(), news=(), final_lines=())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: facts)
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+
+    class _Runtime:
+        def __init__(self, *_args, **kwargs): self.as_of = kwargs["as_of"]
+        def tool_specs(self): return []
+        def call(self, name, arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": [{
+                    "thread_id": "thr_news_1",
+                    "event_type_code": "COMPANY.CONTRACT.SIGNING"}]}
+            if name == "news.get_thread":
+                return {"ok": True, "handle": "os_thread_1", "thread": {
+                    "thread_id": "thr_news_1"}}
+            if name == "news.list_events":
+                return {"ok": True, "handle": "os_events", "events": [{
+                    "source_event_id": "evt_news_1",
+                    "event_type_code": "COMPANY.CONTRACT.SIGNING",
+                    "available_at": "2026-08-05T12:30:00",
+                }]}
+            if name == "objectset.filter":
+                assert arguments["field"] == "source_event_id"
+                return {"ok": True, "handle": "os_event_1"}
+            if name == "news.get_event_evidence":
+                return {"ok": True, "handle": "os_evidence", "evidence": [{
+                    "evidence_id": "ev_1", "source_event_id": "evt_news_1",
+                    "evidence_type": "TITLE",
+                    "evidence_text": "배터리 공급계약 체결",
+                    "link_confidence": 0.98,
+                }]}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda *_a, **_k: ([], []))
+    meta = {}
+
+    text = etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=meta)
+
+    assert "[N]" not in text and "확인된 공시·보도는 없습니다" not in text
+    assert "[4]" in text and "배터리 공급계약 체결" in text
+    block = meta["final_explanation"]["blocks"][-1]
+    assert block["block_code"] == "4"
+    assert block["evidence_refs"] == ["source_event:evt_news_1"]
+    [news_event] = meta["news_events"]
+    assert news_event["title"] == "배터리 공급계약 체결"
+    assert news_event["thread_id"] == "thr_news_1"
+    assert news_event["evidence_id"] == "ev_1"
+    built = build_evidence_rows(
+        blocks=meta["final_explanation"]["blocks"], lineage=meta["lineage"],
+        stat_tests=meta.get("stat_tests", ()), events=meta["news_events"],
+        ticker="305720", etf_name=facts.name, day="2026-08-05", window_end="13:20")
+    assert any(row.type == "NEWS" and "배터리 공급계약 체결" in row.content
+               for row in built.rows)
+
+
+@pytest.mark.parametrize("grounded_evidence", [
+    [],
+    [{"evidence_id": "ev_body", "source_event_id": "evt_no_text",
+      "evidence_type": "BODY", "evidence_text": "본문은 있지만 제목은 없다"}],
+], ids=["empty", "body-only"])
+def test_scoped_event_without_customer_safe_evidence_fails_loud(
+        monkeypatch, grounded_evidence):
+    """ID/type or BODY alone is not customer prose and cannot suppress fail-loud."""
+    import dataclasses
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(
+        _facts(), event_ids=(), disclosures=(), news=(), final_lines=())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: facts)
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, name, _arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": []}
+            if name == "news.list_events":
+                return {"ok": True, "handle": "os_events", "events": [{
+                    "source_event_id": "evt_no_text", "event_type_code": "NEWS.TYPE",
+                    "available_at": "2026-08-05T12:30:00"}]}
+            if name == "objectset.filter":
+                return {"ok": True, "handle": "os_event"}
+            if name == "news.get_event_evidence":
+                return {"ok": True, "handle": "os_evidence",
+                        "evidence": grounded_evidence}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    calls = []
+
+    with pytest.raises(PipelineError, match="OBJECTSET_UNAVAILABLE"):
+        etfcell.run(
+            object(), "305720", "2026-08-05", lambda *_: calls.append(1) or {},
+            instrument_id="ETF", window_start="09:00", window_end="13:20")
+    assert calls == []
+
+
+def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monkeypatch):
+    """Production-shaped scope keeps 14 unique events and one deterministic thread lineage."""
+    import dataclasses
+    from collections import Counter
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(
+        _facts(), event_ids=(), disclosures=(), news=(), final_lines=())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: facts)
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+    calls = Counter()
+    base_events = [{
+        "source_event_id": f"evt_{i:02d}", "event_type_code": "NEWS.TYPE",
+        "available_at": f"2026-08-05T12:{i:02d}:00",
+    } for i in range(14)]
+    all_events = list(base_events)
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, name, arguments):
+            calls[name] += 1
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": [{
+                    "thread_id": f"thr_{i:02d}", "event_type_code": "NEWS.TYPE"}
+                    for i in range(7)]}
+            if name == "news.get_thread":
+                return {"ok": True, "handle": f'os_{arguments["thread_id"]}',
+                        "thread": {"thread_id": arguments["thread_id"]}}
+            if name == "news.list_events":
+                handle = arguments["handle"]
+                if handle == "os_threads":
+                    return {"ok": True, "handle": "os_events", "events": all_events}
+                index = int(handle.removeprefix("os_thr_"))
+                rows = [base_events[index * 2], base_events[index * 2 + 1]]
+                if index == 6:
+                    rows.append(base_events[0])  # one cross-thread duplicate
+                return {"ok": True, "handle": f"os_thread_events_{index}", "events": rows}
+            if name == "objectset.filter":
+                return {"ok": True, "handle": f'os_event_{arguments["value"]}'}
+            if name == "news.get_event_evidence":
+                event_id = arguments["handle"].removeprefix("os_event_")
+                return {"ok": True, "handle": f"os_evidence_{event_id}", "evidence": [{
+                    "evidence_id": f"evidence_{event_id}", "source_event_id": event_id,
+                    "evidence_type": "TITLE", "evidence_text": f"실제 제목 {event_id}"}]}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda *_a, **_k: ([], []))
+    meta = {}
+
+    text = etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=meta)
+
+    assert "[4]" in text and "[N]" not in text
+    news_block = meta["final_explanation"]["blocks"][-1]
+    news_lines = news_block["text"].splitlines()
+    assert len(news_lines) == 7
+    assert sum(int(line.rsplit("관련 기사 ", 1)[1].removesuffix("건)"))
+               for line in news_lines) == 14
+    assert len(meta["news_events"]) == 14
+    assert len({row["source_event_id"] for row in meta["news_events"]}) == 14
+    refs = meta["final_explanation"]["blocks"][-1]["evidence_refs"]
+    assert len(refs) == 14
+    assert refs == [f"source_event:evt_{i:02d}" for i in range(14)]
+    event_ids = [ref.removeprefix("source_event:") for ref in refs]
+    assert event_ids == [f"evt_{i:02d}" for i in range(14)]
+    overlaps = [row for row in meta["news_events"]
+                if row["source_event_id"] == "evt_00"]
+    assert len(overlaps) == 1
+    overlap = overlaps[0]
+    assert overlap["thread_id"] == "thr_06"
+    assert overlap["evidence_id"] == "evidence_evt_00"
+    assert all(row["thread_id"] and row["evidence_id"]
+               for row in meta["news_events"])
+    assert calls == Counter({
+        "news.find_threads": 1, "news.get_thread": 7, "news.list_events": 8,
+        "objectset.filter": 14, "news.get_event_evidence": 14,
+    })
+
+    all_events.reverse()
+    calls.clear()
+    permuted_meta = {}
+    permuted_text = etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=permuted_meta)
+
+    assert permuted_text == text
+    assert permuted_meta["final_explanation"] == meta["final_explanation"]
+
+    all_events.append(base_events[0])
+    duplicate_meta = {}
+    duplicate_text = etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=duplicate_meta)
+
+    assert duplicate_text == text
+    assert duplicate_meta["final_explanation"] == meta["final_explanation"]
+
+
+def test_thread_news_duplicate_event_uses_order_independent_canonical_winner():
+    """A corrected article must not become older merely because input order changed."""
+    from edge_analysis.statics.etfcell import _thread_news_lines
+
+    old = {
+        "source_event_id": "evt_1", "thread_id": "thr_1",
+        "available_at": "2026-08-05T11:00:00", "title": "이전 제목",
+        "evidence_id": "evidence_old", "event_type_code": "NEWS.TYPE",
+    }
+    new = {
+        "source_event_id": "evt_1", "thread_id": "thr_1",
+        "available_at": "2026-08-05T12:00:00", "title": "정정 제목",
+        "evidence_id": "evidence_new", "event_type_code": "NEWS.TYPE",
+    }
+
+    expected = ("12:00, 정정 제목 (관련 기사 1건)",)
+    assert _thread_news_lines([old, new]) == expected
+    assert _thread_news_lines([new, old]) == expected
+
+
+def test_no_scoped_news_and_no_measurable_series_does_not_call_llm(monkeypatch):
+    import dataclasses
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, name, arguments):
+            return ({"ok": True, "handle": "os_threads", "threads": []}
+                    if name == "news.find_threads" else
+                    {"ok": True, "handle": "os_events", "events": []})
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda *_a, **_k: pytest.fail("LLM must remain gated"))
+
+    assert etfcell._window_paneltest(
+        object(), "ETF", "2026-08-05", lambda *_: {}, facts) == ((), ())
 
 
 def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):
@@ -479,13 +939,18 @@ def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):
 
     monkeypatch.setattr("edge_analysis.statics.interval._etypes", boom)
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", boom)
+    monkeypatch.setattr(
+        "edge_analysis.statics.objectset_tools.ObjectSetRuntime",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("surface unavailable")),
+    )
 
     facts = dataclasses.replace(_facts(), event_ids=("e1",))
     with collect_trace() as trace:
         out = etfcell._window_paneltest(
             object(), "iid", "2026-08-05", lambda *_: {}, facts)
 
-    assert out == ((), ()), "재료 없음 - LLM 미호출 계약이 흔들렸다"
+    assert out[0][0]["reason"] == "OBJECTSET_UNAVAILABLE"
+    assert out[1] == ()
     events = {e.get("event") for e in trace}
     assert "hypothesis.etypes_failed" in events
     assert "hypothesis.series_z_failed" in events
