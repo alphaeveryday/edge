@@ -326,6 +326,33 @@ Table "event_thread_link" {
   "unknown_reason" text
 }
 
+Table "explanation_evidence_row" {
+  "evidence_row_id" text [pk]
+  "explanation_result_id" text [not null]
+  "explanation_run_id" text
+  "ref" int [not null]
+  "evidence_type" varchar(16) [not null]
+  "content" text
+  "source" text [not null]
+  "observed_at" text
+  "template" varchar(16)
+  "basis" varchar(8)
+  "method" varchar(20)
+  "slots" jsonb
+  "n" int
+  "unit" varchar(8)
+  "estimate" float8
+  "p" float8
+  "k" int
+  "band" varchar(12)
+  "series" jsonb
+  "effect_low" float8
+  "effect_high" float8
+  "test_as_of" timestamptz
+  "null_kind" varchar(8)
+  "created_at" timestamptz [not null]
+}
+
 Table "explanation_result" {
   "explanation_result_id" text [pk]
   "explanation_run_id" text [not null]

@@ -881,6 +881,83 @@ class EventStore:
             raise
         return len(by_id)
 
+    def persist_evidence_rows(
+        self,
+        build,
+        *,
+        explanation_result_id: str,
+        explanation_run_id: str | None = None,
+    ) -> int:
+        """근거 행(explanation_evidence_row, v3) upsert — 단일 writer (ALPHA-888).
+
+        ``build`` 는 `statics.evidence_rows.EvidenceBuild` 다 — §5 게이트를 이미
+        통과한 행만 담겨 있다(통과 못 한 검정은 행 자체가 없다). 멱등 축은
+        결정적 id `stable_id('evr', result_id, ref)` 다: 같은 결과 재적재(재배달)가
+        같은 행으로 수렴하고, DO UPDATE 가 내용을 최신으로 덮는다.
+
+        `persist_explanation` 트랜잭션 **직후**에 부른다 — 합류시키지 않는 이유:
+        설명 영속은 근거 원장 결손으로 죽으면 안 되고(설명이 정본, 근거는 파생),
+        결손은 재실행이 멱등으로 메운다. 실패는 롤백 후 그대로 올린다 — 로그로
+        드러낼지(런 지속) 죽일지는 호출부가 정한다(hypothesis_trial 과 같은 계약).
+        """
+        from psycopg2.extras import Json, execute_values
+
+        if not build.rows:
+            return 0
+        values = []
+        for row in build.rows:
+            row_id = stable_id("evr", explanation_result_id, row.ref)
+            rec = build.stat_records.get(row.ref)
+            if rec is not None:
+                # STAT_TEST — content 는 저장하지 않는다(§0 완성 문장 금지). 문형은
+                # template+slots 가 렌더 시 조립한다. effect_low/high 는 칼만 배선
+                # (ALPHA-803) 전이라 NULL 이다.
+                values.append((
+                    row_id, explanation_result_id, explanation_run_id, row.ref,
+                    "STAT_TEST", None, row.source, None,
+                    rec.template, rec.basis, rec.method,
+                    Json(rec.slots), rec.n, rec.unit, rec.estimate, rec.p, rec.k,
+                    rec.band, Json(list(rec.series)), None, None, rec.null_kind,
+                ))
+            else:
+                values.append((
+                    row_id, explanation_result_id, explanation_run_id, row.ref,
+                    row.type, row.content, row.source, row.time or None,
+                    None, None, None, None, None, None, None, None, None,
+                    None, None, None, None, None,
+                ))
+        try:
+            with self._conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    "INSERT INTO explanation_evidence_row (evidence_row_id,"
+                    " explanation_result_id, explanation_run_id, ref, evidence_type,"
+                    " content, source, observed_at, template, basis, method, slots,"
+                    " n, unit, estimate, p, k, band, series, effect_low, effect_high,"
+                    " null_kind) VALUES %s"
+                    " ON CONFLICT (evidence_row_id) DO UPDATE SET"
+                    " explanation_run_id = EXCLUDED.explanation_run_id,"
+                    " evidence_type = EXCLUDED.evidence_type,"
+                    " content = EXCLUDED.content,"
+                    " source = EXCLUDED.source,"
+                    " observed_at = EXCLUDED.observed_at,"
+                    " template = EXCLUDED.template, basis = EXCLUDED.basis,"
+                    " method = EXCLUDED.method, slots = EXCLUDED.slots,"
+                    " n = EXCLUDED.n, unit = EXCLUDED.unit,"
+                    " estimate = EXCLUDED.estimate, p = EXCLUDED.p,"
+                    " k = EXCLUDED.k, band = EXCLUDED.band,"
+                    " series = EXCLUDED.series,"
+                    " effect_low = EXCLUDED.effect_low,"
+                    " effect_high = EXCLUDED.effect_high,"
+                    " null_kind = EXCLUDED.null_kind",
+                    values,
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return len(values)
+
     @staticmethod
     def _fanout_new(cur, explanation_result_id: str) -> int:
         """게시된 설명을 전 테넌트 outbox 로 NEW 발번한다 — 게시와 같은 트랜잭션.
