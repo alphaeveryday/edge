@@ -21,7 +21,7 @@ import time
 from typing import Callable
 
 from ..observability import record
-from .model_contract import ModelContractError, ask_checked, list_field
+from .model_contract import ModelContractError, ask_checked, list_field, object_field
 from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, HypothesisTuple,
                     LAYERS, OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS,
                     Trigger, VocabError)
@@ -308,8 +308,8 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
             out = ask_checked(ask, system, user)
             break
         used += 1
-        arguments = out.get("arguments")
-        res = call(name, arguments if isinstance(arguments, dict) else {})
+        arguments = object_field(out, "arguments")
+        res = call(name, arguments)
         if not res.get("ok"):
             rejects += 1
         # Do not echo the raw model arguments. The validated result is the observation.

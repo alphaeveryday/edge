@@ -92,7 +92,17 @@ def list_field(output: dict[str, Any], field: str) -> list[Any]:
     return value
 
 
+def object_field(output: dict[str, Any], field: str) -> dict[str, Any]:
+    """Read an optional object field without silently coercing another JSON type."""
+    value = output.get(field, {})
+    if not isinstance(value, dict):
+        record("llm.model_shape_rejected", code=ModelShapeError.code,
+               field=field, expected="object")
+        raise ModelShapeError(field, "an object")
+    return value
+
+
 __all__ = ["FORBIDDEN_EXECUTABLE_KEYS", "MAX_MODEL_LIST_ITEMS",
            "MAX_MODEL_RESPONSE_BYTES", "ModelContractError", "ModelLimitError",
            "ModelSchemaError", "ModelShapeError", "ask_checked", "list_field",
-           "validate_model_output"]
+           "object_field", "validate_model_output"]

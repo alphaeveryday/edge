@@ -100,6 +100,61 @@ def test_verifier_stage_uses_the_shared_model_contract(monkeypatch):
                         etype="COMPANY.PRODUCT.LAUNCH", day="2026-08-05", layer="고유")
 
 
+def test_plain_claims_must_be_an_array_on_primary_and_retry():
+    from edge_analysis.statics.plain import narrate_plain
+
+    with pytest.raises(ModelShapeError):
+        narrate_plain(lambda *_: {"claims": {}}, {})
+
+    replies = iter([{"claims": []}, {"claims": {}}])
+    with pytest.raises(ModelShapeError):
+        narrate_plain(lambda *_: next(replies), {})
+
+
+def test_verifier_probes_must_be_an_array_on_primary_and_retry(monkeypatch):
+    from edge_analysis.statics import verifier
+
+    monkeypatch.setattr(verifier, "slot_menu", lambda *_: {"actor": [("A", 1)]})
+    with pytest.raises(ModelShapeError):
+        verifier.design(lambda *_: {"probes": {}}, object(), etype="X",
+                        day="2026-08-05", layer="고유")
+
+    replies = iter([{"probes": []}, {"probes": {}}])
+    with pytest.raises(ModelShapeError):
+        verifier.design(lambda *_: next(replies), object(), etype="X",
+                        day="2026-08-05", layer="고유", max_probes=1)
+
+
+def test_object_tool_arguments_must_be_an_object_without_calling_the_tool():
+    from edge_analysis.statics.hypothesize import propose
+
+    calls = []
+    with pytest.raises(ModelShapeError):
+        propose(lambda *_: {"tool": "news.find_threads", "arguments": []},
+                facts="x", event_types=["X"],
+                object_tools={"specs": [], "call": lambda *a: calls.append(a)})
+    assert calls == []
+
+    replies = iter([
+        {"tool": "news.find_threads", "arguments": {}},
+        {"tool": "news.list_events", "arguments": []},
+    ])
+    with pytest.raises(ModelShapeError):
+        propose(lambda *_: next(replies), facts="x", event_types=["X"],
+                object_tools={
+                    "specs": [],
+                    "call": lambda *args: calls.append(args) or {"ok": True},
+                })
+    assert len(calls) == 1
+
+
+def test_expressive_slots_must_be_an_object():
+    from edge_analysis.statics.expressive import score
+
+    with pytest.raises(ModelShapeError):
+        score(lambda *_: {"slots": []}, "claim", event_types=[])
+
+
 def test_oversized_model_response_fails_before_it_can_reach_an_archive():
     with pytest.raises(ModelLimitError, match="MODEL_LIMIT_REJECTED"):
         validate_model_output({"hypotheses": ["x" * MAX_MODEL_RESPONSE_BYTES]})

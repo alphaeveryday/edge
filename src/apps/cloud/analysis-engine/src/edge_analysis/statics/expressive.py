@@ -324,7 +324,7 @@ def score(ask, prose: str, *, event_types: list[str],
     **둘은 다르다**: 어휘엔 있는데 이 셀에 없는 타입은 '어휘 구멍'이 아니라
     '이 셀 미접지'다 - 전자는 스키마 일감이고 후자는 데이터/셀 선택 문제다.
     """
-    from .model_contract import ModelContractError, ask_checked
+    from .model_contract import ModelContractError, ask_checked, object_field
 
     known = tuple(vocab_types) or tuple(event_types)
     sys_p = _SCORE.format(channels=sorted(CHANNELS), event_types=known,
@@ -339,7 +339,7 @@ def score(ask, prose: str, *, event_types: list[str],
     except Exception as e:                          # noqa: BLE001
         trace("expressive.score_failed", why=f"{type(e).__name__}: {e}")
         return None
-    slots = out.get("slots") or {}
+    slots = object_field(out, "slots")
     clean = {}
     for s in SLOTS:
         v = slots.get(s) or {}
