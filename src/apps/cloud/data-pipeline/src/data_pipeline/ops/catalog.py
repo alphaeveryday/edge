@@ -59,7 +59,7 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 
 | 제외 | state | 왜 |
 |---|---|---|
-| `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
+| `fmp` task-def | CollectFmpNews·CollectFmpPrice·CollectFmpFinancial·CollectFmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 | 공시 체인 | CollectDartDisclosure·NormalizeDisclosure·NormalizeDisclosureSegment·LoadDisclosure | **ALPHA-875 가 1분 세션으로 넘겼다** — SFN state 정의는 남아 있으나 스케줄이 DISABLED 라 안 돈다. 등록하면 매 런 MISSED 다. 결손은 여기가 아니라 `minute_ingestion_window` 에 드러난다 → 되살리려면 아래 롤백 절차 3개를 **같은 apply** 로 |
 

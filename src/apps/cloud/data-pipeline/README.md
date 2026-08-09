@@ -116,7 +116,8 @@
 > 미래 `published_at` 을 실은 행에서 정정이 유실되고, 시각을 뒤로 밀면 과거 as-of 구간에서
 > 문서가 사라진다. **배치와의 승자 규칙은 ALPHA-696 이 `news_document.lead_observed_at`
 > 으로 정했다** — 이 경로는 쓰기 가드 없이 쓰되 리드 상태가 움직였을 때만 그 시각을 찍고,
-> 배치는 미주장이거나 자기 canonical `fetched_at` 이 더 새로울 때만 덮는다. 비대칭이
+> 배치는 미주장이거나 자기 canonical `fetched_at` 이 그보다 앞서지 않을 때만 덮는다
+> (절이 `<=` 라 동시각은 배치가 이긴다). 비대칭이
 > 의도이고, 계약 전문은 마이그레이션
 > `V202608071018__add_news_document_lead_observed_at.sql` 에 있다. ⚠️ 그 시각도
 > **`GREATEST` 로 앞으로만** 간다(ALPHA-858) — 두 축 다 단조다. 그래서 `lead_observed_at`
@@ -481,7 +482,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # (언론사, ALPHA-695)가 그 규칙을 쓴다.
 # ⚠️ lead_text 는 **무조건 덮지 않는다**(ALPHA-696) — 이 표엔 1분 뉴스 레인
 # (PgNewsCanonicalWriter)도 쓰기 때문이다. news_document.lead_observed_at 이 미주장(NULL)
-# 이거나 이 런의 canonical fetched_at 이 그보다 새로울 때만 이긴다. fetched_at 이 결손이면
+# 이거나 이 런의 canonical fetched_at 이 그보다 앞서지 않을 때만 이긴다(`<=` — 동시각은
+# 배치가 이긴다). fetched_at 이 결손이면
 # 신선도를 주장하지 않고(published_at 폴백 금지) 그 노출을 로그의 lead_unclaimed_freshness
 # 로 센다(결손엔 빈 문자열도 포함 — 분모는 같은 로그의 lead_attempted, ALPHA-848).
 # publisher 는 별도 축이라 이 가드가 없다.
@@ -619,7 +621,8 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 공시 레인도 같은 형태로 분리됐다가 **한 번 더 옮겨 갔다** —
 `edge-dev-data-pipeline-disclosure`(ALPHA-722)가 세워져
 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
-LoadDisclosure → AssembleDisclosureEvents` 를 돌았고(부분집합 필터 재사용, 새 state 정의 0개),
+LoadDisclosure` 를 돌았고(부분집합 필터 재사용, 새 state 정의 0개 — 체인은 Feature 의
+LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
 시장 SFN 에서 공시 체인이 빠졌다(15:40 런은 공시를 돌리지 않는다). ⚠️ **그 다음이 현재
 상태다: ALPHA-875 가 공시를 1분 세션으로 넘겼다** — 이 SFN 스케줄은 이제 DISABLED 이고
 (`disclosure_schedule_state`, dev `main.tf`) 카탈로그 공시 엔트리도 0 이다. 공시 실행과
@@ -1165,8 +1168,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 **SFN 원장 밖 1분 세션으로** 보낸 몫이라
-  공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 35개 중 — 시장 SFN 30 +
-  뉴스 SFN 직렬 2 + 장중 수급 3. 36→35 는 ALPHA-806 이 AnalyzeOne 을 걷어낸 몫이다.
+  공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 35개 중 — **정의 파일**
+  기준으로 `statemachine.tf` 33 + `news_pipeline.tf` 2 다. 공시·장중 수급 .tf 는 state 를
+  새로 정의하지 않고 부분집합 필터로 재사용하므로 저 33 안에 있다 — 레인별 계수는
+  `pipeline_type` 축을 써라. 36→35 는 ALPHA-806 이 AnalyzeOne 을 걷어낸 몫이다.
   ALPHA-181 → 578 → 553 PR2 → 591 → 769 → 806 → 875).
   레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
