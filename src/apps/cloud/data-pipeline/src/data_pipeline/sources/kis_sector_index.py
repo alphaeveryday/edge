@@ -84,6 +84,9 @@ LANE_INTERVAL_SEC = 60
 # `stck_bsop_date` 자리수(YYYYMMDD). 파서와 창 필터가 **같은 값**을 봐야 한다 — 갈리면
 # 한쪽만 통과하는 형상이 생기고, 그 틈으로 새는 것은 늘 조용한 쪽이다.
 _YMD_LEN = 8
+# `stck_cntg_hour` 자리수(HHMMSS). 같은 이유로 필요하다 — 위 상수와 **함께** 봐야
+# `strptime` 의 연접 파싱이 한쪽 자리를 훔쳐가지 못한다.
+_HHMMSS_LEN = 6
 
 KST = timezone(timedelta(hours=9))
 
@@ -111,11 +114,17 @@ def parse_index_row(raw: dict, unit_id: str, *, interval_sec: int) -> Candle:
     day, label = raw.get("stck_bsop_date"), raw.get("stck_cntg_hour")
     if not isinstance(day, str) or not isinstance(label, str):
         raise ValueError(f"{unit_id} 지수 분봉 행에 날짜·시각이 없다: {raw!r}")
-    if len(day) != _YMD_LEN:
-        # 자리수를 여기서 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열을 보므로
-        # 날짜가 짧으면 시각 자리를 잘라 먹고도 파싱에 성공할 수 있다(`"2026087"` +
-        # `"103000"`). 그러면 라벨이 조용히 다른 분으로 읽힌다.
-        raise ValueError(f"{unit_id} 지수 분봉 거래일 자리수가 다르다: {day!r}")
+    # 자리수를 **양쪽 다** 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를
+    # 보므로, 한쪽이 짧으면 다른 쪽 자리를 잘라 먹고도 파싱에 성공한다. 실측:
+    #   "20260807" + "1030"  → 10:03:00   (4자리 라벨이 조용히 다른 분이 된다)
+    #   "20260807" + "30000" → 03:00:00   (선행 0 이 잘린 라벨 — `kis_inav._time_stamp`
+    #                                      가 `"9300"` 으로 적어둔 그 함정과 같다)
+    # 🔴 이건 **값이 조용히 틀리는** 부류다: 결과의 `second` 가 0 이라 아래 격자 가드도
+    # 안 걸리고, 그 봉은 멀쩡한 다른 window 에 앉아 VALID 로 확정된다. 한쪽만 막으면
+    # 나머지 문으로 그대로 들어온다(날짜만 막았다가 Codex 리뷰에서 잡혔다).
+    if len(day) != _YMD_LEN or len(label) != _HHMMSS_LEN:
+        raise ValueError(
+            f"{unit_id} 지수 분봉 날짜·시각 자리수가 다르다: {day!r} {label!r}")
     try:
         start = datetime.strptime(day + label, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:

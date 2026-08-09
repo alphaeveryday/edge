@@ -170,6 +170,30 @@ class TestParse:
         # 아니다. 그 뜻으로 읽는 소비자를 붙이지 마라(모듈 도크스트링 7번).
         assert candle.traded is False
 
+    @pytest.mark.parametrize("short_label, silently_becomes", [
+        ("1030", "10:03:00"),    # 4자리 — 날짜 자리를 훔쳐 **다른 분**이 된다
+        ("30000", "03:00:00"),   # 선행 0 잘림(`kis_inav._time_stamp` 의 그 함정)
+        ("93000", "09:30:00"),   # 우연히 맞아 보이는 값 — 그래서 더 위험하다
+    ])
+    def test_short_time_label_is_rejected_before_parsing(self, short_label, silently_becomes):
+        """🔴 라벨 자리수도 막아야 한다 — 안 막으면 **값이 조용히 틀린다**.
+
+        `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를 보므로 짧은 라벨이 날짜 자리를
+        훔쳐 간다(`"20260807"+"1030"` → 10:03:00). 결과의 `second` 가 0 이라 격자 가드도
+        안 걸리고, 그 봉은 멀쩡한 다른 window 에 앉아 VALID 로 확정된다.
+
+        날짜 자리수만 막았다가 Codex 리뷰(PR #645)에서 잡혔다 — 한 함정의 양쪽이다.
+        """
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_index_row({**row(), "stck_cntg_hour": short_label}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    def test_short_date_is_rejected_at_the_parser_too(self):
+        """창 필터가 먼저 걸러도 파서 단독 호출은 막아야 한다(공개 함수다)."""
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_index_row({**row(), "stck_bsop_date": "2026087"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
     @pytest.mark.parametrize("broken", [
         {**row(), "stck_cntg_hour": "999999"},        # 센티넬이 파서까지 새면 형식 오류
         {**row(), "stck_bsop_date": None},            # 날짜 결측
