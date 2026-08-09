@@ -526,8 +526,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # → 타입별 추출)로 정규화해 source_event 계보·참여자(event_argument)·측정값(event_measure)·
 # event_thread 를 만든다(결정적 ID 산식 동일, stage 는 lifecycle 메뉴 밖이면 NULL). LLM 은
 # tag-news 와 같은 LLM_* env. 창 미지정 = 오늘(KST) 하루(LLM 비용이 기사 수 비례), 과거는 창으로 백필.
-# 뉴스 SFN 은 --window-days 1 로 [어제,오늘] 겹침(ALPHA-592) — 23:50 슬롯의 자정 crossing 과
-# overnight 갭(D 마감 후 기사)을 닫는다. 멱등이라 겹침 비용은 스캔뿐.
+# 뉴스 SFN 은 --window-days 1 로 [어제,오늘] 겹침(ALPHA-592) — day-close 가 00:10 이라(ALPHA-905)
+# assemble 은 **언제나** 다음 날짜에 돈다. 겹침이 없으면 닫으려던 어제를 통째로 못 읽고
+# read=0 으로 성공한다. 멱등이라 겹침 비용은 스캔뿐.
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 ```
@@ -603,7 +604,7 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
 뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)로 **분리 완료**다 — 시장
-레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 08:10·23:50
+레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 00:10·08:10
 KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔고 슬롯은 ALPHA-893 이 3개→2개로 줄였다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
 AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
 시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
@@ -1239,7 +1240,7 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
 **슬롯 = 분(ALPHA-564).** 멱등키는 `run_key = <pipeline_type>:<YYYY-MM-DDTHH:MM>`(KST)이고
 `pipeline_run_id`·`execution_name` 이 여기서 결정적으로 파생된다. 날짜가 아니라 **시각**인 이유는
 `UNIQUE (run_key)` 가 곧 "한 슬롯 1회 계획"이라, 날짜로 두면 하루 여러 번 도는 레인(뉴스
-08:10·23:50, iNAV 15분)의 2회차부터가 1회차에 흡수되고 **수동·백필 실행이 원장에 들어올
+00:10·08:10, iNAV 15분)의 2회차부터가 1회차에 흡수되고 **수동·백필 실행이 원장에 들어올
 자리가 없기** 때문이다. 결과:
 
 - **애드혹 실행도 `plan-run` 으로 돌리면 관측된다** — 실행 분이 그 실행의 슬롯이 된다.

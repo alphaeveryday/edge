@@ -1317,7 +1317,7 @@ def test_dart_counters_only_reflect_committed_promotion(tmp_path, monkeypatch):
 
 
 def test_window_days_covers_yesterday_after_midnight_crossing(tmp_path, monkeypatch):
-    # WHY: 뉴스 23:50 슬롯은 체인 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게
+    # WHY: 뉴스 day-close 슬롯이 00:10 이라(ALPHA-905) assemble 이 언제나 다음 날짜로 도는 게
     #      기본 경로다 — 2026-07-28 00:03 첫 스케줄 런이 창=07-28 로 read=0(라이브 실측),
     #      전날 늦저녁 기사가 영영 조립되지 않았다(ALPHA-592). window_days=1 이면 창이
     #      [어제, 오늘]로 겹쳐 같은 시각에도 조립된다. 미지정은 현행(오늘 하루) 유지 —

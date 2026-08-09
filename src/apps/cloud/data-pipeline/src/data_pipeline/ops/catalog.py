@@ -319,7 +319,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="rds_dart", deadline_offset_seconds=7200,
     ),
     # ══ 뉴스 레인 6작업 (pipeline_type="news" — 뉴스 SFN edge-dev-data-pipeline-news, 하루
-    # 2슬롯(08:10·23:50, ALPHA-893), ALPHA-591 원장 편입) ═══════════════════════════════════════════════════
+    # 2슬롯(00:10·08:10, ALPHA-893·905), ALPHA-591 원장 편입) ═══════════════════════════════════════════════════
     # ALPHA-553 PR2 로 빠졌던 6작업의 복원이되 **그대로 복사가 아니다**:
     # * 직렬 2개의 state 이름이 다르다 — 뉴스 SFN 은 NewsLoadAssertions·NewsAssembleEvents 다
     #   (병렬 브랜치 4개는 statemachine.tf 잡 정의 재사용이라 이름 그대로).

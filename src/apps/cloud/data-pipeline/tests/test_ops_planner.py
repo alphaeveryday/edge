@@ -57,7 +57,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
 def test_same_day_different_slots_are_separate_runs():
     # WHY: run_key 의 계약은 "이 **슬롯**은 한 번만 계획된다"지 "하루 한 번"이 아니다(ALPHA-564).
     #      날짜로 키를 만들면 DB UNIQUE(run_key) 가 하루 1런을 못박아, 하루 여러 번 도는
-    #      레인(뉴스 08:10·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
+    #      레인(뉴스 00:10·08:10, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
     #      수동 실행은 원장에 자리가 없다 — 실제로 2026-07-26 에 관측이 막혔다.
     db = FakeOpsDB()
     ledger = _ledger(db)
@@ -382,7 +382,7 @@ def test_due_slots_returns_all_past_news_slots_of_the_day(monkeypatch):
     # WHY: 뉴스는 하루 여러 슬롯이다. 최신 슬롯 하나만 돌려주면 뒤 슬롯이 지나는 순간 앞 런이
     #      영영 대조되지 않는다(ALPHA-565 사각의 확대재생산) — 그날 지난 슬롯 전부가 나와야
     #      주기 reconcile 이 늦은 종결까지 판정한다. grace(30분)는 슬롯별로 계산된다.
-    #      ⚠️ 아래 3슬롯은 **합성 픽스처**다(운영은 ALPHA-893 이후 08:10·23:50 둘). 여기서
+    #      ⚠️ 아래 3슬롯은 **합성 픽스처**다(운영은 ALPHA-905 이후 00:10·08:10 둘). 여기서
     #      운영 값을 쓰면 "지났지만 grace 전" 축이 사라져 한 슬롯만 걸리는 표가 된다 — 이
     #      함수는 env 를 읽어 슬롯 수에 무관하므로, 축을 더 많이 태우는 쪽을 고정한다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
@@ -500,7 +500,7 @@ def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):
     #      공유하면 공시 슬롯이 뉴스 시각으로 잡혀 **존재하지 않는 런**을
     #      매 주기 PLANNER_MISSING 으로 연다. 미주입 레인은 슬롯 0개여야 한다 — 스케줄이 아직
     #      Planner 를 안 타는 배포(이 PR 시점)에서 거짓 결측을 만들지 않는 안전 기본값이다.
-    #      ⚠️ 아래 뉴스 값은 **합성 픽스처**다(운영은 08:10·23:50) — 이 테스트가 가리는 축은
+    #      ⚠️ 아래 뉴스 값은 **합성 픽스처**다(운영은 00:10·08:10) — 이 테스트가 가리는 축은
     #      "레인이 남의 env 를 안 본다"이지 뉴스 슬롯의 실제 값이 아니다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
     monkeypatch.delenv("OPS_DISCLOSURE_SCHED_HHMM", raising=False)
@@ -639,6 +639,29 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
             f"{hour:02d}:{minute:02d} 슬롯의 창이 {window} — 그날(07-03)이 끝 날짜가 아니다. "
             "창 날짜가 벤더 달력(KST)이 아니라 프로세스 시계(UTC)로 뽑히면 이 슬롯은 "
             "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
+
+
+def test_assemble_window_covers_what_the_collection_window_collected():
+    # WHY(ALPHA-905): day-close 슬롯이 **00:10** 이라 assemble 은 언제나 다음 날짜에 돈다 —
+    #      닫으려는 날(어제)을 읽으려면 assemble 창이 최소 하루는 소급해야 한다. 종전엔 이게
+    #      23:50 런의 자정 crossing **보정**이라 없어도 대개 맞았지만, 이제는 **매 런의 전제**다.
+    #      N=0 이면 창이 거의 빈 오늘 하루뿐이라 `read=0` 으로 **성공한다**(조용한 헛돎, Rule 12).
+    #      literal 1 을 못박지 않는 이유: 진짜 계약은 "**수집이 담은 것을 조립이 덮는가**"이고,
+    #      수집 창은 `DEFAULT_LOOKBACK_DAYS` 가 정한다. 그 상수가 2로 늘면 assemble 도 따라
+    #      늘어야 하는데, 두 값이 **다른 층**(python 상수 vs terraform 변수)에 있어 한쪽만
+    #      움직여도 아무것도 안 깨진다 — 그 결합을 여기서 붙든다.
+    from data_pipeline import run as run_mod
+
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"assemble_window_days"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "assemble_window_days 를 못 찾았다 — 파서가 낡았다"
+    assemble_days = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+
+    assert assemble_days >= run_mod.DEFAULT_LOOKBACK_DAYS, (
+        f"assemble 창 {assemble_days}일 < 수집 창 소급 {run_mod.DEFAULT_LOOKBACK_DAYS}일. "
+        "수집이 담은 날짜를 조립이 못 읽는다 — 00:10 런은 닫으려던 어제를 통째로 건너뛰고 "
+        "read=0 으로 성공한다(에러 없음)")
 
 
 def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
