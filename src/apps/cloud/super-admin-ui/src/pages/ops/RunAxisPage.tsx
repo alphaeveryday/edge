@@ -13,7 +13,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import { retryCap } from '../../rules/rules';
+import { LANE_UNKNOWN, retryCap } from '../../rules/rules';
 import type { RunFact, TaskFact } from '../../rules/types';
 import { MOCK_RUN_TASKS } from '../../mock/preview';
 import { MockChip } from '../_shared/MockPreview';
@@ -322,7 +322,11 @@ function RunList({ runs, onSelect }: { runs: RunFact[]; onSelect: (id: string) =
                   </button>
                   {r.mock && <MockChip />}
                 </td>
-                <td className="col-muted">{LANE_LABEL[r.lane] ?? r.lane}</td>
+                <td className="col-muted">
+                  {/* 레인 부재는 계측 없음이 아니라 **슬롯 키를 못 읽었다**는 뜻이다 —
+                      표기는 규칙 층과 한 벌(`LANE_UNKNOWN`)이라 문장·셀이 갈리지 않는다. */}
+                  {r.lane ? (LANE_LABEL[r.lane] ?? r.lane) : LANE_UNKNOWN}
+                </td>
                 {/* `kind` 는 계측이 없어 실 응답에서 빠진다 — 부재를 '정규'로 그리면 없는
                     사실을 단정한다. 부재 4구분의 '계측 없음' 칸으로 낸다. */}
                 <td>
@@ -332,7 +336,10 @@ function RunList({ runs, onSelect }: { runs: RunFact[]; onSelect: (id: string) =
                     <Absent kind="uninstrumented" />
                   )}
                 </td>
-                <td className="col-muted">{r.trading_date}</td>
+                {/* null 을 그냥 그리면 **빈 칸**이 된다 — 부재가 값 없음이 아니라 "안 물었다"로 읽힌다 */}
+                <td className="col-muted">
+                  {r.trading_date ?? <Absent kind="none" />}
+                </td>
                 <td className="col-muted">{slotTime(r.id) ?? <Absent kind="none" />}</td>
                 <td className="ops-obs">
                   <ObservationCell obs={led} at="갱신" />
@@ -623,7 +630,8 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
       {/* 선택한 런의 식별 정보 — 아래 숫자가 "어느 런의 것인가"에 답한다 */}
       <div className="card-pad" style={{ paddingBottom: 0 }}>
         <p className="t-sm m-0">
-          <b>{LANE_LABEL[run.lane] ?? run.lane}</b> · {run.trading_date} ·{' '}
+          <b>{run.lane ? (LANE_LABEL[run.lane] ?? run.lane) : LANE_UNKNOWN}</b> ·{' '}
+          {run.trading_date ?? <Absent kind="none" />} ·{' '}
           {slotTime(run.id) ?? '예정 시각 없음'} ·{' '}
           {run.kind ? KIND_LABEL[run.kind] ?? run.kind : <Absent kind="uninstrumented" />}{' '}
           {/* 두 축을 각각 낸다 — 하나로 합치지 않는다 */}

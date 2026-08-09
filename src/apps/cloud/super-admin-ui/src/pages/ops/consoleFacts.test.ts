@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { axisOf, minuteFacts } from './consoleFacts.ts';
+import { awsObservation, axisOf, minuteFacts } from './consoleFacts.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 
 const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead });
@@ -105,4 +105,17 @@ test('조회 상태 — 데이터 유무와 조회 성공은 다른 축이다', 
    * 5xx 가 나는 지배적 경로가 이것이고, 예전에는 이게 `loaded`("실시간 축 실림")로 그려져
    * **낡은 판정이 현재 사실처럼** 섰다. */
   assert.equal(axisOf(true, true), 'stale', '조회 실패인데 "실림"으로 그린다');
+});
+
+test('AWS 관측 부재는 두 형상이다 — 미배선과 조회 실패를 한 칸에 그리지 않는다', () => {
+  /* 포매터(`kst`)에 그냥 넘기면 둘 다 `—`(집계 없음)가 된다. 그러면 제어면 장애(AccessDenied)가
+   * "아직 계측이 없구나"로 읽히고, 운영자는 고칠 수 있는 것을 못 고친다. */
+  assert.equal(awsObservation({ db: 'd', today: 't' }), 'uninstrumented', '키 부재는 미배선이다');
+  assert.equal(
+    awsObservation({ db: 'd', today: 't', aws: undefined }),
+    'uninstrumented',
+    '명시한 undefined 도 미배선이다 — `in` 으로 가르면 여기서 조회 실패로 뒤집힌다',
+  );
+  assert.equal(awsObservation({ db: 'd', today: 't', aws: null }), 'blind', 'null 은 조회 실패다');
+  assert.deepEqual(awsObservation({ db: 'd', today: 't', aws: 'x' }), { at: 'x' });
 });

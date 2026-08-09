@@ -10,7 +10,7 @@
  * 원본 사실(facts-snapshot·DB 컬럼·enum)은 건드리지 않는다 — **표시 계층에서만** 자르고
  * 라벨을 붙인다. 규칙 R10 은 전체 stages 를 그대로 읽는다.
  */
-import { F, fmt } from './shared';
+import { Absent, F, fmt } from './shared';
 
 /** 이 화면이 그리는 마지막 단계 — 이후는 전달 경계·온프렘 소관 */
 const LAST_STAGE_ID = 'c.pub';
@@ -18,13 +18,25 @@ const LAST_STAGE_ID = 'c.pub';
 const DISPLAY_LABEL: Record<string, string> = { 'c.pub': 'Cloud 게시' };
 
 export function ChainStrip() {
-  const all = F.chain.stages;
+  /* 축이 통째로 없으면 **빈 띠를 그리지 않는다** — 단계가 0개인 흐름은 "아무것도 안 흘렀다"로
+   * 읽히는데, 사실은 이 축의 계측이 없는 것이다(계약 §축별 소스: `chain` 은 소스 0). */
+  if (!F.chain) {
+    return (
+      <div className="ops-chain-absent t-xs" style={{ color: 'var(--fg-3)' }}>
+        흐름 단계 집계는 <Absent kind="uninstrumented" /> — 단계별 건수를 세는 계측이 없습니다.
+        구간 손실(R10)도 같은 이유로 판정하지 못합니다.
+      </div>
+    );
+  }
+  /* 가드 뒤에 **값으로 꺼낸다** — 콜백 안에서는 프로퍼티 좁히기가 풀려 `!` 를 다시 쓰게 된다.
+   * 그 `!` 가 축이 옵셔널이 되는 날 조용히 죽는 자리다(계약이 `trendCatalog` 에서 지목한 패턴). */
+  const { feeds, stages: all } = F.chain;
   const end = all.findIndex((s) => s.id === LAST_STAGE_ID);
   const S = end >= 0 ? all.slice(0, end + 1) : all;
   return (
     <div className="ops-chain">
       <div className="ops-feeds">
-        {F.chain.feeds.map((f, i) => (
+        {feeds.map((f, i) => (
           <div
             key={f.id}
             className={'ops-feed ' + (i === 0 ? 'ops-feed-batch' : 'ops-feed-intraday')}
@@ -38,8 +50,8 @@ export function ChainStrip() {
         ))}
       </div>
       {S.map((s, i) => {
-        const prevB = i === 0 ? F.chain.feeds[0]?.v : S[i - 1].batch;
-        const prevI = i === 0 ? F.chain.feeds[1]?.v : S[i - 1].intraday;
+        const prevB = i === 0 ? feeds[0]?.v : S[i - 1].batch;
+        const prevI = i === 0 ? feeds[1]?.v : S[i - 1].intraday;
         const lostB = prevB != null && s.batch != null && s.batch < prevB ? prevB - s.batch : 0;
         const lostI = prevI != null && s.intraday != null && s.intraday < prevI ? prevI - s.intraday : 0;
         return (

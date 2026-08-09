@@ -22,7 +22,7 @@ import type { Incident } from '../../rules/types';
 import { useMinuteStatus, useSourceOverview } from '../../domains/sources/hooks';
 import { datasetKind, sessionHealth } from '../../domains/sources/minuteView';
 import { MOCK_MINUTE } from '../../mock/preview';
-import { F, Info, useConsoleEvaluation } from './shared';
+import { AwsObservedAt, F, Info, useConsoleEvaluation } from './shared';
 import { unevaluatedRules } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
@@ -345,7 +345,8 @@ export function IncidentsPage() {
     <div className="flex flex-col gap-4">
       {/* 기준 시각만 — 규칙 엔진 설명은 하단 탐지 상태에 있다 */}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-        거래일 {F.meta.today} · DB {hm(F.meta.db)} · AWS/S3 {hm(F.meta.aws)}
+        거래일 {F.meta.today} · DB {hm(F.meta.db)} · AWS/S3{' '}
+        <AwsObservedAt format={hm} />
       </p>
 
       <NowStrip
