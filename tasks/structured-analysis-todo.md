@@ -5,7 +5,7 @@
 - [x] PR 1 금지 출력 관계 RED 테스트
 - [x] PR 1 입력 전용 자동 뷰 정책 구현
 - [x] PR 1 focused/full/image 검증
-- [ ] PR 1 커밋·PR 생성
+- [x] PR 1 커밋·PR 생성 (#662)
 - [ ] PR 2 ObjectSet 런타임 및 구조화 도구
 - [ ] PR 2 검증·커밋·PR 생성
 - [ ] 배포 체크포인트 A: PR 1·2 병합 이미지 canary
