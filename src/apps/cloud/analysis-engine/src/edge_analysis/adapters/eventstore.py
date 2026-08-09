@@ -661,7 +661,21 @@ class EventStore:
             explanation_as_of, route_id,
         )
         result_id = stable_id("res", run_id)
-        raw = dict(explanation.raw)
+        # **NUL(0x00) 소거 - Postgres TEXT·JSONB 는 NUL 을 원리적으로 못 담는다.**
+        # 벤더 원문(뉴스 제목·리드)에서 흘러온 제어문자가 산문·stage_results 에 실리면
+        # 이 INSERT 가 통째로 죽는다(08-07 재실행 실측: 직전 거래일 사건 문맥 확장이
+        # NUL 든 원문을 처음 밟았다 - ALPHA-885). 원문은 레이크에 그대로 있으므로
+        # 영속 경계에서 지우는 것이 정보 손실이 아니다.
+        def _scrub(value):
+            if isinstance(value, str):
+                return value.replace("\x00", "")
+            if isinstance(value, dict):
+                return {k: _scrub(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_scrub(v) for v in value]
+            return value
+
+        raw = _scrub(dict(explanation.raw))
         stage = raw.pop("stage_results", {}) or {}
         stage_results = json.dumps(
             {"events": event_count, **stage, "raw": raw}, ensure_ascii=False
@@ -711,9 +725,9 @@ class EventStore:
                 (
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
-                    explanation.summary, explanation.confidence_level, stage_results,
+                    _scrub(explanation.summary), explanation.confidence_level, stage_results,
                     route_id, publishable,
-                    explanation.headline,
+                    _scrub(explanation.headline),
                 ),
             )
             published_row = cur.fetchone()

@@ -750,3 +750,42 @@ def test_hypothesis_trial_empty_rows_touch_nothing():
         [], minute_price_trigger_id="mpt_1",
         trade_date=date(2026, 8, 5), ticker="091160") == 0
     assert conn.committed == 0 and conn.value_batches == []
+
+
+
+def test_persist_explanation_scrubs_nul_from_vendor_text():
+    """벤더 원문의 NUL(0x00)이 산문·stage_results 에 실려 오면 영속 경계에서
+    지운다 - Postgres TEXT·JSONB 는 NUL 을 원리적으로 못 담아 INSERT 가 통째로
+    죽는다(08-07 재실행 실측, ALPHA-885 사건 문맥 확장이 처음 밟음). 원문은
+    레이크에 남으므로 소거는 정보 손실이 아니다. 실제 INSERT 파라미터에 NUL 이
+    없는지를 가짜 커서로 전수 검사한다."""
+    from datetime import date
+    from types import SimpleNamespace
+
+    from edge_analysis.adapters.eventstore import EventStore
+
+    class _Cur:
+        def execute(self, sql, params=None):
+            for value in (params or ()):
+                assert not (isinstance(value, str) and chr(0) in value), "NUL 이 DB 로 샜다"
+
+        def fetchone(self):
+            return (False,)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    store = EventStore.__new__(EventStore)
+    store._conn = SimpleNamespace(cursor=lambda: _Cur(), commit=lambda: None)
+    explanation = SimpleNamespace(
+        raw={"explain": "제목" + chr(0) + "오염",
+             "stage_results": {"window": {"blocks": ["리드" + chr(0)]}}},
+        summary="요약" + chr(0), confidence_level="LOW",
+        explanation_type="PRICE_ONLY", headline="헤드" + chr(0) + "라인")
+    settings = SimpleNamespace(trade_date=date(2026, 8, 7))
+    store.persist_explanation(
+        settings, "inst_1", explanation, run_reason="DAILY",
+        route_id="rte_t", bundle="b1", primary_thread_id=None, events=[])
