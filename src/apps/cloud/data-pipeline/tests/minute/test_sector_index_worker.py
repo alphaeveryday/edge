@@ -233,15 +233,16 @@ class TestCli:
     """기동 가드 — 설정·날짜 결손은 첫 벤더 호출이 아니라 **기동에서** 죽어야 배포
     시점에 드러난다(`test_price_worker.TestCli` 와 같은 형태)."""
 
-    def _settings(self, *, db=_DB, sector_index=..., price_worker=...):
+    def _settings(self, *, db=_DB, sector_index=..., kis_nav=...):
         from types import SimpleNamespace
         from data_pipeline.config.models import MinuteSectorIndexConfig
         if sector_index is ...:
             sector_index = MinuteSectorIndexConfig(index_map=INDEX_MAP)
-        if price_worker is ...:
-            price_worker = SimpleNamespace(app_key="k", app_secret="s")
+        if kis_nav is ...:
+            kis_nav = SimpleNamespace(
+                source=SimpleNamespace(app_key="k", app_secret="s"))
         return SimpleNamespace(db=db, minute_sector_index=sector_index,
-                               minute_price_worker=price_worker, storage=None)
+                               kis_nav=kis_nav, storage=None)
 
     def _cli(self, **kwargs):
         from data_pipeline.minute.worker import sector_index_worker_cli
@@ -261,8 +262,8 @@ class TestCli:
         from types import SimpleNamespace
         with pytest.raises(SystemExit, match="자격증명 없음"):
             self._cli(
-                settings=self._settings(
-                    price_worker=SimpleNamespace(app_key="k", app_secret=None)),
+                settings=self._settings(kis_nav=SimpleNamespace(
+                    source=SimpleNamespace(app_key="k", app_secret=None))),
                 session_date=None)
 
     def test_bad_session_date_fails_loud(self):
@@ -333,7 +334,7 @@ class TestBoundedGate:
         settings = SimpleNamespace(
             db=_DB,
             minute_sector_index=MinuteSectorIndexConfig(index_map=INDEX_MAP),
-            minute_price_worker=SimpleNamespace(app_key="k", app_secret="s"),
+            kis_nav=SimpleNamespace(source=SimpleNamespace(app_key="k", app_secret="s")),
             storage=None,
         )
         return mod.sector_index_worker_cli(

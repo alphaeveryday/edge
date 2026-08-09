@@ -1000,9 +1000,12 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
     `[minute_sector_index.index_map]` 이 준다. 그 config 가 곧 정본이라 이미지 배포가
     반영이다(S3 를 갈 일이 없다).
 
-    자격증명은 `minute_price_worker` 것을 **재사용한다** — 같은 KIS 앱키이고(쿼터가 앱키
-    전역이라 어차피 한 계정이다), 같은 값을 두 번째 비밀값 표면으로 늘리면 배포에서
+    자격증명은 `[kis_nav.source]` 를 **재사용한다**(iNAV 와 같은 쌍) — 같은 KIS 계정이고
+    쿼터가 앱키 전역이라 어차피 하나다. 같은 값을 새 비밀값 표면으로 늘리면 배포에서
     한쪽만 주입되는 사고만 는다.
+    ⚠️ `minute_price_worker` 를 쓰지 않는 이유는 그 섹션이 **`sources.toml` 에 없어서**다 —
+    전부 env 라, 그걸 참조하면 업종지수와 무관한 필수 필드(`trigger_schema_version`·
+    `destination`)까지 주입해야 설정이 로드된다(문서 실행 줄을 실제로 돌려 보고 드러났다).
     """
     import os
     import signal
@@ -1027,12 +1030,12 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         raise SystemExit(
             "[minute_sector_index.index_map] 설정 없음 — 이 dataset 의 기대 집합 정본이다"
             "(미설정으로 돌면 매 window 가 빈 성공으로 확정된다)")
-    if settings.minute_price_worker is None:
+    if settings.kis_nav is None:
         raise SystemExit(
-            "minute_price_worker 설정 없음 — 업종지수는 그 KIS 자격증명을 함께 쓴다")
+            "kis_nav.source 설정 없음 — 업종지수는 iNAV 와 같은 KIS 자격증명을 쓴다")
     _require_credentials(
-        (settings.minute_price_worker.app_key, settings.minute_price_worker.app_secret),
-        "DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET",
+        (settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret),
+        "DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY/__APP_SECRET",
     )
     day = session_date or datetime.now(KST).strftime("%Y-%m-%d")
     try:
@@ -1068,7 +1071,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         )
     worker_id = f"sw-{socket.gethostname()}-{os.getpid()}"
     client = KisSectorIndexClient(
-        settings.minute_price_worker.app_key, settings.minute_price_worker.app_secret,
+        settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret,
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
         PoliteClient(min_interval=0.5),
         index_map,
