@@ -104,6 +104,24 @@ def _canonical_rows(storage, report_date: str) -> list[dict]:
     return rows
 
 
+def test_backfill_window_filters_raw_by_filing_date(tmp_path):
+    """기간 백필이 raw 전체를 canonical로 다시 쓰면 요청 밖 정정본까지 함께 반영된다.
+    --from/--to는 수집일이 아니라 DART 접수일을 inclusive로 제한해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    old = _supply_record("20260622900001", rcept_dt="20260622")
+    current = _supply_record("20260623900001", rcept_dt="20260623")
+    _write_run(storage, [(old, _doc_zip(_supply_html(), old["rcept_no"])),
+                         (current, _doc_zip(_supply_html(), current["rcept_no"]))])
+
+    assert normalize_disclosure.run(
+        storage, "B1", from_date="2026-06-23", to_date="2026-06-23") == 0
+
+    assert _canonical_rows(storage, "2026-06-22") == []
+    assert [row["rcept_no"] for row in _canonical_rows(storage, "2026-06-23")] == [
+        "20260623900001"]
+    assert _quality_log(storage)["records_skipped_window"] == 1
+
+
 # ── 핵심 경로 ────────────────────────────────────────────
 def test_real_fixture_parses_and_lands_in_canonical(tmp_path):
     # WHY: 정제의 존재 이유 — raw 본문(euc-kr HTML)을 파싱해 공통 fact 로 만들고, 메타

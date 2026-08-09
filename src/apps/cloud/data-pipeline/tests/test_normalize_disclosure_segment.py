@@ -81,6 +81,22 @@ def _canonical_rows(storage, report_date: str) -> list[dict]:
     return rows
 
 
+def test_backfill_window_filters_business_reports_by_filing_date(tmp_path):
+    """사업부문 백필도 공급계약과 같은 접수일 창을 써야 두 canonical dataset의 범위가
+    갈리지 않는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    old = _report_record("20260318000001", rcept_dt="20260318")
+    current = _report_record("20260319000001", rcept_dt="20260319")
+    _write_run(storage, [(old, _doc_zip(PHARMA_HTML, old["rcept_no"])),
+                         (current, _doc_zip(PHARMA_HTML, current["rcept_no"]))])
+
+    assert seg.run(storage, "B1", from_date="2026-03-19", to_date="2026-03-19") == 0
+
+    assert _canonical_rows(storage, "2026-03-18") == []
+    assert len(_canonical_rows(storage, "2026-03-19")) == 4
+    assert _quality_log(storage)["records_skipped_window"] == 1
+
+
 def test_business_report_fans_out_to_segment_facts(tmp_path):
     # WHY: 정제의 존재 이유 — 사업보고서 본문(표)을 파싱해 부문당 fact 로 펼치고 provenance 조인.
     storage = LocalStorage(tmp_path / "lake")

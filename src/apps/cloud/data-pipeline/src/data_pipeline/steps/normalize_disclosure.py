@@ -239,6 +239,8 @@ def run(
     input_run_id: str | None = None,
     *,
     raw_keys: list[str] | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> int:
     """raw disclosures → 공급계약 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 장애 시 비0.
@@ -266,7 +268,7 @@ def run(
     # 경로를 조용한 폐기로 바꾼다(카운터도 사유도 없이 사라지고, 전건이 걸러지면
     # `records_read=0` 에 exit 0 이라 호출자가 VALID 로 확정한다 — Rule 12 위반).
 
-    read = routed = skipped_type = 0
+    read = routed = skipped_type = skipped_window = 0
     failures: list[dict] = []  # blocking·본문/파싱 실패 — canonical 제외 대상
     warnings: list[dict] = []  # non-blocking — 통과하되 값 이상을 로깅
     passing: list[dict] = []   # 게이트 통과 fact — 루프 뒤 canonical 로 멱등 병합
@@ -301,6 +303,11 @@ def run(
                 # 알 수 없는 공시 벤더 — 조용히 통과시키지 않고 사유로 드러낸다(Rule 12).
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["unsupported_vendor"]})
+                continue
+            report_date = _norm_report_date(record.get("rcept_dt"))
+            if report_date and ((from_date is not None and report_date < from_date)
+                                or (to_date is not None and report_date > to_date)):
+                skipped_window += 1
                 continue
             # doc_type 라우팅 — 공급계약만 이 스텝이 처리한다. raw 는 유형 필터로 좁혀졌지만
             # 정제도 report_nm 으로 재라우팅해 소스 필터 변화에 독립적으로 동작한다.
@@ -375,6 +382,7 @@ def run(
                 "records_read": read,
                 "records_routed_supply": routed,
                 "records_skipped_type": skipped_type,
+                "records_skipped_window": skipped_window,
                 "records_passed": len(passing),
                 "records_failed": len(failures),
                 # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
