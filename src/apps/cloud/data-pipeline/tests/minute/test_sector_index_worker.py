@@ -251,7 +251,8 @@ class TestCli:
 class TestBoundedGate:
     """`--max-ticks` 는 **확인 게이트**다 — 아무것도 못 봤으면 성공이 아니다."""
 
-    def _run_cli(self, monkeypatch, tmp_path, states, *, session_identity=None):
+    def _run_cli(self, monkeypatch, tmp_path, states, *, session_identity=None,
+                 resident=False):
         """CLI 를 끝까지 몬다 — 판정식을 테스트가 복제하면 코드가 아니라 사본을 잰다."""
         from datetime import datetime as real_datetime
         from types import SimpleNamespace
@@ -294,8 +295,8 @@ class TestBoundedGate:
             storage=None,
         )
         return mod.sector_index_worker_cli(
-            settings, session_date=SESSION_DATE.isoformat(), max_ticks=len(states),
-            tick_seconds=0,
+            settings, session_date=SESSION_DATE.isoformat(),
+            max_ticks=None if resident else len(states), tick_seconds=0,
         )
 
     def test_전_tick_이_IDLE_이면_성공이_아니다(self, monkeypatch, tmp_path):
@@ -306,6 +307,20 @@ class TestBoundedGate:
         iNAV 는 어댑터의 `skip_reason` 이 이 자리를 지키는데 이 어댑터엔 그 축이 없다.
         """
         assert self._run_cli(monkeypatch, tmp_path, ["IDLE", "IDLE"]) == 1
+
+    def test_첫_tick_이_DRAINED_여도_무처리면_성공이_아니다(self, monkeypatch, tmp_path):
+        """🔴 판정식을 **한 곳만** 고쳤던 자리다(리뷰 라운드 2).
+
+        DRAINING 세션에 회수할 claim 이 없으면 첫 tick 이 drain 을 ack 하고 DRAINED 를
+        낸다. 그 분기는 조기 반환이라 아래 게이트를 통째로 우회하는데, 거기 옛 판정식이
+        남아 있으면 **아무것도 안 하고 exit 0** 이다.
+        """
+        assert self._run_cli(monkeypatch, tmp_path, ["DRAINED"]) == 1
+
+    def test_상주_모드의_DRAINED_는_정상_종료다(self, monkeypatch, tmp_path):
+        """반대 방향도 잰다 — 상주 서비스가 그날 정상적으로 마르는 것을 실패로 보고하면
+        매일 알람이 운다. 확인 게이트 규칙은 **bounded 에만** 걸린다."""
+        assert self._run_cli(monkeypatch, tmp_path, ["DRAINED"], resident=True) == 0
 
     def test_실제로_처리했으면_성공이다(self, monkeypatch, tmp_path):
         """게이트가 늘 1 을 내면 확인 명령이 영영 안 통과한다 — 반대 방향도 잰다."""

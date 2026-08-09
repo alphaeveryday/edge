@@ -152,7 +152,13 @@ class TestDeterminism:
 
 
 class TestFailureAxes:
-    """축이 셋이다 — 전파/재시도/영구. 섞이면 방향이 늘 같다(원장이 관대해지는 쪽)."""
+    """축이 셋이다 — 전파 / unit 국한(missing) / window 전체(invalid).
+
+    ⚠️ "재시도 축"이라 부르지 않는다 — `recovery_budget_per_tick=0` 이라 어느 쪽도 그
+    window 로 다시 안 온다. 가르는 것은 **손실 범위와 신호의 크기**다: missing 은 나머지
+    44종을 살리고, invalid 는 window 를 통째로 낮춰 형상 변화를 드러낸다. 섞으면 방향이
+    늘 같다(원장이 관대해지는 쪽).
+    """
 
     def _collector(self, raising):
         class FakeClient:
@@ -172,10 +178,12 @@ class TestFailureAxes:
             collector.collect(request_for(("1005",)), NOW)
 
     def test_envelope_fault_is_missing_not_invalid(self):
-        """봉투 이상은 **재시도 축**이다(어댑터가 `KisUnitError` 로 되감는 이유).
+        """봉투 이상은 missing 이다 — 근거는 **블라스트 반경**이지 재시도가 아니다.
 
-        INVALID 로 올리면 `status_of` 가 window 전체를 죽이는데 INVALID 는 재청구
-        대상이 아니고, 이 소스는 소급이 불가라 그 1분이 45종 전체에 대해 사라진다.
+        ⚠️ 이 dataset 은 `recovery_budget_per_tick=0` 이라 INCOMPLETE 로 확정된 window 는
+        다시 안 온다. 그래도 missing 이 옳은 이유는, INVALID 면 `status_of` 가 window 를
+        통째로 INVALID 로 만들어 **나머지 44종의 정상 값까지 그 판정 아래 묻히기**
+        때문이다. missing 이면 결손이 그 unit 하나로 국한된다.
         """
         collector = self._collector(KisUnitError("응답 봉투 이상"))
 

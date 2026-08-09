@@ -1111,7 +1111,14 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
             blocked += getattr(worker, "drain_blocked", 0)
             logger.info("sector-index-worker 종료(DRAINED) — %d tick, 처리 %d, WINDOW_FAILED %d",
                         ticks, processed, failed)
-            return 1 if failed or (blocked and not processed) else 0
+            if max_ticks is None:
+                # 상주의 DRAINED 는 그날의 정상 종료다 — 늦게 떠서 한 건도 못 잡았어도
+                # 서비스를 실패로 보고하면 매일 알람이 운다.
+                return 1 if failed or (blocked and not processed) else 0
+            # 🔴 bounded 는 **확인 게이트**다. 이 분기를 안 맞추면 DRAINING 세션에 회수할
+            # claim 이 없을 때 첫 tick 이 DRAINED 를 내고 **아무것도 안 한 채 exit 0** 이라,
+            # 아래 게이트를 통째로 우회한다(리뷰 라운드 2). 판정식을 한 곳만 고친 자리다.
+            return 1 if failed or not processed else 0
         if state in ("IDLE", "DRAINING"):
             time.sleep(tick_seconds)
     failed += getattr(worker, "drain_window_failures", 0)

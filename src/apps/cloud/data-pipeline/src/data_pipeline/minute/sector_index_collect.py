@@ -144,9 +144,14 @@ class KisSectorIndexCollector:
             logger.error("KIS 업종지수 소스 전역 실패 — 수집 중단", exc_info=True)
             raise
         except KisUnitError as error:
-            # 봉투 이상·전송 사고는 **재시도 축**이다. 어댑터가 이 축을 따로 두는 이유가
-            # 소급 불가다 — 잘린 본문 1건을 INVALID 로 올리면 45종의 그 1분이 영구히
-            # 사라진다(어댑터 도크스트링·`test_envelope_shape_is_a_retry_axis`).
+            # 봉투 이상·전송 사고는 missing 이다. ⚠️ **근거는 "다음에 다시 받는다"가
+            # 아니다** — 이 dataset 은 `recovery_budget_per_tick=0` 이고 `claim_due_window`
+            # 는 DUE·만료 CLAIMED 만 집으므로, 한 번 INCOMPLETE 로 확정된 window 는 다시
+            # 안 온다(어댑터·iNAV 가 이 축을 "재시도 축"이라 부르지만 여기선 그 말이
+            # 성립하지 않는다 — 리뷰 라운드 2).
+            # 근거는 **블라스트 반경**이다: INVALID 로 올리면 `status_of` 가 window 를
+            # 통째로 INVALID 로 만들어 나머지 44종의 정상 값까지 그 판정 아래 묻힌다.
+            # missing 이면 그 44종은 received 로 남고 결손이 그 unit 하나로 국한된다.
             logger.error("KIS 업종지수 분봉 실패 %s: %s", unit_id, error)
             return Outcome.MISSING
         except ValueError:

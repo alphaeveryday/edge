@@ -240,8 +240,11 @@ class TestPlan:
         capsys.readouterr()
         version, digest = config_set_identity(SECTOR_INDEX.index_map)
         assert code == 0
-        assert ledger_db.sessions[
-            next(iter(ledger_db.sessions))]["universe_version"] == version
+        session = ledger_db.sessions[next(iter(ledger_db.sessions))]
+        # ⚠️ **튜플 전체**를 잰다 — 운영 CLI·Worker 가 `(version, hash)` 를 통째로 대조하므로
+        # version 만 단언하면 hash 만 틀어지는 회귀가 통과하고, 그러면 매 기동이 SystemExit
+        # 인데 테스트는 초록이다(리뷰 라운드 2).
+        assert (session["universe_version"], session["universe_hash"]) == (version, digest)
         assert version != "none"   # "none" 이면 어떤 config 변경도 대조가 안 된다
 
     def test_업종지수_세션은_index_map_없이는_계획되지_않는다(self, ledger_db):
