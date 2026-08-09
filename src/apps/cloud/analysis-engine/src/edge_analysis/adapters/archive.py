@@ -28,6 +28,7 @@ class RunArchiveError(PipelineError):
 # 런 아카이브는 이벤트 제목과 novelty 를 남긴다. 나머지는 의도적으로 버린다.
 _ARCHIVE_EVENT_FIELDS = (
     "source_event_id", "thread_id", "event_type_code", "ticker", "novelty_status", "title",
+    "evidence_id",
 )
 
 
