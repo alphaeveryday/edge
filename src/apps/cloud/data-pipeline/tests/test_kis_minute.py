@@ -202,9 +202,10 @@ class TestParse:
     ])
     def test_date_side_leniency_is_rejected_too(self, bad_date):
         """가드가 연접 문자열 **전체**를 봐야 하는 이유 — 관대함이 날짜 쪽에도 있다."""
-        assert datetime.strptime(bad_date + "103000", "%Y%m%d%H%M%S") \
+        label = row()["stck_cntg_hour"]
+        assert datetime.strptime(bad_date + label, "%Y%m%d%H%M%S") \
             == datetime(2026, 8, 3, 10, 30)
-        with pytest.raises(ValueError, match="\uB0A0\uC9DC\u00B7\uC2DC\uAC01 \uD615\uC0C1\uC774 \uC544\uB2C8\uB2E4"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_minute_row({**row(), "stck_bsop_date": bad_date}, "005930")
 
     def test_well_formed_but_impossible_time_is_a_format_error(self):
