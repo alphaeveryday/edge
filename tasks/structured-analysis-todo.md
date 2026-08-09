@@ -8,7 +8,7 @@
 - [x] PR 1 커밋·PR 생성 (#662)
 - [x] PR 2 ObjectSet 런타임 및 구조화 도구
 - [x] PR 2 focused/full/image 검증
-- [ ] PR 2 커밋·PR 생성
+- [x] PR 2 커밋·PR 생성 (#666)
 - [ ] 배포 체크포인트 A: PR 1·2 병합 이미지 canary
 - [ ] PR 3 뉴스 thread/event/argument 도구
 - [ ] PR 3 검증·커밋·PR 생성
