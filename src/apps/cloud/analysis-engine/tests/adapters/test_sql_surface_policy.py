@@ -30,8 +30,10 @@ def test_analysis_outputs_never_become_automatic_llm_views():
         prefix="rdb.public.",
     )
 
-    names = {name for name, _clamp, _ddl in plan}
-    assert names == {"source_event"}
+    assert [name for name, _clamp, _ddl in plan] == ["source_event"]
+    _name, clamp, ddl = plan[0]
+    assert clamp == "available_at"
+    assert "WHERE available_at <= TIMESTAMP '2026-08-07 23:59:59'" in ddl
 
 
 def test_sql_allowlist_rejects_outputs_even_if_a_caller_marks_them_bound():

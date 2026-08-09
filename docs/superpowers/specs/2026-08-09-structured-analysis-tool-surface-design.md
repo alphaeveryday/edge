@@ -26,8 +26,8 @@ expand/migrate/contract 순서로 전환해 롤백 가능성을 유지한다.
 
 ### PR 1 — 출력 조회 표면 격리
 
-RDB 카탈로그에서 모든 테이블을 자동 공개하는 정책을 입력 전용 명시 정책으로 바꾼다.
-분석 산출물은 자동 DuckDB 뷰, SQL allowlist, LLM schema/coverage에서 제외한다. 산출물 writer는
+RDB 카탈로그에서 모든 테이블을 자동 공개하되 알려진 분석 산출물을 명시적으로 제외한다.
+산출물은 자동 DuckDB 뷰, SQL allowlist, LLM schema/coverage에서 제외한다. 산출물 writer는
 구조화 로그 전환이 완료될 때까지 별도 정책으로 다루되, LLM reader와 섞지 않는다.
 
 이 PR의 핵심 불변식은 다음과 같다.
