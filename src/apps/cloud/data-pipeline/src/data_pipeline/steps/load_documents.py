@@ -265,8 +265,9 @@ def run(
                 # 1분 `PgNewsCanonicalWriter`. 예전엔 여기가 시각 조건 없이 덮어서,
                 # 1분 경로가 반영한 정정(T2)을 아직 T1 만 있는 레이크 값으로 되돌렸다
                 # (원장은 새 지문을 확정했는데 Consumer 는 옛 본문을 읽는 P1).
-                # 이제 `lead_observed_at` 이 **미주장(IS NULL)이거나 자기 관측이 더
-                # 새로울 때만** 이긴다. 축은 `news_document.lead_observed_at` 이고 계약
+                # 이제 `lead_observed_at` 이 **미주장(IS NULL)이거나 자기 관측이 그보다
+                # 앞서지 않을 때만** 이긴다 — 절이 `<=` 라 **동시각이면 배치가 이긴다**
+                # (ALPHA-907). 축은 `news_document.lead_observed_at` 이고 계약
                 # 전문은 마이그레이션
                 # `V202608071018__add_news_document_lead_observed_at.sql` 에 있다.
                 #
@@ -359,15 +360,20 @@ def run(
         # **이번 런이 값을 바꾼** 건수다 — UPSERT 의 WHERE 가 막으면 안 센다.
         # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "안 바뀌었다"이고, 멱등 재실행·
         # 롤백 런에서도 0 이다. ⚠️ 막는 절이 **둘**이라 안 바뀐 이유도 둘이다(ALPHA-848):
-        # ①값이 이미 같다 ②**승자 축에 졌다**(1분 경로가 더 새 리드를 이미 반영했거나 이
-        # canonical 이 더 낡았다). `lead_attempted - lead_text_written` 이 그 합이고, 둘을
+        # ①값이 이미 같다 ②**승자 축에 졌다** — 저장된 `lead_observed_at` 이 이 canonical
+        # 의 `fetched_at` 보다 **뒤**이거나, `fetched_at` 결손이라 비교가 UNKNOWN 이다.
+        # ⚠️ 후자를 "canonical 이 더 낡았다"로 읽지 마라 — 어느 쪽이 최신인지 **알 수 없는**
+        # 것이다(ALPHA-907). `lead_attempted - lead_text_written` 이 그 합이고, 둘을
         # 가르려면 행마다 질의가 하나 더 들어 여기서는 안 가른다. 소스 결손을 보려면
         # canonical 쪽을 봐야 하는 것은 그대로다.
         "lead_text_written": lead_written,
         "publisher_written": publisher_written,
         # canonical `fetched_at` 이 없어 리드 승자 판정에서 신선도를 주장하지
-        # 못한 건수(ALPHA-696). 이게 크면 그 벤더에서 배치가 늘 이기는 옛 동작으로
-        # 돌아간 것이다 — 축이 무력화된 것을 여기 말고는 볼 자리가 없다.
+        # 못한 건수(ALPHA-696). 이게 크면 그 벤더에서 축이 무력화된 것이고, 여기 말고는
+        # 볼 자리가 없다. ⚠️ 방향은 옛 동작(무조건 덮기)의 복귀가 **아니라 그 반대다**
+        # (ALPHA-907) — 주장하지 않으면 가드가 `IS NULL` 하나로 줄어(위 SQL 블록 주석)
+        # 아무도 안 쓴 자리에서만 이기고, 1분 경로가 시각을 찍은 자리에서는 비교가
+        # UNKNOWN 이라 **진다**.
         # ⚠️ 위 두 키와 달리 **적재가 터진 런에서도 0 이 아니다** — 쓴 건수가 아니라 읽은
         # 노출 수라서다(위 롤백 블록 주석). 세는 자리가 DB 쓰기 앞이라 그런 런에서는 후보
         # 전량을 센 값이다. 반대로 **canonical 을 읽다 터지면 이 값은 0 이다** — 세는 루프
