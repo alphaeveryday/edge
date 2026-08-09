@@ -1320,9 +1320,20 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # `ingest_date`(UTC) 파티션을 고르는 소비자가 없다(정제 두 스텝은 raw 전량 스캔).
 # 🔴 그 소득은 **날짜창을 세션 날짜(KST)에서 유도**할 때만 실현된다 — `--from/--to` 를
 # 생략한 증분 기본창은 UTC 라 08:00 KST tick 이 `[D-2, D-1]` 을 질의한다(세션 날짜가 창 밖).
+# ⚠️ **업종지수 세션(`--dataset sector_index_minute --source-group kis`)은 세 번째
+# 형상이다**(ALPHA-887): `--universe` 를 **안 받는데**(주면 거부) 격자는 **390**이다 —
+# 위 둘의 조합이 아니라 각 축이 따로 정해진다는 뜻이다. universe 를 안 쓰는 이유는 소스
+# 단위여서가 아니라 **기대 집합 45종이 universe.json 에 아예 없어서**다(지수는 ETF 명부에도
+# 구성종목에도 없다) — 정본은 `[minute_sector_index.index_map]` 이고, planner 가 그 표의
+# 해시를 세션에 고정한다. 그래야 장중 재배포로 표가 바뀔 때 Worker 가 거부한다(안 그러면
+# 한 세션 안에서 기대 집합이 조용히 갈린다). 격자가 390 인 이유는 이 TR 이 정규장 지수만
+# 주기 때문이고, 소급이 불가라 못 채운 window 는 영구 결손이다.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset disclosure_minute \
     --source-group dart --session-date 2026-08-10   # universe 없음 · 720 window
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run plan-minute-session --dataset sector_index_minute \
+    --source-group kis --session-date 2026-08-10    # universe 없음 · 390 window
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04 --universe /path/universe.json
@@ -1549,6 +1560,30 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
 # 보유한 DART raw 전체를 재처리한다. --from/--to 를 주면 접수일 기준 포괄 범위만 재처리한다.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run backfill-disclosure --run-id dart-backfill-20260809
+# 업종지수 Worker(1분 파이프라인, ALPHA-887) — KRX 업종지수 45종 분봉을 window 단위
+# canonical artifact 로 확정한다. 세션이 먼저 계획돼 있어야 한다
+# (plan-minute-session --dataset sector_index_minute --source-group kis — universe 없음).
+#
+# iNAV Worker 와 갈리는 곳 셋:
+#  · **기대 집합이 universe 가 아니라 config** 다(`[minute_sector_index.index_map]` 45줄).
+#    지수는 ETF 명부에도 구성종목에도 없어 universe.json 이 이 45종을 모른다. planner 가
+#    그 표의 해시를 세션에 고정하고 Worker 가 대조한다 — **장중에 이미지가 바뀌어 표가
+#    달라지면 기동에서 거부한다**(안 그러면 한 세션 안에서 기대 집합이 조용히 갈린다).
+#  · **`no_trade` 축이 없다** — 지수는 자기가 체결되지 않아 `cntg_vol == 0` 인데 OHLC 가
+#    움직이는 봉이 정상이다(실측 3.9%). 가격의 4분류를 그대로 물리면 매 window 가 INVALID 다.
+#  · **오늘이 아닌 `--session-date` 를 거부한다** — 이 TR 에 날짜 파라미터가 없어 과거일로
+#    돌리면 45종 전건 missing 이 그 날짜 원장에 굳는데, 소급이 불가라 채울 방법이 없다.
+#
+# 자격증명은 `[kis_nav.source]` 를 그대로 쓴다(iNAV 와 같은 쌍 — 같은 KIS 계정이고 쿼터가
+# 앱키 전역이라 어차피 하나다). ⚠️ `[minute_price_worker]` 가 아닌 이유는 그 섹션이
+# `sources.toml` 에 없어서다 — 전부 env 라, 그걸 쓰면 업종지수와 무관한 필수 필드
+# (`trigger_schema_version`·`destination`)까지 주입해야 설정이 로드된다.
+# ⚠️ 상주 배선(ECS 서비스)은 **없다** — iNAV 와 같이 bounded 수동 실행이다.
+# --max-ticks 는 확인 게이트다: WINDOW_FAILED 가 있거나 **한 window 도 못 봤으면 exit 1**.
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
+  python -m data_pipeline.run sector-index-worker --session-date 2026-08-10 --max-ticks 3
 # 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882) — 상주 서비스 9종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.

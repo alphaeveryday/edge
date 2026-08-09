@@ -289,6 +289,50 @@ class MinuteCommitter:
                 stage_timestamps=stage_timestamps,
             )
 
+    def commit_sector_index_window(
+        self,
+        *,
+        session_id: str,
+        window_start: datetime,
+        worker_id: str,
+        fence_token: int,
+        claim_token: int,
+        data_status: str,
+        expected_unit_count: int,
+        succeeded_unit_count: int,
+        failed_unit_count: int,
+        record_count: int,
+        checksum: str,
+        manifest_uri: str,
+        manifest_checksum: str,
+        missing_units: list[str] | None,
+        stage_timestamps: dict[str, datetime | str],
+        artifact_generation: int,
+    ) -> int:
+        """업종지수 window 하나를 확정하고 generation 을 돌려준다 (ALPHA-887).
+
+        `commit_inav_window` 와 **본문이 같다.** 그래도 함수를 나누는 이유는 그쪽
+        도크스트링이 적은 것과 같다: 가격 것을 재사용하면 `_insert_price_job_tx` 와
+        `PRICE_EVENT_TYPE` 이 하드코딩돼 지수 window 가 `price-analysis-realtime` 으로
+        발행되고 **종목 설명이 발화된다**(그 소비자는 종목 봉을 기대하는데 우리가 넣는
+        건 업종지수다). iNAV 것을 빌려 쓰지 않는 이유도 같다 — 소비자가 생기는 날
+        job kind·event type 이 붙는 자리가 dataset 마다 여기다.
+
+        지금은 하위 소비자가 없어 window 확정에서 멈춘다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            return self._confirm_window_tx(
+                cur, session_id=session_id, window_start=window_start,
+                worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
+                artifact_generation=artifact_generation, data_status=data_status,
+                expected_unit_count=expected_unit_count,
+                succeeded_unit_count=succeeded_unit_count,
+                failed_unit_count=failed_unit_count, record_count=record_count,
+                checksum=checksum, manifest_uri=manifest_uri,
+                manifest_checksum=manifest_checksum, missing_units=missing_units,
+                stage_timestamps=stage_timestamps,
+            )
+
     def commit_disclosure_window(
         self,
         *,
