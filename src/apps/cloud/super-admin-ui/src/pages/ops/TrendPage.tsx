@@ -14,14 +14,16 @@
  *
  * 뉴스 단계별 감소(퍼널)는 데이터 화면 소관이라 여기서 반복하지 않는다.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
-import { AxisHeader, F, Info, useFocusRow } from './shared';
+import { AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import { InfoPopover } from '../_shared/InfoPopover';
 import { GROUP_LABEL, evaluateMetric, formatValue } from './trendMetrics';
+/* 판단은 JSX 밖에 둔다 — 여기 두면 `node --test` 가 import 을 못 해 변이가 안 잡힌다 */
+import { asOfLabel } from './trendAsOf';
 import type { Metric, MetricGroup, Verdict } from './trendMetrics';
-import { METRICS } from './trendCatalog';
+import { buildMetrics } from './trendCatalog';
 import { extent, points } from './trendSeries';
 import '../../styles/ops.css';
 
@@ -53,7 +55,7 @@ const SCOPE_TIP = [
 ].join('\n');
 
 /** 지표 하나의 작은 그래프 — 자기 y 범위를 갖는다(공통 축 금지) */
-function Spark({ metric, verdict }: { metric: Metric; verdict: Verdict }) {
+function Spark({ metric, verdict, asOf }: { metric: Metric; verdict: Verdict; asOf: string | null }) {
   const W = 240;
   const H = 44;
   const values = metric.series.map((p) => p.value);
@@ -78,7 +80,7 @@ function Spark({ metric, verdict }: { metric: Metric; verdict: Verdict }) {
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
       role="img"
-      aria-label={`${metric.label} 최근 ${values.length}영업일 추이 — 오늘 ${formatValue(
+      aria-label={`${metric.label} ${values.length}영업일 추이 — ${asOf ?? '마지막 값'} ${formatValue(
         metric,
         verdict.actual,
       )}, 기준 ${formatValue(metric, verdict.expected)}, ${verdict.label}`}
@@ -108,9 +110,10 @@ function Spark({ metric, verdict }: { metric: Metric; verdict: Verdict }) {
   );
 }
 
-function MetricCard({ metric }: { metric: Metric }) {
+function MetricCard({ metric, today }: { metric: Metric; today: string }) {
   const v = evaluateMetric(metric);
   const mockPoints = metric.series.filter((p) => p.isMock).length;
+  const asOf = asOfLabel(metric, today);
   return (
     <li className="tr-card" id={'metric-' + metric.id}>
       <div className="tr-card-head">
@@ -121,11 +124,13 @@ function MetricCard({ metric }: { metric: Metric }) {
         </span>
       </div>
 
-      <Spark metric={metric} verdict={v} />
+      <Spark metric={metric} verdict={v} asOf={asOf} />
 
       <div className="tr-figures t-xs">
         <span>
-          오늘 <b>{formatValue(metric, v.actual)}</b>
+          {/* 날짜가 없으면(계열 자체가 없음) **붙이지 않는다** — 옆의 `계측 없음` 배지가 답한다 */}
+          {asOf && `${asOf} `}
+          <b>{formatValue(metric, v.actual)}</b>
         </span>
         {v.expected !== null && (
           <span style={{ color: 'var(--fg-3)' }}>
@@ -149,9 +154,13 @@ function MetricCard({ metric }: { metric: Metric }) {
         {mockPoints === 0 ? (
           <span className="chip">{metric.source}</span>
         ) : mockPoints === metric.series.length ? (
-          <span className="chip chip-warn">MOCK 계열</span>
+          /* 계열 전체가 실측이 아닐 때 **무엇이 아닌지**는 출처가 정한다 — 지어낸 값(MOCK)과
+             한때 관측한 스냅샷을 한 칩에 그리면 그 둘을 못 가른다. */
+          <span className="chip chip-warn">
+            {metric.source === 'SNAPSHOT' ? `${asOf ?? ''} 스냅샷 계열`.trim() : 'MOCK 계열'}
+          </span>
         ) : (
-          <span className="chip">오늘 실측 · 과거 MOCK</span>
+          <span className="chip">{asOf} 실측 · 과거 MOCK</span>
         )}
         <Link to={metric.drill.href} className="tr-drill">
           {metric.drill.label} →
@@ -162,11 +171,18 @@ function MetricCard({ metric }: { metric: Metric }) {
 }
 
 export function TrendPage() {
-  useFocusRow();
   const [filter, setFilter] = useState<Filter>('abnormal');
+  const q = useConsoleFactsQuery();
+  useFocusRow(q.ready);
 
-  /* 평가는 한 번만 — 필터를 바꿔도 페이지가 새로 로드되지 않는다(상태만 바뀐다) */
-  const [evaluated] = useState(() => METRICS.map((m) => ({ m, v: evaluateMetric(m) })));
+  /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
+   * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
+   * 한 번만 돌아 화면이 첫 응답에 영원히 고정된다. */
+  const evaluated = useMemo(
+    () => (q.ready ? buildMetrics(q.facts).map((m) => ({ m, v: evaluateMetric(m) })) : []),
+    [q],
+  );
+  if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
     abnormal: evaluated.filter((x) => x.v.kind === 'abnormal').length,
     batch: evaluated.filter((x) => x.m.group === 'batch').length,
@@ -182,7 +198,7 @@ export function TrendPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
+      <AxisHeader q={q} question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
 
       <div className="card">
         <div className="card-head">
@@ -226,13 +242,15 @@ export function TrendPage() {
             /* 지표마다 독립된 그래프 — 단위·규모가 달라 한 축에 겹치지 않는다 */
             <ul className="tr-grid">
               {shown.map(({ m }) => (
-                <MetricCard key={m.id} metric={m} />
+                <MetricCard key={m.id} metric={m} today={q.facts.meta.today} />
               ))}
             </ul>
           )}
 
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 12 }}>
-            거래일 {F.meta.today} 기준 · 일별 계열을 주는 응답이 없어 과거 점은 검수용 목입니다(카드마다
+            조회일 {q.facts.meta.today} 기준(원장이 아는 가장 최근 날 — 거래일 달력이 아닙니다) ·
+            일별 계열을 주는 응답이 없어 과거 점은 검수용 목입니다. <b>카드의 날짜가 조회일과
+            다르면 그 지표는 이 응답 밖 축</b>이라 그 날짜의 스냅샷입니다(카드마다
             표시). 뉴스의 단계별 감소는{' '}
             <Link to="/ops/datasets?focus=news-funnel">데이터 화면의 뉴스 처리 퍼널</Link>이 답합니다 —
             여기서 반복하지 않습니다.

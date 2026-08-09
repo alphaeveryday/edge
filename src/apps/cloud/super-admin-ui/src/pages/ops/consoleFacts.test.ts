@@ -11,6 +11,7 @@ import {
   axisOf,
   BOUNDARY_FIELDS,
   DATASET_FIELDS,
+  factsAxis,
   META_FIELDS,
   minuteFacts,
   OUTPUT_FIELDS,
@@ -388,6 +389,110 @@ test('거부 — 건수 자리에 소수가 오면 버린다. 기준값의 소�
   const half = WIRE();
   half.outputs[0].base = 31.5;
   assert.equal(parseFacts(half).ok, true, '기준값의 소수를 거부했다 — 짝수 표본의 중앙값이다');
+});
+
+test('🔴 거부 — 날짜·시각이 파싱되지 않으면 버린다(포매터가 렌더를 죽인다)', () => {
+  /* 문자열 여부만 보면 통과하고, 그 값은 곧장 `kst()` → `Intl` 로 가서
+   * `RangeError: Invalid time value` 로 **렌더가 죽는다** — 응답 결함이 화면 단위 조회 실패가
+   * 아니라 정체불명의 붕괴로 나오는 것이 이 경계가 존재하는 이유의 정반대다.
+   * 조용히 틀리는 쪽도 있다: `tradingLag` 는 두 문자열을 사전순 비교해 형식이 깨지면 **지연 0**
+   * 을 실측처럼 낸다. */
+  const cases: [(w: ConsoleFactsDto) => void, string][] = [
+    [(w) => { w.meta.today = '2026-8-3'; }, 'meta.today 미패딩'],
+    [(w) => { w.meta.today = 'not-a-date'; }, 'meta.today 비날짜'],
+    [(w) => { w.meta.db = 'not-an-instant'; }, 'meta.db 비시각'],
+    [(w) => { w.runs[0].tradingDate = '08/03/2026'; }, 'runs[].tradingDate 다른 형식'],
+    [(w) => { w.runs[0].deadline = '언젠가'; }, 'runs[].deadline'],
+    [(w) => { w.tasks[0].tradingDate = '2026-08'; }, 'tasks[].tradingDate 절단'],
+    [(w) => { w.datasets[0].expectedAsOf = '슬롯 창 08-02→08-03'; }, 'datasets[].expectedAsOf 표시 문자열'],
+    [(w) => { w.datasets[0].collectedAt = 'x'; }, 'datasets[].collectedAt'],
+    /* 🔴 `Date.parse` 를 게이트로 쓰면 이 셋이 통과한다 — 특히 마지막은 **3월 2일로 굴려**
+     * 없는 날이 조용히 다른 실재 날이 되어 화면에 실측처럼 선다(실측). */
+    [(w) => { w.meta.db = '2026'; }, '연도만'],
+    [(w) => { w.meta.db = 'Aug 3 2026'; }, '영문 날짜'],
+    [(w) => { w.meta.db = '2026-02-30T12:00Z'; }, '2월 30일 — 굴림'],
+    [(w) => { w.runs[0].tradingDate = '2026-02-30'; }, '없는 날짜'],
+    [(w) => { w.runs[0].tradingDate = '2025-02-29'; }, '평년 2월 29일'],
+    [(w) => { w.runs[0].deadline = '2026-08-03T25:00:00+09:00'; }, '25시'],
+    [(w) => { w.runs[0].deadline = '2026-08-03T12:61:00+09:00'; }, '61분'],
+    /* 🔴 **소비자가 못 읽는 것은 받지 않는다.** 아래 셋은 `new Date()` 가 `Invalid Date` 를 주고
+     * `kst()` 가 그 자리에서 `RangeError` 로 던진다(실측) — 통과시키면 사유 붙은 조회 실패가
+     * 아니라 정체불명의 렌더 붕괴가 된다. 초 단위 오프셋은 Java 가 이론상 낼 수 있지만
+     * 이 원장의 시각은 KST 세션이라 도달 경로가 없다. */
+    [(w) => { w.meta.db = '2026-08-03T12:00:00+09:00:30'; }, '초 단위 오프셋'],
+    [(w) => { w.runs[0].deadline = '2026-08-03T12:00:00+99:99'; }, '범위 밖 오프셋'],
+    [(w) => { w.runs[0].ledgerUpdated = '2026-08-03T12:00:00+19:00'; }, '19시간 오프셋'],
+    /* `ZoneOffset` 의 상한은 부호와 무관하게 **정확히 ±18:00** 이다 — `<= 18` 로 두면 이게 샌다 */
+    [(w) => { w.runs[0].deadline = '2026-08-03T12:00:00+18:59'; }, '18:59 — 상한 밖'],
+    [(w) => { w.meta.db = '2026-08-03T12:00:00-18:30'; }, '-18:30 — 상한 밖'],
+  ];
+  for (const [mutate, where] of cases) {
+    assert.equal(broken(mutate).ok, false, `${where} 를 통과시켰다`);
+  }
+});
+
+test('허용 — 서버가 실제로 내는 날짜 형식은 거부하지 않는다', () => {
+  /* 과하면 정상 응답을 통째로 버린다. 서버는 `LocalDate.toString()`(YYYY-MM-DD)과
+   * `OffsetDateTime.toString()` 을 내고, 후자는 오프셋·나노초 유무가 갈린다.
+   * ⚠️ 통과시킨 값은 **`kst()` 가 실제로 그릴 수 있어야** 한다 — 아래 왕복 단언이 그 축이다. */
+  const cases: [(w: ConsoleFactsDto) => void, string][] = [
+    [(w) => { w.meta.db = '2026-08-03T16:20:34.112043+09:00'; }, '나노초 + 오프셋'],
+    [(w) => { w.meta.db = '2026-08-03T07:21:16Z'; }, 'UTC Z'],
+    [(w) => { w.runs[0].ledgerUpdated = null; }, 'null 시각'],
+    [(w) => { w.runs[0].tradingDate = null; }, '비거래일 런의 null 거래일'],
+    [(w) => { w.datasets[0].expectedAsOf = '2026-12-31'; }, '연말 날짜'],
+    [(w) => { w.datasets[0].expectedAsOf = '2028-02-29'; }, '윤년 2월 29일'],
+    /* Java `OffsetDateTime.toString()` 의 변형 — 초 생략 · 초 단위 오프셋.
+     * `Date.parse` 는 뒤쪽에 `NaN` 을 주므로, 그걸 게이트로 쓰면 정상 응답을 버렸다. */
+    [(w) => { w.runs[0].ledgerUpdated = '2026-08-03T16:20+09:00'; }, '초 생략'],
+    [(w) => { w.runs[0].ledgerUpdated = '2026-08-03T16:20:34.1+09:00'; }, '나노초 1자리'],
+    [(w) => { w.datasets[0].expectedAsOf = '0050-01-01'; }, '두 자리 연도 — Date.UTC 보정에 걸리던 자리'],
+    [(w) => { w.meta.db = '2026-08-03T12:00:00-05:00'; }, '음수 오프셋'],
+    [(w) => { w.meta.db = '2026-08-03T12:00:00+18:00'; }, '최대 오프셋(+)'],
+    /* 부호를 안 보는 구현이라 지금은 둘 다 통과하지만, 부호별 분기가 생겨 한쪽만 막히는
+     * 회귀가 나도 단언이 없으면 안 잡힌다 — 상한은 **부호와 무관하게** ±18:00 이다. */
+    [(w) => { w.runs[0].deadline = '2026-08-03T12:00:00-18:00'; }, '최대 오프셋(−)'],
+  ];
+  for (const [mutate, where] of cases) {
+    const r = broken(mutate);
+    assert.equal(r.ok, true, `${where} 를 거부했다 — ${r.ok ? '' : r.reason}`);
+  }
+});
+
+test('🔴 통과시킨 시각은 렌더러가 읽을 수 있다 — 문법만 맞고 못 그리면 거부보다 나쁘다', () => {
+  /* 이 왕복이 없으면 "Java 가 낼 수 있으니 받자"로 문법을 넓히다 **소비자가 던지는 값**을
+   * 그대로 통과시킨다(실제로 한 라운드 그랬다). 검사표를 넓히는 사람은 이 단언을 먼저 본다. */
+  const r = parseFacts(WIRE());
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  const instants = [
+    r.facts.meta.db,
+    ...r.facts.runs.flatMap((x) => [x.ledger_updated, x.deadline]),
+    ...r.facts.datasets.map((x) => x.collected_at),
+  ].filter((x): x is string => typeof x === 'string');
+  assert.ok(instants.length > 0, '검사할 시각이 픽스처에 없다 — 이 단언이 죽었다');
+  for (const iso of instants) {
+    assert.ok(!Number.isNaN(new Date(iso).getTime()), `렌더러가 못 읽는 값을 통과시켰다 — ${iso}`);
+  }
+});
+
+/* ── 사실 축의 조회 상태 ──
+ * 화면은 이 값 하나로 "표를 그릴지 / 스켈레톤을 세울지 / 조회 실패라 말할지"를 정한다.
+ * 잘못 접으면 사실이 없는데 표가 서고, 빈 표는 그 자리에서 "위반 0건"으로 읽힌다. */
+test('응답 결함은 조회 실패다 — 규칙별 못 돎이 아니라 화면 단위로 접는다', () => {
+  const good = parseFacts(WIRE());
+  const bad = parseFacts({});
+  assert.equal(bad.ok, false, '전제: 빈 객체는 거부된다');
+
+  assert.equal(factsAxis(null, false), 'pending', '응답 전 — 실패가 아니다');
+  assert.equal(factsAxis(null, true), 'error');
+  assert.equal(factsAxis(good, false), 'loaded');
+  /* ⭐ 검증기가 거부한 응답을 `loaded` 로 두면 화면이 **빈 사실** 위에 표를 그린다 —
+   * 그때 "런 0건 · 위반 0건"은 실측처럼 보이는 거짓이다. */
+  assert.equal(factsAxis(bad, false), 'error', '거부된 응답은 실림이 아니다');
+  assert.equal(factsAxis(bad, true), 'error');
+  /* 직전 응답은 통과했는데 마지막 조회가 실패 — 판정은 서지만 낡았다(1분마다 도는 화면) */
+  assert.equal(factsAxis(good, true), 'stale');
 });
 
 test('거부 — 응답 자체가 객체가 아니면 그 사실을 사유로 말한다', () => {

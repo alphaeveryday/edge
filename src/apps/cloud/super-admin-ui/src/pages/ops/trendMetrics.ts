@@ -68,8 +68,9 @@ export interface Metric {
   threshold: number | null;
   direction: Direction;
   source: FactSource;
-  /** 계열에 목이 하나라도 섞였는가 */
-  isMock: boolean;
+  /* 계열에 목이 섞였는지는 **점마다**(`SeriesPoint.isMock`) 안다 — 지표 단위 플래그를 따로
+   * 두지 않는다. 소비자가 0이었고, 두 벌이면 갈린다: 기준(`base`)이 없는 날의 계열은 실측
+   * 한 점뿐인데 지표 플래그는 `true` 로 남아 카드가 없는 목을 말한다. */
   series: SeriesPoint[];
   /** 집계 단위·정의 — 팝오버 본문 */
   help: string;

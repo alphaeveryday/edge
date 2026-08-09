@@ -15,9 +15,17 @@ import { StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import { LANE_UNKNOWN, retryCap } from '../../rules/rules';
 import type { RunFact, TaskFact } from '../../rules/types';
-import { MOCK_RUN_TASKS } from '../../mock/preview';
 import { MockChip } from '../_shared/MockPreview';
-import { Absent, AxisHeader, F, Info, fmt, kst, useConsoleEvaluation } from './shared';
+import {
+  Absent,
+  AxisHeader,
+  ConsoleGate,
+  Info,
+  fmt,
+  kst,
+  useConsoleEvaluation,
+  useConsoleFactsQuery,
+} from './shared';
 import {
   ABSENCE_LABEL,
   ABSENCE_MEANING,
@@ -97,11 +105,16 @@ function taskState(t: TaskFact): TaskState {
   }
 }
 
-/** 런 하나의 작업 — 원장 기록이 있으면 그것이 이긴다. 없으면 검수용 목이고, 그 사실을 밝힌다. */
-function tasksOfRun(runId: string): { tasks: TaskFact[]; mock: boolean } {
-  const ledger = F.tasks.filter((t) => t.run_id === runId);
-  if (ledger.length > 0) return { tasks: ledger, mock: false };
-  return { tasks: MOCK_RUN_TASKS[runId] ?? [], mock: (MOCK_RUN_TASKS[runId]?.length ?? 0) > 0 };
+/**
+ * 런 하나의 작업 — **원장이 준 것만**.
+ *
+ * 검수용 목(`MOCK_RUN_TASKS`)으로 메우던 자리다. 사실 축이 앱 번들 안 스냅샷이던 동안은 표가
+ * 늘 비어 UI 를 평가할 수 없었지만, 이제 이 런은 **실 원장에서 왔다** — 그 런에 계획 행이
+ * 없다는 것 자체가 사실이고(`no_run_row`·계획 결손), 거기에 목 작업을 채우면 원장이 하지
+ * 않은 실행을 화면이 단정한다. 빈 경우의 문장은 아래 `RunTasks` 가 이미 갖고 있다.
+ */
+function tasksOfRun(tasks: TaskFact[], runId: string): TaskFact[] {
+  return tasks.filter((t) => t.run_id === runId);
 }
 
 /** 슬롯 키에서 예정 시각만 — "etf-daily:2026-08-03T15:40" → "15:40" */
@@ -160,15 +173,15 @@ const AXIS_TIP = [
  *   · 선택이 `runs[0]` 로 폴백해서 목록만 보러 와도 첫 런의 상세가 강제로 딸려 왔다.
  *   · 선택이 `replace: true` 라 뒤로가기가 목록이 아니라 화면 밖으로 나갔다.
  *   · 진입의 다수(격자·현재 실행·구성종목 결손·사건)가 이미 특정 런 직행이라 목록이 소음이었다.
- *     ⚠️ 이 셋째 근거는 지금 사건 하나만 남았다 — 나머지 셋은 실 API 화면이라 링크를 끊었다
- *     (`RUN_DETAIL_UNAVAILABLE`). 분리 자체는 앞의 두 근거로 여전히 선다.
+ *     ⚠️ 이 셋째 근거는 지금 사건 하나만 남았다 — 나머지 셋은 임의 날짜를 다루는 실 API
+ *     화면이라 링크를 끊었다(`RUN_DETAIL_UNAVAILABLE`). 분리 자체는 앞의 두 근거로 여전히 선다.
  *
  * 옛 주소 `/ops/runs?run_id=X` 는 여기서 상세로 넘긴다 — 사건이 남긴 주소가 끊기면 안 된다.
  */
 export function RunAxisPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const runs = F.runs;
+  const q = useConsoleFactsQuery();
 
   const legacyRunId = params.get('run_id');
   if (legacyRunId) {
@@ -176,18 +189,31 @@ export function RunAxisPage() {
     rest.delete('run_id');
     return <Navigate to={runHref(legacyRunId, Object.fromEntries(rest))} replace />;
   }
+  if (!q.ready) return <ConsoleGate q={q} />;
+  const runs = q.facts.runs;
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="오늘 어떤 런이 돌았고, 그 런의 작업은 귀결됐는가?" />
+      <AxisHeader q={q} question="오늘 어떤 런이 돌았고, 그 런의 작업은 귀결됐는가?" />
       {runs.length === 0 ? (
-        /* 상세 분기(아래)와 같은 `F` 를 읽는다 — 한쪽만 "스냅샷"이라 말하면 같은
-         * 데이터원이 화면에 따라 원장이 됐다 안 됐다 한다 */
         <div className="card card-pad">
-          <p className="t-sm m-0" style={{ fontWeight: 600 }}>보여줄 런이 없습니다</p>
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>이 조회일에 런이 없습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            이 목록은 아직 실 원장이 아니라 앱에 동봉된 스냅샷을 읽습니다 — 그 안에 런이
-            없다는 뜻이지, 원장에 기록된 런이 없다는 뜻이 아닙니다.
+            {/* ⚠️ 세 가지를 인용하면 안 된다.
+                ① R01 — `runs` 안의 계획 슬롯 행(`planned && no_run_row`)만 위반으로 만들어 이
+                   배열이 비면 **반드시 0건**이다.
+                ② "어떤 규칙도" — 런 축이 비어도 `outputs`·`boundary` 를 읽는 R13·R14 는 돈다.
+                ③ "런 축 규칙은 전부 판정했다" — `canRun` 이 **없는** 규칙(R01·R02·R04…)만
+                   빈 배열을 순회해 `evaluated: true, violations: 0` 이 된다. `canRun` 을 가진
+                   R03(제어면·원장 대조)은 `f.runs.some(...)` 이 거짓이라 **`못 돎`** 이다.
+                   한쪽으로 뭉뚱그리면 "AWS 대조를 못 했다"는 사실이 초록 아래로 숨는다. */}
+            원장에 이 날짜의 실행 행도, 미기동 계획 슬롯도 없습니다 — <b>계획 결손조차 기록되지
+            않았다</b>는 뜻입니다. 런 축 규칙 대부분은 이 빈 목록을 보고{' '}
+            <b>조건에 걸린 것 없음</b>으로 판정하지만(못 본 것이 아닙니다), 관측할 런이 있어야
+            도는 규칙(제어면·원장 대조)은 <b>판정 자체를 못 합니다</b> — 어느 쪽인지는{' '}
+            <Link to="/ops/incidents">문제·사건</Link>의 규칙 목록이 줄마다 말합니다. 조회일은
+            원장이 아는 가장 최근 날이라 거래일이라는 보장이 없고, 다른 날을 보려면 그 날짜로
+            조회해야 합니다.
           </p>
         </div>
       ) : (
@@ -201,7 +227,6 @@ export function RunAxisPage() {
 export function RunDetailPage() {
   const { runId = '' } = useParams();
   const [params] = useSearchParams();
-  const runs = F.runs;
 
   /* 사건 카드의 드릴다운이 실은 작업을 지목한다(?focus=task-…) — 그 지목은 상세 안에서
    * 해당 작업을 펼치는 데 쓴다. 런 자체는 주소(:runId)가 정하므로 여기서 다시 고르지 않는다. */
@@ -210,10 +235,12 @@ export function RunDetailPage() {
   /* 사건에서 왔으면 그 사건을 함께 띄운다 — 조사 문맥이 없으면 이 화면이 왜 이 런을 열었는지
    * 알 수 없고, 돌아갈 곳도 사라진다. */
   const fromIncident = params.get('fromIncident');
-  const { incidents } = useConsoleEvaluation();
+  const ev = useConsoleEvaluation();
+  if (!ev.ready) return <ConsoleGate q={ev} />;
+  const runs = ev.facts.runs;
   const incident = fromIncident
     ? /* 흡수된 위반의 vid 로 와도 찾는다 — 뿌리만 보면 breadcrumb 이 죽은 텍스트가 된다 */
-      (incidentOfVid(incidents, fromIncident)?.incident ?? null)
+      (incidentOfVid(ev.incidents, fromIncident)?.incident ?? null)
     : null;
 
   /**
@@ -226,7 +253,7 @@ export function RunDetailPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="이 실행의 작업은 귀결됐는가?" />
+      <AxisHeader q={ev} question="이 실행의 작업은 귀결됐는가?" />
 
       <nav className="t-xs ops-crumb" aria-label="조사 경로">
         {incident ? (
@@ -243,20 +270,20 @@ export function RunDetailPage() {
       </nav>
 
       {selected ? (
-        <RunTasks run={selected} focus={focus} />
+        <RunTasks tasks={ev.facts.tasks} run={selected} focus={focus} />
       ) : (
         /* 지목한 run_id 를 못 찾았다 — 다른 런을 대신 열지 않는다.
          *
-         * ⚠️ "없다"고 말하지 않는다. 이 화면의 런 축은 앱 번들 안 정적 스냅샷이라(shared.tsx 의
-         * `F`) 실제로 돈 실행 대부분이 여기 없다. 북마크·이전에 공유된 딥링크는 진입점을
-         * 끊은 뒤에도 여기 도달하므로(ALPHA-738 단계 3), 부재의 사유를 목적지가 말한다. */
+         * ⚠️ "그 실행이 없었다"고 말하지 않는다. 이 응답의 창은 **하루**(조회일)라, 다른 날의
+         * 런이나 조회 창 밖의 런은 여기 없는 것이 정상이다. 북마크·이전에 공유된 딥링크는
+         * 그 창 밖에서도 여기 도달하므로, 부재의 사유를 목적지가 말한다. */
         <div className="card card-pad">
-          <p className="t-sm m-0" style={{ fontWeight: 600 }}>이 화면은 이 실행을 읽지 못합니다</p>
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>이 조회 결과에 그 실행이 없습니다</p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            실행 상세는 아직 실 원장이 아니라 앱에 동봉된 스냅샷의 런 {F.runs.length}건만
-            해소합니다 — <code>{runId}</code> 가 그 안에 없다는 뜻이지, 그 실행이 없었다는
-            뜻이 아닙니다. 다른 최근 실행을 대신 선택하지 않습니다 — 무관한 런이 이 사건의
-            실행처럼 보이기 때문입니다.{' '}
+            지금 열려 있는 조회일 <b>{ev.facts.meta.today}</b> 의 런 {runs.length}건 안에{' '}
+            <code>{runId}</code> 가 없습니다 — 그 실행이 없었다는 뜻이 아니라 <b>이 창 밖</b>
+            이라는 뜻입니다(다른 날짜의 런일 수 있습니다). 다른 최근 실행을 대신 선택하지
+            않습니다 — 무관한 런이 이 사건의 실행처럼 보이기 때문입니다.{' '}
             {incident ? (
               <Link to={incidentHref(incident.root)}>사건으로 돌아가기</Link>
             ) : (
@@ -576,8 +603,16 @@ function StageFlow({ groups }: { groups: [string, TaskFact[]][] }) {
   );
 }
 
-function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
-  const { tasks, mock } = tasksOfRun(run.id);
+function RunTasks({
+  tasks: all,
+  run,
+  focus,
+}: {
+  tasks: TaskFact[];
+  run: RunFact;
+  focus: string | null;
+}) {
+  const tasks = tasksOfRun(all, run.id);
   const [open, setOpen] = useState<string | null>(null);
 
   /* 런이 바뀌면 펼침도 닫는다 — 상세는 (run_id, task_key) 조합으로만 의미가 있다 */
@@ -618,9 +653,7 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
   return (
     <div className="card">
       <div className="card-head">
-        <span className="t-label">
-          작업 목록 · DB 원장 기준 — {tasks.length}개 {mock && <MockChip />}
-        </span>
+        <span className="t-label">작업 목록 · DB 원장 기준 — {tasks.length}개</span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
           이 런(run_id)에 속한 작업만 표시합니다 — 다른 런의 작업을 합치지 않습니다
           <Info tip={PLAN_TIP} label="계획 축" />
@@ -669,12 +702,6 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
               ))}
           </p>
         )}
-        {mock && (
-          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 6 }}>
-            이 런의 작업은 스냅샷에 기록이 없어 <b>화면 검수용 목데이터</b>로 채웠습니다 — 실제 운영
-            데이터가 아닙니다. 원장 기록이 있는 런은 목으로 덮지 않습니다.
-          </p>
-        )}
       </div>
 
       <ObservationGap run={run} />
@@ -690,7 +717,7 @@ function RunTasks({ run, focus }: { run: RunFact; focus: string | null }) {
             계획 정보 없음 · 실행 기록 0개 —{' '}
             {run.no_run_row
               ? '이 슬롯은 런 행 자체가 생성되지 않아(계획 슬롯 미기동) 무엇이 예정이었는지 원장이 답하지 못합니다.'
-              : '이 런의 계획(ops_expected_task) 행이 스냅샷에 없어 예정 작업 수를 알 수 없습니다.'}{' '}
+              : '이 런의 계획(ops_expected_task) 행이 원장에 없어 예정 작업 수를 알 수 없습니다.'}{' '}
             다른 런의 작업으로 대체하지 않습니다.
           </p>
         </div>

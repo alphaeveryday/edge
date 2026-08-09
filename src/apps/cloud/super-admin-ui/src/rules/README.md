@@ -27,7 +27,7 @@
 | `types.ts` | Facts(사실)·Violation·Incident·리포트 타입 — **위반 필드 규약**(`target`/`targetId`/`metric`/`unit`/`state`/`why`)이 `RawViolation` 주석에 있다. 정본은 거기다 |
 | `rules.ts` | RULES 19종(선언 데이터 + 조건 함수) · EDGES 7개 |
 | `evaluate.ts` | 위반 수집 → 인과 병합(사건) → 정렬 · 리뷰 계약 §5 JSON(`buildReport`) · 사건 키 조립(`vidOf`)과 **그 역함수**(`ruleOfVid`) — 소비자가 구분자를 다시 적으면 조용히 아무것도 못 찾는다 |
-| `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분). **단계 4에서 `/api/v1/console/facts` fetch 로 교체된다**(ADR-0049 — 서버·검증 경계·어댑터는 섰고, 화면 배선만 남았다) |
+| `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분). ⚠️ **화면은 더 이상 이걸 안 읽는다**(ALPHA-738 D — `GET /api/v1/console/facts` 로 교체됐다). 남은 소비자는 셋이다: `cli.ts` 의 기본 입력 · 회귀 테스트 픽스처 · 응답 밖 축인 `news_funnel`(`pages/ops/newsFunnelSnapshot.ts` 한 모듈로 격리 — 그 카드는 스냅샷임을 스스로 밝힌다) |
 | `cli.ts` | `pnpm eval:rules` — UI 없이 §5 JSON 산출 |
 | `rules.test.ts` | `pnpm test:rules` — 규칙당 위반/비위반 픽스처 + 경계 케이스 (node:test) |
 
@@ -69,12 +69,16 @@ Node 직접 실행(cli·test)을 위해 모듈 내부 import 는 `.ts` 확장자
    - `violations[].scope` — 그 vid 의 시점 범위. 소비자가 `scope ?? run_id` 를 다시 조립하지 않게.
    - `rules[].notRun` — 위 3의 두 종류(`axis`·`identity`).
 5. **실행 위치** — 명세는 "서버 쪽이 자연스럽다" 했으나 UI 워크스페이스의 순수 TS 모듈 + node CLI 로 구현했다.
-   사실 소스가 아직 정적 스냅샷(목 포함)이라 서버 이식의 이득이 없고, §5 JSON 은 CLI 로 UI 없이 나온다.
+   판정이 클라이언트에 남는 이유는 **실시간 축이 다른 응답에서 오기 때문**이다(사실은
+   `/console/facts`, 세션은 `/sources/minute` — 둘을 합쳐야 19규칙이 선다). §5 JSON 은 CLI 로
+   UI 없이 나온다.
    **이 선택은 닫혔다** — 엔드포인트가 사실만 주고 평가는 여기 남는다
    ([ADR-0049](../../../../../../docs/adr/0049-console-facts-endpoint.md), 계약은
    [docs/contracts/console-facts-api.md](../../../../../../docs/contracts/console-facts-api.md)).
 6. **구 홈 잔존** — 이전 `OverviewPage`(실데이터 레인 요약)는 `/overview` 에 "레인 원장 요약"으로 남겼다.
-   규칙 엔진은 정적 스냅샷 위에서 돌고 저 화면은 실 API 를 읽는다 — 축이 달라 대체가 아니라 병존이다.
+   ⚠️ 병존 근거가 바뀌었다: 이제 **둘 다 실 API** 를 읽는다(ALPHA-738 D). 남은 차이는 출처가
+   아니라 **묻는 질문**이다 — 규칙 엔진은 "무엇이 걸렸는가"를, 저 화면은 "레인이 지금 어디까지
+   왔는가"를 답한다.
 7. **`max_retries: 0` = 정책 미선언** — 원장은 재시도 정책이 없음을 `0` 으로 적는다(SFN Retry 블록 0개,
    27개 중 17개). 이를 "상한 0회"로 읽으면 화면이 `1/0` 이라는 없는 분모를 그리고 R16 이 "평가됨"이라
    주장한다. `retryCap()` 에서 한 번만 정규화하고, 상한이 없으면 화면도 "시도 N회 · 상한 미선언"까지만 쓴다.

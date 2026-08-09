@@ -7,6 +7,13 @@
 
 export type Severity = 'P0' | 'P1' | 'P2';
 export type Layer = '런' | '작업' | '데이터셋' | '흐름' | '큐' | '산출' | '경계';
+/**
+ * 값이 **어디서 왔는가**. 부재 4구분과 같은 종류의 축이다 — 접으면 운영자가 못 가른다.
+ *
+ * `SNAPSHOT` 은 `MOCK` 과 다르다: 목은 **계측이 없어 지어낸** 값이고, 스냅샷은 **한때 실제로
+ * 관측했지만 지금 응답이 주지 않는** 값이다. 둘을 MOCK 한 칸에 그리면 "언젠가 참이었던 수"와
+ * "아무도 안 센 수"가 같아 보인다(리뷰 2라운드가 연속으로 지적한 방향).
+ */
 export type FactSource =
   | 'DB_LEDGER'
   | 'S3_LOG'
@@ -14,6 +21,7 @@ export type FactSource =
   | 'AWS_CONTROL+DB_LEDGER'
   | 'CODE'
   | 'SEED'
+  | 'SNAPSHOT'
   | 'MOCK';
 
 export interface RunFact {

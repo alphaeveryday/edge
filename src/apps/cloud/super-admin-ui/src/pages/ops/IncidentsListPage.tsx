@@ -15,6 +15,7 @@ import type { RuleResult, Severity } from '../../rules/types';
 import { RULES } from '../../rules/rules';
 import {
   Absent,
+  ConsoleGate,
   Info,
   SEV_TONE,
   SourceChip,
@@ -23,7 +24,7 @@ import {
   violationTip,
 } from './shared';
 import type { AxisFetch } from './notRun';
-import { notRunReason, unevaluatedRules } from './notRun';
+import { FETCH_LABEL, notRunReason, unevaluatedRules, unreadNote } from './notRun';
 import { incidentHref } from './investigation';
 import '../../styles/ops.css';
 
@@ -56,21 +57,28 @@ export function IncidentsListPage() {
   /* URL 이 선택 상태의 정본이다 — 새로고침·링크 공유가 같은 심각도를 연다. 기본은 P0. */
   const selected: Severity = isSeverity(requested) ? requested : 'P0';
   const ev = useConsoleEvaluation();
-  const { pipeline, outOfScope, rules } = ev;
-  const list = pipeline.filter((i) => i.sev === selected);
-  /* 이 화면의 개수·빈 목록 문장은 **판정된 규칙에 한한 사실**이다. 못 돈 규칙이 있으면 개수는
-   * 하한이고 "없다"는 "모른다"가 된다 — 그걸 안 밝히면 계측 공백과 응답 결함이 정상으로 읽힌다. */
-  const unevaluated = unevaluatedRules(ev);
-  const badResponse = unevaluated.filter((r) => r.notRun === 'identity');
 
   /* 화면만 P0 로 떨어뜨리면 주소창이 거짓말을 한다(?severity=foo 인데 P0 를 보여줌).
-   * 링크를 공유했을 때도 같은 상태가 열리도록 URL 을 정규화한다. */
+   * 링크를 공유했을 때도 같은 상태가 열리도록 URL 을 정규화한다.
+   * ⚠️ 훅이라 사실 축 게이트(아래 조기 반환)보다 **앞에서** 부른다. */
   useEffect(() => {
     if (isSeverity(requested)) return;
     const next = new URLSearchParams(params);
     next.set('severity', 'P0');
     setParams(next, { replace: true });
   }, [requested, params, setParams]);
+
+  if (!ev.ready) return <ConsoleGate q={ev} />;
+  const { pipeline, outOfScope, rules } = ev;
+  const list = pipeline.filter((i) => i.sev === selected);
+  /* 이 화면의 개수·빈 목록 문장은 **판정된 규칙에 한한 사실**이다. 못 돈 규칙이 있으면 개수는
+   * 하한이고 "없다"는 "모른다"가 된다 — 그걸 안 밝히면 계측 공백과 응답 결함이 정상으로 읽힌다. */
+  const unevaluated = unevaluatedRules(ev);
+  const badResponse = unevaluated.filter((r) => r.notRun === 'identity');
+  /* 🔴 이 목록의 건수는 **두 축을 합친** 평가다 — 실시간만 낡아도 캐시된 R17~R19 사건이
+   * `pipeline.length` 와 심각도 카드에 들어간다. 실시간 축 표기는 기본으로 접힌 규칙 목록
+   * 안에만 있어 아무도 안 본다. 낡은 축의 **이름**까지 여기서 말한다. */
+  const stale = unreadNote({ 사실: ev.fetch, 실시간: ev.axisFetch });
 
   const select = (sev: Severity) => {
     const next = new URLSearchParams(params);
@@ -90,6 +98,9 @@ export function IncidentsListPage() {
             `못 돎`(계측 공백)은 평상시에도 0이 아니라 여기 세우면 소음이 되므로 ⓘ 와 규칙 목록이
             맡는다. 여기 서는 것은 어제까진 없다가 오늘 생기는 것뿐이다. */}
         {badResponse.length > 0 && ` · 응답 결함으로 못 센 규칙 ${badResponse.length}개`}
+        {/* 이 화면에는 `AxisHeader` 가 없어 조회 상태를 말할 자리가 여기뿐이다.
+            안 밝히면 1분마다 도는 목록에서 **낡은 사건 수**가 현재로 읽힌다. */}
+        {stale && <b style={{ color: 'var(--warn)' }}> · {stale}</b>}
         <Info tip={SCOPE_TIP} label="집계 범위와 정렬" />
       </p>
 
@@ -250,13 +261,6 @@ const RULE_TIP = [
 ].join('\n');
 
 /** 실시간 축 상태 라벨 — `stale` 은 "실렸지만 낡았다"다(판정은 섰고 마지막 조회가 실패했다) */
-const AXIS_LABEL: Record<AxisFetch, string> = {
-  loaded: '실림',
-  stale: '실림 · 마지막 갱신 실패(판정이 낡았다)',
-  pending: '응답 대기',
-  error: '조회 실패',
-};
-
 function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch: AxisFetch }) {
   const meta = new Map(RULES.map((R) => [R.id, R]));
   /* 두 종류를 한 숫자로 합치지 않는다 — 응답 결함(계약 위반)이 평상시에도 0 이 아닌
@@ -277,7 +281,7 @@ function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch:
             '조회 실패' 로 접으면 **판정은 섰는데(위반 N건) 축은 실패**라는 모순된 화면이 된다 —
             그 사실("판정이 낡았다")이 이 상태를 만든 이유다. */}
         <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
-          실시간 축 {AXIS_LABEL[axisFetch]}
+          실시간 축 {FETCH_LABEL[axisFetch]}
         </span>
       </summary>
       <div className="card-pad" style={{ paddingBottom: 0 }}>

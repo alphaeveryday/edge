@@ -20,6 +20,7 @@ import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_MINUTE, MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
 import { incidentHref, incidentOfVid } from './ops/investigation';
+import { FETCH_LABEL, fetchTip, isCurrent, notRunReason, unevaluatedFor } from './ops/notRun';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
@@ -474,9 +475,25 @@ function LedgerCrumb({
   date?: string;
   report?: SourceReport;
 }) {
-  const { incidents } = useConsoleEvaluation();
-  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다 */
-  const incident = incidentId ? (incidentOfVid(incidents, incidentId)?.incident ?? undefined) : undefined;
+  const ev = useConsoleEvaluation();
+  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다.
+   * ⚠️ **"확인되지 않음"은 `loaded` 에서만 참이다.** 이 화면은 실 API 화면이라 사건 조회 하나
+   * 때문에 통째로 막지 않는데, 그렇다고 못 읽은 것을 "없다"로 쓰면 조회 실패가 해소로 읽힌다 —
+   * `stale`(직전 응답은 있으나 마지막 조회 실패)도 마찬가지다. 넷을 넷으로 쓴다. */
+  const incident =
+    ev.ready && incidentId ? (incidentOfVid(ev.incidents, incidentId)?.incident ?? undefined) : undefined;
+  /* 🔴 **조회 성공 ≠ 그 규칙이 판정함.** facts 가 `loaded` 여도 그 vid 를 낼 규칙이 축 부재나
+   * 실시간 조회 실패로 못 돌았으면 사건은 목록에 없다 — 그걸 "확인되지 않음"이라 쓰면
+   * **판정 못 함이 해소로** 읽힌다. 사건 상세가 쓰는 판별자를 그대로 쓴다. */
+  const notRun = ev.ready && incidentId ? unevaluatedFor(ev, incidentId) : undefined;
+  /* 🔴 **사건 목록은 두 축 위에 선다.** 배치 사실만 보면 실시간 재조회가 실패한 날 캐시된
+   * R17~R19 가 현재 사건으로 서고, 캐시에 없던 사건은 "확인되지 않음"으로 단정된다 —
+   * `unevaluatedFor` 도 그때는 `evaluated: true` 라 못 막는다. 덜 신선한 쪽을 쓴다. */
+  const crumbFetch = !ev.ready
+    ? ev.fetch
+    : isCurrent(ev.fetch)
+      ? ev.axisFetch
+      : ev.fetch;
   const runFound = report?.run?.runKey === runKey;
   const taskFound = task !== undefined && (report?.tasks.some((t) => t.taskKey === task) ?? false);
   const crumbs: React.ReactNode[] = [];
@@ -488,9 +505,17 @@ function LedgerCrumb({
         <Link key="inc" to={incidentHref(incident.root)}>
           {incident.root.title}
         </Link>
-      ) : (
+      ) : notRun ? (
+        <span key="inc" title={notRunReason(notRun, ev.ready ? ev.axisFetch : 'error')}>
+          사건 {incidentId} <b>(그 규칙이 판정 못 함)</b>
+        </span>
+      ) : isCurrent(crumbFetch) ? (
         <span key="inc" title="이 식별자의 사건이 지금 평가 결과에 없다">
           사건 {incidentId} <b>(확인되지 않음)</b>
+        </span>
+      ) : (
+        <span key="inc" title={fetchTip('사건 평가가 딛는 조회(사실 · 실시간)', crumbFetch)}>
+          사건 {incidentId} <b>({FETCH_LABEL[crumbFetch]})</b>
         </span>
       ),
     );

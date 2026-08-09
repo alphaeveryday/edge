@@ -11,7 +11,6 @@
  *      수급 361/363 결손 · 구성종목 4종 누락 · 유니버스 33종).
  */
 import type { Analysis, AnalysisEvidence } from '../domains/analyses';
-import type { TaskFact } from '../rules/types';
 import type {
   ExecutionStatus,
   GridCell,
@@ -838,85 +837,3 @@ export function mockLineage(stage: NewsLineageStage | undefined, limit: number):
     },
   };
 }
-
-/* ─────────── /ops/runs — 런별 작업 (마스터–상세) ───────────
- *
- * 규칙 엔진 스냅샷(facts-snapshot.json)은 6개 런 중 **두 개**의 작업만 담고 있다
- * (시장 15:40 21개 · 뉴스 15:30 6개). 나머지 런은 스냅샷이 안 담은 것이지 작업이 없었던 것이
- * 아니므로, 선택 동작을 검수할 수 있도록 런마다 **서로 다른** 작업 세트를 목으로 채운다.
- *
- * 지키는 선:
- *   · 실제 기록이 있는 런은 목으로 덮지 않는다 — 원장 행이 언제나 이긴다.
- *   · 모든 런에 같은 목록을 넣지 않는다. 런의 성격(정규·수동·백필)과 원장 상태에 맞춘다.
- *   · 기동조차 못 한 런(no_run_row)에는 작업을 지어내지 않는다 — 그 런의 사실은 "행이 없다"다.
- */
-
-const mockTask = (
-  runId: string,
-  pipeline: string,
-  tradingDate: string,
-  o: Partial<TaskFact> & Pick<TaskFact, 'stage' | 'task_key'>,
-): TaskFact => ({
-  run_id: runId,
-  run_key: runId,
-  pipeline_type: pipeline,
-  trading_date: tradingDate,
-  dataset: null,
-  required: true,
-  plan_status: 'DUE',
-  task_outcome: 'FULFILLED',
-  data_status: 'UNKNOWN',
-  records_out: null,
-  failed_records: 0,
-  completeness_expected: null,
-  completeness_received: null,
-  attempts: 1,
-  max_retries: 0,
-  ...o,
-});
-
-/** 런 id → 그 런의 작업(목). 원장에 기록이 있는 런은 여기 없다. */
-export const MOCK_RUN_TASKS: Record<string, TaskFact[]> = {
-  /* 뉴스 정규 런 — 전건 귀결(원장 SUCCEEDED 와 일치) */
-  'news:2026-08-03T15:00': (() => {
-    const R = 'news:2026-08-03T15:00';
-    const t = (o: Partial<TaskFact> & Pick<TaskFact, 'stage' | 'task_key'>) =>
-      mockTask(R, 'news', MOCK_TRADING_DATE, o);
-    return [
-      t({ stage: 'raw', task_key: 'NEWS_COLLECTION_BIGKINDS', dataset: 'stock_news', records_out: 3874, started_at: iso('15:00'), finished_at: iso('15:06'), exit_code: 0 }),
-      t({ stage: 'normalize', task_key: 'NORMALIZE_NEWS', dataset: 'stock_news', records_out: 3874, started_at: iso('15:06'), finished_at: iso('15:09'), exit_code: 0 }),
-      t({ stage: 'feature', task_key: 'LOAD_DOCUMENTS', dataset: 'document', records_out: 3861, started_at: iso('15:09'), finished_at: iso('15:14'), exit_code: 0 }),
-      t({ stage: 'feature', task_key: 'TAG_NEWS', dataset: 'document', records_out: 58, started_at: iso('15:14'), finished_at: iso('15:19'), exit_code: 0 }),
-    ];
-  })(),
-
-  /* 백필 런 — 과거 거래일을 다시 돌린다. 정규 런보다 작업이 적다(적재까지만) */
-  'news:2026-08-02T21:10': (() => {
-    const R = 'news:2026-08-02T21:10';
-    const t = (o: Partial<TaskFact> & Pick<TaskFact, 'stage' | 'task_key'>) =>
-      mockTask(R, 'news', '2026-07-28', o);
-    return [
-      t({ stage: 'raw', task_key: 'NEWS_COLLECTION_BIGKINDS', dataset: 'stock_news', records_out: 2411, started_at: '2026-08-02T21:10:00+09:00', finished_at: '2026-08-02T21:16:00+09:00', exit_code: 0 }),
-      t({ stage: 'normalize', task_key: 'NORMALIZE_NEWS', dataset: 'stock_news', records_out: 2411, started_at: '2026-08-02T21:16:00+09:00', finished_at: '2026-08-02T21:18:00+09:00', exit_code: 0 }),
-      t({ stage: 'feature', task_key: 'LOAD_DOCUMENTS', dataset: 'document', records_out: 2408, started_at: '2026-08-02T21:18:00+09:00', finished_at: '2026-08-02T21:22:00+09:00', exit_code: 0 }),
-    ];
-  })(),
-
-  /* 수동 런 — 원장 상태가 비고 AWS 만 FAILED 인 런. 실패·타임아웃·미기동·선행 미충족·
-   * 계획 제외·대기가 한 런에 모여 있어 상태 어휘를 한 번에 검수할 수 있다. */
-  'etf-daily:2026-08-02T11:03': (() => {
-    const R = 'etf-daily:2026-08-02T11:03';
-    const t = (o: Partial<TaskFact> & Pick<TaskFact, 'stage' | 'task_key'>) =>
-      mockTask(R, 'etf-daily', '2026-08-02', o);
-    return [
-      t({ stage: 'raw', task_key: 'ETF_HOLDINGS_COLLECTION_KRX', dataset: 'etf_holdings', data_status: 'VALID', records_out: 906, completeness_expected: 33, completeness_received: 33, started_at: '2026-08-02T11:03:00+09:00', finished_at: '2026-08-02T11:09:00+09:00', exit_code: 0 }),
-      t({ stage: 'raw', task_key: 'PRICE_COLLECTION_KIS', dataset: 'price_daily', task_outcome: 'FAILED', data_status: null, records_out: null, failed_records: null, attempts: 2, outcome_reason: 'TIMED_OUT', started_at: '2026-08-02T11:09:00+09:00', finished_at: '2026-08-02T11:24:00+09:00', exit_code: 124 }),
-      t({ stage: 'raw', task_key: 'INVESTOR_COLLECTION_KIS', dataset: 'investor_flow', task_outcome: 'MISSED', data_status: null, records_out: null, failed_records: null, attempts: 0, missed_at: '2026-08-02T12:03:00+09:00', outcome_reason: 'FAILED_TO_START' }),
-      t({ stage: 'normalize', task_key: 'NORMALIZE_PRICE', dataset: 'price_daily', task_outcome: 'BLOCKED', data_status: null, records_out: null, failed_records: null, attempts: 0, outcome_reason: 'UPSTREAM_FAILED' }),
-      t({ stage: 'feature', task_key: 'LOAD_PRICE_DAILY', dataset: 'price_daily', task_outcome: 'BLOCKED', data_status: null, records_out: null, failed_records: null, attempts: 0, outcome_reason: 'UPSTREAM_FAILED' }),
-      t({ stage: 'feature', task_key: 'LOAD_ETF_FLOW', dataset: 'etf_flow', plan_status: 'SKIPPED', task_outcome: null, data_status: null, records_out: null, failed_records: null, attempts: 0, skip_reason: 'NON_TRADING_DAY_SOURCE' }),
-      t({ stage: 'analysis', task_key: 'ANALYZE_ETF', dataset: 'explanation_run', task_outcome: 'PENDING', data_status: null, records_out: null, failed_records: null, attempts: 0 }),
-      t({ stage: 'publish', task_key: 'PUBLISH_EXPLANATIONS', dataset: 'explanation_result', task_outcome: 'MISSED', data_status: null, records_out: null, failed_records: null, attempts: 0, outcome_reason: 'UPSTREAM_FAILED' }),
-    ];
-  })(),
-};

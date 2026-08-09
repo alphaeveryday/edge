@@ -4,28 +4,20 @@
  * 설명 생산 흐름이고, 이 데이터셋들이 그 재료다.
  */
 import { StatusBadge } from 'ui-kit';
-import type { BadgeTone } from 'ui-kit';
-import { Absent, AxisHeader, F, Info, kst, useFocusRow } from './shared';
+import type { TaskFact } from '../../rules/types';
+/* 판정은 JSX 밖에 둔다 — 여기 두면 `node --test` 가 import 을 못 해 변이가 하나도 안 잡힌다 */
+import { freshness } from './datasetFreshness';
+import { Absent, AxisHeader, ConsoleGate, Info, kst, useConsoleFactsQuery, useFocusRow } from './shared';
 import { NewsFunnel } from './NewsFunnel';
 import '../../styles/ops.css';
 
-/** 신선도 판정 — 근거가 없으면 FRESH 라고 말하지 않는다 */
-function freshness(d: (typeof F.datasets)[number]): { label: string; tone: BadgeTone; tip: string } {
-  if (d.unverifiable)
-    return { label: '판정 불가', tone: 'neutral', tip: d.unverifiable };
-  if (!d.contract)
-    return { label: '계약 없음', tone: 'neutral', tip: 'DatasetContract 등록이 없어 기대 기준일 자체가 없다' };
-  if (d.window_contract)
-    return { label: '창 계약', tone: 'warn', tip: '기준일이 아니라 창으로 계약된 데이터셋 — as-of 비교 대상이 아니다' };
-  if (d.actual_as_of != null && d.expected_as_of != null && d.actual_as_of < d.expected_as_of)
-    return { label: 'STALE', tone: 'blocked', tip: '분석이 오래된 스냅샷 위에서 돈다' };
-  return { label: 'FRESH', tone: 'active', tip: 'actual_as_of 가 기대 기준일 이상' };
-}
-
 export function DatasetPage() {
-  useFocusRow();
-  const byDataset = new Map<string, typeof F.tasks>();
-  for (const t of F.tasks) {
+  const q = useConsoleFactsQuery();
+  useFocusRow(q.ready);
+  if (!q.ready) return <ConsoleGate q={q} />;
+  const { datasets, tasks } = q.facts;
+  const byDataset = new Map<string, TaskFact[]>();
+  for (const t of tasks) {
     const key = t.dataset ?? '—';
     if (!byDataset.has(key)) byDataset.set(key, []);
     byDataset.get(key)!.push(t);
@@ -33,7 +25,7 @@ export function DatasetPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <AxisHeader question="각 데이터셋이 언제 기준의 사실을 담고 있는가?" />
+      <AxisHeader q={q} question="각 데이터셋이 언제 기준의 사실을 담고 있는가?" />
 
       <div className="card">
         <div className="card-head">
@@ -61,7 +53,7 @@ export function DatasetPage() {
             </tr>
           </thead>
           <tbody>
-            {F.datasets.map((d) => {
+            {datasets.map((d) => {
               const f = freshness(d);
               return (
                 <tr key={d.id} id={'ds-' + d.id}>
@@ -87,17 +79,39 @@ export function DatasetPage() {
                       <StatusBadge tone={f.tone}>{f.label}</StatusBadge>
                     </span>
                   </td>
-                  <td className="col-muted">{d.next_run ?? <Absent kind="none" />}</td>
+                  {/* 다음 실행 예정 축은 이 응답에 없다(계약 §축별 소스에 `next_run` 행이 없다).
+                      `—`(집계 없음)로 그리면 "이번엔 안 셌다"로 읽힌다 — 안 센 게 아니라 기록이 없다. */}
+                  <td className="col-muted">{d.next_run ?? <Absent kind="uninstrumented" />}</td>
                 </tr>
               );
             })}
+            {datasets.length === 0 && (
+              <tr>
+                <td colSpan={6} className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                  {/* 서버는 **`dataset` 이 비지 않은 모든 작업**에서 데이터셋을 파생한다
+                      (계약 유무와 무관). 그러니 빈 목록의 뜻은 "계약이 없다"가 아니라
+                      "이 조회 창의 작업이 데이터셋을 지목하지 않았다"까지다. */}
+                  이 조회일의 작업이 데이터셋을 하나도 지목하지 않았습니다 — 데이터셋이 없다는
+                  뜻이 아니라 <b>작업 행의 dataset 축이 비어 있다</b>는 뜻입니다(계획 자체가
+                  없었거나, 원장 writer 가 그 축을 안 채웠거나).
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
         <div className="card-pad" style={{ paddingTop: 0 }}>
+          {/* ⚠️ 계약 건수를 문장에 박지 않는다 — 위 표와 같은 응답에서 센다. 손으로 적으면
+              등록이 늘어난 날 표와 문장이 서로 다른 수를 말한다. */}
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            실제로는 계약 등록이 1건(KRX holdings)뿐이고 그마저 actual 근거가 없어 영구 UNKNOWN 입니다 — 위 실제 기준일은
-            목값입니다. 이 축이 배선돼야 R08(STALE)이 실제로 돕니다. 다만 KRX holdings 는 원천이 기준일을 주지 않아{' '}
-            <b>영구 검증 불가</b>이며, UNKNOWN 유지가 설계 결정입니다.
+            이 응답에서 계약이 연결된 데이터셋은 <b>{datasets.filter((d) => d.contract).length}건</b>
+            입니다. 이 축이 배선돼야 R08(STALE)이 실제로 돕니다.
+            {datasets.some((d) => d.contract && d.id === 'etf_holdings') && (
+              <>
+                {' '}
+                그중 KRX holdings 는 원천이 기준일을 주지 않아 <b>영구 검증 불가</b>이며, UNKNOWN
+                유지가 설계 결정입니다(ADR-0043).
+              </>
+            )}
           </p>
         </div>
       </div>
@@ -134,7 +148,8 @@ export function DatasetPage() {
           </tbody>
         </table>
       </div>
-      {/* 뉴스 데이터셋의 당일 단계별 처리량 — 추이 화면에서 옮겨 왔다(하루의 단면이지 추이가 아니다) */}
+      {/* 뉴스 데이터셋의 당일 단계별 처리량 — 추이 화면에서 옮겨 왔다(하루의 단면이지 추이가 아니다).
+          🔴 이 축만 응답 밖이라 위 표와 **날짜가 다르다** — 그 사실은 카드가 스스로 밝힌다. */}
       <NewsFunnel />
     </div>
   );

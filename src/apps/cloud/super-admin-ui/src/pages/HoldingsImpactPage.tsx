@@ -22,6 +22,7 @@ import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { useConsoleEvaluation } from './ops/shared';
 import { incidentHref, incidentOfVid } from './ops/investigation';
+import { FETCH_LABEL, fetchTip, isCurrent, notRunReason, unevaluatedFor } from './ops/notRun';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -29,9 +30,16 @@ import '../styles/ops.css';
 
 /** 조사 경로 — 실제 식별자로만 만든다. 사건에서 왔으면 그 문맥을 유지한다 */
 function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string }) {
-  const { incidents } = useConsoleEvaluation();
-  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다 */
-  const incident = incidentId ? (incidentOfVid(incidents, incidentId)?.incident ?? undefined) : undefined;
+  const ev = useConsoleEvaluation();
+  /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다.
+   * ⚠️ **"확인되지 않음"은 `loaded` 에서만 참이다** — `stale`(마지막 조회 실패)·`pending`·
+   * `error` 를 그 문구로 접으면 조회 실패가 "그 사건은 해소됐다"로 읽힌다. */
+  const incident =
+    ev.ready && incidentId ? (incidentOfVid(ev.incidents, incidentId)?.incident ?? undefined) : undefined;
+  /* 🔴 **조회 성공 ≠ 그 규칙이 판정함** — `SourcesPage` 의 crumb 과 같은 판별자다 */
+  const notRun = ev.ready && incidentId ? unevaluatedFor(ev, incidentId) : undefined;
+  /* 🔴 `SourcesPage` 의 crumb 과 같은 판별자 — 사건 목록은 사실·실시간 **두 축** 위에 선다 */
+  const crumbFetch = !ev.ready ? ev.fetch : isCurrent(ev.fetch) ? ev.axisFetch : ev.fetch;
   return (
     <nav className="t-xs ops-crumb" aria-label="조사 경로">
       {incidentId ? (
@@ -41,7 +49,23 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
           {incident ? (
             <Link to={incidentHref(incident.root)}>{incident.root.title}</Link>
           ) : (
-            <span>사건 {incidentId} (확인되지 않음)</span>
+            <span
+              title={
+                notRun
+                  ? notRunReason(notRun, ev.ready ? ev.axisFetch : 'error')
+                  : isCurrent(crumbFetch)
+                    ? undefined
+                    : fetchTip('사건 평가가 딛는 조회(사실 · 실시간)', crumbFetch)
+              }
+            >
+              사건 {incidentId} (
+              {notRun
+                ? '그 규칙이 판정 못 함'
+                : isCurrent(crumbFetch)
+                  ? '확인되지 않음'
+                  : FETCH_LABEL[crumbFetch]}
+              )
+            </span>
           )}
           <span aria-hidden="true">›</span>
         </>
