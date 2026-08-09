@@ -12,10 +12,12 @@
 뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27 → **ALPHA-724 공시 레인
 컷오버로 소유 레인 이동(총계 27 유지)** → **ALPHA-769 장중 수급 레인 신설로 27→30** →
 **ALPHA-875 공시 4작업이 SFN 원장을 떠나 30→26**). state 수
-35 = 시장 SFN 30 + 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents — 병렬 브랜치 4개는
-statemachine.tf 잡 정의를 재사용해 이름이 겹치지 않는다) + 장중 수급 3(ALPHA-769 가 잡 리스트에
-새로 더한 것 — 공시·뉴스가 소유만 옮겨 총계를 안 바꾼 것과 다르다). 36→35 는 ALPHA-806 이
-analyze 페이즈를 걷어 AnalyzeOne 이 사라진 몫이다 — 이 수는 `test_ops_catalog.py` 가
+35 = `statemachine.tf` 33 + `news_pipeline.tf` 2(NewsLoadAssertions·NewsAssembleEvents).
+⚠️ 이건 **정의 파일** 기준이지 레인 기준이 아니다 — `disclosure_pipeline.tf`·
+`investor_intraday_pipeline.tf` 는 state 를 새로 정의하지 않고 statemachine.tf 잡 정의를
+부분집합 필터로 재사용하므로(새 state 정의 0개), 공시 4·장중 수급 3 도 저 33 안에 있다.
+레인별로 세고 싶으면 `pipeline_type` 축(아래)을 써라. 36→35 는 ALPHA-806 이 analyze
+페이즈를 걷어 AnalyzeOne 이 사라진 몫이고, 이 수는 `test_ops_catalog.py` 가
 `len(asl_states) == 35` 로 고정한다. 미등록 state 는 카탈로그에 없어 expected_task 가 안
 생기고, Reconciler 도 대조하지 않는다. 종목 반복은 개별 작업이 아니라 manifest/completeness 로
 관리하고(스펙 §3), 개별 품질 규칙은 quality_check_result 소관이라 카탈로그에 넣지 않는다.
@@ -86,11 +88,12 @@ revision 위에서 돌고, Reconciler 가 resolve 불가한 LEDGER_GAP 을 연�
 원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
 않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
 
-⚠️ 수집 커버리지는 시장 레인 10개 중 5개 + 뉴스 1개(BigKinds) + 장중 수급 1개(KIS 투자자
-추정)다(FMP 4개는 토글 off, DART 재무는 소비자 0). **공시(DART)는 여기 없다** — ALPHA-875 가
-1분 세션으로 보내 이 카탈로그의 수집 엔트리가 0 이다(결손은 ops 원장이 아니라
-`minute_ingestion_window` 에 드러난다). 조용한 누락이 실제로 나는 곳이 수집이므로(ALPHA-387·578)
-커버리지의 **모양**이 숫자보다 중요하다.
+⚠️ 수집 커버리지는 `Collect*` state 13개 중 7개 등록 — 시장 9개 중 5개 + 뉴스 2개 중 1개
+(BigKinds) + 장중 수급 1개 중 1개다. 미등록 6개는 FMP 4개(토글 off — 그중 `CollectFmpNews` 는
+시장이 아니라 **뉴스 레인** 몫이라 시장 분모에 넣지 마라)·`CollectDartFinancial`(소비자 0)·
+`CollectDartDisclosure`. **공시(DART)는 등록 0 이다** — ALPHA-875 가 1분 세션으로 보냈다
+(결손은 ops 원장이 아니라 `minute_ingestion_window` 에 드러난다). 조용한 누락이 실제로 나는
+곳이 수집이므로(ALPHA-387·578) 커버리지의 **모양**이 숫자보다 중요하다.
 """
 
 from __future__ import annotations

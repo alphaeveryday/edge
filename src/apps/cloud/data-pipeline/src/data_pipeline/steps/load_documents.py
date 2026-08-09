@@ -265,8 +265,9 @@ def run(
                 # 1분 `PgNewsCanonicalWriter`. 예전엔 여기가 시각 조건 없이 덮어서,
                 # 1분 경로가 반영한 정정(T2)을 아직 T1 만 있는 레이크 값으로 되돌렸다
                 # (원장은 새 지문을 확정했는데 Consumer 는 옛 본문을 읽는 P1).
-                # 이제 `lead_observed_at` 이 **미주장(IS NULL)이거나 자기 관측이 더
-                # 새로울 때만** 이긴다. 축은 `news_document.lead_observed_at` 이고 계약
+                # 이제 `lead_observed_at` 이 **미주장(IS NULL)이거나 자기 관측이 그보다
+                # 앞서지 않을 때만** 이긴다 — 절이 `<=` 라 **동시각이면 배치가 이긴다**
+                # (ALPHA-907). 축은 `news_document.lead_observed_at` 이고 계약
                 # 전문은 마이그레이션
                 # `V202608071018__add_news_document_lead_observed_at.sql` 에 있다.
                 #

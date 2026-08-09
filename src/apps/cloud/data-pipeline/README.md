@@ -1171,12 +1171,15 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
-  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외는 ① `fmp` 수집
+  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 9개는 ① `fmp` 수집
   4개(**FMP 공용키 bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을
   등록하면 매 런 MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`
   (**하류 소비자 0** — `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할
-  이유 없는 실패 경보가 된다) ③ `AnalyzeOne`(다른 이미지·Map 팬아웃 31종이 한 state 로 뭉쳐
-  거짓 초록). **KRX ETF·DART 공시 2개는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
+  이유 없는 실패 경보가 된다) ③ **공시 체인 4개**(`CollectDartDisclosure`·`NormalizeDisclosure`·
+  `NormalizeDisclosureSegment`·`LoadDisclosure` — ALPHA-875 가 1분 세션으로 넘겨 스케줄이
+  DISABLED 다). `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이 analyze
+  페이즈를 걷었다 — 36→35). **KRX ETF 는 ALPHA-596 이 직접 계측으로 올렸다**(같이 올렸던 DART
+  공시는 위 ③ 으로 빠졌다) — `tasks.tf` 가 두
   task-def 에 DB env 를 주면서, 컨테이너 종료 즉시 판정되고 그전엔 못 얻던 `records_out`·
   `failed_records`·`data_status` 가 함께 올라온다("벤더 컨테이너에 RDS 접속을 주는 신뢰경계
   변경"이라는 전제는 실측 결과 이미 무너져 있었다: 실행 역할·보안그룹이 task-def 전체 공유라
@@ -1189,8 +1192,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
-  을 내는 별건이다). 수집 커버리지는 시장 레인 10개 중 5개 + 뉴스 레인 1개(BigKinds) + 장중
-  수급 1개(KIS 투자자 추정)다 — 공시(DART)는 ALPHA-875 로 여기서 빠졌다.
+  을 내는 별건이다). 수집 커버리지는 `Collect*` 13개 중 7개 — 시장 9개 중 5개 + 뉴스 2개 중
+  1개(BigKinds) + 장중 수급 1개 중 1개다. 공시(DART)는 ALPHA-875 로 여기서 빠졌다.
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다 —
   `instrumented=True`↔`tasks.tf` DB env 배선 대조 포함(어긋나면 그 작업이 조용히 계측 없이 돈다).
   MVP 3작업(ALPHA-530)이었던 것:
