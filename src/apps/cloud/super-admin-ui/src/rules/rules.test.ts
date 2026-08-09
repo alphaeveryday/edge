@@ -127,9 +127,16 @@ test('R03 — AWS 상태를 가진 런이 하나도 없으면 evaluated:false (�
    * '평가됨 · 위반 0'("두 표면이 일치한다")이 선다. 두 축이 갈리면 정확히 그 모양이다. */
   f.runs = [run({ id: 'blank-aws', aws_status: '', ledger_status: 'SUCCEEDED' })];
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R03')!.evaluated, false);
-  /* 한 런이라도 관측되면 돈다 — 부분 관측의 크기는 다른 축(meta.awsUnobservedRuns)이 답한다 */
+  /* 한 런이라도 관측되면 돈다 — 부분 관측의 크기는 다른 축(meta.awsUnobservedRuns)이 답한다.
+   * 다만 **몇 런을 봤는지는 밝혀야 한다**: 안 밝히면 1/40 관측이 "두 표면이 일치한다"로 읽힌다 */
   f.runs.push(run({ id: 'aws', aws_status: 'SUCCEEDED', ledger_status: 'SUCCEEDED' }));
-  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R03')!.evaluated, true);
+  const partial = buildReport(f, NOW).rules.find((r) => r.id === 'R03')!;
+  assert.equal(partial.evaluated, true);
+  assert.match(partial.note ?? '', /관측한 런 1\/2/, '부분 관측이 침묵했다');
+
+  /* 전건 관측이면 밝힐 게 없다 — 늘 붙는 주석은 아무도 안 읽는다 */
+  f.runs = [run({ id: 'aws', aws_status: 'SUCCEEDED', ledger_status: 'SUCCEEDED' })];
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R03')!.note, null);
 });
 
 test('R03 제어면·원장 불일치 — 양쪽 다 있고 다를 때만, 한쪽 부재는 불일치가 아니다', () => {
@@ -452,6 +459,98 @@ test('R13 경계 — 기준(base)이 있는 산출이 하나도 없으면 evalua
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, true);
 });
 
+test('검증 안 된 응답이 판정을 통과하지 못한다 — `NaN`·타입 밖 값은 "봤고 괜찮다"가 아니다', () => {
+  /* facts 응답은 런타임 검증을 안 거치고 온다(타입 선언은 JSON 을 못 막는다). `NaN` 은 `!= null`
+   * 을 통과하는데 모든 비교가 거짓이라, 그대로 두면 **판정 대상인 척하면서 아무것도 안 걸리는**
+   * 값이 된다 — 이 콘솔이 없애려는 칸 혼동의 가장 조용한 형태다. */
+  const nanChain = emptyFacts();
+  nanChain.chain = {
+    feeds: [],
+    stages: [
+      { id: 'a', label: 'A', batch: NaN, src: 's' },
+      { id: 'b', label: 'B', batch: NaN, src: 's' },
+    ],
+  };
+  assert.equal(buildReport(nanChain, NOW).rules.find((r) => r.id === 'R10')!.evaluated, false, 'NaN 을 점으로 셌다');
+
+  /* `run()` 도 **같은 술어**를 써야 한다 — 수가 아닌 값이 `prev` 로 들어가면 그 뒤 비교가
+   * 언제나 거짓이라 canRun 이 센 점(10·5 둘)과 실제 비교가 갈려 손실이 통째로 묻힌다 */
+  const mixedChain = emptyFacts();
+  mixedChain.chain = {
+    feeds: [{ id: 'fb', label: '배치 트리거', v: 10, unit: 'ETF', src: 't' }],
+    stages: [
+      { id: 'bad', label: '이상', batch: NaN, src: 's' },
+      { id: 'c.run', label: '런', batch: 5, src: 's' },
+    ],
+  };
+  assert.deepEqual(
+    hits(mixedChain, 'R10').map((v) => [v.targetId, v.metric]),
+    [['batch:c.run', 5]],
+    '수 아닌 값이 prev 를 오염시켜 10→5 손실을 놓쳤다',
+  );
+
+  /* R13 — 기준이 NaN 이면 기준이 아니다. `today` 가 NaN 이면 판정 자체가 성립 안 하므로
+   * 위반이 아니라 **note 가 그 산출을 밝혀야** 한다(안 밝히면 봤다고 착각한다) */
+  const nanOut = emptyFacts();
+  nanOut.outputs = [{ id: 'x', label: '게시', today: 10, base: NaN, unit: '종' }];
+  assert.equal(buildReport(nanOut, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
+
+  /* 기준은 있는데 오늘 값이 수가 아닌 산출도 **판정 불가**다 — 그것뿐이면 못 돎이지
+   * "전부 분포 안"이 아니다. `canRun` 이 기준 축만 보면 여기서 거짓 평가됨이 선다. */
+  nanOut.outputs = [{ id: 'y', label: '문서', today: NaN, base: 100, unit: '건' }];
+  assert.equal(buildReport(nanOut, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
+
+  /* 하나라도 판정 가능하면 돈다 — 대신 빠진 산출을 note 가 이름으로 밝힌다 */
+  nanOut.outputs.push({ id: 'ok', label: '정상', today: 100, base: 100, unit: '건' });
+  const r13 = buildReport(nanOut, NOW).rules.find((r) => r.id === 'R13')!;
+  assert.equal(r13.evaluated, true);
+  assert.equal(r13.violations, 0);
+  assert.match(r13.note ?? '', /문서/, 'today 가 수가 아닌 산출이 침묵했다');
+  assert.doesNotMatch(r13.note ?? '', /정상/, '판정한 산출을 빠졌다고 적었다');
+
+  /* `Infinity` 는 `NaN` 과 반대 방향으로 샌다 — 비교가 언제나 **참**이라 위반을 지어낸다.
+   * `metric: Infinity` 인 사건이 목록 맨 위에 서고(정렬이 크기순이다) 아무도 그 수를 못 읽는다. */
+  const inf = emptyFacts();
+  inf.outputs = [
+    { id: 'z', label: '무한', today: Infinity, base: 100, unit: '건' },
+    { id: 'ok', label: '정상', today: 100, base: 100, unit: '건' },
+  ];
+  const infRep = buildReport(inf, NOW);
+  assert.equal(infRep.violations.filter((v) => v.rule === 'R13').length, 0, '무한대로 위반을 지어냈다');
+  assert.match(infRep.rules.find((r) => r.id === 'R13')!.note ?? '', /무한/, '판정에서 뺐으면 밝혀야 한다');
+
+  /* R19 — `NaN`·`''` 는 모름이다. 전부 모르면 못 돎이지 "0건"이 아니다 */
+  const nanDead = withMinute([session({ deadJobs: NaN as unknown as number })]);
+  assert.equal(buildReport(nanDead, NOW).rules.find((r) => r.id === 'R19')!.evaluated, false);
+
+  /* 섞이면 돌되 **note 의 축이 필터와 같아야** 한다 — `== null` 로만 세면 NaN 세션이 판정에서
+   * 빠진 채 note 에도 안 나와 그 데이터셋을 봤다고 착각한다 */
+  const mixedNan = buildReport(
+    withMinute([
+      session({ deadJobs: 0 }),
+      session({ dataset: 'inav_minute', deadJobs: NaN as unknown as number }),
+    ]),
+    NOW,
+  ).rules.find((r) => r.id === 'R19')!;
+  assert.equal(mixedNan.evaluated, true);
+  assert.match(mixedNan.note ?? '', /inav_minute/, 'NaN 세션이 침묵했다');
+});
+
+test('축이 통째로 없어도 평가는 산다 — `canRun` 은 evaluated 와 무관하게 전 규칙에서 불린다', () => {
+  /* `canRun` 이 던지면 그 규칙만이 아니라 **평가 전체**가 죽어 19규칙의 사건이 화면에서 사라진다
+   * (파이프라인이 깨진 날 콘솔이 통째로 오류 카드가 된다). `note` 진입점을 막은 것과 같은
+   * 종류이고, 계약 문서가 `chain`·`outputs` 옵셔널화를 남은 일로 적어 뒀다 — 그날 실제로 온다. */
+  const partial = emptyFacts();
+  delete (partial as { chain?: unknown }).chain;
+  delete (partial as { outputs?: unknown }).outputs;
+  const rep = buildReport(partial, NOW);
+  assert.equal(rep.rules.length, RULES.length, '축 부재가 평가 전체를 죽였다');
+  assert.equal(rep.rules.find((r) => r.id === 'R10')!.evaluated, false);
+  assert.equal(rep.rules.find((r) => r.id === 'R13')!.evaluated, false);
+  /* 다른 축의 규칙은 그대로 돈다 — 한 축의 부재가 남의 판정을 지우지 않는다 */
+  assert.equal(rep.rules.find((r) => r.id === 'R01')!.evaluated, true);
+});
+
 test('R14 전달 정합 — 게시·미발번은 P0, 시드 유래 비게시 전달은 P2+seed 로 강등', () => {
   const f = emptyFacts();
   f.boundary = {
@@ -653,6 +752,13 @@ test('합성 대상 축의 조각이 비면 못 돎이다 — 합성 후 문자�
   assert.equal(rep2.rules.find((r) => r.id === 'R17')!.notRun, 'identity');
   assert.equal(rep2.rules.find((r) => r.id === 'R19')!.evaluated, true);
 
+  /* 조각이 **문자열이 아닌** 경우도 같다 — `[]` 는 truthy 라 `Boolean` 검사를 통과하는데
+   * join 하면 빈 문자열이 되어 `price_minute/` 가 나간다. 응답은 런타임 검증을 안 거친다. */
+  const notString = withMinute([
+    session({ sourceGroup: [] as unknown as string, leaseExpired: true }),
+  ]);
+  assert.equal(buildReport(notString, NOW).rules.find((r) => r.id === 'R17')!.notRun, 'identity');
+
   /* 대칭 통제 — 데이터셋 조각이 비어도 같다(한쪽만 막으면 나머지 절반이 남는다) */
   const noDataset = withMinute([session({ dataset: '', leaseExpired: true })]);
   assert.equal(buildReport(noDataset, NOW).rules.find((r) => r.id === 'R17')!.notRun, 'identity');
@@ -686,6 +792,20 @@ test('R19 — `deadJobs: null`(모름)과 `0`(실측 0)이 판정에서 갈린�
   ).rules.find((r) => r.id === 'R19')!;
   assert.equal(mixed.evaluated, true);
   assert.match(mixed.note ?? '', /inav_minute/, '판정에서 빠진 데이터셋을 안 밝혔다');
+});
+
+test('R19 — 축 선언(`deadJobsByDate`)이 없으면 못 돎이다 (빈 집합으로 접으면 벤더 복제가 되살아난다)', () => {
+  /* 타입은 필수지만 응답은 런타임 검증을 안 거친다. 빠진 것을 `new Set(undefined)` 로 접으면
+   * 날짜 축 뉴스 DEAD 가 조용히 **세션 축으로 재분류**되고, 벤더가 둘인 날 같은 3건이 두 사건이
+   * 된다 — 이 규칙이 막으려던 결함 그 자체라 선언이 없으면 판정하지 않는다. */
+  const f = withMinute([
+    session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3 }),
+    session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3 }),
+  ]);
+  delete (f.minute as { deadJobsByDate?: unknown }).deadJobsByDate;
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R19')!;
+  assert.equal(rr.evaluated, false, '축 선언 부재를 빈 집합으로 접었다');
+  assert.equal(rr.violations, 0, '벤더마다 복제된 사건이 나갔다');
 });
 
 test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반', () => {

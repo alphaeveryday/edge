@@ -7,7 +7,7 @@
  *
  * 시각 비교는 ctx.now 를 쓴다(벽시계 직접 참조 금지) — 스냅샷 평가가 재현 가능해야 한다.
  */
-import type { Edge, Facts, MinuteSessionFact, Rule, RunFact, TaskFact } from './types.ts';
+import type { Edge, Facts, MinuteSessionFact, OutputFact, Rule, RunFact, TaskFact } from './types.ts';
 
 /** 재시도 정책 상한 — 없으면 null.
  *
@@ -60,11 +60,38 @@ const runKind = (r: RunFact): string =>
  * `run()` 과 같은 축을 세야 한다: blind 는 0이 아니라 **빠짐**이라 점이 아니고, `null` 도 점이
  * 아니다. 두 점이 없으면 "인접 감소"라는 물음 자체가 성립하지 않는다 — 위반 0건이 아니다.
  */
-const chainPoints = (f: Facts, src: 'batch' | 'intraday'): number =>
-  [
-    (src === 'batch' ? f.chain.feeds[0] : f.chain.feeds[1])?.v,
-    ...f.chain.stages.filter((s) => !s.blind).map((s) => s[src]),
-  ].filter((v) => v != null).length;
+/**
+ * R13 이 기준으로 쓸 수 있는 산출인가 — **`canRun` 과 `run()` 이 같은 술어를 봐야 한다.**
+ *
+ * 두 곳에 따로 쓰면 반드시 갈린다(실제로 두 번 갈렸다: `!= null` vs truthy, 그 다음 `isFinite`
+ * vs `!== 0`). 갈리면 `canRun` 만 통과하고 `run()` 이 걸러 **평가됨 · 위반 0**("분포 안")이 선다.
+ * `0` 은 기준이 아니다(나눗셈이 성립하지 않는다), `NaN` 도 아니다(비교가 언제나 거짓이다).
+ */
+const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && o.base !== 0;
+
+/**
+ * R13 이 **실제로 판정할 수 있는** 산출인가 — 기준과 오늘 값이 둘 다 수여야 한다.
+ *
+ * `canRun` 이 기준만 보면, 기준은 있는데 오늘 값이 수가 아닌 산출뿐인 응답이 `평가됨 · 위반 0`
+ * ("전부 분포 안")으로 선다 — 하나도 판정 못 했는데. R19 가 "원장을 하나도 못 읽으면 못 돎"인 것과
+ * 같은 형태다. `canRun`·`run()`·`note` 세 곳이 이 한 술어를 공유한다.
+ */
+const judgeable = (o: OutputFact): boolean => hasBase(o) && Number.isFinite(o.today);
+
+const chainPoints = (f: Facts, src: 'batch' | 'intraday'): number => {
+  /* ⚠️ **`canRun` 은 `evaluated` 와 무관하게 전 규칙에 대해 무조건 불린다** — 여기서 죽으면
+   * 그 규칙만이 아니라 **평가 전체**가 사라진다(19규칙의 사건이 통째로). 축이 옵셔널이 되는 날
+   * (계약 문서의 남은 항목) 그게 실제로 일어나므로 지금 널 안전하게 둔다. */
+  const feeds = f.chain?.feeds ?? [];
+  const stages = f.chain?.stages ?? [];
+  return [
+    (src === 'batch' ? feeds[0] : feeds[1])?.v,
+    ...stages.filter((s) => !s.blind).map((s) => s[src]),
+  ].filter((v) => Number.isFinite(v)).length;
+  /* `!= null` 이 아니라 `Number.isFinite` 다 — `NaN` 은 `!= null` 을 통과하지만 `<` 비교가
+   * 언제나 거짓이라 "점은 있는데 손실은 없다"(평가됨 · 위반 0)로 인증된다. 검증 안 된 JSON 에서
+   * 오는 값이라 타입 선언이 못 막는다. */
+};
 
 /** 세션을 사람이 읽는 이름 — 화면(MinutePage)이 쓰는 표기와 같다 */
 const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`;
@@ -84,7 +111,10 @@ const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`
  * (`R10.batch:c.run`) — 통일하면 등록된 조치를 못 찾는다.
  */
 const compose = (sep: string, ...parts: string[]): string =>
-  parts.every(Boolean) ? parts.join(sep) : '';
+  /* `Boolean` 만으로는 모자란다 — 응답은 런타임 검증을 안 거치고 오므로 조각이 `[]`(truthy 인데
+   * join 하면 빈 문자열)·객체(`[object Object]`)로 올 수 있다. 타입 선언은 그걸 못 막는다.
+   * 문자열이고 비어 있지 않은 것만 조각으로 친다. */
+  parts.every((p) => typeof p === 'string' && p !== '') ? parts.join(sep) : '';
 
 /**
  * 세션의 **대상 축** — 무엇이 고장났나. `dataset/sourceGroup` 이고 **날짜가 없다**.
@@ -162,6 +192,16 @@ export const RULES: Rule[] = [
      * `every` 로 바꾸면 SFN 실행이 애초에 없는 런 하나가 전체를 `못 돎` 으로 만든다 — 볼 수 있는
      * 불일치를 통째로 버리는 쪽이라 더 나쁘다. */
     canRun: (f) => f.runs.some((r) => !!r.aws_status),
+    /* 한 런만 관측돼도 `canRun` 은 참이다(그게 규칙 단위 불리언의 한계다) — 나머지 런은 비교조차
+     * 안 했는데 "조건에 걸린 것 없음"에 묻힌다. 몇 런을 실제로 봤는지 여기서 밝힌다.
+     * 부분 실패의 **크기**는 `meta.awsUnobservedRuns`(미배선) 소관이고, 이 note 는 그때까지
+     * 침묵을 없애는 최소값이다. R10·R19 의 부분 관측 표기와 같은 형태다. */
+    note: (f) => {
+      const seen = f.runs.filter((r) => !!r.aws_status).length;
+      return seen === f.runs.length
+        ? null
+        : `AWS 상태를 관측한 런 ${seen}/${f.runs.length} — 나머지는 비교하지 않았다(위반 0건이 "두 표면이 일치한다"는 뜻이 아니다)`;
+    },
     run: (f) =>
       f.runs
         .filter((r) => r.aws_status && r.ledger_status && r.aws_status !== r.ledger_status)
@@ -390,8 +430,11 @@ export const RULES: Rule[] = [
         let prevLabel = src === 'batch' ? '배치 트리거' : '장중 트리거';
         stages.forEach((s) => {
           if (s.blind) return; // 관측 불가 단계는 비교 축에서 제외 — 0 이 아니다
-          const v = s[src];
-          if (v == null) return;
+          /* `chainPoints`(canRun)와 **같은 술어**여야 한다. `!= null` 로 두면 수가 아닌 값이
+           * `prev` 로 들어가 다음 비교가 언제나 거짓이 되고, canRun 이 센 점 수와 실제 비교 횟수가
+           * 갈려 "평가됨 · 위반 0"이 선다 — 이 파일에서 두 번 난 바로 그 갈림이다. */
+          if (!Number.isFinite(s[src])) return;
+          const v = s[src] as number;
           if (prev != null && v < prev) {
             out.push({
               /* 대상은 어느 인접 단계에서 줄었는가다. `batch:c.res` 는 앵커용 id 라 targetId 로 내린다.
@@ -478,10 +521,24 @@ export const RULES: Rule[] = [
     /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. 실 응답은 일별
      * 계열을 주는 데가 없어 이 축이 통째로 빈다. `run()` 과 같은 truthy 검사를 쓴다 —
      * base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */
-    canRun: (f) => f.outputs.some((o) => !!o.base),
+    canRun: (f) => (f.outputs ?? []).some(judgeable),
+    /* 기준이 있는 산출이 하나라도 있으면 규칙은 돈다 — 기준 없는 산출은 판정에서 그냥 빠진다.
+     * 그 사실을 안 밝히면 "분포 밖 0건"이 전 산출을 봤다는 뜻으로 읽힌다(R03·R10·R19 와 같은 형태). */
+    note: (f) => {
+      /* 빠지는 이유는 둘이다 — 기준이 없거나(`base`), 오늘 값이 수가 아니거나(`today`).
+       * 한쪽만 세면 나머지 침묵이 남는다: `today: NaN` 은 비교가 언제나 거짓이라 위반도 안 되고
+       * 이 문장에도 안 나와, 그 산출을 **봤다고 착각**하게 된다. */
+      const blind = (f.outputs ?? [])
+        .filter((o) => !judgeable(o))
+        .map((o) => o.label);
+      return blind.length ? `판정에서 빠진 산출 ${blind.join('·')} — 기준(중앙값)이나 오늘 값이 수가 아니다` : null;
+    },
     run: (f) =>
-      f.outputs
-        .filter((o) => o.base && Math.abs((o.today - o.base) / o.base) >= 0.25)
+      (f.outputs ?? [])
+        /* `today` 도 유한수여야 한다 — `NaN` 이면 비교가 언제나 거짓이라 "분포 안"으로 인증된다 */
+        .filter(
+          (o) => judgeable(o) && Math.abs((o.today - (o.base as number)) / (o.base as number)) >= 0.25,
+        )
         .map((o) => ({
           /* `o.pub` 은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
           target: o.label,
@@ -702,25 +759,37 @@ export const RULES: Rule[] = [
     canRun: (f) => {
       const ss = f.minute?.sessions;
       if (!ss) return false;
-      return ss.length === 0 || ss.some((s) => s.deadJobs != null);
+      /* 🔴 **축 선언이 없으면 못 돈다.** 타입은 `deadJobsByDate` 를 필수로 두지만 응답은 런타임
+       * 검증을 안 거치고 온다 — 빠지면 `new Set(undefined)` 가 빈 집합이 되어 날짜 축 뉴스 DEAD 가
+       * 조용히 세션 축으로 재분류되고, 벤더가 둘인 날 같은 3건이 두 사건으로 선다.
+       * 그 재분류는 이 규칙이 막으려던 결함 자체라, 선언이 없으면 판정하지 않는다. */
+      if (!Array.isArray(f.minute?.deadJobsByDate)) return false;
+      /* `deadJobs` 는 유한수여야 안다 — `NaN`·`''`·`[]` 는 `!= null` 을 통과하지만 `>= 1` 이
+       * 거짓이라 "봤고 0건"으로 인증된다. 모르는 값은 모름으로 접는다. */
+      return ss.length === 0 || ss.some((s) => Number.isFinite(s.deadJobs));
     },
     axis: 'minute',
     /* 일부만 모르는 날은 규칙 단위 `못 돎` 으로 표현할 수 없다 — 어느 데이터셋이 판정에서
      * 빠졌는지 밝힌다. 안 밝히면 그 데이터셋의 유실이 "0건"에 흡수돼 보인다. */
     note: (f) => {
       const unknown = [
-        ...new Set((f.minute?.sessions ?? []).filter((s) => s.deadJobs == null).map((s) => s.dataset)),
+        ...new Set(
+          (f.minute?.sessions ?? []).filter((s) => !Number.isFinite(s.deadJobs)).map((s) => s.dataset),
+        ),
       ];
       return unknown.length
         ? `후속 처리 원장을 못 읽는 데이터셋 ${unknown.join('·')} — 그 유실은 이 판정에 없다(0건이 아니다)`
         : null;
+      /* `unknown` 은 아래 필터와 같은 축(유한수가 아니면 모름)이라야 한다 — 갈리면 note 가
+       * 침묵하는 사이 그 세션이 판정에서 빠진다 */
     },
     run: (f) => {
       const date = f.minute?.date ?? '';
       /* 축은 **데이터셋의 성질**이라 데이터셋 집합으로 온다 — 세션마다 실려 오면 같은
        * 데이터셋의 두 세션이 다른 축을 갖는 상태가 표현 가능해지고, 그게 안 난다는 보증이
        * 어댑터의 습관에 걸린다(`MinuteFacts.deadJobsByDate`). */
-      const byDateAxis = new Set(f.minute?.deadJobsByDate);
+      /* `canRun` 이 배열임을 이미 확인했다 — 여기서 `?? []` 로 접으면 그 판정이 무의미해진다 */
+      const byDateAxis = new Set(f.minute!.deadJobsByDate);
       const byDate = new Set<string>();
       return (
         (f.minute?.sessions ?? [])
@@ -728,7 +797,7 @@ export const RULES: Rule[] = [
            * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
           /* `null` 은 0이 아니라 **모름**이다 — 어느 원장을 읽어야 할지 모르는 데이터셋을
            * "봤고 괜찮다"로 접지 않는다. 판정 대상에서 빠질 뿐이다(R17·R18 은 그대로 돈다). */
-          .filter((s) => s.deadJobs != null && s.deadJobs >= 1)
+          .filter((s) => Number.isFinite(s.deadJobs) && (s.deadJobs as number) >= 1)
           .flatMap((s) => {
             /* ⚠️ **값의 입도가 사건의 입도를 정한다.** 뉴스 job 은 세션 연결 컬럼이 없어
              * `(dataset, date)` 집계 하나뿐이다(어댑터가 `deadJobsByDate` 로 밝힌다). 그걸

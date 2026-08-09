@@ -126,4 +126,13 @@ test('canRun 을 가진 규칙은 사유가 서로 갈린다 — 두 규칙이 �
   }
   const shared = [...byReason].filter(([, ids]) => ids.length > 1);
   assert.deepEqual(shared, [], `사유 문장이 겹친다 — ${JSON.stringify(shared)}`);
+
+  /* 유일성만으로는 모자란다 — 두 규칙의 `dep` 를 **서로 바꿔도** 유일성은 유지된다. 각 규칙이
+   * **자기** 사유를 받는지(남의 것이 아니라) 왕복으로 단언한다: 문장은 그 규칙의 `dep` 를 담아야
+   * 한다. `notRunReason` 이 `RULES.find` 로 규칙을 되찾으므로 그 조회가 어긋나면 여기서 깨진다. */
+  for (const R of gated) {
+    if (!R.dep) continue;
+    const why = notRunReason({ ...ev.rules[0], id: R.id, name: R.name }, 'loaded');
+    assert.ok(why.includes(R.dep), `${R.id} 가 남의 사유를 받았다: ${why}`);
+  }
 });
