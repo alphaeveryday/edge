@@ -171,9 +171,9 @@ function MetricCard({ metric, today }: { metric: Metric; today: string }) {
 }
 
 export function TrendPage() {
-  useFocusRow();
   const [filter, setFilter] = useState<Filter>('abnormal');
   const q = useConsoleFactsQuery();
+  useFocusRow(q.ready);
 
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는

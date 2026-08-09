@@ -55,10 +55,11 @@ function Fact({ k, children }: { k: string; children: React.ReactNode }) {
 
 export function IncidentDetailPage() {
   const vid = useSearchParams()[0].get('vid') ?? '';
-  /* `?focus=<vid>` 로 들어오면 아래 연쇄 표의 그 줄을 지목한다(흡수된 위반의 링크가 보내는 곳).
-   * 훅이라 **조기 반환보다 앞에서** 부른다. */
-  useFocusRow();
   const ev = useConsoleEvaluation();
+  /* `?focus=<vid>` 로 들어오면 아래 연쇄 표의 그 줄을 지목한다(흡수된 위반의 링크가 보내는 곳).
+   * 훅이라 **조기 반환보다 앞에서** 부르고, 사실이 도착해야 그 줄이 mount 되므로 `ready` 를
+   * 함께 넘긴다 — 안 넘기면 스켈레톤 위에서 한 번 헛돌고 끝난다. */
+  useFocusRow(ev.ready);
   if (!ev.ready) return <ConsoleGate q={ev} />;
   const { incidents, facts } = ev;
   /* 🔴 **사건마다 딛는 축이 다르다.** 실시간 규칙(R17~R19)은 `/sources/minute` 를, 나머지는

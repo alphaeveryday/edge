@@ -10,8 +10,8 @@ import { Absent, AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRo
 import '../../styles/ops.css';
 
 export function ChainPage() {
-  useFocusRow();
   const q = useConsoleFactsQuery();
+  useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
   const { etf_ledger: ledger, queues } = q.facts;
   const rows = ledger?.rows ?? [];

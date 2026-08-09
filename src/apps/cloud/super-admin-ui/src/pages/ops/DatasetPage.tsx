@@ -12,8 +12,8 @@ import { NewsFunnel } from './NewsFunnel';
 import '../../styles/ops.css';
 
 export function DatasetPage() {
-  useFocusRow();
   const q = useConsoleFactsQuery();
+  useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
   const { datasets, tasks } = q.facts;
   const byDataset = new Map<string, TaskFact[]>();

@@ -199,19 +199,32 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
  * `run` 축 위반을 `/ops/runs?focus=…` 로 보내 실행 상세 링크 규약을 우회한다
  * (investigation.ts 의 `RUN_DETAIL_UNAVAILABLE`). 조사 경로는 `investigate()` 하나다. */
 
-/** `?focus=<id>` 로 들어오면 그 행으로 스크롤하고 잠깐 강조한다 (L3) */
-export function useFocusRow(): string | null {
+/**
+ * `?focus=<id>` 로 들어오면 그 행으로 스크롤하고 잠깐 강조한다 (L3).
+ *
+ * 🔴 **`ready` 는 필수다.** 화면이 비동기가 되면서(ALPHA-738 D) 첫 렌더는 `ConsoleGate` 의
+ * 스켈레톤이라 대상 행이 아직 DOM 에 없다. effect 가 `[focus]` 에만 걸려 있으면 그때 한 번
+ * 헛돌고, 사실이 도착해 행이 mount 돼도 `focus` 는 안 바뀌므로 **다시 돌지 않는다** —
+ * 사건에서 넘어온 딥링크가 조용히 스크롤·강조를 잃는다(봇이 잡았다).
+ *
+ * 기본값을 두지 않는 이유는 `notRunReason` 의 `fetch` 와 같다: 하필 그 기본값(`true`)이
+ * 예전 동작이라, 인자를 빠뜨린 다음 소비자가 **조용히 이 버그로 회귀**한다. 필수로 두면 tsc 가
+ * 잡는다.
+ *
+ * @param ready 대상 행이 그려질 수 있는 상태인가(= 게이트를 통과했는가)
+ */
+export function useFocusRow(ready: boolean): string | null {
   const [params] = useSearchParams();
   const focus = params.get('focus');
   useEffect(() => {
-    if (!focus) return;
+    if (!focus || !ready) return;
     const n = document.getElementById(focus);
     if (!n) return;
     n.scrollIntoView({ behavior: 'smooth', block: 'center' });
     n.classList.add('ops-flash');
     const t = setTimeout(() => n.classList.remove('ops-flash'), 1800);
     return () => clearTimeout(t);
-  }, [focus]);
+  }, [focus, ready]);
   return focus;
 }
 

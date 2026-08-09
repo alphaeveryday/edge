@@ -11,11 +11,11 @@ import { useTenants } from '../../domains/tenants/hooks';
 import '../../styles/ops.css';
 
 export function DeliveryPage() {
-  useFocusRow();
   /* 테넌트 축은 `facts` 에 없다 — 발번 원장과 다른 표면이라 그쪽에서 직접 읽는다.
    * 손으로 박은 수(`0 (+시드 1)`)를 두면 실 응답이 붙는 날 거짓이 된다. */
   const tenants = useTenants();
   const q = useConsoleFactsQuery();
+  useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
   const b = q.facts.boundary;
   /* 🔴 `tenants.data` 존재만 보면 **stale 을 현재 값으로** 그린다 — react-query 는 에러에도
