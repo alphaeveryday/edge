@@ -121,15 +121,18 @@ class TestParse:
         # KIS 는 통화를 주지 않는다 — 지어내지 않는다
         assert candle.currency is None
 
-    def test_bar_off_the_minute_grid_is_a_shape_error(self):
-        """격자 가드는 **파서**에 있어야 한다 — 소급에만 두면 당일 경로가 열린다.
+    def test_off_grid_bar_does_not_raise_in_the_parser(self):
+        """⛔ 격자 가드를 파서로 올리지 마라 — 형제(`kis_sector_index`)를 따라 옮겼다가
+        되돌린 자리다. 이 테스트가 그 회귀를 막는다.
 
-        격자 밖 봉은 어느 계획 window 에도 안 맞아 조용히 `missing` 이 되고, 원장에는
-        "벤더가 안 줬다"로 보인다. 소급 경로에만 가드가 있던 동안 362종이 도는 당일
-        경로는 `"103030"` 을 그대로 통과시켰다(형제 `kis_sector_index` 는 파서에 뒀다).
+        당일 경로는 30봉 페이지를 통째로 파싱하고 `select_window_candle` 이 정확 일치로
+        하나만 고른다 — **남의** 격자 밖 봉은 어차피 안 뽑힌다. 파서에서 raise 하면 그
+        행 하나가 `Outcome.INVALID` → `WINDOW_INVALID` 로 362종 전건을 죽이고, INVALID
+        는 재청구 대상이 아니라 영구 손실이다. 소급 경로는 합성이 봉에 앵커돼 사정이
+        다르므로 가드가 `_fetch_day` 에 있다(`TestHistoricalCandles` 가 잰다).
         """
-        with pytest.raises(ValueError, match="분 격자 밖"):
-            parse_minute_row({**row(), "stck_cntg_hour": "103030"}, "005930")
+        candle = parse_minute_row({**row(), "stck_cntg_hour": "103030"}, "005930")
+        assert candle.window_end == datetime(2026, 8, 3, 10, 30, 30, tzinfo=KST)
 
     def test_zero_volume_row_is_not_traded(self):
         # 무거래 분: 행은 있고 거래량만 0 — collector 가 no_trade 로 센다(missing 아님)
