@@ -1,5 +1,7 @@
 """보관 DART raw → canonical/fact/event 백필 오케스트레이션 (ALPHA-895)."""
 
+import pytest
+
 from data_pipeline.config import DbConfig
 from data_pipeline.steps import backfill_disclosure
 
@@ -36,3 +38,11 @@ def test_backfill_stops_before_loading_when_normalization_fails(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("load called")))
 
     assert backfill_disclosure.run(object(), "B1", db=DbConfig(password="x")) == 1
+
+
+def test_backfill_rejects_reversed_filing_window():
+    """역전 창은 모든 raw를 건너뛴 뒤 exit 0이 되므로 입력 경계에서 크게 거부한다."""
+    with pytest.raises(ValueError, match="from_date"):
+        backfill_disclosure.run(
+            object(), "B1", db=DbConfig(password="x"),
+            from_date="2026-07-01", to_date="2026-06-01")

@@ -7,6 +7,8 @@ import logging
 from datetime import date
 from datetime import datetime, timezone
 
+from edge_ontology import role_entity_kind
+
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..lake import Storage, quality_log_key
@@ -82,16 +84,16 @@ def to_canonical_event(fact: dict) -> dict:
     end = _date_text(fact.get("contract_end_date"))
     arguments = [
         {"role_code": "SUPPLIER", "entity_id": supplier, "mention_text": None,
-         "entity_kind": "COMPANY_OR_INSTRUMENT", "slot": "supplier"},
+         "entity_kind": role_entity_kind("SUPPLIER"), "slot": "supplier"},
         {"role_code": "CONTRACT_OBJECT", "entity_id": contract_object,
          "mention_text": fact.get("contract_object_name"),
-         "entity_kind": "PRODUCT_OR_CONCEPT", "slot": "object"},
+         "entity_kind": role_entity_kind("CONTRACT_OBJECT"), "slot": "object"},
     ]
     if customer or fact.get("counterparty_raw_name"):
         arguments.append({
             "role_code": "CUSTOMER", "entity_id": customer,
             "mention_text": fact.get("counterparty_raw_name"),
-            "entity_kind": "COMPANY_OR_INSTRUMENT", "slot": "customer",
+            "entity_kind": role_entity_kind("CUSTOMER"), "slot": "customer",
         })
     if start:
         arguments.append({"role_code": "EFFECTIVE_DATE", "entity_id": None,
@@ -139,15 +141,47 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
         except ValueError:
             skipped_required += 1
     if not events:
-        return {"created": 0, "already": 0, "unknown_thread": 0,
+        return {"created": 0, "already": 0, "rethreaded": 0, "unknown_thread": 0,
                 "skipped_required": skipped_required}
     with conn.cursor() as cur:
-        cur.execute("SELECT source_event_id FROM source_event WHERE source_event_id = ANY(%s)",
+        cur.execute(
+            "SELECT se.source_event_id, etl.novelty_status FROM source_event se"
+            " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
+            " WHERE se.source_event_id = ANY(%s)",
                     ([event["source_event_id"] for event in events],))
-        existing = {str(row[0]) for row in cur.fetchall()}
+        existing = {str(row[0]): row[1] for row in cur.fetchall()}
     pending = [event for event in events if event["source_event_id"] not in existing]
+    rethread = [event for event in events
+                if existing.get(event["source_event_id"]) == "UNKNOWN"]
     if not pending:
-        return {"created": 0, "already": len(events), "unknown_thread": 0,
+        grounded = [
+            (event["source_event_id"], argument["role_code"], argument["entity_id"],
+             None, argument["slot"], argument["mention_text"], argument["entity_kind"], None)
+            for event in rethread for argument in event["arguments"]
+            if argument["entity_id"] is not None
+        ]
+        assertion_grounded = [
+            (event["assertion_id"], argument["role_code"], argument["entity_id"], None)
+            for event in rethread for argument in event["arguments"]
+            if argument["entity_id"] is not None
+        ]
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO assertion_argument (assertion_id, role_code, entity_id, confidence)"
+                " VALUES (%s,%s,%s,%s)"
+                " ON CONFLICT (assertion_id, role_code, entity_id) DO NOTHING",
+                assertion_grounded,
+            )
+            cur.executemany(
+                "INSERT INTO event_argument (source_event_id, role_code, entity_id, confidence,"
+                " slot, mention_text, entity_kind, group_ord)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+                " ON CONFLICT (source_event_id, role_code, entity_id) DO NOTHING",
+                grounded,
+            )
+        unknown = thread_events(conn, rethread) if rethread else 0
+        return {"created": 0, "already": len(events), "rethreaded": len(rethread),
+                "unknown_thread": unknown,
                 "skipped_required": skipped_required}
 
     with conn.cursor() as cur:
@@ -178,15 +212,17 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
     assertion_args = []
     event_args = []
     measures = []
-    for event in pending:
+    for event in pending + rethread:
         for argument in event["arguments"]:
             entity_id = argument["entity_id"]
             if entity_id is not None:
                 assertion_args.append((event["assertion_id"], argument["role_code"],
                                        entity_id, None))
-            event_args.append((event["source_event_id"], argument["role_code"], entity_id,
-                               None, argument["slot"], argument["mention_text"],
-                               argument["entity_kind"], None))
+            if event in pending or entity_id is not None:
+                event_args.append((event["source_event_id"], argument["role_code"], entity_id,
+                                   None, argument["slot"], argument["mention_text"],
+                                   argument["entity_kind"], None))
+    for event in pending:
         for ordinal, measure in enumerate(event["measures"]):
             measures.append((event["source_event_id"], ordinal, measure["role_code"],
                              measure["surface"], measure["value"], measure["unit"],
@@ -230,9 +266,10 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
             [(e["evidence_id"], e["source_event_id"], e["assertion_id"], "DISCLOSURE_FACT",
               f"DART rcept_no={e['rcept_no']}", None) for e in pending],
         )
-    unknown = thread_events(conn, pending)
+    unknown = thread_events(conn, pending + rethread)
     return {"created": len(pending), "already": len(events) - len(pending),
-            "unknown_thread": unknown, "skipped_required": skipped_required}
+            "rethreaded": len(rethread), "unknown_thread": unknown,
+            "skipped_required": skipped_required}
 
 
 def run(storage: Storage, run_id: str, *, db: DbConfig,
@@ -240,7 +277,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
     """기간 내 typed supply facts를 조립한다. 기간 미지정은 전체 보관분이다."""
     started_at = datetime.now(timezone.utc)
     facts_read = 0
-    result = {"created": 0, "already": 0, "unknown_thread": 0,
+    result = {"created": 0, "already": 0, "rethreaded": 0, "unknown_thread": 0,
               "skipped_required": 0}
     failures = []
     try:

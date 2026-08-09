@@ -262,9 +262,9 @@ def main(argv: list[str] | None = None) -> int:
                  # 원장 DB + storage(raw page·manifest PUT) + [bigkinds_news] 정본.
                  # universe 없음 — 뉴스 세션은 소스 단위다.
                  "news-worker",
-                 # 1분 Disclosure Worker(ALPHA-875): 공시 체인 4스텝을 한 tick 에 도는 상주
+                 # 1분 Disclosure Worker(ALPHA-875): 공시 체인 5스텝을 한 tick 에 도는 상주
                  # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
-                 # ⚠️ 수집만이 아니라 collect→normalize×2→load 를 한 window 에서 돈다.
+                 # ⚠️ 수집만이 아니라 collect→normalize×2→load→assemble 을 한 window 에서 돈다.
                  "disclosure-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")

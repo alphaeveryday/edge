@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from ..config import DbConfig
 from ..lake import Storage
 from . import (assemble_disclosure_events, load_disclosure, normalize_disclosure,
@@ -11,6 +13,11 @@ from . import (assemble_disclosure_events, load_disclosure, normalize_disclosure
 def run(storage: Storage, run_id: str, *, db: DbConfig,
         from_date: str | None = None, to_date: str | None = None) -> int:
     """raw→canonical×2→typed facts→supply events. 미지정 창은 보관 raw 전체다."""
+    parsed_from = date.fromisoformat(from_date) if from_date is not None else None
+    parsed_to = date.fromisoformat(to_date) if to_date is not None else None
+    if parsed_from is not None and parsed_to is not None and parsed_from > parsed_to:
+        raise ValueError("from_date must be on or before to_date")
+
     stages = (
         lambda: normalize_disclosure.run(
             storage, run_id, None, from_date=from_date, to_date=to_date),

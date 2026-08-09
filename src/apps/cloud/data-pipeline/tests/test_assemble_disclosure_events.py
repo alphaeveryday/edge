@@ -43,6 +43,8 @@ def test_typed_supply_fact_becomes_source_neutral_contract_identity():
     }
     assert {a["role_code"] for a in event["arguments"]} == {
         "SUPPLIER", "CUSTOMER", "CONTRACT_OBJECT", "EFFECTIVE_DATE"}
+    kinds = {a["role_code"]: a["entity_kind"] for a in event["arguments"]}
+    assert kinds["SUPPLIER"] == kinds["CUSTOMER"] == "COMPANY_ENTITY"
     by_role = {m["role_code"]: m for m in event["measures"]}
     assert by_role["CONTRACT_VALUE"]["value"] == 12_000_000_000
     assert by_role["CONTRACT_VALUE"]["unit"] == "KRW"
@@ -69,8 +71,8 @@ class _Cursor:
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
         self.conn.log.append((flat, params))
-        if flat.upper().startswith("SELECT SOURCE_EVENT_ID FROM SOURCE_EVENT"):
-            self.rows = [(value,) for value in self.conn.existing_events]
+        if flat.upper().startswith("SELECT SE.SOURCE_EVENT_ID"):
+            self.rows = list(self.conn.existing_events.items())
         elif flat.upper().startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self.rows = list(self.conn.assertions)
         elif flat.upper().startswith("SELECT SC.FACT_ID"):
@@ -93,7 +95,7 @@ class _Cursor:
 
 class _Conn:
     def __init__(self):
-        self.log, self.batches, self.existing_events = [], [], set()
+        self.log, self.batches, self.existing_events = [], [], {}
         self.fetched_facts = []
         assertion_id = stable_domain_id(
             "asrt", "doc_1", "COMPANY.CONTRACT.SIGNING", "SIGN")
@@ -118,7 +120,7 @@ def test_persist_writes_disclosure_event_lineage_and_threads(monkeypatch):
 
     result = assemble_disclosure_events.persist_facts(conn, [_fact()])
 
-    assert result == {"created": 1, "already": 0, "unknown_thread": 0,
+    assert result == {"created": 1, "already": 0, "rethreaded": 0, "unknown_thread": 0,
                       "skipped_required": 0}
     [source_event] = _batch(conn, "source_event")
     assert source_event[1] == "DISCLOSURE"
@@ -129,6 +131,25 @@ def test_persist_writes_disclosure_event_lineage_and_threads(monkeypatch):
         "CONTRACT_VALUE", "CONTRACT_DURATION"}
     assert len(_batch(conn, "event_evidence")) == 1
     assert threaded[0]["source_class"] == "DISCLOSURE"
+
+
+def test_existing_unknown_is_rethreaded_after_customer_resolution(monkeypatch):
+    """백필 전에 비상장/미해소였던 고객사가 나중에 actor→instrument로 붙으면 기존 UNKNOWN
+    링크를 재평가해야 한다. source event 존재만으로 skip하면 UNKNOWN에 영구 고정된다."""
+    conn = _Conn()
+    source_event_id = assemble_disclosure_events.to_canonical_event(_fact())["source_event_id"]
+    conn.existing_events[source_event_id] = "UNKNOWN"
+    threaded = []
+    monkeypatch.setattr(assemble_disclosure_events, "thread_events",
+                        lambda _conn, events: threaded.extend(events) or 0)
+
+    result = assemble_disclosure_events.persist_facts(conn, [_fact()])
+
+    assert result["created"] == 0 and result["rethreaded"] == 1
+    assert threaded[0]["role_values"]["CUSTOMER"] == "inst_customer"
+    assert _batch(conn, "source_event") == []
+    assert any(row[1] == "CUSTOMER" and row[2] == "inst_customer"
+               for row in _batch(conn, "event_argument"))
 
 
 def test_missing_required_identity_is_counted_without_blocking_valid_fact(monkeypatch):
@@ -180,8 +201,8 @@ def test_run_surfaces_required_identity_loss_in_quality_log(tmp_path, monkeypatc
                         lambda *_args, **_kwargs: [_fact(), _fact(document_id="bad")])
     monkeypatch.setattr(
         assemble_disclosure_events, "persist_facts",
-        lambda *_args, **_kwargs: {"created": 1, "already": 0, "unknown_thread": 0,
-                                  "skipped_required": 1})
+        lambda *_args, **_kwargs: {"created": 1, "already": 0, "rethreaded": 0,
+                                  "unknown_thread": 0, "skipped_required": 1})
 
     exit_code = assemble_disclosure_events.run(
         storage, "R1", db=DbConfig(password="x"),

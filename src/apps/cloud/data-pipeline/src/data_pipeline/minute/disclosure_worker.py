@@ -5,10 +5,10 @@
 선례다(`UNIVERSE_DATASETS` 밖). 다른 점 하나가 이 파일의 성격을 정한다:
 
     뉴스는 window 하나가 poll 하나다. **공시는 window 하나가 체인 전체다** —
-    collect → normalize(공급계약) → normalize(사업부문) → load. 사용자 결정(2026-08-08):
+    collect → normalize(공급계약) → normalize(사업부문) → load → assemble. 사용자 결정(2026-08-08):
     수집만 분 단위로 옮기는 게 아니라 체인 전체를 분 단위로 돌린다.
 
-그래서 `_process` 가 기존 **스텝 함수 4개를 직접 부른다**(CLI 가 아니다). CLI 를 부르지
+그래서 `_process` 가 기존 **스텝 함수 5개를 직접 부른다**(CLI 가 아니다). CLI 를 부르지
 않는 것이 `catalog.by_cli` 충돌을 애초에 안 만든다 — 같은 CLI 로 엔트리를 둘 만들면
 `by_cli` 가 먼저 온 쪽을 돌려줘 장중 런의 attempt 가 시장 레인 task_key 로 기록된다
 (`disclosure_pipeline.tf:13-19`). 워커는 스텝 **함수**를 부르므로 그 정체성 표에 안 든다.
@@ -160,7 +160,7 @@ def build_poll_manifest(
         # 관측 전량. 완전성 판정(런 사이 집합 비교)의 입력이자 window checksum 의 재료다.
         "rcept_nos": list(rcept_nos),
         "record_count": len(rcept_nos),
-        # 체인 4스텝의 종료 코드 — 어느 칸이 깨졌는지가 남지 않으면 INCOMPLETE 가
+        # 체인 5스텝의 종료 코드 — 어느 칸이 깨졌는지가 남지 않으면 INCOMPLETE 가
         # "무언가 안 됐다"로만 남는다(Rule 12).
         "step_exits": dict(sorted(step_exits.items())),
     }

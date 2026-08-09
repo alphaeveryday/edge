@@ -613,9 +613,9 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 
 공시 레인도 같은 형태로 **분리 중**이다 — `edge-dev-data-pipeline-disclosure`(ALPHA-722)가
 세워졌고 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
-LoadDisclosure` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개). 단 `LoadDisclosure` 만
-**컷오버 완료**(ALPHA-724): 시장 SFN 에서 공시 4스텝이 빠졌고 이 스케줄이 ENABLED 다 —
-공시는 이제 **이 레인에서만** 수집·정제·적재된다(15:40 런은 공시를 돌리지 않는다). 뉴스 레인이
+LoadDisclosure → AssembleDisclosureEvents` 를 돈다(부분집합 필터 재사용, 새 state 정의 0개).
+시장 SFN 에서 공시 체인이 빠졌고 이 스케줄이 ENABLED 다 — 공시는 이제 **이 레인에서만**
+수집·정제·적재·이벤트 조립된다(15:40 런은 공시를 돌리지 않는다). 뉴스 레인이
 PR1 에서 병행 세워 두고 PR2 에서 컷오버한 것과 같은 순서를 밟았다.
 
 ⚠️ `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
@@ -1532,7 +1532,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
 # 상주 Disclosure Worker(1분 파이프라인, ALPHA-875) — 공시를 매분 폴링한다. **수집만이 아니라
 # 체인 전체**를 한 window 에서 돈다: collect → normalize(공급계약) → normalize(사업부문)
-# → load. CLI 가 아니라 스텝 함수를 부르므로 `catalog.by_cli` 동시 소유 충돌이 없다.
+# → load → assemble. CLI 가 아니라 스텝 함수를 부르므로 `catalog.by_cli` 동시 소유 충돌이 없다.
 # 세션이 먼저 계획돼 있어야 한다(plan-minute-session --dataset disclosure_minute
 # --source-group dart — universe 없음. 격자는 08:00~20:00 720개 — DART 접수 07:30~18:00).
 # 엔드포인트·유형 필터 정본은 [dart_disclosure.source](배치와 공유), pacing·예산은
@@ -1546,6 +1546,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   python -m data_pipeline.run disclosure-worker --session-date 2026-08-07 --max-ticks 3
+# 보유한 DART raw 전체를 재처리한다. --from/--to 를 주면 접수일 기준 포괄 범위만 재처리한다.
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run backfill-disclosure --run-id dart-backfill-20260809
 # 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882) — 상주 서비스 9종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.

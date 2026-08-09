@@ -383,7 +383,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     ),
     # ══ 공시 레인 — 4작업을 **뺐다**(ALPHA-875 컷오버) ═══════════════════════════════
     # 공시는 이제 SFN 슬롯이 아니라 **1분 세션**이 소유한다(`disclosure-worker` — 한 window 가
-    # collect→normalize×2→load 체인 전체다). 그래서 이 레인의 계획·판정 근거가 사라졌다:
+    # collect→normalize×2→load→assemble 체인 전체다). 그래서 이 레인의 계획·판정 근거가 사라졌다:
     #
     # * 원장의 기대는 **슬롯**에서 나온다(`OPS_DISCLOSURE_SCHED_HHMM`). 1분 레인의 기대는
     #   `minute_ingestion_window` 720행이라 축이 다르다 — 두 원장이 같은 작업을 각자 기대하면

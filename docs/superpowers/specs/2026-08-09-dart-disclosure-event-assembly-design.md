@@ -32,8 +32,8 @@ typed supply facts and maps them to the existing ontology without an LLM:
 | event type | `COMPANY.CONTRACT.SIGNING` |
 | predicate | `SIGN` |
 | lifecycle stage | `DEFINITIVE_SIGNED` |
-| `SUPPLIER` | `disclosure_document.issuer_actor_id` |
-| `CUSTOMER` | resolved `counterparty_actor_id`; unresolved/withheld stays absent |
+| `SUPPLIER` | common-stock instrument mapped from `disclosure_document.issuer_actor_id` |
+| `CUSTOMER` | common-stock instrument mapped from resolved `counterparty_actor_id`; unresolved/withheld stays absent |
 | `CONTRACT_OBJECT` | deterministic concept minted from parsed contract object |
 | `CONTRACT_VALUE` | `contract_amount_krw`, KRW, `TOTAL` |
 | `CONTRACT_DURATION` | start/end dates |
