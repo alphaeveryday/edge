@@ -1064,14 +1064,18 @@ def thread_events(conn, events: list[dict]) -> int:
         opened_at = prev_row[4] if prev_row else event["available_at"]
         threads[thread_key] = (thread_id, thread_key, event["event_type_code"],
                                thread_stages.get(thread_key), opened_at, event["available_at"])
-        links.append((event["source_event_id"], thread_id, "NEWS", novelty, "TITLE_EVENT",
+        links.append((event["source_event_id"], thread_id,
+                      event.get("source_class", "NEWS"), novelty,
+                      event.get("link_type", "TITLE_EVENT"),
                       evaluated_at, None))
         snapshots.append((event["source_event_id"], thread_id, prior, None, prior == 0,
                           None, evaluated_at))
 
     for event, missing in unknown:
         reason = "missing required identity roles: " + ", ".join(missing)
-        links.append((event["source_event_id"], None, "NEWS", "UNKNOWN", "TITLE_EVENT",
+        links.append((event["source_event_id"], None,
+                      event.get("source_class", "NEWS"), "UNKNOWN",
+                      event.get("link_type", "TITLE_EVENT"),
                       evaluated_at, reason))
         snapshots.append((event["source_event_id"], None, None, None, None, reason, evaluated_at))
 
