@@ -176,6 +176,10 @@
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
+> ⚠️ **analysis-consumer 만 목록이 따로다**(ALPHA-910 — `MINUTE_SESSION_ANALYSIS_SERVICES`).
+> 수명은 공용과 같지만(07:45→1 · 20:05→0) 소유 축이 분리돼야 그 desired 를 오토스케일링에
+> 넘길 수 있다: 공용에 있으면 스케일러가 큐 깊이로 올린 값을 매일 밤 stop 이 덮어쓴다.
+> 승객 워커 목록과 달리 **토글이 없어** 빈 값은 미편입이 아니라 배선 결손이다(fail-loud).
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
 > (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
 > `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는
@@ -1647,6 +1651,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
@@ -1663,6 +1668,7 @@ MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
+MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \

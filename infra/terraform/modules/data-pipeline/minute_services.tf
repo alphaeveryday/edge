@@ -32,7 +32,7 @@ locals {
   }
 
   # 세션 종료 게이트가 보는 큐 = realtime 큐 2종. 설명 큐(price-explanation-realtime,
-  # 소비자=analysis-consumer ALPHA-719)를 넣지 않는 이유는 아래 MINUTE_SESSION_SERVICES
+  # 소비자=analysis-consumer ALPHA-719)를 넣지 않는 이유는 아래 MINUTE_SESSION_ANALYSIS_SERVICES
   # 주석 — 지연 재배달의 비가시 메시지가 게이트 깊이에 잡혀 스케일다운을 막는다.
   # backfill 큐를 넣으면 밤 backlog 하나가 상주 서비스 **전체**의 스케일다운을 막는다
   # (스케일 단위가 서비스 전체).
@@ -349,8 +349,9 @@ resource "aws_iam_role_policy" "minute_session" {
       {
         Effect = "Allow"
         Action = ["ecs:UpdateService"]
-        # ⚠️ analysis_consumer 포함 — MINUTE_SESSION_SERVICES 에 있는데 여기 빠지면
-        # 아침 스케일업이 AccessDenied 로 죽어 레인 전체가 안 뜬다(목록과 같은 축).
+        # ⚠️ analysis_consumer 포함 — MINUTE_SESSION_ANALYSIS_SERVICES 로 스케일 대상인데
+        # 여기 빠지면 아침 스케일업이 AccessDenied 로 죽어 레인 전체가 안 뜬다(목록과 같은
+        # 축). 공용이든 자기 목록이든 **스케일 대상이면 여기 있어야 한다**.
         Resource = concat(
           [for service in aws_ecs_service.minute : service.id],
           [aws_ecs_service.analysis_consumer.id],
@@ -400,20 +401,25 @@ resource "aws_ecs_task_definition" "minute_session" {
       # ⚠️ 세션 결속 생산자(local.session_bound_workers — news-worker·disclosure-worker·inav-worker)는 공용
       # 목록에서 뺀다 — 자기 세션 계획이 **성공한 날만** 올린다(실패 날 올리면 세션 부재
       # 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음). 각자 아래 자기 목록으로 간다.
-      # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
-      # analysis-consumer(ALPHA-719)도 세션 결속이다 — 트리거는 장중에만 발생하고,
-      # ReturnsNotReady 는 분봉 입력의 120초 재시도(ALPHA-710)라 세션 안에 풀린다. ⚠️설명 큐는
-      # stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트 깊이에 잡혀
-      # 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일) 안에서 다음
-      # 세션이 집는다.
+      # 뉴스 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
       # ⚠️ 공시도 같은 이유로 공용 목록에서 뺀다(ALPHA-875) — 제외 목록을 로컬 하나로
       # 둔다: 서비스를 늘리며 여기 한쪽만 빠뜨리면 그 Worker 가 세션 없는 날도 떠서
       # 기동 거부 루프를 돈다(뺀 축과 올리는 축이 갈리면 안 된다).
-      MINUTE_SESSION_SERVICES = join(",", concat(
-        [for key, service in aws_ecs_service.minute : service.name
-        if !contains(local.session_bound_workers, key)],
-        [aws_ecs_service.analysis_consumer.name],
-      ))
+      MINUTE_SESSION_SERVICES = join(",", [
+        for key, service in aws_ecs_service.minute : service.name
+        if !contains(local.session_bound_workers, key)
+      ])
+      # analysis-consumer(ALPHA-719)는 **자기 목록**으로 간다(ALPHA-910). 세션 결속이라는
+      # 성질은 그대로다(트리거는 장중에만 발생하고, ReturnsNotReady 는 분봉 입력의 120초
+      # 재시도(ALPHA-710)라 세션 안에 풀린다) — 바뀌는 건 소유 축 하나뿐이고 시각도
+      # 그대로다(07:45→1 · 20:05→0). 공용에 두면 오토스케일링을 붙여도 무효다: 스케일러가
+      # 큐 깊이로 올린 desired 를 세션 stop 이 매일 밤 0 으로 덮어쓴다.
+      # ⚠️ 여기 싣는 것과 공용에서 빼는 것이 **짝**이다 — 빼고 안 실으면 아무도 안 올려
+      # 장중 설명이 하루 통째로 안 난다(세션 결속 생산자와 같은 축, 대가만 더 크다).
+      # ⚠️ 설명 큐는 stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트
+      # 깊이에 잡혀 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일)
+      # 안에서 다음 세션이 집는다.
+      MINUTE_SESSION_ANALYSIS_SERVICES          = aws_ecs_service.analysis_consumer.name
       MINUTE_SESSION_NEWS_WORKER_SERVICES       = aws_ecs_service.minute["news-worker"].name
       MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES = aws_ecs_service.minute["disclosure-worker"].name
       MINUTE_SESSION_INAV_WORKER_SERVICES       = aws_ecs_service.minute["inav-worker"].name
