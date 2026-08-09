@@ -807,6 +807,67 @@ def test_선택레인_토글_env_이름이_terraform_과_일치한다():
             f"{lane.dataset} 워커 목록 env 가 terraform 에 없다: {lane.services_env}"
 
 
+# 배선이 CD 목록보다 한 배포 앞선 서비스 — **비어 있는 것이 정상 상태다**.
+# 이미지 CD(deploy-data-pipeline.yml)와 terraform-apply 는 독립 워크플로라 순서 보장이
+# 없다. 새 상주 서비스를 같은 PR 에서 CD 목록에 넣으면, CD 가 apply 를 앞지른 창에서
+# `describe-services` 가 **AccessDenied**(배포 역할이 terraform output 으로 스코프된다)로
+# 떨어져 **멀쩡한 이미지 배포가 통째로 막힌다**. 그래서 레포 규약은 apply 착지를 확인한
+# 뒤 후속 PR 로 목록을 채우는 것이다(워크플로 주석 · ALPHA-882→890 이 그 순서였다).
+# ⚠️ 여기 이름을 올리면 아래 **만료 단언**이 회수를 강제한다 — 목록에 들어가는 순간
+# 이 유예가 스스로 실패하므로, 후속 PR 을 잊는 경로가 없다(ALPHA-610 이 만든 형태).
+_CD_ROLL_PENDING_APPLY = {"sector-index-worker"}  # ALPHA-887 — apply 착지 후 후속 PR
+
+
+def test_CD_롤링_목록이_상주_서비스_맵과_짝이다():
+    """⚠️ **같은 누락이 세 번 났다** — ALPHA-875·882, 그리고 ALPHA-887(이 검사를 만든 계기).
+
+    `deploy-data-pipeline.yml` 의 롤링 대상 목록은 `local.minute_services` 맵과 짝인데,
+    서비스를 늘리면서 목록을 안 늘리면 **그 서비스만 옛 이미지로 남는다**. 장중에
+    desired_count=1 인 채 이미지를 푸시하면 force-new-deployment 를 못 받아 수정이
+    다음 세션까지 반영되지 않는다. 워크플로 주석이 이 위험을 이미 문장으로 적어
+    뒀는데도 세 번째가 났다 — **주석은 가드가 아니다**. 그래서 값으로 못박는다.
+
+    ⚠️ 다만 **같은 PR 에서 채우라는 뜻이 아니다**(그러면 CD 가 apply 를 앞질러 하드
+    실패한다 — `_CD_ROLL_PENDING_APPLY` 주석). 이 검사가 강제하는 것은 "빠뜨리지
+    마라"가 아니라 **"빠진 것을 선언해라"** 이고, 선언은 만료 단언이 회수한다.
+
+    `analysis-consumer` 는 제외다 — 이미지도 CD 워크플로도 다르다(주석의 선언).
+    """
+    from pathlib import Path as _P
+    here = _P(__file__).resolve()
+    rel_tf = "infra/terraform/modules/data-pipeline/minute_services.tf"
+    rel_wf = ".github/workflows/deploy-data-pipeline.yml"
+    try:
+        root = next(p for p in here.parents if (p / rel_tf).exists() and (p / rel_wf).exists())
+    except StopIteration:
+        pytest.skip("저장소 체크아웃에서만 도는 계약 검사")
+
+    import re
+    tf = (root / rel_tf).read_text()
+    # `minute_services = {` 블록 안의 최상위 키 — 들여쓰기 4칸이 서비스 이름이다.
+    block = re.search(r"\n  minute_services = \{\n(.*?)\n  \}\n", tf, re.S)
+    assert block, "minute_services 맵을 못 찾았다 — 이 계약 검사가 헛돌고 있다"
+    services = set(re.findall(r"^    ([a-z0-9-]+) = \{$", block.group(1), re.M))
+    assert len(services) >= 5, f"서비스 파싱이 깨졌다: {services}"
+
+    wf = (root / rel_wf).read_text()
+    rolled = set(re.findall(r"edge-dev-data-pipeline-([a-z0-9-]+)", wf))
+
+    # 만료 단언 — 목록에 이미 들어간 이름이 유예에 남아 있으면 그 유예가 낡은 것이다.
+    # 이게 없으면 유예가 영구화되고 이 검사는 그 서비스에 대해 영영 눈을 감는다.
+    stale = _CD_ROLL_PENDING_APPLY & rolled
+    assert not stale, (
+        f"만료된 유예다 — {sorted(stale)} 는 이미 CD 목록에 있다. "
+        f"_CD_ROLL_PENDING_APPLY 에서 지워 이 검사를 되살려라"
+    )
+    missing = services - rolled - _CD_ROLL_PENDING_APPLY
+    assert not missing, (
+        f"상주 서비스가 CD 롤링 목록에 없다: {sorted(missing)} — 장중 이미지 푸시에서 "
+        f"그 서비스만 옛 이미지로 남는다. apply 가 아직이면 _CD_ROLL_PENDING_APPLY 에 "
+        f"티켓과 함께 선언하고, 착지 뒤 후속 PR 로 목록을 채워라"
+    )
+
+
 def test_세션결속_생산자는_공용_스케일_목록에서_빠진다():
     """공용 목록에 남으면 **그 세션이 안 선 날에도** 올라가 기동 거부 재기동 루프를
     돈다(비용·알람 소음). 선택 레인 Worker 는 자기 목록으로만 올라간다.

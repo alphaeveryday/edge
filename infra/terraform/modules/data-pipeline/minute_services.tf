@@ -442,9 +442,9 @@ resource "aws_ecs_task_definition" "minute_session" {
         if !contains(local.session_bound_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
-      MINUTE_SESSION_NEWS_WORKER_SERVICES       = aws_ecs_service.minute["news-worker"].name
-      MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES = aws_ecs_service.minute["disclosure-worker"].name
-      MINUTE_SESSION_INAV_WORKER_SERVICES       = aws_ecs_service.minute["inav-worker"].name
+      MINUTE_SESSION_NEWS_WORKER_SERVICES         = aws_ecs_service.minute["news-worker"].name
+      MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES   = aws_ecs_service.minute["disclosure-worker"].name
+      MINUTE_SESSION_INAV_WORKER_SERVICES         = aws_ecs_service.minute["inav-worker"].name
       MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES = aws_ecs_service.minute["sector-index-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
