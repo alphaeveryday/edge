@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import signal
+import time
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -280,6 +281,19 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
     def _count(key: str) -> None:
         totals[key] = totals.get(key, 0) + 1
 
+    def _finish(outcome: str, started: float, event_type: str | None) -> None:
+        """메시지 하나의 **점유 시간**을 남긴다 — 규모 산정의 유일한 입력이다(ALPHA-908).
+
+        ⚠️ 성공 경로만 재면 안 된다. `deferred`·`locked`·`failed` 는 소요 프로파일이 전혀
+        다르고 그쪽이 대부분인 날이 있는데, 그 날의 대수는 성공분만으로 정할 수 없다 —
+        큐를 점유한 시간은 결과와 무관하게 대수를 요구한다. `idle` 만 빠진다(점유가 없다).
+        event_type 을 함께 남기는 이유: 회수(ExposureReverted)는 API 한 번이고 설명 생성은
+        LLM 다단이라, 섞으면 분포가 두 봉우리가 돼 백분위가 무의미해진다.
+        """
+        _count(outcome)
+        log("consumer.message", outcome=outcome, event_type=event_type,
+            elapsed_s=round(time.monotonic() - started, 2))
+
     while (max_polls is None or polls < max_polls) and not stopping["flag"]:
         polls += 1
         response = sqs.receive_message(
@@ -291,13 +305,16 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             continue
         message = messages[0]
         receipt = message["ReceiptHandle"]
+        # 점유의 시작은 **수신 직후**다 — 파싱·가시성 연장도 이 메시지가 소비자를 잡고 있는
+        # 시간이라, 처리 호출만 재면 대수 산정이 실제 점유보다 짧게 나온다.
+        started = time.monotonic()
         try:
             event_type, payload = parse_message(message.get("Body", ""))
         except ValueError:
             # 계약 위반 — 재시도로 낫지 않지만 **지우지도 않는다**: 지우면 무엇이 왔는지가
             # 사라진다. 기본 가시성으로 재배달되다 maxReceiveCount 에서 DLQ 로 격리된다.
             logger.exception("봉투 계약 위반 — 지우지 않고 남긴다(DLQ 가 근거 보존)")
-            _count("malformed")
+            _finish("malformed", started, None)
             continue
         # 처리 예산만큼 가시성을 먼저 늘린다 — 기본 300초 안에 LLM 처리가 안 끝나면
         # 재배달본이 프리플라이트를 통과해 이중 과금된다(위 상수 주석).
@@ -316,7 +333,7 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             logger.info("returns 미준비 — %d초 뒤 재시도: trigger=%s reason=%s",
                         RETURNS_RETRY_SECONDS, payload.get("trigger_id"), error)
             _set_visibility(sqs, queue_url, receipt, RETURNS_RETRY_SECONDS)
-            _count("deferred")
+            _finish("deferred", started, event_type)
             continue
         except RouteLockedError as error:
             # 같은 메시지가 두 번 배달됐고 이 쪽이 졌다 — 실패가 아니라 양보다(ALPHA-779).
@@ -330,7 +347,7 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             logger.info("route 선점당함 — %d초 뒤 재확인: %s",
                         PROCESSING_VISIBILITY_SECONDS, error)
             _set_visibility(sqs, queue_url, receipt, PROCESSING_VISIBILITY_SECONDS)
-            _count("locked")
+            _finish("locked", started, event_type)
             continue
         except Exception:
             # 일시 장애(DB·LLM·네트워크) — 가시성을 되돌려 빨리 재배달한다(연장분을
@@ -338,10 +355,10 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             logger.exception("%s 처리 실패 — 재배달된다: %s", event_type,
                              payload.get("trigger_id") or payload.get("entity_id"))
             _set_visibility(sqs, queue_url, receipt, 60)
-            _count("failed")
+            _finish("failed", started, event_type)
             continue
         sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-        _count(outcome)
+        _finish(outcome, started, event_type)
 
     log("consumer.stop", polls=polls, **totals)
     # 계약 위반·처리 실패는 성공으로 접지 않는다 — 상주 모드에선 로그·DLQ 로 드러나고,

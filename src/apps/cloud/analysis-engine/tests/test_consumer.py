@@ -114,6 +114,30 @@ def test_returns_not_ready_defers_without_delete(caplog):
         "사유 없이 고정 문구만 남으면 네 갈래를 로그로 못 가린다")
 
 
+def test_every_disposition_is_timed(capsys):
+    """메시지의 **점유 시간**은 결과와 무관하게 남아야 한다(ALPHA-908).
+
+    이 로그가 오토스케일링 대수 산정의 유일한 입력인데, 성공 경로만 재면 분포가 성공
+    편향된다 — deferred(재확인 대기)·malformed 는 소요가 짧고 failed 는 길어서, 그쪽이
+    대부분인 날의 대수를 성공분만으로 정하면 실제 점유보다 작게 나온다. 그래서 고정하는
+    것은 "성공에 elapsed_s 가 있다"가 아니라 **어느 갈래로 끝나도 한 줄이 남는다**는 것이다.
+    """
+    def by_trigger(trigger_id):
+        if trigger_id == "t1":
+            raise ReturnsNotReadyError("분모 파티션 없음")
+        return "explained"
+
+    sqs = FakeSqs(["{ 깨진 봉투", envelope("t1"), envelope("t2")])
+    consume_triggers("q", max_polls=3, process_fn=by_trigger, sqs_client=sqs)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if json.loads(line).get("event") == "consumer.message"]
+    assert [e["outcome"] for e in events] == ["malformed", "deferred", "explained"]
+    assert all(isinstance(e["elapsed_s"], float) for e in events), (
+        "한 갈래라도 시간이 안 남으면 그 갈래는 규모 산정에서 통째로 빠진다")
+    # 회수(API 한 번)와 설명 생성(LLM 다단)이 섞이면 백분위가 두 봉우리로 무의미해진다
+    assert [e["event_type"] for e in events[1:]] == ["PriceTriggerFired"] * 2
+
+
 def test_generic_failure_leaves_message_and_fails_bounded_run():
     """일시 장애는 지우지 않고 가시성을 되돌려 재배달 — bounded 검증에선 exit 1
     (소비 경로가 통째로 죽은 환경이 초록으로 보이면 안 된다)."""
