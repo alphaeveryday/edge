@@ -18,7 +18,12 @@ export type FactSource =
 
 export interface RunFact {
   id: string;
-  lane: string;
+  /**
+   * 레인(`pipeline_type`). **`null` 이 정상 도달값이다** — 런 행이 없는 계획 슬롯은 레인을
+   * `run_key` 에서 파싱하는데, 형식이 갈리면 서버가 지어내지 않고 `null` 을 준다(B1).
+   * 메우지 마라: 잘못 자른 조각을 레인 이름이라고 우기는 쪽이 더 나쁘다.
+   */
+  lane: string | null;
   /**
    * 정규·수동·백필. **계측이 없어 실 응답에는 이 필드가 없다**(계약 §축별 소스) — 그래서 옵셔널이다.
    *
@@ -27,7 +32,12 @@ export interface RunFact {
    * 놓친다(P0 거짓 음성). 읽는 쪽은 셋이 아니라 **넷**으로 갈라야 한다 — 넷째가 '미기록'이다.
    */
   kind?: 'scheduled' | 'manual' | 'backfill';
-  trading_date: string;
+  /**
+   * 거래일. **`null` 이 정상 도달값이다** — 비거래일 런은 원장에서 이 컬럼이 NULL 이고,
+   * 서버는 그 런을 계획 시각의 KST 날짜로 창에 잡아 그대로 내린다(B1). 요청일로 메우면
+   * 원장에 없는 거래일을 지어내는 것이고, 그 런을 빼면 그날 실패한 런이 R04 에서 사라진다.
+   */
+  trading_date: string | null;
   ledger_status?: string | null;
   ledger_updated?: string | null;
   aws_status?: string | null;
@@ -45,7 +55,8 @@ export interface TaskFact {
   run_id: string;
   run_key?: string;
   pipeline_type: string;
-  trading_date?: string;
+  /** 그 런의 거래일 — 런과 같은 이유로 `null` 이 정상 도달값이다(비거래일 런의 작업). */
+  trading_date?: string | null;
   stage: string;
   dataset?: string | null;
   required: boolean;
@@ -131,7 +142,13 @@ export interface OutputFact {
 
 export interface BoundaryFact {
   published_without_delivery: number;
+  /**
+   * 발번됐는데 현재 비게시 — **무효화 통지가 안 간 것만** 센다. 운영자 무효화는 NEW 행을 남긴 채
+   * WITHDRAWN 전이 + INVALIDATION 발번만 하므로, 상태만 세면 정상 무효화가 P0 로 영구히 쌓인다(B1).
+   */
   delivery_now_nonpublished: number;
+  /** 전달 원장 누적 행 수 — 표시용. 판정에 안 쓴다 */
+  delivery_rows?: number;
   sync_cursor_rows?: number;
   seed_note?: string;
 }
@@ -224,7 +241,13 @@ export interface Facts {
   runs: RunFact[];
   tasks: TaskFact[];
   datasets: DatasetFact[];
-  chain: { feeds: ChainFeed[]; stages: ChainStage[] };
+  /**
+   * 흐름 단계 집계 — **계측이 없어 실 응답에 이 축이 없다**(계약 §축별 소스). 그래서 옵셔널이다.
+   *
+   * ⚠️ 빈 객체(`{feeds:[],stages:[]}`)로 메우지 마라 — 계측 없음이 실측 0 으로 위조되고,
+   * R10 이 `못 돎` 대신 `평가됨 · 위반 0`("손실 없음")을 선다. 읽는 쪽이 부재를 다뤄야 한다.
+   */
+  chain?: { feeds: ChainFeed[]; stages: ChainStage[] };
   queues?: QueueFact[];
   outputs: OutputFact[];
   boundary: BoundaryFact;
@@ -236,9 +259,18 @@ export interface Facts {
    * evaluated:false 다 — "위반 0건"이 아니라 "못 돌았다"로 남는다.
    */
   minute?: MinuteFacts;
-  /** `"R05.LOAD_DOCUMENTS"` 또는 `"R15"` 키 → 조치. 없으면 "런북 미등록" */
-  runbook: Record<string, RunbookEntry>;
-  meta: { db: string; aws: string; today: string };
+  /**
+   * `"R05.LOAD_DOCUMENTS"` 또는 `"R15"` 키 → 조치. 없으면 "런북 미등록".
+   *
+   * **실 응답에 이 축이 없다** — 레지스트리 계약 1건의 `runbook_uri` 가 `None` 이라 서버가
+   * 안 보낸다. 첨자 접근(`f.runbook[k]`)이라 부재면 그 자리에서 죽으므로 읽는 쪽이 가드한다.
+   */
+  runbook?: Record<string, RunbookEntry>;
+  /**
+   * `aws` 는 AWS 제어면 관측 시각 — **미배선이라 실 응답에 없다**(C 축). 붙으면 `awsUnavailable`·
+   * `awsUnobservedRuns` 와 함께 온다. `today` 는 "원장이 아는 가장 최근 날"이지 거래일이 아니다.
+   */
+  meta: { db: string; aws?: string | null; today: string };
   [extra: string]: unknown;
 }
 

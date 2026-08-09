@@ -28,6 +28,24 @@ function emptyFacts(): Facts {
   };
 }
 
+/**
+ * **옵셔널 축을 전부 뺀** 사실 — 실 응답의 최소 형상이다(계약 §「무엇이 실제로 나가는가」:
+ * 서버가 `chain`·`queues`·`etf_ledger`·`runbook`·`meta.aws` 를 안 보낸다).
+ *
+ * 빼는 목록을 각 테스트가 손으로 적으면 축이 하나 늘 때 한 곳만 갱신된다 — 이 트랙에서 반복된
+ * 모양이라 자리를 하나로 둔다. `Facts` 에 옵셔널 축이 새로 생기면 여기에 더해라.
+ */
+function bareFacts(): Facts {
+  const f = emptyFacts();
+  delete f.chain;
+  delete f.queues;
+  delete f.etf_ledger;
+  delete f.minute;
+  delete f.runbook;
+  delete f.meta.aws;
+  return f;
+}
+
 const run = (o: Partial<RunFact>): RunFact => ({
   id: 'lane:2026-08-03T15:40',
   lane: 'lane',
@@ -551,7 +569,7 @@ test('축이 통째로 없어도 평가는 산다 — `canRun` 은 evaluated 와
   assert.equal(rep.rules.find((r) => r.id === 'R01')!.evaluated, true);
 });
 
-test('R14 전달 정합 — 게시·미발번은 P0, 시드 유래 비게시 전달은 P2+seed 로 강등', () => {
+test('R14 전달 정합 — 두 방향 다 P0 다. 시드 기록은 표시일 뿐 심각도를 내리지 않는다', () => {
   const f = emptyFacts();
   f.boundary = {
     published_without_delivery: 2,
@@ -564,16 +582,34 @@ test('R14 전달 정합 — 게시·미발번은 P0, 시드 유래 비게시 전
    * `assertContract` 는 이걸 못 잡는다(엔진이 target 으로 폴백해 늘 채워진다) */
   assert.deepEqual(v.map((x) => x.targetId), ['pub_no_delivery', 'delivery_nonpub']);
   assert.equal(v[0].sev, 'P0');
-  assert.equal(v[1].sev, 'P2');
-  assert.equal(v[1].seed, true);
+  /* 🔴 **시드 기록이 있어도 강등하지 않는다.** 이 값은 **합계**이고 `seed_note` 는 그중 일부를
+   * 설명하는 문장일 뿐이다 — "전량 시드"라는 불변식은 타입에도 계약에도 없어서, 시드 1건이 남은
+   * 채 진짜 누락 1건이 더해지면 합계 2 를 통째로 P2 로 내린다(리뷰 2라운드). 표시는 남기고
+   * 심각도는 규칙 기본값을 쓴다. */
+  assert.equal(v[1].sev, 'P0', '시드 기록을 근거로 심각도를 내렸다');
+  /* 출처 표시(`seed`)도 안 붙인다 — `buildReport` 가 그걸 `source: 'SEED'` 로 내보내고 화면은
+   * "운영 데이터가 아니다"라고 설명한다. 합계 중 일부만 시드일 수 있으니 전체를 그렇게 부를 수
+   * 없다. 기록은 사유에 **덧붙여** 나른다: 규칙의 판정이 앞, 기록이 뒤. */
+  assert.notEqual(v[1].seed, true, '합계 전체를 시드 출처로 덮었다');
+  assert.match(v[1].why, /무효화 통지/, '규칙의 판정 사유가 기록에 밀려났다');
+  assert.match(v[1].why, /로컬 시드\(WITHDRAWN\)/, '시드 기록이 사유에서 사라졌다');
   f.boundary = { published_without_delivery: 0, delivery_now_nonpublished: 0 };
   assert.equal(hits(f, 'R14').length, 0);
 
-  /* seed_note 가 없는 사실 — 시드가 걷히면 실제로 이 모양이 된다. `why` 는 규약 이후 문맥의
-   * 유일한 운반자라 비면 상세·ⓘ 의 '왜'가 통째로 빈다. 이 케이스가 없으면 `assertContract` 의
-   * why 단언이 **자기가 막으려는 결함을 못 잡는다**(픽스처·스냅샷 둘 다 seed_note 를 준다). */
+  /* 🔴 **시드가 걷히면 강등도 걷혀야 한다.** `seed_note` 는 이 수가 로컬 시드 유래라는 사실의
+   * 유일한 신호다 — 없는데도 `seed: true`·`sev: 'P2'` 를 붙이면, 실 응답의 "무효화 통지가 안 간
+   * 발번"(진짜 P0 정합 위반)이 SEED 칩을 단 P2 로 강등돼 조용해진다.
+   *
+   * 이 케이스가 `why` 문구만 검사하던 동안은 그 강등을 **거부하지 못했다**(리뷰가 잡았다) —
+   * 픽스처·스냅샷이 둘 다 `seed_note` 를 줘서 강등 분기가 늘 참이었기 때문이다. */
   f.boundary = { published_without_delivery: 0, delivery_now_nonpublished: 1 };
-  assert.match(hits(f, 'R14')[0].why, /기록이 없다/, '기록 부재를 사유 없음으로 그리지 않는다');
+  const bare = hits(f, 'R14')[0];
+  assert.equal(bare.sev, 'P0', '시드 기록이 없는데 P2 로 강등했다');
+  assert.notEqual(bare.seed, true, '시드 기록이 없는데 SEED 로 표시했다');
+  /* `why` 는 규약 이후 문맥의 유일한 운반자라 비면 상세·ⓘ 의 '왜'가 통째로 빈다.
+   * 문장은 서버가 실제로 세는 것과 같아야 한다 — B1 은 무효화 통지가 안 간 발번만 센다. */
+  assert.match(bare.why, /무효화 통지/, '실제로 세는 것과 다른 사유를 쓴다');
+  assert.ok(!bare.why.includes('기록:'), '기록이 없는데 기록 문구가 붙었다');
 });
 
 test('R15 ETF 분석 실패 — FAILED 행들이 위반 1건으로 집계되고 목록이 남는다', () => {
@@ -960,7 +996,7 @@ test('리포트 — evaluated:false 와 violations:0 이 구분되고, 흡수 �
   assert.equal(rep.incidents[0].members[0].cause, '런이 죽어 작업이 귀결되지 못했다');
 });
 
-test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (레퍼런스 v4 와 동일해야 한다)', async () => {
+test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 6 (레퍼런스 v4 대비 R14 강등 제거분 +1)', async () => {
   const { readFileSync } = await import('node:fs');
   const facts = JSON.parse(
     readFileSync(new URL('./facts-snapshot.json', import.meta.url), 'utf8'),
@@ -971,7 +1007,14 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
   ev.violations.forEach(assertContract);
   assert.equal(ev.violations.length, 29);
   assert.equal(ev.incidents.length, 20);
-  assert.equal(ev.incidents.filter((i) => i.sev === 'P0').length, 5);
+  /* 5 → 6 은 **회귀가 아니라 정정**이다(ALPHA-738 B2a). R14 가 비게시 발번을 `seed_note` 만 보고
+   * P2 로 강등하던 것을 없앴다 — 그 값은 **합계**라 "전량 시드"를 가정할 수 없고, 실 응답에서 그
+   * 수는 "무효화 통지가 안 간 발번"이라 진짜 P0 다.
+   * ⚠️ `seed` 표시도 함께 뺐다(`buildReport` 가 그걸 `source: 'SEED'` 로 내보내 합계 전체를
+   * "운영 데이터가 아니다"로 만든다). 시드임을 말하는 것은 이제 `why` 에 덧붙는 기록 문장뿐이고,
+   * 화면(`DeliveryPage`)도 같은 이유로 그 행의 SEED 칩을 뺐다 — **TSX 라 단언이 없다**(이 앱에
+   * 컴포넌트 테스트가 없다). 칩이 되살아나도 이 스위트는 통과하므로 손으로 봐야 한다. */
+  assert.equal(ev.incidents.filter((i) => i.sev === 'P0').length, 6);
   // 뉴스 런 타임아웃 사건이 연쇄 +7 로 병합된다 (명세 §2-2의 예시 그대로)
   const news = ev.incidents.find((i) => i.root.targetId === 'news:2026-08-03T15:30');
   /* `!` 로 넘기면 실패가 다음 줄의 TypeError 로 나와 무엇이 틀렸는지 안 읽힌다 */
@@ -997,7 +1040,10 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 29 · 사건 20 · P0 5 (�
    * 걸린 위반의 런북 등록은 아래 목록 갱신을 요구한다(29건 중 21건이 `런북 미등록` 이라
    * 그쪽이 더 잦은 편집이다 — 실패는 읽히는 deepEqual diff 다). */
   const produced = new Set(ev.violations.map((v) => `${v.rule}.${v.targetId}`));
-  const matched = Object.keys(facts.runbook).filter((k) => k.includes('.') && produced.has(k));
+  /* 축이 옵셔널이 됐다 — 스냅샷에는 있지만 실 응답에는 없다. `?? {}` 로 접는 것은 여기서만
+   * 옳다(이 단언의 대상은 "등록된 런북과 실제 위반이 맞는가"이고, 축 부재는 그 물음의 답이
+   * 빈 집합인 상태다). 판정 층에서 같은 폴백을 쓰면 부재와 실측이 섞인다. */
+  const matched = Object.keys(facts.runbook ?? {}).filter((k) => k.includes('.') && produced.has(k));
   assert.deepEqual(matched.sort(), [
     'R05.ASSEMBLE_EVENTS',
     'R05.LOAD_DOCUMENTS',
@@ -1051,15 +1097,74 @@ test('모든 규칙의 `note` 는 축이 빈 사실에서도 죽지 않는다 �
    *
    * 규칙 하나를 골라 단언하지 않고 **집합 전체**를 돈다: 손으로 유지되는 목록은 반드시 낡고,
    * 새로 붙는 규칙은 아무도 안 본다. 축이 빈 사실은 `emptyFacts()` 다(옵셔널 축은 아예 뺀다). */
-  const bare = emptyFacts();
-  delete bare.queues;
-  delete bare.etf_ledger;
-  delete bare.minute;
+  const bare = bareFacts();
   const withNote = RULES.filter((R) => R.note);
   assert.ok(withNote.length >= 1, 'note 를 가진 규칙이 사라졌다 — 이 단언이 헛돈다');
   for (const R of withNote) {
     assert.doesNotThrow(() => R.note!(bare), `${R.id}: note 가 없는 축을 읽는다`);
   }
+});
+
+test('모든 규칙의 `canRun` 은 축이 빈 사실에서도 죽지 않는다 — 여기서 죽으면 19규칙이 통째로 사라진다', () => {
+  /* 🔴 `canRun` 은 `evaluated` 와 **무관하게 모든 규칙에 대해 무조건** 불린다. 옵셔널 축을 읽는
+   * `canRun` 이 하나라도 죽으면 그 규칙만이 아니라 **평가 전체**가 사라진다 — 화면이 아니라
+   * 흰 화면이다. `note` 진입점과 같은 종류이고, 그래서 같은 형태의 집합 순회를 둔다. */
+  const bare = bareFacts();
+  const withCanRun = RULES.filter((R) => R.canRun);
+  assert.ok(withCanRun.length >= 1, 'canRun 을 가진 규칙이 사라졌다 — 이 단언이 헛돈다');
+  for (const R of withCanRun) {
+    assert.doesNotThrow(() => R.canRun!(bare), `${R.id}: canRun 이 없는 축을 읽는다`);
+  }
+});
+
+test('옵셔널 축이 없는 응답에서 그 축의 규칙은 `평가됨 · 위반 0` 이 아니라 `못 돎` 이다', () => {
+  /* 이 테스트가 지키는 것은 "안 죽는다"가 아니라 **판정의 방향**이다. 축이 없는데 조용히
+   * `평가됨 · 위반 0` 이 서면 계측 공백이 "봤고 괜찮다"로 그려진다 — 이 콘솔이 없애려는 칸
+   * 혼동 그 자체이고, 널 가드를 `?? []` 로 넣으면 정확히 그 상태가 된다. */
+  const ev = evaluate(bareFacts());
+  const byId = new Map(ev.rules.map((r) => [r.id, r]));
+  for (const id of ['R03', 'R10', 'R11', 'R12', 'R13', 'R15', 'R16']) {
+    const r = byId.get(id);
+    assert.ok(r, `${id} 가 리포트에 없다`);
+    assert.equal(r!.evaluated, false, `${id}: 축이 없는데 평가됐다고 선다`);
+    assert.equal(r!.notRun, 'axis', `${id}: 못 돎의 종류가 축 부재가 아니다`);
+  }
+  /* 축이 없어도 도는 규칙은 그대로 돌아야 한다 — 전부 못 돎으로 만들면 이 단언은 통과하지만
+   * 콘솔이 아무것도 판정하지 않는다(반대 방향 오류). */
+  assert.equal(byId.get('R01')!.evaluated, true, 'R01 은 원장만으로 돈다');
+  assert.equal(byId.get('R14')!.evaluated, true, 'R14 는 원장만으로 돈다');
+});
+
+test('축이 빈 응답에서 부재를 값으로 위조하지 않는다 — 런북 조회·리포트 시각·문장', () => {
+  /* 여기 셋은 **전부 컴파일러가 안 잡는 자리**다. `runbook` 은 첨자 접근이라 부재면 죽고,
+   * `as_of.aws` 는 타입이 문자열이면 아무 시각으로나 메울 수 있고, `why` 의 템플릿 리터럴은
+   * `null` 을 `"null"` 로 렌더한다. 단언이 없으면 전부 조용히 통과한다. */
+  const bare = bareFacts();
+
+  // ① 런북 축이 없으면 조회는 **죽지 않고** "등록 없음"이다.
+  const anyViolation = { rule: 'R05', targetId: 'X' } as Violation;
+  assert.doesNotThrow(() => runbookOf(bare, anyViolation), 'runbook 축이 없으면 조회가 죽는다');
+  assert.equal(runbookOf(bare, anyViolation), undefined);
+
+  // ② 관측 시각이 없으면 `null` 이다 — DB 시각으로 메우면 관측 안 한 시점을 관측했다고 말한다.
+  const rep = buildReport(bare);
+  /* 축이 **없으면 키도 없다**(미배선). `null` 로 접으면 "조회했는데 못 봤다"가 되어, 리포트
+   * 소비자가 계측 공백과 제어면 장애를 구분하지 못한다. 시각으로 메우는 것은 더 나쁘다. */
+  assert.ok(!('aws' in rep.as_of), 'AWS 축 부재를 값으로 만들었다');
+  assert.notEqual(rep.as_of.db, null, 'DB 시각은 있어야 한다 — 단언이 헛돌지 않게');
+  // 조회 실패(키는 있고 값이 null)는 그 형상 그대로 나가야 한다 — 미배선과 다른 사실이다.
+  const failed = bareFacts();
+  failed.meta.aws = null;
+  const repFailed = buildReport(failed);
+  assert.ok('aws' in repFailed.as_of, '조회 실패 형상이 미배선으로 접혔다');
+  assert.equal(repFailed.as_of.aws, null);
+
+  // ③ 레인이 없는 계획 슬롯의 문장에 `null` 이 렌더되면 안 된다.
+  const f = emptyFacts();
+  f.runs = [run({ id: 'lane:2026-08-03T15:40', lane: null, planned: true, no_run_row: true })];
+  const why = evaluate(f).violations.find((v) => v.rule === 'R01')!.why;
+  assert.ok(!why.includes('null'), `문장에 null 이 렌더됐다: ${why}`);
+  assert.ok(why.includes('레인 미상'), `레인 부재 표기가 없다: ${why}`);
 });
 
 test('`note` 의 세 갈래는 배타적이다 — 돌아간 규칙에 "미배선" 주석이 붙지 않는다', async () => {

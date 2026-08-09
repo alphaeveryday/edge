@@ -17,6 +17,7 @@ import { StatusBadge } from 'ui-kit';
 import { RULES } from '../../rules/rules';
 import {
   Absent,
+  AwsObservedAt,
   F,
   Info,
   SEV_TONE,
@@ -165,7 +166,8 @@ export function IncidentDetailPage() {
             </Fact>
             <Fact k="현재 상태">평가 시점에 성립 — 이 위반은 지금 규칙에 걸려 있다</Fact>
             <Fact k="최근 관측">
-              DB {kst(F.meta.db)} · AWS/S3 {kst(F.meta.aws)}
+              DB {kst(F.meta.db)} · AWS/S3{' '}
+              <AwsObservedAt />
             </Fact>
             {/* 위반 단위 first_seen 계측이 없다 — 스냅샷은 평가 시점만 안다 */}
             <Fact k="최초 탐지">

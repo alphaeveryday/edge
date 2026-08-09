@@ -40,7 +40,9 @@ export function tradingLag(actualISO: string | null, expectedISO: string | null)
 const task = (key: string) => F.tasks.find((t) => t.task_key === key);
 const dataset = (id: string) => F.datasets.find((d) => d.id === id);
 const funnel = (stage: string) => F.news_funnel.find((s) => s.stage.startsWith(stage))?.value ?? null;
-const chain = (id: string) => F.chain.stages.find((s) => s.id === id)?.batch ?? null;
+/* 축이 통째로 없으면 `null` — 부재를 0 으로 그리면 "결과 생성률 0%" 라는 거짓 경보가 된다
+ * (`coverageMetric`·`lagMetric` 의 `comparisonType: 'uninstrumented'` 규약과 같은 방향). */
+const chain = (id: string) => F.chain?.stages.find((s) => s.id === id)?.batch ?? null;
 const output = (id: string) => F.outputs.find((o) => o.id === id);
 
 /** 완전성 = received / expected. 분모가 없으면 null(0 이 아니다) */

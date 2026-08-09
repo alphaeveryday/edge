@@ -93,6 +93,20 @@ const chainPoints = (f: Facts, src: 'batch' | 'intraday'): number => {
    * 오는 값이라 타입 선언이 못 막는다. */
 };
 
+/**
+ * 레인을 못 읽었을 때 쓰는 표기. **"계측 없음"이 아니다** — 원장은 `scope_key` 를 기록하고 있고,
+ * 그 키가 Planner 의 형식과 갈려 서버가 파싱을 못 한 것이다(서버는 그때 경고를 남긴다).
+ * 계측 부재로 그리면 형상 불일치라는 장애 단서가 "아직 안 만든 기능"으로 읽힌다(리뷰 지적).
+ */
+export const LANE_UNKNOWN = '레인 미상';
+
+/**
+ * 문장에 쓰는 레인 이름. **`null` 을 그대로 끼우면 `"null"` 이 렌더된다** — 템플릿 리터럴은
+ * 컴파일러가 안 잡는 자리라 표기를 한 곳에 둔다. 레인이 없는 것은 런 행이 없는 계획 슬롯의
+ * 키를 못 읽었다는 뜻이고, 지어내지 않는 것이 서버의 판단이다.
+ */
+export const laneOf = (r: RunFact) => r.lane ?? LANE_UNKNOWN;
+
 /** 세션을 사람이 읽는 이름 — 화면(MinutePage)이 쓰는 표기와 같다 */
 const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`;
 
@@ -142,7 +156,7 @@ export const RULES: Rule[] = [
           title: '런이 생성되지 않음',
           metric: 1,
           unit: '슬롯',
-          why: `${r.lane} ${r.trading_date} 슬롯에 ops_pipeline_run 행이 없다`,
+          why: `${laneOf(r)} ${r.trading_date ?? '거래일 미상'} 슬롯에 ops_pipeline_run 행이 없다`,
           evidence: 'ops_reconciliation_issue PLANNER_MISSING',
           drill: ['run', 'run-' + r.id] as [string, string],
         })),
@@ -245,7 +259,7 @@ export const RULES: Rule[] = [
           title: '런 ' + (r.ledger_status || r.aws_status),
           metric: null,
           state: (r.ledger_status || r.aws_status) as string,
-          why: `${r.lane} ${r.id.split('T')[1] || ''} 슬롯 · ${runKind(r)}`,
+          why: `${laneOf(r)} ${r.id.split('T')[1] || ''} 슬롯 · ${runKind(r)}`,
           evidence: 'ops_pipeline_run.orchestration_status',
           drill: ['run', 'run-' + r.id] as [string, string],
         })),
@@ -423,10 +437,10 @@ export const RULES: Rule[] = [
     },
     run: (f) => {
       const out: ReturnType<Rule['run']> = [];
-      const stages = f.chain.stages;
+      const stages = f.chain?.stages ?? [];
       (['batch', 'intraday'] as const).forEach((src) => {
         let prev: number | null | undefined =
-          src === 'batch' ? f.chain.feeds[0]?.v : f.chain.feeds[1]?.v;
+          src === 'batch' ? f.chain?.feeds[0]?.v : f.chain?.feeds[1]?.v;
         let prevLabel = src === 'batch' ? '배치 트리거' : '장중 트리거';
         stages.forEach((s) => {
           if (s.blind) return; // 관측 불가 단계는 비교 축에서 제외 — 0 이 아니다
@@ -586,12 +600,20 @@ export const RULES: Rule[] = [
           metric: b.delivery_now_nonpublished,
           unit: '건',
           /* 규약 이후 `why` 는 문맥의 유일한 운반자다 — 빈 문자열이면 상세·ⓘ 에서 '왜'가 통째로
-           * 빈다. seed_note 부재는 "사유가 없다"가 아니라 기록이 없는 것이다(R15 와 같은 처리) */
+           * 빈다. `seed_note` 는 **이 수가 로컬 시드 유래라는 사실의 유일한 신호**다. */
+          /* 🔴 **이 값은 합계다.** `seed_note` 는 그중 일부를 설명하는 문장일 뿐이고 "전량 시드"라는
+           * 불변식은 타입에도 계약에도 없다 — 그래서 시드로 **덮지 않는다**.
+           *
+           * 세 번에 걸쳐 좁혔다(리뷰 1~3라운드): ① `seed: true`·`sev: 'P2'` 무조건 → 실 응답의
+           * 진짜 P0 가 강등됐다. ② `seed_note` 있으면 강등 → 시드 1건 + 진짜 누락 1건인 합계 2 를
+           * 통째로 내렸다. ③ `seed` 표시만 남김 → 그것도 합계 전체의 **출처**를 SEED 로 바꿔
+           * (`buildReport` 의 `source`) 운영자가 실제 누락까지 "운영 데이터가 아니다"로 읽는다.
+           *
+           * 남은 형태: 판정 사유는 규칙이 말하고, 기록이 있으면 **덧붙인다**. 사실이 못 가르는
+           * 것을 규칙이 가르는 척하지 않는다. */
           why:
-            b.seed_note ??
-            '시드 유래 여부를 가릴 기록이 없다 — 전달·게시 어느 쪽이 뒤집혔는지는 이 사실이 답하지 않는다',
-          seed: true,
-          sev: 'P2',
+            '발번됐는데 현재 비게시이고 무효화 통지도 안 갔다 — 테넌트가 철회를 못 받은 상태다' +
+            (b.seed_note ? ` · 기록: ${b.seed_note}` : ''),
           evidence: 'tenant_delivery ⋈ explanation_result',
           drill: ['delivery', 'b-dlv'],
         });

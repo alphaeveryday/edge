@@ -7,7 +7,7 @@
  */
 import { datasetKind, NEWS_MINUTE_DATASET } from '../../domains/sources/minuteView.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
-import type { MinuteFacts } from '../../rules/types.ts';
+import type { Facts, MinuteFacts } from '../../rules/types.ts';
 import type { AxisFetch } from './notRun.ts';
 
 /**
@@ -56,4 +56,23 @@ export function minuteFacts(s: MinuteStatus): MinuteFacts {
 export function axisOf(hasData: boolean, isError: boolean): AxisFetch {
   if (!hasData) return isError ? 'error' : 'pending';
   return isError ? 'stale' : 'loaded';
+}
+
+/**
+ * AWS 제어면 관측 시각의 **부재 종류** — 값이 아니라 종류를 답한다.
+ *
+ * 부재가 두 형상이고 뜻이 다르다(계약 §부재를 싣는 규약): 키가 없으면 **미배선**(조회를 시도조차
+ * 안 했다), 키가 있고 `null` 이면 **조회했는데 못 봤다**(예: `AccessDenied` — 서버가
+ * `awsUnavailable` 사유를 함께 보낸다). `kst(undefined)` 처럼 포매터에 그냥 넘기면 둘 다
+ * `—`(집계 없음)로 접혀, 제어면 장애가 "계측이 없구나"로 읽힌다.
+ *
+ * ⚠️ **`in` 이 아니라 값으로 가른다** — 어댑터가 누락 필드를 `aws: undefined` 로 명시하면
+ * (객체 spread·직접 대입) `'aws' in meta` 는 참이라 미배선이 조회 실패로 뒤집힌다.
+ *
+ * ⚠️ 이 판단이 `shared.tsx`(JSX) 안에 있던 동안은 `node --test` 가 import 을 못 해 **변이가
+ * 하나도 안 잡혔다** — `notRun`·`minuteFacts` 를 여기로 내린 것과 같은 이유다.
+ */
+export function awsObservation(meta: Facts['meta']): 'uninstrumented' | 'blind' | { at: string } {
+  if (meta.aws === undefined) return 'uninstrumented';
+  return meta.aws === null ? 'blind' : { at: meta.aws };
 }

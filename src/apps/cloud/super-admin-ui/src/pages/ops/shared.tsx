@@ -11,7 +11,7 @@ import type { BadgeTone } from 'ui-kit';
 import { evaluate, runbookOf as lookupRunbook } from '../../rules/evaluate';
 import { InfoPopover } from '../_shared/InfoPopover';
 import type { AxisFetch } from './notRun';
-import { axisOf, minuteFacts } from './consoleFacts';
+import { awsObservation, axisOf, minuteFacts } from './consoleFacts';
 import type {
   Evaluation,
   Facts,
@@ -54,11 +54,13 @@ interface FunnelStep {
   /** 구조화할 수 없는 짧은 보충만 남긴다 */
   note?: string;
 }
-interface DeliveryFacts {
-  coverage_0803: { published_without_new_delivery: number; new_delivery_now_nonpublished: number };
-  integrity_0803: { delivery_rows: number };
-}
-export type ConsoleFacts = Facts & { news_funnel: FunnelStep[]; delivery: DeliveryFacts };
+/**
+ * `delivery` 축은 없앴다(ALPHA-738 B2). 화면이 읽던 값 셋 중 둘은 `boundary` 의 같은 수였고
+ * (`published_without_new_delivery`·`new_delivery_now_nonpublished`), 나머지 하나가 누적 전달
+ * 행 수라 `boundary.delivery_rows` 로 옮겼다 — 서버도 거기로 준다(B1). 필드명에 날짜가 박힌
+ * 스냅샷 유물(`coverage_0803`)을 계약 축으로 승격시키지 않는다.
+ */
+export type ConsoleFacts = Facts & { news_funnel: FunnelStep[] };
 
 export const F = factsJson as unknown as ConsoleFacts;
 
@@ -243,13 +245,33 @@ export function Info({ tip, label }: { tip: string; label: string }) {
   return <InfoPopover text={tip} label={label} />;
 }
 
+/**
+ * AWS 제어면 관측 시각 — **부재가 두 형상이고 뜻이 다르다**(계약 §부재를 싣는 규약).
+ *
+ * - 키 자체가 없다 → **미배선**(C 축). 조회를 시도조차 안 했다.
+ * - 키는 있는데 `null` → **조회했는데 못 봤다**(예: `sqs:GetQueueAttributes AccessDenied`).
+ *   그때 서버는 `awsUnavailable` 사유를 함께 보낸다.
+ *
+ * `kst(undefined)` 는 둘 다 `—`(집계 없음)로 접는다 — 그러면 실제 제어면 장애가 "계측이 없구나"로
+ * 읽힌다(리뷰가 두 라운드 연속 잡은 방향). 세 자리(`AxisHeader`·`IncidentsPage`·
+ * `IncidentDetailPage`)가 같은 판단을 하도록 **여기 한 벌**로 둔다.
+ */
+export function AwsObservedAt({ format = kst }: { format?: (iso: string) => string }) {
+  /* 판단은 JSX 밖(`consoleFacts.awsObservation`)에 둔다 — 여기 두면 `node --test` 가 import 을
+   * 못 해 변이가 하나도 안 잡힌다(이 파일에서 두 번 겪은 일이다). 여기는 그리기만 한다. */
+  const o = awsObservation(F.meta);
+  if (o === 'uninstrumented') return <Absent kind="uninstrumented" />;
+  if (o === 'blind') return <Absent kind="blind" />;
+  return <>{format(o.at)}</>;
+}
+
 /** 화면 상단 한 줄 — 이 화면이 답하는 질문 + 스냅샷 기준 시각 */
 export function AxisHeader({ question, note }: { question: string; note?: string }) {
   return (
     <div className="card card-pad">
       <p className="t-sm m-0">{question}</p>
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-        기준 DB {kst(F.meta.db)} · AWS/S3 {kst(F.meta.aws)} · 거래일 {F.meta.today}
+        기준 DB {kst(F.meta.db)} · AWS/S3 <AwsObservedAt /> · 거래일 {F.meta.today}
         {note ? ` · ${note}` : ''}
       </p>
     </div>

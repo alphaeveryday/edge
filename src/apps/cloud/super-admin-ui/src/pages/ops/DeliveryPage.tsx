@@ -9,7 +9,7 @@ import '../../styles/ops.css';
 
 export function DeliveryPage() {
   useFocusRow();
-  const cov = F.delivery.coverage_0803;
+  const b = F.boundary;
 
   return (
     <div className="flex flex-col gap-4">
@@ -21,12 +21,14 @@ export function DeliveryPage() {
       <div className="ops-cards">
         <div className="kpi">
           <div className="kpi-label">전달 행</div>
-          <div className="kpi-value">{fmt(F.delivery.integrity_0803.delivery_rows)}</div>
+          <div className="kpi-value">
+            {b.delivery_rows != null ? fmt(b.delivery_rows) : <Absent kind="uninstrumented" />}
+          </div>
           <div className="kpi-sub">tenant_delivery 누적</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">Cloud 게시·미발번</div>
-          <div className="kpi-value">{fmt(cov.published_without_new_delivery)}</div>
+          <div className="kpi-value">{fmt(b.published_without_delivery)}</div>
           <div className="kpi-sub">구조상 0이어야 함</div>
         </div>
         <div className="kpi">
@@ -58,23 +60,25 @@ export function DeliveryPage() {
           <tbody>
             <tr id="b-pub">
               <td>Cloud 게시됐는데 미발번</td>
-              <td className="num">{cov.published_without_new_delivery}</td>
+              <td className="num">{b.published_without_delivery}</td>
               <td className="col-muted">같은 트랜잭션이라 구조상 0</td>
             </tr>
             <tr>
-              <td>
-                발번됐는데 현재 Cloud 비게시 <span className="chip">SEED</span>
-              </td>
+              {/* 🔴 SEED 칩을 안 단다. 이 수는 **합계**이고 `seed_note` 는 그중 일부를 설명하는
+                  문장일 뿐이라, 칩은 조건부로 달아도 합계 전체를 시드라고 주장한다 — 규칙에서
+                  같은 이유로 `seed` 표시를 뺀 것과 같은 판단이다(안 맞추면 사건 목록은 P0 인데
+                  이 표는 "로컬 시드"라고 말한다). 기록은 아래 해석 칸이 그대로 나른다. */}
+              <td>발번됐는데 현재 Cloud 비게시</td>
               <td className="num" style={{ color: 'var(--warn)' }}>
-                {cov.new_delivery_now_nonpublished}
+                {b.delivery_now_nonpublished}
               </td>
-              <td className="col-muted">{F.boundary.seed_note}</td>
+              <td className="col-muted">{b.seed_note ?? '무효화 통지가 안 간 발번만 셉니다'}</td>
             </tr>
             <tr>
               <td>소비 커서 행</td>
               <td className="num">
-                {F.boundary.sync_cursor_rows != null ? (
-                  F.boundary.sync_cursor_rows
+                {b.sync_cursor_rows != null ? (
+                  b.sync_cursor_rows
                 ) : (
                   <Absent kind="uninstrumented" />
                 )}

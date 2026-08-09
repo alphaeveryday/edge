@@ -1611,7 +1611,8 @@
     "published_without_delivery": 0,
     "delivery_now_nonpublished": 1,
     "sync_cursor_rows": 0,
-    "seed_note": "비게시 전달 1건은 로컬 시드(WITHDRAWN)"
+    "seed_note": "비게시 전달 1건은 로컬 시드(WITHDRAWN)",
+    "delivery_rows": 114
   },
   "runbook": {
     "R05.LOAD_DOCUMENTS": {

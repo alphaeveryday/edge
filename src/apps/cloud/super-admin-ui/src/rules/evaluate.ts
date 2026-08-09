@@ -52,7 +52,9 @@ export function ruleOfVid(vid: string): string {
  * 규칙 층에 한 벌만 둔다.
  */
 export function runbookOf(f: Facts, v: Violation): RunbookEntry | undefined {
-  return f.runbook[`${v.rule}.${v.targetId}`] ?? f.runbook[v.rule];
+  /* 첨자 접근이라 축이 없으면 여기서 죽는다 — 실 응답에 `runbook` 이 없다(레지스트리 계약
+   * 1건의 `runbook_uri` 가 `None`). 부재는 "조치 미등록"이지 예외가 아니다. */
+  return f.runbook?.[`${v.rule}.${v.targetId}`] ?? f.runbook?.[v.rule];
 }
 
 export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
@@ -187,7 +189,13 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
  * evaluated:false(못 돈 규칙)와 violations:0(돌았는데 조용한 규칙)을 반드시 구분한다. */
 
 export interface Report {
-  as_of: { db: string; aws: string; trade_date: string };
+  /**
+   * `aws` 의 부재는 **두 형상이고 뜻이 다르다** — 와이어 규약과 같다:
+   * 키가 없으면 **미배선**(조회를 시도조차 안 했다), 키가 있고 `null` 이면 **조회했는데 못 봤다**.
+   * 하나로 접으면 리포트 소비자가 계측 공백과 제어면 장애를 구분하지 못한다(리뷰 3라운드).
+   * `db` 시각으로 메우는 것은 더 나쁘다 — 관측하지 않은 시점을 관측했다고 말한다.
+   */
+  as_of: { db: string; aws?: string | null; trade_date: string };
   rules: RuleResult[];
   violations: {
     /** 사건 키 — `incidents[].root`·`members[].vid`·`absorbed_into` 와 조인하는 축 */
@@ -233,7 +241,12 @@ export function buildReport(f: Facts, now: Date = snapshotNow(f)): Report {
   const ruleSource = new Map(RULES.map((R) => [R.id, R.source]));
 
   return {
-    as_of: { db: f.meta.db, aws: f.meta.aws, trade_date: f.meta.today },
+    as_of: {
+      db: f.meta.db,
+      // 키 유무를 그대로 옮긴다 — `?? null` 로 접으면 미배선이 조회 실패로 둔갑한다.
+      ...(f.meta.aws !== undefined ? { aws: f.meta.aws } : {}),
+      trade_date: f.meta.today,
+    },
     rules: ev.rules,
     violations: ev.violations.map((v) => ({
       vid: v.vid,
