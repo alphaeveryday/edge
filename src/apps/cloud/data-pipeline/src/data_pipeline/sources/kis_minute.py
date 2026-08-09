@@ -37,7 +37,7 @@ import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from .candle import Candle, build_candle, to_decimal
+from .candle import Candle, build_candle, is_stamp, to_decimal
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
 
@@ -124,9 +124,7 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     #     `"٢٠٢٦0803"`→2026 이 통과한다(`%Y` 는 이쪽으로 샌다). `isdecimal()` 은 True 다.
     #     이쪽은 3.12 에서도 산다.
     # 날짜와 라벨을 **연접해서** 본다 — 한쪽만 보면 다른 쪽 문이 그대로 열린다.
-    stamp = day + hour
-    if (len(day) != _YMD_LEN or len(hour) != _HHMMSS_LEN
-            or not stamp.isascii() or not stamp.isdecimal()):
+    if not is_stamp(day, _YMD_LEN) or not is_stamp(hour, _HHMMSS_LEN):
         # ⚠️ "자리수"라고 쓰지 않는다 — `" 93000"` 은 6자다. 운영자가 로그에서 자리수를
         # 세어 보고 "가드가 오작동했다"로 읽으면 진짜 원인(포맷 변경)을 놓친다.
         raise ValueError(f"{symbol} 분봉 날짜·시각 형상이 아니다: {day!r} {hour!r}")
@@ -473,16 +471,18 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                     raise ValueError(
                         f"{symbol} 소급 분봉 행이 객체가 아니다: {type(raw).__name__}")
                 trade_date = raw.get("stck_bsop_date")
-                if not isinstance(trade_date, str) or len(trade_date) != _YMD_LEN:
+                if not is_stamp(trade_date, _YMD_LEN):
                     # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 그 행이
                     # 빠져 `len(same_day) < len(page)` 가 성립하고, 그건 경계를 넘었다는
                     # 신호라 페이징이 끝나며, 빈 하루가 **성공으로** 캐시된다. 예외도
                     # ERROR 로그도 없이 362종 전건 missing 인 window 390개가 커밋된다.
                     #
-                    # ⚠️ **날짜 자리수는 여기서 본다.** 아래 비교는 8자리 `_ymd` 와의
-                    # 정확 일치라 짧은 날짜는 구조적으로 "남의 날"이 되어 `continue` 로
-                    # 빠진다 — 파서의 자리수 가드 중 **날짜 쪽**은 그래서 이 경로에서
-                    # 영영 안 닿는다(형이 맞는 형상 위반이 조용한 문으로 샌다).
+                    # ⚠️ **날짜 형상은 여기서 본다.** 아래 비교는 8자리 `_ymd` 와의
+                    # 정확 일치라 형상이 어긋난 날짜는 **구조적으로 "남의 날"**이 되어
+                    # `continue` 로 빠진다 — 파서의 가드 중 날짜 쪽은 그래서 이 경로에서
+                    # 영영 안 닿는다. 자리수만이 아니라 `is_stamp` **전체**를 여기서
+                    # 봐야 한다: `"202608 3"`·`"٢٠٢٦0803"` 은 8자라 자리수만 보면
+                    # 통과하고, 그대로 남의 날이 되어 하루가 조용히 절단된다(Codex P2).
                     # ⚠️ 라벨 쪽은 다르다 — 오늘 날짜 행은 여기를 통과해 파서로 가고
                     # 거기서 걸린다. 파서 가드를 죽은 코드로 오해하지 마라.
                     # 형제 `kis_sector_index.candles` 와 같은 조건이다.

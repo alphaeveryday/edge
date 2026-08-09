@@ -623,6 +623,22 @@ class TestHistoricalCandles:
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles("005930", window_end=self.at("1030"))
 
+    # 🔴 Codex P2(#647). 자리수만 보면 8자 형상 위반이 **필터를 통과**해 "남의 날"이
+    # 되고, 하루가 조용히 절단돼 성공으로 캐시된다 — 파서 가드는 이 경로에 안 닿는다.
+    @pytest.mark.parametrize("bad_date", ["202608 3", "٢٠٢٦0803"])
+    def test_eight_char_malformed_date_is_not_another_day(self, bad_date):
+        """8자인데 ASCII 숫자가 아닌 거래일 — 자리수 가드만으로는 안 걸린다.
+
+        `!= self._ymd` 는 정확 일치라 이 행이 `continue` 로 빠지고, 그러면
+        `len(same_day) < len(page)` 가 "거래일 경계를 넘었다"로 읽혀 페이징이 끝난다.
+        예외도 ERROR 로그도 없이 **절단된 하루가 성공으로 캐시**된다.
+        """
+        assert len(bad_date) == 8  # 자리수 가드는 통과한다
+        client, _ = self.hist(
+            [TOKEN, ok([row("153000"), {**row("152900"), "stck_bsop_date": bad_date}])])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles("005930", window_end=self.at("1530"))
+
     # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다(변이로 확인) — 초과 길이도 같이 잰다.
     @pytest.mark.parametrize("bad_length", ["2026083", "202608031"])
     def test_trade_date_length_drift_does_not_eat_the_time_label(self, bad_length):

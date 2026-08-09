@@ -414,6 +414,18 @@ class TestCandles:
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles(UNIT_ID, window_end=WINDOW_END)
 
+    # 🔴 Codex P2(#647). 자리수만 보면 8자 형상 위반이 필터를 통과해 "남의 날"이 되고,
+    # 페이지가 통째로 빈 결과가 된다 — 45종 전건 missing 인 INCOMPLETE 로 굳는다.
+    @pytest.mark.parametrize("bad_date", ["202608 7", "٢٠٢٦0807"])
+    def test_eight_char_malformed_date_is_not_another_day(self, bad_date):
+        """8자인데 ASCII 숫자가 아닌 거래일 — 자리수 가드만으로는 안 걸린다."""
+        assert len(bad_date) == 8
+        rows = [{**row(label), "stck_bsop_date": bad_date}
+                for label in ("103000", "103100")]
+        client, _ = make_client([TOKEN, ok(rows)])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles(UNIT_ID, window_end=WINDOW_END)
+
     # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다(변이로 확인) — 초과 길이도 같이 잰다.
     @pytest.mark.parametrize("bad_length", ["2026087", "202608071"])
     def test_trade_date_length_drift_does_not_eat_the_time_label(self, bad_length):

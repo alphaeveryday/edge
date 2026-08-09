@@ -58,7 +58,7 @@ import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
-from .candle import Candle, build_candle, to_decimal
+from .candle import Candle, build_candle, is_stamp, to_decimal
 from .kis_minute import KisMinuteClient, KisUnitError
 
 logger = logging.getLogger(__name__)
@@ -136,9 +136,7 @@ def parse_index_row(raw: dict, unit_id: str, *, interval_sec: int) -> Candle:
     #     `"٢٠٢٦0803"`→2026 이 통과한다(`%Y` 는 이쪽으로 샌다). `isdecimal()` 은 True 다.
     #     이쪽은 3.12 에서도 산다.
     # 날짜와 라벨을 **연접해서** 본다 — 한쪽만 보면 다른 쪽 문이 그대로 열린다.
-    stamp = day + label
-    if (len(day) != _YMD_LEN or len(label) != _HHMMSS_LEN
-            or not stamp.isascii() or not stamp.isdecimal()):
+    if not is_stamp(day, _YMD_LEN) or not is_stamp(label, _HHMMSS_LEN):
         # ⚠️ "자리수"라고 쓰지 않는다 — `" 93000"` 은 6자다. 운영자가 로그에서 자리수를
         # 세어 보고 "가드가 오작동했다"로 읽으면 진짜 원인(포맷 변경)을 놓친다.
         raise ValueError(
@@ -276,17 +274,19 @@ class KisSectorIndexClient(KisMinuteClient):
                 # 벤더의 라벨 규약 변경이 정상 소음에 묻힌다.
                 continue
             trade_date = raw.get("stck_bsop_date")
-            if not isinstance(trade_date, str) or len(trade_date) != _YMD_LEN:
+            if not is_stamp(trade_date, _YMD_LEN):
                 # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 전 행이
                 # `continue` 로 떨어져 `bars` 가 비고, 그건 예외도 ERROR 로그도 없이
                 # 45종 전건 missing 인 INCOMPLETE window 로 굳는다 — 원장에는 "벤더가
                 # 안 줬다"로 보여 원인이 스키마 변화임을 가린다. 이 파일의 `start.second`
                 # 가드와 같은 논거이고, 형제(`_fetch_day`)도 같은 조건을 raise 로 낸다.
                 #
-                # ⚠️ **날짜 자리수는 여기서 본다.** 아래 비교는 8자리 `ymd` 와의 정확
-                # 일치라 짧은 날짜는 구조적으로 "남의 날"이 되어 `continue` 로 빠진다 —
-                # 파서의 자리수 가드 중 **날짜 쪽**은 그래서 이 경로에서 영영 안 닿는다
-                # (형이 맞는 형상 위반이 조용한 문으로 샌다).
+                # ⚠️ **날짜 형상은 여기서 본다.** 아래 비교는 8자리 `ymd` 와의 정확
+                # 일치라 형상이 어긋난 날짜는 **구조적으로 "남의 날"**이 되어 `continue`
+                # 로 빠진다 — 파서의 가드 중 날짜 쪽은 그래서 이 경로에서 영영 안 닿는다.
+                # 자리수만이 아니라 `is_stamp` **전체**를 여기서 봐야 한다:
+                # `"202608 7"`·`"٢٠٢٦0807"` 은 8자라 자리수만 보면 통과하고, 그대로 남의
+                # 날이 되어 페이지가 통째로 빈 결과가 된다(Codex P2).
                 # ⚠️ 라벨 쪽은 다르다 — 그 날짜 행은 여기를 통과해 파서로 가고 거기서
                 # 걸린다. 파서 가드를 죽은 코드로 오해하지 마라.
                 raise ValueError(
