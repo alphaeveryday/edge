@@ -203,6 +203,25 @@ class TestParse:
             parse_index_row({**row(), "stck_cntg_hour": " 93000"}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
+    def test_non_ascii_digit_label_is_rejected(self):
+        """`isdecimal()` 만으로는 안 된다 — `%H` 의 `\\d` 가 유니코드 Nd 라 같은 집합이다.
+
+        `"1٠3000"` 은 `isdecimal()` 도 `strptime` 도 통과한다. 막는 건 `isascii()` 다.
+        """
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_index_row({**row(), "stck_cntg_hour": "1٠3000"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    def test_well_formed_but_impossible_time_is_a_format_error(self):
+        """자리수 가드를 통과한 뒤 `strptime` 이 잡는 분기 — 메시지로 갈라 둔다.
+
+        가드가 넓어지면 이 분기가 조용히 죽는다. `pytest.raises(ValueError)` 만으로는
+        어느 문에서 걸렸는지 구분이 안 된다.
+        """
+        with pytest.raises(ValueError, match="시각 형식 오류"):
+            parse_index_row({**row(), "stck_cntg_hour": "999999"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
     # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
     @pytest.mark.parametrize("field, bad_length", [
         ("stck_bsop_date", "2026087"), ("stck_bsop_date", "202608071"),

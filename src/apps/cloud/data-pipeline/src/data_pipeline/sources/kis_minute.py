@@ -112,11 +112,13 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     # 5자리(`"93000"`)는 선행 0 이 잘린 것으로 **복구도 가능해 보인다**(→09:30:00).
     # 그래도 거부한다: 4자리와 구분할 근거가 우리에게 없고, 추정해서 맞히면 틀렸을 때
     # 아무 신호가 안 남는다. 라벨 규약이 실제로 바뀌면 실패로 드러나는 편이 낫다.
-    # `isdecimal()` 은 자리수와 **한 짝**이다 — `strptime` 은 `%H` 에 `" 9"` 를 허용해
-    # `" 93000"`(공백 패딩)을 6자리째 통과시킨다. 값은 맞게 읽히지만 그러면 벤더가
-    # 패딩 규약을 바꾼 것을 조용히 흡수한다. `isdigit()` 은 `"²"` 를 통과시켜 더 약하다.
+    # 공백 패딩과 비-ASCII 숫자도 여기서 막는다 — `strptime` 이 둘 다 관대하게 받아
+    # 값은 **맞게** 읽히고, 그래서 벤더의 포맷 변경이 조용히 흡수된다(실측:
+    # `" 93000"`→09:30:00, `"1٠3000"`→10:30:00). 이 가드는 값이 아니라 **형상 변화의
+    # 신호**를 지킨다. 일하는 건 `isascii()` 쪽이다 — `isdecimal()` 단독은 `%H` 의
+    # `\d`(유니코드 Nd)와 같은 집합이라 `strptime` 이 이미 거르는 것만 거른다.
     if (len(day) != _YMD_LEN or len(hour) != _HHMMSS_LEN
-            or not (day + hour).isdecimal()):
+            or not (day + hour).isascii() or not (day + hour).isdecimal()):
         raise ValueError(f"{symbol} 분봉 날짜·시각 자리수가 다르다: {day!r} {hour!r}")
     try:
         end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
@@ -132,9 +134,9 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     #     `select_window_candle` 이 그냥 안 뽑는다. 여기서 raise 해봐야 **남의 행** 하나로
     #     그 window 를 INVALID 로 만들 뿐이다(30봉 페이지라 ~30 window 를 그렇게 만든다).
     #   · 소급은 다르다 — `fill_no_trade_minutes` 가 봉에 합성을 **앵커**하므로 격자 밖
-    #     봉 뒤가 통째로 밀린다. 손실 폭은 그 봉이 어디 있느냐에 달렸다(뒤에 실봉이
-    #     빽빽하면 몇 개, 그게 유일한 관측이면 390개 — `:481` 주석의 실측이 후자다).
-    #     거기서만 가드가 일한다.
+    #     봉 뒤가 통째로 밀린다. 손실 폭은 그 봉이 어디 있느냐에 달렸다: 뒤에 실봉이
+    #     빽빽하면 몇 개고, 그게 유일한 관측이면 계획 390개 **전부**다(실측 적중 0).
+    #     거기서만 가드가 일한다 — `_fetch_day` 안에 있다.
     # 지수 어댑터도 페이지 전체를 돌려주므로 노출은 같다 — 그쪽 격자 가드도 같은 값을
     # 치르고 있다. 여기서 따라 할 이유가 아니다.
     values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS}
@@ -482,8 +484,8 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                 if candle.window_end.second:
                     # 분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 같은 오프셋으로 밀어
                     # 계획된 window 키와 어긋나게 만든다 — 예외도 로그도 없이 그 종목의
-                    # 하루가 통째로 missing 이 된다(실측 재현: 09:03:30 한 봉이 389개를
-                    # 죽인다). 벤더가 그렇게 준 적은 없지만 가드가 없었다.
+                    # 하루가 통째로 missing 이 된다(실측 재현: 09:03:30 한 봉이 계획 390개를
+                    # 통째로 죽인다 — 적중 0). 벤더가 그렇게 준 적은 없지만 가드가 없었다.
                     # ⚠️ **소급 전용이다.** 파서로 올리면 당일 경로가 남의 행 하나에
                     # 전건 INVALID 로 죽는다 — 논거는 `parse_minute_row` 안에 적어 뒀다.
                     raise ValueError(

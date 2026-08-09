@@ -112,10 +112,11 @@ def _time_stamp(row: dict) -> str | None:
 
     ⚠️ 그 공백 패딩을 길이+`strptime` 두 겹으로 막고 있다고 오래 적어 뒀는데 **거짓이었다**:
     `strptime` 은 `%H` 에 `" 9"` 를 허용해 `" 93000"` 을 6자리째 09:30:00 으로 받는다.
-    그래서 `isdecimal()` 을 한 겹 더 둔다(`isdigit()` 은 `"²"` 를 통과시켜 더 약하다).
+    비-ASCII 숫자도 마찬가지다(`"1٠3000"`→10:30:00, `%H` 의 `\\d` 가 유니코드 Nd 라서).
+    둘 다 사전순 비교(`max`·`_OPEN_STAMP`)의 전제도 깬다 — 그래서 `isascii()` 로 막는다.
     """
     stamp = str(row.get("bsop_hour"))
-    if len(stamp) != _STAMP_LEN or not stamp.isdecimal():
+    if len(stamp) != _STAMP_LEN or not stamp.isascii() or not stamp.isdecimal():
         return None
     try:
         # 자리수만 보면 `"240000"`·`"153060"` 이 통과한다 — 실제 시각인지까지 **여기서**

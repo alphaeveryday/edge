@@ -182,6 +182,27 @@ class TestParse:
         with pytest.raises(ValueError, match="자리수가 다르다"):
             parse_minute_row({**row(), "stck_cntg_hour": " 93000"}, "005930")
 
+    def test_non_ascii_digit_label_is_rejected(self):
+        """`isdecimal()` 만으로는 안 된다 — `%H` 의 `\\d` 가 유니코드 Nd 라 같은 집합이다.
+
+        아랍-인도 숫자가 섞인 `"1٠3000"` 은 `isdecimal()` 도 `strptime` 도 통과해
+        10:30:00 으로 **맞게** 읽힌다. 막는 건 `isascii()` 쪽이다.
+        """
+        weird = "1٠3000"
+        assert weird.isdecimal() and not weird.isascii()
+        assert datetime.strptime("20260803" + weird, "%Y%m%d%H%M%S").minute == 30
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_minute_row({**row(), "stck_cntg_hour": weird}, "005930")
+
+    def test_well_formed_but_impossible_time_is_a_format_error(self):
+        """자리수 가드를 통과한 뒤 `strptime` 이 잡는 분기 — 메시지로 갈라 둔다.
+
+        가드가 넓어지면 이 분기가 조용히 죽는다(전에 `"99:99:99"` 8자가 그랬다).
+        `pytest.raises(ValueError)` 만으로는 어느 문에서 걸렸는지 구분이 안 된다.
+        """
+        with pytest.raises(ValueError, match="시각 형식 오류"):
+            parse_minute_row({**row(), "stck_cntg_hour": "999999"}, "005930")
+
     @pytest.mark.parametrize("broken", [
         # 자리수는 맞고 값만 깨진 라벨 — 위 자리수 가드가 아니라 `strptime` 이 잡는
         # 경로다. 8자리(`"99:99:99"`)로 두면 자리수 가드에 먼저 걸려 이 분기가 죽는다.
@@ -644,7 +665,7 @@ class TestHistoricalCandles:
         """분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 밀어 하루를 조용히 죽인다.
 
         09:03:30 봉이 하나 오면 이후 합성이 통째로 :30 오프셋으로 생성돼 계획된 390
-        window 중 389개가 키 불일치로 `missing` 이 된다 — 예외도 ERROR 로그도 없이.
+        window 이 **전부** 키 불일치로 `missing` 이 된다(실측 적중 0) — 예외도 ERROR 로그도 없이.
         """
         client, _ = self.hist([TOKEN, ok([row("090100"), {**row(), "stck_cntg_hour": "090330"}])])
         with pytest.raises(ValueError, match="분 격자 밖"):
