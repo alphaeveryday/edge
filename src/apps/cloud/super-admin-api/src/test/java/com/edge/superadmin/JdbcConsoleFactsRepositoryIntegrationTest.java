@@ -599,32 +599,40 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 게시·발번 경계의 두 방향. 정상 조합(res-c)을 같이 두는 것이 요점이다 — 없으면 "전부 센다"
 	 * 로 바꿔도 통과한다.
 	 *
-	 * <p>INVALIDATION 행은 {@code explanation_result_id} 가 NULL 이라(ADR-0044 2형상) 어느 쪽에도
-	 * 안 걸려야 한다. 조인을 느슨하게 잡으면 여기서 수가 늘어난다.
+	 * <p>🔴 <b>무효화 통지가 간 발번은 비게시로 안 센다.</b> 운영자 무효화는 NEW 행을 남긴 채
+	 * WITHDRAWN 전이 + INVALIDATION 발번만 하므로, 상태만 보면 정상 무효화가 R14 P0 로 영구히
+	 * 쌓인다. 상관은 <b>테넌트까지</b>여야 한다 — NEW 를 받고도 통지 못 받은 테넌트는 진짜 위반이다.
 	 */
 	@Test
-	void 경계_정합은_두_방향을_각각_세고_INVALIDATION_은_발번으로_안_친다() {
+	void 경계_정합은_무효화_통지가_안_간_발번만_센다() {
 		insertEtf();
 		insertTradingDay("2026-08-03");
-		insertResult("res-a", "2026-08-03", "PUBLISHED");   // 발번 행 없음 — 미발번 1건
-		insertResult("res-b", "2026-08-03", "WITHDRAWN");   // 발번됐는데 지금 비게시 — 1건
+		insertResult("res-a", "2026-08-03", "PUBLISHED");   // 발번 행 없음 → 미발번 1
+		insertResult("res-b", "2026-08-03", "WITHDRAWN");   // 무효화 통지 감 → 안 센다
 		insertResult("res-c", "2026-08-03", "PUBLISHED");   // 정상 — 어느 쪽에도 안 걸린다
-		long tenantId = jdbc.queryForObject("""
+		long t1 = jdbc.queryForObject("""
 				INSERT INTO tenant (tenant_name, environment, status)
-				VALUES ('t','DEV','ACTIVE') RETURNING tenant_id
+				VALUES ('t1','DEV','ACTIVE') RETURNING tenant_id
+				""", Long.class);
+		long t2 = jdbc.queryForObject("""
+				INSERT INTO tenant (tenant_name, environment, status)
+				VALUES ('t2','DEV','ACTIVE') RETURNING tenant_id
 				""", Long.class);
 		jdbc.update("""
 				INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type,
 				       explanation_result_id, target_explanation_result_id, reason)
 				VALUES (?, 1, 'NEW', 'res-b', NULL, NULL),
-				       (?, 2, 'NEW', 'res-c', NULL, NULL),
-				       (?, 3, 'INVALIDATION', NULL, 'res-b', '오탐지')
-				""", tenantId, tenantId, tenantId);
+				       (?, 2, 'INVALIDATION', NULL, 'res-b', '오탐지'),
+				       (?, 3, 'NEW', 'res-c', NULL, NULL),
+				       (?, 1, 'NEW', 'res-b', NULL, NULL)
+				""", t1, t1, t1, t2);
 
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);   // res-a 만
-			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);    // res-b 만
-			assertThat(b.deliveryRows()).isEqualTo(3L);
+			/* t1 은 통지를 받아 안 센다. t2 는 같은 res-b 의 NEW 를 받고도 통지가 없어 센다 —
+			 * 상관을 결과만으로 하면 여기서 0 이 된다. */
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
+			assertThat(b.deliveryRows()).isEqualTo(4L);
 		});
 	}
 
