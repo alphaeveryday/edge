@@ -10,7 +10,7 @@
 ## 엔드포인트
 
 ```
-GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
+GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 원장이 아는 가장 최근 날
 ```
 
 봉투는 기존 콘솔 API 와 같은 `ApiResponse.onSuccess`. 응답은 **사실**이고 위반 목록이 아니다.
@@ -19,6 +19,115 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 
 **실시간 축은 이 응답에 없다.** `GET /api/v1/sources/minute` 가 계속 준다 — 화면이 둘을 합친다.
 
+✅ **서버는 섰다**(ALPHA-738 B1 — `super-admin-api` 의 `ConsoleController`·`ConsoleFactsService`·
+`JdbcConsoleFactsRepository`). **프론트는 아직 이 응답을 읽지 않는다**
+(B2 에서 검증 경계·어댑터, D 에서 화면 비동기 전환). 아래 「무엇이 실제로 나가는가」가 정본이다.
+
+⚠️ **이 문서의 축 이름은 엔진 타입 어휘(snake_case)다** — `rules/types.ts` 를 그대로 부른다.
+**와이어는 같은 이름의 camelCase** 다(`no_run_row`→`noRunRow` · `trading_date`→`tradingDate` ·
+`completeness_expected`→`completenessExpected` · `aws_status`→`awsStatus`). 어댑터가 메우는 간극은
+이 표기 변환 하나이고, 그 밖의 불일치(축 부재·nullable)는 아래에 따로 적혀 있다.
+
+### 무엇이 실제로 나가는가 (B1)
+
+| 축 | 상태 |
+|---|---|
+| `runs[]`·`tasks[]`·`datasets[]`·`outputs[]`·`boundary`·`meta` | ✅ 실 원장 |
+| `outputs[].base` | ✅ **직전 10거래일 중앙값** — 계약이 ❌ 로 적었던 것은 "일별 계열을 주는 **기존 응답**이 없다"였지 불가능이 아니었다. 그래서 **R13 은 실 응답에서도 돈다**(위 표 §「이 계약이 강제하는 것」의 예고와 다르다) |
+| `chain`·`queues`·`etf_ledger`·`runbook` | ❌ 필드 자체가 없다 → 그 축 규칙은 `못 돎` |
+| `runs[].aws_status`·`aws_stop`·`meta.aws` | ❌ AWS 제어면 미배선(C 축). `meta.aws` 도 **안 보낸다** — 조회를 시도조차 안 했으니 `null`(관측 실패)이 아니라 계측 없음이다. C 가 붙을 때 `awsUnavailable`·`meta.awsUnobservedRuns` 와 함께 들어온다 |
+| `runs[].kind` | ❌ **계측 자체가 없다**(AWS 와 무관 — 런 종류를 쓰는 writer 가 없다) |
+| `tasks[].max_retries`·`last_ok`·`ok_rate` | ❌ 필드 없음 → R16 `못 돎` |
+| `boundary.sync_cursor_rows`·`seed_note` | ❌ 필드 없음(writer 0건 · 소스 0) |
+| `news_funnel`·`delivery` | ❌ **이 응답 밖으로 결정**(아래) |
+
+**`meta.today` 는 "최신 거래일"이 아니라 "원장이 아는 가장 최근 날"이다.** 런이 있던 마지막 날과
+**계획만 있던 마지막 날**(`PLANNER_MISSING` 슬롯) 중 뒤쪽이고, 둘 다 없으면 DB 시계의 KST 오늘이다.
+⚠️ "런이 있던 날"은 `trading_date` 가 아니라 **`COALESCE(trading_date, created_at 의 KST 날짜)`** 다 —
+조회 창이 비거래일 런을 그 축으로 줍기 때문이고, 두 자리가 갈리면 그 런이 창에는 들어오는데 날짜가
+안 골라져 기본 화면에서 사라진다. 계획 결손일을 안 보면 Planner 가 통째로 실패한 날의 R01 P0 가 기본 화면에서 사라진다.
+여기서는 **휴장일을 안 뺀다** — 휴장일에도 도는 뉴스·공시 런을 감추면 안 되기 때문이고, 중앙값
+표본은 반대로 뺀다("무엇을 보여줄까"와 "무엇이 평소인가"는 다른 물음이다). 미래는 양쪽 다 상한으로
+막는다(런 한 건이든 슬롯 키 하나든 기본 조회를 오지 않은 날로 옮긴다).
+
+`runs[].planned`·`no_run_row` 는 **런 행이 없는 슬롯에만** 실린다(`@JsonInclude(NON_NULL)` — 필드
+단위다. 클래스 단위로 걸면 "집계 없음(null)"이 조용히 "계측 없음(필드 부재)"이 된다). 실재 런에
+`false` 를 실으면 "계획된 적 없는 런"이라는, 원장이 하지 않은 단정이 선다 — 크론 설정은 DB 밖이라
+그 축의 계측이 없다.
+
+🔶 **R08 과 R09 가 겹칠 수 있다**(B1 리뷰). 서버는 원장이 `freshness_status='UNKNOWN'` 이라고 말하면
+actual as-of 가 있어도 `unverifiable` 을 붙인다(원장의 판정이 우선이다). 그런데 R08 의 `canRun`·필터는
+`unverifiable` 을 안 보고 `contract ∧ actual_as_of` 만 봐서, 그 조합에서 한 데이터셋이 **STALE 이면서
+판정 불가**로 동시에 설 수 있다. 오늘 그 조합을 쓰는 writer 는 없다(연결된 계약 1건이 actual 을 항상
+NULL 로 쓴다) — 소비 라운드에서 R08 이 `unverifiable` 을 먼저 보게 하면 닫힌다.
+
+`datasets[]` 의 `unverifiable` 은 **판정 코드**다(`CONTRACT_NOT_APPLIED`·`ACTUAL_AS_OF_MISSING`·
+원장의 `freshness_reason`). 술어는 계약 부재 ∨ actual 근거 부재 ∨ **원장이 `UNKNOWN` 이라고 말함**
+이다 — 판정 가능성(계약 ∧ actual)의 여집합보다 **한 겹 넓다**. 좁히면 판정도 못 하고 판정 불가로도
+안 잡히는 데이터셋이 생기고, 그건 화면에서 **정상**으로 보인다. 넓히는 쪽 대가는 R08 과의 겹침뿐이다
+(위 🔶 항목). ⚠️ 코드→문장 매핑은 UI 소관이고 **아직 없다**(B2/D).
+
+한 데이터셋에 작업이 여럿이면 **as-of 쌍을 한 작업에서 통째로** 가져온다 — `expected` 와 `actual`
+을 각자 접으면(`max`·`min`) 어느 작업에도 없던 쌍이 만들어져 둘 다 FRESH 인 작업 두 개가 거짓
+STALE 을 낸다. 기준은 **가장 오래된 근거를 가진 작업**이고, as-of 가 동률이면 **기대일이 늦은 쪽**
+(R08 이 STALE 을 드러내는 방향), 그래도 동률이면 작업 키다 — tie-break 가 없으면 같은 원장이 조회
+순서에 따라 FRESH 로도 STALE 로도 판정된다. 판정 불가 사유는 **`UNKNOWN` 인 그 작업**에서 꺼낸다
+(멀쩡한 작업의 사유를 붙이면 서로 다른 작업이 한 사실로 섞인다).
+
+날짜 창은 거래일(`trading_date`)이되 **거래일이 NULL 인 런(비거래일)은 계획 시각의 KST 날짜**로
+줍는다. 거래일만으로 자르면 그날 실패한 런이 통째로 사라진다.
+
+✅ **휴장일의 거짓 −100% — 해소됨**(봇이 잡았다). 휴장일은 기본 조회로 열리는데(`latestDay` 가
+일부러 안 뺀다 — 그날도 뉴스·공시는 돈다) 장 산출은 0 이고 기준은 정상 거래일 중앙값이라, 그대로
+주면 R13 이 `o.pub`·`o.trig` 를 −100% 로 판정했다. 지금은 **그날 그 둘의 `base` 를 안 준다** —
+`today` 의 0 은 실측이 맞지만 **비교할 평소가 없는 날**이라 기준 쪽을 비운다(새 축을 만들지 않고
+이미 있는 "기준 없음" 규약을 탄다). 산출이 장에 매인 축인지는 서버가 안다(`marketBound`) — 뉴스
+갈래는 휴장일에도 돌아 기준을 그대로 준다.
+⚠️ 그때 R13 의 `note` 는 "기준(중앙값)이나 오늘 값이 수가 아니다"라고 말한다 — 실제 사유(휴장)와
+다르다. 문구를 정확히 하는 것은 소비 라운드 몫이다.
+
+🔴 **장중에는 R13 이 여전히 거짓 −100% 를 낸다**(미해소). 위와 같은 뿌리의 **다른 경로**다:
+`outputs[].today` 는 수 하나라 "실측 0"과 "아직 안 찼다"를 못 가르는데, 산출은 하루 끝에 찬다 —
+아침에 콘솔을 열면 다섯 산출이 전부 분포 밖으로 선다. 휴장일은 원장이 답을 갖고 있어(`skip_reason`)
+막을 수 있었지만, "오늘 산출이 마감됐는가"를 답하는 사실은 이 응답에 없다. **미래 날짜는 400 으로 막았지만**(아직 오지 않은 날은 사실 조회가 아니다) 오늘
+장중은 못 막는다. 막으려면 "그날 산출이 마감됐는가"라는 사실이 새로 필요하고, 그건 이 응답에 없다 —
+소비자 쪽에서 R13 의 도달 조건을 좁히든 축을 새로 계측하든 **다음 라운드의 결정**이다.
+⚠️ 상한 판정은 **앱 시계**(`LocalDate.now(KST)`)다 — `SourceService` 의 날짜 파라미터와 같은 규약이고,
+DB 시계로 옮기려면 조회를 먼저 돌려야 해서 400 게이트가 게이트가 아니게 된다. 두 시계가 갈리는 창은
+KST 자정 앞뒤의 시계 오차만큼이고, 그때 오판은 400 하나다(사실을 틀리게 그리지는 않는다).
+⚠️ 미래 날짜의 상한은 **KST 오늘**이지 원장의 최신 거래일이 아니다. 최신 거래일로 자르면 계획이
+통째로 안 돈 날(런 0건 + `PLANNER_MISSING`)을 못 열게 되는데, 그날이 R01 이 P0 를 내야 하는 날이다.
+
+⚠️ **날짜 캐스트는 존을 항상 명시한다**(`AT TIME ZONE 'Asia/Seoul'`). 생략하면 세션 TimeZone —
+곧 JVM 기본값 — 을 타서 로컬(KST)에서는 맞고 운영(UTC)에서만 하루가 밀린다. 변이 검증이 못 보는
+자리라 통합 테스트 주석에 그대로 적혀 있다.
+
+### `news_funnel`·`delivery` — 범위 결정 (ALPHA-738)
+
+계약에 없던 두 축의 처분을 정했다.
+
+- **`news_funnel` 은 이 응답 밖이다.** 규칙 입력이 **0건**이고(소비자는 `NewsFunnel.tsx` 와 추세
+  지표 2개뿐), 필드 대부분(`maxPages`·`dedupKey`·`timestampAxis`·`universeFilter`)은 그날의 관측이
+  아니라 **수집 코드의 성질**이다. 뉴스 집계를 주는 표면은 이미 있다(`/api/v1/sources/lineage/news`).
+  🔴 그때까지 그 화면과 추세 지표 2개는 **스냅샷 백업**으로 남는다(알려진 부채 — D 에서 밟는다).
+- **`delivery` 축은 없앤다.** 화면이 읽는 값은 셋인데 둘(`published_without_new_delivery`·
+  `new_delivery_now_nonpublished`)이 `boundary` 의 같은 수고, 나머지 하나가 누적 전달 행 수다.
+  서버는 그걸 `boundary.deliveryRows` 로 낸다 — B2 에서 `DeliveryFacts` 타입과 `DeliveryPage` 의
+  `F.delivery` 참조를 지우고 `F.boundary` 로 옮긴다.
+
+⚠️ **발번 유형 술어를 넣지 않았다.** 전달은 2형상이고(NEW·INVALIDATION — [ADR-0044](../adr/0044-correction-abolition.md)
+로 CORRECTION 폐지) 스키마 CHECK 가 `explanation_result_id` 를 NEW 에만 허용해, `delivery_type='NEW'`
+는 **어떤 행도 못 거르는** 가드다(테스트로 겨눌 수도 없다). 3형상이 돌아오면 경계 두 조건에
+**같이** 넣어야 한다 — 한쪽만 넣으면 미발번 P0 가 조용히 줄어든다.
+
+🔴 **"비게시 발번"은 무효화 통지가 안 간 것만 센다**(봇이 잡았다). 운영자 무효화
+(`JdbcAnalysisWriteRepository.invalidate`)는 결과를 WITHDRAWN 으로 전이하고 그 NEW 를 받은
+테넌트에 INVALIDATION 을 발번하되 **원래 NEW 행은 남긴다**. 상태만 보면 정상 무효화한 분석이
+전부 이 칸에 남아 R14 의 **P0 가 영구히 단조 증가**했다. 실제 정합 위반은 "비게시인데 무효화
+통지도 안 갔다"이고, 상관은 결과만이 아니라 **테넌트까지**다 — 무효화는 그 NEW 를 받은 테넌트에만
+나가므로 받고도 통지 못 받은 테넌트가 있으면 그건 진짜 위반이다.
+⚠️ 스냅샷의 `delivery_now_nonpublished: 1`(로컬 시드)은 실 응답에서 이 규칙에 따라 달라질 수 있다.
+
 ## 부재를 싣는 규약
 
 콘솔은 부재를 네 가지로 가른다(`0` 실측 0 / `—` 집계 없음 / `관측 불가` / `계측 없음`). 와이어는:
@@ -26,14 +135,21 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 | 뜻 | 와이어 |
 |---|---|
 | 실측 0 | `0` |
-| 집계 없음 · 관측 불가 | `null` + 그 축의 `*Unavailable` 사유 |
+| 집계 없음 · 관측 불가 | `null`. **축 단위**로 없으면 그 축의 `*Unavailable` 사유를 함께 (예: `queues: null` + `awsUnavailable`) |
 | 계측 없음 (기록 자체가 없다) | **필드를 안 보낸다** |
+
+⚠️ `*Unavailable` 은 **축 단위 부재**의 규약이지 필드 단위가 아니다 — `ledgerStatus: null`(원장이
+아직 안 씀)·`base: null`(기준 표본 없음)처럼 행/필드 단위 null 은 사유를 따로 달지 않는다. 그 뜻은
+필드 주석과 이 문서가 정한다.
 
 **`[]`·`0`·`""` 으로 메우지 않는다** — 화면이 "괜찮다"로 그린다. 표시 문자열도 만들지 않는다
 (포맷은 UI 소관 — `SourceReportResponse` 가 이미 지키는 규약).
 
-⚠️ **"안 보낸다"를 적용할 수 있는 축은 현재 `queues`·`etf_ledger`·`minute` 뿐이다.** 나머지는
-엔진 타입에서 필수라 빼면 평가가 죽는다. 그 축들의 옵셔널화는 이 계약을 배선하는 작업에 포함된다.
+⚠️ **엔진 타입에서 필수인 축을 빼면 평가가 죽는다.** 타입상 지금 그냥 빼도 되는 축은
+`queues`·`etf_ledger`·`minute` 뿐이다.
+🔴 **그런데 B1 서버는 그보다 많이 뺐다** — `chain`·`runbook`·`meta.aws` 도 안 보낸다(계측이 없으니
+그게 맞다). 즉 **옵셔널화는 선택이 아니라 소비 라운드(B2)의 선행 조건**이다. 어느 축이고 무엇이
+가드 없이 그걸 읽는지는 아래 §「배선 시 함께 해야 하는 것」의 표에 있다.
 
 ### AWS 제어면은 같은 응답에, 자기 부재 사유와 함께
 
@@ -53,7 +169,7 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 
 | 축 | 소스 | 상태 |
 |---|---|---|
-| `runs[].id·lane·trading_date` | `ops_pipeline_run.run_key·pipeline_type·trading_date` | ✅ |
+| `runs[].id·lane·trading_date` | `ops_pipeline_run.run_key·pipeline_type·trading_date`. 런 행이 없는 슬롯은 `ops_reconciliation_issue.scope_key`(=run_key)에서 **파싱**한다 — 못 읽으면 lane·trading_date 가 null 이고 경고가 남는다 | ✅ |
 | `runs[].ledger_status` | `ops_pipeline_run.orchestration_status` | ✅ |
 | `runs[].deadline` | `ops_pipeline_run.hard_deadline_at` | ✅ |
 | `runs[].planned·no_run_row` | `ops_reconciliation_issue` `issue_type=PLANNER_MISSING`·`scope=slot` | ✅ |
@@ -67,12 +183,12 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 | `chain.{feeds,stages}` | — | ❌ 소스 없음 (뉴스 갈래만 `/sources/lineage/news` 가 부분) |
 | `queues[]` | SQS `GetQueueAttributes` | ⚠️ AWS |
 | `queues[].purpose`·`subscribers` | — | ❌ SQS 가 안 준다 / 큐→서비스 구독 매핑 선언이 없다 |
-| `outputs[].today` | 각 산출 테이블 count | ⚠️ 쿼리 신설 |
-| `outputs[].base` | — | ❌ 일별 계열을 주는 응답이 없다 |
-| `boundary` | `explanation_result ⋈ tenant_delivery` | ✅ (`seed_note` 는 소스 0) |
+| `outputs[].today` | 각 산출 테이블 count | ✅ B1 에서 신설 |
+| `outputs[].base` | 같은 count 를 **직전 10거래일**로 묶은 중앙값 | ✅ B1. ⚠️ 거래일 판별 = **(런이 있던 `trading_date` ∪ 계획 결손일) − 휴장일**, 그리고 **그 뒤에** 10개로 자른다. 순서가 셋 다 중요하다: 제외를 합집합 앞에 두면 결손일이 휴장일을 되살리고(제외는 **날짜 단위** — 휴장 신호는 KR 시장 레인에만 붙는다), 자르기를 제외 앞에 두면 표본이 9개로 줄고 11번째 거래일이 유실된다 |
+| `boundary` | `explanation_result ⋈ tenant_delivery` | ✅ (`seed_note` 는 소스 0 — 안 보낸다. 누적 전달 행 수 `deliveryRows` 가 B1 에서 붙었다) |
 | `etf_ledger` | — | ❌ per-ETF 분석 귀결 원장이 없다 |
 | `runbook` | `DatasetContract.runbook_uri` | ❌ 레지스트리 계약 1건, 그 값이 `None` |
-| `meta.db`·`meta.today` | `now()` (DB 시계) · 거래일 | ✅ |
+| `meta.db`·`meta.today` | `now()`(DB 시계) · **원장이 아는 가장 최근 날**(거래일 달력이 아니다 — §「무엇이 실제로 나가는가」) | ✅ |
 
 ### `dataset_contract` 테이블은 없다
 
@@ -86,13 +202,17 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 
 ## 이 계약이 강제하는 것
 
-**19룰 중 `facts` 단독 8개, `facts` + `/sources/minute` 11개가 실 응답만으로 선다.**
+**19룰 중 `facts` 단독 9개, `facts` + `/sources/minute` 12개가 실 응답만으로 선다.**
 
 | | 룰 |
 |---|---|
-| ✅ 원장으로 돈다 | R01 · R02 · R04 · R05 · R06 · R07 · R09 · R14 (+ minute 이 오면 R17 · R18 · R19) |
+| ✅ 원장으로 돈다 | R01 · R02 · R04 · R05 · R06 · R07 · R09 · R13 · R14 (+ minute 이 오면 R17 · R18 · R19) |
 | ⚠️ AWS 호출이 붙어야 | R03(SFN) · R12(SQS) — 둘 다 `canRun` 이 있어 미배선이면 `못 돎` 이다 |
-| ❌ 계측이 없어 `못 돎`(`notRun: 'axis'`) | R08 · R10 · R11 · R13 · R15 · R16 (+ SFN 미배선이면 R03, `queues` 미배선이면 R12, minute 미도착이면 R17~R19) |
+| ❌ 계측이 없어 `못 돎`(`notRun: 'axis'`) | R08 · R10 · R11 · R15 · R16 (+ SFN 미배선이면 R03, `queues` 미배선이면 R12, minute 미도착이면 R17~R19) |
+
+⚠️ **R13 은 B1 에서 `못 돎` 줄→`돈다` 줄로 옮겼다.** 산출 일별 계열이 "없다"가 아니라 "주는
+**기존 응답**이 없다"였고, `outputs[].base` 를 신설하면서 실 응답에서도 돈다 —
+§「무엇이 실제로 나가는가」 참조.
 
 ⚠️ **`못 돎` 의 생산자는 둘이다.** 위 표는 `canRun`(사실 축 부재, `notRun: 'axis'`)만 열거한다.
 응답이 사건을 못 가르게 주면(식별자 충돌·빈 대상/범위 축) 평가기가 그 규칙의 위반을 통째로
@@ -100,10 +220,11 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
 대시보드에 매핑하면 안 된다. `rules[].notRun` 필드가 그 구분을 낸다(리포트 JSON 에도 있다).
 
 - 🔴 **R08 은 지금 `평가됨` 인데 실 응답에서 `못 돎` 이 된다.** 목이 가리고 있던 계측 공백이
-  드러나는 것이다 — 회귀가 아니라 정정이다. **R03·R10·R13 도 같이 뒤집힌다**(ALPHA-738 A2 에서
-  `canRun` 을 붙였다): 동봉 스냅샷은 세 축을 다 채우고 있어 오늘은 `평가됨` 이지만, 실 응답에서
-  SFN 조회·체인 집계·산출 일별 계열이 없으면 셋 다 `못 돎` 으로 선다. 스냅샷 회귀 수(위반 29 ·
-  사건 20)는 안 바뀐다 — 이 셋의 판정이 오늘 화면에서 달라지지 않는다는 뜻이다.
+  드러나는 것이다 — 회귀가 아니라 정정이다. **R03·R10 도 같이 뒤집힌다**(ALPHA-738 A2 에서
+  `canRun` 을 붙였다): 동봉 스냅샷은 두 축을 다 채우고 있어 오늘은 `평가됨` 이지만, 실 응답에서
+  SFN 조회·체인 집계가 없으면 둘 다 `못 돎` 으로 선다. 스냅샷 회귀 수(위반 29 · 사건 20)는 안
+  바뀐다 — 이 둘의 판정이 오늘 화면에서 달라지지 않는다는 뜻이다.
+  ✅ **R13 은 뒤집히지 않는다** — B1 이 `outputs[].base` 를 실었다(원래 이 목록에 있었다).
 - **런북은 29/29 미등록**이 된다. 스냅샷의 8개 항목은 손으로 쓴 목이다.
 - 못 도는 규칙은 화면에서 `못 돎` 으로 서야 한다. `평가됨 · 위반 0`("봤고 괜찮다")과 같은 칸에
   그리면 계측 공백이 정상으로 보인다.
@@ -223,8 +344,32 @@ GET /api/v1/console/facts?date=YYYY-MM-DD     # date 생략 = 최신 거래일
   자체가 없어 **E2E 로도 안 밟힌다** — `KIND_LABEL[r.kind ?? 'scheduled']` 같은 변이도, 캡션이
   다시 "이 열은 목값" 으로 되돌아가는 것도 아무것도 안 잡는다(캡션은 실제로 셀과 다른 부재
   어휘를 말하고 있었고 리뷰가 잡았다). `runs[].kind` 를 실제로 싣게 되는 날 세 자리를 함께 봐라.
-- `chain`·`outputs` 축 옵셔널화 (위 부재 규약). **`datasets` 는 넣지 마라** — 작업에서 파생하는
+- `chain` 축 옵셔널화 (위 부재 규약). **`datasets` 는 넣지 마라** — 작업에서 파생하는
   축이라 못 보내는 축이 아니고, 옵셔널로 만들면 `canRun` 이 없는 R09 가 `평가됨 · 위반 0` 이 된다.
+  ✅ **`outputs` 도 넣지 마라** — B1 이 `today`·`base` 를 실제로 싣는다(원래 이 목록에 있었다).
+  🔴 **목록이 둘 모자랐다**(B1 리뷰가 잡았다). 서버가 실제로 안 보내는 축은 `chain` 만이
+  아니다 — **`runbook` 과 `meta.aws` 도 없다**. 둘 다 `Facts` 에서 필수이고 **널 가드 없는 소비자**가
+  있어, 어댑터가 형태만 맞춰 넘기면 그 자리에서 죽는다:
+
+  | 축 | 가드 없는 소비자 |
+  |---|---|
+  | `chain` | `pages/ops/ChainStrip.tsx`(`F.chain.stages`·`F.chain.feeds`) · `pages/ops/trendCatalog.ts` 의 `chain()` · `rules/rules.ts` R10 `run()` |
+  | `runbook` | `rules/evaluate.ts` 의 `runbookOf`(`f.runbook[...]` — 첨자 접근이라 부재면 TypeError) |
+  | `meta.aws` | `pages/ops/shared.tsx`·`IncidentsPage.tsx`·`IncidentDetailPage.tsx` 의 기준 시각 줄 · `rules/evaluate.ts` 의 리포트 `as_of.aws` |
+
+  ⛔ **빈 값으로 메워서 넘기지 마라**(`{feeds:[],stages:[]}`·`{}`·현재 시각). 계측 없음이 실측으로
+  위조되고, 그게 이 콘솔이 없애려는 칸 혼동이다. 축을 옵셔널로 내리고 소비자에 부재 표기를 붙이는
+  것이 유일한 처방이다.
+- 🔴 **엔진 타입이 필수라고 선언한 자리에 서버가 정당하게 null 을 낸다**(B1 리뷰 2라운드에서 전수
+  대조). 어댑터로 못 메운다 — 메우면 원장에 없는 값을 지어내는 것이고, 그 행을 빼면 사고가 사라진다.
+
+  | 필드 | 지금 타입 | null 이 되는 경로 | 빼면 잃는 것 |
+  |---|---|---|---|
+  | `RunFact.trading_date` | `string` | 비거래일 런(원장 컬럼이 NULL) — 계획 시각의 KST 날짜로 창에 잡힌다 | 그날 실패한 런이 R04 에서 사라진다 |
+  | `RunFact.lane` | `string` | 슬롯 키를 못 읽은 `PLANNER_MISSING` 행(레인을 지어내지 않는다) | 그 슬롯의 R01 P0 |
+  | `TaskFact.trading_date` | `?: string` | 위와 같은 런의 작업 — **옵셔널은 `undefined` 지 `null` 이 아니다** | — (키를 안 보내는 것도 답이지만 그러면 "계측 없음"으로 읽힌다) |
+
+  그리고 **`BoundaryFact` 에 `delivery_rows` 를 더해야 한다** — B1 이 싣는데 타입에 자리가 없다.
   🔴 **옵셔널화하는 순간 `canRun` 이 새 진입점이 된다**(리뷰 지적). `canRun` 은 `evaluated` 와
   무관하게 **모든 규칙에 대해 무조건** 불리므로, R10 의 `chainPoints` 가 `f.chain.feeds` 를 읽다
   죽으면 평가가 통째로 사라진다 — 19규칙의 사건이 전부. `note` 진입점을 막은 것과 같은 종류이고,
@@ -290,5 +435,20 @@ finding 이 **직전 라운드가 붙인 가드**에 대한 것이었고, 19규�
 
 ## 남은 계측 부채
 
-`kind` · `runbook_uri` 실값 · 재시도 정책 상한 수 · 큐→서비스 구독 매핑 · 산출 일별 계열 ·
+`kind` · `runbook_uri` 실값 · 재시도 정책 상한 수 · 큐→서비스 구독 매핑 ·
 체인 단계 집계 · per-ETF 분석 귀결 원장 · 작업 최근 이력 집계(`last_ok`·`ok_rate`).
+
+✅ **산출 일별 계열은 해소됐다**(B1 — `outputs[].base`).
+
+🔴 **거래일 달력이 클라우드 DB 에 없다.** 지금은 원장의 `skip_reason='NON_TRADING_DAY'` 를 신호로
+쓰는데, 이건 **런 행이 있는 날에만** 존재한다. Planner 가 통째로 실패한 날(런 0건 + 계획 결손)은
+거래일이었는지 알 방법이 없어 **거래일로 간주해** 표본에 넣는다 — `PLANNER_MISSING` 은 주말을
+걸러 열리고 휴장일에는 Planner 가 정상적으로 돌아 런 행이 생기므로, "런이 0건인 평일 = 거래일"일
+확률이 압도적이기 때문이다. 남는 오차는 **장애와 휴장이 겹친 날** 하나다.
+⚠️ 여기서 "빼는 쪽이 과민이라 안전하다"로 판단하면 안 된다 — R13 은 ±25% **양방향**이라 기준이
+올라가면 위쪽 이상이 조용해진다(거짓 음성). 리뷰 4라운드가 3라운드의 그 논거를 반례로 뒤집었다.
+달력이 생기면 이 추정을 그 판별로 바꾼다.
+
+🔴 **API 매핑 SSOT(`docs/console-ia/super-admin-console.md`)에 `/api/v1/console/facts` 행이 없다.**
+`AdminAuthFilter.RULES` 에는 등록했다(fail-closed라 안 하면 403). IA 문서는 대시보드 마무리 후
+일괄 정리하기로 해서 이번에 안 건드렸다 — **그 라운드에서 이 줄을 같이 처리해라**.
