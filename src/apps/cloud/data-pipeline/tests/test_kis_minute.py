@@ -125,10 +125,11 @@ class TestParse:
         """⛔ 격자 가드를 파서로 올리지 마라 — 형제(`kis_sector_index`)를 따라 옮겼다가
         되돌린 자리다. 이 테스트가 그 회귀를 막는다.
 
-        당일 경로는 30봉 페이지를 통째로 파싱하고 `select_window_candle` 이 정확 일치로
-        하나만 고른다 — **남의** 격자 밖 봉은 어차피 안 뽑힌다. 파서에서 raise 하면 그
-        행 하나가 `Outcome.INVALID` → `WINDOW_INVALID` 로 362종 전건을 죽이고, INVALID
-        는 재청구 대상이 아니라 영구 손실이다. 소급 경로는 합성이 봉에 앵커돼 사정이
+        가르는 것은 **window 키와 충돌할 수 있느냐**다. 짧은 라벨은 `second == 0` 으로
+        파싱돼 계획 키와 정확히 일치할 수 있으니 파서에서 막아야 한다. 격자 밖 봉은
+        분 정렬된 어떤 키와도 못 만나 `select_window_candle` 이 그냥 안 뽑는다 —
+        여기서 raise 하면 **남의** 행 하나로 그 window 를 INVALID 로 만들 뿐이고,
+        30봉 페이지라 ~30 window 가 그렇게 된다. 소급은 합성이 봉에 앵커돼 사정이
         다르므로 가드가 `_fetch_day` 에 있다(`TestHistoricalCandles` 가 잰다).
         """
         candle = parse_minute_row({**row(), "stck_cntg_hour": "103030"}, "005930")

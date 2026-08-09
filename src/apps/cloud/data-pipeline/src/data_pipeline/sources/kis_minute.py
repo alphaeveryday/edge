@@ -118,16 +118,19 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
         end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
         raise ValueError(f"{symbol} 분봉 시각 형식 오류: {day!r} {hour!r}") from error
-    # ⛔ 분 격자 가드를 **여기 두지 마라.** 형제 `kis_sector_index.parse_index_row` 가
-    # 파서에 두고 있어서 옮겨봤다가 되돌렸다 — 두 경로의 소비 방식이 다르다:
-    #   · 당일(`KisMinuteClient.candles`) — 30봉 페이지를 통째로 파싱하고
-    #     `select_window_candle` 이 `window_end` **정확 일치**로 하나만 고른다. 격자 밖
-    #     봉은 어차피 안 뽑힌다. 여기서 raise 하면 남의 행 하나가 `_candle_for` →
-    #     `Outcome.INVALID` → `status_of` 를 타고 **362종 전건**을 죽이고, INVALID 는
-    #     재청구 대상이 아니라 영구 손실이다. 그 봉은 페이지에 ~30 window 동안 남는다.
-    #   · 소급(`_fetch_day`) — `fill_no_trade_minutes` 가 봉에 **합성을 앵커**하므로
-    #     격자 밖 봉 하나가 하루를 민다. 거기서는 가드가 일한다 — 그래서 거기 있다.
-    # 지수 어댑터가 파서에 둘 수 있는 건 그쪽 `candles` 가 자기 window 만 조립해서다.
+    # ⛔ 분 격자 가드는 **여기 두지 마라**(`_fetch_day` 에 있다). 형제
+    # `kis_sector_index.parse_index_row` 가 파서에 둬서 모양을 맞춘답시고 옮겨봤다가
+    # 되돌린 자리다. 가르는 것은 어느 파일이냐가 아니라 **window 키와 충돌할 수 있느냐**다:
+    #   · 짧은 라벨은 `second == 0` 인 시각으로 파싱된다 → 계획 window 키와 **정확히
+    #     일치할 수 있다** → `select_window_candle` 이 그걸 뽑아 틀린 값이 VALID 로
+    #     확정된다. 위 자리수 가드가 막는 것이 그것이고, 그래서 파서에 있어야 한다.
+    #   · 격자 밖 봉(`second != 0`)은 분 정렬된 어떤 키와도 못 만난다 → 당일 경로에선
+    #     `select_window_candle` 이 그냥 안 뽑는다. 여기서 raise 해봐야 **남의 행** 하나로
+    #     그 window 를 INVALID 로 만들 뿐이다(30봉 페이지라 ~30 window 를 그렇게 만든다).
+    #   · 소급은 다르다 — `fill_no_trade_minutes` 가 봉에 합성을 **앵커**하므로 격자 밖
+    #     봉 하나가 하루 전체를 민다. 거기서만 가드가 일한다.
+    # 지수 어댑터도 페이지 전체를 돌려주므로 노출은 같다 — 그쪽 격자 가드도 같은 값을
+    # 치르고 있다. 여기서 따라 할 이유가 아니다.
     values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS}
     volume = to_decimal(raw.get("cntg_vol"), "cntg_vol", symbol)
     # currency 는 KIS 가 주지 않는다 — 지어내지 않고 None 으로 둔다(KRX 전용이라 KRW 지만,
