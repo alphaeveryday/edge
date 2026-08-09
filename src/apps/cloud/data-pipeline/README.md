@@ -571,8 +571,10 @@ LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 > 만든 날짜 문자열이 그대로 벤더 질의에 실리기 때문이다. 기준은 벤더 국적이 아니라 **그
 > 데이터가 어느 시장의 날짜인가**다: BigKinds·DART·KIS 는 KST, **yahoo 도 KST**(미국 서비스지만
 > `index_map` 이 `^KS11`·`^KQ11` 뿐이다), **FMP 만 미국 달력(UTC)**. 프로세스 시계(UTC)로 뽑으면
-> KST 벤더는 09:00 KST 이전에 도는 슬롯에서 하루가 밀린다 — 지금 모든 슬롯이 09:00 이후라 안
-> 드러날 뿐이었고, 공시 09:00 슬롯은 그 경계에 정확히 서 있었다.
+> KST 벤더는 09:00 KST 이전에 도는 슬롯에서 하루가 밀린다 — ALPHA-883 당시엔 모든 슬롯이 09:00
+> 이후라 안 드러났고(공시 09:00 슬롯이 그 경계에 정확히 서 있었다), **ALPHA-893 의 뉴스 08:10
+> 슬롯이 그 경계를 실제로 넘은 첫 슬롯이다.** 이제 이 표는 잠복 대비가 아니라 매일 도는 런을
+> 지킨다.
 > 창을 쓰는 스텝이 늘면 달력을 표에 **선언해야** 한다(미선언은 fail-loud) — 기본값을 두면 새
 > 스텝이 조용히 한쪽으로 떨어지고 그 창은 하루가 밀린 채 성공한다.
 
@@ -601,13 +603,15 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
 뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)로 **분리 완료**다 — 시장
-레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 15:00·15:30·23:50
-KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
+레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 08:10·23:50
+KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔고 슬롯은 ALPHA-893 이 3개→2개로 줄였다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
 AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
 시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
-뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다 — 시장 analyze 는
-뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다. 뉴스 레인은
-운영 원장에 **자체 `pipeline_type`(`news`)·하루 3슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
+뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다. ⚠️ 여기 있던
+"시장 analyze 가 뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다"는 서술은 **ALPHA-806 부터
+사실이 아니다** — 그 티켓이 시장 SFN 에서 analyze 페이즈를 걷어냈고 설명은 분봉 트리거 큐를
+소비하는 상주 서비스만 만든다. 그래서 ALPHA-893 이 오후 슬롯을 내려도 잃는 소비자가 없다. 뉴스 레인은
+운영 원장에 **자체 `pipeline_type`(`news`)·하루 2슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
 (카탈로그 절 참고).
 
@@ -834,8 +838,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   기사를 skip 하고, 트랜잭션은 날짜별 커밋이라 threading 락 점유가 1분 소비자를 오래 막지
   않는다. 자체 분류기 폐기는 단건 경로 커버리지 실증 후 후속. 결정적 ID 산식·프롬프트는
   엔진과 동일(정본), 창 미지정 = 오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘]
-  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). analyze 는 이 스텝이 만든 event 를 소비한다
-  (ADR-0028). 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
+  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). event 의 소비자는 ADR-0028 기준 analyze 였으나
+  **ALPHA-806 이 시장 SFN 에서 analyze 를 걷어낸 뒤로는 분봉 트리거 큐의 상주 소비자**다. 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
   `LLM_CONCURRENCY` env) — 단 threading 은 novelty 가 available_at 순서·prior 카운트에 의존해
   **직렬** 유지다
 
@@ -1235,7 +1239,7 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
 **슬롯 = 분(ALPHA-564).** 멱등키는 `run_key = <pipeline_type>:<YYYY-MM-DDTHH:MM>`(KST)이고
 `pipeline_run_id`·`execution_name` 이 여기서 결정적으로 파생된다. 날짜가 아니라 **시각**인 이유는
 `UNIQUE (run_key)` 가 곧 "한 슬롯 1회 계획"이라, 날짜로 두면 하루 여러 번 도는 레인(뉴스
-15:00·15:30·23:50, iNAV 15분)의 2회차부터가 1회차에 흡수되고 **수동·백필 실행이 원장에 들어올
+08:10·23:50, iNAV 15분)의 2회차부터가 1회차에 흡수되고 **수동·백필 실행이 원장에 들어올
 자리가 없기** 때문이다. 결과:
 
 - **애드혹 실행도 `plan-run` 으로 돌리면 관측된다** — 실행 분이 그 실행의 슬롯이 된다.
@@ -1261,7 +1265,7 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   `_due_slots` 가 그 레인을 먼저 건너뛰므로 플래그만 남아도 무해하다. 미주입이면 `False`(=평일 전용,
   종전 동작)이고, `"true"`/`"false"` 외의 값은 fail-loud 다.
 - 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 **예정일**"의 **그날 지난 스케줄 슬롯 전부**를
-  대조한다(ALPHA-591 — 뉴스 3슬롯이 최신 하나에 밀려 영영 미대조되지 않게). 평일 전용 레인이면
+  대조한다(ALPHA-591 — 뉴스의 앞 슬롯이 최신 하나에 밀려 영영 미대조되지 않게). 평일 전용 레인이면
   그 예정일이 주말을 건너뛴 직전 평일이다. ⚠️ 수동 슬롯은
   여전히 `OPS_RUN_KEY` 로 지정해야 대조된다 — 지정 없이 초기에 죽은 수동 런은 조용히
   남는다(ALPHA-565).
@@ -1642,7 +1646,7 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **22개**(daily 1·뉴스 3·
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **21개**(daily 1·뉴스 2·
 장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2 — 공시 10 은 DISABLED) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
 (전용 IAM 역할 — 레이크 읽기 + 상주 서비스 9종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다

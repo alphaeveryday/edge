@@ -281,8 +281,12 @@ locals {
   # 뉴스 레인 스텝은 뉴스 SFN(news_pipeline.tf) 소관 — 시장 SFN 페이즈에서 제외한다(ALPHA-553
   # PR2). 잡 **정의**는 위 원본 리스트(raw_ingest_jobs 등)에 남는다: news_pipeline.tf 의
   # news_* 부분집합 필터가 같은 리스트를 읽어 command_expr·taskdef_key 드리프트를 막는다(DRY).
-  # LoadAssertions·AssembleEvents(페이즈 뒤 직렬 꼬리)도 뉴스 SFN 으로 이관됐다 — analyze 는
-  # 뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다.
+  # LoadAssertions·AssembleEvents(페이즈 뒤 직렬 꼬리)도 뉴스 SFN 으로 이관됐다.
+  # ⚠️ 이 자리에 있던 "analyze 가 뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다"는 서술은
+  # **ALPHA-806 에서 이미 사실이 아니게 됐다** — 그 티켓이 analyze 페이즈를 이 SFN 에서 걷어냈고
+  # (아래 FeatureCheckResults 앞 주석) 이 SFN 의 책임은 feature 까지다. 설명은 분봉 트리거 큐를
+  # 소비하는 상주 서비스만 만든다. 그래서 ALPHA-893 이 뉴스 오후 슬롯을 내려도 **이 레인이
+  # 잃는 소비자는 없다** — 그 의존은 ALPHA-806 시점에 이미 끊겨 있었다.
   # 공시 4스텝도 같은 이유로 빠진다(ALPHA-724 컷오버) — 공시 SFN(disclosure_pipeline.tf)이
   # 하루 10슬롯으로 돌린다. **성능이 아니라 원장 정체성 때문이다**: 작업 정체성의 정본인
   # `catalog.by_cli` 가 CLI 로 해소하는데 두 레인의 CLI 가 같아, 한 스텝을 두 레인이 동시에

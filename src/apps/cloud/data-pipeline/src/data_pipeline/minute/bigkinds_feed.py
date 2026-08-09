@@ -12,7 +12,7 @@
 - **차단 분류(fail loud)** — ALPHA-645 실측 시그니처(400+HTML 본문·403·429)를
   `BlockedFeedError` 로 가른다. 일반 실패와 차단은 처방이 다르다: 일반 실패는 lease
   만료 재시도로 낫지만, 차단은 재시도가 차단을 **연장**하므로 운영자가 pacing 을
-  낮추거나 서비스를 내려야 한다(기존 3슬롯 배치는 같은 IP 라 폴백이 아니다 — 티켓).
+  낮추거나 서비스를 내려야 한다(기존 배치 레인은 같은 IP 라 폴백이 아니다 — 티켓).
 
 pacing 은 여기 없다 — `PoliteClient.min_interval` 이 요청 간격의 정본이고, 그 값은
 설정(`minute_news_worker.min_interval_sec`)에서 온다(배포 없이 env 로 되돌림).

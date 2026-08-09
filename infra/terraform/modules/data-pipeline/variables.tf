@@ -199,15 +199,52 @@ variable "schedule_state" {
 }
 
 # 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
-# pre-EOD 15:00·15:30 = 정규장 마감구간(종가 동시호가) 뉴스를 EOD analyze 전에 적재. 23:50 = 장외/야간 마무리.
+# 08:10 = 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다. 23:50 = 하루치 마무리.
+#
+# **배치 뉴스가 답하는 질문은 "그날치를 빠짐없이 담았나" 하나다(ALPHA-893).** 신선도는 분 레인
+# 몫이다 — `minute/event_assembly.py`(ALPHA-727)가 장중에 배치와 같은 결정적 ID 로 event 를 세운다.
+# 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD analyze 에 그날 뉴스를 공급**하려고 있었는데, EOD 가격
+# 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 함께 내렸다.
+# ⚠️ 커버리지는 슬롯 수가 아니라 **창**이 정한다 — 창이 `[어제, 오늘]` 2일이라 날 X 는 X일
+# 23:50 런과 **X+1일 08:10 런**이 이중으로 덮는다. 슬롯을 지워도 남은 런의 창은 안 커진다
+# (증분 커서가 없어 매 런이 창 전체를 다시 긁는다).
+# ⚠️ **컷오버 1회 부담**: apply 순간 `OPS_NEWS_SCHED_HHMM` 이 08:10,23:50 으로 갈리므로
+# `entry._due_slots` 는 그 뒤로 15:00·15:30 run_key 를 만들지 않는다 — 그때 in-flight 였던
+# 오후 런과 열려 있던 뉴스 `PLANNER_MISSING` 은 자동 해소 경로를 잃고 OPEN 으로 남는다
+# (공시 컷오버가 같은 값을 치렀다 — infra/terraform/README.md). 15:00~16:00 KST 밖에서
+# apply 하거나, 그 슬롯을 `OPS_RUN_KEY=news:<날짜>T15:00` 로 지목해 `reconcile` 을 한 번 돌려라.
+# ⚠️ **08:10 은 09:00 전에 끝나야 한다 — 이유는 벤더 경합이지 분 격자가 아니다.** 배치와 1분
+# 레인은 같은 BigKinds 를 같은 요청 형상(`sources.bigkinds.search_page` 공유)·같은 IP 로 친다
+# (minute/bigkinds_feed.py 헤더). 09:00 에 뉴스 분 격자가 열리는데(minute/models.py:
+# `EXTENDED_HOURS_DATASETS` 에 뉴스 없음 → 항상 09:00) 그때까지 배치가 돌고 있으면 두 레인의
+# 요청이 겹쳐 pacing 이 합산되고, BigKinds 차단(ALPHA-645: 400+HTML·403·429)은 재시도가 차단을
+# **연장**하는 종류다. 여유는 50분이고 성공 런 실측이 15~17분(2026-08-09)이라 평시엔 08:25~08:27
+# 에 끝난다.
+# ⭐ **08:10 이 사는 것은 분 레인이 못 닿는 꼬리다.** 09:00 첫 poll 은 배치가 뭘 담았든
+# anchor 없는 seed poll 이라 **최신 `max_pages`×`page_size` = 4×100 = 400건**까지만 집는다
+# (minute/news_overlap.py). 이후 poll 은 머리(최신)를 쫓지 꼬리로 안 내려가므로, 밤새 400건이
+# 넘게 쌓이면 **넘친 만큼은 분 레인이 영영 못 본다**(window 는 `truncated` → INCOMPLETE 로
+# 정직하게 남지만 그 기사들이 채워지지는 않는다). 배치는 창이 `[어제, 오늘]` 2일에 페이지
+# 상한 160(ALPHA-541 — 실측 108~126 page)이라 그 꼬리를 통째로 쓸어 canonical 에 넣는다.
+# ⚠️ **분 레인의 첫 poll 페이지 수를 줄여 주지는 않는다** — 두 레인의 원장이 분리돼 있어서다.
+# 분 워커의 anchor 는 `news_poll_anchor`(세션 id 축, minute/news_worker.py)인데 배치 경로는
+# 그 표를 쓰지 않는다. **LLM 장부도 같은 이유로 안 겹친다**(같은 기사를 두 레인이 각각 태운다
+# — ALPHA-900). canonical 만 `parse.news_article_id` 공유로 한 행에 수렴한다.
+# ⚠️ 다만 **50분이 코드로 강제되지는 않는다.** `news_state_machine_timeout_seconds`(40분)는
+# Planner 컨테이너가 떠서 StartExecution 을 부른 **뒤부터** 재므로 Scheduler 의 RunTask 제출
+# ~컨테이너 기동(ENI·이미지 pull, 실측 ~68초)은 그 40분 밖이다 — 이 레포에서 이미 여유를
+# 갉아먹은 적이 있다. 기동이 길어지면 08:10 런이 09:00 을 넘길 수 있고, 재시도 0이라 자동 복구도 없다.
+# 그때 나타나는 증상은 결측이 아니라 **장중 첫 수집이 여러 페이지가 되는 것**이다(뉴스는
+# 그 다음 23:50 런이 어차피 덮으므로 커버리지는 안 깨진다). 상시화하면 슬롯을 앞당겨라.
 #
 # **주 7일인 이유(ALPHA-874)**: 수집 창이 `[어제, 오늘]` 2일이라(run.py `default_window`,
 # DEFAULT_LOOKBACK_DAYS=1) 어떤 날은 그날이나 다음 날에 런이 있어야 덮인다. MON-FRI 였을 때
 # 일요일은 월요일 런의 창이 덮었지만 **토요일은 토·일 모두 런이 없어 매주 통째로 비었다**
 # (2026-08-01 raw 파티션 0 실증). 뉴스는 휴장일에도 나오므로(catalog `kr_trading_calendar=False`)
-# 요일을 넓히는 것이 곧 해소다. ⚠️ 다만 **결함분은 토요일 3슬롯뿐**이고 일요일 3슬롯은 월요일
-# 런이 이미 덮던 구간이다(얻는 것은 즉시성과 런 유실 대비 중복). 주당 체인 실행이 15 → 21 회가
-# 되고 매 실행이 `tag-news`·`assemble-events` 두 LLM 비용 축을 태운다 — 절반은 해소가 아니라 여유다.
+# 요일을 넓히는 것이 곧 해소다. 2026-08-08(토) 23:50 dev 실증으로 닫혔다 — raw 파티션 +
+# 원장 슬롯 `news:2026-08-08T23:50` `found=True, evidence_ok=True`.
+# ⚠️ 다만 **결함분은 토요일뿐**이고 일요일 슬롯은 월요일 런이 이미 덮던 구간이다(얻는 것은
+# 즉시성과 런 유실 대비 중복). 매 실행이 `tag-news`·`assemble-events` 두 LLM 비용 축을 태운다.
 #
 # ⚠️ 요일 표기가 `? * MON-SUN` 이 아니라 **`* * ?`(DOM=매일, DOW=any)** 인 이유: AWS 의
 # day-of-week 은 `1-7 = SUN-SAT` 이라 `MON-SUN` 은 `2-1`, 즉 **내림차순 범위**이고 AWS 문서엔
@@ -216,16 +253,16 @@ variable "schedule_state" {
 #
 # ⚠️ **요일을 MON-FRI 와 주 7일 사이로 좁히지 마라.** 최소 수정은 사실 토요일만 더하는
 # `MON-SAT` 인데 원장이 그걸 표현하지 못한다 — 레인의 "주말에도 도는가"가 이진 플래그라
-# (ops_ledger.tf) MON-SAT 은 일요일 3슬롯까지 기대하게 만들고, 그 런은 뜰 리 없으니 **닫히지
-# 않는** PLANNER_MISSING 이 매주 3개 열린다. 지금은 그런 표기가 plan 단계에서 죽는다.
-# **새 슬롯 시각도 같은 이유로 추가하지 마라** — `OPS_NEWS_SCHED_HHMM` 이 평평한 HH:MM 목록이라
-# 요일 축이 없어, 한 레인 안에 평일 슬롯과 주말 슬롯을 섞는 것 자체가 표현 불가다.
+# (ops_ledger.tf) MON-SAT 은 일요일 슬롯까지 기대하게 만들고, 그 런은 뜰 리 없으니 **닫히지
+# 않는** PLANNER_MISSING 이 매주 열린다. 지금은 그런 표기가 plan 단계에서 죽는다.
+# **슬롯을 더할 땐 요일 표기를 기존과 똑같이 써라** — `OPS_NEWS_SCHED_HHMM` 이 평평한 HH:MM
+# 목록이라 요일 축이 없어, 한 레인 안에 평일 슬롯과 주말 슬롯을 섞는 것 자체가 표현 불가다.
+# 시각을 더하는 것 자체는 자유다(08:10 이 그 예 — 기존과 같은 `* * ?`).
 variable "news_schedule_expressions" {
   description = "뉴스 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 주 7일(ALPHA-874)."
   type        = map(string)
   default = {
-    "pre-eod-1" = "cron(0 15 * * ? *)"
-    "pre-eod-2" = "cron(30 15 * * ? *)"
+    "premarket" = "cron(10 8 * * ? *)"
     "day-close" = "cron(50 23 * * ? *)"
   }
 }
@@ -237,17 +274,30 @@ variable "news_schedule_state" {
 }
 
 variable "news_state_machine_timeout_seconds" {
-  # 인접 스케줄(15:00·15:30, 30분 간격)보다 **짧아야** 한 실행이 다음 실행과 겹치지 않는다 —
-  # 겹치면 두 뉴스 실행이 AssembleEvents 에서 같은 미threaded event 를 동시 처리해 prior-count·
-  # lifecycle_stage 레이스가 난다(edge-review P1). 25분(1500s)=8분 실측에 여유 + 30분 간격 아래.
-  # 초과분은 fail-loud 타임아웃(무한 LLM 을 조용한 레이스보다 낫게 — 타임아웃 알람이 잡는다).
-  # ⚠️ 위 "8분 실측"은 **BigKinds 수집이 40 page 에서 잘리던 때**의 값이다(ALPHA-541 이전).
-  # 캡이 실제 창(2일, 108~126 page)에 맞춰지면서 raw 스텝만 최소 +86초 늘었다 — 상한을 올릴
-  # 수는 없으므로(30분 간격이 묶는다) **다음 실측 때 이 여유를 다시 재라**. 넘으면 States.Timeout
-  # 이라 정의 안 NewsNotifyFailure 를 안 타고 죽는다(news_pipeline.tf 의 타임아웃 알람이 그 자리).
-  description = "뉴스 SFN 실행 타임아웃. 인접 스케줄 간격(30분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
+  # 무한 LLM 을 끊는 fail-loud 상한이다. 넘으면 States.Timeout 이라 정의 안 NewsNotifyFailure 를
+  # 안 타고 죽는다(news_pipeline.tf 의 타임아웃 알람이 그 자리).
+  #
+  # ⚠️ **옛 값 25분(1500s)의 근거는 ALPHA-893 에서 사라졌다.** 그 근거는 "인접 슬롯 간격
+  # 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였다 — 겹치면 두 뉴스 실행의 AssembleEvents
+  # 가 같은 미threaded event 를 동시 처리해 prior-count·lifecycle_stage 레이스가 난다
+  # (edge-review P1). 두 슬롯이 내려가 지금 최소 간격은 **8시간 20분**(23:50→08:10)이다.
+  # 겹침 여지가 그만큼 넓어졌다는 뜻이지 "구조적으로 불가능"은 아니다 — RunTask 제출~컨테이너
+  # 기동이 어디에도 안 묶여 있다.
+  #
+  # 40분(2400s)의 근거는 **실측**이다(2026-08-09, `list-executions` 최근 12런):
+  # SUCCEEDED 4건이 15.3·16.0·16.8·16.9분인데 **5건이 25.0분 정각 TIMED_OUT** — 40%가 상한에
+  # 그대로 잘리고 있었다. 잘리는 지점은 원장에도 찍힌다(`blocked=[ASSEMBLE_EVENTS,
+  # LOAD_ASSERTIONS]`) — 수집·정제·태깅은 끝나고 **꼬리 두 스텝만** 잘린다. 즉 "그날치를
+  # 담는다"는 목적은 서고 event 조립만 안 됐다. 40분은 p50 16분의 2.4배 여유다.
+  # ⚠️ 왜 15~17분이 됐는지(어느 스텝이 부풀었는지)는 아직 안 팠다 — 상한을 올린 것은 원인
+  # 규명이 아니라 **잘림을 멈춘 것**이다. 다음 실측 때 스텝별로 재라.
+  #
+  # 위쪽 상한은 **08:10 런이 뉴스 분 격자 시작(09:00) 전에 끝나는 것**(50분)이 정한다 —
+  # 08:10+40분=08:50. ⚠️ **이 값이 그걸 보장하진 못한다**: 타임아웃은 StartExecution 이후만
+  # 재고 RunTask 제출~컨테이너 기동(~68초)은 밖이다. 더 올리려면 슬롯을 앞당겨라.
+  description = "뉴스 SFN 실행 타임아웃. 무한 LLM 을 fail-loud 로 끊는 상한(겹침 방지 목적은 ALPHA-893 에서 소멸)."
   type        = number
-  default     = 1500
+  default     = 2400
 }
 
 # 공시 SFN 스케줄(ALPHA-722). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
@@ -404,7 +454,7 @@ variable "tag_news_limit" {
   default     = 10000
 }
 
-# 뉴스 SFN TagNews 의 태깅 대상 창(오늘−N일, 주 7일 3슬롯 — ALPHA-553·874). read=O(전체 코퍼스)
+# 뉴스 SFN TagNews 의 태깅 대상 창(오늘−N일, 주 7일 2슬롯 — ALPHA-553·874·893). read=O(전체 코퍼스)
 # 스캔 상한이 목적이다(ALPHA-540). 넓게 둘수록 창 밖 회수가 튼튼하다 — 한 날짜가 슬롯×(N+1)회
 # 스캔돼 일시적 llm_error 가 창 안에서 자가 회복하고(멱등 skip 이라 재스캔 비용은 스캔뿐),
 # 창보다 오래된 정정본만 풀스캔 수동 실행이 맡는다. --window-days 미주입(수동·백필)은 풀스캔

@@ -19,7 +19,7 @@
 # (시장 스케줄이 DISABLED→ENABLED 컷오버를 ALPHA-489 로 한 것과 같은 순서).
 #
 # 운영 원장(ALPHA-591) 편입: 뉴스 스케줄은 daily 와 같이 **Planner(plan-run) 경유**다 —
-# OPS_PIPELINE_TYPE=news 로 자체 레인(카탈로그 6작업·하루 3슬롯 기대)을 계획하고 뉴스 SFN 을
+# OPS_PIPELINE_TYPE=news 로 자체 레인(카탈로그 6작업·하루 2슬롯 기대, ALPHA-893)을 계획하고 뉴스 SFN 을
 # 멱등 시작한다. Reconciler 가 "런 자체가 안 떴다"(PLANNER_MISSING)까지 탐지한다.
 
 locals {
@@ -143,8 +143,9 @@ locals {
         Choices = [{ Variable = "$.ecs.Containers[0].ExitCode", NumericEquals = 0, Next = "NewsAssembleEvents" }]
         Default = "NewsNotifyFailure"
       }
-      # 이벤트 조립 — LoadAssertions 뒤 직렬(document/assertion 자연키 브리지 수렴). 시장 SFN 의
-      # analyze 가 이 스텝이 만든 event 를 기회적으로 소비한다(배리어 없음 — 준실시간 부분입력 계약).
+      # 이벤트 조립 — LoadAssertions 뒤 직렬(document/assertion 자연키 브리지 수렴). ⚠️ 여기
+      # 있던 "시장 SFN 의 analyze 가 이 event 를 소비한다"는 서술은 **ALPHA-806 부터 거짓**이다
+      # (아래 231행·statemachine.tf) — 소비자는 분봉 트리거 큐의 상주 서비스다.
       NewsAssembleEvents = merge(local.ecs_run_task_base, {
         Type  = "Task"
         Next  = "NewsAssembleEventsCheckExitCode"
@@ -224,10 +225,15 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
-# 뉴스 스케줄 3개(KST): pre-EOD 15:00·15:30(정규장 마감구간 뉴스 포함 — 마감 동시호가 15:20~15:30
-# 이 그날 종가를 결정하므로 고신호) + day-close 23:50(장외·야간 뉴스로 하루치 완결, assemble 단일일
-# 창의 오버나잇 갭 보전). analyze 는 시장 SFN 끝(≈장마감+10~15분)에 돌아 그때까지 적재된 event 를
-# 읽으므로, 15:30 런(≈15:38 완료)이 15:40 EOD 런의 analyze 에 그날 뉴스를 공급한다.
+# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 유입분을 배치 코퍼스로 확정 — 분 레인의 seed poll
+# 은 최신 400건까지라 넘친 꼬리를 배치만 담는다. 09:00 전에 끝나야 하는 이유는 그것과 별개로
+# 1분 레인과 같은 BigKinds·같은 IP 를 치기 때문이다) + day-close 23:50
+# (장외·야간 뉴스로 하루치 완결, assemble 단일일 창의 오버나잇 갭 보전). 슬롯 정의·근거의
+# SSOT 는 `news_schedule_expressions` 주석이다.
+#
+# 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD 런의 analyze 에 그날 뉴스를 공급**하려고 있었다.
+# EOD 가격 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 ALPHA-893 이 내렸다 —
+# 장중 신선도는 분 레인(`minute/event_assembly.py`, ALPHA-727)이 갖는다.
 #
 # ⚠️ 알려진 한계(임시구조 수용 — edge-review 지적, 컷오버 전 재검토):
 #   ① 23:50 런은 체인이 10분+ 걸려 자정을 넘기면 assemble 이 '다음 날'만 처리해 그날 늦은 뉴스가
@@ -255,7 +261,10 @@ resource "aws_scheduler_schedule" "news" {
   # StartExecution 하므로, EventBridge 의 드문 중복 재전달이 같은 run_key 로 수렴해 run 1개다.
   # run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
   # jsonencode 이스케이프 우회는 OPS_SCHEDULED_TIME env 한 곳만 남는다.
-  # (재시도는 여전히 0 이다 — 아래 retry_policy 주석: 슬롯 간 비중첩 불변식이 이유.)
+  # (재시도는 여전히 0 이다 — 아래 retry_policy 주석. ⚠️ 이유였던 슬롯 간 비중첩 불변식은
+  #  ALPHA-893 에서 사실상 무의미해졌다: 최소 간격이 30분에서 8시간 20분으로 넓어졌다.
+  #  "불가능"은 아니다 — RunTask 제출~컨테이너 기동은 어디에도 안 묶여 있어 앞 런이 8시간
+  #  넘게 밀리면 원리상 겹칠 수 있다. 그 여지가 실무상 사라졌다는 뜻으로 읽어라.)
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.scheduler.arn
@@ -287,12 +296,14 @@ resource "aws_scheduler_schedule" "news" {
       "SCHEDULED_TIME_TOKEN", "<aws.scheduler.scheduled-time>",
     )
 
-    # 재시도 0 유지 — 사유가 바뀌었다(ALPHA-591 edge-review). 종전엔 멱등 Name 불가(콜론)가
-    # 이유였고 그건 Planner 경유(run_key 파생 execution_name)로 해소됐지만, Planner 멱등은
-    # **같은 슬롯**의 중복만 막는다. 재시도 창이 슬롯 간격(30분)을 파고들면 지연 시작한 15:00
-    # 실행(SFN 타임아웃 1500s)이 15:30 실행과 겹쳐 **서로 다른 run 의 AssembleEvents 가 동시에**
-    # 돌고, threading 의 prior-count·lifecycle_stage read-before-write 레이스가 되살아난다 —
-    # PR1 이 "타임아웃 1500s < 30분 간격"으로 세운 비중첩 불변식은 시작 지연 ≈ 0 일 때만 성립.
+    # 재시도 0 유지 — 사유가 두 번 바뀌었다(ALPHA-591 edge-review → ALPHA-893). 종전엔 멱등
+    # Name 불가(콜론)가 이유였고 그건 Planner 경유(run_key 파생 execution_name)로 해소됐다.
+    # 그 다음 이유는 **슬롯 간격 30분(15:00·15:30)을 재시도 창이 파고들면** 지연 시작한 실행이
+    # 다음 실행과 겹쳐 서로 다른 run 의 AssembleEvents 가 동시에 돌고 threading 의 prior-count·
+    # lifecycle_stage read-before-write 레이스가 되살아난다는 것이었다. ⚠️ **그 두 슬롯이
+    # 사라져 지금 최소 간격은 30분이 아니라 8시간 20분(23:50→08:10)이다** — 여지가 그만큼
+    # 넓어졌을 뿐 "불가능"은 아니다(기동 지연이 어디에도 안 묶여 있다). 즉 이 `retry_policy` 0
+    # 은 더는 실질적 레이스 방지책이 아니고, 아래 "잃는 게 없다"가 유지 근거의 전부다.
     # 재시도를 포기해도 잃는 게 거의 없다: EventBridge 드문 중복 재전달은 run_key 멱등이 흡수,
     # 제출 실패로 슬롯이 누락되면 이번 티켓의 PLANNER_MISSING 탐지가 30분 뒤 이슈를 열고
     # 데이터는 다음 슬롯 창 겹침이 자가 회복한다(daily 15:40 은 하루 1회+후행 슬롯 없음이라

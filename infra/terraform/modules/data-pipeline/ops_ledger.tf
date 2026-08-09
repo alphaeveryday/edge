@@ -192,7 +192,8 @@ resource "aws_ecs_task_definition" "ops" {
       # 그 슬롯이 주말에도 예정된 것인지 알 수 없어, 없으면 레인 구분 없이 주말을 통째로 건너뛴다.
       OPS_DAILY_SCHED_HHMM    = local.daily_schedule_hhmm
       OPS_DAILY_SCHED_WEEKEND = local.daily_schedule_weekend
-      # 뉴스 레인(ALPHA-591): Planner 의 뉴스 SFN ARN + Reconciler 의 뉴스 3슬롯 판정 기준.
+      # 뉴스 레인(ALPHA-591): Planner 의 뉴스 SFN ARN + Reconciler 의 뉴스 슬롯 판정 기준
+      # (ALPHA-893 이후 2슬롯 — 값은 news_schedule_expressions 에서 파생되니 여기 세지 마라).
       OPS_NEWS_STATE_MACHINE_ARN = aws_sfn_state_machine.news.arn
       OPS_NEWS_SCHED_HHMM        = local.news_schedule_hhmm
       OPS_NEWS_SCHED_WEEKEND     = local.news_schedule_weekend

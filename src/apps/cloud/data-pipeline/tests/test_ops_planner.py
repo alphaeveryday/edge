@@ -57,7 +57,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
 def test_same_day_different_slots_are_separate_runs():
     # WHY: run_key 의 계약은 "이 **슬롯**은 한 번만 계획된다"지 "하루 한 번"이 아니다(ALPHA-564).
     #      날짜로 키를 만들면 DB UNIQUE(run_key) 가 하루 1런을 못박아, 하루 여러 번 도는
-    #      레인(뉴스 15:00·15:30·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
+    #      레인(뉴스 08:10·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
     #      수동 실행은 원장에 자리가 없다 — 실제로 2026-07-26 에 관측이 막혔다.
     db = FakeOpsDB()
     ledger = _ledger(db)
@@ -379,9 +379,12 @@ def test_news_tasks_are_due_on_any_non_trading_day():
 
 
 def test_due_slots_returns_all_past_news_slots_of_the_day(monkeypatch):
-    # WHY: 뉴스는 하루 3슬롯이다. 최신 슬롯 하나만 돌려주면 15:30 이 지나는 순간 15:00 런이
+    # WHY: 뉴스는 하루 여러 슬롯이다. 최신 슬롯 하나만 돌려주면 뒤 슬롯이 지나는 순간 앞 런이
     #      영영 대조되지 않는다(ALPHA-565 사각의 확대재생산) — 그날 지난 슬롯 전부가 나와야
     #      주기 reconcile 이 늦은 종결까지 판정한다. grace(30분)는 슬롯별로 계산된다.
+    #      ⚠️ 아래 3슬롯은 **합성 픽스처**다(운영은 ALPHA-893 이후 08:10·23:50 둘). 여기서
+    #      운영 값을 쓰면 "지났지만 grace 전" 축이 사라져 한 슬롯만 걸리는 표가 된다 — 이
+    #      함수는 env 를 읽어 슬롯 수에 무관하므로, 축을 더 많이 태우는 쪽을 고정한다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
     due = entry._due_slots(datetime(2026, 7, 24, 15, 45, tzinfo=planner_mod.KST))
 
@@ -494,9 +497,11 @@ def test_disclosure_left_the_ops_ledger_for_the_minute_lane(monkeypatch):
 
 def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):
     # WHY(ALPHA-721): 레인마다 슬롯 집합이 다르므로 env 도 레인마다여야 한다. 뉴스 env 를
-    #      공유하면 공시 슬롯이 뉴스 시각(15:00·15:30·23:50)으로 잡혀 **존재하지 않는 런**을
+    #      공유하면 공시 슬롯이 뉴스 시각으로 잡혀 **존재하지 않는 런**을
     #      매 주기 PLANNER_MISSING 으로 연다. 미주입 레인은 슬롯 0개여야 한다 — 스케줄이 아직
     #      Planner 를 안 타는 배포(이 PR 시점)에서 거짓 결측을 만들지 않는 안전 기본값이다.
+    #      ⚠️ 아래 뉴스 값은 **합성 픽스처**다(운영은 08:10·23:50) — 이 테스트가 가리는 축은
+    #      "레인이 남의 env 를 안 본다"이지 뉴스 슬롯의 실제 값이 아니다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
     monkeypatch.delenv("OPS_DISCLOSURE_SCHED_HHMM", raising=False)
     due = entry._due_slots(datetime(2026, 7, 24, 16, 30, tzinfo=planner_mod.KST))
@@ -591,16 +596,75 @@ def test_news_cron_runs_every_day_of_week():
     #      (variables.tf 주석), 그 표기는 terraform plan 에서 죽는다. 여기서도 같이 막아 둔다.
     #      ⚠️ **일(day-of-month)까지 함께 든다.** 요일만 보면 `cron(0 15 1 * ? *)`(매달 1일만)
     #      이 통과하는데, 그건 요일 필드가 `?` 라 주말 플래그가 true 로 잡혀 **매달 28일가량
-    #      × 3슬롯**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
-    tf = test_ops_catalog._strip_hcl_comments(
-        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
-    block = re.search(r'variable\s+"news_schedule_expressions"\s*\{(.*?)^\}', tf, re.M | re.S)
-    assert block, "news_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
-    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', block.group(1)))
+    #      × 슬롯 수**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
+    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', _news_cron_block()))
     assert dom_dow and dom_dow <= {("*", "?"), ("?", "*")}, (
         f"뉴스 크론의 (일, 요일)이 {sorted(dom_dow)} — 매일 도는 형태가 아니다. 원장이 표현할 수 "
         "있는 값은 MON-FRI 와 주 7일 둘뿐이고, 둘 중 하나는 `?` 다(AWS 가 `*` 를 두 필드에 "
         "동시에 쓰는 것을 금지한다)")
+
+
+def _news_cron_block() -> str:
+    """주석을 걷어낸 `news_schedule_expressions` 기본값 본문(`_ledger_tf` 와 같은 규율)."""
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"news_schedule_expressions"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "news_schedule_expressions 를 못 찾았다 — 파서가 낡았다"
+    return block.group(1)
+
+
+def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
+    # WHY(ALPHA-893): 08:10 슬롯은 **09:00 KST 이전**이라 창 날짜가 UTC 로 뽑히면 그 런의 창이
+    #      [D-2, D-1] 이 되어 그날 기사를 한 건도 안 가져온다 — 에러 없이 조용히 헛돈다
+    #      (ALPHA-883 이 창을 벤더 달력으로 바꿔 성립시킨 슬롯이다). 두 사실이 **다른 층에**
+    #      있어(크론은 terraform, 달력은 run.py) 한쪽만 되돌려도 아무것도 안 깨진다 —
+    #      그 결합을 여기서 붙든다. 시각 리터럴을 못박지 않는 이유는 08:05·08:20 도 똑같이
+    #      정당하기 때문이다. 지켜야 할 것은 "09:00 이전 슬롯이 있다면 그 창이 KST 여야 한다"다.
+    from data_pipeline import run as run_mod
+
+    slots = [(int(h), int(m)) for m, h in
+             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+    assert slots, "뉴스 크론에서 슬롯 시각을 못 뽑았다 — 파서가 낡았다"
+
+    early = [(h, m) for h, m in slots if (h, m) < (9, 0)]
+    assert early, (
+        "09:00 KST 이전 뉴스 슬롯이 사라졌다. 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다는 "
+        "ALPHA-893 의 결정이 배선에서 빠진 것이다 — 의도한 변경이면 이 단언과 variables.tf 주석을 "
+        "함께 고쳐라")
+    for hour, minute in early:
+        at = datetime(2026, 7, 3, hour, minute, tzinfo=run_mod.KST)
+        window = run_mod.default_window(
+            at.astimezone(run_mod.window_calendar_tz("ingest-raw", "bigkinds")))
+        assert window[1] == "2026-07-03", (
+            f"{hour:02d}:{minute:02d} 슬롯의 창이 {window} — 그날(07-03)이 끝 날짜가 아니다. "
+            "창 날짜가 벤더 달력(KST)이 아니라 프로세스 시계(UTC)로 뽑히면 이 슬롯은 "
+            "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
+
+
+def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
+    # WHY(ALPHA-893): 뉴스 SFN 타임아웃을 묶던 불변식이 **바뀌었다**. 옛 상한 25분의 근거는
+    #      "인접 슬롯 간격 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였는데 그 두 슬롯이
+    #      내려가 최소 간격이 8시간 20분이 됐다. 그 자리를 대신하는 상한이 이것이다 —
+    #      **09:00 전 슬롯은 자기 타임아웃을 다 써도 09:00 을 넘지 않아야 한다.** 넘으면 배치가
+    #      1분 뉴스 워커와 같은 BigKinds 를 같은 IP 로 동시에 쳐서(minute/bigkinds_feed.py 는
+    #      요청 형상을 배치와 공유한다) pacing 이 합산되고, 차단(ALPHA-645)은 재시도가 **연장**
+    #      하는 종류라 그날 두 레인이 함께 죽는다. 두 값이 **다른 변수**(크론 vs 타임아웃)에
+    #      있어 한쪽만 늘려도 아무것도 안 깨진다 — 그 결합을 여기서 붙든다.
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(
+        r'variable\s+"news_state_machine_timeout_seconds"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "news_state_machine_timeout_seconds 를 못 찾았다 — 파서가 낡았다"
+    timeout_sec = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+
+    slots = [(int(h), int(m)) for m, h in
+             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+    for hour, minute in [s for s in slots if s < (9, 0)]:
+        end_min = hour * 60 + minute + timeout_sec // 60
+        assert end_min <= 9 * 60, (
+            f"{hour:02d}:{minute:02d} 슬롯 + 타임아웃 {timeout_sec // 60}분 = "
+            f"{end_min // 60:02d}:{end_min % 60:02d} 로 09:00 을 넘는다. 배치가 1분 뉴스 레인과 "
+            "같은 벤더를 동시에 치는 창이 열린다 — 슬롯을 앞당기거나 타임아웃을 줄여라")
 
 
 def test_every_sched_hhmm_env_has_a_weekend_sibling():

@@ -1026,7 +1026,7 @@ def thread_events(conn, events: list[dict]) -> int:
     # backfill 소비자)이 생겨 writer 가 최대 3 이다. 함수 안에 두는 이유: 모든 호출자
     # (ALPHA-548 백필 포함)가 자동으로 같은 락을 지난다 — 호출부마다 두면 하나가 빠진다.
     # xact 락이라 커밋에 풀린다. ponytail: 전역 락 하나 — 배치 런 트랜잭션이 길면 단건
-    # 소비자가 그동안 대기한다(배치는 하루 3슬롯·현재 DISABLED). thread_key 단위 분할은
+    # 소비자가 그동안 대기한다(배치는 하루 2슬롯 — 08:10·23:50, dev ENABLED). thread_key 단위 분할은
     # prior_counts 가 날짜 전체를 읽어 실익이 없다.
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(hashtext('edge-event-threading'))")

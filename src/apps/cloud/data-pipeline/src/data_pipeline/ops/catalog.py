@@ -42,7 +42,7 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 
 **레인(pipeline_type) 축**(ALPHA-591·724·769): 카탈로그는 시장 레인(`etf-daily`, 17작업)·뉴스 레인
 (`news`, 6작업)·공시 레인(`disclosure`, 4작업)·장중 수급 레인(`investor-intraday`, 3작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
-뉴스 SFN 은 하루 3슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
+뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
 
@@ -319,7 +319,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="rds_dart", deadline_offset_seconds=7200,
     ),
     # ══ 뉴스 레인 6작업 (pipeline_type="news" — 뉴스 SFN edge-dev-data-pipeline-news, 하루
-    # 3슬롯, ALPHA-591 원장 편입) ═══════════════════════════════════════════════════
+    # 2슬롯(08:10·23:50, ALPHA-893), ALPHA-591 원장 편입) ═══════════════════════════════════════════════════
     # ALPHA-553 PR2 로 빠졌던 6작업의 복원이되 **그대로 복사가 아니다**:
     # * 직렬 2개의 state 이름이 다르다 — 뉴스 SFN 은 NewsLoadAssertions·NewsAssembleEvents 다
     #   (병렬 브랜치 4개는 statemachine.tf 잡 정의 재사용이라 이름 그대로).
