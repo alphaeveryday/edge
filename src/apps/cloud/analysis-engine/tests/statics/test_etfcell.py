@@ -323,6 +323,32 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
     assert any(e.get("event") == "llm.response" for e in trace)
 
 
+def test_window_paneltest_wires_the_sql_tool_only_when_the_lake_can(monkeypatch):
+    """레이크가 툴 표면을 만들 수 있으면 propose 에 sql_tool 이 실리고, 스텁·구형
+    레이크면 None 으로 현행 주입식만 돈다(ALPHA-886 2단계 하위호환)."""
+    import dataclasses
+    import types
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {})
+    seen: dict = {}
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda ask, **kw: (seen.update(kw), ([], []))[1])
+
+    lake = types.SimpleNamespace(bound={"price_daily": "available_at"})
+    etfcell._window_paneltest(lake, "iid", "2026-08-05", lambda *_: {}, facts)
+    assert seen["sql_tool"] is not None and seen["sql_tool"]["name"] == "sql"
+
+    seen.clear()
+    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
+    assert seen["sql_tool"] is None
+
+
 def test_missing_layers_raise_instead_of_returning_prose():
     """**부재는 예외로 말한다.**
 

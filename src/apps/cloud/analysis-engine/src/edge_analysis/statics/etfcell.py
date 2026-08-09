@@ -233,10 +233,17 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     if context:
         brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
                   f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
+    # sql 탐색 툴(ALPHA-886 2단계) — 레이크가 툴 표면을 못 만들면(구형·스텁) 주입식만.
+    try:
+        from .sqltool import tool_spec
+        sql_tool = tool_spec(lake)
+    except Exception as e:                      # noqa: BLE001 - 부재는 툴 없이 진행
+        log("hypothesis.sqltool_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
+        sql_tool = None
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),
-                                   series_families=fired)
+                                   series_families=fired, sql_tool=sql_tool)
     except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
         return ({"stage": "propose", "verdict": "제안실패",
                  "reason": f"{type(e).__name__}: {str(e)[:80]}"},), ()
@@ -258,6 +265,12 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         records.append({
             "stage": "test",
             "trigger": t.trigger.ident,
+            # 근거 포맷 §5 게이트 재료(ALPHA-888): 계열 방아쇠는 발화를 명시
+            # 확인해야 한다 — applies_today 는 trigger_fired=None(미계측)을
+            # `is not False` 로 통과시키므로, 유도기가 원값을 직접 본다.
+            "trigger_kind": t.trigger.kind,
+            "trigger_fired": r.trigger_fired,
+            "null_kind": r.null_kind,
             "channel": t.channel,
             "exposure": f"{t.exposure.ident}/{t.exposure.transform}",
             "layer": t.layer,

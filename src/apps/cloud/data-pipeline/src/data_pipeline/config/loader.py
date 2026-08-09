@@ -33,11 +33,13 @@ from .models import (
     KisNavConfig,
     KisPriceConfig,
     MinuteConsumerConfig,
+    MinuteDisclosureWorkerConfig,
     MinuteNewsConsumerConfig,
     MinuteNewsWorkerConfig,
     MinutePriceConsumerConfig,
     MinutePriceWorkerConfig,
     MinuteRelayConfig,
+    MinuteSectorIndexConfig,
     MinuteUniverseConfig,
     KrxEtfConfig,
     KrxInstrumentConfig,
@@ -128,9 +130,19 @@ class Settings(BaseSettings):
     # — 1분 레인의 유니버스 정본은 S3 객체지 이 섹션이 아니다. 미설정이면 섹터 후보
     # 없이(=holdings 파생 ETF 만) universe 를 만든다.
     minute_universe: MinuteUniverseConfig | None = None
+    # 1분 업종지수 dataset(ALPHA-887)의 **수집 대상 정본**. universe.json 과 달리 이건
+    # config 가 곧 정본이다(이 dataset 은 `UNIVERSE_DATASETS` 밖이다).
+    # ⏭ 지금은 읽는 코드가 없다 — 어댑터(`sources/kis_sector_index.py`)만 있고 레인
+    # 배선은 다음 PR 이다. 그 진입점이 미설정을 fail-loud 로 거부해야 한다(기대 집합 0
+    # 으로 도는 것보다 낫다). `KisSectorIndexClient` 는 빈 맵을 이미 기동에서 막는다.
+    minute_sector_index: MinuteSectorIndexConfig | None = None
     # 1분 News Worker(ALPHA-707)는 `news-worker` 스텝만 쓴다. 기본값이 전부라 섹션이
     # 없어도 기동한다 — 엔드포인트 정본은 [bigkinds_news] 라 이 섹션은 수치뿐이다.
     minute_news_worker: MinuteNewsWorkerConfig = MinuteNewsWorkerConfig()
+    # 1분 Disclosure Worker(ALPHA-875)는 `disclosure-worker` 스텝만 쓴다. 뉴스와 같이
+    # 기본값이 전부라 섹션이 없어도 기동한다 — 엔드포인트·유형 필터 정본은
+    # [dart_disclosure.source] 라 이 섹션은 pacing·예산 수치뿐이다.
+    minute_disclosure_worker: MinuteDisclosureWorkerConfig = MinuteDisclosureWorkerConfig()
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
 
