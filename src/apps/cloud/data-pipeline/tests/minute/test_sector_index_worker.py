@@ -403,6 +403,19 @@ class TestBoundedGate:
         assert self._run_cli(monkeypatch, tmp_path, [("DRAINED", {"drain_processed": 1})],
                              today=(2026, 8, 11), draining=True) == 0
 
+    def test_DRAINING_세션은_index_map_이_달라도_닫을_수_있다(self, monkeypatch, tmp_path):
+        """🔴 같은 함정의 **두 번째 문**(Codex P2, 2라운드). 날짜 가드에는 예외를 뒀는데
+        정체성 가드에는 안 둬서, config 가 바뀐 뒤 남은 DRAINING 세션이 그대로 고착됐다.
+
+        공유 루프는 `not ready` 인 drain 을 이미 처리한다 — 고아 CLAIMED 를 집었다 반납하고
+        `ack_drain` 을 부른다(`tick` 의 "단 drain 은 막지 않는다" 주석이 그 논거다).
+        기동에서 죽이면 거기 닿지도 못한다. 새 수집은 어차피 안 일어난다(DRAINING 에서
+        원장이 신규 DUE claim 을 금지한다).
+        """
+        stale = config_set_identity({k: v for k, v in INDEX_MAP.items() if k != "1007"})
+        assert self._run_cli(monkeypatch, tmp_path, [("DRAINED", {"drain_processed": 1})],
+                             session_identity=stale, draining=True) == 0
+
     def test_vps_env_이_클라이언트까지_간다(self, monkeypatch, tmp_path):
         """🔴 `env` 는 **자격증명과 한 몸**이다 — vps 키를 prod 도메인에 던지면 토큰
         발급부터 실패한다. 클라이언트 생성자의 기본값이 `prod` 라, 안 넘기면 vps 설정이

@@ -1068,7 +1068,13 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
     # ⚠️ **기동에서 막는다.** 세션이 다른 index_map 으로 고정돼 있으면 tick 마다
     # `_session_ready` 가 거부해 IDLE 만 돌 뿐이라, 운영자는 "돌고는 있는데 아무것도
     # 안 들어온다"만 본다. 사유를 여기서 한 번 크게 낸다(Rule 12).
-    if (planned := ledger.session_universe(session_id=session_id)) != (
+    # ⚠️ **DRAINING 은 여기서도 예외다**(위 날짜 가드와 같은 이유 — 문이 둘이었다).
+    # 공유 루프는 `not ready` 인 drain 을 이미 처리한다: 고아 CLAIMED 를 집었다 반납하고
+    # `ack_drain` 을 부른다(`tick` 의 "단 drain 은 막지 않는다" 주석이 그 논거다). 기동에서
+    # 죽이면 그 처리에 닿지도 못해, config 가 바뀐 뒤 남은 DRAINING 세션이 영구 고착된다.
+    # 새 수집은 어차피 안 일어난다 — DRAINING 에서 원장이 신규 DUE claim 을 금지한다.
+    if snapshot["phase"] != PHASE_DRAINING and (
+            planned := ledger.session_universe(session_id=session_id)) != (
             expected_version, expected_hash):
         raise SystemExit(
             f"세션의 기대 집합 {planned} 과 이 이미지의 index_map "
