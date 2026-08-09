@@ -282,7 +282,10 @@ locals {
   # PR2). 잡 **정의**는 위 원본 리스트(raw_ingest_jobs 등)에 남는다: news_pipeline.tf 의
   # news_* 부분집합 필터가 같은 리스트를 읽어 command_expr·taskdef_key 드리프트를 막는다(DRY).
   # LoadAssertions·AssembleEvents(페이즈 뒤 직렬 꼬리)도 뉴스 SFN 으로 이관됐다 — analyze 는
-  # 뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다.
+  # 뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다. ⚠️ **그 "이전 런"이 ALPHA-893 에서
+  # 08:10 하나로 줄었다** — 옛 오후 슬롯(15:00·15:30)이 15:40 analyze 직전 공급자였는데
+  # EOD 가격 설명 폐기로 함께 내렸다. 시장 15:40 런이 남아 있는 동안은 그날 08:10 이후 뉴스를
+  # 못 본다(의도 — 장중 신선도는 분 레인 소관, `minute/event_assembly.py`).
   # 공시 4스텝도 같은 이유로 빠진다(ALPHA-724 컷오버) — 공시 SFN(disclosure_pipeline.tf)이
   # 하루 10슬롯으로 돌린다. **성능이 아니라 원장 정체성 때문이다**: 작업 정체성의 정본인
   # `catalog.by_cli` 가 CLI 로 해소하는데 두 레인의 CLI 가 같아, 한 스텝을 두 레인이 동시에

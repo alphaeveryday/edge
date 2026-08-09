@@ -504,7 +504,7 @@ module "data_pipeline" {
   schedule_state = "ENABLED"
 
 
-  # 컷오버(ALPHA-553 PR2): 뉴스 레인 스케줄(15:00·15:30·23:50 KST, ALPHA-874 이후 주 7일). 시장 SFN 의 뉴스 스텝
+  # 컷오버(ALPHA-553 PR2): 뉴스 레인 스케줄(ALPHA-893 이후 08:10·23:50 KST, 주 7일). 시장 SFN 의 뉴스 스텝
   # 제거와 **같은 apply** 로 켠다 — 같은 event 를 두 SFN 이 동시에 쓰는 겹침 창이 구조적으로
   # 생기지 않는다(PR1 이 DISABLED 로 세워 둔 컷오버 게이트). 수동 e2e 실증(07-27,
   # manual-553-verify-20260727T132646Z)을 선행했다.
@@ -543,7 +543,7 @@ module "data_pipeline" {
   # 컷오버(ALPHA-712): 1분 상주 서비스 3종의 세션 결속 스케일 업/다운. 08-03 장중에 같은
   # 순서를 손으로 돌려(plan → desired 1 --force-new-deployment → 백로그 소진 → 실시간 도달)
   # 레인 자체는 실증했다 — 이 스케줄은 그 수동 절차를 자동화한 것이다.
-  # ⚠️ 첫 발화는 다음 거래일 07:45 KST 다. 그때까지 이미지 CD 가 끝나 있어야 `start-minute-session`
+  # ⚠️ 첫 발화는 다음 거래일 08:30 KST 다(ALPHA-893 이전 07:45). 그때까지 이미지 CD 가 끝나 있어야 `start-minute-session`
   # 스텝이 존재한다(이미지 CD 와 apply 는 순서 보장이 없다 — deploy-order-splits-the-pr).
   minute_session_schedule_state = "ENABLED"
 

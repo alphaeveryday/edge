@@ -224,10 +224,13 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
-# 뉴스 스케줄 3개(KST): pre-EOD 15:00·15:30(정규장 마감구간 뉴스 포함 — 마감 동시호가 15:20~15:30
-# 이 그날 종가를 결정하므로 고신호) + day-close 23:50(장외·야간 뉴스로 하루치 완결, assemble 단일일
-# 창의 오버나잇 갭 보전). analyze 는 시장 SFN 끝(≈장마감+10~15분)에 돌아 그때까지 적재된 event 를
-# 읽으므로, 15:30 런(≈15:38 완료)이 15:40 EOD 런의 analyze 에 그날 뉴스를 공급한다.
+# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 밀린 것을 장중 수집 시작 09:00 전에 털어 분 격자를
+# 1페이지로 유지) + day-close 23:50(장외·야간 뉴스로 하루치 완결, assemble 단일일 창의 오버나잇
+# 갭 보전). 슬롯 정의·근거의 SSOT 는 `news_schedule_expressions` 주석이다.
+#
+# 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD 런의 analyze 에 그날 뉴스를 공급**하려고 있었다.
+# EOD 가격 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 ALPHA-893 이 내렸다 —
+# 장중 신선도는 분 레인(`minute/event_assembly.py`, ALPHA-727)이 갖는다.
 #
 # ⚠️ 알려진 한계(임시구조 수용 — edge-review 지적, 컷오버 전 재검토):
 #   ① 23:50 런은 체인이 10분+ 걸려 자정을 넘기면 assemble 이 '다음 날'만 처리해 그날 늦은 뉴스가
@@ -287,12 +290,13 @@ resource "aws_scheduler_schedule" "news" {
       "SCHEDULED_TIME_TOKEN", "<aws.scheduler.scheduled-time>",
     )
 
-    # 재시도 0 유지 — 사유가 바뀌었다(ALPHA-591 edge-review). 종전엔 멱등 Name 불가(콜론)가
-    # 이유였고 그건 Planner 경유(run_key 파생 execution_name)로 해소됐지만, Planner 멱등은
-    # **같은 슬롯**의 중복만 막는다. 재시도 창이 슬롯 간격(30분)을 파고들면 지연 시작한 15:00
-    # 실행(SFN 타임아웃 1500s)이 15:30 실행과 겹쳐 **서로 다른 run 의 AssembleEvents 가 동시에**
-    # 돌고, threading 의 prior-count·lifecycle_stage read-before-write 레이스가 되살아난다 —
-    # PR1 이 "타임아웃 1500s < 30분 간격"으로 세운 비중첩 불변식은 시작 지연 ≈ 0 일 때만 성립.
+    # 재시도 0 유지 — 사유가 두 번 바뀌었다(ALPHA-591 edge-review → ALPHA-893). 종전엔 멱등
+    # Name 불가(콜론)가 이유였고 그건 Planner 경유(run_key 파생 execution_name)로 해소됐다.
+    # 그 다음 이유는 **슬롯 간격 30분(15:00·15:30)을 재시도 창이 파고들면** 지연 시작한 실행이
+    # 다음 실행과 겹쳐 서로 다른 run 의 AssembleEvents 가 동시에 돌고 threading 의 prior-count·
+    # lifecycle_stage read-before-write 레이스가 되살아난다는 것이었다. ⚠️ **그 두 슬롯이
+    # 사라져 지금 최소 간격은 8시간 20분(23:50→08:10)이라 겹침은 구조적으로 불가능하다** —
+    # 즉 이 `retry_policy` 0 은 더는 레이스 방지책이 아니고, 아래 "잃는 게 없다"만 남는다.
     # 재시도를 포기해도 잃는 게 거의 없다: EventBridge 드문 중복 재전달은 run_key 멱등이 흡수,
     # 제출 실패로 슬롯이 누락되면 이번 티켓의 PLANNER_MISSING 탐지가 30분 뒤 이슈를 열고
     # 데이터는 다음 슬롯 창 겹침이 자가 회복한다(daily 15:40 은 하루 1회+후행 슬롯 없음이라

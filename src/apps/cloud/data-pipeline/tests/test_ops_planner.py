@@ -376,9 +376,12 @@ def test_news_tasks_are_due_on_any_non_trading_day():
 
 
 def test_due_slots_returns_all_past_news_slots_of_the_day(monkeypatch):
-    # WHY: 뉴스는 하루 3슬롯이다. 최신 슬롯 하나만 돌려주면 15:30 이 지나는 순간 15:00 런이
+    # WHY: 뉴스는 하루 여러 슬롯이다. 최신 슬롯 하나만 돌려주면 뒤 슬롯이 지나는 순간 앞 런이
     #      영영 대조되지 않는다(ALPHA-565 사각의 확대재생산) — 그날 지난 슬롯 전부가 나와야
     #      주기 reconcile 이 늦은 종결까지 판정한다. grace(30분)는 슬롯별로 계산된다.
+    #      ⚠️ 아래 3슬롯은 **합성 픽스처**다(운영은 ALPHA-893 이후 08:10·23:50 둘). 여기서
+    #      운영 값을 쓰면 "지났지만 grace 전" 축이 사라져 한 슬롯만 걸리는 표가 된다 — 이
+    #      함수는 env 를 읽어 슬롯 수에 무관하므로, 축을 더 많이 태우는 쪽을 고정한다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
     due = entry._due_slots(datetime(2026, 7, 24, 15, 45, tzinfo=planner_mod.KST))
 

@@ -169,7 +169,9 @@
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
 > 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
 > — `run start-minute-session`·`run stop-minute-session` 을 EventBridge Scheduler 2개가
-> 부른다(Premarket 07:45 / EOD 20:05 KST, `aws_scheduler_schedule.minute_session`).
+> 부른다(Premarket 08:30 / EOD 20:05 KST, `aws_scheduler_schedule.minute_session`).
+> ⚠️ Premarket 08:30 은 **지금 universe 에 시간외 종목이 없어(첫 window 09:00)** 성립하는
+> 값이다(ALPHA-893, 이전 07:45) — `extended_hours_ids` 를 넣으면 08:00 이전으로 되돌려라.
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
@@ -588,13 +590,14 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 태스크(analysis-engine 이미지)라 빌더 밖이다.
 
 뉴스(지식) 레인은 별도 상태머신 `edge-dev-data-pipeline-news`(ALPHA-553)로 **분리 완료**다 — 시장
-레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 15:00·15:30·23:50
-KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
+레인과 자연 주기가 달라(시장=장마감 EOD, 뉴스=종일 유입) 자체 주기(**주 7일** 08:10·23:50
+KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔고 슬롯은 ALPHA-893 이 3개→2개로 줄였다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
 AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
 시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
 뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다 — 시장 analyze 는
-뉴스 SFN 의 이전 런(15:00·15:30, 시장 15:40 선행)이 조립해 둔 event 를 소비한다. 뉴스 레인은
-운영 원장에 **자체 `pipeline_type`(`news`)·하루 3슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
+뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다(ALPHA-893 이후 그 이전 런은 08:10 하나다 —
+15:40 analyze 직전 공급자였던 오후 슬롯이 EOD 가격 설명 폐기와 함께 내려갔다). 뉴스 레인은
+운영 원장에 **자체 `pipeline_type`(`news`)·하루 2슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
 (카탈로그 절 참고).
 

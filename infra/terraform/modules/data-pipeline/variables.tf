@@ -199,15 +199,27 @@ variable "schedule_state" {
 }
 
 # 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
-# pre-EOD 15:00·15:30 = 정규장 마감구간(종가 동시호가) 뉴스를 EOD analyze 전에 적재. 23:50 = 장외/야간 마무리.
+# 08:10 = 밤새 밀린 것을 장중 수집 시작(09:00) 전에 털어낸다. 23:50 = 하루치 마무리.
+#
+# **배치 뉴스가 답하는 질문은 "그날치를 빠짐없이 담았나" 하나다(ALPHA-893).** 신선도는 분 레인
+# 몫이다 — `minute/event_assembly.py`(ALPHA-727)가 장중에 배치와 같은 결정적 ID 로 event 를 세운다.
+# 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD analyze 에 그날 뉴스를 공급**하려고 있었는데, EOD 가격
+# 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 함께 내렸다.
+# ⚠️ 커버리지는 슬롯 수가 아니라 **창**이 정한다 — 창이 `[어제, 오늘]` 2일이라 날 X 는 X일
+# 23:50 런과 **X+1일 08:10 런**이 이중으로 덮는다. 슬롯을 지워도 남은 런의 창은 안 커진다
+# (증분 커서가 없어 매 런이 창 전체를 다시 긁는다).
+# ⚠️ **08:10 은 09:00 전에 끝나야 한다** — 뉴스 분 격자가 09:00~15:30 고정이고(minute/models.py:
+# `EXTENDED_HOURS_DATASETS` 에 뉴스 없음) 08:10 의 목적이 그 격자를 1페이지로 유지하는 것이다.
+# 여유 50분, SFN 타임아웃 25분이 그 안에 든다(`news_state_machine_timeout_seconds`).
 #
 # **주 7일인 이유(ALPHA-874)**: 수집 창이 `[어제, 오늘]` 2일이라(run.py `default_window`,
 # DEFAULT_LOOKBACK_DAYS=1) 어떤 날은 그날이나 다음 날에 런이 있어야 덮인다. MON-FRI 였을 때
 # 일요일은 월요일 런의 창이 덮었지만 **토요일은 토·일 모두 런이 없어 매주 통째로 비었다**
 # (2026-08-01 raw 파티션 0 실증). 뉴스는 휴장일에도 나오므로(catalog `kr_trading_calendar=False`)
-# 요일을 넓히는 것이 곧 해소다. ⚠️ 다만 **결함분은 토요일 3슬롯뿐**이고 일요일 3슬롯은 월요일
-# 런이 이미 덮던 구간이다(얻는 것은 즉시성과 런 유실 대비 중복). 주당 체인 실행이 15 → 21 회가
-# 되고 매 실행이 `tag-news`·`assemble-events` 두 LLM 비용 축을 태운다 — 절반은 해소가 아니라 여유다.
+# 요일을 넓히는 것이 곧 해소다. 2026-08-08(토) 23:50 dev 실증으로 닫혔다 — raw 파티션 +
+# 원장 슬롯 `news:2026-08-08T23:50` `found=True, evidence_ok=True`.
+# ⚠️ 다만 **결함분은 토요일뿐**이고 일요일 슬롯은 월요일 런이 이미 덮던 구간이다(얻는 것은
+# 즉시성과 런 유실 대비 중복). 매 실행이 `tag-news`·`assemble-events` 두 LLM 비용 축을 태운다.
 #
 # ⚠️ 요일 표기가 `? * MON-SUN` 이 아니라 **`* * ?`(DOM=매일, DOW=any)** 인 이유: AWS 의
 # day-of-week 은 `1-7 = SUN-SAT` 이라 `MON-SUN` 은 `2-1`, 즉 **내림차순 범위**이고 AWS 문서엔
@@ -216,16 +228,16 @@ variable "schedule_state" {
 #
 # ⚠️ **요일을 MON-FRI 와 주 7일 사이로 좁히지 마라.** 최소 수정은 사실 토요일만 더하는
 # `MON-SAT` 인데 원장이 그걸 표현하지 못한다 — 레인의 "주말에도 도는가"가 이진 플래그라
-# (ops_ledger.tf) MON-SAT 은 일요일 3슬롯까지 기대하게 만들고, 그 런은 뜰 리 없으니 **닫히지
-# 않는** PLANNER_MISSING 이 매주 3개 열린다. 지금은 그런 표기가 plan 단계에서 죽는다.
-# **새 슬롯 시각도 같은 이유로 추가하지 마라** — `OPS_NEWS_SCHED_HHMM` 이 평평한 HH:MM 목록이라
-# 요일 축이 없어, 한 레인 안에 평일 슬롯과 주말 슬롯을 섞는 것 자체가 표현 불가다.
+# (ops_ledger.tf) MON-SAT 은 일요일 슬롯까지 기대하게 만들고, 그 런은 뜰 리 없으니 **닫히지
+# 않는** PLANNER_MISSING 이 매주 열린다. 지금은 그런 표기가 plan 단계에서 죽는다.
+# **슬롯을 더할 땐 요일 표기를 기존과 똑같이 써라** — `OPS_NEWS_SCHED_HHMM` 이 평평한 HH:MM
+# 목록이라 요일 축이 없어, 한 레인 안에 평일 슬롯과 주말 슬롯을 섞는 것 자체가 표현 불가다.
+# 시각을 더하는 것 자체는 자유다(08:10 이 그 예 — 기존과 같은 `* * ?`).
 variable "news_schedule_expressions" {
   description = "뉴스 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 주 7일(ALPHA-874)."
   type        = map(string)
   default = {
-    "pre-eod-1" = "cron(0 15 * * ? *)"
-    "pre-eod-2" = "cron(30 15 * * ? *)"
+    "premarket" = "cron(10 8 * * ? *)"
     "day-close" = "cron(50 23 * * ? *)"
   }
 }
@@ -237,15 +249,18 @@ variable "news_schedule_state" {
 }
 
 variable "news_state_machine_timeout_seconds" {
-  # 인접 스케줄(15:00·15:30, 30분 간격)보다 **짧아야** 한 실행이 다음 실행과 겹치지 않는다 —
-  # 겹치면 두 뉴스 실행이 AssembleEvents 에서 같은 미threaded event 를 동시 처리해 prior-count·
-  # lifecycle_stage 레이스가 난다(edge-review P1). 25분(1500s)=8분 실측에 여유 + 30분 간격 아래.
+  # 한 실행이 다음 실행과 겹치면 두 뉴스 실행이 AssembleEvents 에서 같은 미threaded event 를
+  # 동시 처리해 prior-count·lifecycle_stage 레이스가 난다(edge-review P1). 25분(1500s)=8분 실측에 여유.
   # 초과분은 fail-loud 타임아웃(무한 LLM 을 조용한 레이스보다 낫게 — 타임아웃 알람이 잡는다).
   # ⚠️ 위 "8분 실측"은 **BigKinds 수집이 40 page 에서 잘리던 때**의 값이다(ALPHA-541 이전).
-  # 캡이 실제 창(2일, 108~126 page)에 맞춰지면서 raw 스텝만 최소 +86초 늘었다 — 상한을 올릴
-  # 수는 없으므로(30분 간격이 묶는다) **다음 실측 때 이 여유를 다시 재라**. 넘으면 States.Timeout
-  # 이라 정의 안 NewsNotifyFailure 를 안 타고 죽는다(news_pipeline.tf 의 타임아웃 알람이 그 자리).
-  description = "뉴스 SFN 실행 타임아웃. 인접 스케줄 간격(30분)보다 짧아 실행 간 겹침을 구조적으로 막는다."
+  # 캡이 실제 창(2일, 108~126 page)에 맞춰지면서 raw 스텝만 최소 +86초 늘었다 —
+  # **다음 실측 때 이 여유를 다시 재라**. 넘으면 States.Timeout 이라 정의 안 NewsNotifyFailure 를
+  # 안 타고 죽는다(news_pipeline.tf 의 타임아웃 알람이 그 자리).
+  # ⚠️ **상한을 묶는 것이 ALPHA-893 에서 바뀌었다.** 옛 제약은 인접 슬롯 간격 30분(15:00·15:30)
+  # 이었는데 두 슬롯이 사라져 지금 최소 간격은 8시간 20분(23:50→08:10)이다 — 겹침은 구조적으로
+  # 불가능해졌고, 대신 **08:10 런이 뉴스 분 격자 시작(09:00) 전에 끝나야 한다**는 50분이 상한을
+  # 묶는다. 25분은 그 아래다. 올릴 여지는 생겼지만 실측 없이 올리지 마라.
+  description = "뉴스 SFN 실행 타임아웃. 08:10 런이 분 격자 시작(09:00)까지의 50분 안에 끝나도록 묶는다."
   type        = number
   default     = 1500
 }
@@ -503,11 +518,21 @@ variable "minute_session_schedule_state" {
 
 # ⚠️ 두 cron 은 **universe 가 정하는 세션 범위 밖**이어야 한다. 시간외 거래 종목이 하나라도
 # 있으면 계획 범위가 08:00–20:00 이고(`plan_session_windows`), 없으면 09:00–15:30 이다.
-# 기본값은 넓은 쪽(시간외 포함) 기준이다 — 좁혀 두면 개장 뒤에 뜨거나 마감 전에 내려간다.
+#
+# ⚠️ **start 기본값은 좁은 쪽(시간외 없음) 기준이다(ALPHA-893).** 08:30 은 08:00 보다 뒤라
+# 시간외 종목이 생기는 순간 앞 30칸이 고아가 된다 — 즉 **이 값은 universe 에 딸린 값이지
+# 고정 상수가 아니다.** 실측 근거: 라이브 `config/minute/universe.json`(kr-holdings-96dc5c8bb13b)에
+# `extended_hours_ids` 키가 없고, 생성기도 안 넣는다(`scripts/build_minute_universe.py` — 시간외
+# 여부는 종목별 속성이라 실측 없이 못 채운다). 그래서 지금 계획 범위는 세 dataset 모두 09:00
+# 이후다(뉴스는 `EXTENDED_HOURS_DATASETS` 밖이라 항상 09:00, `disclosure_minute` 은 어휘뿐).
+# **universe 에 `extended_hours_ids` 를 넣게 되면 이 값을 08:00 이전으로 되돌려라.** 안 되돌리면
+# 08:00–08:30 window 30개가 매 거래일 아무도 못 채운 채 DUE 로 쌓이고 EOD QC 가 MISSING 으로
+# 확정한다(조용히는 아니지만 매일 시끄럽다).
+# stop 은 반대로 넓은 쪽(20:00) 기준을 유지한다 — 늦게 내리는 건 낭비지 결측이 아니다.
 variable "minute_session_start_expression" {
-  description = "Premarket 스케일업 cron(Asia/Seoul). 세션 첫 window(시간외 08:00) 전이어야 한다"
+  description = "Premarket 스케일업 cron(Asia/Seoul). 세션 첫 window 전이어야 한다 — 지금 universe 는 시간외 종목이 없어 09:00 이 첫 window 다"
   type        = string
-  default     = "cron(45 7 ? * MON-FRI *)"
+  default     = "cron(30 8 ? * MON-FRI *)"
 }
 
 variable "minute_session_stop_expression" {

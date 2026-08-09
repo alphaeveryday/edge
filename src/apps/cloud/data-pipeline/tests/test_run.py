@@ -74,11 +74,15 @@ def test_branch_vendor_default_comes_from_the_calendar_table():
 
 
 def test_window_does_not_move_for_todays_slot_times():
-    # WHY(ALPHA-883): 이 변경은 **잠복 결함만** 없애야 하고 현행 동작은 한 톨도 바뀌면 안 된다.
-    #      지금 모든 슬롯이 09:00 KST 이후라 UTC 날짜와 KST 날짜가 우연히 같다 — 그 우연을
-    #      값으로 고정해 둔다. 여기가 빨개지면 그날 도는 레인의 수집 창이 실제로 움직인 것이다.
+    # WHY(ALPHA-883): 이 변경은 **잠복 결함만** 없애야 하고 09:00 KST 이후 슬롯의 동작은 한 톨도
+    #      바뀌면 안 된다. 그 시각대는 UTC 날짜와 KST 날짜가 우연히 같다 — 그 우연을 값으로
+    #      고정해 둔다. 여기가 빨개지면 그날 도는 레인의 수집 창이 실제로 움직인 것이다.
+    # ⚠️ ALPHA-893 이 뉴스 08:10 슬롯을 넣으면서 **"모든 슬롯이 09:00 이후"는 더 이상 사실이
+    #      아니다.** 09:00 이전 슬롯은 UTC 와 KST 가 갈리는 것이 **정상**이라 이 표에 넣으면
+    #      안 된다 — 그쪽은 아래 `test_kst_vendor_window_covers_today_before_0900_kst` 소관이다.
+    #      이 표는 "09:00 이후 슬롯" 집합의 불변을 지키는 자리로 남는다.
     for label, kst_hour, kst_minute in [
-        ("뉴스 pre-eod-1", 15, 0), ("뉴스 day-close", 23, 50),
+        ("뉴스 day-close", 23, 50),
         ("공시 첫 슬롯(경계)", 9, 0), ("시장 EOD", 15, 40), ("장중 수급 첫 슬롯", 9, 35),
     ]:
         now_kst = datetime(2026, 7, 3, kst_hour, kst_minute, tzinfo=run_mod.KST)
@@ -86,9 +90,11 @@ def test_window_does_not_move_for_todays_slot_times():
 
 
 def test_kst_vendor_window_covers_today_before_0900_kst():
-    # WHY(ALPHA-883): 09:00 KST 이전은 **전날 UTC 날짜**로 떨어진다(KST=UTC+9). 08:10 슬롯을
-    #      넣으면 그 런의 창이 [D-2, D-1] 이 되어 **그날 기사를 한 건도 안 가져온다** — 8시간
-    #      전 00:10 런과 완전히 같은 창을 다시 긁을 뿐이고, 에러도 안 난다. 조용한 헛돎을 막는다.
+    # WHY(ALPHA-883): 09:00 KST 이전은 **전날 UTC 날짜**로 떨어진다(KST=UTC+9). 08:10 슬롯의
+    #      창이 [D-2, D-1] 이 되면 **그날 기사를 한 건도 안 가져온다** — 8시간 20분 전 23:50
+    #      런과 완전히 같은 창을 다시 긁을 뿐이고, 에러도 안 난다. 조용한 헛돎을 막는다.
+    #      ⚠️ ALPHA-893 이 그 08:10 슬롯을 실제로 넣었다 — 이 테스트는 이제 가정이 아니라
+    #      **매일 도는 런**을 지킨다.
     at_0810_kst = datetime(2026, 7, 3, 8, 10, tzinfo=run_mod.KST)
     news = default_window(at_0810_kst.astimezone(
         run_mod.window_calendar_tz("ingest-raw", "bigkinds")))
