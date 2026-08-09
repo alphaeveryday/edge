@@ -13,7 +13,7 @@ from data_pipeline.lake.storage import (
     canonical_price_minute_prefix,
 )
 from data_pipeline.minute.models import Universe, plan_session_windows
-from data_pipeline.minute.session_ops import PASSENGER_LANES, _resolve
+from data_pipeline.minute.session_ops import _OPTIONAL_LANES, _resolve
 from data_pipeline.minute.states import (
     DATASET_ETF_INAV_MINUTE,
     DATASET_NEWS_MINUTE,
@@ -37,14 +37,15 @@ def test_자기_워커를_소유해도_구동_레인은_아니다():
 
     ⚠️ **ALPHA-882 로 iNAV 가 inav-worker 를 소유하게 된 뒤에도 이 가드는 그대로다.**
     소유는 이 조건을 안 푼다 — `_scale` 이 여전히 공용 목록을 내리기 때문이고, 그래서
-    승객이면서 서비스를 소유하는 news_minute 도 `SCALED_DATASETS` 밖에 있다. 이 단언이
+    선택 레인이면서 서비스를 소유하는 news_minute·disclosure_minute 도 `SCALED_DATASETS` 밖에 있다. 이 단언이
     "소유하면 넣어도 된다"는 오독으로 지워지는 것을 막는 자리다.
     """
     assert DATASET_ETF_INAV_MINUTE in MINUTE_DATASETS       # 어휘엔 있고
-    assert DATASET_ETF_INAV_MINUTE in PASSENGER_LANES       # 자기 워커를 소유하지만
+    lane_datasets = {lane.dataset for lane in _OPTIONAL_LANES}
+    assert DATASET_ETF_INAV_MINUTE in lane_datasets         # 자기 워커를 소유하지만
     assert DATASET_ETF_INAV_MINUTE not in SCALED_DATASETS   # 구동 레인은 아니다
     # 같은 축의 선례 — 소유가 곧 구동 레인이 아니라는 증거가 뉴스다
-    assert DATASET_NEWS_MINUTE in PASSENGER_LANES
+    assert DATASET_NEWS_MINUTE in lane_datasets
     assert DATASET_NEWS_MINUTE not in SCALED_DATASETS
 
     with pytest.raises(SystemExit, match="구동 레인이 아니다"):

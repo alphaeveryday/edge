@@ -159,9 +159,10 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 8종
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 9종
 > price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713) +
-> news-worker(ALPHA-717) + inav-worker(ALPHA-882 — 장중 iNAV 생산자. 소비자가 없어
+> news-worker(ALPHA-717) + disclosure-worker(ALPHA-875 — 한 window 가 체인 전체) +
+> inav-worker(ALPHA-882 — 장중 iNAV 생산자. 소비자가 없어
 > 큐는 안 늘어난다) + analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
@@ -1220,7 +1221,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 ### 실행 흐름 (스펙 §5)
 
 ```
-EventBridge(daily·news×3·공시×10·장중수급×5) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
+EventBridge(daily·news×3·장중수급×5 — 공시 10슬롯은 ALPHA-875 컷오버로 DISABLED, 1분 세션이 소유) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
                                               → commit → 결정적 execution_name → SFN StartExecution
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
 각 ECS 태스크(30작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
@@ -1250,7 +1251,7 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
   판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(공시 최대 10개·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
-- **주말은 레인마다 다르다**(ALPHA-874) — 뉴스 크론만 주 7일이고 시장·공시·장중 수급은 MON-FRI 다.
+- **주말은 레인마다 다르다**(ALPHA-874) — 뉴스 크론만 주 7일이고 시장·장중 수급은 MON-FRI 다(공시 레인은 ALPHA-875 로 꺼져 이 축의 대상이 아니다 — 1분 세션은 거래일 판정을 `start-minute-session` 이 한다).
   그래서 `OPS_DAILY_SCHED_WEEKEND`·`OPS_NEWS_SCHED_WEEKEND`·`OPS_DISCLOSURE_SCHED_WEEKEND`·
   `OPS_INVESTOR_INTRADAY_SCHED_WEEKEND` 가 HH:MM 과 **같은 cron 의 일·요일 필드**에서 파생돼 함께
   주입된다(`"true"`/`"false"`, `entry._lane_sched_weekend`). 이게 없으면 주말 건너뛰기가 레인 무관
@@ -1545,7 +1546,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   python -m data_pipeline.run disclosure-worker --session-date 2026-08-07 --max-ticks 3
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·882) — 상주 서비스 8종의 desired_count
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882) — 상주 서비스 9종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
@@ -1600,8 +1601,8 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
 ```
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **22개**(daily 1·뉴스 3·
-공시 10·장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
-(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 8종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
+장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2 — 공시 10 은 DISABLED) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
+(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 9종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환, 공시·장중 수급은 처음부터). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).

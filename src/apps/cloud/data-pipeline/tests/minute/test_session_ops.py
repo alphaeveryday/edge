@@ -68,12 +68,12 @@ def wiring(monkeypatch):
     monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-worker,svc-relay,svc-consumer")
     monkeypatch.setenv(session_ops.ENV_GATE_QUEUES, "https://q/price")
     monkeypatch.delenv(session_ops.ENV_DRAIN_TIMEOUT, raising=False)
-    # 기본은 단일(구동) 레인 — 승객 편입 케이스는 개별 테스트가 명시로 켠다.
-    # ⚠️ 표 전체를 훑어 지운다: 레인이 늘 때 여기 한 줄을 빠뜨리면 개발자 셸의 env 가
-    # 전 테스트에 새어 들어와, 켠 적 없는 레인이 계획되는 채로 초록이 된다.
-    for _env_group, _env_services in session_ops.PASSENGER_LANES.values():
-        monkeypatch.delenv(_env_group, raising=False)
-        monkeypatch.delenv(_env_services, raising=False)
+    # 기본은 단일(가격) 레인 — 선택 레인 편입 케이스는 개별 테스트가 명시로 켠다.
+    # ⚠️ 표(_OPTIONAL_LANES)에서 돌려 지운다 — 레인을 늘리며 여기 한 줄을 빠뜨리면 호스트
+    # env 가 새어 테스트 결과가 개발자 환경에 따라 갈린다(그 상태가 가장 늦게 발견된다).
+    for _lane in session_ops._OPTIONAL_LANES:
+        monkeypatch.delenv(_lane.source_env, raising=False)
+        monkeypatch.delenv(_lane.services_env, raising=False)
     monkeypatch.setattr(
         session_ops, "_scale",
         lambda *, desired, force, services=None: ecs.update_service(
@@ -298,6 +298,78 @@ def test_non_finite_timeout_is_rejected(monkeypatch, raw):
         session_ops._drain_timeout_sec()
 
 
+class TestDisclosureLane:
+    """공시 세션 편입(ALPHA-875) — 뉴스와 **같은 축**이다. 두 레인이 표 하나를 도므로 여기서
+    보는 것은 "공시가 그 표에 제대로 들어갔나"이고, 축 자체의 반례는 TestNewsLane 이 든다."""
+
+    def test_두_선택_레인이_함께_계획되고_각자_목록으로_올라간다(self, monkeypatch, wiring):
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_SOURCE_GROUP, "dart")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_WORKER_SERVICES, "svc-disclosure-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        calls = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: calls.append(k) or 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss",
+            universe="s3://b/u.json")
+
+        assert rc == 0
+        assert [c["dataset"] for c in calls] == [
+            "price_minute", "news_minute", "disclosure_minute"]
+        # 공시도 유니버스를 쓰지 않는다(소스 단위 — 유니버스는 기대 집합이 아니라 필터다)
+        assert calls[2]["source_group"] == "dart" and calls[2]["universe"] is None
+        assert wiring.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
+            {"desiredCount": 1, "forceNewDeployment": True,
+             "services": ["svc-disclosure-worker"]},
+        ], "각 생산자는 자기 세션이 선 뒤 자기 목록으로만 올라간다"
+
+    def test_공시_계획_실패는_공시_워커만_막는다(self, monkeypatch, wiring):
+        """레인이 둘이 되면서 생긴 축 — 한 레인의 실패가 **다른 선택 레인**까지 막으면
+        안 된다(뉴스 실패가 가격을 안 막는 것과 같은 이유, 한 겹 더)."""
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_SOURCE_GROUP, "dart")
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_WORKER_SERVICES, "svc-disclosure-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        monkeypatch.setattr(
+            session_ops, "plan_session_cli",
+            lambda settings, **k: 2 if k["dataset"] == "disclosure_minute" else 0)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss",
+            universe="s3://b/u.json")
+
+        assert rc == 2, "공시 실패가 exit 에 실려야 스케줄 기록에 남는다"
+        assert wiring.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+            {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
+        ], "뉴스는 올라가고 공시만 안 올라간다"
+
+    def test_토글이_꺼져도_떠_있는_서비스는_내린다(self, monkeypatch, wiring):
+        """어제 켜고 오늘 끈 경우 — 토글로 스케일다운을 가두면 그 서비스를 아무도 안 내려
+        계속 돈다(세션 없이 도는 Worker 는 기동 거부 루프다)."""
+        monkeypatch.setenv(session_ops.ENV_DISCLOSURE_WORKER_SERVICES, "svc-disclosure-worker")
+        monkeypatch.delenv(session_ops.ENV_DISCLOSURE_SOURCE_GROUP, raising=False)
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+        ledger = FakeLedger(["DRAINED"])
+        ledger.request_drain = lambda *, session_id, now: True
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+
+        rc = session_ops.stop_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss")
+
+        assert rc == 0
+        assert {"desiredCount": 0, "forceNewDeployment": False,
+                "services": ["svc-disclosure-worker"]} in wiring.calls
+
+
 class TestNewsLane:
     """뉴스 세션 편입(ALPHA-717) — start 가 두 세션을 계획하고 stop 이 함께 드레인한다."""
 
@@ -499,11 +571,11 @@ class TestNewsLane:
 
 
 class TestInavLane:
-    """iNAV 세션 편입(ALPHA-882) — 뉴스와 같은 승객 축이다.
+    """iNAV 세션 편입(ALPHA-882) — 뉴스·공시와 같은 선택 레인 축이다.
 
     뉴스와 갈리는 지점만 여기서 고정한다. 공통 축(계획 순서·워커 분리·게이트 참여)은
-    `TestNewsLane` 이 이미 잡고 있고, 표(`PASSENGER_LANES`)로 접혀 있어 한쪽만 도는
-    경로가 없다 — **승객이 둘일 때 생기는 것**이 이 클래스의 관심사다.
+    `TestNewsLane` 이 이미 잡고 있고, 표(`_OPTIONAL_LANES`)로 접혀 있어 한쪽만 도는
+    경로가 없다 — **선택 레인이 여럿일 때 생기는 것**이 이 클래스의 관심사다.
     """
 
     def test_start_plans_inav_session_too(self, monkeypatch, wiring):
@@ -710,11 +782,11 @@ def _module_tf() -> str | None:
     return next((p / rel).read_text() for p in here.parents if (p / rel).exists())
 
 
-def test_승객_토글_env_이름이_terraform_과_일치한다():
+def test_선택레인_토글_env_이름이_terraform_과_일치한다():
     """⚠️ **이 드리프트는 완전히 조용하다.** terraform 이 심는 env 이름과 코드가 읽는
-    이름이 갈리면 `_passenger_source_group` 이 None 을 돌려주고, 그 레인은 계획도
+    이름이 갈리면 `_lane_source_group` 이 None 을 돌려주고, 그 레인은 계획도
     스케일업도 없이 **exit 0** 으로 지나간다 — 실패가 아니라 부재라 알람도 안 뜬다.
-    그 날 iNAV 는 통째로 안 도는데 스케줄 기록은 초록이다(Rule 12).
+    그 날 그 레인은 통째로 안 도는데 스케줄 기록은 초록이다(Rule 12).
 
     이름은 terraform 이 정본이고 코드가 따라간다(`_services` 주석과 같은 결) — 그래서
     대조 방향은 "코드 상수가 tf 에 실제로 있는가"다.
@@ -724,17 +796,22 @@ def test_승객_토글_env_이름이_terraform_과_일치한다():
     except StopIteration:
         pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
 
-    for dataset, (env_group, env_services) in session_ops.PASSENGER_LANES.items():
-        assert f"{env_group} =" in text, f"{dataset} 토글 env 가 terraform 에 없다: {env_group}"
-        assert f"{env_services} =" in text, \
-            f"{dataset} 워커 목록 env 가 terraform 에 없다: {env_services}"
+    import re
+    # ⚠️ `NAME =` 를 그대로 찾지 않는다 — `terraform fmt` 가 블록 안에서 `=` 를 정렬해
+    # 이름 뒤 공백 수가 **형제 키 이름 길이에 따라 바뀐다**. 무관한 env 하나가 늘어나면
+    # 이 검사가 배선과 상관없이 빨개진다(그때 고쳐야 할 건 배선이 아니라 이 정규식이었다).
+    for lane in session_ops._OPTIONAL_LANES:
+        assert re.search(rf"{lane.source_env}\s*=", text), \
+            f"{lane.dataset} 토글 env 가 terraform 에 없다: {lane.source_env}"
+        assert re.search(rf"{lane.services_env}\s*=", text), \
+            f"{lane.dataset} 워커 목록 env 가 terraform 에 없다: {lane.services_env}"
 
 
-def test_승객_생산자는_공용_스케일_목록에서_빠진다():
+def test_세션결속_생산자는_공용_스케일_목록에서_빠진다():
     """공용 목록에 남으면 **그 세션이 안 선 날에도** 올라가 기동 거부 재기동 루프를
-    돈다(비용·알람 소음). 승객 워커는 자기 목록으로만 올라간다.
+    돈다(비용·알람 소음). 선택 레인 Worker 는 자기 목록으로만 올라간다.
 
-    terraform 의 제외 목록(`minute_passenger_workers`)과 코드의 `PASSENGER_LANES` 는
+    terraform 의 제외 목록(`session_bound_workers`)과 코드의 `_OPTIONAL_LANES` 는
     짝이다 — 서비스만 추가하고 제외를 빠뜨리는 것이 이 배선의 기본 실수다.
     """
     try:
@@ -743,11 +820,11 @@ def test_승객_생산자는_공용_스케일_목록에서_빠진다():
         pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
 
     import re
-    block = re.search(r"minute_passenger_workers\s*=\s*\[([^\]]*)\]", text)
-    assert block, "공용 목록 제외가 terraform 에서 사라졌다 — 승객 워커가 매일 올라간다"
+    block = re.search(r"session_bound_workers\s*=\s*\[([^\]]*)\]", text)
+    assert block, "공용 목록 제외가 terraform 에서 사라졌다 — 선택 레인 Worker 가 매일 올라간다"
     excluded = set(re.findall(r'"([^"]+)"', block.group(1)))
-    assert excluded == {"news-worker", "inav-worker"}, \
-        f"승객 생산자와 제외 목록이 갈렸다: {excluded}"
+    assert len(excluded) == len(session_ops._OPTIONAL_LANES), \
+        f"선택 레인 수와 제외 목록이 갈렸다: {excluded} vs {[l.dataset for l in session_ops._OPTIONAL_LANES]}"
     # 제외된 워커는 **자기 목록**에 반드시 있어야 한다 — 빼고 안 넣으면 아무도 안 올린다
     for worker in excluded:
         assert f'aws_ecs_service.minute["{worker}"].name' in text, \
@@ -808,12 +885,14 @@ def test_승객의_universe_인자가_UNIVERSE_DATASETS_축을_따른다(monkeyp
     `dataset in UNIVERSE_DATASETS` 를 그대로 기대값으로 쓴다. 레인이 늘 때 이 테스트가
     자동으로 그 레인을 덮고, 축이 뒤집히면(예: 조건을 `not in` 으로) 전건 빨개진다.
     """
-    from data_pipeline.minute.states import UNIVERSE_DATASETS
+    from data_pipeline.minute.states import SOURCE_GROUPS_BY_DATASET, UNIVERSE_DATASETS
 
-    for env_group, env_services in session_ops.PASSENGER_LANES.values():
-        monkeypatch.setenv(env_services, "svc-x")
-    monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
-    monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
+    # 레인을 이름으로 켜지 않는다 — 표를 돌며 그 dataset 의 어휘에서 하나를 집는다.
+    # 레인이 늘면 이 테스트가 **자동으로** 그 레인까지 덮는다(축을 뭉갠 자리를 지키는 게
+    # 이 테스트의 목적인데, 켜는 쪽을 손으로 나열하면 새 레인이 조용히 빠진다).
+    for lane in session_ops._OPTIONAL_LANES:
+        monkeypatch.setenv(lane.services_env, "svc-x")
+        monkeypatch.setenv(lane.source_env, sorted(SOURCE_GROUPS_BY_DATASET[lane.dataset])[0])
     monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
     calls = []
     monkeypatch.setattr(session_ops, "plan_session_cli",
@@ -824,8 +903,9 @@ def test_승객의_universe_인자가_UNIVERSE_DATASETS_축을_따른다(monkeyp
         universe="s3://b/u.json")
 
     seen = {c["dataset"]: c["universe"] for c in calls}
-    assert set(seen) == {"price_minute", *session_ops.PASSENGER_LANES}
-    for dataset in session_ops.PASSENGER_LANES:
+    lane_datasets = [lane.dataset for lane in session_ops._OPTIONAL_LANES]
+    assert set(seen) == {"price_minute", *lane_datasets}
+    for dataset in lane_datasets:
         expected = "s3://b/u.json" if dataset in UNIVERSE_DATASETS else None
         assert seen[dataset] == expected, (
             f"{dataset}: universe 축이 UNIVERSE_DATASETS 와 갈렸다 — "

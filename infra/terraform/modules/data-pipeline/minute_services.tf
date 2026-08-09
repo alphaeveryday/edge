@@ -3,9 +3,10 @@
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
 # (DB 오류는 프로세스가 죽어서 드러낸다 — 각 *_cli 계약).
-# 승객 생산자 2종 포함 — 세션 오케스트레이션이 그 세션도 함께 계획·드레인한다:
-# news-worker(ALPHA-717, news_minute/bigkinds) · inav-worker(ALPHA-882, etf_inav_minute/kis).
-# 둘 다 공용 스케일 목록에서 빠지고 자기 목록으로 올라간다(local.minute_passenger_workers).
+# 세션 결속 생산자 3종 포함 — 세션 오케스트레이션이 그 세션도 함께 계획·드레인한다:
+# news-worker(ALPHA-717, news_minute/bigkinds) · disclosure-worker(ALPHA-875,
+# disclosure_minute/dart) · inav-worker(ALPHA-882, etf_inav_minute/kis).
+# 셋 다 공용 스케일 목록에서 빠지고 자기 목록으로 올라간다(local.session_bound_workers).
 #
 # ⚠️ desired_count 는 **세션 오케스트레이션이 런타임에 바꾸는 값**이다 —
 # lifecycle ignore_changes 가 없으면 무관한 apply 가 장중에 워커를 내린다.
@@ -145,7 +146,7 @@ locals {
     # queue_url 하나만 받으므로 다중 큐 개조 대신 서비스를 분리한다 — 커널 무수정).
     # LLM 설정은 tag-news 관례(LLM_* env, base_url·model 은 코드 기본값=DeepSeek).
     # 이 맵에 들어야 세션 오케스트레이션의 스케일 대상이 된다 — 다만 **공용 목록**
-    # (MINUTE_SESSION_SERVICES)은 여기서 승객 생산자를 뺀 나머지다(minute_passenger_workers).
+    # (MINUTE_SESSION_SERVICES)은 여기서 세션 결속 생산자를 뺀 나머지다(session_bound_workers).
     # 소비자 2종은 공용에 남는다: 생산자(news-worker, ALPHA-707)가 세션 결속이라 소비자도
     # 같은 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
     news-consumer-realtime = {
@@ -175,6 +176,19 @@ locals {
       environment = merge(local.env, local.db_env, {})
       secrets = {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+      }
+    }
+    # 공시 1분 생산자(ALPHA-875) — news-worker 와 같은 자리다(유니버스 없는 소스 단위,
+    # 세션 결속). 다른 점은 **한 window 가 체인 전체**라는 것: collect→normalize×2→load 를
+    # 이 컨테이너가 다 돌므로 벤더 키(DART)와 DB 를 **둘 다** 싣는다(형제 워커는 하나씩).
+    # 엔드포인트·유형 필터는 코드 기본값([dart_disclosure.source] sources.toml)이 정본이고,
+    # pacing·예산은 [minute_disclosure_worker] 기본값을 쓴다(조일 땐 env 로 덮는다).
+    disclosure-worker = {
+      command     = ["disclosure-worker"]
+      environment = merge(local.env, local.db_env, {})
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD                     = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY = "${aws_secretsmanager_secret.dart.arn}:apikey::"
       }
     }
     # 장중 iNAV 생산자(ALPHA-851/882) — 소비자가 없다. `commit_inav_window` 가 job·outbox
@@ -208,12 +222,13 @@ locals {
     }
   }
 
-  # 공용 스케일 목록에서 빼는 **생산자**들 — 자기 세션이 선 날만 올라간다(세션 부재
-  # 기동 거부 → 하루 종일 재기동 루프 방지). 소비자는 여기 안 넣는다: 빈 큐 폴링은
-  # 무해하고 backfill 소비는 세션 무관이다.
-  # ⚠️ 이 목록과 아래 MINUTE_SESSION_*_WORKER_SERVICES 는 **짝이다** — 여기서 빼고
-  # 자기 목록에 안 넣으면 그 워커는 아무도 안 올린다(레인이 조용히 안 돈다).
-  minute_passenger_workers = ["news-worker", "inav-worker"]
+}
+
+# 세션 결속 생산자 — 공용 스케일 목록에서 빼고 각자 자기 목록으로 올린다(세션이 선 날만).
+# 여기 넣는 것과 `MINUTE_SESSION_*_WORKER_SERVICES` 에 싣는 것이 **짝**이다. 소비자는
+# 여기 안 넣는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관이다.
+locals {
+  session_bound_workers = ["news-worker", "disclosure-worker", "inav-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -382,7 +397,7 @@ resource "aws_ecs_task_definition" "minute_session" {
 
       MINUTE_SESSION_CLUSTER = var.cluster_arn
       # 서비스명을 코드에서 다시 조립하지 않는다 — rename 이 조용한 no-op 스케일링이 된다.
-      # ⚠️ 승객 생산자(local.minute_passenger_workers — news-worker·inav-worker)는 공용
+      # ⚠️ 세션 결속 생산자(local.session_bound_workers — news-worker·disclosure-worker·inav-worker)는 공용
       # 목록에서 뺀다 — 자기 세션 계획이 **성공한 날만** 올린다(실패 날 올리면 세션 부재
       # 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음). 각자 아래 자기 목록으로 간다.
       # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
@@ -391,13 +406,17 @@ resource "aws_ecs_task_definition" "minute_session" {
       # stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트 깊이에 잡혀
       # 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일) 안에서 다음
       # 세션이 집는다.
+      # ⚠️ 공시도 같은 이유로 공용 목록에서 뺀다(ALPHA-875) — 제외 목록을 로컬 하나로
+      # 둔다: 서비스를 늘리며 여기 한쪽만 빠뜨리면 그 Worker 가 세션 없는 날도 떠서
+      # 기동 거부 루프를 돈다(뺀 축과 올리는 축이 갈리면 안 된다).
       MINUTE_SESSION_SERVICES = join(",", concat(
         [for key, service in aws_ecs_service.minute : service.name
-        if !contains(local.minute_passenger_workers, key)],
+        if !contains(local.session_bound_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
-      MINUTE_SESSION_NEWS_WORKER_SERVICES = aws_ecs_service.minute["news-worker"].name
-      MINUTE_SESSION_INAV_WORKER_SERVICES = aws_ecs_service.minute["inav-worker"].name
+      MINUTE_SESSION_NEWS_WORKER_SERVICES       = aws_ecs_service.minute["news-worker"].name
+      MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES = aws_ecs_service.minute["disclosure-worker"].name
+      MINUTE_SESSION_INAV_WORKER_SERVICES       = aws_ecs_service.minute["inav-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
       # 승객 세션 편입 — start 가 그 세션도 계획하고 stop 이 함께 드레인한다. 비우면
@@ -406,7 +425,10 @@ resource "aws_ecs_task_definition" "minute_session" {
       # 자기 워커를 소유해도 인자로는 못 온다: `_scale` 이 dataset 을 안 보고 공용 목록을
       # 내려서, stop 을 승객 dataset 으로 부르면 살아 있는 price-worker 가 내려간다.
       MINUTE_SESSION_NEWS_SOURCE_GROUP = var.minute_session_news_source_group
-      # iNAV 세션 편입(ALPHA-882)
+      # 공시 세션 편입(ALPHA-875) — 같은 토글 축. 비우면 공시 레인은 계획도 스케일도 안 된다
+      # (그 상태가 곧 컷오버 전이다 — SFN 레인이 계속 소유한다).
+      MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP = var.minute_session_disclosure_source_group
+      # iNAV 세션 편입(ALPHA-882) — 같은 토글 축.
       MINUTE_SESSION_INAV_SOURCE_GROUP = var.minute_session_inav_source_group
     }) : { name = k, value = v }]
     secrets = [{
@@ -509,9 +531,9 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
   cpu                      = var.task_cpu
   # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
   # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
-  memory                   = var.analysis_task_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.analysis_task.arn
+  memory             = var.analysis_task_memory
+  execution_role_arn = aws_iam_role.execution.arn
+  task_role_arn      = aws_iam_role.analysis_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
