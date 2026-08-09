@@ -58,6 +58,8 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         # 입력이 된다. 산문 승격은 그 포맷의 렌더 계층 몫이다.
         stat_tests, hypothesis_trials = _window_paneltest(
             lake, instrument_id, day, ask, facts)
+        if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
+            raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
@@ -223,19 +225,27 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             news_scope=NewsScope(instrument_id, prev_trading_day(lake, day)))
         object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
         threads = object_runtime.call("news.find_threads", {"limit": 40})
-        if threads.get("ok"):
-            events = object_runtime.call(
-                "news.list_events", {"handle": threads["handle"], "limit": 40})
-            if events.get("ok"):
-                rows = events.get("events", [])
-                structured_ready = True
-                scoped_count = len(rows)
-                ets = sorted(set(ets) | {
-                    str(row["event_type_code"]) for row in rows
-                    if row.get("event_type_code")})
-                scoped_context = tuple(
-                    f'{row.get("available_at", "")} {row.get("event_type_code", "")} '
-                    f'{row.get("source_event_id", "")}' for row in rows)
+        if not threads.get("ok"):
+            code = str(threads.get("error", {}).get("code") or "EXECUTION_FAILED")
+            log("hypothesis.objectset_unavailable", tool="news.find_threads", code=code)
+            return ({"stage": "propose", "verdict": "판정불가",
+                     "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+        events = object_runtime.call(
+            "news.list_events", {"handle": threads["handle"], "limit": 40})
+        if not events.get("ok"):
+            code = str(events.get("error", {}).get("code") or "EXECUTION_FAILED")
+            log("hypothesis.objectset_unavailable", tool="news.list_events", code=code)
+            return ({"stage": "propose", "verdict": "판정불가",
+                     "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+        rows = events.get("events", [])
+        structured_ready = True
+        scoped_count = len(rows)
+        ets = sorted(set(ets) | {
+            str(row["event_type_code"]) for row in rows
+            if row.get("event_type_code")})
+        scoped_context = tuple(
+            f'{row.get("available_at", "")} {row.get("event_type_code", "")} '
+            f'{row.get("source_event_id", "")}' for row in rows)
     except Exception as e:                      # noqa: BLE001 - structured abstention
         log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
         return ({"stage": "propose", "verdict": "판정불가",

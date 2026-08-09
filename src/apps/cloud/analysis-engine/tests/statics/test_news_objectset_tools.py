@@ -161,6 +161,34 @@ def test_news_cutoff_includes_exact_instant_and_excludes_the_next_second():
     assert "thr_next" not in ids
 
 
+def test_news_runtime_reads_postgres_shaped_timezone_timestamps():
+    """Production RDB timestamps are TIMESTAMPTZ and must be fetchable by DuckDB."""
+    lake = _NewsLake()
+    for relation, fields in {
+        "source_event": {"available_at"},
+        "event_thread": {"opened_at"},
+        "event_thread_link": {"evaluated_at"},
+        "etf_holding_snapshot": {"available_at"},
+        "document_assertion": {"available_at"},
+        "document": {"available_at"},
+    }.items():
+        lake.con.execute(f"CREATE TABLE raw_{relation} AS SELECT * FROM v_{relation}")
+        lake.con.execute(f"DROP VIEW v_{relation}")
+        columns = [row[0] for row in lake.con.execute(f"DESCRIBE raw_{relation}").fetchall()]
+        projection = ", ".join(
+            f'CAST("{column}" AS TIMESTAMPTZ) AS "{column}"'
+            if column in fields else f'"{column}"' for column in columns)
+        lake.con.execute(f"CREATE VIEW v_{relation} AS SELECT {projection} FROM raw_{relation}")
+
+    runtime = ObjectSetRuntime(
+        lake, as_of="2026-08-07T12:05:00",
+        news_scope=NewsScope("ETF", "2026-08-06"),
+    )
+    threads = _call(runtime, "news.find_threads", {"limit": 20})
+
+    assert {row["thread_id"] for row in threads["threads"]} == {"thr_1"}
+
+
 def test_thread_to_event_to_argument_and_evidence_keeps_one_intraday_clock():
     runtime = _runtime()
     threads = _call(runtime, "news.find_threads", {

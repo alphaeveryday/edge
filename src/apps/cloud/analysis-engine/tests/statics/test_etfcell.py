@@ -5,6 +5,25 @@ from edge_analysis.config import PipelineError
 from edge_analysis.statics.interval import WindowFacts
 
 
+@pytest.fixture(autouse=True)
+def _structured_news_boundary(monkeypatch):
+    """Unit tests unrelated to news receive a successful, empty structured boundary."""
+    class _Runtime:
+        def __init__(self, *_args, **kwargs): self.as_of = kwargs["as_of"]
+        def tool_specs(self):
+            return [{"name": "objectset.create"}, {"name": "objectset.filter"}]
+        def call(self, name, _arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": []}
+            if name == "news.list_events":
+                return {"ok": True, "handle": "os_events", "events": []}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+
+
 def _object_lake():
     con = duckdb.connect()
     con.execute("CREATE VIEW v_instrument AS SELECT 'iid' AS instrument_id")
@@ -364,6 +383,90 @@ def test_window_paneltest_abstains_before_asking_when_objectset_is_unavailable(m
     },)
 
 
+def test_scoped_news_execution_failure_is_not_treated_as_empty_news(monkeypatch):
+    """A failed lookup must stop before the LLM can turn it into a false absence claim."""
+    import dataclasses
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {"volume": 4.0})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, _name, _arguments):
+            return {"ok": False, "error": {
+                "code": "EXECUTION_FAILED", "message": "object operation failed"}}
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda *_a, **_k: pytest.fail("LLM must not run after lookup failure"))
+
+    stage_results, trials = etfcell._window_paneltest(
+        object(), "ETF", "2026-08-05", lambda *_: {}, facts)
+
+    assert trials == ()
+    assert stage_results[0]["reason"] == "OBJECTSET_UNAVAILABLE"
+    assert stage_results[0]["error_type"] == "EXECUTION_FAILED"
+
+
+def test_event_listing_failure_after_thread_discovery_stays_fail_closed(monkeypatch):
+    """Thread success cannot mask a failed event lookup as an empty news window."""
+    import dataclasses
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: facts)
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {"volume": 4.0})
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, name, _arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": [{
+                    "thread_id": "thr_1", "event_type_code": "COMPANY.CONTRACT.SIGNING"}]}
+            if name == "news.list_events":
+                return {"ok": False, "error": {
+                    "code": "EXECUTION_FAILED", "message": "object operation failed"}}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    calls = []
+    ask = lambda *_: calls.append(1) or {}
+
+    stage_results, trials = etfcell._window_paneltest(
+        object(), "ETF", "2026-08-05", ask, facts)
+
+    assert calls == []
+    assert trials == ()
+    assert stage_results[0]["reason"] == "OBJECTSET_UNAVAILABLE"
+    assert stage_results[0]["error_type"] == "EXECUTION_FAILED"
+    with pytest.raises(PipelineError, match="OBJECTSET_UNAVAILABLE"):
+        etfcell.run(object(), "305720", "2026-08-05", ask,
+                    instrument_id="ETF", window_start="09:00", window_end="13:20")
+    assert calls == []
+
+
+def test_window_run_does_not_render_normal_explanation_after_objectset_failure(monkeypatch):
+    """Structured abstention is a failed run, not a successful customer explanation."""
+    from edge_analysis.config import PipelineError
+    from edge_analysis.statics import etfcell
+
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: _facts())
+    monkeypatch.setattr(etfcell, "_window_paneltest", lambda *_a, **_k: (({
+        "stage": "propose", "reason": "OBJECTSET_UNAVAILABLE",
+        "error_type": "EXECUTION_FAILED"},), ()))
+
+    with pytest.raises(PipelineError, match="OBJECTSET_UNAVAILABLE"):
+        etfcell.run(object(), "305720", "2026-08-05", lambda *_: {},
+                    instrument_id="ETF", window_start="09:00", window_end="13:20")
+
+
 def test_missing_layers_raise_instead_of_returning_prose():
     """**부재는 예외로 말한다.**
 
@@ -396,8 +499,21 @@ def _capture_propose(monkeypatch, facts, context=None):
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
                         lambda lake, iid, day: {"거래량": 3.0})
     if context is not None:
-        monkeypatch.setattr("edge_analysis.statics.interval.thread_context",
-                            lambda *a, **k: context)
+        class _Runtime:
+            def __init__(self, *_args, **kwargs): self.as_of = kwargs["as_of"]
+            def tool_specs(self):
+                return [{"name": "objectset.create"}, {"name": "objectset.filter"}]
+            def call(self, name, _arguments):
+                if name == "news.find_threads":
+                    return {"ok": True, "handle": "os_threads", "threads": []}
+                if name == "news.list_events":
+                    rows = [{"source_event_id": f"evt_{i}",
+                             "event_type_code": "CONTRACT.SIGNING",
+                             "available_at": "2026-08-05T10:31:00"}
+                            for i in range(context[1])]
+                    return {"ok": True, "handle": "os_events", "events": rows}
+                raise AssertionError(name)
+        monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
     seen = {}
 
     def fake_propose(ask, **kw):
@@ -424,7 +540,7 @@ def test_thread_context_reaches_the_proposal_prompt(monkeypatch):
     seen = _capture_propose(monkeypatch, facts, context=((block,), 1, 0))
 
     assert "[사건 문맥" in seen["facts"], "스레드 문맥 섹션이 프롬프트에 없다"
-    assert "10:31" in seen["facts"] and "SK하이닉스 공급계약 해지" in seen["facts"]
+    assert "10:31" in seen["facts"] and "evt_0" in seen["facts"]
     # 검정의 점 방아쇠 접지는 그대로 창 안 축이다 - 제안 문맥 확장이 검정 계약을
     # 흔들면 안 된다.
     assert seen["event_types"] == ["CONTRACT.SIGNING"]
@@ -472,7 +588,7 @@ def test_context_counts_and_failures_are_logged(monkeypatch):
         _capture_propose(monkeypatch, facts, context=(("블록",), 3, 2))
 
     [ev] = [e for e in trace if e.get("event") == "hypothesis.context"]
-    assert ev["events"] == 3 and ev["lookup_failures"] == 2
+    assert ev["events"] == 3 and ev["lookup_failures"] == 0
     assert ev["in_window"] == 1
 
 
@@ -567,6 +683,10 @@ def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):
 
     monkeypatch.setattr("edge_analysis.statics.interval._etypes", boom)
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", boom)
+    monkeypatch.setattr(
+        "edge_analysis.statics.objectset_tools.ObjectSetRuntime",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("surface unavailable")),
+    )
 
     facts = dataclasses.replace(_facts(), event_ids=("e1",))
     with collect_trace() as trace:
