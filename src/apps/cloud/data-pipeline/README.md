@@ -1461,11 +1461,15 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 OPS_KR_HOLIDAYS=2026-08-15,2026-10-03 \
   python -m data_pipeline.run inav-worker --universe /path/universe.json --max-ticks 3
-# 🔴 토큰 만료(24h) 재발급 경로가 **아직 없다**. 상주 전환은 ALPHA-882 로 이미 일어났고
-# (세션 자동 편입 + inav-worker 서비스), 재발급은 **ALPHA-889 로 이연됐다** — 즉 지금
-# dev 는 그 구멍을 안은 채 돈다. 만료되면 `StopFetch` 가 window 실패로 삼켜져(worker.py
-# 의 `except Exception`) 그날 남은 window 가 전부 MISSING 이고, iNAV 는 소급이 불가라
-# 영구 결손이다. 증상은 **전 종목 동시 MISSING + `EGW00121`** 로 로그에서 구분된다.
+# 토큰 만료(24h) 재발급은 **붙어 있다**(ALPHA-889). 상주 전환(ALPHA-882)이 만료를 반드시
+# 만나는 것으로 바꿨기 때문이다 — 만료 신호(rt_cd `EGW00121/123` 또는 4xx)를 보면 공유
+# 캐시와 컬렉터의 토큰 사본을 **둘 다** 버리고 1회 재발급해 그 window 를 살린다.
+# ⚠️ 여기서 안 잡으면 자가치유가 아니다: `StopFetch` 는 tick 의 `except Exception` 에
+# 삼켜져 WINDOW_FAILED 가 되고 루프는 계속 돈다 — 컨테이너가 죽고 재기동하는 게 아니라
+# 그날 남은 window 가 조용히 전부 실패하고, iNAV 는 소급이 불가라 영구 결손이다.
+# 🔴 **재발급 뒤에도 만료면 전역 실패로 전파한다**(MISSING 으로 안 접는다) — 그건 종목
+# 축이 아니라 자격증명·시계 문제라, 접으면 "벤더가 안 준다"로 읽혀 원인을 가린다.
+# 로그 신호: `토큰 만료 — 캐시 폐기 후 1회 재발급`(정상 회복) vs `재발급 뒤에도 만료`(사람 확인).
 
 # 상주 Price Worker(1분 파이프라인, ALPHA-706) — ECS Service 명령. 세션이 먼저 계획돼
 # 있어야 하고(위 plan-minute-session — `--session-date`·`--universe` 를 **같은 값**으로),
