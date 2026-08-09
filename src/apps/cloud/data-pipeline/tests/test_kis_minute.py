@@ -126,7 +126,7 @@ class TestParse:
         되돌린 자리다. 이 테스트가 그 회귀를 막는다.
 
         가르는 것은 **window 키와 충돌할 수 있느냐**다. 짧은 라벨은 `second == 0` 으로
-        파싱돼 계획 키와 정확히 일치할 수 있으니 파서에서 막아야 한다. 격자 밖 봉은
+        파싱될 수 있어 계획 키와 정확히 일치할 수 있으니 파서에서 막아야 한다. 격자 밖 봉은
         분 정렬된 어떤 키와도 못 만나 `select_window_candle` 이 그냥 안 뽑는다 —
         여기서 raise 하면 **남의** 행 하나로 그 window 를 INVALID 로 만들 뿐이고,
         30봉 페이지라 ~30 window 가 그렇게 된다. 소급은 합성이 봉에 앵커돼 사정이
@@ -170,6 +170,17 @@ class TestParse:
         """자리수가 **8·6 이 아니다**를 재는 것이지 "짧다"를 재는 게 아니다."""
         with pytest.raises(ValueError, match="자리수가 다르다"):
             parse_minute_row({**row(), field: bad_length}, "005930")
+
+    def test_space_padded_label_is_rejected_even_though_it_reads_right(self):
+        """자리수만 재면 공백 패딩이 6자리째 샌다 — `strptime` 이 `%H` 에 `" 9"` 를 받는다.
+
+        값은 **맞게** 읽힌다(`" 93000"` → 09:30:00). 그래서 더 막아야 한다: 조용히
+        흡수하면 벤더가 패딩 규약을 바꾼 것을 아무도 못 본다. 이 가드의 목적이 값 보호가
+        아니라 **형상 변화의 신호 보존**이라는 것이 여기서 갈린다.
+        """
+        assert datetime.strptime("20260803" + " 93000", "%Y%m%d%H%M%S").hour == 9
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_minute_row({**row(), "stck_cntg_hour": " 93000"}, "005930")
 
     @pytest.mark.parametrize("broken", [
         # 자리수는 맞고 값만 깨진 라벨 — 위 자리수 가드가 아니라 `strptime` 이 잡는

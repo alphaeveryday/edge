@@ -112,7 +112,11 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     # 5자리(`"93000"`)는 선행 0 이 잘린 것으로 **복구도 가능해 보인다**(→09:30:00).
     # 그래도 거부한다: 4자리와 구분할 근거가 우리에게 없고, 추정해서 맞히면 틀렸을 때
     # 아무 신호가 안 남는다. 라벨 규약이 실제로 바뀌면 실패로 드러나는 편이 낫다.
-    if len(day) != _YMD_LEN or len(hour) != _HHMMSS_LEN:
+    # `isdecimal()` 은 자리수와 **한 짝**이다 — `strptime` 은 `%H` 에 `" 9"` 를 허용해
+    # `" 93000"`(공백 패딩)을 6자리째 통과시킨다. 값은 맞게 읽히지만 그러면 벤더가
+    # 패딩 규약을 바꾼 것을 조용히 흡수한다. `isdigit()` 은 `"²"` 를 통과시켜 더 약하다.
+    if (len(day) != _YMD_LEN or len(hour) != _HHMMSS_LEN
+            or not (day + hour).isdecimal()):
         raise ValueError(f"{symbol} 분봉 날짜·시각 자리수가 다르다: {day!r} {hour!r}")
     try:
         end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
@@ -121,14 +125,16 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     # ⛔ 분 격자 가드는 **여기 두지 마라**(`_fetch_day` 에 있다). 형제
     # `kis_sector_index.parse_index_row` 가 파서에 둬서 모양을 맞춘답시고 옮겨봤다가
     # 되돌린 자리다. 가르는 것은 어느 파일이냐가 아니라 **window 키와 충돌할 수 있느냐**다:
-    #   · 짧은 라벨은 `second == 0` 인 시각으로 파싱된다 → 계획 window 키와 **정확히
-    #     일치할 수 있다** → `select_window_candle` 이 그걸 뽑아 틀린 값이 VALID 로
-    #     확정된다. 위 자리수 가드가 막는 것이 그것이고, 그래서 파서에 있어야 한다.
+    #   · 짧은 라벨은 `second == 0` 으로 파싱**될 수 있다**("1030"→10:03:00) → 계획
+    #     window 키와 정확히 일치할 수 있다 → `select_window_candle` 이 그걸 뽑아 틀린
+    #     값이 VALID 로 확정된다. 위 자리수 가드가 막는 것이 그것이라 파서에 있어야 한다.
     #   · 격자 밖 봉(`second != 0`)은 분 정렬된 어떤 키와도 못 만난다 → 당일 경로에선
     #     `select_window_candle` 이 그냥 안 뽑는다. 여기서 raise 해봐야 **남의 행** 하나로
     #     그 window 를 INVALID 로 만들 뿐이다(30봉 페이지라 ~30 window 를 그렇게 만든다).
     #   · 소급은 다르다 — `fill_no_trade_minutes` 가 봉에 합성을 **앵커**하므로 격자 밖
-    #     봉 하나가 하루 전체를 민다. 거기서만 가드가 일한다.
+    #     봉 뒤가 통째로 밀린다. 손실 폭은 그 봉이 어디 있느냐에 달렸다(뒤에 실봉이
+    #     빽빽하면 몇 개, 그게 유일한 관측이면 390개 — `:481` 주석의 실측이 후자다).
+    #     거기서만 가드가 일한다.
     # 지수 어댑터도 페이지 전체를 돌려주므로 노출은 같다 — 그쪽 격자 가드도 같은 값을
     # 치르고 있다. 여기서 따라 할 이유가 아니다.
     values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS}

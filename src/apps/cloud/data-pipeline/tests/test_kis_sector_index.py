@@ -193,6 +193,16 @@ class TestParse:
             parse_index_row({**row(), "stck_cntg_hour": short_label}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
+    def test_space_padded_label_is_rejected_even_though_it_reads_right(self):
+        """자리수만 재면 공백 패딩이 6자리째 샌다 — `strptime` 이 `%H` 에 `" 9"` 를 받는다.
+
+        값은 맞게 읽히지만(`" 93000"` → 09:30:00) 조용히 흡수하면 벤더가 패딩 규약을
+        바꾼 것을 못 본다. 이 가드는 값이 아니라 **형상 변화의 신호**를 지킨다.
+        """
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_index_row({**row(), "stck_cntg_hour": " 93000"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
     # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
     @pytest.mark.parametrize("field, bad_length", [
         ("stck_bsop_date", "2026087"), ("stck_bsop_date", "202608071"),

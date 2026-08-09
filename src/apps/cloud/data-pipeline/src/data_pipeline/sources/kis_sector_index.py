@@ -124,7 +124,11 @@ def parse_index_row(raw: dict, unit_id: str, *, interval_sec: int) -> Candle:
     # 🔴 이건 **값이 조용히 틀리는** 부류다: 결과의 `second` 가 0 이라 아래 격자 가드도
     # 안 걸리고, 그 봉은 멀쩡한 다른 window 에 앉아 VALID 로 확정된다. 한쪽만 막으면
     # 나머지 문으로 그대로 들어온다(날짜만 막았다가 Codex 리뷰에서 잡혔다).
-    if len(day) != _YMD_LEN or len(label) != _HHMMSS_LEN:
+    # `isdecimal()` 은 자리수와 **한 짝**이다 — `strptime` 은 `%H` 에 `" 9"` 를 허용해
+    # `" 93000"`(공백 패딩)을 6자리째 통과시킨다. 값은 맞게 읽히지만 그러면 벤더가
+    # 패딩 규약을 바꾼 것을 조용히 흡수한다. `isdigit()` 은 `"²"` 를 통과시켜 더 약하다.
+    if (len(day) != _YMD_LEN or len(label) != _HHMMSS_LEN
+            or not (day + label).isdecimal()):
         raise ValueError(
             f"{unit_id} 지수 분봉 날짜·시각 자리수가 다르다: {day!r} {label!r}")
     try:
