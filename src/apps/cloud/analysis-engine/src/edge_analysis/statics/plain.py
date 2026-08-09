@@ -297,6 +297,7 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
     id 생성을 모델에 맡기면 접지가 무너진다(프로젝트 규약).
     """
     import json
+    from .model_contract import ask_checked
 
     news = news or []
     stats = stats or []
@@ -307,7 +308,7 @@ def narrate_plain(ask, ctx: dict, *, news: list[dict] | None = None,
         news=json.dumps(news, ensure_ascii=False, indent=1) or "(없음)")
     user, last, why = "", "", ""
     for _ in range(retries + 1):
-        out = ask(sysmsg, user or "위 재료로 써라.")
+        out = ask_checked(ask, sysmsg, user or "위 재료로 써라.")
         claims = (out or {}).get("claims") or []
         last = " ".join(str(c.get("text", "")) for c in claims if isinstance(c, dict))
         try:

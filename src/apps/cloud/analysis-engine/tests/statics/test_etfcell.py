@@ -173,7 +173,7 @@ def _wire(monkeypatch, reports, rejected=()):
 
     meta = {}
     text = etfcell.run(
-        object(), "091160", "2026-08-05", lambda *_: {},
+        _object_lake(), "091160", "2026-08-05", lambda *_: {},
         instrument_id="iid", window_start="10:40", window_end="13:20",
         window_meta=meta)
     return text, meta
@@ -322,7 +322,7 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
 
     ask = TracingClient(_Client()).complete_json
     with collect_trace() as trace:
-        etfcell._window_paneltest(object(), "iid", "2026-08-05", ask, facts)
+        etfcell._window_paneltest(_object_lake(), "iid", "2026-08-05", ask, facts)
 
     requests = [e for e in trace if e.get("event") == "llm.request"]
     assert requests, "propose 프롬프트가 trace 에 없다"
@@ -330,8 +330,8 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
     assert any(e.get("event") == "llm.response" for e in trace)
 
 
-def test_window_paneltest_wires_objectset_only_when_the_lake_can(monkeypatch):
-    """Bound lakes receive structured ObjectSet tools; a stub gets no query tool."""
+def test_window_paneltest_abstains_before_asking_when_objectset_is_unavailable(monkeypatch):
+    """No ObjectSet means no safe model surface, so the LLM must not be called."""
     import dataclasses
     from edge_analysis.statics import etfcell
 
@@ -340,19 +340,18 @@ def test_window_paneltest_wires_objectset_only_when_the_lake_can(monkeypatch):
                         lambda lake, eids: ["CONTRACT.SIGNING"])
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
                         lambda lake, iid, day: {})
-    seen: dict = {}
-    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
-                        lambda ask, **kw: (seen.update(kw), ([], []))[1])
+    calls = []
+    stage_results, trials = etfcell._window_paneltest(
+        object(), "iid", "2026-08-05", lambda *_: calls.append(1) or {}, facts)
 
-    lake = _object_lake()
-    etfcell._window_paneltest(lake, "iid", "2026-08-05", lambda *_: {}, facts)
-    assert seen["object_tools"] is not None
-    assert seen["object_tools"]["specs"][0]["name"] == "objectset.create"
-    assert "sql_tool" not in seen
-
-    seen.clear()
-    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
-    assert seen["object_tools"] is None
+    assert calls == []
+    assert trials == ()
+    assert stage_results == ({
+        "stage": "propose",
+        "verdict": "판정불가",
+        "reason": "OBJECTSET_UNAVAILABLE",
+        "error_type": "ValueError",
+    },)
 
 
 def test_missing_layers_raise_instead_of_returning_prose():

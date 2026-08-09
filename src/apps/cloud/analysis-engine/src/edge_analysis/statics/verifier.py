@@ -207,6 +207,8 @@ def design(ask, lake, *, etype: str, day: str, layer: str, brief: str = "",
     `ask` 가 None 이면 기준선 하나만 - **에이전트 없이도 돌지만, 그때 이 모듈은
     구체화를 하지 않는다**는 사실을 사유로 남긴다(조용한 퇴화 금지).
     """
+    from .model_contract import ask_checked
+
     menu = slot_menu(lake, etype, day)
     menu_say = "\n".join(
         (f"  {s[1:]}: **질의 실패** {vs[0][0]}" if s.startswith("!")
@@ -221,14 +223,14 @@ def design(ask, lake, *, etype: str, day: str, layer: str, brief: str = "",
     user = (f"사건타입 {etype} · {layer}층 · {day} 셀.\n"
             + (f"가설 층이 이미 본 것:\n{brief}\n" if brief else "")
             + "이 타입을 어떻게 쪼개 시행할지 설계하라.")
-    probes, bad = screen_probes((ask(system, user) or {}).get("probes") or [],
+    probes, bad = screen_probes((ask_checked(ask, system, user) or {}).get("probes") or [],
                                menu, max_probes=max_probes)
     if len([p for p in probes if p["slots"]]) == 0 and any(
             not k.startswith("!") for k in menu):
         # 쪼갤 재료가 있는데 하나도 안 쪼갰다 - 사유를 붙여 한 번 되묻는다
         retry = (user + "\n\n직전 제출이 하나도 쪼개지 않았다. 메뉴에 값이 있으니 "
                  "최소 두 개는 슬롯을 채워 내라.\n" + "\n".join(bad[-4:]))
-        more, bad2 = screen_probes((ask(system, retry) or {}).get("probes") or [],
+        more, bad2 = screen_probes((ask_checked(ask, system, retry) or {}).get("probes") or [],
                                   menu, max_probes=max_probes)
         bad += bad2
         if len([p for p in more if p["slots"]]) > 0:
