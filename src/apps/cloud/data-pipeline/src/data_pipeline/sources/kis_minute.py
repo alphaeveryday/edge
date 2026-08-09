@@ -439,13 +439,18 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                     raise ValueError(
                         f"{symbol} 소급 분봉 행이 객체가 아니다: {type(raw).__name__}")
                 trade_date = raw.get("stck_bsop_date")
-                if not isinstance(trade_date, str):
+                if not isinstance(trade_date, str) or len(trade_date) != _YMD_LEN:
                     # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 그 행이
                     # 빠져 `len(same_day) < len(page)` 가 성립하고, 그건 경계를 넘었다는
                     # 신호라 페이징이 끝나며, 빈 하루가 **성공으로** 캐시된다. 예외도
                     # ERROR 로그도 없이 362종 전건 missing 인 window 390개가 커밋된다.
+                    #
+                    # ⚠️ **자리수도 여기서 본다.** 아래 비교는 8자리 `_ymd` 와의 정확
+                    # 일치라 짧은 날짜는 구조적으로 "남의 날"이 된다 — 파서의 자리수
+                    # 가드는 그래서 이 경로에서 영영 안 닿는다(형이 맞는 형상 위반이
+                    # 조용한 문으로 샌다). 형제 `kis_sector_index.candles` 와 같은 조건.
                     raise ValueError(
-                        f"{symbol} 소급 분봉 행의 거래일이 문자열이 아니다: {trade_date!r}")
+                        f"{symbol} 소급 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
                 if trade_date != self._ymd:
                     continue
                 candle = parse_minute_row(raw, symbol)

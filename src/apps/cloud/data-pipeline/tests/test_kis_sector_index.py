@@ -184,6 +184,9 @@ class TestParse:
 
         날짜 자리수만 막았다가 Codex 리뷰(PR #645)에서 잡혔다 — 한 함정의 양쪽이다.
         """
+        # 가드가 막는 값이 **무엇이 되는지**를 여기서 못박는다 — 주석으로만 적으면 낡는다.
+        stolen = datetime.strptime(row()["stck_bsop_date"] + short_label, "%Y%m%d%H%M%S")
+        assert stolen.strftime("%H:%M:%S") == silently_becomes
         with pytest.raises(ValueError, match="자리수가 다르다"):
             parse_index_row({**row(), "stck_cntg_hour": short_label}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)

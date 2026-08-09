@@ -137,6 +137,10 @@ class TestParse:
         훔쳐 간다. 결과의 `second` 가 0 이라 어느 가드에도 안 걸리고, 그 봉은 멀쩡한
         다른 window 에 앉아 확정된다. `kis_sector_index`·`kis_inav` 와 같은 문이다.
         """
+        # 가드가 막는 값이 **무엇이 되는지**를 여기서 못박는다 — 주석으로만 적으면 낡고,
+        # 그러면 이 가드가 왜 있는지 다음 사람이 모른다.
+        stolen = datetime.strptime("20260803" + short_label, "%Y%m%d%H%M%S")
+        assert stolen.strftime("%H:%M:%S") == silently_becomes
         with pytest.raises(ValueError, match="자리수가 다르다"):
             parse_minute_row({**row(), "stck_cntg_hour": short_label}, "005930")
 
@@ -146,7 +150,9 @@ class TestParse:
             parse_minute_row({**row(), "stck_bsop_date": "2026087"}, "005930")
 
     @pytest.mark.parametrize("broken", [
-        {**row(), "stck_cntg_hour": "99:99:99"},   # 시각 형식
+        # 자리수는 맞고 값만 깨진 라벨 — 위 자리수 가드가 아니라 `strptime` 이 잡는
+        # 경로다. 8자리(`"99:99:99"`)로 두면 자리수 가드에 먼저 걸려 이 분기가 죽는다.
+        {**row(), "stck_cntg_hour": "999999"},     # 시각 형식
         {**row(), "stck_bsop_date": None},         # 날짜 결측
         {**row(), "cntg_vol": "-1"},               # 음수 거래량
         {**row(), "stck_lwpr": "99999"},           # OHLC 정합 위반(low > high)
@@ -545,7 +551,20 @@ class TestHistoricalCandles:
         남는다. 원장이 관대해지는 쪽으로 틀리는 바로 그 방향이다.
         """
         client, _ = self.hist([TOKEN, ok([{**row("1030" + "00"), "stck_bsop_date": bad_date}])])
-        with pytest.raises(ValueError, match="거래일이 문자열이 아니다"):
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles("005930", window_end=self.at("1030"))
+
+    def test_short_trade_date_does_not_eat_the_time_label(self):
+        """자리수도 **여기서** 봐야 한다 — 파서의 가드는 이 경로에 영영 안 닿는다.
+
+        아래 날짜 필터는 8자리 `_ymd` 와의 정확 일치라 짧은 날짜는 구조적으로 "남의 날"이
+        되어 `continue` 로 빠진다. 그러면 `len(same_day) < len(page)` 가 성립해 "경계를
+        넘었다 = 하루가 끝났다"로 읽히고, **절단된 하루가 성공으로 캐시된다** — 형이 맞는
+        형상 위반이라 위 가드에도 안 걸린다. 형제 `kis_sector_index` 와 같은 조건이다.
+        """
+        client, _ = self.hist(
+            [TOKEN, ok([{**row("103000"), "stck_bsop_date": "2026083"}])])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles("005930", window_end=self.at("1030"))
 
     def test_transport_failure_is_not_cached(self):
