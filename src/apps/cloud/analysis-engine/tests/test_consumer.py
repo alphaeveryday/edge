@@ -10,6 +10,7 @@ eventstore 계보 writer 와 **한 곳**에서 나온다는 사실이다.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -112,6 +113,78 @@ def test_returns_not_ready_defers_without_delete(caplog):
     assert RETURNS_RETRY_SECONDS <= 300, "재시도 지연이 분 단위 즉시성을 깨면 안 된다"
     assert "직전 거래일 price_daily 파티션이 없다" in caplog.text, (
         "사유 없이 고정 문구만 남으면 네 갈래를 로그로 못 가린다")
+
+
+def test_every_disposition_is_timed(capsys, monkeypatch):
+    """메시지의 **점유 시간**은 결과와 무관하게 남아야 한다(ALPHA-908).
+
+    이 로그가 오토스케일링 대수 산정의 유일한 입력인데, 성공 경로만 재면 분포가 성공
+    편향된다 — deferred(재확인 대기)·malformed 는 소요가 짧고 failed·locked 는 길어서,
+    그쪽이 대부분인 날의 대수를 성공분만으로 정하면 실제 점유보다 작게 나온다. 그래서
+    고정하는 것은 "성공에 elapsed_s 가 있다"가 아니라 **다섯 갈래 어디로 끝나도 한 줄이
+    남고, 그 값이 실제 경과에서 나온다**는 것이다.
+
+    값을 가상 시계로 고정하는 이유: 타입만 보면(`isinstance(float)`) 구현이 0.0·음수·
+    상수를 실어도 통과한다 — 배포는 초록인데 백분위를 못 만든다. event_type 을 두 종류
+    태우는 이유: 회수(API 한 번)와 설명 생성(LLM 다단)이 한 라벨로 합쳐지면 분포가 두
+    봉우리가 돼 백분위가 무의미해진다.
+    """
+    # 메시지당 정확히 두 번(시작·종료) 읽는다 — 호출 수가 바뀌면 정렬이 깨져 드러난다
+    ticks = iter([0.0, 0.5, 10.0, 130.0, 200.0, 200.25,
+                  300.0, 360.0, 400.0, 1600.0, 2000.0, 2000.75])
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
+
+    def by_trigger(trigger_id):
+        if trigger_id == "t1":
+            raise ReturnsNotReadyError("분모 파티션 없음")
+        if trigger_id == "t2":
+            raise RouteLockedError("다른 소비자가 쥐고 있다")
+        if trigger_id == "t3":
+            raise RuntimeError("db down")
+        return "explained"
+
+    sqs = FakeSqs(["{ 깨진 봉투", envelope("t1"), envelope("t2"), envelope("t3"),
+                   envelope("t4"), revert_envelope()])
+    consume_triggers("q", max_polls=6, process_fn=by_trigger,
+                     revert_fn=lambda _: "reverted", sqs_client=sqs)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if json.loads(line).get("event") == "consumer.message"]
+    assert [(e["outcome"], e["elapsed_s"], e["event_type"]) for e in events] == [
+        ("malformed", 0.5, None),
+        ("deferred", 120.0, "PriceTriggerFired"),
+        ("locked", 0.25, "PriceTriggerFired"),
+        ("failed", 60.0, "PriceTriggerFired"),
+        ("explained", 1200.0, "PriceTriggerFired"),
+        ("reverted", 0.75, "ExposureReverted"),
+    ], "한 갈래라도 빠지면 그 갈래는 규모 산정에서 통째로 사라진다"
+
+
+def test_delete_time_counts_and_survives_delete_failure(capsys, monkeypatch):
+    """삭제에 든 시간은 점유이고, 삭제가 던져도 그 점유는 남아야 한다(ALPHA-908).
+
+    삭제를 로그 앞뒤 어디에 두든 한 방향으로 틀린다 — 앞이면 SDK 재시도로 멈춰 있던
+    시간이 점유에서 빠지고(그동안 다음 메시지를 못 받는다), 뒤면 삭제가 던질 때 그
+    사고의 표본이 통째로 사라진다. 하필 둘 다 **가장 오래 점유한 쪽**을 골라 잃어서,
+    대수를 정하는 입력의 꼬리만 깎인다. 그래서 `finally` 가 계약이다.
+
+    삭제가 시간을 먹게 만드는 이유: 그러지 않으면 로그를 다시 삭제 앞으로 옮겨도
+    경과가 같아 이 테스트가 통과한다 — 지키려는 계약의 반례를 거부하지 못한다.
+    """
+    clock = {"t": 100.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["t"])
+
+    class SlowDeleteBoom(FakeSqs):
+        def delete_message(self, **_):
+            clock["t"] += 600.0          # SDK 재시도로 멈춰 있던 시간
+            raise RuntimeError("sqs 삭제 실패")
+
+    sqs = SlowDeleteBoom([envelope("t1")])
+    with pytest.raises(RuntimeError):
+        consume_triggers("q", max_polls=1, process_fn=lambda _: "explained",
+                         sqs_client=sqs)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if json.loads(line).get("event") == "consumer.message"]
+    assert [(e["outcome"], e["elapsed_s"]) for e in events] == [("explained", 600.0)]
 
 
 def test_generic_failure_leaves_message_and_fails_bounded_run():
