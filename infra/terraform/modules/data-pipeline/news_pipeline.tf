@@ -225,8 +225,9 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
-# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 유입분을 장 시작 전에 배치 코퍼스로 확정 — 09:00
-# 전에 끝나야 하는 이유는 1분 레인과 같은 BigKinds·같은 IP 를 치기 때문이다) + day-close 23:50
+# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 유입분을 배치 코퍼스로 확정 — 분 레인의 seed poll
+# 은 최신 400건까지라 넘친 꼬리를 배치만 담는다. 09:00 전에 끝나야 하는 이유는 그것과 별개로
+# 1분 레인과 같은 BigKinds·같은 IP 를 치기 때문이다) + day-close 23:50
 # (장외·야간 뉴스로 하루치 완결, assemble 단일일 창의 오버나잇 갭 보전). 슬롯 정의·근거의
 # SSOT 는 `news_schedule_expressions` 주석이다.
 #

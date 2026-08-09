@@ -199,7 +199,7 @@ variable "schedule_state" {
 }
 
 # 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
-# 08:10 = 밤새 밀린 것을 장중 수집 시작(09:00) 전에 털어낸다. 23:50 = 하루치 마무리.
+# 08:10 = 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다. 23:50 = 하루치 마무리.
 #
 # **배치 뉴스가 답하는 질문은 "그날치를 빠짐없이 담았나" 하나다(ALPHA-893).** 신선도는 분 레인
 # 몫이다 — `minute/event_assembly.py`(ALPHA-727)가 장중에 배치와 같은 결정적 ID 로 event 를 세운다.
@@ -220,11 +220,16 @@ variable "schedule_state" {
 # 요청이 겹쳐 pacing 이 합산되고, BigKinds 차단(ALPHA-645: 400+HTML·403·429)은 재시도가 차단을
 # **연장**하는 종류다. 여유는 50분이고 성공 런 실측이 15~17분(2026-08-09)이라 평시엔 08:25~08:27
 # 에 끝난다.
-# ⚠️ **08:10 이 분 레인의 첫 poll 을 줄여 주지는 않는다.** 두 레인의 원장이 분리돼 있다 —
+# ⭐ **08:10 이 사는 것은 분 레인이 못 닿는 꼬리다.** 09:00 첫 poll 은 배치가 뭘 담았든
+# anchor 없는 seed poll 이라 **최신 `max_pages`×`page_size` = 4×100 = 400건**까지만 집는다
+# (minute/news_overlap.py). 이후 poll 은 머리(최신)를 쫓지 꼬리로 안 내려가므로, 밤새 400건이
+# 넘게 쌓이면 **넘친 만큼은 분 레인이 영영 못 본다**(window 는 `truncated` → INCOMPLETE 로
+# 정직하게 남지만 그 기사들이 채워지지는 않는다). 배치는 창이 `[어제, 오늘]` 2일에 페이지
+# 상한 160(ALPHA-541 — 실측 108~126 page)이라 그 꼬리를 통째로 쓸어 canonical 에 넣는다.
+# ⚠️ **분 레인의 첫 poll 페이지 수를 줄여 주지는 않는다** — 두 레인의 원장이 분리돼 있어서다.
 # 분 워커의 anchor 는 `news_poll_anchor`(세션 id 축, minute/news_worker.py)인데 배치 경로는
-# 그 표를 쓰지 않는다. 그래서 09:00 첫 poll 은 배치가 뭘 담았든 anchor 없는 seed poll
-# (`max_pages` 4×100, minute/news_overlap.py)이다. 이 슬롯이 파는 것은 **배치 코퍼스의
-# 커버리지**지 분 레인의 페이지 수가 아니다.
+# 그 표를 쓰지 않는다. **LLM 장부도 같은 이유로 안 겹친다**(같은 기사를 두 레인이 각각 태운다
+# — ALPHA-900). canonical 만 `parse.news_article_id` 공유로 한 행에 수렴한다.
 # ⚠️ 다만 **50분이 코드로 강제되지는 않는다.** `news_state_machine_timeout_seconds`(40분)는
 # Planner 컨테이너가 떠서 StartExecution 을 부른 **뒤부터** 재므로 Scheduler 의 RunTask 제출
 # ~컨테이너 기동(ENI·이미지 pull, 실측 ~68초)은 그 40분 밖이다 — 이 레포에서 이미 여유를
