@@ -31,14 +31,22 @@ from minutefakes import FakeMinuteDB  # noqa: E402
 _DB = DbConfig(password="x")
 SESSION_DATE = date(2026, 8, 10)
 NOW = datetime(2026, 8, 10, 9, 10, tzinfo=KST)
-# ETF 2 + 참조 계열 1 + 구성종목 2. **구성종목에는 NAV 가 없다** — 그 둘이 기대 집합에서
-# 빠지는 것이 이 dataset 의 핵심 차이라, 픽스처가 그걸 구분할 수 있어야 한다.
+# ETF 2 + 참조 계열 1 + 구성종목 2. 기대 집합에서 **구성종목과 참조 계열이 둘 다** 빠지는
+# 것이 이 dataset 의 핵심 차이라, 픽스처가 셋을 구분할 수 있어야 한다.
+#
+# 참조 계열은 prod config 규약대로 **`etf_map` 밖 코드**를 쓴다(`091170` 은 실제
+# `[minute_universe].sector_etf_ids` 48종 중 하나이고 `[krx_etf.source.etf_map]` 에 없다).
+# 여기에 `etf_map` 안의 코드를 적으면 `build_minute_universe` 가 `SystemExit` 로 거부하는
+# 조합이라 픽스처가 prod 를 안 비추고, 그러면 아래 `ETF_MAP` 도 거짓말이 된다(ALPHA-903).
 UNIVERSE = Universe(
     universe_version="univ-inav-v1",
     etf_ids=("069500", "091160"),
     constituent_ids=("005930", "000660"),
-    sector_etf_ids=("395160",),
+    sector_etf_ids=("091170",),
 )
+# iNAV 질의 심볼의 출처(`krx_etf.source.etf_map`)를 그대로 흉내낸다 — **판정 축만 있다.**
+# 참조 계열이 여기 없는 것은 픽스처의 사정이 아니라 규약이다(위 주석).
+ETF_MAP = {"069500": "KR7069500007", "091160": "KR7091160002"}
 
 
 class StubInavCollector:
@@ -70,7 +78,47 @@ class StubInavCollector:
         return result, records, manifest
 
 
-def build_worker(db, tmp_path, *, windows=3):
+class FakeAuth:
+    def token(self):
+        return "TOKEN"
+
+
+class NoHttpClient:
+    def request(self, *args, **kwargs):
+        raise AssertionError("이 테스트는 _fetch_etf 를 대체하므로 HTTP 를 타지 않는다")
+
+    def _sleep(self, seconds):
+        pass
+
+
+def make_real_collector(etf_map=None):
+    """**스텁이 아니라 진짜 `KisInavCollector`** 를 `etf_map` 하나로 만든다.
+
+    이 파일의 `StubInavCollector` 는 요청받은 unit 을 전부 received 로 내므로 심볼 맵을
+    아예 안 본다 — 기대 집합이 맵 밖으로 새도 초록이다. ALPHA-903 의 48종 INVALID 가
+    정확히 그 사각에서 나왔다. 여기서는 HTTP 만 대체하고 **심볼 조회(`_symbols`)는 진짜
+    경로를 태운다**: 맵에 없는 unit 은 `_rows_for` 가 `Outcome.INVALID` 로 낸다.
+    """
+    from data_pipeline.config import KisNavSource as KisNavSourceConfig
+    from data_pipeline.minute.inav_collect import KisInavCollector
+    from data_pipeline.sources.kis_inav import KisInavSource
+
+    source = KisInavSource(
+        KisNavSourceConfig(app_key="k", app_secret="s"),
+        dict(ETF_MAP if etf_map is None else etf_map),
+        NoHttpClient(),
+        interval_sec=60,
+    )
+    source.auth = FakeAuth()
+    # 첫 window(09:00)의 라벨을 가진 행 하나 — 어느 종목이든 같은 값이면 된다. 이 테스트가
+    # 재는 것은 값이 아니라 **어떤 unit 을 부를 수 있었는가**다.
+    source._fetch_etf = lambda unit_id, symbol, d1, d2, token: [
+        {"bsop_hour": "090000", "nav": "100.0", "stck_prpr": "101", "dprt": "1.00"}
+    ]
+    return KisInavCollector(source, clock=lambda: NOW)
+
+
+def build_worker(db, tmp_path, *, windows=3, collector=None):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
     # 격자는 390 이다 — iNAV 는 시간외를 계획하지 않는다(어댑터 하한 09:00)
     planned = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_hours=False)
@@ -79,7 +127,7 @@ def build_worker(db, tmp_path, *, windows=3):
         universe_version=UNIVERSE.universe_version, universe_hash=UNIVERSE.universe_hash,
         windows=planned[:windows],
     )
-    collector = StubInavCollector()
+    collector = StubInavCollector() if collector is None else collector
     worker = InavWorker(
         session_id=session_id,
         ledger=ledger,
@@ -110,8 +158,8 @@ def test_canonical_artifact_가_떨어진다(tmp_path):
     key = canonical_etf_inav_minute_artifact_key("KR", "2026-08-10", "0900", 1)
     body = LocalStorage(root=tmp_path).get_bytes(key).decode("utf-8")
     rows = [json.loads(line) for line in body.splitlines()]
-    # 기대 집합(ETF 3종)만큼, 벤더 축은 레코드 컬럼으로
-    assert [r["unit_id"] for r in rows] == ["069500", "091160", "395160"]
+    # 기대 집합(판정 축 ETF 2종)만큼, 벤더 축은 레코드 컬럼으로
+    assert [r["unit_id"] for r in rows] == ["069500", "091160"]
     assert all(r["source"] == "kis" for r in rows)
     window = db.windows[(session_id, worker.ledger.session_window_rows(
         session_id=session_id)[0][0])]
@@ -128,8 +176,37 @@ def test_구성종목은_기대_집합에서_빠진다(tmp_path):
 
     assert collector.seen_unit_ids
     for requested in collector.seen_unit_ids:
-        assert set(requested) == {"069500", "091160", "395160"}
+        assert set(requested) == {"069500", "091160"}
         assert "005930" not in requested and "000660" not in requested
+
+
+def test_참조_계열은_심볼_맵_밖이라_기대_집합에서_빠진다(tmp_path):
+    """ALPHA-903 회귀. **스텁을 안 쓴다** — 진짜 컬렉터가 진짜 심볼 맵으로 판정한다.
+
+    참조 계열은 정의상 `etf_map` 밖이라(`build_minute_universe` 가 겹침을 거부한다) 기대
+    집합에 넣는 순간 `_rows_for` 가 그 전량을 `Outcome.INVALID` 로 내고, invalid 하나면
+    `status_of` 가 **window 전체**를 INVALID 로 만든다 — 그리고 INVALID 는 재청구 대상이
+    아니다(2026-08-09 실측: 운영 universe 객체 81종 중 48종이 이 상태였다).
+
+    그래서 이 단언은 "VALID 로 커밋됐다"다. `_expected_units` 가 참조 계열을 다시
+    얹으면 여기가 INVALID 로 깨진다 — 스텁 컬렉터로는 잡히지 않던 그 축이다.
+    """
+    db = FakeMinuteDB()
+    worker, ledger, session_id, _ = build_worker(
+        db, tmp_path, windows=1, collector=make_real_collector()
+    )
+
+    run_ticks(worker, NOW)
+
+    window_start = ledger.session_window_rows(session_id=session_id)[0][0]
+    window = db.windows[(session_id, window_start)]
+    assert window["data_status"] == "VALID"
+    assert window["expected_unit_count"] == 2 and window["failed_unit_count"] == 0
+    assert not window["missing_units"]
+    body = LocalStorage(root=tmp_path).get_bytes(
+        canonical_etf_inav_minute_artifact_key("KR", "2026-08-10", "0900", 1)
+    ).decode("utf-8")
+    assert [json.loads(line)["unit_id"] for line in body.splitlines()] == ["069500", "091160"]
 
 
 def test_job_도_outbox_도_만들지_않는다(tmp_path):
