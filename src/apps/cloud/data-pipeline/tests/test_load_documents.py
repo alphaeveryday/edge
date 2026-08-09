@@ -53,6 +53,11 @@ def _article(article_id: str, **over) -> dict:
 
 _ABSENT = object()   # "행이 없다" 와 "lead_text 가 NULL 이다" 를 가른다
 
+# 배치가 `created`·표본을 뽑는 유일한 출처(ALPHA-906). 자연키까지 같이 돌려받아야
+# 표본의 세 필드가 한 행에서 나온다 — id 만 받아 자연키를 파이썬 쪽에서 다시 붙이면
+# 그 짝이 어긋나도 로그는 그럴듯하다.
+_RETURNING_CLAUSE = "RETURNING DOCUMENT_ID, SOURCE_CODE, SOURCE_DOCUMENT_ID"
+
 
 class _FakeCursor:
     """ON CONFLICT DO NOTHING 시맨틱 + `document` 자연키→id 해석 흉내.
@@ -65,6 +70,39 @@ class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
         self.rowcount = 1
+        self._returning: list[tuple] = []      # 직전 문이 RETURNING 으로 돌려준 행
+        self._sets: list[list[tuple]] = []     # executemany 가 쌓아 둔 결과집합들
+        self._set_ix = 0
+
+    def executemany(self, sql, params_seq, *, returning=False):
+        """psycopg 3 의 `executemany` 를 `execute` 루프로 흉내낸다(ALPHA-906).
+
+        루프로 구현하는 것이 핵심이다 — 이 파일이 문면·파라미터·승자 규칙에 걸어 둔 계약이
+        전부 `execute` 안에 있으므로, 배치로 바뀌어도 같은 검사를 그대로 통과해야 한다.
+
+        ⚠️ `rowcount` 규칙이 `returning` 에 따라 **갈린다**. psycopg 3.3 `_cursor_base.py`
+        확인: `returning=False` 면 0 에서 시작해 결과마다 `command_tuples` 를 누적하고,
+        `returning=True` 면 누적하지 않고 결과집합들을 쌓아 **첫 번째를 선택**한다.
+        여기서 편하게 양쪽 다 합계를 넣으면, 나중에 document 배치 뒤 `rowcount` 로 세는
+        코드가 들어와도 픽스처만 초록이고 운영에서는 첫 문 하나(0 또는 1)를 센다 —
+        `created` 가 조용히 무너지는 형태다. 그래서 실제와 같이 갈라 둔다.
+        """
+        self._conn.executemany_calls += 1
+        total = 0
+        self._sets = []
+        for params in params_seq:
+            self.execute(sql, params)
+            total += self.rowcount
+            self._sets.append(list(self._returning) if returning else [])
+        self._set_ix = 0
+        self.rowcount = len(self._sets[0]) if returning else total
+
+    def fetchall(self):
+        return self._sets[self._set_ix]
+
+    def nextset(self):
+        self._set_ix += 1
+        return True if self._set_ix < len(self._sets) else None
 
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
@@ -72,6 +110,7 @@ class _FakeCursor:
         # 괄호 주변 공백은 의미가 없으므로 정규화한다 — 아래 WHERE 전문 동등 비교가
         # 무해한 재배치에 깨지지 않게. 결합자·괄호·절 순서 민감도는 **의도한 것**이다.
         head = flat.upper().replace("( ", "(").replace(" )", ")")
+        self._returning = []
         if head.startswith("INSERT INTO DOCUMENT"):
             self._conn.document_inserts += 1
             if (self._conn.fail_after is not None
@@ -80,11 +119,26 @@ class _FakeCursor:
             key = (params[1], params[2])
             self.rowcount = 0 if key in self._conn.documents else 1
             self._conn.documents.setdefault(key, params[0])   # DO NOTHING = 기존 id 가 남는다
+            # DO NOTHING 은 충돌 행을 **안 돌려준다** — RETURNING 이 내놓는 행이 곧 이번
+            # 런이 실제로 만든 행이다. 배치에서 `created`/표본을 rowcount 합계로 세면
+            # "몇 건"은 맞아도 "어느 행"을 못 말해 삽입되지 않은 행이 표본에 실릴 수 있고,
+            # 그래서 절이 사라지면 여기서 아무것도 안 돌려줘 카운트 테스트가 터진다.
+            if not self.rowcount or _RETURNING_CLAUSE not in head:
+                return
+            self._returning = [(params[0], params[1], params[2])]
         elif head.startswith("INSERT INTO NEWS_DOCUMENT"):
             # lead_text 와 publisher(ALPHA-695)는 같은 UPSERT 패턴의 **별도 문**이다 —
             # 컬럼명으로 갈라 각자의 저장소에 쌓는다. 한 저장소에 섞으면 한쪽 회귀가
             # 다른 쪽 단언을 초록으로 가린다.
             column = "publisher" if "PUBLISHER)" in head else "lead_text"
+            if column == "lead_text" and self._conn.fail_lead_after is not None:
+                # document 배치가 **끝난 뒤** 터지는 지점(ALPHA-906). 배치화 이후 이 자리의
+                # 실패는 `already` 가 이미 후보 전량으로 정해진 뒤라, 되돌리지 않으면
+                # 롤백된 런이 산출을 냈다고 보고한다 — fail_after 는 document 문에서만
+                # 터져 그 경우를 못 만든다.
+                self._conn.lead_inserts += 1
+                if self._conn.lead_inserts > self._conn.fail_lead_after:
+                    raise RuntimeError("DB 가 리드 배치에서 터졌다")
             if "DO UPDATE" in head:
                 # UPSERT 의 SET 컬럼이 INSERT 컬럼과 갈리면(복붙 오류) 실제 PG 는 충돌
                 # 행에서 엉뚱한 컬럼을 덮는데, 컬럼별 저장소만 보는 픽스처는 그걸 초록으로
@@ -185,9 +239,14 @@ class _FakeConn:
     def __init__(self, existing: list[tuple] | dict[tuple, str] | None = None,
                  lead_texts: dict[str, str | None] | None = None,
                  lead_observed_at: dict[str, object] | None = None,
-                 fail_after: int | None = None):
+                 fail_after: int | None = None,
+                 fail_lead_after: int | None = None):
         self.log: list = []
         self.fail_after, self.document_inserts = fail_after, 0
+        self.fail_lead_after, self.lead_inserts = fail_lead_after, 0
+        # 배치가 실제로 배치인지 보는 유일한 신호(ALPHA-906). `log` 는 문 단위라 후보마다
+        # 왕복하던 옛 형태와 구분되지 않는다 — 그 회귀는 초록으로 지나간다.
+        self.executemany_calls = 0
         self.news_documents: list[tuple[str, str]] = []
         # 자연키 → **실제 행의** document_id. dict 로 주면 계산값과 다른 기존 id 를 심는 것이고
         # (ALPHA-628 회귀), list 로 주면 id 값은 상관없이 존재만 보는 테스트다.
@@ -271,6 +330,48 @@ def test_existing_article_is_not_recreated(tmp_path, monkeypatch):
     assert log["created"] == 0
     assert log["already_present"] == 1
     assert log["created_rows_sample"] == []
+
+
+def test_one_batch_mixes_new_and_conflicting_rows(tmp_path, monkeypatch):
+    """한 배치 안에 신규와 충돌이 섞여도 created·already·표본이 갈려야 한다(ALPHA-906).
+
+    WHY: 배치는 **어느 행**이 들어갔는지를 말해 주지 않는다 — `rowcount` 로는 알 수 없고
+    (이 문은 `returning=True` 라 rowcount 가 합계도 아니다: psycopg 3.3.4 는 returning 이
+    아닐 때만 누적하고 returning 이면 첫 결과집합을 선택한다), 그래서 `RETURNING` 이
+    유일한 출처다. 그 출처를 잃고 후보 앞에서부터 잘라 메우는 회귀를 주입해 재 봤다(변이 실증):
+    전부 신규 픽스처(`test_run_log_records_what_happened`)는 합계와 표본이 우연히 같아
+    **통과시킨다**. 전부 충돌 픽스처는 "표본이 비어야 한다"로 잡지만, 표본이 비지 않는
+    경우의 **짝과 순서**는 못 가린다. 섞여야 표본이 신규분만, 그것도 제 짝으로 담기는지가
+    드러난다 — `created` 는 그때도 맞으므로 수만 보면 안 보인다.
+
+    표본이 틀리면 운영에서 조용하다: 로그는 만든 적 없는 문서를 만들었다고 말하고, 그 id 로
+    계보를 되짚는 사람이 없는 문서를 쫓는다.
+    """
+    from data_pipeline.db import stable_domain_id
+
+    storage = LocalStorage(tmp_path / "lake")
+    # 리드를 실어 문 셋(document·lead·publisher)이 전부 도는 실제 BigKinds 행 모양으로 둔다.
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article(a, lead_text=f"리드 {a}") for a in ("a1", "a2", "a3", "a4")])
+    # a2·a4 는 이미 있다 — 같은 배치 안에서 a1·a3 과 섞인다.
+    conn = _FakeConn(existing=[("bigkinds", "a2"), ("bigkinds", "a4")])
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "R1", db=_db()) == 0
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+    assert log["created"] == 2
+    assert log["already_present"] == 2
+    # 표본은 **신규 둘만** 담아야 한다. 합계로 세고 후보 앞에서부터 잘라 담으면 여기가
+    # a1·a2 가 된다 — 수는 맞고 내용이 틀린, 로그만 봐서는 안 보이는 형태다.
+    assert [r["source_document_id"] for r in log["created_rows_sample"]] == ["a1", "a3"]
+    assert [r["document_id"] for r in log["created_rows_sample"]] == [
+        stable_domain_id("doc", "bigkinds", "a1"), stable_domain_id("doc", "bigkinds", "a3")]
+
+    # 그리고 이것이 실제로 배치였는지 — 문 셋(document·lead·publisher)이 후보 4건에
+    # 대해 `executemany` 세 번이다. 후보마다 왕복하던 옛 형태로 되돌아가면 0 이 된다.
+    assert conn.executemany_calls == 3
 
 
 def test_missing_identity_is_skipped_not_inserted(tmp_path, monkeypatch):
@@ -591,7 +692,13 @@ def test_rollback_does_not_claim_lead_texts_it_never_kept(tmp_path, monkeypatch)
     monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
 
     assert load_documents.run(storage, "R1", db=_db()) == 1
-    assert _news_doc_inserts(conn) == [(conn.documents[("bigkinds", "a1")], "리드문")]
+    # 배치화(ALPHA-906) 이후 document 전량이 먼저 나가므로, a2 에서 터지면 리드 문은
+    # **한 번도 실행되지 않는다** — 예전엔 a1 의 리드가 나간 뒤 터졌다. 이 줄이 고정하는
+    # 것은 딱 그 **실행 순서**다(순서가 후보마다 3문으로 되돌아가면 여기가 먼저 깨진다).
+    # ⚠️ 롤백 자체는 여기서 증명되지 않는다 — 가짜 커넥션엔 트랜잭션이 없어 a1 의 document
+    # 는 `conn.documents` 에 남는다. 롤백을 담보하는 것은 `connect()` 컨텍스트이고, 이
+    # 테스트가 지키는 계약은 **로그가 남기지 않은 쓰기를 주장하지 않는 것**(아래 세 단언)이다.
+    assert _news_doc_inserts(conn) == []
 
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
@@ -603,6 +710,32 @@ def test_rollback_does_not_claim_lead_texts_it_never_kept(tmp_path, monkeypatch)
     # 필요한 순간에 근거가 사라진다. 위 세 줄과 같이 두는 이유가 그 대비다.
     assert log["lead_unclaimed_freshness"] == 1, \
         "롤백이 관측 노출 수까지 지웠다 — 축이 무력화된 것을 볼 자리가 없어진다"
+
+
+def test_failure_after_the_document_batch_claims_no_output(tmp_path, monkeypatch):
+    """document 배치가 끝난 뒤 터진 런은 산출 0 을 보고해야 한다(ALPHA-906).
+
+    WHY: 배치화로 `already` 가 document 배치 **직후 한 번에** 정해진다. 그 뒤(리드 배치)에서
+    터졌는데 되돌리지 않으면, 롤백된 런이 `ops.records_out = already + created` 로 후보
+    전량을 **냈다고** 보고한다 — 계측이 관대한 방향으로 틀리는 형태다(Rule 12). 이 자리는
+    `fail_after`(document 문에서만 터진다)로는 만들 수 없어 별도 지점이 필요하다.
+    `created` 만 되돌리던 기존 처리로 회귀하면 여기가 잡는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-15",
+                     [_article("a1", lead_text="리드1"), _article("a2", lead_text="리드2")])
+    # 둘 다 이미 있어 document 배치는 통과(created 0·already 2)하고, 리드 배치에서 터진다.
+    conn = _FakeConn(existing=[("bigkinds", "a1"), ("bigkinds", "a2")], fail_lead_after=0)
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "R1", db=_db()) == 1
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+    assert log["created"] == 0
+    assert log["already_present"] == 0, "롤백된 런이 기존 행을 산출로 세고 있다"
+    assert log["ops"]["records_out"] == 0
+    # 반대 방향은 그대로 — 관측 노출 수는 롤백과 무관하게 남는다(위 롤백 테스트와 같은 축).
+    assert log["lead_attempted"] == 2
 
 
 def test_missing_lead_text_writes_no_news_document_row(tmp_path, monkeypatch):
