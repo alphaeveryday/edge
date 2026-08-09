@@ -11,8 +11,9 @@ WORKDIR /app
 
 RUN useradd -r -m -u 1001 analysis
 
+COPY libs/ontology ./libs/ontology
 COPY apps/cloud/analysis-engine ./apps/cloud/analysis-engine
-RUN pip install --no-cache-dir ./apps/cloud/analysis-engine
+RUN pip install --no-cache-dir ./libs/ontology ./apps/cloud/analysis-engine
 
 USER analysis
 

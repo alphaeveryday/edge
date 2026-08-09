@@ -195,6 +195,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     from .hypothesize import propose
     from .interval import _etypes, thread_context
     from .paneltest import FEATURES, Z_ANOM, edge_tests, series_z
+    from .trial import prev_trading_day
 
     try:
         ets = _etypes(lake, list(facts.event_ids))
@@ -209,13 +210,43 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     except Exception as e:                      # noqa: BLE001 - 부재는 빈 목록
         log("hypothesis.series_z_failed", error=f"{type(e).__name__}: {str(e)[:80]}")
         fired = []
+    object_runtime = None
+    object_tools = None
+    scoped_context: tuple[str, ...] = ()
+    scoped_count = 0
+    structured_ready = False
+    try:
+        from .objectset_tools import NewsScope, ObjectSetRuntime
+        object_runtime = ObjectSetRuntime(
+            lake, as_of=f"{day}T{facts.window_end}:00",
+            news_scope=NewsScope(instrument_id, prev_trading_day(lake, day)))
+        object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
+        threads = object_runtime.call("news.find_threads", {"limit": 40})
+        if threads.get("ok"):
+            events = object_runtime.call(
+                "news.list_events", {"handle": threads["handle"], "limit": 40})
+            if events.get("ok"):
+                rows = events.get("events", [])
+                structured_ready = True
+                scoped_count = len(rows)
+                ets = sorted(set(ets) | {
+                    str(row["event_type_code"]) for row in rows
+                    if row.get("event_type_code")})
+                scoped_context = tuple(
+                    f'{row.get("available_at", "")} {row.get("event_type_code", "")} '
+                    f'{row.get("source_event_id", "")}' for row in rows)
+    except Exception as e:                      # noqa: BLE001 - optional structured surface
+        log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
     if not ets and not fired:
         return (), ()
 
     # 제안 접지(ALPHA-885): 직전 거래일부터 요청창 끝까지의 스레드 문맥. 검정의
     # 점 방아쇠 접지(`ets`, 창 안)는 그대로다 - 문맥은 제안에만 실린다.
-    context, n_ctx, n_fail = thread_context(
-        lake, instrument_id, day, facts.window_end, facts.event_ids)
+    if structured_ready:
+        context, n_ctx, n_fail = scoped_context, scoped_count, 0
+    else:
+        context, n_ctx, n_fail = thread_context(
+            lake, instrument_id, day, facts.window_end, facts.event_ids)
     log("hypothesis.context", events=n_ctx, lookup_failures=n_fail,
         in_window=len(facts.event_ids))
 
@@ -232,9 +263,10 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     # 레이크가 표면을 못 만들면(구형 스텁 포함) 주입식 facts만으로 진행하되 사유를 남긴다.
     try:
         from .objectset_tools import ObjectSetRuntime
-        object_runtime = ObjectSetRuntime(
-            lake, as_of=f"{day}T{facts.window_end}:59.999999")
-        object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
+        if object_runtime is None:
+            object_runtime = ObjectSetRuntime(
+                lake, as_of=f"{day}T{facts.window_end}:00")
+            object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
     except Exception as e:                      # noqa: BLE001 - 부재는 툴 없이 진행
         log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
         object_tools = None
