@@ -514,6 +514,42 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(output(repository.facts(DAY), "o.doc").base()).isEqualTo(0.5d);
 	}
 
+	/**
+	 * 🔴 휴장일은 기본 조회로 열린다({@link #latestDay} 가 일부러 안 뺀다 — 그날도 뉴스·공시는
+	 * 돈다). 그런데 장 산출은 0 이고 기준은 정상 거래일 중앙값이라, 기준을 그대로 주면 R13 이
+	 * 다섯 중 둘을 <b>−100%</b> 로 판정한다. 0 은 실측이 맞지만 <b>비교할 평소가 없는 날</b>이다.
+	 *
+	 * <p>뉴스 갈래는 휴장일에도 도니까 기준을 그대로 준다 — 축을 뭉뚱그리면 그쪽 이상을 놓친다.
+	 */
+	@Test
+	void 휴장일에는_장_산출의_기준을_주지_않는다() {
+		insertEtf();
+		insertTradingDay("2026-08-01");
+		insertTradingDay("2026-08-03");
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       plan_status, skip_reason, required, idempotency_key)
+				VALUES ('t-hol','r-2026-08-03','PRICE_COLLECTION_KIS','raw','SKIPPED',
+				        'NON_TRADING_DAY',true,'t-hol')
+				""");
+		insertResult("res-a", "2026-08-01", "PUBLISHED");
+		insertTrigger("trg-1", "2026-08-01");
+		jdbc.update("""
+				INSERT INTO document (document_id, document_type, source_code, source_document_id,
+				       title, available_at)
+				VALUES ('doc-1','NEWS','BIGKINDS','n1','기사','2026-08-01T09:00:00+09:00'::timestamptz)
+				""");
+
+		ConsoleFacts f = repository.facts(DAY);
+
+		assertThat(output(f, "o.pub").base()).isNull();
+		assertThat(output(f, "o.trig").base()).isNull();
+		// 실측은 그대로 낸다 — 기준을 안 주는 것과 값을 숨기는 것은 다르다.
+		assertThat(output(f, "o.pub").today()).isZero();
+		// 뉴스는 휴장일에도 도는 축이라 기준이 그대로 있어야 한다.
+		assertThat(output(f, "o.doc").base()).isEqualTo(1.0d);
+	}
+
 	/** 미래 런 한 건이 기본 조회를 오지 않은 날로 옮기면 그 화면의 산출은 전부 0 이다. */
 	@Test
 	void 미래_거래일_런은_기본_조회의_날짜가_되지_않는다() {

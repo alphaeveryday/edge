@@ -216,32 +216,39 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 같은 이유로 이미 감수한 비용). 콘솔 단발 조회 규모라 지금은 감당 범위지만, 여기는 그쪽과 달리
 	 * 누적 테이블 <b>셋</b>을 한 요청에서 훑는다 — 느려지면 함수 인덱스가 먼저 붙을 자리다.
 	 */
-	private record OutputSpec(String id, String label, String unit, String sql) {
+	/**
+	 * {@code marketBound} — 이 산출이 <b>장이 서야 나오는가</b>. 휴장일에는 0 이 실측이 아니라
+	 * "그날 나올 것이 아니었다"인데, 응답에는 그 둘을 가르는 자리가 없다({@code today} 는 수 하나).
+	 * 그래서 <b>기준을 안 준다</b> — R13 은 기준이 없는 산출을 판정 대상에서 빼고 `note` 로 밝힌다.
+	 * 뉴스 갈래는 휴장일에도 도니까 해당 없다.
+	 */
+	private record OutputSpec(String id, String label, String unit, boolean marketBound,
+			String sql) {
 	}
 
 	private static final List<OutputSpec> OUTPUTS = List.of(
-			new OutputSpec("o.pub", "게시 ETF", "종", """
+			new OutputSpec("o.pub", "게시 ETF", "종", true, """
 					SELECT trade_date AS d, count(DISTINCT etf_instrument_id) AS n
 					  FROM explanation_result
 					 WHERE publication_status = 'PUBLISHED' AND trade_date IN (%s)
 					 GROUP BY trade_date"""),
-			new OutputSpec("o.trig", "배치 트리거", "종", """
+			new OutputSpec("o.trig", "배치 트리거", "종", true, """
 					SELECT trade_date AS d, count(DISTINCT etf_instrument_id) AS n
 					  FROM price_movement_trigger
 					 WHERE trade_date IN (%s)
 					 GROUP BY trade_date"""),
-			new OutputSpec("o.doc", "뉴스 문서", "건", """
+			new OutputSpec("o.doc", "뉴스 문서", "건", false, """
 					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
 					  FROM document
 					 WHERE document_type = 'NEWS'
 					   AND (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
 					 GROUP BY 1"""),
-			new OutputSpec("o.asr", "assertion", "건", """
+			new OutputSpec("o.asr", "assertion", "건", false, """
 					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
 					  FROM document_assertion
 					 WHERE (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
 					 GROUP BY 1"""),
-			new OutputSpec("o.evt", "source event", "건", """
+			new OutputSpec("o.evt", "source event", "건", false, """
 					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
 					  FROM source_event
 					 WHERE (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
@@ -350,13 +357,14 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 기준(중앙값)을 잴 직전 거래일 — 런이 있던 날(휴장일 제외)과 계획 결손일의 합집합에서 최근 10개.
 	 * <b>합친 뒤에</b> 자른다: 한쪽만 10개로 자르고 합치면 더 최근인 다른 쪽 날이 밀려난다.
 	 */
-	private List<LocalDate> baseDays(LocalDate day) {
+	private List<LocalDate> baseDays(LocalDate day, List<LocalDate> holidays) {
 		LocalDate upTo = day.minusDays(1);
 		TreeSet<LocalDate> days = new TreeSet<>(Comparator.reverseOrder());
 		days.addAll(jdbc.queryForList(BASE_DAYS_SQL, LocalDate.class, upTo));
 		days.addAll(slotDays(upTo));
 		// 휴장일 제외는 **합집합 뒤 한 번**, 자르는 것은 **그 뒤** — 각 SQL 주석의 이유.
-		days.removeAll(jdbc.queryForList(HOLIDAY_DAYS_SQL, LocalDate.class, upTo));
+		// `holidays` 는 `day` 이하라 여기 후보(`upTo` 이하)를 덮는다.
+		days.removeAll(holidays);
 		return days.stream().limit(10).toList();
 	}
 
@@ -424,7 +432,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 으로 센다 — 나눠 세면 두 값이 다른 스냅샷에서 나와 편차율이 존재한 적 없는 비교가 된다.
 	 */
 	private List<OutputRow> outputs(LocalDate day) {
-		List<LocalDate> baseDays = baseDays(day);
+		/* 휴장일 목록을 한 번만 읽어 두 곳이 같은 술어를 쓰게 한다 — 표본에서 빼는 자리와
+		 * "오늘이 휴장인가"를 묻는 자리가 갈리면, 이 파일에서 이미 두 번 난 종류의 결함이 된다. */
+		List<LocalDate> holidays = jdbc.queryForList(HOLIDAY_DAYS_SQL, LocalDate.class, day);
+		boolean targetIsHoliday = holidays.contains(day);
+		List<LocalDate> baseDays = baseDays(day, holidays);
 		List<LocalDate> queried = new ArrayList<>(baseDays);
 		queried.add(day);   // 기준일 목록은 day 미만이라 오늘과 겹치지 않는다
 		String placeholders = queried.stream().map(d -> "?").collect(Collectors.joining(","));
@@ -438,8 +450,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 					queried.toArray());
 			// 결과에 없는 거래일은 0 이다 — 그날 산출이 없었다는 실측이지 모름이 아니다.
 			List<Long> base = baseDays.stream().map(d -> byDay.getOrDefault(d, 0L)).toList();
+			/* 🔴 휴장일에 장 산출의 기준을 주면 R13 이 −100% 를 낸다(봇이 잡았다). `today` 의 0 은
+			 * 실측이 맞지만 **비교할 평소가 없는 날**이라 기준 쪽을 비운다 — 없는 사실을 지어내지
+			 * 않고 이미 있는 "기준 없음" 규약을 탄다. */
+			Double median = spec.marketBound() && targetIsHoliday ? null : median(base);
 			return new OutputRow(spec.id(), spec.label(), spec.unit(),
-					byDay.getOrDefault(day, 0L), median(base));
+					byDay.getOrDefault(day, 0L), median);
 		}).toList();
 	}
 
