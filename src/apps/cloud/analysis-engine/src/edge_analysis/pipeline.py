@@ -419,7 +419,12 @@ def run(
     # 묶으므로 코드에서 파생한다(`route_code_of`).
     from .statics.duck import CausalLake
     from .statics.interval import clamp
-    from .statics.layers import MARKET_CODE, SESSION_OPEN, decompose as layer_decompose
+    from .statics.layers import (
+        MARKET_CODE,
+        SESSION_OPEN,
+        decompose as layer_decompose,
+        select_sector,
+    )
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
@@ -459,7 +464,11 @@ def run(
     # 시변 β(ALPHA-803 2단계)의 재료 - 같은 상태축 봉에서 뽑은 대상·시장의 봉단위
     # 수익 경로다. 층 회계가 시장 기여를 Σ β_t·r_m,t 로 세우고, 못 서면 β=1 폴백
     # 사유를 커버리지에 남긴다(`layers._market_beta`).
-    paths = _return_paths(state_bars, (settings.etf_ticker, MARKET_CODE))
+    selected_sector = select_sector(
+        lake, settings.etf_ticker, day_iso, tuple(intraday)).code
+    path_units = ((settings.etf_ticker, MARKET_CODE, selected_sector)
+                  if selected_sector else (settings.etf_ticker, MARKET_CODE))
+    paths = _return_paths(state_bars, path_units)
     try:
         roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock,
                                intraday=intraday, paths=paths)

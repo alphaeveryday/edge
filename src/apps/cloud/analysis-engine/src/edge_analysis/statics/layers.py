@@ -75,6 +75,16 @@ class Name:
 
 
 @dataclass(frozen=True, slots=True)
+class SectorSelection:
+    code: str | None
+    overlap: float
+    twins: tuple[str, ...]
+    alien: tuple[str, ...]
+    broad: bool
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class Rollup:
     """ETF 구간 변동의 층 회계. **합이 정확히 맞는다** - 고유가 잔여로 정의되므로."""
 
@@ -159,6 +169,30 @@ def _absent(lake, key: str, why: str) -> None:
         notes[key] = f"부재: {why}"
 
 
+def select_sector(lake, etf: str, day: str,
+                  available: tuple[str, ...] | list[str] | set[str]) -> SectorSelection:
+    """Select one collected sector ETF using only holdings overlap contracts."""
+    if etf != MARKET_CODE and overlap(lake, etf, MARKET_CODE, day) >= BROAD_MARKET_CUT:
+        return SectorSelection(None, 0.0, (), (), True,
+                               f"시장과 구성 겹침 ≥{BROAD_MARKET_CUT:.0%}")
+    try:
+        sector_codes = {str(code) for code, _name in
+                        lake.sql(_CLOCK_NAMES.format(kinds=("sector",)))}
+    except Exception:  # noqa: BLE001 - missing candidate catalog is an explicit absence
+        sector_codes = set()
+    candidates = sorted((sector_codes & set(available)) - {etf, MARKET_CODE})
+    scored = [(code, overlap(lake, etf, code, day)) for code in candidates]
+    twins = tuple(code for code, score in scored if score >= TAUTOLOGY_CUT)
+    alien = tuple(code for code, score in scored if score < MIN_OVERLAP)
+    valid = [(code, score) for code, score in scored
+             if MIN_OVERLAP <= score < TAUTOLOGY_CUT]
+    if not valid:
+        return SectorSelection(None, 0.0, twins, alien, False,
+                               "겹침 5% 이상 30% 미만 섹터 ETF 없음")
+    code, score = max(valid, key=lambda item: (item[1], item[0]))
+    return SectorSelection(code, score, twins, alien, False, "선정")
+
+
 def _series(lake, day: str, kinds: tuple[str, ...],
             *, clock: tuple[str, str],
             only: str | tuple[str, ...] | None = None) -> dict[str, tuple]:
@@ -179,7 +213,8 @@ def _series(lake, day: str, kinds: tuple[str, ...],
             for sym, lr, vol in rows if lr is not None}
 
 def _market_beta(lake, etf: str, day: str, paths: dict | None,
-                 ) -> tuple[float, tuple[float, ...], float] | None:
+                 sector: str | None = None,
+                 ) -> tuple[float, float | None, tuple[float, ...], float] | None:
     """칼만 시변 β 시장 기여 (Σ β_t·r_m,t) - 구간/커밋 봉 모드 전용(ALPHA-803 2단계).
 
     Q·R·β0 은 전부 **전일 5분봉**(레이크 `bars_5m` 직전 파티션)에서 온다(선견 금지,
@@ -197,6 +232,8 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
         fall("구간 봉 수익 계열 미제공")
         return None
     try:
+        symbols = [etf, MARKET_CODE] + ([sector] if sector else [])
+        symbol_sql = ", ".join(f"'{symbol}'" for symbol in symbols)
         rows = lake.sql(rf"""
             SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, ts, close
             FROM bars_5m
@@ -204,7 +241,7 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
                                 WHERE trade_date < DATE '{day}')
               AND close > 0
               AND regexp_replace(symbol, '\.(KS|KQ)$', '')
-                  IN ('{etf}', '{MARKET_CODE}')
+                  IN ({symbol_sql})
             ORDER BY ts""")
     except Exception as e:              # noqa: BLE001 - 표 부재·질의 실패는 폴백 사유
         fall(f"전일 5분봉 질의 실패: {type(e).__name__}")
@@ -219,7 +256,24 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
         fall(f"전일 5분봉 부재 (대상·시장 정렬 {len(common)}봉)")
         return None
     import numpy as np
-    from .kbeta import wired_beta
+    from .kbeta import wired_beta, wired_beta2
+    if sector and sector in paths and sector in closes:
+        sec_map = closes[sector]
+        common3 = sorted(s_map.keys() & m_map.keys() & sec_map.keys())
+        if len(common3) >= 2:
+            two = wired_beta2(
+                np.array([s_map[t] for t in common3]),
+                np.array([m_map[t] for t in common3]),
+                np.array([sec_map[t] for t in common3]),
+                paths[etf], paths[MARKET_CODE], paths[sector],
+            )
+            if two.get("verdict") == "성립":
+                quarters = tuple(float(np.mean(chunk)) for chunk in
+                                 np.array_split(two["beta_m"], 4) if len(chunk))
+                return (float(two["market_contribution"]),
+                        float(two["sector_contribution"]), quarters,
+                        float(two["market_ci"]))
+            _absent(lake, "sector_layer", f"2요인 칼만 폴백 - {two.get('reason', '?')}")
     res = wired_beta(np.array([s_map[t] for t in common]),
                      np.array([m_map[t] for t in common]),
                      paths[etf], paths[MARKET_CODE])
@@ -228,7 +282,7 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
         return None
     quarters = tuple(float(np.mean(chunk))
                      for chunk in np.array_split(res["beta"], 4) if len(chunk))
-    return float(res["contribution"]), quarters, float(res["ci"])
+    return float(res["contribution"]), None, quarters, float(res["ci"])
 
 
 # ── 층 회계 ───────────────────────────────────────────────────────────────
@@ -269,8 +323,7 @@ def decompose(lake, etf: str, day: str, *, clock: tuple[str, str],
     # 대상·시장 두 심볼만 읽는다 - 섹터 ETF 후보 풀이 사라진 뒤로(ALPHA-877) 전
     # 계열을 읽을 이유가 없다. 대상 ETF 자신이 layers_daily 에 'sector' kind 로
     # 실려 있어 kinds 는 그대로 둔다.
-    ser = _series(lake, day, ("market", "sector"), clock=clock,
-                  only=(etf, MARKET_CODE))
+    ser = _series(lake, day, ("market", "sector"), clock=clock)
     # 1분봉 실측이 레이크 값을 **덮는다** - 이름은 레이크 것을 지키고(수익률만 갈아
     # 끼운다), 레이크에 아예 없는 심볼(스테일 정본)은 코드를 이름 삼아 세운다.
     # 시장 층이 "레이크가 낡아서" 빠지는 일이 없어야 한다.
@@ -290,6 +343,15 @@ def decompose(lake, etf: str, day: str, *, clock: tuple[str, str],
                 ser[sym] = (ser[sym][0] if sym in ser else sym, lr, halt)
             else:
                 ser.pop(sym, None)
+    selection = select_sector(
+        lake, etf, day, tuple(intraday) if intraday is not None else tuple(ser))
+    if selection.code and intraday is not None and selection.code in intraday:
+        lr, halt = intraday[selection.code]
+        ser[selection.code] = (
+            ser[selection.code][0] if selection.code in ser else selection.code,
+            lr,
+            halt,
+        )
     # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다 - `kinds` 에 'stock' 을
     # 넣어 856 종목을 읽을 이유가 없다. 커밋 봉 모드에서는 이 폴백도 닫는다
     # (위와 같은 이유 - 대상은 intraday 가 정본).
@@ -329,19 +391,23 @@ def decompose(lake, etf: str, day: str, *, clock: tuple[str, str],
     # 부재)를 유지한다. 일 모드(clock·intraday 둘 다 없음)는 닿지 않는다.
     beta_quarters: tuple[float, ...] = ()
     beta_ci: float | None = None
+    sector_contribution: float | None = None
     if layers:
-        wired = _market_beta(lake, etf, day, paths)
+        wired = _market_beta(lake, etf, day, paths, selection.code)
         if wired is not None:
-            contrib, beta_quarters, beta_ci = wired
+            contrib, sector_contribution, beta_quarters, beta_ci = wired
             layers[0] = Layer(MARKET_CODE, layers[0].name, "시장",
                               market_now, contrib)
+    if selection.code and sector_contribution is not None:
+        _name, sector_now, _halt = ser[selection.code]
+        layers.append(Layer(selection.code, _name, "섹터", sector_now,
+                            sector_contribution, selection.overlap))
 
     meta = {k: v[0] for k, v in ser.items()}
     # **광역 ETF 는 섹터 층을 접는다**(ALPHA-871). 시장과 ≥BROAD_MARKET_CUT 겹치는
     # 대상은 시장의 부분집합이라 섹터가 시장 몫을 두 번 나눠 갖는 동어반복이 된다 -
     # 시장+고유 2층으로 가고, 접었다는 사실은 커버리지에 남긴다(조용한 생략 금지).
-    broad = (layers and etf != MARKET_CODE
-             and overlap(lake, etf, MARKET_CODE, day) >= BROAD_MARKET_CUT)
+    broad = bool(layers and selection.broad)
     if broad and notes is not None:
         notes["sector_layer"] = (
             f"생략: 시장과 구성 겹침 ≥{BROAD_MARKET_CUT:.0%} - 시장+고유 2층")
@@ -350,9 +416,11 @@ def decompose(lake, etf: str, day: str, *, clock: tuple[str, str],
     # 전액 청구하고, 산문은 "(시장 차감)" 이라 적는다 - 일어나지 않은 차감을 말하는
     # 거짓이다. 대상이 시장 프록시 자신일 때도 같은 이유로 안 세운다: 그 경우는
     # route 가 "시장 100%" 로 정식 처리하는 정상 경로다(069500 07-29).
-    if layers and not broad:
-        _absent(lake, "sector_layer",
-                "업종지수 분봉 미수집 - 수집 전까지 시장+고유 2층")
+    if layers and not broad and selection.code is None:
+        _absent(lake, "sector_layer", selection.reason)
+    elif (layers and selection.code is not None and sector_contribution is None
+          and notes is not None and "sector_layer" not in notes):
+        _absent(lake, "sector_layer", "선정 섹터 ETF의 정렬된 칼만 경로 부재")
     idio = y_now - sum(x.contribution for x in layers)
     names, wsum, wtot, halted, adv, dec = _names(lake, etf, day, layers, top,
                                                  clock=clock, intraday=intraday)
@@ -361,7 +429,8 @@ def decompose(lake, etf: str, day: str, *, clock: tuple[str, str],
     return Rollup(etf, etf_label(lake, etf, meta.get(etf, etf)), day, y_now,
                   tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, len(names), wtot,
-                  (), (), halted, adv, dec, beta_quarters, beta_ci)
+                  selection.twins, selection.alien, halted, adv, dec,
+                  beta_quarters, beta_ci)
 
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────

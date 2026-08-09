@@ -175,6 +175,54 @@ def wired_beta(prev_s, prev_m, y, x) -> dict:
             "ci": float(1.96 * np.sqrt(float(p @ (x * x))))}
 
 
+def wired_beta2(prev_y, prev_m, prev_s, y, market, sector) -> dict:
+    """Aligned committed paths -> time-varying market and sector contributions.
+
+    The sector return is orthogonalized against the market with a coefficient
+    estimated only from the previous session.  This keeps the two claims from
+    charging the same market move and preserves PIT safety.
+    """
+    y = np.asarray(y, dtype=float)
+    market = np.asarray(market, dtype=float)
+    sector = np.asarray(sector, dtype=float)
+    if len({len(y), len(market), len(sector)}) != 1 or len(y) < MIN_PATH:
+        return {"verdict": "판정불가", "reason": "구간 3계열 정렬 실패"}
+    py, pm, ps = _logret(prev_y), _logret(prev_m), _logret(prev_s)
+    n = min(len(py), len(pm), len(ps))
+    py, pm, ps = py[-n:], pm[-n:], ps[-n:]
+    ok = np.isfinite(py) & np.isfinite(pm) & np.isfinite(ps)
+    py, pm, ps = py[ok], pm[ok], ps[ok]
+    if len(py) < MIN_BARS - 1 or float(pm @ pm) <= 0:
+        return {"verdict": "판정불가", "reason": "전일 3계열 표본 부족"}
+    gamma = float(ps @ pm / (pm @ pm))
+    pso = ps - gamma * pm
+    X0 = np.column_stack([pm, pso])
+    if np.linalg.matrix_rank(X0) < 2:
+        return {"verdict": "판정불가", "reason": "전일 섹터 요인 식별 불가"}
+    b0 = np.linalg.lstsq(X0, py, rcond=None)[0]
+    resid = py - X0 @ b0
+    sigma2 = float(resid @ resid) / max(len(py) - 2, 1)
+    P0 = sigma2 * np.linalg.pinv(X0.T @ X0)
+    try:
+        price_q, price_r = fit_qr(prev_y)
+        q_m, obs_r = beta_filter_params(
+            price_q, price_r, float(b0[0]), float(np.var(pm, ddof=1)))
+    except Exception as exc:  # noqa: BLE001 - caller records the fallback reason
+        return {"verdict": "판정불가", "reason": f"2요인 prior 실패: {exc}"}
+    X = np.column_stack([market, sector - gamma * market])
+    B, V = kalman2(y, X, b0, P0, np.diag([q_m, q_m]), obs_r)
+    market_contribution = float(B[:, 0] @ X[:, 0])
+    sector_contribution = float(B[:, 1] @ X[:, 1])
+    return {
+        "verdict": "성립", "beta_m": B[:, 0], "beta_s": B[:, 1],
+        "var_m": V[:, 0], "var_s": V[:, 1], "gamma": gamma,
+        "market_contribution": market_contribution,
+        "sector_contribution": sector_contribution,
+        "market_ci": float(1.96 * np.sqrt(float(V[:, 0] @ (X[:, 0] ** 2)))),
+        "sector_ci": float(1.96 * np.sqrt(float(V[:, 1] @ (X[:, 1] ** 2)))),
+    }
+
+
 def intraday_beta(symbol: str, day: str, *, market: str = "KOSPI") -> dict:
     """당일 시점별 β_t + CI. 재료가 없으면 사유와 함께 판정불가.
 
