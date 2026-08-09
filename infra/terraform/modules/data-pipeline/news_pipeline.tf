@@ -265,7 +265,7 @@ resource "aws_scheduler_schedule" "news" {
   # run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
   # jsonencode 이스케이프 우회는 OPS_SCHEDULED_TIME env 한 곳만 남는다.
   # (재시도는 여전히 0 이다 — 아래 retry_policy 주석. ⚠️ 이유였던 슬롯 간 비중첩 불변식은
-  #  ALPHA-893 에서 사실상 무의미해졌다: 최소 간격이 30분에서 8시간 20분으로 넓어졌다.
+  #  ALPHA-893 에서 사실상 무의미해졌다: 최소 간격이 30분에서 8시간(00:10→08:10)으로 넓어졌다.
   #  "불가능"은 아니다 — RunTask 제출~컨테이너 기동은 어디에도 안 묶여 있어 앞 런이 8시간
   #  넘게 밀리면 원리상 겹칠 수 있다. 그 여지가 실무상 사라졌다는 뜻으로 읽어라.)
   target {

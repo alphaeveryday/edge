@@ -641,6 +641,27 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
             "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
 
 
+def test_day_close_slot_runs_after_the_day_it_closes_has_ended():
+    # WHY(ALPHA-905): `day-close` 는 **하루를 닫는** 슬롯이다. 자정 **전**에 돌면 창의 '어제'는
+    #      이미 앞 런이 닫은 날이고 '오늘'은 아직 안 끝난 날이라 — 닫는 대상이 없다. 그러면서
+    #      비용은 최대다: 창이 `[어제, 오늘]` 2일인데 증분 커서가 없어 매 런이 창 전체를 다시
+    #      긁으므로, 23:50 은 꽉 찬 두 날(~124p)을 긁고 00:10 은 꽉 찬 하루 + 10분(~62p)을 긁는다.
+    #      **시각 리터럴(00:10)을 못박지 않는다** — 00:05·01:00 도 똑같이 정당하다. 지켜야 할
+    #      것은 "day-close 가 그 레인의 **가장 이른** 슬롯이다"(= 하루가 시작하자마자 앞 날을
+    #      닫는다)이고, 23:50 로 되돌리면 그게 깨진다. 이 관계가 없으면 슬롯을 되돌려도 요일·
+    #      타임아웃·assemble 가드가 전부 초록이라 ~124p 재수집이 조용히 재발한다(edge-review).
+    slots = {key: (int(h), int(m)) for key, m, h in
+             re.findall(r'"([\w-]+)"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block())}
+    assert "day-close" in slots, f"day-close 슬롯이 사라졌다 — 현재 키: {sorted(slots)}"
+
+    others = {k: v for k, v in slots.items() if k != "day-close"}
+    assert others, "비교 대상 슬롯이 없다 — 레인에 슬롯이 하나뿐이면 이 계약은 무의미하다"
+    assert slots["day-close"] < min(others.values()), (
+        f"day-close 가 {slots['day-close']} 로 {min(others.values())} 보다 늦다. 자정 전에 돌면 "
+        "닫을 하루가 아직 안 끝났고(앞 런이 닫은 날을 다시 긁을 뿐) 창의 두 날이 모두 꽉 차 "
+        "긁는 양이 두 배가 된다 — day-close 는 그 레인의 가장 이른 슬롯이어야 한다")
+
+
 def test_assemble_window_covers_what_the_collection_window_collected():
     # WHY(ALPHA-905): day-close 슬롯이 **00:10** 이라 assemble 은 언제나 다음 날짜에 돈다 —
     #      닫으려는 날(어제)을 읽으려면 assemble 창이 최소 하루는 소급해야 한다. 종전엔 이게
@@ -657,17 +678,22 @@ def test_assemble_window_covers_what_the_collection_window_collected():
     block = re.search(r'variable\s+"assemble_window_days"\s*\{(.*?)^\}', tf, re.M | re.S)
     assert block, "assemble_window_days 를 못 찾았다 — 파서가 낡았다"
     assemble_days = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+    # ⚠️ 기본값만 보면 사각이 남는다(edge-review) — 하한을 0 으로 되돌려도 기본값 1 이면 이
+    #    테스트가 통과하고, 그 뒤 env 가 0 을 주입하면 plan 도 통과해 매일 read=0 이 된다.
+    #    **허용 범위**(validation 하한)를 함께 본다.
+    floor = int(re.search(r"var\.assemble_window_days\s*>=\s*(\d+)", block.group(1)).group(1))
 
-    assert assemble_days >= run_mod.DEFAULT_LOOKBACK_DAYS, (
-        f"assemble 창 {assemble_days}일 < 수집 창 소급 {run_mod.DEFAULT_LOOKBACK_DAYS}일. "
-        "수집이 담은 날짜를 조립이 못 읽는다 — 00:10 런은 닫으려던 어제를 통째로 건너뛰고 "
-        "read=0 으로 성공한다(에러 없음)")
+    for label, value in (("기본값", assemble_days), ("validation 하한", floor)):
+        assert value >= run_mod.DEFAULT_LOOKBACK_DAYS, (
+            f"assemble 창 {label} {value}일 < 수집 창 소급 {run_mod.DEFAULT_LOOKBACK_DAYS}일. "
+            "수집이 담은 날짜를 조립이 못 읽는다 — 00:10 런은 닫으려던 어제를 통째로 건너뛰고 "
+            "read=0 으로 성공한다(에러 없음)")
 
 
 def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
     # WHY(ALPHA-893): 뉴스 SFN 타임아웃을 묶던 불변식이 **바뀌었다**. 옛 상한 25분의 근거는
     #      "인접 슬롯 간격 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였는데 그 두 슬롯이
-    #      내려가 최소 간격이 8시간 20분이 됐다. 그 자리를 대신하는 상한이 이것이다 —
+    #      내려가 최소 간격이 8시간(00:10→08:10)이 됐다. 그 자리를 대신하는 상한이 이것이다 —
     #      **09:00 전 슬롯은 자기 타임아웃을 다 써도 09:00 을 넘지 않아야 한다.** 넘으면 배치가
     #      1분 뉴스 워커와 같은 BigKinds 를 같은 IP 로 동시에 쳐서(minute/bigkinds_feed.py 는
     #      요청 형상을 배치와 공유한다) pacing 이 합산되고, 차단(ALPHA-645)은 재시도가 **연장**

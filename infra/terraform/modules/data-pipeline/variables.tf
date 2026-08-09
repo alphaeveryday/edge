@@ -492,9 +492,13 @@ variable "tag_news_window_days" {
   }
 }
 
-# 뉴스 SFN AssembleEvents 의 조립 대상 창(오늘−N일, ALPHA-592). 기본 1 = [어제, 오늘] 겹침 —
-# 자정 crossing(23:50 슬롯 기본 경로)과 overnight 갭(D 마감 후 기사를 D+1 런이 조립)을 함께
-# 닫는다. 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
+# 뉴스 SFN AssembleEvents 의 조립 대상 창(오늘−N일, ALPHA-592). 기본 1 = [어제, 오늘] 겹침.
+# ⚠️ **이 겹침의 성격이 ALPHA-905 로 바뀌었다** — 종전엔 23:50 런이 자정을 넘길 때의 **보정**
+# (우발적 상황 대비)이었지만, day-close 가 00:10 이 되면서 assemble 은 **언제나** 다음 날짜에
+# 돈다. 즉 겹침은 이제 옵션이 아니라 **그 슬롯이 어제를 읽는 유일한 근거**다. 하한을 낮추거나
+# 배선을 걷어내면 매일 어제를 통째로 건너뛴다(아래 validation 이 그것을 막는다).
+# overnight 갭(D 마감 후 기사를 D+1 런이 조립)도 같은 겹침이 덮는다.
+# 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
 variable "assemble_window_days" {
   description = "뉴스 SFN assemble-events 조립 대상 창(오늘−N일). 00:10 슬롯이 어제를 읽는 근거이자 자정 crossing 겹침."
   type        = number
