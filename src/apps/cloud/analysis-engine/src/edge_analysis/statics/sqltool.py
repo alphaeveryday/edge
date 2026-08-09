@@ -49,7 +49,11 @@ def allowed_relations(lake) -> dict[str, str | None]:
     ``v_<표>`` 다(auto_views_sql). 목록을 손으로 적지 않는 이유는 duck._rdb 와 같다 —
     적으면 새 표의 기본값이 '안 열림'이 된다.
     """
-    allow: dict[str, str | None] = {f"v_{t}": c for t, c in lake.bound.items()}
+    from ..adapters.sql_surface import is_llm_queryable_table
+
+    allow: dict[str, str | None] = {
+        f"v_{t}": c for t, c in lake.bound.items() if is_llm_queryable_table(t)
+    }
     for name in WHITELIST:
         allow.setdefault(name, None)
     return allow

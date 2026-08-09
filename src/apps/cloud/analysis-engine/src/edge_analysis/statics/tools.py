@@ -106,6 +106,9 @@ class Catalog:
         if n.startswith("s3_"):
             return self._peek_s3(n)
         t = n.removeprefix("v_")
+        from ..adapters.sql_surface import is_llm_queryable_table
+        if not is_llm_queryable_table(t):
+            return f"조회할 수 없는 분석 산출물: {name!r}"
         cols = (getattr(self.lake, "cols", None) or {}).get(t)
         if not cols:
             return (f"그런 표 없음: {name!r}. tables() 로 목록을 봐라")
