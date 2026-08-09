@@ -201,6 +201,34 @@ def test_복구_예산이_0_이다(tmp_path):
     assert worker.config.recovery_budget_per_tick == 0
 
 
+def test_drain_중_처리한_window_가_카운터에_남는다(tmp_path):
+    """🔴 `tick()` 은 회수·처리에 성공해도 **`DRAINED` 하나만** 돌려준다 — 그 사실이
+    카운터에 안 남으면 bounded 확인 게이트가 "회수할 게 없었다"와 구분을 못 한다.
+
+    ⚠️ 이 테스트는 CLI 스텁이 아니라 **진짜 drain 루프**를 돈다. `TestBoundedGate` 는
+    `tick` 을 통째로 대체하므로 이 카운터가 실제로 증가하는지 못 잰다 — 스텁이
+    테스트하려는 경로 자체를 대체한 자리다(리뷰 라운드 3).
+    """
+    from datetime import timedelta
+
+    db = FakeMinuteDB()
+    worker, ledger, session_id, _ = build_worker(db, tmp_path, windows=2)
+    worker.tick(NOW)  # fence 획득 + 첫 window 처리
+
+    # 죽은 attempt 가 남긴 고아 CLAIMED — lease 는 이미 만료됐다
+    window_start = ledger.session_window_rows(session_id=session_id)[1][0]
+    db.windows[(session_id, window_start)].update(
+        data_status="CLAIMED", claimed_by="dead-worker", claim_token=99,
+        lease_expires_at=NOW - timedelta(seconds=1))
+    ledger.request_drain(session_id=session_id, now=NOW)
+
+    states = [worker.tick(NOW + timedelta(seconds=60 + i)) for i in range(4)]
+
+    assert "DRAINED" in states, f"drain 이 수렴하지 않았다: {states}"
+    # 회수해서 **처리까지** 했다는 사실이 남아야 한다
+    assert getattr(worker, "drain_processed", 0) >= 1
+
+
 class TestCli:
     """기동 가드 — 설정·날짜 결손은 첫 벤더 호출이 아니라 **기동에서** 죽어야 배포
     시점에 드러난다(`test_price_worker.TestCli` 와 같은 형태)."""
@@ -278,9 +306,23 @@ class TestBoundedGate:
                             lambda cfg: LocalStorage(root=tmp_path))
         # 벤더 클라이언트는 생성만 하고 안 부른다(tick 을 대체하므로)
         monkeypatch.setattr(mod, "KST", mod.KST)
+        # 상태 문자열 또는 (상태, 설정할 drain 카운터) 튜플을 받는다 — DRAINED 는
+        # "회수할 게 없었다"와 "회수·처리 성공"을 **같은 문자열로** 내므로, 그 구분을
+        # 스텁이 못 하면 테스트가 두 경우를 같은 것으로 승인한다(리뷰 라운드 3).
         remaining = list(states)
-        monkeypatch.setattr(mod.SectorIndexWorker, "tick",
-                            lambda self, now: remaining.pop(0) if remaining else "IDLE")
+
+        def fake_tick(self, now):
+            if not remaining:
+                return "IDLE"
+            item = remaining.pop(0)
+            if isinstance(item, tuple):
+                state, counters = item
+                for name, value in counters.items():
+                    setattr(self, name, value)
+                return state
+            return item
+
+        monkeypatch.setattr(mod.SectorIndexWorker, "tick", fake_tick)
         # 오늘 날짜 게이트를 통과시킨다 — 세션 날짜와 "오늘"을 같은 날로 고정
         class FrozenDatetime(real_datetime):
             @classmethod
@@ -316,6 +358,25 @@ class TestBoundedGate:
         남아 있으면 **아무것도 안 하고 exit 0** 이다.
         """
         assert self._run_cli(monkeypatch, tmp_path, ["DRAINED"]) == 1
+
+    def test_drain_중_실제로_처리했으면_성공이다(self, monkeypatch, tmp_path):
+        """🔴 라운드 2 수정이 만든 **반대 방향 오판정**(리뷰 라운드 3).
+
+        DRAINING 세션에 만료된 CLAIMED 가 있으면 그 tick 이 window 를 처리하고 같은 tick
+        에서 ack 까지 성공한 뒤 `DRAINED` **하나만** 반환한다. CLI 는 `PROCESSED` 상태만
+        세므로 processed 가 0 인 채여서, "아무것도 안 했으면 실패" 규칙이 **실제로 일한
+        실행을 실패로** 판정했다. drain 성공 카운터를 합산해 가른다.
+        """
+        assert self._run_cli(
+            monkeypatch, tmp_path, [("DRAINED", {"drain_processed": 3})]) == 0
+
+    def test_DRAINING_중_max_ticks_가_소진돼도_처리분은_센다(self, monkeypatch, tmp_path):
+        """DRAINED 에 닿기 전에 tick 예산이 끝나는 경로 — 조기 반환을 안 타고 **말미
+        판정식**으로 떨어진다. 거기서도 drain 처리분을 합산해야 실제로 일한 실행을
+        실패로 안 낸다(합산이 두 자리라 한쪽만 고치기 쉽다).
+        """
+        assert self._run_cli(
+            monkeypatch, tmp_path, [("DRAINING", {"drain_processed": 2})]) == 0
 
     def test_상주_모드의_DRAINED_는_정상_종료다(self, monkeypatch, tmp_path):
         """반대 방향도 잰다 — 상주 서비스가 그날 정상적으로 마르는 것을 실패로 보고하면

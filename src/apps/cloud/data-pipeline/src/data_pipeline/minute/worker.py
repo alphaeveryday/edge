@@ -334,6 +334,11 @@ class MinuteWorkerLoop:
                         worker_id=self.config.worker_id, claim_token=claim["claim_token"],
                     )
                 else:
+                    # 반환값은 DRAINED 하나라 **drain 중 처리한 window 도 여기 아니면
+                    # 안 보인다**(위 실패 카운터와 대칭). 이게 없으면 bounded 확인
+                    # 게이트가 "회수·처리 성공"과 "회수할 게 없었다"를 구분 못 해,
+                    # 실제로 일한 실행을 무처리 실패로 판정한다(리뷰 라운드 3).
+                    self.drain_processed = getattr(self, "drain_processed", 0) + 1
                     self.ledger.advance_watermarks(session_id=self.session_id)
             if self.ledger.ack_drain(
                 session_id=self.session_id, fence_token=self.fence_token, now=now
@@ -1109,6 +1114,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         if state == "DRAINED":
             failed += getattr(worker, "drain_window_failures", 0)
             blocked += getattr(worker, "drain_blocked", 0)
+            processed += getattr(worker, "drain_processed", 0)
             logger.info("sector-index-worker 종료(DRAINED) — %d tick, 처리 %d, WINDOW_FAILED %d",
                         ticks, processed, failed)
             if max_ticks is None:
@@ -1123,6 +1129,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
             time.sleep(tick_seconds)
     failed += getattr(worker, "drain_window_failures", 0)
     blocked += getattr(worker, "drain_blocked", 0)
+    processed += getattr(worker, "drain_processed", 0)
     logger.info("sector-index-worker 종료(max-ticks %d) — 처리 %d, WINDOW_FAILED %d, 차단 %d",
                 ticks, processed, failed, blocked)
     # 🔴 확인 게이트다 — 실패가 있었거나 **한 window 도 못 봤으면** 성공이 아니다.
