@@ -765,6 +765,22 @@ def test_contract_signing_splits_thread_by_customer(monkeypatch):
     assert len(_batch(conn, "event_thread")) == 2
 
 
+def test_thread_link_preserves_disclosure_source_class(monkeypatch):
+    """thread header는 소스 중립이지만 link는 원 소스를 보존해야 한다. DISCLOSURE를 NEWS로
+    기록하면 분석·감사에서 공시와 기사를 구분할 수 없고 FK의 source class 계약도 거짓이 된다."""
+    conn = _FakeConn()
+    event = _multi_role_event(
+        "evt_dart", {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST",
+                     "CONTRACT_OBJECT": "concept_hbm"})
+    event.update({"source_class": "DISCLOSURE", "link_type": "DISCLOSURE_FACT"})
+
+    assemble_events.thread_events(conn, [event])
+
+    [link] = _batch(conn, "event_thread_link")
+    assert link[2] == "DISCLOSURE"
+    assert link[4] == "DISCLOSURE_FACT"
+
+
 def test_missing_identity_role_emits_unknown(monkeypatch):
     """identity 역할을 못 채우면(개념 역할 미해소 등) synthetic thread 를 만들지 않고
     novelty=UNKNOWN·thread_id=NULL 로 남긴다(계약 불변식 5

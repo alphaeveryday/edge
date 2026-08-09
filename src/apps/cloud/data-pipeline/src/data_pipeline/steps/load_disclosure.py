@@ -40,6 +40,7 @@ from datetime import date, datetime, timezone
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
+from ..entity_resolution import mint_concept
 from ..lake import (
     Storage,
     canonical_business_segment_fact_partition,
@@ -121,6 +122,72 @@ def _resolve_issuers(conn, corp_codes: set[str]) -> dict[str, str]:
         return {code: actor for code, actor in cur.fetchall()}
 
 
+def _prepare_supply_rows(conn, rows: list[dict]) -> list[dict]:
+    """기존 actor·concept FK로 공급계약 identity를 해소한다.
+
+    상대방은 파서가 정제한 이름과 원문명의 완전일치만 허용한다. 동명이면 NULL로 남겨
+    잘못된 계약 thread 결합을 막는다. 계약대상은 NEWS writer와 같은 채번 함수를 쓴다.
+    """
+    names = sorted({str(value).strip() for row in rows
+                    for value in (row.get("counterparty"), row.get("counterparty_raw"))
+                    if value and str(value).strip()})
+    actor_by_name: dict[str, str | None] = {}
+    if names:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.actor_id, e.display_name FROM actor a"
+                " JOIN entity e ON e.entity_id = a.actor_id"
+                " WHERE e.display_name = ANY(%s)",
+                (names,),
+            )
+            for actor_id, display_name in cur.fetchall():
+                name = str(display_name).strip()
+                if name not in actor_by_name:
+                    actor_by_name[name] = str(actor_id)
+                elif actor_by_name[name] != str(actor_id):
+                    actor_by_name[name] = None
+
+    from edge_ontology import role_entity_kind
+
+    concept_kind = role_entity_kind("CONTRACT_OBJECT")
+    if concept_kind is None:
+        raise ValueError("CONTRACT_OBJECT ontology kind is missing")
+    pending_concepts: dict[str, tuple[str, str]] = {}
+    prepared: list[dict] = []
+    for row in rows:
+        actor_id = None
+        if not row.get("counterparty_withheld"):
+            for value in (row.get("counterparty"), row.get("counterparty_raw")):
+                name = str(value).strip() if value else ""
+                if name and actor_by_name.get(name):
+                    actor_id = actor_by_name[name]
+                    break
+
+        object_name = str(row.get("object") or "").strip()
+        coined = mint_concept("CONTRACT_OBJECT", object_name) if object_name else None
+        concept_id = coined[0] if coined else None
+        enriched = {**row, "_counterparty_actor_id": actor_id,
+                    "_contract_object_concept_id": concept_id}
+        # 거절될 fact 때문에 참조 없는 concept master만 남기지 않는다.
+        if concept_id is not None and _supply_child(enriched)[0] is None:
+            pending_concepts.setdefault(concept_id, (object_name, concept_kind))
+        prepared.append(enriched)
+
+    if pending_concepts:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO entity (entity_id, entity_type, display_name, status)"
+                " VALUES (%s,'CONCEPT',%s,'ACTIVE') ON CONFLICT (entity_id) DO NOTHING",
+                [(cid, name) for cid, (name, _kind) in sorted(pending_concepts.items())],
+            )
+            cur.executemany(
+                "INSERT INTO concept (concept_id, concept_type) VALUES (%s,%s)"
+                " ON CONFLICT (concept_id) DO NOTHING",
+                [(cid, kind) for cid, (_name, kind) in sorted(pending_concepts.items())],
+            )
+    return prepared
+
+
 def _document(rows: list[dict], fact_type: str) -> dict[str, dict]:
     """rcept_no → document 헤더. 한 rcept 는 한 데이터셋에만 오므로(report_nm 라우팅) fact_type
     이 문서 단위로 결정적이다. available_at 은 fetched_at, 결측이면 report_date 로 보수 근사."""
@@ -167,7 +234,6 @@ def run(
 
         documents = {**_document(supply_rows, "SUPPLY_CONTRACT"),
                      **_document(segment_rows, "BUSINESS_SEGMENT")}
-        supply_by_rcept = {r["rcept_no"]: r for r in supply_rows}
         segment_by_rcept: dict[str, list[dict]] = {}
         for r in segment_rows:
             segment_by_rcept.setdefault(r["rcept_no"], []).append(r)
@@ -176,6 +242,8 @@ def run(
 
         with connect(db) as conn:
             issuers = _resolve_issuers(conn, {d["corp_code"] for d in documents.values()})
+            supply_rows = _prepare_supply_rows(conn, supply_rows)
+            supply_by_rcept = {r["rcept_no"]: r for r in supply_rows}
 
             for rcept_no, doc in sorted(documents.items()):
                 issuer_actor_id = issuers.get(doc["corp_code"])
@@ -379,8 +447,10 @@ def _supply_child(row):
     if start and end and end < start:
         return "reversed_period", None  # CHECK: 종료일 >= 시작일 (둘 다 유효 ISO 라 안전)
     cols = ("counterparty_actor_id", "counterparty_raw_name", "counterparty_withheld",
-            "contract_amount_krw", "revenue_ratio_pct", "contract_start_date", "contract_end_date")
-    vals = (None, raw_name, withheld, amount, ratio, start, end)
+            "contract_object_concept_id", "contract_amount_krw", "revenue_ratio_pct",
+            "contract_start_date", "contract_end_date")
+    vals = (row.get("_counterparty_actor_id"), raw_name, withheld,
+            row.get("_contract_object_concept_id"), amount, ratio, start, end)
     return None, (cols, vals)
 
 

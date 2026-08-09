@@ -197,6 +197,8 @@ def run(
     input_run_id: str | None = None,
     *,
     raw_keys: list[str] | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> int:
     """raw disclosures → 사업보고서 사업부문 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 장애 시 비0. input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 적재한다
@@ -215,7 +217,7 @@ def run(
     # 넘겨받은 키는 거르지 않는다 — 근거는 `normalize_disclosure.run` 의 같은 자리에 있다
     # (규약 밖 키는 아래 루프가 사유 + exit 1 로 크게 남긴다).
 
-    read = routed = skipped_type = segments_extracted = 0
+    read = routed = skipped_type = skipped_window = segments_extracted = 0
     failures: list[dict] = []
     warnings: list[dict] = []
     passing: list[dict] = []
@@ -245,6 +247,11 @@ def run(
             if vendor != "dart":
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["unsupported_vendor"]})
+                continue
+            report_date = _norm_report_date(record.get("rcept_dt"))
+            if report_date and ((from_date is not None and report_date < from_date)
+                                or (to_date is not None and report_date > to_date)):
+                skipped_window += 1
                 continue
             report_nm = record.get("report_nm")
             if not isinstance(report_nm, str):
@@ -318,6 +325,7 @@ def run(
                 "records_read": read,
                 "records_routed_business_report": routed,
                 "records_skipped_type": skipped_type,
+                "records_skipped_window": skipped_window,
                 "segments_extracted": segments_extracted,
                 "records_passed": len(passing),
                 "records_failed": len(failures),

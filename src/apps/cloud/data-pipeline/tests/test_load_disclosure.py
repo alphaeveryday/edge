@@ -70,8 +70,8 @@ def _segment(rcept_no, ordinal, **over):
 
 
 class _FakeCursor:
-    def __init__(self, log, profiles, existing_docs):
-        self._log, self._profiles, self._existing = log, profiles, existing_docs
+    def __init__(self, log, profiles, existing_docs, actors):
+        self._log, self._profiles, self._existing, self._actors = log, profiles, existing_docs, actors
         self.rowcount = 1
         self._result: list = []
 
@@ -82,10 +82,16 @@ class _FakeCursor:
         if upper.startswith("SELECT DART_CORP_CODE"):
             codes = params[0]
             self._result = [(c, self._profiles[c]) for c in codes if c in self._profiles]
+        elif upper.startswith("SELECT A.ACTOR_ID, E.DISPLAY_NAME"):
+            self._result = list(self._actors)
         elif upper.startswith("INSERT INTO DOCUMENT "):
             self.rowcount = 0 if (params[1], params[2]) in self._existing else 1
         else:
             self.rowcount = 1
+
+    def executemany(self, sql, rows):
+        for params in rows:
+            self.execute(sql, params)
 
     def fetchall(self):
         return self._result
@@ -98,13 +104,14 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, profiles=None, existing_docs=None):
+    def __init__(self, profiles=None, existing_docs=None, actors=()):
         self.log: list = []
         self._profiles = profiles if profiles is not None else {"00126380": "actor_samsung"}
         self._existing = existing_docs or set()
+        self._actors = actors
 
     def cursor(self):
-        return _FakeCursor(self.log, self._profiles, self._existing)
+        return _FakeCursor(self.log, self._profiles, self._existing, self._actors)
 
 
 def _fake_connect(conn):
@@ -142,7 +149,7 @@ def test_supply_becomes_document_and_typed_fact(tmp_path, monkeypatch):
     storage = LocalStorage(tmp_path / "lake")
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
            "2026-06-30", [_supply("R100")])
-    conn = _FakeConn()
+    conn = _FakeConn(actors=(("actor_customer", "고객사"),))
     assert _run(storage, conn, monkeypatch) == 0
 
     [(doc_id, dtype, source_code, rcept_no, published_at, available_at, uri)] = \
@@ -159,8 +166,25 @@ def test_supply_becomes_document_and_typed_fact(tmp_path, monkeypatch):
     [sc] = _inserts(conn, "supply_contract_fact")
     fact_id = stable_domain_id("dfact", doc_id, "SUPPLY_CONTRACT", None)
     assert sc[0] == fact_id
+    assert sc[1] == "actor_customer"           # 정규화된 상대방 actor
     assert sc[2] == "고객사 주식회사"          # counterparty_raw_name 보존
-    assert sc[4] == 1000000 and sc[5] == 12.5  # amount, ratio
+    assert sc[4] == stable_domain_id("concept", "반도체공급")
+    assert sc[5] == 1000000 and sc[6] == 12.5  # amount, ratio
+    assert _inserts(conn, "entity")             # concept FK 비계를 typed fact 전에 만든다
+    assert _inserts(conn, "concept")
+
+
+def test_ambiguous_counterparty_is_not_guessed(tmp_path, monkeypatch):
+    """동명 actor가 둘이면 아무거나 고르는 순간 DART와 뉴스가 잘못된 계약 thread로 합쳐진다.
+    원문명은 보존하되 actor 연결은 NULL이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R101")])
+    conn = _FakeConn(actors=(("actor_a", "고객사"), ("actor_b", "고객사")))
+    assert _run(storage, conn, monkeypatch) == 0
+    [sc] = _inserts(conn, "supply_contract_fact")
+    assert sc[1] is None
+    assert sc[2] == "고객사 주식회사"
 
 
 def test_segments_carry_ordinal_and_normalize_share_basis(tmp_path, monkeypatch):

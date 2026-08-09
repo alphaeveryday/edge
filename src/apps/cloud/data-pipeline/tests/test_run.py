@@ -498,6 +498,25 @@ def test_load_disclosure_explicit_window_overrides_and_default_is_full_scan(monk
     assert captured["window"] == (None, None)
 
 
+def test_backfill_disclosure_defaults_to_all_raw_and_accepts_filing_window(monkeypatch):
+    """백필 기본값이 최근 N일이면 보관 raw의 과거 공시가 영구 누락된다. 명시 창은 그대로
+    전달하고 미지정은 `(None, None)`으로 전체 raw 재처리를 요청해야 한다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = []
+
+    def fake_run(storage, run_id, *, db, from_date, to_date):
+        captured.append((from_date, to_date))
+        return 0
+
+    monkeypatch.setattr(run_mod.backfill_disclosure, "run", fake_run)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda db: db)
+
+    assert main(["backfill-disclosure", "--run-id", "B1"]) == 0
+    assert main(["backfill-disclosure", "--run-id", "B2",
+                 "--from", "2026-01-01", "--to", "2026-06-30"]) == 0
+    assert captured == [(None, None), ("2026-01-01", "2026-06-30")]
+
+
 def test_deadline_rejected_where_it_is_ignored(monkeypatch):
     # WHY: `--deadline-sec` 는 KRX ETF 만 소비한다. 다른 스텝에서 조용히 무시되면 운영자가
     #      상한이 걸렸다고 오인하고(있다고 믿는데 안 걸린다), SFN 이 엉뚱한 브랜치에 상한을

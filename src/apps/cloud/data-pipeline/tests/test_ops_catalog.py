@@ -485,7 +485,7 @@ def test_dependencies_encode_the_asl_gates():
     assert set(catalog.get("LOAD_INSTRUMENTS").depends_on) == _market_normalize_task_keys()
     # 공시 레인 게이트(ASL `DisclosureNormalizeCheckResults`) — 같은 축을 자기 레인으로 그린다.
     # LOAD_DISCLOSURE 의 의존은 이제 카탈로그가 아니라 **Worker 의 체인 순서**가 진다
-    # (ALPHA-875 — 한 window 가 collect→normalize×2→load 를 순차로 돈다). 엔트리가 없으므로
+    # (ALPHA-875 — 한 window 가 collect→normalize×2→load→assemble 을 순차로 돈다). 엔트리가 없으므로
     # 여기서 볼 것도 없다: 그 순서가 깨지는지는 `test_disclosure_worker` 가 본다.
     assert catalog.get("LOAD_DISCLOSURE") is None
     # 뉴스 레인(ALPHA-591)의 의존은 **뉴스 SFN 의 게이트 축**이다 — 옛 시장 의존(LOAD_ASSERTIONS

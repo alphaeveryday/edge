@@ -80,6 +80,7 @@ from .sources import (
 )
 from .steps import (
     assemble_events,
+    backfill_disclosure,
     enrich_corp_code,
     ingest_price_raw,
     load_assertions,
@@ -222,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
                  "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
+                 "load-price-daily", "load-documents", "load-disclosure", "backfill-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
@@ -265,9 +266,9 @@ def main(argv: list[str] | None = None) -> int:
                  # 원장 DB + storage(raw page·manifest PUT) + [bigkinds_news] 정본.
                  # universe 없음 — 뉴스 세션은 소스 단위다.
                  "news-worker",
-                 # 1분 Disclosure Worker(ALPHA-875): 공시 체인 4스텝을 한 tick 에 도는 상주
+                 # 1분 Disclosure Worker(ALPHA-875): 공시 체인 5스텝을 한 tick 에 도는 상주
                  # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
-                 # ⚠️ 수집만이 아니라 collect→normalize×2→load 를 한 window 에서 돈다.
+                 # ⚠️ 수집만이 아니라 collect→normalize×2→load→assemble 을 한 window 에서 돈다.
                  "disclosure-worker",
                  # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 45종 분봉 상주 루프.
                  # 원장 DB + storage + [minute_sector_index.index_map] 정본 +
@@ -636,6 +637,14 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return load_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=load_from, to_date=load_to,
+        )
+
+    # 보관 raw 재파싱 백필 — 창 미지정은 전체, 명시 창은 DART 접수일 inclusive 범위다.
+    # forward와 같은 normalize/load/assemble 함수를 순서대로 호출한다.
+    if args.step == "backfill-disclosure":
+        return backfill_disclosure.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            from_date=args.from_date, to_date=args.to_date,
         )
 
     # 가격 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
