@@ -13,9 +13,10 @@ from data_pipeline.lake.storage import (
     canonical_price_minute_prefix,
 )
 from data_pipeline.minute.models import Universe, plan_session_windows
-from data_pipeline.minute.session_ops import _resolve
+from data_pipeline.minute.session_ops import _OPTIONAL_LANES, _resolve
 from data_pipeline.minute.states import (
     DATASET_ETF_INAV_MINUTE,
+    DATASET_NEWS_MINUTE,
     DATASET_PRICE_MINUTE,
     EXTENDED_HOURS_DATASETS,
     MINUTE_DATASETS,
@@ -25,18 +26,29 @@ from data_pipeline.minute.states import (
 from datetime import date
 
 
-def test_어휘에_있어도_서비스를_소유하지_않으면_stop_대상이_아니다():
-    """어휘(`MINUTE_DATASETS`)와 스케일 권한은 **다른 축**이다.
+def test_자기_워커를_소유해도_구동_레인은_아니다():
+    """어휘(`MINUTE_DATASETS`)·서비스 소유·**구동 레인**은 서로 다른 축이다.
 
-    start/stop 이 올리고 내리는 서비스 목록은 dataset 별이 아니라 공용이다. iNAV 세션을
-    하나 계획한 뒤 stop 을 부르면 phase 게이트는 그 세션만 보고(claim 0 → 즉시 통과)
-    큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가 내려간다**. 도움말 산문은
-    게이트가 아니다(Rule 12) — `rollup.py` 의 상수 리젝트가 같은 선례다.
+    start/stop 이 올리고 내리는 서비스 목록은 dataset 별이 아니라 공용이고, `_scale` 은
+    dataset 을 아예 보지 않는다. iNAV 세션을 하나 계획한 뒤 stop 을 부르면 phase 게이트는
+    그 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라 **살아 있는
+    price-worker 가 내려간다**. 도움말 산문은 게이트가 아니다(Rule 12) — `rollup.py` 의
+    상수 리젝트가 같은 선례다.
+
+    ⚠️ **ALPHA-882 로 iNAV 가 inav-worker 를 소유하게 된 뒤에도 이 가드는 그대로다.**
+    소유는 이 조건을 안 푼다 — `_scale` 이 여전히 공용 목록을 내리기 때문이고, 그래서
+    선택 레인이면서 서비스를 소유하는 news_minute·disclosure_minute 도 `SCALED_DATASETS` 밖에 있다. 이 단언이
+    "소유하면 넣어도 된다"는 오독으로 지워지는 것을 막는 자리다.
     """
-    assert DATASET_ETF_INAV_MINUTE in MINUTE_DATASETS      # 어휘엔 있고
-    assert DATASET_ETF_INAV_MINUTE not in SCALED_DATASETS  # 스케일 권한은 없다
+    assert DATASET_ETF_INAV_MINUTE in MINUTE_DATASETS       # 어휘엔 있고
+    lane_datasets = {lane.dataset for lane in _OPTIONAL_LANES}
+    assert DATASET_ETF_INAV_MINUTE in lane_datasets         # 자기 워커를 소유하지만
+    assert DATASET_ETF_INAV_MINUTE not in SCALED_DATASETS   # 구동 레인은 아니다
+    # 같은 축의 선례 — 소유가 곧 구동 레인이 아니라는 증거가 뉴스다
+    assert DATASET_NEWS_MINUTE in lane_datasets
+    assert DATASET_NEWS_MINUTE not in SCALED_DATASETS
 
-    with pytest.raises(SystemExit, match="상주 서비스를 소유하지 않는다"):
+    with pytest.raises(SystemExit, match="구동 레인이 아니다"):
         _resolve(DATASET_ETF_INAV_MINUTE, "kis")
 
 

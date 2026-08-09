@@ -18,18 +18,21 @@ from data_pipeline.minute.states import (
 )
 
 
-def test_어휘에_있어도_상주_서비스를_소유하지_않는다():
+def test_어휘에_있어도_구동_레인은_아니다():
     """iNAV 와 같은 축이다 — start/stop 이 올리고 내리는 서비스 목록은 dataset 별이 아니라
-    **공용**이라, 공시 세션을 지목해 stop 을 부르면 phase 게이트는 그 세션만 보고(claim 0
-    → 즉시 통과) 큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가 내려간다**.
+    **공용**이고 `_scale` 은 dataset 을 아예 안 봐서, 공시 세션을 지목해 stop 을 부르면
+    phase 게이트는 그 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라
+    **살아 있는 price-worker 가 내려간다**.
 
-    공시 생산자는 뉴스와 같은 형태로 붙는다(공용 목록이 아닌 자기 서비스 목록 + 세션이 선
-    날만 스케일) — 그래서 이 dataset 이 `SCALED_DATASETS` 에 들어갈 일은 없다.
+    이 독스트링이 예고한 "뉴스와 같은 형태"가 ALPHA-882 에서 `PASSENGER_LANES` 표로
+    섰다 — 승객은 공용 목록이 아닌 자기 서비스 목록으로, 자기 세션이 선 날만 올라간다.
+    공시 Worker 가 붙는 날 그 표에 한 줄 추가하면 되고, **`SCALED_DATASETS` 에 들어갈
+    일은 그때도 없다**(자기 워커를 소유해도 `_scale` 은 여전히 공용 목록을 내린다).
     """
     assert DATASET_DISCLOSURE_MINUTE in MINUTE_DATASETS      # 어휘엔 있고
-    assert DATASET_DISCLOSURE_MINUTE not in SCALED_DATASETS  # 스케일 권한은 없다
+    assert DATASET_DISCLOSURE_MINUTE not in SCALED_DATASETS  # 구동 레인은 아니다
 
-    with pytest.raises(SystemExit, match="상주 서비스를 소유하지 않는다"):
+    with pytest.raises(SystemExit, match="구동 레인이 아니다"):
         _resolve(DATASET_DISCLOSURE_MINUTE, "dart")
 
 

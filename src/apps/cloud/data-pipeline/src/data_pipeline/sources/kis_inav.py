@@ -70,6 +70,10 @@ MARKET_OPEN = time(9, 0)
 # 정규장 마감. **수집을 막는 경계가 아니다**(마감 후에 오는 건 오늘 종가 구간이라 라벨이
 # 맞다 — `skip_reason`) — 지연 수치를 읽는 쪽이 장중과 마감후를 구분하게 하는 표시일 뿐이다.
 MARKET_CLOSE = time(15, 30)
+# `skip_reason` 이 "개장 전" 을 말할 때의 접두어. 상주 Worker 는 이 사유만 **기다리고**
+# 나머지(비거래일)는 종료하는데, 그 판정을 워커가 시각 비교로 다시 구현하면 하한이 갈린다
+# (모듈 주석의 "복제하면 갈라진다"와 같은 축) — 사유 문자열을 한 곳에서 만들어 공유한다.
+SKIP_BEFORE_OPEN = "before market open"
 
 
 _STAMP_FORMAT = "%H%M%S"
@@ -239,7 +243,7 @@ class KisInavSource(KisNavSource):
         if not is_trading_day(now.date()):
             return f"non-trading day (KST {now.date().isoformat()})"
         if now.time() < MARKET_OPEN:
-            return f"before market open (KST {now.strftime('%H:%M')} < 09:00)"
+            return f"{SKIP_BEFORE_OPEN} (KST {now.strftime('%H:%M')} < 09:00)"
         return None
 
     def _query_params(self, kis_symbol: str, d1: str, d2: str) -> dict[str, str]:
