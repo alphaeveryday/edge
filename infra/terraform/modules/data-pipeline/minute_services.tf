@@ -190,6 +190,13 @@ locals {
         # 없으면 안 된다: 매 기동 발급이 분당 1회 제한에 걸리고, 가격 레인·15:40 배치와
         # 발급을 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+        # 거래일 판정 — `skip_reason` 을 **여는 쪽이 이 컨테이너**다(kis_inav.py). 배치 kis
+        # 브랜치(tasks.tf env_sets.kis)와 같은 집합이어야 한다. 안 주면 `is_trading_day` 가
+        # 평일 공휴일을 거래일로 보고 가드가 **주말만 아는 상태로 조용히 퇴화**한다 —
+        # 오케스트레이터가 안 띄우는 날에도 이 서비스가 살아 있을 수 있다(수동 확인·
+        # EOD stop 타임아웃 후 잔존 desired_count=1). 그때 KIS 는 직전 거래일 값을 주고
+        # 그게 오늘 파티션에 앉는다(유령 as-of, ALPHA-387 과 동형).
+        OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
       })
       # 일별 NAV(tasks.tf ingest-raw-nav)와 **같은 자격증명 쌍**이다 — 벤더도 TR 계열도
       # 같아서 그릇을 나눌 이유가 없다. 미주입이면 워커가 기동에서 죽는다(fail-loud).

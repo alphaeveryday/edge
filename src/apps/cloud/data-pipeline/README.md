@@ -1451,10 +1451,14 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 확인용으로 돌릴 거면 `--max-ticks` 를 준다(즉답). 상주가 기다리는 이유는 그게 ECS
 # 서비스의 모습이기 때문이다: 종료하면 desired 1 을 유지하는 ECS 가 재기동 루프를 돌고,
 # 백오프가 첫 정상 기동을 09:00 뒤로 밀어 소급 불가한 window 를 잃는다.
+# ⚠️ 위 휴장일 분기는 `OPS_KR_HOLIDAYS` 를 받아야 성립한다 — 안 주면 `is_trading_day` 가
+# 주말만 아는 상태로 **조용히 퇴화**해 평일 공휴일에 가드가 안 걸린다(terraform 은
+# inav-worker 서비스에 심는다. 그 배선은 test_session_ops 의 계약 검사가 지킨다).
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
+OPS_KR_HOLIDAYS=2026-08-15,2026-10-03 \
   python -m data_pipeline.run inav-worker --universe /path/universe.json --max-ticks 3
 # 🔴 토큰 만료(24h) 재발급 경로가 **아직 없다**. 상주 전환은 ALPHA-882 로 이미 일어났고
 # (세션 자동 편입 + inav-worker 서비스), 재발급은 **ALPHA-889 로 이연됐다** — 즉 지금

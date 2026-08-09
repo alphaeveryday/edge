@@ -754,6 +754,29 @@ def test_승객_생산자는_공용_스케일_목록에서_빠진다():
             f"{worker} 가 공용에서 빠졌는데 자기 목록 env 에도 없다 — 그 레인이 조용히 안 돈다"
 
 
+def test_inav_worker_가_휴장일_집합을_받는다():
+    """`skip_reason` 을 실제로 여는 컨테이너가 `OPS_KR_HOLIDAYS` 를 못 받으면
+    `is_trading_day` 가 **주말만 아는 상태로 조용히 퇴화**한다 — 가드가 있는데 평일
+    공휴일에 안 걸린다(tasks.tf `env_sets.kis` 주석과 같은 축).
+
+    오케스트레이터가 그날 안 띄우니 괜찮다는 논증은 틀렸다 — 수동 확인이나 EOD stop
+    타임아웃 뒤 잔존 `desired_count=1` 로 이 서비스만 살아 있을 수 있고, 그때 KIS 는
+    직전 거래일 값을 줘서 오늘 파티션에 유령 as-of 가 앉는다(ALPHA-387 과 동형).
+    """
+    try:
+        text = _module_tf()
+    except StopIteration:
+        pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    import re
+    # 블록 단위로 본다 — 파일 어딘가(오케스트레이터 task-def)에 있는 것으로는 이 서비스가
+    # 받는다는 증거가 안 된다. 실제로 그 구멍이 이렇게 났다(#642 봇 P2).
+    block = re.search(r"\n    inav-worker = \{.*?\n    \}\n", text, re.S)
+    assert block, "inav-worker 서비스 블록을 못 찾았다 — 이 계약 검사가 헛돌고 있다"
+    assert "OPS_KR_HOLIDAYS" in block.group(0), \
+        "inav-worker 가 휴장일 집합을 못 받는다 — 평일 공휴일 가드가 조용히 퇴화한다"
+
+
 def test_iNAV_토글_기본값이_어휘_안이다():
     """어휘 밖 기본값이면 apply 는 통과하고 **다음 아침 오케스트레이터가 죽는다** —
     가격 레인까지 그날 통째로 안 뜬다. plan 보다 여기서 막는 게 싸다."""
