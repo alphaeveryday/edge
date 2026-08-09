@@ -363,11 +363,14 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             _set_visibility(sqs, queue_url, receipt, 60)
             _finish("failed", started, event_type)
             continue
-        # 삭제**보다 먼저** 남긴다 — delete 가 던지면(스로틀·네트워크) 이 루프는 그대로
-        # 죽는데, 그 시점의 처리는 이미 끝나 점유 시간이 실재한다. 삭제 뒤에 두면 하필
-        # 그 사고에서 가장 오래 걸린 표본이 사라진다. 삭제 자체는 밀리초라 오차가 아니다.
-        _finish(outcome, started, event_type)
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+        # 삭제를 **감싸서** 남긴다. 앞·뒤 어느 한쪽에 두면 한 방향으로 틀린다: 앞에 두면
+        # SDK 재시도로 수십 초 막힌 삭제가 점유에서 빠지고(그동안 다음 메시지를 못 받는다),
+        # 뒤에 두면 delete 가 던질 때 — 이 루프는 그대로 죽는다 — 하필 그 사고의 표본이
+        # 통째로 사라진다. finally 는 지연을 포함하면서 예외에도 한 줄을 남긴다.
+        try:
+            sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+        finally:
+            _finish(outcome, started, event_type)
 
     log("consumer.stop", polls=polls, **totals)
     # 계약 위반·처리 실패는 성공으로 접지 않는다 — 상주 모드에선 로그·DLQ 로 드러나고,

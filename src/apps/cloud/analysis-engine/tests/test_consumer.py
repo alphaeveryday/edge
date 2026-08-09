@@ -159,6 +159,26 @@ def test_every_disposition_is_timed(capsys, monkeypatch):
     ], "한 갈래라도 빠지면 그 갈래는 규모 산정에서 통째로 사라진다"
 
 
+def test_delete_failure_still_records_the_occupancy(capsys):
+    """삭제가 던져도 그 메시지의 점유는 남아야 한다(ALPHA-908).
+
+    delete 실패는 이 루프를 그대로 죽이는데, 죽는 순간의 표본이야말로 가장 오래 점유한
+    쪽일 수 있다. 로그를 삭제 뒤에 두면 그 표본만 골라 잃는다 — 규모를 정하는 입력에서
+    사고 시각의 꼬리가 빠지는 것이 이 테스트가 막는 회귀다.
+    """
+    class DeleteBoom(FakeSqs):
+        def delete_message(self, **_):
+            raise RuntimeError("sqs 삭제 실패")
+
+    sqs = DeleteBoom([envelope("t1")])
+    with pytest.raises(RuntimeError):
+        consume_triggers("q", max_polls=1, process_fn=lambda _: "explained",
+                         sqs_client=sqs)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if json.loads(line).get("event") == "consumer.message"]
+    assert [e["outcome"] for e in events] == ["explained"]
+
+
 def test_generic_failure_leaves_message_and_fails_bounded_run():
     """일시 장애는 지우지 않고 가시성을 되돌려 재배달 — bounded 검증에선 exit 1
     (소비 경로가 통째로 죽은 환경이 초록으로 보이면 안 된다)."""
