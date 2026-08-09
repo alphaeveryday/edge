@@ -341,20 +341,31 @@ class TestVendorBlankAndDrift:
 
     def test_4xx_로_오는_만료도_같은_경로다(self):
         """만료는 rt_cd 본문으로도, 4xx(StopFetch)로도 온다. 후자만 놓치면 그 갈래에서
-        여전히 하루가 날아간다 — `kis_minute` 이 두 갈래를 다 막은 것과 같은 이유."""
+        여전히 하루가 날아간다 — `kis_minute` 이 두 갈래를 다 막은 것과 같은 이유.
+
+        ⚠️ **"안 죽었다"로 단언하면 안 된다**(리뷰 지적). 스텁이 토큰과 무관하게
+        두 번째 호출을 성공시키므로, `_reissue` 를 건너뛰고 **같은 만료 토큰으로 그냥
+        재시도**해도 이 테스트는 초록이다 — 실제 KIS 는 그 두 번째도 거절한다. 그래서
+        rt_cd 테스트와 같은 강도로 **토큰이 바뀌었는지·캐시를 버렸는지**를 단언한다.
+        """
         etf_map = {"069500": "KR7069500007"}
-        calls = []
+        seen_tokens = []
+        invalidated = []
 
         class Auth:
+            def __init__(self):
+                self._n = 0
+
             def token(self):
-                return f"T{len(calls)}"
+                self._n += 1
+                return f"T{self._n}"
 
             def invalidate(self):
-                pass
+                invalidated.append(1)
 
         def expire_4xx(our_etf_id, symbol, d1, d2, token):
-            calls.append(token)
-            if len(calls) == 1:
+            seen_tokens.append(token)
+            if len(seen_tokens) == 1:
                 exc = StopFetch("401")
                 exc.body = "EGW00123 token expired"
                 raise exc
@@ -364,7 +375,11 @@ class TestVendorBlankAndDrift:
         collector.source.auth = Auth()
 
         _, _, manifest = collector.collect(request_for(31), NOW)
+
         assert manifest["received"] == ["069500"]
+        assert invalidated == [1], "4xx 갈래도 공유 캐시를 버려야 한다"
+        assert seen_tokens == ["T1", "T2"], \
+            f"4xx 갈래에서 토큰 사본이 안 갱신됐다: {seen_tokens}"
 
     def test_재발급_뒤에도_만료면_전역_실패로_전파한다(self):
         """⭐ 리뷰가 뒤집은 자리다. 처음엔 `Outcome.MISSING` 으로 접었는데 **틀렸다.**
