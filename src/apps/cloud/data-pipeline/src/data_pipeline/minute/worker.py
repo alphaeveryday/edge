@@ -602,6 +602,11 @@ class SectorIndexWorkerConfig:
     # KRX 업종코드 45종. **정렬된 튜플**로 받는다 — 기대 집합의 순서가 checksum 에 새면
     # 같은 멤버십이 다른 세대를 만든다(collector 가 다시 정렬하지만 여기서도 고정한다).
     unit_ids: tuple[str, ...]
+    # 기대 집합 정체성 — planner 가 세션에 못박은 것과 **같아야** 한다. 장중 재배포로
+    # index_map 이 바뀌면 여기서 갈려 Worker 가 그 세션 처리를 거부한다(iNAV 의
+    # universe_hash 대조와 같은 축). 없으면 한 세션 안에서 기대 집합이 조용히 바뀐다.
+    expected_version: str
+    expected_hash: str
     run_id: str
     lease_seconds: int = 300
     session_lease_seconds: int = 300
@@ -629,13 +634,27 @@ class SectorIndexWorker(MinuteWorkerLoop):
     stopping: bool = False
     _last_heartbeat: datetime | None = field(default=None, repr=False)
 
-    # `_session_ready` 는 기본값(True)을 쓴다 — 대조할 universe 해시가 없다. 세션이
-    # 존재하는지는 CLI 가 기동에서 확인하고, 그 뒤로는 dataset·source 축이 session_id
-    # 에 이미 박혀 있다(`stable_domain_id`).
+    def _session_ready(self) -> bool:
+        """원장에 고정된 기대 집합 정체성이 **지금 이 이미지의 config** 와 같은가.
+
+        iNAV 의 `universe_matches` 와 같은 축인데 출처가 파일이 아니라 config 다. 이 대조가
+        없으면 오전에 45종으로 확정한 세션의 남은 window 를 오후에 44종 이미지가 정상
+        VALID 로 이어 채운다 — 한 세션 안에서 기대 집합이 갈리는데 원장에 신호가 없다.
+        """
+        ledger_plan = self.ledger.session_universe(session_id=self.session_id)
+        mine = (self.config.expected_version, self.config.expected_hash)
+        if ledger_plan == mine:
+            return True
+        logger.error(
+            "session %s 의 기대 집합 %s 와 이 이미지의 index_map %s 이 다르다 — 정지. "
+            "장중에 config 가 바뀌었다면 그 세션은 이전 집합으로 끝내야 한다.",
+            self.session_id, ledger_plan, mine,
+        )
+        return False
 
     def _universe_version(self) -> str:
-        # planner 가 이 세션에 적은 값과 같아야 한다(`session_cli` — universe 없으면 "none")
-        return "none"
+        # planner 가 이 세션에 적은 값과 같아야 한다 — 위 `_session_ready` 가 그것을 잰다.
+        return self.config.expected_version
 
     def _process(self, claim: dict, now: datetime) -> bool:
         return self._process_window(claim, now)
@@ -990,6 +1009,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
     from ..lake.storage import make_storage
     from ..sources.http import PoliteClient
     from ..sources.kis_sector_index import KisSectorIndexClient
+    from .models import config_set_identity
     from .sector_index_collect import KisSectorIndexCollector
     from .states import DATASET_SECTOR_INDEX_MINUTE
 
@@ -1023,12 +1043,24 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         "msn", DATASET_SECTOR_INDEX_MINUTE, "kis", parsed_day.isoformat()
     )
     ledger = MinuteLedger(db=settings.db)
-    if ledger.session_snapshot(session_id=session_id) is None:
+    snapshot = ledger.session_snapshot(session_id=session_id)
+    if snapshot is None:
         raise SystemExit(
             f"세션 없음: {DATASET_SECTOR_INDEX_MINUTE}/kis/{parsed_day} — "
             "plan-minute-session --dataset sector_index_minute 이 먼저 돌아야 한다"
         )
     index_map = settings.minute_sector_index.index_map
+    expected_version, expected_hash = config_set_identity(index_map)
+    # ⚠️ **기동에서 막는다.** 세션이 다른 index_map 으로 고정돼 있으면 tick 마다
+    # `_session_ready` 가 거부해 IDLE 만 돌 뿐이라, 운영자는 "돌고는 있는데 아무것도
+    # 안 들어온다"만 본다. 사유를 여기서 한 번 크게 낸다(Rule 12).
+    if (planned := ledger.session_universe(session_id=session_id)) != (
+            expected_version, expected_hash):
+        raise SystemExit(
+            f"세션의 기대 집합 {planned} 과 이 이미지의 index_map "
+            f"({expected_version}, …) 이 다르다 — 장중에 config 가 바뀌었다면 그 세션은 "
+            "이전 집합으로 끝내야 한다"
+        )
     worker_id = f"sw-{socket.gethostname()}-{os.getpid()}"
     client = KisSectorIndexClient(
         settings.minute_price_worker.app_key, settings.minute_price_worker.app_secret,
@@ -1050,6 +1082,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
             market="KR",  # 1분 트랙은 KR 전용(price 와 같은 이유 — 오타가 다른 prefix 에 쓴다)
             session_date=parsed_day.isoformat(),
             unit_ids=tuple(sorted(index_map)),
+            expected_version=expected_version, expected_hash=expected_hash,
             run_id=worker_id,
         ),
     )
@@ -1085,8 +1118,12 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
     blocked += getattr(worker, "drain_blocked", 0)
     logger.info("sector-index-worker 종료(max-ticks %d) — 처리 %d, WINDOW_FAILED %d, 차단 %d",
                 ticks, processed, failed, blocked)
-    # 확인 게이트다 — 실패가 있었거나, **한 window 도 못 본 채 차단만 됐으면** 성공이 아니다.
-    return 1 if failed or (blocked and not processed) else 0
+    # 🔴 확인 게이트다 — 실패가 있었거나 **한 window 도 못 봤으면** 성공이 아니다.
+    # iNAV 는 어댑터의 `skip_reason` 이 개장 전·휴장일을 걸러 이 자리를 지키는데, 이
+    # 어댑터에는 그 축이 없다. `blocked and not processed` 로만 두면 due window 가 아예
+    # 없는 개장 전 실행(전 tick IDLE)이 **아무 HTTP 호출도 없이 exit 0** 이라, README 의
+    # `--max-ticks 3` 확인 명령이 매일 초록으로 통과한다(Codex 리뷰 P2).
+    return 1 if failed or not processed else 0
 
 
 def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,

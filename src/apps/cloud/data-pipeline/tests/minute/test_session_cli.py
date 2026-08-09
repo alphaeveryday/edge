@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
+from data_pipeline.config.models import MinuteSectorIndexConfig
 from data_pipeline.minute.repository import SessionFinalizedError, UniverseConflictError
 from data_pipeline.minute.session_cli import drain_session_cli, plan_session_cli
 
@@ -32,14 +33,21 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeSettings:
-    """`Settings` 전체를 만들지 않는다 — 이 CLI 가 보는 건 `db` 하나다."""
+    """`Settings` 전체를 만들지 않는다 — 이 CLI 가 보는 건 `db` 와, 기대 집합이 config 인
+    dataset 의 그 표(`minute_sector_index`)뿐이다."""
 
-    def __init__(self, db):
+    def __init__(self, db, minute_sector_index=None):
         self.db = db
+        self.minute_sector_index = minute_sector_index
 
 
-def make_settings(db_ok=True):
-    return FakeSettings(DbConfig(password="x") if db_ok else None)
+# 실제 config 클래스를 쓴다 — dict 로 흉내 내면 검증기가 막는 형태(키·값 뒤집힘 등)가
+# 픽스처에서 통과해, 이 CLI 가 부를 수 있는 함수를 실제보다 넓게 만든다.
+SECTOR_INDEX = MinuteSectorIndexConfig(index_map={"1005": "0005", "2118": "1118"})
+
+
+def make_settings(db_ok=True, *, sector_index=SECTOR_INDEX):
+    return FakeSettings(DbConfig(password="x") if db_ok else None, sector_index)
 
 
 @pytest.fixture
@@ -217,6 +225,32 @@ class TestPlan:
         assert (code, payload["window_count"]) == (0, 390)
         assert payload["windows"]["first"].endswith("09:00:00+09:00")
         assert payload["windows"]["last"].endswith("15:30:00+09:00")
+
+    def test_업종지수_세션은_config_정체성을_원장에_고정한다(self, ledger_db, capsys):
+        """🔴 기대 집합이 config 라 **세션에 고정할 축이 따로 없다** — 안 적으면 오전에
+        45종으로 확정한 세션의 남은 window 를 오후에 44종 이미지가 정상 VALID 로 이어
+        채운다(Codex 리뷰 P2). Worker 는 이 값과 자기 config 를 대조해 거부한다.
+        """
+        from data_pipeline.minute.models import config_set_identity
+
+        code = plan_session_cli(
+            make_settings(), dataset="sector_index_minute", source_group="kis",
+            session_date="2026-07-31", universe=None,
+        )
+        capsys.readouterr()
+        version, digest = config_set_identity(SECTOR_INDEX.index_map)
+        assert code == 0
+        assert ledger_db.sessions[
+            next(iter(ledger_db.sessions))]["universe_version"] == version
+        assert version != "none"   # "none" 이면 어떤 config 변경도 대조가 안 된다
+
+    def test_업종지수_세션은_index_map_없이는_계획되지_않는다(self, ledger_db):
+        """미설정으로 계획하면 Worker 가 무엇을 기대할지 원장에 안 남는다 — 그러면
+        어떤 이미지로 이어 붙여도 대조가 통과한다."""
+        assert plan_session_cli(
+            make_settings(sector_index=None), dataset="sector_index_minute",
+            source_group="kis", session_date="2026-07-31", universe=None,
+        ) == 2
 
     def test_universe_on_a_sector_index_session_is_rejected(self, ledger_db):
         # 기대 집합은 config 의 index_map 이다 — 파일을 조용히 무시하면 운영자는 그게
