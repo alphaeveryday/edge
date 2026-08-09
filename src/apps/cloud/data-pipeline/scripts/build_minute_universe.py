@@ -13,8 +13,9 @@
 여기에 config `[minute_universe].sector_etf_ids` 를 **참조 계열 축**으로 얹는다 — 층 분해의
 섹터 후보 ETF 다. holdings 축과 별개인 이유: `krx_etf.source.etf_map` 밖이라 그 ETF 의
 구성종목을 수집하지 않고, 따라서 canonical KR holdings 에 자기 행이 없다. 안 얹으면
-구간(장중) 모드에서 섹터층이 통째로 빠진다(일봉 경로가 쓰는 KRX 업종지수는 분봉이 없어
-구간 모드가 섹터 ETF 로 대체한다).
+구간(장중) 모드에서 섹터층이 통째로 빠진다 — 일봉 경로가 쓰는 KRX 업종지수는 1분봉을
+수집하지만(ALPHA-887, dataset `sector_index_minute`) 구간 모드가 읽는 5분 롤업 배선이
+없고 소급도 안 돼, 아직 구간 모드가 섹터 ETF 로 대체한다.
 
 **이 스크립트는 업로드하지 않는다.** 파일만 만들고, S3 반영은 운영자가 확인 후 한다 —
 universe 는 세션 identity(universe_hash) 축이라 갈아끼우는 순간 그날 계획이 바뀐다.
