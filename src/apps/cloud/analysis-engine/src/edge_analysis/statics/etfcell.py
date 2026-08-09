@@ -37,6 +37,39 @@ from .interval import (
 )
 
 
+def _thread_news_lines(rows: list[dict]) -> tuple[str, ...]:
+    """Render one stable customer sentence per thread without dropping event lineage."""
+    def canonical_key(row: dict) -> tuple[str, ...]:
+        return tuple(str(row.get(field) or "") for field in (
+            "available_at", "title", "evidence_id", "event_type_code",
+            "thread_id", "source_event_id",
+        ))
+
+    grouped: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        event_id = str(row["source_event_id"])
+        thread_id = str(row.get("thread_id") or event_id)
+        events = grouped.setdefault(thread_id, {})
+        current = events.get(event_id)
+        if current is None or canonical_key(row) > canonical_key(current):
+            events[event_id] = row
+
+    lines = []
+    for thread_id in sorted(grouped):
+        events = grouped[thread_id]
+        representative = max(
+            events.values(),
+            key=lambda row: (str(row.get("available_at") or ""),
+                             str(row["source_event_id"])),
+        )
+        available_at = str(representative.get("available_at") or "")
+        clock = available_at[11:16] if len(available_at) >= 16 else available_at
+        title = str(representative["title"])
+        prefix = f"{clock}, {title}" if clock else title
+        lines.append(f"{prefix} (관련 기사 {len(events)}건)")
+    return tuple(lines)
+
+
 def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         window_start: str | None = None, window_end: str | None = None,
         summary: bool = False, window_meta: dict | None = None,
@@ -65,10 +98,9 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         if scoped_news:
             facts = replace(
                 facts,
-                news=tuple(dict.fromkeys((*facts.news,
-                    *(str(row["line"]) for row in scoped_news)))),
-                event_ids=tuple(dict.fromkeys((*facts.event_ids,
-                    *(str(row["source_event_id"]) for row in scoped_news)))),
+                news=_thread_news_lines(scoped_news),
+                event_ids=tuple(sorted(set(facts.event_ids) | {
+                    str(row["source_event_id"]) for row in scoped_news})),
             )
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]

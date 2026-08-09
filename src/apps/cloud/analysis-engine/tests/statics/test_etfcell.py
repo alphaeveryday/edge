@@ -786,10 +786,11 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
     monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
     monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
     calls = Counter()
-    all_events = [{
+    base_events = [{
         "source_event_id": f"evt_{i:02d}", "event_type_code": "NEWS.TYPE",
         "available_at": f"2026-08-05T12:{i:02d}:00",
     } for i in range(14)]
+    all_events = list(base_events)
 
     class _Runtime:
         def __init__(self, *_args, **_kwargs): pass
@@ -808,9 +809,9 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
                 if handle == "os_threads":
                     return {"ok": True, "handle": "os_events", "events": all_events}
                 index = int(handle.removeprefix("os_thr_"))
-                rows = [all_events[index * 2], all_events[index * 2 + 1]]
+                rows = [base_events[index * 2], base_events[index * 2 + 1]]
                 if index == 6:
-                    rows.append(all_events[0])  # one cross-thread duplicate
+                    rows.append(base_events[0])  # one cross-thread duplicate
                 return {"ok": True, "handle": f"os_thread_events_{index}", "events": rows}
             if name == "objectset.filter":
                 return {"ok": True, "handle": f'os_event_{arguments["value"]}'}
@@ -832,6 +833,11 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
         window_meta=meta)
 
     assert "[4]" in text and "[N]" not in text
+    news_block = meta["final_explanation"]["blocks"][-1]
+    news_lines = news_block["text"].splitlines()
+    assert len(news_lines) == 7
+    assert sum(int(line.rsplit("관련 기사 ", 1)[1].removesuffix("건)"))
+               for line in news_lines) == 14
     assert len(meta["news_events"]) == 14
     assert len({row["source_event_id"] for row in meta["news_events"]}) == 14
     refs = meta["final_explanation"]["blocks"][-1]["evidence_refs"]
@@ -851,6 +857,47 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
         "news.find_threads": 1, "news.get_thread": 7, "news.list_events": 8,
         "objectset.filter": 14, "news.get_event_evidence": 14,
     })
+
+    all_events.reverse()
+    calls.clear()
+    permuted_meta = {}
+    permuted_text = etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=permuted_meta)
+
+    assert permuted_text == text
+    assert permuted_meta["final_explanation"] == meta["final_explanation"]
+
+    all_events.append(base_events[0])
+    duplicate_meta = {}
+    duplicate_text = etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=duplicate_meta)
+
+    assert duplicate_text == text
+    assert duplicate_meta["final_explanation"] == meta["final_explanation"]
+
+
+def test_thread_news_duplicate_event_uses_order_independent_canonical_winner():
+    """A corrected article must not become older merely because input order changed."""
+    from edge_analysis.statics.etfcell import _thread_news_lines
+
+    old = {
+        "source_event_id": "evt_1", "thread_id": "thr_1",
+        "available_at": "2026-08-05T11:00:00", "title": "이전 제목",
+        "evidence_id": "evidence_old", "event_type_code": "NEWS.TYPE",
+    }
+    new = {
+        "source_event_id": "evt_1", "thread_id": "thr_1",
+        "available_at": "2026-08-05T12:00:00", "title": "정정 제목",
+        "evidence_id": "evidence_new", "event_type_code": "NEWS.TYPE",
+    }
+
+    expected = ("12:00, 정정 제목 (관련 기사 1건)",)
+    assert _thread_news_lines([old, new]) == expected
+    assert _thread_news_lines([new, old]) == expected
 
 
 def test_no_scoped_news_and_no_measurable_series_does_not_call_llm(monkeypatch):
