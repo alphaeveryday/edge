@@ -159,10 +159,8 @@ def test_decompose_tolerates_a_lake_without_coverage_dicts():
 
 
 # ── 섹터 후보: KRX 업종지수뿐이다 (ALPHA-877) ─────────────────────────────
-def test_clock_mode_sector_layer_is_honestly_absent():
-    """구간 모드의 섹터 층은 정직 부재다(ALPHA-877) - 업종지수는 분봉이 없고,
-    섹터 ETF 5분봉이 패널에 실려 와도 층이 서면 안 된다(프록시 ETF 겹침 선택이
-    몰래 부활하면 여기서 깨진다). 사유가 남고 시장+고유 2층 회계는 그대로 선다."""
+def test_clock_mode_sector_without_aligned_paths_is_honestly_absent():
+    """A holdings-qualified sector is not erected without its aligned Kalman path."""
     lake = _lake()
     lake.series["T"]["lr5"] = 0.02
     lake.series[MARKET_CODE]["lr5"] = 0.01
@@ -173,8 +171,8 @@ def test_clock_mode_sector_layer_is_honestly_absent():
     m = next(x for x in r.layers if x.kind == "시장")
     assert m.contribution == pytest.approx(0.01, abs=1e-12)
     assert all(x.kind != "섹터" for x in r.layers)
-    assert r.twins == () and r.alien == ()
-    assert "업종지수 분봉 미수집" in lake.exists["sector_layer"]
+    assert r.twins == ("TWIN",) and "ALIEN" in r.alien
+    assert "칼만 경로 부재" in lake.exists["sector_layer"]
     assert sum(x.contribution for x in r.layers) + r.idio == pytest.approx(
         r.total, abs=1e-12), "2층 회계 항등식은 그대로 선다"
 
