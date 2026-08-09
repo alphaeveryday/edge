@@ -735,6 +735,16 @@ def run(
         "explanation": explanation.raw,
         "persistence": outcome,
     })
+    # 발화 스냅샷 대시보드 재생성(ALPHA-894) — 런마다 전량 재조회·덮어쓰기(멱등).
+    # 실패는 런을 죽이지 않는다: 설명은 이미 영속됐고 다음 런이 다시 만든다.
+    # 조용히 삼키지 않는다(Rule 12) — `report.regenerate_failed` 로 드러낸다.
+    try:
+        from .adapters.archive import _result_prefix
+        from .report import regenerate_dashboard
+        regenerate_dashboard(conn=getattr(store, "_conn", None), s3=s3,
+                             result_prefix=_result_prefix(settings))
+    except Exception as exc:  # noqa: BLE001 — 관측이 런을 죽이면 안 된다
+        log("report.regenerate_failed", error=f"{type(exc).__name__}: {exc}")
     log("done", route=route_code, events=len(events), **outcome)
     return 0
 

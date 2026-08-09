@@ -54,8 +54,11 @@ class TracingClient:
             record("llm.failed", seq=seq, error=str(exc),
                    elapsed_s=round(time.monotonic() - started, 2))
             raise
+        # 토큰 usage 는 클라이언트가 마지막 응답에서 노출한 값이다(DeepSeekClient 의
+        # `last_usage`). 없으면 결측으로 둔다 — 지어내지 않는다(ALPHA-894).
+        usage = getattr(self._inner, "last_usage", None)
         record("llm.response", seq=seq, elapsed_s=round(time.monotonic() - started, 2),
-               response=out)
+               response=out, **({"usage": usage} if isinstance(usage, dict) else {}))
         return out
 
 
@@ -85,6 +88,9 @@ class DeepSeekClient:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        # 마지막 성공 호출의 토큰 usage(OpenAI 호환 `payload["usage"]`). TracingClient
+        # 가 trace 이벤트에 싣는다 — 응답에 없으면 None 그대로(결측, ALPHA-894).
+        self.last_usage: dict | None = None
 
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
         """system·user 프롬프트로 채팅을 호출해 파싱된 JSON 객체를 반환한다.
@@ -126,6 +132,8 @@ class DeepSeekClient:
                 )
                 with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                     payload = json.load(resp)
+                usage = payload.get("usage")
+                self.last_usage = usage if isinstance(usage, dict) else None
                 choice = payload["choices"][0]
                 content = choice["message"]["content"]
                 try:
