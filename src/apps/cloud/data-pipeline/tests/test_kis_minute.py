@@ -158,7 +158,7 @@ class TestParse:
         # 먹이는 그 값을 써야 한다(따로 적으면 픽스처가 바뀔 때 조용히 갈라진다).
         stolen = datetime.strptime(row()["stck_bsop_date"] + short_label, "%Y%m%d%H%M%S")
         assert stolen.strftime("%H:%M:%S") == silently_becomes
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_minute_row({**row(), "stck_cntg_hour": short_label}, "005930")
 
     # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
@@ -168,7 +168,7 @@ class TestParse:
     ])
     def test_date_length_drift_is_rejected_too(self, field, bad_length):
         """자리수가 **8·6 이 아니다**를 재는 것이지 "짧다"를 재는 게 아니다."""
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_minute_row({**row(), field: bad_length}, "005930")
 
     def test_space_padded_label_is_rejected_even_though_it_reads_right(self):
@@ -179,7 +179,7 @@ class TestParse:
         아니라 **형상 변화의 신호 보존**이라는 것이 여기서 갈린다.
         """
         assert datetime.strptime("20260803" + " 93000", "%Y%m%d%H%M%S").hour == 9
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_minute_row({**row(), "stck_cntg_hour": " 93000"}, "005930")
 
     def test_non_ascii_digit_label_is_rejected(self):
@@ -191,8 +191,21 @@ class TestParse:
         weird = "1٠3000"
         assert weird.isdecimal() and not weird.isascii()
         assert datetime.strptime("20260803" + weird, "%Y%m%d%H%M%S").minute == 30
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_minute_row({**row(), "stck_cntg_hour": weird}, "005930")
+
+    # 🔴 **날짜 쪽**도 같이 잰다 — 라벨만 검사하면 이 두 문이 그대로 열린다(변이로
+    # 확인: `(day+hour)` 를 `hour` 로 좁히면 아무 테스트도 안 갈렸다).
+    @pytest.mark.parametrize("bad_date", [
+        "202608 3",    # 공백 패딩. `%d` 의 `" [1-9]"` 대안으로 08-03 이 된다
+        "٢٠٢٦0803",   # 비-ASCII 숫자. `%Y` 의 `\d` 가 Nd 라 2026 이 된다
+    ])
+    def test_date_side_leniency_is_rejected_too(self, bad_date):
+        """가드가 연접 문자열 **전체**를 봐야 하는 이유 — 관대함이 날짜 쪽에도 있다."""
+        assert datetime.strptime(bad_date + "103000", "%Y%m%d%H%M%S") \
+            == datetime(2026, 8, 3, 10, 30)
+        with pytest.raises(ValueError, match="\uB0A0\uC9DC\u00B7\uC2DC\uAC01 \uD615\uC0C1\uC774 \uC544\uB2C8\uB2E4"):
+            parse_minute_row({**row(), "stck_bsop_date": bad_date}, "005930")
 
     def test_well_formed_but_impossible_time_is_a_format_error(self):
         """자리수 가드를 통과한 뒤 `strptime` 이 잡는 분기 — 메시지로 갈라 둔다.
@@ -665,7 +678,8 @@ class TestHistoricalCandles:
         """분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 밀어 하루를 조용히 죽인다.
 
         09:03:30 봉이 하나 오면 이후 합성이 통째로 :30 오프셋으로 생성돼 계획된 390
-        window 이 **전부** 키 불일치로 `missing` 이 된다(실측 적중 0) — 예외도 ERROR 로그도 없이.
+        window 중 **388개**가 키 불일치로 `missing` 이 된다(적중은 격자 밖 봉
+        앞의 09:01·09:02 둘뿐. 그 봉이 유일한 관측이면 390개 전부다) — 예외도 ERROR 로그도 없이.
         """
         client, _ = self.hist([TOKEN, ok([row("090100"), {**row(), "stck_cntg_hour": "090330"}])])
         with pytest.raises(ValueError, match="분 격자 밖"):

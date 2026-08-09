@@ -125,14 +125,21 @@ def parse_index_row(raw: dict, unit_id: str, *, interval_sec: int) -> Candle:
     # 안 걸리고, 그 봉은 멀쩡한 다른 window 에 앉아 VALID 로 확정된다. 한쪽만 막으면
     # 나머지 문으로 그대로 들어온다(날짜만 막았다가 Codex 리뷰에서 잡혔다).
     # 공백 패딩과 비-ASCII 숫자도 여기서 막는다 — `strptime` 이 둘 다 관대하게 받아
-    # 값은 **맞게** 읽히고, 그래서 벤더의 포맷 변경이 조용히 흡수된다(실측:
-    # `" 93000"`→09:30:00, `"1٠3000"`→10:30:00). 이 가드는 값이 아니라 **형상 변화의
-    # 신호**를 지킨다. 일하는 건 `isascii()` 쪽이다 — `isdecimal()` 단독은 `%H` 의
-    # `\d`(유니코드 Nd)와 같은 집합이라 `strptime` 이 이미 거르는 것만 거른다.
+    # 값은 **맞게** 읽히고, 그래서 벤더의 포맷 변경이 조용히 흡수된다. 두 술어가 각각
+    # 다른 문을 막는다. 하나만 두면 나머지가 열린다(실측):
+    #   · `isdecimal()` → 공백 패딩. `%Y`·`%H`·`%d` 에 `" \d"` 대안이 있어
+    #     `" 93000"`→09:30:00, `"202608 3"`→08-03 이 통과한다. **공백은 ASCII 라
+    #     `isascii()` 로는 못 막는다.**
+    #   · `isascii()` → 비-ASCII 숫자. `\d` 가 유니코드 Nd 라 `"1٠3000"`→10:30:00,
+    #     `"٢٠٢٦0803"`→2026 이 통과한다. 이쪽은 `isdecimal()` 이 True 라 못 막는다.
+    # 날짜와 라벨을 **연접해서** 본다 — 한쪽만 보면 다른 쪽 문이 그대로 열린다.
+    stamp = day + label
     if (len(day) != _YMD_LEN or len(label) != _HHMMSS_LEN
-            or not (day + label).isascii() or not (day + label).isdecimal()):
+            or not stamp.isascii() or not stamp.isdecimal()):
+        # ⚠️ "자리수"라고 쓰지 않는다 — `" 93000"` 은 6자다. 운영자가 로그에서 자리수를
+        # 세어 보고 "가드가 오작동했다"로 읽으면 진짜 원인(포맷 변경)을 놓친다.
         raise ValueError(
-            f"{unit_id} 지수 분봉 날짜·시각 자리수가 다르다: {day!r} {label!r}")
+            f"{unit_id} 지수 분봉 날짜·시각 형상이 아니다: {day!r} {label!r}")
     try:
         start = datetime.strptime(day + label, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:

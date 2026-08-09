@@ -189,7 +189,7 @@ class TestParse:
         # 가드가 막는 값이 **무엇이 되는지**를 여기서 못박는다 — 주석으로만 적으면 낡는다.
         stolen = datetime.strptime(row()["stck_bsop_date"] + short_label, "%Y%m%d%H%M%S")
         assert stolen.strftime("%H:%M:%S") == silently_becomes
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_index_row({**row(), "stck_cntg_hour": short_label}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
@@ -199,7 +199,7 @@ class TestParse:
         값은 맞게 읽히지만(`" 93000"` → 09:30:00) 조용히 흡수하면 벤더가 패딩 규약을
         바꾼 것을 못 본다. 이 가드는 값이 아니라 **형상 변화의 신호**를 지킨다.
         """
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_index_row({**row(), "stck_cntg_hour": " 93000"}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
@@ -208,8 +208,18 @@ class TestParse:
 
         `"1٠3000"` 은 `isdecimal()` 도 `strptime` 도 통과한다. 막는 건 `isascii()` 다.
         """
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_index_row({**row(), "stck_cntg_hour": "1٠3000"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    # 🔴 **날짜 쪽**도 같이 잰다 — 라벨만 검사하면 이 두 문이 그대로 열린다.
+    @pytest.mark.parametrize("bad_date", ["202608 7", "٢٠٢٦0807"])
+    def test_date_side_leniency_is_rejected_too(self, bad_date):
+        """가드가 연접 문자열 **전체**를 봐야 하는 이유 — 관대함이 날짜 쪽에도 있다."""
+        assert datetime.strptime(bad_date + "103000", "%Y%m%d%H%M%S") \
+            == datetime(2026, 8, 7, 10, 30)
+        with pytest.raises(ValueError, match="\uB0A0\uC9DC\u00B7\uC2DC\uAC01 \uD615\uC0C1\uC774 \uC544\uB2C8\uB2E4"):
+            parse_index_row({**row(), "stck_bsop_date": bad_date}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
     def test_well_formed_but_impossible_time_is_a_format_error(self):
@@ -232,7 +242,7 @@ class TestParse:
 
         재는 축은 자리수가 **8·6 이 아니다**이지 "짧다"가 아니다.
         """
-        with pytest.raises(ValueError, match="자리수가 다르다"):
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_index_row({**row(), field: bad_length}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
