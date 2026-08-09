@@ -27,7 +27,7 @@
 | `types.ts` | Facts(사실)·Violation·Incident·리포트 타입 — **위반 필드 규약**(`target`/`targetId`/`metric`/`unit`/`state`/`why`)이 `RawViolation` 주석에 있다. 정본은 거기다 |
 | `rules.ts` | RULES 19종(선언 데이터 + 조건 함수) · EDGES 7개 |
 | `evaluate.ts` | 위반 수집 → 인과 병합(사건) → 정렬 · 리뷰 계약 §5 JSON(`buildReport`) · 사건 키 조립(`vidOf`)과 **그 역함수**(`ruleOfVid`) — 소비자가 구분자를 다시 적으면 조용히 아무것도 못 찾는다 |
-| `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분). **단계 4에서 `/api/v1/console/facts` fetch 로 교체된다**(ADR-0049) |
+| `facts-snapshot.json` | 사실 팩(2026-08-03 스냅샷, 목 포함 — mock 플래그로 구분). **단계 4에서 `/api/v1/console/facts` fetch 로 교체된다**(ADR-0049 — 서버·검증 경계·어댑터는 섰고, 화면 배선만 남았다) |
 | `cli.ts` | `pnpm eval:rules` — UI 없이 §5 JSON 산출 |
 | `rules.test.ts` | `pnpm test:rules` — 규칙당 위반/비위반 픽스처 + 경계 케이스 (node:test) |
 

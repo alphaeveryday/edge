@@ -6,7 +6,19 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { awsObservation, axisOf, minuteFacts } from './consoleFacts.ts';
+import {
+  awsObservation,
+  axisOf,
+  BOUNDARY_FIELDS,
+  DATASET_FIELDS,
+  META_FIELDS,
+  minuteFacts,
+  OUTPUT_FIELDS,
+  parseFacts,
+  RUN_FIELDS,
+  TASK_FIELDS,
+} from './consoleFacts.ts';
+import type { ConsoleFactsDto } from '../../domains/console/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 
 const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead });
@@ -118,4 +130,274 @@ test('AWS 관측 부재는 두 형상이다 — 미배선과 조회 실패를 �
   );
   assert.equal(awsObservation({ db: 'd', today: 't', aws: null }), 'blind', 'null 은 조회 실패다');
   assert.deepEqual(awsObservation({ db: 'd', today: 't', aws: 'x' }), { at: 'x' });
+});
+
+/* ── 응답 검증 경계 ──────────────────────────────────────────────────────────
+ * 이 경계가 존재하는 이유는 "규칙마다 값 가드를 다는 방식이 끝나지 않아서"다. 그러니 **거부
+ * 조건 하나하나에 단언이 있어야** 한다 — 없으면 다음 라운드가 그 조건을 지워도 아무도 모른다.
+ * 계약이 "검증 경계가 답할 몫"으로 열거한 목록이 곧 이 테스트의 목록이다. */
+
+/* ⚠️ **모든 자리에 다른 값을 둔다.** 두 필드가 같은 값이면 그 둘을 맞바꾸는 매핑 실수가
+ * deepEqual 로도 안 잡힌다 — 실제로 `completenessExpected == received == 33` 과
+ * `deadline == ledgerUpdated == null` 이던 동안 변이 2종이 통과했다. */
+const WIRE = (): ConsoleFactsDto => ({
+  runs: [{
+    id: 'etf-daily:2026-08-03T15:40', lane: 'etf-daily', tradingDate: '2026-08-03',
+    ledgerStatus: 'RUNNING', ledgerUpdated: '2026-08-03T16:10:36+09:00',
+    deadline: '2026-08-03T21:40:00+09:00',
+  }],
+  tasks: [{
+    taskKey: 'T', runId: 'etf-daily:2026-08-03T15:40', pipelineType: 'etf-daily',
+    tradingDate: '2026-08-03', stage: 'raw', dataset: 'etf_holdings', required: true,
+    planStatus: 'DUE', taskOutcome: 'FULFILLED', dataStatus: 'VALID',
+    recordsOut: 906, failedRecords: 0,
+    completenessExpected: 33, completenessReceived: 30, completenessMissing: 3, attempts: 2,
+  }],
+  datasets: [{
+    id: 'etf_holdings', contract: true, expectedAsOf: '2026-08-03', actualAsOf: null,
+    collectedAt: '2026-08-03T15:41:58+09:00', unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
+  }],
+  outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+  boundary: { publishedWithoutDelivery: 0, deliveryNowNonpublished: 1, deliveryRows: 114 },
+  meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
+});
+
+/** 한 자리만 망가뜨린 응답 — 나머지는 정상이라 거부가 그 자리 때문임이 분명하다. */
+const broken = (mutate: (w: ConsoleFactsDto) => void) => {
+  const w = WIRE();
+  mutate(w);
+  return parseFacts(w);
+};
+
+test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다', () => {
+  /* 🔴 **일부 필드만 단언하면 나머지 매핑이 무방비다.** `plan_status` 매핑을 지워도 그 필드가
+   * 옵셔널이라 tsc 는 통과하고, 그러면 SKIPPED 작업이 `undefined !== 'SKIPPED'` 로 R05 에 들어가
+   * **거짓 P0** 가 난다(리뷰가 잡았다). 그래서 **전체를 deepEqual** 한다 — 한 필드가 빠지거나
+   * 엉뚱한 자리로 가면 여기서 걸린다. */
+  const r = parseFacts(WIRE());
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(r.facts, {
+    runs: [{
+      id: 'etf-daily:2026-08-03T15:40',
+      lane: 'etf-daily',
+      trading_date: '2026-08-03',
+      ledger_status: 'RUNNING',
+      ledger_updated: '2026-08-03T16:10:36+09:00',
+      deadline: '2026-08-03T21:40:00+09:00',
+    }],
+    tasks: [{
+      task_key: 'T',
+      /* 사건을 런에 매다는 축 — 어긋나면 인과 간선이 조용히 안 걸린다 */
+      run_id: 'etf-daily:2026-08-03T15:40',
+      pipeline_type: 'etf-daily',
+      trading_date: '2026-08-03',
+      stage: 'raw',
+      dataset: 'etf_holdings',
+      required: true,
+      plan_status: 'DUE',
+      task_outcome: 'FULFILLED',
+      data_status: 'VALID',
+      records_out: 906,
+      failed_records: 0,
+      completeness_expected: 33,
+      completeness_received: 30,
+      completeness_missing: 3,
+      attempts: 2,
+    }],
+    datasets: [{
+      id: 'etf_holdings',
+      contract: true,
+      expected_as_of: '2026-08-03',
+      actual_as_of: null,
+      collected_at: '2026-08-03T15:41:58+09:00',
+      unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
+    }],
+    outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+    boundary: {
+      published_without_delivery: 0,
+      delivery_now_nonpublished: 1,
+      delivery_rows: 114,
+    },
+    meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
+  });
+});
+
+test('서버가 안 보낸 축을 어댑터가 만들어 내지 않는다', () => {
+  /* 🔴 `chain: {feeds:[],stages:[]}`·`runbook: {}` 로 메우면 계측 없음이 실측 0 으로 위조되고,
+   * 규칙이 `못 돎` 대신 `평가됨 · 위반 0`("손실 없음")을 세운다 — 이 트랙이 없애려는 칸 혼동이다. */
+  const r = parseFacts(WIRE());
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.facts.chain, undefined, 'chain 축을 만들어 냈다');
+  assert.equal(r.facts.runbook, undefined, 'runbook 축을 만들어 냈다');
+  assert.equal(r.facts.meta.aws, undefined, 'AWS 관측 시각을 만들어 냈다');
+  assert.equal(r.facts.queues, undefined, 'queues 축을 만들어 냈다');
+});
+
+test('런 행이 없는 슬롯의 계획 표시는 실린 것만 옮긴다', () => {
+  /* `planned`·`noRunRow` 는 서버가 그 슬롯에만 싣는다(필드 단위 NON_NULL). 실재 런에 `false` 를
+   * 만들어 붙이면 "계획된 적 없는 런"이라는, 원장이 하지 않은 단정이 화면에 선다. */
+  const w = WIRE();
+  w.runs.push({ ...w.runs[0], id: 'etf-daily:2026-08-03T21:40', ledgerStatus: null,
+    planned: true, noRunRow: true } as never);
+  const r = parseFacts(w);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.ok(!('planned' in r.facts.runs[0]), '실재 런에 계획 표시를 만들어 붙였다');
+  assert.equal(r.facts.runs[1].planned, true);
+  assert.equal(r.facts.runs[1].no_run_row, true);
+});
+
+test('거부 — 컬렉션 원소가 객체가 아니면 응답 전체를 버린다', () => {
+  /* 규칙 층이 의도적으로 안 막은 자리다. 여기서 통과시키면 `outputs[null].today` 가 규칙 안에서
+   * 터지고, 그건 그 규칙이 아니라 **평가 전체**를 죽인다. */
+  for (const [name, mutate] of [
+    ['outputs: [null]', (w: ConsoleFactsDto) => { (w.outputs as unknown[])[0] = null; }],
+    ['runs: [스칼라]', (w: ConsoleFactsDto) => { (w.runs as unknown[])[0] = 1; }],
+    ['tasks: [배열]', (w: ConsoleFactsDto) => { (w.tasks as unknown[])[0] = []; }],
+    ['datasets 가 객체', (w: ConsoleFactsDto) => { (w as { datasets: unknown }).datasets = {}; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('거부 — 세는 값이 수가 아니거나 음수면 버린다', () => {
+  /* `NaN` 은 `!= null` 을 통과하지만 비교가 언제나 거짓이라 "봤고 괜찮다"로 인증된다.
+   * 음수 카운트는 규칙이 세는 축을 통째로 무의미하게 만든다. */
+  for (const [name, mutate] of [
+    ['today: NaN', (w: ConsoleFactsDto) => { w.outputs[0].today = NaN; }],
+    ['today: 문자열', (w: ConsoleFactsDto) => { (w.outputs[0] as { today: unknown }).today = '16'; }],
+    ['base: 음수', (w: ConsoleFactsDto) => { w.outputs[0].base = -1; }],
+    ['attempts: 음수', (w: ConsoleFactsDto) => { w.tasks[0].attempts = -1; }],
+    ['recordsOut: Infinity', (w: ConsoleFactsDto) => { w.tasks[0].recordsOut = Infinity; }],
+    ['completenessExpected: 문자열', (w: ConsoleFactsDto) =>
+      { (w.tasks[0] as { completenessExpected: unknown }).completenessExpected = '33'; }],
+    ['boundary 음수', (w: ConsoleFactsDto) => { w.boundary.deliveryRows = -1; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('거부 — 식별자·불리언 자리가 어긋나면 버린다', () => {
+  /* 사건 식별자의 축이 문자열이 아니면 딥링크가 남의 사건을 열고, `required` 가 불리언이
+   * 아니면 R05 의 필터가 뜻 없이 참이 된다. */
+  for (const [name, mutate] of [
+    ['runs[].id 가 수', (w: ConsoleFactsDto) => { (w.runs[0] as { id: unknown }).id = 1; }],
+    ['tasks[].runId 가 null', (w: ConsoleFactsDto) => { (w.tasks[0] as { runId: unknown }).runId = null; }],
+    ['required 가 문자열', (w: ConsoleFactsDto) => { (w.tasks[0] as { required: unknown }).required = 'true'; }],
+    ['contract 가 수', (w: ConsoleFactsDto) => { (w.datasets[0] as { contract: unknown }).contract = 1; }],
+    ['meta.today 가 null', (w: ConsoleFactsDto) => { (w.meta as { today: unknown }).today = null; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('허용 — 정당한 null 은 거부하지 않는다', () => {
+  /* 🔴 검증기가 과하면 **정상 응답을 통째로 버린다**. 비거래일 런의 거래일, 슬롯 키를 못 읽은
+   * 레인, 기준 없는 산출은 전부 서버가 정당하게 내는 null 이다(B1). 거부하면 그날의 사고가
+   * 화면에서 사라지는데, 그건 검증기가 만드는 거짓 안심이다. */
+  const w = WIRE();
+  w.runs[0].lane = null;
+  w.runs[0].tradingDate = null;
+  w.tasks[0].tradingDate = null;
+  w.tasks[0].recordsOut = null;
+  w.outputs[0].base = null;
+  w.datasets[0].unverifiable = null;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `정상 응답을 거부했다: ${r.reason}`);
+  if (!r.ok) return;
+  assert.equal(r.facts.runs[0].lane, null);
+  assert.equal(r.facts.outputs[0].base, null);
+});
+
+test('거부 사유는 어느 축인지 말한다 — 조회 실패 문장이 원인을 가리켜야 한다', () => {
+  const r = broken((w) => { w.outputs[0].today = NaN; });
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.match(r.reason, /outputs/, `사유가 축을 안 가리킨다: ${r.reason}`);
+});
+
+test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필드는 무검증으로 규칙에 흘러간다', () => {
+  /* 🔴 부분만 검사하고 캐스트하면 이 경계가 약속한 "규칙은 자기 타입을 믿어도 된다"가 거짓이
+   * 된다(리뷰가 잡았다 — `planned: "false"` 는 truthy 라 R01 이 거짓 P0 를 낸다).
+   *
+   * 손으로 유지되는 표는 반드시 낡으므로 **집합으로** 묶는다: 와이어 픽스처의 키가 표의 키에
+   * 다 들어 있어야 한다. 서버 DTO 에 필드가 하나 늘고 픽스처가 따라가면 여기서 걸린다. */
+  const w = WIRE();
+  /* 양방향으로 본다 — 표에만 있고 픽스처에 없는 필드는 그 단언이 헛도는 자리이고, 서버가
+   * 그 필드를 뺀 뒤에도 표에 남아 있으면 **정상 응답을 거부한다**(값이 `undefined` 가 된다).
+   * 한 축만 검사하면 나머지 다섯의 드리프트를 못 잡는다(리뷰가 잡았다). */
+  const both = (
+    row: object,
+    fields: Record<string, unknown>,
+    axis: string,
+    optional: string[] = [],
+  ) => {
+    const missing = Object.keys(row).filter((k) => !(k in fields));
+    assert.deepEqual(missing, [], `${axis} 의 ${missing.join('·')} 가 검사표에 없다`);
+    const unused = Object.keys(fields).filter((k) => !(k in row) && !optional.includes(k));
+    assert.deepEqual(unused, [], `${axis} 픽스처가 ${unused.join('·')} 를 안 밟는다`);
+  };
+  /* `planned`·`noRunRow` 는 서버가 그 슬롯에만 싣는다 — 픽스처의 정상 런에는 없는 게 맞다. */
+  both(w.runs[0], RUN_FIELDS, 'runs', ['planned', 'noRunRow']);
+  both(w.tasks[0], TASK_FIELDS, 'tasks');
+  both(w.datasets[0], DATASET_FIELDS, 'datasets');
+  both(w.outputs[0], OUTPUT_FIELDS, 'outputs');
+  both(w.boundary, BOUNDARY_FIELDS, 'boundary');
+  both(w.meta, META_FIELDS, 'meta');
+});
+
+test('거부 — 안전 정수 범위를 넘은 건수는 이미 손상된 값이다', () => {
+  /* `long` 은 2^53 을 넘을 수 있고 그때 `JSON.parse` 는 **반올림한 값**을 준다. `isInteger` 로만
+   * 보면 그 손상된 값이 통과해, `expected`·`received` 가 1 차이인 응답이 같은 수가 되고
+   * R07 이 결손을 정상으로 판정한다. */
+  assert.equal(
+    broken((w) => { w.tasks[0].completenessExpected = Number.MAX_SAFE_INTEGER + 2; }).ok,
+    false,
+    '안전 정수 범위를 넘은 건수를 통과시켰다',
+  );
+  const edge = WIRE();
+  edge.tasks[0].completenessExpected = Number.MAX_SAFE_INTEGER;
+  assert.equal(parseFacts(edge).ok, true, '안전 정수 상한 자체를 거부했다');
+});
+
+test('거부 — 무검증으로 새던 자리들', () => {
+  /* 전수 검사 이전에 통과하던 것들이다. `planned: "false"` 가 대표적 — truthy 라 R01 이
+   * "계획됐는데 런이 없다"로 읽어 거짓 P0 를 낸다. */
+  for (const [name, mutate] of [
+    ['planned: "false"', (w: ConsoleFactsDto) => { (w.runs[0] as { planned: unknown }).planned = 'false'; }],
+    ['noRunRow: 1', (w: ConsoleFactsDto) => { (w.runs[0] as { noRunRow: unknown }).noRunRow = 1; }],
+    ['ledgerStatus 가 객체', (w: ConsoleFactsDto) => { (w.runs[0] as { ledgerStatus: unknown }).ledgerStatus = {}; }],
+    ['taskOutcome 가 객체', (w: ConsoleFactsDto) => { (w.tasks[0] as { taskOutcome: unknown }).taskOutcome = {}; }],
+    ['stage 가 null', (w: ConsoleFactsDto) => { (w.tasks[0] as { stage: unknown }).stage = null; }],
+    ['pipelineType 이 수', (w: ConsoleFactsDto) => { (w.tasks[0] as { pipelineType: unknown }).pipelineType = 1; }],
+    ['expectedAsOf 가 수', (w: ConsoleFactsDto) => { (w.datasets[0] as { expectedAsOf: unknown }).expectedAsOf = 20260803; }],
+    ['unit 이 null', (w: ConsoleFactsDto) => { (w.outputs[0] as { unit: unknown }).unit = null; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('거부 — 건수 자리에 소수가 오면 버린다. 기준값의 소수는 정상이다', () => {
+  /* 와이어에서 건수는 `long` 이라 소수가 올 수 없다. 반면 기준(중앙값)은 `Double` 이고 짝수
+   * 표본이면 `.5` 가 정상이다 — 둘을 한 검사로 묶으면 한쪽이 반드시 틀린다. */
+  assert.equal(broken((w) => { w.outputs[0].today = 0.5; }).ok, false, '건수에 소수를 통과시켰다');
+  assert.equal(broken((w) => { w.tasks[0].attempts = 1.5; }).ok, false, '시도 수에 소수를 통과시켰다');
+  assert.equal(broken((w) => { w.boundary.deliveryRows = 1.5; }).ok, false, '건수에 소수를 통과시켰다');
+  const half = WIRE();
+  half.outputs[0].base = 31.5;
+  assert.equal(parseFacts(half).ok, true, '기준값의 소수를 거부했다 — 짝수 표본의 중앙값이다');
+});
+
+test('거부 — 응답 자체가 객체가 아니면 그 사실을 사유로 말한다', () => {
+  /* 사유를 단언하지 않으면 이 가드는 **지워도 통과한다** — 배열·문자열은 뒤의 축 검사에서
+   * 어차피 걸려서 거부 자체는 같기 때문이다. 그때 운영자가 받는 문장은 "runs 축이 배열이
+   * 아니다"인데, 실제로는 응답이 통째로 다른 것이라 원인을 못 가리킨다. */
+  for (const body of [null, undefined, 'x', 1, []]) {
+    const r = parseFacts(body);
+    assert.equal(r.ok, false, `${JSON.stringify(body)} 를 통과시켰다`);
+    if (r.ok) continue;
+    assert.match(r.reason, /응답이 객체가 아니다/, `${JSON.stringify(body)} 의 사유가 원인을 안 가리킨다`);
+  }
 });
