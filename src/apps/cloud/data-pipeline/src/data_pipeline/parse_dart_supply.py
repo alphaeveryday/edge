@@ -282,7 +282,7 @@ def parse_supply(html_or_xml_text: str) -> dict[str, Any]:
     corp_name = _extract_corp_name(soup)
     counterparty_raw = _find_value(rows, "계약상대방", "계약상대")
     counterparty, counterparty_raw, counterparty_withheld = _counterparty_fields(counterparty_raw)
-    object_text = _find_value(rows, "체결계약명", "판매ㆍ공급계약 내용", "판매ㆍ공급계약내용")
+    object_text = _find_value(rows, "체결계약명", "판매ㆍ공급계약 내용", "판매ㆍ공급계약내용", "세부내용")
     # 총액을 우선하고 nullish(조건부 계약의 '-' 등)는 건너뛴다 — 특정 라벨이 총액 위에 먼저
     # 와도 실제 계약금액(총액)을 놓치지 않게(_find_first_nonnull 참고, Codex P2).
     amount_text = _find_first_nonnull(rows, "계약금액 총액(원)", "계약금액 총액", "확정 계약금액", "계약금액(원)", "계약금액")

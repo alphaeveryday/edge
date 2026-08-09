@@ -220,6 +220,30 @@ def test_parse_supply_no_table_returns_partial() -> None:
     assert parsed["confidence"] == "partial"
 
 
+def test_parse_supply_uses_detail_row_as_contract_object() -> None:
+    """공식 공급계약 양식의 ``- 세부내용``도 계약 식별에 필요한 대상이다."""
+    html = """
+    <html>
+      <head><title>디아이/단일판매ㆍ공급계약체결</title></head>
+      <body>
+        <table>
+          <tr><td>1. 판매ㆍ공급계약 구분</td><td>기타 판매ㆍ공급계약</td></tr>
+          <tr><td>- 세부내용</td><td>반도체 검사장비 공급계약</td></tr>
+          <tr><td>3. 계약상대</td><td>삼성전자(주)</td></tr>
+          <tr><td>계약금액(원)</td><td>10,000,000,000</td></tr>
+          <tr><td>매출액대비(%)</td><td>4.5</td></tr>
+          <tr><td>계약기간</td><td>2026.07.30 ~ 2027.07.29</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    parsed = PS.parse_supply(html)
+
+    assert parsed["object"] == "반도체 검사장비 공급계약"
+    assert parsed["confidence"] == "full"
+
+
 # ── 본문 ZIP 추출·euc-kr 디코딩 ──────────────────────────
 def _zip_with(name: str, data: bytes) -> bytes:
     buf = io.BytesIO()

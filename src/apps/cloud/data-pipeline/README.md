@@ -1563,7 +1563,7 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
   python -m data_pipeline.run disclosure-worker --session-date 2026-08-07 --max-ticks 3
 # 보유한 DART raw 전체를 재처리한다. --from/--to 를 주면 접수일 기준 포괄 범위만 재처리한다.
 DATA_PIPELINE_DB__PASSWORD=... \
-  python -m data_pipeline.run backfill-disclosure --run-id dart-backfill-20260809
+  python -m data_pipeline.run backfill-normalize-disclosure --run-id dart-backfill-20260809
 # 업종지수 Worker(1분 파이프라인, ALPHA-887) — KRX 업종지수 45종 분봉을 window 단위
 # canonical artifact 로 확정한다. 세션이 먼저 계획돼 있어야 한다
 # (plan-minute-session --dataset sector_index_minute --source-group kis — universe 없음).

@@ -498,7 +498,7 @@ def test_load_disclosure_explicit_window_overrides_and_default_is_full_scan(monk
     assert captured["window"] == (None, None)
 
 
-def test_backfill_disclosure_defaults_to_all_raw_and_accepts_filing_window(monkeypatch):
+def test_backfill_normalize_disclosure_defaults_to_all_raw_and_accepts_filing_window(monkeypatch):
     """백필 기본값이 최근 N일이면 보관 raw의 과거 공시가 영구 누락된다. 명시 창은 그대로
     전달하고 미지정은 `(None, None)`으로 전체 raw 재처리를 요청해야 한다."""
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
@@ -511,10 +511,13 @@ def test_backfill_disclosure_defaults_to_all_raw_and_accepts_filing_window(monke
     monkeypatch.setattr(run_mod.backfill_disclosure, "run", fake_run)
     monkeypatch.setattr(run_mod, "db_config_from_env", lambda db: db)
 
-    assert main(["backfill-disclosure", "--run-id", "B1"]) == 0
-    assert main(["backfill-disclosure", "--run-id", "B2",
+    assert main(["backfill-normalize-disclosure", "--run-id", "B1"]) == 0
+    assert main(["backfill-normalize-disclosure", "--run-id", "B2",
                  "--from", "2026-01-01", "--to", "2026-06-30"]) == 0
     assert captured == [(None, None), ("2026-01-01", "2026-06-30")]
+
+    with pytest.raises(SystemExit):
+        main(["backfill-disclosure", "--run-id", "B3"])
 
 
 def test_deadline_rejected_where_it_is_ignored(monkeypatch):
