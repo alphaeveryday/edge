@@ -322,9 +322,15 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
         except Exception:
             # 삼키지 않는다 — 트레이스백을 남기고 **이 레인만** 실패로 접는다(Rule 12).
             # exit 는 아래 첫 실패 코드로 실려 스케줄 기록에도 남는다.
+            # ⚠️ **2 다, 1 이 아니다.** `plan_session_cli` 의 어휘에서 1 은 "계획할 수
+            # 없음"(universe 충돌·drain 이후 — 재시도해도 같은 답인 의미적 거부)이고
+            # 2 가 "계획 자체를 못 함"(설정·DB 장애)이다. 예기치 않은 예외는 후자다 —
+            # 1 로 실으면 일시적 S3 오류가 "재시도해도 소용없는 거부"로 분류돼 장애
+            # 대응이 갈린다. `except` 로 잡히는 건 `Exception` 뿐이라 `SystemExit`
+            # (배선 오타 — `_lane_worker_services`)은 여기 안 걸리고 그대로 죽는다.
             logger.exception("%s 세션 계획이 예외로 죽었다 — 이 레인만 접고 나머지는 계속한다",
                              lane.dataset)
-            lane_exits[lane] = 1
+            lane_exits[lane] = 2
             continue
         if lane_exits[lane] != 0:
             logger.error("%s 세션 계획 실패(exit %d) — 가격 레인은 진행하고 그 Worker 는 "

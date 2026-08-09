@@ -108,9 +108,13 @@ def test_워커가_KIS_자격증명을_블록_안에서_받는다():
         assert found, f"sector-index-worker 블록에 {name} 이 없다 — 기동에서 죽는다"
         assert re.search(target, found.group(1)), \
             f"{name} 이 엉뚱한 곳을 가리킨다: {found.group(1)} — 기동하거나 남의 값을 받는다"
-    # 토큰 캐시는 값이 local 참조라 이름·대입만 본다(문자열이 아니라 검사 형태가 다르다).
-    assert re.search(r"KIS_TOKEN_CACHE_PARAM\s*=", block), \
-        "sector-index-worker 가 토큰 공유 캐시를 안 받는다 — 매 기동 발급이 분당 1회 제한에 걸린다"
+    # 토큰 캐시도 **가리키는 곳까지** 본다. 이름만 세면 다른 파라미터를 가리켜도 통과하는데,
+    # task role 은 정본 파라미터만 허용하므로 실물에서는 AccessDenied 뒤 개별 발급으로
+    # 폴백한다 — 캐시가 있는 줄 알았는데 분당 1회 제한을 가격 레인과 다투는 상태가 된다
+    # (있으나 마나가 가장 나쁘다).
+    assert re.search(r"KIS_TOKEN_CACHE_PARAM\s*=\s*local\.kis_token_param_name", block), \
+        ("sector-index-worker 의 토큰 공유 캐시가 정본(local.kis_token_param_name)을 "
+         "안 가리킨다 — 매 기동 발급이 분당 1회 제한에 걸리고 가격 레인과 다툰다")
 
 
 def test_기대_집합이_universe_가_아니다():

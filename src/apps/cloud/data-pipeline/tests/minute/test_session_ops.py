@@ -447,7 +447,9 @@ class TestNewsLane:
 
         assert "sector_index_minute" in planned, \
             "앞 레인의 예외가 뒤 레인의 계획을 막았다 — 그날 업종지수가 영구 결손된다"
-        assert rc != 0, "예외로 죽은 레인이 exit 에 안 실리면 스케줄 기록이 초록이다"
+        assert rc == 2, ("예외는 **2**(계획 자체를 못 함)여야 한다 — 1 은 "
+                         "'계획할 수 없음'(재시도해도 같은 답인 의미적 거부)이라 "
+                         "일시적 S3 오류가 그쪽으로 분류되면 장애 대응이 갈린다")
         scaled = [c["services"] for c in wiring.calls]
         assert ["svc-sector-index-worker"] in scaled, \
             "계획에 성공한 뒤 레인의 Worker 가 안 올라갔다 — 세션만 서고 수집이 0 이다"
@@ -1045,7 +1047,8 @@ def test_승객_계획이_예외로_죽어도_구동_레인은_올라간다(monk
         FakeSettings(), dataset="price_minute", source_group="kis",
         universe="s3://b/u.json")
 
-    assert rc != 0, "예외로 죽은 승객이 exit 에 안 실리면 스케줄 기록이 초록이다"
+    assert rc == 2, ("예외는 **2**(계획 자체를 못 함)여야 한다 — 1 은 '계획할 수 없음'"
+                     "(의미적 거부)이라 일시적 장애가 그쪽으로 분류되면 안 된다")
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
     ], "승객 계획의 예외가 구동 레인 스케일업을 삼키면 안 된다"
@@ -1086,7 +1089,8 @@ def test_뒤_레인_계획이_예외로_죽어도_앞_레인은_이미_올라가
         FakeSettings(), dataset="price_minute", source_group="kis",
         universe="s3://b/u.json")
 
-    assert rc != 0, "예외로 죽은 레인이 exit 에 안 실리면 스케줄 기록이 초록이다"
+    assert rc == 2, ("예외는 **2**(계획 자체를 못 함)여야 한다 — 1 은 '계획할 수 없음'"
+                     "(의미적 거부)이라 일시적 장애가 그쪽으로 분류되면 안 된다")
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
         {"desiredCount": 1, "forceNewDeployment": True, "services": [f"svc-{first.dataset}"]},
