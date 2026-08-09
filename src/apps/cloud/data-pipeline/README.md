@@ -1572,7 +1572,7 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **22개**(daily 1·뉴스 3·
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **21개**(daily 1·뉴스 2·
 공시 10·장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
 (전용 IAM 역할 — 레이크 읽기 + 상주 서비스 7종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
