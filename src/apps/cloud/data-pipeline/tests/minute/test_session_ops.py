@@ -412,6 +412,50 @@ class TestNewsLane:
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
         ], "news-worker 는 세션이 안 선 날 올리지 않는다"
 
+    def test_앞_레인의_예외가_뒤_레인의_계획을_막지_않는다(self, monkeypatch, wiring):
+        """🔴 예외는 exit code 와 **다른 축**이다 — 이 격리가 없으면 앞 레인 하나가
+        뒤 레인 전부를 그날 통째로 지운다.
+
+        `plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라 universe 객체를 읽는
+        S3 의 botocore ClientError 는 뚫고 나온다(그 파일 주석이 근거). iNAV 가
+        `_OPTIONAL_LANES` 마지막이던 동안은 뒤가 없어 안 드러났는데, ALPHA-887 이
+        업종지수를 뒤에 붙이면서 실재하는 경로가 됐다 — 그 소스는 **소급이 불가해
+        그날이 영구 결손**이라 순서 운에 맡길 수 없다.
+
+        여기서 쓰는 예외는 `RuntimeError` 다: `plan_session_cli` 가 **안 잡는** 부류를
+        대표해야 이 격리를 검사하는 것이 된다(ValueError·OSError 를 쓰면 그 함수
+        내부에서 이미 잡혀 이 테스트가 아무것도 증명하지 못한다).
+        """
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+        monkeypatch.setenv(session_ops.ENV_SECTOR_INDEX_SOURCE_GROUP, "kis")
+        monkeypatch.setenv(session_ops.ENV_SECTOR_INDEX_WORKER_SERVICES, "svc-sector-index-worker")
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        planned = []
+
+        def _plan(settings, **k):
+            planned.append(k["dataset"])
+            if k["dataset"] == "news_minute":
+                raise RuntimeError("S3 ClientError 대역 — plan_session_cli 가 안 잡는 부류")
+            return 0
+
+        monkeypatch.setattr(session_ops, "plan_session_cli", _plan)
+
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss",
+            universe="s3://b/u.json")
+
+        assert "sector_index_minute" in planned, \
+            "앞 레인의 예외가 뒤 레인의 계획을 막았다 — 그날 업종지수가 영구 결손된다"
+        assert rc == 2, ("예외는 **2**(계획 자체를 못 함)여야 한다 — 1 은 "
+                         "'계획할 수 없음'(재시도해도 같은 답인 의미적 거부)이라 "
+                         "일시적 S3 오류가 그쪽으로 분류되면 장애 대응이 갈린다")
+        scaled = [c["services"] for c in wiring.calls]
+        assert ["svc-sector-index-worker"] in scaled, \
+            "계획에 성공한 뒤 레인의 Worker 가 안 올라갔다 — 세션만 서고 수집이 0 이다"
+        assert ["svc-news-worker"] not in scaled, \
+            "계획이 죽은 레인의 Worker 를 올리면 세션 부재 재기동 루프를 돈다"
+
     def test_bad_news_source_group_fails_loud(self, monkeypatch, wiring):
         monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkindz")
         monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
@@ -807,6 +851,71 @@ def test_선택레인_토글_env_이름이_terraform_과_일치한다():
             f"{lane.dataset} 워커 목록 env 가 terraform 에 없다: {lane.services_env}"
 
 
+# 배선이 CD 목록보다 한 배포 앞선 서비스 — **비어 있는 것이 정상 상태다**.
+# 이미지 CD(deploy-data-pipeline.yml)와 terraform-apply 는 독립 워크플로라 순서 보장이
+# 없다. 새 상주 서비스를 같은 PR 에서 CD 목록에 넣으면, CD 가 apply 를 앞지른 창에서
+# `describe-services` 가 **AccessDenied**(배포 역할이 terraform output 으로 스코프된다)로
+# 떨어져 **멀쩡한 이미지 배포가 통째로 막힌다**. 그래서 레포 규약은 apply 착지를 확인한
+# 뒤 후속 PR 로 목록을 채우는 것이다(워크플로 주석 · ALPHA-882→890 이 그 순서였다).
+# ⚠️ **이 유예가 강제하는 것과 못 하는 것을 갈라 적는다**(과대평가 금지, Rule 12).
+# 강제하는 것: 목록에 넣으면서 여기를 안 지우면 아래 만료 단언이 실패한다 → 낡은 유예가
+# 쌓여 이 검사가 영영 눈감는 일은 없다(ALPHA-610 이 만든 형태).
+# **못 하는 것: 후속 PR 자체를 안 하는 경우다.** 그때 이 집합은 영원히 통과한다 —
+# 테스트는 미래의 커밋을 강제하지 못한다. 그 회수는 코드가 아니라 **티켓**이 진다
+# (ALPHA-911). 여기 이름이 남아 있다는 것 자체가 "아직 후속이 안 끝났다"는 표시다.
+_CD_ROLL_PENDING_APPLY = {"sector-index-worker"}  # ALPHA-887 → 회수 ALPHA-911
+
+
+def test_CD_롤링_목록이_상주_서비스_맵과_짝이다():
+    """⚠️ **같은 누락이 세 번 났다** — ALPHA-875·882, 그리고 ALPHA-887(이 검사를 만든 계기).
+
+    `deploy-data-pipeline.yml` 의 롤링 대상 목록은 `local.minute_services` 맵과 짝인데,
+    서비스를 늘리면서 목록을 안 늘리면 **그 서비스만 옛 이미지로 남는다**. 장중에
+    desired_count=1 인 채 이미지를 푸시하면 force-new-deployment 를 못 받아 수정이
+    다음 세션까지 반영되지 않는다. 워크플로 주석이 이 위험을 이미 문장으로 적어
+    뒀는데도 세 번째가 났다 — **주석은 가드가 아니다**. 그래서 값으로 못박는다.
+
+    ⚠️ 다만 **같은 PR 에서 채우라는 뜻이 아니다**(그러면 CD 가 apply 를 앞질러 하드
+    실패한다 — `_CD_ROLL_PENDING_APPLY` 주석). 이 검사가 강제하는 것은 "빠뜨리지
+    마라"가 아니라 **"빠진 것을 선언해라"** 이고, 선언은 만료 단언이 회수한다.
+
+    `analysis-consumer` 는 제외다 — 이미지도 CD 워크플로도 다르다(주석의 선언).
+    """
+    from pathlib import Path as _P
+    here = _P(__file__).resolve()
+    rel_tf = "infra/terraform/modules/data-pipeline/minute_services.tf"
+    rel_wf = ".github/workflows/deploy-data-pipeline.yml"
+    try:
+        root = next(p for p in here.parents if (p / rel_tf).exists() and (p / rel_wf).exists())
+    except StopIteration:
+        pytest.skip("저장소 체크아웃에서만 도는 계약 검사")
+
+    import re
+    tf = (root / rel_tf).read_text()
+    # `minute_services = {` 블록 안의 최상위 키 — 들여쓰기 4칸이 서비스 이름이다.
+    block = re.search(r"\n  minute_services = \{\n(.*?)\n  \}\n", tf, re.S)
+    assert block, "minute_services 맵을 못 찾았다 — 이 계약 검사가 헛돌고 있다"
+    services = set(re.findall(r"^    ([a-z0-9-]+) = \{$", block.group(1), re.M))
+    assert len(services) >= 5, f"서비스 파싱이 깨졌다: {services}"
+
+    wf = (root / rel_wf).read_text()
+    rolled = set(re.findall(r"edge-dev-data-pipeline-([a-z0-9-]+)", wf))
+
+    # 만료 단언 — 목록에 이미 들어간 이름이 유예에 남아 있으면 그 유예가 낡은 것이다.
+    # 이게 없으면 유예가 영구화되고 이 검사는 그 서비스에 대해 영영 눈을 감는다.
+    stale = _CD_ROLL_PENDING_APPLY & rolled
+    assert not stale, (
+        f"만료된 유예다 — {sorted(stale)} 는 이미 CD 목록에 있다. "
+        f"_CD_ROLL_PENDING_APPLY 에서 지워 이 검사를 되살려라"
+    )
+    missing = services - rolled - _CD_ROLL_PENDING_APPLY
+    assert not missing, (
+        f"상주 서비스가 CD 롤링 목록에 없다: {sorted(missing)} — 장중 이미지 푸시에서 "
+        f"그 서비스만 옛 이미지로 남는다. apply 가 아직이면 _CD_ROLL_PENDING_APPLY 에 "
+        f"티켓과 함께 선언하고, 착지 뒤 후속 PR 로 목록을 채워라"
+    )
+
+
 def test_세션결속_생산자는_공용_스케일_목록에서_빠진다():
     """공용 목록에 남으면 **그 세션이 안 선 날에도** 올라가 기동 거부 재기동 루프를
     돈다(비용·알람 소음). 선택 레인 Worker 는 자기 목록으로만 올라간다.
@@ -916,7 +1025,13 @@ def test_승객_계획이_예외로_죽어도_구동_레인은_올라간다(monk
     """`plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라 universe 객체를 읽는
     S3 의 botocore ClientError 는 그대로 뚫고 나온다. 구동 레인 스케일업이 승객 계획
     **뒤**에 있으면 그 한 번에 가격 레인이 통째로 안 뜬다 — 승객 결손이 하루치 가격
-    결손으로 번지는 것이 이 모듈이 가장 피하려는 결과다."""
+    결손으로 번지는 것이 이 모듈이 가장 피하려는 결과다.
+
+    ⚠️ **ALPHA-887 이 예외를 레인 단위로 격리하면서 이 테스트의 관측이 바뀌었다** —
+    예외는 더 이상 `start_session_cli` 밖으로 안 나오고 exit code 로 실린다. 지키는
+    것은 그대로다: **구동 레인은 승객보다 먼저 올라간다.** 그게 이 테스트의 WHY 이고,
+    전파 여부는 그 WHY 를 재던 수단이었지 계약이 아니었다.
+    """
     monkeypatch.setenv(session_ops.ENV_INAV_SOURCE_GROUP, "kis")
     monkeypatch.setenv(session_ops.ENV_INAV_WORKER_SERVICES, "svc-inav-worker")
     monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
@@ -928,11 +1043,12 @@ def test_승객_계획이_예외로_죽어도_구동_레인은_올라간다(monk
 
     monkeypatch.setattr(session_ops, "plan_session_cli", plan)
 
-    with pytest.raises(RuntimeError):
-        session_ops.start_session_cli(
-            FakeSettings(), dataset="price_minute", source_group="kis",
-            universe="s3://b/u.json")
+    rc = session_ops.start_session_cli(
+        FakeSettings(), dataset="price_minute", source_group="kis",
+        universe="s3://b/u.json")
 
+    assert rc == 2, ("예외는 **2**(계획 자체를 못 함)여야 한다 — 1 은 '계획할 수 없음'"
+                     "(의미적 거부)이라 일시적 장애가 그쪽으로 분류되면 안 된다")
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
     ], "승객 계획의 예외가 구동 레인 스케일업을 삼키면 안 된다"
@@ -948,6 +1064,11 @@ def test_뒤_레인_계획이_예외로_죽어도_앞_레인은_이미_올라가
 
     첫 레인만 계획에 성공시키고 그 다음 레인에서 터뜨린다 — 표 순서에 기대지 않도록
     `_OPTIONAL_LANES` 에서 앞 둘을 뽑는다.
+
+    ⚠️ **ALPHA-887 이후 예외는 밖으로 안 나온다**(레인 단위 격리) — exit code 로 실린다.
+    이 테스트가 지키는 것은 그대로 "앞 레인이 desired 0 인 채 남지 않는다"이고,
+    **뒤 레인까지 계획된다**는 새 성질은 위 `test_앞_레인의_예외가_뒤_레인의_계획을_
+    막지_않는다` 가 따로 잡는다(여기서는 뒤 레인 토글을 안 켠다).
     """
     from data_pipeline.minute.states import SOURCE_GROUPS_BY_DATASET
 
@@ -964,11 +1085,12 @@ def test_뒤_레인_계획이_예외로_죽어도_앞_레인은_이미_올라가
 
     monkeypatch.setattr(session_ops, "plan_session_cli", plan)
 
-    with pytest.raises(RuntimeError):
-        session_ops.start_session_cli(
-            FakeSettings(), dataset="price_minute", source_group="kis",
-            universe="s3://b/u.json")
+    rc = session_ops.start_session_cli(
+        FakeSettings(), dataset="price_minute", source_group="kis",
+        universe="s3://b/u.json")
 
+    assert rc == 2, ("예외는 **2**(계획 자체를 못 함)여야 한다 — 1 은 '계획할 수 없음'"
+                     "(의미적 거부)이라 일시적 장애가 그쪽으로 분류되면 안 된다")
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
         {"desiredCount": 1, "forceNewDeployment": True, "services": [f"svc-{first.dataset}"]},

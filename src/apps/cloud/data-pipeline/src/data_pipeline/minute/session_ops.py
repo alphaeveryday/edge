@@ -48,6 +48,7 @@ from .states import (
     DATASET_DISCLOSURE_MINUTE,
     DATASET_ETF_INAV_MINUTE,
     DATASET_NEWS_MINUTE,
+    DATASET_SECTOR_INDEX_MINUTE,
     MINUTE_DATASETS,
     SCALED_DATASETS,
     SOURCE_GROUPS_BY_DATASET,
@@ -79,6 +80,13 @@ ENV_DISCLOSURE_WORKER_SERVICES = "MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES"
 # 소비자도 없고, 생산자 하나만 세션 수명에 묶인다.
 ENV_INAV_SOURCE_GROUP = "MINUTE_SESSION_INAV_SOURCE_GROUP"
 ENV_INAV_WORKER_SERVICES = "MINUTE_SESSION_INAV_WORKER_SERVICES"
+# 업종지수(ALPHA-887) — 뉴스·공시처럼 **universe 를 안 쓴다**(`UNIVERSE_DATASETS` 밖).
+# 기대 집합 45종의 정본은 universe.json 이 아니라 config `[minute_sector_index.index_map]`
+# 이고 planner 가 그 해시를 세션에 고정한다 — 그래서 `--universe` 를 주면 planner 가
+# 거부한다. 아래 표의 `universe=... if lane.dataset in UNIVERSE_DATASETS` 가 그 축을
+# 이미 가르므로 여기 넣는 것만으로 맞는다.
+ENV_SECTOR_INDEX_SOURCE_GROUP = "MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP"
+ENV_SECTOR_INDEX_WORKER_SERVICES = "MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES"
 
 
 class _OptionalLane(NamedTuple):
@@ -102,6 +110,8 @@ _OPTIONAL_LANES = (
     _OptionalLane(DATASET_DISCLOSURE_MINUTE, ENV_DISCLOSURE_SOURCE_GROUP,
                   ENV_DISCLOSURE_WORKER_SERVICES),
     _OptionalLane(DATASET_ETF_INAV_MINUTE, ENV_INAV_SOURCE_GROUP, ENV_INAV_WORKER_SERVICES),
+    _OptionalLane(DATASET_SECTOR_INDEX_MINUTE, ENV_SECTOR_INDEX_SOURCE_GROUP,
+                  ENV_SECTOR_INDEX_WORKER_SERVICES),
 )
 
 DEFAULT_DRAIN_TIMEOUT_SEC = 1800.0
@@ -290,17 +300,38 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     for lane, group in lane_groups:
         if group is None:
             continue
-        lane_exits[lane] = plan_session_cli(
-            settings, dataset=lane.dataset, source_group=group,
-            session_date=today.isoformat(),
-            # ⚠️ **선택 레인이라고 universe 가 다 None 인 게 아니다.** 뉴스·공시는 소스
-            # 단위라 안 쓰지만 iNAV 는 `UNIVERSE_DATASETS` 라 planner 가 없으면 **거부한다**
-            # (exit 2 → 그 레인이 매 거래일 통째로 안 선다). 통과시키더라도 원장에
-            # universe_version="none" 이 박혀 Worker 의 `_session_ready` 가 영영 False 다 —
-            # 두 축 모두에서 틀린다. worker 의 `--universe` 와 **같은 객체**여야 한다
-            # (terraform 이 둘에 같은 URI 를 준다).
-            universe=universe if lane.dataset in UNIVERSE_DATASETS else None,
-        )
+        # ⚠️ **예외도 레인 단위로 격리한다**(ALPHA-887). 아래 문단이 "레인별로 판정한다 —
+        # 서로 독립이다"라고 선언하는데, 그 독립은 여태 **exit code 에서만** 성립했다:
+        # `plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라 universe 객체를 읽는
+        # S3 의 botocore ClientError 는 그대로 뚫고 나오고, 그러면 **뒤에 오는 레인은
+        # 계획조차 안 된다**. iNAV 가 마지막이던 동안은 뒤가 없어 안 드러났는데, 업종지수가
+        # 뒤에 붙으면서 실재하는 경로가 됐다 — 그 소스는 소급이 불가해 그날이 영구 결손이다.
+        # 순서에 기대는 대신(다음 레인이 또 뒤에 붙는다) 여기서 끊는다.
+        try:
+            lane_exits[lane] = plan_session_cli(
+                settings, dataset=lane.dataset, source_group=group,
+                session_date=today.isoformat(),
+                # ⚠️ **선택 레인이라고 universe 가 다 None 인 게 아니다.** 뉴스·공시는 소스
+                # 단위라 안 쓰지만 iNAV 는 `UNIVERSE_DATASETS` 라 planner 가 없으면 **거부한다**
+                # (exit 2 → 그 레인이 매 거래일 통째로 안 선다). 통과시키더라도 원장에
+                # universe_version="none" 이 박혀 Worker 의 `_session_ready` 가 영영 False 다 —
+                # 두 축 모두에서 틀린다. worker 의 `--universe` 와 **같은 객체**여야 한다
+                # (terraform 이 둘에 같은 URI 를 준다).
+                universe=universe if lane.dataset in UNIVERSE_DATASETS else None,
+            )
+        except Exception:
+            # 삼키지 않는다 — 트레이스백을 남기고 **이 레인만** 실패로 접는다(Rule 12).
+            # exit 는 아래 첫 실패 코드로 실려 스케줄 기록에도 남는다.
+            # ⚠️ **2 다, 1 이 아니다.** `plan_session_cli` 의 어휘에서 1 은 "계획할 수
+            # 없음"(universe 충돌·drain 이후 — 재시도해도 같은 답인 의미적 거부)이고
+            # 2 가 "계획 자체를 못 함"(설정·DB 장애)이다. 예기치 않은 예외는 후자다 —
+            # 1 로 실으면 일시적 S3 오류가 "재시도해도 소용없는 거부"로 분류돼 장애
+            # 대응이 갈린다. `except` 로 잡히는 건 `Exception` 뿐이라 `SystemExit`
+            # (배선 오타 — `_lane_worker_services`)은 여기 안 걸리고 그대로 죽는다.
+            logger.exception("%s 세션 계획이 예외로 죽었다 — 이 레인만 접고 나머지는 계속한다",
+                             lane.dataset)
+            lane_exits[lane] = 2
+            continue
         if lane_exits[lane] != 0:
             logger.error("%s 세션 계획 실패(exit %d) — 가격 레인은 진행하고 그 Worker 는 "
                          "올리지 않는다(세션 부재 재기동 루프 방지)",

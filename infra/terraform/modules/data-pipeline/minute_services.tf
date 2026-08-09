@@ -220,6 +220,34 @@ locals {
         DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
       }
     }
+    # 장중 업종지수 45종 생산자(ALPHA-887) — iNAV 와 **같은 성질**이다: 소비자가 없어
+    # canonical 까지만 가고 큐도 안 늘어난다. 다른 점은 하나, **universe 를 안 받는다** —
+    # 기대 집합의 정본이 universe.json 이 아니라 동봉 config `[minute_sector_index.index_map]`
+    # 이라 `--universe` 를 주면 planner 가 거부한다(그래서 command 에 없다).
+    sector-index-worker = {
+      command = ["sector-index-worker"]
+      environment = merge(local.env, local.db_env, {
+        # 토큰 공유 캐시(ALPHA-573) — price-worker·inav-worker 와 **같은 앱키**다. KIS 앱키는
+        # 전역 한도라 이걸 빼면 매 기동 발급이 분당 1회 제한에 걸리고 가격 레인과 다툰다.
+        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+        # ⚠️ `OPS_KR_HOLIDAYS` 가 **없는 것이 의도다** — inav-worker 와 갈리는 자리라 적어 둔다.
+        # 그 env 는 컨테이너가 여는 가드가 읽을 때만 필요한데(ALPHA-882 가 이걸 빠뜨려
+        # 평일 공휴일이 거래일로 통과했다), 이 어댑터에는 `skip_reason` 축이 아예 없다
+        # (`worker.py` 의 sector-index 종료 판정 주석). 휴장일은 한 층 위에서 걸린다 —
+        # `start-minute-session` 이 `is_trading_day` 로 세션을 안 만들고, 세션이 없으면
+        # 이 Worker 는 기동에서 죽는다(fail-loud). 잔존 desired=1 로 혼자 살아남아도
+        # 조용한 오염이 아니라 재기동 루프라 드러난다 — iNAV 는 그 자리에서 KIS 가 직전
+        # 거래일 값을 줘 유령 as-of 가 앉았던 것이고, 여기는 그 경로가 없다.
+      })
+      # 업종지수 TR(FHKUP03500200)은 iNAV 와 **같은 KIS 자격증명 쌍**을 쓴다 —
+      # `sector_index_worker_cli` 가 `settings.kis_nav` 를 요구한다(미주입이면 기동에서
+      # 죽는다, fail-loud). 벤더도 TR 계열도 같아 그릇을 나눌 이유가 없다.
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD                = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+      }
+    }
   }
 
 }
@@ -228,7 +256,7 @@ locals {
 # 여기 넣는 것과 `MINUTE_SESSION_*_WORKER_SERVICES` 에 싣는 것이 **짝**이다. 소비자는
 # 여기 안 넣는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관이다.
 locals {
-  session_bound_workers = ["news-worker", "disclosure-worker", "inav-worker"]
+  session_bound_workers = ["news-worker", "disclosure-worker", "inav-worker", "sector-index-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -414,9 +442,10 @@ resource "aws_ecs_task_definition" "minute_session" {
         if !contains(local.session_bound_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
-      MINUTE_SESSION_NEWS_WORKER_SERVICES       = aws_ecs_service.minute["news-worker"].name
-      MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES = aws_ecs_service.minute["disclosure-worker"].name
-      MINUTE_SESSION_INAV_WORKER_SERVICES       = aws_ecs_service.minute["inav-worker"].name
+      MINUTE_SESSION_NEWS_WORKER_SERVICES         = aws_ecs_service.minute["news-worker"].name
+      MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES   = aws_ecs_service.minute["disclosure-worker"].name
+      MINUTE_SESSION_INAV_WORKER_SERVICES         = aws_ecs_service.minute["inav-worker"].name
+      MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES = aws_ecs_service.minute["sector-index-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
       # 승객 세션 편입 — start 가 그 세션도 계획하고 stop 이 함께 드레인한다. 비우면
@@ -430,6 +459,10 @@ resource "aws_ecs_task_definition" "minute_session" {
       MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP = var.minute_session_disclosure_source_group
       # iNAV 세션 편입(ALPHA-882) — 같은 토글 축.
       MINUTE_SESSION_INAV_SOURCE_GROUP = var.minute_session_inav_source_group
+      # 업종지수 세션 편입(ALPHA-887) — 같은 토글 축. 비우면 이 레인만 미편입이고
+      # 구동 레인(가격)은 그대로 돈다. 소급이 불가한 소스라(과거일 질의가 일봉으로
+      # degrade) **비워 둔 날은 영구 결손**이다 — 뉴스·공시처럼 나중에 주워올 수 없다.
+      MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP = var.minute_session_sector_index_source_group
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

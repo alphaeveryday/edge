@@ -613,6 +613,17 @@ variable "minute_session_inav_source_group" {
   default = "kis"
 }
 
+variable "minute_session_sector_index_source_group" {
+  description = "sector_index_minute 세션의 source_group(ALPHA-887). 비우면 업종지수 레인 미편입 — start 가 세션을 계획하지 않고 sector-index-worker 도 올리지 않는다"
+  type        = string
+  # 업종지수 분봉은 KIS 단독이다(`SOURCE_GROUPS_BY_DATASET` 도 {kis}) — 토스·KRX 에 지수
+  # 축이 없다. 어휘 밖 값은 오케스트레이터가 기동에서 거부한다(`_lane_source_group`).
+  # ⚠️ **비워 둔 날은 영구 결손이다.** 이 TR 은 날짜 파라미터가 없어 과거일로 돌려도
+  # "지금 기준 최근 100봉"만 오고(소급 TR 은 일봉으로 degrade), 그날 원장을 나중에 채울
+  # 방법이 없다 — 뉴스·공시처럼 다음 창이 주워오는 축이 아니다.
+  default = "kis"
+}
+
 variable "minute_session_disclosure_source_group" {
   description = "disclosure_minute 세션의 source_group(ALPHA-875). 비우면 공시 레인 미편입 — 공시는 SFN 10슬롯 레인이 계속 소유한다"
   type        = string
