@@ -597,7 +597,11 @@ def test_news_cron_runs_every_day_of_week():
     #      ⚠️ **일(day-of-month)까지 함께 든다.** 요일만 보면 `cron(0 15 1 * ? *)`(매달 1일만)
     #      이 통과하는데, 그건 요일 필드가 `?` 라 주말 플래그가 true 로 잡혀 **매달 28일가량
     #      × 슬롯 수**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
-    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', _news_cron_block()))
+    # ^\s*"키" = 로 앵커한다 — `_strip_hcl_comments` 는 줄 **선두** 주석만 걷으므로
+    # (값 안의 `s3://` 를 자르지 않으려는 의도적 규율), 앵커 없이는 줄 뒤에 달린 인라인
+    # 주석 속 가짜 cron 이 살아 있는 배선으로 세어진다(edge-review 2R).
+    dom_dow = set(re.findall(r'^\s*"[\w-]+"\s*=\s*"cron\(\S+ \S+ (\S+) \S+ (\S+) ',
+                             _news_cron_block(), re.M))
     assert dom_dow and dom_dow <= {("*", "?"), ("?", "*")}, (
         f"뉴스 크론의 (일, 요일)이 {sorted(dom_dow)} — 매일 도는 형태가 아니다. 원장이 표현할 수 "
         "있는 값은 MON-FRI 와 주 7일 둘뿐이고, 둘 중 하나는 `?` 다(AWS 가 `*` 를 두 필드에 "
@@ -623,7 +627,7 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
     from data_pipeline import run as run_mod
 
     slots = [(int(h), int(m)) for m, h in
-             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+             re.findall(r'^\s*"[\w-]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
     assert slots, "뉴스 크론에서 슬롯 시각을 못 뽑았다 — 파서가 낡았다"
 
     early = [(h, m) for h, m in slots if (h, m) < (9, 0)]
@@ -651,7 +655,8 @@ def test_day_close_slot_runs_after_the_day_it_closes_has_ended():
     #      닫는다)이고, 23:50 로 되돌리면 그게 깨진다. 이 관계가 없으면 슬롯을 되돌려도 요일·
     #      타임아웃·assemble 가드가 전부 초록이라 ~124p 재수집이 조용히 재발한다(edge-review).
     slots = {key: (int(h), int(m)) for key, m, h in
-             re.findall(r'"([\w-]+)"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block())}
+             re.findall(r'^\s*"([\w-]+)"\s*=\s*"cron\((\d+) (\d+) ',
+                        _news_cron_block(), re.M)}
     assert "day-close" in slots, f"day-close 슬롯이 사라졌다 — 현재 키: {sorted(slots)}"
 
     others = {k: v for k, v in slots.items() if k != "day-close"}
@@ -677,17 +682,33 @@ def test_assemble_window_covers_what_the_collection_window_collected():
         (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
     block = re.search(r'variable\s+"assemble_window_days"\s*\{(.*?)^\}', tf, re.M | re.S)
     assert block, "assemble_window_days 를 못 찾았다 — 파서가 낡았다"
-    assemble_days = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+    assemble_days = int(re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M).group(1))
     # ⚠️ 기본값만 보면 사각이 남는다(edge-review) — 하한을 0 으로 되돌려도 기본값 1 이면 이
     #    테스트가 통과하고, 그 뒤 env 가 0 을 주입하면 plan 도 통과해 매일 read=0 이 된다.
     #    **허용 범위**(validation 하한)를 함께 본다.
-    floor = int(re.search(r"var\.assemble_window_days\s*>=\s*(\d+)", block.group(1)).group(1))
+    floor = int(re.search(r"^\s*condition\s*=.*?var\.assemble_window_days\s*>=\s*(\d+)",
+                          block.group(1), re.M).group(1))
 
     for label, value in (("기본값", assemble_days), ("validation 하한", floor)):
         assert value >= run_mod.DEFAULT_LOOKBACK_DAYS, (
             f"assemble 창 {label} {value}일 < 수집 창 소급 {run_mod.DEFAULT_LOOKBACK_DAYS}일. "
             "수집이 담은 날짜를 조립이 못 읽는다 — 00:10 런은 닫으려던 어제를 통째로 건너뛰고 "
             "read=0 으로 성공한다(에러 없음)")
+
+    # ⚠️ **변수 선언이 맞아도 배선이 끊기면 같은 결과다**(edge-review 2R). `--window-days` 가
+    #    SFN 명령에서 빠지면 run.py 기본값은 "오늘 하루"라 00:10 런이 D+1 만 읽는다. 리터럴로
+    #    박아도 위 두 값이 아무 의미가 없어진다 — 그래서 **끝단(실제 명령)까지** 센다.
+    sfn = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "news_pipeline.tf").read_text(encoding="utf-8"))
+    command = re.search(r"NewsAssembleEvents\s*=\s*merge\(.*?\"Command\.\$\"\s*=\s*\"([^\"]*)\"",
+                        sfn, re.S)
+    assert command, "NewsAssembleEvents 의 Command 를 못 찾았다 — 파서가 낡았다"
+    assert "--window-days" in command.group(1), (
+        f"NewsAssembleEvents 명령에 --window-days 가 없다: {command.group(1)}. "
+        "미주입이면 assemble 창이 '오늘 하루'라 00:10 런이 닫으려던 어제를 안 읽는다")
+    assert "${var.assemble_window_days}" in command.group(1), (
+        f"NewsAssembleEvents 가 --window-days 를 변수가 아닌 값으로 넘긴다: {command.group(1)}. "
+        "리터럴이면 위 default·validation 이 아무것도 강제하지 못한다")
 
 
 def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
@@ -704,10 +725,10 @@ def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
     block = re.search(
         r'variable\s+"news_state_machine_timeout_seconds"\s*\{(.*?)^\}', tf, re.M | re.S)
     assert block, "news_state_machine_timeout_seconds 를 못 찾았다 — 파서가 낡았다"
-    timeout_sec = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+    timeout_sec = int(re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M).group(1))
 
     slots = [(int(h), int(m)) for m, h in
-             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+             re.findall(r'^\s*"[\w-]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
     for hour, minute in [s for s in slots if s < (9, 0)]:
         end_min = hour * 60 + minute + timeout_sec // 60
         assert end_min <= 9 * 60, (
