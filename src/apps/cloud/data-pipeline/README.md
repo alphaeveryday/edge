@@ -1158,12 +1158,14 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
-  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4 + 장중 수급 레인
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 26작업 =
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 장중 수급 레인
   (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
-  늘어난다)(ECS Task state 36개 중 — 시장 SFN 31 + 뉴스 SFN 직렬 2 + 장중 수급 3.
-  ALPHA-181 → 578 → 553 PR2 → 591 → 769). 레인은 `CatalogEntry.pipeline_type` 축이고
+  늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 **SFN 원장 밖 1분 세션으로** 보낸 몫이라
+  공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 36개 중 — 시장 SFN 31 +
+  뉴스 SFN 직렬 2 + 장중 수급 3. ALPHA-181 → 578 → 553 PR2 → 591 → 769 → 875).
+  레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
   `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외는 ① `fmp` 수집
@@ -1180,7 +1182,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 30작업이 전부 자기
+  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 26작업이 전부 자기
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
@@ -1236,7 +1238,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 EventBridge(daily·news×3·장중수급×5 — 공시 10슬롯은 ALPHA-875 컷오버로 DISABLED, 1분 세션이 소유) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
                                               → commit → 결정적 execution_name → SFN StartExecution
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
-각 ECS 태스크(30작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+각 ECS 태스크(26작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
 ```
 

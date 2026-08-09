@@ -8,9 +8,10 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 36개 중 30개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+**등록 범위: ECS Task state 36개 중 26개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
 뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27 → **ALPHA-724 공시 레인
-컷오버로 소유 레인 이동(총계 27 유지)** → **ALPHA-769 장중 수급 레인 신설로 27→30**). state 수
+컷오버로 소유 레인 이동(총계 27 유지)** → **ALPHA-769 장중 수급 레인 신설로 27→30** →
+**ALPHA-875 공시 4작업이 SFN 원장을 떠나 30→26**). state 수
 36 = 시장 SFN 31 + 뉴스 SFN 직렬 2(NewsLoadAssertions·NewsAssembleEvents — 병렬 브랜치 4개는
 statemachine.tf 잡 정의를 재사용해 이름이 겹치지 않는다) + 장중 수급 3(ALPHA-769 가 잡 리스트에
 새로 더한 것 — 공시·뉴스가 소유만 옮겨 총계를 안 바꾼 것과 다르다). 미등록 state 는 카탈로그에 없어 expected_task 가 안
@@ -40,8 +41,11 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 잠깐의 MISSED 는 자가 해소되지만 **미등록 유예는 잊히면 조용히 영구화된다**(공시가 원장 밖에서
 도는데 화면에 아무 흔적이 없다) — 그래서 관대한 쪽이 아니라 시끄러운 쪽을 골랐다(Rule 12).
 
-**레인(pipeline_type) 축**(ALPHA-591·724·769): 카탈로그는 시장 레인(`etf-daily`, 17작업)·뉴스 레인
-(`news`, 6작업)·공시 레인(`disclosure`, 4작업)·장중 수급 레인(`investor-intraday`, 3작업)을 함께 담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
+**레인(pipeline_type) 축**(ALPHA-591·724·769·875): 카탈로그는 시장 레인(`etf-daily`, 17작업)·뉴스 레인
+(`news`, 6작업)·장중 수급 레인(`investor-intraday`, 3작업)을 함께 담는다. 공시 레인
+(`disclosure`)은 **엔트리가 0 이다** — ALPHA-875 가 1분 세션으로 보냈다(아래 컷오버 블록).
+`DISCLOSURE_PIPELINE_TYPE` 상수와 롤백 절차의 "4엔트리"는 되살릴 때의 개수이지 현재 보유가
+아니다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
@@ -53,7 +57,7 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 | `fmp` task-def | CollectFmpNews·FmpPrice·FmpFinancial·FmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 
-**등록 30작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
+**등록 26작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
 ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
