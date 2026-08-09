@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-import json
 import re
 import sys
 from dataclasses import dataclass
@@ -93,7 +92,6 @@ class WindowFacts:
     lineage: tuple[dict, ...] = ()
     final_lines: tuple[str, ...] = ()
     event_ids: tuple[str, ...] = ()
-    final_bundle_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -220,14 +218,18 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
     plan = {block.key: block for block in build_block_plan(facts)}
 
     def block(code: str, title: str, lines: tuple[str, ...],
-              systems: tuple[str, ...], refs: tuple[str, ...] = ()) -> dict:
-        return {
+              systems: tuple[str, ...], refs: tuple[str, ...] = (),
+              evidence_requirement: str | None = None) -> dict:
+        result = {
             "block_code": code,
             "block_title": title,
             "text": "\n".join(lines),
             "source_systems": list(dict.fromkeys(systems)),
             "evidence_refs": list(dict.fromkeys(refs)),
         }
+        if evidence_requirement is not None:
+            result["evidence_requirement"] = evidence_requirement
+        return result
 
     blocks = [
         block("H", "헤더", plan["header"].lines, ("S3.bars_5m",),
@@ -248,23 +250,25 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
     # 사건 계열(공시·수급·보도)은 final_lines 가 이미 접었으면 중복하지 않는다.
     # 검정 계열(statistics·causal)은 **항상 병치한다** - 판정은 코드 산출이고,
     # final_lines 뒤에 숨으면 유의·비유의 사실이 산문에서 사라진다(Rule 12).
-    optional = (facts.final_lines or _lines("disclosure", "flow", "news")) \
-        + _lines("statistics", "causal")
+    statistical = _lines("statistics", "causal")
+    optional = (facts.final_lines or _lines("disclosure", "flow", "news")) + statistical
     if optional:
         lines = optional
         systems = (
             *(("RDB.source_event",) if facts.event_ids else ()),
-            *(("RDB.analysis_evidence_bundle",) if facts.final_bundle_ids else ()),
+            *(("ANALYSIS.stat_tests",) if statistical else ()),
         )
-        refs = tuple(f"source_event:{value}" for value in facts.event_ids) + tuple(
-            f"analysis_evidence_bundle:{value}" for value in facts.final_bundle_ids)
-        blocks.append(block("4", "이벤트 병치", lines, systems, refs))
+        refs = tuple(f"source_event:{value}" for value in facts.event_ids)
+        blocks.append(block(
+            "4", "이벤트 병치", lines, systems, refs,
+            "CAUSAL_STAT_TEST" if statistical else None,
+        ))
     else:
         blocks.append(block(
             "N", "부재 고지",
             ("해당 구간에 확인된 공시·보도는 없습니다. "
              "비교할 통계·리포트도 없습니다.",),
-            ("RDB.source_event", "RDB.analysis_evidence_bundle"),
+            ("RDB.source_event",),
         ))
     return {
         "rendered_text": "\n\n".join(
@@ -649,18 +653,6 @@ def thread_context(lake, instrument_id: str, day: str, as_of_time: str,
     return tuple(out), len(shown), fails
 
 
-def _mapping(value) -> dict:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
-
-
 def _event_lines(lake, event_ids: tuple[str, ...],
                  event_times: dict[str, dt.datetime]) -> tuple[str, ...]:
     """PIT 통과 사건의 (시각, 요지) 라인 - disclosure 블록 계약.
@@ -690,10 +682,8 @@ def _event_lines(lake, event_ids: tuple[str, ...],
 
 
 def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
-                 event_times: dict[str, dt.datetime], window_return: float,
-                 market_return: float | None,
-                 evidence_bundle_ids: list[str] | None = None) -> tuple[str, ...]:
-    """PIT 사건·재무·통계 사실을 사용자용 네 문장으로 접는다."""
+                 event_times: dict[str, dt.datetime]) -> tuple[str, ...]:
+    """PIT input facts only; prior analysis outputs are never read back."""
     if not event_ids:
         return ()
     ids = ",".join(_literal(eid) for eid in event_ids)
@@ -724,29 +714,6 @@ def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
             f"계약금액 {amount_text}억원, 최근 연매출 대비 "
             f"{float(supply[0][1]):.1f}% 규모입니다.")
 
-    try:
-        bundles = lake.sql(
-            "SELECT bundle_id, stats FROM rdb.public.analysis_evidence_bundle "
-            f"WHERE cell={_literal(ticker.split('.')[0])} "
-            f"AND trade_date=DATE {_literal(day)} AND basis='statistical' "
-            "ORDER BY created_at DESC LIMIT 1")
-    except Exception:  # noqa: BLE001 - 통계 부재를 결과 없음으로 명시한다
-        bundles = []
-    if bundles and evidence_bundle_ids is not None:
-        evidence_bundle_ids.append(str(bundles[0][0]))
-    stats = _mapping(bundles[0][1]) if bundles else {}
-    n = stats.get("n", stats.get("n_days", stats.get("n_pairs")))
-    mean = stats.get("mean_excess", stats.get("att", stats.get("effect")))
-    if isinstance(n, (int, float)) and int(n) >= MIN_N and isinstance(mean, (int, float)):
-        lines.append(
-            f"시장 요인을 제거한 기준으로, 조건이 비슷한 과거 {int(n)}건의 공시 당일 "
-            f"초과수익률은 평균 {float(mean) * 100:+.1f}%였습니다.")
-        if market_return is not None:
-            today = window_return - market_return
-            position = str(stats.get("position") or "").strip()
-            tail = f"과거 분포의 {position}입니다." if position else "과거 분포 내 위치는 계산하지 못했습니다."
-            lines.append(
-                f"오늘 이 종목의 초과수익률은 {today * 100:+.1f}%로, {tail}")
     return tuple(lines)
 
 
@@ -866,11 +833,8 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
             "as_of": b[:5],
         },
     )
-    final_bundle_ids: list[str] = []
     final_lines = _final_lines(
-        lake, ticker, day, event_ids, event_times, measured,
-        None if market is None else float(market.ret),
-        evidence_bundle_ids=final_bundle_ids,
+        lake, ticker, day, event_ids, event_times,
     )
     return WindowFacts(
         ticker=ticker,
@@ -919,7 +883,6 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         lineage=lineage,
         final_lines=final_lines,
         event_ids=event_ids,
-        final_bundle_ids=tuple(final_bundle_ids),
     )
 
 

@@ -66,15 +66,8 @@ def run_window_universe(day: str | None, start: str, end: str, request_id: str |
                     "final_explanation": payload,
                     "analysis_trace": manifest,
                 }
-                bundle_ids = tuple(
-                    ref.removeprefix("analysis_evidence_bundle:")
-                    for block in payload["blocks"]
-                    for ref in block["evidence_refs"]
-                    if ref.startswith("analysis_evidence_bundle:")
-                )
                 verdicts = Verdicts(
                     route_kind=_ROUTE_KIND.get(candidate.route_code, ""),
-                    bundles=tuple(sorted(set(bundle_ids))),
                 )
                 explanation = as_explanation(
                     payload["rendered_text"], card(payload["rendered_text"]), verdicts, stage,

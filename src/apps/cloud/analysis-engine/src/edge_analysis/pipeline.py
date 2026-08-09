@@ -646,12 +646,13 @@ def run(
     # 영속·게시하지 않는 것이 계약이라 조용한 통과가 없다(표면 부재 런은
     # final_payload 가 없어 이 게이트를 타지 않는다 — 죽일 문장 자체가 없다).
     evidence_build = None
+    stat_test_rows = tuple(window_meta.get("stat_tests") or ())
     if final_payload is not None:
         from .statics.evidence_rows import build_evidence_rows
         evidence_build = build_evidence_rows(
             blocks=final_payload["blocks"],
             lineage=window_meta.get("lineage") or (),
-            stat_tests=window_meta.get("stat_tests") or (),
+            stat_tests=stat_test_rows,
             events=[{"source_event_id": e.source_event_id, "title": e.title,
                      "available_at": e.available_at} for e in events],
             ticker=settings.etf_ticker,
@@ -669,7 +670,7 @@ def run(
         if evidence_build.skipped:
             # 통과 못 한 검정은 행이 없다(§0) — 침묵이 아니라 사유를 로그로 드러낸다.
             log("evidence_row.tests_skipped", count=len(evidence_build.skipped),
-                reasons=list(evidence_build.skipped)[:8])
+                reasons=[item["reason"] for item in evidence_build.skipped[:8]])
     # 가설 원장 행(ALPHA-881)은 DB 표(hypothesis_trial)가 정본이다 — stage_results 에
     # 같은 내용을 또 실으면 두 벌이 되어 어느 쪽을 믿을지 갈린다. 여기서 빼서
     # run 확정 뒤 store 로 보낸다(run_id 연결이 필요해 persist_explanation 뒤다).
@@ -678,20 +679,15 @@ def run(
         stage["window"] = window_meta
     if final_payload is not None:
         stage["final_explanation"] = final_payload
-    payload_bundles = tuple(
-        ref.removeprefix("analysis_evidence_bundle:")
-        for block in ((final_payload or {}).get("blocks") or ())
-        for ref in (block.get("evidence_refs") or ())
-        if ref.startswith("analysis_evidence_bundle:")
-    )
     stage["analysis_trace"] = trace_manifest
     verdicts = verdicts_from(
-        text, route_kind=(rt.kind if rt else ""),
+        route_kind=(rt.kind if rt else ""),
+        evidence_build=evidence_build,
+        hypothesis_trials=trial_rows,
         # 폐기가 확신도를 올리면 안 된다(Rule 12) - 라우팅이 깨져 분해를 버린 런이
         # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다.
         degraded=routing_failed,
-        bundles=tuple(sorted(set(payload_bundles or re.findall(
-            r"\bev_[0-9a-f]{16}\b", text)))))
+    )
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,
         confidence=explanation.confidence_level, bundles=len(verdicts.bundles))
@@ -742,6 +738,16 @@ def run(
         "holdings_asof": holdings_asof,
         "events": archived_events(events),
         "explanation": explanation.raw,
+        "verification": {
+            "hypothesis_trials": list(trial_rows),
+            "stat_tests": list(stat_test_rows),
+            "evidence": {
+                "rows": ([asdict(row) for row in evidence_build.rows]
+                         if evidence_build is not None else []),
+                "skipped": (list(evidence_build.skipped)
+                            if evidence_build is not None else []),
+            },
+        },
         "persistence": outcome,
     })
     # 발화 스냅샷 대시보드 재생성(ALPHA-894) — 런마다 전량 재조회·덮어쓰기(멱등).
