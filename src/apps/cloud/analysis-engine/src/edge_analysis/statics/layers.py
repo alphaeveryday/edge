@@ -24,8 +24,6 @@
 """
 from __future__ import annotations
 
-import datetime as dt
-import math
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -37,8 +35,6 @@ MIN_OVERLAP = 0.05    # 이만큼도 안 겹치면 "왜 이게 설명하냐"에 
 # 간다(ALPHA-871). 시장의 부분집합에 '섹터'를 세우면 시장 몫을 두 번 나눠 갖는
 # 동어반복이고, 그때 섹터가 청구하는 차감은 산술은 맞아도 아무것도 설명하지 않는다.
 BROAD_MARKET_CUT = 0.80
-
-KRX_PREFIX = "KRX:"   # KRX 업종지수 후보의 코드 접두
 
 # 장 시각 경계 - 이 밖은 5분봉이 없다. 밤사이는 갭 하나로 뭉쳐지므로 구간이 아니다.
 SESSION_OPEN, SESSION_CLOSE = "09:00:00", "15:30:00"
@@ -164,95 +160,21 @@ def _absent(lake, key: str, why: str) -> None:
 
 
 def _series(lake, day: str, kinds: tuple[str, ...],
-            *, clock: tuple[str, str] | None = None,
+            *, clock: tuple[str, str],
             only: str | tuple[str, ...] | None = None) -> dict[str, tuple]:
-    """{symbol: (name, 당일 log수익률, 거래정지 여부)}. **당일 한 점**만 낸다.
-
-    `clock=(t0, t1)` 이면 그 시각 구간의 5분봉 시가→종가, 아니면 일봉의 전일 종가
-    대비다. β 표본이 사라진 뒤로(ALPHA-862) 과거 이력은 아무도 안 쓴다.
-
-    거래량 0 인 날은 **정지**다 - 그날 종가는 직전 값이고 수익률 0 은 거짓이다.
-    진짜 보합의 고유수익은 정보다: 시장·섹터가 −7% 미는데 안 빠졌으면 그게 그
-    종목의 힘이다.
-    """
+    """{symbol: (name, 구간 log수익률, 거래정지 여부)}."""
     syms = ((only,) if isinstance(only, str) else tuple(only)) if only else ()
     lit = ", ".join(f"'{x}'" for x in syms)
-    if clock is not None:
-        names = {str(s_): n for s_, n in lake.sql(_CLOCK_NAMES.format(kinds=kinds))}
-        # 5분봉 심볼은 **접미사가 붙는다**(`005930.KS`). 맨 코드로 비교하면 한 번도 안
-        # 맞고, 그러면 대상 계열이 비어 `decompose` 가 조용히 None 을 낸다.
-        pick = (f" AND regexp_replace(b.symbol, '\\.(KS|KQ)$', '') IN ({lit})"
-                if syms else "")
-        rows = lake.sql(_CLOCK_SQL.format(
-            kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick))
-        lake.exists["clock_panel"] = f"DuckDB 당일 직독 ({len(rows)}심볼)"
-        return {sym: (names.get(sym, sym), float(lr),
-                      vol is not None and float(vol) <= 0)
-                for sym, lr, vol in rows if lr is not None}
-    pick = f" AND symbol IN ({lit})" if syms else ""
-    d0 = dt.date.fromisoformat(day)
-    rows = lake.sql(
-        "SELECT symbol, any_value(name), list(close ORDER BY date), "
-        "       list(CAST(date AS DATE) ORDER BY date), list(volume ORDER BY date) "
-        f"FROM layers_daily WHERE kind IN {kinds} AND date <= DATE '{day}'{pick} "
-        "GROUP BY symbol")
-    out = {}
-    for sym, nm, closes, dates, vols in rows:
-        # 당일 수익률에는 마지막 두 값이면 된다(분모 = 직전 종가). 당일 행이 없으면
-        # 그 계열은 오늘을 모른다 - 어제 값으로 지어내지 않는다.
-        if len(closes) < 2 or dates[-1] != d0:
-            continue
-        c_now, c_prev = float(closes[-1]), float(closes[-2])
-        if not (c_now > 0 and c_prev > 0):
-            continue
-        v_now = vols[-1] if vols else None
-        halted = v_now is not None and float(v_now) <= 0
-        out[sym] = (nm, math.log(c_now / c_prev), halted)
-    return out
-
-
-def _krx_sector_candidate(lake, etf: str, day: str):
-    """ETF 구성종목의 **최빈 KRX 업종**지수를 섹터 후보로. (코드, 이름, 당일 log수익률).
-
-    업종을 우리가 고르지 않는다: 구성종목 다수가 속한 업종이 그 ETF 의 업종이다.
-    지수 자체도 KRX 가 산출한다 - 설명력으로 고르면 섹터가 아니라 '가장 잘 맞는
-    무엇' 이 된다(042700 07-31 에서 삼성전자가 섹터로 뽑힌 그 실수).
-    """
-    # 보유는 `holdings()` 를 쓴다 - KRX 우선·FMP 폴백이 이미 그 안에 있고 캐시된다.
-    hold = holdings(lake, etf, day)
-    tks = {t.split(".")[0][-6:] for t, _n, _w in hold}
-    if not tks:
-        return None
-    try:
-        # 당일 수익률 분모까지 마지막 2행이면 된다(β 표본 폐지, ALPHA-862).
-        rows = lake.sql(f"""
-            WITH latest AS (
-              SELECT ticker, code FROM (
-                SELECT ticker, code, row_number() OVER (
-                  PARTITION BY ticker ORDER BY as_of DESC) AS rn
-                FROM sector_member
-                WHERE as_of <= DATE '{day}'
-                  AND ticker IN ({", ".join(f"'{t}'" for t in sorted(tks))})
-              ) WHERE rn = 1
-            ), m AS (
-              SELECT code, count(*) n FROM latest
-              GROUP BY 1 ORDER BY 2 DESC LIMIT 1
-            )
-            SELECT si.trade_date, any_value(si.close), any_value((SELECT code FROM m))
-            FROM sector_index si WHERE si.code = (SELECT code FROM m)
-              AND si.trade_date <= DATE '{day}'
-            GROUP BY si.trade_date ORDER BY 1 DESC LIMIT 2""")
-    except Exception:                               # noqa: BLE001 - 부재는 후보 없음
-        return None
-    if len(rows) < 2 or rows[0][2] is None:
-        return None
-    (d_now, c_now, code), (_d_prev, c_prev, _c) = rows[0], rows[1]
-    if str(d_now) != day or not (c_now and c_prev and float(c_prev) > 0):
-        return None
-    from .krxsector import sector_name
-    return (KRX_PREFIX + str(code), f"{sector_name(str(code))}(KRX 업종)",
-            math.log(float(c_now) / float(c_prev)))
-
+    names = {str(s_): n for s_, n in lake.sql(_CLOCK_NAMES.format(kinds=kinds))}
+    # 5분봉 심볼은 접미사가 붙는다(`005930.KS`). 맨 코드로 정규화한다.
+    pick = (f" AND regexp_replace(b.symbol, '\\.(KS|KQ)$', '') IN ({lit})"
+            if syms else "")
+    rows = lake.sql(_CLOCK_SQL.format(
+        kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick))
+    lake.exists["clock_panel"] = f"DuckDB 당일 직독 ({len(rows)}심볼)"
+    return {sym: (names.get(sym, sym), float(lr),
+                  vol is not None and float(vol) <= 0)
+            for sym, lr, vol in rows if lr is not None}
 
 def _market_beta(lake, etf: str, day: str, paths: dict | None,
                  ) -> tuple[float, tuple[float, ...], float] | None:
@@ -308,8 +230,8 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
 
 
 # ── 층 회계 ───────────────────────────────────────────────────────────────
-def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
-              clock: tuple[str, str] | None = None,
+def decompose(lake, etf: str, day: str, *, clock: tuple[str, str],
+              top: int = TOP_NAMES,
               intraday: dict[str, tuple[float, bool]] | None = None,
               paths: dict[str, tuple[float, ...]] | None = None) -> Rollup | None:
     """ETF 구간을 시장·섹터·고유로 가른다. **회계이지 추정이 아니다(β=1, ALPHA-862).**
@@ -331,7 +253,7 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     시변 β 로 세우는 재료다(ALPHA-803 2단계). 대상·시장 두 경로가 서고 전일 5분봉이
     있으면 시장 기여가 β=1 의 r_m 대신 **Σ β_t·r_m,t (경로 적분)** 이 된다. 고유는
     잔여 정의라 항등식(층 합 + 고유 = 구간수익)은 그대로다. 못 서면 β=1 로 접되
-    사유를 남긴다(`_market_beta`). 일 모드는 이 인자와 무관하게 불변이다.
+    사유를 남긴다(`_market_beta`).
     """
     # 이번 호출의 판정으로 덮는다. 한 런이 `decompose` 를 두 번 부르므로(라우팅·설명)
     # 앞 호출의 실패가 남으면 뒤 호출이 성공해도 커버리지가 실패를 말한다 — 부재를
@@ -405,7 +327,7 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     # 부재)를 유지한다. 일 모드(clock·intraday 둘 다 없음)는 닿지 않는다.
     beta_quarters: tuple[float, ...] = ()
     beta_ci: float | None = None
-    if layers and (clock is not None or intraday is not None):
+    if layers:
         wired = _market_beta(lake, etf, day, paths)
         if wired is not None:
             contrib, beta_quarters, beta_ci = wired
@@ -426,25 +348,9 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     # 전액 청구하고, 산문은 "(시장 차감)" 이라 적는다 - 일어나지 않은 차감을 말하는
     # 거짓이다. 대상이 시장 프록시 자신일 때도 같은 이유로 안 세운다: 그 경우는
     # route 가 "시장 100%" 로 정식 처리하는 정상 경로다(069500 07-29).
-    sector = None       # (code, name, ret)
     if layers and not broad:
-        if clock is not None:
-            # 업종지수는 분봉이 없다(수집 스펙만 존재) - 프록시 ETF 로 메우면
-            # '가장 잘 맞는 무엇'이 섹터를 참칭하던 자리로 돌아간다. 정직 부재.
-            _absent(lake, "sector_layer",
-                    "업종지수 분봉 미수집 - 수집 전까지 시장+고유 2층")
-        else:
-            sector = _krx_sector_candidate(lake, etf, day)
-            if sector is None:
-                _absent(lake, "sector_layer",
-                        f"업종지수 후보 없음 ({etf} {day}) - 시장+고유 2층")
-    if sector is not None:
-        code, nm, s_now = sector
-        meta[code] = nm
-        # β=1 시장 차감 - 시장과 겹치는 몫을 빼야 "시장이 민 건지 섹터가 민 건지"
-        # 배분 순서 논쟁이 없다. 회귀 직교화의 단위계수판이다.
-        layers.append(Layer(code, nm, "섹터", s_now, s_now - market_now, 0.0))
-
+        _absent(lake, "sector_layer",
+                "업종지수 분봉 미수집 - 수집 전까지 시장+고유 2층")
     idio = y_now - sum(x.contribution for x in layers)
     names, wsum, wtot, halted, adv, dec = _names(lake, etf, day, layers, top,
                                                  clock=clock, intraday=intraday)
@@ -458,7 +364,7 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────
 def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
-           clock: tuple[str, str] | None,
+           clock: tuple[str, str],
            intraday: dict[str, tuple[float, bool]] | None = None,
            ) -> tuple[tuple[Name, ...], float | None, float, int, int, int]:
     """고유분을 청구하는 상위 종목. **비중 × 고유** 로 순위 - 큰 종목의 작은 움직임과
