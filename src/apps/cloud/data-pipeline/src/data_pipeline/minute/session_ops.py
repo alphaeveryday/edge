@@ -130,19 +130,27 @@ def _services() -> list[str]:
         # 빈 값으로 통과시키면 "스케일링 성공(0건)" 이 되어 아침에 아무것도 안 뜬 채
         # 스케줄은 초록으로 보인다 — 배선 결손은 여기서 죽는다.
         raise SystemExit(f"{ENV_SERVICES} 가 비었다 — 스케일할 ECS 서비스명을 쉼표로 주입한다")
-    return names
+    # 설명 소비자는 자기 목록이 소유한다(ALPHA-910) — terraform 이 아직 공용에도 싣고 있어도
+    # **여기서 뺀다**. 소유 축을 코드가 정해야 배포 순서와 무관하게 축이 하나로 유지된다:
+    # 남겨두면 같은 서비스에 desired 를 두 번 쓰고(force 라 배포도 두 번), 그 상태로
+    # 오토스케일링을 붙이면 공용 경로가 스케일러의 desired 를 계속 되돌린다.
+    owned = set(_analysis_services())
+    return [name for name in names if name not in owned]
 
 
 def _analysis_services() -> list[str]:
-    """설명 소비자의 서비스 목록. 비면 죽는다 — 통과시키면 "스케일링 성공(0건)" 이 되어
-    장중 설명이 하루 통째로 안 나는데 스케줄은 초록이다(`_services` 와 같은 축)."""
+    """설명 소비자의 서비스 목록. **비어 있을 수 있다** — 그 상태가 컷오버 중이다.
+
+    ⚠️ 다른 목록들과 달리 빈 값에 죽지 않는다. terraform 과 이미지 CD 는 각자 `push: dev`
+    로 발화하는 독립 워크플로라 어느 쪽이 먼저 착지할지 모르는데, 여기서 죽으면 이 이미지가
+    apply 보다 먼저 뜬 날 **거래일 판정 전에** 오케스트레이터가 끝나 1분 파이프라인이 통째로
+    안 뜬다. 빈 값은 배선 결손이 아니라 **구 task-def** 이고, 그때는 공용 목록이 아직
+    소비자를 싣고 있어 스케일은 그대로 된다(terraform 이 그래서 공용에서 안 뺐다).
+    공용 목록에서 실제로 빼는 시점(오토스케일링 부착)에 이 관대함을 회수한다 — 그때는
+    빈 값이 곧 "아무도 안 올린다"가 되므로 `_services` 와 같은 fail-loud 로 바꾼다.
+    """
     raw = os.environ.get(ENV_ANALYSIS_SERVICES, "")
-    names = [n.strip() for n in raw.split(",") if n.strip()]
-    if not names:
-        raise SystemExit(
-            f"{ENV_ANALYSIS_SERVICES} 가 비었다 — 설명 소비자를 올릴 ECS 서비스명을 주입한다"
-        )
-    return names
+    return [n.strip() for n in raw.split(",") if n.strip()]
 
 
 def _lane_worker_services(lane: _OptionalLane) -> list[str]:
@@ -279,9 +287,6 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
         # PLANNED 로 남고, 그 사실이 드러나는 자리가 없다.
         if group is not None:
             _lane_worker_services(lane)
-    # 설명 소비자 목록도 계획 전에 해석한다 — 뒤로 미루면 가격 레인을 올린 **뒤** 배선
-    # 결손으로 죽어, 그날 트리거는 쌓이는데 아무도 안 집는다(stop 의 lane_workers 와 같은 순서).
-    analysis_services = _analysis_services()
     today = datetime.now(KST).date()
     if not is_trading_day(today):
         # ⚠️ 공휴일 집합은 `OPS_KR_HOLIDAYS` 수동 주입이다(비면 평일 휴장일이 거래일로
@@ -307,10 +312,12 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # universe 객체를 읽는 S3 의 botocore ClientError 는 그대로 뚫고 나온다. 뒤에 두면 그
     # 한 번에 가격 레인이 통째로 안 뜬다. universe 를 읽는 레인이 생긴 지금 실재하는 경로다.
     _scale(desired=1, force=True)
-    # 설명 소비자는 가격 레인과 **같은 조건**으로 올린다(ALPHA-910) — 공용 목록에 있던
-    # 때와 시각·force 가 같다. 선택 레인처럼 자기 계획 성공을 기다리지 않는다: 이 서비스는
-    # 세션 원장을 안 보고 큐만 폴링해서, 세션이 없어도 기동을 거부하지 않는다.
-    _scale(desired=1, force=True, services=analysis_services)
+    # 설명 소비자는 가격 레인과 **같은 조건**으로 바로 뒤에 올린다(ALPHA-910) — 공용 목록에
+    # 얹혀 있던 때와 순서·시각·force 가 같다. 선택 레인처럼 자기 계획 성공을 기다리지 않는다:
+    # 이 서비스는 세션 원장을 안 보고 큐만 폴링해서, 세션이 없어도 기동을 거부하지 않는다.
+    # 목록이 비면 구 task-def 다 — 위 공용 스케일이 이미 이 서비스를 덮었으니 건너뛴다.
+    if analysis_services := _analysis_services():
+        _scale(desired=1, force=True, services=analysis_services)
 
     lane_exits = {}
     for lane, group in lane_groups:
@@ -373,7 +380,6 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     # 처음 부르면 공용 서비스를 0 으로 내린 **뒤** 죽어서 나머지 레인 Worker 가 밤새
     # desired 1 로 남는다 — 게다가 exit 는 "stop 전체 실패" 로 읽힌다. start 와 같은 순서다.
     lane_workers = {lane: _lane_worker_services(lane) for lane in _OPTIONAL_LANES}
-    analysis_services = _analysis_services()  # 같은 이유로 게이트 전에 해석한다
     ids = {lane: stable_domain_id("msn", lane[0], lane[1], day.isoformat()) for lane in lanes}
 
     ledger = MinuteLedger(db=settings.db)
@@ -449,9 +455,10 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         time.sleep(POLL_INTERVAL_SEC)
 
     _scale(desired=0, force=False)
-    # 설명 소비자 — 공용 목록에 있던 때와 **같은 자리에서** 내린다(ALPHA-910). 게이트가
+    # 설명 소비자 — 공용 목록에 얹혀 있던 때와 **같은 자리에서** 내린다(ALPHA-910). 게이트가
     # 이 서비스의 큐를 안 보는 것도 그대로다(설명 큐는 게이트 밖 — `_gate_pending` 주석).
-    _scale(desired=0, force=False, services=analysis_services)
+    if analysis_services := _analysis_services():
+        _scale(desired=0, force=False, services=analysis_services)
     # ⚠️ 토글과 무관하게 **목록이 있으면 내린다** — 토글을 끈 날 그 서비스가 떠 있으면
     # 아무도 안 내려 계속 돈다(어제 켜고 오늘 끈 경우가 정확히 그 모양이다). 내리는 방향은
     # 과하게 잡아도 안전하다(이미 0 이면 no-op). 목록은 위에서 이미 해석해 뒀다.

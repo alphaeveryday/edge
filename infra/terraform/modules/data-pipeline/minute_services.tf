@@ -405,17 +405,24 @@ resource "aws_ecs_task_definition" "minute_session" {
       # ⚠️ 공시도 같은 이유로 공용 목록에서 뺀다(ALPHA-875) — 제외 목록을 로컬 하나로
       # 둔다: 서비스를 늘리며 여기 한쪽만 빠뜨리면 그 Worker 가 세션 없는 날도 떠서
       # 기동 거부 루프를 돈다(뺀 축과 올리는 축이 갈리면 안 된다).
-      MINUTE_SESSION_SERVICES = join(",", [
-        for key, service in aws_ecs_service.minute : service.name
-        if !contains(local.session_bound_workers, key)
-      ])
-      # analysis-consumer(ALPHA-719)는 **자기 목록**으로 간다(ALPHA-910). 세션 결속이라는
-      # 성질은 그대로다(트리거는 장중에만 발생하고, ReturnsNotReady 는 분봉 입력의 120초
+      # ⚠️ analysis-consumer 는 **여기 남긴다**(ALPHA-910) — 소유 축을 떼는 주체는 아래
+      # 자기 목록을 읽는 **코드**(`session_ops._services` 가 빼낸다)다. terraform 에서
+      # 빼면 이 파일과 이미지 CD 가 독립 워크플로(둘 다 push:dev)라 apply 가 늦게 착지한
+      # 날 구 이미지가 소비자를 아무 목록으로도 안 올린다 — 그날 장중 설명이 통째로
+      # 없다([[deploy-order-splits-the-pr]] 와 같은 함정). 실제로 빼는 것은 오토스케일링
+      # 부착 PR 소관이고, 그때는 새 이미지가 이미 오래 떠 있다.
+      MINUTE_SESSION_SERVICES = join(",", concat(
+        [for key, service in aws_ecs_service.minute : service.name
+        if !contains(local.session_bound_workers, key)],
+        [aws_ecs_service.analysis_consumer.name],
+      ))
+      # analysis-consumer(ALPHA-719)의 **자기 목록**(ALPHA-910). 세션 결속이라는 성질은
+      # 그대로다(트리거는 장중에만 발생하고, ReturnsNotReady 는 분봉 입력의 120초
       # 재시도(ALPHA-710)라 세션 안에 풀린다) — 바뀌는 건 소유 축 하나뿐이고 시각도
-      # 그대로다(07:45→1 · 20:05→0). 공용에 두면 오토스케일링을 붙여도 무효다: 스케일러가
-      # 큐 깊이로 올린 desired 를 세션 stop 이 매일 밤 0 으로 덮어쓴다.
-      # ⚠️ 여기 싣는 것과 공용에서 빼는 것이 **짝**이다 — 빼고 안 실으면 아무도 안 올려
-      # 장중 설명이 하루 통째로 안 난다(세션 결속 생산자와 같은 축, 대가만 더 크다).
+      # 그대로다(07:45→1 · 20:05→0). 공용 목록에 얹힌 채로는 오토스케일링을 붙여도 무효다:
+      # 스케일러가 큐 깊이로 올린 desired 를 세션 stop 이 매일 밤 0 으로 덮어쓴다.
+      # 이 값이 있으면 코드가 공용에서 그 이름을 빼고 여기로 스케일한다. 없으면(구 task-def)
+      # 공용 목록이 그대로 덮으므로 **어느 배포 순서에서도 소비자는 뜬다**.
       # ⚠️ 설명 큐는 stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트
       # 깊이에 잡혀 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일)
       # 안에서 다음 세션이 집는다.

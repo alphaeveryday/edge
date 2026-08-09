@@ -371,43 +371,40 @@ class TestAnalysisConsumerOwnList:
         assert rc == 1
         assert wiring.calls == []
 
-    def test_빈_목록은_계획_전에_죽는다(self, monkeypatch, wiring):
-        """토글이 없는 목록이라 빈 값은 미편입이 아니라 배선 결손이다. 계획 **뒤**에 죽으면
-        가격 레인만 뜬 채 트리거가 쌓여, 그날 설명이 통째로 없는데 원인이 안 드러난다."""
-        monkeypatch.setenv(session_ops.ENV_ANALYSIS_SERVICES, "")
+    def test_공용_목록에_실려_와도_코드가_빼낸다(self, monkeypatch, wiring):
+        """소유 축을 **코드가** 정한다 — terraform 이 컷오버 안전망으로 공용에도 싣고 있으니,
+        여기서 안 빼면 같은 서비스에 desired 를 두 번 쓴다(force 라 배포도 두 번). 그 상태로
+        오토스케일링을 붙이면 공용 경로가 스케일러의 desired 를 계속 되돌린다."""
+        monkeypatch.setenv(session_ops.ENV_SERVICES,
+                           "svc-worker,svc-analysis-consumer,svc-relay")
+
+        assert session_ops._services() == ["svc-worker", "svc-relay"]
+
+    def test_컷오버_중_빈_목록은_죽지_않고_공용에_맡긴다(self, monkeypatch, wiring):
+        """이 이미지가 terraform apply 보다 **먼저** 착지한 날의 상태다(두 워크플로는 독립).
+        여기서 죽으면 거래일 판정 전이라 그날 1분 파이프라인이 통째로 안 뜬다 — 구 task-def
+        의 공용 목록이 아직 소비자를 싣고 있으므로 스케일은 그대로 된다."""
+        monkeypatch.delenv(session_ops.ENV_ANALYSIS_SERVICES, raising=False)
+        monkeypatch.setenv(session_ops.ENV_SERVICES,
+                           "svc-worker,svc-analysis-consumer,svc-relay")
         monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
-        planned = []
-        monkeypatch.setattr(session_ops, "plan_session_cli",
-                            lambda *a, **k: planned.append(k) or 0)
+        monkeypatch.setattr(session_ops, "plan_session_cli", lambda *a, **k: 0)
 
-        with pytest.raises(SystemExit):
-            session_ops.start_session_cli(
-                FakeSettings(), dataset="price_minute", source_group="toss",
-                universe="s3://b/u.json")
+        rc = session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss",
+            universe="s3://b/u.json")
 
-        assert planned == [] and wiring.calls == []
-
-    def test_stop_도_게이트_전에_죽는다(self, monkeypatch, wiring):
-        """게이트를 통과한 뒤 죽으면 공용 서비스는 이미 0 인데 소비자만 밤새 desired 1 로
-        남는다 — lane_workers 를 게이트 전에 해석하는 것과 같은 이유다."""
-        monkeypatch.setenv(session_ops.ENV_ANALYSIS_SERVICES, "")
-        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
-        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
-        ledger = FakeLedger(["DRAINED"])
-        ledger.request_drain = lambda *, session_id, now: True
-        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
-        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
-
-        with pytest.raises(SystemExit):
-            session_ops.stop_session_cli(
-                FakeSettings(), dataset="price_minute", source_group="toss")
-
-        assert wiring.calls == []
+        assert rc == 0
+        assert wiring.calls == [
+            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+        ], "구 task-def 에선 자기 목록 스케일이 없다 — 공용 한 번이 소비자까지 덮는다"
+        # 그 공용 한 번이 실제로 소비자를 포함해야 한다(빼기가 무조건 도는 회귀 방지).
+        assert "svc-analysis-consumer" in session_ops._services()
 
     def test_terraform_이_자기_목록_env_를_준다(self):
-        """코드가 공용에서 뺐는데 terraform 이 자기 목록에 안 실으면 **아무도 안 올린다** —
-        이 배선의 기본 실수이고(레인 워커 짝 검사와 같은 방향), 여기선 그 사고가 "장중
-        설명이 하루 통째로 안 난다"로 나온다. 이름은 terraform 이 정본이다."""
+        """코드가 공용에서 빼는 근거가 이 env 다 — terraform 이 안 실으면 코드는 컷오버
+        상태로 오인해 소유 축이 영영 안 갈린다(그리고 그 사실이 드러나는 자리가 없다).
+        이름은 terraform 이 정본이고 코드가 따라간다(`_services` 주석과 같은 결)."""
         try:
             text = _module_tf()
         except StopIteration:
@@ -415,14 +412,24 @@ class TestAnalysisConsumerOwnList:
 
         import re
         assert re.search(rf"{session_ops.ENV_ANALYSIS_SERVICES}\s*=", text), \
-            "설명 소비자 목록 env 가 terraform 에 없다 — 공용에서 뺀 서비스를 아무도 안 올린다"
+            "설명 소비자 목록 env 가 terraform 에 없다 — 코드가 공용에서 뺄 근거를 잃는다"
         assert "aws_ecs_service.analysis_consumer.name" in text, \
             "자기 목록 env 가 실제 서비스명을 안 싣는다"
-        # 공용 목록 파생에 다시 섞이면 스케일 단위가 붙어 오토스케일링이 무효가 된다.
-        block = re.search(r"MINUTE_SESSION_SERVICES\s*=\s*join\(.*?\n\s*\]\)", text, re.S)
+
+    def test_terraform_공용_목록은_컷오버_안전망으로_남아_있다(self):
+        """⚠️ 여기서 빼면 apply 가 이미지 CD 보다 **늦게** 착지한 날 구 이미지가 소비자를
+        아무 목록으로도 안 올린다 — 그날 장중 설명이 통째로 없다. 실제 제거는 새 이미지가
+        오래 떠 있는 오토스케일링 부착 PR 소관이다. 코드가 이미 빼내므로 남겨도 무해하다."""
+        try:
+            text = _module_tf()
+        except StopIteration:
+            pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+        import re
+        block = re.search(r"MINUTE_SESSION_SERVICES\s*=\s*join\(.*?\n\s*\)\)", text, re.S)
         assert block, "공용 목록 파생을 못 찾았다 — 이 계약 검사가 헛돌고 있다"
-        assert "analysis_consumer" not in block.group(0), \
-            "설명 소비자가 공용 목록에 다시 들어왔다 — 세션이 매일 desired 를 덮어쓴다"
+        assert "aws_ecs_service.analysis_consumer.name" in block.group(0), \
+            "공용 목록에서 소비자를 뺐다 — apply 가 늦은 날 구 이미지가 소비자를 안 올린다"
 
 
 @pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "0", "-5"])
