@@ -1082,16 +1082,22 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
                 "장중에 config 가 바뀌었다면 그 세션은 이전 집합으로 끝내야 한다"
             )
 
-    # config 가 없는 채로 여기 왔다면 **DRAINING 전용 경로**다 — 기대 집합을 계산할 수
-    # 없으니 원장과 절대 안 맞는 값을 쓴다. 그러면 `_session_ready` 가 False 라 drain 이
-    # 수집을 시도하지 않고 회수·ack 만 한다(그게 이 경로의 전부다).
+    # 🔴 **수집 재료가 없으면 `_session_ready` 도 반드시 False 여야 한다.** 둘을 따로
+    # 판정하면 "collector 는 None 인데 ready 는 True" 조합이 생겨 drain 이 `_process` 를
+    # 부르다 죽는다 — 재료 목록과 정체성을 **한 곳에서** 묶는 이유다(문을 다섯 번째로
+    # 놓친 자리: index_map 만 보고 자격증명은 안 봤다).
+    #
+    # 재료가 없는 채로 여기 왔다면 위 블록을 통과한 것이므로 **DRAINING 전용 경로**다.
+    # 원장과 절대 안 맞는 정체성을 써서 drain 이 회수·ack 만 하게 만든다.
     index_map = (settings.minute_sector_index.index_map
                  if settings.minute_sector_index else {})
+    can_collect = bool(index_map) and settings.kis_nav is not None and bool(
+        settings.kis_nav.source.app_key and settings.kis_nav.source.app_secret)
     expected_version, expected_hash = (
-        config_set_identity(index_map) if index_map else ("none", "none"))
+        config_set_identity(index_map) if can_collect else ("none", "none"))
     worker_id = f"sw-{socket.gethostname()}-{os.getpid()}"
     collector = None
-    if index_map:
+    if can_collect:
         client = KisSectorIndexClient(
             settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret,
             # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.

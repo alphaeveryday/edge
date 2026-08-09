@@ -263,7 +263,7 @@ class TestBoundedGate:
 
     def _run_cli(self, monkeypatch, tmp_path, states, *, session_identity=None,
                  resident=False, env="prod", client_spy=None, today=None,
-                 draining=False, sector_index=..., kis_nav=...):
+                 draining=False, sector_index=..., kis_nav=..., captured=None):
         """CLI 를 끝까지 몬다 — 판정식을 테스트가 복제하면 코드가 아니라 사본을 잰다."""
         from datetime import datetime as real_datetime
         from types import SimpleNamespace
@@ -293,12 +293,14 @@ class TestBoundedGate:
                             lambda cfg: LocalStorage(root=tmp_path))
         # 벤더 클라이언트는 생성만 하고 안 부른다(tick 을 대체하므로)
         monkeypatch.setattr(mod, "KST", mod.KST)
+        captured = {} if captured is None else captured
         # 상태 문자열 또는 (상태, 설정할 drain 카운터) 튜플을 받는다 — DRAINED 는
         # "회수할 게 없었다"와 "회수·처리 성공"을 **같은 문자열로** 내므로, 그 구분을
         # 스텁이 못 하면 테스트가 두 경우를 같은 것으로 승인한다(리뷰 라운드 3).
         remaining = list(states)
 
         def fake_tick(self, now):
+            captured["worker"] = self          # 불변식 검사용 — 스텁이 가리는 축을 연다
             if not remaining:
                 return "IDLE"
             item = remaining.pop(0)
@@ -400,6 +402,28 @@ class TestBoundedGate:
             kis_nav=SimpleNamespace(
                 source=SimpleNamespace(app_key=None, app_secret=None, env="prod")),
             draining=True) == 0
+
+    def test_DRAINING_세션은_kis_nav_섹션이_통째로_없어도_닫을_수_있다(
+            self, monkeypatch, tmp_path):
+        """🔴 **다섯 번째 문**(Codex P2, 4라운드). 앞 커밋은 collector 생성을 `index_map`
+        에만 걸어서, index_map 은 남아 있고 `[kis_nav.source]` 만 걷어낸 config 에서
+        `settings.kis_nav.source` 역참조로 죽었다.
+
+        재료 목록과 정체성을 한 곳(`can_collect`)에서 묶어 닫았다 — 재료가 없으면
+        정체성도 원장과 안 맞게 만들어 `_process` 가 아예 안 불린다.
+        """
+        captured = {}
+        assert self._run_cli(monkeypatch, tmp_path,
+                             [("DRAINED", {"drain_processed": 1})],
+                             kis_nav=None, draining=True, captured=captured) == 0
+        # 🔴 **불변식**: collector 가 없으면 정체성도 원장과 안 맞아야 한다. 둘을 따로
+        # 판정하면 "collector 는 None 인데 ready 는 True" 조합이 생겨 drain 이
+        # `_process(claim)` 을 부르다 죽는다. tick 을 스텁하는 이 하네스는 그 크래시를
+        # 못 보므로(스텁이 재려던 경로를 대체한다) **조합 자체**를 여기서 못박는다.
+        worker = captured["worker"]
+        assert worker.collector is None
+        assert (worker.config.expected_version, worker.config.expected_hash) == (
+            "none", "none")
 
     def test_자격증명_결손은_기동에서_죽는다(self, monkeypatch, tmp_path):
         """수집하는 실행에서는 여전히 기동에서 죽어야 한다 — 첫 벤더 호출이 아니라."""
