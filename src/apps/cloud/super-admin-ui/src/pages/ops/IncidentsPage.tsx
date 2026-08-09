@@ -315,6 +315,13 @@ const TOP_N = 3;
  * 있는 것은 이번에 실제로 물어봤을 때뿐이다.
  */
 function noP0Sentence(unevaluated: number, stale: boolean): string {
+  /* ⚠️ 인자는 **P0 를 만든 축(사실·실시간)의 `stale`** 이지 화면 전체의 낡음이 아니다.
+   * 개요(`/sources/overview`)는 이 목록의 입력이 아니라, 그게 안 읽혔다고 "P0 판정이 낡았다"고
+   * 말하면 거짓이다(봇이 잡았다).
+   *
+   * `pending`·`error` 를 따로 안 가르는 이유: 그때는 그 축의 데이터가 **아예 없어** 규칙이
+   * `못 돎` 으로 서고, 이미 `unevaluated` 에 세어져 아래 문장이 그 사실을 말한다. 오직
+   * `stale` 만 — 캐시가 남아 규칙이 **낡은 사실 위에서 평가되어** `unevaluated` 에 안 잡힌다. */
   if (stale) {
     return unevaluated === 0
       ? '직전 응답에는 P0 가 0건이었습니다 — 마지막 조회가 실패해 지금도 그런지는 알 수 없습니다.'
@@ -337,7 +344,8 @@ function ImmediateAction({
    * 그 규칙의 P0 는 이 목록에 애초에 오르지 않으므로, 0을 "지금 개입할 것이 없다"로
    * 그리면 계측 공백·조회 실패가 초록으로 보인다. */
   unevaluated: number;
-  /* 두 축 중 하나라도 낡았는가 — "P0 0건"을 **현재형으로 말해도 되는가**를 정한다.
+  /* **P0 를 만든 축**(사실·실시간) 중 하나라도 낡았는가 — "P0 0건"을 현재형으로 말해도 되는가.
+   * ⚠️ 화면 전체의 낡음이 아니다: 개요는 이 목록의 입력이 아니라 섞으면 거짓이 선다.
    * ⚠️ 이름을 `fetch` 로 두지 마라: 전역 `fetch` 를 가려 tsc 가 엉뚱한 자리를 가리킨다. */
   stale: boolean;
 }) {
@@ -407,7 +415,10 @@ export function IncidentsPage() {
   };
   /* 상단 한 줄은 합쳐 말하고(어느 축이 왜 안 읽혔는지 이름으로), 카드는 각자 자기 축을 본다 */
   const unread = unreadNote({ 사실: fetches.facts, 실시간: fetches.minute, 개요: fetches.overview });
-  const stale = unread !== null;
+  /* 🔴 P0 문장은 **자기 입력만** 본다 — 개요는 이 목록을 만들지 않는다. 그걸 섞으면 개요 조회
+   * 하나가 실패한 날 "P0 판정이 낡았다"는 거짓이 서고, 반대로 개요 경고는 상단·NowStrip 이
+   * 이미 자기 자리에서 말한다. */
+  const p0Stale = fetches.facts === 'stale' || fetches.minute === 'stale';
   const sessions = minute.data?.sessions.length ?? 0;
   const batchRunning =
     overview.data?.lanes.filter(
@@ -435,7 +446,7 @@ export function IncidentsPage() {
         list={p0}
         total={pipeline.length}
         unevaluated={unevaluated.length}
-        stale={stale}
+        stale={p0Stale}
       />
       <RealtimeShortcut />
     </div>
