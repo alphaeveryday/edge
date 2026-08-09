@@ -170,6 +170,84 @@ class TestParse:
         # 아니다. 그 뜻으로 읽는 소비자를 붙이지 마라(모듈 도크스트링 7번).
         assert candle.traded is False
 
+    @pytest.mark.parametrize("short_label, silently_becomes", [
+        ("1030", "10:03:00"),    # 4자리 — 날짜 자리를 훔쳐 **다른 분**이 된다
+        ("30000", "03:00:00"),   # 선행 0 잘림(`kis_inav._time_stamp` 의 그 함정)
+        # 5자리는 선행 0 을 되붙이면 **맞는 값이 나온다** — 우연이 아니다. 그래도 막는
+        # 이유는 4자리와 구분할 근거가 없어서다(소스 주석에 논거를 적어 뒀다).
+        ("93000", "09:30:00"),
+    ])
+    def test_short_time_label_is_rejected_before_parsing(self, short_label, silently_becomes):
+        """🔴 라벨 자리수도 막아야 한다 — 안 막으면 **값이 조용히 틀린다**.
+
+        `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를 보므로 짧은 라벨이 날짜 자리를
+        훔쳐 간다(`"20260807"+"1030"` → 10:03:00). 결과의 `second` 가 0 이라 격자 가드도
+        안 걸리고, 그 봉은 멀쩡한 다른 window 에 앉아 VALID 로 확정된다.
+
+        날짜 자리수만 막았다가 Codex 리뷰(PR #645)에서 잡혔다 — 한 함정의 양쪽이다.
+        """
+        # 가드가 막는 값이 **무엇이 되는지**를 여기서 못박는다 — 주석으로만 적으면 낡는다.
+        stolen = datetime.strptime(row()["stck_bsop_date"] + short_label, "%Y%m%d%H%M%S")
+        assert stolen.strftime("%H:%M:%S") == silently_becomes
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_index_row({**row(), "stck_cntg_hour": short_label}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    def test_space_padded_label_is_rejected_even_though_it_reads_right(self):
+        """자리수만 재면 공백 패딩이 6자리째 샌다 — `strptime` 이 `%H` 에 `" 9"` 를 받는다.
+
+        ⚠️ 관대함은 파이썬 버전에 달렸다 — `%H` 의 `" \\d"` 는 3.12(런타임·CI)에 없고
+        3.14 에 있다. 그래서 값이 아니라 **가드가 막는다**만 잰다. 이미지를 올리는 날
+        조용히 열리는 문이라 미리 막아 둔다.
+        """
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_index_row({**row(), "stck_cntg_hour": " 93000"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    def test_non_ascii_digit_label_is_rejected(self):
+        """`isdecimal()` 만으로는 안 된다 — `%H` 의 `\\d` 가 유니코드 Nd 라 같은 집합이다.
+
+        `"1٠3000"` 은 `isdecimal()` 도 `strptime` 도 통과한다. 막는 건 `isascii()` 다.
+        """
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_index_row({**row(), "stck_cntg_hour": "1٠3000"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    # 🔴 **날짜 쪽**도 같이 잰다 — 라벨만 검사하면 이 두 문이 그대로 열린다.
+    @pytest.mark.parametrize("bad_date", ["202608 7", "٢٠٢٦0807"])
+    def test_date_side_leniency_is_rejected_too(self, bad_date):
+        """가드가 연접 문자열 **전체**를 봐야 하는 이유 — 관대함이 날짜 쪽에도 있다."""
+        label = row()["stck_cntg_hour"]
+        assert datetime.strptime(bad_date + label, "%Y%m%d%H%M%S") \
+            == datetime(2026, 8, 7, 10, 30)
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_index_row({**row(), "stck_bsop_date": bad_date}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    def test_well_formed_but_impossible_time_is_a_format_error(self):
+        """자리수 가드를 통과한 뒤 `strptime` 이 잡는 분기 — 메시지로 갈라 둔다.
+
+        가드가 넓어지면 이 분기가 조용히 죽는다. `pytest.raises(ValueError)` 만으로는
+        어느 문에서 걸렸는지 구분이 안 된다.
+        """
+        with pytest.raises(ValueError, match="시각 형식 오류"):
+            parse_index_row({**row(), "stck_cntg_hour": "999999"}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
+    @pytest.mark.parametrize("field, bad_length", [
+        ("stck_bsop_date", "2026087"), ("stck_bsop_date", "202608071"),
+        ("stck_cntg_hour", "1030000"),
+    ])
+    def test_date_length_drift_is_rejected_at_the_parser_too(self, field, bad_length):
+        """창 필터가 먼저 걸러도 파서 단독 호출은 막아야 한다(공개 함수다).
+
+        재는 축은 자리수가 **8·6 이 아니다**이지 "짧다"가 아니다.
+        """
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_index_row({**row(), field: bad_length}, UNIT_ID,
+                            interval_sec=LANE_INTERVAL_SEC)
+
     @pytest.mark.parametrize("broken", [
         {**row(), "stck_cntg_hour": "999999"},        # 센티넬이 파서까지 새면 형식 오류
         {**row(), "stck_bsop_date": None},            # 날짜 결측
@@ -336,9 +414,23 @@ class TestCandles:
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles(UNIT_ID, window_end=WINDOW_END)
 
-    def test_short_trade_date_does_not_eat_the_time_label(self):
+    # 🔴 Codex P2(#647). 자리수만 보면 8자 형상 위반이 필터를 통과해 "남의 날"이 되고,
+    # 페이지가 통째로 빈 결과가 된다 — 45종 전건 missing 인 INCOMPLETE 로 굳는다.
+    @pytest.mark.parametrize("bad_date", ["202608 7", "٢٠٢٦0807"])
+    def test_eight_char_malformed_date_is_not_another_day(self, bad_date):
+        """8자인데 ASCII 숫자가 아닌 거래일 — 자리수 가드만으로는 안 걸린다."""
+        assert len(bad_date) == 8
+        rows = [{**row(label), "stck_bsop_date": bad_date}
+                for label in ("103000", "103100")]
+        client, _ = make_client([TOKEN, ok(rows)])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles(UNIT_ID, window_end=WINDOW_END)
+
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다(변이로 확인) — 초과 길이도 같이 잰다.
+    @pytest.mark.parametrize("bad_length", ["2026087", "202608071"])
+    def test_trade_date_length_drift_does_not_eat_the_time_label(self, bad_length):
         """날짜 자리수가 짧으면 라벨이 조용히 다른 분으로 읽힌다 — `strptime` 은 연접을 본다."""
-        client, _ = make_client([TOKEN, ok([{**row("103000"), "stck_bsop_date": "2026087"}])])
+        client, _ = make_client([TOKEN, ok([{**row("103000"), "stck_bsop_date": bad_length}])])
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles(UNIT_ID, window_end=WINDOW_END)
 
