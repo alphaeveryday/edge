@@ -143,8 +143,9 @@ locals {
         Choices = [{ Variable = "$.ecs.Containers[0].ExitCode", NumericEquals = 0, Next = "NewsAssembleEvents" }]
         Default = "NewsNotifyFailure"
       }
-      # 이벤트 조립 — LoadAssertions 뒤 직렬(document/assertion 자연키 브리지 수렴). 시장 SFN 의
-      # analyze 가 이 스텝이 만든 event 를 기회적으로 소비한다(배리어 없음 — 준실시간 부분입력 계약).
+      # 이벤트 조립 — LoadAssertions 뒤 직렬(document/assertion 자연키 브리지 수렴). ⚠️ 여기
+      # 있던 "시장 SFN 의 analyze 가 이 event 를 소비한다"는 서술은 **ALPHA-806 부터 거짓**이다
+      # (아래 231행·statemachine.tf) — 소비자는 분봉 트리거 큐의 상주 서비스다.
       NewsAssembleEvents = merge(local.ecs_run_task_base, {
         Type  = "Task"
         Next  = "NewsAssembleEventsCheckExitCode"
@@ -224,9 +225,10 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
-# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 밀린 것을 장중 수집 시작 09:00 전에 털어 분 격자를
-# 1페이지로 유지) + day-close 23:50(장외·야간 뉴스로 하루치 완결, assemble 단일일 창의 오버나잇
-# 갭 보전). 슬롯 정의·근거의 SSOT 는 `news_schedule_expressions` 주석이다.
+# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 유입분을 장 시작 전에 배치 코퍼스로 확정 — 09:00
+# 전에 끝나야 하는 이유는 1분 레인과 같은 BigKinds·같은 IP 를 치기 때문이다) + day-close 23:50
+# (장외·야간 뉴스로 하루치 완결, assemble 단일일 창의 오버나잇 갭 보전). 슬롯 정의·근거의
+# SSOT 는 `news_schedule_expressions` 주석이다.
 #
 # 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD 런의 analyze 에 그날 뉴스를 공급**하려고 있었다.
 # EOD 가격 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 ALPHA-893 이 내렸다 —

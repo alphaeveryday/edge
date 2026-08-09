@@ -208,9 +208,23 @@ variable "schedule_state" {
 # ⚠️ 커버리지는 슬롯 수가 아니라 **창**이 정한다 — 창이 `[어제, 오늘]` 2일이라 날 X 는 X일
 # 23:50 런과 **X+1일 08:10 런**이 이중으로 덮는다. 슬롯을 지워도 남은 런의 창은 안 커진다
 # (증분 커서가 없어 매 런이 창 전체를 다시 긁는다).
-# ⚠️ **08:10 은 09:00 전에 끝나야 한다** — 뉴스 분 격자가 09:00~15:30 고정이고(minute/models.py:
-# `EXTENDED_HOURS_DATASETS` 에 뉴스 없음) 08:10 의 목적이 그 격자를 1페이지로 유지하는 것이다.
-# 여유는 50분이고 성공 런 실측이 15~17분(2026-08-09)이라 평시엔 08:25~08:27 에 끝난다.
+# ⚠️ **컷오버 1회 부담**: apply 순간 `OPS_NEWS_SCHED_HHMM` 이 08:10,23:50 으로 갈리므로
+# `entry._due_slots` 는 그 뒤로 15:00·15:30 run_key 를 만들지 않는다 — 그때 in-flight 였던
+# 오후 런과 열려 있던 뉴스 `PLANNER_MISSING` 은 자동 해소 경로를 잃고 OPEN 으로 남는다
+# (공시 컷오버가 같은 값을 치렀다 — infra/terraform/README.md). 15:00~16:00 KST 밖에서
+# apply 하거나, 그 슬롯을 `OPS_RUN_KEY=news:<날짜>T15:00` 로 지목해 `reconcile` 을 한 번 돌려라.
+# ⚠️ **08:10 은 09:00 전에 끝나야 한다 — 이유는 벤더 경합이지 분 격자가 아니다.** 배치와 1분
+# 레인은 같은 BigKinds 를 같은 요청 형상(`sources.bigkinds.search_page` 공유)·같은 IP 로 친다
+# (minute/bigkinds_feed.py 헤더). 09:00 에 뉴스 분 격자가 열리는데(minute/models.py:
+# `EXTENDED_HOURS_DATASETS` 에 뉴스 없음 → 항상 09:00) 그때까지 배치가 돌고 있으면 두 레인의
+# 요청이 겹쳐 pacing 이 합산되고, BigKinds 차단(ALPHA-645: 400+HTML·403·429)은 재시도가 차단을
+# **연장**하는 종류다. 여유는 50분이고 성공 런 실측이 15~17분(2026-08-09)이라 평시엔 08:25~08:27
+# 에 끝난다.
+# ⚠️ **08:10 이 분 레인의 첫 poll 을 줄여 주지는 않는다.** 두 레인의 원장이 분리돼 있다 —
+# 분 워커의 anchor 는 `news_poll_anchor`(세션 id 축, minute/news_worker.py)인데 배치 경로는
+# 그 표를 쓰지 않는다. 그래서 09:00 첫 poll 은 배치가 뭘 담았든 anchor 없는 seed poll
+# (`max_pages` 4×100, minute/news_overlap.py)이다. 이 슬롯이 파는 것은 **배치 코퍼스의
+# 커버리지**지 분 레인의 페이지 수가 아니다.
 # ⚠️ 다만 **50분이 코드로 강제되지는 않는다.** `news_state_machine_timeout_seconds`(40분)는
 # Planner 컨테이너가 떠서 StartExecution 을 부른 **뒤부터** 재므로 Scheduler 의 RunTask 제출
 # ~컨테이너 기동(ENI·이미지 pull, 실측 ~68초)은 그 40분 밖이다 — 이 레포에서 이미 여유를

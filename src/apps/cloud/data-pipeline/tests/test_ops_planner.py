@@ -628,9 +628,9 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
 
     early = [(h, m) for h, m in slots if (h, m) < (9, 0)]
     assert early, (
-        "09:00 KST 이전 뉴스 슬롯이 사라졌다. 배치가 장중 수집(뉴스 분 격자 09:00~) 시작 전에 "
-        "밤새 밀린 것을 털어 첫 수집을 1페이지로 유지한다는 ALPHA-893 의 결정이 배선에서 빠진 "
-        "것이다 — 의도한 변경이면 이 단언과 variables.tf 주석을 함께 고쳐라")
+        "09:00 KST 이전 뉴스 슬롯이 사라졌다. 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다는 "
+        "ALPHA-893 의 결정이 배선에서 빠진 것이다 — 의도한 변경이면 이 단언과 variables.tf 주석을 "
+        "함께 고쳐라")
     for hour, minute in early:
         at = datetime(2026, 7, 3, hour, minute, tzinfo=run_mod.KST)
         window = run_mod.default_window(
@@ -639,6 +639,32 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
             f"{hour:02d}:{minute:02d} 슬롯의 창이 {window} — 그날(07-03)이 끝 날짜가 아니다. "
             "창 날짜가 벤더 달력(KST)이 아니라 프로세스 시계(UTC)로 뽑히면 이 슬롯은 "
             "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
+
+
+def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
+    # WHY(ALPHA-893): 뉴스 SFN 타임아웃을 묶던 불변식이 **바뀌었다**. 옛 상한 25분의 근거는
+    #      "인접 슬롯 간격 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였는데 그 두 슬롯이
+    #      내려가 최소 간격이 8시간 20분이 됐다. 그 자리를 대신하는 상한이 이것이다 —
+    #      **09:00 전 슬롯은 자기 타임아웃을 다 써도 09:00 을 넘지 않아야 한다.** 넘으면 배치가
+    #      1분 뉴스 워커와 같은 BigKinds 를 같은 IP 로 동시에 쳐서(minute/bigkinds_feed.py 는
+    #      요청 형상을 배치와 공유한다) pacing 이 합산되고, 차단(ALPHA-645)은 재시도가 **연장**
+    #      하는 종류라 그날 두 레인이 함께 죽는다. 두 값이 **다른 변수**(크론 vs 타임아웃)에
+    #      있어 한쪽만 늘려도 아무것도 안 깨진다 — 그 결합을 여기서 붙든다.
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(
+        r'variable\s+"news_state_machine_timeout_seconds"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "news_state_machine_timeout_seconds 를 못 찾았다 — 파서가 낡았다"
+    timeout_sec = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+
+    slots = [(int(h), int(m)) for m, h in
+             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+    for hour, minute in [s for s in slots if s < (9, 0)]:
+        end_min = hour * 60 + minute + timeout_sec // 60
+        assert end_min <= 9 * 60, (
+            f"{hour:02d}:{minute:02d} 슬롯 + 타임아웃 {timeout_sec // 60}분 = "
+            f"{end_min // 60:02d}:{end_min % 60:02d} 로 09:00 을 넘는다. 배치가 1분 뉴스 레인과 "
+            "같은 벤더를 동시에 치는 창이 열린다 — 슬롯을 앞당기거나 타임아웃을 줄여라")
 
 
 def test_every_sched_hhmm_env_has_a_weekend_sibling():
