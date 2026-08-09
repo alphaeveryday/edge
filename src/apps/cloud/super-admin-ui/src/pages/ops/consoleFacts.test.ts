@@ -59,7 +59,8 @@ test('어휘 밖 데이터셋의 job 원장은 0이 아니라 모름이다 — �
    * `평가됨 · 조건에 걸린 것 없음` 을 낸다 — 원장 부재가 정상으로 그려진다. */
   const f = minuteFacts(status([session('inav_minute', 'kis')]));
   assert.equal(f.sessions[0].deadJobs, null, '모르는 원장을 0으로 채웠다');
-  assert.deepEqual(f.deadJobsByDate, []);
+  /* 날짜 축 맵에도 안 들어간다 — 어느 원장을 읽어야 할지 모르는 데이터셋이다 */
+  assert.equal('inav_minute' in f.deadJobsByDataset, false);
 });
 
 test('뉴스 DEAD 는 날짜 축 집계라고 밝힌다 — 안 밝히면 규칙이 벤더마다 같은 사실을 복제한다', () => {
@@ -68,17 +69,32 @@ test('뉴스 DEAD 는 날짜 축 집계라고 밝힌다 — 안 밝히면 규칙
   const f = minuteFacts(
     status([session('news_minute', 'bigkinds'), session('news_minute', 'future_vendor')], 3),
   );
-  /* 두 세션 다 같은 값(3)을 받는다 — 그래서 **축을 밝히는 것**이 유일한 방어다 */
-  assert.deepEqual(f.sessions.map((s) => s.deadJobs), [3, 3]);
-  /* 축은 **데이터셋 하나당 한 번** 실린다 — 세션 수만큼이 아니다. 세션 필드였을 때는 벤더가
-   * 둘이면 표기도 둘이었고, 둘이 갈리는 상태(한쪽만 true)가 타입상 표현 가능했다. */
-  assert.deepEqual(f.deadJobsByDate, ['news_minute']);
+  /* 값이 세션에 안 실린다 — 세션 축으로는 **모름**이다(그 원장이 세션에 안 붙어 있다) */
+  assert.deepEqual(f.sessions.map((s) => s.deadJobs), [null, null]);
+  /* 값은 데이터셋 하나당 **한 자리**에 선다. 세션에 실려 있던 동안은 벤더 수만큼 복제할
+   * 여지가 구조적으로 남아 있었다(둘 다 3을 들고 있었다). */
+  assert.deepEqual(f.deadJobsByDataset, { news_minute: 3 });
 });
 
-test('가격 DEAD 는 세션에 붙은 값이라 날짜 축 표기가 없다 (두 축을 뭉치면 방어가 사라진다)', () => {
+test('가격 DEAD 는 세션에 붙은 값이다 (두 축을 뭉치면 방어가 사라진다)', () => {
   const f = minuteFacts(status([session('price_minute', 'kis', 4)], 99));
   assert.equal(f.sessions[0].deadJobs, 4, '가격은 세션 job 을 읽어야 한다(날짜 집계 99 가 아니다)');
-  assert.deepEqual(f.deadJobsByDate, [], '가격을 날짜 축으로 표기했다');
+  assert.equal('price_minute' in f.deadJobsByDataset, false, '가격을 날짜 축에 실었다');
+});
+
+test('🔴 뉴스 세션이 없어도 그날 DEAD 는 실린다 — 세션 순회로 읽으면 하필 그날 조용해진다', () => {
+  /* `news_extraction_job` 에는 `session_id` 도 `session_date` 도 없다(가격 job 은 `session_id` 를
+   * 가진다). `newsJobs` 는 `created_at` 하루 창 집계라 **세션과 다른 컬럼으로 잘린다**.
+   * 세션이 없는 날은 실제로 있다: 아침 planner 전(자정~계획 사이의 재시도) · 비거래일 ·
+   * **뉴스 계획만 실패한 날**(파이프라인이 의도적으로 만드는 경로 — 가격은 세우고 news-worker 는
+   * 안 올린다). 하필 그날이 R19 가 가장 시끄러워야 할 날이다. */
+  const noSession = minuteFacts(status([], 3));
+  assert.deepEqual(noSession.sessions, []);
+  assert.deepEqual(noSession.deadJobsByDataset, { news_minute: 3 }, '세션이 없다고 유실을 버렸다');
+
+  /* 가격 세션만 있는 날도 같다 — 뉴스 계획만 실패한 날의 실제 모양이다 */
+  const priceOnly = minuteFacts(status([session('price_minute', 'kis', 0)], 3));
+  assert.deepEqual(priceOnly.deadJobsByDataset, { news_minute: 3 });
 });
 
 test('조회 상태 — 데이터 유무와 조회 성공은 다른 축이다', () => {

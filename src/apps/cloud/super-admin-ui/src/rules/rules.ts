@@ -756,88 +756,83 @@ export const RULES: Rule[] = [
      * 판정 대상에서 빠지는데, 그게 규칙 전체에 걸치면 `평가됨 · 위반 0`("봤고 괜찮다")이 된다 —
      * 어댑터가 지킨 구분이 판정 층에서 소멸하던 자리다(어휘 밖 데이터셋만 있는 날의 모양).
      * 세션이 **0건**인 것은 다르다: 그건 실측이고 잃을 후속 작업 자체가 없다. */
+    /* 판정할 원장을 **하나도** 못 읽으면 못 돎이다. 두 축을 다 센다 — 날짜 축(데이터셋 맵)과
+     * 세션 축(그 맵에 없는 데이터셋의 세션). 세션도 맵도 비었으면 그건 실측이다(그날 실시간
+     * 레인이 없었고 잃을 후속 작업도 없다) — 못 돎으로 세면 안 도는 날마다 거짓 경보가 뜬다. */
     canRun: (f) => {
-      const ss = f.minute?.sessions;
-      if (!ss) return false;
-      /* 🔴 **축 선언이 없으면 못 돈다.** 타입은 `deadJobsByDate` 를 필수로 두지만 응답은 런타임
-       * 검증을 안 거치고 온다 — 빠지면 `new Set(undefined)` 가 빈 집합이 되어 날짜 축 뉴스 DEAD 가
-       * 조용히 세션 축으로 재분류되고, 벤더가 둘인 날 같은 3건이 두 사건으로 선다.
-       * 그 재분류는 이 규칙이 막으려던 결함 자체라, 선언이 없으면 판정하지 않는다. */
-      if (!Array.isArray(f.minute?.deadJobsByDate)) return false;
-      /* `deadJobs` 는 유한수여야 안다 — `NaN`·`''`·`[]` 는 `!= null` 을 통과하지만 `>= 1` 이
-       * 거짓이라 "봤고 0건"으로 인증된다. 모르는 값은 모름으로 접는다. */
-      return ss.length === 0 || ss.some((s) => Number.isFinite(s.deadJobs));
+      const m = f.minute;
+      if (!m) return false;
+      /* 🔴 축 선언(맵) 자체가 없으면 못 돈다 — 응답은 런타임 검증을 안 거치고 오고, 빠진 것을
+       * 빈 맵으로 접으면 날짜 축 데이터셋이 조용히 세션 축으로 재분류된다(벤더 수만큼 복제). */
+      if (!m.deadJobsByDataset || typeof m.deadJobsByDataset !== 'object') return false;
+      const by = m.deadJobsByDataset;
+      if (m.sessions.length === 0 && Object.keys(by).length === 0) return true;
+      return (
+        Object.values(by).some((v) => Number.isFinite(v)) ||
+        m.sessions.some((x) => !(x.dataset in by) && Number.isFinite(x.deadJobs))
+      );
     },
     axis: 'minute',
     /* 일부만 모르는 날은 규칙 단위 `못 돎` 으로 표현할 수 없다 — 어느 데이터셋이 판정에서
      * 빠졌는지 밝힌다. 안 밝히면 그 데이터셋의 유실이 "0건"에 흡수돼 보인다. */
     note: (f) => {
-      const unknown = [
-        ...new Set(
-          (f.minute?.sessions ?? []).filter((s) => !Number.isFinite(s.deadJobs)).map((s) => s.dataset),
-        ),
-      ];
-      return unknown.length
-        ? `후속 처리 원장을 못 읽는 데이터셋 ${unknown.join('·')} — 그 유실은 이 판정에 없다(0건이 아니다)`
+      const m = f.minute;
+      if (!m) return null;
+      const by = m.deadJobsByDataset ?? {};
+      const unknown = new Set<string>();
+      for (const [d, v] of Object.entries(by)) if (!Number.isFinite(v)) unknown.add(d);
+      for (const x of m.sessions) {
+        if (!(x.dataset in by) && !Number.isFinite(x.deadJobs)) unknown.add(x.dataset);
+      }
+      return unknown.size
+        ? `후속 처리 원장을 못 읽는 데이터셋 ${[...unknown].join('·')} — 그 유실은 이 판정에 없다(0건이 아니다)`
         : null;
-      /* `unknown` 은 아래 필터와 같은 축(유한수가 아니면 모름)이라야 한다 — 갈리면 note 가
-       * 침묵하는 사이 그 세션이 판정에서 빠진다 */
     },
     run: (f) => {
       const date = f.minute?.date ?? '';
-      /* 축은 **데이터셋의 성질**이라 데이터셋 집합으로 온다 — 세션마다 실려 오면 같은
-       * 데이터셋의 두 세션이 다른 축을 갖는 상태가 표현 가능해지고, 그게 안 난다는 보증이
-       * 어댑터의 습관에 걸린다(`MinuteFacts.deadJobsByDate`). */
-      /* `canRun` 이 배열임을 이미 확인했다 — 여기서 `?? []` 로 접으면 그 판정이 무의미해진다 */
-      const byDateAxis = new Set(f.minute!.deadJobsByDate);
-      const byDate = new Set<string>();
-      return (
-        (f.minute?.sessions ?? [])
-          /* 임계 1건 — DEAD 는 재시도가 끝난 **종료 상태**다. 누적치가 아니라 유실 확정이라
-           * "몇 건부터"를 둘 근거가 없다. P1 인 이유: 수집 자체는 살아 있고 재투입으로 복구 가능하다. */
-          /* `null` 은 0이 아니라 **모름**이다 — 어느 원장을 읽어야 할지 모르는 데이터셋을
-           * "봤고 괜찮다"로 접지 않는다. 판정 대상에서 빠질 뿐이다(R17·R18 은 그대로 돈다). */
-          .filter((s) => Number.isFinite(s.deadJobs) && (s.deadJobs as number) >= 1)
-          .flatMap((s) => {
-            /* ⚠️ **값의 입도가 사건의 입도를 정한다.** 뉴스 job 은 세션 연결 컬럼이 없어
-             * `(dataset, date)` 집계 하나뿐이다(어댑터가 `deadJobsByDate` 로 밝힌다). 그걸
-             * 세션마다 내면 벤더 둘인 날 같은 3건이 두 사건으로 서서 6건으로 읽히고, 어느
-             * 벤더 소관인지 근거도 없다 — 모르는 것을 벤더별로 복제하는 셈이다. */
-            if (byDateAxis.has(s.dataset)) {
-              if (byDate.has(s.dataset)) return [];
-              byDate.add(s.dataset);
-              return [
-                {
-                  target: s.dataset,
-                  targetId: s.dataset,
-                  scope: date,
-                  title: `${s.dataset} 후속 처리 유실`,
-                  metric: s.deadJobs,
-                  unit: '건',
-                  /* "못 가른다"가 아니라 **지금 응답이 안 가른다**. 원장에는 축이 있다
-                   * (`news_extraction_job.source_code`) — 조회가 날짜 창만 걸고 GROUP BY 를
-                   * 안 한다. 불가능으로 못박으면 아무도 그 쿼리를 고치지 않는다. */
-                  why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다. 이 수는 지금 응답이 날짜 축으로만 주어 벤더로 갈리지 않는다',
-                  evidence: `후속 처리 작업 원장 ${date} dead (데이터셋·날짜 집계)`,
-                  drill: ['dataset', 'ds-' + s.dataset] as [string, string],
-                },
-              ];
-            }
-            return [
-              {
-                target: sessionLabel(s),
-                targetId: sessionTarget(s),
-                scope: date,
-                title: `${sessionLabel(s)} 후속 처리 유실`,
-                metric: s.deadJobs,
-                unit: '건',
-                why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',
-                evidence: `후속 처리 작업 원장 ${date} dead`,
-                drill: ['dataset', 'ds-' + s.dataset] as [string, string],
-              },
-            ];
-          })
-      );
+      const by = f.minute?.deadJobsByDataset ?? {};
+      const out: ReturnType<Rule['run']> = [];
+      /* ⚠️ **값의 입도가 사건의 입도를 정한다.** 뉴스 job 은 세션 연결 컬럼이 없어
+       * `(dataset, date)` 집계 하나뿐이다. 그걸 세션마다 내면 벤더 둘인 날 같은 3건이 두
+       * 사건으로 서서 6건으로 읽히고, 어느 벤더 소관인지 근거도 없다.
+       * 그리고 **세션을 순회하지 않는다** — 그날 그 데이터셋의 세션이 없어도(아침 planner 전 ·
+       * 비거래일 · 뉴스 계획만 실패한 날) 유실은 있다. 순회로 읽으면 하필 그날 조용해진다. */
+      for (const [dataset, dead] of Object.entries(by)) {
+        if (!Number.isFinite(dead) || (dead as number) < 1) continue;
+        out.push({
+          target: dataset,
+          targetId: dataset,
+          scope: date,
+          title: `${dataset} 후속 처리 유실`,
+          metric: dead as number,
+          unit: '건',
+          /* "못 가른다"가 아니라 **지금 응답이 안 가른다**. 원장에는 축이 있다
+           * (`news_extraction_job.source_code`) — 조회가 날짜 창만 걸고 GROUP BY 를 안 한다.
+           * 불가능으로 못박으면 아무도 그 쿼리를 고치지 않는다. */
+          why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다. 이 수는 지금 응답이 날짜 축으로만 주어 벤더로 갈리지 않는다',
+          evidence: `후속 처리 작업 원장 ${date} dead (데이터셋·날짜 집계)`,
+          drill: ['dataset', 'ds-' + dataset] as [string, string],
+        });
+      }
+      /* 세션 축 — 날짜 축으로 이미 낸 데이터셋은 건너뛴다(같은 사실을 두 번 내지 않는다) */
+      for (const s of f.minute?.sessions ?? []) {
+        if (s.dataset in by) continue;
+        /* `null`·수 아닌 값은 0이 아니라 **모름**이다 — 어느 원장을 읽어야 할지 모르는
+         * 데이터셋을 "봤고 괜찮다"로 접지 않는다. 판정 대상에서 빠질 뿐이고 `note` 가 밝힌다. */
+        if (!Number.isFinite(s.deadJobs) || (s.deadJobs as number) < 1) continue;
+        out.push({
+          target: sessionLabel(s),
+          targetId: sessionTarget(s),
+          scope: date,
+          title: `${sessionLabel(s)} 후속 처리 유실`,
+          metric: s.deadJobs as number,
+          unit: '건',
+          why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',
+          evidence: `후속 처리 작업 원장 ${date} dead`,
+          drill: ['dataset', 'ds-' + s.dataset] as [string, string],
+        });
+      }
+      return out;
     },
   },
 ];

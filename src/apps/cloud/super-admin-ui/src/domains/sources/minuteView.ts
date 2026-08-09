@@ -41,9 +41,17 @@ export type ViewTone = 'active' | 'neutral' | 'gated' | 'warn' | 'blocked' | 'en
  */
 export type DatasetKind = 'price' | 'news' | 'other';
 
+/**
+ * 날짜 축 job 원장을 쓰는 데이터셋 — `news_extraction_job` 에는 `session_id` 도 `session_date` 도
+ * 없고 `created_at` 뿐이다(가격 job 은 `session_id` 를 가진다). 그래서 이 데이터셋의 유실은
+ * **세션이 아니라 날짜**에 매달리고, 세션이 없는 날에도 값이 있을 수 있다.
+ * 이름을 상수로 두는 이유: 세션 목록에서 유도할 수 없는 자리(어댑터)가 있다.
+ */
+export const NEWS_MINUTE_DATASET = 'news_minute';
+
 export function datasetKind(dataset: string): DatasetKind {
   if (dataset === 'price_minute') return 'price';
-  if (dataset === 'news_minute') return 'news';
+  if (dataset === NEWS_MINUTE_DATASET) return 'news';
   return 'other';
 }
 

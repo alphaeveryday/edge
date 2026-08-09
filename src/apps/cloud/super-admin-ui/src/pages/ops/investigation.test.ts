@@ -307,10 +307,10 @@ test('생산자↔소비자 왕복 — 조사 문맥이 실제 세션 행과 맞
       date: '2026-08-03',
       sessions: [
         { dataset: 'price_minute', sourceGroup: 'kis', phase: 'ACTIVE', leaseExpired: true, overdueNoEvidence: 0, deadJobs: 0 },
-        { dataset: 'news_minute', sourceGroup: 'bigkinds', phase: 'ACTIVE', leaseExpired: false, overdueNoEvidence: 0, deadJobs: 3 },
+        { dataset: 'news_minute', sourceGroup: 'bigkinds', phase: 'ACTIVE', leaseExpired: false, overdueNoEvidence: 0, deadJobs: null },
       ],
       /* 뉴스 DEAD 는 날짜 축 집계다 — 그 사건만 벤더를 안 지목한다 */
-      deadJobsByDate: ['news_minute'],
+      deadJobsByDataset: { news_minute: 3 },
     },
   };
   const ev = evaluate(f, new Date('2026-08-03T16:21:00+09:00'));
