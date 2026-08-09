@@ -159,24 +159,32 @@ def test_every_disposition_is_timed(capsys, monkeypatch):
     ], "한 갈래라도 빠지면 그 갈래는 규모 산정에서 통째로 사라진다"
 
 
-def test_delete_failure_still_records_the_occupancy(capsys):
-    """삭제가 던져도 그 메시지의 점유는 남아야 한다(ALPHA-908).
+def test_delete_time_counts_and_survives_delete_failure(capsys, monkeypatch):
+    """삭제에 든 시간은 점유이고, 삭제가 던져도 그 점유는 남아야 한다(ALPHA-908).
 
-    delete 실패는 이 루프를 그대로 죽이는데, 죽는 순간의 표본이야말로 가장 오래 점유한
-    쪽일 수 있다. 로그를 삭제 뒤에 두면 그 표본만 골라 잃는다 — 규모를 정하는 입력에서
-    사고 시각의 꼬리가 빠지는 것이 이 테스트가 막는 회귀다.
+    삭제를 로그 앞뒤 어디에 두든 한 방향으로 틀린다 — 앞이면 SDK 재시도로 멈춰 있던
+    시간이 점유에서 빠지고(그동안 다음 메시지를 못 받는다), 뒤면 삭제가 던질 때 그
+    사고의 표본이 통째로 사라진다. 하필 둘 다 **가장 오래 점유한 쪽**을 골라 잃어서,
+    대수를 정하는 입력의 꼬리만 깎인다. 그래서 `finally` 가 계약이다.
+
+    삭제가 시간을 먹게 만드는 이유: 그러지 않으면 로그를 다시 삭제 앞으로 옮겨도
+    경과가 같아 이 테스트가 통과한다 — 지키려는 계약의 반례를 거부하지 못한다.
     """
-    class DeleteBoom(FakeSqs):
+    clock = {"t": 100.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["t"])
+
+    class SlowDeleteBoom(FakeSqs):
         def delete_message(self, **_):
+            clock["t"] += 600.0          # SDK 재시도로 멈춰 있던 시간
             raise RuntimeError("sqs 삭제 실패")
 
-    sqs = DeleteBoom([envelope("t1")])
+    sqs = SlowDeleteBoom([envelope("t1")])
     with pytest.raises(RuntimeError):
         consume_triggers("q", max_polls=1, process_fn=lambda _: "explained",
                          sqs_client=sqs)
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get("event") == "consumer.message"]
-    assert [e["outcome"] for e in events] == ["explained"]
+    assert [(e["outcome"], e["elapsed_s"]) for e in events] == [("explained", 600.0)]
 
 
 def test_generic_failure_leaves_message_and_fails_bounded_run():
