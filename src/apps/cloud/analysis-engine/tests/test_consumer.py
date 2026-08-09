@@ -255,6 +255,53 @@ def test_lock_precedes_duplicate_preflight():
     assert calls == ["lock", "preflight", "close"]
 
 
+def test_archive_failure_is_retried_then_only_completed_delivery_is_deduplicated(monkeypatch):
+    """S3 실패 delivery는 complete gate를 세우지 않아 두 번째가 실행되고, 세 번째만 skip한다."""
+    import edge_analysis.consumer as consumer_module
+    from edge_analysis.adapters.archive import RunArchiveError
+
+    state = {"complete": False, "deliveries": 0, "closes": 0}
+
+    class StatefulStore:
+        def try_lock_route(self, route_id):
+            return True
+
+        def has_run_for_route(self, route_id):
+            return state["complete"]
+
+        def close(self):
+            state["closes"] += 1
+
+        @classmethod
+        def connect(cls, settings):
+            return cls()
+
+    def delivery(settings, **kwargs):
+        state["deliveries"] += 1
+        if state["deliveries"] == 1:
+            raise RunArchiveError("first S3 put failed")
+        state["complete"] = True       # models the post-archive DB transaction
+        return 0
+
+    from types import SimpleNamespace
+    fake_settings = SimpleNamespace(
+        lake_bucket="bucket", deepseek_api_key="key", deepseek_model="model")
+    monkeypatch.setattr(consumer_module, "load_settings", lambda **_: fake_settings)
+    monkeypatch.setattr(consumer_module, "EventStore", StatefulStore)
+    monkeypatch.setattr(consumer_module, "make_s3_client", lambda settings: object())
+    monkeypatch.setattr(consumer_module, "LakeReader", lambda *args: object())
+    monkeypatch.setattr(consumer_module, "DeepSeekClient", lambda *args: object())
+    monkeypatch.setattr(consumer_module, "run", delivery)
+
+    with pytest.raises(RunArchiveError, match="first S3 put failed"):
+        consumer_module.process_trigger("t1")
+    assert not state["complete"]
+    assert consumer_module.process_trigger("t1") == "explained"
+    assert state["complete"]
+    assert consumer_module.process_trigger("t1") == "skipped_duplicate"
+    assert state == {"complete": True, "deliveries": 2, "closes": 3}
+
+
 def test_lock_failure_skips_the_pipeline_entirely():
     """락을 못 잡으면 프리플라이트조차 보지 않고 빠진다 — 그 뒤는 전부 LLM 을 태우는
     경로다(ALPHA-779). 커넥션은 반드시 닫힌다: 세션 락 해제가 close 에 매달려 있어

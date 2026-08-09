@@ -63,6 +63,14 @@ class WindowCandidate(NamedTuple):
     route_code: str
 
 
+class ExplanationPersistencePlan(NamedTuple):
+    """Archive-first handoff: the exact identifiers the DB transaction will use."""
+
+    explanation_as_of: str
+    run_id: str
+    result_id: str
+
+
 def minute_observation_id(trigger_id: str) -> str:
     """분봉 트리거 계보의 observation id — trigger_id 결정적 파생(멱등 upsert 재료)."""
     return stable_id("cob", trigger_id)
@@ -152,6 +160,18 @@ class EventStore:
                 (route_id,),
             )
             return cur.fetchone() is not None
+
+    def plan_explanation(
+        self, settings: Settings, etf_instrument_id: str, *, route_id: str,
+    ) -> ExplanationPersistencePlan:
+        """Plan IDs before the required archive; no database state is changed."""
+        explanation_as_of = datetime.now(timezone.utc).isoformat()
+        run_id = stable_id(
+            "run", etf_instrument_id, settings.trade_date.isoformat(),
+            explanation_as_of, route_id,
+        )
+        return ExplanationPersistencePlan(
+            explanation_as_of, run_id, stable_id("res", run_id))
 
     def window_candidates(self, trade_date: date) -> list[WindowCandidate]:
         """당일 분봉 trigger→observation→route가 모두 있는 ETF의 최신 route."""
@@ -643,6 +663,7 @@ class EventStore:
         events: list[EventContext],
         run_reason: str = "DAILY",
         publishable: bool = True,
+        plan: ExplanationPersistencePlan | None = None,
     ) -> dict[str, str | int | None]:
         """explanation_run + explanation_result + 근거 lineage를 한 트랜잭션으로 적재한다."""
         import json
@@ -654,13 +675,12 @@ class EventStore:
         # 끝난 서로 다른 발화 둘이 모두 PUBLISHED 를 타며 충돌해 두 번째 INSERT 가
         # 터진다(ON CONFLICT 는 PK 만 커버). route 축 정책(ALPHA-710)에선 둘 다 게시가
         # 맞다 — 정밀도로 충돌을 없앤다(정확 일치는 유니크가 fail-loud 백스톱).
-        explanation_as_of = datetime.now(timezone.utc).isoformat()
+        plan = plan or self.plan_explanation(
+            settings, etf_instrument_id, route_id=route_id)
+        explanation_as_of = plan.explanation_as_of
         event_count = len(events)
-        run_id = stable_id(
-            "run", etf_instrument_id, settings.trade_date.isoformat(),
-            explanation_as_of, route_id,
-        )
-        result_id = stable_id("res", run_id)
+        run_id = plan.run_id
+        result_id = plan.result_id
         # **NUL(0x00) 소거 - Postgres TEXT·JSONB 는 NUL 을 원리적으로 못 담는다.**
         # 벤더 원문(뉴스 제목·리드)에서 흘러온 제어문자가 산문·stage_results 에 실리면
         # 이 INSERT 가 통째로 죽는다(08-07 재실행 실측: 직전 거래일 사건 문맥 확장이

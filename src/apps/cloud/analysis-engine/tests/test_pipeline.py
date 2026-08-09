@@ -146,6 +146,10 @@ class _FakeStore:
         self.calls.append("persist_explanation")
         return {"persisted": "rds", "explanation_result_id": "res_1", "run_id": "run_1"}
 
+    def plan_explanation(self, settings, etf_instrument_id, *, route_id):
+        from edge_analysis.adapters.eventstore import ExplanationPersistencePlan
+        return ExplanationPersistencePlan("2026-07-16T01:00:00.000001+00:00", "run_1", "res_1")
+
     def persist_hypothesis_trials(self, rows, **kwargs):
         self.calls.append("persist_hypothesis_trials")
         self.trials = (rows, kwargs)
@@ -219,6 +223,53 @@ def test_triggered_day_persists_the_explanation():
     bodies = [json.loads(p["Body"].decode("utf-8")) for p in s3.puts]
     archive = next(b for b in bodies if b.get("outcome") == "explained")
     assert "events" in archive  # 런 아카이브 이벤트 키 — 구 "kodex_events" 는 소비자 계약이 아니다
+
+
+def test_required_archive_precedes_database_completion(monkeypatch):
+    """필수 감사본이 실패한 delivery 는 완료 run/게시/fanout 을 만들면 안 된다.
+
+    소비자 dedup 권위가 explanation_run 존재이므로 DB가 먼저면 첫 S3 장애 뒤 재배달이
+    영구 skip 된다. archive 성공 뒤에만 DB 완료가 가능하다는 순서를 고정한다.
+    """
+    from edge_analysis.adapters.archive import RunArchiveError
+
+    order = []
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    original_persist = store.persist_explanation
+
+    def persist(*args, **kwargs):
+        order.append("database_complete")
+        return original_persist(*args, **kwargs)
+
+    def fail_archive(*args, **kwargs):
+        order.append("archive_failed")
+        raise RunArchiveError("s3 down")
+
+    store.persist_explanation = persist
+    monkeypatch.setattr("edge_analysis.pipeline.write_run_archive", fail_archive)
+
+    with pytest.raises(RunArchiveError, match="s3 down"):
+        _run(store, _FakeS3())
+    assert order == ["archive_failed"]
+    assert "persist_explanation" not in store.calls
+
+
+def test_archive_contains_the_exact_planned_database_ids(monkeypatch):
+    """archive-first 는 아직 없는 DB outcome 을 성공처럼 꾸미지 않는다.
+
+    대신 같은 delivery 에 DB writer가 사용할 계획 ID를 담아 orphan archive도 복구·대조
+    가능해야 한다. writer가 다른 ID를 만들면 이 계약은 거짓이 된다.
+    """
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    archive = next(json.loads(p["Body"].decode("utf-8")) for p in s3.puts
+                   if json.loads(p["Body"].decode("utf-8")).get("outcome") == "explained")
+    assert archive["persistence_plan"]["run_id"] == "run_1"
+    assert archive["persistence_plan"]["result_id"] == "res_1"
+    assert archive["persistence_plan"]["state"] == "PLANNED"
+    assert "persistence" not in archive
 
 
 def test_statics_failure_is_persisted_as_low_confidence():

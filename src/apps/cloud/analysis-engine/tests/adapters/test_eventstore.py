@@ -240,6 +240,20 @@ def test_persist_records_lineage_only_for_events_that_have_evidence(monkeypatch)
     assert conn.committed
 
 
+def test_persist_uses_the_ids_planned_before_the_required_archive():
+    """archive에 적은 계획과 실제 DB run/result가 갈라지면 orphan 복구 단서가 거짓이다."""
+    store = EventStore(_FakeConn())
+    plan = store.plan_explanation(_settings(), "inst_ETF", route_id="rte_1")
+
+    ids = store.persist_explanation(
+        _settings(), "inst_ETF", Explanation({"explain": "본문"}),
+        route_id="rte_1", bundle=None, primary_thread_id=None, events=[], plan=plan,
+    )
+
+    assert ids["run_id"] == plan.run_id
+    assert ids["explanation_result_id"] == plan.result_id
+
+
 def test_persist_without_any_evidence_skips_the_lineage_insert(monkeypatch):
     """근거가 하나도 없으면 빈 INSERT 를 던지지 않는다 — VALUES 가 비면 문법 오류다."""
     import psycopg2.extras

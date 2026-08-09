@@ -691,6 +691,37 @@ def run(
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,
         confidence=explanation.confidence_level, bundles=len(verdicts.bundles))
+    persistence_plan = store.plan_explanation(
+        settings, etf_instrument_id, route_id=prereqs["route"])
+    # Required audit archive is the completion barrier.  The consumer's duplicate gate is an
+    # explanation_run, so publishing first would make an S3 failure permanently non-retryable.
+    # The planned IDs make an archive orphan self-contained; the deterministic request key lets
+    # a retry overwrite it before starting its own DB transaction.
+    write_run_archive(s3, settings, {
+        "outcome": "explained",
+        "trigger": asdict(gate),
+        "route_code": route_code,
+        "decomposition": decomp_summary(decomp),
+        "holdings_asof": holdings_asof,
+        "events": archived_events(events),
+        "explanation": explanation.raw,
+        "verification": {
+            "hypothesis_trials": list(trial_rows),
+            "stat_tests": list(stat_test_rows),
+            "evidence": {
+                "rows": ([asdict(row) for row in evidence_build.rows]
+                         if evidence_build is not None else []),
+                "skipped": (list(evidence_build.skipped)
+                            if evidence_build is not None else []),
+            },
+        },
+        "persistence_plan": {
+            "state": "PLANNED",
+            "explanation_as_of": persistence_plan.explanation_as_of,
+            "run_id": persistence_plan.run_id,
+            "result_id": persistence_plan.result_id,
+        },
+    })
     outcome = store.persist_explanation(
         settings, etf_instrument_id, explanation,
         route_id=prereqs["route"],
@@ -698,6 +729,7 @@ def run(
         primary_thread_id=_primary_thread_id(events),
         events=events,
         publishable=surface_ok,
+        plan=persistence_plan,
     )
     if trial_rows:
         # DB 실패가 런을 죽이지 않는다 — 설명은 이미 영속됐고, 원장 결손은 재실행이
@@ -730,26 +762,6 @@ def run(
         except Exception as exc:            # noqa: BLE001 — 원장 실패는 로그로 드러낸다
             log("evidence_row.persist_failed",
                 error=f"{type(exc).__name__}: {exc}", rows=len(evidence_build.rows))
-    write_run_archive(s3, settings, {
-        "outcome": "explained",
-        "trigger": asdict(gate),
-        "route_code": route_code,
-        "decomposition": decomp_summary(decomp),
-        "holdings_asof": holdings_asof,
-        "events": archived_events(events),
-        "explanation": explanation.raw,
-        "verification": {
-            "hypothesis_trials": list(trial_rows),
-            "stat_tests": list(stat_test_rows),
-            "evidence": {
-                "rows": ([asdict(row) for row in evidence_build.rows]
-                         if evidence_build is not None else []),
-                "skipped": (list(evidence_build.skipped)
-                            if evidence_build is not None else []),
-            },
-        },
-        "persistence": outcome,
-    })
     # 발화 스냅샷 대시보드 재생성(ALPHA-894) — 런마다 전량 재조회·덮어쓰기(멱등).
     # 실패는 런을 죽이지 않는다: 설명은 이미 영속됐고 다음 런이 다시 만든다.
     # 조용히 삼키지 않는다(Rule 12) — `report.regenerate_failed` 로 드러낸다.
