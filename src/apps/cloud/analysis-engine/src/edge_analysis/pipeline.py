@@ -92,6 +92,41 @@ def _intraday_returns(
     return out
 
 
+def _return_paths(
+    bars: tuple[AggregatedBar, ...], units: tuple[str, ...],
+) -> dict[str, tuple[float, ...]]:
+    """상태축 봉 → unit 별 봉단위 log수익 경로 - 칼만 시변 β(ALPHA-803)의 입력.
+
+    봉 시작시각의 **교집합**에 정렬한다 - ETF·시장이 같은 t 의 수익을 봐야 β 관측식
+    y_t = β_t·x_t 가 선다. 각 unit 의 첫 수익은 log(close/open), 이후는 인접 close
+    비 - 합이 정확히 그 구간의 log수익이라 Σ β_t·r_m,t 가 경로 적분으로 회계에
+    들어간다. 요청 unit 이 빠졌거나 비정상 가격이 끼면 빈 dict 를 돌려준다 -
+    지어내느니 부재로 남겨 `decompose` 가 β=1 폴백 사유를 적게 한다(Rule 12).
+    """
+    per: dict[str, dict] = {unit: {} for unit in units}
+    for bar in bars:
+        if bar.unit_id in per:
+            per[bar.unit_id][bar.start] = bar
+    if any(not series for series in per.values()):
+        return {}
+    common = sorted(set.intersection(*(set(d) for d in per.values())))
+    out: dict[str, tuple[float, ...]] = {}
+    for unit, series in per.items():
+        rets: list[float] = []
+        prev: float | None = None
+        for start in common:
+            bar = series[start]
+            base = float(bar.open) if prev is None else prev
+            close = float(bar.close)
+            if not (math.isfinite(base) and base > 0
+                    and math.isfinite(close) and close > 0):
+                return {}
+            rets.append(math.log(close / base))
+            prev = close
+        out[unit] = tuple(rets)
+    return out
+
+
 def _ratio(numerator: float, base: float | None) -> float | None:
     """`numerator/base - 1` — 유한하지 않으면 `None`(미가격).
 
@@ -384,7 +419,7 @@ def run(
     # 묶으므로 코드에서 파생한다(`route_code_of`).
     from .statics.duck import CausalLake
     from .statics.interval import clamp
-    from .statics.layers import SESSION_OPEN, decompose as layer_decompose
+    from .statics.layers import MARKET_CODE, SESSION_OPEN, decompose as layer_decompose
     from .statics.record import route_code_of
     from .statics.route import route_etf
 
@@ -421,9 +456,13 @@ def run(
     # 스테일 폴백이 이 축들에 낄 자리가 없다. 섹터 후보만 레이크에 남는다(참조 계열은
     # 분석 unit 밖 - 후속 PR).
     intraday = _intraday_returns(state_bars)
+    # 시변 β(ALPHA-803 2단계)의 재료 - 같은 상태축 봉에서 뽑은 대상·시장의 봉단위
+    # 수익 경로다. 층 회계가 시장 기여를 Σ β_t·r_m,t 로 세우고, 못 서면 β=1 폴백
+    # 사유를 커버리지에 남긴다(`layers._market_beta`).
+    paths = _return_paths(state_bars, (settings.etf_ticker, MARKET_CODE))
     try:
         roll = layer_decompose(lake, settings.etf_ticker, day_iso, clock=clock,
-                               intraday=intraday)
+                               intraday=intraday, paths=paths)
         rt = route_etf(roll)
     except Exception as exc:                # noqa: BLE001 - 표면 부재를 사유로 남긴다
         # **분해까지 됐어도 라우팅이 터지면 그 분해는 버린다.** `route_etf` 가 던지면
@@ -592,6 +631,40 @@ def run(
         # 최종 문자열에서 다시 파싱하지 않고 추적한다.
         "plain": plain.strip().lstrip("=").strip()}
     final_payload = window_meta.pop("final_explanation", None)
+    # ── 근거 행 유도 + 빌드 게이트 (ALPHA-888, 근거 명세 v3 §5) ────────────────
+    # 고객 노출 문장(final_explanation.blocks)마다 근거 행 ≥1 을 문장 생성 시점에
+    # 강제한다. 못 세우면 `EvidenceFormatError` 로 **런이 죽는다** — 근거 0인 문장을
+    # 영속·게시하지 않는 것이 계약이라 조용한 통과가 없다(표면 부재 런은
+    # final_payload 가 없어 이 게이트를 타지 않는다 — 죽일 문장 자체가 없다).
+    evidence_build = None
+    if final_payload is not None:
+        from .statics.evidence_rows import build_evidence_rows
+        evidence_build = build_evidence_rows(
+            blocks=final_payload["blocks"],
+            lineage=window_meta.get("lineage") or (),
+            stat_tests=window_meta.get("stat_tests") or (),
+            events=[{"source_event_id": e.source_event_id, "title": e.title,
+                     "available_at": e.available_at} for e in events],
+            ticker=settings.etf_ticker,
+            etf_name=str(getattr(roll, "etf_name", "") or settings.etf_ticker),
+            day=day_iso,
+            window_end=str(window_meta.get("window_end") or window_end),
+            sector_name=next((str(x.name) for x in (roll.layers if roll else ())
+                              if x.kind == "섹터"), None),
+        )
+        # 블록↔ref 표(§7)는 stage_results 로 남긴다 — 행은 DB 표가 정본이고,
+        # 어느 문장이 어느 행을 딛는지는 결과 원장이 말한다.
+        for block in final_payload["blocks"]:
+            block["evidence_row_refs"] = list(
+                evidence_build.block_refs.get(str(block.get("block_code")), ()))
+        if evidence_build.skipped:
+            # 통과 못 한 검정은 행이 없다(§0) — 침묵이 아니라 사유를 로그로 드러낸다.
+            log("evidence_row.tests_skipped", count=len(evidence_build.skipped),
+                reasons=list(evidence_build.skipped)[:8])
+    # 가설 원장 행(ALPHA-881)은 DB 표(hypothesis_trial)가 정본이다 — stage_results 에
+    # 같은 내용을 또 실으면 두 벌이 되어 어느 쪽을 믿을지 갈린다. 여기서 빼서
+    # run 확정 뒤 store 로 보낸다(run_id 연결이 필요해 persist_explanation 뒤다).
+    trial_rows = window_meta.pop("hypothesis_trials", None) or ()
     if window_meta:
         stage["window"] = window_meta
     if final_payload is not None:
@@ -621,6 +694,37 @@ def run(
         events=events,
         publishable=surface_ok,
     )
+    if trial_rows:
+        # DB 실패가 런을 죽이지 않는다 — 설명은 이미 영속됐고, 원장 결손은 재실행이
+        # 멱등으로 메운다. 조용히 삼키지 않는다(Rule 12): 사유를 로그로 드러낸다.
+        try:
+            stored_trials = store.persist_hypothesis_trials(
+                list(trial_rows),
+                minute_price_trigger_id=settings.trigger_id,
+                trade_date=settings.trade_date,
+                ticker=settings.etf_ticker,
+                explanation_run_id=outcome.get("run_id"),
+            )
+            log("hypothesis_trial.stored", rows=stored_trials)
+        except Exception as exc:            # noqa: BLE001 — 원장 실패는 로그로 드러낸다
+            log("hypothesis_trial.persist_failed",
+                error=f"{type(exc).__name__}: {exc}", rows=len(trial_rows))
+    if evidence_build is not None:
+        # 근거 행 영속(ALPHA-888). 실패해도 런은 지속한다 — §5 게이트는 위(문장 생성
+        # 시점)에서 이미 섰고, 설명은 영속됐다. 원장 결손은 같은 결과 재적재가 멱등
+        # (stable_id 축)으로 메운다. 조용히 삼키지 않는다(Rule 12) — fail-loud 로그.
+        try:
+            stored_rows = store.persist_evidence_rows(
+                evidence_build,
+                explanation_result_id=str(outcome["explanation_result_id"]),
+                explanation_run_id=(str(outcome["run_id"])
+                                    if outcome.get("run_id") else None),
+            )
+            log("evidence_row.stored", rows=stored_rows,
+                blocks=len(evidence_build.block_refs))
+        except Exception as exc:            # noqa: BLE001 — 원장 실패는 로그로 드러낸다
+            log("evidence_row.persist_failed",
+                error=f"{type(exc).__name__}: {exc}", rows=len(evidence_build.rows))
     write_run_archive(s3, settings, {
         "outcome": "explained",
         "trigger": asdict(gate),

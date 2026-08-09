@@ -200,13 +200,33 @@ variable "schedule_state" {
 
 # 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
 # pre-EOD 15:00·15:30 = 정규장 마감구간(종가 동시호가) 뉴스를 EOD analyze 전에 적재. 23:50 = 장외/야간 마무리.
+#
+# **주 7일인 이유(ALPHA-874)**: 수집 창이 `[어제, 오늘]` 2일이라(run.py `default_window`,
+# DEFAULT_LOOKBACK_DAYS=1) 어떤 날은 그날이나 다음 날에 런이 있어야 덮인다. MON-FRI 였을 때
+# 일요일은 월요일 런의 창이 덮었지만 **토요일은 토·일 모두 런이 없어 매주 통째로 비었다**
+# (2026-08-01 raw 파티션 0 실증). 뉴스는 휴장일에도 나오므로(catalog `kr_trading_calendar=False`)
+# 요일을 넓히는 것이 곧 해소다. ⚠️ 다만 **결함분은 토요일 3슬롯뿐**이고 일요일 3슬롯은 월요일
+# 런이 이미 덮던 구간이다(얻는 것은 즉시성과 런 유실 대비 중복). 주당 체인 실행이 15 → 21 회가
+# 되고 매 실행이 `tag-news`·`assemble-events` 두 LLM 비용 축을 태운다 — 절반은 해소가 아니라 여유다.
+#
+# ⚠️ 요일 표기가 `? * MON-SUN` 이 아니라 **`* * ?`(DOM=매일, DOW=any)** 인 이유: AWS 의
+# day-of-week 은 `1-7 = SUN-SAT` 이라 `MON-SUN` 은 `2-1`, 즉 **내림차순 범위**이고 AWS 문서엔
+# 랩어라운드 지원 서술이 없다. `* * ?` 가 문서의 "매일" 예시 그대로이고, DOM·DOW 중 하나는 `?`
+# 여야 한다는 규칙 때문에 둘을 맞바꾼 것뿐이다 — 슬롯 시각은 그대로다.
+#
+# ⚠️ **요일을 MON-FRI 와 주 7일 사이로 좁히지 마라.** 최소 수정은 사실 토요일만 더하는
+# `MON-SAT` 인데 원장이 그걸 표현하지 못한다 — 레인의 "주말에도 도는가"가 이진 플래그라
+# (ops_ledger.tf) MON-SAT 은 일요일 3슬롯까지 기대하게 만들고, 그 런은 뜰 리 없으니 **닫히지
+# 않는** PLANNER_MISSING 이 매주 3개 열린다. 지금은 그런 표기가 plan 단계에서 죽는다.
+# **새 슬롯 시각도 같은 이유로 추가하지 마라** — `OPS_NEWS_SCHED_HHMM` 이 평평한 HH:MM 목록이라
+# 요일 축이 없어, 한 레인 안에 평일 슬롯과 주말 슬롯을 섞는 것 자체가 표현 불가다.
 variable "news_schedule_expressions" {
-  description = "뉴스 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 평일만."
+  description = "뉴스 SFN EventBridge Scheduler cron 맵(키=이름 접미사). 주 7일(ALPHA-874)."
   type        = map(string)
   default = {
-    "pre-eod-1" = "cron(0 15 ? * MON-FRI *)"
-    "pre-eod-2" = "cron(30 15 ? * MON-FRI *)"
-    "day-close" = "cron(50 23 ? * MON-FRI *)"
+    "pre-eod-1" = "cron(0 15 * * ? *)"
+    "pre-eod-2" = "cron(30 15 * * ? *)"
+    "day-close" = "cron(50 23 * * ? *)"
   }
 }
 
@@ -384,7 +404,7 @@ variable "tag_news_limit" {
   default     = 10000
 }
 
-# 뉴스 SFN TagNews 의 태깅 대상 창(오늘−N일, 평일 3슬롯 — ALPHA-553). read=O(전체 코퍼스)
+# 뉴스 SFN TagNews 의 태깅 대상 창(오늘−N일, 주 7일 3슬롯 — ALPHA-553·874). read=O(전체 코퍼스)
 # 스캔 상한이 목적이다(ALPHA-540). 넓게 둘수록 창 밖 회수가 튼튼하다 — 한 날짜가 슬롯×(N+1)회
 # 스캔돼 일시적 llm_error 가 창 안에서 자가 회복하고(멱등 skip 이라 재스캔 비용은 스캔뿐),
 # 창보다 오래된 정정본만 풀스캔 수동 실행이 맡는다. --window-days 미주입(수동·백필)은 풀스캔
@@ -508,12 +528,31 @@ variable "minute_session_news_source_group" {
   default     = "bigkinds"
 }
 
+variable "minute_session_inav_source_group" {
+  description = "etf_inav_minute 세션의 source_group(ALPHA-882). 비우면 iNAV 레인 미편입 — start 가 iNAV 세션을 계획하지 않고 inav-worker 도 올리지 않는다"
+  type        = string
+  # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만). 어휘 밖 값은
+  # 오케스트레이터가 기동에서 거부한다(`_lane_source_group`).
+  default = "kis"
+}
+
+variable "minute_session_disclosure_source_group" {
+  description = "disclosure_minute 세션의 source_group(ALPHA-875). 비우면 공시 레인 미편입 — 공시는 SFN 10슬롯 레인이 계속 소유한다"
+  type        = string
+  # ⚠️ 이 값이 **컷오버 스위치**다. 비어 있으면 start 가 공시 세션을 계획하지 않고
+  # disclosure-worker 도 안 뜬다(서비스 정의는 착지하되 desired 0). 비면 SFN 레인이 계속
+  # 돌고, 채우면 1분 레인이 소유한다 — **둘을 동시에 켜지 않는다**(같은 CLI 를 두 레인이
+  # 소유하면 `catalog.by_cli` 가 먼저 온 쪽을 돌려줘 한쪽은 영구 MISSED 가 된다).
+  # 그래서 이 값을 채우는 apply 는 아래 SFN 스케줄 비활성과 **같은 apply** 여야 한다.
+  default = "dart"
+}
+
 variable "minute_session_source_group" {
   description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
   type        = string
   # kis(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다. 이 기본값은
   # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
-  default     = "kis"
+  default = "kis"
 }
 
 variable "super_admin_api_url" {

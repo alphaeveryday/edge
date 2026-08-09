@@ -38,10 +38,12 @@ from .config import load_settings
 from .db import db_config_from_env
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.news_consumer import news_consumer_cli
+from .minute.disclosure_worker import disclosure_worker_cli
 from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.rollup import rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
+from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
 from .minute.price_consumer import price_consumer_cli
@@ -130,8 +132,77 @@ def make_run_id(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
 
 
+# 증분 창의 날짜는 **프로세스 시계가 아니라 벤더 달력**이다(ALPHA-883). 우리가 만든 날짜
+# 문자열이 그대로 벤더 질의에 실리기 때문이다 — BigKinds `search_page` 의 startDate/endDate 가
+# 그 자리이고, 그 벤더는 KST 벽시계로 라벨한다(`normalize_news._KST`). canonical 뉴스 파티션도
+# `published_at[:10]` 이라 KST 날짜 키라, 그 파티션을 고르는 `tag-news` 창도 같은 축이다.
+#
+# UTC 로 날짜를 뽑으면 KST=UTC+9 이라 **09:00 KST 이전에 도는 슬롯에서 하루가 밀린다.** 지금
+# 안 깨지는 유일한 이유는 모든 스케줄 슬롯이 09:00 KST 이후이기 때문이고(공시 09:00 은 정확히
+# 경계다), 그 불변식은 어디에도 적혀 있지 않았다. 08:10 슬롯 하나를 넣는 순간 그 런은 전날 창을
+# 다시 긁고 그날 뉴스를 0건 가져온다 — **에러 없이** 조용히.
+# 이 레포엔 축이 다른 시간 관례가 **둘** 있다. **순간**은 UTC 다(`make_run_id`·`started_date`
+# 파티션·원장 타임스탬프·`ops.entry._scheduled_time`). **시장 날짜**는 KST 다 —
+# `sources/dart_disclosure.py` 가 "파이프라인 전체가 KR 시장 기준이라 KST 다"라고 명문화했고
+# `assemble_events`·`dart_values` 도 같은 관례다. 증분 창은 후자(어느 영업일의 데이터인가)라
+# KST 쪽이지만, **기본값은 두지 않는다** — 창을 쓰는 스텝이 늘 때 어느 달력으로든 조용히
+# 떨어지면 그 창은 하루가 밀린 채 **성공**한다. 스텝마다 선언하고 미선언은 fail-loud 다
+# (`ops.entry._LANE_STATE_MACHINE_ARN_ENV` 와 같은 자세, Rule 12).
+KST = timezone(timedelta(hours=9))
+# 벤더가 `--source` 로 갈리는 스텝과 그 미지정 기본값. **아래 분기가 이 dict 를 읽는다** —
+# 리터럴로 두 벌을 두면 한쪽만 바뀌는 순간 창은 이 벤더로, 질의는 저 벤더로 나간다(리뷰 실측:
+# 분기 쪽 기본값만 바꿔도 전 스위트가 초록이었다). 사실을 하나로 줄여 드리프트를 불가능하게 한다.
+_VENDOR_SPLIT_STEPS = {"ingest-raw": "fmp", "ingest-price-raw": "fmp"}
+# 창을 쓰는 스텝의 달력. 벤더가 안 갈리는 스텝은 스텝이 곧 벤더라 source 를 안 본다.
+# 기준은 벤더 국적이 아니라 **그 데이터가 어느 시장의 날짜인가**다.
+_WINDOW_CALENDAR: dict[tuple[str, str | None], timezone] = {
+    ("ingest-raw", "fmp"): timezone.utc,             # 미국 뉴스
+    ("ingest-raw", "bigkinds"): KST,
+    ("ingest-price-raw", "fmp"): timezone.utc,       # 미국 시세
+    ("ingest-price-raw", "kis"): KST,
+    ("ingest-price-raw", "yahoo"): KST,              # index_map 이 ^KS11·^KQ11 (KOSPI·KOSDAQ)
+    ("ingest-raw-nav", None): KST,                   # KIS
+    ("ingest-raw-inav", None): KST,                  # KIS
+    ("ingest-raw-investor", None): KST,              # KIS
+    ("ingest-raw-disclosure", None): KST,            # DART
+    # canonical 뉴스 파티션(`published_at[:10]`)은 벤더마다 달력이 다르다 — normalize 가
+    # BigKinds 는 KST 로, FMP 는 UTC 로 라벨한다. tag-news 는 벤더가 안 갈려 한쪽을 골라야
+    # 하고, 실제로 도는 건 KR 레인이라 KST 다.
+    ("tag-news", None): KST,
+    ("load-disclosure", None): KST,                  # canonical 공시(report_date = DART 접수일)
+}
+
+
+def window_calendar_tz(step: str, source: str | None) -> timezone:
+    """이 스텝·벤더의 증분 창이 쓰는 달력. 미선언은 fail-loud.
+
+    ponytail: 달력의 임자는 사실 벤더 어댑터다 — KST 어댑터 10여 개가 이미 자기 `_KST` 를
+    들고 있고 `dart_disclosure._window_segments` 는 그걸로 창 끝까지 채운다. 이 표는 그 사실의
+    재진술이고, 창이 어댑터 생성 **전에** 계산되기 때문에(`ingest_*.run(…, from_date, to_date)`)
+    존재한다. 창 계산을 분기 뒤로 옮기면 표가 통째로 사라진다 — 6분기를 건드리는 일이라 별건.
+    """
+    if step in _VENDOR_SPLIT_STEPS:
+        vendor = source or _VENDOR_SPLIT_STEPS[step]
+        tz = _WINDOW_CALENDAR.get((step, vendor))
+        if tz is None:
+            # 표의 키 집합이 곧 그 스텝의 벤더 화이트리스트다. 오타난 `--source` 를 "달력
+            # 미선언"으로 진단하면 시킨 대로 표에 넣어도 아무것도 안 고쳐지고, 그제서야
+            # 분기의 진짜 에러를 본다 — 게다가 그 진단이 `--from/--to` 유무로 갈린다.
+            known = "|".join(sorted(v for s, v in _WINDOW_CALENDAR if s == step and v))
+            raise SystemExit(f"알 수 없는 --source: {vendor} ({known})")
+        return tz
+    tz = _WINDOW_CALENDAR.get((step, None))
+    if tz is None:
+        raise SystemExit(
+            f"증분 창의 달력이 선언되지 않았다: step={step} — `_WINDOW_CALENDAR` 에 추가하라. "
+            "기본값을 두면 새 스텝이 어느 달력으로든 조용히 떨어지고, 그 창은 하루가 밀린 "
+            "채로 성공한다.")
+    return tz
+
+
 def default_window(now: datetime, lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> tuple[str, str]:
-    """증분 기본 창(from, to) = (오늘-소급일, 오늘) UTC 날짜."""
+    """증분 기본 창(from, to) = (오늘-소급일, 오늘). 날짜는 `now` 의 tzinfo 가 정한다 —
+    호출부가 `window_calendar_tz` 로 벤더 달력을 골라 넘긴다(ALPHA-883)."""
     to_date = now.date()
     from_date = to_date - timedelta(days=lookback_days)
     return from_date.isoformat(), to_date.isoformat()
@@ -189,7 +260,11 @@ def main(argv: list[str] | None = None) -> int:
                  # 1분 News Worker(ALPHA-707): BigKinds 매분 폴링 상주 루프(ECS Service).
                  # 원장 DB + storage(raw page·manifest PUT) + [bigkinds_news] 정본.
                  # universe 없음 — 뉴스 세션은 소스 단위다.
-                 "news-worker"],
+                 "news-worker",
+                 # 1분 Disclosure Worker(ALPHA-875): 공시 체인 4스텝을 한 tick 에 도는 상주
+                 # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
+                 # ⚠️ 수집만이 아니라 collect→normalize×2→load 를 한 window 에서 돈다.
+                 "disclosure-worker"],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -227,15 +302,24 @@ def main(argv: list[str] | None = None) -> int:
                              "여기서 바로잡지 않으면 복구 경로가 없다")
     parser.add_argument("--dataset", default=None,
                         help="세션 dataset. plan-minute-session 은 "
-                             "price_minute|news_minute|etf_inav_minute, "
+                             # 어휘를 산문으로 베끼지 않는다 — 표(states.SOURCE_GROUPS_BY_
+                             # DATASET)가 SSOT 라 dataset 이 늘 때 여기가 조용히 낡는다
+                             f"{'|'.join(sorted(MINUTE_DATASETS))}, "
                              "start/stop-minute-session 은 **price_minute 만**"
-                             "(공용 서비스 목록을 스케일하므로 그 세션이 서비스를 "
-                             "소유해야 한다 — states.SCALED_DATASETS), "
+                             "(공용 서비스 목록을 스케일하므로 구동 레인만 인자가 된다 — "
+                             "states.SCALED_DATASETS. news_minute·etf_inav_minute 은 "
+                             "자기 워커를 소유해도 인자가 아니라 env 토글로 켜지는 "
+                             "승객이다 — session_ops.PASSENGER_LANES), "
                              "rollup-minute-session 도 **price_minute 만**"
                              "(5분 파생은 가격 분봉 canonical 전용 경로다)")
     parser.add_argument("--source-group", default=None,
-                        help="세션 source_group. price_minute=toss|kis, "
-                             "news_minute=bigkinds 등 — dataset 의 어휘 안에서만 받는다")
+                        # `--dataset` 과 같은 이유로 표에서 조립한다 — 산문 예시는 dataset 이
+                        # 늘 때 낡고, 그게 곧 "어휘 안에서만 받는다"는 안내를 거짓으로 만든다
+                        help="세션 source_group(dataset 의 어휘 안에서만 받는다): "
+                             + ", ".join(
+                                 f"{dataset}={'|'.join(sorted(groups))}"
+                                 for dataset, groups in sorted(SOURCE_GROUPS_BY_DATASET.items())
+                             ))
     parser.add_argument("--session-date", default=None,
                         help="plan-minute-session·price-worker·rollup-minute-session: "
                              "세션 날짜 YYYY-MM-DD(price-worker·rollup-minute-session "
@@ -276,11 +360,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.max_ticks is not None:
         if args.step not in ("relay", "dlq-reconcile", "price-worker", "price-consumer",
-                             "news-consumer", "news-worker", "inav-worker"):
+                             "news-consumer", "news-worker", "inav-worker",
+                             "disclosure-worker"):
             raise SystemExit(
                 "--max-ticks 는 relay·dlq-reconcile·price-worker·price-consumer·"
-                f"news-consumer·news-worker·inav-worker 에서만 쓴다 — 이 스텝({args.step})"
-                "에서는 무시되므로 거부한다"
+                f"news-consumer·news-worker·inav-worker·disclosure-worker 에서만 쓴다 — "
+                f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         if args.max_ticks < 1:
             raise SystemExit(f"--max-ticks 는 1 이상이어야 한다: {args.max_ticks}")
@@ -327,6 +412,13 @@ def main(argv: list[str] | None = None) -> int:
             "--universe 는 news-worker 에서 쓰지 않는다 — 뉴스 세션은 소스 단위라 "
             "universe 가 없다(무시되므로 거부)"
         )
+    if args.step == "disclosure-worker" and args.universe is not None:
+        # 공시도 소스 단위다 — 유니버스는 기대 집합이 아니라 목록 **필터**이고, 그 정본은
+        # canonical holdings 파생이라(`universe_from_holdings`) 파일 인자가 아니다.
+        raise SystemExit(
+            "--universe 는 disclosure-worker 에서 쓰지 않는다 — 공시 세션은 소스 단위이고 "
+            "수집 유니버스는 canonical holdings 에서 파생된다(무시되므로 거부)"
+        )
     if args.step == "rollup-minute-session" and args.universe is not None:
         # 받아서 무시하면 "계획을 이 파일로 다시 세운다"는 오해를 판다 — 배치는 계획을
         # 원장에서 읽는다(마감 후의 universe 파일은 그날 계획과 갈릴 수 있다).
@@ -336,13 +428,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
                          "start-minute-session", "news-worker",
-                         "rollup-minute-session", "inav-worker") and (
+                         "rollup-minute-session", "inav-worker",
+                         "disclosure-worker") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
-            f"price-consumer·start-minute-session·news-worker·rollup-minute-session "
-            "에서만 쓴다 — "
+            "price-consumer·start-minute-session·news-worker·rollup-minute-session·"
+            "inav-worker·disclosure-worker 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
@@ -416,6 +509,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.step == "news-worker":
         return news_worker_cli(settings, session_date=args.session_date,
                                max_ticks=args.max_ticks)
+    if args.step == "disclosure-worker":
+        return disclosure_worker_cli(settings, session_date=args.session_date,
+                                     max_ticks=args.max_ticks)
     if args.step == "redrive":
         return redrive_cli(settings, kind=args.kind, job_id=args.job_id,
                            reason=args.reason, destination=args.destination)
@@ -513,7 +609,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     if args.step == "load-disclosure":
         load_from, load_to = args.from_date, args.to_date
         if load_from is None and load_to is None and args.window_days is not None:
-            load_from, load_to = default_window(datetime.now(timezone.utc), args.window_days)
+            load_from, load_to = default_window(
+                datetime.now(window_calendar_tz(args.step, args.source)), args.window_days)
         return load_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=load_from, to_date=load_to,
@@ -629,7 +726,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 명시 --from/--to 가 최우선(백필). 없고 --window-days 만 있으면 오늘−N일 창으로 좁힌다.
         from_date, to_date = args.from_date, args.to_date
         if from_date is None and to_date is None and args.window_days is not None:
-            from_date, to_date = default_window(datetime.now(timezone.utc), args.window_days)
+            from_date, to_date = default_window(
+                datetime.now(window_calendar_tz(args.step, args.source)), args.window_days)
         return tag_news.run(storage, run_id, complete_fn=complete_fn,
                             from_date=from_date, to_date=to_date, limit=args.limit,
                             concurrency=concurrency)
@@ -755,10 +853,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
             if args.step in ("ingest-price-raw", "ingest-raw-investor")
             else DEFAULT_LOOKBACK_DAYS
         )
-        from_date, to_date = default_window(datetime.now(timezone.utc), lookback)
+        from_date, to_date = default_window(
+            datetime.now(window_calendar_tz(args.step, args.source)), lookback)
 
     if args.step == "ingest-raw":
-        vendor = args.source or "fmp"
+        vendor = args.source or _VENDOR_SPLIT_STEPS["ingest-raw"]
         if vendor == "fmp":
             fmp_config = settings.news.sources.get("fmp")
             if fmp_config is None:
@@ -831,7 +930,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
         # 통화·거래시간이 어긋난다(price.source.symbol_map 은 거래소-로컬 심볼만).
         # --source 로 벤더를 고른다(미지정=fmp, 기존 동작 보존; kis=국내 일봉; yahoo=지수).
-        vendor = args.source or "fmp"
+        vendor = args.source or _VENDOR_SPLIT_STEPS["ingest-price-raw"]
         if vendor == "fmp":
             price_source = FmpPriceSource(settings.price.source, PoliteClient())
         elif vendor == "kis":

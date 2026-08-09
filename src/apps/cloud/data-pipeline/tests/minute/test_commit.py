@@ -29,7 +29,10 @@ from data_pipeline.minute.commit import (
 )
 from data_pipeline.minute.models import KST, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
-from data_pipeline.minute.states import DATASET_ETF_INAV_MINUTE
+from data_pipeline.minute.states import (
+    DATASET_DISCLOSURE_MINUTE,
+    DATASET_ETF_INAV_MINUTE,
+)
 
 _DB = DbConfig(password="x")
 SESSION_DATE = date(2026, 7, 31)
@@ -45,7 +48,7 @@ def ready_session():
     session_id, _ = ledger.plan_session(
         dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
         universe_version="v1", universe_hash="a" * 64,
-        windows=plan_session_windows(SESSION_DATE, universe=None, extended_hours=True)[:10],
+        windows=plan_session_windows(SESSION_DATE, universe=None, extended_hours=False)[:10],
     )
     token = ledger.acquire_worker_fence(
         session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
@@ -301,6 +304,159 @@ class TestCommitInavWindow:
 
         with pytest.raises(GenerationMismatchError):
             committer.commit_inav_window(**kwargs)
+
+
+def ready_disclosure_session():
+    """공시 세션. universe 없이 시간외 격자(720) — 운영 설정과 같은 축이다(ALPHA-875).
+
+    가격·iNAV 세션을 빌려 쓰면 dataset 이 갈린 채 통과해, 나중에 dataset 별 분기가 생겼을
+    때 이 테스트가 그 분기를 안 밟는다(iNAV fixture 와 같은 단서).
+    """
+    db = FakeMinuteDB()
+    ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
+    session_id, _ = ledger.plan_session(
+        dataset=DATASET_DISCLOSURE_MINUTE, source_group="dart", session_date=SESSION_DATE,
+        universe_version="none", universe_hash="none",
+        windows=plan_session_windows(
+            SESSION_DATE, universe=None, extended_hours=True
+        )[:10],
+    )
+    token = ledger.acquire_worker_fence(
+        session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
+    )
+    claim = ledger.claim_due_window(
+        session_id=session_id, worker_id="w1", fence_token=token,
+        now=NOW, lease_seconds=60, lane="recovery",
+    )
+    return db, ledger, session_id, token, claim
+
+
+def disclosure_commit_kwargs(session_id, claim, token, *, checksum="c" * 64, **overrides):
+    """가격 kwargs 에서 **공시 서명이 실제로 받는 것만** 남긴다(iNAV helper 와 같은 이유 —
+    가격 쪽에 인자가 늘어도 조용히 딸려가지 않는다). unit 수는 서명에 없다 — 공시는
+    `data_status` 에서 유도하므로 여기서 줄 수 있으면 그 유도를 우회한 채 통과한다."""
+    accepted = inspect.signature(MinuteCommitter.commit_disclosure_window).parameters
+    kwargs = {
+        key: value
+        for key, value in commit_kwargs(session_id, claim, token, checksum=checksum).items()
+        if key in accepted
+    }
+    return {**kwargs, "source_code": "dart", "record_count": 97, **overrides}
+
+
+class TestCommitDisclosureWindow:
+    """공시도 하위 소비자가 없어 **window 확정에서 멈춘다** (ALPHA-875, 레일 결정 ALPHA-873
+    대기). unit 은 소스 하나다 — 유니버스가 기대 집합을 정하지 않아 종목으로 셀 수 없다.
+    """
+
+    def test_확정만_하고_job_도_outbox_도_만들지_않는다(self):
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        before = db.connect_calls
+
+        generation = committer.commit_disclosure_window(
+            **disclosure_commit_kwargs(session_id, claim, token)
+        )
+
+        assert db.connect_calls == before + 1  # 한 트랜잭션
+        assert generation == 1
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "VALID" and window["generation"] == 1
+        # 관측 메타 행 수가 그대로 실린다 — 대상 유형만 세면 "전량 보존"(ALPHA-865)이
+        # 원장에서 안 보인다
+        assert window["record_count"] == 97
+        assert (window["succeeded_unit_count"], window["failed_unit_count"]) == (1, 0)
+        assert window["missing_units"] is None
+        assert db.jobs == {} and db.outbox == {}
+
+    def test_INVALID_이면_소스를_실패_unit_으로_세고_지목한다(self):
+        """`data_status` 하나에서 유도한다 — unit 수를 따로 받으면 "INVALID 인데 실패 0"
+        같은 모순 조합이 커밋되고, QC 는 그 window 를 정상으로 읽는다."""
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+
+        committer.commit_disclosure_window(
+            **disclosure_commit_kwargs(session_id, claim, token, data_status="INVALID")
+        )
+
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "INVALID"
+        assert (window["succeeded_unit_count"], window["failed_unit_count"]) == (0, 1)
+        # 축은 unit(=소스)이다 — 여기에 rcept_no 를 넣으면 unit 집합과 대조하는 QC 가 어긋난다
+        assert window["missing_units"] == ["dart"]
+
+    def test_VALID_EMPTY_도_소스_성공이다(self):
+        """**지배적 케이스다** — 넓힌 격자(720)에서 접수가 없는 분이 대다수이고, 18:00 이후
+        120 window 는 당일접수가 끝나 전부 여기로 온다.
+
+        이 케이스가 없으면 실패 유도를 "VALID·INCOMPLETE 만 성공" 으로 좁히는 변이가 전
+        스위트를 통과하는데, 그러면 접수 없는 분마다 DART 가 실패 unit 으로 지목돼
+        (`missing_units=["dart"]`) 이 유도를 둔 이유(QC 의 "소스가 죽었다" 오독 방지)가
+        정확히 지배적 케이스에서 뒤집힌다.
+        """
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+
+        committer.commit_disclosure_window(**disclosure_commit_kwargs(
+            session_id, claim, token, data_status="VALID_EMPTY", record_count=0,
+        ))
+
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "VALID_EMPTY"
+        assert (window["succeeded_unit_count"], window["failed_unit_count"]) == (1, 0)
+        assert window["missing_units"] is None
+
+    def test_INCOMPLETE_는_소스_실패로_세지_않는다(self):
+        """부분 실패(본문 결측 등)는 그 폴링의 산출이 온전치 않다는 뜻이고 소스 장애가
+        아니다 — 실패로 세면 QC 가 "DART 가 죽었다"로 오독한다(뉴스의 truncated 와 같은 축).
+
+        INVALID 반례와 짝이다: 실패 유도를 `data_status != VALID` 로 넓히는 구현은 위
+        테스트만으로 통과하고, 그러면 본문 한 건 실패한 날이 소스 장애로 보고된다.
+        """
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+
+        committer.commit_disclosure_window(
+            **disclosure_commit_kwargs(session_id, claim, token, data_status="INCOMPLETE")
+        )
+
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "INCOMPLETE"
+        assert (window["succeeded_unit_count"], window["failed_unit_count"]) == (1, 0)
+        assert window["missing_units"] is None
+
+    def test_다른_attempt_소유_window_는_거부된다(self):
+        """매 tick 이 날짜창 전체를 재독하므로 두 attempt 의 관측이 겹치는 것이 **정상**이다
+        — 그래서 뒤늦은 attempt 가 남의 claim 위에 자기 판정을 쓰는 경합이 실재한다.
+        SFN 레인이 슬롯 간격(3600s) > 실행시간으로 피하던 겹침을 1분 레인에서 막는 장치가
+        이것 하나다(ALPHA-875 성공기준).
+        """
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        stale = disclosure_commit_kwargs(session_id, claim, token)
+        stale["claim_token"] = claim["claim_token"] + 1  # 다른 attempt 의 토큰
+
+        with pytest.raises(CommitRejectedError, match="claim 무효"):
+            committer.commit_disclosure_window(**stale)
+
+        window = db.windows[(session_id, claim["window_start"])]
+        assert window["data_status"] == "CLAIMED"  # 아무것도 확정되지 않았다
+
+    def test_세대가_어긋나면_거부된다(self):
+        """claim 이 준 checksum 으로 세대를 예측한다(같으면 불변·다르면 +1) — 어긋나면
+        그 사이 다른 attempt 가 이 window 를 확정한 것이다."""
+        db, ledger, session_id, token, claim = ready_disclosure_session()
+        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
+        committer.commit_disclosure_window(
+            **disclosure_commit_kwargs(session_id, claim, token)
+        )
+
+        reclaim = _redue(db, ledger, session_id, token, claim)
+        kwargs = disclosure_commit_kwargs(session_id, reclaim, token)  # 같은 checksum → 세대 1
+        kwargs["artifact_generation"] = 2
+
+        with pytest.raises(GenerationMismatchError):
+            committer.commit_disclosure_window(**kwargs)
 
 
 class TestOrphanDetection:

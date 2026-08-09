@@ -142,7 +142,7 @@ def _tuple():
         outcome="수익률", layer="고유")
 
 
-def _wire(monkeypatch, reports):
+def _wire(monkeypatch, reports, rejected=()):
     """요청창 갈래에 가설→검정 사슬을 스텁으로 배선한다. 판정(EdgeReport)만 주입 -
     승격·명시 규율은 실제 코드(`_window_paneltest`)가 돈다."""
     import dataclasses
@@ -159,7 +159,7 @@ def _wire(monkeypatch, reports):
                         lambda lake, iid, day: {})
     tup = _tuple()
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
-                        lambda ask, **kw: ([tup] * len(reports), []))
+                        lambda ask, **kw: ([tup] * len(reports), list(rejected)))
     monkeypatch.setattr("edge_analysis.statics.paneltest.edge_tests",
                         lambda lake, tuples, day, cell_instrument_id="":
                         [(tup, r) for r in reports])
@@ -176,56 +176,177 @@ def _block_kinds(meta):
     return [block["kind"] for block in meta["blocks"]]
 
 
-def test_significant_and_applicable_verdict_reaches_statistics(monkeypatch):
-    """성립 + 오늘 적용만 StatisticFact 로 승격돼 산문에 실린다."""
+JARGON = ("방아쇠", "노출", "성립", "판정불가", "유의", "p=", "패널", "고유층")
+
+
+def _clean(text: str) -> bool:
+    """고객 산문에 통계 어휘가 없다 - 근거 명세 v3 §0(카드에 통계 어휘 금지)."""
+    return not any(w in text for w in JARGON)
+
+
+def test_significant_verdict_lands_in_the_buffer_not_the_prose(monkeypatch):
+    """성립+오늘 적용 검정도 **고객 산문에는 안 실린다**(ALPHA-876) - 레코드는
+    stage_results 버퍼(stat_tests)에 남아 근거 포맷(통계검정 레코드 §3)의 입력이
+    된다. 검정 원문이 산문에 다시 나타나면 이 테스트가 깨져야 한다(Rule 9)."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9)])
 
-    assert "statistics" in _block_kinds(meta)
-    assert "CONTRACT.SIGNING 방아쇠 × Q수량" in text
-    assert "효과 +1.50%p" in text and "p=0.0010" in text
-    assert "성립 (n=120, p=0.0010) · 오늘 적용" in text
+    assert _clean(text), f"고객 산문에 통계 어휘가 노출됐다: {text}"
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "성립" and rec["applies_today"] is True
+    assert rec["n"] == 120 and rec["p"] == 0.001
+    assert rec["trigger"] == "CONTRACT.SIGNING" and rec["layer"] == "고유"
 
 
-def test_insignificant_hypothesis_is_stated_not_promoted(monkeypatch):
-    """비유의는 산문에 '유의하지 않았다' 로 **명시**되고, 통계 블록에는 못 오른다.
-    비유의 가설이 StatisticFact 로 실리면 이 테스트가 깨져야 한다(Rule 9)."""
+def test_insignificant_verdict_is_recorded_not_rendered(monkeypatch):
+    """비유의도 버퍼에 사실로 남되(숨기지 않음 - Rule 12) 산문에는 없다."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("불성립", 120, 0.4, 0.01, -0.002, 0.5)])
 
-    assert "statistics" not in _block_kinds(meta)
-    assert "유의하지 않았다 (n=120, p=0.4000)" in text
-    assert "영향 없음이 아니라 못 가름" in text
-    assert "· 오늘 적용" not in text
+    assert _clean(text)
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "불성립" and rec["applies_today"] is False
 
 
-def test_undecidable_never_masquerades_as_significant(monkeypatch):
-    """판정불가는 사유와 함께 판정불가로 남는다 - 유의로 위장하면 깨진다."""
+def test_undecidable_keeps_its_reason_in_the_buffer(monkeypatch):
+    """판정불가는 사유와 함께 버퍼에 남는다 - 유의로 위장하면 깨진다."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("판정불가", 10, None, None, None, None,
                    reason="패널 표본 n=10 < 30 - 백필이 필요하다")])
 
-    assert "statistics" not in _block_kinds(meta)
-    assert "판정불가 — 패널 표본 n=10 < 30" in text
-    assert "· 오늘 적용" not in text and "효과" not in text
+    assert _clean(text)
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "판정불가"
+    assert "패널 표본" in rec["reason"]
 
 
-def test_established_but_inapplicable_stays_out_of_statistics(monkeypatch):
-    """패널 성립이어도 오늘 조건 미충족이면 승격되지 않고 그 사실이 명시된다."""
+def test_established_but_inapplicable_is_flagged_in_the_buffer(monkeypatch):
+    """패널 성립이어도 오늘 조건 미충족이면 applies_today=False 로 남는다."""
     from edge_analysis.statics.paneltest import EdgeReport
 
     text, meta = _wire(monkeypatch, [
         EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9,
                    cond_satisfied=False)])
 
-    assert "statistics" not in _block_kinds(meta)
-    assert "패널에서는 성립했으나 오늘 적용 불가 — 오늘 조건 미충족" in text
+    assert _clean(text)
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "성립" and rec["applies_today"] is False
+    assert rec["reason"], "적용불가 사유가 비었다"
+
+
+def test_rejected_proposals_become_ledger_rows(monkeypatch):
+    """기각 제안은 REJECTED+사유로 원장 행이 된다 — 기각이 침묵되면 깨진다(ALPHA-881).
+
+    이전에는 유효 튜플이 하나라도 있으면 rejected 목록이 통째로 사라졌다: "무엇이
+    제안됐고 왜 죽었나"가 로그 보존 기간과 함께 증발한다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    why = "[1] 접지 밖 사건타입 날조: 'EVT_FAKE'"
+    _text, meta = _wire(monkeypatch, [
+        EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9)], rejected=[why])
+
+    trials = meta["hypothesis_trials"]
+    rejected = [t for t in trials if t["stage"] == "REJECTED"]
+    assert rejected == [{"stage": "REJECTED", "verdict": "REJECTED", "reason": why}]
+    # 검정 행도 같은 원장에 있다 — 기각만 남고 검정이 사라지면 그것도 침묵이다.
+    assert [t["stage"] for t in trials] == ["REJECTED", "TESTED"]
+
+
+def test_tested_verdicts_are_stored_as_english_codes(monkeypatch):
+    """원장 저장은 영문 코드 원칙 — 한글 판정이 그대로 새면 DB CHECK 가 거부한다.
+
+    stage_results 버퍼(stat_tests)는 한글 원값을 유지한다 — 두 소비자의 계약이 다르다."""
+    from edge_analysis.statics.paneltest import EdgeReport
+
+    _text, meta = _wire(monkeypatch, [
+        EdgeReport("성립", 120, 0.001, 0.012, -0.003, 0.9),
+        EdgeReport("불성립", 120, 0.4, 0.01, -0.002, 0.5),
+        EdgeReport("판정불가", 10, None, None, None, None, reason="표본부족"),
+    ])
+
+    tested = [t for t in meta["hypothesis_trials"] if t["stage"] == "TESTED"]
+    assert [t["verdict"] for t in tested] == [
+        "ESTABLISHED", "NOT_ESTABLISHED", "UNDECIDABLE"]
+    assert all(t["verdict"] not in ("성립", "불성립", "판정불가") for t in tested)
+    # 슬롯 원값(닫힌 어휘)이 행에 실린다 — 원장만 보고 튜플을 복원할 수 있어야 한다.
+    assert tested[0]["trigger_slot"] == "점:CONTRACT.SIGNING"
+    assert tested[0]["exposure"] == "거래량/수준" and tested[0]["layer"] == "고유"
+
+
+def test_all_rejected_proposals_still_reach_the_ledger(monkeypatch):
+    """전부 기각돼 검정이 0건이어도 기각 행은 남는다 — 빈손 런이 무기록 런으로
+    위장되면 안 된다(Rule 12)."""
+    _text, meta = _wire(monkeypatch, [], rejected=["[1] 채널 중복: Q수량"])
+
+    assert [t["stage"] for t in meta["hypothesis_trials"]] == ["REJECTED"]
+    assert meta["hypothesis_trials"][0]["reason"] == "[1] 채널 중복: Q수량"
+    # stat_tests 버퍼의 '가설없음' 계약은 그대로다.
+    [rec] = meta["stat_tests"]
+    assert rec["verdict"] == "가설없음"
+
+
+def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
+    """가설 제안 호출의 프롬프트·응답 원문이 trace 버퍼에 남는다(ALPHA-881).
+
+    `TracingClient` 가 propose 의 ask 지점을 감싸므로, collect_trace 안에서 요청창
+    갈래를 돌리면 llm.request/response 가 쌓여야 한다 — 이 사슬이 끊기면 가설이
+    왜 그렇게 나왔는지 되짚을 원문이 없다."""
+    import dataclasses
+
+    from edge_analysis.adapters.llm import TracingClient
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {})
+
+    class _Client:
+        def complete_json(self, system, user):
+            return {"hypotheses": []}   # 빈 제안 — 검정 없이 propose 만 돈다
+
+    ask = TracingClient(_Client()).complete_json
+    with collect_trace() as trace:
+        etfcell._window_paneltest(object(), "iid", "2026-08-05", ask, facts)
+
+    requests = [e for e in trace if e.get("event") == "llm.request"]
+    assert requests, "propose 프롬프트가 trace 에 없다"
+    assert "인과 가설 에이전트" in str(requests[0]["system"])
+    assert any(e.get("event") == "llm.response" for e in trace)
+
+
+def test_window_paneltest_wires_the_sql_tool_only_when_the_lake_can(monkeypatch):
+    """레이크가 툴 표면을 만들 수 있으면 propose 에 sql_tool 이 실리고, 스텁·구형
+    레이크면 None 으로 현행 주입식만 돈다(ALPHA-886 2단계 하위호환)."""
+    import dataclasses
+    import types
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {})
+    seen: dict = {}
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda ask, **kw: (seen.update(kw), ([], []))[1])
+
+    lake = types.SimpleNamespace(bound={"price_daily": "available_at"})
+    etfcell._window_paneltest(lake, "iid", "2026-08-05", lambda *_: {}, facts)
+    assert seen["sql_tool"] is not None and seen["sql_tool"]["name"] == "sql"
+
+    seen.clear()
+    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
+    assert seen["sql_tool"] is None
 
 
 def test_missing_layers_raise_instead_of_returning_prose():
@@ -247,3 +368,102 @@ def test_missing_layers_raise_instead_of_returning_prose():
 
     with pytest.raises(PipelineError, match="층 분해 불가"):
         etfcell.run(_NoLayers(), "091160", "2026-08-06", lambda *_a, **_k: {})
+
+
+# ── 제안 접지: 스레드 문맥 (ALPHA-885) ────────────────────────────────────
+def _capture_propose(monkeypatch, facts, context=None):
+    """propose 에 실리는 facts 문자열을 붙잡는다. context 는 thread_context 스텁."""
+    from edge_analysis.statics import etfcell
+
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes",
+                        lambda lake, eids: ["CONTRACT.SIGNING"] if eids else [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z",
+                        lambda lake, iid, day: {"거래량": 3.0})
+    if context is not None:
+        monkeypatch.setattr("edge_analysis.statics.interval.thread_context",
+                            lambda *a, **k: context)
+    seen = {}
+
+    def fake_propose(ask, **kw):
+        seen.update(kw)
+        return [], []
+
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose", fake_propose)
+    etfcell._window_paneltest(object(), "iid", "2026-08-05", lambda *_: {}, facts)
+    return seen
+
+
+def test_thread_context_reaches_the_proposal_prompt(monkeypatch):
+    """창 안 사건이 있으면 제안 프롬프트에 스레드 문맥(제목·τ)이 실린다.
+
+    안 실리면 제안이 타입 코드 목록만 보고 가설을 세운다 - 그게 ALPHA-885 가
+    고치는 결함이므로, 문맥이 빠지면 이 테스트가 깨져야 한다(Rule 9).
+    """
+    import dataclasses
+
+    block = ("[설명창 안] 08-05 10:31 CONTRACT.SIGNING — SK하이닉스 공급계약 해지\n"
+             "  스레드(CONFIRMED·FOLLOW_UP_STAGE): 직전 07-30 09:00 루머 보도")
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    seen = _capture_propose(monkeypatch, facts, context=((block,), 1, 0))
+
+    assert "[사건 문맥" in seen["facts"], "스레드 문맥 섹션이 프롬프트에 없다"
+    assert "10:31" in seen["facts"] and "SK하이닉스 공급계약 해지" in seen["facts"]
+    # 검정의 점 방아쇠 접지는 그대로 창 안 축이다 - 제안 문맥 확장이 검정 계약을
+    # 흔들면 안 된다.
+    assert seen["event_types"] == ["CONTRACT.SIGNING"]
+
+
+def test_no_events_keeps_the_current_brief(monkeypatch):
+    """사건 0·계열만 발화면 brief 는 현행 그대로다 - 스레드가 없는데 문맥 섹션을
+    지어내면 안 된다."""
+    import dataclasses
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    seen = _capture_propose(monkeypatch, facts, context=((), 0, 0))
+
+    assert "[사건 문맥" not in seen["facts"]
+    assert "창 안 사건 타입: 없음" in seen["facts"]
+    assert "오늘 발화 계열족: ['거래량']" in seen["facts"]
+
+
+def test_context_counts_and_failures_are_logged(monkeypatch):
+    """제안 입력에 실린 사건 수·조회 실패 수가 log 이벤트로 남는다.
+
+    방아쇠 판정이 침묵 폴백이라 실행마다 결과가 흔들려도 원인을 못 짚던 문제의
+    관측 라인이다 - 이 이벤트가 사라지면 깨져야 한다.
+    """
+    import dataclasses
+
+    from edge_analysis.observability import collect_trace
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    with collect_trace() as trace:
+        _capture_propose(monkeypatch, facts, context=(("블록",), 3, 2))
+
+    [ev] = [e for e in trace if e.get("event") == "hypothesis.context"]
+    assert ev["events"] == 3 and ev["lookup_failures"] == 2
+    assert ev["in_window"] == 1
+
+
+def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):
+    """_etypes·series_z 예외 삼킴에 로그 한 줄이 남는다 - 완전 침묵 폴백 금지."""
+    import dataclasses
+
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics import etfcell
+
+    def boom(*a, **k):
+        raise RuntimeError("RDB 부재")
+
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", boom)
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", boom)
+
+    facts = dataclasses.replace(_facts(), event_ids=("e1",))
+    with collect_trace() as trace:
+        out = etfcell._window_paneltest(
+            object(), "iid", "2026-08-05", lambda *_: {}, facts)
+
+    assert out == ((), ()), "재료 없음 - LLM 미호출 계약이 흔들렸다"
+    events = {e.get("event") for e in trace}
+    assert "hypothesis.etypes_failed" in events
+    assert "hypothesis.series_z_failed" in events

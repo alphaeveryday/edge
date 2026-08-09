@@ -53,16 +53,22 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
             raise ValueError("요청창 설명에는 instrument_id·window_start·window_end가 필요하다")
         facts = window_facts(
             lake, etf, instrument_id, day, window_start, window_end, roll=roll)
-        stats, causal = _window_paneltest(lake, instrument_id, day, ask, facts)
-        if stats or causal:
-            import dataclasses
-            facts = dataclasses.replace(
-                facts, statistics=facts.statistics + stats,
-                causal=facts.causal + causal)
+        # 검정 산출은 **고객 산문에 싣지 않는다**(ALPHA-876, 근거 명세 v3 §0) -
+        # 카드에 통계 어휘 금지·완성 문장 저장 금지. 레코드는 stage_results 버퍼
+        # (`stat_tests`)에만 보존하고, 근거 포맷 구현 시 통계검정 레코드(§3)의
+        # 입력이 된다. 산문 승격은 그 포맷의 렌더 계층 몫이다.
+        stat_tests, hypothesis_trials = _window_paneltest(
+            lake, instrument_id, day, ask, facts)
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
         if window_meta is not None:
+            if stat_tests:
+                window_meta["stat_tests"] = list(stat_tests)
+            if hypothesis_trials:
+                # 가설 원장(ALPHA-881) 행 재료 — etfcell 은 store 를 모르므로
+                # window_meta 로 올리고 pipeline 이 영속한다(단일 writer, ADR-0005).
+                window_meta["hypothesis_trials"] = list(hypothesis_trials)
             window_meta.update({
                 "window_start": facts.window_start,
                 "window_end": facts.window_end,
@@ -163,72 +169,131 @@ def _no_apply_reason(r) -> str:
     return "오늘 적용 요건 미충족"
 
 
+# EdgeVerdict(한글) → hypothesis_trial.verdict(영문 코드). 저장은 영문 코드 원칙 —
+# 산문·버퍼는 한글 원값을 유지하고, 원장만 코드로 적는다(ALPHA-881).
+_VERDICT_CODE = {"성립": "ESTABLISHED", "불성립": "NOT_ESTABLISHED",
+                 "판정불가": "UNDECIDABLE"}
+
+
 def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
-                      ) -> tuple[tuple, tuple[str, ...]]:
-    """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → (statistics, causal).
+                      ) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
+    """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → **레코드 버퍼**.
+
+    반환은 (stat_tests, hypothesis_trials) 두 버퍼다. 앞은 근거 포맷 입력
+    (stage_results, 한글 원값), 뒤는 가설 원장(hypothesis_trial) 행 재료다
+    (ALPHA-881, 영문 코드) — 기각된 제안도 사유와 함께 행이 된다. 기각이
+    침묵되면 "무엇이 제안됐고 왜 죽었나"가 사라진다(Rule 12).
 
     계약 세 줄:
       1. LLM 은 **제안만** 한다 - 판정은 `edge_gate`·`applies_today`(코드)다.
-         LLM 출력이 검정을 우회해 산문에 직행하는 경로는 없다: statistics 에
-         실리는 claim 도 닫힌 어휘 슬롯의 결정론 조합이다.
-      2. **유의(성립 + 오늘 적용)만** StatisticFact 로 승격한다. 불성립·판정불가·
-         적용불가는 causal 라인에 **사실로 명시**한다(Rule 12) - 숨기지 않는다.
+         LLM 출력이 검정을 우회해 어디로도 직행하지 않는다.
+      2. 산출은 **고객 산문에 실리지 않는다**(ALPHA-876, 근거 명세 v3) - 전 판정
+         (성립·불성립·판정불가·적용불가)을 영문 코드 아닌 슬롯 원값 그대로
+         stage_results 버퍼에 남긴다. 숨기는 게 아니라 축을 옮긴 것이다(Rule 12):
+         근거 포맷(통계검정 레코드 §3)이 이 버퍼를 입력으로 렌더한다.
       3. 방아쇠 재료(창 안 사건 타입 또는 오늘 발화 계열족)가 없으면 LLM 을
          부르지 않는다 - 재료 없는 가설은 소원이고, 호출 자체가 비용이다.
     """
     if ask is None:
         return (), ()
+    from ..observability import log
     from .hypothesize import propose
-    from .interval import StatisticFact, _etypes
+    from .interval import _etypes, thread_context
     from .paneltest import FEATURES, Z_ANOM, edge_tests, series_z
 
     try:
         ets = _etypes(lake, list(facts.event_ids))
-    except Exception:                           # noqa: BLE001 - 부재는 빈 목록
+    except Exception as e:                      # noqa: BLE001 - 부재는 빈 목록
+        # 침묵 폴백이 방아쇠 판정을 흔든다(실행마다 결과가 다른데 이유가 안 남는다) -
+        # 빈 목록 폴백은 유지하되 사유는 로그로 드러낸다.
+        log("hypothesis.etypes_failed", error=f"{type(e).__name__}: {str(e)[:80]}")
         ets = []
     try:
         fired = sorted(f for f, z in series_z(lake, instrument_id, day).items()
                        if abs(z) >= Z_ANOM)
-    except Exception:                           # noqa: BLE001 - 부재는 빈 목록
+    except Exception as e:                      # noqa: BLE001 - 부재는 빈 목록
+        log("hypothesis.series_z_failed", error=f"{type(e).__name__}: {str(e)[:80]}")
         fired = []
     if not ets and not fired:
         return (), ()
+
+    # 제안 접지(ALPHA-885): 직전 거래일부터 요청창 끝까지의 스레드 문맥. 검정의
+    # 점 방아쇠 접지(`ets`, 창 안)는 그대로다 - 문맥은 제안에만 실린다.
+    context, n_ctx, n_fail = thread_context(
+        lake, instrument_id, day, facts.window_end, facts.event_ids)
+    log("hypothesis.context", events=n_ctx, lookup_failures=n_fail,
+        in_window=len(facts.event_ids))
 
     brief = (f"[셀] {facts.ticker} {facts.name} · {day} "
              f"요청창 {facts.window_start}~{facts.window_end} "
              f"수익 {facts.window_return * 100:+.2f}%\n"
              f"창 안 사건 타입: {ets or '없음'} · 오늘 발화 계열족: {fired or '없음'}")
+    if getattr(facts, "beta_path", ""):  # 시변 β 경로 요약(ALPHA-803) - facts 가 정본
+        brief += "\n" + facts.beta_path
+    if context:
+        brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
+                  f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
+    # sql 탐색 툴(ALPHA-886 2단계) — 레이크가 툴 표면을 못 만들면(구형·스텁) 주입식만.
+    try:
+        from .sqltool import tool_spec
+        sql_tool = tool_spec(lake)
+    except Exception as e:                      # noqa: BLE001 - 부재는 툴 없이 진행
+        log("hypothesis.sqltool_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
+        sql_tool = None
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),
-                                   series_families=fired)
+                                   series_families=fired, sql_tool=sql_tool)
     except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
-        return (), (f"가설 제안 실패 — {type(e).__name__}: {str(e)[:80]}",)
+        return ({"stage": "propose", "verdict": "제안실패",
+                 "reason": f"{type(e).__name__}: {str(e)[:80]}"},), ()
+    # 기각 제안은 사유째로 원장 행이 된다 — 유효 튜플이 몇 개든(0개 포함) 남긴다.
+    trials: list[dict] = [
+        {"stage": "REJECTED", "verdict": "REJECTED", "reason": why}
+        for why in rejected]
     if not tuples:
-        return (), ("검정할 유효 가설이 없다 — "
-                    + (f"제안 전부 거부됨 ({len(rejected)}건)" if rejected
-                       else "가설이 제안되지 않았다"),)
+        return ({"stage": "propose", "verdict": "가설없음",
+                 "reason": (f"제안 전부 거부됨 ({len(rejected)}건)" if rejected
+                            else "가설이 제안되지 않았다")},), tuple(trials)
 
-    stats: list[StatisticFact] = []
-    causal: list[str] = []
+    from dataclasses import asdict
+    records: list[dict] = []
     for t, r in edge_tests(lake, tuples, day, cell_instrument_id=instrument_id):
-        claim = (f"{t.trigger.ident} 방아쇠 × {t.channel} × "
-                 f"노출 {t.exposure.ident}/{t.exposure.transform} ({t.layer}층)")
-        if r.verdict == "성립" and r.applies_today:
-            stats.append(StatisticFact(
-                claim=f"{claim} — 패널 검정 성립, 오늘 적용.", n=r.n,
-                effect=(None if r.effect_high is None
-                        else r.effect_high - r.effect_low), p=r.p))
-            causal.append(f"{claim}: 성립 (n={r.n}, p={r.p:.4f}) · 오늘 적용")
-        elif r.verdict == "성립":
-            causal.append(f"{claim}: 패널에서는 성립했으나 오늘 적용 불가 — "
-                          + _no_apply_reason(r))
-        elif r.verdict == "불성립":
-            causal.append(f"{claim}: 유의하지 않았다 "
-                          f"(n={r.n}, p={r.p:.4f}) — 영향 없음이 아니라 못 가름")
-        else:
-            causal.append(f"{claim}: 판정불가 — {r.reason or '사유 미상'}")
-    return tuple(stats), tuple(causal)
+        reason = (r.reason if r.verdict not in ("성립", "불성립")
+                  else ("" if r.applies_today or r.verdict == "불성립"
+                        else _no_apply_reason(r)))
+        records.append({
+            "stage": "test",
+            "trigger": t.trigger.ident,
+            # 근거 포맷 §5 게이트 재료(ALPHA-888): 계열 방아쇠는 발화를 명시
+            # 확인해야 한다 — applies_today 는 trigger_fired=None(미계측)을
+            # `is not False` 로 통과시키므로, 유도기가 원값을 직접 본다.
+            "trigger_kind": t.trigger.kind,
+            "trigger_fired": r.trigger_fired,
+            "null_kind": r.null_kind,
+            "channel": t.channel,
+            "exposure": f"{t.exposure.ident}/{t.exposure.transform}",
+            "layer": t.layer,
+            "verdict": r.verdict,
+            "applies_today": bool(r.applies_today),
+            "n": r.n, "p": r.p,
+            "effect_low": r.effect_low, "effect_high": r.effect_high,
+            "reason": reason,
+        })
+        trials.append({
+            "stage": "TESTED",
+            "verdict": _VERDICT_CODE[r.verdict],
+            "trigger_slot": f"{t.trigger.kind}:{t.trigger.ident}",
+            "channel": t.channel,
+            "exposure": f"{t.exposure.ident}/{t.exposure.transform}",
+            "layer": t.layer,
+            "conditions": [asdict(v) for v in t.conditions],
+            "applies_today": bool(r.applies_today),
+            "n": r.n, "p": r.p,
+            "effect_low": r.effect_low, "effect_high": r.effect_high,
+            "reason": reason,
+        })
+    return tuple(records), tuple(trials)
 
 
 def _dual(lake, roll, r, day: str, honest: str, ask, split=None,

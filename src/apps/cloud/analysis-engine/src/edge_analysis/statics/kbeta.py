@@ -7,18 +7,20 @@
 
 상태공간:
 
-    β_t = β_{t-1} + w_t      w ~ N(0, Q)     (랜덤워크)
-    r_i,t = β_t · r_m,t + ε  ε ~ N(0, R)
-    β_0 ~ N(β̂_20d, SE²)                     (일간 20일 롤링이 prior)
+    β_t = β_{t-1} + w_t      w ~ N(0, Q_β)   (랜덤워크)
+    r_i,t = β_t · r_m,t + ε  ε ~ N(0, R_β)
+    β_0 ~ N(β̂_전일, SE²)                    (전일 5분봉 OLS 가 prior)
 
-개장 직후 일중 표본만으로는 β 를 못 추정한다 - 일간 롤링을 초기값으로 주는 것이
+개장 직후 일중 표본만으로는 β 를 못 추정한다 - 전일 추정을 초기값으로 주는 것이
 정당한 축소(shrinkage)다.
 
 ## 정직해야 하는 셋
 
 1. **Q 가 결과를 지배한다.** 크면 β 가 노이즈를 추종하고 작으면 초기값에 갇힌다.
-   셀별 MLE 로 정하면 §13(재실행 결정론)이 깨진다 - 데이터에서 유도하되 **규칙을
-   전역 고정**한다: Q = var(일간 β 의 일간 변화) / 하루 봉수.
+   손튜닝·60일 회귀 대신 **전일 5분봉 종가(~78개)에 로컬레벨 모형을 EM 최대우도
+   피팅**해 가격의 Q·R 을 얻고(`fit_qr`, ALPHA-803 SSOT), 그것을 고정 규칙으로
+   β 필터의 Q_β·R_β 로 옮긴다(`beta_filter_params`). 매일 전일 하루로 재피팅하는
+   롤링이며, EM 은 결정론이라 §13(재실행 결정론)이 유지된다.
 2. **일중 β 는 설명 전용이다.** yfinance 5분봉 상한이 60일이라 타입 수준 패널
    (n 수백~수천)을 만들 수 없다. 패널 검정은 일봉을 그대로 쓴다 - 섞으면 표본이
    거짓말한다.
@@ -36,8 +38,7 @@ import warnings
 import numpy as np
 
 BARS_PER_DAY = 78       # 09:00~15:30 5분봉 (전역 상수 - 가설별 지정 금지)
-BETA_DAILY_WIN = 20     # 일간 롤링 β 창 = 초기값 표본
-R_WIN_DAYS = 5          # 관측 분산 R 을 재는 직전 거래일 수
+EM_ITER = 5             # fit_qr EM 반복 수 (SSOT 스니펫 그대로 - 셀별 조정 금지)
 MIN_BARS = 20           # 일중 봉이 이보다 적으면 판정불가
 CI_MAX = 1.20           # β CI 폭이 이보다 넓으면 판정불가 (Epps·비동시성 가드)
 MARKET = {"KOSPI": "069500.KS", "KOSDAQ": "229200.KS"}
@@ -62,37 +63,54 @@ def _logret(close) -> np.ndarray:
     return np.diff(np.log(np.where(c > 0, c, np.nan)))
 
 
-def daily_beta(stk_d, mkt_d, day: str, win: int = BETA_DAILY_WIN):
-    """(β̂, SE, β 일간변화 분산) — 칼만의 초기값과 Q 규칙의 재료.
+def fit_qr(prev_day_closes, n_iter: int = EM_ITER) -> tuple[float, float]:
+    """전일 5분봉 종가(~78개)에 로컬레벨 모형을 EM 최대우도 피팅 → (Q, R).
 
-    `day` **미포함**이다 (당일 정보로 당일 초기값을 만들면 선견이다).
+        level_t = level_{t-1} + w,  w ~ N(0, Q)     (참 로그가격)
+        obs_t   = level_t + v,      v ~ N(0, R)     (미시구조 잡음)
+
+    ALPHA-803 SSOT(pykalman `em()`) 그대로다. 단 하나의 이탈: **로그가격**에
+    피팅한다 - 원가격이면 Q·R 이 원화² 단위라 β 필터의 수익률² 공간으로 옮길
+    수 없다. 로그로 받으면 Q 는 '봉당 참수익 분산', R 은 '로그가격 관측잡음
+    분산'이 되어 단위가 맞는다. EM 은 결정론이다 - 같은 입력이면 같은 출력.
     """
-    import pandas as pd
-    d0 = pd.Timestamp(day).tz_localize(None)
-    s = stk_d["Close"].copy()
-    m = mkt_d["Close"].copy()
-    s.index = pd.to_datetime(s.index).tz_localize(None)
-    m.index = pd.to_datetime(m.index).tz_localize(None)
-    j = pd.concat([s.rename("s"), m.rename("m")], axis=1).dropna()
-    j = j[j.index < d0]
-    if len(j) < win + 2:
-        return None
-    ls, lm = _logret(j["s"].to_numpy()), _logret(j["m"].to_numpy())
-    # 롤링 β 계열: Q 규칙이 '일간 β 가 하루에 얼마나 움직이나' 를 요구한다.
-    betas = []
-    for k in range(win, len(lm) + 1):
-        x, y = lm[k - win:k], ls[k - win:k]
-        v = float((x * x).sum())
-        if v > 0:
-            betas.append(float((x * y).sum() / v))
-    if len(betas) < 3:
-        return None
-    x, y = lm[-win:], ls[-win:]
-    b = float((x * y).sum() / (x * x).sum())
-    resid = y - b * x
-    se = float(np.sqrt((resid @ resid) / max(win - 1, 1) / (x @ x)))
-    dvar = float(np.var(np.diff(np.asarray(betas)), ddof=1))
-    return b, se, dvar
+    c = np.asarray(prev_day_closes, dtype=float)
+    c = c[np.isfinite(c) & (c > 0)]
+    if len(c) < MIN_BARS:
+        raise ValueError(f"전일 종가 {len(c)} < {MIN_BARS}")
+    lp = np.log(c)
+    from pykalman import KalmanFilter
+    # EM 초기값을 데이터 스케일로 준다. pykalman 기본값(공분산 1.0)은 수익률
+    # 스케일(~1e-6)과 6자릿수 어긋나 n_iter=5 로는 수렴 근처도 못 간다(실측
+    # 1만 배 이탈). var(Δlogp) 를 Q·R 로 반씩 나눠 시작한다 - 데이터에서 오는
+    # 결정론적 초기화라 재실행 결정론이 유지된다.
+    v0 = max(float(np.var(np.diff(lp), ddof=1)), 1e-12)
+    kf = KalmanFilter(transition_matrices=[1], observation_matrices=[1],
+                      initial_state_mean=lp[0],
+                      transition_covariance=[[v0 / 2]],
+                      observation_covariance=[[v0 / 2]])
+    kf = kf.em(lp, n_iter=n_iter)
+    return float(np.asarray(kf.transition_covariance)[0, 0]), \
+        float(np.asarray(kf.observation_covariance)[0, 0])
+
+
+def beta_filter_params(Q: float, R: float, b0: float, var_m: float,
+                       n_bars: int = BARS_PER_DAY) -> tuple[float, float]:
+    """가격 로컬레벨 (Q, R) → β 필터 (Q_β, R_β). 전역 고정 규칙 - 셀별 튜닝 금지.
+
+    - **R_β (관측잡음)**: β 관측식 y=β·x+ε 의 ε 는 (고유수익) + (관측잡음의 차분).
+      고유수익 분산 ≈ Q − b0²·var_m (총 참수익 분산에서 시장 설명분을 뺀 것,
+      바닥 0.1·Q - 음수 방지), 차분잡음 = 2R (인접 두 관측의 잡음이 다 들어온다).
+    - **Q_β (상태잡음)**: 'β 는 하루 전체 관측이 주는 정밀도만큼 하루에 표류할
+      수 있다'로 스케일한다. 1일 OLS 의 SE² ≈ R_β/(n·var_m) 이고 하루 표류 분산
+      n·Q_β 를 그것과 같게 두면 Q_β = R_β/(var_m·n²). 손튜닝 상수가 없고 모든
+      입력이 EM 산출·전일 실측에서 온다.
+    """
+    if var_m <= 0:
+        raise ValueError("시장 분산이 0 이하 - β 필터를 정의할 수 없다")
+    r_beta = max(Q - b0 * b0 * var_m, 0.1 * Q) + 2.0 * R
+    q_beta = r_beta / (var_m * n_bars * n_bars)
+    return q_beta, r_beta
 
 
 def kalman(y: np.ndarray, x: np.ndarray, b0: float, p0: float,
@@ -113,30 +131,87 @@ def kalman(y: np.ndarray, x: np.ndarray, b0: float, p0: float,
     return b, p
 
 
+MIN_PATH = 3            # 구간 봉 수익 계열이 이보다 짧으면 필터를 세우지 않는다
+
+
+def wired_beta(prev_s, prev_m, y, x) -> dict:
+    """전일 5분봉 종가 두 계열(시각 정렬됨) + 구간 수익 계열 → β_t 경로와 시장 기여.
+
+    구간(clock)·커밋 봉 배선 전용(ALPHA-803 2단계). `intraday_beta` 와 같은 규율
+    (선견 금지 - Q·R·β0 전부 전일)이되, 재료를 yfinance 가 아니라 호출자(레이크
+    `bars_5m` 전일 파티션·상태축 봉)에게서 받는다. 실패는 {"verdict": "판정불가",
+    "reason": …} - β=1 폴백 여부와 그 기록은 호출자(`layers.decompose`) 몫이다
+    (Rule 12: 조용한 폴백 금지).
+
+    반환(성립): beta·var 경로, contribution = Σ β_t·x_t (경로 적분),
+    ci = 1.96·√(Σ x_t²·P_t) (필터 분산 P_t 에서 유도한 기여 신뢰폭).
+    """
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    if len(y) != len(x) or len(y) < MIN_PATH:
+        return {"verdict": "판정불가",
+                "reason": f"구간 봉 {min(len(y), len(x))} < {MIN_PATH}"}
+    try:
+        Q, R = fit_qr(prev_s)
+    except Exception as e:              # noqa: BLE001 - EM·표본 실패는 사유로
+        return {"verdict": "판정불가", "reason": f"fit_qr 실패: {e}"}
+    ys, xs = _logret(prev_s), _logret(prev_m)
+    ok = np.isfinite(ys) & np.isfinite(xs)
+    ys, xs = ys[ok], xs[ok]
+    if len(xs) < MIN_BARS - 1:
+        return {"verdict": "판정불가",
+                "reason": f"전일 정렬 수익 {len(xs)} < {MIN_BARS - 1}"}
+    sxx = float(xs @ xs)
+    var_m = float(np.var(xs, ddof=1))
+    if sxx <= 0 or var_m <= 0:
+        return {"verdict": "판정불가", "reason": "전일 시장 분산 0"}
+    b0 = float(ys @ xs / sxx)
+    resid = ys - b0 * xs
+    se0 = float(np.sqrt((resid @ resid) / max(len(ys) - 1, 1) / sxx))
+    q, r = beta_filter_params(Q, R, b0, var_m)
+    b, p = kalman(y, x, b0, se0 * se0, q, r)
+    return {"verdict": "성립", "beta": b, "var": p, "b0": b0, "q": q, "r": r,
+            "contribution": float(b @ x),
+            "ci": float(1.96 * np.sqrt(float(p @ (x * x))))}
+
+
 def intraday_beta(symbol: str, day: str, *, market: str = "KOSPI") -> dict:
-    """당일 시점별 β_t + CI. 재료가 없으면 사유와 함께 판정불가."""
+    """당일 시점별 β_t + CI. 재료가 없으면 사유와 함께 판정불가.
+
+    당일 정보를 초기값·잡음 추정에 쓰지 않는다 (선견 금지):
+      - Q·R: 전일 5분봉 종가에 `fit_qr` EM 피팅 → `beta_filter_params` 이식.
+      - β_0·P_0: 전일 5분봉 OLS β 와 그 SE².
+    """
     import pandas as pd
     msym = MARKET[market]
     s5, m5 = fetch(symbol, interval="5m", period="60d"), fetch(msym, interval="5m", period="60d")
-    sd, md = fetch(symbol, interval="1d", period="2y"), fetch(msym, interval="1d", period="2y")
-    if any(v is None for v in (s5, m5, sd, md)):
+    if any(v is None for v in (s5, m5)):
         return {"verdict": "판정불가", "reason": "yfinance 응답 없음 (심볼 또는 기간)"}
-    init = daily_beta(sd, md, day)
-    if init is None:
-        return {"verdict": "판정불가",
-                "reason": f"일간 초기값 표본 부족 ({BETA_DAILY_WIN}일 롤링 불가)"}
-    b0, se0, dvar = init
     j = pd.concat([s5["Close"].rename("s"), m5["Close"].rename("m")], axis=1).dropna()
     d0 = pd.Timestamp(day).date()
-    # R: 직전 R_WIN_DAYS 거래일의 5분 잔차 분산. 당일 정보를 쓰지 않는다.
     prev = j[[d.date() < d0 for d in j.index]]
-    days = sorted({d.date() for d in prev.index})[-R_WIN_DAYS:]
-    pr = prev[[d.date() in days for d in prev.index]]
+    if prev.empty:
+        return {"verdict": "판정불가", "reason": "전일 5분봉 없음 (커버리지 밖)"}
+    pd_last = max(d.date() for d in prev.index)
+    pr = prev[[d.date() == pd_last for d in prev.index]]
     if len(pr) < MIN_BARS:
-        return {"verdict": "판정불가", "reason": f"R 추정용 직전 5분봉 {len(pr)} < {MIN_BARS}"}
+        return {"verdict": "판정불가",
+                "reason": f"전일({pd_last}) 5분봉 {len(pr)} < {MIN_BARS}"}
+    try:
+        Q, R = fit_qr(pr["s"].to_numpy())
+    except ValueError as e:
+        return {"verdict": "판정불가", "reason": f"fit_qr 실패: {e}"}
     ys, xs = _logret(pr["s"].to_numpy()), _logret(pr["m"].to_numpy())
     ok = np.isfinite(ys) & np.isfinite(xs)
-    r = float(np.var(ys[ok] - b0 * xs[ok], ddof=1))
+    ys, xs = ys[ok], xs[ok]
+    sxx = float(xs @ xs)
+    if sxx <= 0:
+        return {"verdict": "판정불가", "reason": "전일 시장 수익 분산 0"}
+    b0 = float(ys @ xs / sxx)
+    resid = ys - b0 * xs
+    se0 = float(np.sqrt((resid @ resid) / max(len(ys) - 1, 1) / sxx))
+    var_m = float(np.var(xs, ddof=1))
+    q, r = beta_filter_params(Q, R, b0, var_m)
     today = j[[d.date() == d0 for d in j.index]]
     if len(today) < MIN_BARS:
         return {"verdict": "판정불가",
@@ -145,8 +220,6 @@ def intraday_beta(symbol: str, day: str, *, market: str = "KOSPI") -> dict:
     ts = list(today.index)[1:]
     fin = np.isfinite(y) & np.isfinite(x)
     y, x, ts = y[fin], x[fin], [t for t, f in zip(ts, fin) if f]
-    # Q 규칙 (전역): 일간 β 변화 분산을 하루 봉수로 나눈다. 셀별 튜닝 금지.
-    q = dvar / BARS_PER_DAY
     b, p = kalman(y, x, b0, se0 * se0, q, r)
     ci = 1.96 * np.sqrt(p)
     wide = float(np.median(2 * ci))
@@ -155,6 +228,7 @@ def intraday_beta(symbol: str, day: str, *, market: str = "KOSPI") -> dict:
                 "reason": f"β CI 중위 폭 {wide:.2f} > {CI_MAX} — 일중 상관 붕괴"
                           " (Epps·비동시거래). 부재를 0 으로 쓰지 않는다"}
     return {"verdict": "성립", "b0": b0, "se0": se0, "q": q, "r": r,
+            "Q_price": Q, "R_price": R,
             "ts": ts, "beta": b, "ci": ci, "y": y, "x": x,
             "ci_width_med": wide, "n": len(y)}
 
@@ -197,7 +271,6 @@ def path_summary(res: dict, marks: list[str]) -> list[tuple]:
 
 SECTOR_TOPN = 12        # 섹터 프록시 구성원 수 (전역 상수)
 PROXY_RHO_MIN = 0.70    # 일봉 KRX 업종지수와 이만큼도 안 맞으면 프록시 자격 없음
-RHO_IDIO_MAX = 0.20    # 잔차 공통상관이 이보다 크면 '고유'라 부를 자격이 없다
 
 
 def sector_proxy(lake, tk6: str, day: str, topn: int = SECTOR_TOPN) -> dict:
@@ -315,53 +388,11 @@ def intraday_beta2(lake, symbol: str, day: str, *, market: str = "KOSPI") -> dic
         return {"verdict": "판정불가",
                 "reason": f"2요인 β_m CI 중위 폭 {wide:.2f} > {CI_MAX} — 일중 상관 붕괴",
                 "one_factor": one}
-    # **'고유' 라 부를 자격 검사** (layers.py L20 이 선언하고 배선은 없던 것).
-    # 시장·섹터를 뺀 잔차가 구성원 사이에서 여전히 동조하면 이름 없는 공통요인이
-    # 남아 있다는 직접 증거다 - 그걸 '고유' 라 부르면 종목 사건으로 설명하려 든다.
-    rho_idio, rho_n = _resid_rho(sp.get("lr_members"), idx, ok, rm, rso)
+    # ρ(잔차 공통상관) 판정은 제외한다 - 사용자 결정 (ALPHA-803, 2026-08-08).
     return {"verdict": "성립", "ts": ts, "beta_m": B[:, 0], "beta_s": B[:, 1],
             "ci_m": ci[:, 0], "ci_s": ci[:, 1], "y": y, "rm": rm, "rs_orth": rso,
             "gamma": g, "rho_proxy": sp["rho"], "sector_code": sp["code"],
-            "n_members": sp["n_members"], "b0": one["b0"], "q": one["q"], "n": len(y),
-            "rho_idio": rho_idio, "rho_idio_n": rho_n,
-            "idio_qualified": None if rho_idio is None else rho_idio <= RHO_IDIO_MAX}
-
-
-def _resid_rho(members, idx, ok: np.ndarray, rm: np.ndarray,
-               rso: np.ndarray) -> tuple[float | None, int]:
-    """구성원 잔차의 평균 횡단면 상관. ρ≈0 이어야 '고유' 라 부를 자격이 생긴다.
-
-    각 구성원을 같은 두 요인(시장·섹터⊥)에 회귀하고 남은 잔차끼리의 상관을 잰다.
-    남아 있으면 층이 하나 부족한 것이고, 그 몫이 조용히 '고유' 로 흘러든다.
-    """
-    if members is None or getattr(members, "empty", True):
-        return None, 0
-    X = np.column_stack([np.ones(len(rm)), rm, rso])
-    res = []
-    for col in members.columns:
-        v = members[col].reindex(idx).to_numpy(dtype=float)[ok]
-        if not np.isfinite(v).all() or np.ptp(v) == 0:
-            continue
-        beta, *_ = np.linalg.lstsq(X, v, rcond=None)
-        res.append(v - X @ beta)
-    if len(res) < 3:
-        return None, len(res)
-    return _residual_rho(res), len(res)
-
-
-def _residual_rho(resid: list[np.ndarray]) -> float | None:
-    """잔차 평균 횡단면 상관. **ρ≈0 이어야 '고유'라 부를 자격이 생긴다** -
-    남아 있으면 이름 없는 공통요인이 있다는 직접 증거다.
-
-    구 `layers.residual_rho` 의 이관(ALPHA-862) - 층 회계에서 ρ 게이트가 빠진 뒤
-    이 판정은 칼만 축 소유다.
-    """
-    if len(resid) < 3:
-        return None
-    m = np.corrcoef(np.vstack(resid))
-    iu = np.triu_indices_from(m, k=1)
-    v = m[iu][np.isfinite(m[iu])]
-    return float(v.mean()) if len(v) else None
+            "n_members": sp["n_members"], "b0": one["b0"], "q": one["q"], "n": len(y)}
 
 
 def path_layers3(res: dict) -> list[tuple[str, float, float, float, float, float]]:

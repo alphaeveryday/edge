@@ -15,10 +15,12 @@
 회계만 하고, 판정은 칼만이 신뢰구간과 함께 가져온다.
 
 섹터 후보는 **우리가 고르지 않는다.** 설명력으로 고르면 섹터가 아니라 '가장 잘 맞는
-무엇' 이 된다(042700 07-31 삼성전자가 섹터로 뽑힌 실수). 일 모드는 구성종목 최빈
-KRX 업종지수, 구간 모드(KRX 지수는 5분봉이 없다)는 구성 겹침 최대 섹터 ETF 다 -
-겹침은 포트폴리오 사실이지 적합이 아니다. 동어반복(겹침 ≥ `TAUTOLOGY_CUT`)과
-무근거(겹침 < `MIN_OVERLAP`)는 사유와 함께 뺀다.
+무엇' 이 된다(042700 07-31 삼성전자가 섹터로 뽑힌 실수). 섹터의 최종형은 **KRX
+업종지수 하나다**(ALPHA-877) - 지수는 KRX 가 산출하고 업종은 구성종목 최빈이
+정하므로 어느 쪽도 우리 선택이 아니다. 프록시 섹터 ETF 겹침 선택은 폐기했다.
+업종지수는 분봉이 없어(수집 스펙만 존재) 구간(clock) 모드의 섹터 층은 **정직
+부재**다 - 사유를 남기고 시장+고유 2층으로 선다. 프록시로 메우면 '가장 잘 맞는
+무엇'이 섹터를 참칭하던 그 자리로 돌아간다.
 """
 from __future__ import annotations
 
@@ -29,17 +31,14 @@ from functools import lru_cache
 
 TOP_NAMES = 5         # 고유분을 배정할 종목 수
 MARKET_CODE = "069500"
-TAUTOLOGY_CUT = 0.30  # 이만큼 겹치면 같은 것이다 - 섹터 후보에서 뺀다 (동어반복 금지)
+TAUTOLOGY_CUT = 0.30  # 이만큼 겹치면 같은 것이다 - 겹침 판정의 계약 임계 (동어반복 금지)
 MIN_OVERLAP = 0.05    # 이만큼도 안 겹치면 "왜 이게 설명하냐"에 답이 없다 (우연 적합 금지)
 # 대상이 시장과 이만큼 겹치면 광역(broad) ETF 다 - 섹터 층을 접고 시장+고유 2층으로
 # 간다(ALPHA-871). 시장의 부분집합에 '섹터'를 세우면 시장 몫을 두 번 나눠 갖는
 # 동어반복이고, 그때 섹터가 청구하는 차감은 산술은 맞아도 아무것도 설명하지 않는다.
 BROAD_MARKET_CUT = 0.80
-# 섹터 후보에서 항상 빼는 계열 - 데이터 위생(ALPHA-871). 0210A0 은 상장이 늦어
-# 이력이 최소(2026-08 실측 33일)라 계열 자체를 아직 못 믿는다.
-SECTOR_EXCLUDE = frozenset({"0210A0"})
 
-KRX_PREFIX = "KRX:"   # KRX 업종지수 후보의 코드 접두 (겹침 게이트 면제 표식)
+KRX_PREFIX = "KRX:"   # KRX 업종지수 후보의 코드 접두
 
 # 장 시각 경계 - 이 밖은 5분봉이 없다. 밤사이는 갭 하나로 뭉쳐지므로 구간이 아니다.
 SESSION_OPEN, SESSION_CLOSE = "09:00:00", "15:30:00"
@@ -96,6 +95,15 @@ class Rollup:
     twins: tuple[str, ...]      # 겹쳐서 뺀 ETF (동어반복) - 조용히 빼지 않는다
     alien: tuple[str, ...]      # 안 겹쳐서 뺀 ETF (근거 없음)
     halted: int                 # 거래정지로 뺀 종목 수 - 수익률 0 을 참으로 쓰면 거짓
+    # 등락 폭(breadth) - **측정된 전 구성종목** 기준(ALPHA-876). top-N 으로 자른
+    # `names` 로 세면 "구성종목 5종목 중" 같은 거짓 분모가 산문에 나간다(실측 08-08).
+    advancers: int = 0
+    decliners: int = 0
+    # 시변 β (칼만, ALPHA-803 2단계) - 구간/커밋 봉 모드에서 시장 기여가
+    # Σ β_t·r_m,t 로 섰을 때만 채워진다. 비면 β=1 회계이고, 그 폴백의 사유는
+    # `lake.exists["market_beta"]` 에 남는다(조용한 폴백 금지, Rule 12).
+    beta_quarters: tuple[float, ...] = ()   # β_t 경로 4분할 평균
+    beta_ci: float | None = None            # 시장 기여 신뢰폭 (±, 수익률 단위)
 
     @property
     def coverage(self) -> float:
@@ -246,24 +254,84 @@ def _krx_sector_candidate(lake, etf: str, day: str):
             math.log(float(c_now) / float(c_prev)))
 
 
+def _market_beta(lake, etf: str, day: str, paths: dict | None,
+                 ) -> tuple[float, tuple[float, ...], float] | None:
+    """칼만 시변 β 시장 기여 (Σ β_t·r_m,t) - 구간/커밋 봉 모드 전용(ALPHA-803 2단계).
+
+    Q·R·β0 은 전부 **전일 5분봉**(레이크 `bars_5m` 직전 파티션)에서 온다(선견 금지,
+    `kbeta` 서문의 규율 그대로 - 매일 전일 하루로 재피팅하는 롤링). 어떤 이유로든
+    못 서면 None 을 돌려주고 사유를 `lake.exists["market_beta"]` 에 "시장 층 β=1
+    폴백 - …" 로 남긴다 - β=1 로 접는 것 자체는 정당하지만 조용히 접으면 시변 β 가
+    선 런과 구분되지 않는다(Rule 12).
+    """
+    def fall(why: str) -> None:
+        notes = getattr(lake, "exists", None)
+        if notes is not None:
+            notes["market_beta"] = f"시장 층 β=1 폴백 - {why}"
+
+    if not paths or etf not in paths or MARKET_CODE not in paths:
+        fall("구간 봉 수익 계열 미제공")
+        return None
+    try:
+        rows = lake.sql(rf"""
+            SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, ts, close
+            FROM bars_5m
+            WHERE trade_date = (SELECT max(trade_date) FROM bars_5m
+                                WHERE trade_date < DATE '{day}')
+              AND close > 0
+              AND regexp_replace(symbol, '\.(KS|KQ)$', '')
+                  IN ('{etf}', '{MARKET_CODE}')
+            ORDER BY ts""")
+    except Exception as e:              # noqa: BLE001 - 표 부재·질의 실패는 폴백 사유
+        fall(f"전일 5분봉 질의 실패: {type(e).__name__}")
+        return None
+    closes: dict[str, dict] = {}
+    for sym, ts, close in rows:
+        closes.setdefault(str(sym), {})[ts] = float(close)
+    s_map = closes.get(etf, {})
+    m_map = closes.get(MARKET_CODE, {})
+    common = sorted(s_map.keys() & m_map.keys())
+    if len(common) < 2:
+        fall(f"전일 5분봉 부재 (대상·시장 정렬 {len(common)}봉)")
+        return None
+    import numpy as np
+    from .kbeta import wired_beta
+    res = wired_beta(np.array([s_map[t] for t in common]),
+                     np.array([m_map[t] for t in common]),
+                     paths[etf], paths[MARKET_CODE])
+    if res.get("verdict") != "성립":
+        fall(str(res.get("reason", "?")))
+        return None
+    quarters = tuple(float(np.mean(chunk))
+                     for chunk in np.array_split(res["beta"], 4) if len(chunk))
+    return float(res["contribution"]), quarters, float(res["ci"])
+
+
 # ── 층 회계 ───────────────────────────────────────────────────────────────
 def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
               clock: tuple[str, str] | None = None,
-              intraday: dict[str, tuple[float, bool]] | None = None) -> Rollup | None:
+              intraday: dict[str, tuple[float, bool]] | None = None,
+              paths: dict[str, tuple[float, ...]] | None = None) -> Rollup | None:
     """ETF 구간을 시장·섹터·고유로 가른다. **회계이지 추정이 아니다(β=1, ALPHA-862).**
 
     설명 대상은 **ETF 자신의 수익률**이다 (관측 가능). 구성종목 가중합과의 차이는
     `rollup_gap` 으로 따로 보고한다 - 추적오차와 비중 노후를 숨기지 않는다.
 
     `clock=(t0, t1)` 이면 설명 대상이 **그 구간의 수익률**이 된다. 구간 모드의 섹터
-    층은 **KR 섹터 ETF** 다(KRX 업종지수는 5분봉이 없다 - 실측 0건). 후보 선정은
-    구성 겹침 최대이지 적합이 아니다.
+    층은 **정직 부재**다(ALPHA-877) - KRX 업종지수는 분봉이 없고(수집 스펙만 존재),
+    프록시 섹터 ETF 로 메우던 겹침 선택은 폐기했다. 사유를 커버리지에 남기고
+    시장+고유 2층으로 선다.
 
     `intraday` 는 `{맨코드: (구간 log수익률, 정지여부)}` — 호출자가 **커밋된 1분봉**
     에서 같은 clock 구간으로 계산한 값이다(ALPHA-866). 있는 심볼은 레이크 `bars_5m`
     대신 이 값이 선다: 라우팅은 방금 발화를 만든 바로 그 봉으로 판정해야 하고, 그래야
-    정본(Iceberg) 스테일 폴백이 시장·대상·종목 축에 낄 자리가 없다. 섹터 후보는 수집
-    축이 달라(참조 계열, 1분 수집 밖) 여전히 레이크를 본다 — 후속 PR 의 몫이다.
+    정본(Iceberg) 스테일 폴백이 시장·대상·종목 축에 낄 자리가 없다.
+
+    `paths` 는 `{맨코드: 구간 봉단위 log수익 경로}` - 구간/커밋 봉 모드에서 시장 층을
+    시변 β 로 세우는 재료다(ALPHA-803 2단계). 대상·시장 두 경로가 서고 전일 5분봉이
+    있으면 시장 기여가 β=1 의 r_m 대신 **Σ β_t·r_m,t (경로 적분)** 이 된다. 고유는
+    잔여 정의라 항등식(층 합 + 고유 = 구간수익)은 그대로다. 못 서면 β=1 로 접되
+    사유를 남긴다(`_market_beta`). 일 모드는 이 인자와 무관하게 불변이다.
     """
     # 이번 호출의 판정으로 덮는다. 한 런이 `decompose` 를 두 번 부르므로(라우팅·설명)
     # 앞 호출의 실패가 남으면 뒤 호출이 성공해도 커버리지가 실패를 말한다 — 부재를
@@ -273,14 +341,18 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
         notes.pop("layers", None)
         notes.pop("market_layer", None)
         notes.pop("sector_layer", None)
-    ser = _series(lake, day, ("market", "sector"), clock=clock)
+        notes.pop("market_beta", None)
+    # 대상·시장 두 심볼만 읽는다 - 섹터 ETF 후보 풀이 사라진 뒤로(ALPHA-877) 전
+    # 계열을 읽을 이유가 없다. 대상 ETF 자신이 layers_daily 에 'sector' kind 로
+    # 실려 있어 kinds 는 그대로 둔다.
+    ser = _series(lake, day, ("market", "sector"), clock=clock,
+                  only=(etf, MARKET_CODE))
     # 1분봉 실측이 레이크 값을 **덮는다** - 이름은 레이크 것을 지키고(수익률만 갈아
     # 끼운다), 레이크에 아예 없는 심볼(스테일 정본)은 코드를 이름 삼아 세운다.
     # 시장 층이 "레이크가 낡아서" 빠지는 일이 없어야 한다.
     #
-    # **대상·시장만.** `intraday` 에는 구성종목도 실려 오는데(`_names` 몫), 여기서
-    # 전부 덮으면 종목이 섹터 후보 풀(`ser`)에 들어가 '삼성전자가 섹터로 뽑히는'
-    # 그 실수로 돌아간다 - 후보 풀은 건드리지 않는다.
+    # **대상·시장만.** `intraday` 에는 구성종목도 실려 오는데 그건 `_names` 몫이다 -
+    # `ser` 는 대상·시장 두 심볼의 자리이지 계열 주입 자리가 아니다.
     #
     # 반대 방향도 계약이다: **커밋 봉 모드(intraday is not None)에서 대상·시장이
     # 결손이면 레이크로 내려가지 않는다.** 내려가면 이 배선이 닫은 갈림 - 발화를
@@ -294,10 +366,9 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
                 ser[sym] = (ser[sym][0] if sym in ser else sym, lr, halt)
             else:
                 ser.pop(sym, None)
-    # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다. `kinds` 에 'stock' 을 넣으면
-    # 856 종목이 섹터 후보가 되어 겹침 게이트가 종목마다 질의를 돌고, 무엇보다
-    # '삼성전자가 섹터로 뽑히는' 그 실수로 돌아간다 - 후보 풀은 건드리지 않는다.
-    # 커밋 봉 모드에서는 이 폴백도 닫는다(위와 같은 이유 - 대상은 intraday 가 정본).
+    # 대상이 ETF 가 아니면(개별 종목) **대상만** 주입한다 - `kinds` 에 'stock' 을
+    # 넣어 856 종목을 읽을 이유가 없다. 커밋 봉 모드에서는 이 폴백도 닫는다
+    # (위와 같은 이유 - 대상은 intraday 가 정본).
     if etf not in ser and intraday is None:
         tgt = _series(lake, day, ("stock",), clock=clock, only=etf)
         if etf in tgt:
@@ -328,12 +399,19 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
                  if intraday is not None
                  else f"시장 층 없음 - {MARKET_CODE} 당일 계열 부재"))
 
-    # ── 섹터 후보. 자격은 **구성 겹침**이 정한다 - 조용히 빼지 않고 사유를 남긴다.
-    #   위: 겹치면 같은 것이다 - "반도체가 왜 빠졌냐"에 "반도체가 빠져서"는 설명이 아니다.
-    #   아래: 안 겹치면 근거가 없다 - 게임 ETF 가 2차전지를 "설명"하는 일이 실제로
-    #   일어났다. 산술은 맞지만 아무도 안 믿는다.
-    twins, alien = set(), set()
-    sector = None       # (code, name, ret, overlap)
+    # ── 시변 β (칼만, ALPHA-803 2단계) - 구간/커밋 봉 모드의 시장 층만 ─────────
+    # 시장 기여를 β=1 의 r_m 에서 Σ β_t·r_m,t (경로 적분)로 바꾼다. 섹터 차감
+    # 기준(market_now)은 그대로다 - 섹터 층은 877 상태(β=1 차감·구간 모드 정직
+    # 부재)를 유지한다. 일 모드(clock·intraday 둘 다 없음)는 닿지 않는다.
+    beta_quarters: tuple[float, ...] = ()
+    beta_ci: float | None = None
+    if layers and (clock is not None or intraday is not None):
+        wired = _market_beta(lake, etf, day, paths)
+        if wired is not None:
+            contrib, beta_quarters, beta_ci = wired
+            layers[0] = Layer(MARKET_CODE, layers[0].name, "시장",
+                              market_now, contrib)
+
     meta = {k: v[0] for k, v in ser.items()}
     # **광역 ETF 는 섹터 층을 접는다**(ALPHA-871). 시장과 ≥BROAD_MARKET_CUT 겹치는
     # 대상은 시장의 부분집합이라 섹터가 시장 몫을 두 번 나눠 갖는 동어반복이 된다 -
@@ -343,60 +421,46 @@ def decompose(lake, etf: str, day: str, *, top: int = TOP_NAMES,
     if broad and notes is not None:
         notes["sector_layer"] = (
             f"생략: 시장과 구성 겹침 ≥{BROAD_MARKET_CUT:.0%} - 시장+고유 2층")
-    # KRX 업종지수가 있으면 **그것만** 쓴다 - 지수는 KRX 가 산출하고 업종은 구성종목
-    # 최빈이 정하므로 어느 쪽도 우리 선택이 아니다. 구간 모드는 KRX 5분봉이 없어
-    # 섹터 ETF 로 간다.
-    krx = (None if (clock is not None or broad)
-           else _krx_sector_candidate(lake, etf, day))
-    if krx is not None:
-        code, nm, s_now = krx
-        meta[code] = nm
-        sector = (code, nm, s_now, 0.0)
-    elif not broad:
-        best_ov = 0.0
-        for s_, (nm, s_now, s_halt) in ser.items():
-            if s_ in (etf, MARKET_CODE) or s_ in SECTOR_EXCLUDE or s_halt:
-                continue
-            ov = overlap(lake, etf, s_, day)
-            if ov >= TAUTOLOGY_CUT:
-                twins.add(s_)
-            elif ov < MIN_OVERLAP:
-                alien.add(s_)
-            elif ov > best_ov:
-                # 겹침 최대 = 그 ETF 의 업종에 가장 가깝다. 포트폴리오 사실이지
-                # 적합이 아니다 - 적합으로 고르면 섹터가 아니라 '가장 잘 맞는
-                # 무엇'이 된다(ALPHA-862 에서 회귀 선택을 걷어낸 이유와 같다).
-                sector, best_ov = (s_, nm, s_now, ov), ov
-    # **시장 층이 섰을 때만** 섹터를 세운다. 차감 기준이 없으면 섹터가 시장 몫까지
+    # ── 섹터 후보는 **KRX 업종지수뿐**이다(ALPHA-877) - 프록시 ETF 겹침 선택은
+    # 폐기했다. **시장 층이 섰을 때만** 세운다: 차감 기준이 없으면 섹터가 시장 몫까지
     # 전액 청구하고, 산문은 "(시장 차감)" 이라 적는다 - 일어나지 않은 차감을 말하는
-    # 거짓이다. 대상이 시장 프록시 자신일 때도 같은 이유로 섹터를 안 세운다: 그
-    # 경우는 route 가 "시장 100%" 로 정식 처리하는 정상 경로다(069500 07-29).
-    if sector is not None and layers:
-        code, nm, s_now, ov = sector
+    # 거짓이다. 대상이 시장 프록시 자신일 때도 같은 이유로 안 세운다: 그 경우는
+    # route 가 "시장 100%" 로 정식 처리하는 정상 경로다(069500 07-29).
+    sector = None       # (code, name, ret)
+    if layers and not broad:
+        if clock is not None:
+            # 업종지수는 분봉이 없다(수집 스펙만 존재) - 프록시 ETF 로 메우면
+            # '가장 잘 맞는 무엇'이 섹터를 참칭하던 자리로 돌아간다. 정직 부재.
+            _absent(lake, "sector_layer",
+                    "업종지수 분봉 미수집 - 수집 전까지 시장+고유 2층")
+        else:
+            sector = _krx_sector_candidate(lake, etf, day)
+            if sector is None:
+                _absent(lake, "sector_layer",
+                        f"업종지수 후보 없음 ({etf} {day}) - 시장+고유 2층")
+    if sector is not None:
+        code, nm, s_now = sector
+        meta[code] = nm
         # β=1 시장 차감 - 시장과 겹치는 몫을 빼야 "시장이 민 건지 섹터가 민 건지"
         # 배분 순서 논쟁이 없다. 회귀 직교화의 단위계수판이다.
-        #
-        # 커밋 봉 모드에서는 이 차가 **소스·경계가 다른 두 값**의 차다: `market_now`
-        # 는 상태축 1분 집계(분 단위로 정확히 끝난다), `s_now` 는 레이크 5분봉
-        # (`ts < t1` 격자라 끝이 최대 4분 더 덮인다). 그 어긋남은 idio 로 샌다 -
-        # 섹터 후보가 커밋 봉으로 넘어오는 후속 PR 까지 알고 받는 오차다.
-        layers.append(Layer(code, nm, "섹터", s_now, s_now - market_now, ov))
+        layers.append(Layer(code, nm, "섹터", s_now, s_now - market_now, 0.0))
 
     idio = y_now - sum(x.contribution for x in layers)
-    names, wsum, wtot, halted = _names(lake, etf, day, layers, top, clock=clock,
-                                       intraday=intraday)
+    names, wsum, wtot, halted, adv, dec = _names(lake, etf, day, layers, top,
+                                                 clock=clock, intraday=intraday)
+    # twins/alien 은 프록시 ETF 후보 풀과 함께 사라졌다(ALPHA-877) - 스키마(필드)는
+    # 남긴다: 소비자가 있고, 빈 튜플이 "겹침 판정으로 뺀 것이 없다"는 사실 그대로다.
     return Rollup(etf, etf_label(lake, etf, meta.get(etf, etf)), day, y_now,
                   tuple(layers), idio, names,
                   None if wsum is None else wsum - y_now * wtot, len(names), wtot,
-                  tuple(sorted(meta.get(t, t) for t in twins)),
-                  tuple(sorted(meta.get(t, t) for t in alien)), halted)
+                  (), (), halted, adv, dec, beta_quarters, beta_ci)
 
 
 # ── 종목 귀속 ─────────────────────────────────────────────────────────────
 def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
            clock: tuple[str, str] | None,
            intraday: dict[str, tuple[float, bool]] | None = None,
-           ) -> tuple[tuple[Name, ...], float | None, float, int]:
+           ) -> tuple[tuple[Name, ...], float | None, float, int, int, int]:
     """고유분을 청구하는 상위 종목. **비중 × 고유** 로 순위 - 큰 종목의 작은 움직임과
     작은 종목의 큰 움직임을 같은 자로 잰다.
 
@@ -409,7 +473,7 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
     """
     hold = holdings(lake, etf, day)
     if not hold or not layers:
-        return (), None, 0.0, 0
+        return (), None, 0.0, 0, 0, 0
     # 커밋 봉 모드(ALPHA-866)에서는 구성종목도 **intraday 만이 정본**이다 - 레이크를
     # 아예 안 읽는다. 원장이 결손으로 떨어뜨린 unit 이 레이크(스테일 폴백 경로)에서
     # 되살아나면 dropped_units 와 귀속이 서로 다른 세계를 말한다. 이름은 `hold` 의
@@ -423,6 +487,7 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
                       clock=clock)
     base = sum(x.contribution for x in layers)
     out, wsum, wtot, halted = [], 0.0, 0.0, 0
+    adv = dec = 0
     for tk, label, w in hold:
         if tk not in ser:
             continue
@@ -431,13 +496,15 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
             halted += 1
             continue
         e = r_now - base
+        adv += 1 if r_now > 0 else 0
+        dec += 1 if r_now < 0 else 0
         out.append(Name(tk, label, w, r_now, e, w * e))
         wsum += w * r_now
         wtot += w
     if not out:
-        return (), None, 0.0, halted
+        return (), None, 0.0, halted, 0, 0
     out.sort(key=lambda n: -abs(n.contribution))
-    return tuple(out[:top]), wsum, wtot, halted
+    return tuple(out[:top]), wsum, wtot, halted, adv, dec
 
 
 @lru_cache(maxsize=8192)

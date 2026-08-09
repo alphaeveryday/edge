@@ -143,7 +143,8 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3). sfn_state_name·cli_command·ecs_task_definition 은
+# 등록 26작업(시장 17 + 뉴스 6 + 장중수급 3). 공시 4작업은 1분 레인으로 떠났다(ALPHA-875).
+# sfn_state_name·cli_command·ecs_task_definition 은
 # statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf·investor_intraday_pipeline.tf 의 실제
 # state·command_expr·taskdef_key 와 일치해야 한다 (test_ops_catalog 이 삼중항으로 대조한다).
 # 앞 3개는 ALPHA-530 MVP 슬라이스라 필드를 풀어 썼고, 나머지는 압축 표기다.
@@ -324,8 +325,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     #   (병렬 브랜치 4개는 statemachine.tf 잡 정의 재사용이라 이름 그대로).
     # * depends_on 은 뉴스 SFN 의 게이트 축으로 다시 그렸다 — 옛 시장 의존(LOAD_ASSERTIONS ←
     #   feature 7개 등)을 복사하면 뉴스 런에 존재하지 않는 작업을 기다려 영영 eligible 이 안 된다.
-    # * `kr_trading_calendar` 전부 False — 뉴스 SFN 은 공휴일에도 돈다(평일 크론). True 면 실행
-    #   결과가 SKIPPED 뒤로 통째로 사라진다(ALPHA-181 의 함정).
+    # * `kr_trading_calendar` 전부 False — 뉴스 SFN 은 공휴일에도 돈다(주 7일 크론이라
+    #   ALPHA-874 이후로는 **주말에도** 돈다). True 면 실행 결과가 SKIPPED 뒤로 통째로
+    #   사라진다(ALPHA-181 의 함정) — 요일이 넓어진 만큼 이 False 가 더 중요해졌다.
     CatalogEntry(
         # 뉴스는 휴장일에도 나온다 — kr_trading_calendar=False(비거래일에도 DUE).
         task_key="NEWS_COLLECTION_BIGKINDS", stage="raw", dataset="stock_news", required=True,
@@ -379,62 +381,23 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="events", deadline_offset_seconds=10800,
         stalled_after_seconds=21600, pipeline_type="news",
     ),
-    # ══ 공시 레인 4작업 (pipeline_type="disclosure" — 공시 SFN edge-dev-data-pipeline-disclosure,
-    # 평일 09~18시 정각 10슬롯, ALPHA-722·724) ═══════════════════════════════════════
-    # 시장 레인에 있던 4작업의 **소유 레인 이동**이다(신설이 아니다). 옮기면서 두 값을 조정했다:
+    # ══ 공시 레인 — 4작업을 **뺐다**(ALPHA-875 컷오버) ═══════════════════════════════
+    # 공시는 이제 SFN 슬롯이 아니라 **1분 세션**이 소유한다(`disclosure-worker` — 한 window 가
+    # collect→normalize×2→load 체인 전체다). 그래서 이 레인의 계획·판정 근거가 사라졌다:
     #
-    # * `deadline_offset_seconds` 를 3600/5400/7200 → 1200/1800/2400 으로 줄였다. 옛 값은 하루
-    #   1회 런에 맞춘 것이라 슬롯 간격(3600s)보다 커서 결측이 다음 슬롯 뒤에나 드러났다.
-    #   ⚠️ 기준은 간격이 아니라 **간격 − Reconciler 주기**다: 판정은 15분마다 도는 Reconciler 가
-    #   하므로 deadline 직후가 아니라 최대 900s 뒤에 찍힌다. 3000s 로 뒀더니 3000+900 > 3600 이라
-    #   "다음 슬롯 예정 전에 판정된다"는 계약이 실제로는 안 지켜졌다(edge-review).
-    # * `stalled_after_seconds` 를 21600(6시간) → 1800 으로 줄였다. 옛 값의 근거는 "DART 도
-    #   대상 corp 수만큼 직렬"이었는데 ALPHA-714 가 그 순회를 없앴다. ⚠️ SFN 타임아웃(2400s)과
-    #   **같게 두면 안 된다** — 판정이 `> threshold` 인데 SFN 이 2400s 에 실행을 죽이므로 경과가
-    #   2400 을 넘는 순간이 오지 않아 **영원히 발화하지 않는다**. 타임아웃보다 낮춰야 "어느
-    #   스텝이 매달렸나"를 작업 단위로 남길 수 있다(실행 단위 타임아웃 알람은 그걸 못 준다).
+    # * 원장의 기대는 **슬롯**에서 나온다(`OPS_DISCLOSURE_SCHED_HHMM`). 1분 레인의 기대는
+    #   `minute_ingestion_window` 720행이라 축이 다르다 — 두 원장이 같은 작업을 각자 기대하면
+    #   한쪽은 반드시 거짓 결측을 낸다.
+    # * `by_cli` 는 CLI 로 작업을 해소하는데 두 레인의 CLI 가 글자 그대로 같다. 엔트리를
+    #   남겨 두면 1분 Worker 가 부른 스텝이 **이 레인의 task_key 로 귀속**돼, 공시 SFN 은
+    #   영구 MISSED 이고 1분 레인은 resolve 경로가 없는 LEDGER_GAP 이 된다(724 가 시장 레인에서
+    #   겪은 그 모양이다). ⚠️ 워커는 CLI 가 아니라 스텝 **함수**를 부르므로 실제로는 `by_cli`
+    #   조회 자체가 안 일어나지만, 엔트리를 남기면 슬롯 기대만 살아남아 매 거래일 10슬롯이
+    #   전건 MISSED 로 찍힌다 — 그게 이 제거의 직접 사유다.
     #
-    # `kr_trading_calendar` 는 전부 False 다 — 크론이 MON-FRI 라 평일 공휴일에도 돈다. True 면
-    # 그날 실제로 돈 실행 결과가 SKIPPED 뒤로 통째로 사라진다(ALPHA-181 의 함정).
-    CatalogEntry(
-        task_key="DISCLOSURE_COLLECTION_DART", stage="raw", dataset="disclosures", required=True,
-        cli_command=("ingest-raw-disclosure",), sfn_state_name="CollectDartDisclosure",
-        ecs_task_definition="dart", source_vendor="dart",
-        deadline_offset_seconds=1200, stalled_after_seconds=1800,
-        pipeline_type="disclosure",
-    ),
-    # 정제 의존은 시장·뉴스 레인과 같은 이유로 비운다 — raw 부분 실패는 뒤를 막지 않고
-    # (ADR-0030) 정제는 빈 입력을 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집 실패
-    # 런에서 **실제로 돌아 성공한 정제**가 BLOCKED 로 오귀속된다.
-    CatalogEntry(
-        task_key="NORMALIZE_DISCLOSURE", stage="normalize", dataset="supply_contract_fact",
-        required=True, cli_command=("normalize-disclosure",), sfn_state_name="NormalizeDisclosure",
-        ecs_task_definition="bigkinds",
-        deadline_offset_seconds=1800, stalled_after_seconds=1800,
-        pipeline_type="disclosure",
-    ),
-    CatalogEntry(
-        task_key="NORMALIZE_DISCLOSURE_SEGMENT", stage="normalize",
-        dataset="business_segment_fact", required=True,
-        cli_command=("normalize-disclosure-segment",), sfn_state_name="NormalizeDisclosureSegment",
-        ecs_task_definition="bigkinds",
-        deadline_offset_seconds=1800, stalled_after_seconds=1800,
-        pipeline_type="disclosure",
-    ),
-    # ⚠️ 의존은 공시 SFN 의 `DisclosureNormalizeCheckResults` 게이트다 — **ENRICH_CORP_CODE 를
-    # 걸 수 없다.** 그건 시장 레인 작업이라 이 런에 존재하지 않아 영영 eligible 이 안 된다
-    # (뉴스 레인이 옛 시장 의존을 복사하지 않은 것과 같은 함정). 실제 데이터 의존은 남아 있고
-    # **레인 간 읽기 전용 공유**로 성립한다: `company_profile.dart_corp_code` 를 시장 SFN 의
-    # EnrichCorpCode 가 채우고, 미해소 건은 이 스텝이 `skipped_unresolved_issuer` 로 계측한 뒤
-    # 다음 일일런 이후 슬롯이 줍는다(조용한 유실이 아니라 계측된 지연).
-    CatalogEntry(
-        task_key="LOAD_DISCLOSURE", stage="feature", dataset="disclosure_document", required=True,
-        cli_command=("load-disclosure",), sfn_state_name="LoadDisclosure",
-        ecs_task_definition="rds",
-        depends_on=("NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT"),
-        deadline_offset_seconds=2400, stalled_after_seconds=1800,
-        pipeline_type="disclosure",
-    ),
+    # 🔴 **되돌리려면 반드시 스케줄과 같은 apply 로** 되살린다(envs/dev/main.tf 의
+    # `disclosure_schedule_state` 주석). 이쪽만 되살리면 돌지도 않는 슬롯을 원장이 기대한다.
+    # 1분 레인의 결측 판정은 EOD QC(`qc-minute-session`)가 window 축으로 진다.
     # ══ 장중 수급 레인 3작업 (pipeline_type="investor-intraday" — 장중 수급 SFN
     # edge-dev-data-pipeline-investor-intraday, 평일 5슬롯, ALPHA-767·768·769) ═══════════
     # 공시와 달리 **레인 이동이 아니라 신설**이다 — 시장 SFN 이 이 스텝들을 돈 적이 없다.
@@ -510,12 +473,19 @@ CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
-# 장중 공시 레인(ALPHA-721). **아직 등록 작업이 0개다** — 배선(Planner 분기·Reconciler 슬롯)만
-# 먼저 착지시키고 카탈로그 엔트리 이동은 컷오버 PR 이 한다. 순서가 이런 이유: 이미지 CD 와
-# terraform-apply 가 독립 워크플로라 어느 쪽이 먼저 떠도 안전해야 하는데, 레인을 아는 코드가
-# 먼저 떠 있으면 스케줄이 켜졌을 때 Planner 가 죽지 않고(모르는 레인 = SystemExit) 기대 0건으로
-# 계획할 뿐이다. 반대 순서(엔트리를 먼저 옮김)는 시장 런이 자기 기대 밖 attempt 를 받아
-# **resolve 경로 없는 LEDGER_GAP** 이 된다.
+# 장중 공시 레인(ALPHA-721). **등록 작업이 0개다 — 이번엔 떠났기 때문이다**(ALPHA-875).
+# 721 때도 0이었지만 그건 "아직 안 옮겼다"였고 724 가 채웠다가, 875 가 1분 세션으로 보내며
+# 다시 비웠다. 같은 0 이지만 방향이 반대다.
+#
+# 레인 상수와 ARN 표는 **남긴다** — SFN 정의·스케줄 리소스가 그대로라(스케줄만 DISABLED)
+# 롤백이 값 몇 개로 끝난다. 표에서 빼면 되살리는 apply 가 폴백으로 남의 SFN 을 기동한다.
+#
+# 🔴 **되살리는 순서는 셋이다**(하나라도 빠뜨리면 조용히 어긋난다):
+#   ① `disclosure_schedule_state = "ENABLED"`  ② `minute_session_disclosure_source_group = ""`
+#   ③ 여기 4 엔트리 복원 — 그리고 셋은 **같은 apply** 여야 한다.
+# ⚠️ ②를 빠뜨렸을 때의 증상은 MISSED 가 아니라 **이중 수집**이다: 1분 Worker 는 CLI 가 아니라
+# 스텝 함수를 부르므로 `by_cli` 충돌이 안 나고, 두 레인이 같은 창을 각자 긁어 DART 일 한도
+# ("020")를 태운다. 조용한 쪽이라 더 늦게 발견된다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
 # 장중 수급 레인(ALPHA-769). 공시와 달리 **엔트리를 같은 PR 에서 등록한다** — 공시는 시장 SFN 이
 # 이미 돌던 스텝의 소유 레인 이동이라 순서를 나눠야 했지만(엔트리를 먼저 옮기면 시장 런이 자기

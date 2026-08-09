@@ -326,6 +326,33 @@ Table "event_thread_link" {
   "unknown_reason" text
 }
 
+Table "explanation_evidence_row" {
+  "evidence_row_id" text [pk]
+  "explanation_result_id" text [not null]
+  "explanation_run_id" text
+  "ref" int [not null]
+  "evidence_type" varchar(16) [not null]
+  "content" text
+  "source" text [not null]
+  "observed_at" text
+  "template" varchar(16)
+  "basis" varchar(8)
+  "method" varchar(20)
+  "slots" jsonb
+  "n" int
+  "unit" varchar(8)
+  "estimate" float8
+  "p" float8
+  "k" int
+  "band" varchar(12)
+  "series" jsonb
+  "effect_low" float8
+  "effect_high" float8
+  "test_as_of" timestamptz
+  "null_kind" varchar(8)
+  "created_at" timestamptz [not null]
+}
+
 Table "explanation_result" {
   "explanation_result_id" text [pk]
   "explanation_run_id" text [not null]
@@ -424,6 +451,28 @@ Table "explanation_run_event_price_observation" {
   indexes {
     ("explanation_run_id", "event_price_observation_id", "stage_code") [pk]
   }
+}
+
+Table "hypothesis_trial" {
+  "trial_id" text [pk]
+  "minute_price_trigger_id" text [not null]
+  "explanation_run_id" text
+  "trade_date" date [not null]
+  "ticker" text [not null]
+  "stage" varchar(16) [not null]
+  "trigger_slot" text
+  "channel" text
+  "exposure" text
+  "layer" text
+  "conditions" jsonb
+  "verdict" varchar(20)
+  "applies_today" boolean
+  "n" int
+  "p" float8
+  "effect_low" float8
+  "effect_high" float8
+  "reason" text [not null]
+  "created_at" timestamptz [not null]
 }
 
 Table "instrument" {

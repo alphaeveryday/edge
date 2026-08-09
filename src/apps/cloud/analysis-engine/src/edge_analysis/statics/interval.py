@@ -76,6 +76,10 @@ class WindowFacts:
     sector_contribution: float | None = None
     idio_contribution: float | None = None
     path: str = ""
+    # 시변 β 경로 요약(칼만, ALPHA-803 2단계) - 가설 제안 입력(brief)에 실리는
+    # **결정론 문자열**이다. 층이 β=1 폴백이면 빈 문자열이고, 그 사유는
+    # `lake.exists["market_beta"]` 에 있다. 산문 블록 형식은 바꾸지 않는다.
+    beta_path: str = ""
 
     contributions: tuple[ContributionFact, ...] = ()
     nav_gap: float | None = None
@@ -480,6 +484,171 @@ def _literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+# 제안 문맥 상한 - 사건 수(확장 구간 기준)와 사건당 줄 수. 초과분은 "외 N건" 으로
+# 말한다 - 조용한 절단 금지(Rule 12).
+CONTEXT_MAX_EVENTS = 8
+CONTEXT_MAX_LINES = 6
+
+
+def thread_context(lake, instrument_id: str, day: str, as_of_time: str,
+                   window_event_ids: tuple[str, ...] = (),
+                   *, max_events: int = CONTEXT_MAX_EVENTS,
+                   ) -> tuple[tuple[str, ...], int, int]:
+    """가설 제안용 사건 문맥 - **직전 거래일부터 요청창 끝(as_of)까지**, PIT 클램프.
+
+    반환: (사건당 텍스트 블록, 실린 사건 수, 조회 실패 수). 창 안 사건(ALPHA-885 원안)
+    만 보면 밤사이·개장 전 공시와 전일 장중 사건이 통째로 빠진다 - 갭과 오늘 움직임을
+    끄는 재료가 그쪽에 있다. 그래서 수집 구간은 [직전 거래일, as_of] 이고, 창 안/밖은
+    블록 머리에 구분 표기한다. **검정의 점 방아쇠 접지(`_etypes`, 창 안)는 그대로다** -
+    여기는 제안 문맥만이다. 제안 접지와 검정 방아쇠를 섞으면 paneltest 의 PIT 계약이
+    흔들린다.
+
+    PIT: 사건 τ ≤ as_of. 표면 조회는 `sql_surface.views_sql` 의 클램프된 뷰
+    (available_at·evaluated_at ≤ as_of)를 쓴다 - 미래 스레드 링크·제목이 못 들어온다.
+    조회 실패는 그 사건만 타입 코드로 폴백한다 - 실패가 사건 존재를 지우지 않는다.
+    """
+    from .trial import prev_trading_day
+    fails = 0
+    as_of = dt.datetime.combine(dt.date.fromisoformat(day),
+                                dt.time.fromisoformat(as_of_time))
+    inside = {str(e) for e in window_event_ids}
+
+    # ── 수집: 직전 거래일 + 오늘, τ ≤ as_of ──
+    days = [day]
+    try:
+        prev = prev_trading_day(lake, day)
+        if prev != day:
+            days.insert(0, prev)
+    except Exception:                               # noqa: BLE001 - 캘린더 부재도 실패다
+        fails += 1
+    events: list[tuple[str, dt.datetime | None]] = []
+    seen: set[str] = set()
+    for d in days:
+        try:
+            rows = lake.taus(instrument_id, d)
+        except Exception:                           # noqa: BLE001
+            fails += 1
+            continue
+        for tau, eid in rows:
+            eid = str(eid)
+            if eid in seen or (tau is not None and tau > as_of):
+                continue                            # τ > as_of 는 PIT 위반 - 배제
+            seen.add(eid)
+            events.append((eid, tau))
+    # 수집이 통째로 실패해도 창 안 사건 id 는 남긴다 - 실패가 존재를 지우면 안 된다.
+    for eid in window_event_ids:
+        if str(eid) not in seen:
+            seen.add(str(eid))
+            events.append((str(eid), None))
+    if not events:
+        return (), 0, fails
+    events.sort(key=lambda x: (x[1] is None, x[1] or as_of))
+    shown = events[:max_events]
+    ids = ",".join(_literal(e) for e, _t in shown)
+
+    # ── 표면 조회: PIT 클램프된 뷰(views_sql) 하나로 제목·스레드·리드를 붙인다 ──
+    from ..adapters.sql_surface import views_sql
+    base = "WITH " + views_sql(f"TIMESTAMP '{day} {as_of_time}:00'",
+                               f"DATE '{day}'", "rdb.public.")
+    detail: dict[str, tuple[str, str, str, str, str]] = {}
+    try:
+        for eid, et, title, tid, novelty, stage in lake.sql(base + f"""
+            SELECT DISTINCT e.source_event_id, e.event_type_code, e.title,
+                   e.thread_id, e.novelty_status, th.current_stage
+            FROM v_event e
+            LEFT JOIN v_thread th ON th.source_event_id = e.source_event_id
+            WHERE e.source_event_id IN ({ids})"""):
+            detail[str(eid)] = (str(et or ""), str(title or ""), str(tid or ""),
+                                str(novelty or ""), str(stage or ""))
+    except Exception:                               # noqa: BLE001 - 타입 코드 폴백
+        fails += 1
+        try:
+            for eid, et in lake.sql(
+                    "SELECT source_event_id, event_type_code "
+                    f"FROM rdb.public.source_event WHERE source_event_id IN ({ids})"):
+                detail[str(eid)] = (str(et or ""), "", "", "", "")
+        except Exception:                           # noqa: BLE001
+            fails += 1
+    args: dict[str, list[str]] = {}
+    try:
+        for eid, role, name in lake.sql(
+                "SELECT ea.source_event_id, ea.role_code, "
+                "coalesce(en.display_name, ea.entity_id) "
+                "FROM rdb.public.event_argument ea "
+                "LEFT JOIN rdb.public.entity en ON en.entity_id = ea.entity_id "
+                f"WHERE ea.source_event_id IN ({ids}) ORDER BY ea.role_code"):
+            args.setdefault(str(eid), []).append(f"{role}={name}")
+    except Exception:                               # noqa: BLE001
+        fails += 1
+    measures: dict[str, list[str]] = {}
+    try:
+        for eid, role, value, unit in lake.sql(
+                "SELECT source_event_id, role_code, value, unit "
+                f"FROM rdb.public.event_measure WHERE source_event_id IN ({ids})"):
+            measures.setdefault(str(eid), []).append(
+                f"{role}={value}" + (f" {unit}" if unit else ""))
+    except Exception:                               # noqa: BLE001
+        fails += 1
+    leads: dict[str, str] = {}
+    try:
+        for eid, lead in lake.sql(base + f"""
+            SELECT en.source_event_id, any_value(n.lead_text)
+            FROM v_event_news en JOIN v_news n ON n.document_id = en.document_id
+            WHERE en.source_event_id IN ({ids}) AND n.lead_text IS NOT NULL
+            GROUP BY 1"""):
+            if lead:
+                leads[str(eid)] = str(lead)
+    except Exception:                               # noqa: BLE001
+        fails += 1
+    prior: dict[str, list[str]] = {}
+    tids = sorted({d[2] for d in detail.values() if d[2]})
+    if tids:
+        try:
+            tlit = ",".join(_literal(t) for t in tids)
+            for tid, avail, et, title in lake.sql(base + f"""
+                SELECT DISTINCT e.thread_id, e.available_at, e.event_type_code, e.title
+                FROM v_event e
+                WHERE e.thread_id IN ({tlit})
+                  AND e.source_event_id NOT IN ({ids})
+                ORDER BY e.available_at DESC"""):
+                bucket = prior.setdefault(str(tid), [])
+                if len(bucket) < 2:                 # 같은 스레드 직전 사건 1~2건
+                    bucket.append(f"{str(avail)[:16]} {et}"
+                                  + (f" — {str(title)[:60]}" if title else ""))
+        except Exception:                           # noqa: BLE001
+            fails += 1
+
+    # ── 조립: 사건당 3~6줄 결정론 블록 ──
+    out: list[str] = []
+    for eid, tau in shown:
+        et, title, tid, novelty, stage = detail.get(eid, ("", "", "", "", ""))
+        scope = "설명창 안" if eid in inside else "직전 거래일~창 시작"
+        when = (f"{tau:%m-%d %H:%M}"
+                if tau is not None and tau.time() != UNKNOWN_TAU else "시각미상")
+        if not et and not title:
+            head = f"[{scope}] {when} 사건 {eid} (조회 실패 - 타입·제목 미상)"
+        else:
+            head = f"[{scope}] {when} {et or '타입미상'}"
+            if title:
+                head += f" — {title[:80]}"
+        lines = [head]
+        if lead := leads.get(eid):
+            lines.append(f"  리드: {lead[:100]}")
+        if a := args.get(eid):
+            lines.append("  인자: " + " · ".join(a[:4]))
+        if m := measures.get(eid):
+            lines.append("  수치: " + " · ".join(m[:2]))
+        if tid:
+            pv = prior.get(tid) or []
+            lines.append(f"  스레드({stage or '단계미상'}·{novelty or '신규성미상'})"
+                         + ((": 직전 " + " / ".join(pv)) if pv else ": 직전 사건 없음"))
+        out.append("\n".join(lines[:CONTEXT_MAX_LINES]))
+    if more := len(events) - len(shown):
+        out.append(f"외 {more}건 - 상한 {max_events}건 초과 "
+                   f"(수집 구간 사건 {len(events)}건)")
+    return tuple(out), len(shown), fails
+
+
 def _mapping(value) -> dict:
     if isinstance(value, dict):
         return value
@@ -579,6 +748,22 @@ def _final_lines(lake, ticker: str, day: str, event_ids: tuple[str, ...],
             lines.append(
                 f"오늘 이 종목의 초과수익률은 {today * 100:+.1f}%로, {tail}")
     return tuple(lines)
+
+
+def beta_path_line(quarters: tuple[float, ...], contribution: float | None,
+                   ci: float | None) -> str:
+    """시변 β 경로의 결정론 요약 한 줄 - 가설 제안 입력(`WindowFacts.beta_path`)용.
+
+    형식 고정: "장중 β 1.14→1.02→1.49→0.80 · 시장 기여 -1.69%p [±0.12]".
+    같은 입력이면 같은 문자열이다(§13 재실행 결정론) - LLM 프롬프트에 실리므로
+    포맷이 흔들리면 제안 재현이 흔들린다. β=1 폴백(quarters 비어 있음)이면 빈
+    문자열 - 없는 경로를 요약하지 않는다.
+    """
+    if not quarters or contribution is None:
+        return ""
+    arrow = "→".join(f"{q:.2f}" for q in quarters)
+    tail = "" if ci is None else f" [±{ci * 100:.2f}]"
+    return f"장중 β {arrow} · 시장 기여 {contribution * 100:+.2f}%p{tail}"
 
 
 # "호출자가 층 분해를 모른다" 를 뜻하는 기본값. `None` 을 쓰면 **분해 실패**(라우팅도
@@ -695,8 +880,15 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         window_end=b[:5],
         header_return=header_return,
         window_return=measured,
-        advancers=sum(1 for item in names if float(item.ret) > 0),
-        decliners=sum(1 for item in names if float(item.ret) < 0),
+        # breadth 는 **측정된 전 구성종목**이다(ALPHA-876) - top-N `names` 로 세면
+        # "구성종목 5종목 중" 같은 거짓 분모가 나간다. 전수 집계는 rollup 이 갖고,
+        # 없는 주입 rollup(레거시 대역)만 names 로 최저선을 지킨다.
+        advancers=(sum(1 for item in names if float(item.ret) > 0)
+                   if getattr(roll, "advancers", None) is None
+                   else int(roll.advancers)),
+        decliners=(sum(1 for item in names if float(item.ret) < 0)
+                   if getattr(roll, "decliners", None) is None
+                   else int(roll.decliners)),
         market_return=None if market is None else float(market.ret),
         sector_name=None if sector is None else str(sector.name),
         sector_return=None if sector is None else float(sector.ret),
@@ -714,6 +906,12 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
                            if roll is not None and getattr(roll, "idio", None) is not None
                            else None),
         path=f"{a[:5]}부터 {b[:5]}까지 {direction}했습니다.",
+        beta_path=beta_path_line(
+            tuple(getattr(roll, "beta_quarters", ()) or ()),
+            (float(market.contribution)
+             if market is not None
+             and getattr(market, "contribution", None) is not None else None),
+            getattr(roll, "beta_ci", None)),
         contributions=contributions,
         nav_gap=None if premium is None else float(premium.premium_move),
         disclosures=_event_lines(lake, event_ids, event_times),

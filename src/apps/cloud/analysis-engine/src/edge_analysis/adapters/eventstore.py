@@ -661,7 +661,21 @@ class EventStore:
             explanation_as_of, route_id,
         )
         result_id = stable_id("res", run_id)
-        raw = dict(explanation.raw)
+        # **NUL(0x00) 소거 - Postgres TEXT·JSONB 는 NUL 을 원리적으로 못 담는다.**
+        # 벤더 원문(뉴스 제목·리드)에서 흘러온 제어문자가 산문·stage_results 에 실리면
+        # 이 INSERT 가 통째로 죽는다(08-07 재실행 실측: 직전 거래일 사건 문맥 확장이
+        # NUL 든 원문을 처음 밟았다 - ALPHA-885). 원문은 레이크에 그대로 있으므로
+        # 영속 경계에서 지우는 것이 정보 손실이 아니다.
+        def _scrub(value):
+            if isinstance(value, str):
+                return value.replace("\x00", "")
+            if isinstance(value, dict):
+                return {k: _scrub(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_scrub(v) for v in value]
+            return value
+
+        raw = _scrub(dict(explanation.raw))
         stage = raw.pop("stage_results", {}) or {}
         stage_results = json.dumps(
             {"events": event_count, **stage, "raw": raw}, ensure_ascii=False
@@ -711,9 +725,9 @@ class EventStore:
                 (
                     result_id, run_id, etf_instrument_id, settings.trade_date.isoformat(),
                     explanation_as_of, primary_thread_id, explanation.explanation_type,
-                    explanation.summary, explanation.confidence_level, stage_results,
+                    _scrub(explanation.summary), explanation.confidence_level, stage_results,
                     route_id, publishable,
-                    explanation.headline,
+                    _scrub(explanation.headline),
                 ),
             )
             published_row = cur.fetchone()
@@ -791,6 +805,158 @@ class EventStore:
             "publication_status": publication_status,
             "fanout_tenants": fanout_tenants,
         }
+
+    def persist_hypothesis_trials(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        minute_price_trigger_id: str,
+        trade_date: date,
+        ticker: str,
+        explanation_run_id: str | None = None,
+    ) -> int:
+        """가설 원장(hypothesis_trial) upsert — 단일 writer 는 이 리포지토리다(ADR-0005).
+
+        trial_id 는 (trigger_id, stage, 정체성)의 결정적 해시다. 정체성은 TESTED 면
+        튜플 슬롯(방아쇠·채널·노출·층·조건), REJECTED 면 기각 사유 원문 — 같은 트리거
+        재실행이 같은 id 로 수렴해 중복 행이 쌓이지 않는다(멱등 축 = PK).
+        (trigger, run) UNIQUE 축을 안 쓴 이유: run_id 는 벽시계 재료라 재배달·재실행마다
+        새 값이고 그 축은 재실행마다 행을 쌓는다. DO UPDATE 라 재실행이 판정·통계·run
+        연결을 최신으로 덮는다(정정 후 재실행이 낡은 판정을 남기지 않는다).
+
+        같은 배치 안의 동일 id 는 마지막 것만 남긴다 — ON CONFLICT DO UPDATE 는 한
+        문장에서 같은 행을 두 번 못 건드린다(cannot affect row a second time).
+        실패는 롤백 후 그대로 올린다 — 원장 실패로 런을 죽일지는 호출부가 정한다.
+        """
+        import json
+
+        from psycopg2.extras import Json, execute_values
+
+        if not rows:
+            return 0
+        by_id: dict[str, tuple] = {}
+        for row in rows:
+            stage = str(row.get("stage", ""))
+            if stage == "TESTED":
+                identity = json.dumps(
+                    {k: row.get(k) for k in
+                     ("trigger_slot", "channel", "exposure", "layer", "conditions")},
+                    ensure_ascii=False, sort_keys=True)
+            else:
+                identity = str(row.get("reason") or "")
+            trial_id = stable_id("hyt", minute_price_trigger_id, stage, identity)
+            conditions = row.get("conditions")
+            by_id[trial_id] = (
+                trial_id, minute_price_trigger_id, explanation_run_id,
+                trade_date.isoformat(), ticker, stage,
+                row.get("trigger_slot"), row.get("channel"), row.get("exposure"),
+                row.get("layer"),
+                Json(conditions) if conditions is not None else None,
+                row.get("verdict"), row.get("applies_today"),
+                row.get("n"), row.get("p"),
+                row.get("effect_low"), row.get("effect_high"),
+                str(row.get("reason") or ""),
+            )
+        try:
+            with self._conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    "INSERT INTO hypothesis_trial (trial_id, minute_price_trigger_id,"
+                    " explanation_run_id, trade_date, ticker, stage, trigger_slot,"
+                    " channel, exposure, layer, conditions, verdict, applies_today,"
+                    " n, p, effect_low, effect_high, reason) VALUES %s"
+                    " ON CONFLICT (trial_id) DO UPDATE SET"
+                    " explanation_run_id = EXCLUDED.explanation_run_id,"
+                    " verdict = EXCLUDED.verdict,"
+                    " applies_today = EXCLUDED.applies_today,"
+                    " n = EXCLUDED.n, p = EXCLUDED.p,"
+                    " effect_low = EXCLUDED.effect_low,"
+                    " effect_high = EXCLUDED.effect_high,"
+                    " reason = EXCLUDED.reason",
+                    list(by_id.values()),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return len(by_id)
+
+    def persist_evidence_rows(
+        self,
+        build,
+        *,
+        explanation_result_id: str,
+        explanation_run_id: str | None = None,
+    ) -> int:
+        """근거 행(explanation_evidence_row, v3) upsert — 단일 writer (ALPHA-888).
+
+        ``build`` 는 `statics.evidence_rows.EvidenceBuild` 다 — §5 게이트를 이미
+        통과한 행만 담겨 있다(통과 못 한 검정은 행 자체가 없다). 멱등 축은
+        결정적 id `stable_id('evr', result_id, ref)` 다: 같은 결과 재적재(재배달)가
+        같은 행으로 수렴하고, DO UPDATE 가 내용을 최신으로 덮는다.
+
+        `persist_explanation` 트랜잭션 **직후**에 부른다 — 합류시키지 않는 이유:
+        설명 영속은 근거 원장 결손으로 죽으면 안 되고(설명이 정본, 근거는 파생),
+        결손은 재실행이 멱등으로 메운다. 실패는 롤백 후 그대로 올린다 — 로그로
+        드러낼지(런 지속) 죽일지는 호출부가 정한다(hypothesis_trial 과 같은 계약).
+        """
+        from psycopg2.extras import Json, execute_values
+
+        if not build.rows:
+            return 0
+        values = []
+        for row in build.rows:
+            row_id = stable_id("evr", explanation_result_id, row.ref)
+            rec = build.stat_records.get(row.ref)
+            if rec is not None:
+                # STAT_TEST — content 는 저장하지 않는다(§0 완성 문장 금지). 문형은
+                # template+slots 가 렌더 시 조립한다. effect_low/high 는 칼만 배선
+                # (ALPHA-803) 전이라 NULL 이다.
+                values.append((
+                    row_id, explanation_result_id, explanation_run_id, row.ref,
+                    "STAT_TEST", None, row.source, None,
+                    rec.template, rec.basis, rec.method,
+                    Json(rec.slots), rec.n, rec.unit, rec.estimate, rec.p, rec.k,
+                    rec.band, Json(list(rec.series)), None, None, rec.null_kind,
+                ))
+            else:
+                values.append((
+                    row_id, explanation_result_id, explanation_run_id, row.ref,
+                    row.type, row.content, row.source, row.time or None,
+                    None, None, None, None, None, None, None, None, None,
+                    None, None, None, None, None,
+                ))
+        try:
+            with self._conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    "INSERT INTO explanation_evidence_row (evidence_row_id,"
+                    " explanation_result_id, explanation_run_id, ref, evidence_type,"
+                    " content, source, observed_at, template, basis, method, slots,"
+                    " n, unit, estimate, p, k, band, series, effect_low, effect_high,"
+                    " null_kind) VALUES %s"
+                    " ON CONFLICT (evidence_row_id) DO UPDATE SET"
+                    " explanation_run_id = EXCLUDED.explanation_run_id,"
+                    " evidence_type = EXCLUDED.evidence_type,"
+                    " content = EXCLUDED.content,"
+                    " source = EXCLUDED.source,"
+                    " observed_at = EXCLUDED.observed_at,"
+                    " template = EXCLUDED.template, basis = EXCLUDED.basis,"
+                    " method = EXCLUDED.method, slots = EXCLUDED.slots,"
+                    " n = EXCLUDED.n, unit = EXCLUDED.unit,"
+                    " estimate = EXCLUDED.estimate, p = EXCLUDED.p,"
+                    " k = EXCLUDED.k, band = EXCLUDED.band,"
+                    " series = EXCLUDED.series,"
+                    " effect_low = EXCLUDED.effect_low,"
+                    " effect_high = EXCLUDED.effect_high,"
+                    " null_kind = EXCLUDED.null_kind",
+                    values,
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return len(values)
 
     @staticmethod
     def _fanout_new(cur, explanation_result_id: str) -> int:

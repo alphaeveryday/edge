@@ -70,6 +70,10 @@ MARKET_OPEN = time(9, 0)
 # 정규장 마감. **수집을 막는 경계가 아니다**(마감 후에 오는 건 오늘 종가 구간이라 라벨이
 # 맞다 — `skip_reason`) — 지연 수치를 읽는 쪽이 장중과 마감후를 구분하게 하는 표시일 뿐이다.
 MARKET_CLOSE = time(15, 30)
+# `skip_reason` 이 "개장 전" 을 말할 때의 접두어. 상주 Worker 는 이 사유만 **기다리고**
+# 나머지(비거래일)는 종료하는데, 그 판정을 워커가 시각 비교로 다시 구현하면 하한이 갈린다
+# (모듈 주석의 "복제하면 갈라진다"와 같은 축) — 사유 문자열을 한 곳에서 만들어 공유한다.
+SKIP_BEFORE_OPEN = "before market open"
 
 
 _STAMP_FORMAT = "%H%M%S"
@@ -106,13 +110,21 @@ def _time_stamp(row: dict) -> str | None:
     ⚠️ `or ""` 를 쓰지 않는다 — 그 관용구는 수치 0(자정)을 결측으로 접는다. 25줄 위
     `_is_blank` 도크스트링이 예고한 바로 그 함정이라, 같은 파일에서 다시 밟지 않는다.
 
-    검사는 **두 겹뿐**이다. `None` 분기·`isdigit()`·`strip()` 을 두지 않는 이유가 각각
-    있다: 결측은 `str(None)`="None"(4자)이라 길이에서 걸리고, 비숫자는 `strptime` 이 이미
-    거부하며(`isdigit()` 은 `"²"` 를 통과시켜 오히려 더 약하다), 공백 패딩은 **걸러내는
-    편이 옳다** — 벤더 포맷이 변한 신호라 조용히 흡수하면 그 변화를 못 본다.
+    `None` 분기·`strip()` 을 두지 않는 이유가 각각 있다: 결측은 `str(None)`="None"(4자)
+    이라 길이에서 걸리고, 공백 패딩은 **걸러내는 편이 옳다** — 벤더 포맷이 변한 신호라
+    조용히 흡수하면 그 변화를 못 본다.
+
+    ⚠️ 그 공백 패딩을 길이+`strptime` 두 겹으로 막고 있다고 오래 적어 뒀는데 **거짓이었다**:
+    `%H` 에 `" \\d"` 대안이 있어 `" 93000"` 이 6자리째 09:30:00 으로 들어온다 — 다만 그
+    대안은 **버전에 달렸다**(실측: 3.12 런타임 이미지에는 없고 3.14 에는 있다). 지금은
+    안 새고 이미지를 올리는 날 샌다. 비-ASCII 숫자는 3.12 에서도 샌다
+    (`"1٠3000"`→10:30:00, `\\d` 가 유니코드 Nd 라서).
+    둘은 **다른 술어가 막는다** — 공백은 ASCII 라 `isdecimal()` 이, 비-ASCII 숫자는
+    `isdecimal()` 이 True 라 `isascii()` 가. 하나만 두면 나머지가 그대로 들어온다.
+    둘 다 사전순 비교(`max`·`_OPEN_STAMP`)의 전제도 깬다 — 그래서 여기서 끝낸다.
     """
     stamp = str(row.get("bsop_hour"))
-    if len(stamp) != _STAMP_LEN:
+    if len(stamp) != _STAMP_LEN or not stamp.isascii() or not stamp.isdecimal():
         return None
     try:
         # 자리수만 보면 `"240000"`·`"153060"` 이 통과한다 — 실제 시각인지까지 **여기서**
@@ -231,7 +243,7 @@ class KisInavSource(KisNavSource):
         if not is_trading_day(now.date()):
             return f"non-trading day (KST {now.date().isoformat()})"
         if now.time() < MARKET_OPEN:
-            return f"before market open (KST {now.strftime('%H:%M')} < 09:00)"
+            return f"{SKIP_BEFORE_OPEN} (KST {now.strftime('%H:%M')} < 09:00)"
         return None
 
     def _query_params(self, kis_symbol: str, d1: str, d2: str) -> dict[str, str]:

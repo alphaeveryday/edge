@@ -16,7 +16,8 @@
 """
 from __future__ import annotations
 
-import json  # noqa: F401 — 호출자 편의 재노출
+import json
+import time
 from typing import Callable
 
 from ..observability import record
@@ -26,6 +27,8 @@ from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, Hypothesis
 
 Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
+MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPHA-886 2단계)
+SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 
@@ -237,15 +240,59 @@ def screen_tuples(hyps: list[dict], *, event_types: list[str],
     return valid, rejected
 
 
+_SQL_OFFER = """
+
+[탐색 도구 · 선택] 가설을 내기 전에 데이터를 직접 조회할 수 있다.
+{{"sql": "SELECT ..."}} 하나만 담은 JSON 으로 답하면 실행 결과가 다음 메시지에 실린다.
+최대 {cap}회. 거부되면 reason 을 읽고 고쳐라. 조회가 끝나면(필요 없으면 즉시)
+hypotheses JSON 으로 답하라 — sql 과 hypotheses 를 한 응답에 섞지 마라.
+{desc}"""
+
+_SQL_DONE = ("\n\n[sql] 왕복 상한 소진 — 추가 조회 없이 지금 아는 것만으로 "
+             "hypotheses JSON 을 내라.")
+
+
+def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
+              budget: int, deadline: float) -> tuple[dict, str, int, int]:
+    """모델이 hypotheses 를 낼 때까지 sql 왕복을 돌린다.
+
+    반환: (마지막 응답, 결과가 누적된 user, 왕복 수, 거부 수). 상한·타임박스가 다하면
+    소진을 **알리고 한 번 더** 묻는다 — 조용한 절단은 모델이 답을 안 낸 것과 못
+    가른다(정직 종료). 질의 실패는 reason 그대로 되먹인다 — 오류도 관측이다.
+    """
+    used = rejects = 0
+    out = ask(system, user)
+    while isinstance(out, dict) and str(out.get("sql") or "").strip():
+        if used >= budget or time.monotonic() >= deadline:
+            user += _SQL_DONE
+            out = ask(system, user)
+            break
+        used += 1
+        sql = str(out["sql"]).strip()
+        res = call(sql)
+        if not res.get("ok"):
+            rejects += 1
+        user += (f"\n\n[sql 결과 {used}/{budget}] 질의: {sql}\n"
+                 + json.dumps(res, ensure_ascii=False))
+        out = ask(system, user)
+    return out, user, used, rejects
+
+
 def propose(ask: Ask, *, facts: str, event_types: list[str],
             measurable: list[tuple[str, str]] = (),
             series_families: list[str] = (),
-            n: int = 3) -> tuple[list[HypothesisTuple], list[str]]:
+            n: int = 3, sql_tool: dict | None = None,
+            ) -> tuple[list[HypothesisTuple], list[str]]:
     """튜플 후보를 받는다. 반환: (유효 튜플들, 거부 사유들 - 감사용).
 
     거부된 것은 폐기하고 사유를 되물음에 싣는다. 유효 < 2 면 한 번 다시 묻는다 -
     같은 프롬프트의 반복이 아니라 **거부 사유가 추가된** 프롬프트다(요청을 바꿔
     재시도, 감사 2R 교훈).
+
+    sql_tool (`sqltool.tool_spec` 모양: description·call) 을 주면 모델이 제안 전에
+    {"sql": ...} 왕복으로 레이크를 조회할 수 있다(상한 MAX_SQL_ROUNDS·타임박스).
+    툴은 **제안 재료 탐색용**이다 — 심사(screen_tuples)·검정 계약은 그대로고,
+    안 주면(구형 호출자) 현행 주입식 단발과 동일하게 돈다.
     """
     # 개수·목록 리터럴은 **어휘에서 파생**된다 (21R). 손으로 적은 리터럴은 낡는다 -
     # 실측: 프롬프트가 '계열족 9 · 변환 5' 라고 말하는 동안 어휘는 17·6 이었고,
@@ -259,11 +306,22 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                             layer_exposures=_layer_menu(),
                             series_families=sorted(series_families),
                             measurable=sorted(measurable), n=n)
+    if sql_tool:
+        system += _SQL_OFFER.format(cap=MAX_SQL_ROUNDS, desc=sql_tool["description"])
     rejected: list[str] = []
     valid: list[HypothesisTuple] = []
-    user = facts
+    base = facts
+    sql_used = sql_rejects = 0
+    deadline = time.monotonic() + SQL_TIMEBOX_S
     for turn in range(MAX_ASKS):
-        out = ask(system, user)
+        user = base
+        if sql_tool:
+            out, base, u, rj = _sql_loop(ask, system, user, sql_tool["call"],
+                                         MAX_SQL_ROUNDS - sql_used, deadline)
+            sql_used += u
+            sql_rejects += rj
+        else:
+            out = ask(system, user)
         valid, rej = screen_tuples(out.get("hypotheses") or [],
                                    event_types=event_types,
                                    series_families=list(series_families),
@@ -276,9 +334,12 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                    reduction_note=t.reduction_note, intent=t.intent)
         if len(valid) >= 2:
             break
-        user = (facts + "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n"
+        base = (base + "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n"
                 + "\n".join(rejected[-6:]))
+    if sql_tool:
+        # 왕복 수·거부 수 한 줄 — 질의 원문·결과는 sqltool 이 이미 record 로 남긴다.
+        record("hypothesize.sql_rounds", rounds=sql_used, rejected=sql_rejects)
     return valid, rejected
 
 
-__all__ = ["Ask", "MAX_ASKS", "explore", "propose", "screen_tuples"]
+__all__ = ["Ask", "MAX_ASKS", "MAX_SQL_ROUNDS", "explore", "propose", "screen_tuples"]

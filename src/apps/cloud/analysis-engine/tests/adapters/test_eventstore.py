@@ -626,3 +626,166 @@ def test_surface_absent_result_is_drafted_and_not_fanned_out(capsys):
     assert (ids["publication_status"], ids["fanout_tenants"]) == ("DRAFT", 0)
     assert conn.committed                         # 계보는 남는다
     assert "surface_absent" in capsys.readouterr().out
+
+
+class _LedgerCursor:
+    """가설 원장 upsert 를 받는 가짜 커서 — execute_values 캡처는 monkeypatch 가 한다."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        self._conn.executed.append((" ".join(sql.split()), params))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _LedgerConn:
+    def __init__(self):
+        self.executed = []
+        self.value_batches = []          # (sql, rows) — monkeypatch 가 채운다
+        self.committed = 0
+        self.rolled_back = 0
+
+    def cursor(self):
+        return _LedgerCursor(self)
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+def _capture_values(monkeypatch, conn):
+    import psycopg2.extras
+    monkeypatch.setattr(
+        psycopg2.extras, "execute_values",
+        lambda cur, sql, rows: conn.value_batches.append(
+            (" ".join(sql.split()), list(rows))),
+    )
+
+
+_TESTED_ROW = {
+    "stage": "TESTED", "verdict": "ESTABLISHED",
+    "trigger_slot": "점:CONTRACT.SIGNING", "channel": "Q수량",
+    "exposure": "거래량/수준", "layer": "고유", "conditions": [],
+    "applies_today": True, "n": 120, "p": 0.001,
+    "effect_low": -0.003, "effect_high": 0.012, "reason": "",
+}
+_REJECTED_ROW = {"stage": "REJECTED", "verdict": "REJECTED",
+                 "reason": "[1] 접지 밖 사건타입 날조: 'EVT_FAKE'"}
+
+
+def test_hypothesis_trial_rerun_is_idempotent(monkeypatch):
+    """같은 트리거 재실행이 같은 trial_id 로 수렴하고 upsert 로 흡수된다(ALPHA-881).
+
+    trial_id 가 벽시계를 재료로 쓰면 재배달·재실행마다 새 행이 쌓인다 — 결정적
+    유도(trigger+stage+정체성)와 ON CONFLICT DO UPDATE 가 그 축을 막는다."""
+    conn = _LedgerConn()
+    _capture_values(monkeypatch, conn)
+    store = EventStore(conn)
+
+    rows = [dict(_TESTED_ROW), dict(_REJECTED_ROW)]
+    n1 = store.persist_hypothesis_trials(
+        rows, minute_price_trigger_id="mpt_1",
+        trade_date=date(2026, 8, 5), ticker="091160", explanation_run_id="run_1")
+    n2 = store.persist_hypothesis_trials(
+        rows, minute_price_trigger_id="mpt_1",
+        trade_date=date(2026, 8, 5), ticker="091160", explanation_run_id="run_2")
+
+    assert n1 == n2 == 2 and conn.committed == 2
+    (sql1, batch1), (sql2, batch2) = conn.value_batches
+    assert "ON CONFLICT (trial_id) DO UPDATE" in sql1
+    ids1 = sorted(v[0] for v in batch1)
+    ids2 = sorted(v[0] for v in batch2)
+    assert ids1 == ids2, "재실행이 다른 trial_id 를 만들었다 — 멱등 축이 깨졌다"
+    # run 연결은 최신 런으로 덮인다 — upsert 대상 컬럼이다.
+    assert "explanation_run_id = EXCLUDED.explanation_run_id" in sql1
+
+
+def test_hypothesis_trial_batch_collapses_duplicate_identity(monkeypatch):
+    """한 배치 안의 동일 정체성은 마지막 행만 남는다 — ON CONFLICT DO UPDATE 는
+    같은 문장에서 같은 행을 두 번 못 건드린다(cannot affect row a second time)."""
+    conn = _LedgerConn()
+    _capture_values(monkeypatch, conn)
+
+    dup = dict(_TESTED_ROW, verdict="NOT_ESTABLISHED")
+    n = EventStore(conn).persist_hypothesis_trials(
+        [dict(_TESTED_ROW), dup], minute_price_trigger_id="mpt_1",
+        trade_date=date(2026, 8, 5), ticker="091160")
+
+    assert n == 1
+    [(_sql, batch)] = conn.value_batches
+    assert len(batch) == 1 and batch[0][11] == "NOT_ESTABLISHED"
+
+
+def test_hypothesis_trial_failure_rolls_back_and_raises(monkeypatch):
+    """원장 insert 실패는 롤백 후 그대로 올라간다 — 삼키면 커넥션이 aborted 인 채
+    다음 문장이 죽고, 죽일지 말지는 호출부(pipeline)의 결정이다."""
+    import psycopg2.extras
+
+    conn = _LedgerConn()
+
+    def _boom(cur, sql, rows):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(psycopg2.extras, "execute_values", _boom)
+
+    import pytest
+    with pytest.raises(RuntimeError, match="db down"):
+        EventStore(conn).persist_hypothesis_trials(
+            [dict(_REJECTED_ROW)], minute_price_trigger_id="mpt_1",
+            trade_date=date(2026, 8, 5), ticker="091160")
+    assert conn.rolled_back == 1 and conn.committed == 0
+
+
+def test_hypothesis_trial_empty_rows_touch_nothing():
+    conn = _LedgerConn()
+    assert EventStore(conn).persist_hypothesis_trials(
+        [], minute_price_trigger_id="mpt_1",
+        trade_date=date(2026, 8, 5), ticker="091160") == 0
+    assert conn.committed == 0 and conn.value_batches == []
+
+
+
+def test_persist_explanation_scrubs_nul_from_vendor_text():
+    """벤더 원문의 NUL(0x00)이 산문·stage_results 에 실려 오면 영속 경계에서
+    지운다 - Postgres TEXT·JSONB 는 NUL 을 원리적으로 못 담아 INSERT 가 통째로
+    죽는다(08-07 재실행 실측, ALPHA-885 사건 문맥 확장이 처음 밟음). 원문은
+    레이크에 남으므로 소거는 정보 손실이 아니다. 실제 INSERT 파라미터에 NUL 이
+    없는지를 가짜 커서로 전수 검사한다."""
+    from datetime import date
+    from types import SimpleNamespace
+
+    from edge_analysis.adapters.eventstore import EventStore
+
+    class _Cur:
+        def execute(self, sql, params=None):
+            for value in (params or ()):
+                assert not (isinstance(value, str) and chr(0) in value), "NUL 이 DB 로 샜다"
+
+        def fetchone(self):
+            return (False,)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    store = EventStore.__new__(EventStore)
+    store._conn = SimpleNamespace(cursor=lambda: _Cur(), commit=lambda: None)
+    explanation = SimpleNamespace(
+        raw={"explain": "제목" + chr(0) + "오염",
+             "stage_results": {"window": {"blocks": ["리드" + chr(0)]}}},
+        summary="요약" + chr(0), confidence_level="LOW",
+        explanation_type="PRICE_ONLY", headline="헤드" + chr(0) + "라인")
+    settings = SimpleNamespace(trade_date=date(2026, 8, 7))
+    store.persist_explanation(
+        settings, "inst_1", explanation, run_reason="DAILY",
+        route_id="rte_t", bundle="b1", primary_thread_id=None, events=[])

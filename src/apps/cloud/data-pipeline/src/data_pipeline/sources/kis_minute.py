@@ -37,7 +37,7 @@ import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from .candle import Candle, build_candle, to_decimal
+from .candle import Candle, build_candle, is_stamp, to_decimal
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, domain_for
 
@@ -62,6 +62,10 @@ RATE_STREAK_LIMIT = 5
 TOKEN_EXPIRED_CODES = ("EGW00121", "EGW00123")
 # 봉 하나가 덮는 길이. 이 어댑터는 1분봉 전용이다(두 TR 다 분봉이다).
 INTERVAL_SECONDS = 60
+# `stck_bsop_date`(YYYYMMDD)·`stck_cntg_hour`(HHMMSS) 자리수. **둘을 함께** 못박아야
+# 아래 연접 `strptime` 이 한쪽 자리를 훔쳐가지 못한다(kis_sector_index 와 같은 문).
+_YMD_LEN = 8
+_HHMMSS_LEN = 6
 
 KST = timezone(timedelta(hours=9))
 
@@ -101,10 +105,48 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     day, hour = raw.get("stck_bsop_date"), raw.get("stck_cntg_hour")
     if not isinstance(day, str) or not isinstance(hour, str):
         raise ValueError(f"{symbol} 분봉 행에 날짜·시각이 없다: {raw!r}")
+    # 자리수를 **양쪽 다** 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를
+    # 보므로 한쪽이 짧으면 다른 쪽 자리를 잘라 먹고도 파싱에 성공한다(실측:
+    # `"20260807"+"1030"` → 10:03:00). 결과의 `second` 가 0 이라 격자로도 못 거른다 —
+    # 그 봉은 멀쩡한 다른 window 에 앉아 확정된다. **값이 조용히 틀리는** 부류다.
+    # 5자리(`"93000"`)는 선행 0 이 잘린 것으로 **복구도 가능해 보인다**(→09:30:00).
+    # 그래도 거부한다: 4자리와 구분할 근거가 우리에게 없고, 추정해서 맞히면 틀렸을 때
+    # 아무 신호가 안 남는다. 라벨 규약이 실제로 바뀌면 실패로 드러나는 편이 낫다.
+    # 공백 패딩과 비-ASCII 숫자도 여기서 막는다 — `strptime` 이 둘 다 관대하게 받아
+    # 값은 **맞게** 읽히고, 그래서 벤더의 포맷 변경이 조용히 흡수된다. 두 술어가 각각
+    # 다른 문을 막는다. 하나만 두면 나머지가 열린다(실측):
+    #   · `isdecimal()` → 공백 패딩. `%d` 의 `" [1-9]"` 로 `"202608 3"`→08-03 이 통과한다
+    #     (`%Y`·`%m` 에는 없다). **공백은 ASCII 라 `isascii()` 로는 못 막는다.**
+    #     ⚠️ 라벨 쪽(`%H` 의 `" \d"`)은 **파이썬 버전에 달렸다** — 실측 3.12(런타임
+    #     이미지·CI)에는 없고 3.14 에는 있다. 즉 `" 93000"` 은 지금은 `strptime` 이
+    #     거부하고, 이미지를 올리는 날 조용히 09:30:00 이 된다. 그래서 미리 막는다.
+    #   · `isascii()` → 비-ASCII 숫자. `\d` 가 유니코드 Nd 라 `"1٠3000"`→10:30:00,
+    #     `"٢٠٢٦0803"`→2026 이 통과한다(`%Y` 는 이쪽으로 샌다). `isdecimal()` 은 True 다.
+    #     이쪽은 3.12 에서도 산다.
+    # 날짜와 라벨을 **연접해서** 본다 — 한쪽만 보면 다른 쪽 문이 그대로 열린다.
+    if not is_stamp(day, _YMD_LEN) or not is_stamp(hour, _HHMMSS_LEN):
+        # ⚠️ "자리수"라고 쓰지 않는다 — `" 93000"` 은 6자다. 운영자가 로그에서 자리수를
+        # 세어 보고 "가드가 오작동했다"로 읽으면 진짜 원인(포맷 변경)을 놓친다.
+        raise ValueError(f"{symbol} 분봉 날짜·시각 형상이 아니다: {day!r} {hour!r}")
     try:
         end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
         raise ValueError(f"{symbol} 분봉 시각 형식 오류: {day!r} {hour!r}") from error
+    # ⛔ 분 격자 가드는 **여기 두지 마라**(`_fetch_day` 에 있다). 형제
+    # `kis_sector_index.parse_index_row` 가 파서에 둬서 모양을 맞춘답시고 옮겨봤다가
+    # 되돌린 자리다. 가르는 것은 어느 파일이냐가 아니라 **window 키와 충돌할 수 있느냐**다:
+    #   · 짧은 라벨은 `second == 0` 으로 파싱**될 수 있다**("1030"→10:03:00) → 계획
+    #     window 키와 정확히 일치할 수 있다 → `select_window_candle` 이 그걸 뽑아 틀린
+    #     값이 VALID 로 확정된다. 위 자리수 가드가 막는 것이 그것이라 파서에 있어야 한다.
+    #   · 격자 밖 봉(`second != 0`)은 분 정렬된 어떤 키와도 못 만난다 → 당일 경로에선
+    #     `select_window_candle` 이 그냥 안 뽑는다. 여기서 raise 해봐야 **남의 행** 하나로
+    #     그 window 를 INVALID 로 만들 뿐이다(30봉 페이지라 ~30 window 를 그렇게 만든다).
+    #   · 소급은 다르다 — `fill_no_trade_minutes` 가 봉에 합성을 **앵커**하므로 격자 밖
+    #     봉 뒤가 통째로 밀린다. 손실 폭은 그 봉이 어디 있느냐에 달렸다: 뒤에 실봉이
+    #     빽빽하면 몇 개고, 그게 유일한 관측이면 계획 390개 **전부**다(실측 적중 0).
+    #     거기서만 가드가 일한다 — `_fetch_day` 안에 있다.
+    # 지수 어댑터도 페이지 전체를 돌려주므로 노출은 같다 — 그쪽 격자 가드도 같은 값을
+    # 치르고 있다. 여기서 따라 할 이유가 아니다.
     values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS}
     volume = to_decimal(raw.get("cntg_vol"), "cntg_vol", symbol)
     # currency 는 KIS 가 주지 않는다 — 지어내지 않고 None 으로 둔다(KRX 전용이라 KRW 지만,
@@ -429,21 +471,33 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                     raise ValueError(
                         f"{symbol} 소급 분봉 행이 객체가 아니다: {type(raw).__name__}")
                 trade_date = raw.get("stck_bsop_date")
-                if not isinstance(trade_date, str):
+                if not is_stamp(trade_date, _YMD_LEN):
                     # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 그 행이
                     # 빠져 `len(same_day) < len(page)` 가 성립하고, 그건 경계를 넘었다는
                     # 신호라 페이징이 끝나며, 빈 하루가 **성공으로** 캐시된다. 예외도
                     # ERROR 로그도 없이 362종 전건 missing 인 window 390개가 커밋된다.
+                    #
+                    # ⚠️ **날짜 형상은 여기서 본다.** 아래 비교는 8자리 `_ymd` 와의
+                    # 정확 일치라 형상이 어긋난 날짜는 **구조적으로 "남의 날"**이 되어
+                    # `continue` 로 빠진다 — 파서의 가드 중 날짜 쪽은 그래서 이 경로에서
+                    # 영영 안 닿는다. 자리수만이 아니라 `is_stamp` **전체**를 여기서
+                    # 봐야 한다: `"202608 3"`·`"٢٠٢٦0803"` 은 8자라 자리수만 보면
+                    # 통과하고, 그대로 남의 날이 되어 하루가 조용히 절단된다(Codex P2).
+                    # ⚠️ 라벨 쪽은 다르다 — 오늘 날짜 행은 여기를 통과해 파서로 가고
+                    # 거기서 걸린다. 파서 가드를 죽은 코드로 오해하지 마라.
+                    # 형제 `kis_sector_index.candles` 와 같은 조건이다.
                     raise ValueError(
-                        f"{symbol} 소급 분봉 행의 거래일이 문자열이 아니다: {trade_date!r}")
+                        f"{symbol} 소급 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
                 if trade_date != self._ymd:
                     continue
                 candle = parse_minute_row(raw, symbol)
-                if candle.window_end.second or candle.window_end.microsecond:
+                if candle.window_end.second:
                     # 분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 같은 오프셋으로 밀어
                     # 계획된 window 키와 어긋나게 만든다 — 예외도 로그도 없이 그 종목의
-                    # 하루가 통째로 missing 이 된다(실측 재현: 09:03:30 한 봉이 389개를
-                    # 죽인다). 벤더가 그렇게 준 적은 없지만 가드가 없었다.
+                    # 하루가 통째로 missing 이 된다(실측: 09:03:30 봉 하나가 유일한
+                    # 관측이면 계획 390개 전부, 앞에 09:01 실봉이 있으면 388개). 벤더가 그렇게 준 적은 없지만 가드가 없었다.
+                    # ⚠️ **소급 전용이다.** 파서로 올리면 당일 경로가 남의 행 하나에
+                    # 전건 INVALID 로 죽는다 — 논거는 `parse_minute_row` 안에 적어 뒀다.
                     raise ValueError(
                         f"{symbol} 소급 분봉 봉 시각이 분 격자 밖이다: "
                         f"{candle.window_end.isoformat()}")

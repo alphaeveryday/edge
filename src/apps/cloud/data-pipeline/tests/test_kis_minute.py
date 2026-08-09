@@ -121,12 +121,107 @@ class TestParse:
         # KIS 는 통화를 주지 않는다 — 지어내지 않는다
         assert candle.currency is None
 
+    def test_off_grid_bar_does_not_raise_in_the_parser(self):
+        """⛔ 격자 가드를 파서로 올리지 마라 — 형제(`kis_sector_index`)를 따라 옮겼다가
+        되돌린 자리다. 이 테스트가 그 회귀를 막는다.
+
+        가르는 것은 **window 키와 충돌할 수 있느냐**다. 짧은 라벨은 `second == 0` 으로
+        파싱될 수 있어 계획 키와 정확히 일치할 수 있으니 파서에서 막아야 한다. 격자 밖 봉은
+        분 정렬된 어떤 키와도 못 만나 `select_window_candle` 이 그냥 안 뽑는다 —
+        여기서 raise 하면 **남의** 행 하나로 그 window 를 INVALID 로 만들 뿐이고,
+        30봉 페이지라 ~30 window 가 그렇게 된다. 소급은 합성이 봉에 앵커돼 사정이
+        다르므로 가드가 `_fetch_day` 에 있다(`TestHistoricalCandles` 가 잰다).
+        """
+        candle = parse_minute_row({**row(), "stck_cntg_hour": "103030"}, "005930")
+        assert candle.window_end == datetime(2026, 8, 3, 10, 30, 30, tzinfo=KST)
+
     def test_zero_volume_row_is_not_traded(self):
         # 무거래 분: 행은 있고 거래량만 0 — collector 가 no_trade 로 센다(missing 아님)
         assert parse_minute_row(flat_row(), "439870").traded is False
 
+    @pytest.mark.parametrize("short_label, silently_becomes", [
+        ("1030", "10:03:00"),    # 4자리 — 날짜 자리를 훔쳐 **다른 분**이 된다
+        ("30000", "03:00:00"),   # 선행 0 잘림(`kis_inav._time_stamp` 의 그 함정)
+        # 5자리는 선행 0 을 되붙이면 **맞는 값이 나온다** — 우연이 아니다. 그래도 막는
+        # 이유는 4자리와 구분할 근거가 없어서다(소스 주석에 논거를 적어 뒀다).
+        ("93000", "09:30:00"),
+    ])
+    def test_short_time_label_is_rejected_before_parsing(self, short_label, silently_becomes):
+        """🔴 자리수를 안 막으면 **값이 조용히 틀린다** — 형식 오류로 안 드러난다.
+
+        `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를 보므로 짧은 라벨이 날짜 자리를
+        훔쳐 간다. 결과의 `second` 가 0 이라 어느 가드에도 안 걸리고, 그 봉은 멀쩡한
+        다른 window 에 앉아 확정된다. `kis_sector_index`·`kis_inav` 와 같은 문이다.
+        """
+        # 가드가 막는 값이 **무엇이 되는지**를 여기서 못박는다 — 주석으로만 적으면 낡고,
+        # 그러면 이 가드가 왜 있는지 다음 사람이 모른다. 날짜는 아래 `row()` 가 실제로
+        # 먹이는 그 값을 써야 한다(따로 적으면 픽스처가 바뀔 때 조용히 갈라진다).
+        stolen = datetime.strptime(row()["stck_bsop_date"] + short_label, "%Y%m%d%H%M%S")
+        assert stolen.strftime("%H:%M:%S") == silently_becomes
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_minute_row({**row(), "stck_cntg_hour": short_label}, "005930")
+
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
+    @pytest.mark.parametrize("field, bad_length", [
+        ("stck_bsop_date", "2026087"), ("stck_bsop_date", "202608031"),
+        ("stck_cntg_hour", "1030000"),
+    ])
+    def test_date_length_drift_is_rejected_too(self, field, bad_length):
+        """자리수가 **8·6 이 아니다**를 재는 것이지 "짧다"를 재는 게 아니다."""
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_minute_row({**row(), field: bad_length}, "005930")
+
+    def test_space_padded_label_is_rejected_even_though_it_reads_right(self):
+        """자리수만 재면 공백 패딩이 6자리째 샌다 — `strptime` 이 `%H` 에 `" 9"` 를 받는다.
+
+        ⚠️ 이 관대함은 **파이썬 버전에 달렸다** — `%H` 의 `" \\d"` 대안은 실측 3.12
+        (런타임 이미지·CI)에는 없고 3.14 에는 있다. 그래서 `strptime` 이 실제로 09:30:00
+        을 주는지는 여기서 단언하지 않는다(3.12 에서 갈린다). 대신 **가드가 버전과
+        무관하게 막는다**를 잰다 — 이미지를 올리는 날 조용히 열리는 문이다.
+        """
+        assert len(" 93000") == 6 and not " 93000".isdecimal()  # 길이론 못 막는다
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_minute_row({**row(), "stck_cntg_hour": " 93000"}, "005930")
+
+    def test_non_ascii_digit_label_is_rejected(self):
+        """`isdecimal()` 만으로는 안 된다 — `%H` 의 `\\d` 가 유니코드 Nd 라 같은 집합이다.
+
+        아랍-인도 숫자가 섞인 `"1٠3000"` 은 `isdecimal()` 도 `strptime` 도 통과해
+        10:30:00 으로 **맞게** 읽힌다. 막는 건 `isascii()` 쪽이다.
+        """
+        weird = "1٠3000"
+        assert weird.isdecimal() and not weird.isascii()
+        assert datetime.strptime("20260803" + weird, "%Y%m%d%H%M%S").minute == 30
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_minute_row({**row(), "stck_cntg_hour": weird}, "005930")
+
+    # 🔴 **날짜 쪽**도 같이 잰다 — 라벨만 검사하면 이 두 문이 그대로 열린다(변이로
+    # 확인: `(day+hour)` 를 `hour` 로 좁히면 아무 테스트도 안 갈렸다).
+    @pytest.mark.parametrize("bad_date", [
+        "202608 3",    # 공백 패딩. `%d` 의 `" [1-9]"` 대안으로 08-03 이 된다
+        "٢٠٢٦0803",   # 비-ASCII 숫자. `%Y` 의 `\d` 가 Nd 라 2026 이 된다
+    ])
+    def test_date_side_leniency_is_rejected_too(self, bad_date):
+        """가드가 연접 문자열 **전체**를 봐야 하는 이유 — 관대함이 날짜 쪽에도 있다."""
+        label = row()["stck_cntg_hour"]
+        assert datetime.strptime(bad_date + label, "%Y%m%d%H%M%S") \
+            == datetime(2026, 8, 3, 10, 30)
+        with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
+            parse_minute_row({**row(), "stck_bsop_date": bad_date}, "005930")
+
+    def test_well_formed_but_impossible_time_is_a_format_error(self):
+        """자리수 가드를 통과한 뒤 `strptime` 이 잡는 분기 — 메시지로 갈라 둔다.
+
+        가드가 넓어지면 이 분기가 조용히 죽는다(전에 `"99:99:99"` 8자가 그랬다).
+        `pytest.raises(ValueError)` 만으로는 어느 문에서 걸렸는지 구분이 안 된다.
+        """
+        with pytest.raises(ValueError, match="시각 형식 오류"):
+            parse_minute_row({**row(), "stck_cntg_hour": "999999"}, "005930")
+
     @pytest.mark.parametrize("broken", [
-        {**row(), "stck_cntg_hour": "99:99:99"},   # 시각 형식
+        # 자리수는 맞고 값만 깨진 라벨 — 위 자리수 가드가 아니라 `strptime` 이 잡는
+        # 경로다. 8자리(`"99:99:99"`)로 두면 자리수 가드에 먼저 걸려 이 분기가 죽는다.
+        {**row(), "stck_cntg_hour": "999999"},     # 시각 형식
         {**row(), "stck_bsop_date": None},         # 날짜 결측
         {**row(), "cntg_vol": "-1"},               # 음수 거래량
         {**row(), "stck_lwpr": "99999"},           # OHLC 정합 위반(low > high)
@@ -525,7 +620,38 @@ class TestHistoricalCandles:
         남는다. 원장이 관대해지는 쪽으로 틀리는 바로 그 방향이다.
         """
         client, _ = self.hist([TOKEN, ok([{**row("1030" + "00"), "stck_bsop_date": bad_date}])])
-        with pytest.raises(ValueError, match="거래일이 문자열이 아니다"):
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles("005930", window_end=self.at("1030"))
+
+    # 🔴 Codex P2(#647). 자리수만 보면 8자 형상 위반이 **필터를 통과**해 "남의 날"이
+    # 되고, 하루가 조용히 절단돼 성공으로 캐시된다 — 파서 가드는 이 경로에 안 닿는다.
+    @pytest.mark.parametrize("bad_date", ["202608 3", "٢٠٢٦0803"])
+    def test_eight_char_malformed_date_is_not_another_day(self, bad_date):
+        """8자인데 ASCII 숫자가 아닌 거래일 — 자리수 가드만으로는 안 걸린다.
+
+        `!= self._ymd` 는 정확 일치라 이 행이 `continue` 로 빠지고, 그러면
+        `len(same_day) < len(page)` 가 "거래일 경계를 넘었다"로 읽혀 페이징이 끝난다.
+        예외도 ERROR 로그도 없이 **절단된 하루가 성공으로 캐시**된다.
+        """
+        assert len(bad_date) == 8  # 자리수 가드는 통과한다
+        client, _ = self.hist(
+            [TOKEN, ok([row("153000"), {**row("152900"), "stck_bsop_date": bad_date}])])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
+            client.candles("005930", window_end=self.at("1530"))
+
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다(변이로 확인) — 초과 길이도 같이 잰다.
+    @pytest.mark.parametrize("bad_length", ["2026083", "202608031"])
+    def test_trade_date_length_drift_does_not_eat_the_time_label(self, bad_length):
+        """자리수도 **여기서** 봐야 한다 — 파서의 가드는 이 경로에 영영 안 닿는다.
+
+        아래 날짜 필터는 8자리 `_ymd` 와의 정확 일치라 짧은 날짜는 구조적으로 "남의 날"이
+        되어 `continue` 로 빠진다. 그러면 `len(same_day) < len(page)` 가 성립해 "경계를
+        넘었다 = 하루가 끝났다"로 읽히고, **절단된 하루가 성공으로 캐시된다** — 형이 맞는
+        형상 위반이라 위 가드에도 안 걸린다. 형제 `kis_sector_index` 와 같은 조건이다.
+        """
+        client, _ = self.hist(
+            [TOKEN, ok([{**row("103000"), "stck_bsop_date": bad_length}])])
+        with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles("005930", window_end=self.at("1030"))
 
     def test_transport_failure_is_not_cached(self):
@@ -570,7 +696,8 @@ class TestHistoricalCandles:
         """분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 밀어 하루를 조용히 죽인다.
 
         09:03:30 봉이 하나 오면 이후 합성이 통째로 :30 오프셋으로 생성돼 계획된 390
-        window 중 389개가 키 불일치로 `missing` 이 된다 — 예외도 ERROR 로그도 없이.
+        window 중 **388개**가 키 불일치로 `missing` 이 된다(적중은 격자 밖 봉
+        앞의 09:01·09:02 둘뿐. 그 봉이 유일한 관측이면 390개 전부다) — 예외도 ERROR 로그도 없이.
         """
         client, _ = self.hist([TOKEN, ok([row("090100"), {**row(), "stck_cntg_hour": "090330"}])])
         with pytest.raises(ValueError, match="분 격자 밖"):

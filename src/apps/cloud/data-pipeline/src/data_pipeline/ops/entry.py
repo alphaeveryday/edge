@@ -70,6 +70,24 @@ def _lane_sched_hhmms(env_name: str) -> list[tuple[int, int]]:
     return sorted(slots)
 
 
+def _lane_sched_weekend(env_name: str) -> bool:
+    """이 레인이 **주말에도 예정되는가**. env("true"/"false") — ops_ledger.tf 가 그 레인
+    schedule cron 의 **일·요일 필드 쌍**에서 뽑아 주입한다(HH:MM 과 같은 드리프트 불가 패턴,
+    ALPHA-874). 시각 목록만으로는 알 수 없는 축이라 따로 온다.
+
+    **미주입이면 False = 평일 전용**, 즉 종전 동작이다(ALPHA-874 이전엔 레인 구분 없이
+    주말을 건너뛰었다). 값이 있는데 모르는 표기면 fail-loud 다 — 조용히 False 로 떨어지면
+    그 레인의 주말 결측 탐지가 소리 없이 사라진다(`_lane_sched_hhmms` 와 같은 축)."""
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return False
+    if raw not in ("true", "false"):
+        raise SystemExit(
+            f"{env_name} 파싱 실패({raw!r}) — 'true'/'false' 만. 조용히 평일 전용으로 "
+            "떨어지면 그 레인 주말 런의 PLANNER_MISSING 탐지가 사라진다.")
+    return raw == "true"
+
+
 def ledger_from_settings(settings) -> Ledger | None:
     """settings.db 가 있으면 Ledger, 없으면 None(원장 미설정 — instrument 는 통과)."""
     db = getattr(settings, "db", None)
@@ -348,30 +366,41 @@ def plan_run_cli(settings) -> int:
 def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
     """레인별로 **예정 시각이 지난** 슬롯들의 (run_key, grace_경과) 목록. 없으면 빈 목록.
 
-    레인마다 "가장 최근에 지난 슬롯이 있는 평일"을 찾아 **그날의 지난 슬롯 전부**를 돌려준다
+    레인마다 "가장 최근에 지난 슬롯이 있는 예정일"을 찾아 **그날의 지난 슬롯 전부**를 돌려준다
     (ALPHA-591). 시장 레인은 하루 1슬롯이라 종전과 같고, 뉴스 레인은 하루 3슬롯이라 최신
     하나만 보면 15:30 이 지나는 순간 15:00 런이 영영 대조되지 않는다(ALPHA-565 사각의 확대재생산)
     — 같은 날 슬롯을 전부 물고 있으면 주기 reconcile 이 자정까지 재대조해 늦은 종결도 판정한다.
-    월요일 오전(오늘 미예정)엔 금요일 슬롯을, 주말엔 직전 금요일을 돌려준다 — 아직 예정 전인
-    오늘 슬롯을 결측으로 보지 않게(edge-review). grace 경과 여부는 PLANNER_MISSING 판정에 쓴다.
+    아직 예정 전인 오늘 슬롯은 결측으로 보지 않는다(edge-review) — 평일 전용 레인이면 월요일
+    오전엔 금요일 슬롯을, 주말엔 직전 금요일을 돌려준다. grace 경과 여부는 PLANNER_MISSING
+    판정에 쓴다.
+
+    **주말은 레인마다 다르다**(ALPHA-874) — 현재 주 7일인 것은 뉴스뿐이다. 그래서 주말
+    건너뛰기가 레인 무관 상수이면 안 된다: 상수 "건너뛴다"면 주 7일 레인의 결측 탐지가 0 이
+    되고(조용한 축소), 상수 "안 건너뛴다"면 평일 전용 레인이 매 토·일 거짓 PLANNER_MISSING 을
+    연다(뜰 런이 없어 영영 안 닫힌다). 판단 근거는 그 레인 cron 의 **일·요일 필드 쌍**이고,
+    terraform 이 거기서 뽑아 넣는다(`_lane_sched_weekend`) — 여기에 레인 목록을 하드코딩하지 마라.
 
     키는 `planner.slot_run_key` 로 만든다 — Planner 가 쓰는 바로 그 함수다(ALPHA-564). 여기서
     형식을 따로 조립하면 어긋나는 순간 있지도 않은 슬롯을 찾아 PLANNER_MISSING 오탐이 난다.
     """
-    lanes: list[tuple[str, list[tuple[int, int]]]] = [
-        (catalog.PIPELINE_TYPE, [_sched_hhmm()]),
-        (catalog.NEWS_PIPELINE_TYPE, _lane_sched_hhmms("OPS_NEWS_SCHED_HHMM")),
-        (catalog.DISCLOSURE_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM")),
+    lanes: list[tuple[str, list[tuple[int, int]], bool]] = [
+        (catalog.PIPELINE_TYPE, [_sched_hhmm()],
+         _lane_sched_weekend("OPS_DAILY_SCHED_WEEKEND")),
+        (catalog.NEWS_PIPELINE_TYPE, _lane_sched_hhmms("OPS_NEWS_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_NEWS_SCHED_WEEKEND")),
+        (catalog.DISCLOSURE_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_DISCLOSURE_SCHED_WEEKEND")),
         (catalog.INVESTOR_INTRADAY_PIPELINE_TYPE,
-         _lane_sched_hhmms("OPS_INVESTOR_INTRADAY_SCHED_HHMM")),
+         _lane_sched_hhmms("OPS_INVESTOR_INTRADAY_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_INVESTOR_INTRADAY_SCHED_WEEKEND")),
     ]
     slots: list[tuple[str, bool]] = []
-    for lane, hhmms in lanes:
+    for lane, hhmms, weekend in lanes:
         if not hhmms:
             continue   # env 미주입 레인 — 결측 판정 대상 아님(_lane_sched_hhmms 참조)
         for back in range(7):
             cand = now_kst.date() - timedelta(days=back)
-            if cand.weekday() >= 5:
+            if cand.weekday() >= 5 and not weekend:
                 continue
             past = [
                 sched for h, m in hhmms
