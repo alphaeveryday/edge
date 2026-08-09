@@ -240,7 +240,7 @@ class TestCli:
             sector_index = MinuteSectorIndexConfig(index_map=INDEX_MAP)
         if kis_nav is ...:
             kis_nav = SimpleNamespace(
-                source=SimpleNamespace(app_key="k", app_secret="s"))
+                source=SimpleNamespace(app_key="k", app_secret="s", env="prod"))
         return SimpleNamespace(db=db, minute_sector_index=sector_index,
                                kis_nav=kis_nav, storage=None)
 
@@ -281,7 +281,7 @@ class TestBoundedGate:
     """`--max-ticks` 는 **확인 게이트**다 — 아무것도 못 봤으면 성공이 아니다."""
 
     def _run_cli(self, monkeypatch, tmp_path, states, *, session_identity=None,
-                 resident=False):
+                 resident=False, env="prod", client_spy=None):
         """CLI 를 끝까지 몬다 — 판정식을 테스트가 복제하면 코드가 아니라 사본을 잰다."""
         from datetime import datetime as real_datetime
         from types import SimpleNamespace
@@ -289,6 +289,10 @@ class TestBoundedGate:
         import data_pipeline.lake.storage as storage_mod
         import data_pipeline.minute.worker as mod
         from data_pipeline.config.models import MinuteSectorIndexConfig
+
+        if client_spy is not None:
+            monkeypatch.setattr(
+                "data_pipeline.sources.kis_sector_index.KisSectorIndexClient", client_spy)
 
         db = FakeMinuteDB()
         ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
@@ -334,7 +338,8 @@ class TestBoundedGate:
         settings = SimpleNamespace(
             db=_DB,
             minute_sector_index=MinuteSectorIndexConfig(index_map=INDEX_MAP),
-            kis_nav=SimpleNamespace(source=SimpleNamespace(app_key="k", app_secret="s")),
+            kis_nav=SimpleNamespace(
+                source=SimpleNamespace(app_key="k", app_secret="s", env=env)),
             storage=None,
         )
         return mod.sector_index_worker_cli(
@@ -378,6 +383,25 @@ class TestBoundedGate:
         """
         assert self._run_cli(
             monkeypatch, tmp_path, [("DRAINING", {"drain_processed": 2})]) == 0
+
+    def test_vps_env_이_클라이언트까지_간다(self, monkeypatch, tmp_path):
+        """🔴 `env` 는 **자격증명과 한 몸**이다 — vps 키를 prod 도메인에 던지면 토큰
+        발급부터 실패한다. 클라이언트 생성자의 기본값이 `prod` 라, 안 넘기면 vps 설정이
+        조용히 무시된다(빌려 온 섹션의 축을 안 가져와 리뷰에서 잡힌 자리).
+        """
+        from data_pipeline.sources.kis_auth import domain_for
+
+        seen = {}
+
+        class SpyClient:
+            def __init__(self, app_key, app_secret, client, index_map, *,
+                         env="prod", **kw):
+                seen["env"] = env
+
+        self._run_cli(monkeypatch, tmp_path, ["IDLE"], env="vps", client_spy=SpyClient)
+
+        assert seen["env"] == "vps"
+        assert domain_for("vps") != domain_for("prod")   # 축이 실재하는지도 못박는다
 
     def test_상주_모드의_DRAINED_는_정상_종료다(self, monkeypatch, tmp_path):
         """반대 방향도 잰다 — 상주 서비스가 그날 정상적으로 마르는 것을 실패로 보고하면

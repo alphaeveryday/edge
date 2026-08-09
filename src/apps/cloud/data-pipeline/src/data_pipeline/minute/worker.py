@@ -1075,7 +1075,16 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
         PoliteClient(min_interval=0.5),
         index_map,
+        # ⚠️ `env` 는 **자격증명과 한 몸이다** — vps 키를 prod 도메인에 던지면 토큰 발급부터
+        # 실패한다. 빌려 온 섹션의 이 축은 반드시 같이 가져와야 한다(`KisNavSource` 도
+        # `domain_for(config.env)` 로 같은 값을 쓴다). 기본값에 맡겼다가 리뷰에서 잡혔다.
+        env=settings.kis_nav.source.env,
     )
+    # ⛔ `kis_nav.source.enabled` 는 **의도적으로 안 본다.** 그건 "일별 NAV 적재 레인이
+    # 켜졌나"이지 KIS 전역 스위치가 아니다(`ingest_raw*` 스텝들이 각자 자기 소스의 그
+    # 플래그를 본다). 여기서 보면 일별 NAV 를 끄는 순간 업종지수 수집이 **말없이** 같이
+    # 죽는다 — 형제 워커들도 각자 자기 소스 것만 본다(`news_worker`·`disclosure_worker`).
+    # 이 dataset 의 스위치는 세션이다: 계획하지 않으면 기동이 거부된다.
     worker = SectorIndexWorker(
         session_id=session_id,
         ledger=ledger,
