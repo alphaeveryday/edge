@@ -860,8 +860,8 @@ def test_선택레인_토글_env_이름이_terraform_과_일치한다():
 # 쌓여 이 검사가 영영 눈감는 일은 없다(ALPHA-610 이 만든 형태).
 # **못 하는 것: 후속 PR 자체를 안 하는 경우다.** 그때 이 집합은 영원히 통과한다 —
 # 테스트는 미래의 커밋을 강제하지 못한다. 그 회수는 코드가 아니라 **티켓**이 진다
-# (ALPHA-908). 여기 이름이 남아 있다는 것 자체가 "아직 후속이 안 끝났다"는 표시다.
-_CD_ROLL_PENDING_APPLY = {"sector-index-worker"}  # ALPHA-887 → 회수 ALPHA-908
+# (ALPHA-911). 여기 이름이 남아 있다는 것 자체가 "아직 후속이 안 끝났다"는 표시다.
+_CD_ROLL_PENDING_APPLY = {"sector-index-worker"}  # ALPHA-887 → 회수 ALPHA-911
 
 
 def test_CD_롤링_목록이_상주_서비스_맵과_짝이다():
