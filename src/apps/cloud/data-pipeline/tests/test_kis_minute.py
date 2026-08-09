@@ -554,7 +554,9 @@ class TestHistoricalCandles:
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles("005930", window_end=self.at("1030"))
 
-    def test_short_trade_date_does_not_eat_the_time_label(self):
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다(변이로 확인) — 초과 길이도 같이 잰다.
+    @pytest.mark.parametrize("bad_length", ["2026083", "202608031"])
+    def test_trade_date_length_drift_does_not_eat_the_time_label(self, bad_length):
         """자리수도 **여기서** 봐야 한다 — 파서의 가드는 이 경로에 영영 안 닿는다.
 
         아래 날짜 필터는 8자리 `_ymd` 와의 정확 일치라 짧은 날짜는 구조적으로 "남의 날"이
@@ -563,7 +565,7 @@ class TestHistoricalCandles:
         형상 위반이라 위 가드에도 안 걸린다. 형제 `kis_sector_index` 와 같은 조건이다.
         """
         client, _ = self.hist(
-            [TOKEN, ok([{**row("103000"), "stck_bsop_date": "2026083"}])])
+            [TOKEN, ok([{**row("103000"), "stck_bsop_date": bad_length}])])
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles("005930", window_end=self.at("1030"))
 

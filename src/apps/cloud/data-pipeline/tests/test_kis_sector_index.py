@@ -363,9 +363,11 @@ class TestCandles:
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles(UNIT_ID, window_end=WINDOW_END)
 
-    def test_short_trade_date_does_not_eat_the_time_label(self):
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다(변이로 확인) — 초과 길이도 같이 잰다.
+    @pytest.mark.parametrize("bad_length", ["2026087", "202608071"])
+    def test_trade_date_length_drift_does_not_eat_the_time_label(self, bad_length):
         """날짜 자리수가 짧으면 라벨이 조용히 다른 분으로 읽힌다 — `strptime` 은 연접을 본다."""
-        client, _ = make_client([TOKEN, ok([{**row("103000"), "stck_bsop_date": "2026087"}])])
+        client, _ = make_client([TOKEN, ok([{**row("103000"), "stck_bsop_date": bad_length}])])
         with pytest.raises(ValueError, match="거래일 형상이 아니다"):
             client.candles(UNIT_ID, window_end=WINDOW_END)
 
