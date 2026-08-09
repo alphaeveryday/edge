@@ -255,6 +255,63 @@ def test_lock_precedes_duplicate_preflight():
     assert calls == ["lock", "preflight", "close"]
 
 
+def test_db_failure_after_archive_retries_same_key_then_deduplicates_completion(monkeypatch):
+    """DB 실패 orphan은 같은 key로 overwrite되고, 완료 뒤 세 번째만 skip한다."""
+    import edge_analysis.consumer as consumer_module
+    from edge_analysis.adapters.archive import write_run_archive
+
+    state = {"complete": set(), "deliveries": 0, "closes": 0}
+    puts = []
+
+    class StatefulStore:
+        def try_lock_route(self, route_id):
+            return True
+
+        def has_run_for_route(self, route_id):
+            return route_id in state["complete"]
+
+        def close(self):
+            state["closes"] += 1
+
+        @classmethod
+        def connect(cls, settings):
+            return cls()
+
+    def delivery(settings, **kwargs):
+        state["deliveries"] += 1
+        write_run_archive(kwargs["s3"], settings, {"outcome": "explained"})
+        if state["deliveries"] == 1:
+            raise RuntimeError("DB commit failed after archive")
+        state["complete"].add(consumer_module.minute_route_id(settings.trigger_id))
+        return 0
+
+    class FakeS3:
+        def put_object(self, **kwargs):
+            puts.append(kwargs)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "key")
+    monkeypatch.setenv("ALPHAMALE_LAKE_BUCKET", "bucket")
+    monkeypatch.setattr(consumer_module, "EventStore", StatefulStore)
+    monkeypatch.setattr(consumer_module, "make_s3_client", lambda settings: FakeS3())
+    monkeypatch.setattr(consumer_module, "LakeReader", lambda *args: object())
+    monkeypatch.setattr(consumer_module, "DeepSeekClient", lambda *args: object())
+    monkeypatch.setattr(consumer_module, "run", delivery)
+
+    with pytest.raises(RuntimeError, match="DB commit failed after archive"):
+        consumer_module.process_trigger("t1")
+    assert not state["complete"]
+    assert consumer_module.process_trigger("t1") == "explained"
+    assert consumer_module.process_trigger("t1") == "skipped_duplicate"
+    assert consumer_module.process_trigger("other/한글/" + "x" * 500) == "explained"
+
+    keys = [put["Key"] for put in puts]
+    assert keys[0] == keys[1], "같은 trigger retry가 orphan archive를 overwrite하지 않는다"
+    assert keys[2] != keys[1], "다른 trigger가 같은 archive key에 충돌한다"
+    request_names = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
+    assert all(name.isascii() and len(name) <= 64 and "/" not in name for name in request_names)
+    assert state["deliveries"] == 3 and state["closes"] == 4
+
+
 def test_lock_failure_skips_the_pipeline_entirely():
     """락을 못 잡으면 프리플라이트조차 보지 않고 빠진다 — 그 뒤는 전부 LLM 을 태우는
     경로다(ALPHA-779). 커넥션은 반드시 닫힌다: 세션 락 해제가 close 에 매달려 있어

@@ -1,8 +1,8 @@
 """주 DB 쓰기가 아닌 S3 산출물: 런 아카이브.
 
 런 아카이브는 매 런의 중간 산출물(분해·소비 트리거·LLM 원문)을 남겨 트리거 없는 잔잔한
-날도 감사 가능하게 한다(ALPHA-415). 쓰기 실패는 로그만 남기고 삼킨다 — 관측이 분석
-영속을 무너뜨리면 안 된다.
+날도 감사 가능하게 한다(ALPHA-415). 분석 완료의 필수 감사 산출물이므로 크기 초과나
+쓰기 실패를 삼키지 않는다.
 """
 from __future__ import annotations
 
@@ -10,11 +10,20 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from ..config import Settings
+from ..config import PipelineError, Settings
 from ..domain.models import Decomposition, EventContext
 from ..observability import log, utcnow_iso
 
 _DEFAULT_PREFIX = "operations_archive/etf_explanations/"
+
+# Two model attempts contribute at most 512 KiB after the model-boundary cap.
+# 2 MiB leaves room for deterministic evidence, events, and explanation metadata.
+MAX_RUN_ARCHIVE_BYTES = 2 * 1024 * 1024
+
+
+class RunArchiveError(PipelineError):
+    """A required analysis run archive could not be stored intact."""
+
 
 # 런 아카이브는 이벤트 제목과 novelty 를 남긴다. 나머지는 의도적으로 버린다.
 _ARCHIVE_EVENT_FIELDS = (
@@ -56,10 +65,13 @@ def decomp_summary(decomp: Decomposition) -> dict[str, Any]:
 
 
 def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | None:
-    """``{result_prefix}/runs/`` 아래 런 아카이브 1건을 쓴다.
+    """``{result_prefix}/runs/`` 아래 크기 제한된 필수 런 아카이브 1건을 쓴다.
 
     Returns:
-        s3 URI, 또는 쓰기 실패·비 s3:// prefix 면 ``None``(어느 쪽이든 런은 계속).
+        저장된 s3 URI. 비 s3:// prefix 설정이면 ``None``.
+
+    Raises:
+        RunArchiveError: 아카이브가 제한을 넘거나 S3 쓰기에 실패한 경우.
     """
     prefix = _result_prefix(settings)
     if not prefix.startswith("s3://"):
@@ -79,11 +91,14 @@ def write_run_archive(s3, settings: Settings, archive: dict[str, Any]) -> str | 
         },
         ensure_ascii=False,
     ).encode("utf-8")
+    if len(body) > MAX_RUN_ARCHIVE_BYTES:
+        raise RunArchiveError(
+            f"RUN_ARCHIVE_TOO_LARGE: {len(body)} > {MAX_RUN_ARCHIVE_BYTES} bytes")
     try:
         s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
-    except Exception as exc:  # noqa: BLE001 — 관측이 런을 죽이면 안 된다
+    except Exception as exc:  # noqa: BLE001 — 필수 감사 산출물은 실패를 숨기지 않는다
         log("run_archive.failed", error=str(exc))
-        return None
+        raise RunArchiveError(f"run archive S3 write failed: {exc}") from exc
     location = f"s3://{bucket}/{key}"
     log("run_archive.stored", s3=location)
     return location

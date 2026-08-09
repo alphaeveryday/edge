@@ -146,10 +146,19 @@ class _FakeStore:
         self.calls.append("persist_explanation")
         return {"persisted": "rds", "explanation_result_id": "res_1", "run_id": "run_1"}
 
+    def plan_explanation(self, settings, etf_instrument_id, *, route_id):
+        from edge_analysis.adapters.eventstore import ExplanationPersistencePlan
+        return ExplanationPersistencePlan("2026-07-16T01:00:00.000001+00:00", "run_1", "res_1")
+
     def persist_hypothesis_trials(self, rows, **kwargs):
         self.calls.append("persist_hypothesis_trials")
         self.trials = (rows, kwargs)
         return len(rows)
+
+    def persist_evidence_rows(self, evidence, **kwargs):
+        self.calls.append("persist_evidence_rows")
+        self.evidence = (evidence, kwargs)
+        return len(evidence.rows)
 
 
 class _FakeClient:
@@ -214,6 +223,53 @@ def test_triggered_day_persists_the_explanation():
     bodies = [json.loads(p["Body"].decode("utf-8")) for p in s3.puts]
     archive = next(b for b in bodies if b.get("outcome") == "explained")
     assert "events" in archive  # 런 아카이브 이벤트 키 — 구 "kodex_events" 는 소비자 계약이 아니다
+
+
+def test_required_archive_precedes_database_completion(monkeypatch):
+    """필수 감사본이 실패한 delivery 는 완료 run/게시/fanout 을 만들면 안 된다.
+
+    소비자 dedup 권위가 explanation_run 존재이므로 DB가 먼저면 첫 S3 장애 뒤 재배달이
+    영구 skip 된다. archive 성공 뒤에만 DB 완료가 가능하다는 순서를 고정한다.
+    """
+    from edge_analysis.adapters.archive import RunArchiveError
+
+    order = []
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    original_persist = store.persist_explanation
+
+    def persist(*args, **kwargs):
+        order.append("database_complete")
+        return original_persist(*args, **kwargs)
+
+    def fail_archive(*args, **kwargs):
+        order.append("archive_failed")
+        raise RunArchiveError("s3 down")
+
+    store.persist_explanation = persist
+    monkeypatch.setattr("edge_analysis.pipeline.write_run_archive", fail_archive)
+
+    with pytest.raises(RunArchiveError, match="s3 down"):
+        _run(store, _FakeS3())
+    assert order == ["archive_failed"]
+    assert "persist_explanation" not in store.calls
+
+
+def test_archive_contains_the_exact_planned_database_ids(monkeypatch):
+    """archive-first 는 아직 없는 DB outcome 을 성공처럼 꾸미지 않는다.
+
+    대신 같은 delivery 에 DB writer가 사용할 계획 ID를 담아 orphan archive도 복구·대조
+    가능해야 한다. writer가 다른 ID를 만들면 이 계약은 거짓이 된다.
+    """
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    archive = next(json.loads(p["Body"].decode("utf-8")) for p in s3.puts
+                   if json.loads(p["Body"].decode("utf-8")).get("outcome") == "explained")
+    assert archive["persistence_plan"]["run_id"] == "run_1"
+    assert archive["persistence_plan"]["result_id"] == "res_1"
+    assert archive["persistence_plan"]["state"] == "PLANNED"
+    assert "persistence" not in archive
 
 
 def test_statics_failure_is_persisted_as_low_confidence():
@@ -450,6 +506,65 @@ def test_hypothesis_path_run_leaves_a_trace_file(monkeypatch):
     kinds = [e["event"] for e in events]
     assert "llm.request" in kinds and "llm.response" in kinds
     assert store.explanation.raw["stage_results"]["analysis_trace"]["event_count"] >= 2
+
+
+def test_run_archive_preserves_verification_ledgers_before_db_removal(monkeypatch):
+    tested = {
+        "stage": "TESTED", "verdict": "ESTABLISHED", "applies_today": True,
+        "trigger_slot": "계열:거래량", "channel": "FX환",
+        "exposure": "거시/민감도", "layer": "섹터",
+    }
+    rejected = {"stage": "REJECTED", "verdict": "REJECTED", "reason": "채널 중복"}
+    eligible = {
+        "stage": "test", "trigger": "거시", "trigger_kind": "계열",
+        "trigger_fired": True, "null_kind": "pair", "channel": "FX환",
+        "exposure": "거시/민감도", "layer": "섹터", "verdict": "성립",
+        "applies_today": True, "n": 412, "p": 0.0121,
+        "effect_low": 0.0048, "effect_high": -0.0045, "reason": "",
+    }
+    skipped = {**eligible, "trigger_fired": None}
+
+    def fake_statics(lake, ticker, day, ask=None, **kwargs):
+        kwargs["window_meta"].update({
+            "lineage": [
+                {"view": "bars_5m", "entity": ticker, "as_of": kwargs["window_end"]},
+                {"view": "layers", "entity": ticker, "as_of": kwargs["window_end"]},
+            ],
+            "stat_tests": [eligible, skipped],
+            "hypothesis_trials": [rejected, tested],
+            "final_explanation": {
+                "rendered_text": "[H] 가격\n\n[3] 요인\n\n[N] 부재",
+                "blocks": [
+                    {"block_code": "H", "block_title": "헤더",
+                     "evidence_refs": [f"bars_5m:{ticker}"]},
+                    {"block_code": "3", "block_title": "요인 분해",
+                     "evidence_requirement": "CAUSAL_STAT_TEST", "evidence_refs": []},
+                    {"block_code": "N", "block_title": "부재 고지", "evidence_refs": []},
+                ],
+            },
+        })
+        return "뉴스 제목의 [함의] **유의** 토큰은 판정을 바꾸지 않는다."
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    archive_put = next(
+        item for item in s3.puts
+        if json.loads(item["Body"].decode("utf-8")).get("outcome") == "explained")
+    assert len(archive_put["Body"]) < 64 * 1024
+    archive = json.loads(archive_put["Body"].decode("utf-8"))
+    verification = archive["verification"]
+    assert verification["hypothesis_trials"] == [rejected, tested]
+    assert verification["stat_tests"] == [eligible, skipped]
+    stat_row = next(
+        row for row in verification["evidence"]["rows"] if row["type"] == "STAT_TEST")
+    assert stat_row["source"] == "전 종목 일봉 수익률 · 원/달러 일봉 변화"
+    assert stat_row["detail"]["method"] == "SENSITIVE_STOCKS"
+    assert len(verification["evidence"]["skipped"]) == 1
+    assert verification["evidence"]["skipped"][0]["record"] == skipped
+    assert store.explanation.explanation_type == "EVENT_SUPPORTED"
 
 
 class _HostileField:

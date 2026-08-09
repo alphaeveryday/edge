@@ -31,6 +31,7 @@ def test_load_settings_builds_validated_settings(monkeypatch):
     assert isinstance(settings.pg, PgConfig)
     assert settings.pg.host == "db.internal"
     assert settings.deepseek_api_key == "sk-test"
+    assert settings.request_id == "r1"  # manual CLI correlation id is never rewritten
 
 
 def test_load_settings_without_api_key_raises(monkeypatch):

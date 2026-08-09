@@ -49,7 +49,7 @@ from .config import (
     RouteLockedError,
     load_settings,
 )
-from .observability import log
+from .observability import log, stable_id
 from .pipeline import run
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,11 @@ def process_trigger(trigger_id: str) -> str:
     ⚠️ 락이 프리플라이트보다 **먼저**다(ALPHA-779). 프리플라이트가 먼저면 두 소비자가
     나란히 "run 없음"을 읽고 둘 다 진행한다 — 락은 그 창을 닫는 장치라 순서가 곧 계약이다.
     """
-    settings = load_settings(trigger_id=trigger_id)
+    # SQS retries must address the same required archive, while adjacent triggers must never
+    # collide. Hashing also keeps untrusted trigger text out of the S3 path and bounds its length.
+    # Manual CLI runs retain their explicit request_id because this override exists only here.
+    settings = load_settings(
+        trigger_id=trigger_id, request_id=stable_id("trigger", trigger_id))
     store = EventStore.connect(settings)
     try:
         route_id = minute_route_id(trigger_id)
