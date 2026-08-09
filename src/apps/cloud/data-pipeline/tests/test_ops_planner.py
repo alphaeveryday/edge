@@ -600,7 +600,7 @@ def test_news_cron_runs_every_day_of_week():
     # ^\s*"키" = 로 앵커한다 — `_strip_hcl_comments` 는 줄 **선두** 주석만 걷으므로
     # (값 안의 `s3://` 를 자르지 않으려는 의도적 규율), 앵커 없이는 줄 뒤에 달린 인라인
     # 주석 속 가짜 cron 이 살아 있는 배선으로 세어진다(edge-review 2R).
-    dom_dow = set(re.findall(r'^\s*"[\w-]+"\s*=\s*"cron\(\S+ \S+ (\S+) \S+ (\S+) ',
+    dom_dow = set(re.findall(r'^\s*"[^"]+"\s*=\s*"cron\(\S+ \S+ (\S+) \S+ (\S+) ',
                              _news_cron_block(), re.M))
     assert dom_dow and dom_dow <= {("*", "?"), ("?", "*")}, (
         f"뉴스 크론의 (일, 요일)이 {sorted(dom_dow)} — 매일 도는 형태가 아니다. 원장이 표현할 수 "
@@ -627,7 +627,7 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
     from data_pipeline import run as run_mod
 
     slots = [(int(h), int(m)) for m, h in
-             re.findall(r'^\s*"[\w-]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
+             re.findall(r'^\s*"[^"]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
     assert slots, "뉴스 크론에서 슬롯 시각을 못 뽑았다 — 파서가 낡았다"
 
     early = [(h, m) for h, m in slots if (h, m) < (9, 0)]
@@ -645,6 +645,25 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
             "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
 
 
+def _module_number(var_name: str) -> int:
+    """모듈 변수의 **실제 배포값**(envs/dev override 가 있으면 그것, 없으면 모듈 default).
+
+    ⚠️ 층이 셋이다 — 모듈 default · envs/dev 의 `module "data_pipeline"` 인자 · (런타임 env).
+    모듈 default 만 읽으면 envs/dev 가 값을 덮어써도 가드가 못 본다(edge-review 3R). 여기서
+    앞의 둘을 합쳐 "지금 dev 에 서는 값"을 돌려준다. 셋째(런타임 env)는 이 레인에 경로가 없다.
+    """
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(rf'variable\s+"{var_name}"\s*\{{(.*?)^\}}', tf, re.M | re.S)
+    assert block, f"{var_name} 를 모듈에서 못 찾았다 — 파서가 낡았다"
+    value = int(re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M).group(1))
+
+    env_tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE.parents[1] / "envs/dev/main.tf").read_text(encoding="utf-8"))
+    override = re.search(rf"^\s*{var_name}\s*=\s*(\d+)", env_tf, re.M)
+    return int(override.group(1)) if override else value
+
+
 def test_day_close_slot_runs_after_the_day_it_closes_has_ended():
     # WHY(ALPHA-905): `day-close` 는 **하루를 닫는** 슬롯이다. 자정 **전**에 돌면 창의 '어제'는
     #      이미 앞 런이 닫은 날이고 '오늘'은 아직 안 끝난 날이라 — 닫는 대상이 없다. 그러면서
@@ -655,7 +674,7 @@ def test_day_close_slot_runs_after_the_day_it_closes_has_ended():
     #      닫는다)이고, 23:50 로 되돌리면 그게 깨진다. 이 관계가 없으면 슬롯을 되돌려도 요일·
     #      타임아웃·assemble 가드가 전부 초록이라 ~124p 재수집이 조용히 재발한다(edge-review).
     slots = {key: (int(h), int(m)) for key, m, h in
-             re.findall(r'^\s*"([\w-]+)"\s*=\s*"cron\((\d+) (\d+) ',
+             re.findall(r'^\s*"([^"]+)"\s*=\s*"cron\((\d+) (\d+) ',
                         _news_cron_block(), re.M)}
     assert "day-close" in slots, f"day-close 슬롯이 사라졌다 — 현재 키: {sorted(slots)}"
 
@@ -682,14 +701,14 @@ def test_assemble_window_covers_what_the_collection_window_collected():
         (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
     block = re.search(r'variable\s+"assemble_window_days"\s*\{(.*?)^\}', tf, re.M | re.S)
     assert block, "assemble_window_days 를 못 찾았다 — 파서가 낡았다"
-    assemble_days = int(re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M).group(1))
+    assemble_days = _module_number("assemble_window_days")   # envs/dev override 반영
     # ⚠️ 기본값만 보면 사각이 남는다(edge-review) — 하한을 0 으로 되돌려도 기본값 1 이면 이
     #    테스트가 통과하고, 그 뒤 env 가 0 을 주입하면 plan 도 통과해 매일 read=0 이 된다.
     #    **허용 범위**(validation 하한)를 함께 본다.
     floor = int(re.search(r"^\s*condition\s*=.*?var\.assemble_window_days\s*>=\s*(\d+)",
                           block.group(1), re.M).group(1))
 
-    for label, value in (("기본값", assemble_days), ("validation 하한", floor)):
+    for label, value in (("실효값", assemble_days), ("validation 하한", floor)):
         assert value >= run_mod.DEFAULT_LOOKBACK_DAYS, (
             f"assemble 창 {label} {value}일 < 수집 창 소급 {run_mod.DEFAULT_LOOKBACK_DAYS}일. "
             "수집이 담은 날짜를 조립이 못 읽는다 — 00:10 런은 닫으려던 어제를 통째로 건너뛰고 "
@@ -725,16 +744,19 @@ def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
     block = re.search(
         r'variable\s+"news_state_machine_timeout_seconds"\s*\{(.*?)^\}', tf, re.M | re.S)
     assert block, "news_state_machine_timeout_seconds 를 못 찾았다 — 파서가 낡았다"
-    timeout_sec = int(re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M).group(1))
+    timeout_sec = _module_number("news_state_machine_timeout_seconds")  # envs/dev override 반영
 
+    # ⚠️ 분으로 내림하면 3001초(50분 1초)가 "50분"이 되어 09:00:01 착지를 통과시킨다
+    #    (edge-review 3R) — **초 단위로** 센다.
     slots = [(int(h), int(m)) for m, h in
-             re.findall(r'^\s*"[\w-]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
+             re.findall(r'^\s*"[^"]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
     for hour, minute in [s for s in slots if s < (9, 0)]:
-        end_min = hour * 60 + minute + timeout_sec // 60
-        assert end_min <= 9 * 60, (
-            f"{hour:02d}:{minute:02d} 슬롯 + 타임아웃 {timeout_sec // 60}분 = "
-            f"{end_min // 60:02d}:{end_min % 60:02d} 로 09:00 을 넘는다. 배치가 1분 뉴스 레인과 "
-            "같은 벤더를 동시에 치는 창이 열린다 — 슬롯을 앞당기거나 타임아웃을 줄여라")
+        end_sec = (hour * 60 + minute) * 60 + timeout_sec
+        assert end_sec <= 9 * 3600, (
+            f"{hour:02d}:{minute:02d} 슬롯 + 타임아웃 {timeout_sec}초 = "
+            f"{end_sec // 3600:02d}:{end_sec // 60 % 60:02d}:{end_sec % 60:02d} 로 09:00 을 넘는다. "
+            "배치가 1분 뉴스 레인과 같은 벤더를 동시에 치는 창이 열린다 — "
+            "슬롯을 앞당기거나 타임아웃을 줄여라")
 
 
 def test_every_sched_hhmm_env_has_a_weekend_sibling():
