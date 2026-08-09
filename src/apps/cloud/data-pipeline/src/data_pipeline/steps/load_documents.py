@@ -360,8 +360,10 @@ def run(
         # **이번 런이 값을 바꾼** 건수다 — UPSERT 의 WHERE 가 막으면 안 센다.
         # 그래서 0 은 "canonical 에 스니펫이 없다"가 아니라 "안 바뀌었다"이고, 멱등 재실행·
         # 롤백 런에서도 0 이다. ⚠️ 막는 절이 **둘**이라 안 바뀐 이유도 둘이다(ALPHA-848):
-        # ①값이 이미 같다 ②**승자 축에 졌다**(1분 경로가 더 새 리드를 이미 반영했거나 이
-        # canonical 이 더 낡았다). `lead_attempted - lead_text_written` 이 그 합이고, 둘을
+        # ①값이 이미 같다 ②**승자 축에 졌다** — 저장된 `lead_observed_at` 이 이 canonical
+        # 의 `fetched_at` 보다 **뒤**이거나, `fetched_at` 결손이라 비교가 UNKNOWN 이다.
+        # ⚠️ 후자를 "canonical 이 더 낡았다"로 읽지 마라 — 어느 쪽이 최신인지 **알 수 없는**
+        # 것이다(ALPHA-907). `lead_attempted - lead_text_written` 이 그 합이고, 둘을
         # 가르려면 행마다 질의가 하나 더 들어 여기서는 안 가른다. 소스 결손을 보려면
         # canonical 쪽을 봐야 하는 것은 그대로다.
         "lead_text_written": lead_written,
