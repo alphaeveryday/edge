@@ -11,6 +11,8 @@ import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
 from data_pipeline.config import DbConfig
@@ -18,6 +20,7 @@ from data_pipeline.db import stable_domain_id
 from data_pipeline.ops import entry
 from data_pipeline.ops import planner as planner_mod
 from data_pipeline.ops import states
+from data_pipeline.minute import states as minute_states
 from data_pipeline.ops import catalog
 from data_pipeline.ops import contracts
 from data_pipeline.ops.catalog import PIPELINE_TYPE
@@ -452,38 +455,44 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_disclosure_lane_owns_the_four_disclosure_tasks(monkeypatch):
-    # WHY(ALPHA-724): 컷오버의 본체는 **소유 레인 이동**이다. 두 레인의 CLI 가 글자 그대로 같아
-    #      (`ingest-raw-disclosure`…) 같은 스텝을 둘이 동시에 소유하면 `by_cli` 가 먼저 온
-    #      엔트리를 돌려줘 장중 런의 attempt 가 시장 레인 task_key 로 기록된다 — 장중 런은
-    #      영구 MISSED 다. 그래서 "레인 하나"는 성능이 아니라 정체성 요구다.
-    #      **중간 미등록 상태를 두지 않은 이유도 여기서 잠근다**: 미등록은 잊히면 조용히
-    #      영구화되지만(공시가 원장 밖에서 도는데 화면에 흔적 0), 레인을 바로 옮기면 최악이
-    #      배포 순서에 따른 MISSED 몇 건이고 그건 자가 해소된다(Rule 12 — 관대한 쪽 대신
-    #      시끄러운 쪽). 레인이 비면 그 조용한 상태로 되돌아간 것이므로 여기서 실패해야 한다.
-    assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
-    assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
-        "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
-        "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE"}
-    # 시장 레인에는 하나도 남지 않았다 — 한쪽만 옮기면 `by_cli` 오귀속이 그대로 살아난다.
+def test_disclosure_left_the_ops_ledger_for_the_minute_lane(monkeypatch):
+    # WHY(ALPHA-875): 724 가 세운 가드를 **전제가 바뀌어** 다시 쓴다. 그때 잠근 것은
+    #      "공시가 원장 밖에서 도는데 화면에 흔적 0" 인 상태였다. 이제 공시는 원장 밖이 아니라
+    #      **다른 원장**(minute_ingestion_session/window)에 있다 — 그래서 잠글 불변식이 바뀐다:
+    #      **정확히 한 원장만 공시를 소유한다.**
+    #
+    #      둘 다 소유하면 724 가 겪은 그 모양이 그대로 돌아온다(`by_cli` 오귀속). 둘 다 안
+    #      소유하면 724 가 막으려던 조용한 상태다. 그래서 양쪽을 함께 단언한다.
+    # ops 원장: 공시 레인이 비었다(엔트리도, 시장 레인 잔재도 없다)
+    assert list(catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)) == []
     assert not [e for e in catalog.entries(catalog.PIPELINE_TYPE)
                 if "DISCLOSURE" in e.task_key]
-    # 판정 임계는 **terraform 의 실제 값**에서 뽑아 대조한다 — 상수를 하드코딩하면 cron 에
-    # 30분 슬롯을 더하거나 SFN 타임아웃을 낮춰도 통과한다(edge-review). 두 계약:
-    #   ① deadline + Reconciler 주기 < 슬롯 간격. 주기를 빼먹으면 안 된다 — 판정을 찍는 건
-    #      15분마다 도는 Reconciler 라 deadline 직후가 아니라 최대 그만큼 뒤다. 이 항이 없으면
-    #      "한 슬롯의 결측이 다음 슬롯 예정 전에 드러난다"가 산술적으로 거짓인데 통과한다.
-    #   ② stalled **<** SFN 타임아웃(같으면 안 된다). 판정이 `> threshold` 인데 SFN 이 정확히
-    #      타임아웃에 실행을 죽이므로, 같게 두면 경과가 임계를 넘는 순간이 오지 않아
-    #      **영원히 발화하지 않는다**(있으나 마나 한 신호를 계약으로 못박는 셈).
-    slot_interval = test_ops_catalog.lane_slot_interval_seconds("disclosure")
-    sfn_timeout = test_ops_catalog.lane_sfn_timeout_seconds("disclosure")
-    reconcile_period = test_ops_catalog.reconcile_period_seconds()
-    for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE):
-        assert e.deadline_offset_seconds + reconcile_period < slot_interval, e.task_key
-        assert e.stalled_after_seconds < sfn_timeout, e.task_key
-        # 크론이 MON-FRI 라 평일 공휴일에도 돈다 — True 면 그 실행 결과가 SKIPPED 뒤로 사라진다.
-        assert e.kr_trading_calendar is False, e.task_key
+    # 1분 원장: 어휘에 있다 — 여기까지 비면 공시를 아무도 기대하지 않는 상태다
+    assert minute_states.DATASET_DISCLOSURE_MINUTE in minute_states.MINUTE_DATASETS
+    allowed = minute_states.SOURCE_GROUPS_BY_DATASET[minute_states.DATASET_DISCLOSURE_MINUTE]
+    assert allowed == frozenset({"dart"})
+    # ⚠️ **위 둘로는 부족하다** — 그건 PR A 가 박은 상수라 1분 레인을 꺼도 그대로다.
+    # 실제 소유 스위치는 terraform 토글이고, 그게 비면 start 가 공시 세션을 계획하지 않아
+    # Worker 가 영영 안 뜬다: 스케줄은 DISABLED·카탈로그는 비었으므로 **아무도 공시를
+    # 수집하지 않는데 아무 테스트도 안 깨지는** 상태가 된다(리뷰 실증: 기본값을 ""로 바꿔도
+    # 108/108 통과). 724 가 막으려던 그 조용한 상태라 여기서 함께 단언한다.
+    # (관용구는 `test_price_worker` 의 `minute_session_source_group` 대조와 같다.)
+    import re
+    root = next((p for p in Path(__file__).resolve().parents
+                 if (p / "infra/terraform/modules/data-pipeline/variables.tf").exists()), None)
+    if root is None:
+        pytest.skip("variables.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+    tf = (root / "infra/terraform/modules/data-pipeline/variables.tf").read_text(encoding="utf-8")
+    toggle = re.search(
+        r'variable\s+"minute_session_disclosure_source_group"\s*\{.*?default\s*=\s*"([^"]*)"',
+        tf, re.DOTALL)
+    assert toggle, "minute_session_disclosure_source_group 기본값을 못 찾았다"
+    assert toggle.group(1) in allowed, (
+        f"1분 레인 토글이 비었거나 어휘 밖이다: {toggle.group(1)!r} — 스케줄도 카탈로그도 "
+        "꺼진 지금 이 값이 공시를 수집하는 유일한 근거다")
+    # ⚠️ ARN 표에는 **남긴다** — SFN 정의는 롤백 경로로 살아 있고(스케줄만 DISABLED),
+    #    표에서 빼면 되돌리는 apply 가 폴백으로 남의 SFN 을 기동한다.
+    assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
 
 
 def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):

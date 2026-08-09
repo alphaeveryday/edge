@@ -18,6 +18,7 @@ from data_pipeline.sources.kis_inav import (
     DEFAULT_INTERVAL_SEC,
     ROWS_PER_CALL,
     KisInavSource,
+    SKIP_BEFORE_OPEN,
 )
 
 # 라이브 실측 행(2026-07-25, 069500, cls=60). 필드명·문자열 타입을 그대로 고정한다.
@@ -243,7 +244,10 @@ def _at(monkeypatch, when: datetime):
     [
         (datetime(2026, 7, 25, 14, 0, tzinfo=KST), "non-trading day"),   # 토
         (datetime(2026, 7, 26, 14, 0, tzinfo=KST), "non-trading day"),   # 일
-        (datetime(2026, 7, 27, 8, 59, tzinfo=KST), "before market open"),  # 월, 개장 1분 전
+        # ⚠️ 상수를 쓴다 — 상주 Worker 가 이 **접두어**로 "기다릴 사유"를 가른다
+        # (worker.inav_worker_cli). 리터럴로 두면 메시지 앞에 뭘 붙여도 이 테스트는
+        # 초록인데 워커는 종료해서 07:45~09:00 재기동 루프가 조용히 돌아온다.
+        (datetime(2026, 7, 27, 8, 59, tzinfo=KST), SKIP_BEFORE_OPEN),  # 월, 개장 1분 전
     ],
 )
 def test_오늘_데이터가_없는_시점은_수집하지_않는다(monkeypatch, when, expected):
@@ -251,7 +255,8 @@ def test_오늘_데이터가_없는_시점은_수집하지_않는다(monkeypatch
     _at(monkeypatch, when)
     src = _source({"069500": _ok([LIVE_ROW])})
 
-    assert expected in src.skip_reason
+    # `in` 이 아니라 `startswith` — 소비자(worker)가 접두어로 판정한다
+    assert src.skip_reason.startswith(expected)
 
 
 @pytest.mark.parametrize(
@@ -341,7 +346,18 @@ def test_자리수_잘린_라벨이_최신을_탈취하지_못한다(monkeypatch
     assert rec.args[7] == 5
 
 
-@pytest.mark.parametrize("stamp", ["240000", "153060", "15:30:00", "abc123", " 153000"])
+@pytest.mark.parametrize("stamp", [
+    "240000", "153060", "15:30:00", "abc123",
+    " 153000",   # 7자 — 길이에서 걸린다
+    # 🔴 6자 공백 패딩. `strptime` 이 `%H` 에 `" 9"` 를 허용해 09:30:00 으로 **맞게**
+    # 읽는다 — 길이도 6이라 도크스트링이 "두 겹으로 막는다"고 적어둔 그 두 겹을 다
+    # 통과했다. 값이 맞아서 더 위험하다: 벤더가 패딩 규약을 바꿔도 신호가 안 남는다.
+    " 93000",
+    # 🔴 6자 비-ASCII 숫자. `isdecimal()` 은 True 이고 `%H` 의 `\d` 도 유니코드 Nd 라
+    # 둘 다 통과해 10:30:00 으로 맞게 읽힌다 — 게다가 사전순 `max`·`_OPEN_STAMP` 비교의
+    # 전제(ASCII 숫자)까지 깬다. 막는 건 `isascii()` 쪽이다.
+    "1٠3000",
+])
 def test_시각이_아닌_6자리도_라벨로_받지_않는다(monkeypatch, caplog, stamp):
     """자리수만 보면 `240000`·`153060` 이 통과한다 — 실제 시각인지까지 한 곳에서 판정해야
     호출부가 파싱 실패를 다시 다루지 않는다."""

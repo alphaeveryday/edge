@@ -868,7 +868,7 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
     from ..db import stable_domain_id
     from ..lake.storage import make_storage
     from ..sources.http import PoliteClient
-    from ..sources.kis_inav import DEFAULT_INTERVAL_SEC, KisInavSource
+    from ..sources.kis_inav import DEFAULT_INTERVAL_SEC, SKIP_BEFORE_OPEN, KisInavSource
     from .inav_collect import KisInavCollector
     from .models import load_universe_uri
     from .states import DATASET_ETF_INAV_MINUTE
@@ -909,14 +909,37 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
         # 환경 skip 의 exit 0 을 물려주면 날짜를 훑는 래퍼가 **아무것도 안 쓰고 전건
         # 초록**으로 끝난다(라운드2 지적).
         raise SystemExit(rejected)
-    if (reason := source.skip_reason) is not None:
-        # 휴장일·개장 전은 **실패가 아니라 skip 이다**(raw 스텝과 같은 규약, ALPHA-557) —
-        # 스케줄러가 붙으면 휴장일마다 정상적으로 지나간다. 조용히는 아니다(Rule 12).
-        logger.warning("inav-worker 실행 안 함 — %s", reason)
-        # ⚠️ **bounded 모드는 확인 게이트다**(price 와 같은 규약) — "돌렸는데 한 window 도
-        # 못 봤다"를 성공으로 보고하면 README 의 `--max-ticks 3` 확인 명령이 휴장일마다
-        # 초록으로 통과한다. 상주 모드의 skip 만 정상 종료다.
-        return 0 if max_ticks is None else 1
+    # 휴장일·개장 전은 **실패가 아니라 skip 이다**(raw 스텝과 같은 규약, ALPHA-557).
+    # 조용히는 아니다(Rule 12).
+    #
+    # ⚠️ **상주 모드에서 "개장 전" 은 종료 사유가 아니다**(ALPHA-882). start-minute-session
+    # 은 07:45 에 올린다 — 가격 레인의 시간외 첫 window 가 08:00 이라 그보다 앞서야 하는데,
+    # iNAV 수집 하한은 09:00 이다. 여기서 종료하면 ECS 가 desired 1 을 유지해 개장까지
+    # ~75분간 재기동 루프를 돈다. 그건 소음으로 끝나지 않는다: ECS 가 반복 종료에 백오프를
+    # 걸어 **첫 정상 기동이 09:00 을 넘길 수 있고**, iNAV window 는 소급이 불가라 그만큼이
+    # 영구 결손이다. price-worker 는 같은 시각에 떠도 IDLE tick 으로 자므로 이 문제가 없다 —
+    # 상주 프로세스는 "아직 할 일이 없다" 를 종료가 아니라 대기로 표현해야 한다.
+    # ⚠️ 세션 확인은 **대기 뒤**에 둔다(리뷰에서 앞으로 옮기자는 제안이 있었으나 되돌렸다).
+    # 앞에 두면 휴장일 skip 이 DB 를 먼저 때려 `exit 0` 대신 "세션 없음" SystemExit 이
+    # 되고, README 가 문서화한 휴장일 계약이 깨진다(위 테스트가 그걸 막는다).
+    # 대가는 계획 실패일의 기동 거부가 09:00 에 드러나는 것뿐인데, 그 경로는 사실상
+    # 안 닿는다 — start 는 승객 계획이 exit 0 일 때만 그 워커를 올린다. 대기에 별도
+    # 상한을 두지 않는 것도 같은 이유다: 진입 조건이 `now < 09:00` 이라 **구조적으로**
+    # 같은 날 09:00 에 끝난다(자정을 넘으려면 23:59 에 대기 중이어야 하는데 그 시각엔
+    # skip_reason 이 None 이라 진입 자체를 안 한다).
+    while (reason := source.skip_reason) is not None:
+        if max_ticks is not None:
+            # ⚠️ **bounded 모드는 확인 게이트다**(price 와 같은 규약) — "돌렸는데 한 window
+            # 도 못 봤다"를 성공으로 보고하면 README 의 `--max-ticks 3` 확인 명령이 휴장일
+            # 마다 초록으로 통과한다. 기다리지도 않는다(확인은 즉답이어야 한다).
+            logger.warning("inav-worker 실행 안 함 — %s", reason)
+            return 1
+        if not reason.startswith(SKIP_BEFORE_OPEN):
+            # 비거래일은 기다려도 안 열린다 — 상주 모드의 정상 종료다.
+            logger.warning("inav-worker 실행 안 함 — %s", reason)
+            return 0
+        logger.info("inav-worker 개장 대기 — %s", reason)
+        time.sleep(tick_seconds)
     session_id = stable_domain_id(
         "msn", DATASET_ETF_INAV_MINUTE, "kis", parsed_day.isoformat()
     )

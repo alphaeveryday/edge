@@ -210,11 +210,11 @@ variable "schedule_state" {
 # (증분 커서가 없어 매 런이 창 전체를 다시 긁는다).
 # ⚠️ **08:10 은 09:00 전에 끝나야 한다** — 뉴스 분 격자가 09:00~15:30 고정이고(minute/models.py:
 # `EXTENDED_HOURS_DATASETS` 에 뉴스 없음) 08:10 의 목적이 그 격자를 1페이지로 유지하는 것이다.
-# 여유는 50분이고 실측 체인이 9~14분이라 평시엔 08:19~08:24 에 끝난다.
-# ⚠️ 다만 **50분이 코드로 강제되지는 않는다.** `news_state_machine_timeout_seconds`(25분)는
+# 여유는 50분이고 성공 런 실측이 15~17분(2026-08-09)이라 평시엔 08:25~08:27 에 끝난다.
+# ⚠️ 다만 **50분이 코드로 강제되지는 않는다.** `news_state_machine_timeout_seconds`(40분)는
 # Planner 컨테이너가 떠서 StartExecution 을 부른 **뒤부터** 재므로 Scheduler 의 RunTask 제출
-# ~컨테이너 기동(ENI·이미지 pull)은 그 25분 밖이다 — 이 레포에서 이미 여유를 갉아먹은 적이
-# 있다. 기동이 길어지면 08:10 런이 09:00 을 넘길 수 있고, 재시도 0이라 자동 복구도 없다.
+# ~컨테이너 기동(ENI·이미지 pull, 실측 ~68초)은 그 40분 밖이다 — 이 레포에서 이미 여유를
+# 갉아먹은 적이 있다. 기동이 길어지면 08:10 런이 09:00 을 넘길 수 있고, 재시도 0이라 자동 복구도 없다.
 # 그때 나타나는 증상은 결측이 아니라 **장중 첫 수집이 여러 페이지가 되는 것**이다(뉴스는
 # 그 다음 23:50 런이 어차피 덮으므로 커버리지는 안 깨진다). 상시화하면 슬롯을 앞당겨라.
 #
@@ -255,23 +255,30 @@ variable "news_schedule_state" {
 }
 
 variable "news_state_machine_timeout_seconds" {
-  # 한 실행이 다음 실행과 겹치면 두 뉴스 실행이 AssembleEvents 에서 같은 미threaded event 를
-  # 동시 처리해 prior-count·lifecycle_stage 레이스가 난다(edge-review P1). 25분(1500s)=8분 실측에 여유.
-  # 초과분은 fail-loud 타임아웃(무한 LLM 을 조용한 레이스보다 낫게 — 타임아웃 알람이 잡는다).
-  # ⚠️ 위 "8분 실측"은 **BigKinds 수집이 40 page 에서 잘리던 때**의 값이다(ALPHA-541 이전).
-  # 캡이 실제 창(2일, 108~126 page)에 맞춰지면서 raw 스텝만 최소 +86초 늘었다 —
-  # **다음 실측 때 이 여유를 다시 재라**. 넘으면 States.Timeout 이라 정의 안 NewsNotifyFailure 를
+  # 무한 LLM 을 끊는 fail-loud 상한이다. 넘으면 States.Timeout 이라 정의 안 NewsNotifyFailure 를
   # 안 타고 죽는다(news_pipeline.tf 의 타임아웃 알람이 그 자리).
-  # ⚠️ **상한을 묶는 것이 ALPHA-893 에서 바뀌었다.** 옛 제약은 인접 슬롯 간격 30분(15:00·15:30)
-  # 이었는데 두 슬롯이 사라져 지금 최소 간격은 8시간 20분(23:50→08:10)이다 — 겹침 여지가
-  # 30분에서 그만큼 넓어졌다(기동 지연이 안 묶여 있어 "불가능"은 아니다).
-  # 남은 연성 제약은 **08:10 런이 뉴스 분 격자 시작(09:00) 전에 끝나는 것**(50분)
-  # 인데 ⚠️ **이 값이 그걸 보장하진 못한다** — 타임아웃은 StartExecution 이후만 재고 RunTask
-  # 제출~컨테이너 기동은 밖이다. 즉 25분은 "SFN 이 무한히 도는 것"만 막는 fail-loud 상한이고,
-  # 50분 예산은 실측(체인 9~14분)이 지킨다. 올릴 여지는 생겼지만 실측 없이 올리지 마라.
+  #
+  # ⚠️ **옛 값 25분(1500s)의 근거는 ALPHA-893 에서 사라졌다.** 그 근거는 "인접 슬롯 간격
+  # 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였다 — 겹치면 두 뉴스 실행의 AssembleEvents
+  # 가 같은 미threaded event 를 동시 처리해 prior-count·lifecycle_stage 레이스가 난다
+  # (edge-review P1). 두 슬롯이 내려가 지금 최소 간격은 **8시간 20분**(23:50→08:10)이다.
+  # 겹침 여지가 그만큼 넓어졌다는 뜻이지 "구조적으로 불가능"은 아니다 — RunTask 제출~컨테이너
+  # 기동이 어디에도 안 묶여 있다.
+  #
+  # 40분(2400s)의 근거는 **실측**이다(2026-08-09, `list-executions` 최근 12런):
+  # SUCCEEDED 4건이 15.3·16.0·16.8·16.9분인데 **5건이 25.0분 정각 TIMED_OUT** — 40%가 상한에
+  # 그대로 잘리고 있었다. 잘리는 지점은 원장에도 찍힌다(`blocked=[ASSEMBLE_EVENTS,
+  # LOAD_ASSERTIONS]`) — 수집·정제·태깅은 끝나고 **꼬리 두 스텝만** 잘린다. 즉 "그날치를
+  # 담는다"는 목적은 서고 event 조립만 안 됐다. 40분은 p50 16분의 2.4배 여유다.
+  # ⚠️ 왜 15~17분이 됐는지(어느 스텝이 부풀었는지)는 아직 안 팠다 — 상한을 올린 것은 원인
+  # 규명이 아니라 **잘림을 멈춘 것**이다. 다음 실측 때 스텝별로 재라.
+  #
+  # 위쪽 상한은 **08:10 런이 뉴스 분 격자 시작(09:00) 전에 끝나는 것**(50분)이 정한다 —
+  # 08:10+40분=08:50. ⚠️ **이 값이 그걸 보장하진 못한다**: 타임아웃은 StartExecution 이후만
+  # 재고 RunTask 제출~컨테이너 기동(~68초)은 밖이다. 더 올리려면 슬롯을 앞당겨라.
   description = "뉴스 SFN 실행 타임아웃. 무한 LLM 을 fail-loud 로 끊는 상한(겹침 방지 목적은 ALPHA-893 에서 소멸)."
   type        = number
-  default     = 1500
+  default     = 2400
 }
 
 # 공시 SFN 스케줄(ALPHA-722). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
@@ -527,21 +534,11 @@ variable "minute_session_schedule_state" {
 
 # ⚠️ 두 cron 은 **universe 가 정하는 세션 범위 밖**이어야 한다. 시간외 거래 종목이 하나라도
 # 있으면 계획 범위가 08:00–20:00 이고(`plan_session_windows`), 없으면 09:00–15:30 이다.
-#
-# ⚠️ **start 기본값은 좁은 쪽(시간외 없음) 기준이다(ALPHA-893).** 08:30 은 08:00 보다 뒤라
-# 시간외 종목이 생기는 순간 앞 30칸이 고아가 된다 — 즉 **이 값은 universe 에 딸린 값이지
-# 고정 상수가 아니다.** 실측 근거: 라이브 `config/minute/universe.json`(kr-holdings-96dc5c8bb13b)에
-# `extended_hours_ids` 키가 없고, 생성기도 안 넣는다(`scripts/build_minute_universe.py` — 시간외
-# 여부는 종목별 속성이라 실측 없이 못 채운다). 그래서 지금 계획 범위는 세 dataset 모두 09:00
-# 이후다(뉴스는 `EXTENDED_HOURS_DATASETS` 밖이라 항상 09:00, `disclosure_minute` 은 어휘뿐).
-# **universe 에 `extended_hours_ids` 를 넣게 되면 이 값을 08:00 이전으로 되돌려라.** 안 되돌리면
-# 08:00–08:30 window 30개가 매 거래일 아무도 못 채운 채 DUE 로 쌓이고 EOD QC 가 MISSING 으로
-# 확정한다(조용히는 아니지만 매일 시끄럽다).
-# stop 은 반대로 넓은 쪽(20:00) 기준을 유지한다 — 늦게 내리는 건 낭비지 결측이 아니다.
+# 기본값은 넓은 쪽(시간외 포함) 기준이다 — 좁혀 두면 개장 뒤에 뜨거나 마감 전에 내려간다.
 variable "minute_session_start_expression" {
-  description = "Premarket 스케일업 cron(Asia/Seoul). 세션 첫 window 전이어야 한다 — 지금 universe 는 시간외 종목이 없어 09:00 이 첫 window 다"
+  description = "Premarket 스케일업 cron(Asia/Seoul). 세션 첫 window(시간외 08:00) 전이어야 한다"
   type        = string
-  default     = "cron(30 8 ? * MON-FRI *)"
+  default     = "cron(45 7 ? * MON-FRI *)"
 }
 
 variable "minute_session_stop_expression" {
@@ -562,12 +559,31 @@ variable "minute_session_news_source_group" {
   default     = "bigkinds"
 }
 
+variable "minute_session_inav_source_group" {
+  description = "etf_inav_minute 세션의 source_group(ALPHA-882). 비우면 iNAV 레인 미편입 — start 가 iNAV 세션을 계획하지 않고 inav-worker 도 올리지 않는다"
+  type        = string
+  # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만). 어휘 밖 값은
+  # 오케스트레이터가 기동에서 거부한다(`_lane_source_group`).
+  default = "kis"
+}
+
+variable "minute_session_disclosure_source_group" {
+  description = "disclosure_minute 세션의 source_group(ALPHA-875). 비우면 공시 레인 미편입 — 공시는 SFN 10슬롯 레인이 계속 소유한다"
+  type        = string
+  # ⚠️ 이 값이 **컷오버 스위치**다. 비어 있으면 start 가 공시 세션을 계획하지 않고
+  # disclosure-worker 도 안 뜬다(서비스 정의는 착지하되 desired 0). 비면 SFN 레인이 계속
+  # 돌고, 채우면 1분 레인이 소유한다 — **둘을 동시에 켜지 않는다**(같은 CLI 를 두 레인이
+  # 소유하면 `catalog.by_cli` 가 먼저 온 쪽을 돌려줘 한쪽은 영구 MISSED 가 된다).
+  # 그래서 이 값을 채우는 apply 는 아래 SFN 스케줄 비활성과 **같은 apply** 여야 한다.
+  default = "dart"
+}
+
 variable "minute_session_source_group" {
   description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
   type        = string
   # kis(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다. 이 기본값은
   # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
-  default     = "kis"
+  default = "kis"
 }
 
 variable "super_admin_api_url" {

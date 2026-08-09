@@ -145,7 +145,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 python -m edge_analysis --trigger-id <trigger_id> --request-id manual-2
 
 # 분봉 트리거 큐 상주 소비(ALPHA-719) — price-explanation-realtime 을 폴링해 위
-# --trigger-id 경로를 태운다(ECS Service, 세션 결속 08:30~게이트 종료 — 기동 시각은 ALPHA-893). 멱등은
+# --trigger-id 경로를 태운다(ECS Service, 세션 결속 07:45~게이트 종료). 멱등은
 # explanation_run 존재(route id 프리플라이트)로, 재시도는 SQS(visibility·DLQ)로 판정.
 # 프리플라이트는 **처리가 끝나야** 참이라 처리 중 재배달은 못 거른다 — 그 창은 route
 # advisory lock 이 닫는다(ALPHA-779, 락이 프리플라이트보다 먼저). 진 쪽은 메시지를

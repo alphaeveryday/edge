@@ -39,6 +39,27 @@ class Candle:
         return self.volume > 0
 
 
+def is_stamp(raw: object, length: int) -> bool:
+    """벤더 날짜·시각 문자열이 **정확히 `length` 자리 ASCII 숫자**인가.
+
+    `strptime` 을 믿으면 안 되는 세 가지를 한 곳에서 막는다 — 셋 다 값은 **맞게** 읽혀서
+    포맷 변경이 조용히 흡수된다(그래서 값이 아니라 **형상 변화의 신호**를 지키는 검사다):
+
+    - 자리수 부족 — 연접 파싱(`"%Y%m%d%H%M%S"`)이라 한쪽이 짧으면 다른 쪽 자리를 훔친다
+      (`"20260807"+"1030"` → 10:03:00).
+    - 공백 패딩 — `%d` 의 `" [1-9]"` 로 `"202608 3"` 이 통과한다. `%H` 의 `" \\d"` 는
+      **버전에 달렸다**(실측: 런타임 이미지 3.12 에 없고 3.14 에 있다).
+    - 비-ASCII 숫자 — `\\d` 가 유니코드 Nd 라 `"٢٠٢٦0803"`·`"1٠3000"` 이 통과한다.
+
+    ⚠️ 술어 셋이 **서로 다른 문**을 막는다. 공백은 ASCII 라 `isascii()` 로 못 막고,
+    비-ASCII 숫자는 `isdecimal()` 이 True 라 그걸로 못 막는다. 하나만 두면 나머지가 샌다.
+
+    ⚠️ **여기 한 곳인 이유**: 같은 규칙이 파서 둘·창 필터 둘에 흩어져 있었고, 파서에만
+    술어를 더했다가 필터 둘이 뒤처져 그 틈으로 하루가 조용히 절단됐다(Codex P2, #647).
+    """
+    return isinstance(raw, str) and len(raw) == length and raw.isascii() and raw.isdecimal()
+
+
 def to_decimal(raw: object, field_name: str, symbol: str) -> Decimal:
     """문자열 숫자를 Decimal 로. float 를 거치지 않는다 — 정밀도가 깨진다.
 

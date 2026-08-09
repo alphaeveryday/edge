@@ -58,7 +58,7 @@ import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
-from .candle import Candle, build_candle, to_decimal
+from .candle import Candle, build_candle, is_stamp, to_decimal
 from .kis_minute import KisMinuteClient, KisUnitError
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,9 @@ LANE_INTERVAL_SEC = 60
 # `stck_bsop_date` 자리수(YYYYMMDD). 파서와 창 필터가 **같은 값**을 봐야 한다 — 갈리면
 # 한쪽만 통과하는 형상이 생기고, 그 틈으로 새는 것은 늘 조용한 쪽이다.
 _YMD_LEN = 8
+# `stck_cntg_hour` 자리수(HHMMSS). 같은 이유로 필요하다 — 위 상수와 **함께** 봐야
+# `strptime` 의 연접 파싱이 한쪽 자리를 훔쳐가지 못한다.
+_HHMMSS_LEN = 6
 
 KST = timezone(timedelta(hours=9))
 
@@ -111,11 +114,33 @@ def parse_index_row(raw: dict, unit_id: str, *, interval_sec: int) -> Candle:
     day, label = raw.get("stck_bsop_date"), raw.get("stck_cntg_hour")
     if not isinstance(day, str) or not isinstance(label, str):
         raise ValueError(f"{unit_id} 지수 분봉 행에 날짜·시각이 없다: {raw!r}")
-    if len(day) != _YMD_LEN:
-        # 자리수를 여기서 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열을 보므로
-        # 날짜가 짧으면 시각 자리를 잘라 먹고도 파싱에 성공할 수 있다(`"2026087"` +
-        # `"103000"`). 그러면 라벨이 조용히 다른 분으로 읽힌다.
-        raise ValueError(f"{unit_id} 지수 분봉 거래일 자리수가 다르다: {day!r}")
+    # 자리수를 **양쪽 다** 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를
+    # 보므로, 한쪽이 짧으면 다른 쪽 자리를 잘라 먹고도 파싱에 성공한다. 실측:
+    #   "20260807" + "1030"  → 10:03:00   (4자리 라벨이 조용히 다른 분이 된다)
+    #   "20260807" + "30000" → 03:00:00   (선행 0 이 잘린 라벨 — `kis_inav._time_stamp`
+    #                                      가 `"9300"` 으로 적어둔 그 함정과 같다)
+    # 5자리는 선행 0 을 되붙이면 **복구도 가능해 보인다**("93000"→09:30:00). 그래도
+    # 거부한다: 4자리와 구분할 근거가 없고, 추정해서 맞히면 틀렸을 때 신호가 안 남는다.
+    # 🔴 이건 **값이 조용히 틀리는** 부류다: 결과의 `second` 가 0 이라 아래 격자 가드도
+    # 안 걸리고, 그 봉은 멀쩡한 다른 window 에 앉아 VALID 로 확정된다. 한쪽만 막으면
+    # 나머지 문으로 그대로 들어온다(날짜만 막았다가 Codex 리뷰에서 잡혔다).
+    # 공백 패딩과 비-ASCII 숫자도 여기서 막는다 — `strptime` 이 둘 다 관대하게 받아
+    # 값은 **맞게** 읽히고, 그래서 벤더의 포맷 변경이 조용히 흡수된다. 두 술어가 각각
+    # 다른 문을 막는다. 하나만 두면 나머지가 열린다(실측):
+    #   · `isdecimal()` → 공백 패딩. `%d` 의 `" [1-9]"` 로 `"202608 3"`→08-03 이 통과한다
+    #     (`%Y`·`%m` 에는 없다). **공백은 ASCII 라 `isascii()` 로는 못 막는다.**
+    #     ⚠️ 라벨 쪽(`%H` 의 `" \d"`)은 **파이썬 버전에 달렸다** — 실측 3.12(런타임
+    #     이미지·CI)에는 없고 3.14 에는 있다. 즉 `" 93000"` 은 지금은 `strptime` 이
+    #     거부하고, 이미지를 올리는 날 조용히 09:30:00 이 된다. 그래서 미리 막는다.
+    #   · `isascii()` → 비-ASCII 숫자. `\d` 가 유니코드 Nd 라 `"1٠3000"`→10:30:00,
+    #     `"٢٠٢٦0803"`→2026 이 통과한다(`%Y` 는 이쪽으로 샌다). `isdecimal()` 은 True 다.
+    #     이쪽은 3.12 에서도 산다.
+    # 날짜와 라벨을 **연접해서** 본다 — 한쪽만 보면 다른 쪽 문이 그대로 열린다.
+    if not is_stamp(day, _YMD_LEN) or not is_stamp(label, _HHMMSS_LEN):
+        # ⚠️ "자리수"라고 쓰지 않는다 — `" 93000"` 은 6자다. 운영자가 로그에서 자리수를
+        # 세어 보고 "가드가 오작동했다"로 읽으면 진짜 원인(포맷 변경)을 놓친다.
+        raise ValueError(
+            f"{unit_id} 지수 분봉 날짜·시각 형상이 아니다: {day!r} {label!r}")
     try:
         start = datetime.strptime(day + label, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
@@ -249,16 +274,21 @@ class KisSectorIndexClient(KisMinuteClient):
                 # 벤더의 라벨 규약 변경이 정상 소음에 묻힌다.
                 continue
             trade_date = raw.get("stck_bsop_date")
-            if not isinstance(trade_date, str) or len(trade_date) != _YMD_LEN:
+            if not is_stamp(trade_date, _YMD_LEN):
                 # ⚠️ 형상 위반을 "남의 날"로 흘리면 **조용히 하루를 잃는다**: 전 행이
                 # `continue` 로 떨어져 `bars` 가 비고, 그건 예외도 ERROR 로그도 없이
                 # 45종 전건 missing 인 INCOMPLETE window 로 굳는다 — 원장에는 "벤더가
                 # 안 줬다"로 보여 원인이 스키마 변화임을 가린다. 이 파일의 `start.second`
                 # 가드와 같은 논거이고, 형제(`_fetch_day`)도 같은 조건을 raise 로 낸다.
                 #
-                # ⚠️ **자리수도 여기서 본다.** 아래 비교는 8자리 `ymd` 와의 정확 일치라
-                # 짧은 날짜는 구조적으로 "남의 날"이 된다 — 파서의 자리수 가드는 그래서
-                # 이 경로에서 영영 안 닿는다(형이 맞는 형상 위반이 조용한 문으로 샌다).
+                # ⚠️ **날짜 형상은 여기서 본다.** 아래 비교는 8자리 `ymd` 와의 정확
+                # 일치라 형상이 어긋난 날짜는 **구조적으로 "남의 날"**이 되어 `continue`
+                # 로 빠진다 — 파서의 가드 중 날짜 쪽은 그래서 이 경로에서 영영 안 닿는다.
+                # 자리수만이 아니라 `is_stamp` **전체**를 여기서 봐야 한다:
+                # `"202608 7"`·`"٢٠٢٦0807"` 은 8자라 자리수만 보면 통과하고, 그대로 남의
+                # 날이 되어 페이지가 통째로 빈 결과가 된다(Codex P2).
+                # ⚠️ 라벨 쪽은 다르다 — 그 날짜 행은 여기를 통과해 파서로 가고 거기서
+                # 걸린다. 파서 가드를 죽은 코드로 오해하지 마라.
                 raise ValueError(
                     f"{unit_id} 지수 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
             if trade_date != ymd:

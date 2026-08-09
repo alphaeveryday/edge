@@ -36,6 +36,7 @@ import math
 import os
 import time
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from ..db import stable_domain_id
 from ..ops.trading_calendar import is_trading_day
@@ -44,10 +45,13 @@ from .models import KST
 from .repository import MinuteLedger
 from .session_cli import plan_session_cli
 from .states import (
+    DATASET_DISCLOSURE_MINUTE,
+    DATASET_ETF_INAV_MINUTE,
     DATASET_NEWS_MINUTE,
     MINUTE_DATASETS,
     SCALED_DATASETS,
     SOURCE_GROUPS_BY_DATASET,
+    UNIVERSE_DATASETS,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,39 @@ ENV_NEWS_SOURCE_GROUP = "MINUTE_SESSION_NEWS_SOURCE_GROUP"
 # 루프(비용·알람 소음)를 돌기 때문에, 이 목록은 **뉴스 세션이 선 날만** 올린다.
 # 소비자 2종은 공용 목록에 남는다 — 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
 ENV_NEWS_WORKER_SERVICES = "MINUTE_SESSION_NEWS_WORKER_SERVICES"
+# 공시(ALPHA-875) — 뉴스와 **같은 성질**이다: 유니버스 없는 소스 단위 레인이고, 생산자가
+# 세션 결속이라 세션이 선 날만 올려야 한다. 그래서 같은 축 두 개를 그대로 갖는다.
+ENV_DISCLOSURE_SOURCE_GROUP = "MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP"
+ENV_DISCLOSURE_WORKER_SERVICES = "MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES"
+# iNAV(ALPHA-882) — 위 둘과 같은 축이되 **universe 를 쓴다**(`UNIVERSE_DATASETS`).
+# 하위 소비자는 없어(`commit_inav_window` 가 job·outbox 를 안 만든다) 공용 목록에 넣을
+# 소비자도 없고, 생산자 하나만 세션 수명에 묶인다.
+ENV_INAV_SOURCE_GROUP = "MINUTE_SESSION_INAV_SOURCE_GROUP"
+ENV_INAV_WORKER_SERVICES = "MINUTE_SESSION_INAV_WORKER_SERVICES"
+
+
+class _OptionalLane(NamedTuple):
+    """가격 레인에 **얹히는** 선택 레인 — 토글(env)이 켜진 날만 계획·스케일된다.
+
+    뉴스와 공시가 글자 그대로 같은 규칙을 따르므로 표로 둔다(두 벌로 두면 한쪽만 고쳐진다 —
+    `states.SOURCE_GROUPS_BY_DATASET` 를 한 표로 둔 것과 같은 이유). 늘어나는 자리는 여기다.
+
+    ⚠️ 레인이 **모든 축에서 같지는 않다** — universe 를 쓰는지는 여기 있는지가 아니라
+    `UNIVERSE_DATASETS` 가 정한다(iNAV 는 쓰고 뉴스·공시는 안 쓴다). 표에 넣었다고 그
+    축까지 같다고 접으면 그 레인이 매 거래일 통째로 안 선다(`start_session_cli` 주석).
+    """
+
+    dataset: str
+    source_env: str
+    services_env: str
+
+
+_OPTIONAL_LANES = (
+    _OptionalLane(DATASET_NEWS_MINUTE, ENV_NEWS_SOURCE_GROUP, ENV_NEWS_WORKER_SERVICES),
+    _OptionalLane(DATASET_DISCLOSURE_MINUTE, ENV_DISCLOSURE_SOURCE_GROUP,
+                  ENV_DISCLOSURE_WORKER_SERVICES),
+    _OptionalLane(DATASET_ETF_INAV_MINUTE, ENV_INAV_SOURCE_GROUP, ENV_INAV_WORKER_SERVICES),
+)
 
 DEFAULT_DRAIN_TIMEOUT_SEC = 1800.0
 POLL_INTERVAL_SEC = 15.0
@@ -89,15 +126,15 @@ def _services() -> list[str]:
     return names
 
 
-def _news_worker_services() -> list[str]:
-    """뉴스 생산자 서비스 목록 — 비어 있을 수 있다(뉴스 미편입 환경). 결손 검증은
-    `_news_source_group` 과 짝으로 본다: 토글이 켜졌는데 목록이 비면 배선 결손이다."""
-    raw = os.environ.get(ENV_NEWS_WORKER_SERVICES, "")
+def _lane_worker_services(lane: _OptionalLane) -> list[str]:
+    """그 레인 생산자의 서비스 목록 — 비어 있을 수 있다(미편입 환경). 결손 검증은
+    토글과 **짝으로** 본다: 토글이 켜졌는데 목록이 비면 배선 결손이다."""
+    raw = os.environ.get(lane.services_env, "")
     names = [n.strip() for n in raw.split(",") if n.strip()]
-    if _news_source_group() is not None and not names:
+    if _lane_source_group(lane) is not None and not names:
         raise SystemExit(
-            f"{ENV_NEWS_SOURCE_GROUP} 이 켜졌는데 {ENV_NEWS_WORKER_SERVICES} 가 비었다 — "
-            "뉴스 세션은 계획되는데 그걸 처리할 서비스가 스케일 목록에 없다"
+            f"{lane.source_env} 이 켜졌는데 {lane.services_env} 가 비었다 — "
+            f"{lane.dataset} 세션은 계획되는데 그걸 처리할 서비스가 스케일 목록에 없다"
         )
     return names
 
@@ -159,16 +196,17 @@ def _scale(*, desired: int, force: bool, services: list[str] | None = None) -> N
         logger.info("desired_count=%d (force_new_deployment=%s): %s", desired, force, service)
 
 
-def _news_source_group() -> str | None:
-    value = os.environ.get(ENV_NEWS_SOURCE_GROUP, "").strip()
+def _lane_source_group(lane: _OptionalLane) -> str | None:
+    """그 레인의 토글 — 빈 값이면 꺼진 것(그 레인을 계획도 스케일도 하지 않는다)."""
+    value = os.environ.get(lane.source_env, "").strip()
     if not value:
         return None
-    allowed = SOURCE_GROUPS_BY_DATASET[DATASET_NEWS_MINUTE]
+    allowed = SOURCE_GROUPS_BY_DATASET[lane.dataset]
     if value not in allowed:
-        # 오타를 통과시키면 없는 세션 id 가 유도돼 news-worker 가 기동 거부 루프를 돈다 —
+        # 오타를 통과시키면 없는 세션 id 가 유도돼 그 Worker 가 기동 거부 루프를 돈다 —
         # 배선 결손은 오케스트레이터 기동에서 죽는다(_services 와 같은 축).
         raise SystemExit(
-            f"{ENV_NEWS_SOURCE_GROUP} 이 news_minute 어휘 밖이다: {value} (아는 값 {sorted(allowed)})"
+            f"{lane.source_env} 이 {lane.dataset} 어휘 밖이다: {value} (아는 값 {sorted(allowed)})"
         )
     return value
 
@@ -178,14 +216,20 @@ def _resolve(dataset: str | None, source_group: str | None) -> tuple[str, str]:
     if dataset not in MINUTE_DATASETS:
         raise SystemExit(f"--dataset 이 1분 원장 어휘 밖이다: {dataset} (아는 값 {sorted(MINUTE_DATASETS)})")
     if dataset not in SCALED_DATASETS:
-        # ⚠️ 어휘에 있다고 스케일 주체는 아니다. start/stop 이 올리고 내리는 서비스
-        # 목록은 **공용**이라, 이 세션이 소유하지 않은 서비스를 건드리게 된다 — 특히
-        # stop 은 phase 게이트가 이 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는
-        # 전역이라 **살아 있는 price-worker 를 내린다**. 배선이 생기면 여기 추가한다.
+        # ⚠️ 어휘에 있다고 **구동 레인**은 아니다. start/stop 이 올리고 내리는 서비스
+        # 목록은 **공용**이고 `_scale` 은 dataset 을 아예 안 본다 — 그래서 이 세션이
+        # 소유하지 않은 서비스를 건드리게 된다. 특히 stop 은 phase 게이트가 이 세션만
+        # 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라 **살아 있는 price-worker
+        # 를 내린다**.
+        # ⚠️ **자기 상주 서비스를 갖는 것으로는 이 조건이 안 풀린다** — 선택 레인
+        # (news_minute·disclosure_minute·etf_inav_minute)은 자기 Worker 를 소유하지만
+        # 여전히 여기 못 든다. `_scale` 이 dataset 별 목록을 받게 되기 전까지는
+        # 그대로다(`_OPTIONAL_LANES` 주석).
         raise SystemExit(
-            f"--dataset {dataset!r} 는 상주 서비스를 소유하지 않는다 — "
-            f"start/stop-minute-session 대상이 아니다(아는 값 {sorted(SCALED_DATASETS)}). "
-            f"계획·수집은 plan-minute-session 과 그 dataset 의 worker 로 한다"
+            f"--dataset {dataset!r} 는 start/stop-minute-session 의 구동 레인이 아니다"
+            f"(아는 값 {sorted(SCALED_DATASETS)}). 선택 레인은 인자가 아니라 env 토글로 "
+            f"켠다({', '.join(lane.source_env for lane in _OPTIONAL_LANES)}). "
+            f"계획·수집만 하려면 plan-minute-session 과 그 dataset 의 worker 로 한다"
         )
     allowed = SOURCE_GROUPS_BY_DATASET[dataset]
     if source_group not in allowed:
@@ -209,7 +253,13 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     (fail-loud), 올려 두면 하루 종일 재기동 루프만 돈다.
     """
     dataset, source_group = _resolve(dataset, source_group)
-    news_group = _news_source_group()  # 배선 오타는 계획 전에 죽는다(_services 와 같은 축)
+    # 배선 오타는 계획 전에 죽는다(_services 와 같은 축). 켜진 레인만 남긴다.
+    lane_groups = [(lane, _lane_source_group(lane)) for lane in _OPTIONAL_LANES]
+    for lane, group in lane_groups:
+        # 목록 결손도 계획 전에 — 계획만 세우고 올릴 서비스가 없으면 그 레인은 하루 종일
+        # PLANNED 로 남고, 그 사실이 드러나는 자리가 없다.
+        if group is not None:
+            _lane_worker_services(lane)
     today = datetime.now(KST).date()
     if not is_trading_day(today):
         # ⚠️ 공휴일 집합은 `OPS_KR_HOLIDAYS` 수동 주입이다(비면 평일 휴장일이 거래일로
@@ -225,25 +275,47 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
         logger.error("세션 계획이 실패했다(exit %d) — 스케일업하지 않는다", exit_code)
         return exit_code
 
-    # 뉴스 세션(ALPHA-717) — 가격 계획 성공 뒤에 계획한다. ⚠️ 뉴스 계획이 실패해도
-    # **스케일업은 한다**: 가격 레인까지 세우면 뉴스 결손이 하루치 가격 결손으로
-    # 번진다. news-worker 는 세션 부재로 기동 거부 루프를 돌아 실패가 드러나고,
-    # exit 는 뉴스 실패를 그대로 실어 스케줄 기록에 남긴다.
-    news_exit = 0
-    if news_group is not None:
-        news_exit = plan_session_cli(
-            settings, dataset=DATASET_NEWS_MINUTE, source_group=news_group,
-            session_date=today.isoformat(), universe=None,
-        )
-        if news_exit != 0:
-            logger.error("news 세션 계획 실패(exit %d) — 가격 레인은 진행하고 "
-                         "news-worker 는 올리지 않는다(세션 부재 재기동 루프 방지)", news_exit)
-
+    # 선택 레인(뉴스 ALPHA-717 · 공시 ALPHA-875 · iNAV ALPHA-882) — 가격 계획 성공 뒤에 계획한다.
+    # ⚠️ 선택 레인 계획이 실패해도 **가격 스케일업은 한다**: 가격 레인까지 세우면 그 레인의
+    # 결손이 하루치 가격 결손으로 번진다. 실패한 레인의 Worker 는 세션 부재로 기동 거부
+    # 루프를 돌아 실패가 드러나고, exit 는 그 실패를 그대로 실어 스케줄 기록에 남긴다.
+    # ⚠️ **가격 레인을 선택 레인 계획보다 먼저 올린다**(ALPHA-882 리뷰 라운드1). 위 문단이
+    # 내건 "선택 레인이 실패해도 가격은 진행한다"를 exit code 경로에서만이 아니라 **예외
+    # 경로에서도** 성립시킨다 — `plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라
+    # universe 객체를 읽는 S3 의 botocore ClientError 는 그대로 뚫고 나온다. 뒤에 두면 그
+    # 한 번에 가격 레인이 통째로 안 뜬다. universe 를 읽는 레인이 생긴 지금 실재하는 경로다.
     _scale(desired=1, force=True)
-    if news_group is not None and news_exit == 0:
-        # 뉴스 생산자는 세션이 섰을 때만 — 계획 실패 날 올리면 기동 거부 루프만 돈다
-        _scale(desired=1, force=True, services=_news_worker_services())
-    return news_exit
+
+    lane_exits = {}
+    for lane, group in lane_groups:
+        if group is None:
+            continue
+        lane_exits[lane] = plan_session_cli(
+            settings, dataset=lane.dataset, source_group=group,
+            session_date=today.isoformat(),
+            # ⚠️ **선택 레인이라고 universe 가 다 None 인 게 아니다.** 뉴스·공시는 소스
+            # 단위라 안 쓰지만 iNAV 는 `UNIVERSE_DATASETS` 라 planner 가 없으면 **거부한다**
+            # (exit 2 → 그 레인이 매 거래일 통째로 안 선다). 통과시키더라도 원장에
+            # universe_version="none" 이 박혀 Worker 의 `_session_ready` 가 영영 False 다 —
+            # 두 축 모두에서 틀린다. worker 의 `--universe` 와 **같은 객체**여야 한다
+            # (terraform 이 둘에 같은 URI 를 준다).
+            universe=universe if lane.dataset in UNIVERSE_DATASETS else None,
+        )
+        if lane_exits[lane] != 0:
+            logger.error("%s 세션 계획 실패(exit %d) — 가격 레인은 진행하고 그 Worker 는 "
+                         "올리지 않는다(세션 부재 재기동 루프 방지)",
+                         lane.dataset, lane_exits[lane])
+            continue
+        # ⚠️ **그 레인의 스케일업을 다음 레인 계획보다 먼저 한다**(#642 봇 P2). 가격 레인에
+        # 쓴 것과 **같은 논증을 한 층 아래에 적용**한 것이다: 스케일업을 루프 뒤로 모으면
+        # 뒤 레인의 계획이 예외로 죽을 때(iNAV universe 의 S3 ClientError — `plan_session_cli`
+        # 가 안 잡는다) 이미 계획에 성공한 앞 레인이 desired 0 인 채 남는다. 세션은 섰는데
+        # Worker 가 없으니 그 레인은 그날 조용히 아무것도 수집하지 않는다.
+        # 레인별로 판정한다: 뉴스가 실패해도 iNAV 는 올라가야 한다(서로 독립이다).
+        _scale(desired=1, force=True, services=_lane_worker_services(lane))
+    # ⚠️ 여러 레인이 실패하면 **첫 실패 코드**를 낸다(0 이 아니면 스케줄 기록에 남는 건
+    # 같고, 어느 레인인지는 위 로그가 말한다). 합치거나 최댓값을 쓰면 없는 코드가 나온다.
+    return next((code for code in lane_exits.values() if code != 0), 0)
 
 
 def stop_session_cli(settings, *, dataset: str | None, source_group: str | None) -> int:
@@ -267,9 +339,14 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     dataset, source_group = _resolve(dataset, source_group)
     day = datetime.now(KST).date()
     lanes = [(dataset, source_group)]
-    news_group = _news_source_group()
-    if news_group is not None:
-        lanes.append((DATASET_NEWS_MINUTE, news_group))
+    for lane, group in ((lane, _lane_source_group(lane)) for lane in _OPTIONAL_LANES):
+        if group is not None:
+            lanes.append((lane.dataset, group))
+    # ⚠️ 레인 Worker 목록을 **게이트 전에 전부 해석한다**(ALPHA-882 리뷰 라운드1). 이 조회는
+    # 배선 결손에서 SystemExit 이라(토글은 켜졌는데 목록이 빔), 스케일다운 루프 안에서
+    # 처음 부르면 공용 서비스를 0 으로 내린 **뒤** 죽어서 나머지 레인 Worker 가 밤새
+    # desired 1 로 남는다 — 게다가 exit 는 "stop 전체 실패" 로 읽힌다. start 와 같은 순서다.
+    lane_workers = {lane: _lane_worker_services(lane) for lane in _OPTIONAL_LANES}
     ids = {lane: stable_domain_id("msn", lane[0], lane[1], day.isoformat()) for lane in lanes}
 
     ledger = MinuteLedger(db=settings.db)
@@ -345,9 +422,12 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         time.sleep(POLL_INTERVAL_SEC)
 
     _scale(desired=0, force=False)
-    news_workers = _news_worker_services()
-    if news_workers:
-        _scale(desired=0, force=False, services=news_workers)
+    # ⚠️ 토글과 무관하게 **목록이 있으면 내린다** — 토글을 끈 날 그 서비스가 떠 있으면
+    # 아무도 안 내려 계속 돈다(어제 켜고 오늘 끈 경우가 정확히 그 모양이다). 내리는 방향은
+    # 과하게 잡아도 안전하다(이미 0 이면 no-op). 목록은 위에서 이미 해석해 뒀다.
+    for workers in lane_workers.values():
+        if workers:
+            _scale(desired=0, force=False, services=workers)
     logger.info("세션 종료: sessions=%s — 게이트 전건 비었음", session_ids)
     return 0
 
