@@ -91,10 +91,11 @@ def test_window_does_not_move_for_todays_slot_times():
 
 def test_kst_vendor_window_covers_today_before_0900_kst():
     # WHY(ALPHA-883): 09:00 KST 이전은 **전날 UTC 날짜**로 떨어진다(KST=UTC+9). 08:10 슬롯의
-    #      창이 [D-2, D-1] 이 되면 **그날 기사를 한 건도 안 가져온다** — 8시간 20분 전 23:50
-    #      런과 완전히 같은 창을 다시 긁을 뿐이고, 에러도 안 난다. 조용한 헛돎을 막는다.
-    #      ⚠️ ALPHA-893 이 그 08:10 슬롯을 실제로 넣었다 — 이 테스트는 이제 가정이 아니라
-    #      **매일 도는 런**을 지킨다.
+    #      창이 [D-2, D-1] 이 되면 **그날 기사를 한 건도 안 가져온다** — 8시간 전 00:10 런과
+    #      완전히 같은 창을 다시 긁을 뿐이고, 에러도 안 난다. 조용한 헛돎을 막는다.
+    #      ⚠️ ALPHA-893 이 그 08:10 슬롯을 실제로 넣었고, ALPHA-905 가 day-close 를 00:10 으로
+    #      옮기며 **두 슬롯 모두** 09:00 이전이 됐다 — 이 테스트는 이제 가정이 아니라 그 레인의
+    #      **모든 런**을 지킨다. 00:10 은 UTC 로 전날 15:10 이라 어긋나면 하루를 통째로 못 닫는다.
     at_0810_kst = datetime(2026, 7, 3, 8, 10, tzinfo=run_mod.KST)
     news = default_window(at_0810_kst.astimezone(
         run_mod.window_calendar_tz("ingest-raw", "bigkinds")))

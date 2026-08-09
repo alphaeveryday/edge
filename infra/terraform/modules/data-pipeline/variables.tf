@@ -199,20 +199,39 @@ variable "schedule_state" {
 }
 
 # 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
-# 08:10 = 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다. 23:50 = 하루치 마무리.
+# 00:10 = 어제 하루를 통째로 닫는다. 08:10 = 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다.
 #
 # **배치 뉴스가 답하는 질문은 "그날치를 빠짐없이 담았나" 하나다(ALPHA-893).** 신선도는 분 레인
 # 몫이다 — `minute/event_assembly.py`(ALPHA-727)가 장중에 배치와 같은 결정적 ID 로 event 를 세운다.
 # 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD analyze 에 그날 뉴스를 공급**하려고 있었는데, EOD 가격
 # 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 함께 내렸다.
-# ⚠️ 커버리지는 슬롯 수가 아니라 **창**이 정한다 — 창이 `[어제, 오늘]` 2일이라 날 X 는 X일
-# 23:50 런과 **X+1일 08:10 런**이 이중으로 덮는다. 슬롯을 지워도 남은 런의 창은 안 커진다
+# ⚠️ 커버리지는 슬롯 수가 아니라 **창**이 정한다 — 창이 `[어제, 오늘]` 2일이라 날 X 는 X+1일
+# 00:10 런과 **X+1일 08:10 런**이 이중으로 덮는다. 슬롯을 지워도 남은 런의 창은 안 커진다
 # (증분 커서가 없어 매 런이 창 전체를 다시 긁는다).
-# ⚠️ **컷오버 1회 부담**: apply 순간 `OPS_NEWS_SCHED_HHMM` 이 08:10,23:50 으로 갈리므로
-# `entry._due_slots` 는 그 뒤로 15:00·15:30 run_key 를 만들지 않는다 — 그때 in-flight 였던
-# 오후 런과 열려 있던 뉴스 `PLANNER_MISSING` 은 자동 해소 경로를 잃고 OPEN 으로 남는다
-# (공시 컷오버가 같은 값을 치렀다 — infra/terraform/README.md). 15:00~16:00 KST 밖에서
-# apply 하거나, 그 슬롯을 `OPS_RUN_KEY=news:<날짜>T15:00` 로 지목해 `reconcile` 을 한 번 돌려라.
+#
+# ⭐ **왜 23:50 이 아니라 00:10 인가(ALPHA-905) — 같은 창인데 일이 절반이다.** 증분 커서가 없어
+# 매 런이 창 전체를 다시 긁으므로, 비용은 "창에 든 두 날짜에 기사가 얼마나 있나"가 정한다.
+# 실측 볼륨(경제 카테고리: 하루 ~62 page, 00~08시 6~8 page):
+#
+#   23:50(D)   창 [D-1, D]   = D-1 하루 62p + D 의 00~23:50 ~62p  → **~124p**
+#   00:10(D+1) 창 [D, D+1]   = D 하루 62p + D+1 의 10분 ~0p       → **~62p**
+#   08:10(D)   창 [D-1, D]   = D-1 하루 62p + D 의 00~08시 6~8p    → ~70p
+#
+# 즉 **가장 무거운 런이 절반**이 된다. 최근 런의 40~50%가 SFN 상한에 잘리고 있었고(ALPHA-893)
+# 그중엔 23:50 런도 있었다 — 상한을 올리는 것은 증상 완화이고 이쪽이 일을 줄이는 축이다.
+# 덤 둘: ① 23:50 은 체인이 **자정을 넘는 것이 기본 경로**라(2026-07-28 실증 23:50→00:04)
+# 수집 창과 assemble 창이 갈렸는데(ALPHA-592 가 `--window-days 1` 로 덮었다) 00:10 은 체인이
+# 한 날짜 안에서 끝나 애초에 안 갈린다. ② 23:50 은 그날 23:50~24:00 발행분을 다음 날 08:10 에
+# 넘기지만(2일 창이라 구멍은 아니고 지연이다) 00:10 은 D 를 통째로 닫는다.
+# ⚠️ **00:10 은 벤더 달력 의존이 08:10 보다 크다** — 00:10 KST 는 UTC 로 **전날 15:10** 이라,
+# 창 날짜가 프로세스 시계(UTC)로 뽑히면 창이 하루 어긋나 D 를 못 닫는다(ALPHA-883 이 세운
+# 벤더 달력이 전제다). `test_premarket_news_slot_depends_on_the_vendor_calendar_window` 가 붙든다.
+#
+# ⚠️ **슬롯을 옮길 때의 컷오버 1회 부담**: apply 순간 `OPS_NEWS_SCHED_HHMM` 이 새 값으로 갈리므로
+# `entry._due_slots` 는 그 뒤로 옛 슬롯의 run_key 를 만들지 않는다 — 그때 in-flight 였던 런과
+# 열려 있던 뉴스 `PLANNER_MISSING` 은 자동 해소 경로를 잃고 OPEN 으로 남는다(공시 컷오버가 같은
+# 값을 치렀다 — infra/terraform/README.md). **퇴역하는 슬롯 시각 전후를 피해 apply** 하거나,
+# 그 슬롯을 `OPS_RUN_KEY=news:<날짜>T<HH:MM>` 로 지목해 `reconcile` 을 한 번 돌려라.
 # ⚠️ **08:10 은 09:00 전에 끝나야 한다 — 이유는 벤더 경합이지 분 격자가 아니다.** 배치와 1분
 # 레인은 같은 BigKinds 를 같은 요청 형상(`sources.bigkinds.search_page` 공유)·같은 IP 로 친다
 # (minute/bigkinds_feed.py 헤더). 09:00 에 뉴스 분 격자가 열리는데(minute/models.py:
@@ -234,8 +253,8 @@ variable "schedule_state" {
 # Planner 컨테이너가 떠서 StartExecution 을 부른 **뒤부터** 재므로 Scheduler 의 RunTask 제출
 # ~컨테이너 기동(ENI·이미지 pull, 실측 ~68초)은 그 40분 밖이다 — 이 레포에서 이미 여유를
 # 갉아먹은 적이 있다. 기동이 길어지면 08:10 런이 09:00 을 넘길 수 있고, 재시도 0이라 자동 복구도 없다.
-# 그때 나타나는 증상은 결측이 아니라 **장중 첫 수집이 여러 페이지가 되는 것**이다(뉴스는
-# 그 다음 23:50 런이 어차피 덮으므로 커버리지는 안 깨진다). 상시화하면 슬롯을 앞당겨라.
+# 그때 나타나는 증상은 결측이 아니라 **두 레인이 같은 벤더를 동시에 치는 것**이다(커버리지는
+# 그 다음 00:10 런이 어차피 덮으므로 안 깨진다). 상시화하면 슬롯을 앞당겨라.
 #
 # **주 7일인 이유(ALPHA-874)**: 수집 창이 `[어제, 오늘]` 2일이라(run.py `default_window`,
 # DEFAULT_LOOKBACK_DAYS=1) 어떤 날은 그날이나 다음 날에 런이 있어야 덮인다. MON-FRI 였을 때
@@ -263,7 +282,7 @@ variable "news_schedule_expressions" {
   type        = map(string)
   default = {
     "premarket" = "cron(10 8 * * ? *)"
-    "day-close" = "cron(50 23 * * ? *)"
+    "day-close" = "cron(10 0 * * ? *)"
   }
 }
 
@@ -280,7 +299,7 @@ variable "news_state_machine_timeout_seconds" {
   # ⚠️ **옛 값 25분(1500s)의 근거는 ALPHA-893 에서 사라졌다.** 그 근거는 "인접 슬롯 간격
   # 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였다 — 겹치면 두 뉴스 실행의 AssembleEvents
   # 가 같은 미threaded event 를 동시 처리해 prior-count·lifecycle_stage 레이스가 난다
-  # (edge-review P1). 두 슬롯이 내려가 지금 최소 간격은 **8시간 20분**(23:50→08:10)이다.
+  # (edge-review P1). 두 슬롯이 내려가 지금 최소 간격은 **8시간**(00:10→08:10)이다.
   # 겹침 여지가 그만큼 넓어졌다는 뜻이지 "구조적으로 불가능"은 아니다 — RunTask 제출~컨테이너
   # 기동이 어디에도 안 묶여 있다.
   #
@@ -473,19 +492,27 @@ variable "tag_news_window_days" {
   }
 }
 
-# 뉴스 SFN AssembleEvents 의 조립 대상 창(오늘−N일, ALPHA-592). 기본 1 = [어제, 오늘] 겹침 —
-# 자정 crossing(23:50 슬롯 기본 경로)과 overnight 갭(D 마감 후 기사를 D+1 런이 조립)을 함께
-# 닫는다. 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
+# 뉴스 SFN AssembleEvents 의 조립 대상 창(오늘−N일, ALPHA-592). 기본 1 = [어제, 오늘] 겹침.
+# ⚠️ **이 겹침의 성격이 ALPHA-905 로 바뀌었다** — 종전엔 23:50 런이 자정을 넘길 때의 **보정**
+# (우발적 상황 대비)이었지만, day-close 가 00:10 이 되면서 assemble 은 **언제나** 다음 날짜에
+# 돈다. 즉 겹침은 이제 옵션이 아니라 **그 슬롯이 어제를 읽는 유일한 근거**다. 하한을 낮추거나
+# 배선을 걷어내면 매일 어제를 통째로 건너뛴다(아래 validation 이 그것을 막는다).
+# overnight 갭(D 마감 후 기사를 D+1 런이 조립)도 같은 겹침이 덮는다.
+# 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
 variable "assemble_window_days" {
-  description = "뉴스 SFN assemble-events 조립 대상 창(오늘−N일). 자정 crossing·overnight 갭 방지 겹침."
+  description = "뉴스 SFN assemble-events 조립 대상 창(오늘−N일). 00:10 슬롯이 어제를 읽는 근거이자 자정 crossing 겹침."
   type        = number
   default     = 1
   validation {
     # 음수는 역전 창이라 전 파티션을 제외해 0건 조립을 성공으로 위장하고(Rule 12), 소수는
     # command 로 "1.5" 가 실려 run.py argparse type=int 가 거부해 매 런이 즉시 실패한다.
     # 상한(3650)은 run.py 공통 가드와 짝 — 넘으면 date 연산 하한 초과로 로그 없이 크래시한다.
-    condition     = var.assemble_window_days >= 0 && var.assemble_window_days <= 3650 && floor(var.assemble_window_days) == var.assemble_window_days
-    error_message = "assemble_window_days 는 0~3650 의 정수여야 한다(음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
+    # ⚠️ **하한이 0 → 1 로 올라간 것은 ALPHA-905 다.** day-close 가 00:10 이라 assemble 은
+    # **언제나** 다음 날짜에 돈다 — N=0 이면 창이 그날(=거의 빈 D+1)뿐이라 닫으려던 어제를
+    # 통째로 안 읽고 `read=0` 으로 **성공한다**(2026-07-28 자정 crossing 때 실측된 그 모양이,
+    # 사고가 아니라 매일이 된다). 슬롯이 00:10 인 한 0 은 유효한 값이 아니다.
+    condition     = var.assemble_window_days >= 1 && var.assemble_window_days <= 3650 && floor(var.assemble_window_days) == var.assemble_window_days
+    error_message = "assemble_window_days 는 1~3650 의 정수여야 한다(0=00:10 슬롯이 어제를 못 읽어 매일 read=0, 음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
   }
 }
 

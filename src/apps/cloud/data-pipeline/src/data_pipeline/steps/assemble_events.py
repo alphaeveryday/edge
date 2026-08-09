@@ -1026,7 +1026,7 @@ def thread_events(conn, events: list[dict]) -> int:
     # backfill 소비자)이 생겨 writer 가 최대 3 이다. 함수 안에 두는 이유: 모든 호출자
     # (ALPHA-548 백필 포함)가 자동으로 같은 락을 지난다 — 호출부마다 두면 하나가 빠진다.
     # xact 락이라 커밋에 풀린다. ponytail: 전역 락 하나 — 배치 런 트랜잭션이 길면 단건
-    # 소비자가 그동안 대기한다(배치는 하루 2슬롯 — 08:10·23:50, dev ENABLED). thread_key 단위 분할은
+    # 소비자가 그동안 대기한다(배치는 하루 2슬롯 — 00:10·08:10, dev ENABLED). thread_key 단위 분할은
     # prior_counts 가 날짜 전체를 읽어 실익이 없다.
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(hashtext('edge-event-threading'))")
@@ -1238,9 +1238,10 @@ def run(
     구간은 창으로 백필한다. 이미 정규화된 기사(document 존재)는 건너뛰므로 멱등이다.
 
     window_days(ALPHA-592)는 그 기준일에서 N일 소급해 창을 겹친다(from/to 명시가 우선).
-    뉴스 SFN 23:50 슬롯은 체인 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게
-    기본 경로라(2026-07-28 00:03 read=0 라이브 실측), 겹침 없이는 그날 늦저녁 기사가 영영
-    조립되지 않는다. 멱등(document-exists skip)이라 겹침 비용은 스캔뿐이다.
+    뉴스 SFN 의 day-close 슬롯이 **00:10** 이라(ALPHA-905) assemble 은 **언제나** 다음 날짜로
+    돈다 — 겹침이 없으면 닫으려던 어제를 통째로 안 읽고 `read=0` 으로 성공한다(2026-07-28
+    00:03 자정 crossing 때 실측된 그 모양이, 사고가 아니라 매일이 된다). 멱등(document-exists
+    skip)이라 겹침 비용은 스캔뿐이다.
     """
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = assembled_during_classify = 0

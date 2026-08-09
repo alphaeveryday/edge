@@ -155,9 +155,11 @@ locals {
           Overrides = {
             ContainerOverrides = [{
               Name = local.container_name
-              # --window-days: 창을 [오늘−N, 오늘]로 겹친다(ALPHA-592). 23:50 슬롯은 체인
-              # 소요(9~14분)가 자정을 넘겨 assemble 이 다음 날짜로 도는 게 기본 경로라
-              # (2026-07-28 00:03 read=0 실측), 겹침 없이는 늦저녁 기사가 영영 조립되지 않는다.
+              # --window-days: 창을 [오늘−N, 오늘]로 겹친다(ALPHA-592). 원래는 23:50 슬롯의
+              # 자정 crossing 보정이었는데(2026-07-28 00:03 read=0 실측) **ALPHA-905 로 성격이
+              # 바뀌었다** — day-close 가 00:10 이라 assemble 은 **언제나** 다음 날짜에 돌고,
+              # 겹침이 없으면 어제(=닫으려는 그 날)를 통째로 못 읽어 매일 read=0 이다.
+              # 즉 이 인자는 이제 보정이 아니라 **00:10 슬롯의 전제**다(N≥1, variables.tf validation).
               "Command.$" = "States.Array('assemble-events', '--run-id', $.run_id, '--window-days', '${var.assemble_window_days}')"
               # NewsLoadAssertions 와 같은 이유의 원장 계보 주입(ALPHA-591).
               Environment = [
@@ -225,20 +227,21 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
-# 뉴스 스케줄 2개(KST): premarket 08:10(밤새 유입분을 배치 코퍼스로 확정 — 분 레인의 seed poll
-# 은 최신 400건까지라 넘친 꼬리를 배치만 담는다. 09:00 전에 끝나야 하는 이유는 그것과 별개로
-# 1분 레인과 같은 BigKinds·같은 IP 를 치기 때문이다) + day-close 23:50
-# (장외·야간 뉴스로 하루치 완결, assemble 단일일 창의 오버나잇 갭 보전). 슬롯 정의·근거의
-# SSOT 는 `news_schedule_expressions` 주석이다.
+# 뉴스 스케줄 2개(KST): day-close 00:10(어제 하루를 통째로 닫는다 — 창 [어제, 오늘] 중 오늘이
+# 10분뿐이라 23:50 대비 긁는 양이 절반이다, ALPHA-905) + premarket 08:10(밤새 유입분을 배치
+# 코퍼스로 확정 — 분 레인의 seed poll 은 최신 400건까지라 넘친 꼬리를 배치만 담는다. 09:00 전에
+# 끝나야 하는 이유는 그것과 별개로 1분 레인과 같은 BigKinds·같은 IP 를 치기 때문이다).
+# 슬롯 정의·근거의 SSOT 는 `news_schedule_expressions` 주석이다.
 #
 # 옛 오후 슬롯(15:00·15:30)은 **15:40 EOD 런의 analyze 에 그날 뉴스를 공급**하려고 있었다.
 # EOD 가격 설명을 하지 않기로 하면서(2026-08-09) 그 소비자가 사라져 ALPHA-893 이 내렸다 —
 # 장중 신선도는 분 레인(`minute/event_assembly.py`, ALPHA-727)이 갖는다.
 #
 # ⚠️ 알려진 한계(임시구조 수용 — edge-review 지적, 컷오버 전 재검토):
-#   ① 23:50 런은 체인이 10분+ 걸려 자정을 넘기면 assemble 이 '다음 날'만 처리해 그날 늦은 뉴스가
-#      조립에서 밀린다 — today-implicit 스텝 + assemble 단일일 창의 성질이고, assemble 창 재설계는
-#      정준영 질의 대기다([[assemble-window-overnight-gap]]).
+#   ① **성질이 바뀌었음(ALPHA-905)** — 종전엔 "23:50 런이 자정을 넘기면 assemble 이 '다음 날'만
+#      처리해 그날 늦은 뉴스가 밀린다"였다. day-close 가 00:10 이 되면서 자정을 넘는 것이
+#      **사고가 아니라 설계**가 됐고, `--window-days 1` 겹침이 그 슬롯의 전제로 승격했다.
+#      남은 축은 assemble 창 재설계 자체(정준영 질의 대기, [[assemble-window-overnight-gap]]).
 #   ② **해소됨(ALPHA-874)** — 크론을 주 7일로 넓혔다. 실제 구멍은 주말 전체가 아니라 **토요일
 #      하나**였다: 수집 창이 `[어제, 오늘]` 2일이라 일요일은 월요일 런이 덮었고, 토요일만 토·일
 #      모두 런이 없었다(2026-08-01 raw 파티션 0 실증).
@@ -262,7 +265,7 @@ resource "aws_scheduler_schedule" "news" {
   # run_id 도 scheduled-time 리터럴이 아니라 pipeline_run_id 라 ALPHA-593 의
   # jsonencode 이스케이프 우회는 OPS_SCHEDULED_TIME env 한 곳만 남는다.
   # (재시도는 여전히 0 이다 — 아래 retry_policy 주석. ⚠️ 이유였던 슬롯 간 비중첩 불변식은
-  #  ALPHA-893 에서 사실상 무의미해졌다: 최소 간격이 30분에서 8시간 20분으로 넓어졌다.
+  #  ALPHA-893 에서 사실상 무의미해졌다: 최소 간격이 30분에서 8시간(00:10→08:10)으로 넓어졌다.
   #  "불가능"은 아니다 — RunTask 제출~컨테이너 기동은 어디에도 안 묶여 있어 앞 런이 8시간
   #  넘게 밀리면 원리상 겹칠 수 있다. 그 여지가 실무상 사라졌다는 뜻으로 읽어라.)
   target {
@@ -301,7 +304,7 @@ resource "aws_scheduler_schedule" "news" {
     # 그 다음 이유는 **슬롯 간격 30분(15:00·15:30)을 재시도 창이 파고들면** 지연 시작한 실행이
     # 다음 실행과 겹쳐 서로 다른 run 의 AssembleEvents 가 동시에 돌고 threading 의 prior-count·
     # lifecycle_stage read-before-write 레이스가 되살아난다는 것이었다. ⚠️ **그 두 슬롯이
-    # 사라져 지금 최소 간격은 30분이 아니라 8시간 20분(23:50→08:10)이다** — 여지가 그만큼
+    # 사라져 지금 최소 간격은 30분이 아니라 8시간(00:10→08:10)이다** — 여지가 그만큼
     # 넓어졌을 뿐 "불가능"은 아니다(기동 지연이 어디에도 안 묶여 있다). 즉 이 `retry_policy` 0
     # 은 더는 실질적 레이스 방지책이 아니고, 아래 "잃는 게 없다"가 유지 근거의 전부다.
     # 재시도를 포기해도 잃는 게 거의 없다: EventBridge 드문 중복 재전달은 run_key 멱등이 흡수,

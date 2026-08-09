@@ -57,7 +57,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
 def test_same_day_different_slots_are_separate_runs():
     # WHY: run_key 의 계약은 "이 **슬롯**은 한 번만 계획된다"지 "하루 한 번"이 아니다(ALPHA-564).
     #      날짜로 키를 만들면 DB UNIQUE(run_key) 가 하루 1런을 못박아, 하루 여러 번 도는
-    #      레인(뉴스 08:10·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
+    #      레인(뉴스 00:10·08:10, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
     #      수동 실행은 원장에 자리가 없다 — 실제로 2026-07-26 에 관측이 막혔다.
     db = FakeOpsDB()
     ledger = _ledger(db)
@@ -382,7 +382,7 @@ def test_due_slots_returns_all_past_news_slots_of_the_day(monkeypatch):
     # WHY: 뉴스는 하루 여러 슬롯이다. 최신 슬롯 하나만 돌려주면 뒤 슬롯이 지나는 순간 앞 런이
     #      영영 대조되지 않는다(ALPHA-565 사각의 확대재생산) — 그날 지난 슬롯 전부가 나와야
     #      주기 reconcile 이 늦은 종결까지 판정한다. grace(30분)는 슬롯별로 계산된다.
-    #      ⚠️ 아래 3슬롯은 **합성 픽스처**다(운영은 ALPHA-893 이후 08:10·23:50 둘). 여기서
+    #      ⚠️ 아래 3슬롯은 **합성 픽스처**다(운영은 ALPHA-905 이후 00:10·08:10 둘). 여기서
     #      운영 값을 쓰면 "지났지만 grace 전" 축이 사라져 한 슬롯만 걸리는 표가 된다 — 이
     #      함수는 env 를 읽어 슬롯 수에 무관하므로, 축을 더 많이 태우는 쪽을 고정한다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
@@ -500,7 +500,7 @@ def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):
     #      공유하면 공시 슬롯이 뉴스 시각으로 잡혀 **존재하지 않는 런**을
     #      매 주기 PLANNER_MISSING 으로 연다. 미주입 레인은 슬롯 0개여야 한다 — 스케줄이 아직
     #      Planner 를 안 타는 배포(이 PR 시점)에서 거짓 결측을 만들지 않는 안전 기본값이다.
-    #      ⚠️ 아래 뉴스 값은 **합성 픽스처**다(운영은 08:10·23:50) — 이 테스트가 가리는 축은
+    #      ⚠️ 아래 뉴스 값은 **합성 픽스처**다(운영은 00:10·08:10) — 이 테스트가 가리는 축은
     #      "레인이 남의 env 를 안 본다"이지 뉴스 슬롯의 실제 값이 아니다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
     monkeypatch.delenv("OPS_DISCLOSURE_SCHED_HHMM", raising=False)
@@ -597,7 +597,11 @@ def test_news_cron_runs_every_day_of_week():
     #      ⚠️ **일(day-of-month)까지 함께 든다.** 요일만 보면 `cron(0 15 1 * ? *)`(매달 1일만)
     #      이 통과하는데, 그건 요일 필드가 `?` 라 주말 플래그가 true 로 잡혀 **매달 28일가량
     #      × 슬롯 수**의 PLANNER_MISSING 을 연다 — 뜰 런이 없어 영영 안 닫힌다.
-    dom_dow = set(re.findall(r'"cron\(\S+ \S+ (\S+) \S+ (\S+) ', _news_cron_block()))
+    # ^\s*"키" = 로 앵커한다 — `_strip_hcl_comments` 는 줄 **선두** 주석만 걷으므로
+    # (값 안의 `s3://` 를 자르지 않으려는 의도적 규율), 앵커 없이는 줄 뒤에 달린 인라인
+    # 주석 속 가짜 cron 이 살아 있는 배선으로 세어진다(edge-review 2R).
+    dom_dow = set(re.findall(r'^\s*"[^"]+"\s*=\s*"cron\(\S+ \S+ (\S+) \S+ (\S+) ',
+                             _news_cron_block(), re.M))
     assert dom_dow and dom_dow <= {("*", "?"), ("?", "*")}, (
         f"뉴스 크론의 (일, 요일)이 {sorted(dom_dow)} — 매일 도는 형태가 아니다. 원장이 표현할 수 "
         "있는 값은 MON-FRI 와 주 7일 둘뿐이고, 둘 중 하나는 `?` 다(AWS 가 `*` 를 두 필드에 "
@@ -623,7 +627,7 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
     from data_pipeline import run as run_mod
 
     slots = [(int(h), int(m)) for m, h in
-             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+             re.findall(r'^\s*"[^"]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
     assert slots, "뉴스 크론에서 슬롯 시각을 못 뽑았다 — 파서가 낡았다"
 
     early = [(h, m) for h, m in slots if (h, m) < (9, 0)]
@@ -641,10 +645,108 @@ def test_premarket_news_slot_depends_on_the_vendor_calendar_window():
             "8시간 전 런과 같은 창을 다시 긁고 그날 기사를 0건 가져온다(ALPHA-883)")
 
 
+def _module_number(var_name: str) -> int:
+    """모듈 변수의 **실제 배포값**(envs/dev override 가 있으면 그것, 없으면 모듈 default).
+
+    ⚠️ 층이 셋이다 — 모듈 default · envs/dev 의 `module "data_pipeline"` 인자 · (런타임 env).
+    모듈 default 만 읽으면 envs/dev 가 값을 덮어써도 가드가 못 본다(edge-review 3R). 여기서
+    앞의 둘을 합쳐 "지금 dev 에 서는 값"을 돌려준다. 셋째(런타임 env)는 이 레인에 경로가 없다.
+    """
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(rf'variable\s+"{var_name}"\s*\{{(.*?)^\}}', tf, re.M | re.S)
+    assert block, f"{var_name} 를 모듈에서 못 찾았다 — 파서가 낡았다"
+    value = int(re.search(r"^\s*default\s*=\s*(\d+)", block.group(1), re.M).group(1))
+
+    env_tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE.parents[1] / "envs/dev/main.tf").read_text(encoding="utf-8"))
+    override = re.search(rf"^\s*{var_name}\s*=\s*(\d+)", env_tf, re.M)
+    return int(override.group(1)) if override else value
+
+
+def test_day_close_slot_runs_after_the_day_it_closes_has_ended():
+    # WHY(ALPHA-905): `day-close` 는 **하루를 닫는** 슬롯이다. 자정 **전**에 돌면 창의 '어제'는
+    #      이미 앞 런이 닫은 날이고 '오늘'은 아직 안 끝난 날이라 — 닫는 대상이 없다. 그러면서
+    #      비용은 최대다: 창이 `[어제, 오늘]` 2일인데 증분 커서가 없어 매 런이 창 전체를 다시
+    #      긁으므로, 23:50 은 꽉 찬 두 날(~124p)을 긁고 00:10 은 꽉 찬 하루 + 10분(~62p)을 긁는다.
+    #      **시각 리터럴(00:10)을 못박지 않는다** — 00:05·01:00 도 똑같이 정당하다. 지켜야 할
+    #      것은 "day-close 가 그 레인의 **가장 이른** 슬롯이다"(= 하루가 시작하자마자 앞 날을
+    #      닫는다)이고, 23:50 로 되돌리면 그게 깨진다. 이 관계가 없으면 슬롯을 되돌려도 요일·
+    #      타임아웃·assemble 가드가 전부 초록이라 ~124p 재수집이 조용히 재발한다(edge-review).
+    slots = {key: (int(h), int(m)) for key, m, h in
+             re.findall(r'^\s*"([^"]+)"\s*=\s*"cron\((\d+) (\d+) ',
+                        _news_cron_block(), re.M)}
+    assert "day-close" in slots, f"day-close 슬롯이 사라졌다 — 현재 키: {sorted(slots)}"
+
+    others = {k: v for k, v in slots.items() if k != "day-close"}
+    assert others, "비교 대상 슬롯이 없다 — 레인에 슬롯이 하나뿐이면 이 계약은 무의미하다"
+    assert slots["day-close"] < min(others.values()), (
+        f"day-close 가 {slots['day-close']} 로 {min(others.values())} 보다 늦다. 자정 전에 돌면 "
+        "닫을 하루가 아직 안 끝났고(앞 런이 닫은 날을 다시 긁을 뿐) 창의 두 날이 모두 꽉 차 "
+        "긁는 양이 두 배가 된다 — day-close 는 그 레인의 가장 이른 슬롯이어야 한다")
+
+    # ⚠️ "가장 이르다"만으로는 약하다(edge-review 검증 라운드) — day-close 를 08:09 로 두면
+    #    08:10 보다 이르니 위 단언을 통과하는데, 두 배치가 1분 간격으로 시작해 같은 벤더를
+    #    동시에 치고 '오늘 몫이 10분뿐'이라는 절감도 사라진다. `retry_policy` 0 의 유지 근거가
+    #    기대고 있는 성질(**실행이 서로 겹치지 않는다**)을 그대로 단언한다 — 인접 슬롯 간격이
+    #    한 실행의 상한보다 커야 한다. 시각 리터럴은 여전히 안 박는다(00:05·01:00 도 정당).
+    timeout_sec = _module_number("news_state_machine_timeout_seconds")
+    ordered = sorted(h * 3600 + m * 60 for h, m in slots.values())
+    gaps = [b - a for a, b in zip(ordered, ordered[1:])] + [86400 - ordered[-1] + ordered[0]]
+    assert min(gaps) > timeout_sec, (
+        f"인접 슬롯 최소 간격 {min(gaps)}초 ≤ 실행 상한 {timeout_sec}초. 앞 런이 상한까지 끌면 "
+        "다음 런과 겹쳐 서로 다른 run 의 AssembleEvents 가 동시에 돌고 prior-count·"
+        "lifecycle_stage read-before-write 레이스가 되살아난다(재시도 0 의 유지 근거가 깨진다)")
+
+
+def test_assemble_window_covers_what_the_collection_window_collected():
+    # WHY(ALPHA-905): day-close 슬롯이 **00:10** 이라 assemble 은 언제나 다음 날짜에 돈다 —
+    #      닫으려는 날(어제)을 읽으려면 assemble 창이 최소 하루는 소급해야 한다. 종전엔 이게
+    #      23:50 런의 자정 crossing **보정**이라 없어도 대개 맞았지만, 이제는 **매 런의 전제**다.
+    #      N=0 이면 창이 거의 빈 오늘 하루뿐이라 `read=0` 으로 **성공한다**(조용한 헛돎, Rule 12).
+    #      literal 1 을 못박지 않는 이유: 진짜 계약은 "**수집이 담은 것을 조립이 덮는가**"이고,
+    #      수집 창은 `DEFAULT_LOOKBACK_DAYS` 가 정한다. 그 상수가 2로 늘면 assemble 도 따라
+    #      늘어야 하는데, 두 값이 **다른 층**(python 상수 vs terraform 변수)에 있어 한쪽만
+    #      움직여도 아무것도 안 깨진다 — 그 결합을 여기서 붙든다.
+    from data_pipeline import run as run_mod
+
+    tf = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "variables.tf").read_text(encoding="utf-8"))
+    block = re.search(r'variable\s+"assemble_window_days"\s*\{(.*?)^\}', tf, re.M | re.S)
+    assert block, "assemble_window_days 를 못 찾았다 — 파서가 낡았다"
+    assemble_days = _module_number("assemble_window_days")   # envs/dev override 반영
+    # ⚠️ 기본값만 보면 사각이 남는다(edge-review) — 하한을 0 으로 되돌려도 기본값 1 이면 이
+    #    테스트가 통과하고, 그 뒤 env 가 0 을 주입하면 plan 도 통과해 매일 read=0 이 된다.
+    #    **허용 범위**(validation 하한)를 함께 본다.
+    floor = int(re.search(r"^\s*condition\s*=.*?var\.assemble_window_days\s*>=\s*(\d+)",
+                          block.group(1), re.M).group(1))
+
+    for label, value in (("실효값", assemble_days), ("validation 하한", floor)):
+        assert value >= run_mod.DEFAULT_LOOKBACK_DAYS, (
+            f"assemble 창 {label} {value}일 < 수집 창 소급 {run_mod.DEFAULT_LOOKBACK_DAYS}일. "
+            "수집이 담은 날짜를 조립이 못 읽는다 — 00:10 런은 닫으려던 어제를 통째로 건너뛰고 "
+            "read=0 으로 성공한다(에러 없음)")
+
+    # ⚠️ **변수 선언이 맞아도 배선이 끊기면 같은 결과다**(edge-review 2R). `--window-days` 가
+    #    SFN 명령에서 빠지면 run.py 기본값은 "오늘 하루"라 00:10 런이 D+1 만 읽는다. 리터럴로
+    #    박아도 위 두 값이 아무 의미가 없어진다 — 그래서 **끝단(실제 명령)까지** 센다.
+    sfn = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "news_pipeline.tf").read_text(encoding="utf-8"))
+    command = re.search(r"NewsAssembleEvents\s*=\s*merge\(.*?\"Command\.\$\"\s*=\s*\"([^\"]*)\"",
+                        sfn, re.S)
+    assert command, "NewsAssembleEvents 의 Command 를 못 찾았다 — 파서가 낡았다"
+    assert "--window-days" in command.group(1), (
+        f"NewsAssembleEvents 명령에 --window-days 가 없다: {command.group(1)}. "
+        "미주입이면 assemble 창이 '오늘 하루'라 00:10 런이 닫으려던 어제를 안 읽는다")
+    assert "${var.assemble_window_days}" in command.group(1), (
+        f"NewsAssembleEvents 가 --window-days 를 변수가 아닌 값으로 넘긴다: {command.group(1)}. "
+        "리터럴이면 위 default·validation 이 아무것도 강제하지 못한다")
+
+
 def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
     # WHY(ALPHA-893): 뉴스 SFN 타임아웃을 묶던 불변식이 **바뀌었다**. 옛 상한 25분의 근거는
     #      "인접 슬롯 간격 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였는데 그 두 슬롯이
-    #      내려가 최소 간격이 8시간 20분이 됐다. 그 자리를 대신하는 상한이 이것이다 —
+    #      내려가 최소 간격이 8시간(00:10→08:10)이 됐다. 그 자리를 대신하는 상한이 이것이다 —
     #      **09:00 전 슬롯은 자기 타임아웃을 다 써도 09:00 을 넘지 않아야 한다.** 넘으면 배치가
     #      1분 뉴스 워커와 같은 BigKinds 를 같은 IP 로 동시에 쳐서(minute/bigkinds_feed.py 는
     #      요청 형상을 배치와 공유한다) pacing 이 합산되고, 차단(ALPHA-645)은 재시도가 **연장**
@@ -655,16 +757,19 @@ def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
     block = re.search(
         r'variable\s+"news_state_machine_timeout_seconds"\s*\{(.*?)^\}', tf, re.M | re.S)
     assert block, "news_state_machine_timeout_seconds 를 못 찾았다 — 파서가 낡았다"
-    timeout_sec = int(re.search(r"default\s*=\s*(\d+)", block.group(1)).group(1))
+    timeout_sec = _module_number("news_state_machine_timeout_seconds")  # envs/dev override 반영
 
+    # ⚠️ 분으로 내림하면 3001초(50분 1초)가 "50분"이 되어 09:00:01 착지를 통과시킨다
+    #    (edge-review 3R) — **초 단위로** 센다.
     slots = [(int(h), int(m)) for m, h in
-             re.findall(r'"cron\((\d+) (\d+) ', _news_cron_block())]
+             re.findall(r'^\s*"[^"]+"\s*=\s*"cron\((\d+) (\d+) ', _news_cron_block(), re.M)]
     for hour, minute in [s for s in slots if s < (9, 0)]:
-        end_min = hour * 60 + minute + timeout_sec // 60
-        assert end_min <= 9 * 60, (
-            f"{hour:02d}:{minute:02d} 슬롯 + 타임아웃 {timeout_sec // 60}분 = "
-            f"{end_min // 60:02d}:{end_min % 60:02d} 로 09:00 을 넘는다. 배치가 1분 뉴스 레인과 "
-            "같은 벤더를 동시에 치는 창이 열린다 — 슬롯을 앞당기거나 타임아웃을 줄여라")
+        end_sec = (hour * 60 + minute) * 60 + timeout_sec
+        assert end_sec <= 9 * 3600, (
+            f"{hour:02d}:{minute:02d} 슬롯 + 타임아웃 {timeout_sec}초 = "
+            f"{end_sec // 3600:02d}:{end_sec // 60 % 60:02d}:{end_sec % 60:02d} 로 09:00 을 넘는다. "
+            "배치가 1분 뉴스 레인과 같은 벤더를 동시에 치는 창이 열린다 — "
+            "슬롯을 앞당기거나 타임아웃을 줄여라")
 
 
 def test_every_sched_hhmm_env_has_a_weekend_sibling():
