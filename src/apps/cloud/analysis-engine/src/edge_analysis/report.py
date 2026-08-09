@@ -170,6 +170,37 @@ summary{cursor:pointer;font-size:.88rem}
 .miss-note{color:#a11;font-size:.85rem}
 .head-note{background:#fffbe8;border:1px solid #e8dfae;border-radius:8px;
  padding:10px 14px;font-size:.88rem}
+#filter-bar{position:sticky;top:0;z-index:5;background:#fff;
+ border:1px solid #dfe3e8;border-radius:8px;padding:10px 14px;margin:12px 0;
+ font-size:.9rem}
+#filter-bar select{font-size:.9rem;margin:0 12px 0 4px}
+#f-count{color:#444}
+""".strip()
+
+# 필터 바 동작 — 인라인 바닐라 JS(외부 참조 0). select change 마다 data-date·
+# data-ticker 로 표시/숨김을 토글한다. 초기 로드에도 한 번 실행해 최신 일자만
+# 펼친다(스크롤 천장). JS 꺼진 환경은 이 스크립트가 안 돌므로 전체가 그대로
+# 보인다 — <noscript> 안내와 짝.
+_FILTER_JS = """
+(function(){
+var fd=document.getElementById("f-date"),ft=document.getElementById("f-ticker"),
+    fc=document.getElementById("f-count");
+if(!fd||!ft)return;
+function apply(){
+  var d=fd.value,t=ft.value,n=0;
+  var els=document.querySelectorAll("[data-date]");
+  for(var i=0;i<els.length;i++){
+    var el=els[i],tk=el.getAttribute("data-ticker");
+    var show=el.getAttribute("data-date")===d&&(tk===null||!t||tk===t);
+    el.style.display=show?"":"none";
+    if(show&&tk!==null)n+=el.querySelectorAll("article.utt").length;
+  }
+  fc.textContent="발화 "+n+"건";
+}
+fd.addEventListener("change",apply);
+ft.addEventListener("change",apply);
+apply();
+})();
 """.strip()
 
 
@@ -356,7 +387,12 @@ def _render_utterance(r: dict[str, Any]) -> list[str]:
 
 def render_dashboard(results: list[dict[str, Any]],
                      orphan_trials: list[tuple] = ()) -> str:
-    """발화 목록 → 단일 HTML(인라인 CSS만, 외부 리소스 0, 한글)."""
+    """발화 목록 → 단일 HTML(인라인 CSS·JS만, 외부 참조 0, 한글).
+
+    상단 고정 필터 바(일자 내림차순·종목 가나다순)가 상세 구간을 일자·종목으로
+    토글한다(ALPHA-894 후속). 기본 선택은 최신 일자 — 초기 스크롤이 하루치로
+    준다. JS 꺼짐이면 스크립트가 안 돌아 전체가 보인다(<noscript> 안내).
+    """
     parts = ["<!doctype html>", '<html lang="ko"><head><meta charset="utf-8">',
              '<meta name="viewport" content="width=device-width,initial-scale=1">',
              "<title>발화 스냅샷 대시보드</title>",
@@ -374,15 +410,39 @@ def render_dashboard(results: list[dict[str, Any]],
         "일자 내림차순 → 종목 오름차순 → 발화 시각 오름차순.</div>")
     detail = [r for r in results if r["detail"]]
     old = [r for r in results if not r["detail"]]
+    if detail:
+        dates = sorted({r["trade_date"] for r in detail}, reverse=True)
+        tickers = sorted({r["ticker"] for r in detail})
+        parts.append(
+            '<div id="filter-bar"><label>일자 <select id="f-date">'
+            + "".join(f'<option value="{d.isoformat()}">{d.isoformat()}</option>'
+                      for d in dates)
+            + '</select></label><label>종목 <select id="f-ticker">'
+            '<option value="">전체</option>'
+            + "".join(f'<option value="{escape(t)}">{escape(t)}</option>'
+                      for t in tickers)
+            + '</select></label><span id="f-count"></span></div>')
+        parts.append('<noscript><p class="head-note">필터는 JS 가 필요하다 — '
+                     '전체 목록은 아래에 그대로 있다.</p></noscript>')
     day = ticker = None
+    open_section = False
     for r in detail:
-        if r["trade_date"] != day:
-            day, ticker = r["trade_date"], None
-            parts.append(f"<h2>{day.isoformat()}</h2>")
-        if r["ticker"] != ticker:
+        new_day = r["trade_date"] != day
+        if new_day or r["ticker"] != ticker:
+            if open_section:
+                parts.append("</section>")
+            if new_day:
+                day = r["trade_date"]
+                parts.append(f'<h2 data-date="{day.isoformat()}">'
+                             f"{day.isoformat()}</h2>")
             ticker = r["ticker"]
+            parts.append(f'<section data-date="{day.isoformat()}"'
+                         f' data-ticker="{escape(ticker)}">')
             parts.append(f"<h3>{escape(ticker)}</h3>")
+            open_section = True
         parts.extend(_render_utterance(r))
+    if open_section:
+        parts.append("</section>")
     if old:
         parts.append(f"<h2>요약 구간 ({cutoff.isoformat()} 이전)</h2>")
         parts.append("<p class=\"meta\">상세는 원장·trace 에 있다.</p>")
@@ -401,7 +461,10 @@ def render_dashboard(results: list[dict[str, Any]],
         parts.append("<h2>런 미연결 가설 시행</h2>")
         parts.append("<table>" + _TRIAL_HEAD
                      + "".join(_trial_row(t) for t in orphan_trials) + "</table>")
-    parts.append("</main></body></html>")
+    parts.append("</main>")
+    if detail:
+        parts.append(f"<script>{_FILTER_JS}</script>")
+    parts.append("</body></html>")
     return "\n".join(parts)
 
 

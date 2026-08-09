@@ -262,12 +262,49 @@ def test_same_input_renders_the_same_bytes():
 
 
 def test_page_references_no_external_resources():
+    """외부 **참조** 0 — 파일 하나로 열리는 계약.
+
+    의도 변경(ALPHA-894 후속): 필터 바가 인라인 <script> 를 쓰므로 '<script 태그
+    자체 금지'에서 '외부 참조(src=·http(s)·<link>·@import·url()) 금지 + 인라인
+    script 허용'으로 좁혔다. 네트워크 없이 단일 파일로 열리는 계약은 그대로다.
+    """
     html = _html(_FakeConn(results=[_result_row()], evidence=_EVIDENCE,
                            trials=_TRIALS), _fresh_s3())
 
-    assert "<script" not in html and "<link" not in html and "<img" not in html
-    assert 'src="http' not in html and "href=\"http" not in html
+    assert "<link" not in html and "<img" not in html
+    assert "src=" not in html                             # <script src> 포함 전면 금지
+    assert "http://" not in html and "https://" not in html
     assert "@import" not in html and "url(" not in html
+
+
+def test_filter_bar_lists_every_date_and_ticker_with_latest_date_default():
+    """필터 바 — 전 일자(내림차순)·전 종목(가나다순)+'전체' 옵션이 있어야
+    사용자가 어떤 일자·종목이든 도달할 수 있다. 기본 선택은 select 의 첫 옵션
+    이므로 최신 일자가 맨 앞이어야 초기 스크롤이 하루치로 준다."""
+    older = _DAY - timedelta(days=1)
+    rows = [_result_row(),
+            _result_row(result_id="res_b", run_id="run_b", day=older)]
+    html = _html(_FakeConn(results=rows, evidence=_EVIDENCE, trials=_TRIALS),
+                 _fresh_s3())
+
+    assert f'<option value="{_DAY.isoformat()}">' in html
+    assert f'<option value="{older.isoformat()}">' in html
+    assert '<option value="">전체</option>' in html
+    assert '<option value="091160">' in html
+    # 최신 일자가 첫 옵션(=기본 선택) — 내림차순
+    date_sel = html[html.index('id="f-date"'):html.index("f-ticker")]
+    assert date_sel.index(_DAY.isoformat()) < date_sel.index(older.isoformat())
+
+
+def test_sections_carry_date_and_ticker_hooks_and_page_has_inline_filter_script():
+    """섹션마다 data-date·data-ticker 가 붙어야 JS 토글이 잡을 수 있고,
+    <noscript> 폴백이 있어야 JS 꺼진 환경에서 전체 목록 안내가 남는다."""
+    html = _html(_FakeConn(results=[_result_row()], evidence=_EVIDENCE,
+                           trials=_TRIALS), _fresh_s3())
+
+    assert f'<section data-date="{_DAY.isoformat()}" data-ticker="091160">' in html
+    assert "<script>" in html and "addEventListener" in html
+    assert "<noscript>" in html
 
 
 def test_orphan_trials_are_not_silently_dropped():
