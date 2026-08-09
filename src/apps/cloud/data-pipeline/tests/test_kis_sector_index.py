@@ -173,7 +173,9 @@ class TestParse:
     @pytest.mark.parametrize("short_label, silently_becomes", [
         ("1030", "10:03:00"),    # 4자리 — 날짜 자리를 훔쳐 **다른 분**이 된다
         ("30000", "03:00:00"),   # 선행 0 잘림(`kis_inav._time_stamp` 의 그 함정)
-        ("93000", "09:30:00"),   # 우연히 맞아 보이는 값 — 그래서 더 위험하다
+        # 5자리는 선행 0 을 되붙이면 **맞는 값이 나온다** — 우연이 아니다. 그래도 막는
+        # 이유는 4자리와 구분할 근거가 없어서다(소스 주석에 논거를 적어 뒀다).
+        ("93000", "09:30:00"),
     ])
     def test_short_time_label_is_rejected_before_parsing(self, short_label, silently_becomes):
         """🔴 라벨 자리수도 막아야 한다 — 안 막으면 **값이 조용히 틀린다**.
@@ -191,10 +193,18 @@ class TestParse:
             parse_index_row({**row(), "stck_cntg_hour": short_label}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
-    def test_short_date_is_rejected_at_the_parser_too(self):
-        """창 필터가 먼저 걸러도 파서 단독 호출은 막아야 한다(공개 함수다)."""
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
+    @pytest.mark.parametrize("field, bad_length", [
+        ("stck_bsop_date", "2026087"), ("stck_bsop_date", "202608071"),
+        ("stck_cntg_hour", "1030000"),
+    ])
+    def test_date_length_drift_is_rejected_at_the_parser_too(self, field, bad_length):
+        """창 필터가 먼저 걸러도 파서 단독 호출은 막아야 한다(공개 함수다).
+
+        재는 축은 자리수가 **8·6 이 아니다**이지 "짧다"가 아니다.
+        """
         with pytest.raises(ValueError, match="자리수가 다르다"):
-            parse_index_row({**row(), "stck_bsop_date": "2026087"}, UNIT_ID,
+            parse_index_row({**row(), field: bad_length}, UNIT_ID,
                             interval_sec=LANE_INTERVAL_SEC)
 
     @pytest.mark.parametrize("broken", [

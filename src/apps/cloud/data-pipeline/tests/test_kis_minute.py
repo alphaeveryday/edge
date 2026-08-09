@@ -128,7 +128,9 @@ class TestParse:
     @pytest.mark.parametrize("short_label, silently_becomes", [
         ("1030", "10:03:00"),    # 4자리 — 날짜 자리를 훔쳐 **다른 분**이 된다
         ("30000", "03:00:00"),   # 선행 0 잘림(`kis_inav._time_stamp` 의 그 함정)
-        ("93000", "09:30:00"),   # 우연히 맞아 보이는 값 — 그래서 더 위험하다
+        # 5자리는 선행 0 을 되붙이면 **맞는 값이 나온다** — 우연이 아니다. 그래도 막는
+        # 이유는 4자리와 구분할 근거가 없어서다(소스 주석에 논거를 적어 뒀다).
+        ("93000", "09:30:00"),
     ])
     def test_short_time_label_is_rejected_before_parsing(self, short_label, silently_becomes):
         """🔴 자리수를 안 막으면 **값이 조용히 틀린다** — 형식 오류로 안 드러난다.
@@ -138,16 +140,22 @@ class TestParse:
         다른 window 에 앉아 확정된다. `kis_sector_index`·`kis_inav` 와 같은 문이다.
         """
         # 가드가 막는 값이 **무엇이 되는지**를 여기서 못박는다 — 주석으로만 적으면 낡고,
-        # 그러면 이 가드가 왜 있는지 다음 사람이 모른다.
-        stolen = datetime.strptime("20260803" + short_label, "%Y%m%d%H%M%S")
+        # 그러면 이 가드가 왜 있는지 다음 사람이 모른다. 날짜는 아래 `row()` 가 실제로
+        # 먹이는 그 값을 써야 한다(따로 적으면 픽스처가 바뀔 때 조용히 갈라진다).
+        stolen = datetime.strptime(row()["stck_bsop_date"] + short_label, "%Y%m%d%H%M%S")
         assert stolen.strftime("%H:%M:%S") == silently_becomes
         with pytest.raises(ValueError, match="자리수가 다르다"):
             parse_minute_row({**row(), "stck_cntg_hour": short_label}, "005930")
 
-    def test_short_date_is_rejected_too(self):
-        """날짜가 짧으면 시각 자리를 훔친다 — 같은 함정의 반대쪽."""
+    # 짧은 쪽만 재면 `!=` 를 `<` 로 바꿔도 안 갈린다 — 파서에서도 초과 길이를 같이 잰다.
+    @pytest.mark.parametrize("field, bad_length", [
+        ("stck_bsop_date", "2026087"), ("stck_bsop_date", "202608031"),
+        ("stck_cntg_hour", "1030000"),
+    ])
+    def test_date_length_drift_is_rejected_too(self, field, bad_length):
+        """자리수가 **8·6 이 아니다**를 재는 것이지 "짧다"를 재는 게 아니다."""
         with pytest.raises(ValueError, match="자리수가 다르다"):
-            parse_minute_row({**row(), "stck_bsop_date": "2026087"}, "005930")
+            parse_minute_row({**row(), field: bad_length}, "005930")
 
     @pytest.mark.parametrize("broken", [
         # 자리수는 맞고 값만 깨진 라벨 — 위 자리수 가드가 아니라 `strptime` 이 잡는
