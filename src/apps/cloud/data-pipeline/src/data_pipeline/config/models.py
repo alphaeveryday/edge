@@ -836,6 +836,74 @@ class MinuteUniverseConfig(BaseModel):
         return self
 
 
+class MinuteSectorIndexConfig(BaseModel):
+    """KRX 업종지수 45종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
+
+    `[minute_universe]` 와 축이 다르다: 저기는 universe.json 을 **만드는 입력**이고 실제
+    정본은 S3 객체지만, 여기 값은 그 자체가 정본이다(이 dataset 은 universe 를 쓰지
+    않는다 — `UNIVERSE_DATASETS` 밖이라 planner 가 `--universe` 를 거부한다). 기대 집합이
+    config 이므로 이미지 배포가 곧 반영이고, S3 를 갈 일이 없다.
+
+    🔴 **KIS 지수코드는 KRX 업종코드가 아니다.** 그래서 목록이 아니라 **맵**이다. KIS 의
+    `U` 네임스페이스는 자체 조밀 번호라(`0xxx`=KOSPI 업종 · `1xxx`=KOSDAQ 업종 ·
+    `2xxx`=KOSPI200 계열) KRX 코드와 산술 관계가 없다 — KOSPI 1005~1027 만 우연히
+    −1000 이고 1045~1047 에서 꺾인다(0028~0030).
+
+    ⚠️ **틀린 값은 조용히 틀린다.** KRX 코드를 그대로 넣어도 KIS 는 `rt_cd=0` 에 그럴듯한
+    한글 업종명이 담긴 **남의 지수**를 준다(45종 중 43종이 정상 격자를 채웠다). 그래서
+    이 맵은 이름이 아니라 **값으로 확정했다** — 레이크 `sector_index.parquet` 의 일봉
+    종가와 99거래일 전건 소수점 일치(2026-08-09). 고칠 때도 같은 방법으로 확인해라.
+
+    `[krx_etf.source.etf_map]`(우리 id → 벤더 심볼)이 형식 선례다. 키가 우리 축이다 —
+    canonical 에 실리는 `unit_id` 는 KRX 업종코드이고, KIS 코드는 질의에서만 산다
+    (벤더 코드가 새어 나가면 일봉 `sector_index` 와 조인이 안 된다).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # KRX 업종코드 → KIS 지수코드. 비면 이 dataset 은 기대 집합이 0 이라 Worker 가 매
+    # window 를 빈 성공으로 확정한다 — 그건 "받을 게 없다"가 아니라 배선 누락이다.
+    index_map: Annotated[dict[NonBlankStr, NonBlankStr], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _validate(self) -> MinuteSectorIndexConfig:
+        # 값(KIS 코드) 중복은 **두 업종이 같은 지수를 받는다**는 뜻이다. 그 window 는
+        # 정상 VALID 로 확정되고 두 unit 이 같은 값을 싣는데, 층 분해가 그 둘을 독립
+        # 후보로 보면 같은 계열이 두 번 선다. 오타 한 줄이 만드는 결과치고 조용하다.
+        if len(set(self.index_map.values())) != len(self.index_map):
+            duplicated = sorted({v for v in self.index_map.values()
+                                 if list(self.index_map.values()).count(v) > 1})
+            raise ValueError(f"두 업종코드가 같은 KIS 지수코드를 가리킨다: {duplicated[:5]}")
+        # 형태만 본다 — 실재는 config 로드 경로에서 알 수 없다(`MinuteUniverseConfig` 와
+        # 같은 이유). 둘 다 숫자 4자리다: KRX 업종코드(`1005`·`2118`)와 KIS 지수코드
+        # (`0005`·`1033`). **선행 0 이 의미를 가지므로** 정수로 접으면 안 된다.
+        if bad := sorted(k for k in self.index_map if not (len(k) == 4 and k.isdigit())):
+            raise ValueError(f"KRX 업종코드 형태(숫자 4자리)가 아니다: {bad[:5]}")
+        if bad := sorted(v for v in self.index_map.values()
+                         if not (len(v) == 4 and v.isdigit())):
+            raise ValueError(f"KIS 지수코드 형태(숫자 4자리)가 아니다: {bad[:5]}")
+        # ⚠️ **자리수만 보면 한 줄을 뒤집어 적어도 통과한다.** 두 코드계가 형태로 겹치기
+        # 때문이다(KIS 값 대역 `1006`~`1033` ∩ KRX KOSPI 키 대역 `1005`~`1047`; 실제로
+        # 14개 코드가 이 표에서 키이면서 동시에 값이다). 뒤집힌 줄은 개수도 45 그대로고
+        # 값 중복도 안 나서 로드가 정상인데, canonical 의 `unit_id` 가 벤더 코드가 돼
+        # **일봉 `sector_index` 와 어떤 조인에도 안 걸린다**(그 업종은 동시에 표에서
+        # 사라진다). 대역 첫 자리가 **뒤바뀜은** 가른다: KRX 업종코드는 KOSPI `1xxx`·
+        # KOSDAQ `2xxx` 이고, KIS 지수코드는 KOSPI 업종 `0xxx`·KOSDAQ 업종 `1xxx` 다.
+        if bad := sorted(k for k in self.index_map if k[0] not in "12"):
+            raise ValueError(f"KRX 업종코드 대역(1xxx·2xxx)이 아니다 — 키·값이 뒤집혔나: {bad[:5]}")
+        if bad := sorted(v for v in self.index_map.values() if v[0] not in "01"):
+            raise ValueError(f"KIS 지수코드 대역(0xxx·1xxx)이 아니다 — 키·값이 뒤집혔나: {bad[:5]}")
+        # ⚠️ **대역만으로는 "번역을 잊은" 줄을 못 잡는다.** `"1008" = "1008"`(화학)은
+        # 자리수·대역·중복을 전부 통과하는데, KIS `1008` 은 KOSDAQ 지수라 그 자리에 남의
+        # 지수가 조용히 실린다 — 이 트랙을 헤매게 한 오류의 모양 그대로다. KOSPI 24행 중
+        # 10행이 이 구멍에 있었다. 자기 자신을 가리키는 줄은 **번역이 안 된 것**이다:
+        # 실제 표에 `키 == 값` 인 줄은 하나도 없다(KIS 는 자기 번호를 따로 쓴다).
+        if bad := sorted(k for k, v in self.index_map.items() if k == v):
+            raise ValueError(
+                f"KRX 업종코드를 KIS 지수코드 자리에 그대로 적었다 — 번역이 빠졌나: {bad[:5]}")
+        return self
+
+
 class PriceTriggersConfig(BaseModel):
     """ETF 가격변동 트리거 산출 설정 — load-price-triggers 만 쓴다(ALPHA-406).
 
