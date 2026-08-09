@@ -39,7 +39,7 @@ from decimal import Decimal
 
 from .candle import Candle, build_candle, is_stamp, to_decimal
 from .http import PoliteClient, StopFetch
-from .kis_auth import KisAuth, domain_for
+from .kis_auth import KisAuth, token_expired, domain_for
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +57,7 @@ MAX_RATE_RETRY = 5
 RATE_STREAK_LIMIT = 5
 # 토큰 만료 오류 코드. KIS 는 만료를 4xx 본문(EGW00123 "기간이 만료된 token")이나 rt_cd!=0
 # 응답으로 알린다 — 두 경로 다 같은 처방(캐시 폐기 후 1회 재발급)이라 코드로만 가른다.
-# ⚠️ 만료 응답 형상은 **실측 대상이 아니었다**(24시간 상주 실증 전) — 코드가 안 맞으면
-# 재발급이 안 걸려 그 window 들이 실패로 드러난다(조용한 성공은 아니다, Rule 12).
-TOKEN_EXPIRED_CODES = ("EGW00121", "EGW00123")
+# 만료 코드·판정은 `kis_auth` 가 소유한다(iNAV 레인과 공유 — 그 모듈 주석).
 # 봉 하나가 덮는 길이. 이 어댑터는 1분봉 전용이다(두 TR 다 분봉이다).
 INTERVAL_SECONDS = 60
 # `stck_bsop_date`(YYYYMMDD)·`stck_cntg_hour`(HHMMSS) 자리수. **둘을 함께** 못박아야
@@ -155,8 +153,7 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
                         values=values, volume=volume)
 
 
-def _token_expired(text: str) -> bool:
-    return any(code in text for code in TOKEN_EXPIRED_CODES)
+_token_expired = token_expired  # 이 모듈의 기존 호출부 이름을 유지한다
 
 
 class KisMinuteClient:

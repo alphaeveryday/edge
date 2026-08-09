@@ -294,3 +294,99 @@ class TestVendorBlankAndDrift:
 
         assert manifest["missing"] == ["069500"] and manifest["invalid"] == []
         assert result.status == "INCOMPLETE" and records == ()
+
+    def test_만료를_만나면_두_캐시를_다_버리고_그_window_를_살린다(self):
+        """⭐ ALPHA-889. 상주 전환(ALPHA-882)이 만료를 **반드시 만나는 것**으로 바꿨다.
+
+        여기서 안 잡으면 자가치유가 아니다 — `StopFetch` 는 `MinuteWorkerLoop.tick` 의
+        `except Exception` 에 삼켜져 WINDOW_FAILED 가 되고 루프는 계속 돈다. 즉 만료
+        시점부터 15:30 까지 매 window 가 조용히 실패하고, iNAV 는 소급이 불가라 영구
+        결손이다. 그래서 단언은 "안 죽는다"가 아니라 **그 window 가 실제로 채워진다**다.
+
+        🔴 **두 캐시를 다 버리는지**가 이 테스트의 축이다. `auth.invalidate()` 만으로는
+        컬렉터가 든 토큰 사본이 안 바뀌어 다음 호출도 같은 낡은 문자열을 보낸다.
+        """
+        etf_map = {"069500": "KR7069500007"}
+        seen_tokens = []
+        invalidated = []
+
+        class ExpiringAuth:
+            def __init__(self):
+                self._n = 0
+
+            def token(self):
+                self._n += 1
+                return f"TOKEN{self._n}"
+
+            def invalidate(self):
+                invalidated.append(1)
+
+        def expire_once(our_etf_id, symbol, d1, d2, token):
+            seen_tokens.append(token)
+            if len(seen_tokens) == 1:
+                raise ValueError("KIS rt_cd=1 msg_cd=EGW00121 msg1=기간이 만료된 token")
+            return ROWS[our_etf_id]
+
+        collector = make_collector(etf_map=etf_map, fetch=expire_once)
+        collector.source.auth = ExpiringAuth()
+
+        _, records, manifest = collector.collect(request_for(31), NOW)
+
+        assert manifest["received"] == ["069500"], "재발급 뒤 그 window 가 채워져야 한다"
+        assert manifest["missing"] == [] and records
+        assert invalidated == [1], "공유 캐시(KisAuth) 를 버려야 SSM 까지 내려간다"
+        # ⭐ 사본을 안 버리면 두 호출이 같은 토큰이다 — 그게 이 결함의 정체였다
+        assert seen_tokens == ["TOKEN1", "TOKEN2"], \
+            f"컬렉터 토큰 사본이 안 갱신됐다: {seen_tokens}"
+
+    def test_4xx_로_오는_만료도_같은_경로다(self):
+        """만료는 rt_cd 본문으로도, 4xx(StopFetch)로도 온다. 후자만 놓치면 그 갈래에서
+        여전히 하루가 날아간다 — `kis_minute` 이 두 갈래를 다 막은 것과 같은 이유."""
+        etf_map = {"069500": "KR7069500007"}
+        calls = []
+
+        class Auth:
+            def token(self):
+                return f"T{len(calls)}"
+
+            def invalidate(self):
+                pass
+
+        def expire_4xx(our_etf_id, symbol, d1, d2, token):
+            calls.append(token)
+            if len(calls) == 1:
+                exc = StopFetch("401")
+                exc.body = "EGW00123 token expired"
+                raise exc
+            return ROWS[our_etf_id]
+
+        collector = make_collector(etf_map=etf_map, fetch=expire_4xx)
+        collector.source.auth = Auth()
+
+        _, _, manifest = collector.collect(request_for(31), NOW)
+        assert manifest["received"] == ["069500"]
+
+    def test_재발급_뒤에도_만료면_포기한다(self):
+        """시계·자격증명 문제는 반복해도 안 풀린다 — 무한 루프가 tick 을 먹으면 그날
+        나머지 window 가 통째로 밀린다(만료보다 나쁘다)."""
+        etf_map = {"069500": "KR7069500007"}
+        calls = []
+
+        class Auth:
+            def token(self):
+                return "SAME"
+
+            def invalidate(self):
+                pass
+
+        def always_expired(our_etf_id, symbol, d1, d2, token):
+            calls.append(token)
+            raise ValueError("KIS rt_cd=1 msg_cd=EGW00121 msg1=만료")
+
+        collector = make_collector(etf_map=etf_map, fetch=always_expired)
+        collector.source.auth = Auth()
+
+        _, _, manifest = collector.collect(request_for(31), NOW)
+
+        assert manifest["missing"] == ["069500"], "포기는 missing 이다(invalid 아님 — 재시도 축)"
+        assert len(calls) == 2, f"1회만 재발급해야 한다 — 실제 {len(calls)}회 호출"
