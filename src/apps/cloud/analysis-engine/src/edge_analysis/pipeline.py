@@ -647,6 +647,10 @@ def run(
     # final_payload 가 없어 이 게이트를 타지 않는다 — 죽일 문장 자체가 없다).
     evidence_build = None
     stat_test_rows = tuple(window_meta.get("stat_tests") or ())
+    scoped_news_events = list(window_meta.pop("news_events", ()) or ())
+    events = _canonical_event_contexts(events, scoped_news_events)
+    log("events.canonical", events=len(events), scoped=len(scoped_news_events))
+    stage["event_count"] = len(events)
     if final_payload is not None:
         from .statics.evidence_rows import build_evidence_rows
         evidence_build = build_evidence_rows(
@@ -824,3 +828,32 @@ def _primary_thread_id(events: list[EventContext]) -> str | None:
     edge-review). ``None`` 은 목록의 **어떤** 이벤트도 스레드되지 않았을 때만.
     """
     return next((e.thread_id for e in events if e.thread_id), None)
+
+
+def _canonical_event_contexts(
+    trigger_events: list[EventContext], scoped_events: list[dict[str, Any]],
+) -> list[EventContext]:
+    """Merge event sources once; trigger context wins and scoped evidence fills gaps."""
+    merged = {
+        str(row["source_event_id"]): EventContext(
+            source_event_id=str(row["source_event_id"]),
+            event_type_code=str(row.get("event_type_code") or ""),
+            available_at=str(row.get("available_at") or ""),
+            entity_id="", ticker="",
+            thread_id=(str(row["thread_id"]) if row.get("thread_id") else None),
+            novelty_status="", title=str(row.get("title") or ""),
+            evidence_id=(str(row["evidence_id"]) if row.get("evidence_id") else None),
+        )
+        for row in scoped_events
+    }
+    for event in trigger_events:
+        scoped = merged.get(event.source_event_id)
+        merged[event.source_event_id] = event if scoped is None else replace(
+            event,
+            event_type_code=event.event_type_code or scoped.event_type_code,
+            available_at=event.available_at or scoped.available_at,
+            thread_id=event.thread_id or scoped.thread_id,
+            title=event.title or scoped.title,
+            evidence_id=event.evidence_id or scoped.evidence_id,
+        )
+    return [merged[key] for key in sorted(merged)]

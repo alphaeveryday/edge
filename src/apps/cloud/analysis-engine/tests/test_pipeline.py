@@ -14,11 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from edge_analysis.domain.models import Holding, PriceTrigger
+from edge_analysis.domain.models import EventContext, Holding, PriceTrigger
 from edge_analysis.domain.window import CommittedMinuteWindow, MinuteBar
 from edge_analysis.config import KST
 from edge_analysis.config import PipelineError
-from edge_analysis.pipeline import _redacted, _verdict_reason, run
+from edge_analysis.pipeline import (
+    _canonical_event_contexts, _primary_thread_id, _redacted, _verdict_reason, run,
+)
 from edge_analysis.statics.interval import IntervalError, window_facts
 
 # `run` 이 `dataclasses.replace` 로 트리거 행의 대상·날짜를 덮으므로 설정 대역은
@@ -223,6 +225,66 @@ def test_triggered_day_persists_the_explanation():
     bodies = [json.loads(p["Body"].decode("utf-8")) for p in s3.puts]
     archive = next(b for b in bodies if b.get("outcome") == "explained")
     assert "events" in archive  # 런 아카이브 이벤트 키 — 구 "kodex_events" 는 소비자 계약이 아니다
+
+
+def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(monkeypatch):
+    """The 14 scoped events must not split from the legacy persistence collection."""
+    scoped = [{
+        "source_event_id": f"evt_{i:02d}", "event_type_code": "NEWS.TYPE",
+        "available_at": f"2026-07-16T10:{i:02d}:00", "thread_id": f"thr_{i:02d}",
+        "title": f"실제 뉴스 제목 {i}", "evidence_id": f"evidence_{i:02d}",
+    } for i in range(14)]
+
+    def fake_statics(_lake, _ticker, _day, _ask=None, **kwargs):
+        meta = kwargs["window_meta"]
+        meta.update({
+            "lineage": [{"view": "bars_5m"}], "news_events": scoped,
+            "final_explanation": {"rendered_text": "[4] 실제 뉴스 14건", "blocks": [
+                {"block_code": "H", "block_title": "헤더", "text": "헤더"},
+                {"block_code": "1", "block_title": "기여", "text": "기여"},
+                {"block_code": "2", "block_title": "구간", "text": "구간"},
+                {"block_code": "3", "block_title": "요인", "text": "요인"},
+                {"block_code": "4", "block_title": "이벤트", "text": "실제 뉴스 14건",
+                 "evidence_refs": [f"source_event:evt_{i:02d}" for i in range(14)]},
+            ]},
+        })
+        return "[4] 실제 뉴스 14건"
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    persisted = store.explanation_kwargs["events"]
+    assert len(persisted) == 14
+    assert _primary_thread_id(persisted) == "thr_00"
+    archive = next(json.loads(item["Body"].decode("utf-8")) for item in s3.puts
+                   if json.loads(item["Body"].decode("utf-8")).get("outcome") == "explained")
+    assert len(archive["events"]) == 14
+    assert archive["events"][0]["evidence_id"] == "evidence_00"
+    evidence, _kwargs = store.evidence
+    assert len([row for row in evidence.rows if row.type == "NEWS"]) == 14
+    assert store.explanation.raw["stage_results"]["event_count"] == 14
+
+
+def test_trigger_event_wins_overlap_while_scoped_fills_lineage_gaps():
+    scoped = [{
+        "source_event_id": "evt_overlap", "event_type_code": "SCOPED.TYPE",
+        "available_at": "2026-07-16T10:00:00", "thread_id": "thr_scoped",
+        "title": "scoped title", "evidence_id": "evidence_scoped",
+    }]
+    trigger = EventContext(
+        source_event_id="evt_overlap", event_type_code="TRIGGER.TYPE",
+        available_at="2026-07-16T10:01:00", entity_id="entity_1", ticker="005930",
+        thread_id=None, novelty_status="FIRST_IN_THREAD", title="trigger title")
+
+    [merged] = _canonical_event_contexts([trigger], scoped)
+
+    assert merged.event_type_code == "TRIGGER.TYPE"
+    assert merged.title == "trigger title"
+    assert merged.entity_id == "entity_1" and merged.ticker == "005930"
+    assert merged.thread_id == "thr_scoped"
+    assert merged.evidence_id == "evidence_scoped"
 
 
 def test_required_archive_precedes_database_completion(monkeypatch):
