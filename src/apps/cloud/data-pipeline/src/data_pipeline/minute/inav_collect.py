@@ -32,6 +32,7 @@ from datetime import datetime
 
 from ..sources.candle import to_decimal
 from ..sources.http import StopFetch
+from ..sources.kis_auth import token_expired
 from ..sources.kis_inav import KST, KisInavSource
 from .models import CollectionRequest, CollectionResult, content_checksum
 from .price_collect import Outcome, status_of
@@ -182,10 +183,15 @@ class KisInavCollector:
     다른 간격이면 라벨이 격자에 아예 안 맞아 전 unit 이 매 window missing 이 된다 —
     그 상태는 원장에 "벤더가 안 준다"로 보여 원인이 설정임을 가린다. 기동에서 막는다.
 
-    ponytail: 토큰 만료(24h) 재발급 경로가 없다 — `KisNavSource._fetch_etf` 는 배치용이라
-    만료를 안 본다(`kis_minute` 은 `KisAuth.invalidate()` 로 1회 재발급한다). ALPHA-851 은
-    수동 bounded 실행이라 프로세스가 24시간을 못 산다. **세션 자동 편입(상주 전환)에서
-    같이 붙여라** — 그때부터는 반드시 만난다(`kis_auth.KisAuth.invalidate` 도크스트링).
+    **토큰 만료(24h) 재발급은 여기 있다**(ALPHA-889 — 이 자리의 예고를 이행했다).
+    `KisNavSource._fetch_etf` 는 배치용이라 만료를 안 보는데, ALPHA-882 가 이 컬렉터를
+    6.5시간짜리 상주로 만들면서 만료가 **반드시 만나는 것**이 됐다. `_rows_for` 가
+    만료 신호를 보고 두 캐시를 버린 뒤 1회 재시도한다(`_reissue`).
+
+    ⚠️ 그 window 를 잃지 않는 것이 요점이다 — `StopFetch` 는 `MinuteWorkerLoop.tick` 의
+    `except Exception` 에 삼켜져 WINDOW_FAILED 가 되고 **루프는 계속 돈다**. 즉 만료를
+    여기서 안 잡으면 컨테이너가 죽고 재기동하는 자가치유가 아니라, 그 시점부터 15:30
+    까지 매 window 가 조용히 실패한다. iNAV 는 소급이 불가라 그만큼 영구 결손이다.
     """
 
     def __init__(self, source: KisInavSource, clock: Callable[[], datetime]):
@@ -233,20 +239,60 @@ class KisInavCollector:
                 unit_id,
             )
             return Outcome.INVALID
-        if self._token is None:
-            # 토큰은 프로세스 1회 — 종목마다 발급하면 KIS 의 분당 1회 제한에 걸린다.
-            self._token = self.source.auth.token()
-        try:
-            return self.source._fetch_etf(unit_id, symbol, "", "", self._token)
-        except StopFetch:
-            logger.error("KIS iNAV 소스 전역 실패 — 수집 중단", exc_info=True)
-            raise
-        except Exception as error:
-            # 종목 단위 실패(요청 실패·깨진 JSON·rt_cd 오류·빈 output·**봉투 형상
-            # 위반**)는 전부 재시도 축이다. 봉투를 INVALID 로 올리면 안 되는 이유는
-            # 블라스트 반경이다 — `status_of` 는 invalid 하나로 **window 전체**를
-            # INVALID 로 만들고 INVALID 는 재청구 대상이 아닌데, iNAV 는 소급이 불가라
-            # 그 분이 전 종목에 대해 영구히 없어진다. 스키마 드리프트는 한 응답의
-            # 모양이 아니라 **전 unit·전 window 지속**으로 드러난다.
-            logger.error("KIS iNAV 실패 %s(%s): %s", unit_id, symbol, error)
-            return Outcome.MISSING
+        # 만료를 만나면 **한 번만** 재발급하고 같은 unit 을 다시 부른다(ALPHA-889).
+        # `reissued` 가 False→True 로 한 바퀴만 도는 이유: 재발급 뒤에도 만료면 그건
+        # 시계·자격증명 문제라 반복해도 안 풀리고, 무한 루프가 tick 을 먹는다.
+        for reissued in (False, True):
+            if self._token is None:
+                # 토큰은 프로세스 1회 — 종목마다 발급하면 KIS 의 분당 1회 제한에 걸린다.
+                self._token = self.source.auth.token()
+            try:
+                return self.source._fetch_etf(unit_id, symbol, "", "", self._token)
+            except StopFetch as error:
+                # 4xx 로 오는 만료. 그 외 4xx/429 는 키·권한·쿼터라 종목을 바꿔도 안 풀린다.
+                if not reissued and token_expired(getattr(error, "body", "") or str(error)):
+                    self._reissue(unit_id, error)
+                    continue
+                logger.error("KIS iNAV 소스 전역 실패 — 수집 중단", exc_info=True)
+                raise
+            except Exception as error:
+                # rt_cd 로 오는 만료 — `KisNavSource._fetch_etf` 가 `msg_cd=…` 를 예외
+                # 메시지에 실어 올리므로 문자열로 판정된다(실측).
+                if token_expired(str(error)):
+                    if not reissued:
+                        self._reissue(unit_id, error)
+                        continue
+                    # ⚠️ **재발급 뒤에도 만료면 종목 축이 아니다** — 자격증명·시계 문제라
+                    # 다음 unit 도, 다음 window 도 똑같이 만난다. MISSING 으로 접으면 전
+                    # 종목이 매 분 missing 인 INCOMPLETE 가 쌓이는데 그 모양은 "벤더가 안
+                    # 준다"로 읽혀 원인이 우리 쪽임을 가린다 — 이 클래스가 "소스 전역
+                    # 실패는 전파한다"로 못박은 바로 그 축이다(Rule 12). 위 4xx 갈래가
+                    # 같은 상황에서 raise 하므로 계약도 그쪽에 맞춘다.
+                    logger.error(
+                        "KIS iNAV 토큰이 재발급 뒤에도 만료 — 소스 전역 실패로 전파한다"
+                        "(자격증명·시계를 본다): %s(%s)", unit_id, error
+                    )
+                    raise
+                # 종목 단위 실패(요청 실패·깨진 JSON·rt_cd 오류·빈 output·**봉투 형상
+                # 위반**)는 전부 재시도 축이다. 봉투를 INVALID 로 올리면 안 되는 이유는
+                # 블라스트 반경이다 — `status_of` 는 invalid 하나로 **window 전체**를
+                # INVALID 로 만들고 INVALID 는 재청구 대상이 아닌데, iNAV 는 소급이 불가라
+                # 그 분이 전 종목에 대해 영구히 없어진다. 스키마 드리프트는 한 응답의
+                # 모양이 아니라 **전 unit·전 window 지속**으로 드러난다.
+                logger.error("KIS iNAV 실패 %s(%s): %s", unit_id, symbol, error)
+                return Outcome.MISSING
+        # 위 루프는 두 갈래 모두 return/raise/continue 로 끝나므로 여기 안 닿는다.
+        raise AssertionError("unreachable")
+
+    def _reissue(self, unit_id: str, error: Exception) -> None:
+        """만료 신호를 보고 **두 캐시를 다 버린다**.
+
+        🔴 둘 다여야 실효가 있다. `auth.invalidate()` 는 `KisAuth` 의 메모리 캐시만
+        비우는데, 이 컬렉터가 **토큰 문자열 사본을 따로 들고** `_fetch_etf` 에 인자로
+        넘기기 때문이다(가격 어댑터는 클라이언트가 매 요청 `auth` 에서 받아와 이 층이
+        없다). 하나만 버리면 다음 호출도 같은 낡은 문자열을 보내 아무것도 안 바뀐다.
+        SSM 공유 캐시는 남은 유효시간을 검사하므로 만료분은 미스가 되어 재발급된다.
+        """
+        logger.warning("KIS iNAV 토큰 만료 — 캐시 폐기 후 1회 재발급: %s(%s)", unit_id, error)
+        self.source.auth.invalidate()   # ② KisAuth 메모리
+        self._token = None              # ③ 이 컬렉터의 사본 — 이 줄이 없으면 위가 무의미

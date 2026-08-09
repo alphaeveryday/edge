@@ -68,6 +68,20 @@ TOKEN_RATE_LIMIT_MAX_RETRY = 4
 CACHE_PARAM_ENV = "KIS_TOKEN_CACHE_PARAM"
 # 남은 유효시간이 이보다 짧으면 캐시를 안 쓴다. 수집 런 하나가 10분 안쪽이라, 런 도중
 # 만료돼 전 종목이 401 을 두드리는 것보다 한 번 더 발급하는 편이 싸다.
+# 만료 응답 코드. **여기 사는 이유**: 만료를 본 쪽이 부르는 문(`invalidate`)이 이 모듈에
+# 있고, 소비자가 둘 이상이다(`kis_minute` 분봉 · `minute/inav_collect` iNAV). 어느 한
+# 어댑터에 두면 나머지가 그 어댑터를 import 하게 되는데, NAV 레인이 분봉 어댑터에
+# 의존하는 것은 방향이 거꾸로다.
+# ⚠️ 만료 응답 형상은 **실측 대상이 아니었다**(24시간 상주 실증 전) — 코드가 안 맞으면
+# 재발급이 안 걸려 그 window 들이 실패로 드러난다(조용한 성공은 아니다, Rule 12).
+TOKEN_EXPIRED_CODES = ("EGW00121", "EGW00123")
+
+
+def token_expired(text: str) -> bool:
+    """응답 본문·에러 문자열이 만료를 말하는가. 호출부가 `str(error)` 를 그대로 넣는다."""
+    return any(code in text for code in TOKEN_EXPIRED_CODES)
+
+
 CACHE_MIN_REMAINING_SEC = 900
 # 상한 — KIS 토큰은 24시간(86400초) 유효하므로 그보다 먼 만료는 값이 손상됐다는 뜻이다.
 # 상한이 없으면 손상된 큰 수 하나가 죽은 토큰을 영구히 유효로 만든다(edge-review 지적).
