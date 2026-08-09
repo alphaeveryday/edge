@@ -10,6 +10,7 @@ eventstore 계보 writer 와 **한 곳**에서 나온다는 사실이다.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -114,28 +115,48 @@ def test_returns_not_ready_defers_without_delete(caplog):
         "사유 없이 고정 문구만 남으면 네 갈래를 로그로 못 가린다")
 
 
-def test_every_disposition_is_timed(capsys):
+def test_every_disposition_is_timed(capsys, monkeypatch):
     """메시지의 **점유 시간**은 결과와 무관하게 남아야 한다(ALPHA-908).
 
     이 로그가 오토스케일링 대수 산정의 유일한 입력인데, 성공 경로만 재면 분포가 성공
-    편향된다 — deferred(재확인 대기)·malformed 는 소요가 짧고 failed 는 길어서, 그쪽이
-    대부분인 날의 대수를 성공분만으로 정하면 실제 점유보다 작게 나온다. 그래서 고정하는
-    것은 "성공에 elapsed_s 가 있다"가 아니라 **어느 갈래로 끝나도 한 줄이 남는다**는 것이다.
+    편향된다 — deferred(재확인 대기)·malformed 는 소요가 짧고 failed·locked 는 길어서,
+    그쪽이 대부분인 날의 대수를 성공분만으로 정하면 실제 점유보다 작게 나온다. 그래서
+    고정하는 것은 "성공에 elapsed_s 가 있다"가 아니라 **다섯 갈래 어디로 끝나도 한 줄이
+    남고, 그 값이 실제 경과에서 나온다**는 것이다.
+
+    값을 가상 시계로 고정하는 이유: 타입만 보면(`isinstance(float)`) 구현이 0.0·음수·
+    상수를 실어도 통과한다 — 배포는 초록인데 백분위를 못 만든다. event_type 을 두 종류
+    태우는 이유: 회수(API 한 번)와 설명 생성(LLM 다단)이 한 라벨로 합쳐지면 분포가 두
+    봉우리가 돼 백분위가 무의미해진다.
     """
+    # 메시지당 정확히 두 번(시작·종료) 읽는다 — 호출 수가 바뀌면 정렬이 깨져 드러난다
+    ticks = iter([0.0, 0.5, 10.0, 130.0, 200.0, 200.25,
+                  300.0, 360.0, 400.0, 1600.0, 2000.0, 2000.75])
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
+
     def by_trigger(trigger_id):
         if trigger_id == "t1":
             raise ReturnsNotReadyError("분모 파티션 없음")
+        if trigger_id == "t2":
+            raise RouteLockedError("다른 소비자가 쥐고 있다")
+        if trigger_id == "t3":
+            raise RuntimeError("db down")
         return "explained"
 
-    sqs = FakeSqs(["{ 깨진 봉투", envelope("t1"), envelope("t2")])
-    consume_triggers("q", max_polls=3, process_fn=by_trigger, sqs_client=sqs)
+    sqs = FakeSqs(["{ 깨진 봉투", envelope("t1"), envelope("t2"), envelope("t3"),
+                   envelope("t4"), revert_envelope()])
+    consume_triggers("q", max_polls=6, process_fn=by_trigger,
+                     revert_fn=lambda _: "reverted", sqs_client=sqs)
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get("event") == "consumer.message"]
-    assert [e["outcome"] for e in events] == ["malformed", "deferred", "explained"]
-    assert all(isinstance(e["elapsed_s"], float) for e in events), (
-        "한 갈래라도 시간이 안 남으면 그 갈래는 규모 산정에서 통째로 빠진다")
-    # 회수(API 한 번)와 설명 생성(LLM 다단)이 섞이면 백분위가 두 봉우리로 무의미해진다
-    assert [e["event_type"] for e in events[1:]] == ["PriceTriggerFired"] * 2
+    assert [(e["outcome"], e["elapsed_s"], e["event_type"]) for e in events] == [
+        ("malformed", 0.5, None),
+        ("deferred", 120.0, "PriceTriggerFired"),
+        ("locked", 0.25, "PriceTriggerFired"),
+        ("failed", 60.0, "PriceTriggerFired"),
+        ("explained", 1200.0, "PriceTriggerFired"),
+        ("reverted", 0.75, "ExposureReverted"),
+    ], "한 갈래라도 빠지면 그 갈래는 규모 산정에서 통째로 사라진다"
 
 
 def test_generic_failure_leaves_message_and_fails_bounded_run():

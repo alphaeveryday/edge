@@ -289,6 +289,12 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
         큐를 점유한 시간은 결과와 무관하게 대수를 요구한다. `idle` 만 빠진다(점유가 없다).
         event_type 을 함께 남기는 이유: 회수(ExposureReverted)는 API 한 번이고 설명 생성은
         LLM 다단이라, 섞으면 분포가 두 봉우리가 돼 백분위가 무의미해진다.
+
+        ponytail: 완료 시점 한 줄이라 **미완료 표본은 못 잡는다** — SIGTERM 뒤 stopTimeout
+        (120초) 안에 안 끝난 처리는 SIGKILL 되고 그 메시지의 점유가 통째로 빠진다. 하필
+        가장 오래 걸린 쪽이라 분포가 아래로 편향된다. 시작 시점 줄까지 남기면 잡히지만
+        분포에 안 쓰이는 줄이 2배가 되고, 그 메시지는 재배달돼 다음 세션에 측정된다 —
+        배포·세션 stop 때만이라 지금은 감수한다. p99 가 stopTimeout 에 붙으면 켠다.
         """
         _count(outcome)
         log("consumer.message", outcome=outcome, event_type=event_type,
@@ -357,8 +363,11 @@ def consume_triggers(queue_url: str, *, max_polls: int | None = None,
             _set_visibility(sqs, queue_url, receipt, 60)
             _finish("failed", started, event_type)
             continue
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+        # 삭제**보다 먼저** 남긴다 — delete 가 던지면(스로틀·네트워크) 이 루프는 그대로
+        # 죽는데, 그 시점의 처리는 이미 끝나 점유 시간이 실재한다. 삭제 뒤에 두면 하필
+        # 그 사고에서 가장 오래 걸린 표본이 사라진다. 삭제 자체는 밀리초라 오차가 아니다.
         _finish(outcome, started, event_type)
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
 
     log("consumer.stop", polls=polls, **totals)
     # 계약 위반·처리 실패는 성공으로 접지 않는다 — 상주 모드에선 로그·DLQ 로 드러나고,
