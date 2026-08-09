@@ -445,7 +445,7 @@ def test_hypothesis_path_injects_objectset_tools_instead_of_the_sql_tool(monkeyp
     assert [spec["name"] for spec in seen["object_tools"]["specs"]][:2] == [
         "objectset.create", "objectset.filter"]
     assert "sql_tool" not in seen
-    assert seen["object_tools"]["call"].__self__.as_of == "2026-08-05T13:20:59.999999"
+    assert seen["object_tools"]["call"].__self__.as_of == "2026-08-05T13:20:00"
 
 
 def test_context_counts_and_failures_are_logged(monkeypatch):
@@ -465,6 +465,85 @@ def test_context_counts_and_failures_are_logged(monkeypatch):
     [ev] = [e for e in trace if e.get("event") == "hypothesis.context"]
     assert ev["events"] == 3 and ev["lookup_failures"] == 2
     assert ev["in_window"] == 1
+
+
+def test_constituent_scoped_news_bypasses_empty_publication_search_gate(monkeypatch):
+    """The route's empty publication event list must not hide grounded constituent news."""
+    import dataclasses
+
+    from edge_analysis.observability import collect_trace
+    from edge_analysis.statics import etfcell
+    from edge_analysis.statics.objectset_tools import NewsScope
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+    seen = {}
+
+    class _Runtime:
+        def __init__(self, _lake, *, as_of, news_scope):
+            seen["as_of"] = as_of
+            seen["scope"] = news_scope
+
+        def tool_specs(self):
+            return []
+
+        def call(self, name, arguments):
+            if name == "news.find_threads":
+                return {"ok": True, "handle": "os_threads", "threads": [{
+                    "thread_id": "thr_constituent",
+                    "event_type_code": "COMPANY.CONTRACT.SIGNING",
+                }]}
+            if name == "news.list_events":
+                return {"ok": True, "handle": "os_events", "events": [{
+                    "source_event_id": "evt_constituent",
+                    "event_type_code": "COMPANY.CONTRACT.SIGNING",
+                    "available_at": "2026-08-05T12:30:00",
+                }]}
+            raise AssertionError(name)
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda ask, **kwargs: (seen.update(kwargs), ([], []))[1])
+
+    with collect_trace() as trace:
+        etfcell._window_paneltest(object(), "ETF", "2026-08-05", lambda *_: {}, facts)
+
+    assert seen["as_of"] == "2026-08-05T13:20:00"
+    assert seen["scope"] == NewsScope("ETF", "2026-08-04")
+    assert seen["event_types"] == ["COMPANY.CONTRACT.SIGNING"]
+    assert "evt_constituent" in seen["facts"]
+    [context] = [row for row in trace if row.get("event") == "hypothesis.context"]
+    assert context["events"] == 1 and context["in_window"] == 0
+
+
+def test_no_scoped_news_and_no_measurable_series_does_not_call_llm(monkeypatch):
+    import dataclasses
+
+    from edge_analysis.statics import etfcell
+
+    facts = dataclasses.replace(_facts(), event_ids=())
+    monkeypatch.setattr("edge_analysis.statics.interval._etypes", lambda *_: [])
+    monkeypatch.setattr("edge_analysis.statics.paneltest.series_z", lambda *_: {})
+    monkeypatch.setattr("edge_analysis.statics.trial.prev_trading_day",
+                        lambda _lake, _day: "2026-08-04")
+
+    class _Runtime:
+        def __init__(self, *_args, **_kwargs): pass
+        def tool_specs(self): return []
+        def call(self, name, arguments):
+            return ({"ok": True, "handle": "os_threads", "threads": []}
+                    if name == "news.find_threads" else
+                    {"ok": True, "handle": "os_events", "events": []})
+
+    monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
+                        lambda *_a, **_k: pytest.fail("LLM must remain gated"))
+
+    assert etfcell._window_paneltest(
+        object(), "ETF", "2026-08-05", lambda *_: {}, facts) == ((), ())
 
 
 def test_swallowed_trigger_exceptions_leave_a_log_line(monkeypatch):

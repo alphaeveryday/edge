@@ -51,7 +51,8 @@ def _runtime(*, versions=None) -> ObjectSetRuntime:
 def test_tool_contract_has_six_structured_operations_and_no_query_text_slot():
     runtime = _runtime()
 
-    specs = runtime.tool_specs()
+    specs = [spec for spec in runtime.tool_specs()
+             if spec["name"].startswith("objectset.")]
 
     assert [s["name"] for s in specs] == [
         "objectset.create", "objectset.filter", "objectset.describe",
@@ -123,7 +124,7 @@ def test_model_cannot_change_clock_or_smuggle_executable_fields():
 
     assert changed_clock == {
         "ok": False,
-        "error": {"code": "INVALID_ARGUMENTS", "message": "unknown arguments: as_of"},
+        "error": {"code": "INVALID_ARGUMENTS", "message": "arguments contain unsupported fields"},
     }
     assert smuggled["ok"] is False
     assert smuggled["error"]["code"] == "INVALID_ARGUMENTS"
