@@ -68,6 +68,8 @@ class _Cursor:
             self.rows = [(value,) for value in self.conn.existing_events]
         elif flat.upper().startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self.rows = list(self.conn.assertions)
+        elif flat.upper().startswith("SELECT SC.FACT_ID"):
+            self.rows = list(self.conn.fetched_facts)
         else:
             self.rows = []
 
@@ -87,6 +89,7 @@ class _Cursor:
 class _Conn:
     def __init__(self):
         self.log, self.batches, self.existing_events = [], [], set()
+        self.fetched_facts = []
         assertion_id = stable_domain_id(
             "asrt", "doc_1", "COMPANY.CONTRACT.SIGNING", "SIGN")
         self.assertions = [("doc_1", "COMPANY.CONTRACT.SIGNING", "SIGN", assertion_id)]
@@ -110,7 +113,8 @@ def test_persist_writes_disclosure_event_lineage_and_threads(monkeypatch):
 
     result = assemble_disclosure_events.persist_facts(conn, [_fact()])
 
-    assert result == {"created": 1, "already": 0, "unknown_thread": 0}
+    assert result == {"created": 1, "already": 0, "unknown_thread": 0,
+                      "skipped_required": 0}
     [source_event] = _batch(conn, "source_event")
     assert source_event[1] == "DISCLOSURE"
     assert source_event[2] == "COMPANY.CONTRACT.SIGNING"
@@ -120,3 +124,37 @@ def test_persist_writes_disclosure_event_lineage_and_threads(monkeypatch):
         "CONTRACT_VALUE", "CONTRACT_DURATION"}
     assert len(_batch(conn, "event_evidence")) == 1
     assert threaded[0]["source_class"] == "DISCLOSURE"
+
+
+def test_missing_required_identity_is_counted_without_blocking_valid_fact(monkeypatch):
+    """계약대상이 없는 공시 하나가 배치 전체를 롤백시키면 정상 공시도 분석에 못 들어간다.
+    유효 행은 조립하되 ontology 필수 identity 결손은 성공으로 숨기지 않고 별도 계측한다."""
+    conn = _Conn()
+    monkeypatch.setattr(assemble_disclosure_events, "thread_events", lambda *_: 0)
+
+    result = assemble_disclosure_events.persist_facts(
+        conn, [_fact(), _fact(fact_id="bad", document_id="doc_bad",
+                              contract_object_concept_id=None)])
+
+    assert result["created"] == 1
+    assert result["skipped_required"] == 1
+
+
+def test_fetch_maps_issuer_and_counterparty_to_common_instruments():
+    """공시 typed fact의 actor FK를 그대로 thread에 쓰면 NEWS instrument FK와 절대 같아질 수
+    없다. 조회 경계에서 양쪽 actor의 보통주 instrument를 명시적으로 가져온다."""
+    conn = _Conn()
+    conn.fetched_facts = [(
+        "dfact_1", "doc_1", "20260809000123", "2026-08-09",
+        "2026-08-09T09:01:02+09:00", "inst_supplier", "inst_customer",
+        "고객사 주식회사", "concept_hbm", "HBM 공급", 12_000_000_000,
+        "2026-08-10", "2027-08-09",
+    )]
+
+    [fact] = assemble_disclosure_events.fetch_facts(
+        conn, from_date="2026-08-01", to_date="2026-08-09")
+
+    assert fact["supplier_instrument_id"] == "inst_supplier"
+    assert fact["customer_instrument_id"] == "inst_customer"
+    query = next(sql for sql, _ in conn.log if sql.upper().startswith("SELECT SC.FACT_ID"))
+    assert query.upper().count("SHARE_CLASS_CODE = 'COMMON'") == 2

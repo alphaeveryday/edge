@@ -11,11 +11,53 @@ EVENT_TYPE = "COMPANY.CONTRACT.SIGNING"
 PREDICATE = "SIGN"
 STAGE = "DEFINITIVE_SIGNED"
 
+_FACT_COLUMNS = (
+    "fact_id", "document_id", "rcept_no", "report_date", "available_at",
+    "supplier_instrument_id", "customer_instrument_id", "counterparty_raw_name",
+    "contract_object_concept_id", "contract_object_name", "contract_amount_krw",
+    "contract_start_date", "contract_end_date",
+)
+
 
 def _date_text(value) -> str | None:
     if value is None:
         return None
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def fetch_facts(conn, *, from_date: str | None = None,
+                to_date: str | None = None) -> list[dict]:
+    """공급계약 fact와 NEWS identity 축인 보통주 instrument를 함께 읽는다."""
+    conditions = []
+    params = []
+    if from_date is not None:
+        conditions.append("dd.report_date >= %s")
+        params.append(from_date)
+    if to_date is not None:
+        conditions.append("dd.report_date <= %s")
+        params.append(to_date)
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT sc.fact_id, df.document_id, d.source_document_id, dd.report_date,"
+            " df.available_at, supplier.instrument_id, customer.instrument_id,"
+            " sc.counterparty_raw_name, sc.contract_object_concept_id, ce.display_name,"
+            " sc.contract_amount_krw, sc.contract_start_date, sc.contract_end_date"
+            " FROM supply_contract_fact sc"
+            " JOIN disclosure_fact df ON df.fact_id = sc.fact_id"
+            " JOIN disclosure_document dd ON dd.document_id = df.document_id"
+            " JOIN document d ON d.document_id = df.document_id"
+            " LEFT JOIN LATERAL (SELECT ep.instrument_id FROM equity_profile ep"
+            " WHERE ep.issuer_actor_id = dd.issuer_actor_id"
+            " AND ep.share_class_code = 'COMMON' ORDER BY ep.instrument_id LIMIT 1) supplier ON TRUE"
+            " LEFT JOIN LATERAL (SELECT ep.instrument_id FROM equity_profile ep"
+            " WHERE ep.issuer_actor_id = sc.counterparty_actor_id"
+            " AND ep.share_class_code = 'COMMON' ORDER BY ep.instrument_id LIMIT 1) customer ON TRUE"
+            " LEFT JOIN entity ce ON ce.entity_id = sc.contract_object_concept_id" + where +
+            " ORDER BY dd.report_date, sc.fact_id",
+            tuple(params),
+        )
+        return [dict(zip(_FACT_COLUMNS, row)) for row in cur.fetchall()]
 
 
 def to_canonical_event(fact: dict) -> dict:
@@ -82,16 +124,24 @@ def to_canonical_event(fact: dict) -> dict:
 
 def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
     """새 supply fact의 assertion→event→evidence를 적재하고 공용 thread에 연결한다."""
-    events = [to_canonical_event(fact) for fact in facts]
+    events = []
+    skipped_required = 0
+    for fact in facts:
+        try:
+            events.append(to_canonical_event(fact))
+        except ValueError:
+            skipped_required += 1
     if not events:
-        return {"created": 0, "already": 0, "unknown_thread": 0}
+        return {"created": 0, "already": 0, "unknown_thread": 0,
+                "skipped_required": skipped_required}
     with conn.cursor() as cur:
         cur.execute("SELECT source_event_id FROM source_event WHERE source_event_id = ANY(%s)",
                     ([event["source_event_id"] for event in events],))
         existing = {str(row[0]) for row in cur.fetchall()}
     pending = [event for event in events if event["source_event_id"] not in existing]
     if not pending:
-        return {"created": 0, "already": len(events), "unknown_thread": 0}
+        return {"created": 0, "already": len(events), "unknown_thread": 0,
+                "skipped_required": skipped_required}
 
     with conn.cursor() as cur:
         cur.executemany(
@@ -175,4 +225,4 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
         )
     unknown = thread_events(conn, pending)
     return {"created": len(pending), "already": len(events) - len(pending),
-            "unknown_thread": unknown}
+            "unknown_thread": unknown, "skipped_required": skipped_required}
