@@ -806,8 +806,11 @@ class MinuteUniverseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # 층 분해의 **섹터 후보** ETF — 분봉이 있어야 구간(장중) 모드에서 섹터층이 선다.
-    # 일봉 경로는 KRX 업종지수를 섹터 후보로 주입하지만(analysis `layers._krx_sector_candidate`)
-    # 그 지수는 분봉이 없어(수집 원천이 pykrx 일봉이다) 구간 모드가 섹터 ETF 로 대체한다.
+    # 섹터의 정본은 KRX 업종지수이고 그 1분봉은 ALPHA-887 이 수집하지만(dataset
+    # `sector_index_minute`) 소비 배선이 아직 없어(analysis `layers.select_sector` 의
+    # 후보는 섹터 ETF 뿐이다) 그 자리를 이 목록이 메운다.
+    # ⚠️ "일봉 경로가 업종지수를 주입한다"·`layers._krx_sector_candidate` 는 **둘 다 없다**
+    # — #657 이 일 모드를 걷어냈고 그 함수도 함께 사라졌다.
     #
     # 정본은 analysis 쪽 `layers_daily` 의 `kind='sector'` 집합이고, **여기와 자동으로
     # 맞춰지지 않는다**(그 parquet 은 이 레포 밖 산출물이라 로드 시점에 대조할 수 없다).
