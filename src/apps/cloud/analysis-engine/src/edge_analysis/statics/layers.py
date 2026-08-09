@@ -171,7 +171,9 @@ def _series(lake, day: str, kinds: tuple[str, ...],
             if syms else "")
     rows = lake.sql(_CLOCK_SQL.format(
         kinds=kinds, day=day, t0=clock[0], t1=clock[1], pick=pick))
-    lake.exists["clock_panel"] = f"DuckDB 당일 직독 ({len(rows)}심볼)"
+    notes = getattr(lake, "exists", None)
+    if notes is not None:
+        notes["clock_panel"] = f"DuckDB 당일 직독 ({len(rows)}심볼)"
     return {sym: (names.get(sym, sym), float(lr),
                   vol is not None and float(vol) <= 0)
             for sym, lr, vol in rows if lr is not None}

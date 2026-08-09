@@ -367,7 +367,8 @@ def test_missing_layers_raise_instead_of_returning_prose():
             return []
 
     with pytest.raises(PipelineError, match="층 분해 불가"):
-        etfcell.run(_NoLayers(), "091160", "2026-08-06", lambda *_a, **_k: {})
+        etfcell.run(_NoLayers(), "091160", "2026-08-06", lambda *_a, **_k: {},
+                    roll=None)
 
 
 # ── 제안 접지: 스레드 문맥 (ALPHA-885) ────────────────────────────────────

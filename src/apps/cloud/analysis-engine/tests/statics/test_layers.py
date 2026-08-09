@@ -163,7 +163,7 @@ def test_clock_mode_sector_layer_is_honestly_absent():
     """구간 모드의 섹터 층은 정직 부재다(ALPHA-877) - 업종지수는 분봉이 없고,
     섹터 ETF 5분봉이 패널에 실려 와도 층이 서면 안 된다(프록시 ETF 겹침 선택이
     몰래 부활하면 여기서 깨진다). 사유가 남고 시장+고유 2층 회계는 그대로 선다."""
-    lake = _krx_lake()                    # KRX 일봉 표까지 있어도 분봉은 아니다
+    lake = _lake()
     lake.series["T"]["lr5"] = 0.02
     lake.series[MARKET_CODE]["lr5"] = 0.01
     lake.series["SEC"]["lr5"] = 0.015     # 프록시 후보였던 섹터 ETF 의 구간수익
