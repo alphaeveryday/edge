@@ -685,6 +685,19 @@ def test_day_close_slot_runs_after_the_day_it_closes_has_ended():
         "닫을 하루가 아직 안 끝났고(앞 런이 닫은 날을 다시 긁을 뿐) 창의 두 날이 모두 꽉 차 "
         "긁는 양이 두 배가 된다 — day-close 는 그 레인의 가장 이른 슬롯이어야 한다")
 
+    # ⚠️ "가장 이르다"만으로는 약하다(edge-review 검증 라운드) — day-close 를 08:09 로 두면
+    #    08:10 보다 이르니 위 단언을 통과하는데, 두 배치가 1분 간격으로 시작해 같은 벤더를
+    #    동시에 치고 '오늘 몫이 10분뿐'이라는 절감도 사라진다. `retry_policy` 0 의 유지 근거가
+    #    기대고 있는 성질(**실행이 서로 겹치지 않는다**)을 그대로 단언한다 — 인접 슬롯 간격이
+    #    한 실행의 상한보다 커야 한다. 시각 리터럴은 여전히 안 박는다(00:05·01:00 도 정당).
+    timeout_sec = _module_number("news_state_machine_timeout_seconds")
+    ordered = sorted(h * 3600 + m * 60 for h, m in slots.values())
+    gaps = [b - a for a, b in zip(ordered, ordered[1:])] + [86400 - ordered[-1] + ordered[0]]
+    assert min(gaps) > timeout_sec, (
+        f"인접 슬롯 최소 간격 {min(gaps)}초 ≤ 실행 상한 {timeout_sec}초. 앞 런이 상한까지 끌면 "
+        "다음 런과 겹쳐 서로 다른 run 의 AssembleEvents 가 동시에 돌고 prior-count·"
+        "lifecycle_stage read-before-write 레이스가 되살아난다(재시도 0 의 유지 근거가 깨진다)")
+
 
 def test_assemble_window_covers_what_the_collection_window_collected():
     # WHY(ALPHA-905): day-close 슬롯이 **00:10** 이라 assemble 은 언제나 다음 날짜에 돈다 —
