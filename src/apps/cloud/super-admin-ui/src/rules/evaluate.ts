@@ -127,7 +127,16 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
       violations: mine.length,
       depends_on_mock:
         evaluated && (mine.some((v) => v.mock) || !!R.mockBacked?.(f)),
-      note: collision ?? R.note?.(f) ?? R.dep,
+      /* 세 갈래가 **배타적**이다: 충돌 사유 / 돈 규칙의 주석 / 못 돈 규칙의 사유(`dep`).
+       *
+       * `R.note` 는 **돈 규칙에만** 부른다 — 축이 없어 `canRun` 이 막은 규칙의 `note` 가 그 축을
+       * 읽으면 여기서 죽는다(`canRun` 이 못 막는 진입점이 이 한 줄이었다).
+       * `R.dep` 는 반대로 **못 돈 규칙에만** 붙인다 — `dep` 은 "없는 계측"이라 못 돈 사유이지
+       * 돌아간 규칙의 주석이 아니다. 폴백으로 두면 배선돼서 잘 도는 규칙 행에 "…배선"이라는
+       * 주석과 `*` 표가 영구히 붙는다(R03·R10·R13 에 `dep` 을 넣자마자 실제로 그랬다).
+       * ⚠️ 세 항을 통째로 `evaluated &&` 로 감싸면 **충돌 사유가 지워진다** — 충돌이 나면
+       * 위에서 `evaluated` 를 이미 false 로 바꾸므로, `collision` 은 반드시 밖에 있어야 한다. */
+      note: collision ?? (evaluated ? R.note?.(f) ?? null : R.dep),
     });
   }
 

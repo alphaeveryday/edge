@@ -94,6 +94,44 @@ test('R02 마감 초과 미귀결 — 마감 경과+원장 공백만 위반, 마
   assert.deepEqual(hits(f, 'R02').map((v) => v.target), ['late']);
 });
 
+test('R02 — kind 부재를 "정규 런"으로 단정하지 않는다 (모름이 가장 강한 주장을 기본값으로 잡았다)', () => {
+  /* `kind` 는 계측이 없어 실 응답에서 통째로 빠진다. 부재를 정규로 접으면 수동 런의 원장 공백이
+   * '정규 런 미귀결'로 서고, 운영자가 안 봐도 되는 것을 본다. 넷째 값이 있어야 한다. */
+  const f = emptyFacts();
+  const late = { deadline: '2026-08-03T16:00:00+09:00' };
+  f.runs = [
+    run({ id: 'unknown', kind: undefined, ...late }),
+    run({ id: 'manual', kind: 'manual', ...late }),
+    run({ id: 'sched', kind: 'scheduled', ...late }),
+  ];
+  f.runs.push(run({ id: 'bf', kind: 'backfill', ...late }));
+  const why = new Map(hits(f, 'R02').map((v) => [v.target, v.why]));
+  assert.match(why.get('unknown')!, /미기록/, '부재를 아는 값으로 단정했다');
+  assert.doesNotMatch(why.get('unknown')!, /정규 런/);
+  assert.match(why.get('manual')!, /수동 런/);
+  assert.match(why.get('sched')!, /정규 런/);
+  /* 네 값이 **넷 다** 달라야 한다 — 하나라도 뭉치면 그 종류가 남의 이름으로 그려진다 */
+  assert.match(why.get('bf')!, /백필 런/);
+  assert.equal(new Set([...why.values()].map((w) => w.split(' ·')[0])).size, 4);
+});
+
+test('R03 — AWS 상태를 가진 런이 하나도 없으면 evaluated:false (한 표면을 못 본 것이지 일치가 아니다)', () => {
+  /* 실 응답은 SFN 조회가 붙기 전까지 이 축이 통째로 없다. canRun 이 없으면 R03 이 매일
+   * "제어면과 원장이 일치한다"를 주장한다 — 조회 배선 부재가 정상으로 그려진다. */
+  const f = emptyFacts();
+  f.runs = [run({ id: 'no-aws', ledger_status: 'SUCCEEDED' })];
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R03')!;
+  assert.equal(rr.evaluated, false);
+  assert.equal(rr.notRun, 'axis');
+  /* 빈 문자열도 관측이 아니다 — `run()` 이 truthy 로 거르므로 `canRun` 이 `!= null` 이면
+   * '평가됨 · 위반 0'("두 표면이 일치한다")이 선다. 두 축이 갈리면 정확히 그 모양이다. */
+  f.runs = [run({ id: 'blank-aws', aws_status: '', ledger_status: 'SUCCEEDED' })];
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R03')!.evaluated, false);
+  /* 한 런이라도 관측되면 돈다 — 부분 관측의 크기는 다른 축(meta.awsUnobservedRuns)이 답한다 */
+  f.runs.push(run({ id: 'aws', aws_status: 'SUCCEEDED', ledger_status: 'SUCCEEDED' }));
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R03')!.evaluated, true);
+});
+
 test('R03 제어면·원장 불일치 — 양쪽 다 있고 다를 때만, 한쪽 부재는 불일치가 아니다', () => {
   const f = emptyFacts();
   f.runs = [
@@ -110,14 +148,24 @@ test('R04 런 실패 — 원장 terminal 실패는 위반', () => {
   assert.deepEqual(hits(f, 'R04').map((v) => v.target), ['f1']);
 });
 
-test('R04 경계 — 원장 공백+AWS 실패는 정규(scheduled) 런에 한해서만 걸린다', () => {
+test('R04 경계 — 원장 공백+AWS 실패에서 배제는 아는 것(수동·백필)으로만 한다', () => {
+  /* ⚠️ 예전에는 `kind === 'scheduled'` 를 **요구**했다. `kind` 는 계측이 없어 실 응답에서 빠지므로
+   * 그 분기가 영구 사문화되고, 원장 공백 + AWS 실패가 통째로 안 잡힌다 — P0 거짓 음성이다.
+   * 모름은 배제 근거가 아니다: 배제는 수동·백필로 **확인된** 런만. */
   const f = emptyFacts();
   f.runs = [
     run({ id: 'sched', kind: 'scheduled', aws_status: 'FAILED' }),
+    run({ id: 'unknown', kind: undefined, aws_status: 'FAILED' }),
     run({ id: 'man', kind: 'manual', aws_status: 'FAILED' }),
     run({ id: 'bf', kind: 'backfill', aws_status: 'TIMED_OUT' }),
   ];
-  assert.deepEqual(hits(f, 'R04').map((v) => v.target), ['sched']);
+  /* 종료 실패 어휘는 원장과 AWS 가 **같아야** 한다 — AWS 쪽에만 `ABORTED` 가 빠져 있어서
+   * 원장 공백 + SFN ABORTED(운영자가 멈췄는데 투영이 안 됨)가 통째로 안 잡혔다. */
+  f.runs.push(run({ id: 'aborted', aws_status: 'ABORTED' }));
+  const v = hits(f, 'R04');
+  assert.deepEqual(v.map((x) => x.target), ['sched', 'unknown', 'aborted']);
+  /* 잡되 **종류를 못 읽었다는 것도 같이 말한다** — 안 그러면 수동 런일 수 있는 것이 확정 실패로 선다 */
+  assert.match(v[1].why, /미기록/, '모름을 잡아 놓고 그 사실을 안 밝혔다');
 });
 
 test('R05 필수 작업 미귀결 — required 미귀결만, 비필수·FULFILLED 는 아님', () => {
@@ -244,6 +292,107 @@ test('R10 경계 — blind(관측 불가) 단계는 0으로 세지 않고 비교
   assert.equal(hits(f, 'R10').length, 0);
 });
 
+test('R10 경계 — 비교할 점이 두 개 없으면 evaluated:false (인접 감소라는 물음이 성립하지 않는다)', () => {
+  /* 실 응답에는 체인 축의 소스가 아예 없다. canRun 이 없으면 R10 이 "손실 없음"을 주장한다. */
+  assert.equal(buildReport(emptyFacts(), NOW).rules.find((r) => r.id === 'R10')!.evaluated, false);
+
+  /* 점이 하나뿐인 상태도 못 돎이다 — 인접 쌍이 없다. blind 는 값이 아니라 빠짐이라 점이 아니다 */
+  const one = emptyFacts();
+  one.chain = {
+    feeds: [],
+    stages: [
+      { id: 'a', label: 'A', batch: 10, src: 's' },
+      { id: 'blind', label: '소비', blind: true, batch: 5, src: 's' },
+    ],
+  };
+  assert.equal(buildReport(one, NOW).rules.find((r) => r.id === 'R10')!.evaluated, false);
+
+  /* `null` 도 점이 아니다 — 단계가 있어도 값이 없으면 비교할 게 없다.
+   * `!= null` 을 `!== undefined` 로 느슨하게 하면 여기서만 깨진다 */
+  const nulls = emptyFacts();
+  nulls.chain = {
+    feeds: [],
+    stages: [
+      { id: 'a', label: 'A', batch: null, src: 's' },
+      { id: 'b', label: 'B', batch: null, src: 's' },
+    ],
+  };
+  assert.equal(buildReport(nulls, NOW).rules.find((r) => r.id === 'R10')!.evaluated, false);
+
+  /* 한 레인에 두 점이 서면 돈다 — 다른 레인이 비어도 마찬가지다 */
+  const two = emptyFacts();
+  two.chain = {
+    feeds: [],
+    stages: [
+      { id: 'a', label: 'A', batch: 10, src: 's' },
+      { id: 'b', label: 'B', batch: 10, src: 's' },
+    ],
+  };
+  assert.equal(buildReport(two, NOW).rules.find((r) => r.id === 'R10')!.evaluated, true);
+});
+
+test('R10 — canRun 이 세는 피드는 `run()` 이 비교 시작점으로 쓰는 그 피드다 (축이 갈리면 P0 가 버려진다)', () => {
+  /* `feeds[0]`=배치 · `feeds[1]`=장중이다. `canRun` 이 이 대응을 뒤집으면 배치 레인의 점이
+   * 1개로 세어져 **평가됨→못 돎** 이 되고, `run()` 이 낸 P0 손실 위반이 통째로 버려진다.
+   * 한 글자 실수인데 규칙 표에는 "못 돎"이라고만 서서 아무도 사라진 P0 를 못 찾는다.
+   * 갈래를 **비대칭**으로 만들어야 잡힌다 — 둘 다 채우면 뒤집어도 통과한다. */
+  const f = emptyFacts();
+  f.chain = {
+    feeds: [{ id: 'fb', label: '배치 트리거', v: 100, unit: 'ETF', src: 't' }], // 장중 피드 없음
+    stages: [{ id: 'c.run', label: '런', batch: 90, src: 's' }], // 장중 값 없음
+  };
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.equal(rr.evaluated, true, 'canRun 이 배치 피드를 못 셌다 — P0 위반이 버려진다');
+  const v = hits(f, 'R10');
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric]), [['batch:c.run', 10]]);
+});
+
+test('R10 — 갈래를 못 가르는 못 돎이라 무엇을 비교했는지 밝힌다 (위반 0건이 "손실 없음"이 아니다)', () => {
+  /* `canRun` 은 규칙 단위다. 한 갈래만 도착한 응답(계약상 그 형상이 먼저 온다)에서 나머지
+   * 갈래는 점이 0개인데 "평가됨 · 위반 0"에 묻힌다. `&&` 로 조이면 반대로 볼 수 있는 P0 를
+   * 버리므로, 판정은 `||` 로 두고 그 사실을 note 로 낸다. */
+  const partial = emptyFacts();
+  partial.chain = {
+    feeds: [],
+    stages: [
+      { id: 'a', label: 'A', batch: 10, src: 's' },
+      { id: 'b', label: 'B', batch: 10, src: 's' },
+    ],
+  };
+  const note = buildReport(partial, NOW).rules.find((r) => r.id === 'R10')!.note;
+  assert.match(note ?? '', /배치/);
+  assert.match(note ?? '', /나머지 갈래는 점이 2개 미만/);
+
+  /* 두 갈래 다 비교했으면 밝힐 게 없다 — 늘 붙는 주석은 아무도 안 읽는다 */
+  const both = emptyFacts();
+  both.chain = {
+    feeds: [],
+    stages: [
+      { id: 'a', label: 'A', batch: 10, intraday: 5, src: 's' },
+      { id: 'b', label: 'B', batch: 10, intraday: 5, src: 's' },
+    ],
+  };
+  assert.equal(buildReport(both, NOW).rules.find((r) => r.id === 'R10')!.note, null);
+});
+
+test('합성 대상 축은 세션만이 아니다 — 체인 단계 id 가 비어도 못 돎이다 (가드가 둘이면 한쪽만 고쳐진다)', () => {
+  /* `${src}:${s.id}` 는 `${dataset}/${sourceGroup}` 과 **같은 합성**이다. 처음 조각 가드를
+   * 넣을 때 세션 축만 막고 여기를 놓쳤다(리뷰가 잡았다) — 그러면 `batch:` 라는 정상처럼
+   * 보이는 사건 키가 나가고, 딥링크·런북 키가 그걸 문다. 두 자리가 같은 함수를 탄다. */
+  const f = emptyFacts();
+  f.chain = {
+    feeds: [],
+    stages: [
+      { id: 'ok', label: 'A', batch: 10, src: 's' },
+      { id: '', label: 'B', batch: 5, src: 's' }, // 단계 id 가 빈 응답
+    ],
+  };
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.equal(rr.evaluated, false);
+  assert.equal(rr.notRun, 'identity', '계측 공백이 아니라 응답의 계약 위반이다');
+  assert.equal(rr.violations, 0);
+});
+
 test('R11 소비자 부재 — 대기>0·in-flight 0·구독자 0 전부 만족할 때만', () => {
   const f = emptyFacts();
   f.queues = [
@@ -285,6 +434,22 @@ test('R13 산출 이상 — ±25% 이상만, 기준(base) 없으면 평가 대�
    * 대상은 라벨(사람이 읽을 것), 키는 산출 id(`half`) 로 갈린다. */
   assert.deepEqual(v.map((x) => [x.targetId, x.metric, x.unit]), [['half', -50, '%']]);
   assert.deepEqual(v.map((x) => x.target), ['게시']);
+});
+
+test('R13 경계 — 기준(base)이 있는 산출이 하나도 없으면 evaluated:false (분포 안이 아니라 분포를 모른다)', () => {
+  /* 실 응답은 일별 계열을 주는 데가 없어 이 축이 통째로 빈다. canRun 이 없으면 R13 이
+   * "전부 분포 안"이라고 말한다 — 오늘 값이 뭐든. */
+  const f = emptyFacts();
+  f.outputs = [{ id: 'o', label: '게시', today: 16, base: null, unit: '종' }];
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
+  assert.equal(rr.evaluated, false);
+  assert.equal(rr.notRun, 'axis');
+  /* `base: 0` 은 기준이 아니다 — 나눗셈이 성립하지 않아 `run()` 도 거른다. `canRun` 만
+   * `!= null` 로 느슨해지면 '평가됨 · 위반 0'("분포 안")이 서고 오늘 값이 뭐든 조용하다. */
+  f.outputs = [{ id: 'zero', label: '게시', today: 999, base: 0, unit: '종' }];
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
+  f.outputs.push({ id: 'p', label: '문서', today: 100, base: 100, unit: '건' });
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, true);
 });
 
 test('R14 전달 정합 — 게시·미발번은 P0, 시드 유래 비게시 전달은 P2+seed 로 강등', () => {
@@ -389,9 +554,9 @@ const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
   deadJobs: 0,
   ...o,
 });
-const withMinute = (sessions: MinuteSessionFact[]): Facts => {
+const withMinute = (sessions: MinuteSessionFact[], deadJobsByDate: string[] = []): Facts => {
   const f = emptyFacts();
-  f.minute = { date: '2026-08-03', sessions };
+  f.minute = { date: '2026-08-03', sessions, deadJobsByDate };
   return f;
 };
 
@@ -436,10 +601,15 @@ test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 
    * 값의 입도가 사건의 입도를 정한다는 규약을 여기서 못박는다. */
   /* 오늘 뉴스 벤더는 `bigkinds` 하나다(`states.py` 의 `SOURCE_GROUPS_BY_DATASET`) — 이 단언이
    * 지키는 것은 **벤더가 늘 때** 조용히 두 배로 세지 않는다는 불변식이다. */
-  const f = withMinute([
-    session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3, deadJobsByDate: true }),
-    session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3, deadJobsByDate: true }),
-  ]);
+  const f = withMinute(
+    [
+      session({ dataset: 'news_minute', sourceGroup: 'bigkinds', deadJobs: 3 }),
+      session({ dataset: 'news_minute', sourceGroup: 'future_vendor', deadJobs: 3 }),
+    ],
+    /* 축은 **데이터셋 집합**으로 온다 — 세션 플래그였을 때는 벤더마다 따로 붙어, 한쪽만 true 인
+     * 상태(같은 데이터셋의 두 세션이 다른 축)가 표현 가능했다. 지금은 그게 표현 불가다. */
+    ['news_minute'],
+  );
   const vs = hits(f, 'R19');
   assert.equal(vs.length, 1, '벤더마다 복제됐다 — DEAD 3건이 6건으로 읽힌다');
   assert.equal(vs[0].targetId, 'news_minute', '벤더로 못 가르는 값에 벤더 대상을 붙였다');
@@ -461,6 +631,61 @@ test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 
     'price_minute/kis',
     'price_minute/toss',
   ]);
+});
+
+test('합성 대상 축의 조각이 비면 못 돎이다 — 합성 후 문자열만 보는 가드는 `price_minute/` 를 통과시킨다', () => {
+  /* 대상 축은 `dataset/sourceGroup` 으로 **합성**된다. 엔진의 빈 축 가드는 합성 결과만 보므로
+   * 벤더가 빈 응답은 정상처럼 보이는 사건 키를 낸다 — 위반이 하나면 충돌도 안 나 그대로 나가고,
+   * 내일 또 같은 모양이 오면 어제 공유한 링크가 오늘 사건을 연다(충돌 검사로는 못 잡는다). */
+  const broken = withMinute([session({ sourceGroup: '', leaseExpired: true, overdueNoEvidence: 9 })]);
+  const rep = buildReport(broken, NOW);
+  const r17 = rep.rules.find((r) => r.id === 'R17')!;
+  assert.equal(r17.evaluated, false);
+  /* 계측 공백이 아니라 **응답의 계약 위반**이다 — 같은 칸에 그리면 응답 결함이 "아직 계측이
+   * 없구나"로 읽힌다. `axis` 로 서면 이 구분이 사라진다. */
+  assert.equal(r17.notRun, 'identity');
+  assert.equal(r17.violations, 0);
+  /* 조각이 빈 vid 는 **하나도** 안 나간다 — 나가면 딥링크가 그걸 열 수 있게 된다 */
+  assert.deepEqual(rep.violations.filter((v) => v.vid.includes('/@')).map((v) => v.vid), []);
+  /* 데이터셋 축으로 대상을 내는 R19 는 벤더를 안 쓰므로 그대로 돈다 — 규칙 하나만 세운다 */
+  const both = withMinute([session({ sourceGroup: '', deadJobs: 2, leaseExpired: true })], ['price_minute']);
+  const rep2 = buildReport(both, NOW);
+  assert.equal(rep2.rules.find((r) => r.id === 'R17')!.notRun, 'identity');
+  assert.equal(rep2.rules.find((r) => r.id === 'R19')!.evaluated, true);
+
+  /* 대칭 통제 — 데이터셋 조각이 비어도 같다(한쪽만 막으면 나머지 절반이 남는다) */
+  const noDataset = withMinute([session({ dataset: '', leaseExpired: true })]);
+  assert.equal(buildReport(noDataset, NOW).rules.find((r) => r.id === 'R17')!.notRun, 'identity');
+
+  /* 양성 통제 — 두 조각이 다 있으면 그대로 위반이 선다(가드가 전부를 삼키지 않는다) */
+  assert.equal(hits(withMinute([session({ leaseExpired: true })]), 'R17').length, 1);
+});
+
+test('R19 — `deadJobs: null`(모름)과 `0`(실측 0)이 판정에서 갈린다 (어댑터가 지킨 구분이 여기서 죽었다)', () => {
+  /* 어댑터가 어휘 밖 데이터셋의 job 원장을 `null` 로 낸다(`priceJobs` 로 접으면 행이 없어 0이
+   * 되고 "봤고 괜찮다"가 되므로). 그런데 규칙이 `!= null` 로 **건너뛰기만** 하면 그 구분이
+   * 판정 층에서 소멸한다 — null 도 0도 똑같이 '평가됨 · 위반 0' 이었다. */
+  const unknownOnly = withMinute([session({ dataset: 'inav_minute', deadJobs: null })]);
+  const rr = buildReport(unknownOnly, NOW).rules.find((r) => r.id === 'R19')!;
+  assert.equal(rr.evaluated, false, '원장을 하나도 못 읽었는데 "봤고 괜찮다"로 섰다');
+  assert.equal(rr.notRun, 'axis');
+
+  /* 실측 0 은 다르다 — 봤고 없었다 */
+  const zero = buildReport(withMinute([session({ deadJobs: 0 })]), NOW).rules.find((r) => r.id === 'R19')!;
+  assert.equal(zero.evaluated, true);
+  assert.equal(zero.violations, 0);
+
+  /* 세션이 0건인 것도 실측이다 — 잃을 후속 작업 자체가 없다. 이걸 못 돎으로 세면
+   * 실시간 레인이 안 도는 날마다 거짓 `못 돎` 이 뜬다 */
+  assert.equal(buildReport(withMinute([]), NOW).rules.find((r) => r.id === 'R19')!.evaluated, true);
+
+  /* 섞인 날은 규칙 단위 못 돎으로 표현할 수 없다 — 어느 데이터셋이 판정에서 빠졌는지 밝힌다 */
+  const mixed = buildReport(
+    withMinute([session({ deadJobs: 0 }), session({ dataset: 'inav_minute', deadJobs: null })]),
+    NOW,
+  ).rules.find((r) => r.id === 'R19')!;
+  assert.equal(mixed.evaluated, true);
+  assert.match(mixed.note ?? '', /inav_minute/, '판정에서 빠진 데이터셋을 안 밝혔다');
 });
 
 test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반', () => {
@@ -644,6 +869,44 @@ test('vid — 같은 작업 키가 두 런에 걸려도 사건이 갈린다 (런
   );
 });
 
+test('모든 규칙의 `note` 는 축이 빈 사실에서도 죽지 않는다 — 여기서 죽으면 화면이 아니라 흰 화면이다', () => {
+  /* `note` 는 평가기가 `canRun` **밖에서** 부르던 진입점이었다(지금은 돈 규칙에만 부른다).
+   * 옵셔널 축을 읽는 `note` 가 하나라도 붙으면 그 축이 빈 응답에서 평가가 통째로 죽고,
+   * 19규칙의 사건이 전부 사라진다 — 규칙 하나의 주석 때문에.
+   *
+   * 규칙 하나를 골라 단언하지 않고 **집합 전체**를 돈다: 손으로 유지되는 목록은 반드시 낡고,
+   * 새로 붙는 규칙은 아무도 안 본다. 축이 빈 사실은 `emptyFacts()` 다(옵셔널 축은 아예 뺀다). */
+  const bare = emptyFacts();
+  delete bare.queues;
+  delete bare.etf_ledger;
+  delete bare.minute;
+  const withNote = RULES.filter((R) => R.note);
+  assert.ok(withNote.length >= 1, 'note 를 가진 규칙이 사라졌다 — 이 단언이 헛돈다');
+  for (const R of withNote) {
+    assert.doesNotThrow(() => R.note!(bare), `${R.id}: note 가 없는 축을 읽는다`);
+  }
+});
+
+test('`note` 의 세 갈래는 배타적이다 — 돌아간 규칙에 "미배선" 주석이 붙지 않는다', async () => {
+  /* `dep` 은 **못 돈 사유**다. `?? R.dep` 폴백으로 두면 배선돼서 잘 도는 규칙 행에도 "…배선"
+   * 주석과 `*` 표가 영구히 붙는다 — R03·R10·R13 에 `dep` 을 넣자마자 실제로 그랬다.
+   * 규칙 하나를 짚지 않고 **집합**으로 단언한다: 새 규칙에 `dep` 이 붙어도 여기서 걸린다. */
+  const { readFileSync } = await import('node:fs');
+  /* 픽스처가 아니라 **동봉 스냅샷**으로 돈다 — 픽스처는 canRun 이 켜진 규칙을 몇 개 안 밟는다 */
+  const snap = JSON.parse(
+    readFileSync(new URL('./facts-snapshot.json', import.meta.url), 'utf8'),
+  ) as Facts;
+  const rep = buildReport(snap);
+  const depOf = new Map(RULES.map((R) => [R.id, R.dep]));
+  const leaked = rep.rules.filter((r) => r.evaluated && r.note != null && r.note === depOf.get(r.id));
+  assert.deepEqual(leaked.map((r) => r.id), [], '돈 규칙의 note 에 dep 이 샜다');
+
+  /* 반대 방향 — 못 돈 규칙은 그 사유를 note 로 들고 있어야 한다(리포트 소비자가 읽는다) */
+  const bare = buildReport(emptyFacts(), NOW).rules.find((r) => r.id === 'R08')!;
+  assert.equal(bare.evaluated, false);
+  assert.equal(bare.note, depOf.get('R08'));
+});
+
 test('규칙 id 는 유일하다 — 충돌 검사를 규칙 안으로 좁힌 근거이고, 화면이 vid→규칙을 되찾는 축이다', () => {
   /* 이 단언이 없으면 두 곳이 조용히 무너진다. (1) 평가기가 vid 충돌을 **규칙 단위**로만 본다
    * (규칙 간 `seen` 을 지운 논거가 "vid 는 규칙 id 로 시작한다"였다). (2) 화면이
@@ -666,7 +929,7 @@ test('실시간 축을 읽는 규칙과 `axis: minute` 표기 집합이 같다 (
   const withoutMinute = emptyFacts();
   const withMinuteAxis: Facts = {
     ...emptyFacts(),
-    minute: { date: '2026-08-03', sessions: [session({})] },
+    minute: { date: '2026-08-03', sessions: [session({})], deadJobsByDate: [] },
   };
   const readsMinute = RULES.filter(
     (R) => R.canRun != null && !R.canRun(withoutMinute) && R.canRun(withMinuteAxis),
@@ -689,6 +952,7 @@ test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수
     sessions: [
       session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }), // 슬래시 + @범위
     ],
+    deadJobsByDate: [],
   };
 
   const vs = evaluate(f, NOW).violations;

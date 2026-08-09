@@ -7,13 +7,22 @@
  *
  * 시각 비교는 ctx.now 를 쓴다(벽시계 직접 참조 금지) — 스냅샷 평가가 재현 가능해야 한다.
  */
-import type { Edge, MinuteSessionFact, Rule, TaskFact } from './types.ts';
+import type { Edge, Facts, MinuteSessionFact, Rule, RunFact, TaskFact } from './types.ts';
 
 /** 재시도 정책 상한 — 없으면 null.
  *
  * 원장은 정책 미선언을 `0` 으로 적는다(SFN Retry 블록이 0개라 상한이라는 개념 자체가 없다).
  * 이 `0` 을 상한 0회로 읽으면 두 가지가 동시에 틀린다 — 화면이 `1/0` 이라는 없는 분모를 그리고,
  * R16 이 "평가됨"이라 주장한다. 정책 없음과 상한 0회는 다르므로 여기서 한 번만 정규화한다. */
+/**
+ * 런이 실패로 끝났다고 말하는 종료 상태 — **원장과 AWS 제어면이 같은 어휘를 쓴다.**
+ *
+ * 두 벌로 두면 한쪽만 늘어난다: 실제로 AWS 쪽 목록에 `ABORTED` 가 빠져 있어, 원장이 비고 SFN 이
+ * `ABORTED` 를 낸 런(운영자가 멈췄는데 투영이 안 된 상태)이 통째로 안 잡혔다. 원장 쪽은 같은
+ * 값을 이미 실패로 세고 있었으므로 비대칭이 근거를 가진 것도 아니었다.
+ */
+const TERMINAL_FAILURE = ['FAILED', 'TIMED_OUT', 'ABORTED'];
+
 export function retryCap(t: TaskFact): number | null {
   return t.max_retries != null && t.max_retries > 0 ? t.max_retries : null;
 }
@@ -30,8 +39,52 @@ const kst = (iso?: string | null): string =>
       }).format(new Date(iso))
     : '—';
 
+/**
+ * 런 종류 표기 — **부재는 '정규'가 아니다.**
+ *
+ * `kind` 는 계측이 없어 실 응답에서 통째로 빠진다(`RunFact.kind`). 부재를 정규로 접으면 수동 런의
+ * 원장 공백이 '정규 런 미귀결'로 서고, 운영자는 안 봐도 되는 것을 본다. 넷째 값을 만든다.
+ */
+const runKind = (r: RunFact): string =>
+  r.kind === 'manual'
+    ? '수동 런'
+    : r.kind === 'backfill'
+      ? '백필 런'
+      : r.kind === 'scheduled'
+        ? '정규 런'
+        : '런 종류 미기록';
+
+/**
+ * R10 이 비교할 수 있는 점의 수 — 그 레인의 피드 + 관측 가능한 단계 값.
+ *
+ * `run()` 과 같은 축을 세야 한다: blind 는 0이 아니라 **빠짐**이라 점이 아니고, `null` 도 점이
+ * 아니다. 두 점이 없으면 "인접 감소"라는 물음 자체가 성립하지 않는다 — 위반 0건이 아니다.
+ */
+const chainPoints = (f: Facts, src: 'batch' | 'intraday'): number =>
+  [
+    (src === 'batch' ? f.chain.feeds[0] : f.chain.feeds[1])?.v,
+    ...f.chain.stages.filter((s) => !s.blind).map((s) => s[src]),
+  ].filter((v) => v != null).length;
+
 /** 세션을 사람이 읽는 이름 — 화면(MinutePage)이 쓰는 표기와 같다 */
 const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`;
+
+/**
+ * 합성 대상 축 — **조각이 하나라도 비면 합성하지 않는다**(빈 문자열을 낸다).
+ *
+ * 엔진의 빈 축 가드는 합성 **후** 문자열만 본다(`targetId === ''`). 그래서 조각이 빈 응답은
+ * `price_minute/`·`batch:` 처럼 **정상처럼 보이는** 사건 키를 통과시킨다 — 위반이 하나면 충돌도
+ * 안 나 그대로 나가고, 내일 또 같은 모양이 오면 어제 공유한 링크가 오늘 사건을 연다(충돌
+ * 검사로는 못 잡는 시간 축 충돌). 여기서 빈 문자열로 접으면 그 가드가 **그 규칙만**
+ * `못 돎(identity)` 으로 세운다 — 새 가드를 만들지 않고 이미 있는 판정 경로 하나를 쓴다.
+ *
+ * ⚠️ **합성하는 자리는 전부 이 함수를 통과해야 한다.** 자리마다 인라인으로 쓰면 가드가 여럿이
+ * 되고 나중에 한쪽만 고쳐진다 — 실제로 처음 고칠 때 세션 축만 막고 체인 축(`${src}:${s.id}`)을
+ * 놓쳤다(리뷰가 잡았다). 구분자가 자리마다 다른 것은 **런북 키가 그 모양에 매여 있어서**다
+ * (`R10.batch:c.run`) — 통일하면 등록된 조치를 못 찾는다.
+ */
+const compose = (sep: string, ...parts: string[]): string =>
+  parts.every(Boolean) ? parts.join(sep) : '';
 
 /**
  * 세션의 **대상 축** — 무엇이 고장났나. `dataset/sourceGroup` 이고 **날짜가 없다**.
@@ -39,7 +92,7 @@ const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`
  * 데이터셋만으로는 안 갈린다(같은 `news_minute` 를 벤더별로 따로 돌린다). 날짜를 여기 넣으면
  * 런북 키 `${rule}.${targetId}` 가 매일 달라져 어떤 조치도 등록할 수 없다 — 시점은 `scope` 다.
  */
-const sessionTarget = (s: MinuteSessionFact) => `${s.dataset}/${s.sourceGroup}`;
+const sessionTarget = (s: MinuteSessionFact) => compose('/', s.dataset, s.sourceGroup);
 
 export const RULES: Rule[] = [
   {
@@ -83,7 +136,7 @@ export const RULES: Rule[] = [
           /* 세는 값이 없다 — 이 위반은 양이 아니라 판정 하나다 */
           metric: null,
           state: '미귀결',
-          why: `${r.kind === 'manual' ? '수동 런' : '정규 런'} · 마감 ${kst(r.deadline)} 경과, 원장 상태 없음 (AWS는 ${r.aws_status || '—'})`,
+          why: `${runKind(r)} · 마감 ${kst(r.deadline)} 경과, 원장 상태 없음 (AWS는 ${r.aws_status || '—'})`,
           evidence: 'ops_pipeline_run.orchestration_status IS NULL',
           drill: ['run', 'run-' + r.id] as [string, string],
         })),
@@ -96,8 +149,19 @@ export const RULES: Rule[] = [
     kls: '투영 지연',
     base: 'P1',
     desc: 'AWS 최종 상태와 DB 투영 원장이 다르다 — 어느 쪽도 정본으로 덮지 않는다',
-    dep: null,
+    dep: 'SFN DescribeExecution 조회 배선(runs[].aws_status)',
     source: 'AWS_CONTROL+DB_LEDGER',
+    /* AWS 상태를 가진 런이 하나도 없으면 비교할 표면이 한쪽뿐이다 — "두 표면이 같다"가 아니라
+     * **한 표면을 못 봤다**. 실 응답은 SFN 조회가 붙기 전까지 이 축이 통째로 없어, 없으면
+     * R03 이 매일 '평가됨 · 위반 0'("제어면과 원장이 일치한다")이라는 거짓을 주장한다.
+     *
+     * `run()` 과 **같은 truthy 축**을 쓴다(`!= null` 이 아니다) — 어댑터가 미관측을 `''` 로 옮기면
+     * `!= null` 은 그걸 관측으로 세고, `run()` 의 필터는 버려 다시 '평가됨 · 위반 0' 이 된다.
+     * ⚠️ **부분 관측은 이 축이 답하지 않는다**: 40런 중 1건만 관측돼도 참이다. 그건 규칙 단위
+     * 불리언으로 표현할 수 없는 축이라 `meta.awsUnobservedRuns`(계약 문서, 미배선) 소관이다.
+     * `every` 로 바꾸면 SFN 실행이 애초에 없는 런 하나가 전체를 `못 돎` 으로 만든다 — 볼 수 있는
+     * 불일치를 통째로 버리는 쪽이라 더 나쁘다. */
+    canRun: (f) => f.runs.some((r) => !!r.aws_status),
     run: (f) =>
       f.runs
         .filter((r) => r.aws_status && r.ledger_status && r.aws_status !== r.ledger_status)
@@ -125,19 +189,23 @@ export const RULES: Rule[] = [
       f.runs
         .filter(
           (r) =>
-            ['FAILED', 'TIMED_OUT', 'ABORTED'].includes(r.ledger_status ?? '') ||
-            /* 원장이 비고 AWS만 실패면 정규 런에 한해서만 — 수동·백필 런의 원장 공백은
-             * 실패 단정 근거가 아니다(경계 케이스, 명세 §2 R04) */
+            TERMINAL_FAILURE.includes(r.ledger_status ?? '') ||
+            /* 원장이 비고 AWS만 실패면 — **수동·백필로 확인된 런만 뺀다**. 수동·백필의 원장
+             * 공백은 실패 단정 근거가 아니라는 것이 명세 §2 R04 의 경계인데, `kind === 'scheduled'`
+             * 를 **요구**하면 계측이 없는 실 응답에서 그 분기가 영구 사문화된다 — 원장 공백 +
+             * AWS 실패가 통째로 안 잡히는 P0 거짓 음성이다. 배제는 아는 것으로만 한다:
+             * 모름은 배제 근거가 아니고, 대신 `why` 가 종류를 못 읽었다고 밝힌다. */
             (!r.ledger_status &&
-              ['FAILED', 'TIMED_OUT'].includes(r.aws_status ?? '') &&
-              r.kind === 'scheduled'),
+              TERMINAL_FAILURE.includes(r.aws_status ?? '') &&
+              r.kind !== 'manual' &&
+              r.kind !== 'backfill'),
         )
         .map((r) => ({
           target: r.id,
           title: '런 ' + (r.ledger_status || r.aws_status),
           metric: null,
           state: (r.ledger_status || r.aws_status) as string,
-          why: `${r.lane} ${r.id.split('T')[1] || ''} 슬롯`,
+          why: `${r.lane} ${r.id.split('T')[1] || ''} 슬롯 · ${runKind(r)}`,
           evidence: 'ops_pipeline_run.orchestration_status',
           drill: ['run', 'run-' + r.id] as [string, string],
         })),
@@ -298,8 +366,21 @@ export const RULES: Rule[] = [
     kls: '손실',
     base: 'P0',
     desc: '인접 단계에서 in > out이고 설계된 감소가 아니다',
-    dep: null,
+    dep: '산출 체인 단계 집계(chain.feeds·stages)',
     source: 'DB_LEDGER',
+    /* 비교할 점이 두 개 없으면 "인접 감소"를 물을 수 없다 — 조용한 것이 아니라 못 돈 것이다.
+     * 실 응답에는 이 축의 소스가 아예 없어(계약 §축별 소스) 점이 0개가 된다. */
+    canRun: (f) => chainPoints(f, 'batch') >= 2 || chainPoints(f, 'intraday') >= 2,
+    /* ⚠️ `canRun` 은 **규칙 단위**라 갈래를 못 가른다. 한 갈래만 도착한 응답에서 나머지 갈래는
+     * 점이 0개인데도 "손실 없음"으로 선다 — 계약상 그 형상(뉴스 갈래만 부분)이 먼저 온다.
+     * `&&` 로 조이면 반대로 **볼 수 있는 P0 손실을 통째로 버린다**. 판정은 `||` 로 두고,
+     * 무엇을 실제로 비교했는지는 여기서 밝힌다(리포트·규칙 표가 읽는다). */
+    note: (f) => {
+      const seen = (['batch', 'intraday'] as const).filter((src) => chainPoints(f, src) >= 2);
+      if (seen.length === 2) return null;
+      const label = (src: string) => (src === 'batch' ? '배치' : '장중');
+      return `비교한 갈래 ${seen.map(label).join('·') || '없음'} — 나머지 갈래는 점이 2개 미만이라 비교 자체가 없었다(위반 0건이 "손실 없음"을 뜻하지 않는다)`;
+    },
     run: (f) => {
       const out: ReturnType<Rule['run']> = [];
       const stages = f.chain.stages;
@@ -313,9 +394,11 @@ export const RULES: Rule[] = [
           if (v == null) return;
           if (prev != null && v < prev) {
             out.push({
-              /* 대상은 어느 인접 단계에서 줄었는가다. `batch:c.res` 는 앵커용 id 라 targetId 로 내린다 */
+              /* 대상은 어느 인접 단계에서 줄었는가다. `batch:c.res` 는 앵커용 id 라 targetId 로 내린다.
+               * 세션 축과 **같은 합성**이라 같은 조각 가드를 탄다 — 단계 id 가 비면 `batch:` 라는
+               * 정상처럼 보이는 사건 키가 나간다. */
               target: `${prevLabel} → ${s.label}`,
-              targetId: `${src}:${s.id}`,
+              targetId: compose(':', src, s.id),
               title: `${prevLabel} → ${s.label}`,
               metric: prev - v,
               unit: '건',
@@ -390,8 +473,12 @@ export const RULES: Rule[] = [
     kls: '이상',
     base: 'P1',
     desc: '오늘 값이 직전 10영업일 중앙값에서 ±25% 이상 벗어났다',
-    dep: null,
+    dep: '산출 일별 계열(outputs[].base — 직전 10영업일 중앙값)',
     source: 'DB_LEDGER',
+    /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. 실 응답은 일별
+     * 계열을 주는 데가 없어 이 축이 통째로 빈다. `run()` 과 같은 truthy 검사를 쓴다 —
+     * base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */
+    canRun: (f) => f.outputs.some((o) => !!o.base),
     run: (f) =>
       f.outputs
         .filter((o) => o.base && Math.abs((o.today - o.base) / o.base) >= 0.25)
@@ -608,10 +695,32 @@ export const RULES: Rule[] = [
     desc: '실시간 레인의 후속 처리 작업이 종료 상태 실패(DEAD)로 남았다',
     dep: null,
     source: 'DB_LEDGER',
-    canRun: (f) => f.minute != null,
+    /* `deadJobs: null` 은 **모름**이다(그 데이터셋의 job 원장을 응답이 안 준다). 이 축이 없으면
+     * 판정 대상에서 빠지는데, 그게 규칙 전체에 걸치면 `평가됨 · 위반 0`("봤고 괜찮다")이 된다 —
+     * 어댑터가 지킨 구분이 판정 층에서 소멸하던 자리다(어휘 밖 데이터셋만 있는 날의 모양).
+     * 세션이 **0건**인 것은 다르다: 그건 실측이고 잃을 후속 작업 자체가 없다. */
+    canRun: (f) => {
+      const ss = f.minute?.sessions;
+      if (!ss) return false;
+      return ss.length === 0 || ss.some((s) => s.deadJobs != null);
+    },
     axis: 'minute',
+    /* 일부만 모르는 날은 규칙 단위 `못 돎` 으로 표현할 수 없다 — 어느 데이터셋이 판정에서
+     * 빠졌는지 밝힌다. 안 밝히면 그 데이터셋의 유실이 "0건"에 흡수돼 보인다. */
+    note: (f) => {
+      const unknown = [
+        ...new Set((f.minute?.sessions ?? []).filter((s) => s.deadJobs == null).map((s) => s.dataset)),
+      ];
+      return unknown.length
+        ? `후속 처리 원장을 못 읽는 데이터셋 ${unknown.join('·')} — 그 유실은 이 판정에 없다(0건이 아니다)`
+        : null;
+    },
     run: (f) => {
       const date = f.minute?.date ?? '';
+      /* 축은 **데이터셋의 성질**이라 데이터셋 집합으로 온다 — 세션마다 실려 오면 같은
+       * 데이터셋의 두 세션이 다른 축을 갖는 상태가 표현 가능해지고, 그게 안 난다는 보증이
+       * 어댑터의 습관에 걸린다(`MinuteFacts.deadJobsByDate`). */
+      const byDateAxis = new Set(f.minute?.deadJobsByDate);
       const byDate = new Set<string>();
       return (
         (f.minute?.sessions ?? [])
@@ -625,7 +734,7 @@ export const RULES: Rule[] = [
              * `(dataset, date)` 집계 하나뿐이다(어댑터가 `deadJobsByDate` 로 밝힌다). 그걸
              * 세션마다 내면 벤더 둘인 날 같은 3건이 두 사건으로 서서 6건으로 읽히고, 어느
              * 벤더 소관인지 근거도 없다 — 모르는 것을 벤더별로 복제하는 셈이다. */
-            if (s.deadJobsByDate) {
+            if (byDateAxis.has(s.dataset)) {
               if (byDate.has(s.dataset)) return [];
               byDate.add(s.dataset);
               return [

@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { incidentHref, incidentOfVid, investigate, ledgerHref } from './investigation.ts';
+import { evaluate } from '../../rules/evaluate.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
 const FACTS = {
@@ -287,4 +288,84 @@ test('사건 딥링크 — 점 든 대상이어도 경로 조각에 점이 없�
   assert.notEqual(path, '/ops/incidents', `목록 주소다 — 사건 상세가 아니라 목록이 열린다 (${href})`);
   /* 값이 사라지지도 않아야 한다 — 점 없는 경로를 만드느라 식별자를 잘라내면 딥링크가 무의미하다 */
   assert.equal(new URLSearchParams(href.split('?')[1]).get('vid'), 'R13:o.pub');
+});
+
+test('생산자↔소비자 왕복 — 조사 문맥이 실제 세션 행과 맞는다 (문자열 모양이 아니라 사실로 검사한다)', () => {
+  /* 여기까지의 단언은 전부 **손으로 만든 위반**을 넣는다 — 그러면 규칙이 합성 순서를 뒤집어도
+   * (`kis/price_minute`) 이 파일은 전건 통과한다. 엔진이 실제로 낸 위반을 넣고, 나온 문맥이
+   * `f.minute.sessions` 의 **실물 행과 일치하는지**로 검사한다. 두 층 사이의 규약이 이 왕복이다. */
+  const f: Facts = {
+    ...FACTS,
+    /* `FACTS` 는 `as unknown as Facts` 라 필수 축이 비어 있다 — `investigate()` 만 부르는
+     * 단언들에는 충분하지만 `evaluate()` 는 그 축들을 읽는다. 여기서만 채운다. */
+    datasets: [],
+    chain: { feeds: [], stages: [] },
+    outputs: [],
+    boundary: { published_without_delivery: 0, delivery_now_nonpublished: 0 },
+    runbook: {},
+    minute: {
+      date: '2026-08-03',
+      sessions: [
+        { dataset: 'price_minute', sourceGroup: 'kis', phase: 'ACTIVE', leaseExpired: true, overdueNoEvidence: 0, deadJobs: 0 },
+        { dataset: 'news_minute', sourceGroup: 'bigkinds', phase: 'ACTIVE', leaseExpired: false, overdueNoEvidence: 0, deadJobs: 3 },
+      ],
+      /* 뉴스 DEAD 는 날짜 축 집계다 — 그 사건만 벤더를 안 지목한다 */
+      deadJobsByDate: ['news_minute'],
+    },
+  };
+  const ev = evaluate(f, new Date('2026-08-03T16:21:00+09:00'));
+  const minute = ev.incidents.filter((i) => ['R17', 'R18', 'R19'].includes(i.root.rule));
+  assert.equal(minute.length, 2, '픽스처가 실시간 사건을 안 만든다 — 이 단언이 헛돈다');
+
+  for (const I of minute) {
+    const ctx = investigate(I, f).ledger!;
+    if (ctx.sourceGroup) {
+      assert.ok(
+        f.minute!.sessions.some((s) => s.dataset === ctx.dataset && s.sourceGroup === ctx.sourceGroup),
+        `조사 문맥 ${ctx.dataset}/${ctx.sourceGroup} 에 해당하는 세션 행이 없다`,
+      );
+    } else {
+      /* 벤더를 못 싣는 사건은 그 사실을 문장으로 밝혀야 한다 — 안 밝히면 도착한 화면이
+       * "source_group 을 실어 주세요"라는 이 사건에서는 불가능한 조치를 지시한다.
+       *
+       * ⚠️ **규칙 id 로 못박지 않는다.** 예전엔 `R19` 로 고정했는데, 문구를 "날짜 축 집계라"에서
+       * 내린 **이유가 바로** 같은 데이터셋 앵커로 계약 축 규칙(R08·R09)도 벤더 없이 여기 온다는
+       * 것이었다 — 못박으면 그 경로에서 이 단언이 **틀린 메시지로** 깨진다(아래 별도 테스트). */
+      const r = investigate(I, f);
+      assert.match(r.ledgerNote ?? '', /벤더를 지목하지 않아/);
+      assert.doesNotMatch(r.targets[0].label, /실시간 세션/, '벤더 없는 대상을 "세션"이라 불렀다');
+    }
+  }
+});
+
+test('벤더 없는 실시간 사건은 R19 만이 아니다 — 계약 축 규칙(R08)도 같은 앵커로 온다', () => {
+  /* `price_minute` 은 **데이터셋 사실에도 있다**(동봉 스냅샷). 그 계약이 STALE 이면 R08 이
+   * `targetId: 'price_minute'` · `drill: ['dataset','ds-price_minute']` 를 내고, 조사 경로의
+   * 실시간 분기로 들어온다 — 벤더 없이. 예전 안내 문구는 여기서 "이 **수**는 날짜 축 집계라"
+   * 라고 말했는데, R08 은 세는 값이 아예 없어(`metric: null`) 그 문장이 거짓이었다.
+   * 문장을 아는 것까지만으로 내린 이유가 이 경로다. */
+  const f: Facts = {
+    ...FACTS,
+    datasets: [
+      {
+        id: 'price_minute',
+        contract: true,
+        expected_as_of: '2026-08-03',
+        actual_as_of: '2026-07-30',
+      },
+    ],
+    chain: { feeds: [], stages: [] },
+    outputs: [],
+    boundary: { published_without_delivery: 0, delivery_now_nonpublished: 0 },
+    runbook: {},
+  };
+  const ev = evaluate(f, new Date('2026-08-03T16:21:00+09:00'));
+  const r08 = ev.incidents.find((i) => i.root.rule === 'R08');
+  assert.ok(r08, '픽스처가 R08 을 안 만든다 — 이 단언이 헛돈다');
+  const r = investigate(r08, f);
+  assert.equal(r.ledger?.sourceGroup, undefined, '없는 벤더를 지어냈다');
+  /* 세는 값이 없는 사건에 "이 수는 …" 이라고 쓰지 않는다 */
+  assert.equal(r08.root.metric, null);
+  assert.doesNotMatch(r.ledgerNote ?? '', /수는 날짜 축 집계/, '이 사건에서 거짓인 사유를 말했다');
+  assert.match(r.ledgerNote ?? '', /벤더를 지목하지 않아/);
 });
