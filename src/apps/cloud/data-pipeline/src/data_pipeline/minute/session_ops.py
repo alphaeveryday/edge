@@ -135,7 +135,16 @@ def _services() -> list[str]:
     # 남겨두면 같은 서비스에 desired 를 두 번 쓰고(force 라 배포도 두 번), 그 상태로
     # 오토스케일링을 붙이면 공용 경로가 스케일러의 desired 를 계속 되돌린다.
     owned = set(_analysis_services())
-    return [name for name in names if name not in owned]
+    rest = [name for name in names if name not in owned]
+    if not rest:
+        # ⚠️ 위 빈 값 검사만으로는 부족하다 — **빼기가 목록을 비울 수 있다.** 통과시키면
+        # 가격 워커·relay 를 하나도 안 올린 채 소비자만 올리고 exit 0 이 되어, 위 가드가
+        # 막으려던 "스케일링 성공(0건)" 이 그대로 재현된다(빈 값이 아니라 다른 원인으로).
+        raise SystemExit(
+            f"{ENV_SERVICES} 가 {ENV_ANALYSIS_SERVICES} 를 빼고 나면 빈다 — "
+            f"공용 목록에 설명 소비자만 실렸다(공용={names}, 소유={sorted(owned)})"
+        )
+    return rest
 
 
 def _analysis_services() -> list[str]:

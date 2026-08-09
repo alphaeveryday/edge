@@ -380,6 +380,15 @@ class TestAnalysisConsumerOwnList:
 
         assert session_ops._services() == ["svc-worker", "svc-relay"]
 
+    def test_빼기가_공용을_비우면_죽는다(self, monkeypatch, wiring):
+        """빈 값 검사는 **빼기 전**이라 이 경로를 못 막는다 — 통과시키면 가격 워커·relay 를
+        하나도 안 올린 채 소비자만 올리고 exit 0 이 되어, `_services` 의 원래 가드가
+        막으려던 "스케일링 성공(0건)" 이 다른 원인으로 그대로 재현된다."""
+        monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-analysis-consumer")
+
+        with pytest.raises(SystemExit, match="빼고 나면 빈다"):
+            session_ops._services()
+
     def test_컷오버_중_빈_목록은_죽지_않고_공용에_맡긴다(self, monkeypatch, wiring):
         """이 이미지가 terraform apply 보다 **먼저** 착지한 날의 상태다(두 워크플로는 독립).
         여기서 죽으면 거래일 판정 전이라 그날 1분 파이프라인이 통째로 안 뜬다 — 구 task-def
@@ -411,10 +420,14 @@ class TestAnalysisConsumerOwnList:
             pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
 
         import re
-        assert re.search(rf"{session_ops.ENV_ANALYSIS_SERVICES}\s*=", text), \
-            "설명 소비자 목록 env 가 terraform 에 없다 — 코드가 공용에서 뺄 근거를 잃는다"
-        assert "aws_ecs_service.analysis_consumer.name" in text, \
-            "자기 목록 env 가 실제 서비스명을 안 싣는다"
+        # ⚠️ 이름 존재와 값 존재를 **따로** 보면 안 된다 — `aws_ecs_service.analysis_consumer.name`
+        # 은 공용 목록·IAM 에도 있어서, env 가 `""` 로 바뀌어도 두 단언이 각자 통과한다.
+        # 대입식 하나로 묶어야 배선 회귀를 실제로 거부한다.
+        assert re.search(
+            rf"{session_ops.ENV_ANALYSIS_SERVICES}\s*=\s*aws_ecs_service\.analysis_consumer\.name",
+            text,
+        ), ("설명 소비자 목록 env 가 terraform 에서 그 서비스명을 안 싣는다 — "
+            "코드가 공용에서 뺄 근거를 잃고 컷오버 상태로 오인한다")
 
     def test_terraform_공용_목록은_컷오버_안전망으로_남아_있다(self):
         """⚠️ 여기서 빼면 apply 가 이미지 CD 보다 **늦게** 착지한 날 구 이미지가 소비자를
