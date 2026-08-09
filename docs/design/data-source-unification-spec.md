@@ -21,7 +21,7 @@ PIT 안전성 표기: ✅ = 시점 클램프/파티션이 선견을 구조적으
 
 | 표면 | 존·경로 | 생산자 | 주기 | PIT |
 |---|---|---|---|---|
-| RDB 19표 (`price_daily`·`source_event`·`document`… `RDB_TABLES`) | Cloud Event Store (Postgres) | data-pipeline SFN 4레인(시장·뉴스·공시·장중수급) + 1분 레인 | 일배치·하루 3~5슬롯·분 단위 | ✅ 자동 클램프 뷰(`bind_day`) — 단 클램프 열 없는 시점 불변 차원은 ❌ 로 `coverage()` 가 명시 |
+| RDB 19표 (`price_daily`·`source_event`·`document`… `RDB_TABLES`) | Cloud Event Store (Postgres) | data-pipeline SFN 4레인(시장·뉴스·공시·장중수급) + 1분 레인 | 일배치·레인별 하루 1~10슬롯(시장 1·뉴스 2·공시 10·장중수급 5)·분 단위 | ✅ 자동 클램프 뷰(`bind_day`) — 단 클램프 열 없는 시점 불변 차원은 ❌ 로 `coverage()` 가 명시 |
 | `bars_5m` (5분봉) | **정본 = Glue Iceberg** `gl.market_data_kr.edge_intraday_5m` (fmp 백필 + 깊은 재수집 + 1분 롤업 3원천 합본) · 폴백 = `canonical/market_data/intraday_5m` 합집합 | 1분 레인 롤업(2026-08-04~, `ROLLUP_FROM`) + 백필 writer 들(§1.3) | 장중 5분 버킷 + EOD 확정(`rollup-minute-session`) | ✅ `available_at = ts+5분` · 신선도 판정(착지 ≥100종 + 시장 프록시 069500) 미달 시 canonical 폴백 |
 | `s3_price_daily` | `canonical/market_data/price_daily` | `normalize-price` (KIS KR·FMP US) | 일배치 (FMP 는 한도로 토글 off — ALPHA-558) | ✅ trade_date 파티션 |
 | `s3_investor_flow` | `canonical/market_data/investor_flow_daily` | `normalize-investor` (KIS EOD) | 일배치 | ✅ |

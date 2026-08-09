@@ -596,9 +596,10 @@ SNS 알림이 나가고, 그 런은 끝에서 FAILED 로 마감된다(막지 않
 KST, dev ENABLED 컷오버 — 요일은 ALPHA-874 로 넓혔고 슬롯은 ALPHA-893 이 3개→2개로 줄였다)로 `news raw → NormalizeNews → [TagNews·LoadDocuments] → LoadAssertions →
 AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_* 페이즈), `instrument` 마스터는
 시장 SFN 이 단일 writer 로 쓰고 뉴스 SFN 은 읽기 전용 공유한다. PR2(ALPHA-553)로 시장 SFN 에서
-뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다 — 시장 analyze 는
-뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다(ALPHA-893 이후 그 이전 런은 08:10 하나다 —
-15:40 analyze 직전 공급자였던 오후 슬롯이 EOD 가격 설명 폐기와 함께 내려갔다). 뉴스 레인은
+뉴스 스텝(수집·정제·태깅·문서 + 직렬 LoadAssertions·AssembleEvents)이 제거됐다. ⚠️ 여기 있던
+"시장 analyze 가 뉴스 SFN 의 이전 런이 조립해 둔 event 를 소비한다"는 서술은 **ALPHA-806 부터
+사실이 아니다** — 그 티켓이 시장 SFN 에서 analyze 페이즈를 걷어냈고 설명은 분봉 트리거 큐를
+소비하는 상주 서비스만 만든다. 그래서 ALPHA-893 이 오후 슬롯을 내려도 잃는 소비자가 없다. 뉴스 레인은
 운영 원장에 **자체 `pipeline_type`(`news`)·하루 2슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
 (카탈로그 절 참고).
@@ -826,8 +827,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   기사를 skip 하고, 트랜잭션은 날짜별 커밋이라 threading 락 점유가 1분 소비자를 오래 막지
   않는다. 자체 분류기 폐기는 단건 경로 커버리지 실증 후 후속. 결정적 ID 산식·프롬프트는
   엔진과 동일(정본), 창 미지정 = 오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘]
-  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). analyze 는 이 스텝이 만든 event 를 소비한다
-  (ADR-0028). 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
+  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). event 의 소비자는 ADR-0028 기준 analyze 였으나
+  **ALPHA-806 이 시장 SFN 에서 analyze 를 걷어낸 뒤로는 분봉 트리거 큐의 상주 소비자**다. 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
   `LLM_CONCURRENCY` env) — 단 threading 은 novelty 가 available_at 순서·prior 카운트에 의존해
   **직렬** 유지다
 

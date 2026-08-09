@@ -54,7 +54,7 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
 def test_same_day_different_slots_are_separate_runs():
     # WHY: run_key 의 계약은 "이 **슬롯**은 한 번만 계획된다"지 "하루 한 번"이 아니다(ALPHA-564).
     #      날짜로 키를 만들면 DB UNIQUE(run_key) 가 하루 1런을 못박아, 하루 여러 번 도는
-    #      레인(뉴스 15:00·15:30·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
+    #      레인(뉴스 08:10·23:50, iNAV 15분)의 2회차부터가 1회차 슬롯에 흡수되고
     #      수동 실행은 원장에 자리가 없다 — 실제로 2026-07-26 에 관측이 막혔다.
     db = FakeOpsDB()
     ledger = _ledger(db)
@@ -488,9 +488,11 @@ def test_disclosure_lane_owns_the_four_disclosure_tasks(monkeypatch):
 
 def test_due_slots_disclosure_lane_follows_its_own_env(monkeypatch):
     # WHY(ALPHA-721): 레인마다 슬롯 집합이 다르므로 env 도 레인마다여야 한다. 뉴스 env 를
-    #      공유하면 공시 슬롯이 뉴스 시각(15:00·15:30·23:50)으로 잡혀 **존재하지 않는 런**을
+    #      공유하면 공시 슬롯이 뉴스 시각으로 잡혀 **존재하지 않는 런**을
     #      매 주기 PLANNER_MISSING 으로 연다. 미주입 레인은 슬롯 0개여야 한다 — 스케줄이 아직
     #      Planner 를 안 타는 배포(이 PR 시점)에서 거짓 결측을 만들지 않는 안전 기본값이다.
+    #      ⚠️ 아래 뉴스 값은 **합성 픽스처**다(운영은 08:10·23:50) — 이 테스트가 가리는 축은
+    #      "레인이 남의 env 를 안 본다"이지 뉴스 슬롯의 실제 값이 아니다.
     monkeypatch.setenv("OPS_NEWS_SCHED_HHMM", "15:00,15:30,23:50")
     monkeypatch.delenv("OPS_DISCLOSURE_SCHED_HHMM", raising=False)
     due = entry._due_slots(datetime(2026, 7, 24, 16, 30, tzinfo=planner_mod.KST))
