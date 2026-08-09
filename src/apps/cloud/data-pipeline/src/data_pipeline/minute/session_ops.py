@@ -305,12 +305,14 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
             logger.error("%s 세션 계획 실패(exit %d) — 가격 레인은 진행하고 그 Worker 는 "
                          "올리지 않는다(세션 부재 재기동 루프 방지)",
                          lane.dataset, lane_exits[lane])
-
-    for lane, group in lane_groups:
-        if group is not None and lane_exits.get(lane) == 0:
-            # 그 레인 생산자는 세션이 섰을 때만 — 계획 실패 날 올리면 기동 거부 루프만 돈다.
-            # 레인별로 판정한다: 뉴스가 실패해도 iNAV 는 올라가야 한다(서로 독립이다).
-            _scale(desired=1, force=True, services=_lane_worker_services(lane))
+            continue
+        # ⚠️ **그 레인의 스케일업을 다음 레인 계획보다 먼저 한다**(#642 봇 P2). 가격 레인에
+        # 쓴 것과 **같은 논증을 한 층 아래에 적용**한 것이다: 스케일업을 루프 뒤로 모으면
+        # 뒤 레인의 계획이 예외로 죽을 때(iNAV universe 의 S3 ClientError — `plan_session_cli`
+        # 가 안 잡는다) 이미 계획에 성공한 앞 레인이 desired 0 인 채 남는다. 세션은 섰는데
+        # Worker 가 없으니 그 레인은 그날 조용히 아무것도 수집하지 않는다.
+        # 레인별로 판정한다: 뉴스가 실패해도 iNAV 는 올라가야 한다(서로 독립이다).
+        _scale(desired=1, force=True, services=_lane_worker_services(lane))
     # ⚠️ 여러 레인이 실패하면 **첫 실패 코드**를 낸다(0 이 아니면 스케줄 기록에 남는 건
     # 같고, 어느 레인인지는 위 로그가 말한다). 합치거나 최댓값을 쓰면 없는 코드가 나온다.
     return next((code for code in lane_exits.values() if code != 0), 0)

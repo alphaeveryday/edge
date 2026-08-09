@@ -938,6 +938,43 @@ def test_승객_계획이_예외로_죽어도_구동_레인은_올라간다(monk
     ], "승객 계획의 예외가 구동 레인 스케일업을 삼키면 안 된다"
 
 
+def test_뒤_레인_계획이_예외로_죽어도_앞_레인은_이미_올라가_있다(monkeypatch, wiring):
+    """⭐ 위 테스트와 **같은 논증의 한 층 아래**다(#642 봇 P2).
+
+    스케일업을 계획 루프 **뒤**로 모으면, 뒤 레인의 계획이 예외로 죽을 때 이미 계획에
+    성공한 앞 레인이 desired 0 인 채 남는다 — 세션은 원장에 섰는데 Worker 가 없으니
+    그 레인은 그날 조용히 아무것도 수집하지 않는다(계획 성공이라 실패로도 안 보인다).
+    레인은 서로 독립이므로 한 레인의 S3 사고가 다른 레인을 끌고 내려가면 안 된다.
+
+    첫 레인만 계획에 성공시키고 그 다음 레인에서 터뜨린다 — 표 순서에 기대지 않도록
+    `_OPTIONAL_LANES` 에서 앞 둘을 뽑는다.
+    """
+    from data_pipeline.minute.states import SOURCE_GROUPS_BY_DATASET
+
+    first, second = session_ops._OPTIONAL_LANES[0], session_ops._OPTIONAL_LANES[1]
+    for lane in (first, second):
+        monkeypatch.setenv(lane.source_env, sorted(SOURCE_GROUPS_BY_DATASET[lane.dataset])[0])
+        monkeypatch.setenv(lane.services_env, f"svc-{lane.dataset}")
+    monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+
+    def plan(settings, **k):
+        if k["dataset"] == second.dataset:
+            raise RuntimeError("botocore ClientError: AccessDenied on GetObject")
+        return 0
+
+    monkeypatch.setattr(session_ops, "plan_session_cli", plan)
+
+    with pytest.raises(RuntimeError):
+        session_ops.start_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="kis",
+            universe="s3://b/u.json")
+
+    assert wiring.calls == [
+        {"desiredCount": 1, "forceNewDeployment": True, "services": None},
+        {"desiredCount": 1, "forceNewDeployment": True, "services": [f"svc-{first.dataset}"]},
+    ], f"{second.dataset} 의 예외가 이미 계획된 {first.dataset} 의 스케일업을 삼켰다"
+
+
 def test_stop_은_승객_배선_결손에도_부분_스케일다운을_안_남긴다(monkeypatch, wiring):
     """토글은 켜졌는데 워커 목록이 빈 배선에서, 그 조회를 스케일다운 루프 안에서 처음
     하면 공용 서비스를 0 으로 내린 **뒤** SystemExit 이라 나머지 승객 워커가 밤새
