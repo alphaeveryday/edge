@@ -739,7 +739,7 @@ class CausalLake:
             return self.unbound[name]
 
     def _rdb(self, dsn: str) -> None:
-        """Postgres 를 붙이고 **살아 있는 표 전량**에 클램프 뷰를 생성한다 (19R).
+        """Postgres를 붙이고 살아 있는 분석 입력 표에 클램프 뷰를 생성한다 (19R).
 
         표 목록을 손으로 적지 않는다: 적으면 새 표의 기본값이 '안 묶임'이 되고,
         실측이 정확히 그랬다(44표 중 20표만). 원장이 목록의 원천이다.
@@ -898,20 +898,20 @@ class CausalLake:
     def coverage(self, *, effective: bool = False) -> str:
         """바인딩 원장 — **도메인 표 중 몇 %가 시점 뷰로 도달 가능한가**.
 
-        분모에서 빼는 것 둘, 각각 사유가 다르다: 빈 표(적재 안 됨 - 표면 결함 아님),
-        배관 표(ops/tenant/flyway - 도메인이 아님). 뺀 개수를 같이 말한다.
+        분모에서 빼는 것은 빈 표(적재 안 됨), 배관 표(도메인이 아님), 분석 산출물
+        (다음 분석의 입력이 아님)이다. 뺀 개수를 같이 말한다.
         effective=True 면 그날 실제로 행이 남는지까지 잰다(터널 왕복 1회).
         """
-        from ..adapters.sql_surface import HAND_VIEWS, PLUMBING
+        from ..adapters.sql_surface import HAND_VIEWS, is_llm_queryable_table
         live = {t: n for t, n in self.rows.items() if n}
-        plumb = {t for t in live if t.startswith(PLUMBING)}
-        dom = {t: n for t, n in live.items() if t not in plumb}
+        excluded = {t for t in live if not is_llm_queryable_table(t)}
+        dom = {t: n for t, n in live.items() if t not in excluded}
         hand = {n[2:] for n in HAND_VIEWS} & set(dom)
         reach = (set(self.bound) & set(dom)) | hand
         miss = sorted(set(dom) - reach - set(self.unbound), key=lambda t: -dom[t])
         pct = 100.0 * len(reach) / len(dom) if dom else 0.0
         lines = [f"바인딩 {len(reach)}/{len(dom)} = {pct:.0f}%  (도메인 표 기준 · "
-                 f"빈 표 {len(self.rows) - len(live)} · 배관 {len(plumb)} 제외 · "
+                 f"빈 표 {len(self.rows) - len(live)} · 비입력 {len(excluded)} 제외 · "
                  f"뷰 기준일 {self.day or '미고정'})"]
         if miss:
             lines.append("  미도달: " + ", ".join(f"{t}({dom[t]:,})" for t in miss))

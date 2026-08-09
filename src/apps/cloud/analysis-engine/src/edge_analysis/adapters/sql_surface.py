@@ -511,18 +511,36 @@ HAND_VIEWS = ('v_cohort', 'v_daily', 'v_entity', 'v_event', 'v_event_news', 'v_f
 # 도메인이 아닌 배관 표. 분모에서 뺀다 - 못 묶은 게 아니라 **안 묶는다**.
 PLUMBING = ("flyway_", "ops_", "tenant", "admin_", "release_")
 
+# 분석 실행이 만든 산출물. 원장에 물리적으로 남아 있어도 다음 분석의 입력으로 열지 않는다.
+# 이 경계가 없으면 모델이 자기 이전 응답을 근거로 다시 인용하는 순환 증거가 생긴다.
+ANALYSIS_OUTPUT_TABLES = frozenset({
+    "analysis_evidence_bundle",
+    "explanation_evidence_row",
+    "explanation_result",
+    "explanation_run",
+    "explanation_run_event_evidence",
+    "explanation_run_event_price_observation",
+    "hypothesis_trial",
+})
+
 CLAMP_COLS = ("available_at", "evaluated_at", "published_at", "opened_at",
               "as_of_date", "profile_as_of_date", "trade_date", "created_at")
 
 
+def is_llm_queryable_table(name: str) -> bool:
+    """분석 입력만 LLM 조회 표면에 들어간다."""
+    return name not in ANALYSIS_OUTPUT_TABLES and not name.startswith(PLUMBING)
+
+
 def auto_views_sql(cols: dict[str, list[str]], *, as_of: str, trade_date: str,
                    prefix: str, skip: set[str] = frozenset()) -> list[tuple[str, str | None, str]]:
-    """손으로 안 쓴 표 전량에 시점 클램프 뷰를 **생성**한다 (19R).
+    """손으로 안 쓴 분석 입력 표 전량에 시점 클램프 뷰를 **생성**한다 (19R).
 
     왜 자동인가: 클램프를 표마다 손으로 쓰면 새 표는 기본값이 '안 묶임'이 된다.
     실측이 그랬다 - 살아 있는 44표 중 20표만 묶여 있었고, 안 묶인 쪽에
     `thread_discovery_snapshot`(사건별 신규성 축) 같은 1급 재료가 앉아 있었다.
-    생성기가 하나면 커버리지가 **구조적으로** 100% 이고, 클램프 누락이 불가능하다.
+    생성기가 하나면 입력 커버리지가 구조적으로 100% 이고 클램프 누락이 불가능하다.
+    분석 산출물은 원장에 존재해도 다음 분석의 입력이 아니므로 정책에서 제외한다.
 
     반환: (표 이름, 클램프 열 또는 None, CREATE VIEW 문). 클램프 열이 없는 표는
     시점 불변 차원으로 취급하되 **None 을 그대로 보고**한다 - 조용히 통과시키면
@@ -530,7 +548,7 @@ def auto_views_sql(cols: dict[str, list[str]], *, as_of: str, trade_date: str,
     """
     out: list[tuple[str, str | None, str]] = []
     for t in sorted(cols):
-        if t in skip or t.startswith(PLUMBING):
+        if t in skip or not is_llm_queryable_table(t):
             continue
         have = set(cols[t])
         clamp = next((c for c in CLAMP_COLS if c in have), None)
@@ -542,4 +560,5 @@ def auto_views_sql(cols: dict[str, list[str]], *, as_of: str, trade_date: str,
     return out
 
 
-__all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface", "HAND_VIEWS", "PLUMBING", "auto_views_sql", "views_sql"]
+__all__ = ["MAX_ROWS", "SCHEMA", "SqlLedger", "SqlSurface", "ANALYSIS_OUTPUT_TABLES",
+           "HAND_VIEWS", "PLUMBING", "auto_views_sql", "is_llm_queryable_table", "views_sql"]
