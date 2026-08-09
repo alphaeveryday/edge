@@ -24,10 +24,11 @@ jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64]
     # 빌드(~5분) + 롤링 대상 9종 대기(각 10분 상한, 순차 최악 90분) 수용.
-    # ⚠️ 다른 문서의 "상주 서비스 9종"과 **다른 수가 맞다** — 저건 세션 오케스트레이션이
-    # 스케일하는 집합(analysis-consumer 포함)이고, 여기는 **data-pipeline 이미지를 쓰는
-    # 것만**이다. analysis-consumer 는 analysis-engine 이미지라 deploy-analysis-engine.yml
-    # 소관이고, 여기 넣으면 이 이미지 push 가 남의 서비스를 재배포한다.
+    # ⚠️ 다른 문서가 세는 "세션 오케스트레이션이 스케일하는 상주 서비스"와 **집합이 다르다**
+    # — 저건 analysis-consumer 를 포함하는데 그건 analysis-engine 이미지라
+    # deploy-analysis-engine.yml 소관이고, 여기 넣으면 이 이미지 push 가 남의 서비스를
+    # 재배포한다. **수로 대조하지 마라** — 대조할 상대는 `local.minute_services` 맵이다.
+    # 테스트가 잡아 주는 건 "맵에 있는데 여기 없는" 한 방향뿐이니 반대 방향은 사람이 본다.
     # ⚠️ 이 값은 **위 for 루프의 서비스 수에 걸려 있다** — 6종(최악 65분)에 80 이었고
     # ALPHA-890 이 8종(최악 85분)으로, ALPHA-911 이 9종(최악 95분)으로 늘리며 함께
     # 올렸다(여유 15분 유지). 목록을 늘리면 여기도 늘려라.
