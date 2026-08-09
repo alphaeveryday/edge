@@ -121,6 +121,16 @@ class TestParse:
         # KIS 는 통화를 주지 않는다 — 지어내지 않는다
         assert candle.currency is None
 
+    def test_bar_off_the_minute_grid_is_a_shape_error(self):
+        """격자 가드는 **파서**에 있어야 한다 — 소급에만 두면 당일 경로가 열린다.
+
+        격자 밖 봉은 어느 계획 window 에도 안 맞아 조용히 `missing` 이 되고, 원장에는
+        "벤더가 안 줬다"로 보인다. 소급 경로에만 가드가 있던 동안 362종이 도는 당일
+        경로는 `"103030"` 을 그대로 통과시켰다(형제 `kis_sector_index` 는 파서에 뒀다).
+        """
+        with pytest.raises(ValueError, match="분 격자 밖"):
+            parse_minute_row({**row(), "stck_cntg_hour": "103030"}, "005930")
+
     def test_zero_volume_row_is_not_traded(self):
         # 무거래 분: 행은 있고 거래량만 0 — collector 가 no_trade 로 센다(missing 아님)
         assert parse_minute_row(flat_row(), "439870").traded is False

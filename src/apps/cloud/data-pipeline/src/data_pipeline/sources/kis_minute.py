@@ -118,6 +118,14 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
         end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
         raise ValueError(f"{symbol} 분봉 시각 형식 오류: {day!r} {hour!r}") from error
+    if end.second or end.microsecond:
+        # 분 격자를 벗어난 봉은 어느 계획 window 에도 안 맞아 **조용히 missing** 이 되고,
+        # 원장에는 "벤더가 안 줬다"로 보여 원인이 형상 변화임을 가린다(실측 재현:
+        # 09:03:30 한 봉이 389개를 죽인다). 벤더가 그렇게 준 적은 없지만 가드는 있어야
+        # 한다. **파서에 둔다** — 당일·소급 두 경로가 다 여기를 지나므로 한 곳이면 되고,
+        # 형제 `kis_sector_index.parse_index_row` 도 파서에 뒀다. 소급 경로에만 두었을
+        # 때 당일 경로(362종 주 경로)가 열려 있었다.
+        raise ValueError(f"{symbol} 분봉 봉 시각이 분 격자 밖이다: {end.isoformat()}")
     values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS}
     volume = to_decimal(raw.get("cntg_vol"), "cntg_vol", symbol)
     # currency 는 KIS 가 주지 않는다 — 지어내지 않고 None 으로 둔다(KRX 전용이라 KRW 지만,
@@ -459,16 +467,9 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                         f"{symbol} 소급 분봉 행의 거래일 형상이 아니다: {trade_date!r}")
                 if trade_date != self._ymd:
                     continue
-                candle = parse_minute_row(raw, symbol)
-                if candle.window_end.second or candle.window_end.microsecond:
-                    # 분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 같은 오프셋으로 밀어
-                    # 계획된 window 키와 어긋나게 만든다 — 예외도 로그도 없이 그 종목의
-                    # 하루가 통째로 missing 이 된다(실측 재현: 09:03:30 한 봉이 389개를
-                    # 죽인다). 벤더가 그렇게 준 적은 없지만 가드가 없었다.
-                    raise ValueError(
-                        f"{symbol} 소급 분봉 봉 시각이 분 격자 밖이다: "
-                        f"{candle.window_end.isoformat()}")
-                same_day.append(candle)
+                # 분 격자 가드는 `parse_minute_row` 안에 있다 — 당일 경로도 같은 파서를
+                # 지나므로 여기 두면 그쪽이 열린 채로 남는다(그렇게 남아 있었다).
+                same_day.append(parse_minute_row(raw, symbol))
             for candle in same_day:
                 previous = collected.get(candle.window_end)
                 if previous is not None and previous != candle:
