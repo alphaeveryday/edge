@@ -366,9 +366,18 @@ class TestVendorBlankAndDrift:
         _, _, manifest = collector.collect(request_for(31), NOW)
         assert manifest["received"] == ["069500"]
 
-    def test_재발급_뒤에도_만료면_포기한다(self):
-        """시계·자격증명 문제는 반복해도 안 풀린다 — 무한 루프가 tick 을 먹으면 그날
-        나머지 window 가 통째로 밀린다(만료보다 나쁘다)."""
+    def test_재발급_뒤에도_만료면_전역_실패로_전파한다(self):
+        """⭐ 리뷰가 뒤집은 자리다. 처음엔 `Outcome.MISSING` 으로 접었는데 **틀렸다.**
+
+        재발급 뒤에도 만료면 그건 종목 축이 아니라 자격증명·시계다 — 다음 unit 도, 다음
+        window 도 똑같이 만난다. MISSING 으로 접으면 전 종목이 매 분 missing 인
+        INCOMPLETE 가 쌓이는데, 그 모양은 원장에서 "벤더가 안 준다"로 읽혀 원인이 우리
+        쪽임을 가린다. 이 클래스가 "소스 전역 실패는 전파한다"로 못박은 축이고(Rule 12),
+        4xx 갈래는 애초에 raise 하고 있어 **두 만료 경로의 계약이 갈려 있었다**.
+
+        그리고 재발급은 여전히 1회여야 한다 — 무한 루프가 tick 을 먹으면 그날 나머지
+        window 가 통째로 밀린다(만료보다 나쁘다). 전파와 1회 상한을 함께 고정한다.
+        """
         etf_map = {"069500": "KR7069500007"}
         calls = []
 
@@ -386,7 +395,7 @@ class TestVendorBlankAndDrift:
         collector = make_collector(etf_map=etf_map, fetch=always_expired)
         collector.source.auth = Auth()
 
-        _, _, manifest = collector.collect(request_for(31), NOW)
+        with pytest.raises(ValueError, match="EGW00121"):
+            collector.collect(request_for(31), NOW)
 
-        assert manifest["missing"] == ["069500"], "포기는 missing 이다(invalid 아님 — 재시도 축)"
         assert len(calls) == 2, f"1회만 재발급해야 한다 — 실제 {len(calls)}회 호출"

@@ -258,9 +258,21 @@ class KisInavCollector:
             except Exception as error:
                 # rt_cd 로 오는 만료 — `KisNavSource._fetch_etf` 가 `msg_cd=…` 를 예외
                 # 메시지에 실어 올리므로 문자열로 판정된다(실측).
-                if not reissued and token_expired(str(error)):
-                    self._reissue(unit_id, error)
-                    continue
+                if token_expired(str(error)):
+                    if not reissued:
+                        self._reissue(unit_id, error)
+                        continue
+                    # ⚠️ **재발급 뒤에도 만료면 종목 축이 아니다** — 자격증명·시계 문제라
+                    # 다음 unit 도, 다음 window 도 똑같이 만난다. MISSING 으로 접으면 전
+                    # 종목이 매 분 missing 인 INCOMPLETE 가 쌓이는데 그 모양은 "벤더가 안
+                    # 준다"로 읽혀 원인이 우리 쪽임을 가린다 — 이 클래스가 "소스 전역
+                    # 실패는 전파한다"로 못박은 바로 그 축이다(Rule 12). 위 4xx 갈래가
+                    # 같은 상황에서 raise 하므로 계약도 그쪽에 맞춘다.
+                    logger.error(
+                        "KIS iNAV 토큰이 재발급 뒤에도 만료 — 소스 전역 실패로 전파한다"
+                        "(자격증명·시계를 본다): %s(%s)", unit_id, error
+                    )
+                    raise
                 # 종목 단위 실패(요청 실패·깨진 JSON·rt_cd 오류·빈 output·**봉투 형상
                 # 위반**)는 전부 재시도 축이다. 봉투를 INVALID 로 올리면 안 되는 이유는
                 # 블라스트 반경이다 — `status_of` 는 invalid 하나로 **window 전체**를
