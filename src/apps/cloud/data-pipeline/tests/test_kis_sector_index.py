@@ -196,8 +196,9 @@ class TestParse:
     def test_space_padded_label_is_rejected_even_though_it_reads_right(self):
         """자리수만 재면 공백 패딩이 6자리째 샌다 — `strptime` 이 `%H` 에 `" 9"` 를 받는다.
 
-        값은 맞게 읽히지만(`" 93000"` → 09:30:00) 조용히 흡수하면 벤더가 패딩 규약을
-        바꾼 것을 못 본다. 이 가드는 값이 아니라 **형상 변화의 신호**를 지킨다.
+        ⚠️ 관대함은 파이썬 버전에 달렸다 — `%H` 의 `" \\d"` 는 3.12(런타임·CI)에 없고
+        3.14 에 있다. 그래서 값이 아니라 **가드가 막는다**만 잰다. 이미지를 올리는 날
+        조용히 열리는 문이라 미리 막아 둔다.
         """
         with pytest.raises(ValueError, match="날짜·시각 형상이 아니다"):
             parse_index_row({**row(), "stck_cntg_hour": " 93000"}, UNIT_ID,
