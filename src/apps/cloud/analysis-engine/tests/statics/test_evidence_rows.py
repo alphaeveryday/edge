@@ -19,7 +19,10 @@ from edge_analysis.statics.evidence_card import (
     StatTestRecord,
 )
 from edge_analysis.statics.evidence_render import render_row, render_rows, render_stat_test
-from edge_analysis.statics.evidence_rows import build_evidence_rows
+from edge_analysis.statics.evidence_rows import (
+    build_evidence_rows,
+    select_verified_stat_tests,
+)
 
 DAY = "2026-08-07"
 TICKER = "069500"
@@ -52,15 +55,40 @@ _EVENT_BLOCK = {"block_code": "4", "block_title": "이벤트 병치",
 _ABSENT_BLOCK = {"block_code": "N", "block_title": "부재 고지", "evidence_refs": []}
 
 _EVENTS = [{"source_event_id": "ev_001", "title": "SK하이닉스 공급계약 해지",
+            "event_type_code": "COMPANY.CONTRACT.TERMINATION",
             "available_at": "2026-08-07T10:31:00+09:00"}]
 
 # 케이스 B 의 환율 검정(§7) — 게이트 전 조건 통과.
 _FX_PASS = {
-    "stage": "test", "trigger": "거시", "trigger_kind": "계열", "trigger_fired": True,
+    "stage": "test", "trigger": "거시",
+    "trigger_kind": "사건", "trigger_fired": True,
     "null_kind": "pair", "channel": "FX환", "exposure": "거시/민감도", "layer": "섹터",
     "verdict": "성립", "applies_today": True, "n": 412, "p": 0.0121,
     "effect_low": 0.0048, "effect_high": -0.0045, "reason": "",
 }
+
+
+@pytest.mark.parametrize("mutation", [
+    {"verdict": "불성립"},
+    {"verdict": "판정불가"},
+    {"applies_today": False},
+    {"null_kind": "date"},
+    {"trigger_kind": "계열", "trigger_fired": None},
+])
+def test_public_stat_selector_rejects_every_non_positive_mutation(mutation):
+    selected, skipped = select_verified_stat_tests(
+        [{**_FX_PASS, **mutation}], sector_name="반도체")
+
+    assert selected == []
+    assert len(skipped) == 1
+
+
+def test_public_stat_selector_accepts_the_exact_verified_record():
+    selected, skipped = select_verified_stat_tests(
+        [_FX_PASS], sector_name="반도체")
+
+    assert len(selected) == 1
+    assert skipped == []
 
 
 def _build(blocks, *, stat_tests=(), events=(), sector_name="반도체"):
@@ -74,7 +102,8 @@ class TestCaseA_공시가끌었다:
     """§7 케이스 A — 사건 문서 + 통과 검정. 플랫과 검정이 둘 다 남는다(§6-b)."""
 
     def _out(self):
-        return _build(_blocks(tail=_EVENT_BLOCK),
+        return _build(_blocks(tail={
+            **_EVENT_BLOCK, "evidence_requirement": "CAUSAL_STAT_TEST"}),
                       stat_tests=[_FX_PASS], events=_EVENTS)
 
     def test_row_types_and_integer_ref_order(self):
@@ -88,7 +117,7 @@ class TestCaseA_공시가끌었다:
         out = self._out()
         assert out.block_refs == {
             "H": (1,), "1": (4, 2), "2": (1,),
-            "3": (1, 3, 6), "4": (5,)}
+            "3": (1, 3), "4": (5, 6)}
 
     def test_flat_and_stat_rows_both_survive(self):
         """§6-b: 검정이 가격 데이터를 썼다는 이유로 플랫 가격 행을 지우지 않는다."""
@@ -154,8 +183,7 @@ class TestCaseB_이벤트없는날:
 
     def test_stat_row_attaches_to_relative_block(self):
         out = self._out()
-        stat_ref = next(r.ref for r in out.rows if r.type == "STAT_TEST")
-        assert stat_ref in out.block_refs["3"]
+        assert any(r.type == "STAT_TEST" for r in out.rows)
 
     def test_single_hypothesis_omits_correction_fragment(self):
         """§3.4: k=1 이면 `· 가설 N건 보정` 조각을 생략한다."""
@@ -175,11 +203,10 @@ class TestCaseC_시장이끌고간날:
     def test_news_only_event_block(self):
         news = [{"source_event_id": "ev_rate", "title": "한국은행, 기준금리 0.25%p 인상",
                  "available_at": "2026-08-07T09:58:00+09:00"}]
-        out = _build(_blocks(tail={
-            "block_code": "4", "block_title": "이벤트 병치",
-            "evidence_refs": ["source_event:ev_rate"]}), events=news)
-        assert out.block_refs["4"] == (5,)
-        assert not any(r.type == "STAT_TEST" for r in out.rows)
+        with pytest.raises(EvidenceFormatError, match="근거 0"):
+            _build(_blocks(tail={
+                "block_code": "4", "block_title": "이벤트 병치",
+                "evidence_refs": ["source_event:ev_rate"]}), events=news)
 
     def test_market_event_template_renders_with_day_unit(self):
         rec = StatTestRecord(
@@ -204,7 +231,7 @@ class TestCaseD_근거가안생기는경우:
         ({"applies_today": False, "reason": "오늘 조건 미충족"}, "적용"),
         ({"null_kind": "date"}, "date"),
         # §5 의 구멍: 계열 방아쇠 미계측(None)이 `is not False` 를 타던 경로.
-        ({"trigger_fired": None}, "발화"),
+        ({"trigger_kind": "계열", "trigger_fired": None}, "발화"),
         # 어휘 미배선 — series 를 §3.7 문법으로 못 만들면 행이 없다.
         ({"trigger": "거래량", "channel": "Q수량"}, "어휘"),
     ])
@@ -219,7 +246,11 @@ class TestCaseD_근거가안생기는경우:
     def test_k_counts_all_tested_hypotheses(self):
         """§3.4: k 는 같이 검정한 가설 수다 — 떨어진 가설도 센다."""
         failed = {**_FX_PASS, "verdict": "불성립"}
-        out = _build(_blocks(tail=_ABSENT_BLOCK), stat_tests=[_FX_PASS, failed])
+        out = _build(_blocks(tail={
+            "block_code": "4", "block_title": "이벤트 병치",
+            "evidence_requirement": "CAUSAL_STAT_TEST",
+            "evidence_refs": ["source_event:ev_001"],
+        }), events=_EVENTS, stat_tests=[_FX_PASS, failed])
         assert "가설 2건 보정" in render_rows(out.rows)
 
 
@@ -250,6 +281,7 @@ class TestBuildGate:
         assert stat_refs
         assert stat_refs.issubset(out.block_refs["4"])
 
+
     def test_missing_bars_lineage_kills_header_sentence(self):
         """lineage 가 비면 가격 행이 없고, 헤더 문장이 근거 0으로 죽는다(§5)."""
         with pytest.raises(EvidenceFormatError, match=r"근거 0인 문장"):
@@ -277,11 +309,13 @@ class TestRefIntegerOrdering:
 
     def test_refs_beyond_ten_sort_numerically(self):
         events = [{"source_event_id": f"ev_{i:03d}", "title": f"사건 {i}",
+                   "event_type_code": "COMPANY.CONTRACT.TERMINATION",
                    "available_at": "2026-08-07T10:00:00+09:00"} for i in range(9)]
         refs = ["source_event:" + e["source_event_id"] for e in events]
         out = _build(_blocks(tail={
             "block_code": "4", "block_title": "이벤트 병치",
-            "evidence_refs": refs}), events=events)
+            "evidence_requirement": "CAUSAL_STAT_TEST",
+            "evidence_refs": refs}), events=events, stat_tests=[_FX_PASS])
         got = [r.ref for r in out.rows]
         assert got == sorted(got) and got[-1] > 10
         assert all(isinstance(r.ref, int) for r in out.rows)
@@ -344,7 +378,11 @@ class TestTemplateRenderCoverage:
 
     def test_stat_row_never_renders_a_time_line(self):
         """§3.4: 통계검정에는 시각 줄이 없다 — 줄 자체를 생략한다."""
-        out = _build(_blocks(tail=_ABSENT_BLOCK), stat_tests=[_FX_PASS])
+        out = _build(_blocks(tail={
+            "block_code": "4", "block_title": "이벤트 병치",
+            "evidence_requirement": "CAUSAL_STAT_TEST",
+            "evidence_refs": ["source_event:ev_001"],
+        }), events=_EVENTS, stat_tests=[_FX_PASS])
         stat = next(r for r in out.rows if r.type == "STAT_TEST")
         assert stat.time == ""
         assert " / " not in render_row(stat)

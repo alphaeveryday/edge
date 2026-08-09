@@ -237,18 +237,17 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
 
     def fake_statics(_lake, _ticker, _day, _ask=None, **kwargs):
         meta = kwargs["window_meta"]
+        customer = "[H] 헤더\n\n[1] 기여\n\n[2] 구간\n\n[3] 요인"
         meta.update({
             "lineage": [{"view": "bars_5m"}], "news_events": scoped,
-            "final_explanation": {"rendered_text": "[4] 실제 뉴스 14건", "blocks": [
+            "final_explanation": {"rendered_text": customer, "blocks": [
                 {"block_code": "H", "block_title": "헤더", "text": "헤더"},
                 {"block_code": "1", "block_title": "기여", "text": "기여"},
                 {"block_code": "2", "block_title": "구간", "text": "구간"},
                 {"block_code": "3", "block_title": "요인", "text": "요인"},
-                {"block_code": "4", "block_title": "이벤트", "text": "실제 뉴스 14건",
-                 "evidence_refs": [f"source_event:evt_{i:02d}" for i in range(14)]},
             ]},
         })
-        return "[4] 실제 뉴스 14건"
+        return customer
 
     monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
@@ -262,6 +261,10 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
                    if json.loads(item["Body"].decode("utf-8")).get("outcome") == "explained")
     assert len(archive["events"]) == 14
     assert archive["events"][0]["evidence_id"] == "evidence_00"
+    customer_text = archive["explanation"]["stage_results"][
+        "final_explanation"]["rendered_text"]
+    assert "[4]" not in customer_text
+    assert "[N]" not in customer_text
     evidence, _kwargs = store.evidence
     assert len([row for row in evidence.rows if row.type == "NEWS"]) == 14
     assert store.explanation.raw["stage_results"]["event_count"] == 14
@@ -600,7 +603,7 @@ def test_run_archive_preserves_verification_ledgers_before_db_removal(monkeypatc
                     {"block_code": "H", "block_title": "헤더",
                      "evidence_refs": [f"bars_5m:{ticker}"]},
                     {"block_code": "3", "block_title": "요인 분해",
-                     "evidence_requirement": "CAUSAL_STAT_TEST", "evidence_refs": []},
+                     "evidence_refs": []},
                     {"block_code": "N", "block_title": "부재 고지", "evidence_refs": []},
                 ],
             },

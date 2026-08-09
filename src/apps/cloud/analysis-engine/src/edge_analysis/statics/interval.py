@@ -92,6 +92,7 @@ class WindowFacts:
     lineage: tuple[dict, ...] = ()
     final_lines: tuple[str, ...] = ()
     event_ids: tuple[str, ...] = ()
+    suppress_absence: bool = False
 
 
 @dataclass(frozen=True)
@@ -251,7 +252,8 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
     # 검정 계열(statistics·causal)은 **항상 병치한다** - 판정은 코드 산출이고,
     # final_lines 뒤에 숨으면 유의·비유의 사실이 산문에서 사라진다(Rule 12).
     statistical = _lines("statistics", "causal")
-    optional = (facts.final_lines or _lines("disclosure", "flow", "news")) + statistical
+    optional = (facts.final_lines or
+                (_lines("disclosure", "flow", "news") + statistical))
     if optional:
         lines = optional
         systems = (
@@ -263,7 +265,7 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
             "4", "이벤트 병치", lines, systems, refs,
             "CAUSAL_STAT_TEST" if statistical else None,
         ))
-    else:
+    elif not facts.suppress_absence:
         blocks.append(block(
             "N", "부재 고지",
             ("해당 구간에 확인된 공시·보도는 없습니다. "
