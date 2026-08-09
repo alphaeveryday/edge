@@ -270,18 +270,14 @@ class TestCli:
         with pytest.raises(SystemExit, match="session-date 형식 오류"):
             self._cli(settings=self._settings(), session_date="2026-W01-1")
 
-    def test_past_session_date_is_rejected(self):
-        """🔴 이 TR 은 날짜 질의가 불가하다 — 과거일로 돌리면 45종 전건 missing 이 그
-        날짜 원장에 굳고, 소급이 없어 채울 방법이 없다."""
-        with pytest.raises(SystemExit, match="오늘.*이 아니다"):
-            self._cli(settings=self._settings(), session_date="2020-01-02")
 
 
 class TestBoundedGate:
     """`--max-ticks` 는 **확인 게이트**다 — 아무것도 못 봤으면 성공이 아니다."""
 
     def _run_cli(self, monkeypatch, tmp_path, states, *, session_identity=None,
-                 resident=False, env="prod", client_spy=None):
+                 resident=False, env="prod", client_spy=None, today=None,
+                 draining=False):
         """CLI 를 끝까지 몬다 — 판정식을 테스트가 복제하면 코드가 아니라 사본을 잰다."""
         from datetime import datetime as real_datetime
         from types import SimpleNamespace
@@ -329,10 +325,15 @@ class TestBoundedGate:
 
         monkeypatch.setattr(mod.SectorIndexWorker, "tick", fake_tick)
         # 오늘 날짜 게이트를 통과시킨다 — 세션 날짜와 "오늘"을 같은 날로 고정
+        if draining:
+            ledger.request_drain(session_id=next(iter(db.sessions)),
+                                 now=real_datetime(2026, 8, 10, 15, 40, tzinfo=KST))
+        frozen = today or (2026, 8, 10)
+
         class FrozenDatetime(real_datetime):
             @classmethod
             def now(cls, tz=None):
-                return real_datetime(2026, 8, 10, 9, 10, tzinfo=tz)
+                return real_datetime(*frozen, 9, 10, tzinfo=tz)
         monkeypatch.setattr(mod, "datetime", FrozenDatetime)
 
         settings = SimpleNamespace(
@@ -383,6 +384,24 @@ class TestBoundedGate:
         """
         assert self._run_cli(
             monkeypatch, tmp_path, [("DRAINING", {"drain_processed": 2})]) == 0
+
+    def test_과거일은_거부된다(self, monkeypatch, tmp_path):
+        """🔴 이 TR 은 날짜 질의가 불가하다 — 과거일로 돌리면 45종 전건 missing 이 그
+        날짜 원장에 굳고, 소급이 없어 채울 방법이 없다."""
+        with pytest.raises(SystemExit, match="오늘.*이 아니다"):
+            self._run_cli(monkeypatch, tmp_path, ["IDLE"], today=(2026, 8, 11))
+
+    def test_DRAINING_세션은_과거일이어도_닫을_수_있다(self, monkeypatch, tmp_path):
+        """🔴 날짜로 먼저 막으면 자정을 넘긴 DRAINING 세션을 **아무도 못 닫는다**.
+
+        `ack_drain` 을 부를 수 있는 건 Worker 뿐이고(`worker.tick` 의 drain 분기가 유일
+        호출부) QC 는 DRAINED 를 요구한다 — 그 사이가 비면 세션이 영구 고착이다.
+        `drain-minute-session` 은 `--session-id` 만 받아 dataset 을 안 가리므로 이 상태는
+        도달 가능하다(Codex P2). 수집 금지의 근거(소급 불가)는 **닫는 일에는 안 걸린다**.
+        """
+        # 어제 세션이 DRAINING 인 채 오늘이 됐다 — 거부되지 않고 진행해야 한다
+        assert self._run_cli(monkeypatch, tmp_path, [("DRAINED", {"drain_processed": 1})],
+                             today=(2026, 8, 11), draining=True) == 0
 
     def test_vps_env_이_클라이언트까지_간다(self, monkeypatch, tmp_path):
         """🔴 `env` 는 **자격증명과 한 몸**이다 — vps 키를 prod 도메인에 던지면 토큰

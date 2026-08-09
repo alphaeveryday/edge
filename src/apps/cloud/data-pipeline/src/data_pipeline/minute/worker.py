@@ -1019,7 +1019,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
     from ..sources.kis_sector_index import KisSectorIndexClient
     from .models import config_set_identity
     from .sector_index_collect import KisSectorIndexCollector
-    from .states import DATASET_SECTOR_INDEX_MINUTE
+    from .states import DATASET_SECTOR_INDEX_MINUTE, PHASE_DRAINING
 
     if settings.db is None:
         raise SystemExit(
@@ -1043,10 +1043,6 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         parsed_day = datetime.strptime(day, "%Y-%m-%d").date()
     except ValueError:
         raise SystemExit(f"--session-date 형식 오류(YYYY-MM-DD): {day!r}") from None
-    # ⚠️ **수집 전에 막는다** — 위 함수의 도크스트링이 근거다.
-    if (rejected := sector_index_date_rejected(
-            parsed_day, datetime.now(KST).date())) is not None:
-        raise SystemExit(rejected)
     session_id = stable_domain_id(
         "msn", DATASET_SECTOR_INDEX_MINUTE, "kis", parsed_day.isoformat()
     )
@@ -1057,6 +1053,16 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
             f"세션 없음: {DATASET_SECTOR_INDEX_MINUTE}/kis/{parsed_day} — "
             "plan-minute-session --dataset sector_index_minute 이 먼저 돌아야 한다"
         )
+    # ⚠️ **수집 전에 막는다** — 위 함수의 도크스트링이 근거다. 단 **DRAINING 은 예외**다:
+    # 그 세션은 이미 닫히는 중이고 `ack_drain` 을 부를 수 있는 건 Worker 뿐인데
+    # (`worker.tick` 의 drain 분기가 유일한 호출부), QC 는 DRAINED 를 요구한다
+    # (`eod.py` — ACTIVE·DRAINING 은 "QC 자격 없다"). 날짜로 먼저 막으면 자정을 넘긴
+    # DRAINING 세션은 **아무도 닫을 수 없어 영구 고착**된다 — `drain-minute-session` 은
+    # `--session-id` 만 받아 dataset 을 안 가리므로 이 상태는 도달 가능하다(Codex P2).
+    if snapshot["phase"] != PHASE_DRAINING and (
+            rejected := sector_index_date_rejected(
+                parsed_day, datetime.now(KST).date())) is not None:
+        raise SystemExit(rejected)
     index_map = settings.minute_sector_index.index_map
     expected_version, expected_hash = config_set_identity(index_map)
     # ⚠️ **기동에서 막는다.** 세션이 다른 index_map 으로 고정돼 있으면 tick 마다
