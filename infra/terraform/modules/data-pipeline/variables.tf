@@ -528,6 +528,14 @@ variable "minute_session_news_source_group" {
   default     = "bigkinds"
 }
 
+variable "minute_session_inav_source_group" {
+  description = "etf_inav_minute 세션의 source_group(ALPHA-882). 비우면 iNAV 레인 미편입 — start 가 iNAV 세션을 계획하지 않고 inav-worker 도 올리지 않는다"
+  type        = string
+  # iNAV 는 KIS 단독이다 — 토스 분봉 API 에 NAV 축이 없다(`1m`·`1d` 캔들만). 어휘 밖 값은
+  # 오케스트레이터가 기동에서 거부한다(`_lane_source_group`).
+  default = "kis"
+}
+
 variable "minute_session_disclosure_source_group" {
   description = "disclosure_minute 세션의 source_group(ALPHA-875). 비우면 공시 레인 미편입 — 공시는 SFN 10슬롯 레인이 계속 소유한다"
   type        = string

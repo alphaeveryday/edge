@@ -3,8 +3,10 @@
 # SFN 단발 task 와 달리 **ECS Service** 다: Worker(수집)·Relay(outbox 발행)·
 # Consumer(가격 판정)는 tick 루프 상주 프로세스고, 재기동 책임이 ECS 에 있다
 # (DB 오류는 프로세스가 죽어서 드러낸다 — 각 *_cli 계약).
-# news-worker 포함(ALPHA-717) — 세션 오케스트레이션이 news 세션(news_minute/bigkinds)도
-# 계획·드레인한다(MINUTE_SESSION_NEWS_SOURCE_GROUP).
+# 세션 결속 생산자 3종 포함 — 세션 오케스트레이션이 그 세션도 함께 계획·드레인한다:
+# news-worker(ALPHA-717, news_minute/bigkinds) · disclosure-worker(ALPHA-875,
+# disclosure_minute/dart) · inav-worker(ALPHA-882, etf_inav_minute/kis).
+# 셋 다 공용 스케일 목록에서 빠지고 자기 목록으로 올라간다(local.session_bound_workers).
 #
 # ⚠️ desired_count 는 **세션 오케스트레이션이 런타임에 바꾸는 값**이다 —
 # lifecycle ignore_changes 가 없으면 무관한 apply 가 장중에 워커를 내린다.
@@ -143,9 +145,10 @@ locals {
     # 뉴스 추출 Consumer 2종(ALPHA-713) — 핸들러·스텝이 같고 큐 URL 만 다르다(커널이
     # queue_url 하나만 받으므로 다중 큐 개조 대신 서비스를 분리한다 — 커널 무수정).
     # LLM 설정은 tag-news 관례(LLM_* env, base_url·model 은 코드 기본값=DeepSeek).
-    # 이 맵에 든 것만으로 세션 오케스트레이션의 스케일 대상이 된다(MINUTE_SESSION_SERVICES
-    # 가 이 맵에서 파생) — 생산자(news-worker, ALPHA-707)가 세션 결속이라 소비자도 같은
-    # 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
+    # 이 맵에 들어야 세션 오케스트레이션의 스케일 대상이 된다 — 다만 **공용 목록**
+    # (MINUTE_SESSION_SERVICES)은 여기서 세션 결속 생산자를 뺀 나머지다(session_bound_workers).
+    # 소비자 2종은 공용에 남는다: 생산자(news-worker, ALPHA-707)가 세션 결속이라 소비자도
+    # 같은 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
     news-consumer-realtime = {
       command = ["news-consumer"]
       environment = merge(local.env, local.db_env, {
@@ -188,13 +191,44 @@ locals {
         DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY = "${aws_secretsmanager_secret.dart.arn}:apikey::"
       }
     }
+    # 장중 iNAV 생산자(ALPHA-851/882) — 소비자가 없다. `commit_inav_window` 가 job·outbox
+    # 를 일부러 안 만들어(가격 것을 빌려 쓰면 NAV 가 price-analysis-realtime 으로 나가
+    # 설명이 발화된다) 이 레인은 canonical 까지만 간다. 큐도 안 늘어난다.
+    # ⚠️ 질의 심볼(`krx_etf.source.etf_map`)은 동봉 sources.toml 이 정본이라 env 가 없다 —
+    # 세션 유니버스(`--universe`)와 **다른 출처**이고, 갈리면 etf_map 에 없는 unit 이 매
+    # window invalid 로 드러난다(조용히 missing 으로 접지 않는다).
+    inav-worker = {
+      command = ["inav-worker", "--universe", local.minute_universe_uri]
+      environment = merge(local.env, local.db_env, {
+        # 토큰 공유 캐시(ALPHA-573) — price-worker 와 **같은 앱키를 쓴다**. 상주 워커엔
+        # 없으면 안 된다: 매 기동 발급이 분당 1회 제한에 걸리고, 가격 레인·15:40 배치와
+        # 발급을 다툰다.
+        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+        # 거래일 판정 — `skip_reason` 을 **여는 쪽이 이 컨테이너**다(kis_inav.py). 배치 kis
+        # 브랜치(tasks.tf env_sets.kis)와 같은 집합이어야 한다. 안 주면 `is_trading_day` 가
+        # 평일 공휴일을 거래일로 보고 가드가 **주말만 아는 상태로 조용히 퇴화**한다 —
+        # 오케스트레이터가 안 띄우는 날에도 이 서비스가 살아 있을 수 있다(수동 확인·
+        # EOD stop 타임아웃 후 잔존 desired_count=1). 그때 KIS 는 직전 거래일 값을 주고
+        # 그게 오늘 파티션에 앉는다(유령 as-of, ALPHA-387 과 동형).
+        OPS_KR_HOLIDAYS = join(",", var.kr_holidays)
+      })
+      # 일별 NAV(tasks.tf ingest-raw-nav)와 **같은 자격증명 쌍**이다 — 벤더도 TR 계열도
+      # 같아서 그릇을 나눌 이유가 없다. 미주입이면 워커가 기동에서 죽는다(fail-loud).
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD                = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
+        DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+      }
+    }
   }
+
 }
 
 # 세션 결속 생산자 — 공용 스케일 목록에서 빼고 각자 자기 목록으로 올린다(세션이 선 날만).
-# 여기 넣는 것과 `MINUTE_SESSION_*_WORKER_SERVICES` 에 싣는 것이 **짝**이다.
+# 여기 넣는 것과 `MINUTE_SESSION_*_WORKER_SERVICES` 에 싣는 것이 **짝**이다. 소비자는
+# 여기 안 넣는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관이다.
 locals {
-  session_bound_workers = ["news-worker", "disclosure-worker"]
+  session_bound_workers = ["news-worker", "disclosure-worker", "inav-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -363,8 +397,9 @@ resource "aws_ecs_task_definition" "minute_session" {
 
       MINUTE_SESSION_CLUSTER = var.cluster_arn
       # 서비스명을 코드에서 다시 조립하지 않는다 — rename 이 조용한 no-op 스케일링이 된다.
-      # ⚠️ news-worker 는 공용 목록에서 뺀다 — 뉴스 세션 계획이 **성공한 날만** 올린다
-      # (실패 날 올리면 세션 부재 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음).
+      # ⚠️ 세션 결속 생산자(local.session_bound_workers — news-worker·disclosure-worker·inav-worker)는 공용
+      # 목록에서 뺀다 — 자기 세션 계획이 **성공한 날만** 올린다(실패 날 올리면 세션 부재
+      # 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음). 각자 아래 자기 목록으로 간다.
       # 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
       # analysis-consumer(ALPHA-719)도 세션 결속이다 — 트리거는 장중에만 발생하고,
       # ReturnsNotReady 는 분봉 입력의 120초 재시도(ALPHA-710)라 세션 안에 풀린다. ⚠️설명 큐는
@@ -381,13 +416,20 @@ resource "aws_ecs_task_definition" "minute_session" {
       ))
       MINUTE_SESSION_NEWS_WORKER_SERVICES       = aws_ecs_service.minute["news-worker"].name
       MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES = aws_ecs_service.minute["disclosure-worker"].name
+      MINUTE_SESSION_INAV_WORKER_SERVICES       = aws_ecs_service.minute["inav-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
-      # 뉴스 세션 편입(ALPHA-717) — start 가 news_minute 세션도 계획, stop 이 함께 드레인.
+      # 승객 세션 편입 — start 가 그 세션도 계획하고 stop 이 함께 드레인한다. 비우면
+      # 그 레인만 미편입이고 구동 레인(가격)은 그대로 돈다.
+      # ⚠️ 승객은 `--dataset` 인자가 **아니다**(그건 구동 레인 전용 — states.SCALED_DATASETS).
+      # 자기 워커를 소유해도 인자로는 못 온다: `_scale` 이 dataset 을 안 보고 공용 목록을
+      # 내려서, stop 을 승객 dataset 으로 부르면 살아 있는 price-worker 가 내려간다.
       MINUTE_SESSION_NEWS_SOURCE_GROUP = var.minute_session_news_source_group
       # 공시 세션 편입(ALPHA-875) — 같은 토글 축. 비우면 공시 레인은 계획도 스케일도 안 된다
       # (그 상태가 곧 컷오버 전이다 — SFN 레인이 계속 소유한다).
       MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP = var.minute_session_disclosure_source_group
+      # iNAV 세션 편입(ALPHA-882) — 같은 토글 축.
+      MINUTE_SESSION_INAV_SOURCE_GROUP = var.minute_session_inav_source_group
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

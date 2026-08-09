@@ -49,6 +49,32 @@ def test_tracing_client_records_prompt_and_response_in_order():
     assert trace[1]["response"] == {"ok": 1}
 
 
+class _UsageClient(_FakeClient):
+    """실물 `DeepSeekClient` 처럼 마지막 응답의 usage 를 노출하는 클라이언트."""
+
+    last_usage = {"prompt_tokens": 120, "completion_tokens": 34, "total_tokens": 154}
+
+
+def test_tracing_client_records_token_usage_when_the_client_exposes_it():
+    """응답의 토큰 usage 가 trace 에 남는다(ALPHA-894) — 대시보드 usage 합산의 원천.
+
+    녹화가 빠지면 발화당 LLM 비용을 사후에 잴 방법이 없다.
+    """
+    with collect_trace() as trace:
+        TracingClient(_UsageClient({"ok": 1})).complete_json("SYS", "USER")
+
+    assert trace[1]["usage"] == {
+        "prompt_tokens": 120, "completion_tokens": 34, "total_tokens": 154}
+
+
+def test_tracing_client_leaves_usage_absent_when_the_client_has_none():
+    # 결측은 결측으로 남는다 — usage 를 지어내면 합산이 거짓말을 한다(Rule 12).
+    with collect_trace() as trace:
+        TracingClient(_FakeClient({"ok": 1})).complete_json("SYS", "USER")
+
+    assert "usage" not in trace[1]
+
+
 def test_tracing_client_records_the_failed_turn_before_reraising():
     # 재시도 루프의 어느 턴이 죽었는지가 디버깅의 본체다 — 실패가 흔적 없이 사라지면 안 된다.
     with collect_trace() as trace:

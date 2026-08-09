@@ -142,11 +142,16 @@ UNIVERSE_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_ETF_INAV_MINUTE})
 # `recovery_budget_per_tick` 은 **일 총량을 안 줄인다**(720 window 는 그대로다) —
 # 줄이는 것은 tick 하나의 길이뿐이니 lease 예산과 짝으로만 만진다.
 EXTENDED_HOURS_DATASETS = frozenset({DATASET_PRICE_MINUTE, DATASET_DISCLOSURE_MINUTE})
-# **상주 서비스를 스케일하는 세션**의 dataset. `start/stop-minute-session` 이 올리고
-# 내리는 서비스 목록은 dataset 별이 아니라 **공용**이라, 여기 없는 dataset 으로 stop 을
-# 부르면 phase 게이트는 그 세션만 보고(claim 0 → 즉시 통과) 큐·outbox 게이트는 전역이라
-# **살아 있는 price-worker 를 내린다**. 어휘(`MINUTE_DATASETS`)와 갈리는 것이 정상이다 —
-# 어휘는 "원장이 아는 dataset", 이건 "그 세션이 서비스를 소유하는가"다.
+# `start/stop-minute-session` 의 **구동 레인**이 되는 dataset. 그 명령이 올리고 내리는
+# 서비스 목록은 dataset 별이 아니라 **공용**이고 `_scale` 은 dataset 을 아예 안 봐서,
+# 여기 없는 dataset 으로 stop 을 부르면 phase 게이트는 그 세션만 보고(claim 0 → 즉시
+# 통과) 큐·outbox 게이트는 전역이라 **살아 있는 price-worker 를 내린다**.
+# 어휘(`MINUTE_DATASETS`)와 갈리는 것이 정상이다 — 어휘는 "원장이 아는 dataset",
+# 이건 "그 dataset 이 start/stop 의 인자가 될 수 있는가"다.
+# ⚠️ **자기 상주 서비스를 갖는 것과는 다른 축이다.** news_minute·etf_inav_minute 은
+# 각자 워커를 소유하지만 여기 없다 — 구동 레인(price_minute)의 스케줄에 얹혀 도는
+# 승객이고, env 토글로 켜진다(`session_ops.PASSENGER_LANES`). 소유가 늘었다고 여기
+# 추가하면 위 사고가 그대로 난다.
 # 도움말 산문은 게이트가 아니다(Rule 12) — `rollup.py` 의 상수 리젝트가 같은 선례다.
 SCALED_DATASETS = frozenset({DATASET_PRICE_MINUTE})
 

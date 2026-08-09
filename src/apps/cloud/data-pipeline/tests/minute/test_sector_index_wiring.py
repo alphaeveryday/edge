@@ -17,7 +17,7 @@ from data_pipeline.lake.storage import (
     canonical_sector_index_minute_prefix,
 )
 from data_pipeline.minute.models import Universe, plan_session_windows
-from data_pipeline.minute.session_ops import _resolve
+from data_pipeline.minute.session_ops import _OPTIONAL_LANES, _resolve
 from data_pipeline.minute.states import (
     DATASET_SECTOR_INDEX_MINUTE,
     EXTENDED_HOURS_DATASETS,
@@ -28,17 +28,23 @@ from data_pipeline.minute.states import (
 )
 
 
-def test_어휘에_있어도_서비스를_소유하지_않으면_stop_대상이_아니다():
-    """어휘와 스케일 권한은 **다른 축**이다(iNAV 와 같은 가드).
+def test_어휘에_있어도_구동_레인도_선택_레인도_아니다():
+    """축이 **셋**이다 — 어휘 / 선택 레인(자기 서비스 소유) / 구동 레인(스케일 권한).
+    이 dataset 은 첫째만 갖는다.
 
-    start/stop 이 올리고 내리는 서비스 목록은 dataset 별이 아니라 공용이다. 업종지수
-    세션을 하나 계획한 뒤 stop 을 부르면 phase 게이트는 그 세션만 보고 통과하는데
-    큐·outbox 게이트는 전역이라 **살아 있는 price-worker 가 내려간다**.
+    iNAV·뉴스·공시는 자기 워커 서비스를 소유해 `_OPTIONAL_LANES` 에 있지만 이 dataset 은
+    **terraform 배선이 없다**(bounded 수동 실행). 그 사실을 값으로 못박는다 — 나중에
+    상주로 올릴 때 이 단언이 "레인 등록도 같이 해야 한다"를 알려 준다.
+
+    구동 레인이 아닌 이유는 공통이다: `_scale` 은 dataset 을 안 보고 **공용 목록**을
+    내리므로, 이 세션으로 stop 을 부르면 살아 있는 price-worker 가 함께 내려간다.
     """
-    assert DATASET_SECTOR_INDEX_MINUTE in MINUTE_DATASETS      # 어휘엔 있고
-    assert DATASET_SECTOR_INDEX_MINUTE not in SCALED_DATASETS  # 스케일 권한은 없다
+    lane_datasets = {lane.dataset for lane in _OPTIONAL_LANES}
+    assert DATASET_SECTOR_INDEX_MINUTE in MINUTE_DATASETS         # 어휘엔 있고
+    assert DATASET_SECTOR_INDEX_MINUTE not in lane_datasets       # 서비스는 없고
+    assert DATASET_SECTOR_INDEX_MINUTE not in SCALED_DATASETS     # 스케일 권한도 없다
 
-    with pytest.raises(SystemExit, match="상주 서비스를 소유하지 않는다"):
+    with pytest.raises(SystemExit, match="구동 레인이 아니다"):
         _resolve(DATASET_SECTOR_INDEX_MINUTE, "kis")
 
 

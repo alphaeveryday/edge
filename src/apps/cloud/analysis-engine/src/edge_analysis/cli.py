@@ -25,7 +25,7 @@ from .adapters.price_daily import (
 )
 from .adapters.readonly import connect_readonly, emit, run_query
 from .adapters.universe import load_universe
-from .config import PipelineError, _load_pg, load_settings, parse_trade_date
+from .config import PipelineError, _env, _load_pg, load_settings, parse_trade_date
 from .observability import log
 from .pipeline import run
 
@@ -102,6 +102,13 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     source = querier.add_mutually_exclusive_group(required=True)
     source.add_argument("--sql", help="a single SELECT/WITH statement")
     source.add_argument("--file", help="path to a file holding one statement")
+
+    # 발화 스냅샷 대시보드 수동 재생성(ALPHA-894). 런마다 자동 재생성되지만, 배선
+    # 이전 데이터·재생성 실패 뒤 복구는 이 경로로 멱등하게 다시 만든다.
+    reporter = sub.add_parser(
+        "report", help="발화 스냅샷 대시보드(단일 HTML)를 전량 재조회로 재생성.")
+    reporter.add_argument("--out-dir", default=None,
+                          help="로컬 출력 디렉터리(미지정=S3 reports/dashboard.html 덮어쓰기)")
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -237,6 +244,35 @@ def load_price_daily_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def report_command(args: argparse.Namespace) -> int:
+    """대시보드 재생성 1건: 읽기전용 접속 → 전량 조회 → 렌더 → 덮어쓰기.
+
+    ``load_settings`` 를 거치지 않는다 — 대시보드 재생성에 LLM 키가 필요하지 않다.
+    필요한 것은 Postgres 읽기와 S3 뿐이다(`query_command` 와 같은 결).
+    """
+    import os
+    from types import SimpleNamespace
+
+    from .adapters.archive import _DEFAULT_PREFIX
+    from .adapters.lake import make_s3_client
+    from .report import regenerate_dashboard
+
+    prefix = os.environ.get("ALPHAMALE_RESULT_S3_PREFIX", "").strip() or (
+        f"s3://{_env('ALPHAMALE_LAKE_BUCKET', 'edge-dev-pipeline-lake')}/"
+        f"{_DEFAULT_PREFIX}")
+    s3 = make_s3_client(SimpleNamespace(
+        aws_profile=_env("AWS_PROFILE"),
+        region=_env("AWS_REGION", "ap-northeast-2")))
+    conn = connect_readonly(_load_pg())
+    try:
+        location = regenerate_dashboard(
+            conn=conn, s3=s3, result_prefix=prefix, out_dir=args.out_dir)
+    finally:
+        conn.close()
+    log("report.done", location=location)
+    return 0
+
+
 def query_command(args: argparse.Namespace) -> int:
     """읽기전용 질의 1건: 가드 → 상한 실행 → JSON Lines 출력.
 
@@ -284,6 +320,8 @@ def main(argv: list[str] | None = None) -> int:
             return load_price_daily_command(args)
         if args.command == "query":
             return query_command(args)
+        if args.command == "report":
+            return report_command(args)
         settings = load_settings(trade_date=args.trade_date, request_id=args.request_id,
                                  trigger_id=args.trigger_id)
         s3 = make_s3_client(settings)

@@ -316,8 +316,10 @@ def main(argv: list[str] | None = None) -> int:
                              # DATASET)가 SSOT 라 dataset 이 늘 때 여기가 조용히 낡는다
                              f"{'|'.join(sorted(MINUTE_DATASETS))}, "
                              "start/stop-minute-session 은 **price_minute 만**"
-                             "(공용 서비스 목록을 스케일하므로 그 세션이 서비스를 "
-                             "소유해야 한다 — states.SCALED_DATASETS), "
+                             "(공용 서비스 목록을 스케일하므로 구동 레인만 인자가 된다 — "
+                             "states.SCALED_DATASETS. news_minute·etf_inav_minute 은 "
+                             "자기 워커를 소유해도 인자가 아니라 env 토글로 켜지는 "
+                             "승객이다 — session_ops.PASSENGER_LANES), "
                              "rollup-minute-session 도 **price_minute 만**"
                              "(5분 파생은 가격 분봉 canonical 전용 경로다)")
     parser.add_argument("--source-group", default=None,
