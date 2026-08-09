@@ -215,7 +215,8 @@ DATA_PIPELINE_NEWS__SOURCES__FMP__API_KEY=... \
 # **카테고리 주도 전체 수집**(검색어 없음, ALPHA-417) — 경제 대분류(sources.toml
 # `category_codes`, 필수)의 창 안 뉴스 전체를 받는다. 종목 연결(mentions)은 수집이 아니라
 # 정규화의 종목명 탐지(ALPHA-416) 산출물이다.
-# 창 미지정 = **`[어제, 오늘]` 2일**(다른 증분 스텝과 같은 `default_window`). 하루가 아니다 —
+# 창 미지정 = **`[어제, 오늘]` 2일**(다른 증분 스텝과 같은 `default_window`, 날짜는 **KST
+# 달력** — ALPHA-883). 하루가 아니다 —
 # 깊이가 2배라 `max_pages` 산정이 여기 걸린다(sources.toml 주석이 근거 SSOT).
 # 받아야 할 건수는 응답의 `totalCount` 가 정본이고, 못 채우면 유실 건수와 함께 절단 경고를
 # 낸다(kind=truncation, exit 0). 그 경고는 `<name>-collection-truncated` 알람이 받는다
@@ -553,6 +554,14 @@ LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 > 지원한다. 어댑터는 심볼별로 창을 페이지 끝까지 순회해 고volume 날에도 누락이 없다.
 > 스케줄 실행은 날짜창을 생략하면 되고(앱이 어제~오늘 계산 — EventBridge Scheduler 는
 > 정적 입력만 넣어 동적 날짜를 못 만들기 때문), 과거 적재만 `--from/--to` 로 명시한다.
+> ⚠️ **그 날짜가 어느 달력인지는 벤더가 정한다**(ALPHA-883, `run.window_calendar_tz`) — 우리가
+> 만든 날짜 문자열이 그대로 벤더 질의에 실리기 때문이다. 기준은 벤더 국적이 아니라 **그
+> 데이터가 어느 시장의 날짜인가**다: BigKinds·DART·KIS 는 KST, **yahoo 도 KST**(미국 서비스지만
+> `index_map` 이 `^KS11`·`^KQ11` 뿐이다), **FMP 만 미국 달력(UTC)**. 프로세스 시계(UTC)로 뽑으면
+> KST 벤더는 09:00 KST 이전에 도는 슬롯에서 하루가 밀린다 — 지금 모든 슬롯이 09:00 이후라 안
+> 드러날 뿐이었고, 공시 09:00 슬롯은 그 경계에 정확히 서 있었다.
+> 창을 쓰는 스텝이 늘면 달력을 표에 **선언해야** 한다(미선언은 fail-loud) — 기본값을 두면 새
+> 스텝이 조용히 한쪽으로 떨어지고 그 창은 하루가 밀린 채 성공한다.
 
 > uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서, pip ≥ 25.1):
 > ```bash

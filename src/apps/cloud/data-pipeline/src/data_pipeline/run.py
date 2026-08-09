@@ -132,8 +132,77 @@ def make_run_id(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
 
 
+# 증분 창의 날짜는 **프로세스 시계가 아니라 벤더 달력**이다(ALPHA-883). 우리가 만든 날짜
+# 문자열이 그대로 벤더 질의에 실리기 때문이다 — BigKinds `search_page` 의 startDate/endDate 가
+# 그 자리이고, 그 벤더는 KST 벽시계로 라벨한다(`normalize_news._KST`). canonical 뉴스 파티션도
+# `published_at[:10]` 이라 KST 날짜 키라, 그 파티션을 고르는 `tag-news` 창도 같은 축이다.
+#
+# UTC 로 날짜를 뽑으면 KST=UTC+9 이라 **09:00 KST 이전에 도는 슬롯에서 하루가 밀린다.** 지금
+# 안 깨지는 유일한 이유는 모든 스케줄 슬롯이 09:00 KST 이후이기 때문이고(공시 09:00 은 정확히
+# 경계다), 그 불변식은 어디에도 적혀 있지 않았다. 08:10 슬롯 하나를 넣는 순간 그 런은 전날 창을
+# 다시 긁고 그날 뉴스를 0건 가져온다 — **에러 없이** 조용히.
+# 이 레포엔 축이 다른 시간 관례가 **둘** 있다. **순간**은 UTC 다(`make_run_id`·`started_date`
+# 파티션·원장 타임스탬프·`ops.entry._scheduled_time`). **시장 날짜**는 KST 다 —
+# `sources/dart_disclosure.py` 가 "파이프라인 전체가 KR 시장 기준이라 KST 다"라고 명문화했고
+# `assemble_events`·`dart_values` 도 같은 관례다. 증분 창은 후자(어느 영업일의 데이터인가)라
+# KST 쪽이지만, **기본값은 두지 않는다** — 창을 쓰는 스텝이 늘 때 어느 달력으로든 조용히
+# 떨어지면 그 창은 하루가 밀린 채 **성공**한다. 스텝마다 선언하고 미선언은 fail-loud 다
+# (`ops.entry._LANE_STATE_MACHINE_ARN_ENV` 와 같은 자세, Rule 12).
+KST = timezone(timedelta(hours=9))
+# 벤더가 `--source` 로 갈리는 스텝과 그 미지정 기본값. **아래 분기가 이 dict 를 읽는다** —
+# 리터럴로 두 벌을 두면 한쪽만 바뀌는 순간 창은 이 벤더로, 질의는 저 벤더로 나간다(리뷰 실측:
+# 분기 쪽 기본값만 바꿔도 전 스위트가 초록이었다). 사실을 하나로 줄여 드리프트를 불가능하게 한다.
+_VENDOR_SPLIT_STEPS = {"ingest-raw": "fmp", "ingest-price-raw": "fmp"}
+# 창을 쓰는 스텝의 달력. 벤더가 안 갈리는 스텝은 스텝이 곧 벤더라 source 를 안 본다.
+# 기준은 벤더 국적이 아니라 **그 데이터가 어느 시장의 날짜인가**다.
+_WINDOW_CALENDAR: dict[tuple[str, str | None], timezone] = {
+    ("ingest-raw", "fmp"): timezone.utc,             # 미국 뉴스
+    ("ingest-raw", "bigkinds"): KST,
+    ("ingest-price-raw", "fmp"): timezone.utc,       # 미국 시세
+    ("ingest-price-raw", "kis"): KST,
+    ("ingest-price-raw", "yahoo"): KST,              # index_map 이 ^KS11·^KQ11 (KOSPI·KOSDAQ)
+    ("ingest-raw-nav", None): KST,                   # KIS
+    ("ingest-raw-inav", None): KST,                  # KIS
+    ("ingest-raw-investor", None): KST,              # KIS
+    ("ingest-raw-disclosure", None): KST,            # DART
+    # canonical 뉴스 파티션(`published_at[:10]`)은 벤더마다 달력이 다르다 — normalize 가
+    # BigKinds 는 KST 로, FMP 는 UTC 로 라벨한다. tag-news 는 벤더가 안 갈려 한쪽을 골라야
+    # 하고, 실제로 도는 건 KR 레인이라 KST 다.
+    ("tag-news", None): KST,
+    ("load-disclosure", None): KST,                  # canonical 공시(report_date = DART 접수일)
+}
+
+
+def window_calendar_tz(step: str, source: str | None) -> timezone:
+    """이 스텝·벤더의 증분 창이 쓰는 달력. 미선언은 fail-loud.
+
+    ponytail: 달력의 임자는 사실 벤더 어댑터다 — KST 어댑터 10여 개가 이미 자기 `_KST` 를
+    들고 있고 `dart_disclosure._window_segments` 는 그걸로 창 끝까지 채운다. 이 표는 그 사실의
+    재진술이고, 창이 어댑터 생성 **전에** 계산되기 때문에(`ingest_*.run(…, from_date, to_date)`)
+    존재한다. 창 계산을 분기 뒤로 옮기면 표가 통째로 사라진다 — 6분기를 건드리는 일이라 별건.
+    """
+    if step in _VENDOR_SPLIT_STEPS:
+        vendor = source or _VENDOR_SPLIT_STEPS[step]
+        tz = _WINDOW_CALENDAR.get((step, vendor))
+        if tz is None:
+            # 표의 키 집합이 곧 그 스텝의 벤더 화이트리스트다. 오타난 `--source` 를 "달력
+            # 미선언"으로 진단하면 시킨 대로 표에 넣어도 아무것도 안 고쳐지고, 그제서야
+            # 분기의 진짜 에러를 본다 — 게다가 그 진단이 `--from/--to` 유무로 갈린다.
+            known = "|".join(sorted(v for s, v in _WINDOW_CALENDAR if s == step and v))
+            raise SystemExit(f"알 수 없는 --source: {vendor} ({known})")
+        return tz
+    tz = _WINDOW_CALENDAR.get((step, None))
+    if tz is None:
+        raise SystemExit(
+            f"증분 창의 달력이 선언되지 않았다: step={step} — `_WINDOW_CALENDAR` 에 추가하라. "
+            "기본값을 두면 새 스텝이 어느 달력으로든 조용히 떨어지고, 그 창은 하루가 밀린 "
+            "채로 성공한다.")
+    return tz
+
+
 def default_window(now: datetime, lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> tuple[str, str]:
-    """증분 기본 창(from, to) = (오늘-소급일, 오늘) UTC 날짜."""
+    """증분 기본 창(from, to) = (오늘-소급일, 오늘). 날짜는 `now` 의 tzinfo 가 정한다 —
+    호출부가 `window_calendar_tz` 로 벤더 달력을 골라 넘긴다(ALPHA-883)."""
     to_date = now.date()
     from_date = to_date - timedelta(days=lookback_days)
     return from_date.isoformat(), to_date.isoformat()
@@ -538,7 +607,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     if args.step == "load-disclosure":
         load_from, load_to = args.from_date, args.to_date
         if load_from is None and load_to is None and args.window_days is not None:
-            load_from, load_to = default_window(datetime.now(timezone.utc), args.window_days)
+            load_from, load_to = default_window(
+                datetime.now(window_calendar_tz(args.step, args.source)), args.window_days)
         return load_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=load_from, to_date=load_to,
@@ -654,7 +724,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 명시 --from/--to 가 최우선(백필). 없고 --window-days 만 있으면 오늘−N일 창으로 좁힌다.
         from_date, to_date = args.from_date, args.to_date
         if from_date is None and to_date is None and args.window_days is not None:
-            from_date, to_date = default_window(datetime.now(timezone.utc), args.window_days)
+            from_date, to_date = default_window(
+                datetime.now(window_calendar_tz(args.step, args.source)), args.window_days)
         return tag_news.run(storage, run_id, complete_fn=complete_fn,
                             from_date=from_date, to_date=to_date, limit=args.limit,
                             concurrency=concurrency)
@@ -780,10 +851,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
             if args.step in ("ingest-price-raw", "ingest-raw-investor")
             else DEFAULT_LOOKBACK_DAYS
         )
-        from_date, to_date = default_window(datetime.now(timezone.utc), lookback)
+        from_date, to_date = default_window(
+            datetime.now(window_calendar_tz(args.step, args.source)), lookback)
 
     if args.step == "ingest-raw":
-        vendor = args.source or "fmp"
+        vendor = args.source or _VENDOR_SPLIT_STEPS["ingest-raw"]
         if vendor == "fmp":
             fmp_config = settings.news.sources.get("fmp")
             if fmp_config is None:
@@ -856,7 +928,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 가격은 뉴스와 별개 심볼맵을 쓴다 — ADR 의 USD 시세를 KR 종목 가격으로 쓰면
         # 통화·거래시간이 어긋난다(price.source.symbol_map 은 거래소-로컬 심볼만).
         # --source 로 벤더를 고른다(미지정=fmp, 기존 동작 보존; kis=국내 일봉; yahoo=지수).
-        vendor = args.source or "fmp"
+        vendor = args.source or _VENDOR_SPLIT_STEPS["ingest-price-raw"]
         if vendor == "fmp":
             price_source = FmpPriceSource(settings.price.source, PoliteClient())
         elif vendor == "kis":

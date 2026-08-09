@@ -1,9 +1,11 @@
 """run 엔트리 테스트 — 증분 기본 날짜창 계산(스케줄러가 못 넣어주는 부분)."""
 
+import pathlib
 from datetime import datetime, timezone
 
 import pytest
 
+from data_pipeline import run as run_mod
 from data_pipeline.run import (
     DEFAULT_LOOKBACK_DAYS,
     DEFAULT_PRICE_LOOKBACK_DAYS,
@@ -12,13 +14,119 @@ from data_pipeline.run import (
 )
 
 
-def test_default_window_is_lookback_to_today_utc():
+def test_default_window_is_lookback_to_today_in_given_tz():
     # WHY: EventBridge Scheduler 는 정적 입력만 넣어 '어제~오늘'을 못 만든다 — 앱이
     #      런타임 시계로 증분 창을 계산해야 스케줄 실행이 그날 유입을 덮는다.
     now = datetime(2026, 7, 3, 5, 0, tzinfo=timezone.utc)
     from_date, to_date = default_window(now)
     assert to_date == "2026-07-03"
     assert from_date == "2026-07-02"  # DEFAULT_LOOKBACK_DAYS = 1
+
+
+def test_window_calendar_tz_is_declared_per_step_and_vendor():
+    # WHY(ALPHA-883): 창의 날짜는 프로세스 시계가 아니라 **벤더 달력**이다 — 그 날짜 문자열이
+    #      그대로 벤더 질의에 실린다(BigKinds startDate/endDate). 한쪽으로 통일하면 반드시
+    #      한쪽이 틀린다: 전부 UTC 면 한국 벤더가 09:00 KST 이전 슬롯에서 하루 밀리고, 전부
+    #      KST 면 FMP 가 민다. **한 표가 두 방향을 다 막는지**를 값으로 든다.
+    assert run_mod.window_calendar_tz("ingest-raw", "bigkinds") == run_mod.KST
+    assert run_mod.window_calendar_tz("ingest-raw", "fmp") == timezone.utc
+    # --source 미지정이면 그 스텝의 기본 벤더를 따라야 한다(분기가 읽는 `_VENDOR_SPLIT_STEPS`).
+    assert run_mod.window_calendar_tz("ingest-raw", None) == timezone.utc
+    assert run_mod.window_calendar_tz("ingest-price-raw", None) == timezone.utc
+    assert run_mod.window_calendar_tz("ingest-price-raw", "kis") == run_mod.KST
+    # yahoo 는 미국 서비스지만 index_map 이 ^KS11·^KQ11 이라 **한국 달력**이다 — 벤더 국적이
+    # 아니라 그 데이터가 어느 시장의 날짜인가가 기준임을 여기서 못박는다.
+    assert run_mod.window_calendar_tz("ingest-price-raw", "yahoo") == run_mod.KST
+    for step in ("tag-news", "load-disclosure", "ingest-raw-disclosure",
+                 "ingest-raw-investor", "ingest-raw-nav", "ingest-raw-inav"):
+        assert run_mod.window_calendar_tz(step, None) == run_mod.KST, step
+    # 벤더가 안 갈리는 스텝은 무의미한 --source 를 무시한다(분기도 안 본다) — 그것 때문에
+    # 창 계산이 죽으면 이 변경이 없던 실패를 만든다.
+    assert run_mod.window_calendar_tz("tag-news", "bigkinds") == run_mod.KST
+
+
+def test_undeclared_window_calendar_fails_loud():
+    # WHY(ALPHA-883): 이 레포엔 축이 다른 관례가 둘이라(순간=UTC, 시장 날짜=KST) 어느 쪽을
+    #      기본으로 삼아도 다음 사람이 반대로 읽는다. 기본을 두면 새 스텝이 조용히 한쪽으로
+    #      떨어지고 그 창은 하루가 밀린 채 **성공**한다 — 창을 쓰는 스텝이 늘면 여기서 죽어야 한다.
+    with pytest.raises(SystemExit, match="달력이 선언되지 않았다"):
+        run_mod.window_calendar_tz("ingest-raw-newvendor", None)
+
+
+def test_unknown_source_is_diagnosed_as_source_not_calendar():
+    # WHY(ALPHA-883): 오타난 `--source` 를 "달력 미선언"으로 진단하면 시킨 대로 표에 넣어도
+    #      아무것도 안 고쳐지고 그제서야 분기의 진짜 에러를 본다. 게다가 창 계산이 분기보다
+    #      앞이라 그 진단이 `--from/--to` 유무로 갈린다 — 같은 오타에 다른 메시지가 나온다.
+    #      벤더가 갈리는 스텝에선 표의 키 집합이 곧 벤더 화이트리스트다.
+    with pytest.raises(SystemExit, match=r"알 수 없는 --source: quandl \(bigkinds\|fmp\)"):
+        run_mod.window_calendar_tz("ingest-raw", "quandl")
+
+
+def test_branch_vendor_default_comes_from_the_calendar_table():
+    # WHY(ALPHA-883): 분기의 기본 벤더와 달력 표의 기본 벤더가 **두 벌**이면 한쪽만 바뀌는
+    #      순간 창은 이 벤더로, 질의는 저 벤더로 나간다 — 리뷰 변이 실측에서 분기 쪽만 바꿔도
+    #      전 스위트가 초록이었다. 리터럴을 지워 사실을 하나로 만든 것을 여기서 고정한다.
+    #      ⚠️ 리터럴 부재는 단언하지 않는다 — `ingest-raw-financial`·`ingest-raw-etf` 는 창을
+    #      아예 안 써서(창 계산 앞에서 분기한다) 자기 리터럴을 갖는 게 맞다.
+    src = (pathlib.Path(run_mod.__file__)).read_text(encoding="utf-8")
+    for step in run_mod._VENDOR_SPLIT_STEPS:
+        assert f'vendor = args.source or _VENDOR_SPLIT_STEPS["{step}"]' in src, step
+
+
+def test_window_does_not_move_for_todays_slot_times():
+    # WHY(ALPHA-883): 이 변경은 **잠복 결함만** 없애야 하고 현행 동작은 한 톨도 바뀌면 안 된다.
+    #      지금 모든 슬롯이 09:00 KST 이후라 UTC 날짜와 KST 날짜가 우연히 같다 — 그 우연을
+    #      값으로 고정해 둔다. 여기가 빨개지면 그날 도는 레인의 수집 창이 실제로 움직인 것이다.
+    for label, kst_hour, kst_minute in [
+        ("뉴스 pre-eod-1", 15, 0), ("뉴스 day-close", 23, 50),
+        ("공시 첫 슬롯(경계)", 9, 0), ("시장 EOD", 15, 40), ("장중 수급 첫 슬롯", 9, 35),
+    ]:
+        now_kst = datetime(2026, 7, 3, kst_hour, kst_minute, tzinfo=run_mod.KST)
+        assert default_window(now_kst) == default_window(now_kst.astimezone(timezone.utc)), label
+
+
+def test_kst_vendor_window_covers_today_before_0900_kst():
+    # WHY(ALPHA-883): 09:00 KST 이전은 **전날 UTC 날짜**로 떨어진다(KST=UTC+9). 08:10 슬롯을
+    #      넣으면 그 런의 창이 [D-2, D-1] 이 되어 **그날 기사를 한 건도 안 가져온다** — 8시간
+    #      전 00:10 런과 완전히 같은 창을 다시 긁을 뿐이고, 에러도 안 난다. 조용한 헛돎을 막는다.
+    at_0810_kst = datetime(2026, 7, 3, 8, 10, tzinfo=run_mod.KST)
+    news = default_window(at_0810_kst.astimezone(
+        run_mod.window_calendar_tz("ingest-raw", "bigkinds")))
+    assert news == ("2026-07-02", "2026-07-03"), "그날(07-03)이 창에 없으면 장전 런이 헛돈다"
+    # 같은 순간에 FMP 는 미국 달력이라 종전 그대로여야 한다 — 한쪽을 고치며 다른 쪽을 밀지 않는다.
+    fmp = default_window(at_0810_kst.astimezone(
+        run_mod.window_calendar_tz("ingest-raw", "fmp")))
+    assert fmp == ("2026-07-01", "2026-07-02")
+    assert news != fmp, "두 달력이 같은 답을 내면 이 함수가 아무것도 안 가르고 있다"
+
+
+class _WindowComputed(Exception):
+    """창 계산 시점에 CLI 를 끊는 sentinel — 그 뒤(설정·네트워크)는 이 축과 무관하다."""
+
+
+def test_cli_passes_vendor_calendar_to_window(monkeypatch):
+    # WHY(ALPHA-883): `window_calendar_tz` 만 테스트하면 **호출부가 UTC 로 돌아가도 초록**이다
+    #      — 실제로 변이에서 그랬다(`:795` 만 되돌렸는데 전 스위트 통과). 달력을 고르는 것과
+    #      그걸 창 계산에 실제로 넘기는 것은 다른 사실이라 따로 든다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    seen = {}
+
+    def fake_window(now, lookback_days=None):
+        seen["tz"] = now.tzinfo
+        raise _WindowComputed
+
+    monkeypatch.setattr(run_mod, "default_window", fake_window)
+    for argv, expected, label in [
+        (["ingest-raw", "--source", "bigkinds", "--run-id", "R1"], run_mod.KST, "BigKinds=KST"),
+        (["ingest-raw", "--source", "fmp", "--run-id", "R1"], timezone.utc, "FMP=미국 달력"),
+        (["tag-news", "--run-id", "R1", "--window-days", "3"], run_mod.KST, "canonical 파티션=KST"),
+        (["load-disclosure", "--run-id", "R1", "--window-days", "3"], run_mod.KST, "DART=KST"),
+    ]:
+        seen.clear()
+        with pytest.raises(_WindowComputed):
+            main(argv)
+        assert seen["tz"] == expected, label
 
 
 def test_lookback_default_is_one_day():
