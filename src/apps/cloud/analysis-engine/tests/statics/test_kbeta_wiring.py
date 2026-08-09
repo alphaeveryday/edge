@@ -134,17 +134,6 @@ def test_fallback_when_paths_too_short():
     assert r.layers[0].contribution == pytest.approx(M_NOW)
 
 
-# ── 일 모드 불변 ───────────────────────────────────────────────────────────
-def test_day_mode_is_untouched():
-    lake = FakeLake()
-    r = decompose(lake, "T", DAYS[-1].isoformat())
-    assert r is not None
-    assert r.layers[0].contribution == pytest.approx(0.01)    # β=1 회계 그대로
-    assert r.beta_quarters == () and r.beta_ci is None
-    assert "market_beta" not in lake.exists                   # 폴백 사유도 없다
-
-
-# ── facts 의 β 요약: 결정론 문자열 ─────────────────────────────────────────
 def test_beta_path_line_is_deterministic():
     from edge_analysis.statics.interval import beta_path_line
     line = beta_path_line((1.141, 1.02, 1.487, 0.804), -0.0169, 0.0012)

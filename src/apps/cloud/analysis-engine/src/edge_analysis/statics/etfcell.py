@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import os
-import sys
 
 from ..config import PipelineError
 from .route import route_etf, say_route
@@ -85,16 +84,12 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                 "final_explanation": final_payload,
             })
         return final
-    from .layers import decompose
     from .premium import screen
     from .premium5 import premium_5m
     out: list[str] = []
 
-    # 하루 모드도 주입분을 존중한다 - 무조건 재대입하면 파라미터를 **조용히 무시**하게
-    # 되고, 그 침묵은 호출자가 넘겼다고 믿는 동안 계속된다. 현재 `pipeline` 은 하루
-    # 경로에 넘기지 않아(창 인자 없음) 동작은 그대로다.
     if roll is ROLL_UNSET:
-        roll = decompose(lake, etf, day)
+        raise PipelineError("일봉 층 분해 실행 경로는 제거됐다 - 요청창 roll 이 필요하다")
     if roll is None:
         # **부재는 예외로 말한다.** 산문으로 돌려주면 호출자가 그것을 정상 설명과 못 가르고
         # 게시본 자리를 내준다 - 판정불가가 발화의 게시본을 선점하면 나중의 제대로 된
@@ -580,22 +575,3 @@ def _workflow(lake, roll, r, day: str,
         out.append("[워크플로우] 고유 몫은 크지만 |기여| 상위 종목이 임계 미달 — "
                    "귀속할 이름이 없다. 이것도 결과다 (분산된 고유)")
     return out
-
-
-def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit(__doc__)
-    from .duck import CausalLake
-    # 키가 있으면 쉬운 설명까지, 없으면 정직한 설명만 - **조용히 빠지지 않는다**.
-    ask = None
-    if key := os.environ.get("DEEPSEEK_API_KEY"):
-        from ..adapters.llm import DeepSeekClient, TracingClient
-        ask = TracingClient(DeepSeekClient(
-            key, os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))).complete_json
-    else:
-        print("[알림] DEEPSEEK_API_KEY 없음 - 쉬운 설명(토스식)은 생략한다")
-    print(run(CausalLake(), sys.argv[1], sys.argv[2], ask))
-
-
-if __name__ == "__main__":
-    main()
