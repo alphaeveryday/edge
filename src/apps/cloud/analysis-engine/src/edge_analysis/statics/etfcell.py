@@ -228,6 +228,8 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
              f"요청창 {facts.window_start}~{facts.window_end} "
              f"수익 {facts.window_return * 100:+.2f}%\n"
              f"창 안 사건 타입: {ets or '없음'} · 오늘 발화 계열족: {fired or '없음'}")
+    if getattr(facts, "beta_path", ""):  # 시변 β 경로 요약(ALPHA-803) - facts 가 정본
+        brief += "\n" + facts.beta_path
     if context:
         brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
                   f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
