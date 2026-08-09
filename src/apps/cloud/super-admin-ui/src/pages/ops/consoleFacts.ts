@@ -7,6 +7,7 @@
  */
 import { datasetKind, NEWS_MINUTE_DATASET } from '../../domains/sources/minuteView.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
+import type { ConsoleFactsDto } from '../../domains/console/types.ts';
 import type { Facts, MinuteFacts } from '../../rules/types.ts';
 import type { AxisFetch } from './notRun.ts';
 
@@ -75,4 +76,188 @@ export function axisOf(hasData: boolean, isError: boolean): AxisFetch {
 export function awsObservation(meta: Facts['meta']): 'uninstrumented' | 'blind' | { at: string } {
   if (meta.aws === undefined) return 'uninstrumented';
   return meta.aws === null ? 'blind' : { at: meta.aws };
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 응답 검증 경계 (ALPHA-738 B2b · 계약 §「B 의 선행 조건」)
+ *
+ * ⛔ **규칙마다 값 가드를 다는 방식은 끝나지 않는다.** A2 리뷰에서 실증됐다 — `Number.isFinite`
+ * 를 붙이면 다음 라운드가 `[]` 를, 그 다음이 `[null]` 을, 그 다음이 음수를 찾는다. 19규칙 ×
+ * 값 종류만큼 늘고, 가드가 여럿이면 나중에 한쪽만 고쳐진다.
+ *
+ * 그래서 **규칙 층에 넘기기 전에 한 번** 본다. 규칙은 자기 타입을 믿을 수 있어야 하고, 그래야
+ * `canRun`·`run()`·`note` 가 값 방어가 아니라 **판정**만 말한다.
+ *
+ * 🔴 **거부는 규칙별 `못 돎` 이 아니라 화면 단위 조회 실패다** — 축이 안 온 것(계측 공백)과
+ * 응답이 망가진 것(계약 위반)은 다른 사실이다. 호출자는 이 실패를 `AxisFetch: 'error'` 로
+ * 옮긴다. 일부 행만 버리지 않는 이유도 같다: 망가진 응답은 부분적으로도 못 믿는다.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type FactsParse = { ok: true; facts: Facts } | { ok: false; reason: string };
+
+/* 필드 검사기 — 한 자리에 모아 두고 축별 표가 이걸 가리킨다.
+ *
+ * 🔴 **정수 카운트와 비율을 가른다.** 와이어에서 건수는 `long` 이라 소수가 올 수 없는데
+ * `Number.isFinite` 만 보면 `0.5 건` 이 통과한다. 기준(중앙값)만 `Double` 이라 소수가 정상이다
+ * (짝수 표본의 평균) — 둘을 한 검사로 묶으면 한쪽이 반드시 틀린다. */
+type Check = (v: unknown) => boolean;
+const text: Check = (v) => typeof v === 'string';
+const nullableText: Check = (v) => v === null || text(v);
+const bool: Check = (v) => typeof v === 'boolean';
+/** 서버가 그 슬롯에만 싣는 필드 — 없는 것이 정상이다(필드 단위 `NON_NULL`). */
+const optionalBool: Check = (v) => v === undefined || bool(v);
+/**
+ * 건수 — **안전 정수**이고 음수가 아니다.
+ *
+ * `isInteger` 가 아니라 `isSafeInteger` 인 이유: 와이어의 건수는 `long` 이라 2^53 을 넘을 수 있고,
+ * 그때 `JSON.parse` 는 **이미 반올림한 값**을 준다. `isInteger` 는 그 손상된 값을 통과시키므로
+ * `expected` 와 `received` 가 1 차이인 응답이 같은 수가 되어 **R07 이 결손을 정상으로 판정**한다
+ * (리뷰가 잡았다). 도달 확률은 낮지만 검사 비용이 같아서 옳은 쪽을 쓴다.
+ */
+const count: Check = (v) => Number.isSafeInteger(v) && (v as number) >= 0;
+const nullableCount: Check = (v) => v === null || count(v);
+/** 기준값 — 짝수 표본의 중앙값이라 소수가 정상이다. */
+const ratio: Check = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const nullableRatio: Check = (v) => v === null || ratio(v);
+
+/* 축별 **전수** 검사표. 부분만 검사하고 캐스트하면 나머지 필드는 무검증으로 규칙에 흘러가고,
+ * 그러면 이 경계가 약속한 "규칙은 자기 타입을 믿어도 된다"가 거짓이 된다(리뷰가 잡았다 —
+ * `planned: "false"` 는 truthy 라 R01 이 거짓 P0 를 낸다).
+ *
+ * ⚠️ **모르는 필드는 거부하지 않는다.** 서버가 축을 하나 더 실었다고 콘솔이 죽으면, 전진하는
+ * 배포가 화면을 멈춘다. 표는 "이 필드들이 이 타입이어야 한다"만 말한다.
+ * 표가 낡는 것은 `consoleFacts.test.ts` 의 집합 불변식이 막는다(픽스처의 키 ⊆ 표의 키). */
+export const RUN_FIELDS: Record<string, Check> = {
+  id: text, lane: nullableText, tradingDate: nullableText, ledgerStatus: nullableText,
+  ledgerUpdated: nullableText, deadline: nullableText,
+  planned: optionalBool, noRunRow: optionalBool,
+};
+export const TASK_FIELDS: Record<string, Check> = {
+  taskKey: text, runId: text, pipelineType: text, tradingDate: nullableText, stage: text,
+  dataset: nullableText, required: bool, planStatus: text, taskOutcome: nullableText,
+  dataStatus: nullableText, recordsOut: nullableCount, failedRecords: nullableCount,
+  completenessExpected: nullableCount, completenessReceived: nullableCount,
+  completenessMissing: nullableCount, attempts: count,
+};
+export const DATASET_FIELDS: Record<string, Check> = {
+  id: text, contract: bool, expectedAsOf: nullableText, actualAsOf: nullableText,
+  collectedAt: nullableText, unverifiable: nullableText,
+};
+export const OUTPUT_FIELDS: Record<string, Check> = {
+  id: text, label: text, unit: text, today: count, base: nullableRatio,
+};
+export const BOUNDARY_FIELDS: Record<string, Check> = {
+  publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
+};
+export const META_FIELDS: Record<string, Check> = { db: text, today: text };
+
+/** 배열 원소는 **객체**여야 한다 — `[null]`·`[1]`·`[[]]` 가 여기서 걸린다. */
+const isRow = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** 어긋난 첫 필드 이름을 돌려준다(없으면 null) — 사유가 어느 자리인지 말해야 원인을 가리킨다. */
+function offendingField(row: Record<string, unknown>, fields: Record<string, Check>): string | null {
+  for (const [name, ok] of Object.entries(fields)) {
+    if (!ok(row[name])) return name;
+  }
+  return null;
+}
+
+/**
+ * 와이어 응답 → 규칙 사실. 형상이 틀리면 **거부한다**(사유와 함께).
+ *
+ * 검증 범위는 계약이 "검증 경계가 답할 몫"으로 열거한 것이다: 컬렉션 원소가 객체가 아닌 경우 ·
+ * 음수·비정수 카운트 · 수여야 할 자리가 수가 아닌 경우 · 문자열·불리언 자리의 타입 · 필수 축의
+ * 종류. **서버가 안 보내는 축(`chain`·`runbook`·`meta.aws`)은 검사하지 않는다** — 그건 계측
+ * 공백이지 응답 결함이 아니고, 규칙이 `canRun` 으로 답할 몫이다.
+ *
+ * 🔴 **과하면 정상 응답을 통째로 버린다.** 서버가 정당하게 내는 `null`(비거래일 런의 거래일 ·
+ * 슬롯 키를 못 읽은 레인 · 기준 없는 산출 · 미배선 완전성)을 거부하면 그날의 사고가 화면에서
+ * 사라진다 — 검증기가 만드는 거짓 안심이다.
+ */
+export function parseFacts(body: unknown): FactsParse {
+  const bad = (reason: string): FactsParse => ({ ok: false, reason });
+  if (!isRow(body)) return bad('응답이 객체가 아니다');
+
+  const AXES = [
+    ['runs', RUN_FIELDS], ['tasks', TASK_FIELDS],
+    ['datasets', DATASET_FIELDS], ['outputs', OUTPUT_FIELDS],
+  ] as const;
+  for (const [axis, fields] of AXES) {
+    const rows = body[axis];
+    if (!Array.isArray(rows)) return bad(`${axis} 축이 배열이 아니다`);
+    for (const row of rows) {
+      if (!isRow(row)) return bad(`${axis} 원소가 객체가 아니다`);
+      const field = offendingField(row, fields);
+      if (field) return bad(`${axis}[].${field} 의 값이 계약과 다르다`);
+    }
+  }
+  for (const [axis, fields] of [['boundary', BOUNDARY_FIELDS], ['meta', META_FIELDS]] as const) {
+    const row = body[axis];
+    if (!isRow(row)) return bad(`${axis} 축이 객체가 아니다`);
+    const field = offendingField(row, fields);
+    if (field) return bad(`${axis}.${field} 의 값이 계약과 다르다`);
+  }
+
+  return { ok: true, facts: toFacts(body as unknown as ConsoleFactsDto) };
+}
+
+/**
+ * 검증된 와이어 → 엔진 사실. **이름만 바꾼다** — 값을 메우거나 접지 않는다.
+ *
+ * 서버가 안 보낸 축은 여기서도 안 만든다(`chain`·`runbook`·`meta.aws`). 빈 값으로 채우면
+ * 계측 없음이 실측으로 위조되고, 규칙이 `못 돎` 대신 `평가됨 · 위반 0` 을 세운다.
+ */
+function toFacts(dto: ConsoleFactsDto): Facts {
+  return {
+    runs: dto.runs.map((r) => ({
+      id: r.id,
+      lane: r.lane,
+      trading_date: r.tradingDate,
+      ledger_status: r.ledgerStatus,
+      ledger_updated: r.ledgerUpdated,
+      deadline: r.deadline,
+      ...(r.planned !== undefined ? { planned: r.planned } : {}),
+      ...(r.noRunRow !== undefined ? { no_run_row: r.noRunRow } : {}),
+    })),
+    tasks: dto.tasks.map((t) => ({
+      task_key: t.taskKey,
+      run_id: t.runId,
+      pipeline_type: t.pipelineType,
+      trading_date: t.tradingDate,
+      stage: t.stage,
+      dataset: t.dataset,
+      required: t.required,
+      plan_status: t.planStatus,
+      task_outcome: t.taskOutcome,
+      data_status: t.dataStatus,
+      records_out: t.recordsOut,
+      failed_records: t.failedRecords,
+      completeness_expected: t.completenessExpected,
+      completeness_received: t.completenessReceived,
+      completeness_missing: t.completenessMissing,
+      attempts: t.attempts,
+    })),
+    datasets: dto.datasets.map((d) => ({
+      id: d.id,
+      contract: d.contract,
+      expected_as_of: d.expectedAsOf,
+      actual_as_of: d.actualAsOf,
+      collected_at: d.collectedAt,
+      unverifiable: d.unverifiable,
+    })),
+    outputs: dto.outputs.map((o) => ({
+      id: o.id,
+      label: o.label,
+      today: o.today,
+      base: o.base,
+      unit: o.unit,
+    })),
+    boundary: {
+      published_without_delivery: dto.boundary.publishedWithoutDelivery,
+      delivery_now_nonpublished: dto.boundary.deliveryNowNonpublished,
+      delivery_rows: dto.boundary.deliveryRows,
+    },
+    meta: { db: dto.meta.db, today: dto.meta.today },
+  };
 }
