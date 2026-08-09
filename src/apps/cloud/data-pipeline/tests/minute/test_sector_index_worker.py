@@ -252,20 +252,6 @@ class TestCli:
         with pytest.raises(SystemExit, match="db 설정 없음"):
             self._cli(settings=self._settings(db=None), session_date=None)
 
-    def test_missing_index_map_fails_loud(self):
-        """config 가 기대 집합의 정본이다 — 미설정으로 돌면 unit 0종이라 매 window 가
-        빈 성공으로 확정된다. 그건 "받을 게 없다"가 아니라 배선 누락이다."""
-        with pytest.raises(SystemExit, match=r"minute_sector_index.index_map. 설정 없음"):
-            self._cli(settings=self._settings(sector_index=None), session_date=None)
-
-    def test_missing_credentials_fail_loud(self):
-        from types import SimpleNamespace
-        with pytest.raises(SystemExit, match="자격증명 없음"):
-            self._cli(
-                settings=self._settings(kis_nav=SimpleNamespace(
-                    source=SimpleNamespace(app_key="k", app_secret=None))),
-                session_date=None)
-
     def test_bad_session_date_fails_loud(self):
         with pytest.raises(SystemExit, match="session-date 형식 오류"):
             self._cli(settings=self._settings(), session_date="2026-W01-1")
@@ -277,7 +263,7 @@ class TestBoundedGate:
 
     def _run_cli(self, monkeypatch, tmp_path, states, *, session_identity=None,
                  resident=False, env="prod", client_spy=None, today=None,
-                 draining=False):
+                 draining=False, sector_index=..., kis_nav=...):
         """CLI 를 끝까지 몬다 — 판정식을 테스트가 복제하면 코드가 아니라 사본을 잰다."""
         from datetime import datetime as real_datetime
         from types import SimpleNamespace
@@ -338,9 +324,11 @@ class TestBoundedGate:
 
         settings = SimpleNamespace(
             db=_DB,
-            minute_sector_index=MinuteSectorIndexConfig(index_map=INDEX_MAP),
-            kis_nav=SimpleNamespace(
-                source=SimpleNamespace(app_key="k", app_secret="s", env=env)),
+            minute_sector_index=(MinuteSectorIndexConfig(index_map=INDEX_MAP)
+                                 if sector_index is ... else sector_index),
+            kis_nav=(SimpleNamespace(
+                source=SimpleNamespace(app_key="k", app_secret="s", env=env))
+                if kis_nav is ... else kis_nav),
             storage=None,
         )
         return mod.sector_index_worker_cli(
@@ -384,6 +372,41 @@ class TestBoundedGate:
         """
         assert self._run_cli(
             monkeypatch, tmp_path, [("DRAINING", {"drain_processed": 2})]) == 0
+
+    def test_index_map_결손은_기동에서_죽는다(self, monkeypatch, tmp_path):
+        """config 가 기대 집합의 정본이다 — 미설정으로 돌면 unit 0종이라 매 window 가
+        빈 성공으로 확정된다. 그건 "받을 게 없다"가 아니라 배선 누락이다."""
+        with pytest.raises(SystemExit, match=r"minute_sector_index.index_map. 설정 없음"):
+            self._run_cli(monkeypatch, tmp_path, ["IDLE"], sector_index=None)
+
+    def test_DRAINING_세션은_index_map_이_없어도_닫을_수_있다(self, monkeypatch, tmp_path):
+        """🔴 같은 함정의 **세 번째 문**(Codex P2, 3라운드). 레인을 걷어낸 이미지가
+        배포된 뒤 남은 DRAINING 세션도 닫을 수 있어야 한다 — 닫는 데는 기대 집합이
+        필요 없다(`_session_ready` 가 False 라 수집을 시도조차 않는다).
+
+        문을 하나씩 막다 세 번 놓쳐서, 수집 전제를 **한 블록**으로 모으고 drain 이 그
+        블록을 통째로 비켜가게 바꿨다. 이 테스트가 그 구조를 잰다.
+        """
+        assert self._run_cli(monkeypatch, tmp_path,
+                             [("DRAINED", {"drain_processed": 1})],
+                             sector_index=None, draining=True) == 0
+
+    def test_DRAINING_세션은_자격증명이_없어도_닫을_수_있다(self, monkeypatch, tmp_path):
+        """같은 블록의 **네 번째 문** — 봇이 짚기 전에 같이 닫았다. 키가 회수된 뒤에도
+        남은 세션은 닫혀야 한다(벤더를 부르지 않는다)."""
+        from types import SimpleNamespace
+        assert self._run_cli(
+            monkeypatch, tmp_path, [("DRAINED", {"drain_processed": 1})],
+            kis_nav=SimpleNamespace(
+                source=SimpleNamespace(app_key=None, app_secret=None, env="prod")),
+            draining=True) == 0
+
+    def test_자격증명_결손은_기동에서_죽는다(self, monkeypatch, tmp_path):
+        """수집하는 실행에서는 여전히 기동에서 죽어야 한다 — 첫 벤더 호출이 아니라."""
+        from types import SimpleNamespace
+        with pytest.raises(SystemExit, match="자격증명 없음"):
+            self._run_cli(monkeypatch, tmp_path, ["IDLE"], kis_nav=SimpleNamespace(
+                source=SimpleNamespace(app_key="k", app_secret=None, env="prod")))
 
     def test_과거일은_거부된다(self, monkeypatch, tmp_path):
         """🔴 이 TR 은 날짜 질의가 불가하다 — 과거일로 돌리면 45종 전건 missing 이 그

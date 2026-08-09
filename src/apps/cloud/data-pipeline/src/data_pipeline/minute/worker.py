@@ -1024,19 +1024,6 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
     if settings.db is None:
         raise SystemExit(
             "db 설정 없음 — sector-index-worker 는 1분 원장 필수(DATA_PIPELINE_DB__* 주입)")
-    if settings.minute_sector_index is None:
-        # config 가 기대 집합의 정본이다 — 미설정으로 돌면 unit 0종이라 매 window 가
-        # 빈 성공(VALID_EMPTY)으로 확정된다. 그건 "받을 게 없다"가 아니라 배선 누락이다.
-        raise SystemExit(
-            "[minute_sector_index.index_map] 설정 없음 — 이 dataset 의 기대 집합 정본이다"
-            "(미설정으로 돌면 매 window 가 빈 성공으로 확정된다)")
-    if settings.kis_nav is None:
-        raise SystemExit(
-            "kis_nav.source 설정 없음 — 업종지수는 iNAV 와 같은 KIS 자격증명을 쓴다")
-    _require_credentials(
-        (settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret),
-        "DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY/__APP_SECRET",
-    )
     day = session_date or datetime.now(KST).strftime("%Y-%m-%d")
     try:
         # strptime 고정 — date.fromisoformat 은 3.11+ 에서 주 날짜를 다른 연도로 읽는다
@@ -1053,45 +1040,70 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
             f"세션 없음: {DATASET_SECTOR_INDEX_MINUTE}/kis/{parsed_day} — "
             "plan-minute-session --dataset sector_index_minute 이 먼저 돌아야 한다"
         )
-    # ⚠️ **수집 전에 막는다** — 위 함수의 도크스트링이 근거다. 단 **DRAINING 은 예외**다:
-    # 그 세션은 이미 닫히는 중이고 `ack_drain` 을 부를 수 있는 건 Worker 뿐인데
-    # (`worker.tick` 의 drain 분기가 유일한 호출부), QC 는 DRAINED 를 요구한다
-    # (`eod.py` — ACTIVE·DRAINING 은 "QC 자격 없다"). 날짜로 먼저 막으면 자정을 넘긴
-    # DRAINING 세션은 **아무도 닫을 수 없어 영구 고착**된다 — `drain-minute-session` 은
-    # `--session-id` 만 받아 dataset 을 안 가리므로 이 상태는 도달 가능하다(Codex P2).
-    if snapshot["phase"] != PHASE_DRAINING and (
-            rejected := sector_index_date_rejected(
-                parsed_day, datetime.now(KST).date())) is not None:
-        raise SystemExit(rejected)
-    index_map = settings.minute_sector_index.index_map
-    expected_version, expected_hash = config_set_identity(index_map)
-    # ⚠️ **기동에서 막는다.** 세션이 다른 index_map 으로 고정돼 있으면 tick 마다
-    # `_session_ready` 가 거부해 IDLE 만 돌 뿐이라, 운영자는 "돌고는 있는데 아무것도
-    # 안 들어온다"만 본다. 사유를 여기서 한 번 크게 낸다(Rule 12).
-    # ⚠️ **DRAINING 은 여기서도 예외다**(위 날짜 가드와 같은 이유 — 문이 둘이었다).
-    # 공유 루프는 `not ready` 인 drain 을 이미 처리한다: 고아 CLAIMED 를 집었다 반납하고
-    # `ack_drain` 을 부른다(`tick` 의 "단 drain 은 막지 않는다" 주석이 그 논거다). 기동에서
-    # 죽이면 그 처리에 닿지도 못해, config 가 바뀐 뒤 남은 DRAINING 세션이 영구 고착된다.
-    # 새 수집은 어차피 안 일어난다 — DRAINING 에서 원장이 신규 DUE claim 을 금지한다.
-    if snapshot["phase"] != PHASE_DRAINING and (
-            planned := ledger.session_universe(session_id=session_id)) != (
-            expected_version, expected_hash):
-        raise SystemExit(
-            f"세션의 기대 집합 {planned} 과 이 이미지의 index_map "
-            f"({expected_version}, …) 이 다르다 — 장중에 config 가 바뀌었다면 그 세션은 "
-            "이전 집합으로 끝내야 한다"
+
+    # ── 수집 전제 ─────────────────────────────────────────────
+    # 🔴 **DRAINING 은 이 블록을 통째로 비켜간다.** 여기 있는 것은 전부 "새로 수집해도
+    # 되는가"의 조건인데, 닫는 일에는 하나도 안 걸린다. 하나씩 예외를 달다가 문을 세 번
+    # 놓쳤다(Codex P2 ×3: 날짜 → 정체성 → index_map. 자격증명도 같은 자리였다) — 그래서
+    # 조건을 개별 가드가 아니라 **한 블록**으로 모은다. 새 전제를 더할 자리도 여기다.
+    #
+    # 왜 닫는 일에는 안 걸리나: `ack_drain` 을 부를 수 있는 건 Worker 뿐이고
+    # (`worker.tick` 의 drain 분기가 유일 호출부) QC 는 DRAINED 를 요구하므로
+    # (`eod.py` — ACTIVE·DRAINING 은 "QC 자격 없다") 기동에서 죽이면 그 세션은 **아무도
+    # 닫을 수 없어 영구 고착**된다. `drain-minute-session` 은 `--session-id` 만 받아
+    # dataset 을 안 가리므로 이 상태는 도달 가능하다. 그리고 새 수집이 새지도 않는다 —
+    # DRAINING 에서 원장이 신규 DUE claim 을 금지하고, 공유 루프는 `not ready` 인 drain 을
+    # 이미 처리한다(고아 CLAIMED 를 집었다 반납하고 ack — `tick` 의 그 주석이 논거다).
+    draining = snapshot["phase"] == PHASE_DRAINING
+    if not draining:
+        if settings.minute_sector_index is None:
+            # config 가 기대 집합의 정본이다 — 미설정으로 돌면 unit 0종이라 매 window 가
+            # 빈 성공(VALID_EMPTY)으로 확정된다. 그건 "받을 게 없다"가 아니라 배선 누락이다.
+            raise SystemExit(
+                "[minute_sector_index.index_map] 설정 없음 — 이 dataset 의 기대 집합 정본이다"
+                "(미설정으로 돌면 매 window 가 빈 성공으로 확정된다)")
+        if settings.kis_nav is None:
+            raise SystemExit(
+                "kis_nav.source 설정 없음 — 업종지수는 iNAV 와 같은 KIS 자격증명을 쓴다")
+        _require_credentials(
+            (settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret),
+            "DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY/__APP_SECRET",
         )
+        if (rejected := sector_index_date_rejected(
+                parsed_day, datetime.now(KST).date())) is not None:
+            raise SystemExit(rejected)
+        # 세션이 다른 index_map 으로 고정돼 있으면 tick 마다 `_session_ready` 가 거부해
+        # IDLE 만 돌 뿐이라, 운영자는 "돌고는 있는데 아무것도 안 들어온다"만 본다.
+        # 사유를 여기서 한 번 크게 낸다(Rule 12).
+        if (planned := ledger.session_universe(session_id=session_id)) != (
+                config_set_identity(settings.minute_sector_index.index_map)):
+            raise SystemExit(
+                f"세션의 기대 집합 {planned} 과 이 이미지의 index_map 이 다르다 — "
+                "장중에 config 가 바뀌었다면 그 세션은 이전 집합으로 끝내야 한다"
+            )
+
+    # config 가 없는 채로 여기 왔다면 **DRAINING 전용 경로**다 — 기대 집합을 계산할 수
+    # 없으니 원장과 절대 안 맞는 값을 쓴다. 그러면 `_session_ready` 가 False 라 drain 이
+    # 수집을 시도하지 않고 회수·ack 만 한다(그게 이 경로의 전부다).
+    index_map = (settings.minute_sector_index.index_map
+                 if settings.minute_sector_index else {})
+    expected_version, expected_hash = (
+        config_set_identity(index_map) if index_map else ("none", "none"))
     worker_id = f"sw-{socket.gethostname()}-{os.getpid()}"
-    client = KisSectorIndexClient(
-        settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret,
-        # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
-        PoliteClient(min_interval=0.5),
-        index_map,
-        # ⚠️ `env` 는 **자격증명과 한 몸이다** — vps 키를 prod 도메인에 던지면 토큰 발급부터
-        # 실패한다. 빌려 온 섹션의 이 축은 반드시 같이 가져와야 한다(`KisNavSource` 도
-        # `domain_for(config.env)` 로 같은 값을 쓴다). 기본값에 맡겼다가 리뷰에서 잡혔다.
-        env=settings.kis_nav.source.env,
-    )
+    collector = None
+    if index_map:
+        client = KisSectorIndexClient(
+            settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret,
+            # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
+            PoliteClient(min_interval=0.5),
+            index_map,
+            # ⚠️ `env` 는 **자격증명과 한 몸이다** — vps 키를 prod 도메인에 던지면 토큰
+            # 발급부터 실패한다. 빌려 온 섹션의 이 축은 반드시 같이 가져와야 한다
+            # (`KisNavSource` 도 `domain_for(config.env)` 로 같은 값을 쓴다).
+            env=settings.kis_nav.source.env,
+        )
+        collector = KisSectorIndexCollector(
+            client, clock=lambda: datetime.now(timezone.utc))
     # ⛔ `kis_nav.source.enabled` 는 **의도적으로 안 본다.** 그건 "일별 NAV 적재 레인이
     # 켜졌나"이지 KIS 전역 스위치가 아니다(`ingest_raw*` 스텝들이 각자 자기 소스의 그
     # 플래그를 본다). 여기서 보면 일별 NAV 를 끄는 순간 업종지수 수집이 **말없이** 같이
@@ -1102,8 +1114,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         ledger=ledger,
         committer=MinuteCommitter(db=settings.db),
         storage=make_storage(settings.storage),
-        collector=KisSectorIndexCollector(
-            client, clock=lambda: datetime.now(timezone.utc)),
+        collector=collector,
         config=SectorIndexWorkerConfig(
             worker_id=worker_id,
             dataset=DATASET_SECTOR_INDEX_MINUTE,
