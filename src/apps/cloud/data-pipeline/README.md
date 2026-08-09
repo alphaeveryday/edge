@@ -816,12 +816,19 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   3% 게이트(엔진 L0 정본, ALPHA-411). 창 미지정 = canonical 전체 스캔 + (etf, trade_date)
   멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
 - `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410) — canonical 뉴스 →
-  document. 자연키 멱등, LoadAssertions 의 FK 선행
+  document. 자연키 멱등, LoadAssertions 의 FK 선행. 문마다 후보 전량을 `executemany` 로
+  보낸다(ALPHA-906) — 예전엔 후보마다 최대 3왕복(document·lead·publisher)이라 31.8만 행이면
+  왕복이 최대 95만 번이었고, 그것이 뉴스 SFN 이 상한에 물리던 원인이었다(TIMED_OUT 전건이 이 스텝
+  미완). `created` 와 로그 표본은 `RETURNING` 이 돌려준 행에서만 뽑는다 — 배치의 `rowcount`
+  로는 **어느 행**이 들어갔는지를 알 수 없다
 - `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
   dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
-  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721) — 형제 로더들은 하루 1회만
-  돌아 canonical 풀스캔을 견디지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다 곱해진다.
+  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721) — 형제 로더들은 하루에 한두
+  슬롯만 돌아 canonical 풀스캔을 안고 가지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다
+  곱해진다. ⚠️ "안고 간다"가 "싸다"는 뜻은 아니다 — `load-documents` 는 31.8만 행 풀스캔이
+  뉴스 SFN 상한을 넘겨 왕복을 배치로 접어야 했다(ALPHA-906). 풀스캔 자체를 없애는 것은
+  ALPHA-579(적재 7스텝 창 적용) 소관이고 아직 안 붙었다.
   그 레인이 실제로 붙었다(ALPHA-875 `disclosure-worker`) — 1분 레인은 이 함수를 **질의 날짜창으로
   좁혀** 부른다. ⚠️ 좁혀지는 것은 parquet GET 뿐이다: `_read_facts` 가 `report_date=` 프리픽스
   **전체**를 LIST 한 뒤 날짜를 거르므로 window 당 2 LIST(supply·segment)가 남고 그 비용은
