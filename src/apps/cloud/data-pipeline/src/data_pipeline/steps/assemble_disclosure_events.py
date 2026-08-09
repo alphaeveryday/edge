@@ -7,7 +7,7 @@ import logging
 from datetime import date
 from datetime import datetime, timezone
 
-from edge_ontology import role_entity_kind
+from edge_ontology import load_process_registry, role_entity_kind
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
@@ -82,23 +82,29 @@ def to_canonical_event(fact: dict) -> dict:
     customer = fact.get("customer_instrument_id")
     start = _date_text(fact.get("contract_start_date"))
     end = _date_text(fact.get("contract_end_date"))
+    process_type = load_process_registry().get(EVENT_TYPE)
+    if process_type is None:
+        raise ValueError(f"unknown disclosure event type: {EVENT_TYPE}")
     arguments = [
         {"role_code": "SUPPLIER", "entity_id": supplier, "mention_text": None,
-         "entity_kind": role_entity_kind("SUPPLIER"), "slot": "supplier"},
+         "entity_kind": role_entity_kind("SUPPLIER"),
+         "slot": process_type.slot_of("SUPPLIER")},
         {"role_code": "CONTRACT_OBJECT", "entity_id": contract_object,
          "mention_text": fact.get("contract_object_name"),
-         "entity_kind": role_entity_kind("CONTRACT_OBJECT"), "slot": "object"},
+         "entity_kind": role_entity_kind("CONTRACT_OBJECT"),
+         "slot": process_type.slot_of("CONTRACT_OBJECT")},
     ]
     if customer or fact.get("counterparty_raw_name"):
         arguments.append({
             "role_code": "CUSTOMER", "entity_id": customer,
             "mention_text": fact.get("counterparty_raw_name"),
-            "entity_kind": role_entity_kind("CUSTOMER"), "slot": "customer",
+            "entity_kind": role_entity_kind("CUSTOMER"),
+            "slot": process_type.slot_of("CUSTOMER"),
         })
     if start:
         arguments.append({"role_code": "EFFECTIVE_DATE", "entity_id": None,
                           "mention_text": start, "entity_kind": None,
-                          "slot": "effective_date"})
+                          "slot": process_type.slot_of("EFFECTIVE_DATE")})
 
     rcept_no = fact["rcept_no"]
     measures = []

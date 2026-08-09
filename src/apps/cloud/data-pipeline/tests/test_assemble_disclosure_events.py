@@ -3,6 +3,8 @@
 import json
 from contextlib import contextmanager
 
+from edge_ontology import load_process_registry
+
 from data_pipeline.config import DbConfig
 from data_pipeline.db import stable_domain_id
 from data_pipeline.lake import LocalStorage
@@ -50,6 +52,18 @@ def test_typed_supply_fact_becomes_source_neutral_contract_identity():
     assert by_role["CONTRACT_VALUE"]["unit"] == "KRW"
     assert by_role["CONTRACT_DURATION"]["value"] == 364
     assert all(m["dart_rcept_no"] == "20260809000123" for m in event["measures"])
+
+
+def test_argument_slots_follow_contract_ontology_and_database_vocabulary():
+    """역할명을 소문자로 slot에 넣으면 실제 DB CHECK(subject/object/qualifier)를 위반해
+    백필 트랜잭션 전체가 롤백된다. 공시도 NEWS와 같은 온톨로지 slot을 사용해야 한다."""
+    event = assemble_disclosure_events.to_canonical_event(_fact())
+    process_type = load_process_registry().get("COMPANY.CONTRACT.SIGNING")
+    slots = {argument["role_code"]: argument["slot"]
+             for argument in event["arguments"]}
+
+    assert slots == {role: process_type.slot_of(role) for role in slots}
+    assert set(slots.values()) <= {None, "subject", "object", "qualifier"}
 
 
 def test_unlisted_customer_stays_missing_for_unknown_thread_policy():
