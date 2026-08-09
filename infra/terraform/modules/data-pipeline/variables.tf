@@ -528,12 +528,23 @@ variable "minute_session_news_source_group" {
   default     = "bigkinds"
 }
 
+variable "minute_session_disclosure_source_group" {
+  description = "disclosure_minute 세션의 source_group(ALPHA-875). 비우면 공시 레인 미편입 — 공시는 SFN 10슬롯 레인이 계속 소유한다"
+  type        = string
+  # ⚠️ 이 값이 **컷오버 스위치**다. 비어 있으면 start 가 공시 세션을 계획하지 않고
+  # disclosure-worker 도 안 뜬다(서비스 정의는 착지하되 desired 0). 비면 SFN 레인이 계속
+  # 돌고, 채우면 1분 레인이 소유한다 — **둘을 동시에 켜지 않는다**(같은 CLI 를 두 레인이
+  # 소유하면 `catalog.by_cli` 가 먼저 온 쪽을 돌려줘 한쪽은 영구 MISSED 가 된다).
+  # 그래서 이 값을 채우는 apply 는 아래 SFN 스케줄 비활성과 **같은 apply** 여야 한다.
+  default = "dart"
+}
+
 variable "minute_session_source_group" {
   description = "그 세션의 source_group. price-worker 의 DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE 와 같아야 같은 session_id 가 유도된다"
   type        = string
   # kis(ALPHA-735) — 토스는 초당 5회라 종목당 1콜 × 400종이 60초 창을 넘는다. 이 기본값은
   # `MinutePriceWorkerConfig.source` 와 **함께 움직여야 한다**(계약 테스트가 대조한다).
-  default     = "kis"
+  default = "kis"
 }
 
 variable "super_admin_api_url" {

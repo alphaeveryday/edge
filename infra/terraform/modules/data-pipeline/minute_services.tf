@@ -175,7 +175,26 @@ locals {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
       }
     }
+    # 공시 1분 생산자(ALPHA-875) — news-worker 와 같은 자리다(유니버스 없는 소스 단위,
+    # 세션 결속). 다른 점은 **한 window 가 체인 전체**라는 것: collect→normalize×2→load 를
+    # 이 컨테이너가 다 돌므로 벤더 키(DART)와 DB 를 **둘 다** 싣는다(형제 워커는 하나씩).
+    # 엔드포인트·유형 필터는 코드 기본값([dart_disclosure.source] sources.toml)이 정본이고,
+    # pacing·예산은 [minute_disclosure_worker] 기본값을 쓴다(조일 땐 env 로 덮는다).
+    disclosure-worker = {
+      command     = ["disclosure-worker"]
+      environment = merge(local.env, local.db_env, {})
+      secrets = {
+        DATA_PIPELINE_DB__PASSWORD                     = "${var.db_password_secret_arn}:password::"
+        DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY = "${aws_secretsmanager_secret.dart.arn}:apikey::"
+      }
+    }
   }
+}
+
+# 세션 결속 생산자 — 공용 스케일 목록에서 빼고 각자 자기 목록으로 올린다(세션이 선 날만).
+# 여기 넣는 것과 `MINUTE_SESSION_*_WORKER_SERVICES` 에 싣는 것이 **짝**이다.
+locals {
+  session_bound_workers = ["news-worker", "disclosure-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -352,15 +371,23 @@ resource "aws_ecs_task_definition" "minute_session" {
       # stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트 깊이에 잡혀
       # 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일) 안에서 다음
       # 세션이 집는다.
+      # ⚠️ 공시도 같은 이유로 공용 목록에서 뺀다(ALPHA-875) — 제외 목록을 로컬 하나로
+      # 둔다: 서비스를 늘리며 여기 한쪽만 빠뜨리면 그 Worker 가 세션 없는 날도 떠서
+      # 기동 거부 루프를 돈다(뺀 축과 올리는 축이 갈리면 안 된다).
       MINUTE_SESSION_SERVICES = join(",", concat(
-        [for key, service in aws_ecs_service.minute : service.name if key != "news-worker"],
+        [for key, service in aws_ecs_service.minute : service.name
+        if !contains(local.session_bound_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
-      MINUTE_SESSION_NEWS_WORKER_SERVICES = aws_ecs_service.minute["news-worker"].name
+      MINUTE_SESSION_NEWS_WORKER_SERVICES       = aws_ecs_service.minute["news-worker"].name
+      MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES = aws_ecs_service.minute["disclosure-worker"].name
       # 내리기 전에 비어야 하는 큐 — 선정 근거·IAM 동기화는 minute_gate_queue_names 주석.
       MINUTE_SESSION_GATE_QUEUES = join(",", [for name in local.minute_gate_queue_names : aws_sqs_queue.minute[name].url])
       # 뉴스 세션 편입(ALPHA-717) — start 가 news_minute 세션도 계획, stop 이 함께 드레인.
       MINUTE_SESSION_NEWS_SOURCE_GROUP = var.minute_session_news_source_group
+      # 공시 세션 편입(ALPHA-875) — 같은 토글 축. 비우면 공시 레인은 계획도 스케일도 안 된다
+      # (그 상태가 곧 컷오버 전이다 — SFN 레인이 계속 소유한다).
+      MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP = var.minute_session_disclosure_source_group
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
@@ -462,9 +489,9 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
   cpu                      = var.task_cpu
   # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
   # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
-  memory                   = var.analysis_task_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.analysis_task.arn
+  memory             = var.analysis_task_memory
+  execution_role_arn = aws_iam_role.execution.arn
+  task_role_arn      = aws_iam_role.analysis_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"

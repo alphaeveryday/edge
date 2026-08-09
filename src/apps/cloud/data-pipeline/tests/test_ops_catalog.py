@@ -60,6 +60,18 @@ _NOT_INSTRUMENTED = {
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
     # AnalyzeOne 은 ALPHA-806 에서 state 자체가 사라졌다(analyze 페이즈 제거) — 설명은
     # SFN 스텝이 아니라 분봉 트리거 큐 상주 소비자가 만든다. 제외 목록에서도 뺀다.
+    #
+    # ── 공시 4state: 1분 레인으로 소유 이동(ALPHA-875) ──
+    # ALPHA-724 가 시장 SFN → 공시 SFN 으로 옮겼던 그 스텝들이, 이번엔 SFN 을 아예 떠나
+    # **1분 세션**(`disclosure-worker`)이 소유한다. SFN 정의는 남기되 스케줄이 DISABLED 라
+    # 아무도 시작하지 않는다 — 롤백 경로를 위해 남긴 것이고, 원장 기대는 옮겨갔다.
+    # ⚠️ 등록을 남기면 **돌지도 않는 슬롯을 원장이 기대**해 매 거래일 10슬롯이 전건 MISSED 다.
+    # 되살릴 때는 반드시 `disclosure_schedule_state` 와 **같은 apply** 로 되돌린다.
+    "CollectDartDisclosure": "1분 레인이 소유(ALPHA-875) — SFN 스케줄 DISABLED, 원장 기대는 "
+                             "minute_ingestion_window 로 이동",
+    "NormalizeDisclosure": "1분 레인이 소유(ALPHA-875)",
+    "NormalizeDisclosureSegment": "1분 레인이 소유(ALPHA-875)",
+    "LoadDisclosure": "1분 레인이 소유(ALPHA-875)",
 }
 
 
@@ -184,10 +196,16 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 27 → 30(ALPHA-769): 장중 수급 3작업 신설. 시장 17 은 그대로다 — 이 셋은 시장 SFN 이 돌던
     # 것을 뺏어온 게 아니라 배선이 0이던 신설이라, 레인 이동이었다면 반드시 줄었어야 할 숫자가
     # 안 줄어야 맞다(그 구분을 이 절이 든다).
-    assert len(registered) == 30
+    # 30 → 26(ALPHA-875): 공시 4작업이 **SFN 원장을 떠났다**(1분 세션이 소유). 위 두 사례와
+    # 성질이 다르다 — 724 는 레인 간 이동이라 총계가 그대로였고, 769 는 신설이라 늘었다.
+    # 이번엔 줄어야 맞다. ⚠️ 줄어드는 변경이 가장 위험한 종류라(조용한 커버리지 축소) 이
+    # 숫자를 고쳐야만 통과하게 두는 것이 이 절의 목적이다: 공시 레인이 0 인 것은
+    # **의도된 상태**이고 그 근거는 `_NOT_INSTRUMENTED` 의 공시 4항목에 적었다.
+    assert len(registered) == 26
     assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
-    assert len(catalog.entries("disclosure")) == 4
+    # 공시 레인은 비었다 — 되살리려면 `disclosure_schedule_state` 와 같은 apply 여야 한다.
+    assert len(catalog.entries("disclosure")) == 0
     assert len(catalog.entries("investor-intraday")) == 3
     # 자기 기록이 불가능한 등록 작업은 이제 **0개**다(ALPHA-596 이 krx·dart, ALPHA-610 이
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
@@ -363,7 +381,11 @@ def test_by_cli_resolves_vendor_split_steps():
     assert catalog.by_cli("ingest-raw-financial", None) is None
     # 공시는 벤더 축이 없다(DART 단일) — --source 없이 해소된다. 레인이 바뀌어도(ALPHA-724)
     # `by_cli` 는 전 레인 검색이라 그대로다: 컨테이너는 자기 레인을 모르고 CLI 가 정체성이다.
-    assert catalog.by_cli("ingest-raw-disclosure").task_key == "DISCLOSURE_COLLECTION_DART"
+    # 공시는 이제 ops 원장이 소유하지 않는다(ALPHA-875) — **None 이 정답이다.** 엔트리를
+    # 남기면 1분 레인이 부른 스텝이 이 레인 task_key 로 귀속돼 슬롯이 전건 MISSED 가 된다.
+    # (워커는 CLI 가 아니라 스텝 함수를 부르므로 이 조회 자체가 안 일어나지만, 어휘가 비어
+    # 있어야 "누가 소유하나"가 한 곳에서만 답해진다.)
+    assert catalog.by_cli("ingest-raw-disclosure") is None
     # 벤더 축이 없는 스텝은 --source 없이 해소된다.
     assert catalog.by_cli("normalize-price").task_key == "NORMALIZE_PRICE"
     assert catalog.by_cli("load-price-daily").task_key == "LOAD_PRICE_DAILY"
@@ -392,7 +414,8 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
     # KRX·공시 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
-    assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
+    # 공시는 ops 원장 밖이다(ALPHA-875) — by_cli 와 같은 축으로 None 이 정답이다.
+    assert ops_entry.task_key_for("ingest-raw-disclosure", None) is None
     assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과
 
 
@@ -461,8 +484,10 @@ def test_dependencies_encode_the_asl_gates():
     # 미충족으로 BLOCKED 다. 그 어긋남이 이 테스트가 막으려는 바로 그 종류의 결함이다.
     assert set(catalog.get("LOAD_INSTRUMENTS").depends_on) == _market_normalize_task_keys()
     # 공시 레인 게이트(ASL `DisclosureNormalizeCheckResults`) — 같은 축을 자기 레인으로 그린다.
-    assert catalog.get("LOAD_DISCLOSURE").depends_on == (
-        "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT")
+    # LOAD_DISCLOSURE 의 의존은 이제 카탈로그가 아니라 **Worker 의 체인 순서**가 진다
+    # (ALPHA-875 — 한 window 가 collect→normalize×2→load 를 순차로 돈다). 엔트리가 없으므로
+    # 여기서 볼 것도 없다: 그 순서가 깨지는지는 `test_disclosure_worker` 가 본다.
+    assert catalog.get("LOAD_DISCLOSURE") is None
     # 뉴스 레인(ALPHA-591)의 의존은 **뉴스 SFN 의 게이트 축**이다 — 옛 시장 의존(LOAD_ASSERTIONS
     # ← feature 7개, LOAD_DOCUMENTS ← ENRICH_CORP_CODE)을 복사하면 뉴스 런에 존재하지 않는
     # 작업을 기다려 영영 eligible 이 안 되고, hard deadline 뒤 전부 BLOCKED 로 오귀속된다.
