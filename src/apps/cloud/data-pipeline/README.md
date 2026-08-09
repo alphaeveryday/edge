@@ -980,8 +980,8 @@ settings.targets.keywords            # ["금리", ...]
   canonical artifact 의 checksum 이 곧 세대 identity 라 실행 시각이 섞이면 값이 같은
   재실행마다 checksum 이 달라져 `ArtifactImmutabilityError` 가 난다(raw 는 반대로 붙인다).
   키는 `canonical/market_data/etf_inav_minute/market=KR/session_date=…/window=HHMM/
-  generation=…/inav.ndjson` 이다. ⚠️ **아직 쓰는 주체가 없다** — 계약(키·레코드 형상·
-  window 확정)은 섰지만 Worker·CLI 가 없어 이 prefix 에는 아무 파일도 없다.
+  generation=…/inav.ndjson` 이다. 쓰는 주체는 상주 iNAV Worker 다(ALPHA-851·882 —
+  `run inav-worker`, 아래 "상주 iNAV Worker" 절).
   이 스텝은 **산출물이 로그**다(raw 는 무변형 보존이라 판단 재료가 로그뿐이다). 그래서
   로그 사전이 곧 계약이다 — ETF 마다 다음이 나온다:
 
@@ -1440,8 +1440,12 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # price 와 **같은 파일**을 쓴다. 세션 identity·기대 집합이 거기서 나온다).
 #
 # 가격 Worker 와 갈리는 곳 넷:
-#  · **기대 집합은 ETF 계열뿐이다**(`etf_ids + sector_etf_ids`) — 구성종목에는 NAV 가
-#    없다. `units_at` 전체를 기대하면 매 window 가 INCOMPLETE 다.
+#  · **기대 집합은 판정 축 ETF 뿐이다**(`etf_ids`) — 기준은 NAV 가 있는가가 아니라
+#    **질의 심볼 맵(`etf_map`)에 있는가**다. 맵 밖 unit 은 `_rows_for` 가 INVALID 로
+#    내고 invalid 하나면 window 전체가 INVALID 다. 구성종목은 NAV 도 맵도 없고, 참조
+#    계열(`sector_etf_ids`)은 NAV 는 있어도 빌더가 두 축의 겹침을 거부해 **정의상**
+#    맵 밖이다(ALPHA-903). ⚠️ NAV 축만의 판단이다 — 참조 계열의 **봉**은 가격 레인이
+#    그대로 수집한다.
 #  · **job·outbox 를 만들지 않는다** — 하위 소비자가 없어 window 확정에서 멈춘다.
 #    (가격 것을 빌려 쓰면 NAV 가 price-analysis-realtime 으로 나가 설명이 발화된다.)
 #  · **복구를 하지 않는다**(`recovery_budget_per_tick = 0`, 2026-08-08 결정) — iNAV 는
