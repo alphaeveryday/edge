@@ -67,7 +67,8 @@ def wiring(monkeypatch):
     monkeypatch.setenv(session_ops.ENV_CLUSTER, "arn:aws:ecs:ap-northeast-2:1:cluster/edge-dev")
     monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-worker,svc-relay,svc-consumer")
     monkeypatch.setenv(session_ops.ENV_GATE_QUEUES, "https://q/price")
-    # 설명 소비자는 토글이 없다 — 늘 배선돼 있고, 비면 죽는다(ALPHA-910).
+    # 설명 소비자 목록(ALPHA-910) — 기본은 **컷오버가 끝난** 배선이다. 빈 값(구 task-def)
+    # 경로는 TestAnalysisConsumerOwnList 가 명시로 지운다.
     monkeypatch.setenv(session_ops.ENV_ANALYSIS_SERVICES, "svc-analysis-consumer")
     monkeypatch.delenv(session_ops.ENV_DRAIN_TIMEOUT, raising=False)
     # 기본은 단일(가격) 레인 — 선택 레인 편입 케이스는 개별 테스트가 명시로 켠다.
@@ -425,7 +426,7 @@ class TestAnalysisConsumerOwnList:
         # 대입식 하나로 묶어야 배선 회귀를 실제로 거부한다.
         assert re.search(
             rf"{session_ops.ENV_ANALYSIS_SERVICES}\s*=\s*aws_ecs_service\.analysis_consumer\.name",
-            text,
+            _tf_code(text),
         ), ("설명 소비자 목록 env 가 terraform 에서 그 서비스명을 안 싣는다 — "
             "코드가 공용에서 뺄 근거를 잃고 컷오버 상태로 오인한다")
 
@@ -439,7 +440,7 @@ class TestAnalysisConsumerOwnList:
             pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
 
         import re
-        block = re.search(r"MINUTE_SESSION_SERVICES\s*=\s*join\(.*?\n\s*\)\)", text, re.S)
+        block = re.search(r"MINUTE_SESSION_SERVICES\s*=\s*join\(.*?\n\s*\)\)", _tf_code(text), re.S)
         assert block, "공용 목록 파생을 못 찾았다 — 이 계약 검사가 헛돌고 있다"
         assert "aws_ecs_service.analysis_consumer.name" in block.group(0), \
             "공용 목록에서 소비자를 뺐다 — apply 가 늦은 날 구 이미지가 소비자를 안 올린다"
@@ -945,6 +946,14 @@ class TestTwoPassengers:
              "services": ["svc-analysis-consumer"]},
             {"desiredCount": 0, "forceNewDeployment": False, "services": ["svc-inav-worker"]},
         ], "토글이 꺼져 있어도 목록에 있으면 내린다"
+
+
+def _tf_code(text: str) -> str:
+    """주석을 걷어낸 terraform 본문. 주석 처리된 대입식을 배선으로 인정하면 계약 검사가
+    **회귀를 거부하지 못한다** — 실제 값을 `""` 로 바꾸고 옛 줄을 주석으로 남기는 것이
+    가장 흔한 모양이다(Rule 9: 단언이 계약보다 약하면 안 된다)."""
+    import re
+    return re.sub(r"(?m)^[ \t]*(#|//).*$", "", text)
 
 
 def _module_tf() -> str | None:

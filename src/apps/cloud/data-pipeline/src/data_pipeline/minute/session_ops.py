@@ -83,8 +83,10 @@ ENV_INAV_WORKER_SERVICES = "MINUTE_SESSION_INAV_WORKER_SERVICES"
 # (ALPHA-910). 수명은 그대로 세션에 묶이지만(start 에서 1, stop 에서 0), 소유 축이
 # 분리돼야 그 desired 를 오토스케일링에 넘길 수 있다: 공용에 있으면 스케일러가 큐 깊이로
 # 올린 값을 매일 밤 stop 이 0 으로 덮어써 둘 다 틀린다.
-# ⚠️ 선택 레인 목록과 달리 **토글이 없다** — 이 서비스는 늘 세션과 함께 뜬다. 그래서 빈
-# 값은 미편입이 아니라 배선 결손이고, `_services` 와 같은 축으로 죽는다.
+# ⚠️ 선택 레인 목록과 달리 **토글이 없다** — 이 서비스는 늘 세션과 함께 뜬다. 그런데도
+# **빈 값에 죽지 않는다**: 그 상태가 컷오버 중(구 task-def)이고 그때는 공용 목록이 아직
+# 소비자를 싣고 있다. 근거는 `_analysis_services` 도크스트링에 있다 — 여기가 아니라
+# 거기가 계약의 자리다(주석은 가드가 아니다).
 ENV_ANALYSIS_SERVICES = "MINUTE_SESSION_ANALYSIS_SERVICES"
 
 
