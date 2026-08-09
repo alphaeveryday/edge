@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "ETF 당일 설명 생성 파이프라인 (S3 → Cloud Event Store)"
 requires-python = ">=3.12"
 dependencies = [
+    "pytz>=2024.1",         # DuckDB Python TIMESTAMPTZ conversion (Postgres RDB boundary)
     "boto3>=1.34",          # S3 canonical lake 읽기 + 결과 s3 fallback
     "pyarrow>=17",          # canonical news parquet 읽기
     "pandas>=2.2",          # 경량 데이터 정리
