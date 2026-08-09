@@ -62,6 +62,10 @@ RATE_STREAK_LIMIT = 5
 TOKEN_EXPIRED_CODES = ("EGW00121", "EGW00123")
 # 봉 하나가 덮는 길이. 이 어댑터는 1분봉 전용이다(두 TR 다 분봉이다).
 INTERVAL_SECONDS = 60
+# `stck_bsop_date`(YYYYMMDD)·`stck_cntg_hour`(HHMMSS) 자리수. **둘을 함께** 못박아야
+# 아래 연접 `strptime` 이 한쪽 자리를 훔쳐가지 못한다(kis_sector_index 와 같은 문).
+_YMD_LEN = 8
+_HHMMSS_LEN = 6
 
 KST = timezone(timedelta(hours=9))
 
@@ -101,6 +105,12 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     day, hour = raw.get("stck_bsop_date"), raw.get("stck_cntg_hour")
     if not isinstance(day, str) or not isinstance(hour, str):
         raise ValueError(f"{symbol} 분봉 행에 날짜·시각이 없다: {raw!r}")
+    # 자리수를 **양쪽 다** 못박는다 — `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를
+    # 보므로 한쪽이 짧으면 다른 쪽 자리를 잘라 먹고도 파싱에 성공한다(실측:
+    # `"20260807"+"1030"` → 10:03:00). `second` 가 0 이라 아래 어느 가드도 안 걸리고,
+    # 그 봉은 멀쩡한 다른 window 에 앉아 확정된다 — **값이 조용히 틀리는** 부류다.
+    if len(day) != _YMD_LEN or len(hour) != _HHMMSS_LEN:
+        raise ValueError(f"{symbol} 분봉 날짜·시각 자리수가 다르다: {day!r} {hour!r}")
     try:
         end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:

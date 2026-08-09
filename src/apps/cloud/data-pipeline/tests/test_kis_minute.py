@@ -125,6 +125,26 @@ class TestParse:
         # 무거래 분: 행은 있고 거래량만 0 — collector 가 no_trade 로 센다(missing 아님)
         assert parse_minute_row(flat_row(), "439870").traded is False
 
+    @pytest.mark.parametrize("short_label, silently_becomes", [
+        ("1030", "10:03:00"),    # 4자리 — 날짜 자리를 훔쳐 **다른 분**이 된다
+        ("30000", "03:00:00"),   # 선행 0 잘림(`kis_inav._time_stamp` 의 그 함정)
+        ("93000", "09:30:00"),   # 우연히 맞아 보이는 값 — 그래서 더 위험하다
+    ])
+    def test_short_time_label_is_rejected_before_parsing(self, short_label, silently_becomes):
+        """🔴 자리수를 안 막으면 **값이 조용히 틀린다** — 형식 오류로 안 드러난다.
+
+        `strptime("%Y%m%d%H%M%S")` 는 연접 문자열 하나를 보므로 짧은 라벨이 날짜 자리를
+        훔쳐 간다. 결과의 `second` 가 0 이라 어느 가드에도 안 걸리고, 그 봉은 멀쩡한
+        다른 window 에 앉아 확정된다. `kis_sector_index`·`kis_inav` 와 같은 문이다.
+        """
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_minute_row({**row(), "stck_cntg_hour": short_label}, "005930")
+
+    def test_short_date_is_rejected_too(self):
+        """날짜가 짧으면 시각 자리를 훔친다 — 같은 함정의 반대쪽."""
+        with pytest.raises(ValueError, match="자리수가 다르다"):
+            parse_minute_row({**row(), "stck_bsop_date": "2026087"}, "005930")
+
     @pytest.mark.parametrize("broken", [
         {**row(), "stck_cntg_hour": "99:99:99"},   # 시각 형식
         {**row(), "stck_bsop_date": None},         # 날짜 결측
