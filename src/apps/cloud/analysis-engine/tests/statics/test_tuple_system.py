@@ -12,7 +12,8 @@ import pytest
 
 
 from edge_analysis.statics.attribute import _verifiable_event_types
-from edge_analysis.statics.hypothesize import propose, screen_tuples
+from edge_analysis.observability import collect_trace
+from edge_analysis.statics.hypothesize import propose, render_hypothesis, screen_tuples
 from edge_analysis.statics.paneltest import EdgeReport, FEATURES, edge_test
 from edge_analysis.statics.vocab import (ExposureSource, HypothesisTuple, VocabError,
                                          MIN_N, SERIES_FAMILIES, Trigger, Condition)
@@ -74,6 +75,80 @@ def test_propose_rejects_proxy_outside_measurement_schema():
         measurable=[("가격잔차", "누적")])
     assert valid == []
     assert rejected and all("못 재는 노출" in why for why in rejected)
+
+
+def test_hypothesis_keeps_legacy_shape_without_control_policy():
+    valid, rejected = screen_tuples(
+        [_h()], event_types=ETYPES,
+        measurable=[("가격잔차", "누적"), ("수급", "누적")])
+    assert not rejected and valid[0].channel == "Q수량"
+
+
+def test_hypothesis_trace_keeps_raw_and_natural_korean_rendering():
+    def ask(_system, _user):
+        return {"hypotheses": [_h(intent="시장 진입이 수익률 차이를 만든다")]}
+
+    with collect_trace() as trace:
+        propose(ask, facts="사실", event_types=ETYPES,
+                measurable=[("가격잔차", "누적"), ("수급", "누적")], n=1)
+
+    raw = next(e for e in trace if e["event"] == "hypothesis.raw")
+    rendered = next(e for e in trace if e["event"] == "hypothesis.rendered")
+    assert raw["hypotheses"][0]["intent"] == "시장 진입이 수익률 차이를 만든다"
+    text = rendered["hypotheses"][0]["text"]
+    assert rendered["hypotheses"][0]["status"] == "preview_required"
+    assert text == "preview_required"
+    assert rendered["hypotheses"][0]["llm_intent"] == "시장 진입이 수익률 차이를 만든다"
+    assert "execution_explanation" not in rendered["hypotheses"][0]
+    assert "EVENT" not in text and "SIGNIFICANCE" not in text
+
+
+def test_objectset_result_summary_is_safe_and_traceable():
+    replies = iter([
+        {"tool": "objectset.describe", "arguments": {"handle": "os_abc"}},
+        {"hypotheses": [_h(), _h(channel="FX환")]},
+    ])
+
+    def ask(_system, _user):
+        return next(replies)
+
+    def call(name, arguments):
+        assert name == "objectset.describe"
+        assert arguments == {"handle": "os_abc"}
+        return {"ok": True, "handle": "os_abc", "kind": "NEWS_THREAD",
+                "lineage_id": "lin_1", "as_of": "2026-08-07T00:00:00Z",
+                "row_count": 7, "pit": {"clamp": True,
+                                          "gaps": ["secret_dataset_name"]},
+                "objects": [{"secret": "drop-me"}]}
+
+    with collect_trace() as trace:
+        propose(ask, facts="사실", event_types=ETYPES, n=1,
+                object_tools={"specs": [], "call": call})
+    [summary] = [e for e in trace if e["event"] == "hypothesis.tool_result"]
+    assert summary["ok"] is True
+    assert summary["handle"] == "os_abc"
+    assert summary["kind"] == "NEWS_THREAD"
+    assert summary["lineage_id"] == "lin_1"
+    assert summary["as_of"] == "2026-08-07T00:00:00Z"
+    assert summary["row_count"] == 7
+    assert summary["has_gaps"] is True
+    assert summary["gap_count"] == 1
+    assert "gaps" not in summary
+    assert "objects" not in summary
+    [rendered] = [e for e in trace if e["event"] == "hypothesis.rendered"]
+    assert rendered["hypotheses"][0]["tool_results"][0] == {
+        k: v for k, v in summary.items() if k not in {"event", "ts"}}
+
+
+def test_hypothesis_prompt_keeps_channel_duplicate_guard():
+    seen = {}
+
+    def ask(system, _user):
+        seen["system"] = system
+        return {"hypotheses": []}
+
+    propose(ask, facts="사실", event_types=ETYPES, n=1)
+    assert "서로 다른 채널" in seen["system"]
 
 
 
