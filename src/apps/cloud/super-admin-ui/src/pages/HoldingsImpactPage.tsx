@@ -21,7 +21,8 @@ import { ApiError } from '../api/client';
 import type { HoldingsImpact } from '../domains/sources';
 import { useHoldingsImpact } from '../domains/sources/hooks';
 import { useConsoleEvaluation } from './ops/shared';
-import { incidentHref, incidentOfVid } from './ops/investigation';
+import { dateOfSlot } from '../domains/sources/dailyRollup';
+import { incidentHref, incidentOfVid, runHref } from './ops/investigation';
 import { FETCH_LABEL, fetchTip, isCurrent, notRunReason, unevaluatedFor } from './ops/notRun';
 import { MOCK_HOLDINGS } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
@@ -30,7 +31,17 @@ import '../styles/ops.css';
 
 /** 조사 경로 — 실제 식별자로만 만든다. 사건에서 왔으면 그 문맥을 유지한다 */
 function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string }) {
-  const ev = useConsoleEvaluation();
+  /* 실행 상세의 조회 창 — 아래 링크 분기가 이 값의 유무로 갈린다 */
+  const runDate = runKey ? dateOfSlot({ tradingDate: null, runKey }) : null;
+  /* 🔴 **사건을 푸는 창과 링크가 싣는 창이 같아야 한다.** 여기서 오늘 사실로 `incidentId` 를
+   * 풀고 링크에는 `runDate` 를 실으면, 목적지가 그 날 사실로 같은 vid 를 다시 찾다가 못 찾는다
+   * (vid 는 날짜에 고정된다 — `rules.test.ts` 의 R17 사건 키 검사). 그러면 breadcrumb 이
+   * "최근 런"으로 퇴행해 **돌아갈 곳이 사라진다** — 조사 문맥을 유지하려고 둔 이 컴포넌트가
+   * 정확히 그걸 잃는다. 런을 모르는 자리(`runKey` 없음)는 전과 같이 최신 창을 본다.
+   * ⚠️ **대가도 적어 둔다**: 그 사건이 오늘 사실에만 있으면 back-link 이 `확인되지 않음` 으로
+   * degrade 한다. "사건은 보이는데 런 링크가 죽는다"를 "둘 다 같은 창"으로 바꾼 거래다 —
+   * 창이 갈린 채로 두면 목적지에서 **문맥과 링크가 동시에** 죽는 쪽이라 이쪽을 골랐다. */
+  const ev = useConsoleEvaluation(runDate ?? undefined);
   /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다.
    * ⚠️ **"확인되지 않음"은 `loaded` 에서만 참이다** — `stale`(마지막 조회 실패)·`pending`·
    * `error` 를 그 문구로 접으면 조회 실패가 "그 사건은 해소됐다"로 읽힌다. */
@@ -72,7 +83,9 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
       ) : (
         <>
           {/* 실행 **목록**이 아니라 원장 근거다 — 아래 404 분기와 같은 이유로, 실 API
-            * 런키를 들고 온 사용자를 스냅샷 런만 세우는 목록으로 보내면 "없다"로 읽힌다.
+            * 런키를 들고 온 사용자를 **하루치 목록**으로 보내면 그 창 밖 런은 "없다"로 읽힌다.
+            * (목록이 실 원장을 읽게 된 뒤로도 그대로다 — 바뀐 것은 출처이지 창이 아니다.
+            * 창을 지목할 수 있는 것은 런 하나를 쥔 자리뿐이라 위 breadcrumb 만 링크다.)
             * 이름은 그 화면이 자기를 부르는 이름을 쓴다(AdminLayout 의 페이지 제목 =
             * `원장 근거`) — 링크 텍스트와 도착지 제목이 다르면 잘못 온 줄 안다. */}
           <Link to="/sources">원장 근거</Link>
@@ -81,12 +94,35 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
       )}
       {runKey && (
         <>
-          {/* 링크가 아니다 — 실행 상세는 스냅샷만 읽어 이 실 API 런을 해소하지 못한다.
-           * 사유를 `title` 로만 달지 않는다: 비대화형 span 의 title 은 탭 순서에 없고
-           * 스크린리더가 기본 설정에서 읽지 않아 마우스 사용자만 받는다. 여기는 조사 경로
-           * 라벨이라 클릭을 시도할 자리가 아니고, 사유는 실행 이력·현재 실행이 보이는
-           * 텍스트로 낸다. */}
-          <span className="mono">{runKey}</span>
+          {/* 조사 경로의 윗단계 = 그 실행의 상세다(축 E).
+            *
+            * ⚠️ **이 화면이 아는 날짜는 런 키에 든 슬롯 날짜뿐이다** — 응답의 `expectedAsOf`
+            * 는 기대 목록의 기준일이지 원장이 이 런을 세는 날이 아니라 여기 쓰지 않는다.
+            * 그래서 `tradingDate: null` 을 **명시해서** 넘긴다 — 축을 못 보는 것이 선언이 된다.
+            * (한때 `dateOfRunKey` 라는 별도 함수로 뺐다가 되돌렸다: 그 이름을 부르는 것만으로
+            * `tradingDate` 필수화가 세운 tsc 가드를 우회할 수 있어, 거래일을 쥔 화면이 축을
+            * 흘려도 안 잡혔다 — 리뷰 6라운드.)
+            * 원장이 이 런을 다른 날로 세면 목적지가 그 사실을 밝힌다 — 여기서 "없다"로 접지 않는다.
+            *
+            * 🔴 **키에서 날짜를 못 읽으면 링크가 아니다.** `runKey` 는 URL 이 준 값이라 모양을
+            * 보증할 수 없는데, 날짜 없이 보내면 상세가 가장 최근 날로 폴백해 축 E 이전과 같은
+            * 창 밖 조회가 된다 — 그리고 목적지의 "이 주소는 날짜를 싣지 않아"가 *안 실었다* 와
+            * *못 구했다* 를 한 문장으로 접는다(리뷰가 잡았다). 라벨로만 남긴다.
+            *
+            * ⚠️ **404 분기에서도 이 링크는 산다 — 의도한 것이다.** 이 화면의 404 는 "이 런의
+            * **기대 목록**이 원장에 없다"는 좁은 주장이지 "그 런이 없다"가 아니다(아래 404
+            * 카드가 제목에서 그 둘을 갈라 놓은 이유와 같다). 계획 행이 없는 런은 실재하는
+            * 상태이고(`no_run_row`·계획 결손) **그걸 설명하는 화면이 정확히 실행 상세**라,
+            * 여기서 링크를 끊으면 진짜 조사 경로를 404 하나로 막는다. 대가는 오타 키로 왔을 때
+            * 부재 문구를 한 번 더 보는 것이고, 그건 이 화면이 알 수 없는 사실이다 — 원장에
+            * 물어봐야 갈리므로 목적지가 답하는 것이 맞다(리뷰 2라운드 제기, 이 근거로 유지). */}
+          {runDate ? (
+            <Link to={runHref(runKey, { date: runDate, fromIncident: incidentId })} className="mono">
+              {runKey}
+            </Link>
+          ) : (
+            <span className="mono">{runKey}</span>
+          )}
           <span aria-hidden="true">›</span>
           <Link to={`/sources?runKey=${encodeURIComponent(runKey)}`}>ETF 구성종목</Link>
           <span aria-hidden="true">›</span>
@@ -146,8 +182,8 @@ export function HoldingsImpactPage() {
               이 실행의 기대 목록을 찾을 수 없습니다
             </p>
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-              {/* 실행 **목록**으로 보내지 않는다 — 그 화면은 스냅샷 런만 세워서, 실 런키를
-                * 들고 온 사용자가 거기서도 자기 실행을 못 보고 "없다"로 한 번 더 읽는다.
+              {/* 실행 **목록**으로 보내지 않는다 — 그 화면은 하루치만 세워서, 이 런이 그 창
+                * 밖이면 사용자가 거기서도 자기 실행을 못 보고 "없다"로 한 번 더 읽는다.
                 * 그리고 `runKey` 를 버리지 않는다: 404 는 "이 런의 **기대 목록**이 없다"는
                 * 좁은 주장이고 `/sources/report?runKey=` 는 얼마든지 답한다. 화면에 떠 있는
                 * 키를 사용자가 폼에 다시 타이핑하게 두지 않는다. */}

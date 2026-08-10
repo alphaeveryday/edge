@@ -35,6 +35,15 @@ export const realSourcesRepository: SourcesRepository = {
         ? `/sources/impact/holdings?runKey=${encodeURIComponent(runKey)}`
         : '/sources/impact/holdings',
     ),
+  /* ⚠️ 인코딩은 이 파일의 형제들(`report`·`holdingsImpact` 의 `encodeURIComponent` ·
+   * `newsLineage` 의 `URLSearchParams`)과 같아야 한다 — 축 E 부터 이 값이 **주소에서
+   * 온 미검증 문자열**이다(`/ops/runs/:id?date=` → `useConsoleEvaluation` → 여기). 날것으로
+   * 보간하면 `2026-08-10%26limit=1` 같은 입력이 `&` 로 풀려 **없던 파라미터**가 붙고, 서버는
+   * 날짜 부분만 보고 200 을 준다 — 같은 값을 `console` 도메인의 `facts`
+   * (`domains/console/repository.real.ts`)는 인코딩해 400 으로 거부하는데. 한 화면이 두 축을
+   * 같은 값으로 물으므로 판별이 갈리면 안 된다. */
   minuteStatus: (date) =>
-    apiClient.get<MinuteStatus>(date ? `/sources/minute?date=${date}` : '/sources/minute'),
+    apiClient.get<MinuteStatus>(
+      date ? `/sources/minute?date=${encodeURIComponent(date)}` : '/sources/minute',
+    ),
 };

@@ -36,9 +36,10 @@ import {
 } from '../domains/sources/minuteView';
 import type { ApiGap, Issue, Segment, ViewTone } from '../domains/sources/minuteView';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
+import { dateOfSlot } from '../domains/sources/dailyRollup';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
-import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
+import { runHref } from './ops/investigation';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
 import '../styles/minute.css';
@@ -682,23 +683,7 @@ function BatchRunning({ date }: { date: string }) {
             <ul className="mn-runlist">
               {view.map((l) => (
                 <li key={l.runKey}>
-                  <div className="mn-runcard">
-                    <span className="t-label">{l.pipelineType}</span>
-                    <StatusBadge tone={l.opsStatus === 'DEGRADED' ? 'warn' : 'env'}>
-                      {l.orchestrationStatus ?? l.opsStatus}
-                    </StatusBadge>
-                    <span className="mono t-xs" style={{ color: 'var(--fg-3)' }}>
-                      {l.runKey}
-                    </span>
-                    <span className="t-xs" style={{ color: 'var(--fg-2)' }}>
-                      계획 {l.plannedAt ? clock(l.plannedAt) : '—'} · 완료 {l.counts.fulfilled}/
-                      {l.counts.requiredDue} · 남은 작업 {l.counts.pending}
-                    </span>
-                    <span className="t-xs" style={{ color: 'var(--fg-4)' }}>
-                      시작·경과·heartbeat 계측 없음
-                    </span>
-                    <span className="t-xs mn-runcard-go">{RUN_DETAIL_UNAVAILABLE}</span>
-                  </div>
+                  <RunCard lane={l} mock={mock} />
                 </li>
               ))}
             </ul>
@@ -706,6 +691,66 @@ function BatchRunning({ date }: { date: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * 배치 카드 하나 — 실행 상세로 가는 링크다(축 E).
+ *
+ * 조회 창이 하루라 **이 런이 선 날을 함께 싣는다**. 이 블록은 "지금"만 그리지만 그 날이 곧
+ * 오늘이라는 보장은 없다 — `notToday` 가 말하듯 Planner 가 오늘 안 돌면 어제 런이 최신으로
+ * 재사용된다. 날짜 규칙은 격자와 한 벌(`dateOfSlot`)이라 같은 런이 화면에 따라 다른 날로
+ * 조회되지 않는다.
+ *
+ * 🔴 **날짜를 모르면 링크가 아니다 — 두 경우가 있고 둘 다 링크를 주면 거짓이 된다.**
+ *   · **목 카드** — 도는 배치가 없으면 이 블록은 목으로 떨어진다(= 장 밖 대부분의 시간).
+ *     지어낸 런 키로 상세를 열면 목적지가 "이 조회 결과에 그 실행이 없습니다"로 답하는데,
+ *     그건 **조회 창 밖**이라는 뜻이지 지어낸 값이라는 뜻이 아니다.
+ *   · **`dateOfSlot` 이 null** — 거래일도 없고 런 키에서 날짜도 못 읽었다. 날짜 없이 보내면
+ *     상세가 가장 최근 날로 폴백해 **축 E 이전과 같은 창 밖 조회**가 되고, 목적지는 "이 주소는
+ *     날짜를 싣지 않아"라고 답한다 — 사실이지만 *안 실은 것*과 *못 구한 것*이 한 문장으로
+ *     접힌다(리뷰가 잡았다).
+ * 둘 다 어포던스를 안 준다(`.mn-runcard` 의 hover·focus 는 `a` 에만 걸려 있다 — 안 그러면
+ * 링크 아닌 카드가 눌리는 것처럼 보인다). 다만 **사유를 내는 자리가 다르다**: 목은 위
+ * 목데이터 안내가 이미 말하고, 날짜 부재는 **실데이터인데도 링크가 없는 경우라** 아무도 말해
+ * 주지 않는다 — 그래서 그 자리에 `날짜 미상` 을 세운다(리뷰 2라운드가 잡았다. 1라운드 수정이
+ * 두 사유를 한 분기로 합치면서 뒤쪽 사유를 통째로 삼켰다).
+ */
+function RunCard({ lane: l, mock }: { lane: OverviewLane; mock: boolean }) {
+  const date = dateOfSlot(l);
+  const body = (
+    <>
+      <span className="t-label">{l.pipelineType}</span>
+      <StatusBadge tone={l.opsStatus === 'DEGRADED' ? 'warn' : 'env'}>
+        {l.orchestrationStatus ?? l.opsStatus}
+      </StatusBadge>
+      <span className="mono t-xs" style={{ color: 'var(--fg-3)' }}>
+        {l.runKey}
+      </span>
+      <span className="t-xs" style={{ color: 'var(--fg-2)' }}>
+        계획 {l.plannedAt ? clock(l.plannedAt) : '—'} · 완료 {l.counts.fulfilled}/
+        {l.counts.requiredDue} · 남은 작업 {l.counts.pending}
+      </span>
+      <span className="t-xs" style={{ color: 'var(--fg-4)' }}>
+        시작·경과·heartbeat 계측 없음
+      </span>
+    </>
+  );
+  if (mock) return <div className="mn-runcard">{body}</div>;
+  if (!date)
+    return (
+      <div className="mn-runcard">
+        {body}
+        <span className="t-xs mn-runcard-go" style={{ color: 'var(--fg-4)' }}>
+          날짜 미상 — 상세를 열 수 없습니다
+        </span>
+      </div>
+    );
+  return (
+    <Link to={runHref(l.runKey, { date })} className="mn-runcard">
+      {body}
+      <span className="t-xs mn-runcard-go">실행 상세 →</span>
+    </Link>
   );
 }
 

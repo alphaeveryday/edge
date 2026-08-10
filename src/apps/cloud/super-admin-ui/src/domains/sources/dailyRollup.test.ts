@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { datesOf, rollup, stateOf } from './dailyRollup.ts';
+import { dateOfSlot, datesOf, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
 import type { GridCell, GridSlot } from './types.ts';
 
@@ -233,4 +233,61 @@ test('tradingDate 가 없으면 run_key 에서 날짜를 읽는다(비거래일 
     { runKey: 'etf-daily:2026-08-01T15:40', launchStatus: null, orchestrationStatus: null, tradingDate: null, tasks: [] },
   ]);
   assert.deepEqual(dates, ['2026-08-01']);
+});
+
+/* ── `dateOfSlot` 의 **우선순위** — 실행 상세 링크의 조회 창이 이 규칙에 달려 있다 (축 E) ──
+ *
+ * 위 두 테스트는 `datesOf` 를 거쳐 재는데, 거기서는 두 날짜가 **같은 픽스처**라 우선순위가
+ * 뒤집혀도 통과한다. 갈리는 입력을 직접 넣어야 규칙이 잡힌다.
+ *
+ * ⚠️ **이 검사를 브라우저 하네스로 밀지 마라.** 한 번 그렇게 했다가 스텁의 한 응답만 갈라 놓아,
+ * 같은 런 키가 화면마다 다른 거래일을 갖는 **원장에 존재할 수 없는 상태**를 만들었다. 그러면
+ * 가드들이 서로 모순된 링크를 동시에 통과시킨다(리뷰 3라운드가 단언 방향을, 4라운드가 그
+ * 모순을 잡았다). `dateOfSlot` 은 JSX 가 없는 순수 함수라 **여기서 직접 잴 수 있다** — 픽스처를
+ * 비틀 이유가 없다.
+ *
+ * ⚠️ 오늘 이 갈림을 만드는 writer 는 없다(`ops/planner.py` 가 `trading_date` 와 run_key 를 같은
+ * `slot` 에서 뽑고, `create_pipeline_run` 의 다른 호출자는 테스트뿐이다). 그래도 지운 채 두지
+ * 않는 이유: 타입이 허용하고(`tradingDate: string | null`), 서버의 `COALESCE` 도 둘이 다를 수
+ * 있다는 전제 위에 있으며, 무엇보다 **우선순위 자체가 코드로 존재하는 규칙**이라 근거 없이
+ * 뒤집히면 조용히 창 밖 링크가 된다. 관측된 상태가 아니라 **선언된 계약**을 지키는 검사다. */
+test('dateOfSlot 은 tradingDate 를 우선한다 — run_key 의 슬롯 날짜가 아니라', () => {
+  assert.equal(
+    dateOfSlot({ tradingDate: '2026-07-31', runKey: 'etf-daily:2026-08-03T15:40' }),
+    '2026-07-31',
+  );
+});
+
+test('dateOfSlot 은 tradingDate 가 없을 때만 run_key 로 떨어진다', () => {
+  assert.equal(dateOfSlot({ tradingDate: null, runKey: 'etf-daily:2026-08-03T15:40' }), '2026-08-03');
+});
+
+/* ⚠️ **`dateOfSlot({ runKey })` 를 여기서 검사하지 않는 이유: 그건 이제 컴파일되지 않는다.**
+ * `tradingDate` 를 필수로 둔 것이 가드다 — 거래일을 쥔 호출부가 부분 객체로 축을 흘리면 tsc 가
+ * 잡는다. 거래일을 모르는 자리는 `{ tradingDate: null }` 을 명시한다(리뷰 5·6라운드). */
+
+test('빈 문자열 tradingDate 는 부재로 접는다 — 값으로 내보내지 않는다', () => {
+  /* 🔴 `??` 로 쓰면 `''` 가 그대로 나가고, `runHref` 의 falsy 필터가 그걸 지워 링크가 조용히
+   * "날짜 없음"으로 퇴행한다(= 상세가 최신 하루만 조회). 가드와 바인딩이 falsy 를 다르게
+   * 읽던 자리라, 여기서 못을 박는다. */
+  assert.equal(dateOfSlot({ tradingDate: '', runKey: 'etf-daily:2026-08-03T15:40' }), '2026-08-03');
+});
+
+test('날짜를 못 읽으면 null 이다 — 아무 날이나 지어내지 않는다', () => {
+  /* 호출부는 이 null 로 **링크를 만들지 않는다**. 여기서 오늘 날짜 같은 걸 돌려주면 상세가
+   * 엉뚱한 창을 열고, 그 부재가 "안 물어봤다"로 읽힌다. */
+  assert.equal(dateOfSlot({ tradingDate: null, runKey: 'etf-daily:no-slot-date' }), null);
+  assert.equal(dateOfSlot({ tradingDate: '', runKey: '' }), null);
+});
+
+test('모양만 맞으면 그대로 낸다 — 달력 실재성은 여기서 안 본다(일부러)', () => {
+  /* 🔴 `2026-02-30` 은 없는 날이고, 이 값이 `?date=` 로 나가면 서버가 400 을 낸다. 그래도
+   * 여기서 `null` 로 접지 않는다: 이 함수의 다른 소비자(`rollup`·`datesOf`)는 날짜 없는 슬롯을
+   * **건너뛰므로** 그 런이 실행 이력에서 통째로 사라진다. 손으로 친 URL 의 400 은 fail-loud,
+   * 실재 런의 실종은 fail-silent 다. 소비자 둘이 반대 방향을 원해 여기서 정하면 한쪽이 진다
+   * (10라운드에 걸렀다가 11라운드에 되돌렸다 — 다시 제안되면 이 테스트가 근거다). */
+  assert.equal(
+    dateOfSlot({ tradingDate: null, runKey: 'etf-daily:2026-02-30T15:40' }),
+    '2026-02-30',
+  );
 });

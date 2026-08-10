@@ -38,7 +38,7 @@ import type { DayExecution, DayRollup, DayState } from '../domains/sources/daily
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
-import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
+import { runHref } from './ops/investigation';
 import { LoadError } from './_shared/LoadError';
 import '../styles/grid.css';
 
@@ -306,7 +306,7 @@ function GridBody({
               <b>박스</b> 선택 → 그 데이터셋·날짜의 실행 목록
             </span>
             <span>
-              실행 목록에서 <b>실시간 세션</b>은 세션 상세로 갑니다 — <b>배치 실행</b>은 여기까지입니다
+              실행 목록에서 <b>배치 실행</b>은 실행 상세로, <b>실시간 세션</b>은 세션 상세로 갑니다
             </span>
             <span style={{ marginLeft: 'auto' }}>
               분·poll 단위 상태는 <Link to="/minute">현재 실행</Link>이 답합니다
@@ -445,10 +445,10 @@ function boxTip(
  * 기본은 접힘이되 **문제 있는 실행만 펼친다** — 정상 실행까지 펼치면 하루 10회 × 작업 3개가
  * 다시 30행 평탄화가 된다. 일별 배지만 두고 어느 실행이 장애인지 못 찾는 상태로 두지 않는다.
  *
- * 정식 조사 순서는 실행 이력 → 실행 목록 → 실행 상세 → 작업 상세 → 원장 근거지만,
- * **실행 상세로 가는 진입점은 지금 없다** — 그 화면이 최근 조회일 하루만 읽어 이 격자의
- * 임의 날짜 런을 해소하지 못한다(`RUN_DETAIL_UNAVAILABLE`). 여기서 답할 수 있는 데까지가
- * 이 표다.
+ * 작업을 고르면 **실행 상세**(/ops/runs)로 간다 — 원장 근거로 바로 건너뛰지 않는다.
+ * 정식 순서: 실행 이력 → 실행 목록 → 실행 상세 → 작업 상세 → 원장 근거.
+ * 상세의 조회 창은 하루라 **이 격자의 날짜를 함께 실어 보낸다**(축 E) — 안 실으면 원장이 아는
+ * 가장 최근 날만 보고, 30일치를 훑는 이 화면의 링크는 거의 전부 창 밖으로 나간다.
  *
  * ⚠️ 런 kind(정규·수동·백필)는 격자 응답에 없다(decisions.md §3-4 계측 부채) — 여기서
  * runKey 모양으로 추측하지 않고 `배치 실행`까지만 단언한다.
@@ -601,7 +601,7 @@ function DayDetail({
 
         <ul className="gd-exec-list">
           {r.executions.map((e) => (
-            <ExecutionRow key={e.runKey} exec={e} mock={mock} />
+            <ExecutionRow key={e.runKey} exec={e} date={date} mock={mock} />
           ))}
         </ul>
 
@@ -616,8 +616,14 @@ function DayDetail({
   );
 }
 
-/** 실행 하나 — 접힘이 기본이고 문제 있는 실행만 펼친 채로 시작한다 */
-function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
+/**
+ * 실행 하나 — 접힘이 기본이고 문제 있는 실행만 펼친 채로 시작한다.
+ *
+ * @param date 이 실행이 선 격자 칸의 날짜(`dateOfSlot`). 실행 상세의 조회 창을 여는 축이라
+ *             **이 값이 곧 링크의 유효성**이다 — 격자의 열 축과 다른 날을 실으면 목적지가
+ *             창 밖이라고 답한다.
+ */
+function ExecutionRow({ exec, date, mock }: { exec: DayExecution; date: string; mock: boolean }) {
   const problem = exec.state === '장애' || exec.state === '주의';
   const [open, setOpen] = useState(problem);
   const c = exec.counts;
@@ -649,7 +655,6 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
         </span>
       </button>
       {open && (
-        <>
         <div style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead>
@@ -661,6 +666,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                 <th className="num">산출</th>
                 <th className="num">유실</th>
                 <th>사유</th>
+                <th>상세</th>
               </tr>
             </thead>
             <tbody>
@@ -679,19 +685,39 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                   <td className="num">{t.recordsOut ?? '—'}</td>
                   <td className="num">{t.failedRecords ?? '—'}</td>
                   <td className="col-muted t-xs">{t.reason ?? '—'}</td>
+                  <td>
+                    {/* 원장 근거로 바로 건너뛰지 않는다 — 실행 상세를 거쳐 작업 상세를 연다.
+                      * 버튼+navigate 가 아니라 진짜 링크다: 주소가 보여야 새 탭·공유가 되고,
+                      * 하네스도 클래스가 아니라 목적지로 잴 수 있다(`.gd-linkbtn` 은 같은
+                      * 상세 패널 안 세션 상세 링크도 쓴다 — 표는 다르다).
+                      *
+                      * 🔴 목 격자에서는 링크를 안 준다 — 지어낸 런 키로 상세를 열면 목적지가
+                      * "이 조회 결과에 그 실행이 없습니다"로 답하는데, 그건 **조회 창 밖**
+                      * 이라는 뜻이지 지어낸 값이라는 뜻이 아니다. 목이 실 원장의 부재로
+                      * 둔갑하는 자리라, 사유는 이 표를 감싼 `MockPreview` 가 맡는다. */}
+                    {mock ? (
+                      <span className="t-xs" style={{ color: 'var(--fg-4)' }}>—</span>
+                    ) : (
+                      /* 링크 이름에 작업 키를 넣는다 — 스크린리더의 **링크 목록**은 주변 셀
+                       * 없이 이름만 나열하므로, 전부 "실행 상세 →"면 한 실행의 작업 N개가
+                       * 구별되지 않는 N개의 같은 링크가 된다(각자 다른 `focus=task-*` 를
+                       * 여는데도). 보이는 문구는 열 제목이 문맥을 주므로 그대로 둔다.
+                       * ⚠️ 보이는 라벨을 **접두로 그대로 담는다**(WCAG 2.5.3 label-in-name) —
+                       * 음성 입력 사용자가 화면에 보이는 "실행 상세"로 이 링크를 부른다. */
+                      <Link
+                        to={runHref(exec.runKey, { date, focus: `task-${t.taskKey}` })}
+                        className="gd-linkbtn"
+                        aria-label={`실행 상세 → ${t.taskKey} 작업`}
+                      >
+                        실행 상세 →
+                      </Link>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {/* 행마다 반복하지 않는다 — 값이 행에 따라 변하지 않는 사실이고, 표 안에 두면
-          * 스크린리더가 작업 수만큼 같은 문장을 읽는다. 빈 칸으로 두지도 않는다.
-          * 가로 스크롤 박스 **밖**에 둔다 — 안에 두면 줄바꿈 폭을 표가 정해서, 표가
-          * 넓은 화면에서는 이 문장을 끝까지 읽으려고 가로 스크롤해야 한다. */}
-        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', padding: '6px 0 2px' }}>
-          {RUN_DETAIL_UNAVAILABLE} — 이 표가 이 실행에 대해 답할 수 있는 전부입니다.
-        </p>
-        </>
       )}
     </li>
   );
