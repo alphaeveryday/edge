@@ -77,6 +77,11 @@ resource "aws_db_instance" "this" {
   # ⚠️ PI 에이전트 자체가 DB 호스트의 CPU·메모리를 쓴다(AWS 원문 "limited" — 수치는 안 준다).
   # 메모리로 죽는 인스턴스에 소비자를 하나 더 붙이는 것이니, 켠 뒤 평시 여유를 다시 재고
   # 아래 알람 임계를 재교정하라.
+  # 🔴 다만 지금은 **읽을 수가 없다** — 조직 SCP 가 `pi:*` 를 명시 거부한다(ALPHA-923).
+  # 그래도 켜 둔다: 수집은 계속되므로 풀리는 순간 **그때부터가 아니라 그 시점 기준 직전
+  # 7일치**를 얻는다. ⚠️ 보관은 롤링이라 그보다 오래된 것은 없다 — 해제가 늦어질수록
+  # 편익이 줄고 오버헤드만 남는다. 오래 안 풀리면 끄는 것도 선택지다(ALPHA-923 에서 판단).
+  # 위 오버헤드 경고와의 교환은 상향(2GiB, 여유 700MB+) 뒤라 부담이 줄었다.
   # 켜고 끄는 데 재부팅·다운타임이 없고, 유지보수 창을 무시하고 즉시 반영된다(AWS 문서).
   # 콘솔은 2026-07-31 EOL 로 CloudWatch Database Insights(Standard)에 승계됐다. terraform
   # 설정·API·요금은 그대로다. 보관 7일은 무료(인스턴스 클래스 무관), 그 이상은 vCPU 당 과금.
@@ -107,7 +112,7 @@ resource "aws_db_instance" "this" {
 # 이 상향이 그 답이다. 알람은 느린 형태 전용이라고 읽어라.
 resource "aws_cloudwatch_metric_alarm" "freeable_memory" {
   alarm_name        = "${var.name}-rds-freeable-memory"
-  alarm_description = "RDS 여유 메모리가 최근 15분 중 12분 이상 80MiB 미만이다 — 곧 OOM 으로 인스턴스가 죽고 DB 를 쓰는 모든 레인이 함께 멈춘다. 할 일: Database Insights 에서 DB load 상위 세션·질의를 보고 폭주 소비자를 끊어라. 거기가 비어 있으면 유휴 커넥션이 각자 버퍼를 쥔 형태이므로 DatabaseConnections 를 봐라(유휴 세션은 DB load 에 안 잡힌다). 못 끊으면 장 마감 후 인스턴스 상향이 답이다 — 재기동은 시간만 벌 뿐 원인을 해결하지 않는다."
+  alarm_description = "RDS 여유 메모리가 최근 15분 중 12분 이상 80MiB 미만이다 — 곧 OOM 으로 인스턴스가 죽고 DB 를 쓰는 모든 레인이 함께 멈춘다. 할 일 ① CloudWatch 에서 CPUUtilization 과 ReadIOPS 를 같은 창에 겹쳐 계단이 생긴 시각을 찾아라 — 그 시각이 원인 워크로드의 시작점이고, 파이프라인 스케줄·ops_* 원장과 대조하면 어느 레인인지 좁혀진다(2026-08-10 실증: 21:44 에 CPU 9%→24%·ReadIOPS 18→119, 30분 뒤 사망). ② DatabaseConnections 로 유휴 커넥션이 각자 버퍼를 쥔 형태인지 가른다 — 유휴 세션은 DB load 에 안 잡힌다. ③ Performance Insights 의 상위 질의가 가장 빠른 길이지만 조직 SCP 가 pi:* 를 막고 있다(ALPHA-923) — 열리는지 먼저 확인하고 안 되면 ①로 가라. 못 끊으면 장 마감 후 인스턴스 상향이 답이다 — 재기동은 시간만 벌 뿐 원인을 해결하지 않는다."
 
   namespace   = "AWS/RDS"
   metric_name = "FreeableMemory"
@@ -137,12 +142,35 @@ resource "aws_cloudwatch_metric_alarm" "freeable_memory" {
   # range 안에 실데이터가 evaluation_periods 만큼 남아 있으면 결측 처리를 통째로 무시하기
   # 때문이다(AWS 문서). ⚠️ 그러니 문턱을 evaluation_periods(15)로 읽지 마라 — 정확히 15개
   # 결측으로는 모자랐다. 실제 문턱은 evaluation range 폭(AWS 미공개)과 M-of-N 이 함께
-  # 정하고, 이번 실측이 주는 것은 하한뿐이다. 요컨대 이 값을 죽음 탐지로 쓰지 마라.
-  # 그래서 이 설정의 실제
-  # 값은 "죽는 순간을 잡는다"가 아니라 "긴 단절을 OK 로 오독하지 않는다"이고, 대가는
-  # auto_minor_version_upgrade 재시작이 그만큼 길면 유지보수 창에 오탐 한 통이다.
-  # ⏭ 죽음 자체의 통보는 이 축으로 못 얻는다 — RDS 이벤트 구독이 필요하다(ALPHA-928).
+  # 정하고, 이번 실측이 주는 것은 하한뿐이다. 요컨대 이 값을 죽음 탐지로 쓰지 마라 —
+  # 이 설정의 실제 값은 "죽는 순간을 잡는다"가 아니라 "긴 단절을 OK 로 오독하지 않는다"이고,
+  # 대가는 auto_minor_version_upgrade 재시작이 그만큼 길면 유지보수 창에 오탐 한 통이다.
+  # 죽음 자체의 통보는 이 축이 아니라 아래 aws_db_event_subscription 이 진다(ALPHA-928).
   treat_missing_data = "breaching"
 
   alarm_actions = [var.alarm_topic_arn]
+}
+
+# DB 가 죽었다는 사실 자체의 통보. 위 FreeableMemory 알람은 **죽기 전 예고**이고 그것도
+# 느린 하강 형태에서만 듣는다 — 2026-08-10 22:14 사망은 15개 결측(=evaluation_periods)에도
+# 끝내 ALARM 으로 안 갔다(이력 전이 0건). 지표 공백으로 죽음을 추론하는 방식은 CloudWatch 의
+# evaluation range 규칙에 구조적으로 지므로, 임계·통계·M-of-N 을 어떻게 조여도 안 닫힌다.
+# 이 구독은 RDS 가 이벤트를 SNS 로 **직접** 밀어 주는 다른 축이라 그 규칙을 안 탄다.
+#
+# 카테고리는 08-10 사망 5회의 실제 이벤트를 describe-events 로 분류해 골랐다(추측 아님):
+#   recovery     — "Recovery of the DB instance has started"  ← 가장 이른 신호(재시작 4분 전)
+#   availability — "DB instance restarted" · "DB instance shutdown"
+#   notification — "A database workload is causing the system to run critically low on
+#                   memory … set shared_buffers 23081 → 11295"  ← 원인이 담긴 유일한 메시지
+#   failure      — 08-10 에는 안 나왔지만 실제 실패의 카테고리라 넣는다
+# 뺀 것: configuration change(terraform apply 마다 온다) · backup(매일 온다) ·
+# low storage(FreeStorageSpace 16.2GB 로 여유가 크고 근거가 없다 — 필요해지면 그때).
+resource "aws_db_event_subscription" "this" {
+  name      = "${var.name}-rds-events"
+  sns_topic = var.alarm_topic_arn
+
+  source_type = "db-instance"
+  source_ids  = [aws_db_instance.this.identifier]
+
+  event_categories = ["availability", "recovery", "notification", "failure"]
 }
