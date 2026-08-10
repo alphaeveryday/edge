@@ -279,3 +279,15 @@ test('날짜를 못 읽으면 null 이다 — 아무 날이나 지어내지 않�
   assert.equal(dateOfSlot({ tradingDate: null, runKey: 'etf-daily:no-slot-date' }), null);
   assert.equal(dateOfSlot({ tradingDate: '', runKey: '' }), null);
 });
+
+test('모양만 맞으면 그대로 낸다 — 달력 실재성은 여기서 안 본다(일부러)', () => {
+  /* 🔴 `2026-02-30` 은 없는 날이고, 이 값이 `?date=` 로 나가면 서버가 400 을 낸다. 그래도
+   * 여기서 `null` 로 접지 않는다: 이 함수의 다른 소비자(`rollup`·`datesOf`)는 날짜 없는 슬롯을
+   * **건너뛰므로** 그 런이 실행 이력에서 통째로 사라진다. 손으로 친 URL 의 400 은 fail-loud,
+   * 실재 런의 실종은 fail-silent 다. 소비자 둘이 반대 방향을 원해 여기서 정하면 한쪽이 진다
+   * (10라운드에 걸렀다가 11라운드에 되돌렸다 — 다시 제안되면 이 테스트가 근거다). */
+  assert.equal(
+    dateOfSlot({ tradingDate: null, runKey: 'etf-daily:2026-02-30T15:40' }),
+    '2026-02-30',
+  );
+});

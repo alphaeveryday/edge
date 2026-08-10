@@ -230,8 +230,12 @@ details[open] > .mn-summary::before {
 }
 /* 카드가 <Link> 일 때만 어포던스를 준다 — 목·날짜 미상 카드는 <div> 라 안 걸린다.
  * `a` 로 좁히지 않으면 눌리지 않는 카드가 hover 에 반응해 링크가 고장 난 것처럼 보인다.
- * :focus-visible 은 ui-kit tokens.css 의 전역 규칙(box-shadow)을 이 카드에서 테두리 색과
- * 같은 축(outline)으로 바꾼다. 지우면 포커스 표시가 카드 경계와 다른 축으로 떨어진다. */
-a.mn-runcard:hover { border-color: var(--accent); }
+ * :focus-visible 은 ui-kit tokens.css 의 전역 규칙(box-shadow)에 카드 경계와 같은 축인
+ * outline 을 **더한다**(전역 그림자는 그대로 남는다 — `.gd-cellbtn`·`.ops-run-btn` 도 같다).
+ * 지우면 이 카드의 포커스 표시가 경계와 다른 축 하나로만 남는다. */
+/* 밑줄을 여기서 끈다 — 전역 `a:hover`(tokens.css)가 `text-decoration: underline` 을 주는데,
+ * 카드는 링크 텍스트가 아니라 **면**이라 런 키·상태·계획이 통째로 밑줄 그어진다. 위 기본
+ * 규칙의 `text-decoration: none` 은 `.mn-runcard`(0,1,0)이라 `a:hover`(0,1,1)에 진다. */
+a.mn-runcard:hover { border-color: var(--accent); text-decoration: none; }
 a.mn-runcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mn-runcard-go { margin-left: auto; color: var(--accent); }

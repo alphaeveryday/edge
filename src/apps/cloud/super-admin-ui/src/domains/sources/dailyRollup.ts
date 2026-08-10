@@ -160,6 +160,14 @@ const EMPTY: DayCounts = {
  * `/sources/overview`(`OverviewLane`)에서 **타입 캐스팅으로 그냥 들어온다**. 즉 두 응답에는
  * 검증 경계가 **아예 없다**. 언젠가 fail-loud 가 필요해지면 순수 함수인 여기가 아니라 그
  * 두 응답에 경계를 **새로 만들어야** 한다 — 지금 그 처방은 코드에 존재하지 않는다.
+ *
+ * ❌ **달력 실재성 검증도 여기 넣지 않는다**(리뷰 10라운드에 넣었다가 11라운드에 되돌렸다).
+ * 정규식은 모양만 보므로 `2026-02-30` 같은 없는 날이 통과하고, 그 값이 `?date=` 로 실려 나가면
+ * 서버 `LocalDate.parse` 가 400 을 낸다. 그래도 여기서 거르면 **위와 똑같이 더 나쁜 쪽으로
+ * 숨긴다** — 그런 런이 격자에서 통째로 사라진다. 손으로 친 URL 이 400 을 받는 것은 fail-loud
+ * 쪽이고, 실재하는 런이 이력에서 없어지는 것은 fail-silent 쪽이다. 이 함수의 소비자 둘이
+ * 반대 방향을 원하므로(격자 열은 "틀린 칸 > 실종", 링크는 "무링크 > 400") 규칙을 **여기서**
+ * 한쪽으로 정하면 다른 쪽이 진다. 걸러야 한다면 그 자리는 링크 경계다.
  */
 export function dateOfSlot(slot: { tradingDate: string | null; runKey: string }): string | null {
   if (slot.tradingDate) return slot.tradingDate;

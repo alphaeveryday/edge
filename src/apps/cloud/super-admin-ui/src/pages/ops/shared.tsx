@@ -175,18 +175,18 @@ export type ConsoleEvaluation =
  * ⚠️ 사건 목록을 두 벌로 두지 않는다. 소비자가 전부 이 훅을 쓰는 이유다 — 한쪽만 실시간을
  * 보면 목록엔 있는데 상세는 못 여는 사건이 생긴다.
  *
- * @param date 배치 사실을 볼 날 — `useConsoleFactsQuery` 와 같다. ⚠️ **실시간 축은 따라오지
- *             않는다**(`/sources/minute` 에 날짜 인자가 없다): 지난 날을 지목하면 R17~R19 는
- *             오늘의 세션 위에서 판정된다. 사건 목록을 세우는 화면은 날짜를 넘기지 마라 —
- *             지금 넘기는 곳은 특정 런을 여는 상세 하나이고, 거기서 쓰는 것은 그 런의
- *             작업과 (같은 창에서 온) 사건 breadcrumb 뿐이다.
+ * @param date 배치 사실을 볼 날 — `useConsoleFactsQuery` 와 같다. **실시간 축도 같은 날로
+ *             간다**(`/sources/minute` 은 `date` 를 받는다 — `SourceController.minuteStatus`).
+ *             한쪽만 오늘로 두면 7/31 런 화면에서 R17~R19 가 **오늘 세션** 위에서 판정돼,
+ *             그 날과 무관한 사건이 breadcrumb 에 선다. 두 축을 한 날로 묶는 것이 이 훅의
+ *             일이다(리뷰 11라운드 — 그전 주석은 "날짜 인자가 없다"고 적혀 있었고 틀렸다).
  */
 export function useConsoleEvaluation(date?: string): ConsoleEvaluation {
   const q = useConsoleFactsQuery(date);
   /* `isError` 를 같이 꺼내는 이유: 실시간 축 부재의 뜻이 셋이다 — 도착 전 · 조회 실패 ·
    * (응답은 왔는데) 축이 없다. `data` 만 보면 셋이 한 문장으로 뭉쳐, 응답 대기와 API 장애가
    * 화면에서 "계측 없음"과 구분되지 않는다. */
-  const { data, isError } = useMinuteStatus();
+  const { data, isError } = useMinuteStatus(date);
   return useMemo(() => {
     if (!q.ready) return q;
     const facts: Facts = data ? { ...q.facts, minute: minuteFacts(data) } : q.facts;

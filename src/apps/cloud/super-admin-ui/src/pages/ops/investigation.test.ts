@@ -242,9 +242,9 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
  *     곧 우회로가 된다 — 6라운드에 그렇게 했다가 되돌렸다).
  *   · **그 값이 실제로 href 에 실렸는가** — 하네스가 렌더된 주소로 잰다(`verify-execution-unit`
  *     은 `date=` 가 응답의 거래일·그 격자 칸의 날짜와 같은지 + 눌러서 실제로 열리는지).
- *   · 🔴 **상세가 그 값을 조회에 쓰는가** — `verify-run-page-split` 이 기본 창 **밖의** 런을
- *     `?date=` 로 열어 해소되는지 본다. **위 셋은 전부 링크 생산자만 검사한다** — 소비 배선을
- *     되돌리는 변이가 tsc·단위 전건·나머지 하네스를 통과했다(리뷰 5라운드가 실증).
+ *   · 🔴 **상세가 그 값을 조회에 쓰는가** — **위 셋은 전부 링크 생산자만 검사한다.** 소비 배선을
+ *     되돌리는 변이가 tsc·단위 전건·나머지 하네스를 통과했다(리뷰 5라운드가 실증). 배선은 이
+ *     파일 아래 테스트가, 값(실제로 그 하루가 조회됐는가)은 `verify-run-page-split` 이 본다.
  *   · **날짜를 못 구한 경우** — 호출부가 링크 자체를 안 만든다(`MinutePage.RunCard` 의 `!date` ·
  *     `HoldingsImpactPage` 의 `runDate` 분기).
  * 여기 단언을 값 검사로 키우려 들지 마라 — `.tsx` 를 텍스트로 평가하는 셈이라 다음 우회에 또
@@ -253,14 +253,35 @@ test('원장 주소는 문맥이 있을 때만 만든다 — 문맥 없는 원�
  * 알려진 천장(의도한 것): ① 대상 3파일이 하드코딩이라 **새로 생기는 실 API 화면은 안 본다**
  * ② 괄호 스캐너는 문자열·템플릿 안의 괄호를 구문으로 안 가른다 — 인자에 괄호 든 문자열을 두면
  * 호출 경계가 어긋난다. 둘 다 막으려면 전 파일 스캔 + 파서가 필요해 값이 안 맞는다. */
+/* 주석은 사실이 아니라 서술이다 — 단언의 입력에서 뺀다. 블록 주석과 줄 주석 둘 다 건다
+ * (줄 주석은 줄머리만 — `http://` 같은 URL 을 잘라 뒤를 숨기지 않게). */
+function readSrc(rel: string): string {
+  return readFileSync(new URL(rel, import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
+/* `name(...)` 호출을 **괄호 깊이로** 잘라낸다 — 인자에 객체·중첩 호출·템플릿이 들어 정규식
+ * 으로는 못 끊는다. 천장: 문자열·템플릿 안의 괄호를 구문으로 안 가른다(인자에 괄호 든 문자열을
+ * 두면 호출 경계가 어긋난다). 파서를 들일 값이 안 맞아 그대로 둔다. */
+function callsOf(src: string, name: string): string[] {
+  const calls: string[] = [];
+  for (let i = src.indexOf(`${name}(`); i >= 0; i = src.indexOf(`${name}(`, i + 1)) {
+    let depth = 0;
+    let j = i + name.length;
+    for (; j < src.length; j++) {
+      if (src[j] === '(') depth++;
+      else if (src[j] === ')' && --depth === 0) break;
+    }
+    calls.push(src.slice(i, j + 1));
+  }
+  return calls;
+}
+
 test('실 API 화면 3곳은 실행 상세로 보낼 때 조회 창(date)을 함께 싣는다', () => {
   const REAL_API_PAGES = ['../GridPage.tsx', '../MinutePage.tsx', '../HoldingsImpactPage.tsx'];
   for (const rel of REAL_API_PAGES) {
-    /* 주석은 사실이 아니라 서술이다 — 단언의 입력에서 뺀다. 블록 주석과 줄 주석
-     * 둘 다 건다(줄 주석은 줄머리만 — `http://` 같은 URL 을 잘라 뒤를 숨기지 않게). */
-    const src = readFileSync(new URL(rel, import.meta.url), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^[ \t]*\/\/.*$/gm, '');
+    const src = readSrc(rel);
 
     /* 경로 뒤 접미사를 반드시 허용한다 — 이 레포는 `from './investigation.ts'` 처럼
      * 확장자를 명시하는 곳이 있어서, `investigation` 에서 닫으면 그게 통째로 새 나간다. */
@@ -279,32 +300,52 @@ test('실 API 화면 3곳은 실행 상세로 보낼 때 조회 창(date)을 함
     );
 
     /* 호출마다 본다. 파일에 `date` 를 넘기는 호출이 하나 있어도 나머지가 안 넘기면
-     * 그 링크만 조용히 최신 날로 간다 — "한 군데는 하니까 괜찮다"로 접히는 자리다.
-     * 괄호 깊이로 잘라낸다: 인자에 객체·중첩 호출·템플릿이 들어 정규식으로는 못 끊는다. */
-    const calls: string[] = [];
-    for (let i = src.indexOf('runHref('); i >= 0; i = src.indexOf('runHref(', i + 1)) {
-      let depth = 0;
-      let j = i + 'runHref'.length;
-      for (; j < src.length; j++) {
-        if (src[j] === '(') depth++;
-        else if (src[j] === ')' && --depth === 0) break;
-      }
-      calls.push(src.slice(i, j + 1));
-    }
+     * 그 링크만 조용히 최신 날로 간다 — "한 군데는 하니까 괜찮다"로 접히는 자리다. */
+    const calls = callsOf(src, 'runHref');
     assert.ok(calls.length > 0, `${rel} 에 runHref 호출이 없다 — import 만 남았다`);
     for (const call of calls) {
       assert.ok(
         /* `date` 라는 낱말이 아니라 **객체 키 자리**에 쓰였는지 본다.
          * ⚠️ 앞을 안 보면 문자열·템플릿 안의 `date:` 가 걸린다 — 주석은 걷었지만 리터럴은
          * 남으므로 `focus: `date:${d}:task-…`` 같은 인자가 통과했다(리뷰 8라운드).
-         * `{` 나 `,` 뒤라야 프로퍼티 자리다. */
-        /[{,]\s*date\s*[,:}]/.test(call),
+         * `{` 나 `,` 뒤라야 프로퍼티 자리다.
+         * ⚠️ **`date: undefined` 는 키가 있어도 축이 없는 것**이다 — `runHref` 가 falsy 를
+         * 버리므로 주소에 `?date=` 가 안 실린다. 키만 세면 이 변이가 tsc(`extra` 의 값 타입이
+         * `string | undefined`)와 이 검사를 **둘 다 통과**한다(리뷰 11라운드). */
+        /[{,]\s*date\s*[,:}]/.test(call) && !/[{,]\s*date\s*:\s*undefined\b/.test(call),
         `${rel} 의 ${call.replace(/\s+/g, ' ')} 가 date 를 안 싣는다 — 상세가 가장 최근 날만 본다`,
       );
     }
   }
 });
 
+/* ── 🔴 소비 배선 — 상세가 그 `date` 를 **조회에 넘기는가** ────────────────────────────
+ * 위 가드도, `dateOfSlot` 단위 테스트도, tsc 도 전부 링크 **생산자**만 본다. 소비 쪽을
+ * 되돌리는 변이(`useConsoleEvaluation(date)` → `useConsoleEvaluation()`)는 인자가 옵셔널이라
+ * tsc 를 통과하고 단위 전건도 통과했다(리뷰 5라운드가 실증). 그때 유일한 판별자는 브라우저
+ * 하네스였는데 그건 `.dev/` 라 **레포에도 CI 에도 없다** — 링크만 고쳐 놓고 소비를 안 하면
+ * 화면은 멀쩡해 보이면서 축 E 이전과 정확히 같은 창을 본다. 그래서 여기 못을 박는다.
+ *
+ * 값이 아니라 **배선**을 본다: 주소에서 읽은 그 식별자가 훅으로 들어가는가. 값(어느 날이 실제로
+ * 조회됐는가)은 하네스 소관이고, 이 검사는 그게 없는 환경에서의 바닥이다. */
+test('실행 상세는 주소의 date 를 조회에 넘긴다 — 링크만 실어서는 아무것도 안 바뀐다', () => {
+  const src = readSrc('./RunAxisPage.tsx');
+
+  /* 훅에 무엇이 들어가는지 보려면 먼저 **무엇이 주소에서 나오는지** 잡아야 한다. 이름을 여기
+   * 하드코딩하면 리팩터링에 조용히 죽으므로 바인딩에서 캐낸다. */
+  const bound = src.match(/const\s+(\w+)\s*=\s*params\.get\('date'\)/)?.[1];
+  assert.ok(bound, 'RunAxisPage 가 주소에서 date 를 안 읽는다 — 보낸 쪽이 실은 창이 버려진다');
+
+  const calls = callsOf(src, 'useConsoleEvaluation');
+  assert.ok(calls.length > 0, 'RunAxisPage 에 useConsoleEvaluation 호출이 없다');
+  for (const call of calls) {
+    assert.match(
+      call,
+      new RegExp(String.raw`\b${bound}\b`),
+      `${call} 가 주소의 date(${bound})를 안 넘긴다 — 상세가 원장이 아는 가장 최근 날만 본다`,
+    );
+  }
+});
 
 /* ── 사건 딥링크는 CDN 을 통과해야 한다 ──────────────────────────────────────────
  * CloudFront 의 SPA fallback(`infra/terraform/modules/static-site/spa-rewrite.js`)은
