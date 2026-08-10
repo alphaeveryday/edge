@@ -44,8 +44,9 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 소비자가 "첫 런"을 집는 순간 판정이 흔들린다.
 	 *
 	 * <p>{@code run_key} 하나로 전순서가 정해진다 — {@code uq_ops_pipeline_run_key} 가 UNIQUE 라
-	 * 동률이 없다("이 슬롯은 한 번만 계획된다"가 그 컬럼의 계약이다). 2차 키는 무해한 중복이고,
-	 * 그 계약이 깨지는 날을 대비해 남겨 둔다.
+	 * 동률이 없다("이 슬롯은 한 번만 계획된다"가 그 컬럼의 계약이다). 2차 키는 그래서 <b>잉여</b>
+	 * 이고, 원본에서 온 그대로 둘 뿐 여기서 무엇을 지키지는 않는다 — 그 UNIQUE 가 깨지면 원장
+	 * <b>쓰기</b> 쪽이 먼저 죽는다({@code ops/ledger.py} 의 슬롯 멱등 조회가 단일 행을 전제한다).
 	 */
 	private static final String RUNS_SQL = """
 			SELECT r.run_key, r.pipeline_type, r.trading_date, r.orchestration_status,
