@@ -216,7 +216,7 @@ export function ExplanationDetailPage() {
             <span className="t-label">원본 설명 문구</span>
             <span className="chip">모델 생성</span>
           </div>
-          <div className="p-4" style={{ fontSize: 13, lineHeight: 1.65, color: 'var(--fg-2)' }}>
+          <div className="p-4 whitespace-pre-line" style={{ fontSize: 13, lineHeight: 1.65, color: 'var(--fg-2)' }}>
             {it.original}
           </div>
         </div>
@@ -257,7 +257,7 @@ export function ExplanationDetailPage() {
               </div>
             </div>
           ) : (
-            <div className="p-4" style={{ fontSize: 13, lineHeight: 1.65 }}>
+            <div className="p-4 whitespace-pre-line" style={{ fontSize: 13, lineHeight: 1.65 }}>
               {it.final}
             </div>
           )}

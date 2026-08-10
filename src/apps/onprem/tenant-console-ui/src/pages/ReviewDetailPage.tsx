@@ -168,7 +168,7 @@ export function ReviewDetailPage() {
         <div className="card-head">
           <span className="t-label">원본 설명 문구</span>
         </div>
-        <div className="p-4" style={{ fontSize: 13, lineHeight: 1.7 }}>
+        <div className="p-4 whitespace-pre-line" style={{ fontSize: 13, lineHeight: 1.7 }}>
           {it.summary}
         </div>
       </div>
