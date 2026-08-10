@@ -631,6 +631,16 @@ class ObjectSetRuntime:
         inspected.pop("truncated_reason")
         return {**inspected, "events": rows}
 
+    def event_type_codes(self, handle: str) -> tuple[str, ...]:
+        """Return only ontology event types contained in one issued NEWS_EVENT handle."""
+        item = self._get_kind(handle, "NEWS_EVENT")
+        source, params = self._render(item)
+        rows = self._lake.con.execute(
+            f'SELECT DISTINCT "event_type_code" FROM ({source}) AS event_set '
+            'WHERE "event_type_code" IS NOT NULL ORDER BY "event_type_code"', params,
+        ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
     def _get_event_arguments(self, handle: str, limit: int = 20) -> dict[str, Any]:
         self._get_kind(handle, "NEWS_EVENT")
         argument_handle = self._follow(handle, "ARGUMENTS")["handle"]

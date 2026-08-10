@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from typing import Callable
 
 from ..observability import record
@@ -127,6 +128,63 @@ def render_hypothesis(t: HypothesisTuple) -> str:
     이 문장은 감사/trace 표시용이다. 고객 설명이나 검정 결과를 대신하지 않는다.
     """
     return "preview_required"
+
+
+_PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공한 ObjectSet과 hypothesis 도구만 사용한다.
+
+먼저 사건 ObjectSet을 탐색하고 `hypothesis.list_options`로 이 실행에서 선택 가능한 어휘를 확인한다.
+검정하려는 설계마다 `hypothesis.preview`를 호출한다. READY인 preview만 최종 제출할 수 있다.
+
+최종 응답은 아래 JSON 하나뿐이다.
+{{"hypotheses":[{{"preview_handle":"hpr_...","intent":"검정하려는 차이를 한 문장으로 쓴다."}}]}}
+
+최종 JSON에는 `preview_handle`과 `intent` 외의 필드를 쓰지 마라. 서버가 preview에 고정한 설계만 실행한다.
+"""
+
+
+def _resolve_preview_hypotheses(hyps: list[object], resolver: Callable[[str], object]
+                                ) -> tuple[list[HypothesisTuple], list[str], list[dict[str, object]]]:
+    """Accept only a current runtime's READY preview and preserve its frozen recipe."""
+    valid: list[HypothesisTuple] = []
+    rejected: list[str] = []
+    rendered: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for idx, raw in enumerate(hyps, 1):
+        if not isinstance(raw, dict) or set(raw) != {"preview_handle", "intent"}:
+            why = "최종 가설은 preview_handle과 intent만 포함해야 합니다"
+            rejected.append(f"[{idx}] {why}")
+            record("tuple.rejected", idx=idx, why=why, raw=raw)
+            continue
+        handle = raw["preview_handle"]
+        intent = raw["intent"]
+        if (not isinstance(handle, str) or not handle or not isinstance(intent, str)
+                or not intent.strip() or len(intent) > 240):
+            why = "preview_handle 또는 intent 형식이 올바르지 않습니다"
+            rejected.append(f"[{idx}] {why}")
+            record("tuple.rejected", idx=idx, why=why, raw=raw)
+            continue
+        if handle in seen:
+            why = "같은 preview_handle을 중복 제출할 수 없습니다"
+            rejected.append(f"[{idx}] {why}")
+            record("tuple.rejected", idx=idx, why=why, raw=raw)
+            continue
+        seen.add(handle)
+        try:
+            preview = resolver(handle)
+            recipe = getattr(preview, "hypothesis")
+            summary = getattr(preview, "summary")
+            if not isinstance(recipe, HypothesisTuple) or not isinstance(summary, str):
+                raise ValueError("PREVIEW_RESOLUTION_INVALID")
+        except Exception as exc:  # noqa: BLE001 - resolver is the run-scope trust boundary
+            code = str(getattr(exc, "code", "PREVIEW_HANDLE_REJECTED"))
+            why = f"preview_handle을 실행할 수 없습니다: {code}"
+            rejected.append(f"[{idx}] {why}")
+            record("tuple.rejected", idx=idx, why=why, raw=raw)
+            continue
+        valid.append(replace(recipe, intent=intent.strip()))
+        rendered.append({"text": summary, "llm_intent": intent.strip(),
+                         "status": "ready", "preview_handle": handle})
+    return valid, rejected, rendered
 
 
 def _tool_result_summary(name: str, result: object) -> dict[str, object]:
@@ -379,15 +437,15 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     # 개수·목록 리터럴은 **어휘에서 파생**된다 (21R). 손으로 적은 리터럴은 낡는다 -
     # 실측: 프롬프트가 '계열족 9 · 변환 5' 라고 말하는 동안 어휘는 17·6 이었고,
     # 결과종류는 하드코딩 2종이라 '되돌림' 축을 모델이 고를 수조차 없었다.
-    system = _SYSTEM.format(channels=sorted(CHANNELS), families=sorted(SERIES_FAMILIES),
-                            transforms=sorted(TRANSFORMS),
-                            n_ch=len(CHANNELS), n_fam=len(SERIES_FAMILIES),
-                            n_tr=len(TRANSFORMS), comparators=sorted(COMPARATORS),
-                            outcomes=sorted(OUTCOME_KINDS), event_types=event_types,
-                            layers=sorted(LAYERS), n_ly=len(LAYERS),
-                            layer_exposures=_layer_menu(),
-                            series_families=sorted(series_families),
-                            measurable=sorted(measurable), n=n)
+    preview_resolver = (object_tools or {}).get("resolve_preview")
+    preview_mode = callable(preview_resolver)
+    system = (_PREVIEW_SYSTEM if preview_mode else _SYSTEM.format(
+        channels=sorted(CHANNELS), families=sorted(SERIES_FAMILIES),
+        transforms=sorted(TRANSFORMS), n_ch=len(CHANNELS), n_fam=len(SERIES_FAMILIES),
+        n_tr=len(TRANSFORMS), comparators=sorted(COMPARATORS),
+        outcomes=sorted(OUTCOME_KINDS), event_types=event_types,
+        layers=sorted(LAYERS), n_ly=len(LAYERS), layer_exposures=_layer_menu(),
+        series_families=sorted(series_families), measurable=sorted(measurable), n=n))
     if sql_tool and object_tools:
         raise ValueError("sql_tool and object_tools cannot be enabled together")
     if object_tools:
@@ -420,24 +478,32 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         raw_hypotheses = list_field(out, "hypotheses")
         record("hypothesis.raw", turn=turn + 1,
                hypotheses=_trace_safe(raw_hypotheses))
-        valid, rej = screen_tuples(raw_hypotheses,
-                                   event_types=event_types,
-                                   series_families=list(series_families),
-                                   measurable=(measurable or None))
+        if preview_mode:
+            valid, rej, rendered_hypotheses = _resolve_preview_hypotheses(
+                raw_hypotheses, preview_resolver)
+            for rendered, hypothesis in zip(rendered_hypotheses, valid):
+                rendered["tool_results"] = list(tool_summaries)
+                rendered["trigger"] = f"{hypothesis.trigger.kind}:{hypothesis.trigger.ident}"
+        else:
+            valid, rej = screen_tuples(raw_hypotheses,
+                                       event_types=event_types,
+                                       series_families=list(series_families),
+                                       measurable=(measurable or None))
+            rendered_hypotheses = [{"text": render_hypothesis(t),
+                                    "llm_intent": t.intent,
+                                    "status": "preview_required",
+                                    "tool_results": list(tool_summaries),
+                                    "trigger": f"{t.trigger.kind}:{t.trigger.ident}"}
+                                   for t in valid]
         rejected += rej
         record("hypothesis.rendered", turn=turn + 1,
-               hypotheses=[{"text": render_hypothesis(t),
-                            "llm_intent": t.intent,
-                            "status": "preview_required",
-                            "tool_results": list(tool_summaries),
-                            "trigger": f"{t.trigger.kind}:{t.trigger.ident}"}
-                           for t in valid])
+               hypotheses=rendered_hypotheses)
         for t in valid:
             record("tuple.accepted", turn=turn + 1, channel=t.channel,
                    trigger=f"{t.trigger.kind}:{t.trigger.ident}",
                    exposure=f"{t.exposure.ident}/{t.exposure.transform}",
                    reduction_note=t.reduction_note, intent=t.intent)
-        if len(valid) >= 2:
+        if valid and (preview_mode or len(valid) >= 2):
             break
         base = (base + "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n"
                 + "\n".join(rejected[-6:]))
