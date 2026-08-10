@@ -12,8 +12,8 @@ import java.util.List;
  * 뭉개지 않는 것도 {@link PipelineStatusRepository} 와 같다.
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
- * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함)</b>이고,
- * 작업·데이터셋·산출·경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b>
+ * 이고, 데이터셋·산출·경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
  */
 public interface ConsoleFactsRepository {
 
@@ -28,7 +28,8 @@ public interface ConsoleFactsRepository {
 	ConsoleFacts facts(LocalDate date);
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
-	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs) {
+	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
+			List<TaskRow> tasks) {
 	}
 
 	/**
@@ -43,5 +44,18 @@ public interface ConsoleFactsRepository {
 	record RunRow(String runKey, String lane, LocalDate tradingDate, String ledgerStatus,
 			OffsetDateTime ledgerUpdated, OffsetDateTime deadline, Boolean planned,
 			Boolean noRunRow) {
+	}
+
+	/**
+	 * 작업 하나. 뒤쪽 여섯 컬럼({@code datasetContractKey}~{@code freshnessReason})은 와이어에
+	 * <b>작업 축으로 나가지 않는다</b> — 뒤따르는 조각이 <b>데이터셋 축을 파생</b>하는 재료다
+	 * (계약·신선도는 별도 테이블이 아니라 {@code ops_expected_task} 의 컬럼이다).
+	 */
+	record TaskRow(String taskKey, String runKey, String pipelineType, LocalDate tradingDate,
+			String stage, String dataset, boolean required, String planStatus, String taskOutcome,
+			String dataStatus, Long recordsOut, Long failedRecords, Long completenessExpected,
+			Long completenessReceived, Long completenessMissing, long attempts,
+			String datasetContractKey, LocalDate expectedAsOf, LocalDate actualAsOf,
+			OffsetDateTime collectedAt, String freshnessStatus, String freshnessReason) {
 	}
 }

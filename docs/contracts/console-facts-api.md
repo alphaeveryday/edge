@@ -14,7 +14,7 @@
 | 조회 창 | 어느 하루를 볼지 고르고 무엇을 봤는지 되돌려준다(`meta`) | ✅ |
 | 런 축 | `runs[]` | ✅ |
 | 계획 결손 슬롯 | 런 행이 없는 슬롯을 런 축에 싣는다 | ✅ |
-| 작업 축 | `tasks[]` | ⏭ |
+| 작업 축 | `tasks[]` | ✅ |
 | 데이터셋 축 | `datasets[]` (작업에서 파생) | ⏭ |
 | 산출 축 | `outputs[]` + 기준선(중앙값) | ⏭ |
 | 경계 축 | `boundary` | ⏭ |
@@ -104,6 +104,23 @@ GET /api/v1/console/facts[?date=YYYY-MM-DD]
 
 두 소스를 합친 뒤 **다시 정렬한다** — 각자 자기 안에서만 정렬돼 있어 이어 붙이면 전체 순서가
 깨진다.
+
+## 작업 축
+
+그 날의 기대 작업 전건. `runId` 는 런의 `id`(=`run_key`)와 **같은 축**이다 — 내부
+`pipeline_run_id` 를 쓰면 와이어에서 런 축과 안 이어진다. 창은 런 축과 **같은 식**을 쓴다.
+
+⚠️ **모르는 값은 `null` 이다.** `records_out`·`failed_records`·`completeness_*` 는 원장이 안 준
+경우가 있는데, JDBC 의 `getLong` 은 SQL NULL 을 **0 으로 준다** — 접히면 "0건 처리"와 "신호 없음"이
+화면에서 같은 칸이 된다. `attempts` 는 `count(*)` 라 0 이 실측이다.
+
+⚠️ **정렬은 파이프라인 순서다**(`raw` → `normalize` → 그 외). 문자열 순이면 역순이 된다
+(`feature` < `normalize` < `raw`).
+
+⚠️ **계약·신선도 컬럼(`datasetContractKey`·`expectedAsOf`·`actualAsOf`·`collectedAt`·
+`freshnessStatus`·`freshnessReason`)은 작업 축 와이어에 안 나간다.** 그건 **데이터셋 축을
+파생하는 재료**이지 작업 축의 사실이 아니다(`dataset_contract` 테이블이 없어 `ops_expected_task`
+의 컬럼으로 산다). 그대로 흘리면 소비자가 같은 사실을 두 축에서 읽고, 한쪽만 고칠 때 갈린다.
 
 ## 조회 창
 

@@ -1,6 +1,7 @@
 package com.edge.superadmin.dto;
 
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.LocalDate;
@@ -18,14 +19,15 @@ import java.util.List;
  * {@code @JsonInclude} 를 걸지 않는다 — NON_NULL 을 위에 걸면 "집계 없음(null)"이 조용히
  * "계측 없음(필드 부재)"으로 바뀌어, 콘솔이 없애려는 칸 혼동을 서버가 다시 만든다.
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축</b>이다. 작업·데이터셋·산출·경계는 뒤따르는 조각이
+ * <p>지금 내는 것은 <b>조회 창 + 런 축 + 작업 축</b>이다. 데이터셋·산출·경계는 뒤따르는 조각이
  * 하나씩 더하고, <b>붙기 전까지 그 필드는 응답에 아예 없다</b> — 빈 배열이 아니다. 같은 규약이다:
  * 빈 배열은 "봤는데 없었다"이고 필드 부재는 "아직 안 본다"라, 규칙 층이 그 둘을 다르게 센다.
  *
  * <p>표시 문자열을 만들지 않는다 — 건수·시각·판정 코드를 raw 로 내리고 포맷은 UI 소관이다
  * ({@link SourceReportResponse} 와 같은 규약).
  */
-public record ConsoleFactsResponse(List<RunResponse> runs, MetaResponse meta) {
+public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
+		MetaResponse meta) {
 
 	/**
 	 * 런 하나. {@code id} 는 {@code run_key} 다 — 사건 식별자의 대상 축이라 내부 id 를 쓰면
@@ -46,6 +48,28 @@ public record ConsoleFactsResponse(List<RunResponse> runs, MetaResponse meta) {
 		public static RunResponse from(RunRow r) {
 			return new RunResponse(r.runKey(), r.lane(), iso(r.tradingDate()), r.ledgerStatus(),
 					iso(r.ledgerUpdated()), iso(r.deadline()), r.planned(), r.noRunRow());
+		}
+	}
+
+	/**
+	 * 작업 하나. {@code runId} 는 런의 {@code id}(=run_key)와 <b>같은 축</b>이다 — 사건을 런에
+	 * 매다는 값이라 내부 {@code pipeline_run_id} 를 쓰면 와이어에서 런 축과 안 이어진다.
+	 *
+	 * <p>{@code TaskRow} 의 뒤쪽 여섯 컬럼(계약·신선도)은 <b>여기 없다</b>. 그건 데이터셋 축을
+	 * 파생하는 재료이지 작업 축의 사실이 아니다 — 뒤따르는 조각이 그 축을 만든다.
+	 */
+	public record TaskResponse(String taskKey, String runId, String pipelineType,
+			String tradingDate, String stage, String dataset, boolean required, String planStatus,
+			String taskOutcome, String dataStatus, Long recordsOut, Long failedRecords,
+			Long completenessExpected, Long completenessReceived, Long completenessMissing,
+			long attempts) {
+
+		public static TaskResponse from(TaskRow t) {
+			return new TaskResponse(t.taskKey(), t.runKey(), t.pipelineType(),
+					iso(t.tradingDate()), t.stage(), t.dataset(), t.required(), t.planStatus(),
+					t.taskOutcome(), t.dataStatus(), t.recordsOut(), t.failedRecords(),
+					t.completenessExpected(), t.completenessReceived(), t.completenessMissing(),
+					t.attempts());
 		}
 	}
 

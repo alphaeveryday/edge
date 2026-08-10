@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.repository.JdbcConsoleFactsRepository;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -19,7 +20,7 @@ import java.time.OffsetDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 콘솔 사실 조회의 <b>조회 창 + 런 축(계획 결손 슬롯 포함)</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
+ * 콘솔 사실 조회의 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
  * migrations-cloud)로 컬럼명·날짜 창·정렬을 검증한다(ALPHA-738).
  *
  * <p>손 페이크는 이 SQL 을 <b>한 줄도 실행하지 않는다</b>. 여기 걸린 축은 조용히 틀리는 종류다 —
@@ -78,6 +79,27 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	private void insertTradingDay(String tradingDate) {
 		insertRun("r-" + tradingDate, "etf-daily:" + tradingDate + "T15:40", "SUCCEEDED",
 				tradingDate, tradingDate + "T06:40:00Z", null);
+	}
+
+	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
+			String outcome, Long recordsOut, Long failedRecords, String completeness) {
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       dataset, plan_status, task_outcome, data_status, required,
+				       records_out, failed_records, completeness, idempotency_key)
+				VALUES (?,?,?,?,?,'DUE',?,'VALID',true,?,?,?::jsonb,?)
+				""", id, runId, taskKey, stage, dataset, outcome, recordsOut, failedRecords,
+				completeness, id);
+	}
+
+	/** ⚠️ {@code ecs_task_arn} 은 NOT NULL 이고 {@code (expected_task_id, ecs_task_arn)} 이 UNIQUE 다
+	 *  — 같은 작업의 시도 둘을 넣으려면 ARN 이 달라야 한다(스키마가 가짜 행을 막는 자리다). */
+	private void insertAttempt(String id, String taskId) {
+		jdbc.update("""
+				INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,
+				       execution_status)
+				VALUES (?,?,?,'SUCCEEDED')
+				""", id, taskId, "arn:aws:ecs:task/" + id);
 	}
 
 	private void insertMissingSlotIssue(String id, String runKey, String status) {
@@ -367,6 +389,78 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
 				.containsExactly("a-lane:2026-08-03T15:40", "m-lane:2026-08-03T15:40",
 						"z-lane:2026-08-03T15:40");
+	}
+
+	/**
+	 * 작업 축은 <b>완전성 jsonb 와 시도 수</b>를 함께 낸다. 그리고 {@code getLong} 이 SQL NULL 을
+	 * 0 으로 주므로 <b>"0건 처리"와 "신호 없음"이 갈려야 한다</b> — null 을 0 으로 접으면 화면이
+	 * 계측 공백을 실측으로 그린다.
+	 */
+	@Test
+	void 작업_축은_완전성_jsonb_와_시도_수를_함께_낸다() {
+		insertTradingDay("2026-08-03");
+		insertTask("t1", "r-2026-08-03", "COLLECT", "raw", "price", "FULFILLED", 906L, 0L,
+				"{\"expected\":33,\"received\":33,\"missing\":0}");
+		insertTask("t2", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", null, null, null);
+		insertAttempt("a1", "t1");
+		insertAttempt("a2", "t1");
+
+		assertThat(repository.facts(DAY).tasks()).satisfiesExactly(
+				t -> {
+					assertThat(t.taskKey()).isEqualTo("COLLECT");
+					/* 런과 같은 축으로 매인다 — 내부 id 면 와이어에서 런 축과 안 이어진다. */
+					assertThat(t.runKey()).isEqualTo("etf-daily:2026-08-03T15:40");
+					assertThat(t.pipelineType()).isEqualTo("etf-daily");
+					assertThat(t.tradingDate()).isEqualTo(DAY);
+					assertThat(t.stage()).isEqualTo("raw");
+					assertThat(t.dataset()).isEqualTo("price");
+					assertThat(t.required()).isTrue();
+					assertThat(t.planStatus()).isEqualTo("DUE");
+					assertThat(t.taskOutcome()).isEqualTo("FULFILLED");
+					assertThat(t.dataStatus()).isEqualTo("VALID");
+					assertThat(t.recordsOut()).isEqualTo(906L);
+					assertThat(t.failedRecords()).isZero();
+					assertThat(t.completenessExpected()).isEqualTo(33L);
+					assertThat(t.completenessReceived()).isEqualTo(33L);
+					assertThat(t.completenessMissing()).isZero();
+					assertThat(t.attempts()).isEqualTo(2L);
+				},
+				t -> {
+					/* 🔴 여기가 요점이다 — 원장이 안 준 값은 **null 이지 0 이 아니다**. */
+					assertThat(t.taskKey()).isEqualTo("LOAD");
+					assertThat(t.recordsOut()).isNull();
+					assertThat(t.failedRecords()).isNull();
+					assertThat(t.completenessExpected()).isNull();
+					assertThat(t.attempts()).isZero();   // count(*) 라 0 이 실측이다
+				});
+	}
+
+	/**
+	 * stage 정렬을 CASE 로 고정한다 — 문자열 순이면 파이프라인이 <b>역순</b>이 된다
+	 * ({@code feature} < {@code normalize} < {@code raw}). 픽스처를 그 함정에 정확히 걸리게 둔다:
+	 * 삽입 순서·문자열 순 둘 다 기대와 달라야 정렬이 실제로 일한 것이 보인다.
+	 */
+	@Test
+	void 작업_축은_파이프라인_순서로_정렬된다() {
+		insertTradingDay("2026-08-03");
+		insertTask("t1", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", null, null, null);
+		insertTask("t2", "r-2026-08-03", "CLEAN", "normalize", "price", "PENDING", null, null, null);
+		insertTask("t3", "r-2026-08-03", "COLLECT", "raw", "price", "PENDING", null, null, null);
+
+		assertThat(repository.facts(DAY).tasks()).extracting(TaskRow::stage)
+				.containsExactly("raw", "normalize", "feature");
+	}
+
+	/** 창이 없으면 다른 날 작업이 오늘 사건이 된다 — 런 축과 <b>같은 식</b>을 써야 한다. */
+	@Test
+	void 작업_축도_그_날의_것만_나간다() {
+		insertTradingDay("2026-08-03");
+		insertTradingDay("2026-08-01");
+		insertTask("t1", "r-2026-08-03", "COLLECT", "raw", "price", "FULFILLED", 1L, 0L, null);
+		insertTask("t2", "r-2026-08-01", "COLLECT", "raw", "price", "FULFILLED", 1L, 0L, null);
+
+		assertThat(repository.facts(DAY).tasks()).extracting(TaskRow::runKey)
+				.containsExactly("etf-daily:2026-08-03T15:40");
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
