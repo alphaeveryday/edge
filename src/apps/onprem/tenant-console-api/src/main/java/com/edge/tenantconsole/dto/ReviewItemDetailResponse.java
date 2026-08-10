@@ -26,6 +26,8 @@ public record ReviewItemDetailResponse(
 		String confidenceLevel,
 		String status,
 		String receivedAt,
+		/** 스냅샷 기준시각(생성 벽시계, 원장 NOT NULL) — 기준시각 표시의 폴백(ALPHA-925, 설명 상세와 동일 규칙). */
+		String explanationAsOf,
 		/** 콘텐츠 기준시각(ALPHA-920) — 본문의 시간 서술과 대조하는 검수자용. 결측(구형 수신분)은 키 생략. */
 		String contentAsOf,
 		JsonNode evidences,
@@ -55,6 +57,7 @@ public record ReviewItemDetailResponse(
 				i.tradeDate() == null ? null : i.tradeDate().toString(),
 				i.summary(), i.headline(), i.confidenceLevel(), i.status(),
 				i.receivedAt() == null ? null : i.receivedAt().toString(),
+				i.explanationAsOf() == null ? null : i.explanationAsOf().toString(),
 				i.contentAsOf() == null ? null : i.contentAsOf().toString(),
 				detail.evidences(),
 				detail.reviewReasons(),

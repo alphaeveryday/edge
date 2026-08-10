@@ -115,10 +115,10 @@ export function ReviewDetailPage() {
           {
             label: '기준시각',
             // 산문이 말하는 창의 끝(ALPHA-918) — 검수자가 본문의 시간 서술과 대조한다.
-            // 결측(구형 수신분)은 '—' (생성 시각 폴백은 이 화면의 혼동을 되살린다).
+            // 결측(구형 수신분)은 생성 시각 폴백 — 설명 상세와 동일 규칙(ALPHA-925, A안).
             value: (
               <span className="num" style={{ fontSize: 12 }}>
-                {it.contentAsOf ? kstMinute(it.contentAsOf) : '—'}
+                {kstMinute(it.contentAsOf ?? it.explanationAsOf)}
               </span>
             ),
           },

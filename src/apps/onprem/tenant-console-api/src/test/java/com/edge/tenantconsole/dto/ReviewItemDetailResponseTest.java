@@ -15,8 +15,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 검수 상세 응답의 와이어 계약(snake_case·NON_NULL)을 검증한다(ALPHA-920). WHY: UI 는
- * `content_as_of` 키로 매핑(`w.content_as_of ?? null`)하고 결측이면 기준시각 행을
- * 생략한다 — camelCase 로 새거나 null 명시로 나가면 값이 조용히 숨거나 "null" 이 그려진다.
+ * `content_as_of ?? explanation_as_of` 폴백으로 기준시각을 표시한다(ALPHA-925, 설명
+ * 상세와 동일 규칙) — camelCase 로 새거나 null 명시로 나가면 값이 조용히 숨거나
+ * "null" 이 그려지고, 폴백 원료(explanation_as_of)가 빠지면 구형 수신분이 '—' 로 갈린다.
  */
 class ReviewItemDetailResponseTest {
 
@@ -37,6 +38,8 @@ class ReviewItemDetailResponseTest {
 
 		assertThat(json.get("content_as_of").asString()).isEqualTo("2026-07-15T10:30+09:00");
 		assertThat(json.has("contentAsOf")).isFalse();
+		// 폴백 원료(ALPHA-925) — UI 가 contentAsOf ?? explanationAsOf 로 설명 상세와 같은 규칙을 쓴다.
+		assertThat(json.get("explanation_as_of").asString()).isEqualTo("2026-07-15T16:00+09:00");
 	}
 
 	@Test

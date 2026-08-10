@@ -20,6 +20,7 @@ interface WireItem {
 }
 
 interface WireDetail extends WireItem {
+  explanation_as_of?: string;
   content_as_of?: string;
   evidences: { kind: string; title: string | null; source: string; published_at?: string; source_uri?: string }[];
   checks: {
@@ -64,6 +65,7 @@ function toItem(w: WireItem): ReviewItem {
 function toDetail(w: WireDetail): ReviewItemDetail {
   return {
     ...toItem(w),
+    explanationAsOf: w.explanation_as_of ?? null,
     contentAsOf: w.content_as_of ?? null,
     evidences: (w.evidences ?? []).map((e) => ({
       kind: e.kind,
