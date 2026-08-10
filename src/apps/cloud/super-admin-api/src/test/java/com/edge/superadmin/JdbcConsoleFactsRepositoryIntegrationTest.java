@@ -1,8 +1,14 @@
 package com.edge.superadmin;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
+import com.edge.superadmin.repository.JdbcConsoleFactsRepository;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,7 +19,7 @@ import java.time.OffsetDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 콘솔 사실 조회의 <b>조회 창 + 런 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
+ * 콘솔 사실 조회의 <b>조회 창 + 런 축(계획 결손 슬롯 포함)</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
  * migrations-cloud)로 컬럼명·날짜 창·정렬을 검증한다(ALPHA-738).
  *
  * <p>손 페이크는 이 SQL 을 <b>한 줄도 실행하지 않는다</b>. 여기 걸린 축은 조용히 틀리는 종류다 —
@@ -240,9 +246,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(repository.facts(DAY).runs()).containsExactly(
 				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
 						OffsetDateTime.parse("2026-08-03T07:20:34Z"),
-						OffsetDateTime.parse("2026-08-03T08:00:00Z")),
+						OffsetDateTime.parse("2026-08-03T08:00:00Z"), null, null),
 				new RunRow("news:2026-08-03T09:00", "news", null, "RUNNING",
-						OffsetDateTime.parse("2026-08-03T00:10:00Z"), null));
+						OffsetDateTime.parse("2026-08-03T00:10:00Z"), null, null, null));
 	}
 
 	/**
@@ -256,6 +262,111 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
 				.containsExactly("news:2026-08-03T15:30");
+	}
+
+	/** 런 행이 없는 계획 슬롯은 <b>런처럼 생긴 행</b>으로 나간다 — 그 슬롯이 사건의 대상이다. */
+	@Test
+	void 런_행이_없는_계획_슬롯은_런처럼_생긴_행으로_나간다() {
+		insertMissingSlotIssue("i1", "etf-daily:2026-08-03T15:40", "OPEN");
+
+		assertThat(repository.facts(DAY).runs()).singleElement().satisfies(r -> {
+			assertThat(r.runKey()).isEqualTo("etf-daily:2026-08-03T15:40");
+			assertThat(r.lane()).isEqualTo("etf-daily");
+			assertThat(r.tradingDate()).isEqualTo(DAY);
+			assertThat(r.planned()).isTrue();
+			assertThat(r.noRunRow()).isTrue();
+			/* 런 행이 없으니 원장 상태·시각은 **없는 것이 사실**이다 — 채우면 지어내는 것이다. */
+			assertThat(r.ledgerStatus()).isNull();
+			assertThat(r.ledgerUpdated()).isNull();
+			assertThat(r.deadline()).isNull();
+		});
+	}
+
+	/**
+	 * 🔴 이슈가 아직 OPEN 인 채 런이 생기면 같은 {@code run_key} 가 <b>두 행</b>으로 나간다 —
+	 * 소비자는 그걸 식별자 충돌로 읽어 그 축 규칙을 통째로 못 돎 으로 세운다. {@code status} 만
+	 * 믿으면 그 창이 열린다(Reconciler 가 닫기 전까지가 그 창이다).
+	 */
+	@Test
+	void 런이_생긴_뒤_안_닫힌_이슈는_유령_행을_만들지_않는다() {
+		insertTradingDay("2026-08-03");
+		insertMissingSlotIssue("i1", "etf-daily:2026-08-03T15:40", "OPEN");
+
+		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
+				.containsExactly("etf-daily:2026-08-03T15:40");
+	}
+
+	/**
+	 * 슬롯 키를 못 읽으면 레인·거래일이 null 이다 — 잘못 자른 조각을 레인 이름이라고 우기면
+	 * 화면이 존재하지 않는 레인을 그린다. 사건 축({@code run_key})은 그대로 남는다.
+	 */
+	@Test
+	void 형식이_깨진_슬롯_키는_레인을_지어내지_않고_경고를_남긴다() {
+		insertMissingSlotIssue("i1", ":2026-08-03T15:40", "OPEN");
+		/* 로거는 전역이라 반드시 떼야 다음 테스트로 안 샌다 — 레포 선례(publication-api 의
+		 * `ExplanationDisclaimerIntegrationTest`)와 같은 try/finally 형태다. */
+		Logger repoLogger = (Logger) LoggerFactory.getLogger(JdbcConsoleFactsRepository.class);
+		ListAppender<ILoggingEvent> captured = new ListAppender<>();
+		captured.start();
+		repoLogger.addAppender(captured);
+		try {
+			assertThat(repository.facts(DAY).runs()).singleElement().satisfies(r -> {
+				assertThat(r.runKey()).isEqualTo(":2026-08-03T15:40");
+				assertThat(r.lane()).isNull();
+				assertThat(r.tradingDate()).isNull();
+				assertThat(r.noRunRow()).isTrue();
+			});
+			/* null 을 내는 것만으로는 Rule 12 를 못 만족한다 — 응답에는 "레인 미상"으로만 보여
+			 * Planner 키 형식이 갈렸다는 사실이 아무 데도 안 남는다. 경고가 그 유일한 장치라면
+			 * **경고의 존재가 곧 계약이다**. 레벨까지 재는 것은 선례와 같은 이유다 — 강등하면
+			 * 로거가 걸러 안 들어오지만, ERROR 로 올리는 변이는 레벨을 안 보면 통과한다. */
+			assertThat(captured.list).anySatisfy(event -> {
+				assertThat(event.getLevel()).isEqualTo(Level.WARN);
+				assertThat(event.getFormattedMessage()).contains("슬롯 키를 못 읽었다");
+			});
+		}
+		finally {
+			repoLogger.detachAppender(captured);
+		}
+	}
+
+	/**
+	 * 이 쿼리의 술어 <b>다섯</b>을 한 자리에서 잰다 — 하나라도 빠지면 <b>유령 런 행</b>이
+	 * `runs[]` 에 뜬다(`planned: true, noRunRow: true` 를 달고). 화면은 그걸 "계획됐는데 안 돈
+	 * 슬롯"으로 그리고, 존재한 적 없는 사건이 판정 대상이 된다.
+	 *
+	 * <p>⚠️ 조회 창 쪽 형제 쿼리({@code MISSING_SLOT_DAYS_SQL})는 같은 술어를 이미 pin 했는데
+	 * 이쪽만 비어 있었다 — 픽스처 키가 <b>조회 날짜와 달라</b> 그 테스트가 이 쿼리를 안 탔다.
+	 * 그래서 여기 후보는 전부 <b>08-03 키</b>다.
+	 */
+	@Test
+	void 슬롯_후보가_아닌_이슈는_유령_런_행을_만들지_않는다() {
+		insertMissingSlotIssue("i1", "etf-daily:2026-08-03T15:40", "RESOLVED");   // status
+		insertMissingSlotIssue("i2", "etf-daily:2026-08-02T15:40", "OPEN");       // 다른 날
+		insertIssue("i3", "MISSED", "slot", "etf-daily:2026-08-03T09:00", "OPEN");        // issue_type
+		insertIssue("i4", "PLANNER_MISSING", "run", "etf-daily:2026-08-03T10:00", "OPEN"); // scope
+		/* `LIKE '%:' || ? || 'T%'` 의 앵커(`:` 와 `T`)를 잰다 — 날짜가 키의 **다른 자리**에 박힌
+		 * 값이 통과하면 안 된다. 앵커를 지우면(`'%' || ? || '%'`) 이 줄이 잡는다. */
+		insertIssue("i5", "PLANNER_MISSING", "slot", "run-2026-08-03-retry", "OPEN");
+
+		assertThat(repository.facts(DAY).runs()).isEmpty();
+	}
+
+	/**
+	 * 두 소스가 <b>한 축</b>으로 합쳐진다 — 각 소스가 자기 안에서만 정렬돼 있어 그냥 이어 붙이면
+	 * 전체 순서가 깨진다. 계획 슬롯이 실재 런들 <b>사이</b>에 끼는 픽스처라야 그걸 잰다.
+	 */
+	@Test
+	void 계획_슬롯과_실재_런이_한_축으로_정렬된다() {
+		insertRun("r-z", "z-lane:2026-08-03T15:40", "z-lane", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T06:40:00Z", "2026-08-03T06:40:00Z", null);
+		insertRun("r-a", "a-lane:2026-08-03T15:40", "a-lane", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T06:40:00Z", "2026-08-03T06:40:00Z", null);
+		insertMissingSlotIssue("i1", "m-lane:2026-08-03T15:40", "OPEN");
+
+		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
+				.containsExactly("a-lane:2026-08-03T15:40", "m-lane:2026-08-03T15:40",
+						"z-lane:2026-08-03T15:40");
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */

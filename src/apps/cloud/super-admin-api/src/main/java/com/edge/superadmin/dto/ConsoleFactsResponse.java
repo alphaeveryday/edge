@@ -1,6 +1,7 @@
 package com.edge.superadmin.dto;
 
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -31,13 +32,20 @@ public record ConsoleFactsResponse(List<RunResponse> runs, MetaResponse meta) {
 	 * 다른 축과 조인이 끊긴다.
 	 *
 	 * <p>시각·날짜는 ISO 문자열로 내린다. 표시 형식을 만들지 않는 것이 이 응답의 규약이다.
+	 *
+	 * <p>{@code planned}·{@code noRunRow} 는 <b>런 행이 없는 계획 슬롯</b>에만 실린다. 실재 런에
+	 * 대해 "스케줄 상 있어야 할 슬롯인가"를 답하는 계측이 없어서 {@code null} 을 내보내지 않고
+	 * <b>필드를 뺀다</b> — {@code false} 로 채우면 모름이 "계획된 적 없다"는 단정으로 뒤집힌다.
+	 * 여기가 이 응답에서 {@code @JsonInclude} 를 <b>필드 단위로</b> 거는 유일한 자리다.
 	 */
 	public record RunResponse(String id, String lane, String tradingDate, String ledgerStatus,
-			String ledgerUpdated, String deadline) {
+			String ledgerUpdated, String deadline,
+			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean planned,
+			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean noRunRow) {
 
 		public static RunResponse from(RunRow r) {
 			return new RunResponse(r.runKey(), r.lane(), iso(r.tradingDate()), r.ledgerStatus(),
-					iso(r.ledgerUpdated()), iso(r.deadline()));
+					iso(r.ledgerUpdated()), iso(r.deadline()), r.planned(), r.noRunRow());
 		}
 	}
 
