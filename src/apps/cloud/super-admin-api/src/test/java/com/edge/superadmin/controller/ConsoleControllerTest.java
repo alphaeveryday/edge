@@ -94,12 +94,18 @@ class ConsoleControllerTest {
 	 * 뒤에 붙을 작업 축이 이 값으로 조인한다.
 	 */
 	@Test
-	void 런_축은_원장_값을_그대로_싣는다() throws Exception {
-		mvc(facts(new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
-				DB_NOW, DB_NOW.plusHours(1))))
+	void 런_축은_원장_값을_그대로_순서대로_싣는다() throws Exception {
+		/* 런을 **둘** 넣는 이유: 정렬 단언이 리포지토리 레벨에만 있으면 서비스가 순서를 뒤집어도
+		 * 아무도 못 본다(`.sorted(...)` 한 줄이면 된다). 계약이 정렬을 약속하는 대상은 소비자,
+		 * 곧 **와이어**다. 조각 3 에서 서비스가 실제 파생 로직을 갖게 되면 그때 물리는 자리다. */
+		mvc(facts(
+				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
+						DB_NOW, DB_NOW.plusHours(1)),
+				new RunRow("news:2026-08-03T15:30", "news", DAY, "RUNNING", DB_NOW, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.runs.length()").value(1))
+				.andExpect(jsonPath("$.result.runs.length()").value(2))
+				.andExpect(jsonPath("$.result.runs[1].id").value("news:2026-08-03T15:30"))
 				.andExpect(jsonPath("$.result.runs[0].id").value("etf-daily:2026-08-03T15:40"))
 				.andExpect(jsonPath("$.result.runs[0].lane").value("etf-daily"))
 				.andExpect(jsonPath("$.result.runs[0].tradingDate").value("2026-08-03"))
