@@ -647,3 +647,9 @@ variable "super_admin_api_url" {
   description = "ExposureReverted 회수 집행 대상(ALPHA-746) — analysis-consumer 가 부르는 super-admin-api base URL. 무효화(WITHDRAWN 전이·INVALIDATION 발번·감사)의 발화자를 super-admin 하나로 유지한다"
   type        = string
 }
+
+variable "analysis_consumer_max_capacity" {
+  description = "설명 소비자(analysis-consumer) 오토스케일링 상한(ALPHA-912). ⚠️ 성능이 원하는 수가 아니라 **공유 RDS 가 견디는 수**다 — 2026-08-10 에 수동 12대가 db.t4g.micro 를 메모리로 죽였다(당일 2회). ALPHA-924 로 db.t4g.small(2GB) 상향 뒤의 잠정치이고, 정상 거래일 실측으로 올린다. ⚠️ 그 실측은 코드를 세서 하지 마라 — 태스크당 커넥션은 1개가 아니다(`EventStore` 외에 DuckDB 의 `ATTACH postgres` 가 더 연다). `DatabaseConnections` 를 그때의 대수로 나눠 재고, `FreeableMemory` 를 함께 본다(끊는 것은 커넥션 수가 아니라 메모리다). 계단 상단도 이 값에 맞춰야 한다"
+  type        = number
+  default     = 4
+}
