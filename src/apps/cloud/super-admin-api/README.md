@@ -8,6 +8,7 @@
 sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 행 복제 아님)·analyses
 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회다(ALPHA-514·601·651). analyses 쓰기는 무효화 단독(ALPHA-440·737 — 게시본 WITHDRAWN 전이 + INVALIDATION 발번 + `admin_activity_log` 감사)이다
 (ALPHA-602). session 표면은 인증 세션 주체(SessionOperator) 투영으로 실전환됐다(ALPHA-608).
+화면 표면과 별개로 **콘솔 규칙 엔진의 사실 표면**이 하나 더 있다(ALPHA-738, 아래 절).
 운영자 인증은 아직 in-memory(474).
 
 ## 지켜야 할 로컬 불변식
@@ -46,6 +47,33 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 - **의도적 생략(데모 범위)**: 로그인 레이트리밋·계정 잠금 없음 —
   `allowed_cidrs`·WAF(망 제한) 뒤의 운영자 표면 전제. CSRF 는 세션 쿠키
   SameSite=Strict·HttpOnly 로 경량 방어.
+
+## 규칙 엔진 사실 표면 (ALPHA-738)
+
+`GET /api/v1/console/facts?date=` — 콘솔 규칙 엔진(`super-admin-ui/src/rules/`)이 읽는 **사실**.
+화면 표면 4종과 성격이 다르다: UI 도메인 계약과 1:1 이 아니고, 수집 축을 넘어 전달 경계·산출까지
+한 응답에 담는다(그래서 `/sources/*` 아래 두지 않는다). 계약 정본은
+[docs/contracts/console-facts-api.md](../../../../docs/contracts/console-facts-api.md),
+결정 근거는 [ADR-0050](../../../../docs/adr/0050-console-facts-endpoint.md).
+
+이 모듈만의 비자명한 규율:
+
+- **여기서 판정하지 않는다.** 응답은 사실이고 위반 목록이 아니다 — 규칙은 프론트의 순수 함수다.
+  서버가 하는 유일한 파생은 데이터셋 축(`dataset_contract` 테이블이 없어 `ops_expected_task` 의
+  컬럼을 dataset 으로 묶는다)이고, 그건 계약이 정한 것이다.
+- **부재의 종류를 뭉개지 않는다** — 실측 0 은 `0`, 집계 없음은 `null`, **계측 없음은 필드 자체를
+  안 보낸다**. 그래서 클래스 단위 `@JsonInclude` 를 걸지 않는다: `NON_NULL` 을 위에 걸면 "집계
+  없음"이 조용히 "계측 없음"으로 바뀐다. 필요한 필드에만 붙인다(`RunResponse.planned`).
+- **여섯 조회는 한 REPEATABLE READ 스냅샷**에서 돈다 — 드릴다운(`JdbcPipelineStatusRepository`)과
+  같은 이유로, 조회 사이에 writer 가 끼면 어느 시점에도 없던 조합이 한 판정 위에 조립된다.
+- **날짜 축이 이 조회의 함정이다.** `ops_pipeline_run.trading_date` 는 거래일 달력이 아니고
+  (Planner 가 휴장일에도 채운다) 휴장 신호는 `ops_expected_task.skip_reason='NON_TRADING_DAY'` 에
+  있다. "이 런은 어느 날의 것인가"는 한 식(`RUN_DAY`)으로 두고 조회 창·작업 조인·최신 날짜가
+  공유한다 — 갈리면 그 런이 창에는 들어오는데 날짜가 안 골라져 화면에서 사라진다. 자세한 이유는
+  각 SQL 상수의 주석에 있다.
+- 이 앱은 여기서도 **읽기만** 한다 — 읽는 원장(`ops_*`·`explanation_*`·`tenant_delivery`·
+  `document`·`document_assertion`·`source_event`·`price_movement_trigger`)의 소유는 전부 다른
+  모듈이다(ADR-0005 단일 writer).
 
 ## 콘솔 화면 표면 (ALPHA-515 → 도메인별 DB 전환 중)
 

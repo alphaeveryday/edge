@@ -57,3 +57,4 @@
 | [0047](0047-banned-word-risk-retirement.md) | 금칙어 심각도 은퇴 — 결과를 정하는 축은 처리 방식뿐 | 승인됨 |
 | [0048](0048-explanation-s3-fallback-abolition.md) | 설명 S3 폴백 폐기 — 영속 전제는 LLM 앞에서 검사, bundle 주입 필수화 | 승인됨 |
 | [0049](0049-screening-llm-triage-layer.md) | 스크리닝 LLM 트리아지 층 — 게시 후 감사·검수 확정 회수 | 제안됨 |
+| [0050](0050-console-facts-endpoint.md) | 콘솔 규칙 엔진의 사실 공급 — 엔드포인트는 사실만, 평가는 클라이언트 | 승인됨 |
