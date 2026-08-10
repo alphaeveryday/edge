@@ -280,7 +280,8 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             return ({"stage": "propose", "verdict": "판정불가",
                      "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
         from .hypothesis_preview import HypothesisPreviewRuntime
-        preview_runtime = HypothesisPreviewRuntime(lake, object_runtime, day=day)
+        preview_runtime = HypothesisPreviewRuntime(
+            lake, object_runtime, day=day, default_event_set_handle=events["handle"])
         object_tools = {
             "specs": [*object_runtime.tool_specs(), *preview_runtime.tool_specs()],
             "call": preview_runtime.call,

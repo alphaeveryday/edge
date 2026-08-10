@@ -1,6 +1,7 @@
 """Hypothesis preview exposes only the existing panel-test design."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -40,6 +41,65 @@ def test_list_options_is_the_exact_panel_feature_registry_without_channel_vocabu
         "id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
         "label": "COMPANY.COMMERCIAL.MARKET_ENTRY 사건",
     }]
+
+
+def test_usual_model_tool_sequence_uses_the_server_scoped_event_set_and_reaches_a_preview_handle(monkeypatch):
+    runtime = HypothesisPreviewRuntime(
+        object(), _EventSets(), day="2026-08-07", default_event_set_handle="os_events")
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.edge_test",
+        lambda *_args, **_kwargs: SimpleNamespace(verdict="성립", n=42),
+    )
+    replies = 0
+    systems: list[str] = []
+
+    def ask(system, _user):
+        nonlocal replies
+        systems.append(system)
+        replies += 1
+        if replies == 1:
+            return {"tool": "hypothesis.list_options", "arguments": {}}
+        if replies == 2:
+            return {"tool": "hypothesis.preview", "arguments": {
+                "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+                "outcome_id": "outcome:daily_return",
+                "layer_id": "layer:고유",
+                "exposure_id": "feature:배수/수준",
+            }}
+        return {"hypotheses": [{
+            "preview_handle": next(iter(runtime._previews)),
+            "intent": "PBR 수준에 따른 수익률 차이를 확인한다.",
+        }]}
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["COMPANY.COMMERCIAL.MARKET_ENTRY"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve},
+    )
+
+    assert rejected == []
+    assert len(valid) == 1
+    assert valid[0].trigger.ident == "COMPANY.COMMERCIAL.MARKET_ENTRY"
+    assert "빈 arguments 객체" in systems[0]
+    wrong_handle = runtime.call(
+        "hypothesis.list_options", {"event_set_handle": "os_company_entity"})
+    assert wrong_handle["ok"] is False
+    assert wrong_handle["retry"] == {"tool": "hypothesis.list_options", "arguments": {}}
+    wrong_preview = runtime.call("hypothesis.preview", {
+        "event_set_handle": "os_company_entity",
+        "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+        "outcome_id": "outcome:daily_return",
+        "layer_id": "layer:고유",
+        "exposure_id": "feature:배수/수준",
+    })
+    assert wrong_preview["ok"] is False
+    assert wrong_preview["retry"] == {"tool": "hypothesis.preview", "arguments": {
+        "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+        "outcome_id": "outcome:daily_return",
+        "layer_id": "layer:고유",
+        "exposure_id": "feature:배수/수준",
+    }}
+    assert "os_company_entity" not in json.dumps(wrong_preview)
 
 
 def test_preview_rejects_unknown_handle_or_option_before_running_the_verifier(monkeypatch):
