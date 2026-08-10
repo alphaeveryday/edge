@@ -32,9 +32,9 @@ variable "engine_version" {
 }
 
 variable "instance_class" {
-  description = "인스턴스 클래스 (dev: db.t4g.micro)"
+  description = "인스턴스 클래스 (dev: db.t4g.small). micro(1GiB)에서 2026-08-10 하루 다섯 번 OOM 재기동 — ALPHA-924"
   type        = string
-  default     = "db.t4g.micro"
+  default     = "db.t4g.small"
 }
 
 variable "allocated_storage" {
