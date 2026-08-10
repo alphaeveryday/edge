@@ -420,7 +420,7 @@ def test_유니버스_뿌리_밖_ETF_행은_유실이_아니라_대상_밖이다
     canonical holdings 파티션에는 유니버스 뿌리가 아닌 etf_id 가 섞인다 — 폐지 ETF 의 옛
     행(파티션은 안 지워진다)과 참조 계열 ETF(명부만 받는 축)다. 이 둘을 안 거르면 마스터에
     ETF 행이 없어 전량 `skipped_unknown_etf` 로 잡히고, 그 값이 `ops.failed_records` 에
-    들어가 이 작업이 **매 런 INCOMPLETE** 가 된다(참조 계열 48종이면 하루 ~5,000행).
+    들어가 이 작업이 **매 런 INCOMPLETE** 가 된다(참조 계열 47종이면 하루 ~5,000행).
 
     비교 대상은 `skipped_self` 다 — "정상 동작이지 유실이 아니다"라는 같은 판단이고, 같이
     수치로는 남긴다(0 이 아니면 파티션에 대상 밖 ETF 가 있다는 사실이다).
@@ -428,7 +428,7 @@ def test_유니버스_뿌리_밖_ETF_행은_유실이_아니라_대상_밖이다
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [
         _hold_row("091160", "005930"),   # 뿌리
-        _hold_row("091170", "005930"),   # 참조 계열 — 마스터에 ETF 행이 없다
+        _hold_row("102970", "005930"),   # 참조 계열 — 마스터에 ETF 행이 없다
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))

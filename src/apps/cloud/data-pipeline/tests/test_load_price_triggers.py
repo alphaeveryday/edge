@@ -581,7 +581,7 @@ def test_유니버스_뿌리_밖_ETF_는_미등록으로_세지_않는다(tmp_pa
     """
     storage = LocalStorage(tmp_path)
     _default_holdings(storage)                        # _ETF — 뿌리
-    _default_holdings(storage, etf="091170")          # 참조 계열 — 같은 파티션에 섞인다
+    _default_holdings(storage, etf="102970")          # 참조 계열 — 같은 파티션에 섞인다
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
     conn = _FakeConn(master={})
@@ -606,12 +606,12 @@ def test_뿌리_밖_ETF_를_지목한_단일_실행은_fail_loud(tmp_path, monke
     참조 계열 48종이 바로 운영자가 `--etf-ticker` 로 지목할 법한 집합이다.
     """
     storage = LocalStorage(tmp_path)
-    _default_holdings(storage, etf="091170")
+    _default_holdings(storage, etf="102970")
     _write_prices(storage, "2026-07-15", [{"ticker": "005930", "close": 10000.0}])
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])
-    conn = _FakeConn(master={"091170": "inst-091170"})   # 마스터엔 있다
+    conn = _FakeConn(master={"102970": "inst-102970"})   # 마스터엔 있다
 
-    assert _run(storage, conn, monkeypatch, etf_ticker="091170",
+    assert _run(storage, conn, monkeypatch, etf_ticker="102970",
                 expected_etfs=frozenset({_ETF})) == 1
 
     log = _quality_log(storage)
