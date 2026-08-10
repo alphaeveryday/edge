@@ -19,7 +19,7 @@ Tenant Console
 
 **Dashboard**
 
-- 주요 현황 — 가격 변동 설명 반입 상태: 자동 제공 / 검수 대기 / 점검 차단 / 검수 반려 / 제공 중단 건수
+- 주요 현황 — 가격 변동 설명 수신 상태: 자동 제공 / 검수 대기 / 점검 차단 / 검수 반려 / 제공 중단 건수
 - 제공 API 트래픽(최근 24시간): 요청 수, 에러 건수·에러율 (원천 = serving_request_metric, ALPHA-128)
 - 최근 가격 변동 설명 요약: 종목, 등락률, 제공 상태, 확신도(높음/중간/보류 — 위험등급 융합 산정 폐지, [../adr/0046](../adr/0046-confidence-gate-risk-grade-abolition.md))
 - 이벤트 수신 상태, 무효화 알림, 최근 장애 알림
@@ -32,7 +32,7 @@ Tenant Console
 - 관리 액션: **최종 문구 정정 / 검수로 이관 / 제공 중단(노출 중단 — 사유 필수)** (구 "정정 등록"은 CORRECTION 폐지로 삭제 — [../adr/0044](../adr/0044-correction-abolition.md))
 - 판정 게이트(승인·반려)는 Review Queue 소관이다 — explanations 는 현황판+사후 운영에 한정된다(역할 분담, 사용자 결정 2026-07-29).
 
-> 실전환 현황(ALPHA-607 읽기·613 쓰기): 읽기(목록·상세·반입 상태)와 사후 운영 쓰기(최종 문구 정정·검수 이관·제공 중단)가 온프렘 원장 전이·행위자·감사로 실전환됐다 — `ExplanationMockStore` 삭제로 콘솔 mock 이 소멸했다. 화면·IA 에 없던 approve·reject·draft(ALPHA-513 잔재)는 표면째 제거됐다. **시장·등락률(방향)**은 온프렘 원장에 아직 없어(경계면 확장 [../contracts/event-bundle-schema.md](../contracts/event-bundle-schema.md) `observed_return`·`market_code`, ALPHA-497 이연) 목록·상세·Dashboard 요약에서 **한시 생략** — materialization 후 위 컬럼을 복원한다. 권한은 [permission-matrix](permission-matrix.md) 적용.
+> 실전환 현황(ALPHA-607 읽기·613 쓰기): 읽기(목록·상세·수신 상태)와 사후 운영 쓰기(최종 문구 정정·검수 이관·제공 중단)가 온프렘 원장 전이·행위자·감사로 실전환됐다 — `ExplanationMockStore` 삭제로 콘솔 mock 이 소멸했다. 화면·IA 에 없던 approve·reject·draft(ALPHA-513 잔재)는 표면째 제거됐다. **시장·등락률(방향)**은 온프렘 원장에 아직 없어(경계면 확장 [../contracts/event-bundle-schema.md](../contracts/event-bundle-schema.md) `observed_return`·`market_code`, ALPHA-497 이연) 목록·상세·Dashboard 요약에서 **한시 생략** — materialization 후 위 컬럼을 복원한다. 권한은 [permission-matrix](permission-matrix.md) 적용.
 
 **Review Queue** (논리적 작업함, status=REVIEW_REQUIRED 목록)
 

@@ -81,7 +81,7 @@ API(tenant-console-api)가 세션의 역할 클레임으로 아래 표를 강제
 | `GET /api/v1/auth/session` | 인증(세션 조회) | 인증된 전 역할 |
 | `GET /api/v1/session` · `PATCH /api/v1/session/profile` | 세션·프로필 조회·표시 이름 변경 (member 원장, ALPHA-500) | 인증된 전 역할 |
 | `GET /api/v1/dashboard/traffic` | Dashboard 트래픽 KPI (24시간 요청·에러) | TA·CR·OP·RO |
-| `GET /api/v1/explanations` · `GET /api/v1/explanations/{id}` · `GET /api/v1/explanations/feed-status` · `GET /api/v1/explanations/status-counts` | Price Movement Explanations 목록(페이지)·단건·반입 상태·상태별 건수 조회 (실전환 ALPHA-607, 페이지네이션·단건·집계 ALPHA-914) | TA·CR·OP·RO |
+| `GET /api/v1/explanations` · `GET /api/v1/explanations/{id}` · `GET /api/v1/explanations/feed-status` · `GET /api/v1/explanations/status-counts` | Price Movement Explanations 목록(페이지)·단건·수신 상태·상태별 건수 조회 (실전환 ALPHA-607, 페이지네이션·단건·집계 ALPHA-914) | TA·CR·OP·RO |
 | `PATCH /api/v1/explanations/{id}/final` | 최종 문구 정정(게시본 published_summary in-place, ALPHA-613) | CR |
 | `POST /api/v1/explanations/{id}/stop` · `.../move-to-review` | 노출 축소 조치(제공 중단 — 사유 필수 · 검수로 이관, ALPHA-613) | CR·OP |
 | `GET /api/v1/review/items` | Review Queue 조회 | TA·CR·OP·RO |
