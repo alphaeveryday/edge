@@ -68,7 +68,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				INSERT INTO ops_reconciliation_issue (issue_id, issue_type, scope, scope_key,
 				       dedupe_key, status)
 				VALUES (?,?,?,?,?,?)
-				""", id, type, scope, scopeKey, type + ":" + scope + ":" + scopeKey, status);
+				""", id, type, scope, scopeKey, type.toLowerCase() + ":" + scopeKey, status);
 	}
 
 	@Test
@@ -133,16 +133,26 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 🔴 슬롯 스코프가 아닌 이슈는 후보가 아니다. {@code issue_type}·{@code scope} 술어를 빼도
-	 * 전건 통과했는데, 이건 가설이 아니다 — <b>런 키와 슬롯 키의 형식이 같아서</b>
-	 * ({@code etf-daily:2026-08-05T15:40}) 날짜 정규식이 똑같이 매칭된다. 런 스코프 이슈 한 건이
-	 * 조회 창을 옮긴다.
+	 * 슬롯 스코프의 {@code PLANNER_MISSING} 만 후보다. 두 술어({@code issue_type}·{@code scope})를
+	 * 각각 빼도 전건 통과했다.
+	 *
+	 * <p>⚠️ <b>오늘의 프로듀서로는 이 구멍이 안 터진다</b> — 슬롯 스코프를 쓰는 writer 는
+	 * {@code ops/reconciler.py:496} 하나이고 항상 {@code PLANNER_MISSING} 이며, 비-slot 스코프의
+	 * {@code scope_key} 는 <b>해시</b>라({@code run} 은 {@code run_id = stable_domain_id("run",
+	 * run_key)}) 날짜 정규식에 애초에 안 걸린다. 즉 두 술어는 <b>앞으로 생길 프로듀서</b>에 대한
+	 * 가드이고, 이 테스트가 지키는 것은 <b>그 가드가 조용히 빠지는 것</b>이다.
+	 *
+	 * <p>(이 주석은 한때 "런 키와 슬롯 키 형식이 같아 지금도 터진다"고 적혀 있었고 <b>틀렸다</b> —
+	 * `scope_key` 에 실제로 무엇이 들어가는지 안 보고 쓴 문장이었다.)
 	 */
 	@Test
 	void 슬롯_스코프가_아닌_이슈는_조회_창_후보가_아니다() {
 		insertTradingDay("2026-08-03");
+		/* 픽스처는 **날짜 형식을 담은** scope_key 를 일부러 쓴다 — 미래 프로듀서가 그렇게 쓰기
+		 * 시작해도 두 술어가 막는지를 재는 것이 이 테스트의 일이라서다. 둘의 날짜를 다르게 둬야
+		 * 어느 술어가 빠졌는지 실패 값으로 갈린다. */
 		insertIssue("i1", "PLANNER_MISSING", "run", "etf-daily:2026-08-05T15:40", "OPEN");
-		insertIssue("i2", "DEADLINE_MISSED", "slot", "etf-daily:2026-08-06T15:40", "OPEN");
+		insertIssue("i2", "MISSED", "slot", "etf-daily:2026-08-06T15:40", "OPEN");
 
 		assertThat(repository.facts(null).today()).isEqualTo(DAY);
 	}

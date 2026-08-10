@@ -23,7 +23,8 @@ import java.util.regex.Pattern;
  * 화면 표면 엔드포인트를 더할 때는 IA 문서와 여기 RULES 에 함께 행을 더한다.
  * ⚠️ 화면 표면이 아닌 것도 여기에는 온다 — 인증은 IA 와 무관하게 전 표면에 걸리기 때문이다
  * (예: 콘솔 규칙 엔진의 사실 표면 /api/v1/console/facts, ALPHA-738. 그 계약의 SSOT 는
- * docs/contracts/console-facts-api.md 다). 그런 표면은 IA 표에 행이 없는 것이 맞다. 매핑 없는 /api/** 는 거부가
+ * docs/contracts/console-facts-api.md). 그런 표면은 IA 표에 행이 없는 것이 맞다.
+ * 매핑 없는 /api/** 는 거부가
  * 기본이다(fail-closed). 운영자는 단일 역할이라 역할 인가는 없다 — 인증만 강제한다
  * (역할 분화 시 tenant-console ConsoleAuthFilter 처럼 Rule 에 역할 집합을 더한다).
  */
@@ -43,6 +44,8 @@ public class AdminAuthFilter extends OncePerRequestFilter {
 			new Rule("POST", Pattern.compile("/api/v1/auth/login"));
 
 	// super-admin-console.md 화면 표면의 코드 대응물(ALPHA-515) — 전부 인증 필수.
+	// ⚠️ 화면 표면이 **아닌** 것도 여기 온다(인증은 IA 와 무관하게 전 표면에 걸린다) —
+	// /api/v1/console/facts 는 IA 표에 행이 없는 것이 맞다. 클래스 javadoc 참조.
 	private static final List<Rule> RULES = List.of(
 			new Rule("POST", Pattern.compile("/api/v1/auth/logout")),
 			new Rule("GET", Pattern.compile("/api/v1/auth/session")),
