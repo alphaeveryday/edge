@@ -53,7 +53,7 @@ class RequestMetricFilterTest {
 			1L, "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
 			"반도체 비중 상위 구성종목의 동반 상승이 반영된 변동 요인 후보입니다.", "MEDIUM",
 			List.of(), OffsetDateTime.of(2026, 7, 15, 16, 40, 0, 0, ZoneOffset.ofHours(9)),
-			OffsetDateTime.of(2026, 7, 15, 16, 0, 0, 0, ZoneOffset.ofHours(9)));
+			OffsetDateTime.of(2026, 7, 15, 16, 0, 0, 0, ZoneOffset.ofHours(9)), null);
 
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {

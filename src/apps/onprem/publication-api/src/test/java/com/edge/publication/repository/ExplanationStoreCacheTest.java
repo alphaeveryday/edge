@@ -30,7 +30,7 @@ class ExplanationStoreCacheTest {
 			"반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
 			"MEDIUM", List.of(),
 			OffsetDateTime.of(2026, 7, 15, 16, 40, 0, 0, ZoneOffset.ofHours(9)),
-			OffsetDateTime.of(2026, 7, 15, 16, 0, 0, 0, ZoneOffset.ofHours(9)));
+			OffsetDateTime.of(2026, 7, 15, 16, 0, 0, 0, ZoneOffset.ofHours(9)), null);
 
 	/** 로더 호출을 세는 대역 — 069500 만 게시분 존재(200), 그 외는 없음(204). */
 	private static final class CountingStore extends ExplanationStore {

@@ -61,7 +61,7 @@ class EventBundleContractTest {
 		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null, null)));
 		// upsert 1행(신규 수신)이어야 판정·근거 기록 경로가 실행된다 — mock 기본값 0은 재수신 skip 이 된다.
 		when(analysis.upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-				any(), anyLong(), any())).thenReturn(1);
+				any(), anyLong(), any(), any())).thenReturn(1);
 		BundleScreener screener = new BundleScreener(pending, analysis, publications, policies, rules, checks, history);
 
 		// 계약을 만족하는 populated evidences 를 담은 NEW 번들을 실제로 screen 한다
@@ -75,11 +75,17 @@ class EventBundleContractTest {
 		// 파서 입력만 봉투로 감싼다.
 		screener.screen(101L, envelope(bundle).getBytes(StandardCharsets.UTF_8));
 
-		// analysis_item 으로 넘어가는 evidencesJson(12번째 인자)을 캡처한다
+		// analysis_item 으로 넘어가는 evidencesJson(12번째)·content_as_of(15번째) 인자를 캡처한다
 		ArgumentCaptor<String> movedEvidences = ArgumentCaptor.forClass(String.class);
+		ArgumentCaptor<java.time.OffsetDateTime> movedContentAsOf =
+				ArgumentCaptor.forClass(java.time.OffsetDateTime.class);
 		verify(analysis).upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-				movedEvidences.capture(), anyLong(), any());
+				movedEvidences.capture(), anyLong(), any(), movedContentAsOf.capture());
 		String moved = movedEvidences.getValue();
+		// optional content_as_of(ALPHA-918)도 번들→원장 배선에서 유실되면 안 된다 —
+		// 파서가 null 로 흘리거나 upsert 전달이 빠지면 여기서 잡힌다.
+		assertThat(movedContentAsOf.getValue())
+				.isEqualTo(java.time.OffsetDateTime.parse("2026-07-15T10:30:00+09:00"));
 
 		// (1) 유실 금지 — 근거를 통째로 떨어뜨리면 안 된다
 		assertThat(moved).as("BundleScreener 가 evidences 를 유실하면 안 된다").isNotEqualTo("[]");
@@ -101,7 +107,7 @@ class EventBundleContractTest {
 				{"bundle_id":"0198aaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant_id":1,
 				 "generated_at":"2026-07-15T09:00:00Z","cursor_from":101,"cursor_to":101,
 				 "entries":[{"cursor":101,"delivery_type":"NEW",
-				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":"069500","etf_name":"KODEX 200","trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"EVENT_SUPPORTED","summary":"요약","confidence_level":"MEDIUM","primary_thread_id":"t1"},
+				   "explanation_result":{"explanation_result_id":"r1","etf_instrument_id":"i1","etf_ticker":"069500","etf_name":"KODEX 200","trade_date":"2026-07-15","explanation_as_of":"2026-07-15T09:00:00Z","explanation_type":"EVENT_SUPPORTED","summary":"요약","confidence_level":"MEDIUM","primary_thread_id":"t1","content_as_of":"2026-07-15T10:30:00+09:00"},
 				   "explanation_run":{"explanation_run_id":"run1","release_bundle_version":"v1"},
 				   "source_events":[],"evidences":%s}]}""").formatted(evidencesJson);
 	}

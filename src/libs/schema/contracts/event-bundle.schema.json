@@ -112,6 +112,7 @@
         },
         "primary_thread_id": { "type": ["string", "null"], "description": "대표 스레드 참조 — 없으면 null." },
         "market_code": { "type": ["string", "null"], "description": "시장 코드(MIC) ← instrument.market_code. ALPHA-395 결정, producer 조인 구현(후속)까지는 미포함이라 optional — 구현 시 required 승격." },
+        "content_as_of": { "type": ["string", "null"], "format": "date-time", "description": "콘텐츠 기준시각 — 산문이 서술하는 요청 창의 끝(KST) ← stage_results->'window'. explanation_as_of(생성 벽시계·스냅샷 grain)와 구분되는 표시용 시각. ALPHA-854 이전 행·시드 행·EOD 레인·합성 실패는 null(소비자는 explanation_as_of 폴백) — 백필 없음이라 optional 유지 (ALPHA-918)." },
         "observed_return": { "type": ["number", "null"], "description": "등락률 ← price_movement_trigger.observed_return. ALPHA-395 결정, producer 조인 구현(후속)까지는 미포함이라 optional." }
       }
     },

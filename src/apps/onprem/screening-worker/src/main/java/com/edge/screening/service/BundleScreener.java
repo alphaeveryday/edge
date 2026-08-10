@@ -199,7 +199,8 @@ public class BundleScreener {
 				result.primaryThreadId(),
 				entry.evidencesJson(),
 				entry.cursor(),
-				status);
+				status,
+				result.contentAsOf());
 	}
 
 	private static DeliveryEntry.ExplanationResult requiredResult(DeliveryEntry entry) {

@@ -54,7 +54,8 @@ class EventBundleContractTest {
 	void 직렬화된_번들이_계약을_만족한다() {
 		ExplanationResult result = new ExplanationResult("r1", "i1", "069500", "KODEX 200",
 				LocalDate.parse("2026-07-15"), Instant.parse("2026-07-15T09:00:00Z"),
-				"EVENT_SUPPORTED", "요약", "MEDIUM", "t1");
+				"EVENT_SUPPORTED", "요약", "MEDIUM", "t1",
+				Instant.parse("2026-07-15T01:30:00Z"));
 		ExplanationRun run = new ExplanationRun("run1", "v1");
 		// source_events·evidences 는 실 조립 형상(SourceEventItem·EvidenceItem)으로 싣는다
 		// (ALPHA-718) — event_date·title·published_at 이 null 이어도 키 자체는 required 라

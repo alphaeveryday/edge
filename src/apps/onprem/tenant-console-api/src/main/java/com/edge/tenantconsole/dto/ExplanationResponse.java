@@ -27,6 +27,7 @@ public record ExplanationResponse(
 		String receivedRelative,
 		String receivedAt,
 		String explanationAsOf,
+		String contentAsOf,
 		boolean serving,
 		List<EvidenceResponse> evidence,
 		String original,
@@ -57,7 +58,10 @@ public record ExplanationResponse(
 		return new ExplanationResponse(it.id(), it.name(), it.code(), it.status(), it.confidence(),
 				it.reviewReason(), TimeText.relative(it.receivedAt()), TimeText.absolute(it.receivedAt()),
 				// 기준시각(ALPHA-744) — 원장 explanation_as_of 는 NOT NULL 이라 폴백 불요
-				TimeText.absolute(it.explanationAsOf()), it.serving(),
+				TimeText.absolute(it.explanationAsOf()),
+				// 콘텐츠 기준시각(ALPHA-918) — nullable: 결측이면 NON_NULL 로 키 생략(UI 가 as_of 폴백)
+				it.contentAsOf() == null ? null : TimeText.absolute(it.contentAsOf()),
+				it.serving(),
 				it.evidence().stream().map(EvidenceResponse::from).toList(),
 				it.original(), it.finalText());
 	}

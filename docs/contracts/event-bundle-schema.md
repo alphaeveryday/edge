@@ -21,7 +21,7 @@
 
 | 테이블 | 역할 | 키 |
 | --- | --- | --- |
-| `explanation_result` | 고객 노출 후보 문구. 번들의 본체 | `explanation_result_id` |
+| `explanation_result` | 고객 노출 후보 문구. 번들의 본체. `content_as_of` 는 `stage_results->'window'` 에서 조립 시 파생(ALPHA-918) | `explanation_result_id` |
 | `explanation_run` | 어느 실행이 그 결과를 냈는지 + 사용한 릴리스 번들 버전 | `explanation_run_id` |
 | `source_event` | 설명이 근거로 삼은 소스 이벤트 | `source_event_id` |
 | `event_evidence` | `evidences` 문서로의 lineage 브리지(`source_event_id`·`assertion_id`) — 페이로드는 `document`가 공급 | `evidence_id`·`assertion_id` |
@@ -70,7 +70,8 @@
       "explanation_result": { "explanation_result_id": "...", "etf_instrument_id": "...",
         "etf_ticker": "069500", "etf_name": "KODEX 200",
         "trade_date": "2026-07-15", "explanation_as_of": "...", "explanation_type": "EVENT_SUPPORTED",
-        "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "..." },
+        "summary": "...", "confidence_level": "MEDIUM", "primary_thread_id": "...",
+        "content_as_of": "2026-07-15T10:30:00+09:00" },
       "explanation_run": { "explanation_run_id": "...", "release_bundle_version": "..." },
       "source_events": [ { "source_event_id": "...", "source_class": "NEWS", "event_type_code": "EARNINGS", "event_date": "2026-07-14" } ],
       "evidences": [ { "kind": "NEWS", "title": "실적 발표 기사", "source": "YONHAP", "published_at": "2026-07-14T00:00:00Z", "source_uri": "https://news.example.com/a1" } ]
@@ -104,6 +105,8 @@ reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·�
 "source_events": [ { "source_event_id": "...", "source_class": "DISCLOSURE", "event_type_code": "...", "event_date": "2026-07-14" } ],
 "evidences": [ { "kind": "DISCLOSURE", "title": "삼성전자 공급계약 체결 공시", "source": "DART", "published_at": "2026-07-14T09:00:00Z" } ]
 ```
+
+**`content_as_of`(콘텐츠 기준시각, ALPHA-918)**: `explanation_result` 페이로드의 **optional** 필드. 산문이 서술하는 요청 창의 **끝 시각**(KST timestamptz)으로, `explanation_as_of`(생성 벽시계 — 스냅샷 grain·게시 grain 축, 불변)와 구분되는 **표시용** 시각이다. 원천은 `explanation_result.stage_results->'window'` — 실시간 분봉 런은 `requested_end`, 요청창 백필 런(`window_batch`)은 `as_of`/`window_end` 키(KST "HH:MM" 문자열)이며, producer(tenant-sync-api)가 `trade_date` 와 합성해 timestamptz 로 싣는다. **결측 = null**: ALPHA-854 이전 행·시드/수동 삽입 행·EOD 레인·형식 이상(합성 실패는 그 건만 null — 근거 파싱의 "불량 요소 생략" 규약과 동일). 백필 없음 — 소비자는 null 이면 `explanation_as_of` 로 폴백 표시한다. 구형 수신분과 공존해야 하므로 required 승격 없음.
 
 **`observed_return`·`market_code`(검수 UI 목록의 시장·등락률)**: 번들에 **싣기로 결정**하되, `source_events`/`evidences` 배열이 아니라 **`explanation_result` 페이로드 확장**이다 — `market_code`는 `instrument`(이미 `etf_ticker`·`etf_name` 조인) 출처, `observed_return`은 `price_movement_trigger` 출처. **결정적 lineage 조인 경로·기계가독 스키마화·openapi(ALPHA-326) 반영은 ALPHA-497로 이연**한다 — `price_movement_trigger`는 `(etf_instrument_id, trade_date, detected_at)` 유니크라 단순 (종목·거래일) 조인은 다중 트리거 시 비결정적이므로 조인 경로 확정이 497 몫이다. 여기선 "싣는다"는 결정만 기록한다.
 

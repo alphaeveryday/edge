@@ -12,9 +12,11 @@ import java.time.OffsetDateTime;
 public record DeliveryEntry(long cursor, String deliveryType, ExplanationResult explanationResult,
 		String targetExplanationResultId, String reason, String evidencesJson, int sourceEventCount) {
 
-	/** explanation_result 페이로드 — 필드 정의 SSOT 는 docs/contracts/event-bundle-schema.md. */
+	/** explanation_result 페이로드 — 필드 정의 SSOT 는 docs/contracts/event-bundle-schema.md.
+	 * contentAsOf(ALPHA-918)는 optional — 구형 번들·EOD 레인은 null 이다. */
 	public record ExplanationResult(String explanationResultId, String etfInstrumentId, String etfTicker,
 			String etfName, LocalDate tradeDate, OffsetDateTime explanationAsOf, String explanationType,
-			String summary, String headline, String confidenceLevel, String primaryThreadId) {
+			String summary, String headline, String confidenceLevel, String primaryThreadId,
+			OffsetDateTime contentAsOf) {
 	}
 }

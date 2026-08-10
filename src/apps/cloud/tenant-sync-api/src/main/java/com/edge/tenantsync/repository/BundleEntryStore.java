@@ -8,12 +8,17 @@ import com.edge.tenantsync.dto.SourceEventItem;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -38,12 +43,16 @@ public class BundleEntryStore {
 		Set<String> runIds = newRunIds(rows);
 		Map<String, List<SourceEventItem>> sourceEventsByRun = sourceEventsByRun(runIds);
 		Map<String, List<EvidenceItem>> evidencesByRun = evidencesByRun(runIds);
+		Map<String, Instant> contentAsOfById = contentAsOfById(rows);
 		return rows.stream()
 				.map(row -> toEntry(row,
 						row.explanationRunId() == null ? List.of()
 								: sourceEventsByRun.getOrDefault(row.explanationRunId(), List.of()),
 						row.explanationRunId() == null ? List.of()
-								: evidencesByRun.getOrDefault(row.explanationRunId(), List.of())))
+								: evidencesByRun.getOrDefault(row.explanationRunId(), List.of()),
+						// INVALIDATION 은 본체가 없다 — 불변 Map 은 null 키 조회가 NPE 라 먼저 거른다.
+						row.explanationResultId() == null ? null
+								: contentAsOfById.get(row.explanationResultId())))
 				.toList();
 	}
 
@@ -90,8 +99,42 @@ public class BundleEntryStore {
 				row.getSourceUri());
 	}
 
+	/**
+	 * 콘텐츠 기준시각(ALPHA-918) — NEW 본체의 result id 로 창 끝("HH:MM")을 배치 조회해
+	 * trade_date 와 KST 로 합성한다. fail-soft: 형식 이상·결측은 그 건만 빠진다(null) —
+	 * 한 건의 이상값이 pull 전체를 세우지 않게(근거 파싱의 "불량 요소 생략" 규약과 동일).
+	 */
+	private Map<String, Instant> contentAsOfById(List<DeliveryRow> rows) {
+		Map<String, LocalDate> tradeDateById = rows.stream()
+				.filter(row -> "NEW".equals(row.deliveryType()))
+				.filter(row -> row.explanationResultId() != null && row.tradeDate() != null)
+				.collect(Collectors.toMap(DeliveryRow::explanationResultId, DeliveryRow::tradeDate,
+						(a, b) -> a));
+		if (tradeDateById.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, Instant> byId = new HashMap<>();
+		for (ContentWindowRow row : repository.findContentWindowRows(tradeDateById.keySet())) {
+			Instant composed = composeContentAsOf(tradeDateById.get(row.getExplanationResultId()), row.getHhmm());
+			if (composed != null) {
+				byId.put(row.getExplanationResultId(), composed);
+			}
+		}
+		return byId;
+	}
+
+	private static final Pattern HHMM = Pattern.compile("^(?:[01]\\d|2[0-3]):[0-5]\\d$");
+	private static final ZoneOffset KST = ZoneOffset.ofHours(9);
+
+	static Instant composeContentAsOf(LocalDate tradeDate, String hhmm) {
+		if (tradeDate == null || hhmm == null || !HHMM.matcher(hhmm).matches()) {
+			return null;
+		}
+		return tradeDate.atTime(LocalTime.parse(hhmm)).atOffset(KST).toInstant();
+	}
+
 	static BundleEntry toEntry(DeliveryRow row, List<SourceEventItem> sourceEvents,
-			List<EvidenceItem> evidences) {
+			List<EvidenceItem> evidences, Instant contentAsOf) {
 		if ("INVALIDATION".equals(row.deliveryType())) {
 			return BundleEntry.invalidation(row.cursor(), row.targetExplanationResultId(), row.reason());
 		}
@@ -117,7 +160,8 @@ public class BundleEntryStore {
 				row.explanationType(),
 				row.summary(),
 				row.confidenceLevel(),
-				row.primaryThreadId());
+				row.primaryThreadId(),
+				contentAsOf);
 		ExplanationRun run = new ExplanationRun(row.explanationRunId(), row.bundleVersion());
 		return BundleEntry.newResult(row.cursor(), result, run, sourceEvents, evidences);
 	}

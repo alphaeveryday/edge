@@ -23,7 +23,8 @@ class ExplanationResponseTest {
 	private static Explanation sample(String reviewReason) {
 		return new Explanation("expr_LOCAL01", "삼성전자", "005930", "REVIEW_REQUIRED", "HIGH",
 				reviewReason, OffsetDateTime.parse("2026-07-11T10:42:00+09:00"),
-				OffsetDateTime.parse("2026-07-11T16:00:00+09:00"), true,
+				OffsetDateTime.parse("2026-07-11T16:00:00+09:00"),
+				OffsetDateTime.parse("2026-07-11T10:30:00+09:00"), true,
 				List.of(new Explanation.Evidence("DISCLOSURE", "3분기 잠정 실적 공시", "KIND",
 								OffsetDateTime.parse("2026-07-11T10:31:00+09:00"),
 								"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260711000001"),
@@ -50,6 +51,22 @@ class ExplanationResponseTest {
 		// 기준시각·노출 head(ALPHA-744) — UI 는 이 두 필드로 다스냅샷 공존을 판별한다
 		assertThat(json.get("explanationAsOf").asString()).isEqualTo("2026-07-11 16:00 KST");
 		assertThat(json.get("serving").asBoolean()).isTrue();
+		// 콘텐츠 기준시각(ALPHA-918) — 산문이 말하는 창의 끝, 같은 KST 표시 포맷
+		assertThat(json.get("contentAsOf").asString()).isEqualTo("2026-07-11 10:30 KST");
+	}
+
+	/** WHY(ALPHA-918): 결측(구형 수신분)은 키 생략이어야 UI 의 `contentAsOf ?? explanationAsOf`
+	 * 폴백이 성립한다 — null 명시로 새면 화면이 "null" 을 그린다(키 부재 단언, ALPHA-599 교훈). */
+	@Test
+	void 콘텐츠_기준시각_결측은_키_생략이다() {
+		Explanation missing = new Explanation("expr_LOCAL02", "삼성전자", "005930", "APPROVED", "HIGH",
+				null, OffsetDateTime.parse("2026-07-11T10:42:00+09:00"),
+				OffsetDateTime.parse("2026-07-11T16:00:00+09:00"), null, true,
+				List.of(), "원본 문구", "최종 문구");
+
+		JsonNode json = mapper.valueToTree(ExplanationResponse.from(missing));
+
+		assertThat(json.has("contentAsOf")).isFalse();
 	}
 
 	@Test

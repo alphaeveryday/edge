@@ -42,6 +42,8 @@ export interface Explanation {
   receivedAt: string;
   /** 스냅샷 기준시각 ("2026-07-11 16:00 KST") — 다스냅샷 공존 판별 축(ALPHA-744) */
   explanationAsOf: string;
+  /** 콘텐츠 기준시각 — 산문이 서술하는 창의 끝(ALPHA-918). 결측(구형 수신분)이면 explanationAsOf 폴백 표시 */
+  contentAsOf?: string;
   /** 현재 노출 head 여부 — 서버가 서빙 술어("유효 최신 승리")로 판정, UI 파생 금지(ALPHA-744) */
   serving: boolean;
   evidence: Evidence[];

@@ -41,7 +41,9 @@ public class ExplanationStore {
 			List<Evidence> evidences,
 			OffsetDateTime publishedAt,
 			/** 스냅샷 기준시각 — 표시 규칙 "유효 최신 승리"의 축, 응답 노출(ALPHA-743). */
-			OffsetDateTime explanationAsOf
+			OffsetDateTime explanationAsOf,
+			/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 창의 끝. 구형 게시분은 null. */
+			OffsetDateTime contentAsOf
 	) {
 		public record Evidence(String kind, String title, String source, OffsetDateTime publishedAt) {
 		}
@@ -120,7 +122,8 @@ public class ExplanationStore {
 				a.getConfidenceLevel(),
 				parseEvidences(a.getEvidences()),
 				p.getPublishedAt(),
-				p.getExplanationAsOf());
+				p.getExplanationAsOf(),
+				p.getContentAsOf());
 	}
 
 	/**

@@ -64,6 +64,13 @@ class SyncBundleControllerTest {
 		public List<RunSourceEventRow> findSourceEventRows(java.util.Collection<String> runIds) {
 			return List.of();
 		}
+
+		@Override
+		public List<com.edge.tenantsync.repository.ContentWindowRow> findContentWindowRows(
+				java.util.Collection<String> resultIds) {
+			// 창 결측(구형 행) 경로 — 실 추출·합성은 BundleEntryStoreIntegrationTest 가 고정한다.
+			return List.of();
+		}
 	}
 
 	private MockMvc mvc;

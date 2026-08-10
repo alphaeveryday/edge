@@ -27,7 +27,7 @@ class PolicyEvaluatorTest {
 		return new DeliveryEntry(1L, "NEW",
 				new DeliveryEntry.ExplanationResult("er-1", "i-1", "069500", "KODEX 200",
 						LocalDate.of(2026, 7, 15), OffsetDateTime.parse("2026-07-15T16:00:00+09:00"),
-						explanationType, summary, headline, confidenceLevel, null),
+						explanationType, summary, headline, confidenceLevel, null, null),
 				null, null, "[]", sourceCount);
 	}
 

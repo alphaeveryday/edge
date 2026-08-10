@@ -50,6 +50,10 @@ public class AnalysisItemEntity {
 	@Column(name = "explanation_as_of")
 	private OffsetDateTime explanationAsOf;
 
+	/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 창의 끝. 구형 수신분·시드·EOD 는 null. */
+	@Column(name = "content_as_of")
+	private OffsetDateTime contentAsOf;
+
 	/** 근거 문서 JSONB(계약 형상 [{kind,title,source,published_at,source_uri}]) — 상세 화면 원천(ALPHA-436·739). */
 	@JdbcTypeCode(SqlTypes.JSON)
 	private String evidences;
@@ -118,6 +122,10 @@ public class AnalysisItemEntity {
 
 	public OffsetDateTime getExplanationAsOf() {
 		return explanationAsOf;
+	}
+
+	public OffsetDateTime getContentAsOf() {
+		return contentAsOf;
 	}
 
 	public OffsetDateTime getReceivedAt() {
