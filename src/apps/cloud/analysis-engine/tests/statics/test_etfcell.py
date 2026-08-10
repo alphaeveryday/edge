@@ -577,6 +577,7 @@ def test_hypothesis_path_injects_objectset_tools_instead_of_the_sql_tool(monkeyp
         "objectset.create", "objectset.filter"]
     assert "sql_tool" not in seen
     assert seen["object_tools"]["call"].__self__.as_of == "2026-08-05T13:20:00"
+    assert seen["object_tools"]["call"].__self__._default_event_set_handle == "os_events"
 
 
 def test_context_counts_and_failures_are_logged(monkeypatch):

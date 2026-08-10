@@ -61,10 +61,12 @@ def _condition_id(key: tuple[str, str], direction: str) -> str:
 class HypothesisPreviewRuntime:
     """One-run option catalog and readiness preview for ``paneltest.edge_test``."""
 
-    def __init__(self, lake, event_sets, *, day: str) -> None:
+    def __init__(self, lake, event_sets, *, day: str,
+                 default_event_set_handle: str = "") -> None:
         self._lake = lake
         self._event_sets = event_sets
         self._day = day
+        self._default_event_set_handle = default_event_set_handle
         self.as_of = getattr(event_sets, "as_of", "")
         self._run_id = secrets.token_hex(12)
         self._previews: dict[str, PreviewResolution] = {}
@@ -74,8 +76,8 @@ class HypothesisPreviewRuntime:
         option = {"type": "string", "minLength": 1, "maxLength": 200}
         return [
             {"name": "hypothesis.list_options",
-             "description": "List this event set's server-defined, executable hypothesis vocabulary.",
-             "input_schema": _schema({"event_set_handle": handle}, ("event_set_handle",))},
+             "description": "List the current run's scoped event set vocabulary. Omit event_set_handle to use that server-owned set.",
+             "input_schema": _schema({"event_set_handle": handle}, ())},
             {"name": "hypothesis.preview",
              "description": "Check one server-defined event-day panel-test design and return a run-scoped handle.",
              "input_schema": _schema({
@@ -85,16 +87,16 @@ class HypothesisPreviewRuntime:
                  "layer_id": option,
                  "exposure_id": option,
                  "modifier_id": option,
-             }, ("event_set_handle", "trigger_id", "outcome_id", "layer_id", "exposure_id"))},
+             }, ("trigger_id", "outcome_id", "layer_id", "exposure_id"))},
         ]
 
     def call(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         operations = {
-            "hypothesis.list_options": (self._list_options, {"event_set_handle"}, {"event_set_handle"}),
+            "hypothesis.list_options": (self._list_options, {"event_set_handle"}, set()),
             "hypothesis.preview": (
                 self._preview,
                 {"event_set_handle", "trigger_id", "outcome_id", "layer_id", "exposure_id", "modifier_id"},
-                {"event_set_handle", "trigger_id", "outcome_id", "layer_id", "exposure_id"}),
+                {"trigger_id", "outcome_id", "layer_id", "exposure_id"}),
         }
         if name not in operations:
             return self._event_sets.call(name, arguments)
@@ -107,7 +109,18 @@ class HypothesisPreviewRuntime:
             return fn(**arguments)
         except ValueError as exc:
             code = getattr(exc, "code", "HANDLE_NOT_FOUND")
-            return self._error(code, "event set handle is not available")
+            out = self._error(code, "event set handle is not available")
+            if name == "hypothesis.list_options" and self._default_event_set_handle:
+                out["retry"] = {"tool": "hypothesis.list_options", "arguments": {}}
+            elif name == "hypothesis.preview" and self._default_event_set_handle:
+                out["retry"] = {
+                    "tool": "hypothesis.preview",
+                    "arguments": {
+                        key: value for key, value in arguments.items()
+                        if key != "event_set_handle"
+                    },
+                }
+            return out
         except Exception:  # noqa: BLE001 - keep engine details server-side
             return self._error("EXECUTION_FAILED", "hypothesis preview could not be prepared")
 
@@ -115,12 +128,20 @@ class HypothesisPreviewRuntime:
     def _error(code: str, message: str) -> dict[str, Any]:
         return {"ok": False, "error": {"code": code, "message": message}}
 
-    def _event_types(self, event_set_handle: str) -> tuple[str, ...]:
+    def _event_set_handle(self, event_set_handle: str | None) -> str:
+        if event_set_handle is None:
+            if self._default_event_set_handle:
+                return self._default_event_set_handle
+            raise _OptionError("event set handle is required")
         if not isinstance(event_set_handle, str):
             raise ValueError("event set handle must be a string")
+        return event_set_handle
+
+    def _event_types(self, event_set_handle: str) -> tuple[str, ...]:
         return tuple(sorted(set(self._event_sets.event_type_codes(event_set_handle))))
 
-    def _list_options(self, event_set_handle: str) -> dict[str, Any]:
+    def _list_options(self, event_set_handle: str | None = None) -> dict[str, Any]:
+        event_set_handle = self._event_set_handle(event_set_handle)
         event_types = self._event_types(event_set_handle)
         features = [
             {"id": _feature_id(key), "label": _FEATURE_LABELS[key],
@@ -144,8 +165,10 @@ class HypothesisPreviewRuntime:
             "modifiers": modifiers,
         }
 
-    def _preview(self, event_set_handle: str, trigger_id: str, outcome_id: str,
-                 layer_id: str, exposure_id: str, modifier_id: str | None = None) -> dict[str, Any]:
+    def _preview(self, trigger_id: str, outcome_id: str, layer_id: str,
+                 exposure_id: str, modifier_id: str | None = None,
+                 event_set_handle: str | None = None) -> dict[str, Any]:
+        event_set_handle = self._event_set_handle(event_set_handle)
         event_types = self._event_types(event_set_handle)
         trigger = _parse_trigger(trigger_id, event_types)
         exposure = _parse_feature(exposure_id)

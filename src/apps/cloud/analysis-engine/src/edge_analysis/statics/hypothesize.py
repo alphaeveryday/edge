@@ -132,7 +132,7 @@ def render_hypothesis(t: HypothesisTuple) -> str:
 
 _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공한 ObjectSet과 hypothesis 도구만 사용한다.
 
-먼저 사건 ObjectSet을 탐색하고 `hypothesis.list_options`로 이 실행에서 선택 가능한 어휘를 확인한다.
+이 실행의 사건 집합은 서버가 이미 고정했다. 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출해 이 실행에서 선택 가능한 어휘를 확인한다. 사건 집합을 얻기 위해 `objectset.create`를 호출하지 마라.
 검정하려는 설계마다 `hypothesis.preview`를 호출한다. READY인 preview만 최종 제출할 수 있다.
 
 최종 응답은 아래 JSON 하나뿐이다.
