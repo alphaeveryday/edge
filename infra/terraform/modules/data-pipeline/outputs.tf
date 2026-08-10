@@ -49,3 +49,8 @@ output "minute_service_names" {
   description = "1분 상주 서비스 이름 — CD 가 존재 확인 후 롤링 재배포에 쓴다"
   value       = [for s in aws_ecs_service.minute : s.name]
 }
+
+output "alarm_topic_arn" {
+  description = "파이프라인 알람 SNS 토픽. 감시 대상이 다른 모듈에 있는 알람(예: RDS)도 이 토픽 하나로 모은다 — 알림 채널을 쪼개면 구독을 두 번 확인해야 한다"
+  value       = aws_sns_topic.alarms.arn
+}

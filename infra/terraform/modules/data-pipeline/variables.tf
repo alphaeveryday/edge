@@ -452,7 +452,7 @@ variable "kr_holidays" {
 }
 
 variable "alarm_email" {
-  description = "raw ingest 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만."
+  description = "이 모듈의 알람 토픽 구독 이메일 — raw ingest 실패·수집 절단·SFN 타임아웃 4레인, 그리고 alarm_topic_arn 출력을 받아 간 다른 모듈의 알람까지 이 구독 하나에 달렸다. null 이면 SNS 구독 없이 토픽만(=알림 유실)."
   type        = string
   default     = null
 }

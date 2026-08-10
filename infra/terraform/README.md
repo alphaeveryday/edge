@@ -20,7 +20,7 @@ infra/terraform/
     ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
     ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
     ├── alb/                # 공개 엣지 ALB (호스트 단위 1:1, mTLS verify 옵션 — ADR-0034. 호출자: sync·super-admin ALB)
-    ├── rds/                # PostgreSQL(private·관리형 비밀번호)
+    ├── rds/                # PostgreSQL(private·관리형 비밀번호) + 관측(FreeableMemory 경보·Performance Insights — 경보는 data-pipeline 토픽으로, ALPHA-919)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
@@ -75,7 +75,7 @@ cd ../envs/dev  && terraform apply
 
 | 기능 | 상태 | 켜는 법 |
 |------|------|---------|
-| **파이프라인 실패 알림 이메일** | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
+| **알림 이메일**(파이프라인 실패 + RDS 경보) | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
 | **super-admin ALB 보호** | WAFv2 부착됨(ALPHA-297 — AWS Managed CommonRuleSet·KnownBadInputs, 차단 동작·CloudWatch 메트릭). IP 제한은 미적용(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있으나 dev 시크릿 미배선으로 닫힘 | 앱 인증 본격화(ALPHA-474)·`allowed_cidrs` 운영 판단·커스텀 룰/레이트리밋 후속 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
 | **오토스케일링** | 없음(`desired_count=1`) | 추후 |
@@ -84,7 +84,9 @@ cd ../envs/dev  && terraform apply
 > ⚠️ `pipeline_alarm_email` 이 `null` 이면 SNS 구독 리소스가 `count=0` 으로 **아예 안 생겨** 실패
 > 알림이 구독자 없는 토픽으로 사라진다 — "구독 없음"이 아니라 **알림 유실**이다. ALPHA-389 착수
 > 전까지 실제로 그 상태였고(라이브 토픽 구독자 0), data-pipeline 정제가 run 스코프로 바뀐 뒤로는
-> 실패 런의 raw 를 사람이 명시 재처리해야 하므로 이 알림이 그 절차의 유일한 트리거다.
+> 실패 런의 raw 를 사람이 명시 재처리해야 하므로 이 알림이 그 절차의 트리거다.
+> ⚠️ 유실되는 것은 파이프라인 실패 통보만이 아니다 — `modules/rds` 의 **RDS 메모리 고갈 경보**
+> (ALPHA-919)도 같은 토픽에 얹혀 있어, 이 값을 비우면 **DB 가 죽는다는 통보까지** 함께 사라진다.
 
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
