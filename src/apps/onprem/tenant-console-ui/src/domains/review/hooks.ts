@@ -31,6 +31,9 @@ export function useReviewActions(id: string) {
   const settled = () => {
     qc.invalidateQueries({ queryKey: LIST_KEY });
     qc.invalidateQueries({ queryKey: detailKey(id) });
+    // 검수 결정은 explanations 상태(status-counts 의 REVIEW_REQUIRED 배지 포함)를
+    // 바꾼다 — prefix 무효화로 목록·상세·집계를 함께 갱신한다(ALPHA-914).
+    qc.invalidateQueries({ queryKey: ['explanations'] });
   };
 
   const approve = useMutation({

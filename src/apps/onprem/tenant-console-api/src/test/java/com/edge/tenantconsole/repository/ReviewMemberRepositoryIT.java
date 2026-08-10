@@ -103,7 +103,9 @@ class ReviewMemberRepositoryIT extends AbstractPostgresIntegrationTest {
 		assertThat(single.stream().filter(id -> id.startsWith("er-page-")))
 				.containsExactly("er-page-new", "er-page-mid", "er-page-old");
 
-		// limit 2 페이지를 끝까지 이어붙이면 단일 조회와 동일해야 한다(경계 중복·누락 없음).
+		// limit 2 페이지를 끝까지 이어붙였을 때 경계 중복이 없고 내 행이 정렬대로 전부
+		// 나와야 한다(누락 없음). 전체 집합 비교는 공유 컨테이너의 행 수가 단일 조회
+		// 상한(100)을 넘으면 취약해 내 id 투영으로 단언한다.
 		List<String> paged = new ArrayList<>();
 		for (int offset = 0; ; offset += 2) {
 			List<AnalysisItemEntity> page = reviewItems.pageByStatus("REVIEW_REQUIRED", 2, offset);
@@ -112,7 +114,9 @@ class ReviewMemberRepositoryIT extends AbstractPostgresIntegrationTest {
 				break;
 			}
 		}
-		assertThat(paged).containsExactlyElementsOf(single);
+		assertThat(paged).doesNotHaveDuplicates();
+		assertThat(paged.stream().filter(id -> id.startsWith("er-page-")))
+				.containsExactly("er-page-new", "er-page-mid", "er-page-old");
 	}
 
 	@Test

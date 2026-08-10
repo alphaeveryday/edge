@@ -2,6 +2,7 @@ package com.edge.tenantconsole.repository;
 
 import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.AbstractPostgresIntegrationTest;
+import com.edge.tenantconsole.error.ConsoleErrorStatus;
 import com.edge.tenantconsole.model.Explanation;
 import com.edge.tenantconsole.model.FeedStatus;
 import com.edge.tenantconsole.service.ExplanationService;
@@ -378,7 +379,8 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 
 		assertThat(explanations.detail("it914-one").id()).isEqualTo("it914-one");
 		assertThatThrownBy(() -> explanations.detail("it914-rcv"))
-				.isInstanceOf(GeneralException.class);
+				.isInstanceOfSatisfying(GeneralException.class,
+						e -> assertThat(e.getCode()).isEqualTo(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
 	}
 
 	/** WHY: 대시보드 KPI·검수 대기 배지는 로드된 페이지로 셀 수 없다(ALPHA-914) — 서버
