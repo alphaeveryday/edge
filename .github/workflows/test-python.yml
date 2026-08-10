@@ -38,6 +38,10 @@ jobs:
   pytest:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
+    # Self-hosted runner jobs share ~/.cache/uv. Give each matrix job a private
+    # cache directory so setup-uv's post-job prune cannot wait on another job.
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.app }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +91,9 @@ jobs:
   e2e:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
+    # This job runs alongside the pytest matrix on the same self-hosted runner.
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@v4
 
