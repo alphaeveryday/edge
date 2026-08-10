@@ -259,13 +259,21 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		/* ⚠️ **삽입 순서를 기대 순서와 반대로 둔다.** 같으면 `ORDER BY` 를 통째로 지워도 통과한다 —
 		 * Postgres 가 힙 순서(=삽입 순서)로 주기 때문이다. 그러면 이 테스트가 잡는 것은 *틀린
 		 * 정렬*뿐이고 계약이 지키려는 *정렬 부재*는 새어 나간다(실제로 한 라운드 그랬다). */
-		insertRun("r-b", "news:2026-08-03T09:00", "news", "RUNNING", null,
-				"2026-08-03T00:00:00Z", "2026-08-03T00:10:00Z", null);
 		insertRun("r-a", "etf-daily:2026-08-03T15:40", "etf-daily", "SUCCEEDED", "2026-08-03",
 				"2026-08-03T06:40:00Z", "2026-08-03T07:20:34Z", "2026-08-03T08:00:00Z");
+		/* 🔴 **같은 레인의 두 슬롯**을 일부러 둔다(뉴스가 하루 00:10·08:10 두 번 도는 것처럼).
+		 * 레인은 슬롯 키의 접두사라, 레인별로 하나씩만 있으면 `lane` 으로 정렬해도 `run_key` 로
+		 * 정렬해도 결과가 같아 **정렬 키를 바꾸는 변이가 살아남는다**. 레인이 같은 둘이 있어야
+		 * 그 키가 순서를 못 정한다는 게 드러난다 — 계약이 막으려는 "첫 런이 흔들린다"가 그것이다. */
+		insertRun("r-c", "etf-daily:2026-08-03T09:00", "etf-daily", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T00:00:00Z", "2026-08-03T00:30:00Z", null);
+		insertRun("r-b", "news:2026-08-03T09:00", "news", "RUNNING", null,
+				"2026-08-03T00:00:00Z", "2026-08-03T00:10:00Z", null);
 		insertTradingDay("2026-08-01");
 
 		assertThat(repository.facts(DAY).runs()).containsExactly(
+				new RunRow("etf-daily:2026-08-03T09:00", "etf-daily", DAY, "SUCCEEDED",
+						OffsetDateTime.parse("2026-08-03T00:30:00Z"), null, null, null),
 				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
 						OffsetDateTime.parse("2026-08-03T07:20:34Z"),
 						OffsetDateTime.parse("2026-08-03T08:00:00Z"), null, null),
