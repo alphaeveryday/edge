@@ -63,7 +63,7 @@ _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 �
 }}, ...]}}
 
 규칙:
-- 가설 **최대 {n}개**, 서로 다른 채널로. 근거 없는 채널을 채우느니 2개가 낫다 -
+- 가설 **최대 {n}개**, 서로 다른 채널로. 근거 없는 후보를 채우느니 2개가 낫다 -
   제출 수 m 이 늘면 확증 임계가 α/m 으로 좁아져 **좋은 가설까지 같이 죽는다**
 - **방향을 선언하지 마라.** 우리가 찾는 것은 유효한 CATE 이고 방향은 그 추정량이
   낸다(상위−하위). 검정은 양측이므로 방향을 맞춰도 이득이 없고, 틀리면 환원 검사만
@@ -111,6 +111,42 @@ def _parse(h: dict) -> HypothesisTuple:
         layer=str(h.get("layer", "고유")),
         reduction_note=str(h.get("reduction_note", ""))[:200],
         intent=str(h.get("intent", ""))[:240])
+
+
+def _trace_safe(value: object) -> object:
+    """trace에 넣을 후보를 JSON scalar/container로 고정한다."""
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def render_hypothesis(t: HypothesisTuple) -> str:
+    """가설을 사람이 읽는 자연스러운 한 문단으로 결정론적으로 렌더한다.
+
+    이 문장은 감사/trace 표시용이다. 고객 설명이나 검정 결과를 대신하지 않는다.
+    """
+    return "preview_required"
+
+
+def _tool_result_summary(name: str, result: object) -> dict[str, object]:
+    """ObjectSet 결과 중 대시보드에 필요한 안전한 식별·요약만 보존한다."""
+    raw = result if isinstance(result, dict) else {}
+    out: dict[str, object] = {"tool": name, "ok": bool(raw.get("ok"))}
+    for key in ("handle", "lineage_id", "kind", "as_of", "row_count"):
+        value = raw.get(key)
+        if isinstance(value, (str, int, float, bool)):
+            out[key] = value
+    if "row_count" not in out and isinstance(raw.get("count"), int):
+        out["row_count"] = raw["count"]
+    pit = raw.get("pit")
+    if isinstance(pit, dict):
+        gaps = pit.get("gaps", [])
+        out["has_gaps"] = bool(gaps)
+        out["gap_count"] = len(gaps) if isinstance(gaps, (list, tuple, set)) else 0
+        out["pit_clamped"] = (pit.get("clamp")
+                              if isinstance(pit.get("clamp"), bool) else None)
+    return out
 
 
 _EXPLORE = """도구를 불러 이 셀을 조사한다. **여기 없는 도구는 존재하지 않는다.**
@@ -295,9 +331,10 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
 
 
 def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], dict],
-                 budget: int) -> tuple[dict, str, int, int]:
+                 budget: int) -> tuple[dict, str, int, int, list[dict[str, object]]]:
     """Run bounded structured tool calls; executable text is never an argument shape."""
     used = rejects = 0
+    tool_summaries: list[dict[str, object]] = []
     out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
@@ -310,13 +347,16 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
         used += 1
         arguments = object_field(out, "arguments")
         res = call(name, arguments)
+        summary = _tool_result_summary(name, res)
+        tool_summaries.append(summary)
+        record("hypothesis.tool_result", **summary)
         if not res.get("ok"):
             rejects += 1
         # Do not echo the raw model arguments. The validated result is the observation.
         user += (f"\n\n[ObjectSet 결과 {used}/{budget}] 도구: {name or 'schema'}\n"
                  + json.dumps(res, ensure_ascii=False))
         out = ask_checked(ask, system, user)
-    return out, user, used, rejects
+    return out, user, used, rejects, tool_summaries
 
 
 def propose(ask: Ask, *, facts: str, event_types: list[str],
@@ -360,14 +400,16 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     base = facts
     sql_used = sql_rejects = 0
     object_used = object_rejects = 0
+    tool_summaries: list[dict[str, object]] = []
     deadline = time.monotonic() + SQL_TIMEBOX_S
     for turn in range(MAX_ASKS):
         user = base
         if object_tools:
-            out, base, u, rj = _object_loop(
+            out, base, u, rj, summaries = _object_loop(
                 ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used)
             object_used += u
             object_rejects += rj
+            tool_summaries.extend(summaries)
         elif sql_tool:
             out, base, u, rj = _sql_loop(ask, system, user, sql_tool["call"],
                                          MAX_SQL_ROUNDS - sql_used, deadline)
@@ -375,11 +417,21 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
             sql_rejects += rj
         else:
             out = ask_checked(ask, system, user)
-        valid, rej = screen_tuples(list_field(out, "hypotheses"),
+        raw_hypotheses = list_field(out, "hypotheses")
+        record("hypothesis.raw", turn=turn + 1,
+               hypotheses=_trace_safe(raw_hypotheses))
+        valid, rej = screen_tuples(raw_hypotheses,
                                    event_types=event_types,
                                    series_families=list(series_families),
                                    measurable=(measurable or None))
         rejected += rej
+        record("hypothesis.rendered", turn=turn + 1,
+               hypotheses=[{"text": render_hypothesis(t),
+                            "llm_intent": t.intent,
+                            "status": "preview_required",
+                            "tool_results": list(tool_summaries),
+                            "trigger": f"{t.trigger.kind}:{t.trigger.ident}"}
+                           for t in valid])
         for t in valid:
             record("tuple.accepted", turn=turn + 1, channel=t.channel,
                    trigger=f"{t.trigger.kind}:{t.trigger.ident}",
@@ -396,7 +448,5 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         record("hypothesize.objectset_rounds", rounds=object_used,
                rejected=object_rejects)
     return valid, rejected
-
-
 __all__ = ["Ask", "MAX_ASKS", "MAX_OBJECT_ROUNDS", "MAX_SQL_ROUNDS",
-           "explore", "propose", "screen_tuples"]
+           "explore", "propose", "render_hypothesis", "screen_tuples"]
