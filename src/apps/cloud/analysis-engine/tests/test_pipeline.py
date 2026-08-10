@@ -229,6 +229,11 @@ def test_triggered_day_persists_the_explanation():
 
 def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(monkeypatch):
     """The 14 scoped events must not split from the legacy persistence collection."""
+    paragraph = (
+        "10:00, 실제 뉴스 제목 0 소식이 있었습니다. 같은 유형의 과거 41개 사건일에서 "
+        "이 종목의 시장초과수익률은 평균 -3.10%였습니다. 오늘 시장초과수익률은 -3.60%로, "
+        "과거 분포의 하위 42% 수준입니다."
+    )
     scoped = [{
         "source_event_id": f"evt_{i:02d}", "event_type_code": "NEWS.TYPE",
         "available_at": f"2026-07-16T10:{i:02d}:00", "thread_id": f"thr_{i:02d}",
@@ -239,16 +244,16 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
         meta = kwargs["window_meta"]
         meta.update({
             "lineage": [{"view": "bars_5m"}], "news_events": scoped,
-            "final_explanation": {"rendered_text": "[4] 실제 뉴스 14건", "blocks": [
+            "final_explanation": {"rendered_text": f"[4] {paragraph}", "blocks": [
                 {"block_code": "H", "block_title": "헤더", "text": "헤더"},
                 {"block_code": "1", "block_title": "기여", "text": "기여"},
                 {"block_code": "2", "block_title": "구간", "text": "구간"},
                 {"block_code": "3", "block_title": "요인", "text": "요인"},
-                {"block_code": "4", "block_title": "이벤트", "text": "실제 뉴스 14건",
-                 "evidence_refs": [f"source_event:evt_{i:02d}" for i in range(14)]},
+                {"block_code": "4", "block_title": "이벤트", "text": paragraph,
+                 "evidence_refs": ["source_event:evt_00"]},
             ]},
         })
-        return "[4] 실제 뉴스 14건"
+        return f"[4] {paragraph}"
 
     monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
@@ -265,6 +270,11 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
     evidence, _kwargs = store.evidence
     assert len([row for row in evidence.rows if row.type == "NEWS"]) == 14
     assert store.explanation.raw["stage_results"]["event_count"] == 14
+    saved = store.explanation.raw["stage_results"]["final_explanation"]
+    assert saved["blocks"][-1]["text"] == paragraph
+    assert saved["blocks"][-1]["evidence_refs"] == ["source_event:evt_00"]
+    assert len(saved["blocks"][-1]["evidence_row_refs"]) == 1
+    assert archive["explanation"]["stage_results"]["final_explanation"] == saved
 
 
 def test_trigger_event_wins_overlap_while_scoped_fills_lineage_gaps():

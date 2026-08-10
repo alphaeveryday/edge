@@ -285,7 +285,12 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
             block_refs[code] = _refs("price_etf", "price_layers") + sector_stat
         elif code == "4":
             required = str(b.get("evidence_requirement") or "")
-            block_refs[code] = _refs(*news_keys) + (
+            selected_news = tuple(
+                f"news:{str(ref).removeprefix('source_event:')}"
+                for ref in (b.get("evidence_refs") or ())
+                if str(ref).startswith("source_event:")
+            ) or news_keys
+            block_refs[code] = _refs(*selected_news) + (
                 all_stat if required == "CAUSAL_STAT_TEST" else other_stat)
         elif code == "N":
             block_refs[code] = ()       # 부재 고지 — 게이트 예외(§7)
