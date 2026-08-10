@@ -107,8 +107,8 @@ export function ConsoleLayout() {
           <span
             className="inline-flex items-center justify-center"
             style={{
-              width: 20, height: 20, background: '#FFBC00', borderRadius: 4,
-              fontSize: 10, fontWeight: 800, color: '#60584C', flex: 'none',
+              width: 20, height: 20, background: 'linear-gradient(135deg,#8dd8f8,#41abe0)', borderRadius: 4,
+              fontSize: 8, fontWeight: 800, color: '#fff', flex: 'none',
             }}
           >
             {session?.tenantMark ?? ''}

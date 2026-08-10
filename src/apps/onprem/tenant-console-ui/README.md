@@ -79,5 +79,5 @@ hooks.ts             페이지가 쓰는 hook (TanStack Query)
 - 앱 자체 전역 CSS 는 [`src/styles/app.css`](src/styles/app.css) (tailwind 진입점) 하나뿐이다 — 구 `global.css` 체계는 폐기.
 - import 순서는 tailwind(preflight) → ui-kit 고정 (`src/main.tsx`).
 
-샘플 데이터는 가상 증권사 **KB증권** 기준 — 시안 목데이터는 실전환 과정에서
+샘플 데이터는 가상 증권사 **소마증권** 기준 — 시안 목데이터는 실전환 과정에서
 tenant-console-api 의 DB 시드로 대체됐다(구 `mock` 패키지는 제거).
