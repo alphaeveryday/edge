@@ -109,9 +109,13 @@ export type ConsoleFactsQuery = ConsoleFactsPending | ConsoleFactsReady;
  * 규칙 평가가 필요 없는 화면(데이터셋·전달·체인·추이)이 엔진을 돌리지 않고 사실만 읽는 자리다.
  * `useConsoleEvaluation` 도 이 훅 위에 선다 — 사실 출처가 둘이면 한 화면에서 다른 시각의
  * 사실이 조립된다.
+ *
+ * @param date 볼 날(KST `YYYY-MM-DD`). 생략하면 **원장이 아는 가장 최근 날**이고, 어느 쪽이든
+ *             응답의 `meta.today` 가 무엇을 봤는지 되돌려준다(화면은 그 값만 표시한다 —
+ *             요청한 날짜를 그대로 그리면 서버가 다른 날을 골랐을 때 화면이 거짓말을 한다).
  */
-export function useConsoleFactsQuery(): ConsoleFactsQuery {
-  const { data, isError, error } = useConsoleFacts();
+export function useConsoleFactsQuery(date?: string): ConsoleFactsQuery {
+  const { data, isError, error } = useConsoleFacts(date);
   return useMemo(() => {
     const parsed = data !== undefined ? parseFacts(data) : null;
     const fetch = factsAxis(parsed, isError);
@@ -170,9 +174,15 @@ export type ConsoleEvaluation =
  *
  * ⚠️ 사건 목록을 두 벌로 두지 않는다. 소비자가 전부 이 훅을 쓰는 이유다 — 한쪽만 실시간을
  * 보면 목록엔 있는데 상세는 못 여는 사건이 생긴다.
+ *
+ * @param date 배치 사실을 볼 날 — `useConsoleFactsQuery` 와 같다. ⚠️ **실시간 축은 따라오지
+ *             않는다**(`/sources/minute` 에 날짜 인자가 없다): 지난 날을 지목하면 R17~R19 는
+ *             오늘의 세션 위에서 판정된다. 사건 목록을 세우는 화면은 날짜를 넘기지 마라 —
+ *             지금 넘기는 곳은 특정 런을 여는 상세 하나이고, 거기서 쓰는 것은 그 런의
+ *             작업과 (같은 창에서 온) 사건 breadcrumb 뿐이다.
  */
-export function useConsoleEvaluation(): ConsoleEvaluation {
-  const q = useConsoleFactsQuery();
+export function useConsoleEvaluation(date?: string): ConsoleEvaluation {
+  const q = useConsoleFactsQuery(date);
   /* `isError` 를 같이 꺼내는 이유: 실시간 축 부재의 뜻이 셋이다 — 도착 전 · 조회 실패 ·
    * (응답은 왔는데) 축이 없다. `data` 만 보면 셋이 한 문장으로 뭉쳐, 응답 대기와 API 장애가
    * 화면에서 "계측 없음"과 구분되지 않는다. */
@@ -195,9 +205,9 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
 /* 판정을 못 한 규칙을 묻는 헬퍼는 `./notRun` 에 있다 — **JSX 가 없는 모듈이라야
  * `node --test` 가 import 한다.** 여기 두는 동안은 그 판단들의 변이가 하나도 안 잡혔다. */
 
-/* `DRILL_ROUTE`·`drillHref` 를 지웠다 (ALPHA-738 단계 3). 소비자가 0이었고, 살아나면
- * `run` 축 위반을 `/ops/runs?focus=…` 로 보내 실행 상세 링크 규약을 우회한다
- * (investigation.ts 의 `RUN_DETAIL_UNAVAILABLE`). 조사 경로는 `investigate()` 하나다. */
+/* `DRILL_ROUTE`·`drillHref` 를 지웠다 (ALPHA-738 단계 3). 소비자가 0이었고, 살아나면 `run` 축
+ * 위반을 `/ops/runs?focus=…` 로 — 즉 런을 지목하지 않고 **목록에 하이라이트만** 걸어 — 보낸다.
+ * 조사 경로는 `investigate()` 하나이고, 특정 런으로 가는 주소는 `runHref` 하나다. */
 
 /**
  * `?focus=<id>` 로 들어오면 그 행으로 스크롤하고 잠깐 강조한다 (L3).

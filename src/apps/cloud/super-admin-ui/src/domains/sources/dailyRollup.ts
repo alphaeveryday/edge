@@ -107,8 +107,61 @@ const EMPTY: DayCounts = {
   failedRecords: 0,
 };
 
-/** 슬롯 키에서 날짜만 — "etf-daily:2026-08-03T15:40" → "2026-08-03". tradingDate 가 있으면 그걸 쓴다 */
-export function dateOfSlot(slot: GridSlot): string | null {
+/**
+ * 이 런이 어느 날에 속하는가 — tradingDate 가 있으면 그것, 없으면 슬롯 키의 날짜
+ * ("etf-daily:2026-08-03T15:40" → "2026-08-03").
+ *
+ * ⚠️ **격자의 열 축이자 `/console/facts?date=` 의 조회 축이다.** 서버의 창은
+ * `COALESCE(trading_date, created_at 의 KST 날짜)` 다(`JdbcConsoleFactsRepository.RUN_DAY`).
+ * 여기서 고른 날을 실행 상세로 넘기므로 두 식이 갈리면 링크가 창 밖으로 나간다 —
+ * **언제 갈리는지가 정확히 아래 하나다**:
+ *   · `tradingDate` 가 있으면 서버도 그 값을 쓴다(COALESCE 의 첫 항) → **항상 일치**.
+ *     Planner 는 슬롯 시각의 KST 날짜를 `trading_date` 에 그대로 넣으므로(`ops/planner.py` 의
+ *     `day = slot.date()` · `run_key = slot_run_key(slot, …)`) 정규 런은 여기 들어온다.
+ *   · `tradingDate` 가 **null** 이면 여기는 런 키의 슬롯 날짜를, 서버는 `created_at` 의 KST
+ *     날짜를 쓴다 → **슬롯을 만든 날과 도는 날이 다르면 갈린다**(과거 슬롯을 나중에 세운
+ *     백필·레거시 런). 그때 목적지는 "이 조회 결과에 그 실행이 없습니다"로 그 사실을 밝힌다 —
+ *     없다고 말하지 않는다(리뷰 2라운드가 이 경로를 짚었다).
+ *   · **런 행이 아예 없는 계획 슬롯**(`PLANNER_MISSING`)은 `RUN_DAY` 를 안 탄다 —
+ *     `MISSING_SLOTS_SQL` 이 슬롯 키의 날짜를 문자열로 맞추고 `missingSlot()` 이 그 키에서
+ *     `trading_date` 를 합성한다. 결과는 첫 항목과 같지만 **경로가 다르다**: 이 축을 고칠 때
+ *     `RUN_DAY` 만 보면 계획 결손 슬롯이 따로 깨진다(리뷰 3라운드).
+ * 슬롯 날짜를 버리고 `created_at` 을 따라갈 수는 없다 — 이 함수의 다른 소비자인 격자의 **열**
+ * 은 "그 데이터셋의 그 날"이라 슬롯 날짜가 맞고, 생성일로 옮기면 백필 런이 실행한 날의 칸에
+ * 서서 그날 실제로 돈 런과 섞인다.
+ *
+ * 인자를 `GridSlot` 이 아니라 구조로 받는 이유: 실행 중인 배치(`OverviewLane`)도 같은 축을
+ * 물어야 하는데, 날짜 규칙이 화면마다 갈리면 같은 런이 화면에 따라 다른 날짜로 조회된다.
+ *
+ * ⚠️ **`tradingDate` 는 옵셔널이 아니다 — 일부러 필수다.** 옵셔널이면 거래일을 쥔 호출부가
+ * `dateOfSlot({ runKey: l.runKey })` 로 **컴파일되게** 축을 흘릴 수 있고, 그러면 우선순위가
+ * 호출부에서 조용히 뒤집힌다(단위 테스트는 헬퍼만 보고, 소스 가드는 `date` 키만 보고, 하네스
+ * 픽스처는 두 날짜가 같아 전부 통과한다 — 리뷰 5라운드가 이 경로를 실증했다). 필수로 두면
+ * tsc 가 잡는다. 거래일을 **모르는** 자리(구성종목 결손: `runKey` 가 URL 로만 온다)는
+ * `{ tradingDate: null, runKey }` 를 **명시해서** 넘긴다 — 축을 못 보는 것이 선언이 되고,
+ * 거래일을 쥔 화면이 같은 걸 쓰면 눈에 띈다.
+ * ⛔ 폴백 갈래를 `dateOfRunKey` 같은 **별도 export 로 빼지 마라**(6라운드에 그렇게 했다가
+ * 되돌렸다): 그러면 그 이름을 부르는 것만으로 위 tsc 가드를 통과해 우선순위를 우회할 수 있고,
+ * 같은 규칙이 두 곳에 서서 갈릴 자리가 생긴다.
+ *
+ * ⚠️ **빈 문자열은 부재로 접는다**(`??` 가 아니라 조건식인 이유). 와이어 타입은
+ * `string | null` 이라 `''` 는 날짜도 아니고 선언된 부재도 아닌 **불량값**이다. `??` 로 쓰면
+ * `''` 가 그대로 나가 `runHref` 의 falsy 필터에서 사라지고, 링크가 조용히 "날짜 없음"으로
+ * 퇴행한다 — 가드와 바인딩이 falsy 를 다르게 읽던 그 자리다.
+ *
+ * ❌ **그렇다고 `''` 에 `null` 을 돌려주지 않는다**(리뷰 7라운드 제기 — Rule 12 로 "불량값을
+ * 드러내라"고 봤다). 그 처방이 여기서는 **더 나쁜 쪽으로 숨긴다**: 이 함수의 다른 소비자인
+ * `rollup`·`datesOf` 는 날짜가 없는 슬롯을 **통째로 건너뛴다**(`if (!date) continue`). 즉
+ * 불량값 하나가 실행 이력에서 **그 런을 사라지게** 만든다 — 잘못된 열에 서는 것보다 나쁘다
+ * (없는 것과 못 읽은 것이 같은 모양이 된다). 그리고 오늘 이 값은 서버가 만들 수 없다:
+ * `trading_date` 는 `LocalDate` 로 매핑돼 날짜 아니면 `null` 이다.
+ * ⚠️ **드러낼 자리를 `parseFacts` 라고 적었던 것은 틀렸다**(리뷰 8라운드가 잡았다) — 그건
+ * `/console/facts` 만 검사하고, 이 함수의 입력은 `/sources/grid`(`GridSlot`)와
+ * `/sources/overview`(`OverviewLane`)에서 **타입 캐스팅으로 그냥 들어온다**. 즉 두 응답에는
+ * 검증 경계가 **아예 없다**. 언젠가 fail-loud 가 필요해지면 순수 함수인 여기가 아니라 그
+ * 두 응답에 경계를 **새로 만들어야** 한다 — 지금 그 처방은 코드에 존재하지 않는다.
+ */
+export function dateOfSlot(slot: { tradingDate: string | null; runKey: string }): string | null {
   if (slot.tradingDate) return slot.tradingDate;
   return slot.runKey.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
 }
