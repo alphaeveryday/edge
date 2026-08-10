@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,14 +45,27 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	private void insertRun(String id, String runKey, String orchestration, String tradingDate,
 			String createdAt, String deadline) {
+		insertRun(id, runKey, "etf-daily", orchestration, tradingDate, createdAt, createdAt,
+				deadline);
+	}
+
+	/**
+	 * ⚠️ {@code pipelineType}·{@code updatedAt} 을 <b>따로 받는다</b>. 한때 레인을
+	 * {@code 'etf-daily'} 로 박고 {@code updated_at} 에 {@code created_at} 을 그대로 넣었는데,
+	 * 그러면 <b>어떤 단언으로도</b> 그 두 컬럼을 못 잰다 — SQL 이 엉뚱한 컬럼을 읽어도(레인을
+	 * {@code schedule_slot} 에서, 갱신 시각을 {@code created_at} 에서) 값이 같아 통과한다.
+	 * 픽스처가 컬럼을 못 가르면 그 컬럼은 계약이 아니다.
+	 */
+	private void insertRun(String id, String runKey, String pipelineType, String orchestration,
+			String tradingDate, String createdAt, String updatedAt, String deadline) {
 		jdbc.update("""
 				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
 				       execution_name, launch_status, orchestration_status, trading_date,
 				       hard_deadline_at, created_at, updated_at)
-				VALUES (?,?,'etf-daily',?,'LAUNCHED',?,?::date,?::timestamptz,?::timestamptz,
+				VALUES (?,?,?,?,'LAUNCHED',?,?::date,?::timestamptz,?::timestamptz,
 				        ?::timestamptz)
-				""", id, runKey, "exec-" + id, orchestration, tradingDate, deadline, createdAt,
-				createdAt);
+				""", id, runKey, pipelineType, "exec-" + id, orchestration, tradingDate, deadline,
+				createdAt, updatedAt);
 	}
 
 	/** 거래일 하나를 원장에 세운다. */
@@ -209,14 +223,23 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 나가 소비자의 "첫 런"이 흔들린다({@code run_key} 가 UNIQUE 라 그 하나로 전순서가 정해진다).
 	 */
 	@Test
-	void 런_축은_그_날의_런만_정렬해서_싣는다() {
-		insertTradingDay("2026-08-03");
-		insertRun("r-b", "etf-daily:2026-08-03T09:00", "RUNNING", "2026-08-03",
-				"2026-08-03T00:00:00Z", null);
+	void 런_축은_그_날의_런만_컬럼_그대로_정렬해서_싣는다() {
+		/* 🔴 **전 필드를 단언한다.** `runKey` 만 재던 동안 SQL 이 다른 컬럼을 읽게 만드는 변이
+		 * 다섯이 전부 살아남았다(레인을 `schedule_slot` 에서 · 갱신 시각을 `created_at` 에서 ·
+		 * 거래일·마감을 NULL 로). 그때 화면은 조용히 틀린 사실 위에 판정을 세운다.
+		 * 그래서 픽스처의 값을 **컬럼마다 다르게** 둔다 — 같으면 못 가른다. */
+		insertRun("r-a", "etf-daily:2026-08-03T15:40", "etf-daily", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T06:40:00Z", "2026-08-03T07:20:34Z", "2026-08-03T08:00:00Z");
+		insertRun("r-b", "news:2026-08-03T09:00", "news", "RUNNING", null,
+				"2026-08-03T00:00:00Z", "2026-08-03T00:10:00Z", null);
 		insertTradingDay("2026-08-01");
 
-		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
-				.containsExactly("etf-daily:2026-08-03T09:00", "etf-daily:2026-08-03T15:40");
+		assertThat(repository.facts(DAY).runs()).containsExactly(
+				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
+						OffsetDateTime.parse("2026-08-03T07:20:34Z"),
+						OffsetDateTime.parse("2026-08-03T08:00:00Z")),
+				new RunRow("news:2026-08-03T09:00", "news", null, "RUNNING",
+						OffsetDateTime.parse("2026-08-03T00:10:00Z"), null));
 	}
 
 	/**

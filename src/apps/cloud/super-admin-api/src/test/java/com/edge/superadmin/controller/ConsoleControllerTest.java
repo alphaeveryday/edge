@@ -80,6 +80,10 @@ class ConsoleControllerTest {
 		/* 문자열로 본다 — `jsonPath(...).doesNotExist()` 는 `"runs": null` 도 통과시켜서
 		 * "계측 없음"과 "집계 없음"을 가르지 못한다. */
 		assertThat(body).doesNotContain("\"tasks\"", "\"datasets\"", "\"outputs\"", "\"boundary\"");
+		/* 🔴 **셋째 다리**: 런이 0건인 날의 `runs: []` 는 **사실**이라 키가 있어야 한다("봤는데
+		 * 없었다"). 이걸 안 재면 `NON_EMPTY` 한 줄에 키가 통째로 사라져 규칙 층이 "아직 안 봄"
+		 * 으로 읽는데 전건 초록이다 — 부재 3분 중 이 다리만 비어 있었다. */
+		assertThat(body).contains("\"runs\":[]");
 	}
 
 	/**
