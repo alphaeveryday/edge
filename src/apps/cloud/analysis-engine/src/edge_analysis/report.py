@@ -247,40 +247,174 @@ def _usage_total(events: list[dict]) -> dict[str, int]:
     return total
 
 
+_TRACE_TOOL_FIELDS = ("tool", "ok", "handle", "lineage_id", "kind", "as_of",
+                      "row_count", "pit_clamped", "has_gaps", "gap_count")
+_TRACE_RESULT_FIELDS = ("preview_handle", "status", "summary", "method", "verdict",
+                        "n", "p", "reason")
+_HYPOTHESIS_LABELS = {"llm_intent": "LLM 의도", "text": "서버 설명",
+                      "status": "서버 상태", "preview_handle": "preview handle",
+                      "summary": "preview 요약"}
+_RESULT_LABELS = {"preview_handle": "preview handle", "status": "검정 상태",
+                  "summary": "검정 설명", "method": "방법", "verdict": "판정",
+                  "n": "표본", "p": "p값", "reason": "사유"}
+
+
+def _safe_trace_fields(event: dict, fields: tuple[str, ...]) -> dict[str, object]:
+    """감사 화면에 계약된 scalar만 남긴다; 모델 인자와 adapter 오류는 보이지 않는다."""
+    if not isinstance(event, dict):
+        return {}
+    return {key: event[key] for key in fields
+            if isinstance(event.get(key), (str, int, float, bool))}
+
+
+def _trace_fields_line(fields: dict[str, object], labels: dict[str, str]) -> str:
+    """계약 field를 감사자가 읽는 짧은 레이블로 바꾼다."""
+    bits = []
+    for key, value in fields.items():
+        shown = ("preview 필요 (preview_required)"
+                 if key == "status" and value == "preview_required" else value)
+        bits.append(f"{escape(labels[key])}: {escape(str(shown))}")
+    return "<li>" + " · ".join(bits) + "</li>"
+
+
+def _tool_line(tool: dict[str, object]) -> str:
+    name = escape(str(tool.get("tool", "unknown")))
+    status = "성공" if tool.get("ok") is True else "실패"
+    bits = [f"<code>{name}</code>", status]
+    for key, label in (("handle", "handle"), ("lineage_id", "lineage"),
+                       ("kind", "kind"), ("as_of", "as_of"),
+                       ("row_count", "rows")):
+        if key in tool:
+            bits.append(f"{label}={escape(str(tool[key]))}")
+    if tool.get("pit_clamped") is True:
+        bits.append("PIT 보정")
+    if tool.get("has_gaps") is True:
+        bits.append(f"gap {escape(str(tool.get('gap_count', 0)))}건")
+    return "<li>" + " · ".join(bits) + "</li>"
+
+
+_RAW_SCALAR_FIELDS = ("preview_handle", "intent", "outcome")
+_RAW_TRIGGER_FIELDS = ("kind", "ident")
+_RAW_EXPOSURE_FIELDS = ("kind", "ident", "transform")
+_RAW_CONDITION_FIELDS = ("family", "transform", "comparator", "percentile")
+
+
+def _safe_raw_hypotheses(value: object) -> list[dict[str, object]]:
+    """LLM 원문 중 가설 계약의 알려진 필드만 감사용으로 보존한다."""
+    if not isinstance(value, list):
+        return []
+    safe: list[dict[str, object]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        hypothesis = _safe_trace_fields(raw, _RAW_SCALAR_FIELDS)
+        trigger = _safe_trace_fields(raw.get("trigger", {}), _RAW_TRIGGER_FIELDS)
+        exposure = _safe_trace_fields(raw.get("exposure", {}), _RAW_EXPOSURE_FIELDS)
+        conditions = [_safe_trace_fields(item, _RAW_CONDITION_FIELDS)
+                      for item in raw.get("conditions", []) if isinstance(item, dict)]
+        if trigger:
+            hypothesis["trigger"] = trigger
+        if exposure:
+            hypothesis["exposure"] = exposure
+        if conditions:
+            hypothesis["conditions"] = conditions
+        safe.append(hypothesis)
+    return safe
+
+
+def _turn_key(event: dict, fallback: int) -> tuple[str, str]:
+    turn = event.get("turn")
+    if isinstance(turn, (str, int)) and not isinstance(turn, bool):
+        return f"turn:{turn}", f"턴 {turn}"
+    return f"trace:{fallback}", "턴 미기록"
+
+
 def _render_llm(events: list[dict]) -> list[str]:
-    """trace 이벤트 → LLM·SQL 왕복 아코디언. 원문을 자르지 않는다."""
+    """가설 trace를 입력 turn별로 raw→의도→도구→검정 결과 순서로 렌더한다."""
+    groups: dict[str, dict[str, object]] = {}
+    unassigned_tools: list[dict[str, object]] = []
+
+    def group_for(event: dict, index: int) -> dict[str, object]:
+        key, label = _turn_key(event, index)
+        return groups.setdefault(key, {"label": label, "raw": [], "rendered": [],
+                                       "tools": [], "results": []})
+
+    for index, event in enumerate(events):
+        kind = event.get("event")
+        if kind in {"hypothesis.raw", "hypothesis.rendered", "hypothesis.verifier_result"}:
+            group = group_for(event, index)
+            bucket = ("raw" if kind == "hypothesis.raw" else
+                      "rendered" if kind == "hypothesis.rendered" else "results")
+            group[bucket].append(event)
+        elif kind in {"hypothesis.tool_result", "objectset.tool"}:
+            if isinstance(event.get("turn"), (str, int)) and not isinstance(event.get("turn"), bool):
+                group_for(event, index)["tools"].append(event)
+            else:
+                unassigned_tools.append(event)
+
+    if len(groups) == 1 and unassigned_tools:
+        next(iter(groups.values()))["tools"].extend(unassigned_tools)
+        unassigned_tools = []
+
     out: list[str] = []
-    other: list[dict] = []
-    for e in events:
-        kind = str(e.get("event", ""))
-        seq = e.get("seq", "")
-        if kind == "llm.request":
-            out.append(f"<details><summary>LLM 요청 #{escape(str(seq))}</summary>"
-                       f"<p>system</p>{_pre(e.get('system', ''))}"
-                       f"<p>user</p>{_pre(e.get('user', ''))}</details>")
-        elif kind == "llm.response":
-            body = json.dumps(e.get("response"), ensure_ascii=False, indent=1,
-                              sort_keys=True)
-            usage = e.get("usage")
-            usage_html = (f"<p class=\"meta\">usage: {escape(json.dumps(usage, ensure_ascii=False, sort_keys=True))}</p>"
-                          if isinstance(usage, dict) else "")
-            out.append(f"<details><summary>LLM 응답 #{escape(str(seq))}"
-                       f" ({escape(str(e.get('elapsed_s', '?')))}s)</summary>"
-                       f"{usage_html}{_pre(body)}</details>")
-        elif kind == "llm.failed":
-            out.append(f"<details open><summary>LLM 실패 #{escape(str(seq))}</summary>"
-                       f"{_pre(e.get('error', ''))}</details>")
-        elif kind == "query.done" or kind.startswith("sql"):
-            out.append(f"<details><summary>SQL {escape(str(e.get('rows', '?')))}행"
-                       f" ({escape(str(e.get('ms', '?')))}ms)</summary>"
-                       f"{_pre(e.get('sql', ''))}</details>")
-        else:
-            other.append(e)
-    if other:
-        lines = "\n".join(json.dumps(e, ensure_ascii=False, sort_keys=True,
-                                     default=str) for e in other)
-        out.append(f"<details><summary>기타 trace 이벤트 {len(other)}건</summary>"
-                   f"{_pre(lines)}</details>")
+    for group in groups.values():
+        label = escape(str(group["label"]))
+        raw_events = group["raw"]
+        if raw_events:
+            bodies = [_pre(json.dumps(_safe_raw_hypotheses(event.get("hypotheses")),
+                                      ensure_ascii=False, indent=1, sort_keys=True))
+                      for event in raw_events]
+            out.append(f"<details open><summary>{label} — LLM 원문 가설</summary>"
+                       + "".join(bodies) + "</details>")
+
+        rendered_events = group["rendered"]
+        if rendered_events:
+            rows = []
+            for event in rendered_events:
+                for item in event.get("hypotheses", []):
+                    if isinstance(item, dict):
+                        fields = _safe_trace_fields(
+                            item, ("llm_intent", "text", "status", "preview_handle", "summary"))
+                        if fields:
+                            rows.append(_trace_fields_line(fields, _HYPOTHESIS_LABELS))
+            if rows:
+                out.append(f"<details open><summary>{label} — LLM 의도와 실행 상태</summary><ul>"
+                           + "".join(rows) + "</ul></details>")
+
+        nested_tools: list[dict[str, object]] = []
+        for event in rendered_events:
+            for item in event.get("hypotheses", []):
+                if isinstance(item, dict):
+                    nested_tools.extend(_safe_trace_fields(call, _TRACE_TOOL_FIELDS)
+                                        for call in item.get("tool_results", [])
+                                        if isinstance(call, dict))
+        direct_tools = [_safe_trace_fields(event, _TRACE_TOOL_FIELDS)
+                        for event in group["tools"]]
+        remaining_direct = list(direct_tools)
+        remaining_nested: list[dict[str, object]] = []
+        for nested in nested_tools:
+            try:
+                remaining_direct.remove(nested)  # same call's rendered duplicate only
+            except ValueError:
+                remaining_nested.append(nested)
+        tool_calls = direct_tools + remaining_nested
+        if tool_calls:
+            out.append(f"<details open><summary>{label} — ObjectSet 도구 호출</summary><ul>"
+                       + "".join(_tool_line(call) for call in tool_calls) + "</ul></details>")
+
+        result_rows = []
+        for event in group["results"]:
+            fields = _safe_trace_fields(event, _TRACE_RESULT_FIELDS)
+            if fields:
+                result_rows.append(_trace_fields_line(fields, _RESULT_LABELS))
+        if result_rows:
+            out.append(f"<details open><summary>{label} — 검정 결과</summary><ul>"
+                       + "".join(result_rows) + "</ul></details>")
+
+    if unassigned_tools:
+        calls = [_safe_trace_fields(event, _TRACE_TOOL_FIELDS) for event in unassigned_tools]
+        out.append("<details><summary>턴 미기록 — ObjectSet 도구 호출</summary><ul>"
+                   + "".join(_tool_line(call) for call in calls) + "</ul></details>")
     return out
 
 

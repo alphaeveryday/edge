@@ -209,19 +209,158 @@ def test_rejected_hypothesis_keeps_its_reason():
     assert "ESTABLISHED" in html                          # 검정 전건도 같은 표에
 
 
-def test_llm_roundtrip_raw_text_survives_into_the_accordion():
-    """③ 프롬프트·응답·SQL 원문이 <details> 안에 그대로 남는다 — 요약·절단 금지."""
+def test_legacy_llm_sql_trace_has_a_safe_fallback_from_fixture():
+    """기존 fixture archive도 안전한 fallback으로 계속 렌더한다."""
     html = _html(_FakeConn(results=[_result_row()], evidence=_EVIDENCE,
                            trials=_TRIALS), _fresh_s3())
 
-    assert "너는 인과 가설 에이전트다" in html
-    assert "BRIEF-원문" in html
-    assert "RESPONSE-원문" in html
-    assert "SELECT 1 AS probe" in html
-    assert "<details>" in html
+    assert "너는 인과 가설 에이전트다" not in html
+    assert "BRIEF-원문" not in html
+    assert "RESPONSE-원문" not in html
+    assert "SELECT 1 AS probe" not in html
+    assert "trace 이벤트 없음" in html
     # ④ usage 합산과 창 좌표
     assert "&quot;total_tokens&quot;: 140" in html
     assert "&quot;requested_end&quot;: &quot;10:31&quot;" in html
+
+
+def test_hypothesis_trace_is_ordered_and_redacts_unsafe_tool_details():
+    """가설 감사 화면은 LLM의 설계 의도와 서버 관측만 순서대로 보여 준다.
+
+    ObjectSet의 원시 인자·내부 dataset 이름·SQL/예외를 되비추면 감사 화면이
+    다시 실행 표면이 된다. raw hypothesis만 원문 보존 대상이다.
+    """
+    events = [
+        {"event": "hypothesis.raw", "turn": 1,
+         "hypotheses": [{"intent": "LLM-RAW-HYPOTHESIS"}]},
+        {"event": "hypothesis.rendered", "turn": 1, "hypotheses": [{
+            "llm_intent": "시장 진입일 PBR 차이를 검정한다.",
+            "text": "preview_required", "status": "preview_required",
+            "tool_results": [{"tool": "news.list_events", "ok": True,
+                              "handle": "os_safe", "kind": "NEWS_EVENT",
+                              "as_of": "2026-08-07T00:00:00Z", "row_count": 23,
+                              "pit_clamped": True, "has_gaps": True,
+                              "gap_count": 1, "internal_dataset": "secret_dataset"}],
+        }]},
+        {"event": "objectset.tool", "tool": "news.list_events", "ok": True,
+         "handle": "os_safe", "arguments": {"secret_argument": "drop-me"}},
+        {"event": "hypothesis.verifier_result", "status": "ESTABLISHED",
+         "summary": "거래일별 층화 비교", "n": 42, "p": 0.03,
+         "error": "internal exception"},
+        {"event": "query.done", "sql": "SELECT forbidden"},
+    ]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    raw = html.index("LLM-RAW-HYPOTHESIS")
+    intent = html.index("시장 진입일 PBR 차이를 검정한다.")
+    tool = html.index("news.list_events")
+    verifier = html.index("거래일별 층화 비교")
+    assert raw < intent < tool < verifier
+    assert "LLM 의도:" in html
+    assert "서버 상태: preview 필요 (preview_required)" in html
+    assert "검정 상태: ESTABLISHED" in html
+    assert "NEWS_EVENT" in html and "os_safe" in html and "23" in html
+    assert "PIT 보정" in html and "gap 1건" in html
+    assert "ESTABLISHED" in html and "0.03" in html and "42" in html
+    assert "secret_dataset" not in html
+    assert "secret_argument" not in html
+    assert "internal exception" not in html
+    assert "SELECT forbidden" not in html
+
+
+def test_hypothesis_trace_keeps_each_turn_and_repeated_tool_calls_in_order():
+    """두 턴의 같은 도구 호출도 서로 다른 관측이면 하나로 합치지 않는다."""
+    events = [
+        {"event": "hypothesis.raw", "turn": 1,
+         "hypotheses": [{"intent": "RAW-TURN-1"}]},
+        {"event": "hypothesis.rendered", "turn": 1, "hypotheses": [{
+            "llm_intent": "INTENT-TURN-1", "status": "preview_required"}]},
+        {"event": "hypothesis.tool_result", "turn": 1, "tool": "news.find_threads",
+         "ok": True, "handle": "os_turn_1"},
+        {"event": "hypothesis.verifier_result", "turn": 1,
+         "summary": "VERIFY-TURN-1", "status": "REJECTED"},
+        {"event": "hypothesis.raw", "turn": 2,
+         "hypotheses": [{"intent": "RAW-TURN-2"}]},
+        {"event": "hypothesis.rendered", "turn": 2, "hypotheses": [{
+            "llm_intent": "INTENT-TURN-2", "status": "preview_required"}]},
+        {"event": "hypothesis.tool_result", "turn": 2, "tool": "news.list_events",
+         "ok": True, "handle": "os_repeat"},
+        {"event": "hypothesis.tool_result", "turn": 2, "tool": "news.list_events",
+         "ok": True, "handle": "os_repeat"},
+        {"event": "hypothesis.verifier_result", "turn": 2,
+         "summary": "VERIFY-TURN-2", "status": "ESTABLISHED"},
+    ]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    assert (html.index("RAW-TURN-1") < html.index("INTENT-TURN-1")
+            < html.index("news.find_threads") < html.index("VERIFY-TURN-1")
+            < html.index("RAW-TURN-2") < html.index("INTENT-TURN-2")
+            < html.index("news.list_events") < html.index("VERIFY-TURN-2"))
+    assert html.count("<code>news.list_events</code>") == 2
+
+
+def test_hypothesis_raw_keeps_only_canonical_hypothesis_fields():
+    """raw hypothesis라 해도 임의 query·arguments·오류 객체는 감사 화면에 못 온다."""
+    events = [{
+        "event": "hypothesis.raw", "turn": 1, "hypotheses": [{
+            "preview_handle": "hpr_safe", "intent": "SAFE-INTENT",
+            "trigger": {"kind": "점", "ident": "COMPANY.COMMERCIAL.MARKET_ENTRY",
+                        "sql": "DROP-TRIGGER"},
+            "exposure": {"kind": "속성", "ident": "PBR", "transform": "수준",
+                         "error": "EXPOSURE-ERROR"},
+            "outcome": "수익률",
+            "conditions": [{"family": "거시", "transform": "민감도",
+                            "comparator": ">=", "percentile": 0.9,
+                            "query": "DROP-CONDITION"}],
+            "sql": "DROP-RAW", "query": "DROP-QUERY",
+            "arguments": {"key": "DROP-ARGUMENT"}, "error": "DROP-ERROR",
+            "internal": {"dataset": "DROP-DATASET"},
+        }],
+    }]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    assert "hpr_safe" in html and "SAFE-INTENT" in html
+    assert "COMPANY.COMMERCIAL.MARKET_ENTRY" in html and "PBR" in html
+    assert "DROP-" not in html and "EXPOSURE-ERROR" not in html
+
+
+def test_legacy_llm_sql_trace_has_a_safe_fallback_without_new_trace_fields():
+    """PR1 이전 archive도 깨지지 않되 원시 프롬프트·SQL은 다시 노출하지 않는다."""
+    events = [
+        {"event": "llm.request", "system": "legacy-system", "user": "legacy-argument"},
+        {"event": "llm.response", "response": {"arguments": {"key": "secret"}}},
+        {"event": "query.done", "sql": "SELECT legacy_sql"},
+    ]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    assert "trace 이벤트 없음" in html
+    assert "legacy-system" not in html and "legacy-argument" not in html
+    assert "legacy_sql" not in html and "secret" not in html
 
 
 def test_old_utterances_fold_to_summary_rows_at_the_boundary():
