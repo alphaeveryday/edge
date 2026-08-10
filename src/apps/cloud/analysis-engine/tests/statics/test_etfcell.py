@@ -349,7 +349,7 @@ def test_propose_prompts_land_in_the_agent_trace(monkeypatch):
 
     requests = [e for e in trace if e.get("event") == "llm.request"]
     assert requests, "propose 프롬프트가 trace 에 없다"
-    assert "인과 가설 에이전트" in str(requests[0]["system"])
+    assert "사건 설명 가설 에이전트" in str(requests[0]["system"])
     assert any(e.get("event") == "llm.response" for e in trace)
 
 

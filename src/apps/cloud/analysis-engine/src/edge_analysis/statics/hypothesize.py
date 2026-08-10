@@ -139,6 +139,14 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 `hypothesis.preview` 결과의 `handle` 값을 그대로 써야 한다. 서버가 preview에 고정한 설계만 실행한다.
 """
 
+_EVENT_DISTRIBUTION_PREVIEW_SYSTEM = """당신은 사건 설명 가설 에이전트다. 서버가 제공한 hypothesis 도구만 사용한다.
+
+먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중 한 사건과
+`사건 당일 시장 초과수익률` outcome만 고른 뒤 `hypothesis.preview`를 호출한다. READY preview만
+최종 JSON에 `preview_handle`과 그 검정을 왜 확인할지 쓴 `intent`로 제출한다. 서버가 고정한 사건과
+동일 사건 유형의 과거 분포를 바꾸거나, 조건·노출·채널을 새로 만들지 마라.
+"""
+
 
 def _resolve_preview_hypotheses(hyps: list[object], resolver: Callable[[str], object]
                                 ) -> tuple[list[HypothesisTuple], list[str], list[dict[str, object]]]:
@@ -179,7 +187,7 @@ def _resolve_preview_hypotheses(hyps: list[object], resolver: Callable[[str], ob
             rejected.append(f"[{idx}] {why}")
             record("tuple.rejected", idx=idx, why=why, raw=raw)
             continue
-        valid.append(replace(recipe, intent=intent.strip()))
+        valid.append(replace(recipe, intent=intent.strip(), preview_handle=handle))
         rendered.append({"text": summary, "llm_intent": intent.strip(),
                          "status": "ready", "preview_handle": handle})
     return valid, rejected, rendered
@@ -405,9 +413,11 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
         arguments = object_field(out, "arguments")
         res = call(name, arguments)
         if name == "hypothesis.list_options":
+            generic_options = (res.get("triggers") and res.get("outcomes")
+                               and res.get("layers") and res.get("exposures"))
+            distribution_options = res.get("event_candidates") and res.get("outcomes")
             previewable_options = previewable_options or bool(
-                res.get("ok") and res.get("triggers") and res.get("outcomes")
-                and res.get("layers") and res.get("exposures"))
+                res.get("ok") and (generic_options or distribution_options))
         summary = _tool_result_summary(name, res)
         tool_summaries.append(summary)
         record("hypothesis.tool_result", **summary)
@@ -442,7 +452,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     # 결과종류는 하드코딩 2종이라 '되돌림' 축을 모델이 고를 수조차 없었다.
     preview_resolver = (object_tools or {}).get("resolve_preview")
     preview_mode = callable(preview_resolver)
-    system = (_PREVIEW_SYSTEM if preview_mode else _SYSTEM.format(
+    system = ((object_tools or {}).get("preview_system", _PREVIEW_SYSTEM)
+              if preview_mode else _SYSTEM.format(
         channels=sorted(CHANNELS), families=sorted(SERIES_FAMILIES),
         transforms=sorted(TRANSFORMS), n_ch=len(CHANNELS), n_fam=len(SERIES_FAMILIES),
         n_tr=len(TRANSFORMS), comparators=sorted(COMPARATORS),

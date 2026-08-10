@@ -292,6 +292,7 @@ class HypothesisTuple:
     reduction_note: str = ""  # 환원 근거 (토큰→타입). 자유 텍스트가 아니라 감사 메모.
     intent: str = ""          # **이 튜플로 검정하려는 인과 주장** 한 문장 - 간선에 실려
                               # 검정 에이전트에게 전달된다. 무엇이 사실이면 성립인가.
+    preview_handle: str = ""  # server-issued preview lineage; never model-authored tuple data
 
     def __post_init__(self) -> None:
         _need(self.channel, CHANNELS, "채널")
