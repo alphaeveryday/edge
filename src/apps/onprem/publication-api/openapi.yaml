@@ -169,6 +169,13 @@ components:
             스냅샷 기준시각(오프셋 포함 ISO-8601). 같은 거래일에 유효 스냅샷이 여럿이면
             이 값이 최신인 것이 서빙된다("유효 최신 승리" — ADR-0045). 최신 무효화 시
             재노출되는 직전 스냅샷의 기준 시점을 화면이 이 값으로 안다.
+        content_as_of:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            콘텐츠 기준시각(오프셋 포함 ISO-8601) — 설명 본문이 서술하는 구간의 끝(ALPHA-918).
+            explanation_as_of(생성 시각)와 달리 본문 내용의 시점을 말한다. 구형 게시분은
+            null — 소비자는 explanation_as_of 로 폴백한다.
 
     EtfInfo:
       type: object

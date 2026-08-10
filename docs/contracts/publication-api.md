@@ -43,10 +43,12 @@ X-Channel: MTS | HTS | INTERNAL
   ],
   "disclaimer": "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.",
   "published_at": "2026-07-15T16:40:00+09:00",
-  "explanation_as_of": "2026-07-15T16:00:00+09:00"
+  "explanation_as_of": "2026-07-15T16:00:00+09:00",
+  "content_as_of": "2026-07-15T10:30:00+09:00"
 }
 ```
 
+- `content_as_of`는 **콘텐츠 기준시각** — 설명 본문이 서술하는 구간의 끝이다(ALPHA-918). `explanation_as_of`(생성 시각·스냅샷 축)와 달리 본문 내용의 시점을 말한다. 구형 게시분은 `null` — 소비자는 `explanation_as_of`로 폴백한다.
 - `summary`는 검수를 거친 **최종 노출 문구**다(원본 AI 문구가 아니라 검수자 수정 반영본). 원천은 Cloud `explanation_result.summary`(물리 스키마의 유일한 고객 노출 텍스트 필드) — 번들로 온프렘에 수신된 뒤 검수를 거친 값이다.
 - `disclaimer`는 **활성 정책 버전**(`policy_version.disclaimer_text`, 콘솔 "점검 기준 관리 → 면책 문구"의 발행분)의 안내 문구 — 화면에 반드시 함께 노출한다. **조회 시점 최신값**이라 문구를 새로 발행하면 이미 게시된 설명의 조회에도 즉시 적용된다(면책 문구는 게시분의 내용이 아니라 노출 화면에 동반되는 현행 안내이기 때문 — 게시분 캐시는 이 값을 가리지 않는다). 활성 버전이 없는 구간(첫 발행 전 — 면책 문구는 테넌트 컴플라이언스 콘텐츠라 시드로 발행하지 않는다)에는 콘솔이 편집 화면에 투영하는 것과 같은 기본 문구가 실린다.
 - `evidences` 요소 형상은 `{kind, title, source, published_at}`(근거 뉴스/공시 문서 목록)로 **확정**(ALPHA-395 — [event-bundle-schema.md](event-bundle-schema.md) "경계면 컬럼" 절). 번들 `evidences`가 온프렘 저장(`analysis_item.evidences`)을 거쳐 이 응답으로 서빙된다(`ExplanationStore`가 파싱하는 형상 — 저장분에는 `source_uri`(ALPHA-739, 검수 콘솔용)도 있으나 **서빙 계약에는 싣지 않는다**: 내부 lineage URI 를 고객 표면에 노출하지 않음). 반대 요인 등 부가 텍스트는 물리 스키마에 전용 컬럼이 없어(candidate: `stage_results` JSONB) 계약에 넣지 않는다 — 필요해지면 스키마 확장(양자 합의) 후 추가.
