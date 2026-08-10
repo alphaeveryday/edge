@@ -2,6 +2,7 @@ package com.edge.superadmin.repository;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.List;
 
 /**
  * 슈퍼 어드민 콘솔 규칙 엔진이 읽는 <b>사실</b>(ALPHA-738 · docs/contracts/console-facts-api.md).
@@ -11,8 +12,8 @@ import java.time.OffsetDateTime;
  * 뭉개지 않는 것도 {@link PipelineStatusRepository} 와 같다.
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
- * 이 조각은 <b>조회 창</b>만 정한다 — 사실 축(런·작업·데이터셋·산출·경계)은 뒤따르는 조각이
- * 하나씩 더한다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축</b>이고, 작업·데이터셋·산출·경계는
+ * 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
  */
 public interface ConsoleFactsRepository {
 
@@ -27,6 +28,14 @@ public interface ConsoleFactsRepository {
 	ConsoleFacts facts(LocalDate date);
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
-	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow) {
+	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs) {
+	}
+
+	/**
+	 * 런 하나. {@code runKey} 가 곧 사건 식별자의 대상 축이다 — 내부 {@code pipeline_run_id} 가
+	 * 아니라 이 값이라야 다른 축(작업 등)이 붙을 때 조인이 선다.
+	 */
+	record RunRow(String runKey, String lane, LocalDate tradingDate, String ledgerStatus,
+			OffsetDateTime ledgerUpdated, OffsetDateTime deadline) {
 	}
 }

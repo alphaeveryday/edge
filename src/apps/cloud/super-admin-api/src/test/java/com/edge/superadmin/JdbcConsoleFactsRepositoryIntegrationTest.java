@@ -1,18 +1,20 @@
 package com.edge.superadmin;
 
 import com.edge.superadmin.repository.ConsoleFactsRepository;
+import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 콘솔 사실 조회의 <b>조회 창</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
- * migrations-cloud)로 컬럼명·날짜 창을 검증한다(ALPHA-738).
+ * 콘솔 사실 조회의 <b>조회 창 + 런 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
+ * migrations-cloud)로 컬럼명·날짜 창·정렬을 검증한다(ALPHA-738).
  *
  * <p>손 페이크는 이 SQL 을 <b>한 줄도 실행하지 않는다</b>. 여기 걸린 축은 조용히 틀리는 종류다 —
  * 창이 UTC 로 새면 하루가 밀리고, 미래 슬롯 키 하나가 기본 조회를 오지 않은 날로 옮기면 그 화면은
@@ -43,14 +45,27 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	private void insertRun(String id, String runKey, String orchestration, String tradingDate,
 			String createdAt, String deadline) {
+		insertRun(id, runKey, "etf-daily", orchestration, tradingDate, createdAt, createdAt,
+				deadline);
+	}
+
+	/**
+	 * ⚠️ {@code pipelineType}·{@code updatedAt} 을 <b>따로 받는다</b>. 한때 레인을
+	 * {@code 'etf-daily'} 로 박고 {@code updated_at} 에 {@code created_at} 을 그대로 넣었는데,
+	 * 그러면 <b>어떤 단언으로도</b> 그 두 컬럼을 못 잰다 — SQL 이 엉뚱한 컬럼을 읽어도(레인을
+	 * {@code schedule_slot} 에서, 갱신 시각을 {@code created_at} 에서) 값이 같아 통과한다.
+	 * 픽스처가 컬럼을 못 가르면 그 컬럼은 계약이 아니다.
+	 */
+	private void insertRun(String id, String runKey, String pipelineType, String orchestration,
+			String tradingDate, String createdAt, String updatedAt, String deadline) {
 		jdbc.update("""
 				INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type,
 				       execution_name, launch_status, orchestration_status, trading_date,
 				       hard_deadline_at, created_at, updated_at)
-				VALUES (?,?,'etf-daily',?,'LAUNCHED',?,?::date,?::timestamptz,?::timestamptz,
+				VALUES (?,?,?,?,'LAUNCHED',?,?::date,?::timestamptz,?::timestamptz,
 				        ?::timestamptz)
-				""", id, runKey, "exec-" + id, orchestration, tradingDate, deadline, createdAt,
-				createdAt);
+				""", id, runKey, pipelineType, "exec-" + id, orchestration, tradingDate, deadline,
+				createdAt, updatedAt);
 	}
 
 	/** 거래일 하나를 원장에 세운다. */
@@ -166,8 +181,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	@Test
 	void 거래일이_없는_런은_계획_시각의_KST_날짜로_줍는다() {
-		insertRun("r-news", "news:2026-08-03T15:30", "SUCCEEDED", null,
-				"2026-08-02T16:00:00Z", null);
+		insertRun("r-news", "news:2026-08-03T15:30", "news", "SUCCEEDED", null,
+				"2026-08-02T16:00:00Z", "2026-08-02T16:00:00Z", null);
 
 		assertThat(repository.facts(null).today()).isEqualTo(DAY);
 	}
@@ -200,6 +215,47 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertMissingSlotIssue("i1", "etf-daily:2026-02-31T15:40", "OPEN");
 
 		assertThat(repository.facts(null).today()).isEqualTo(LocalDate.parse("2026-08-01"));
+	}
+
+	/**
+	 * 런 축은 <b>그 날의 것만</b> 나간다. 창을 안 걸면 원장 전건이 실려 다른 날 런이 오늘 사건이
+	 * 된다. {@code run_key} 순 고정도 함께 잰다 — 정렬이 없으면 같은 원장이 조회마다 다른 순서로
+	 * 나가 소비자의 "첫 런"이 흔들린다({@code run_key} 가 UNIQUE 라 그 하나로 전순서가 정해진다).
+	 */
+	@Test
+	void 런_축은_그_날의_런만_컬럼_그대로_정렬해서_싣는다() {
+		/* 🔴 **전 필드를 단언한다.** `runKey` 만 재던 동안 SQL 이 다른 컬럼을 읽게 만드는 변이
+		 * 다섯이 전부 살아남았다(레인을 `schedule_slot` 에서 · 갱신 시각을 `created_at` 에서 ·
+		 * 거래일·마감을 NULL 로). 그때 화면은 조용히 틀린 사실 위에 판정을 세운다.
+		 * 그래서 픽스처의 값을 **컬럼마다 다르게** 둔다 — 같으면 못 가른다. */
+		/* ⚠️ **삽입 순서를 기대 순서와 반대로 둔다.** 같으면 `ORDER BY` 를 통째로 지워도 통과한다 —
+		 * Postgres 가 힙 순서(=삽입 순서)로 주기 때문이다. 그러면 이 테스트가 잡는 것은 *틀린
+		 * 정렬*뿐이고 계약이 지키려는 *정렬 부재*는 새어 나간다(실제로 한 라운드 그랬다). */
+		insertRun("r-b", "news:2026-08-03T09:00", "news", "RUNNING", null,
+				"2026-08-03T00:00:00Z", "2026-08-03T00:10:00Z", null);
+		insertRun("r-a", "etf-daily:2026-08-03T15:40", "etf-daily", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T06:40:00Z", "2026-08-03T07:20:34Z", "2026-08-03T08:00:00Z");
+		insertTradingDay("2026-08-01");
+
+		assertThat(repository.facts(DAY).runs()).containsExactly(
+				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
+						OffsetDateTime.parse("2026-08-03T07:20:34Z"),
+						OffsetDateTime.parse("2026-08-03T08:00:00Z")),
+				new RunRow("news:2026-08-03T09:00", "news", null, "RUNNING",
+						OffsetDateTime.parse("2026-08-03T00:10:00Z"), null));
+	}
+
+	/**
+	 * 거래일이 NULL 인 런도 <b>같은 창</b>에 들어와야 한다 — 조회 창을 고르는 식과 런을 자르는 식이
+	 * 갈리면 그 런이 "날짜는 골랐는데 목록에는 없는" 상태가 된다.
+	 */
+	@Test
+	void 거래일이_없는_런도_같은_창에_잡힌다() {
+		insertRun("r-news", "news:2026-08-03T15:30", "news", "SUCCEEDED", null,
+				"2026-08-02T16:00:00Z", "2026-08-02T16:00:00Z", null);
+
+		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
+				.containsExactly("news:2026-08-03T15:30");
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
