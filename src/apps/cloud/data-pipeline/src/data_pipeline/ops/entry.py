@@ -292,22 +292,31 @@ def _observe_from_log(
 def _etf_universe_provider(settings):
     """국내 ETF 3개 수집 작업의 기대 universe를 설정 정본에서 고정한다(ALPHA-611).
 
-    구성종목·NAV·프로필 실행도 모두 ``krx_etf.source.etf_map`` 을 쓰므로 키(our_etf_id)가
-    세 작업의 공통 entity grain 이다. 값(ISIN)이나 실행 결과에서 다시 만들면 기대값과 실제값이
-    같은 실패를 공유해 누락을 못 잡는다.
+    값(ISIN)이나 실행 결과에서 다시 만들면 기대값과 실제값이 같은 실패를 공유해 누락을 못 잡는다.
+
+    ⚠️ **세 작업의 기대 집합이 더는 같지 않다**(ALPHA-855). NAV·프로필은 `etf_map` 만 쓰지만
+    구성종목 수집은 `plan()` 이 `etf_map + reference_etf_map` 을 받는다. 같은 값을 주면
+    구성종목 쪽 기대(33)가 실제(81)보다 작아져 `missing = max(expected - received, 0)` 가
+    **영원히 0** 으로 굳는다 — 뿌리 10종이 통째로 빠져도 완전성이 만점으로 보이고,
+    `received < expected` 판정(`ops/wrapper`)은 절대 발화하지 않는다. 수집기가 분모를 줄여
+    스스로 만점을 주는 것을 막으려던 규율의 거울상이라, 작업별로 가른다.
     """
     krx_etf = getattr(settings, "krx_etf", None)
     if krx_etf is None:
         raise SystemExit(
             "krx_etf.source 설정 없음 — etf-daily 기대 universe를 계획할 수 없다"
         )
-    entity_ids = tuple(sorted(krx_etf.source.etf_map))
+    root_ids = tuple(sorted(krx_etf.source.etf_map))
+    # 구성종목 수집의 기대 = 어댑터가 실제로 계획하는 집합. `plan()` 과 같은 규칙을 여기서
+    # 재구현하지 않으려면 키 합집합이면 충분하다(순서는 완전성 판정과 무관하다).
+    holdings_ids = tuple(sorted({**krx_etf.source.etf_map, **krx_etf.source.reference_etf_map}))
 
     def provide(task_key: str) -> dict | None:
         if task_key not in _ETF_UNIVERSE_TASK_KEYS:
             return None
+        ids = holdings_ids if task_key == "ETF_HOLDINGS_COLLECTION_KRX" else root_ids
         # 작업별 snapshot JSON이 서로 공유된 mutable list를 갖지 않게 매번 새로 만든다.
-        return {"entity_kind": "ticker", "entity_ids": list(entity_ids)}
+        return {"entity_kind": "ticker", "entity_ids": list(ids)}
 
     return provide
 

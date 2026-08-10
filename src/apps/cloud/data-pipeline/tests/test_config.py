@@ -249,9 +249,14 @@ def test_krx_etf_isins_match_their_short_codes():
     #      31종까지 늘어난 지금(ALPHA-454) 그건 매일 시끄러운 실패라, 오타를 런타임이 아니라
     #      여기서 잡는다. 체크디짓까지 봐야 한 자리 오타가 걸린다 — 접두사만 보면 KR7091*1*60002
     #      같은 실수가 통과한다.
+    #      참조 계열(reference_etf_map, ALPHA-855)도 같은 자에 태운다 — 48종을 유도해 적었고
+    #      같은 성질의 손오타를 탄다. 두 맵을 따로 도는 대신 합쳐 도는 이유는, 새 맵을 여기
+    #      안 얹으면 검사 없는 ISIN 축이 조용히 하나 생기기 때문이다.
     settings = load_settings()
+    krx = settings.krx_etf.source
+    assert krx.reference_etf_map, "참조 계열 맵이 비었다 — 이 검사가 0회 돌면 통과가 무의미하다"
 
-    for short_code, isin in settings.krx_etf.source.etf_map.items():
+    for short_code, isin in {**krx.etf_map, **krx.reference_etf_map}.items():
         body, expected = isin[:-1], isin[-1]
         assert body == f"KR7{short_code}00", f"{short_code}: ISIN 본문 불일치 ({isin})"
         digits = "".join(str(int(c, 36)) if c.isalpha() else c for c in body)
@@ -261,6 +266,83 @@ def test_krx_etf_isins_match_their_short_codes():
             total += d - 9 if d > 9 else d
             double = not double
         assert str((10 - total % 10) % 10) == expected, f"{short_code}: 체크디짓 불일치 ({isin})"
+
+
+def test_reference_etfs_are_not_universe_roots():
+    """실제 배포 설정에서 참조 계열이 **유니버스 파생에 안 들어가는지** (ALPHA-855).
+
+    이 티켓 전체가 이 한 줄을 지키려고 맵을 둘로 가른 것이다. `_krx_expected_etfs` 는
+    일봉 가격·투자자 수급·공시 제외집합·1분 constituent_ids 넷이 공유하는 유니버스 뿌리라
+    (`ingest_price_raw`·`ingest_raw_investor`·`ingest_raw_disclosure`·`build_minute_universe`),
+    여기에 참조 계열이 새면 넷이 동시에 는다 — 1분 수집이 410 → 1,400 unit 로 뛰어 유량
+    상한을 넘긴다. 픽스처가 아니라 **배포되는 sources.toml** 로 본다: 이 결함은 코드가
+    아니라 설정 한 줄을 옮겨 적어서 나기 때문이다.
+    """
+    from data_pipeline.steps.ingest_price_raw import _krx_expected_etfs
+
+    settings = load_settings()
+    roots = _krx_expected_etfs(settings)
+    reference = set(settings.krx_etf.source.reference_etf_map)
+
+    assert reference, "참조 계열이 비었다 — 이 검사가 공집합끼리 비교하면 통과가 무의미하다"
+    assert roots == set(settings.krx_etf.source.etf_map)
+    assert not (roots & reference), f"참조 계열이 유니버스 뿌리에 샜다: {sorted(roots & reference)}"
+
+
+def test_reference_etf_map_must_not_overlap_etf_map(tmp_path):
+    # WHY: 같은 ETF 를 양쪽에 적으면 두 선언이 서로 다른 말을 한다 — etf_map 은 "유니버스
+    #      뿌리로 삼아라", reference 는 "명부만 받아라". plan() 이 dict 병합이라 조용히
+    #      한쪽으로 흡수되므로, 모순이 수집에서 사라지기 전에 로드에서 죽인다(Rule 7).
+    bad = VALID + """
+[krx_etf.source]
+[krx_etf.source.etf_map]
+"069500" = "KR7069500007"
+[krx_etf.source.reference_etf_map]
+"069500" = "KR7069500007"
+"""
+    with pytest.raises(ConfigError, match="양쪽에 있다"):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_sector_candidate_without_holdings_source_is_rejected(tmp_path):
+    """섹터 후보로 선언했는데 명부 대상이 아니면 로드가 죽는다 (ALPHA-855).
+
+    **틀리는 방향이 나빠서** 로드 시점에 잡는다: 명부가 없으면 `layers.holdings` 가 빈
+    목록을 내고 겹침 게이트 `overlap()` 이 0.0 을 낸다. 0.0 은 "동어반복이 아니다"라는
+    뜻이라 그 ETF 가 섹터층으로 뽑힌다 — 결손이 침묵이 아니라 **관대한 쪽 오답**으로
+    나온다. 탈락 사유를 남기는 자리는 들어온 후보만 기록하므로 사유도 안 남는다.
+    """
+    bad = VALID + """
+[krx_etf.source]
+[krx_etf.source.etf_map]
+"069500" = "KR7069500007"
+[krx_etf.source.reference_etf_map]
+"091170" = "KR7091170001"
+
+[minute_universe]
+sector_etf_ids = ["091170", "102970"]
+"""
+    with pytest.raises(ConfigError, match="102970"):
+        load_settings(_write(tmp_path, bad))
+
+
+def test_holdings_source_without_sector_candidate_is_allowed(tmp_path):
+    # WHY: 반대 방향은 막지 않는다 — 안 쓰는 명부를 받는 수집 낭비일 뿐 오답을 만들지
+    #      않는다. 양방향 등식으로 잠그면 "명부만 먼저 받아 두고 후보는 나중에" 같은 정상
+    #      운영이 막힌다. 안 깨진 것에 가드를 걸지 않는다(Rule 2).
+    good = VALID + """
+[krx_etf.source]
+[krx_etf.source.etf_map]
+"069500" = "KR7069500007"
+[krx_etf.source.reference_etf_map]
+"091170" = "KR7091170001"
+"102970" = "KR7102970001"
+
+[minute_universe]
+sector_etf_ids = ["091170"]
+"""
+    settings = load_settings(_write(tmp_path, good))
+    assert set(settings.krx_etf.source.reference_etf_map) == {"091170", "102970"}
 
 
 def test_minute_relay_queue_urls_from_documented_env_form(monkeypatch, tmp_path):
@@ -350,3 +432,27 @@ def test_minute_universe_section_is_optional(tmp_path):
     # WHY: 섹터 후보 없이도 1분 레인은 돌아야 한다(이 축이 생기기 전과 같은 유니버스).
     #      필수로 만들면 이 섹션이 없는 환경의 로드가 통째로 죽는다.
     assert load_settings(_write(tmp_path, VALID)).minute_universe is None
+
+
+def test_sector_candidate_in_etf_map_is_rejected_with_the_right_map(tmp_path):
+    """섹터 후보를 `etf_map` 에 적어도 거부하고, **어느 맵에 넣어야 하는지** 말해 준다.
+
+    `etf_map` 을 "명부 대상"으로 인정하면 이 가드를 통과하는데, 거기 두는 것이 바로 이 축을
+    가른 이유 자체(구성종목이 1분 유니버스로 딸려 들어와 410 → 1,400 unit)를 되돌리는
+    설정이다. `build_minute_universe` 가 뒤늦게 거부하긴 하지만, 가드가 옳은 자리를
+    안내하지 않으면 사람은 **통과하는 자리를 찾는다**.
+    """
+    bad = VALID + """
+[krx_etf.source]
+[krx_etf.source.etf_map]
+"069500" = "KR7069500007"
+"091170" = "KR7091170001"
+
+[minute_universe]
+sector_etf_ids = ["091170"]
+"""
+    with pytest.raises(ConfigError) as exc:
+        load_settings(_write(tmp_path, bad))
+    message = str(exc.value)
+    assert "reference_etf_map" in message, "어느 맵에 넣으라는 안내가 없다"
+    assert "1,400 unit" in message, "etf_map 에 두면 무엇이 터지는지 말하지 않는다"

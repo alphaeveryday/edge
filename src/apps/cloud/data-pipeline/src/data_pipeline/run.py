@@ -801,7 +801,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return ingest_raw_etf.run(settings, storage, etf_source, run_id)
 
     # ETF 프로필도 스냅샷(현재 상품정보)이라 날짜창을 쓰지 않는다. 유니버스는 NAV 와 같은
-    # krx_etf.source.etf_map 이다 — 마스터·NAV·구성종목이 다른 목록을 보면 안 된다.
+    # krx_etf.source.etf_map 이다 — 마스터·NAV 가 다른 목록을 보면 안 된다. ⚠️ 구성종목 수집만
+    # 여기에 reference_etf_map 을 더한다(명부만 받는 축, ALPHA-855) — 뿌리는 이 맵 하나다.
     if args.step == "ingest-raw-etf-profile":
         if settings.kis_nav is None:
             raise SystemExit("kis_nav.source 설정이 없다 — sources.toml 확인")

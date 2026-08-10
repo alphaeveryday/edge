@@ -15,6 +15,7 @@ import os
 import tomllib
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -145,6 +146,45 @@ class Settings(BaseSettings):
     minute_disclosure_worker: MinuteDisclosureWorkerConfig = MinuteDisclosureWorkerConfig()
     # 스토리지는 기본 local 스텁이 있어 섹션 생략 가능(배포는 env 로 s3 지정).
     storage: StorageConfig = StorageConfig()
+
+    @model_validator(mode="after")
+    def _validate_reference_etfs_have_holdings(self) -> Settings:
+        """섹터 후보로 선언한 ETF 는 전부 KRX 명부 대상이어야 한다 (ALPHA-855).
+
+        같은 48종이 두 섹션에 적힌다 — `[minute_universe].sector_etf_ids` 는 "분봉을 받아라",
+        `[krx_etf.source.reference_etf_map]` 은 "명부를 받아라". 한 ETF 를 앞쪽에만 적었을 때
+        **틀리는 방향이 나쁘다**: 명부가 없으면 `layers.holdings` 가 FMP 폴백으로 내려가고
+        거기에도 없으면 빈 목록이라, 겹침 게이트 `overlap()` 이 **0.0** 을 낸다. 0.0 은
+        "동어반복이 아니다"라는 뜻이라 그 ETF 가 섹터층 후보로 살아남는다 — 실제로는 같은
+        포트폴리오일 수 있는데도. 즉 결손이 **관대한 쪽 오답**으로 나타나고, 사유를 남기는
+        자리(twins·alien·rho_blocked)는 들어온 후보만 기록하므로 사유 없는 오답이다.
+        그래서 첫 사용처가 아니라 **로드 시점**에 죽인다.
+
+        반대 방향(reference_etf_map 에만 있는 ETF)은 안 막는다 — 안 쓰는 명부를 받는 수집
+        낭비일 뿐 오답을 만들지 않는다. 안 깨진 것에 가드를 걸지 않는다(Rule 2).
+
+        ⚠️ 대조군은 `reference_etf_map` **하나**다. `etf_map` 까지 인정하면 섹터 후보를 거기
+        적어도 통과하는데, 그건 이 축을 가른 이유 자체(구성종목이 1분 유니버스로 딸려 들어와
+        410 → 1,400 unit)를 되돌리는 설정이다. `build_minute_universe` 가 뒤늦게 거부하긴
+        하지만, 거부를 로드 시점으로 당기고 **어느 맵에 넣어야 하는지**까지 말해 주는 편이
+        낫다 — 가드가 옳은 자리를 안내하지 않으면 사람은 통과하는 자리를 찾는다.
+        """
+        if self.minute_universe is None or self.krx_etf is None:
+            return self  # 한쪽이 없으면 대조할 짝이 없다(둘 다 선택 섹션이다)
+        reference = set(self.krx_etf.source.reference_etf_map)
+        if missing := sorted(set(self.minute_universe.sector_etf_ids) - reference):
+            in_root = sorted(set(missing) & set(self.krx_etf.source.etf_map))
+            hint = (
+                f" (그중 {in_root} 는 etf_map 에 있다 — 거기 두면 구성종목이 1분 유니버스로 "
+                f"딸려 들어와 수집이 410 → 1,400 unit 로 뛴다)" if in_root else ""
+            )
+            raise ValueError(
+                f"[minute_universe].sector_etf_ids 에 있는데 참조 계열 명부 대상이 아닌 ETF: "
+                f"{missing} — [krx_etf.source.reference_etf_map] 에 ISIN 과 함께 더해라"
+                f"{hint}. 명부가 없으면 겹침 게이트가 0.0 을 내어 동어반복 ETF 가 섹터층으로 "
+                f"뽑힌다"
+            )
+        return self
 
     @classmethod
     def settings_customise_sources(

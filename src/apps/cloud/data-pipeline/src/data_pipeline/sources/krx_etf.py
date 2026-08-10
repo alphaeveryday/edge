@@ -76,8 +76,13 @@ class KrxEtfSource:
         self.config_enabled = config.enabled
         self.mbr_id = config.mbr_id
         self.pw = config.pw
-        # our_etf_id → KRX ISIN(표준코드). 종목맵과 별개 — 이 맵의 키가 곧 수집 유니버스다.
+        # our_etf_id → KRX ISIN(표준코드). 종목맵과 별개 — 이 맵의 키가 곧 **유니버스 뿌리**다
+        # (수집 대상은 아래 reference_etf_map 까지 포함한다 — 둘은 다른 축이다).
         self.etf_map = config.etf_map
+        # 참조 계열(ALPHA-855) — 명부만 받고 유니버스 파생에는 안 들어간다. **따로 들고 있는
+        # 것이 요점**이다: 합쳐 두면 이 어댑터 밖에서 `source.etf_map` 을 유니버스 정본으로
+        # 읽는 곳들(NAV·프로필·`_krx_expected_etfs`)이 참조 계열까지 유니버스로 삼는다.
+        self.reference_etf_map = config.reference_etf_map
         self.client = client
         # 수집 루프의 벽시계 상한(초). None = 무제한(기본 — 이전과 동일).
         #
@@ -99,8 +104,24 @@ class KrxEtfSource:
         return self.config_enabled and bool(self.mbr_id) and bool(self.pw)
 
     def plan(self) -> list[tuple[str, str]]:
-        """수집 대상 → [(our_etf_id, isin)]. etf_map 이 곧 유니버스다(US 어댑터와 동형)."""
-        return sorted(self.etf_map.items())
+        """수집 대상 → [(our_etf_id, isin)]. 두 맵의 합집합이다.
+
+        **수집 대상 ≠ 유니버스**다(ALPHA-855). `etf_map` 은 수집 대상이자 유니버스 파생의
+        뿌리이고, `reference_etf_map` 은 수집 대상일 뿐이다 — 층 분해의 겹침 게이트가 쓸
+        명부만 받는다. 그 구분을 아는 것은 이 `plan()` 이 아니라 유니버스를 파생시키는 쪽
+        (`ingest_price_raw._krx_expected_etfs`)이고, 거기는 `etf_map` 만 본다.
+
+        두 맵의 키가 겹치지 않는 것은 config 검증이 보장한다(`KrxEtfSource`) — 여기서
+        `dict` 병합으로 조용히 흡수하면 그 모순이 로드가 아니라 수집에서 사라진다.
+
+        🔴 **합집합을 정렬하지 않는다. 뿌리를 먼저 낸다.** 이 목록의 순서가 곧 수집 순서이고,
+        수집 상한(`--deadline-sec`)에 닿으면 뒤쪽이 통째로 미시도로 잘린다. 합쳐서 정렬하면
+        참조 계열 코드가 앞에 몰려(전부 ≤373490) **뿌리가 뒤로 밀린다** — 혼잡일에 잘리는
+        것이 "명부만 필요한 계열"이 아니라 "일봉·수급·공시·1분 유니버스의 뿌리"가 된다.
+        KRX 는 trdDd 백필 수단이 없어 그날 못 받은 ETF 는 그날로 끝이다(ALPHA-387).
+        상한 근거는 혼잡일 실측이다 — 2026-07-24 15:40 런이 31종에 579초였다.
+        """
+        return sorted(self.etf_map.items()) + sorted(self.reference_etf_map.items())
 
     def _note_failure(self, isin: str, our_etf_id: str, reason: str) -> None:
         """ETF 단위 실패를 로그로 남기고 fetch_failures 에 기록(격리≠은폐)."""
