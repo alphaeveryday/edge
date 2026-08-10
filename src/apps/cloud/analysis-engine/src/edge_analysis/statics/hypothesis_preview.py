@@ -76,8 +76,8 @@ class HypothesisPreviewRuntime:
         option = {"type": "string", "minLength": 1, "maxLength": 200}
         return [
             {"name": "hypothesis.list_options",
-             "description": "List the current run's scoped event set vocabulary. Omit event_set_handle to use that server-owned set.",
-             "input_schema": _schema({"event_set_handle": handle}, ())},
+             "description": "List the current run's vocabulary. Omit event_set_handle for the server-owned set; pass one exposure_id to list only its compatible modifiers.",
+             "input_schema": _schema({"event_set_handle": handle, "exposure_id": option}, ())},
             {"name": "hypothesis.preview",
              "description": "Check one server-defined event-day panel-test design and return a run-scoped handle.",
              "input_schema": _schema({
@@ -92,7 +92,7 @@ class HypothesisPreviewRuntime:
 
     def call(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         operations = {
-            "hypothesis.list_options": (self._list_options, {"event_set_handle"}, set()),
+            "hypothesis.list_options": (self._list_options, {"event_set_handle", "exposure_id"}, set()),
             "hypothesis.preview": (
                 self._preview,
                 {"event_set_handle", "trigger_id", "outcome_id", "layer_id", "exposure_id", "modifier_id"},
@@ -161,7 +161,8 @@ class HypothesisPreviewRuntime:
     def _event_types(self, event_set_handle: str) -> tuple[str, ...]:
         return tuple(sorted(set(self._event_sets.event_type_codes(event_set_handle))))
 
-    def _list_options(self, event_set_handle: str | None = None) -> dict[str, Any]:
+    def _list_options(self, event_set_handle: str | None = None,
+                      exposure_id: str | None = None) -> dict[str, Any]:
         event_set_handle = self._event_set_handle(event_set_handle)
         event_types = self._event_types(event_set_handle)
         features = [
@@ -169,12 +170,7 @@ class HypothesisPreviewRuntime:
              "layers": [f"layer:{layer}" for layer in sorted(_allowed_layers(key))]}
             for key in sorted(FEATURES)
         ]
-        modifiers = [
-            {"id": _condition_id(key, direction),
-             "label": f"{_FEATURE_LABELS[key]} {'상위 10%' if direction == 'high_90' else '하위 10%'}"}
-            for key in sorted(FEATURES) for direction in ("high_90", "low_10")
-        ]
-        return {
+        result = {
             "ok": True,
             "event_set_handle": event_set_handle,
             "triggers": [{"id": f"event:{event_type}", "label": f"{event_type} 사건"}
@@ -183,8 +179,16 @@ class HypothesisPreviewRuntime:
             "layers": [{"id": f"layer:{layer}", "label": _LAYER_LABELS[layer]}
                        for layer in sorted(_LAYER_LABELS)],
             "exposures": features,
-            "modifiers": modifiers,
         }
+        if exposure_id is not None:
+            exposure = _parse_feature(exposure_id)
+            result["modifiers"] = [
+                {"id": _condition_id(key, direction),
+                 "label": f"{_FEATURE_LABELS[key]} {'상위 10%' if direction == 'high_90' else '하위 10%'}"}
+                for key in sorted(FEATURES) if key != exposure
+                for direction in ("high_90", "low_10")
+            ]
+        return result
 
     def _preview(self, trigger_id: str, outcome_id: str, layer_id: str,
                  exposure_id: str, modifier_id: str | None = None,

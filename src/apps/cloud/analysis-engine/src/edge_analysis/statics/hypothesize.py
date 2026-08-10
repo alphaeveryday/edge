@@ -133,7 +133,7 @@ def render_hypothesis(t: HypothesisTuple) -> str:
 _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공한 ObjectSet과 hypothesis 도구만 사용한다.
 
 이 실행의 사건 집합은 서버가 이미 고정했다. 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출해 이 실행에서 선택 가능한 어휘를 확인한다. 사건 집합을 얻기 위해 `objectset.create`를 호출하지 마라.
-검정하려는 설계마다 `hypothesis.preview`를 호출한다. READY인 preview만 최종 제출할 수 있다.
+조건을 쓸 때는 고른 exposure_id를 넣어 `hypothesis.list_options`를 다시 호출하고, 그 결과의 modifier ID만 쓴다. 검정하려는 설계마다 `hypothesis.preview`를 호출한다. READY인 preview만 최종 제출할 수 있다.
 
 최종 JSON의 각 가설에는 `preview_handle`과 `intent`만 쓴다. `preview_handle`은 READY
 `hypothesis.preview` 결과의 `handle` 값을 그대로 써야 한다. 서버가 preview에 고정한 설계만 실행한다.

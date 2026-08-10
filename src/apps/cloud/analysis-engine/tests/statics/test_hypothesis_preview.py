@@ -43,6 +43,36 @@ def test_list_options_is_the_exact_panel_feature_registry_without_channel_vocabu
     }]
 
 
+def test_each_exposure_lists_only_compatible_modifiers_that_preview_accepts(monkeypatch):
+    runtime = _runtime()
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.edge_test",
+        lambda *_args, **_kwargs: SimpleNamespace(verdict="성립", n=42),
+    )
+    options = runtime.call("hypothesis.list_options", {"event_set_handle": "os_events"})
+    exposure = options["exposures"][0]
+    own_high = "condition:" + exposure["id"].removeprefix("feature:") + ":high_90"
+    selected = runtime.call("hypothesis.list_options", {
+        "event_set_handle": "os_events", "exposure_id": exposure["id"],
+    })
+
+    assert "modifiers" not in options
+    assert own_high not in {modifier["id"] for modifier in selected["modifiers"]}
+    assert selected["modifiers"]
+    preview = runtime.call("hypothesis.preview", {
+        "event_set_handle": "os_events",
+        "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+        "outcome_id": "outcome:daily_return",
+        "layer_id": exposure["layers"][0],
+        "exposure_id": exposure["id"],
+        "modifier_id": selected["modifiers"][0]["id"],
+    })
+    assert preview["ok"] is True
+    assert runtime.call("hypothesis.list_options", {
+        "event_set_handle": "os_events", "modifier_id": own_high,
+    })["error"]["code"] == "INVALID_ARGUMENTS"
+
+
 def test_usual_model_tool_sequence_uses_the_server_scoped_event_set_and_reaches_a_preview_handle(monkeypatch):
     runtime = HypothesisPreviewRuntime(
         object(), _EventSets(), day="2026-08-07", default_event_set_handle="os_events")
