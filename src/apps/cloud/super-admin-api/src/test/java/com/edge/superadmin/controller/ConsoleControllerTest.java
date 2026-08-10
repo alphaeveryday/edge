@@ -3,6 +3,7 @@ package com.edge.superadmin.controller;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.service.ConsoleFactsService;
 import com.edge.superadmin.support.FakeConsoleFactsRepository;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,18 @@ class ConsoleControllerTest {
 	private FakeConsoleFactsRepository repository;
 
 	private static ConsoleFacts facts(RunRow... runs) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(runs));
+		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of());
+	}
+
+	private static ConsoleFacts factsWithTask(TaskRow task) {
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(task));
+	}
+
+	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
+	private static TaskRow task(Long recordsOut, Long completenessExpected) {
+		return new TaskRow("COLLECT", "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw",
+				"price", true, "DUE", "FULFILLED", "VALID", recordsOut, 0L, completenessExpected,
+				33L, 0L, 2L, "price@v1", DAY, DAY, DB_NOW, "FRESH", null);
 	}
 
 	private MockMvc mvc(ConsoleFacts facts) {
@@ -79,11 +91,11 @@ class ConsoleControllerTest {
 
 		/* 문자열로 본다 — `jsonPath(...).doesNotExist()` 는 `"runs": null` 도 통과시켜서
 		 * "계측 없음"과 "집계 없음"을 가르지 못한다. */
-		assertThat(body).doesNotContain("\"tasks\"", "\"datasets\"", "\"outputs\"", "\"boundary\"");
+		assertThat(body).doesNotContain("\"datasets\"", "\"outputs\"", "\"boundary\"");
 		/* 🔴 **셋째 다리**: 런이 0건인 날의 `runs: []` 는 **사실**이라 키가 있어야 한다("봤는데
 		 * 없었다"). 이걸 안 재면 `NON_EMPTY` 한 줄에 키가 통째로 사라져 규칙 층이 "아직 안 봄"
 		 * 으로 읽는데 전건 초록이다 — 부재 3분 중 이 다리만 비어 있었다. */
-		assertThat(body).contains("\"runs\":[]");
+		assertThat(body).contains("\"runs\":[]", "\"tasks\":[]");
 	}
 
 	/**
@@ -156,6 +168,30 @@ class ConsoleControllerTest {
 		 * "키 있고 null" 을 못 가르므로 JSON 조각을 직접 본다. */
 		assertThat(body).contains("\"id\":\"etf-daily:2026-08-03T15:40\"")
 				.doesNotContain("\"planned\":null", "\"noRunRow\":null");
+	}
+
+	/**
+	 * 작업 축은 원장 값을 그대로 싣되, {@code TaskRow} 의 <b>뒤쪽 여섯 컬럼</b>(계약·신선도)은
+	 * 와이어에 <b>안 나간다</b> — 그건 데이터셋 축을 파생하는 재료이지 작업 축의 사실이 아니다.
+	 * 그대로 흘리면 소비자가 같은 사실을 두 축에서 읽고 한쪽만 고칠 때 갈린다.
+	 *
+	 * <p>🔴 그리고 <b>모르는 값은 null 로 실린다</b>. {@code getLong} 이 SQL NULL 을 0 으로 주는
+	 * 자리라, 접히면 "0건 처리"와 "신호 없음"이 화면에서 같은 칸이 된다.
+	 */
+	@Test
+	void 작업_축은_계약_컬럼을_안_싣고_모르는_값은_null_이다() throws Exception {
+		String body = mvc(factsWithTask(task(null, null)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.tasks[0].taskKey").value("COLLECT"))
+				/* 런 축과 같은 축으로 매인다 — 내부 id 면 와이어에서 안 이어진다. */
+				.andExpect(jsonPath("$.result.tasks[0].runId").value("etf-daily:2026-08-03T15:40"))
+				.andExpect(jsonPath("$.result.tasks[0].attempts").value(2))
+				.andReturn().getResponse().getContentAsString();
+
+		assertThat(body).contains("\"recordsOut\":null", "\"completenessExpected\":null")
+				.doesNotContain("datasetContractKey", "expectedAsOf", "actualAsOf", "collectedAt",
+						"freshnessStatus", "freshnessReason");
 	}
 
 	@Test
