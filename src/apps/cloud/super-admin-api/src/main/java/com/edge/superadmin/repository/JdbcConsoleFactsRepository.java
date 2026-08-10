@@ -1,5 +1,7 @@
 package com.edge.superadmin.repository;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Isolation;
@@ -9,13 +11,14 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
 /**
  * {@link ConsoleFactsRepository} 의 JdbcTemplate 구현(ALPHA-738).
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축</b>이다. 작업·데이터셋·산출·경계는 뒤따르는 조각이
+ * <p>지금 내는 것은 <b>조회 창 + 런 축(계획 결손 슬롯 포함)</b>이다. 작업·데이터셋·산출·경계는 뒤따르는 조각이
  * 하나씩 더한다.
  *
  * <p>날짜 축은 <b>거래일</b>({@code trading_date})이다. 다만 비거래일 런은 그 컬럼이 NULL 이라
@@ -26,6 +29,8 @@ import java.util.List;
  */
 @Repository
 public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
+
+	private static final Logger log = LoggerFactory.getLogger(JdbcConsoleFactsRepository.class);
 
 	/**
 	 * <b>이 런은 어느 날의 것인가</b> — 거래일이 있으면 거래일, 없으면(비거래일 런) 계획 시각의
@@ -85,6 +90,29 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			""".formatted(RUN_DAY, RUN_DAY);
 
 	/**
+	 * 런 행이 없는 계획 슬롯 — 이 응답에서 <b>런처럼 생긴 행</b>으로 나간다.
+	 *
+	 * <p>{@code status = 'OPEN'} 만으로는 부족해 {@code NOT EXISTS} 를 함께 건다. Reconciler 가
+	 * 아직 닫지 못한 이슈와 그 사이 생긴 런이 겹치면 같은 {@code run_key} 가 <b>두 행</b>으로
+	 * 나가고, 소비자는 그걸 식별자 충돌로 읽어 그 축 규칙을 통째로 못 돎 으로 세운다.
+	 *
+	 * <p>슬롯 날짜는 키에서 읽는다 — Reconciler 의 {@code evidence} 에는 {@code run_key} 뿐이고
+	 * {@code ops_reconciliation_issue} 에 레인·거래일 컬럼이 없다. 키 형식의 SSOT 는
+	 * data-pipeline {@code ops/planner.py} 의 {@code slot_run_key}
+	 * ({@code <lane>:<YYYY-MM-DDTHH:MM>} KST).
+	 */
+	private static final String MISSING_SLOTS_SQL = """
+			SELECT i.scope_key
+			  FROM ops_reconciliation_issue i
+			 WHERE i.issue_type = 'PLANNER_MISSING'
+			   AND i.scope = 'slot'
+			   AND i.status = 'OPEN'
+			   AND i.scope_key LIKE '%:' || ? || 'T%'
+			   AND NOT EXISTS (SELECT 1 FROM ops_pipeline_run r WHERE r.run_key = i.scope_key)
+			 ORDER BY i.scope_key
+			""";
+
+	/**
 	 * 계획만 있고 런 행이 없는 슬롯의 <b>날짜</b> — 런이 하나도 안 뜬 날을 조회 창 후보로 살린다.
 	 * 그런 날이야말로 콘솔이 열려야 하는 날이라, 런 축만 보면 기본 조회가 그 날을 건너뛴다.
 	 *
@@ -115,8 +143,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getObject("kst_today", LocalDate.class),
 				rs.getObject("run_latest", LocalDate.class)));
 		LocalDate day = date != null ? date : latestDay(meta);
-		return new ConsoleFacts(day, meta.dbNow(),
+
+		/* 두 소스가 한 축으로 합쳐진다 — 실재하는 런과, 런 행이 없는 계획 슬롯. 합친 뒤 다시
+		 * 정렬하는 이유: 각 소스가 자기 안에서만 정렬돼 있어 그냥 이어 붙이면 전체 순서가 깨진다. */
+		List<RunRow> runs = new ArrayList<>(
 				jdbc.query(RUNS_SQL, JdbcConsoleFactsRepository::mapRun, day));
+		jdbc.queryForList(MISSING_SLOTS_SQL, String.class, day.toString())
+				.forEach(runKey -> runs.add(missingSlot(runKey)));
+		runs.sort(Comparator.comparing(RunRow::runKey));
+		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs));
 	}
 
 	private record Meta(OffsetDateTime dbNow, LocalDate kstToday, LocalDate runLatest) {
@@ -175,7 +210,29 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getObject("trading_date", LocalDate.class),
 				rs.getString("orchestration_status"),
 				rs.getObject("updated_at", OffsetDateTime.class),
-				rs.getObject("hard_deadline_at", OffsetDateTime.class));
+				rs.getObject("hard_deadline_at", OffsetDateTime.class),
+				// 실재하는 런에는 "계획된 슬롯인가"를 답할 계측이 없다 — 인터페이스 주석 참조.
+				null, null);
+	}
+
+	/**
+	 * 런 행이 없는 슬롯을 런 축으로 옮긴다. 키를 못 읽으면 레인·거래일을 <b>null 로 둔다</b> —
+	 * 형식이 바뀌었을 때 잘못 자른 조각을 레인 이름이라고 우기는 쪽이 더 나쁘다.
+	 *
+	 * <p>다만 <b>조용히 넘기지는 않는다</b>(Rule 12). 여기서 못 읽히는 키는 곧 Planner 의 슬롯 키
+	 * 형식이 이 조회와 갈렸다는 뜻인데, 응답에는 "레인 미상"으로만 보여 원인이 안 남는다.
+	 */
+	private static RunRow missingSlot(String runKey) {
+		int sep = runKey.indexOf(':');
+		String lane = sep > 0 ? runKey.substring(0, sep) : null;
+		LocalDate slotDate = sep > 0 && runKey.length() >= sep + 11
+				? parseDate(runKey.substring(sep + 1, sep + 11))
+				: null;
+		if (lane == null || slotDate == null) {
+			log.warn("PLANNER_MISSING 슬롯 키를 못 읽었다: {} — planner 의 slot_run_key"
+					+ "(<lane>:<YYYY-MM-DDTHH:MM>) 형식과 갈렸는지 확인 필요", runKey);
+		}
+		return new RunRow(runKey, lane, slotDate, null, null, null, true, true);
 	}
 
 	/** 달력에 없는 날짜는 null — 못 읽는 키 하나가 조회를 죽이지 않는다. */

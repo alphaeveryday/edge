@@ -12,8 +12,8 @@ import java.util.List;
  * 뭉개지 않는 것도 {@link PipelineStatusRepository} 와 같다.
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
- * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축</b>이고, 작업·데이터셋·산출·경계는
- * 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함)</b>이고,
+ * 작업·데이터셋·산출·경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
  */
 public interface ConsoleFactsRepository {
 
@@ -34,8 +34,14 @@ public interface ConsoleFactsRepository {
 	/**
 	 * 런 하나. {@code runKey} 가 곧 사건 식별자의 대상 축이다 — 내부 {@code pipeline_run_id} 가
 	 * 아니라 이 값이라야 다른 축(작업 등)이 붙을 때 조인이 선다.
+	 *
+	 * <p>{@code planned}·{@code noRunRow} 는 <b>런 행이 없는 계획 슬롯</b>에만 채워진다
+	 * ({@code ops_reconciliation_issue PLANNER_MISSING}). 실재하는 런 행에는 {@code null} 이다 —
+	 * "스케줄 상 있어야 할 슬롯인가"를 답하는 계측이 원장에 없기 때문이고(크론 설정은 DB 밖),
+	 * 없는 것을 {@code false} 로 채우면 모름이 "계획된 적 없다"는 단정으로 뒤집힌다.
 	 */
 	record RunRow(String runKey, String lane, LocalDate tradingDate, String ledgerStatus,
-			OffsetDateTime ledgerUpdated, OffsetDateTime deadline) {
+			OffsetDateTime ledgerUpdated, OffsetDateTime deadline, Boolean planned,
+			Boolean noRunRow) {
 	}
 }

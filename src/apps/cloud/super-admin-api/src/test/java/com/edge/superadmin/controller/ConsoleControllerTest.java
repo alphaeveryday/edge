@@ -100,8 +100,8 @@ class ConsoleControllerTest {
 		 * 곧 **와이어**다. 조각 3 에서 서비스가 실제 파생 로직을 갖게 되면 그때 물리는 자리다. */
 		mvc(facts(
 				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
-						DB_NOW, DB_NOW.plusHours(1)),
-				new RunRow("news:2026-08-03T15:30", "news", DAY, "RUNNING", DB_NOW, null)))
+						DB_NOW, DB_NOW.plusHours(1), null, null),
+				new RunRow("news:2026-08-03T15:30", "news", DAY, "RUNNING", DB_NOW, null, null, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.runs.length()").value(2))
@@ -123,7 +123,7 @@ class ConsoleControllerTest {
 	@Test
 	void 런의_모르는_값은_null_로_싣는다_키를_빼지_않는다() throws Exception {
 		String body = mvc(facts(new RunRow("news:2026-08-03T15:30", "news", null, "RUNNING",
-				DB_NOW, null)))
+				DB_NOW, null, null, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andReturn().getResponse().getContentAsString();
@@ -131,6 +131,31 @@ class ConsoleControllerTest {
 		/* `jsonPath(...).doesNotExist()` 는 null 도 통과시켜 "키 있고 null" 과 "키 없음" 을 못
 		 * 가른다 — 문자열로 키의 실재를 확인한다. */
 		assertThat(body).contains("\"tradingDate\":null", "\"deadline\":null");
+	}
+
+	/**
+	 * 🔴 <b>`planned`·`noRunRow` 는 계획 슬롯에만 실린다.</b> 실재 런에 `false` 를 채우면 "계획된
+	 * 적 없다"는 <b>단정</b>이 되는데, 그걸 답할 계측이 원장에 없다(크론 설정은 DB 밖이다).
+	 * 그래서 실재 런에서는 <b>키 자체를 뺀다</b> — 이 응답에서 `@JsonInclude` 를 필드 단위로 거는
+	 * 유일한 자리이고, 클래스 단위로 올리면 다른 축의 "집계 없음(null)"까지 같이 지워진다.
+	 */
+	@Test
+	void 계획_여부는_런_행이_없는_슬롯에만_실린다() throws Exception {
+		String body = mvc(facts(
+				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
+						DB_NOW, null, null, null),
+				new RunRow("etf-daily:2026-08-03T09:00", "etf-daily", DAY, null, null, null,
+						true, true)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.runs[1].planned").value(true))
+				.andExpect(jsonPath("$.result.runs[1].noRunRow").value(true))
+				.andReturn().getResponse().getContentAsString();
+
+		/* 실재 런 쪽에 키가 **없어야** 한다. `jsonPath(...).doesNotExist()` 는 null 도 통과시켜
+		 * "키 있고 null" 을 못 가르므로 JSON 조각을 직접 본다. */
+		assertThat(body).contains("\"id\":\"etf-daily:2026-08-03T15:40\"")
+				.doesNotContain("\"planned\":null", "\"noRunRow\":null");
 	}
 
 	@Test
