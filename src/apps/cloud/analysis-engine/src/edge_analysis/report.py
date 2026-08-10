@@ -483,6 +483,47 @@ def _seal_badge(trace: dict[str, Any] | None) -> str:
     return '<span class="badge bad">봉인 불일치</span>'
 
 
+def _render_event_distribution_observations(window: dict[str, Any]) -> list[str]:
+    if "event_distribution_observations" not in window:
+        return []
+    diagnostic = window.get("event_distribution_observations") or {}
+    if not isinstance(diagnostic, dict):
+        return []
+    candidates = diagnostic.get("candidates") or []
+    if not isinstance(candidates, list):
+        return []
+    summary = diagnostic.get("summary") or {}
+    summary_keys = (("candidates", "후보"), ("linked", "연결"), ("ready", "READY"),
+                    ("submitted", "제출"), ("rendered", "렌더"))
+    bits = [f"{label} {escape(str(summary.get(key, 0)))}"
+            for key, label in summary_keys]
+    out = ["<h4>사건 분포 준비도</h4>",
+           f'<p class="meta">{" · ".join(bits)}</p>']
+    if not candidates:
+        out.append('<p class="meta">사건 후보 없음</p>')
+        return out
+    head = ("<tr><th>사건</th><th>결과</th><th>연결</th><th>Preview</th><th>사유</th>"
+            "<th>과거 표본</th><th>제출</th><th>렌더</th></tr>")
+    rows = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        reason = item.get("preview_reason") or item.get("link_reason") or ""
+        historical = ("" if item.get("historical_n") is None else
+                      f'{item["historical_n"]} / {item.get("min_n", "") or ""}')
+        values = (
+            item.get("source_event_id", ""), item.get("outcome_status", ""),
+            item.get("link_status", ""),
+            item.get("preview_status", ""), reason, historical,
+            "예" if item.get("submitted") else "아니오",
+            "예" if item.get("rendered") else "아니오",
+        )
+        rows.append("<tr>" + "".join(
+            f"<td>{escape(str(value))}</td>" for value in values) + "</tr>")
+    out.append("<table>" + head + "".join(rows) + "</table>")
+    return out
+
+
 def _render_utterance(r: dict[str, Any]) -> list[str]:
     stage = r["stage"] or {}
     out = [f'<article class="utt" id="{escape(r["result_id"])}">',
@@ -537,16 +578,19 @@ def _render_utterance(r: dict[str, Any]) -> list[str]:
     else:
         out.append("<p class=\"meta\">가설 원장 행 없음</p>")
 
-    # ③ LLM·도구 감사 trace
+    # ③ READY 사건 분포 준비도 — stage_results.window 가 정본이다.
+    window = stage.get("window") or {}
+    out.extend(_render_event_distribution_observations(window))
+
+    # ④ LLM·도구 감사 trace
     out.append("<h4>LLM·도구</h4>")
     events = trace.get("events") or []
     rendered = _render_llm(events)
     out.extend(rendered if rendered
                else ['<p class="meta">trace 이벤트 없음</p>'])
 
-    # ④ usage 합산 · 창 좌표 · 커버리지
+    # ⑤ usage 합산 · 창 좌표 · 커버리지
     usage = _usage_total(events)
-    window = stage.get("window") or {}
     meta = ["<div class=\"meta\">"]
     meta.append("usage 합산: " + (escape(json.dumps(usage, ensure_ascii=False,
                                                    sort_keys=True))

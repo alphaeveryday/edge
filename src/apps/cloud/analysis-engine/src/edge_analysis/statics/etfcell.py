@@ -72,10 +72,61 @@ def _thread_news_lines(rows: list[dict]) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _observation_payload(rows: list[dict]) -> dict:
+    """Bounded candidate diagnostics persisted under ``stage_results.window``."""
+    ordered = []
+    for row in sorted(rows, key=lambda item: str(item.get("source_event_id") or "")):
+        item = dict(row)
+        preview_status = str(item.get("preview_status") or "")
+        if item.get("rendered"):
+            outcome_status = "RENDERED"
+        elif preview_status == "READY":
+            outcome_status = ("READY_SUBMITTED" if item.get("submitted")
+                              else "READY_NOT_SUBMITTED")
+        else:
+            outcome_status = preview_status or "PREVIEW_NOT_REQUESTED"
+        item["outcome_status"] = outcome_status
+        ordered.append(item)
+    return {
+        "schema_version": 1,
+        "summary": {
+            "candidates": len(ordered),
+            "linked": sum(row.get("link_status") == "LINKED" for row in ordered),
+            "ready": sum(row.get("preview_status") == "READY" for row in ordered),
+            "submitted": sum(bool(row.get("submitted")) for row in ordered),
+            "rendered": sum(bool(row.get("rendered")) for row in ordered),
+        },
+        "candidates": ordered,
+    }
+
+
+def _event_link(argument_ids: list[str], return_universe: set[str],
+                current_returns: dict[str, float], surface_reason: str,
+                ) -> tuple[str, str | None, list[str], list[str]]:
+    universe_matches = sorted(set(argument_ids) & return_universe)
+    return_matches = sorted(set(argument_ids) & set(current_returns))
+    if surface_reason == "MARKET_RETURN_UNAVAILABLE":
+        return "UNAVAILABLE", surface_reason, universe_matches, return_matches
+    if not current_returns:
+        return "UNAVAILABLE", "NO_FINITE_EVENT_RETURNS", universe_matches, return_matches
+    if not argument_ids:
+        return "UNAVAILABLE", "NO_EVENT_ARGUMENTS", universe_matches, return_matches
+    if not universe_matches:
+        return "UNAVAILABLE", "NO_ARGUMENT_IN_PRICE_UNIVERSE", universe_matches, return_matches
+    if not return_matches:
+        return "UNAVAILABLE", "NO_ARGUMENT_WITH_CURRENT_RETURN", universe_matches, return_matches
+    if len(return_matches) > 1:
+        return ("UNAVAILABLE", "MULTIPLE_ARGUMENTS_WITH_CURRENT_RETURN",
+                universe_matches, return_matches)
+    return "LINKED", None, universe_matches, return_matches
+
+
 def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         window_start: str | None = None, window_end: str | None = None,
         summary: bool = False, window_meta: dict | None = None,
-        roll=ROLL_UNSET, current_event_returns: dict[str, float] | None = None) -> str:
+        roll=ROLL_UNSET, current_event_returns: dict[str, float] | None = None,
+        event_return_universe: tuple[str, ...] | None = None,
+        event_return_surface: dict | None = None) -> str:
     """ETF 하루 또는 요청창 하나를 설명한다.
 
     ``roll`` 은 호출자가 **이미 계산한** 구간 층 분해다(`pipeline` 의 라우팅이 쓴 것).
@@ -93,10 +144,30 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         # (`stat_tests`)에만 보존하고, 근거 포맷 구현 시 통계검정 레코드(§3)의
         # 입력이 된다. 산문 승격은 그 포맷의 렌더 계층 몫이다.
         scoped_news: list[dict] = []
-        stat_tests, hypothesis_trials = _window_paneltest(
-            lake, instrument_id, day, ask, facts, news_out=scoped_news,
-            current_event_returns=current_event_returns)
+        distribution_observations: list[dict] = []
+        try:
+            stat_tests, hypothesis_trials = _window_paneltest(
+                lake, instrument_id, day, ask, facts, news_out=scoped_news,
+                current_event_returns=current_event_returns,
+                event_return_universe=event_return_universe,
+                event_return_surface=event_return_surface,
+                observations_out=distribution_observations)
+        except Exception:
+            payload = _observation_payload(distribution_observations)
+            if window_meta is not None:
+                window_meta["event_distribution_observations"] = payload
+            from ..observability import log
+            for observation in payload["candidates"]:
+                log("event_distribution.outcome", **observation)
+            raise
+        if window_meta is not None:
+            window_meta["event_distribution_observations"] = _observation_payload(
+                distribution_observations)
         if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
+            from ..observability import log
+            for observation in _observation_payload(
+                    distribution_observations)["candidates"]:
+                log("event_distribution.outcome", **observation)
             raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
         distributions = tuple(
             EventDistributionFact(
@@ -116,6 +187,15 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                 event_distributions=distributions,
             )
         final_payload = final_explanation_payload(facts)
+        rendered_ids = {item.source_event_id for item in distributions}
+        for observation in distribution_observations:
+            observation["rendered"] = observation.get("source_event_id") in rendered_ids
+        payload = _observation_payload(distribution_observations)
+        from ..observability import log
+        for observation in payload["candidates"]:
+            log("event_distribution.outcome", **observation)
+        if window_meta is not None:
+            window_meta["event_distribution_observations"] = payload
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
         if window_meta is not None:
@@ -232,6 +312,9 @@ _VERDICT_CODE = {"성립": "ESTABLISHED", "불성립": "NOT_ESTABLISHED",
 def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                       news_out: list[dict] | None = None,
                       current_event_returns: dict[str, float] | None = None,
+                      event_return_universe: tuple[str, ...] | None = None,
+                      event_return_surface: dict | None = None,
+                      observations_out: list[dict] | None = None,
                       ) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
     """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → **레코드 버퍼**.
 
@@ -326,6 +409,11 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             f'{row.get("available_at", "")} {row.get("event_type_code", "")} '
             f'{row.get("source_event_id", "")}' for row in rows)
         discovered: list[dict] = []
+        observations = observations_out if observations_out is not None else []
+        current_returns = dict(current_event_returns or {})
+        return_universe = set(current_returns if event_return_universe is None
+                              else event_return_universe)
+        surface_reason = str((event_return_surface or {}).get("reason") or "")
         for row in rows:
             narrowed = object_runtime.call("objectset.filter", {
                 "handle": events["handle"], "field": "source_event_id",
@@ -336,8 +424,10 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                 log("hypothesis.objectset_unavailable", tool="objectset.filter", code=code)
                 return ({"stage": "propose", "verdict": "판정불가",
                          "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+            argument_ids: list[str] = []
             matched_instruments: list[str] = []
-            if current_event_returns:
+            universe_matches: list[str] = []
+            if current_returns:
                 arguments = object_runtime.call(
                     "news.get_event_arguments", {"handle": narrowed["handle"], "limit": 40})
                 if not arguments.get("ok"):
@@ -346,9 +436,11 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                         tool="news.get_event_arguments", code=code)
                     return ({"stage": "propose", "verdict": "판정불가",
                              "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
-                matched_instruments = sorted({str(item["entity_id"])
-                                              for item in arguments.get("arguments", [])
-                                              if item.get("entity_id") in current_event_returns})
+                argument_ids = sorted({str(item["entity_id"])
+                                       for item in arguments.get("arguments", [])
+                                       if item.get("entity_id")})
+            link_status, link_reason, universe_matches, matched_instruments = _event_link(
+                argument_ids, return_universe, current_returns, surface_reason)
             grounded = object_runtime.call(
                 "news.get_event_evidence", {"handle": narrowed["handle"], "limit": 20})
             if not grounded.get("ok"):
@@ -381,6 +473,23 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                                   if len(matched_instruments) == 1 else ""),
                 "evidence_id": str(chosen.get("evidence_id") or "") or None,
                 "line": f"{clock}, {title}" if clock else title,
+            })
+            observations.append({
+                "source_event_id": str(row["source_event_id"]),
+                "event_type_code": str(row.get("event_type_code") or ""),
+                "link_status": link_status,
+                "link_reason": link_reason,
+                "argument_count": len(argument_ids),
+                "price_universe_match_count": len(universe_matches),
+                "current_return_match_count": len(matched_instruments),
+                "instrument_id": (matched_instruments[0]
+                                  if len(matched_instruments) == 1 else ""),
+                "preview_status": "PREVIEW_NOT_REQUESTED",
+                "preview_reason": None,
+                "historical_n": None,
+                "min_n": None,
+                "submitted": False,
+                "rendered": False,
             })
         if news_out is not None:
             news_out.extend(discovered)
@@ -428,17 +537,29 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
     if context:
         brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
                   f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
+    def sync_preview_attempts() -> None:
+        by_event = {item["source_event_id"]: item for item in observations}
+        attempts = getattr(preview_runtime, "distribution_attempts", lambda: {})()
+        for source_event_id, attempt in attempts.items():
+            if target := by_event.get(source_event_id):
+                target.update({key: value for key, value in attempt.items()
+                               if key != "handle"})
+
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),
                                    series_families=fired, object_tools=object_tools)
     except PreviewExecutionError as e:
+        sync_preview_attempts()
         raise PipelineError(str(e)) from e
     except ModelContractError:
+        sync_preview_attempts()
         raise
     except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
+        sync_preview_attempts()
         return ({"stage": "propose", "verdict": "제안실패",
                  "reason": f"{type(e).__name__}: {str(e)[:80]}"},), ()
+    sync_preview_attempts()
     # 기각 제안은 사유째로 원장 행이 된다 — 유효 튜플이 몇 개든(0개 포함) 남긴다.
     trials: list[dict] = [
         {"stage": "REJECTED", "verdict": "REJECTED", "reason": why}
@@ -459,6 +580,10 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         distribution = resolution.distribution
         candidate = resolution.candidate
         assert distribution is not None and candidate is not None
+        target = next((item for item in observations
+                       if item["source_event_id"] == candidate.source_event_id), None)
+        if target is not None:
+            target["submitted"] = True
         records.append({
             "stage": "event_distribution",
             "verdict": "READY",
