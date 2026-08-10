@@ -55,6 +55,7 @@ cd ../envs/dev  && terraform apply
 ```
 
 - **envs/dev 는 Terraform CD 로 배포된다(ALPHA-311)**: `envs/dev/**`·`modules/**` 를 바꾼 PR 이 `terraform-plan.yml`(read-only 역할 `edge-tf-plan`)로 plan 을 PR 코멘트에 게시하고, dev 머지 시 `terraform-apply.yml`(`edge-tf-apply`, trust=`ref:refs/heads/dev`)이 apply 한다. 두 역할은 foundation `tf-cd.tf` 소유. 위 수동 apply 는 **bootstrap·foundation**(CD 대상 아님) 및 env 브레이크글래스용이다.
+  - 🔴 **`modules/rds` 는 머지 시각을 골라야 한다 — 장 마감 후에 머지하라.** 이 모듈이 `apply_immediately = true` 라(ALPHA-924) **머지 = 즉시 apply = 즉시 DB 재부팅**이고, 재부팅은 이 DB 를 쓰는 1분 레인 5종을 함께 세운다. 그리고 즉시 반영은 이번 변경만이 아니라 **AWS 대기 큐 전체**를 함께 터뜨리므로(`auto_minor_version_upgrade` 가 사람 손 없이 큐를 채울 수 있다), 머지 직전에 `aws rds describe-db-instances --db-instance-identifier edge-dev --query 'DBInstances[0].PendingModifiedValues'` 가 `{}` 인지 확인하라. 다른 모듈에는 해당 없다.
 - **envs/demo-onprem** 은 apply CD 밖이다(ADR-0033) — PR 에서 오프라인 `terraform validate`(전용 `terraform-validate-demo.yml`, creds 불필요)로만 검증하고, apply 는 수동. dev plan(`terraform-plan.yml`, OIDC creds)과 분리해 데모만 바꾼 PR 이 dev 자격/drift 에 묶이지 않게 한다. 데모 런타임(compose·sync·CloudFront 오리진)은 개통 완료(ALPHA-445·627·632 — 현황은 아래 "미구축" 절).
 - 상태는 **S3 원격**(`edge-tfstate-393229433969`, 네이티브 락). backend 는 `foundation/backend.tf`·`envs/dev/backend.tf`·`envs/demo-onprem/backend.tf`(같은 버킷, 다른 key — 데모/실클라우드 격리).
 - env 를 foundation 전에 돌리면 `data` 소스에서 실패한다 — 그게 순서를 강제하는 안전장치.
