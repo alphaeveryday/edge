@@ -23,7 +23,9 @@ public record ExplanationResponse(
 		String disclaimer,
 		OffsetDateTime publishedAt,
 		/** 스냅샷 기준시각 — 재노출(fallback)분의 기준 시점을 화면이 알 수 있게(ADR-0045 결정 3). */
-		OffsetDateTime explanationAsOf
+		OffsetDateTime explanationAsOf,
+		/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 창의 끝. 결측(구형 게시분)은 null — 소비자는 explanation_as_of 폴백. */
+		OffsetDateTime contentAsOf
 ) {
 
 	public record EtfInfo(String ticker, String name) {

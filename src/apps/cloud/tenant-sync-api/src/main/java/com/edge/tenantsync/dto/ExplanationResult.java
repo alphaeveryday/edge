@@ -22,6 +22,8 @@ public record ExplanationResult(
 		String explanationType,
 		String summary,
 		String confidenceLevel,
-		String primaryThreadId
+		String primaryThreadId,
+		/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 요청 창의 끝. 결측(구형 행·시드·EOD)은 null. */
+		Instant contentAsOf
 ) {
 }

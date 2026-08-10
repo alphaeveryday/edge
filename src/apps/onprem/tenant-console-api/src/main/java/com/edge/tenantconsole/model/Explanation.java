@@ -25,6 +25,8 @@ public record Explanation(
 		String reviewReason,
 		OffsetDateTime receivedAt,
 		OffsetDateTime explanationAsOf,
+		/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 창의 끝. 결측이면 null(표시층 as_of 폴백). */
+		OffsetDateTime contentAsOf,
 		boolean serving,
 		List<Evidence> evidence,
 		String original,

@@ -151,6 +151,7 @@ public class ExplanationService {
 				reasons.get(it.getExplanationResultId()),
 				it.getReceivedAt(),
 				it.getExplanationAsOf(),
+				it.getContentAsOf(),
 				heads.contains(it.getExplanationResultId()),
 				parseEvidence(it.getEvidences()),
 				it.getSummary(),

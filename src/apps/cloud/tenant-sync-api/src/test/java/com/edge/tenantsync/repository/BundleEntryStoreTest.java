@@ -30,7 +30,7 @@ class BundleEntryStoreTest {
 
 	@Test
 	void 본체_결측_NEW_는_조용히_넘기지_않고_즉시_실패한다() {
-		assertThatThrownBy(() -> BundleEntryStore.toEntry(row("NEW", null), List.of(), List.of()))
+		assertThatThrownBy(() -> BundleEntryStore.toEntry(row("NEW", null), List.of(), List.of(), null))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("cursor=7");
 	}
@@ -40,7 +40,7 @@ class BundleEntryStoreTest {
 		BundleEntry entry = BundleEntryStore.toEntry(new DeliveryRow(7L, "NEW", null, null,
 				"expr-1", "inst-etf-069500", "069500", "KODEX 200", LocalDate.of(2026, 7, 15),
 				Instant.parse("2026-07-15T07:30:00Z"), "PRICE_ONLY", "요약", "MEDIUM",
-				"thr-0001", "exrun-0001", "rb-2026.07.0"), List.of(), List.of());
+				"thr-0001", "exrun-0001", "rb-2026.07.0"), List.of(), List.of(), null);
 
 		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.NEW);
 		assertThat(entry.explanationResult().explanationResultId()).isEqualTo("expr-1");
@@ -62,17 +62,37 @@ class BundleEntryStoreTest {
 						"https://news.example.com/a1"),
 				new EvidenceItem("DISCLOSURE", null, "DART", null, null));
 
-		BundleEntry entry = BundleEntryStore.toEntry(row("NEW", "expr-1"), sourceEvents, evidences);
+		BundleEntry entry = BundleEntryStore.toEntry(row("NEW", "expr-1"), sourceEvents, evidences, null);
 
 		assertThat(entry.sourceEvents()).isEqualTo(sourceEvents);
 		assertThat(entry.evidences()).isEqualTo(evidences);
 	}
 
 	@Test
+	void NEW_는_콘텐츠_기준시각을_본체에_싣는다() {
+		Instant contentAsOf = Instant.parse("2026-07-15T01:30:00Z"); // 10:30 KST
+		BundleEntry entry = BundleEntryStore.toEntry(row("NEW", "expr-1"), List.of(), List.of(), contentAsOf);
+		assertThat(entry.explanationResult().contentAsOf()).isEqualTo(contentAsOf);
+	}
+
+	/** WHY(ALPHA-918): 창 끝은 KST "HH:MM" 문자열에서 합성된다 — 형식 이상·결측이 pull
+	 * 전체를 세우지 않고 그 건만 null 로 빠져야 소비자 폴백(explanation_as_of)이 성립한다. */
+	@Test
+	void 콘텐츠_기준시각_합성은_HHMM_만_받고_이상값은_null_이다() {
+		LocalDate tradeDate = LocalDate.of(2026, 7, 15);
+		assertThat(BundleEntryStore.composeContentAsOf(tradeDate, "10:30"))
+				.isEqualTo(Instant.parse("2026-07-15T01:30:00Z"));   // KST 10:30 = UTC 01:30
+		assertThat(BundleEntryStore.composeContentAsOf(tradeDate, null)).isNull();
+		assertThat(BundleEntryStore.composeContentAsOf(tradeDate, "25:99")).isNull();
+		assertThat(BundleEntryStore.composeContentAsOf(tradeDate, "2026-07-15T10:30:00")).isNull();
+		assertThat(BundleEntryStore.composeContentAsOf(null, "10:30")).isNull();
+	}
+
+	@Test
 	void 폐지된_CORRECTION_유형은_조용히_매핑하지_않고_즉시_실패한다() {
 		// 정정 전달은 계약에서 폐지됐다(ADR-0044) — NEW 로 치환돼 나가면 정정 서사가
 		// 신규로 둔갑해 전달되므로 fail-loud 가 맞다.
-		assertThatThrownBy(() -> BundleEntryStore.toEntry(row("CORRECTION", "expr-2"), List.of(), List.of()))
+		assertThatThrownBy(() -> BundleEntryStore.toEntry(row("CORRECTION", "expr-2"), List.of(), List.of(), null))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("폐지");
 	}
@@ -81,7 +101,7 @@ class BundleEntryStoreTest {
 	void INVALIDATION_은_본체_없이_대상_참조와_사유만_매핑한다() {
 		BundleEntry entry = BundleEntryStore.toEntry(new DeliveryRow(7L, "INVALIDATION",
 				"expr-target", "사유", null, null, null, null, null, null, null, null, null,
-				null, null, null), List.of(), List.of());
+				null, null, null), List.of(), List.of(), null);
 
 		assertThat(entry.deliveryType()).isEqualTo(DeliveryType.INVALIDATION);
 		assertThat(entry.targetExplanationResultId()).isEqualTo("expr-target");

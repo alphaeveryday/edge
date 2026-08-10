@@ -396,6 +396,22 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		assertThat(counts.get("BLOCKED")).isGreaterThanOrEqualTo(1);
 	}
 
+	/** WHY(ALPHA-918): 콘텐츠 기준시각은 원장 컬럼 그대로 모델에 실려야 하고, 결측(구형
+	 * 수신분)은 null 로 남아야 응답의 키 생략·UI 폴백이 성립한다. */
+	@Test
+	void 콘텐츠_기준시각은_원장_값을_싣고_결측은_null_이다() {
+		seedItem("it918-cao", "918CAO", "삼성전자", "APPROVED", "LOW", "요약", "[]",
+				OffsetDateTime.now());
+		OffsetDateTime contentAsOf = OffsetDateTime.parse("2026-08-10T10:30:00+09:00");
+		jdbc.update("UPDATE analysis_item SET content_as_of = ? WHERE explanation_result_id = 'it918-cao'",
+				contentAsOf);
+		seedItem("it918-legacy", "918LGC", "카카오", "APPROVED", "LOW", "요약", "[]",
+				OffsetDateTime.now());
+
+		assertThat(find("it918-cao").contentAsOf()).isEqualTo(contentAsOf);
+		assertThat(find("it918-legacy").contentAsOf()).isNull();
+	}
+
 	@Test
 	void 반입_상태는_오늘_반입_수와_최근_시각을_집계한다() {
 		seedItem("it607-feed", "607FED", "현대차", "AUTO_PUBLISHED", "LOW", "요약", "[]",

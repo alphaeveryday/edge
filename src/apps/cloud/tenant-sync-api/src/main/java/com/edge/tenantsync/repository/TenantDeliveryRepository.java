@@ -94,4 +94,21 @@ public interface TenantDeliveryRepository extends Repository<TenantDelivery, Ten
 			 ORDER BY "explanationRunId", "eventDate" ASC NULLS LAST, "sourceEventId"
 			""", nativeQuery = true)
 	List<RunSourceEventRow> findSourceEventRows(@Param("runIds") Collection<String> runIds);
+
+	/**
+	 * 콘텐츠 기준시각 원료(ALPHA-918) — `stage_results->'window'` 의 창 끝(KST "HH:MM").
+	 * 실시간 분봉 런은 `requested_end`, 요청창 백필 런(window_batch)은 `as_of`/`window_end`
+	 * 키를 쓰므로 COALESCE 로 두 어휘를 함께 읽는다. `findAfter`(JPQL)에 얹지 않는 이유:
+	 * stage_results 전체는 raw·trace 포함 수십 KB/행이라, 필요한 한 값만 결과 id 배치로
+	 * 뽑는다(findEvidenceRows 패턴). window 키 부재(ALPHA-854 이전 행·시드 행)는 NULL 행.
+	 */
+	@Query(value = """
+			SELECT explanation_result_id AS "explanationResultId",
+			       COALESCE(stage_results->'window'->>'requested_end',
+			                stage_results->'window'->>'as_of',
+			                stage_results->'window'->>'window_end') AS "hhmm"
+			  FROM explanation_result
+			 WHERE explanation_result_id IN (:resultIds)
+			""", nativeQuery = true)
+	List<ContentWindowRow> findContentWindowRows(@Param("resultIds") Collection<String> resultIds);
 }

@@ -135,7 +135,8 @@ public class ExplanationService {
 						.toList(),
 				disclaimer,
 				e.publishedAt(),
-				e.explanationAsOf()
+				e.explanationAsOf(),
+				e.contentAsOf()
 		);
 	}
 }

@@ -89,7 +89,8 @@ export function ExplanationsPage() {
                 <StockCell name={it.name} code={it.code} />
                 <StatusCell it={it} showServing />
                 <ConfidenceCell level={it.confidence} />
-                <td className="col-muted t-data">{it.explanationAsOf}</td>
+                {/* 콘텐츠 기준시각(ALPHA-918) — 산문이 말하는 창의 끝. 구형 수신분은 생성 시각 폴백 */}
+                <td className="col-muted t-data">{it.contentAsOf ?? it.explanationAsOf}</td>
                 <td className="col-muted t-data">{it.receivedRelative}</td>
                 <td className="text-right" style={{ color: 'var(--fg-4)' }}>
                   <Icon name="chevronRight" size={14} />

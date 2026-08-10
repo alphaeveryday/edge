@@ -23,14 +23,21 @@ public interface PublicationRepository extends Repository<PublicationEntity, Lon
 	 * 게시 시점 노출 문구를 published_summary 로 스냅샷한다(ALPHA-437) — 수정 승인은
 	 * 편집 문구, 일반 승인은 원문(analysis_item.summary)이 실린다(DDL 주석의 필수화).
 	 *
+	 * content_as_of 는 원장에서 직접 복사한다(ALPHA-918) — 자동 게시(screening-worker)와
+	 * 같은 원천. FROM analysis_item 이 붙어 원장 행 부재 시 0행인데, 승인 게시는 항상
+	 * 원장 행을 읽은 뒤라 그 경우는 원래 무결성 위반이다.
+	 *
 	 * @return 삽입된 행 수(1 = 게시, 0 = 같은 스냅샷 이중 게시).
 	 */
 	@Transactional
 	@Modifying
 	@Query(value = """
 			INSERT INTO publication (analysis_item_id, etf_ticker, trade_date, explanation_as_of,
-			                         published_summary)
-			VALUES (:analysisItemId, :etfTicker, :tradeDate, :explanationAsOf, :publishedSummary)
+			                         published_summary, content_as_of)
+			SELECT :analysisItemId, :etfTicker, :tradeDate, :explanationAsOf, :publishedSummary,
+			       ai.content_as_of
+			FROM analysis_item ai
+			WHERE ai.explanation_result_id = :analysisItemId
 			ON CONFLICT (etf_ticker, trade_date, explanation_as_of) WHERE status = 'PUBLISHED'
 			DO NOTHING
 			""", nativeQuery = true)

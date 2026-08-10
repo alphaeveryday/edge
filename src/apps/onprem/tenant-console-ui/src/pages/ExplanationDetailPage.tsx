@@ -76,8 +76,9 @@ export function ExplanationDetailPage() {
           </div>
           <div>
             <div className="t-label">기준시각</div>
+            {/* 콘텐츠 기준시각(ALPHA-918) — 산문이 말하는 창의 끝. 구형 수신분은 생성 시각 폴백 */}
             <div className="num mt-1.5" style={{ fontSize: 12 }}>
-              {it.explanationAsOf}
+              {it.contentAsOf ?? it.explanationAsOf}
             </div>
           </div>
           <div>

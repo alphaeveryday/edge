@@ -56,7 +56,7 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	private int upsertItem(String id, String ticker, String status) {
 		return items.upsert(id, "instr-" + id, ticker, "KODEX 200", TRADE_DATE,
 				OffsetDateTime.parse("2026-07-15T16:00:00+09:00"), "EVENT_SUPPORTED", "요약 " + id, null,
-				"MEDIUM", null, "[]", 1L, status);
+				"MEDIUM", null, "[]", 1L, status, null);
 	}
 
 	@Test
@@ -100,6 +100,27 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 		assertThat(jdbc.queryForObject(
 				"SELECT explanation_as_of FROM publication WHERE analysis_item_id = 'er-3b'",
 				OffsetDateTime.class)).isEqualTo(AS_OF_2);
+	}
+
+	/** WHY(ALPHA-918): 콘텐츠 기준시각은 게시 시점에 원장에서 복사돼야 서빙(publication-api)이
+	 * 원장 재조인 없이 읽는다 — explanation_as_of 복사와 같은 규율. 원장 결측(구형 수신분)은
+	 * NULL 그대로 전파돼야 소비자 폴백이 성립한다. */
+	@Test
+	void publish_는_원장의_content_as_of_를_복사하고_결측은_NULL_전파한다() {
+		OffsetDateTime contentAsOf = OffsetDateTime.parse("2026-07-15T10:30:00+09:00");
+		items.upsert("er-cao", "instr-er-cao", "069500", "KODEX 200", TRADE_DATE,
+				AS_OF_1, "EVENT_SUPPORTED", "요약", null, "MEDIUM", null, "[]", 1L,
+				"AUTO_PUBLISHED", contentAsOf);
+		assertThat(publications.publish("er-cao", "069500", TRADE_DATE, AS_OF_1)).isEqualTo(1);
+		assertThat(jdbc.queryForObject(
+				"SELECT content_as_of FROM publication WHERE analysis_item_id = 'er-cao'",
+				OffsetDateTime.class)).isEqualTo(contentAsOf);
+
+		upsertItem("er-cao-null", "069500", "AUTO_PUBLISHED"); // content_as_of 미지정(null)
+		assertThat(publications.publish("er-cao-null", "069500", TRADE_DATE, AS_OF_2)).isEqualTo(1);
+		assertThat(jdbc.queryForObject(
+				"SELECT content_as_of FROM publication WHERE analysis_item_id = 'er-cao-null'",
+				OffsetDateTime.class)).isNull();
 	}
 
 	@Test

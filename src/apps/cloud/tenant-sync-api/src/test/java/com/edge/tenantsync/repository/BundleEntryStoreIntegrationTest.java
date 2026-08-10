@@ -104,6 +104,42 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		// lineage 미시드 — 근거 없는 런은 두 배열 다 비어야 한다(남의 근거·출처를 얻으면 안 된다).
 		assertThat(entry.sourceEvents()).isEmpty();
 		assertThat(entry.evidences()).isEmpty();
+		// stage_results 미시드(구형 행) — 콘텐츠 기준시각은 null 폴백이다(ALPHA-918).
+		assertThat(entry.explanationResult().contentAsOf()).isNull();
+	}
+
+	/** WHY(ALPHA-918): 콘텐츠 기준시각은 산문이 쓴 창 값(stage_results->'window')에서만 와야
+	 * 한다 — 실시간 런(requested_end)·백필 런(as_of) 두 키 어휘를 다 읽고, 형식 이상은 그
+	 * 건만 null 로 빠져야 한 건의 이상값이 pull 전체를 세우지 않는다. */
+	@Test
+	void NEW_전달은_창_끝을_콘텐츠_기준시각으로_합성하고_이상값은_null_이다() {
+		Instant asOf = OffsetDateTime.parse("2026-07-15T18:30:00+09:00").toInstant();
+		seedRun("it-run-1", asOf);
+		seedResult("it-res-rt", "it-run-1", LocalDate.of(2026, 7, 15), asOf, null);
+		setStageWindow("it-res-rt", "{\"window\": {\"requested_start\": \"10:05\", \"requested_end\": \"10:30\"}}");
+		seedRun("it-run-2", asOf.plusSeconds(1));
+		seedResult("it-res-bf", "it-run-2", LocalDate.of(2026, 7, 15), asOf.plusSeconds(1), null);
+		setStageWindow("it-res-bf", "{\"window\": {\"window_start\": \"09:00\", \"window_end\": \"15:30\", \"as_of\": \"15:30\"}}");
+		seedRun("it-run-3", asOf.plusSeconds(2));
+		seedResult("it-res-bad", "it-run-3", LocalDate.of(2026, 7, 15), asOf.plusSeconds(2), null);
+		setStageWindow("it-res-bad", "{\"window\": {\"requested_end\": \"이상값\"}}");
+		seedDelivery(tenantId, 1, "NEW", "it-res-rt", null, null);
+		seedDelivery(tenantId, 2, "NEW", "it-res-bf", null, null);
+		seedDelivery(tenantId, 3, "NEW", "it-res-bad", null, null);
+
+		List<BundleEntry> entries = repository.findAfter(tenantId, 0, 10);
+
+		assertThat(entries).hasSize(3);
+		assertThat(entries.get(0).explanationResult().contentAsOf())
+				.isEqualTo(OffsetDateTime.parse("2026-07-15T10:30:00+09:00").toInstant());
+		assertThat(entries.get(1).explanationResult().contentAsOf())
+				.isEqualTo(OffsetDateTime.parse("2026-07-15T15:30:00+09:00").toInstant());
+		assertThat(entries.get(2).explanationResult().contentAsOf()).isNull();
+	}
+
+	private void setStageWindow(String resultId, String stageResultsJson) {
+		jdbc.update("UPDATE explanation_result SET stage_results = ?::jsonb WHERE explanation_result_id = ?",
+				stageResultsJson, resultId);
 	}
 
 	@Test

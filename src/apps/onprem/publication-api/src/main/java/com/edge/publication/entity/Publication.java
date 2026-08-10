@@ -39,6 +39,9 @@ public class Publication {
 	// 스냅샷 기준시각 — 표시 규칙 "유효 최신 승리"의 정렬 축(ADR-0045 결정 3, ALPHA-743).
 	private OffsetDateTime explanationAsOf;
 
+	// 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 창의 끝, 게시 시 원장에서 복사. 구형 게시분은 null.
+	private OffsetDateTime contentAsOf;
+
 	// FK analysis_item_id → analysis_item.explanation_result_id(대상 PK 라 referencedColumnName 생략).
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "analysis_item_id")
@@ -73,6 +76,10 @@ public class Publication {
 
 	public OffsetDateTime getExplanationAsOf() {
 		return explanationAsOf;
+	}
+
+	public OffsetDateTime getContentAsOf() {
+		return contentAsOf;
 	}
 
 	public AnalysisItem getAnalysisItem() {

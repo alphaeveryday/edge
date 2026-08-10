@@ -115,6 +115,9 @@ public final class DeliveryBundleParser {
 	}
 
 	private static DeliveryEntry.ExplanationResult parseResult(JsonNode result) {
+		// 콘텐츠 기준시각(ALPHA-918) — optional: 구형 번들·EOD 레인은 키 부재/null.
+		// 값이 있으면 형식은 계약(date-time)이라 파싱 실패는 fail-loud 가 맞다(explanation_as_of 동일).
+		String contentAsOf = strictString(result, "content_as_of");
 		return new DeliveryEntry.ExplanationResult(
 				strictString(result, "explanation_result_id"),
 				strictString(result, "etf_instrument_id"),
@@ -126,6 +129,7 @@ public final class DeliveryBundleParser {
 				strictString(result, "summary"),
 				strictString(result, "headline"),
 				result.path("confidence_level").asString(null),
-				result.path("primary_thread_id").asString(null));
+				result.path("primary_thread_id").asString(null),
+				contentAsOf == null ? null : OffsetDateTime.parse(contentAsOf));
 	}
 }
