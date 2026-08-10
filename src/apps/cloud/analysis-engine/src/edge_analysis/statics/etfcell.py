@@ -237,7 +237,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
          부르지 않는다 - 재료 없는 가설은 소원이고, 호출 자체가 비용이다.
     """
     from ..observability import log
-    from .hypothesize import propose
+    from .hypothesize import _EVENT_DISTRIBUTION_PREVIEW_SYSTEM, propose
     from .interval import _etypes, thread_context
     from .model_contract import ModelContractError
     from .paneltest import FEATURES, Z_ANOM, edge_tests, series_z
@@ -279,14 +279,6 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             log("hypothesis.objectset_unavailable", tool="news.list_events", code=code)
             return ({"stage": "propose", "verdict": "판정불가",
                      "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
-        from .hypothesis_preview import HypothesisPreviewRuntime
-        preview_runtime = HypothesisPreviewRuntime(
-            lake, object_runtime, day=day, default_event_set_handle=events["handle"])
-        object_tools = {
-            "specs": [*object_runtime.tool_specs(), *preview_runtime.tool_specs()],
-            "call": preview_runtime.call,
-            "resolve_preview": preview_runtime.resolve,
-        }
         rows = events.get("events", [])
         thread_by_event: dict[str, str] = {}
         for thread in threads.get("threads", []):
@@ -363,6 +355,22 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             })
         if news_out is not None:
             news_out.extend(discovered)
+        from .hypothesis_preview import EventCandidate, HypothesisPreviewRuntime
+        preview_runtime = HypothesisPreviewRuntime(
+            lake, object_runtime, day=day, default_event_set_handle=events["handle"],
+            candidates=tuple(EventCandidate(
+                source_event_id=row["source_event_id"],
+                thread_id=str(row.get("thread_id") or row["source_event_id"]),
+                instrument_id=instrument_id,
+                title=row["title"], available_at=row["available_at"],
+            ) for row in discovered),
+        )
+        object_tools = {
+            "specs": [*object_runtime.tool_specs(), *preview_runtime.tool_specs()],
+            "call": preview_runtime.call,
+            "resolve_preview": preview_runtime.resolve,
+            "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM,
+        }
     except Exception as e:                      # noqa: BLE001 - structured abstention
         log("hypothesis.objectset_unavailable", error=f"{type(e).__name__}: {str(e)[:80]}")
         return ({"stage": "propose", "verdict": "판정불가",
@@ -409,7 +417,28 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
 
     from dataclasses import asdict
     records: list[dict] = []
-    for t, r in edge_tests(lake, tuples, day, cell_instrument_id=instrument_id):
+    causal_tuples = []
+    for t in tuples:
+        resolution = preview_runtime.distribution_resolution(t.preview_handle)
+        if resolution is None:
+            causal_tuples.append(t)
+            continue
+        distribution = resolution.distribution
+        candidate = resolution.candidate
+        assert distribution is not None and candidate is not None
+        records.append({
+            "stage": "event_distribution",
+            "verdict": "READY",
+            "preview_handle": t.preview_handle,
+            "source_event_id": distribution.source_event_id,
+            "thread_id": candidate.thread_id,
+            "event_type_code": distribution.event_type_code,
+            "n": distribution.n,
+            "mean": distribution.mean,
+            "today": distribution.today,
+            "percentile": distribution.percentile,
+        })
+    for t, r in edge_tests(lake, causal_tuples, day, cell_instrument_id=instrument_id):
         reason = (r.reason if r.verdict not in ("성립", "불성립")
                   else ("" if r.applies_today or r.verdict == "불성립"
                         else _no_apply_reason(r)))

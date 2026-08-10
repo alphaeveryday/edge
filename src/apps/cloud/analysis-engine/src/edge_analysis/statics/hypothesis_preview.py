@@ -8,11 +8,80 @@ from dataclasses import dataclass
 from typing import Any
 
 from .paneltest import FEATURES, LAYER_EXPOSURES, edge_test
-from .vocab import (CHANNELS, Condition, ExposureSource, HypothesisTuple,
+from .vocab import (CHANNELS, MIN_N, Condition, ExposureSource, HypothesisTuple,
                     Trigger)
 
 
 _OUTCOME_ID = "outcome:daily_return"
+_EVENT_DISTRIBUTION_OUTCOME_ID = "outcome:market_adjusted_return_day_0"
+
+
+@dataclass(frozen=True, slots=True)
+class EventDistributionPreview:
+    """One current event and the PIT-safe event-day return distribution behind it."""
+
+    source_event_id: str
+    instrument_id: str
+    event_type_code: str
+    n: int
+    mean: float
+    today: float
+    percentile: float
+
+
+@dataclass(frozen=True, slots=True)
+class EventCandidate:
+    """One deduplicated current news thread that can anchor an event distribution."""
+
+    source_event_id: str
+    thread_id: str
+    instrument_id: str
+    title: str
+    available_at: str
+
+
+def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str, day: str,
+                               as_of: str, min_n: int) -> EventDistributionPreview | None:
+    """Return no preview unless one current anchor and its comparable history exist."""
+    anchor = lake.con.execute("""
+        SELECT DISTINCT instrument_id, event_type_code
+        FROM v_event
+        WHERE source_event_id = ? AND instrument_id = ?
+          AND trade_date = CAST(? AS DATE)
+          AND available_at <= CAST(? AS TIMESTAMP)
+    """, [source_event_id, instrument_id, day, as_of]).fetchall()
+    if len(anchor) != 1:
+        return None
+    instrument_id, event_type_code = map(str, anchor[0])
+    historical = lake.con.execute("""
+        SELECT DISTINCT e.instrument_id, e.trade_date, d.ar
+        FROM v_event e
+        JOIN v_daily d
+          ON d.instrument_id = e.instrument_id AND d.trade_date = e.trade_date
+        WHERE e.event_type_code = ?
+          AND e.trade_date < CAST(? AS DATE)
+          AND e.available_at <= CAST(? AS TIMESTAMP)
+          AND d.ar IS NOT NULL
+    """, [event_type_code, day, as_of]).fetchall()
+    if len(historical) < min_n:
+        return None
+    today = lake.con.execute("""
+        SELECT ar FROM v_daily
+        WHERE instrument_id = ? AND trade_date = CAST(? AS DATE) AND ar IS NOT NULL
+    """, [instrument_id, day]).fetchall()
+    if len(today) != 1:
+        return None
+    values = [float(row[2]) for row in historical]
+    observed = float(today[0][0])
+    return EventDistributionPreview(
+        source_event_id=source_event_id,
+        instrument_id=instrument_id,
+        event_type_code=event_type_code,
+        n=len(values),
+        mean=sum(values) / len(values),
+        today=observed,
+        percentile=sum(value <= observed for value in values) / len(values),
+    )
 _LAYER_LABELS = {
     "고유": "시장·업종 조정 수익률",
     "섹터": "시장 조정 수익률",
@@ -62,7 +131,8 @@ class HypothesisPreviewRuntime:
     """One-run option catalog and readiness preview for ``paneltest.edge_test``."""
 
     def __init__(self, lake, event_sets, *, day: str,
-                 default_event_set_handle: str = "") -> None:
+                 default_event_set_handle: str = "",
+                 candidates: tuple[EventCandidate, ...] | None = None) -> None:
         self._lake = lake
         self._event_sets = event_sets
         self._day = day
@@ -70,10 +140,37 @@ class HypothesisPreviewRuntime:
         self.as_of = getattr(event_sets, "as_of", "")
         self._run_id = secrets.token_hex(12)
         self._previews: dict[str, PreviewResolution] = {}
+        grouped: dict[str, EventCandidate] = {}
+        for candidate in candidates or ():
+            prior = grouped.get(candidate.thread_id)
+            if prior is None or (candidate.available_at, candidate.title,
+                                 candidate.source_event_id) > (
+                                     prior.available_at, prior.title,
+                                     prior.source_event_id):
+                grouped[candidate.thread_id] = candidate
+        self._candidates = tuple(grouped[key] for key in sorted(grouped)) if candidates is not None else None
+        self._candidate_by_id = {
+            self._candidate_id(candidate): candidate for candidate in self._candidates or ()
+        }
+
+    def _candidate_id(self, candidate: EventCandidate) -> str:
+        raw = (f"{self._run_id}:{candidate.thread_id}:{candidate.instrument_id}:"
+               f"{candidate.source_event_id}")
+        return "candidate_" + hashlib.sha256(raw.encode()).hexdigest()[:20]
 
     def tool_specs(self) -> list[dict[str, Any]]:
         handle = {"type": "string", "minLength": 16, "maxLength": 64}
         option = {"type": "string", "minLength": 1, "maxLength": 200}
+        if self._candidates is not None:
+            return [
+                {"name": "hypothesis.list_options",
+                 "description": "List current deduplicated event candidates and measurable outcomes.",
+                 "input_schema": _schema({}, ())},
+                {"name": "hypothesis.preview",
+                 "description": "Compute the selected event type's historical event-day return distribution.",
+                 "input_schema": _schema({"candidate_id": option, "outcome_id": option},
+                                         ("candidate_id", "outcome_id"))},
+            ]
         return [
             {"name": "hypothesis.list_options",
              "description": "List the current run's vocabulary. Omit event_set_handle for the server-owned set; pass one exposure_id to list only its compatible modifiers.",
@@ -91,6 +188,8 @@ class HypothesisPreviewRuntime:
         ]
 
     def call(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
+        if self._candidates is not None:
+            return self._call_distribution(name, arguments)
         operations = {
             "hypothesis.list_options": (self._list_options, {"event_set_handle", "exposure_id"}, set()),
             "hypothesis.preview": (
@@ -124,6 +223,84 @@ class HypothesisPreviewRuntime:
     @staticmethod
     def _error(code: str, message: str) -> dict[str, Any]:
         return {"ok": False, "error": {"code": code, "message": message}}
+
+    def _call_distribution(self, name: str,
+                           arguments: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(arguments, dict):
+            return self._error("INVALID_ARGUMENTS", "arguments must be an object")
+        if name == "hypothesis.list_options":
+            if arguments:
+                return self._error("INVALID_ARGUMENTS", "arguments do not match this tool")
+            return self._list_distribution_options()
+        if name == "hypothesis.preview":
+            if set(arguments) != {"candidate_id", "outcome_id"}:
+                return self._error("INVALID_ARGUMENTS", "arguments do not match this tool")
+            return self._preview_distribution(**arguments)
+        return self._event_sets.call(name, arguments)
+
+    def _list_distribution_options(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "event_candidates": [
+                {"id": self._candidate_id(candidate),
+                 "label": f"{candidate.available_at[11:16]}, {candidate.title}"
+                 if len(candidate.available_at) >= 16 else candidate.title}
+                for candidate in self._candidates or ()
+            ],
+            "outcomes": [{
+                "id": _EVENT_DISTRIBUTION_OUTCOME_ID,
+                "label": "사건 당일 시장 초과수익률",
+            }],
+        }
+
+    def _preview_distribution(self, candidate_id: str, outcome_id: str) -> dict[str, Any]:
+        candidate = self._candidate_by_id.get(candidate_id)
+        if candidate is None or outcome_id != _EVENT_DISTRIBUTION_OUTCOME_ID:
+            return self._error("OPTION_NOT_ALLOWED", "candidate or outcome is not available")
+        distribution = event_distribution_preview(
+            self._lake, source_event_id=candidate.source_event_id,
+            instrument_id=candidate.instrument_id, day=self._day,
+            as_of=self.as_of.replace("T", " "), min_n=MIN_N,
+        )
+        recipe = {"run_id": self._run_id, "candidate_id": candidate_id,
+                  "outcome_id": outcome_id}
+        handle = "hpr_" + hashlib.sha256(json.dumps(
+            recipe, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:24]
+        ready = distribution is not None
+        summary = (f"{candidate.title} 사건의 같은 유형 과거 사건일 시장 초과수익률 분포를 "
+                   "확인합니다.")
+        carrier = None
+        if distribution is not None:
+            feature = sorted(FEATURES)[0]
+            carrier = HypothesisTuple(
+                conditions=(), trigger=Trigger("점", distribution.event_type_code),
+                channel=sorted(CHANNELS)[0],
+                exposure=ExposureSource("속성", feature[0], feature[1]),
+                outcome="수익률", layer="고유",
+            )
+        self._previews[handle] = PreviewResolution(
+            handle, carrier, summary, ready, distribution=distribution,
+            candidate=candidate,
+        )
+        return {
+            "ok": True,
+            "handle": handle,
+            "available": ready,
+            "status": "READY" if ready else "UNAVAILABLE",
+            "summary": summary,
+            "method": "동일 사건 유형의 과거 사건일 시장 초과수익률 분포",
+            **({"sample": {"historical_event_observations": distribution.n}}
+               if distribution is not None else {}),
+        }
+
+    def distribution(self, handle: str) -> EventDistributionPreview | None:
+        preview = self._previews.get(handle)
+        return None if preview is None else preview.distribution
+
+    def distribution_resolution(self, handle: str) -> "PreviewResolution | None":
+        preview = self._previews.get(handle)
+        return preview if preview is not None and preview.distribution is not None else None
 
     def _validated_preview_retry(self, arguments: dict[str, Any]) -> dict[str, str] | None:
         """Keep only IDs the server catalog validates for the default event scope."""
@@ -246,7 +423,7 @@ class HypothesisPreviewRuntime:
         if not isinstance(handle, str) or handle not in self._previews:
             raise PreviewResolutionError("UNKNOWN_PREVIEW_HANDLE")
         preview = self._previews[handle]
-        if not preview.ready:
+        if not preview.ready or preview.hypothesis is None:
             raise PreviewResolutionError("PREVIEW_NOT_READY")
         return preview
 
@@ -308,9 +485,11 @@ class _OptionError(ValueError):
 @dataclass(frozen=True, slots=True)
 class PreviewResolution:
     handle: str
-    hypothesis: HypothesisTuple
+    hypothesis: HypothesisTuple | None
     summary: str
     ready: bool
+    distribution: EventDistributionPreview | None = None
+    candidate: EventCandidate | None = None
 
 
 class PreviewResolutionError(ValueError):
@@ -319,4 +498,5 @@ class PreviewResolutionError(ValueError):
         super().__init__(code)
 
 
-__all__ = ["HypothesisPreviewRuntime", "PreviewResolution", "PreviewResolutionError"]
+__all__ = ["EventCandidate", "EventDistributionPreview", "HypothesisPreviewRuntime",
+           "PreviewResolution", "PreviewResolutionError", "event_distribution_preview"]
