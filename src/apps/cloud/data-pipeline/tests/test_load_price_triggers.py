@@ -603,7 +603,7 @@ def test_뿌리_밖_ETF_를_지목한_단일_실행은_fail_loud(tmp_path, monke
     `missing_holdings`(유실 아님)로 잡혀 **exit 0 · 트리거 0건**으로 끝난다. 오타 티커와
     정확히 같은 실패(요청한 백필이 수행 안 된 걸 탐지 못 함)라 처방도 같아야 한다.
 
-    참조 계열 48종이 바로 운영자가 `--etf-ticker` 로 지목할 법한 집합이다.
+    참조 계열 47종이 바로 운영자가 `--etf-ticker` 로 지목할 법한 집합이다.
     """
     storage = LocalStorage(tmp_path)
     _default_holdings(storage, etf="102970")

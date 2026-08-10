@@ -166,7 +166,7 @@ def test_no_holdings_still_fails_loud(tmp_path):
 
 def test_settings_wiring_reaches_the_universe(tmp_path):
     # WHY: build() 만 직접 부르는 테스트는 **기능이 통째로 무력화된 채 초록으로 도는**
-    #      경우를 못 잡는다 — main() 이 설정에서 목록을 안 꺼내면 섹터 후보 48종이
+    #      경우를 못 잡는다 — main() 이 설정에서 목록을 안 꺼내면 섹터 후보 47종이
     #      universe.json 에서 조용히 사라지고 어느 테스트도 실패하지 않는다.
     settings = SimpleNamespace(
         krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),

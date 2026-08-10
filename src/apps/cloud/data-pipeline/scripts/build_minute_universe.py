@@ -96,12 +96,19 @@ def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Unive
     # 봉조차 못 받아 **옮기기 전보다 나빠진다**(참조 계열이었을 땐 봉은 받았다).
     # 그래서 겹침(Rule 7)과 같은 급으로 거부한다 — 사람이 순서를 지키게 만드는 것은
     # 문서가 아니라 여기다(Rule 12).
+    # ⚠️ **1종 결손이 전면 차단으로 승격된다** — 폐지·거래정지·장기 수집실패로 어떤 ETF 가
+    # `UNIVERSE_LOOKBACK_PARTITIONS` 파티션을 넘겨 결손이면 universe 재생성 자체가 막히고,
+    # 탈출구는 etf_map 편집뿐이다(`--allow-missing` 류를 일부러 안 뒀다). 의도한 값이다:
+    # 여기서 통과시키면 그 ETF 가 **조용히** 사라지는데, 그건 급할 때 아무도 안 본다.
     if orphan := sorted(set(expected_etfs or ()) - judged):
         raise SystemExit(
             f"etf_map 이 선언했는데 canonical KR holdings 에 없는 ETF: {orphan} — 이대로 "
             f"만들면 이 종목들이 universe 세 축 어디에도 안 실려 1분봉조차 수집되지 않는다. "
-            f"KRX holdings 수집(일배치 15:40 런의 CollectKrxEtf → normalize)이 착지한 뒤에 "
-            f"다시 돌려라. 수집 대상에서 뺄 생각이면 etf_map 에서 지워라"
+            f"순서는 ①새 sources.toml 이 든 **이미지 배포**(etf_map 은 이미지 동봉 config 가 "
+            f"정본이라 env 로 못 넘긴다) → ②그 뒤 일배치 15:40 런의 CollectKrxEtf → "
+            f"NormalizeEtf 착지 → ③여기 재실행이다. ①을 건너뛰면 그 런도 옛 목록으로 "
+            f"수집해 다음 날도 같은 자리에 선다. ②가 실패한 날은 trdDd 소급 수단이 없어 "
+            f"다음 런을 기다려야 한다. 수집 대상에서 뺄 생각이면 etf_map 에서 지워라"
         )
     etf_ids = sorted(judged)
     everything = set(_kr_holdings_universe(storage, expected_etfs=expected_etfs))
