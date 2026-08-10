@@ -20,6 +20,7 @@ Table "analysis_item" {
   "status" varchar(20) [not null]
   "received_at" timestamptz [not null]
   "updated_at" timestamptz [not null]
+  "content_as_of" timestamptz
 }
 
 Table "analysis_item_status_history" {
@@ -90,6 +91,7 @@ Table "publication" {
   "unpublish_reason" text
   "unpublished_by" bigint
   "explanation_as_of" timestamptz [not null]
+  "content_as_of" timestamptz
 }
 
 Table "received_bundle" {
