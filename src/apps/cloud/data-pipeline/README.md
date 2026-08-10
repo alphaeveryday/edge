@@ -160,11 +160,12 @@
 > 어휘는 여전히 job 큐 3종이다 — 트리거 DLQ 는 job 테이블이 없어 대사 대상이 아니다.
 > 분석 엔진은 `analyze --trigger-id` 로 분봉 트리거를 단건 소비한다 — 대상 ETF·
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
-> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 9종
+> AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 10종
 > price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713) +
 > news-worker(ALPHA-717) + disclosure-worker(ALPHA-875 — 한 window 가 체인 전체) +
 > inav-worker(ALPHA-882 — 장중 iNAV 생산자. 소비자가 없어
-> 큐는 안 늘어난다) + analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
+> 큐는 안 늘어난다) + sector-index-worker(ALPHA-887 — 업종지수 45종 생산자) +
+> analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
 > apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
@@ -1621,18 +1622,21 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 앱키 전역이라 어차피 하나다). ⚠️ `[minute_price_worker]` 가 아닌 이유는 그 섹션이
 # `sources.toml` 에 없어서다 — 전부 env 라, 그걸 쓰면 업종지수와 무관한 필수 필드
 # (`trigger_schema_version`·`destination`)까지 주입해야 설정이 로드된다.
-# ⚠️ 상주 배선(ECS 서비스)은 **없다** — iNAV 와 같이 bounded 수동 실행이다.
+# ⚠️ 상주 배선(ECS 서비스)이 **있다**(ALPHA-887 — `sector-index-worker`. iNAV 와 같이
+# 세션 오케스트레이션이 desired_count 를 올리고 내린다). 아래 명령은 그 배선과 별개인
+# **수동 확인 게이트**다 — 상주 태스크가 이미 fence 를 쥐고 있으면 window 를 못 잡는다.
 # --max-ticks 는 확인 게이트다: WINDOW_FAILED 가 있거나 **한 window 도 못 봤으면 exit 1**.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
   python -m data_pipeline.run sector-index-worker --session-date 2026-08-10 --max-ticks 3
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882) — 상주 서비스 9종의 desired_count
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882·887) — 상주 서비스 10종의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
-# ⚠️ **`--dataset` 은 구동 레인(price_minute)만 받는다.** news_minute·etf_inav_minute 은
-# 어휘엔 있어도 인자로는 거부된다(**exit 1** — 실측).
+# ⚠️ **`--dataset` 은 구동 레인(price_minute)만 받는다.** 선택 레인 넷(news_minute·
+# disclosure_minute·etf_inav_minute·sector_index_minute)은 어휘엔 있어도 인자로는
+# 거부된다(**exit 1** — 실측).
 #   ⚠️ 같은 부류의 오류에 `plan-minute-session` 은 2 를 낸다(어휘 밖 dataset). 이쪽은
 #   `SystemExit(문자열)` 이라 1 로 떨어지는 것이고 **의도된 구분이 아니다** — 정리 대상.
 #   여기서 올리고 내리는
@@ -1642,8 +1646,11 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 #   ⚠️ **자기 워커를 소유해도 이 조건은 안 풀린다**(ALPHA-882) — 소유와 구동 레인은
 #   다른 축이다(`states.SCALED_DATASETS`). news_minute 이 news-worker 를, etf_inav_minute
 #   이 inav-worker 를 소유하는 지금도 둘 다 인자로는 못 온다.
-# **두 레인 다 이 명령에 얹혀 계획·드레인된다** — 인자가 아니라 아래 토글 env 로 켠다
-# (`MINUTE_SESSION_NEWS_SOURCE_GROUP`·`MINUTE_SESSION_INAV_SOURCE_GROUP`). terraform 의
+# **네 레인 다 이 명령에 얹혀 계획·드레인된다** — 인자가 아니라 아래 토글 env 로 켠다
+# (`MINUTE_SESSION_{NEWS,DISCLOSURE,INAV,SECTOR_INDEX}_SOURCE_GROUP`). ⚠️ **토글 env 가
+# 없는 레인은 계획도 스케일도 안 된다** — 그 레인만 조용히 빠진 채 세션이 선다
+# (`session_ops._OPTIONAL_LANES`). 손으로 칠 때 아래 예시에서 한 쌍을 빼면 그 결과다.
+# terraform 의
 # `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만, 손으로 치던
 # 사람은 `--dataset` 에서 막힌다.
 #
@@ -1659,8 +1666,12 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
+MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP=dart \
+MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES=edge-dev-data-pipeline-disclosure-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
 MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
+MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP=kis \
+MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES=edge-dev-data-pipeline-sector-index-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group kis --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
@@ -1685,7 +1696,7 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
 
 배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **21개**(daily 1·뉴스 2·
 장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2 — 공시 10 은 DISABLED) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
-(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 9종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
+(전용 IAM 역할 — 레이크 읽기 + 상주 서비스 10종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환, 공시·장중 수급은 처음부터). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
 `ops_` 접두사).
