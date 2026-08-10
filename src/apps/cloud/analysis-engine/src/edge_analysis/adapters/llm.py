@@ -83,7 +83,7 @@ def _first_object(text: str) -> dict[str, Any]:
 class DeepSeekClient:
     """파싱된 JSON 객체를 반환하는 OpenAI 호환 DeepSeek 채팅 클라이언트."""
 
-    def __init__(self, api_key: str, model: str, timeout: int = 180) -> None:
+    def __init__(self, api_key: str, model: str, timeout: int = 60) -> None:
         """API 키·모델·타임아웃을 보관한다."""
         self._api_key = api_key
         self._model = model
