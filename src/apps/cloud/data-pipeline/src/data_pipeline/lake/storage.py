@@ -587,7 +587,7 @@ def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:
     않으므로 config 에서 뺀 ETF 가 소급 상한만큼 살아 있다. (2) **참조 계열 ETF** — 층
     분해의 겹침 게이트가 명부를 필요로 해서 받는 계열로, 판정·적재·탐지 축이 아니다.
     1분 레인은 이미 축을 갈라 뒀고(`[minute_universe].sector_etf_ids`, ALPHA-842) 일배치
-    수집 축의 편입은 ALPHA-855 다 — 그때 이 파티션에 48종이 들어온다. 안 거르면 마스터에
+    수집 축의 편입은 ALPHA-855 다 — 그때 이 파티션에 47종이 들어온다. 안 거르면 마스터에
     없는 ETF 가 매 런 `failed_records` 로 잡혀 원장이 **영구 INCOMPLETE** 가 되거나
     (`load_etf_holdings`·`load_price_triggers`), 분석 유니버스 밖 종목이 멘션 사전에
     들어간다(`normalize_news`).
