@@ -137,10 +137,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 각각 빼도 전건 통과했다.
 	 *
 	 * <p>⚠️ <b>오늘의 프로듀서로는 이 구멍이 안 터진다</b> — 슬롯 스코프를 쓰는 writer 는
-	 * {@code ops/reconciler.py:496} 하나이고 항상 {@code PLANNER_MISSING} 이며, 비-slot 스코프의
-	 * {@code scope_key} 는 <b>해시</b>라({@code run} 은 {@code run_id = stable_domain_id("run",
-	 * run_key)}) 날짜 정규식에 애초에 안 걸린다. 즉 두 술어는 <b>앞으로 생길 프로듀서</b>에 대한
-	 * 가드이고, 이 테스트가 지키는 것은 <b>그 가드가 조용히 빠지는 것</b>이다.
+	 * {@code ops/reconciler.py} 의 {@code detect_planner_missing} 하나이고 항상
+	 * {@code PLANNER_MISSING} 이며, 비-slot 스코프의 {@code scope_key} 는 <b>런·작업 id</b>라
+	 * ({@code run} 은 해시 {@code run_<hex>}, {@code task} 는 ULID {@code etask_01K…}) 날짜
+	 * 정규식에 애초에 안 걸린다. 즉 두 술어는 <b>앞으로 생길 프로듀서</b>에 대한 가드이고,
+	 * 이 테스트가 지키는 것은 <b>그 가드가 조용히 빠지는 것</b>이다.
 	 *
 	 * <p>(이 주석은 한때 "런 키와 슬롯 키 형식이 같아 지금도 터진다"고 적혀 있었고 <b>틀렸다</b> —
 	 * `scope_key` 에 실제로 무엇이 들어가는지 안 보고 쓴 문장이었다.)
