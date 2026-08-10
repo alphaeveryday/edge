@@ -60,11 +60,15 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	private void insertMissingSlotIssue(String id, String runKey, String status) {
+		insertIssue(id, "PLANNER_MISSING", "slot", runKey, status);
+	}
+
+	private void insertIssue(String id, String type, String scope, String scopeKey, String status) {
 		jdbc.update("""
 				INSERT INTO ops_reconciliation_issue (issue_id, issue_type, scope, scope_key,
 				       dedupe_key, status)
-				VALUES (?,'PLANNER_MISSING','slot',?,?,?)
-				""", id, runKey, "planner_missing:" + runKey, status);
+				VALUES (?,?,?,?,?,?)
+				""", id, type, scope, scopeKey, type + ":" + scope + ":" + scopeKey, status);
 	}
 
 	@Test
@@ -76,6 +80,21 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
+	 * 🔴 <b>요청한 날이 그대로 창이 된다.</b> 이걸 안 재면 리포지토리가 인자를 버리고 늘 최신일을
+	 * 봐도 아무도 모른다 — 컨트롤러 테스트는 페이크가 받은 값만 보고, 그 값으로 무엇을 하는지는
+	 * 페이크가 정하기 때문이다. 화면은 요청 날짜가 아니라 {@code meta.today} 를 그리므로
+	 * <b>이상 징후가 화면에 안 나타난다</b>: 과거 조회가 통째로 불능인데 조용하다.
+	 */
+	@Test
+	void 날짜를_주면_최신일이_아니라_그_날을_본다() {
+		insertTradingDay("2026-08-01");
+		insertTradingDay("2026-08-03");
+
+		assertThat(repository.facts(LocalDate.parse("2026-08-01")).today())
+				.isEqualTo(LocalDate.parse("2026-08-01"));
+	}
+
+	/**
 	 * 런이 하루도 안 뜬 날 — 계획만 있고 런 행이 없는 슬롯도 조회 창 후보다. 런 축만 보면 기본
 	 * 조회가 그 날을 건너뛰는데, <b>그날이 바로 콘솔이 열려야 하는 날</b>이다.
 	 */
@@ -83,6 +102,47 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	void 계획만_있던_날도_기본_조회의_날짜가_된다() {
 		insertTradingDay("2026-08-01");
 		insertMissingSlotIssue("i1", "etf-daily:2026-08-03T15:40", "OPEN");
+
+		assertThat(repository.facts(null).today()).isEqualTo(DAY);
+	}
+
+	/**
+	 * 🔴 <b>"둘 중 뒤쪽"은 양방향이다.</b> 위 테스트가 "슬롯이 더 뒤" 한 방향만 재서, 비교를 아예
+	 * 빼고 슬롯이 있으면 무조건 이기게 만들어도 통과했다. 그러면 3주 전에 열린 채 안 닫힌
+	 * {@code PLANNER_MISSING} 하나가 <b>런이 오늘까지 정상인데도 기본 조회를 3주 전으로 되돌린다</b>.
+	 */
+	@Test
+	void 슬롯_날짜가_런보다_과거면_런_날짜가_이긴다() {
+		insertTradingDay("2026-08-03");
+		insertMissingSlotIssue("i1", "etf-daily:2026-07-20T15:40", "OPEN");
+
+		assertThat(repository.facts(null).today()).isEqualTo(DAY);
+	}
+
+	/**
+	 * 🔴 해소된 이슈는 후보가 아니다. {@code status='OPEN'} 술어를 빼도 전건 통과했다 — 그러면
+	 * 지난 사고에서 {@code RESOLVED} 된 결손 하나가 <b>기본 조회일을 영구히 그날에 고정</b>한다.
+	 */
+	@Test
+	void 해소된_계획_결손은_조회_창_후보가_아니다() {
+		insertTradingDay("2026-08-03");
+		insertMissingSlotIssue("i1", "etf-daily:2099-01-01T15:40", "OPEN");
+		insertMissingSlotIssue("i2", "etf-daily:2026-08-05T15:40", "RESOLVED");
+
+		assertThat(repository.facts(null).today()).isEqualTo(DAY);
+	}
+
+	/**
+	 * 🔴 슬롯 스코프가 아닌 이슈는 후보가 아니다. {@code issue_type}·{@code scope} 술어를 빼도
+	 * 전건 통과했는데, 이건 가설이 아니다 — <b>런 키와 슬롯 키의 형식이 같아서</b>
+	 * ({@code etf-daily:2026-08-05T15:40}) 날짜 정규식이 똑같이 매칭된다. 런 스코프 이슈 한 건이
+	 * 조회 창을 옮긴다.
+	 */
+	@Test
+	void 슬롯_스코프가_아닌_이슈는_조회_창_후보가_아니다() {
+		insertTradingDay("2026-08-03");
+		insertIssue("i1", "PLANNER_MISSING", "run", "etf-daily:2026-08-05T15:40", "OPEN");
+		insertIssue("i2", "DEADLINE_MISSED", "slot", "etf-daily:2026-08-06T15:40", "OPEN");
 
 		assertThat(repository.facts(null).today()).isEqualTo(DAY);
 	}

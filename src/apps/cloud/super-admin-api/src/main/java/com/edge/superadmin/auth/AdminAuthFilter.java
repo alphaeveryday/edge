@@ -19,8 +19,11 @@ import java.util.regex.Pattern;
 
 /**
  * 운영자 인증 필터 — fail-closed(ALPHA-474: 공개 엣지의 앱 방어선, 미인증 접근은
- * 전 표면 차단). 표면의 SSOT 는 docs/console-ia/super-admin-console.md — 엔드포인트
- * 추가 시 IA 문서와 여기 RULES 에 함께 행을 더한다. 매핑 없는 /api/** 는 거부가
+ * 전 표면 차단). <b>화면</b> 표면의 SSOT 는 docs/console-ia/super-admin-console.md —
+ * 화면 표면 엔드포인트를 더할 때는 IA 문서와 여기 RULES 에 함께 행을 더한다.
+ * ⚠️ 화면 표면이 아닌 것도 여기에는 온다 — 인증은 IA 와 무관하게 전 표면에 걸리기 때문이다
+ * (예: 콘솔 규칙 엔진의 사실 표면 /api/v1/console/facts, ALPHA-738. 그 계약의 SSOT 는
+ * docs/contracts/console-facts-api.md 다). 그런 표면은 IA 표에 행이 없는 것이 맞다. 매핑 없는 /api/** 는 거부가
  * 기본이다(fail-closed). 운영자는 단일 역할이라 역할 인가는 없다 — 인증만 강제한다
  * (역할 분화 시 tenant-console ConsoleAuthFilter 처럼 Rule 에 역할 집합을 더한다).
  */
