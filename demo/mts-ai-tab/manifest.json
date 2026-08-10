@@ -1,6 +1,6 @@
 {
-  "name": "KB증권",
-  "short_name": "KB증권",
+  "name": "소마증권",
+  "short_name": "소마증권",
   "display": "standalone",
   "start_url": "/",
   "background_color": "#ffffff",

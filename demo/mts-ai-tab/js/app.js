@@ -247,7 +247,7 @@
       var active = label === name;
       btn.style.cssText = 'flex-shrink:0;padding:11px 13px;font-size:13px;border:none;background:none;font-family:inherit;cursor:pointer;' +
         'font-weight:' + (active ? '700' : '400') + ';color:' + (active ? '#3f3a33' : '#71717a') + ';' +
-        (active ? 'box-shadow:inset 0 -2.5px 0 #FFBC00' : '');
+        (active ? 'box-shadow:inset 0 -2.5px 0 #41abe0' : '');
       btn.addEventListener('click', function () {
         selectTab(label);
       });
@@ -268,11 +268,11 @@
 
   function renderFavAlert() {
     var star = el('fav-btn').querySelector('svg');
-    star.setAttribute('fill', state.fav ? '#FFBC00' : 'none');
-    star.setAttribute('stroke', state.fav ? '#e0a800' : '#71717a');
+    star.setAttribute('fill', state.fav ? '#41abe0' : 'none');
+    star.setAttribute('stroke', state.fav ? '#2e8fc4' : '#71717a');
     var bell = el('alert-btn').querySelector('svg');
-    bell.setAttribute('fill', state.alertOn ? '#FFBC00' : 'none');
-    bell.setAttribute('stroke', state.alertOn ? '#e0a800' : '#71717a');
+    bell.setAttribute('fill', state.alertOn ? '#41abe0' : 'none');
+    bell.setAttribute('stroke', state.alertOn ? '#2e8fc4' : '#71717a');
   }
 
   // ── AI 분석 탭 — BrokerApi 경유 실데이터 경로 ──────────────────
@@ -608,7 +608,7 @@
       var div = document.createElement('div');
       div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f0f0f1';
       div.innerHTML = '<div style="width:128px;font-size:13px;font-weight:500;flex-shrink:0"></div>' +
-        '<div style="flex:1;height:8px;background:#f4f4f5;border-radius:999px;overflow:hidden"><div style="height:100%;background:#FFBC00;border-radius:999px;width:' + h.bar + '"></div></div>' +
+        '<div style="flex:1;height:8px;background:#f4f4f5;border-radius:999px;overflow:hidden"><div style="height:100%;background:#41abe0;border-radius:999px;width:' + h.bar + '"></div></div>' +
         '<div class="num" style="width:48px;text-align:right;font-size:13px;font-weight:600"></div>';
       div.children[0].textContent = h.name;
       div.children[2].textContent = h.weight;
@@ -636,7 +636,7 @@
       var like = document.createElement('button');
       like.textContent = '👍 ' + (po.likes + (liked ? 1 : 0));
       like.style.cssText = 'border:none;border-radius:999px;padding:2px 8px;cursor:pointer;font-family:inherit;font-size:11px;' +
-        'background:' + (liked ? '#fff7dd' : 'none') + ';font-weight:' + (liked ? '700' : '400') + ';color:' + (liked ? '#60584C' : '#a1a1aa');
+        'background:' + (liked ? '#e8f5fc' : 'none') + ';font-weight:' + (liked ? '700' : '400') + ';color:' + (liked ? '#1b6ea8' : '#a1a1aa');
       like.addEventListener('click', function () {
         state.liked[i] = !state.liked[i];
         renderTalk();
