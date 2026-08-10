@@ -75,7 +75,7 @@ def _thread_news_lines(rows: list[dict]) -> tuple[str, ...]:
 def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         window_start: str | None = None, window_end: str | None = None,
         summary: bool = False, window_meta: dict | None = None,
-        roll=ROLL_UNSET) -> str:
+        roll=ROLL_UNSET, current_event_returns: dict[str, float] | None = None) -> str:
     """ETF 하루 또는 요청창 하나를 설명한다.
 
     ``roll`` 은 호출자가 **이미 계산한** 구간 층 분해다(`pipeline` 의 라우팅이 쓴 것).
@@ -94,7 +94,8 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         # 입력이 된다. 산문 승격은 그 포맷의 렌더 계층 몫이다.
         scoped_news: list[dict] = []
         stat_tests, hypothesis_trials = _window_paneltest(
-            lake, instrument_id, day, ask, facts, news_out=scoped_news)
+            lake, instrument_id, day, ask, facts, news_out=scoped_news,
+            current_event_returns=current_event_returns)
         if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
             raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
         distributions = tuple(
@@ -230,6 +231,7 @@ _VERDICT_CODE = {"성립": "ESTABLISHED", "불성립": "NOT_ESTABLISHED",
 
 def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                       news_out: list[dict] | None = None,
+                      current_event_returns: dict[str, float] | None = None,
                       ) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
     """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → **레코드 버퍼**.
 
@@ -334,6 +336,19 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                 log("hypothesis.objectset_unavailable", tool="objectset.filter", code=code)
                 return ({"stage": "propose", "verdict": "판정불가",
                          "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+            matched_instruments: list[str] = []
+            if current_event_returns:
+                arguments = object_runtime.call(
+                    "news.get_event_arguments", {"handle": narrowed["handle"], "limit": 40})
+                if not arguments.get("ok"):
+                    code = str(arguments.get("error", {}).get("code") or "EXECUTION_FAILED")
+                    log("hypothesis.objectset_unavailable",
+                        tool="news.get_event_arguments", code=code)
+                    return ({"stage": "propose", "verdict": "판정불가",
+                             "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+                matched_instruments = sorted({str(item["entity_id"])
+                                              for item in arguments.get("arguments", [])
+                                              if item.get("entity_id") in current_event_returns})
             grounded = object_runtime.call(
                 "news.get_event_evidence", {"handle": narrowed["handle"], "limit": 20})
             if not grounded.get("ok"):
@@ -362,6 +377,8 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                 "title": title,
                 "available_at": available_at,
                 "thread_id": thread_by_event.get(str(row["source_event_id"])),
+                "instrument_id": (matched_instruments[0]
+                                  if len(matched_instruments) == 1 else ""),
                 "evidence_id": str(chosen.get("evidence_id") or "") or None,
                 "line": f"{clock}, {title}" if clock else title,
             })
@@ -373,10 +390,11 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             candidates=tuple(EventCandidate(
                 source_event_id=row["source_event_id"],
                 thread_id=str(row.get("thread_id") or row["source_event_id"]),
-                instrument_id=instrument_id,
+                instrument_id=str(row.get("instrument_id") or ""),
                 title=row["title"], available_at=row["available_at"],
                 evidence_id=str(row.get("evidence_id") or ""),
             ) for row in discovered),
+            current_event_returns=current_event_returns,
         )
         object_tools = {
             "specs": [*object_runtime.tool_specs(), *preview_runtime.tool_specs()],
@@ -454,6 +472,8 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             "n": distribution.n,
             "mean": distribution.mean,
             "today": distribution.today,
+            "today_as_of": facts.window_end,
+            "today_basis": "committed_minute_end",
             "percentile": distribution.percentile,
         })
     for t, r in edge_tests(lake, causal_tuples, day, cell_instrument_id=instrument_id):

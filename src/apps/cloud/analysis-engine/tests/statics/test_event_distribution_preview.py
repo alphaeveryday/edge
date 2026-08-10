@@ -21,6 +21,7 @@ class _Lake:
     def __init__(self) -> None:
         con = duckdb.connect()
         self._con = con
+        self.queries: list[str] = []
         con.execute("""
             CREATE TABLE event_rows(
                 source_event_id TEXT, instrument_id TEXT, event_type_code TEXT,
@@ -51,6 +52,7 @@ class _Lake:
 
     def sql(self, query: str) -> list[tuple]:
         assert query.startswith("WITH")
+        self.queries.append(query)
         return self._con.execute(query).fetchall()
 
 
@@ -63,30 +65,32 @@ def test_distribution_preview_binds_anchor_to_same_type_deduplicated_pit_history
                         lambda *_args: """WITH
                         v_event AS (
                             SELECT * FROM event_rows
-                            WHERE available_at <= TIMESTAMP '2026-08-07 15:30:00'
+                            WHERE available_at <= TIMESTAMP '2026-08-07 12:05:00'
                         ),
                         v_daily AS (SELECT * FROM daily_rows)
                         """)
+    lake = _lake()
     preview = event_distribution_preview(
-        _lake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
-        as_of="2026-08-07 15:30:00", min_n=2,
+        lake, source_event_id="anchor", instrument_id="A", day="2026-08-07",
+        as_of="2026-08-07 12:05:00", today=-0.036, min_n=2,
     )
 
     assert preview is not None
     assert preview.n == 2
     assert preview.mean == 0.005
-    assert preview.today == -0.03
+    assert preview.today == -0.036
     assert preview.percentile == 0.0
+    assert len(lake.queries) == 2, "today must come from the committed minute return, never v_daily"
 
 
-def test_distribution_preview_never_reads_today_close_before_market_close():
+def test_distribution_preview_uses_the_supplied_committed_minute_observation():
     class _Lake:
         def sql(self, _query: str) -> list[tuple]:
-            raise AssertionError("pre-close preview must not query v_daily")
+            raise AssertionError("missing current minute return must not query v_daily")
 
     assert event_distribution_preview(
         _Lake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
-        as_of="2026-08-07 12:05:00", min_n=2,
+        as_of="2026-08-07 12:05:00", today=None, min_n=2,
     ) is None
 
 
@@ -100,7 +104,7 @@ def test_distribution_preview_fails_loudly_when_the_pit_surface_is_unavailable(m
     with pytest.raises(PreviewExecutionError, match="EVENT_DISTRIBUTION_UNAVAILABLE"):
         event_distribution_preview(
             _UnavailableLake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
-            as_of="2026-08-07 15:30:00", min_n=2,
+            as_of="2026-08-07 12:05:00", today=-0.036, min_n=2,
         )
 
 
@@ -110,13 +114,13 @@ def test_llm_can_only_submit_a_ready_current_event_distribution_preview(monkeypa
         object(), event_sets, day="2026-08-07", candidates=(
             EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
                            "2026-08-07T10:31:00"),
-        ),
+        ), current_event_returns={"A": -0.036},
     )
-    monkeypatch.setattr(
-        "edge_analysis.statics.hypothesis_preview.event_distribution_preview",
-        lambda *_args, **_kwargs: EventDistributionPreview(
-            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42),
-    )
+    def preview(*_args, **kwargs):
+        assert kwargs["today"] == -0.036
+        return EventDistributionPreview("anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
     candidate_id = next(iter(runtime._candidate_by_id))
     replies = iter((
         {"tool": "hypothesis.list_options", "arguments": {}},

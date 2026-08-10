@@ -639,6 +639,10 @@ def test_constituent_scoped_news_bypasses_empty_publication_search_gate(monkeypa
                 }]}
             if name == "objectset.filter":
                 return {"ok": True, "handle": "os_constituent_event"}
+            if name == "news.get_event_arguments":
+                return {"ok": True, "handle": "os_arguments", "arguments": [{
+                    "entity_id": "ENT_CONSTITUENT",
+                }]}
             if name == "news.get_event_evidence":
                 return {"ok": True, "handle": "os_evidence", "evidence": [{
                     "source_event_id": "evt_constituent", "evidence_type": "TITLE",
@@ -646,15 +650,27 @@ def test_constituent_scoped_news_bypasses_empty_publication_search_gate(monkeypa
             raise AssertionError(name)
 
     monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+
+    class _Preview:
+        def __init__(self, *_args, candidates, **_kwargs):
+            seen["candidate_instrument_id"] = candidates[0].instrument_id
+        def tool_specs(self): return []
+        def call(self, *_args): return {}
+        def resolve(self, *_args): return None
+
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview.HypothesisPreviewRuntime", _Preview)
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
                         lambda ask, **kwargs: (seen.update(kwargs), ([], []))[1])
 
     with collect_trace() as trace:
-        etfcell._window_paneltest(object(), "ETF", "2026-08-05", lambda *_: {}, facts)
+        etfcell._window_paneltest(
+            object(), "ETF", "2026-08-05", lambda *_: {}, facts,
+            current_event_returns={"ENT_CONSTITUENT": 0.04})
 
     assert seen["as_of"] == "2026-08-05T13:20:00"
     assert seen["scope"] == NewsScope("ETF", "2026-08-04")
     assert seen["event_types"] == ["COMPANY.CONTRACT.SIGNING"]
+    assert seen["candidate_instrument_id"] == "ENT_CONSTITUENT"
     assert "evt_constituent" in seen["facts"]
     [context] = [row for row in trace if row.get("event") == "hypothesis.context"]
     assert context["events"] == 1 and context["in_window"] == 0
