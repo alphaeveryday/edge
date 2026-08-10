@@ -95,13 +95,11 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
             lake, instrument_id, day, ask, facts, news_out=scoped_news)
         if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
             raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
-        if scoped_news:
-            facts = replace(
-                facts,
-                news=_thread_news_lines(scoped_news),
-                event_ids=tuple(sorted(set(facts.event_ids) | {
-                    str(row["source_event_id"]) for row in scoped_news})),
-            )
+        # 현재 검정 레코드에는 사건/스레드 식별자가 없다. 유형 수준 검정을 여러
+        # 뉴스 스레드에 임의로 붙이지 않고, 원시 감사 데이터만 보존한다.
+        facts = replace(
+            facts, news=(), final_lines=(), event_ids=(), statistics=(),
+            suppress_absence=bool(scoped_news))
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)

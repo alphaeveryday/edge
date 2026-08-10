@@ -121,23 +121,8 @@ def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
     )
 
     assert not calls
-    assert text.startswith(
-        "[H] KODEX 반도체 -6.20%\n13:20 기준 · 전일 종가 대비\n\n"
-        "[1] 구성종목 기여를 계산하지 못했습니다.\n"
-        "구성종목 30종목 중 12종목 상승 · 18종목 하락\n\n"
-        "[2] 10:40부터 13:20까지 하락했습니다.\n\n"
-        "[3] 시장 요인 -0.20%p · 섹터 요인 -0.60%p · 고유 요인 -3.30%p\n\n"
-        "[4] "
-    )
-    assert text.split("[4] ", 1)[1].splitlines() == [
-        "10:31, SK하이닉스 공급계약 해지 공시가 있었습니다.",
-        "계약금액 3,200억원, 최근 연매출 대비 0.9% 규모입니다.",
-        "시장 요인을 제거한 기준으로, 조건이 비슷한 과거 41건의 공시 당일 "
-        "초과수익률은 평균 -3.1%였습니다.",
-        "오늘 이 종목의 초과수익률은 -3.6%로, 과거 분포의 중앙값 부근입니다.",
-    ]
-    assert "쉬운 설명" not in text and "요청창" not in text
-    assert text.count("10:31") == 1
+    assert "[4]" not in text
+    assert "[N]" in text
     assert meta["window_start"] == "10:40" and meta["as_of"] == "13:20"
     assert [block["kind"] for block in meta["blocks"]] == [
         "header", "contribution", "breadth", "path", "relative", "absence", "evidence",
@@ -145,7 +130,7 @@ def test_minute_run_keeps_core_blocks_before_final_explanation(monkeypatch):
     assert meta["lineage"][0]["view"] == "bars_5m"
     assert meta["final_explanation"]["rendered_text"] == text
     assert [block["block_code"] for block in meta["final_explanation"]["blocks"]] == [
-        "H", "1", "2", "3", "4",
+        "H", "1", "2", "3", "N",
     ]
 
 
@@ -159,7 +144,7 @@ def test_model_cannot_replace_the_final_explanation(monkeypatch):
         instrument_id="iid", window_start="10:40", window_end="13:20",
     )
 
-    assert "SK하이닉스 공급계약 해지 공시" in text
+    assert "SK하이닉스 공급계약 해지 공시" not in text
     assert "삼성전자" not in text
 
 
@@ -711,11 +696,8 @@ def test_structured_news_reaches_final_block_and_news_evidence_rows(monkeypatch)
         instrument_id="ETF", window_start="09:00", window_end="13:20",
         window_meta=meta)
 
-    assert "[N]" not in text and "확인된 공시·보도는 없습니다" not in text
-    assert "[4]" in text and "배터리 공급계약 체결" in text
-    block = meta["final_explanation"]["blocks"][-1]
-    assert block["block_code"] == "4"
-    assert block["evidence_refs"] == ["source_event:evt_news_1"]
+    assert "[N]" not in text and "[4]" not in text
+    assert "배터리 공급계약 체결" not in text
     [news_event] = meta["news_events"]
     assert news_event["title"] == "배터리 공급계약 체결"
     assert news_event["thread_id"] == "thr_news_1"
@@ -773,12 +755,14 @@ def test_scoped_event_without_customer_safe_evidence_fails_loud(
     assert calls == []
 
 
-def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monkeypatch):
-    """Production-shaped scope keeps 14 unique events and one deterministic thread lineage."""
+def test_seven_threads_fourteen_events_stay_audit_only_without_incident_identity(monkeypatch):
+    """A type-level test cannot be fanned out into seven customer incident claims."""
     import dataclasses
     from collections import Counter
 
     from edge_analysis.statics import etfcell
+    from edge_analysis.statics.paneltest import EdgeReport
+    from edge_analysis.statics.vocab import ExposureSource, HypothesisTuple, Trigger
 
     facts = dataclasses.replace(
         _facts(), event_ids=(), disclosures=(), news=(), final_lines=())
@@ -823,8 +807,16 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
             raise AssertionError(name)
 
     monkeypatch.setattr("edge_analysis.statics.objectset_tools.ObjectSetRuntime", _Runtime)
+    tup = HypothesisTuple(
+        conditions=(), trigger=Trigger("점", "NEWS.TYPE"), channel="FX환",
+        exposure=ExposureSource("속성", "거시", "민감도"),
+        outcome="수익률", layer="섹터")
     monkeypatch.setattr("edge_analysis.statics.hypothesize.propose",
-                        lambda *_a, **_k: ([], []))
+                        lambda *_a, **_k: ([tup], []))
+    monkeypatch.setattr(
+        "edge_analysis.statics.paneltest.edge_tests",
+        lambda *_a, **_k: [(tup, EdgeReport(
+            "성립", 412, 0.0121, -0.0045, 0.0048, 0.9))])
     meta = {}
 
     text = etfcell.run(
@@ -832,19 +824,10 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
         instrument_id="ETF", window_start="09:00", window_end="13:20",
         window_meta=meta)
 
-    assert "[4]" in text and "[N]" not in text
-    news_block = meta["final_explanation"]["blocks"][-1]
-    news_lines = news_block["text"].splitlines()
-    assert len(news_lines) == 7
-    assert sum(int(line.rsplit("관련 기사 ", 1)[1].removesuffix("건)"))
-               for line in news_lines) == 14
+    assert "[4]" not in text and "[N]" not in text, meta.get("stat_tests")
+    assert len(meta["stat_tests"]) == 1
     assert len(meta["news_events"]) == 14
     assert len({row["source_event_id"] for row in meta["news_events"]}) == 14
-    refs = meta["final_explanation"]["blocks"][-1]["evidence_refs"]
-    assert len(refs) == 14
-    assert refs == [f"source_event:evt_{i:02d}" for i in range(14)]
-    event_ids = [ref.removeprefix("source_event:") for ref in refs]
-    assert event_ids == [f"evt_{i:02d}" for i in range(14)]
     overlaps = [row for row in meta["news_events"]
                 if row["source_event_id"] == "evt_00"]
     assert len(overlaps) == 1
@@ -898,6 +881,61 @@ def test_thread_news_duplicate_event_uses_order_independent_canonical_winner():
     expected = ("12:00, 정정 제목 (관련 기사 1건)",)
     assert _thread_news_lines([old, new]) == expected
     assert _thread_news_lines([new, old]) == expected
+
+
+@pytest.mark.parametrize("mutations,positive", [
+    (({},), True),
+    (({"applies_today": False, "reason": "오늘 조건 미충족"},), False),
+    (({}, {"applies_today": False, "reason": "오늘 조건 미충족"}), True),
+])
+def test_customer_statistics_and_evidence_rows_share_the_verified_gate(
+        monkeypatch, mutations, positive):
+    """An archived test becomes customer prose iff it can also become STAT_TEST evidence."""
+    import dataclasses
+
+    from edge_analysis.statics import etfcell
+    from edge_analysis.statics.evidence_rows import build_evidence_rows
+
+    facts = dataclasses.replace(
+        _facts(), event_ids=(), disclosures=(), news=(), final_lines=())
+    base = {
+        "stage": "test", "trigger": "거시",
+        "trigger_kind": "사건",
+        "trigger_fired": True, "null_kind": "pair", "channel": "FX환",
+        "exposure": "거시/민감도", "layer": "섹터", "verdict": "성립",
+        "applies_today": True, "n": 412, "p": 0.0121,
+        "effect_low": 0.0048, "effect_high": -0.0045, "reason": "",
+    }
+    records = [{**base, **mutation} for mutation in mutations]
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: facts)
+    def panel(*_args, news_out, **_kwargs):
+        news_out.append({
+            "source_event_id": "evt_1", "thread_id": "thread_1",
+            "event_type_code": "COMPANY.CONTRACT.SIGNING",
+            "available_at": "2026-08-05T12:00:00", "title": "공급계약 체결",
+            "evidence_id": "evidence_1", "line": "12:00, 공급계약 체결",
+        })
+        return tuple(records), ()
+    monkeypatch.setattr(etfcell, "_window_paneltest", panel)
+    meta = {}
+
+    etfcell.run(
+        object(), "305720", "2026-08-05", lambda *_: {},
+        instrument_id="ETF", window_start="09:00", window_end="13:20",
+        window_meta=meta)
+    blocks = meta["final_explanation"]["blocks"]
+    built = build_evidence_rows(
+        blocks=meta["final_explanation"]["blocks"], lineage=meta["lineage"],
+        stat_tests=meta["stat_tests"], events=meta["news_events"],
+        ticker="305720", etf_name=facts.name, day="2026-08-05",
+        window_end="13:20", sector_name=facts.sector_name)
+
+    assert any(row.type == "STAT_TEST" for row in built.rows) is positive, built.skipped
+    assert not any(block["block_code"] in ("4", "N") for block in blocks)
+    rendered = meta["final_explanation"]["rendered_text"]
+    assert "통계적으로 유의했습니다" not in rendered
+    assert "오늘 적용 가능한 근거로 확인되지 않았습니다" not in rendered
+    assert meta["stat_tests"] == records
 
 
 def test_no_scoped_news_and_no_measurable_series_does_not_call_llm(monkeypatch):

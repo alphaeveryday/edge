@@ -115,8 +115,9 @@ def _gate_reason(rec: dict) -> str | None:
     return None
 
 
-def _stat_records(stat_tests: list[dict] | tuple, sector_name: str | None,
-                  ) -> tuple[list[StatTestRecord], list[dict]]:
+def select_verified_stat_tests(
+        stat_tests: list[dict] | tuple, sector_name: str | None,
+        ) -> tuple[list[StatTestRecord], list[dict]]:
     """stat_tests 버퍼(etfcell) → 통과분의 `StatTestRecord` + 탈락 사유 목록.
 
     현재 버퍼는 `paneltest.edge_tests` 산출(SENSITIVE_STOCKS/TUPLE_PANEL)만 담는다.
@@ -240,7 +241,7 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
             publisher=f"RDB.source_event · {eid}",
             published_at=_event_time(str(e.get("available_at") or ""), day))
 
-    stat_recs, skipped = _stat_records(list(stat_tests), sector_name)
+    stat_recs, skipped = select_verified_stat_tests(list(stat_tests), sector_name)
 
     # ── 채번: 유형 순서 고정 → 유형 안에서는 유도 순서(§1) ─────────────────
     order = {t: i for i, t in enumerate(TYPE_ORDER)}
@@ -268,11 +269,7 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     def _refs(*keys_: str) -> tuple[int, ...]:
         return tuple(refs[key] for key in keys_ if key in refs)
 
-    sector_stat = tuple(ref for ref, rec in stat_records.items()
-                        if rec.method == "SENSITIVE_STOCKS")
-    other_stat = tuple(ref for ref in stat_records if ref not in sector_stat)
     all_stat = tuple(stat_records)
-    news_keys = tuple(key for key in refs if key.startswith("news:"))
     block_refs: dict[str, tuple[int, ...]] = {}
     for b in blocks:
         code = str(b.get("block_code"))
@@ -282,11 +279,16 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
             block_refs[code] = _refs("holding", "price_members") or _refs("price_etf")
         elif code == "3":
             # 검정은 몫의 설명이라 [3]에 붙는다(§7 케이스 B — 사건 병치가 아니다).
-            block_refs[code] = _refs("price_etf", "price_layers") + sector_stat
+            block_refs[code] = _refs("price_etf", "price_layers")
         elif code == "4":
             required = str(b.get("evidence_requirement") or "")
-            block_refs[code] = _refs(*news_keys) + (
-                all_stat if required == "CAUSAL_STAT_TEST" else other_stat)
+            cited_news = tuple(
+                f"news:{ref.removeprefix('source_event:')}"
+                for ref in (b.get("evidence_refs") or ())
+                if str(ref).startswith("source_event:"))
+            block_refs[code] = (
+                _refs(*cited_news) + all_stat
+                if required == "CAUSAL_STAT_TEST" else ())
         elif code == "N":
             block_refs[code] = ()       # 부재 고지 — 게이트 예외(§7)
         else:
@@ -310,4 +312,4 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
                          block_refs=block_refs, skipped=tuple(skipped))
 
 
-__all__ = ["EvidenceBuild", "build_evidence_rows"]
+__all__ = ["EvidenceBuild", "build_evidence_rows", "select_verified_stat_tests"]
