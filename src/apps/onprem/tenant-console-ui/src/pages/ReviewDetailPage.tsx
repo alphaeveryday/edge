@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
+import { useNavigate, useParams } from 'react-router-dom';
+import { PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
   CHECK_RESULT_LABEL,
   EVIDENCE_KIND_LABEL,
@@ -14,9 +14,9 @@ import type { ConfidenceLevel } from '../domains/explanations';
 import { CONFIDENCE_LABEL, CONFIDENCE_TONE } from '../domains/explanations';
 import { apiMessage } from '../api/client';
 import { useReviewActions, useReviewItem } from '../domains/review/hooks';
-import { isHttpUrl } from './_shared/links';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
+import { BackLink, DetailHeader, EvidenceTable, OriginalSummaryCard } from './_shared/detail';
 import { kstMinute, kstSecond } from '../lib/time';
 
 /**
@@ -97,36 +97,46 @@ export function ReviewDetailPage() {
 
   return (
     <div className="flex max-w-[900px] flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <Link to="/review" className="btn btn-sm btn-ghost">
-          <Icon name="arrowLeft" className="ic" /> 목록
-        </Link>
-        <span className="font-semibold" style={{ fontSize: 15 }}>
-          {it.name ?? '(종목 미상)'}
-        </span>
-        <span className="col-muted num" style={{ fontSize: 12 }}>
-          {it.ticker ?? '—'} · {it.tradeDate ?? '—'}
-        </span>
-        <StatusBadge tone={inReview ? 'warn' : 'neutral'}>
-          {ITEM_STATUS_LABEL[it.status] ?? it.status}
-        </StatusBadge>
-        {/* 사유가 "설정한 기준"을 말하게 되면서 이 건의 실제 확신도가 화면에서 사라진다
-            (검수 상세엔 확신도 표시가 없었다) — 설명 목록과 같은 배지로 채운다(ALPHA-774). */}
-        {it.confidenceLevel && Object.hasOwn(CONFIDENCE_LABEL, it.confidenceLevel) ? (
-          <StatusBadge tone={CONFIDENCE_TONE[it.confidenceLevel as ConfidenceLevel]} dot={false}>
-            확신도 {CONFIDENCE_LABEL[it.confidenceLevel as ConfidenceLevel]}
-          </StatusBadge>
-        ) : it.confidenceLevel ? (
-          <span className="col-muted" style={{ fontSize: 12 }}>확신도 {it.confidenceLevel}</span>
-        ) : null}
-        <div className="flex-1" />
-        <span className="col-muted num" style={{ fontSize: 11 }}>
-          {/* KST 고정(ALPHA-920) — 뷰어 타임존 무관, 거래소 시간. 기준시각은 산문이
-              말하는 창의 끝(ALPHA-918)이라 검수자가 본문의 시간 서술과 대조한다. */}
-          {it.contentAsOf && <>기준시각 {kstMinute(it.contentAsOf)} · </>}
-          수신 {kstMinute(it.receivedAt)}
-        </span>
-      </div>
+      <BackLink to="/review" label="검수 목록" />
+
+      <DetailHeader
+        name={it.name ?? '(종목 미상)'}
+        code={it.ticker ?? '—'}
+        sub={`${it.tradeDate ?? '—'} · 수신 ${kstMinute(it.receivedAt)}`}
+        fields={[
+          {
+            label: '상태',
+            value: (
+              <StatusBadge tone={inReview ? 'warn' : 'neutral'}>
+                {ITEM_STATUS_LABEL[it.status] ?? it.status}
+              </StatusBadge>
+            ),
+          },
+          {
+            label: '기준시각',
+            // 산문이 말하는 창의 끝(ALPHA-918) — 검수자가 본문의 시간 서술과 대조한다.
+            // 결측(구형 수신분)은 '—' (생성 시각 폴백은 이 화면의 혼동을 되살린다).
+            value: (
+              <span className="num" style={{ fontSize: 12 }}>
+                {it.contentAsOf ? kstMinute(it.contentAsOf) : '—'}
+              </span>
+            ),
+          },
+          {
+            label: '확신도',
+            // 사유가 "설정한 기준"을 말하면서 실제 확신도가 화면에서 사라진다 —
+            // 설명 상세와 같은 배지로 채운다(ALPHA-774).
+            value:
+              it.confidenceLevel && Object.hasOwn(CONFIDENCE_LABEL, it.confidenceLevel) ? (
+                <StatusBadge tone={CONFIDENCE_TONE[it.confidenceLevel as ConfidenceLevel]} dot={false}>
+                  {CONFIDENCE_LABEL[it.confidenceLevel as ConfidenceLevel]}
+                </StatusBadge>
+              ) : (
+                <span style={{ color: 'var(--fg-4)' }}>{it.confidenceLevel ?? '—'}</span>
+              ),
+          },
+        ]}
+      />
 
       {(it.reviewReasons.length > 0 || reviewChecks.length > 0) && (
         <div
@@ -168,56 +178,17 @@ export function ReviewDetailPage() {
         </div>
       )}
 
-      <div className="card">
-        <div className="card-head">
-          <span className="t-label">원본 설명 문구</span>
-        </div>
-        <div className="p-4 whitespace-pre-line" style={{ fontSize: 13, lineHeight: 1.7 }}>
-          {it.summary}
-        </div>
-      </div>
+      <OriginalSummaryCard text={it.summary} />
 
-      <div className="card">
-        <div className="card-head">
-          <span className="t-label">근거 데이터</span>
-        </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>유형</th>
-              <th>내용</th>
-              <th className="col-muted">출처</th>
-              <th className="col-muted">시각</th>
-            </tr>
-          </thead>
-          <tbody>
-            {it.evidences.map((e, i) => (
-              <tr key={i}>
-                <td>{EVIDENCE_KIND_LABEL[e.kind] ?? e.kind}</td>
-                <td>
-                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)·비웹 URI 는 일반 텍스트 폴백 */}
-                  {e.sourceUri && isHttpUrl(e.sourceUri) ? (
-                    <a href={e.sourceUri} target="_blank" rel="noopener noreferrer">
-                      {e.title}
-                    </a>
-                  ) : (
-                    e.title
-                  )}
-                </td>
-                <td className="col-muted">{e.source}</td>
-                <td className="col-muted t-data">
-                  {kstMinute(e.publishedAt)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {it.evidences.length === 0 && (
-          <div className="p-6 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
-            근거 데이터가 없습니다.
-          </div>
-        )}
-      </div>
+      <EvidenceTable
+        rows={it.evidences.map((e) => ({
+          type: EVIDENCE_KIND_LABEL[e.kind] ?? e.kind,
+          title: e.title,
+          source: e.source,
+          time: kstMinute(e.publishedAt),
+          sourceUri: e.sourceUri,
+        }))}
+      />
 
       {canReview && inReview && (
         <div className="card">
