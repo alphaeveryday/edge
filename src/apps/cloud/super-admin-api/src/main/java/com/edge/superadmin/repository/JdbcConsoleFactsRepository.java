@@ -5,6 +5,8 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
@@ -13,8 +15,8 @@ import java.util.List;
 /**
  * {@link ConsoleFactsRepository} 의 JdbcTemplate 구현(ALPHA-738).
  *
- * <p>이 조각은 <b>조회 창</b>만 정한다 — 어느 하루를 볼지 고르고, 무엇을 봤는지 되돌려준다.
- * 사실 축(런·작업·데이터셋·산출·경계)은 뒤따르는 조각이 하나씩 더한다.
+ * <p>지금 내는 것은 <b>조회 창 + 런 축</b>이다. 작업·데이터셋·산출·경계는 뒤따르는 조각이
+ * 하나씩 더한다.
  *
  * <p>날짜 축은 <b>거래일</b>({@code trading_date})이다. 다만 비거래일 런은 그 컬럼이 NULL 이라
  * 거래일만으로 자르면 통째로 새어 나간다({@link JdbcPipelineStatusRepository} 격자 주석과 같은
@@ -33,6 +35,22 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 */
 	private static final String RUN_DAY =
 			"COALESCE(r.trading_date, (r.created_at AT TIME ZONE 'Asia/Seoul')::date)";
+
+	/** 런과 (뒤에 붙을) 작업이 <b>같은 조각</b>을 써야 "작업은 있는데 그 런이 없는" 응답이 안 나온다. */
+	private static final String DAY_WINDOW = "(%s = ?)".formatted(RUN_DAY);
+
+	/**
+	 * 그 날의 런 전건. <b>정렬을 고정한다</b> — 안 하면 같은 원장이 조회마다 다른 순서로 나가고,
+	 * 소비자가 "첫 런"을 집는 순간 판정이 흔들린다. {@code run_key} 가 같은 행이 둘 이상일 수
+	 * 있어(재실행) 2차 키로 내부 id 를 쓴다.
+	 */
+	private static final String RUNS_SQL = """
+			SELECT r.run_key, r.pipeline_type, r.trading_date, r.orchestration_status,
+			       r.updated_at, r.hard_deadline_at
+			  FROM ops_pipeline_run r
+			 WHERE %s
+			 ORDER BY r.run_key, r.pipeline_run_id
+			""".formatted(DAY_WINDOW);
 
 	/*
 	 * ⚠️ 날짜 후보 조회에 <b>하한(lookback)을 두지 않는다.</b> 한 번 뒀다가 되돌렸다: 90일 창은
@@ -93,7 +111,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getObject("kst_today", LocalDate.class),
 				rs.getObject("run_latest", LocalDate.class)));
 		LocalDate day = date != null ? date : latestDay(meta);
-		return new ConsoleFacts(day, meta.dbNow());
+		return new ConsoleFacts(day, meta.dbNow(),
+				jdbc.query(RUNS_SQL, JdbcConsoleFactsRepository::mapRun, day));
 	}
 
 	private record Meta(OffsetDateTime dbNow, LocalDate kstToday, LocalDate runLatest) {
@@ -139,6 +158,20 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				.filter(java.util.Objects::nonNull)
 				.sorted(Comparator.reverseOrder())
 				.toList();
+	}
+
+	/**
+	 * 원장 컬럼을 <b>그대로</b> 옮긴다 — 여기서 어휘를 다시 정의하지 않는다(판정은 클라이언트).
+	 * {@code lane} 은 {@code pipeline_type} 이고, 시각 둘은 타임존을 가진 채로 나간다.
+	 */
+	private static RunRow mapRun(ResultSet rs, int rowNum) throws SQLException {
+		return new RunRow(
+				rs.getString("run_key"),
+				rs.getString("pipeline_type"),
+				rs.getObject("trading_date", LocalDate.class),
+				rs.getString("orchestration_status"),
+				rs.getObject("updated_at", OffsetDateTime.class),
+				rs.getObject("hard_deadline_at", OffsetDateTime.class));
 	}
 
 	/** 달력에 없는 날짜는 null — 못 읽는 키 하나가 조회를 죽이지 않는다. */

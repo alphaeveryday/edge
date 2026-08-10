@@ -3,6 +3,7 @@ package com.edge.superadmin.service;
 import com.edge.common.exception.GeneralException;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.MetaResponse;
+import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
@@ -14,9 +15,9 @@ import java.time.ZoneId;
 /**
  * 콘솔 사실 응답 조립(ALPHA-738).
  *
- * <p>여기서 위반을 판정하지 않는다 — 규칙은 프론트의 순수 함수다. 이 조각이 하는 일은 <b>조회
- * 창</b>을 정하는 것뿐이다: 요청한 날을 검사해 넘기고, 원장이 실제로 무엇을 봤는지 되돌려준다.
- * 사실 축은 뒤따르는 조각이 하나씩 더한다.
+ * <p>여기서 위반을 판정하지 않는다 — 규칙은 프론트의 순수 함수다. 이 서비스가 하는 일은 조회
+ * 창을 정하고(요청한 날을 검사해 넘긴다) 원장 행을 <b>와이어 형으로 옮기는 것</b>뿐이다.
+ * 남은 사실 축은 뒤따르는 조각이 하나씩 더한다.
  */
 @Service
 public class ConsoleFactsService {
@@ -37,6 +38,7 @@ public class ConsoleFactsService {
 	public ConsoleFactsResponse facts(String date) {
 		ConsoleFacts f = facts.facts(date == null ? null : parseDateParam(date));
 		return new ConsoleFactsResponse(
+				f.runs().stream().map(RunResponse::from).toList(),
 				new MetaResponse(f.dbNow().toString(), f.today().toString()));
 	}
 

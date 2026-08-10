@@ -1,6 +1,7 @@
 package com.edge.superadmin;
 
 import com.edge.superadmin.repository.ConsoleFactsRepository;
+import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,8 +12,8 @@ import java.time.LocalDate;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 콘솔 사실 조회의 <b>조회 창</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
- * migrations-cloud)로 컬럼명·날짜 창을 검증한다(ALPHA-738).
+ * 콘솔 사실 조회의 <b>조회 창 + 런 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
+ * migrations-cloud)로 컬럼명·날짜 창·정렬을 검증한다(ALPHA-738).
  *
  * <p>손 페이크는 이 SQL 을 <b>한 줄도 실행하지 않는다</b>. 여기 걸린 축은 조용히 틀리는 종류다 —
  * 창이 UTC 로 새면 하루가 밀리고, 미래 슬롯 키 하나가 기본 조회를 오지 않은 날로 옮기면 그 화면은
@@ -200,6 +201,35 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertMissingSlotIssue("i1", "etf-daily:2026-02-31T15:40", "OPEN");
 
 		assertThat(repository.facts(null).today()).isEqualTo(LocalDate.parse("2026-08-01"));
+	}
+
+	/**
+	 * 런 축은 <b>그 날의 것만</b> 나간다. 창을 안 걸면 원장 전건이 실려 다른 날 런이 오늘 사건이
+	 * 된다. {@code run_key} 순 고정도 함께 잰다 — 정렬이 없으면 같은 원장이 조회마다 다른 순서로
+	 * 나가 소비자의 "첫 런"이 흔들린다.
+	 */
+	@Test
+	void 런_축은_그_날의_런만_정렬해서_싣는다() {
+		insertTradingDay("2026-08-03");
+		insertRun("r-b", "etf-daily:2026-08-03T09:00", "RUNNING", "2026-08-03",
+				"2026-08-03T00:00:00Z", null);
+		insertTradingDay("2026-08-01");
+
+		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
+				.containsExactly("etf-daily:2026-08-03T09:00", "etf-daily:2026-08-03T15:40");
+	}
+
+	/**
+	 * 거래일이 NULL 인 런도 <b>같은 창</b>에 들어와야 한다 — 조회 창을 고르는 식과 런을 자르는 식이
+	 * 갈리면 그 런이 "날짜는 골랐는데 목록에는 없는" 상태가 된다.
+	 */
+	@Test
+	void 거래일이_없는_런도_같은_창에_잡힌다() {
+		insertRun("r-news", "news:2026-08-03T15:30", "SUCCEEDED", null,
+				"2026-08-02T16:00:00Z", null);
+
+		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
+				.containsExactly("news:2026-08-03T15:30");
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
