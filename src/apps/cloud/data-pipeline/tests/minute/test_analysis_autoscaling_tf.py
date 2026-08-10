@@ -54,11 +54,22 @@ def _steps(text: str) -> list[tuple[float, float, int]]:
 
 
 def _capacity_for(depth: int, threshold: float, steps) -> int:
-    """AWS 계약: 오프셋 = 지표값 - threshold, lower 는 포함·upper 는 배제."""
+    """AWS 계약: 오프셋 = 지표값 - threshold.
+
+    ⚠️ 포함/배제는 **한 방향이 아니다** — 지표가 임계 위면 `[lo, up)`, 아래면 `(lo, up]`
+    로 뒤집힌다. 오프셋이 bound 에 정확히 얹히는 값이 있으면 그 뒤집힘이 대수를 가르고,
+    apply 는 멀쩡히 통과한다. 그래서 여기선 **두 해석을 다 계산해 일치를 요구**한다 —
+    일치해야만 계단이 벤더의 규칙 방향과 무관해진다(임계를 반정수로 두는 이유).
+    """
     offset = depth - threshold
-    hit = [adj for lo, up, adj in steps if lo <= offset < up]
-    assert len(hit) == 1, f"깊이 {depth}(오프셋 {offset})에 맞는 구간이 {len(hit)}개다 — 구멍이거나 겹친다"
-    return hit[0]
+    above = [adj for lo, up, adj in steps if lo <= offset < up]
+    below = [adj for lo, up, adj in steps if lo < offset <= up]
+    assert len(above) == 1 and len(below) == 1, \
+        f"깊이 {depth}(오프셋 {offset})에 맞는 구간이 {len(above)}/{len(below)}개다 — 구멍이거나 겹친다"
+    assert above[0] == below[0], (
+        f"깊이 {depth}(오프셋 {offset})이 bound 위에 얹혀 포함/배제 규칙에 따라 "
+        f"{above[0]}대와 {below[0]}대로 갈린다 — 임계를 반정수로 두면 사라진다")
+    return above[0]
 
 
 @pytest.mark.parametrize("depth,expected", _EXPECTED)
@@ -90,6 +101,32 @@ def test_계단이_상한을_넘지_않는다():
     top = max(adj for _, _, adj in _steps(text))
     assert top <= int(default.group(1)), \
         f"계단 상단({top})이 max_capacity({default.group(1)})를 넘는다 — 그 구간은 조용히 잘린다"
+
+
+def test_처리중_메시지가_잔여_일감에_들어간다():
+    """가시 수만 보면 **마지막 한 건이 영영 안 끝난다** — 소비자가 집는 순간 비가시가 돼
+    깊이 0 이 되고, OK 로 풀린 알람이 매분 0 대를 써서 처리 중이던 태스크를 죽인다
+    (Fargate stopTimeout 120초 < 건당 588초). 재배달되면 같은 순환이라 DLQ 로 간다.
+    그래서 `NotVisible` 이 지표에 **반드시 더해져** 있어야 한다."""
+    try:
+        text = _tf()
+    except StopIteration:
+        pytest.skip(f"{_REL} 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    assert "ApproximateNumberOfMessagesVisible" in text, "가시 메시지 지표가 없다"
+    assert "ApproximateNumberOfMessagesNotVisible" in text, \
+        "처리 중(비가시) 메시지가 잔여 일감에서 빠졌다 — 인플라이트 중에 0 대로 내려간다"
+
+    expr = re.search(r'expression\s*=\s*"([^"]+)"', text)
+    assert expr, "두 지표를 합치는 metric math 식이 없다"
+    ids = set(re.findall(r"\b[a-z_]+\b", expr.group(1)))
+    for metric in ("ApproximateNumberOfMessagesVisible", "ApproximateNumberOfMessagesNotVisible"):
+        hit = re.search(r'metric_name\s*=\s*"' + metric + r'"', text)
+        assert hit, f"{metric} 이 metric_query 안에 없다"
+        # 그 지표를 감싼 블록의 id = 지표 앞에 마지막으로 선언된 id
+        mid = re.findall(r'id\s*=\s*"([a-z_]+)"', text[:hit.start()])[-1]
+        assert mid in ids, \
+            f"{metric}({mid}) 이 합산식 `{expr.group(1)}` 에 안 쓰인다 — 지표에서 빠졌다"
 
 
 def test_계단_하한이_0_대에_닿는다():

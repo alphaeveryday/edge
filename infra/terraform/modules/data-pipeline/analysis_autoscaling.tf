@@ -37,32 +37,67 @@ resource "aws_appautoscaling_target" "analysis_consumer" {
   max_capacity = var.analysis_consumer_max_capacity
 }
 
-# 큐 깊이 = **가시 메시지 수**다. 처리 중인 메시지와 ReturnsNotReady 로 미룬 메시지는
-# 비가시라 여기 안 잡힌다 — 이미 붙잡고 있는 일을 보고 또 올리는 헛 스케일업이 없다.
-# ⚠️ `NotVisible` 을 더하면 안 된다: 처리 중 1건이 곧 "일이 남았다"로 읽혀 배출이 끝난
-# 뒤에도 대수가 안 내려간다.
+# 잔여 일감 = **가시 + 처리중(비가시)** 이다. 둘을 더하는 것이 이 알람의 핵심이다.
+# ⚠️ 가시 수만 보면 **마지막 한 건이 영영 안 끝난다**: 소비자가 메시지를 집는 순간
+# 비가시가 돼 가시 깊이가 0 이 되고, 알람이 OK 로 전이하면 `ok_actions` 가 **매분** 0 대를
+# 써서 그 건을 처리 중이던 태스크를 죽인다(Fargate `stopTimeout` 상한 120초 < 건당 588초).
+# 900초 뒤 재배달되면 같은 순환이 반복돼 `maxReceiveCount` 16 을 소진하고 DLQ 로 간다.
+# 단발 트리거와 버스트 꼬리가 전부 여기 걸린다. 더하면 인플라이트가 남아 있는 한 대수가
+# 0 으로 안 내려가고, 밤에는 둘 다 0 이라 `min_capacity = 0` 의 비용 근거는 그대로다.
+# ⚠️ 그래도 **스케일인 자체는 처리 중인 건을 자른다**(4→2 면 두 건이 잘려 900초 뒤
+# 재배달·LLM 재과금). Fargate 가 `stopTimeout` 을 120초로 묶어 터미널에서 못 막는다 —
+# 태스크 스케일인 보호(소비자가 처리 중임을 ECS 에 알리는 것)는 코드라 후속 PR 이다.
 resource "aws_cloudwatch_metric_alarm" "analysis_backlog" {
   alarm_name        = "${var.name}-analysis-backlog"
-  alarm_description = "설명 큐 대기 깊이 — analysis-consumer 대수를 정하는 유일한 입력(ALPHA-912)."
-  namespace         = "AWS/SQS"
-  metric_name       = "ApproximateNumberOfMessagesVisible"
-  dimensions        = { QueueName = aws_sqs_queue.minute["price-explanation-realtime"].name }
+  alarm_description = "설명 큐 잔여 일감(가시+처리중) — analysis-consumer 대수를 정하는 유일한 입력(ALPHA-912)."
 
-  statistic          = "Maximum"
-  period             = 60
+  metric_query {
+    id          = "backlog"
+    expression  = "visible + inflight"
+    label       = "설명 큐 잔여 일감"
+    return_data = true
+  }
+
+  metric_query {
+    id = "visible"
+    metric {
+      namespace   = "AWS/SQS"
+      metric_name = "ApproximateNumberOfMessagesVisible"
+      dimensions  = { QueueName = aws_sqs_queue.minute["price-explanation-realtime"].name }
+      period      = 60
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id = "inflight"
+    metric {
+      namespace   = "AWS/SQS"
+      metric_name = "ApproximateNumberOfMessagesNotVisible"
+      dimensions  = { QueueName = aws_sqs_queue.minute["price-explanation-realtime"].name }
+      period      = 60
+      stat        = "Maximum"
+    }
+  }
+
   evaluation_periods = 1
   # ⚠️ 임계는 **계단의 원점**이다 — step 의 bound 가 "지표값"이 아니라 `지표값 - threshold`
-  # 오프셋이라서. 0 으로 두면 깊이 0 의 오프셋이 0 이 돼 첫 구간 `[0,5)` 에 걸려 **1대로
-  # 내려가고 0 대에 영영 못 간다**(min 0 의 비용 근거가 사라진다). 1 로 두면 깊이 0 이
-  # 오프셋 -1 이 돼 `(-∞,0)` 구간, 즉 0 대에 닿는다.
-  threshold           = 1
+  # 오프셋이라서. 그리고 AWS 는 지표가 임계 **아래**일 때 bound 의 포함/배제를 뒤집는다
+  # (아래면 lower 배제·upper 포함, 위면 그 반대). 정수로 두면 어떤 깊이의 오프셋이 bound 에
+  # 정확히 얹혀 **그 뒤집힘이 대수를 가른다** — 예컨대 임계 1 에서 깊이 1 은 breach 가
+  # 아니라 오프셋 0 이 `(-∞,0]` 에 걸려 0 대가 된다(의도는 1 대). 0.5 로 두면 모든 깊이의
+  # 오프셋이 bound 사이에 떨어져 그 규칙과 **무관**해지고, 깊이 0 은 -0.5 로 0 대에 닿는다.
+  threshold           = 0.5
   comparison_operator = "GreaterThanThreshold"
   # 큐가 비면 SQS 는 지표를 안 보내는 게 아니라 0 을 보낸다 — missing 은 사실상 안 생기지만,
   # 생긴다면 "모름"이지 "일감 있음"이 아니다(올리는 쪽으로 틀리면 야간에 대수가 남는다).
   treat_missing_data = "notBreaching"
 
+  # 오토스케일링 액션은 **상태가 바뀔 때만이 아니라 그 상태에 머무는 동안 매분** 다시
+  # 불린다(CloudWatch 계약 — SNS 액션과 다른 점). 그래서 버스트가 커지는 동안 ALARM 을
+  # 유지해도 계단이 재평가돼 대수가 따라 오른다. 한 번 걸리고 마는 게 아니다.
   alarm_actions = [aws_appautoscaling_policy.analysis_scale.arn]
-  # ⚠️ OK 액션에도 같은 정책을 건다 — 계단의 하한(대기 0 → 0대)은 알람이 **풀릴 때**
+  # ⚠️ OK 액션에도 같은 정책을 건다 — 계단의 하한(잔여 0 → 0대)은 알람이 **풀릴 때**
   # 평가된다. 안 걸면 버스트 뒤 대수가 그대로 남아 min 0 의 비용 근거가 사라진다.
   ok_actions = [aws_appautoscaling_policy.analysis_scale.arn]
 }
@@ -81,13 +116,15 @@ resource "aws_appautoscaling_policy" "analysis_scale" {
     # 기동이 59~122초 걸린다(ECS Fargate 실측) — 그보다 짧게 두면 아직 안 뜬 태스크를
     # 못 보고 같은 깊이에 또 올린다.
     cooldown = 180
-    # ⚠️ bound 는 지표값이 아니라 **`지표값 - threshold(1)` 오프셋**이다. 아래 구간이
-    # 실제로 뜻하는 깊이:
-    #   (-∞,0)  → 깊이 0        → 0대   (버스트 종료 · 야간)
-    #   [0,5)   → 깊이 1~5      → 1대
-    #   [5,15)  → 깊이 6~15     → 2대
-    #   [15,30) → 깊이 16~30    → 3대
-    #   [30,∞)  → 깊이 31 이상  → 4대
+    # ⚠️ bound 는 지표값이 아니라 **`지표값 - threshold(0.5)` 오프셋**이다. 아래 구간이
+    # 실제로 뜻하는 잔여 일감(가시+처리중):
+    #   (-∞,0)  → 0건         → 0대   (버스트 종료 · 야간)
+    #   [0,5)   → 1~5건       → 1대
+    #   [5,15)  → 6~15건      → 2대
+    #   [15,30) → 16~30건     → 3대
+    #   [30,∞)  → 31건 이상   → 4대
+    # 임계가 반정수라 오프셋(n-0.5)이 bound 위에 얹히지 않는다 — 포함/배제 규칙이 뒤집혀도
+    # 같은 대수가 나온다(계약 테스트가 두 해석을 모두 대조한다).
     # 실측 p50 588초 기준 배출 시간(40건): 1대 6.5시간 · 2대 3.3시간 · 3대 2.2시간 · 4대 1.6시간.
     # 알람 statistic 과 **같은 집계**여야 한다 — 갈리면 계단이 다른 값으로 판정된다.
     metric_aggregation_type = "Maximum"
