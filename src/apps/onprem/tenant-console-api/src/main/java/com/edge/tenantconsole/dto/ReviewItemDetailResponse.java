@@ -26,6 +26,8 @@ public record ReviewItemDetailResponse(
 		String confidenceLevel,
 		String status,
 		String receivedAt,
+		/** 콘텐츠 기준시각(ALPHA-920) — 본문의 시간 서술과 대조하는 검수자용. 결측(구형 수신분)은 키 생략. */
+		String contentAsOf,
 		JsonNode evidences,
 		List<String> reviewReasons,
 		List<CheckResponse> checks,
@@ -53,6 +55,7 @@ public record ReviewItemDetailResponse(
 				i.tradeDate() == null ? null : i.tradeDate().toString(),
 				i.summary(), i.headline(), i.confidenceLevel(), i.status(),
 				i.receivedAt() == null ? null : i.receivedAt().toString(),
+				i.contentAsOf() == null ? null : i.contentAsOf().toString(),
 				detail.evidences(),
 				detail.reviewReasons(),
 				detail.checks().stream()

@@ -13,6 +13,7 @@ import {
 } from '../domains/screening/hooks';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
+import { kstMinute } from '../lib/time';
 
 const ACTION_LABEL: Record<WordAction, string> = { REVIEW: '검수 필요', BLOCK: '점검 차단' };
 
@@ -497,7 +498,7 @@ function HistoryTab() {
           {versions.map((v) => (
             <tr key={v.versionNo}>
               <td className="num">v{v.versionNo}</td>
-              <td className="col-muted t-data">{v.publishedAt ? new Date(v.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}</td>
+              <td className="col-muted t-data">{kstMinute(v.publishedAt)}</td>
               <td>{v.publishedBy ?? '—'}</td>
               <td>{v.autoPublishEnabled ? '사용' : '전건 검수'}</td>
               {/* 이력 셀도 설정 화면과 같은 어휘로 — 헤더가 축만 말하므로 조건은 값이 진다.

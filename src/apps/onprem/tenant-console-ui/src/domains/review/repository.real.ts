@@ -20,6 +20,7 @@ interface WireItem {
 }
 
 interface WireDetail extends WireItem {
+  content_as_of?: string;
   evidences: { kind: string; title: string | null; source: string; published_at?: string; source_uri?: string }[];
   checks: {
     result: 'PASS' | 'REVIEW' | 'BLOCK';
@@ -63,6 +64,7 @@ function toItem(w: WireItem): ReviewItem {
 function toDetail(w: WireDetail): ReviewItemDetail {
   return {
     ...toItem(w),
+    contentAsOf: w.content_as_of ?? null,
     evidences: (w.evidences ?? []).map((e) => ({
       kind: e.kind,
       // title 은 계약상 nullable — null 이면 링크 앵커가 빈 셀이 되므로 설명 상세와 같은 폴백.
