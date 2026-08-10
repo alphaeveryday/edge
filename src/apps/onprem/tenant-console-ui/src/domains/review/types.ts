@@ -60,6 +60,8 @@ export interface StatusChange {
 }
 
 export interface ReviewItemDetail extends ReviewItem {
+  /** 스냅샷 기준시각(생성 벽시계) — 기준시각 표시의 폴백 원료(ALPHA-925) */
+  explanationAsOf: string | null;
   /** 콘텐츠 기준시각(ALPHA-920) — 본문의 시간 서술과 대조용. 구형 수신분은 null */
   contentAsOf: string | null;
   evidences: ReviewEvidence[];

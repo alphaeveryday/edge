@@ -37,6 +37,8 @@ class ReviewItemDetailResponseTest {
 
 		assertThat(json.get("content_as_of").asString()).isEqualTo("2026-07-15T10:30+09:00");
 		assertThat(json.has("contentAsOf")).isFalse();
+		// 폴백 원료(ALPHA-925) — UI 가 contentAsOf ?? explanationAsOf 로 설명 상세와 같은 규칙을 쓴다.
+		assertThat(json.get("explanation_as_of").asString()).isEqualTo("2026-07-15T16:00+09:00");
 	}
 
 	@Test
