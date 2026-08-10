@@ -41,8 +41,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 
 	/**
 	 * 그 날의 런 전건. <b>정렬을 고정한다</b> — 안 하면 같은 원장이 조회마다 다른 순서로 나가고,
-	 * 소비자가 "첫 런"을 집는 순간 판정이 흔들린다. {@code run_key} 가 같은 행이 둘 이상일 수
-	 * 있어(재실행) 2차 키로 내부 id 를 쓴다.
+	 * 소비자가 "첫 런"을 집는 순간 판정이 흔들린다.
+	 *
+	 * <p>{@code run_key} 하나로 전순서가 정해진다 — {@code uq_ops_pipeline_run_key} 가 UNIQUE 라
+	 * 동률이 없다("이 슬롯은 한 번만 계획된다"가 그 컬럼의 계약이다). 2차 키는 무해한 중복이고,
+	 * 그 계약이 깨지는 날을 대비해 남겨 둔다.
 	 */
 	private static final String RUNS_SQL = """
 			SELECT r.run_key, r.pipeline_type, r.trading_date, r.orchestration_status,

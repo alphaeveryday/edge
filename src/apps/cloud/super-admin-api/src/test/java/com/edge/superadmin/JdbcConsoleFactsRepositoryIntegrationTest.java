@@ -206,7 +206,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	/**
 	 * 런 축은 <b>그 날의 것만</b> 나간다. 창을 안 걸면 원장 전건이 실려 다른 날 런이 오늘 사건이
 	 * 된다. {@code run_key} 순 고정도 함께 잰다 — 정렬이 없으면 같은 원장이 조회마다 다른 순서로
-	 * 나가 소비자의 "첫 런"이 흔들린다.
+	 * 나가 소비자의 "첫 런"이 흔들린다({@code run_key} 가 UNIQUE 라 그 하나로 전순서가 정해진다).
 	 */
 	@Test
 	void 런_축은_그_날의_런만_정렬해서_싣는다() {
