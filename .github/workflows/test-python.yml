@@ -53,6 +53,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "src/uv.lock"
+          cache-local-path: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.app }}
 
       - name: uv sync (locked, 앱 스코프)
         working-directory: src
@@ -136,6 +137,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "src/uv.lock"
+          cache-local-path: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
 
       - name: uv sync (locked)
         working-directory: src
