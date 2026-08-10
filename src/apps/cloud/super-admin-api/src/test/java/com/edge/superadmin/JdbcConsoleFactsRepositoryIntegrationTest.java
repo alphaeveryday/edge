@@ -1,11 +1,12 @@
 package com.edge.superadmin;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.JdbcConsoleFactsRepository;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -302,25 +303,51 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 형식이_깨진_슬롯_키는_레인을_지어내지_않고_경고를_남긴다() {
 		insertMissingSlotIssue("i1", ":2026-08-03T15:40", "OPEN");
-		ListAppender<ILoggingEvent> logs = captureWarnings(JdbcConsoleFactsRepository.class);
-
-		assertThat(repository.facts(DAY).runs()).singleElement().satisfies(r -> {
-			assertThat(r.runKey()).isEqualTo(":2026-08-03T15:40");
-			assertThat(r.lane()).isNull();
-			assertThat(r.tradingDate()).isNull();
-			assertThat(r.noRunRow()).isTrue();
-		});
-		/* null 을 내는 것만으로는 Rule 12 를 못 만족한다 — 응답에는 "레인 미상"으로만 보여
-		 * Planner 키 형식이 갈렸다는 사실이 아무 데도 안 남는다. 경고가 그 유일한 장치라면
-		 * **경고의 존재가 곧 계약이다**(경고를 지우는 변이가 여기서 잡혀야 한다). */
-		assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
-				.anySatisfy(m -> assertThat(m).contains("슬롯 키를 못 읽었다"));
+		/* 로거는 전역이라 반드시 떼야 다음 테스트로 안 샌다 — 레포 선례(publication-api 의
+		 * `ExplanationDisclaimerIntegrationTest`)와 같은 try/finally 형태다. */
+		Logger repoLogger = (Logger) LoggerFactory.getLogger(JdbcConsoleFactsRepository.class);
+		ListAppender<ILoggingEvent> captured = new ListAppender<>();
+		captured.start();
+		repoLogger.addAppender(captured);
+		try {
+			assertThat(repository.facts(DAY).runs()).singleElement().satisfies(r -> {
+				assertThat(r.runKey()).isEqualTo(":2026-08-03T15:40");
+				assertThat(r.lane()).isNull();
+				assertThat(r.tradingDate()).isNull();
+				assertThat(r.noRunRow()).isTrue();
+			});
+			/* null 을 내는 것만으로는 Rule 12 를 못 만족한다 — 응답에는 "레인 미상"으로만 보여
+			 * Planner 키 형식이 갈렸다는 사실이 아무 데도 안 남는다. 경고가 그 유일한 장치라면
+			 * **경고의 존재가 곧 계약이다**. 레벨까지 재는 것은 선례와 같은 이유다 — 강등하면
+			 * 로거가 걸러 안 들어오지만, ERROR 로 올리는 변이는 레벨을 안 보면 통과한다. */
+			assertThat(captured.list).anySatisfy(event -> {
+				assertThat(event.getLevel()).isEqualTo(Level.WARN);
+				assertThat(event.getFormattedMessage()).contains("슬롯 키를 못 읽었다");
+			});
+		}
+		finally {
+			repoLogger.detachAppender(captured);
+		}
 	}
 
+	/**
+	 * 이 쿼리의 술어 <b>다섯</b>을 한 자리에서 잰다 — 하나라도 빠지면 <b>유령 런 행</b>이
+	 * `runs[]` 에 뜬다(`planned: true, noRunRow: true` 를 달고). 화면은 그걸 "계획됐는데 안 돈
+	 * 슬롯"으로 그리고, 존재한 적 없는 사건이 판정 대상이 된다.
+	 *
+	 * <p>⚠️ 조회 창 쪽 형제 쿼리({@code MISSING_SLOT_DAYS_SQL})는 같은 술어를 이미 pin 했는데
+	 * 이쪽만 비어 있었다 — 픽스처 키가 <b>조회 날짜와 달라</b> 그 테스트가 이 쿼리를 안 탔다.
+	 * 그래서 여기 후보는 전부 <b>08-03 키</b>다.
+	 */
 	@Test
-	void 해소된_이슈와_다른_날_슬롯은_안_담는다() {
-		insertMissingSlotIssue("i1", "etf-daily:2026-08-03T15:40", "RESOLVED");
-		insertMissingSlotIssue("i2", "etf-daily:2026-08-02T15:40", "OPEN");
+	void 슬롯_후보가_아닌_이슈는_유령_런_행을_만들지_않는다() {
+		insertMissingSlotIssue("i1", "etf-daily:2026-08-03T15:40", "RESOLVED");   // status
+		insertMissingSlotIssue("i2", "etf-daily:2026-08-02T15:40", "OPEN");       // 다른 날
+		insertIssue("i3", "MISSED", "slot", "etf-daily:2026-08-03T09:00", "OPEN");        // issue_type
+		insertIssue("i4", "PLANNER_MISSING", "run", "etf-daily:2026-08-03T10:00", "OPEN"); // scope
+		/* `LIKE '%:' || ? || 'T%'` 의 앵커(`:` 와 `T`)를 잰다 — 날짜가 키의 **다른 자리**에 박힌
+		 * 값이 통과하면 안 된다. 앵커를 지우면(`'%' || ? || '%'`) 이 줄이 잡는다. */
+		insertIssue("i5", "PLANNER_MISSING", "slot", "run-2026-08-03-retry", "OPEN");
 
 		assertThat(repository.facts(DAY).runs()).isEmpty();
 	}
@@ -340,26 +367,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
 				.containsExactly("a-lane:2026-08-03T15:40", "m-lane:2026-08-03T15:40",
 						"z-lane:2026-08-03T15:40");
-	}
-
-	private ch.qos.logback.classic.Logger capturedLogger;
-	private ListAppender<ILoggingEvent> capturedAppender;
-
-	/** 지정 클래스의 WARN 을 담는다. logback 로거는 전역이라 <b>반드시 떼야</b> 다음 테스트로 안 샌다. */
-	private ListAppender<ILoggingEvent> captureWarnings(Class<?> type) {
-		capturedAppender = new ListAppender<>();
-		capturedAppender.start();
-		capturedLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(type);
-		capturedLogger.addAppender(capturedAppender);
-		return capturedAppender;
-	}
-
-	@AfterEach
-	void detachAppender() {
-		if (capturedLogger != null) {
-			capturedLogger.detachAppender(capturedAppender);
-			capturedLogger = null;
-		}
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
