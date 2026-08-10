@@ -31,7 +31,17 @@ import '../styles/ops.css';
 
 /** 조사 경로 — 실제 식별자로만 만든다. 사건에서 왔으면 그 문맥을 유지한다 */
 function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string }) {
-  const ev = useConsoleEvaluation();
+  /* 실행 상세의 조회 창 — 아래 링크 분기가 이 값의 유무로 갈린다 */
+  const runDate = runKey ? dateOfSlot({ tradingDate: null, runKey }) : null;
+  /* 🔴 **사건을 푸는 창과 링크가 싣는 창이 같아야 한다.** 여기서 오늘 사실로 `incidentId` 를
+   * 풀고 링크에는 `runDate` 를 실으면, 목적지가 그 날 사실로 같은 vid 를 다시 찾다가 못 찾는다
+   * (vid 는 날짜에 고정된다 — `rules.test.ts` 의 R17 사건 키 검사). 그러면 breadcrumb 이
+   * "최근 런"으로 퇴행해 **돌아갈 곳이 사라진다** — 조사 문맥을 유지하려고 둔 이 컴포넌트가
+   * 정확히 그걸 잃는다. 런을 모르는 자리(`runKey` 없음)는 전과 같이 최신 창을 본다.
+   * ⚠️ **대가도 적어 둔다**: 그 사건이 오늘 사실에만 있으면 back-link 이 `확인되지 않음` 으로
+   * degrade 한다. "사건은 보이는데 런 링크가 죽는다"를 "둘 다 같은 창"으로 바꾼 거래다 —
+   * 창이 갈린 채로 두면 목적지에서 **문맥과 링크가 동시에** 죽는 쪽이라 이쪽을 골랐다. */
+  const ev = useConsoleEvaluation(runDate ?? undefined);
   /* 흡수된 위반의 vid 로 와도 그 사건을 찾는다 — 뿌리만 보면 문맥이 조용히 사라진다.
    * ⚠️ **"확인되지 않음"은 `loaded` 에서만 참이다** — `stale`(마지막 조회 실패)·`pending`·
    * `error` 를 그 문구로 접으면 조회 실패가 "그 사건은 해소됐다"로 읽힌다. */
@@ -41,8 +51,6 @@ function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string })
   const notRun = ev.ready && incidentId ? unevaluatedFor(ev, incidentId) : undefined;
   /* 🔴 `SourcesPage` 의 crumb 과 같은 판별자 — 사건 목록은 사실·실시간 **두 축** 위에 선다 */
   const crumbFetch = !ev.ready ? ev.fetch : isCurrent(ev.fetch) ? ev.axisFetch : ev.fetch;
-  /* 실행 상세의 조회 창 — 아래 링크 분기가 이 값의 유무로 갈린다 */
-  const runDate = runKey ? dateOfSlot({ tradingDate: null, runKey }) : null;
   return (
     <nav className="t-xs ops-crumb" aria-label="조사 경로">
       {incidentId ? (

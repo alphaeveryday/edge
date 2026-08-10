@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { incidentHref, incidentOfVid, investigate, ledgerHref } from './investigation.ts';
+import { incidentHref, incidentOfVid, investigate, ledgerHref, runHref } from './investigation.ts';
 import { evaluate } from '../../rules/evaluate.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
@@ -327,7 +327,10 @@ test('실 API 화면 3곳은 실행 상세로 보낼 때 조회 창(date)을 함
  * 화면은 멀쩡해 보이면서 축 E 이전과 정확히 같은 창을 본다. 그래서 여기 못을 박는다.
  *
  * 값이 아니라 **배선**을 본다: 주소에서 읽은 그 식별자가 훅으로 들어가는가. 값(어느 날이 실제로
- * 조회됐는가)은 하네스 소관이고, 이 검사는 그게 없는 환경에서의 바닥이다. */
+ * 조회됐는가)은 하네스 소관이고, 이 검사는 그게 없는 환경에서의 바닥이다.
+ *
+ * ⚠️ **이 파일도 CI 가 안 돌린다** — `.github/workflows/` 에 super-admin-ui 를 도는 PR
+ * 워크플로가 없다(JVM·파이썬은 있다). 여기 있는 것은 *로컬에서 돌릴 때* 도는 가드다. */
 test('실행 상세는 주소의 date 를 조회에 넘긴다 — 링크만 실어서는 아무것도 안 바뀐다', () => {
   const src = readSrc('./RunAxisPage.tsx');
 
@@ -345,6 +348,88 @@ test('실행 상세는 주소의 date 를 조회에 넘긴다 — 링크만 실�
       `${call} 가 주소의 date(${bound})를 안 넘긴다 — 상세가 원장이 아는 가장 최근 날만 본다`,
     );
   }
+
+  /* 🔴 **훅 하나로 끝나지 않는다 — 사슬이다.** `date` 는 `useConsoleEvaluation` 에서 배치 축
+   * (`useConsoleFactsQuery` → `useConsoleFacts`, 여기가 실제 요청을 만든다)과 실시간 축
+   * (`useMinuteStatus`)으로 갈라져 내려간다. 어느 한 홉만 떨어뜨리는 변이는 나머지 자리에
+   * 인자가 살아 있어 tsc 미사용 경고도 안 뜨고 위 검사도 통과했다(홉마다 실증).
+   * 배치 축이 끊기면 **부재 문구가 거짓말을 한다** — 물어본 적 없는 날을 두고 "그 날을
+   * 물었는데 없었다"고 말해 운영자가 원장·런키를 의심하며 헛수사한다. */
+  /* 홉은 **요청을 만드는 데까지** 이어야 한다. 중간에서 끊으면 그 아래가 그대로 구멍이다 —
+   * 특히 `useConsoleFacts` 는 `queryKey` 에 날짜를 넣으므로, 거기서 축을 흘리면 react-query 가
+   * **날짜별로 캐시를 나눠 두고 내용은 전부 최신 하루**를 담는다. 운영자가 7/31 과 8/3 을 나란히
+   * 놓고 같은 사실을 다른 라벨로 비교하고, 새로고침으로도 안 풀린다(키가 달라 재검증이 안 붙는다). */
+  for (const [file, owner, hooks] of [
+    ['./shared.tsx', 'useConsoleEvaluation', ['useConsoleFactsQuery', 'useMinuteStatus']],
+    ['./shared.tsx', 'useConsoleFactsQuery', ['useConsoleFacts']],
+    ['../../domains/console/hooks.ts', 'useConsoleFacts', ['consoleRepository.facts']],
+    ['../../domains/sources/hooks.ts', 'useMinuteStatus', ['sourcesRepository.minuteStatus']],
+  ] as const) {
+    const chain = readSrc(file);
+    /* ⚠️ **정의를 호출로 세면 안 된다** — 이 파일들은 같은 훅을 정의도 하고 부르기도 한다.
+     * 정의부 `function useConsoleFactsQuery(date?: string)` 가 매개변수 이름 때문에 그냥 통과해,
+     * 실제 호출이 축을 떨어뜨려도 못 잡는다(이 검사를 처음 쓸 때 실제로 그랬다). */
+    const body = chain.replace(/\bfunction\s+\w+\s*\(/g, 'function DECL(');
+
+    /* 홉마다 "그 함수가 받은 인자 이름"이 다르므로 정의부에서 캐낸다.
+     * ⚠️ 못 캐냈으면 **이 검사가 낡은 것**이지 코드가 틀린 게 아니다 — 리네임·제네릭 추가 같은
+     * 회귀 없는 변경이 여기로 떨어진다. "날짜 인자를 안 받는다"로 말하면 다음 사람이 엉뚱한
+     * 곳을 고치므로 사유를 그대로 밝힌다. */
+    const arg = chain.match(
+      new RegExp(String.raw`(?:function\s+${owner}|${owner}\s*=)\s*\(\s*(\w+)`),
+    )?.[1];
+    assert.ok(
+      arg,
+      `${file} 의 ${owner} 정의에서 날짜 인자 이름을 못 캐냈다 — 함수 형태가 바뀌었으면 ` +
+        `**이 검사를 고쳐라**(회귀가 아니다). 인자를 정말 없앴다면 그건 축 유실이다`,
+    );
+    for (const hook of hooks) {
+      const chainCalls = callsOf(body, hook);
+      assert.ok(chainCalls.length > 0, `${file} 에 ${hook} 호출이 없다`);
+      /* `.some()` 인 이유(위 3파일 검사는 전건인 것과 다르다): 이 파일들은 훅 정의를 겸해서
+       * 같은 이름의 정당한 호출이 여러 자리에 설 수 있다. 전건을 요구하면 그런 추가 호출이
+       * 회귀 없이 빨개진다. 대신 천장이 생긴다 — 날짜 없는 두 번째 호출이 첫 번째를 가린다. */
+      assert.ok(
+        chainCalls.some((c) => new RegExp(String.raw`\b${arg}\b`).test(c)),
+        `${owner} 이 ${hook} 로 ${arg} 를 안 넘긴다 — 그 축만 오늘로 남는다`,
+      );
+    }
+  }
+
+  /* 구성종목 결손의 조사 경로는 **사건을 푸는 창**과 **링크가 싣는 창**이 같아야 한다(둘이
+   * 갈리면 목적지가 같은 vid 를 못 찾아 breadcrumb 이 "최근 런"으로 퇴행한다). 위 홉 표는
+   * `Crumb` 을 못 본다 — 인자가 구조분해라 이름을 캐낼 수 없어 따로 못을 박는다. */
+  const holdings = readSrc('../HoldingsImpactPage.tsx');
+  for (const call of callsOf(holdings, 'useConsoleEvaluation')) {
+    assert.match(
+      call,
+      /\brunDate\b/,
+      `${call} 가 링크와 다른 창에서 사건을 푼다 — 목적지가 그 vid 를 못 찾아 돌아갈 곳이 사라진다`,
+    );
+  }
+
+  /* 알려진 천장(의도한 것): 이 표는 **하드코딩된 사슬**이라 ① `useConsoleEvaluation` 에 세 번째
+   * 축이 붙어도 아무 요구를 안 하고 ② 마지막 홉인 `repository.real.ts` 의 URL 조립(값을 쓰되
+   * 안 싣는 형태·인코딩 누락)은 안 본다. 둘 다 `apiClient` 를 물어 순수 단언이 안 나오는 자리라
+   * 값이 안 맞는다 — 하네스가 렌더된 주소로 재는 쪽이 맞다. */
+});
+
+/* `runHref` 가 실제로 그 쿼리를 **낸다**는 것 — 위 검사들은 전부 *호출부가 뭐라고 적었나*만
+ * 본다. 헬퍼 자신이 `date` 를 버리면(필터 한 줄) 3파일의 링크가 동시에, 그리고 조용히 창 밖으로
+ * 나가는데 소스 텍스트 검사는 전부 통과한다. 산출물을 재는 단언이 레포 안에 이것뿐이다. */
+test('runHref 가 조회 창을 실제 주소에 싣는다 — 호출부가 적었다고 실리는 게 아니다', () => {
+  assert.equal(
+    runHref('etf-daily:2026-08-03T15:40', { date: '2026-08-03' }),
+    '/ops/runs/etf-daily%3A2026-08-03T15%3A40?date=2026-08-03',
+  );
+  /* 날짜를 안 주면 쿼리가 통째로 없다 — `?date=` 빈 값으로 나가면 서버가 400 을 내고, 그건
+   * "안 물어봤다"와 다른 사실이 된다. 그래서 **빈 문자열도 같이 잰다**: falsy 필터를
+   * `v !== undefined` 로 풀면 빈 쿼리가 나가는데, 위 두 경우만으로는 그게 안 잡힌다. */
+  assert.equal(
+    runHref('etf-daily:2026-08-03T15:40'),
+    '/ops/runs/etf-daily%3A2026-08-03T15%3A40',
+  );
+  assert.equal(runHref('k', { date: '' }), '/ops/runs/k');
 });
 
 /* ── 사건 딥링크는 CDN 을 통과해야 한다 ──────────────────────────────────────────
