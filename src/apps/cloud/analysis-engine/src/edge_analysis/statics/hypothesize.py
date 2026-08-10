@@ -135,10 +135,8 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 이 실행의 사건 집합은 서버가 이미 고정했다. 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출해 이 실행에서 선택 가능한 어휘를 확인한다. 사건 집합을 얻기 위해 `objectset.create`를 호출하지 마라.
 검정하려는 설계마다 `hypothesis.preview`를 호출한다. READY인 preview만 최종 제출할 수 있다.
 
-최종 응답은 아래 JSON 하나뿐이다.
-{{"hypotheses":[{{"preview_handle":"hpr_...","intent":"검정하려는 차이를 한 문장으로 쓴다."}}]}}
-
-최종 JSON에는 `preview_handle`과 `intent` 외의 필드를 쓰지 마라. 서버가 preview에 고정한 설계만 실행한다.
+최종 JSON의 각 가설에는 `preview_handle`과 `intent`만 쓴다. `preview_handle`은 READY
+`hypothesis.preview` 결과의 `handle` 값을 그대로 써야 한다. 서버가 preview에 고정한 설계만 실행한다.
 """
 
 
@@ -505,8 +503,12 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
                    reduction_note=t.reduction_note, intent=t.intent)
         if valid and (preview_mode or len(valid) >= 2):
             break
-        base = (base + "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n"
-                + "\n".join(rejected[-6:]))
+        retry = "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n" + "\n".join(rejected[-6:])
+        if preview_mode and any("PREVIEW_HANDLE" in reason for reason in rej):
+            retry += ("\n\n[서버 재시도 지시] 다음 응답은 반드시 `hypothesis.preview` 도구 호출이어야 "
+                      "한다. 앞서 받은 hypothesis.list_options 결과의 option ID만 사용하라. "
+                      "READY 결과의 실제 handle을 받은 뒤에만 최종 JSON을 제출하라.")
+        base += retry
     if sql_tool:
         # 왕복 수·거부 수 한 줄 — 질의 원문·결과는 sqltool 이 이미 record 로 남긴다.
         record("hypothesize.sql_rounds", rounds=sql_used, rejected=sql_rejects)
