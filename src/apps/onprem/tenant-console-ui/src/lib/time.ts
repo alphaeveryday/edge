@@ -22,12 +22,19 @@ const SECOND = new Intl.DateTimeFormat('sv-SE', {
   second: '2-digit',
 });
 
-/** ISO 시각 → "yyyy-MM-dd HH:mm KST". 결측은 '—'. */
-export function kstMinute(iso: string | null | undefined): string {
-  return iso ? `${MINUTE.format(new Date(iso))} KST` : '—';
+// 불량 문자열은 '—' 로 — format() 은 Invalid Date 에 RangeError 를 던져, 근거 published_at
+// 한 건의 이상값이 상세 화면 전체를 렌더링 실패시킨다(구 toLocaleString 은 문자열을 반환했다).
+function safeFormat(fmt: Intl.DateTimeFormat, iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? '—' : `${fmt.format(date)} KST`;
 }
 
-/** ISO 시각 → "yyyy-MM-dd HH:mm:ss KST" (검사·이력처럼 초까지 의미 있는 곳). 결측은 '—'. */
+/** ISO 시각 → "yyyy-MM-dd HH:mm KST". 결측·불량은 '—'. */
+export function kstMinute(iso: string | null | undefined): string {
+  return iso ? safeFormat(MINUTE, iso) : '—';
+}
+
+/** ISO 시각 → "yyyy-MM-dd HH:mm:ss KST" (검사·이력처럼 초까지 의미 있는 곳). 결측·불량은 '—'. */
 export function kstSecond(iso: string | null | undefined): string {
-  return iso ? `${SECOND.format(new Date(iso))} KST` : '—';
+  return iso ? safeFormat(SECOND, iso) : '—';
 }
