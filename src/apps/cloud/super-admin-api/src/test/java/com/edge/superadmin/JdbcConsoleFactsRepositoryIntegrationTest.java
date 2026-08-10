@@ -83,13 +83,28 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
 			String outcome, Long recordsOut, Long failedRecords, String completeness) {
+		insertTask(id, runId, taskKey, stage, dataset, outcome, true, recordsOut, failedRecords,
+				completeness);
+	}
+
+	/**
+	 * ⚠️ {@code required} 를 인자로 받는다 — 항상 {@code true} 로 넣으면 그 컬럼을 상수로 바꾸는
+	 * 변이가 통과한다(픽스처가 컬럼을 못 가르면 그 컬럼은 계약이 아니다).
+	 *
+	 * <p>{@code data_status} 는 귀결에 맞춘다 — 프로듀서는 PENDING 일 때 {@code UNKNOWN} 을 쓴다
+	 * ({@code ops/ledger.py}). 원장에 안 나오는 조합을 픽스처가 만들지 않게.
+	 */
+	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
+			String outcome, boolean required, Long recordsOut, Long failedRecords,
+			String completeness) {
 		jdbc.update("""
 				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
 				       dataset, plan_status, task_outcome, data_status, required,
 				       records_out, failed_records, completeness, idempotency_key)
-				VALUES (?,?,?,?,?,'DUE',?,'VALID',true,?,?,?::jsonb,?)
-				""", id, runId, taskKey, stage, dataset, outcome, recordsOut, failedRecords,
-				completeness, id);
+				VALUES (?,?,?,?,?,'DUE',?,?,?,?,?,?::jsonb,?)
+				""", id, runId, taskKey, stage, dataset, outcome,
+				"PENDING".equals(outcome) ? "UNKNOWN" : "VALID", required, recordsOut,
+				failedRecords, completeness, id);
 	}
 
 	/** ⚠️ {@code ecs_task_arn} 은 NOT NULL 이고 {@code (expected_task_id, ecs_task_arn)} 이 UNIQUE 다
@@ -408,8 +423,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	void 작업_축은_완전성_jsonb_와_시도_수를_함께_낸다() {
 		insertTradingDay("2026-08-03");
 		insertTask("t1", "r-2026-08-03", "COLLECT", "raw", "price", "FULFILLED", 906L, 0L,
-				"{\"expected\":33,\"received\":33,\"missing\":0}");
-		insertTask("t2", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", null, null, null);
+				"{\"expected\":33,\"received\":30,\"missing\":3}");
+		insertTask("t2", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", false, null, null,
+				null);
 		insertAttempt("a1", "t1");
 		insertAttempt("a2", "t1");
 
@@ -425,17 +441,22 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 					assertThat(t.required()).isTrue();
 					assertThat(t.planStatus()).isEqualTo("DUE");
 					assertThat(t.taskOutcome()).isEqualTo("FULFILLED");
+					assertThat(t.required()).isTrue();
 					assertThat(t.dataStatus()).isEqualTo("VALID");
 					assertThat(t.recordsOut()).isEqualTo(906L);
 					assertThat(t.failedRecords()).isZero();
+					/* 세 값을 **서로 다르게** 둔다 — 같으면 `expected`↔`received` 키를 맞바꾸는
+					 * 변이가 통과한다(조각 2 의 `created_at`==`updated_at` 과 같은 병이다). */
 					assertThat(t.completenessExpected()).isEqualTo(33L);
-					assertThat(t.completenessReceived()).isEqualTo(33L);
-					assertThat(t.completenessMissing()).isZero();
+					assertThat(t.completenessReceived()).isEqualTo(30L);
+					assertThat(t.completenessMissing()).isEqualTo(3L);
 					assertThat(t.attempts()).isEqualTo(2L);
 				},
 				t -> {
 					/* 🔴 여기가 요점이다 — 원장이 안 준 값은 **null 이지 0 이 아니다**. */
 					assertThat(t.taskKey()).isEqualTo("LOAD");
+					assertThat(t.required()).isFalse();   // 상수 true 로 바꾸는 변이를 잡는다
+					assertThat(t.dataStatus()).isEqualTo("UNKNOWN");
 					assertThat(t.recordsOut()).isNull();
 					assertThat(t.failedRecords()).isNull();
 					assertThat(t.completenessExpected()).isNull();
@@ -449,14 +470,24 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 삽입 순서·문자열 순 둘 다 기대와 달라야 정렬이 실제로 일한 것이 보인다.
 	 */
 	@Test
-	void 작업_축은_파이프라인_순서로_정렬된다() {
+	void 작업_축은_런_그다음_파이프라인_순서로_정렬된다() {
 		insertTradingDay("2026-08-03");
 		insertTask("t1", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", null, null, null);
 		insertTask("t2", "r-2026-08-03", "CLEAN", "normalize", "price", "PENDING", null, null, null);
 		insertTask("t3", "r-2026-08-03", "COLLECT", "raw", "price", "PENDING", null, null, null);
+		/* 🔴 **두 번째 런의 작업**을 둔다 — 전부 한 런 밑에 있으면 1차 정렬 키(`run_key`)를
+		 * 지워도 통과한다. 이 런은 `run_key` 가 앞서므로(`etf-daily:…09:00`) 그 작업이 먼저 와야
+		 * 하고, 그 안에서 stage 순이 다시 선다. */
+		insertRun("r-early", "etf-daily:2026-08-03T09:00", "etf-daily", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T00:00:00Z", "2026-08-03T00:00:00Z", null);
+		insertTask("t4", "r-early", "COLLECT", "raw", "price", "PENDING", null, null, null);
 
-		assertThat(repository.facts(DAY).tasks()).extracting(TaskRow::stage)
-				.containsExactly("raw", "normalize", "feature");
+		assertThat(repository.facts(DAY).tasks()).extracting(TaskRow::runKey, TaskRow::stage)
+				.containsExactly(
+						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T09:00", "raw"),
+						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T15:40", "raw"),
+						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T15:40", "normalize"),
+						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T15:40", "feature"));
 	}
 
 	/** 창이 없으면 다른 날 작업이 오늘 사건이 된다 — 런 축과 <b>같은 식</b>을 써야 한다. */

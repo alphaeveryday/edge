@@ -48,17 +48,17 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 그 날의 런 전건. <b>정렬을 고정한다</b> — 안 하면 같은 원장이 조회마다 다른 순서로 나가고,
 	 * 소비자가 "첫 런"을 집는 순간 판정이 흔들린다.
 	 *
-	 * <p>{@code run_key} 하나로 전순서가 정해진다 — {@code uq_ops_pipeline_run_key} 가 UNIQUE 라
-	 * 동률이 없다("이 슬롯은 한 번만 계획된다"가 그 컬럼의 계약이다). 2차 키는 그래서 <b>잉여</b>
-	 * 이고, 원본에서 온 그대로 둘 뿐 여기서 무엇을 지키지는 않는다 — 그 UNIQUE 가 깨지면 원장
-	 * <b>쓰기</b> 쪽이 먼저 죽는다({@code ops/ledger.py} 의 슬롯 멱등 조회가 단일 행을 전제한다).
+	 * <p>⚠️ <b>여기서 정렬하지 않는다.</b> 계획 결손 슬롯을 합친 뒤 {@link #facts} 가 전부 다시
+	 * 정렬하므로 이 자리의 {@code ORDER BY} 는 아무것도 정하지 않는다. 그런데 <b>가만두면 해롭다</b>:
+	 * 자바 정렬은 안정 정렬이라 SQL 이 미리 {@code run_key} 순으로 줘 버리면 자바 쪽 정렬 키를
+	 * 무엇으로 바꾸든 결과가 같아진다 — 두 정렬이 <b>서로를 가려</b> 어느 쪽도 안 걸린다.
+	 * 순서의 계약은 {@code facts()} 한 곳에 둔다.
 	 */
 	private static final String RUNS_SQL = """
 			SELECT r.run_key, r.pipeline_type, r.trading_date, r.orchestration_status,
 			       r.updated_at, r.hard_deadline_at
 			  FROM ops_pipeline_run r
 			 WHERE %s
-			 ORDER BY r.run_key, r.pipeline_run_id
 			""".formatted(DAY_WINDOW);
 
 	/*
@@ -175,6 +175,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				jdbc.query(RUNS_SQL, JdbcConsoleFactsRepository::mapRun, day));
 		jdbc.queryForList(MISSING_SLOTS_SQL, String.class, day.toString())
 				.forEach(runKey -> runs.add(missingSlot(runKey)));
+		/* 순서의 계약은 여기 하나다 — SQL 쪽에도 두면 둘이 서로를 가린다(RUNS_SQL 주석).
+		 * `run_key` 는 UNIQUE 라(`uq_ops_pipeline_run_key`) 이 키 하나로 전순서가 정해진다. */
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
