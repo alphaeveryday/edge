@@ -257,6 +257,8 @@ _HYPOTHESIS_LABELS = {"llm_intent": "LLM 의도", "text": "서버 설명",
 _RESULT_LABELS = {"preview_handle": "preview handle", "status": "검정 상태",
                   "summary": "검정 설명", "method": "방법", "verdict": "판정",
                   "n": "표본", "p": "p값", "reason": "사유"}
+_PREVIEW_REJECTED = "서버가 preview를 확인하지 못해 이 가설을 실행하지 않았습니다."
+_PREVIEW_DIAGNOSTIC_CODES = ("PREVIEW_HANDLE", "PREVIEW_NOT_READY")
 
 
 def _safe_trace_fields(event: dict, fields: tuple[str, ...]) -> dict[str, object]:
@@ -267,12 +269,20 @@ def _safe_trace_fields(event: dict, fields: tuple[str, ...]) -> dict[str, object
             if isinstance(event.get(key), (str, int, float, bool))}
 
 
+def _safe_preview_diagnostic(value: object) -> object:
+    """preview trust-boundary 코드는 어느 감사 경로에서도 사용자에게 노출하지 않는다."""
+    if isinstance(value, str) and any(code in value for code in _PREVIEW_DIAGNOSTIC_CODES):
+        return _PREVIEW_REJECTED
+    return value
+
+
 def _trace_fields_line(fields: dict[str, object], labels: dict[str, str]) -> str:
     """계약 field를 감사자가 읽는 짧은 레이블로 바꾼다."""
     bits = []
     for key, value in fields.items():
         shown = ("preview 필요 (preview_required)"
-                 if key == "status" and value == "preview_required" else value)
+                 if key == "status" and value == "preview_required"
+                 else _safe_preview_diagnostic(value))
         bits.append(f"{escape(labels[key])}: {escape(str(shown))}")
     return "<li>" + " · ".join(bits) + "</li>"
 
@@ -308,6 +318,9 @@ def _safe_raw_hypotheses(value: object) -> list[dict[str, object]]:
         if not isinstance(raw, dict):
             continue
         hypothesis = _safe_trace_fields(raw, _RAW_SCALAR_FIELDS)
+        if "preview_handle" in hypothesis:
+            hypothesis["preview_handle"] = _safe_preview_diagnostic(
+                hypothesis["preview_handle"])
         trigger = _safe_trace_fields(raw.get("trigger", {}), _RAW_TRIGGER_FIELDS)
         exposure = _safe_trace_fields(raw.get("exposure", {}), _RAW_EXPOSURE_FIELDS)
         conditions = [_safe_trace_fields(item, _RAW_CONDITION_FIELDS)
@@ -329,10 +342,17 @@ def _turn_key(event: dict, fallback: int) -> tuple[str, str]:
     return f"trace:{fallback}", "턴 미기록"
 
 
+def _same_tool_call(left: dict[str, object], right: dict[str, object]) -> bool:
+    """ObjectSet adapter 기록과 LLM 결과 요약이 같은 호출인지 제한적으로 판별한다."""
+    return (left.get("tool"), left.get("ok"), left.get("handle")) == (
+        right.get("tool"), right.get("ok"), right.get("handle")) and bool(left.get("handle"))
+
+
 def _render_llm(events: list[dict]) -> list[str]:
     """가설 trace를 입력 turn별로 raw→의도→도구→검정 결과 순서로 렌더한다."""
     groups: dict[str, dict[str, object]] = {}
-    unassigned_tools: list[dict[str, object]] = []
+    unassigned_llm_tools: list[dict[str, object]] = []
+    objectset_events: list[dict[str, object]] = []
 
     def group_for(event: dict, index: int) -> dict[str, object]:
         key, label = _turn_key(event, index)
@@ -346,17 +366,41 @@ def _render_llm(events: list[dict]) -> list[str]:
             bucket = ("raw" if kind == "hypothesis.raw" else
                       "rendered" if kind == "hypothesis.rendered" else "results")
             group[bucket].append(event)
-        elif kind in {"hypothesis.tool_result", "objectset.tool"}:
+        elif kind == "hypothesis.tool_result":
             if isinstance(event.get("turn"), (str, int)) and not isinstance(event.get("turn"), bool):
                 group_for(event, index)["tools"].append(event)
             else:
-                unassigned_tools.append(event)
+                unassigned_llm_tools.append(event)
+        elif kind == "objectset.tool":
+            objectset_events.append(event)
 
-    if len(groups) == 1 and unassigned_tools:
-        next(iter(groups.values()))["tools"].extend(unassigned_tools)
-        unassigned_tools = []
+    if len(groups) == 1 and unassigned_llm_tools:
+        next(iter(groups.values()))["tools"].extend(unassigned_llm_tools)
+        unassigned_llm_tools = []
+
+    llm_tool_summaries = [_safe_trace_fields(event, _TRACE_TOOL_FIELDS)
+                          for group in groups.values() for event in group["tools"]]
+    for group in groups.values():
+        for rendered in group["rendered"]:
+            for hypothesis in rendered.get("hypotheses", []):
+                if isinstance(hypothesis, dict):
+                    llm_tool_summaries.extend(
+                        _safe_trace_fields(call, _TRACE_TOOL_FIELDS)
+                        for call in hypothesis.get("tool_results", [])
+                        if isinstance(call, dict))
+    llm_tool_summaries.extend(_safe_trace_fields(event, _TRACE_TOOL_FIELDS)
+                              for event in unassigned_llm_tools)
+    server_prefetch = [_safe_trace_fields(event, _TRACE_TOOL_FIELDS)
+                       for event in objectset_events
+                       if not any(_same_tool_call(_safe_trace_fields(event, _TRACE_TOOL_FIELDS), llm)
+                                      for llm in llm_tool_summaries)]
 
     out: list[str] = []
+    if server_prefetch:
+        out.append("<details open><summary>서버 측 사전 조회</summary><p class=\"meta\">"
+                   "LLM이 선택한 호출이 아니라, 분석에 필요한 사건·뉴스 범위를 서버가 먼저 준비한 기록입니다."
+                   "</p><ul>" + "".join(_tool_line(call) for call in server_prefetch)
+                   + "</ul></details>")
     for group in groups.values():
         label = escape(str(group["label"]))
         raw_events = group["raw"]
@@ -411,9 +455,9 @@ def _render_llm(events: list[dict]) -> list[str]:
             out.append(f"<details open><summary>{label} — 검정 결과</summary><ul>"
                        + "".join(result_rows) + "</ul></details>")
 
-    if unassigned_tools:
-        calls = [_safe_trace_fields(event, _TRACE_TOOL_FIELDS) for event in unassigned_tools]
-        out.append("<details><summary>턴 미기록 — ObjectSet 도구 호출</summary><ul>"
+    if unassigned_llm_tools:
+        calls = [_safe_trace_fields(event, _TRACE_TOOL_FIELDS) for event in unassigned_llm_tools]
+        out.append("<details><summary>LLM 도구 호출 — 가설 턴 연결 정보 없음</summary><ul>"
                    + "".join(_tool_line(call) for call in calls) + "</ul></details>")
     return out
 
