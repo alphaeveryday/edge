@@ -178,19 +178,18 @@
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
-> ⚠️ **analysis-consumer 는 소유 축이 따로다**(ALPHA-910 — `MINUTE_SESSION_ANALYSIS_SERVICES`).
-> 수명은 공용과 같지만(07:45→1 · 20:05→0) 축이 갈려야 그 desired 를 오토스케일링에 넘길 수
-> 있다: 공용 경로가 남아 있으면 스케일러가 큐 깊이로 올린 값을 매일 밤 stop 이 덮어쓴다.
-> **축을 가르는 주체는 terraform 이 아니라 코드다** — `_services()` 가 공용 목록에서 이
-> 이름을 빼낸다. terraform 은 공용에도 그대로 싣는데, 그건 컷오버 안전망이다: 이 파일의
-> apply 와 이미지 CD 는 각자 `push: dev` 로 도는 독립 워크플로라 어느 쪽이 먼저 착지할지
-> 모르고, 공용에서 빼면 apply 가 늦은 날 구 이미지가 소비자를 아무 목록으로도 안 올린다.
-> 그래서 이 env 가 비어도 **죽지 않는다**(구 task-def = 공용이 덮는 상태). 공용 목록에서
-> 실제로 빼는 것과 이 관대함을 fail-loud 로 회수하는 것은 **오토스케일링 부착 다음 PR**
-> 소관이다 — 부착 PR(ALPHA-912 PR A, `analysis_autoscaling.tf`)은 terraform 만 담고 이
-> 둘을 **의도적으로 안 한다**. 같은 PR 에서 세션의 손까지 떼면, 이미지 CD 가 apply 보다
-> 먼저 착지한 날 아무도 desired 를 안 올려 그날 설명이 통째로 없기 때문이다. 즉 지금은
-> **세션과 스케일러가 공존하는 중간 상태**이고, 컷오버는 아직 안 끝났다.
+> ⚠️ **analysis-consumer 는 세션이 스케일하지 않는다**(ALPHA-912 — 컷오버 완료). desired 는
+> 큐 잔여 일감(가시+처리중)을 보는 오토스케일링이 소유하고(`analysis_autoscaling.tf`),
+> 세션이 이 서비스에 대해 하는 일은 **공용 목록에서 이름을 빼는 것뿐**이다 —
+> `_services()` 가 `MINUTE_SESSION_ANALYSIS_SERVICES` 를 근거로 뺀다(ALPHA-910 이 세운 축.
+> **축을 가르는 주체는 terraform 이 아니라 코드다**). 그 env 가 비면 **죽는다**: 빼기가 안
+> 돌아 공용 경로가 이 서비스를 다시 스케일하고, 그러면 매일 밤 stop 이 스케일러의 desired 를
+> 덮어 축이 도로 둘이 된다(ALPHA-910 의 컷오버 관대함은 여기서 회수됐다).
+> ⚠️ 그래서 **20:05 에 이 서비스를 내리는 주체가 없다** — 그게 의도다. 게이트는 설명 큐를
+> 안 보므로(아래) 예전엔 처리 중인 설명이 stop 에 잘렸는데, 스케일러는 처리 중(비가시)까지
+> 세어 그동안 대수를 유지한다. 야간 비용은 잔여 0 에서 0대로 내려가 해결된다.
+> terraform 공용 목록에 이름이 아직 남아 있으나 코드가 늘 빼내므로 잉여다 — 제거는 후속
+> 정합성 정리(PR C) 소관이고, 남아 있어도 동작은 같다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
 > (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
 > `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는

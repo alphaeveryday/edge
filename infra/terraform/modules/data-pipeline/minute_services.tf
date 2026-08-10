@@ -377,9 +377,11 @@ resource "aws_iam_role_policy" "minute_session" {
       {
         Effect = "Allow"
         Action = ["ecs:UpdateService"]
-        # ⚠️ analysis_consumer 포함 — MINUTE_SESSION_ANALYSIS_SERVICES 로 스케일 대상인데
-        # 여기 빠지면 아침 스케일업이 AccessDenied 로 죽어 레인 전체가 안 뜬다(목록과 같은
-        # 축). 공용이든 자기 목록이든 **스케일 대상이면 여기 있어야 한다**.
+        # ⚠️ **스케일 대상이면 여기 있어야 한다** — 빠지면 아침 스케일업이 AccessDenied 로
+        # 죽어 레인 전체가 안 뜬다(목록과 같은 축).
+        # analysis_consumer 는 ALPHA-912 이후 **세션의 스케일 대상이 아니다**(desired 는
+        # 오토스케일링 소유). 여기 남은 것은 잉여지 근거가 아니다 — 공용 목록 정리(PR C)와
+        # 함께 뺀다. 그때까지 세션이 이 서비스로 UpdateService 를 부르는 경로는 없다.
         Resource = concat(
           [for service in aws_ecs_service.minute : service.id],
           [aws_ecs_service.analysis_consumer.id],

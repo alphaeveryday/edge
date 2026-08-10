@@ -89,7 +89,15 @@ jobs:
             exit 1
           fi
           if [ "${desired}" = "0" ]; then
-            echo "::notice::${svc} 는 desired 0 — 이미지는 스케일업 시점에 고정된다(force-new-deployment)"
+            # 이 건너뛰기의 근거가 ALPHA-912 로 바뀌었다. 예전엔 **세션이 아침에
+            # force-new-deployment 로 올려** 그때 최신 이미지가 고정됐는데, 이제 desired 를
+            # 올리는 것은 오토스케일링이고 그건 재배포를 안 한다. 그래도 안전한 이유는
+            # 다른 데 있다 — Fargate 는 이미지를 캐시하지 않아 **태스크마다 태그를 새로
+            # 당긴다**("container images are not cached on the instance", ECS 문서
+            # fargate-pull-behavior). 위에서 민 `analysis-engine-latest` 를 첫 스케일업이
+            # 그대로 집는다. desired>0 인 동안은 아래 force-new-deployment 가 필요하다
+            # (도는 태스크는 안 바뀐다).
+            echo "::notice::${svc} 는 desired 0 — 첫 스케일업이 latest 태그를 새로 당긴다(Fargate 무캐시)"
             exit 0
           fi
           aws ecs update-service --cluster "${cluster}" --service "${svc}" \
