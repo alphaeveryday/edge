@@ -342,6 +342,80 @@ def test_hypothesis_raw_keeps_only_canonical_hypothesis_fields():
     assert "DROP-" not in html and "EXPOSURE-ERROR" not in html
 
 
+def test_unknown_preview_handle_is_replaced_with_a_safe_korean_status():
+    """서버의 preview 오류 코드는 대시보드 계약이 아니라 내부 진단값이다."""
+    events = [
+        {"event": "hypothesis.raw", "turn": 1,
+         "hypotheses": [{"preview_handle": "UNKNOWN_PREVIEW_HANDLE",
+                           "intent": "안전한 의도"}]},
+        {"event": "hypothesis.rendered", "turn": 1, "hypotheses": [{
+            "status": "UNKNOWN_PREVIEW_HANDLE", "reason": "UNKNOWN_PREVIEW_HANDLE"}]},
+    ]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    assert "UNKNOWN_PREVIEW_HANDLE" not in html
+    assert "서버가 preview를 확인하지 못해 이 가설을 실행하지 않았습니다." in html
+
+
+def test_preview_not_ready_is_redacted_in_raw_rendered_and_verifier_trace():
+    """준비되지 않은 preview도 handle 오류와 같은 안전한 상태로만 보인다."""
+    events = [
+        {"event": "hypothesis.raw", "turn": 1,
+         "hypotheses": [{"preview_handle": "PREVIEW_NOT_READY", "intent": "의도"}]},
+        {"event": "hypothesis.rendered", "turn": 1,
+         "hypotheses": [{"status": "PREVIEW_NOT_READY"}]},
+        {"event": "hypothesis.verifier_result", "turn": 1,
+         "reason": "PREVIEW_NOT_READY"},
+    ]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    assert "PREVIEW_NOT_READY" not in html
+    assert html.count("서버가 preview를 확인하지 못해 이 가설을 실행하지 않았습니다.") == 3
+
+
+def test_server_prefetch_is_separate_from_the_llm_turn_timeline():
+    """턴 없는 서버 prefetch를 LLM의 선택이라고 표시하면 안 된다."""
+    events = [
+        {"event": "objectset.tool", "tool": "news.find_threads", "ok": True,
+         "handle": "os_prefetch"},
+        {"event": "hypothesis.raw", "turn": 1,
+         "hypotheses": [{"intent": "LLM-TURN"}]},
+        {"event": "hypothesis.rendered", "turn": 1, "hypotheses": [{
+            "llm_intent": "LLM-TURN",
+            "tool_results": [{"tool": "news.list_events", "ok": True,
+                              "handle": "os_llm"}],
+        }]},
+        {"event": "hypothesis.tool_result", "tool": "news.list_events", "ok": True,
+         "handle": "os_llm"},
+        {"event": "objectset.tool", "tool": "news.list_events", "ok": True,
+         "handle": "os_llm"},
+    ]
+    body = json.dumps({"events": events}, ensure_ascii=False).encode("utf-8")
+    s3 = _FakeS3()
+    s3.objects[(_BUCKET, _TRACE_KEY)] = body
+    manifest = {"s3_uri": f"s3://{_BUCKET}/{_TRACE_KEY}",
+                "sha256": hashlib.sha256(body).hexdigest()}
+    html = _html(_FakeConn(results=[_result_row(stage=_stage(manifest))],
+                           evidence=_EVIDENCE, trials=[]), s3)
+
+    assert html.index("서버 측 사전 조회") < html.index("LLM-TURN")
+    assert "os_prefetch" in html and "os_llm" in html
+    assert "턴 미기록" not in html
+    assert html.count("<code>news.list_events</code>") == 1
+
+
 def test_legacy_llm_sql_trace_has_a_safe_fallback_without_new_trace_fields():
     """PR1 이전 archive도 깨지지 않되 원시 프롬프트·SQL은 다시 노출하지 않는다."""
     events = [
