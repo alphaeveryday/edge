@@ -167,8 +167,9 @@
 > 큐는 안 늘어난다) + sector-index-worker(ALPHA-887 — 업종지수 45종 생산자) +
 > analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
-> desired_count 0 에 lifecycle ignore_changes — 스케일은 세션 오케스트레이션 소관이고
-> apply 가 장중 워커를 내리지 않게 한다. ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
+> desired_count 0 에 lifecycle ignore_changes — desired 를 terraform 밖에서 정하게 두고
+> apply 가 장중 워커를 내리지 않게 한다. 그 주체는 상주 4종은 세션 오케스트레이션이고,
+> **analysis-consumer 만 오토스케일링**이다(ALPHA-912, 아래). ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
 > `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
 > 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
@@ -185,7 +186,11 @@
 > apply 와 이미지 CD 는 각자 `push: dev` 로 도는 독립 워크플로라 어느 쪽이 먼저 착지할지
 > 모르고, 공용에서 빼면 apply 가 늦은 날 구 이미지가 소비자를 아무 목록으로도 안 올린다.
 > 그래서 이 env 가 비어도 **죽지 않는다**(구 task-def = 공용이 덮는 상태). 공용 목록에서
-> 실제로 빼는 것과 이 관대함을 fail-loud 로 회수하는 것은 오토스케일링 부착 PR 소관이다.
+> 실제로 빼는 것과 이 관대함을 fail-loud 로 회수하는 것은 **오토스케일링 부착 다음 PR**
+> 소관이다 — 부착 PR(ALPHA-912 PR A, `analysis_autoscaling.tf`)은 terraform 만 담고 이
+> 둘을 **의도적으로 안 한다**. 같은 PR 에서 세션의 손까지 떼면, 이미지 CD 가 apply 보다
+> 먼저 착지한 날 아무도 desired 를 안 올려 그날 설명이 통째로 없기 때문이다. 즉 지금은
+> **세션과 스케일러가 공존하는 중간 상태**이고, 컷오버는 아직 안 끝났다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
 > (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
 > `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는

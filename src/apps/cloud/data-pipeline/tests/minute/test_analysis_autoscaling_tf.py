@@ -143,13 +143,14 @@ def test_처리중_메시지가_잔여_일감에_들어간다():
     assert normalized in (f"{a}+{b}", f"{b}+{a}"), \
         f"합산식이 `{expr.group(1)}` 이다 — 처리 중 메시지를 **더하는** 식이어야 한다"
 
-    # ⚠️ 알람이 판정하는 것은 `return_data = true` 인 블록 하나다. 그게 합산식이 아니라
-    # 어느 한 지표에 붙으면 두 지표가 파일에 남아 있어도 알람은 **가시 수만** 본다.
-    for block in re.split(r"\bmetric_query\s*\{", text)[1:]:
-        judged = re.search(r"return_data\s*=\s*true", block)
-        if judged:
-            assert "expression" in block, \
-                "return_data 가 합산식이 아닌 개별 지표에 붙어 있다 — 알람이 한쪽만 본다"
+    # ⚠️ 알람이 판정하는 것은 `return_data = true` 인 블록 **하나**다. 존재·위치를 따로
+    # 세야 한다 — 위치만 보면(있으면 합산식인가) 통째로 지운 변이가 조용히 통과한다.
+    judged = [b for b in re.split(r"\bmetric_query\s*\{", text)[1:]
+              if re.search(r"return_data\s*=\s*true", b)]
+    assert len(judged) == 1, \
+        f"return_data = true 인 블록이 {len(judged)}개다 — 알람이 무엇을 판정하는지 정해지지 않는다"
+    assert "expression" in judged[0], \
+        "return_data 가 합산식이 아닌 개별 지표에 붙어 있다 — 알람이 한쪽만 본다"
 
 
 def test_계단을_구동하는_배선이_다_있다():

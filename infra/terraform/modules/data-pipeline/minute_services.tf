@@ -624,7 +624,11 @@ resource "aws_ecs_service" "analysis_consumer" {
   }
 
   lifecycle {
-    # 상주 3종과 같은 계약 — 스케일은 세션 오케스트레이션 소관, task-def 는 terraform 소유.
+    # 상주 3종과 같은 계약 — desired 는 terraform 밖에서 정하고, task-def 는 terraform 소유.
+    # ⚠️ 이 서비스만 desired 의 주인이 다르다: ALPHA-912 로 **오토스케일링이 최종 소유자**이고
+    # (`analysis_autoscaling.tf`), 세션 오케스트레이션은 컷오버가 끝날 때까지 공존할 뿐이다.
+    # 그래서 이 `ignore_changes` 는 그때보다 지금 **더** 필요하다 — 없으면 apply 마다
+    # 스케일러가 정한 대수를 terraform 이 0 으로 되돌린다.
     ignore_changes = [desired_count]
   }
 }
