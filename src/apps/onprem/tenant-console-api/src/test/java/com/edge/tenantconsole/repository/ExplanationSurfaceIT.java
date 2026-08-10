@@ -1,5 +1,6 @@
 package com.edge.tenantconsole.repository;
 
+import com.edge.common.exception.GeneralException;
 import com.edge.tenantconsole.AbstractPostgresIntegrationTest;
 import com.edge.tenantconsole.model.Explanation;
 import com.edge.tenantconsole.model.FeedStatus;
@@ -11,8 +12,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * explanations 읽기 표면(ALPHA-607)의 DB 계약을 실 Postgres 로 검증한다 — 손 대역이 우회하는
@@ -81,7 +84,7 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 	}
 
 	private Explanation find(String id) {
-		return explanations.list().stream().filter(e -> e.id().equals(id)).findFirst().orElseThrow();
+		return explanations.list(100, 0).stream().filter(e -> e.id().equals(id)).findFirst().orElseThrow();
 	}
 
 	@Test
@@ -239,7 +242,7 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		seedItem("it607-invalidated", "607INV", "네이버", "INVALIDATED", "LOW", "요약", "[]",
 				OffsetDateTime.now());
 
-		List<String> ids = explanations.list().stream().map(Explanation::id).toList();
+		List<String> ids = explanations.list(100, 0).stream().map(Explanation::id).toList();
 		assertThat(ids).doesNotContain("it607-received", "it607-invalidated");
 	}
 
@@ -362,6 +365,33 @@ class ExplanationSurfaceIT extends AbstractPostgresIntegrationTest {
 		// 테스트를 전역 차단하므로 여기선 INSTRUMENT 로만 고정한다(전역 실효화는
 		// publication-api ExplanationScopeIntegrationTest 소관).
 		assertThat(find("it607-scope-off").serving()).isFalse();
+	}
+
+	/** WHY: 목록이 페이지 단위가 되면(ALPHA-914) 상세 딥링크는 목록 캐시에 의존할 수 없다 —
+	 * 단건 조회가 목록과 같은 상태 필터를 적용해야 수신 전(RECEIVED) 항목이 딥링크로 새지 않는다. */
+	@Test
+	void 단건_조회는_노출_상태만_돌려주고_수신전_항목은_404_다() {
+		seedItem("it914-one", "914ONE", "삼성전자", "APPROVED", "LOW", "요약", "[]",
+				OffsetDateTime.now());
+		seedItem("it914-rcv", "914RCV", "카카오", "RECEIVED", "LOW", "요약", "[]",
+				OffsetDateTime.now());
+
+		assertThat(explanations.detail("it914-one").id()).isEqualTo("it914-one");
+		assertThatThrownBy(() -> explanations.detail("it914-rcv"))
+				.isInstanceOf(GeneralException.class);
+	}
+
+	/** WHY: 대시보드 KPI·검수 대기 배지는 로드된 페이지로 셀 수 없다(ALPHA-914) — 서버
+	 * 집계가 노출 6종을 0 포함 전부 실어야 소비자가 결측과 0 을 구분할 필요가 없다. */
+	@Test
+	void 상태별_건수는_노출_6종을_0_포함_전부_싣는다() {
+		seedItem("it914-cnt", "914CNT", "네이버", "BLOCKED", "LOW", "요약", "[]",
+				OffsetDateTime.now());
+
+		Map<String, Long> counts = explanations.statusCounts();
+		assertThat(counts.keySet()).containsExactlyInAnyOrder("AUTO_PUBLISHED", "APPROVED",
+				"REVIEW_REQUIRED", "BLOCKED", "REJECTED", "UNPUBLISHED");
+		assertThat(counts.get("BLOCKED")).isGreaterThanOrEqualTo(1);
 	}
 
 	@Test

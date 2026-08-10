@@ -2,8 +2,8 @@
 import type { ReviewItem, ReviewItemDetail } from './types';
 
 export interface ReviewRepository {
-  /** 검수 대기 목록(status=REVIEW_REQUIRED, 수신 오래된 순 — 서버 정렬) */
-  listPending(): Promise<ReviewItem[]>;
+  /** 검수 대기 목록 페이지(status=REVIEW_REQUIRED, 최근 수신 순 — 서버 정렬·limit/offset, ALPHA-914) */
+  listPending(params: { limit: number; offset: number }): Promise<ReviewItem[]>;
   detail(id: string): Promise<ReviewItemDetail>;
   approve(id: string, note: string | null): Promise<void>;
   approveEdited(id: string, editedSummary: string, note: string | null): Promise<void>;

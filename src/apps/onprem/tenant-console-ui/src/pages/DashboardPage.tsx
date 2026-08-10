@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
 import { useTrafficSummary } from '../domains/dashboard/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
-import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
+import { useExplanations, useFeedStatus, useStatusCounts } from '../domains/explanations/hooks';
 import { ConfidenceCell, LoadError, StatusCell, StockCell } from './_shared/cells';
 
 export function DashboardPage() {
@@ -10,19 +10,25 @@ export function DashboardPage() {
   const explanationsQuery = useExplanations();
   const feedQuery = useFeedStatus();
   const trafficQuery = useTrafficSummary();
+  // KPI 는 서버 집계로 센다(ALPHA-914) — 목록이 페이지 단위라 로드된 페이지로는 못 센다.
+  const countsQuery = useStatusCounts();
 
-  if (explanationsQuery.isError || feedQuery.isError || trafficQuery.isError) return <LoadError />;
+  if (explanationsQuery.isError || feedQuery.isError || trafficQuery.isError || countsQuery.isError)
+    return <LoadError />;
   // 로딩 중 0건·빈 반입 정보를 실데이터처럼 보이지 않게 — 전부 로드된 뒤 렌더
-  if (explanationsQuery.isPending || feedQuery.isPending || trafficQuery.isPending) return <PageSkeleton rows={6} />;
+  if (explanationsQuery.isPending || feedQuery.isPending || trafficQuery.isPending || countsQuery.isPending)
+    return <PageSkeleton rows={6} />;
 
-  const items = explanationsQuery.data;
+  const items = explanationsQuery.data ?? [];
   const feed = feedQuery.data;
   const traffic = trafficQuery.data;
+  const counts = countsQuery.data;
   const errorRate =
     traffic.totalRequests === 0
       ? '0%'
       : `${((traffic.errorRequests / traffic.totalRequests) * 100).toFixed(1)}%`;
-  const count = (status: string) => items.filter((it) => it.status === status).length;
+  const count = (status: string) => counts[status] ?? 0;
+  const total = Object.values(counts).reduce((n, c) => n + c, 0);
 
   return (
     <div className="flex max-w-[1200px] flex-col gap-6">
@@ -46,7 +52,7 @@ export function DashboardPage() {
           <div className="kpi">
             <div className="kpi-label">자동 제공</div>
             <div className="kpi-value">{count('AUTO_PUBLISHED')}</div>
-            <div className="kpi-sub">전체 {items.length}건 중</div>
+            <div className="kpi-sub">전체 {total}건 중</div>
           </div>
           <div className="kpi cursor-pointer" onClick={() => navigate('/review')}>
             <div className="kpi-label">검수 대기</div>

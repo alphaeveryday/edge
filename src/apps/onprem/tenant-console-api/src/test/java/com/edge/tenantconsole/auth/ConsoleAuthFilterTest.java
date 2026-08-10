@@ -27,7 +27,6 @@ import com.edge.tenantconsole.service.ReviewService;
 import com.edge.tenantconsole.service.ScopeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.domain.Limit;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
@@ -65,7 +64,7 @@ class ConsoleAuthFilterTest {
 
 	private static final class StubItems implements ReviewItemRepository {
 		@Override
-		public List<AnalysisItemEntity> findByStatusOrderByReceivedAtAsc(String status, Limit limit) {
+		public List<AnalysisItemEntity> pageByStatus(String status, int limit, int offset) {
 			return List.of();
 		}
 

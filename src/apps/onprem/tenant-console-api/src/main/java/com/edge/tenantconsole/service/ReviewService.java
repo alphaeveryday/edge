@@ -23,7 +23,6 @@ import com.edge.tenantconsole.repository.PolicyVersionRepository;
 import com.edge.tenantconsole.repository.ScreeningRuleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,7 +48,6 @@ import java.util.Set;
 public class ReviewService {
 
 	private static final Logger log = LoggerFactory.getLogger(ReviewService.class);
-	private static final int LIST_LIMIT = 100;
 	/** 룰 무관 REVIEW(자동 제공 스위치·출처 임계 미충족)의 파생 사유 마커 — rule_type
 	 * 어휘(스키마 CHECK)와 겹치지 않는 별도 상수. 버리면 정상 유입 항목이 사유 공백이 된다. */
 	private static final String AUTO_PUBLISH_CRITERIA_REASON = "AUTO_PUBLISH_CRITERIA";
@@ -85,14 +83,14 @@ public class ReviewService {
 		this.actionLog = actionLog;
 	}
 
-	public List<ReviewItem> list(String status) {
-		return reviewItemRepository.findByStatusOrderByReceivedAtAsc(status, Limit.of(LIST_LIMIT))
+	public List<ReviewItem> list(String status, int limit, int offset) {
+		return reviewItemRepository.pageByStatus(status, limit, offset)
 				.stream().map(ReviewItem::from).toList();
 	}
 
 	/** 목록 + 파생 검수 사유(ALPHA-436) — 사유는 배치 조회로 해석한다(항목당 N+1 금지). */
-	public List<ReviewListEntry> listWithReasons(String status) {
-		List<ReviewItem> items = list(status);
+	public List<ReviewListEntry> listWithReasons(String status, int limit, int offset) {
+		List<ReviewItem> items = list(status, limit, offset);
 		List<String> ids = items.stream().map(ReviewItem::explanationResultId).toList();
 		// 검사 행은 한 번만 읽는다 — 사유와 게이트 재료가 같은 행에서 나온다.
 		List<ScreeningCheckEntity> reviewChecks = ids.isEmpty() ? List.of()

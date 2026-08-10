@@ -2,8 +2,12 @@
 import type { Explanation, FeedStatus } from './types';
 
 export interface ExplanationsRepository {
-  /** 가격 변동 설명 전체 (대시보드·목록·상세가 공유) */
-  list(): Promise<Explanation[]>;
+  /** 가격 변동 설명 목록 페이지 — 최근 반입 순, limit/offset 서버 페이지(ALPHA-914) */
+  list(params: { limit: number; offset: number }): Promise<Explanation[]>;
+  /** 단건 조회 — 상세 딥링크용(목록 캐시에 없는 항목도 열린다) */
+  get(id: string): Promise<Explanation>;
+  /** 상태별 건수 — 대시보드 KPI·검수 대기 배지(목록 페이지로는 못 센다) */
+  statusCounts(): Promise<Record<string, number>>;
   /** 반입(수신) 상태 */
   feedStatus(): Promise<FeedStatus>;
   /** 최종 제공 문구 수정 (상세 화면) */

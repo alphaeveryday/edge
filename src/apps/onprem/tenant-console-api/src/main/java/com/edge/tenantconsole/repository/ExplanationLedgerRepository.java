@@ -23,11 +23,33 @@ import java.util.Optional;
  */
 public interface ExplanationLedgerRepository extends Repository<AnalysisItemEntity, String> {
 
-	/** 화면 노출 상태(6종)의 설명을 최근 반입 순으로 — RECEIVED·INVALIDATED 는 제외. */
-	List<AnalysisItemEntity> findByStatusInOrderByReceivedAtDesc(Collection<String> statuses);
+	/**
+	 * 화면 노출 상태(6종)의 설명 페이지를 최근 반입 순으로 — RECEIVED·INVALIDATED 는 제외.
+	 * 반입 시각이 같은 행은 id 보조 정렬로 페이지 경계를 안정화한다(무한 스크롤, ALPHA-914).
+	 */
+	@Query(value = """
+			SELECT * FROM analysis_item WHERE status IN (:statuses)
+			ORDER BY received_at DESC, explanation_result_id DESC
+			LIMIT :limit OFFSET :offset
+			""", nativeQuery = true)
+	List<AnalysisItemEntity> pageByStatusIn(@Param("statuses") Collection<String> statuses,
+			@Param("limit") int limit, @Param("offset") int offset);
 
 	/** 사후 운영 전이의 not-found(404) 분기용 — 현재 상태를 읽어 가드 값으로 쓴다. */
 	Optional<AnalysisItemEntity> findById(String explanationResultId);
+
+	/** 상태별 건수 집계(ALPHA-914) — 목록이 페이지 단위가 되면서 대시보드 KPI·검수 대기
+	 * 배지가 로드된 페이지로 셀 수 없어 서버 집계로 내린다. */
+	interface StatusCount {
+		String getStatus();
+		long getCnt();
+	}
+
+	@Query(value = """
+			SELECT status AS status, count(*) AS cnt FROM analysis_item
+			WHERE status IN (:statuses) GROUP BY status
+			""", nativeQuery = true)
+	List<StatusCount> countByStatusIn(@Param("statuses") Collection<String> statuses);
 
 	/**
 	 * 제공 중단 — 노출 중(:expectedStatus, AUTO_PUBLISHED|APPROVED)에서만 UNPUBLISHED 로.

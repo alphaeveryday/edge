@@ -78,6 +78,9 @@ public class ConsoleAuthFilter extends OncePerRequestFilter {
 			// 운영으로 역할 재정리, ALPHA-613). 쓰기 3종은 원장 전이·감사로 실전환됐다.
 			new Rule("GET", Pattern.compile("/api/v1/explanations"), ANY_ROLE),
 			new Rule("GET", Pattern.compile("/api/v1/explanations/feed-status"), ANY_ROLE),
+			new Rule("GET", Pattern.compile("/api/v1/explanations/status-counts"), ANY_ROLE),
+			// 단건 조회(ALPHA-914) — 목록 페이지네이션 도입으로 상세 딥링크 전용. 조회는 전 역할.
+			new Rule("GET", Pattern.compile("/api/v1/explanations/[^/]+"), ANY_ROLE),
 			new Rule("PATCH", Pattern.compile("/api/v1/explanations/[^/]+/final"), COMPLIANCE_REVIEWER_ONLY),
 			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/stop"), COMPLIANCE_REVIEWER_OR_OPERATOR),
 			new Rule("POST", Pattern.compile("/api/v1/explanations/[^/]+/move-to-review"), COMPLIANCE_REVIEWER_OR_OPERATOR),

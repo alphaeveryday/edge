@@ -1,14 +1,16 @@
 package com.edge.tenantconsole.repository;
 
 import com.edge.tenantconsole.AbstractPostgresIntegrationTest;
+import com.edge.tenantconsole.entity.AnalysisItemEntity;
 import com.edge.tenantconsole.entity.MemberEntity;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.domain.Limit;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,6 +42,16 @@ class ReviewMemberRepositoryIT extends AbstractPostgresIntegrationTest {
 				""", id, ticker, status);
 	}
 
+	private void seedItemAt(String id, String ticker, String status, String receivedAt) {
+		jdbc.update("""
+				INSERT INTO analysis_item (explanation_result_id, etf_instrument_id, etf_ticker,
+					etf_name, trade_date, explanation_as_of, explanation_type, summary,
+					confidence_level, status, received_at)
+				VALUES (?, 'instr-1', ?, 'KODEX 200', DATE '2026-07-15', now(),
+					'PRICE_ONLY', '요약', 'LOW', ?, ?::timestamptz)
+				""", id, ticker, status, receivedAt);
+	}
+
 	@Test
 	void decide_는_REVIEW_REQUIRED_에서만_전이하고_재결정은_0행이다() {
 		seedItem("er-decide", "069500", "REVIEW_REQUIRED");
@@ -69,12 +81,38 @@ class ReviewMemberRepositoryIT extends AbstractPostgresIntegrationTest {
 	}
 
 	@Test
-	void findByStatus_는_상태로_거르고_Limit_을_적용한다() {
+	void pageByStatus_는_상태로_거른다() {
 		seedItem("er-list", "069500", "REVIEW_REQUIRED");
-		assertThat(reviewItems.findByStatusOrderByReceivedAtAsc("REVIEW_REQUIRED", Limit.of(100)))
+		assertThat(reviewItems.pageByStatus("REVIEW_REQUIRED", 100, 0))
 				.anyMatch(e -> e.getExplanationResultId().equals("er-list"));
-		assertThat(reviewItems.findByStatusOrderByReceivedAtAsc("BLOCKED", Limit.of(100)))
+		assertThat(reviewItems.pageByStatus("BLOCKED", 100, 0))
 				.noneMatch(e -> e.getExplanationResultId().equals("er-list"));
+	}
+
+	/** WHY: 검수 목록은 최신 수신부터 봐야 한다(ALPHA-914) — 과거순+상한이면 최신 건이
+	 * 목록에서 통째로 빠진다. offset 페이지는 정렬을 이어받아 중복·누락 없이 이어져야
+	 * 한다. 공유 컨테이너라 다른 테스트의 행이 섞일 수 있어 내 id 로만 단언한다. */
+	@Test
+	void pageByStatus_는_최근_수신_순이고_offset_페이지가_이어진다() {
+		seedItemAt("er-page-old", "069500", "REVIEW_REQUIRED", "2026-07-15T10:00:00+09:00");
+		seedItemAt("er-page-mid", "069501", "REVIEW_REQUIRED", "2026-07-15T11:00:00+09:00");
+		seedItemAt("er-page-new", "069502", "REVIEW_REQUIRED", "2026-07-15T12:00:00+09:00");
+
+		List<String> single = reviewItems.pageByStatus("REVIEW_REQUIRED", 100, 0)
+				.stream().map(AnalysisItemEntity::getExplanationResultId).toList();
+		assertThat(single.stream().filter(id -> id.startsWith("er-page-")))
+				.containsExactly("er-page-new", "er-page-mid", "er-page-old");
+
+		// limit 2 페이지를 끝까지 이어붙이면 단일 조회와 동일해야 한다(경계 중복·누락 없음).
+		List<String> paged = new ArrayList<>();
+		for (int offset = 0; ; offset += 2) {
+			List<AnalysisItemEntity> page = reviewItems.pageByStatus("REVIEW_REQUIRED", 2, offset);
+			page.forEach(e -> paged.add(e.getExplanationResultId()));
+			if (page.size() < 2) {
+				break;
+			}
+		}
+		assertThat(paged).containsExactlyElementsOf(single);
 	}
 
 	@Test

@@ -64,7 +64,7 @@ export function ExplanationDetailPage() {
               {/* 노출 head(ALPHA-744) — 같은 종목 다스냅샷 중 지금 고객 화면에 보이는 판 */}
               {it.serving && (
                 <StatusBadge tone="exposed" dot={false}>
-                  노출 중
+                  제공 중
                 </StatusBadge>
               )}
             </div>

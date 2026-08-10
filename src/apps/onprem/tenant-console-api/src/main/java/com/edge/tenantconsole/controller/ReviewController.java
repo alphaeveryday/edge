@@ -44,12 +44,15 @@ public class ReviewController {
 
 	@GetMapping("/api/v1/review/items")
 	public ApiResponse<List<ReviewItemResponse>> list(
-			@RequestParam(value = "status", defaultValue = "REVIEW_REQUIRED") String status) {
+			@RequestParam(value = "status", defaultValue = "REVIEW_REQUIRED") String status,
+			@RequestParam(value = "limit", defaultValue = "50") int limit,
+			@RequestParam(value = "offset", defaultValue = "0") int offset) {
 		if (!STATUSES.contains(status)) {
 			throw new GeneralException(ConsoleErrorStatus.INVALID_STATUS_FILTER);
 		}
 		return ApiResponse.onSuccess(
-				reviewService.listWithReasons(status).stream().map(ReviewItemResponse::from).toList());
+				reviewService.listWithReasons(status, ListPaging.clampLimit(limit), ListPaging.clampOffset(offset))
+						.stream().map(ReviewItemResponse::from).toList());
 	}
 
 	/** 검수 상세(ALPHA-436) — 근거·파생 사유·검사 결과·상태 이력(구 439 흡수)을 한 번에. */

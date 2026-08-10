@@ -218,7 +218,7 @@ export function ReviewDetailPage() {
       {canReview && inReview && (
         <div className="card">
           <div className="card-head">
-            <span className="t-label">최종 노출 문구 (수정 시 “수정 승인”으로 처리)</span>
+            <span className="t-label">최종 제공 문구 (수정 시 “수정 승인”으로 처리)</span>
           </div>
           <div className="flex flex-col gap-3 p-4">
             <textarea
