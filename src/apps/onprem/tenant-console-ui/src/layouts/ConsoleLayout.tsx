@@ -175,11 +175,11 @@ export function ConsoleLayout() {
               <span className="dot" style={{ background: feed && !feedUnavailable ? FEED_DOT_COLOR[feed.state] : 'var(--gray-400)' }} />
               {feed && !feedUnavailable ? (
                 <>
-                  <span>반입 {FEED_LABEL[feed.state]}</span>
-                  <span style={{ color: 'var(--fg-4)' }}>· 최근 반입 {feed.lastReceivedRelative}</span>
+                  <span>수신 {FEED_LABEL[feed.state]}</span>
+                  <span style={{ color: 'var(--fg-4)' }}>· 최근 수신 {feed.lastReceivedRelative}</span>
                 </>
               ) : (
-                <span>반입 상태 확인 불가</span>
+                <span>수신 상태 확인 불가</span>
               )}
             </div>
           )}

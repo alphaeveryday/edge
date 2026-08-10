@@ -15,7 +15,7 @@ export function DashboardPage() {
 
   if (explanationsQuery.isError || feedQuery.isError || trafficQuery.isError || countsQuery.isError)
     return <LoadError />;
-  // 로딩 중 0건·빈 반입 정보를 실데이터처럼 보이지 않게 — 전부 로드된 뒤 렌더
+  // 로딩 중 0건·빈 수신 정보를 실데이터처럼 보이지 않게 — 전부 로드된 뒤 렌더
   if (explanationsQuery.isPending || feedQuery.isPending || trafficQuery.isPending || countsQuery.isPending)
     return <PageSkeleton rows={6} />;
 
@@ -36,7 +36,7 @@ export function DashboardPage() {
         <div className="t-label mb-3">주요 현황</div>
         <div className="grid grid-cols-6 gap-3">
           <div className="kpi">
-            <div className="kpi-label">가격 변동 설명 반입 상태</div>
+            <div className="kpi-label">가격 변동 설명 수신 상태</div>
             <div className="kpi-value flex items-center gap-2" style={{ fontSize: 18 }}>
               {feed && (
                 <>
@@ -46,7 +46,7 @@ export function DashboardPage() {
               )}
             </div>
             <div className="kpi-sub">
-              최근 반입 {feed?.lastReceivedRelative} · 오늘 {feed?.todayReceived}건
+              최근 수신 {feed?.lastReceivedRelative} · 오늘 {feed?.todayReceived}건
             </div>
           </div>
           <div className="kpi">
@@ -103,7 +103,7 @@ export function DashboardPage() {
               <th>종목</th>
               <th>제공 상태</th>
               <th>확신도</th>
-              <th className="col-muted">반입</th>
+              <th className="col-muted">수신</th>
             </tr>
           </thead>
           <tbody>
