@@ -17,6 +17,7 @@ import { useReviewActions, useReviewItem } from '../domains/review/hooks';
 import { isHttpUrl } from './_shared/links';
 import { useSession } from '../domains/session/hooks';
 import { LoadError } from './_shared/cells';
+import { kstMinute, kstSecond } from '../lib/time';
 
 /**
  * 검수 상세(ALPHA-436, 구 439 흡수) — 실 analysis_item 원장 기반: 원문·근거(evidences)·
@@ -120,7 +121,10 @@ export function ReviewDetailPage() {
         ) : null}
         <div className="flex-1" />
         <span className="col-muted num" style={{ fontSize: 11 }}>
-          수신 {it.receivedAt ? new Date(it.receivedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
+          {/* KST 고정(ALPHA-920) — 뷰어 타임존 무관, 거래소 시간. 기준시각은 산문이
+              말하는 창의 끝(ALPHA-918)이라 검수자가 본문의 시간 서술과 대조한다. */}
+          {it.contentAsOf && <>기준시각 {kstMinute(it.contentAsOf)} · </>}
+          수신 {kstMinute(it.receivedAt)}
         </span>
       </div>
 
@@ -202,7 +206,7 @@ export function ReviewDetailPage() {
                 </td>
                 <td className="col-muted">{e.source}</td>
                 <td className="col-muted t-data">
-                  {e.publishedAt ? new Date(e.publishedAt).toLocaleString('sv-SE').slice(0, 16) : '—'}
+                  {kstMinute(e.publishedAt)}
                 </td>
               </tr>
             ))}
@@ -284,7 +288,7 @@ export function ReviewDetailPage() {
                   {c.policyVersionNo != null ? `v${c.policyVersionNo}` : '—'}
                 </td>
                 <td className="col-muted t-data">
-                  {c.checkedAt ? new Date(c.checkedAt).toLocaleString('sv-SE').slice(0, 19) : '—'}
+                  {kstSecond(c.checkedAt)}
                 </td>
               </tr>
             ))}
@@ -321,7 +325,7 @@ export function ReviewDetailPage() {
                 <td>{h.actorType === 'SYSTEM' ? '시스템' : (h.actorName ?? '구성원')}</td>
                 <td className="col-muted">{h.reason ?? '—'}</td>
                 <td className="col-muted t-data">
-                  {h.occurredAt ? new Date(h.occurredAt).toLocaleString('sv-SE').slice(0, 19) : '—'}
+                  {kstSecond(h.occurredAt)}
                 </td>
               </tr>
             ))}

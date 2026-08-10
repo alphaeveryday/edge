@@ -21,11 +21,13 @@ public record ReviewItem(
 		String status,
 		OffsetDateTime receivedAt,
 		/** 스냅샷 기준시각 — 승인 게시 시 publication grain 축으로 복사(ALPHA-743). */
-		OffsetDateTime explanationAsOf
+		OffsetDateTime explanationAsOf,
+		/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 창의 끝. 구형 수신분은 null. */
+		OffsetDateTime contentAsOf
 ) {
 	public static ReviewItem from(AnalysisItemEntity e) {
 		return new ReviewItem(e.getExplanationResultId(), e.getEtfTicker(), e.getEtfName(),
 				e.getTradeDate(), e.getSummary(), e.getHeadline(), e.getConfidenceLevel(),
-				e.getStatus(), e.getReceivedAt(), e.getExplanationAsOf());
+				e.getStatus(), e.getReceivedAt(), e.getExplanationAsOf(), e.getContentAsOf());
 	}
 }

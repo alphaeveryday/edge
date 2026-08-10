@@ -59,9 +59,18 @@ class ReviewDetailIT extends AbstractPostgresIntegrationTest {
 		jdbc.update("INSERT INTO analysis_item_status_history (analysis_item_id, from_status, "
 				+ "to_status, actor_type) VALUES ('it436-d1', NULL, 'REVIEW_REQUIRED', 'SYSTEM')");
 
+		// WHY(ALPHA-920): 검수자는 본문의 시간 서술과 기준시각을 대조한다 — 원장
+		// content_as_of 가 상세 모델로 실려야 하고, 결측(구형 수신분)은 null 로 남아야
+		// 화면이 폴백 없이 행을 생략한다. 결측 → 값 순으로 양쪽을 실측한다.
+		assertThat(review.detail("it436-d1").item().contentAsOf()).isNull();
+		jdbc.update("UPDATE analysis_item SET content_as_of = '2026-07-15T10:30:00+09:00'"
+				+ " WHERE explanation_result_id = 'it436-d1'");
+
 		ReviewItemDetail detail = review.detail("it436-d1");
 
 		assertThat(detail.item().summary()).isEqualTo("급등 확실 요약");
+		assertThat(detail.item().contentAsOf())
+				.isEqualTo(java.time.OffsetDateTime.parse("2026-07-15T10:30:00+09:00"));
 		assertThat(detail.evidences().isArray()).isTrue();
 		assertThat(detail.evidences().get(0).path("kind").asString()).isEqualTo("DISCLOSURE");
 		assertThat(detail.reviewReasons()).containsExactly("BANNED_WORD");
