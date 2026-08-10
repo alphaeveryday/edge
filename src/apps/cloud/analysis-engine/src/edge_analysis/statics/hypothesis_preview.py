@@ -113,13 +113,10 @@ class HypothesisPreviewRuntime:
             if name == "hypothesis.list_options" and self._default_event_set_handle:
                 out["retry"] = {"tool": "hypothesis.list_options", "arguments": {}}
             elif name == "hypothesis.preview" and self._default_event_set_handle:
-                out["retry"] = {
-                    "tool": "hypothesis.preview",
-                    "arguments": {
-                        key: value for key, value in arguments.items()
-                        if key != "event_set_handle"
-                    },
-                }
+                retry = self._validated_preview_retry(arguments)
+                out["retry"] = ( {"tool": "hypothesis.preview", "arguments": retry}
+                                 if retry is not None else
+                                 {"tool": "hypothesis.list_options", "arguments": {}} )
             return out
         except Exception:  # noqa: BLE001 - keep engine details server-side
             return self._error("EXECUTION_FAILED", "hypothesis preview could not be prepared")
@@ -127,6 +124,30 @@ class HypothesisPreviewRuntime:
     @staticmethod
     def _error(code: str, message: str) -> dict[str, Any]:
         return {"ok": False, "error": {"code": code, "message": message}}
+
+    def _validated_preview_retry(self, arguments: dict[str, Any]) -> dict[str, str] | None:
+        """Keep only IDs the server catalog validates for the default event scope."""
+        try:
+            trigger_id = arguments["trigger_id"]
+            outcome_id = arguments["outcome_id"]
+            layer_id = arguments["layer_id"]
+            exposure_id = arguments["exposure_id"]
+            modifier_id = arguments.get("modifier_id")
+            _parse_trigger(trigger_id, self._event_types(self._event_set_handle(None)))
+            exposure = _parse_feature(exposure_id)
+            layer = _parse_layer(layer_id)
+            if outcome_id != _OUTCOME_ID or layer not in _allowed_layers(exposure):
+                return None
+            condition = _parse_modifier(modifier_id) if modifier_id is not None else None
+            if condition and (condition.ident, condition.transform) == exposure:
+                return None
+        except (KeyError, ValueError):
+            return None
+        retry = {"trigger_id": trigger_id, "outcome_id": outcome_id,
+                 "layer_id": layer_id, "exposure_id": exposure_id}
+        if modifier_id is not None:
+            retry["modifier_id"] = modifier_id
+        return retry
 
     def _event_set_handle(self, event_set_handle: str | None) -> str:
         if event_set_handle is None:

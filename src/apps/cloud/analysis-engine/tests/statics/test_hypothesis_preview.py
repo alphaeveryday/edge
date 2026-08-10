@@ -100,6 +100,15 @@ def test_usual_model_tool_sequence_uses_the_server_scoped_event_set_and_reaches_
         "exposure_id": "feature:배수/수준",
     }}
     assert "os_company_entity" not in json.dumps(wrong_preview)
+    invalid_preview = runtime.call("hypothesis.preview", {
+        "event_set_handle": "os_company_entity",
+        "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+        "outcome_id": "outcome:daily_return",
+        "layer_id": "layer:고유",
+        "exposure_id": "feature:not/a-feature",
+    })
+    assert invalid_preview["retry"] == {"tool": "hypothesis.list_options", "arguments": {}}
+    assert "not/a-feature" not in json.dumps(invalid_preview)
 
 
 def test_unknown_final_preview_handle_requires_preview_tool_before_another_final_submission(monkeypatch):
@@ -145,6 +154,50 @@ def test_unknown_final_preview_handle_requires_preview_tool_before_another_final
     assert any("UNKNOWN_PREVIEW_HANDLE" in reason for reason in rejected)
     assert "hypothesis.preview` 도구 호출" in prompts[2]
     assert "hpr_..." not in prompts[2]
+
+
+def test_empty_final_with_previewable_options_is_rejected_and_retries_the_preview_tool():
+    runtime = HypothesisPreviewRuntime(
+        object(), _EventSets(), day="2026-08-07", default_event_set_handle="os_events")
+    prompts: list[str] = []
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"hypotheses": []},
+        {"hypotheses": []},
+    ))
+
+    def ask(_system, user):
+        prompts.append(user)
+        return next(replies)
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["COMPANY.COMMERCIAL.MARKET_ENTRY"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve},
+    )
+
+    assert valid == []
+    assert any("READY preview" in reason for reason in rejected)
+    assert "hypothesis.preview` 도구 호출" in prompts[2]
+
+
+def test_empty_final_is_allowed_when_the_scoped_event_set_has_no_previewable_options():
+    runtime = HypothesisPreviewRuntime(
+        object(), _EventSets(event_types=()), day="2026-08-07", default_event_set_handle="os_events")
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"hypotheses": []},
+        {"hypotheses": []},
+    ))
+
+    valid, rejected = propose(
+        lambda *_: next(replies), facts="f", event_types=[],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve},
+    )
+
+    assert valid == []
+    assert rejected == []
 
 
 def test_preview_rejects_unknown_handle_or_option_before_running_the_verifier(monkeypatch):

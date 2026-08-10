@@ -387,10 +387,11 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
 
 
 def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], dict],
-                 budget: int) -> tuple[dict, str, int, int, list[dict[str, object]]]:
+                 budget: int) -> tuple[dict, str, int, int, list[dict[str, object]], bool]:
     """Run bounded structured tool calls; executable text is never an argument shape."""
     used = rejects = 0
     tool_summaries: list[dict[str, object]] = []
+    previewable_options = False
     out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
@@ -403,6 +404,10 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
         used += 1
         arguments = object_field(out, "arguments")
         res = call(name, arguments)
+        if name == "hypothesis.list_options":
+            previewable_options = previewable_options or bool(
+                res.get("ok") and res.get("triggers") and res.get("outcomes")
+                and res.get("layers") and res.get("exposures"))
         summary = _tool_result_summary(name, res)
         tool_summaries.append(summary)
         record("hypothesis.tool_result", **summary)
@@ -412,7 +417,7 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
         user += (f"\n\n[ObjectSet 결과 {used}/{budget}] 도구: {name or 'schema'}\n"
                  + json.dumps(res, ensure_ascii=False))
         out = ask_checked(ask, system, user)
-    return out, user, used, rejects, tool_summaries
+    return out, user, used, rejects, tool_summaries, previewable_options
 
 
 def propose(ask: Ask, *, facts: str, event_types: list[str],
@@ -457,15 +462,17 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     sql_used = sql_rejects = 0
     object_used = object_rejects = 0
     tool_summaries: list[dict[str, object]] = []
+    previewable_options = False
     deadline = time.monotonic() + SQL_TIMEBOX_S
     for turn in range(MAX_ASKS):
         user = base
         if object_tools:
-            out, base, u, rj, summaries = _object_loop(
+            out, base, u, rj, summaries, available = _object_loop(
                 ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used)
             object_used += u
             object_rejects += rj
             tool_summaries.extend(summaries)
+            previewable_options = previewable_options or available
         elif sql_tool:
             out, base, u, rj = _sql_loop(ask, system, user, sql_tool["call"],
                                          MAX_SQL_ROUNDS - sql_used, deadline)
@@ -479,6 +486,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         if preview_mode:
             valid, rej, rendered_hypotheses = _resolve_preview_hypotheses(
                 raw_hypotheses, preview_resolver)
+            if previewable_options and not raw_hypotheses:
+                rej.append("최종 제출에는 READY preview가 하나 이상 필요합니다")
             for rendered, hypothesis in zip(rendered_hypotheses, valid):
                 rendered["tool_results"] = list(tool_summaries)
                 rendered["trigger"] = f"{hypothesis.trigger.kind}:{hypothesis.trigger.ident}"
@@ -504,7 +513,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         if valid and (preview_mode or len(valid) >= 2):
             break
         retry = "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n" + "\n".join(rejected[-6:])
-        if preview_mode and any("PREVIEW_HANDLE" in reason for reason in rej):
+        if (preview_mode and previewable_options and
+                (not raw_hypotheses or any("PREVIEW_HANDLE" in reason for reason in rej))):
             retry += ("\n\n[서버 재시도 지시] 다음 응답은 반드시 `hypothesis.preview` 도구 호출이어야 "
                       "한다. 앞서 받은 hypothesis.list_options 결과의 option ID만 사용하라. "
                       "READY 결과의 실제 handle을 받은 뒤에만 최종 JSON을 제출하라.")
