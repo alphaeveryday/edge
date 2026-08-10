@@ -38,3 +38,20 @@ export function kstMinute(iso: string | null | undefined): string {
 export function kstSecond(iso: string | null | undefined): string {
   return iso ? safeFormat(SECOND, iso) : '—';
 }
+
+/**
+ * ISO 시각 → "방금 전"·"9분 전"·"3시간 전"·"2일 전" (ALPHA-921). 서버 TimeText.relative
+ * 와 같은 규칙 — 검수 목록의 수신 표시가 설명 목록(서버 계산 receivedRelative)과 같은
+ * 모양이어야 한다. 결측·불량은 '—'.
+ */
+export function relativeFromNow(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const at = new Date(iso).getTime();
+  if (Number.isNaN(at)) return '—';
+  const minutes = Math.floor((Date.now() - at) / 60_000);
+  if (minutes < 1) return '방금 전';
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  return `${Math.floor(hours / 24)}일 전`;
+}

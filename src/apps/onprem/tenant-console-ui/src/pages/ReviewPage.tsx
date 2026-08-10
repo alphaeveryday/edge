@@ -7,7 +7,7 @@ import type { ConfidenceLevel } from '../domains/explanations';
 import { useReviewItems } from '../domains/review/hooks';
 import { useInfiniteScroll } from '../lib/pagination';
 import { ConfidenceCell, LoadError, StockCell } from './_shared/cells';
-import { kstMinute } from '../lib/time';
+import { relativeFromNow } from '../lib/time';
 
 /**
  * Review Queue 목록(ALPHA-436) — status=REVIEW_REQUIRED 논리 작업함의 실계약 조회.
@@ -121,7 +121,7 @@ export function ReviewPage() {
                 {/* 설명 목록과 같은 배지 — 같은 값을 화면마다 다른 모양으로 그리지 않는다. */}
                 <ConfidenceCell level={it.confidenceLevel as ConfidenceLevel | null} />
                 <td className="col-muted t-data">
-                  {kstMinute(it.receivedAt)}
+                  {relativeFromNow(it.receivedAt)}
                 </td>
                 <td className="text-right">
                   <button className="btn btn-sm">검수</button>

@@ -36,9 +36,9 @@ export interface Explanation {
   confidence?: ConfidenceLevel;
   /** 검수 대기·차단·반려 사유 (해당 상태일 때만) */
   reviewReason?: ReviewReason;
-  /** 반입 상대 시각 ("9분 전") */
+  /** 수신 상대 시각 ("9분 전") */
   receivedRelative: string;
-  /** 반입 절대 시각 ("2026-07-11 10:42 KST") */
+  /** 수신 절대 시각 ("2026-07-11 10:42 KST") */
   receivedAt: string;
   /** 스냅샷 기준시각 ("2026-07-11 16:00 KST") — 다스냅샷 공존 판별 축(ALPHA-744) */
   explanationAsOf: string;

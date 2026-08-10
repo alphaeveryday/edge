@@ -79,7 +79,7 @@ export function ExplanationsPage() {
               <th>제공 상태</th>
               <th>확신도</th>
               <th className="col-muted">기준시각</th>
-              <th className="col-muted">반입</th>
+              <th className="col-muted">수신</th>
               <th></th>
             </tr>
           </thead>
