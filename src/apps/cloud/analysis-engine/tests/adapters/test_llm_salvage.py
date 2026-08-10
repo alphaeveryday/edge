@@ -61,3 +61,17 @@ def test_same_failure_still_bounded(monkeypatch):
     monkeypatch.setattr(L.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(PipelineError):
         L.DeepSeekClient("k", "m").complete_json("s", "u")
+
+
+def test_default_response_timeout_keeps_a_failed_canary_bounded(monkeypatch):
+    seen: list[int] = []
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(timeout)
+        raise L.urllib.error.URLError("slow upstream")
+
+    monkeypatch.setattr(L.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(PipelineError):
+        L.DeepSeekClient("k", "m").complete_json("s", "u")
+
+    assert seen == [60, 60, 60]
