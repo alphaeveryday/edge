@@ -60,9 +60,12 @@ variable "github_oidc_provider_arn" {
 # 구독자 없는 토픽에 publish 한다 — 즉 실패가 아무 데도 안 알려진다. 여기 주소가 있어야
 # data-pipeline 의 실패 통보가 실제로 사람에게 닿는다(ALPHA-389 에서 라이브 실측으로 발견:
 # 토픽 구독자 0). 정제가 run 스코프로 바뀌면서 실패 런의 raw 를 사람이 명시적으로 재처리해야
-# 하는데, 그 절차의 유일한 트리거가 이 알림이다.
+# 하는데, 그 절차의 트리거가 이 알림이다.
+# ⚠️ ALPHA-919 이후로는 RDS 메모리 고갈 경보도 같은 토픽·같은 구독에 달렸다. 여기를 null 로
+# 두면 파이프라인 실패 통보만이 아니라 **DB 가 죽는다는 통보까지** 함께 사라진다 — 그게
+# 2026-08-10 사고(하루 세 번 다운, 아침 09:30 경고 신호를 아무도 못 봄)의 실패 모드 그대로다.
 variable "pipeline_alarm_email" {
-  description = "파이프라인 실패 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만(=알림 유실)."
+  description = "파이프라인 실패·RDS 경보 알림 수신 이메일. null 이면 SNS 구독 없이 토픽만(=알림 유실)."
   type        = string
   default     = "asm.alphaeveryday@gmail.com"
 }

@@ -66,3 +66,8 @@ variable "skip_final_snapshot" {
   type        = bool
   default     = true
 }
+
+variable "alarm_topic_arn" {
+  description = "알람을 보낼 SNS 토픽 ARN (data-pipeline 모듈의 alarm_topic_arn 출력). 필수 — 관측 없는 DB 를 만드는 경로를 남기지 않는다"
+  type        = string
+}

@@ -95,6 +95,13 @@ module "rds" {
   name       = local.prefix
   vpc_id     = module.network.vpc_id
   subnet_ids = module.network.data_subnet_ids # 격리 데이터 tier(컴퓨트와 분리)
+
+  # RDS 알람도 파이프라인과 같은 SNS 토픽으로 보낸다. data_pipeline 이 아래에서 이 모듈의
+  # 출력(db_host 등)을 받아가므로 상호 참조지만 순환은 아니다 — 토픽은 DB 출력에 의존하지
+  # 않아 값 체인이 닫히지 않고, tofu 는 모듈이 아니라 변수/출력 노드 단위로 그래프를 짠다.
+  # ⚠️ 성립 조건은 이 두 module 블록 어디에도 depends_on 이 없는 것이다 — 붙이면 모듈이
+  # 단일 노드로 접혀 실제로 순환한다(양방향 다 재현했다). count·for_each 는 무해하다.
+  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
 }
 
 # ── super-admin 공개 엣지 (ADR-0034, ALPHA-473) ─────────
