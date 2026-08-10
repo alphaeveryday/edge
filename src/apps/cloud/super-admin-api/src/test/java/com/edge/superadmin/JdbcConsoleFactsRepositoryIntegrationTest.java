@@ -181,8 +181,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	@Test
 	void 거래일이_없는_런은_계획_시각의_KST_날짜로_줍는다() {
-		insertRun("r-news", "news:2026-08-03T15:30", "SUCCEEDED", null,
-				"2026-08-02T16:00:00Z", null);
+		insertRun("r-news", "news:2026-08-03T15:30", "news", "SUCCEEDED", null,
+				"2026-08-02T16:00:00Z", "2026-08-02T16:00:00Z", null);
 
 		assertThat(repository.facts(null).today()).isEqualTo(DAY);
 	}
@@ -228,10 +228,13 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		 * 다섯이 전부 살아남았다(레인을 `schedule_slot` 에서 · 갱신 시각을 `created_at` 에서 ·
 		 * 거래일·마감을 NULL 로). 그때 화면은 조용히 틀린 사실 위에 판정을 세운다.
 		 * 그래서 픽스처의 값을 **컬럼마다 다르게** 둔다 — 같으면 못 가른다. */
-		insertRun("r-a", "etf-daily:2026-08-03T15:40", "etf-daily", "SUCCEEDED", "2026-08-03",
-				"2026-08-03T06:40:00Z", "2026-08-03T07:20:34Z", "2026-08-03T08:00:00Z");
+		/* ⚠️ **삽입 순서를 기대 순서와 반대로 둔다.** 같으면 `ORDER BY` 를 통째로 지워도 통과한다 —
+		 * Postgres 가 힙 순서(=삽입 순서)로 주기 때문이다. 그러면 이 테스트가 잡는 것은 *틀린
+		 * 정렬*뿐이고 계약이 지키려는 *정렬 부재*는 새어 나간다(실제로 한 라운드 그랬다). */
 		insertRun("r-b", "news:2026-08-03T09:00", "news", "RUNNING", null,
 				"2026-08-03T00:00:00Z", "2026-08-03T00:10:00Z", null);
+		insertRun("r-a", "etf-daily:2026-08-03T15:40", "etf-daily", "SUCCEEDED", "2026-08-03",
+				"2026-08-03T06:40:00Z", "2026-08-03T07:20:34Z", "2026-08-03T08:00:00Z");
 		insertTradingDay("2026-08-01");
 
 		assertThat(repository.facts(DAY).runs()).containsExactly(
@@ -248,8 +251,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	@Test
 	void 거래일이_없는_런도_같은_창에_잡힌다() {
-		insertRun("r-news", "news:2026-08-03T15:30", "SUCCEEDED", null,
-				"2026-08-02T16:00:00Z", null);
+		insertRun("r-news", "news:2026-08-03T15:30", "news", "SUCCEEDED", null,
+				"2026-08-02T16:00:00Z", "2026-08-02T16:00:00Z", null);
 
 		assertThat(repository.facts(DAY).runs()).extracting(RunRow::runKey)
 				.containsExactly("news:2026-08-03T15:30");
