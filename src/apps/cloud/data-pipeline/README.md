@@ -1625,8 +1625,9 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
-# ⚠️ **`--dataset` 은 구동 레인(price_minute)만 받는다.** news_minute·etf_inav_minute 은
-# 어휘엔 있어도 인자로는 거부된다(**exit 1** — 실측).
+# ⚠️ **`--dataset` 은 구동 레인(price_minute)만 받는다.** 선택 레인 넷(news_minute·
+# disclosure_minute·etf_inav_minute·sector_index_minute)은 어휘엔 있어도 인자로는
+# 거부된다(**exit 1** — 실측).
 #   ⚠️ 같은 부류의 오류에 `plan-minute-session` 은 2 를 낸다(어휘 밖 dataset). 이쪽은
 #   `SystemExit(문자열)` 이라 1 로 떨어지는 것이고 **의도된 구분이 아니다** — 정리 대상.
 #   여기서 올리고 내리는
@@ -1636,8 +1637,11 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 #   ⚠️ **자기 워커를 소유해도 이 조건은 안 풀린다**(ALPHA-882) — 소유와 구동 레인은
 #   다른 축이다(`states.SCALED_DATASETS`). news_minute 이 news-worker 를, etf_inav_minute
 #   이 inav-worker 를 소유하는 지금도 둘 다 인자로는 못 온다.
-# **두 레인 다 이 명령에 얹혀 계획·드레인된다** — 인자가 아니라 아래 토글 env 로 켠다
-# (`MINUTE_SESSION_NEWS_SOURCE_GROUP`·`MINUTE_SESSION_INAV_SOURCE_GROUP`). terraform 의
+# **네 레인 다 이 명령에 얹혀 계획·드레인된다** — 인자가 아니라 아래 토글 env 로 켠다
+# (`MINUTE_SESSION_{NEWS,DISCLOSURE,INAV,SECTOR_INDEX}_SOURCE_GROUP`). ⚠️ **토글 env 가
+# 없는 레인은 계획도 스케일도 안 된다** — 그 레인만 조용히 빠진 채 세션이 선다
+# (`session_ops._OPTIONAL_LANES`). 손으로 칠 때 아래 예시에서 한 쌍을 빼면 그 결과다.
+# terraform 의
 # `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만, 손으로 치던
 # 사람은 `--dataset` 에서 막힌다.
 #
@@ -1652,8 +1656,12 @@ MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
+MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP=dart \
+MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES=edge-dev-data-pipeline-disclosure-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
 MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
+MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP=kis \
+MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES=edge-dev-data-pipeline-sector-index-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group kis --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 # stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
