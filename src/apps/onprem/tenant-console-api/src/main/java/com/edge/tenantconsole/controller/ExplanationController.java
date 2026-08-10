@@ -13,9 +13,11 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 가격 변동 설명 표면(ALPHA-513·607·613) — tenant-console-ui explanations 도메인 계약
@@ -35,9 +37,24 @@ public class ExplanationController {
 	}
 
 	@GetMapping("/api/v1/explanations")
-	public ApiResponse<List<ExplanationResponse>> list() {
+	public ApiResponse<List<ExplanationResponse>> list(
+			@RequestParam(value = "limit", defaultValue = "50") int limit,
+			@RequestParam(value = "offset", defaultValue = "0") int offset) {
 		return ApiResponse.onSuccess(
-				explanationService.list().stream().map(ExplanationResponse::from).toList());
+				explanationService.list(ListPaging.clampLimit(limit), ListPaging.clampOffset(offset))
+						.stream().map(ExplanationResponse::from).toList());
+	}
+
+	/** 단건 조회(ALPHA-914) — 목록 페이지네이션 도입으로 상세 딥링크가 목록 캐시에 의존할 수 없어 신설. */
+	@GetMapping("/api/v1/explanations/{id}")
+	public ApiResponse<ExplanationResponse> detail(@PathVariable("id") String id) {
+		return ApiResponse.onSuccess(ExplanationResponse.from(explanationService.detail(id)));
+	}
+
+	/** 상태별 건수(ALPHA-914) — 대시보드 KPI·검수 대기 배지가 페이지 목록 대신 소비한다. */
+	@GetMapping("/api/v1/explanations/status-counts")
+	public ApiResponse<Map<String, Long>> statusCounts() {
+		return ApiResponse.onSuccess(explanationService.statusCounts());
 	}
 
 	@GetMapping("/api/v1/explanations/feed-status")

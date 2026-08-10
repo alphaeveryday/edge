@@ -21,7 +21,6 @@ import com.edge.tenantconsole.service.ConsoleActionLogService;
 import com.edge.tenantconsole.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.domain.Limit;
 import org.springframework.http.MediaType;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
@@ -65,8 +64,10 @@ class ReviewControllerTest {
 		final List<String> decisions = new ArrayList<>();
 
 		@Override
-		public List<AnalysisItemEntity> findByStatusOrderByReceivedAtAsc(String status, Limit limit) {
-			return item != null && item.getStatus().equals(status) ? List.of(item) : List.of();
+		public List<AnalysisItemEntity> pageByStatus(String status, int limit, int offset) {
+			// offset 이후 페이지는 빈 목록 — 단건 스텁이라 첫 페이지에만 실린다.
+			return item != null && item.getStatus().equals(status) && offset == 0
+					? List.of(item) : List.of();
 		}
 
 		@Override

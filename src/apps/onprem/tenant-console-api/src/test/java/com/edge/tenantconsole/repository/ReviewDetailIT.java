@@ -90,7 +90,7 @@ class ReviewDetailIT extends AbstractPostgresIntegrationTest {
 				+ "screening_rule_id, result, matched_text) VALUES ('it436-l1', ?, ?, 'REVIEW', '급등 확실')",
 				versionId, ruleId);
 
-		List<ReviewListEntry> entries = review.listWithReasons("REVIEW_REQUIRED");
+		List<ReviewListEntry> entries = review.listWithReasons("REVIEW_REQUIRED", 50, 0);
 
 		assertThat(entries).anySatisfy(e -> {
 			assertThat(e.item().explanationResultId()).isEqualTo("it436-l1");

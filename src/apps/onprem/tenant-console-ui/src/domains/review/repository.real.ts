@@ -92,8 +92,10 @@ function toDetail(w: WireDetail): ReviewItemDetail {
 }
 
 export const realReviewRepository: ReviewRepository = {
-  listPending: () =>
-    apiClient.get<WireItem[]>('/review/items?status=REVIEW_REQUIRED').then((r) => r.map(toItem)),
+  listPending: ({ limit, offset }) =>
+    apiClient
+      .get<WireItem[]>(`/review/items?status=REVIEW_REQUIRED&limit=${limit}&offset=${offset}`)
+      .then((r) => r.map(toItem)),
   detail: (id) => apiClient.get<WireDetail>(`/review/items/${encodeURIComponent(id)}`).then(toDetail),
   approve: (id, note) => apiClient.post<void>(`/review/items/${encodeURIComponent(id)}/approve`, { note }),
   approveEdited: (id, editedSummary, note) =>

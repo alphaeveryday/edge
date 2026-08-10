@@ -32,7 +32,7 @@ export function StatusCell({ it, showServing = false }: { it: Explanation; showS
         {/* 노출 head(ALPHA-744) — 상태(제공 자격)와 별개로 "지금 고객 화면의 그 판"을 가리킨다 */}
         {showServing && it.serving && (
           <StatusBadge tone="exposed" dot={false}>
-            노출 중
+            제공 중
           </StatusBadge>
         )}
       </span>

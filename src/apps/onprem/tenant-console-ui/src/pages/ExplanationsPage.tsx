@@ -4,11 +4,20 @@ import { Icon, PageSkeleton, Select } from 'ui-kit';
 import type { ConfidenceLevel, ServeStatus } from '../domains/explanations';
 import { CONFIDENCE_LABEL, STATUS_LABEL } from '../domains/explanations';
 import { useExplanations } from '../domains/explanations/hooks';
+import { useInfiniteScroll } from '../lib/pagination';
 import { ConfidenceCell, LoadError, StatusCell, StockCell } from './_shared/cells';
 
 export function ExplanationsPage() {
   const navigate = useNavigate();
-  const { data: items = [], isError, isPending } = useExplanations();
+  const {
+    data: items = [],
+    isError,
+    isPending,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useExplanations();
+  const sentinelRef = useInfiniteScroll(fetchNextPage, hasNextPage && !isFetchingNextPage);
 
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<ServeStatus | 'ALL'>('ALL');
@@ -57,7 +66,8 @@ export function ExplanationsPage() {
         />
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-          {filtered.length}건
+          {filtered.length}
+          {hasNextPage ? '+' : ''}건
         </span>
       </div>
 
@@ -88,12 +98,19 @@ export function ExplanationsPage() {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && (
+        {filtered.length === 0 && !hasNextPage && (
           <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
             조건에 해당하는 가격 변동 설명이 없습니다.
           </div>
         )}
       </div>
+      {/* 무한 스크롤 센티널(ALPHA-914) — 보이면 다음 50건을 로드한다. */}
+      <div ref={sentinelRef} />
+      {isFetchingNextPage && (
+        <div className="pb-4 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
+          불러오는 중…
+        </div>
+      )}
     </div>
   );
 }

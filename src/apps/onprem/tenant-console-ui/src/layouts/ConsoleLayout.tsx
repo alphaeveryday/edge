@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ErrorBoundary, Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
-import { useExplanations, useFeedStatus } from '../domains/explanations/hooks';
+import { useFeedStatus, useStatusCounts } from '../domains/explanations/hooks';
 import { FEED_DOT_COLOR, FEED_LABEL } from '../domains/explanations';
 import { ROLE_LABEL } from '../domains/users';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
@@ -23,7 +23,7 @@ const NAV_SECTIONS: { section?: string; items: NavEntry[] }[] = [
   {
     section: '콘텐츠 운영',
     items: [
-      { path: '/explanations', label: '가격 변동 설명', icon: 'fileText', match: ['/explanations'] },
+      { path: '/explanations', label: '가격 변동 설명 관리', icon: 'fileText', match: ['/explanations'] },
       { path: '/review', label: '검수 관리', icon: 'clipboardCheck', match: ['/review'] },
     ],
   },
@@ -59,7 +59,8 @@ export function ConsoleLayout() {
   const logout = useLogout();
   // 배지 데이터의 조회 실패는 조용히 사라지게 두지 않고 '확인 불가' 신호로 표면화한다 (Rule 12).
   const { data: feed, isError: feedUnavailable } = useFeedStatus();
-  const { data: explanations, isError: pendingUnavailable } = useExplanations();
+  // 배지는 서버 집계로 센다(ALPHA-914) — 목록이 페이지 단위라 로드된 페이지로는 못 센다.
+  const { data: statusCounts, isError: pendingUnavailable } = useStatusCounts();
   const updateName = useUpdateDisplayName();
 
   const [accountOpen, setAccountOpen] = useState(false);
@@ -74,7 +75,7 @@ export function ConsoleLayout() {
     return () => document.removeEventListener('click', close);
   }, [accountOpen]);
 
-  const pendingCount = explanations?.filter((it) => it.status === 'REVIEW_REQUIRED').length ?? 0;
+  const pendingCount = statusCounts?.REVIEW_REQUIRED ?? 0;
   const pageTitle = PAGE_TITLES.find(([prefix]) => location.pathname.startsWith(prefix))?.[1] ?? '';
   const userInitial = session?.name?.[0] ?? '?';
 

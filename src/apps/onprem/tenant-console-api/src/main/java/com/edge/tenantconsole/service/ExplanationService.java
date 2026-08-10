@@ -103,8 +103,38 @@ public class ExplanationService {
 		this.actionLog = actionLog;
 	}
 
-	public List<Explanation> list() {
-		List<AnalysisItemEntity> items = ledger.findByStatusInOrderByReceivedAtDesc(VISIBLE_STATUSES);
+	public List<Explanation> list(int limit, int offset) {
+		return assemble(ledger.pageByStatusIn(VISIBLE_STATUSES, limit, offset));
+	}
+
+	/**
+	 * 단건 조회(ALPHA-914) — 목록이 페이지 단위가 되면서 상세 딥링크가 로드된 페이지에
+	 * 의존할 수 없어 신설. 화면 노출 상태 밖(RECEIVED·INVALIDATED)은 목록과 동일하게
+	 * 없는 것으로 본다(404).
+	 */
+	public Explanation detail(String explanationResultId) {
+		AnalysisItemEntity item = ledger.findById(explanationResultId)
+				.filter(it -> VISIBLE_STATUSES.contains(it.getStatus()))
+				.orElseThrow(() -> new GeneralException(ConsoleErrorStatus.EXPLANATION_NOT_FOUND));
+		return assemble(List.of(item)).getFirst();
+	}
+
+	/**
+	 * 상태별 건수(ALPHA-914) — 대시보드 KPI·검수 대기 배지용. 화면 노출 상태 6종을 모두
+	 * 키로 실어(0 포함) 소비자가 결측·0 을 구분할 필요가 없게 한다.
+	 */
+	public Map<String, Long> statusCounts() {
+		Map<String, Long> counts = new LinkedHashMap<>();
+		for (String status : VISIBLE_STATUSES) {
+			counts.put(status, 0L);
+		}
+		for (ExplanationLedgerRepository.StatusCount row : ledger.countByStatusIn(VISIBLE_STATUSES)) {
+			counts.put(row.getStatus(), row.getCnt());
+		}
+		return counts;
+	}
+
+	private List<Explanation> assemble(List<AnalysisItemEntity> items) {
 		List<String> ids = items.stream().map(AnalysisItemEntity::getExplanationResultId).toList();
 		Map<String, String> reasons = reviewReasonsFor(items);
 		Map<String, String> finals = publishedSummariesFor(ids);

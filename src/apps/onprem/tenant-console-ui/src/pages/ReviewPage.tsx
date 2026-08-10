@@ -5,6 +5,7 @@ import type { ReviewReasonType } from '../domains/review';
 import { AUTO_PUBLISH_CRITERIA, REASON_LABEL, gateReasonLabel, reasonLabel } from '../domains/review';
 import type { ConfidenceLevel } from '../domains/explanations';
 import { useReviewItems } from '../domains/review/hooks';
+import { useInfiniteScroll } from '../lib/pagination';
 import { ConfidenceCell, LoadError, StockCell } from './_shared/cells';
 
 /**
@@ -14,7 +15,15 @@ import { ConfidenceCell, LoadError, StockCell } from './_shared/cells';
  */
 export function ReviewPage() {
   const navigate = useNavigate();
-  const { data: items = [], isError, isPending } = useReviewItems();
+  const {
+    data: items = [],
+    isError,
+    isPending,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useReviewItems();
+  const sentinelRef = useInfiniteScroll(fetchNextPage, hasNextPage && !isFetchingNextPage);
 
   const [q, setQ] = useState('');
   const [fReason, setFReason] = useState<string>('ALL');
@@ -55,7 +64,8 @@ export function ReviewPage() {
         />
         <div className="flex-1" />
         <span className="num" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-          대기 {filtered.length}건
+          대기 {filtered.length}
+          {hasNextPage ? '+' : ''}건
         </span>
       </div>
 
@@ -119,12 +129,19 @@ export function ReviewPage() {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && (
+        {filtered.length === 0 && !hasNextPage && (
           <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
             검수 대기 중인 설명이 없습니다.
           </div>
         )}
       </div>
+      {/* 무한 스크롤 센티널(ALPHA-914) — 보이면 다음 50건을 로드한다. */}
+      <div ref={sentinelRef} />
+      {isFetchingNextPage && (
+        <div className="pb-4 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
+          불러오는 중…
+        </div>
+      )}
     </div>
   );
 }

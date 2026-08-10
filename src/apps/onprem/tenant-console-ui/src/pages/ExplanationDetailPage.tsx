@@ -6,12 +6,13 @@ import {
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
 import { useSession } from '../domains/session/hooks';
+import { ApiError } from '../api/client';
 import { isHttpUrl } from './_shared/links';
 import { LoadError } from './_shared/cells';
 
 export function ExplanationDetailPage() {
   const { id } = useParams();
-  const { explanation: it, isLoading, isError } = useExplanation(id);
+  const { explanation: it, isLoading, isError, error } = useExplanation(id);
   const { updateFinal, stop, moveToReview } = useExplanationActions();
   const { data: session } = useSession();
   // 강제 지점은 API(ConsoleAuthFilter), 화면은 UX 게이트(permission-matrix "이중 방어").
@@ -25,9 +26,13 @@ export function ExplanationDetailPage() {
   const [stopping, setStopping] = useState(false);
   const [stopReason, setStopReason] = useState('');
 
-  if (isError) return <LoadError />;
+  // 단건 조회 전환(ALPHA-914)으로 없는 항목은 404 로 온다 — 서버 장애(LoadError)와
+  // 구분해 기존 '찾을 수 없음' 화면을 유지한다. 404 는 캐시된 이전 상세보다 우선한다 —
+  // 서버가 의도적으로 숨긴 항목(INVALIDATED 전환 등)이 낡은 캐시로 계속 노출되면 안 된다.
+  const notFound = isError && error instanceof ApiError && error.status === 404;
+  if (isError && !notFound) return <LoadError />;
   if (isLoading) return <PageSkeleton rows={5} />;
-  if (!it) {
+  if (notFound || !it) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 12 }}>
         해당 가격 변동 설명을 찾을 수 없습니다.
@@ -64,7 +69,7 @@ export function ExplanationDetailPage() {
               {/* 노출 head(ALPHA-744) — 같은 종목 다스냅샷 중 지금 고객 화면에 보이는 판 */}
               {it.serving && (
                 <StatusBadge tone="exposed" dot={false}>
-                  노출 중
+                  제공 중
                 </StatusBadge>
               )}
             </div>

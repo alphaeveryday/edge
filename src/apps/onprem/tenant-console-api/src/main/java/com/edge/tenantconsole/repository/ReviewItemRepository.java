@@ -1,7 +1,6 @@
 package com.edge.tenantconsole.repository;
 
 import com.edge.tenantconsole.entity.AnalysisItemEntity;
-import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -19,7 +18,17 @@ import java.util.Optional;
  */
 public interface ReviewItemRepository extends Repository<AnalysisItemEntity, String> {
 
-	List<AnalysisItemEntity> findByStatusOrderByReceivedAtAsc(String status, Limit limit);
+	/**
+	 * 검수 목록 페이지 — 최근 수신 순(ALPHA-914). 수신 시각이 같은 행은 id 보조 정렬로
+	 * 페이지 경계를 안정화한다(무한 스크롤에서 중복·누락 방지).
+	 */
+	@Query(value = """
+			SELECT * FROM analysis_item WHERE status = :status
+			ORDER BY received_at DESC, explanation_result_id DESC
+			LIMIT :limit OFFSET :offset
+			""", nativeQuery = true)
+	List<AnalysisItemEntity> pageByStatus(@Param("status") String status,
+			@Param("limit") int limit, @Param("offset") int offset);
 
 	Optional<AnalysisItemEntity> findById(String explanationResultId);
 
