@@ -341,6 +341,13 @@ def run(
     # **분해는 요청축이 답한다** - "그 구간에 왜 움직였나"가 질문이므로 분자는 요청 끝의
     # 가격이다. 상태축은 같은 질문의 배경("오늘 여기까지 어떻게 왔나")이라 축이 다르다.
     returns = _returns_from_bars(requested.bars, prev_closes)
+    market_return = returns.get(MARKET_CODE)
+    current_event_returns: dict[str, float] = {}
+    if market_return is not None and math.isfinite(market_return):
+        for ticker, value in returns.items():
+            instrument_id = entity_index.get(ticker)
+            if (instrument_id is not None and value is not None and math.isfinite(value)):
+                current_event_returns[instrument_id] = float(value - market_return)
     # 두 축의 좌표를 원장에 남긴다. 봉은 재생성 가능하지만 "그때 어느 세대를 몇 개
     # 봤나" 는 이 기록에만 남는다.
     #
@@ -366,6 +373,8 @@ def run(
         "dropped_units": sorted(dropped),
         "etf_day_return": returns.get(settings.etf_ticker),
         "etf_window_return": _window_return(requested.bars, settings.etf_ticker),
+        "event_return_basis": "committed_minute_end",
+        "event_return_count": len(current_event_returns),
     }
     log("window.two_axis", **window_state)
     # 구성종목 가격이 하나도 없으면 total_priced=0 분해가 정상 설명으로 영속된다 —
@@ -576,6 +585,7 @@ def run(
                 "window_start": window_start_hhmm,
                 "window_end": window_end,
                 "window_meta": window_meta,
+                "current_event_returns": current_event_returns,
             }
             # 라우팅이 쓴 그 분해를 그대로 넘긴다 - 같은 창을 두 번 질의하면 그 사이
             # 분봉 canonical 이 정정될 때 route_code 와 산문 근거가 한 explanation 안에서

@@ -70,7 +70,7 @@ class _FakeLake:
         return [Holding("005930", "삼성전자", 1.0)], "2026-07-15"
 
     def load_prev_closes(self, market, trade_date):
-        return {"005930": 70000.0, "091160": 10000.0}
+        return {"005930": 70000.0, "091160": 10000.0, "069500": 250000.0}
 
     def load_committed_minute_bars(self, market, windows):
         """구성종목 + 발화 ETF 자신의 봉 — 실제 분봉 레인이 그렇다(unit_ids 에 둘 다).
@@ -241,6 +241,7 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
     } for i in range(14)]
 
     def fake_statics(_lake, _ticker, _day, _ask=None, **kwargs):
+        assert kwargs["current_event_returns"]["ent_1"] == pytest.approx(0.04)
         meta = kwargs["window_meta"]
         meta.update({
             "lineage": [{"view": "bars_5m"}], "news_events": scoped,

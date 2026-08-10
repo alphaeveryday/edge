@@ -7,7 +7,6 @@ import secrets
 from dataclasses import dataclass
 from typing import Any
 
-from .layers import SESSION_CLOSE
 from .paneltest import FEATURES, LAYER_EXPOSURES, _base, edge_test
 from .vocab import (CHANNELS, MIN_N, Condition, ExposureSource, HypothesisTuple,
                     Trigger)
@@ -43,16 +42,15 @@ class EventCandidate:
 
 
 def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str, day: str,
-                               as_of: str, min_n: int) -> EventDistributionPreview | None:
+                               as_of: str, today: float | None,
+                               min_n: int) -> EventDistributionPreview | None:
     """Return no preview unless one current anchor and its comparable history exist."""
     def literal(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
-    clock = as_of.replace("T", " ")[11:19]
-    # v_daily is a close-to-close series.  Before the close its current-day value
-    # is not knowable at this request's as-of, so never render a future close.
-    if not clock or clock < SESSION_CLOSE:
+    if today is None:
         return None
+    clock = as_of.replace("T", " ")[11:19]
     base = _base(day, clock)
     try:
         anchor = lake.sql(base + f"""
@@ -77,20 +75,12 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
           AND e.trade_date < DATE {literal(day)}
           AND d.ar IS NOT NULL
         """)
-        today = lake.sql(base + f"""
-        SELECT ar FROM v_daily
-        WHERE instrument_id = {literal(instrument_id)}
-          AND trade_date = DATE {literal(day)}
-          AND ar IS NOT NULL
-        """)
     except Exception as e:  # noqa: BLE001 - no partial distribution is publishable
         raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
     if len(historical) < min_n:
         return None
-    if len(today) != 1:
-        return None
     values = [float(row[2]) for row in historical]
-    observed = float(today[0][0])
+    observed = float(today)
     return EventDistributionPreview(
         source_event_id=source_event_id,
         instrument_id=instrument_id,
@@ -150,11 +140,13 @@ class HypothesisPreviewRuntime:
 
     def __init__(self, lake, event_sets, *, day: str,
                  default_event_set_handle: str = "",
-                 candidates: tuple[EventCandidate, ...] | None = None) -> None:
+                 candidates: tuple[EventCandidate, ...] | None = None,
+                 current_event_returns: dict[str, float] | None = None) -> None:
         self._lake = lake
         self._event_sets = event_sets
         self._day = day
         self._default_event_set_handle = default_event_set_handle
+        self._current_event_returns = dict(current_event_returns or {})
         self.as_of = getattr(event_sets, "as_of", "")
         self._run_id = secrets.token_hex(12)
         self._previews: dict[str, PreviewResolution] = {}
@@ -278,7 +270,8 @@ class HypothesisPreviewRuntime:
         distribution = event_distribution_preview(
             self._lake, source_event_id=candidate.source_event_id,
             instrument_id=candidate.instrument_id, day=self._day,
-            as_of=self.as_of.replace("T", " "), min_n=MIN_N,
+            as_of=self.as_of.replace("T", " "),
+            today=self._current_event_returns.get(candidate.instrument_id), min_n=MIN_N,
         )
         recipe = {"run_id": self._run_id, "candidate_id": candidate_id,
                   "outcome_id": outcome_id}
