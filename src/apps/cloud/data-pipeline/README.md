@@ -1613,7 +1613,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 앱키 전역이라 어차피 하나다). ⚠️ `[minute_price_worker]` 가 아닌 이유는 그 섹션이
 # `sources.toml` 에 없어서다 — 전부 env 라, 그걸 쓰면 업종지수와 무관한 필수 필드
 # (`trigger_schema_version`·`destination`)까지 주입해야 설정이 로드된다.
-# ⚠️ 상주 배선(ECS 서비스)은 **없다** — iNAV 와 같이 bounded 수동 실행이다.
+# ⚠️ 상주 배선(ECS 서비스)이 **있다**(ALPHA-887 — `sector-index-worker`. iNAV 와 같이
+# 세션 오케스트레이션이 desired_count 를 올리고 내린다). 아래 명령은 그 배선과 별개인
+# **수동 확인 게이트**다 — 상주 태스크가 이미 fence 를 쥐고 있으면 window 를 못 잡는다.
 # --max-ticks 는 확인 게이트다: WINDOW_FAILED 가 있거나 **한 window 도 못 봤으면 exit 1**.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
