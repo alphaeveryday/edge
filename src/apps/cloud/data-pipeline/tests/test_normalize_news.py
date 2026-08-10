@@ -745,7 +745,7 @@ def test_멘션_사전은_유니버스_뿌리_ETF_의_구성종목만_담는다(
     storage = LocalStorage(tmp_path / "lake")
     _write_holdings(storage, "2026-06-30", [("한미반도체", "042700")], etf_id="091160")
     _write_holdings(storage, "2026-06-30", [("한미반도체", "999999"), ("케이비금융", "105560")],
-                    etf_id="091170")  # 참조 계열 — 동명이 하나 + 유니버스 밖 하나
+                    etf_id="102970")  # 참조 계열 — 동명이 하나 + 유니버스 밖 하나
     _write_raw(storage, _raw_key("bigkinds", "KR"),
                [_bk_row(TITLE="한미반도체 신고가, 케이비금융도 올랐다", our_ticker=None)])
 

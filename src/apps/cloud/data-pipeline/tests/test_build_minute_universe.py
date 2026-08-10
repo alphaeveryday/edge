@@ -91,6 +91,33 @@ def test_both_axes_conflict_is_caught_from_config_not_just_holdings(tmp_path):
         build(storage, frozenset({"091160", "091170"}), ("091170",))
 
 
+def test_declared_etf_without_holdings_is_refused_not_silently_dropped(tmp_path):
+    # WHY: `etf_ids` 는 config 가 아니라 holdings 파생이라(`_kr_etf_ids`), etf_map 이
+    #      선언만 하고 스냅샷이 아직 없는 ETF 는 세 축 어디에도 안 실린다 — universe 에서
+    #      통째로 사라지는데 나머지 종목이 멀쩡해 `not etf_ids` 게이트는 통과한다.
+    #      이 창은 **참조 계열 → 판정 축 이동 때 반드시 열리고**(ALPHA-927), 그 사이
+    #      만든 객체를 올리면 그 ETF 는 봉조차 못 받아 **옮기기 전보다 나빠진다**.
+    #      그러니 조용한 누락이 아니라 거부여야 한다(Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07", [("005930", "091160")])  # 091170 스냅샷이 아직 없다
+
+    with pytest.raises(SystemExit, match="091170"):
+        build(storage, frozenset({"091160", "091170"}), ())
+
+
+def test_declared_etf_with_holdings_still_builds(tmp_path):
+    # WHY: 위 가드가 **결손일 때만** 물어야 한다. 선언 = 판정집합이 되는 정상 경로까지
+    #      막으면 ETF 를 새로 넣는 일 자체가 불가능해진다 — 가드가 넓으면 우회당한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07",
+              [("005930", "091160"), ("105560", "091170")])
+
+    universe = build(storage, frozenset({"091160", "091170"}), ())
+
+    assert set(universe.etf_ids) == {"091160", "091170"}
+    assert "105560" in universe.constituent_ids
+
+
 def test_universe_version_moves_when_sector_set_changes(tmp_path):
     # WHY: universe_version 은 세션 identity 축이다(worker·consumer 가 원장 값과 대조해
     #      갈리면 처리를 거부한다). 참조 계열을 더했는데 version 이 그대로면 새 집합이
@@ -125,7 +152,13 @@ def test_empty_sector_list_reproduces_the_pre_axis_version(tmp_path):
 def test_no_holdings_still_fails_loud(tmp_path):
     # WHY: 참조 계열만으로 축이 차면 "holdings 를 못 읽었다"가 가려진다 — 구성종목 0 인
     #      유니버스가 만들어져 그날 1분 수집이 몇 종으로 쪼그라든 채 초록으로 돈다.
+    #
+    # 입력은 **선언 ETF 의 스냅샷은 있고 그 구성종목이 참조 계열뿐인** 형태다. 빈 레이크로
+    # 두면 ALPHA-927 가드(선언했는데 holdings 에 없다)가 먼저 잡아 이 게이트에 안 닿는다 —
+    # 그건 더 구체적인 진단이라 순서가 맞지만, 그러면 이 테스트가 **자기 경로를 안 밟는다**.
     storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07",
+              [("091170", "091160"), ("102970", "091160")])
 
     with pytest.raises(SystemExit, match="유니버스를 못 만들었다"):
         build(storage, frozenset({"091160"}), ("091170", "102970"))
@@ -133,7 +166,7 @@ def test_no_holdings_still_fails_loud(tmp_path):
 
 def test_settings_wiring_reaches_the_universe(tmp_path):
     # WHY: build() 만 직접 부르는 테스트는 **기능이 통째로 무력화된 채 초록으로 도는**
-    #      경우를 못 잡는다 — main() 이 설정에서 목록을 안 꺼내면 섹터 후보 48종이
+    #      경우를 못 잡는다 — main() 이 설정에서 목록을 안 꺼내면 섹터 후보 47종이
     #      universe.json 에서 조용히 사라지고 어느 테스트도 실패하지 않는다.
     settings = SimpleNamespace(
         krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),

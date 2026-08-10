@@ -750,7 +750,7 @@ def test_유니버스_뿌리_밖_ETF_의_구성종목은_마스터에_시딩하�
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("005930", "삼성전자"),                      # etf_id 기본값 091160 — 뿌리
-        _holding("105560", "KB금융", etf_id="091170"),       # 참조 계열
+        _holding("105560", "KB금융", etf_id="102970"),       # 참조 계열
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
@@ -798,8 +798,8 @@ def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는�
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [
-        _holding("005930", "삼성전자", etf_id="091170"),
-        _holding("000660", "SK하이닉스", etf_id="091170"),
+        _holding("005930", "삼성전자", etf_id="102970"),
+        _holding("000660", "SK하이닉스", etf_id="102970"),
         # ⚠️ **운영 파티션 모양을 담는다.** KR canonical 에는 원화현금(MIC 없음) 행이 매 런
         #    정상적으로 들어온다. 이 행이 없으면 게이트를 `foreign == read` 로 잘못 짜도
         #    테스트가 통과한다 — 실제로 그렇게 짰다가 리뷰에서 잡혔다(그 형태는 운영에서
@@ -835,8 +835,8 @@ def test_전량_탈락_게이트는_시장별로_본다(tmp_path, monkeypatch):
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
     _write_canonical(storage, "US", "2026-07-15", [
-        _holding("NVDA", "NVIDIA", mic="XNAS", market="US", etf_id="091170"),
-        _holding("AAPL", "Apple", mic="XNAS", market="US", etf_id="091170"),
+        _holding("NVDA", "NVIDIA", mic="XNAS", market="US", etf_id="102970"),
+        _holding("AAPL", "Apple", mic="XNAS", market="US", etf_id="102970"),
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))

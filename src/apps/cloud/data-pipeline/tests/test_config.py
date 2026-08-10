@@ -325,7 +325,7 @@ sector_etf_ids = ["091170", "091170"]
 
 def test_sector_etf_unknown_key_fails_loud(tmp_path):
     # WHY: `extra="forbid"` 가 없으면 키 오타(sector_etf_id)가 조용히 로드되고
-    #      sector_etf_ids 는 빈 튜플이 된다 — 48종이 통째로 사라진 채 초록으로 돈다.
+    #      sector_etf_ids 는 빈 튜플이 된다 — 47종이 통째로 사라진 채 초록으로 돈다.
     #      값 오타는 위에서 막는데 키 오타를 안 막으면 같은 결과에 신호만 없다.
     bad = VALID + """
 [minute_universe]

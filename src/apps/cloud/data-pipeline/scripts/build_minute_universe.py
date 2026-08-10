@@ -84,6 +84,33 @@ def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Unive
             f"같은 ETF 가 etf_map 과 [minute_universe].sector_etf_ids 양쪽에 있다: {both} "
             f"— 판정 대상이면 etf_map 에만, 참조 계열이면 sector_etf_ids 에만 둬라"
         )
+    # **선언했는데 어느 축에도 안 실리는 ETF 는 거부한다**(ALPHA-927). etf_map 은 판정
+    # 축을 선언하지만 `etf_ids` 는 holdings 파생이라(`_kr_etf_ids`), 선언만 있고 스냅샷이
+    # 아직 없으면 그 ETF 는 `etf_ids` 도 `sector_etf_ids` 도 아니고 남의 구성종목도 아니다
+    # — **universe 에서 통째로 사라진다.** 그런데도 아래 `not etf_ids` 게이트는 나머지
+    # 33종이 멀쩡해 통과하고, 유일한 신호는 `_latest_kr_holdings_rows` 의 warning 한 줄에
+    # exit 0 이다. 요약 줄까지 평시와 같아("판정 ETF 33종") 사람이 그 객체를 그대로 올린다.
+    #
+    # 이 창은 **참조 계열에서 판정 축으로 ETF 를 옮길 때 반드시 열린다** — 옮긴 직후부터
+    # 첫 KRX holdings 런이 착지하기 전까지다. 그 사이에 만든 universe 를 올리면 그 ETF 는
+    # 봉조차 못 받아 **옮기기 전보다 나빠진다**(참조 계열이었을 땐 봉은 받았다).
+    # 그래서 겹침(Rule 7)과 같은 급으로 거부한다 — 사람이 순서를 지키게 만드는 것은
+    # 문서가 아니라 여기다(Rule 12).
+    # ⚠️ **1종 결손이 전면 차단으로 승격된다** — 폐지·거래정지·장기 수집실패로 어떤 ETF 가
+    # `UNIVERSE_LOOKBACK_PARTITIONS` 파티션을 넘겨 결손이면 universe 재생성 자체가 막히고,
+    # 탈출구는 etf_map 편집뿐이다(`--allow-missing` 류를 일부러 안 뒀다). 의도한 값이다:
+    # 여기서 통과시키면 그 ETF 가 **조용히** 사라지는데, 그건 급할 때 아무도 안 본다.
+    if orphan := sorted(set(expected_etfs or ()) - judged):
+        raise SystemExit(
+            f"etf_map 이 선언했는데 canonical KR holdings 에 없는 ETF: {orphan} — 이대로 "
+            f"만들면 이 종목들이 universe 세 축 어디에도 안 실려 1분봉조차 수집되지 않는다. "
+            f"순서는 ①새 sources.toml 이 든 **이미지 배포**(etf_map 은 이미지 동봉 config 가 "
+            f"정본이다 — terraform 이 env 로 안 넘긴다. tasks.tf 는 자격증명만 준다) → "
+            f"②그 뒤 일배치 15:40 런의 CollectKrxEtf → "
+            f"NormalizeEtf 착지 → ③여기 재실행이다. ①을 건너뛰면 그 런도 옛 목록으로 "
+            f"수집해 다음 날도 같은 자리에 선다. ②가 실패한 날은 trdDd 소급 수단이 없어 "
+            f"다음 런을 기다려야 한다. 수집 대상에서 뺄 생각이면 etf_map 에서 지워라"
+        )
     etf_ids = sorted(judged)
     everything = set(_kr_holdings_universe(storage, expected_etfs=expected_etfs))
     # 세 축은 서로 겹치면 안 된다(Universe 검증) — ETF·참조 계열을 뺀 나머지가 구성종목

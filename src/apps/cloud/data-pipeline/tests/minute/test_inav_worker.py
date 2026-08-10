@@ -34,15 +34,18 @@ NOW = datetime(2026, 8, 10, 9, 10, tzinfo=KST)
 # ETF 2 + 참조 계열 1 + 구성종목 2. 기대 집합에서 **구성종목과 참조 계열이 둘 다** 빠지는
 # 것이 이 dataset 의 핵심 차이라, 픽스처가 셋을 구분할 수 있어야 한다.
 #
-# 참조 계열은 prod config 규약대로 **`etf_map` 밖 코드**를 쓴다(`091170` 은 실제
-# `[minute_universe].sector_etf_ids` 48종 중 하나이고 `[krx_etf.source.etf_map]` 에 없다).
+# 참조 계열은 prod config 규약대로 **`etf_map` 밖 코드**를 쓴다(`102970` 은 실제
+# `[minute_universe].sector_etf_ids` 47종 중 하나이고 `[krx_etf.source.etf_map]` 에 없다).
+# ⚠️ 여기 코드를 고를 땐 **그때의 config 를 봐라** — 이 자리엔 원래 `091170` 이 있었는데
+# ALPHA-927 이 그걸 판정 축으로 옮기면서 위 두 명제가 통째로 거짓이 됐고, 로컬 `ETF_MAP`
+# 을 쓰는 이 테스트는 그래도 초록으로 돌았다(침묵 드리프트).
 # 여기에 `etf_map` 안의 코드를 적으면 `build_minute_universe` 가 `SystemExit` 로 거부하는
 # 조합이라 픽스처가 prod 를 안 비추고, 그러면 아래 `ETF_MAP` 도 거짓말이 된다(ALPHA-903).
 UNIVERSE = Universe(
     universe_version="univ-inav-v1",
     etf_ids=("069500", "091160"),
     constituent_ids=("005930", "000660"),
-    sector_etf_ids=("091170",),
+    sector_etf_ids=("102970",),
 )
 # iNAV 질의 심볼의 출처(`krx_etf.source.etf_map`)를 그대로 흉내낸다 — **판정 축만 있다.**
 # 참조 계열이 여기 없는 것은 픽스처의 사정이 아니라 규약이다(위 주석).
