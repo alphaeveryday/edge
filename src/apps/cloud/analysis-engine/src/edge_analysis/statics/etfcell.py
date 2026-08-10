@@ -266,7 +266,6 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         object_runtime = ObjectSetRuntime(
             lake, as_of=f"{day}T{facts.window_end}:00",
             news_scope=NewsScope(instrument_id, prev_trading_day(lake, day)))
-        object_tools = {"specs": object_runtime.tool_specs(), "call": object_runtime.call}
         threads = object_runtime.call("news.find_threads", {"limit": 40})
         if not threads.get("ok"):
             code = str(threads.get("error", {}).get("code") or "EXECUTION_FAILED")
@@ -280,6 +279,13 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             log("hypothesis.objectset_unavailable", tool="news.list_events", code=code)
             return ({"stage": "propose", "verdict": "판정불가",
                      "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
+        from .hypothesis_preview import HypothesisPreviewRuntime
+        preview_runtime = HypothesisPreviewRuntime(lake, object_runtime, day=day)
+        object_tools = {
+            "specs": [*object_runtime.tool_specs(), *preview_runtime.tool_specs()],
+            "call": preview_runtime.call,
+            "resolve_preview": preview_runtime.resolve,
+        }
         rows = events.get("events", [])
         thread_by_event: dict[str, str] = {}
         for thread in threads.get("threads", []):
