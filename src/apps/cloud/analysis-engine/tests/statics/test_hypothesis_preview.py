@@ -102,6 +102,51 @@ def test_usual_model_tool_sequence_uses_the_server_scoped_event_set_and_reaches_
     assert "os_company_entity" not in json.dumps(wrong_preview)
 
 
+def test_unknown_final_preview_handle_requires_preview_tool_before_another_final_submission(monkeypatch):
+    runtime = HypothesisPreviewRuntime(
+        object(), _EventSets(), day="2026-08-07", default_event_set_handle="os_events")
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.edge_test",
+        lambda *_args, **_kwargs: SimpleNamespace(verdict="성립", n=42),
+    )
+    prompts: list[str] = []
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"hypotheses": [{"preview_handle": "hpr_...", "intent": "검정한다."}]},
+        {"tool": "hypothesis.preview", "arguments": {
+            "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+            "outcome_id": "outcome:daily_return",
+            "layer_id": "layer:고유",
+            "exposure_id": "feature:배수/수준",
+        }},
+        {"hypotheses": [{
+            "preview_handle": lambda: next(iter(runtime._previews)),
+            "intent": "검정한다.",
+        }]},
+    ))
+
+    def ask(_system, user):
+        prompts.append(user)
+        reply = next(replies)
+        if isinstance(reply.get("hypotheses"), list):
+            for hypothesis in reply["hypotheses"]:
+                handle = hypothesis.get("preview_handle")
+                if callable(handle):
+                    hypothesis["preview_handle"] = handle()
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["COMPANY.COMMERCIAL.MARKET_ENTRY"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve},
+    )
+
+    assert len(valid) == 1
+    assert any("UNKNOWN_PREVIEW_HANDLE" in reason for reason in rejected)
+    assert "hypothesis.preview` 도구 호출" in prompts[2]
+    assert "hpr_..." not in prompts[2]
+
+
 def test_preview_rejects_unknown_handle_or_option_before_running_the_verifier(monkeypatch):
     runtime = _runtime()
     called = False
