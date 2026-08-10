@@ -1474,9 +1474,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 #  · **기대 집합은 판정 축 ETF 뿐이다**(`etf_ids`) — 기준은 NAV 가 있는가가 아니라
 #    **질의 심볼 맵(`etf_map`)에 있는가**다. 맵 밖 unit 은 `_rows_for` 가 INVALID 로
 #    내고 invalid 하나면 window 전체가 INVALID 다. 구성종목은 NAV 도 맵도 없고, 참조
-#    계열(`sector_etf_ids`)은 NAV 는 있어도 빌더가 두 축의 겹침을 거부해 **정의상**
-#    맵 밖이다(ALPHA-903). ⚠️ NAV 축만의 판단이다 — 참조 계열의 **봉**은 가격 레인이
-#    그대로 수집한다.
+#    계열(`sector_etf_ids`)은 NAV 는 있어도 맵 밖이다(ALPHA-903 — 빌더가 두 축의 겹침을
+#    거부해 그 상태를 지키지만 영구 보장은 아니다. `_expected_units` 도크스트링에 이유가
+#    있다). ⚠️ NAV 축만의 판단이다 — 참조 계열의 **봉**은 가격 레인이 그대로 수집한다.
 #  · **job·outbox 를 만들지 않는다** — 하위 소비자가 없어 window 확정에서 멈춘다.
 #    (가격 것을 빌려 쓰면 NAV 가 price-analysis-realtime 으로 나가 설명이 발화된다.)
 #  · **복구를 하지 않는다**(`recovery_budget_per_tick = 0`, 2026-08-08 결정) — iNAV 는

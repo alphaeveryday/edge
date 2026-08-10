@@ -183,7 +183,7 @@ def test_구성종목은_기대_집합에서_빠진다(tmp_path):
 def test_참조_계열은_심볼_맵_밖이라_기대_집합에서_빠진다(tmp_path):
     """ALPHA-903 회귀. **스텁을 안 쓴다** — 진짜 컬렉터가 진짜 심볼 맵으로 판정한다.
 
-    참조 계열은 정의상 `etf_map` 밖이라(`build_minute_universe` 가 겹침을 거부한다) 기대
+    참조 계열은 `etf_map` 밖이라(현재 `build_minute_universe` 가 겹침을 거부한다) 기대
     집합에 넣는 순간 `_rows_for` 가 그 전량을 `Outcome.INVALID` 로 내고, invalid 하나면
     `status_of` 가 **window 전체**를 INVALID 로 만든다 — 그리고 INVALID 는 재청구 대상이
     아니다(2026-08-09 실측: 운영 universe 객체 81종 중 48종이 이 상태였다).

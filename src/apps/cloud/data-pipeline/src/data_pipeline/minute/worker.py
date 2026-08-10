@@ -573,10 +573,12 @@ class InavWorker(MinuteWorkerLoop):
         있다 — 갈리면 그 unit 이 매 window invalid 로 드러난다(`inav_worker_cli` 도크스트링).
 
         ⚠️ **참조 계열(`sector_etf_ids`)은 뺀다**(ALPHA-903). 여기 있던 "참조 계열도 ETF 라
-        NAV 가 있다"는 근거는 참이지만 부를 수가 없다: `build_minute_universe` 가 두 축의
-        겹침을 `SystemExit` 로 거부하므로 참조 계열은 **정의상** `etf_map` 밖이다(운영 객체
+        NAV 가 있다"는 근거는 참이지만 부를 수가 없다: 참조 계열은 심볼 맵(`etf_map`) 밖이라
+        `KisInavSource` 에 질의할 수단이 없다(운영 객체
         `s3://edge-dev-pipeline-lake/config/minute/universe.json` 2026-08-09 실측: 기대
-        81종 중 48종이 그랬다). 심볼 맵을 넓히는 갈래를 안 고른 이유는 **NAV 를 읽는 데가
+        81종 중 48종이 그랬다). 그 상태는 `build_minute_universe` 의 겹침 거부(`SystemExit`)
+        가 지키지만 **영구 보장은 아니다** — universe 재생성 없이 `etf_map` 만 넓히면 맵 안이
+        될 수 있다. 심볼 맵을 넓히는 갈래를 안 고른 이유는 **NAV 를 읽는 데가
         없어서**다 — iNAV 는 하위 소비자가 0 이다(`_commit` 주석). 소비자가 생기면
         `KisInavSource` 에 참조 계열 심볼 맵을 **먼저** 주고 여기를 되돌려라 — 순서가 반대면
         되돌린 그날부터 다시 전량이 매 분 INVALID 다.
