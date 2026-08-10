@@ -7,7 +7,8 @@ import secrets
 from dataclasses import dataclass
 from typing import Any
 
-from .paneltest import FEATURES, LAYER_EXPOSURES, edge_test
+from .layers import SESSION_CLOSE
+from .paneltest import FEATURES, LAYER_EXPOSURES, _base, edge_test
 from .vocab import (CHANNELS, MIN_N, Condition, ExposureSource, HypothesisTuple,
                     Trigger)
 
@@ -38,37 +39,54 @@ class EventCandidate:
     instrument_id: str
     title: str
     available_at: str
+    evidence_id: str = ""
 
 
 def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str, day: str,
                                as_of: str, min_n: int) -> EventDistributionPreview | None:
     """Return no preview unless one current anchor and its comparable history exist."""
-    anchor = lake.con.execute("""
+    def literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    clock = as_of.replace("T", " ")[11:19]
+    # v_daily is a close-to-close series.  Before the close its current-day value
+    # is not knowable at this request's as-of, so never render a future close.
+    if not clock or clock < SESSION_CLOSE:
+        return None
+    base = _base(day, clock)
+    try:
+        anchor = lake.sql(base + f"""
         SELECT DISTINCT instrument_id, event_type_code
         FROM v_event
-        WHERE source_event_id = ? AND instrument_id = ?
-          AND trade_date = CAST(? AS DATE)
-          AND available_at <= CAST(? AS TIMESTAMP)
-    """, [source_event_id, instrument_id, day, as_of]).fetchall()
+        WHERE source_event_id = {literal(source_event_id)}
+          AND instrument_id = {literal(instrument_id)}
+          AND trade_date = DATE {literal(day)}
+        """)
+    except Exception as e:  # noqa: BLE001 - this is an unavailable server data surface
+        raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
     if len(anchor) != 1:
         return None
     instrument_id, event_type_code = map(str, anchor[0])
-    historical = lake.con.execute("""
+    try:
+        historical = lake.sql(base + f"""
         SELECT DISTINCT e.instrument_id, e.trade_date, d.ar
         FROM v_event e
         JOIN v_daily d
           ON d.instrument_id = e.instrument_id AND d.trade_date = e.trade_date
-        WHERE e.event_type_code = ?
-          AND e.trade_date < CAST(? AS DATE)
-          AND e.available_at <= CAST(? AS TIMESTAMP)
+        WHERE e.event_type_code = {literal(event_type_code)}
+          AND e.trade_date < DATE {literal(day)}
           AND d.ar IS NOT NULL
-    """, [event_type_code, day, as_of]).fetchall()
+        """)
+        today = lake.sql(base + f"""
+        SELECT ar FROM v_daily
+        WHERE instrument_id = {literal(instrument_id)}
+          AND trade_date = DATE {literal(day)}
+          AND ar IS NOT NULL
+        """)
+    except Exception as e:  # noqa: BLE001 - no partial distribution is publishable
+        raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
     if len(historical) < min_n:
         return None
-    today = lake.con.execute("""
-        SELECT ar FROM v_daily
-        WHERE instrument_id = ? AND trade_date = CAST(? AS DATE) AND ar IS NOT NULL
-    """, [instrument_id, day]).fetchall()
     if len(today) != 1:
         return None
     values = [float(row[2]) for row in historical]
@@ -498,5 +516,10 @@ class PreviewResolutionError(ValueError):
         super().__init__(code)
 
 
+class PreviewExecutionError(RuntimeError):
+    """A server-owned preview could not read its required PIT surface."""
+
+
 __all__ = ["EventCandidate", "EventDistributionPreview", "HypothesisPreviewRuntime",
-           "PreviewResolution", "PreviewResolutionError", "event_distribution_preview"]
+           "PreviewExecutionError", "PreviewResolution", "PreviewResolutionError",
+           "event_distribution_preview"]

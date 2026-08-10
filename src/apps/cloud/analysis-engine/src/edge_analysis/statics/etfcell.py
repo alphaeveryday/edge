@@ -29,8 +29,10 @@ from dataclasses import replace
 
 from ..config import PipelineError
 from .route import route_etf, say_route
+from .hypothesis_preview import PreviewExecutionError
 from .interval import (
     ROLL_UNSET,
+    EventDistributionFact,
     build_block_plan,
     final_explanation_payload,
     window_facts,
@@ -95,12 +97,22 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
             lake, instrument_id, day, ask, facts, news_out=scoped_news)
         if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
             raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
-        if scoped_news:
+        distributions = tuple(
+            EventDistributionFact(
+                source_event_id=str(row["source_event_id"]), title=str(row["title"]),
+                available_at=str(row["available_at"]), evidence_id=str(row["evidence_id"]),
+                n=int(row["n"]), mean=float(row["mean"]), today=float(row["today"]),
+                percentile=float(row["percentile"]),
+            )
+            for row in stat_tests if row.get("stage") == "event_distribution"
+        )
+        if scoped_news or distributions:
             facts = replace(
                 facts,
-                news=_thread_news_lines(scoped_news),
+                news=_thread_news_lines(scoped_news) if scoped_news else facts.news,
                 event_ids=tuple(sorted(set(facts.event_ids) | {
                     str(row["source_event_id"]) for row in scoped_news})),
+                event_distributions=distributions,
             )
         final_payload = final_explanation_payload(facts)
         final = final_payload["rendered_text"]
@@ -363,6 +375,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                 thread_id=str(row.get("thread_id") or row["source_event_id"]),
                 instrument_id=instrument_id,
                 title=row["title"], available_at=row["available_at"],
+                evidence_id=str(row.get("evidence_id") or ""),
             ) for row in discovered),
         )
         object_tools = {
@@ -401,6 +414,8 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
                                    measurable=sorted(FEATURES),
                                    series_families=fired, object_tools=object_tools)
+    except PreviewExecutionError as e:
+        raise PipelineError(str(e)) from e
     except ModelContractError:
         raise
     except Exception as e:                      # noqa: BLE001 - 실패는 사유와 함께
@@ -433,6 +448,9 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             "source_event_id": distribution.source_event_id,
             "thread_id": candidate.thread_id,
             "event_type_code": distribution.event_type_code,
+            "title": candidate.title,
+            "available_at": candidate.available_at,
+            "evidence_id": candidate.evidence_id,
             "n": distribution.n,
             "mean": distribution.mean,
             "today": distribution.today,

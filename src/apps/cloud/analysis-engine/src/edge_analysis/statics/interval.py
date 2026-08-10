@@ -55,6 +55,21 @@ class StatisticFact:
     p: float | None = None
     evidence_ids: tuple[str, ...] = ()
 
+
+@dataclass(frozen=True)
+class EventDistributionFact:
+    """A server-verified event and its same-type market-adjusted return distribution."""
+
+    source_event_id: str
+    title: str
+    available_at: str
+    evidence_id: str
+    n: int
+    mean: float
+    today: float
+    percentile: float
+
+
 @dataclass(frozen=True)
 class WindowFacts:
     ticker: str
@@ -86,6 +101,7 @@ class WindowFacts:
     disclosures: tuple[str, ...] = ()
     flows: tuple[str, ...] = ()
     news: tuple[str, ...] = ()
+    event_distributions: tuple[EventDistributionFact, ...] = ()
     statistics: tuple[StatisticFact, ...] = ()
     causal: tuple[str, ...] = ()
     evidence: tuple[str, ...] = ()
@@ -103,6 +119,16 @@ class OutputBlock:
 
 def _pct(value: float) -> str:
     return f"{value * 100:+.2f}%"
+
+
+def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple[str, ...]:
+    return tuple(
+        f"{item.available_at[11:16]}, {item.title} 소식이 있었습니다. "
+        f"같은 유형의 과거 {item.n}개 사건일에서 이 종목의 시장초과수익률은 평균 "
+        f"{_pct(item.mean)}였습니다. 오늘 시장초과수익률은 {_pct(item.today)}로, "
+        f"과거 분포의 하위 {item.percentile * 100:.0f}% 수준입니다."
+        for item in items
+    )
 
 
 def _contribution_lines(items: tuple[ContributionFact, ...]) -> tuple[str, ...]:
@@ -251,17 +277,22 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
     # 검정 계열(statistics·causal)은 **항상 병치한다** - 판정은 코드 산출이고,
     # final_lines 뒤에 숨으면 유의·비유의 사실이 산문에서 사라진다(Rule 12).
     statistical = _lines("statistics", "causal")
-    optional = (facts.final_lines or _lines("disclosure", "flow", "news")) + statistical
-    if optional:
-        lines = optional
+    if facts.event_distributions:
+        lines = _event_distribution_lines(facts.event_distributions)
+        systems = ("RDB.source_event", "ANALYSIS.event_distribution")
+        refs = tuple(f"source_event:{item.source_event_id}"
+                     for item in facts.event_distributions)
+    else:
+        lines = (facts.final_lines or _lines("disclosure", "flow", "news")) + statistical
         systems = (
             *(("RDB.source_event",) if facts.event_ids else ()),
             *(("ANALYSIS.stat_tests",) if statistical else ()),
         )
         refs = tuple(f"source_event:{value}" for value in facts.event_ids)
+    if lines:
         blocks.append(block(
             "4", "이벤트 병치", lines, systems, refs,
-            "CAUSAL_STAT_TEST" if statistical else None,
+            "CAUSAL_STAT_TEST" if not facts.event_distributions and statistical else None,
         ))
     else:
         blocks.append(block(

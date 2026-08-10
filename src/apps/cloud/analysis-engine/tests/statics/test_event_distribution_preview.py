@@ -4,51 +4,72 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import duckdb
+import pytest
 
 from edge_analysis.statics.hypothesize import (_EVENT_DISTRIBUTION_PREVIEW_SYSTEM,
                                                propose)
 from edge_analysis.statics.hypothesis_preview import (EventCandidate,
                                                        EventDistributionPreview,
                                                        HypothesisPreviewRuntime,
+                                                       PreviewExecutionError,
                                                        event_distribution_preview)
 
 
-def _lake() -> SimpleNamespace:
-    con = duckdb.connect()
-    con.execute("""
-        CREATE TABLE v_event(
-            source_event_id TEXT, instrument_id TEXT, event_type_code TEXT,
-            trade_date DATE, available_at TIMESTAMP
-        )
-    """)
-    con.execute("""
-        CREATE TABLE v_daily(instrument_id TEXT, trade_date DATE, ar DOUBLE)
-    """)
-    con.execute("""
-        INSERT INTO v_event VALUES
-          ('old_a', 'A', 'CONTRACT.CANCEL', DATE '2026-07-01', TIMESTAMP '2026-07-01 10:00:00'),
-          ('old_a_duplicate', 'A', 'CONTRACT.CANCEL', DATE '2026-07-01', TIMESTAMP '2026-07-01 11:00:00'),
-          ('old_b', 'B', 'CONTRACT.CANCEL', DATE '2026-07-02', TIMESTAMP '2026-07-02 10:00:00'),
-          ('other_type', 'C', 'CONTRACT.SIGN', DATE '2026-07-03', TIMESTAMP '2026-07-03 10:00:00'),
-          ('future', 'D', 'CONTRACT.CANCEL', DATE '2026-07-04', TIMESTAMP '2026-08-08 09:00:00'),
-          ('anchor', 'A', 'CONTRACT.CANCEL', DATE '2026-08-07', TIMESTAMP '2026-08-07 10:31:00'),
-          ('anchor', 'COUNTERPARTY', 'CONTRACT.CANCEL', DATE '2026-08-07', TIMESTAMP '2026-08-07 10:31:00')
-    """)
-    con.execute("""
-        INSERT INTO v_daily VALUES
-          ('A', DATE '2026-07-01', -0.01),
-          ('B', DATE '2026-07-02',  0.02),
-          ('C', DATE '2026-07-03', -0.90),
-          ('D', DATE '2026-07-04', -0.80),
-          ('A', DATE '2026-08-07', -0.03)
-    """)
-    return SimpleNamespace(con=con)
+class _Lake:
+    """Production preview must use the lake's PIT SQL boundary, never ``con``."""
+
+    def __init__(self) -> None:
+        con = duckdb.connect()
+        self._con = con
+        con.execute("""
+            CREATE TABLE event_rows(
+                source_event_id TEXT, instrument_id TEXT, event_type_code TEXT,
+                trade_date DATE, available_at TIMESTAMP
+            )
+        """)
+        con.execute("""
+            CREATE TABLE daily_rows(instrument_id TEXT, trade_date DATE, ar DOUBLE)
+        """)
+        con.execute("""
+            INSERT INTO event_rows VALUES
+              ('old_a', 'A', 'CONTRACT.CANCEL', DATE '2026-07-01', TIMESTAMP '2026-07-01 10:00:00'),
+              ('old_a_duplicate', 'A', 'CONTRACT.CANCEL', DATE '2026-07-01', TIMESTAMP '2026-07-01 11:00:00'),
+              ('old_b', 'B', 'CONTRACT.CANCEL', DATE '2026-07-02', TIMESTAMP '2026-07-02 10:00:00'),
+              ('other_type', 'C', 'CONTRACT.SIGN', DATE '2026-07-03', TIMESTAMP '2026-07-03 10:00:00'),
+              ('future', 'D', 'CONTRACT.CANCEL', DATE '2026-07-04', TIMESTAMP '2026-08-08 09:00:00'),
+              ('anchor', 'A', 'CONTRACT.CANCEL', DATE '2026-08-07', TIMESTAMP '2026-08-07 10:31:00'),
+              ('anchor', 'COUNTERPARTY', 'CONTRACT.CANCEL', DATE '2026-08-07', TIMESTAMP '2026-08-07 10:31:00')
+        """)
+        con.execute("""
+            INSERT INTO daily_rows VALUES
+              ('A', DATE '2026-07-01', -0.01),
+              ('B', DATE '2026-07-02',  0.02),
+              ('C', DATE '2026-07-03', -0.90),
+              ('D', DATE '2026-07-04', -0.80),
+              ('A', DATE '2026-08-07', -0.03)
+        """)
+
+    def sql(self, query: str) -> list[tuple]:
+        assert query.startswith("WITH")
+        return self._con.execute(query).fetchall()
 
 
-def test_distribution_preview_binds_anchor_to_same_type_deduplicated_pit_history():
+def _lake() -> _Lake:
+    return _Lake()
+
+
+def test_distribution_preview_binds_anchor_to_same_type_deduplicated_pit_history(monkeypatch):
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview._base",
+                        lambda *_args: """WITH
+                        v_event AS (
+                            SELECT * FROM event_rows
+                            WHERE available_at <= TIMESTAMP '2026-08-07 15:30:00'
+                        ),
+                        v_daily AS (SELECT * FROM daily_rows)
+                        """)
     preview = event_distribution_preview(
         _lake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
-        as_of="2026-08-07 12:05:00", min_n=2,
+        as_of="2026-08-07 15:30:00", min_n=2,
     )
 
     assert preview is not None
@@ -56,6 +77,31 @@ def test_distribution_preview_binds_anchor_to_same_type_deduplicated_pit_history
     assert preview.mean == 0.005
     assert preview.today == -0.03
     assert preview.percentile == 0.0
+
+
+def test_distribution_preview_never_reads_today_close_before_market_close():
+    class _Lake:
+        def sql(self, _query: str) -> list[tuple]:
+            raise AssertionError("pre-close preview must not query v_daily")
+
+    assert event_distribution_preview(
+        _Lake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
+        as_of="2026-08-07 12:05:00", min_n=2,
+    ) is None
+
+
+def test_distribution_preview_fails_loudly_when_the_pit_surface_is_unavailable(monkeypatch):
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview._base", lambda *_args: "WITH x AS")
+
+    class _UnavailableLake:
+        def sql(self, _query: str) -> list[tuple]:
+            raise RuntimeError("database unavailable")
+
+    with pytest.raises(PreviewExecutionError, match="EVENT_DISTRIBUTION_UNAVAILABLE"):
+        event_distribution_preview(
+            _UnavailableLake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
+            as_of="2026-08-07 15:30:00", min_n=2,
+        )
 
 
 def test_llm_can_only_submit_a_ready_current_event_distribution_preview(monkeypatch):

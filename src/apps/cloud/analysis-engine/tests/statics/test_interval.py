@@ -5,6 +5,7 @@ from edge_analysis.statics.interval import (
     BLOCK_ORDER,
     MIN_N,
     ContributionFact,
+    EventDistributionFact,
     StatisticFact,
     WindowFacts,
     build_block_plan,
@@ -345,6 +346,27 @@ def test_final_payload_emits_absence_only_when_optional_blocks_are_empty():
     assert [b["block_code"] for b in payload["blocks"]] == ["H", "1", "2", "3", "N"]
     assert payload["blocks"][-1]["block_title"] == "부재 고지"
     assert "확인된 공시·보도는 없습니다" in payload["blocks"][-1]["text"]
+
+
+def test_ready_event_distribution_renders_one_grounded_customer_paragraph():
+    payload = final_explanation_payload(_facts(
+        news=("기존 뉴스 목록은 고객 문장으로 쓰지 않는다.",),
+        event_ids=("evt_selected", "evt_other"),
+        event_distributions=(EventDistributionFact(
+            source_event_id="evt_selected", title="포스코퓨처엠의 LFP 장기공급 합의",
+            available_at="2026-08-05T09:49:00", evidence_id="ev_title",
+            n=41, mean=-0.031, today=-0.036, percentile=0.42,
+        ),),
+    ))
+    event = payload["blocks"][-1]
+
+    assert event["block_code"] == "4"
+    assert event["text"] == (
+        "09:49, 포스코퓨처엠의 LFP 장기공급 합의 소식이 있었습니다. "
+        "같은 유형의 과거 41개 사건일에서 이 종목의 시장초과수익률은 평균 -3.10%였습니다. "
+        "오늘 시장초과수익률은 -3.60%로, 과거 분포의 하위 42% 수준입니다."
+    )
+    assert event["evidence_refs"] == ["source_event:evt_selected"]
 
 def test_final_explanation_never_reads_a_prior_analysis_output():
     """A previous run's output must never become evidence for the current run."""
