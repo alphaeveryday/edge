@@ -209,6 +209,20 @@ def test_rejected_hypothesis_keeps_its_reason():
     assert "ESTABLISHED" in html                          # 검정 전건도 같은 표에
 
 
+def test_rejected_preview_trial_uses_the_safe_status_and_tool_heading():
+    """기존 가설 원장도 trace와 같은 preview 오류 비노출 계약을 지킨다."""
+    rejected = ("run_1", "091160", _DAY, "REJECTED", "시장진입", None, None,
+                None, "REJECTED", None, None,
+                "[1] preview_handle을 실행할 수 없습니다: UNKNOWN_PREVIEW_HANDLE")
+    html = _html(_FakeConn(results=[_result_row()], evidence=_EVIDENCE,
+                           trials=[rejected]), _fresh_s3())
+
+    assert "UNKNOWN_PREVIEW_HANDLE" not in html
+    assert "서버가 preview를 확인하지 못해 이 가설을 실행하지 않았습니다." in html
+    assert "LLM·도구" in html
+    assert "LLM·SQL 왕복" not in html
+
+
 def test_legacy_llm_sql_trace_has_a_safe_fallback_from_fixture():
     """기존 fixture archive도 안전한 fallback으로 계속 렌더한다."""
     html = _html(_FakeConn(results=[_result_row()], evidence=_EVIDENCE,

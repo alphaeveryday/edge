@@ -469,7 +469,8 @@ _TRIAL_HEAD = ("<tr><th>단계</th><th>방아쇠</th><th>채널</th><th>노출</
 def _trial_row(row: tuple) -> str:
     (_run, _ticker, _day, stage, slot, channel, exposure, layer,
      verdict, n, p, reason) = row
-    cells = (stage, slot, channel, exposure, layer, verdict, n, p, reason)
+    cells = (stage, slot, channel, exposure, layer, verdict, n, p,
+             _safe_preview_diagnostic(reason))
     return "<tr>" + "".join(
         f"<td>{escape('' if c is None else str(c))}</td>" for c in cells) + "</tr>"
 
@@ -536,8 +537,8 @@ def _render_utterance(r: dict[str, Any]) -> list[str]:
     else:
         out.append("<p class=\"meta\">가설 원장 행 없음</p>")
 
-    # ③ LLM·SQL 왕복 원문
-    out.append("<h4>LLM·SQL 왕복</h4>")
+    # ③ LLM·도구 감사 trace
+    out.append("<h4>LLM·도구</h4>")
     events = trace.get("events") or []
     rendered = _render_llm(events)
     out.extend(rendered if rendered
