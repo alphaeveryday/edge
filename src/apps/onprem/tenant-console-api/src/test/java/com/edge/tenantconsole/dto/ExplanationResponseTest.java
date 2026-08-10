@@ -86,7 +86,7 @@ class ExplanationResponseTest {
 				.get("evidence");
 
 		assertThat(evidence.get(0).get("type").asString()).isEqualTo("공시");
-		assertThat(evidence.get(0).get("time").asString()).isEqualTo("2026-07-11 10:31");
+		assertThat(evidence.get(0).get("time").asString()).isEqualTo("2026-07-11 10:31 KST");
 		// 원문 링크(ALPHA-739) — 있으면 그대로, 없으면 키 생략(NON_NULL — UI 는 링크 미표시)
 		assertThat(evidence.get(0).get("sourceUri").asString())
 				.isEqualTo("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260711000001");

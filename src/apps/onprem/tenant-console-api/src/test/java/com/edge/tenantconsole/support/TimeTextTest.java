@@ -29,7 +29,8 @@ class TimeTextTest {
 		// 원장 시각(UTC 오프셋)도 KST 로 통일해 표시한다
 		OffsetDateTime utc = OffsetDateTime.parse("2026-07-11T01:42:00Z");
 		assertThat(TimeText.absolute(utc)).isEqualTo("2026-07-11 10:42 KST");
-		assertThat(TimeText.doc(utc)).isEqualTo("2026-07-11 10:42");
+		// 근거 시각도 KST 명시(ALPHA-922) — 검수 상세(kstMinute)와 같은 모양이어야 한다.
+		assertThat(TimeText.doc(utc)).isEqualTo("2026-07-11 10:42 KST");
 		assertThat(TimeText.doc(null)).isEqualTo("—");
 	}
 }

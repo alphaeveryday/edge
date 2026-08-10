@@ -15,7 +15,7 @@ public final class TimeText {
 
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 	private static final DateTimeFormatter ABS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'KST'");
-	private static final DateTimeFormatter DOC = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+	private static final DateTimeFormatter DOC = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'KST'");
 
 	private TimeText() {
 	}
@@ -25,7 +25,7 @@ public final class TimeText {
 		return ABS.format(at.atZoneSameInstant(KST));
 	}
 
-	/** "2026-07-14 09:00" — 근거 문서 시각 표시. NULL 은 "—"(시각처럼 그리지 않는다). */
+	/** "2026-07-14 09:00 KST" — 근거 문서 시각 표시(검수 상세 kstMinute 와 동일 모양, ALPHA-922). NULL 은 "—". */
 	public static String doc(OffsetDateTime at) {
 		return at == null ? "—" : DOC.format(at.atZoneSameInstant(KST));
 	}

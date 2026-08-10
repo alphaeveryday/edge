@@ -1,14 +1,14 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { Icon, PageSkeleton, StatusBadge, toast } from 'ui-kit';
+import { useParams } from 'react-router-dom';
+import { PageSkeleton, StatusBadge, toast } from 'ui-kit';
 import {
   CONFIDENCE_LABEL, CONFIDENCE_TONE, PUBLISHED_STATUSES, STATUS_LABEL, STATUS_TONE,
 } from '../domains/explanations';
 import { useExplanation, useExplanationActions } from '../domains/explanations/hooks';
 import { useSession } from '../domains/session/hooks';
 import { ApiError } from '../api/client';
-import { isHttpUrl } from './_shared/links';
 import { LoadError } from './_shared/cells';
+import { BackLink, DetailHeader, EvidenceTable, OriginalSummaryCard } from './_shared/detail';
 
 export function ExplanationDetailPage() {
   const { id } = useParams();
@@ -41,93 +41,83 @@ export function ExplanationDetailPage() {
   }
 
   return (
-    <div className="flex max-w-[860px] flex-col gap-4">
-      <div>
-        <Link to="/explanations" className="inline-flex items-center gap-1" style={{ fontSize: 12 }}>
-          <Icon name="chevronLeft" size={13} strokeWidth={1.8} />
-          가격 변동 설명 목록
-        </Link>
-      </div>
+    <div className="flex max-w-[900px] flex-col gap-4">
+      <BackLink to="/explanations" label="가격 변동 설명 목록" />
 
-      <div className="card card-pad flex flex-wrap items-center gap-6">
-        <div className="min-w-[180px]">
-          <div style={{ fontSize: 18, fontWeight: 700 }}>
-            {it.name}{' '}
-            <span className="num" style={{ fontSize: 13, fontWeight: 400, color: 'var(--fg-4)' }}>
-              {it.code}
-            </span>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 2 }}>
-            {it.receivedAt}
-          </div>
-        </div>
-        <div className="flex items-center gap-8">
-          <div>
-            <div className="t-label">제공 상태</div>
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status]}</StatusBadge>
-              {/* 노출 head(ALPHA-744) — 같은 종목 다스냅샷 중 지금 고객 화면에 보이는 판 */}
-              {it.serving && (
-                <StatusBadge tone="exposed" dot={false}>
-                  제공 중
-                </StatusBadge>
-              )}
-            </div>
-          </div>
-          <div>
-            <div className="t-label">기준시각</div>
-            {/* 콘텐츠 기준시각(ALPHA-918) — 산문이 말하는 창의 끝. 구형 수신분은 생성 시각 폴백 */}
-            <div className="num mt-1.5" style={{ fontSize: 12 }}>
-              {it.contentAsOf ?? it.explanationAsOf}
-            </div>
-          </div>
-          <div>
-            <div className="t-label">확신도</div>
-            <div className="mt-1.5">
-              {it.confidence ? (
-                <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
-                  {CONFIDENCE_LABEL[it.confidence]}
-                </StatusBadge>
-              ) : (
-                <span style={{ color: 'var(--fg-4)' }}>—</span>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="flex-1" />
-        <div className="flex gap-2">
-          {/* 최종 문구는 게시본(published_summary)을 정정하므로 노출 중일 때만 — 미게시 건은 API 가 409 */}
-          {canEditFinal && PUBLISHED_STATUSES.includes(it.status) && (
-            <button
-              className="btn"
-              onClick={() => {
-                setEditing(true);
-                setDraft(it.final);
-              }}
-            >
-              최종 문구 수정
-            </button>
-          )}
-          {canReduceExposure && it.status === 'BLOCKED' && (
-            <button
-              className="btn"
-              onClick={() =>
-                moveToReview.mutate(it.id, {
-                  onSuccess: () => toast(`${it.name} 설명이 검수 대기열로 이관되었습니다.`),
-                })
-              }
-            >
-              검수로 이관
-            </button>
-          )}
-          {/* 실제 노출 중인 상태에서만 — 검수 대기·차단·반려 건은 승인/반려 플로우를 우회하지 않게 */}
-          {canReduceExposure && PUBLISHED_STATUSES.includes(it.status) && (
-            <button className="btn btn-danger" onClick={() => setStopping(true)}>
-              제공 중단
-            </button>
-          )}
-        </div>
-      </div>
+      <DetailHeader
+        name={it.name}
+        code={it.code}
+        sub={`수신 ${it.receivedAt}`}
+        fields={[
+          {
+            label: '제공 상태',
+            value: (
+              <>
+                <StatusBadge tone={STATUS_TONE[it.status]}>{STATUS_LABEL[it.status]}</StatusBadge>
+                {/* 노출 head(ALPHA-744) — 같은 종목 다스냅샷 중 지금 고객 화면에 보이는 판 */}
+                {it.serving && (
+                  <StatusBadge tone="exposed" dot={false}>
+                    제공 중
+                  </StatusBadge>
+                )}
+              </>
+            ),
+          },
+          {
+            label: '기준시각',
+            // 콘텐츠 기준시각(ALPHA-918) — 산문이 말하는 창의 끝. 구형 수신분은 생성 시각 폴백
+            value: (
+              <span className="num" style={{ fontSize: 12 }}>
+                {it.contentAsOf ?? it.explanationAsOf}
+              </span>
+            ),
+          },
+          {
+            label: '확신도',
+            value: it.confidence ? (
+              <StatusBadge tone={CONFIDENCE_TONE[it.confidence]} dot={false}>
+                {CONFIDENCE_LABEL[it.confidence]}
+              </StatusBadge>
+            ) : (
+              <span style={{ color: 'var(--fg-4)' }}>—</span>
+            ),
+          },
+        ]}
+        actions={
+          <>
+            {/* 최종 문구는 게시본(published_summary)을 정정하므로 노출 중일 때만 — 미게시 건은 API 가 409 */}
+            {canEditFinal && PUBLISHED_STATUSES.includes(it.status) && (
+              <button
+                className="btn"
+                onClick={() => {
+                  setEditing(true);
+                  setDraft(it.final);
+                }}
+              >
+                최종 문구 수정
+              </button>
+            )}
+            {canReduceExposure && it.status === 'BLOCKED' && (
+              <button
+                className="btn"
+                onClick={() =>
+                  moveToReview.mutate(it.id, {
+                    onSuccess: () => toast(`${it.name} 설명이 검수 대기열로 이관되었습니다.`),
+                  })
+                }
+              >
+                검수로 이관
+              </button>
+            )}
+            {/* 실제 노출 중인 상태에서만 — 검수 대기·차단·반려 건은 승인/반려 플로우를 우회하지 않게 */}
+            {canReduceExposure && PUBLISHED_STATUSES.includes(it.status) && (
+              <button className="btn btn-danger" onClick={() => setStopping(true)}>
+                제공 중단
+              </button>
+            )}
+          </>
+        }
+      />
 
       {/* 제공 중단 사유 — 필수(감사·publication unpublish_reason). ReviewDetailPage 반려/차단 사유 패턴 이식 */}
       {stopping && (
@@ -176,56 +166,10 @@ export function ExplanationDetailPage() {
         </div>
       )}
 
-      <div className="card">
-        <div className="card-head">
-          <span className="t-label">근거 데이터</span>
-          <span className="num" style={{ fontSize: 11, color: 'var(--fg-4)' }}>
-            {it.evidence.length}개 출처
-          </span>
-        </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>유형</th>
-              <th>내용</th>
-              <th>출처</th>
-              <th className="col-muted">시각</th>
-            </tr>
-          </thead>
-          <tbody>
-            {it.evidence.map((ev, i) => (
-              <tr key={i}>
-                <td>
-                  <span className="chip">{ev.type}</span>
-                </td>
-                <td>
-                  {/* 원문 링크(ALPHA-739) — 결측(EOD 구멍 등)·비웹 URI 는 일반 텍스트 폴백 */}
-                  {ev.sourceUri && isHttpUrl(ev.sourceUri) ? (
-                    <a href={ev.sourceUri} target="_blank" rel="noopener noreferrer">
-                      {ev.title}
-                    </a>
-                  ) : (
-                    ev.title
-                  )}
-                </td>
-                <td className="col-muted">{ev.source}</td>
-                <td className="col-muted t-data">{ev.time}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <EvidenceTable rows={it.evidence} />
 
       <div className="grid grid-cols-2 gap-4">
-        <div className="card">
-          <div className="card-head">
-            <span className="t-label">원본 설명 문구</span>
-            <span className="chip">모델 생성</span>
-          </div>
-          <div className="p-4 whitespace-pre-line" style={{ fontSize: 13, lineHeight: 1.65, color: 'var(--fg-2)' }}>
-            {it.original}
-          </div>
-        </div>
+        <OriginalSummaryCard text={it.original} />
         <div className="card" style={{ borderColor: editing ? 'var(--accent)' : 'var(--border)' }}>
           <div className="card-head">
             <span className="t-label">최종 제공 문구</span>
