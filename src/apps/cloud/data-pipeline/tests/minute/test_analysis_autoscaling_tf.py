@@ -26,8 +26,16 @@ _EXPECTED = [
 
 
 def _tf() -> str:
+    """`.tf` 본문에서 **주석을 걷어낸** 것.
+
+    ⚠️ 주석을 안 걷으면 단언이 **주석에 걸려 죽는다.** `min_capacity = 0` 가드가 실제로
+    그랬다 — 설정을 `1` 로 바꿔도 같은 문자열이 설명 주석 안에 있어 12건이 전부 초록이었고,
+    그 가드가 이름 붙인 회귀("야간에 계속 뜬다")를 통째로 통과시켰다. 원문 텍스트를 읽는
+    계약 검사는 **코드만** 봐야 한다.
+    """
     here = Path(__file__).resolve()
-    return next((p / _REL).read_text() for p in here.parents if (p / _REL).exists())
+    raw = next((p / _REL).read_text() for p in here.parents if (p / _REL).exists())
+    return "\n".join(line.split("#", 1)[0] for line in raw.splitlines())
 
 
 def _threshold(text: str) -> float:
@@ -38,7 +46,9 @@ def _threshold(text: str) -> float:
 
 def _steps(text: str) -> list[tuple[float, float, int]]:
     """(lower, upper, capacity) 목록. 없는 bound 는 ∓inf."""
-    block = re.search(r"step_scaling_policy_configuration\s*\{(.*)\n  \}", text, re.S)
+    # ⚠️ non-greedy — greedy 로 두면 파일의 **마지막** 2칸 `}` 까지 먹어, 이 아래에 중첩
+    # 블록을 가진 리소스가 추가되면 그쪽 step_adjustment 가 계약에 조용히 합류한다.
+    block = re.search(r"step_scaling_policy_configuration\s*\{(.*?)\n  \}", text, re.S)
     assert block, "step_scaling_policy_configuration 을 못 찾았다"
     out = []
     for raw in re.findall(r"step_adjustment\s*\{([^}]*)\}", block.group(1)):
@@ -119,14 +129,64 @@ def test_처리중_메시지가_잔여_일감에_들어간다():
 
     expr = re.search(r'expression\s*=\s*"([^"]+)"', text)
     assert expr, "두 지표를 합치는 metric math 식이 없다"
-    ids = set(re.findall(r"\b[a-z_]+\b", expr.group(1)))
+    ids = {}
     for metric in ("ApproximateNumberOfMessagesVisible", "ApproximateNumberOfMessagesNotVisible"):
         hit = re.search(r'metric_name\s*=\s*"' + metric + r'"', text)
         assert hit, f"{metric} 이 metric_query 안에 없다"
         # 그 지표를 감싼 블록의 id = 지표 앞에 마지막으로 선언된 id
-        mid = re.findall(r'id\s*=\s*"([a-z_]+)"', text[:hit.start()])[-1]
-        assert mid in ids, \
-            f"{metric}({mid}) 이 합산식 `{expr.group(1)}` 에 안 쓰인다 — 지표에서 빠졌다"
+        ids[metric] = re.findall(r'id\s*=\s*"([a-z_]+)"', text[:hit.start()])[-1]
+
+    # ⚠️ id 가 식에 **등장**하는지만 보면 안 된다 — `visible - inflight` 도 통과해 이 검사가
+    # 막으려는 결함(가시 단독 판정)으로 되돌아간다. 두 id 를 **더하는** 형태여야 한다.
+    a, b = ids["ApproximateNumberOfMessagesVisible"], ids["ApproximateNumberOfMessagesNotVisible"]
+    normalized = expr.group(1).replace(" ", "")
+    assert normalized in (f"{a}+{b}", f"{b}+{a}"), \
+        f"합산식이 `{expr.group(1)}` 이다 — 처리 중 메시지를 **더하는** 식이어야 한다"
+
+    # ⚠️ 알람이 판정하는 것은 `return_data = true` 인 블록 하나다. 그게 합산식이 아니라
+    # 어느 한 지표에 붙으면 두 지표가 파일에 남아 있어도 알람은 **가시 수만** 본다.
+    for block in re.split(r"\bmetric_query\s*\{", text)[1:]:
+        judged = re.search(r"return_data\s*=\s*true", block)
+        if judged:
+            assert "expression" in block, \
+                "return_data 가 합산식이 아닌 개별 지표에 붙어 있다 — 알람이 한쪽만 본다"
+
+
+def test_계단을_구동하는_배선이_다_있다():
+    """계단 **산술**이 맞아도 그것을 구동하는 배선이 빠지면 대수만 조용히 틀린다.
+
+    앞의 검사들은 depth→capacity 표만 본다. 그 표가 성립하려면 넷이 더 필요하고, 넷 다
+    빠져도 apply 는 통과한다:
+    ① `ExactCapacity` — `ChangeInCapacity` 면 "깊이 31 = 4대"가 "매분 +4"가 돼 모델이 허구가 된다
+    ② 알람 집계 = 정책 집계 — 갈리면 계단이 다른 값으로 판정된다
+    ③ `alarm_actions` — 없으면 아예 안 올라간다(이 리소스 전체가 무효)
+    ④ `ok_actions` — 없으면 버스트 뒤 대수가 안 내려가 `min_capacity = 0` 이 무의미해진다
+    그리고 상한은 변수에서 와야 한다 — 하드코딩하면 DB 보호선이 변수 설명에서 떨어져 나간다.
+    """
+    try:
+        text = _tf()
+    except StopIteration:
+        pytest.skip(f"{_REL} 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    assert re.search(r'adjustment_type\s*=\s*"ExactCapacity"', text), \
+        "adjustment_type 이 ExactCapacity 가 아니다 — depth→대수 표가 뜻을 잃는다"
+
+    policy_agg = re.search(r'metric_aggregation_type\s*=\s*"(\w+)"', text)
+    assert policy_agg, "metric_aggregation_type 이 없다"
+    stats = set(re.findall(r'^\s*stat\s*=\s*"(\w+)"', text, re.M))
+    assert stats == {policy_agg.group(1)}, \
+        f"알람 집계 {stats} 와 정책 집계 {policy_agg.group(1)} 이 갈린다 — 계단이 다른 값으로 판정된다"
+
+    for field, why in (("alarm_actions", "일감이 쌓여도 대수가 안 오른다"),
+                       ("ok_actions", "버스트 뒤 대수가 안 내려간다")):
+        assert re.search(field + r"\s*=\s*\[aws_appautoscaling_policy\.analysis_scale\.arn\]", text), \
+            f"{field} 가 스케일링 정책을 안 부른다 — {why}"
+
+    assert re.search(r"max_capacity\s*=\s*var\.analysis_consumer_max_capacity", text), \
+        "max_capacity 가 변수에서 안 온다 — 상한의 DB 근거가 변수 설명에서 떨어져 나간다"
+
+    assert re.search(r'comparison_operator\s*=\s*"GreaterThanThreshold"', text), \
+        "비교 방향이 뒤집혔다 — 잔여가 많을 때 OK, 없을 때 ALARM 이 된다"
 
 
 def test_계단_하한이_0_대에_닿는다():

@@ -7,16 +7,25 @@
 # ⚠️ **상한은 성능이 원하는 수가 아니라 공유 DB 가 견디는 수가 정한다.** 2026-08-10 에
 # 다른 세션이 수동으로 12대를 올렸다가 db.t4g.micro 가 메모리로 죽었다(당일 2회). 그래서
 # `max_capacity` 는 보수적으로 시작하고 실측으로 올린다 — 지금 값은 ALPHA-924 로 상향된
-# db.t4g.small(2GB, micro 의 2배) 기준의 **잠정치**다. 소비자는 처리 건당 DB 커넥션 1개를
-# 쓴다(`EventStore.connect` 하나 — `connect_readonly` 는 이 경로에 없다).
+# db.t4g.small(2GB, micro 의 2배) 기준의 **잠정치**다.
+# ⚠️ **커넥션은 태스크당 1개가 아니다 — 세지 말고 재라.** `consumer.py` 의
+# `EventStore.connect` 가 하나지만, 같은 메시지가 `pipeline.py` 의 `CausalLake` 를 타고
+# `statics/duck.py` 의 `ATTACH '<dsn>' (TYPE postgres)` 로 **또 연다**(DuckDB postgres 확장은
+# 풀이라 질의 병렬도만큼 늘어난다). 소비자는 `causal_lake` 를 주입하지 않으므로 이 경로가
+# 기본이다. 상한을 올릴 때는 코드를 세지 말고 그날의 `DatabaseConnections` 를 대수로 나눠라.
 # ⚠️ 이 리소스는 스케일업 장치이자 **가드레일**이다. 지금까지는 상한이 없어 수동
 # `update-service` 가 DB 를 넘어뜨릴 수 있었다.
 #
 # ⚠️ **세션 오케스트레이션과 당분간 공존한다**(ALPHA-910). 세션은 여전히 07:45 에 1,
-# 20:05 에 0 을 쓰므로 그 **두 순간에만** 스케일러와 부딪히고, 스케일러가 다음 평가에서
-# 큐 깊이대로 되돌린다. 세션의 손을 떼는 것은 후속 PR 이다 — 여기서 함께 떼면 이미지 CD 가
+# 20:05 에 0 을 쓴다. 세션의 손을 떼는 것은 후속 PR 이다 — 여기서 함께 떼면 이미지 CD 가
 # apply 보다 먼저 착지한 날 **아무도 desired 를 안 올려** 그날 설명이 통째로 없다
 # (두 워크플로가 각자 `push: dev` 로 도는 독립 워크플로다).
+# ⚠️ 공존의 귀결을 정확히 적는다 — "두 순간만 부딪힌다"가 **아니다**. 오토스케일링 액션은
+# 상태에 머무는 동안 매분 재호출되므로(아래 `alarm_actions` 주석), **잔여가 남은 밤에는
+# 20:05 세션 stop 이 60초 안에 덮인다**. 08-10 이 그런 날이었다(20:05 잔여 10 → 계단 2대,
+# 다음날 01:25 까지 안 비었다) — 즉 무인 시간대에 최대 몇 시간을 계단 대수로 계속 돈다.
+# 일을 마저 한다는 뜻이라 의도에 반하지는 않으나, 상한 시간이 없고 그동안 공유 RDS 커넥션이
+# 붙어 있다. 관측 항목이다(밤 잔여가 실제로 배출되는가 · 그때 DB 여유가 남는가).
 
 locals {
   # appautoscaling 의 resource_id 는 클러스터 **이름**을 요구한다(ARN 이 아니다).
@@ -31,8 +40,10 @@ resource "aws_appautoscaling_target" "analysis_consumer" {
   resource_id        = local.analysis_scalable_id
   scalable_dimension = "ecs:service:DesiredCount"
 
-  # min 0 — 실측상 버스트 배출 뒤 큐가 9시간 넘게 완전히 빈다. 야간·유휴 비용을 0 으로 둔다.
-  # 첫 메시지에 알람 60초 + 기동 ~2분이 붙지만, 건당 처리가 10분대라 무시할 만하다.
+  # min 0 — 실측상 버스트 배출 뒤 큐가 오래 완전히 빈다(7일 중 6일은 16시간 이상, 잔여가
+  # 밤을 넘긴 08-10 만 예외). 야간·유휴 비용을 0 으로 둔다.
+  # 첫 메시지에 알람 60초 + 기동(같은 클러스터 다른 서비스 실측 38~67초)이 붙지만, 건당
+  # 처리가 10분대라 무시할 만하다.
   min_capacity = 0
   max_capacity = var.analysis_consumer_max_capacity
 }
@@ -44,9 +55,13 @@ resource "aws_appautoscaling_target" "analysis_consumer" {
 # 900초 뒤 재배달되면 같은 순환이 반복돼 `maxReceiveCount` 16 을 소진하고 DLQ 로 간다.
 # 단발 트리거와 버스트 꼬리가 전부 여기 걸린다. 더하면 인플라이트가 남아 있는 한 대수가
 # 0 으로 안 내려가고, 밤에는 둘 다 0 이라 `min_capacity = 0` 의 비용 근거는 그대로다.
-# ⚠️ 그래도 **스케일인 자체는 처리 중인 건을 자른다**(4→2 면 두 건이 잘려 900초 뒤
-# 재배달·LLM 재과금). Fargate 가 `stopTimeout` 을 120초로 묶어 터미널에서 못 막는다 —
-# 태스크 스케일인 보호(소비자가 처리 중임을 ECS 에 알리는 것)는 코드라 후속 PR 이다.
+# ⚠️ 그래도 **스케일인 자체는 처리 중인 건을 자른다**. Fargate 가 `stopTimeout` 을 120초로
+# 묶어(상한이다) 건당 588초를 못 버티므로 사실상 SIGKILL 이고, 900초 뒤 재배달된다 —
+# LLM 재과금 + 그만큼 지연. 다만 **순환은 아니다**: 잘린 건은 900초 내내 비가시로 집계돼
+# 잔여가 안 내려가니 같은 경계를 다시 안 넘는다. 버스트당 경계 통과 횟수만큼(30·15·5 =
+# 최대 3회) 유한하고 `maxReceiveCount` 16 중 1회만 태워 DLQ 에 안 닿는다. 계단으로는 못
+# 고친다(`ExactCapacity` 로 "인플라이트 아래로 안 내려간다"를 표현할 수 없다) — 태스크
+# 스케일인 보호(소비자가 처리 중임을 ECS 에 알리는 것)는 코드라 후속 PR 이다.
 resource "aws_cloudwatch_metric_alarm" "analysis_backlog" {
   alarm_name        = "${var.name}-analysis-backlog"
   alarm_description = "설명 큐 잔여 일감(가시+처리중) — analysis-consumer 대수를 정하는 유일한 입력(ALPHA-912)."
@@ -89,8 +104,11 @@ resource "aws_cloudwatch_metric_alarm" "analysis_backlog" {
   # 오프셋이 bound 사이에 떨어져 그 규칙과 **무관**해지고, 깊이 0 은 -0.5 로 0 대에 닿는다.
   threshold           = 0.5
   comparison_operator = "GreaterThanThreshold"
-  # 큐가 비면 SQS 는 지표를 안 보내는 게 아니라 0 을 보낸다 — missing 은 사실상 안 생기지만,
-  # 생긴다면 "모름"이지 "일감 있음"이 아니다(올리는 쪽으로 틀리면 야간에 대수가 남는다).
+  # ⚠️ **결측은 실제로 난다.** SQS 는 큐가 유휴면 지표를 아예 안 보낸다(실측: 08-10 은
+  # 01:43 부터 09:00 까지 ~7.3시간 방출 0). 그래서 이 값이 야간 동작을 정한다 — 유휴가 곧
+  # 결측이니 "잔여 없음"으로 읽는 `notBreaching` 이 맞다. `breaching`·`missing` 으로 바꾸면
+  # 밤새 대수가 남거나 직전 상태가 고착된다.
+  # (두 지표의 타임스탬프 집합은 같아서 한쪽만 결측돼 합산이 사라지는 구멍은 없다 — 실측.)
   treat_missing_data = "notBreaching"
 
   # 오토스케일링 액션은 **상태가 바뀔 때만이 아니라 그 상태에 머무는 동안 매분** 다시
@@ -113,8 +131,10 @@ resource "aws_appautoscaling_policy" "analysis_scale" {
     # ExactCapacity — 대기 깊이가 곧 목표 대수를 정한다. Change/PercentChange 는 직전
     # 대수에 상대적이라, 알람이 여러 번 울리는 동안 같은 깊이에서도 값이 계속 움직인다.
     adjustment_type = "ExactCapacity"
-    # 기동이 59~122초 걸린다(ECS Fargate 실측) — 그보다 짧게 두면 아직 안 뜬 태스크를
-    # 못 보고 같은 깊이에 또 올린다.
+    # 기동이 수십 초~2분 걸린다(같은 클러스터 다른 서비스 실측 38~67초, 이미지가 더 큰
+    # 이 서비스는 그보다 길다) — 그보다 짧게 두면 아직 안 뜬 태스크를 못 보고 같은 깊이에
+    # 또 올린다. 스케일인도 같은 값으로 늦춰지는데, 여기선 인플라이트 절단을 미루는 쪽이라
+    # 유익하다.
     cooldown = 180
     # ⚠️ bound 는 지표값이 아니라 **`지표값 - threshold(0.5)` 오프셋**이다. 아래 구간이
     # 실제로 뜻하는 잔여 일감(가시+처리중):
