@@ -1,7 +1,12 @@
 /* 규칙 엔진 타입 — UI를 모른다 (ALPHA-738).
  *
- * 사실(Facts)은 스냅샷 JSON 또는 `GET /api/v1/console/facts` 가 주고, 규칙은 (사실) → 위반[]
- * 순수 함수다.
+ * 사실(Facts)은 스냅샷 JSON 이 주고, 규칙은 (사실) → 위반[] 순수 함수다.
+ *
+ * ⚠️ **`GET /api/v1/console/facts` 가 이 모양을 주는 것이 아니다.** 와이어는 camelCase 이고
+ * (`taskKey`·`taskOutcome`·`ledgerStatus`) 여기는 snake_case 다. 그대로 캐스팅하면 필드가 통째로
+ * `undefined` 라 FULFILLED 작업까지 R05 P0 미귀결로 선다. 사이를 잇는 어댑터가 있어야 하고,
+ * **아직 없다**(화면 조각이 들여온다). 형상 차이는 `domains/console/types.ts` 를 보라.
+ *
  * 부재 4구분: 0(실측 0) / null·undefined(집계 없음) / blind(관측 불가) / 필드 자체 부재(계측 없음).
  *
  * ⚠️ **계측 없는 축을 목값으로 메우지 않는다.** 동봉 스냅샷에는 목으로 채운 축이 일부 있고
@@ -107,6 +112,14 @@ export interface DatasetFact {
   id: string;
   lane?: string;
   contract?: boolean;
+  /**
+   * 창 계약(as-of 가 아니라 기간으로 신선도를 보는 데이터셋)인가 — R08 이 이걸로 제외한다.
+   *
+   * 🔴 **실 응답에 이 필드가 없다**(계약·`DatasetDto`·서버 `DatasetResponse` 어디에도 없다).
+   * 스냅샷에서 `true` 로 제외되던 데이터셋이 실 API 를 거치면 `undefined` 가 돼 일반 as-of 계약으로
+   * 판정되고, `actual < expected` 면 **거짓 STALE P1** 이 난다. 어댑터가 이 축을 채우거나 서버가
+   * 실어 줘야 하고 둘 다 아직 없다 — 화면 조각이 붙기 전에 닫아야 할 구멍이다.
+   */
   window_contract?: boolean;
   expected_as_of?: string | null;
   actual_as_of?: string | null;
@@ -154,7 +167,8 @@ export interface OutputFact {
   id: string;
   label: string;
   today: number;
-  /** 직전 10영업일 중앙값 — null 이면 기준 없음(평가 대상 아님) */
+  /** 최근 기준일들의 중앙값(서버가 최대 10개로 자른다 — 정확히 10 영업일이라는 보장은 없다).
+   *  `null` 이면 표본 부재. **`0` 은 표본 부재가 아니라 관측된 0** 이고, 비율 판정만 안 선다. */
   base?: number | null;
   unit: string;
 }

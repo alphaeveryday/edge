@@ -517,6 +517,68 @@ test('R13 산출 이상 — ±25% 이상만, 기준(base) 없으면 평가 대�
   assert.ok(!v.some((x) => x.targetId === 'near'), '-24% 는 안 걸린다');
 });
 
+test('R13 경계 — 셈으로 성립 안 하는 값은 관측이 아니다 (음수 count 를 정상 인증하지 않는다)', () => {
+  /* 유한성만 검사하던 때는 `base:-100·today:-100` 이 `평가됨 · 위반 0`("평소와 같다")으로 인증됐고,
+   * `base:100·today:-1` 은 −101% 라는 없는 편차를 P1 로 냈다. 산출 다섯은 전부 count 라 음수가
+   * 성립하지 않는다 — 손상은 판정에서 빼고 `note` 가 밝힌다. */
+  const f = emptyFacts();
+  f.outputs = [
+    { id: 'neg-both', label: '둘 다 음수', today: -100, base: -100, unit: '건' },
+    { id: 'neg-today', label: '오늘만 음수', today: -1, base: 100, unit: '건' },
+    /* ⚠️ 기준만 음수이고 오늘 값은 멀쩡한 경우가 **`base > 0` 가드의 유일한 증인**이다.
+     * 둘 다 음수인 행은 `today >= 0` 쪽에서도 걸러져, 기준 가드를 `!== 0` 으로 되돌려도
+     * 안 잡힌다(변이로 확인). 여기서 음의 분모는 −150% 라는 없는 편차를 만든다. */
+    { id: 'neg-base', label: '기준만 음수', today: 50, base: -100, unit: '건' },
+    { id: 'real', label: '진짜 감소', today: 50, base: 100, unit: '건' },
+  ];
+  assert.deepEqual(hits(f, 'R13').map((v) => v.targetId), ['real'], '손상값이 편차로 서면 안 된다');
+  /* 라벨 두 개를 손으로 대조하는 대신 **불변식**을 잰다: 판정에서 빠진 산출은 하나도 빠짐없이
+   * note 에 이름이 나와야 한다. 갈래를 나열하는 방식이 새 가드를 더할 때마다 구멍을 냈다. */
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
+  const judged = hits(f, 'R13').map((v) => v.targetId);
+  for (const o of f.outputs) {
+    if (judged.includes(o.id)) continue;
+    assert.match(rr.note ?? '', new RegExp(o.label), `판정에서 빠졌는데 note 에 없다: ${o.label}`);
+  }
+});
+
+test('R13 note — 관측된 0 과 표본 부재를 같은 사유로 접지 않는다', () => {
+  /* 이름이 note 에 뜨는 것만 재면 **사유를 합치는 변이가 안 잡힌다**(확인함) — 그런데 이 둘을
+   * 가르는 것이 이 note 의 존재 이유다. 서버 `median()` 은 표본이 전부 0이면 `0.0` 을 주므로
+   * `base: 0` 은 관측이고, `base: null` 만 미관측이다. 사유 문장이 달라야 한다. */
+  const f = emptyFacts();
+  f.outputs = [
+    { id: 'zero', label: '평소0', today: 5, base: 0, unit: '건' },
+    { id: 'nosample', label: '표본없음', today: 5, base: null, unit: '건' },
+    { id: 'real', label: '진짜', today: 50, base: 100, unit: '건' },
+  ];
+  const note = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.note ?? '';
+  const reasonOf = (label: string) =>
+    note.split(' · ').find((seg) => seg.includes(label)) ?? '';
+  assert.notEqual(reasonOf('평소0'), '', '평소0 이 note 에 없다');
+  assert.notEqual(reasonOf('표본없음'), '', '표본없음 이 note 에 없다');
+  assert.notEqual(
+    reasonOf('평소0'),
+    reasonOf('표본없음'),
+    '관측된 0 과 표본 부재가 같은 사유로 접혔다',
+  );
+  assert.match(reasonOf('평소0'), /관측된 0/);
+});
+
+test('R06 경계 — failed_records 가 셈으로 성립 안 하면 "0" 도 "없다" 도 아니다', () => {
+  /* 사유가 두 갈래뿐이던 때는 `-1` 이 "0이다"로, `NaN` 이 "없다"로 보고됐다 — 둘 다 거짓 설명이다.
+   * DB 에 비음수 CHECK 가 없어 결함 writer 의 값이 여기까지 닿는다. */
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'neg', data_status: 'INCOMPLETE', failed_records: -1 }),
+    task({ task_key: 'nan', data_status: 'INCOMPLETE', failed_records: Number.NaN }),
+  ];
+  const v = hits(f, 'R06');
+  assert.deepEqual(v.map((x) => x.metric), [null, null]);
+  assert.match(v[0].why, /성립하지 않는다/, '음수를 0이라 설명하지 않는다');
+  assert.match(v[1].why, /성립하지 않는다/, 'NaN 을 부재라 설명하지 않는다');
+});
+
 test('R13 경계 — 기준(base)이 있는 산출이 하나도 없으면 evaluated:false (분포 안이 아니라 분포를 모른다)', () => {
   /* 실 응답은 일별 계열을 주는 데가 없어 이 축이 통째로 빈다. canRun 이 없으면 R13 이
    * "전부 분포 안"이라고 말한다 — 오늘 값이 뭐든. */
@@ -1089,6 +1151,13 @@ test('🔴 심각도 승격과 R02→R03 간선은 지금 어떤 사실로도 �
   const promotable = EDGES.filter((e) => rank[sev[e.c]] < rank[sev[e.p]]).map((e) => `${e.c}→${e.p}`);
   assert.deepEqual(promotable, [], `승격 가능한 간선이 생겼다 — 승격 사례 테스트를 더하라: ${promotable}`);
 
+  /* 간선을 **지우는** 변이가 안 잡히던 자리다 — 배타성만 재면 목록에서 빠져도 전건 초록이고,
+   * README 의 "간선 7개 중 하나가 죽어 있다"가 조용히 6개짜리 사실로 바뀐다. 존재부터 못 박는다. */
+  assert.equal(EDGES.length, 7, 'README 가 세는 간선 수와 다르다');
+  assert.ok(
+    EDGES.some((e) => e.c === 'R02' && e.p === 'R03'),
+    'R02→R03 간선이 사라졌다 — 죽은 간선을 지운 것이라면 README 의 "간선 7개"도 함께 고쳐라',
+  );
   const r02 = RULES.find((R) => R.id === 'R02')!;
   const r03 = RULES.find((R) => R.id === 'R03')!;
   for (const ledger_status of [undefined, null, '', 'RUNNING']) {

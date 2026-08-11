@@ -71,12 +71,14 @@ const runKind = (r: RunFact): string =>
  * 두 곳에 따로 쓰면 반드시 갈린다(실제로 두 번 갈렸다: `!= null` vs truthy, 그 다음 `isFinite`
  * vs `!== 0`). 갈리면 `canRun` 만 통과하고 `run()` 이 걸러 **평가됨 · 위반 0**("분포 안")이 선다.
  * `0` 은 기준이 아니다(나눗셈이 성립하지 않는다), `NaN` 도 아니다(비교가 언제나 거짓이다).
+ * **음수도 아니다** — 산출 다섯은 전부 count 라 음수가 성립하지 않는다. 유한성만 검사하면
+ * `base:-100·today:-100` 이 `평가됨 · 위반 0`("평소와 같다")으로 인증된다.
  *
  * ⚠️ **`base: 0` 은 "표본이 없다"가 아니다.** 서버 `median()` 은 표본이 있고 값이 전부 0이면
  * `0.0` 을 준다 — 관측된 기준이다. 비율 판정이 성립하지 않아 판정에서 빠질 뿐이므로, 사유를
  * "표본 없음"이라 쓰면 관측을 미관측으로 위조한다. `note` 가 둘을 갈라 적는다.
  */
-const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && o.base !== 0;
+const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && (o.base as number) > 0;
 
 /**
  * R13 이 **실제로 판정할 수 있는** 산출인가 — 기준과 오늘 값이 둘 다 수여야 한다.
@@ -84,8 +86,12 @@ const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && o.base !=
  * `canRun` 이 기준만 보면, 기준은 있는데 오늘 값이 수가 아닌 산출뿐인 응답이 `평가됨 · 위반 0`
  * ("전부 분포 안")으로 선다 — 하나도 판정 못 했는데. R19 가 "원장을 하나도 못 읽으면 못 돎"인 것과
  * 같은 형태다. `canRun`·`run()`·`note` 세 곳이 이 한 술어를 공유한다.
+ *
+ * `today` 도 **셈으로 성립해야** 한다(음수 count 는 손상이지 관측이 아니다) — `base:100·today:-1`
+ * 을 그냥 재면 −101% 라는 없는 편차가 P1 로 선다.
  */
-const judgeable = (o: OutputFact): boolean => hasBase(o) && Number.isFinite(o.today);
+const judgeable = (o: OutputFact): boolean =>
+  hasBase(o) && Number.isFinite(o.today) && o.today >= 0;
 
 const chainPoints = (f: Facts, src: 'batch' | 'intraday'): number => {
   /* ⚠️ **`canRun` 은 `evaluated` 와 무관하게 전 규칙에 대해 무조건 불린다** — 여기서 죽으면
@@ -341,9 +347,11 @@ export const RULES: Rule[] = [
             why:
               lost != null
                 ? 'ops.failed_records — 스텝의 유실 판정값이며 skipped_*를 직접 더한 값이 아니다. 무엇 1건인지는 잡마다 다르다'
-                : Number.isFinite(n)
+                : n === 0
                   ? `${t.data_status} 인데 failed_records 는 0이다 — 이 카운터 밖(완전성 결손 등)에서 온 판정이라 규모는 R07 이 센다`
-                  : `${t.data_status} 인데 failed_records 가 없다 — 스텝이 유실을 선언했으나 규모를 안 남겼다`,
+                  : n == null
+                    ? `${t.data_status} 인데 failed_records 가 없다 — 스텝이 유실을 선언했으나 규모를 안 남겼다`
+                    : `${t.data_status} 인데 failed_records 가 셈으로 성립하지 않는다(${String(n)}) — 원장 writer 결함이라 규모를 못 쓴다`,
             runId: t.run_id,
             evidence: 'ops_expected_task.data_status + failed_records',
             drill: ['run', 'task-' + t.task_key] as [string, string],
@@ -418,6 +426,8 @@ export const RULES: Rule[] = [
             d.contract &&
             d.actual_as_of &&
             d.expected_as_of &&
+            /* 🔴 실 응답에 `window_contract` 가 없다 — 이 배제가 통째로 무력해져 창 계약
+             * 데이터셋이 거짓 STALE 로 선다(`DatasetFact.window_contract` 주석 참조). */
             !d.window_contract &&
             d.actual_as_of < d.expected_as_of,
         )
@@ -592,12 +602,17 @@ export const RULES: Rule[] = [
     name: '산출 이상',
     kls: '이상',
     base: 'P1',
-    desc: '오늘 값이 직전 10영업일 중앙값에서 ±25% 이상 벗어났다',
+    /* '직전 10영업일' 이라 못 박지 않는다 — 서버 `baseDays()` 는 기준일 후보를 최대 10개로
+     * 자를 뿐이라 신규 환경·이른 과거 조회에서는 1~9개로도 중앙값이 나온다. */
+    desc: '오늘 값이 최근 기준일들의 중앙값에서 ±25% 이상 벗어났다',
     /* **미배선이 아니다** — 서버는 `outputs[].base` 를 보내고, `null` 은 "표본이 없어 비교할
      * 평소를 모른다"는 **관측된 부재**다(계약 §기준 표본). 전에 여기 '…계열 배선' 이라고 적혀
      * 있었는데, 그러면 표본이 아직 없는 신규 환경에서 R13 이 "아직 안 만든 기능"이라고 말한다 —
      * 장애·공백을 미배선으로 읽는 오독이고 이 모듈이 없애려는 것 그 자체다. */
-    dep: '비교할 기준(outputs[].base) — 표본이 없어 서버가 못 준 상태',
+    /* ⚠️ 이 문장은 **`canRun` 이 거짓인 모든 경우에 참**이어야 한다 — `evaluate` 는 못 돈 규칙의
+     * `note` 를 안 부르므로(`R.note` 는 돈 규칙 전용) 아래 세 갈래 사유는 그때 안 보인다.
+     * '표본이 없다'로만 적었더니 전 산출이 `base:0`(관측된 0)인 응답에서 거짓말이 됐다. */
+    dep: '비율 판정에 쓸 기준이 하나도 없다(표본 부재이거나 평소가 0이라 나눗셈이 안 선다)',
     source: 'DB_LEDGER',
     /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. `run()` 과 같은
      * 술어를 쓴다 — base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */
@@ -608,17 +623,29 @@ export const RULES: Rule[] = [
       /* 빠지는 이유는 둘이다 — 기준이 없거나(`base`), 오늘 값이 수가 아니거나(`today`).
        * 한쪽만 세면 나머지 침묵이 남는다: `today: NaN` 은 비교가 언제나 거짓이라 위반도 안 되고
        * 이 문장에도 안 나와, 그 산출을 **봤다고 착각**하게 된다. */
-      const out = f.outputs ?? [];
-      /* 빠지는 사유가 셋이고 뜻이 다르다 — 접으면 관측된 0 이 "아무도 안 셌다"로 읽힌다 */
-      const noBase = out.filter((o) => o.base == null || !Number.isFinite(o.base)).map((o) => o.label);
-      const zeroBase = out.filter((o) => o.base === 0).map((o) => o.label);
-      const noToday = out.filter((o) => hasBase(o) && !Number.isFinite(o.today)).map((o) => o.label);
-      const parts = [
-        noBase.length ? `기준 표본이 없어 빠진 산출 ${noBase.join('·')}` : '',
-        zeroBase.length ? `평소가 0이라 비율 판정이 성립하지 않는 산출 ${zeroBase.join('·')}(관측된 0이지 미관측이 아니다)` : '',
-        noToday.length ? `오늘 값이 수가 아니라 빠진 산출 ${noToday.join('·')}` : '',
-      ].filter(Boolean);
-      return parts.length ? parts.join(' · ') : null;
+      /* 사유가 여럿이고 뜻이 다르다 — 접으면 관측된 0 이 "아무도 안 셌다"로 읽힌다.
+       *
+       * ⚠️ **분류를 `judgeable` 의 여집합에서 뽑는다.** 갈래를 따로 나열했더니 새 가드
+       * (`base > 0`·`today >= 0`)를 더한 순간 **어느 갈래에도 안 걸리는 산출**이 생겼고, 판정에서
+       * 빠졌는데 note 에도 안 나와 "봤다"고 착각하게 됐다. 여집합에서 뽑으면 그 구멍이 구조적으로
+       * 안 생긴다 — 빠진 산출은 반드시 어느 사유엔가 담긴다(`reason` 이 전건을 덮는다). */
+      const reason = (o: OutputFact): string => {
+        const b = o.base;
+        if (b == null || !Number.isFinite(b)) return '기준 표본 없음';
+        if (b === 0) return '평소가 0이라 비율이 안 선다(관측된 0이지 미관측이 아니다)';
+        if ((b as number) < 0) return '기준이 음수라 셈으로 성립하지 않는다';
+        if (!Number.isFinite(o.today)) return '오늘 값이 수가 아니다';
+        if (o.today < 0) return '오늘 값이 음수라 셈으로 성립하지 않는다';
+        return '판정 대상이 아니다';
+      };
+      const byReason = new Map<string, string[]>();
+      for (const o of (f.outputs ?? []).filter((o) => !judgeable(o))) {
+        byReason.set(reason(o), [...(byReason.get(reason(o)) ?? []), o.label]);
+      }
+      if (!byReason.size) return null;
+      return [...byReason]
+        .map(([why, labels]) => `판정에서 빠진 산출 ${labels.join('·')} — ${why}`)
+        .join(' · ');
     },
     run: (f) =>
       (f.outputs ?? [])
@@ -639,7 +666,7 @@ export const RULES: Rule[] = [
           /* '직전 10거래일' 이라 쓰면 서버가 실제로 세는 것보다 강한 주장이다 — 표본은
            * `(런이 있던 날 ∪ 계획 결손일) − 장 안 서는 날` 의 최근 10개라, 평일 휴장에 Planner 까지
            * 실패한 날은 거래일로 오인돼 섞인다(계약 문서가 남은 불확실로 적어 둔 것). */
-          evidence: '최근 기준일 10개의 중앙값(서버 표본 규칙)',
+          evidence: '최근 기준일(최대 10개) 중앙값 — 서버 표본 규칙',
           drill: ['trend', 'out-' + o.id] as [string, string],
         })),
   },
