@@ -10,7 +10,8 @@
  * 메우게 되고, 그러면 계측 공백이 실측으로 위조된다.
  */
 
-/** 서버가 준 그대로. 값 검증은 안 돼 있다 — 그건 `parseFacts` 의 일이다. */
+/** 서버가 준 그대로 — `apiClient` 결과를 캐스팅만 한 것이라 **값 검증이 없다.**
+ *  검증은 규칙 층으로 넘기는 어댑터의 일이고, 그 어댑터는 아직 없다(화면 조각이 들여온다). */
 export interface ConsoleFactsDto {
   runs: RunDto[];
   tasks: TaskDto[];
@@ -81,7 +82,9 @@ export interface BoundaryDto {
   deliveryRows: number;
 }
 
-/** `today` 는 "원장이 아는 가장 최근 날" — **거래일이라는 보장은 없다**. */
+/** `today` 는 **응답이 실제로 본 날**이다 — 조회 기준일이지 "지금"도 거래일도 아니다.
+ *  `?date=` 를 주면 **그 날짜가 그대로** 실리고(dev 실측), 생략했을 때만 원장이 아는 가장 최근 날이다.
+ *  뒤엣것만 적어 두면 과거 조회 응답에 "원장 최신일"이라는 거짓 라벨이 붙는다. */
 export interface MetaDto {
   db: string;
   today: string;

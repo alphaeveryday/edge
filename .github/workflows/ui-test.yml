@@ -22,6 +22,9 @@ on:
       - "src/apps/cloud/super-admin-ui/**"
       - "src/apps/onprem/tenant-console-ui/**"
       - "src/libs/ui-kit/**"
+      # 워크스페이스 루트 manifest — packageManager·공통 의존성이 여기서 바뀌면 설치·빌드가
+      # 통째로 달라진다. 빼면 그 PR 은 게이트 없이 지나가고 dev 배포에서만 깨진다.
+      - "src/package.json"
       - "src/pnpm-lock.yaml"
       - "src/pnpm-workspace.yaml"
       - ".github/workflows/ui-test.yml"

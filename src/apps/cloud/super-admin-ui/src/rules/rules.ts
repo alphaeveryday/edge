@@ -1,9 +1,14 @@
-/* 규칙 R01~R19 + 인과 간선 7개 — 명세 edge-console-rules.md §2·§3 의 정식 구현 (ALPHA-738).
+/* 규칙 R01~R19 + 인과 간선 7개 (ALPHA-738).
  *
- * R17~R19 는 명세 이후에 붙인 실시간(1분) 레인 규칙이다 — 그 절 아래 주석에 임계값 근거를 적었다.
+ * ⚠️ 명세 원문(`edge-console-rules.md`)은 **이 레포에 없다** — 레퍼런스 HTML 에서 추출한 것이
+ * 출처다(경위는 README "명세와 다르게 구현한 지점" 1). 주석의 `§2`·`§3` 인용은 그 추출본 기준이라
+ * 새 체크아웃에서 대조할 원문이 없다.
+ *
+ * R17~R19 는 그 이후에 붙인 실시간(1분) 레인 규칙이다 — 그 절 아래 주석에 임계값 근거를 적었다.
  *
  * 규칙은 선언 데이터(id/layer/name/desc/kls/base/dep/source) + 조건 함수(run)다.
- * 화면 하단 "규칙 실행 결과" 바는 이 배열에서 자동 생성된다 — 여기 없는 규칙은 화면에 없다.
+ * 이 배열이 규칙 목록의 정본이다 — 화면의 "규칙 실행 결과" 바도 여기서 자동 생성될 예정이지만
+ * **그 화면은 아직 없다**(뒤 조각). 지금 이 배열을 읽는 것은 `evaluate`·CLI·테스트뿐이다.
  *
  * 시각 비교는 ctx.now 를 쓴다(벽시계 직접 참조 금지) — 스냅샷 평가가 재현 가능해야 한다.
  */
@@ -133,8 +138,9 @@ const compose = (sep: string, ...parts: string[]): string =>
 /**
  * 세션의 **대상 축** — 무엇이 고장났나. `dataset/sourceGroup` 이고 **날짜가 없다**.
  *
- * 데이터셋만으로는 안 갈린다(같은 `news_minute` 를 벤더별로 따로 돌린다). 날짜를 여기 넣으면
- * 런북 키 `${rule}.${targetId}` 가 매일 달라져 어떤 조치도 등록할 수 없다 — 시점은 `scope` 다.
+ * 데이터셋만으로는 안 갈린다 — `price_minute` 는 소스가 `toss`·`kis` 둘이다(파이프라인의
+ * `SOURCE_GROUPS_BY_DATASET` 이 정본. `news_minute` 는 지금 `bigkinds` 하나뿐이라 예가 못 된다).
+ * 날짜를 여기 넣으면 런북 키 `${rule}.${targetId}` 가 매일 달라져 어떤 조치도 등록할 수 없다 — 시점은 `scope` 다.
  */
 const sessionTarget = (s: MinuteSessionFact) => compose('/', s.dataset, s.sourceGroup);
 
@@ -202,7 +208,8 @@ export const RULES: Rule[] = [
      * `run()` 과 **같은 truthy 축**을 쓴다(`!= null` 이 아니다) — 어댑터가 미관측을 `''` 로 옮기면
      * `!= null` 은 그걸 관측으로 세고, `run()` 의 필터는 버려 다시 '평가됨 · 위반 0' 이 된다.
      * ⚠️ **부분 관측은 이 축이 답하지 않는다**: 40런 중 1건만 관측돼도 참이다. 그건 규칙 단위
-     * 불리언으로 표현할 수 없는 축이라 `meta.awsUnobservedRuns`(계약 문서, 미배선) 소관이다.
+     * 불리언으로 표현할 수 없는 축이라 **응답에 없는 축**(관측한 런 수)이 답해야 한다 — 계약에
+     * 그런 필드는 아직 없고, 그때까지는 아래 `note` 가 몇 런을 봤는지 밝히는 것이 전부다.
      * `every` 로 바꾸면 SFN 실행이 애초에 없는 런 하나가 전체를 `못 돎` 으로 만든다 — 볼 수 있는
      * 불일치를 통째로 버리는 쪽이라 더 나쁘다. */
     canRun: (f) => f.runs.some((r) => !!r.aws_status),
@@ -305,19 +312,30 @@ export const RULES: Rule[] = [
     desc: 'data_status가 INCOMPLETE·INVALID — 스텝이 스스로 유실을 판정했다',
     dep: null,
     source: 'DB_LEDGER',
+    /* 판정은 `data_status` 가 내린다 — **건수는 그 판정을 가르는 축이 아니다.**
+     * `&& t.failed_records` 로 조이던 때가 있었는데, 그러면 스텝이 스스로 INCOMPLETE 를 선언했지만
+     * 건수를 안 남긴 작업(계약상 `failedRecords` 는 nullable 이고 `data_status` 와의 결합 제약이
+     * 없다)이 **위반 0건**으로 접힌다 — 유실을 선언한 원장이 "봤고 괜찮다"가 되는 자리다.
+     * 건수가 없으면 위반을 버리는 게 아니라 `metric` 을 비우고 판정을 `state` 로 낸다(필드 규약). */
     run: (f) =>
       f.tasks
-        .filter((t) => ['INCOMPLETE', 'INVALID'].includes(t.data_status ?? '') && t.failed_records)
-        .map((t) => ({
-          target: t.task_key,
-          title: t.task_key,
-          metric: t.failed_records as number,
-          unit: '건',
-          why: 'ops.failed_records — 스텝의 유실 판정값이며 skipped_*를 직접 더한 값이 아니다. 무엇 1건인지는 잡마다 다르다',
-          runId: t.run_id,
-          evidence: 'ops_expected_task.data_status + failed_records',
-          drill: ['run', 'task-' + t.task_key] as [string, string],
-        })),
+        .filter((t) => ['INCOMPLETE', 'INVALID'].includes(t.data_status ?? ''))
+        .map((t) => {
+          const lost = Number.isFinite(t.failed_records) ? (t.failed_records as number) : null;
+          return {
+            target: t.task_key,
+            title: t.task_key,
+            metric: lost,
+            ...(lost != null ? { unit: '건' } : { state: t.data_status as string }),
+            why:
+              lost != null
+                ? 'ops.failed_records — 스텝의 유실 판정값이며 skipped_*를 직접 더한 값이 아니다. 무엇 1건인지는 잡마다 다르다'
+                : `${t.data_status} 인데 failed_records 가 없다 — 스텝이 유실을 선언했으나 규모를 안 남겼다`,
+            runId: t.run_id,
+            evidence: 'ops_expected_task.data_status + failed_records',
+            drill: ['run', 'task-' + t.task_key] as [string, string],
+          };
+        }),
   },
 
   {
@@ -327,25 +345,37 @@ export const RULES: Rule[] = [
     kls: '결손',
     base: 'P0',
     desc: '분모가 있는 작업에서 received < expected',
-    dep: '완전성 분모 배선(현재 ETF 3작업만)',
+    /* 배선 규모를 여기 적지 않는다 — 수를 산문에 박으면 원장이 늘 때마다 낡는다(실제로 낡았다).
+     * 현재 값은 `note` 가 사실에서 세어 낸다. */
+    dep: '완전성 분모 배선(일부 수집 작업만)',
     source: 'DB_LEDGER',
-    /* expected 가 null 인 작업은 위반이 아니라 평가 대상 아님 — 27개 중 24개가 그렇다 */
+    /* expected 가 null 인 작업은 위반이 아니라 평가 대상 아님 */
     note: (f) => {
-      const wired = f.tasks.filter((t) => t.completeness_expected != null).length;
-      return `분모 배선 작업 ${wired}/${f.tasks.length} — 나머지는 조건 자체가 평가 대상 아님`;
+      const wired = f.tasks.filter((t) => t.completeness_expected != null);
+      /* 분모는 배선됐는데 **분자가 없는** 작업 — 판정에서 빠지지만 "결손 0"이 아니다.
+       * 안 밝히면 그 작업의 결손이 위반 0건에 흡수돼 보인다(R03·R10·R13·R19 와 같은 형태). */
+      const blind = wired.filter((t) => !Number.isFinite(t.completeness_received)).map((t) => t.task_key);
+      return (
+        `분모 배선 작업 ${wired.length}/${f.tasks.length} — 나머지는 조건 자체가 평가 대상 아님` +
+        (blind.length ? ` · 분자가 없어 판정에서 빠진 작업 ${blind.join('·')}` : '')
+      );
     },
     mockBacked: (f) => f.tasks.some((t) => t.completeness_expected != null && t.cmpl_mock),
     run: (f) =>
       f.tasks
+        /* `received ?? 0` 이었다 — **`null` 은 0이 아니라 집계 없음**이다(계약 §부재를 싣는 규약).
+         * 0으로 접으면 분모가 100 인 정상 작업이 "100건 결손" P0 로 서고, 그 수는 실측처럼 보인다.
+         * 이 모듈이 없애려는 칸 혼동 그 자체라 판정에서 빼고 `note` 가 밝힌다. */
         .filter(
           (t) =>
             t.completeness_expected != null &&
-            (t.completeness_received ?? 0) < t.completeness_expected,
+            Number.isFinite(t.completeness_received) &&
+            (t.completeness_received as number) < t.completeness_expected,
         )
         .map((t) => ({
           target: t.task_key,
           title: t.task_key,
-          metric: (t.completeness_expected as number) - (t.completeness_received ?? 0),
+          metric: (t.completeness_expected as number) - (t.completeness_received as number),
           unit: '엔티티',
           why: `${t.completeness_received}/${t.completeness_expected} — 기대 대비 부족`,
           runId: t.run_id,
@@ -484,9 +514,25 @@ export const RULES: Rule[] = [
     source: 'AWS_CONTROL',
     canRun: (f) => (f.queues ?? []).some((q) => q.subscribers != null),
     mockBacked: (f) => (f.queues ?? []).some((q) => q.sub_mock),
+    /* `canRun` 은 **규칙 단위**라 큐 하나만 매핑돼도 참이다 — 나머지 큐는 선언을 못 본 것인데
+     * 판정에서는 그냥 섞인다. 몇 큐를 실제로 봤는지 여기서 밝힌다(R03·R10 과 같은 형태). */
+    note: (f) => {
+      const qs = f.queues ?? [];
+      const seen = qs.filter((q) => q.subscribers != null).length;
+      return seen === qs.length
+        ? null
+        : `구독 매핑을 가진 큐 ${seen}/${qs.length} — 나머지는 판정하지 않았다(위반 0건이 "소비자가 있다"는 뜻이 아니다)`;
+    },
     run: (f) =>
       (f.queues ?? [])
-        .filter((q) => q.visible > 0 && q.in_flight === 0 && (q.subscribers ?? []).length === 0)
+        /* `(q.subscribers ?? []).length === 0` 이었다 — **필드 부재를 빈 목록으로 접으면
+         * "아무도 안 셌다"가 "구독자가 없다"라는 P0 단정이 된다.** 매핑이 일부 큐에만 붙은 응답
+         * (계약상 정상 형상)에서 미계측 큐가 전부 '소비자 부재'로 섰다. 선언을 가진 큐만 판정하고
+         * 나머지는 `note` 가 밝힌다. */
+        .filter(
+          (q) =>
+            q.visible > 0 && q.in_flight === 0 && q.subscribers != null && q.subscribers.length === 0,
+        )
         .map((q) => ({
           target: q.name,
           title: q.purpose || q.name,
@@ -534,11 +580,14 @@ export const RULES: Rule[] = [
     kls: '이상',
     base: 'P1',
     desc: '오늘 값이 직전 10영업일 중앙값에서 ±25% 이상 벗어났다',
-    dep: '산출 일별 계열(outputs[].base — 직전 10영업일 중앙값)',
+    /* **미배선이 아니다** — 서버는 `outputs[].base` 를 보내고, `null` 은 "표본이 없어 비교할
+     * 평소를 모른다"는 **관측된 부재**다(계약 §기준 표본). 전에 여기 '…계열 배선' 이라고 적혀
+     * 있었는데, 그러면 표본이 아직 없는 신규 환경에서 R13 이 "아직 안 만든 기능"이라고 말한다 —
+     * 장애·공백을 미배선으로 읽는 오독이고 이 모듈이 없애려는 것 그 자체다. */
+    dep: '비교할 기준(outputs[].base) — 표본이 없어 서버가 못 준 상태',
     source: 'DB_LEDGER',
-    /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. 실 응답은 일별
-     * 계열을 주는 데가 없어 이 축이 통째로 빈다. `run()` 과 같은 truthy 검사를 쓴다 —
-     * base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */
+    /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. `run()` 과 같은
+     * 술어를 쓴다 — base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */
     canRun: (f) => (f.outputs ?? []).some(judgeable),
     /* 기준이 있는 산출이 하나라도 있으면 규칙은 돈다 — 기준 없는 산출은 판정에서 그냥 빠진다.
      * 그 사실을 안 밝히면 "분포 밖 0건"이 전 산출을 봤다는 뜻으로 읽힌다(R03·R10·R19 와 같은 형태). */
@@ -567,7 +616,7 @@ export const RULES: Rule[] = [
           metric: Math.round(((o.today - (o.base as number)) / (o.base as number)) * 100),
           unit: '%',
           why: `오늘 ${o.today.toLocaleString('ko-KR')} · 평소(중앙값) ${(o.base as number).toLocaleString('ko-KR')} ${o.unit} — 분포 밖, 원인은 다른 규칙이 지목한다`,
-          evidence: '30일 시계열 중앙값',
+          evidence: '직전 10거래일 중앙값',
           drill: ['trend', 'out-' + o.id] as [string, string],
         })),
   },
@@ -634,7 +683,10 @@ export const RULES: Rule[] = [
     base: 'P0',
     desc: 'ETF 단위로 분석이 실패해 설명이 만들어지지 않았다',
     dep: 'AnalyzeOne per-ETF outcome 원장',
-    source: 'MOCK',
+    /* `source: 'MOCK'` 이었다 — 규칙의 `source` 는 **정적**이라, 실 원장이 붙은 뒤에도 리포트가
+     * `mock:false` 와 `source:'MOCK'` 을 동시에 낸다(모순). 목 여부는 사실이 `etf_ledger.mock` 로
+     * 말하고 위반의 `mock` 이 나르므로, 여기는 축의 성격만 적는다. */
+    source: 'DB_LEDGER',
     canRun: (f) => f.etf_ledger != null,
     mockBacked: (f) => !!f.etf_ledger?.mock,
     run: (f) => {
@@ -653,7 +705,7 @@ export const RULES: Rule[] = [
                 : '설명 미생성 — per-ETF 원장에 오류 사유 기록이 없다',
               list: bad.map((r) => r.name),
               mock: !!f.etf_ledger?.mock,
-              evidence: 'ETF별 분석 원장(목)',
+              evidence: `ETF별 분석 원장${f.etf_ledger?.mock ? '(목)' : ''}`,
               drill: ['chain', 'etf-ledger'] as [string, string],
             },
           ]

@@ -142,12 +142,23 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
     });
   }
 
-  // 부모 결정 — 자식 하나당 부모 하나(첫 매칭 간선). 간선 순서가 우선순위다.
+  /* 부모 결정 — 자식 하나당 부모 하나(첫 매칭 간선). 간선 순서가 우선순위다.
+   *
+   * ⚠️ **한 간선에 부모 후보가 여럿일 수 있다.** 조건이 자식만 보는 간선(R10→R11 은 `c.src` 만
+   * 본다)에서는 그 규칙의 위반 전부가 후보라, `find` 가 고르는 것은 **사실 배열의 순서**였다.
+   * 위반 순서는 응답의 행 순서에서 오므로, 서버 쿼리에 `ORDER BY` 하나가 바뀌면 같은 날 같은
+   * 장애의 뿌리가 q1 에서 q2 로 옮겨 간다 — 운영자가 어제와 다른 큐를 원인으로 본다.
+   *
+   * 사실이 진짜 부모를 못 가르는 것은 그대로다(간선 조건이 그것뿐이다). 고칠 수 있는 것은
+   * **임의성이 재현되게** 만드는 것이라, 후보 중 `vid` 가 가장 작은 것을 뽑는다 — 값에서만
+   * 나오는 순서라 입력 순서가 바뀌어도 같은 답이 된다. */
   const parent = new Map<Violation, { p: Violation; why: string }>();
   for (const c of violations) {
     for (const e of EDGES) {
       if (e.c !== c.rule) continue;
-      const p = violations.find((x) => x.rule === e.p && x !== c && e.when(c, x));
+      const p = violations
+        .filter((x) => x.rule === e.p && x !== c && e.when(c, x))
+        .sort((a, b) => (a.vid < b.vid ? -1 : a.vid > b.vid ? 1 : 0))[0];
       if (p) {
         parent.set(c, { p, why: e.why });
         break;

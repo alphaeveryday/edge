@@ -1,8 +1,14 @@
 /* 규칙 엔진 타입 — UI를 모른다 (ALPHA-738).
  *
- * 사실(Facts)은 스냅샷 JSON(또는 추후 API)이 주고, 규칙은 (사실) → 위반[] 순수 함수다.
+ * 사실(Facts)은 스냅샷 JSON 또는 `GET /api/v1/console/facts` 가 주고, 규칙은 (사실) → 위반[]
+ * 순수 함수다.
  * 부재 4구분: 0(실측 0) / null·undefined(집계 없음) / blind(관측 불가) / 필드 자체 부재(계측 없음).
- * 계측 없음인 축은 목값 + mock 플래그로 채워져 있고, 규칙 결과에 mock 이 전파된다.
+ *
+ * ⚠️ **계측 없는 축을 목값으로 메우지 않는다.** 동봉 스냅샷에는 목으로 채운 축이 일부 있고
+ * (`mock` 플래그가 그걸 밝히며 규칙 결과에 전파된다), 실 응답은 **그 축을 아예 안 보낸다** —
+ * 그래서 `chain`·`queues`·`etf_ledger`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
+ * `evaluated:false` 다. 빈 배열·빈 객체로 메우면 계측 공백이 실측 0 으로 위조되고
+ * "못 돎"이 "봤고 괜찮다"가 된다.
  */
 
 export type Severity = 'P0' | 'P1' | 'P2';
@@ -13,6 +19,11 @@ export type Layer = '런' | '작업' | '데이터셋' | '흐름' | '큐' | '산�
  * `SNAPSHOT` 은 `MOCK` 과 다르다: 목은 **계측이 없어 지어낸** 값이고, 스냅샷은 **한때 실제로
  * 관측했지만 지금 응답이 주지 않는** 값이다. 둘을 MOCK 한 칸에 그리면 "언젠가 참이었던 수"와
  * "아무도 안 센 수"가 같아 보인다(리뷰 2라운드가 연속으로 지적한 방향).
+ *
+ * 🔴 **`SNAPSHOT` 은 지금 아무도 생산하지 않는다.** 규칙의 `source` 는 정적이라, 동봉 스냅샷을
+ * 읽는 `pnpm eval:rules` 도 위반 출처를 `DB_LEDGER`·`AWS_CONTROL` 로 낸다 — 과거 데이터가 실조회처럼
+ * 보고된다. 축을 쓰려면 **사실이 자기 출처를 실어야** 하고(규칙 단위 상수로는 못 가른다),
+ * 그 배선은 이 조각에 없다. 어휘만 있고 생산자가 없는 상태임을 알고 읽어라.
  */
 export type FactSource =
   | 'DB_LEDGER'
@@ -187,7 +198,7 @@ export interface RunbookEntry {
  *
  * ⚠️ API DTO(`domains/sources/types.ts` 의 `MinuteSession`)를 여기로 import 하지 않는다.
  * 규칙은 사실만 읽는 층이고 화면 도메인을 모른다 — 반대로 끌어오면 계층이 뒤집힌다.
- * 대신 호출자가 DTO 를 이 모양으로 맞춰 넣는다(`minuteFacts` 어댑터).
+ * 대신 호출자가 DTO 를 이 모양으로 맞춰 넣는다 — 그 어댑터는 **아직 없다**(화면 조각이 들여온다).
  *
  * `deadJobs` 는 **세션에 붙은** 후속 처리 원장이다(가격 job 은 `session_id` 를 가진다).
  * 날짜 축 집계(뉴스)는 여기 넣지 않는다 — `MinuteFacts.deadJobsByDataset` 이 그 자리다.
@@ -198,7 +209,8 @@ export interface MinuteSessionFact {
   dataset: string;
   /**
    * 세션 identity 의 두 번째 축 — 한 세션은 `(dataset, sourceGroup, date)` 다.
-   * 데이터셋만으로는 안 갈린다(같은 `news_minute` 를 벤더별로 따로 돌린다).
+   * 데이터셋만으로는 안 갈린다: `price_minute` 는 소스가 `toss`·`kis` 둘이다(파이프라인의
+   * `SOURCE_GROUPS_BY_DATASET` 이 정본 — `news_minute` 는 `bigkinds` 하나뿐이라 예가 못 된다).
    */
   sourceGroup: string;
   /** 원장 어휘 그대로(ACTIVE·DRAINED·QC_RUNNING·FINALIZED·FAILED). 모르는 값은 그대로 둔다 */
@@ -353,7 +365,7 @@ export interface Violation extends RawViolation {
   sev: Severity;
   dep: string | null;
   /**
-   * 사건 식별자 — 딥링크(`/ops/incidents/detail?vid=…`)가 쥐는 축이다.
+   * 사건 식별자 — 화면의 사건 딥링크가 쥘 축이다(그 화면은 아직 없다).
    * `${rule}:${targetId}` + 범위가 있으면 `@${scope ?? runId}`.
    *
    * **위치 인덱스(`R05#0`)였다.** 앞 위반이 해소되면 뒤가 당겨져 공유된 링크가 404 도 없이
@@ -382,7 +394,7 @@ export interface Rule {
   base: Severity;
   /** 이 규칙이 실제로 돌기 위해 필요한 계측(없으면 목 대체 중) — null 이면 의존 없음.
    *
-   *  **못 돈 규칙의 사유**를 겸한다(`notRunReason`·`RuleResult.note`). 그래서 `canRun` 을 가진
+   *  **못 돈 규칙의 사유**를 겸한다(`evaluate` 가 `RuleResult.note` 로 낸다). 그래서 `canRun` 을 가진
    *  규칙은 여기가 비면 안 된다 — 비면 폴백 문장을 받아 다른 규칙과 구분이 사라진다.
    *  반대로 **돌아간** 규칙의 `note` 로는 새지 않는다(`evaluate` 가 배타적으로 가른다) —
    *  새면 배선돼서 잘 도는 규칙 행에 "…미배선" 주석이 영구히 붙는다. */
@@ -406,7 +418,8 @@ export interface Rule {
   axis?: 'minute';
   /** 이 규칙이 읽는 사실이 목으로 채워져 있는가 (위반 0건이어도 표시하기 위함) */
   mockBacked?: (f: Facts) => boolean;
-  /** 리포트 note — 예: R07 "분모 배선 작업 3/27" */
+  /** 리포트 note — 규칙이 **무엇을 실제로 봤는지** 밝힌다(예: R07 의 분모 배선 작업 수).
+   *  수를 여기 예시로 박지 않는다 — 사실이 바뀌면 낡는다(실제로 낡았었다). */
   note?: (f: Facts) => string | null;
   run: (f: Facts, ctx: RuleCtx) => RawViolation[];
 }

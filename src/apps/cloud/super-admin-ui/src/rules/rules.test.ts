@@ -1,6 +1,8 @@
 /* 규칙 하나당 위반/비위반 픽스처 각 1 + 경계 케이스 (ALPHA-738, 명세 §2-1).
  *
- * 실행: node --test src/rules/   (Node 23.6+ 네이티브 TS)
+ * 실행: `pnpm test` (super-admin-ui 패키지 루트, Node 23.6+ 네이티브 TS).
+ *   ⚠️ `node --test src/rules/` 는 안 된다 — node 가 그 경로를 모듈 파일로 열어 MODULE_NOT_FOUND 다.
+ *   실제 명령은 package.json 의 `test` 스크립트(테스트 파일 glob)다.
  *
  * 테스트가 지키는 의도: 규칙의 조건이 명세 §2 표와 다르게 느슨해지거나(거짓 양성)
  * 관대해지면(거짓 음성 — 원장이 관대해지는 방향이 상습 오류다) 여기서 깨져야 한다.
@@ -8,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildReport, evaluate, ruleOfVid, runbookOf } from './evaluate.ts';
-import { RULES } from './rules.ts';
+import { EDGES, RULES } from './rules.ts';
 import type { Facts, MinuteSessionFact, RunFact, TaskFact, Violation } from './types.ts';
 
 const NOW = new Date('2026-08-03T16:21:00+09:00');
@@ -219,14 +221,27 @@ test('R05 경계 — 계획에서 제외된(SKIPPED) 필수 작업은 미귀결�
   assert.deepEqual(hits(f, 'R05').map((v) => v.target), ['due-pending']);
 });
 
-test('R06 데이터 부분 유실 — INCOMPLETE+failed_records>0 만, 유실 0이면 아님', () => {
+test('R06 데이터 부분 유실 — 판정은 data_status 가 내린다 (건수는 규모지 조건이 아니다)', () => {
+  /* 이 테스트가 `failed_records` 를 **조건**으로 고정하고 있었다("유실 0이면 아님"). 그래서
+   * 스텝이 스스로 INCOMPLETE 를 선언했는데 건수를 안 남긴 작업이 위반 0건으로 접혔고, 테스트는
+   * 초록이었다 — 내 테스트가 결함을 고정한 자리다. 계약상 `failedRecords` 는 nullable 이고
+   * `data_status` 와의 결합 제약이 없으므로, 규모의 부재를 유실의 부재로 읽으면 안 된다.
+   *
+   * 규모가 없을 때 무엇이 나오는지까지 재야 한다 — 위반만 세면 `metric: undefined` 같은
+   * 망가진 형태가 통과한다(필드 규약: 양이 아니면 metric 은 null 이고 판정은 state 로 간다). */
   const f = emptyFacts();
   f.tasks = [
     task({ task_key: 'lost', data_status: 'INCOMPLETE', failed_records: 12 }),
     task({ task_key: 'flagged-only', data_status: 'INCOMPLETE', failed_records: 0 }),
+    task({ task_key: 'no-count', data_status: 'INVALID', failed_records: null }),
     task({ task_key: 'valid', data_status: 'VALID', failed_records: 3 }),
   ];
-  assert.deepEqual(hits(f, 'R06').map((v) => v.target), ['lost']);
+  const v = hits(f, 'R06');
+  assert.deepEqual(v.map((x) => x.target), ['lost', 'flagged-only', 'no-count']);
+  assert.deepEqual(v.map((x) => x.metric), [12, 0, null], '건수는 그대로 싣되 없으면 null 이다');
+  /* 규모가 없는 위반만 state 를 갖는다 — 둘 다 채우면 화면이 어느 쪽을 그릴지 추측하게 된다 */
+  assert.deepEqual(v.map((x) => x.state ?? null), [null, null, 'INVALID']);
+  assert.deepEqual(v.map((x) => x.unit ?? null), ['건', '건', null]);
 });
 
 test('R07 완전성 결손 — received<expected 만 위반', () => {
@@ -247,6 +262,25 @@ test('R07 경계 — expected=null(분모 미배선)은 위반이 아니라 평�
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R07')!;
   assert.equal(rr.evaluated, true); // 규칙 자체는 돌았다 — 조용한 것
   assert.match(rr.note ?? '', /분모 배선 작업 0\/1/);
+});
+
+test('R07 경계 — received=null(집계 없음)은 실측 0이 아니다 (분모 전체가 결손으로 서던 자리)', () => {
+  /* `received ?? 0` 이었다. 분모만 배선되고 분자가 아직 안 오는 정상 작업이 **분모 크기 그대로**
+   * P0 결손으로 섰고, 그 수는 실측처럼 보였다 — 부재를 값으로 위조하는, 이 모듈이 없애려는 바로
+   * 그 혼동이다. 판정에서 빼는 것만으로는 부족하다: 안 밝히면 그 작업의 결손이 "위반 0건"에
+   * 흡수돼 보이므로 `note` 가 어느 작업이 빠졌는지 이름을 대야 한다. 둘 다 재지 않으면
+   * 침묵을 침묵으로 바꾼 것뿐이다. */
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'numerator-missing', completeness_expected: 100, completeness_received: null }),
+    task({ task_key: 'short', completeness_expected: 10, completeness_received: 7 }),
+  ];
+  const v = hits(f, 'R07');
+  assert.deepEqual(v.map((x) => x.target), ['short'], 'null 분자는 결손 100건이 아니다');
+  assert.equal(v[0].metric, 3);
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R07')!;
+  assert.equal(rr.evaluated, true);
+  assert.match(rr.note ?? '', /numerator-missing/, '판정에서 빠진 작업을 note 가 이름으로 밝힌다');
 });
 
 test('R08 신선도 위반 — actual<expected 만, 창 계약·근거 없음은 아님', () => {
@@ -452,13 +486,20 @@ test('R13 산출 이상 — ±25% 이상만, 기준(base) 없으면 평가 대�
   f.outputs = [
     { id: 'half', label: '게시', today: 16, base: 32, unit: '종' }, // -50%
     { id: 'near', label: '문서', today: 76, base: 100, unit: '건' }, // -24%
+    /* 경계 정확히 ±25% — 계약이 "이상"이라 **걸려야 한다**. 이 두 줄이 없으면 `>= 0.25` 를
+     * `> 0.25` 로 바꿔도 전건 초록이라, 임계값이 조용히 한 칸 옮겨간다. 양쪽 부호를 다 둔다. */
+    { id: 'edge-down', label: '경계 감소', today: 75, base: 100, unit: '건' }, // -25%
+    { id: 'edge-up', label: '경계 증가', today: 125, base: 100, unit: '건' }, // +25%
     { id: 'nobase', label: '신규', today: 5, base: null, unit: '건' },
   ];
   const v = hits(f, 'R13');
   /* 편차율은 **양이다** — 문자열 `'-50%'` 로 두면 정렬(크기순)과 숫자 열이 이 값을 못 쓴다.
    * 대상은 라벨(사람이 읽을 것), 키는 산출 id(`half`) 로 갈린다. */
-  assert.deepEqual(v.map((x) => [x.targetId, x.metric, x.unit]), [['half', -50, '%']]);
-  assert.deepEqual(v.map((x) => x.target), ['게시']);
+  assert.deepEqual(
+    v.map((x) => [x.targetId, x.metric, x.unit]).sort(),
+    [['edge-down', -25, '%'], ['edge-up', 25, '%'], ['half', -50, '%']],
+  );
+  assert.ok(!v.some((x) => x.targetId === 'near'), '-24% 는 안 걸린다');
 });
 
 test('R13 경계 — 기준(base)이 있는 산출이 하나도 없으면 evaluated:false (분포 안이 아니라 분포를 모른다)', () => {
@@ -949,17 +990,58 @@ test('사건 병합 경계 — 다른 런의 작업 실패는 그 런 실패에 
   assert.equal(ev.incidents.length, 2); // 병합되지 않는다
 });
 
-test('정렬 — 심각도 → 연쇄 크기 → 수치. 사건 심각도는 구성원 최고치로 승격된다', () => {
+test('정렬 1순위 — 심각도가 먼저다 (연쇄가 긴 P1 이 독립 P0 을 앞지르지 않는다)', () => {
+  /* 제목이 "심각도 → 연쇄 크기 → 수치 · 심각도 승격"을 다 재는 것처럼 돼 있었는데, 픽스처의
+   * R02·R03 은 targetId 가 달라 애초에 병합되지 않아 **연쇄가 0이었다** — `b.size - a.size` 를
+   * 지워도 통과했다. 순위는 셋이니 테스트도 셋으로 가른다(이건 1순위만). */
   const f = emptyFacts();
-  // P1 사건(연쇄 2: R02→R03)과 독립 P0(R12) — P0 이 앞이어야 한다
-  f.runs = [
-    run({ id: 'proj', aws_status: 'SUCCEEDED', ledger_status: 'RUNNING', deadline: '2026-08-03T16:00:00+09:00' }),
-  ];
-  // ledger_status 가 있으면 R02 안 걸림 — deadline 경과 + 원장 공백 런을 따로
-  f.runs.push(run({ id: 'open', deadline: '2026-08-03T16:00:00+09:00' }));
-  f.queues = [{ name: 'dead', visible: 0, in_flight: 0, dlq: 9, subscribers: ['svc'] }];
+  f.runs = [run({ id: 'open', deadline: '2026-08-03T16:00:00+09:00' })]; // R02 P1
+  f.queues = [{ name: 'dead', visible: 0, in_flight: 0, dlq: 9, subscribers: ['svc'] }]; // R12 P0
   const ev = evaluate(f, NOW);
-  assert.equal(ev.incidents[0].root.rule, 'R12'); // P0 먼저
+  assert.deepEqual(ev.incidents.map((i) => i.root.rule), ['R12', 'R02']);
+});
+
+test('정렬 2순위 — 같은 심각도면 연쇄가 긴 사건이 앞이다 (조치 단위가 큰 쪽을 먼저 본다)', () => {
+  /* 앞 테스트가 못 재던 자리다. 실제로 병합되는 간선(R05·R16 → R04)으로 연쇄 3짜리 사건을
+   * 세우고, 같은 P0 인 독립 사건과 순서를 다툰다. `b.size - a.size` 를 지우면 깨진다. */
+  const f = emptyFacts();
+  f.runs = [run({ id: 'chained', ledger_status: 'FAILED' }), run({ id: 'lonely', ledger_status: 'FAILED' })];
+  f.tasks = [
+    task({ task_key: 'T1', run_id: 'chained', task_outcome: 'FAILED', attempts: 3, max_retries: 3 }),
+    task({ task_key: 'T2', run_id: 'chained', task_outcome: 'PENDING' }),
+  ];
+  const ev = evaluate(f, NOW);
+  const [first, second] = ev.incidents;
+  assert.equal(first.root.targetId, 'chained', `연쇄가 긴 쪽이 앞이어야 한다: ${ev.incidents.map((i) => `${i.root.targetId}(${i.size})`)}`);
+  assert.ok(first.size > second.size, '크기 비교자가 실제로 갈랐는지');
+  assert.equal(second.root.targetId, 'lonely');
+});
+
+test('🔴 심각도 승격과 R02→R03 간선은 지금 어떤 사실로도 못 밟는다 (죽은 경로를 테스트가 밝힌다)', () => {
+  /* 두 가지가 **구조적으로** 도달 불가다. 픽스처로는 못 보여주니 구조로 단언한다 —
+   * 안 적어 두면 "테스트가 있으니 검증됐다"로 읽히고, 실제로 앞 테스트가 그렇게 읽혔다.
+   *
+   * ① `I.sev` 승격(구성원이 뿌리보다 심각) — 승격은 **부모가 자식보다 약할 때만** 일어나는데
+   *    현재 간선 일곱 중 그런 쌍이 하나도 없다. reduce 를 지워도 아무 테스트가 안 깨진다.
+   * ② `R02 → R03` — R02 는 `!ledger_status`, R03 은 `ledger_status` 를 요구하고 간선은 **같은
+   *    런**(`targetId` 동일)을 요구한다. 한 런이 둘 다일 수 없으니 이 간선은 영영 안 붙는다.
+   *    README 가 "인과 간선 7개"라 세는 것 중 하나가 실은 죽어 있다 — 의도를 모르는 채 지우거나
+   *    고치지 않고, 여기서 사실만 못 박는다.
+   *
+   * 둘 중 하나라도 도달 가능해지면 이 테스트가 깨진다 — 그때 **진짜 사례 테스트를 더하라**. */
+  const sev: Record<string, string> = Object.fromEntries(RULES.map((R) => [R.id, R.base]));
+  const rank: Record<string, number> = { P0: 0, P1: 1, P2: 2 };
+  const promotable = EDGES.filter((e) => rank[sev[e.c]] < rank[sev[e.p]]).map((e) => `${e.c}→${e.p}`);
+  assert.deepEqual(promotable, [], `승격 가능한 간선이 생겼다 — 승격 사례 테스트를 더하라: ${promotable}`);
+
+  const r02 = RULES.find((R) => R.id === 'R02')!;
+  const r03 = RULES.find((R) => R.id === 'R03')!;
+  for (const ledger_status of [undefined, null, '', 'RUNNING']) {
+    const f = emptyFacts();
+    f.runs = [run({ id: 'X', deadline: '2026-08-03T16:00:00+09:00', ledger_status, aws_status: 'SUCCEEDED' })];
+    const both = r02.run(f, { now: NOW }).length > 0 && r03.run(f, { now: NOW }).length > 0;
+    assert.equal(both, false, `한 런이 R02·R03 을 동시에 밟았다(${ledger_status}) — 간선이 살아났으니 사례 테스트를 더하라`);
+  }
 });
 
 test('정렬 3순위 — 수치는 크기순이다. 부호가 아니라 절댓값으로 잰다', () => {

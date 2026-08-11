@@ -1,9 +1,12 @@
 /* 규칙 평가 결과를 UI 없이 뽑는 CLI (리뷰 계약 §5).
  *
- *   node src/rules/cli.ts [facts.json]     # 생략 시 동봉 스냅샷
+ *   pnpm --filter super-admin-ui eval:rules            # src/ 워크스페이스 어디서나
+ *   node src/rules/cli.ts [facts.json]                 # super-admin-ui 패키지 루트에서
  *
- * Node 23.6+ 의 네이티브 TS 실행을 전제한다(레포 Node 26). JSON 은 import attribute
- * 대신 fs 로 읽는다 — 번들러/노드 간 JSON 모듈 규약 차이를 피한다.
+ * ⚠️ **Node 23.6+ 가 필요하다** — `.ts` 를 네이티브로 실행한다. 레포에 버전 핀(`engines`·
+ * `.nvmrc`)이 없고 배포 워크플로는 Node 20 이라(번들러가 TS 를 지운다) 이 명령의 전제는
+ * 로컬·CI(`ui-test.yml` 은 Node 24) 환경에만 선다. JSON 은 import attribute 대신 fs 로 읽는다 —
+ * 번들러/노드 간 JSON 모듈 규약 차이를 피한다.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
