@@ -280,6 +280,9 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     log = _log(storage)
     assert log["events_created"] == 1 and log["threaded"] == 1
     assert log["assembler_version"] == assemble_events.ASSEMBLER_VERSION
+    # 런당 타입 분포·게이트 드롭 봉투(ALPHA-948) — 욱여넣기 패턴을 데이터로 발견하는 축.
+    assert log["event_type_distribution"] == {_ETYPE: 1}
+    assert log["gate_drops"] == {}
 
 
 def test_already_assembled_articles_skip_llm(tmp_path, monkeypatch):
@@ -548,7 +551,52 @@ def test_ticker_outside_article_mentions_is_rejected(tmp_path, monkeypatch):
                                complete_fn=_default_llm("a1", ticker="000660"),
                                from_date="2026-07-15", to_date="2026-07-15") == 0
     assert _batch(conn, "source_event") == []
-    assert _log(storage)["events_created"] == 0
+    log = _log(storage)
+    assert log["events_created"] == 0
+    # 입력 밖 티커 드롭도 무성이 아니다(ALPHA-948) — 사유별 카운터로 봉투에 드러난다.
+    assert log["gate_drops"] == {"ticker_invalid": 1}
+
+
+def test_gate_prompt_carries_type_notes_and_unmatched_escape():
+    """게이트 메뉴에 타입 정의문(note)이 실리고, 정의에 맞는 타입이 없으면 빈 값으로 두는
+    탈출로가 명시된다(ALPHA-948). WHY: 코드·술어만으론 타입 경계가 안 보여 채용 기사가
+    LAYOFF(순수 감축 전용)로 태깅됐다 — 온톨로지에 OTHER 가 없어 목록 강제만 있으면
+    욱여넣기가 구조적으로 강제된다."""
+    from edge_ontology import load_process_registry
+
+    view = load_process_registry()
+    system = assemble_events._classify_system(view)
+    note = view.types["COMPANY.WORKFORCE.LAYOFF"].note
+    assert note and f"note:{note}" in system
+    assert 'event_type_code 를 "" 로 둔다' in system
+
+
+def test_gate_unmatched_and_invented_types_are_counted_separately(tmp_path, monkeypatch):
+    """EVENT 인데 event_type_code 가 빈 값(탈출로의 정직한 산출)이면 계보를 세우지 않고
+    type_unmatched 로, 목록 밖 발명은 type_invalid 로 **갈라** 센다(Rule 12 — 무성 드롭
+    금지). 한 통에 섞으면 탈출로 사용량(온톨로지 갭 신호)과 환각을 구분할 수 없다.
+    비이벤트(doc_class≠EVENT)는 드롭이 아니라 정상 판별이라 안 센다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [
+        _article("a1"), _article("a2"), _article("a3")])
+    conn = _FakeConn()
+    _setup(monkeypatch, conn)
+    complete_fn = _llm_fn([
+        _gate_item("a1", etype=""),                              # 정의에 맞는 타입 없음
+        _gate_item("a2", etype="COMPANY.MADE_UP.TYPE"),          # 목록 밖 발명
+        _gate_item("a3", etype="", doc_class="PROMOTIONAL"),     # 비이벤트 — 드롭 아님
+    ], [])
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=complete_fn,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    assert _batch(conn, "source_event") == []
+    log = _log(storage)
+    assert log["gate_drops"] == {"type_unmatched": 1, "type_invalid": 1}
+    assert log["events_created"] == 0
+    assert log["event_type_distribution"] == {}
+    # 드롭은 자국이 안 남아 다음 런에 재분류된다 — 실패로 위장하지 않는다.
+    assert log["ops"]["failed_records"] == 0
 
 
 def test_llm_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
@@ -1411,3 +1459,82 @@ def test_unknown_authority_stays_unresolved(tmp_path, monkeypatch):
     # thread identity에는 못 들어가되, 추출 사실·품질 계측은 사라지지 않는다.
     assert args[("AUTHORITY", None)][4:] == ("subject", "당국", None, 0)
     assert _log(storage)["arguments_unresolved"] == 1
+
+
+def test_gate_response_contract_violations_are_counted():
+    """응답 컨테이너·항목의 계약 위반이 비이벤트 판별로 위장되면 안 된다(Rule 12) —
+    items 비배열은 배치 전건 무관측, 입력 id 누락은 그 기사 무관측, 메뉴 밖 doc_class
+    ("event"·오타·결측)는 검증 실패다. 전부 사유로 센다(자국이 없어 다음 런 재분류).
+    조용히 접으면 malformed 응답이 '정상 0건'으로 보여 매 런 재시도만 반복된다."""
+    from edge_ontology import load_process_registry
+
+    view = load_process_registry()
+    chunk = [{"article_id": f"a{i}", "title": "t", "tickers": ["005930"]}
+             for i in (1, 2, 3)]
+    entity_index = {"005930": "ent-1"}
+
+    def respond(payload):
+        return lambda system, user: json.dumps(payload, ensure_ascii=False)
+
+    out, drops = assemble_events._gate_batch(
+        respond({"items": None}), "s", chunk, view, entity_index)
+    assert (out, drops) == ({}, {"response_malformed": 3})
+
+    out, drops = assemble_events._gate_batch(
+        respond({"items": ["문자열", {"id": "a1", "doc_class": "event"}]}),
+        "s", chunk, view, entity_index)
+    assert out == {}
+    assert drops == {"item_malformed": 1, "doc_class_invalid": 1,
+                     "response_missing": 2}
+
+
+def test_gate_duplicate_ids_keep_first_judgment_and_are_counted():
+    """같은 id 를 두 번 판정한 응답 — 마지막이 이기면 채택이 응답 순서에 좌우된다.
+    첫 판정을 유지(결정론)하고 item_duplicate 로 센다(ALPHA-948 리뷰 R2)."""
+    from edge_ontology import load_process_registry
+
+    view = load_process_registry()
+    chunk = [{"article_id": "a1", "title": "t", "tickers": ["005930"]}]
+    entity_index = {"005930": "ent-1"}
+    other = "COMPANY.WORKFORCE.LAYOFF"
+    assert other in view.types and other != _ETYPE
+
+    out, drops = assemble_events._gate_batch(
+        lambda system, user: json.dumps(
+            {"items": [_gate_item("a1"), _gate_item("a1", etype=other)]},
+            ensure_ascii=False),
+        "s", chunk, view, entity_index)
+
+    assert out["a1"]["event_type_code"] == _ETYPE       # 첫 판정
+    assert drops == {"item_duplicate": 1}
+
+    # 첫 판정이 비이벤트여도 '첫 판정 유지'다 — out 존재로 가리면 후속 EVENT 가
+    # 조용히 채택된다(리뷰 R3).
+    out, drops = assemble_events._gate_batch(
+        lambda system, user: json.dumps(
+            {"items": [_gate_item("a1", etype="", doc_class="PROMOTIONAL"),
+                       _gate_item("a1")]},
+            ensure_ascii=False),
+        "s", chunk, view, entity_index)
+    assert out == {}
+    assert drops == {"item_duplicate": 1}
+
+
+def test_event_type_distribution_counts_gate_judgments_not_extraction_survivors(
+        tmp_path, monkeypatch):
+    """분포 지표의 목적은 욱여넣기(게이트 타입 편중) 발견이다 — 추출 성공분으로 세면
+    추출 콜 누락이 편중을 가린다(ALPHA-948 리뷰 R2). 게이트가 EVENT 로 판정한 건은
+    추출이 통째로 누락돼도 분포에 남아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn()
+    _setup(monkeypatch, conn)
+
+    # 게이트는 EVENT+타입 판정, 추출 응답은 그 기사를 누락(빈 테이블).
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=_llm_fn([_gate_item("a1")], []),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    log = _log(storage)
+    assert log["events_created"] == 0                    # 추출 누락 — 적재 없음
+    assert log["event_type_distribution"] == {_ETYPE: 1}  # 게이트 판정은 분포에 남는다

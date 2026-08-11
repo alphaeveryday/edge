@@ -102,10 +102,14 @@ def default_predicate(event_type_code: str) -> str | None:
 
 
 def prompt_catalog() -> str:
-    """프롬프트에 실을 타입 카탈로그 — `타입 | 술어 | 필수역할 | 선택역할` 한 줄씩.
+    """프롬프트에 실을 타입 카탈로그 — `타입 | 술어 | 필수역할 | 선택역할 | 정의` 한 줄씩.
 
     스냅샷 원본(48KB)엔 태깅이 안 쓰는 필드가 절반 이상이라 그대로 실으면 토큰만 태운다.
     허용 집합과 **같은 함수들**에서 파생하므로 프롬프트와 검증이 갈라지지 않는다.
+
+    정의문(note)은 있는 타입만 싣는다(ALPHA-948) — 코드·술어만으로는 경계가 안 보여
+    모델이 이웃 타입에 욱여넣는다(채용 기사가 LAYOFF 로 태깅된 실측). note 는 온톨로지
+    영어 원문 그대로다 — 한국어 재서술은 어휘 재작성이라 여기 소관이 아니다.
     """
     lines = []
     for code in event_type_codes():
@@ -114,5 +118,6 @@ def prompt_catalog() -> str:
             f"{code} | 술어: {','.join(pt.predicates)}"
             f" | 필수: {','.join(pt.required_roles) or '-'}"
             f" | 선택: {','.join(pt.optional_roles) or '-'}"
+            + (f" | 정의: {pt.note}" if pt.note else "")
         )
     return "\n".join(lines)

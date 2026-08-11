@@ -59,6 +59,15 @@ def test_prompt_catalog_and_validation_share_one_source():
         assert code in catalog
 
 
+def test_prompt_catalog_carries_type_notes():
+    # WHY(ALPHA-948): 코드·술어만으론 타입 경계가 안 보여 채용 기사가 LAYOFF(순수 감축
+    # 전용)로 태깅됐다. 정의문(note)이 있는 타입은 원문 그대로 카탈로그에 실려야 모델이
+    # 경계를 판정할 수 있다 — 재서술 금지(온톨로지 어휘의 현지 수정이 된다).
+    catalog = ontology.prompt_catalog()
+    note = ontology.process_types()["COMPANY.WORKFORCE.LAYOFF"].note
+    assert note and f"정의: {note}" in catalog
+
+
 # ── 추출: 정상 ────────────────────────────
 
 def test_extracts_assertion_with_roles():
