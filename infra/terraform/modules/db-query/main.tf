@@ -121,13 +121,18 @@ resource "aws_ecs_task_definition" "this" {
     cpu_architecture        = var.cpu_architecture
   }
 
-  # command 미지정: 이미지 ENTRYPOINT(python -m edge_analysis)에 RunTask 가 CMD args 를 덮어
-  # `query --sql <SQL>` 또는 `query --file <경로>` 로 질의를 넘긴다 — 질의문이 task 정의에
-  # 박히지 않는(리비전을 늘리지 않는) 계약이다. 여기에 command 를 쓰면 RunTask 가 덮어 무의미하다.
+  # entryPoint 를 query 서브커맨드까지 고정한다 — RunTask 오버라이드는 command(인자)만
+  # 바꿀 수 있고 entryPoint 는 못 바꾼다. 이 task 는 마스터 시크릿을 주입받으므로(SCP 가
+  # IAM 경로를 막아서), entryPoint 를 이미지 기본(python -m edge_analysis)에 두면 RunTask
+  # 권한만으로 쓰기 서브커맨드(load-* 류)를 마스터로 돌릴 수 있다. 서브커맨드를 박아
+  # 도달 가능한 코드가 읽기 질의 경로(query: read-only 접속 파라미터+SELECT 가드)뿐이게
+  # 한다. 호출부는 command 로 `--sql <SQL>` 또는 `--file <경로>` 만 넘긴다 — 질의문이
+  # task 정의에 박히지 않는(리비전을 늘리지 않는) 계약은 그대로다.
   container_definitions = jsonencode([{
     name        = "db-query"
     image       = var.image
     essential   = true
+    entryPoint  = ["python", "-m", "edge_analysis", "query"]
     environment = [for k, v in local.environment : { name = k, value = v }]
     secrets = [
       { name = "PGPASSWORD", valueFrom = "${var.db_password_secret_arn}:password::" },
