@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -66,6 +67,29 @@ def _price(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _weight(value: Any) -> float | None:
+    """구성종목 비중(퍼센트)을 float 로 — 결손·계약 위반은 None(그 행만 제외).
+
+    NaN 은 비교가 전부 False 라 `load_holdings` 의 결손 과반 게이트를 '실값'으로 조용히
+    통과하면서 분해에는 NaN 커버리지를 심는다 — 게이트를 세우는 값이 게이트를 무력화하는
+    형태다. inf 도 같은 이유로 결측 취급한다(coerce-to-passing 금지).
+
+    판정을 파이프라인 트리거 writer 와 **글자 그대로 같게 둔다** — `_num`(bool 차단 +
+    int/float 만 + isfinite) 뒤에 `< 0` 제외(`load_price_triggers`). 갈리면 발화한
+    트리거와 그 설명이 다른 구성종목으로 선다. 그래서 가격용 `_price` 를 재사용하지
+    않는다: 그쪽은 문자열 수치를 받는데(옛 가격 컬럼 관례) writer 의 `_num` 은 버려,
+    재사용하면 두 레인의 행 규칙이 갈린다. canonical 은 `weight_pct` 를 float64 로
+    쓰므로(`normalize_etf.py`) 좁혀도 잃는 행이 없다.
+
+    `0` 은 결손이 아니라 실값이라 writer 와 같이 남긴다(상류 품질 검사도 경고만 낸다).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
 
 
 def make_s3_client(settings: Settings):
@@ -261,6 +285,24 @@ class LakeReader:
         대상 ETF 행 존재 기준으로 고른다: trade_date 이하 최신 as_of, 없으면 가장 이른
         미래 스냅샷 — 파이프라인 트리거 writer(ALPHA-418)와 같은 규칙이라 발화한 트리거와
         그 설명이 같은 holdings 로 분해된다.
+
+        ⚠️ **그 규칙 일치는 이제 한 축에서만 성립한다**(ALPHA-951): 날짜 선택과 행 단위
+        비중 규칙은 writer 와 같지만, 아래 **결손 과반 파티션 배제는 이쪽에만 있다**.
+        결손 과반 파티션에서 writer 는 남은 실값 몇 건으로 트리거를 발화하고 이쪽은 그
+        파티션을 버린다 — 그 경우 설명은 **이전 스냅샷**으로 선다. 설명 쪽을 택한 이유는
+        비중 한 줄짜리 구성으로 낸 분해가 '없음'보다 나쁘기 때문이고, writer 에도 같은
+        게이트가 필요한지는 별 티켓이다.
+
+        **비중 NULL 은 0 으로 접지 않고 그 행을 뺀다.** 접으면 두 방향으로 틀린다 —
+        ① 행이 살아남아 `holdings` 가 비지 않으니 아래 폴백 루프가 그 파티션에서 멈춘다
+        (정상 파티션이 뒤에 있어도 도달 못 한다) ② 비중 0 인 행이 coverage 에 '커버됨'
+        으로 세어져 분모가 거짓이 된다.
+
+        **과반이 NULL 이면 파티션째 다음 후보로 넘긴다.** 장전 수집분은 비중 없이
+        구성종목·수량만 오는 것이 정상이라(유니버스용) 그 파티션이 '최신'으로 뽑히면
+        장중 설명이 매일 아침 죽는다(2026-08-11, 882/916 행 = 96% NULL). 판정을
+        **비중 합으로는 못 한다** — 그 사고는 ETF 당 `원화현금 100.0` 한 행만 실값이라
+        합이 정확히 100 이었다. 자릿수 여유는 충분하다: 정상 3/905(0.3%) vs 사고 96%.
         """
         base = f"{LAKE_HOLDINGS_PREFIX}/market={market}/"
         dates = self._partition_values(base, "as_of_date")
@@ -268,19 +310,33 @@ class LakeReader:
         eligible = [x for x in dates if x <= target]
         future = [x for x in dates if x > target]
         for chosen in [*reversed(eligible), *future]:
-            rows = self._read_parquet_prefix(
-                f"{base}as_of_date={chosen}/",
-                ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
-            )
+            rows = [
+                r
+                for r in self._read_parquet_prefix(
+                    f"{base}as_of_date={chosen}/",
+                    ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
+                )
+                if str(r.get("etf_id")) == etf_id
+            ]
+            # 티커 결손도 **결손으로 센다** — 분모에서 미리 빼면 티커가 통째로 날아간
+            # 파티션이 '행 0건'으로 보여 정상 폴백과 구분되지 않고, 아래 경고도 안 난다.
+            # 공백만 있는 티커는 truthy 라 그냥 두면 '유효'로 세어져 과반 게이트를
+            # 통과시키는데, 정작 가격과 매칭될 구성종목은 0종이다.
             holdings = [
                 Holding(
-                    ticker=str(r["constituent_ticker"]),
+                    ticker=ticker,
                     name=r.get("constituent_name"),
-                    weight=float(r["weight_pct"] or 0.0) / 100.0,
+                    weight=weight / 100.0,
                 )
                 for r in rows
-                if str(r.get("etf_id")) == etf_id and r.get("constituent_ticker")
+                if (ticker := str(r.get("constituent_ticker") or "").strip())
+                and (weight := _weight(r.get("weight_pct"))) is not None
             ]
-            if holdings:
+            if holdings and len(holdings) * 2 >= len(rows):
                 return holdings, chosen
+            if rows:
+                logger.warning(
+                    "holdings 파티션 결손 과반 — 건너뜀: etf=%s as_of=%s 유효=%d/%d",
+                    etf_id, chosen, len(holdings), len(rows),
+                )
         return [], None

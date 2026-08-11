@@ -495,6 +495,9 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
 # coverage 정규화 proxy(분석엔진 L0 산식 정본)가 absolute gate(abs_threshold=3%)를 넘는
 # 거래일만 price_movement_trigger 로. holdings 는 거래일 이하 최신 스냅샷, 없으면 가장 이른
 # 미래 스냅샷 폴백(엔진과 같은 선택, ALPHA-418 — 사용 횟수·as_of 는 quality_log 로 드러남).
+# 날짜 선택과 행 규칙(비중 결손·음수 제외)은 엔진과 같지만 **결손 과반 파티션 배제는
+# 엔진에만** 있다(ALPHA-951) — 그런 파티션에선 트리거는 남은 실값으로 서고 설명은 이전
+# 스냅샷으로 서서 둘이 갈린다.
 # 게이트 미통과 일자는 행이 없는 게 정상이고 그 수는
 # data_quality_logs 로 남는다. 구정책 행은 observation 참조가 없으면 자동 교체된다.
 # 판정에 쓴 가격 coverage 는 두 곳에 나뉘어 남는다(ALPHA-452 — 1% 비중 종목 하나로 판정된
