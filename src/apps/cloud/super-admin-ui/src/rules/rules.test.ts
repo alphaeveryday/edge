@@ -238,10 +238,17 @@ test('R06 데이터 부분 유실 — 판정은 data_status 가 내린다 (건�
   ];
   const v = hits(f, 'R06');
   assert.deepEqual(v.map((x) => x.target), ['lost', 'flagged-only', 'no-count']);
-  assert.deepEqual(v.map((x) => x.metric), [12, 0, null], '건수는 그대로 싣되 없으면 null 이다');
+  /* ⚠️ `flagged-only`(failed_records: 0)의 metric 이 **0이 아니라 null** 인 것이 이 단언의 핵심이다.
+   * 생산자는 `received < expected` 만으로도 INCOMPLETE 를 내므로 이 카운터가 0인 INCOMPLETE 는
+   * 정상 형상이고, 유실은 완전성 축(R07)에 있다. `metric: 0 · unit: '건'` 으로 그리면
+   * "유실 0건인 부분 유실"이라는 자기모순이 표에 선다 — 규모로 쓸 수 있는 건 양수뿐이다. */
+  assert.deepEqual(v.map((x) => x.metric), [12, null, null]);
   /* 규모가 없는 위반만 state 를 갖는다 — 둘 다 채우면 화면이 어느 쪽을 그릴지 추측하게 된다 */
-  assert.deepEqual(v.map((x) => x.state ?? null), [null, null, 'INVALID']);
-  assert.deepEqual(v.map((x) => x.unit ?? null), ['건', '건', null]);
+  assert.deepEqual(v.map((x) => x.state ?? null), [null, 'INCOMPLETE', 'INVALID']);
+  assert.deepEqual(v.map((x) => x.unit ?? null), ['건', null, null]);
+  /* 0 과 부재는 사유가 다르다 — 한 문장으로 접으면 "규모를 안 남겼다"가 0건에도 붙는다 */
+  assert.match(v[1].why, /0이다/);
+  assert.match(v[2].why, /없다/);
 });
 
 test('R07 완전성 결손 — received<expected 만 위반', () => {
@@ -459,8 +466,16 @@ test('R11 소비자 부재 — 대기>0·in-flight 0·구독자 0 전부 만족�
     { name: 'consuming', visible: 65, in_flight: 3, dlq: 0, subscribers: [] },
     { name: 'subscribed', visible: 65, in_flight: 0, dlq: 0, subscribers: ['svc'] },
     { name: 'idle', visible: 0, in_flight: 0, dlq: 0, subscribers: [] },
+    /* 매핑이 **일부 큐에만** 붙은 응답 — 계약상 정상 형상이다. `(q.subscribers ?? []).length === 0`
+     * 이던 때는 이 큐가 '소비자 부재' P0 로 섰다: 아무도 안 센 것을 없다고 단정한 것이다.
+     * 이 줄이 없으면 그 접기를 되살려도 전건 초록이다(변이로 확인). */
+    { name: 'unmapped', visible: 65, in_flight: 0, dlq: 0 },
   ];
-  assert.deepEqual(hits(f, 'R11').map((v) => v.target), ['orphan']);
+  assert.deepEqual(hits(f, 'R11').map((v) => v.target), ['orphan'], '미계측 큐를 구독자 0으로 단정하지 않는다');
+  /* 판정에서 빠졌다는 사실이 어딘가에는 남아야 한다 — 안 그러면 침묵을 침묵으로 바꾼 것뿐이다 */
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R11')!;
+  assert.equal(rr.evaluated, true);
+  assert.match(rr.note ?? '', /4\/5/, '몇 큐를 실제로 봤는지 note 가 밝힌다');
 });
 
 test('R11 경계 — 구독 매핑 계측이 아예 없으면 evaluated:false', () => {
@@ -1005,7 +1020,10 @@ test('정렬 2순위 — 같은 심각도면 연쇄가 긴 사건이 앞이다 (
   /* 앞 테스트가 못 재던 자리다. 실제로 병합되는 간선(R05·R16 → R04)으로 연쇄 3짜리 사건을
    * 세우고, 같은 P0 인 독립 사건과 순서를 다툰다. `b.size - a.size` 를 지우면 깨진다. */
   const f = emptyFacts();
-  f.runs = [run({ id: 'chained', ledger_status: 'FAILED' }), run({ id: 'lonely', ledger_status: 'FAILED' })];
+  /* ⚠️ `lonely` 를 **먼저** 넣는다. 뒤에 두면 `b.size - a.size` 를 지워도 안정 정렬이 삽입
+   * 순서를 그대로 둬 'chained' 가 여전히 앞이고 테스트가 통과한다(변이로 확인 — 처음 쓴
+   * 픽스처가 정확히 그랬다). 비교자가 실제로 순서를 **뒤집어야** 잡힌다. */
+  f.runs = [run({ id: 'lonely', ledger_status: 'FAILED' }), run({ id: 'chained', ledger_status: 'FAILED' })];
   f.tasks = [
     task({ task_key: 'T1', run_id: 'chained', task_outcome: 'FAILED', attempts: 3, max_retries: 3 }),
     task({ task_key: 'T2', run_id: 'chained', task_outcome: 'PENDING' }),
@@ -1015,6 +1033,43 @@ test('정렬 2순위 — 같은 심각도면 연쇄가 긴 사건이 앞이다 (
   assert.equal(first.root.targetId, 'chained', `연쇄가 긴 쪽이 앞이어야 한다: ${ev.incidents.map((i) => `${i.root.targetId}(${i.size})`)}`);
   assert.ok(first.size > second.size, '크기 비교자가 실제로 갈랐는지');
   assert.equal(second.root.targetId, 'lonely');
+});
+
+test('인과 부모 — 후보가 여럿이면 사실의 배열 순서가 뿌리를 바꾸면 안 된다', () => {
+  /* `R10 → R11` 의 간선 조건은 **자식만** 본다(`c.src === 'intraday'`). 그래서 R11 위반이 둘이면
+   * 둘 다 부모 후보이고, `violations.find(...)` 는 그중 **먼저 나온 것**을 골랐다 — 위반 순서는
+   * 응답의 행 순서에서 오므로 서버 쿼리의 `ORDER BY` 하나가 바뀌면 같은 날 같은 장애의 뿌리가
+   * 다른 큐로 옮겨 간다. 운영자는 어제와 다른 원인을 보고, 공유한 딥링크는 다른 사건을 연다.
+   *
+   * 사실이 진짜 부모를 못 가르는 것은 그대로다 — 잴 수 있는 것은 **같은 사실이면 같은 답**이다.
+   * 큐 배열을 뒤집어 두 번 평가하고 뿌리가 같은지 본다. `.sort(vid)` 를 지우면 깨진다. */
+  const build = (queues: Facts['queues']): Facts => {
+    const f = emptyFacts();
+    f.chain = {
+      feeds: [
+        { id: 'fb', label: '배치 트리거', v: 0, unit: 'ETF', src: 't' },
+        { id: 'fi', label: '장중 트리거', v: 65, unit: '건', src: 't' },
+      ],
+      stages: [{ id: 'c.obs', label: '관측', batch: 0, intraday: 9, src: 's' }],
+    };
+    f.queues = queues;
+    return f;
+  };
+  const qa = { name: 'q-alpha', visible: 7, in_flight: 0, dlq: 0, subscribers: [] };
+  const qb = { name: 'q-beta', visible: 7, in_flight: 0, dlq: 0, subscribers: [] };
+  const rootOf = (f: Facts) => {
+    const ev = evaluate(f, NOW);
+    const child = ev.violations.find((v) => v.rule === 'R10');
+    assert.ok(child, '픽스처가 R10 장중 손실을 못 만들었다 — 경계를 재는 게 아니라 no-op 이다');
+    const owner = ev.incidents.find((I) => I.members.some((m) => m.v.vid === child!.vid));
+    assert.ok(owner, 'R10 이 흡수되지 않았다 — 부모 선택 자체가 안 일어났다');
+    return owner!.root.targetId;
+  };
+  assert.equal(rootOf(build([qa, qb])), rootOf(build([qb, qa])), '큐 순서가 뿌리를 바꾼다');
+  /* 순서 무관만 재면 비교자를 **내림차순으로 뒤집어도** 통과한다(변이로 확인) — 그러면 이미
+   * 공유된 사건 링크가 전부 다른 부모로 옮겨 간다. 계약은 "재현 가능"이 아니라 "가장 작은 vid" 다. */
+  const q = [qa, qb].map((x) => `R11:${x.name}`).sort()[0];
+  assert.equal(rootOf(build([qb, qa])), q.slice('R11:'.length), '뿌리는 vid 가 가장 작은 후보다');
 });
 
 test('🔴 심각도 승격과 R02→R03 간선은 지금 어떤 사실로도 못 밟는다 (죽은 경로를 테스트가 밝힌다)', () => {
@@ -1042,6 +1097,21 @@ test('🔴 심각도 승격과 R02→R03 간선은 지금 어떤 사실로도 �
     const both = r02.run(f, { now: NOW }).length > 0 && r03.run(f, { now: NOW }).length > 0;
     assert.equal(both, false, `한 런이 R02·R03 을 동시에 밟았다(${ledger_status}) — 간선이 살아났으니 사례 테스트를 더하라`);
   }
+  /* 술어 배타성만 재면 **간선 조건(`when`)을 느슨하게 바꿔 살리는 경로**를 놓친다 — `when` 을
+   * `() => true` 로 두면 다른 런의 R02·R03 이 병합돼 간선이 살아나는데 위 루프는 그대로 통과한다.
+   * 그러니 `evaluate` 로도 확인한다: 둘 다 있는 사실에서 R02 가 흡수되지 않아야 한다. */
+  const f = emptyFacts();
+  f.runs = [
+    run({ id: 'open', deadline: '2026-08-03T16:00:00+09:00' }), // R02
+    run({ id: 'projlag', ledger_status: 'RUNNING', aws_status: 'SUCCEEDED' }), // R03
+  ];
+  const ev = evaluate(f, NOW);
+  const v02 = ev.violations.find((v) => v.rule === 'R02');
+  assert.ok(v02, '픽스처가 R02 를 못 만들었다');
+  assert.ok(
+    ev.incidents.some((I) => I.root.vid === v02!.vid),
+    'R02 가 흡수됐다 — R02→R03 간선이 살아났으니 인과 사례 테스트를 더하라',
+  );
 });
 
 test('정렬 3순위 — 수치는 크기순이다. 부호가 아니라 절댓값으로 잰다', () => {

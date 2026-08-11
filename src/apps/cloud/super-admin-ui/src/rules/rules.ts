@@ -71,6 +71,10 @@ const runKind = (r: RunFact): string =>
  * 두 곳에 따로 쓰면 반드시 갈린다(실제로 두 번 갈렸다: `!= null` vs truthy, 그 다음 `isFinite`
  * vs `!== 0`). 갈리면 `canRun` 만 통과하고 `run()` 이 걸러 **평가됨 · 위반 0**("분포 안")이 선다.
  * `0` 은 기준이 아니다(나눗셈이 성립하지 않는다), `NaN` 도 아니다(비교가 언제나 거짓이다).
+ *
+ * ⚠️ **`base: 0` 은 "표본이 없다"가 아니다.** 서버 `median()` 은 표본이 있고 값이 전부 0이면
+ * `0.0` 을 준다 — 관측된 기준이다. 비율 판정이 성립하지 않아 판정에서 빠질 뿐이므로, 사유를
+ * "표본 없음"이라 쓰면 관측을 미관측으로 위조한다. `note` 가 둘을 갈라 적는다.
  */
 const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && o.base !== 0;
 
@@ -321,7 +325,14 @@ export const RULES: Rule[] = [
       f.tasks
         .filter((t) => ['INCOMPLETE', 'INVALID'].includes(t.data_status ?? ''))
         .map((t) => {
-          const lost = Number.isFinite(t.failed_records) ? (t.failed_records as number) : null;
+          /* ⚠️ **`failed_records: 0` 은 "0건 유실"이 아니다.** 생산자(`derive_data_status`)는
+           * `received < expected` 만으로도 INCOMPLETE 를 내므로, 이 카운터가 0인데 상태가
+           * INCOMPLETE 인 작업이 정상적으로 존재한다 — 유실은 완전성 축에 있고 R07 이 센다.
+           * 그걸 `metric: 0 · unit: '건'` 으로 그리면 "유실 0건인 부분 유실"이라는 자기모순이
+           * 표에 선다. 규모로 쓸 수 있는 것은 **양수일 때뿐**이고, 나머지는 판정만 낸다.
+           * (그렇다고 위반을 버리지는 않는다 — 그게 이 규칙이 조용했던 원래 결함이다.) */
+          const n = t.failed_records;
+          const lost = Number.isFinite(n) && (n as number) > 0 ? (n as number) : null;
           return {
             target: t.task_key,
             title: t.task_key,
@@ -330,7 +341,9 @@ export const RULES: Rule[] = [
             why:
               lost != null
                 ? 'ops.failed_records — 스텝의 유실 판정값이며 skipped_*를 직접 더한 값이 아니다. 무엇 1건인지는 잡마다 다르다'
-                : `${t.data_status} 인데 failed_records 가 없다 — 스텝이 유실을 선언했으나 규모를 안 남겼다`,
+                : Number.isFinite(n)
+                  ? `${t.data_status} 인데 failed_records 는 0이다 — 이 카운터 밖(완전성 결손 등)에서 온 판정이라 규모는 R07 이 센다`
+                  : `${t.data_status} 인데 failed_records 가 없다 — 스텝이 유실을 선언했으나 규모를 안 남겼다`,
             runId: t.run_id,
             evidence: 'ops_expected_task.data_status + failed_records',
             drill: ['run', 'task-' + t.task_key] as [string, string],
@@ -595,10 +608,17 @@ export const RULES: Rule[] = [
       /* 빠지는 이유는 둘이다 — 기준이 없거나(`base`), 오늘 값이 수가 아니거나(`today`).
        * 한쪽만 세면 나머지 침묵이 남는다: `today: NaN` 은 비교가 언제나 거짓이라 위반도 안 되고
        * 이 문장에도 안 나와, 그 산출을 **봤다고 착각**하게 된다. */
-      const blind = (f.outputs ?? [])
-        .filter((o) => !judgeable(o))
-        .map((o) => o.label);
-      return blind.length ? `판정에서 빠진 산출 ${blind.join('·')} — 기준(중앙값)이나 오늘 값이 수가 아니다` : null;
+      const out = f.outputs ?? [];
+      /* 빠지는 사유가 셋이고 뜻이 다르다 — 접으면 관측된 0 이 "아무도 안 셌다"로 읽힌다 */
+      const noBase = out.filter((o) => o.base == null || !Number.isFinite(o.base)).map((o) => o.label);
+      const zeroBase = out.filter((o) => o.base === 0).map((o) => o.label);
+      const noToday = out.filter((o) => hasBase(o) && !Number.isFinite(o.today)).map((o) => o.label);
+      const parts = [
+        noBase.length ? `기준 표본이 없어 빠진 산출 ${noBase.join('·')}` : '',
+        zeroBase.length ? `평소가 0이라 비율 판정이 성립하지 않는 산출 ${zeroBase.join('·')}(관측된 0이지 미관측이 아니다)` : '',
+        noToday.length ? `오늘 값이 수가 아니라 빠진 산출 ${noToday.join('·')}` : '',
+      ].filter(Boolean);
+      return parts.length ? parts.join(' · ') : null;
     },
     run: (f) =>
       (f.outputs ?? [])
@@ -616,7 +636,10 @@ export const RULES: Rule[] = [
           metric: Math.round(((o.today - (o.base as number)) / (o.base as number)) * 100),
           unit: '%',
           why: `오늘 ${o.today.toLocaleString('ko-KR')} · 평소(중앙값) ${(o.base as number).toLocaleString('ko-KR')} ${o.unit} — 분포 밖, 원인은 다른 규칙이 지목한다`,
-          evidence: '직전 10거래일 중앙값',
+          /* '직전 10거래일' 이라 쓰면 서버가 실제로 세는 것보다 강한 주장이다 — 표본은
+           * `(런이 있던 날 ∪ 계획 결손일) − 장 안 서는 날` 의 최근 10개라, 평일 휴장에 Planner 까지
+           * 실패한 날은 거래일로 오인돼 섞인다(계약 문서가 남은 불확실로 적어 둔 것). */
+          evidence: '최근 기준일 10개의 중앙값(서버 표본 규칙)',
           drill: ['trend', 'out-' + o.id] as [string, string],
         })),
   },

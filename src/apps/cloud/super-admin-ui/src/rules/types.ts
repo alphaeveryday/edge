@@ -287,8 +287,11 @@ export interface Facts {
    */
   runbook?: Record<string, RunbookEntry>;
   /**
-   * `aws` 는 AWS 제어면 관측 시각 — **미배선이라 실 응답에 없다**(C 축). 붙으면 `awsUnavailable`·
-   * `awsUnobservedRuns` 와 함께 온다. `today` 는 "원장이 아는 가장 최근 날"이지 거래일이 아니다.
+   * `aws` 는 AWS 제어면 관측 시각 — **미배선이라 실 응답에 없다**(C 축).
+   *
+   * `today` 는 **응답이 실제로 본 날**이고 거래일이라는 보장이 없다. `?date=` 를 주면 그 날짜가
+   * 그대로 실리고(dev 실측), 생략했을 때만 "원장이 아는 가장 최근 날"이다 — 뒤엣것만 알고 쓰면
+   * 과거 조회가 현재 상태로 읽힌다.
    */
   meta: { db: string; aws?: string | null; today: string };
   [extra: string]: unknown;
