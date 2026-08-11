@@ -373,14 +373,17 @@ def _gate_batch(complete_fn, system: str, chunk: list[dict], view: ProcessRegist
         if not isinstance(item, dict):
             drop("item_malformed")
             continue
-        seen_ids.add(str(item.get("id")))
+        raw_id = item.get("id")
+        if raw_id and str(raw_id) in seen_ids:
+            # 같은 id 재판정 — 채택이 응답 순서에 좌우되지 않게 **첫 판정**(비이벤트
+            # 판별 포함)을 유지하고 위반으로 센다(Rule 12). `out` 존재로 가리면 첫
+            # 판정이 비이벤트·검증 실패일 때 후속 판정이 조용히 채택된다.
+            drop("item_duplicate")
+            continue
+        if raw_id:
+            seen_ids.add(str(raw_id))
         validated, drop_reason = _validate_gate(item, view, entity_index, allowed_by_id)
         if validated is not None:
-            if validated["article_id"] in out:
-                # 같은 id 재판정 — 마지막 항목이 이기게 두면 채택이 응답 순서에 좌우된다.
-                # 첫 판정을 유지(결정론)하고 위반으로 센다(Rule 12).
-                drop("item_duplicate")
-                continue
             out[validated["article_id"]] = validated
         elif drop_reason is not None:
             drop(drop_reason)

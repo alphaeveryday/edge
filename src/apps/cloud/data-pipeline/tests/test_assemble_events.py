@@ -1508,6 +1508,17 @@ def test_gate_duplicate_ids_keep_first_judgment_and_are_counted():
     assert out["a1"]["event_type_code"] == _ETYPE       # 첫 판정
     assert drops == {"item_duplicate": 1}
 
+    # 첫 판정이 비이벤트여도 '첫 판정 유지'다 — out 존재로 가리면 후속 EVENT 가
+    # 조용히 채택된다(리뷰 R3).
+    out, drops = assemble_events._gate_batch(
+        lambda system, user: json.dumps(
+            {"items": [_gate_item("a1", etype="", doc_class="PROMOTIONAL"),
+                       _gate_item("a1")]},
+            ensure_ascii=False),
+        "s", chunk, view, entity_index)
+    assert out == {}
+    assert drops == {"item_duplicate": 1}
+
 
 def test_event_type_distribution_counts_gate_judgments_not_extraction_survivors(
         tmp_path, monkeypatch):
