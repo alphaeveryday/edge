@@ -166,8 +166,13 @@ def test_weekend_event_anchors_to_the_next_trading_day(monkeypatch):
     lake._con.execute("""
         INSERT INTO event_rows VALUES
           ('sunday', 'A', 'CONTRACT.CANCEL', DATE '2026-08-09',
-           TIMESTAMP '2026-08-09 15:26:00')
+           TIMESTAMP '2026-08-09 15:26:00'),
+          ('old_sat', 'F', 'CONTRACT.CANCEL', DATE '2026-07-04',
+           TIMESTAMP '2026-07-04 12:00:00')
     """)
+    # F 의 다음 거래일(07-06) 봉 — 명목일(토요일 07-04) 조인이면 이 표본이 없다.
+    lake._con.execute(
+        "INSERT INTO daily_rows VALUES ('F', DATE '2026-07-06', 0.05)")
 
     sunday = event_distribution_preview(
         lake, source_event_id="sunday", instrument_id="A", day="2026-08-10",
@@ -178,12 +183,53 @@ def test_weekend_event_anchors_to_the_next_trading_day(monkeypatch):
 
     # 일요일 15:26 관측 → 실효 거래일 = 다음 거래일(월요일 = 설명일). 달력에
     # 08-08(토)·08-09(일) 거래일이 없으므로 currency 판정이 주말을 건너뛴다.
-    # 과거 표본 3 = A(07-01)·B(07-02)·A(08-07 — 'anchor' 사건의 실효 거래일).
+    # 과거 표본 4 = A(07-01)·B(07-02)·A(08-07 — 'anchor' 사건의 실효 거래일)·
+    # F(07-06 — 토요일 사건이 다음 거래일 봉으로 매핑된 표본. 명목일 조인 회귀는
+    # 이 표본을 잃어 n=3 이 된다).
     assert sunday.status == "READY"
-    assert sunday.distribution is not None and sunday.distribution.n == 3
+    assert sunday.distribution is not None and sunday.distribution.n == 4
     # 금요일(08-07) 장중 사건은 그날 세션이 이미 완결됐다 — 월요일 수익률과
     # 비교하면 사건-반응 축이 어긋난다.
     assert (stale.status, stale.reason) == ("UNAVAILABLE", "ANCHOR_NOT_CURRENT")
+
+
+def test_effective_day_close_boundary_and_instrument_calendar(monkeypatch):
+    """두 변이를 죽이는 표본: ① 15:30 **정각** 관측은 당일 종가에 선행할 수 없어
+    다음 거래일로 밀린다(> 로 되돌리면 G 의 표본값이 0.09→0.07 로 어긋나 mean 이
+    깨진다) ② 실효 거래일 달력은 **그 종목의** 거래일이다(전 시장 달력로 되돌리면
+    거래정지였던 H 가 자기 봉 없는 날에 매핑돼 표본에서 사라져 n 이 깨진다)."""
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview._base",
+                        lambda *_args: """WITH
+                        v_event AS (SELECT * FROM event_rows),
+                        v_daily AS (SELECT * FROM daily_rows)
+                        """)
+    lake = _lake()
+    lake._con.execute("""
+        INSERT INTO event_rows VALUES
+          ('at_close', 'G', 'CONTRACT.CANCEL', DATE '2026-07-01',
+           TIMESTAMP '2026-07-01 15:30:00'),
+          ('h_event', 'H', 'CONTRACT.CANCEL', DATE '2026-07-06',
+           TIMESTAMP '2026-07-06 10:00:00')
+    """)
+    lake._con.execute("""
+        INSERT INTO daily_rows VALUES
+          ('G', DATE '2026-07-01', 0.07),
+          ('G', DATE '2026-07-02', 0.09),
+          ('X', DATE '2026-07-07', 0.99),
+          ('H', DATE '2026-07-08', 0.11)
+    """)
+
+    result = event_distribution_preview(
+        lake, source_event_id="anchor", instrument_id="A", day="2026-08-07",
+        as_of="2026-08-07 12:05:00", today=-0.036, min_n=4)
+
+    # 표본 4 = A(07-01, -0.01)·B(07-02, 0.02)·G(정각 관측 → 07-02, 0.09)·
+    # H(자기 재개일 07-08, 0.11 — 전 시장 달력이면 X 의 07-07 로 매핑돼 봉이 없어
+    # 탈락한다). mean 은 G 가 0.09(다음날)일 때만 맞는다.
+    assert result.status == "READY"
+    assert result.distribution is not None
+    assert result.distribution.n == 4
+    assert result.distribution.mean == pytest.approx(0.0525)
 
 
 def test_distribution_preview_fails_loudly_when_the_pit_surface_is_unavailable(monkeypatch):

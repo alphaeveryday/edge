@@ -52,8 +52,9 @@ class EventCandidate:
     evidence_id: str = ""
 
 
-# 정규장 마감(KST). 이후 관측된 사건은 그날 봉에 반영될 수 없어 실효 거래일이
-# 다음 거래일로 밀린다. duck 세션이 TimeZone=Asia/Seoul 이라(statics/duck.py)
+# 정규장 마감(KST). 마감 **정각 포함** 이후 관측된 사건은 그날 종가에 선행할 수
+# 없어(종가는 15:30 에 확정) 실효 거래일이 다음 거래일로 밀린다 — 경계는 보수적
+# PIT 쪽으로 접는다. duck 세션이 TimeZone=Asia/Seoul 이라(statics/duck.py)
 # available_at 캐스팅은 KST 벽시계로 떨어진다.
 _SESSION_CLOSE = "15:30:00"
 
@@ -65,7 +66,7 @@ _SESSION_CLOSE = "15:30:00"
 # 만들지 않는다. TIMESTAMPTZ→TIME 직접 캐스팅은 DuckDB 에 없다 — 세션
 # TZ(Asia/Seoul)가 적용되는 TIMESTAMP 경유로 벽시계를 얻는다.
 _EFFECTIVE_BASE = f"""
-        CASE WHEN CAST(CAST(e.available_at AS TIMESTAMP) AS TIME) > TIME '{_SESSION_CLOSE}'
+        CASE WHEN CAST(CAST(e.available_at AS TIMESTAMP) AS TIME) >= TIME '{_SESSION_CLOSE}'
              THEN CAST(CAST(e.available_at AS TIMESTAMP) AS DATE) + 1
              ELSE CAST(CAST(e.available_at AS TIMESTAMP) AS DATE) END
 """
@@ -95,8 +96,12 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
         SELECT DISTINCT e.instrument_id, e.event_type_code,
                ({_EFFECTIVE_BASE}) <= DATE {literal(day)}
                AND NOT EXISTS (
+                   -- 달력은 **그 종목의** 거래일이다: 거래정지면 시장이 열려도 이
+                   -- 종목은 반응할 수 없다 - 전 시장 달력은 정지 종목의 앵커를
+                   -- 잘못 기각하고 재개일 표본을 놓친다.
                    SELECT 1 FROM v_daily cal
-                   WHERE cal.trade_date >= ({_EFFECTIVE_BASE})
+                   WHERE cal.instrument_id = e.instrument_id
+                     AND cal.trade_date >= ({_EFFECTIVE_BASE})
                      AND cal.trade_date < DATE {literal(day)}
                ) AS is_current
         FROM v_event e
@@ -123,7 +128,8 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
         _eff AS (
             SELECT e.instrument_id,
                    (SELECT MIN(cal.trade_date) FROM v_daily cal
-                     WHERE cal.trade_date >= ({_EFFECTIVE_BASE})) AS trade_date
+                     WHERE cal.instrument_id = e.instrument_id
+                       AND cal.trade_date >= ({_EFFECTIVE_BASE})) AS trade_date
             FROM v_event e
             WHERE e.event_type_code = {literal(event_type_code)}
         )
