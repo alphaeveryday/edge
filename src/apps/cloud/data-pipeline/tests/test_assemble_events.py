@@ -1486,3 +1486,44 @@ def test_gate_response_contract_violations_are_counted():
     assert out == {}
     assert drops == {"item_malformed": 1, "doc_class_invalid": 1,
                      "response_missing": 2}
+
+
+def test_gate_duplicate_ids_keep_first_judgment_and_are_counted():
+    """같은 id 를 두 번 판정한 응답 — 마지막이 이기면 채택이 응답 순서에 좌우된다.
+    첫 판정을 유지(결정론)하고 item_duplicate 로 센다(ALPHA-948 리뷰 R2)."""
+    from edge_ontology import load_process_registry
+
+    view = load_process_registry()
+    chunk = [{"article_id": "a1", "title": "t", "tickers": ["005930"]}]
+    entity_index = {"005930": "ent-1"}
+    other = "COMPANY.WORKFORCE.LAYOFF"
+    assert other in view.types and other != _ETYPE
+
+    out, drops = assemble_events._gate_batch(
+        lambda system, user: json.dumps(
+            {"items": [_gate_item("a1"), _gate_item("a1", etype=other)]},
+            ensure_ascii=False),
+        "s", chunk, view, entity_index)
+
+    assert out["a1"]["event_type_code"] == _ETYPE       # 첫 판정
+    assert drops == {"item_duplicate": 1}
+
+
+def test_event_type_distribution_counts_gate_judgments_not_extraction_survivors(
+        tmp_path, monkeypatch):
+    """분포 지표의 목적은 욱여넣기(게이트 타입 편중) 발견이다 — 추출 성공분으로 세면
+    추출 콜 누락이 편중을 가린다(ALPHA-948 리뷰 R2). 게이트가 EVENT 로 판정한 건은
+    추출이 통째로 누락돼도 분포에 남아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn()
+    _setup(monkeypatch, conn)
+
+    # 게이트는 EVENT+타입 판정, 추출 응답은 그 기사를 누락(빈 테이블).
+    assert assemble_events.run(storage, "R1", db=_db(),
+                               complete_fn=_llm_fn([_gate_item("a1")], []),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    log = _log(storage)
+    assert log["events_created"] == 0                    # 추출 누락 — 적재 없음
+    assert log["event_type_distribution"] == {_ETYPE: 1}  # 게이트 판정은 분포에 남는다

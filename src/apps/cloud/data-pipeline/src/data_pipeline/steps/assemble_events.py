@@ -376,6 +376,11 @@ def _gate_batch(complete_fn, system: str, chunk: list[dict], view: ProcessRegist
         seen_ids.add(str(item.get("id")))
         validated, drop_reason = _validate_gate(item, view, entity_index, allowed_by_id)
         if validated is not None:
+            if validated["article_id"] in out:
+                # 같은 id 재판정 — 마지막 항목이 이기게 두면 채택이 응답 순서에 좌우된다.
+                # 첫 판정을 유지(결정론)하고 위반으로 센다(Rule 12).
+                drop("item_duplicate")
+                continue
             out[validated["article_id"]] = validated
         elif drop_reason is not None:
             drop(drop_reason)
@@ -627,7 +632,8 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
 def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
                     entity_index: dict[str, str],
                     concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY,
-                    gate_drops_out: dict[str, int] | None = None) -> dict[str, dict]:
+                    gate_drops_out: dict[str, int] | None = None,
+                    gate_types_out: dict[str, int] | None = None) -> dict[str, dict]:
     """article_id → 검증된 v4 추출(게이트 EVENT + 해소 가능한 primary + 타입별 인자).
 
     2콜 체인: (a) 게이트 배치(40건)가 doc_class·타입·primary 를 판별하고, (b) 게이트를 통과한
@@ -639,6 +645,9 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
 
     gate_drops_out(선택): EVENT 판정인데 계보에 못 실은 게이트 드롭 사유별 건수를 병합해
     준다(ALPHA-948, Rule 12) — 호출부(run)가 quality_log 봉투로 드러낸다.
+    gate_types_out(선택): **게이트 판정**의 event_type 별 건수 — 분포 지표의 목적이
+    욱여넣기(게이트 타입 편중) 발견이라 추출 성공분이 아니라 게이트 산출을 센다(추출
+    실패가 편중을 가리면 안 된다).
     """
     concurrency = max(1, min(concurrency, MAX_CLASSIFY_CONCURRENCY))
     batches = [rows[start:start + CLASSIFY_BATCH] for start in range(0, len(rows), CLASSIFY_BATCH)]
@@ -654,6 +663,10 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
             if gate_drops_out is not None:
                 for reason, count in drops.items():
                     gate_drops_out[reason] = gate_drops_out.get(reason, 0) + count
+    if gate_types_out is not None:
+        for cls in gate.values():
+            etype = cls["event_type_code"]
+            gate_types_out[etype] = gate_types_out.get(etype, 0) + 1
     if not gate:
         return {}
 
@@ -1336,9 +1349,11 @@ def run(
                 already = assembled_source_ids(conn, [n["article_id"] for n in in_universe])
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 date_gate_drops: dict[str, int] = {}
+                date_gate_types: dict[str, int] = {}
                 classifications = (classify_titles(complete_fn, todo, view, entity_index,
                                                    concurrency=concurrency,
-                                                   gate_drops_out=date_gate_drops)
+                                                   gate_drops_out=date_gate_drops,
+                                                   gate_types_out=date_gate_types)
                                    if todo else {})
                 # 적재 직전 자국 재확인(ALPHA-730) — 분류(LLM, 수 분) 창에서 1분 단건
                 # 조립이 먼저 조립한 기사는 뺀다. doc 락은 이 날짜 커밋까지 유지된다.
@@ -1363,9 +1378,10 @@ def run(
             assembled_during_classify += len(raced)
             for reason, count in date_gate_drops.items():
                 gate_drops[reason] = gate_drops.get(reason, 0) + count
-            for c in classifications.values():
-                etype = c["event_type_code"]
-                event_type_distribution[etype] = event_type_distribution.get(etype, 0) + 1
+            # 분포는 **게이트 판정** 기준이다 — 추출 성공분으로 세면 추출 누락이
+            # 욱여넣기(타입 편중)를 가린다(지표의 목적 자체가 편중 발견).
+            for etype, count in date_gate_types.items():
+                event_type_distribution[etype] = event_type_distribution.get(etype, 0) + count
             # 품질 카운터(Rule 12) — stage 오염 차단·엔티티 해소 실패를 로그로 드러낸다.
             stage_rejected += sum(
                 1 for c in classifications.values() if c.get("stage_rejected"))
