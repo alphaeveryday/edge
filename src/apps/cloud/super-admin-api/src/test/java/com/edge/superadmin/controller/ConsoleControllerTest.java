@@ -464,6 +464,25 @@ class ConsoleControllerTest {
 	}
 
 	/**
+	 * 🔴 <b>빈 계약 키는 계약이 아니다.</b> 스키마는 계약 3종을 함께 non-null 로 묶을 뿐
+	 * ({@code ck_ops_expected_task_contract_snapshot}) <b>비공백 제약이 없다</b>. {@code null} 만
+	 * 보면 등록될 수 없는 빈 식별자가 "계약 적용됨"으로 서고, actual 만 있으면 그 데이터셋이
+	 * <b>판정 가능</b>으로 조용히 인증된다 — 이 축이 없애려는 실패다(리뷰가 잡았다).
+	 *
+	 * <p>같은 규칙을 서비스가 두 군데서 이미 쓴다(빈 {@code dataset}·빈 사유). 셋이 갈리면 안 된다.
+	 */
+	@Test
+	void 빈_계약_키는_계약으로_안_친다() throws Exception {
+		mvc(factsWithTask(task("COLLECT", "etf_flow", "   ", DAY, DAY, DB_NOW,
+				"FRESH", "AS_OF_MATCH")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].contract").value(false))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("CONTRACT_NOT_APPLIED"));
+	}
+
+	/**
 	 * 🔴 <b>기대일은 계약 작업의 것이다.</b> Planner 는 {@code expected_as_of_date} 를 계약 유무와
 	 * 무관하게 모든 작업에 쓰고 값이 갈린다(계약 작업은 {@code resolve_expected_as_of}, 나머지는
 	 * {@code slot_date}). 접기를 계약으로 안 좁히면 <b>아무 계약도 하지 않은 기대일</b>이 계약

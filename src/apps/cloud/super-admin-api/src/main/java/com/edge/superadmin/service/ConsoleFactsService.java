@@ -141,7 +141,7 @@ public class ConsoleFactsService {
 	 * <b>정상</b>으로 보인다. 넓히는 쪽 대가는 신선도 규칙과의 겹침뿐이고 계약 문서에 적혀 있다.
 	 */
 	private static DatasetResponse dataset(String id, List<TaskRow> rows) {
-		boolean contract = rows.stream().anyMatch(t -> t.datasetContractKey() != null);
+		boolean contract = rows.stream().anyMatch(ConsoleFactsService::hasContract);
 
 		/* 🔴 **신선도는 계약이 걸린 채 그 날 실행 대상이던 작업에서만 접는다**(`DUE` ∧ 계약 키 있음).
 		 * 이 축의 사실은 **계약의 것**이지 데이터셋에 붙은 아무 작업의 것이 아니다.
@@ -158,7 +158,7 @@ public class ConsoleFactsService {
 		 * (`ops/catalog.py`), 그 계약은 actual 을 늘 NULL 로 써서(ADR-0043 첫 슬라이스) 기대일
 		 * 접기가 **정상 경로**다 — 아무 계약도 하지 않은 기대일에 계약 작업의 사유가 붙는다. */
 		List<TaskRow> judged = rows.stream()
-				.filter(t -> "DUE".equals(t.planStatus()) && t.datasetContractKey() != null)
+				.filter(t -> "DUE".equals(t.planStatus()) && hasContract(t))
 				.toList();
 
 		/* 🔴 **as-of 쌍은 한 작업에서 통째로 가져온다.** 한 데이터셋에 작업이 여럿일 때
@@ -231,6 +231,19 @@ public class ConsoleFactsService {
 				actualAsOf == null ? null : actualAsOf.toString(),
 				collectedAt == null ? null : collectedAt.toString(),
 				unverifiable);
+	}
+
+	/**
+	 * 계약이 <b>실제로</b> 걸렸나. {@code null} 만 보지 않는다 — 스키마는 계약 3종을 함께
+	 * non-null 로 묶을 뿐({@code ck_ops_expected_task_contract_snapshot}) <b>비공백 제약이 없어</b>
+	 * 빈 문자열 키가 들어올 수 있다. 그걸 계약으로 세면 등록될 수 없는 식별자가 "계약 적용됨"으로
+	 * 서고, actual 만 있으면 그 데이터셋이 <b>판정 가능</b>으로 조용히 인증된다.
+	 *
+	 * <p>같은 규칙을 이 파일이 두 군데서 이미 쓴다 — 빈 {@code dataset} 은 축에서 빼고, 빈
+	 * {@code freshness_reason} 은 사유로 안 친다. <b>빈 문자열은 값이 아니다.</b>
+	 */
+	private static boolean hasContract(TaskRow t) {
+		return t.datasetContractKey() != null && !t.datasetContractKey().isBlank();
 	}
 
 	/**
