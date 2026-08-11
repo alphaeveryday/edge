@@ -32,6 +32,8 @@ import logging
 import math
 from datetime import datetime, time
 
+from pydantic import ValidationError
+
 from ..lake.storage import Storage
 from ..minute.models import (
     KST,
@@ -51,11 +53,12 @@ from .ingest_price_raw import (
 
 logger = logging.getLogger(__name__)
 
-# 축소 방어 임계 — 새 유니버스의 수집 unit 수가 직전의 이 비율보다 작으면 거부한다.
+# 멤버십 방어 임계 — 직전 유니버스의 unit 중 이 비율만큼은 새 유니버스에 **그대로
+# 남아야** 한다(개수가 아니라 교집합이다 — `_refuse_membership_loss`).
 # 값의 근거는 정밀 실측이 아니라 **역할**이다: 정상 리밸런싱(ETF 하나가 몇 종 갈아끼우는
-# 일)은 통과시키고 수집 사고(ETF 여러 종의 스냅샷이 통째로 낡거나 빈 수집이 착지)만 잡는
-# 성긴 그물이다. `_kr_holdings_universe` 가 "ETF 별 최신 스냅샷 합집합"이라 원래 잘 줄지
-# 않으므로, 큰 축소는 그 자체가 수집을 의심할 신호다.
+# 일)은 통과시키고 수집 사고(스냅샷이 통째로 낡거나 빈 수집이 착지, 남의 구성종목이
+# 다른 etf_id 로 오배정)만 잡는 성긴 그물이다. `_kr_holdings_universe` 가 "ETF 별 최신
+# 스냅샷 합집합"이라 원래 잘 안 흔들리므로, 큰 이탈은 그 자체가 수집을 의심할 신호다.
 # ponytail: 고정 비율 하나 — 오탐/미탐이 실제로 나면 ETF 별 결손 판정으로 올려라
 MIN_KEEP_RATIO = 0.9
 
@@ -206,12 +209,15 @@ def run(storage: Storage, settings, universe_uri: str, run_id: str,
     기본값에서 옮겨진 순간 생산자와 소비자가 다른 객체를 보게 되고, 그 상태는 양쪽 다
     exit 0 이라 **아무 데도 안 드러난다**(소비자는 옛 정본을 계속 읽는다).
     """
-    universe = build_from_settings(settings, storage)
+    existing = read_universe_bytes(universe_uri)
+    before = _previous(existing, universe_uri)
+    # 시간외 축은 holdings 파생이 **아니라** 사람이 실측으로 채우는 값이라, 직전 정본에서
+    # 살려 오지 않으면 재생성이 조용히 지운다(아래 `_carry_extended`).
+    universe = _carry_extended(before, build_from_settings(settings, storage))
     # 스크립트의 `--out` 과 **같은 바이트**여야 한다 — 손으로 만든 파일과 이 스텝의
     # 산출을 그대로 대조할 수 있어야 교체 여부를 사람이 확인한다.
     payload = (payload_of(universe) + "\n").encode("utf-8")
 
-    existing = read_universe_bytes(universe_uri)
     if existing == payload:
         # 세대만 바꾸는 쓰기를 안 한다. universe_version 은 구성에서 유도되므로 같은
         # 구성이면 같은 값이고, 그때의 PUT 은 순수한 노이즈다.
@@ -224,7 +230,8 @@ def run(storage: Storage, settings, universe_uri: str, run_id: str,
     _refuse_after_plan(now or datetime.now(KST))
 
     if existing is not None:
-        _refuse_shrink_from(existing, universe, universe_uri)
+        if before is not None:
+            _refuse_membership_loss(before, universe)
         # 08-11 수동 교체가 이미 하던 절차다 — 되돌릴 것이 없으면 잘못 만든 유니버스가
         # 그날의 유일한 정본이 된다.
         write_universe_bytes(f"{universe_uri}.bak-{run_id}", existing)
@@ -234,6 +241,51 @@ def run(storage: Storage, settings, universe_uri: str, run_id: str,
     return 0
 
 
+def _previous(existing: bytes | None, universe_uri: str) -> Universe | None:
+    """직전 정본(없거나 **못 읽으면** None).
+
+    ⚠️ **손상된 객체가 재빌드를 영구히 막으면 안 된다.** 그 상태는 소비자도 이미
+    fail-loud 로 못 뜨는 상태라(`load_universe_uri`), 여기서까지 거부하면 탈출구가
+    "사람이 객체를 지운다" 하나뿐인 채로 매일 아침 같은 자리에 선다. 앞으로 고치되
+    **건너뛴 사실은 남긴다**(Rule 12) — 직전 객체는 백업으로 보존된다.
+
+    잡는 예외는 **손상의 형태 셋**뿐이다. `Exception` 으로 넓히면 MemoryError·구현
+    버그까지 '손상'으로 접혀, 멀쩡한 정본을 기준 없이 갈아치우고도 warning 한 줄로
+    끝난다 — 가드를 끄는 가장 조용한 방법이다.
+    """
+    if existing is None:
+        return None
+    try:
+        return Universe.model_validate(json.loads(existing.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
+        logger.warning(
+            "직전 universe 객체가 손상돼 멤버십 대조·시간외 축 승계를 건너뛴다(%s): %s "
+            "— 백업(.bak-*)에 원본이 남는다", universe_uri, exc)
+        return None
+
+
+def _carry_extended(before: Universe | None, after: Universe) -> Universe:
+    """시간외(NXT) 거래 종목 축을 직전 정본에서 승계한다.
+
+    이 축은 **종목별 실측 속성**이라 holdings 에서 파생되지 않고(`build` 주석), 사람이
+    채운 뒤로는 아무도 다시 안 넣는다. 재생성이 그걸 지우면 다음 세션부터 그 종목들의
+    계획이 08:00–20:00 에서 390분으로 줄고, 사라진 시간외 window 는 **결손으로도 안
+    잡힌다**(기대 집합 자체가 줄어든다).
+
+    유니버스를 떠난 종목만 뺀다 — `Universe` 가 universe 밖 ID 를 거부하기 때문이고,
+    뺐다는 사실은 남긴다(그 종목의 시간외 관측이 그날부터 끝난다는 뜻이다).
+    """
+    if before is None or not before.extended_hours_ids:
+        return after
+    units = set(after.unit_ids)
+    kept = tuple(t for t in before.extended_hours_ids if t in units)
+    if dropped := sorted(set(before.extended_hours_ids) - units):
+        logger.warning("시간외 축에서 유니버스를 떠난 종목을 뺀다: %s", dropped)
+    # 모델을 다시 통과시킨다 — `model_copy(update=…)` 는 검증을 건너뛰어, 축 간 겹침
+    # 규칙이 깨진 조합을 그대로 직렬화한다.
+    return Universe(**{**after.model_dump(), "extended_hours_ids": kept})
+
+
 def _refuse_after_plan(now: datetime) -> None:
     """세션이 이미 계획됐을 수 있는 시각이면 교체를 거부한다(`REBUILD_CUTOFF_KST`).
 
@@ -241,6 +293,11 @@ def _refuse_after_plan(now: datetime) -> None:
     이상 그 불변식을 **산문이 아니라 코드로** 다시 세워야 한다 — 도크스트링의 "장중에
     돌리지 마라"는 급할 때 아무도 안 읽는다.
     """
+    if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+        # `astimezone` 이 naive 를 **호스트 로컬**로 해석한다 — UTC 컨테이너에서 KST
+        # 16:00 을 뜻해 넘긴 값이 다음 날 01:00 이 되어 이 가드를 그냥 통과한다.
+        # 원장 계약 전반의 aware-only 규약과 같은 자세다(`Universe.units_at`).
+        raise ValueError(f"now 는 timezone-aware 여야 한다: {now!r}")
     local = now.astimezone(KST)
     if not is_trading_day(local.date()) or local.time() < REBUILD_CUTOFF_KST:
         return
@@ -253,37 +310,25 @@ def _refuse_after_plan(now: datetime) -> None:
     )
 
 
-def _refuse_shrink_from(existing: bytes, after: Universe, universe_uri: str) -> None:
-    """직전 정본을 축소 대조의 기준으로 삼는다. 못 읽으면 대조를 건너뛴다.
+def _refuse_membership_loss(before: Universe, after: Universe) -> None:
+    """직전 유니버스의 unit 을 크게 잃으면 거부한다(`MIN_KEEP_RATIO`).
 
-    ⚠️ **손상된 객체가 재빌드를 영구히 막으면 안 된다.** 그 상태는 소비자도 이미
-    fail-loud 로 못 뜨는 상태라(`load_universe_uri`), 여기서까지 거부하면 탈출구가
-    "사람이 객체를 지운다" 하나뿐인 채로 매일 아침 같은 자리에 선다. 앞으로 고치되
-    **건너뛴 사실은 남긴다**(Rule 12) — 직전 객체는 백업으로 보존된다.
+    잃은 종목을 그대로 올리면 그날 1분 레인이 쪼그라든 채 **초록으로** 돈다 — 빠진
+    종목은 window 기대 집합에서도 빠져 결손으로도 안 잡힌다. 그 상태는 그날 분봉이
+    다시 안 오므로 복구 불가다(ALPHA-936 실증).
+
+    ⚠️ **개수가 아니라 남은 멤버로 센다.** 개수만 보면 30종이 빠지고 엉뚱한 30종이
+    들어온 대량 교체가 '변화 없음'으로 통과한다 — 사고의 형태가 결손이 아니라 **오배정**
+    (남의 구성종목이 다른 etf_id 로 착지)일 때 정확히 그 모양이 된다.
     """
-    try:
-        before = Universe.model_validate(json.loads(existing.decode("utf-8")))
-    except Exception as exc:
-        logger.warning(
-            "직전 universe 객체를 못 읽어 축소 대조를 건너뛴다(%s): %s — 백업(.bak-*)에 "
-            "원본이 남는다", universe_uri, exc)
-        return
-    _refuse_shrink(before, after)
-
-
-def _refuse_shrink(before: Universe, after: Universe) -> None:
-    """수집 대상이 크게 줄면 거부한다(`MIN_KEEP_RATIO`).
-
-    줄어든 유니버스를 그대로 올리면 그날 1분 레인이 쪼그라든 채 **초록으로** 돈다 —
-    빠진 종목은 window 기대 집합에서도 빠져 결손으로도 안 잡힌다. 그 상태는 그날
-    분봉이 다시 안 오므로 복구 불가다(ALPHA-936 실증).
-    """
+    kept = set(before.unit_ids) & set(after.unit_ids)
     floor = math.ceil(len(before.unit_ids) * MIN_KEEP_RATIO)
-    if len(after.unit_ids) >= floor:
+    if len(kept) >= floor:
         return
     raise SystemExit(
-        f"유니버스가 크게 줄어 거부한다: {len(before.unit_ids)} → {len(after.unit_ids)} unit "
-        f"(최소 {floor}) — 정상 리밸런싱이 아니라 홀딩스 수집 결손을 의심하라. "
-        f"canonical KR holdings 의 ETF 별 최신 스냅샷을 확인하고, 축소가 진짜면 "
-        f"기존 객체를 지운 뒤 다시 돌려라"
+        f"직전 유니버스의 unit 을 크게 잃어 거부한다: {len(before.unit_ids)} 중 "
+        f"{len(kept)} 만 남았다(최소 {floor}, 새 유니버스 {len(after.unit_ids)} unit) — "
+        f"정상 리밸런싱이 아니라 홀딩스 수집 결손·오배정을 의심하라. canonical KR "
+        f"holdings 의 ETF 별 최신 스냅샷을 확인하고, 축소가 진짜면 기존 객체를 지운 뒤 "
+        f"다시 돌려라"
     )

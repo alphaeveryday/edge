@@ -300,7 +300,7 @@ def test_shrunk_universe_is_refused_and_leaves_the_object_alone(tmp_path):
     before = Path(uri).read_bytes()
     _wide(storage, "2026-08-12", 2)  # 수집 사고 — 스냅샷이 2종만 실렸다
 
-    with pytest.raises(SystemExit, match="크게 줄어 거부"):
+    with pytest.raises(SystemExit, match="크게 잃어 거부"):
         build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY)
 
     assert Path(uri).read_bytes() == before
@@ -392,7 +392,7 @@ def test_unchanged_universe_passes_the_cutoff_untouched(tmp_path):
 def test_corrupt_previous_object_does_not_brick_the_rebuild(tmp_path, caplog):
     # WHY: 손상된 정본은 소비자도 이미 못 읽어 레인이 서 있는 상태다(`load_universe_uri`
     #      가 fail-loud). 여기서까지 거부하면 탈출구가 "사람이 객체를 지운다" 하나뿐인 채
-    #      매일 아침 같은 자리에 선다 — 앞으로 고치되, 축소 대조를 못 했다는 **사실은
+    #      매일 아침 같은 자리에 선다 — 앞으로 고치되, 대조를 못 했다는 **사실은
     #      남기고** 원본은 백업에 보존한다(Rule 12).
     storage, uri = _lane(tmp_path)
     Path(uri).parent.mkdir(parents=True, exist_ok=True)
@@ -403,7 +403,79 @@ def test_corrupt_previous_object_does_not_brick_the_rebuild(tmp_path, caplog):
 
     assert json.loads(Path(uri).read_text(encoding="utf-8"))["etf_ids"] == ["091160"]
     assert _bak(uri).read_bytes() == b"{ this is not json"   # 원본 보존
-    assert "축소 대조를 건너뛴다" in caplog.text
+    assert "멤버십 대조·시간외 축 승계를 건너뛴다" in caplog.text
+
+
+def test_wholesale_swap_is_refused_even_though_the_count_holds(tmp_path):
+    # WHY: 사고의 형태가 늘 '결손'인 것은 아니다 — 남의 구성종목이 다른 etf_id 로
+    #      착지하면(오배정) 종수는 그대로인 채 **멤버가 통째로 바뀐다**. 개수만 재는
+    #      가드는 그걸 '변화 없음'으로 통과시키고, 사라진 종목은 기대 집합에서도 빠져
+    #      결손으로도 안 잡힌다. 남은 멤버로 세야 두 사고를 다 잡는다.
+    storage, uri = _lane(tmp_path)
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
+    before = Path(uri).read_bytes()
+    # 20종 → 다른 20종. 개수는 21 unit 그대로다.
+    _holdings(storage, "2026-08-12",
+              [(f"{200000 + i:06d}", "091160") for i in range(20)])
+
+    with pytest.raises(SystemExit, match="크게 잃어 거부"):
+        build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY)
+
+    assert Path(uri).read_bytes() == before
+
+
+def test_extended_hours_axis_survives_the_rebuild(tmp_path):
+    # WHY: 시간외 축은 holdings 파생이 아니라 **종목별 실측 속성**이라(build 주석) 사람이
+    #      한 번 채우면 아무도 다시 안 넣는다. 재생성이 그걸 지우면 그 종목들의 계획이
+    #      다음 세션부터 08:00–20:00 에서 390분으로 줄고, 사라진 시간외 window 는
+    #      **결손으로도 안 잡힌다**(기대 집합 자체가 줄어든다).
+    storage, uri = _lane(tmp_path)
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
+    landed = json.loads(Path(uri).read_text(encoding="utf-8"))
+    landed["extended_hours_ids"] = ["100000", "100001"]   # 사람이 실측으로 채운 축
+    Path(uri).write_text(json.dumps(landed, ensure_ascii=False, indent=2) + "\n",
+                         encoding="utf-8")
+    _wide(storage, "2026-08-12", 21)   # 신규 편입 1종
+
+    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY) == 0
+
+    after = json.loads(Path(uri).read_text(encoding="utf-8"))
+    assert after["extended_hours_ids"] == ["100000", "100001"]
+    assert "100020" in after["constituent_ids"]
+
+
+def test_extended_hours_entry_that_left_the_universe_is_dropped_loudly(tmp_path, caplog):
+    # WHY: `Universe` 는 universe 밖 ID 를 담은 시간외 축을 거부한다 — 그대로 승계하면
+    #      편입 해제 하나가 재생성 전체를 죽인다. 그렇다고 조용히 빼면 그 종목의 시간외
+    #      관측이 그날부터 끝난 사실이 아무 데도 안 남는다(Rule 12).
+    storage, uri = _lane(tmp_path)
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
+    landed = json.loads(Path(uri).read_text(encoding="utf-8"))
+    landed["extended_hours_ids"] = ["100000", "100019"]
+    Path(uri).write_text(json.dumps(landed, ensure_ascii=False, indent=2) + "\n",
+                         encoding="utf-8")
+    _wide(storage, "2026-08-12", 19)   # 100019 가 빠졌다
+
+    with caplog.at_level("WARNING"):
+        assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY) == 0
+
+    after = json.loads(Path(uri).read_text(encoding="utf-8"))
+    assert after["extended_hours_ids"] == ["100000"]
+    assert "100019" in caplog.text
+
+
+def test_naive_now_is_refused_not_reinterpreted(tmp_path):
+    # WHY: `astimezone` 은 naive 를 **호스트 로컬**로 읽는다. UTC 컨테이너에서 KST 16:00
+    #      을 뜻해 넘긴 값이 다음 날 01:00 이 되어 교체 마감 가드를 그냥 통과한다 —
+    #      가드가 있다고 믿는데 안 무는 상태가 없느니만 못하다(원장 계약의 aware-only
+    #      규약과 같은 자세).
+    storage, uri = _lane(tmp_path)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        build_minute_universe.run(storage, _settings(), uri, RUN_ID,
+                                  datetime(2026, 8, 12, 16, 0))
+
+    assert not Path(uri).exists()
 
 
 def test_put_is_skipped_entirely_when_nothing_changed(tmp_path):
