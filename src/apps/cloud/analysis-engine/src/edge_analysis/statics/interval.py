@@ -134,14 +134,17 @@ def _mean_phrase(value: float) -> str:
     return f"{rendered}였습니다"
 
 
-def _top_rank_pct(percentile: float) -> int:
-    """ECDF → "상위 N%" 표시값. 반올림 뒤 [1, 99] 로 클램프한다.
+def _top_rank_pct(percentile: float, n: int) -> int:
+    """ECDF → "상위 N%" 표시값. 표본 해상도(100/n)와 [1, 99] 로 클램프한다.
 
     percentile 은 `value <= observed` 비율이라 극단에서 1.0(전 표본 이상)·0.0
-    (전 표본 미만)이 나온다 - 그대로 두면 가장 강한 반응이 "상위 0%", 가장 약한
-    반응이 "상위 100%" 라는 무의미한 문장이 된다(봇 리뷰). 경계는 1%·99% 로 접는다.
+    (전 표본 미만)이 나온다 - 그대로 두면 가장 강한 반응이 "상위 0%" 라는 무의미한
+    문장이 된다. 하한은 1% 가 아니라 **표본이 지지하는 해상도**다: n=30 이면 전
+    표본 위여도 경험분포가 말할 수 있는 것은 "상위 1/30(≈3%)" 까지지 "상위 1%"
+    가 아니다(봇 리뷰 2건). 상한은 대칭으로 99% 에서 접는다.
     """
-    return min(99, max(1, round((1 - percentile) * 100)))
+    floor = max(1, math.ceil(100 / n)) if n > 0 else 1
+    return min(99, max(floor, round((1 - percentile) * 100)))
 
 
 def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple[str, ...]:
@@ -152,7 +155,7 @@ def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple
         f"{item.available_at[11:16]}, {item.title} 소식이 있었습니다. "
         f"같은 유형의 과거 {item.n}개 사건일에서 이 종목의 시장초과수익률은 평균 "
         f"{_mean_phrase(item.mean)}. 오늘 시장초과수익률은 {_pct(item.today)}로, "
-        f"과거 분포의 상위 {_top_rank_pct(item.percentile)}% 수준입니다."
+        f"과거 분포의 상위 {_top_rank_pct(item.percentile, item.n)}% 수준입니다."
         for item in items
     )
 

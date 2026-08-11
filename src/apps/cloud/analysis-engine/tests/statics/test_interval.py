@@ -392,16 +392,19 @@ def test_event_distribution_near_zero_mean_reads_as_about_zero():
     assert "상위 31% 수준" in event["text"]
 
 
-def test_event_distribution_extreme_percentiles_clamp_to_one_and_ninety_nine():
-    """ECDF 극단(전 표본 이상=1.0·전 표본 미만=0.0)이 "상위 0%"·"상위 100%" 라는
-    무의미한 문장이 되지 않는다 — 표시값은 [1, 99] 로 접는다."""
+def test_event_distribution_extreme_percentiles_clamp_to_sample_resolution():
+    """ECDF 극단이 "상위 0%"·"상위 100%" 라는 무의미한 문장이 되지 않고, 하한은
+    표본이 지지하는 해상도(100/n)에 묶인다 — n=30 전 표본 위는 "상위 1%"가 아니라
+    "상위 4%"(ceil(100/30))까지만 말할 수 있다."""
     from edge_analysis.statics.interval import _top_rank_pct
 
-    assert _top_rank_pct(1.0) == 1
-    assert _top_rank_pct(0.999) == 1
-    assert _top_rank_pct(0.0) == 99
-    assert _top_rank_pct(0.004) == 99
-    assert _top_rank_pct(0.69) == 31
+    assert _top_rank_pct(1.0, 871) == 1
+    assert _top_rank_pct(1.0, 30) == 4
+    assert _top_rank_pct(0.999, 871) == 1
+    assert _top_rank_pct(0.0, 871) == 99
+    assert _top_rank_pct(0.004, 871) == 99
+    assert _top_rank_pct(0.69, 871) == 31
+    assert _top_rank_pct(0.69, 30) == 31
 
 def test_final_explanation_never_reads_a_prior_analysis_output():
     """A previous run's output must never become evidence for the current run."""
