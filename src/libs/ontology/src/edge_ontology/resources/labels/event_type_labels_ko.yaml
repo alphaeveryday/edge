@@ -1,0 +1,81 @@
+# 사건 유형 한국어 라벨 — edge 로컬 증보 (ALPHA-942).
+#
+# ⚠️ 이 파일은 상류 실험실(event-ontology) 스냅샷 교체의 대상이 **아니다** —
+# resources/relation/ 과 같은 edge 로컬 증보다. 타입 YAML(process/types/)에 라벨을
+# 넣지 않는 이유가 그것이다: 거기 넣으면 다음 통째 교체 때 소실된다.
+#
+# 문맥 계약: 라벨은 고객 산문의 "과거에 {라벨} 소식이 있었던 N건" 자리에 들어가는
+# **명사구**다. 통계·영문 약어 금지(analysis-engine 산문 금지어 게이트가 하류에서
+# 잡는다). 라벨 문안 근거는 각 타입 YAML 의 note·predicates.
+#
+# 완전성은 테스트가 강제한다(tests/test_labels.py): registry 의 모든 타입에 라벨이
+# 있어야 하고, 라벨만 있고 타입이 없는 고아도 금지 — 상류 스냅샷 교체로 새 타입이
+# 오면 여기에 라벨을 추가해야 테스트가 통과한다(fail-loud).
+
+version: v0.1
+
+types:
+  COMPANY.ALLIANCE.PARTNERSHIP: 제휴·협력
+  COMPANY.CAPITAL.DIVIDEND_DECISION: 배당 결정
+  COMPANY.CAPITAL.EQUITY_ISSUANCE: 신주 발행
+  COMPANY.CAPITAL.IPO: 신규 상장
+  COMPANY.CAPITAL.SHARE_BUYBACK: 자사주 매입
+  COMPANY.CAPITAL.STOCK_SPLIT: 액면분할
+  COMPANY.COMMERCIAL.MARKET_ENTRY: 신규 시장 진출
+  COMPANY.COMMERCIAL.PRICING_ACTION: 가격 조정
+  COMPANY.CONTRACT.SIGNING: 계약 체결
+  COMPANY.EARNINGS.GUIDANCE_CHANGE: 실적 전망 변경
+  COMPANY.EARNINGS.RESULT_RELEASE: 실적 발표
+  COMPANY.FINANCING.DEBT_ISSUANCE: 회사채 발행
+  COMPANY.INVESTMENT.STAKE_ACQUISITION: 지분 투자
+  COMPANY.LEGAL.LAWSUIT: 소송
+  COMPANY.LEGAL.REGULATORY_ACTION: 당국 제재·조사
+  COMPANY.MANAGEMENT.EXECUTIVE_CHANGE: 경영진 교체
+  COMPANY.M_AND_A.ACQUISITION: 인수
+  COMPANY.M_AND_A.MERGER: 합병
+  COMPANY.OWNERSHIP.INSIDER_TRANSACTION: 내부자 지분 거래
+  COMPANY.PRODUCT.CERTIFICATION: 제품 인증
+  COMPANY.PRODUCT.LAUNCH: 신제품 출시
+  COMPANY.PRODUCTION.CAPACITY_CHANGE: 생산능력 변화
+  COMPANY.RESTRUCTURING.SPINOFF: 분사·분할
+  COMPANY.WORKFORCE.LAYOFF: 인력 감축
+  EXOGENOUS.ACCIDENT.OPERATIONAL_DISRUPTION: 사고·조업 중단
+  EXOGENOUS.CONFLICT.OUTBREAK: 분쟁 발발
+  EXOGENOUS.CONFLICT.RESOLUTION: 분쟁 타결
+  EXOGENOUS.CYBER.SERVICE_DISRUPTION: 사이버 장애
+  EXOGENOUS.DISASTER.OCCURRENCE: 재해 발생
+  EXOGENOUS.HEALTH.OUTBREAK: 감염병 확산
+  INDUSTRY.DEMAND.DEMAND_CHANGE: 업계 수요 변화
+  INDUSTRY.PRICE.COMMODITY_PRICE_CHANGE: 원자재 가격 변동
+  INDUSTRY.SUPPLY.CAPACITY_CHANGE: 업계 공급 변화
+  INDUSTRY.SUPPLY.INVENTORY_CHANGE: 업계 재고 변화
+  INDUSTRY.TECHNOLOGY.STANDARD_CHANGE: 기술 표준 변화
+  MACRO.CREDIT.LIQUIDITY_ACTION: 유동성 정책
+  MACRO.EMPLOYMENT.DATA_RELEASE: 고용 지표 발표
+  MACRO.FX.EXCHANGE_RATE_POLICY: 환율 정책
+  MACRO.GROWTH.GDP_RELEASE: 성장률 지표 발표
+  MACRO.INFLATION.DATA_RELEASE: 물가 지표 발표
+  MACRO.MONETARY.POLICY_RATE_DECISION: 기준금리 결정
+  MARKET_INFO.ANALYST.RATING_CHANGE: 증권사 투자의견 변경
+  MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE: 목표주가 변경
+  MARKET_INFO.CREDIT.RATING_CHANGE: 신용등급 변경
+  MARKET_STRUCTURE.EXCHANGE_OUTAGE: 거래소 장애
+  MARKET_STRUCTURE.INDEX.EXCLUSION: 지수 편출
+  MARKET_STRUCTURE.INDEX.INCLUSION: 지수 편입
+  MARKET_STRUCTURE.TRADING_HALT: 거래 정지
+  POLICY.COURT.RULING: 법원 판결
+  POLICY.REGULATION.RULE_CHANGE: 규제 변경
+  POLICY.SANCTION.IMPOSITION: 제재 부과
+  POLICY.TRADE.EXPORT_CONTROL: 수출 통제
+  POLICY.TRADE.TARIFF_CHANGE: 관세 변경
+
+# 상류 스냅샷 교체 직후, 새 타입에 정확 라벨이 붙기 전까지의 1단 폴백.
+# "과거에 {family 라벨} 관련 소식이 있었던" 문맥으로 읽힌다.
+families:
+  COMPANY: 기업
+  EXOGENOUS: 외부 충격
+  INDUSTRY: 산업
+  MACRO: 거시경제
+  MARKET_INFO: 시장 정보
+  MARKET_STRUCTURE: 시장 제도
+  POLICY: 정책
