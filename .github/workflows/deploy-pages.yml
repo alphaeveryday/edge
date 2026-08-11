@@ -8,6 +8,8 @@ on:
     paths:
       - "docs/**"
       - "pages/**"
+      # 브랜드 로고 캐노니컬 — sync 가 포털로 복사하므로 변경 시 재빌드.
+      - "src/libs/ui-kit/src/assets/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 

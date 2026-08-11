@@ -10,6 +10,7 @@ theme:
   language: ko
   # 헤더 배경이 항상 브랜드 블루(#00309F, extra.css)라 흰색 로고 단일 사용.
   # (edge-logo-black.svg = 어두운 배경용 흰 로고 — 명명은 배경 기준)
+  # 파일은 커밋되지 않는다 — 캐노니컬(src/libs/ui-kit/src/assets)에서 sync 가 복사.
   logo: assets/images/edge-logo-black.svg
   features:
     - navigation.tabs
