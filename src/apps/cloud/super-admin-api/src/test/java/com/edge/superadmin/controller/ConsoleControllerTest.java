@@ -318,22 +318,27 @@ class ConsoleControllerTest {
 	}
 
 	/**
-	 * 반대편: 같은 데이터셋에 {@code DUE} 가 하나라도 있으면 그 작업들로 판정한다 —
-	 * {@code SKIPPED} 행이 접기에 끼어들어 값을 흐리면 안 된다.
+	 * 반대편: 같은 데이터셋에 {@code DUE} 가 하나라도 있으면 그 작업들로 판정하고,
+	 * {@code SKIPPED} 행은 접기에 <b>보태지 않는다</b>.
+	 *
+	 * <p>⚠️ {@code SKIPPED} 행이 스키마상 들고 있을 수 있는 값은 <b>기대일뿐</b>이다(as-of·수집
+	 * 시각·신선도는 전부 NULL — {@code ck_ops_expected_task_freshness_applicability}). 그래서
+	 * 이 행이 새는 유일한 경로는 <b>기대일 접기</b>이고, 그 경로가 열리려면 {@code DUE} 쪽 as-of 가
+	 * 없어야 한다. 픽스처를 그 형태로 둔다 — 안 그러면 이 테스트를 죽이는 단독 변이가 없다.
 	 */
 	@Test
-	void SKIPPED_행은_DUE_작업의_판정에_끼어들지_않는다() throws Exception {
+	void SKIPPED_행의_기대일은_DUE_의_기대일을_밀어내지_않는다() throws Exception {
 		mvc(factsWithTask(
+				// 이 행의 기대일(08-03)이 새면 응답이 그 날을 기대일이라고 말한다.
 				task("SKIPPED_ONE", "etf_flow", "ETF_FLOW_KRX_EOD", "SKIPPED",
 						DAY, null, null, null, null),
-				task("DUE_ONE", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2),
-						DAY.minusDays(2), DB_NOW, "FRESH", "AS_OF_MATCH")))
+				task("DUE_ONE", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), null, DB_NOW,
+						"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED")))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				// SKIPPED 의 기대일(08-03)이 아니라 DUE 의 쌍(08-01/08-01)이 나가야 한다.
 				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-01"))
-				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
-				.andExpect(jsonPath("$.result.datasets[0].unverifiable").value(nullValue()));
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_UNVERIFIED"));
 	}
 
 	/**
