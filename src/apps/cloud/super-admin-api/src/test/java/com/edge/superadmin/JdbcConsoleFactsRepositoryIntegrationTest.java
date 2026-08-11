@@ -132,21 +132,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 그 날 그 ETF 의 배치 트리거 한 건 — {@code o.trig} 가 세는 것.
-	 *
-	 * <p>표본·창 계약을 재는 대부분의 테스트가 이 테이블을 쓴다 — {@code trade_date} 축이고
-	 * {@code marketBound} 이면서 사슬이 짧기 때문이다. ⚠️ <b>{@code o.pub} 을 이걸로 대신 재지는
-	 * 못한다</b>: 그쪽에는 여기 없는 {@code publication_status} 술어가 있어
-	 * {@link #insertPublished} 가 따로 있다(리뷰가 잡은 자리 — "같은 계약"이라 적었던 것이 틀렸다).
-	 *
-	 * <p>⚠️ 여기도 FK 가 없지는 않다 — {@code ALTER TABLE} 로 {@code etf_profile} 을 물고 있어
-	 * 아래처럼 종목 사슬 셋을 먼저 세운다.
-	 *
-	 * <p>{@code etf} 를 인자로 받는 이유는 그 산출이 {@code count(DISTINCT etf_instrument_id)} 라서다
-	 * — 같은 ETF 를 두 번 넣어도 1 이어야 하고, 그 계약은 값을 갈라야만 재진다.
-	 * {@code detected_at} 도 갈라 둔다({@code (etf,trade_date,detected_at)} 이 UNIQUE 다).
-	 */
-	/**
 	 * {@code available_at} 축 산출({@code o.doc})이 세는 문서 한 건.
 	 *
 	 * <p>{@code availableAt} 을 <b>오프셋 있는 문자열로 그대로 받는다</b> — KST/UTC 경계에 걸린
@@ -154,8 +139,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	private void insertDocument(String id, String type, String availableAt) {
 		/* ⚠️ {@code published_at} 을 **다른 날**로 둔다 — 두 시각이 같으면 산출이 `available_at`
-		 * 대신 `published_at` 을 읽는 변이가 통과한다(리뷰가 잡았다). 실제로도 그 둘은 다르다:
-		 * 발행은 벤더 시각, 수집 가능해진 시각은 우리 쪽이다. */
+		 * 대신 `published_at` 을 읽는 변이가 통과한다(리뷰가 잡았다).
+		 *
+		 * ⚠️ **원장에서 둘이 늘 다르지는 않다** — `steps/load_documents.py` 는
+		 * `available_at = fetched_at or published_at` 로 폴백해서 같은 행이 실제로 생긴다.
+		 * 여기서 가르는 것은 **그 컬럼을 읽는지 재기 위한 것**이지 원장 불변식이 아니다. */
 		jdbc.update("""
 				INSERT INTO document (document_id, document_type, source_code, source_document_id,
 				       title, published_at, available_at)
@@ -229,6 +217,21 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				""", id, "run-" + id, etf, tradingDate, at, status);
 	}
 
+	/**
+	 * 그 날 그 ETF 의 배치 트리거 한 건 — {@code o.trig} 가 세는 것.
+	 *
+	 * <p>표본·창 계약을 재는 대부분의 테스트가 이 테이블을 쓴다 — {@code trade_date} 축이고
+	 * {@code marketBound} 이면서 사슬이 짧기 때문이다. ⚠️ <b>{@code o.pub} 을 이걸로 대신 재지는
+	 * 못한다</b>: 그쪽에는 여기 없는 {@code publication_status} 술어가 있어
+	 * {@link #insertPublished} 가 따로 있다(리뷰가 잡은 자리 — "같은 계약"이라 적었던 것이 틀렸다).
+	 *
+	 * <p>⚠️ 여기도 FK 가 없지는 않다 — {@code ALTER TABLE} 로 {@code etf_profile} 을 물고 있어
+	 * 아래처럼 종목 사슬 셋을 먼저 세운다.
+	 *
+	 * <p>{@code etf} 를 인자로 받는 이유는 그 산출이 {@code count(DISTINCT etf_instrument_id)} 라서다
+	 * — 같은 ETF 를 두 번 넣어도 1 이어야 하고, 그 계약은 값을 갈라야만 재진다.
+	 * {@code detected_at} 도 갈라 둔다({@code (etf,trade_date,detected_at)} 이 UNIQUE 다).
+	 */
 	private void insertTrigger(String id, String tradingDate, String etf) {
 		/* `etf_instrument_id` 는 `etf_profile` FK 이고, 그건 다시 `instrument` 를, `instrument` 는
 		 * `(instrument_id, entity_type)` 으로 `entity` 를 문다 — 종목 하나에 세 행이 필요하다.
@@ -952,9 +955,15 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		List<OutputRow> outputs = repository.facts(saturday).outputs();
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.trig")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isNull());
-		// 뉴스 갈래는 주말에도 도니까 기준을 그대로 준다 — marketBound 가 가르는 자리.
-		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
-				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
+		/* 뉴스 갈래 **셋 다** 기준을 그대로 받는다 — marketBound 가 가르는 자리다. 한둘만 재면
+		 * 나머지 spec 의 플래그를 개별로 뒤집는 변이가 산다(리뷰가 잡았다). 라벨·단위도 함께
+		 * 못 박는다 — 그 값들은 소비자 어휘와 1:1 이라 조용히 바뀌면 화면이 딴 이름을 그린다. */
+		assertThat(outputs).filteredOn(o -> !o.id().startsWith("o.pub") && !o.id().equals("o.trig"))
+				.extracting(OutputRow::id, OutputRow::label, OutputRow::unit, OutputRow::base)
+				.containsExactly(
+						org.assertj.core.groups.Tuple.tuple("o.doc", "뉴스 문서", "건", 0.0d),
+						org.assertj.core.groups.Tuple.tuple("o.asr", "assertion", "건", 0.0d),
+						org.assertj.core.groups.Tuple.tuple("o.evt", "source event", "건", 0.0d));
 	}
 
 	/**
