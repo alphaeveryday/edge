@@ -528,6 +528,15 @@ const MOCK_DATASET: Record<string, string> = {
   ASSEMBLE_EVENTS: 'source_event',
 };
 
+/**
+ * 지금 상태를 말해주는 시도 — 서버 `TaskStatus.currentAttempt()` 규칙이다.
+ * RUNNING 이 있으면 그중 마지막, 없으면 순서상 마지막(픽스처에는 원장 지목이 없다).
+ * 헤더(`executionStatus`·`lastFinishedAt`)는 **이 시도에서 파생**된다 — 정의가 두 곳에 있으면
+ * 헤더와 시도 목록이 서로 다른 말을 한다(`SourceReportResponse.TaskResponse.from`).
+ */
+const currentAttempt = (attempts: TaskStatus['attempts']) =>
+  attempts.filter((a) => a.executionStatus === 'RUNNING').at(-1) ?? attempts.at(-1) ?? null;
+
 /** 격자 셀 → 리포트 행. 대표 런과 파생 런이 **같은 변환**을 쓴다(둘이 갈리면 화면이 갈린다). */
 function taskFromCell(gridCell: GridCell, at: string | null): TaskStatus {
     const executionStatus = mockExecutionStatus(gridCell);
@@ -632,8 +641,17 @@ export const MOCK_REPORT: SourceReport = {
     return slot.tasks.map((gridCell) => {
       const base = taskFromCell(gridCell, mockSlotAt(slot));
       const extra = RICH_TASKS[gridCell.taskKey];
-      /* 상태 축은 셀에서만 온다 — 상세는 셀이 못 만드는 두 필드뿐이라 덮을 것이 없다 */
-      return extra ? { ...base, ...extra } : base;
+      if (!extra) return base;
+      /* 상태 축은 셀에서 오지만 **헤더는 시도에서 파생**된다 — 시도 목록만 갈아끼우고 헤더를
+       * 그대로 두면 "15:40 에 타임아웃"이라 적힌 헤더 아래 16:02 에 FAILED 로 끝난 시도
+       * 목록이 붙는다. 서버는 둘 다 `currentAttempt()` 한 곳에서 뽑는다. */
+      const merged = { ...base, ...extra };
+      const cur = currentAttempt(merged.attempts);
+      return {
+        ...merged,
+        executionStatus: cur?.executionStatus ?? null,
+        lastFinishedAt: cur?.finishedAt ?? null,
+      };
     });
   })(),
   issues: [

@@ -408,3 +408,37 @@ test('리포트는 그 런의 작업을 전부 낸다 — 격자에서 보이는
     '완전성 대조가 남아야 한다',
   );
 });
+
+/** 서버 `TaskStatus.currentAttempt()` — RUNNING 이 있으면 그중 마지막, 없으면 마지막 */
+const currentAttemptOf = (attempts: { executionStatus: string | null; finishedAt: string | null }[]) =>
+  attempts.filter((a) => a.executionStatus === 'RUNNING').at(-1) ?? attempts.at(-1) ?? null;
+
+test('리포트 헤더는 자기 시도 목록과 같은 말을 한다 — 서버는 둘 다 현재 시도에서 뽑는다', () => {
+  /* `SourceReportResponse.TaskResponse.from` 은 `executionStatus`·`lastFinishedAt` 을
+   * `currentAttempt()` 에서 파생한다. 픽스처가 시도 목록만 갈아끼우면 "15:40 에 타임아웃"
+   * 헤더 아래 16:02 FAILED 시도가 붙어, 검수가 자기모순인 상세를 정상으로 승인한다. */
+  for (const slot of MOCK_GRID.slots) {
+    for (const t of mockReportForRun(slot.runKey)!.tasks) {
+      const cur = currentAttemptOf(t.attempts);
+      assert.equal(t.executionStatus, cur?.executionStatus ?? null, `${slot.runKey} ${t.taskKey}: 실행 상태`);
+      assert.equal(t.lastFinishedAt, cur?.finishedAt ?? null, `${slot.runKey} ${t.taskKey}: 종료 시각`);
+    }
+  }
+});
+
+test('손으로 쓴 시도 이력이 격자 귀결과 같은 결말이다 — 두 벌이 갈리면 상세가 거짓이 된다', () => {
+  /* 위 단언은 파생을 고정할 뿐, **상세 표 자체가 낡는 것**은 못 잡는다(헤더가 상세를 따라
+   * 같이 틀려질 뿐이다). 시도의 결말과 셀의 귀결이 같은지는 따로 재야 한다. */
+  const slot = MOCK_GRID.slots.find((x) => x.runKey === MOCK_REPORT.run?.runKey)!;
+  const outcomeOf = new Map(slot.tasks.map((t) => [t.taskKey, t.outcome]));
+  const ENDING: Record<string, string> = { SUCCEEDED: 'FULFILLED', FAILED: 'FAILED', TIMED_OUT: 'FAILED', RUNNING: 'PENDING' };
+  for (const t of MOCK_REPORT.tasks) {
+    const cur = currentAttemptOf(t.attempts);
+    if (!cur?.executionStatus) continue;
+    assert.equal(
+      ENDING[cur.executionStatus],
+      outcomeOf.get(t.taskKey),
+      `${t.taskKey}: 시도는 ${cur.executionStatus} 인데 격자 귀결은 ${outcomeOf.get(t.taskKey)}`,
+    );
+  }
+});
