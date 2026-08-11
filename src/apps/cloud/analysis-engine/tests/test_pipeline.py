@@ -232,8 +232,8 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
     paragraph = (
         "10:00, 실제 뉴스 제목 0 소식이 있었습니다. 과거에 계약 체결 소식이 있었던 "
         "41건의 사례에서, 해당 종목들은 소식 당일 시장 대비 평균 -3.10% 움직였습니다. "
-        "오늘 이 종목은 시장 대비 -3.60%로, 과거 41건 중 약 59%는 오늘보다 높게 "
-        "움직였습니다."
+        "오늘 이 종목은 시장 대비 -3.60% 움직였습니다. 과거 41건 중 약 59%는 시장 대비 "
+        "성과가 이보다 좋았습니다."
     )
     scoped = [{
         "source_event_id": f"evt_{i:02d}", "event_type_code": "NEWS.TYPE",
