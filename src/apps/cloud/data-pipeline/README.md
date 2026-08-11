@@ -1554,7 +1554,7 @@ OPS_KR_HOLIDAYS=2026-08-15,2026-10-03 \
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET=... \
-DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2 \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2.1 \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
@@ -1584,7 +1584,7 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 # (poison·misrouted·orphan·ahead)가 있으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
-DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2 \
+DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2.1 \
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 # 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
 # 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.
