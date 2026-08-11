@@ -32,7 +32,12 @@ import logging
 import math
 
 from ..lake.storage import Storage
-from ..minute.models import Universe, content_checksum
+from ..minute.models import (
+    Universe,
+    content_checksum,
+    read_universe_bytes,
+    write_universe_bytes,
+)
 # 유니버스 파생은 수집 스텝이 정본이다 — 규칙을 두 벌로 만들면 한쪽만 고쳐진다.
 # 공시·투자자 스텝도 같은 함수를 그대로 가져다 쓴다(ingest_raw_disclosure·investor).
 from .ingest_price_raw import (
@@ -42,12 +47,6 @@ from .ingest_price_raw import (
 )
 
 logger = logging.getLogger(__name__)
-
-# universe 정본 객체 키. ⚠️ terraform `local.minute_universe_uri` 의 **기본값과 같은
-# 자리**여야 한다(`modules/data-pipeline/minute_services.tf`) — planner·worker·consumer 가
-# 그 URI 로 읽는다. `var.minute_universe_uri` 로 그 기본값을 덮으면 생산자(여기)와
-# 소비자가 다른 객체를 보게 되므로, 덮을 거면 이 상수도 같이 옮겨야 한다.
-UNIVERSE_KEY = "config/minute/universe.json"
 
 # 축소 방어 임계 — 새 유니버스의 수집 unit 수가 직전의 이 비율보다 작으면 거부한다.
 # 값의 근거는 정밀 실측이 아니라 **역할**이다: 정상 리밸런싱(ETF 하나가 몇 종 갈아끼우는
@@ -144,7 +143,20 @@ def build_from_settings(settings, storage) -> Universe:
     """`Settings` → `Universe`. 호출부의 배선을 여기 모은다 — 설정에서 목록을 꺼내는
     표현이 두 군데로 갈리면 한쪽만 고쳐지고, 그 갈림은 **기능이 통째로 무력화된 채
     초록으로 도는** 형태로 드러난다(빌드 테스트가 build() 만 부르면 못 잡는다)."""
-    return build(storage, _krx_expected_etfs(settings), sector_ids(settings))
+    expected = _krx_expected_etfs(settings)
+    # `None` 은 "0종"이 아니라 **유니버스 뿌리가 부재**라는 뜻이고(`_krx_expected_etfs`),
+    # 그 값을 그대로 넘기면 holdings 헬퍼가 "필터하지 않는다"로 읽어 레이크에 남은 폐지
+    # ETF·옛 스냅샷까지 전부 실린 유니버스가 나온다. 아래 가드들도 `expected_etfs or ()`
+    # 라 전부 빈 집합 대조가 되어 통과한다 — 즉 **전 축이 조용히 넓어진 채 초록**이다.
+    # 손으로 파일만 뽑던 시절엔 사람이 요약 줄에서 걸렀지만, 이제 그 산출이 정본 객체로
+    # 반영되므로 여기서 거부한다(Rule 12).
+    if expected is None:
+        raise SystemExit(
+            "설정에 [krx_etf] 섹션이 없다 — 유니버스 뿌리(etf_map)가 부재한 채로는 "
+            "만들지 않는다. 필터 없이 만들면 레이크에 남은 폐지 ETF·옛 스냅샷까지 "
+            "실린다. --config 가 맞는 파일을 가리키는지 확인하라"
+        )
+    return build(storage, expected, sector_ids(settings))
 
 
 def sector_ids(settings) -> tuple[str, ...]:
@@ -171,31 +183,25 @@ def summary_of(universe: Universe) -> str:
             f"= 수집 {len(universe.unit_ids)} unit (version={universe.universe_version})")
 
 
-def _existing(storage: Storage) -> bytes | None:
-    """현재 정본 객체(없으면 None).
+def run(storage: Storage, settings, universe_uri: str, run_id: str) -> int:
+    """유니버스를 다시 만들어 정본 객체에 반영한다. 변경이 없으면 쓰지 않는다.
 
-    존재 판정을 `list_keys` 로 먼저 한다 — `get_bytes` 의 예외 타입이 백엔드마다 다르고
-    (로컬 `FileNotFoundError` · S3 `ClientError`), 넓게 잡으면 자격증명 오류·권한 거부까지
-    '객체 없음'으로 접혀 **백업도 축소 판정도 없이** 덮어쓴다.
+    **대상 객체는 인자로 받는다** — 소비자(planner·worker·consumer)가 `--universe` 로
+    받는 그 URI 다. 여기서 키를 상수로 박으면 terraform `var.minute_universe_uri` 가
+    기본값에서 옮겨진 순간 생산자와 소비자가 다른 객체를 보게 되고, 그 상태는 양쪽 다
+    exit 0 이라 **아무 데도 안 드러난다**(소비자는 옛 정본을 계속 읽는다).
     """
-    if UNIVERSE_KEY not in storage.list_keys(UNIVERSE_KEY):
-        return None
-    return storage.get_bytes(UNIVERSE_KEY)
-
-
-def run(storage: Storage, settings, run_id: str) -> int:
-    """유니버스를 다시 만들어 정본 객체에 반영한다. 변경이 없으면 쓰지 않는다."""
     universe = build_from_settings(settings, storage)
     # 스크립트의 `--out` 과 **같은 바이트**여야 한다 — 손으로 만든 파일과 이 스텝의
     # 산출을 그대로 대조할 수 있어야 교체 여부를 사람이 확인한다.
     payload = (payload_of(universe) + "\n").encode("utf-8")
 
-    existing = _existing(storage)
+    existing = read_universe_bytes(universe_uri)
     if existing == payload:
         # 세대만 바꾸는 쓰기를 안 한다. universe_version 은 구성에서 유도되므로 같은
         # 구성이면 같은 값이고, 그때의 PUT 은 순수한 노이즈다.
         logger.info("universe 무변경 — %s 를 쓰지 않는다: %s",
-                    UNIVERSE_KEY, summary_of(universe))
+                    universe_uri, summary_of(universe))
         return 0
 
     if existing is not None:
@@ -203,10 +209,10 @@ def run(storage: Storage, settings, run_id: str) -> int:
         _refuse_shrink(before, universe)
         # 08-11 수동 교체가 이미 하던 절차다 — 되돌릴 것이 없으면 잘못 만든 유니버스가
         # 그날의 유일한 정본이 된다.
-        storage.put_bytes(f"{UNIVERSE_KEY}.bak-{run_id}", existing)
+        write_universe_bytes(f"{universe_uri}.bak-{run_id}", existing)
 
-    storage.put_bytes(UNIVERSE_KEY, payload)
-    logger.info("universe 갱신: %s ← %s", UNIVERSE_KEY, summary_of(universe))
+    write_universe_bytes(universe_uri, payload)
+    logger.info("universe 갱신: %s ← %s", universe_uri, summary_of(universe))
     return 0
 
 

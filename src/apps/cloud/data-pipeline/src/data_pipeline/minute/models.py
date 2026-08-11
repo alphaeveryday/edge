@@ -397,18 +397,62 @@ def load_universe(path: Path) -> Universe:
     return Universe.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
+def _s3_ref(uri: str) -> tuple[str, str] | None:
+    """`s3://bucket/key` → (bucket, key). s3 가 아니면 None(로컬 경로다)."""
+    if not uri.lower().startswith("s3://"):  # scheme 은 대소문자 무관(RFC 3986)
+        return None
+    bucket, _, key = uri[len("s3://"):].partition("/")
+    if not bucket or not key:
+        raise ValueError(f"s3 universe URI 형식 오류: {uri!r}")
+    return bucket, key
+
+
 def load_universe_uri(uri: str) -> Universe:
     """`load_universe` 의 URI 판 — `s3://bucket/key` 를 지원한다(ALPHA-711).
 
     ECS 컨테이너에는 로컬 파일 배포 축이 없다 — planner·worker·consumer 가 **같은
     S3 객체**를 가리키면 세 표면의 universe 가 한 정본에서 나온다.
     """
-    if uri.lower().startswith("s3://"):  # scheme 은 대소문자 무관(RFC 3986)
-        import boto3  # 지연 import — 로컬 경로만 쓰는 테스트에 AWS 의존을 안 끼운다
+    if (ref := _s3_ref(uri)) is None:
+        return load_universe(Path(uri))
+    import boto3  # 지연 import — 로컬 경로만 쓰는 테스트에 AWS 의존을 안 끼운다
 
-        bucket, _, key = uri[len("s3://"):].partition("/")
-        if not bucket or not key:
-            raise ValueError(f"s3 universe URI 형식 오류: {uri!r}")
-        body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
-        return Universe.model_validate(json.loads(body.decode("utf-8")))
-    return load_universe(Path(uri))
+    body = boto3.client("s3").get_object(Bucket=ref[0], Key=ref[1])["Body"].read()
+    return Universe.model_validate(json.loads(body.decode("utf-8")))
+
+
+def read_universe_bytes(uri: str) -> bytes | None:
+    """정본 객체의 **원본 바이트**(없으면 None). 재생성이 교체 여부를 판정하는 자리다.
+
+    `load_universe_uri` 와 달리 파싱하지 않는다 — 재생성 산출과 바이트로 대조해야
+    "구성이 같다"가 아니라 "쓸 것이 없다"를 판정할 수 있다.
+
+    ⚠️ **'없음'만 None 이다.** 권한 거부(403)·자격증명 오류까지 None 으로 접으면
+    재생성이 백업도 축소 판정도 없이 기존 정본을 덮어쓴다(ALPHA-953).
+    """
+    if (ref := _s3_ref(uri)) is None:
+        path = Path(uri)
+        return path.read_bytes() if path.exists() else None
+    import boto3
+    from botocore.exceptions import ClientError
+
+    try:
+        return boto3.client("s3").get_object(Bucket=ref[0], Key=ref[1])["Body"].read()
+    except ClientError as exc:  # pragma: no cover - 통합(실 S3)
+        # get_object 의 '없음'은 NoSuchKey 지만, 버킷 ListBucket 권한이 없으면 같은
+        # 상황이 403 AccessDenied 로 온다 — 그건 '없음'이 아니므로 그대로 올린다.
+        if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return None
+        raise
+
+
+def write_universe_bytes(uri: str, data: bytes) -> None:
+    """정본 객체(또는 그 백업)를 쓴다. `read_universe_bytes` 의 짝."""
+    if (ref := _s3_ref(uri)) is None:
+        path = Path(uri)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return
+    import boto3  # pragma: no cover - 통합(실 S3)
+
+    boto3.client("s3").put_object(Bucket=ref[0], Key=ref[1], Body=data)
