@@ -211,6 +211,70 @@ def test_empty_final_with_previewable_options_is_rejected_and_retries_the_previe
     assert "hypothesis.preview` 도구 호출" in prompts[2]
 
 
+def test_bare_final_submission_is_normalized_into_the_hypotheses_wrapper(monkeypatch):
+    """낱개 {"preview_handle","intent"} 최종 제출은 유효하다 — 프롬프트가 그 두 키로
+    제출하라고 지시하므로, 래핑 부재로 유효 제출이 증발하면 READY 분포가 영영 검정에
+    닿지 못한다(ALPHA-935 실측: 전건 READY_NOT_SUBMITTED)."""
+    runtime = HypothesisPreviewRuntime(
+        object(), _EventSets(), day="2026-08-07", default_event_set_handle="os_events")
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.edge_test",
+        lambda *_args, **_kwargs: SimpleNamespace(verdict="성립", n=42),
+    )
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"tool": "hypothesis.preview", "arguments": {
+            "trigger_id": "event:COMPANY.COMMERCIAL.MARKET_ENTRY",
+            "outcome_id": "outcome:daily_return",
+            "layer_id": "layer:고유",
+            "exposure_id": "feature:배수/수준",
+        }},
+        {"preview_handle": lambda: next(iter(runtime._previews)),
+         "intent": "과거 분포 대비 오늘 반응을 확인한다."},
+    ))
+
+    def ask(_system, _user):
+        reply = next(replies)
+        handle = reply.get("preview_handle")
+        if callable(handle):
+            reply["preview_handle"] = handle()
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["COMPANY.COMMERCIAL.MARKET_ENTRY"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve},
+    )
+
+    assert rejected == []
+    assert len(valid) == 1
+    assert valid[0].preview_handle.startswith("hpr_")
+
+
+def test_final_without_hypotheses_key_is_rejected_for_shape_not_missing_preview():
+    """hypotheses 키도 preview_handle 도 없는 최종 응답은 **형식** 사유로 기각된다 —
+    "READY preview 필요"로 접으면 원장만 봐서는 모델이 제출을 안 한 것으로 오독된다
+    (ALPHA-935 가 정확히 그 오독이었다)."""
+    runtime = HypothesisPreviewRuntime(
+        object(), _EventSets(), day="2026-08-07", default_event_set_handle="os_events")
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"analysis": "설명만 있고 제출이 없다"},
+        {"analysis": "설명만 있고 제출이 없다"},
+    ))
+
+    valid, rejected = propose(
+        lambda *_: next(replies), facts="f",
+        event_types=["COMPANY.COMMERCIAL.MARKET_ENTRY"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve},
+    )
+
+    assert valid == []
+    assert any("hypotheses 배열이 없습니다" in reason for reason in rejected)
+    assert not any("READY preview" in reason for reason in rejected)
+
+
 def test_empty_final_is_allowed_when_the_scoped_event_set_has_no_previewable_options():
     runtime = HypothesisPreviewRuntime(
         object(), _EventSets(event_types=()), day="2026-08-07", default_event_set_handle="os_events")
