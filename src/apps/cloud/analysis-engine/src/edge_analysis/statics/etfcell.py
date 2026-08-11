@@ -159,6 +159,10 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                 observations_out=distribution_observations)
             if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
                 raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
+            # 여기 도달 = 후보 열거가 끝까지 돌았다는 뜻이다(OBJECTSET 게이트가 중간
+            # 중단 열거를 걸러냈다). 이후 조립·렌더 실패는 수집 미완이 아니다 —
+            # 그 결말은 rendered=False 가 따로 말한다.
+            collection_complete = True
             distributions = tuple(
                 EventDistributionFact(
                     source_event_id=str(row["source_event_id"]), title=str(row["title"]),
@@ -190,7 +194,6 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                 observation["rendered"] = (
                     observation.get("source_event_id") in rendered_ids
                     or observation.get("thread_id") in rendered_threads)
-            collection_complete = True
         finally:
             payload = _observation_payload(distribution_observations)
             # 조회가 끝까지 돈 0건과 조회 미도달의 0건은 다른 사실이다 - 예외로
