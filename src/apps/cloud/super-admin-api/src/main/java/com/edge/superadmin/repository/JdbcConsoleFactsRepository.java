@@ -297,11 +297,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 계속 잡힌다. 가르려면 {@code tenant.created_at} 과 결과 시각을 상관시켜야 하는데 그게 계약인지
 	 * 정해진 바 없어 여기서 지어내지 않는다.
 	 *
-	 * <p>⚠️ <b>무효화 통지의 cursor 순서는 안 본다.</b> 정규 writer 가 구조적으로 보장한다 —
-	 * {@link JdbcAnalysisWriteRepository#invalidate} 는 그 결과의 NEW 를 <b>이미 받은</b> 테넌트에만
-	 * ({@code EXISTS} 제한) {@code MAX(cursor)+1} 로 넣어서 언제나 NEW 보다 뒤다. 단일 writer
-	 * (ADR-0005)라 그 순서를 깨는 경로가 없고, {@code inv.cursor > d.cursor} 를 더하면 <b>어떤 행도
-	 * 못 거르는 가드</b>가 하나 는다 — {@code delivery_type} 을 안 거르는 것과 같은 판단이다.
+	 * <p>⚠️ <b>무효화 통지의 cursor 순서는 안 본다.</b> {@code INVALIDATION} 을 넣는 경로가
+	 * {@link JdbcAnalysisWriteRepository#invalidate} <b>하나뿐</b>이고, 그 문장이 그 결과의 NEW 를
+	 * <b>이미 받은</b> 테넌트에만({@code EXISTS} 제한) {@code MAX(cursor)+1} 로 넣어 언제나 NEW 보다
+	 * 뒤다. 그래서 {@code inv.cursor > d.cursor} 를 더하면 <b>어떤 행도 못 거르는 가드</b>가 하나
+	 * 는다 — {@code delivery_type} 을 안 거르는 것과 같은 판단이다.
+	 *
+	 * <p>⚠️ 이 표의 writer 가 <b>하나라는 뜻은 아니다</b>(그렇게 적었다가 정정했다): {@code NEW} 는
+	 * analysis-engine 의 {@code _fanout_new} 가, {@code INVALIDATION} 은 여기 super-admin-api 가
+	 * 넣는다. 순서를 지키는 것은 writer 수가 아니라 <b>무효화 쪽 문장의 {@code EXISTS}</b> 다.
 	 *
 	 * <p>⚠️ <b>날짜 창을 안 탄다</b> — 인터페이스 {@link BoundaryRow} 주석의 이유. 이 수들의 기준
 	 * 시각은 {@code meta.today} 가 아니라 <b>{@code meta.db}</b>(DB 시계)다.

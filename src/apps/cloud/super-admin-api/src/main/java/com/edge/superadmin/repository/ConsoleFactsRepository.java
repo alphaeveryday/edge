@@ -42,8 +42,9 @@ public interface ConsoleFactsRepository {
 	 * "지금 어긋난 것이 몇 건인가"라 <b>누적</b>이다 — 어제 어긋난 것이 오늘 저절로 낫지 않는다.
 	 * 날짜로 자르면 조회한 날에 안 생긴 위반이 화면에서 사라진다.
 	 *
-	 * <p>{@code deliveryRows} 는 분모다 — 앞의 둘이 0 일 때 그것이 <b>정합</b>인지 <b>발번이 아직
-	 * 하나도 없음</b>인지 가른다.
+	 * <p>{@code deliveryRows} 는 <b>"발번이 돌고는 있나"</b>를 답한다 — 앞의 둘이 0 일 때 그것이
+	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 가른다. ⚠️ 비율의 분모로는 못 쓴다:
+	 * 앞의 둘은 단위가 다르고 여기엔 {@code INVALIDATION} 도 들어간다.
 	 */
 	record BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,
 			long deliveryRows) {

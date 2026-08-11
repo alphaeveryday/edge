@@ -234,8 +234,18 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	/** 테넌트 하나. {@code tenant_id} 는 IDENTITY 라 이름으로 되찾는다. */
 	private long insertTenant(String name) {
-		jdbc.update("INSERT INTO tenant (tenant_name, environment, status) VALUES (?,'DEV','ACTIVE')",
-				name);
+		return insertTenant(name, "DEV", "ACTIVE");
+	}
+
+	/**
+	 * ⚠️ {@code environment}·{@code status} 를 <b>따로 받는다</b>. 전건을 DEV·ACTIVE 로 박으면
+	 * 테넌트 가드를 {@code status='ACTIVE'} 나 DEV 한정으로 좁히는 변이가 통과한다 —
+	 * {@code _fanout_new} 는 <b>필터 없이 tenant 전건</b>에 발번하므로, 그런 환경에서 미발번
+	 * 게시본이 0 으로 숨는다(리뷰가 잡았다).
+	 */
+	private long insertTenant(String name, String environment, String status) {
+		jdbc.update("INSERT INTO tenant (tenant_name, environment, status) VALUES (?,?,?)",
+				name, environment, status);
 		return jdbc.queryForObject("SELECT tenant_id FROM tenant WHERE tenant_name = ?", Long.class,
 				name);
 	}
@@ -1215,8 +1225,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isZero();
 
-		// 테넌트가 생기는 순간 같은 행이 위반으로 선다 — 가드가 그 경계에 있다.
-		insertTenant("증권사A");
+		/* 테넌트가 생기는 순간 같은 행이 위반으로 선다 — 가드가 그 경계에 있다.
+		 * ⚠️ **DEV·ACTIVE 가 아닌 테넌트**로 만든다: `_fanout_new` 는 필터 없이 전건에 발번하므로
+		 * 가드도 전건이어야 하고, 여기서 DEV·ACTIVE 를 쓰면 가드를 좁히는 변이가 통과한다. */
+		insertTenant("증권사A", "PROD", "ONBOARDING");
 		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(1L);
 	}
 
@@ -1267,9 +1279,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 🔴 <b>{@code deliveryRows} 가 분모다.</b> 앞의 둘이 0 일 때 그것이 <b>정합</b>인지 <b>발번이
-	 * 아직 하나도 없음</b>인지 이 값이 가른다 — 없으면 "아무 문제 없음"과 "아직 아무것도 안 나감"이
-	 * 화면에서 같은 칸이 된다.
+	 * 🔴 <b>{@code deliveryRows} 는 "발번이 돌고는 있나"를 답한다.</b> 앞의 둘이 0 일 때 그것이
+	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 이 값이 가른다 — 없으면 "아무 문제 없음"과
+	 * "아직 아무것도 안 나감"이 화면에서 같은 칸이 된다.
 	 */
 	@Test
 	void 발번이_하나도_없는_것과_정합인_것을_가른다() {

@@ -115,8 +115,12 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 것이 몇 건인가</b>라 수 셋으로 끝난다. 그리고 이 축만 <b>날짜 창을 안 탄다</b> — 누적이라
 	 * 어제 어긋난 것이 오늘 저절로 낫지 않는다.
 	 *
-	 * <p>{@code deliveryRows} 가 분모다: 앞의 둘이 0 일 때 그것이 <b>정합</b>인지 <b>발번이 아직
-	 * 하나도 없음</b>인지 이 값이 가른다. 셋 다 실측이라 {@code long} 이고 null 이 없다.
+	 * <p>{@code deliveryRows} 는 <b>"발번이 돌고는 있나"</b>를 답한다: 앞의 둘이 0 일 때 그것이
+	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 이 값이 가른다. 셋 다 실측이라
+	 * {@code long} 이고 null 이 없다.
+	 *
+	 * <p>⚠️ <b>비율의 분모로는 못 쓴다</b> — 앞의 둘은 단위가 서로 다르고(결과 건수 vs 테넌트별
+	 * 발번 건수) {@code deliveryRows} 에는 {@code INVALIDATION} 도 들어간다.
 	 */
 	public record BoundaryResponse(long publishedWithoutDelivery, long deliveryNowNonpublished,
 			long deliveryRows) {
