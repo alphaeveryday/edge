@@ -72,7 +72,7 @@ jobs:
             --cluster "${cluster}" --services "${svc}" \
             --query 'services[0].[status,desiredCount]' --output text 2>"${describe_err}")"; then
             if grep -q "AccessDenied" "${describe_err}" && [ "${can_skip}" = "true" ]; then
-              echo "::warning::${svc} 조회가 AccessDenied — terraform-apply 선착 전이면 정상(첫 스케일업이 최신 이미지를 당긴다)"
+              echo "::warning::${svc} 조회가 AccessDenied — terraform-apply 선착 전이면 정상(서비스 생성 후 첫 배포가 이미지를 확정한다)"
               exit 0
             fi
             cat "${describe_err}" >&2
@@ -88,18 +88,19 @@ jobs:
             echo "::error::${svc} 가 ACTIVE 가 아니다(status=${status})"
             exit 1
           fi
-          if [ "${desired}" = "0" ]; then
-            # 이 건너뛰기의 근거가 ALPHA-912 로 바뀌었다. 예전엔 **세션이 아침에
-            # force-new-deployment 로 올려** 그때 최신 이미지가 고정됐는데, 이제 desired 를
-            # 올리는 것은 오토스케일링이고 그건 재배포를 안 한다. 그래도 안전한 이유는
-            # 다른 데 있다 — Fargate 는 이미지를 캐시하지 않아 **태스크마다 태그를 새로
-            # 당긴다**("container images are not cached on the instance", ECS 문서
-            # fargate-pull-behavior). 위에서 민 `analysis-engine-latest` 를 첫 스케일업이
-            # 그대로 집는다. desired>0 인 동안은 아래 force-new-deployment 가 필요하다
-            # (도는 태스크는 안 바뀐다).
-            echo "::notice::${svc} 는 desired 0 — 첫 스케일업이 latest 태그를 새로 당긴다(Fargate 무캐시)"
-            exit 0
-          fi
+          # ⚠️ **desired 0 이어도 건너뛰지 않는다**(ALPHA-912). 예전엔 건너뛰고 세션의
+          # 아침 force-new-deployment 에 이미지 갱신을 맡겼는데, 그 스케일업이 사라졌다 —
+          # 이제 desired 를 올리는 것은 오토스케일링이고 그건 재배포를 안 한다.
+          # 스케일아웃이 태그를 다시 해소하지 **않는다**는 것이 핵심이다: ECS 는 배포 단위로
+          # 다이제스트를 고정하고("After the container image digests have been established,
+          # Amazon ECS uses the digests to start any other desired tasks, and for any future
+          # service updates" — ECS 문서 deployment-type-ecs), 갱신 수단은 새 배포뿐이다
+          # ("To establish updated image digests, you can force a new deployment").
+          # 여기서 안 걸면 mutable 태그(analysis-engine-latest)가 새로 밀려도 스케일업은
+          # 옛 다이제스트로 떠서 **고친 버그가 그대로 돈다**(갱신 계기가 영영 없다).
+          # desired 0 에서의 force 는 태스크가 없어 다이제스트를 안 잡고, 첫 스케일업이
+          # 그때의 태그를 확정한다 — 그게 우리가 원하는 것이다.
+          # 실측: desired 0 에서도 롤아웃이 COMPLETED 로 끝난다(약 1분 50초, 아래 상한 안).
           aws ecs update-service --cluster "${cluster}" --service "${svc}" \
             --force-new-deployment >/dev/null
           echo "${svc} 재배포 시작"

@@ -322,11 +322,12 @@ class TestAnalysisConsumerOwnList:
 
     def test_세션은_소비자를_올리지_않는다(self, monkeypatch, wiring):
         """세션이 1 을 쓰면 스케일러가 큐를 보고 정한 값을 덮는다 — 개장 시각에 큐가 비어
-        있으면 0 대가 맞고, 첫 트리거에서 알람+기동으로 3분 안에 뜬다.
+        있으면 0 대가 맞다(첫 트리거에 붙는 지연은 `start_session_cli` 주석 참조).
 
-        ⚠️ 자기 목록 호출이 사라진 것만 보면 안 된다 — 공용 목록으로 **되돌아가** 실리는
-        경로가 열려도 증상이 같다(스케일러 값이 덮인다). 그래서 이름이 실린 호출이 하나도
-        없음을 본다."""
+        ⚠️ 두 단언이 **서로 다른 것**을 지킨다. 앞의 `all(...)` 은 자기 목록 스케일이
+        되살아나는 것만 잡는다 — 픽스처가 `_scale` 을 통째로 스텁해 공용 호출은 늘
+        `services: None` 으로 기록되므로, 공용 경로로 되돌아가는 회귀는 **여기서 안 잡힌다**.
+        그걸 잡는 것은 아래 `_services()` 단언이다(빼기가 죽으면 그 줄이 죽는다)."""
         monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
         monkeypatch.setattr(session_ops, "plan_session_cli", lambda *a, **k: 0)
 

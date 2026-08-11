@@ -446,13 +446,15 @@ resource "aws_ecs_task_definition" "minute_session" {
         if !contains(local.session_bound_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
-      # analysis-consumer(ALPHA-719)의 **자기 목록**(ALPHA-910). 세션 결속이라는 성질은
-      # 그대로다(트리거는 장중에만 발생하고, ReturnsNotReady 는 분봉 입력의 120초
-      # 재시도(ALPHA-710)라 세션 안에 풀린다) — 바뀌는 건 소유 축 하나뿐이고 시각도
-      # 그대로다(07:45→1 · 20:05→0). 공용 목록에 얹힌 채로는 오토스케일링을 붙여도 무효다:
-      # 스케일러가 큐 깊이로 올린 desired 를 세션 stop 이 매일 밤 0 으로 덮어쓴다.
-      # 이 값이 있으면 코드가 공용에서 그 이름을 빼고 여기로 스케일한다. 없으면(구 task-def)
-      # 공용 목록이 그대로 덮으므로 **어느 배포 순서에서도 소비자는 뜬다**.
+      # analysis-consumer(ALPHA-719)를 공용 스케일에서 **빼는 근거**(ALPHA-910 이 세운 축,
+      # ALPHA-912 로 컷오버 완료). 세션은 이 서비스를 더 이상 올리지도 내리지도 않는다 —
+      # desired 는 큐 잔여 일감을 보는 오토스케일링이 소유한다(`analysis_autoscaling.tf`).
+      # 공용 목록에 얹힌 채로는 오토스케일링을 붙여도 무효다: 스케일러가 올린 desired 를
+      # 세션 stop 이 매일 밤 0 으로 덮어쓴다.
+      # 🔴 **이 값을 지우지 마라 — 비면 세션이 죽는다**(`_analysis_services` 가 fail-loud).
+      # 공용 목록(위)에서 소비자를 빼고 나면 이 env 는 "뺄 게 없는 값"처럼 보이는데,
+      # 그때도 지우면 start·stop 이 둘 다 SystemExit 으로 죽어 1분 파이프라인이 통째로
+      # 안 뜬다. 잉여로 보이지만 **생존 토큰**이다. 계약의 자리는 그 도크스트링이다.
       # ⚠️ 설명 큐는 stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트
       # 깊이에 잡혀 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일)
       # 안에서 다음 세션이 집는다.

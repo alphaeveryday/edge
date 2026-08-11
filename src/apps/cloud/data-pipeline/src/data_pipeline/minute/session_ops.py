@@ -344,9 +344,15 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # 한 번에 가격 레인이 통째로 안 뜬다. universe 를 읽는 레인이 생긴 지금 실재하는 경로다.
     # ⚠️ 설명 소비자는 여기서 **안 올린다**(ALPHA-912). desired 를 큐 잔여 일감이 정하고
     # (`analysis_autoscaling.tf`), 세션이 하루 한 번 1 을 쓰면 그 값을 덮어 스케일러가 다시
-    # 되돌리는 왕복만 생긴다. 개장 시각에 큐가 비어 있으면 0 대가 맞다 — 첫 트리거에서
-    # 알람 60초 + 기동으로 3분 안에 뜬다(실측). `_services` 가 공용 목록에서 이 이름을
-    # 빼는 것이 세션이 이 서비스에 대해 하는 일의 전부다.
+    # 되돌리는 왕복만 생긴다. 개장 시각에 큐가 비어 있으면 0 대가 맞다.
+    # ⚠️ 대신 **그날 첫 설명이 늦어진다** — 여기서 올리던 1 이 소비자 폴링으로 SQS 큐를
+    # 깨워 두고 있었다. 큐는 6시간 무접근이면 자고(CloudWatch 계약), 깨어날 때 지표에
+    # **최대 15분** 지연이 붙는다("A delay of up to 15 minutes occurs in CloudWatch metrics
+    # when a queue is activated from an inactive state"). 08-10 실측은 5분이었다(공백
+    # 03:00~07:52 KST, 소비자 기동 07:47 의 5분 뒤 재개). 그 뒤에 알람 60초 + 기동이 붙는다.
+    # 건당 588초짜리 레인이라 감내한다 — 개장 지연이 문제가 되면 세션을 되살리지 말고
+    # `aws_appautoscaling_scheduled_action` 으로 09:00 에 min 1 을 얹는 쪽이 싸다.
+    # `_services` 가 공용 목록에서 이 이름을 빼는 것이 세션이 이 서비스에 대해 하는 일의 전부다.
     _scale(desired=1, force=True)
 
     lane_exits = {}
