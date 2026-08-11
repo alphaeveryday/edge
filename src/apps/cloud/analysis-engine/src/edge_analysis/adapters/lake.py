@@ -261,6 +261,17 @@ class LakeReader:
         대상 ETF 행 존재 기준으로 고른다: trade_date 이하 최신 as_of, 없으면 가장 이른
         미래 스냅샷 — 파이프라인 트리거 writer(ALPHA-418)와 같은 규칙이라 발화한 트리거와
         그 설명이 같은 holdings 로 분해된다.
+
+        **비중 NULL 은 0 으로 접지 않고 그 행을 뺀다.** 접으면 두 방향으로 틀린다 —
+        ① 행이 살아남아 `holdings` 가 비지 않으니 아래 폴백 루프가 그 파티션에서 멈춘다
+        (정상 파티션이 뒤에 있어도 도달 못 한다) ② 비중 0 인 행이 coverage 에 '커버됨'
+        으로 세어져 분모가 거짓이 된다.
+
+        **과반이 NULL 이면 파티션째 다음 후보로 넘긴다.** 장전 수집분은 비중 없이
+        구성종목·수량만 오는 것이 정상이라(유니버스용) 그 파티션이 '최신'으로 뽑히면
+        장중 설명이 매일 아침 죽는다(2026-08-11, 882/916 행 = 96% NULL). 판정을
+        **비중 합으로는 못 한다** — 그 사고는 ETF 당 `원화현금 100.0` 한 행만 실값이라
+        합이 정확히 100 이었다. 자릿수 여유는 충분하다: 정상 3/905(0.3%) vs 사고 96%.
         """
         base = f"{LAKE_HOLDINGS_PREFIX}/market={market}/"
         dates = self._partition_values(base, "as_of_date")
@@ -268,19 +279,23 @@ class LakeReader:
         eligible = [x for x in dates if x <= target]
         future = [x for x in dates if x > target]
         for chosen in [*reversed(eligible), *future]:
-            rows = self._read_parquet_prefix(
-                f"{base}as_of_date={chosen}/",
-                ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
-            )
+            rows = [
+                r
+                for r in self._read_parquet_prefix(
+                    f"{base}as_of_date={chosen}/",
+                    ["etf_id", "constituent_ticker", "constituent_name", "weight_pct"],
+                )
+                if str(r.get("etf_id")) == etf_id and r.get("constituent_ticker")
+            ]
             holdings = [
                 Holding(
                     ticker=str(r["constituent_ticker"]),
                     name=r.get("constituent_name"),
-                    weight=float(r["weight_pct"] or 0.0) / 100.0,
+                    weight=weight / 100.0,
                 )
                 for r in rows
-                if str(r.get("etf_id")) == etf_id and r.get("constituent_ticker")
+                if (weight := _price(r.get("weight_pct"))) is not None
             ]
-            if holdings:
+            if holdings and len(holdings) * 2 >= len(rows):
                 return holdings, chosen
         return [], None
