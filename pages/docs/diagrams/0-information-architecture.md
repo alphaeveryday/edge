@@ -9,6 +9,10 @@
   <iframe src="../interactive/0-ia.v2.html" title="EDGE 정보 구조 다이어그램 v2 — 인터랙티브" loading="lazy"></iframe>
 </div>
 
+!!! note "설계 뷰 — 원본 v0.2 기준"
+    이 다이어그램은 설계 시점(v0.2)의 정보 구조다. 현행 화면·메뉴의 권위는
+    [콘솔 IA SSOT](../reference/console-ia/super-admin-console.md)에 있으며, 충돌 시 SSOT 가 우선한다.
+
 근거 문서(설계 뷰): [information-architecture.md](../reference/architecture/information-architecture.md)
 
 ---
