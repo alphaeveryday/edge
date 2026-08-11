@@ -18,11 +18,16 @@ theme:
     - search.highlight
     - content.code.copy
   palette:
+    # custom = Material 기본 색 CSS 를 끄고 extra.css 의 브랜드 변수(#00309F)를 쓴다
     - scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: 다크 모드로 전환
     - scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: 라이트 모드로 전환
