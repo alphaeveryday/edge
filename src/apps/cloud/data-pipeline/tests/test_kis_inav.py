@@ -531,7 +531,7 @@ def test_지연_로그가_나르는_수치를_전부_묶는다(monkeypatch, capl
 
 def test_ETF_마다_관측한다(monkeypatch, caplog):
     """픽스처가 1종이면 훅을 ETF 루프 밖으로 옮겨 첫 종목만 관측하는 회귀가 통과한다.
-    실 유니버스는 33종이다."""
+    실 유니버스는 etf_map 전량(38종)이다."""
     _at(monkeypatch, datetime(2026, 7, 27, 11, 0, tzinfo=KST))  # 장중
     src = _source(
         {"069500": _ok([_row("105900")]), "091160": _ok([_row("104900")])},
