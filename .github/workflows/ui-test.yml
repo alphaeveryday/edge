@@ -1,0 +1,70 @@
+# PR 검증 — UI 워크스페이스의 타입체크 + 단위 테스트 게이트 (ALPHA-738).
+#
+# 이 게이트가 없던 동안 UI 는 PR 에서 **아무것도 안 돌았다**. 배포 워크플로(deploy-ui.yml)가
+# `pnpm build`(= `tsc --noEmit && vite build`) 를 돌지만 그건 dev 머지 **후** 라, 타입 오류는
+# PR 이 아니라 배포를 깨뜨렸다. 단위 테스트는 아예 아무 데서도 안 돌았다.
+#
+# jvm-test.yml 과 달리 변경 감지가 없다 — typecheck 대상이 세 패키지(super-admin-ui·
+# tenant-console-ui·ui-kit)뿐이고 수십 초라, 전체를 도는 편이 감지 로직보다 싸다.
+#
+# ⚠️ Node 24 인 이유: `node --test 'src/**/*.test.ts'` 는 네이티브 TS 실행(23.6+)에 기댄다.
+# 배포 워크플로의 Node 20 으로는 이 테스트가 못 돈다 — 두 워크플로의 버전이 다른 것은 의도다
+# (배포는 번들러가 TS 를 지우고, 여기는 node 가 직접 읽는다).
+#
+# 이 레포(private, free 플랜)는 branch protection 을 못 써 이 체크가 required 가 아니므로
+# paths 필터가 안전하다 — required 로 지정하려면 걷어낼 것(jvm-test.yml 과 같은 이유).
+name: ui-test
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "src/apps/cloud/super-admin-ui/**"
+      - "src/apps/onprem/tenant-console-ui/**"
+      - "src/libs/ui-kit/**"
+      # 워크스페이스 루트 manifest — 지금은 name·private 뿐이지만 여기에 스크립트나 공통
+      # 의존성이 붙으면 설치·빌드가 통째로 달라진다. 빼면 그 PR 이 게이트 없이 지나간다.
+      - "src/package.json"
+      - "src/pnpm-lock.yaml"
+      - "src/pnpm-workspace.yaml"
+      - ".github/workflows/ui-test.yml"
+
+# 최소 권한 — 체크아웃(읽기)만 필요하다(어떤 secret 도 쓰지 않는 검증 전용 워크플로).
+permissions:
+  contents: read
+
+# 같은 PR 의 이전 실행은 취소한다 — 러너 2대의 큐를 오래된 실행이 점유하지 않게.
+concurrency:
+  group: ui-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-test:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 을 먼저 설치해야 setup-node 의 pnpm 캐시가 동작한다(deploy-ui.yml 과 같은 순서).
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: src/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # 앱마다 스크립트 유무가 다르다 — `-r` 은 스크립트를 가진 패키지에서만 돈다.
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Unit tests
+        run: pnpm -r test
