@@ -59,3 +59,4 @@
 | [0049](0049-screening-llm-triage-layer.md) | 스크리닝 LLM 트리아지 층 — 게시 후 감사·검수 확정 회수 | 제안됨 |
 | [0050](0050-console-facts-endpoint.md) | 콘솔 규칙 엔진의 사실 공급 — 엔드포인트는 사실만, 평가는 클라이언트 | 승인됨 |
 | [0051](0051-byoc-deployment-topology.md) | BYOC 배포 토폴로지 — 증권사 클라우드 사상, 단계형 구성과 승격 조건 | 제안됨 |
+| [0052](0052-sync-two-module-standard-reaffirmed.md) | Sync 온프렘 토폴로지 재검토 — 클라우드 사상에서도 2모듈 표준 유지, 근거 재정초 | 제안됨 |
