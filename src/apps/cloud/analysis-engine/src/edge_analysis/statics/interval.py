@@ -68,6 +68,9 @@ class EventDistributionFact:
     mean: float
     today: float
     percentile: float
+    # 산문이 유형을 한국어 라벨로 명시하는 데 쓴다(ALPHA-943). 원천은 preview 의
+    # 앵커 판정(hypothesis_preview)이고 etfcell 의 stat_tests 레코드를 거쳐 온다.
+    event_type_code: str
 
 
 @dataclass(frozen=True)
@@ -121,17 +124,17 @@ def _pct(value: float) -> str:
     return f"{value * 100:+.2f}%"
 
 
-def _mean_phrase(value: float) -> str:
+def _mean_clause(value: float) -> str:
     """평균 절(어미 포함): 반올림이 ±0.00% 로 접히는 언더플로는 "0% 부근"으로 말한다.
 
-    "평균 +0.00%였습니다"는 정보가 없는 문장이다(2026-08-11 첫 RENDERED 실측,
-    mean=7.9e-06). 어미까지 함께 만드는 이유는 한국어 어미가 갈려서다("%였습니다"
-    vs "부근이었습니다"). 일반 수익률 표기(`_pct`)는 전역 관례라 불변.
+    "평균 +0.00% 움직였습니다"는 정보가 없는 문장이다(2026-08-11 첫 RENDERED 실측,
+    mean=7.9e-06). 어미까지 함께 만드는 이유는 한국어 조사·어미가 갈려서다.
+    일반 수익률 표기(`_pct`)는 전역 관례라 불변.
     """
     rendered = _pct(value)
     if rendered in ("+0.00%", "-0.00%"):
-        return "0% 부근이었습니다"
-    return f"{rendered}였습니다"
+        return "평균 0% 부근에서 움직였습니다"
+    return f"평균 {rendered} 움직였습니다"
 
 
 def _top_rank_pct(percentile: float, n: int) -> int:
@@ -147,15 +150,39 @@ def _top_rank_pct(percentile: float, n: int) -> int:
     return min(99, max(floor, round((1 - percentile) * 100)))
 
 
+def _event_type_prose_label(event_type_code: str) -> str:
+    """유형 코드 → 산문 명사구. 폴백은 조용히 접지 않는다(Rule 12).
+
+    라벨 자산은 온톨로지 edge 로컬 오버레이(ALPHA-942)다. 정확 라벨이 없으면
+    (상류 스냅샷 교체 직후의 새 타입) family 폴백으로 문장은 성립시키되 로그로
+    드러낸다 - 완전성 게이트가 있어도 배포 시차 창은 존재한다.
+    """
+    from edge_ontology import event_type_label_ko
+
+    label = event_type_label_ko(event_type_code)
+    if not label.exact:
+        from ..observability import log
+        log("event_type_label.fallback", event_type_code=event_type_code,
+            label=label.text)
+    return label.text
+
+
 def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple[str, ...]:
-    # percentile 은 ECDF(과거 표본 중 오늘 **이하** 비율)다 - 0.69 는 "상위 31%"지
-    # "하위 69%"가 아니다. 방향을 뒤집어 말하면 강한 반응이 약한 반응으로 읽힌다
-    # (ALPHA-937: today>mean 인데 "하위 69%"로 렌더된 실측).
+    # 어휘 계약(ALPHA-943, 사용자 확정 문안):
+    # - 유형은 코드도 "같은 유형"도 아닌 한국어 라벨로 명시한다.
+    # - 표본은 "이 종목의 과거"가 아니라 같은 유형 사건이 났던 **모든 종목**의
+    #   (종목×거래일) 횡단면이다 - "해당 종목들은"이 그 사실의 서술이고, 단위는
+    #   "일"이 아니라 "건"이다(같은 날 여러 기사는 1건, 다른 종목 같은 날은 각각).
+    # - percentile 은 부호 포함 ECDF 라 마지막 절은 "크게"(절대폭)가 아니라
+    #   "높게"(부호 포함)다 - 하락일에 "크게"로 쓰면 다시 오서술이 된다.
+    # - "시장초과수익률" 같은 통계 어휘 금지 - 산문 금지어 게이트가 잠근다.
     return tuple(
         f"{item.available_at[11:16]}, {item.title} 소식이 있었습니다. "
-        f"같은 유형의 과거 {item.n}개 사건일에서 이 종목의 시장초과수익률은 평균 "
-        f"{_mean_phrase(item.mean)}. 오늘 시장초과수익률은 {_pct(item.today)}로, "
-        f"과거 분포의 상위 {_top_rank_pct(item.percentile, item.n)}% 수준입니다."
+        f"과거에 {_event_type_prose_label(item.event_type_code)} 소식이 있었던 "
+        f"{item.n}건의 사례에서, 해당 종목들은 소식 당일 시장 대비 "
+        f"{_mean_clause(item.mean)}. 오늘 이 종목은 시장 대비 {_pct(item.today)}로, "
+        f"과거 {item.n}건 중 약 {_top_rank_pct(item.percentile, item.n)}%는 "
+        f"오늘보다 높게 움직였습니다."
         for item in items
     )
 

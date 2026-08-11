@@ -230,9 +230,10 @@ def test_triggered_day_persists_the_explanation():
 def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(monkeypatch):
     """The 14 scoped events must not split from the legacy persistence collection."""
     paragraph = (
-        "10:00, 실제 뉴스 제목 0 소식이 있었습니다. 같은 유형의 과거 41개 사건일에서 "
-        "이 종목의 시장초과수익률은 평균 -3.10%였습니다. 오늘 시장초과수익률은 -3.60%로, "
-        "과거 분포의 상위 58% 수준입니다."
+        "10:00, 실제 뉴스 제목 0 소식이 있었습니다. 과거에 계약 체결 소식이 있었던 "
+        "41건의 사례에서, 해당 종목들은 소식 당일 시장 대비 평균 -3.10% 움직였습니다. "
+        "오늘 이 종목은 시장 대비 -3.60%로, 과거 41건 중 약 58%는 오늘보다 높게 "
+        "움직였습니다."
     )
     scoped = [{
         "source_event_id": f"evt_{i:02d}", "event_type_code": "NEWS.TYPE",

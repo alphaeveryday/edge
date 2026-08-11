@@ -170,6 +170,7 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                     evidence_id=str(row["evidence_id"]),
                     n=int(row["n"]), mean=float(row["mean"]), today=float(row["today"]),
                     percentile=float(row["percentile"]),
+                    event_type_code=str(row["event_type_code"]),
                 )
                 for row in stat_tests if row.get("stage") == "event_distribution"
             )
