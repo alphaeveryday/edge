@@ -286,11 +286,30 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * — 무효화는 그 NEW 를 받은 테넌트에만 나가므로({@code invalidate} 의 {@code EXISTS} 제한),
 	 * 받고도 통지 못 받은 테넌트가 있으면 그건 진짜 위반이다.
 	 *
-	 * <p>⚠️ <b>날짜 창을 안 탄다</b> — 인터페이스 {@link BoundaryRow} 주석의 이유.
+	 * <p>🔴 <b>테넌트가 하나도 없으면 미발번은 위반이 아니다.</b> {@code _fanout_new}
+	 * ({@code analysis-engine} 의 {@code eventstore.py})는 {@code tenant} <b>전건</b>에 발번하므로
+	 * 테넌트가 0명이면 0행을 넣고, 호출부는 그걸 {@code fanout_tenants: 0} 인 <b>정상 성공</b>으로
+	 * 기록한다. 그 상태를 안 막으면 새 환경 부트스트랩에서 게시본 전건이 위반으로 선다 —
+	 * 정상 무효화를 위반으로 세면 안 되는 것과 같은 부류다(리뷰가 잡았다).
+	 * ⚠️ dev 실측(2026-08-11)으로는 테넌트 1명이라 이 값이 <b>0</b> 이었다 — 잠복이지 발화가 아니다.
+	 *
+	 * <p>⏭ <b>남는 것</b>: 게시 <b>뒤</b>에 테넌트가 생기면 그 과거 게시본은 발번이 백필되지 않아
+	 * 계속 잡힌다. 가르려면 {@code tenant.created_at} 과 결과 시각을 상관시켜야 하는데 그게 계약인지
+	 * 정해진 바 없어 여기서 지어내지 않는다.
+	 *
+	 * <p>⚠️ <b>무효화 통지의 cursor 순서는 안 본다.</b> 정규 writer 가 구조적으로 보장한다 —
+	 * {@link JdbcAnalysisWriteRepository#invalidate} 는 그 결과의 NEW 를 <b>이미 받은</b> 테넌트에만
+	 * ({@code EXISTS} 제한) {@code MAX(cursor)+1} 로 넣어서 언제나 NEW 보다 뒤다. 단일 writer
+	 * (ADR-0005)라 그 순서를 깨는 경로가 없고, {@code inv.cursor > d.cursor} 를 더하면 <b>어떤 행도
+	 * 못 거르는 가드</b>가 하나 는다 — {@code delivery_type} 을 안 거르는 것과 같은 판단이다.
+	 *
+	 * <p>⚠️ <b>날짜 창을 안 탄다</b> — 인터페이스 {@link BoundaryRow} 주석의 이유. 이 수들의 기준
+	 * 시각은 {@code meta.today} 가 아니라 <b>{@code meta.db}</b>(DB 시계)다.
 	 */
 	private static final String BOUNDARY_SQL = """
 			SELECT (SELECT count(*) FROM explanation_result r
 			         WHERE r.publication_status = 'PUBLISHED'
+			           AND EXISTS (SELECT 1 FROM tenant)
 			           AND NOT EXISTS (SELECT 1 FROM tenant_delivery d
 			                            WHERE d.explanation_result_id = r.explanation_result_id))
 			         AS published_without_delivery,

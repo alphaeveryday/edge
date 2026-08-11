@@ -1153,22 +1153,46 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 경계_축은_게시와_발번이_어긋난_건수를_낸다() {
 		long t1 = insertTenant("증권사A");
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");     // 발번 있음 → 안 셈
-		insertPublished("p-nodev", DAY.toString(), "etf-b", "PUBLISHED");  // 🔴 발번 없음 → 1건
+		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");    // 발번 있음 → 안 셈
+		insertPublished("p-ok2", DAY.toString(), "etf-d", "PUBLISHED");   // 〃
 		deliverNew(t1, "p-ok");
+		deliverNew(t1, "p-ok2");
+		// 🔴 게시했는데 발번 없음 → 2건
+		insertPublished("p-nodev1", DAY.toString(), "etf-b", "PUBLISHED");
+		insertPublished("p-nodev2", DAY.toString(), "etf-e", "PUBLISHED");
+		/* 🔴 **게시본이 아닌 무발번은 안 센다.** 이 행이 없으면 `publication_status='PUBLISHED'`
+		 * 술어를 지워도 값이 같아 그 계약이 안 재진다(리뷰가 잡았다) — 초안·철회는 애초에 발번
+		 * 대상이 아니라 무발번이 정상이다. */
+		insertPublished("p-draft", DAY.toString(), "etf-f", "DRAFT");
 
-		/* 🔴 발번했는데 지금 비게시 — **무효화 통지 없이** 철회된 것만 위반이다.
-		 * p-gone: NEW 만 있고 INVALIDATION 이 없다 → 1건.
-		 * p-inv : NEW + INVALIDATION → 정상 무효화라 **안 센다**(아래 전용 테스트가 그 축을 잰다). */
+		/* 🔴 발번했는데 지금 비게시 — **무효화 통지 없이** 철회된 것만 위반이다 → 1건.
+		 * 통지가 간 경우는 아래 전용 테스트가 잰다. */
 		insertPublished("p-gone", DAY.toString(), "etf-c", "PUBLISHED");
 		deliverNew(t1, "p-gone");
 		withdraw("p-gone");
 
+		// ⚠️ 셋을 **서로 다른 값**으로 둔다 — 같으면 와이어/서브쿼리를 맞바꾸는 변이가 통과한다.
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
-			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);   // p-nodev
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(2L);   // p-nodev1·p-nodev2
 			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);    // p-gone
-			assertThat(b.deliveryRows()).isEqualTo(2L);               // NEW 둘
+			assertThat(b.deliveryRows()).isEqualTo(3L);               // NEW 셋
 		});
+	}
+
+	/**
+	 * 🔴 <b>테넌트가 하나도 없으면 미발번은 위반이 아니다.</b> {@code _fanout_new} 는 {@code tenant}
+	 * 전건에 발번하므로 0명이면 0행이고, 호출부는 그걸 <b>정상 성공</b>으로 기록한다
+	 * ({@code fanout_tenants: 0}). 안 막으면 새 환경 부트스트랩에서 게시본 전건이 위반으로 선다.
+	 */
+	@Test
+	void 테넌트가_없으면_미발번은_위반이_아니다() {
+		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");   // 테넌트 0명
+
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isZero();
+
+		// 테넌트가 생기는 순간 같은 행이 위반으로 선다 — 가드가 그 경계에 있다.
+		insertTenant("증권사A");
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(1L);
 	}
 
 	/**
