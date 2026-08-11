@@ -6,12 +6,14 @@
  * 범위에서 격자를 데이터셋 축으로 읽으려면 작업→데이터셋 매핑이 화면 쪽에 있어야 한다.
  *
  * **어디까지가 사실인가**
- *   · dataset id 어휘 — facts-snapshot 의 `datasets[].id` 및 `tasks[].dataset` 실측값 그대로다.
- *   · taskKeys — 전부 facts-snapshot `tasks[].task_key` 에 실재하는 작업이다(테스트가 고정).
- *     ⚠️ **매핑까지 같지는 않다** — 27 중 15 는 `tasks[].dataset` 과 다른 데이터셋에 매인다.
- *     원장은 산출 테이블별로 dataset 을 쓰고(`LOAD_ETF_HOLDINGS` → `etf_holding_snapshot`)
- *     이 카탈로그는 그것을 수집 데이터셋 한 행으로 접기 때문이다(아래 「행을 나누는 기준」).
- *     접기는 의도이고, **누락**은 아니다 — 원장 작업 전량이 어느 한 행에 매인다(테스트가 고정).
+ *   · taskKeys — 정본은 **`data_pipeline/ops/catalog.py`** 다(facts-snapshot 이 아니다 —
+ *     그건 2026-08-03 로 얼린 회귀 픽스처라 그날 이후의 레인 이동·신설을 모른다. 실제로
+ *     그걸 정본으로 삼았다가 공시 4작업이 사라지고 장중 수급 3작업이 생긴 것을 놓쳤다).
+ *     테스트가 양방향으로 고정한다 — 유령도 누락도 없다.
+ *     ⚠️ **매핑까지 같지는 않다** — 원장은 산출 테이블별로 dataset 을 쓰고
+ *     (`LOAD_ETF_HOLDINGS` → `etf_holding_snapshot`) 이 카탈로그는 그것을 수집 데이터셋
+ *     한 행으로 접는다(아래 「행을 나누는 기준」). 접기는 의도이고 **누락은 아니다**.
+ *   · sessionDataset — 정본은 **`data_pipeline/minute/states.py`** 의 dataset 어휘다.
  *   · group·label·cadence — **원장에 없는 UI 카탈로그다**(CATALOG_SOURCE 참고). 화면에서
  *     그 사실을 표시한다.
  *
@@ -106,17 +108,28 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         inOpsGrid: true,
       },
       {
-        id: 'disclosures',
+        /* 기업 기본정보(corp_code 보강) — 공시가 1분 레인으로 옮겨간 뒤 ops 격자에 남은
+         * 유일한 공시 계열 작업이다. 공시 행에 얹어 두면 그 행이 실시간으로 옮겨갈 때
+         * 같이 사라져 격자에서 실행되는 작업이 어느 행에도 안 매인다. */
+        id: 'company_profile',
         domain: '시장',
-        label: '공시',
-        taskKeys: [
-          'DISCLOSURE_COLLECTION_DART',
-          'NORMALIZE_DISCLOSURE',
-          'NORMALIZE_DISCLOSURE_SEGMENT',
-          'ENRICH_CORP_CODE',
-          'LOAD_DISCLOSURE',
-        ],
+        label: '기업 기본정보',
+        taskKeys: ['ENRICH_CORP_CODE'],
         cadence: daily('일 1회 · 15:40 슬롯'),
+        inOpsGrid: true,
+      },
+      {
+        /* 장중 수급(ALPHA-767·768·769) — **레인 이동이 아니라 신설**이다. 일 1회가 아니라
+         * 평일 5슬롯이라 기대 실행 수를 일배치와 같이 세면 안 된다(원장의 DUE 셀이 정본). */
+        id: 'investor_flow_intraday',
+        domain: '시장',
+        label: '수급 (장중)',
+        taskKeys: [
+          'INVESTOR_INTRADAY_COLLECTION_KIS',
+          'NORMALIZE_INVESTOR_INTRADAY',
+          'LOAD_INVESTOR_INTRADAY',
+        ],
+        cadence: daily('평일 5슬롯 · 장중'),
         inOpsGrid: true,
       },
       {
@@ -199,6 +212,55 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         inOpsGrid: false,
         elsewhere: { href: '/minute', label: '실시간 세션' },
         sessionDataset: 'news_minute',
+      },
+      {
+        /* 장중 추정 NAV(ALPHA-851) — 일별 종가 NAV(`etf_nav`)와 **다른 축**이다(저건 하루
+         * 한 점, 이건 장중 시각 grain). 한 행으로 접으면 grain 이 행마다 달라진다. */
+        id: 'etf_inav_minute',
+        domain: '시장',
+        label: '1분 iNAV',
+        taskKeys: [],
+        cadence: {
+          kind: 'intradayWindows',
+          label: '1분 창 · 세션의 기대 창 수',
+          ledger: 'minute_ingestion_window',
+        },
+        inOpsGrid: false,
+        elsewhere: { href: '/minute', label: '실시간 세션' },
+        sessionDataset: 'etf_inav_minute',
+      },
+      {
+        /* 공시(ALPHA-875) — ops 격자에서 이 레인으로 **옮겨왔다**. window 는 산출물 단위가
+         * 아니라 "그 분에 한 번 폴링했다"는 원장 단위다(증분 커서가 없어 매 tick 이 그날
+         * 날짜창 전체를 다시 읽는다) — 뉴스와 같은 성질이라 poll 로 읽는다. */
+        id: 'disclosure_minute',
+        domain: '시장',
+        label: '공시 (실시간)',
+        taskKeys: [],
+        cadence: {
+          kind: 'intradayWindows',
+          label: '1분 poll · 세션의 예정 poll 수',
+          ledger: 'minute_ingestion_window',
+        },
+        inOpsGrid: false,
+        elsewhere: { href: '/minute', label: '실시간 세션' },
+        sessionDataset: 'disclosure_minute',
+      },
+      {
+        /* KRX 업종지수 45종 1분봉(ALPHA-887) — 기대 집합이 universe 가 아니라 config 다
+         * (지수는 ETF 명부에도 구성종목에도 없다). 완전성 분모를 universe 로 읽으면 안 된다. */
+        id: 'sector_index_minute',
+        domain: '시장',
+        label: '1분 업종지수',
+        taskKeys: [],
+        cadence: {
+          kind: 'intradayWindows',
+          label: '1분 창 · 세션의 기대 창 수',
+          ledger: 'minute_ingestion_window',
+        },
+        inOpsGrid: false,
+        elsewhere: { href: '/minute', label: '실시간 세션' },
+        sessionDataset: 'sector_index_minute',
       },
     ],
   },

@@ -35,15 +35,24 @@ export interface SymbolGroup {
 /**
  * 결과가 실제로 남았는가 — 상태와 본문 둘 다 본다(실패에 본문이 있으면 그건 데이터 결함이다).
  *
- * ⚠️ **본문은 두 자리에 있다.** `result` 는 `analysis_result.summary`, `resultBlocks` 는
- * `stage_results -> final_explanation -> blocks` 로 **서버에서 독립된 두 컬럼**이다
- * (`JdbcAnalysisRepository` LIST_SQL). 상세 화면은 블록이 있으면 그걸 고객 산문으로 그리고
- * `result` 는 폴백일 뿐이라, `result` 만 보면 **블록만 있는 완료 분석이 "결과 없음"** 이 되어
- * 목록에서 사라지고 `attemptPending` 이 거짓으로 켜진다.
+ * **본문은 두 자리에 있다.** `result` 는 `explanation_result.summary`, `resultBlocks` 는
+ * `stage_results -> final_explanation -> blocks` 로 서버에서 **같은 행의 다른 컬럼**이다
+ * (`JdbcAnalysisRepository` LIST_SQL — `res` 는 LEFT JOIN). 상세 화면은 블록이 있으면 그걸
+ * 고객 산문으로 그리고 `result` 는 폴백이라, 배열 길이만 세면 `text` 가 빈 블록도 본문으로
+ * 선다 — 서버 파서가 text 를 검증하지 않으므로 **비어 있지 않은 text 하나**를 요구한다.
+ *
+ * 🔴 **가릴 수 없는 자리가 하나 남는다.** 완료 런에 결과가 없으면 서버가 `result` 를 빈 채로
+ * 주지 않고 안내 문장으로 바꿔 보낸다(`AnalysisResponse.result` — "설명 본문이 원장에
+ * 없습니다 …"). 그래서 **실 응답의 `result` 는 절대 비지 않고**, 이 술어는 그 런을 유효
+ * 결과로 센다. 서버가 "없음"을 문장으로 평탄화한 결과라 화면 쪽에서 되돌릴 수 없다 —
+ * 한글 문구를 매칭하면 서버 카피에 결합되고, 같은 행에서 오는 `confidence`·
+ * `publicationStatus` 는 둘 다 nullable 이라 판별자가 못 된다(결과가 있는데도 null 일 수
+ * 있어, 그걸로 가르면 **진짜 설명을 숨긴다**). 축을 서버가 내려 줘야 닫힌다.
  */
 export function hasResult(a: Analysis): boolean {
   if (a.status !== 'COMPLETED') return false;
-  return a.result.trim().length > 0 || (a.resultBlocks?.length ?? 0) > 0;
+  if (a.resultBlocks?.some((b) => b.text.trim().length > 0)) return true;
+  return a.result.trim().length > 0;
 }
 
 export const symbolKey = (a: Pick<Analysis, 'market' | 'code'>) => `${a.market}:${a.code}`;

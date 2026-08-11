@@ -695,18 +695,28 @@ export const MOCK_ANALYSES: Analysis[] = [
     publicationStatus: 'PUBLISHED',
     /* 고객에게 실제로 나간 산문 블록(ALPHA-878) — 있으면 상세가 result 대신 이걸 그린다.
      * 블록이 없는 픽스처만 두면 폴백 경로만 검수된다. */
+    /* 코드·제목·참조 형식은 엔진 실물 그대로다(`statics/interval.py`
+     * `final_explanation_payload`) — 코드는 'H'·'1'·'2'·'3'·'4'|'N', 참조는
+     * `bars_5m:<ticker>`·`source_event:<id>`. 여기서 형식을 지어내면 미리보기 검수가
+     * 운영 응답에 없는 모양을 정상 UI 로 승인한다(상세 화면은 참조를 그대로 출력한다). */
     resultBlocks: [
       {
-        code: 'WHAT',
-        title: '무슨 일이 있었나',
-        text: '반도체 업종이 장중 내내 강세를 보이며 구성종목 대부분이 함께 올랐습니다.',
-        evidenceRefs: ['news:2026080312400001'],
+        code: 'H',
+        title: '헤더',
+        text: 'KODEX 반도체는 8월 3일 +3.2% 상승했습니다.',
+        evidenceRefs: ['bars_5m:091160'],
       },
       {
-        code: 'WHY',
-        title: '왜 그랬나',
-        text: '수출 지표 개선과 HBM 수요 전망이 같은 방향으로 겹쳤습니다.',
-        evidenceRefs: ['news:2026080309310007', 'disclosure:20260803000135'],
+        code: '1',
+        title: '기여 분해',
+        text: '상승의 대부분은 상위 3종목에서 나왔고, 구성종목 28종 중 24종이 함께 올랐습니다.',
+        evidenceRefs: ['bars_5m:091160'],
+      },
+      {
+        code: '4',
+        title: '이벤트 병치',
+        text: '같은 구간에 반도체 수출 지표 개선 보도와 공급계약 공시가 있었습니다.',
+        evidenceRefs: ['source_event:8f1c0a42', 'source_event:8f1c0a77'],
       },
     ],
     evidence: [

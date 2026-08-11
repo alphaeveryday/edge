@@ -73,10 +73,12 @@ test('진행 중인 분석은 유효 결과로 세지 않는다', () => {
   assert.equal(hasResult(a({ id: 'c', basisTimeAbs: 'T' })), true);
 });
 
-test('본문이 블록에만 있어도 유효 결과다 — result 와 resultBlocks 는 서버의 다른 컬럼이다', () => {
-  /* `result`=analysis_result.summary · `resultBlocks`=stage_results->final_explanation->blocks.
-   * 둘은 독립이라 summary 가 빈 완료 런이 나올 수 있고, 상세 화면은 그때 블록을 산문으로 그린다.
-   * `result` 만 보면 고객에게 실제로 나간 설명이 목록에서 사라진다. */
+test('본문이 블록에만 있어도 유효 결과다 — 빈 text 블록은 본문이 아니다', () => {
+  /* `result`=explanation_result.summary · `resultBlocks`=stage_results->final_explanation
+   * ->blocks — 같은 행의 다른 컬럼이다. 상세 화면은 블록이 있으면 그걸 고객 산문으로
+   * 그리므로, 블록만 보고 판정하는 경로가 실제로 있어야 한다.
+   * ⚠️ 실 API 의 `result` 는 절대 비지 않는다(서버가 결측을 안내 문장으로 바꾼다) — 이
+   * 케이스는 그 평탄화가 걷히거나 다른 소비자가 붙었을 때의 형상을 고정한다. */
   const blocksOnly = a({
     id: 'b',
     basisTimeAbs: '2026-08-03 15:30',
@@ -89,6 +91,19 @@ test('본문이 블록에만 있어도 유효 결과다 — result 와 resultBlo
 
   /* 빈 블록 배열은 본문이 아니다 — 있음/없음을 배열 존재로 접으면 안 된다 */
   assert.equal(hasResult(a({ id: 'z', basisTimeAbs: 'T', result: '', resultBlocks: [] })), false);
+  /* 길이만 세면 text 가 빈 블록도 본문이 된다 — 서버 파서가 text 를 검증하지 않는다 */
+  assert.equal(
+    hasResult(
+      a({
+        id: 'w',
+        basisTimeAbs: 'T',
+        result: '',
+        resultBlocks: [{ code: 'WHAT', title: '무슨 일이', text: '   ', evidenceRefs: [] }],
+      }),
+    ),
+    false,
+    '빈 text 블록은 읽을 설명이 아니다',
+  );
 
   /* 그룹 층까지 실제로 닿는지 — 최신이 블록만 가진 완료면 그게 latestValid 고 대기가 아니다 */
   const g = groupBySymbol([

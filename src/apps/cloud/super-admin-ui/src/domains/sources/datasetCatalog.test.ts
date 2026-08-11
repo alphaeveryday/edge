@@ -18,10 +18,33 @@ import {
   kindOf,
 } from './datasetCatalog.ts';
 
-/** 원장 실측 — 작업 어휘의 정본. 카탈로그는 이 집합 위에서만 접을 수 있다. */
-const LEDGER_TASKS: { task_key: string; dataset?: string }[] = JSON.parse(
-  readFileSync(new URL('../../rules/facts-snapshot.json', import.meta.url), 'utf8'),
-).tasks;
+/*
+ * 정본은 **파이프라인 소스 자체**다 — facts-snapshot 이 아니다.
+ *
+ * 스냅샷은 2026-08-03 로 얼린 회귀 픽스처라 그날 이후의 레인 이동·신설을 모른다. 실제로
+ * 그걸 정본으로 삼았더니 공시 4작업이 ops 에서 사라진 것도, 장중 수급 3작업이 생긴 것도
+ * 통과했다 — "낡은 것끼리 맞음"이 초록으로 보였다. 두 언어를 잇는 자동 가드가 없어 이
+ * 파일이 그 다리다(그래서 정규식으로 읽는다 — 생성물을 하나 더 만들지 않는다).
+ *
+ * 이 대조가 정당하게 깨지는 때: 파이프라인이 작업·1분 dataset 을 더하거나 뺐을 때. 그때
+ * 화면 카탈로그도 같이 움직여야 하고, 안 움직이면 `dailyRollup` 이 그 작업 셀을 조용히
+ * 버리거나(누락) 영원히 안 오는 행을 그린다(유령).
+ */
+const pipelineSrc = (rel: string) =>
+  readFileSync(
+    new URL(`../../../../data-pipeline/src/data_pipeline/${rel}`, import.meta.url),
+    'utf8',
+  );
+
+/** ops 격자 원장이 계획하는 작업 전량 */
+const OPS_TASK_KEYS: string[] = [...pipelineSrc('ops/catalog.py').matchAll(/task_key="([^"]+)"/g)].map(
+  (m) => m[1],
+);
+
+/** 1분 원장이 아는 dataset 어휘 */
+const MINUTE_DATASETS: string[] = [
+  ...pipelineSrc('minute/states.py').matchAll(/^DATASET_[A-Z_]+ = "([a-z_]+)"$/gm),
+].map((m) => m[1]);
 
 test('유형은 cadence 에서 유도한다 — 두 벌로 두지 않는다', () => {
   for (const d of ALL_DATASETS) {
@@ -39,11 +62,14 @@ test('유형과 도메인은 직교한다 — 어느 한 축도 트리의 부모
 
 test('실시간 데이터셋은 격자 원장 밖이고 세션 상세로 갈 키를 갖는다', () => {
   const realtime = ALL_DATASETS.filter((d) => kindOf(d) === '실시간');
+  /* 어휘를 여기 하드코딩하면 원장이 늘어도 테스트가 초록이라, 새 레인이 실행 이력에서
+   * 통째로 사라진 채 "고정됨"으로 보인다 — 실제로 세 개(iNAV·공시·업종지수)를 그렇게 놓쳤다. */
   assert.deepEqual(
     realtime.map((d) => d.id).sort(),
-    ['news_minute', 'price_minute'],
-    '1분 원장의 두 dataset(states.py 어휘)이 다 있어야 한다',
+    [...MINUTE_DATASETS].sort(),
+    '1분 원장 어휘(states.py) 전량이 행으로 서야 한다',
   );
+  assert.ok(MINUTE_DATASETS.length >= 2, '어휘 추출이 빈 배열이면 위 단언은 아무것도 안 잰다');
   for (const d of realtime) {
     assert.equal(d.inOpsGrid, false, `${d.id} 는 ops_expected_task 소관이 아니다`);
     /* 지목 키가 없으면 드릴다운이 데이터셋을 못 고르고 첫 탭으로 떨어진다 */
@@ -54,9 +80,9 @@ test('실시간 데이터셋은 격자 원장 밖이고 세션 상세로 갈 키
 
 test('실시간 데이터셋이 작업→데이터셋 역인덱스를 오염시키지 않는다', () => {
   /* 1분 수집은 ops 작업(task_key)이 아니다 — 여기 끼면 배치 격자 셀이 실시간 행으로 샌다 */
+  const minute = new Set(MINUTE_DATASETS);
   for (const id of Object.values(DATASET_OF_TASK)) {
-    assert.notEqual(id, 'price_minute');
-    assert.notEqual(id, 'news_minute');
+    assert.ok(!minute.has(id), `${id} 는 1분 원장 소관인데 ops 작업이 매여 있다`);
   }
 });
 
@@ -72,22 +98,21 @@ test('배치 데이터셋은 반드시 격자에 있고 작업이 매여 있다'
  * `개수 > 0` 만 재면 오타(`PRICE_COLLECTION_KI`)도, 원장에 새로 생긴 작업이 어느 행에도
  * 안 매인 것도 통과한다. 그런데 `rollup()` 은 `DATASET_OF_TASK[key]` 가 없으면 그 셀을
  * **조용히 버린다** — 위 두 결함은 화면에서 "그 작업이 없던 일"로 보인다.
- * 그래서 어휘 자체를 원장 실측(facts-snapshot)과 양방향으로 맞물린다.
+ * 그래서 어휘 자체를 파이프라인 소스(ops/catalog.py)와 양방향으로 맞물린다.
  */
 
-test('카탈로그의 작업 키는 전부 원장에 실재한다 — 오타는 행을 영원히 비운다', () => {
-  const ledger = new Set(LEDGER_TASKS.map((t) => t.task_key));
-  const unknown = Object.keys(DATASET_OF_TASK).filter((k) => !ledger.has(k));
-  assert.deepEqual(unknown, [], '원장에 없는 작업 키가 카탈로그에 있다');
+test('카탈로그의 작업 키는 전부 ops 원장에 실재한다 — 유령은 영원히 빈 행을 그린다', () => {
+  assert.ok(OPS_TASK_KEYS.length > 10, '정본 추출이 실패하면 아래 단언이 빈 집합끼리 비교된다');
+  const ops = new Set(OPS_TASK_KEYS);
+  const ghost = Object.keys(DATASET_OF_TASK).filter((k) => !ops.has(k));
+  assert.deepEqual(ghost, [], 'ops/catalog.py 에 없는 작업 키가 카탈로그에 있다');
 });
 
-test('원장의 모든 작업이 정확히 한 데이터셋에 귀속된다 — 안 매인 작업은 격자에서 사라진다', () => {
+test('ops 원장의 모든 작업이 정확히 한 데이터셋에 귀속된다 — 안 매인 작업은 격자에서 사라진다', () => {
   /* 접기 방향은 카탈로그의 몫이지만(산출 테이블마다 행을 쪼개지 않는다), **누락**은 아니다.
    * 매인 데가 없으면 rollup 이 그 셀을 버려 실패조차 안 보인다. */
-  const orphan = LEDGER_TASKS.filter((t) => t.dataset && !DATASET_OF_TASK[t.task_key]).map(
-    (t) => t.task_key,
-  );
-  assert.deepEqual(orphan, [], '어느 데이터셋에도 안 매인 원장 작업이 있다');
+  const orphan = OPS_TASK_KEYS.filter((k) => !DATASET_OF_TASK[k]);
+  assert.deepEqual(orphan, [], '어느 데이터셋에도 안 매인 ops 작업이 있다');
 
   /* 같은 작업을 두 데이터셋이 주장하면 Object.fromEntries 가 뒤엣것으로 조용히 덮는다 —
    * 그러면 앞 데이터셋의 행에서 그 작업이 통째로 빠진다. */
