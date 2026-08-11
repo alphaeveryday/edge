@@ -6,6 +6,7 @@ import type { IconName } from 'ui-kit';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 import { useTenants } from '../domains/tenants/hooks';
+import { EdgeLogo } from '../pages/_shared/EdgeLogo';
 
 interface NavEntry {
   path: string;
@@ -35,18 +36,6 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
     ],
   },
 ];
-
-/** EDGE 마크 (시안 로고 — 상승 바 3개) */
-function EdgeMark() {
-  return (
-    <svg width="26" height="26" viewBox="0 0 32 32" fill="none" role="img" aria-label="EDGE mark" style={{ flex: 'none' }}>
-      <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="#18181b" stroke="rgba(255,255,255,0.18)" />
-      <rect x="8" y="17" width="3.4" height="7" rx="1" fill="#a1a1aa" />
-      <rect x="14.3" y="12" width="3.4" height="12" rx="1" fill="#d4d4d8" />
-      <rect x="20.6" y="8" width="3.4" height="16" rx="1" fill="#2e5aac" />
-    </svg>
-  );
-}
 
 export function AdminLayout() {
   const location = useLocation();
@@ -129,13 +118,10 @@ export function AdminLayout() {
           className="flex items-center gap-2"
           style={{ padding: '16px 16px 14px', borderBottom: '1px solid rgba(255,255,255,.08)' }}
         >
-          <EdgeMark />
-          <div className="flex flex-col gap-px">
-            <span style={{ color: '#fff', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>EDGE</span>
-            <span style={{ color: 'var(--gray-500)', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              Super Admin
-            </span>
-          </div>
+          <EdgeLogo height={16} />
+          <span style={{ color: 'var(--gray-500)', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            Super Admin
+          </span>
         </div>
 
         {NAV_SECTIONS.map(({ section, items }) => (
