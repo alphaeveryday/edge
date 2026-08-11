@@ -13,7 +13,7 @@
 **비목표**:
 - 유스케이스·유저 저니 등 존재하지 않는 제품 기획 산출물의 신규 창작 — 하지 않는다.
   레퍼런스 사이트의 해당 섹션은 제품 포트폴리오라서 있는 것이고, edge 의 소재는
-  아키텍처 깊이(하이브리드 온프렘·ADR 49건·발전 이력)다.
+  아키텍처 깊이(하이브리드 온프렘·ADR 50건·발전 이력)다.
 - 기존 파이프라인 교체 — deploy-pages.yml·sync_reference_docs.py·strict 빌드·
   edge-pages 퍼블리시 구조는 그대로 둔다. 별도 SPA 신설은 콘텐츠 이중화라 배제.
 
@@ -25,12 +25,15 @@ MkDocs Material 유지 + 홈만 템플릿 오버라이드(`pages/overrides/home.
 ## 사이트 IA (내비게이션)
 
 ```
-개요(/) · 다이어그램(/diagrams/0) · 설계·ADR(/adr) · 계약(/contracts)
-· 데이터플로우(/dataflow) · 발전 과정(/evolution) · 회고(/retrospective)
-· Reference(기존 유지)
+Home(/) · Diagrams(/diagrams/…) · 설계·ADR(/reference/adr/) · 계약(/reference/contracts/…)
+· Evolution(/evolution/) · Retrospective(/retrospective/) · Reference(기존 유지)
 ```
 
-- 계약(sync-protocol 등 4건)·발전 과정·회고를 Reference 하위에서 1급 메뉴로 승격 —
+(계약·ADR 은 nav 만 1급 승격하고 파일 경로는 sync 산출물인 `reference/` 밑을 유지한다 —
+sync 스크립트의 `_COPIED_DIRS` 재타깃을 피하기 위함. 데이터플로우 섹션은 산출물 준비
+전이라 홈 인덱스의 "작성 예정" 행으로만 둔다.)
+
+- 계약(sync-protocol 등 5건)·발전 과정·회고를 Reference 하위에서 1급 메뉴로 승격 —
   온프렘 하이브리드 서사와 반복 개선 이력이 edge 쇼케이스의 차별점이므로.
 - 나머지 Reference(도메인·콘솔 IA 등)는 현행 유지.
 
@@ -42,8 +45,8 @@ MkDocs Material 유지 + 홈만 템플릿 오버라이드(`pages/overrides/home.
 ```
 0~3  다이어그램 (확정 4종)
 4·5  다이어그램 (후보 2종 — 채택 시 번호 편입, 미채택 시 이후 번호를 당겨 공번 없이 확정)
-6    설계 결정 — ADR 현황판 49건
-7    계약 4건 (sync-protocol · event-bundle-schema · sync-auth · publication-api)
+6    설계 결정 — ADR 현황판 50건
+7    계약 5건 (sync-protocol · event-bundle-schema · sync-auth · publication-api · console-facts-api)
 8    데이터플로우
 9    발전 과정 (evolution)
 10   회고 7건 (sprint 1~7)
@@ -72,8 +75,9 @@ MkDocs Material 유지 + 홈만 템플릿 오버라이드(`pages/overrides/home.
 
 ## 작업 단위 (3 PR)
 
-1. **PR-1** IA 재편: nav 개편 + 커스텀 홈 + ADR 현황판 인덱스(번호·제목·상태·요지 표),
-   다이어그램 자리는 placeholder.
+1. **PR-1** IA 재편: nav 개편 + 커스텀 홈, 다이어그램 자리는 placeholder.
+   ADR 현황판은 기존 `docs/adr/README.md` 표(번호·제목·상태, 0050까지 최신)를 그대로 쓴다 —
+   구현 시 실사 결과 이미 완비돼 있어 요지 열 추가는 중복이라 하지 않는다.
 2. **PR-2** 다이어그램 0·1 (IA·서비스).
 3. **PR-3** 다이어그램 2·3 (시스템·클라우드) + 후보 2종 채택 판단.
 
@@ -81,4 +85,4 @@ MkDocs Material 유지 + 홈만 템플릿 오버라이드(`pages/overrides/home.
 
 - `mkdocs build -f pages/mkdocs.yml --strict` 통과(기존 CI 게이트 그대로).
 - 홈 오버라이드는 Material 업그레이드에 취약하므로 mkdocs-material 버전 고정(현행 9.7.6)을 유지.
-- 퍼블리시 후 edge-pages 실사이트에서 내비 8항목·인덱스 링크 전수 클릭 확인.
+- 퍼블리시 후 edge-pages 실사이트에서 최상위 내비 7항목·인덱스 링크 전수 클릭 확인.

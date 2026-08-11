@@ -5,9 +5,8 @@
 -#}
 {% extends "main.html" %}
 
-{# 허브 홈은 전폭 레이아웃 — 좌우 사이드바를 제거한다 #}
-{% block site_nav %}{% endblock %}
-
+{# 사이드바 숨김은 index.md front matter 의 hide: [navigation, toc] 가 담당한다 —
+   site_nav 블록을 비우면 모바일 내비 드로어까지 사라진다 #}
 {% block content %}
 <div class="ep-home">
   <section class="ep-hero">

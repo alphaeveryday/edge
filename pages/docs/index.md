@@ -1,6 +1,9 @@
 ---
 template: home.html
 title: Home
+hide:
+  - navigation
+  - toc
 ---
 
 !!! note "원본은 `docs/`, 이 사이트는 표시용"

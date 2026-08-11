@@ -4,8 +4,8 @@ ECS 클러스터 분리·RDS·CloudFront 등 실 배포 토폴로지.
 
 !!! info "다이어그램 준비 중"
     작도 후 이 자리에 SVG 가 들어간다.
-    그때까지는 정본 문서를 참조:
-    [cloud-architecture.md](https://github.com/alphaeveryday/edge/blob/main/docs/architecture/cloud-architecture.md)
+    그때까지는 근거 문서(설계 뷰)를 참조:
+    [cloud-architecture.md](../reference/architecture/cloud-architecture.md)
 
 ---
 

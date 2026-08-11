@@ -69,6 +69,11 @@ nav:
       - Implementation: reference/implementation.md
       - Roadmap: reference/roadmap.md
       - Writing Rules: reference/writing-rules.md
+      - Architecture:
+          - Information Architecture: reference/architecture/information-architecture.md
+          - Application Architecture: reference/architecture/application-architecture.md
+          - System Architecture: reference/architecture/system-architecture.md
+          - Cloud Architecture: reference/architecture/cloud-architecture.md
       - Domain:
           - State Machine: reference/domain/state-machine.md
           - Data Residency: reference/domain/data-residency.md
