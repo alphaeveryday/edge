@@ -611,6 +611,17 @@ variable "minute_session_stop_expression" {
   default     = "cron(5 20 ? * MON-FRI *)"
 }
 
+variable "minute_session_sector_rollup_expression" {
+  description = <<-EOT
+    업종지수 5분 파생 확정 cron(Asia/Seoul). **업종지수 세션 마지막 window(15:30) 후**여야
+    한다 — 가격(20:00)이 아니다. 두 레인은 격자가 다르고 이 스케줄은 업종지수만 부른다.
+    16:00 인 근거(소급 불가 → 벤더 페이지가 13:50~15:30 에 얼어붙음, recovery 는 몇 분이면
+    소진)는 `minute_session_schedules` 의 `rollup_sector` 주석에 있다.
+  EOT
+  type        = string
+  default     = "cron(0 16 ? * MON-FRI *)"
+}
+
 variable "minute_session_dataset" {
   description = "스케일 오케스트레이션이 계획·드레인할 세션 dataset. 상주 서비스의 세션 축이 가격 레인이라 price_minute 고정(뉴스 소비자도 이 세션 수명에 결속)"
   type        = string
