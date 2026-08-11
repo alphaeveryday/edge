@@ -134,11 +134,13 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	/**
 	 * 그 날 그 ETF 의 배치 트리거 한 건 — {@code o.trig} 가 세는 것.
 	 *
-	 * <p>{@code o.pub}({@code explanation_result}) 이 아니라 이 테이블을 쓴다: 둘 다
-	 * {@code trade_date} 축 · {@code marketBound} · {@code count(DISTINCT etf_instrument_id)} 로
-	 * <b>같은 계약</b>인데, {@code explanation_result} 는 {@code explanation_run → explanation_route}
-	 * 까지 더 요구해 이 테스트와 무관한 행이 더 늘어난다. ⚠️ 여기도 FK 가 없지는 않다 —
-	 * {@code ALTER TABLE} 로 {@code etf_profile} 을 물고 있어 아래처럼 종목 사슬 셋을 먼저 세운다.
+	 * <p>표본·창 계약을 재는 대부분의 테스트가 이 테이블을 쓴다 — {@code trade_date} 축이고
+	 * {@code marketBound} 이면서 사슬이 짧기 때문이다. ⚠️ <b>{@code o.pub} 을 이걸로 대신 재지는
+	 * 못한다</b>: 그쪽에는 여기 없는 {@code publication_status} 술어가 있어
+	 * {@link #insertPublished} 가 따로 있다(리뷰가 잡은 자리 — "같은 계약"이라 적었던 것이 틀렸다).
+	 *
+	 * <p>⚠️ 여기도 FK 가 없지는 않다 — {@code ALTER TABLE} 로 {@code etf_profile} 을 물고 있어
+	 * 아래처럼 종목 사슬 셋을 먼저 세운다.
 	 *
 	 * <p>{@code etf} 를 인자로 받는 이유는 그 산출이 {@code count(DISTINCT etf_instrument_id)} 라서다
 	 * — 같은 ETF 를 두 번 넣어도 1 이어야 하고, 그 계약은 값을 갈라야만 재진다.
@@ -151,11 +153,14 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 시각을 픽스처가 직접 지정해야 존을 바꾸는 변이가 잡힌다.
 	 */
 	private void insertDocument(String id, String type, String availableAt) {
+		/* ⚠️ {@code published_at} 을 **다른 날**로 둔다 — 두 시각이 같으면 산출이 `available_at`
+		 * 대신 `published_at` 을 읽는 변이가 통과한다(리뷰가 잡았다). 실제로도 그 둘은 다르다:
+		 * 발행은 벤더 시각, 수집 가능해진 시각은 우리 쪽이다. */
 		jdbc.update("""
 				INSERT INTO document (document_id, document_type, source_code, source_document_id,
 				       title, published_at, available_at)
 				VALUES (?,?,'BIGKINDS',?,?,?::timestamptz,?::timestamptz)
-				""", id, type, "src-" + id, "제목 " + id, availableAt, availableAt);
+				""", id, type, "src-" + id, "제목 " + id, "2026-07-01T09:00:00+09:00", availableAt);
 	}
 
 	/**
@@ -166,8 +171,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		jdbc.update("""
 				INSERT INTO document_assertion (assertion_id, document_id, event_type_code,
 				       predicate_code, modality_code, available_at)
-				VALUES (?,?,'ET','P','REPORTED',?::timestamptz)
-				""", id, documentId, availableAt);
+				VALUES (?,?,?,'P','REPORTED',?::timestamptz)
+				""", id, documentId,
+				// 같은 문서에 주장 둘을 달려면 유형이 달라야 한다(스키마의 UNIQUE).
+				"ET-" + id, availableAt);
 	}
 
 	/** 소스 이벤트 하나 — {@code o.evt} 가 세는 것. */
@@ -967,8 +974,13 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 세 산출 모두 경계 시각에 둔다 — 각 SQL 의 KST 캐스트가 **따로** 재져야 한다.
 		insertDocument("d1", "NEWS", "2026-08-03T00:30:00+09:00");        // KST 08-03 · UTC 08-02
 		insertDocument("d2", "DISCLOSURE", "2026-08-03T10:00:00+09:00");  // o.doc 이 안 세는 것
+		/* ⚠️ 세 산출의 **건수를 서로 다르게** 둔다(문서 1 · 주장 2 · 이벤트 3) — 같으면 두 SQL 의
+		 * 테이블을 맞바꾸는 변이가 통과한다(리뷰가 잡았다). */
 		insertAssertion("a1", "d1", "2026-08-03T00:30:00+09:00");
+		insertAssertion("a2", "d1", "2026-08-03T00:30:00+09:00");
 		insertSourceEvent("e1", "NEWS", "2026-08-03T00:30:00+09:00");
+		insertSourceEvent("e2", "NEWS", "2026-08-03T00:30:00+09:00");
+		insertSourceEvent("e3", "NEWS", "2026-08-03T00:30:00+09:00");
 
 		List<OutputRow> outputs = repository.facts(DAY).outputs();
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
@@ -979,16 +991,17 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 					assertThat(o.today()).isEqualTo(1L);
 				});
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.asr")).singleElement()
-				.satisfies(o -> assertThat(o.today()).isEqualTo(1L));
+				.satisfies(o -> assertThat(o.today()).isEqualTo(2L));
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.evt")).singleElement()
-				.satisfies(o -> assertThat(o.today()).isEqualTo(1L));
+				.satisfies(o -> assertThat(o.today()).isEqualTo(3L));
 	}
 
 	/**
 	 * 🔴 <b>{@code o.asr}·{@code o.evt} 는 공시도 함께 센다</b> — {@code o.doc} 과 다르다.
 	 * 그 둘의 SQL 에는 계열 술어가 없고, 원장에는 공시 주장·이벤트가 실제로 들어온다
-	 * ({@code steps/assemble_disclosure_events.py}). dev 실측(2026-08-11)으로는 뉴스 대비 <b>0.3%</b>
-	 * (주장 63 / 86,197 · 이벤트 63 / 38,543)라 판정을 뒤집지 않지만, <b>공시 레인이 커지면 달라진다</b>.
+	 * ({@code steps/assemble_disclosure_events.py}). dev 실측(2026-08-11)으로는 <b>주장 0.07%</b>
+	 * (63/86,197) · <b>이벤트 0.16%</b>(63/38,543)라 판정을 뒤집지 않지만, <b>공시 레인이 커지면
+	 * 달라진다</b>. ⚠️ 이 수치는 저장소만으로 재현되지 않는다 — 근거로 쓸 때 다시 재라.
 	 *
 	 * <p>여기서 술어를 더하지 않는 이유는 그게 <b>지표의 정의를 바꾸는 일</b>이라서다(라벨도
 	 * "assertion"·"source event" 로 계열을 안 밝힌다). 대신 <b>현재 셈법을 못 박아</b> 조용히
