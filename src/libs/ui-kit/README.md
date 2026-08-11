@@ -10,7 +10,7 @@ src/styles/tokens.css       디자인 토큰 (그레이스케일·액센트·방
 src/styles/components.css   컴포넌트 클래스 (.btn·.card·.table·.nav-item·.switch 등) — edge-components.css 이식
 src/styles/index.css        스타일 진입점 (tokens → components)
 src/*.tsx                   React 프리미티브: StatusBadge · Toggle · Select · Modal · Toaster/toast · Icon · Delta · PageSkeleton · ErrorBoundary
-src/assets/                 브랜드 로고 SVG 캐노니컬 (edge-logo-white/black — 명명은 배경 기준, 포털도 sync 로 여기서 복사)
+src/assets/                 브랜드 로고·파비콘 SVG 캐노니컬 (edge-logo-white/black — 명명은 배경 기준 · edge-favicon, 포털도 sync 로 여기서 복사)
 ```
 
 ## 소비 방법 (소스 패키지)

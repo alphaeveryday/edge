@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""docs/ 원본을 pages/docs/reference/ 로, 브랜드 로고를 assets/images/ 로 복사한다(빌드 산출물).
+"""docs/ 원본을 pages/docs/reference/ 로, 브랜드 로고·파비콘을 assets/images/ 로 복사한다(빌드 산출물).
 
 repo root 에서 실행한다고 가정한다. reference/ 는 매 실행마다 지우고 다시 만든다.
 복사하면서, 복사 트리 밖을 가리키는 상대 링크(루트 README 등)는 GitHub 소스 URL 로
 재작성한다 — 포털에서 404 가 되던 링크를 유효하게 만들기 위함이다.
 원본 docs/ 는 절대 수정하지 않는다(읽기만 하고 reference/ 로만 쓴다).
-브랜드 로고의 캐노니컬은 src/libs/ui-kit/src/assets (콘솔과 공용, ALPHA-950) —
+브랜드 로고·파비콘의 캐노니컬은 src/libs/ui-kit/src/assets (콘솔과 공용, ALPHA-950·952) —
 포털은 빌드 시 여기서 복사받고 사본은 커밋하지 않는다(.gitignore).
 """
 from __future__ import annotations
@@ -39,6 +39,7 @@ COPIES = [
     # 브랜드 로고 — 명명은 배경 기준(black = 어두운 배경용 흰 로고).
     (BRAND / "edge-logo-black.svg", IMAGES / "edge-logo-black.svg"),
     (BRAND / "edge-logo-white.svg", IMAGES / "edge-logo-white.svg"),
+    (BRAND / "edge-favicon.svg", IMAGES / "edge-favicon.svg"),
 ]
 
 # reference/ 로 복사되는 repo 경로들 — 이 안을 가리키는 링크는 그대로 두어도 해결된다.
