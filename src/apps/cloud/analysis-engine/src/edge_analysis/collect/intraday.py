@@ -130,10 +130,23 @@ def canonical_sql(market: str, trade_date: str | None = None, *,
     """canonical intraday_5m 을 읽는 FROM 절. ``trade_date`` 를 주면 그 하루 파티션만.
 
     ``hive_partitioning=true``: market·trade_date 는 경로에만 있고 파일 안에는 없다.
+
+    🔴 **업종지수 파생을 여기서 걸러 낸다** (ALPHA-941). 이 파티션은 파일 합집합으로
+    읽히는데, 파이프라인의 1분 롤업이 업종지수 5분봉을 `part-sector-index.parquet` 로
+    나란히 쓴다 — `ticker` 가 종목코드가 아니라 4자리 KRX 업종코드다. 이 모듈은 **FMP
+    가격 수집기**라 그 행은 어느 질의에서도 대상이 아니다.
+
+    거르는 자리를 **FROM 절 하나로** 삼는 이유: 소비하는 질의마다 WHERE 를 붙이면
+    하나를 빠뜨리는 순간 그 질의만 조용히 오염된다. 실제로 그랬다 — `load_symbols` 에만
+    붙였더니 `verify` 의 부분봉 비율 **분모**에 업종지수 45종이 섞여, 잘린 수집을
+    정상으로 통과시키는 경로가 남았다(가격 410종 중 42종 잘림 = 10.24% 위반이
+    42/455 = 9.23% 로 희석돼 허용 10% 를 통과한다).
     """
     root = base or bucket_url(CANONICAL_PREFIX)
     part = f"market={market}/trade_date={trade_date}" if trade_date else f"market={market}/**"
-    return f"read_parquet('{root}/{part}/*.parquet', hive_partitioning=true)"
+    return (f"(SELECT * FROM read_parquet('{root}/{part}/*.parquet',"
+            f" hive_partitioning=true)"
+            f" WHERE source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}')")
 
 
 def daily_sql(market: str, trade_date: str, *, base: str | None = None) -> str:
@@ -446,21 +459,21 @@ def load_symbols(con, market: str, *, path: str | None = None,
     코드가 아니라 4자리 KRX 업종코드(``1005``·``2063``)다. 안 거르면 그 45개가 FMP 수집
     심볼로 요청된다 — 지수는 FMP 종목이 아니라서 빈 응답이 되고, 혹여 그 문자열이 다른
     상품으로 해소되면 **업종지수 행과 같은 ticker 로 겹치는 canonical 행**이 생긴다.
-    벤더 표기로 거른다(``rollup.SOURCE_VENDOR_SECTOR``) — 심볼 모양(자릿수)으로 거르면
-    시장마다 다시 틀린다.
+    거르는 것은 ``canonical_sql`` 이다(그 도크스트링에 자리를 그리 잡은 이유가 있다).
+
+    ⚠️ 그래서 ``max(trade_date)`` 도 **이미 걸러진 집합** 위에서 구해진다. 이게 중요한
+    이유: 안 걸러진 집합에서 max 를 잡으면 "업종지수 롤업은 됐고 가격 롤업은 안 된 날"이
+    최신일일 때 그날이 뽑히고, 가격 행이 0이라 유니버스가 통째로 비어 ``PipelineError``
+    가 된다 — 직전 거래일에 멀쩡한 심볼이 있는데도. 두 롤업은 각자 실행이라 그 상태는
+    정상 운영에서 난다.
     """
     if path:
         text = Path(path).read_text(encoding="utf-8")
         return [s.strip() for s in text.splitlines() if s.strip()]
     src = canonical_sql(market.upper(), base=base)
-    # ⚠️ 필터를 **`max(trade_date)` 안에도** 건다. 바깥에만 걸면 "업종지수 롤업은 됐고
-    # 가격 롤업은 안 된 날"이 최신 파티션일 때 max 가 그날을 집고 바깥 필터가 그 행을
-    # 전부 지워, 직전 거래일에 멀쩡한 유니버스가 있는데도 빈 결과 → PipelineError 가 된다.
-    # 두 롤업은 각자 실행이라 그 상태는 정상 운영에서 난다.
-    keep = f"source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'"
     got = con.execute(
-        f"SELECT DISTINCT source_symbol FROM {src} WHERE {keep}"
-        f" AND trade_date = (SELECT max(trade_date) FROM {src} WHERE {keep}) ORDER BY 1"
+        f"SELECT DISTINCT source_symbol FROM {src}"
+        f" WHERE trade_date = (SELECT max(trade_date) FROM {src}) ORDER BY 1"
     ).fetchall()
     if not got:
         raise PipelineError(
