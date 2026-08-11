@@ -24,7 +24,7 @@
 | [0014](0014-correction-repreview.md) | 정정 이벤트 처리 — 무조건 재검수 | 대체됨(0041) |
 | [0015](0015-sync-protocol-mvp.md) | Sync 프로토콜 — cursor 기반 delta, MVP 스펙과 목표 계약 분리 | 대체됨 (→ [0040](0040-sync-integrity-mvp-to-signing.md)) |
 | [0016](0016-single-repo-two-artifacts.md) | 코드베이스 — 단일 레포, 배포 아티팩트 2종 | 승인됨 |
-| [0017](0017-demo-topology-compose.md) | 데모/개발 토폴로지 — 별도 EC2 + Docker Compose 가상 온프렘 | 승인됨 |
+| [0017](0017-demo-topology-compose.md) | 데모/개발 토폴로지 — 별도 EC2 + Docker Compose 가상 온프렘 | 승인됨 (스택 열거 중 Redis 대체 → [0051](0051-byoc-deployment-topology.md)) |
 | [0018](0018-rule-deployment-path.md) | Compliance Rule 배포 경로 — Rule Type은 릴리스, Sync 채널은 데이터 전용 | 승인됨 |
 | [0019](0019-team-ownership-interface.md) | 팀 오너십 — Sync 프로토콜 양단 단일 오너, 인터페이스 계약 고정 | 대체됨 (→ [0026](0026-ownership-boundary-db.md)) |
 | [0020](0020-verification-realign.md) | 검증 반영 — 규제 서사 재정렬 및 설계 정합 일괄 정정 | 승인됨 |
@@ -40,10 +40,10 @@
 | [0030](0030-raw-phase-partial-failure.md) | raw 페이즈는 부분 실패를 격리한다 — 전량 성공 게이트 제거 | 승인됨 |
 | [0031](0031-serving-to-publication.md) | serving-api를 Publication 도메인으로 리네이밍 | 승인됨 |
 | [0032](0032-retire-gateway.md) | gateway 은퇴 — 클라우드 엣지를 ALB 직결로 | 승인됨 |
-| [0033](0033-demo-onprem-stack.md) | 데모 온프렘 terraform 스택 분리 — 실 클라우드와 state 격리 | 승인됨 |
+| [0033](0033-demo-onprem-stack.md) | 데모 온프렘 terraform 스택 분리 — 실 클라우드와 state 격리 | 승인됨 (스택 열거 중 Redis 대체 → [0051](0051-byoc-deployment-topology.md)) |
 | [0034](0034-host-per-edge-alb.md) | 공개 엣지 호스트 단위 분리 — 서비스당 ALB 1개, 경로 라우팅 없음 | 승인됨 |
 | [0035](0035-widget-ui-build-artifact.md) | 위젯 UI를 빌드 산출물로 납품 — 실행 서버 없음 | 승인됨 |
-| [0036](0036-sync-agent-intake-topology.md) | Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준 | 승인됨 |
+| [0036](0036-sync-agent-intake-topology.md) | Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준 | 승인됨 (조율 메커니즘 대체 → [0052](0052-sync-two-module-standard-reaffirmed.md)) |
 | [0037](0037-compliance-engine-to-screening-worker.md) | 점검 실행 모듈 명칭 — Compliance Engine → Screening Worker | 승인됨 |
 | [0038](0038-jpa-onprem-read-standard.md) | 온프렘 조회 표준으로 JPA 도입 — 스키마는 Flyway SSOT, 앱은 validate-only | 승인됨 |
 | [0039](0039-screening-policy-ddd-trigger.md) | Screening 판정의 DDD 전환은 사건 기반 — 첫 테넌트 기준 연결이 방아쇠 | 승인됨 |
@@ -58,5 +58,5 @@
 | [0048](0048-explanation-s3-fallback-abolition.md) | 설명 S3 폴백 폐기 — 영속 전제는 LLM 앞에서 검사, bundle 주입 필수화 | 승인됨 |
 | [0049](0049-screening-llm-triage-layer.md) | 스크리닝 LLM 트리아지 층 — 게시 후 감사·검수 확정 회수 | 제안됨 |
 | [0050](0050-console-facts-endpoint.md) | 콘솔 규칙 엔진의 사실 공급 — 엔드포인트는 사실만, 평가는 클라이언트 | 승인됨 |
-| [0051](0051-byoc-deployment-topology.md) | BYOC 배포 토폴로지 — 증권사 클라우드 사상, 단계형 구성과 승격 조건 | 제안됨 |
-| [0052](0052-sync-two-module-standard-reaffirmed.md) | Sync 온프렘 토폴로지 재검토 — 클라우드 사상에서도 2모듈 표준 유지, 근거 재정초 | 제안됨 |
+| [0051](0051-byoc-deployment-topology.md) | BYOC 배포 토폴로지 — 증권사 클라우드 사상, 단계형 구성과 승격 조건 | 승인됨 |
+| [0052](0052-sync-two-module-standard-reaffirmed.md) | Sync 온프렘 토폴로지 재검토 — 클라우드 사상에서도 2모듈 표준 유지, 근거 재정초 | 승인됨 |

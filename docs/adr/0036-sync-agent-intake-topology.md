@@ -1,6 +1,6 @@
 # ADR-0036: Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준
 
-- 상태: 승인됨
+- 상태: 승인됨 (조율 메커니즘 — DMZ-local 마크·commit-ack — 은 [0052](0052-sync-two-module-standard-reaffirmed.md) 결정 5가 대체)
 - 날짜: 2026-07-21
 
 ## 맥락
