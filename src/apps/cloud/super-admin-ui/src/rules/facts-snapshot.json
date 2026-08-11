@@ -1575,35 +1575,35 @@
       "id": "o.pub",
       "label": "게시 ETF",
       "today": 16,
-      "base": 32,
+      "base": null,
       "unit": "종"
     },
     {
       "id": "o.trig",
       "label": "배치 트리거",
       "today": 20,
-      "base": 31.5,
+      "base": null,
       "unit": "종"
     },
     {
       "id": "o.doc",
       "label": "뉴스 문서",
       "today": 3961,
-      "base": 6122,
+      "base": null,
       "unit": "건"
     },
     {
       "id": "o.asr",
       "label": "assertion",
       "today": 711,
-      "base": 1382,
+      "base": null,
       "unit": "건"
     },
     {
       "id": "o.evt",
       "label": "source event",
       "today": 539,
-      "base": 1032,
+      "base": null,
       "unit": "건"
     }
   ],

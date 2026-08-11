@@ -39,6 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       운영(UTC)에서만 하루가 밀린다. 변이 검증으로 확인한 것은 <b>어느 존을 쓰는가</b>까지다
  *       ({@code 'Asia/Seoul'}→{@code 'UTC'} 는 잡힌다). 그래서 이 조회의 날짜 캐스트는 존을 항상
  *       명시해야 한다 — 세션 기본값에 기대는 순간 이 테스트가 못 보는 자리가 된다.</li>
+ *   <li><b>미완결일 판정이 DB 시계를 쓰는지 JVM 시계를 쓰는지</b>. 둘이 같은 호스트라 값이
+ *       같다 — {@code LocalDate.now(KST)} 로 바꾸는 변이는 여기서 안 죽는다. 계약은 "한 응답의
+ *       {@code meta.today} 와 같은 시계"이고, 그 근거는 조회가 {@code META_SQL} 의
+ *       {@code kst_today} 를 그대로 넘겨받는다는 <b>구조</b>에 있지 이 단언에 있지 않다.</li>
  * </ul>
  */
 @Transactional
@@ -75,6 +79,24 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				        ?::timestamptz)
 				""", id, runKey, pipelineType, "exec-" + id, orchestration, tradingDate, deadline,
 				createdAt, updatedAt);
+	}
+
+	/**
+	 * 서버가 보는 오늘 — <b>DB 시계</b>다. 조회가 {@code now()} 로 KST 오늘을 뽑으므로 테스트도
+	 * 같은 시계를 물어야 자정 근처에서 갈리지 않는다(JVM 시계로 잡으면 그 창에서만 깨진다).
+	 */
+	private LocalDate kstToday() {
+		return jdbc.queryForObject("SELECT (now() AT TIME ZONE 'Asia/Seoul')::date",
+				LocalDate.class);
+	}
+
+	/** 주말은 기준 표본에서 빠지므로 표본 날짜는 <b>평일</b>이어야 한다. */
+	private static LocalDate previousWeekday(LocalDate from) {
+		LocalDate d = from.minusDays(1);
+		while (d.getDayOfWeek().getValue() > 5) {
+			d = d.minusDays(1);
+		}
+		return d;
 	}
 
 	/** 거래일 하나를 원장에 세운다. */
@@ -913,6 +935,60 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 장에 안 매인 산출은 휴장일에도 기준을 준다(표본 하나 → 중앙값 0.0, null 이 아니다).
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
+	}
+
+	/**
+	 * 🔴 <b>아직 안 끝난 날은 다 끝난 날들과 비교할 수 없다</b>(ALPHA-946). 기준일 후보는
+	 * {@code day} 미만이라 전부 완결된 하루의 값인데, 조회일이 KST 오늘이면 그 값은 아직 쌓이는
+	 * 중이다 — dev 실측(2026-08-11 14:27 KST)에서 산출 다섯 중 <b>넷</b>이 그 이유로 거짓 P1 이었다.
+	 *
+	 * <p>⚠️ <b>다섯 전부를 잰다.</b> 완결 시점이 산출마다 다르다(dev 원장 실측): {@code o.trig} 은
+	 * 15:30 배치 1회로 끝나는 계단 함수, 뉴스 셋은 {@code available_at} 이 곧 날짜 버킷이라 자정까지,
+	 * {@code o.pub} 은 {@code trade_date} 가 적재와 분리돼 하루가 끝나도 는다. 다섯 전부에 참인
+	 * 술어가 "그 날이 다 지났는가" 하나뿐이라 산출별로 가르지 않는다 — 억제를
+	 * {@code marketBound} 와 함께 거는 변이가 여기서 죽는다.
+	 *
+	 * <p>⚠️ <b>대조를 같은 픽스처로 둔다</b> — 같은 데이터로 <b>다 지난 날</b>을 물으면 기준이 선다.
+	 * 이게 없으면 "표본이 없어서 null" 과 구별이 안 돼, 억제를 통째로 지우는 변이가 산다.
+	 *
+	 * <p>⚠️ 억제는 <b>기준 쪽만</b>이다 — 그 날 값은 실측이라 그대로 낸다. 그래서 오늘 픽스처를
+	 * 0 이 아니게 둔다.
+	 */
+	@Test
+	void 오늘은_아직_안_끝났으니_기준을_안_준다() {
+		LocalDate today = kstToday();
+		LocalDate prior = previousWeekday(today);
+		LocalDate prior2 = previousWeekday(prior);
+
+		/* 기준 표본 둘 — `prior` 를 물었을 때도 기준이 서야 대조가 성립한다(`prior2` 가 그 표본). */
+		insertTradingDay(prior2.toString());
+		insertDocument("d-prior2", "NEWS", prior2 + "T09:00:00+09:00");
+		insertTradingDay(prior.toString());
+		insertPublished("p-prior", prior.toString(), "etf-a", "PUBLISHED");
+		insertDocument("d-prior", "NEWS", prior + "T09:00:00+09:00");
+		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
+		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
+
+		// 오늘 — 다섯 축 전부에 값이 있다(`insertPublished` 가 트리거도 함께 세운다).
+		insertPublished("p-today", today.toString(), "etf-b", "PUBLISHED");
+		insertDocument("d-today", "NEWS", today + "T09:00:00+09:00");
+		insertAssertion("a-today", "d-today", today + "T09:00:00+09:00");
+		insertSourceEvent("e-today", "NEWS", today + "T09:00:00+09:00");
+
+		List<OutputRow> outputs = repository.facts(today).outputs();
+		assertThat(outputs).extracting(OutputRow::id)
+				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
+		assertThat(outputs).allSatisfy(o -> {
+			assertThat(o.base()).as("%s 기준", o.id()).isNull();
+			assertThat(o.today()).as("%s 그날 값", o.id()).isPositive();
+		});
+
+		/* 대조 — 같은 원장으로 다 지난 날을 물으면 기준이 선다. 억제 사유는 데이터가 아니라
+		 * **조회일**이다. (뉴스 갈래로 잰다 — 주말에 도는 날 `marketBound` 두 축은 휴장 규약으로도
+		 * null 이 돼 이 대조가 무뎌진다.) */
+		assertThat(repository.facts(prior).outputs())
+				.filteredOn(o -> o.id().equals("o.doc")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(1.0d));
 	}
 
 	/**

@@ -354,7 +354,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
-				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day), outputs(day),
+				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day),
+				outputs(day, meta.kstToday()),
 				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
@@ -370,11 +371,28 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 서로 일관된 것이 그 증거다. 한 문장으로 세는 이유는 왕복을 줄이는 것뿐이고, <b>격리수준을
 	 * 낮추면</b> 그때야 나눠 센 값들이 갈린다.
 	 */
-	private List<OutputRow> outputs(LocalDate day) {
+	private List<OutputRow> outputs(LocalDate day, LocalDate kstToday) {
 		/* 휴장일 목록을 한 번만 읽어 두 자리가 같은 술어를 쓰게 한다 — 표본에서 빼는 자리와
 		 * "오늘이 휴장인가"를 묻는 자리가 갈리면 이 파일이 이미 겪은 종류의 결함이 된다. */
 		List<LocalDate> holidays = jdbc.queryForList(HOLIDAY_DAYS_SQL, LocalDate.class, day);
 		boolean targetIsNonMarketDay = !marketDay(day, holidays);
+		/* 🔴 <b>아직 안 끝난 날은 다 끝난 날들과 비교할 수 없다</b>(ALPHA-946). 기준일 후보는
+		 * {@code day} 미만이라 전부 완결된 하루의 값인데, {@code day} 가 KST 오늘이면 그 값은
+		 * 아직 쌓이는 중이다 — 같은 축이 아닌 둘을 나눠 임계에 건다. dev 실측(08-11 14:27 KST)에서
+		 * 산출 다섯 중 <b>넷</b>이 그 이유로 거짓 P1 이었다({@code o.trig} −100%·{@code o.pub} −71%
+		 * ·{@code o.asr} −29%·{@code o.evt} −59%). 미래 날짜를 400 으로 막는
+		 * {@code ConsoleFactsService.parseDateParam} 이 같은 논거를 이미 쓴다 — 오늘은 그
+		 * "아직"이 <b>부분</b>으로 오는 날이다.
+		 *
+		 * <p>⚠️ <b>다섯 전부에 건다.</b> 완결 시점이 산출마다 다르고(2026-08-11 dev 원장 실측):
+		 * {@code o.trig} 은 15:30 배치 1회로 끝나는 계단 함수, 뉴스 셋은 {@code available_at} 이
+		 * 곧 날짜 버킷이라 자정까지 차고, {@code o.pub} 은 {@code trade_date} 가 적재와 분리돼
+		 * <b>하루가 끝나도</b> 는다. 다섯 전부에 참인 술어는 "그 날이 다 지났는가" 하나뿐이라
+		 * 산출별로 가르지 않는다. 가르려면 산출↔작업 완료 바인딩이 있어야 하고 지금은 없다.
+		 *
+		 * <p>{@code isBefore} 로 쓴다 — 미래 날짜는 서비스가 400 으로 막지만, 그 가드가 이 판정의
+		 * 전제로 <b>여기에 적혀 있지 않으므로</b> 등호로 좁히면 가드가 빠지는 날 조용히 샌다. */
+		boolean targetDayIsIncomplete = !day.isBefore(kstToday);
 		List<LocalDate> baseDays = baseDays(day, holidays);
 
 		List<LocalDate> queried = new ArrayList<>(baseDays);
@@ -392,8 +410,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			List<Long> base = baseDays.stream().map(d -> byDay.getOrDefault(d, 0L)).toList();
 			/* 🔴 휴장일에 장 산출의 기준을 주면 소비자가 −100% 편차로 판정한다. `today` 의 0 은
 			 * 실측이 맞지만 **비교할 평소가 없는 날**이라 기준 쪽을 비운다 — 없는 사실을 지어내지
-			 * 않고 이미 있는 "기준 없음" 규약을 탄다. */
-			Double median = spec.marketBound() && targetIsNonMarketDay ? null : median(base);
+			 * 않고 이미 있는 "기준 없음" 규약을 탄다. 미완결일도 같은 지렛대를 탄다(위 주석) —
+			 * 두 사유 모두 "이 날의 값은 비교 대상이 아니다"이지 "표본이 없다"가 아니다. */
+			Double median = targetDayIsIncomplete || (spec.marketBound() && targetIsNonMarketDay)
+					? null : median(base);
 			return new OutputRow(spec.id(), spec.label(), spec.unit(),
 					byDay.getOrDefault(day, 0L), median);
 		}).toList();
