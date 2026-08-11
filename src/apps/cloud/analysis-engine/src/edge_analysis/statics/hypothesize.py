@@ -31,7 +31,8 @@ Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
 MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPHA-886 2단계)
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
-MAX_OBJECT_ROUNDS = 4               # 구조화 객체 탐색도 무한 루프를 허용하지 않는다
+MAX_OBJECT_ROUNDS = 6               # 무한 루프 금지. 6 = list_options 1 + preview 3(사건
+                                    # 분포 상한, ALPHA-938) + 재조회·거부 재시도 여유 2
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 
@@ -142,10 +143,11 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 
 _EVENT_DISTRIBUTION_PREVIEW_SYSTEM = """당신은 사건 설명 가설 에이전트다. 서버가 제공한 hypothesis 도구만 사용한다.
 
-먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중 한 사건과
-`사건 당일 시장 초과수익률` outcome만 고른 뒤 `hypothesis.preview`를 호출한다. READY preview만
-제출할 수 있다. 최종 제출은 {"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의
-JSON 하나이고, `intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
+먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중
+서로 다른 사건을 **최대 3개까지** 골라, 각 사건마다 `사건 당일 시장 초과수익률` outcome으로
+`hypothesis.preview`를 호출한다. READY preview만 제출할 수 있다 — READY인 것들을 모두 모아
+{"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의 JSON 하나로 제출한다.
+`intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
 동일 사건 유형의 과거 분포를 바꾸거나, 조건·노출·채널을 새로 만들지 마라.
 """
 

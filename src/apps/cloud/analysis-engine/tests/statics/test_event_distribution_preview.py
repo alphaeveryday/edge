@@ -297,3 +297,72 @@ def test_llm_can_only_submit_a_ready_current_event_distribution_preview(monkeypa
     }
     assert "event_candidates" in systems[0]
     assert "exposure_id" not in systems[0]
+
+
+def test_llm_can_preview_and_submit_up_to_three_distinct_events(monkeypatch):
+    """복수 후보 preview·복수 제출(상한 3, ALPHA-938) — 런당 한 사건만 고르라던
+    프롬프트가 스레드-런 그룹 67개 중 6개(9%)만 preview 하게 만들던 실측의 해소.
+    서로 다른 두 사건이 각각 READY preview 를 받아 한 hypotheses 배열로 제출된다."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("evt_a", "thread_a", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+            EventCandidate("evt_b", "thread_b", "B", "증설 발표",
+                           "2026-08-07T11:02:00"),
+        ), current_event_returns={"A": -0.036, "B": 0.021},
+    )
+
+    def preview(*_args, **kwargs):
+        source_event_id = kwargs["source_event_id"]
+        distribution = EventDistributionPreview(
+            source_event_id, kwargs["instrument_id"], "CONTRACT.CANCEL",
+            41, -0.031, kwargs["today"], 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    by_event = {c.source_event_id: cid
+                for cid, c in runtime._candidate_by_id.items()}
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"tool": "hypothesis.preview", "arguments": {
+            "candidate_id": by_event["evt_a"],
+            "outcome_id": "outcome:market_adjusted_return_day_0",
+        }},
+        {"tool": "hypothesis.preview", "arguments": {
+            "candidate_id": by_event["evt_b"],
+            "outcome_id": "outcome:market_adjusted_return_day_0",
+        }},
+        {"hypotheses": [
+            {"preview_handle": None, "intent": "계약 해지의 과거 반응을 확인한다."},
+            {"preview_handle": None, "intent": "증설 발표의 과거 반응을 확인한다."},
+        ]},
+    ))
+    systems: list[str] = []
+
+    def ask(system, _user):
+        systems.append(system)
+        reply = next(replies)
+        if "hypotheses" in reply:
+            for hypothesis, handle in zip(reply["hypotheses"], runtime._previews):
+                hypothesis["preview_handle"] = handle
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    assert rejected == []
+    assert len(valid) == 2
+    assert {v.preview_handle for v in valid} == set(runtime._previews)
+    # 두 후보 모두 시도가 원장에 남는다 — 퍼널이 스레드 단위로 접힌다.
+    attempts = runtime.distribution_attempts()
+    assert attempts["evt_a"]["preview_status"] == "READY"
+    assert attempts["evt_b"]["preview_status"] == "READY"
+    # 프롬프트 계약: 복수 상한이 명시돼야 모델이 두 번째 후보를 시도한다.
+    assert "최대 3개" in systems[0]
