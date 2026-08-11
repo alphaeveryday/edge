@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/client';
 import { useLogin } from '../domains/session/hooks';
+import { EdgeLogo } from './_shared/EdgeLogo';
 
 interface LoginLocationState {
   from?: { pathname?: string; search?: string; hash?: string };
@@ -23,18 +24,6 @@ function bodyMessage(body: unknown): string | undefined {
     if (typeof m === 'string' && m) return m;
   }
   return undefined;
-}
-
-/* EDGE 시안 마크(상승 바 3개, 다크 패널 위라 배경 사각형 없음).
- * super-admin 은 공식 로고로 전환(ALPHA-930) — 검수 콘솔은 시안 마크 유지. */
-function BrandMark() {
-  return (
-    <svg width={26} height={26} viewBox="0 0 32 32" fill="none" role="img" aria-label="EDGE mark" style={{ flex: 'none' }}>
-      <rect x="8" y="17" width="3.4" height="7" rx="1" fill="#71717a" />
-      <rect x="14.3" y="12" width="3.4" height="12" rx="1" fill="#d4d4d8" />
-      <rect x="20.6" y="8" width="3.4" height="16" rx="1" fill="#4a7bd8" />
-    </svg>
-  );
 }
 
 export function LoginPage() {
@@ -92,8 +81,7 @@ export function LoginPage() {
         style={{ flex: 2.33, background: 'var(--bg-nav)', padding: '40px 56px' }}
       >
         <div className="flex items-center gap-3">
-          <BrandMark />
-          <span style={{ color: '#fff', fontSize: 22, fontWeight: 700, letterSpacing: '0.02em' }}>EDGE</span>
+          <EdgeLogo height={22} />
           <span
             style={{
               color: 'var(--gray-500)',
