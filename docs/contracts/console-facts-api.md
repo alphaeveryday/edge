@@ -153,9 +153,27 @@ GET /api/v1/console/facts[?date=YYYY-MM-DD]
 
 ### `unverifiable` — 판정 가능성의 여집합보다 **한 겹 넓다**
 
-판정 **코드**지 문장이 아니다(`CONTRACT_NOT_APPLIED`·`ACTUAL_AS_OF_MISSING`·원장의
-`freshness_reason` 그대로). 술어는 **계약 부재 ∨ actual 근거 부재 ∨ 원장이 `UNKNOWN` 이라고 말함**
-이다.
+판정 **코드**지 문장이 아니다. 술어는 **계약 부재 ∨ 그 날 실행 대상 아님 ∨ actual 근거 부재 ∨
+원장이 `UNKNOWN` 이라고 말함**이고, 코드는 이 순서로 정해진다:
+
+| 코드 | 언제 | 출처 |
+|---|---|---|
+| `CONTRACT_NOT_APPLIED` | 이 데이터셋의 작업 중 계약이 걸린 것이 **하나도 없다** | 서버 |
+| `NOT_APPLICABLE` | 계약은 있는데 그 날 `DUE` 인 작업이 **하나도 없다**(전건 `SKIPPED`) | 서버 |
+| 원장의 `freshness_reason` | 원장이 `UNKNOWN` 이라 말했고 사유를 남겼다 | 원장 그대로 |
+| `FRESHNESS_REASON_MISSING` | 원장이 `UNKNOWN` 이라 말했는데 **사유가 비었다** | 서버 |
+| `ACTUAL_AS_OF_MISSING` | `UNKNOWN` 도 아닌데 actual 근거가 없다 | 서버 |
+| `null` | 판정할 수 있다 — 판정 자체는 클라이언트 소관 | — |
+
+⚠️ **`NOT_APPLICABLE` 은 휴장일 자리다.** Planner 는 비거래일 작업에도 계약 키를 남기되
+`plan_status='SKIPPED'` 로 두고 신선도를 안 쓴다(`ops/planner.py`) — 마이그레이션이 정의한 대로
+그 NULL 은 **NOT_APPLICABLE 이고 UNKNOWN 과 다르다**. 그래서 신선도는 **`DUE` 작업에서만** 접는다.
+전건을 그냥 접으면 "계약은 있는데 근거가 없다"로 서서 **정상 휴장일마다 거짓 경보**가 난다.
+
+⚠️ **`FRESHNESS_REASON_MISSING` 은 `ACTUAL_AS_OF_MISSING` 과 다른 사실이다.** `UNKNOWN` 은 as-of 가
+**있어도** 서므로(`ck_ops_expected_task_verified_as_of` 는 `actual > expected` 인 UNKNOWN 을
+통과시킨다) 후자를 돌려쓰면 응답이 actual 날짜를 실은 채 "as-of 가 없다"고 말한다 — 판정 불가는
+맞지만 사유가 거짓이라 운영자가 없는 결손을 찾으러 간다.
 
 ⚠️ 셋째 항을 빼면 안 된다. 스키마는 `freshness_status='UNKNOWN'` 인데 `actual_as_of_date` 가 있는
 조합을 허용하는데(`ck_ops_expected_task_verified_as_of` 는 `actual > expected` 인 UNKNOWN 을
@@ -185,7 +203,7 @@ GET /api/v1/console/facts[?date=YYYY-MM-DD]
 ⚠️ **빈 사유는 사유가 아니다.** `ck_ops_expected_task_freshness_pair` 는 `freshness_reason` 에
 `IS NOT NULL` 만 걸어 **빈 문자열을 막지 않는다**. 그대로 내리면 판정 코드를 truthy 로 보는
 소비자가 판정 불가 데이터셋을 정상으로 건너뛴다 — 판정 불가는 유지하고 사유만
-`ACTUAL_AS_OF_MISSING` 으로 떨어뜨린다.
+`FRESHNESS_REASON_MISSING` 으로 떨어뜨린다(위 표).
 
 ## 조회 창
 

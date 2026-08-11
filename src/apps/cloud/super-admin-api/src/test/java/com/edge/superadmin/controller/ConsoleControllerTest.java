@@ -89,8 +89,19 @@ class ConsoleControllerTest {
 	private static TaskRow task(String taskKey, String dataset, String contractKey,
 			LocalDate expectedAsOf, LocalDate actualAsOf, OffsetDateTime collectedAt,
 			String freshnessStatus, String freshnessReason) {
+		return task(taskKey, dataset, contractKey, "DUE", expectedAsOf, actualAsOf, collectedAt,
+				freshnessStatus, freshnessReason);
+	}
+
+	/**
+	 * ⚠️ {@code planStatus} 를 <b>따로 받는다</b>. 전건 {@code DUE} 로 박으면 신선도를 {@code DUE}
+	 * 로 좁히는 계약이 안 재진다 — 휴장일({@code SKIPPED})이 원장에 실제로 들어오는 형태다.
+	 */
+	private static TaskRow task(String taskKey, String dataset, String contractKey,
+			String planStatus, LocalDate expectedAsOf, LocalDate actualAsOf,
+			OffsetDateTime collectedAt, String freshnessStatus, String freshnessReason) {
 		return new TaskRow(taskKey, "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw", dataset,
-				true, "DUE", "FULFILLED", "VALID", 906L, 0L, 33L, 33L, 0L, 1L,
+				true, planStatus, "FULFILLED", "VALID", 906L, 0L, 33L, 33L, 0L, 1L,
 				contractKey, expectedAsOf, actualAsOf, collectedAt, freshnessStatus,
 				freshnessReason);
 	}
@@ -207,10 +218,16 @@ class ConsoleControllerTest {
 		mvc(factsWithTask(
 				task("A_FRESH", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, DAY, "FRESH", "AS_OF_MATCH"),
 				task("B_UNKNOWN", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(3),
-						DAY.minusDays(2), "UNKNOWN", "OBSERVED_AT_MISSING")))
+						DAY.minusDays(2), "UNKNOWN", "OBSERVED_AT_MISSING"),
+				/* 🔴 **계약 없는 작업을 같은 데이터셋에 섞는다** — `contract` 는 `anyMatch` 라야
+				 * 한다. 전건이 계약을 가지면 `allMatch` 로 바꿔도 통과하고, 그러면 운영에서
+				 * 조립 스텝 하나가 섞인 데이터셋이 통째로 CONTRACT_NOT_APPLIED 로 뒤집힌다.
+				 * 계약 없는 행은 스키마상 as-of·수집시각·신선도가 전부 NULL 이다. */
+				task("C_NO_CONTRACT", "etf_flow", null, null, null, null, null, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.datasets.length()").value(1))
+				.andExpect(jsonPath("$.result.datasets[0].contract").value(true))
 				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
 				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
 						.value("OBSERVED_AT_MISSING"));
@@ -264,19 +281,82 @@ class ConsoleControllerTest {
 	@Test
 	void actual_이_없으면_expected_와_collectedAt_을_늦은_쪽으로_접는다() throws Exception {
 		OffsetDateTime later = DB_NOW.plusHours(2);
+		/* ⚠️ 기대일 최댓값(08-01)을 런의 거래일(08-03)과 **다르게** 둔다 — 같으면 이 접기를
+		 * `tradingDate` 로 바꾸는 변이가 통과한다(리뷰가 잡았다). */
 		mvc(factsWithTask(
-				task("A", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), null, DB_NOW,
+				task("A", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(4), null, DB_NOW,
 						"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED"),
-				task("B", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, null, later,
+				task("B", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), null, later,
 						"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED")))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.datasets.length()").value(1))
-				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-01"))
 				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value(nullValue()))
 				.andExpect(jsonPath("$.result.datasets[0].collectedAt").value(later.toString()))
 				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
 						.value("ACTUAL_AS_OF_UNVERIFIED"));
+	}
+
+	/**
+	 * 🔴 <b>휴장일은 증거 결손이 아니다.</b> Planner 는 비거래일 작업에도 계약 키를 남기되
+	 * {@code plan_status='SKIPPED'} 로 두고 신선도를 안 쓴다({@code ops/planner.py}) — 그 NULL 은
+	 * 마이그레이션이 정의한 대로 <b>NOT_APPLICABLE 이고 UNKNOWN 과 다르다</b>. 전건을 그냥 접으면
+	 * "계약은 있는데 근거가 없다"로 서서 <b>정상 휴장일마다 거짓 경보</b>가 난다(리뷰가 잡았다).
+	 *
+	 * <p>{@code SKIPPED} 행은 스키마상 as-of·수집시각·신선도가 전부 NULL 이다
+	 * ({@code ck_ops_expected_task_freshness_applicability}) — 픽스처가 그 형태를 지킨다.
+	 */
+	@Test
+	void 실행_대상이_아니었던_날은_증거_결손이_아니다() throws Exception {
+		mvc(factsWithTask(task("COLLECT", "etf_flow", "ETF_FLOW_KRX_EOD", "SKIPPED",
+				DAY, null, null, null, null)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].contract").value(true))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable").value("NOT_APPLICABLE"));
+	}
+
+	/**
+	 * 반대편: 같은 데이터셋에 {@code DUE} 가 하나라도 있으면 그 작업들로 판정한다 —
+	 * {@code SKIPPED} 행이 접기에 끼어들어 값을 흐리면 안 된다.
+	 */
+	@Test
+	void SKIPPED_행은_DUE_작업의_판정에_끼어들지_않는다() throws Exception {
+		mvc(factsWithTask(
+				task("SKIPPED_ONE", "etf_flow", "ETF_FLOW_KRX_EOD", "SKIPPED",
+						DAY, null, null, null, null),
+				task("DUE_ONE", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2),
+						DAY.minusDays(2), DB_NOW, "FRESH", "AS_OF_MATCH")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				// SKIPPED 의 기대일(08-03)이 아니라 DUE 의 쌍(08-01/08-01)이 나가야 한다.
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable").value(nullValue()));
+	}
+
+	/**
+	 * 🔴 <b>기준 작업이 UNKNOWN 이 아니어도 나머지에서 UNKNOWN 을 찾는다.</b> 기준 작업 하나만 보면
+	 * 더 오래된 FRESH 작업이 앞에 서는 순간 그 데이터셋이 <b>판정 가능</b>으로 인증되고, 원장이
+	 * UNKNOWN 이라 말한 작업은 아무도 못 본다(리뷰가 잡았다 — {@code Stream.concat} 의 뒷항이
+	 * 지키는 계약이다).
+	 */
+	@Test
+	void 기준_작업이_UNKNOWN_이_아니어도_나머지에서_찾는다() throws Exception {
+		LocalDate older = DAY.minusDays(2);
+		mvc(factsWithTask(
+				// 기준 작업(actual 이 가장 오래됨)이지만 FRESH 다.
+				task("A_FRESH", "etf_flow", "ETF_FLOW_KRX_EOD", older, older, DB_NOW,
+						"FRESH", "AS_OF_MATCH"),
+				// actual 이 더 최신이라 기준이 아니지만 원장이 UNKNOWN 이라 말했다.
+				task("B_UNKNOWN", "etf_flow", "ETF_FLOW_KRX_EOD", older, DAY, DB_NOW,
+						"UNKNOWN", "OBSERVED_AT_MISSING")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("OBSERVED_AT_MISSING"));
 	}
 
 	/**
@@ -365,27 +445,33 @@ class ConsoleControllerTest {
 	 * 🔴 <b>dataset 이 빈 작업은 축에서 빼되 조용히 빼지 않는다</b>(Rule 12). 스키마에 비공백 제약이
 	 * 없어 원장에 실제로 들어올 수 있고, 그건 writer 결함이다 — 로그가 없으면 데이터셋 하나가
 	 * 화면에서 통째로 사라진 것을 아무도 못 본다. 그 작업 자체는 {@code tasks[]} 에 그대로 남는다.
+	 *
+	 * <p>⚠️ 경고는 <b>요청당 한 줄</b>이다. 콘솔은 주기적으로 재조회하고 운영자가 여럿이라, 행마다
+	 * 찍으면 원장 결함 하나가 로그량을 요청량 × 작업 수로 증폭한다. 그래서 빈 작업을 <b>둘</b> 넣고
+	 * 줄 수를 정확히 센다 — 하나만 넣으면 행마다 찍는 퇴행도 한 줄이라 안 걸린다(리뷰가 잡았다).
 	 */
 	@Test
-	void dataset_이_빈_작업은_축에서_빼고_경고를_남긴다() throws Exception {
+	void dataset_이_빈_작업은_축에서_빼고_요청당_한_줄로_경고한다() throws Exception {
 		Logger logger = (Logger) LoggerFactory.getLogger(ConsoleFactsService.class);
 		ListAppender<ILoggingEvent> appender = new ListAppender<>();
 		appender.start();
 		logger.addAppender(appender);
 		try {
-			mvc(factsWithTask(task("LOAD_DOCUMENTS", "   ", null, null, null, null, null)))
+			mvc(factsWithTask(
+					task("LOAD_DOCUMENTS", "   ", null, null, null, null, null),
+					task("ASSEMBLE_EVENTS", "", null, null, null, null, null)))
 					.perform(get("/api/v1/console/facts"))
 					.andExpect(status().isOk())
 					.andExpect(jsonPath("$.result.datasets.length()").value(0))
 					// 작업 축에는 그대로 남는다 — 데이터셋 축이 없다고 작업이 없어지지 않는다.
-					.andExpect(jsonPath("$.result.tasks.length()").value(1));
+					.andExpect(jsonPath("$.result.tasks.length()").value(2));
 		} finally {
 			logger.detachAppender(appender);
 		}
 
-		assertThat(appender.list)
-				.anySatisfy(event -> assertThat(event.getFormattedMessage())
-						.contains("LOAD_DOCUMENTS"));
+		assertThat(appender.list).singleElement()
+				.satisfies(event -> assertThat(event.getFormattedMessage())
+						.contains("LOAD_DOCUMENTS", "ASSEMBLE_EVENTS"));
 	}
 
 	/**

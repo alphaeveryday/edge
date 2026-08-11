@@ -60,6 +60,19 @@ public class ConsoleFactsService {
 	 */
 	private static final String FRESHNESS_REASON_MISSING = "FRESHNESS_REASON_MISSING";
 
+	/**
+	 * 계약은 걸렸지만 그 날 <b>실행 대상이 아니었던</b> 데이터셋(전건 {@code SKIPPED}).
+	 *
+	 * <p>휴장일이 이 자리다 — Planner 는 비거래일 작업에도 계약 키를 남기되 {@code plan_status} 를
+	 * {@code SKIPPED} 로 두고 신선도를 <b>안 쓴다</b>({@code ops/planner.py}). 마이그레이션이
+	 * 정의한 대로 그 NULL 은 <b>NOT_APPLICABLE 이고 UNKNOWN 과 다르다</b>
+	 * ({@code V202607311300__add_expected_task_freshness.sql}).
+	 *
+	 * <p>이걸 {@link #ACTUAL_AS_OF_MISSING} 으로 접으면 <b>정상 휴장일마다 증거 결손 경보</b>가
+	 * 선다 — 아무도 기대하지 않은 데이터를 안 왔다고 세는 것이다(리뷰가 잡았다).
+	 */
+	private static final String NOT_APPLICABLE = "NOT_APPLICABLE";
+
 	private final ConsoleFactsRepository facts;
 
 	public ConsoleFactsService(ConsoleFactsRepository facts) {
@@ -124,6 +137,14 @@ public class ConsoleFactsService {
 	private static DatasetResponse dataset(String id, List<TaskRow> rows) {
 		boolean contract = rows.stream().anyMatch(t -> t.datasetContractKey() != null);
 
+		/* 🔴 **신선도는 그 날 실행 대상이던 작업(`DUE`)에서만 접는다.** Planner 는 비거래일 작업에도
+		 * 계약 키를 남기되 `plan_status='SKIPPED'` 로 두고 신선도를 안 쓴다(`ops/planner.py`) —
+		 * 그 NULL 은 **NOT_APPLICABLE 이고 UNKNOWN 과 다르다**(마이그레이션이 정의한 구분). 전건을
+		 * 그냥 접으면 휴장일 데이터셋이 "계약은 있는데 근거가 없다"로 서서 **정상 휴장일마다 증거
+		 * 결손 경보**가 난다. `SKIPPED` 행은 스키마상 as-of·수집시각·신선도가 전부 NULL 이라
+		 * (`ck_ops_expected_task_freshness_applicability`) 접기에 보탤 사실도 없다. */
+		List<TaskRow> due = rows.stream().filter(t -> "DUE".equals(t.planStatus())).toList();
+
 		/* 🔴 **as-of 쌍은 한 작업에서 통째로 가져온다.** 한 데이터셋에 작업이 여럿일 때
 		 * `expected` 와 `actual` 을 각자 접으면(`max` 와 `min`) **어느 작업에도 없던 쌍**이
 		 * 만들어져, 둘 다 FRESH 인 작업 두 개가 거짓 STALE 을 낸다(01/01 과 03/03 → expected 03 ·
@@ -134,7 +155,7 @@ public class ConsoleFactsService {
 		 * 곧 낡음을 드러내는 방향이다. 마지막 tie-break 는 작업 키다 — as-of 쌍이 완전히 동률이면
 		 * 어느 행을 골라도 쌍은 같지만, **판정 불가 사유가 이 선택을 따라오므로**(아래) 안 두면
 		 * 같은 원장이 조회 순서에 따라 서로 다른 사유를 낸다. */
-		TaskRow stalest = rows.stream().filter(t -> t.actualAsOf() != null)
+		TaskRow stalest = due.stream().filter(t -> t.actualAsOf() != null)
 				.min(Comparator.comparing(TaskRow::actualAsOf)
 						.thenComparing(TaskRow::expectedAsOf,
 								Comparator.nullsLast(Comparator.reverseOrder()))
@@ -143,9 +164,9 @@ public class ConsoleFactsService {
 		/* as-of 근거가 아예 없으면 비교할 쌍이 없다 — 그때만 expected 를 따로 접는다(표시용). */
 		LocalDate actualAsOf = stalest == null ? null : stalest.actualAsOf();
 		LocalDate expectedAsOf = stalest != null ? stalest.expectedAsOf()
-				: rows.stream().map(TaskRow::expectedAsOf).filter(Objects::nonNull)
+				: due.stream().map(TaskRow::expectedAsOf).filter(Objects::nonNull)
 						.max(Comparator.naturalOrder()).orElse(null);
-		OffsetDateTime collectedAt = rows.stream().map(TaskRow::collectedAt)
+		OffsetDateTime collectedAt = due.stream().map(TaskRow::collectedAt)
 				.filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(null);
 
 		/* 🔴 **원장이 UNKNOWN 이라고 말했으면 그게 답이다.** `actual_as_of_date` 유무만 보면
@@ -159,12 +180,15 @@ public class ConsoleFactsService {
 		 * B 의 as-of 와 A 의 사유가 한 행에 실려 서로 다른 작업이 한 사실로 섞인다(리뷰가 잡았다 —
 		 * 그 조합은 스키마가 허용한다: UNKNOWN 은 `actual > expected` 여도 성립한다). 기준 작업이
 		 * UNKNOWN 이 아닐 때만 나머지에서 찾는다. */
-		Optional<TaskRow> unknown = Stream.concat(Stream.ofNullable(stalest), rows.stream())
+		Optional<TaskRow> unknown = Stream.concat(Stream.ofNullable(stalest), due.stream())
 				.filter(t -> "UNKNOWN".equals(t.freshnessStatus())).findFirst();
 
 		String unverifiable;
 		if (!contract) {
 			unverifiable = CONTRACT_NOT_APPLIED;
+		} else if (due.isEmpty()) {
+			// 계약은 걸렸는데 그 날 실행 대상인 작업이 없었다 — 휴장일이다(위 `due` 주석).
+			unverifiable = NOT_APPLICABLE;
 		} else if (unknown.isPresent()) {
 			/* 스키마상 UNKNOWN 이면 사유가 있지만(`ck_ops_expected_task_freshness_pair`) 그 제약은
 			 * `IS NOT NULL` 이라 **빈 문자열을 막지 않는다**. 빈 사유를 그대로 내면 판정 코드를
