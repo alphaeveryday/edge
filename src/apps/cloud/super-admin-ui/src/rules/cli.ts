@@ -10,8 +10,11 @@
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-/* `process` 를 전역으로 쓰지 않고 모듈에서 가져온다 — tsconfig `types` 에 `node` 를 더하면
- * 브라우저 코드에서도 `process.env` 가 타입 검사를 통과해 런타임에서만 죽는다. */
+/* `process` 를 전역으로 쓰지 않고 모듈에서 가져온다 — Node 진입점이 앰비언트 전역에 기대지
+ * 않는 쪽이 맞다(`types` 를 어떻게 두든 이 파일은 그대로 선다).
+ * ⚠️ 이게 **브라우저 코드를 지켜 주지는 않는다** — 실측하면 `process` 전역은 `rules/` 를
+ * tsconfig 에서 통째로 빼도 이 패키지에서 타입 검사를 통과한다(`vite.config.ts` 경로로 Node
+ * 타입이 이미 들어온다). 그 구멍을 막는 것은 이 import 가 아니다. */
 import { argv, stdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { buildReport } from './evaluate.ts';
