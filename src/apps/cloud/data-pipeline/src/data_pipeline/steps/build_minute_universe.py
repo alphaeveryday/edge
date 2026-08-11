@@ -306,7 +306,9 @@ def _refuse_after_plan(now: datetime) -> None:
         f"거부한다 — 세션이 이미 이 유니버스로 계획됐을 수 있고, 그러면 원장의 "
         f"universe_hash 는 옛 값에 고정된 채 객체만 바뀌어 worker·consumer 가 매 틱 "
         f"blocked 로 돈다. 오늘 안에 꼭 갈아야 하면 scripts/build_minute_universe.py "
-        f"로 파일을 뽑아 확인한 뒤 사람이 반영하고 원장 universe_hash 도 함께 고쳐라"
+        f"로 파일을 뽑아 확인한 뒤 사람이 반영하고, 원장의 **universe_version 과 "
+        f"universe_hash 를 둘 다** 고쳐라 — 소비자는 그 쌍을 비교한다"
+        f"(price_consumer·repository)"
     )
 
 
@@ -320,15 +322,27 @@ def _refuse_membership_loss(before: Universe, after: Universe) -> None:
     ⚠️ **개수가 아니라 남은 멤버로 센다.** 개수만 보면 30종이 빠지고 엉뚱한 30종이
     들어온 대량 교체가 '변화 없음'으로 통과한다 — 사고의 형태가 결손이 아니라 **오배정**
     (남의 구성종목이 다른 etf_id 로 착지)일 때 정확히 그 모양이 된다.
+
+    ⚠️ **그리고 축마다 따로 센다.** 합쳐서 재면 작은 축이 통째로 사라져도 큰 축이
+    비율을 떠받쳐 통과한다 — 실측 구성(460 unit 중 참조 계열 47종)에서 참조 계열이
+    7종만 남아도 전체로는 91%다. 축은 크기가 아니라 **역할**로 나뉘어 있고
+    (`Universe` 도크스트링 — 판정·구성종목·참조 계열), 참조 계열 전멸은 섹터층이
+    통째로 빠진다는 뜻이다.
     """
-    kept = set(before.unit_ids) & set(after.unit_ids)
-    floor = math.ceil(len(before.unit_ids) * MIN_KEEP_RATIO)
-    if len(kept) >= floor:
-        return
-    raise SystemExit(
-        f"직전 유니버스의 unit 을 크게 잃어 거부한다: {len(before.unit_ids)} 중 "
-        f"{len(kept)} 만 남았다(최소 {floor}, 새 유니버스 {len(after.unit_ids)} unit) — "
-        f"정상 리밸런싱이 아니라 홀딩스 수집 결손·오배정을 의심하라. canonical KR "
-        f"holdings 의 ETF 별 최신 스냅샷을 확인하고, 축소가 진짜면 기존 객체를 지운 뒤 "
-        f"다시 돌려라"
-    )
+    axes = (("판정 ETF", "etf_ids"), ("구성종목", "constituent_ids"),
+            ("참조 계열", "sector_etf_ids"))
+    for label, field in axes:
+        was = set(getattr(before, field))
+        kept = was & set(getattr(after, field))
+        floor = math.ceil(len(was) * MIN_KEEP_RATIO)
+        if len(kept) >= floor:
+            continue
+        raise SystemExit(
+            f"{label} 축이 직전 유니버스를 크게 잃어 거부한다: {len(was)} 중 "
+            f"{len(kept)} 만 남았다(최소 {floor}, 새 유니버스 "
+            f"{len(getattr(after, field))}종) — 정상 리밸런싱이 아니라 홀딩스 수집 "
+            f"결손·오배정, 참조 계열이면 config `[minute_universe].sector_etf_ids` "
+            f"누락을 의심하라. 축소가 진짜면 **기존 객체를 지우지 말고** "
+            f"`.bak-수동` 으로 옮긴 뒤 다시 돌려라 — 지우면 사람이 채운 시간외 축"
+            f"(extended_hours_ids)을 승계할 대상이 사라지고 되돌릴 백업도 안 남는다"
+        )

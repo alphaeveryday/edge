@@ -424,6 +424,33 @@ def test_wholesale_swap_is_refused_even_though_the_count_holds(tmp_path):
     assert Path(uri).read_bytes() == before
 
 
+def test_a_small_axis_wiped_out_is_refused_even_though_the_whole_holds(tmp_path):
+    # WHY: 축을 합쳐서 재면 **작은 축의 전멸**을 큰 축이 떠받쳐 통과시킨다 — 실측 구성
+    #      (460 unit 중 참조 계열 47종)에서 참조 계열이 7종만 남아도 전체로는 91%다.
+    #      축은 크기가 아니라 **역할**로 나뉘어 있어(판정·구성종목·참조 계열) 참조 계열
+    #      전멸은 층 분해의 섹터층이 통째로 빠진다는 뜻이고, 빠진 종목은 새 기대 집합에도
+    #      없어 결손으로 관측되지 않는다. 축마다 따로 세야 잡힌다.
+    sectors = tuple(f"{300000 + i:06d}" for i in range(10))
+    settings = SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),
+        minute_universe=SimpleNamespace(sector_etf_ids=sectors),
+    )
+    storage = LocalStorage(tmp_path / "lake")
+    _wide(storage, "2026-08-07", 100)
+    uri = str(tmp_path / "config" / "universe.json")
+    build_minute_universe.run(storage, settings, uri, "20260811T070000Z", EARLY)
+    before = Path(uri).read_bytes()
+
+    # 참조 계열이 설정 누락으로 1종만 남는다. 전체 111 unit 중 102 유지(92%)라
+    # 합산 판정이었다면 통과했을 형태다.
+    settings.minute_universe = SimpleNamespace(sector_etf_ids=sectors[:1])
+
+    with pytest.raises(SystemExit, match="참조 계열 축이 직전 유니버스를 크게 잃어"):
+        build_minute_universe.run(storage, settings, uri, RUN_ID, EARLY)
+
+    assert Path(uri).read_bytes() == before
+
+
 def test_extended_hours_axis_survives_the_rebuild(tmp_path):
     # WHY: 시간외 축은 holdings 파생이 아니라 **종목별 실측 속성**이라(build 주석) 사람이
     #      한 번 채우면 아무도 다시 안 넣는다. 재생성이 그걸 지우면 그 종목들의 계획이
