@@ -268,6 +268,8 @@ def run(
                    if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
 
         # holdings 기준일: 거래일 이하의 최신 스냅샷(없으면 최초) — 엔진과 같은 선택 규칙.
+        # 단 엔진은 **결손 과반 파티션을 배제**한다(ALPHA-951, `lake.load_holdings`) —
+        # 그런 파티션에선 트리거는 서고 설명은 이전 스냅샷으로 서서 둘이 갈린다.
         holdings_dates = _partition_values(
             storage, canonical_etf_holdings_partition(config.market, ""))
 
