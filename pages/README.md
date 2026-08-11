@@ -7,8 +7,8 @@ sync 가 복사해 넣는 빌드 산출물이라, 건너뛰면 로고·reference
 
 ```bash
 # repo root 에서
-pip install "mkdocs-material==9.7.6"
-python pages/scripts/sync_reference_docs.py
-python pages/scripts/generate_evolution.py
+python3 -m pip install "mkdocs-material==9.7.6"
+python3 pages/scripts/sync_reference_docs.py
+python3 pages/scripts/generate_evolution.py
 mkdocs build -f pages/mkdocs.yml --strict   # 또는 mkdocs serve -f pages/mkdocs.yml
 ```
