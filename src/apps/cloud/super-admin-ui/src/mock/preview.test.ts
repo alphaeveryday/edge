@@ -9,9 +9,20 @@
  * 실행: node --test src/mock/preview.test.ts
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { groupBySymbol, hasResult } from '../domains/analyses/symbols.ts';
-import { MOCK_ANALYSES } from './preview.ts';
+import { MOCK_ANALYSES, MOCK_GRID, MOCK_OVERVIEW, MOCK_REPORT } from './preview.ts';
+
+/** ops 격자 원장이 계획하는 작업 전량 — 정본은 파이프라인 소스다(datasetCatalog.test 와 같은 이유) */
+const OPS_TASK_KEYS = new Set(
+  [
+    ...readFileSync(
+      new URL('../../../data-pipeline/src/data_pipeline/ops/catalog.py', import.meta.url),
+      'utf8',
+    ).matchAll(/task_key="([^"]+)"/g),
+  ].map((m) => m[1]),
+);
 
 test('본문이 있는 분석은 게시 상태를 갖는다 — 서버는 그 조합을 낼 수 없다', () => {
   /* `explanation_result.publication_status` 는 NOT NULL DEFAULT 'DRAFT' 이고 목록 SQL 이
@@ -79,6 +90,47 @@ test('블록 코드·근거 참조가 엔진이 실제로 저장하는 형식이
       for (const ref of b.evidenceRefs) {
         assert.match(ref, /^(bars_5m|source_event):/, `엔진이 만들지 않는 참조 형식: ${ref}`);
       }
+    }
+  }
+});
+
+test('격자·리포트 픽스처의 작업이 전부 ops 원장에 실재한다 — 없는 경로를 검수가 승인한다', () => {
+  /* 실제로 `DISCLOSURE_COLLECTION_DART` 가 남아 있었다 — 공시는 1분 레인으로 옮겨 ops 격자가
+   * 그 셀을 더는 못 낸다. 미리보기로 검수하면 존재하지 않는 배치 경로를 정상으로 승인하고,
+   * 정작 덮어야 할 disclosure_minute 경로는 한 번도 안 본다. */
+  assert.ok(OPS_TASK_KEYS.size > 10, '정본 추출이 실패하면 아래 단언이 아무것도 안 잰다');
+  const used = new Set([
+    ...MOCK_GRID.slots.flatMap((s) => s.tasks.map((t) => t.taskKey)),
+    ...MOCK_REPORT.tasks.map((t) => t.taskKey),
+    ...MOCK_OVERVIEW.lanes.flatMap((l) => l.defects.map((d) => d.taskKey)),
+  ]);
+  const ghost = [...used].filter((k) => !OPS_TASK_KEYS.has(k));
+  assert.deepEqual(ghost, [], 'ops 원장에 없는 작업이 미리보기 픽스처에 있다');
+});
+
+test('개요가 말한 결함을 드릴다운이 실제로 그릴 수 있다 — 픽스처가 스스로와 모순되지 않는다', () => {
+  /* 개요 → 격자·리포트는 같은 `runKey` 로 이어진다. 개요만 결함을 선언하고 그 작업이 격자
+   * 슬롯에 없으면, 운영자가 클릭해도 그 행이 없어 UI 경로가 통째로 검수에서 빠진다. */
+  for (const lane of MOCK_OVERVIEW.lanes) {
+    const slot = MOCK_GRID.slots.find((s) => s.runKey === lane.runKey);
+    assert.ok(slot, `개요 레인 ${lane.runKey} 에 대응하는 격자 슬롯이 없다`);
+    const inSlot = new Set(slot!.tasks.map((t) => t.taskKey));
+    for (const d of lane.defects) {
+      assert.ok(inSlot.has(d.taskKey), `${lane.runKey}: 개요가 말한 결함 ${d.taskKey} 를 격자가 못 그린다`);
+    }
+    /* ⚠️ 셀 **수**는 일부러 안 잰다 — 시장 레인의 격자 픽스처는 축약본이다(개요 due 21 vs
+     * 8셀). 실 ops 시장 레인은 정말 21작업이고 그걸 7일 × 슬롯마다 적으면 픽스처가 화면보다
+     * 커진다. 축약은 의도이고, **개요가 지목한 결함이 드릴다운에 없는 것**은 의도가 아니다 —
+     * 그건 운영자가 클릭할 행이 없다는 뜻이라 위에서 잡는다. */
+
+    /* 다만 격자가 그 런의 작업을 **전부** 담은 레인(축약 안 한 레인)에서는 귀결 분포까지
+     * 개요와 같아야 한다 — 같은 런을 두 화면이 다르게 말하면 검수가 어느 쪽도 못 믿는다. */
+    if (slot!.tasks.length === lane.counts.due) {
+      const n = (o: string) => slot!.tasks.filter((t) => t.outcome === o).length;
+      assert.equal(n('FULFILLED'), lane.counts.fulfilled, `${lane.runKey}: fulfilled`);
+      assert.equal(n('FAILED'), lane.counts.failed, `${lane.runKey}: failed`);
+      assert.equal(n('MISSED'), lane.counts.missed, `${lane.runKey}: missed`);
+      assert.equal(n('PENDING'), lane.counts.pending, `${lane.runKey}: pending`);
     }
   }
 });

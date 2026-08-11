@@ -41,13 +41,20 @@ const MARKET_TASKS: { stage: string; taskKey: string }[] = [
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF' },
   { stage: 'normalize', taskKey: 'NORMALIZE_PRICE' },
   { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY' },
-  { stage: 'raw', taskKey: 'DISCLOSURE_COLLECTION_DART' },
+  { stage: 'feature', taskKey: 'ENRICH_CORP_CODE' },
   { stage: 'feature', taskKey: 'LOAD_ETF_FLOW' },
 ];
+/* ⚠️ `MOCK_OVERVIEW` 의 뉴스 레인이 `due: 6` 과 TAG_NEWS·ASSEMBLE_EVENTS 결함을 선언한다.
+ * 격자·리포트는 **이 목록에서** 파생하므로 여기가 짧으면 개요가 말한 결함 행을 드릴다운에서
+ * 영영 못 그린다 — 픽스처가 스스로와 모순되고 그 UI 경로가 검수에서 빠진다.
+ * 여섯은 ops 카탈로그의 뉴스 작업 전량과 같다. */
 const NEWS_TASKS: { stage: string; taskKey: string }[] = [
   { stage: 'raw', taskKey: 'NEWS_COLLECTION_BIGKINDS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_NEWS' },
+  { stage: 'feature', taskKey: 'TAG_NEWS' },
   { stage: 'feature', taskKey: 'LOAD_DOCUMENTS' },
+  { stage: 'feature', taskKey: 'LOAD_ASSERTIONS' },
+  { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS' },
 ];
 
 const cell = (
@@ -164,6 +171,15 @@ function marketSlot(date: string): GridSlot {
   }
 }
 
+/* ⚠️ 작업을 **위치로 짚지 않는다.** `N[2]` 로 적으면 목록에 한 줄 더하는 순간 그 참조가
+ * 조용히 다른 작업을 가리킨다 — 실제로 뉴스 작업을 셋에서 여섯으로 늘렸을 때 "FAILED 인
+ * LOAD_DOCUMENTS" 가 TAG_NEWS 로 옮겨 갔다. 키로 짚으면 없는 키에서 즉시 죽는다. */
+const newsTask = (taskKey: string) => {
+  const found = NEWS_TASKS.find((t) => t.taskKey === taskKey);
+  if (!found) throw new Error(`NEWS_TASKS 에 없는 작업: ${taskKey}`);
+  return found;
+};
+
 function newsSlot(date: string): GridSlot {
   const runKey = `news:${date}T15:30`;
   const N = NEWS_TASKS;
@@ -171,16 +187,23 @@ function newsSlot(date: string): GridSlot {
     return { runKey, launchStatus: 'LAUNCHED', orchestrationStatus: 'SUCCEEDED', tradingDate: date, tasks: N.map(skipped) };
   }
   if (date === MOCK_TRADING_DATE) {
-    /* 런이 타임아웃 — 그 안의 작업이 미실행으로 남는다 */
+    /* 런이 타임아웃 — 그 안의 작업이 미실행으로 남는다.
+     * 귀결 분포는 `MOCK_OVERVIEW` 의 뉴스 레인 counts 와 같아야 한다
+     * (due 6 · fulfilled 2 · failed 1 · missed 2 · pending 1) — 개요와 드릴다운이
+     * 같은 런을 다르게 말하면 검수가 어느 쪽도 못 믿는다. */
+    const timedOut = { dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'RUN_TIMED_OUT' } as const;
     return {
       runKey,
       launchStatus: 'LAUNCHED',
       orchestrationStatus: 'TIMED_OUT',
       tradingDate: date,
       tasks: [
-        cell(N[0], { recordsOut: 3961 }),
-        cell(N[1], { outcome: 'MISSED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'RUN_TIMED_OUT' }),
-        cell(N[2], { outcome: 'FAILED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'RUN_TIMED_OUT' }),
+        cell(newsTask('NEWS_COLLECTION_BIGKINDS'), { recordsOut: 3961 }),
+        cell(newsTask('NORMALIZE_NEWS'), { recordsOut: 3961 }),
+        cell(newsTask('TAG_NEWS'), { outcome: 'MISSED', ...timedOut }),
+        cell(newsTask('LOAD_DOCUMENTS'), { outcome: 'FAILED', ...timedOut }),
+        cell(newsTask('LOAD_ASSERTIONS'), { outcome: 'PENDING', ...timedOut, outcomeReason: null }),
+        cell(newsTask('ASSEMBLE_EVENTS'), { outcome: 'MISSED', ...timedOut }),
       ],
     };
   }
@@ -193,7 +216,7 @@ function newsSlot(date: string): GridSlot {
     launchStatus: 'LAUNCHED',
     orchestrationStatus: 'SUCCEEDED',
     tradingDate: date,
-    tasks: [cell(N[0], { recordsOut: 6122 }), cell(N[1], { recordsOut: 5327 }), cell(N[2], { recordsOut: 5327 })],
+    tasks: N.map((t) => cell(t, { recordsOut: t.stage === 'raw' ? 6122 : 5327 })),
   };
 }
 
@@ -431,7 +454,7 @@ export const MOCK_REPORT: SourceReport = {
       ],
     }),
     /* 건수 신호를 안 남긴 작업 — "—" 는 0건 처리와 다르다 */
-    task({ stage: 'raw', taskKey: 'DISCLOSURE_COLLECTION_DART', dataset: 'disclosures', recordsOut: 2, failedRecords: null }),
+    task({ stage: 'feature', taskKey: 'ENRICH_CORP_CODE', dataset: 'company_profile', recordsOut: 2, failedRecords: null }),
     task({ stage: 'normalize', taskKey: 'NORMALIZE_ETF', dataset: 'etf_holdings', recordsOut: 906 }),
     /* 선행 미충족 — 시도 행 자체가 없다 */
     task({
@@ -491,7 +514,7 @@ const MOCK_DATASET: Record<string, string> = {
   ETF_HOLDINGS_COLLECTION_KRX: 'etf_holdings',
   PRICE_COLLECTION_KIS: 'price_daily',
   INVESTOR_COLLECTION_KIS: 'investor_flow',
-  DISCLOSURE_COLLECTION_DART: 'disclosures',
+  ENRICH_CORP_CODE: 'company_profile',
   NORMALIZE_ETF: 'etf_holdings',
   NORMALIZE_PRICE: 'price_daily',
   LOAD_PRICE_DAILY: 'price_daily',
@@ -499,6 +522,9 @@ const MOCK_DATASET: Record<string, string> = {
   NEWS_COLLECTION_BIGKINDS: 'stock_news',
   NORMALIZE_NEWS: 'stock_news',
   LOAD_DOCUMENTS: 'document',
+  TAG_NEWS: 'news_assertions',
+  LOAD_ASSERTIONS: 'document_assertion',
+  ASSEMBLE_EVENTS: 'source_event',
 };
 
 function mockSlotAt(slot: GridSlot) {
