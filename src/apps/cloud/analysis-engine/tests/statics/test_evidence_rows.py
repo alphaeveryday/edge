@@ -40,7 +40,7 @@ def _blocks(*, tail: dict | None = None) -> list[dict]:
          "evidence_refs": ["bars_5m:000660", "bars_5m:005930"]},
         {"block_code": "2", "block_title": "시간 구간",
          "evidence_refs": [f"bars_5m:{TICKER}"]},
-        {"block_code": "3", "block_title": "요인 분해", "evidence_refs": []},
+        {"block_code": "3", "block_title": "움직임 분해", "evidence_refs": []},
     ]
     if tail is not None:
         blocks.append(tail)
@@ -230,25 +230,9 @@ class TestBuildGate:
         with pytest.raises(EvidenceFormatError, match=r"근거 0인 문장"):
             _build(_blocks(tail=_EVENT_BLOCK))     # 사건도 검정도 없다
 
-    def test_news_row_cannot_satisfy_a_causal_numeric_block(self):
-        causal = {
-            "block_code": "4", "block_title": "이벤트 병치",
-            "evidence_requirement": "CAUSAL_STAT_TEST",
-            "evidence_refs": ["source_event:ev_001"],
-        }
-        with pytest.raises(EvidenceFormatError, match="STAT_TEST"):
-            _build(_blocks(tail=causal), events=_EVENTS)
-
-    def test_eligible_stat_test_satisfies_a_causal_numeric_block(self):
-        causal = {
-            "block_code": "4", "block_title": "이벤트 병치",
-            "evidence_requirement": "CAUSAL_STAT_TEST",
-            "evidence_refs": ["source_event:ev_001"],
-        }
-        out = _build(_blocks(tail=causal), events=_EVENTS, stat_tests=[_FX_PASS])
-        stat_refs = {row.ref for row in out.rows if row.type == "STAT_TEST"}
-        assert stat_refs
-        assert stat_refs.issubset(out.block_refs["4"])
+    # 옛 CAUSAL_STAT_TEST 요구 분기(뉴스 행 불충분·검정 행 충족)는 생산자 없는
+    # 사문이라 분기째 제거됐다(ALPHA-949) — 검정 행의 블록 부착은 케이스 A·
+    # test_stat_row_attaches_to_relative_block 이 커버한다.
 
     def test_missing_bars_lineage_kills_header_sentence(self):
         """lineage 가 비면 가격 행이 없고, 헤더 문장이 근거 0으로 죽는다(§5)."""

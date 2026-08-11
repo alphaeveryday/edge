@@ -188,7 +188,7 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     블록별 유도 규칙(§7 의 블록↔근거 표를 엔진 산출로 재현):
       H(헤더)·2(시간 구간)  ETF 5분봉 가격 행 — lineage 의 bars_5m
       1(기여 분해)          구성종목 가격 행 + 구성비중(HOLDING) 행
-      3(요인 분해)          ETF 가격 행 + 층 분해 계열 행 (+ 몫을 설명하는 검정 행,
+      3(움직임 분해)        ETF 가격 행 + 층 분해 계열 행 (+ 몫을 설명하는 검정 행,
                             §7 "상대적 비교는 몫의 설명" — SENSITIVE_STOCKS 가 붙는다)
       4(이벤트 병치)        사건 문서(NEWS) 행 + 나머지 통과 검정 행
       N(부재 고지)          행 없음 — §7 "부재 문구는 게이트의 예외"
@@ -225,7 +225,7 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
         specs["holding"] = holding_row(
             0, as_of_basis=_mmdd(day), vendor="RDB.etf_holding_snapshot", as_of=when)
     if "layers" in lineage_views:
-        # [3] 요인 분해의 근거 — 층 몫(시장·업종·개별)을 낸 계열. 상품·지수명은
+        # [3] 움직임 분해의 근거 — 층 몫(시장·업종·개별)을 낸 계열. 상품·지수명은
         # 산문 금지(ALPHA-871)라 계열의 역할명으로 적는다. 코드가 만든 고정
         # 문자열이라 자유 텍스트가 아니다.
         specs["price_layers"] = price_row(
@@ -271,7 +271,6 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     sector_stat = tuple(ref for ref, rec in stat_records.items()
                         if rec.method == "SENSITIVE_STOCKS")
     other_stat = tuple(ref for ref in stat_records if ref not in sector_stat)
-    all_stat = tuple(stat_records)
     news_keys = tuple(key for key in refs if key.startswith("news:"))
     block_refs: dict[str, tuple[int, ...]] = {}
     for b in blocks:
@@ -284,14 +283,12 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
             # 검정은 몫의 설명이라 [3]에 붙는다(§7 케이스 B — 사건 병치가 아니다).
             block_refs[code] = _refs("price_etf", "price_layers") + sector_stat
         elif code == "4":
-            required = str(b.get("evidence_requirement") or "")
             selected_news = tuple(
                 f"news:{str(ref).removeprefix('source_event:')}"
                 for ref in (b.get("evidence_refs") or ())
                 if str(ref).startswith("source_event:")
             ) or news_keys
-            block_refs[code] = _refs(*selected_news) + (
-                all_stat if required == "CAUSAL_STAT_TEST" else other_stat)
+            block_refs[code] = _refs(*selected_news) + other_stat
         elif code == "N":
             block_refs[code] = ()       # 부재 고지 — 게이트 예외(§7)
         else:
@@ -302,10 +299,6 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
         code = str(b.get("block_code"))
         if code == "N":
             continue
-        if b.get("evidence_requirement") == "CAUSAL_STAT_TEST" and not any(
-                ref in stat_records for ref in block_refs.get(code, ())):
-            raise EvidenceFormatError(
-                f"블록 [{code}] CAUSAL_STAT_TEST 요구를 적격 STAT_TEST 행이 만족하지 못했다")
         if not block_refs.get(code):
             raise EvidenceFormatError(
                 f"근거 0인 문장 — 블록 [{code}] {b.get('block_title')!r} 에 근거 행을 "

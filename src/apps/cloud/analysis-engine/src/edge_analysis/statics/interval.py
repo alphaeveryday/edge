@@ -32,10 +32,9 @@ UNKNOWN_TAU = dt.time(0, 0)
 # 요구창은 사람이 물었으므로 몫과 무관하게 항상 가른다.
 FLOOR = 0.20
 
-MIN_N = 20
 BLOCK_ORDER = (
     "header", "nav", "contribution", "breadth", "path", "relative", "anomaly",
-    "disclosure", "flow", "news", "statistics", "causal", "absence", "evidence",
+    "disclosure", "flow", "news", "absence", "evidence",
 )
 
 
@@ -44,15 +43,6 @@ class ContributionFact:
     name: str
     contribution: float
     return_value: float | None = None
-    evidence_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class StatisticFact:
-    claim: str
-    n: int
-    effect: float | None = None
-    p: float | None = None
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -105,8 +95,6 @@ class WindowFacts:
     flows: tuple[str, ...] = ()
     news: tuple[str, ...] = ()
     event_distributions: tuple[EventDistributionFact, ...] = ()
-    statistics: tuple[StatisticFact, ...] = ()
-    causal: tuple[str, ...] = ()
     evidence: tuple[str, ...] = ()
     lineage: tuple[dict, ...] = ()
     final_lines: tuple[str, ...] = ()
@@ -240,15 +228,16 @@ def build_block_plan(facts: WindowFacts) -> tuple[OutputBlock, ...]:
     # 항등식(시장+섹터+고유 = 층 프레임의 구간수익)의 조각이라 검산 가능하다.
     # 프록시·지수명은 쓰지 않는다 - 섹터 소스가 바뀌어도(업종지수 1분봉 전환 예정)
     # 산문 형식이 불변이어야 한다.
+    # 어휘는 문장형 풀이다(ALPHA-949) - "요인"·무설명 %p 는 고객 어휘가 아니다.
     if facts.market_contribution is None:
         relative = ("층 미계측 — 시장 층이 서지 않았습니다.",)
     else:
-        parts = [f"시장 요인 {_pct(facts.market_contribution)}p"]
+        parts = [f"시장 전체 흐름 {_pct(facts.market_contribution)}p"]
         if facts.sector_contribution is not None:
-            parts.append(f"섹터 요인 {_pct(facts.sector_contribution)}p")
+            parts.append(f"업종 흐름 {_pct(facts.sector_contribution)}p")
         if facts.idio_contribution is not None:
-            parts.append(f"고유 요인 {_pct(facts.idio_contribution)}p")
-        relative = (" · ".join(parts),)
+            parts.append(f"이 종목 고유 {_pct(facts.idio_contribution)}p")
+        relative = ("오늘 움직임을 나누면 — " + " · ".join(parts),)
     blocks.append(OutputBlock("relative", relative))
     if facts.anomaly:
         blocks.append(OutputBlock("anomaly", (facts.anomaly,)))
@@ -258,22 +247,6 @@ def build_block_plan(facts: WindowFacts) -> tuple[OutputBlock, ...]:
         blocks.append(OutputBlock("flow", facts.flows))
     if facts.news:
         blocks.append(OutputBlock("news", facts.news))
-    if facts.statistics:
-        lines, refs = [], []
-        for stat in facts.statistics:
-            refs.extend(stat.evidence_ids)
-            if stat.n < MIN_N:
-                lines.append(f"표본이 부족해 판단하지 않았습니다 (n={stat.n} < {MIN_N}).")
-            else:
-                detail = stat.claim
-                if stat.effect is not None:
-                    detail += f" 효과 {_pct(stat.effect)}p"
-                if stat.p is not None:
-                    detail += f" · p={stat.p:.4f}"
-                lines.append(detail)
-        blocks.append(OutputBlock("statistics", tuple(lines), tuple(refs)))
-    if facts.causal:
-        blocks.append(OutputBlock("causal", facts.causal))
     if not facts.disclosures and not facts.news:
         blocks.append(OutputBlock(
             "absence", ("해당 구간에 확인된 공시·보도는 없습니다.",)))
@@ -307,18 +280,14 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
     plan = {block.key: block for block in build_block_plan(facts)}
 
     def block(code: str, title: str, lines: tuple[str, ...],
-              systems: tuple[str, ...], refs: tuple[str, ...] = (),
-              evidence_requirement: str | None = None) -> dict:
-        result = {
+              systems: tuple[str, ...], refs: tuple[str, ...] = ()) -> dict:
+        return {
             "block_code": code,
             "block_title": title,
             "text": "\n".join(lines),
             "source_systems": list(dict.fromkeys(systems)),
             "evidence_refs": list(dict.fromkeys(refs)),
         }
-        if evidence_requirement is not None:
-            result["evidence_requirement"] = evidence_requirement
-        return result
 
     blocks = [
         block("H", "헤더", plan["header"].lines, ("S3.bars_5m",),
@@ -329,7 +298,8 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
               plan["contribution"].evidence_ids),
         block("2", "시간 구간", plan["path"].lines, ("S3.bars_5m",),
               (f"bars_5m:{facts.ticker}",)),
-        block("3", "요인 분해", plan["relative"].lines,
+        # 제목도 고객 어휘다(ALPHA-949) — 콘솔(super-admin)이 block_title 을 그대로 띄운다.
+        block("3", "움직임 분해", plan["relative"].lines,
               ("S3.bars_5m", "S3.layers_daily")),
     ]
     def _lines(*keys: str) -> tuple[str, ...]:
@@ -337,26 +307,20 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
                      for line in (plan[key].lines if key in plan else ()))
 
     # 사건 계열(공시·수급·보도)은 final_lines 가 이미 접었으면 중복하지 않는다.
-    # 검정 계열(statistics·causal)은 **항상 병치한다** - 판정은 코드 산출이고,
-    # final_lines 뒤에 숨으면 유의·비유의 사실이 산문에서 사라진다(Rule 12).
-    statistical = _lines("statistics", "causal")
+    # 검정 산출(효과·p값)은 산문에 싣지 않는다(ALPHA-876 §0) - 표면은 근거 카드
+    # (evidence_render.render_stat_test)가 정본이다. 옛 statistics·causal 병치
+    # 가지는 생산자가 없는 사문이라 제거했다(ALPHA-949).
     if facts.event_distributions:
         lines = _event_distribution_lines(facts.event_distributions)
         systems = ("RDB.source_event", "ANALYSIS.event_distribution")
         refs = tuple(f"source_event:{item.source_event_id}"
                      for item in facts.event_distributions)
     else:
-        lines = (facts.final_lines or _lines("disclosure", "flow", "news")) + statistical
-        systems = (
-            *(("RDB.source_event",) if facts.event_ids else ()),
-            *(("ANALYSIS.stat_tests",) if statistical else ()),
-        )
+        lines = facts.final_lines or _lines("disclosure", "flow", "news")
+        systems = ("RDB.source_event",) if facts.event_ids else ()
         refs = tuple(f"source_event:{value}" for value in facts.event_ids)
     if lines:
-        blocks.append(block(
-            "4", "이벤트 병치", lines, systems, refs,
-            "CAUSAL_STAT_TEST" if not facts.event_distributions and statistical else None,
-        ))
+        blocks.append(block("4", "이벤트 병치", lines, systems, refs))
     else:
         blocks.append(block(
             "N", "부재 고지",
