@@ -18,7 +18,14 @@ docker compose up --build super-admin-api      # host 18082
 pnpm --filter super-admin-ui dev        # http://localhost:5175
 pnpm --filter super-admin-ui build      # tsc --noEmit && vite build → dist/
 pnpm --filter super-admin-ui typecheck
+pnpm --filter super-admin-ui test       # node:test — 규칙 엔진 단위 테스트
+pnpm --filter super-admin-ui eval:rules # 규칙 평가 결과 JSON (UI 없이)
 ```
+
+⚠️ `test`·`eval:rules` 는 **Node 23.6+** 가 필요하다 — `.ts` 를 네이티브로 실행한다(레포에
+버전 핀이 없다). 배포 워크플로는 Node 20 이라 못 돌고, PR 게이트
+[`ui-test.yml`](../../../../.github/workflows/ui-test.yml)이 Node 24 로 돌린다. 그 워크플로가
+UI 의 **유일한 PR 체크**다 — 그전에는 타입 오류가 PR 이 아니라 dev 배포를 깨뜨렸다.
 
 dev 서버는 `/api` 를 super-admin-api(기본 `http://localhost:18082`, bootRun 직접
 기동이면 `VITE_API_PROXY_TARGET=http://localhost:8080`)로 프록시한다 — same-origin 이
@@ -52,6 +59,19 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 2단계 인증(OTP) 뷰는 시안에 있으나 서버 2FA 미지원이라 범위 밖(ALPHA-474 계열 후속).
 **신규 IA 금지 항목 준수**: API Key 관리 메뉴 없음 · 테넌트 사용 중지/재개 버튼 없음 (epic ALPHA-424).
 
+## 규칙 엔진 (`src/rules/`)
+
+콘솔 홈을 "규칙이 사실 위에서 돌아 나온 결과의 렌더링"으로 바꾸기 위한 **판정 층**이다
+(ALPHA-738 · [ADR-0050](../../../../docs/adr/0050-console-facts-endpoint.md)). 규칙 R01~R19 +
+인과 간선 + `evaluate()` 가 여기 살고 UI 를 모른다.
+
+⚠️ **판정 층만 있고 이 결과를 그리는 화면은 아직 없다.** 지금 소비자는 `eval:rules` CLI 와
+회귀 테스트뿐이고, 사실 공급(`domains/console` → `GET /api/v1/console/facts`)은 배선돼 있으나
+아직 아무도 안 부른다. 와이어 DTO 와 엔진 `Facts` 는 **형상이 달라**(camelCase vs snake_case)
+어댑터가 필요하고 그것도 화면 조각 몫이다.
+
+알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
+
 ## 데이터 레이어
 
 화면 데이터는 전 도메인이 **super-admin-api 호출**이다(ALPHA-515). mock 데이터는
@@ -60,7 +80,7 @@ UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 A
 
 tenant-console-ui 와 거의 동일 규약 — 공통 fetch 래퍼 [`src/api/client.ts`](src/api/client.ts)
 (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증), TanStack Query hook, 페이지는 도메인
-hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `session`.
+hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `session` · `console`.
 super-admin-api 성공 응답도 공통 봉투(`ApiResponse`)라 client.ts 가 `.result` 를
 중앙에서 벗겨 반환한다 — tenant-console-ui 도 동일하다(ALPHA-521·522, 도메인별
 repository 는 무변경). 그 밖 상세 규약은
