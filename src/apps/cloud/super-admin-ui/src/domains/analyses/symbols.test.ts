@@ -73,6 +73,32 @@ test('진행 중인 분석은 유효 결과로 세지 않는다', () => {
   assert.equal(hasResult(a({ id: 'c', basisTimeAbs: 'T' })), true);
 });
 
+test('본문이 블록에만 있어도 유효 결과다 — result 와 resultBlocks 는 서버의 다른 컬럼이다', () => {
+  /* `result`=analysis_result.summary · `resultBlocks`=stage_results->final_explanation->blocks.
+   * 둘은 독립이라 summary 가 빈 완료 런이 나올 수 있고, 상세 화면은 그때 블록을 산문으로 그린다.
+   * `result` 만 보면 고객에게 실제로 나간 설명이 목록에서 사라진다. */
+  const blocksOnly = a({
+    id: 'b',
+    basisTimeAbs: '2026-08-03 15:30',
+    result: '',
+    resultBlocks: [
+      { code: 'WHAT', title: '무슨 일이 있었나', text: '반도체가 올랐다', evidenceRefs: [] },
+    ],
+  });
+  assert.equal(hasResult(blocksOnly), true, '블록이 있으면 읽을 설명이 있다');
+
+  /* 빈 블록 배열은 본문이 아니다 — 있음/없음을 배열 존재로 접으면 안 된다 */
+  assert.equal(hasResult(a({ id: 'z', basisTimeAbs: 'T', result: '', resultBlocks: [] })), false);
+
+  /* 그룹 층까지 실제로 닿는지 — 최신이 블록만 가진 완료면 그게 latestValid 고 대기가 아니다 */
+  const g = groupBySymbol([
+    a({ id: 'old', basisTimeAbs: '2026-08-03 10:00', result: '옛 설명' }),
+    blocksOnly,
+  ]);
+  assert.equal(g[0].latestValid?.id, 'b', '블록만 있는 최신이 유효 설명이다');
+  assert.equal(g[0].attemptPending, false, '유효한데 대기로 켜지면 안 된다');
+});
+
 test('유효 결과가 하나도 없으면 latestValid 는 null 이다 — 지어내지 않는다', () => {
   const g = groupBySymbol([a({ id: 'p', basisTimeAbs: 'T', status: 'PENDING', result: '' })]);
   assert.equal(g[0].latestValid, null);

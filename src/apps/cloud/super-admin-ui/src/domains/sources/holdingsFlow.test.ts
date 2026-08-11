@@ -81,6 +81,35 @@ test('결손이 없으면 진입 액션을 만들지 않는다', () => {
   assert.equal(f.state, 'none');
 });
 
+test('적재가 실패로 끝났으면 수집이 다 왔어도 "모두 적재됐다"가 아니다', () => {
+  /* 실패한 적재는 얼마나 틀렸는지를 아예 안 남길 수 있다 — `dataStatus`·`failedRecords` 만
+   * 보는 결손 판정은 그때 통과하고, 남는 근거가 수집 완전성뿐이라 결손 없음이 선다.
+   * 이 조합(수집 완전 + 적재 FAILED + 결함 수치 없음)이 그 구멍의 정확한 형상이다. */
+  const f = holdingsFlow([
+    collect(0),
+    load({ outcome: 'FAILED', dataStatus: null, failedRecords: null, executionStatus: 'FAILED' }),
+  ]);
+  assert.equal(f.state, 'unknown', '결손 없음으로 접히면 안 된다');
+  assert.match(f.basis, /FAILED/, '무엇 때문에 판정 못 하는지 근거에 남는다');
+  /* 결손이라 단정하지도 않는다 — 수집은 다 왔고 어디서 탈락했는지 모른다 */
+  assert.notEqual(f.state, 'missing');
+});
+
+test('적재 작업이 아예 없으면 적재 여부를 모르는 것이지 완료가 아니다', () => {
+  const f = holdingsFlow([collect(0)]);
+  assert.equal(f.state, 'unknown');
+  assert.match(f.basis, /없다/);
+  /* 블록은 선다 — 수집 작업이 있으니 데이터셋 문맥 자체는 존재한다 */
+  assert.equal(f.steps.length, 1);
+});
+
+test('MISSED·BLOCKED 적재도 성공이 아니다 — FULFILLED 만 결손 없음의 자격이 있다', () => {
+  for (const outcome of ['MISSED', 'BLOCKED', 'PENDING'] as const) {
+    const f = holdingsFlow([collect(0), load({ outcome, dataStatus: null, failedRecords: null })]);
+    assert.notEqual(f.state, 'none', `${outcome} 인데 결손 없음으로 섰다`);
+  }
+});
+
 test('이 런에 구성종목 작업이 없으면 블록 자체를 세우지 않는다', () => {
   assert.equal(holdingsFlow([task({ taskKey: 'PRICE_COLLECTION_KIS' })]).state, 'absent');
   assert.equal(holdingsFlow([]).state, 'absent');

@@ -32,9 +32,18 @@ export interface SymbolGroup {
   todayCount: number;
 }
 
-/** 결과가 실제로 남았는가 — 상태와 본문 둘 다 본다(실패에 본문이 있으면 그건 데이터 결함이다) */
+/**
+ * 결과가 실제로 남았는가 — 상태와 본문 둘 다 본다(실패에 본문이 있으면 그건 데이터 결함이다).
+ *
+ * ⚠️ **본문은 두 자리에 있다.** `result` 는 `analysis_result.summary`, `resultBlocks` 는
+ * `stage_results -> final_explanation -> blocks` 로 **서버에서 독립된 두 컬럼**이다
+ * (`JdbcAnalysisRepository` LIST_SQL). 상세 화면은 블록이 있으면 그걸 고객 산문으로 그리고
+ * `result` 는 폴백일 뿐이라, `result` 만 보면 **블록만 있는 완료 분석이 "결과 없음"** 이 되어
+ * 목록에서 사라지고 `attemptPending` 이 거짓으로 켜진다.
+ */
 export function hasResult(a: Analysis): boolean {
-  return a.status === 'COMPLETED' && a.result.trim().length > 0;
+  if (a.status !== 'COMPLETED') return false;
+  return a.result.trim().length > 0 || (a.resultBlocks?.length ?? 0) > 0;
 }
 
 export const symbolKey = (a: Pick<Analysis, 'market' | 'code'>) => `${a.market}:${a.code}`;

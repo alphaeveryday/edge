@@ -9,6 +9,7 @@
  * 실행: node --test src/domains/sources/datasetCatalog.test.ts
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   ALL_DATASETS,
@@ -16,6 +17,11 @@ import {
   DATASET_OF_TASK,
   kindOf,
 } from './datasetCatalog.ts';
+
+/** 원장 실측 — 작업 어휘의 정본. 카탈로그는 이 집합 위에서만 접을 수 있다. */
+const LEDGER_TASKS: { task_key: string; dataset?: string }[] = JSON.parse(
+  readFileSync(new URL('../../rules/facts-snapshot.json', import.meta.url), 'utf8'),
+).tasks;
 
 test('유형은 cadence 에서 유도한다 — 두 벌로 두지 않는다', () => {
   for (const d of ALL_DATASETS) {
@@ -59,4 +65,38 @@ test('배치 데이터셋은 반드시 격자에 있고 작업이 매여 있다'
     assert.equal(d.inOpsGrid, true, d.id);
     assert.ok(d.taskKeys.length > 0, `${d.id} 에 작업이 없으면 행이 영원히 빈다`);
   }
+});
+
+/* ── 역인덱스는 원장 어휘 위에서만 성립한다 ──
+ *
+ * `개수 > 0` 만 재면 오타(`PRICE_COLLECTION_KI`)도, 원장에 새로 생긴 작업이 어느 행에도
+ * 안 매인 것도 통과한다. 그런데 `rollup()` 은 `DATASET_OF_TASK[key]` 가 없으면 그 셀을
+ * **조용히 버린다** — 위 두 결함은 화면에서 "그 작업이 없던 일"로 보인다.
+ * 그래서 어휘 자체를 원장 실측(facts-snapshot)과 양방향으로 맞물린다.
+ */
+
+test('카탈로그의 작업 키는 전부 원장에 실재한다 — 오타는 행을 영원히 비운다', () => {
+  const ledger = new Set(LEDGER_TASKS.map((t) => t.task_key));
+  const unknown = Object.keys(DATASET_OF_TASK).filter((k) => !ledger.has(k));
+  assert.deepEqual(unknown, [], '원장에 없는 작업 키가 카탈로그에 있다');
+});
+
+test('원장의 모든 작업이 정확히 한 데이터셋에 귀속된다 — 안 매인 작업은 격자에서 사라진다', () => {
+  /* 접기 방향은 카탈로그의 몫이지만(산출 테이블마다 행을 쪼개지 않는다), **누락**은 아니다.
+   * 매인 데가 없으면 rollup 이 그 셀을 버려 실패조차 안 보인다. */
+  const orphan = LEDGER_TASKS.filter((t) => t.dataset && !DATASET_OF_TASK[t.task_key]).map(
+    (t) => t.task_key,
+  );
+  assert.deepEqual(orphan, [], '어느 데이터셋에도 안 매인 원장 작업이 있다');
+
+  /* 같은 작업을 두 데이터셋이 주장하면 Object.fromEntries 가 뒤엣것으로 조용히 덮는다 —
+   * 그러면 앞 데이터셋의 행에서 그 작업이 통째로 빠진다. */
+  const claimed = ALL_DATASETS.flatMap((d) => d.taskKeys);
+  assert.equal(
+    claimed.length,
+    new Set(claimed).size,
+    `두 데이터셋이 같은 작업을 주장한다: ${claimed.filter((k, i) => claimed.indexOf(k) !== i)}`,
+  );
+  /* 역인덱스가 주장 전량을 담았는지 — 크기가 갈리면 위 중복 단언과 함께 원인이 좁혀진다 */
+  assert.equal(Object.keys(DATASET_OF_TASK).length, claimed.length);
 });

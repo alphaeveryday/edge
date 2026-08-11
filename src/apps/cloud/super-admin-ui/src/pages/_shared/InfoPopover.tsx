@@ -93,6 +93,11 @@ export function InfoPopover({ text, label, title }: InfoPopoverProps) {
       setPos((prev) => (prev && prev.left === left && prev.top === top ? prev : { left, top }));
     };
     place();
+    /* 자리를 잡은 **뒤** 포커스를 옮긴다. 패널은 portal 로 `document.body` 끝에 붙어 DOM
+     * 순서상 버튼 옆이 아니므로, 포커스를 안 옮기면 키보드·스크린리더 사용자는 문서 끝까지
+     * 내려가야 본문에 닿는다 — 이 컴포넌트가 없애려던 바로 그 상태(설명이 사실상 없음)다.
+     * Escape 는 위에서 버튼으로 되돌려 준다. 배치 전에 옮기면 화면 밖(-9999)으로 스크롤된다. */
+    panelRef.current?.focus({ preventScroll: true });
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
     return () => {
@@ -122,6 +127,8 @@ export function InfoPopover({ text, label, title }: InfoPopoverProps) {
             role="dialog"
             aria-modal="false"
             aria-label={`${label} 설명`}
+            /* 포커스를 받을 수 있어야 위 배치 효과가 여기로 옮겨 줄 수 있다(탭 순서에는 안 낀다) */
+            tabIndex={-1}
             className="info-panel"
             /* 첫 페인트는 측정용이라 화면 밖에서 시작한다(깜빡임 없이 제자리로 온다) */
             style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}

@@ -290,6 +290,26 @@ const NEWS_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string
 };
 
 /**
+ * 어휘 밖 dataset 의 덮어쓰기 — `datasetKind` 가 'other' 로 두는 이유(모르는 것을 가격으로
+ * 접으면 없는 의미가 붙는다)를 문구 층에서도 지킨다. 기본 조각 중 **`validEmpty` 하나만**
+ * 데이터셋 고유 사실("그 분에 거래가 없었다")을 단정한다 — 나머지는 원장 컬럼 그대로라
+ * 어느 데이터셋에나 참이다. 새 분 데이터셋이 붙는 날(inav·업종지수 등) 이 자리가 그 축의
+ * 사실을 모른 채 가격 문구를 붙이지 않게 한다.
+ */
+const OTHER_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
+  validEmpty: {
+    label: '정상 · 빈 데이터',
+    meaning:
+      '돌았고 그 분의 결과가 비었다는 **증거가 남은** 창 — 실행 증거가 있으므로 정상 귀결이다. 무엇이 비었는지는 이 데이터셋의 의미에 달렸고 여기서 단정하지 않는다.',
+  },
+};
+
+const SEGMENT_OVERRIDES: Record<
+  DatasetKind,
+  Partial<Record<SegmentKey, { label: string; meaning: string }>> | undefined
+> = { price: undefined, news: NEWS_SEGMENTS, other: OTHER_SEGMENTS };
+
+/**
  * 분별 전체 타임라인 대신 쓰는 구간 요약. 각 조각은 응답이 실제로 준 카운트이고,
  * 합은 expectedWindowCount 다 — 없는 분모를 만들지 않는다.
  *
@@ -343,10 +363,10 @@ export function segments(s: MinuteSession): Segment[] {
       meaning: '기대 창 수에는 있는데 원장에 행이 없다 — 어떤 집계에도 안 잡히는 materialize 결손 후보',
     },
   ];
-  const news = datasetKind(s.dataset) === 'news';
+  const override = SEGMENT_OVERRIDES[datasetKind(s.dataset)];
   return all
     .filter((seg) => seg.count > 0)
-    .map((seg) => (news && NEWS_SEGMENTS[seg.key] ? { ...seg, ...NEWS_SEGMENTS[seg.key]! } : seg));
+    .map((seg) => (override?.[seg.key] ? { ...seg, ...override[seg.key]! } : seg));
 }
 
 /** 원장에 실재하는 창 행 수. 기대 창 수와 다르면 위 숫자들을 그대로 믿으면 안 된다. */

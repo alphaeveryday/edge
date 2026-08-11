@@ -10,7 +10,7 @@
  *      사건은 규칙 엔진 스냅샷과 같다(시장 15:40 진행 중 · 뉴스 15:30 타임아웃 ·
  *      수급 361/363 결손 · 구성종목 4종 누락 · 유니버스 33종).
  */
-import type { Analysis, AnalysisEvidence } from '../domains/analyses';
+import type { Analysis, AnalysisEvidence, EvidenceType } from '../domains/analyses';
 import type {
   ExecutionStatus,
   GridCell,
@@ -659,8 +659,14 @@ const analysis = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'name' | 'code' |
   ...o,
 });
 
-/** 사용 근거 한 건 — 응답이 실제로 주는 축만(구분·제목·수집 소스·발행 시각) */
-const ev = (type: '뉴스' | '공시', title: string, source: string, time: string): AnalysisEvidence => ({
+/**
+ * 사용 근거 한 건 — 응답이 실제로 주는 축만(구분·제목·수집 소스·발행 시각).
+ *
+ * `type` 이 넓은 이유: 실 API 는 영문 코드(`NEWS`·`DISCLOSURE`)를 보내고 라벨 매핑이 그걸
+ * 히트한다. 한글은 UI·API 가 따로 배포된 동안 올 수 있는 **폴백 경로**다(`types.ts` 참고).
+ * 미리보기가 한쪽만 담으면 검수가 나머지 경로를 한 번도 안 본다 — 둘 다 담는다.
+ */
+const ev = (type: EvidenceType | '뉴스' | '공시', title: string, source: string, time: string): AnalysisEvidence => ({
   type,
   title,
   source,
@@ -684,9 +690,29 @@ export const MOCK_ANALYSES: Analysis[] = [
     direction: 1, changePct: 3.2, status: 'COMPLETED',
     basisTime: '15:30', basisTimeAbs: `${MOCK_TRADING_DATE} 15:30`, doneTime: '15:41',
     confidence: 'HIGH', result: '반도체 업종 강세로 구성종목이 동반 상승했습니다.',
+    /* 게시된 설명 — 무효화 액션은 PUBLISHED 에서만 활성이다(ALPHA-737). 전건 null 로 두면
+     * 미리보기로는 그 버튼을 한 번도 못 본다. */
+    publicationStatus: 'PUBLISHED',
+    /* 고객에게 실제로 나간 산문 블록(ALPHA-878) — 있으면 상세가 result 대신 이걸 그린다.
+     * 블록이 없는 픽스처만 두면 폴백 경로만 검수된다. */
+    resultBlocks: [
+      {
+        code: 'WHAT',
+        title: '무슨 일이 있었나',
+        text: '반도체 업종이 장중 내내 강세를 보이며 구성종목 대부분이 함께 올랐습니다.',
+        evidenceRefs: ['news:2026080312400001'],
+      },
+      {
+        code: 'WHY',
+        title: '왜 그랬나',
+        text: '수출 지표 개선과 HBM 수요 전망이 같은 방향으로 겹쳤습니다.',
+        evidenceRefs: ['news:2026080309310007', 'disclosure:20260803000135'],
+      },
+    ],
     evidence: [
-      ev('뉴스', '반도체 수출 3개월 연속 증가', 'BIGKINDS', '12:40'),
-      ev('공시', '단일판매·공급계약 체결', 'DART', '10:05'),
+      ev('NEWS', '반도체 수출 3개월 연속 증가', 'BIGKINDS', '12:40'),
+      ev('DISCLOSURE', '단일판매·공급계약 체결', 'DART', '10:05'),
+      /* 한글 한 건은 남긴다 — 코드 전환 전 API 가 보내는 폴백 경로도 검수 대상이다 */
       ev('뉴스', 'HBM 수요 증가 전망', 'BIGKINDS', '09:31'),
     ],
     /* 표시 상한보다 총 건수가 큰 사례 — 화면이 "56건 중 3건 표시"라고 말해야 한다 */
@@ -697,7 +723,9 @@ export const MOCK_ANALYSES: Analysis[] = [
     direction: 1, changePct: 2.4, status: 'COMPLETED',
     basisTime: '14:10', basisTimeAbs: `${MOCK_TRADING_DATE} 14:10`, doneTime: '14:19',
     confidence: 'MEDIUM', result: '장중 반등 — 외국인 순매수 전환.',
-    evidence: [ev('뉴스', '외국인 순매수 전환', 'BIGKINDS', '13:55')], evidenceTotal: 1,
+    /* 게시가 내려간 이력 — 목록이 PUBLISHED 와 다른 칸으로 그리는지 본다 */
+    publicationStatus: 'WITHDRAWN',
+    evidence: [ev('NEWS', '외국인 순매수 전환', 'BIGKINDS', '13:55')], evidenceTotal: 1,
   }),
   analysis({
     id: 'mock-091160-1022', name: 'KODEX 반도체', code: '091160', market: 'KRX',

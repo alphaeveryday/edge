@@ -238,6 +238,30 @@ test('뉴스의 빈 결과는 "거래 없음"이 아니라 "신규 기사 0건"�
   assert.equal(priceEmpty.count, newsEmpty.count);
 });
 
+test('어휘 밖 dataset 의 빈 결과에 "거래 없음"을 붙이지 않는다 — 가른 뒤 도로 접지 않는다', () => {
+  /* `datasetKind` 가 other 로 가르는 이유가 "모르는 것을 가격으로 접으면 없는 의미가 붙는다"
+   * 인데, 문구 층이 뉴스만 덮어쓰면 other 는 가격 문구로 되돌아간다. 새 분 데이터셋
+   * (inav·업종지수)이 붙는 날 그 축의 사실을 모른 채 거래를 말하게 된다. */
+  const w = { valid: 3, validEmpty: 5 };
+  const otherEmpty = segments(
+    session({ dataset: 'inav_minute', expectedWindowCount: 8, windows: w }),
+  ).find((x) => x.key === 'validEmpty')!;
+  assert.doesNotMatch(otherEmpty.meaning, /거래/, '모르는 데이터셋에 거래를 단정하면 안 된다');
+  assert.doesNotMatch(otherEmpty.meaning, /기사/, '뉴스 문구를 빌려와서도 안 된다');
+  /* 정상 귀결이라는 사실 자체는 유지된다 — 판정을 약화시키는 게 아니라 근거만 중립화한다 */
+  assert.equal(otherEmpty.tone, 'active');
+  assert.equal(otherEmpty.count, 5);
+
+  /* 원장 컬럼 그대로인 조각은 덮어쓰지 않는다 — 불필요한 갈래를 만들지 않았는지 고정한다 */
+  const otherValid = segments(
+    session({ dataset: 'inav_minute', expectedWindowCount: 8, windows: w }),
+  ).find((x) => x.key === 'valid')!;
+  const priceValid = segments(session({ expectedWindowCount: 8, windows: w })).find(
+    (x) => x.key === 'valid',
+  )!;
+  assert.equal(otherValid.meaning, priceValid.meaning);
+});
+
 test('뉴스의 불완전은 unit 유실이 아니라 anchor 미도달(따라잡기)이다', () => {
   const inc = segments(newsSession({ expectedWindowCount: 4, windows: { valid: 3, incomplete: 1 } })).find(
     (x) => x.key === 'incomplete',

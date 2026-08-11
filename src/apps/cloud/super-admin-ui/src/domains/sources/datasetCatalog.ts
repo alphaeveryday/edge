@@ -7,7 +7,11 @@
  *
  * **어디까지가 사실인가**
  *   · dataset id 어휘 — facts-snapshot 의 `datasets[].id` 및 `tasks[].dataset` 실측값 그대로다.
- *   · taskKeys — facts-snapshot `tasks[].dataset` 이 실제로 이어 준 작업들이다.
+ *   · taskKeys — 전부 facts-snapshot `tasks[].task_key` 에 실재하는 작업이다(테스트가 고정).
+ *     ⚠️ **매핑까지 같지는 않다** — 27 중 15 는 `tasks[].dataset` 과 다른 데이터셋에 매인다.
+ *     원장은 산출 테이블별로 dataset 을 쓰고(`LOAD_ETF_HOLDINGS` → `etf_holding_snapshot`)
+ *     이 카탈로그는 그것을 수집 데이터셋 한 행으로 접기 때문이다(아래 「행을 나누는 기준」).
+ *     접기는 의도이고, **누락**은 아니다 — 원장 작업 전량이 어느 한 행에 매인다(테스트가 고정).
  *   · group·label·cadence — **원장에 없는 UI 카탈로그다**(CATALOG_SOURCE 참고). 화면에서
  *     그 사실을 표시한다.
  *

@@ -103,5 +103,22 @@ export function holdingsFlow(tasks: TaskStatus[]): HoldingsFlow {
     };
   }
 
+  /* 적재가 성공으로 귀결되지 않았으면 "모두 적재됐다"고 말할 수 없다. 위 `loadDefect` 는
+   * 적재가 **얼마나** 틀렸는지(dataStatus·failedRecords)를 보는데, 실패한 적재는 그 값을
+   * 아예 안 남길 수 있다(`outcome:'FAILED'` + `dataStatus:null`) — 그러면 여기까지 흘러와
+   * 수집 완전성만 근거로 결손 없음이 선다. 적재 작업이 목록에 아예 없을 때도 같다.
+   * 결손을 단정하지도 않는다(수집은 다 왔을 수 있다) — 계산 불가로 세운다. */
+  if (load === undefined || load.outcome !== 'FULFILLED') {
+    return {
+      state: 'unknown',
+      basis:
+        load === undefined
+          ? '적재(LOAD_ETF_HOLDINGS) 작업이 이 런에 없다 — 적재 여부를 알 수 없다'
+          : `적재(LOAD_ETF_HOLDINGS)가 ${load.outcome ?? '미귀결'} 로 끝났다 — 결손 없음이 아니다`,
+      completeness,
+      steps,
+    };
+  }
+
   return { state: 'none', basis: '기대 ETF 가 모두 적재됐다', completeness, steps };
 }
