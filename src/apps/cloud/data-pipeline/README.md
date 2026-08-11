@@ -179,8 +179,12 @@
 > `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
 > 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
-> — `run start-minute-session`·`run stop-minute-session` 을 EventBridge Scheduler 2개가
+> — `run start-minute-session`·`run stop-minute-session` 을 EventBridge Scheduler 가
 > 부른다(Premarket 07:45 / EOD 20:05 KST, `aws_scheduler_schedule.minute_session`).
+> 같은 자원이 **업종지수 5분 파생 확정**도 부른다(평일 16:00 KST — `rollup-minute-session
+> --dataset sector_index_minute`, ALPHA-955). 시각이 다른 이유는 격자가 달라서다:
+> 업종지수 세션은 09:00~15:30 이고 가격은 20:00 까지라, 가격 EOD 확정은 이 시각을 쓸 수
+> 없다(ALPHA-839 소관).
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
 > 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.

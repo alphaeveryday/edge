@@ -531,6 +531,14 @@ locals {
   # ⚠️ 상태(`minute_session_schedule_state`)를 start/stop 과 **공유한다**. 이 롤업만
   # 따로 끄는 손잡이는 없다 — 필요해지면 그때 가른다. 실패해도 산출이 없을 뿐 기존
   # 파일을 덮지 않아(`_rollup_day` 가드) 급히 꺼야 할 성질이 아니다.
+  #
+  # 🔴 **실패는 이 스케줄에서 안 보인다** — 스케줄러는 RunTask 제출까지만 보므로
+  # 컨테이너 exit≠0 이 관측되지 않는다(이 레인 공통. DLQ·retry_policy 는 이 유형을 못
+  # 잡는다: 제출은 성공하고 태스크가 나중에 죽는다). 백스톱은 **다음 날 실행의 구멍
+  # 판정**이다 — 이 스텝이 매번 `unfilled_settled_days` 로 "원장이 멈춘 거래일인데 5분
+  # 산출이 없는 날"을 함께 보고한다. 업종지수 세션도 stop 이 승객 레인까지 drain 하므로
+  # (`session_ops.stop_session_cli`) settled 로 잡힌다. ⚠️ 그건 **로그**지 경보가 아니다
+  # — 경보는 이 레인 전체가 함께 받아야 할 별건이다.
   minute_session_sector_rollup_schedule = {
     expression = var.minute_session_sector_rollup_expression
     # `--session-date` 를 안 준다 = 오늘(KST). 16:00 KST 는 그날이라 맞다 —
