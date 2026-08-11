@@ -50,12 +50,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Autowired
 	private JdbcTemplate jdbc;
 
-	private void insertRun(String id, String runKey, String orchestration, String tradingDate,
-			String createdAt, String deadline) {
-		insertRun(id, runKey, "etf-daily", orchestration, tradingDate, createdAt, createdAt,
-				deadline);
-	}
-
 	/**
 	 * ⚠️ {@code pipelineType}·{@code updatedAt} 을 <b>따로 받는다</b>. 한때 레인을
 	 * {@code 'etf-daily'} 로 박고 {@code updated_at} 에 {@code created_at} 을 그대로 넣었는데,
@@ -77,8 +71,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	/** 거래일 하나를 원장에 세운다. */
 	private void insertTradingDay(String tradingDate) {
-		insertRun("r-" + tradingDate, "etf-daily:" + tradingDate + "T15:40", "SUCCEEDED",
-				tradingDate, tradingDate + "T06:40:00Z", null);
+		insertRun("r-" + tradingDate, "etf-daily:" + tradingDate + "T15:40", "etf-daily",
+				"SUCCEEDED", tradingDate, tradingDate + "T06:40:00Z", tradingDate + "T06:40:00Z",
+				null);
 	}
 
 	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
@@ -105,6 +100,31 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				""", id, runId, taskKey, stage, dataset, outcome,
 				"PENDING".equals(outcome) ? "UNKNOWN" : "VALID", required, recordsOut,
 				failedRecords, completeness, id);
+	}
+
+	/**
+	 * 이미 넣은 작업에 <b>계약·신선도 여섯 컬럼</b>을 채운다({@code ops_expected_task} 의 컬럼이다 —
+	 * 별도 테이블이 아니다). 계약이 걸리면 {@code version}·{@code snapshot} 도 NOT NULL 이어야 하고
+	 * ({@code ck_ops_expected_task_contract_snapshot}), {@code STALE}·{@code FRESH} 는
+	 * {@code observed_at} 을 요구한다({@code ck_ops_expected_task_freshness_pair}).
+	 *
+	 * <p>⚠️ 인자를 <b>전부 따로 받는다</b>. 하나라도 상수로 박으면 SQL 이 엉뚱한 컬럼을 읽어도
+	 * (기대일을 {@code actual_as_of_date} 에서, 수집 시각을 {@code observed_at} 에서) 값이 같아
+	 * 통과한다 — 픽스처가 컬럼을 못 가르면 그 컬럼은 계약이 아니다.
+	 */
+	private void applyContract(String taskId, String contractKey, String version,
+			String expectedAsOf, String actualAsOf, String collectedAt, String observedAt,
+			String freshnessStatus, String freshnessReason) {
+		jdbc.update("""
+				UPDATE ops_expected_task
+				   SET dataset_contract_key = ?, dataset_contract_version = ?,
+				       dataset_contract_snapshot = '{"grain":"daily"}'::jsonb,
+				       expected_as_of_date = ?::date, actual_as_of_date = ?::date,
+				       collected_at = ?::timestamptz, observed_at = ?::timestamptz,
+				       freshness_status = ?, freshness_reason = ?
+				 WHERE expected_task_id = ?
+				""", contractKey, version, expectedAsOf, actualAsOf, collectedAt, observedAt,
+				freshnessStatus, freshnessReason, taskId);
 	}
 
 	/** ⚠️ {@code ecs_task_arn} 은 NOT NULL 이고 {@code (expected_task_id, ecs_task_arn)} 이 UNIQUE 다
@@ -488,6 +508,66 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T15:40", "raw"),
 						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T15:40", "normalize"),
 						org.assertj.core.groups.Tuple.tuple("etf-daily:2026-08-03T15:40", "feature"));
+	}
+
+	/**
+	 * 🔴 <b>계약·신선도 여섯 컬럼</b>이 각자 제 컬럼에서 온다. 이 여섯은 와이어의 작업 축에 안
+	 * 나가고 서비스가 데이터셋 축으로 접어서 내보내므로, <b>여기서 안 재면 어디서도 안 재진다</b> —
+	 * {@code expected_as_of_date} 와 {@code actual_as_of_date} 를 SQL 에서 맞바꿔도 전건이 초록이던
+	 * 자리다.
+	 *
+	 * <p>그래서 픽스처가 여섯을 <b>전부 서로 다르게</b> 둔다. 특히:
+	 * <ul>
+	 *   <li>as-of 둘이 달라야 맞바꿈이 걸린다 — 스키마상 {@code FRESH} 는 {@code actual = expected}
+	 *       를 요구하므로({@code ck_ops_expected_task_verified_as_of}) 갈리는 픽스처의 상태는
+	 *       <b>{@code STALE}</b> 이다. FRESH 로 두면 두 값이 같아 이 축이 통째로 안 재진다.</li>
+	 *   <li>🔴 {@code expected_as_of_date} 를 런의 <b>{@code trading_date} 와도 다르게</b> 둔다.
+	 *       둘을 같은 날로 두면 {@code t.expected_as_of_date} 대신 {@code r.trading_date} 를 읽는
+	 *       변이가 통과한다 — 이 조회는 두 테이블을 조인하므로 옆 <b>테이블</b>의 DATE 컬럼도
+	 *       후보다(리뷰가 잡았다).</li>
+	 *   <li>{@code collected_at} 옆에 <b>{@code observed_at} 을 다른 시각으로</b> 둔다. 둘 다
+	 *       TIMESTAMPTZ 라 SQL 이 옆 컬럼을 읽어도 형이 맞아 조용히 통과한다.</li>
+	 *   <li>계약 <b>key 와 version</b> 을 다르게 둔다 — 둘 다 TEXT 다.</li>
+	 * </ul>
+	 *
+	 * <p>계약이 안 걸린 작업을 함께 둬서 여섯이 <b>상수가 아님</b>을 잰다. 그 행의 여섯은 전부
+	 * NULL 인데, 그건 "계약 미적용"이지 "UNKNOWN" 이 아니다(마이그레이션 주석의 구분).
+	 */
+	@Test
+	void 계약_신선도_여섯_컬럼은_각자_제_컬럼에서_온다() {
+		insertTradingDay("2026-08-03");
+		insertTask("t1", "r-2026-08-03", "COLLECT", "raw", "etf_holdings", "FULFILLED", 906L, 0L,
+				null);
+		/* 거래일(08-03)·기대일(08-02)·실제일(08-01)이 전부 다르다 — 셋 다 DATE 라 어느 둘이 같으면
+		 * 그 짝을 맞바꾸는 변이가 통과한다. STALE 이라야 actual < expected 가 스키마에 선다. */
+		applyContract("t1", "ETF_HOLDINGS_KRX_EOD", "v3", "2026-08-02", "2026-08-01",
+				"2026-08-03T07:00:00Z", "2026-08-03T08:00:00Z", "STALE",
+				"ACTUAL_AS_OF_BEFORE_EXPECTED");
+		insertTask("t2", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", null, null, null);
+
+		assertThat(repository.facts(DAY).tasks()).satisfiesExactly(
+				t -> {
+					assertThat(t.taskKey()).isEqualTo("COLLECT");
+					assertThat(t.datasetContractKey()).isEqualTo("ETF_HOLDINGS_KRX_EOD");
+					// 거래일(08-03)이 아니라 기대일(08-02)이다 — 옆 테이블의 DATE 를 읽으면 걸린다.
+					assertThat(t.tradingDate()).isEqualTo(DAY);
+					assertThat(t.expectedAsOf()).isEqualTo(LocalDate.parse("2026-08-02"));
+					assertThat(t.actualAsOf()).isEqualTo(LocalDate.parse("2026-08-01"));
+					assertThat(t.collectedAt())
+							.isEqualTo(OffsetDateTime.parse("2026-08-03T07:00:00Z"));
+					assertThat(t.freshnessStatus()).isEqualTo("STALE");
+					assertThat(t.freshnessReason()).isEqualTo("ACTUAL_AS_OF_BEFORE_EXPECTED");
+				},
+				t -> {
+					/* 🔴 계약이 없는 작업 — 여섯이 전부 null 이라야 위 값들이 상수가 아님이 선다. */
+					assertThat(t.taskKey()).isEqualTo("LOAD");
+					assertThat(t.datasetContractKey()).isNull();
+					assertThat(t.expectedAsOf()).isNull();
+					assertThat(t.actualAsOf()).isNull();
+					assertThat(t.collectedAt()).isNull();
+					assertThat(t.freshnessStatus()).isNull();
+					assertThat(t.freshnessReason()).isNull();
+				});
 	}
 
 	/** 창이 없으면 다른 날 작업이 오늘 사건이 된다 — 런 축과 <b>같은 식</b>을 써야 한다. */

@@ -19,15 +19,16 @@ import java.util.List;
  * {@code @JsonInclude} 를 걸지 않는다 — NON_NULL 을 위에 걸면 "집계 없음(null)"이 조용히
  * "계측 없음(필드 부재)"으로 바뀌어, 콘솔이 없애려는 칸 혼동을 서버가 다시 만든다.
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축 + 작업 축</b>이다. 데이터셋·산출·경계는 뒤따르는 조각이
- * 하나씩 더하고, <b>붙기 전까지 그 필드는 응답에 아예 없다</b> — 빈 배열이 아니다. 같은 규약이다:
- * 빈 배열은 "봤는데 없었다"이고 필드 부재는 "아직 안 본다"라, 규칙 층이 그 둘을 다르게 센다.
+ * <p>지금 내는 것은 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축</b>이다. 산출·경계는 뒤따르는
+ * 조각이 하나씩 더하고, <b>붙기 전까지 그 필드는 응답에 아예 없다</b> — 빈 배열이 아니다. 같은
+ * 규약이다: 빈 배열은 "봤는데 없었다"이고 필드 부재는 "아직 안 본다"라, 규칙 층이 그 둘을 다르게
+ * 센다.
  *
  * <p>표시 문자열을 만들지 않는다 — 건수·시각·판정 코드를 raw 로 내리고 포맷은 UI 소관이다
  * ({@link SourceReportResponse} 와 같은 규약).
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
-		MetaResponse meta) {
+		List<DatasetResponse> datasets, MetaResponse meta) {
 
 	/**
 	 * 런 하나. {@code id} 는 {@code run_key} 다 — 사건 식별자의 대상 축이라 내부 id 를 쓰면
@@ -56,7 +57,7 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 매다는 값이라 내부 {@code pipeline_run_id} 를 쓰면 와이어에서 런 축과 안 이어진다.
 	 *
 	 * <p>{@code TaskRow} 의 뒤쪽 여섯 컬럼(계약·신선도)은 <b>여기 없다</b>. 그건 데이터셋 축을
-	 * 파생하는 재료이지 작업 축의 사실이 아니다 — 뒤따르는 조각이 그 축을 만든다.
+	 * 파생하는 재료이지 작업 축의 사실이 아니다 — {@link DatasetResponse} 가 그 축이다.
 	 */
 	public record TaskResponse(String taskKey, String runId, String pipelineType,
 			String tradingDate, String stage, String dataset, boolean required, String planStatus,
@@ -71,6 +72,20 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 					t.completenessExpected(), t.completenessReceived(), t.completenessMissing(),
 					t.attempts());
 		}
+	}
+
+	/**
+	 * 데이터셋 하나. 이 축은 원장 테이블이 아니라 <b>작업에서 파생</b>한다({@code dataset_contract}
+	 * 테이블이 없어 계약·신선도가 {@code ops_expected_task} 의 컬럼으로 산다).
+	 *
+	 * <p>{@code id} 는 {@code ops_expected_task.dataset} 이다 — 작업 축의 {@code dataset} 과 같은
+	 * 축이라 소비자가 둘을 잇는다.
+	 *
+	 * <p>{@code unverifiable} 은 판정 <b>코드</b>지 문장이 아니다(포맷은 UI 소관). null 이면
+	 * "신선도를 판정할 수 있다"는 뜻이고, 그 판정 자체는 여기서 하지 않는다 — 규칙은 클라이언트다.
+	 */
+	public record DatasetResponse(String id, boolean contract, String expectedAsOf,
+			String actualAsOf, String collectedAt, String unverifiable) {
 	}
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 date 를 생략했을 때 무엇을 본 응답인가.

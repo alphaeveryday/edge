@@ -18,8 +18,9 @@ import java.util.List;
 /**
  * {@link ConsoleFactsRepository} 의 JdbcTemplate 구현(ALPHA-738).
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b>이다. 데이터셋·산출·
- * 경계는 뒤따르는 조각이 하나씩 더한다.
+ * <p>지금 내는 것은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b>이다. 산출·경계는
+ * 뒤따르는 조각이 하나씩 더한다. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도
+ * 컬럼을 재료로 {@code ConsoleFactsService} 가 접는다.
  *
  * <p>날짜 축은 <b>거래일</b>({@code trading_date})이다. 다만 비거래일 런은 그 컬럼이 NULL 이라
  * 거래일만으로 자르면 통째로 새어 나간다({@link JdbcPipelineStatusRepository} 격자 주석과 같은

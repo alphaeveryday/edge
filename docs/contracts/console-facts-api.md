@@ -15,7 +15,7 @@
 | 런 축 | `runs[]` | ✅ |
 | 계획 결손 슬롯 | 런 행이 없는 슬롯을 런 축에 싣는다 | ✅ |
 | 작업 축 | `tasks[]` | ✅ |
-| 데이터셋 축 | `datasets[]` (작업에서 파생) | ⏭ |
+| 데이터셋 축 | `datasets[]` (작업에서 파생) | ✅ |
 | 산출 축 | `outputs[]` + 기준선(중앙값) | ⏭ |
 | 경계 축 | `boundary` | ⏭ |
 
@@ -121,6 +121,107 @@ GET /api/v1/console/facts[?date=YYYY-MM-DD]
 `freshnessStatus`·`freshnessReason`)은 작업 축 와이어에 안 나간다.** 그건 **데이터셋 축을
 파생하는 재료**이지 작업 축의 사실이 아니다(`dataset_contract` 테이블이 없어 `ops_expected_task`
 의 컬럼으로 산다). 그대로 흘리면 소비자가 같은 사실을 두 축에서 읽고, 한쪽만 고칠 때 갈린다.
+
+## 데이터셋 축
+
+**여러 행을 하나의 사실로 접는 유일한 축이다.** 원장에 이 축의 테이블이 없어 그 날의 작업을
+`dataset` 으로 묶어 세운다. 다른 축은 행과 응답이 1:1 이다 — 런 축도 계획 결손 슬롯을 키에서
+파싱해 **합성**하지만(§계획 결손 슬롯) 슬롯 하나가 행 하나이지 여러 행을 접지는 않는다. 접는
+축은 여기뿐이고, 그래서 **접는 방향이 곧 계약**이다.
+
+```jsonc
+"datasets": [
+  {
+    "id": "etf_holdings",          // = ops_expected_task.dataset (작업 축의 dataset 과 같은 축)
+    "contract": true,              // 이 데이터셋의 작업 중 하나라도 계약이 걸려 있나
+    "expectedAsOf": "2026-08-03",
+    "actualAsOf": null,
+    "collectedAt": "2026-08-03T07:00:00Z",
+    "unverifiable": "ACTUAL_AS_OF_UNVERIFIED"   // null 이면 신선도를 판정할 수 있다
+  }
+]
+```
+
+정렬은 **데이터셋 id** 다. 안 고정하면 같은 원장이 조회마다 다른 순서로 나가고, 소비자가 "첫
+데이터셋"을 집는 순간 판정이 흔들린다(런 축을 `run_key` 로 고정한 것과 같은 이유).
+
+`dataset` 이 **없거나 빈 문자열**인 작업은 이 축에서 뺀다 — 빈 id 가 서면 그걸 위반으로 만드는
+규칙이 빈 대상 가드에 걸려 **그 규칙 전체**를 못 돎으로 세우고, 다른 데이터셋의 판정 불가까지
+같이 버려진다. ⚠️ 다만 **조용히 빼지 않는다**: 스키마에 비공백 제약이 없어 원장에 실제로 들어올
+수 있고 그건 writer 결함이다. 요청당 한 줄로 접어 경고를 남기고(행마다 찍으면 결함 하나가
+로그량을 요청량 × 작업 수로 증폭한다), 그 작업 자체는 `tasks[]` 에 그대로 남는다.
+
+### `unverifiable` — 판정 가능성의 여집합보다 **한 겹 넓다**
+
+판정 **코드**지 문장이 아니다. 술어는 **계약 부재 ∨ 그 날 실행 대상 아님 ∨ actual 근거 부재 ∨
+원장이 `UNKNOWN` 이라고 말함**이고, 코드는 이 순서로 정해진다:
+
+| 코드 | 언제 | 출처 |
+|---|---|---|
+| `CONTRACT_NOT_APPLIED` | 이 데이터셋의 작업 중 계약이 걸린 것이 **하나도 없다** | 서버 |
+| `NOT_APPLICABLE` | 계약은 있는데 **그 계약으로 그 날 `DUE` 이던 작업이 없다** | 서버 |
+| 원장의 `freshness_reason` | 원장이 `UNKNOWN` 이라 말했고 사유를 남겼다 | 원장 그대로 |
+| `FRESHNESS_REASON_MISSING` | 원장이 `UNKNOWN` 이라 말했는데 **사유가 비었다** | 서버 |
+| `ACTUAL_AS_OF_MISSING` | `UNKNOWN` 도 아닌데 actual 근거가 없다(스키마상 안 나오는 자리 — 아래) | 서버 |
+| `null` | 판정할 수 있다 — 판정 자체는 클라이언트 소관 | — |
+
+### 접기는 **계약이 걸린 `DUE` 작업**에서만 한다
+
+이 축의 사실은 **계약의 것**이지 데이터셋에 붙은 아무 작업의 것이 아니다. 네 값 중 셋(actual
+as-of·수집 시각·신선도)은 스키마가 이미 그렇게 묶어 두므로(`ck_ops_expected_task_freshness_applicability`)
+좁히든 말든 같다.
+
+⚠️ **`expected_as_of_date` 하나만 다르다.** Planner 는 그 컬럼을 계약 유무와 무관하게 **모든
+작업에** 쓰고 값이 갈린다 — 계약 작업은 `resolve_expected_as_of`, 나머지는 `slot_date`. 안 좁히면
+**아무 계약도 하지 않은 기대일**이 계약 데이터셋의 `expectedAsOf` 로 나가고 거기에 계약 작업의
+사유가 붙는다. 실물 조합이다: `etf_holdings` 는 계약이 걸린 `ETF_HOLDINGS_COLLECTION_KRX` 와
+계약이 없는 `NORMALIZE_ETF` 를 함께 갖고(`ops/catalog.py`), 그 계약은 actual 을 늘 NULL 로 써서
+기대일 접기가 **정상 경로**다.
+
+⚠️ **`NOT_APPLICABLE` 은 오늘 나가지 않는다** — 계약이 걸린 카탈로그 엔트리는
+`ETF_HOLDINGS_COLLECTION_KRX` 하나뿐이고 그 엔트리는 `kr_trading_calendar` 를 켜지 않아 휴장일에도
+`DUE` 로 선다(플래그를 켠 다섯 엔트리는 계약이 없다). 스키마와 Planner 가 그 조합을 **허용**하므로
+갈래는 두되, "휴장일이 이 코드로 온다"고 읽으면 안 된다.
+
+⚠️ **`ACTUAL_AS_OF_MISSING` 도 스키마상 안 나오는 자리다** — 계약 ∧ `DUE` 면 상태가 non-null 이고
+(`ck_ops_expected_task_contract_freshness_status`) FRESH·STALE 은 actual 을 요구하며
+(`ck_ops_expected_task_verified_as_of`) UNKNOWN 은 앞 행이 잡는다. 그래도 `null` 로 떨어뜨리지
+않는다 — 원장이 그 제약을 잃는 날 대안은 **판정 불가가 조용히 정상으로 서는 것**이다.
+
+⚠️ **`FRESHNESS_REASON_MISSING` 은 `ACTUAL_AS_OF_MISSING` 과 다른 사실이다.** `UNKNOWN` 은 as-of 가
+**있어도** 서므로(`ck_ops_expected_task_verified_as_of` 는 `actual > expected` 인 UNKNOWN 을
+통과시킨다) 후자를 돌려쓰면 응답이 actual 날짜를 실은 채 "as-of 가 없다"고 말한다 — 판정 불가는
+맞지만 사유가 거짓이라 운영자가 없는 결손을 찾으러 간다.
+
+⚠️ 셋째 항을 빼면 안 된다. 스키마는 `freshness_status='UNKNOWN'` 인데 `actual_as_of_date` 가 있는
+조합을 허용하는데(`ck_ops_expected_task_verified_as_of` 는 `actual > expected` 인 UNKNOWN 을
+통과시킨다), as-of 유무만 보면 그 데이터셋이 **판정 가능**으로 서고 값이 낡음 규칙도 통과하면
+**두 규칙 다 위반 0** 이 된다 — 아무도 못 본 데이터셋이 화면에서 정상으로 그려진다. 좁히는 쪽으로
+새면 판정도 못 하고 판정 불가로도 안 잡히는 데이터셋이 생기고, 넓히는 쪽 대가는 낡음 규칙과의
+겹침뿐이다.
+
+⚠️ 코드→문장 매핑은 **UI 소관이고 아직 없다**.
+
+### 한 데이터셋에 작업이 여럿이면
+
+**as-of 쌍은 한 작업에서 통째로** 가져온다. `expected` 와 `actual` 을 각자 접으면(`max`·`min`)
+**어느 작업에도 없던 쌍**이 만들어져, 둘 다 FRESH 인 작업 두 개가 거짓 STALE 을 낸다
+(01/01 과 03/03 → expected 03 · actual 01).
+
+| 무엇 | 어떻게 | 왜 |
+|---|---|---|
+| 기준 작업 | `actual` 이 **가장 오래된** 작업 | 하나만 최신이어도 전체가 최신으로 보이면 낡음이 조용해진다 |
+| 동률이면 | **기대일이 늦은** 쪽 | `actual < expected` 가 설 가능성이 큰 쪽 — 낡음을 드러내는 방향 |
+| 그래도 동률이면 | 작업 키 | 쌍은 어느 쪽이든 같지만 **사유가 이 선택을 따라오므로**, 없으면 같은 원장이 조회 순서에 따라 서로 다른 사유를 낸다 |
+| 판정 불가 사유 | **기준 작업**이 `UNKNOWN` 이면 거기서, 아니면 나머지 `UNKNOWN` 중 첫 작업 | 따로 고르면 한 행이 B 의 as-of 와 A 의 사유를 함께 실어 서로 다른 작업이 한 사실로 섞인다 |
+| `collectedAt` | 가장 **최근** | "언제까지 관측 가능해졌나"라 늦은 쪽이 답이다 |
+
+`actual` 근거가 아예 없으면 비교할 쌍이 없다 — 그때만 `expected` 를 따로(최댓값) 접어 표시한다.
+
+⚠️ **빈 사유는 사유가 아니다.** `ck_ops_expected_task_freshness_pair` 는 `freshness_reason` 에
+`IS NOT NULL` 만 걸어 **빈 문자열을 막지 않는다**. 그대로 내리면 판정 코드를 truthy 로 보는
+소비자가 판정 불가 데이터셋을 정상으로 건너뛴다 — 판정 불가는 유지하고 사유만
+`FRESHNESS_REASON_MISSING` 으로 떨어뜨린다(위 표).
 
 ## 조회 창
 
