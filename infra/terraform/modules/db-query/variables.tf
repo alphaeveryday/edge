@@ -4,12 +4,7 @@ variable "name" {
 }
 
 variable "region" {
-  description = "awslogs 리전. rds-db:connect ARN 과 컨테이너 AWS_REGION 에도 쓴다(IAM 토큰 서명 리전이라 DB 와 같아야 한다)."
-  type        = string
-}
-
-variable "account_id" {
-  description = "rds-db:connect ARN 조립용 계정 ID. 모듈이 caller identity 를 조회하지 않고 호출부(env)가 넘긴다 — dev/main.tf 가 ECR ARN 을 조립하는 방식과 동일."
+  description = "awslogs 리전."
   type        = string
 }
 
@@ -39,13 +34,12 @@ variable "db_name" {
 }
 
 variable "db_username" {
-  description = "IAM 인증으로 붙을 DB 롤. 마스터 유저가 아니라 읽기 전용 롤이어야 한다 — 이 이름이 rds-db:connect ARN 의 dbuser 라, 여기 마스터를 넣으면 IAM 토큰만으로 쓰기까지 열린다."
+  description = "접속할 DB 유저(컨테이너 PGUSER). db_password_secret_arn 시크릿의 비밀번호와 같은 유저여야 한다. 원설계의 읽기전용 롤(agent_ro)은 IAM 토큰 전용이었는데 조직 SCP 가 rds-db:connect 를 막아 폐기됐다(main.tf IAM 절) — 읽기전용 강제는 접속 파라미터+SELECT 가드가 진다."
   type        = string
-  default     = "agent_ro"
 }
 
-variable "db_resource_id" {
-  description = "RDS 인스턴스의 resource ID(db-XXXX 형식, 인스턴스 식별자와 다르다). rds-db:connect ARN 에 쓴다. 인스턴스를 재생성하면 값이 바뀌므로 rds 모듈 출력을 넘긴다."
+variable "db_password_secret_arn" {
+  description = "PGPASSWORD 로 주입할 Secrets Manager 시크릿 ARN(JSON 의 password 키). schema-migrate 의 flyway_password_secret_arn 과 같은 패턴 — 실행 역할에 GetSecretValue 가 이 ARN 으로 스코프된다."
   type        = string
 }
 
