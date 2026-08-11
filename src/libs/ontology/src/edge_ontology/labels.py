@@ -13,6 +13,7 @@ tests/test_labels.py 가 registry 대조로 강제한다: 상류 교체로 새 �
 from __future__ import annotations
 
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Mapping, NamedTuple
 
 from ._resource import load_yaml_resource
@@ -32,8 +33,10 @@ def _payload() -> tuple[Mapping[str, str], Mapping[str, str]]:
     families = payload.get("families") or {}
     if not isinstance(types, dict) or not isinstance(families, dict):
         raise ValueError("event_type_labels_ko: types/families 는 매핑이어야 한다")
-    return ({str(k): str(v) for k, v in types.items()},
-            {str(k): str(v) for k, v in families.items()})
+    # lru_cache 로 공유되는 객체다 - 가변 dict 를 그대로 내보내면 소비자의 수정이
+    # 전 프로세스의 어휘를 바꾼다. 읽기 전용 뷰로 감싼다.
+    return (MappingProxyType({str(k): str(v) for k, v in types.items()}),
+            MappingProxyType({str(k): str(v) for k, v in families.items()}))
 
 
 def event_type_labels_ko() -> Mapping[str, str]:

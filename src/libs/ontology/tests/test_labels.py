@@ -23,13 +23,15 @@ def test_every_registry_type_has_an_exact_korean_label():
 
 
 def test_labels_are_prose_safe_noun_phrases():
-    """라벨은 "과거에 {라벨} 소식이 있었던" 자리에 들어간다 — 코드 원문·영문·통계
-    어휘가 섞이면 산문 개편(ALPHA-943)의 목적이 무너진다."""
+    """라벨은 "과거에 {라벨} 소식이 있었던" 자리에 들어간다 — 허용 문자셋을
+    **한글 음절·공백·가운뎃점**으로 닫는다(화이트리스트). 영문·한자·숫자·특수문자
+    금지 목록 방식은 우회가 남는다 — 코드 원문·통계 어휘가 섞이면 산문 개편
+    (ALPHA-943)의 목적이 무너진다."""
+    import re
+
+    allowed = re.compile(r"^[가-힣·]+(?:[ ][가-힣·]+)*$")
     for type_id, label in event_type_labels_ko().items():
-        assert label.strip() == label and label, (type_id, label)
-        assert "." not in label and "_" not in label, (type_id, label)
-        assert not any("A" <= ch <= "Z" or "a" <= ch <= "z" for ch in label), (
-            type_id, label, "영문 금지 - 고객 산문 자리다")
+        assert allowed.fullmatch(label), (type_id, label, "한글 명사구만 허용")
         assert len(label) <= 14, (type_id, label, "명사구가 너무 길다")
 
 
