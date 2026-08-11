@@ -22,7 +22,7 @@ PIT 안전성 표기: ✅ = 시점 클램프/파티션이 선견을 구조적으
 | 표면 | 존·경로 | 생산자 | 주기 | PIT |
 |---|---|---|---|---|
 | RDB 19표 (`price_daily`·`source_event`·`document`… `RDB_TABLES`) | Cloud Event Store (Postgres) | data-pipeline SFN 4레인(시장·뉴스·공시·장중수급) + 1분 레인 | 일배치·레인별 하루 1~10슬롯(시장 1·뉴스 2·공시 10·장중수급 5)·분 단위 | ✅ 자동 클램프 뷰(`bind_day`) — 단 클램프 열 없는 시점 불변 차원은 ❌ 로 `coverage()` 가 명시 |
-| `bars_5m` (5분봉) | **정본 = Glue Iceberg** `gl.market_data_kr.edge_intraday_5m` (fmp 백필 + 깊은 재수집 + 1분 롤업 3원천 합본) · 폴백 = `canonical/market_data/intraday_5m` 합집합 | 1분 레인 롤업(2026-08-04~, `ROLLUP_FROM`) + 백필 writer 들(§1.3) | 장중 5분 버킷 + EOD 확정(`rollup-minute-session`) | ✅ `available_at = ts+5분` · 신선도 판정(착지 ≥100종 + 시장 프록시 069500) 미달 시 canonical 폴백 |
+| `bars_5m` (5분봉) | **정본 = Glue Iceberg** `gl.market_data_kr.edge_intraday_5m` (fmp 백필 + 깊은 재수집 + 1분 롤업 3원천 합본) · 폴백 = `canonical/market_data/intraday_5m` 합집합 | 1분 레인 롤업(2026-08-04~, `ROLLUP_FROM`) + 백필 writer 들(§1.3). ⚠️ 롤업이 이 파티션에 **파일을 둘** 쓴다(ALPHA-941) — 가격 `part-0` · 업종지수 `part-sector-index`. 후자는 `ticker` 가 4자리 KRX 업종코드고 `source_vendor='1m_rollup_sector'` 라, 파티션 전체를 훑는 소비자는 그 축으로 갈라야 한다 | 장중 5분 버킷 + EOD 확정(`rollup-minute-session`) | ✅ `available_at = ts+5분` · 신선도 판정(착지 ≥100종 + 시장 프록시 069500) 미달 시 canonical 폴백 |
 | `s3_price_daily` | `canonical/market_data/price_daily` | `normalize-price` (KIS KR·FMP US) | 일배치 (FMP 는 한도로 토글 off — ALPHA-558) | ✅ trade_date 파티션 |
 | `s3_investor_flow` | `canonical/market_data/investor_flow_daily` | `normalize-investor` (KIS EOD) | 일배치 | ✅ |
 | `investor_flow_intraday` | `canonical/market_data/investor_flow_intraday` | 장중 수급 레인(평일 5슬롯) | 하루 5슬롯 | ✅ asof_slot 축 분리로 잠정/확정 구분 |
@@ -91,6 +91,10 @@ duck.py `backfill_sources` docstring).
    writer, `intraday_5m` 의 `rollup.writer_owns()` 경계(파티션을 통째로 나눠 소유, 겹치면
    foreign 가드가 정지). 수작업 백필이 상시 파이프라인과 같은 데이터셋을 쓰게 되면 반드시
    이 소유권 경계를 먼저 정한다.
+   ⚠️ **"writer 하나"가 "파일 하나"는 아니다**(ALPHA-941). 롤업은 한 writer 지만
+   `intraday_5m` 에 dataset 마다 다른 파일을 쓴다 — 허용되는 근거는 **행이 서로소**라는
+   것이고(업종코드 ∩ 종목코드 = ∅), 그 비겹침을 코드로 지키는 것이
+   `lake.storage.is_foreign_5m_key` 하나다(산출 가드·구멍 판정이 함께 쓴다).
 4. **잠정과 확정, 축이 다르면 데이터셋을 가른다.** investor_flow_daily↔intraday,
    etf_nav↔etf_inav 의 기존 규율. 업종지수도 일봉과 분봉은 다른 데이터셋이다.
 5. **수렴 방향.**

@@ -637,6 +637,40 @@ class TestSectorIndexRollup:
             )
         assert DAY_KEY not in fx.partition_keys(), "거부했는데 가격 파일이 쓰였다"
 
+    def test_a_directory_marker_is_not_a_foreign_writer(self, tmp_path, monkeypatch):
+        """🔴 0바이트 **디렉터리 마커**가 두 레인을 영구 정지시키면 안 된다.
+
+        `S3Storage.list_keys` 는 프리픽스 아래 모든 키를 준다 — 콘솔·도구가 만드는
+        `…/trade_date=…/` 마커가 섞일 수 있다. 그건 소비자의 `*.parquet` 글롭에 안 걸려
+        이중계상을 못 만드는데, 낯선 파일로 세면 그날 산출이 영구 거부되고 감시는 매일
+        `contested` 를 낸다 — 사람이 소유자를 정해도 안 풀린다(정할 파일이 없다).
+
+        `LocalStorage` 는 파일만 나열해 이 형상을 못 만든다. **실물이 못 만드는 상태가
+        운영에는 있다** — 그래서 목록만 흉내 낸다.
+        """
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)
+        prefix = f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}/"
+        real = fx.storage.list_keys
+        monkeypatch.setattr(fx.storage, "list_keys",
+                            lambda p: ([prefix] if p == prefix else []) + real(p))
+        assert fx.rollup_session() == DAY_KEY, "디렉터리 마커가 산출을 막았다"
+
+    def test_the_foreign_judgement_is_one_predicate(self):
+        """산출 가드와 구멍 판정이 **같은 판정**을 써야 한다 — 두 벌이면 한쪽만 늘어난다.
+
+        판정 자체를 직접 센다: 소유 파일 둘은 통과, 낯선 parquet 은 거부, 소비자가 안 읽는
+        키(마커·체크섬 부산물)는 대상 아님.
+        """
+        from data_pipeline.lake.storage import is_foreign_5m_key
+
+        pre = f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}/"
+        assert not is_foreign_5m_key(DAY_KEY, "KR", SESSION_DATE)
+        assert not is_foreign_5m_key(SECTOR_DAY_KEY, "KR", SESSION_DATE)
+        assert is_foreign_5m_key(pre + "part-toss-backfill.parquet", "KR", SESSION_DATE)
+        assert not is_foreign_5m_key(pre, "KR", SESSION_DATE)          # 디렉터리 마커
+        assert not is_foreign_5m_key(pre + "_SUCCESS", "KR", SESSION_DATE)
+
     def test_zero_volume_bars_are_carried_not_dropped(self, tmp_path):
         """🔴 지수는 자기가 체결되지 않는다 — `volume=0` 이 정상이다(2026-08-10 실측 6.2%).
 

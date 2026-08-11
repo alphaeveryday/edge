@@ -58,7 +58,7 @@ from ..lake.storage import (
     canonical_intraday_5m_key,
     canonical_intraday_5m_prefix,
     canonical_intraday_5m_sector_key,
-    canonical_intraday_5m_writer_keys,
+    is_foreign_5m_key,
     canonical_price_minute_artifact_key,
     canonical_sector_index_minute_artifact_key,
 )
@@ -340,7 +340,7 @@ def _rollup_day(
     # 대조하면 **한쪽이 다른 쪽을 남의 파일로 보고 둘 다 영구 정지한다**. 목록을 넓히는
     # 것이지 가드를 푸는 것이 아니다 — 목록 밖 파일은 여전히 거부다.
     foreign = [k for k in storage.list_keys(canonical_intraday_5m_prefix(market, session_date))
-               if k not in canonical_intraday_5m_writer_keys(market, session_date)]
+               if is_foreign_5m_key(k, market, session_date)]
     if foreign:
         logger.error(
             "5분 롤업 %s(%s): 파티션에 롤업 소유가 아닌 파일이 있다 %s — 나란히 쓰면 행이 두 "
@@ -533,8 +533,7 @@ def unfilled_settled_days(
     unfilled, contested = [], []
     for trade_date in settled:
         keys = storage.list_keys(canonical_intraday_5m_prefix(market, trade_date))
-        owned = canonical_intraday_5m_writer_keys(market, trade_date)
-        if any(k not in owned for k in keys):
+        if any(is_foreign_5m_key(k, market, trade_date) for k in keys):
             # 타 writer 파일이 있으면 `_rollup_day` 가 그날을 **영구 거부**한다.
             # ⚠️ 우리 산출 유무와 **무관하게** 잡아야 한다 — 후크가 09:04 에 쓴 뒤
             # 백필이 끼어드는 순서가 운영에서 더 흔하고, 그때 남는 것은 그 시점에

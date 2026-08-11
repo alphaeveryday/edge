@@ -925,11 +925,28 @@ def canonical_intraday_5m_writer_keys(market: str, trade_date: str) -> frozenset
     ⚠️ 판정하는 자리가 둘이다(`rollup._rollup_day` 의 산출 가드 · `rollup.
     unfilled_settled_days` 의 구멍 판정). 두 벌로 적으면 한쪽만 늘어 산출은 되는데
     감시는 그날을 영구 `contested` 로 보고하는(또는 그 반대) 상태가 된다.
+
+    ⚠️ 대조는 **`.parquet` 키에만** 건다(`is_foreign_5m_key`). `S3Storage.list_keys` 는
+    프리픽스 아래 **모든** 키를 주는데 거기엔 콘솔·도구가 만드는 0바이트 디렉터리 마커
+    (`…/trade_date=2026-08-10/`)가 섞일 수 있다. 그건 소비자의 `*.parquet` 글롭에 안
+    걸려 이중계상을 못 만드는데, 낯선 파일로 세면 **두 레인이 그날 영구 정지**한다.
+    가드의 근거가 "소비자가 글롭으로 읽어 겹치는 행이 두 번 세어진다"이므로 판정 대상도
+    그 글롭이 읽는 것이어야 한다.
     """
     return frozenset({
         canonical_intraday_5m_key(market, trade_date),
         canonical_intraday_5m_sector_key(market, trade_date),
     })
+
+
+def is_foreign_5m_key(key: str, market: str, trade_date: str) -> bool:
+    """이 키가 5분 파티션의 **낯선 writer 파일**인가 — 산출 가드·구멍 판정의 공용 판정.
+
+    소비자가 읽는 것(`*.parquet`)만 대상이다. 판정을 한 함수로 두는 이유는
+    `canonical_intraday_5m_writer_keys` 도크스트링의 "자리가 둘" 과 같다.
+    """
+    return key.endswith(".parquet") and key not in canonical_intraday_5m_writer_keys(
+        market, trade_date)
 
 
 def raw_news_minute_page_key(
