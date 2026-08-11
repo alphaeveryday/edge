@@ -62,8 +62,13 @@ JOB_NAME = "assemble_events"
 DATASET = "source_event"
 
 # 추출기 버전 — provenance. 프롬프트·검증 계약이 바뀌면 올린다(tag-news 의 TAGGER_VERSION
-# 관례). v4 = 2콜 체인 + 다중역할/수량 기록(ALPHA-545).
-ASSEMBLER_VERSION = "assemble-v4"
+# 관례). v4 = 2콜 체인 + 다중역할/수량 기록(ALPHA-545). v5 = 게이트에 타입 정의문(note)
+# 노출 + 유형미상 탈출로·드롭 관측(ALPHA-948). TAGGER_VERSION 과 달리 재처리 게이트가
+# 아니다(증분 판정은 document_entity 자국) — bump 가 재분류 비용을 유발하지 않는다.
+# tag-news 쪽은 같은 카탈로그 변경에도 TAGGER_VERSION 을 올리지 않는다: _is_current 가
+# 버전 축으로 전 기사 재태깅(기사당 LLM 1콜)을 트리거하므로 신규 기사부터만 적용한다
+# (소급 재태깅은 별도 비용 결정).
+ASSEMBLER_VERSION = "assemble-v5"
 
 CLASSIFY_BATCH = 40
 # 추출 콜은 항목당 출력(arguments·measures JSON)이 게이트보다 훨씬 커서 배치를 줄인다
@@ -239,22 +244,31 @@ def read_daily_news(storage: Storage, published_date: str) -> list[dict]:
 
 # ── 분류·추출 (v4 2콜 체인 — 이식원 extract.py 의 게이트→타입별 추출 구조를 edge 관례로) ──
 def _classify_system(view: ProcessRegistry) -> str:
-    """게이트+타입판별 콜(a)의 system — 판별만 하고 인자 추출은 타입별 콜(b)이 한다."""
+    """게이트+타입판별 콜(a)의 system — 판별만 하고 인자 추출은 타입별 콜(b)이 한다.
+
+    타입 줄에 정의문(note, 있는 타입만)을 싣는다(ALPHA-948) — 코드·술어만으로는 타입 경계가
+    안 보여 모델이 이웃 타입에 욱여넣는다(채용 기사가 LAYOFF 로 태깅된 실측). 정의에 맞는
+    타입이 없으면 빈 값으로 두게 탈출로를 명시한다 — 온톨로지에 OTHER 가 없어 목록 강제만
+    있으면 오태깅이 구조적으로 강제된다.
+    """
     types = "\n".join(
         f"- {tid} | pred:{','.join(sorted(tv.predicates))} | req:{','.join(tv.required_roles)}"
+        + (f" | note:{tv.note}" if tv.note else "")
         for tid, tv in sorted(view.types.items())
     )
     return (
         "너는 한국어 금융 뉴스 제목만 보고 문서 성격과 이벤트 타입을 판정하는 게이트다. 제목 외 정보는 없다.\n"
         "각 항목에 대해 아래 JSON 스키마의 오브젝트를 만든다.\n"
         '{"items":[{"id": <입력 id 그대로>, "doc_class": "' + "|".join(GATE_DOC_CLASSES) + '", '
-        '"event_type_code": <doc_class=EVENT 면 아래 목록 중 하나, 아니면 "">, '
+        '"event_type_code": <doc_class=EVENT 면 아래 목록 중 정의에 맞는 하나, 맞는 타입이 없거나 EVENT 가 아니면 "">, '
         '"primary_ticker": <입력 tickers 중 하나 또는 "">, "confidence": 0~1}]}\n'
         "doc_class 메뉴: EVENT=확정된 사실 행동/결과 보도(실적·수주·계약·인수·출시·공시·증설·판결·인사·가격변동). "
         "MARKET_COMMENTARY=시황·시세 동향 해설(가격·지수 등락 자체, 누적 회고·마일스톤 단독). "
         "OPINION_OR_ANALYSIS=전망·분석·칼럼·인터뷰 의견. PROMOTIONAL=보도자료·수상·신제품 홍보톤. "
         "LIST=단순 나열·목록·일정·시세표.\n"
-        "규칙: event_type_code 는 반드시 아래 목록에서만 고른다. primary_ticker 는 입력 tickers 목록에서만 "
+        "규칙: event_type_code 는 반드시 아래 목록에서만 고른다. note 가 있는 타입은 그 정의를 기준으로 판정한다 — "
+        '비슷해 보인다고 다른 사건을 욱여넣지 마라. EVENT 인데 어느 타입의 정의에도 맞지 않으면 event_type_code 를 "" 로 둔다. '
+        "primary_ticker 는 입력 tickers 목록에서만 "
         '고른다(없으면 ""). 목록에 없는 값은 만들지 마라. 술어·인자 추출은 다음 단계가 한다 — 여기선 판별만 한다.\n'
         f"[이벤트 타입 목록]\n{types}"
     )
@@ -333,40 +347,51 @@ def _llm_items(chunk: list[dict], entity_index: dict[str, str]) -> tuple[list[di
 
 
 def _gate_batch(complete_fn, system: str, chunk: list[dict], view: ProcessRegistry,
-                entity_index: dict[str, str]) -> dict[str, dict]:
-    """게이트 콜 40건배치 1개 → {article_id: 검증된 게이트 판정}. 배치 로컬 dict 만 반환
-    (공유상태 미접근)해 스레드에서 안전하게 돈다 — merge 는 호출부가 메인스레드에서 한다."""
+                entity_index: dict[str, str]) -> tuple[dict[str, dict], dict[str, int]]:
+    """게이트 콜 40건배치 1개 → ({article_id: 검증된 게이트 판정}, 드롭 사유 카운터).
+    배치 로컬 dict 만 반환(공유상태 미접근)해 스레드에서 안전하게 돈다 — merge 는 호출부가
+    메인스레드에서 한다. 드롭 카운터는 EVENT 판정인데 계보에 못 실은 사유별 건수다(Rule 12
+    — 무성 드롭 금지, ALPHA-948)."""
     items, allowed_by_id = _llm_items(chunk, entity_index)
     payload = _complete_json(complete_fn, system, json.dumps({"items": items}, ensure_ascii=False))
     out: dict[str, dict] = {}
+    drops: dict[str, int] = {}
     raw_items = payload.get("items")
     # items 컨테이너·항목이 비정형이어도 그 항목만 버린다(국소 실패) — 배치 전체 롤백 금지.
     for item in (raw_items if isinstance(raw_items, list) else ()):
         if not isinstance(item, dict):
             continue
-        validated = _validate_gate(item, view, entity_index, allowed_by_id)
+        validated, drop_reason = _validate_gate(item, view, entity_index, allowed_by_id)
         if validated is not None:
             out[validated["article_id"]] = validated
-    return out
+        elif drop_reason is not None:
+            drops[drop_reason] = drops.get(drop_reason, 0) + 1
+    return out, drops
 
 
 def _validate_gate(item: dict, view: ProcessRegistry, entity_index: dict[str, str],
-                   allowed_by_id: dict[str, set[str]]) -> dict | None:
+                   allowed_by_id: dict[str, set[str]]) -> tuple[dict | None, str | None]:
+    """게이트 항목 1건 검증 → (판정, 드롭 사유). 비이벤트(doc_class≠EVENT)는 드롭이 아니라
+    정상 판별이라 사유 없이 거른다. EVENT 인데 못 실은 건은 사유를 낸다(ALPHA-948) —
+    `type_unmatched`(정의에 맞는 타입 없음 — 프롬프트 탈출로의 정직한 산출)와
+    `type_invalid`(목록 밖 발명)·`ticker_invalid`(입력 밖/미해소 티커)를 가른다."""
     article_id = item.get("id")
     if not article_id or item.get("doc_class") != "EVENT":
-        return None
+        return None, None
     event_type = str(item.get("event_type_code") or "")
+    if not event_type:
+        return None, "type_unmatched"
     if event_type not in view.types:
-        return None
+        return None, "type_invalid"
     ticker = str(item.get("primary_ticker") or "")
     if ticker not in allowed_by_id.get(str(article_id), set()):
         # 프롬프트는 "입력 tickers 중에서만"을 이미 명시하지만 엔진 검증은 전역 유니버스만
         # 봤다 — 모델이 무관한 유니버스 종목을 반환하면 엉뚱한 회사에 이벤트·스레드가 선다
         # (Codex #137). 프롬프트 규칙의 코드 강제이지 분류 시맨틱 변경이 아니다.
-        return None
+        return None, "ticker_invalid"
     entity_id = entity_index.get(ticker)
     if entity_id is None:
-        return None
+        return None, "ticker_invalid"
     try:
         confidence = float(item.get("confidence"))
     except (TypeError, ValueError):
@@ -375,7 +400,7 @@ def _validate_gate(item: dict, view: ProcessRegistry, entity_index: dict[str, st
         confidence = None
     tv = view.types[event_type]
     role_code = tv.required_roles[0] if tv.required_roles else "ISSUER"
-    return {
+    return ({
         "article_id": str(article_id),
         "event_type_code": event_type,
         "primary_ticker": ticker,
@@ -389,7 +414,7 @@ def _validate_gate(item: dict, view: ProcessRegistry, entity_index: dict[str, st
         # 실으면 규제당국 주장이 조작된다.
         "anchor_role": tv.primary_roles[0] if len(tv.primary_roles) == 1 else None,
         "confidence": confidence,
-    }
+    }, None)
 
 
 def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[dict],
@@ -578,7 +603,8 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
 
 def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
                     entity_index: dict[str, str],
-                    concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY) -> dict[str, dict]:
+                    concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY,
+                    gate_drops_out: dict[str, int] | None = None) -> dict[str, dict]:
     """article_id → 검증된 v4 추출(게이트 EVENT + 해소 가능한 primary + 타입별 인자).
 
     2콜 체인: (a) 게이트 배치(40건)가 doc_class·타입·primary 를 판별하고, (b) 게이트를 통과한
@@ -587,6 +613,9 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
     순차 실행과 결과 동일(article_id 는 배치 간 유일이라 순서 무관). 추출 콜이 누락한 기사는
     적재하지 않는다(이식원 규약: 누락=추출 실패, 비이벤트 아님) — 자국이 안 남아 다음 런에서
     재시도된다.
+
+    gate_drops_out(선택): EVENT 판정인데 계보에 못 실은 게이트 드롭 사유별 건수를 병합해
+    준다(ALPHA-948, Rule 12) — 호출부(run)가 quality_log 봉투로 드러낸다.
     """
     concurrency = max(1, min(concurrency, MAX_CLASSIFY_CONCURRENCY))
     batches = [rows[start:start + CLASSIFY_BATCH] for start in range(0, len(rows), CLASSIFY_BATCH)]
@@ -595,10 +624,13 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
     gate_system = _classify_system(view)
     gate: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(concurrency, len(batches))) as pool:
-        for partial in pool.map(
+        for partial, drops in pool.map(
                 lambda chunk: _gate_batch(complete_fn, gate_system, chunk, view, entity_index),
                 batches):
             gate.update(partial)  # 메인스레드 순차 병합(경합 없음)
+            if gate_drops_out is not None:
+                for reason, count in drops.items():
+                    gate_drops_out[reason] = gate_drops_out.get(reason, 0) + count
     if not gate:
         return {}
 
@@ -1248,6 +1280,10 @@ def run(
     classified = events_created = threaded = unknown_thread = 0
     stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
     dart_matched = dart_ambiguous = 0
+    # 게이트 드롭 사유(type_unmatched 등)·타입 분포(ALPHA-948) — 욱여넣기 패턴을 데이터로
+    # 발견 가능하게 봉투로 드러낸다. 날짜 커밋 뒤에만 합산(아래 카운터 규약과 동일).
+    gate_drops: dict[str, int] = {}
+    event_type_distribution: dict[str, int] = {}
     failures: list[dict] = []
     exit_code = 0
 
@@ -1276,8 +1312,10 @@ def run(
                 in_universe = [n for n in news if any(t in entity_index for t in n["tickers"])]
                 already = assembled_source_ids(conn, [n["article_id"] for n in in_universe])
                 todo = [n for n in in_universe if n["article_id"] not in already]
+                date_gate_drops: dict[str, int] = {}
                 classifications = (classify_titles(complete_fn, todo, view, entity_index,
-                                                   concurrency=concurrency)
+                                                   concurrency=concurrency,
+                                                   gate_drops_out=date_gate_drops)
                                    if todo else {})
                 # 적재 직전 자국 재확인(ALPHA-730) — 분류(LLM, 수 분) 창에서 1분 단건
                 # 조립이 먼저 조립한 기사는 뺀다. doc 락은 이 날짜 커밋까지 유지된다.
@@ -1300,6 +1338,11 @@ def run(
             already_normalized += len(in_universe) - len(todo)
             classified += len(classifications)
             assembled_during_classify += len(raced)
+            for reason, count in date_gate_drops.items():
+                gate_drops[reason] = gate_drops.get(reason, 0) + count
+            for c in classifications.values():
+                etype = c["event_type_code"]
+                event_type_distribution[etype] = event_type_distribution.get(etype, 0) + 1
             # 품질 카운터(Rule 12) — stage 오염 차단·엔티티 해소 실패를 로그로 드러낸다.
             stage_rejected += sum(
                 1 for c in classifications.values() if c.get("stage_rejected"))
@@ -1354,6 +1397,12 @@ def run(
         "assembled_during_classify": assembled_during_classify,
         "events_created": events_created, "threaded": threaded,
         "unknown_thread": unknown_thread,
+        # 게이트 드롭 사유별 건수(ALPHA-948) — type_unmatched(정의에 맞는 타입 없음, 탈출로의
+        # 정직한 산출)·type_invalid(목록 밖 발명)·ticker_invalid. 런당 타입 분포와 함께
+        # 욱여넣기(한 타입 과대 편중) 패턴을 데이터로 발견하는 축이다. 드롭은 자국이 안 남아
+        # 다음 런에 재분류된다 — 유실이 아니라 판정 보류다(ops.failed_records 에 안 더하는 이유).
+        "gate_drops": gate_drops,
+        "event_type_distribution": dict(sorted(event_type_distribution.items())),
         "stage_rejected": stage_rejected,
         "arguments_unresolved": arguments_unresolved,
         "anchorless_events": anchorless_events,
@@ -1383,12 +1432,12 @@ def run(
     logger.info(
         "assemble_events: read=%d in_universe=%d already=%d raced=%d classified=%d created=%d"
         " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d anchorless=%d"
-        " concepts=%d"
+        " concepts=%d type_unmatched=%d gate_drops=%d"
         " dart_matched=%d dart_ambiguous=%d failures=%d",
         news_read, in_universe_count, already_normalized, assembled_during_classify,
         classified, events_created,
         threaded, unknown_thread, stage_rejected, arguments_unresolved, anchorless_events,
-        concepts_minted,
+        concepts_minted, gate_drops.get("type_unmatched", 0), sum(gate_drops.values()),
         dart_matched, dart_ambiguous, len(failures),
     )
     return exit_code
