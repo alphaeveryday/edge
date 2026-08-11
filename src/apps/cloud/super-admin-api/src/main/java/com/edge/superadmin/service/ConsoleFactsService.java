@@ -61,15 +61,21 @@ public class ConsoleFactsService {
 	private static final String FRESHNESS_REASON_MISSING = "FRESHNESS_REASON_MISSING";
 
 	/**
-	 * 계약은 걸렸지만 그 날 <b>실행 대상이 아니었던</b> 데이터셋(전건 {@code SKIPPED}).
+	 * 계약은 걸렸는데 <b>그 계약으로 그 날 실행 대상이던 작업이 없는</b> 데이터셋.
 	 *
-	 * <p>휴장일이 이 자리다 — Planner 는 비거래일 작업에도 계약 키를 남기되 {@code plan_status} 를
-	 * {@code SKIPPED} 로 두고 신선도를 <b>안 쓴다</b>({@code ops/planner.py}). 마이그레이션이
-	 * 정의한 대로 그 NULL 은 <b>NOT_APPLICABLE 이고 UNKNOWN 과 다르다</b>
-	 * ({@code V202607311300__add_expected_task_freshness.sql}).
+	 * <p>Planner 는 계약 키를 {@code plan_status} 와 무관하게 쓰고, 신선도는 {@code DUE} 일 때만
+	 * 쓴다({@code ops/planner.py}). 마이그레이션이 정의한 대로 그 NULL 은 <b>NOT_APPLICABLE 이고
+	 * UNKNOWN 과 다르다</b>({@code V202607311300__add_expected_task_freshness.sql}). 그래서 그
+	 * 데이터셋을 {@link #ACTUAL_AS_OF_MISSING} 으로 접으면 아무도 기대하지 않은 데이터를 안 왔다고
+	 * 세게 된다.
 	 *
-	 * <p>이걸 {@link #ACTUAL_AS_OF_MISSING} 으로 접으면 <b>정상 휴장일마다 증거 결손 경보</b>가
-	 * 선다 — 아무도 기대하지 않은 데이터를 안 왔다고 세는 것이다(리뷰가 잡았다).
+	 * <p>⚠️ <b>오늘 이 코드가 나가는 원장 조합은 없다</b> — 계약이 걸린 카탈로그 엔트리는
+	 * {@code ETF_HOLDINGS_COLLECTION_KRX} 하나뿐이고 그 엔트리는 {@code kr_trading_calendar} 를
+	 * 켜지 않아 휴장일에도 {@code DUE} 로 선다({@code ops/catalog.py}). 그 플래그를 켠 다섯 엔트리는
+	 * 계약이 없다. 즉 <b>휴장일 때문에 이 분기가 필요한 것이 아니다</b>(리뷰 4라운드에서 그렇게
+	 * 적었다가 정정했다 — 계약과 달력 게이트가 겹치는 엔트리가 아직 없다). 남겨 두는 이유는
+	 * 스키마와 Planner 가 그 조합을 <b>허용</b>하고, 계약 엔트리 하나에 그 플래그가 붙는 순간
+	 * 대안이 조용한 거짓 경보이기 때문이다.
 	 */
 	private static final String NOT_APPLICABLE = "NOT_APPLICABLE";
 
@@ -137,13 +143,23 @@ public class ConsoleFactsService {
 	private static DatasetResponse dataset(String id, List<TaskRow> rows) {
 		boolean contract = rows.stream().anyMatch(t -> t.datasetContractKey() != null);
 
-		/* 🔴 **신선도는 그 날 실행 대상이던 작업(`DUE`)에서만 접는다.** Planner 는 비거래일 작업에도
-		 * 계약 키를 남기되 `plan_status='SKIPPED'` 로 두고 신선도를 안 쓴다(`ops/planner.py`) —
-		 * 그 NULL 은 **NOT_APPLICABLE 이고 UNKNOWN 과 다르다**(마이그레이션이 정의한 구분). 전건을
-		 * 그냥 접으면 휴장일 데이터셋이 "계약은 있는데 근거가 없다"로 서서 **정상 휴장일마다 증거
-		 * 결손 경보**가 난다. `SKIPPED` 행은 스키마상 as-of·수집시각·신선도가 전부 NULL 이라
-		 * (`ck_ops_expected_task_freshness_applicability`) 접기에 보탤 사실도 없다. */
-		List<TaskRow> due = rows.stream().filter(t -> "DUE".equals(t.planStatus())).toList();
+		/* 🔴 **신선도는 계약이 걸린 채 그 날 실행 대상이던 작업에서만 접는다**(`DUE` ∧ 계약 키 있음).
+		 * 이 축의 사실은 **계약의 것**이지 데이터셋에 붙은 아무 작업의 것이 아니다.
+		 *
+		 * 네 값 중 셋(actual as-of·수집 시각·신선도)은 스키마가 이미 그렇게 강제한다 —
+		 * `ck_ops_expected_task_freshness_applicability` 가 `DUE` ∧ 계약이 아닌 행의 그 컬럼들을
+		 * 전부 NULL 로 묶는다. 좁히지 않아도 결과가 같다는 뜻이다.
+		 *
+		 * ⚠️ **`expected_as_of_date` 하나만 다르다** — Planner 는 그 컬럼을 계약 유무와 무관하게
+		 * **모든 작업에** 쓰고, 값이 갈린다(계약 작업은 `resolve_expected_as_of`, 나머지는
+		 * `slot_date` — `ops/planner.py`). 그래서 안 좁히면 계약이 없는 작업의 기대일이 계약
+		 * 데이터셋의 `expectedAsOf` 로 나갈 수 있다. 실물 조합이다: `etf_holdings` 는 계약이 걸린
+		 * `ETF_HOLDINGS_COLLECTION_KRX` 와 계약이 없는 `NORMALIZE_ETF` 를 함께 갖고
+		 * (`ops/catalog.py`), 그 계약은 actual 을 늘 NULL 로 써서(ADR-0043 첫 슬라이스) 기대일
+		 * 접기가 **정상 경로**다 — 아무 계약도 하지 않은 기대일에 계약 작업의 사유가 붙는다. */
+		List<TaskRow> judged = rows.stream()
+				.filter(t -> "DUE".equals(t.planStatus()) && t.datasetContractKey() != null)
+				.toList();
 
 		/* 🔴 **as-of 쌍은 한 작업에서 통째로 가져온다.** 한 데이터셋에 작업이 여럿일 때
 		 * `expected` 와 `actual` 을 각자 접으면(`max` 와 `min`) **어느 작업에도 없던 쌍**이
@@ -155,7 +171,7 @@ public class ConsoleFactsService {
 		 * 곧 낡음을 드러내는 방향이다. 마지막 tie-break 는 작업 키다 — as-of 쌍이 완전히 동률이면
 		 * 어느 행을 골라도 쌍은 같지만, **판정 불가 사유가 이 선택을 따라오므로**(아래) 안 두면
 		 * 같은 원장이 조회 순서에 따라 서로 다른 사유를 낸다. */
-		TaskRow stalest = due.stream().filter(t -> t.actualAsOf() != null)
+		TaskRow stalest = judged.stream().filter(t -> t.actualAsOf() != null)
 				.min(Comparator.comparing(TaskRow::actualAsOf)
 						.thenComparing(TaskRow::expectedAsOf,
 								Comparator.nullsLast(Comparator.reverseOrder()))
@@ -164,9 +180,9 @@ public class ConsoleFactsService {
 		/* as-of 근거가 아예 없으면 비교할 쌍이 없다 — 그때만 expected 를 따로 접는다(표시용). */
 		LocalDate actualAsOf = stalest == null ? null : stalest.actualAsOf();
 		LocalDate expectedAsOf = stalest != null ? stalest.expectedAsOf()
-				: due.stream().map(TaskRow::expectedAsOf).filter(Objects::nonNull)
+				: judged.stream().map(TaskRow::expectedAsOf).filter(Objects::nonNull)
 						.max(Comparator.naturalOrder()).orElse(null);
-		OffsetDateTime collectedAt = due.stream().map(TaskRow::collectedAt)
+		OffsetDateTime collectedAt = judged.stream().map(TaskRow::collectedAt)
 				.filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(null);
 
 		/* 🔴 **원장이 UNKNOWN 이라고 말했으면 그게 답이다.** `actual_as_of_date` 유무만 보면
@@ -180,14 +196,14 @@ public class ConsoleFactsService {
 		 * B 의 as-of 와 A 의 사유가 한 행에 실려 서로 다른 작업이 한 사실로 섞인다(리뷰가 잡았다 —
 		 * 그 조합은 스키마가 허용한다: UNKNOWN 은 `actual > expected` 여도 성립한다). 기준 작업이
 		 * UNKNOWN 이 아닐 때만 나머지에서 찾는다. */
-		Optional<TaskRow> unknown = Stream.concat(Stream.ofNullable(stalest), due.stream())
+		Optional<TaskRow> unknown = Stream.concat(Stream.ofNullable(stalest), judged.stream())
 				.filter(t -> "UNKNOWN".equals(t.freshnessStatus())).findFirst();
 
 		String unverifiable;
 		if (!contract) {
 			unverifiable = CONTRACT_NOT_APPLIED;
-		} else if (due.isEmpty()) {
-			// 계약은 걸렸는데 그 날 실행 대상인 작업이 없었다 — 휴장일이다(위 `due` 주석).
+		} else if (judged.isEmpty()) {
+			// 계약은 걸렸는데 그 계약으로 그 날 실행 대상이던 작업이 없었다(위 `judged` 주석).
 			unverifiable = NOT_APPLICABLE;
 		} else if (unknown.isPresent()) {
 			/* 스키마상 UNKNOWN 이면 사유가 있지만(`ck_ops_expected_task_freshness_pair`) 그 제약은
@@ -198,8 +214,13 @@ public class ConsoleFactsService {
 					.filter(reason -> !reason.isBlank())
 					.orElse(FRESHNESS_REASON_MISSING);
 		} else if (actualAsOf == null) {
-			/* 여기는 원장이 UNKNOWN 이라 말하지 않았는데 근거가 없는 자리다 — 스키마상 사유도 없다
-			 * (`ck_ops_expected_task_freshness_pair`: 사유는 상태가 있을 때만 존재한다). */
+			/* ⚠️ **스키마상 여기 오지 않는다.** `judged` 는 계약 ∧ `DUE` 라 상태가 non-null 이고
+			 * (`ck_ops_expected_task_contract_freshness_status`), FRESH·STALE 은 actual 을 요구하며
+			 * (`ck_ops_expected_task_verified_as_of`), UNKNOWN 은 위 분기가 잡는다.
+			 *
+			 * 그래도 `null` 로 떨어뜨리지 않는다 — 원장이 그 제약을 잃는 날 이 자리의 대안은
+			 * **판정 불가가 조용히 정상으로 서는 것**이고, 그게 이 축이 없애려는 실패다(Rule 12).
+			 * 스키마가 막는 상태에 새 가드를 더하지는 않되, 이미 갈래가 있는 자리를 비우지도 않는다. */
 			unverifiable = ACTUAL_AS_OF_MISSING;
 		} else {
 			unverifiable = null;

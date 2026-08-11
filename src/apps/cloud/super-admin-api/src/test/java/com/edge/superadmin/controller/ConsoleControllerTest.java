@@ -430,18 +430,63 @@ class ConsoleControllerTest {
 						.value("FRESHNESS_REASON_MISSING"));
 	}
 
-	/**
-	 * 대비: 계약은 있는데 <b>as-of 근거 자체가 없는</b> 자리는 {@code ACTUAL_AS_OF_MISSING} 이다.
-	 * 두 코드가 서로 다른 사실을 가리키므로 한쪽으로 뭉개면 안 된다.
-	 */
+	/** 원장이 사유를 남겼으면 그게 이긴다 — 서버 기본 코드로 덮지 않는다. */
 	@Test
-	void as_of_근거가_없는_것과_사유가_없는_것은_다른_코드다() throws Exception {
+	void 원장이_남긴_사유는_서버_기본_코드로_덮이지_않는다() throws Exception {
 		mvc(factsWithTask(task("COLLECT", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, null, DB_NOW,
 				"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED")))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value(nullValue()))
-				// 원장이 사유를 남겼으면 그게 이긴다 — 기본 코드로 덮지 않는다.
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_UNVERIFIED"));
+	}
+
+	/**
+	 * 🔴 <b>원장이 제약을 잃어도 판정 불가가 정상으로 서지 않는다.</b> 계약 ∧ {@code DUE} 인데
+	 * 신선도 상태가 없고 as-of 근거도 없는 행은 <b>스키마가 막는다</b>
+	 * ({@code ck_ops_expected_task_contract_freshness_status}). 그래서 이 픽스처는 원장에 없는
+	 * 조합이고, 그 사실을 알고 넣는다 — 이 갈래의 일이 <b>제약이 깨진 날</b>을 위한 것이라서다.
+	 *
+	 * <p>여기서 {@code null} 이 나가면 아무도 못 본 데이터셋이 화면에서 <b>정상</b>으로 그려진다
+	 * (Rule 12). 갈래가 있는데 어느 테스트도 안 밟으면 그 갈래는 조용히 지워질 수 있다 —
+	 * 리뷰가 잡은 자리다.
+	 */
+	@Test
+	void 상태도_근거도_없는_계약_작업은_정상으로_서지_않는다() throws Exception {
+		mvc(factsWithTask(task("COLLECT", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, null, DB_NOW,
+				null, null)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].contract").value(true))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_MISSING"));
+	}
+
+	/**
+	 * 🔴 <b>기대일은 계약 작업의 것이다.</b> Planner 는 {@code expected_as_of_date} 를 계약 유무와
+	 * 무관하게 모든 작업에 쓰고 값이 갈린다(계약 작업은 {@code resolve_expected_as_of}, 나머지는
+	 * {@code slot_date}). 접기를 계약으로 안 좁히면 <b>아무 계약도 하지 않은 기대일</b>이 계약
+	 * 데이터셋의 {@code expectedAsOf} 로 나가고, 거기에 계약 작업의 사유가 붙는다.
+	 *
+	 * <p>⚠️ 실물 조합이다 — {@code etf_holdings} 는 계약이 걸린
+	 * {@code ETF_HOLDINGS_COLLECTION_KRX} 와 계약이 없는 {@code NORMALIZE_ETF} 를 함께 갖고
+	 * ({@code ops/catalog.py}), 그 계약은 actual 을 늘 NULL 로 써서 기대일 접기가 <b>정상 경로</b>다
+	 * (리뷰가 잡았다). 그래서 비계약 행의 기대일을 <b>더 늦게</b> 둔다 — max 접기가 그걸 집도록.
+	 */
+	@Test
+	void 기대일은_계약_없는_작업에서_오지_않는다() throws Exception {
+		mvc(factsWithTask(
+				task("ETF_HOLDINGS_COLLECTION_KRX", "etf_holdings", "ETF_HOLDINGS_KRX_EOD",
+						DAY.minusDays(2), null, DB_NOW, "UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED"),
+				// 계약이 없으니 as-of·수집시각·신선도는 스키마상 전부 NULL 이고 기대일만 있다.
+				task("NORMALIZE_ETF", "etf_holdings", null, DAY, null, null, null, null)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets.length()").value(1))
+				.andExpect(jsonPath("$.result.datasets[0].contract").value(true))
+				// 비계약 작업의 08-03 이 아니라 계약 작업의 08-01 이다.
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-01"))
 				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
 						.value("ACTUAL_AS_OF_UNVERIFIED"));
 	}
