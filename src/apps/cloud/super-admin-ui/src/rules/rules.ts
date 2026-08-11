@@ -531,8 +531,13 @@ export const RULES: Rule[] = [
       const out: ReturnType<Rule['run']> = [];
       const stages = f.chain?.stages ?? [];
       (['batch', 'intraday'] as const).forEach((src) => {
-        let prev: number | null | undefined =
-          src === 'batch' ? f.chain?.feeds[0]?.v : f.chain?.feeds[1]?.v;
+        /* ⚠️ **피드 값에도 단계와 같은 술어를 건다.** `chainPoints`(canRun)는 유한수만 점으로
+         * 세는데 여기서 그냥 실으면 손상된 피드(검증 안 된 JSON 의 `"20"`·`Infinity`)가 `prev` 가
+         * 되고, 아래 `v < prev` 가 강제 변환·무한 비교로 **거짓 P0 체인 손실**을 낸다
+         * (`metric` 이 `Infinity` 인 위반까지 나간다). 단계 쪽만 막고 여기를 빠뜨렸던 자리다 —
+         * `compose` 가드 때와 같은 "한곳만 고침"이다. */
+        const feed = src === 'batch' ? f.chain?.feeds[0]?.v : f.chain?.feeds[1]?.v;
+        let prev: number | null | undefined = Number.isFinite(feed) ? feed : null;
         let prevLabel = src === 'batch' ? '배치 트리거' : '장중 트리거';
         stages.forEach((s) => {
           if (s.blind) return; // 관측 불가 단계는 비교 축에서 제외 — 0 이 아니다

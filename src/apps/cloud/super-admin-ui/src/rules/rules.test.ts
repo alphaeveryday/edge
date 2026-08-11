@@ -524,6 +524,38 @@ test('합성 대상 축은 세션만이 아니다 — 체인 단계 id 가 비�
   assert.equal(rr.violations, 0);
 });
 
+test('R10 경계 — 손상된 피드 값은 비교 기준이 못 된다 (거짓 P0 체인 손실이 나던 자리)', () => {
+  /* `chainPoints`(canRun)는 유한수만 점으로 세는데 `run()` 은 피드 값을 검사 없이 `prev` 로
+   * 실었다 — **단계 쪽만 막고 피드 쪽을 빠뜨린** 갈림이다. 검증 안 된 JSON 의 `"20"`·`Infinity`
+   * 가 기준이 되면 `v < prev` 가 강제 변환·무한 비교로 통과해 P0 체인 손실이 지어내진다.
+   * `Infinity` 는 `metric: Infinity` 라는 렌더 불가 값까지 낸다. */
+  for (const bad of ['20' as unknown as number, Number.POSITIVE_INFINITY, Number.NaN]) {
+    const f = emptyFacts();
+    f.chain = {
+      feeds: [
+        { id: 'fb', label: '배치 트리거', v: bad, unit: 'ETF', src: 't' },
+        { id: 'fi', label: '장중 트리거', v: 10, unit: '건', src: 't' },
+      ],
+      stages: [
+        { id: 'c.obs', label: '관측', batch: 5, intraday: 10, src: 's' },
+        { id: 'c.run', label: '런', batch: 5, intraday: 10, src: 's' },
+      ],
+    };
+    const v = hits(f, 'R10');
+    assert.deepEqual(v, [], `손상 피드(${String(bad)})가 체인 손실을 지어냈다: ${JSON.stringify(v.map((x) => [x.targetId, x.metric]))}`);
+  }
+  /* 멀쩡한 피드는 그대로 잡혀야 한다 — 가드가 규칙을 통째로 죽이면 그건 고친 게 아니다 */
+  const ok = emptyFacts();
+  ok.chain = {
+    feeds: [
+      { id: 'fb', label: '배치 트리거', v: 20, unit: 'ETF', src: 't' },
+      { id: 'fi', label: '장중 트리거', v: 10, unit: '건', src: 't' },
+    ],
+    stages: [{ id: 'c.obs', label: '관측', batch: 5, intraday: 10, src: 's' }],
+  };
+  assert.deepEqual(hits(ok, 'R10').map((x) => x.metric), [15], '멀쩡한 피드까지 버렸다');
+});
+
 test('R11 소비자 부재 — 대기>0·in-flight 0·구독자 0 전부 만족할 때만', () => {
   const f = emptyFacts();
   f.queues = [
