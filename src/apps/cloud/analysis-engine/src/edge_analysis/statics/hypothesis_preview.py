@@ -52,6 +52,26 @@ class EventCandidate:
     evidence_id: str = ""
 
 
+# 정규장 마감(KST). 마감 **정각 포함** 이후 관측된 사건은 그날 종가에 선행할 수
+# 없어(종가는 15:30 에 확정) 실효 거래일이 다음 거래일로 밀린다 — 경계는 보수적
+# PIT 쪽으로 접는다. duck 세션이 TimeZone=Asia/Seoul 이라(statics/duck.py)
+# available_at 캐스팅은 KST 벽시계로 떨어진다.
+_SESSION_CLOSE = "15:30:00"
+
+# 사건의 **실효 거래일**: 시장이 그 사건에 반응할 수 있었던 첫 거래 세션.
+# event_date(사건 명목일)가 아니라 available_at(관측 가능 시점)에서 유도한다 —
+# 주말·장마감 후 사건은 명목일에 거래가 없거나 세션이 이미 닫혀 "사건일 수익률"이
+# 성립하지 않는다(ALPHA-932: 전 거래일 event_date 가 설명일 동일성 필터에서
+# 앵커를 전멸시킨 실측). 달력은 v_daily 의 거래일 집합이다 — 별도 달력 표면을
+# 만들지 않는다. TIMESTAMPTZ→TIME 직접 캐스팅은 DuckDB 에 없다 — 세션
+# TZ(Asia/Seoul)가 적용되는 TIMESTAMP 경유로 벽시계를 얻는다.
+_EFFECTIVE_BASE = f"""
+        CASE WHEN CAST(CAST(e.available_at AS TIMESTAMP) AS TIME) >= TIME '{_SESSION_CLOSE}'
+             THEN CAST(CAST(e.available_at AS TIMESTAMP) AS DATE) + 1
+             ELSE CAST(CAST(e.available_at AS TIMESTAMP) AS DATE) END
+"""
+
+
 def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str, day: str,
                                as_of: str, today: float | None,
                                min_n: int) -> EventDistributionPreviewResult:
@@ -67,12 +87,26 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
     clock = as_of.replace("T", " ")[11:19]
     base = _base(day, clock)
     try:
+        # 앵커는 사건·종목으로만 잡는다 — PIT 은 v_event 의 available_at 클램프가
+        # 이미 보장하고, 날짜 동일성 요구는 후보 발견 창("직전 거래일~요청창 끝")과
+        # 어긋나 주말·전일 사건을 전멸시킨다(ALPHA-932). 대신 **현재성**을 따로
+        # 판정한다: 실효 거래일 이후 오늘 전에 완결된 거래일이 있으면 시장은 이미
+        # 그날 반응했다 — 오늘 수익률과 비교할 사건이 아니다.
         anchor = lake.sql(base + f"""
-        SELECT DISTINCT instrument_id, event_type_code
-        FROM v_event
-        WHERE source_event_id = {literal(source_event_id)}
-          AND instrument_id = {literal(instrument_id)}
-          AND trade_date = DATE {literal(day)}
+        SELECT DISTINCT e.instrument_id, e.event_type_code,
+               ({_EFFECTIVE_BASE}) <= DATE {literal(day)}
+               AND NOT EXISTS (
+                   -- 달력은 **그 종목의** 거래일이다: 거래정지면 시장이 열려도 이
+                   -- 종목은 반응할 수 없다 - 전 시장 달력은 정지 종목의 앵커를
+                   -- 잘못 기각하고 재개일 표본을 놓친다.
+                   SELECT 1 FROM v_daily cal
+                   WHERE cal.instrument_id = e.instrument_id
+                     AND cal.trade_date >= ({_EFFECTIVE_BASE})
+                     AND cal.trade_date < DATE {literal(day)}
+               ) AS is_current
+        FROM v_event e
+        WHERE e.source_event_id = {literal(source_event_id)}
+          AND e.instrument_id = {literal(instrument_id)}
         """)
     except Exception as e:  # noqa: BLE001 - this is an unavailable server data surface
         raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
@@ -81,15 +115,29 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
             "UNAVAILABLE", "ANCHOR_NOT_FOUND", None, 0, None, min_n)
     if len(anchor) != 1:
         raise PreviewExecutionError("EVENT_DISTRIBUTION_ANCHOR_AMBIGUOUS")
-    instrument_id, event_type_code = map(str, anchor[0])
+    instrument_id, event_type_code, is_current = anchor[0]
+    instrument_id, event_type_code = str(instrument_id), str(event_type_code)
+    if not is_current:
+        return EventDistributionPreviewResult(
+            "UNAVAILABLE", "ANCHOR_NOT_CURRENT", None, 1, None, min_n)
     try:
-        historical = lake.sql(base + f"""
-        SELECT DISTINCT e.instrument_id, e.trade_date, d.ar
-        FROM v_event e
+        # 과거 표본도 같은 실효 거래일 축이다: 사건별 available_at → 첫 거래일 →
+        # 그날 AR. 명목일 조인은 주말 사건을 표본에서 조용히 떨어뜨려 분포를
+        # 얇게 만든다(같은 결함의 과거 분포판).
+        historical = lake.sql(base + f""",
+        _eff AS (
+            SELECT e.instrument_id,
+                   (SELECT MIN(cal.trade_date) FROM v_daily cal
+                     WHERE cal.instrument_id = e.instrument_id
+                       AND cal.trade_date >= ({_EFFECTIVE_BASE})) AS trade_date
+            FROM v_event e
+            WHERE e.event_type_code = {literal(event_type_code)}
+        )
+        SELECT DISTINCT f.instrument_id, f.trade_date, d.ar
+        FROM _eff f
         JOIN v_daily d
-          ON d.instrument_id = e.instrument_id AND d.trade_date = e.trade_date
-        WHERE e.event_type_code = {literal(event_type_code)}
-          AND e.trade_date < DATE {literal(day)}
+          ON d.instrument_id = f.instrument_id AND d.trade_date = f.trade_date
+        WHERE f.trade_date < DATE {literal(day)}
           AND d.ar IS NOT NULL
         """)
     except Exception as e:  # noqa: BLE001 - no partial distribution is publishable
