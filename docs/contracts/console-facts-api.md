@@ -362,14 +362,20 @@ REJECTED 적재가 생기면 이 수의 뜻이 조용히 바뀐다.
 
 🔴 **이 게이트가 안 덮는 잔여 셋**:
 
-1. **소급 적재는 지난 날의 버킷도 다시 연다.** `document.available_at` 의 뜻이 writer 마다 다르다 —
-   `minute/canonical_news.py` 는 **실제 처리 시각**(정정 시 `GREATEST` 로 단조 증가)이지만
-   `steps/assemble_events.py` 는 **`published_at`**, `steps/load_documents.py` 는 `fetched_at` 폴백
-   `published_at` 이다. 셋 다 `ON CONFLICT (source_code, source_document_id) DO NOTHING` 이라
-   **먼저 넣은 writer 가 값을 정한다.** 게다가 뉴스 day-close 는 00:10 에 돌며 **어제 창**을
-   처리한다(#669). `o.pub` 도 같은 부류다 — dev 실측(행 기준) 08-10 → 30 당일 + 4 익일 ·
-   **08-03 → 15 + 15(절반이 익일)**. ⇒ 자정 직후 어제를 조회하면 `base` 는 서는데 `today` 는 더
-   자랄 수 있다.
+1. **지난 날의 버킷은 양방향으로 흔들린다.** `document.available_at` 의 뜻이 writer 마다 다르고
+   **충돌 처리도 다르다**:
+
+   | writer | `available_at` | `ON CONFLICT (source_code, source_document_id)` | 과거 버킷에 미치는 영향 |
+   |---|---|---|---|
+   | `steps/assemble_events.py` | **`published_at`** | `DO NOTHING` | 나중에 돌아도 **과거** 버킷에 실린다 → 늘린다 |
+   | `steps/load_documents.py` | `fetched_at` 폴백 `published_at` | `DO NOTHING` | 폴백을 탄 행만 과거 버킷 |
+   | `minute/canonical_news.py` | **실제 처리 시각** | `DO UPDATE … GREATEST(기존, 신규)` | 정정이 오면 값을 **앞으로 민다** → 과거 버킷을 줄인다 |
+
+   `DO NOTHING` 인 배치 둘 사이에서는 **먼저 넣은 쪽이 값을 정하지만**, 1분 레인은 그 뒤에도
+   값을 전진시킬 수 있다. 게다가 뉴스 day-close 는 00:10 에 돌며 **어제 창**을 처리한다(#669).
+   `o.pub` 도 같은 부류다 — dev 실측(행 기준) 08-10 → 30 당일 + 4 익일 ·
+   **08-03 → 15 + 15(절반이 익일)**. ⇒ 자정 직후 어제를 조회하면 `base` 는 서는데 `today` 는 아직
+   움직일 수 있다.
 2. **`o.trig` 은 시장 SFN 이 끝난 뒤엔 과잉 억제** — 그때부터 자정까지는 사실상 확정인데 판정을
    안 한다. 푸는 조건은 위와 같다(산출↔작업 완료 바인딩).
 3. 🔴 **그 날의 진짜 결손이 자정까지 조용해진다.** 산출이 통째로 0 인 장애를 R13 이 당일에 잡던

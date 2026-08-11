@@ -662,7 +662,17 @@ test('R13 note — 관측된 0 과 표본 부재를 같은 사유로 접지 않�
   /* "서로 다르기만" 재면 한쪽 문장을 **다른 거짓 문장**으로 바꿔도 통과한다(확인함) —
    * 사유가 실제로 무엇을 말하는지까지 재야 그 변이가 죽는다. */
   assert.match(reasonOf('평소0'), /관측된 0/);
-  assert.match(reasonOf('표본없음'), /표본 없음/);
+  /* ⚠️ `base: null` 의 사유는 **셋**이고 와이어는 하나로 온다(표본 부재·장 안 서는 날·그 날이
+   * 안 끝남 — ALPHA-946). 그래서 이 사유는 갈래를 **나열**하고 어느 하나를 단정하지 않는다.
+   * `/표본 없음/` 으로 못 박고 있었는데, 그 문면이면 지난 주말 조회에서 표본이 멀쩡한
+   * `o.pub`·`o.trig` 에 거짓 사유가 붙는다. 재는 것은 "기준이 없다고 말하되 원인을 지목하지
+   * 않는가" 다. */
+  assert.match(reasonOf('표본없음'), /기준이 없다/);
+  assert.doesNotMatch(
+    reasonOf('표본없음'),
+    /^(?!.*중 하나).*표본 (부재|없음)/,
+    '기준 부재의 원인을 표본 탓으로 단정했다',
+  );
 });
 
 test('R13 못 돎 사유 — 기준은 멀쩡한데 오늘 값만 손상된 경우를 "기준이 없다"고 말하지 않는다', () => {
@@ -695,7 +705,8 @@ test('R13 note — 수가 아닌 기준은 "표본 부재"가 아니라 계약 �
   const note = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.note ?? '';
   const reasonOf = (label: string) => note.split(' · ').find((seg) => seg.includes(label)) ?? '';
   assert.match(reasonOf('깨진기준'), /계약 손상/, '손상을 표본 부재로 접었다');
-  assert.match(reasonOf('표본없음'), /표본 없음/);
+  // 갈래를 나열하는 사유 — 위 테스트의 주석이 그 이유를 적는다(ALPHA-946)
+  assert.match(reasonOf('표본없음'), /기준이 없다/);
   assert.notEqual(reasonOf('깨진기준'), reasonOf('표본없음'));
 });
 
