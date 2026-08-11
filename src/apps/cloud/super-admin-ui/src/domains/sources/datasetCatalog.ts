@@ -61,6 +61,12 @@ export interface DatasetEntry {
   cadence: Cadence;
   /** ops 격자(ops_expected_task)가 이 데이터셋을 담는가. false 면 다른 원장 소관이다 */
   inOpsGrid: boolean;
+  /**
+   * 이 데이터셋을 만드는 ops 레인(`pipeline_type`). **기동 실패처럼 작업이 하나도 없는 런**을
+   * 데이터셋 축에 귀속시킬 때 쓴다 — 그때는 작업이 없어 `DATASET_OF_TASK` 로 갈 수 없다.
+   * 지어내는 값이 아니라 카탈로그가 이미 아는 사실이고, 테스트가 ops 정본과 대조한다.
+   */
+  lane?: string;
   /** 다른 원장 소관일 때 어디서 보는가 */
   elsewhere?: { href: string; label: string };
   /**
@@ -88,6 +94,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
     datasets: [
       {
         id: 'etf_holdings',
+        lane: 'etf-daily',
         domain: '시장',
         label: 'ETF 구성종목',
         taskKeys: ['ETF_HOLDINGS_COLLECTION_KRX', 'NORMALIZE_ETF', 'LOAD_ETF_HOLDINGS'],
@@ -96,6 +103,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
       },
       {
         id: 'price_daily',
+        lane: 'etf-daily',
         domain: '시장',
         label: '가격 일봉',
         taskKeys: ['PRICE_COLLECTION_KIS', 'NORMALIZE_PRICE', 'LOAD_PRICE_DAILY'],
@@ -104,6 +112,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
       },
       {
         id: 'investor_flow',
+        lane: 'etf-daily',
         domain: '시장',
         label: '수급',
         taskKeys: ['INVESTOR_COLLECTION_KIS', 'NORMALIZE_INVESTOR', 'LOAD_ETF_FLOW'],
@@ -115,6 +124,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
          * 유일한 공시 계열 작업이다. 공시 행에 얹어 두면 그 행이 실시간으로 옮겨갈 때
          * 같이 사라져 격자에서 실행되는 작업이 어느 행에도 안 매인다. */
         id: 'company_profile',
+        lane: 'etf-daily',
         domain: '시장',
         label: '기업 기본정보',
         taskKeys: ['ENRICH_CORP_CODE'],
@@ -125,6 +135,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         /* 장중 수급(ALPHA-767·768·769) — **레인 이동이 아니라 신설**이다. 일 1회가 아니라
          * 평일 5슬롯이라 기대 실행 수를 일배치와 같이 세면 안 된다(원장의 DUE 셀이 정본). */
         id: 'investor_flow_intraday',
+        lane: 'investor-intraday',
         domain: '시장',
         label: '수급 (장중)',
         taskKeys: [
@@ -137,6 +148,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
       },
       {
         id: 'etf_nav',
+        lane: 'etf-daily',
         domain: '시장',
         label: 'ETF NAV',
         taskKeys: ['NAV_COLLECTION_KIS', 'NORMALIZE_ETF_NAV', 'LOAD_ETF_NAV'],
@@ -145,6 +157,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
       },
       {
         id: 'etf_profile',
+        lane: 'etf-daily',
         domain: '시장',
         label: 'ETF 프로필',
         taskKeys: ['ETF_PROFILE_COLLECTION_KIS', 'NORMALIZE_ETF_PROFILE', 'LOAD_INSTRUMENTS'],
@@ -153,6 +166,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
       },
       {
         id: 'price_movement_trigger',
+        lane: 'etf-daily',
         domain: '시장',
         label: '가격 변동 트리거',
         taskKeys: ['LOAD_PRICE_TRIGGERS'],
@@ -166,6 +180,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
     datasets: [
       {
         id: 'stock_news',
+        lane: 'news',
         domain: '뉴스',
         label: '뉴스 기사',
         taskKeys: [

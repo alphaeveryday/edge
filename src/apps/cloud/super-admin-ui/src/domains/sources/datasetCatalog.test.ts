@@ -125,3 +125,28 @@ test('ops 원장의 모든 작업이 정확히 한 데이터셋에 귀속된다 
   /* 역인덱스가 주장 전량을 담았는지 — 크기가 갈리면 위 중복 단언과 함께 원인이 좁혀진다 */
   assert.equal(Object.keys(DATASET_OF_TASK).length, claimed.length);
 });
+
+test('데이터셋의 레인 선언이 ops 정본과 같다 — 기동 실패 귀속이 여기에 매여 있다', () => {
+  /* `rollup` 은 작업이 하나도 없는 기동 실패 런을 이 `lane` 으로 데이터셋에 귀속시킨다.
+   * 선언이 낡으면 **엉뚱한 데이터셋이 장애로** 서거나, 진짜 실패가 어디에도 안 남는다.
+   * 정본은 ops 카탈로그의 `pipeline_type` 이고, 그 데이터셋의 작업들이 실제로 그 레인에
+   * 속하는지로 잰다(레인을 따로 적은 두 벌이 되지 않게). */
+  const laneOfTask = new Map<string, string>();
+  for (const m of pipelineSrc('ops/catalog.py').matchAll(/CatalogEntry\(([\s\S]*?)\n    \)/g)) {
+    const key = /task_key="([^"]+)"/.exec(m[1])?.[1];
+    if (!key) continue;
+    laneOfTask.set(key, /pipeline_type="([^"]+)"/.exec(m[1])?.[1] ?? 'etf-daily');
+  }
+  assert.ok(laneOfTask.size > 20, '정본 추출 실패');
+
+  for (const d of ALL_DATASETS) {
+    if (!d.inOpsGrid) {
+      assert.equal(d.lane, undefined, `${d.id}: ops 격자 밖인데 레인이 붙어 있다`);
+      continue;
+    }
+    assert.ok(d.lane, `${d.id}: 배치 데이터셋에 레인이 없다`);
+    for (const k of d.taskKeys) {
+      assert.equal(laneOfTask.get(k), d.lane, `${d.id}.${k}: 작업의 레인이 선언과 다르다`);
+    }
+  }
+});

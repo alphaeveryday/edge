@@ -21,7 +21,7 @@
  *   · 서버 판정(outcome·dataStatus·running)을 다시 정의하지 않는다 — 세기만 한다.
  */
 import type { GridCell, GridSlot } from './types.ts';
-import { DATASET_OF_TASK } from './datasetCatalog.ts';
+import { ALL_DATASETS, DATASET_OF_TASK } from './datasetCatalog.ts';
 
 /**
  * 하루·실행 하나의 상태.
@@ -76,6 +76,8 @@ export interface DayTask {
  */
 export interface DayExecution {
   runKey: string;
+  /** 런이 기동 자체를 못 했다 — 작업 행이 없어 작업 축으로는 보이지 않는 실패다 */
+  notLaunched?: true;
   state: DayState;
   planned: boolean;
   counts: DayCounts;
@@ -251,20 +253,48 @@ export function dayStateOf(states: DayState[]): DayState {
  * 슬롯 전량 → (데이터셋, 날짜) 별 롤업. 실행 인스턴스는 `runKey` 로 묶는다.
  * 카탈로그에 없는 작업은 어느 데이터셋에도 넣지 않는다 — 임의 배정 금지.
  */
+/** 기동 실패 — `SourceService` 가 BLOCKED 를 내는 두 값과 같다(그 밖은 기동은 된 것이다) */
+const LAUNCH_FAILED = new Set(['LAUNCH_FAILED', 'LAUNCH_CONFLICT']);
+
 export function rollup(slots: GridSlot[]): Map<string, DayRollup> {
   const out = new Map<string, DayRollup>();
+  const ensure = (datasetId: string, date: string): DayRollup => {
+    const key = `${datasetId}|${date}`;
+    let r = out.get(key);
+    if (!r) {
+      r = { datasetId, date, state: '계획 없음', expected: 0, counts: { ...EMPTY }, executions: [] };
+      out.set(key, r);
+    }
+    return r;
+  };
+
   for (const slot of slots) {
     const date = dateOfSlot(slot);
     if (!date) continue;
+
+    /* 기동 자체가 실패한 런은 **작업 행이 없다** — 작업에서 시작하면 이 슬롯이 통째로
+     * 사라지고, `datesOf()` 는 그 날짜를 넣으므로 격자에 열은 서고 그 레인의 데이터셋 행만
+     * "계획 없음"으로 그려진다. 계획이 없던 게 아니라 **런이 못 떴다**는 반대 사실이다.
+     * 귀속은 지어내지 않는다 — 카탈로그가 아는 레인→데이터셋으로만 간다. */
+    if (slot.tasks.length === 0 && LAUNCH_FAILED.has(slot.launchStatus ?? '')) {
+      const lane = slot.runKey.split(':')[0];
+      for (const d of ALL_DATASETS.filter((x) => x.lane === lane)) {
+        const r = ensure(d.id, date);
+        r.executions.push({
+          runKey: slot.runKey,
+          notLaunched: true,
+          state: '장애',
+          planned: false,
+          counts: { ...EMPTY },
+          tasks: [],
+        });
+      }
+      continue;
+    }
     for (const cell of slot.tasks) {
       const datasetId = DATASET_OF_TASK[cell.taskKey];
       if (!datasetId) continue;
-      const key = `${datasetId}|${date}`;
-      let r = out.get(key);
-      if (!r) {
-        r = { datasetId, date, state: '계획 없음', expected: 0, counts: { ...EMPTY }, executions: [] };
-        out.set(key, r);
-      }
+      const r = ensure(datasetId, date);
       /* 같은 runKey 의 작업은 한 실행에 모은다 — 여기가 "작업 3개 = 실행 3회" 를 막는 지점이다 */
       let exec = r.executions.find((e) => e.runKey === slot.runKey);
       if (!exec) {
@@ -288,7 +318,10 @@ export function rollup(slots: GridSlot[]): Map<string, DayRollup> {
     }
   }
   for (const r of out.values()) {
-    for (const e of r.executions) e.state = stateOf(e.counts, e.tasks.length);
+    for (const e of r.executions) {
+      if (e.notLaunched) continue; // 작업 축으로는 못 세는 실패 — 위에서 이미 정했다
+      e.state = stateOf(e.counts, e.tasks.length);
+    }
     /* 기대 실행 = 계획(DUE)이 있던 실행 인스턴스 수. 작업 수가 아니다. */
     r.expected = r.executions.filter((e) => e.planned).length;
     r.state = dayStateOf(r.executions.map((e) => e.state));

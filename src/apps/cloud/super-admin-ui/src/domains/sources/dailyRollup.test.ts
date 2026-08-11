@@ -291,3 +291,39 @@ test('모양만 맞으면 그대로 낸다 — 달력 실재성은 여기서 안
     '2026-02-30',
   );
 });
+
+test('기동 실패한 런은 그 레인의 데이터셋 행에 남는다 — "계획 없음"과 반대 사실이다', () => {
+  /* 기동 실패 슬롯은 작업 행이 없다. 작업에서만 시작하면 이 슬롯이 롤업에서 통째로
+   * 사라지는데, `datesOf()` 는 그 날짜를 넣으므로 격자에 열은 서고 그 레인 행만
+   * "계획 없음"으로 그려진다 — 계획이 없던 게 아니라 **런이 못 떴다**는 반대 사실이다.
+   * 귀속은 카탈로그가 아는 레인→데이터셋으로만 간다(지어내지 않는다). */
+  const slot: GridSlot = {
+    runKey: 'news:2026-07-30T15:30',
+    launchStatus: 'LAUNCH_FAILED',
+    orchestrationStatus: null,
+    tradingDate: '2026-07-30',
+    tasks: [],
+  };
+  const map = rollup([slot]);
+  const row = map.get('stock_news|2026-07-30');
+  assert.ok(row, '뉴스 레인의 데이터셋 행이 서야 한다');
+  assert.equal(row!.state, '장애', '계획 없음이 아니다');
+  assert.equal(row!.executions.length, 1);
+  assert.equal(row!.executions[0].notLaunched, true);
+  /* 원장에 DUE 증거가 없으므로 기대 실행 수는 지어내지 않는다 */
+  assert.equal(row!.expected, 0);
+
+  /* 다른 레인은 안 건드린다 — 뉴스 런이 못 떴다고 시장 데이터셋이 장애가 되지 않는다 */
+  assert.equal(map.get('price_daily|2026-07-30'), undefined);
+});
+
+test('작업이 없어도 기동은 된 슬롯은 행을 만들지 않는다 — 없는 실패를 지어내지 않는다', () => {
+  const launched: GridSlot = {
+    runKey: 'news:2026-07-30T15:30',
+    launchStatus: 'LAUNCHED',
+    orchestrationStatus: 'SUCCEEDED',
+    tradingDate: '2026-07-30',
+    tasks: [],
+  };
+  assert.equal(rollup([launched]).size, 0);
+});
