@@ -371,7 +371,7 @@ def test_ready_event_distribution_renders_one_grounded_customer_paragraph():
         "09:49, 포스코퓨처엠의 LFP 장기공급 합의 소식이 있었습니다. "
         "과거에 계약 체결 소식이 있었던 41건의 사례에서, 해당 종목들은 소식 당일 "
         "시장 대비 평균 -3.10% 움직였습니다. 오늘 이 종목은 시장 대비 -3.60%로, "
-        "과거 41건 중 약 58%는 오늘보다 높게 움직였습니다."
+        "과거 41건 중 약 59%는 오늘보다 높게 움직였습니다."
     )
     assert event["evidence_refs"] == ["source_event:evt_selected"]
 
@@ -401,18 +401,21 @@ def test_event_distribution_near_zero_mean_reads_as_about_zero():
 _PROSE_BANNED = (
     # 산문 금지어 게이트(ALPHA-943) - 고객 산문(rendered_text)에 통계·내부 어휘가
     # 다시 스며드는 것을 구조적으로 막는다(plain.BANNED·JARGON 선례의 interval 판).
-    # [3] 요인 블록 어휘("요인"·"%p")는 후속 어휘 개편 티켓에서 이 목록에 올린다(TODO).
+    # ⚠️ 현재 픽스처는 **사건 분포 경로**를 덮는다. 통계 검정 병치 경로([4] 의
+    # "표본이 부족해"·"p=0.0040" — interval 이 ALPHA-876 §0 과 충돌 중인 기존 부채)와
+    # [3] 요인 어휘("요인"·"%p")는 후속 어휘 개편 티켓에서 픽스처·목록에 함께 올린다.
     "시장초과수익률", "초과수익률", "분포", "백분위", "표본", "ECDF", "유의", "p값",
 )
 _PROSE_BANNED_PATTERNS = (
     r"[A-Z]{2,}\.[A-Z_.]{2,}",   # 사건 유형 코드 원문
     r"(상위|하위)\s?\d+%",        # 방향 백분위 표현(ALPHA-943 에서 문장형으로 대체)
+    r"\bp\s?=\s?\d",             # p값 직출 표기(통계 병치 경로의 실제 형태)
 )
 
 
 def test_customer_prose_never_contains_banned_vocabulary():
-    """게이트: 사건 분포 문장을 포함한 rendered_text 전체에 금지 어휘가 없다 —
-    새 문장이 추가될 때 이 테스트가 어휘 계약을 지키게 한다."""
+    """게이트: 사건 분포 경로의 rendered_text 에 금지 어휘가 없다 — 새 문장이
+    추가될 때 이 테스트가 어휘 계약을 지키게 한다(경로 확장은 목록 주석의 TODO)."""
     payload = final_explanation_payload(_facts(
         news=("보도 한 줄.",),
         event_ids=("evt_a",),
@@ -431,19 +434,20 @@ def test_customer_prose_never_contains_banned_vocabulary():
         assert not re.search(pattern, text), (pattern, text)
 
 
-def test_event_distribution_extreme_percentiles_clamp_to_sample_resolution():
-    """ECDF 극단이 "상위 0%"·"상위 100%" 라는 무의미한 문장이 되지 않고, 하한은
-    표본이 지지하는 해상도(100/n)에 묶인다 — n=30 전 표본 위는 "상위 1%"가 아니라
-    "상위 4%"(ceil(100/30))까지만 말할 수 있다."""
-    from edge_analysis.statics.interval import _top_rank_pct
+def test_higher_share_clause_states_facts_even_at_extremes():
+    """비율 절은 사실 그대로다 — 순위 표시용 클램프를 재사용하면 극단에서 왜곡된다
+    (p=1.0·n=30 이면 높은 사례 0건인데 "약 4%"). 극단은 건수로 말한다."""
+    from edge_analysis.statics.interval import _higher_share_clause
 
-    assert _top_rank_pct(1.0, 871) == 1
-    assert _top_rank_pct(1.0, 30) == 4
-    assert _top_rank_pct(0.999, 871) == 1
-    assert _top_rank_pct(0.0, 871) == 99
-    assert _top_rank_pct(0.004, 871) == 99
-    assert _top_rank_pct(0.69, 871) == 31
-    assert _top_rank_pct(0.69, 30) == 31
+    assert _higher_share_clause(0.26, 213) == (
+        "과거 213건 중 약 74%는 오늘보다 높게 움직였습니다")
+    assert _higher_share_clause(1.0, 30) == "오늘보다 높게 움직인 사례는 없었습니다"
+    assert _higher_share_clause(0.0, 30) == "과거 30건 모두 오늘보다 높게 움직였습니다"
+    # 반올림이 0%·100% 로 접히는 자리는 백분율 대신 건수 — "약 0%"는 거짓이다.
+    assert _higher_share_clause(1 - 1 / 871, 871) == (
+        "과거 871건 중 1건이 오늘보다 높게 움직였습니다")
+    assert _higher_share_clause(1 / 871, 871) == (
+        "과거 871건 중 870건이 오늘보다 높게 움직였습니다")
 
 def test_final_explanation_never_reads_a_prior_analysis_output():
     """A previous run's output must never become evidence for the current run."""

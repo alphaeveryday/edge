@@ -137,17 +137,24 @@ def _mean_clause(value: float) -> str:
     return f"평균 {rendered} 움직였습니다"
 
 
-def _top_rank_pct(percentile: float, n: int) -> int:
-    """ECDF → "상위 N%" 표시값. 표본 해상도(100/n)와 [1, 99] 로 클램프한다.
+def _higher_share_clause(percentile: float, n: int) -> str:
+    """"과거 N건 중 …는 오늘보다 높게 움직였습니다" 절. 사실 그대로의 비율이다.
 
-    percentile 은 `value <= observed` 비율이라 극단에서 1.0(전 표본 이상)·0.0
-    (전 표본 미만)이 나온다 - 그대로 두면 가장 강한 반응이 "상위 0%" 라는 무의미한
-    문장이 된다. 하한은 1% 가 아니라 **표본이 지지하는 해상도**다: n=30 이면 전
-    표본 위여도 경험분포가 말할 수 있는 것은 "상위 1/30(≈3%)" 까지지 "상위 1%"
-    가 아니다(봇 리뷰 2건). 상한은 대칭으로 99% 에서 접는다.
+    percentile 은 부호 포함 ECDF(오늘 이하 비율)라 오늘보다 높은 건수는
+    `(1-p)·n` 이다. 구 "상위 N%" 표시가 쓰던 해상도·[1,99] 클램프를 비율 문장에
+    재사용하면 극단에서 사실을 왜곡한다(봇 리뷰: p=1.0·n=30 이면 높은 사례가
+    0건인데 "약 4%"로 렌더) - 비율 문장은 클램프 없이, 반올림이 0%·100% 로
+    접히는 자리는 건수로 말한다.
     """
-    floor = max(1, math.ceil(100 / n)) if n > 0 else 1
-    return min(99, max(floor, round((1 - percentile) * 100)))
+    count = min(n, max(0, round((1 - percentile) * n)))
+    if count == 0:
+        return "오늘보다 높게 움직인 사례는 없었습니다"
+    if count == n:
+        return f"과거 {n}건 모두 오늘보다 높게 움직였습니다"
+    share = round(count / n * 100)
+    if 1 <= share <= 99:
+        return f"과거 {n}건 중 약 {share}%는 오늘보다 높게 움직였습니다"
+    return f"과거 {n}건 중 {count}건이 오늘보다 높게 움직였습니다"
 
 
 def _event_type_prose_label(event_type_code: str) -> str:
@@ -181,8 +188,7 @@ def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple
         f"과거에 {_event_type_prose_label(item.event_type_code)} 소식이 있었던 "
         f"{item.n}건의 사례에서, 해당 종목들은 소식 당일 시장 대비 "
         f"{_mean_clause(item.mean)}. 오늘 이 종목은 시장 대비 {_pct(item.today)}로, "
-        f"과거 {item.n}건 중 약 {_top_rank_pct(item.percentile, item.n)}%는 "
-        f"오늘보다 높게 움직였습니다."
+        f"{_higher_share_clause(item.percentile, item.n)}."
         for item in items
     )
 
