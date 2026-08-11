@@ -19,13 +19,16 @@
 
 어휘 정본은 이 패키지의 resources/<층>/ 다. 갱신 규약: 실험실(event-ontology repo)에서
 확정한 리소스를 **통째 교체**하고(부분 발췌·현지 수정 금지 — 구 alphamale 스냅샷 정책
-승계), 어휘가 바뀌었으면 constants.ONTOLOGY_VERSION 을 함께 올린다. 예외는
-resources/relation/ — edge 로컬 증보이며 상류 백포트 대기 중이다.
+승계), 어휘가 바뀌었으면 constants.ONTOLOGY_VERSION 을 함께 올린다. 예외 둘은
+edge 로컬 증보다 — resources/relation/(상류 백포트 대기 중)과 resources/labels/
+(사건 유형 한국어 라벨, ALPHA-942 — 통째 교체 대상이 아니며, 교체로 새 타입이
+오면 라벨 완전성 테스트가 깨져 추가를 강제한다).
 """
 from .attribute import Attribute, load_common_attributes
 from .constants import DEFAULT_VERSION, ONTOLOGY_VERSION
 from .entity import (AuthorityRegistry, EntityKind, load_authority_registry,
                      load_entity_kinds, normalize_name)
+from .labels import EventTypeLabel, event_type_label_ko, event_type_labels_ko
 from .process import (ProcessRegistry, ProcessType, load_lifecycle_models,
                       load_process_registry, load_type_definitions)
 from .relation import (Relation, RelationVocabulary, concept_key, load_relations,
@@ -37,6 +40,9 @@ __all__ = [
     "Attribute",
     "AuthorityRegistry",
     "EntityKind",
+    "EventTypeLabel",
+    "event_type_label_ko",
+    "event_type_labels_ko",
     "ProcessRegistry",
     "ProcessType",
     "Relation",
