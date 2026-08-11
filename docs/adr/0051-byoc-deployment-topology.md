@@ -86,8 +86,9 @@ docs/implementation.md §2 가 명시). 사상 확정으로
    이 제약은 현행 실스택과 일치한다 — 배포 compose 에 Redis 는 없고,
    publication-api 조회 캐시는 인프로세스 Caffeine 이다(ALPHA-433 — "별도 캐시
    서버(Redis)는 온프렘 반입 컴포넌트를 늘려 보류"). implementation.md·
-   context.md 에 남아 있던 Redis(Publication Cache) 서술은 ALPHA-433 이후의
-   낡은 드리프트라 이 ADR 과 같은 PR 에서 정정했다.
+   context.md·architecture/cloud-architecture.md·demo-onprem variables.tf 에
+   남아 있던 Redis(Publication Cache) 서술은 ALPHA-433 이후의 낡은 드리프트라
+   이 ADR 과 같은 PR 에서 정정했다.
    구 논거(폐쇄망 반입 불가)는 증권사 AWS 계정에서 SQS·ElastiCache 가 기술적으로
    열리는 순간 죽는다. 새 논거는 ① CSP 중립성 — 비AWS 금융클라우드 테넌트에
    같은 스택을 이식하려면 매니지드 서비스 의존이 족쇄가 된다, ② 보안 승인 표면

@@ -4,7 +4,7 @@
 >
 > **[설계 뷰]** AWS 클라우드 배치의 논리 개요다. 현행 인프라의 권위는 [../../infra/terraform/README.md](../../infra/terraform/README.md), ALB·파이프라인 결정은 [../adr/0034](../adr/0034-host-per-edge-alb.md)·[../adr/0028](../adr/0028-unified-pipeline-sfn.md)에 있다. 충돌 시 SSOT 우선.
 >
-> ⚠️ **목표(prod) 토폴로지 — 현행 dev와 다름**: 이 구성도의 **다중 AZ 이중화**(NAT gateway ×2, RDS Primary/Standby, Replica Cache)와 **클라우드 캐시**(ElastiCache, Analysis Result Cache)는 목표 설계다. 현행 dev는 **단일 NAT·단일 AZ RDS(`multi_az=false`)**, 클라우드 캐시 **미배선**, prod 환경 **미구축**이다 ([../../infra/terraform/README.md](../../infra/terraform/README.md)). 현행 캐시는 온프렘 Publication Cache(Redis)뿐 ([../context.md](../context.md) §4.2).
+> ⚠️ **목표(prod) 토폴로지 — 현행 dev와 다름**: 이 구성도의 **다중 AZ 이중화**(NAT gateway ×2, RDS Primary/Standby, Replica Cache)와 **클라우드 캐시**(ElastiCache, Analysis Result Cache)는 목표 설계다. 현행 dev는 **단일 NAT·단일 AZ RDS(`multi_az=false`)**, 클라우드 캐시 **미배선**, prod 환경 **미구축**이다 ([../../infra/terraform/README.md](../../infra/terraform/README.md)). 현행 캐시는 온프렘 publication-api 인프로세스 캐시(Caffeine, ALPHA-433)뿐 ([../context.md](../context.md) §4.2).
 
 ## 개요
 
