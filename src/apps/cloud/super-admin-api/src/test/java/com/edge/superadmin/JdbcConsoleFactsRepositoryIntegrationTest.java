@@ -1060,6 +1060,34 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				});
 	}
 
+	/**
+	 * 🔴 <b>표본도 창과 같은 식({@code RUN_DAY})으로 날을 묻는다.</b> 조회 창은 거래일이 없는 런을
+	 * 계획 시각의 KST 날짜로 줍는데(위 테스트), 표본만 {@code trading_date} 를 직접 보면 <b>그 런은
+	 * 창에는 들어오는데 표본에는 안 잡힌다</b> — 같은 원장을 두 축으로 세는 것이고, 그 파일의
+	 * {@code RUN_DAY} 자바독이 경고하는 바로 그 자리다(서브에이전트 리뷰가 짚었다).
+	 *
+	 * <p>⚠️ 프로듀서는 {@code trading_date} 를 늘 채운다({@code plan_run}) — dev 실측 NULL 0건.
+	 * 그래서 이 테스트가 겨누는 것은 <b>운영 상태가 아니라 두 조회의 축이 같은가</b>이고, 그 계약이
+	 * 없으면 위 통일이 어떤 단언으로도 안 재진다.
+	 */
+	@Test
+	void 표본도_창과_같은_식으로_날을_묻는다() {
+		insertTradingDay(DAY.toString());
+		/* 거래일 없는 런 — 계획 시각의 KST 날짜(07-31)가 이 런의 날이다.
+		 * 08-01T00:30Z = KST 08-01 09:30 이 아니라, 07-31T21:30Z = KST 08-01 06:30 …
+		 * 헷갈리지 않게 KST 로 07-31 이 되는 시각을 쓴다: 07-31T05:00Z = KST 07-31 14:00. */
+		insertRun("r-nodate", "news:2026-07-31T14:00", "news", "SUCCEEDED", null,
+				"2026-07-31T05:00:00Z", "2026-07-31T05:00:00Z", null);
+		insertTrigger("g1", "2026-07-31", "etf-a");
+		insertTrigger("g2", "2026-07-31", "etf-b");
+
+		/* 07-31 이 표본에 들면 중앙값 2.0. `trading_date` 만 보면 그 런이 안 잡혀 표본이 비고
+		 * base 는 null 이 된다. */
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(2.0d));
+	}
+
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
 	@Test
 	void 원장이_비면_DB_시계의_KST_오늘을_본다() {
