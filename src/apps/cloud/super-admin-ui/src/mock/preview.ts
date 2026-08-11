@@ -664,8 +664,15 @@ const analysis = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'name' | 'code' |
    * "본문은 있는데 게시 상태 없음"을 만들면 실 API 가 낼 수 없는 조합이고, 그 조합으로
    * 검수하면 소비자(`hasResult`)가 유효 설명을 전부 대기로 읽는다. 본문에서 유도해
    * 호출부마다 다시 적지 않는다 — 빠뜨리면 그 종목만 조용히 사라진다. */
-  const hasBody = base.result.trim().length > 0 || (base.resultBlocks?.length ?? 0) > 0;
-  return 'publicationStatus' in o
+  /* 유도 조건은 소비자 술어(`hasResult`)와 **같은 집합**이어야 한다 — 블록은 길이가 아니라
+   * 비지 않은 text 를 요구한다. 어긋나면 팩터리는 DRAFT 를 주는데 소비자는 무효로 읽는다. */
+  const hasBody =
+    base.result.trim().length > 0 ||
+    (base.resultBlocks?.some((b) => b.text.trim().length > 0) ?? false);
+  /* `'publicationStatus' in o` 로 가르면 **명시적 `undefined`** 도 재정의로 읽혀 유도를
+   * 건너뛰고 필드가 `undefined` 로 남는다(`Partial<Analysis>` 가 허용한다). 의도적 null 만
+   * 보존하고 미지정·undefined 는 유도한다. */
+  return o.publicationStatus !== undefined
     ? base
     : { ...base, publicationStatus: hasBody ? 'DRAFT' : null };
 };
@@ -721,6 +728,18 @@ export const MOCK_ANALYSES: Analysis[] = [
         code: '1',
         title: '기여 분해',
         text: '상승의 대부분은 상위 3종목에서 나왔고, 구성종목 28종 중 24종이 함께 올랐습니다.',
+        evidenceRefs: ['bars_5m:091160'],
+      },
+      {
+        code: '2',
+        title: '시간 구간',
+        text: '오전 10시대에 한 번, 장 마감 직전에 한 번 크게 움직였습니다.',
+        evidenceRefs: ['bars_5m:091160'],
+      },
+      {
+        code: '3',
+        title: '움직임 분해',
+        text: '시장 전체보다 업종 요인이 더 크게 작용했습니다.',
         evidenceRefs: ['bars_5m:091160'],
       },
       {

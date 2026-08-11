@@ -18,7 +18,7 @@ test('본문이 있는 분석은 게시 상태를 갖는다 — 서버는 그 �
    * 그 테이블만 LEFT JOIN 한다 — 결과 행이 있으면 null 이 나올 수 없다. */
   const impossible = MOCK_ANALYSES.filter(
     (a) =>
-      a.publicationStatus === null &&
+      a.publicationStatus == null && // null 과 undefined 를 함께 잡는다 — 둘 다 서버가 못 낸다
       (a.result.trim().length > 0 || (a.resultBlocks?.length ?? 0) > 0),
   );
   assert.deepEqual(
@@ -64,12 +64,21 @@ test('블록 코드·근거 참조가 엔진이 실제로 저장하는 형식이
   /* `statics/interval.py` `final_explanation_payload` — 코드는 H·1·2·3·4|N,
    * 참조는 `bars_5m:<ticker>`·`source_event:<id>`. 형식을 지어내면 상세 화면이 그대로
    * 출력하므로 운영 응답에 없는 모양이 정상 UI 로 승인된다. */
-  const blocks = MOCK_ANALYSES.flatMap((a) => a.resultBlocks ?? []);
-  assert.ok(blocks.length > 0, '블록이 없으면 아래 단언은 아무것도 안 잰다');
-  for (const b of blocks) {
-    assert.match(b.code, /^(H|N|[1-4])$/, `엔진이 만들지 않는 블록 코드: ${b.code}`);
-    for (const ref of b.evidenceRefs) {
-      assert.match(ref, /^(bars_5m|source_event):/, `엔진이 만들지 않는 참조 형식: ${ref}`);
+  const withBlocks = MOCK_ANALYSES.filter((a) => a.resultBlocks?.length);
+  assert.ok(withBlocks.length > 0, '블록이 없으면 아래 단언은 아무것도 안 잰다');
+  for (const a of withBlocks) {
+    const codes = a.resultBlocks!.map((b) => b.code);
+    /* 엔진은 블록을 **묶음으로** 만든다 — H·1·2·3 은 항상, 마지막은 4(이벤트 있음) 또는
+     * N(부재 고지) 하나다. 코드 하나하나가 어휘 안이라는 것만 재면 H·1·4 같은 **엔진이
+     * 만들 수 없는 묶음**이 통과한다. 화면이 그 묶음을 그리는 걸 검수하려면 묶음이 맞아야 한다. */
+    assert.deepEqual(codes.slice(0, 4), ['H', '1', '2', '3'], `${a.id}: 고정 블록 넷이 순서대로여야 한다`);
+    assert.equal(codes.length, 5, `${a.id}: 고정 넷 + 마지막 하나`);
+    assert.ok(['4', 'N'].includes(codes[4]), `${a.id}: 마지막은 4 또는 N 이다 (${codes[4]})`);
+    assert.equal(new Set(codes).size, codes.length, `${a.id}: 코드가 중복된다`);
+    for (const b of a.resultBlocks!) {
+      for (const ref of b.evidenceRefs) {
+        assert.match(ref, /^(bars_5m|source_event):/, `엔진이 만들지 않는 참조 형식: ${ref}`);
+      }
     }
   }
 });
