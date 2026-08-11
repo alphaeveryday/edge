@@ -1483,25 +1483,21 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # (price_minute·sector_index_minute — `rollup.ROLLUP_DATASETS` 가 정본). 어휘 전체로
 # 열지 않는 이유: 뉴스 세션도 390 window 를 계획해서, 열어 두면 뉴스 커밋 지평으로 잘린
 # 5분봉이 가격 파일을 덮는다.
-# ⚠️ **업종지수는 이 CLI 가 유일한 생산 수단이다**(ALPHA-941) — 장중 후크가 없고
-# (`SectorIndexWorker._after_commit` 은 비어 있다: 후크는 ALPHA-839 가 지울 경로다)
-# terraform 스케줄도 아직 없다. 안 돌리면 `part-sector-index.parquet` 이 안 생기고
-# 분석엔진의 섹터 축은 계속 빈다. 산출은 가격과 **같은 파티션의 다른 파일**이라 둘을
-# 따로 돌려야 한다(행은 서로소 — 업종코드 vs 종목코드).
-# 🔴 **스케줄 배선 전 선행 조건**(terraform PR): `aws_iam_role_policy.minute_session` 의
-#   s3 문장은 `["s3:GetObject","s3:ListBucket"]` 뿐이고 주석이 "쓰기는 없다(이 태스크는
-#   레이크에 아무것도 안 만든다)"고 단언한다. 이 스텝은 PUT 을 하므로 권한이 필요하다 —
-#   없으면 매일 AccessDenied 인데 스케줄러는 RunTask 제출까지만 보므로 **조용한 실패**다.
-#   ⚠️ 기존 문장에 `s3:PutObject` 를 **더하지 마라** — 그 Resource 가
-#   `[lake_bucket_arn, "${lake_bucket_arn}/*"]` 라 레이크 **전역 쓰기**가 된다. 별도
-#   문장으로 `"${lake_bucket_arn}/canonical/market_data/intraday_5m/*"` 에 한정한다
-#   (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례다).
+# 산출은 dataset 마다 **같은 파티션의 다른 파일**이라 둘을 따로 돌려야 한다
+# (행은 서로소 — 업종코드 vs 종목코드).
+# ⚠️ **업종지수는 장중 후크가 없다**(`SectorIndexWorker._after_commit` 은 비어 있다 —
+# 후크는 ALPHA-839 가 지울 경로다). 배치가 유일 writer 이고, 평일 16:00 KST 스케줄이
+# 그것을 부른다(ALPHA-955 — `aws_scheduler_schedule.minute_session["rollup-sector"]`).
+# 아래 명령은 **그 스케줄이 못 채운 날을 손으로 되돌릴 때** 쓴다.
+# 🔴 **가격은 아직 스케줄이 없다** — 장중 후크가 매일 만들고 있어 당장 공백은 없지만,
+# 지나간 날은 이 명령으로만 채워진다(EOD 확정 스케줄은 ALPHA-839 PR2).
+#   시각이 업종지수와 다를 수밖에 없다: cron 20:05 + 상한 1800초 + 확인분 60초 = 최악
+#   20:36 이고 stop 태스크의 Fargate 기동(59~122초)이 더 붙어 실제 최악은 ~20:38 이다.
+#   그 전에 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어간다(후크와의 배타성은
+#   코드가 아니라 스케줄 시각이 진다 — 이 스텝은 phase 게이트를 의도적으로 안 건다).
+#   업종지수는 09:00~15:30 격자라 그 하한이 훨씬 이르다(16:00 근거는 terraform 주석).
 #   `OPS_KR_HOLIDAYS` 는 `aws_ecs_task_definition.minute_session` 에 **이미 주입돼 있다**
 #   — 그 task-def 를 재사용하면 자동 충족이고, 새 task-def 를 파면 필수다.
-# ⚠️ 시각은 stop 뒤여야 한다: cron 20:05 + 상한 1800초 + 확인분 60초 = 최악 20:36 이고,
-# 여기에 stop 태스크 자신의 Fargate 기동(59~122초)이 더 붙어 실제 최악은 ~20:38 이다.
-# 그 전에 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어간다(후크와의 배타성은 코드가
-# 아니라 스케줄 시각이 진다 — 이 스텝은 phase 게이트를 의도적으로 안 건다).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04
