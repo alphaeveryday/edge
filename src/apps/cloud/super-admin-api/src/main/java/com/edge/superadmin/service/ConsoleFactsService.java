@@ -29,10 +29,13 @@ import java.util.stream.Stream;
 /**
  * 콘솔 사실 응답 조립(ALPHA-738).
  *
- * <p>여기서 위반을 판정하지 않는다 — 규칙은 프론트의 순수 함수다. 나머지 축은 원장 행을 그대로
- * <b>와이어 형으로 옮기는 것</b>이 전부이고, 이 서비스가 하는 <b>유일한 파생</b>은 데이터셋
- * 축이다({@link #datasets}) — {@code dataset_contract} 테이블이 없어 작업의 컬럼을
+ * <p>여기서 위반을 판정하지 않는다 — 규칙은 프론트의 순수 함수다. 나머지 축에서 이 서비스가 하는
+ * 일은 원장 행을 <b>와이어 형으로 옮기는 것</b>(1:1)뿐이고, <b>여러 행을 하나로 접는 축은
+ * 데이터셋 축뿐</b>이다({@link #datasets}) — {@code dataset_contract} 테이블이 없어 작업의 컬럼을
  * {@code dataset} 으로 묶는 것 말고는 그 축을 세울 방법이 없다.
+ *
+ * <p>⚠️ "서버가 파생을 안 한다"는 뜻은 아니다 — 런 축의 계획 결손 슬롯은 리포지토리가
+ * {@code scope_key} 를 파싱해 <b>행을 합성한다</b>. 다만 그건 슬롯 하나가 행 하나라 접기가 없다.
  */
 @Service
 public class ConsoleFactsService {
@@ -44,8 +47,18 @@ public class ConsoleFactsService {
 	/** 계약이 아예 안 걸린 데이터셋 — FRESH/STALE 을 가릴 기준 자체가 없다. */
 	private static final String CONTRACT_NOT_APPLIED = "CONTRACT_NOT_APPLIED";
 
-	/** 계약은 있는데 actual as-of 근거가 없고 원장이 사유도 안 남긴 경우. */
+	/** 계약은 있는데 actual as-of 근거 자체가 없는 경우. */
 	private static final String ACTUAL_AS_OF_MISSING = "ACTUAL_AS_OF_MISSING";
+
+	/**
+	 * 원장이 {@code UNKNOWN} 이라고 말했는데 <b>사유를 안 남긴</b> 경우.
+	 *
+	 * <p>{@link #ACTUAL_AS_OF_MISSING} 을 돌려쓰지 않는다 — UNKNOWN 은 as-of 가 <b>있어도</b> 설 수
+	 * 있어서({@code ck_ops_expected_task_verified_as_of} 는 {@code actual > expected} 인 UNKNOWN 을
+	 * 통과시킨다), 그 경우 응답이 actual 날짜를 실은 채 "as-of 가 없다"고 말하게 된다. 판정 불가는
+	 * 맞지만 <b>사유가 거짓</b>이 되고, 운영자는 없는 결손을 찾으러 간다.
+	 */
+	private static final String FRESHNESS_REASON_MISSING = "FRESHNESS_REASON_MISSING";
 
 	private final ConsoleFactsRepository facts;
 
@@ -156,11 +169,13 @@ public class ConsoleFactsService {
 			/* 스키마상 UNKNOWN 이면 사유가 있지만(`ck_ops_expected_task_freshness_pair`) 그 제약은
 			 * `IS NOT NULL` 이라 **빈 문자열을 막지 않는다**. 빈 사유를 그대로 내면 판정 코드를
 			 * truthy 로 보는 소비자가 판정 불가 데이터셋을 정상으로 건너뛴다 — 이 축이 없애려는
-			 * 바로 그 실패다. 판정 불가는 유지하고 사유만 기본값으로 떨어뜨린다. */
+			 * 바로 그 실패다. 판정 불가는 유지하고 사유만 기본 코드로 떨어뜨린다. */
 			unverifiable = unknown.map(TaskRow::freshnessReason)
 					.filter(reason -> !reason.isBlank())
-					.orElse(ACTUAL_AS_OF_MISSING);
+					.orElse(FRESHNESS_REASON_MISSING);
 		} else if (actualAsOf == null) {
+			/* 여기는 원장이 UNKNOWN 이라 말하지 않았는데 근거가 없는 자리다 — 스키마상 사유도 없다
+			 * (`ck_ops_expected_task_freshness_pair`: 사유는 상태가 있을 때만 존재한다). */
 			unverifiable = ACTUAL_AS_OF_MISSING;
 		} else {
 			unverifiable = null;

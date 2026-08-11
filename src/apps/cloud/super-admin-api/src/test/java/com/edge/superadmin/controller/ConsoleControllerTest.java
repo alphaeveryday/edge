@@ -33,9 +33,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 화면은 다른 날을 보고도 모른다) ② 원장이 <b>실제로 무엇을 봤는지</b> 되돌려주는가 ③ 런 축이
  * <b>원장 값 그대로</b> 나가는가(어휘를 다시 정의하면 판정이 서버로 샌다).
  *
- * <p>데이터셋 축만 다르다 — 여기가 <b>서버가 유일하게 파생을 하는 자리</b>라(원장에 그 테이블이
- * 없다) 접는 <b>방향</b>이 곧 계약이다. 그래서 그 절의 단언은 값의 존재가 아니라 <b>어느 작업의
- * 값을 골랐는가</b>를 잰다.
+ * <p>데이터셋 축만 다르다 — <b>여러 행을 하나로 접는 유일한 축</b>이라(원장에 그 테이블이 없다)
+ * 접는 <b>방향</b>이 곧 계약이다. 그래서 그 절의 단언은 값의 존재가 아니라 <b>어느 작업의 값을
+ * 골랐는가</b>를 잰다.
  *
  * <p>그리고 <b>부재의 종류</b>: 아직 안 붙은 축은 빈 배열이 아니라 <b>키가 없고</b>, 값을 못 구한
  * 필드는 <b>키가 있고 null</b> 이다. 둘이 뭉개지면 화면이 계측 공백을 "봤고 괜찮다"로 그린다.
@@ -327,15 +327,38 @@ class ConsoleControllerTest {
 	 * {@code freshness_reason} 에 {@code IS NOT NULL} 만 걸어 <b>빈 문자열을 막지 않는다</b>.
 	 * 그대로 내리면 판정 코드를 truthy 로 보는 소비자가 판정 불가 데이터셋을 <b>정상으로 건너뛴다</b> —
 	 * 이 축이 없애려는 바로 그 실패다. 판정 불가는 유지하고 사유만 기본 코드로 떨어진다.
+	 *
+	 * <p>🔴 그 기본 코드는 {@code ACTUAL_AS_OF_MISSING} 이 <b>아니다</b>. UNKNOWN 은 as-of 가
+	 * 있어도 서므로(여기 픽스처가 그렇다) 그 코드를 돌려쓰면 응답이 <b>actual 날짜를 실은 채</b>
+	 * "as-of 가 없다"고 말하게 된다 — 판정 불가는 맞지만 사유가 거짓이라 운영자가 없는 결손을
+	 * 찾으러 간다(리뷰가 잡았다).
 	 */
 	@Test
-	void 빈_사유는_판정_불가를_지우지_않는다() throws Exception {
+	void 빈_사유는_판정_불가를_지우지_않되_없는_결손을_지어내지도_않는다() throws Exception {
 		mvc(factsWithTask(task("COLLECT", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, DAY, DB_NOW,
 				"UNKNOWN", "   ")))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
+				// as-of 가 실제로 있다 — 그런데 사유가 "as-of 없음"이면 그 사유가 거짓이다.
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-03"))
 				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
-						.value("ACTUAL_AS_OF_MISSING"));
+						.value("FRESHNESS_REASON_MISSING"));
+	}
+
+	/**
+	 * 대비: 계약은 있는데 <b>as-of 근거 자체가 없는</b> 자리는 {@code ACTUAL_AS_OF_MISSING} 이다.
+	 * 두 코드가 서로 다른 사실을 가리키므로 한쪽으로 뭉개면 안 된다.
+	 */
+	@Test
+	void as_of_근거가_없는_것과_사유가_없는_것은_다른_코드다() throws Exception {
+		mvc(factsWithTask(task("COLLECT", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, null, DB_NOW,
+				"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value(nullValue()))
+				// 원장이 사유를 남겼으면 그게 이긴다 — 기본 코드로 덮지 않는다.
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_UNVERIFIED"));
 	}
 
 	/**
