@@ -4,6 +4,7 @@ import com.edge.common.exception.GeneralException;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.DatasetResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.MetaResponse;
+import com.edge.superadmin.dto.ConsoleFactsResponse.OutputResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.TaskResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
@@ -96,6 +97,7 @@ public class ConsoleFactsService {
 				f.runs().stream().map(RunResponse::from).toList(),
 				f.tasks().stream().map(TaskResponse::from).toList(),
 				datasets(f.tasks()),
+				f.outputs().stream().map(OutputResponse::from).toList(),
 				new MetaResponse(f.dbNow().toString(), f.today().toString()));
 	}
 

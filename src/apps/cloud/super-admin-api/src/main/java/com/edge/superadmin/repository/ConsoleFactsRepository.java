@@ -12,8 +12,8 @@ import java.util.List;
  * 뭉개지 않는 것도 {@link PipelineStatusRepository} 와 같다.
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
- * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b>
- * 이고, 산출·경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 +
+ * 산출 축</b>이고, 경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
  *
  * <p>와이어의 <b>데이터셋 축은 여기 없다</b> — 원장에 그 테이블이 없어 작업에서 파생하고, 파생은
  * {@code ConsoleFactsService} 소관이다. 이 인터페이스는 그 재료({@link TaskRow} 뒤쪽 여섯 컬럼)만 낸다.
@@ -32,7 +32,17 @@ public interface ConsoleFactsRepository {
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
-			List<TaskRow> tasks) {
+			List<TaskRow> tasks, List<OutputRow> outputs) {
+	}
+
+	/**
+	 * 산출 하나 — 그 날의 값과 <b>평소</b>(직전 거래일 중앙값).
+	 *
+	 * <p>{@code today} 는 {@code long} 이다: 그 날 0건인 것은 <b>실측</b>이지 모름이 아니다.
+	 * 반대로 {@code base} 는 {@code Double} 이라 <b>null 이 곧 "비교할 평소가 없다"</b>이고,
+	 * 소비자는 그런 산출을 편차 판정에서 뺀다. 두 축의 nullability 가 다른 것이 이 record 의 핵심이다.
+	 */
+	record OutputRow(String id, String label, String unit, long today, Double base) {
 	}
 
 	/**

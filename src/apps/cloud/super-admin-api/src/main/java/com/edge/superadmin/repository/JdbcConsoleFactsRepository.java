@@ -3,6 +3,7 @@ package com.edge.superadmin.repository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,18 +14,27 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * {@link ConsoleFactsRepository} 의 JdbcTemplate 구현(ALPHA-738).
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b>이다. 산출·경계는
- * 뒤따르는 조각이 하나씩 더한다. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도
- * 컬럼을 재료로 {@code ConsoleFactsService} 가 접는다.
+ * <p>지금 내는 것은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축</b>이다. 경계는
+ * 뒤따르는 조각이 더한다. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도 컬럼을
+ * 재료로 {@code ConsoleFactsService} 가 접는다.
  *
- * <p>날짜 축은 <b>거래일</b>({@code trading_date})이다. 다만 비거래일 런은 그 컬럼이 NULL 이라
- * 거래일만으로 자르면 통째로 새어 나간다({@link JdbcPipelineStatusRepository} 격자 주석과 같은
- * 사실) — 그래서 NULL 인 런만 계획 시각({@code created_at})의 KST 날짜로 줍는다.
+ * <p>날짜 축은 <b>거래일</b>({@code trading_date})이되 {@link #RUN_DAY} 한 식으로만 묻는다.
+ *
+ * <p>⚠️ <b>"비거래일 런은 그 컬럼이 NULL 이다"는 사실이 아니다.</b> {@code ops/planner.py} 의
+ * {@code plan_run} 은 {@code trading_date=day.isoformat()} 을 <b>무조건</b> 넘기고, 그것이
+ * {@code ops_pipeline_run} 을 만드는 유일한 프로덕션 경로다. dev 실측(2026-08-11)으로도 103행 중
+ * NULL 이 <b>0건</b>이었다(저장소만으로는 재현 안 된다 — 다시 잴 것). 컬럼 자체는 nullable 이라
+ * {@code RUN_DAY} 의 {@code COALESCE} 는 <b>방어</b>로 남기지만, 그걸 근거로 "거래일만 보면 샌다"고
+ * 적으면 안 된다. 같은 거짓이 {@link JdbcPipelineStatusRepository} 에도 있다(이 PR 범위 밖).
  *
  * <p>축이 붙으면 그 조회들은 한 REPEATABLE READ 스냅샷에서 돈다 — 인터페이스 주석의 이유.
  */
@@ -155,6 +165,106 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			 ORDER BY 1 DESC
 			""";
 
+	/**
+	 * 기준(중앙값)을 잴 <b>직전 거래일</b> 후보.
+	 *
+	 * <p>⚠️ <b>{@code trading_date} 는 거래일 달력이 아니다.</b> Planner 는 슬롯 날짜를 그대로 쓴다
+	 * ({@code ops/planner.py} 의 {@code plan_run} 이 {@code day = slot.date()} 를 그대로
+	 * {@code trading_date} 로 넘긴다 — 거래일인지 안 본다). 휴장 판정은 기대 작업 쪽에
+	 * {@code skip_reason='NON_TRADING_DAY'} 로 남고, 주말은 아예 신호가 없다({@link #marketDay}).
+	 *
+	 * <p>🔴 <b>여기서 10개로 자르지 않는다.</b> 자르고 나서 휴장일을 빼면 그중 하나가 휴장일일 때
+	 * 표본이 9개로 줄고 <b>11번째 거래일은 영영 안 들어온다</b>. 자르는 것은 {@link #baseDays} 가
+	 * 합집합·제외를 다 끝낸 뒤에 한다({@code slotDays} 가 같은 이유로 LIMIT 을 안 쓰는 것과 한 짝이다).
+	 */
+	private static final String BASE_DAYS_SQL = """
+			SELECT DISTINCT %s AS d
+			  FROM ops_pipeline_run r
+			 WHERE %s <= ?
+			 ORDER BY 1 DESC
+			""".formatted(RUN_DAY, RUN_DAY);
+
+	/**
+	 * 휴장일 — 그날 어느 런이든 KR 시장 작업을 {@code NON_TRADING_DAY} 로 건너뛰었으면 휴장이다
+	 * ({@code ops/planner.py} 의 {@code skip = (not trading) and entry.kr_trading_calendar}).
+	 *
+	 * <p>🔴 <b>제외는 런 단위가 아니라 날짜 단위다.</b> 휴장 신호는 {@code kr_trading_calendar=true}
+	 * 인 <b>작업</b>에만 붙는다 — 지금은 가격 레인 셋과 장중 수급 레인 둘이고({@code ops/catalog.py};
+	 * 같은 레인 안에서도 작업마다 다르다), 뉴스·공시 레인은 휴장일에도 돈다. 런 단위로 상관시키면
+	 * 그 레인의 런이 <b>같은 날짜를 다시 표본에 넣는다</b>. 그래서 날짜 집합으로 뽑는다.
+	 *
+	 * <p>{@link #baseDays} 가 <b>합집합 뒤에 한 번</b> 빼는 이유는 집합 대수가 아니라(양쪽에서 빼도
+	 * 결과는 같다) <b>빠뜨림을 구조적으로 막기 위해서</b>다 — 한 소스에서만 빼면 다른 소스가 같은
+	 * 날짜를 되살린다. 합집합 뒤 한 자리면 소스가 늘어도 자동으로 덮인다.
+	 *
+	 * <p>⚠️ 이 신호는 <b>평일 휴장만</b> 답한다. 주말은 {@link #marketDay} 가 달력으로 답한다.
+	 *
+	 * <p>⚠️ <b>리터럴을 {@code IS NOT NULL} 로 바꾸는 변이는 테스트로 못 잡는다</b>(변이 검증에서
+	 * 생존). {@code skip_reason} 에 들어가는 값이 지금 <b>하나뿐</b>이라 두 술어가 동치이기 때문이다
+	 * ({@code ops/states.py} 에 {@code SKIP_NON_TRADING_DAY} 만 있고 쓰는 곳은 {@code planner.py} 의
+	 * 한 자리다). 죽이려면 프로듀서가 안 쓰는 값을 픽스처가 지어내야 해서 그러지 않았다.
+	 * 그래도 <b>리터럴을 유지한다</b> — 둘째 사유(예: 상류 결손)가 생기는 날 {@code IS NOT NULL} 은
+	 * 그것까지 조용히 휴장으로 세고, 그러면 그 날의 산출이 표본에서 통째로 빠진다.
+	 */
+	private static final String HOLIDAY_DAYS_SQL = """
+			SELECT DISTINCT %s AS d
+			  FROM ops_pipeline_run r
+			  JOIN ops_expected_task t ON t.pipeline_run_id = r.pipeline_run_id
+			 WHERE %s <= ?
+			   AND t.skip_reason = 'NON_TRADING_DAY'
+			""".formatted(RUN_DAY, RUN_DAY);
+
+	/**
+	 * 산출 축의 명세 — {@code id}·{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고 {@code sql} 은
+	 * <b>날짜별 카운트</b>를 낸다({@code %s} 자리에 날짜 플레이스홀더가 들어간다).
+	 *
+	 * <p>{@code marketBound} 는 <b>이 산출이 장이 서야 나오는가</b>다. 휴장일에는 0 이 실측이 아니라
+	 * "그날 나올 것이 아니었다"인데 응답에는 그 둘을 가르는 자리가 없다({@code today} 는 수 하나다).
+	 * 그래서 그날은 <b>기준을 안 준다</b> — 소비자는 기준 없는 산출을 편차 판정에서 뺀다. 뉴스 갈래는
+	 * 휴장일에도 도니까 해당 없다.
+	 */
+	private record OutputSpec(String id, String label, String unit, boolean marketBound,
+			String sql) {
+	}
+
+	/**
+	 * 날짜 축이 <b>둘</b>이다 — 거래일 컬럼을 가진 산출({@code trade_date})과 수집 시각뿐인 산출
+	 * ({@code available_at} 의 KST 날짜). 뒤 셋은 표현식 필터라 인덱스를 못 탄다
+	 * ({@link JdbcNewsLineageRepository} 가 같은 이유로 이미 감수한 비용) — 콘솔 단발 조회 규모라
+	 * 지금은 감당 범위지만, 여기는 누적 테이블 <b>셋</b>을 한 요청에서 훑는다. 느려지면 함수 인덱스가
+	 * 먼저 붙을 자리다.
+	 */
+	private static final List<OutputSpec> OUTPUTS = List.of(
+			new OutputSpec("o.pub", "게시 ETF", "종", true, """
+					SELECT trade_date AS d, count(DISTINCT etf_instrument_id) AS n
+					  FROM explanation_result
+					 WHERE publication_status = 'PUBLISHED' AND trade_date IN (%s)
+					 GROUP BY trade_date"""),
+			new OutputSpec("o.trig", "배치 트리거", "종", true, """
+					SELECT trade_date AS d, count(DISTINCT etf_instrument_id) AS n
+					  FROM price_movement_trigger
+					 WHERE trade_date IN (%s)
+					 GROUP BY trade_date"""),
+			new OutputSpec("o.doc", "뉴스 문서", "건", false, """
+					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
+					  FROM document
+					 WHERE document_type = 'NEWS'
+					   AND (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
+					 GROUP BY 1"""),
+			new OutputSpec("o.asr", "assertion", "건", false, """
+					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
+					  FROM document_assertion
+					 WHERE (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
+					 GROUP BY 1"""),
+			/* ⚠️ {@code event_status}(ACTIVE·REJECTED) 축은 <b>안 거른다</b>. 오늘은 무해하다 —
+			 * 프로듀서 둘 다 {@code ACTIVE} 를 박고 REJECTED 를 쓰는 writer 가 레포에 없다(dev 실측
+			 * 으로도 비-ACTIVE 0건). REJECTED 적재가 생기면 이 수의 뜻이 조용히 바뀐다. */
+			new OutputSpec("o.evt", "source event", "건", false, """
+					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
+					  FROM source_event
+					 WHERE (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
+					 GROUP BY 1"""));
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcConsoleFactsRepository(JdbcTemplate jdbc) {
@@ -181,7 +291,113 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
-				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day));
+				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day), outputs(day));
+	}
+
+	/**
+	 * 산출별 <b>그 날의 값과 직전 거래일 중앙값</b>. 산출마다 조회 한 번이고, 오늘과 기준일을
+	 * 한 문장으로 센다.
+	 *
+	 * <p>⚠️ <b>일관성을 주는 것은 이 문장 구성이 아니라 트랜잭션이다.</b> {@link #facts} 전체가
+	 * REPEATABLE READ 라 나눠 세도 같은 스냅샷을 읽는다 — 산출 다섯이 서로 다른 문장인데도
+	 * 서로 일관된 것이 그 증거다. 한 문장으로 세는 이유는 왕복을 줄이는 것뿐이고, <b>격리수준을
+	 * 낮추면</b> 그때야 나눠 센 값들이 갈린다.
+	 */
+	private List<OutputRow> outputs(LocalDate day) {
+		/* 휴장일 목록을 한 번만 읽어 두 자리가 같은 술어를 쓰게 한다 — 표본에서 빼는 자리와
+		 * "오늘이 휴장인가"를 묻는 자리가 갈리면 이 파일이 이미 겪은 종류의 결함이 된다. */
+		List<LocalDate> holidays = jdbc.queryForList(HOLIDAY_DAYS_SQL, LocalDate.class, day);
+		boolean targetIsNonMarketDay = !marketDay(day, holidays);
+		List<LocalDate> baseDays = baseDays(day, holidays);
+
+		List<LocalDate> queried = new ArrayList<>(baseDays);
+		queried.add(day);   // 기준일 후보는 day 미만이라 오늘과 겹치지 않는다
+		String placeholders = queried.stream().map(d -> "?").collect(Collectors.joining(","));
+
+		return OUTPUTS.stream().map(spec -> {
+			Map<LocalDate, Long> byDay = new HashMap<>();
+			// 캐스트가 없으면 varargs 오버로드가 ResultSetExtractor 와 겹쳐 모호해진다.
+			jdbc.query(spec.sql().formatted(placeholders),
+					(RowCallbackHandler) rs -> byDay.put(rs.getObject("d", LocalDate.class),
+							rs.getLong("n")),
+					queried.toArray());
+			// 결과에 없는 거래일은 0 이다 — 그날 산출이 없었다는 실측이지 모름이 아니다.
+			List<Long> base = baseDays.stream().map(d -> byDay.getOrDefault(d, 0L)).toList();
+			/* 🔴 휴장일에 장 산출의 기준을 주면 소비자가 −100% 편차로 판정한다. `today` 의 0 은
+			 * 실측이 맞지만 **비교할 평소가 없는 날**이라 기준 쪽을 비운다 — 없는 사실을 지어내지
+			 * 않고 이미 있는 "기준 없음" 규약을 탄다. */
+			Double median = spec.marketBound() && targetIsNonMarketDay ? null : median(base);
+			return new OutputRow(spec.id(), spec.label(), spec.unit(),
+					byDay.getOrDefault(day, 0L), median);
+		}).toList();
+	}
+
+	/**
+	 * 기준을 잴 직전 거래일 — 런이 있던 날과 <b>계획 결손일</b>의 합집합에서 휴장일을 빼고 최근 10개.
+	 *
+	 * <p>🔴 <b>순서 셋이 다 중요하다.</b> ① 계획 결손일을 합집합에 넣는다 — 안 넣으면 Planner 가
+	 * 통째로 실패한 날의 실측 0 이 표본에서 빠진다. ② 휴장일 제외는 <b>합집합 뒤 한 번</b> — 각
+	 * 소스 안에서 빼면 다른 소스가 같은 날짜를 되살린다. ③ 자르기는 <b>제외 뒤</b> — 먼저 자르면
+	 * 표본이 10개 미만으로 줄고 그만큼의 거래일이 영영 안 들어온다.
+	 *
+	 * <p>⚠️ "런 0건인 날을 표본에서 빼는 쪽이 과민이라 안전하다"는 <b>거짓이다</b>. 편차 판정은
+	 * 양방향이라 기준이 올라가면 <b>위쪽 이상이 조용해진다</b> — 거짓 음성도 같이 만든다. 어느 쪽도
+	 * 안전하지 않으므로 더 그럴듯한 쪽을 고른다: 휴장일에는 Planner 가 정상적으로 돌아 런 행이
+	 * 생기므로(그래서 휴장 신호도 그때 남는다) <b>런이 0건인 평일 = 거래일</b>일 확률이 압도적이다.
+	 *
+	 * <p>🔴 <b>남는 불확실은 "장애와 휴장이 겹친 날" 하나다</b> — 평일 휴장인데 Planner 가 통째로
+	 * 실패하면 런이 없어 휴장 신호도 없고, 계획 결손일로만 표본에 들어와 <b>거래일로 오인된다</b>
+	 * (리뷰가 짚었다). 그 날을 조회하면 장 산출에 기준이 실린다. 계측이 없어 지금은 못 가르고,
+	 * 위 확률 판단이 그 대가를 감수한 것이다.
+	 *
+	 * <p>⚠️ {@code PLANNER_MISSING} 이 주말을 거른다고 읽으면 안 된다 — {@code _due_slots} 는
+	 * 레인별 주말 설정을 본다({@link #marketDay} 주석). 주말은 그 술어가 뺀다.
+	 */
+	private List<LocalDate> baseDays(LocalDate day, List<LocalDate> holidays) {
+		LocalDate upTo = day.minusDays(1);
+		TreeSet<LocalDate> days = new TreeSet<>(Comparator.reverseOrder());
+		days.addAll(jdbc.queryForList(BASE_DAYS_SQL, LocalDate.class, upTo));
+		days.addAll(slotDays(upTo));
+		/* 장이 안 서는 날을 뺀다 — `holidays` 는 `day` 이하라 여기 후보(`upTo` 이하)를 덮는다.
+		 * ⚠️ 자르기는 이 뒤다(위 주석). */
+		return days.stream().filter(d -> marketDay(d, holidays)).limit(10).toList();
+	}
+
+	/**
+	 * 장이 서는 날인가 — <b>물음이 둘로 갈린다</b>.
+	 *
+	 * <p>🔴 <b>주말은 원장이 답해 주지 않는다.</b> {@code skip_reason='NON_TRADING_DAY'} 는 그날
+	 * <b>달력에 매인 레인이 실제로 돌았을 때만</b> 생긴다 — 뉴스 레인은 주 7일 돌고 그 런에도
+	 * {@code trading_date} 가 박히므로, 시장 레인이 안 돈 주말은 <b>원장상 평범한 거래일처럼
+	 * 보인다</b>. dev 실측(2026-08-11): 주말 {@code trading_date} 4일 중 2일(08-08 토·08-09 일)이
+	 * 뉴스 런만 있고 skip 행이 <b>0</b> 이었다. 그대로 두면 그 이틀의 시장 산출 0 이 기준 표본에
+	 * 섞이고, 그 날을 조회하면 비어야 할 {@code base} 가 실린다.
+	 *
+	 * <p>그래서 <b>주말은 달력이, 평일 휴장은 원장의 skip 신호가</b> 답한다. 주말 규칙은
+	 * data-pipeline 의 {@code ops/trading_calendar.py}({@code day.weekday() >= 5})와 같은 식이다.
+	 *
+	 * <p>⚠️ 슬롯 생성({@code ops/entry.py} 의 {@code _due_slots})은 <b>같은 기준이 아니다</b> —
+	 * {@code cand.weekday() >= 5 and not weekend} 라 <b>레인별 주말 설정</b>을 본다. 뉴스처럼 주말에
+	 * 도는 레인은 주말 슬롯을 만들고, 그 결손 이슈도 주말 날짜로 열린다(dev 원장에 실재:
+	 * {@code news:2026-08-08T15:00} 토요일). 그 날짜를 여기서 뺀다.
+	 *
+	 * <p>⚠️ <b>한 술어를 두 자리가 함께 쓴다</b> — 표본에서 빼는 자리와 "오늘 장이 섰나"를 묻는
+	 * 자리. 갈리면 이 파일이 이미 겪은 종류의 결함이 된다.
+	 */
+	private static boolean marketDay(LocalDate date, List<LocalDate> holidays) {
+		return date.getDayOfWeek().getValue() <= 5 && !holidays.contains(date);
+	}
+
+	/** 표본이 없으면 <b>null</b> — 기준 없음이지 0 이 아니다. 짝수면 가운데 둘의 평균이다. */
+	private static Double median(List<Long> values) {
+		if (values.isEmpty()) {
+			return null;
+		}
+		List<Long> sorted = values.stream().sorted().toList();
+		int n = sorted.size();
+		return n % 2 == 1
+				? (double) sorted.get(n / 2)
+				: (sorted.get(n / 2 - 1) + sorted.get(n / 2)) / 2.0;
 	}
 
 	private record Meta(OffsetDateTime dbNow, LocalDate kstToday, LocalDate runLatest) {

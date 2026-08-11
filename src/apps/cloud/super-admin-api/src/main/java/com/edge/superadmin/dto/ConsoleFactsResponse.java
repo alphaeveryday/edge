@@ -1,5 +1,6 @@
 package com.edge.superadmin.dto;
 
+import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -19,8 +20,8 @@ import java.util.List;
  * {@code @JsonInclude} 를 걸지 않는다 — NON_NULL 을 위에 걸면 "집계 없음(null)"이 조용히
  * "계측 없음(필드 부재)"으로 바뀌어, 콘솔이 없애려는 칸 혼동을 서버가 다시 만든다.
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축</b>이다. 산출·경계는 뒤따르는
- * 조각이 하나씩 더하고, <b>붙기 전까지 그 필드는 응답에 아예 없다</b> — 빈 배열이 아니다. 같은
+ * <p>지금 내는 것은 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축</b>이다. 경계는 뒤따르는
+ * 조각이 더하고, <b>붙기 전까지 그 필드는 응답에 아예 없다</b> — 빈 배열이 아니다. 같은
  * 규약이다: 빈 배열은 "봤는데 없었다"이고 필드 부재는 "아직 안 본다"라, 규칙 층이 그 둘을 다르게
  * 센다.
  *
@@ -28,7 +29,7 @@ import java.util.List;
  * ({@link SourceReportResponse} 와 같은 규약).
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
-		List<DatasetResponse> datasets, MetaResponse meta) {
+		List<DatasetResponse> datasets, List<OutputResponse> outputs, MetaResponse meta) {
 
 	/**
 	 * 런 하나. {@code id} 는 {@code run_key} 다 — 사건 식별자의 대상 축이라 내부 id 를 쓰면
@@ -86,6 +87,24 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 */
 	public record DatasetResponse(String id, boolean contract, String expectedAsOf,
 			String actualAsOf, String collectedAt, String unverifiable) {
+	}
+
+	/**
+	 * 산출 하나 — 그 날의 값과 <b>평소</b>(직전 거래일 중앙값).
+	 *
+	 * <p>🔴 <b>{@code today} 와 {@code base} 의 nullability 가 다른 것이 이 타입의 전부다.</b>
+	 * {@code today} 는 {@code long} 이라 0 이 <b>실측</b>이고, {@code base} 는 {@code Double} 이라
+	 * <b>null 이 "비교할 평소가 없다"</b>이다. 기준을 0 으로 메우면 소비자가 그 산출을 −100% 로
+	 * 판정한다 — 휴장일의 장 산출이 정확히 그 자리다.
+	 *
+	 * <p>{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고, 표시 문자열은 만들지 않는다
+	 * (건수는 raw 로 내리고 포맷은 UI 소관 — 이 응답의 규약).
+	 */
+	public record OutputResponse(String id, String label, long today, Double base, String unit) {
+
+		public static OutputResponse from(OutputRow o) {
+			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit());
+		}
 	}
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 date 를 생략했을 때 무엇을 본 응답인가.
