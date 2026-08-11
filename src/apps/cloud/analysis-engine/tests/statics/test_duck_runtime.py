@@ -9,13 +9,14 @@ DuckDB 실물 연결이 필요 없는 것은 순수 함수로, 필요한 것(백
 연결 + 로컬 parquet 로 검사한다 — S3 는 절대 건드리지 않는다.
 """
 import datetime as dt
+import re
 import tempfile
 
 import duckdb
 import pytest
 
 from edge_analysis.statics.duck import (
-    BACKFILL_SETS, MARKET_PROXY_TICKER, MIN_LANDED_TICKERS, CausalLake,
+    BACKFILL_SETS, MARKET_PROXY_TICKER, MIN_LANDED_TICKERS, SECTOR_ROLLUP_VENDOR, CausalLake,
     backfill_sources, iceberg_covers, rdb_dsn_from_env, s3_secret_sql, session_pragmas)
 
 _ENVS = ("EDGE_RDB_DSN", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
@@ -365,6 +366,15 @@ def test_partial_landing_says_partial_not_absent():
     # 질의를 `count(*)` 로 되돌려도(=이 PR 이 막으려는 그 회귀) 스위트가 초록이다.
     probe = next(q for q in lk.con.sql if "max(trade_date)" in q)
     assert "count(DISTINCT ticker)" in probe and MARKET_PROXY_TICKER in probe
+    # 🔴 **가격 집합 제한이 스캔 전체에 걸려야 한다** (ALPHA-941). 같은 데이터셋에 사는
+    # 업종지수 파생을 집계 `FILTER` 안에서만 빼면 `max(trade_date)` 가 안 걸리고, 표에
+    # 업종지수 행만 있을 때 `newest` 가 non-NULL 이 된다 — `asked_day` 가 빈 호출(생성
+    # 지점 23곳 중 21곳)은 `iceberg_covers` 가 거기서 곧장 True 라 **가격 봉이 없는 표를
+    # 정본으로 승인**한다. `FILTER (...)` 를 걷어내고도 남아야 스캔 절에 있는 것이다 —
+    # 있는지만 보면 집계 안으로 되돌아간 회귀를 그대로 통과시킨다.
+    assert SECTOR_ROLLUP_VENDOR in probe, "업종지수를 안 거른다"
+    assert SECTOR_ROLLUP_VENDOR in re.sub(r"FILTER\s*\([^)]*\)", "", probe), (
+        "가격 집합 제한이 집계 FILTER 안에만 있다 — max(trade_date) 가 안 걸린다")
 
 
 def test_missing_market_proxy_is_named_as_such():
