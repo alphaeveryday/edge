@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import Callable
 
 from ..observability import record
+from .hypothesis_preview import MAX_DISTRIBUTION_PREVIEWS
 from .model_contract import ModelContractError, ask_checked, list_field, object_field
 from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, HypothesisTuple,
                     LAYERS, OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS,
@@ -33,8 +34,10 @@ MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPH
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
 MAX_OBJECT_ROUNDS = 6               # 무한 루프 금지. 6 = list_options 1 + preview 3(사건
                                     # 분포 상한, ALPHA-938) + 재조회·거부 재시도 여유 2
-MAX_PREVIEW_SUBMISSIONS = 3         # 최종 제출 상한 - 프롬프트 계약("최대 3개")을 서버가
-                                    # 강제한다. 초과분은 사유와 함께 기각(수용분은 유지)
+# 최종 제출 상한 - preview 도구 상한(hypothesis_preview.MAX_DISTRIBUTION_PREVIEWS)과
+# 단일 출처다: 두 게이트(도구 실행·최종 제출)가 갈리면 프롬프트 계약("최대 3개")이
+# 한쪽에서만 강제된다. 초과분은 사유와 함께 기각(수용분은 유지).
+MAX_PREVIEW_SUBMISSIONS = MAX_DISTRIBUTION_PREVIEWS
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 

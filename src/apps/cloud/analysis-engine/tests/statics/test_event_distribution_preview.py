@@ -421,3 +421,41 @@ def test_submissions_beyond_the_cap_are_rejected_with_reason(monkeypatch):
     # 초과 사유는 요약 1행 - 건별로 늘어놓으면 재시도 지시문의 rejected[-6:] 창에서
     # 실제 실패 사유를 밀어낸다.
     assert rejected == ["제출 상한 3개 초과 - 제출 순서 뒤의 1건을 기각합니다"]
+
+
+def test_fourth_distinct_preview_is_refused_at_the_tool(monkeypatch):
+    """상한은 제출뿐 아니라 **도구 실행 시점**에도 강제된다 — 제출만 자르면 왕복
+    예산 안에서 4·5번째 preview SQL 이 그대로 실행돼 프롬프트 계약("최대 3개")과
+    어긋난다. 같은 사건 재조회는 새 비용 축이 아니라 상한에 안 걸린다."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=tuple(
+            EventCandidate(f"evt_{i}", f"thread_{i}", chr(65 + i), f"사건 {i}",
+                           "2026-08-07T10:31:00")
+            for i in range(4)
+        ), current_event_returns={chr(65 + i): 0.01 for i in range(4)},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            kwargs["source_event_id"], kwargs["instrument_id"], "CONTRACT.CANCEL",
+            41, -0.031, kwargs["today"], 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_ids = list(runtime._candidate_by_id)
+    outcome = "outcome:market_adjusted_return_day_0"
+    for cid in candidate_ids[:3]:
+        assert runtime.call("hypothesis.preview", {
+            "candidate_id": cid, "outcome_id": outcome})["ok"] is True
+
+    fourth = runtime.call("hypothesis.preview", {
+        "candidate_id": candidate_ids[3], "outcome_id": outcome})
+    again = runtime.call("hypothesis.preview", {
+        "candidate_id": candidate_ids[0], "outcome_id": outcome})
+
+    assert fourth["ok"] is False
+    assert fourth["error"]["code"] == "PREVIEW_LIMIT_EXCEEDED"
+    assert again["ok"] is True

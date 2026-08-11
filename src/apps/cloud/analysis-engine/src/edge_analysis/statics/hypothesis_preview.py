@@ -17,6 +17,11 @@ _OUTCOME_ID = "outcome:daily_return"
 _EVENT_DISTRIBUTION_OUTCOME_ID = "outcome:market_adjusted_return_day_0"
 
 
+# 서로 다른 사건 preview 상한(ALPHA-938). 도구 실행(런타임)과 최종 제출(hypothesize
+# 의 MAX_PREVIEW_SUBMISSIONS)이 같은 값을 강제한다 - 프롬프트 "최대 3개"의 코드 게이트.
+MAX_DISTRIBUTION_PREVIEWS = 3
+
+
 @dataclass(frozen=True, slots=True)
 class EventDistributionPreview:
     """One current event and the PIT-safe event-day return distribution behind it."""
@@ -341,6 +346,16 @@ class HypothesisPreviewRuntime:
         candidate = self._candidate_by_id.get(candidate_id)
         if candidate is None or outcome_id != _EVENT_DISTRIBUTION_OUTCOME_ID:
             return self._error("OPTION_NOT_ALLOWED", "candidate or outcome is not available")
+        # 상한(최대 3개 사건)은 제출뿐 아니라 **도구 실행 시점**에도 서버가 강제한다
+        # (ALPHA-938 봇 리뷰) - 제출만 자르면 왕복 예산 안에서 4·5번째 preview SQL 이
+        # 그대로 실행돼 프롬프트가 광고한 계약과 어긋난다. 이미 시도한 사건의 재조회는
+        # 상한에 안 걸린다(같은 사건 재시도는 새 비용 축이 아니다).
+        if (candidate.source_event_id not in self._distribution_attempts
+                and len(self._distribution_attempts) >= MAX_DISTRIBUTION_PREVIEWS):
+            return self._error(
+                "PREVIEW_LIMIT_EXCEEDED",
+                f"preview 는 서로 다른 사건 최대 {MAX_DISTRIBUTION_PREVIEWS}개까지다 - "
+                "이미 받은 READY handle 로 최종 제출하라")
         recipe = {"run_id": self._run_id, "candidate_id": candidate_id,
                   "outcome_id": outcome_id}
         handle = "hpr_" + hashlib.sha256(json.dumps(
