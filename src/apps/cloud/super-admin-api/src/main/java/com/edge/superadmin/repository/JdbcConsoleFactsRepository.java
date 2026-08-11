@@ -27,9 +27,14 @@ import java.util.stream.Collectors;
  * 뒤따르는 조각이 더한다. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도 컬럼을
  * 재료로 {@code ConsoleFactsService} 가 접는다.
  *
- * <p>날짜 축은 <b>거래일</b>({@code trading_date})이다. 다만 비거래일 런은 그 컬럼이 NULL 이라
- * 거래일만으로 자르면 통째로 새어 나간다({@link JdbcPipelineStatusRepository} 격자 주석과 같은
- * 사실) — 그래서 NULL 인 런만 계획 시각({@code created_at})의 KST 날짜로 줍는다.
+ * <p>날짜 축은 <b>거래일</b>({@code trading_date})이되 {@link #RUN_DAY} 한 식으로만 묻는다.
+ *
+ * <p>⚠️ <b>"비거래일 런은 그 컬럼이 NULL 이다"는 사실이 아니다.</b> {@code ops/planner.py} 의
+ * {@code plan_run} 은 {@code trading_date=day.isoformat()} 을 <b>무조건</b> 넘기고, 그것이
+ * {@code ops_pipeline_run} 을 만드는 유일한 프로덕션 경로다. dev 실측(2026-08-11)으로도 103행 중
+ * NULL 이 <b>0건</b>이었다(저장소만으로는 재현 안 된다 — 다시 잴 것). 컬럼 자체는 nullable 이라
+ * {@code RUN_DAY} 의 {@code COALESCE} 는 <b>방어</b>로 남기지만, 그걸 근거로 "거래일만 보면 샌다"고
+ * 적으면 안 된다. 같은 거짓이 {@link JdbcPipelineStatusRepository} 에도 있다(이 PR 범위 밖).
  *
  * <p>축이 붙으면 그 조회들은 한 REPEATABLE READ 스냅샷에서 돈다 — 인터페이스 주석의 이유.
  */
@@ -173,19 +178,20 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 합집합·제외를 다 끝낸 뒤에 한다({@code slotDays} 가 같은 이유로 LIMIT 을 안 쓰는 것과 한 짝이다).
 	 */
 	private static final String BASE_DAYS_SQL = """
-			SELECT DISTINCT r.trading_date
+			SELECT DISTINCT %s AS d
 			  FROM ops_pipeline_run r
-			 WHERE r.trading_date IS NOT NULL AND r.trading_date <= ?
-			 ORDER BY r.trading_date DESC
-			""";
+			 WHERE %s <= ?
+			 ORDER BY 1 DESC
+			""".formatted(RUN_DAY, RUN_DAY);
 
 	/**
 	 * 휴장일 — 그날 어느 런이든 KR 시장 작업을 {@code NON_TRADING_DAY} 로 건너뛰었으면 휴장이다
 	 * ({@code ops/planner.py} 의 {@code skip = (not trading) and entry.kr_trading_calendar}).
 	 *
-	 * <p>🔴 <b>제외는 런 단위가 아니라 날짜 단위다.</b> 휴장 신호는 KR 시장 레인에만 붙는데 뉴스·
-	 * 공시 레인은 휴장일에도 돈다 — 런 단위로 상관시키면 그 레인의 런이 <b>같은 날짜를 다시 표본에
-	 * 넣는다</b>. 그래서 날짜 집합으로 뽑는다.
+	 * <p>🔴 <b>제외는 런 단위가 아니라 날짜 단위다.</b> 휴장 신호는 {@code kr_trading_calendar=true}
+	 * 인 <b>작업</b>에만 붙는다 — 지금은 가격 레인 셋과 장중 수급 레인 둘이고({@code ops/catalog.py};
+	 * 같은 레인 안에서도 작업마다 다르다), 뉴스·공시 레인은 휴장일에도 돈다. 런 단위로 상관시키면
+	 * 그 레인의 런이 <b>같은 날짜를 다시 표본에 넣는다</b>. 그래서 날짜 집합으로 뽑는다.
 	 *
 	 * <p>{@link #baseDays} 가 <b>합집합 뒤에 한 번</b> 빼는 이유는 집합 대수가 아니라(양쪽에서 빼도
 	 * 결과는 같다) <b>빠뜨림을 구조적으로 막기 위해서</b>다 — 한 소스에서만 빼면 다른 소스가 같은
@@ -194,12 +200,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * <p>⚠️ 이 신호는 <b>평일 휴장만</b> 답한다. 주말은 {@link #marketDay} 가 달력으로 답한다.
 	 */
 	private static final String HOLIDAY_DAYS_SQL = """
-			SELECT DISTINCT r.trading_date
+			SELECT DISTINCT %s AS d
 			  FROM ops_pipeline_run r
 			  JOIN ops_expected_task t ON t.pipeline_run_id = r.pipeline_run_id
-			 WHERE r.trading_date IS NOT NULL AND r.trading_date <= ?
+			 WHERE %s <= ?
 			   AND t.skip_reason = 'NON_TRADING_DAY'
-			""";
+			""".formatted(RUN_DAY, RUN_DAY);
 
 	/**
 	 * 산출 축의 명세 — {@code id}·{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고 {@code sql} 은
@@ -243,6 +249,9 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 					  FROM document_assertion
 					 WHERE (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
 					 GROUP BY 1"""),
+			/* ⚠️ {@code event_status}(ACTIVE·REJECTED) 축은 <b>안 거른다</b>. 오늘은 무해하다 —
+			 * 프로듀서 둘 다 {@code ACTIVE} 를 박고 REJECTED 를 쓰는 writer 가 레포에 없다(dev 실측
+			 * 으로도 비-ACTIVE 0건). REJECTED 적재가 생기면 이 수의 뜻이 조용히 바뀐다. */
 			new OutputSpec("o.evt", "source event", "건", false, """
 					SELECT (available_at AT TIME ZONE 'Asia/Seoul')::date AS d, count(*) AS n
 					  FROM source_event
