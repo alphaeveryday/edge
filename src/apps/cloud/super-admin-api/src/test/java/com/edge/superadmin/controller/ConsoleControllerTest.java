@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.edge.common.exception.ExceptionAdvice;
+import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
@@ -28,7 +29,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 콘솔 사실 응답의 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축</b> 계약(ALPHA-738).
+ * 콘솔 사실 응답의 <b>일곱 축 전부</b> 계약(ALPHA-738) — 조회 창·런·계획 결손 슬롯·작업·데이터셋·
+ * 산출·경계.
  *
  * <p>지키는 것 셋 — ① 요청한 날이 <b>그대로 아래로 내려가는가</b>(게이트가 값을 조용히 바꾸면
  * 화면은 다른 날을 보고도 모른다) ② 원장이 <b>실제로 무엇을 봤는지</b> 되돌려주는가 ③ 런 축이
@@ -49,18 +51,21 @@ class ConsoleControllerTest {
 			OffsetDateTime.of(2026, 8, 3, 7, 20, 34, 0, ZoneOffset.UTC);
 	private static final LocalDate DAY = LocalDate.parse("2026-08-03");
 
+	/** 경계가 정합인 기본값 — 그 축을 안 겨누는 테스트가 값에 신경 쓰지 않게. */
+	private static final BoundaryRow CLEAN = new BoundaryRow(0L, 0L, 0L);
+
 	private FakeConsoleFactsRepository repository;
 
 	private static ConsoleFacts facts(RunRow... runs) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of());
+		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of(), CLEAN);
 	}
 
 	private static ConsoleFacts factsWithTask(TaskRow... tasks) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks), List.of());
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks), List.of(), CLEAN);
 	}
 
 	private static ConsoleFacts factsWithOutput(OutputRow... outputs) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(outputs));
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(outputs), CLEAN);
 	}
 
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
@@ -130,14 +135,16 @@ class ConsoleControllerTest {
 	}
 
 	/**
-	 * 아직 안 싣는 축은 <b>키가 없다</b>. ⚠️ 런 축은 이제 붙었으므로 이 목록에서 빠졌다 — 런이
-	 * 0건인 날의 {@code runs: []} 는 "봤는데 없었다"는 <b>사실</b>이고 계측 공백과 반대다.
-	 * {@code tasks: []} 로 내려가면 규칙 층이 "축은 왔는데
-	 * 비었다"로 읽어 <b>못 돎</b> 대신 "평가됨 · 위반 0" 을 세운다 — 계측 공백이 정상으로 뒤집힌다.
-	 * 축을 하나씩 더하는 이 트랙에서 그 구분이 곧 진행 상태의 정본이라, 키 부재를 여기서 못 박는다.
+	 * 🔴 <b>비어 있어도 축의 키는 있다.</b> 그 날 런이 0건이면 {@code runs: []} 가 <b>사실</b>이다 —
+	 * "봤는데 없었다". 이걸 {@code NON_EMPTY} 한 줄로 지우면 규칙 층이 <b>"아직 안 봄"</b> 으로 읽어
+	 * 그 축 규칙을 통째로 못 돎 으로 세우는데, 그러고도 전건 초록이라 아무도 모른다.
+	 *
+	 * <p>⚠️ 이 트랙 내내 이 테스트는 <b>"아직 안 붙은 축은 키가 없다"</b> 도 함께 지켰다. 조각
+	 * 일곱이 다 붙어 <b>부재하는 축이 없어졌으므로</b> 그 절반은 겨눌 대상을 잃었다 — 축을 더
+	 * 붙일 일이 생기면 그때 그 이름을 여기 다시 적는다(빈 배열과 키 부재는 여전히 다른 뜻이다).
 	 */
 	@Test
-	void 아직_없는_축은_빈_배열이_아니라_키가_없다() throws Exception {
+	void 비어_있어도_축의_키는_있다() throws Exception {
 		String body = mvc(facts())
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
@@ -146,15 +153,28 @@ class ConsoleControllerTest {
 
 		/* 문자열로 본다 — `jsonPath(...).doesNotExist()` 는 `"runs": null` 도 통과시켜서
 		 * "계측 없음"과 "집계 없음"을 가르지 못한다. */
-		assertThat(body).doesNotContain("\"boundary\"");
-		/* 🔴 **셋째 다리**: 런이 0건인 날의 `runs: []` 는 **사실**이라 키가 있어야 한다("봤는데
-		 * 없었다"). 이걸 안 재면 `NON_EMPTY` 한 줄에 키가 통째로 사라져 규칙 층이 "아직 안 봄"
-		 * 으로 읽는데 전건 초록이다 — 부재 3분 중 이 다리만 비어 있었다.
-		 *
-		 * ⚠️ `datasets` 도 이제 붙었으므로 위 목록에서 빠지고 이쪽으로 왔다. 작업이 0건이면 이 축은
-		 * "묶을 게 없었다"라 빈 배열이 맞다 — 파생 축이라고 키를 빼면 안 된다. */
 		assertThat(body).contains("\"runs\":[]", "\"tasks\":[]", "\"datasets\":[]",
-				"\"outputs\":[]");
+				"\"outputs\":[]")
+				// 경계는 배열이 아니라 객체 하나다 — 수 셋이 늘 실린다(실측 0 이 사실이다).
+				.contains("\"boundary\":{");
+	}
+
+	/**
+	 * 경계 축은 <b>수 셋</b>이고 전부 실측이라 null 이 없다. {@code deliveryRows} 는 "발번이 돌고는
+	 * 있나"를 답한다 — 앞의 둘이 0 일 때 그것이 <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지
+	 * 가른다(비율의 분모는 아니다 — 단위가 다르고 무효화도 섞인다).
+	 *
+	 * <p>⚠️ 셋을 <b>다른 값</b>으로 둔다 — 같으면 와이어 매핑을 맞바꾸는 변이가 통과한다.
+	 */
+	@Test
+	void 경계_축은_수_셋을_그대로_싣는다() throws Exception {
+		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(),
+				new BoundaryRow(2L, 5L, 114L)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.boundary.publishedWithoutDelivery").value(2))
+				.andExpect(jsonPath("$.result.boundary.deliveryNowNonpublished").value(5))
+				.andExpect(jsonPath("$.result.boundary.deliveryRows").value(114));
 	}
 
 	/**
