@@ -471,7 +471,7 @@ def test_업종지수_벤더_표기가_파이프라인과_같다():
     게이트는 `collect.intraday`, 정본 착지 폭 판정은 `statics.duck`). 사본을 **전수로**
     센다: 한 곳만 대조하면 나머지가 갈려도 초록이고, 그 갈린 곳의 필터는 아무것도 안 거른다.
     """
-    from edge_analysis.statics import duck
+    from edge_analysis.statics import duck, layers
 
     src = (Path(__file__).resolve().parents[3]
            / "data-pipeline/src/data_pipeline/minute/rollup.py")
@@ -480,7 +480,8 @@ def test_업종지수_벤더_표기가_파이프라인과_같다():
                        src.read_text(encoding="utf-8"), re.M)
     assert len(found) == 1, f"파이프라인 쪽 선언이 1개가 아니다: {found}"
     copies = {"collect.intraday": intraday.SECTOR_ROLLUP_VENDOR,
-              "statics.duck": duck.SECTOR_ROLLUP_VENDOR}
+              "statics.duck": duck.SECTOR_ROLLUP_VENDOR,
+              "statics.layers": layers.SECTOR_ROLLUP_VENDOR}
     drifted = {k: v for k, v in copies.items() if v != found[0]}
     assert not drifted, f"레인 표기가 갈렸다 — 파이프라인 {found[0]!r} vs {drifted}"
 
