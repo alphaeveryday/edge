@@ -39,6 +39,8 @@ from data_pipeline.minute.fake_collector import FakePriceCollector
 from data_pipeline.minute.models import KST, Universe, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
 from data_pipeline.minute.rollup import (
+    OWNER_SOURCE_GROUP,
+    WRITER_OWNED_BEFORE_SINCE,
     WRITER_SINCE,
     maybe_rollup,
     rollup_session,
@@ -47,6 +49,7 @@ from data_pipeline.minute.rollup import (
 from data_pipeline.minute.states import (
     DATASET_PRICE_MINUTE,
     DATASET_SECTOR_INDEX_MINUTE,
+    SOURCE_GROUPS_BY_DATASET,
 )
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
@@ -138,9 +141,11 @@ class Fixture:
         )
 
     def rollup_session(self, session_date: str = SESSION_DATE,
-                       dataset: str = DATASET_PRICE_MINUTE) -> str | None:
+                       dataset: str = DATASET_PRICE_MINUTE,
+                       session_id: str | None = None) -> str | None:
         return rollup_session(
-            self.storage, self.ledger, dataset=dataset, session_id=self.session_id,
+            self.storage, self.ledger, dataset=dataset,
+            session_id=session_id or self.session_id,
             market="KR", session_date=session_date,
         )
 
@@ -517,6 +522,135 @@ class TestSessionRollup:
             window = fx.db.windows[(fx.session_id, w(hhmm))]
             window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
         assert fx.rollup_session(session_date=owned) == canonical_intraday_5m_key("KR", owned)
+
+
+class TestPartitionOwnerWhenSessionsContend:
+    """한 거래일에 세션이 둘일 때 누가 그날 파티션을 쓰나 (ALPHA-847).
+
+    산출 키에는 source_group 축이 없고(`canonical_intraday_5m_key(market, trade_date)`)
+    세션은 source_group 으로 갈린다(`stable_domain_id("msn", dataset, source_group, day)`).
+    그래서 세션이 둘인 날은 **어느 세션으로 재집계하든 같은 파일을 쓴다** — 얇은 세션의
+    커밋만으로 다시 접으면 두꺼운 산출이 통째로 덮이고, 파티션 덮어쓰기는 복구 불가다.
+    기존 가드 셋 중 어느 것도 이걸 안 막는다: `writer_owns` 는 날짜 축이고, foreign 은
+    롤업 소유 목록 **밖의 파일명**만 보며, 커밋 0건·닫힌 버킷 0 은 얇은 세션도 통과한다.
+
+    축을 **곱으로** 깐다 — {세션 1개, 2개} × {소유자 실행, 비소유자 실행} ×
+    {경계 이후, 예외일}. "세션 1개" 칸을 비우면 상수만으로 자르는 구현이 살아남는데,
+    그건 벤더를 바꾼 날부터(`WorkerConfig.source` 는 설정 축이다) 파생을 전면 중단시킨다.
+    두께를 갈라 두는 것도 의도다 — 소유 세션은 두 버킷, 다투는 세션은 한 버킷을
+    커밋하므로 가드를 지우면 파일이 **잘린 하루**로 바뀌어 바이트 단언이 깨진다.
+    """
+
+    THICK = ("0900", "0901", "0902", "0903", "0904",
+             "0905", "0906", "0907", "0908", "0909")
+    THIN = ("0900", "0901", "0902", "0903", "0904")
+
+    def test_the_owner_is_a_real_source_group(self):
+        # 아래 칸들은 소유자를 이 상수에서 **유도**한다(경계를 안 박는 이 파일의 관례) —
+        # 그래서 오타가 나도 픽스처가 같이 따라가 전부 초록으로 통과하는데, 운영에서는
+        # 다투는 날마다 **모든 실행이 거부**된다(소유자로 설 수 있는 세션이 없다).
+        assert OWNER_SOURCE_GROUP in SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE]
+
+    def plan(self, fx, source_group: str, day: str) -> str:
+        """같은 (dataset, 거래일)에 그 source_group 세션을 세운다."""
+        session_day = date.fromisoformat(day)
+        session_id, _ = fx.ledger.plan_session(
+            dataset=DATASET_PRICE_MINUTE, source_group=source_group,
+            session_date=session_day, universe_version=UNIVERSE.universe_version,
+            universe_hash=UNIVERSE.universe_hash,
+            windows=plan_session_windows(
+                session_day, universe=UNIVERSE, extended_hours=True),
+        )
+        return session_id
+
+    def commit(self, fx, session_id: str, day: str, hhmms) -> None:
+        """그 세션의 window 를 커밋 상태로 만든다 — artifact 키는 **두 세션이 공유**한다.
+
+        공유가 사실이다(ALPHA-705: 벤더는 파티션 축이 아니라 record 컬럼). 그래서 두
+        세션을 가르는 것은 재료가 아니라 **커밋한 window 집합**이고, 이 테스트가 두께를
+        window 수로 만드는 이유다.
+        """
+        for hhmm in hhmms:
+            start = datetime.combine(
+                date.fromisoformat(day), time(int(hhmm[:2]), int(hhmm[2:])), tzinfo=KST)
+            fx.storage.put_bytes(
+                canonical_price_minute_artifact_key("KR", day, hhmm, 1),
+                serialize_records([{
+                    "unit_id": "500000", "ts": start, "open": "100", "high": "101",
+                    "low": "99", "close": "100", "volume": "1", "source": "kis"}]))
+            window = fx.db.windows[(session_id, start)]
+            window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
+
+    def contended(self, fx, day: str) -> tuple[str, str]:
+        """그날에 소유자·비소유자 세션을 하나씩 세우고 (소유자, 비소유자) 를 준다."""
+        rival = "toss" if OWNER_SOURCE_GROUP != "toss" else "kis"
+        owner_id = self.plan(fx, OWNER_SOURCE_GROUP, day)
+        rival_id = self.plan(fx, rival, day)
+        self.commit(fx, owner_id, day, self.THICK)
+        self.commit(fx, rival_id, day, self.THIN)
+        return owner_id, rival_id
+
+    # ── 세션 2개 ──────────────────────────────────────────────
+    def test_owner_writes_when_sessions_contend(self, tmp_path):
+        fx = Fixture(tmp_path)
+        owner_id, _ = self.contended(fx, SESSION_DATE)
+        assert fx.rollup_session(session_id=owner_id) == DAY_KEY
+        # 두꺼운 쪽이 실렸다 — 소유자의 커밋 지평까지 두 버킷
+        assert {row["ts"] for row in fx.read_rows()} == {naive("0900"), naive("0905")}
+
+    def test_non_owner_leaves_the_file_untouched(self, tmp_path):
+        # 🔴 이 티켓의 결함이다. 비소유 세션의 재집계는 **한 버킷짜리 하루**를 만들어
+        # 소유 세션의 산출을 덮는다 — 산출이 정상으로 보이고 exit 0 이라 아무도 안 본다.
+        fx = Fixture(tmp_path)
+        owner_id, rival_id = self.contended(fx, SESSION_DATE)
+        assert fx.rollup_session(session_id=owner_id) == DAY_KEY
+        thick = fx.storage.get_bytes(DAY_KEY)
+        assert fx.rollup_session(session_id=rival_id) is None
+        assert fx.storage.get_bytes(DAY_KEY) == thick   # 바이트가 안 바뀐다
+
+    def test_non_owner_is_refused_before_it_can_create_the_file(self, tmp_path):
+        # 소유자가 **아직 안 돈** 순서도 같다 — 거부는 "덮지 마라"가 아니라 "쓰지 마라"다.
+        # 이 칸이 없으면 "파일이 이미 있을 때만 막는" 구현이 살아남고, 그 구현은 비소유
+        # 세션이 먼저 도는 흔한 순서에서 얇은 하루를 새로 만든다.
+        fx = Fixture(tmp_path)
+        _, rival_id = self.contended(fx, SESSION_DATE)
+        assert fx.rollup_session(session_id=rival_id) is None
+        assert fx.partition_keys() == []
+
+    # ── 세션 1개 (다투는 상대가 없다 — 기존 거동) ──────────────
+    def test_sole_owner_session_writes(self, tmp_path):
+        fx = Fixture(tmp_path)
+        solo_day = (SESSION_DAY + timedelta(days=1)).isoformat()
+        owner_id = self.plan(fx, OWNER_SOURCE_GROUP, solo_day)
+        self.commit(fx, owner_id, solo_day, self.THIN)
+        assert fx.rollup_session(session_date=solo_day, session_id=owner_id) == \
+            canonical_intraday_5m_key("KR", solo_day)
+
+    def test_sole_session_writes_even_when_it_is_not_the_owner(self, tmp_path):
+        # ⚠️ 상수만으로 자르는 구현을 죽이는 칸이다. 벤더는 설정 축이라
+        # (`WorkerConfig.source`) 교체하면 그날부터 모든 세션이 "비소유자"가 되는데,
+        # 다툴 상대가 없는 날까지 막으면 파생이 통째로 멎는다. fixture 의 기본 세션이
+        # 바로 그 형상이다(source_group="toss" 단독).
+        assert OWNER_SOURCE_GROUP != "toss", "이 칸의 전제는 기본 세션이 비소유자인 것"
+        fx = Fixture(tmp_path)
+        self.commit(fx, fx.session_id, SESSION_DATE, self.THIN)
+        assert fx.rollup_session() == DAY_KEY
+
+    # ── 예외일(경계 **앞**인데 롤업 소유) ──────────────────────
+    def test_contention_is_judged_on_a_writer_owned_exception_day(self, tmp_path):
+        # 예외일이 이 판정에서 빠지면 안 된다 — dev 실측(2026-08-11)에서 롤업 소유일 중
+        # 세션이 둘인 날은 **예외일 하나뿐**이다(2026-08-03, kis 159,826 vs toss 13,260
+        # record). 경계 이후 날만 세우면 실재하는 유일한 사례가 픽스처에서 빠진다.
+        owned = sorted(WRITER_OWNED_BEFORE_SINCE)[0]
+        assert owned < WRITER_SINCE, "예외가 경계 앞이어야 의미가 있다"
+        fx = Fixture(tmp_path)
+        owner_id, rival_id = self.contended(fx, owned)
+        owned_key = canonical_intraday_5m_key("KR", owned)
+        assert fx.rollup_session(session_date=owned, session_id=owner_id) == owned_key
+        thick = fx.storage.get_bytes(owned_key)
+        assert fx.rollup_session(session_date=owned, session_id=rival_id) is None
+        assert fx.storage.get_bytes(owned_key) == thick
+
 
 class TestSectorIndexRollup:
     """업종지수 5분 파생 (ALPHA-941) — 한 파티션을 두 레인이 나눠 쓴다.
