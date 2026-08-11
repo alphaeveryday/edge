@@ -11,6 +11,10 @@ canonical(S3 artifact) **window 단위 GET 1회**다 — DB 에 canonical 이 �
     1) |close / prev_close − 1| ≤ revert_threshold(1%) → 발화 금지 구간.
        앵커가 기준선이 아니면 노출 회수(ExposureReverted) 발행 + 앵커 ← 기준선.
     2) 그 외 → |close / anchor − 1| ≥ abs_threshold(3%) 면 발화 + 앵커 ← 발화가.
+       단 **앵커가 이 window 보다 뒤에서 왔으면 발화하지 않는다**(ALPHA-776) —
+       늦게 재판정된 과거 창이 미래 가격을 기준으로 재는 것이라 값 자체가 무의미
+       하다. 앵커 쓰기·회수는 이미 anchor_window 로 순서를 지키고 있었고 발화만
+       안 지켰다. 판정부 스냅샷과 쓰기 tx 두 곳에서 본다(경합이 남아서다).
     앵커 초기값 = 기준선(minute_trigger_anchor 행 부재가 곧 그 뜻)
     멱등 = UNIQUE(entity_id, session_id, window_start) + ON CONFLICT DO NOTHING
     출력 = 트리거 행 + 앵커 + outbox **한 트랜잭션** (SQS 직접 쓰기 금지 — Relay 경유)
@@ -272,7 +276,7 @@ class PriceTriggerHandler:
                 "threshold": str(self.abs_threshold),
                 "revert_threshold": str(self.revert_threshold),
                 "judged": [], "fired": [], "inserted": [], "reverted": [],
-                "skipped_no_open": [], "errors": [],
+                "skipped_no_open": [], "skipped_stale_anchor": [], "errors": [],
             }
             logger.info("가격 판정 %s: 대상 ETF 0 — 판정 없이 성공", job_id)
             return content_checksum(result)
@@ -291,9 +295,17 @@ class PriceTriggerHandler:
         # 천장 1: 앵커를 판정 트랜잭션 **밖**에서 읽는다 — 실시간 순차 처리(window
         # 하나씩)에서는 정확하고, 배달 순서가 섞이거나 max_concurrency 를 올리면 같은
         # 종목의 두 window 가 같은 앵커를 보고 둘 다 발화할 수 있다(값의 근사). 상태가
-        # **뒤로 가는** 것은 앵커 쓰기의 anchor_window 전진 조건이 막는다 — 남은 것은
-        # 발화 한 건이 더 나갈 수 있다는 것뿐이다. 정확히 하려면 판정 자체를 쓰기 tx
-        # 안으로 옮겨야 하는데(종목별 앵커 행 잠금), 지금 물량에 그 값이 없다.
+        # **뒤로 가는** 것은 앵커 쓰기의 anchor_window 전진 조건이 막는다. 정확히
+        # 하려면 판정 자체를 쓰기 tx 안으로 옮겨야 하는데(종목별 앵커 행 잠금), 지금
+        # 물량에 그 값이 없다.
+        #
+        # ⚠️ 여기 "남은 것은 발화 한 건이 더 나갈 수 있다는 것뿐"이라고 적혀 있었는데
+        # **거짓이었다**(ALPHA-776). 앵커 쓰기가 안 움직여도 트리거 INSERT 와 outbox
+        # 발행에는 그 조건이 없어서, 앵커가 전진한 뒤 도착한 **더 이른** window 가
+        # 미래 앵커와 비교돼 그대로 발화한다. 2026-08-11 dev 실측: 배포 경합으로 창
+        # 0900~0925 가 generation=2 로 늦게 재판정되며 51건 중 **21건**이 이 형태로
+        # 났다(0093A0 창 0900 이 0952 의 종가를 앵커로 4.88%). 한 건이 아니라 밀린
+        # 창 수만큼이라, 아래에서 발화 자체를 막는다.
         #
         # 천장 1-b: anchor_window 조건은 **행이 있을 때**만 건다. 앵커 행이 아직 없는데
         # 복귀 window 가 먼저 처리되면(회수할 노출이 없어 아무것도 안 남긴다) 뒤이어
@@ -311,6 +323,7 @@ class PriceTriggerHandler:
         fired: list[dict] = []
         reverted: list[dict] = []
         skipped_no_open: list[str] = []
+        skipped_stale_anchor: list[str] = []
         errors: list[str] = []
         for entity_id in sorted(etf_rows):
             baseline = prev_closes.get(entity_id)
@@ -334,8 +347,12 @@ class PriceTriggerHandler:
                     # 0·음수 close 를 통과시키면 change_rate 가 1 이상으로 계산돼
                     # 계약 위반 가격이 그대로 발화한다(coerce-to-passing)
                     raise ValueError(f"{entity_id} 의 close 가 양수가 아니다: {close_price}")
-                anchor = _decimal(anchors.get(entity_id, baseline), entity=entity_id,
-                                  field_name="anchor")
+                # 행 부재 = 앵커가 기준선(첫 발화 전) — 그때는 비교할 앵커 창도 없다
+                anchor_state = anchors.get(entity_id)
+                anchor_window = None if anchor_state is None else anchor_state[1]
+                anchor = _decimal(
+                    baseline if anchor_state is None else anchor_state[0],
+                    entity=entity_id, field_name="anchor")
                 if anchor <= 0:
                     raise ValueError(f"{entity_id} 의 앵커가 양수가 아니다: {anchor}")
             except (ValueError, InvalidOperation) as error:
@@ -361,17 +378,28 @@ class PriceTriggerHandler:
                 continue
             change_rate = abs(close_price / anchor - 1)
             if change_rate >= self.abs_threshold:
+                if anchor_window is not None and window_start < anchor_window:
+                    # 앵커가 이 window **뒤에** 정해졌다 — 미래 가격을 기준으로 과거
+                    # 창을 재는 셈이라 change_rate 자체가 무의미하다(ALPHA-776).
+                    # 앵커 쓰기·회수 UPDATE 는 이미 anchor_window 로 막고 있었는데
+                    # 발화만 안 막아서, 앵커는 그대로인 채 트리거 행과 outbox 사건만
+                    # 나갔다. 여기서 끊어야 하류(설명 레인)가 그 비용을 안 문다.
+                    skipped_stale_anchor.append(entity_id)
+                    continue
                 fired.append({
                     "entity_id": entity_id, "open_price": baseline,
                     "anchor_price": anchor, "close_price": close_price,
                     "change_rate": change_rate,
                 })
 
-        inserted, reverted_ids = self._persist_triggers(
+        inserted, reverted_ids, stale_in_tx = self._persist_triggers(
             job_id=job_id, attempt=attempt, redrive_generation=redrive_generation,
             session_id=session_id, window_start=window_start,
             generation=generation, fired=fired, reverted=reverted,
         )
+        # 두 축을 합쳐 하나의 사실로 보고한다 — 어느 가드가 잡았든 "이 window 는
+        # 앵커보다 과거라 발화하지 않았다"가 소비자가 알아야 할 것이다
+        stale_anchor_all = sorted({*skipped_stale_anchor, *stale_in_tx})
         result = {
             "job_id": job_id, "session_id": session_id,
             "window_start": window_start, "generation": generation,
@@ -383,13 +411,27 @@ class PriceTriggerHandler:
             "inserted": inserted,
             "reverted": reverted_ids,
             "skipped_no_open": skipped_no_open,
+            "skipped_stale_anchor": stale_anchor_all,
             "errors": errors,
         }
         logger.info(
-            "가격 판정 %s: 대상 %d, 발화 %d(신규 %d), 회수 %d, 기준선없음 %d, 오류 %d",
+            "가격 판정 %s: 대상 %d, 발화 %d(신규 %d), 회수 %d, 기준선없음 %d, "
+            "앵커역전 %d, 오류 %d",
             job_id, len(etf_rows), len(fired), len(inserted), len(reverted_ids),
-            len(skipped_no_open), len(errors),
+            len(skipped_no_open), len(stale_anchor_all), len(errors),
         )
+        if stale_anchor_all:
+            # 조용히 세기만 하면 "오늘 발화가 왜 적지"의 답이 어디에도 없다 — 어느
+            # 종목이 접혔는지, 그리고 **어느 축이 잡았는지** 남긴다(Rule 12).
+            # tx 축(`stale_in_tx`)은 판정부 스냅샷이 놓친 실제 경합이라, 이게 0 이
+            # 아니면 동시 판정이 실제로 일어나고 있다는 신호다 — 같은-window 재판정
+            # (발화 N·신규 0)과 구분되지 않으면 그 신호를 영영 못 본다.
+            logger.warning(
+                "가격 판정 %s: window %s 가 앵커보다 과거라 %d 종 발화를 건너뛴다 "
+                "— 늦게 재판정된 창이다(판정부 %s · tx 경합 %s)",
+                job_id, window_start, len(stale_anchor_all),
+                sorted(skipped_stale_anchor), sorted(stale_in_tx),
+            )
         return content_checksum(result)
 
     # ── 내부 ─────────────────────────────────────────────────
@@ -455,17 +497,22 @@ class PriceTriggerHandler:
                         session_id, len(prev_closes), len(self.etf_ids), missing)
         return prev_closes
 
-    def _anchors(self, session_id: str) -> dict[str, Decimal]:
-        """세션×종목의 현재 앵커 — 행 부재 = 앵커가 기준선이라는 뜻(첫 발화 전)."""
+    def _anchors(self, session_id: str) -> dict[str, tuple[Decimal, datetime]]:
+        """세션×종목의 현재 (앵커가, 앵커 창) — 행 부재 = 앵커가 기준선(첫 발화 전).
+
+        `anchor_window` 를 **함께** 읽는다: 값만 읽으면 판정부가 자기가 보는 window 가
+        그 앵커보다 과거인지 알 수 없어, 늦게 재판정된 창이 미래 앵커로 발화한다
+        (ALPHA-776). 쓰기 쪽 두 SQL 은 이미 `anchor_window` 로 순서를 지키고 있었다.
+        """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT entity_id, anchor_price FROM minute_trigger_anchor
+                SELECT entity_id, anchor_price, anchor_window FROM minute_trigger_anchor
                 WHERE session_id = %s
                 """,
                 (session_id,),
             )
-            return {row[0]: row[1] for row in cur.fetchall()}
+            return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
 
     def _window_checksum(self, session_id: str, window_start: datetime):
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
@@ -630,7 +677,8 @@ class PriceTriggerHandler:
     def _persist_triggers(self, *, job_id: str, attempt: int, redrive_generation: int,
                           session_id: str, window_start: datetime,
                           generation: int, fired: list[dict],
-                          reverted: list[dict]) -> tuple[list[str], list[str]]:
+                          reverted: list[dict],
+                          ) -> tuple[list[str], list[str], list[str]]:
         """트리거·앵커·outbox 를 **한 트랜잭션**에 — 실제로 쓴 entity 만 돌려준다.
 
         회수(reverted)는 "앵커가 기준선이 아닌" 종목만 사건이 된다 — 판정 시점에는
@@ -638,9 +686,12 @@ class PriceTriggerHandler:
         (복귀 구간이 여러 window 이어져도 사건은 한 번뿐인 이유).
         """
         if not fired and not reverted:
-            return [], []
+            return [], [], []
         inserted: list[str] = []
         reverted_ids: list[str] = []
+        # tx 안에서 앵커 역전이 확인돼 접힌 종목 — 판정부 가드가 놓친 경합분이라
+        # 조용히 사라지면 "발화 N(신규 0)" 이 같은-window 재판정과 구분되지 않는다
+        stale_in_tx: list[str] = []
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             # 도메인 쓰기도 자기 attempt 에 fence 한다(kernel 의 CAS 는 job 행만 지킨다
             # — consumer._execute 계약). lease 상실·redrive 뒤에도 돌던 낡은 attempt 가
@@ -686,6 +737,25 @@ class PriceTriggerHandler:
                     f"현재={row and (row[0], row[1])})",
                     code="STALE_GENERATION",
                 )
+            # 앵커 행을 **entity_id 한 순서로 먼저 전부** 잠근다. 아래 두 루프는
+            # 회수(UPDATE)가 먼저·발화(FOR UPDATE)가 나중인데 두 집합이 서로소라,
+            # 각각이 정렬돼 있어도 합친 잠금 순서는 전역 정렬이 아니다 — 회수[B]→
+            # 발화[A] 인 window 와 회수[A]→발화[B] 인 window 가 겹치면 순환 대기로
+            # 데드락이 난다. 여기서 한 번에 잡아 두면 이후 두 루프는 이미 가진
+            # 잠금을 다시 쓸 뿐이라 순서가 문제되지 않는다.
+            lock_ids = sorted({f["entity_id"] for f in fired}
+                              | {r["entity_id"] for r in reverted})
+            if lock_ids:
+                cur.execute(
+                    """
+                    SELECT entity_id FROM minute_trigger_anchor
+                    WHERE session_id = %s AND entity_id = ANY(%s)
+                    ORDER BY entity_id
+                    FOR UPDATE
+                    """,
+                    (session_id, lock_ids),
+                )
+                cur.fetchall()
             for revert in reverted:
                 entity_id = revert["entity_id"]
                 # 조건부 UPDATE 가 곧 중복 차단이다 — 행이 없거나(첫 발화 전) 이미
@@ -732,6 +802,31 @@ class PriceTriggerHandler:
                     fire["entity_id"], session_id, window_start,
                     self.detection_policy_version,
                 )
+                # **경합 축**의 가드다(ALPHA-776). 판정부는 tx 밖에서 읽은 앵커
+                # 스냅샷으로 거르므로, 이른 창 E 와 늦은 창 L 이 같은 앵커를 보고
+                # 동시에 통과한 뒤 L 이 먼저 커밋하면 E 는 판정부 가드를 이미 지난
+                # 상태다 — 여기서 다시 안 보면 앵커만 안 움직인 채 트리거 행과 outbox
+                # 사건이 나간다. 동시 판정은 가정이 아니다: 롤링 배포 중 구·신 태스크가
+                # 겹치고(2026-08-11 실측), max_concurrency 도 설정으로 올린다.
+                #
+                # ⚠️ `FOR UPDATE` 여야 한다. 평범한 SELECT(또는 NOT EXISTS 서브쿼리)는
+                # READ COMMITTED 에서 L 의 **미커밋** 전진을 못 봐서 그대로 통과한다 —
+                # 닫힌 것처럼 보이지만 정확히 경합에서만 새는 가드가 된다. 행을 잠그면
+                # L 이 커밋할 때까지 기다렸다가 전진된 값을 읽는다. 행이 아직 없으면
+                # 잠글 것도 없는데, 그 경우 E·L 둘 다 첫 발화라 이른 E 의 발화는
+                # 시간순으로도 옳다(가짜가 아니다).
+                cur.execute(
+                    """
+                    SELECT anchor_window FROM minute_trigger_anchor
+                    WHERE session_id = %s AND entity_id = %s
+                    FOR UPDATE
+                    """,
+                    (session_id, fire["entity_id"]),
+                )
+                anchor_row = cur.fetchone()
+                if anchor_row is not None and anchor_row[0] > window_start:
+                    stale_in_tx.append(fire["entity_id"])
+                    continue
                 cur.execute(
                     """
                     INSERT INTO minute_price_trigger (
@@ -789,7 +884,7 @@ class PriceTriggerHandler:
                     },
                 )
                 inserted.append(fire["entity_id"])
-        return inserted, reverted_ids
+        return inserted, reverted_ids, stale_in_tx
 
 
 def price_consumer_cli(settings, *, universe: str | None,
