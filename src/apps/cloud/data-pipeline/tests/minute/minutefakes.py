@@ -158,6 +158,18 @@ class _Cursor:
             ]
         elif "SET data_status = 'DUE', claimed_by = NULL" in s:
             self._release_claim(params)
+        elif s.startswith("SELECT source_group, session_id FROM minute_ingestion_session"):
+            # 5분 파티션 소유 판정(ALPHA-847). 두 절이 SQL 에서 빠지면 fake 가 Python 으로
+            # 재현해 버려 못 잡는다 — 문면을 못 박는다(Rule 9). `dataset` 이 빠지면 같은
+            # 날 업종지수 세션이 가격 레인의 다투는 세션으로 세어져 **정상 실행이
+            # 거부되고**, `session_date` 가 빠지면 다른 날 세션이 오늘을 막는다.
+            assert "dataset = %s" in s
+            assert "session_date = %s" in s
+            self._rows = [
+                (row["source_group"], row["session_id"])
+                for row in self.db.sessions.values()
+                if (row["dataset"], row["session_date"]) == (params[0], params[1])
+            ]
         elif s.startswith("SELECT phase FROM minute_ingestion_session"):
             row = self.db.sessions.get(params[0])
             if row is not None:

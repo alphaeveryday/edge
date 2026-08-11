@@ -151,6 +151,51 @@ def writer_owns(session_date: str) -> bool:
     return session_date >= WRITER_SINCE or session_date in WRITER_OWNED_BEFORE_SINCE
 
 
+# 세션이 **둘 이상인 거래일**의 소유 source_group (ALPHA-847). 위 두 상수가 "롤업이냐
+# 백필이냐"를 가른다면 이건 롤업 안에서 "어느 세션이냐"를 가른다.
+#
+# 세션은 source_group 으로 갈리는데(`stable_domain_id("msn", dataset, source_group, day)`)
+# 산출 키는 안 갈린다(`canonical_intraday_5m_key(market, trade_date)`) — 그래서 그날
+# 세션이 둘이면 **어느 세션으로 재집계하든 같은 파일을 쓴다**. 얇은 세션의 커밋만으로
+# 다시 접으면 두꺼운 세션의 산출이 통째로 덮인다. 파티션 덮어쓰기는 복구 불가다
+# (ALPHA-828 토스 백필 재실행이 앞선 85종을 지운 전례).
+#
+# 값의 근거는 실측이다(2026-08-11 dev 원장): 롤업 소유일 중 세션이 둘인 날은
+# **2026-08-03 하나**이고 kis 159,826 record vs toss 13,260 record 다. kis 가 소유자인
+# 근거는 위 `WRITER_OWNED_BEFORE_SINCE` 의 08-03 항이 그대로 진다 — 그날을 롤업 소유로
+# 넘긴 재료가 KIS 소급 수집 410종이고 토스 49종은 그 부분집합이다.
+#
+# ⚠️ 세션이 **하나뿐인 날엔 안 본다**(`_rollup_day`). 벤더는 설정 축이라
+# (`WorkerConfig.source`) 여기를 무조건 걸면 벤더를 바꾼 날부터 파생이 통째로 멎는다 —
+# 다투는 상대가 없는 날은 그 세션이 소유자다.
+#
+# ⚠️ 날짜별로 소유자가 갈리면 `WRITER_OWNED_BEFORE_SINCE` 처럼 `{날짜: 그룹}` 표로
+# 넓혀라(경계 + 예외를 이 파일이 그렇게 표현한다). 지금은 갈리는 날이 없다.
+#
+# 🔴 **대가를 적어 둔다**: 소유 세션 행은 있는데 그 세션의 커밋이 0건이고 비소유 세션만
+# 온전한 날은 **그날 파생이 안 나온다**(비소유는 여기서, 소유는 "커밋 0건" 가드에서
+# 멈춘다). 두 세션을 합집합으로 접으면 풀리지만 지금 재료 형상에서 그게 필요하다는
+# 근거가 없어 열지 않았다 — 조용하지도 않다: 아래 `logger.error` + CLI exit 1 +
+# `unfilled_settled_days` 가 그날을 결손으로 보고한다. 이 형상이 실제로 나면 그때
+# 합집합을 별건으로 연다.
+OWNER_SOURCE_GROUP = "kis"
+
+
+def _same_day_sessions(ledger, *, dataset: str, session_date: str) -> dict[str, str]:
+    """그날 그 dataset 세션의 source_group → session_id — 소유 판정의 재료.
+
+    상수 하나로 자르지 않고 **원장에 먼저 묻는** 이유는 위 `OWNER_SOURCE_GROUP` 의
+    두 번째 경고다. 다투는 세션이 실제로 있는 날만 상수가 판정한다.
+    """
+    with ledger.connect_fn(ledger.db) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT source_group, session_id FROM minute_ingestion_session "
+            "WHERE dataset = %s AND session_date = %s",
+            (dataset, date.fromisoformat(session_date)),
+        )
+        return dict(cur.fetchall())
+
+
 def scan_lower() -> str:
     """구멍 판정 창의 하한 — 롤업이 소유하는 **가장 이른** 날.
 
@@ -235,7 +280,8 @@ def maybe_rollup(
     if window_start != members[-1] and members[-1].strftime("%H%M") not in committed:
         return None  # 버킷 미완 — 마지막 분이 아직 관측 전이다
     return _rollup_day(
-        storage, dataset=DATASET_PRICE_MINUTE, market=market, session_date=session_date,
+        storage, ledger, dataset=DATASET_PRICE_MINUTE, session_id=session_id,
+        market=market, session_date=session_date,
         planned=planned, committed=committed,
     )
 
@@ -297,15 +343,18 @@ def rollup_session(
         if checksum is not None
     }
     return _rollup_day(
-        storage, dataset=dataset, market=market, session_date=session_date,
+        storage, ledger, dataset=dataset, session_id=session_id,
+        market=market, session_date=session_date,
         planned=planned, committed=committed,
     )
 
 
 def _rollup_day(
     storage: Storage,
+    ledger,
     *,
     dataset: str,
+    session_id: str,
     market: str,
     session_date: str,
     planned: Sequence[tuple[datetime, datetime]],
@@ -326,6 +375,19 @@ def _rollup_day(
         logger.warning(
             "5분 롤업 %s(%s): 다른 벤더의 정본 파티션(< %s, 예외 %s) — 덮어쓰지 않는다",
             session_date, dataset, WRITER_SINCE, sorted(WRITER_OWNED_BEFORE_SINCE),
+        )
+        return None
+    # 롤업 소유일이라도 **어느 세션이 쓰느냐**가 남는다(ALPHA-847). 위 `writer_owns` 는
+    # 날짜 축이라 같은 날 두 세션을 구분하지 못하고, 아래 foreign 가드는 롤업 소유 목록
+    # **밖의 파일명**만 보므로 우리 자신의 파일을 덮는 이 경로를 통과시킨다.
+    sessions = _same_day_sessions(ledger, dataset=dataset, session_date=session_date)
+    if len(sessions) > 1 and sessions.get(OWNER_SOURCE_GROUP) != session_id:
+        logger.error(
+            "5분 롤업 %s(%s): 이 거래일 세션이 둘 이상이다(%s) — 파티션 소유자는 "
+            "source_group=%s 인데 실행은 %s 다. 재집계하면 소유 세션의 산출을 덮는다"
+            "(파일 유지, 산출하지 않는다)",
+            session_date, dataset, sorted(sessions), OWNER_SOURCE_GROUP,
+            next((g for g, sid in sessions.items() if sid == session_id), session_id),
         )
         return None
     day_key = day_key_of(market, session_date)
