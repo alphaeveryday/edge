@@ -168,10 +168,13 @@ test('리포트의 dataset 은 원장 어휘다 — UI 카탈로그의 접기와
    * `/sources/report` 가 못 내는 라벨을 검수가 승인한다(실제로 `etf_flow`·`investor_flow`·
    * `stock_news` 가 그랬다 — 원장은 각각 investor_flow_load·investor_flow_daily·news_articles). */
   assert.ok(OPS_DATASET.size > 10, '정본 추출 실패');
-  const wrong = MOCK_REPORT.tasks
-    .filter((t) => t.dataset && OPS_DATASET.get(t.taskKey) !== t.dataset)
+  /* ⚠️ **null 을 봐주지 않는다.** 원장은 이 작업들에 dataset 을 다 준다 — 픽스처가 비우면
+   * 드릴다운이 "—" 를 그리고, 그 라벨 경로가 검수에서 통째로 빠진다. */
+  const wrong = MOCK_GRID.slots
+    .flatMap((slot) => mockReportForRun(slot.runKey)!.tasks)
+    .filter((t) => OPS_DATASET.get(t.taskKey) !== t.dataset)
     .map((t) => `${t.taskKey}: ${t.dataset} ≠ ${OPS_DATASET.get(t.taskKey)}`);
-  assert.deepEqual(wrong, [], '리포트 픽스처의 dataset 이 원장과 다르다');
+  assert.deepEqual([...new Set(wrong)], [], '리포트 픽스처의 dataset 이 원장과 다르다');
 });
 
 test('주말 슬롯은 달력 게이트 작업만 스킵한다 — 레인 전체를 스킵으로 칠하지 않는다', () => {
@@ -440,5 +443,26 @@ test('손으로 쓴 시도 이력이 격자 귀결과 같은 결말이다 — �
       outcomeOf.get(t.taskKey),
       `${t.taskKey}: 시도는 ${cur.executionStatus} 인데 격자 귀결은 ${outcomeOf.get(t.taskKey)}`,
     );
+  }
+});
+
+test('개요가 센 실패는 전부 누를 수 있는 행으로 있다 — 숫자만 있고 행이 없으면 안 된다', () => {
+  /* `SourceService.toLane()` 은 결함 목록과 counts 를 같은 원장에서 만든다. 목록만 손으로
+   * 적으면 counts 는 연쇄를 반영해 늘어나는데 행은 옛것으로 남아, "결함 8" 이라 말하면서
+   * 누를 행은 셋뿐인 상태가 된다. 귀결 실패는 전부 행이 있어야 한다. */
+  for (const lane of MOCK_OVERVIEW.lanes) {
+    const outcomeFailures = lane.counts.failed + lane.counts.missed + lane.counts.blocked;
+    assert.ok(
+      lane.defects.length >= outcomeFailures,
+      `${lane.runKey}: 실패 ${outcomeFailures} 인데 결함 행은 ${lane.defects.length}`,
+    );
+    const listed = new Set(lane.defects.map((d) => d.taskKey));
+    const slot = MOCK_GRID.slots.find((x) => x.runKey === lane.runKey)!;
+    for (const t of slot.tasks) {
+      if (t.planStatus === 'SKIPPED') continue;
+      if (t.outcome === 'FAILED' || t.outcome === 'MISSED' || t.outcome === 'BLOCKED') {
+        assert.ok(listed.has(t.taskKey), `${lane.runKey} ${t.taskKey}: 실패인데 결함 목록에 없다`);
+      }
+    }
   }
 });

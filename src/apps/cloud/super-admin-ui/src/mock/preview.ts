@@ -432,6 +432,46 @@ export const MOCK_MINUTE: MinuteStatus = {
 
 /* ─────────── /overview — 레인 원장 요약 ─────────── */
 
+/**
+ * 레인의 결함 목록 — **격자 슬롯에서 파생한다.** 서버 `SourceService.toLane()` 은 필수 DUE
+ * 작업 전부를 `isDefect()` 로 걸러 만들고, counts 도 같은 원장에서 센다. 손으로 적으면
+ * counts 는 연쇄를 반영해 늘어나는데 목록만 옛것으로 남아, **개요가 "결함 8"이라 말하면서
+ * 누를 행은 셋뿐인** 상태가 된다(실제로 그렇게 났다).
+ *
+ * `isDefect`: 귀결 실패(FAILED·MISSED·BLOCKED) · 데이터 결손(INCOMPLETE·INVALID) ·
+ * 유실 건수 · 신선도 STALE · 마감 경과 미귀결. **UNKNOWN 은 결함이 아니다** — 완전성
+ * 미배선이 설계상 대다수라 넣으면 화면 전체가 상시 결함이 된다.
+ */
+const defectsOf = (runKey: string) => {
+  const slot = MOCK_GRID.slots.find((x) => x.runKey === runKey)!;
+  return slot.tasks
+    .filter((t) => t.planStatus !== 'SKIPPED')
+    .filter(
+      (t) =>
+        t.outcome === 'FAILED' ||
+        t.outcome === 'MISSED' ||
+        t.outcome === 'BLOCKED' ||
+        t.dataStatus === 'INCOMPLETE' ||
+        t.dataStatus === 'INVALID' ||
+        (t.failedRecords ?? 0) > 0 ||
+        STALE_TASKS.has(t.taskKey),
+    )
+    .map((t) => ({
+      stage: t.stage,
+      taskKey: t.taskKey,
+      outcome: t.outcome,
+      dataStatus: t.dataStatus,
+      /* 신선도는 격자 셀에 없는 축이라 여기서만 붙인다(계약 문서 §신선도) */
+      freshnessStatus: STALE_TASKS.has(t.taskKey) ? ('STALE' as const) : null,
+      failedRecords: t.failedRecords,
+      /* `overdue` 는 미귀결에만 붙는다(`SourceService.overdue`) */
+      overdue: t.outcome === null || t.outcome === 'PENDING',
+    }));
+};
+
+/** 신선도가 낡은 작업 — 격자 셀에는 없는 축이라 픽스처가 따로 든다 */
+const STALE_TASKS = new Set(['ETF_HOLDINGS_COLLECTION_KRX']);
+
 export const MOCK_OVERVIEW: SourceOverview = {
   lanes: [
     {
@@ -449,15 +489,7 @@ export const MOCK_OVERVIEW: SourceOverview = {
       /* 격자의 같은 런과 **같은 수**여야 한다 — 개요만 크게 적으면 운영자가 드릴다운에서
        * 재현할 수 없는 숫자가 되고, 검수는 어느 쪽도 못 믿는다(테스트가 고정한다). */
       counts: { due: 17, requiredDue: 17, fulfilled: 7, failed: 1, missed: 0, blocked: 8, pending: 1, skipped: 0 },
-      defects: [
-        { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
-        { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', freshnessStatus: null, failedRecords: 2, overdue: false },
-        { stage: 'raw', taskKey: 'ETF_HOLDINGS_COLLECTION_KRX', outcome: 'FULFILLED', dataStatus: 'VALID', freshnessStatus: 'STALE', failedRecords: null, overdue: false },
-        /* ⚠️ `overdue` 는 **미귀결(PENDING·null)** 에만 붙는다(`SourceService.overdue`).
-         * 귀결된 결함에 붙이면 "선행 미충족 · 마감 경과 미귀결"처럼 실 API 가 못 내는
-         * 사유 조합이 화면에 선다. */
-        { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
-      ],
+      defects: defectsOf(MARKET_RUN),
     },
     {
       pipelineType: 'news',
@@ -471,12 +503,7 @@ export const MOCK_OVERVIEW: SourceOverview = {
        * 실행이 terminal 실패면 DEGRADED 다 — TIMED_OUT 은 ORCHESTRATION_TERMINAL_FAILED. */
       opsStatus: 'DEGRADED',
       counts: { due: 6, requiredDue: 6, fulfilled: 2, failed: 1, missed: 1, blocked: 2, pending: 0, skipped: 0 },
-      defects: [
-        { stage: 'feature', taskKey: 'LOAD_DOCUMENTS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
-        /* MISSED 도 귀결이다 — overdue 는 미귀결 전용이라 여기 붙지 않는다 */
-        { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
-        { stage: 'feature', taskKey: 'TAG_NEWS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
-      ],
+      defects: defectsOf(NEWS_RUN),
     },
   ],
 };
@@ -516,6 +543,15 @@ const MOCK_DATASET: Record<string, string> = {
   PRICE_COLLECTION_KIS: 'price_daily',
   INVESTOR_COLLECTION_KIS: 'investor_flow_daily',
   ENRICH_CORP_CODE: 'company_profile',
+  NAV_COLLECTION_KIS: 'etf_nav',
+  ETF_PROFILE_COLLECTION_KIS: 'etf_profile',
+  NORMALIZE_ETF_NAV: 'etf_nav',
+  NORMALIZE_ETF_PROFILE: 'etf_profile',
+  NORMALIZE_INVESTOR: 'investor_flow_daily',
+  LOAD_INSTRUMENTS: 'instrument_master',
+  LOAD_ETF_NAV: 'etf_nav_daily',
+  LOAD_ETF_HOLDINGS: 'etf_holding_snapshot',
+  LOAD_PRICE_TRIGGERS: 'price_movement_trigger',
   NORMALIZE_ETF: 'etf_holdings',
   NORMALIZE_PRICE: 'price_daily',
   LOAD_PRICE_DAILY: 'price_daily',
