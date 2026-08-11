@@ -22,6 +22,8 @@ build/
 pages/site/
 pages/docs/reference/
 pages/docs/evolution.md
+# 브랜드 로고 사본 — 캐노니컬은 src/libs/ui-kit/src/assets (sync 가 복사)
+pages/docs/assets/images/edge-logo-*.svg
 
 # ──────────────────────────────────────────────
 # JVM / Gradle

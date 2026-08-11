@@ -10,6 +10,7 @@ src/styles/tokens.css       디자인 토큰 (그레이스케일·액센트·방
 src/styles/components.css   컴포넌트 클래스 (.btn·.card·.table·.nav-item·.switch 등) — edge-components.css 이식
 src/styles/index.css        스타일 진입점 (tokens → components)
 src/*.tsx                   React 프리미티브: StatusBadge · Toggle · Select · Modal · Toaster/toast · Icon · Delta · PageSkeleton · ErrorBoundary
+src/assets/                 브랜드 로고 SVG 캐노니컬 (edge-logo-white/black — 명명은 배경 기준, 포털도 sync 로 여기서 복사)
 ```
 
 ## 소비 방법 (소스 패키지)
@@ -24,6 +25,7 @@ src/*.tsx                   React 프리미티브: StatusBadge · Toggle · Sele
 ```ts
 import 'ui-kit/styles.css';            // tailwind(preflight) 뒤에 import — preflight가 토큰을 덮지 않게
 import { StatusBadge, toast } from 'ui-kit';
+import logoUrl from 'ui-kit/assets/edge-logo-black.svg';   // 브랜드 자산 — Vite 가 URL 로 번들
 ```
 
 - 단순 위젯(버튼·입력·카드·테이블)은 React 래퍼 없이 **클래스 직접 사용**이 기본이다 (`<button className="btn btn-primary">`). 상태·로직이 있는 것만 컴포넌트로 제공한다.
