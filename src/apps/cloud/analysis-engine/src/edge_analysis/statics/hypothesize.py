@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import Callable
 
 from ..observability import record
+from .hypothesis_preview import MAX_DISTRIBUTION_PREVIEWS
 from .model_contract import ModelContractError, ask_checked, list_field, object_field
 from .vocab import (CHANNELS, COMPARATORS, Condition, ExposureSource, HypothesisTuple,
                     LAYERS, OUTCOME_KINDS, SERIES_FAMILIES, TRANSFORMS,
@@ -31,7 +32,12 @@ Ask = Callable[[str, str], dict]    # (system, user) -> 파싱된 JSON 객체
 MAX_ASKS = 2                        # 최초 1 + 되물음 1. 결정론적 실패 반복 금지(감사 2R)
 MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPHA-886 2단계)
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
-MAX_OBJECT_ROUNDS = 4               # 구조화 객체 탐색도 무한 루프를 허용하지 않는다
+MAX_OBJECT_ROUNDS = 6               # 무한 루프 금지. 6 = list_options 1 + preview 3(사건
+                                    # 분포 상한, ALPHA-938) + 재조회·거부 재시도 여유 2
+# 최종 제출 상한 - preview 도구 상한(hypothesis_preview.MAX_DISTRIBUTION_PREVIEWS)과
+# 단일 출처다: 두 게이트(도구 실행·최종 제출)가 갈리면 프롬프트 계약("최대 3개")이
+# 한쪽에서만 강제된다. 초과분은 사유와 함께 기각(수용분은 유지).
+MAX_PREVIEW_SUBMISSIONS = MAX_DISTRIBUTION_PREVIEWS
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 
@@ -142,10 +148,11 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 
 _EVENT_DISTRIBUTION_PREVIEW_SYSTEM = """당신은 사건 설명 가설 에이전트다. 서버가 제공한 hypothesis 도구만 사용한다.
 
-먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중 한 사건과
-`사건 당일 시장 초과수익률` outcome만 고른 뒤 `hypothesis.preview`를 호출한다. READY preview만
-제출할 수 있다. 최종 제출은 {"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의
-JSON 하나이고, `intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
+먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중
+서로 다른 사건을 **최대 3개까지** 골라, 각 사건마다 `사건 당일 시장 초과수익률` outcome으로
+`hypothesis.preview`를 호출한다. READY preview만 제출할 수 있다 — READY인 것들을 모두 모아
+{"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의 JSON 하나로 제출한다.
+`intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
 동일 사건 유형의 과거 분포를 바꾸거나, 조건·노출·채널을 새로 만들지 마라.
 """
 
@@ -504,8 +511,24 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         record("hypothesis.raw", turn=turn + 1,
                hypotheses=_trace_safe(raw_hypotheses))
         if preview_mode:
+            overflow: list[str] = []
+            # 상한은 사건 분포 모드(전용 preview_system 을 넘긴 호출자)에만 건다 -
+            # 일반 preview 모드는 상한 계약이 없어(프롬프트가 "설계마다 preview")
+            # 여기서 자르면 유효 가설이 손실되는 회귀다.
+            distribution_mode = bool((object_tools or {}).get("preview_system"))
+            if (distribution_mode
+                    and len(raw_hypotheses) > MAX_PREVIEW_SUBMISSIONS):
+                # 상한은 서버가 강제한다(프롬프트 계약만으로는 게이트가 아니다) -
+                # 제출 순서 앞 3개는 유지하고 초과분은 사유째 원장 행이 된다.
+                # 사유는 요약 1행이다: 건별로 늘어놓으면 재시도 지시문의
+                # rejected[-6:] 창에서 실제 형식·handle 실패 사유를 밀어낸다.
+                dropped = len(raw_hypotheses) - MAX_PREVIEW_SUBMISSIONS
+                overflow = [f"제출 상한 {MAX_PREVIEW_SUBMISSIONS}개 초과 - "
+                            f"제출 순서 뒤의 {dropped}건을 기각합니다"]
+                raw_hypotheses = raw_hypotheses[:MAX_PREVIEW_SUBMISSIONS]
             valid, rej, rendered_hypotheses = _resolve_preview_hypotheses(
                 raw_hypotheses, preview_resolver)
+            rej += overflow
             if previewable_options and not raw_hypotheses:
                 # 형식 오독과 진짜 미제출을 가른다(Rule 12) - "READY preview 필요"
                 # 사유가 형식 불일치까지 덮으면 원장만 봐서는 모델이 제출을 안 한
