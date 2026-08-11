@@ -15,6 +15,13 @@ def test_every_registry_type_has_an_exact_korean_label():
 
     missing = sorted(set(registry.types) - set(labels))
     orphans = sorted(set(labels) - set(registry.types))
+    # family 폴백 키도 registry 의 실제 family 집합과 대조한다 - 키가 오타·개명으로
+    # 어긋나면 그 계열의 새 타입이 계열 폴백 대신 일반어로 조용히 퇴행한다.
+    from edge_ontology.labels import _payload
+    families = set(_payload()[1])
+    registry_families = {t.family for t in registry.types.values()}
+    assert families == registry_families, (
+        sorted(families - registry_families), sorted(registry_families - families))
 
     assert not missing, (
         f"라벨 없는 사건 유형 {len(missing)}종 — 상류 스냅샷 교체로 새 타입이 왔다면 "
