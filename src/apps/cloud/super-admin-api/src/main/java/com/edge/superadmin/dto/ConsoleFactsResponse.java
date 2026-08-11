@@ -1,5 +1,6 @@
 package com.edge.superadmin.dto;
 
+import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
@@ -20,16 +21,16 @@ import java.util.List;
  * {@code @JsonInclude} 를 걸지 않는다 — NON_NULL 을 위에 걸면 "집계 없음(null)"이 조용히
  * "계측 없음(필드 부재)"으로 바뀌어, 콘솔이 없애려는 칸 혼동을 서버가 다시 만든다.
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축</b>이다. 경계는 뒤따르는
- * 조각이 더하고, <b>붙기 전까지 그 필드는 응답에 아예 없다</b> — 빈 배열이 아니다. 같은
- * 규약이다: 빈 배열은 "봤는데 없었다"이고 필드 부재는 "아직 안 본다"라, 규칙 층이 그 둘을 다르게
- * 센다.
+ * <p>축이 전부 찼다 — <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축 + 경계 축</b>.
+ * 축을 하나씩 더하는 동안 지킨 규약이 이것이었다: 빈 배열은 "봤는데 없었다"이고 <b>필드 부재는
+ * "아직 안 본다"</b>라 규칙 층이 그 둘을 다르게 센다. 이제 부재하는 축은 없다.
  *
  * <p>표시 문자열을 만들지 않는다 — 건수·시각·판정 코드를 raw 로 내리고 포맷은 UI 소관이다
  * ({@link SourceReportResponse} 와 같은 규약).
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
-		List<DatasetResponse> datasets, List<OutputResponse> outputs, MetaResponse meta) {
+		List<DatasetResponse> datasets, List<OutputResponse> outputs, BoundaryResponse boundary,
+		MetaResponse meta) {
 
 	/**
 	 * 런 하나. {@code id} 는 {@code run_key} 다 — 사건 식별자의 대상 축이라 내부 id 를 쓰면
@@ -104,6 +105,25 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 
 		public static OutputResponse from(OutputRow o) {
 			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit());
+		}
+	}
+
+	/**
+	 * 게시 경계의 정합 — 게시 상태와 테넌트 발번이 <b>어긋난 건수</b>.
+	 *
+	 * <p>⚠️ <b>배열이 아니라 객체 하나다</b>. 다른 축은 "그 날의 행들"이지만 이건 <b>지금 어긋난
+	 * 것이 몇 건인가</b>라 수 셋으로 끝난다. 그리고 이 축만 <b>날짜 창을 안 탄다</b> — 누적이라
+	 * 어제 어긋난 것이 오늘 저절로 낫지 않는다.
+	 *
+	 * <p>{@code deliveryRows} 가 분모다: 앞의 둘이 0 일 때 그것이 <b>정합</b>인지 <b>발번이 아직
+	 * 하나도 없음</b>인지 이 값이 가른다. 셋 다 실측이라 {@code long} 이고 null 이 없다.
+	 */
+	public record BoundaryResponse(long publishedWithoutDelivery, long deliveryNowNonpublished,
+			long deliveryRows) {
+
+		public static BoundaryResponse from(BoundaryRow b) {
+			return new BoundaryResponse(b.publishedWithoutDelivery(), b.deliveryNowNonpublished(),
+					b.deliveryRows());
 		}
 	}
 

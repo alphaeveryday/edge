@@ -23,8 +23,8 @@ import java.util.stream.Collectors;
 /**
  * {@link ConsoleFactsRepository} 의 JdbcTemplate 구현(ALPHA-738).
  *
- * <p>지금 내는 것은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축</b>이다. 경계는
- * 뒤따르는 조각이 더한다. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도 컬럼을
+ * <p>축이 전부 찼다 — <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축 + 경계 축</b>.
+ * 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도 컬럼을
  * 재료로 {@code ConsoleFactsService} 가 접는다.
  *
  * <p>날짜 축은 <b>거래일</b>({@code trading_date})이되 {@link #RUN_DAY} 한 식으로만 묻는다.
@@ -265,6 +265,46 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 					 WHERE (available_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
 					 GROUP BY 1"""));
 
+	/**
+	 * 경계 정합 — 세 카운트를 <b>한 문장</b>으로 낸다. 쪼개면 조회 사이에 writer 가 끼어 <b>존재한
+	 * 적 없는 조합</b>이 조립된다(뉴스 계보 요약과 같은 이유). 격리수준이 지켜 주는 것과 별개로,
+	 * 세 수가 서로를 설명하는 한 벌이라 한 문장이 그 관계를 코드에 남긴다.
+	 *
+	 * <p>⚠️ <b>{@code delivery_type} 을 따로 거르지 않는다.</b> 발번은 2형상이고
+	 * (NEW·INVALIDATION — CORRECTION 은 <a href="../../../../../../../../docs/adr/0044-correction-abolition.md">ADR-0044</a>
+	 * 로 폐지), {@code ck_tenant_delivery_payload} 가 {@code explanation_result_id} 를
+	 * <b>NEW 에만</b> 허용한다 — INVALIDATION 은 그 자리가 NULL 이라 아래 두 조건에 애초에 안 걸린다.
+	 * 유형 술어를 덧붙이면 <b>어떤 행도 못 거르는 가드</b>가 하나 늘고 그건 테스트로 겨눌 수도 없다
+	 * (같은 이유로 {@code V202608011200} 이 자기참조 금지 제약을 "죽은 제약"이라며 지웠다).
+	 * 3형상이 돌아오면 이 두 조건에 유형 술어가 <b>같이</b> 필요하다.
+	 *
+	 * <p>🔴 <b>무효화 통지가 간 발번은 비게시로 안 센다.</b> 운영자 무효화
+	 * ({@link JdbcAnalysisWriteRepository#invalidate})는 결과를 WITHDRAWN 으로 전이하고 그 NEW 를
+	 * 받은 테넌트에 INVALIDATION 을 발번하되 <b>원래 NEW 행은 남긴다</b>. 상태만 보면 정상 무효화한
+	 * 분석이 전부 "발번했는데 현재 비게시"로 남아 그 수가 <b>영구히 단조 증가</b>한다. 실제 정합
+	 * 위반은 "비게시인데 <b>무효화 통지도 안 갔다</b>"이고, 상관은 결과만이 아니라 <b>테넌트까지</b>다
+	 * — 무효화는 그 NEW 를 받은 테넌트에만 나가므로({@code invalidate} 의 {@code EXISTS} 제한),
+	 * 받고도 통지 못 받은 테넌트가 있으면 그건 진짜 위반이다.
+	 *
+	 * <p>⚠️ <b>날짜 창을 안 탄다</b> — 인터페이스 {@link BoundaryRow} 주석의 이유.
+	 */
+	private static final String BOUNDARY_SQL = """
+			SELECT (SELECT count(*) FROM explanation_result r
+			         WHERE r.publication_status = 'PUBLISHED'
+			           AND NOT EXISTS (SELECT 1 FROM tenant_delivery d
+			                            WHERE d.explanation_result_id = r.explanation_result_id))
+			         AS published_without_delivery,
+			       (SELECT count(*) FROM tenant_delivery d
+			          JOIN explanation_result r
+			            ON r.explanation_result_id = d.explanation_result_id
+			         WHERE r.publication_status <> 'PUBLISHED'
+			           AND NOT EXISTS (SELECT 1 FROM tenant_delivery inv
+			                            WHERE inv.tenant_id = d.tenant_id
+			                              AND inv.target_explanation_result_id
+			                                  = d.explanation_result_id)) AS delivery_now_nonpublished,
+			       (SELECT count(*) FROM tenant_delivery) AS delivery_rows
+			""";
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcConsoleFactsRepository(JdbcTemplate jdbc) {
@@ -291,7 +331,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
-				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day), outputs(day));
+				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day), outputs(day),
+				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
+						rs.getLong("published_without_delivery"),
+						rs.getLong("delivery_now_nonpublished"),
+						rs.getLong("delivery_rows"))));
 	}
 
 	/**

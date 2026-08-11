@@ -12,8 +12,8 @@ import java.util.List;
  * 뭉개지 않는 것도 {@link PipelineStatusRepository} 와 같다.
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
- * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 +
- * 산출 축</b>이고, 경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ * 축은 조각별로 하나씩 붙었고 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축 +
+ * 경계 축</b>으로 <b>전부 찼다</b>.
  *
  * <p>와이어의 <b>데이터셋 축은 여기 없다</b> — 원장에 그 테이블이 없어 작업에서 파생하고, 파생은
  * {@code ConsoleFactsService} 소관이다. 이 인터페이스는 그 재료({@link TaskRow} 뒤쪽 여섯 컬럼)만 낸다.
@@ -32,7 +32,21 @@ public interface ConsoleFactsRepository {
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
-			List<TaskRow> tasks, List<OutputRow> outputs) {
+			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary) {
+	}
+
+	/**
+	 * 게시 경계의 정합 — <b>게시 상태와 테넌트 발번이 어긋난 건수</b>.
+	 *
+	 * <p>⚠️ 이 축만 <b>날짜 창을 안 탄다.</b> 나머지 축은 "그 날 무슨 일이 있었나"이고 이건
+	 * "지금 어긋난 것이 몇 건인가"라 <b>누적</b>이다 — 어제 어긋난 것이 오늘 저절로 낫지 않는다.
+	 * 날짜로 자르면 조회한 날에 안 생긴 위반이 화면에서 사라진다.
+	 *
+	 * <p>{@code deliveryRows} 는 분모다 — 앞의 둘이 0 일 때 그것이 <b>정합</b>인지 <b>발번이 아직
+	 * 하나도 없음</b>인지 가른다.
+	 */
+	record BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,
+			long deliveryRows) {
 	}
 
 	/**
