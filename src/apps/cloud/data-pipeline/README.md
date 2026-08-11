@@ -168,7 +168,7 @@
 > analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — desired 를 terraform 밖에서 정하게 두고
-> apply 가 장중 워커를 내리지 않게 한다. 그 주체는 상주 4종은 세션 오케스트레이션이고,
+> apply 가 장중 워커를 내리지 않게 한다. 그 주체는 **나머지 9종은 세션 오케스트레이션**이고,
 > **analysis-consumer 만 오토스케일링**이다(ALPHA-912, 아래). ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
 > `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
@@ -188,6 +188,10 @@
 > ⚠️ 그래서 **20:05 에 이 서비스를 내리는 주체가 없다** — 그게 의도다. 게이트는 설명 큐를
 > 안 보므로(아래) 예전엔 처리 중인 설명이 stop 에 잘렸는데, 스케일러는 처리 중(비가시)까지
 > 세어 그동안 대수를 유지한다. 야간 비용은 잔여 0 에서 0대로 내려가 해결된다.
+> ⚠️ **절단이 통째로 사라진 것은 아니다** — 버스트 중 CD 재배포의 롤링은 여전히 처리 중인
+> 태스크를 자른다(Fargate `stopTimeout` 상한 120초 < 건당 588초). 그건 별개 축이다.
+> ⚠️ 그리고 이제 desired 를 0 으로 내리는 주체가 **오토스케일링 하나뿐**이다 — 세션의
+> 20:05 하드스톱이 CloudWatch 를 안 보는 유일한 천장이었다.
 > terraform 공용 목록에 이름이 아직 남아 있으나 코드가 늘 빼내므로 잉여다 — 제거는 후속
 > 정합성 정리(PR C) 소관이고, 남아 있어도 동작은 같다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**

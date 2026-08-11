@@ -349,7 +349,10 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # 깨워 두고 있었다. 큐는 6시간 무접근이면 자고(CloudWatch 계약), 깨어날 때 지표에
     # **최대 15분** 지연이 붙는다("A delay of up to 15 minutes occurs in CloudWatch metrics
     # when a queue is activated from an inactive state"). 08-10 실측은 5분이었다(공백
-    # 03:00~07:52 KST, 소비자 기동 07:47 의 5분 뒤 재개). 그 뒤에 알람 60초 + 기동이 붙는다.
+    # 03:00~07:52 KST, 소비자 기동 07:47 의 5분 뒤 재개).
+    # 그 위에 **알람 탐지 ~3분**이 붙는다(08-11 실측: 09:01 첫 메시지 → 09:02 첫 지표 →
+    # 09:04:48 ALARM → 09:04:54 태스크 시작). 60초는 알람 `period` 이지 탐지 지연이 아니다 —
+    # 지표 배달과 평가 래그가 그 위에 얹힌다.
     # 건당 588초짜리 레인이라 감내한다 — 개장 지연이 문제가 되면 세션을 되살리지 말고
     # `aws_appautoscaling_scheduled_action` 으로 09:00 에 min 1 을 얹는 쪽이 싸다.
     # `_services` 가 공용 목록에서 이 이름을 빼는 것이 세션이 이 서비스에 대해 하는 일의 전부다.
@@ -515,7 +518,10 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     # 0 으로 내린다(실증됨). 여기서 0 을 쓰면 **아직 처리 중인 설명을 자른다**: 게이트는
     # 이 서비스의 큐를 안 보므로(설명 큐는 게이트 밖 — `_gate_pending` 주석) 20:05 에
     # 남아 있는 건이 있어도 stop 이 온다. 스케일러는 처리 중(비가시)까지 세어 그 동안
-    # 대수를 유지하니, 손을 떼는 것이 곧 그 절단을 없애는 것이다.
+    # 대수를 유지하니, 손을 떼면 **stop 으로 인한** 절단은 없어진다.
+    # ⚠️ 절단이 통째로 사라진 것은 아니다 — 버스트 중에 CD 가 재배포를 걸면 롤링이
+    # 처리 중인 태스크를 여전히 자른다(Fargate `stopTimeout` 상한 120초 < 건당 588초).
+    # 그건 이 변경이 만든 것도, 없앤 것도 아니다.
     _scale(desired=0, force=False)
     # ⚠️ 토글과 무관하게 **목록이 있으면 내린다** — 토글을 끈 날 그 서비스가 떠 있으면
     # 아무도 안 내려 계속 돈다(어제 켜고 오늘 끈 경우가 정확히 그 모양이다). 내리는 방향은

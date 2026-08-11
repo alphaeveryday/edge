@@ -70,7 +70,7 @@ jobs:
           describe_err="$(mktemp)"
           if ! described="$(aws ecs describe-services \
             --cluster "${cluster}" --services "${svc}" \
-            --query 'services[0].[status,desiredCount]' --output text 2>"${describe_err}")"; then
+            --query 'services[0].status' --output text 2>"${describe_err}")"; then
             if grep -q "AccessDenied" "${describe_err}" && [ "${can_skip}" = "true" ]; then
               echo "::warning::${svc} 조회가 AccessDenied — terraform-apply 선착 전이면 정상(서비스 생성 후 첫 배포가 이미지를 확정한다)"
               exit 0
@@ -79,7 +79,7 @@ jobs:
             echo "::error::${svc} describe 실패 — 유예(${grace_until} 전)가 아니므로 배선·자격 결함이다"
             exit 1
           fi
-          read -r status desired <<<"${described}"
+          status="${described}"
           if { [ "${status}" = "None" ] || [ -z "${status}" ]; } && [ "${can_skip}" = "true" ]; then
             echo "::warning::${svc} 가 아직 없다 — apply 선착 전이면 정상"
             exit 0
@@ -104,6 +104,16 @@ jobs:
           aws ecs update-service --cluster "${cluster}" --service "${svc}" \
             --force-new-deployment >/dev/null
           echo "${svc} 재배포 시작"
+          # ⚠️ **이 COMPLETED 는 이미지 검증이 아니다.** ALPHA-912 뒤로 desired 는 버스트
+          # 중에만 0 이 아니라, 대부분의 푸시에서 이 배포는 태스크를 **하나도 안 띄운다**
+          # (requestedTaskCount 0). 깨진 이미지를 밀어도 여기는 초록이고, 실패는 개장 후
+          # 스케일업의 크래시루프에서 처음 드러난다(이 레인엔 백스톱이 없고 배포
+          # circuit breaker 도 꺼져 있다). 여기서 확인되는 것은 **배포 접수**뿐이다.
+          # ⚠️ 그 대가도 적어 둔다 — desired 0 배포는 다이제스트를 안 잡으므로(라이브 확인:
+          # 그 revision 에는 imageDigest 필드가 없다) ECS 의 version consistency 가 이
+          # 서비스에 대해 꺼진 상태로 돈다. 버스트 중에 새 이미지를 밀면 같은 큐를 두 버전이
+          # 나눠 먹을 수 있다. 대안이 "영영 옛 이미지"라 이 트레이드를 택했다 — 근본 해법은
+          # task-def 를 mutable 태그가 아니라 SHA 로 핀하는 것이고, 레포 전체 관례라 별건이다.
           deadline=$(( SECONDS + 600 ))
           while :; do
             state="$(aws ecs describe-services --cluster "${cluster}" --services "${svc}" \

@@ -439,6 +439,7 @@ class TestAnalysisConsumerOwnList:
         ), ("설명 소비자 목록 env 가 terraform 에서 그 서비스명을 안 싣는다 — "
             "코드가 공용에서 뺄 근거를 잃고 컷오버 상태로 오인한다")
 
+
 class TestDisclosureLane:
     """공시 세션 편입(ALPHA-875) — 뉴스와 **같은 축**이다. 두 레인이 표 하나를 도므로 여기서
     보는 것은 "공시가 그 표에 제대로 들어갔나"이고, 축 자체의 반례는 TestNewsLane 이 든다."""
