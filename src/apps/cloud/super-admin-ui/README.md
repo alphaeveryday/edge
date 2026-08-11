@@ -18,7 +18,7 @@ docker compose up --build super-admin-api      # host 18082
 pnpm --filter super-admin-ui dev        # http://localhost:5175
 pnpm --filter super-admin-ui build      # tsc --noEmit && vite build → dist/
 pnpm --filter super-admin-ui typecheck
-pnpm --filter super-admin-ui test       # node:test — 규칙 엔진 단위 테스트
+pnpm --filter super-admin-ui test       # node:test — 규칙 엔진 + 도메인 판단 모듈 단위 테스트
 pnpm --filter super-admin-ui eval:rules # 규칙 평가 결과 JSON (UI 없이)
 ```
 
@@ -71,6 +71,24 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 어댑터가 필요하고 그것도 화면 조각 몫이다.
 
 알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
+
+## 화면 기반 조각 (`src/styles/` · `src/pages/_shared/` · `src/mock/` · `domains` 파생 모듈)
+
+화면(`pages/ops/*`)이 올라설 토대만 먼저 들였다(ALPHA-738 조각 2). **아직 라우팅에 안 붙고
+아무 데서도 import 되지 않아 번들에 들어가지 않는다** — 화면은 후속 조각이다.
+
+| 자리 | 무엇 |
+|---|---|
+| `styles/` 5 | ops·grid·minute·info-popover·mock-preview |
+| `pages/_shared/` | `InfoPopover`(portal 팝오버 — 포커스·Escape 처리) · `MockPreview` |
+| `mock/preview.ts` | 실 데이터 0건일 때 화면을 검수하는 미리보기 픽스처. `mock/preview.test.ts` 가 **서버가 낼 수 있는 응답인가**를 고정한다 |
+| `domains/sources/` 파생 4 | `dailyRollup`(데이터셋×날짜 롤업) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현) |
+| `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 |
+
+⚠️ **`datasetCatalog` 의 정본은 파이프라인 소스다** — `data_pipeline/ops/catalog.py`(작업 어휘)와
+`data_pipeline/minute/states.py`(1분 dataset 어휘). 두 언어를 잇는 자동 가드가 없어
+`datasetCatalog.test.ts` 가 그 다리다(유령·누락·중복을 양방향으로 잡는다). facts-snapshot 을
+정본으로 쓰면 안 된다 — 날짜 고정 픽스처라 이후의 레인 이동·신설을 모른다.
 
 ## 데이터 레이어
 
