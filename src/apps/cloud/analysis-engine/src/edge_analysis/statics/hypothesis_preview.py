@@ -229,6 +229,9 @@ class HypothesisPreviewRuntime:
         self._run_id = secrets.token_hex(12)
         self._previews: dict[str, PreviewResolution] = {}
         self._distribution_attempts: dict[str, dict[str, Any]] = {}
+        # 실제로 preview 를 **실행한** 사건 집합 - 상한 판정 축. attempts 와 갈라
+        # 두는 이유는 _preview_distribution 의 상한 주석 참조(거부 기록의 우회 방지).
+        self._previewed_events: set[str] = set()
         grouped: dict[str, EventCandidate] = {}
         for candidate in candidates or ():
             prior = grouped.get(candidate.thread_id)
@@ -348,14 +351,22 @@ class HypothesisPreviewRuntime:
             return self._error("OPTION_NOT_ALLOWED", "candidate or outcome is not available")
         # 상한(최대 3개 사건)은 제출뿐 아니라 **도구 실행 시점**에도 서버가 강제한다
         # (ALPHA-938 봇 리뷰) - 제출만 자르면 왕복 예산 안에서 4·5번째 preview SQL 이
-        # 그대로 실행돼 프롬프트가 광고한 계약과 어긋난다. 이미 시도한 사건의 재조회는
-        # 상한에 안 걸린다(같은 사건 재시도는 새 비용 축이 아니다).
-        if (candidate.source_event_id not in self._distribution_attempts
-                and len(self._distribution_attempts) >= MAX_DISTRIBUTION_PREVIEWS):
+        # 그대로 실행돼 프롬프트가 광고한 계약과 어긋난다. 판정은 **실행된 사건
+        # 집합**(_previewed_events)이다: 거부도 attempts 에 기록하므로(퍼널 fail-loud)
+        # attempts 크기로 재면 거부 기록이 "이미 시도함"으로 읽혀 재요청이 상한을
+        # 우회한다. 실행된 사건의 재조회는 상한에 안 걸린다(새 비용 축이 아니다).
+        if (candidate.source_event_id not in self._previewed_events
+                and len(self._previewed_events) >= MAX_DISTRIBUTION_PREVIEWS):
+            self._distribution_attempts[candidate.source_event_id] = {
+                "preview_status": "UNAVAILABLE",
+                "preview_reason": "PREVIEW_LIMIT_EXCEEDED",
+                "historical_n": None, "min_n": MIN_N, "handle": None,
+            }
             return self._error(
                 "PREVIEW_LIMIT_EXCEEDED",
                 f"preview 는 서로 다른 사건 최대 {MAX_DISTRIBUTION_PREVIEWS}개까지다 - "
                 "이미 받은 READY handle 로 최종 제출하라")
+        self._previewed_events.add(candidate.source_event_id)
         recipe = {"run_id": self._run_id, "candidate_id": candidate_id,
                   "outcome_id": outcome_id}
         handle = "hpr_" + hashlib.sha256(json.dumps(

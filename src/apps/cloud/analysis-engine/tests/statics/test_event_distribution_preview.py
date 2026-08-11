@@ -453,9 +453,16 @@ def test_fourth_distinct_preview_is_refused_at_the_tool(monkeypatch):
 
     fourth = runtime.call("hypothesis.preview", {
         "candidate_id": candidate_ids[3], "outcome_id": outcome})
+    fourth_retry = runtime.call("hypothesis.preview", {
+        "candidate_id": candidate_ids[3], "outcome_id": outcome})
     again = runtime.call("hypothesis.preview", {
         "candidate_id": candidate_ids[0], "outcome_id": outcome})
 
     assert fourth["ok"] is False
     assert fourth["error"]["code"] == "PREVIEW_LIMIT_EXCEEDED"
+    # 거부 기록이 "이미 시도함"으로 읽혀 재요청이 상한을 우회하면 안 된다.
+    assert fourth_retry["ok"] is False
     assert again["ok"] is True
+    # 거부도 퍼널에 남는다(fail-loud) - 미요청(PREVIEW_NOT_REQUESTED)과 구분된다.
+    assert runtime.distribution_attempts()["evt_3"]["preview_reason"] == (
+        "PREVIEW_LIMIT_EXCEEDED")
