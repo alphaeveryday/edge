@@ -25,7 +25,8 @@ function bodyMessage(body: unknown): string | undefined {
   return undefined;
 }
 
-/* super-admin LoginPage BrandMark 의 복제본 (다크 패널 위라 배경 사각형 없음). */
+/* EDGE 시안 마크(상승 바 3개, 다크 패널 위라 배경 사각형 없음).
+ * super-admin 은 공식 로고로 전환(ALPHA-930) — 검수 콘솔은 시안 마크 유지. */
 function BrandMark() {
   return (
     <svg width={26} height={26} viewBox="0 0 32 32" fill="none" role="img" aria-label="EDGE mark" style={{ flex: 'none' }}>
