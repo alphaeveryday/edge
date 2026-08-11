@@ -470,3 +470,28 @@ test('마감 세션이 결함을 안고 있으면 깨끗한 종료로 그리지 
   assert.doesNotMatch(h.reason, /남은 결함/, '창 결함은 없으니 그 문구는 안 붙는다');
   assert.ok(issues(stuckOnly, jobs).length > 0, '같은 세션의 확인 항목은 그 job 을 드러낸다');
 });
+
+test('원장 불일치는 요약에도 뜬다 — 상세만 "못 믿는다"고 하고 요약이 정상이면 안 된다', () => {
+  /* 기대 390인데 행이 389면 `issues()` 가 원장 불일치를 낸다. `sessionHealth` 가 그걸 안 보면
+   * 요약은 "정상", 상세는 "원장 수를 그대로 믿으면 안 된다" 로 갈린다. 장애로는 안 세운다 —
+   * 세션이 죽은 게 아니라 셈의 근거가 흔들리는 것이다. */
+  const s0 = session({ expectedWindowCount: 390, windows: { valid: 389 } });
+  assert.ok(issues(s0, NO_JOBS).some((i) => i.key === 'ledgerMismatch'), '상세는 이미 낸다');
+  const h = sessionHealth(s0, NO_JOBS);
+  assert.equal(h.kind, 'caution', '요약이 정상이면 안 된다');
+  assert.notEqual(h.kind, 'failure', '셈의 근거 문제지 세션 장애가 아니다');
+  assert.match(h.reason, /원장 불일치/);
+
+  /* 마감 세션도 같다 — 종료 분기가 먼저 반환하므로 거기서도 세야 한다 */
+  const closed = sessionHealth(
+    session({ phase: 'FINALIZED', expectedWindowCount: 390, windows: { valid: 389 } }),
+    NO_JOBS,
+  );
+  assert.equal(closed.tone, 'warn');
+  assert.match(closed.reason, /원장 불일치 1/);
+
+  /* 수가 맞으면 종전대로 정상 */
+  const ok = sessionHealth(session({ expectedWindowCount: 390, windows: { valid: 390 } }), NO_JOBS);
+  assert.equal(ok.kind, 'normal');
+  assert.doesNotMatch(ok.reason, /불일치/);
+});

@@ -171,6 +171,11 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
   const elapsed = evidenced + w.overdueNoEvidence + w.missing;
   const defects = qualityDefectCount(s);
   const stuck = jobs.claimedExpired + jobs.dead;
+  /* 기대 창 수에는 있는데 원장에 행이 없다 — 어떤 창 집계에도 안 잡히므로 위 숫자들을
+   * 그대로 믿으면 안 된다는 사실이다. `issues()` 는 이걸 내는데 여기서 안 보면 요약이
+   * "정상"이라 하고 상세가 "원장 수를 못 믿는다"고 해 둘이 어긋난다.
+   * 장애로 세우지는 않는다 — 세션이 죽은 게 아니라 **셈의 근거가 흔들리는** 것이다. */
+  const unmaterialized = Math.max(0, s.expectedWindowCount - materializedCount(s));
 
   const coverage = {
     elapsed,
@@ -214,6 +219,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
     const parts = [
       windowDefects > 0 ? `남은 결함 ${windowDefects}${noun}` : null,
       stuck > 0 ? `고착 job ${stuck}` : null,
+      unmaterialized > 0 ? `원장 불일치 ${unmaterialized}${noun}` : null,
     ].filter(Boolean);
     return {
       ...base,
@@ -242,19 +248,30 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
     };
   }
   /* 수집기가 살아 있어도 결함이 있으면 정상이 아니다 */
-  if (defects > 0 || stuck > 0) {
+  if (defects > 0 || stuck > 0 || unmaterialized > 0) {
     return {
       ...base,
       kind: 'caution',
       label: '주의',
       tone: 'warn',
-      reason: defects > 0 ? `품질 결함 ${defects}${noun}` : `유효 lease 없는 claim·DEAD ${stuck}건`,
+      reason:
+        defects > 0
+          ? `품질 결함 ${defects}${noun}`
+          : stuck > 0
+            ? `유효 lease 없는 claim·DEAD ${stuck}건`
+            : `원장 불일치 — 기대 ${s.expectedWindowCount}${noun} 중 실재 행 ${materializedCount(s)}`,
     };
   }
   if (live.kind === 'unknown') {
     return { ...base, kind: 'caution', label: '주의', tone: 'warn', reason: live.basis };
   }
-  return { ...base, kind: 'normal', label: '정상', tone: 'active', reason: '네 축 모두 이상 없음' };
+  return {
+    ...base,
+    kind: 'normal',
+    label: '정상',
+    tone: 'active',
+    reason: '창·품질·실행·큐 이상 없고 원장 행 수도 기대와 같다',
+  };
 }
 
 /* ── 창 축 ── */
