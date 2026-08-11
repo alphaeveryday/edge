@@ -39,12 +39,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       운영(UTC)에서만 하루가 밀린다. 변이 검증으로 확인한 것은 <b>어느 존을 쓰는가</b>까지다
  *       ({@code 'Asia/Seoul'}→{@code 'UTC'} 는 잡힌다). 그래서 이 조회의 날짜 캐스트는 존을 항상
  *       명시해야 한다 — 세션 기본값에 기대는 순간 이 테스트가 못 보는 자리가 된다.</li>
+ *   <li><b>미완결일 판정이 DB 시계를 쓰는지 JVM 시계를 쓰는지</b>. 둘이 같은 호스트라 값이
+ *       같다 — {@code LocalDate.now(KST)} 로 바꾸는 변이는 여기서 안 죽는다. 계약은 "한 응답의
+ *       {@code meta.today} 와 같은 시계"이고, 그 근거는 조회가 {@code META_SQL} 의
+ *       {@code kst_today} 를 그대로 넘겨받는다는 <b>구조</b>에 있지 이 단언에 있지 않다.</li>
  * </ul>
  */
 @Transactional
 class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegrationTest {
 
 	private static final LocalDate DAY = LocalDate.parse("2026-08-03");
+
+	/** 장이 서야 나오는 산출({@code marketBound}) — 장 안 서는 날 규칙이 기준을 비우는 대상. */
+	private static final List<String> MARKET_OUTPUTS = List.of("o.pub", "o.trig");
+
+	/** 장과 무관하게 도는 산출 — 그래서 <b>미완결일 억제만</b>이 이 셋의 기준을 비운다. */
+	private static final List<String> NEWS_OUTPUTS = List.of("o.doc", "o.asr", "o.evt");
 
 	/** {@code price_movement_trigger} 의 UNIQUE 를 피하려 시각을 갈라 주는 카운터. */
 	private int triggerSeq;
@@ -75,6 +85,24 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				        ?::timestamptz)
 				""", id, runKey, pipelineType, "exec-" + id, orchestration, tradingDate, deadline,
 				createdAt, updatedAt);
+	}
+
+	/**
+	 * 서버가 보는 오늘 — <b>DB 시계</b>다. 조회가 {@code now()} 로 KST 오늘을 뽑으므로 테스트도
+	 * 같은 시계를 물어야 자정 근처에서 갈리지 않는다(JVM 시계로 잡으면 그 창에서만 깨진다).
+	 */
+	private LocalDate kstToday() {
+		return jdbc.queryForObject("SELECT (now() AT TIME ZONE 'Asia/Seoul')::date",
+				LocalDate.class);
+	}
+
+	/** 주말은 기준 표본에서 빠지므로 표본 날짜는 <b>평일</b>이어야 한다. */
+	private static LocalDate previousWeekday(LocalDate from) {
+		LocalDate d = from.minusDays(1);
+		while (d.getDayOfWeek().getValue() > 5) {
+			d = d.minusDays(1);
+		}
+		return d;
 	}
 
 	/** 거래일 하나를 원장에 세운다. */
@@ -913,6 +941,112 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 장에 안 매인 산출은 휴장일에도 기준을 준다(표본 하나 → 중앙값 0.0, null 이 아니다).
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
+	}
+
+	/**
+	 * 🔴 <b>그 날의 적재 창이 아직 안 지났으면 비교 대상이 아니다</b>(ALPHA-946). 기준일 후보는
+	 * {@code day} 미만이라 <b>적재 창이 지난</b> 하루의 값인데, 조회일이 KST 오늘이면 그 값은 아직
+	 * 쌓이는 중이다 — dev 실측(2026-08-11 14:27 KST)에서 산출 다섯 중 <b>넷</b>이 그 이유로 거짓
+	 * P1 이었다.
+	 *
+	 * <p>⚠️ <b>"완결"이 아니다</b> — 지난 날의 값도 소급 적재·정정으로 움직인다. 이 게이트가 주는
+	 * 것은 정직한 하한이고, 무엇이 흔들리는지는 프로덕션 코드 주석과
+	 * {@code docs/contracts/console-facts-api.md} 「미완결일」이 정본이다.
+	 *
+	 * <p>⚠️ <b>다섯 전부를 잰다.</b> 적재 창이 산출마다 다르다: {@code o.trig} 은 시장 SFN 한 번
+	 * (기본 15:40)이 통째로 넣는 계단 함수고 — ⚠️ 행에 박힌 {@code detected_at}=15:30 은
+	 * {@code load_price_triggers.py} 의 <b>멱등 키</b>이지 적재 시각이 아니다 — 뉴스 셋은 하루 종일,
+	 * {@code o.pub} 은 날짜 경계를 넘는다. 다섯 전부에 참인 술어가 "그 날이 다 지났는가" 하나뿐이라
+	 * 산출별로 가르지 않는다 — 억제를 {@code marketBound} 와 함께 거는 변이가 여기서 죽는다.
+	 *
+	 * <p>⚠️ <b>대조를 같은 픽스처로 둔다</b> — 같은 데이터로 <b>다 지난 날</b>을 물으면 기준이 선다.
+	 * 이게 없으면 "표본이 없어서 null" 과 구별이 안 돼, 억제를 통째로 지우는 변이가 산다.
+	 *
+	 * <p>⚠️ 억제는 <b>기준 쪽만</b>이다 — 그 날 값은 실측이라 그대로 낸다.
+	 *
+	 * <p>⭐⭐ <b>오늘 픽스처는 네 칸을 다 채운다</b>({@code marketBound} × 그날 값의 유무). 한
+	 * 칸이라도 비면 억제를 <b>그 칸으로 좁히는</b> 변이가 산다 — 두 라운드 연속 그렇게 뚫렸다:
+	 * 처음엔 다섯을 전부 양수로 둬 {@code && today > 0} 이 살고, 그걸 고치며 장 산출을 전부 0 으로
+	 * 만들었더니 {@code && (today == 0 || !marketBound)} 가 살았다(둘 다 리뷰가 잡았다).
+	 * 그래서 {@code o.trig}=양수 · {@code o.pub}=0 · 뉴스 셋=양수로 갈라 둔다.
+	 */
+	@Test
+	void 오늘은_아직_안_끝났으니_기준을_안_준다() {
+		LocalDate today = kstToday();
+		LocalDate prior = previousWeekday(today);
+		LocalDate prior2 = previousWeekday(prior);
+
+		/* 기준 표본 둘 — `prior` 를 물었을 때도 **다섯 전부** 기준이 서야 대조가 성립한다
+		 * (`prior2` 가 그 표본이므로 거기에도 게시·문서를 함께 둔다). */
+		insertTradingDay(prior2.toString());
+		insertPublished("p-prior2", prior2.toString(), "etf-a", "PUBLISHED");
+		insertDocument("d-prior2", "NEWS", prior2 + "T09:00:00+09:00");
+		insertTradingDay(prior.toString());
+		insertPublished("p-prior", prior.toString(), "etf-a", "PUBLISHED");
+		insertDocument("d-prior", "NEWS", prior + "T09:00:00+09:00");
+		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
+		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
+
+		/* 오늘 — **네 칸을 다 채운다**(위 javadoc):
+		 *   · `o.trig` = 양수 · 장에 매임   ← 이 칸이 비면 `(today == 0 || !marketBound)` 가 산다
+		 *   · `o.pub`  = 0    · 장에 매임   ← 이 칸이 비면 `&& today > 0` 이 산다
+		 *                                     ⭐ 그리고 **이게 이 결함의 실제 형상이다**
+		 *                                     (dev 14:27 실측에서 `o.trig` 가 0/28.5 였다)
+		 *   · 뉴스 셋  = 양수 · 안 매임
+		 * ⚠️ `insertPublished` 는 트리거를 **함께** 세우므로 `o.pub` 만 0 으로 두려면 트리거를
+		 * 따로 넣어야 한다(그래서 여기서 `insertTrigger` 를 직접 쓴다). */
+		insertTrigger("g-today", today.toString(), "etf-c");
+		insertDocument("d-today", "NEWS", today + "T09:00:00+09:00");
+		insertAssertion("a-today", "d-today", today + "T09:00:00+09:00");
+		insertSourceEvent("e-today", "NEWS", today + "T09:00:00+09:00");
+
+		List<OutputRow> outputs = repository.facts(today).outputs();
+		assertThat(outputs).extracting(OutputRow::id)
+				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
+		assertThat(outputs).allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
+		/* 억제는 **기준 쪽만**이고 **값의 크기와 무관**하다 — 그날 값은 실측대로 낸다.
+		 * 양수 쪽에 장 산출({@code o.trig})이 **반드시 하나 있어야** 위 표의 네 칸이 찬다. */
+		assertThat(outputs).filteredOn(o -> o.today() > 0).extracting(OutputRow::id)
+				.containsExactlyInAnyOrder("o.trig", "o.doc", "o.asr", "o.evt");
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.pub")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isZero());
+
+		/* 대조 — 같은 원장으로 다 지난 날을 물으면 기준이 선다. 억제 사유는 데이터가 아니라
+		 * **조회일**이다. ⚠️ **다섯 전부를 잰다**: 한 축만 보면 특정 산출의 기준을 영구히
+		 * 비우는 변이(`|| id.equals("o.pub")`)가 통과한다 — 당일은 어차피 전부 null 이고 휴장
+		 * 테스트도 그 축의 null 을 기대하므로 아무 단언도 안 깨진다(리뷰가 잡았다). */
+		assertThat(repository.facts(prior).outputs())
+				.allSatisfy(o -> assertThat(o.base()).as("%s 기준(지난 날)", o.id()).isNotNull());
+	}
+
+	/**
+	 * 🔴 <b>두 억제가 <b>독립</b>이다 — 오늘이 장 안 서는 날이어도 뉴스 셋까지 기준이 없다.</b>
+	 *
+	 * <p>위 테스트만으로는 억제를 {@code targetDayIsIncomplete && !targetIsNonMarketDay} 로 좁히는
+	 * 변이가 <b>평일에 돌면 통과한다</b> — 실행 날짜에 결과가 매이는 자리였다(리뷰가 잡았다).
+	 * 오늘을 원장에서 결정적으로 휴장으로 만들면 그 변이가 뉴스 셋의 기준을 되살리고, 아직 쌓이는
+	 * 중인 값이 평일 중앙값과 비교된다.
+	 *
+	 * <p>뉴스 셋으로 재는 이유: {@code marketBound} 두 축은 휴장 규약으로도 null 이라 이 변이를
+	 * 못 가른다.
+	 */
+	@Test
+	void 오늘이_휴장이어도_뉴스_산출까지_기준을_안_준다() {
+		LocalDate today = kstToday();
+		LocalDate prior = previousWeekday(today);
+		insertHoliday(today.toString());   // 실행 요일과 무관하게 오늘을 장 안 서는 날로 고정
+		insertTradingDay(prior.toString());
+		insertDocument("d-prior", "NEWS", prior + "T09:00:00+09:00");
+		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
+		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
+
+		/* ⚠️ **거른 뒤 크기를 먼저 잰다.** `allSatisfy` 는 빈 목록에 **성공**하므로, 이 교차
+		 * 조건(미완결 ∧ 휴장)에서만 뉴스 셋을 응답에서 빼는 변이가 단언 없이 통과한다
+		 * (리뷰가 잡았다 — 이 클래스의 다른 테스트는 그 교차를 안 밟는다). */
+		assertThat(repository.facts(today).outputs())
+				.filteredOn(o -> NEWS_OUTPUTS.contains(o.id()))
+				.hasSize(NEWS_OUTPUTS.size())
+				.allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
 	}
 
 	/**

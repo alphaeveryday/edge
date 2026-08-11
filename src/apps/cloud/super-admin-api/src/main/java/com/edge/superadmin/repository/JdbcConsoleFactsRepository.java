@@ -354,7 +354,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
-				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day), outputs(day),
+				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day),
+				outputs(day, meta.kstToday()),
 				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
@@ -370,11 +371,45 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 서로 일관된 것이 그 증거다. 한 문장으로 세는 이유는 왕복을 줄이는 것뿐이고, <b>격리수준을
 	 * 낮추면</b> 그때야 나눠 센 값들이 갈린다.
 	 */
-	private List<OutputRow> outputs(LocalDate day) {
+	private List<OutputRow> outputs(LocalDate day, LocalDate kstToday) {
 		/* 휴장일 목록을 한 번만 읽어 두 자리가 같은 술어를 쓰게 한다 — 표본에서 빼는 자리와
 		 * "오늘이 휴장인가"를 묻는 자리가 갈리면 이 파일이 이미 겪은 종류의 결함이 된다. */
 		List<LocalDate> holidays = jdbc.queryForList(HOLIDAY_DAYS_SQL, LocalDate.class, day);
 		boolean targetIsNonMarketDay = !marketDay(day, holidays);
+		/* 🔴 <b>그 날의 적재 창이 아직 안 지났으면 비교 대상이 아니다</b>(ALPHA-946). 기준일 후보는
+		 * {@code day} 미만이라 <b>적재 창이 지난</b> 하루의 값인데, {@code day} 가 KST 오늘이면 그
+		 * 값은 아직 쌓이는 중이다 — 같은 축이 아닌 둘을 나눠 임계에 건다. dev 실측(08-11 14:27 KST)
+		 * 에서 산출 다섯 중 <b>넷</b>이 그 이유로 거짓 P1 이었다({@code o.trig} −100%·{@code o.pub}
+		 * −71%·{@code o.asr} −29%·{@code o.evt} −59%). 미래 날짜를 400 으로 막는
+		 * {@code ConsoleFactsService.parseDateParam} 이 같은 논거를 이미 쓴다 — 오늘은 그
+		 * "아직"이 <b>부분</b>으로 오는 날이다.
+		 *
+		 * <p>⚠️ <b>"완결"이 아니라 "창이 지났다"이다.</b> 지난 날의 값도 <b>양방향으로</b> 움직인다:
+		 * {@code o.pub} 은 {@code trade_date} 가 적재와 분리돼 며칠 뒤에도 늘고, 뉴스 셋의
+		 * {@code available_at} 은 writer 마다 뜻이 다르다 — 배치 둘({@code steps/assemble_events.py}
+		 * 은 <b>{@code published_at}</b>, {@code steps/load_documents.py} 는 {@code fetched_at} 폴백
+		 * {@code published_at})은 {@code ON CONFLICT DO NOTHING} 이라 <b>먼저 넣은 쪽이 값을 정하고</b>
+		 * 과거 버킷을 <b>늘리며</b>, 1분 레인({@code minute/canonical_news.py})은 {@code DO UPDATE} 로
+		 * {@code available_at = GREATEST(기존, 처리 시각)} 이라 <b>정정이 오면 값을 앞으로 밀어</b>
+		 * 과거 버킷을 <b>줄인다</b>. 이 술어는 완결을 증명하지 않고 <b>정직한 하한</b>을 준다 —
+		 * 장중 거짓 −100% 는 구조적으로 없애되 지난 날의 값은 여전히 흔들린다.
+		 *
+		 * <p>⚠️ <b>다섯 전부에 건다.</b> 적재 창이 산출마다 다르기 때문이다: {@code o.trig} 은
+		 * 시장 SFN 한 번({@code schedule_expression} 기본 15:40)이 통째로 넣는 계단 함수고
+		 * (행에 박힌 {@code detected_at}=15:30 은 <b>멱등 키의 결정적 이벤트 시각</b>이지 적재
+		 * 시각이 아니다 — {@code steps/load_price_triggers.py}), 뉴스 셋은 하루 종일, {@code o.pub}
+		 * 은 상주 소비자라 날짜 경계를 넘는다. 다섯 전부에 참인 술어는 "그 날이 다 지났는가"
+		 * 하나뿐이라 산출별로 가르지 않는다. 가르려면 산출↔작업 완료 바인딩이 있어야 하고 없다.
+		 *
+		 * <p>🔴 <b>대가: 그 날의 진짜 결손이 자정까지 조용해진다.</b> 산출이 통째로 0 인 장애를
+		 * R13 이 당일에 잡던 경로가 사라진다 — 그리고 그걸 대신 잡을 규칙이 지금 없다(완전성 축이
+		 * 대부분 {@code UNKNOWN} 이라 작업이 {@code FULFILLED} 로 끝나면 R05~R07 이 조용하다,
+		 * ALPHA-728). 거짓 P1 다섯 중 넷을 없애는 값으로 그 지연을 받았고, 완전성 축이 서면
+		 * 그쪽이 당일 검출을 맡는다.
+		 *
+		 * <p>{@code isBefore} 로 쓴다 — 미래 날짜는 서비스가 400 으로 막지만, 그 가드가 이 판정의
+		 * 전제로 <b>여기에 적혀 있지 않으므로</b> 등호로 좁히면 가드가 빠지는 날 조용히 샌다. */
+		boolean targetDayIsIncomplete = !day.isBefore(kstToday);
 		List<LocalDate> baseDays = baseDays(day, holidays);
 
 		List<LocalDate> queried = new ArrayList<>(baseDays);
@@ -392,8 +427,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			List<Long> base = baseDays.stream().map(d -> byDay.getOrDefault(d, 0L)).toList();
 			/* 🔴 휴장일에 장 산출의 기준을 주면 소비자가 −100% 편차로 판정한다. `today` 의 0 은
 			 * 실측이 맞지만 **비교할 평소가 없는 날**이라 기준 쪽을 비운다 — 없는 사실을 지어내지
-			 * 않고 이미 있는 "기준 없음" 규약을 탄다. */
-			Double median = spec.marketBound() && targetIsNonMarketDay ? null : median(base);
+			 * 않고 이미 있는 "기준 없음" 규약을 탄다. 미완결일도 같은 지렛대를 탄다(위 주석) —
+			 * 두 사유 모두 "이 날의 값은 비교 대상이 아니다"이지 "표본이 없다"가 아니다. */
+			Double median = targetDayIsIncomplete || (spec.marketBound() && targetIsNonMarketDay)
+					? null : median(base);
 			return new OutputRow(spec.id(), spec.label(), spec.unit(),
 					byDay.getOrDefault(day, 0L), median);
 		}).toList();
