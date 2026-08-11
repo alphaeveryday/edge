@@ -163,8 +163,12 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
   const kind = datasetKind(s.dataset);
   const noun = isPollLane(kind) ? 'poll' : '창';
   const evidenced = evidencedCount(s);
-  /* 도래한 창의 하한 — 미도래·수집 중은 분모에 넣지 않는다 */
-  const elapsed = evidenced + w.overdueNoEvidence;
+  /* 도래한 창의 하한 — 미도래·수집 중은 분모에 넣지 않는다.
+   * ⚠️ **MISSING 은 넣는다.** EOD reconciliation 이 결손으로 판정한 창은 기한이 확실히
+   * 지났다. 빼면 389증거 + 1MISSING 인 세션이 `기한 도래 389 중 증거 389` 로 서서 커버리지가
+   * 만점으로 보이는데, 같은 창을 `qualityDefectCount` 는 결함으로 센다 — 한 화면이 같은
+   * 창을 두 번 다르게 말한다. 마감·정산된 세션일수록 이 과대평가가 커진다. */
+  const elapsed = evidenced + w.overdueNoEvidence + w.missing;
   const defects = qualityDefectCount(s);
   const stuck = jobs.claimedExpired + jobs.dead;
 
@@ -558,7 +562,7 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       title: news
         ? '품질 결함 poll — 잘린 poll(따라잡기) · 격리 · MISSING'
         : poll
-          ? '품질 결함 poll — 격리 · MISSING'
+          ? '품질 결함 poll — 부분 실패 · 격리 · MISSING'
           : '품질 결함 창 — 불완전 · 무효 · MISSING',
       short: '품질 결함',
       count: quality,
@@ -568,7 +572,7 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       detail: news
         ? 'anchor 에 못 닿고 잘린 poll(관측이 뒤처졌다), 격리분이 있어 무효로 커밋된 poll, EOD 가 결손으로 판정한 분이다.'
         : poll
-          ? '격리분이 있어 무효로 커밋된 poll 과 EOD 가 결손으로 판정한 분이다.'
+          ? '하위 스텝이 부분 실패한 poll(INCOMPLETE — `commit_disclosure_window` 가 그렇게 커밋한다), 격리분이 있어 무효로 커밋된 poll, EOD 가 결손으로 판정한 분이다.'
           : '결과는 남았지만 정상이 아닌 창과 EOD QC 가 결손으로 판정한 창이다.',
     });
   }

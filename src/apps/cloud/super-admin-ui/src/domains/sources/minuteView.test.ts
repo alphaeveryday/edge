@@ -414,3 +414,29 @@ test('큐 고착·DEAD 도 주의로 올라온다 — heartbeat 만으로 정상
   assert.equal(sessionHealth(s, { ...NO_JOBS, dead: 2 }).kind, 'caution');
   assert.equal(sessionHealth(s, { ...NO_JOBS, claimedExpired: 1 }).kind, 'caution');
 });
+
+test('MISSING 은 기한이 지난 창이다 — 커버리지 분모에서 빼면 만점으로 보인다', () => {
+  /* EOD reconciliation 이 결손으로 판정한 창은 기한이 확실히 지났다. 분모에서 빼면
+   * `기한 도래 N 중 증거 N` 이 되어 커버리지가 만점인데, 같은 창을 품질 결함이 세고 있다 —
+   * 한 화면이 같은 창을 두 번 다르게 말한다. */
+  const s0 = session({ expectedWindowCount: 390, windows: { valid: 389, missing: 1 } });
+  const h = sessionHealth(s0, NO_JOBS);
+  assert.equal(h.coverage.evidenced, 389);
+  assert.equal(h.coverage.elapsed, 390, 'MISSING 도 도래한 창이다');
+  assert.notEqual(h.coverage.elapsed, h.coverage.evidenced, '결함이 있는데 만점으로 서면 안 된다');
+  assert.equal(h.quality.defects, 1, '같은 창을 결함으로도 센다');
+});
+
+test('공시 품질 결함은 부분 실패(INCOMPLETE)를 빠뜨리지 않는다 — 없는 원인만 대면 다른 데를 본다', () => {
+  /* `commit_disclosure_window` 는 하위 스텝 부분 실패를 INCOMPLETE 로 커밋한다.
+   * `qualityDefectCount` 는 그걸 세는데 문구가 격리·MISSING 만 대면, INCOMPLETE 뿐인
+   * 세션에서 운영자가 실제로 실패한 체인 스텝이 아닌 곳을 찾게 된다. */
+  const q = issues(
+    session({ dataset: 'disclosure_minute', expectedWindowCount: 4, windows: { valid: 3, incomplete: 1 } }),
+    NO_JOBS,
+  ).find((x) => x.key === 'quality')!;
+  assert.equal(q.count, 1);
+  assert.match(q.title, /부분 실패/, '셀 수 있는 원인을 문구가 빠뜨리면 안 된다');
+  assert.match(q.detail, /INCOMPLETE/);
+  assert.doesNotMatch(q.detail, /anchor/, '뉴스 고유 기전은 여전히 안 붙는다');
+});
