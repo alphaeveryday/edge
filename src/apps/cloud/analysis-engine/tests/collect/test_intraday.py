@@ -418,6 +418,43 @@ def test_업종지수만_있는_최신일이_유니버스를_비우지_않는다
     assert intraday.load_symbols(con, MARKET, base=dest.as_posix()) == [SYMBOL]
 
 
+def test_업종지수는_부분봉_비율_분모에_안_들어간다(con, tmp_path):
+    """🔴 업종지수가 **분모**에 섞이면 잘린 수집이 정상으로 통과한다 (ALPHA-941).
+
+    부분봉 판정은 `partial > n_tickers * max_partial_ratio` 다. 멀쩡한 업종지수 45종이
+    `n_tickers` 에 더해지면 허용 절대치가 같이 커져, 가격 쪽 잘림이 그만큼 가려진다.
+    여기서는 가격 10종 중 2종을 짧게 만든다 — 20% 라 허용 10% 위반이어야 하는데,
+    지수 45종이 분모에 들어오면 2/55 = 3.6% 가 되어 **통과해 버린다**.
+
+    ⚠️ 이 결함은 `load_symbols` 만 고쳤을 때 그대로 살아 있었다. 거르는 자리가 질의마다
+    따로면 하나를 빠뜨리는 순간 그 질의만 조용히 오염된다 — `canonical_sql` 로 올린 이유다.
+    """
+    rows = [r for i in range(8) for r in _day_rows(f"{i:06d}.KS", "2026-07-30")]
+    rows += [r for i in range(8, 10)
+             for r in _day_rows(f"{i:06d}.KS", "2026-07-30", n_bars=BARS_PER_DAY // 3)]
+    intraday.stage_rows(con, rows)
+    dest = tmp_path / "intraday_5m"
+    intraday.publish_canonical(con, MARKET, dest=dest.as_posix())
+    part = dest / "market=KR" / "trade_date=2026-07-30"
+    con.execute(f"""
+        COPY (SELECT printf('%04d', 1000 + i) AS ticker,
+                     printf('%04d', 1000 + i) AS source_symbol,
+                     TIMESTAMP '2026-07-30 09:00:00' + INTERVAL (b * 5) MINUTE AS ts,
+                     2000.0 AS open, 2010.0 AS high, 1990.0 AS low, 2005.0 AS close,
+                     0::BIGINT AS volume,
+                     '{intraday.SECTOR_ROLLUP_VENDOR}' AS source_vendor,
+                     TIMESTAMP '2026-07-30 09:05:00' AS available_at
+              FROM range({BARS_PER_DAY}) t(b), range(45) u(i))
+        TO '{(part / "part-sector-index.parquet").as_posix()}' (FORMAT parquet)""")
+
+    rep = intraday.verify(con, market=MARKET, trade_date="2026-07-30",
+                          intraday=intraday.canonical_sql(MARKET, "2026-07-30",
+                                                          base=dest.as_posix()))
+    assert rep.n_tickers == 10, f"업종지수가 분모에 섞였다 — n_tickers={rep.n_tickers}"
+    assert any("부분적으로 잘렸다" in v for v in rep.violations), (
+        f"잘린 수집이 통과했다 — violations={rep.violations}")
+
+
 def test_업종지수_벤더_표기가_파이프라인과_같다():
     """두 서비스가 값을 **베껴** 쓴다 — 갈리면 위 필터가 조용히 아무것도 안 거른다.
 
