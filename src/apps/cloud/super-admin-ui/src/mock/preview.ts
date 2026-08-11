@@ -384,7 +384,10 @@ export const MOCK_OVERVIEW: SourceOverview = {
       notToday: false,
       launchStatus: 'LAUNCHED',
       orchestrationStatus: 'RUNNING',
-      opsStatus: 'DEGRADED',
+      /* ⚠️ 파생값이다 — `SourceService.opsStatus` 규칙을 그대로 따라야 한다(테스트가 고정).
+       * orchestration=RUNNING 이면 **결함을 보기 전에** IN_PROGRESS 다. 결함이 있다고
+       * DEGRADED 를 적으면 실 `/sources/overview` 가 못 내는 배지를 검수가 승인한다. */
+      opsStatus: 'IN_PROGRESS',
       /* 격자의 같은 런과 **같은 수**여야 한다 — 개요만 크게 적으면 운영자가 드릴다운에서
        * 재현할 수 없는 숫자가 되고, 검수는 어느 쪽도 못 믿는다(테스트가 고정한다). */
       counts: { due: 7, requiredDue: 7, fulfilled: 4, failed: 1, missed: 0, blocked: 1, pending: 1, skipped: 1 },
@@ -392,7 +395,10 @@ export const MOCK_OVERVIEW: SourceOverview = {
         { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
         { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', freshnessStatus: null, failedRecords: 2, overdue: false },
         { stage: 'raw', taskKey: 'ETF_HOLDINGS_COLLECTION_KRX', outcome: 'FULFILLED', dataStatus: 'VALID', freshnessStatus: 'STALE', failedRecords: null, overdue: false },
-        { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: true },
+        /* ⚠️ `overdue` 는 **미귀결(PENDING·null)** 에만 붙는다(`SourceService.overdue`).
+         * 귀결된 결함에 붙이면 "선행 미충족 · 마감 경과 미귀결"처럼 실 API 가 못 내는
+         * 사유 조합이 화면에 선다. */
+        { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
       ],
     },
     {
@@ -403,12 +409,15 @@ export const MOCK_OVERVIEW: SourceOverview = {
       notToday: false,
       launchStatus: 'LAUNCHED',
       orchestrationStatus: 'TIMED_OUT',
-      opsStatus: 'BLOCKED',
+      /* BLOCKED 은 **기동 실패·충돌 전용**이다(LAUNCH_FAILED·LAUNCH_CONFLICT). 기동은 됐고
+       * 실행이 terminal 실패면 DEGRADED 다 — TIMED_OUT 은 ORCHESTRATION_TERMINAL_FAILED. */
+      opsStatus: 'DEGRADED',
       counts: { due: 6, requiredDue: 6, fulfilled: 2, failed: 1, missed: 2, blocked: 0, pending: 1, skipped: 0 },
       defects: [
         { stage: 'feature', taskKey: 'LOAD_DOCUMENTS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
-        { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: true },
-        { stage: 'feature', taskKey: 'TAG_NEWS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: true },
+        /* MISSED 도 귀결이다 — overdue 는 미귀결 전용이라 여기 붙지 않는다 */
+        { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
+        { stage: 'feature', taskKey: 'TAG_NEWS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
       ],
     },
   ],

@@ -218,3 +218,42 @@ test('개요가 가리키는 런이 곧 그 레인의 최신 런이다 — 서�
     assert.equal(lane.runKey, latest, `${lane.pipelineType}: 개요가 최신 런을 안 가리킨다`);
   }
 });
+
+/** 실행 전체가 terminal 실패로 끝난 상태 — `SourceService.ORCHESTRATION_TERMINAL_FAILED` */
+const TERMINAL_FAILED = new Set(['FAILED', 'TIMED_OUT', 'ABORTED']);
+
+test('개요 배지는 서버 파생 규칙이 낼 수 있는 값이다 — 하드코딩이 규칙을 앞지르지 않는다', () => {
+  /* `SourceService.opsStatus` 를 그대로 옮긴 것이다. 픽스처가 규칙 밖 값을 들면(예: 기동은
+   * 됐는데 BLOCKED, RUNNING 인데 DEGRADED) 실 `/sources/overview` 가 못 내는 배지를
+   * 검수가 승인한다. 규칙이 바뀌면 이 테스트가 먼저 깨지는 게 맞다. */
+  for (const lane of MOCK_OVERVIEW.lanes) {
+    const launchFailed =
+      lane.launchStatus === 'LAUNCH_FAILED' || lane.launchStatus === 'LAUNCH_CONFLICT';
+    const runTerminalFailed = TERMINAL_FAILED.has(lane.orchestrationStatus ?? '');
+    const expected = launchFailed
+      ? 'BLOCKED'
+      : !runTerminalFailed && lane.orchestrationStatus === 'RUNNING'
+        ? 'IN_PROGRESS'
+        : lane.orchestrationStatus == null || lane.orchestrationStatus === 'UNKNOWN'
+          ? 'UNKNOWN'
+          : lane.defects.length === 0 && !runTerminalFailed
+            ? 'READY'
+            : 'DEGRADED';
+    assert.equal(lane.opsStatus, expected, `${lane.runKey}: 배지가 서버 규칙과 다르다`);
+  }
+});
+
+test('마감 경과(overdue)는 미귀결에만 붙는다 — 귀결된 결함에 붙이면 없는 사유가 선다', () => {
+  /* `SourceService.overdue` 는 `pendingOutcome`(outcome null 또는 PENDING)일 때만 참이다.
+   * BLOCKED·MISSED 에 붙이면 "선행 미충족 · 마감 경과 미귀결" 같은 실 API 가 못 내는
+   * 사유 조합이 화면에 서고, 그 문구 경로가 검수를 통과한다. */
+  for (const lane of MOCK_OVERVIEW.lanes) {
+    for (const d of lane.defects) {
+      if (!d.overdue) continue;
+      assert.ok(
+        d.outcome == null || d.outcome === 'PENDING',
+        `${lane.runKey} ${d.taskKey}: ${d.outcome} 인데 overdue 다`,
+      );
+    }
+  }
+});
