@@ -351,8 +351,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 섞이고, 그 날을 조회하면 비어야 할 {@code base} 가 실린다.
 	 *
 	 * <p>그래서 <b>주말은 달력이, 평일 휴장은 원장의 skip 신호가</b> 답한다. 주말 규칙은
-	 * data-pipeline 의 {@code ops/trading_calendar.py}({@code day.weekday() >= 5})와 같은 식이고,
-	 * Planner 의 슬롯 생성도 같은 기준을 쓴다({@code ops/entry.py} 의 {@code cand.weekday() >= 5}).
+	 * data-pipeline 의 {@code ops/trading_calendar.py}({@code day.weekday() >= 5})와 같은 식이다.
+	 *
+	 * <p>⚠️ 슬롯 생성({@code ops/entry.py} 의 {@code _due_slots})은 <b>같은 기준이 아니다</b> —
+	 * {@code cand.weekday() >= 5 and not weekend} 라 <b>레인별 주말 설정</b>을 본다. 뉴스처럼 주말에
+	 * 도는 레인은 주말 슬롯을 만들고, 그 결손 이슈도 주말 날짜로 열린다(dev 원장에 실재:
+	 * {@code news:2026-08-08T15:00} 토요일). 그 날짜를 여기서 뺀다.
 	 *
 	 * <p>⚠️ <b>한 술어를 두 자리가 함께 쓴다</b> — 표본에서 빼는 자리와 "오늘 장이 섰나"를 묻는
 	 * 자리. 갈리면 이 파일이 이미 겪은 종류의 결함이 된다.

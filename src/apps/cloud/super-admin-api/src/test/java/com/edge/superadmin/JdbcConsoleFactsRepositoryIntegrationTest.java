@@ -155,6 +155,27 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				""", id, type, "src-" + id, "제목 " + id, availableAt, availableAt);
 	}
 
+	/**
+	 * 문서에 매달린 주장 하나 — {@code o.asr} 이 세는 것. {@code available_at} 은 문서와 <b>따로</b>
+	 * 받는다(그 축이 문서가 아니라 주장 자신의 컬럼이다).
+	 */
+	private void insertAssertion(String id, String documentId, String availableAt) {
+		jdbc.update("""
+				INSERT INTO document_assertion (assertion_id, document_id, event_type_code,
+				       predicate_code, modality_code, available_at)
+				VALUES (?,?,'ET','P','REPORTED',?::timestamptz)
+				""", id, documentId, availableAt);
+	}
+
+	/** 소스 이벤트 하나 — {@code o.evt} 가 세는 것. */
+	private void insertSourceEvent(String id, String sourceClass, String availableAt) {
+		jdbc.update("""
+				INSERT INTO source_event (source_event_id, source_class, event_type_code,
+				       available_at)
+				VALUES (?,?,'ET',?::timestamptz)
+				""", id, sourceClass, availableAt);
+	}
+
 	private void insertTrigger(String id, String tradingDate, String etf) {
 		/* `etf_instrument_id` 는 `etf_profile` FK 이고, 그건 다시 `instrument` 를, `instrument` 는
 		 * `(instrument_id, entity_type)` 으로 `entity` 를 문다 — 종목 하나에 세 행이 필요하다.
@@ -705,7 +726,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	/**
 	 * 🔴 <b>휴장일은 표본에서 뺀다.</b> {@code trading_date} 는 거래일 달력이 아니라 슬롯 날짜라
-	 * ({@code plan_slot} 이 {@code is_trading_day} 와 무관하게 채운다) 휴장일에도 런 행이 생긴다.
+	 * ({@code ops/planner.py} 의 {@code plan_run} 이 {@code slot.date()} 를 그대로 넘긴다) 휴장일에도 런 행이 생긴다.
 	 * 안 빼면 그날의 산출 0 이 표본에 들어가 중앙값이 내려가고 편차 판정이 둔해진다.
 	 *
 	 * <p>⚠️ <b>제외는 날짜 단위지 런 단위가 아니다.</b> 휴장 신호는 KR 시장 레인에만 붙는데 뉴스
@@ -802,8 +823,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	void 표본은_휴장일을_뺀_뒤_10개로_자른다() {
 		insertTradingDay(DAY.toString());
 		insertHoliday("2026-07-27");   // day 직전 **평일** 11개 후보 중 하나가 휴장이다
-		/* 자르기가 제외보다 **앞이면** 최근 10개(08-02~07-24)를 집은 뒤 휴장을 빼 **9개**가 되고
-		 * 가장 오래된 07-23 이 영영 안 들어온다. 뒤면 제외 후 10개(08-01~07-23)가 그대로 남는다.
+		/* 후보는 day 직전 **평일 11개**(07-31·07-30·07-29·07-28·07-27·07-24·07-23·07-22·07-21·
+		 * 07-20·07-17)이고 그중 07-27 이 휴장이다.
+		 * 자르기가 제외보다 **앞이면** 최근 10개(07-31~07-20)를 집은 뒤 휴장을 빼 **9개**가 되고
+		 * 가장 오래된 07-17 이 영영 안 들어온다. 뒤면 제외 후 10개(07-31~07-17)가 그대로 남는다.
 		 * 그래서 두 경우를 가르는 신호는 **가장 오래된 07-17 의 유무 하나**다.
 		 *
 		 * 값을 그 신호가 중앙값을 움직이게 배치한다 — 0 인 날 5개와 1 인 날 5개:
@@ -886,18 +909,56 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 그날 값이 2 가 된다.
 	 */
 	@Test
-	void available_at_산출은_KST_날짜로_세고_뉴스만_센다() {
+	void available_at_산출_셋은_KST_날짜로_센다() {
 		insertTradingDay(DAY.toString());
+		// 세 산출 모두 경계 시각에 둔다 — 각 SQL 의 KST 캐스트가 **따로** 재져야 한다.
 		insertDocument("d1", "NEWS", "2026-08-03T00:30:00+09:00");        // KST 08-03 · UTC 08-02
-		insertDocument("d2", "DISCLOSURE", "2026-08-03T10:00:00+09:00");  // 뉴스가 아니다
+		insertDocument("d2", "DISCLOSURE", "2026-08-03T10:00:00+09:00");  // o.doc 이 안 세는 것
+		insertAssertion("a1", "d1", "2026-08-03T00:30:00+09:00");
+		insertSourceEvent("e1", "NEWS", "2026-08-03T00:30:00+09:00");
 
-		assertThat(repository.facts(DAY).outputs())
-				.filteredOn(o -> o.id().equals("o.doc")).singleElement()
+		List<OutputRow> outputs = repository.facts(DAY).outputs();
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
 				.satisfies(o -> {
 					assertThat(o.label()).isEqualTo("뉴스 문서");
 					assertThat(o.unit()).isEqualTo("건");
+					// 🔴 공시 문서는 안 센다 — `document_type='NEWS'` 술어가 빠지면 2 가 된다.
 					assertThat(o.today()).isEqualTo(1L);
 				});
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.asr")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isEqualTo(1L));
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.evt")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isEqualTo(1L));
+	}
+
+	/**
+	 * 🔴 <b>{@code o.asr}·{@code o.evt} 는 공시도 함께 센다</b> — {@code o.doc} 과 다르다.
+	 * 그 둘의 SQL 에는 계열 술어가 없고, 원장에는 공시 주장·이벤트가 실제로 들어온다
+	 * ({@code steps/assemble_disclosure_events.py}). dev 실측(2026-08-11)으로는 뉴스 대비 <b>0.3%</b>
+	 * (주장 63 / 86,197 · 이벤트 63 / 38,543)라 판정을 뒤집지 않지만, <b>공시 레인이 커지면 달라진다</b>.
+	 *
+	 * <p>여기서 술어를 더하지 않는 이유는 그게 <b>지표의 정의를 바꾸는 일</b>이라서다(라벨도
+	 * "assertion"·"source event" 로 계열을 안 밝힌다). 대신 <b>현재 셈법을 못 박아</b> 조용히
+	 * 바뀌지 않게 한다 — 정의를 바꾸려면 이 테스트가 먼저 깨져야 한다.
+	 */
+	@Test
+	void assertion_과_source_event_는_공시도_함께_센다() {
+		insertTradingDay(DAY.toString());
+		insertDocument("d1", "NEWS", "2026-08-03T10:00:00+09:00");
+		insertDocument("d2", "DISCLOSURE", "2026-08-03T10:00:00+09:00");
+		insertAssertion("a1", "d1", "2026-08-03T10:00:00+09:00");
+		insertAssertion("a2", "d2", "2026-08-03T10:00:00+09:00");   // 공시 주장
+		insertSourceEvent("e1", "NEWS", "2026-08-03T10:00:00+09:00");
+		insertSourceEvent("e2", "DISCLOSURE", "2026-08-03T10:00:00+09:00");
+
+		List<OutputRow> outputs = repository.facts(DAY).outputs();
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.asr")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isEqualTo(2L));
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.evt")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isEqualTo(2L));
+		// 대비: 문서 산출은 뉴스만 센다 — 셋이 같은 계열이 아니라는 것이 이 대비의 요점이다.
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isEqualTo(1L));
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
