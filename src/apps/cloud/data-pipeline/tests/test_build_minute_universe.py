@@ -1,12 +1,10 @@
-"""build_minute_universe — 참조 계열(섹터 후보) ETF 축.
+"""build_minute_universe — 참조 계열(섹터 후보) ETF 축 + 정본 객체 반영.
 
 각 테스트는 '왜 이 동작이 중요한가'를 주석으로 남긴다 — AGENTS Rule 9.
 """
 
-import importlib.util
 import io
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -14,13 +12,9 @@ import pyarrow.parquet as pq
 import pytest
 
 from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+from data_pipeline.steps import build_minute_universe
+from data_pipeline.steps.build_minute_universe import UNIVERSE_KEY
 
-_SPEC = importlib.util.spec_from_file_location(
-    "build_minute_universe",
-    Path(__file__).resolve().parents[1] / "scripts" / "build_minute_universe.py",
-)
-build_minute_universe = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(build_minute_universe)
 build = build_minute_universe.build
 
 
@@ -216,3 +210,86 @@ def test_constituents_drained_by_the_sector_axis_fails_loud(tmp_path):
 
     with pytest.raises(SystemExit, match="구성종목 0종"):
         build(storage, frozenset({"091160"}), ("091170",))
+
+
+# ── 정본 객체 반영 (ALPHA-953) ─────────────────────────────
+RUN_ID = "20260812T070000Z"
+BAK_KEY = f"{UNIVERSE_KEY}.bak-{RUN_ID}"
+
+
+def _settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),
+        minute_universe=None,
+    )
+
+
+def _wide(storage, as_of: str, count: int) -> None:
+    """구성종목 `count` 종을 가진 091160 스냅샷. 축소 판정은 unit 수로 갈리므로
+    표본이 임계(10%)를 넘게 움직일 만큼은 있어야 한다."""
+    _holdings(storage, as_of, [(f"{100000 + i:06d}", "091160") for i in range(count)])
+
+
+def test_unchanged_universe_is_not_written(tmp_path):
+    # WHY: universe_version 은 구성에서 유도되므로 같은 구성이면 같은 객체다. 그런데도
+    #      매일 PUT 하면 정본 객체의 세대가 매일 바뀌어, 나중에 "언제 유니버스가 실제로
+    #      움직였나"를 객체 이력으로 못 되짚는다 — 그 이력이 사고 때 유일한 단서다.
+    storage = LocalStorage(tmp_path / "lake")
+    _wide(storage, "2026-08-07", 20)
+    assert build_minute_universe.run(storage, _settings(), RUN_ID) == 0
+    first = storage.get_bytes(UNIVERSE_KEY)
+
+    assert build_minute_universe.run(storage, _settings(), "20260813T070000Z") == 0
+
+    assert storage.get_bytes(UNIVERSE_KEY) == first
+    # 백업조차 안 만든다 — 쓰기 자체가 없었다는 증거다(내용 비교만으로는 못 가른다)
+    assert not [k for k in storage.list_keys(UNIVERSE_KEY) if ".bak-" in k]
+
+
+def test_new_constituent_lands_with_the_previous_object_backed_up(tmp_path):
+    # WHY: 이 스텝의 존재 이유다 — 장전에 편입된 종목이 **그날** 분봉을 받으려면 세션
+    #      계획 전에 정본이 바뀌어야 한다. 동시에 잘못 만든 유니버스가 그날의 유일한
+    #      정본이 되면 되돌릴 것이 없으므로, 교체는 백업과 한 쌍이다.
+    storage = LocalStorage(tmp_path / "lake")
+    _wide(storage, "2026-08-07", 20)
+    build_minute_universe.run(storage, _settings(), "20260811T070000Z")
+    before = storage.get_bytes(UNIVERSE_KEY)
+    _wide(storage, "2026-08-12", 21)  # 신규 편입 1종
+
+    assert build_minute_universe.run(storage, _settings(), RUN_ID) == 0
+
+    after = json.loads(storage.get_bytes(UNIVERSE_KEY).decode("utf-8"))
+    assert "100020" in after["constituent_ids"]
+    assert storage.get_bytes(BAK_KEY) == before   # 직전 정본이 그대로 남는다
+
+
+def test_shrunk_universe_is_refused_and_leaves_the_object_alone(tmp_path):
+    # WHY: 줄어든 유니버스는 **초록으로** 돈다 — 빠진 종목은 window 기대 집합에서도
+    #      빠져 결손으로 잡히지 않는다. 그리고 그날 분봉은 다시 오지 않아 복구가 없다
+    #      (ALPHA-936 실증). 홀딩스 수집이 반쯤 실패한 아침에 조용히 착지하는 것이
+    #      이 형태라, 거부는 물론 **기존 객체를 건드리지 않는 것**까지가 계약이다.
+    storage = LocalStorage(tmp_path / "lake")
+    _wide(storage, "2026-08-07", 20)
+    build_minute_universe.run(storage, _settings(), "20260811T070000Z")
+    before = storage.get_bytes(UNIVERSE_KEY)
+    _wide(storage, "2026-08-12", 2)  # 수집 사고 — 스냅샷이 2종만 실렸다
+
+    with pytest.raises(SystemExit, match="크게 줄어 거부"):
+        build_minute_universe.run(storage, _settings(), RUN_ID)
+
+    assert storage.get_bytes(UNIVERSE_KEY) == before
+    assert BAK_KEY not in storage.list_keys(UNIVERSE_KEY)
+
+
+def test_small_shrink_still_lands(tmp_path):
+    # WHY: 가드가 넓으면 정상 리밸런싱(ETF 하나가 몇 종 갈아끼우는 일)까지 막아, 탈출구가
+    #      "객체를 지운다"뿐인 상태로 매일 아침 사람을 부른다 — 그런 가드는 곧 꺼진다.
+    storage = LocalStorage(tmp_path / "lake")
+    _wide(storage, "2026-08-07", 20)
+    build_minute_universe.run(storage, _settings(), "20260811T070000Z")
+    _wide(storage, "2026-08-12", 19)  # 21 unit → 20 unit (ETF 1 + 구성종목)
+
+    assert build_minute_universe.run(storage, _settings(), RUN_ID) == 0
+
+    after = json.loads(storage.get_bytes(UNIVERSE_KEY).decode("utf-8"))
+    assert len(after["constituent_ids"]) == 19

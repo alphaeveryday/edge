@@ -4,7 +4,7 @@
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
-         |load-assertions|assemble-events}
+         |load-assertions|assemble-events|build-minute-universe}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N] [--window-days N]
         [--interval-sec N]
@@ -81,6 +81,7 @@ from .sources import (
 from .steps import (
     assemble_events,
     backfill_disclosure,
+    build_minute_universe,
     enrich_corp_code,
     ingest_price_raw,
     load_assertions,
@@ -224,6 +225,11 @@ def main(argv: list[str] | None = None) -> int:
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
                  "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
+                 # 1분 유니버스 재생성(ALPHA-953): canonical KR holdings → universe 정본
+                 # 객체(config/minute/universe.json) 갱신. storage 만 필요하고 수집창·
+                 # 원장 DB 와 무관하다. ⚠️ **세션 계획 전에만** 돌려라 — 장중 교체는 그날
+                 # 분봉을 영구 결손시킨다(스텝 모듈 도크스트링).
+                 "build-minute-universe",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
@@ -553,6 +559,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
+    # 유니버스 재생성은 canonical 만 읽어 config 객체를 쓰는 스텝이라 수집 창·벤더가 없다.
+    # run_id 는 백업 객체 접미사로만 쓴다(`.bak-<run_id>`) — 같은 런의 산출임이 드러난다.
+    if args.step == "build-minute-universe":
+        return build_minute_universe.run(storage, settings, run_id)
     # 정제(normalize-price)는 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 먼저 분기한다.
     # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-price":
