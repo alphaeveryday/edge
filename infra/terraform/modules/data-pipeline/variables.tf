@@ -554,21 +554,39 @@ variable "minute_universe_uri" {
 }
 
 variable "minute_trigger_schema_version" {
-  # v2(ALPHA-745)로 함께 올린다 — 이 축을 v1 에 두면 규칙이 바뀐 뒤에도 job 원장이
+  # v2.1(ALPHA-776)로 함께 올린다 — 이 축을 옛 값에 두면 규칙이 바뀐 뒤에도 job 원장이
   # 어느 판정 규칙의 window 였는지 구분하지 못한다(변수 설명 그대로의 사유).
   # 판정 자체는 소비자의 detection_policy_version 이 정하므로 이 값은 식별용이고,
   # 소비자는 job 행의 이 값을 기대 상수와 대조하지 않아 롤링 배포에도 안전하다.
   description = "price window job identity 축(ALPHA-706) — 판정 규칙 변경 시 올린다"
   type        = string
-  default     = "intraday-anchor-v2"
+  default     = "intraday-anchor-v2.1"
 }
 
 variable "minute_detection_policy_version" {
-  # v2(ALPHA-745): 기준선=전일 종가·가변 앵커 재발화·2h 쿨다운 폐지. trigger_id 가 이
-  # 값을 포함해 v1 행과 섞이지 않는다.
+  # v2(ALPHA-745): 기준선=전일 종가·가변 앵커 재발화·2h 쿨다운 폐지.
+  # v2.1(ALPHA-776): **앵커 순서 가드** — 임계를 넘어도 앵커가 이 window 보다 뒤에서
+  # 왔으면 발화하지 않는다(판정부 스냅샷 + 쓰기 tx 두 축). 규칙이 바뀌었으므로 축을
+  # 올린다 — trigger_id 가 이 값을 포함해 v2 행과 섞이지 않는다.
+  #
+  # ⚠️ **v3 를 쓰지 않은 이유**: 이미 배포된 `V202608061020__minute_trigger_kind.sql:23`
+  # 이 "판정식 v3(앵커 사다리 제거)"를 **후속 writer 몫으로 예약**해 뒀다. 여기서 v3 를
+  # 집으면 서로 다른 두 규칙이 한 라벨을 영구히 공유하고(UNIQUE 가 재판정을 막는다),
+  # 그 마이그레이션은 Flyway 체크섬 때문에 고쳐서 비켜 갈 수도 없다.
+  #
+  # ⚠️ **배선(#738)이 dev 에 먼저 착지한 것을 확인한 뒤** 올린 값이다. 이미지 CD 와
+  # terraform-apply 는 서로 순서 보장이 없어, tf 가 먼저면 **구 이미지가 새 라벨**을
+  # 달고 그 라벨은 UNIQUE(entity, session, window) 때문에 재판정으로도 안 바뀐다.
+  # 다음에 이 값을 올릴 때도 같은 순서를 지켜라(코드 → 확인 → 이 변수).
+  #
+  # ⚠️ 두 변수는 **서로 다른 서비스**(price-worker / price-consumer)의 task def 에
+  # 실려 독립적으로 롤링된다 — 교체가 겹치는 동안 job 과 트리거의 라벨이 v2/v2.1 로
+  # 섞일 수 있다. 소비자가 job 의 축을 상수와 대조하지 않아 깨지지는 않지만, 먼저
+  # 기록된 라벨은 UNIQUE 때문에 교정되지 않는다. **발화가 0인 시각(장 마감 후)에
+  # apply 하면 섞일 행 자체가 없다** — 이 변경도 그 창에서 넣었다.
   description = "분봉 판정 정책 identity(ALPHA-708) — 일 단위 트리거와 축이 달라 별도 값"
   type        = string
-  default     = "intraday-anchor-v2"
+  default     = "intraday-anchor-v2.1"
 }
 
 # ── 세션 스케일 오케스트레이션(ALPHA-712) ─────────────────────────────

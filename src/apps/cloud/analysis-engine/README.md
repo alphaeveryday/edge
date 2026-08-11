@@ -132,7 +132,7 @@ python -m edge_analysis --trade-date 2026-07-14 --request-id manual-1
 # 분을 요구해 매 발화가 지연 재시도로 접히고, 마감 직전 발화는 15:30 을 넘겨 DLQ 로 간다.
 # 요청 시작은 5분 격자로 내리지 않는다(10:12 요청이면 첫 봉이 10:12~10:15).
 # 분해가 답하는 것은 설명축이다: 그 구간 마지막 봉의 close 를 canonical price_daily
-# **직전 거래일** 종가로 나눠 구성종목 수익률을 파생한다 — 판정(intraday-anchor-v2)과
+# **직전 거래일** 종가로 나눠 구성종목 수익률을 파생한다 — 판정(intraday-anchor-v2.1)과
 # 같은 축(전일 종가 대비, ALPHA-747). 갭이 기여에 포함된다.
 # 입력 unit 은 **대상 ETF + 구성종목**으로 좁힌다. 그 중 구간을 다 못 채운 종목은
 # 떨어뜨리고 진행하며(벤더 미제공은 window 가 INCOMPLETE 로 terminal 커밋돼 재시도가

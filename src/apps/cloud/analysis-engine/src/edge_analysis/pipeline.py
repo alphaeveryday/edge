@@ -44,7 +44,7 @@ def _returns_from_bars(
 ) -> dict[str, float | None]:
     """설명축 봉 → unit 별 **전일 종가 대비** 수익률.
 
-    분모가 전일 종가인 것은 트리거 판정과 같은 앵커라서다(ALPHA-747 `intraday-anchor-v2`).
+    분모가 전일 종가인 것은 트리거 판정과 같은 앵커라서다(ALPHA-747 `intraday-anchor-v2.1`).
     시가 축을 쓰면 판정과 분해가 갈리고, 그 갈림은 산문에서 안 보인다.
 
     분자는 그 unit 의 **마지막 봉 close** 다 — 설명축은 요청 clock 을 정확히 덮으므로
