@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
+import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.repository.JdbcConsoleFactsRepository;
@@ -16,11 +17,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 콘솔 사실 조회의 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
+ * 콘솔 사실 조회의 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
  * migrations-cloud)로 컬럼명·날짜 창·정렬을 검증한다(ALPHA-738).
  *
  * <p>손 페이크는 이 SQL 을 <b>한 줄도 실행하지 않는다</b>. 여기 걸린 축은 조용히 틀리는 종류다 —
@@ -43,6 +45,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegrationTest {
 
 	private static final LocalDate DAY = LocalDate.parse("2026-08-03");
+
+	/** {@code price_movement_trigger} 의 UNIQUE 를 피하려 시각을 갈라 주는 카운터. */
+	private int triggerSeq;
 
 	@Autowired
 	private ConsoleFactsRepository repository;
@@ -100,6 +105,69 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				""", id, runId, taskKey, stage, dataset, outcome,
 				"PENDING".equals(outcome) ? "UNKNOWN" : "VALID", required, recordsOut,
 				failedRecords, completeness, id);
+	}
+
+	/**
+	 * 그 날을 <b>휴장일</b>로 만든다 — 어느 런이든 KR 시장 작업 하나가 {@code NON_TRADING_DAY} 로
+	 * 건너뛰어졌으면 휴장이다({@code ops/planner.py}).
+	 *
+	 * <p>⚠️ 신호는 <b>기대 작업</b>에 붙지 런에 붙지 않는다. 그래서 휴장일에도 도는 레인(뉴스·공시)의
+	 * 런은 그 날짜에 그대로 남는다 — 제외를 <b>런 단위</b>로 하면 그 런이 같은 날짜를 표본에 되살린다.
+	 */
+	private void insertHoliday(String tradingDate) {
+		insertRun("r-hol-" + tradingDate, "etf-daily:" + tradingDate + "T15:40", "etf-daily",
+				"SUCCEEDED", tradingDate, tradingDate + "T06:40:00Z", tradingDate + "T06:40:00Z",
+				null);
+		/* ⚠️ `SKIPPED` 면 `task_outcome`·`data_status` 는 **NULL** 이다 — 스키마 주석과
+		 * `ops/ledger.py` 가 같은 말을 한다(축 분리). 값을 채우면 원장에 없는 조합이 된다. */
+		jdbc.update("""
+				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
+				       dataset, plan_status, required, skip_reason, idempotency_key)
+				VALUES (?,?,?,'raw','price','SKIPPED',true,'NON_TRADING_DAY',?)
+				""", "t-hol-" + tradingDate, "r-hol-" + tradingDate, "PRICE_COLLECTION_KIS",
+				"t-hol-" + tradingDate);
+	}
+
+	/**
+	 * 그 날 그 ETF 의 배치 트리거 한 건 — {@code o.trig} 가 세는 것.
+	 *
+	 * <p>{@code o.pub}({@code explanation_result}) 이 아니라 이 테이블을 쓴다: 둘 다
+	 * {@code trade_date} 축 · {@code marketBound} · {@code count(DISTINCT etf_instrument_id)} 로
+	 * <b>같은 계약</b>인데, {@code explanation_result} 는 {@code explanation_run → explanation_route
+	 * → contribution_observation} 으로 이어지는 FK 사슬을 요구해 픽스처가 이 테스트와 무관한 행
+	 * 서넛을 더 만들어야 한다. 여기는 FK 가 없다.
+	 *
+	 * <p>{@code etf} 를 인자로 받는 이유는 그 산출이 {@code count(DISTINCT etf_instrument_id)} 라서다
+	 * — 같은 ETF 를 두 번 넣어도 1 이어야 하고, 그 계약은 값을 갈라야만 재진다.
+	 * {@code detected_at} 도 갈라 둔다({@code (etf,trade_date,detected_at)} 이 UNIQUE 다).
+	 */
+	private void insertTrigger(String id, String tradingDate, String etf) {
+		/* `etf_instrument_id` 는 `etf_profile` FK 이고, 그건 다시 `instrument` 를, `instrument` 는
+		 * `(instrument_id, entity_type)` 으로 `entity` 를 문다 — 종목 하나에 세 행이 필요하다.
+		 * 같은 종목을 여러 날 넣으므로 전부 멱등하게 둔다. */
+		jdbc.update("""
+				INSERT INTO entity (entity_id, entity_type, display_name)
+				VALUES (?, 'INSTRUMENT', ?)
+				ON CONFLICT (entity_id) DO NOTHING
+				""", etf, etf);
+		jdbc.update("""
+				INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type)
+				VALUES (?, 'XKRX', ?, 'ETF')
+				ON CONFLICT (instrument_id) DO NOTHING
+				""", etf, etf.toUpperCase());
+		jdbc.update("""
+				INSERT INTO etf_profile (instrument_id, etf_type) VALUES (?, 'SECTOR')
+				ON CONFLICT (instrument_id) DO NOTHING
+				""", etf);
+		jdbc.update("""
+				INSERT INTO price_movement_trigger (price_movement_trigger_id, etf_instrument_id,
+				       trade_date, detected_at, observed_return, absolute_gate_triggered,
+				       relative_gate_triggered, detection_policy_version)
+				VALUES (?,?,?::date,?::timestamptz,-0.05,true,false,'v1')
+				""", id, etf, tradingDate,
+				// (etf, trade_date, detected_at) 이 UNIQUE 라 같은 종목·날짜의 둘째 행은 시각이
+				// 달라야 한다 — DISTINCT 계약을 재려면 그 행이 실제로 들어가야 하기 때문이다.
+				"%sT15:%02d:00+09:00".formatted(tradingDate, triggerSeq++ % 60));
 	}
 
 	/**
@@ -580,6 +648,161 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		assertThat(repository.facts(DAY).tasks()).extracting(TaskRow::runKey)
 				.containsExactly("etf-daily:2026-08-03T15:40");
+	}
+
+	/**
+	 * 산출 축은 <b>그 날의 값과 직전 거래일 중앙값</b>을 함께 낸다. 표본이 짝수면 가운데 둘의
+	 * 평균이고, 결과에 없는 거래일은 <b>0 이 실측</b>이다(모름이 아니다).
+	 *
+	 * <p>⚠️ 값을 날마다 <b>다르게</b> 둔다 — 같은 값이면 중앙값을 평균·최댓값·첫값 무엇으로 바꿔도
+	 * 통과한다. 그리고 {@code today} 는 표본에서 <b>빠져야</b> 하므로 그날 값을 표본과 다르게 둔다.
+	 */
+	@Test
+	void 산출은_그날_값과_직전_거래일_중앙값을_함께_낸다() {
+		insertTradingDay("2026-08-03");
+		insertTradingDay("2026-08-02");
+		insertTradingDay("2026-08-01");
+		// 표본 둘: 08-02 → 2종, 08-01 → 4종 ⇒ 중앙값 3.0 (짝수라 평균)
+		insertTrigger("g1", "2026-08-02", "etf-a");
+		insertTrigger("g2", "2026-08-02", "etf-b");
+		insertTrigger("g3", "2026-08-01", "etf-a");
+		insertTrigger("g4", "2026-08-01", "etf-b");
+		insertTrigger("g5", "2026-08-01", "etf-c");
+		insertTrigger("g6", "2026-08-01", "etf-d");
+		/* 그날 값: 1종. 같은 ETF 를 **두 번** 넣어도 `DISTINCT` 라 1 이어야 한다 —
+		 * `count(*)` 로 바꾸는 변이가 여기서 죽는다. */
+		insertTrigger("g7", DAY.toString(), "etf-a");
+		insertTrigger("g8", DAY.toString(), "etf-a");
+
+		OutputRow trig = repository.facts(DAY).outputs().stream()
+				.filter(o -> o.id().equals("o.trig")).findFirst().orElseThrow();
+		assertThat(trig.label()).isEqualTo("배치 트리거");
+		assertThat(trig.unit()).isEqualTo("종");
+		assertThat(trig.today()).isEqualTo(1L);
+		assertThat(trig.base()).isEqualTo(3.0d);
+	}
+
+	/**
+	 * 🔴 <b>휴장일은 표본에서 뺀다.</b> {@code trading_date} 는 거래일 달력이 아니라 슬롯 날짜라
+	 * ({@code plan_slot} 이 {@code is_trading_day} 와 무관하게 채운다) 휴장일에도 런 행이 생긴다.
+	 * 안 빼면 그날의 산출 0 이 표본에 들어가 중앙값이 내려가고 편차 판정이 둔해진다.
+	 *
+	 * <p>⚠️ <b>제외는 날짜 단위지 런 단위가 아니다.</b> 휴장 신호는 KR 시장 레인에만 붙는데 뉴스
+	 * 레인은 휴장일에도 돈다 — 그래서 픽스처가 <b>같은 휴장일에 뉴스 런을 함께</b> 둔다. 런 단위로
+	 * 상관시키면 그 뉴스 런이 같은 날짜를 표본에 되살려 이 단언이 깨진다.
+	 */
+	@Test
+	void 휴장일은_기준_표본에서_빠진다() {
+		insertTradingDay("2026-08-03");
+		insertTradingDay("2026-08-01");
+		insertHoliday("2026-08-02");
+		// 같은 휴장일에 도는 다른 레인(뉴스) — 런 단위 제외였다면 이 런이 08-02 를 되살린다.
+		insertRun("r-news-0802", "news:2026-08-02T15:30", "news", "SUCCEEDED", "2026-08-02",
+				"2026-08-02T06:30:00Z", "2026-08-02T06:30:00Z", null);
+		// 08-01 만 표본이면 중앙값 = 2.0. 08-02(산출 0)가 섞이면 1.0 으로 내려간다.
+		insertTrigger("g1", "2026-08-01", "etf-a");
+		insertTrigger("g2", "2026-08-01", "etf-b");
+
+		OutputRow trig = repository.facts(DAY).outputs().stream()
+				.filter(o -> o.id().equals("o.trig")).findFirst().orElseThrow();
+		assertThat(trig.base()).isEqualTo(2.0d);
+	}
+
+	/**
+	 * 🔴 <b>오늘이 휴장이면 장 산출의 기준을 안 준다.</b> 그날 0 은 실측이 맞지만 <b>비교할 평소가
+	 * 없는 날</b>이라, 기준을 주면 소비자가 −100% 편차로 판정한다. 없는 사실을 지어내지 않고 이미
+	 * 있는 "기준 없음" 규약을 탄다.
+	 *
+	 * <p>⚠️ 뉴스 갈래는 휴장일에도 도니까 <b>기준을 그대로 준다</b> — 이 구분이 {@code marketBound}
+	 * 이고, 한쪽만 재면 그 플래그를 상수로 바꾸는 변이가 통과한다.
+	 */
+	@Test
+	void 오늘이_휴장이면_장_산출만_기준을_안_준다() {
+		insertHoliday(DAY.toString());
+		insertTradingDay("2026-08-01");
+		insertTrigger("g1", "2026-08-01", "etf-a");
+
+		List<OutputRow> outputs = repository.facts(DAY).outputs();
+		assertThat(outputs).extracting(OutputRow::id)
+				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> {
+					assertThat(o.today()).isZero();   // 실측 0 은 그대로 낸다
+					assertThat(o.base()).isNull();    // 비교할 평소가 없다
+				});
+		// 장에 안 매인 산출은 휴장일에도 기준을 준다(표본 하나 → 중앙값 0.0, null 이 아니다).
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
+	}
+
+	/**
+	 * 🔴 <b>표본이 없으면 기준은 null 이다 — 0 이 아니다.</b> 원장에 직전 거래일이 하나도 없으면
+	 * "평소가 0" 이 아니라 "평소를 모른다"이고, 0 으로 메우면 소비자가 그 산출을 판정 대상으로 세운다.
+	 */
+	@Test
+	void 직전_거래일이_없으면_기준은_null_이다() {
+		insertTradingDay(DAY.toString());
+		insertTrigger("g1", DAY.toString(), "etf-a");
+
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> {
+					assertThat(o.today()).isEqualTo(1L);
+					assertThat(o.base()).isNull();
+				});
+	}
+
+	/**
+	 * 🔴 <b>계획 결손일도 기준 표본이다.</b> Planner 가 통째로 실패한 날은 {@code ops_pipeline_run}
+	 * 에 한 행도 없어 런 조회로는 안 잡힌다 — 빼면 <b>그날의 실측 0 이 표본에서 사라져</b> 중앙값이
+	 * 올라가고, 편차 판정은 양방향이라 위쪽 이상이 조용해진다.
+	 */
+	@Test
+	void 계획_결손일도_기준_표본에_들어간다() {
+		insertTradingDay("2026-08-03");
+		insertTradingDay("2026-08-01");
+		// 08-02 는 런이 0건이고 계획 결손 이슈만 있다.
+		insertMissingSlotIssue("i1", "etf-daily:2026-08-02T15:40", "OPEN");
+		insertTrigger("g1", "2026-08-01", "etf-a");
+		insertTrigger("g2", "2026-08-01", "etf-b");
+
+		// 표본 = {08-02: 0, 08-01: 2} ⇒ 중앙값 1.0. 08-02 가 빠지면 2.0 이 된다.
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(1.0d));
+	}
+
+	/**
+	 * 🔴 <b>자르기는 휴장일 제외 뒤에 한다.</b> 먼저 10개로 자르고 그 안에 휴장일이 있으면 표본이
+	 * 9개로 줄고 <b>11번째 거래일은 영영 안 들어온다</b>. 그래서 픽스처를 정확히 그 함정에 건다 —
+	 * 최근 11일 중 하나가 휴장이라, 순서가 뒤바뀌면 표본이 10개가 아니라 9개가 된다.
+	 */
+	@Test
+	void 표본은_휴장일을_뺀_뒤_10개로_자른다() {
+		insertTradingDay(DAY.toString());
+		insertHoliday("2026-08-02");   // day 직전 11일 후보 중 하나가 휴장이다
+		/* 자르기가 제외보다 **앞이면** 최근 10개(08-02~07-24)를 집은 뒤 휴장을 빼 **9개**가 되고
+		 * 가장 오래된 07-23 이 영영 안 들어온다. 뒤면 제외 후 10개(08-01~07-23)가 그대로 남는다.
+		 * 그래서 두 경우를 가르는 신호는 **07-23 의 유무 하나**다.
+		 *
+		 * 값을 그 신호가 중앙값을 움직이게 배치한다 — 0 인 날 5개(07-23·07-24~07-27)와 1 인 날
+		 * 5개(07-28~08-01):
+		 *   · 옳게 10개  → [0,0,0,0,0,1,1,1,1,1] 가운데 둘 평균 = **0.5**
+		 *   · 잘못 9개   → [0,0,0,0,1,1,1,1,1]   가운데   = **1.0**
+		 * 값을 균일하게 두면 개수가 달라져도 중앙값이 같아 이 순서가 안 재진다. */
+		List<String> zeroDays = List.of("2026-07-23", "2026-07-24", "2026-07-25", "2026-07-26",
+				"2026-07-27");
+		List<String> oneDays = List.of("2026-07-28", "2026-07-29", "2026-07-30", "2026-07-31",
+				"2026-08-01");
+		zeroDays.forEach(this::insertTradingDay);
+		oneDays.forEach(this::insertTradingDay);
+		for (int i = 0; i < oneDays.size(); i++) {
+			insertTrigger("g" + i, oneDays.get(i), "etf-" + i);
+		}
+
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(0.5d));
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */

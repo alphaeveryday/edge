@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
+import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.service.ConsoleFactsService;
@@ -27,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 콘솔 사실 응답의 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축</b> 계약(ALPHA-738).
+ * 콘솔 사실 응답의 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축</b> 계약(ALPHA-738).
  *
  * <p>지키는 것 셋 — ① 요청한 날이 <b>그대로 아래로 내려가는가</b>(게이트가 값을 조용히 바꾸면
  * 화면은 다른 날을 보고도 모른다) ② 원장이 <b>실제로 무엇을 봤는지</b> 되돌려주는가 ③ 런 축이
@@ -51,11 +52,15 @@ class ConsoleControllerTest {
 	private FakeConsoleFactsRepository repository;
 
 	private static ConsoleFacts facts(RunRow... runs) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of());
+		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of());
 	}
 
 	private static ConsoleFacts factsWithTask(TaskRow... tasks) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks));
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks), List.of());
+	}
+
+	private static ConsoleFacts factsWithOutput(OutputRow... outputs) {
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(outputs));
 	}
 
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
@@ -141,14 +146,15 @@ class ConsoleControllerTest {
 
 		/* 문자열로 본다 — `jsonPath(...).doesNotExist()` 는 `"runs": null` 도 통과시켜서
 		 * "계측 없음"과 "집계 없음"을 가르지 못한다. */
-		assertThat(body).doesNotContain("\"outputs\"", "\"boundary\"");
+		assertThat(body).doesNotContain("\"boundary\"");
 		/* 🔴 **셋째 다리**: 런이 0건인 날의 `runs: []` 는 **사실**이라 키가 있어야 한다("봤는데
 		 * 없었다"). 이걸 안 재면 `NON_EMPTY` 한 줄에 키가 통째로 사라져 규칙 층이 "아직 안 봄"
 		 * 으로 읽는데 전건 초록이다 — 부재 3분 중 이 다리만 비어 있었다.
 		 *
 		 * ⚠️ `datasets` 도 이제 붙었으므로 위 목록에서 빠지고 이쪽으로 왔다. 작업이 0건이면 이 축은
 		 * "묶을 게 없었다"라 빈 배열이 맞다 — 파생 축이라고 키를 빼면 안 된다. */
-		assertThat(body).contains("\"runs\":[]", "\"tasks\":[]", "\"datasets\":[]");
+		assertThat(body).contains("\"runs\":[]", "\"tasks\":[]", "\"datasets\":[]",
+				"\"outputs\":[]");
 	}
 
 	/**
@@ -647,6 +653,37 @@ class ConsoleControllerTest {
 				/* 이 둘은 어느 축에도 없는 이름이라 통째 검사가 여전히 맞다 — 데이터셋 축의
 				 * 판정 코드는 `unverifiable` 이고 원장 어휘를 그대로 흘리지 않는다. */
 				.doesNotContain("freshnessStatus", "freshnessReason");
+	}
+
+	/**
+	 * 🔴 <b>실측 0 과 기준 없음은 다른 사실이다.</b> {@code today} 는 {@code long} 이라 0 이 실측이고,
+	 * {@code base} 는 {@code Double} 이라 <b>null 이 "비교할 평소가 없다"</b>이다. 둘이 뭉개지면
+	 * 소비자가 기준 없는 산출을 −100% 로 판정하거나(0 으로 메울 때) 실측 0 을 계측 공백으로 읽는다.
+	 *
+	 * <p>그래서 {@code base: null} 은 <b>키를 유지한 채</b> 나가야 한다 — 키가 빠지면 "이 축을 아직
+	 * 안 본다"가 되고, 그건 이 응답에서 다른 뜻이다.
+	 */
+	@Test
+	void 산출은_실측_0_과_기준_없음을_가른다() throws Exception {
+		String body = mvc(factsWithOutput(
+				new OutputRow("o.pub", "게시 ETF", "종", 16L, 32.0d),
+				new OutputRow("o.trig", "배치 트리거", "종", 0L, null)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.outputs.length()").value(2))
+				.andExpect(jsonPath("$.result.outputs[0].id").value("o.pub"))
+				.andExpect(jsonPath("$.result.outputs[0].label").value("게시 ETF"))
+				.andExpect(jsonPath("$.result.outputs[0].unit").value("종"))
+				.andExpect(jsonPath("$.result.outputs[0].today").value(16))
+				.andExpect(jsonPath("$.result.outputs[0].base").value(32.0))
+				// 실측 0 — 이건 사실이지 부재가 아니다.
+				.andExpect(jsonPath("$.result.outputs[1].today").value(0))
+				.andExpect(jsonPath("$.result.outputs[1].base").value(nullValue()))
+				.andReturn().getResponse().getContentAsString();
+
+		/* `jsonPath(...).value(nullValue())` 는 키가 없어도 통과할 수 있다 — 키의 실재를 문자열로
+		 * 확인한다. 여기가 클래스 단위 `@JsonInclude(NON_NULL)` 이 조용히 깨뜨릴 자리다. */
+		assertThat(body).contains("\"base\":null").contains("\"today\":0");
 	}
 
 	@Test
