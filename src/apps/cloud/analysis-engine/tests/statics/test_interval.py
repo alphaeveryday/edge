@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 from types import SimpleNamespace
 
 from edge_analysis.statics.interval import (
@@ -356,55 +357,99 @@ def test_ready_event_distribution_renders_one_grounded_customer_paragraph():
             source_event_id="evt_selected", title="포스코퓨처엠의 LFP 장기공급 합의",
             available_at="2026-08-05T09:49:00", evidence_id="ev_title",
             n=41, mean=-0.031, today=-0.036, percentile=0.42,
+            event_type_code="COMPANY.CONTRACT.SIGNING",
         ),),
     ))
     event = payload["blocks"][-1]
 
     assert event["block_code"] == "4"
-    # percentile=0.42(ECDF) = 과거의 42% 만이 오늘보다 낮다 → 상위 58%. "하위 42%"
-    # 로 되돌리는 방향 회귀는 이 단언이 깨뜨린다(ALPHA-937 — 실측에서 today>mean
-    # 인 +1.27% 가 "하위 69%"로 렌더돼 강한 반응이 약하게 읽혔다).
+    # 어휘 계약(ALPHA-943): 유형은 한국어 라벨("계약 체결")로 명시, 표본은 여러
+    # 종목의 횡단면이라 "해당 종목들"·"건" 단위, percentile 은 부호 포함 ECDF 라
+    # "높게"(0.42 → 58%가 오늘보다 높았다). "하위 42%"(ALPHA-937 이전)나
+    # "크게"(절대폭 오서술)로 되돌리는 회귀는 이 단언이 깨뜨린다.
     assert event["text"] == (
         "09:49, 포스코퓨처엠의 LFP 장기공급 합의 소식이 있었습니다. "
-        "같은 유형의 과거 41개 사건일에서 이 종목의 시장초과수익률은 평균 -3.10%였습니다. "
-        "오늘 시장초과수익률은 -3.60%로, 과거 분포의 상위 58% 수준입니다."
+        "과거에 계약 체결 소식이 있었던 41건의 사례에서, 해당 종목들은 소식 당일 "
+        "시장 대비 평균 -3.10% 움직였습니다. 오늘 이 종목은 시장 대비 -3.60%로, "
+        "과거 41건 중 약 59%는 오늘보다 높게 움직였습니다."
     )
     assert event["evidence_refs"] == ["source_event:evt_selected"]
 
 
 def test_event_distribution_near_zero_mean_reads_as_about_zero():
     """mean 이 반올림으로 ±0.00% 가 되는 언더플로는 "0% 부근"으로 말한다 — "평균
-    +0.00%였습니다"는 정보가 없는 문장이다(2026-08-11 첫 RENDERED 실측 mean=7.9e-06).
-    일반 수익률(today)의 +.2f 표기는 불변이어야 한다."""
+    +0.00% 움직였습니다"는 정보가 없는 문장이다(2026-08-11 첫 RENDERED 실측
+    mean=7.9e-06). 일반 수익률(today)의 +.2f 표기는 불변이어야 한다."""
     payload = final_explanation_payload(_facts(
         event_ids=("evt_zero",),
         event_distributions=(EventDistributionFact(
             source_event_id="evt_zero", title="한미반도체 미국 법인 설립",
             available_at="2026-08-10T15:49:00", evidence_id="ev_title",
             n=871, mean=7.9e-06, today=0.0127, percentile=0.69,
+            event_type_code="COMPANY.COMMERCIAL.MARKET_ENTRY",
         ),),
     ))
     event = payload["blocks"][-1]
 
-    assert "평균 0% 부근이었습니다" in event["text"]
+    assert "평균 0% 부근에서 움직였습니다" in event["text"]
     assert "+0.00%" not in event["text"]
-    assert "오늘 시장초과수익률은 +1.27%로" in event["text"]
-    assert "상위 31% 수준" in event["text"]
+    assert "과거에 시장 진출·철수 소식이 있었던 871건" in event["text"]
+    assert "오늘 이 종목은 시장 대비 +1.27%로" in event["text"]
+    assert "약 31%는 오늘보다 높게 움직였습니다" in event["text"]
 
 
-def test_event_distribution_extreme_percentiles_clamp_to_sample_resolution():
-    """ECDF 극단이 "상위 0%"·"상위 100%" 라는 무의미한 문장이 되지 않고, 하한은
-    표본이 지지하는 해상도(100/n)에 묶인다 — n=30 전 표본 위는 "상위 1%"가 아니라
-    "상위 4%"(ceil(100/30))까지만 말할 수 있다."""
-    from edge_analysis.statics.interval import _top_rank_pct
+_PROSE_BANNED = (
+    # 산문 금지어 게이트(ALPHA-943) - 고객 산문(rendered_text)에 통계·내부 어휘가
+    # 다시 스며드는 것을 구조적으로 막는다(plain.BANNED·JARGON 선례의 interval 판).
+    # ⚠️ 현재 픽스처는 **사건 분포 경로**를 덮는다. 통계 검정 병치 경로([4] 의
+    # "표본이 부족해"·"p=0.0040" — interval 이 ALPHA-876 §0 과 충돌 중인 기존 부채)와
+    # [3] 요인 어휘("요인"·"%p")는 후속 어휘 개편 티켓에서 픽스처·목록에 함께 올린다.
+    "시장초과수익률", "초과수익률", "분포", "백분위", "표본", "ECDF", "유의", "p값",
+)
+_PROSE_BANNED_PATTERNS = (
+    r"[A-Z]{2,}\.[A-Z_.]{2,}",   # 사건 유형 코드 원문
+    r"(상위|하위)\s?\d+%",        # 방향 백분위 표현(ALPHA-943 에서 문장형으로 대체)
+    # p값 직출 표기(통계 병치 경로의 실제 형태). \b 는 한글도 단어 문자라
+    # "양측p=" 를 놓친다 - 앞글자 부정 룩비하인드 + 임의 공백으로 잡는다.
+    r"(?<![0-9A-Za-z])p\s*=\s*\d",
+)
 
-    assert _top_rank_pct(1.0, 871) == 1
-    assert _top_rank_pct(1.0, 30) == 4
-    assert _top_rank_pct(0.999, 871) == 1
-    assert _top_rank_pct(0.0, 871) == 99
-    assert _top_rank_pct(0.004, 871) == 99
-    assert _top_rank_pct(0.69, 871) == 31
-    assert _top_rank_pct(0.69, 30) == 31
+
+def test_customer_prose_never_contains_banned_vocabulary():
+    """게이트: 사건 분포 경로의 rendered_text 에 금지 어휘가 없다 — 새 문장이
+    추가될 때 이 테스트가 어휘 계약을 지키게 한다(경로 확장은 목록 주석의 TODO)."""
+    payload = final_explanation_payload(_facts(
+        news=("보도 한 줄.",),
+        event_ids=("evt_a",),
+        event_distributions=(EventDistributionFact(
+            source_event_id="evt_a", title="포스코퓨처엠의 LFP 장기공급 합의",
+            available_at="2026-08-05T09:49:00", evidence_id="ev_title",
+            n=41, mean=-0.031, today=-0.036, percentile=0.42,
+            event_type_code="COMPANY.CONTRACT.SIGNING",
+        ),),
+    ))
+    text = payload["rendered_text"]
+
+    for word in _PROSE_BANNED:
+        assert word not in text, (word, text)
+    for pattern in _PROSE_BANNED_PATTERNS:
+        assert not re.search(pattern, text), (pattern, text)
+
+
+def test_higher_share_clause_states_facts_even_at_extremes():
+    """비율 절은 사실 그대로다 — 순위 표시용 클램프를 재사용하면 극단에서 왜곡된다
+    (p=1.0·n=30 이면 높은 사례 0건인데 "약 4%"). 극단은 건수로 말한다."""
+    from edge_analysis.statics.interval import _higher_share_clause
+
+    assert _higher_share_clause(0.26, 213) == (
+        "과거 213건 중 약 74%는 오늘보다 높게 움직였습니다")
+    assert _higher_share_clause(1.0, 30) == "오늘보다 높게 움직인 사례는 없었습니다"
+    assert _higher_share_clause(0.0, 30) == "과거 30건 모두 오늘보다 높게 움직였습니다"
+    # 반올림이 0%·100% 로 접히는 자리는 백분율 대신 건수 — "약 0%"는 거짓이다.
+    assert _higher_share_clause(1 - 1 / 871, 871) == (
+        "과거 871건 중 1건이 오늘보다 높게 움직였습니다")
+    assert _higher_share_clause(1 / 871, 871) == (
+        "과거 871건 중 870건이 오늘보다 높게 움직였습니다")
 
 def test_final_explanation_never_reads_a_prior_analysis_output():
     """A previous run's output must never become evidence for the current run."""
