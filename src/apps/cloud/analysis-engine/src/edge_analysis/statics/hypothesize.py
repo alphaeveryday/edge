@@ -135,15 +135,17 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 이 실행의 사건 집합은 서버가 이미 고정했다. 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출해 이 실행에서 선택 가능한 어휘를 확인한다. 사건 집합을 얻기 위해 `objectset.create`를 호출하지 마라.
 조건을 쓸 때는 고른 exposure_id를 넣어 `hypothesis.list_options`를 다시 호출하고, 그 결과의 modifier ID만 쓴다. 검정하려는 설계마다 `hypothesis.preview`를 호출한다. READY인 preview만 최종 제출할 수 있다.
 
-최종 JSON의 각 가설에는 `preview_handle`과 `intent`만 쓴다. `preview_handle`은 READY
-`hypothesis.preview` 결과의 `handle` 값을 그대로 써야 한다. 서버가 preview에 고정한 설계만 실행한다.
+최종 제출은 {"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의 JSON 하나다.
+`preview_handle`은 READY `hypothesis.preview` 결과의 `handle` 값을 그대로 써야 한다.
+서버가 preview에 고정한 설계만 실행한다.
 """
 
 _EVENT_DISTRIBUTION_PREVIEW_SYSTEM = """당신은 사건 설명 가설 에이전트다. 서버가 제공한 hypothesis 도구만 사용한다.
 
 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중 한 사건과
 `사건 당일 시장 초과수익률` outcome만 고른 뒤 `hypothesis.preview`를 호출한다. READY preview만
-최종 JSON에 `preview_handle`과 그 검정을 왜 확인할지 쓴 `intent`로 제출한다. 서버가 고정한 사건과
+제출할 수 있다. 최종 제출은 {"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의
+JSON 하나이고, `intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
 동일 사건 유형의 과거 분포를 바꾸거나, 조건·노출·채널을 새로 만들지 마라.
 """
 
@@ -492,13 +494,30 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         else:
             out = ask_checked(ask, system, user)
         raw_hypotheses = list_field(out, "hypotheses")
+        if (preview_mode and not raw_hypotheses
+                and isinstance(out, dict) and "preview_handle" in out):
+            # 낱개 {"preview_handle","intent"} 최종 제출 - 프롬프트 지시("preview_handle
+            # 과 intent 로 제출")를 따른 유효 제출이 래핑 부재로 증발하던 실측
+            # (ALPHA-935, READY_NOT_SUBMITTED 전건의 원인). 검증은 _resolve 가
+            # exact-set 으로 그대로 한다 - 여기서 키를 거르지 않는다.
+            raw_hypotheses = [out]
         record("hypothesis.raw", turn=turn + 1,
                hypotheses=_trace_safe(raw_hypotheses))
         if preview_mode:
             valid, rej, rendered_hypotheses = _resolve_preview_hypotheses(
                 raw_hypotheses, preview_resolver)
             if previewable_options and not raw_hypotheses:
-                rej.append("최종 제출에는 READY preview가 하나 이상 필요합니다")
+                # 형식 오독과 진짜 미제출을 가른다(Rule 12) - "READY preview 필요"
+                # 사유가 형식 불일치까지 덮으면 원장만 봐서는 모델이 제출을 안 한
+                # 것으로 오독된다(ALPHA-935 가 정확히 그 오독이었다). 빈
+                # {"hypotheses": []} 만 미제출이고, hypotheses 키가 없는 응답({}
+                # 포함)은 전부 형식 불일치다.
+                if isinstance(out, dict) and "hypotheses" not in out:
+                    rej.append('최종 응답에 hypotheses 배열이 없습니다 - '
+                               '{"hypotheses": [{"preview_handle": "...", '
+                               '"intent": "..."}]} 형태로 제출해야 합니다')
+                else:
+                    rej.append("최종 제출에는 READY preview가 하나 이상 필요합니다")
             for rendered, hypothesis in zip(rendered_hypotheses, valid):
                 rendered["tool_results"] = list(tool_summaries)
                 rendered["trigger"] = f"{hypothesis.trigger.kind}:{hypothesis.trigger.ident}"
@@ -526,9 +545,14 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         retry = "\n\n직전 제출의 거부 사유 - 고쳐서 다시 내라:\n" + "\n".join(rejected[-6:])
         if (preview_mode and previewable_options and
                 (not raw_hypotheses or any("PREVIEW_HANDLE" in reason for reason in rej))):
-            retry += ("\n\n[서버 재시도 지시] 다음 응답은 반드시 `hypothesis.preview` 도구 호출이어야 "
-                      "한다. 앞서 받은 hypothesis.list_options 결과의 option ID만 사용하라. "
-                      "READY 결과의 실제 handle을 받은 뒤에만 최종 JSON을 제출하라.")
+            # 이미 READY handle 을 받아 놓고 형식·검증에서 떨어진 모델에게 "preview 를
+            # 호출하라"고 강제하면 재시도까지 어긋난다(ALPHA-935) - 형식부터 알려주고,
+            # handle 이 없을 때만 preview 호출을 요구한다.
+            retry += ('\n\n[서버 재시도 지시] 최종 제출은 {"hypotheses": '
+                      '[{"preview_handle": "...", "intent": "..."}]} 형태의 JSON 하나다. '
+                      "`preview_handle`은 READY `hypothesis.preview` 결과의 handle 값이어야 "
+                      "한다 - 아직 READY handle 이 없으면 먼저 `hypothesis.preview` 도구 호출로 "
+                      "받아라(option ID 는 hypothesis.list_options 결과의 것만).")
         base += retry
     if sql_tool:
         # 왕복 수·거부 수 한 줄 — 질의 원문·결과는 sqltool 이 이미 record 로 남긴다.
