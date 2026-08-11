@@ -77,10 +77,22 @@ class ConsoleControllerTest {
 	private static TaskRow task(String taskKey, String dataset, String contractKey,
 			LocalDate expectedAsOf, LocalDate actualAsOf, String freshnessStatus,
 			String freshnessReason) {
+		return task(taskKey, dataset, contractKey, expectedAsOf, actualAsOf,
+				contractKey == null ? null : DB_NOW, freshnessStatus, freshnessReason);
+	}
+
+	/**
+	 * ⚠️ {@code collectedAt} 을 <b>따로 받는다</b>. 전건을 {@code DB_NOW} 로 박으면 그 값을 어느
+	 * 방향으로 접든(max·min·기준 작업의 것) 결과가 같아 <b>접기 자체가 안 재진다</b>(리뷰가 잡았다 —
+	 * 픽스처가 컬럼을 못 가르면 그 컬럼은 계약이 아니다).
+	 */
+	private static TaskRow task(String taskKey, String dataset, String contractKey,
+			LocalDate expectedAsOf, LocalDate actualAsOf, OffsetDateTime collectedAt,
+			String freshnessStatus, String freshnessReason) {
 		return new TaskRow(taskKey, "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw", dataset,
 				true, "DUE", "FULFILLED", "VALID", 906L, 0L, 33L, 33L, 0L, 1L,
-				contractKey, expectedAsOf, actualAsOf, contractKey == null ? null : DB_NOW,
-				freshnessStatus, freshnessReason);
+				contractKey, expectedAsOf, actualAsOf, collectedAt, freshnessStatus,
+				freshnessReason);
 	}
 
 	private MockMvc mvc(ConsoleFacts facts) {
@@ -240,6 +252,90 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-03"))
 				// 낡음 판정은 클라이언트 소관이다 — 판정 가능하면 여기서는 null 이다.
 				.andExpect(jsonPath("$.result.datasets[0].unverifiable").value(nullValue()));
+	}
+
+	/**
+	 * 🔴 <b>as-of 근거가 아예 없으면 그때만 {@code expected} 를 따로 접는다 — 가장 늦은 쪽으로.</b>
+	 * 이르게 접으면 기대일이 실제보다 과거로 보여 낡음 규칙이 조용해진다.
+	 *
+	 * <p>그리고 <b>{@code collectedAt} 은 가장 최근</b>이다 — "언제까지 관측 가능해졌나"라 늦은
+	 * 쪽이 답이다. 두 값을 픽스처에서 갈라 둬야 접는 방향이 실제로 재진다.
+	 */
+	@Test
+	void actual_이_없으면_expected_와_collectedAt_을_늦은_쪽으로_접는다() throws Exception {
+		OffsetDateTime later = DB_NOW.plusHours(2);
+		mvc(factsWithTask(
+				task("A", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), null, DB_NOW,
+						"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED"),
+				task("B", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, null, later,
+						"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets.length()").value(1))
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value(nullValue()))
+				.andExpect(jsonPath("$.result.datasets[0].collectedAt").value(later.toString()))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_UNVERIFIED"));
+	}
+
+	/**
+	 * 🔴 <b>판정 불가 사유는 as-of 쌍을 준 그 작업에서 온다.</b> UNKNOWN 인 작업이 둘 이상일 때
+	 * 사유를 따로 고르면, 한 행이 B 의 as-of 와 A 의 사유를 함께 실어 <b>서로 다른 작업이 한
+	 * 사실로 섞인다</b>. 스키마가 그 조합을 허용한다 — {@code ck_ops_expected_task_verified_as_of}
+	 * 는 {@code actual > expected} 인 UNKNOWN 을 통과시키므로 as-of 를 가진 UNKNOWN 이 존재한다.
+	 *
+	 * <p>기준 작업을 <b>먼저</b> 넣지 않는다(입력 순서로 통과하면 고른 게 아니다).
+	 */
+	@Test
+	void 판정_불가_사유는_as_of_를_준_작업에서_온다() throws Exception {
+		mvc(factsWithTask(
+				// as-of 가 없는 UNKNOWN — 목록에서 먼저지만 기준 작업이 아니다.
+				task("A_NO_ASOF", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, null, DB_NOW,
+						"UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED"),
+				// 유일하게 as-of 를 가진 작업 — 쌍도 사유도 여기서 와야 한다.
+				task("B_HAS_ASOF", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), DAY, DB_NOW,
+						"UNKNOWN", "ACTUAL_AS_OF_AFTER_EXPECTED")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_AFTER_EXPECTED"));
+	}
+
+	/**
+	 * 🔴 <b>as-of 쌍이 완전히 동률이면 작업 키가 기준 작업을 정한다.</b> 쌍은 어느 쪽을 골라도
+	 * 같지만 <b>사유가 그 선택을 따라오므로</b>, tie-break 가 없으면 같은 원장이 조회 순서에 따라
+	 * 서로 다른 사유를 낸다. 그래서 입력을 <b>작업 키 역순</b>으로 넣는다.
+	 */
+	@Test
+	void as_of_가_완전_동률이면_작업_키가_사유를_정한다() throws Exception {
+		mvc(factsWithTask(
+				task("B_LATER", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), DAY, DB_NOW,
+						"UNKNOWN", "OBSERVED_AT_MISSING"),
+				task("A_FIRST", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(2), DAY, DB_NOW,
+						"UNKNOWN", "ACTUAL_AS_OF_AFTER_EXPECTED")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_AFTER_EXPECTED"));
+	}
+
+	/**
+	 * 🔴 <b>빈 사유는 사유가 아니다.</b> {@code ck_ops_expected_task_freshness_pair} 는 UNKNOWN 의
+	 * {@code freshness_reason} 에 {@code IS NOT NULL} 만 걸어 <b>빈 문자열을 막지 않는다</b>.
+	 * 그대로 내리면 판정 코드를 truthy 로 보는 소비자가 판정 불가 데이터셋을 <b>정상으로 건너뛴다</b> —
+	 * 이 축이 없애려는 바로 그 실패다. 판정 불가는 유지하고 사유만 기본 코드로 떨어진다.
+	 */
+	@Test
+	void 빈_사유는_판정_불가를_지우지_않는다() throws Exception {
+		mvc(factsWithTask(task("COLLECT", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, DAY, DB_NOW,
+				"UNKNOWN", "   ")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_MISSING"));
 	}
 
 	/**

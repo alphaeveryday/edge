@@ -521,6 +521,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 *   <li>as-of 둘이 달라야 맞바꿈이 걸린다 — 스키마상 {@code FRESH} 는 {@code actual = expected}
 	 *       를 요구하므로({@code ck_ops_expected_task_verified_as_of}) 갈리는 픽스처의 상태는
 	 *       <b>{@code STALE}</b> 이다. FRESH 로 두면 두 값이 같아 이 축이 통째로 안 재진다.</li>
+	 *   <li>🔴 {@code expected_as_of_date} 를 런의 <b>{@code trading_date} 와도 다르게</b> 둔다.
+	 *       둘을 같은 날로 두면 {@code t.expected_as_of_date} 대신 {@code r.trading_date} 를 읽는
+	 *       변이가 통과한다 — 이 조회는 두 테이블을 조인하므로 옆 <b>테이블</b>의 DATE 컬럼도
+	 *       후보다(리뷰가 잡았다).</li>
 	 *   <li>{@code collected_at} 옆에 <b>{@code observed_at} 을 다른 시각으로</b> 둔다. 둘 다
 	 *       TIMESTAMPTZ 라 SQL 이 옆 컬럼을 읽어도 형이 맞아 조용히 통과한다.</li>
 	 *   <li>계약 <b>key 와 version</b> 을 다르게 둔다 — 둘 다 TEXT 다.</li>
@@ -534,7 +538,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertTradingDay("2026-08-03");
 		insertTask("t1", "r-2026-08-03", "COLLECT", "raw", "etf_holdings", "FULFILLED", 906L, 0L,
 				null);
-		applyContract("t1", "ETF_HOLDINGS_KRX_EOD", "v3", "2026-08-03", "2026-08-01",
+		/* 거래일(08-03)·기대일(08-02)·실제일(08-01)이 전부 다르다 — 셋 다 DATE 라 어느 둘이 같으면
+		 * 그 짝을 맞바꾸는 변이가 통과한다. STALE 이라야 actual < expected 가 스키마에 선다. */
+		applyContract("t1", "ETF_HOLDINGS_KRX_EOD", "v3", "2026-08-02", "2026-08-01",
 				"2026-08-03T07:00:00Z", "2026-08-03T08:00:00Z", "STALE",
 				"ACTUAL_AS_OF_BEFORE_EXPECTED");
 		insertTask("t2", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", null, null, null);
@@ -543,7 +549,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				t -> {
 					assertThat(t.taskKey()).isEqualTo("COLLECT");
 					assertThat(t.datasetContractKey()).isEqualTo("ETF_HOLDINGS_KRX_EOD");
-					assertThat(t.expectedAsOf()).isEqualTo(LocalDate.parse("2026-08-03"));
+					// 거래일(08-03)이 아니라 기대일(08-02)이다 — 옆 테이블의 DATE 를 읽으면 걸린다.
+					assertThat(t.tradingDate()).isEqualTo(DAY);
+					assertThat(t.expectedAsOf()).isEqualTo(LocalDate.parse("2026-08-02"));
 					assertThat(t.actualAsOf()).isEqualTo(LocalDate.parse("2026-08-01"));
 					assertThat(t.collectedAt())
 							.isEqualTo(OffsetDateTime.parse("2026-08-03T07:00:00Z"));

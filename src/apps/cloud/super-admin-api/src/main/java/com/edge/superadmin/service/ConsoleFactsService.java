@@ -24,6 +24,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 콘솔 사실 응답 조립(ALPHA-738).
@@ -117,8 +118,9 @@ public class ConsoleFactsService {
 		 * 최신으로 보이면 낡음이 조용해진다.
 		 *
 		 * 동률이면 **기대일이 늦은 쪽**을 고른다: `actual < expected` 가 성립할 가능성이 큰 쪽,
-		 * 곧 낡음을 드러내는 방향이다. 마지막 tie-break 는 작업 키다 — 안 두면 같은 원장이 조회
-		 * 순서에 따라 FRESH 로도 STALE 로도 판정된다. */
+		 * 곧 낡음을 드러내는 방향이다. 마지막 tie-break 는 작업 키다 — as-of 쌍이 완전히 동률이면
+		 * 어느 행을 골라도 쌍은 같지만, **판정 불가 사유가 이 선택을 따라오므로**(아래) 안 두면
+		 * 같은 원장이 조회 순서에 따라 서로 다른 사유를 낸다. */
 		TaskRow stalest = rows.stream().filter(t -> t.actualAsOf() != null)
 				.min(Comparator.comparing(TaskRow::actualAsOf)
 						.thenComparing(TaskRow::expectedAsOf,
@@ -137,19 +139,27 @@ public class ConsoleFactsService {
 		 * 스키마가 허용하는 조합(`freshness_status='UNKNOWN'` + actual 존재 —
 		 * `ck_ops_expected_task_verified_as_of` 는 `actual > expected` 인 UNKNOWN 을 허용한다)이
 		 * **판정 가능**으로 서고, 값이 우연히 기대일과 같으면 낡음 규칙도 조용해 두 규칙 다 위반
-		 * 0 이 된다. 사유는 **UNKNOWN 인 그 작업**에서 꺼낸다 — 전체에서 첫 사유를 집으면 판정
-		 * 불가인데 멀쩡한 작업의 `AS_OF_MATCH` 를 사유로 다는, 서로 다른 작업을 한 사실로 섞는
-		 * 일이 된다. */
-		Optional<TaskRow> unknown = rows.stream()
+		 * 0 이 된다.
+		 *
+		 * 사유는 **as-of 쌍을 준 그 작업**에서 먼저 찾는다. 전체에서 첫 사유를 집으면 판정 불가인데
+		 * 멀쩡한 작업의 `AS_OF_MATCH` 를 사유로 다는 일이 되고, UNKNOWN 인 작업이 **둘 이상**일 때는
+		 * B 의 as-of 와 A 의 사유가 한 행에 실려 서로 다른 작업이 한 사실로 섞인다(리뷰가 잡았다 —
+		 * 그 조합은 스키마가 허용한다: UNKNOWN 은 `actual > expected` 여도 성립한다). 기준 작업이
+		 * UNKNOWN 이 아닐 때만 나머지에서 찾는다. */
+		Optional<TaskRow> unknown = Stream.concat(Stream.ofNullable(stalest), rows.stream())
 				.filter(t -> "UNKNOWN".equals(t.freshnessStatus())).findFirst();
 
 		String unverifiable;
 		if (!contract) {
 			unverifiable = CONTRACT_NOT_APPLIED;
 		} else if (unknown.isPresent()) {
-			// 스키마상 UNKNOWN 이면 사유가 있다(`ck_ops_expected_task_freshness_pair`).
-			// 없으면 그 제약이 깨졌다는 뜻이라 판정 불가는 유지하고 사유만 기본값으로 떨어뜨린다.
-			unverifiable = unknown.map(TaskRow::freshnessReason).orElse(ACTUAL_AS_OF_MISSING);
+			/* 스키마상 UNKNOWN 이면 사유가 있지만(`ck_ops_expected_task_freshness_pair`) 그 제약은
+			 * `IS NOT NULL` 이라 **빈 문자열을 막지 않는다**. 빈 사유를 그대로 내면 판정 코드를
+			 * truthy 로 보는 소비자가 판정 불가 데이터셋을 정상으로 건너뛴다 — 이 축이 없애려는
+			 * 바로 그 실패다. 판정 불가는 유지하고 사유만 기본값으로 떨어뜨린다. */
+			unverifiable = unknown.map(TaskRow::freshnessReason)
+					.filter(reason -> !reason.isBlank())
+					.orElse(ACTUAL_AS_OF_MISSING);
 		} else if (actualAsOf == null) {
 			unverifiable = ACTUAL_AS_OF_MISSING;
 		} else {
