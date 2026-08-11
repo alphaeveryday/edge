@@ -29,10 +29,15 @@ def test_labels_are_prose_safe_noun_phrases():
     (ALPHA-943)의 목적이 무너진다."""
     import re
 
+    from edge_ontology.labels import _payload
+
     allowed = re.compile(r"^[가-힣·]+(?:[ ][가-힣·]+)*$")
-    for type_id, label in event_type_labels_ko().items():
-        assert allowed.fullmatch(label), (type_id, label, "한글 명사구만 허용")
-        assert len(label) <= 14, (type_id, label, "명사구가 너무 길다")
+    types, families = _payload()
+    # family 라벨도 폴백으로 같은 산문 자리에 노출된다 - 같은 잣대로 검사한다.
+    for source in (types, families):
+        for type_id, label in source.items():
+            assert allowed.fullmatch(label), (type_id, label, "한글 명사구만 허용")
+            assert len(label) <= 14, (type_id, label, "명사구가 너무 길다")
 
 
 def test_lookup_falls_back_visibly_not_silently():
