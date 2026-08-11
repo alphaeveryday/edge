@@ -361,12 +361,35 @@ def test_ready_event_distribution_renders_one_grounded_customer_paragraph():
     event = payload["blocks"][-1]
 
     assert event["block_code"] == "4"
+    # percentile=0.42(ECDF) = 과거의 42% 만이 오늘보다 낮다 → 상위 58%. "하위 42%"
+    # 로 되돌리는 방향 회귀는 이 단언이 깨뜨린다(ALPHA-937 — 실측에서 today>mean
+    # 인 +1.27% 가 "하위 69%"로 렌더돼 강한 반응이 약하게 읽혔다).
     assert event["text"] == (
         "09:49, 포스코퓨처엠의 LFP 장기공급 합의 소식이 있었습니다. "
         "같은 유형의 과거 41개 사건일에서 이 종목의 시장초과수익률은 평균 -3.10%였습니다. "
-        "오늘 시장초과수익률은 -3.60%로, 과거 분포의 하위 42% 수준입니다."
+        "오늘 시장초과수익률은 -3.60%로, 과거 분포의 상위 58% 수준입니다."
     )
     assert event["evidence_refs"] == ["source_event:evt_selected"]
+
+
+def test_event_distribution_near_zero_mean_reads_as_about_zero():
+    """mean 이 반올림으로 ±0.00% 가 되는 언더플로는 "0% 부근"으로 말한다 — "평균
+    +0.00%였습니다"는 정보가 없는 문장이다(2026-08-11 첫 RENDERED 실측 mean=7.9e-06).
+    일반 수익률(today)의 +.2f 표기는 불변이어야 한다."""
+    payload = final_explanation_payload(_facts(
+        event_ids=("evt_zero",),
+        event_distributions=(EventDistributionFact(
+            source_event_id="evt_zero", title="한미반도체 미국 법인 설립",
+            available_at="2026-08-10T15:49:00", evidence_id="ev_title",
+            n=871, mean=7.9e-06, today=0.0127, percentile=0.69,
+        ),),
+    ))
+    event = payload["blocks"][-1]
+
+    assert "평균 0% 부근이었습니다" in event["text"]
+    assert "+0.00%" not in event["text"]
+    assert "오늘 시장초과수익률은 +1.27%로" in event["text"]
+    assert "상위 31% 수준" in event["text"]
 
 def test_final_explanation_never_reads_a_prior_analysis_output():
     """A previous run's output must never become evidence for the current run."""

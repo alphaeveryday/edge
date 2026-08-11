@@ -121,12 +121,28 @@ def _pct(value: float) -> str:
     return f"{value * 100:+.2f}%"
 
 
+def _mean_phrase(value: float) -> str:
+    """평균 절(어미 포함): 반올림이 ±0.00% 로 접히는 언더플로는 "0% 부근"으로 말한다.
+
+    "평균 +0.00%였습니다"는 정보가 없는 문장이다(2026-08-11 첫 RENDERED 실측,
+    mean=7.9e-06). 어미까지 함께 만드는 이유는 한국어 어미가 갈려서다("%였습니다"
+    vs "부근이었습니다"). 일반 수익률 표기(`_pct`)는 전역 관례라 불변.
+    """
+    rendered = _pct(value)
+    if rendered in ("+0.00%", "-0.00%"):
+        return "0% 부근이었습니다"
+    return f"{rendered}였습니다"
+
+
 def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple[str, ...]:
+    # percentile 은 ECDF(과거 표본 중 오늘 **이하** 비율)다 - 0.69 는 "상위 31%"지
+    # "하위 69%"가 아니다. 방향을 뒤집어 말하면 강한 반응이 약한 반응으로 읽힌다
+    # (ALPHA-937: today>mean 인데 "하위 69%"로 렌더된 실측).
     return tuple(
         f"{item.available_at[11:16]}, {item.title} 소식이 있었습니다. "
         f"같은 유형의 과거 {item.n}개 사건일에서 이 종목의 시장초과수익률은 평균 "
-        f"{_pct(item.mean)}였습니다. 오늘 시장초과수익률은 {_pct(item.today)}로, "
-        f"과거 분포의 하위 {item.percentile * 100:.0f}% 수준입니다."
+        f"{_mean_phrase(item.mean)}. 오늘 시장초과수익률은 {_pct(item.today)}로, "
+        f"과거 분포의 상위 {(1 - item.percentile) * 100:.0f}% 수준입니다."
         for item in items
     )
 
