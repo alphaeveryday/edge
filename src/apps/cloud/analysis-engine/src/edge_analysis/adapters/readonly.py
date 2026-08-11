@@ -1,19 +1,21 @@
-"""읽기전용 원장 질의 — 비밀번호 없는 접속, 서버가 강제하는 읽기전용.
+"""읽기전용 원장 질의 — 시크릿 주입 접속, 서버가 강제하는 읽기전용.
 
 에이전트가 클라우드 원장을 확인할 경로다. private RDS 는 VPC 밖에서 닿지 않으므로 VPC
 내부 ECS one-off task 안에서 이 모듈이 돈다(Flyway 가 같은 제약을 푸는 방식과 같다).
 
-**안전을 정규식으로 주장하지 않는다.** 층이 셋이고, 아래 두 개는 애플리케이션 밖이다:
+**안전을 정규식으로 주장하지 않는다.** 층은 아래 둘이고, 첫째는 애플리케이션 밖이다:
 
-1. ``agent_ro`` 롤에 INSERT·UPDATE·DELETE·DDL 권한이 **없다**. 문법이 통과해도 서버가
-   거부한다(V202607300001).
-2. 접속 옵션 ``default_transaction_read_only=on`` — Postgres 가 쓰기 트랜잭션 자체를
-   거부한다. 1번이 뚫려도(잘못된 GRANT 가 섞여도) 여기서 막힌다.
-3. 아래 ``guard`` — SELECT 가 아닌 것을 **에러 메시지가 읽히는 형태로** 되돌린다.
-   3번은 안전장치가 아니라 사용성이다. 안전은 1·2 가 담당한다.
+1. 접속 옵션 ``default_transaction_read_only=on`` — Postgres 가 쓰기 트랜잭션 자체를
+   거부한다. 세션이 아니라 접속 파라미터라 이후 어떤 SQL 도 되돌릴 수 없다.
+2. 아래 ``guard`` — SELECT 가 아닌 것을 **에러 메시지가 읽히는 형태로** 되돌린다.
+   2번은 안전장치가 아니라 사용성이다. 안전은 1 이 담당한다.
 
-비밀번호는 존재하지 않는다. RDS IAM 인증으로 15분 만료 토큰을 매번 발급받으므로 유출될
-장기 비밀이 없고, 회수는 IAM 에서 한다(``rds-db:connect`` 를 떼면 즉시 끊긴다).
+접속 자격증명은 컨테이너 secrets 로 주입되는 ``PGPASSWORD``(Secrets Manager)다.
+원설계는 ``agent_ro`` 롤 + RDS IAM 토큰(rds-db:connect)의 비밀번호 없는 3층이었으나,
+**조직 SCP 가 rds-db:connect 를 explicitDeny** 해 이 계정에서 IAM DB 인증이 불가하다
+(ALPHA-933, 2026-08-11 simulate-principal-policy 실측). ``agent_ro`` 의 읽기전용
+GRANT(V202607300001)는 DB 에 남아 있다 — SCP 가 풀리면 ``PGPASSWORD`` 를 빼는 것만으로
+아래 IAM 토큰 폴백(``auth_token``)이 되살아난다.
 """
 from __future__ import annotations
 

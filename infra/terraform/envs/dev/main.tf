@@ -385,15 +385,17 @@ module "db_query" {
   region = var.region
   vpc_id = module.network.vpc_id
 
-  # IAM DB 인증 토큰 정책(rds-db:connect)이 계정·DB 리소스 id 로 스코프된다 — 비밀번호가 없는 이유.
-  account_id     = data.aws_caller_identity.current.account_id
-  db_resource_id = module.rds.resource_id
-
   image = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
 
   db_host = module.rds.address
   db_port = module.rds.port
   db_name = module.rds.db_name
+
+  # IAM 토큰(rds-db:connect) 원설계는 조직 SCP explicitDeny 로 폐기(ALPHA-933,
+  # 모듈 main.tf IAM 절). analysis-consumer 와 같은 마스터 시크릿을 주입한다 —
+  # 읽기전용 강제는 접속 파라미터 read_only + 런타임 SELECT 가드가 진다.
+  db_username            = "edge"
+  db_password_secret_arn = module.rds.master_user_secret_arn
 
   cpu_architecture = "X86_64"
 }

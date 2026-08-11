@@ -36,31 +36,34 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# schema-migrate 에 있는 Secrets Manager 읽기 정책이 여기에는 의도적으로 없다.
-# 이 task 는 DB 비밀번호를 아예 주입받지 않으므로(아래 태스크 역할의 IAM 토큰으로 접속)
-# 실행 역할이 읽을 시크릿이 없다. 빠뜨린 것이 아니니 추가하지 마라.
-
-# 태스크 역할: 컨테이너가 접속 직전 rds:generate-db-auth-token 으로 만드는 IAM 토큰의 근거.
-# 이 정책이 곧 DB 접속 권한이다 — IAM 에서 떼면 발급된 토큰의 수명(15분)과 무관하게 즉시 회수된다.
-# 그래서 비밀번호도, 비밀번호 회전도 필요 없다. Resource 가 dbuser 단위라 agent_ro 로만 붙을 수 있고,
-# 읽기 권한 범위는 DB 안에서 그 롤의 GRANT 가 정한다(IAM 은 "누구로 붙을 수 있나"만 정한다).
-resource "aws_iam_role" "task" {
-  name               = "${var.name}-task"
-  assume_role_policy = data.aws_iam_policy_document.assume.json
-}
-
-resource "aws_iam_role_policy" "task_rds_connect" {
-  name = "${var.name}-rds-connect"
-  role = aws_iam_role.task.id
+# DB 비밀번호는 schema-migrate 와 같은 방식으로 시크릿에서 주입한다(ALPHA-933).
+# 원설계는 IAM 토큰(rds-db:connect)의 비밀번호 없는 접속이었으나 **조직 SCP 가
+# rds-db:connect 를 explicitDeny** 해(2026-08-11 simulate-principal-policy 실측,
+# AllowedByOrganizations=false) 이 계정에서는 IAM DB 인증이 원리적으로 불가하다 —
+# LakeFormation 이 같은 이유로 막힌 전례와 동일 계열. 읽기전용 안전은 남은 두 층이
+# 진다: 접속 파라미터 default_transaction_read_only=on(연결 단위라 SQL 로 못 되돌림)
+# + 런타임 SELECT 가드(adapters/readonly.py).
+# (RDS 관리형 시크릿은 기본 aws/secretsmanager 키라 GetSecretValue 로 충분. CMK 면 kms:Decrypt 추가.)
+resource "aws_iam_role_policy" "execution_secret" {
+  name = "${var.name}-execution-secret"
+  role = aws_iam_role.execution.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["rds-db:connect"]
-      Resource = ["arn:aws:rds-db:${var.region}:${var.account_id}:dbuser:${var.db_resource_id}/${var.db_username}"]
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = [var.db_password_secret_arn]
     }]
   })
+}
+
+# 태스크 역할: 컨테이너 자체 권한은 없다(질의는 DB 안에서 끝난다). rds-db:connect
+# 정책이 있던 자리다 — SCP 차단으로 죽은 경로라 남겨 두면 "IAM 으로 붙는다"는
+# 오독만 낳아 제거했다. SCP 가 풀리면 원설계(git 히스토리)로 되돌릴 수 있다.
+resource "aws_iam_role" "task" {
+  name               = "${var.name}-task"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
 }
 
 # ── 보안그룹 ────────────────────────────────────────────
@@ -82,16 +85,15 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 
 # ── 태스크 정의 ─────────────────────────────────────────
 locals {
-  # 런타임(edge_analysis)이 읽는 접속 컨텍스트. 비밀번호 env 가 하나도 없는 것이 이 티켓의 요점이다 —
-  # 비밀번호를 두지 않으려고 IAM 토큰 방식을 택했으니 secrets 블록도 없다.
-  # AWS_REGION 은 명시해야 한다(Lambda 와 달리 Fargate 는 리전을 env 로 주지 않아 토큰 서명이 실패한다).
+  # 런타임(edge_analysis)이 읽는 접속 컨텍스트. 비밀번호는 env 가 아니라 아래
+  # 태스크 정의의 secrets 블록(PGPASSWORD)으로 주입된다 — SCP 가 IAM 토큰 경로를
+  # 막아 시크릿 방식으로 전환했다(위 IAM 절 주석).
   environment = {
     PGHOST     = var.db_host
     PGPORT     = tostring(var.db_port)
     PGDATABASE = var.db_name
     PGUSER     = var.db_username
     PGSCHEMA   = "public"
-    AWS_REGION = var.region
 
     # 에이전트가 무심코 전체 테이블을 끌어오는 사고를 런타임에서 끊는 가드.
     # SG·IAM 으로는 막을 수 없는 종류라 env 로 계약한다(런타임이 이 두 값을 읽는다).
@@ -122,6 +124,9 @@ resource "aws_ecs_task_definition" "this" {
     image       = var.image
     essential   = true
     environment = [for k, v in local.environment : { name = k, value = v }]
+    secrets = [
+      { name = "PGPASSWORD", valueFrom = "${var.db_password_secret_arn}:password::" },
+    ]
     logConfiguration = {
       logDriver = "awslogs"
       options = {
