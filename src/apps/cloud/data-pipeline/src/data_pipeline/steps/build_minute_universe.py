@@ -328,21 +328,32 @@ def _refuse_membership_loss(before: Universe, after: Universe) -> None:
     7종만 남아도 전체로는 91%다. 축은 크기가 아니라 **역할**로 나뉘어 있고
     (`Universe` 도크스트링 — 판정·구성종목·참조 계열), 참조 계열 전멸은 섹터층이
     통째로 빠진다는 뜻이다.
+
+    ⚠️ **단, 남았는지는 유니버스 전체에서 본다** — 축 대 축으로 대조하면 **축 사이의
+    정상적인 이동**이 소실로 잡힌다. 참조 계열 ETF 를 `etf_map` 에 넣어 판정 축으로
+    옮기는 절차(ALPHA-927, `build` 주석이 순서까지 적어 둔 그것)가 바로 그 형태다 —
+    unit 집합은 그대로인데 참조 계열 축만 비어, 그 이관을 이 가드가 막아 버린다.
+    잃었다는 것은 **수집 대상에서 사라졌다**는 뜻이지 다른 역할을 맡았다는 뜻이 아니다.
+
+    ponytail: 이탈만 본다 — 반대 방향(오염 멤버 대량 유입)은 대칭 비율로 못 막는다.
+    08-11 에 테마 ETF 4종을 더한 정상 변경이 410→460 unit(+12%)이라 어떤 대칭 상한도
+    그날 거짓 차단이었다. 유입은 축이 다른 문제다(수집 용량 — 별건).
     """
+    units_after = set(after.unit_ids)
     axes = (("판정 ETF", "etf_ids"), ("구성종목", "constituent_ids"),
             ("참조 계열", "sector_etf_ids"))
     for label, field in axes:
         was = set(getattr(before, field))
-        kept = was & set(getattr(after, field))
+        kept = was & units_after
         floor = math.ceil(len(was) * MIN_KEEP_RATIO)
         if len(kept) >= floor:
             continue
         raise SystemExit(
-            f"{label} 축이 직전 유니버스를 크게 잃어 거부한다: {len(was)} 중 "
-            f"{len(kept)} 만 남았다(최소 {floor}, 새 유니버스 "
-            f"{len(getattr(after, field))}종) — 정상 리밸런싱이 아니라 홀딩스 수집 "
-            f"결손·오배정, 참조 계열이면 config `[minute_universe].sector_etf_ids` "
-            f"누락을 의심하라. 축소가 진짜면 **기존 객체를 지우지 말고** "
-            f"`.bak-수동` 으로 옮긴 뒤 다시 돌려라 — 지우면 사람이 채운 시간외 축"
-            f"(extended_hours_ids)을 승계할 대상이 사라지고 되돌릴 백업도 안 남는다"
+            f"{label} 축이 직전 유니버스에서 크게 이탈해 거부한다: {len(was)} 중 "
+            f"{len(kept)} 만 새 유니버스에 남았다(최소 {floor}) — 정상 리밸런싱이 아니라 "
+            f"홀딩스 수집 결손·오배정, 참조 계열이면 config "
+            f"`[minute_universe].sector_etf_ids` 누락을 의심하라. 이탈이 진짜면 기존 "
+            f"객체를 `.bak-수동` 으로 **옮긴 뒤**(복사가 아니다 — 남겨 두면 같은 대조에 "
+            f"또 걸린다) 다시 돌리고, 그 백업의 extended_hours_ids 를 새 객체에 손으로 "
+            f"옮겨 담아라 — 승계할 직전 객체가 없어져 시간외 축이 빈 채로 만들어진다"
         )

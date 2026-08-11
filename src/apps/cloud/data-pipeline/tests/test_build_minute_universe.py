@@ -300,7 +300,7 @@ def test_shrunk_universe_is_refused_and_leaves_the_object_alone(tmp_path):
     before = Path(uri).read_bytes()
     _wide(storage, "2026-08-12", 2)  # 수집 사고 — 스냅샷이 2종만 실렸다
 
-    with pytest.raises(SystemExit, match="크게 잃어 거부"):
+    with pytest.raises(SystemExit, match="크게 이탈해 거부"):
         build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY)
 
     assert Path(uri).read_bytes() == before
@@ -418,7 +418,7 @@ def test_wholesale_swap_is_refused_even_though_the_count_holds(tmp_path):
     _holdings(storage, "2026-08-12",
               [(f"{200000 + i:06d}", "091160") for i in range(20)])
 
-    with pytest.raises(SystemExit, match="크게 잃어 거부"):
+    with pytest.raises(SystemExit, match="크게 이탈해 거부"):
         build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY)
 
     assert Path(uri).read_bytes() == before
@@ -445,10 +445,41 @@ def test_a_small_axis_wiped_out_is_refused_even_though_the_whole_holds(tmp_path)
     # 합산 판정이었다면 통과했을 형태다.
     settings.minute_universe = SimpleNamespace(sector_etf_ids=sectors[:1])
 
-    with pytest.raises(SystemExit, match="참조 계열 축이 직전 유니버스를 크게 잃어"):
+    with pytest.raises(SystemExit, match="참조 계열 축이 직전 유니버스에서 크게 이탈해"):
         build_minute_universe.run(storage, settings, uri, RUN_ID, EARLY)
 
     assert Path(uri).read_bytes() == before
+
+
+def test_moving_an_etf_from_reference_to_judged_is_not_a_loss(tmp_path):
+    # WHY: 축별 판정을 **축 대 축**으로 하면 정상적인 역할 이동이 소실로 잡힌다. 참조
+    #      계열 ETF 를 etf_map 에 넣어 판정 축으로 옮기는 절차는 `build` 주석이 순서까지
+    #      적어 둔 지원 경로인데(ALPHA-927), 그때 참조 계열 축은 비고 unit 집합은 그대로다
+    #      — 가드가 그걸 막으면 이관 자체가 불가능해진다. 잃었다는 것은 **수집 대상에서
+    #      사라졌다**는 뜻이지 다른 역할을 맡았다는 뜻이 아니다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07",
+              [("005930", "091160"), ("000660", "091160"), ("105560", "091170")])
+    uri = str(tmp_path / "config" / "universe.json")
+    reference = SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),
+        minute_universe=SimpleNamespace(sector_etf_ids=("091170",)),
+    )
+    build_minute_universe.run(storage, reference, uri, "20260811T070000Z", EARLY)
+    assert json.loads(Path(uri).read_text(encoding="utf-8"))["sector_etf_ids"] == ["091170"]
+
+    # 이관: 091170 을 etf_map 으로 옮기고 참조 계열에서 뺀다(스냅샷은 이미 있다)
+    judged = SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(
+            etf_map={"091160": "KR7091160002", "091170": "KR7091170001"})),
+        minute_universe=None,
+    )
+
+    assert build_minute_universe.run(storage, judged, uri, RUN_ID, EARLY) == 0
+
+    after = json.loads(Path(uri).read_text(encoding="utf-8"))
+    assert set(after["etf_ids"]) == {"091160", "091170"}
+    assert "sector_etf_ids" not in after   # 빈 축은 키 자체가 없다
 
 
 def test_extended_hours_axis_survives_the_rebuild(tmp_path):
