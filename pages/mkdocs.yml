@@ -8,9 +8,9 @@ theme:
   name: material
   custom_dir: overrides
   language: ko
-  # 스킴별 실제 로고 교체는 overrides/partials/logo.html + extra.css 가 담당한다.
-  # 이 값은 로고 버튼 렌더 조건을 켜는 역할.
-  logo: assets/images/edge-logo-white.svg
+  # 헤더 배경이 항상 브랜드 블루(#00309F, extra.css)라 흰색 로고 단일 사용.
+  # (edge-logo-black.svg = 어두운 배경용 흰 로고 — 명명은 배경 기준)
+  logo: assets/images/edge-logo-black.svg
   features:
     - navigation.tabs
     - navigation.sections
@@ -18,11 +18,16 @@ theme:
     - search.highlight
     - content.code.copy
   palette:
+    # custom = Material 기본 색 CSS 를 끄고 extra.css 의 브랜드 변수(#00309F)를 쓴다
     - scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: 다크 모드로 전환
     - scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: 라이트 모드로 전환
