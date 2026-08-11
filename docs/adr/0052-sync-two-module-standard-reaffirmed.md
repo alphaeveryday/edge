@@ -75,11 +75,11 @@ IntakePoller 의 틱 재시도가 지킨다). 따라서 "단일 모듈로 자리
    전진시킬 상태 자체를 제거해 충족한다. 따라서 **규범을 구현 형태에 맞춘다**:
    마크·ack 메커니즘 요구는 이 결정으로 대체되고, 규범은 "재개점 = intake
    committed cursor 단독, sync-agent 는 durable 진행 상태를 갖지 않는다"다.
-   상태형 릴레이(마크·ack)로 되돌리려면 새 ADR 이 필요하다. 이 부분 대체가
-   승인되면 두 곳을 함께 갱신한다: ① 0036 헤더·README 인덱스의 부분 대체 표기
-   (0046→0047·0051 선례) ② [sync-protocol.md](../contracts/sync-protocol.md)
-   Cursor 절의 "DMZ-local 마크는 commit-ack 까지만 전진·ack 정확성 필수" 서술을
-   무상태 규범으로 개정. 그 외 후속 문서 변경은 없다 — context.md·
+   상태형 릴레이(마크·ack)로 되돌리려면 새 ADR 이 필요하다. 이 부분 대체와
+   함께 두 곳을 갱신한다(승인 전환 ALPHA-957 에서 이행): ① 0036 헤더·README
+   인덱스의 부분 대체 표기(0046→0047·0051 선례) ②
+   [sync-protocol.md](../contracts/sync-protocol.md) Cursor 절의 "DMZ-local
+   마크는 commit-ack 까지만 전진·ack 정확성 필수" 서술을 무상태 규범으로 개정. 그 외 후속 문서 변경은 없다 — context.md·
    state-machine·아키텍처 뷰 매핑 개정이 필요 없고, 0036 결과 절의 "미구현"
    서술은 작성 시점의 사실 기록이라 수정하지 않는다(현행 구현 상태는 맥락 ②가
    기록한다).
