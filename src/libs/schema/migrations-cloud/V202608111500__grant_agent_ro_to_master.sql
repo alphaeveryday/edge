@@ -1,0 +1,14 @@
+-- db-query 질의 task 를 읽기전용 롤로 내려앉히기 위한 멤버십 (ALPHA-933).
+--
+-- 원설계는 agent_ro 가 RDS IAM 토큰(rds-db:connect)으로 직접 붙는 것이었는데,
+-- 조직 SCP 가 rds-db:connect 를 explicitDeny 해(2026-08-11 simulate-principal-policy
+-- 실측, AllowedByOrganizations=false) 이 계정에서 IAM DB 인증이 불가하다. 그래서
+-- 질의 task 는 마스터 시크릿으로 접속하되, 마스터 권한 그대로 질의를 실행하면
+-- SELECT 문 안에서도 부작용 함수(pg_terminate_backend 등)가 열린다 — 접속 파라미터
+-- `role=agent_ro` 로 세션 시작 시점에 권한을 내려앉힌다. 그 SET ROLE 이 성립하려면
+-- 접속 주체가 agent_ro 의 멤버여야 한다. 권한 축소는 정규식이 아니라 서버가
+-- 강제한다(V202607300001 과 같은 원칙).
+--
+-- CURRENT_USER = Flyway 접속 주체 = 각 환경의 마스터(클라우드 edge·로컬 postgres).
+-- 이름을 박지 않아 환경마다 자기 마스터에 부여되고, 재실행해도 무해하다(멱등).
+GRANT agent_ro TO CURRENT_USER;

@@ -10,12 +10,16 @@
 2. 아래 ``guard`` — SELECT 가 아닌 것을 **에러 메시지가 읽히는 형태로** 되돌린다.
    2번은 안전장치가 아니라 사용성이다. 안전은 1 이 담당한다.
 
-접속 자격증명은 컨테이너 secrets 로 주입되는 ``PGPASSWORD``(Secrets Manager)다.
-원설계는 ``agent_ro`` 롤 + RDS IAM 토큰(rds-db:connect)의 비밀번호 없는 3층이었으나,
+접속 자격증명은 컨테이너 secrets 로 주입되는 ``PGPASSWORD``(Secrets Manager)이고,
+``EDGE_QUERY_ROLE`` 이 있으면 접속 파라미터 ``role`` 로 그 롤(운영은 ``agent_ro``)에
+내려앉는다 — 마스터로 붙어도 권한은 읽기전용 롤이 서버 강제한다(1번 층의 복원.
+SELECT 문 안의 부작용 함수 pg_terminate_backend 류를 막는 것이 이 층이다).
+
+원설계는 ``agent_ro`` + RDS IAM 토큰(rds-db:connect)의 비밀번호 없는 접속이었으나,
 **조직 SCP 가 rds-db:connect 를 explicitDeny** 해 이 계정에서 IAM DB 인증이 불가하다
-(ALPHA-933, 2026-08-11 simulate-principal-policy 실측). ``agent_ro`` 의 읽기전용
-GRANT(V202607300001)는 DB 에 남아 있다 — SCP 가 풀리면 ``PGPASSWORD`` 를 빼는 것만으로
-아래 IAM 토큰 폴백(``auth_token``)이 되살아난다.
+(ALPHA-933, 2026-08-11 simulate-principal-policy 실측). ``auth_token`` 폴백 코드는
+남겨 두지만 되살리려면 배선 복원이 필요하다 — task 역할의 rds-db:connect 정책과
+``AWS_REGION`` env 를 이 티켓이 제거했다(git 히스토리의 원설계 참조).
 """
 from __future__ import annotations
 
@@ -117,6 +121,13 @@ def connect_readonly(pg: PgConfig, *, timeout_ms: int | None = None):
 
     timeout = timeout_ms if timeout_ms is not None else _int_env("EDGE_QUERY_TIMEOUT_MS", _TIMEOUT_MS)
     password = pg.password or auth_token(pg)
+    options = f"-c default_transaction_read_only=on -c statement_timeout={timeout}"
+    # 마스터 시크릿으로 붙되 권한은 읽기전용 롤로 내려앉는다(ALPHA-933) - SELECT
+    # 가드를 통과하는 부작용 함수(pg_terminate_backend 류)를 서버 권한이 막는다.
+    # 접속 파라미터라 첫 SQL 이전에 적용된다(GRANT agent_ro TO 마스터, V202608111500).
+    role = os.environ.get("EDGE_QUERY_ROLE")
+    if role:
+        options += f" -c role={role}"
     # IAM 인증은 TLS 를 요구한다. verify-full 이 더 낫지만 RDS CA 번들을 이미지에 실어야
     # 하므로 기본은 require 로 두고 PGSSLMODE 로 올릴 수 있게 남긴다. 로컬 Postgres 는
     # SSL 이 꺼져 있어 disable 이 필요하다 - 그래서 값을 코드에 박지 않는다.
@@ -127,7 +138,7 @@ def connect_readonly(pg: PgConfig, *, timeout_ms: int | None = None):
         user=pg.user,
         password=password,
         sslmode=os.environ.get("PGSSLMODE", "require"),
-        options=f"-c default_transaction_read_only=on -c statement_timeout={timeout}",
+        options=options,
     )
     with conn.cursor() as cur:
         cur.execute(f"SET search_path TO {pg.schema}")

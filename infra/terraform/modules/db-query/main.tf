@@ -95,6 +95,11 @@ locals {
     PGUSER     = var.db_username
     PGSCHEMA   = "public"
 
+    # 접속 직후 이 롤로 내려앉는다(접속 파라미터 role) - 마스터 시크릿으로 붙어도
+    # 질의 권한은 읽기전용 롤이 서버 강제한다. GRANT agent_ro TO 마스터는
+    # V202608111500 마이그레이션이 선행한다.
+    EDGE_QUERY_ROLE = var.query_role
+
     # 에이전트가 무심코 전체 테이블을 끌어오는 사고를 런타임에서 끊는 가드.
     # SG·IAM 으로는 막을 수 없는 종류라 env 로 계약한다(런타임이 이 두 값을 읽는다).
     EDGE_QUERY_ROW_CAP    = tostring(var.row_cap)
