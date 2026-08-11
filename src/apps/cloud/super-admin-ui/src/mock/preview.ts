@@ -647,17 +647,28 @@ export const MOCK_HOLDINGS: HoldingsImpact = {
 
 /* ─────────── /analyses — 가격 변동 분석 목록 ─────────── */
 
-const analysis = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'name' | 'code' | 'market' | 'direction' | 'changePct' | 'status'>): Analysis => ({
-  basisTime: '15:30',
-  basisTimeAbs: `${MOCK_TRADING_DATE} 15:30 KST`,
-  doneTime: '—',
-  confidence: null,
-  /* 게시 상태는 실행 상태와 별개 축이다 — 결과가 아직 없는 런은 null (ALPHA-737) */
-  publicationStatus: null,
-  result: '',
-  evidence: [],
-  ...o,
-});
+const analysis = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'name' | 'code' | 'market' | 'direction' | 'changePct' | 'status'>): Analysis => {
+  const base: Analysis = {
+    basisTime: '15:30',
+    basisTimeAbs: `${MOCK_TRADING_DATE} 15:30 KST`,
+    doneTime: '—',
+    confidence: null,
+    /* 게시 상태는 실행 상태와 별개 축이다 — 결과가 아직 없는 런은 null (ALPHA-737) */
+    publicationStatus: null,
+    result: '',
+    evidence: [],
+    ...o,
+  };
+  /* 본문이 있으면 게시 상태는 **절대 null 이 아니다** — `explanation_result.publication_status`
+   * 가 `NOT NULL DEFAULT 'DRAFT'` 라 결과 행이 있으면 서버가 값을 반드시 싣는다. 픽스처가
+   * "본문은 있는데 게시 상태 없음"을 만들면 실 API 가 낼 수 없는 조합이고, 그 조합으로
+   * 검수하면 소비자(`hasResult`)가 유효 설명을 전부 대기로 읽는다. 본문에서 유도해
+   * 호출부마다 다시 적지 않는다 — 빠뜨리면 그 종목만 조용히 사라진다. */
+  const hasBody = base.result.trim().length > 0 || (base.resultBlocks?.length ?? 0) > 0;
+  return 'publicationStatus' in o
+    ? base
+    : { ...base, publicationStatus: hasBody ? 'DRAFT' : null };
+};
 
 /**
  * 사용 근거 한 건 — 응답이 실제로 주는 축만(구분·제목·수집 소스·발행 시각).
