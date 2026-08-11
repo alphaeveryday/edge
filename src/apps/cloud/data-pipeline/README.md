@@ -93,7 +93,10 @@
 > 이라 **이미 계획된 세션엔 소급되지 않는다** — 당일 적용이 필요하면 그 행의
 > `scheduled_at` 을 직접 UPDATE 한다. ⚠️ 이 지연은 마감 봉이 접수 구간 창보다 **먼저**
 > 처리되는 순서 역전을 만든다(realtime lane 이 최신을 먼저 집는다) — 무거래 봉이 더
-> 최신 앵커와 대조돼 허위 발화가 나갈 수 있고, 판정단 처방은 ALPHA-776 이다),
+> 최신 앵커와 대조돼 허위 발화가 나갈 수 있었다. **ALPHA-776 이 그 발화를 막았다**
+> (앵커가 이 window 보다 뒤에서 왔으면 발화 안 함 — 판정부 스냅샷과 쓰기 tx 두 곳).
+> 같은 티켓에 남은 것은 무거래 봉 축(거래량 판독 실패 포함)과 정책 identity v3
+> 승격이다),
 > **뉴스 추출 Consumer handler**(ALPHA-689 — kernel 위에 `tagging/extract` 를 job 단위로
 > 부르는 배선: 기사 정본은 PG `document`+`news_document` 자연키, 결과는 feature 존 불변
 > artifact 이고 반환값이 그 바이트의 sha256 이다. artifact key 축은
@@ -149,7 +152,10 @@
 > (`ExposureReverted`)하고 앵커를 기준선으로 되돌린다. 밖이면 |close/anchor−1| ≥
 > `abs_threshold`(3%) 에서 발화하고 앵커(`minute_trigger_anchor`) ← 발화가 —
 > **2h 쿨다운은 폐지**됐고(재발화 축이 시간이 아니라 가격) 멱등 축은
-> UNIQUE(entity, session, window)+DO NOTHING 이다. 트리거 행은 `open_price` 에
+> UNIQUE(entity, session, window)+DO NOTHING 이다. 임계를 넘어도 **앵커가 이 window
+> 보다 뒤에서 왔으면 발화하지 않는다**(ALPHA-776 — 늦게 재판정된 과거 창이 미래
+> 가격으로 재는 것이라 무의미하다. 판정부 스냅샷과 쓰기 tx 두 곳에서 보고, 접힌
+> 종목은 판정 로그 `앵커역전 N` 과 결과 `skipped_stale_anchor` 에 남는다). 트리거 행은 `open_price` 에
 > 기준선, `anchor_price` 에 판정 기준가를 남긴다. 전일 종가가 없는 종목만 세션 시가로
 > 폴백한다 — 그때만 `minute_session_open` 원장이 **확정 후 불변**으로 걸린다(첫 window
 > 미커밋=재시도, 커밋됐는데 레코드 없음=MISSING+사유). 트리거 행·앵커·설명 outbox

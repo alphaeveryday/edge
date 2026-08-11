@@ -56,6 +56,10 @@ class FakeMinuteDB:
         self.session_opens: dict[tuple, dict] = {}  # (session_id, entity_id) -> row
         self.triggers: dict[str, dict] = {}         # trigger_id -> row
         self.trigger_anchors: dict[tuple, dict] = {}  # (session_id, entity_id) -> row
+        # tx 마다 발급된 앵커 **선행 잠금** 대상(ALPHA-776) — 이걸 안 남기면 잠금
+        # 블록을 통째로 지워도 아무 테스트가 안 죽는다(호출이 없으면 문면 assert 도
+        # 안 돈다). 데드락 예방은 '잠갔다'는 사실 자체가 계약이라 여기 기록한다
+        self.anchor_prelocks: list[list] = []
         # price_daily×instrument 조인의 결과만 모델링한다: {ticker: 전일 종가}.
         # 비우면 전일 종가 결손 = 세션 시가 폴백 경로다(ALPHA-745).
         self.prev_closes: dict[str, object] = {}
@@ -389,10 +393,29 @@ class _Cursor:
             self._rows = [(ticker, close) for ticker, close
                           in sorted(self.db.prev_closes.items())
                           if ticker in params[0]]
-        elif s.startswith("SELECT entity_id, anchor_price FROM minute_trigger_anchor"):
-            self._rows = [(entity, row["anchor_price"])
+        elif s.startswith("SELECT entity_id, anchor_price, anchor_window "
+                          "FROM minute_trigger_anchor"):
+            # 분기 조건 자체가 문면 검사다 — `anchor_window` 를 SELECT 에서 빼면 어느
+            # 분기에도 안 걸려 unknown-SQL 로 죽는다(ALPHA-776). 여기 별도 assert 를
+            # 두면 절대 실패할 수 없는 항진식이라 회귀를 지키지 못한다
+            self._rows = [(entity, row["anchor_price"], row["anchor_window"])
                           for (sid, entity), row in self.db.trigger_anchors.items()
                           if sid == params[0]]
+        elif s.startswith("SELECT entity_id FROM minute_trigger_anchor"):
+            # 데드락 예방용 선행 잠금(ALPHA-776) — 회수·발화 두 루프의 잠금 순서가
+            # 합쳐지면 전역 정렬이 아니라, 여기서 entity_id 한 순서로 먼저 잡는다.
+            # `ORDER BY`·`FOR UPDATE` 가 빠지면 그 예방이 사라진다
+            assert "ORDER BY entity_id" in s and "FOR UPDATE" in s
+            self.db.anchor_prelocks.append(sorted(params[1]))
+            self._rows = [(e,) for (sid, e) in sorted(self.db.trigger_anchors)
+                          if sid == params[0] and e in params[1]]
+        elif s.startswith("SELECT anchor_window FROM minute_trigger_anchor"):
+            # 경합 축 가드(ALPHA-776). **`FOR UPDATE` 가 문면의 핵심**이다 — 평범한
+            # SELECT 면 READ COMMITTED 에서 다른 tx 의 미커밋 앵커 전진을 못 봐서,
+            # 닫힌 것처럼 보이는데 정확히 경합에서만 새는 가드가 된다
+            assert "FOR UPDATE" in s
+            row = self.db.trigger_anchors.get((params[0], params[1]))
+            self._rows = [] if row is None else [(row["anchor_window"],)]
         elif s.startswith("UPDATE minute_trigger_anchor"):
             # 회수는 **조건부 UPDATE 의 RETURNING** 이 중복 차단이다(ALPHA-745) —
             # `anchor_price <> %s` 가 빠지면 복귀 구간 매 window 마다 회수 사건이 나간다.

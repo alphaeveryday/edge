@@ -385,6 +385,127 @@ class TestAnchorV2:
         # 리셋된 앵커(=기준선 100) 대비 판정이었다
         assert Decimal(str(last["anchor_price"])) == 100
 
+    def test_late_earlier_window_does_not_fire_against_future_anchor(
+            self, tmp_path, caplog):
+        # window 유니크는 **같은 분의 재배달**만 막는다(아래 테스트). 한 번도 발화한 적
+        # 없는 **더 이른** window 가 뒤늦게 판정되면 유니크에 안 걸려 그대로 들어간다 —
+        # 그런데 그때 앵커는 이미 뒤 window 가 올려놓은 값이라, 미래 가격으로 과거 창을
+        # 재는 셈이다. 2026-08-11 dev 에서 배포 경합으로 창 0900~0925 가 늦게 재판정되며
+        # 51건 중 21건이 이 형태로 났다(ALPHA-776).
+        #
+        # 시나리오: 09:00 은 순방향이면 안 터진다(103 vs 기준선 100 = 3% < 5%).
+        # 09:01 이 먼저 처리돼 앵커를 110 으로 올리면, 뒤늦은 09:00 은 103/110 = 6.4%
+        # 라 **가드가 없으면 발화한다**.
+        db = FakeMinuteDB()
+        handler, session_id, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 103), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=2, upto=0,
+        )
+        claim_then_run(handler, events[1])          # 09:01 먼저 — 앵커 100 → 110
+        assert len(db.triggers) == 1
+        # **복사본**으로 떠 둔다 — fake 는 `row.update(...)` 로 같은 dict 를 제자리
+        # 변경하므로, 참조를 들고 있으면 앵커가 실제로 되돌아가도 양쪽이 함께 바뀌어
+        # 아래 불변식 단언이 자기 자신을 비교하며 항상 통과한다
+        anchor = dict(db.trigger_anchors[(session_id, "500000")])
+        assert Decimal(str(anchor["anchor_price"])) == 110
+
+        with caplog.at_level("WARNING"):
+            claim_then_run(handler, events[0])      # 09:00 이 뒤늦게 도착
+
+        # 트리거 행도 사건도 늘지 않는다 — 발화 자체가 접혔다
+        assert len(db.triggers) == 1, "과거 창이 미래 앵커로 발화했다"
+        assert len(trigger_events(db)) == 1
+        # 앵커는 건드리지 않는다(쓰기 가드가 이미 막던 것 — 거동 불변)
+        assert db.trigger_anchors[(session_id, "500000")] == anchor
+        # 조용히 세지 않는다 — 어느 종목이 왜 접혔는지 로그에 남는다(Rule 12).
+        # **어느 축이 잡았는지**까지 단언한다: tx 가드가 같은 케이스를 뒤에서 또
+        # 막으므로, 축을 안 보면 판정부 가드를 통째로 지워도 이 테스트가 초록이 된다.
+        # 두 축은 뜻이 다르다 — `tx 경합` 이 0 이 아니면 동시 판정이 실제로 일어나고
+        # 있다는 운영 신호라, 판정부가 잡은 것이 그쪽으로 새면 신호가 흐려진다.
+        [warned] = [r.getMessage() for r in caplog.records
+                    if r.levelname == "WARNING" and "앵커보다 과거" in r.getMessage()]
+        assert "판정부 ['500000']" in warned, f"판정부 축이 잡지 않았다: {warned}"
+        assert "tx 경합 []" in warned, f"tx 축까지 흘러갔다: {warned}"
+
+    def test_concurrent_earlier_window_is_blocked_inside_the_write_tx(
+            self, tmp_path, caplog):
+        # 판정부 가드는 tx **밖**에서 읽은 앵커 스냅샷을 본다 — 이른 창 E 와 늦은 창
+        # L 이 같은 앵커를 보고 동시에 통과한 뒤 L 이 먼저 커밋하면, E 는 이미 그
+        # 가드를 지난 상태다. 그 경합은 가정이 아니다: 롤링 배포 중 구·신 consumer
+        # 태스크가 겹친다(2026-08-11 실측). tx 안 NOT EXISTS 가 마지막 방어다.
+        #
+        # 스냅샷이 낡은 상황을 그대로 만든다 — 09:00 판정에 **09:01 이 앵커를 올리기
+        # 전** 스냅샷을 물려주고, DB 의 앵커는 이미 09:01 로 전진해 있게 한다.
+        db = FakeMinuteDB()
+        handler, session_id, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 103), (100, 110)],
+                    "500001": [(200, 200), (200, 200)],
+                    "100000": [(50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=2, upto=0,
+        )
+        claim_then_run(handler, events[1])          # 09:01 — 앵커 100 → 110
+        assert len(db.triggers) == 1
+        anchor = dict(db.trigger_anchors[(session_id, "500000")])
+
+        # 판정부만 낡은 스냅샷(=앵커 행 부재)을 보게 한다. tx 안 가드가 없으면
+        # 09:00 이 기준선 100 대비 3% 라 임계 미달이니, 경합을 재현하려면 스냅샷이
+        # **발화하는** 값이어야 한다 — 앵커 110 을 옛 창(08:59)으로 물려준다
+        earlier_window = datetime.fromisoformat(
+            events[0]["payload"]["window_start"]) - timedelta(minutes=1)
+        stale = {"500000": (Decimal("110"), earlier_window)}
+        handler._anchors = lambda _session_id: stale
+        with caplog.at_level("WARNING"):
+            claim_then_run(handler, events[0])      # 09:00 이 낡은 스냅샷으로 판정
+
+        # 판정부는 통과시켰지만(스냅샷상 앵커 창이 과거) tx 가 막았다
+        assert len(db.triggers) == 1, "경합 경로로 과거 창이 발화했다"
+        assert len(trigger_events(db)) == 1
+        assert db.trigger_anchors[(session_id, "500000")] == anchor
+        # **tx 축으로** 보고돼야 한다 — `stale_in_tx` 수집만 지워도 위 세 단언은 전부
+        # 통과하는데, 그러면 로그가 같은-window 재판정(발화 1·신규 0)과 구분되지 않아
+        # "동시 판정이 실제로 일어난다"는 신호가 사라진다(Rule 12)
+        [warned] = [r.getMessage() for r in caplog.records
+                    if r.levelname == "WARNING" and "앵커보다 과거" in r.getMessage()]
+        assert "tx 경합 ['500000']" in warned, f"tx 축이 보고되지 않았다: {warned}"
+        assert "판정부 []" in warned, f"판정부 축이 잡았다 — 경합을 못 태웠다: {warned}"
+
+    def test_anchor_rows_are_prelocked_in_one_order_for_both_axes(self, tmp_path):
+        # 회수는 UPDATE 로, 발화는 FOR UPDATE 로 앵커를 잠그는데 두 집합이 서로소라
+        # **합친 잠금 순서가 전역 정렬이 아니다** — 회수[B]→발화[A] 인 window 와
+        # 회수[A]→발화[B] 인 window 가 겹치면 순환 대기로 데드락이 난다. 그래서 tx
+        # 진입부에서 합집합을 entity_id 한 순서로 미리 전부 잠근다.
+        #
+        # 데드락은 단일 스레드 fake 로 재현할 수 없다(파일 서두의 천장) — 대신
+        # **잠갔다는 사실과 그 대상**을 계약으로 못 박는다. 이게 없으면 잠금 블록을
+        # 통째로 지워도 아무 테스트가 안 죽는다(호출이 없으면 문면 assert 도 안 돈다).
+        #
+        # 500000 은 발화(110 = 기준선 100 대비 10%), 500001 은 회수(200 → 기준선
+        # 복귀). 회수가 사건이 되려면 앵커가 기준선이 아니어야 하니 먼저 발화시킨다.
+        db = FakeMinuteDB()
+        handler, session_id, events = self._run(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (100, 110), (100, 121)],
+                    "500001": [(200, 220), (200, 220), (200, 200)],
+                    "100000": [(50, 50), (50, 50), (50, 50)]},
+            prev_closes={"500000": Decimal("100"), "500001": Decimal("200")},
+            windows=3, upto=2,
+        )
+        assert (session_id, "500001") in db.trigger_anchors  # 회수할 노출이 생겼다
+        db.anchor_prelocks.clear()
+        claim_then_run(handler, events[2])   # 500000 발화 + 500001 회수가 한 tx 에
+
+        assert db.anchor_prelocks, "앵커 선행 잠금이 아예 발급되지 않았다"
+        # **두 축의 합집합**이 한 번에·정렬된 채로 잠겨야 한다 — 한쪽만 잠그면
+        # 나머지 축이 여전히 반대 순서로 잠글 수 있어 순환이 남는다
+        assert db.anchor_prelocks[0] == ["500000", "500001"], \
+            f"선행 잠금 대상이 회수·발화 합집합이 아니다: {db.anchor_prelocks}"
+
     def test_same_window_rejudge_does_not_double_fire(self, tmp_path):
         # SQS 는 at-least-once 다. 뒤 window 가 앵커를 올린 뒤 앞 window 가 재배달되면
         # 앵커 대비로는 다시 임계를 넘는다 — window 유니크가 없으면 같은 분에 대해
