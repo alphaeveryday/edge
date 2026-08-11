@@ -22,6 +22,20 @@
   width: auto;
 }
 
+/* 다이어그램 임베드 (diagrams/N-*.md 의 iframe) */
+.ep-diagram-frame iframe {
+  width: 100%;
+  height: 72vh;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  background: #fff; /* 다이어그램은 화이트 단일 테마 */
+}
+
+.ep-diagram-meta {
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
 .ep-home {
   max-width: 46rem;
   margin: 0 auto;
