@@ -273,8 +273,23 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	/** 게시본을 철회 상태로 — 운영자 무효화가 하는 전이({@code JdbcAnalysisWriteRepository}). */
 	private void withdraw(String resultId) {
-		jdbc.update("UPDATE explanation_result SET publication_status = 'WITHDRAWN'"
-				+ " WHERE explanation_result_id = ?", resultId);
+		setStatus(resultId, "WITHDRAWN");
+	}
+
+	/**
+	 * 게시본을 초안으로 되돌린다.
+	 *
+	 * <p>⚠️ 비게시가 <b>WITHDRAWN 뿐이 아니라는 것</b>을 픽스처가 보여야 한다 — 전부 철회로만
+	 * 만들면 {@code <> 'PUBLISHED'} 를 {@code = 'WITHDRAWN'} 으로 좁히는 변이가 통과하고, 그러면
+	 * 발번된 뒤 초안으로 되돌아간 결과가 <b>위반에서 조용히 빠진다</b>(변이 리뷰가 잡았다).
+	 */
+	private void draft(String resultId) {
+		setStatus(resultId, "DRAFT");
+	}
+
+	private void setStatus(String resultId, String status) {
+		jdbc.update("UPDATE explanation_result SET publication_status = ?"
+				+ " WHERE explanation_result_id = ?", status, resultId);
 	}
 
 	private void insertTrigger(String id, String tradingDate, String etf) {
@@ -1157,25 +1172,35 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertPublished("p-ok2", DAY.toString(), "etf-d", "PUBLISHED");   // 〃
 		deliverNew(t1, "p-ok");
 		deliverNew(t1, "p-ok2");
-		// 🔴 게시했는데 발번 없음 → 2건
-		insertPublished("p-nodev1", DAY.toString(), "etf-b", "PUBLISHED");
-		insertPublished("p-nodev2", DAY.toString(), "etf-e", "PUBLISHED");
-		/* 🔴 **게시본이 아닌 무발번은 안 센다.** 이 행이 없으면 `publication_status='PUBLISHED'`
-		 * 술어를 지워도 값이 같아 그 계약이 안 재진다(리뷰가 잡았다) — 초안·철회는 애초에 발번
-		 * 대상이 아니라 무발번이 정상이다. */
-		insertPublished("p-draft", DAY.toString(), "etf-f", "DRAFT");
 
-		/* 🔴 발번했는데 지금 비게시 — **무효화 통지 없이** 철회된 것만 위반이다 → 1건.
-		 * 통지가 간 경우는 아래 전용 테스트가 잰다. */
+		/* 🔴 게시했는데 발번 없음 → 3건. **셋을 같은 ETF 로 둔다** — 다르게 두면 이 수를
+		 * `count(DISTINCT etf_instrument_id)` 로 바꾸는 변이가 통과하고, 운영에선 한 ETF 에 as-of
+		 * 다른 설명이 하루 여럿이라 **축소 보고**된다(변이 리뷰가 잡았다). */
+		insertPublished("p-nodev1", DAY.toString(), "etf-b", "PUBLISHED");
+		insertPublished("p-nodev2", DAY.toString(), "etf-b", "PUBLISHED");
+		insertPublished("p-nodev3", DAY.toString(), "etf-b", "PUBLISHED");
+
+		/* 🔴 **게시본이 아닌 무발번은 안 센다** — 초안·철회는 애초에 발번 대상이 아니라 무발번이
+		 * 정상이다. 둘 다 둬야 술어를 `true` 로 여는 변이와 `IN ('PUBLISHED','WITHDRAWN')` 로
+		 * 넓히는 변이가 **각각** 죽는다. 안 그러면 이 수가 초안 수만큼 상시 올라 절대 0 이 안 된다. */
+		insertPublished("p-draft", DAY.toString(), "etf-f", "DRAFT");
+		insertPublished("p-wd", DAY.toString(), "etf-g", "WITHDRAWN");
+
+		/* 🔴 발번했는데 지금 비게시 → 2건. **비게시가 WITHDRAWN 뿐이 아니다** — 초안으로 되돌아간
+		 * 것도 테넌트는 페이로드를 들고 있으므로 위반이다. 철회만 두면 `<> 'PUBLISHED'` 를
+		 * `= 'WITHDRAWN'` 으로 좁히는 변이가 통과한다(0 이 사실이 아닌데 0 으로 보이는 방향). */
 		insertPublished("p-gone", DAY.toString(), "etf-c", "PUBLISHED");
 		deliverNew(t1, "p-gone");
 		withdraw("p-gone");
+		insertPublished("p-back", DAY.toString(), "etf-h", "PUBLISHED");
+		deliverNew(t1, "p-back");
+		draft("p-back");
 
 		// ⚠️ 셋을 **서로 다른 값**으로 둔다 — 같으면 와이어/서브쿼리를 맞바꾸는 변이가 통과한다.
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
-			assertThat(b.publishedWithoutDelivery()).isEqualTo(2L);   // p-nodev1·p-nodev2
-			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);    // p-gone
-			assertThat(b.deliveryRows()).isEqualTo(3L);               // NEW 셋
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(3L);   // p-nodev1·2·3
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(2L);    // p-gone · p-back
+			assertThat(b.deliveryRows()).isEqualTo(4L);               // NEW 넷
 		});
 	}
 
@@ -1209,16 +1234,35 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	void 무효화_통지가_간_발번은_비게시로_안_센다() {
 		long a = insertTenant("증권사A");
 		long b = insertTenant("증권사B");
+
+		// ① A·B 가 받았고 A 만 통지받았다 → B 의 행이 위반.
 		insertPublished("p-inv", DAY.toString(), "etf-a", "PUBLISHED");
 		deliverNew(a, "p-inv");
 		deliverNew(b, "p-inv");
 		withdraw("p-inv");
-		deliverInvalidation(a, "p-inv");   // A 만 통지받았다
+		deliverInvalidation(a, "p-inv");
+
+		/* ② 🔴 **B 에게 "다른 결과"의 무효화를 준다.** 면제가 "그 테넌트가 아무 무효화나 한 번
+		 * 받았으면"으로 미끄러지면 ①의 B 행이 조용히 면제된다 — 운영 며칠이면 모든 테넌트가
+		 * 무효화를 한 번씩 받으므로 그 뒤로는 이 수가 **영구히 0** 이고 콘솔은 "정합"을 계속
+		 * 띄운다(변이 리뷰가 잡았다 — 위반을 숨기는 방향이라 가장 나쁘다). */
+		insertPublished("p-other", DAY.toString(), "etf-b", "PUBLISHED");
+		deliverNew(b, "p-other");
+		withdraw("p-other");
+		deliverInvalidation(b, "p-other");   // B 는 이 결과에 대해서는 정상
+
+		/* ③ 통지가 아예 없는 철회 — A·B 둘 다 위반. 이걸로 위반 행이 **셋**이 되고
+		 * (b/p-inv · a/p-third · b/p-third) 서로 다른 테넌트 2 · 서로 다른 결과 2 라,
+		 * `count(*)` 를 테넌트나 결과 단위로 바꾸는 변이가 **각각** 죽는다. 행 수로 안 세면
+		 * 팬아웃 사고가 축소 보고된다(한 결과가 20개 테넌트에 나가 있어도 1 로 뜬다). */
+		insertPublished("p-third", DAY.toString(), "etf-c", "PUBLISHED");
+		deliverNew(a, "p-third");
+		deliverNew(b, "p-third");
+		withdraw("p-third");
 
 		assertThat(repository.facts(DAY).boundary()).satisfies(x -> {
-			// A 는 통지받아 정상 · B 는 받고도 통지 못 받았다 → **1건**(결과 단위면 0 이 된다)
-			assertThat(x.deliveryNowNonpublished()).isEqualTo(1L);
-			assertThat(x.deliveryRows()).isEqualTo(3L);   // NEW 둘 + INVALIDATION 하나
+			assertThat(x.deliveryNowNonpublished()).isEqualTo(3L);
+			assertThat(x.deliveryRows()).isEqualTo(7L);   // NEW 다섯 + INVALIDATION 둘
 		});
 	}
 
@@ -1254,14 +1298,26 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	@Test
 	void 경계_축은_조회한_날과_무관하게_누적을_낸다() {
-		insertTenant("증권사A");
+		long t = insertTenant("증권사A");
 		// 조회 날(08-03)과 **다른 날**의 게시본이 발번 없이 남아 있다.
 		insertPublished("p-old", "2026-07-31", "etf-a", "PUBLISHED");
+		/* 🔴 **둘째 수도 함께 잰다.** 첫째만 단언하면 둘째 서브쿼리에 날짜 창을 붙이는 변이가
+		 * 통과하고, 그러면 통지 없이 철회된 발번이 **다음 날 화면에서 사라진다** — 이 축의 존재
+		 * 이유로 내건 문장("어제 어긋난 것이 오늘 저절로 낫지 않는다")이 정작 그 수에서 깨진다
+		 * (변이 리뷰가 잡았다). */
+		insertPublished("p-old-gone", "2026-07-31", "etf-b", "PUBLISHED");
+		deliverNew(t, "p-old-gone");
+		withdraw("p-old-gone");
 
-		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(1L);
+		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
+		});
 		// 그 날을 직접 조회해도 같은 수다 — 창이 없다는 뜻이다.
-		assertThat(repository.facts(LocalDate.parse("2026-07-31")).boundary()
-				.publishedWithoutDelivery()).isEqualTo(1L);
+		assertThat(repository.facts(LocalDate.parse("2026-07-31")).boundary()).satisfies(b -> {
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
+		});
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */
