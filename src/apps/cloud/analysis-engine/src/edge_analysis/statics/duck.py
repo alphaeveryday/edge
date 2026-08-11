@@ -437,13 +437,18 @@ class CausalLake:
             # ⚠️ 지금 이 표에 그 행이 **없다**(승격 잡이 2026-08-05 이후 안 돈다). 그래도
             # 거르는 이유는 이 판정의 계약이 "가격 착지 폭"이라서다 - 닿을 수 있게 되는
             # 날(ALPHA-796 되살리기)에 이 줄이 없으면 가드가 조용히 무력해진다.
+            # ⚠️ 필터를 집계마다 붙이지 않고 **스캔 전체**에 건다. `max(trade_date)` 를
+            # 안 거르면 표에 업종지수 행만 있을 때 `newest` 가 non-NULL 이 되는데,
+            # `asked_day` 가 빈 호출(23개 생성 지점 중 21곳)은 `iceberg_covers` 가
+            # 거기서 곧장 True 라 **가격 봉이 하나도 없는 표를 정본으로 승인**한다.
+            # 판정 대상이 "가격 표면"이면 분모·분자·최신일이 전부 그 집합이어야 한다.
             day_pred = f"DATE '{self.asked_day}'" if self.asked_day else "NULL"
-            price = f"source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'"
             newest, day_tks, mkt_rows = self.con.execute(
                 f"SELECT max(trade_date), count(DISTINCT ticker) "
-                f"FILTER (WHERE trade_date = {day_pred} AND {price}), count(*) FILTER "
-                f"(WHERE trade_date = {day_pred} AND {price} "
-                f"AND ticker = '{MARKET_PROXY_TICKER}') FROM {tbl}").fetchone()
+                f"FILTER (WHERE trade_date = {day_pred}), count(*) FILTER "
+                f"(WHERE trade_date = {day_pred} "
+                f"AND ticker = '{MARKET_PROXY_TICKER}') FROM {tbl} "
+                f"WHERE source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'").fetchone()
             if not iceberg_covers(newest, self.asked_day, day_tks, mkt_rows):
                 # **세 사유를 갈라 적는다** - 처방이 다르다. 없는 것은 적재가 아예 안 돈
                 # 것이고, 13종은 돌다 만 것이고, 시장 프록시 부재는 착지 폭과 무관하게
