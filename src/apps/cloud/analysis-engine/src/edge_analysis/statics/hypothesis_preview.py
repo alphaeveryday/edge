@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -58,7 +59,9 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
     def literal(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
-    if today is None:
+    # NaN·inf 도 부재다 — percentile 비교가 전부 False 로 접혀 0.0 이 READY 분포에
+    # 실리는 것을 경계 자체가 막는다(호출자의 사전 필터에 기대지 않는다).
+    if today is None or not math.isfinite(today):
         return EventDistributionPreviewResult(
             "UNAVAILABLE", "TODAY_RETURN_UNAVAILABLE", None, None, None, min_n)
     clock = as_of.replace("T", " ")[11:19]
@@ -91,10 +94,13 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
         """)
     except Exception as e:  # noqa: BLE001 - no partial distribution is publishable
         raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
-    if len(historical) < min_n:
+    # NaN 은 모든 비교가 False 라 mean·percentile 을 조용히 오염시킨다 - 유한값만
+    # 표본이다. 걸러서 min_n 에 못 미치면 분포가 없는 것과 같다.
+    values = [value for value in (float(row[2]) for row in historical)
+              if math.isfinite(value)]
+    if len(values) < min_n:
         return EventDistributionPreviewResult(
-            "UNAVAILABLE", "HISTORY_BELOW_MIN", None, 1, len(historical), min_n)
-    values = [float(row[2]) for row in historical]
+            "UNAVAILABLE", "HISTORY_BELOW_MIN", None, 1, len(values), min_n)
     observed = float(today)
     return EventDistributionPreviewResult(
         "READY", "READY",

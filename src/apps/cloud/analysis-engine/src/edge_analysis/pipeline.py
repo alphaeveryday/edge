@@ -719,8 +719,11 @@ def run(
         evidence_build=evidence_build,
         hypothesis_trials=trial_rows,
         # 폐기가 확신도를 올리면 안 된다(Rule 12) - 라우팅이 깨져 분해를 버린 런이
-        # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다.
-        degraded=routing_failed or not surface_ok,
+        # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다. 사건 수익률
+        # 표면이 죽은 런도 같다 - 링크 판정이 전부 UNAVAILABLE 로 끝난 것은 "따질
+        # 사건이 없어서"가 아니라 "잴 수 없어서"다.
+        degraded=(routing_failed or not surface_ok
+                  or event_return_surface["status"] != "READY"),
     )
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,

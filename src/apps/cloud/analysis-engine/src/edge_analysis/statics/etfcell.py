@@ -137,65 +137,73 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
     if window_start is not None or window_end is not None:
         if not instrument_id or window_start is None or window_end is None:
             raise ValueError("요청창 설명에는 instrument_id·window_start·window_end가 필요하다")
-        facts = window_facts(
-            lake, etf, instrument_id, day, window_start, window_end, roll=roll)
         # 검정 산출은 **고객 산문에 싣지 않는다**(ALPHA-876, 근거 명세 v3 §0) -
         # 카드에 통계 어휘 금지·완성 문장 저장 금지. 레코드는 stage_results 버퍼
         # (`stat_tests`)에만 보존하고, 근거 포맷 구현 시 통계검정 레코드(§3)의
         # 입력이 된다. 산문 승격은 그 포맷의 렌더 계층 몫이다.
         scoped_news: list[dict] = []
         distribution_observations: list[dict] = []
+        # 결말 flush 는 finally 한 곳이다 — 팩트 조회·검정·조립·렌더 어느 단계에서
+        # 죽어도 그때까지의 후보별 관측이 원장(window_meta)·로그에 남는다(Rule 12).
+        # 후보 발견 전에 죽으면 빈 payload 가 남는다 — "관측이 있었는데 후보 0" 과
+        # "관측 도입 전 레코드"(키 부재)를 원장에서 가른다.
+        collection_complete = False
         try:
+            facts = window_facts(
+                lake, etf, instrument_id, day, window_start, window_end, roll=roll)
             stat_tests, hypothesis_trials = _window_paneltest(
                 lake, instrument_id, day, ask, facts, news_out=scoped_news,
                 current_event_returns=current_event_returns,
                 event_return_universe=event_return_universe,
                 event_return_surface=event_return_surface,
                 observations_out=distribution_observations)
-        except Exception:
+            if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
+                raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
+            distributions = tuple(
+                EventDistributionFact(
+                    source_event_id=str(row["source_event_id"]), title=str(row["title"]),
+                    available_at=str(row["available_at"]),
+                    evidence_id=str(row["evidence_id"]),
+                    n=int(row["n"]), mean=float(row["mean"]), today=float(row["today"]),
+                    percentile=float(row["percentile"]),
+                )
+                for row in stat_tests if row.get("stage") == "event_distribution"
+            )
+            if scoped_news or distributions:
+                facts = replace(
+                    facts,
+                    news=_thread_news_lines(scoped_news) if scoped_news else facts.news,
+                    event_ids=tuple(sorted(set(facts.event_ids) | {
+                        str(row["source_event_id"]) for row in scoped_news})),
+                    event_distributions=distributions,
+                )
+            final_payload = final_explanation_payload(facts)
+            # 분포는 스레드 대표 사건에 앵커된다 — 같은 스레드의 형제 기사도 그
+            # 결말을 공유한다(사건 행 수가 스레드 후보 수보다 많아도 퍼널이 안 분다).
+            rendered_ids = {item.source_event_id for item in distributions}
+            rendered_threads = {
+                observation.get("thread_id")
+                for observation in distribution_observations
+                if observation.get("source_event_id") in rendered_ids
+                and observation.get("thread_id")}
+            for observation in distribution_observations:
+                observation["rendered"] = (
+                    observation.get("source_event_id") in rendered_ids
+                    or observation.get("thread_id") in rendered_threads)
+            collection_complete = True
+        finally:
             payload = _observation_payload(distribution_observations)
+            # 조회가 끝까지 돈 0건과 조회 미도달의 0건은 다른 사실이다 - 예외로
+            # 빠져나가는 flush 는 ABORTED 로 표시해 렌더가 구분하게 한다(Rule 12).
+            # 판정은 명시 플래그다 - finally 안 sys.exc_info() 는 상위 스택이 처리
+            # 중인 바깥 예외까지 돌려줘 정상 완료를 ABORTED 로 오기록한다.
+            payload["collection"] = ("COMPLETE" if collection_complete
+                                     else "ABORTED")
             if window_meta is not None:
                 window_meta["event_distribution_observations"] = payload
             from ..observability import log
             for observation in payload["candidates"]:
                 log("event_distribution.outcome", **observation)
-            raise
-        if window_meta is not None:
-            window_meta["event_distribution_observations"] = _observation_payload(
-                distribution_observations)
-        if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
-            from ..observability import log
-            for observation in _observation_payload(
-                    distribution_observations)["candidates"]:
-                log("event_distribution.outcome", **observation)
-            raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
-        distributions = tuple(
-            EventDistributionFact(
-                source_event_id=str(row["source_event_id"]), title=str(row["title"]),
-                available_at=str(row["available_at"]), evidence_id=str(row["evidence_id"]),
-                n=int(row["n"]), mean=float(row["mean"]), today=float(row["today"]),
-                percentile=float(row["percentile"]),
-            )
-            for row in stat_tests if row.get("stage") == "event_distribution"
-        )
-        if scoped_news or distributions:
-            facts = replace(
-                facts,
-                news=_thread_news_lines(scoped_news) if scoped_news else facts.news,
-                event_ids=tuple(sorted(set(facts.event_ids) | {
-                    str(row["source_event_id"]) for row in scoped_news})),
-                event_distributions=distributions,
-            )
-        final_payload = final_explanation_payload(facts)
-        rendered_ids = {item.source_event_id for item in distributions}
-        for observation in distribution_observations:
-            observation["rendered"] = observation.get("source_event_id") in rendered_ids
-        payload = _observation_payload(distribution_observations)
-        from ..observability import log
-        for observation in payload["candidates"]:
-            log("event_distribution.outcome", **observation)
-        if window_meta is not None:
-            window_meta["event_distribution_observations"] = payload
         final = final_payload["rendered_text"]
         plan = build_block_plan(facts)
         if window_meta is not None:
@@ -414,6 +422,30 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         return_universe = set(current_returns if event_return_universe is None
                               else event_return_universe)
         surface_reason = str((event_return_surface or {}).get("reason") or "")
+
+        def observe(row: dict, **fields) -> None:
+            # 후보 하나당 관측 한 행 — 조기 실패도 결말 없이 사라지지 않는다(Rule 12).
+            # 미조회 축의 카운트는 0 이 아니라 None 이다(거짓 0 금지).
+            base = {
+                "source_event_id": str(row["source_event_id"]),
+                "event_type_code": str(row.get("event_type_code") or ""),
+                "thread_id": thread_by_event.get(str(row["source_event_id"]), ""),
+                "link_status": "UNAVAILABLE",
+                "link_reason": None,
+                "argument_count": None,
+                "price_universe_match_count": None,
+                "current_return_match_count": None,
+                "instrument_id": "",
+                "preview_status": "PREVIEW_NOT_REQUESTED",
+                "preview_reason": None,
+                "historical_n": None,
+                "min_n": None,
+                "submitted": False,
+                "rendered": False,
+            }
+            base.update(fields)
+            observations.append(base)
+
         for row in rows:
             narrowed = object_runtime.call("objectset.filter", {
                 "handle": events["handle"], "field": "source_event_id",
@@ -422,6 +454,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             if not narrowed.get("ok"):
                 code = str(narrowed.get("error", {}).get("code") or "EXECUTION_FAILED")
                 log("hypothesis.objectset_unavailable", tool="objectset.filter", code=code)
+                observe(row, link_reason=f"OBJECTSET_UNAVAILABLE:{code}")
                 return ({"stage": "propose", "verdict": "판정불가",
                          "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
             argument_ids: list[str] = []
@@ -434,6 +467,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                     code = str(arguments.get("error", {}).get("code") or "EXECUTION_FAILED")
                     log("hypothesis.objectset_unavailable",
                         tool="news.get_event_arguments", code=code)
+                    observe(row, link_reason=f"OBJECTSET_UNAVAILABLE:{code}")
                     return ({"stage": "propose", "verdict": "판정불가",
                              "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
                 argument_ids = sorted({str(item["entity_id"])
@@ -441,12 +475,24 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                                        if item.get("entity_id")})
             link_status, link_reason, universe_matches, matched_instruments = _event_link(
                 argument_ids, return_universe, current_returns, surface_reason)
+            link_fields = {
+                "link_status": link_status,
+                "link_reason": link_reason,
+                "argument_count": len(argument_ids) if current_returns else None,
+                "price_universe_match_count": (len(universe_matches)
+                                               if current_returns else None),
+                "current_return_match_count": (len(matched_instruments)
+                                               if current_returns else None),
+                "instrument_id": (matched_instruments[0]
+                                  if len(matched_instruments) == 1 else ""),
+            }
             grounded = object_runtime.call(
                 "news.get_event_evidence", {"handle": narrowed["handle"], "limit": 20})
             if not grounded.get("ok"):
                 code = str(grounded.get("error", {}).get("code") or "EXECUTION_FAILED")
                 log("hypothesis.objectset_unavailable",
                     tool="news.get_event_evidence", code=code)
+                observe(row, **link_fields)
                 return ({"stage": "propose", "verdict": "판정불가",
                          "reason": "OBJECTSET_UNAVAILABLE", "error_type": code},), ()
             evidence = [item for item in grounded.get("evidence", [])
@@ -455,6 +501,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
             if not evidence:
                 log("hypothesis.objectset_unavailable",
                     tool="news.get_event_evidence", code="EVIDENCE_UNAVAILABLE")
+                observe(row, **link_fields)
                 return ({"stage": "propose", "verdict": "판정불가",
                          "reason": "OBJECTSET_UNAVAILABLE",
                          "error_type": "EVIDENCE_UNAVAILABLE"},), ()
@@ -474,23 +521,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                 "evidence_id": str(chosen.get("evidence_id") or "") or None,
                 "line": f"{clock}, {title}" if clock else title,
             })
-            observations.append({
-                "source_event_id": str(row["source_event_id"]),
-                "event_type_code": str(row.get("event_type_code") or ""),
-                "link_status": link_status,
-                "link_reason": link_reason,
-                "argument_count": len(argument_ids),
-                "price_universe_match_count": len(universe_matches),
-                "current_return_match_count": len(matched_instruments),
-                "instrument_id": (matched_instruments[0]
-                                  if len(matched_instruments) == 1 else ""),
-                "preview_status": "PREVIEW_NOT_REQUESTED",
-                "preview_reason": None,
-                "historical_n": None,
-                "min_n": None,
-                "submitted": False,
-                "rendered": False,
-            })
+            observe(row, **link_fields)
         if news_out is not None:
             news_out.extend(discovered)
         from .hypothesis_preview import EventCandidate, HypothesisPreviewRuntime
@@ -538,12 +569,19 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         brief += (f"\n\n[사건 문맥 - 직전 거래일부터 요청창 끝까지 · "
                   f"as_of={day} {facts.window_end}]\n" + "\n\n".join(context))
     def sync_preview_attempts() -> None:
+        # 시도는 스레드 대표 사건에 키가 잡힌다 - 같은 스레드의 형제 기사 행에도
+        # 같은 결말을 전파해야 "미시도"가 체계적으로 부풀지 않는다.
         by_event = {item["source_event_id"]: item for item in observations}
         attempts = getattr(preview_runtime, "distribution_attempts", lambda: {})()
         for source_event_id, attempt in attempts.items():
-            if target := by_event.get(source_event_id):
-                target.update({key: value for key, value in attempt.items()
-                               if key != "handle"})
+            fields = {key: value for key, value in attempt.items()
+                      if key != "handle"}
+            anchor = by_event.get(source_event_id)
+            thread = (anchor or {}).get("thread_id")
+            for item in observations:
+                if item["source_event_id"] == source_event_id or (
+                        thread and item.get("thread_id") == thread):
+                    item.update(fields)
 
     try:
         tuples, rejected = propose(ask, facts=brief, event_types=ets,
@@ -580,10 +618,13 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
         distribution = resolution.distribution
         candidate = resolution.candidate
         assert distribution is not None and candidate is not None
-        target = next((item for item in observations
+        anchor = next((item for item in observations
                        if item["source_event_id"] == candidate.source_event_id), None)
-        if target is not None:
-            target["submitted"] = True
+        thread = (anchor or {}).get("thread_id")
+        for item in observations:
+            if item["source_event_id"] == candidate.source_event_id or (
+                    thread and item.get("thread_id") == thread):
+                item["submitted"] = True
         records.append({
             "stage": "event_distribution",
             "verdict": "READY",
