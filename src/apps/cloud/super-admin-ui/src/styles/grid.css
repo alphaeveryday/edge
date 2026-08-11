@@ -1,0 +1,168 @@
+/* 실행 격자 (ALPHA-594 → ALPHA-738 범례·접근성).
+ *
+ * 셀과 범례가 **같은 클래스**를 쓴다 — 두 곳에 모양을 복제하면 범례가 조용히 거짓말을 한다.
+ * 인코딩 값(색·테두리·점 위치)은 기존 그대로다. 의미론은 하나도 바꾸지 않았다. */
+
+/* 셀 클릭 표면 — 18×18 밀도를 유지하려고 버튼 자체를 셀 크기로 만든다 */
+.gd-cellbtn {
+  display: block;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+/* mock preview 는 클릭되지 않는다(기존 계약) — 버튼이 아니라 정적 span 으로 그린다 */
+.gd-static {
+  display: block;
+  width: 18px;
+  height: 18px;
+  cursor: default;
+}
+.gd-cellbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 박스 본체 — 일 단위 상태 6종. 색 하나에만 기대지 않게 테두리·사선·빈 칸을 함께 쓴다. */
+.gd-cell {
+  display: block;
+  position: relative;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border-radius: 3px;
+  border: 1px solid #d1d5db;
+  background: #e5e7eb;
+}
+.gd-s-ok { background: #22c55e; }
+.gd-s-warn { background: #f59e0b; }
+.gd-s-bad { background: #ef4444; }
+/* 실행 중은 배경을 덮지 않고 테두리로 — 기존 인코딩 그대로 */
+.gd-s-run { background: #e5e7eb; border: 2px solid #3b82f6; }
+/* 계획 스킵 — 안 한 게 아니라 할 일이 아니었다 */
+.gd-s-skip { background: repeating-linear-gradient(45deg, #e5e7eb 0 3px, #fff 3px 6px); }
+/* 계획 없음 — 그 날짜에 계획 행 자체가 없다 */
+.gd-s-none { background: #fff; border-style: dashed; }
+/* 다른 원장 — 판정이 아니라 "이 격자가 담지 않는다"는 사실. 상태색을 쓰지 않는다 */
+.gd-s-other {
+  background: repeating-linear-gradient(90deg, var(--gray-300) 0 1px, #fff 1px 4px);
+  border-style: dotted;
+}
+
+/* 격자 표 — sticky 행 머리와 날짜 열 */
+.gd-scroll { overflow-x: auto; padding: 0 var(--sp-6) var(--sp-5); }
+.gd-table { border-collapse: collapse; font-size: var(--xs-size); }
+.gd-rowhead {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+  text-align: left;
+  font-weight: 500;
+  white-space: nowrap;
+  padding: var(--sp-2) var(--sp-5) var(--sp-2) 0;
+  min-width: 172px;
+}
+/* 행 머리 — 이름 + 유형·도메인 배지. 그룹 층이 없어 행이 곧 제어 단위다 */
+.gd-rowname { display: block; font-weight: 600; color: var(--fg-1); }
+.gd-rowmeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-top: 1px;
+}
+.gd-rowmeta .chip { font-size: 10px; padding: 0 4px; }
+
+/* 필터 — 유형·도메인 두 축이 같은 모양 */
+.gd-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-6);
+  margin-bottom: var(--sp-4);
+}
+.gd-filter { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.gd-filterbtn {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--xs-size);
+  cursor: pointer;
+}
+.gd-filterbtn[aria-pressed='true'] { background: var(--fg-2); color: #fff; }
+.gd-filterbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gd-datehead {
+  padding: 2px 3px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.gd-box { padding: 2px; }
+/* 선택된 박스 — 색 외에 링으로도 표시 */
+.gd-cellbtn.gd-selected .gd-cell { box-shadow: 0 0 0 2px var(--accent); }
+
+/* 일별 상세의 수치 */
+.gd-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-5);
+  font-size: var(--sm-size);
+  color: var(--fg-2);
+}
+.gd-figure b { color: var(--fg-1); font-variant-numeric: tabular-nums; }
+.gd-figure-zero, .gd-figure-zero b { color: var(--fg-4); }
+.gd-linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.gd-linkbtn:hover { text-decoration: underline; }
+
+/* ── 범례 ── */
+.gd-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-6);
+}
+.gd-legend-label {
+  font-size: var(--xs-size);
+  font-weight: 600;
+  letter-spacing: var(--label-track);
+  text-transform: uppercase;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.gd-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--xs-size);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+/* 범례 안의 셀은 클릭 대상이 아니라 견본이다 */
+.gd-legend-item .gd-cell,
+.gd-legend-item .gd-none {
+  flex: none;
+}
+
+/* 조작 안내 — 상태 범례와 시각적으로 갈라 둔다 */
+.gd-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-6);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px dashed var(--border);
+  font-size: var(--xs-size);
+  color: var(--fg-3);
+}
+.gd-hint b {
+  color: var(--fg-2);
+  font-weight: 600;
+}

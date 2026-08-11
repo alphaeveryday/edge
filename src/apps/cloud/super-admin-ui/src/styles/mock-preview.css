@@ -1,0 +1,35 @@
+/* 검수용 목데이터 영역 — 실데이터와 한눈에 갈라지는 것이 유일한 목적이다.
+   색은 상태 신호가 아니므로 무채색 + 파선 테두리로만 구분한다(ui-kit 토큰). */
+
+.mock-preview {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+.mock-preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-6);
+  border-bottom: 1px dashed var(--border-strong);
+  color: var(--fg-3);
+}
+.mock-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5);
+}
+/* 목데이터 영역 안의 카드는 배경 위에서 떠 보여야 한다 */
+.mock-preview-body > .card,
+.mock-preview-body .card {
+  background: var(--bg-surface);
+}
+
+.chip.mock-chip {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  color: var(--fg-3);
+  background: var(--bg-surface);
+  letter-spacing: 0.04em;
+}
