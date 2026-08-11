@@ -38,6 +38,10 @@
 - **ticker 는 접미사 없는 6자리**(`005930`). 원본 심볼은 `source_symbol` 에 보존.
   레이크의 `v_instrument.ticker`·`canonical/price_daily` 가 그 규약이라, 안 맞추면
   조인이 통째로 안 된다.
+  ⚠️ **예외 하나** — `intraday_5m` 의 `part-sector-index.parquet` 은 `ticker` 가 4자리
+  KRX 업종코드다(ALPHA-941). 지수는 종목이 아니라 `v_instrument` 에 없고 조인 대상도
+  아니다(섹터 층 계열로 따로 소비된다). 종목코드와 서로소라 같은 파티션에 공존해도
+  겹치지 않고, 가르는 축은 `source_vendor='1m_rollup_sector'` 다.
 - 금액 단위는 **원(KRW)**. KIS 가 백만원 단위로 주면 1e6 곱해서 넣는다.
 - 쓰기는 DuckDB 로:
   ```python

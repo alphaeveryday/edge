@@ -41,7 +41,7 @@ from .minute.news_consumer import news_consumer_cli
 from .minute.disclosure_worker import disclosure_worker_cli
 from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
-from .minute.rollup import rollup_session_cli
+from .minute.rollup import ROLLUP_DATASETS, rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 from .minute.session_ops import start_session_cli, stop_session_cli
@@ -321,8 +321,9 @@ def main(argv: list[str] | None = None) -> int:
                              "states.SCALED_DATASETS. news_minute·etf_inav_minute 은 "
                              "자기 워커를 소유해도 인자가 아니라 env 토글로 켜지는 "
                              "승객이다 — session_ops.PASSENGER_LANES), "
-                             "rollup-minute-session 도 **price_minute 만**"
-                             "(5분 파생은 가격 분봉 canonical 전용 경로다)")
+                             "rollup-minute-session 은 **봉 dataset 만**"
+                             # 여기도 표에서 조립한다 — 허용 목록이 늘 때 산문만 낡는다
+                             f"({'|'.join(sorted(ROLLUP_DATASETS))})")
     parser.add_argument("--source-group", default=None,
                         # `--dataset` 과 같은 이유로 표에서 조립한다 — 산문 예시는 dataset 이
                         # 늘 때 낡고, 그게 곧 "어휘 안에서만 받는다"는 안내를 거짓으로 만든다

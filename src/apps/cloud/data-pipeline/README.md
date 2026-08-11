@@ -1475,8 +1475,15 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # (설정·인자 결손·DB/S3 장애 — 재시도하면 될 수 있다). 구멍 판정 스캔만 실패하면 rollup
 # 이 성공했을 때만 2 이고, rollup 이 거부했으면 **1 이 이긴다**(두 사실은 독립이다).
 # 우선순위: rollup 예외 → 2 · 정당한 거부(key 없음) → 1 · 스캔 실패만 → 2 · 그 외 0.
-# `--session-date` 미지정=오늘(KST). `--dataset` 은 price_minute 만 받는다 — 뉴스 세션도
-# 390 window 를 계획해서, 열어 두면 뉴스 커밋 지평으로 잘린 5분봉이 가격 파일을 덮는다.
+# `--session-date` 미지정=오늘(KST). `--dataset` 은 **봉 dataset 만** 받는다
+# (price_minute·sector_index_minute — `rollup.ROLLUP_DATASETS` 가 정본). 어휘 전체로
+# 열지 않는 이유: 뉴스 세션도 390 window 를 계획해서, 열어 두면 뉴스 커밋 지평으로 잘린
+# 5분봉이 가격 파일을 덮는다.
+# ⚠️ **업종지수는 이 CLI 가 유일한 생산 수단이다**(ALPHA-941) — 장중 후크가 없고
+# (`SectorIndexWorker._after_commit` 은 비어 있다: 후크는 ALPHA-839 가 지울 경로다)
+# terraform 스케줄도 아직 없다. 안 돌리면 `part-sector-index.parquet` 이 안 생기고
+# 분석엔진의 섹터 축은 계속 빈다. 산출은 가격과 **같은 파티션의 다른 파일**이라 둘을
+# 따로 돌려야 한다(행은 서로소 — 업종코드 vs 종목코드).
 # 🔴 **스케줄 배선 전 선행 조건**(terraform PR): `aws_iam_role_policy.minute_session` 의
 #   s3 문장은 `["s3:GetObject","s3:ListBucket"]` 뿐이고 주석이 "쓰기는 없다(이 태스크는
 #   레이크에 아무것도 안 만든다)"고 단언한다. 이 스텝은 PUT 을 하므로 권한이 필요하다 —
@@ -1494,6 +1501,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04
+# 업종지수(45종 → part-sector-index.parquet). source-group 은 kis 뿐이다.
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run rollup-minute-session --dataset sector_index_minute \
+    --source-group kis --session-date 2026-08-10
 # 상주 iNAV Worker(1분 파이프라인, ALPHA-851) — 장중 추정 NAV 를 window 단위 canonical
 # artifact 로 확정한다. 세션이 먼저 계획돼 있어야 한다
 # (plan-minute-session --dataset etf_inav_minute --source-group kis — `--universe` 는

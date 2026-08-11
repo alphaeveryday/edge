@@ -42,6 +42,12 @@ from functools import lru_cache
 
 TOP_NAMES = 5         # 고유분을 배정할 종목 수
 MARKET_CODE = "069500"
+# `bars_5m` 에 섞여 사는 **업종지수 파생**의 표기 (ALPHA-941). 전일 표본을 고를 때
+# 제외한다 — 이 계열은 4자리 KRX 업종코드라 아래 심볼 필터에 안 걸리는데, 거르지
+# 않으면 "지수 롤업만 돈 날"이 전일로 뽑혀 표본이 0행이 되고 β 가 1 로 폴백한다
+# (두 롤업은 각자 실행이다). 값의 정본은 `data_pipeline.minute.rollup.
+# SOURCE_VENDOR_SECTOR` 이고 별 배포 단위라 베낀다 — 드리프트는 테스트가 잡는다.
+SECTOR_ROLLUP_VENDOR = "1m_rollup_sector"
 TAUTOLOGY_CUT = 0.30  # 이만큼 겹치면 같은 것이다 - 겹침 판정의 계약 임계 (동어반복 금지)
 MIN_OVERLAP = 0.05    # 이만큼도 안 겹치면 "왜 이게 설명하냐"에 답이 없다 (우연 적합 금지)
 # 대상이 시장과 이만큼 겹치면 광역(broad) ETF 다 - 섹터 층을 접고 시장+고유 2층으로
@@ -251,7 +257,9 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
             SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, ts, close
             FROM bars_5m
             WHERE trade_date = (SELECT max(trade_date) FROM bars_5m
-                                WHERE trade_date < DATE '{day}')
+                                WHERE trade_date < DATE '{day}'
+                                  AND source_vendor IS DISTINCT FROM
+                                      '{SECTOR_ROLLUP_VENDOR}')
               AND close > 0
               AND regexp_replace(symbol, '\.(KS|KQ)$', '')
                   IN ({symbol_sql})

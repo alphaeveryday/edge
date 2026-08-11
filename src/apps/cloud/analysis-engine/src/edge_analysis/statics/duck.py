@@ -59,6 +59,10 @@ MIN_LANDED_TICKERS = 100
 # 없다(레이크 기반층이 분석층을 되부르는 방향 역전 - ALPHA-862 로 athena 는 삭제). 갈리면 이 가드가 엉뚱한 종목을
 # 찾아 정상일을 폴백시키므로, 두 자리가 같은지는 테스트가 지킨다.
 MARKET_PROXY_TICKER = "069500"
+# 같은 데이터셋에 사는 **업종지수 파생**의 표기 - 착지 폭 판정에서 제외한다(ALPHA-941).
+# 값의 정본은 `data_pipeline.minute.rollup.SOURCE_VENDOR_SECTOR` 이고, 별 배포 단위라
+# import 하지 않고 베낀다(`collect/intraday.py` 와 같은 규약 - 드리프트는 테스트가 잡는다).
+SECTOR_ROLLUP_VENDOR = "1m_rollup_sector"
 # 로컬로 내려오는 바이트 임계. 넘으면 `lake.heavy` 에 남는다(막지는 않는다).
 # 기본 64MB: 실측으로 새는 것들이 그 위다(층분해 295.7MB · pit_daily 106MB).
 # 0 이면 감시를 끈다 - 프로파일링 자체가 비용이라 배치에서는 끌 수 있어야 한다.
@@ -425,12 +429,26 @@ class CausalLake:
             # `symbol` 이 아니라 `ticker` 를 센다 - 접미사 없는 심볼이 섞이는 날
             # (2026-08-05) 같은 종목이 둘로 세어지면 안 된다. 그날 두 값은 366 으로
             # 같았지만 같다는 것은 관측이지 계약이 아니다.
+            # 🔴 **업종지수는 안 센다** (ALPHA-941). 이 판정이 묻는 것은 "요청일의 **가격**
+            # 표면이 쓸 만큼 착지했나"인데, 1분 롤업이 같은 데이터셋에 업종지수 45종을
+            # 따로 싣는다(`source_vendor='1m_rollup_sector'`, ticker 는 4자리 업종코드).
+            # 그게 분자에 섞이면 **가격이 60종만 착지한 날도 100종 문턱을 넘어** 폴백이
+            # 꺼진다 - 부분 착지를 거르라고 만든 가드가 정확히 그 상황을 통과시킨다.
+            # ⚠️ 지금 이 표에 그 행이 **없다**(승격 잡이 2026-08-05 이후 안 돈다). 그래도
+            # 거르는 이유는 이 판정의 계약이 "가격 착지 폭"이라서다 - 닿을 수 있게 되는
+            # 날(ALPHA-796 되살리기)에 이 줄이 없으면 가드가 조용히 무력해진다.
+            # ⚠️ 필터를 집계마다 붙이지 않고 **스캔 전체**에 건다. `max(trade_date)` 를
+            # 안 거르면 표에 업종지수 행만 있을 때 `newest` 가 non-NULL 이 되는데,
+            # `asked_day` 가 빈 호출(23개 생성 지점 중 21곳)은 `iceberg_covers` 가
+            # 거기서 곧장 True 라 **가격 봉이 하나도 없는 표를 정본으로 승인**한다.
+            # 판정 대상이 "가격 표면"이면 분모·분자·최신일이 전부 그 집합이어야 한다.
             day_pred = f"DATE '{self.asked_day}'" if self.asked_day else "NULL"
             newest, day_tks, mkt_rows = self.con.execute(
                 f"SELECT max(trade_date), count(DISTINCT ticker) "
                 f"FILTER (WHERE trade_date = {day_pred}), count(*) FILTER "
                 f"(WHERE trade_date = {day_pred} "
-                f"AND ticker = '{MARKET_PROXY_TICKER}') FROM {tbl}").fetchone()
+                f"AND ticker = '{MARKET_PROXY_TICKER}') FROM {tbl} "
+                f"WHERE source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'").fetchone()
             if not iceberg_covers(newest, self.asked_day, day_tks, mkt_rows):
                 # **세 사유를 갈라 적는다** - 처방이 다르다. 없는 것은 적재가 아예 안 돈
                 # 것이고, 13종은 돌다 만 것이고, 시장 프록시 부재는 착지 폭과 무관하게

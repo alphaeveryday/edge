@@ -840,7 +840,7 @@ def canonical_intraday_5m_prefix(market: str, trade_date: str) -> str:
 
 
 def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
-    """5분봉 canonical(dataset=intraday_5m)의 거래일 파일 키 (ALPHA-750).
+    """5분봉 canonical(dataset=intraday_5m)의 **가격** 거래일 파일 키 (ALPHA-750).
 
     분석엔진(analysis-engine)이 소비하는 기존 데이터셋이다 — FMP 백필
     (source_vendor='fmp', ~2026-07-31)이 이미 이 형상으로 살고, 그 뒤를 벤더 백필과
@@ -853,6 +853,11 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     쓰기 전에 `part-0` 의 티커를 빼는 것이 그 보장이고, 롤업 쪽은 자기 소유 구간에서
     낯선 파일을 만나면 산출을 멈춘다(`rollup._rollup_day` 의 foreign 가드).
 
+    ⚠️ 롤업 자신도 이 파티션에 **파일을 둘** 쓴다(ALPHA-941 — 업종지수는
+    `canonical_intraday_5m_sector_key`). "롤업 파일 = `part-0` 하나"로 읽으면 그 가드가
+    자기 파일을 남의 것으로 본다 — 소유 목록의 정본은 `canonical_intraday_5m_writer_keys`
+    하나다.
+
     스키마(dev S3 2026-07-31 part-0.parquet 실측 — 이 컬럼·타입 그대로, 여분 컬럼
     없음: 소비자 스키마 검증과의 충돌을 피하는 게 우선이라 bars_count 류는 넣지
     않고 결손은 로그로 남긴다):
@@ -861,7 +866,10 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     - ts: timestamp[us] **naive KST** — **구간 시작** 라벨(09:00 행 = 09:00~09:04)
     - open/high/low/close: double
     - volume: int64
-    - source_vendor: string (fmp 원본과 파생을 가르는 필터 축)
+    - source_vendor: string (원본·파생·레인을 가르는 필터 축 — `fmp` 원본 / 1분 롤업의
+      `1m_rollup`(가격) · `1m_rollup_sector`(업종지수). ⚠️ 이 파티션은 파일 합집합으로
+      읽히고 **두 심볼 어휘가 공존**하므로, 파티션 전체를 훑는 소비자는 이 축으로 갈라야
+      한다 — `rollup.SOURCE_VENDOR*` 가 정본)
     - available_at: timestamp[us] naive KST = ts + 5분(구간 끝)
 
     ⚠️ **"거래일당 1파일"이 아니다**(2026-08-07 정정). 이 키는 1분 롤업 writer 의 파일
@@ -876,6 +884,69 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
     영구 차단된다).
     """
     return f"{canonical_intraday_5m_prefix(market, trade_date)}part-0.parquet"
+
+
+def canonical_intraday_5m_sector_key(market: str, trade_date: str) -> str:
+    """업종지수 45종 5분봉의 거래일 파일 키 (ALPHA-941).
+
+    가격과 **같은 파티션에 다른 파일로** 산다. 새 dataset 을 파지 않는 이유는 소비자다 —
+    분석엔진은 이 파티션을 파일명 없이 통째로 건다(`statics/duck.py` 의 `s3_intraday_5m`
+    hive 등록 + `FROM s3_intraday_5m b WHERE b.market='KR'`). 여기 놓으면 봉 읽는 경로가
+    **무변경**이고, 새 dataset 을 파면 그 질의를 UNION 으로 고쳐야 한다.
+
+    파티션을 나눠 쓰는 것이 안전한 근거는 **행이 서로소**라는 것이다 — 이 파일의 `ticker`
+    는 KRX 업종코드(`1005`·`2063` 4자리)고 `part-0` 은 종목코드(6자리)라 교집합이 공집합
+    이다. 소비자가 `*.parquet` 글롭으로 읽어도 겹치는 (ticker, ts) 가 없어 이중계상이
+    구조적으로 불가능하다(벤더 백필 파일과 다른 점이 정확히 이것이다 — 그쪽은 같은
+    종목코드를 담아서 나란히 놓이면 두 번 세어진다).
+
+    스키마·ts 시맨틱은 `canonical_intraday_5m_key` 와 **같다** — 같은 뷰로 읽히므로
+    갈리면 안 된다. 값의 성질만 다르다: 지수는 자기가 체결되지 않아 `volume=0` 이
+    정상이고(2026-08-10 실측 6.2%), 그것을 결손으로 접는 소비자가 있으면 그건 소비자
+    쪽 결함이다.
+
+    🔴 `source_vendor` 는 `1m_rollup_sector` 로 **가격과 갈라 둔다**. 파티션이 파일
+    합집합으로 읽히는데 여기 `source_symbol` 은 종목코드가 아니라 KRX 업종코드라,
+    파티션 전체를 훑는 소비자에게 두 어휘를 가를 축이 필요하다 — 실제로
+    `analysis-engine/collect/intraday.py:load_symbols` 가 `DISTINCT source_symbol` 로
+    FMP 수집 유니버스를 잇고 그 축으로 이 45개를 거른다.
+    """
+    return f"{canonical_intraday_5m_prefix(market, trade_date)}part-sector-index.parquet"
+
+
+def canonical_intraday_5m_writer_keys(market: str, trade_date: str) -> frozenset[str]:
+    """1분 롤업 writer 가 이 파티션에서 **소유하는 파일 전부** — foreign 가드의 판정 축.
+
+    가드가 `k != part-0` 로 물으면 롤업 자신의 두 번째 파일을 남의 것으로 읽고 **가격
+    롤업이 그날부터 통째로 멈춘다**(ALPHA-941). 그렇다고 가드를 빼면 벤더 백필
+    (`part-<vendor>-backfill.parquet`)과 나란히 놓여 겹치는 행이 두 번 세어지는 원래
+    사고가 되살아난다. 그래서 **소유 목록**으로 좁힌다 — 여기 없는 파일은 여전히 거부다.
+
+    ⚠️ 판정하는 자리가 둘이다(`rollup._rollup_day` 의 산출 가드 · `rollup.
+    unfilled_settled_days` 의 구멍 판정). 두 벌로 적으면 한쪽만 늘어 산출은 되는데
+    감시는 그날을 영구 `contested` 로 보고하는(또는 그 반대) 상태가 된다.
+
+    ⚠️ 대조는 **`.parquet` 키에만** 건다(`is_foreign_5m_key`). `S3Storage.list_keys` 는
+    프리픽스 아래 **모든** 키를 주는데 거기엔 콘솔·도구가 만드는 0바이트 디렉터리 마커
+    (`…/trade_date=2026-08-10/`)가 섞일 수 있다. 그건 소비자의 `*.parquet` 글롭에 안
+    걸려 이중계상을 못 만드는데, 낯선 파일로 세면 **두 레인이 그날 영구 정지**한다.
+    가드의 근거가 "소비자가 글롭으로 읽어 겹치는 행이 두 번 세어진다"이므로 판정 대상도
+    그 글롭이 읽는 것이어야 한다.
+    """
+    return frozenset({
+        canonical_intraday_5m_key(market, trade_date),
+        canonical_intraday_5m_sector_key(market, trade_date),
+    })
+
+
+def is_foreign_5m_key(key: str, market: str, trade_date: str) -> bool:
+    """이 키가 5분 파티션의 **낯선 writer 파일**인가 — 산출 가드·구멍 판정의 공용 판정.
+
+    소비자가 읽는 것(`*.parquet`)만 대상이다. 판정을 한 함수로 두는 이유는
+    `canonical_intraday_5m_writer_keys` 도크스트링의 "자리가 둘" 과 같다.
+    """
+    return key.endswith(".parquet") and key not in canonical_intraday_5m_writer_keys(
+        market, trade_date)
 
 
 def raw_news_minute_page_key(

@@ -466,15 +466,24 @@ def test_업종지수_벤더_표기가_파이프라인과_같다():
     그래서 **소스를 텍스트로 읽어** 대조한다. 파일이나 상수를 못 찾으면 조용히
     건너뛰지 않고 실패한다 — 경로가 옮겨졌을 때 가드가 초록인 채로 죽는 것이 이
     테스트가 막으려는 것보다 나쁘다(Rule 12). `pytest.skip` 을 쓰지 않는 이유다.
+
+    ⚠️ 소비자 쪽 사본이 **하나가 아니다** — 거르는 자리가 둘이라서다(수집 유니버스·품질
+    게이트는 `collect.intraday`, 정본 착지 폭 판정은 `statics.duck`). 사본을 **전수로**
+    센다: 한 곳만 대조하면 나머지가 갈려도 초록이고, 그 갈린 곳의 필터는 아무것도 안 거른다.
     """
+    from edge_analysis.statics import duck, layers
+
     src = (Path(__file__).resolve().parents[3]
            / "data-pipeline/src/data_pipeline/minute/rollup.py")
     assert src.is_file(), f"파이프라인 롤업 소스를 못 찾았다 — 경로가 옮겨졌나: {src}"
     found = re.findall(r'^SOURCE_VENDOR_SECTOR = "([^"]+)"$',
                        src.read_text(encoding="utf-8"), re.M)
-    assert found == [intraday.SECTOR_ROLLUP_VENDOR], (
-        f"레인 표기가 갈렸다 — 파이프라인 {found} vs 소비자 "
-        f"{intraday.SECTOR_ROLLUP_VENDOR!r}")
+    assert len(found) == 1, f"파이프라인 쪽 선언이 1개가 아니다: {found}"
+    copies = {"collect.intraday": intraday.SECTOR_ROLLUP_VENDOR,
+              "statics.duck": duck.SECTOR_ROLLUP_VENDOR,
+              "statics.layers": layers.SECTOR_ROLLUP_VENDOR}
+    drifted = {k: v for k, v in copies.items() if v != found[0]}
+    assert not drifted, f"레인 표기가 갈렸다 — 파이프라인 {found[0]!r} vs {drifted}"
 
 
 def test_기대_봉_개수는_정규장_창에서_유도된다():

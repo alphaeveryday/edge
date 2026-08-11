@@ -29,7 +29,9 @@ from data_pipeline.config import DbConfig
 from data_pipeline.lake.storage import (
     LocalStorage,
     canonical_intraday_5m_key,
+    canonical_intraday_5m_sector_key,
     canonical_price_minute_artifact_key,
+    canonical_sector_index_minute_artifact_key,
 )
 from data_pipeline.minute.artifacts import serialize_records
 from data_pipeline.minute.commit import MinuteCommitter
@@ -42,6 +44,10 @@ from data_pipeline.minute.rollup import (
     rollup_session,
     unfilled_settled_days,
 )
+from data_pipeline.minute.states import (
+    DATASET_PRICE_MINUTE,
+    DATASET_SECTOR_INDEX_MINUTE,
+)
 from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
 # **롤업이 소유하는 첫 날**. 날짜를 박지 않고 경계에서 파생시킨다 — 소유권 경계는
@@ -50,6 +56,7 @@ from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 SESSION_DATE = WRITER_SINCE
 SESSION_DAY = date.fromisoformat(SESSION_DATE)
 DAY_KEY = canonical_intraday_5m_key("KR", SESSION_DATE)
+SECTOR_DAY_KEY = canonical_intraday_5m_sector_key("KR", SESSION_DATE)
 UNIVERSE = Universe(
     universe_version="univ-test-v1",
     etf_ids=("500000",),
@@ -80,6 +87,17 @@ def bar(unit: str, ts_hhmm: str, o, h, low, c, v) -> dict:
     # 실 record 축(price_collect.record_of): 값은 문자열, source 는 컬럼이다
     return {"unit_id": unit, "ts": w(ts_hhmm), "open": str(o), "high": str(h),
             "low": str(low), "close": str(c), "volume": str(v), "source": "toss"}
+
+
+def sector_bar(unit: str, ts_hhmm: str, o, h, low, c, v) -> dict:
+    """업종지수 1분 record — 가격과 **같은 축**이다.
+
+    `sector_index_collect` 가 `price_collect.record_of` 를 그대로 쓰기 때문이고, 그래서
+    `_rollup_day` 의 집계 본문이 두 dataset 에 공유된다. 다른 것은 값의 성질뿐이다:
+    `unit_id` 가 4자리 KRX 업종코드(종목코드와 서로소)이고 `volume=0` 이 정상이다.
+    """
+    return {"unit_id": unit, "ts": w(ts_hhmm), "open": str(o), "high": str(h),
+            "low": str(low), "close": str(c), "volume": str(v), "source": "kis"}
 
 
 class Fixture:
@@ -119,16 +137,49 @@ class Fixture:
             ),
         )
 
-    def rollup_session(self, session_date: str = SESSION_DATE) -> str | None:
+    def rollup_session(self, session_date: str = SESSION_DATE,
+                       dataset: str = DATASET_PRICE_MINUTE) -> str | None:
         return rollup_session(
-            self.storage, self.ledger, session_id=self.session_id, market="KR",
-            session_date=session_date,
+            self.storage, self.ledger, dataset=dataset, session_id=self.session_id,
+            market="KR", session_date=session_date,
         )
 
-    def read_rows(self) -> list[dict]:
+    def read_rows(self, key: str = DAY_KEY) -> list[dict]:
         import pyarrow.parquet as pq
 
-        return pq.read_table(io.BytesIO(self.storage.get_bytes(DAY_KEY))).to_pylist()
+        return pq.read_table(io.BytesIO(self.storage.get_bytes(key))).to_pylist()
+
+    # ── 업종지수 레인 (ALPHA-941) ──
+    # 별 fixture 를 만들지 않는 이유는 이 트랙의 요점이 **두 레인이 한 파티션을 나눠
+    # 쓴다**는 것이라서다 — 같은 레이크·같은 원장 위에 둘을 세워야 서로를 막는 회귀가
+    # 이 파일에서 잡힌다.
+
+    def plan_sector(self):
+        """업종지수 세션을 같은 원장에 세운다 — universe 없음·정규장 격자."""
+        self.sector_session_id, _ = self.ledger.plan_session(
+            dataset=DATASET_SECTOR_INDEX_MINUTE, source_group="kis",
+            session_date=SESSION_DAY, universe_version="none", universe_hash="none",
+            windows=plan_session_windows(
+                SESSION_DAY, universe=None, extended_hours=False),
+        )
+        return self.sector_session_id
+
+    def commit_sector(self, hhmm: str, records: list[dict], generation: int = 1):
+        self.storage.put_bytes(
+            canonical_sector_index_minute_artifact_key("KR", SESSION_DATE, hhmm, generation),
+            serialize_records(records))
+        window = self.db.windows[(self.sector_session_id, w(hhmm))]
+        window["checksum"], window["generation"] = f"s-{hhmm}-{generation}", generation
+
+    def rollup_sector(self, session_date: str = SESSION_DATE) -> str | None:
+        return rollup_session(
+            self.storage, self.ledger, dataset=DATASET_SECTOR_INDEX_MINUTE,
+            session_id=self.sector_session_id, market="KR", session_date=session_date,
+        )
+
+    def partition_keys(self, session_date: str = SESSION_DATE) -> list[str]:
+        return self.storage.list_keys(
+            f"canonical/market_data/intraday_5m/market=KR/trade_date={session_date}/")
 
 
 class TestAggregation:
@@ -467,6 +518,174 @@ class TestSessionRollup:
             window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
         assert fx.rollup_session(session_date=owned) == canonical_intraday_5m_key("KR", owned)
 
+class TestSectorIndexRollup:
+    """업종지수 5분 파생 (ALPHA-941) — 한 파티션을 두 레인이 나눠 쓴다.
+
+    이 클래스가 지키는 것은 **가드가 넓어졌지 풀리지 않았다**는 것이다. 두 방향을 따로
+    센다: ①롤업 자기 파일끼리는 서로를 막지 않는다 ②목록 밖 파일은 여전히 전건 거부다.
+    한쪽만 세우면 가드를 통째로 지우는 회귀(①만 통과)나 되돌리는 회귀(②만 통과)가
+    조용히 산다.
+    """
+
+    def seed_price(self, fx):
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            fx.commit(hhmm, [bar("500000", hhmm, 100, 101, 99, 100, 1)])
+
+    def seed_sector(self, fx, volume=7):
+        fx.plan_sector()
+        for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+            fx.commit_sector(hhmm, [sector_bar("1005", hhmm, 2000, 2010, 1990, 2005, volume)])
+
+    def test_reads_sector_artifacts_not_price_ones(self, tmp_path):
+        """재료 키가 dataset 을 따라간다 — 산출 위치만 바꾸면 절반만 고친 것이다.
+
+        가격 artifact 를 **일부러 심어 둔다**: 재료 빌더가 가격으로 굳어 있으면 이
+        테스트는 통과해 버릴 수 있는데, 그때 나오는 봉은 지수가 아니라 종목이다.
+        그래서 값까지 센다 — 산출된 ticker 가 업종코드여야 한다.
+        """
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)          # 같은 window 에 가격 재료도 있다
+        self.seed_sector(fx)
+        assert fx.rollup_sector() == SECTOR_DAY_KEY
+        rows = fx.read_rows(SECTOR_DAY_KEY)
+        assert [(r["ticker"], r["ts"], r["open"], r["close"]) for r in rows] == [
+            ("1005", naive("0900"), 2000.0, 2005.0)
+        ], "가격 재료를 읽었으면 ticker 가 500000 으로 나온다"
+
+    def test_sector_rows_carry_their_own_vendor_marker(self, tmp_path):
+        """🔴 **산출물이 실제로** 레인 표기를 달아야 한다 — 상수 동등성만으로는 못 잡는다.
+
+        `ROLLUP_DATASETS` 의 업종지수 항목이 실수로 `SOURCE_VENDOR` 를 쓰면 상수는 여전히
+        둘 다 존재하고 소비자 쪽 드리프트 테스트도 통과하는데, 파일에 실린 값이 가격과
+        같아져 **소비자 필터가 통째로 헛돈다**(업종코드가 FMP 수집 유니버스로 다시 샌다).
+        가격 쪽도 함께 센다 — 한쪽만 세면 둘 다 sector 표기가 되는 회귀가 산다.
+        """
+        from data_pipeline.minute.rollup import SOURCE_VENDOR, SOURCE_VENDOR_SECTOR
+
+        assert SOURCE_VENDOR != SOURCE_VENDOR_SECTOR, "두 레인 표기가 같으면 축이 없다"
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)
+        self.seed_sector(fx)
+        assert fx.rollup_session() == DAY_KEY
+        assert fx.rollup_sector() == SECTOR_DAY_KEY
+        assert {r["source_vendor"] for r in fx.read_rows()} == {SOURCE_VENDOR}
+        assert {r["source_vendor"] for r in fx.read_rows(SECTOR_DAY_KEY)} == {
+            SOURCE_VENDOR_SECTOR
+        }
+
+    def test_two_lanes_do_not_block_each_other(self, tmp_path):
+        """⭐ 가드 넓힘의 정방향 — 롤업 파일 둘이 한 파티션에 공존하고, **둘 다 계속 산출한다**.
+
+        마지막 재실행이 요점이다. 가드를 `k != day_key` 로 되돌리면 여기서 가격이
+        `None` 이 되는데, 그건 "업종지수를 켠 날부터 가격 5분봉이 통째로 멈춘다"는 뜻이다
+        — 첫 산출만 세면 그 회귀가 안 잡힌다(순서상 가격이 먼저 쓰였으니까).
+        """
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)
+        self.seed_sector(fx)
+        assert fx.rollup_session() == DAY_KEY
+        assert fx.rollup_sector() == SECTOR_DAY_KEY
+        assert fx.rollup_session() == DAY_KEY, "이웃 롤업 파일이 가격을 막았다"
+        assert fx.rollup_sector() == SECTOR_DAY_KEY, "이웃 롤업 파일이 지수를 막았다"
+        assert sorted(fx.partition_keys()) == sorted([DAY_KEY, SECTOR_DAY_KEY])
+        # 행이 **서로소**라는 것이 두 파일을 나란히 두는 근거다 — 소비자는 글롭으로
+        # 둘을 합쳐 읽으므로 겹치면 그대로 이중계상이다.
+        assert {r["ticker"] for r in fx.read_rows()} == {"500000"}
+        assert {r["ticker"] for r in fx.read_rows(SECTOR_DAY_KEY)} == {"1005"}
+
+    def test_a_foreign_file_still_blocks_both_lanes(self, tmp_path):
+        """⭐ 가드 넓힘의 역방향 — 목록 **밖** 파일은 여전히 전건 거부다.
+
+        벤더 백필(`part-<vendor>-backfill.parquet`)은 우리와 같은 **종목코드**를 담아서
+        나란히 놓이면 겹치는 (ticker, ts) 가 두 번 세어진다 — 이웃 롤업 파일과 다른 점이
+        정확히 이것이다. 가드를 목록으로 좁히는 대신 통째로 지우는 회귀를 여기서 센다.
+
+        이미 산출된 롤업 파일이 **있는 상태**에서 센다 — 낯선 파일 하나만 있는 상황은
+        `TestSessionRollup` 이 이미 세고, 여기서 봐야 할 것은 "우리 파일이 옆에 있어도
+        낯선 파일 판정이 살아 있나"다.
+        """
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)
+        self.seed_sector(fx)
+        assert fx.rollup_sector() == SECTOR_DAY_KEY
+        foreign = (f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}"
+                   "/part-toss-backfill.parquet")
+        fx.storage.put_bytes(foreign, b"x")
+        assert fx.rollup_session() is None, "낯선 벤더 파일인데 가격이 산출했다"
+        assert fx.rollup_sector() is None, "낯선 벤더 파일인데 지수가 산출했다"
+        assert foreign in fx.partition_keys()
+
+    def test_a_session_from_the_other_lane_is_refused(self, tmp_path):
+        """🔴 `dataset` 과 `session_id` 가 어긋나면 **조용히 남의 파일을 덮는다**.
+
+        둘은 따로 오는 인자다. 업종지수 session_id + `dataset=price_minute` 로 부르면
+        업종지수 세션의 계획·커밋을 읽어 같은 HHMM/generation 의 **가격** artifact 를
+        집계하고 `part-0` 을 덮는다 — 산출은 정상으로 보이고 exit 0 이라 아무도 안 본다.
+
+        CLI 는 session_id 를 dataset 에서 유도해 지금 어긋날 수 없지만, 그건 호출부의
+        성질이지 이 함수의 계약이 아니다. dataset 축을 연 것이 이 트랙이므로 여기서 막는다.
+        """
+        import pytest
+
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)
+        self.seed_sector(fx)
+        with pytest.raises(ValueError, match="세션과 dataset 이 어긋난다"):
+            rollup_session(
+                fx.storage, fx.ledger, dataset=DATASET_PRICE_MINUTE,
+                session_id=fx.sector_session_id, market="KR", session_date=SESSION_DATE,
+            )
+        assert DAY_KEY not in fx.partition_keys(), "거부했는데 가격 파일이 쓰였다"
+
+    def test_a_directory_marker_is_not_a_foreign_writer(self, tmp_path, monkeypatch):
+        """🔴 0바이트 **디렉터리 마커**가 두 레인을 영구 정지시키면 안 된다.
+
+        `S3Storage.list_keys` 는 프리픽스 아래 모든 키를 준다 — 콘솔·도구가 만드는
+        `…/trade_date=…/` 마커가 섞일 수 있다. 그건 소비자의 `*.parquet` 글롭에 안 걸려
+        이중계상을 못 만드는데, 낯선 파일로 세면 그날 산출이 영구 거부되고 감시는 매일
+        `contested` 를 낸다 — 사람이 소유자를 정해도 안 풀린다(정할 파일이 없다).
+
+        `LocalStorage` 는 파일만 나열해 이 형상을 못 만든다. **실물이 못 만드는 상태가
+        운영에는 있다** — 그래서 목록만 흉내 낸다.
+        """
+        fx = Fixture(tmp_path)
+        self.seed_price(fx)
+        prefix = f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}/"
+        real = fx.storage.list_keys
+        monkeypatch.setattr(fx.storage, "list_keys",
+                            lambda p: ([prefix] if p == prefix else []) + real(p))
+        assert fx.rollup_session() == DAY_KEY, "디렉터리 마커가 산출을 막았다"
+
+    def test_the_foreign_judgement_is_one_predicate(self):
+        """산출 가드와 구멍 판정이 **같은 판정**을 써야 한다 — 두 벌이면 한쪽만 늘어난다.
+
+        판정 자체를 직접 센다: 소유 파일 둘은 통과, 낯선 parquet 은 거부, 소비자가 안 읽는
+        키(마커·체크섬 부산물)는 대상 아님.
+        """
+        from data_pipeline.lake.storage import is_foreign_5m_key
+
+        pre = f"canonical/market_data/intraday_5m/market=KR/trade_date={SESSION_DATE}/"
+        assert not is_foreign_5m_key(DAY_KEY, "KR", SESSION_DATE)
+        assert not is_foreign_5m_key(SECTOR_DAY_KEY, "KR", SESSION_DATE)
+        assert is_foreign_5m_key(pre + "part-toss-backfill.parquet", "KR", SESSION_DATE)
+        assert not is_foreign_5m_key(pre, "KR", SESSION_DATE)          # 디렉터리 마커
+        assert not is_foreign_5m_key(pre + "_SUCCESS", "KR", SESSION_DATE)
+
+    def test_zero_volume_bars_are_carried_not_dropped(self, tmp_path):
+        """🔴 지수는 자기가 체결되지 않는다 — `volume=0` 이 정상이다(2026-08-10 실측 6.2%).
+
+        집계가 거래량으로 봉을 거르면 그 6.2% 가 조용히 사라지고, 소비자는 결손을
+        "그 분에 지수가 안 움직였다"로 읽는다. OHLC 는 멀쩡히 움직인 봉들이다.
+        """
+        fx = Fixture(tmp_path)
+        self.seed_sector(fx, volume=0)
+        assert fx.rollup_sector() == SECTOR_DAY_KEY
+        rows = fx.read_rows(SECTOR_DAY_KEY)
+        assert [(r["ticker"], r["volume"], r["high"], r["low"]) for r in rows] == [
+            ("1005", 0, 2010.0, 1990.0)
+        ]
+
+
 class TestUnfilledSettledDays:
     """구멍 판정 — 원장이 멈춘 거래일에 파생이 없는 날."""
 
@@ -475,10 +694,11 @@ class TestUnfilledSettledDays:
             if row["session_date"] == date.fromisoformat(session_date):
                 row["phase"] = phase
 
-    def scan(self, fx, before: date = SESSION_DAY + timedelta(days=1)):
+    def scan(self, fx, before: date = SESSION_DAY + timedelta(days=1), *,
+             dataset: str = DATASET_PRICE_MINUTE, source_group: str = "toss"):
         return unfilled_settled_days(
             fx.storage, fx.ledger, market="KR",
-            dataset="price_minute", source_group="toss", before=before,
+            dataset=dataset, source_group=source_group, before=before,
         )
 
     def unfilled(self, fx, before: date = SESSION_DAY + timedelta(days=1)) -> list[str]:
@@ -583,6 +803,35 @@ class TestUnfilledSettledDays:
         fx.storage.put_bytes(DAY_KEY, b"ours")
         assert self.unfilled(fx) == [] and self.contested(fx) == []
 
+    def test_sibling_lane_output_is_not_contested(self, tmp_path):
+        """🔴 이웃 레인의 롤업 파일을 "타 writer" 로 읽으면 **정상일이 매일 빨갛게 뜬다**.
+
+        `contested` 는 "파생이 영구 정지했다, 사람이 소유자를 정해야 한다"는 뜻이다.
+        업종지수를 켠 날부터 가격 판정이 전건 그걸 내면 진짜 정지가 그 소음에 묻힌다.
+        판정 목록이 `_rollup_day` 의 산출 가드와 **같은 소유 목록**이어야 하는 이유다.
+        """
+        fx = Fixture(tmp_path)
+        fx.plan_sector()
+        self.settle(fx, SESSION_DATE)      # 두 세션이 같은 거래일이라 함께 확정된다
+        fx.storage.put_bytes(DAY_KEY, b"ours")
+        fx.storage.put_bytes(SECTOR_DAY_KEY, b"sector-ours")
+        assert self.contested(fx) == [] and self.unfilled(fx) == []
+        sector = self.scan(fx, dataset=DATASET_SECTOR_INDEX_MINUTE, source_group="kis")
+        assert sector == ([], [], 1), "업종지수 쪽 후보가 0이면 이 방향을 안 센 것이다"
+
+    def test_only_the_other_lanes_file_is_still_a_hole(self, tmp_path):
+        """부재 판정이 **자기 dataset 의 파일**을 짚는다.
+
+        "파티션이 통째로 비었나"로 물으면 가격은 나왔고 업종지수만 안 나온 날이 초록으로
+        보인다 — 파티션은 안 비었으니까. 이 트랙 전에는 파티션에 파일이 하나뿐이라 두
+        질문이 같은 답이었고, 그래서 조용히 갈라지는 자리다.
+        """
+        fx = Fixture(tmp_path)
+        self.settle(fx, SESSION_DATE)
+        fx.storage.put_bytes(SECTOR_DAY_KEY, b"sector-ours")   # 가격은 아직 없다
+        assert self.unfilled(fx) == [SESSION_DATE]
+        assert self.contested(fx) == []
+
     def test_live_session_is_not_a_hole(self, tmp_path):
         # 아직 도는 세션(PLANNED·ACTIVE·DRAINING)은 원장이 움직이는 중이라 "재료가
         # 안 변하는데 파생이 없다"가 성립하지 않는다 — 장중에 오늘이 결손으로 잡히면
@@ -684,6 +933,47 @@ class TestRollupSessionCli:
         self.with_fake_ledger(monkeypatch)
         assert self.run(self.settings(tmp_path), dataset="news_minute",
                         source_group="toss") == 2
+
+    def test_sector_index_dataset_is_accepted(self, tmp_path, monkeypatch):
+        # 허용 목록이 둘로 늘었다(ALPHA-941). 1 = "판정은 됐는데 그날 세션이 없다" 라,
+        # dataset·source_group 게이트를 **통과했다**는 뜻이다 — 거부면 2 다.
+        self.with_fake_ledger(monkeypatch)
+        assert self.run(self.settings(tmp_path), dataset=DATASET_SECTOR_INDEX_MINUTE,
+                        source_group="kis") == 1
+
+    def test_source_group_vocabulary_follows_the_dataset(self, tmp_path, monkeypatch):
+        # `toss` 는 price_minute 어휘에는 있고 sector_index_minute 어휘에는 없다.
+        # 이 검증이 price 어휘에 굳어 있으면 여기가 **통과해** 없는 session_id 를 유도하고,
+        # 지목이 틀린 것(2)이 그날이 안 돈 것(1)으로 보인다.
+        self.with_fake_ledger(monkeypatch)
+        assert self.run(self.settings(tmp_path), dataset=DATASET_SECTOR_INDEX_MINUTE,
+                        source_group="toss") == 2
+
+    def test_cli_rolls_up_the_dataset_it_was_given(self, tmp_path, monkeypatch):
+        """🔴 게이트만 열고 **가격을 롤업하면** 업종지수 5분봉은 영영 안 생긴다.
+
+        게이트 통과(위 두 건)로는 못 잡는다 — `dataset` 을 받아 놓고 `rollup_session` 에
+        상수를 넘겨도 exit code 는 똑같이 나온다. 그래서 넘어간 값을 직접 센다.
+        """
+        import data_pipeline.minute.rollup as mod
+        from data_pipeline.config import DbConfig
+        from data_pipeline.minute.repository import MinuteLedger
+
+        db = self.with_fake_ledger(monkeypatch)
+        ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=db.connect)
+        sid, _ = ledger.plan_session(
+            dataset=DATASET_SECTOR_INDEX_MINUTE, source_group="kis",
+            session_date=SESSION_DAY, universe_version="none", universe_hash="none",
+            windows=plan_session_windows(SESSION_DAY, universe=None, extended_hours=False),
+        )
+        db.sessions[sid]["phase"] = "DRAINED"
+        seen = {}
+        monkeypatch.setattr(mod, "rollup_session",
+                            lambda *a, **kw: seen.update(kw) or SECTOR_DAY_KEY)
+        assert self.run(self.settings(tmp_path), dataset=DATASET_SECTOR_INDEX_MINUTE,
+                        source_group="kis") == 0
+        assert seen["dataset"] == DATASET_SECTOR_INDEX_MINUTE
+        assert seen["session_id"] == sid, "다른 dataset 의 session_id 를 유도했다"
 
     def test_unknown_source_group_is_refused(self, tmp_path, monkeypatch):
         self.with_fake_ledger(monkeypatch)

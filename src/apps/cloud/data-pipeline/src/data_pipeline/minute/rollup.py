@@ -5,6 +5,11 @@
 판정기(트리거)는 1분 그대로다 — 이 산출물은 분석 전용 표면이다. 파일 계약(경로·컬럼·
 타입·ts 시맨틱)은 lake/storage.py 의 canonical_intraday_5m_key docstring 이 정본이다.
 
+재료가 되는 dataset 은 **허용 목록**이다(`ROLLUP_DATASETS` — 가격 분봉·업종지수 분봉).
+어휘 전체를 열지 않는 이유는 그 상수 옆에 적었다. 산출은 dataset 마다 **같은 파티션의
+다른 파일**이고(가격 `part-0` · 업종지수 `part-sector-index`), 행이 서로소라 소비자의
+`*.parquet` 글롭이 둘을 합쳐 읽어도 이중계상이 없다(ALPHA-941).
+
 진입점이 둘이고 **집계는 하나**다(`_rollup_day`):
 
 - `maybe_rollup` — 수집 워커 커밋 후크. 장중 즉시성 담당. 버킷이 닫힐 때만 발화한다
@@ -28,11 +33,12 @@ volume=합. 정렬은 **window 축**이다 — 도착 순서도, record 의 ts �
 ts 는 직전 분이라 ts 로 정렬하면 open/close 가 뒤바뀐다). 결손 분은 있는 봉만으로
 집계하고 로그로 남긴다(산출 스키마는 기존 fmp 파일과 동일해야 해서 컬럼로는 안 싣는다).
 
-쓰기는 **그날 전체 재집계 → part-0.parquet 통째 overwrite** 다 — 하루 5분봉은
+쓰기는 **그날 전체 재집계 → 자기 파일 통째 overwrite** 다 — 하루 5분봉은
 ≤ 362종×78봉 ≈ 2.8만 행이라 통재작성이 싸고, 우리 파일 안에서는 부분 병합·순서 문제가
 없다. ⚠️ **파티션 안에서는 다르다**(2026-08-07 정정) — 같은 파티션에 다른 writer 가 다른
 파일명으로 쓰고 소비자는 글롭으로 읽으므로, 나란히 놓이면 겹치는 봉이 두 번 세어진다.
-`_rollup_day` 가 타 writer 파일을 발견하면 산출하지 않는 이유다.
+`_rollup_day` 가 **롤업 소유 목록 밖** 파일을 발견하면 산출하지 않는 이유다 — 판정이
+`part-0` 하나가 아닌 이유는 `canonical_intraday_5m_writer_keys` 도크스트링에 있다.
 # ponytail: 매 버킷 마감마다 그날 1분 artifact 전부를 다시 읽고(장 후반 ~390 GET) 타
 # writer 파일 확인에 S3 LIST 를 1회 더 한다(~78회/일) — 인프로세스 증분 캐시는 이 비용이
 # 실측으로 문제가 될 때 붙인다.
@@ -51,9 +57,13 @@ from ..lake.storage import (
     Storage,
     canonical_intraday_5m_key,
     canonical_intraday_5m_prefix,
+    canonical_intraday_5m_sector_key,
+    is_foreign_5m_key,
     canonical_price_minute_artifact_key,
+    canonical_sector_index_minute_artifact_key,
 )
 from .models import KST, Universe, plan_session_windows
+from .states import DATASET_PRICE_MINUTE, DATASET_SECTOR_INDEX_MINUTE
 
 logger = logging.getLogger(__name__)
 
@@ -66,24 +76,46 @@ BUCKET_MINUTES = 5
 # 롤업 파생"임만 드러낸다.
 SOURCE_VENDOR = "1m_rollup"
 
-# 업종지수 파생의 벤더 표기 (ALPHA-941).
+# 업종지수 파생의 벤더 표기 (ALPHA-941). 위 값과 **갈라 두는 이유는 소비자다** — 이
+# 파티션에 두 심볼 어휘(6자리 종목코드 · 4자리 KRX 업종코드)가 공존하는데, 파티션 전체를
+# 훑는 소비자에게 둘을 가를 축이 없으면 지수를 종목으로 취급한다. 실제 사례:
+# `analysis-engine/collect/intraday.py:load_symbols` 는 `DISTINCT source_symbol` 로
+# 수집 유니버스를 잇는데("이미 쌓은 표의 source_symbol 이 곧 지금까지의 유니버스"),
+# 거르지 않으면 업종코드를 FMP 종목 심볼로 요청한다.
 #
-# ⚠️ **아직 이 값을 쓰는 생산자가 없다 — 그게 이 PR 의 요점이다.** 곧 롤업이 업종지수
-# 5분봉을 같은 파티션에 따로 쓰는데(후속 PR), 그러면 한 파티션에 심볼 어휘가 둘
-# (6자리 종목코드 · 4자리 KRX 업종코드) 공존한다. 파티션 전체를 훑는 소비자에게 둘을
-# 가를 축이 없으면 지수를 종목으로 취급한다 —
-# `analysis-engine/collect/intraday.py:load_symbols` 가 `DISTINCT source_symbol` 로 FMP
-# 수집 유니버스를 잇는 것이 실제 사례다.
-#
-# 그 소비자와 이 상수를 **생산자보다 한 배포 먼저** 보낸다. 두 이미지 CD 는 독립
-# 워크플로라 같은 머지 커밋이어도 순서가 따로 논다([[deploy-order-splits-the-pr]]) —
-# 생산이 먼저 뜨면 구 소비자가 업종코드를 FMP 심볼로 요청한다. 반대 순서(배선 먼저)는
-# 중간 상태가 **완전한 no-op** 이라 안전하다: 거를 행이 아직 없다.
+# 🔴 **이 값을 바꾸려면 소비자를 먼저 배포해라.** 두 서비스가 별 배포 단위라 값을 베껴
+# 쓰고(analysis-engine `SECTOR_ROLLUP_VENDOR`), 두 이미지 CD 는 독립 워크플로라 같은
+# 머지 커밋이어도 순서가 따로 논다. 생산이 먼저 뜨면 구 소비자가 못 거른다 — 반대 순서는
+# 중간 상태가 no-op 이라 안전하다. 이 상수가 소비자보다 한 배포 늦게 온 것도 그래서다
+# (PR #741 → 이 PR).
 #
 # ⚠️ 위 상수의 "벤더명을 넣지 않는다"와 어긋나지 않는다 — 이건 벤더명이 아니라 **레인
 # 표기**다. 여기 들어갈 수 없는 것이 벤더(kis|toss)이고, 그 축의 정본은 여전히 1분
 # canonical 의 record 컬럼이다.
 SOURCE_VENDOR_SECTOR = "1m_rollup_sector"
+
+# 롤업이 5분 파생을 만드는 dataset — **허용 목록이지 범용화가 아니다** (ALPHA-941).
+# dataset → (1분 재료 artifact 키 빌더, 산출 파일 키 빌더, source_vendor 표기).
+#
+# 🔴 여기에 dataset 을 더하기 전에 그 dataset 이 **봉**인지부터 물어라. 어휘 전체
+# (`MINUTE_DATASETS`)로 열면 ALPHA-839 가 막은 사고가 되살아난다 — 뉴스 세션도 390 window
+# 를 계획해서 `committed` 가 안 비고, 그러면 뉴스 레인의 커밋 지평으로 잘린 5분봉이
+# **가격 레인이 만든 온전한 파일을 덮는다**. `news`·`disclosure` 는 봉이 아니라 대상이
+# 아니고, `etf_inav_minute` 은 봉이지만 소비자가 0이라 뺐다.
+#
+# 셋을 **한 튜플로 묶는다** — 따로 두면 재료만 바꾸고 산출을 안 바꾸는 항목이 생기고,
+# 그건 업종지수 봉이 가격 파일을 덮는다는 뜻이다(위 사고와 같은 모양). 벤더 표기를 같이
+# 두는 이유도 같다: 산출 위치만 갈라 놓고 표기를 안 갈면 두 어휘가 한 파티션에서
+# 구분 불가가 된다.
+ROLLUP_DATASETS = {
+    DATASET_PRICE_MINUTE: (
+        canonical_price_minute_artifact_key, canonical_intraday_5m_key, SOURCE_VENDOR,
+    ),
+    DATASET_SECTOR_INDEX_MINUTE: (
+        canonical_sector_index_minute_artifact_key, canonical_intraday_5m_sector_key,
+        SOURCE_VENDOR_SECTOR,
+    ),
+}
 
 # 파티션 **소유권 경계**. 이 날짜부터는 롤업이 쓰고, 그 전은 벤더 백필이 쓴다.
 # 비겹침은 주석이 아니라 코드로 강제한다 — 과거 --session-date 재실행이
@@ -177,11 +209,16 @@ def maybe_rollup(
     반환은 PUT 한 키. 같은 커밋 세대 집합이면 같은 바이트라 재PUT 은 멱등이다.
 
     여기는 **발화 게이트만** 본다 — 집계·쓰기는 `_rollup_day` 다(EOD 배치와 공유).
+
+    ⚠️ 이 경로는 **가격 전용이다** — dataset 을 인자로 열지 않는다. 근거가 둘이다:
+    ①`universe` 를 필수로 받는데 업종지수 세션엔 universe 가 없다(기대 집합이 config
+    `index_map` 이라 `UNIVERSE_DATASETS` 밖이다) ②이 후크 자체가 **폐기 예정**이다
+    (ALPHA-839 가 EOD 배치로 일원화 중이고 남은 작업에 후크 제거가 있다). 곧 지울
+    경로에 두 번째 dataset 을 얹지 않는다 — 업종지수 5분봉은 배치가 만든다(ALPHA-941).
     """
     planned = plan_session_windows(
         datetime.strptime(session_date, "%Y-%m-%d").date(), universe=universe,
-        # 롤업은 가격 분봉 전용이라(이 모듈이 dataset 을 상수로 리젝트한다) 격자도
-        # 가격 규칙 그대로다.
+        # 이 경로는 가격 전용이라(위 도크스트링) 격자도 가격 규칙 그대로다.
         extended_hours=True,
     )
     bucket = _bucket_of(window_start)
@@ -198,7 +235,7 @@ def maybe_rollup(
     if window_start != members[-1] and members[-1].strftime("%H%M") not in committed:
         return None  # 버킷 미완 — 마지막 분이 아직 관측 전이다
     return _rollup_day(
-        storage, market=market, session_date=session_date,
+        storage, dataset=DATASET_PRICE_MINUTE, market=market, session_date=session_date,
         planned=planned, committed=committed,
     )
 
@@ -207,11 +244,15 @@ def rollup_session(
     storage: Storage,
     ledger,
     *,
+    dataset: str,
     session_id: str,
     market: str,
     session_date: str,
 ) -> str | None:
     """거래일 마감 후 그날 5분봉을 한 번 확정한다 (ALPHA-839 EOD 진입점).
+
+    **dataset 을 받는 유일한 진입점이다**(`ROLLUP_DATASETS` 어휘 안에서만) — 후크는
+    가격 전용이라 안 받는다. 업종지수 5분봉이 배치로만 생기는 것은 그 결과다.
 
     후크와 달리 **버킷 게이트가 없다** — 세션 전체를 대상으로 부르는 자리라 "방금 닫힌
     버킷"이라는 개념이 없고, 닫힌 버킷만 싣는 규칙은 `_rollup_day` 의 커밋 지평이 그대로
@@ -226,6 +267,20 @@ def rollup_session(
     갈리면 배치가 없는 분을 결손으로 세거나 있는 분을 계획 밖으로 버린다. 원장은
     `plan_session` 이 그날 고정한 것이라 갈리지 않는다.
     """
+    # 🔴 `dataset` 과 `session_id` 는 **따로 오는 인자인데 반드시 같은 레인을 가리켜야
+    # 한다**. 어긋나면 조용히 최악이 된다: 업종지수 세션의 계획·커밋을 읽어 같은
+    # HHMM/generation 의 **가격** artifact 를 집계하고 가격 파일을 덮는다(그 반대도).
+    # 산출은 정상적으로 보이고 exit 0 이라 아무도 안 본다.
+    #
+    # CLI 는 session_id 를 dataset 에서 유도하므로(`stable_domain_id`) 지금 어긋날 수
+    # 없다 — 하지만 그건 호출부의 성질이지 이 함수의 계약이 아니다. dataset 축을 연 것이
+    # 이 트랙이므로 그 축이 갈릴 수 있다는 사실도 여기서 막는다(Rule 12 · ALPHA-941).
+    snapshot = ledger.session_snapshot(session_id=session_id)
+    if snapshot is not None and snapshot["dataset"] != dataset:
+        raise ValueError(
+            f"세션과 dataset 이 어긋난다 — session={session_id} 의 dataset 은 "
+            f"{snapshot['dataset']} 인데 {dataset} 로 롤업하려 한다"
+        )
     rows = ledger.session_window_rows(session_id=session_id)
     # 원장 시각은 tz-aware UTC 로 온다. `plan_session_windows` 산출은 KST 라
     # (`_bucket_of`·`strftime("%H%M")` 이 그 축을 전제한다) 여기서 축을 맞춘다 —
@@ -242,7 +297,7 @@ def rollup_session(
         if checksum is not None
     }
     return _rollup_day(
-        storage, market=market, session_date=session_date,
+        storage, dataset=dataset, market=market, session_date=session_date,
         planned=planned, committed=committed,
     )
 
@@ -250,6 +305,7 @@ def rollup_session(
 def _rollup_day(
     storage: Storage,
     *,
+    dataset: str,
     market: str,
     session_date: str,
     planned: Sequence[tuple[datetime, datetime]],
@@ -259,25 +315,37 @@ def _rollup_day(
 
     후크와 EOD 배치가 공유하는 유일한 집계 경로다 — 규칙이 두 벌이 되면 장중 산출과
     마감 산출이 갈리고, 갈린 날은 어느 쪽이 맞는지 물어볼 곳이 없다.
+
+    `dataset` 은 **재료와 산출의 키만** 가른다(`ROLLUP_DATASETS`). 집계 본문은 공유다 —
+    업종지수 1분 record 가 가격과 같은 축이라(`sector_index_collect` 가 `price_collect.
+    record_of` 를 그대로 쓴다: `unit_id`·`ts`·o/h/l/c·`volume`) 갈라 둘 이유가 없고,
+    갈라 두면 두 dataset 의 5분봉이 서로 다른 규칙으로 접혀 같은 뷰에 실린다.
     """
+    artifact_key_of, day_key_of, source_vendor = ROLLUP_DATASETS[dataset]
     if not writer_owns(session_date):  # ISO 문자열이라 사전순 = 시간순
         logger.warning(
-            "5분 롤업 %s: 다른 벤더의 정본 파티션(< %s, 예외 %s) — 덮어쓰지 않는다",
-            session_date, WRITER_SINCE, sorted(WRITER_OWNED_BEFORE_SINCE),
+            "5분 롤업 %s(%s): 다른 벤더의 정본 파티션(< %s, 예외 %s) — 덮어쓰지 않는다",
+            session_date, dataset, WRITER_SINCE, sorted(WRITER_OWNED_BEFORE_SINCE),
         )
         return None
-    day_key = canonical_intraday_5m_key(market, session_date)
+    day_key = day_key_of(market, session_date)
     # ⚠️ 같은 파티션을 **다른 writer 가 다른 파일명으로** 쓸 수 있다(과거 백필이 벤더마다
     # `part-<vendor>-backfill.parquet`, ALPHA-828 토스·ALPHA-856 KIS). 소비자는 파티션을 `*.parquet` 글롭으로
-    # 읽으므로 우리 `part-0` 을 나란히 놓으면 겹치는 (ticker, ts) 가 **두 번 세어진다**
+    # 읽으므로 우리 파일을 나란히 놓으면 겹치는 (ticker, ts) 가 **두 번 세어진다**
     # (거래량 이중계상 → β 패널 오염). 백필은 "쓰는 시점의 part-0" 만 대조하므로 나중에
     # 우리가 쓰면 그 비겹침 보장이 깨진다. 덮어쓸 수도 지울 수도 없으니 사람이 정한다.
-    foreign = [k for k in storage.list_keys(
-        canonical_intraday_5m_prefix(market, session_date)) if k != day_key]
+    #
+    # 🔴 판정은 `k != day_key` 가 **아니라** 롤업 소유 목록이다(ALPHA-941). 롤업은 이
+    # 파티션에 파일을 둘 쓰는데(가격 `part-0` · 업종지수 `part-sector-index`) 자기 것과
+    # 대조하면 **한쪽이 다른 쪽을 남의 파일로 보고 둘 다 영구 정지한다**. 목록을 넓히는
+    # 것이지 가드를 푸는 것이 아니다 — 목록 밖 파일은 여전히 거부다.
+    foreign = [k for k in storage.list_keys(canonical_intraday_5m_prefix(market, session_date))
+               if is_foreign_5m_key(k, market, session_date)]
     if foreign:
         logger.error(
-            "5분 롤업 %s: 파티션에 다른 writer 의 파일이 있다 %s — 나란히 쓰면 행이 두 번 "
-            "세어진다. 산출하지 않는다(소유자를 정한 뒤 재실행)", session_date, foreign,
+            "5분 롤업 %s(%s): 파티션에 롤업 소유가 아닌 파일이 있다 %s — 나란히 쓰면 행이 두 "
+            "번 세어진다. 산출하지 않는다(소유자를 정한 뒤 재실행)",
+            session_date, dataset, foreign,
         )
         return None
 
@@ -295,8 +363,8 @@ def _rollup_day(
         # 맞지만, 여긴 "원장에 커밋 자체가 없다"라 그날에 대해 아는 게 없다. 그걸로
         # 덮으면 다른 writer 가 채워 둔 멀쩡한 파티션을 지운다.
         logger.warning(
-            "5분 롤업 %s: 커밋된 1분 window 가 0건 — 산출 없이 건너뛴다(파일 유지)",
-            session_date,
+            "5분 롤업 %s(%s): 커밋된 1분 window 가 0건 — 산출 없이 건너뛴다(파일 유지)",
+            session_date, dataset,
         )
         return None
     horizon = max(horizons)
@@ -311,8 +379,8 @@ def _rollup_day(
         # 그 경로는 "정정이 그날 봉을 지웠다"는 후크 전제용이라 여기 오면 안 된다 —
         # 닫힌 봉이 없는 것과 봉이 폐기된 것은 다른 사실이다.
         logger.warning(
-            "5분 롤업 %s: 커밋 지평 %s 까지 닫힌 버킷이 0개 — 산출 없이 건너뛴다(파일 유지)",
-            session_date, horizon.strftime("%H%M"),
+            "5분 롤업 %s(%s): 커밋 지평 %s 까지 닫힌 버킷이 0개 — 산출 없이 건너뛴다(파일 유지)",
+            session_date, dataset, horizon.strftime("%H%M"),
         )
         return None
     for start, _ in planned:
@@ -324,7 +392,7 @@ def _rollup_day(
             gaps.append(hhmm)  # 닫힌 버킷의 구멍 — 결손 분(재청구 대상)
             continue
         artifact = storage.get_bytes(
-            canonical_price_minute_artifact_key(market, session_date, hhmm, generation)
+            artifact_key_of(market, session_date, hhmm, generation)
         )
         for line in artifact.decode("utf-8").splitlines():
             record = json.loads(line)
@@ -351,13 +419,13 @@ def _rollup_day(
                 aggregate["volume"] += volume
     if gaps:
         logger.warning(
-            "5분 롤업 %s: 커밋 없는 결손 분 %d개 %s — 있는 봉만 집계(도착 시 재작성)",
-            session_date, len(gaps), gaps[:10],
+            "5분 롤업 %s(%s): 커밋 없는 결손 분 %d개 %s — 있는 봉만 집계(도착 시 재작성)",
+            session_date, dataset, len(gaps), gaps[:10],
         )
     if not aggregates:
         # 크게 남기되 **파일은 그래도 쓴다**(빈 스키마) — 여기서 반환하면 정정이
         # 그날 봉을 전부 지웠을 때 직전 산출본이 남아 폐기된 가격을 계속 서빙한다.
-        logger.error("5분 롤업 %s: 집계할 1분봉 0건 — 빈 파일로 재작성", session_date)
+        logger.error("5분 롤업 %s(%s): 집계할 1분봉 0건 — 빈 파일로 재작성", session_date, dataset)
 
     import pyarrow as pa  # 지연 import — pyproject 의 parquet 규약과 동일
     import pyarrow.parquet as pq
@@ -367,7 +435,7 @@ def _rollup_day(
     volumes = [aggregates[key]["volume"] for key in ordered]
     if any(volume != int(volume) for volume in volumes):
         # 소수 volume 은 우리가 아는 형상이 아니다 — int64 절삭으로 조용히 접지 않는다
-        raise ValueError(f"소수 volume 관측 — session_date={session_date}")
+        raise ValueError(f"소수 volume 관측 — dataset={dataset} session_date={session_date}")
     # ts 는 naive KST(구간 시작), available_at = ts + 5분 — 기존 fmp 파일 실측과 동형
     ts_values = [bucket_start.replace(tzinfo=None) for bucket_start, _ in ordered]
     table = pa.table(
@@ -381,7 +449,7 @@ def _rollup_day(
             "low": pa.array([float(aggregates[k]["low"]) for k in ordered], pa.float64()),
             "close": pa.array([float(aggregates[k]["close"]) for k in ordered], pa.float64()),
             "volume": pa.array([int(v) for v in volumes], pa.int64()),
-            "source_vendor": pa.array([SOURCE_VENDOR] * len(ordered), pa.string()),
+            "source_vendor": pa.array([source_vendor] * len(ordered), pa.string()),
             "available_at": pa.array(
                 [ts + timedelta(minutes=BUCKET_MINUTES) for ts in ts_values],
                 pa.timestamp("us"),
@@ -424,12 +492,21 @@ def unfilled_settled_days(
 
     ⚠️ 파티션 축이 둘이다. "파티션이 통째로 비었나" 하나로 물으면 `_rollup_day` 가 타
     writer 파일 때문에 거부한 날이 영원히 "채워짐"으로 보이고(파생은 영영 안 나오는데
-    조용하다), "우리 `part-0` 이 있나" 하나로 물으면 **후크가 먼저 쓴 뒤 백필이 끼어든
+    조용하다), "우리 파일이 있나" 하나로 물으면 **후크가 먼저 쓴 뒤 백필이 끼어든
     날**이 빠진다(그때 남는 것은 그 시점에 얼어붙은 부분본이다 — 운영에서 더 흔한 순서다).
     그래서 타 writer 파일 유무를 먼저 보고, 없을 때만 우리 산출의 부재를 본다.
     (백필이 소유하는 날 — 2026-07-31 같은 — 은 애초에 후보가 아니라 이 축이 오탐을
     내지 않는다. 소유 여부는 `writer_owns` 하나가 정하므로, 경계 **앞**이라도 예외일은
     후보에 들어온다.)
+
+    🔴 "타 writer" 판정은 `_rollup_day` 의 산출 가드와 **같은 소유 목록**을 써야 한다
+    (ALPHA-941). 자기 dataset 의 파일 하나와 대조하면 같은 파티션에 사는 **롤업의 다른
+    dataset 파일**이 남의 것으로 잡혀, 산출은 멀쩡히 되는데 감시는 그날을 매일
+    `contested`("파생 영구 정지")로 보고한다 — 실제 정지와 구분이 안 되므로 진짜
+    정지가 그 소음에 묻힌다.
+
+    ⚠️ 부재 판정도 **자기 dataset 의 파일**을 짚는다 — "파티션이 통째로 비었나"로 물으면
+    가격은 채워지고 업종지수만 안 나온 날이 초록으로 보인다.
 
     백필 소유일을 빼는 이유도 같다 — 넣으면 영영 안 지워지는 결손 목록이 되고,
     그러면 아무도 안 읽는다.
@@ -452,17 +529,17 @@ def unfilled_settled_days(
     settled = _settled_session_dates(
         ledger, dataset=dataset, source_group=source_group, before=before
     )
+    _, day_key_of, _vendor = ROLLUP_DATASETS[dataset]
     unfilled, contested = [], []
     for trade_date in settled:
         keys = storage.list_keys(canonical_intraday_5m_prefix(market, trade_date))
-        day_key = canonical_intraday_5m_key(market, trade_date)
-        if any(k != day_key for k in keys):
+        if any(is_foreign_5m_key(k, market, trade_date) for k in keys):
             # 타 writer 파일이 있으면 `_rollup_day` 가 그날을 **영구 거부**한다.
-            # ⚠️ 우리 part-0 유무와 **무관하게** 잡아야 한다 — 후크가 09:04 에 part-0 를
-            # 쓴 뒤 백필이 끼어드는 순서가 운영에서 더 흔하고, 그때 남는 것은 그 시점에
-            # 얼어붙은 **부분본**이다. `part-0` 존재만 보면 그 부분본이 완성본처럼 보인다.
+            # ⚠️ 우리 산출 유무와 **무관하게** 잡아야 한다 — 후크가 09:04 에 쓴 뒤
+            # 백필이 끼어드는 순서가 운영에서 더 흔하고, 그때 남는 것은 그 시점에
+            # 얼어붙은 **부분본**이다. 우리 파일 존재만 보면 그게 완성본처럼 보인다.
             contested.append(trade_date)
-        elif not keys:
+        elif day_key_of(market, trade_date) not in keys:
             unfilled.append(trade_date)
     return unfilled, contested, len(settled)
 
@@ -536,7 +613,8 @@ def rollup_session_cli(
     파생까지 통째로 잃는다. 대신 phase 를 출력에 실어 드러낸다.
     🔴 그 대가로 **후크와의 배타성이 코드에 없다** — 20:05(stop) 이전에 부르면 recovery
     레인의 늦은 커밋과 같은 `part-0` 을 두고 경합하고, 배치가 나중에 착지하면 그 커밋이
-    빠진 산출이 남는다. 배타성은 스케줄 시각이 진다(terraform PR).
+    빠진 산출이 남는다. 배타성은 스케줄 시각이 진다(terraform PR). 이 경합은 **가격에만**
+    있다 — 업종지수는 후크가 없어 배치가 유일한 writer 다(ALPHA-941).
     """
     import json
     from datetime import datetime
@@ -545,31 +623,31 @@ def rollup_session_cli(
     from ..lake import make_storage
     from ..ops.trading_calendar import is_trading_day
     from .repository import MinuteLedger
-    from .states import DATASET_PRICE_MINUTE, SOURCE_GROUPS_BY_DATASET
+    from .states import SOURCE_GROUPS_BY_DATASET
 
     if settings.db is None:
         logger.error(
             "db 설정 없음 — rollup-minute-session 은 세션 원장 필수(DATA_PIPELINE_DB__* 주입)"
         )
         return 2
-    # ⚠️ dataset 을 1분 원장 어휘 전체(`MINUTE_DATASETS`)로 열면 안 된다 — `_rollup_day`
-    # 가 읽는 artifact 키는 **가격 분봉 전용**이고(`canonical_price_minute_artifact_key`)
-    # 뉴스 세션도 390 window 를 계획하므로 `committed` 가 안 빈다. 그러면 뉴스 레인의
-    # 커밋 지평으로 잘린 5분봉이 **가격 레인이 만든 온전한 파일을 덮는다**. `eod.py` 가
-    # orphan 스캔에서 같은 이유로 같은 가드를 둔다(`_PRICE_DATASET`).
-    if dataset != DATASET_PRICE_MINUTE:
+    # ⚠️ dataset 을 1분 원장 어휘 전체(`MINUTE_DATASETS`)로 열면 안 된다 — 뉴스 세션도
+    # 390 window 를 계획하므로 `committed` 가 안 비고, 그러면 뉴스 레인의 커밋 지평으로
+    # 잘린 5분봉이 **가격 레인이 만든 온전한 파일을 덮는다**. `eod.py` 가 orphan 스캔에서
+    # 같은 이유로 같은 가드를 둔다(`_PRICE_DATASET`).
+    # 목록이 둘로 는 것은 그 가드를 푼 것이 아니다(ALPHA-941) — 봉이고, 소비자가 있고,
+    # 자기 산출 파일을 따로 갖는 dataset 만 `ROLLUP_DATASETS` 에 있다.
+    if dataset not in ROLLUP_DATASETS:
         logger.error(
-            "--dataset 은 %s 여야 한다: %s — 5분 파생은 가격 분봉 canonical 전용 경로다",
-            DATASET_PRICE_MINUTE, dataset,
+            "--dataset 이 5분 롤업 어휘 밖이다: %s (아는 값 %s) — 5분 파생은 봉 canonical "
+            "전용 경로다", dataset, sorted(ROLLUP_DATASETS),
         )
         return 2
-    if source_group not in SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE]:
+    if source_group not in SOURCE_GROUPS_BY_DATASET[dataset]:
         # 오타는 없는 session_id 를 유도해 "세션 없음"으로 보인다 — 지목이 틀린 것과
         # 그날이 안 돈 것은 처방이 다르다.
         logger.error(
             "--source-group 이 %s 의 어휘 밖이다: %s (아는 값 %s)",
-            DATASET_PRICE_MINUTE, source_group,
-            sorted(SOURCE_GROUPS_BY_DATASET[DATASET_PRICE_MINUTE]),
+            dataset, source_group, sorted(SOURCE_GROUPS_BY_DATASET[dataset]),
         )
         return 2
     if session_date is None:
@@ -609,7 +687,7 @@ def rollup_session_cli(
                 )
             else:
                 result["key"] = rollup_session(
-                    storage, ledger, session_id=session_id,
+                    storage, ledger, dataset=dataset, session_id=session_id,
                     market=_MARKET, session_date=day.isoformat(),
                 )
         except Exception:

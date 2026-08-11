@@ -15,6 +15,7 @@ import re
 import numpy as np
 import pytest
 
+from edge_analysis.statics import layers
 from edge_analysis.statics.layers import MARKET_CODE, Rollup, decompose
 
 DAYS = [dt.date(2026, 1, 1) + dt.timedelta(d) for d in range(90)]
@@ -273,3 +274,33 @@ def test_intraday_mode_names_exclude_units_the_ledger_dropped():
 
 
 # ── 광역 ETF 2층 (ALPHA-871) ──────────────────────────────────────────────
+
+
+def test_전일_표본은_가격_행에서만_고른다():
+    """🔴 업종지수만 착지한 날이 전일로 뽑히면 β 표본이 0행이 되어 β=1 로 폴백한다.
+
+    `bars_5m` 에는 1분 롤업의 업종지수 파생이 섞여 산다(ALPHA-941, ticker 가 4자리 KRX
+    업종코드). 두 롤업은 각자 실행이라 "지수만 돈 날"이 실제로 생기는데, 그날이
+    `max(trade_date)` 로 뽑히면 바깥 심볼 필터(6자리 ETF·시장)가 0행을 내고 시변 β 가
+    조용히 1 로 접힌다 — 업종지수 도입 **전에는 그 실행이 D-2 가격 파티션을 골랐다**.
+
+    `FakeLake` 는 SQL 을 안 보고 고정 응답을 주므로 거동으로는 못 잡는다. 질의 형상을
+    고정하되 **`max` 서브쿼리 안에** 제한이 있는지까지 본다 — 바깥 WHERE 에만 있으면
+    날짜 선택이 여전히 오염된다.
+    """
+    seen: list[str] = []
+
+    class RecordingLake:
+        exists: dict = {}
+
+        def sql(self, q: str):
+            seen.append(q)
+            return []
+
+    layers._market_beta(RecordingLake(), "T", _day(), {"T": 1, MARKET_CODE: 1})
+    probe = next(q for q in seen if "FROM bars_5m" in q)
+    head = "SELECT max(trade_date)"           # 이 자체의 괄호를 지나서 자른다
+    inner = probe[probe.index(head) + len(head):]
+    inner = inner[:inner.index(")")]
+    assert layers.SECTOR_ROLLUP_VENDOR in inner, (
+        f"전일 선택이 업종지수를 안 거른다 — max 서브쿼리: {inner!r}")
