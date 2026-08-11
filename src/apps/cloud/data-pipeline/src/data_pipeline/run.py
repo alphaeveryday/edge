@@ -4,7 +4,7 @@
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
-         |load-assertions|assemble-events}
+         |load-assertions|assemble-events|build-minute-universe}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--limit N] [--window-days N]
         [--interval-sec N]
@@ -81,6 +81,7 @@ from .sources import (
 from .steps import (
     assemble_events,
     backfill_disclosure,
+    build_minute_universe,
     enrich_corp_code,
     ingest_price_raw,
     load_assertions,
@@ -224,6 +225,11 @@ def main(argv: list[str] | None = None) -> int:
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
                  "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
+                 # 1분 유니버스 재생성(ALPHA-953): canonical KR holdings → `--universe`
+                 # 가 가리키는 정본 객체 갱신. storage(canonical 읽기) 만 필요하고
+                 # 수집창·원장 DB 와 무관하다. ⚠️ **세션 계획 전에만** 돌려라 — 장중
+                 # 교체는 그날 분봉을 영구 결손시킨다(스텝 모듈 도크스트링).
+                 "build-minute-universe",
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
@@ -340,7 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--universe", default=None,
                         help="plan-minute-session·price-worker: 가격 세션의 universe JSON "
                              "경로(둘 다 필수·**같은 파일**). window 범위와 universe_hash 가 "
-                             "여기서 나온다 — 갈리면 Worker 가 처리를 거부한다")
+                             "여기서 나온다 — 갈리면 Worker 가 처리를 거부한다. "
+                             "build-minute-universe 에선 **쓸 자리**다(필수) — 그 소비자들이 "
+                             "읽는 URI 를 그대로 준다")
     parser.add_argument("--session-id", default=None,
                         help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
                              "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
@@ -447,17 +455,33 @@ def main(argv: list[str] | None = None) -> int:
             "--universe 는 rollup-minute-session 에서 쓰지 않는다 — 계획·커밋은 원장에서 "
             "읽는다(무시되므로 거부)"
         )
-    if args.step not in ("plan-minute-session", "price-worker", "price-consumer",
-                         "start-minute-session", "news-worker",
-                         "rollup-minute-session", "inav-worker",
-                         "disclosure-worker", "sector-index-worker") and (
+    if args.step == "build-minute-universe":
+        # 생산자와 소비자가 **같은 객체**를 봐야 한다 — 기본값을 여기 두면 terraform
+        # `var.minute_universe_uri` 가 옮겨졌을 때 양쪽이 exit 0 으로 갈린다(생산자는
+        # 옛 자리에 쓰고 소비자는 새 자리를 읽는다). 그래서 필수 인자다.
+        if not args.universe:
+            raise SystemExit(
+                "build-minute-universe 는 --universe 가 필수다 — 소비자"
+                "(plan-minute-session·price-worker·price-consumer·inav-worker)가 받는 "
+                "그 URI 를 그대로 줘라(terraform local.minute_universe_uri)"
+            )
+        if args.session_date is not None:
+            raise SystemExit(
+                "--session-date 는 build-minute-universe 에서 쓰지 않는다 — 대상은 "
+                "canonical holdings 의 ETF 별 최신 스냅샷이라 날짜 인자가 없다"
+                "(무시되므로 거부)"
+            )
+    elif args.step not in ("plan-minute-session", "price-worker", "price-consumer",
+                           "start-minute-session", "news-worker",
+                           "rollup-minute-session", "inav-worker",
+                           "disclosure-worker", "sector-index-worker") and (
         args.session_date is not None or args.universe is not None
     ):
         raise SystemExit(
             "--session-date·--universe 는 plan-minute-session·price-worker·"
             "price-consumer·start-minute-session·news-worker·rollup-minute-session·"
-            "inav-worker·disclosure-worker·sector-index-worker 에서만 쓴다 — "
-            f"이 스텝({args.step})에서는 무시되므로 거부한다"
+            "inav-worker·disclosure-worker·sector-index-worker·build-minute-universe "
+            f"에서만 쓴다 — 이 스텝({args.step})에서는 무시되므로 거부한다"
         )
 
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
@@ -554,6 +578,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
+    # 유니버스 재생성은 canonical 만 읽어 config 객체를 쓰는 스텝이라 수집 창·벤더가 없다.
+    # run_id 는 백업 객체 접미사로만 쓴다(`.bak-<run_id>`) — 같은 런의 산출임이 드러난다.
+    if args.step == "build-minute-universe":
+        return build_minute_universe.run(storage, settings, args.universe, run_id)
     # 정제(normalize-price)는 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 먼저 분기한다.
     # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-price":

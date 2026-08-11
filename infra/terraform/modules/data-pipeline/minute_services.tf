@@ -20,8 +20,11 @@ locals {
   minute_all_destinations = concat(local.minute_job_destinations, ["price-explanation-realtime"])
 
   # universe 정본 객체 — planner·worker·consumer 가 **같은 URI** 를 봐야 세 표면의
-  # universe(version·hash)가 한 곳에서 나온다. ⚠️ 이 객체의 생산 파이프라인은 아직
-  # 없다(ALPHA-711 범위 밖) — 객체가 없으면 worker/consumer 는 기동 시 fail-loud 다.
+  # universe(version·hash)가 한 곳에서 나온다. 객체가 없으면 worker/consumer 는 기동 시
+  # fail-loud 다.
+  # 생산자는 `build-minute-universe` 스텝이고(ALPHA-953) **이 값을 그대로 `--universe`
+  # 로 받는다** — 그래서 이 변수를 옮겨도 생산자와 소비자가 갈리지 않는다. ⚠️ 다만 그
+  # 스텝의 스케줄 배선은 아직 없다(후속) — 지금은 수동 실행이다.
   minute_universe_uri = (
     var.minute_universe_uri != "" ? var.minute_universe_uri
     : "s3://${var.lake_bucket_name}/config/minute/universe.json"

@@ -200,11 +200,14 @@
 > 20:05 하드스톱이 CloudWatch 를 안 보는 유일한 천장이었다.
 > terraform 공용 목록에 이름이 아직 남아 있으나 코드가 늘 빼내므로 잉여다 — 제거는 후속
 > 정합성 정리(PR C) 소관이고, 남아 있어도 동작은 같다.
-> ⚠️ universe 정본 객체(config/minute/universe.json)는 **생성 스크립트까지만 있다**
-> (ALPHA-735 — `scripts/build_minute_universe.py` 가 canonical KR holdings 와 config
-> `[minute_universe].sector_etf_ids` 에서 만든다. 업로드는 사람이 확인 후 한다: universe 는
-> 세션 identity 축이라 갈아끼우는 순간 그날 계획이 바뀐다). 객체 없이 스케일업하면
-> worker·consumer 는 기동 거부(fail-loud)다.
+> ⚠️ universe 정본 객체(config/minute/universe.json)는 **`build-minute-universe` 스텝**이
+> 만들고 반영한다(ALPHA-735·953 — canonical KR holdings 와 config
+> `[minute_universe].sector_etf_ids` 에서 파생. 쓸 자리는 소비자와 같은 `--universe` URI 를
+> 인자로 받는다). 무변경이면 no-op 이고, 교체할 땐 직전 객체를 `.bak-<run_id>` 로 남긴다.
+> **거래일 07:30 KST 이후엔 스스로 거부한다** — 세션이 이미 그 유니버스로 계획됐을 수 있고,
+> 그러면 원장의 (universe_version, universe_hash) 는 옛 값에 고정된 채 객체만 바뀌어
+> worker·consumer 가 매 틱 blocked 로 돈다. 아직 스케줄 배선은 없어 수동 실행이다(후속).
+> 객체 없이 스케일업하면 worker·consumer 는 기동 거부(fail-loud)다.
 > ⚠️ **수집 축과 판정 축은 다르다**(ALPHA-842). `unit_ids`(수집) = 판정 ETF + 구성종목 +
 > **참조 계열**(`sector_etf_ids`)이고, 트리거 판정은 `etf_ids` 만 받는다 — 층 분해의 섹터
 > 후보처럼 봉만 필요한 계열을 `etf_ids` 에 얹으면 발화 대상·전일 종가 대조 대상이 된다.
@@ -1408,18 +1411,30 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 조용히 어긋난다. 여기에 config `[minute_universe].sector_etf_ids`(층 분해의 섹터 후보
 # ETF)를 **참조 계열 축**(`Universe.sector_etf_ids`)으로 얹는다 — 봉만 받고 트리거 판정은
 # 안 받는 계열이다(`etf_ids` 는 price-consumer 의 판정 집합이라 거기 얹으면 발화 대상이 된다).
-# ⚠️ **업로드는 하지 않는다** — universe 는 세션 identity(universe_hash)
-# 축이라, 확인 후 사람이 반영한다(그날 계획이 바뀐다). `--out` 없으면 stdout.
+# 반영까지 하는 것은 **스텝**이다(ALPHA-953). 쓸 자리는 소비자와 같은 `--universe` URI 를
+# 인자로 받는다 — 상수로 박으면 var.minute_universe_uri 가 옮겨졌을 때 생산자와 소비자가
+# 둘 다 exit 0 으로 갈린다. 무변경이면 no-op(PUT 자체를 안 한다), 교체하면 직전 객체를
+# `<uri>.bak-<run_id>` 로 남긴다. 아직 스케줄 배선은 없다 — 수동 실행이다(후속).
+AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
+DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
+  uv run --package data-pipeline python -m data_pipeline.run build-minute-universe \
+    --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
+# ⚠️ **거래일 07:30 KST(REBUILD_CUTOFF_KST) 이후엔 스텝이 스스로 거부한다** — 세션이 이미
+# 계획된 뒤라면 원장의 (universe_version, universe_hash)는 옛 값에 고정된 채 객체만 바뀌어,
+# 재기동된 worker 가 매 틱 blocked 로 돌면서도 안 죽는다. 장전 체인은 이 시각 전에 끝나야
+# 한다(그게 계약이고 크론이 그것을 지킨다). 비거래일엔 흔들 계획이 없어 시각을 안 본다.
 # ⚠️ **새 축을 담은 객체는 이미지 배포 뒤에 올린다.** Universe 는 extra="forbid" 라
 # 옛 이미지가 읽으면 ValidationError 이고, planner 가 exit 2 면 스케일업을 안 해 그날
 # 레인이 안 뜬다(그 실패는 관측되지 않는다 — 위 "exit≠0 은 관측되지 않는다" 참고).
 # 반대 순서는 안전하다(축 기본값이 ()이라 옛 객체는 그대로 읽힌다).
-# ⚠️ **세션이 ACTIVE 인 장중에는 갈지 않는다** — 재계획은 UniverseConflictError 로
-# 막히고, 재기동된 worker 는 원장과 갈려 매 틱 blocked 로 돌면서도 안 죽는다.
+#
+# 파일로만 뽑아 눈으로 대조할 땐 스크립트를 쓴다(업로드하지 않는다. `--out` 없으면 stdout).
+# 마감 시각을 넘겨 오늘 안에 꼭 갈아야 할 때도 이 경로다 — 그때는 ①기존 객체를 지우지 말고
+# `.bak-수동` 으로 옮기고 ②백업의 extended_hours_ids 를 새 객체에 손으로 옮겨 담고
+# ③원장의 universe_version 과 universe_hash 를 **둘 다** 고치고 ④소비자를 재기동한다.
 AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
   uv run python apps/cloud/data-pipeline/scripts/build_minute_universe.py --out /tmp/universe.json
-aws s3 cp /tmp/universe.json s3://edge-dev-pipeline-lake/config/minute/universe.json
 # 세션 drain(1분 파이프라인, ALPHA-698) — phase 를 DRAINING 으로 옮긴다(EOD SFN 이 부를
 # 자리). Worker 가 ack 하면 DRAINED 가 되고 그다음이 qc-minute-session 이다.
 # ⚠️ **이미 drain 이후인 것도 exit 0** 이다 — DB 커밋 뒤 출력 전에 죽은 실행의 재시도가
