@@ -39,6 +39,7 @@ COPIES = [
     # 브랜드 로고 — 명명은 배경 기준(black = 어두운 배경용 흰 로고).
     (BRAND / "edge-logo-black.svg", IMAGES / "edge-logo-black.svg"),
     (BRAND / "edge-logo-white.svg", IMAGES / "edge-logo-white.svg"),
+    (BRAND / "edge-favicon.svg", IMAGES / "edge-favicon.svg"),
 ]
 
 # reference/ 로 복사되는 repo 경로들 — 이 안을 가리키는 링크는 그대로 두어도 해결된다.

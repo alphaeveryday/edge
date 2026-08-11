@@ -12,6 +12,7 @@ theme:
   # (edge-logo-black.svg = 어두운 배경용 흰 로고 — 명명은 배경 기준)
   # 파일은 커밋되지 않는다 — 캐노니컬(src/libs/ui-kit/src/assets)에서 sync 가 복사.
   logo: assets/images/edge-logo-black.svg
+  favicon: assets/images/edge-favicon.svg
   features:
     - navigation.tabs
     - navigation.sections
