@@ -612,7 +612,7 @@ export const RULES: Rule[] = [
     /* ⚠️ 이 문장은 **`canRun` 이 거짓인 모든 경우에 참**이어야 한다 — `evaluate` 는 못 돈 규칙의
      * `note` 를 안 부르므로(`R.note` 는 돈 규칙 전용) 아래 세 갈래 사유는 그때 안 보인다.
      * '표본이 없다'로만 적었더니 전 산출이 `base:0`(관측된 0)인 응답에서 거짓말이 됐다. */
-    dep: '비율 판정에 쓸 기준이 하나도 없다(표본 부재이거나 평소가 0이라 나눗셈이 안 선다)',
+    dep: '편차를 판정할 수 있는 산출이 하나도 없다(기준·오늘 값 중 하나가 셈으로 성립하지 않는다)',
     source: 'DB_LEDGER',
     /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. `run()` 과 같은
      * 술어를 쓴다 — base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */
@@ -631,7 +631,11 @@ export const RULES: Rule[] = [
        * 안 생긴다 — 빠진 산출은 반드시 어느 사유엔가 담긴다(`reason` 이 전건을 덮는다). */
       const reason = (o: OutputFact): string => {
         const b = o.base;
-        if (b == null || !Number.isFinite(b)) return '기준 표본 없음';
+        if (b == null) return '기준 표본 없음';
+        /* 값이 왔는데 수가 아닌 것은 **표본 부재가 아니라 계약 손상**이다(`base: "100"` 같은 것).
+         * 응답은 런타임 검증을 안 거치고 오므로 타입 선언이 못 막는다 — 접으면 writer 결함이
+         * "아직 표본이 없구나"로 읽혀 아무도 안 고친다. */
+        if (!Number.isFinite(b)) return `기준이 수가 아니다(${typeof b}) — 표본 부재가 아니라 계약 손상`;
         if (b === 0) return '평소가 0이라 비율이 안 선다(관측된 0이지 미관측이 아니다)';
         if ((b as number) < 0) return '기준이 음수라 셈으로 성립하지 않는다';
         if (!Number.isFinite(o.today)) return '오늘 값이 수가 아니다';

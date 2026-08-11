@@ -562,7 +562,44 @@ test('R13 note — 관측된 0 과 표본 부재를 같은 사유로 접지 않�
     reasonOf('표본없음'),
     '관측된 0 과 표본 부재가 같은 사유로 접혔다',
   );
+  /* "서로 다르기만" 재면 한쪽 문장을 **다른 거짓 문장**으로 바꿔도 통과한다(확인함) —
+   * 사유가 실제로 무엇을 말하는지까지 재야 그 변이가 죽는다. */
   assert.match(reasonOf('평소0'), /관측된 0/);
+  assert.match(reasonOf('표본없음'), /표본 없음/);
+});
+
+test('R13 못 돎 사유 — 기준은 멀쩡한데 오늘 값만 손상된 경우를 "기준이 없다"고 말하지 않는다', () => {
+  /* `canRun` 이 거짓이면 평가기는 `note` 를 **안 부르고** `dep` 을 사유로 낸다. 그래서 `dep` 은
+   * canRun=false 의 **모든 형상에서 참**이어야 하는데, 원인 하나(표본 부재·평소 0)만 적어 뒀더니
+   * 오늘 값만 깨진 응답에서 거짓말이 됐다 — 기준 100 이 멀쩡한데 "기준이 하나도 없다"고 한다.
+   * 문구를 되돌리는 변이가 안 잡히던 자리라 여기서 못 박는다. */
+  const f = emptyFacts();
+  f.outputs = [{ id: 'only-today-broken', label: '오늘만 손상', today: -1, base: 100, unit: '건' }];
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
+  assert.equal(rr.evaluated, false);
+  assert.equal(rr.notRun, 'axis');
+  assert.doesNotMatch(
+    rr.note ?? '',
+    /표본|기준이 하나도 없다|평소가 0/,
+    `기준이 멀쩡한데 기준 탓으로 적었다: ${rr.note}`,
+  );
+});
+
+test('R13 note — 수가 아닌 기준은 "표본 부재"가 아니라 계약 손상이다', () => {
+  /* 응답은 런타임 검증을 안 거치고 오므로 `base: "100"`(문자열) 같은 값이 실제로 닿는다.
+   * `!Number.isFinite` 하나로 접으면 **writer 결함이 "아직 표본이 없구나"로 읽혀** 아무도 안
+   * 고친다 — 미관측과 손상은 다른 사실이다(이 모듈이 가르려는 축 그 자체). */
+  const f = emptyFacts();
+  f.outputs = [
+    { id: 'broken', label: '깨진기준', today: 5, base: '100' as unknown as number, unit: '건' },
+    { id: 'nosample', label: '표본없음', today: 5, base: null, unit: '건' },
+    { id: 'real', label: '진짜', today: 50, base: 100, unit: '건' },
+  ];
+  const note = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.note ?? '';
+  const reasonOf = (label: string) => note.split(' · ').find((seg) => seg.includes(label)) ?? '';
+  assert.match(reasonOf('깨진기준'), /계약 손상/, '손상을 표본 부재로 접었다');
+  assert.match(reasonOf('표본없음'), /표본 없음/);
+  assert.notEqual(reasonOf('깨진기준'), reasonOf('표본없음'));
 });
 
 test('R06 경계 — failed_records 가 셈으로 성립 안 하면 "0" 도 "없다" 도 아니다', () => {
