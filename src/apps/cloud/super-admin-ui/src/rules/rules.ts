@@ -103,11 +103,12 @@ const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && (o.base a
  * R08 이 **실제로 신선도를 가릴 수 있는** 데이터셋인가 — `canRun`·`run()` 이 같은 술어를 본다.
  *
  * 창 계약은 as-of 비교 대상이 아니고, 기대일이 없으면 비교 자체가 성립하지 않는다.
- * (⚠️ `window_contract` 는 실 응답에 없다 — `DatasetFact` 의 그 필드 주석을 보라.)
+ *
+ * ⚠️ `window_contract` 는 실 응답에 없어 이 배제항은 실 API 에서 무력하다 — 다만 원장에 창 계약이
+ * 하나도 없어(계약은 `ETF_HOLDINGS_KRX_EOD` 하나, as-of 계약이다) 지금은 무해하다. 첫 항의
+ * `contract` 가 먼저 걸러 주기 때문이기도 하다. `DatasetFact.window_contract` 주석을 보라.
  */
 const freshnessJudgeable = (d: DatasetFact): boolean =>
-  /* 🔴 실 응답에 `window_contract` 가 없다 — 이 배제가 통째로 무력해져 창 계약 데이터셋이
-   * 거짓 STALE 로 선다(`DatasetFact.window_contract` 주석 참조). */
   !!d.contract && !!d.actual_as_of && !!d.expected_as_of && !d.window_contract;
 
 const judgeable = (o: OutputFact): boolean =>

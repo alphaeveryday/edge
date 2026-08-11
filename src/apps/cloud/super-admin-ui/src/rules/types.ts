@@ -115,10 +115,17 @@ export interface DatasetFact {
   /**
    * 창 계약(as-of 가 아니라 기간으로 신선도를 보는 데이터셋)인가 — R08 이 이걸로 제외한다.
    *
-   * 🔴 **실 응답에 이 필드가 없다**(계약·`DatasetDto`·서버 `DatasetResponse` 어디에도 없다).
+   * ⚠️ **실 응답에 이 필드가 없다**(계약·`DatasetDto`·서버 `DatasetResponse` 어디에도 없다).
    * 스냅샷에서 `true` 로 제외되던 데이터셋이 실 API 를 거치면 `undefined` 가 돼 일반 as-of 계약으로
-   * 판정되고, `actual < expected` 면 **거짓 STALE P1** 이 난다. 어댑터가 이 축을 채우거나 서버가
-   * 실어 줘야 하고 둘 다 아직 없다 — 화면 조각이 붙기 전에 닫아야 할 구멍이다.
+   * 판정되고, `actual < expected` 면 거짓 STALE P1 이 날 자리다.
+   *
+   * **다만 지금은 발화할 수 없다** — 원장에 창 계약이 없다. 계약을 다는 카탈로그 항목은
+   * `ETF_HOLDINGS_COLLECTION_KRX` 하나뿐이고 그 계약은 as-of 계약이며, `Cadence`·
+   * `ExpectedAsOfRule` 어느 enum 에도 창 계약을 표현할 값이 없다(`ops/contracts.py`).
+   * 아래 술어가 `contract` 를 먼저 보므로 계약 없는 데이터셋은 이 필드와 무관하게 이미 빠진다.
+   * 이 구멍은 창 계약 성격의 계약이 레지스트리에 들어오는 날 열린다 — 화면 착지의 선행 조건이
+   * 아니다. 스냅샷의 `stock_news`(`window_contract: true`)는 그 미래를 그린 픽스처지 원장에
+   * 있는 계약이 아니다.
    */
   window_contract?: boolean;
   expected_as_of?: string | null;
