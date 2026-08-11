@@ -20,7 +20,7 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "루트 EBS 크기(GB) — compose 의 PG/Redis named volume 이 여기 얹힌다"
+  description = "루트 EBS 크기(GB) — compose 의 PG named volume 이 여기 얹힌다"
   type        = number
   default     = 50
 }

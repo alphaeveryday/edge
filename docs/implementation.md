@@ -15,9 +15,9 @@
 
 > 결정 배경: [ADR-0017](adr/0017-demo-topology-compose.md)
 
-- 가상 온프렘 = **별도 EC2 1대 + Docker Compose**로 온프렘 스택 전체 구동 (Publication API, Screening Worker, Tenant Console, Sync Agent, Intake, PostgreSQL, Redis).
+- 가상 온프렘 = **별도 EC2 1대 + Docker Compose**로 온프렘 스택 전체 구동 (Publication API, Screening Worker, Tenant Console, Sync Agent, Intake, PostgreSQL).
 - Compose 는 **데모 시연을 위한 구동 방식 선택**이다 — 실 증권사 납품의 패키징·설치 형태는 이와 별개(미확정)이며, "Compose 파일 하나로 설치"를 제품 딜리버리 계약으로 읽지 않는다.
-- On-Prem 스택: **PostgreSQL + Redis 유지**.
+- On-Prem 스택: **PostgreSQL 유지** — 조회 캐시는 별도 캐시 서버가 아니라 publication-api 인프로세스 Caffeine 이다(ALPHA-433, Redis 반입 보류 — [ADR-0051](adr/0051-byoc-deployment-topology.md) 결정 6).
 - Cloud 측은 기존 AWS 구조(ECS, Step Functions, RDS, 3-layer subnet) 유지하되 serving cluster 구성을 신규 컴포넌트에 맞게 개정.
 
 ## 3. Compliance Rule 배포 경로
