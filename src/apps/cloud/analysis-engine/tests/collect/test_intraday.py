@@ -365,6 +365,65 @@ def test_심볼_파일이_있으면_그것을_유니버스로_쓴다(con, tmp_pa
     assert intraday.load_symbols(con, MARKET, path=f.as_posix()) == ["005930.KS", "000660.KS"]
 
 
+def test_업종지수_파생은_수집_유니버스에_안_섞인다(con, tmp_path):
+    """🔴 같은 파티션에 사는 **다른 어휘**를 FMP 심볼로 요청하면 안 된다 (ALPHA-941).
+
+    파이프라인 1분 롤업이 업종지수 5분봉을 같은 파티션에 따로 쓴다. 그 `source_symbol`
+    은 4자리 KRX 업종코드라 FMP 종목이 아니다 — 거르지 않으면 매 백필이 그 45개를
+    헛되이 요청하고, 그 문자열이 다른 상품으로 해소되면 업종지수 행과 **같은 ticker 로
+    겹치는** canonical 행이 생긴다(이 파티션은 파일 합집합으로 읽힌다).
+
+    같은 파티션·같은 거래일에 둘을 나란히 둬야 이 필터가 하중을 받는다 — 날짜를 가르면
+    `max(trade_date)` 가 혼자 걸러 필터를 지워도 초록이다.
+    """
+    intraday.stage_rows(con, _day_rows(SYMBOL, "2026-07-30"))
+    dest = tmp_path / "intraday_5m"
+    intraday.publish_canonical(con, MARKET, dest=dest.as_posix())
+    part = dest / "market=KR" / "trade_date=2026-07-30"
+    con.execute(f"""
+        COPY (SELECT '1005' AS ticker, '1005' AS source_symbol,
+                     TIMESTAMP '2026-07-30 09:00:00' AS ts, 2000.0 AS open,
+                     2010.0 AS high, 1990.0 AS low, 2005.0 AS close, 0::BIGINT AS volume,
+                     '{intraday.SECTOR_ROLLUP_VENDOR}' AS source_vendor,
+                     TIMESTAMP '2026-07-30 09:05:00' AS available_at)
+        TO '{(part / "part-sector-index.parquet").as_posix()}' (FORMAT parquet)""")
+
+    syms = intraday.load_symbols(con, MARKET, base=dest.as_posix())
+    assert syms == [SYMBOL], f"업종코드가 수집 유니버스에 섞였다: {syms}"
+
+
+def test_업종지수만_있는_최신일이_유니버스를_비우지_않는다(con, tmp_path):
+    """🔴 필터를 `max(trade_date)` **밖에만** 걸면 최신일이 통째로 날아간다 (ALPHA-941).
+
+    두 롤업은 각자 실행이라 "업종지수는 됐고 가격은 안 된 날"이 정상 운영에서 난다
+    (가격 파티션을 낯선 writer 가 물면 가격만 영구 거부된다). 그날이 최신이면 max 가
+    그날을 집고 바깥 필터가 그 행을 전부 지워 **빈 결과 → PipelineError** 다 —
+    직전 거래일에 멀쩡한 심볼이 있는데도 수집이 시작조차 못 한다.
+    """
+    intraday.stage_rows(con, _day_rows(SYMBOL, "2026-07-30"))
+    dest = tmp_path / "intraday_5m"
+    intraday.publish_canonical(con, MARKET, dest=dest.as_posix())
+    later = dest / "market=KR" / "trade_date=2026-07-31"     # 가격 없음, 지수만
+    later.mkdir(parents=True)
+    con.execute(f"""
+        COPY (SELECT '1005' AS ticker, '1005' AS source_symbol,
+                     TIMESTAMP '2026-07-31 09:00:00' AS ts, 2000.0 AS open,
+                     2010.0 AS high, 1990.0 AS low, 2005.0 AS close, 0::BIGINT AS volume,
+                     '{intraday.SECTOR_ROLLUP_VENDOR}' AS source_vendor,
+                     TIMESTAMP '2026-07-31 09:05:00' AS available_at)
+        TO '{(later / "part-sector-index.parquet").as_posix()}' (FORMAT parquet)""")
+
+    assert intraday.load_symbols(con, MARKET, base=dest.as_posix()) == [SYMBOL]
+
+
+def test_업종지수_벤더_표기가_파이프라인과_같다():
+    """두 서비스가 값을 **베껴** 쓴다(별 배포 단위라 import 못 한다) — 갈리면 위 필터가
+    조용히 아무것도 안 거른다. 드리프트를 여기서 못박는다."""
+    from data_pipeline.minute.rollup import SOURCE_VENDOR_SECTOR
+
+    assert intraday.SECTOR_ROLLUP_VENDOR == SOURCE_VENDOR_SECTOR
+
+
 def test_기대_봉_개수는_정규장_창에서_유도된다():
     assert intraday.expected_bars("US") == 78        # 09:30~15:55 실측과 일치
     assert intraday.expected_bars("KR") == 79        # 09:00~15:30(종가 단일가 포함)
