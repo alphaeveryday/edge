@@ -10,9 +10,11 @@ FMP 응답은 `_FakeFmp` 로 흉내낸다. 흉내내는 대상은 응답의 내�
 """
 from __future__ import annotations
 
+import re
 import urllib.error
 import urllib.request
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -417,11 +419,25 @@ def test_업종지수만_있는_최신일이_유니버스를_비우지_않는다
 
 
 def test_업종지수_벤더_표기가_파이프라인과_같다():
-    """두 서비스가 값을 **베껴** 쓴다(별 배포 단위라 import 못 한다) — 갈리면 위 필터가
-    조용히 아무것도 안 거른다. 드리프트를 여기서 못박는다."""
-    from data_pipeline.minute.rollup import SOURCE_VENDOR_SECTOR
+    """두 서비스가 값을 **베껴** 쓴다 — 갈리면 위 필터가 조용히 아무것도 안 거른다.
 
-    assert intraday.SECTOR_ROLLUP_VENDOR == SOURCE_VENDOR_SECTOR
+    ⚠️ `import data_pipeline` 로 묶을 수 **없다**. CI 는 앱마다
+    `uv sync --locked --package <app>` 으로 그 앱 의존만 깔고(교차 의존 누수를 막는 것이
+    그 워크플로의 의도다), analysis-engine 의존에 data-pipeline 은 없다 — import 하면
+    단언에 닿기 전에 `ModuleNotFoundError` 로 죽는다(실측).
+
+    그래서 **소스를 텍스트로 읽어** 대조한다. 파일이나 상수를 못 찾으면 조용히
+    건너뛰지 않고 실패한다 — 경로가 옮겨졌을 때 가드가 초록인 채로 죽는 것이 이
+    테스트가 막으려는 것보다 나쁘다(Rule 12). `pytest.skip` 을 쓰지 않는 이유다.
+    """
+    src = (Path(__file__).resolve().parents[3]
+           / "data-pipeline/src/data_pipeline/minute/rollup.py")
+    assert src.is_file(), f"파이프라인 롤업 소스를 못 찾았다 — 경로가 옮겨졌나: {src}"
+    found = re.findall(r'^SOURCE_VENDOR_SECTOR = "([^"]+)"$',
+                       src.read_text(encoding="utf-8"), re.M)
+    assert found == [intraday.SECTOR_ROLLUP_VENDOR], (
+        f"레인 표기가 갈렸다 — 파이프라인 {found} vs 소비자 "
+        f"{intraday.SECTOR_ROLLUP_VENDOR!r}")
 
 
 def test_기대_봉_개수는_정규장_창에서_유도된다():
