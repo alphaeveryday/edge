@@ -38,12 +38,6 @@ variable "db_username" {
   type        = string
 }
 
-variable "query_role" {
-  description = "접속 직후 내려앉을 DB 롤(컨테이너 EDGE_QUERY_ROLE → 접속 파라미터 role). 마스터 시크릿 접속에서 SELECT 가드를 통과하는 부작용 함수를 서버 권한으로 막는 층 — 접속 주체가 이 롤의 멤버여야 한다(V202608111500)."
-  type        = string
-  default     = "agent_ro"
-}
-
 variable "db_password_secret_arn" {
   description = "PGPASSWORD 로 주입할 Secrets Manager 시크릿 ARN(JSON 의 password 키). schema-migrate 의 flyway_password_secret_arn 과 같은 패턴 — 실행 역할에 GetSecretValue 가 이 ARN 으로 스코프된다."
   type        = string
