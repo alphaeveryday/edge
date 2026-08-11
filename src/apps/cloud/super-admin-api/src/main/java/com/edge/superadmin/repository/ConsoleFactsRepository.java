@@ -13,7 +13,10 @@ import java.util.List;
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
  * 축은 조각별로 하나씩 붙는다 — 지금은 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축</b>
- * 이고, 데이터셋·산출·경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ * 이고, 산출·경계는 뒤따른다. 축이 붙기 전까지 그 필드는 응답에 <b>아예 없다</b>(빈 배열이 아니다).
+ *
+ * <p>와이어의 <b>데이터셋 축은 여기 없다</b> — 원장에 그 테이블이 없어 작업에서 파생하고, 파생은
+ * {@code ConsoleFactsService} 소관이다. 이 인터페이스는 그 재료({@link TaskRow} 뒤쪽 여섯 컬럼)만 낸다.
  */
 public interface ConsoleFactsRepository {
 
@@ -48,8 +51,8 @@ public interface ConsoleFactsRepository {
 
 	/**
 	 * 작업 하나. 뒤쪽 여섯 컬럼({@code datasetContractKey}~{@code freshnessReason})은 와이어에
-	 * <b>작업 축으로 나가지 않는다</b> — 뒤따르는 조각이 <b>데이터셋 축을 파생</b>하는 재료다
-	 * (계약·신선도는 별도 테이블이 아니라 {@code ops_expected_task} 의 컬럼이다).
+	 * <b>작업 축으로 나가지 않는다</b> — {@code ConsoleFactsService} 가 <b>데이터셋 축을 파생</b>
+	 * 하는 재료다(계약·신선도는 별도 테이블이 아니라 {@code ops_expected_task} 의 컬럼이다).
 	 */
 	record TaskRow(String taskKey, String runKey, String pipelineType, LocalDate tradingDate,
 			String stage, String dataset, boolean required, String planStatus, String taskOutcome,

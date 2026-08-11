@@ -1,5 +1,8 @@
 package com.edge.superadmin.controller;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
@@ -7,6 +10,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.service.ConsoleFactsService;
 import com.edge.superadmin.support.FakeConsoleFactsRepository;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -16,17 +20,22 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 콘솔 사실 응답의 <b>조회 창 + 런 축</b> 계약(ALPHA-738).
+ * 콘솔 사실 응답의 <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축</b> 계약(ALPHA-738).
  *
  * <p>지키는 것 셋 — ① 요청한 날이 <b>그대로 아래로 내려가는가</b>(게이트가 값을 조용히 바꾸면
  * 화면은 다른 날을 보고도 모른다) ② 원장이 <b>실제로 무엇을 봤는지</b> 되돌려주는가 ③ 런 축이
  * <b>원장 값 그대로</b> 나가는가(어휘를 다시 정의하면 판정이 서버로 샌다).
+ *
+ * <p>데이터셋 축만 다르다 — 여기가 <b>서버가 유일하게 파생을 하는 자리</b>라(원장에 그 테이블이
+ * 없다) 접는 <b>방향</b>이 곧 계약이다. 그래서 그 절의 단언은 값의 존재가 아니라 <b>어느 작업의
+ * 값을 골랐는가</b>를 잰다.
  *
  * <p>그리고 <b>부재의 종류</b>: 아직 안 붙은 축은 빈 배열이 아니라 <b>키가 없고</b>, 값을 못 구한
  * 필드는 <b>키가 있고 null</b> 이다. 둘이 뭉개지면 화면이 계측 공백을 "봤고 괜찮다"로 그린다.
@@ -45,15 +54,33 @@ class ConsoleControllerTest {
 		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of());
 	}
 
-	private static ConsoleFacts factsWithTask(TaskRow task) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(task));
+	private static ConsoleFacts factsWithTask(TaskRow... tasks) {
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks));
 	}
 
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
 	private static TaskRow task(Long recordsOut, Long completenessExpected) {
 		return new TaskRow("COLLECT", "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw",
 				"price", true, "DUE", "FULFILLED", "VALID", recordsOut, 0L, completenessExpected,
-				33L, 0L, 2L, "price@v1", DAY, DAY, DB_NOW, "FRESH", null);
+				33L, 0L, 2L, "price@v1", DAY, DAY, DB_NOW, "FRESH", "AS_OF_MATCH");
+	}
+
+	/**
+	 * 데이터셋 축 재료가 되는 작업.
+	 *
+	 * <p>⚠️ 픽스처가 <b>스키마에 없는 조합</b>을 만들면 그 위에서 통과한 단언은 운영 원장을 아무것도
+	 * 못 지킨다. 그래서 {@code ck_ops_expected_task_*} 를 따라간다 — 계약이 없으면
+	 * {@code collectedAt} 도 신선도도 없고(applicability), {@code FRESH} 는 {@code actual =
+	 * expected} 일 때만, {@code STALE} 은 {@code actual < expected} 일 때만 성립한다
+	 * (verified_as_of). 그래서 as-of 가 갈리는 픽스처의 상태는 {@code STALE}·{@code UNKNOWN} 이다.
+	 */
+	private static TaskRow task(String taskKey, String dataset, String contractKey,
+			LocalDate expectedAsOf, LocalDate actualAsOf, String freshnessStatus,
+			String freshnessReason) {
+		return new TaskRow(taskKey, "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw", dataset,
+				true, "DUE", "FULFILLED", "VALID", 906L, 0L, 33L, 33L, 0L, 1L,
+				contractKey, expectedAsOf, actualAsOf, contractKey == null ? null : DB_NOW,
+				freshnessStatus, freshnessReason);
 	}
 
 	private MockMvc mvc(ConsoleFacts facts) {
@@ -91,11 +118,155 @@ class ConsoleControllerTest {
 
 		/* 문자열로 본다 — `jsonPath(...).doesNotExist()` 는 `"runs": null` 도 통과시켜서
 		 * "계측 없음"과 "집계 없음"을 가르지 못한다. */
-		assertThat(body).doesNotContain("\"datasets\"", "\"outputs\"", "\"boundary\"");
+		assertThat(body).doesNotContain("\"outputs\"", "\"boundary\"");
 		/* 🔴 **셋째 다리**: 런이 0건인 날의 `runs: []` 는 **사실**이라 키가 있어야 한다("봤는데
 		 * 없었다"). 이걸 안 재면 `NON_EMPTY` 한 줄에 키가 통째로 사라져 규칙 층이 "아직 안 봄"
-		 * 으로 읽는데 전건 초록이다 — 부재 3분 중 이 다리만 비어 있었다. */
-		assertThat(body).contains("\"runs\":[]", "\"tasks\":[]");
+		 * 으로 읽는데 전건 초록이다 — 부재 3분 중 이 다리만 비어 있었다.
+		 *
+		 * ⚠️ `datasets` 도 이제 붙었으므로 위 목록에서 빠지고 이쪽으로 왔다. 작업이 0건이면 이 축은
+		 * "묶을 게 없었다"라 빈 배열이 맞다 — 파생 축이라고 키를 빼면 안 된다. */
+		assertThat(body).contains("\"runs\":[]", "\"tasks\":[]", "\"datasets\":[]");
+	}
+
+	/**
+	 * 데이터셋 축은 작업에서 <b>파생</b>하고, {@code unverifiable} 은 "신선도를 판정할 수 있는가"의
+	 * 여집합보다 <b>한 겹 넓다</b>. 여집합보다 좁으면 판정도 못 하고 판정 불가로도 안 잡히는
+	 * 데이터셋이 생기는데, 그건 화면에서 <b>정상</b>으로 보인다.
+	 *
+	 * <p>정렬은 데이터셋 id 다 — 안 고정하면 같은 원장이 조회마다 다른 순서로 나가고, 소비자가
+	 * "첫 데이터셋"을 집는 순간 판정이 흔들린다. 그래서 입력을 <b>id 역순으로 넣는다</b>(그냥
+	 * 순서대로 넣으면 정렬을 지워도 통과한다).
+	 */
+	@Test
+	void 데이터셋_축은_작업에서_파생하고_판정_불가를_빠짐없이_표시한다() throws Exception {
+		mvc(factsWithTask(
+				task("PRICE_COLLECTION_KIS", "price_daily", null, DAY, null, null, null),
+				task("ETF_NAV_COLLECTION_KIS", "etf_nav", "ETF_NAV_KIS_EOD", DAY, DAY, "FRESH",
+						"AS_OF_MATCH"),
+				task("ETF_HOLDINGS_COLLECTION_KRX", "etf_holdings", "ETF_HOLDINGS_KRX_EOD", DAY,
+						null, "UNKNOWN", "ACTUAL_AS_OF_UNVERIFIED"),
+				// dataset 이 없거나 빈 작업은 데이터셋 축 자체가 없다 — 빈 키로 세우지 않는다.
+				// 빈 id 가 서면 그걸 위반으로 만드는 규칙이 빈 대상 가드에 걸려 통째로 못 돎이 된다.
+				task("ASSEMBLE_EVENTS", null, null, null, null, null, null),
+				task("LOAD_DOCUMENTS", "   ", null, null, null, null, null)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets.length()").value(3))
+				.andExpect(jsonPath("$.result.datasets[0].id").value("etf_holdings"))
+				.andExpect(jsonPath("$.result.datasets[0].contract").value(true))
+				// 원장이 남긴 사유를 그대로 옮긴다 — 문장으로 바꾸지 않는다(포맷은 UI 소관).
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("ACTUAL_AS_OF_UNVERIFIED"))
+				.andExpect(jsonPath("$.result.datasets[1].id").value("etf_nav"))
+				.andExpect(jsonPath("$.result.datasets[1].actualAsOf").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.datasets[1].collectedAt").value(DB_NOW.toString()))
+				.andExpect(jsonPath("$.result.datasets[1].unverifiable").value(nullValue()))
+				.andExpect(jsonPath("$.result.datasets[2].id").value("price_daily"))
+				.andExpect(jsonPath("$.result.datasets[2].contract").value(false))
+				.andExpect(jsonPath("$.result.datasets[2].unverifiable")
+						.value("CONTRACT_NOT_APPLIED"));
+	}
+
+	/**
+	 * 🔴 <b>원장이 {@code UNKNOWN} 이라고 말했으면 as-of 값이 있어도 판정 불가다.</b> 스키마는 그
+	 * 조합을 막지 않는데({@code ck_ops_expected_task_verified_as_of} 는 {@code actual > expected}
+	 * 인 UNKNOWN 을 허용한다), as-of 유무만 보면 그 데이터셋이 <b>판정 가능</b>으로 서고 값이
+	 * 낡음 규칙도 통과하면 두 규칙 다 위반 0 이 된다 — 아무도 못 본 데이터셋이 정상으로 그려진다.
+	 */
+	@Test
+	void 원장이_UNKNOWN_이라_말하면_as_of_가_있어도_판정_불가다() throws Exception {
+		mvc(factsWithTask(task("ETF_FLOW_COLLECTION_KRX", "etf_flow", "ETF_FLOW_KRX_EOD",
+				DAY.minusDays(2), DAY, "UNKNOWN", "OBSERVED_AT_MISSING")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("OBSERVED_AT_MISSING"));
+	}
+
+	/**
+	 * 한 데이터셋에 작업이 여럿이면 값을 어느 방향으로 접느냐가 곧 놓침이냐 과민이냐다.
+	 * {@code actualAsOf} 는 <b>가장 오래된 것</b>(하나만 최신이어도 전체가 최신으로 보이면 낡음이
+	 * 조용해진다), 판정 불가 사유는 <b>UNKNOWN 인 그 작업</b>에서 온다 — 멀쩡한 작업의
+	 * {@code AS_OF_MATCH} 를 갖다 붙이면 서로 다른 작업이 한 사실로 섞인다.
+	 */
+	@Test
+	void 한_데이터셋에_작업이_여럿이면_보수적으로_접는다() throws Exception {
+		mvc(factsWithTask(
+				task("A_FRESH", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, DAY, "FRESH", "AS_OF_MATCH"),
+				task("B_UNKNOWN", "etf_flow", "ETF_FLOW_KRX_EOD", DAY.minusDays(3),
+						DAY.minusDays(2), "UNKNOWN", "OBSERVED_AT_MISSING")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets.length()").value(1))
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable")
+						.value("OBSERVED_AT_MISSING"));
+	}
+
+	/**
+	 * 🔴 as-of 쌍은 <b>한 작업에서 통째로</b> 온다. {@code expected} 와 {@code actual} 을 각자
+	 * 접으면(max·min) 어느 작업에도 없던 쌍이 만들어져, 둘 다 FRESH 인 작업 두 개가 <b>거짓
+	 * STALE</b> 을 낸다.
+	 */
+	@Test
+	void as_of_쌍을_서로_다른_작업에서_섞지_않는다() throws Exception {
+		LocalDate older = DAY.minusDays(2);
+		mvc(factsWithTask(
+				task("A", "etf_flow", "ETF_FLOW_KRX_EOD", older, older, "FRESH", "AS_OF_MATCH"),
+				task("B", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, DAY, "FRESH", "AS_OF_MATCH")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				// 각자 접으면 expected=08-03 · actual=08-01 이라는, 아무도 낸 적 없는 쌍이 선다.
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable").value(nullValue()));
+	}
+
+	/**
+	 * as-of 가 동률이면 <b>기대일이 늦은 쪽</b>을 고른다 — 낡음을 드러내는 방향이다. tie-break 가
+	 * 없으면 같은 원장이 조회 순서에 따라 FRESH 로도 STALE 로도 판정된다.
+	 */
+	@Test
+	void as_of_동률이면_낡음을_드러내는_쪽을_고른다() throws Exception {
+		LocalDate older = DAY.minusDays(2);
+		mvc(factsWithTask(
+				task("A", "etf_flow", "ETF_FLOW_KRX_EOD", older, older, "FRESH", "AS_OF_MATCH"),
+				task("B", "etf_flow", "ETF_FLOW_KRX_EOD", DAY, older, "STALE",
+						"ACTUAL_AS_OF_BEFORE_EXPECTED")))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.datasets[0].actualAsOf").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.datasets[0].expectedAsOf").value("2026-08-03"))
+				// 낡음 판정은 클라이언트 소관이다 — 판정 가능하면 여기서는 null 이다.
+				.andExpect(jsonPath("$.result.datasets[0].unverifiable").value(nullValue()));
+	}
+
+	/**
+	 * 🔴 <b>dataset 이 빈 작업은 축에서 빼되 조용히 빼지 않는다</b>(Rule 12). 스키마에 비공백 제약이
+	 * 없어 원장에 실제로 들어올 수 있고, 그건 writer 결함이다 — 로그가 없으면 데이터셋 하나가
+	 * 화면에서 통째로 사라진 것을 아무도 못 본다. 그 작업 자체는 {@code tasks[]} 에 그대로 남는다.
+	 */
+	@Test
+	void dataset_이_빈_작업은_축에서_빼고_경고를_남긴다() throws Exception {
+		Logger logger = (Logger) LoggerFactory.getLogger(ConsoleFactsService.class);
+		ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		logger.addAppender(appender);
+		try {
+			mvc(factsWithTask(task("LOAD_DOCUMENTS", "   ", null, null, null, null, null)))
+					.perform(get("/api/v1/console/facts"))
+					.andExpect(status().isOk())
+					.andExpect(jsonPath("$.result.datasets.length()").value(0))
+					// 작업 축에는 그대로 남는다 — 데이터셋 축이 없다고 작업이 없어지지 않는다.
+					.andExpect(jsonPath("$.result.tasks.length()").value(1));
+		} finally {
+			logger.detachAppender(appender);
+		}
+
+		assertThat(appender.list)
+				.anySatisfy(event -> assertThat(event.getFormattedMessage())
+						.contains("LOAD_DOCUMENTS"));
 	}
 
 	/**
@@ -187,11 +358,21 @@ class ConsoleControllerTest {
 				/* 런 축과 같은 축으로 매인다 — 내부 id 면 와이어에서 안 이어진다. */
 				.andExpect(jsonPath("$.result.tasks[0].runId").value("etf-daily:2026-08-03T15:40"))
 				.andExpect(jsonPath("$.result.tasks[0].attempts").value(2))
+				/* ⚠️ 여섯 컬럼 중 셋은 이제 **데이터셋 축에 이름이 같은 필드로 존재한다** — 그래서
+				 * 응답 문자열 전체로 재면 안 되고 **작업 객체 안**을 봐야 한다. 여기서 통째 검사로
+				 * 두면 데이터셋 축이 붙는 순간 이 단언이 계약이 아니라 잡음이 된다. */
+				.andExpect(jsonPath("$.result.tasks[0].datasetContractKey").doesNotHaveJsonPath())
+				.andExpect(jsonPath("$.result.tasks[0].expectedAsOf").doesNotHaveJsonPath())
+				.andExpect(jsonPath("$.result.tasks[0].actualAsOf").doesNotHaveJsonPath())
+				.andExpect(jsonPath("$.result.tasks[0].collectedAt").doesNotHaveJsonPath())
+				.andExpect(jsonPath("$.result.tasks[0].freshnessStatus").doesNotHaveJsonPath())
+				.andExpect(jsonPath("$.result.tasks[0].freshnessReason").doesNotHaveJsonPath())
 				.andReturn().getResponse().getContentAsString();
 
 		assertThat(body).contains("\"recordsOut\":null", "\"completenessExpected\":null")
-				.doesNotContain("datasetContractKey", "expectedAsOf", "actualAsOf", "collectedAt",
-						"freshnessStatus", "freshnessReason");
+				/* 이 둘은 어느 축에도 없는 이름이라 통째 검사가 여전히 맞다 — 데이터셋 축의
+				 * 판정 코드는 `unverifiable` 이고 원장 어휘를 그대로 흘리지 않는다. */
+				.doesNotContain("freshnessStatus", "freshnessReason");
 	}
 
 	@Test
