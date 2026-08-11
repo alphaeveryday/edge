@@ -103,7 +103,7 @@ flowchart TB
 | Review Queue | **물리 DB 아님.** analysis_items 중 status=REVIEW_REQUIRED의 논리적 작업함 |
 | Tenant Console + Tenant Console API | 검수, 정책 관리, 감사 로그, 설정 (증권사 내부 사용자 전용) |
 | Published Store | 최종 노출 확정 문구 저장 |
-| Publication Cache | Published 데이터 조회 캐시 (Redis) |
+| Publication Cache | Published 데이터 조회 캐시 (publication-api 인프로세스 Caffeine — ALPHA-433) |
 | Publication API | MTS/HTS/Internal에 Published 상태만 반환 |
 | Exposure Log | 고객 노출 이력 (민원/감사 재현용) |
 | Audit Log | 콘텐츠 상태 변경/검수/정책 변경 이력 |
