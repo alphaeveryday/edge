@@ -78,6 +78,11 @@ CANONICAL_PREFIX = "canonical/market_data/intraday_5m"
 # 함께 읽으므로, 새 prefix 를 만들면 전체 재정규화 경로가 이 수집분을 못 본다.
 RAW_PREFIX = {"KR": "raw/kr_intraday/fmp_5min_gap", "US": "raw/fmp_5min_us_gap"}
 VENDOR = "fmp"
+# 같은 파티션에 사는 **다른 어휘**의 표기 — 파이프라인 1분 롤업의 업종지수 파생
+# (`data_pipeline.minute.rollup.SOURCE_VENDOR_SECTOR`). 값을 import 하지 않고 베끼는
+# 것은 두 서비스가 별 배포 단위라 런타임 의존이 없어서다. 갈리면 `load_symbols` 가
+# 업종코드를 다시 수집 심볼로 집으므로, 저쪽을 고칠 땐 여기도 고쳐야 한다.
+SECTOR_ROLLUP_VENDOR = "1m_rollup_sector"
 
 CHUNK_DAYS = 7          # 요청 1건의 상한. 이보다 길면 응답이 잘린다.
 MIN_CHUNK_DAYS = 1      # 재분할 바닥. 하루는 더 쪼갤 수 없다.
@@ -435,14 +440,27 @@ def load_symbols(con, market: str, *, path: str | None = None,
     미추적 진실이 된다. 이미 쌓은 표의 ``source_symbol`` 이 곧 지금까지의 유니버스다.
     한계: 신규 상장은 이 경로로 들어오지 않는다 — 유니버스 확장은 파일(``--symbols``)로
     명시해야 한다.
+
+    🔴 **이 파티션의 ``source_symbol`` 이 한 어휘가 아니다**(ALPHA-941). 파이프라인의
+    1분 롤업이 같은 파티션에 업종지수 5분봉을 따로 쓰고, 그 ``source_symbol`` 은 종목
+    코드가 아니라 4자리 KRX 업종코드(``1005``·``2063``)다. 안 거르면 그 45개가 FMP 수집
+    심볼로 요청된다 — 지수는 FMP 종목이 아니라서 빈 응답이 되고, 혹여 그 문자열이 다른
+    상품으로 해소되면 **업종지수 행과 같은 ticker 로 겹치는 canonical 행**이 생긴다.
+    벤더 표기로 거른다(``rollup.SOURCE_VENDOR_SECTOR``) — 심볼 모양(자릿수)으로 거르면
+    시장마다 다시 틀린다.
     """
     if path:
         text = Path(path).read_text(encoding="utf-8")
         return [s.strip() for s in text.splitlines() if s.strip()]
     src = canonical_sql(market.upper(), base=base)
+    # ⚠️ 필터를 **`max(trade_date)` 안에도** 건다. 바깥에만 걸면 "업종지수 롤업은 됐고
+    # 가격 롤업은 안 된 날"이 최신 파티션일 때 max 가 그날을 집고 바깥 필터가 그 행을
+    # 전부 지워, 직전 거래일에 멀쩡한 유니버스가 있는데도 빈 결과 → PipelineError 가 된다.
+    # 두 롤업은 각자 실행이라 그 상태는 정상 운영에서 난다.
+    keep = f"source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'"
     got = con.execute(
-        f"SELECT DISTINCT source_symbol FROM {src}"
-        f" WHERE trade_date = (SELECT max(trade_date) FROM {src}) ORDER BY 1"
+        f"SELECT DISTINCT source_symbol FROM {src} WHERE {keep}"
+        f" AND trade_date = (SELECT max(trade_date) FROM {src} WHERE {keep}) ORDER BY 1"
     ).fetchall()
     if not got:
         raise PipelineError(
