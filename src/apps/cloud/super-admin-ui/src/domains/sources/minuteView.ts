@@ -200,14 +200,22 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
   if (s.phase === 'PLANNED') {
     return { ...base, kind: 'waiting', label: '대기', tone: 'neutral', reason: '세션이 아직 시작되지 않았다(phase=PLANNED)' };
   }
-  /* 종료 국면 — 최종 완결 상태를 함께 말한다 */
+  /* 종료 국면 — 최종 완결 상태를 함께 말한다.
+   * ⚠️ 이 분기가 아래 결함·무증거·고착 검사보다 **먼저** 반환하므로, 결함을 안 보면
+   * MISSING·INCOMPLETE 를 가진 마감 세션이 경고 없는 종료로 선다 — 같은 health 객체가
+   * `quality.defects` 를 0 아닌 값으로 들고 있는데도. EOD 가 결손을 판정한 뒤라 오히려
+   * 가장 확정적인 결함인데 배지만 깨끗해진다. 국면(종료)은 유지하고 **톤과 사유**로
+   * 드러낸다 — 국면을 장애로 바꾸면 서버가 안 한 판정을 화면이 만든다. */
   if (s.phase === 'DRAINED' || s.phase === 'QC_RUNNING' || s.phase === 'FINALIZED') {
+    const unresolved = defects + w.overdueNoEvidence;
     return {
       ...base,
       kind: 'closed',
       label: '종료',
-      tone: 'gated',
-      reason: `phase=${s.phase} · 최종 연속 완결 ${hhmmOf(s.contiguousCompleteThrough)}`,
+      tone: unresolved > 0 ? 'warn' : 'gated',
+      reason:
+        `phase=${s.phase} · 최종 연속 완결 ${hhmmOf(s.contiguousCompleteThrough)}` +
+        (unresolved > 0 ? ` · 남은 결함 ${unresolved}${noun}` : ''),
     };
   }
   if (s.phase === 'FAILED') {

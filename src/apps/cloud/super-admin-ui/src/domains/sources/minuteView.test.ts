@@ -440,3 +440,23 @@ test('공시 품질 결함은 부분 실패(INCOMPLETE)를 빠뜨리지 않는�
   assert.match(q.detail, /INCOMPLETE/);
   assert.doesNotMatch(q.detail, /anchor/, '뉴스 고유 기전은 여전히 안 붙는다');
 });
+
+test('마감 세션이 결함을 안고 있으면 깨끗한 종료로 그리지 않는다', () => {
+  /* 종료 국면 분기는 결함 검사보다 먼저 반환한다 — 결함을 안 보면 EOD 가 결손을 판정한
+   * 뒤(가장 확정적인 결함)인데도 배지가 경고 없이 선다. 국면은 종료 그대로 두고 톤·사유로
+   * 드러낸다: 국면을 장애로 바꾸면 서버가 안 한 판정을 화면이 만든다. */
+  const dirty = sessionHealth(
+    session({ phase: 'FINALIZED', expectedWindowCount: 390, windows: { valid: 389, missing: 1 } }),
+    NO_JOBS,
+  );
+  assert.equal(dirty.kind, 'closed', '국면은 종료 그대로');
+  assert.equal(dirty.tone, 'warn', '결함이 있는데 경고 없는 톤이면 안 된다');
+  assert.match(dirty.reason, /남은 결함 1/);
+
+  const clean = sessionHealth(
+    session({ phase: 'FINALIZED', expectedWindowCount: 390, windows: { valid: 390 } }),
+    NO_JOBS,
+  );
+  assert.equal(clean.tone, 'gated', '결함이 없으면 종전대로');
+  assert.doesNotMatch(clean.reason, /남은 결함/);
+});

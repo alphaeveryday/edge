@@ -256,15 +256,21 @@ const rerunSlot = (date: string): GridSlot => ({
   launchStatus: 'LAUNCHED',
   orchestrationStatus: 'SUCCEEDED',
   tradingDate: date,
-  /* 오늘 정규 슬롯에서 FAILED 였던 가격 수집만 다시 돌려 성공했다 */
-  tasks: [cell(MARKET_TASKS[1], { recordsOut: 1452 })],
+  /* 그날 정규 슬롯에서 FAILED 였던 가격 수집만 다시 돌려 성공했다.
+   * 위치가 아니라 키로 짚는다 — 목록이 바뀌면 조용히 다른 작업을 가리킨다. */
+  tasks: [cell(MARKET_TASKS.find((t) => t.taskKey === 'PRICE_COLLECTION_KIS')!, { recordsOut: 1452 })],
 });
 
 export const MOCK_GRID: SourceGrid = {
   days: 7,
   slots: [
     ...GRID_DATES.flatMap((d) => [newsSlot(d), marketSlot(d)]),
-    rerunSlot(MOCK_TRADING_DATE),
+    /* ⚠️ **오늘이 아닌 날에 둔다.** 실 `/sources/overview` 는 pipeline_type 별로
+     * `run_key DESC` 최신 하나를 고른다(`OVERVIEW_SQL` DISTINCT ON). 오늘 16:20 재실행을
+     * 두면 개요가 고를 런은 15:40 이 아니라 그것인데, 개요 픽스처는 15:40 을 가리키고
+     * 15:40 의 결함을 나열한다 — 실 API 가 낼 수 없는 조합이 된다. 07-31 은 정규 슬롯에서
+     * 가격 수집이 FAILED 라 재실행이 자연스럽고, 드릴다운 두 줄 케이스도 그대로 남는다. */
+    rerunSlot('2026-07-31'),
   ],
 };
 
@@ -379,12 +385,14 @@ export const MOCK_OVERVIEW: SourceOverview = {
       launchStatus: 'LAUNCHED',
       orchestrationStatus: 'RUNNING',
       opsStatus: 'DEGRADED',
-      counts: { due: 21, requiredDue: 18, fulfilled: 15, failed: 1, missed: 0, blocked: 1, pending: 1, skipped: 3 },
+      /* 격자의 같은 런과 **같은 수**여야 한다 — 개요만 크게 적으면 운영자가 드릴다운에서
+       * 재현할 수 없는 숫자가 되고, 검수는 어느 쪽도 못 믿는다(테스트가 고정한다). */
+      counts: { due: 7, requiredDue: 7, fulfilled: 4, failed: 1, missed: 0, blocked: 1, pending: 1, skipped: 1 },
       defects: [
         { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
         { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', freshnessStatus: null, failedRecords: 2, overdue: false },
         { stage: 'raw', taskKey: 'ETF_HOLDINGS_COLLECTION_KRX', outcome: 'FULFILLED', dataStatus: 'VALID', freshnessStatus: 'STALE', failedRecords: null, overdue: false },
-        { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: true },
+        { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: true },
       ],
     },
     {

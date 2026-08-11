@@ -130,19 +130,27 @@ test('개요가 말한 결함을 드릴다운이 실제로 그릴 수 있다 —
     for (const d of lane.defects) {
       assert.ok(inSlot.has(d.taskKey), `${lane.runKey}: 개요가 말한 결함 ${d.taskKey} 를 격자가 못 그린다`);
     }
-    /* ⚠️ 셀 **수**는 일부러 안 잰다 — 시장 레인의 격자 픽스처는 축약본이다(개요 due 21 vs
-     * 8셀). 실 ops 시장 레인은 정말 21작업이고 그걸 7일 × 슬롯마다 적으면 픽스처가 화면보다
-     * 커진다. 축약은 의도이고, **개요가 지목한 결함이 드릴다운에 없는 것**은 의도가 아니다 —
-     * 그건 운영자가 클릭할 행이 없다는 뜻이라 위에서 잡는다. */
+    /* 귀결 분포까지 같아야 한다 — 같은 런을 두 화면이 다르게 말하면 검수가 어느 쪽도
+     * 못 믿는다. 개요만 크게 적으면 드릴다운에서 재현 못 하는 숫자가 된다. */
+    const planned = slot!.tasks.filter((t) => t.planStatus !== 'SKIPPED');
+    const n = (o: string) => planned.filter((t) => t.outcome === o).length;
+    assert.equal(planned.length, lane.counts.due, `${lane.runKey}: due`);
+    assert.equal(
+      slot!.tasks.length - planned.length,
+      lane.counts.skipped,
+      `${lane.runKey}: skipped`,
+    );
+    assert.equal(n('FULFILLED'), lane.counts.fulfilled, `${lane.runKey}: fulfilled`);
+    assert.equal(n('FAILED'), lane.counts.failed, `${lane.runKey}: failed`);
+    assert.equal(n('MISSED'), lane.counts.missed, `${lane.runKey}: missed`);
+    assert.equal(n('BLOCKED'), lane.counts.blocked, `${lane.runKey}: blocked`);
+    assert.equal(n('PENDING'), lane.counts.pending, `${lane.runKey}: pending`);
 
-    /* 다만 격자가 그 런의 작업을 **전부** 담은 레인(축약 안 한 레인)에서는 귀결 분포까지
-     * 개요와 같아야 한다 — 같은 런을 두 화면이 다르게 말하면 검수가 어느 쪽도 못 믿는다. */
-    if (slot!.tasks.length === lane.counts.due) {
-      const n = (o: string) => slot!.tasks.filter((t) => t.outcome === o).length;
-      assert.equal(n('FULFILLED'), lane.counts.fulfilled, `${lane.runKey}: fulfilled`);
-      assert.equal(n('FAILED'), lane.counts.failed, `${lane.runKey}: failed`);
-      assert.equal(n('MISSED'), lane.counts.missed, `${lane.runKey}: missed`);
-      assert.equal(n('PENDING'), lane.counts.pending, `${lane.runKey}: pending`);
+    /* 결함 행의 귀결도 격자와 같아야 한다 — 개요가 BLOCKED 라 한 작업이 격자에선
+     * PENDING 이면, 운영자가 들어가서 보는 사실이 개요와 다르다. */
+    const outcomeOf = new Map(slot!.tasks.map((t) => [t.taskKey, t.outcome]));
+    for (const d of lane.defects) {
+      assert.equal(outcomeOf.get(d.taskKey), d.outcome, `${lane.runKey} ${d.taskKey}: 귀결이 갈린다`);
     }
   }
 });
@@ -193,5 +201,20 @@ test('1분 결함 창은 집계 수만큼 목록에도 있다 — 못 들어가�
       s.windows.overdueNoEvidence,
       `${s.dataset}: 무증거`,
     );
+  }
+});
+
+test('개요가 가리키는 런이 곧 그 레인의 최신 런이다 — 서버가 그렇게 고른다', () => {
+  /* `OVERVIEW_SQL` 은 `DISTINCT ON (pipeline_type) … ORDER BY pipeline_type, run_key DESC` 다.
+   * 더 늦은 run_key 의 런이 격자에 있으면 실 개요는 그걸 고르므로, 픽스처가 앞선 런을
+   * 가리키면 실 API 가 낼 수 없는 조합이 된다(재실행 슬롯을 오늘 두면 바로 그렇게 된다). */
+  for (const lane of MOCK_OVERVIEW.lanes) {
+    const prefix = `${lane.pipelineType}:`;
+    const latest = MOCK_GRID.slots
+      .map((s) => s.runKey)
+      .filter((k) => k.startsWith(prefix))
+      .sort()
+      .pop();
+    assert.equal(lane.runKey, latest, `${lane.pipelineType}: 개요가 최신 런을 안 가리킨다`);
   }
 });
