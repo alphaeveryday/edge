@@ -1,0 +1,13 @@
+<!-- 공식 로고(src/assets/logo.svg)의 'E' 글자만 추출한 파비콘 — 워드마크 전체는 16px 에서 판독 불가. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <rect width="300" height="300" rx="36" fill="#ffffff"/>
+  <g transform="translate(-163.5 0)">
+    <rect x="196" y="40" width="205" height="40" fill="#00309F"/>
+    <rect x="196" y="130" width="235" height="40" fill="#00309F"/>
+    <rect x="196" y="220" width="205" height="40" fill="#00309F"/>
+    <rect x="196" y="40" width="40" height="220" fill="#00309F"/>
+    <circle cx="216" cy="150" r="30" fill="#ffffff"/>
+    <circle cx="216" cy="150" r="25" fill="#00309E"/>
+    <circle cx="216" cy="150" r="15" fill="#ffffff"/>
+  </g>
+</svg>
