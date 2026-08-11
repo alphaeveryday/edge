@@ -14,7 +14,9 @@ include_paths:
   - docs/domain/
   - docs/console-ia/
   - docs/adr/
+  # 브랜드 로고 — 과거 이력용 옛 경로 + 캐노니컬(ALPHA-950 이동, 콘솔과 공용).
   - pages/docs/assets/images/
+  - src/libs/ui-kit/src/assets/
 
 # 발전 기록에서 뺄 커밋(SHA prefix 목록). 인라인이 아니라 블록 형태로 쓴다. 예:
 #   exclude:
