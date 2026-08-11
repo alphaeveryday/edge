@@ -23,10 +23,14 @@ class _Lake:
         con = duckdb.connect()
         self._con = con
         self.queries: list[str] = []
+        # 운영과 같은 형이다: RDB available_at 은 TIMESTAMPTZ 이고 duck 세션은
+        # Asia/Seoul 이다(statics/duck.py). naive TIMESTAMP 픽스처는 TZ 캐스팅
+        # 오류(TIMESTAMPTZ→TIME 직접 캐스팅 불가)를 숨긴다.
+        con.execute("SET TimeZone='Asia/Seoul'")
         con.execute("""
             CREATE TABLE event_rows(
                 source_event_id TEXT, instrument_id TEXT, event_type_code TEXT,
-                trade_date DATE, available_at TIMESTAMP
+                trade_date DATE, available_at TIMESTAMPTZ
             )
         """)
         con.execute("""
@@ -113,8 +117,11 @@ def test_distribution_preview_names_missing_anchor_and_thin_history(monkeypatch)
         as_of="2026-08-07 12:05:00", today=-0.036, min_n=4)
 
     assert (missing.reason, missing.anchor_count) == ("ANCHOR_NOT_FOUND", 0)
+    # 표본 2 = A(07-01)·B(07-02). 'future'(관측 2026-08-08) 는 실효 거래일이
+    # 달력에 없어 제외된다 — 명목일 조인이던 시절엔 미래 관측 사건이 과거 표본에
+    # 새던 PIT 누수였다(ALPHA-932 실효 거래일 축).
     assert (thin.reason, thin.historical_n, thin.min_n) == (
-        "HISTORY_BELOW_MIN", 3, 4)
+        "HISTORY_BELOW_MIN", 2, 4)
 
 
 def test_distribution_preview_excludes_non_finite_history(monkeypatch):
@@ -137,12 +144,46 @@ def test_distribution_preview_excludes_non_finite_history(monkeypatch):
 
     result = event_distribution_preview(
         lake, source_event_id="anchor", instrument_id="A", day="2026-08-07",
-        as_of="2026-08-07 12:05:00", today=-0.036, min_n=4)
+        as_of="2026-08-07 12:05:00", today=-0.036, min_n=3)
 
-    # NaN 행이 유한값처럼 세어지면 4건이 되어 READY 로 뒤집힌다 — 그 회귀가
-    # 이 단언을 깨뜨린다.
+    # 표본 후보 3 = A(07-01)·B(07-02)·E(07-05, NaN). NaN 행이 유한값처럼 세어지면
+    # 3건이 되어 READY 로 뒤집힌다 — 그 회귀가 이 단언을 깨뜨린다.
     assert (result.status, result.reason, result.historical_n) == (
-        "UNAVAILABLE", "HISTORY_BELOW_MIN", 3)
+        "UNAVAILABLE", "HISTORY_BELOW_MIN", 2)
+
+
+def test_weekend_event_anchors_to_the_next_trading_day(monkeypatch):
+    """일요일(2026-08-09) 사건은 월요일(08-10) 설명에서 앵커가 선다 — event_date=
+    설명일 요구가 주말·전일 사건을 전멸시키던 ALPHA-932 의 회귀 가드. 반대로 이미
+    지난 거래일에 시장이 반응한 사건(금요일 08-07 장중)은 오늘과 비교할 수 없어
+    ANCHOR_NOT_CURRENT."""
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview._base",
+                        lambda *_args: """WITH
+                        v_event AS (SELECT * FROM event_rows),
+                        v_daily AS (SELECT * FROM daily_rows)
+                        """)
+    lake = _lake()
+    lake._con.execute("""
+        INSERT INTO event_rows VALUES
+          ('sunday', 'A', 'CONTRACT.CANCEL', DATE '2026-08-09',
+           TIMESTAMP '2026-08-09 15:26:00')
+    """)
+
+    sunday = event_distribution_preview(
+        lake, source_event_id="sunday", instrument_id="A", day="2026-08-10",
+        as_of="2026-08-10 09:44:00", today=-0.02, min_n=2)
+    stale = event_distribution_preview(
+        lake, source_event_id="anchor", instrument_id="A", day="2026-08-10",
+        as_of="2026-08-10 09:44:00", today=-0.02, min_n=2)
+
+    # 일요일 15:26 관측 → 실효 거래일 = 다음 거래일(월요일 = 설명일). 달력에
+    # 08-08(토)·08-09(일) 거래일이 없으므로 currency 판정이 주말을 건너뛴다.
+    # 과거 표본 3 = A(07-01)·B(07-02)·A(08-07 — 'anchor' 사건의 실효 거래일).
+    assert sunday.status == "READY"
+    assert sunday.distribution is not None and sunday.distribution.n == 3
+    # 금요일(08-07) 장중 사건은 그날 세션이 이미 완결됐다 — 월요일 수익률과
+    # 비교하면 사건-반응 축이 어긋난다.
+    assert (stale.status, stale.reason) == ("UNAVAILABLE", "ANCHOR_NOT_CURRENT")
 
 
 def test_distribution_preview_fails_loudly_when_the_pit_surface_is_unavailable(monkeypatch):
