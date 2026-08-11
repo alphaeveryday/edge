@@ -173,17 +173,35 @@ test('주말 슬롯은 달력 게이트 작업만 스킵한다 — 레인 전체
    * 셋만 스킵된다. 전부 스킵으로 칠하면 실 planner 가 못 내는 슬롯이고, "주말엔 아무것도
    * 안 돈다"는 없는 사실을 화면이 배운다. */
   assert.ok(OPS_CALENDAR_GATED.size > 0, '정본 추출 실패');
-  const weekend = MOCK_GRID.slots.filter((s) => /2026-08-0[12]/.test(s.runKey));
-  assert.ok(weekend.length >= 2, '주말 슬롯이 있어야 이 단언이 의미가 있다');
-  for (const slot of weekend) {
+  const isWeekend = (runKey: string) => /2026-08-0[12]/.test(runKey);
+  assert.ok(MOCK_GRID.slots.some((s) => isWeekend(s.runKey)), '주말 슬롯이 있어야 의미가 있다');
+
+  /* ⚠️ 주말 슬롯만 보면 **거래일에 선 스킵**을 놓친다(실제로 거래일 슬롯에
+   * `LOAD_ETF_FLOW: SKIPPED / NON_TRADING_DAY_SOURCE` 가 있었다 — 셋 다 불가능한 조합).
+   * planner 는 `(not trading) and kr_trading_calendar` 일 때만 SKIPPED 를 쓰고 사유는
+   * `states.SKIP_NON_TRADING_DAY` 하나다. 그러니 전 슬롯을 그 술어로 잰다. */
+  for (const slot of MOCK_GRID.slots) {
     for (const t of slot.tasks) {
-      const gated = OPS_CALENDAR_GATED.has(t.taskKey);
+      const skipped = t.planStatus === 'SKIPPED';
+      const canSkip = isWeekend(slot.runKey) && OPS_CALENDAR_GATED.has(t.taskKey);
       assert.equal(
-        t.planStatus === 'SKIPPED',
-        gated,
-        `${slot.runKey} ${t.taskKey}: 스킵=${t.planStatus === 'SKIPPED'} 인데 달력 게이트=${gated}`,
+        skipped,
+        canSkip,
+        `${slot.runKey} ${t.taskKey}: 스킵=${skipped} 인데 planner 가 스킵할 수 있나=${canSkip}`,
       );
+      if (skipped) {
+        assert.equal(t.skipReason, 'NON_TRADING_DAY', `${slot.runKey} ${t.taskKey}: 사유가 어휘 밖`);
+      }
     }
+  }
+
+  /* 리포트 픽스처도 같은 술어를 따른다 — 격자만 고치고 리포트를 두면 드릴다운에서 되살아난다 */
+  for (const t of MOCK_REPORT.tasks) {
+    assert.notEqual(
+      t.planStatus,
+      'SKIPPED',
+      `${t.taskKey}: 대표 리포트는 거래일 런이라 계획 스킵이 있을 수 없다`,
+    );
   }
 });
 
