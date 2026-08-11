@@ -662,13 +662,16 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertTradingDay("2026-08-03");
 		insertTradingDay("2026-08-02");
 		insertTradingDay("2026-08-01");
-		// 표본 둘: 08-02 → 2종, 08-01 → 4종 ⇒ 중앙값 3.0 (짝수라 평균)
+		insertTradingDay("2026-07-31");
+		/* 표본 셋을 **치우치게** 둔다: 07-31 → 0종, 08-02 → 1종, 08-01 → 5종.
+		 * ⇒ 중앙값 1.0 · 평균 2.0 — 대칭으로 두면 둘이 같아져 **중앙값을 평균으로 바꾸는 변이가
+		 * 통과한다**(실제로 통과했다). 통계량 자체가 계약이면 표본이 그걸 갈라야 한다. */
 		insertTrigger("g1", "2026-08-02", "etf-a");
-		insertTrigger("g2", "2026-08-02", "etf-b");
 		insertTrigger("g3", "2026-08-01", "etf-a");
 		insertTrigger("g4", "2026-08-01", "etf-b");
 		insertTrigger("g5", "2026-08-01", "etf-c");
 		insertTrigger("g6", "2026-08-01", "etf-d");
+		insertTrigger("g9", "2026-08-01", "etf-e");
 		/* 그날 값: 1종. 같은 ETF 를 **두 번** 넣어도 `DISTINCT` 라 1 이어야 한다 —
 		 * `count(*)` 로 바꾸는 변이가 여기서 죽는다. */
 		insertTrigger("g7", DAY.toString(), "etf-a");
@@ -679,7 +682,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(trig.label()).isEqualTo("배치 트리거");
 		assertThat(trig.unit()).isEqualTo("종");
 		assertThat(trig.today()).isEqualTo(1L);
-		assertThat(trig.base()).isEqualTo(3.0d);
+		// 정렬 [0, 1, 5] 의 가운데 = 1.0 (평균이면 2.0 이다)
+		assertThat(trig.base()).isEqualTo(1.0d);
 	}
 
 	/**
