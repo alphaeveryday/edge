@@ -356,28 +356,51 @@ def _gate_batch(complete_fn, system: str, chunk: list[dict], view: ProcessRegist
     payload = _complete_json(complete_fn, system, json.dumps({"items": items}, ensure_ascii=False))
     out: dict[str, dict] = {}
     drops: dict[str, int] = {}
+
+    def drop(reason: str, count: int = 1) -> None:
+        drops[reason] = drops.get(reason, 0) + count
+
     raw_items = payload.get("items")
-    # items 컨테이너·항목이 비정형이어도 그 항목만 버린다(국소 실패) — 배치 전체 롤백 금지.
-    for item in (raw_items if isinstance(raw_items, list) else ()):
+    if not isinstance(raw_items, list):
+        # 컨테이너 자체가 계약 위반 — 조용히 빈 배치로 접으면 40건이 관측 없이 사라져
+        # 매 런 재시도만 반복된다(Rule 12). 사유로 세운다. 기사는 자국이 없어 다음 런에
+        # 재분류되므로 유실은 아니다.
+        drop("response_malformed", len(chunk))
+        return out, drops
+    # 항목이 비정형이어도 그 항목만 버린다(국소 실패) — 배치 전체 롤백 금지.
+    seen_ids: set[str] = set()
+    for item in raw_items:
         if not isinstance(item, dict):
+            drop("item_malformed")
             continue
+        seen_ids.add(str(item.get("id")))
         validated, drop_reason = _validate_gate(item, view, entity_index, allowed_by_id)
         if validated is not None:
             out[validated["article_id"]] = validated
         elif drop_reason is not None:
-            drops[drop_reason] = drops.get(drop_reason, 0) + 1
+            drop(drop_reason)
+    # 응답이 입력 id 를 누락하면 그 기사는 판정 자체가 없다 — 무관측을 세운다(Rule 12).
+    missing = len({str(i) for i in allowed_by_id} - seen_ids)
+    if missing:
+        drop("response_missing", missing)
     return out, drops
 
 
 def _validate_gate(item: dict, view: ProcessRegistry, entity_index: dict[str, str],
                    allowed_by_id: dict[str, set[str]]) -> tuple[dict | None, str | None]:
-    """게이트 항목 1건 검증 → (판정, 드롭 사유). 비이벤트(doc_class≠EVENT)는 드롭이 아니라
-    정상 판별이라 사유 없이 거른다. EVENT 인데 못 실은 건은 사유를 낸다(ALPHA-948) —
-    `type_unmatched`(정의에 맞는 타입 없음 — 프롬프트 탈출로의 정직한 산출)와
-    `type_invalid`(목록 밖 발명)·`ticker_invalid`(입력 밖/미해소 티커)를 가른다."""
+    """게이트 항목 1건 검증 → (판정, 드롭 사유). 메뉴 안 비이벤트는 드롭이 아니라 정상
+    판별이라 사유 없이 거른다. 사유는 두 갈래다(ALPHA-948) — 계약 위반(`item_malformed`
+    id 결측·`doc_class_invalid` 메뉴 밖)과, EVENT 인데 계보에 못 실은 건:
+    `type_unmatched`(정의에 맞는 타입 없음 — 프롬프트 탈출로의 정직한 산출)·
+    `type_invalid`(목록 밖 발명)·`ticker_invalid`(입력 밖/미해소 티커)."""
     article_id = item.get("id")
-    if not article_id or item.get("doc_class") != "EVENT":
-        return None, None
+    if not article_id:
+        return None, "item_malformed"
+    doc_class = item.get("doc_class")
+    if doc_class != "EVENT":
+        # 메뉴 안 비이벤트는 정상 판별이라 사유 없이 거른다. 메뉴 밖·결측("event"·오타)은
+        # 계약 위반인데 비이벤트로 접으면 검증 실패가 안 보인다 — 사유로 세운다(Rule 12).
+        return None, (None if doc_class in GATE_DOC_CLASSES else "doc_class_invalid")
     event_type = str(item.get("event_type_code") or "")
     if not event_type:
         return None, "type_unmatched"
@@ -1397,8 +1420,9 @@ def run(
         "assembled_during_classify": assembled_during_classify,
         "events_created": events_created, "threaded": threaded,
         "unknown_thread": unknown_thread,
-        # 게이트 드롭 사유별 건수(ALPHA-948) — type_unmatched(정의에 맞는 타입 없음, 탈출로의
-        # 정직한 산출)·type_invalid(목록 밖 발명)·ticker_invalid. 런당 타입 분포와 함께
+        # 게이트 드롭 사유별 건수(ALPHA-948) — EVENT 미적재(type_unmatched=탈출로의 정직한
+        # 산출·type_invalid=목록 밖 발명·ticker_invalid)와 응답 계약 위반(response_malformed·
+        # response_missing·item_malformed·doc_class_invalid). 런당 타입 분포와 함께
         # 욱여넣기(한 타입 과대 편중) 패턴을 데이터로 발견하는 축이다. 드롭은 자국이 안 남아
         # 다음 런에 재분류된다 — 유실이 아니라 판정 보류다(ops.failed_records 에 안 더하는 이유).
         "gate_drops": gate_drops,

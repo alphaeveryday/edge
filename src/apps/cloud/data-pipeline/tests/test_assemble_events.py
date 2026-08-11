@@ -1459,3 +1459,30 @@ def test_unknown_authority_stays_unresolved(tmp_path, monkeypatch):
     # thread identity에는 못 들어가되, 추출 사실·품질 계측은 사라지지 않는다.
     assert args[("AUTHORITY", None)][4:] == ("subject", "당국", None, 0)
     assert _log(storage)["arguments_unresolved"] == 1
+
+
+def test_gate_response_contract_violations_are_counted():
+    """응답 컨테이너·항목의 계약 위반이 비이벤트 판별로 위장되면 안 된다(Rule 12) —
+    items 비배열은 배치 전건 무관측, 입력 id 누락은 그 기사 무관측, 메뉴 밖 doc_class
+    ("event"·오타·결측)는 검증 실패다. 전부 사유로 센다(자국이 없어 다음 런 재분류).
+    조용히 접으면 malformed 응답이 '정상 0건'으로 보여 매 런 재시도만 반복된다."""
+    from edge_ontology import load_process_registry
+
+    view = load_process_registry()
+    chunk = [{"article_id": f"a{i}", "title": "t", "tickers": ["005930"]}
+             for i in (1, 2, 3)]
+    entity_index = {"005930": "ent-1"}
+
+    def respond(payload):
+        return lambda system, user: json.dumps(payload, ensure_ascii=False)
+
+    out, drops = assemble_events._gate_batch(
+        respond({"items": None}), "s", chunk, view, entity_index)
+    assert (out, drops) == ({}, {"response_malformed": 3})
+
+    out, drops = assemble_events._gate_batch(
+        respond({"items": ["문자열", {"id": "a1", "doc_class": "event"}]}),
+        "s", chunk, view, entity_index)
+    assert out == {}
+    assert drops == {"item_malformed": 1, "doc_class_invalid": 1,
+                     "response_missing": 2}
