@@ -1,0 +1,47 @@
+{#-
+  쇼케이스 허브 홈 — index.md 의 front matter `template: home.html` 로만 사용된다.
+  Material 9.7.6 고정 전제(deploy-pages.yml 의 pip 버전 고정과 한 몸) — 버전을
+  올리면 이 템플릿의 블록 구조를 재검증할 것.
+-#}
+{% extends "main.html" %}
+
+{# 사이드바 숨김은 index.md front matter 의 hide: [navigation, toc] 가 담당한다 —
+   site_nav 블록을 비우면 모바일 내비 드로어까지 사라진다 #}
+{% block content %}
+<div class="ep-home">
+  <section class="ep-hero">
+    <p class="ep-eyebrow">Edge · Architecture Artifacts</p>
+    <h1>클라우드에서 만들고,<br />증권사 안에서 서빙한다.</h1>
+    <p class="ep-sub">
+      국내 ETF 사건 설명 파이프라인의 아키텍처 산출물 — 하이브리드 온프렘 설계,
+      ADR 50건, 스프린트를 따라 쌓인 발전 기록.
+    </p>
+    <p class="ep-cta">
+      <a class="md-button md-button--primary" href="{{ 'diagrams/0-information-architecture/' | url }}">다이어그램 보기</a>
+      <a class="md-button" href="{{ 'reference/adr/' | url }}">설계 · ADR 읽기</a>
+    </p>
+  </section>
+
+  <section class="ep-artifacts">
+    <h2>산출물</h2>
+    <ol class="ep-artifact-list" start="0">
+      <li><a href="{{ 'diagrams/0-information-architecture/' | url }}"><span class="ep-num">0</span><span class="ep-title">정보 구조 (IA)</span><span class="ep-kind">다이어그램</span></a></li>
+      <li><a href="{{ 'diagrams/1-application-architecture/' | url }}"><span class="ep-num">1</span><span class="ep-title">서비스 아키텍처 — cloud/onprem 하이브리드</span><span class="ep-kind">다이어그램</span></a></li>
+      <li><a href="{{ 'diagrams/2-system-architecture/' | url }}"><span class="ep-num">2</span><span class="ep-title">시스템 아키텍처 — 파이프라인·팬아웃·스크리닝</span><span class="ep-kind">다이어그램</span></a></li>
+      <li><a href="{{ 'diagrams/3-cloud-architecture/' | url }}"><span class="ep-num">3</span><span class="ep-title">클라우드 아키텍처 (AWS)</span><span class="ep-kind">다이어그램</span></a></li>
+      <li class="ep-pending"><span class="ep-num">4</span><span class="ep-title">데이터 파이프라인</span><span class="ep-kind">작성 예정</span></li>
+      <li class="ep-pending"><span class="ep-num">5</span><span class="ep-title">Agent — 분석 엔진</span><span class="ep-kind">작성 예정</span></li>
+      <li><a href="{{ 'reference/adr/' | url }}"><span class="ep-num">6</span><span class="ep-title">설계 결정 — ADR 현황판 50건</span><span class="ep-kind">문서</span></a></li>
+      <li><a href="{{ 'reference/contracts/sync-protocol/' | url }}"><span class="ep-num">7</span><span class="ep-title">계약 5건 — Sync·번들 스키마·인증·Publication·Facts</span><span class="ep-kind">문서</span></a></li>
+      <li class="ep-pending"><span class="ep-num">8</span><span class="ep-title">데이터플로우</span><span class="ep-kind">작성 예정</span></li>
+      <li><a href="{{ 'evolution/' | url }}"><span class="ep-num">9</span><span class="ep-title">발전 기록 — 아키텍처 문서의 커밋 연대기</span><span class="ep-kind">생성 문서</span></a></li>
+      <li><a href="{{ 'retrospective/' | url }}"><span class="ep-num">10</span><span class="ep-title">회고 — Sprint 1~7</span><span class="ep-kind">문서</span></a></li>
+    </ol>
+  </section>
+
+  {# index.md 본문(SSOT 고지 등)은 인덱스 아래에 렌더 #}
+  <section class="ep-body">
+    {{ page.content }}
+  </section>
+</div>
+{% endblock %}

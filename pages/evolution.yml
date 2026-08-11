@@ -4,6 +4,7 @@
 # architecture.md·schema.md 는 2026-07 피벗으로 삭제됐지만 과거 커밋 이력을 위해 남긴다.
 include_paths:
   - docs/architecture.md
+  - docs/architecture/
   - docs/schema.md
   - docs/context.md
   - docs/scope.md

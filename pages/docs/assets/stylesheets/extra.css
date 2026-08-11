@@ -1,0 +1,129 @@
+/* 쇼케이스 허브 홈(overrides/home.html) 전용 스타일.
+   색은 Material 팔레트 변수만 사용해 라이트/다크 토글에 함께 반응한다. */
+
+/* 스킴별 로고 교체 (overrides/partials/logo.html 의 2-img 와 한 쌍) */
+[data-md-color-scheme="default"] .ep-logo--dark {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .ep-logo--light {
+  display: none;
+}
+
+/* 워드마크(1100×225)가 헤더 높이에 맞게 — Material 기본 로고 크기 규칙 유지 */
+.md-header__button.md-logo img.ep-logo,
+.md-nav__button.md-logo img.ep-logo {
+  height: 1.1rem;
+  width: auto;
+}
+
+.ep-home {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2rem 0.8rem 3rem;
+}
+
+.ep-hero {
+  padding: 2.5rem 0 2rem;
+}
+
+.ep-eyebrow {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--md-primary-fg-color);
+  margin: 0 0 0.6rem;
+}
+
+.ep-hero h1 {
+  font-size: 2rem;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+  margin: 0 0 0.8rem;
+}
+
+.ep-sub {
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+  margin: 0 0 1.4rem;
+}
+
+.ep-cta .md-button {
+  margin-right: 0.5rem;
+}
+
+.ep-artifacts h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  padding-bottom: 0.4rem;
+}
+
+.ep-artifact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ep-artifact-list li {
+  margin: 0;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.ep-artifact-list a,
+.ep-artifact-list .ep-pending {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  padding: 0.65rem 0.2rem;
+  color: var(--md-default-fg-color);
+}
+
+.ep-artifact-list a:hover {
+  background: var(--md-code-bg-color);
+}
+
+.ep-artifact-list a:hover .ep-title {
+  color: var(--md-primary-fg-color);
+}
+
+/* .ep-pending 은 li 자체가 행이다 — a 와 같은 레이아웃을 클래스로 공유 */
+li.ep-pending {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  padding: 0.65rem 0.2rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.ep-num {
+  flex: 0 0 1.6rem;
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.ep-title {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.ep-kind {
+  flex: none;
+  font-size: 0.65rem;
+  color: var(--md-default-fg-color--light);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 2rem;
+  padding: 0.1rem 0.55rem;
+  white-space: nowrap;
+}
+
+.ep-body {
+  margin-top: 2.5rem;
+}

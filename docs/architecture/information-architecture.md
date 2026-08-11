@@ -2,7 +2,7 @@
 
 > 원본: `EDGE_아키텍처_v0_2.pptx` — Slide 1 (Information Architecture)
 >
-> **[설계 뷰]** 콘솔 정보구조의 논리 개요다. 현행 콘솔 화면·메뉴의 권위는 SSOT [../console-ia/](../console-ia/)에 있다. 충돌 시 SSOT 우선.
+> **[설계 뷰]** 콘솔 정보구조의 논리 개요다. 현행 콘솔 화면·메뉴의 권위는 SSOT [super-admin-console.md](../console-ia/super-admin-console.md)·[tenant-console.md](../console-ia/tenant-console.md)에 있다. 충돌 시 SSOT 우선.
 >
 > 이 문서는 콘솔 재설계 목표이며 **`console-ia/`로 전진 완료**됐다(Audit Log·Admin Activity Log 메뉴 제거, 감사=DB 보존). 현행 콘솔 메뉴의 권위는 `console-ia/`다 ([system-architecture.md 전진 예정 축](system-architecture.md#전진-예정-축)).
 

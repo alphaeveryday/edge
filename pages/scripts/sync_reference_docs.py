@@ -27,6 +27,7 @@ COPIES = [
     (DOCS / "implementation.md", REFERENCE / "implementation.md"),
     (DOCS / "roadmap.md", REFERENCE / "roadmap.md"),
     (DOCS / "writing-rules.md", REFERENCE / "writing-rules.md"),
+    (DOCS / "architecture", REFERENCE / "architecture"),
     (DOCS / "contracts", REFERENCE / "contracts"),
     (DOCS / "domain", REFERENCE / "domain"),
     (DOCS / "console-ia", REFERENCE / "console-ia"),
@@ -41,7 +42,7 @@ _COPIED_FILES = (
     "docs/roadmap.md",
     "docs/writing-rules.md",
 )
-_COPIED_DIRS = ("docs/adr", "docs/contracts", "docs/domain", "docs/console-ia")
+_COPIED_DIRS = ("docs/adr", "docs/architecture", "docs/contracts", "docs/domain", "docs/console-ia")
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 
 

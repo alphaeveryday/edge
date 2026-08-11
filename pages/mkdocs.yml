@@ -6,7 +6,11 @@ site_dir: site
 
 theme:
   name: material
+  custom_dir: overrides
   language: ko
+  # 스킴별 실제 로고 교체는 overrides/partials/logo.html + extra.css 가 담당한다.
+  # 이 값은 로고 버튼 렌더 조건을 켜는 역할.
+  logo: assets/images/edge-logo-white.svg
   features:
     - navigation.tabs
     - navigation.sections
@@ -39,8 +43,20 @@ exclude_docs: |
 
 nav:
   - Home: index.md
+  - Diagrams:
+      - Overview: diagrams/index.md
+      - 0 정보 구조: diagrams/0-information-architecture.md
+      - 1 서비스 아키텍처: diagrams/1-application-architecture.md
+      - 2 시스템 아키텍처: diagrams/2-system-architecture.md
+      - 3 클라우드 아키텍처: diagrams/3-cloud-architecture.md
+  - 설계 · ADR: reference/adr/README.md
+  - 계약:
+      - Sync Protocol: reference/contracts/sync-protocol.md
+      - Event Bundle Schema: reference/contracts/event-bundle-schema.md
+      - Sync Auth: reference/contracts/sync-auth.md
+      - Publication API: reference/contracts/publication-api.md
+      - Console Facts API: reference/contracts/console-facts-api.md
   - Evolution: evolution.md
-  - Artifacts: artifacts.md
   - Retrospective:
       - Overview: retrospective/index.md
       - Sprint 1: retrospective/sprint-1.md
@@ -56,19 +72,20 @@ nav:
       - Implementation: reference/implementation.md
       - Roadmap: reference/roadmap.md
       - Writing Rules: reference/writing-rules.md
-      - Contracts:
-          - Sync Protocol: reference/contracts/sync-protocol.md
-          - Event Bundle Schema: reference/contracts/event-bundle-schema.md
-          - Sync Auth: reference/contracts/sync-auth.md
-          - Publication API: reference/contracts/publication-api.md
+      - Architecture:
+          - Information Architecture: reference/architecture/information-architecture.md
+          - Application Architecture: reference/architecture/application-architecture.md
+          - System Architecture: reference/architecture/system-architecture.md
+          - Cloud Architecture: reference/architecture/cloud-architecture.md
       - Domain:
           - State Machine: reference/domain/state-machine.md
           - Data Residency: reference/domain/data-residency.md
           - Exposure Log: reference/domain/exposure-log.md
+          - Data Source Licensing: reference/domain/data-source-licensing.md
       - Console IA:
           - Super Admin Console: reference/console-ia/super-admin-console.md
           - Tenant Console: reference/console-ia/tenant-console.md
-      - ADR: reference/adr/README.md
+          - Permission Matrix: reference/console-ia/permission-matrix.md
 
 # reference/adr/ 아래 개별 ADR 은 빌드 시 복사되는 산출물이며 nav 에 나열하지 않는다
 # (README.md 만 nav 에 둔다). ADR 파일명 규칙이나 하위 폴더 유무와 무관하게
@@ -79,7 +96,12 @@ not_in_nav: |
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - toc:
       permalink: true
   - pymdownx.superfences
   - pymdownx.details
+
+extra_css:
+  - assets/stylesheets/extra.css
