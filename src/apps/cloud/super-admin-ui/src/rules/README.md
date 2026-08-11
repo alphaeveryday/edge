@@ -136,7 +136,8 @@ import 에 확장자를 붙인다.
    마다 다르다 — 배치 둘(`assemble_events.py`=**`published_at`** / `load_documents.py`=`fetched_at`
    폴백 `published_at`)은 `ON CONFLICT DO NOTHING` 이라 과거 버킷을 **늘리고**, 1분 레인
    (`canonical_news.py`=처리 시각)은 `DO UPDATE … GREATEST` 라 정정이 오면 값을 앞으로 밀어
-   과거 버킷을 **줄인다**. 뉴스 day-close 는 00:10 에 돌며 **어제 창**을 처리한다. `o.pub` 도 같은
+   과거 버킷을 **줄인다**. ⚠️ 버킷을 정하는 것은 writer 가 아니라 그 행의 `available_at` 이
+   어느 날짜인가다. 뉴스 day-close 는 00:10 에 돌며 **어제 창**을 처리한다. `o.pub` 도 같은
    부류다 — 실측(행 기준) **08-03 은 절반이 익일 적재**. 정본은 계약 문서 「미완결일」 절.
 2. **`o.trig` 은 시장 SFN 이 끝난 뒤엔 과잉 억제** — 자정까지는 사실상 확정인데 판정을 안 한다.
 3. 🔴 **그 날의 진짜 결손이 자정까지 조용해진다** — 산출이 통째로 0 인 장애를 R13 이 당일에 잡던

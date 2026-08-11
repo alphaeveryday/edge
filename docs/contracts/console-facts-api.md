@@ -368,9 +368,12 @@ REJECTED 적재가 생기면 이 수의 뜻이 조용히 바뀐다.
    | writer | `available_at` | `ON CONFLICT (source_code, source_document_id)` | 과거 버킷에 미치는 영향 |
    |---|---|---|---|
    | `steps/assemble_events.py` | **`published_at`** | `DO NOTHING` | 나중에 돌아도 **과거** 버킷에 실린다 → 늘린다 |
-   | `steps/load_documents.py` | `fetched_at` 폴백 `published_at` | `DO NOTHING` | 폴백을 탄 행만 과거 버킷 |
+   | `steps/load_documents.py` | `fetched_at` 폴백 `published_at` | `DO NOTHING` | 늘린다 — ⚠️ **폴백 여부와 무관하다**. 과거 파티션을 재스캔·재실행하면 그때 처음 들어오는 행의 `fetched_at` 이 이미 지난 날짜다 |
    | `minute/canonical_news.py` | **실제 처리 시각** | `DO UPDATE … GREATEST(기존, 신규)` | 정정이 오면 값을 **앞으로 민다** → 과거 버킷을 줄인다 |
 
+   ⚠️ **버킷을 정하는 것은 writer 의 종류가 아니라 그 행의 `available_at` 이 어느 KST 날짜인가**
+   다 — 위 표는 각 writer 가 그 값을 **어디서 얻는지**를 적을 뿐이고, 늦게 도는 것만으로 과거
+   버킷에 실리지는 않는다(늦게 돌아도 그 시점의 `fetched_at` 을 쓰면 오늘 버킷이다).
    `DO NOTHING` 인 배치 둘 사이에서는 **먼저 넣은 쪽이 값을 정하지만**, 1분 레인은 그 뒤에도
    값을 전진시킬 수 있다. 게다가 뉴스 day-close 는 00:10 에 돌며 **어제 창**을 처리한다(#669).
    `o.pub` 도 같은 부류다 — dev 실측(행 기준) 08-10 → 30 당일 + 4 익일 ·
