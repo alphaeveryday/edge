@@ -298,7 +298,8 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
               plan["contribution"].evidence_ids),
         block("2", "시간 구간", plan["path"].lines, ("S3.bars_5m",),
               (f"bars_5m:{facts.ticker}",)),
-        block("3", "요인 분해", plan["relative"].lines,
+        # 제목도 고객 어휘다(ALPHA-949) — 콘솔(super-admin)이 block_title 을 그대로 띄운다.
+        block("3", "움직임 분해", plan["relative"].lines,
               ("S3.bars_5m", "S3.layers_daily")),
     ]
     def _lines(*keys: str) -> tuple[str, ...]:

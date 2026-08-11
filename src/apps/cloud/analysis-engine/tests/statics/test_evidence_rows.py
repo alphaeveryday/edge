@@ -40,7 +40,7 @@ def _blocks(*, tail: dict | None = None) -> list[dict]:
          "evidence_refs": ["bars_5m:000660", "bars_5m:005930"]},
         {"block_code": "2", "block_title": "시간 구간",
          "evidence_refs": [f"bars_5m:{TICKER}"]},
-        {"block_code": "3", "block_title": "요인 분해", "evidence_refs": []},
+        {"block_code": "3", "block_title": "움직임 분해", "evidence_refs": []},
     ]
     if tail is not None:
         blocks.append(tail)

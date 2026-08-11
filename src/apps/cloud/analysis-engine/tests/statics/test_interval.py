@@ -394,7 +394,9 @@ def test_customer_prose_never_contains_banned_vocabulary():
             event_type_code="COMPANY.CONTRACT.SIGNING",
         ),),
     ))
-    text = payload["rendered_text"]
+    # block_title 도 고객 노출이다 — 콘솔(super-admin)이 제목을 그대로 띄운다(ALPHA-949).
+    titles = " ".join(str(b["block_title"]) for b in payload["blocks"])
+    text = payload["rendered_text"] + " " + titles
 
     for word in _PROSE_BANNED:
         assert word not in text, (word, text)

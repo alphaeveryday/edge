@@ -645,7 +645,7 @@ def test_run_archive_preserves_verification_ledgers_before_db_removal(monkeypatc
                 "blocks": [
                     {"block_code": "H", "block_title": "헤더",
                      "evidence_refs": [f"bars_5m:{ticker}"]},
-                    {"block_code": "3", "block_title": "요인 분해",
+                    {"block_code": "3", "block_title": "움직임 분해",
                      "evidence_refs": []},
                     {"block_code": "N", "block_title": "부재 고지", "evidence_refs": []},
                 ],
