@@ -134,6 +134,16 @@ def _mean_phrase(value: float) -> str:
     return f"{rendered}였습니다"
 
 
+def _top_rank_pct(percentile: float) -> int:
+    """ECDF → "상위 N%" 표시값. 반올림 뒤 [1, 99] 로 클램프한다.
+
+    percentile 은 `value <= observed` 비율이라 극단에서 1.0(전 표본 이상)·0.0
+    (전 표본 미만)이 나온다 - 그대로 두면 가장 강한 반응이 "상위 0%", 가장 약한
+    반응이 "상위 100%" 라는 무의미한 문장이 된다(봇 리뷰). 경계는 1%·99% 로 접는다.
+    """
+    return min(99, max(1, round((1 - percentile) * 100)))
+
+
 def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple[str, ...]:
     # percentile 은 ECDF(과거 표본 중 오늘 **이하** 비율)다 - 0.69 는 "상위 31%"지
     # "하위 69%"가 아니다. 방향을 뒤집어 말하면 강한 반응이 약한 반응으로 읽힌다
@@ -142,7 +152,7 @@ def _event_distribution_lines(items: tuple[EventDistributionFact, ...]) -> tuple
         f"{item.available_at[11:16]}, {item.title} 소식이 있었습니다. "
         f"같은 유형의 과거 {item.n}개 사건일에서 이 종목의 시장초과수익률은 평균 "
         f"{_mean_phrase(item.mean)}. 오늘 시장초과수익률은 {_pct(item.today)}로, "
-        f"과거 분포의 상위 {(1 - item.percentile) * 100:.0f}% 수준입니다."
+        f"과거 분포의 상위 {_top_rank_pct(item.percentile)}% 수준입니다."
         for item in items
     )
 
