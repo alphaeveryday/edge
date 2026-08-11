@@ -12,7 +12,16 @@
  *
  * 시각 비교는 ctx.now 를 쓴다(벽시계 직접 참조 금지) — 스냅샷 평가가 재현 가능해야 한다.
  */
-import type { Edge, Facts, MinuteSessionFact, OutputFact, Rule, RunFact, TaskFact } from './types.ts';
+import type {
+  DatasetFact,
+  Edge,
+  Facts,
+  MinuteSessionFact,
+  OutputFact,
+  Rule,
+  RunFact,
+  TaskFact,
+} from './types.ts';
 
 /** 재시도 정책 상한 — 없으면 null.
  *
@@ -90,6 +99,17 @@ const hasBase = (o: OutputFact): boolean => Number.isFinite(o.base) && (o.base a
  * `today` 도 **셈으로 성립해야** 한다(음수 count 는 손상이지 관측이 아니다) — `base:100·today:-1`
  * 을 그냥 재면 −101% 라는 없는 편차가 P1 로 선다.
  */
+/**
+ * R08 이 **실제로 신선도를 가릴 수 있는** 데이터셋인가 — `canRun`·`run()` 이 같은 술어를 본다.
+ *
+ * 창 계약은 as-of 비교 대상이 아니고, 기대일이 없으면 비교 자체가 성립하지 않는다.
+ * (⚠️ `window_contract` 는 실 응답에 없다 — `DatasetFact` 의 그 필드 주석을 보라.)
+ */
+const freshnessJudgeable = (d: DatasetFact): boolean =>
+  /* 🔴 실 응답에 `window_contract` 가 없다 — 이 배제가 통째로 무력해져 창 계약 데이터셋이
+   * 거짓 STALE 로 선다(`DatasetFact.window_contract` 주석 참조). */
+  !!d.contract && !!d.actual_as_of && !!d.expected_as_of && !d.window_contract;
+
 const judgeable = (o: OutputFact): boolean =>
   hasBase(o) && Number.isFinite(o.today) && o.today >= 0;
 
@@ -255,7 +275,9 @@ export const RULES: Rule[] = [
     base: 'P0',
     desc: '런이 FAILED·TIMED_OUT·ABORTED로 끝났다',
     dep: null,
-    source: 'DB_LEDGER',
+    /* 원장·제어면 **둘 다** 읽는다(아래 분기가 AWS 단독 실패도 잡는다) — `DB_LEDGER` 라고만
+     * 적으면 원장이 빈 채로 AWS 만 실패한 위반의 출처가 거짓이 된다. R03 과 같은 축이다. */
+    source: 'AWS_CONTROL+DB_LEDGER',
     run: (f) =>
       f.runs
         .filter(
@@ -277,7 +299,11 @@ export const RULES: Rule[] = [
           metric: null,
           state: (r.ledger_status || r.aws_status) as string,
           why: `${laneOf(r)} ${r.id.split('T')[1] || ''} 슬롯 · ${runKind(r)}`,
-          evidence: 'ops_pipeline_run.orchestration_status',
+          /* 근거는 **어느 표면이 실패를 말했는가**로 갈린다 — 원장이 빈 위반에
+           * `orchestration_status` 를 근거로 대면 운영자가 빈 컬럼을 보러 간다. */
+          evidence: r.ledger_status
+            ? 'ops_pipeline_run.orchestration_status'
+            : 'stepfunctions 최종 상태 (원장은 비어 있다)',
           drill: ['run', 'run-' + r.id] as [string, string],
         })),
   },
@@ -288,9 +314,21 @@ export const RULES: Rule[] = [
     name: '필수 작업 미귀결',
     kls: '고장',
     base: 'P0',
-    desc: 'required ∧ DUE인데 FULFILLED가 아니다',
+    /* 'required ∧ DUE' 라고 쓰던 문장이다. 필터는 **DUE 를 요구하지 않고 SKIPPED 만 뺀다** —
+     * 그게 의도다(모름은 배제 근거가 아니다: `plan_status` 를 모른다고 필수 작업의 미귀결을
+     * 버리면 P0 거짓 음성이다. R04 의 `kind` 와 같은 판단). 문장을 코드에 맞춘다. */
+    desc: 'required 이고 계획에서 빠지지(SKIPPED) 않았는데 FULFILLED가 아니다',
     dep: null,
     source: 'DB_LEDGER',
+    /* 배제는 **아는 것으로만** 한다 — 그러니 모르는 것이 몇 건인지는 밝혀야 한다. 안 밝히면
+     * plan 축이 통째로 빠진 응답에서 전 작업이 'DUE 였다'는 가정 위에 판정된 줄 아무도 모른다. */
+    note: (f) => {
+      const KNOWN = ['DUE', 'SKIPPED'];
+      const unknown = f.tasks.filter((t) => t.required && !KNOWN.includes(t.plan_status ?? ''));
+      return unknown.length
+        ? `계획 상태를 모르는 필수 작업 ${unknown.length}/${f.tasks.filter((t) => t.required).length} — 계획에서 빠진 것인지 못 가른 채 판정했다`
+        : null;
+    },
     run: (f) =>
       f.tasks
         /* plan 축을 빼면 계획에서 제외된(SKIPPED) 작업이 '미귀결'로 둔갑한다 —
@@ -372,7 +410,9 @@ export const RULES: Rule[] = [
     source: 'DB_LEDGER',
     /* expected 가 null 인 작업은 위반이 아니라 평가 대상 아님 */
     note: (f) => {
-      const wired = f.tasks.filter((t) => t.completeness_expected != null);
+      /* `!= null` 이 아니라 `Number.isFinite` 다 — 검증 안 된 JSON 의 `"100"` 은 `!= null` 을
+       * 통과하고 비교·뺄셈에서 100 으로 강제 변환돼 **실측 결손처럼** 보고된다. */
+      const wired = f.tasks.filter((t) => Number.isFinite(t.completeness_expected));
       /* 분모는 배선됐는데 **분자가 없는** 작업 — 판정에서 빠지지만 "결손 0"이 아니다.
        * 안 밝히면 그 작업의 결손이 위반 0건에 흡수돼 보인다(R03·R10·R13·R19 와 같은 형태). */
       const blind = wired.filter((t) => !Number.isFinite(t.completeness_received)).map((t) => t.task_key);
@@ -389,9 +429,9 @@ export const RULES: Rule[] = [
          * 이 모듈이 없애려는 칸 혼동 그 자체라 판정에서 빼고 `note` 가 밝힌다. */
         .filter(
           (t) =>
-            t.completeness_expected != null &&
+            Number.isFinite(t.completeness_expected) &&
             Number.isFinite(t.completeness_received) &&
-            (t.completeness_received as number) < t.completeness_expected,
+            (t.completeness_received as number) < (t.completeness_expected as number),
         )
         .map((t) => ({
           target: t.task_key,
@@ -417,19 +457,18 @@ export const RULES: Rule[] = [
     source: 'DB_LEDGER',
     /* actual 근거를 가진 데이터셋이 하나도 없으면 이 규칙은 돌지 못한 것(evaluated:false)이지
      * 조용한 것이 아니다 */
-    canRun: (f) => f.datasets.some((d) => d.contract && d.actual_as_of != null),
+    /* `contract && actual_as_of != null` 만 보던 자리다 — `run()` 은 거기에 `expected_as_of` 와
+     * 창 계약 배제까지 요구하므로 **둘이 갈렸다**. 갈리면 판정 가능한 데이터셋이 하나도 없는
+     * 응답(창 계약뿐이거나 기대일이 없는)이 `평가됨 · 위반 0`("전부 신선하다")으로 선다 —
+     * 이 파일이 R13 에서 두 번 겪고 `judgeable` 로 묶은 바로 그 갈림이다. 술어를 하나로 둔다. */
+    canRun: (f) => f.datasets.some(freshnessJudgeable),
     mockBacked: (f) => f.datasets.some((d) => d.actual_as_of != null && d.mock),
     run: (f) =>
       f.datasets
         .filter(
           (d) =>
-            d.contract &&
-            d.actual_as_of &&
-            d.expected_as_of &&
-            /* 🔴 실 응답에 `window_contract` 가 없다 — 이 배제가 통째로 무력해져 창 계약
-             * 데이터셋이 거짓 STALE 로 선다(`DatasetFact.window_contract` 주석 참조). */
-            !d.window_contract &&
-            d.actual_as_of < d.expected_as_of,
+            freshnessJudgeable(d) &&
+            (d.actual_as_of as string) < (d.expected_as_of as string),
         )
         .map((d) => ({
           target: d.id,
@@ -612,7 +651,7 @@ export const RULES: Rule[] = [
     /* ⚠️ 이 문장은 **`canRun` 이 거짓인 모든 경우에 참**이어야 한다 — `evaluate` 는 못 돈 규칙의
      * `note` 를 안 부르므로(`R.note` 는 돈 규칙 전용) 아래 세 갈래 사유는 그때 안 보인다.
      * '표본이 없다'로만 적었더니 전 산출이 `base:0`(관측된 0)인 응답에서 거짓말이 됐다. */
-    dep: '편차를 판정할 수 있는 산출이 하나도 없다(기준·오늘 값 중 하나가 셈으로 성립하지 않는다)',
+    dep: '편차를 판정할 수 있는 산출이 하나도 없다(산출이 없거나, 기준·오늘 값이 셈으로 성립하지 않는다)',
     source: 'DB_LEDGER',
     /* 기준이 있는 산출이 하나도 없으면 "분포 안"이 아니라 **분포를 모른다**. `run()` 과 같은
      * 술어를 쓴다 — base 0 은 나눗셈이 성립하지 않아 양쪽 모두 평가 대상이 아니다. */

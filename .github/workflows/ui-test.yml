@@ -4,8 +4,8 @@
 # `pnpm build`(= `tsc --noEmit && vite build`) 를 돌지만 그건 dev 머지 **후** 라, 타입 오류는
 # PR 이 아니라 배포를 깨뜨렸다. 단위 테스트는 아예 아무 데서도 안 돌았다.
 #
-# jvm-test.yml 과 달리 변경 감지가 없다 — Node 워크스페이스는 패키지가 넷뿐이고 typecheck+test 가
-# 수십 초라 전체를 도는 편이 감지 로직보다 싸다.
+# jvm-test.yml 과 달리 변경 감지가 없다 — typecheck 대상이 세 패키지(super-admin-ui·
+# tenant-console-ui·ui-kit)뿐이고 수십 초라, 전체를 도는 편이 감지 로직보다 싸다.
 #
 # ⚠️ Node 24 인 이유: `node --test 'src/**/*.test.ts'` 는 네이티브 TS 실행(23.6+)에 기댄다.
 # 배포 워크플로의 Node 20 으로는 이 테스트가 못 돈다 — 두 워크플로의 버전이 다른 것은 의도다
@@ -22,8 +22,8 @@ on:
       - "src/apps/cloud/super-admin-ui/**"
       - "src/apps/onprem/tenant-console-ui/**"
       - "src/libs/ui-kit/**"
-      # 워크스페이스 루트 manifest — packageManager·공통 의존성이 여기서 바뀌면 설치·빌드가
-      # 통째로 달라진다. 빼면 그 PR 은 게이트 없이 지나가고 dev 배포에서만 깨진다.
+      # 워크스페이스 루트 manifest — 지금은 name·private 뿐이지만 여기에 스크립트나 공통
+      # 의존성이 붙으면 설치·빌드가 통째로 달라진다. 빼면 그 PR 이 게이트 없이 지나간다.
       - "src/package.json"
       - "src/pnpm-lock.yaml"
       - "src/pnpm-workspace.yaml"

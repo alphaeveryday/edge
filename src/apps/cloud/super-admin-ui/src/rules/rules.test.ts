@@ -290,6 +290,71 @@ test('R07 경계 — received=null(집계 없음)은 실측 0이 아니다 (분�
   assert.match(rr.note ?? '', /numerator-missing/, '판정에서 빠진 작업을 note 가 이름으로 밝힌다');
 });
 
+test('R05 note — 계획 상태를 모르는 필수 작업을 조용히 DUE 로 세지 않는다', () => {
+  /* 필터는 SKIPPED 만 뺀다(모름은 배제 근거가 아니다 — P0 거짓 음성을 피하는 쪽). 그 대가로
+   * **plan 축을 모르는 작업이 DUE 로 가정돼 판정된다** — 몇 건이 그런지 안 밝히면 축이 통째로
+   * 빠진 응답에서도 아무도 그 사실을 모른다. */
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'known', required: true, plan_status: 'DUE', task_outcome: 'FAILED' }),
+    task({ task_key: 'unknown-plan', required: true, plan_status: 'BROKEN', task_outcome: null }),
+  ];
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R05')!;
+  assert.match(rr.note ?? '', /계획 상태를 모르는 필수 작업 1\/2/);
+});
+
+test('R08 경계 — 판정 가능한 데이터셋이 하나도 없으면 "전부 신선하다"가 아니라 못 돎이다', () => {
+  /* `canRun` 이 `contract && actual_as_of` 만 보고 `run()` 이 `expected_as_of`·창 계약까지
+   * 요구해 **둘이 갈렸다**. 갈리면 판정을 하나도 못 했는데 `평가됨 · 위반 0`("전부 신선")이 선다 —
+   * R13 에서 두 번 겪고 `judgeable` 로 묶은 그 갈림이다. 두 형상 모두 못 돎이어야 한다. */
+  for (const [label, ds] of [
+    ['창 계약뿐', { id: 'w', contract: true, window_contract: true, actual_as_of: '2026-08-01', expected_as_of: '2026-08-02' }],
+    ['기대일 없음', { id: 'n', contract: true, actual_as_of: '2026-08-01' }],
+  ] as const) {
+    const f = emptyFacts();
+    f.datasets = [ds];
+    const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R08')!;
+    assert.equal(rr.evaluated, false, `${label}: 판정 가능한 게 없는데 평가됨으로 섰다`);
+  }
+});
+
+test('R04 근거 — 원장이 빈 AWS 단독 실패에 빈 컬럼을 근거로 대지 않는다', () => {
+  /* 근거는 **어느 표면이 실패를 말했는가**로 갈린다. 원장이 비었는데
+   * `orchestration_status` 를 근거로 대면 운영자가 빈 컬럼을 보러 간다. */
+  const f = emptyFacts();
+  f.runs = [
+    run({ id: 'ledger-said', ledger_status: 'FAILED' }),
+    run({ id: 'aws-only', ledger_status: null, aws_status: 'FAILED' }),
+  ];
+  const v = hits(f, 'R04');
+  assert.deepEqual(v.map((x) => x.target), ['ledger-said', 'aws-only']);
+  assert.match(v[0].evidence, /orchestration_status/);
+  assert.match(v[1].evidence, /stepfunctions/);
+  assert.doesNotMatch(v[1].evidence, /orchestration_status/);
+});
+
+test('R07 경계 — 수가 아닌 분모는 강제 변환되지 않는다 (문자열 "100" 이 실측 결손이 되던 자리)', () => {
+  /* 검증 안 된 JSON 의 `"100"` 은 `!= null` 을 통과하고 비교·뺄셈에서 100 으로 강제 변환돼
+   * **실측 P0 결손 1건**처럼 보고됐다. note 도 그걸 배선된 분모로 셌다. */
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'coerced', completeness_expected: '100' as unknown as number, completeness_received: 99 }),
+  ];
+  assert.deepEqual(hits(f, 'R07').map((v) => v.target), []);
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R07')!;
+  assert.match(rr.note ?? '', /분모 배선 작업 0\/1/, '수가 아닌 분모를 배선된 것으로 셌다');
+});
+
+test('R13 못 돎 사유 — 산출 축이 비었을 때도 사유가 참이다', () => {
+  /* `dep` 은 canRun=false 의 **모든 형상**에서 참이어야 하는데, `outputs: []` 이면 "셈으로
+   * 성립하지 않는 값"이 존재하지도 않는다. 문장이 형상 하나를 놓칠 때마다 거짓말이 된다. */
+  const f = emptyFacts();
+  f.outputs = [];
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
+  assert.equal(rr.evaluated, false);
+  assert.match(rr.note ?? '', /산출이 없거나/, `산출 부재 형상을 사유가 안 덮는다: ${rr.note}`);
+});
+
 test('R08 신선도 위반 — actual<expected 만, 창 계약·근거 없음은 아님', () => {
   const f = emptyFacts();
   f.datasets = [
