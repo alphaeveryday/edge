@@ -641,12 +641,12 @@ def test_run_archive_preserves_verification_ledgers_before_db_removal(monkeypatc
             "stat_tests": [eligible, skipped],
             "hypothesis_trials": [rejected, tested],
             "final_explanation": {
-                "rendered_text": "[H] 가격\n\n[3] 요인\n\n[N] 부재",
+                "rendered_text": "[H] 가격\n\n[3] 움직임\n\n[N] 부재",
                 "blocks": [
                     {"block_code": "H", "block_title": "헤더",
                      "evidence_refs": [f"bars_5m:{ticker}"]},
                     {"block_code": "3", "block_title": "요인 분해",
-                     "evidence_requirement": "CAUSAL_STAT_TEST", "evidence_refs": []},
+                     "evidence_refs": []},
                     {"block_code": "N", "block_title": "부재 고지", "evidence_refs": []},
                 ],
             },

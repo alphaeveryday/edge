@@ -271,7 +271,6 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     sector_stat = tuple(ref for ref, rec in stat_records.items()
                         if rec.method == "SENSITIVE_STOCKS")
     other_stat = tuple(ref for ref in stat_records if ref not in sector_stat)
-    all_stat = tuple(stat_records)
     news_keys = tuple(key for key in refs if key.startswith("news:"))
     block_refs: dict[str, tuple[int, ...]] = {}
     for b in blocks:
@@ -284,14 +283,12 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
             # 검정은 몫의 설명이라 [3]에 붙는다(§7 케이스 B — 사건 병치가 아니다).
             block_refs[code] = _refs("price_etf", "price_layers") + sector_stat
         elif code == "4":
-            required = str(b.get("evidence_requirement") or "")
             selected_news = tuple(
                 f"news:{str(ref).removeprefix('source_event:')}"
                 for ref in (b.get("evidence_refs") or ())
                 if str(ref).startswith("source_event:")
             ) or news_keys
-            block_refs[code] = _refs(*selected_news) + (
-                all_stat if required == "CAUSAL_STAT_TEST" else other_stat)
+            block_refs[code] = _refs(*selected_news) + other_stat
         elif code == "N":
             block_refs[code] = ()       # 부재 고지 — 게이트 예외(§7)
         else:
@@ -302,10 +299,6 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
         code = str(b.get("block_code"))
         if code == "N":
             continue
-        if b.get("evidence_requirement") == "CAUSAL_STAT_TEST" and not any(
-                ref in stat_records for ref in block_refs.get(code, ())):
-            raise EvidenceFormatError(
-                f"블록 [{code}] CAUSAL_STAT_TEST 요구를 적격 STAT_TEST 행이 만족하지 못했다")
         if not block_refs.get(code):
             raise EvidenceFormatError(
                 f"근거 0인 문장 — 블록 [{code}] {b.get('block_title')!r} 에 근거 행을 "

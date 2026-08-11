@@ -4,10 +4,8 @@ from types import SimpleNamespace
 
 from edge_analysis.statics.interval import (
     BLOCK_ORDER,
-    MIN_N,
     ContributionFact,
     EventDistributionFact,
-    StatisticFact,
     WindowFacts,
     build_block_plan,
     final_explanation_payload,
@@ -50,21 +48,13 @@ def test_render_describes_only_the_requested_window():
     assert "supersedes" not in text
 
 
-def test_block_order_is_fixed_and_thin_statistics_hide_all_estimates():
-    facts = _facts(statistics=(StatisticFact(
-        claim="계약 체결 뒤 평균 수익률이 높았습니다.", n=MIN_N - 1,
-        effect=0.013, p=0.004, evidence_ids=("s1",),
-    ),))
-
-    plan = build_block_plan(facts)
+def test_block_order_is_fixed():
+    plan = build_block_plan(_facts(
+        disclosures=("요청창 사건 evt_1",),
+        news=("보도 한 줄.",),
+    ))
     keys = [block.key for block in plan]
     assert keys == [key for key in BLOCK_ORDER if key in keys]
-
-    text = render_block_plan(plan)
-    assert "표본이 부족해 판단하지 않았습니다" in text
-    assert "0.013" not in text
-    assert "0.004" not in text
-    assert "계약 체결 뒤" not in text
 
 
 def test_contributions_keep_three_per_direction_and_report_breadth():
@@ -293,33 +283,6 @@ def test_clamp_rejects_a_window_empty_after_session_cut():
         clamp("00:00", "00:30")
 
 
-def test_statistics_begin_at_minimum_sample_boundary():
-    """MIN_N은 결과를 숨기는 최대값이 아니라 공개 가능한 최소값이다."""
-    facts = _facts(statistics=(StatisticFact(
-        claim="계약 체결 뒤 평균 수익률", n=MIN_N,
-        effect=0.013, p=0.004, evidence_ids=("s1",),
-    ),))
-
-    text = render_block_plan(build_block_plan(facts))
-
-    assert "계약 체결 뒤 평균 수익률" in text
-    assert "효과 +1.30%p" in text
-    assert "p=0.0040" in text
-
-
-def test_statistical_output_declares_a_structural_evidence_requirement():
-    payload = final_explanation_payload(_facts(statistics=(StatisticFact(
-        claim="계약 체결 뒤 평균 수익률", n=MIN_N,
-        effect=0.013, p=0.004, evidence_ids=("s1",),
-    ),)))
-
-    statistical = next(block for block in payload["blocks"]
-                       if block["block_code"] == "4")
-    assert statistical["evidence_requirement"] == "CAUSAL_STAT_TEST"
-    assert statistical["source_systems"] == ["ANALYSIS.stat_tests"]
-
-
-
 def test_final_payload_uses_named_blocks_and_traceable_references():
     """최종 JSONB는 H→4 순서와 근거 조회키를 동시에 보존한다."""
     facts = _facts(
@@ -401,26 +364,29 @@ def test_event_distribution_near_zero_mean_reads_as_about_zero():
 _PROSE_BANNED = (
     # 산문 금지어 게이트(ALPHA-943) - 고객 산문(rendered_text)에 통계·내부 어휘가
     # 다시 스며드는 것을 구조적으로 막는다(plain.BANNED·JARGON 선례의 interval 판).
-    # ⚠️ 현재 픽스처는 **사건 분포 경로**를 덮는다. 통계 검정 병치 경로([4] 의
-    # "표본이 부족해"·"p=0.0040" — interval 이 ALPHA-876 §0 과 충돌 중인 기존 부채)와
-    # [3] 요인 어휘("요인"·"%p")는 후속 어휘 개편 티켓에서 픽스처·목록에 함께 올린다.
+    # 픽스처는 사건 분포 경로 + [3] 층 회계를 덮는다. 옛 통계 병치 가지("표본이
+    # 부족해"·"p=0.0040")는 생산자 없는 사문이라 제거됐다(ALPHA-949) — "표본"·p=
+    # 패턴은 재도입 방지로 유지한다. "요인" 도 [3] 개편으로 금지 목록에 올렸다.
     "시장초과수익률", "초과수익률", "분포", "백분위", "표본", "ECDF", "유의", "p값",
+    "요인",
 )
 _PROSE_BANNED_PATTERNS = (
     r"[A-Z]{2,}\.[A-Z_.]{2,}",   # 사건 유형 코드 원문
     r"(상위|하위)\s?\d+%",        # 방향 백분위 표현(ALPHA-943 에서 문장형으로 대체)
-    # p값 직출 표기(통계 병치 경로의 실제 형태). \b 는 한글도 단어 문자라
-    # "양측p=" 를 놓친다 - 앞글자 부정 룩비하인드 + 임의 공백으로 잡는다.
+    # p값 직출 표기(옛 통계 병치의 실제 형태 — 재도입 방지). \b 는 한글도 단어
+    # 문자라 "양측p=" 를 놓친다 - 앞글자 부정 룩비하인드 + 임의 공백으로 잡는다.
     r"(?<![0-9A-Za-z])p\s*=\s*\d",
 )
 
 
 def test_customer_prose_never_contains_banned_vocabulary():
-    """게이트: 사건 분포 경로의 rendered_text 에 금지 어휘가 없다 — 새 문장이
-    추가될 때 이 테스트가 어휘 계약을 지키게 한다(경로 확장은 목록 주석의 TODO)."""
+    """게이트: rendered_text 에 금지 어휘가 없다 — 새 문장이 추가될 때 이 테스트가
+    어휘 계약을 지키게 한다. 픽스처는 사건 분포([4])와 층 회계([3]) 를 함께 세운다."""
     payload = final_explanation_payload(_facts(
         news=("보도 한 줄.",),
         event_ids=("evt_a",),
+        market_contribution=-0.002, sector_contribution=-0.006,
+        idio_contribution=-0.033,
         event_distributions=(EventDistributionFact(
             source_event_id="evt_a", title="포스코퓨처엠의 LFP 장기공급 합의",
             available_at="2026-08-05T09:49:00", evidence_id="ev_title",
@@ -500,7 +466,8 @@ def test_missing_requested_window_return_fails_loud(monkeypatch):
 
 # ── 기여회계 산문 (ALPHA-871) ─────────────────────────────────────────────
 def test_factor_block_states_the_layer_accounting_without_proxy_names():
-    """[3] 은 층 기여회계다 - "시장 요인 X%p · 섹터 요인 Y%p · 고유 요인 Z%p".
+    """[3] 은 층 기여회계를 문장형으로 푼다(ALPHA-949) - "오늘 움직임을 나누면 —
+    시장 전체 흐름 X%p · 업종 흐름 Y%p · 이 종목 고유 Z%p".
 
     상대비교("X 대비")는 층 회계와 다른 프레임이고 프록시 상품명을 노출했다
     (이름 오염 41/80 이 사용자에게 보이던 경로). 섹터 소스가 업종지수 1분봉으로
@@ -509,7 +476,9 @@ def test_factor_block_states_the_layer_accounting_without_proxy_names():
     text = render_block_plan(build_block_plan(_facts(
         market_contribution=-0.002, sector_contribution=-0.006,
         idio_contribution=-0.033)))
-    assert "시장 요인 -0.20%p · 섹터 요인 -0.60%p · 고유 요인 -3.30%p" in text
+    assert ("오늘 움직임을 나누면 — 시장 전체 흐름 -0.20%p · "
+            "업종 흐름 -0.60%p · 이 종목 고유 -3.30%p") in text
+    assert "요인" not in text
     assert "KRX 반도체" not in text, "프록시·지수명이 산문에 노출됐다"
     assert "시장 대비" not in text and "대비 " not in text
 
@@ -519,15 +488,15 @@ def test_factor_block_omits_the_sector_term_when_no_sector_layer_stood():
     text = render_block_plan(build_block_plan(_facts(
         market_contribution=-0.002, sector_contribution=None,
         idio_contribution=-0.039)))
-    assert "시장 요인 -0.20%p · 고유 요인 -3.90%p" in text
-    assert "섹터 요인" not in text
+    assert "오늘 움직임을 나누면 — 시장 전체 흐름 -0.20%p · 이 종목 고유 -3.90%p" in text
+    assert "업종 흐름" not in text
 
 
 def test_factor_block_admits_when_no_layer_stood():
-    """층이 아예 없으면 미계측을 말한다 - 빈 회계를 0 요인으로 위장하지 않는다."""
+    """층이 아예 없으면 미계측을 말한다 - 빈 회계를 0 으로 위장하지 않는다."""
     text = render_block_plan(build_block_plan(_facts()))
     assert "층 미계측" in text
-    assert "시장 요인" not in text
+    assert "오늘 움직임을 나누면" not in text
 
 
 # ── 가설 제안 사건 문맥 (ALPHA-885) ──────────────────────────────────────
