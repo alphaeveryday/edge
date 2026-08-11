@@ -45,14 +45,27 @@ const NEWS_RUN = `news:${MOCK_TRADING_DATE}T15:30`;
 type FixtureTask = { stage: string; taskKey: string; calendar?: true };
 
 const MARKET_TASKS: FixtureTask[] = [
+  /* ⚠️ **etf-daily 전량이어야 한다.** planner 는 `catalog.entries(pipeline_type)` 를 통째로
+   * 계획하므로(`ops/planner.py`), 일부만 담은 런은 실 `/sources/grid`·`/sources/overview` 가
+   * 낼 수 없다 — 개요 due 가 그 수에 매이고, 빠진 데이터셋의 행·드릴다운이 검수에서 통째로
+   * 사라진다. 테스트가 ops 카탈로그와 전건 대조한다. */
   { stage: 'raw', taskKey: 'ETF_HOLDINGS_COLLECTION_KRX' },
   { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', calendar: true },
   { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS' },
+  { stage: 'raw', taskKey: 'NAV_COLLECTION_KIS' },
+  { stage: 'raw', taskKey: 'ETF_PROFILE_COLLECTION_KIS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF' },
   { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', calendar: true },
+  { stage: 'normalize', taskKey: 'NORMALIZE_INVESTOR' },
+  { stage: 'normalize', taskKey: 'NORMALIZE_ETF_NAV' },
+  { stage: 'normalize', taskKey: 'NORMALIZE_ETF_PROFILE' },
   { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY', calendar: true },
-  { stage: 'feature', taskKey: 'ENRICH_CORP_CODE' },
+  { stage: 'feature', taskKey: 'LOAD_ETF_HOLDINGS' },
+  { stage: 'feature', taskKey: 'LOAD_ETF_NAV' },
   { stage: 'feature', taskKey: 'LOAD_ETF_FLOW' },
+  { stage: 'feature', taskKey: 'LOAD_INSTRUMENTS' },
+  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS' },
+  { stage: 'feature', taskKey: 'ENRICH_CORP_CODE' },
 ];
 /* ⚠️ `MOCK_OVERVIEW` 의 뉴스 레인이 `due: 6` 과 TAG_NEWS·ASSEMBLE_EVENTS 결함을 선언한다.
  * 격자·리포트는 **이 목록에서** 파생하므로 여기가 짧으면 개요가 말한 결함 행을 드릴다운에서
@@ -107,96 +120,89 @@ const marketTask = (taskKey: string) => {
   return found;
 };
 
+/**
+ * 시장 슬롯 — **전 작업을 깔고 그날 다른 것만 키로 덮는다.**
+ * 분기마다 17줄을 나열하면 목록이 늘 때마다 네 곳을 같이 고쳐야 하고, 한 곳만 빠뜨리면
+ * 그 슬롯이 조용히 짧아진다(그게 due 8 인 런이 태어난 경위다).
+ */
+const marketTasks = (over: Record<string, Partial<GridCell>> = {}): GridCell[] =>
+  MARKET_TASKS.map((t) =>
+    t.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && !over[t.taskKey]
+      ? verified(t)
+      : cell(t, over[t.taskKey] ?? { recordsOut: 906 }),
+  );
+
+const BLOCKED_BY_UPSTREAM: Partial<GridCell> = {
+  outcome: 'BLOCKED',
+  dataStatus: null,
+  recordsOut: null,
+  failedRecords: null,
+  outcomeReason: 'UPSTREAM_FAILED',
+};
+const COLLECT_TIMEOUT: Partial<GridCell> = {
+  outcome: 'FAILED',
+  dataStatus: null,
+  recordsOut: null,
+  failedRecords: null,
+  outcomeReason: 'UPSTREAM_TIMEOUT',
+};
+
 function marketSlot(date: string): GridSlot {
   const runKey = `etf-daily:${date}T15:40`;
-  const T = MARKET_TASKS;
+  const lane = (over: Record<string, Partial<GridCell>>, orchestrationStatus: string): GridSlot => ({
+    runKey,
+    launchStatus: 'LAUNCHED',
+    orchestrationStatus: orchestrationStatus as GridSlot['orchestrationStatus'],
+    tradingDate: date,
+    tasks: marketTasks(over),
+  });
   switch (date) {
     case '2026-08-01':
     case '2026-08-02':
-      /* 주말 — **달력 게이트 작업만** 계획 스킵이다. 나머지는 그대로 돈다(개요도 이 레인을
-       * `skipped: 3` 이라 말한다). 레인 전체를 스킵으로 칠하면 실 planner 가 못 내는 슬롯이다. */
+      /* 주말 — **달력 게이트 작업만** 계획 스킵이다. 나머지는 그대로 돈다.
+       * 레인 전체를 스킵으로 칠하면 실 planner 가 못 내는 슬롯이다. */
       return {
         runKey,
         launchStatus: 'LAUNCHED',
         orchestrationStatus: 'SUCCEEDED',
         tradingDate: date,
-        tasks: T.map((t) => (t.calendar ? skipped(t) : cell(t, { recordsOut: 906 }))),
+        tasks: MARKET_TASKS.map((t) => (t.calendar ? skipped(t) : cell(t, { recordsOut: 906 }))),
       };
     case '2026-07-31':
       /* 수집 실패 → 하류가 선행 미충족으로 막힌다 */
-      return {
-        runKey,
-        launchStatus: 'LAUNCHED',
-        orchestrationStatus: 'FAILED',
-        tradingDate: date,
-        tasks: [
-          verified(marketTask('ETF_HOLDINGS_COLLECTION_KRX')),
-          cell(marketTask('PRICE_COLLECTION_KIS'), { outcome: 'FAILED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_TIMEOUT' }),
-          verified(marketTask('INVESTOR_COLLECTION_KIS')),
-          cell(marketTask('NORMALIZE_ETF'), { recordsOut: 906 }),
-          cell(marketTask('NORMALIZE_PRICE'), { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
-          cell(marketTask('LOAD_PRICE_DAILY'), { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
-          cell(marketTask('ENRICH_CORP_CODE'), { recordsOut: 2, failedRecords: null }),
-          cell(marketTask('LOAD_ETF_FLOW'), { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
-        ],
-      };
+      return lane(
+        {
+          PRICE_COLLECTION_KIS: COLLECT_TIMEOUT,
+          NORMALIZE_PRICE: BLOCKED_BY_UPSTREAM,
+          LOAD_PRICE_DAILY: BLOCKED_BY_UPSTREAM,
+          LOAD_PRICE_TRIGGERS: BLOCKED_BY_UPSTREAM,
+          ENRICH_CORP_CODE: { recordsOut: 2, failedRecords: null },
+        },
+        'FAILED',
+      );
     case '2026-07-29':
       /* 실행은 성공인데 데이터가 불완전 — "실행 성공 ≠ 데이터 유효" */
-      return {
-        runKey,
-        launchStatus: 'LAUNCHED',
-        orchestrationStatus: 'SUCCEEDED',
-        tradingDate: date,
-        tasks: [
-          verified(marketTask('ETF_HOLDINGS_COLLECTION_KRX')),
-          cell(marketTask('PRICE_COLLECTION_KIS')),
-          cell(marketTask('INVESTOR_COLLECTION_KIS'), { dataStatus: 'INCOMPLETE', failedRecords: 2, recordsOut: 1450 }),
-          cell(marketTask('NORMALIZE_ETF'), { recordsOut: 906 }),
-          cell(marketTask('NORMALIZE_PRICE')),
-          cell(marketTask('LOAD_PRICE_DAILY'), { recordsOut: 1450 }),
-          cell(marketTask('ENRICH_CORP_CODE'), { recordsOut: 2, failedRecords: null }),
-          cell(marketTask('LOAD_ETF_FLOW'), { recordsOut: 1450 }),
-        ],
-      };
+      return lane(
+        {
+          INVESTOR_COLLECTION_KIS: { dataStatus: 'INCOMPLETE', failedRecords: 2, recordsOut: 1450 },
+          ENRICH_CORP_CODE: { recordsOut: 2, failedRecords: null },
+        },
+        'SUCCEEDED',
+      );
     case MOCK_TRADING_DATE:
       /* 오늘 — 아직 도는 중(파란 테두리)이고 수급은 결손 */
-      return {
-        runKey,
-        launchStatus: 'LAUNCHED',
-        orchestrationStatus: 'RUNNING',
-        tradingDate: date,
-        tasks: [
-          verified(marketTask('ETF_HOLDINGS_COLLECTION_KRX')),
-          cell(marketTask('PRICE_COLLECTION_KIS'), { outcome: 'FAILED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_TIMEOUT' }),
-          cell(marketTask('INVESTOR_COLLECTION_KIS'), { dataStatus: 'INCOMPLETE', failedRecords: 2, recordsOut: 1450 }),
-          cell(marketTask('NORMALIZE_ETF'), { recordsOut: 906 }),
-          cell(marketTask('NORMALIZE_PRICE'), { outcome: 'BLOCKED', dataStatus: null, recordsOut: null, failedRecords: null, outcomeReason: 'UPSTREAM_FAILED' }),
-          cell(marketTask('LOAD_PRICE_DAILY'), { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true }),
-          cell(marketTask('ENRICH_CORP_CODE'), { recordsOut: 2, failedRecords: null }),
-          /* ⚠️ 거래일에는 계획 스킵이 없다. planner 는 `(not trading) and kr_trading_calendar`
-           * 일 때만 SKIPPED 를 쓰고 사유는 `NON_TRADING_DAY` 하나다(`ops/planner.py`·
-           * `states.SKIP_NON_TRADING_DAY`) — LOAD_ETF_FLOW 는 달력 게이트도 아니다.
-           * 스킵 렌더 경로는 주말 슬롯 드릴다운이 덮는다(`mockReportForRun` 이 슬롯 파생). */
-          cell(marketTask('LOAD_ETF_FLOW'), { recordsOut: 1452 }),
-        ],
-      };
+      return lane(
+        {
+          PRICE_COLLECTION_KIS: COLLECT_TIMEOUT,
+          INVESTOR_COLLECTION_KIS: { dataStatus: 'INCOMPLETE', failedRecords: 2, recordsOut: 1450 },
+          NORMALIZE_PRICE: BLOCKED_BY_UPSTREAM,
+          LOAD_PRICE_DAILY: { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true },
+          ENRICH_CORP_CODE: { recordsOut: 2, failedRecords: null },
+        },
+        'RUNNING',
+      );
     default:
-      return {
-        runKey,
-        launchStatus: 'LAUNCHED',
-        orchestrationStatus: 'SUCCEEDED',
-        tradingDate: date,
-        tasks: [
-          verified(marketTask('ETF_HOLDINGS_COLLECTION_KRX')),
-          cell(marketTask('PRICE_COLLECTION_KIS')),
-          verified(marketTask('INVESTOR_COLLECTION_KIS')),
-          cell(marketTask('NORMALIZE_ETF'), { recordsOut: 906 }),
-          cell(marketTask('NORMALIZE_PRICE')),
-          cell(marketTask('LOAD_PRICE_DAILY'), { recordsOut: 1452 }),
-          cell(marketTask('ENRICH_CORP_CODE'), { recordsOut: 2, failedRecords: null }),
-          cell(marketTask('LOAD_ETF_FLOW'), { recordsOut: 1452 }),
-        ],
-      };
+      return lane({ ENRICH_CORP_CODE: { recordsOut: 2, failedRecords: null } }, 'SUCCEEDED');
   }
 }
 
@@ -270,7 +276,7 @@ const rerunSlot = (date: string): GridSlot => ({
   tradingDate: date,
   /* 그날 정규 슬롯에서 FAILED 였던 가격 수집만 다시 돌려 성공했다.
    * 위치가 아니라 키로 짚는다 — 목록이 바뀌면 조용히 다른 작업을 가리킨다. */
-  tasks: [cell(MARKET_TASKS.find((t) => t.taskKey === 'PRICE_COLLECTION_KIS')!, { recordsOut: 1452 })],
+  tasks: [cell(marketTask('PRICE_COLLECTION_KIS'), { recordsOut: 1452 })],
 });
 
 export const MOCK_GRID: SourceGrid = {
@@ -402,7 +408,7 @@ export const MOCK_OVERVIEW: SourceOverview = {
       opsStatus: 'IN_PROGRESS',
       /* 격자의 같은 런과 **같은 수**여야 한다 — 개요만 크게 적으면 운영자가 드릴다운에서
        * 재현할 수 없는 숫자가 되고, 검수는 어느 쪽도 못 믿는다(테스트가 고정한다). */
-      counts: { due: 8, requiredDue: 8, fulfilled: 5, failed: 1, missed: 0, blocked: 1, pending: 1, skipped: 0 },
+      counts: { due: 17, requiredDue: 17, fulfilled: 14, failed: 1, missed: 0, blocked: 1, pending: 1, skipped: 0 },
       defects: [
         { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
         { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', freshnessStatus: null, failedRecords: 2, overdue: false },
