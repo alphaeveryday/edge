@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -30,6 +31,16 @@ class EventDistributionPreview:
 
 
 @dataclass(frozen=True, slots=True)
+class EventDistributionPreviewResult:
+    status: str
+    reason: str | None
+    distribution: EventDistributionPreview | None
+    anchor_count: int | None
+    historical_n: int | None
+    min_n: int
+
+
+@dataclass(frozen=True, slots=True)
 class EventCandidate:
     """One deduplicated current news thread that can anchor an event distribution."""
 
@@ -43,13 +54,16 @@ class EventCandidate:
 
 def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str, day: str,
                                as_of: str, today: float | None,
-                               min_n: int) -> EventDistributionPreview | None:
-    """Return no preview unless one current anchor and its comparable history exist."""
+                               min_n: int) -> EventDistributionPreviewResult:
+    """Return a closed readiness result for one current event distribution."""
     def literal(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
-    if today is None:
-        return None
+    # NaN·inf 도 부재다 — percentile 비교가 전부 False 로 접혀 0.0 이 READY 분포에
+    # 실리는 것을 경계 자체가 막는다(호출자의 사전 필터에 기대지 않는다).
+    if today is None or not math.isfinite(today):
+        return EventDistributionPreviewResult(
+            "UNAVAILABLE", "TODAY_RETURN_UNAVAILABLE", None, None, None, min_n)
     clock = as_of.replace("T", " ")[11:19]
     base = _base(day, clock)
     try:
@@ -62,8 +76,11 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
         """)
     except Exception as e:  # noqa: BLE001 - this is an unavailable server data surface
         raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
+    if not anchor:
+        return EventDistributionPreviewResult(
+            "UNAVAILABLE", "ANCHOR_NOT_FOUND", None, 0, None, min_n)
     if len(anchor) != 1:
-        return None
+        raise PreviewExecutionError("EVENT_DISTRIBUTION_ANCHOR_AMBIGUOUS")
     instrument_id, event_type_code = map(str, anchor[0])
     try:
         historical = lake.sql(base + f"""
@@ -77,18 +94,26 @@ def event_distribution_preview(lake, *, source_event_id: str, instrument_id: str
         """)
     except Exception as e:  # noqa: BLE001 - no partial distribution is publishable
         raise PreviewExecutionError("EVENT_DISTRIBUTION_UNAVAILABLE") from e
-    if len(historical) < min_n:
-        return None
-    values = [float(row[2]) for row in historical]
+    # NaN 은 모든 비교가 False 라 mean·percentile 을 조용히 오염시킨다 - 유한값만
+    # 표본이다. 걸러서 min_n 에 못 미치면 분포가 없는 것과 같다.
+    values = [value for value in (float(row[2]) for row in historical)
+              if math.isfinite(value)]
+    if len(values) < min_n:
+        return EventDistributionPreviewResult(
+            "UNAVAILABLE", "HISTORY_BELOW_MIN", None, 1, len(values), min_n)
     observed = float(today)
-    return EventDistributionPreview(
-        source_event_id=source_event_id,
-        instrument_id=instrument_id,
-        event_type_code=event_type_code,
-        n=len(values),
-        mean=sum(values) / len(values),
-        today=observed,
-        percentile=sum(value <= observed for value in values) / len(values),
+    return EventDistributionPreviewResult(
+        "READY", "READY",
+        EventDistributionPreview(
+            source_event_id=source_event_id,
+            instrument_id=instrument_id,
+            event_type_code=event_type_code,
+            n=len(values),
+            mean=sum(values) / len(values),
+            today=observed,
+            percentile=sum(value <= observed for value in values) / len(values),
+        ),
+        1, len(values), min_n,
     )
 _LAYER_LABELS = {
     "고유": "시장·업종 조정 수익률",
@@ -150,6 +175,7 @@ class HypothesisPreviewRuntime:
         self.as_of = getattr(event_sets, "as_of", "")
         self._run_id = secrets.token_hex(12)
         self._previews: dict[str, PreviewResolution] = {}
+        self._distribution_attempts: dict[str, dict[str, Any]] = {}
         grouped: dict[str, EventCandidate] = {}
         for candidate in candidates or ():
             prior = grouped.get(candidate.thread_id)
@@ -267,18 +293,33 @@ class HypothesisPreviewRuntime:
         candidate = self._candidate_by_id.get(candidate_id)
         if candidate is None or outcome_id != _EVENT_DISTRIBUTION_OUTCOME_ID:
             return self._error("OPTION_NOT_ALLOWED", "candidate or outcome is not available")
-        distribution = event_distribution_preview(
-            self._lake, source_event_id=candidate.source_event_id,
-            instrument_id=candidate.instrument_id, day=self._day,
-            as_of=self.as_of.replace("T", " "),
-            today=self._current_event_returns.get(candidate.instrument_id), min_n=MIN_N,
-        )
         recipe = {"run_id": self._run_id, "candidate_id": candidate_id,
                   "outcome_id": outcome_id}
         handle = "hpr_" + hashlib.sha256(json.dumps(
             recipe, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:24]
-        ready = distribution is not None
+        try:
+            result = event_distribution_preview(
+                self._lake, source_event_id=candidate.source_event_id,
+                instrument_id=candidate.instrument_id, day=self._day,
+                as_of=self.as_of.replace("T", " "),
+                today=self._current_event_returns.get(candidate.instrument_id), min_n=MIN_N,
+            )
+        except PreviewExecutionError as exc:
+            self._distribution_attempts[candidate.source_event_id] = {
+                "preview_status": "FAILED", "preview_reason": str(exc),
+                "historical_n": None, "min_n": MIN_N, "handle": handle,
+            }
+            raise
+        distribution = result.distribution
+        ready = result.status == "READY"
+        self._distribution_attempts[candidate.source_event_id] = {
+            "preview_status": result.status,
+            "preview_reason": result.reason,
+            "historical_n": result.historical_n,
+            "min_n": result.min_n,
+            "handle": handle,
+        }
         summary = (f"{candidate.title} 사건의 같은 유형 과거 사건일 시장 초과수익률 분포를 "
                    "확인합니다.")
         carrier = None
@@ -299,11 +340,15 @@ class HypothesisPreviewRuntime:
             "handle": handle,
             "available": ready,
             "status": "READY" if ready else "UNAVAILABLE",
+            "reason": result.reason,
             "summary": summary,
             "method": "동일 사건 유형의 과거 사건일 시장 초과수익률 분포",
-            **({"sample": {"historical_event_observations": distribution.n}}
-               if distribution is not None else {}),
+            **({"sample": {"historical_event_observations": result.historical_n}}
+               if result.historical_n is not None else {}),
         }
+
+    def distribution_attempts(self) -> dict[str, dict[str, Any]]:
+        return {key: dict(value) for key, value in self._distribution_attempts.items()}
 
     def distribution(self, handle: str) -> EventDistributionPreview | None:
         preview = self._previews.get(handle)
@@ -513,6 +558,7 @@ class PreviewExecutionError(RuntimeError):
     """A server-owned preview could not read its required PIT surface."""
 
 
-__all__ = ["EventCandidate", "EventDistributionPreview", "HypothesisPreviewRuntime",
+__all__ = ["EventCandidate", "EventDistributionPreview", "EventDistributionPreviewResult",
+           "HypothesisPreviewRuntime",
            "PreviewExecutionError", "PreviewResolution", "PreviewResolutionError",
            "event_distribution_preview"]

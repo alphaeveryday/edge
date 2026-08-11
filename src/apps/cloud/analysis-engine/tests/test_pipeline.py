@@ -245,6 +245,17 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
         meta = kwargs["window_meta"]
         meta.update({
             "lineage": [{"view": "bars_5m"}], "news_events": scoped,
+            "event_distribution_observations": {
+                "schema_version": 1,
+                "summary": {"candidates": 1, "linked": 1, "ready": 0,
+                            "submitted": 0, "rendered": 0},
+                "candidates": [{"source_event_id": "evt_00",
+                                "link_status": "LINKED",
+                                "preview_status": "UNAVAILABLE",
+                                "preview_reason": "HISTORY_BELOW_MIN",
+                                "historical_n": 17, "min_n": 30,
+                                "submitted": False, "rendered": False}],
+            },
             "final_explanation": {"rendered_text": f"[4] {paragraph}", "blocks": [
                 {"block_code": "H", "block_title": "헤더", "text": "헤더"},
                 {"block_code": "1", "block_title": "기여", "text": "기여"},
@@ -276,6 +287,11 @@ def test_scoped_events_are_one_collection_for_archive_persistence_and_evidence(m
     assert saved["blocks"][-1]["evidence_refs"] == ["source_event:evt_00"]
     assert len(saved["blocks"][-1]["evidence_row_refs"]) == 1
     assert archive["explanation"]["stage_results"]["final_explanation"] == saved
+    diagnostic = store.explanation.raw["stage_results"]["window"][
+        "event_distribution_observations"]
+    assert diagnostic["candidates"][0]["preview_reason"] == "HISTORY_BELOW_MIN"
+    assert archive["explanation"]["stage_results"]["window"][
+        "event_distribution_observations"] == diagnostic
 
 
 def test_trigger_event_wins_overlap_while_scoped_fills_lineage_gaps():
@@ -345,10 +361,28 @@ def test_archive_contains_the_exact_planned_database_ids(monkeypatch):
     assert "persistence" not in archive
 
 
-def test_statics_failure_is_persisted_as_low_confidence():
+def test_statics_failure_is_persisted_as_low_confidence(monkeypatch):
+    """통계 표면 실패만으로 DRAFT·LOW가 되며 외부 레이크 상태는 판정을 못 바꾼다."""
+    import importlib
+
+    roll = SimpleNamespace(layers=(), idio=None, etf_name="테스트 ETF")
+    monkeypatch.setattr("edge_analysis.statics.layers.select_sector",
+                        lambda *_args, **_kwargs: SimpleNamespace(code=""))
+    monkeypatch.setattr("edge_analysis.statics.layers.decompose",
+                        lambda *_args, **_kwargs: roll)
+    route_module = importlib.import_module("edge_analysis.statics.route")
+    monkeypatch.setattr(route_module, "route_etf",
+                        lambda actual: SimpleNamespace(kind="고유") if actual is roll else None)
+
+    def fail_statics(*_args, **_kwargs):
+        raise RuntimeError("통계 표면이 안 선다")
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fail_statics)
     store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
 
-    assert _run(store, _FakeS3()) == 0
+    assert run(_SETTINGS, lake=_FakeLake(), store=store, client=_FakeClient(),
+               s3=_FakeS3(), causal_lake=object()) == 0
+    assert store.explanation_kwargs["publishable"] is False
     assert store.explanation.confidence_level == "LOW"
     assert "판정불가" in store.explanation.summary
     # 검수 화면에 뜨는 문장이다 - 파이썬 예외 타입이 다시 붙으면 여기서 죽는다.
@@ -830,6 +864,11 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
         "roll": None,   # 레이크 부재로 라우팅 분해가 실패했다 — 넘길 것이 없다
         # 005930 (+5%) - 069500 시장 프록시 (+1%) = 구성종목의 시장초과수익률
         "current_event_returns": {"ent_1": pytest.approx(0.04)},
+        "event_return_universe": ("ent_1",),
+        "event_return_surface": {
+            "status": "READY", "reason": None,
+            "price_universe_count": 1, "current_return_count": 1,
+        },
     }
     window = store.explanation.raw["stage_results"]["window"]
     assert (window["window_start"], window["as_of"]) == ("09:00", "10:31")
@@ -1388,6 +1427,40 @@ def test_surface_absent_run_is_not_published(monkeypatch):
     assert store.explanation_kwargs["publishable"] is False
 
 
+def test_surface_absent_run_preserves_event_distribution_diagnostics(monkeypatch):
+    """통계 표면이 죽어 DRAFT가 되어도 사건 분포 실패 원인은 원장 두 벌에 남는다."""
+    diagnostic = {
+        "schema_version": 1,
+        "summary": {"candidates": 1, "linked": 1, "ready": 0,
+                    "submitted": 0, "rendered": 0},
+        "candidates": [{
+            "source_event_id": "evt_1", "link_status": "LINKED",
+            "preview_status": "FAILED",
+            "preview_reason": "EVENT_DISTRIBUTION_UNAVAILABLE",
+            "outcome_status": "FAILED", "historical_n": None, "min_n": 30,
+            "submitted": False, "rendered": False,
+        }],
+    }
+
+    def fake_statics(*_args, **kwargs):
+        kwargs["window_meta"]["event_distribution_observations"] = diagnostic
+        raise RuntimeError("통계 표면이 안 선다")
+
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
+    store = _FakeStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    s3 = _FakeS3()
+
+    assert _run(store, s3) == 0
+    saved = store.explanation.raw["stage_results"]["window"][
+        "event_distribution_observations"]
+    archive = next(json.loads(item["Body"].decode("utf-8")) for item in s3.puts
+                   if json.loads(item["Body"].decode("utf-8")).get("outcome") == "explained")
+    assert store.explanation_kwargs["publishable"] is False
+    assert saved == diagnostic
+    assert archive["explanation"]["stage_results"]["window"][
+        "event_distribution_observations"] == diagnostic
+
+
 def test_a_measured_run_is_still_published(monkeypatch):
     """기준은 **표면 부재**지 `UNCERTAIN` 전체가 아니다.
 
@@ -1452,9 +1525,13 @@ def test_missing_market_proxy_bars_degrade_the_market_layer_not_the_run(monkeypa
         seen.update(intraday=intraday)
         return None
 
+    def fake_statics(*_args, **kwargs):
+        seen["event_return_surface"] = kwargs["event_return_surface"]
+        seen["event_return_universe"] = kwargs["event_return_universe"]
+        return "고정 산출"
+
     monkeypatch.setattr("edge_analysis.statics.layers.decompose", fake_decompose)
-    monkeypatch.setattr("edge_analysis.statics.etfcell.run",
-                        lambda *_a, **_kw: "고정 산출")
+    monkeypatch.setattr("edge_analysis.statics.etfcell.run", fake_statics)
 
     store = _MinuteFakeStore(_PREREQS_OK)
     from dataclasses import make_dataclass
@@ -1463,5 +1540,10 @@ def test_missing_market_proxy_bars_degrade_the_market_layer_not_the_run(monkeypa
     assert run(settings, lake=_NoMarketLake(), store=store, client=_FakeClient(),
                s3=_FakeS3(), causal_lake=object()) == 0
     assert "069500" not in seen["intraday"]
+    assert seen["event_return_surface"] == {
+        "status": "UNAVAILABLE", "reason": "MARKET_RETURN_UNAVAILABLE",
+        "price_universe_count": 1, "current_return_count": 0,
+    }
+    assert seen["event_return_universe"] == ("ent_1",)
     window = store.explanation.raw["stage_results"]["window"]
     assert window["dropped_units"] == ["069500"], "결손이 원장에 안 남았다"

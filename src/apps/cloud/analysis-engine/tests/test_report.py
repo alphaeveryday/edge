@@ -158,6 +158,37 @@ def test_blocks_are_linked_to_their_evidence_rows():
     assert html.index("[1] 가격", block_at) > block_at  # 카드가 블록 뒤에 붙는다
 
 
+def test_event_distribution_readiness_is_rendered_from_stage_results():
+    stage = _stage(_manifest())
+    stage["window"]["event_distribution_observations"] = {
+        "schema_version": 1,
+        "summary": {"candidates": 1, "linked": 1, "ready": 0,
+                    "submitted": 0, "rendered": 0},
+        "candidates": [{
+            "source_event_id": "evt_123", "link_status": "LINKED",
+            "preview_status": "UNAVAILABLE", "preview_reason": "HISTORY_BELOW_MIN",
+            "outcome_status": "UNAVAILABLE",
+            "historical_n": 17, "min_n": 30, "submitted": False, "rendered": False,
+        }],
+    }
+
+    html = _html(_FakeConn(results=[_result_row(stage=stage)], evidence=_EVIDENCE,
+                           trials=_TRIALS), _fresh_s3())
+
+    assert "사건 분포 준비도" in html
+    assert "후보 1 · 연결 1 · READY 0 · 제출 0 · 렌더 0" in html
+    assert "evt_123" in html and "HISTORY_BELOW_MIN" in html
+    assert "UNAVAILABLE" in html
+    assert "17 / 30" in html
+
+
+def test_old_stage_without_distribution_diagnostics_stays_backward_compatible():
+    html = _html(_FakeConn(results=[_result_row()], evidence=_EVIDENCE,
+                           trials=_TRIALS), _fresh_s3())
+
+    assert "사건 분포 준비도" not in html
+
+
 def test_missing_evidence_row_is_rendered_as_a_gap_not_hidden():
     """참조된 근거 행이 원장에 없으면 그 자리에 결손 사유가 남는다(Rule 12)."""
     html = _html(_FakeConn(results=[_result_row()], evidence=[_EVIDENCE[0]],

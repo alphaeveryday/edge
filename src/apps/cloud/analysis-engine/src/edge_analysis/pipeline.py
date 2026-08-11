@@ -342,12 +342,29 @@ def run(
     # 가격이다. 상태축은 같은 질문의 배경("오늘 여기까지 어떻게 왔나")이라 축이 다르다.
     returns = _returns_from_bars(requested.bars, prev_closes)
     market_return = returns.get(MARKET_CODE)
+    event_return_universe = tuple(sorted({
+        instrument_id
+        for ticker in needed
+        if (instrument_id := entity_index.get(ticker)) is not None
+    }))
     current_event_returns: dict[str, float] = {}
     if market_return is not None and math.isfinite(market_return):
         for ticker, value in returns.items():
             instrument_id = entity_index.get(ticker)
             if (instrument_id is not None and value is not None and math.isfinite(value)):
                 current_event_returns[instrument_id] = float(value - market_return)
+    event_return_surface = {
+        "status": ("READY" if current_event_returns else "UNAVAILABLE"),
+        "reason": (
+            None if current_event_returns
+            else ("MARKET_RETURN_UNAVAILABLE"
+                  if market_return is None or not math.isfinite(market_return)
+                  else "NO_FINITE_EVENT_RETURNS")
+        ),
+        "price_universe_count": len(event_return_universe),
+        "current_return_count": len(current_event_returns),
+    }
+    log("event_return.surface", **event_return_surface)
     # 두 축의 좌표를 원장에 남긴다. 봉은 재생성 가능하지만 "그때 어느 세대를 몇 개
     # 봤나" 는 이 기록에만 남는다.
     #
@@ -375,6 +392,7 @@ def run(
         "etf_window_return": _window_return(requested.bars, settings.etf_ticker),
         "event_return_basis": "committed_minute_end",
         "event_return_count": len(current_event_returns),
+        "event_return_surface": event_return_surface,
     }
     log("window.two_axis", **window_state)
     # 구성종목 가격이 하나도 없으면 total_priced=0 분해가 정상 설명으로 영속된다 —
@@ -586,6 +604,8 @@ def run(
                 "window_end": window_end,
                 "window_meta": window_meta,
                 "current_event_returns": current_event_returns,
+                "event_return_universe": event_return_universe,
+                "event_return_surface": event_return_surface,
             }
             # 라우팅이 쓴 그 분해를 그대로 넘긴다 - 같은 창을 두 번 질의하면 그 사이
             # 분봉 canonical 이 정정될 때 route_code 와 산문 근거가 한 explanation 안에서
@@ -699,8 +719,11 @@ def run(
         evidence_build=evidence_build,
         hypothesis_trials=trial_rows,
         # 폐기가 확신도를 올리면 안 된다(Rule 12) - 라우팅이 깨져 분해를 버린 런이
-        # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다.
-        degraded=routing_failed,
+        # "따질 대상이 없다"는 이유로 더 확신 있게 영속되는 것을 막는다. 사건 수익률
+        # 표면이 죽은 런도 같다 - 링크 판정이 전부 UNAVAILABLE 로 끝난 것은 "따질
+        # 사건이 없어서"가 아니라 "잴 수 없어서"다.
+        degraded=(routing_failed or not surface_ok
+                  or event_return_surface["status"] != "READY"),
     )
     explanation = as_explanation(honest.strip(), headline, verdicts, stage)
     log("statics.explained", route=stage["route"], type=explanation.explanation_type,

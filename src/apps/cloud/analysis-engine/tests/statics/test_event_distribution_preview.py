@@ -10,6 +10,7 @@ from edge_analysis.statics.hypothesize import (_EVENT_DISTRIBUTION_PREVIEW_SYSTE
                                                propose)
 from edge_analysis.statics.hypothesis_preview import (EventCandidate,
                                                        EventDistributionPreview,
+                                                       EventDistributionPreviewResult,
                                                        HypothesisPreviewRuntime,
                                                        PreviewExecutionError,
                                                        event_distribution_preview)
@@ -70,11 +71,13 @@ def test_distribution_preview_binds_anchor_to_same_type_deduplicated_pit_history
                         v_daily AS (SELECT * FROM daily_rows)
                         """)
     lake = _lake()
-    preview = event_distribution_preview(
+    result = event_distribution_preview(
         lake, source_event_id="anchor", instrument_id="A", day="2026-08-07",
         as_of="2026-08-07 12:05:00", today=-0.036, min_n=2,
     )
 
+    assert result.status == "READY" and result.reason == "READY"
+    preview = result.distribution
     assert preview is not None
     assert preview.n == 2
     assert preview.mean == 0.005
@@ -88,10 +91,58 @@ def test_distribution_preview_uses_the_supplied_committed_minute_observation():
         def sql(self, _query: str) -> list[tuple]:
             raise AssertionError("missing current minute return must not query v_daily")
 
-    assert event_distribution_preview(
+    result = event_distribution_preview(
         _Lake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
         as_of="2026-08-07 12:05:00", today=None, min_n=2,
-    ) is None
+    )
+    assert result.status == "UNAVAILABLE"
+    assert result.reason == "TODAY_RETURN_UNAVAILABLE"
+
+
+def test_distribution_preview_names_missing_anchor_and_thin_history(monkeypatch):
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview._base",
+                        lambda *_args: """WITH
+                        v_event AS (SELECT * FROM event_rows),
+                        v_daily AS (SELECT * FROM daily_rows)
+                        """)
+    missing = event_distribution_preview(
+        _lake(), source_event_id="missing", instrument_id="A", day="2026-08-07",
+        as_of="2026-08-07 12:05:00", today=-0.036, min_n=2)
+    thin = event_distribution_preview(
+        _lake(), source_event_id="anchor", instrument_id="A", day="2026-08-07",
+        as_of="2026-08-07 12:05:00", today=-0.036, min_n=4)
+
+    assert (missing.reason, missing.anchor_count) == ("ANCHOR_NOT_FOUND", 0)
+    assert (thin.reason, thin.historical_n, thin.min_n) == (
+        "HISTORY_BELOW_MIN", 3, 4)
+
+
+def test_distribution_preview_excludes_non_finite_history(monkeypatch):
+    """NaN 과거 수익률은 표본이 아니다 — 비교가 전부 False 라 mean·percentile 을
+    조용히 오염시키고도 READY 로 통과한다. 유한값만 세어 min_n 미달이면 분포가
+    없는 것과 같아야 한다."""
+    monkeypatch.setattr("edge_analysis.statics.hypothesis_preview._base",
+                        lambda *_args: """WITH
+                        v_event AS (SELECT * FROM event_rows),
+                        v_daily AS (SELECT * FROM daily_rows)
+                        """)
+    lake = _lake()
+    lake._con.execute("""
+        INSERT INTO event_rows VALUES
+          ('old_e', 'E', 'CONTRACT.CANCEL', DATE '2026-07-05',
+           TIMESTAMP '2026-07-05 10:00:00')
+    """)
+    lake._con.execute(
+        "INSERT INTO daily_rows VALUES ('E', DATE '2026-07-05', 'NaN'::DOUBLE)")
+
+    result = event_distribution_preview(
+        lake, source_event_id="anchor", instrument_id="A", day="2026-08-07",
+        as_of="2026-08-07 12:05:00", today=-0.036, min_n=4)
+
+    # NaN 행이 유한값처럼 세어지면 4건이 되어 READY 로 뒤집힌다 — 그 회귀가
+    # 이 단언을 깨뜨린다.
+    assert (result.status, result.reason, result.historical_n) == (
+        "UNAVAILABLE", "HISTORY_BELOW_MIN", 3)
 
 
 def test_distribution_preview_fails_loudly_when_the_pit_surface_is_unavailable(monkeypatch):
@@ -118,7 +169,10 @@ def test_llm_can_only_submit_a_ready_current_event_distribution_preview(monkeypa
     )
     def preview(*_args, **kwargs):
         assert kwargs["today"] == -0.036
-        return EventDistributionPreview("anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        distribution = EventDistributionPreview(
+            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
 
     monkeypatch.setattr("edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
     candidate_id = next(iter(runtime._candidate_by_id))
@@ -149,5 +203,10 @@ def test_llm_can_only_submit_a_ready_current_event_distribution_preview(monkeypa
     assert rejected == []
     assert len(valid) == 1
     assert valid[0].preview_handle.startswith("hpr_")
+    assert runtime.distribution_attempts()["anchor"] == {
+        "preview_status": "READY", "preview_reason": "READY",
+        "historical_n": 41, "min_n": 30,
+        "handle": valid[0].preview_handle,
+    }
     assert "event_candidates" in systems[0]
     assert "exposure_id" not in systems[0]

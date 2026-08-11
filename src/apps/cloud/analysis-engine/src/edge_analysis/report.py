@@ -483,6 +483,60 @@ def _seal_badge(trace: dict[str, Any] | None) -> str:
     return '<span class="badge bad">봉인 불일치</span>'
 
 
+def _render_event_distribution_observations(window: dict[str, Any]) -> list[str]:
+    if "event_distribution_observations" not in window:
+        return []
+    diagnostic = window["event_distribution_observations"]
+    candidates = (diagnostic.get("candidates")
+                  if isinstance(diagnostic, dict) else None)
+    summary = diagnostic.get("summary") if isinstance(diagnostic, dict) else None
+    if not isinstance(candidates, list) or not isinstance(summary, dict):
+        # 키는 있는데 형상이 깨졌다 - 관측 부재(키 없음)나 후보 0 과 같은 얼굴로
+        # 접으면 원장 손상을 아무도 못 본다(Rule 12). None·비dict·summary 결손
+        # 전부 여기로 온다.
+        return ["<h4>사건 분포 준비도</h4>",
+                '<p class="meta">관측 payload 형상 불일치 — 원장 확인 필요</p>']
+    summary_keys = (("candidates", "후보"), ("linked", "연결"), ("ready", "READY"),
+                    ("submitted", "제출"), ("rendered", "렌더"))
+    bits = [f"{label} {escape(str(summary.get(key, 0)))}"
+            for key, label in summary_keys]
+    out = ["<h4>사건 분포 준비도</h4>",
+           f'<p class="meta">{" · ".join(bits)}</p>']
+    # ABORTED 는 "조회가 끝까지 못 돈 런"이다 - 확인된 0건("사건 후보 없음")과
+    # 같은 얼굴로 접으면 미확인 0 이 확정 사실처럼 보인다(Rule 12).
+    aborted = diagnostic.get("collection") == "ABORTED"
+    if not candidates:
+        out.append('<p class="meta">후보 조회 미완 — 런 중단</p>' if aborted
+                   else '<p class="meta">사건 후보 없음</p>')
+        return out
+    if aborted:
+        out.append('<p class="meta">수집 미완 — 이후 후보는 조회 전에 중단됐다</p>')
+    head = ("<tr><th>사건</th><th>결과</th><th>연결</th><th>Preview</th><th>사유</th>"
+            "<th>과거 표본</th><th>제출</th><th>렌더</th></tr>")
+    rows = []
+    skipped = 0
+    for item in candidates:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        reason = item.get("preview_reason") or item.get("link_reason") or ""
+        historical = ("" if item.get("historical_n") is None else
+                      f'{item["historical_n"]} / {item.get("min_n", "") or ""}')
+        values = (
+            item.get("source_event_id", ""), item.get("outcome_status", ""),
+            item.get("link_status", ""),
+            item.get("preview_status", ""), reason, historical,
+            "예" if item.get("submitted") else "아니오",
+            "예" if item.get("rendered") else "아니오",
+        )
+        rows.append("<tr>" + "".join(
+            f"<td>{escape(str(value))}</td>" for value in values) + "</tr>")
+    out.append("<table>" + head + "".join(rows) + "</table>")
+    if skipped:
+        out.append(f'<p class="meta">형상 불일치로 제외된 후보 {skipped}건</p>')
+    return out
+
+
 def _render_utterance(r: dict[str, Any]) -> list[str]:
     stage = r["stage"] or {}
     out = [f'<article class="utt" id="{escape(r["result_id"])}">',
@@ -537,16 +591,19 @@ def _render_utterance(r: dict[str, Any]) -> list[str]:
     else:
         out.append("<p class=\"meta\">가설 원장 행 없음</p>")
 
-    # ③ LLM·도구 감사 trace
+    # ③ READY 사건 분포 준비도 — stage_results.window 가 정본이다.
+    window = stage.get("window") or {}
+    out.extend(_render_event_distribution_observations(window))
+
+    # ④ LLM·도구 감사 trace
     out.append("<h4>LLM·도구</h4>")
     events = trace.get("events") or []
     rendered = _render_llm(events)
     out.extend(rendered if rendered
                else ['<p class="meta">trace 이벤트 없음</p>'])
 
-    # ④ usage 합산 · 창 좌표 · 커버리지
+    # ⑤ usage 합산 · 창 좌표 · 커버리지
     usage = _usage_total(events)
-    window = stage.get("window") or {}
     meta = ["<div class=\"meta\">"]
     meta.append("usage 합산: " + (escape(json.dumps(usage, ensure_ascii=False,
                                                    sort_keys=True))

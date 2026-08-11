@@ -467,6 +467,33 @@ def test_window_run_does_not_render_normal_explanation_after_objectset_failure(m
                     instrument_id="ETF", window_start="09:00", window_end="13:20")
 
 
+def test_window_run_buffers_distribution_attempt_before_preview_failure(monkeypatch):
+    """Preview 예외가 DRAFT를 만들기 전에 후보 진단을 window 원장에 넘긴다."""
+    from edge_analysis.statics import etfcell
+
+    monkeypatch.setattr(etfcell, "window_facts", lambda *_a, **_k: _facts())
+
+    def fail_preview(*_args, **kwargs):
+        kwargs["observations_out"].append({
+            "source_event_id": "evt_1", "link_status": "LINKED",
+            "preview_status": "FAILED",
+            "preview_reason": "EVENT_DISTRIBUTION_UNAVAILABLE",
+            "submitted": False, "rendered": False,
+        })
+        raise PipelineError("EVENT_DISTRIBUTION_UNAVAILABLE")
+
+    monkeypatch.setattr(etfcell, "_window_paneltest", fail_preview)
+    meta = {}
+
+    with pytest.raises(PipelineError, match="EVENT_DISTRIBUTION_UNAVAILABLE"):
+        etfcell.run(object(), "305720", "2026-08-05", lambda *_: {},
+                    instrument_id="ETF", window_start="09:00", window_end="13:20",
+                    window_meta=meta)
+
+    [candidate] = meta["event_distribution_observations"]["candidates"]
+    assert candidate["outcome_status"] == "FAILED"
+
+
 def test_missing_layers_raise_instead_of_returning_prose():
     """**부재는 예외로 말한다.**
 
@@ -737,6 +764,12 @@ def test_structured_news_reaches_final_block_and_news_evidence_rows(monkeypatch)
     assert news_event["title"] == "배터리 공급계약 체결"
     assert news_event["thread_id"] == "thr_news_1"
     assert news_event["evidence_id"] == "ev_1"
+    diagnostic = meta["event_distribution_observations"]
+    assert diagnostic["summary"] == {
+        "candidates": 1, "linked": 0, "ready": 0, "submitted": 0, "rendered": 0}
+    [candidate] = diagnostic["candidates"]
+    assert candidate["link_reason"] == "NO_FINITE_EVENT_RETURNS"
+    assert candidate["preview_status"] == "PREVIEW_NOT_REQUESTED"
     built = build_evidence_rows(
         blocks=meta["final_explanation"]["blocks"], lineage=meta["lineage"],
         stat_tests=meta.get("stat_tests", ()), events=meta["news_events"],
@@ -868,6 +901,7 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
     overlap = overlaps[0]
     assert overlap["thread_id"] == "thr_06"
     assert overlap["evidence_id"] == "evidence_evt_00"
+
     assert all(row["thread_id"] and row["evidence_id"]
                for row in meta["news_events"])
     assert calls == Counter({
@@ -895,6 +929,50 @@ def test_seven_threads_fourteen_events_render_once_with_bounded_tool_calls(monke
 
     assert duplicate_text == text
     assert duplicate_meta["final_explanation"] == meta["final_explanation"]
+
+
+@pytest.mark.parametrize(("arguments", "universe", "returns", "surface", "reason"), [
+    ([], {"A"}, {"A": 0.01}, "", "NO_EVENT_ARGUMENTS"),
+    (["B"], {"A"}, {"A": 0.01}, "", "NO_ARGUMENT_IN_PRICE_UNIVERSE"),
+    (["A"], {"A"}, {"B": 0.01}, "", "NO_ARGUMENT_WITH_CURRENT_RETURN"),
+    (["A", "B"], {"A", "B"}, {"A": 0.01, "B": 0.02}, "",
+     "MULTIPLE_ARGUMENTS_WITH_CURRENT_RETURN"),
+    (["A"], {"A"}, {}, "MARKET_RETURN_UNAVAILABLE", "MARKET_RETURN_UNAVAILABLE"),
+])
+def test_event_link_unavailability_reasons_are_mutually_exclusive(
+        arguments, universe, returns, surface, reason):
+    from edge_analysis.statics import etfcell
+
+    status, actual, _universe_matches, _return_matches = etfcell._event_link(
+        arguments, universe, returns, surface)
+
+    assert status == "UNAVAILABLE" and actual == reason
+
+
+def test_event_link_accepts_exactly_one_current_return():
+    from edge_analysis.statics import etfcell
+
+    assert etfcell._event_link(["A", "OUT"], {"A"}, {"A": 0.01}, "") == (
+        "LINKED", None, ["A"], ["A"])
+
+
+def test_observation_payload_distinguishes_ready_funnel_outcomes():
+    """READY만으로는 모델 미제출과 최종 렌더 성공을 구분할 수 없어야 안 된다."""
+    from edge_analysis.statics import etfcell
+
+    rows = [
+        {"source_event_id": "a", "preview_status": "READY",
+         "submitted": False, "rendered": False},
+        {"source_event_id": "b", "preview_status": "READY",
+         "submitted": True, "rendered": False},
+        {"source_event_id": "c", "preview_status": "READY",
+         "submitted": True, "rendered": True},
+    ]
+
+    payload = etfcell._observation_payload(rows)
+
+    assert [row["outcome_status"] for row in payload["candidates"]] == [
+        "READY_NOT_SUBMITTED", "READY_SUBMITTED", "RENDERED"]
 
 
 def test_thread_news_duplicate_event_uses_order_independent_canonical_winner():
