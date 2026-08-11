@@ -171,11 +171,17 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
   const elapsed = evidenced + w.overdueNoEvidence + w.missing;
   const defects = qualityDefectCount(s);
   const stuck = jobs.claimedExpired + jobs.dead;
-  /* 기대 창 수에는 있는데 원장에 행이 없다 — 어떤 창 집계에도 안 잡히므로 위 숫자들을
-   * 그대로 믿으면 안 된다는 사실이다. `issues()` 는 이걸 내는데 여기서 안 보면 요약이
-   * "정상"이라 하고 상세가 "원장 수를 못 믿는다"고 해 둘이 어긋난다.
-   * 장애로 세우지는 않는다 — 세션이 죽은 게 아니라 **셈의 근거가 흔들리는** 것이다. */
-  const unmaterialized = Math.max(0, s.expectedWindowCount - materializedCount(s));
+  /* 기대 창 수와 원장 실재 행 수가 다르다 — 위 숫자들을 그대로 믿으면 안 된다는 사실이다.
+   * `issues()` 는 이걸 내는데 여기서 안 보면 요약이 "정상"이라 하고 상세가 "원장 수를 못
+   * 믿는다"고 해 둘이 어긋난다. 장애로 세우지는 않는다 — 세션이 죽은 게 아니라 **셈의
+   * 근거가 흔들리는** 것이다.
+   *
+   * ⚠️ **양방향이다.** `issues()` 가 `materialized !== expected` 로 재므로 여기서
+   * `max(0, expected - materialized)` 로 재면 **행이 더 많은 쪽**(391 vs 390)을 0으로 접어
+   * 요약만 깨끗해진다. 초과도 같은 사실이다 — 중복 materialize 든 기대 수 계산 오류든,
+   * 어느 쪽이어도 창 집계를 그대로 믿을 수 없다. */
+  const materialized = materializedCount(s);
+  const ledgerGap = Math.abs(s.expectedWindowCount - materialized);
 
   const coverage = {
     elapsed,
@@ -219,7 +225,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
     const parts = [
       windowDefects > 0 ? `남은 결함 ${windowDefects}${noun}` : null,
       stuck > 0 ? `고착 job ${stuck}` : null,
-      unmaterialized > 0 ? `원장 불일치 ${unmaterialized}${noun}` : null,
+      ledgerGap > 0 ? `원장 불일치 ${ledgerGap}${noun}` : null,
     ].filter(Boolean);
     return {
       ...base,
@@ -248,7 +254,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
     };
   }
   /* 수집기가 살아 있어도 결함이 있으면 정상이 아니다 */
-  if (defects > 0 || stuck > 0 || unmaterialized > 0) {
+  if (defects > 0 || stuck > 0 || ledgerGap > 0) {
     return {
       ...base,
       kind: 'caution',
@@ -259,7 +265,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
           ? `품질 결함 ${defects}${noun}`
           : stuck > 0
             ? `유효 lease 없는 claim·DEAD ${stuck}건`
-            : `원장 불일치 — 기대 ${s.expectedWindowCount}${noun} 중 실재 행 ${materializedCount(s)}`,
+            : `원장 불일치 — 기대 ${s.expectedWindowCount}${noun} 중 실재 행 ${materialized}`,
     };
   }
   if (live.kind === 'unknown') {

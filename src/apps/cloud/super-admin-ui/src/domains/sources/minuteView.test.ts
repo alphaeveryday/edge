@@ -496,6 +496,23 @@ test('원장 불일치는 요약에도 뜬다 — 상세만 "못 믿는다"고 �
   assert.doesNotMatch(ok.reason, /불일치/);
 });
 
+test('원장 불일치는 양방향이다 — 행이 더 많아도 셈을 믿을 수 없다', () => {
+  /* `issues()` 는 `materialized !== expected` 로 잰다. 요약이 `max(0, expected - materialized)`
+   * 로 재면 초과(391 vs 390)를 0으로 접어 요약만 깨끗해진다 — 중복 materialize 든 기대 수
+   * 계산 오류든 창 집계를 못 믿는 건 같다. */
+  const over = session({ expectedWindowCount: 390, windows: { valid: 391 } });
+  assert.ok(issues(over, NO_JOBS).some((i) => i.key === 'ledgerMismatch'), '상세는 이미 낸다');
+  assert.equal(sessionHealth(over, NO_JOBS).kind, 'caution', '요약이 정상이면 안 된다');
+  assert.match(sessionHealth(over, NO_JOBS).reason, /원장 불일치/);
+
+  const overClosed = sessionHealth(
+    session({ phase: 'FINALIZED', expectedWindowCount: 390, windows: { valid: 391 } }),
+    NO_JOBS,
+  );
+  assert.equal(overClosed.tone, 'warn', '마감 세션도 같다');
+  assert.match(overClosed.reason, /원장 불일치 1/);
+});
+
 test('poll 레인의 어느 조각에도 창·거래 어휘가 남지 않는다 — 덮은 키만 맞고 나머지가 새면 안 된다', () => {
   /* 부분 덮어쓰기 표는 **빠뜨린 키가 곧 기본(가격) 문구로 떨어진다**. 키를 하나씩 세는
    * 단언은 다음에 추가되는 키를 못 잡으므로, 전 조각을 구조로 검사한다. */
