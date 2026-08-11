@@ -34,13 +34,23 @@ const NEWS_RUN = `news:${MOCK_TRADING_DATE}T15:30`;
  * 최근 7거래일 × 두 레인. 성공·실행 중·실패·타임아웃·계획 스킵·데이터 결손·완전성 VALID 가
  * 한 화면에 다 나오도록 날짜별 시나리오를 고정한다(무작위 금지 — 검수 스크린샷이 흔들린다). */
 
-const MARKET_TASKS: { stage: string; taskKey: string }[] = [
+/**
+ * 격자 픽스처의 작업 목록.
+ *
+ * `calendar` 는 **비거래일에 계획이 스킵되는가**다 — 정본은 `ops/catalog.py` 의
+ * `kr_trading_calendar` 이고 테스트가 그 값과 맞물린다. 레인 단위가 아니라 **작업마다**
+ * 다르다: 주말에 레인 전체를 스킵으로 칠하면 실 API 가 못 내는 슬롯이 되고, 그 모양으로
+ * 검수하면 "주말엔 아무것도 안 돈다"는 없는 사실을 화면이 배운다.
+ */
+type FixtureTask = { stage: string; taskKey: string; calendar?: true };
+
+const MARKET_TASKS: FixtureTask[] = [
   { stage: 'raw', taskKey: 'ETF_HOLDINGS_COLLECTION_KRX' },
-  { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS' },
+  { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', calendar: true },
   { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF' },
-  { stage: 'normalize', taskKey: 'NORMALIZE_PRICE' },
-  { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY' },
+  { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', calendar: true },
+  { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY', calendar: true },
   { stage: 'feature', taskKey: 'ENRICH_CORP_CODE' },
   { stage: 'feature', taskKey: 'LOAD_ETF_FLOW' },
 ];
@@ -48,7 +58,7 @@ const MARKET_TASKS: { stage: string; taskKey: string }[] = [
  * 격자·리포트는 **이 목록에서** 파생하므로 여기가 짧으면 개요가 말한 결함 행을 드릴다운에서
  * 영영 못 그린다 — 픽스처가 스스로와 모순되고 그 UI 경로가 검수에서 빠진다.
  * 여섯은 ops 카탈로그의 뉴스 작업 전량과 같다. */
-const NEWS_TASKS: { stage: string; taskKey: string }[] = [
+const NEWS_TASKS: FixtureTask[] = [
   { stage: 'raw', taskKey: 'NEWS_COLLECTION_BIGKINDS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_NEWS' },
   { stage: 'feature', taskKey: 'TAG_NEWS' },
@@ -95,8 +105,15 @@ function marketSlot(date: string): GridSlot {
   switch (date) {
     case '2026-08-01':
     case '2026-08-02':
-      /* 주말 — 계획 스킵 */
-      return { runKey, launchStatus: 'LAUNCHED', orchestrationStatus: 'SUCCEEDED', tradingDate: date, tasks: T.map(skipped) };
+      /* 주말 — **달력 게이트 작업만** 계획 스킵이다. 나머지는 그대로 돈다(개요도 이 레인을
+       * `skipped: 3` 이라 말한다). 레인 전체를 스킵으로 칠하면 실 planner 가 못 내는 슬롯이다. */
+      return {
+        runKey,
+        launchStatus: 'LAUNCHED',
+        orchestrationStatus: 'SUCCEEDED',
+        tradingDate: date,
+        tasks: T.map((t) => (t.calendar ? skipped(t) : cell(t, { recordsOut: 906 }))),
+      };
     case '2026-07-31':
       /* 수집 실패 → 하류가 선행 미충족으로 막힌다 */
       return {
@@ -184,7 +201,15 @@ function newsSlot(date: string): GridSlot {
   const runKey = `news:${date}T15:30`;
   const N = NEWS_TASKS;
   if (date === '2026-08-01' || date === '2026-08-02') {
-    return { runKey, launchStatus: 'LAUNCHED', orchestrationStatus: 'SUCCEEDED', tradingDate: date, tasks: N.map(skipped) };
+    /* 뉴스 작업은 여섯 다 `kr_trading_calendar=False` 라 **주말에도 돈다** — 스킵으로 칠하면
+     * 실 API 가 못 내는 슬롯이고, 주말 뉴스라는 실제 동작이 검수에서 빠진다. */
+    return {
+      runKey,
+      launchStatus: 'LAUNCHED',
+      orchestrationStatus: 'SUCCEEDED',
+      tradingDate: date,
+      tasks: N.map((t) => cell(t, { recordsOut: t.stage === 'raw' ? 2841 : 2603 })),
+    };
   }
   if (date === MOCK_TRADING_DATE) {
     /* 런이 타임아웃 — 그 안의 작업이 미실행으로 남는다.
@@ -278,14 +303,21 @@ export const MOCK_MINUTE: MinuteStatus = {
         invalid: 1,
         overdueNoEvidence: 4,
       },
+      /* ⚠️ **집계와 같은 수만큼 있어야 한다.** 서버 `GAPS_SQL` 은 LIMIT 없이 결함 창
+       * (MISSING·INCOMPLETE·INVALID)과 무증거 창을 **전부** 낸다 — 집계는 6인데 목록이 3이면
+       * 운영자가 못 들어가는 숫자가 생기고, 같은 상태가 여럿일 때의 구간 접기·범위 렌더가
+       * 검수에서 빠진다. 연속·비연속을 섞어 둔다(gapRuns 가 접는 대상이 실제로 생기게). */
       gaps: [
         { windowStart: iso('10:14'), windowEnd: iso('10:15'), dataStatus: 'DUE', noEvidence: true },
         { windowStart: iso('10:15'), windowEnd: iso('10:16'), dataStatus: 'DUE', noEvidence: true },
         { windowStart: iso('11:02'), windowEnd: iso('11:03'), dataStatus: 'CLAIMED', noEvidence: true },
         { windowStart: iso('13:41'), windowEnd: iso('13:42'), dataStatus: 'CLAIMED', noEvidence: true },
         { windowStart: iso('09:37'), windowEnd: iso('09:38'), dataStatus: 'INCOMPLETE', noEvidence: false },
+        { windowStart: iso('09:38'), windowEnd: iso('09:39'), dataStatus: 'INCOMPLETE', noEvidence: false },
+        { windowStart: iso('11:45'), windowEnd: iso('11:46'), dataStatus: 'INCOMPLETE', noEvidence: false },
         { windowStart: iso('14:08'), windowEnd: iso('14:09'), dataStatus: 'INVALID', noEvidence: false },
         { windowStart: iso('12:20'), windowEnd: iso('12:21'), dataStatus: 'MISSING', noEvidence: false },
+        { windowStart: iso('12:21'), windowEnd: iso('12:22'), dataStatus: 'MISSING', noEvidence: false },
       ],
       priceJobs: { waiting: 12, claimed: 3, claimedExpired: 1, succeeded: 1284, dead: 2 },
     },
@@ -428,7 +460,7 @@ export const MOCK_REPORT: SourceReport = {
     task({
       stage: 'raw',
       taskKey: 'INVESTOR_COLLECTION_KIS',
-      dataset: 'investor_flow',
+      dataset: 'investor_flow_daily',
       dataStatus: 'INCOMPLETE',
       recordsOut: 1450,
       failedRecords: 2,
@@ -491,7 +523,7 @@ export const MOCK_REPORT: SourceReport = {
     task({
       stage: 'feature',
       taskKey: 'LOAD_ETF_FLOW',
-      dataset: 'etf_flow',
+      dataset: 'investor_flow_load',
       planStatus: 'SKIPPED',
       outcome: null,
       dataStatus: null,
@@ -510,17 +542,23 @@ export const MOCK_REPORT: SourceReport = {
   ],
 };
 
+/**
+ * 작업 → **원장 dataset**. `TaskStatus.dataset` 이 그 축이라 UI 카탈로그의 접기
+ * (`datasetCatalog` 는 산출 테이블을 수집 데이터셋 한 행으로 접는다)와 **다른 값**이다.
+ * 정본은 `ops/catalog.py` 이고 테스트가 전건 대조한다 — 접힌 값을 여기 적으면 실
+ * `/sources/report` 가 못 내는 라벨을 검수가 승인한다.
+ */
 const MOCK_DATASET: Record<string, string> = {
   ETF_HOLDINGS_COLLECTION_KRX: 'etf_holdings',
   PRICE_COLLECTION_KIS: 'price_daily',
-  INVESTOR_COLLECTION_KIS: 'investor_flow',
+  INVESTOR_COLLECTION_KIS: 'investor_flow_daily',
   ENRICH_CORP_CODE: 'company_profile',
   NORMALIZE_ETF: 'etf_holdings',
   NORMALIZE_PRICE: 'price_daily',
   LOAD_PRICE_DAILY: 'price_daily',
-  LOAD_ETF_FLOW: 'etf_flow',
+  LOAD_ETF_FLOW: 'investor_flow_load',
   NEWS_COLLECTION_BIGKINDS: 'stock_news',
-  NORMALIZE_NEWS: 'stock_news',
+  NORMALIZE_NEWS: 'news_articles',
   LOAD_DOCUMENTS: 'document',
   TAG_NEWS: 'news_assertions',
   LOAD_ASSERTIONS: 'document_assertion',
