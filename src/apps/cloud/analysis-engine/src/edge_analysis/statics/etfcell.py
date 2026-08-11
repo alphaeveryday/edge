@@ -147,7 +147,10 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         # 죽어도 그때까지의 후보별 관측이 원장(window_meta)·로그에 남는다(Rule 12).
         # 후보 발견 전에 죽으면 빈 payload 가 남는다 — "관측이 있었는데 후보 0" 과
         # "관측 도입 전 레코드"(키 부재)를 원장에서 가른다.
-        collection_complete = False
+        # 수집 완료는 열거가 실제로 끝나는 자리(_window_paneltest 의 후보 루프 종료)
+        # 가 선언한다 — preview 실패(PreviewExecutionError)나 조립·렌더 실패는 열거
+        # 뒤의 일이라 수집 미완이 아니다. 그 결말은 preview_status·rendered 가 말한다.
+        collection_state: dict = {}
         try:
             facts = window_facts(
                 lake, etf, instrument_id, day, window_start, window_end, roll=roll)
@@ -156,13 +159,10 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                 current_event_returns=current_event_returns,
                 event_return_universe=event_return_universe,
                 event_return_surface=event_return_surface,
-                observations_out=distribution_observations)
+                observations_out=distribution_observations,
+                collection_out=collection_state)
             if any(row.get("reason") == "OBJECTSET_UNAVAILABLE" for row in stat_tests):
                 raise PipelineError("OBJECTSET_UNAVAILABLE: scoped news lookup failed")
-            # 여기 도달 = 후보 열거가 끝까지 돌았다는 뜻이다(OBJECTSET 게이트가 중간
-            # 중단 열거를 걸러냈다). 이후 조립·렌더 실패는 수집 미완이 아니다 —
-            # 그 결말은 rendered=False 가 따로 말한다.
-            collection_complete = True
             distributions = tuple(
                 EventDistributionFact(
                     source_event_id=str(row["source_event_id"]), title=str(row["title"]),
@@ -196,11 +196,11 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
                     or observation.get("thread_id") in rendered_threads)
         finally:
             payload = _observation_payload(distribution_observations)
-            # 조회가 끝까지 돈 0건과 조회 미도달의 0건은 다른 사실이다 - 예외로
-            # 빠져나가는 flush 는 ABORTED 로 표시해 렌더가 구분하게 한다(Rule 12).
+            # 조회가 끝까지 돈 0건과 조회 미도달의 0건은 다른 사실이다 - 열거를
+            # 못 끝낸 flush 는 ABORTED 로 표시해 렌더가 구분하게 한다(Rule 12).
             # 판정은 명시 플래그다 - finally 안 sys.exc_info() 는 상위 스택이 처리
             # 중인 바깥 예외까지 돌려줘 정상 완료를 ABORTED 로 오기록한다.
-            payload["collection"] = ("COMPLETE" if collection_complete
+            payload["collection"] = ("COMPLETE" if collection_state.get("complete")
                                      else "ABORTED")
             if window_meta is not None:
                 window_meta["event_distribution_observations"] = payload
@@ -326,6 +326,7 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                       event_return_universe: tuple[str, ...] | None = None,
                       event_return_surface: dict | None = None,
                       observations_out: list[dict] | None = None,
+                      collection_out: dict | None = None,
                       ) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
     """요청창 사건·발화 계열 → LLM 가설 제안 → 코드 검정 → **레코드 버퍼**.
 
@@ -525,6 +526,9 @@ def _window_paneltest(lake, instrument_id: str, day: str, ask, facts,
                 "line": f"{clock}, {title}" if clock else title,
             })
             observe(row, **link_fields)
+        # 후보 열거가 여기서 끝났다 — 이후 preview·제안 실패는 수집 미완이 아니다.
+        if collection_out is not None:
+            collection_out["complete"] = True
         if news_out is not None:
             news_out.extend(discovered)
         from .hypothesis_preview import EventCandidate, HypothesisPreviewRuntime
