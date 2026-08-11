@@ -5,6 +5,7 @@
 
 import io
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+from data_pipeline.minute.models import KST
 from data_pipeline.steps import build_minute_universe
 
 build = build_minute_universe.build
@@ -214,6 +216,9 @@ def test_constituents_drained_by_the_sector_axis_fails_loud(tmp_path):
 
 # ── 정본 객체 반영 (ALPHA-953) ─────────────────────────────
 RUN_ID = "20260812T070000Z"
+# 교체가 허용되는 시각 — 거래일(수) 07:00 KST, 마감 07:30 전. 가상 시계로 못박는다:
+# `datetime.now()` 에 기대면 이 스위트가 매일 07:30 이후에 빨개진다.
+EARLY = datetime(2026, 8, 12, 7, 0, tzinfo=KST)
 
 
 class _CountingStorage(LocalStorage):
@@ -258,11 +263,11 @@ def test_unchanged_universe_is_not_written(tmp_path):
     #      움직였나"를 객체 이력으로 못 되짚는다 — 그 이력이 사고 때 유일한 단서다.
     #      **쓰기 횟수로 단언한다** — 결과 바이트를 보면 매번 PUT 하는 회귀가 통과한다.
     storage, uri = _lane(tmp_path)
-    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID) == 0
+    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY) == 0
     first = Path(uri).read_bytes()
     stat = Path(uri).stat()
 
-    assert build_minute_universe.run(storage, _settings(), uri, "20260813T070000Z") == 0
+    assert build_minute_universe.run(storage, _settings(), uri, "20260813T070000Z", EARLY) == 0
 
     assert Path(uri).read_bytes() == first
     assert Path(uri).stat().st_mtime_ns == stat.st_mtime_ns   # 파일을 아예 안 열었다
@@ -274,11 +279,11 @@ def test_new_constituent_lands_with_the_previous_object_backed_up(tmp_path):
     #      계획 전에 정본이 바뀌어야 한다. 동시에 잘못 만든 유니버스가 그날의 유일한
     #      정본이 되면 되돌릴 것이 없으므로, 교체는 백업과 한 쌍이다.
     storage, uri = _lane(tmp_path)
-    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z")
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
     before = Path(uri).read_bytes()
     _wide(storage, "2026-08-12", 21)  # 신규 편입 1종
 
-    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID) == 0
+    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY) == 0
 
     after = json.loads(Path(uri).read_text(encoding="utf-8"))
     assert "100020" in after["constituent_ids"]
@@ -291,12 +296,12 @@ def test_shrunk_universe_is_refused_and_leaves_the_object_alone(tmp_path):
     #      (ALPHA-936 실증). 홀딩스 수집이 반쯤 실패한 아침에 조용히 착지하는 것이
     #      이 형태라, 거부는 물론 **기존 객체를 건드리지 않는 것**까지가 계약이다.
     storage, uri = _lane(tmp_path)
-    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z")
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
     before = Path(uri).read_bytes()
     _wide(storage, "2026-08-12", 2)  # 수집 사고 — 스냅샷이 2종만 실렸다
 
     with pytest.raises(SystemExit, match="크게 줄어 거부"):
-        build_minute_universe.run(storage, _settings(), uri, RUN_ID)
+        build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY)
 
     assert Path(uri).read_bytes() == before
     assert not _bak(uri).exists()
@@ -306,10 +311,10 @@ def test_small_shrink_still_lands(tmp_path):
     # WHY: 가드가 넓으면 정상 리밸런싱(ETF 하나가 몇 종 갈아끼우는 일)까지 막아, 탈출구가
     #      "객체를 지운다"뿐인 상태로 매일 아침 사람을 부른다 — 그런 가드는 곧 꺼진다.
     storage, uri = _lane(tmp_path)
-    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z")
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
     _wide(storage, "2026-08-12", 19)  # 21 unit → 20 unit (ETF 1 + 구성종목)
 
-    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID) == 0
+    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY) == 0
 
     after = json.loads(Path(uri).read_text(encoding="utf-8"))
     assert len(after["constituent_ids"]) == 19
@@ -323,7 +328,7 @@ def test_the_step_writes_where_the_consumers_read(tmp_path):
     from data_pipeline.minute.models import load_universe_uri
 
     storage, uri = _lane(tmp_path)
-    build_minute_universe.run(storage, _settings(), uri, RUN_ID)
+    build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY)
 
     assert load_universe_uri(uri).etf_ids == ("091160",)
 
@@ -338,9 +343,67 @@ def test_missing_etf_map_root_is_refused_not_silently_widened(tmp_path):
     settings = SimpleNamespace(krx_etf=None, minute_universe=None)
 
     with pytest.raises(SystemExit, match=r"\[krx_etf\] 섹션이 없다"):
-        build_minute_universe.run(storage, settings, uri, RUN_ID)
+        build_minute_universe.run(storage, settings, uri, RUN_ID, EARLY)
 
     assert not Path(uri).exists()
+
+
+def test_replacement_after_the_plan_cutoff_is_refused(tmp_path):
+    # WHY: 앞선 스크립트는 "업로드하지 않는다"로 이 위험을 피했다. 업로드를 이 스텝이
+    #      맡은 이상 그 불변식을 **산문이 아니라 코드로** 다시 세워야 한다 — 계획 뒤에
+    #      객체만 바뀌면 원장의 universe_hash 는 옛 값에 고정된 채라, 재기동한 worker·
+    #      consumer 가 매 틱 blocked 로 돌면서도 **안 죽는다**(08-11 12:07 실증).
+    storage, uri = _lane(tmp_path)
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
+    before = Path(uri).read_bytes()
+    _wide(storage, "2026-08-12", 21)
+    noon = datetime(2026, 8, 12, 12, 7, tzinfo=KST)   # 거래일(수) 장중
+
+    with pytest.raises(SystemExit, match="교체 마감"):
+        build_minute_universe.run(storage, _settings(), uri, RUN_ID, noon)
+
+    assert Path(uri).read_bytes() == before
+    assert not _bak(uri).exists()
+
+
+def test_the_cutoff_does_not_fire_on_a_non_trading_day(tmp_path):
+    # WHY: 가드가 무는 것은 **계획된 세션**이지 시각이 아니다. 비거래일엔 세션 자체가
+    #      없으므로 낮에 재빌드해도 흔들 계획이 없다 — 여기서 막으면 주말 복구·백필이
+    #      통째로 불가능해지고, 그런 가드는 곧 우회되거나 꺼진다.
+    storage, uri = _lane(tmp_path)
+    saturday_noon = datetime(2026, 8, 15, 12, 0, tzinfo=KST)
+
+    assert build_minute_universe.run(
+        storage, _settings(), uri, RUN_ID, saturday_noon) == 0
+    assert Path(uri).exists()
+
+
+def test_unchanged_universe_passes_the_cutoff_untouched(tmp_path):
+    # WHY: 무변경은 교체가 아니라 아무 계획도 못 흔든다. 시각 가드를 no-op 판정보다
+    #      앞에 두면 장중 재실행이 **아무것도 안 바꾸면서** exit 1 을 내 — 배선된 체인이
+    #      늦게 돈 날마다 거짓 실패로 알람이 울리고, 그 알람은 곧 무시된다.
+    storage, uri = _lane(tmp_path)
+    build_minute_universe.run(storage, _settings(), uri, "20260811T070000Z", EARLY)
+    noon = datetime(2026, 8, 12, 12, 7, tzinfo=KST)
+
+    assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, noon) == 0
+
+
+def test_corrupt_previous_object_does_not_brick_the_rebuild(tmp_path, caplog):
+    # WHY: 손상된 정본은 소비자도 이미 못 읽어 레인이 서 있는 상태다(`load_universe_uri`
+    #      가 fail-loud). 여기서까지 거부하면 탈출구가 "사람이 객체를 지운다" 하나뿐인 채
+    #      매일 아침 같은 자리에 선다 — 앞으로 고치되, 축소 대조를 못 했다는 **사실은
+    #      남기고** 원본은 백업에 보존한다(Rule 12).
+    storage, uri = _lane(tmp_path)
+    Path(uri).parent.mkdir(parents=True, exist_ok=True)
+    Path(uri).write_bytes(b"{ this is not json")
+
+    with caplog.at_level("WARNING"):
+        assert build_minute_universe.run(storage, _settings(), uri, RUN_ID, EARLY) == 0
+
+    assert json.loads(Path(uri).read_text(encoding="utf-8"))["etf_ids"] == ["091160"]
+    assert _bak(uri).read_bytes() == b"{ this is not json"   # 원본 보존
+    assert "축소 대조를 건너뛴다" in caplog.text
 
 
 def test_put_is_skipped_entirely_when_nothing_changed(tmp_path):
@@ -351,6 +414,6 @@ def test_put_is_skipped_entirely_when_nothing_changed(tmp_path):
     _wide(storage, "2026-08-07", 20)
     baseline = storage.puts
 
-    build_minute_universe.run(storage, _settings(), str(tmp_path / "u.json"), RUN_ID)
+    build_minute_universe.run(storage, _settings(), str(tmp_path / "u.json"), RUN_ID, EARLY)
 
     assert storage.puts == baseline

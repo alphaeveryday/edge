@@ -2,13 +2,16 @@
 """1분 레인 universe.json 을 파일로 뽑는 **로컬 확인용** 래퍼 (ALPHA-735·953).
 
 파생 규칙·산출 형식의 정본은 `data_pipeline.steps.build_minute_universe` 다 — 여기서
-재구현하지 않는다. 배포 경로(ECS)는 그 스텝을 직접 돈다:
+재구현하지 않는다. 배포 경로(ECS)는 그 스텝을 직접 돈다(`--universe` 는 **필수**다 —
+소비자가 읽는 그 URI 를 그대로 준다):
 
-    python -m data_pipeline.run build-minute-universe
+    python -m data_pipeline.run build-minute-universe \
+      --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
 
 **이 스크립트는 업로드하지 않는다.** 파일만 만든다 — 반영(정본 객체 교체)은 위 스텝의
-일이고, 그 스텝은 세션 계획 전 창에서만 도는 자리라 장중 교체 위험이 없다. 손으로
-올릴 일이 남았다면(스텝 배선 전 급한 교체 등) 아래 레시피대로 확인 후 하라.
+일이고, 그 스텝은 거래일 07:30 KST 이후엔 스스로 거부한다(세션 계획 뒤 교체 금지).
+그 시각을 넘겨 오늘 안에 꼭 갈아야 하면 아래 레시피로 확인한 뒤 사람이 반영하고,
+원장의 universe_hash 도 함께 고쳐라.
 
 실행(레포 루트 기준):
 

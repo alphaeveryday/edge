@@ -30,14 +30,17 @@ from __future__ import annotations
 import json
 import logging
 import math
+from datetime import datetime, time
 
 from ..lake.storage import Storage
 from ..minute.models import (
+    KST,
     Universe,
     content_checksum,
     read_universe_bytes,
     write_universe_bytes,
 )
+from ..ops.trading_calendar import is_trading_day
 # 유니버스 파생은 수집 스텝이 정본이다 — 규칙을 두 벌로 만들면 한쪽만 고쳐진다.
 # 공시·투자자 스텝도 같은 함수를 그대로 가져다 쓴다(ingest_raw_disclosure·investor).
 from .ingest_price_raw import (
@@ -55,6 +58,17 @@ logger = logging.getLogger(__name__)
 # 않으므로, 큰 축소는 그 자체가 수집을 의심할 신호다.
 # ponytail: 고정 비율 하나 — 오탐/미탐이 실제로 나면 ETF 별 결손 판정으로 올려라
 MIN_KEEP_RATIO = 0.9
+
+# 거래일에 교체를 허용하는 마지막 시각(KST). 이 시각 이후엔 **세션이 이미 계획됐을 수
+# 있다** — 그러면 원장의 universe_hash 는 옛 값에 고정된 채 객체만 바뀌어, 재기동한
+# worker·consumer 가 매 틱 blocked 로 돌면서도 안 죽는다(08-11 12:07 실증, ALPHA-936).
+#
+# ⚠️ **이 상수가 계약이고 크론이 그것을 지킨다** — 반대가 아니다. 장전 체인은 이 시각
+# **전에** 끝나야 하고, 늦으면 스텝이 스스로 거부한다. 그게 의도다: 계획 뒤에 갈아끼우는
+# 것보다 그날 재빌드를 거르는 편이 낫다(전자는 그날 분봉이 영구 결손, 후자는 신규 편입이
+# 하루 늦을 뿐이다). 세션 계획(start-minute-session)은 07:45 KST 라 15분 여유다.
+# 비거래일엔 세션 자체가 없으므로 시각을 안 본다.
+REBUILD_CUTOFF_KST = time(7, 30)
 
 
 def build(storage, expected_etfs, sector_etf_ids: tuple[str, ...] = ()) -> Universe:
@@ -183,7 +197,8 @@ def summary_of(universe: Universe) -> str:
             f"= 수집 {len(universe.unit_ids)} unit (version={universe.universe_version})")
 
 
-def run(storage: Storage, settings, universe_uri: str, run_id: str) -> int:
+def run(storage: Storage, settings, universe_uri: str, run_id: str,
+        now: datetime | None = None) -> int:
     """유니버스를 다시 만들어 정본 객체에 반영한다. 변경이 없으면 쓰지 않는다.
 
     **대상 객체는 인자로 받는다** — 소비자(planner·worker·consumer)가 `--universe` 로
@@ -200,13 +215,16 @@ def run(storage: Storage, settings, universe_uri: str, run_id: str) -> int:
     if existing == payload:
         # 세대만 바꾸는 쓰기를 안 한다. universe_version 은 구성에서 유도되므로 같은
         # 구성이면 같은 값이고, 그때의 PUT 은 순수한 노이즈다.
+        # ⚠️ **시각 가드보다 앞이다** — 무변경은 교체가 아니라 계획을 못 흔든다. 뒤로
+        # 밀면 장중 재실행이 아무것도 안 바꾸면서 exit 1 을 내 알람만 울린다.
         logger.info("universe 무변경 — %s 를 쓰지 않는다: %s",
                     universe_uri, summary_of(universe))
         return 0
 
+    _refuse_after_plan(now or datetime.now(KST))
+
     if existing is not None:
-        before = Universe.model_validate(json.loads(existing.decode("utf-8")))
-        _refuse_shrink(before, universe)
+        _refuse_shrink_from(existing, universe, universe_uri)
         # 08-11 수동 교체가 이미 하던 절차다 — 되돌릴 것이 없으면 잘못 만든 유니버스가
         # 그날의 유일한 정본이 된다.
         write_universe_bytes(f"{universe_uri}.bak-{run_id}", existing)
@@ -214,6 +232,43 @@ def run(storage: Storage, settings, universe_uri: str, run_id: str) -> int:
     write_universe_bytes(universe_uri, payload)
     logger.info("universe 갱신: %s ← %s", universe_uri, summary_of(universe))
     return 0
+
+
+def _refuse_after_plan(now: datetime) -> None:
+    """세션이 이미 계획됐을 수 있는 시각이면 교체를 거부한다(`REBUILD_CUTOFF_KST`).
+
+    앞선 스크립트는 이 위험을 "업로드하지 않는다"로 피했다. 업로드를 이 스텝이 맡은
+    이상 그 불변식을 **산문이 아니라 코드로** 다시 세워야 한다 — 도크스트링의 "장중에
+    돌리지 마라"는 급할 때 아무도 안 읽는다.
+    """
+    local = now.astimezone(KST)
+    if not is_trading_day(local.date()) or local.time() < REBUILD_CUTOFF_KST:
+        return
+    raise SystemExit(
+        f"거래일 {local:%Y-%m-%d %H:%M} KST 는 교체 마감({REBUILD_CUTOFF_KST:%H:%M}) 뒤라 "
+        f"거부한다 — 세션이 이미 이 유니버스로 계획됐을 수 있고, 그러면 원장의 "
+        f"universe_hash 는 옛 값에 고정된 채 객체만 바뀌어 worker·consumer 가 매 틱 "
+        f"blocked 로 돈다. 오늘 안에 꼭 갈아야 하면 scripts/build_minute_universe.py "
+        f"로 파일을 뽑아 확인한 뒤 사람이 반영하고 원장 universe_hash 도 함께 고쳐라"
+    )
+
+
+def _refuse_shrink_from(existing: bytes, after: Universe, universe_uri: str) -> None:
+    """직전 정본을 축소 대조의 기준으로 삼는다. 못 읽으면 대조를 건너뛴다.
+
+    ⚠️ **손상된 객체가 재빌드를 영구히 막으면 안 된다.** 그 상태는 소비자도 이미
+    fail-loud 로 못 뜨는 상태라(`load_universe_uri`), 여기서까지 거부하면 탈출구가
+    "사람이 객체를 지운다" 하나뿐인 채로 매일 아침 같은 자리에 선다. 앞으로 고치되
+    **건너뛴 사실은 남긴다**(Rule 12) — 직전 객체는 백업으로 보존된다.
+    """
+    try:
+        before = Universe.model_validate(json.loads(existing.decode("utf-8")))
+    except Exception as exc:
+        logger.warning(
+            "직전 universe 객체를 못 읽어 축소 대조를 건너뛴다(%s): %s — 백업(.bak-*)에 "
+            "원본이 남는다", universe_uri, exc)
+        return
+    _refuse_shrink(before, after)
 
 
 def _refuse_shrink(before: Universe, after: Universe) -> None:
