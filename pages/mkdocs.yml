@@ -8,6 +8,9 @@ theme:
   name: material
   custom_dir: overrides
   language: ko
+  # 스킴별 실제 로고 교체는 overrides/partials/logo.html + extra.css 가 담당한다.
+  # 이 값은 로고 버튼 렌더 조건을 켜는 역할.
+  logo: assets/images/edge-logo-white.svg
   features:
     - navigation.tabs
     - navigation.sections

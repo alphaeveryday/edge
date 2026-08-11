@@ -1,6 +1,22 @@
 /* 쇼케이스 허브 홈(overrides/home.html) 전용 스타일.
    색은 Material 팔레트 변수만 사용해 라이트/다크 토글에 함께 반응한다. */
 
+/* 스킴별 로고 교체 (overrides/partials/logo.html 의 2-img 와 한 쌍) */
+[data-md-color-scheme="default"] .ep-logo--dark {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .ep-logo--light {
+  display: none;
+}
+
+/* 워드마크(1100×225)가 헤더 높이에 맞게 — Material 기본 로고 크기 규칙 유지 */
+.md-header__button.md-logo img.ep-logo,
+.md-nav__button.md-logo img.ep-logo {
+  height: 1.1rem;
+  width: auto;
+}
+
 .ep-home {
   max-width: 46rem;
   margin: 0 auto;
