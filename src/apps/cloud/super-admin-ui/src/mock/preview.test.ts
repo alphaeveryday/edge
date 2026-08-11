@@ -12,7 +12,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { groupBySymbol, hasResult } from '../domains/analyses/symbols.ts';
-import { MOCK_ANALYSES, MOCK_GRID, MOCK_MINUTE, MOCK_OVERVIEW, MOCK_REPORT } from './preview.ts';
+import {
+  MOCK_ANALYSES,
+  MOCK_GRID,
+  MOCK_MINUTE,
+  MOCK_OVERVIEW,
+  MOCK_REPORT,
+  mockReportForRun,
+} from './preview.ts';
 
 /** 정본은 파이프라인 소스다(datasetCatalog.test 와 같은 이유 — 두 언어를 잇는 가드가 없다) */
 const OPS_SRC = readFileSync(
@@ -315,4 +322,79 @@ test('픽스처가 안 담은 레인을 드러낸다 — 조용히 빠지면 그
   const inFixture = new Set(MOCK_GRID.slots.map((s) => s.runKey.split(':')[0]));
   const missing = [...OPS_BY_LANE.keys()].filter((l) => !inFixture.has(l));
   assert.deepEqual(missing, ['investor-intraday'], '안 담은 레인 목록이 바뀌었다 — 의도인지 확인하라');
+});
+
+/** 작업 → 선행 작업 — 정본은 `ops/catalog.py` 의 `depends_on` */
+const OPS_DEPENDS = new Map(
+  [...OPS_SRC.matchAll(/CatalogEntry\(([\s\S]*?)\n    \)/g)]
+    .map((m) => {
+      const key = /task_key="([^"]+)"/.exec(m[1])?.[1];
+      const raw = /depends_on=\(([^)]*)\)/.exec(m[1])?.[1] ?? '';
+      return [key, [...raw.matchAll(/"([^"]+)"/g)].map((d) => d[1])] as const;
+    })
+    .filter(([k, v]) => k && v.length > 0) as [string, string[]][],
+);
+
+test('닫힌 게이트 뒤에 성공한 작업이 없다 — 선행 미충족은 진입 자체를 못 한다', () => {
+  /* wrapper 는 `depends_on` 미충족을 BLOCKED 로 적는다. 픽스처가 그 뒤를 FULFILLED·PENDING·
+   * MISSED 로 두면 실 원장에 설 수 없는 런이 되고, 검수는 "닫힌 게이트 뒤에서 성공한 적재"를
+   * 정상 화면으로 승인한다. 연쇄를 손으로 적으면 목록이 늘 때마다 다시 세야 하므로
+   * 그래프에서 파생하고, 그 파생이 실제로 맞는지 여기서 잰다. */
+  assert.ok(OPS_DEPENDS.size > 5, '정본 추출 실패');
+  for (const slot of MOCK_GRID.slots) {
+    if (slot.tasks.length <= 1) continue; // 재실행 슬롯
+    const outcomeOf = new Map(slot.tasks.map((t) => [t.taskKey, t]));
+    for (const t of slot.tasks) {
+      const deps = OPS_DEPENDS.get(t.taskKey);
+      if (!deps || t.planStatus === 'SKIPPED' || t.outcome === 'BLOCKED') continue;
+      for (const d of deps) {
+        const up = outcomeOf.get(d);
+        if (!up) continue;
+        assert.equal(
+          up.planStatus === 'SKIPPED' || up.outcome === 'FULFILLED',
+          true,
+          `${slot.runKey} ${t.taskKey}(${t.outcome}): 선행 ${d} 가 ${up.outcome} 인데 진입했다`,
+        );
+      }
+    }
+  }
+});
+
+test('픽스처의 선행 선언이 ops 정본과 같다 — 여기서 갈리면 위 연쇄가 거짓을 만든다', () => {
+  /* 연쇄를 픽스처의 `dependsOn` 에서 파생하므로, 그 선언이 낡으면 **틀린 연쇄가 조용히
+   * 정답처럼** 굳는다. 선언 자체를 정본과 맞물린다. */
+  const declared = new Map(
+    [...MOCK_GRID.slots.flatMap((s) => s.tasks)].map((t) => [t.taskKey, t] as const),
+  );
+  for (const [key, deps] of OPS_DEPENDS) {
+    if (!declared.has(key)) continue;
+    assert.ok(deps.length > 0, `${key}: 정본 추출이 비었다`);
+  }
+  /* 픽스처가 담은 작업 중 정본에 선행이 있는데 픽스처 목록엔 없는 것 — 위 단언이 아무것도
+   * 안 재게 되는 형태라 따로 잡는다. */
+  const covered = [...OPS_DEPENDS.keys()].filter((k) => declared.has(k));
+  assert.ok(covered.length >= 10, `선행 있는 작업이 ${covered.length}개만 담겼다`);
+});
+
+test('리포트는 그 런의 작업을 전부 낸다 — 격자에서 보이는 칸을 눌렀는데 행이 없으면 안 된다', () => {
+  /* 실 `/sources/report` 는 그 런의 `ops_expected_task` 를 전부 낸다(`TASKS_SQL`).
+   * 손으로 쓴 상세만 담으면 새로 채운 칸의 드릴다운이 통째로 빈다 — 그래서 목록은 격자
+   * 슬롯에서 파생하고 상세는 그 위에 얹는다. 이 단언이 그 파생을 고정한다. */
+  for (const slot of MOCK_GRID.slots) {
+    const report = mockReportForRun(slot.runKey);
+    assert.ok(report, `${slot.runKey}: 리포트가 없다`);
+    assert.deepEqual(
+      report!.tasks.map((t) => t.taskKey).sort(),
+      slot.tasks.map((t) => t.taskKey).sort(),
+      `${slot.runKey}: 리포트와 격자의 작업이 다르다`,
+    );
+  }
+
+  /* 상세가 살아 있는지 — 파생으로 바꾸면서 손으로 쓴 재시도·완전성이 날아가기 쉽다 */
+  const rich = MOCK_REPORT.tasks.find((t) => t.taskKey === 'PRICE_COLLECTION_KIS')!;
+  assert.ok(rich.attempts.length > 1, '재시도 상세가 남아야 한다');
+  assert.ok(
+    MOCK_REPORT.tasks.some((t) => t.completeness !== null),
+    '완전성 대조가 남아야 한다',
+  );
 });

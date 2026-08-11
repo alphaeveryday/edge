@@ -42,7 +42,13 @@ const NEWS_RUN = `news:${MOCK_TRADING_DATE}T15:30`;
  * 다르다: 주말에 레인 전체를 스킵으로 칠하면 실 API 가 못 내는 슬롯이 되고, 그 모양으로
  * 검수하면 "주말엔 아무것도 안 돈다"는 없는 사실을 화면이 배운다.
  */
-type FixtureTask = { stage: string; taskKey: string; calendar?: true };
+type FixtureTask = {
+  stage: string;
+  taskKey: string;
+  calendar?: true;
+  /** 선행 작업 — 정본은 `ops/catalog.py` 의 `depends_on` 이고 테스트가 전건 대조한다 */
+  dependsOn?: string[];
+};
 
 const MARKET_TASKS: FixtureTask[] = [
   /* ⚠️ **etf-daily 전량이어야 한다.** planner 는 `catalog.entries(pipeline_type)` 를 통째로
@@ -55,17 +61,17 @@ const MARKET_TASKS: FixtureTask[] = [
   { stage: 'raw', taskKey: 'NAV_COLLECTION_KIS' },
   { stage: 'raw', taskKey: 'ETF_PROFILE_COLLECTION_KIS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF' },
-  { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', calendar: true },
+  { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', calendar: true, dependsOn: ['PRICE_COLLECTION_KIS'] },
   { stage: 'normalize', taskKey: 'NORMALIZE_INVESTOR' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF_NAV' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF_PROFILE' },
-  { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY', calendar: true },
-  { stage: 'feature', taskKey: 'LOAD_ETF_HOLDINGS' },
-  { stage: 'feature', taskKey: 'LOAD_ETF_NAV' },
-  { stage: 'feature', taskKey: 'LOAD_ETF_FLOW' },
-  { stage: 'feature', taskKey: 'LOAD_INSTRUMENTS' },
-  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS' },
-  { stage: 'feature', taskKey: 'ENRICH_CORP_CODE' },
+  { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY', calendar: true, dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'LOAD_ETF_HOLDINGS', dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'LOAD_ETF_NAV', dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'LOAD_ETF_FLOW', dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'LOAD_INSTRUMENTS', dependsOn: ['NORMALIZE_PRICE', 'NORMALIZE_ETF', 'NORMALIZE_ETF_PROFILE', 'NORMALIZE_ETF_NAV', 'NORMALIZE_INVESTOR'] },
+  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS', dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'ENRICH_CORP_CODE', dependsOn: ['LOAD_INSTRUMENTS'] },
 ];
 /* ⚠️ `MOCK_OVERVIEW` 의 뉴스 레인이 `due: 6` 과 TAG_NEWS·ASSEMBLE_EVENTS 결함을 선언한다.
  * 격자·리포트는 **이 목록에서** 파생하므로 여기가 짧으면 개요가 말한 결함 행을 드릴다운에서
@@ -74,10 +80,10 @@ const MARKET_TASKS: FixtureTask[] = [
 const NEWS_TASKS: FixtureTask[] = [
   { stage: 'raw', taskKey: 'NEWS_COLLECTION_BIGKINDS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_NEWS' },
-  { stage: 'feature', taskKey: 'TAG_NEWS' },
-  { stage: 'feature', taskKey: 'LOAD_DOCUMENTS' },
-  { stage: 'feature', taskKey: 'LOAD_ASSERTIONS' },
-  { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS' },
+  { stage: 'feature', taskKey: 'TAG_NEWS', dependsOn: ['NORMALIZE_NEWS'] },
+  { stage: 'feature', taskKey: 'LOAD_DOCUMENTS', dependsOn: ['NORMALIZE_NEWS'] },
+  { stage: 'feature', taskKey: 'LOAD_ASSERTIONS', dependsOn: ['TAG_NEWS', 'LOAD_DOCUMENTS'] },
+  { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS', dependsOn: ['LOAD_ASSERTIONS'] },
 ];
 
 const cell = (
@@ -121,15 +127,47 @@ const marketTask = (taskKey: string) => {
 };
 
 /**
+ * 선행이 안 끝난 작업은 **진입하지 못한다** — wrapper 가 `depends_on` 미충족을 BLOCKED 로
+ * 적는다. 그래서 한 수집이 실패하면 하류가 통째로 막힌다:
+ * `NORMALIZE_PRICE` → `LOAD_INSTRUMENTS` → `ENRICH_CORP_CODE` → 적재 다섯.
+ *
+ * ⚠️ 손으로 적으면 목록이 늘 때마다 연쇄를 다시 세야 하고, 한 칸만 빠뜨리면 **닫힌 게이트
+ * 뒤에서 성공한 적재**가 화면에 선다(실 API 가 못 내는 조합). 그래프에서 파생시킨다 —
+ * ⚠️ **명시적으로 덮은 칸도 게이트가 닫혔으면 연쇄가 이긴다.** 그날의 의도라고 봐주면
+ * "선행이 막혔는데 도는 중"·"막혔는데 성공" 같은 조합이 그대로 남는다 — 그게 실 API 가
+ * 못 내는 바로 그 모양이다. 계획 스킵만 예외다(애초에 진입 대상이 아니다).
+ */
+const cascadeBlocked = (tasks: FixtureTask[], cells: GridCell[]): GridCell[] => {
+  const byKey = new Map(cells.map((c) => [c.taskKey, c]));
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const t of tasks) {
+      if (!t.dependsOn?.length) continue;
+      const current = byKey.get(t.taskKey)!;
+      if (current.outcome === 'BLOCKED' || current.planStatus === 'SKIPPED') continue;
+      const gateOpen = t.dependsOn.every((d) => byKey.get(d)?.outcome === 'FULFILLED');
+      if (!gateOpen) {
+        byKey.set(t.taskKey, cell(t, BLOCKED_BY_UPSTREAM));
+        changed = true;
+      }
+    }
+  }
+  return tasks.map((t) => byKey.get(t.taskKey)!);
+};
+
+/**
  * 시장 슬롯 — **전 작업을 깔고 그날 다른 것만 키로 덮는다.**
  * 분기마다 17줄을 나열하면 목록이 늘 때마다 네 곳을 같이 고쳐야 하고, 한 곳만 빠뜨리면
  * 그 슬롯이 조용히 짧아진다(그게 due 8 인 런이 태어난 경위다).
  */
 const marketTasks = (over: Record<string, Partial<GridCell>> = {}): GridCell[] =>
-  MARKET_TASKS.map((t) =>
-    t.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && !over[t.taskKey]
-      ? verified(t)
-      : cell(t, over[t.taskKey] ?? { recordsOut: 906 }),
+  cascadeBlocked(
+    MARKET_TASKS,
+    MARKET_TASKS.map((t) =>
+      t.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && !over[t.taskKey]
+        ? verified(t)
+        : cell(t, over[t.taskKey] ?? { recordsOut: 906 }),
+    ),
   );
 
 const BLOCKED_BY_UPSTREAM: Partial<GridCell> = {
@@ -195,9 +233,9 @@ function marketSlot(date: string): GridSlot {
         {
           PRICE_COLLECTION_KIS: COLLECT_TIMEOUT,
           INVESTOR_COLLECTION_KIS: { dataStatus: 'INCOMPLETE', failedRecords: 2, recordsOut: 1450 },
-          NORMALIZE_PRICE: BLOCKED_BY_UPSTREAM,
-          LOAD_PRICE_DAILY: { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true },
-          ENRICH_CORP_CODE: { recordsOut: 2, failedRecords: null },
+          /* 아직 도는 중인 칸은 **선행이 없는 raw** 에 둔다 — 막힌 게이트 뒤에서 도는 칸은
+           * 실 원장에 설 수 없다(연쇄가 BLOCKED 로 덮어 버린다). */
+          ETF_PROFILE_COLLECTION_KIS: { outcome: 'PENDING', dataStatus: null, recordsOut: null, failedRecords: null, running: true },
         },
         'RUNNING',
       );
@@ -240,14 +278,16 @@ function newsSlot(date: string): GridSlot {
       launchStatus: 'LAUNCHED',
       orchestrationStatus: 'TIMED_OUT',
       tradingDate: date,
-      tasks: [
+      /* 하류(LOAD_ASSERTIONS·ASSEMBLE_EVENTS)는 연쇄가 BLOCKED 로 덮는다 —
+       * 선행이 MISSED·FAILED 인데 진입해서 MISSED·PENDING 이 될 수는 없다. */
+      tasks: cascadeBlocked(NEWS_TASKS, [
         cell(newsTask('NEWS_COLLECTION_BIGKINDS'), { recordsOut: 3961 }),
         cell(newsTask('NORMALIZE_NEWS'), { recordsOut: 3961 }),
         cell(newsTask('TAG_NEWS'), { outcome: 'MISSED', ...timedOut }),
         cell(newsTask('LOAD_DOCUMENTS'), { outcome: 'FAILED', ...timedOut }),
         cell(newsTask('LOAD_ASSERTIONS'), { outcome: 'PENDING', ...timedOut, outcomeReason: null }),
         cell(newsTask('ASSEMBLE_EVENTS'), { outcome: 'MISSED', ...timedOut }),
-      ],
+      ]),
     };
   }
   if (date === '2026-07-30') {
@@ -408,7 +448,7 @@ export const MOCK_OVERVIEW: SourceOverview = {
       opsStatus: 'IN_PROGRESS',
       /* 격자의 같은 런과 **같은 수**여야 한다 — 개요만 크게 적으면 운영자가 드릴다운에서
        * 재현할 수 없는 숫자가 되고, 검수는 어느 쪽도 못 믿는다(테스트가 고정한다). */
-      counts: { due: 17, requiredDue: 17, fulfilled: 14, failed: 1, missed: 0, blocked: 1, pending: 1, skipped: 0 },
+      counts: { due: 17, requiredDue: 17, fulfilled: 7, failed: 1, missed: 0, blocked: 8, pending: 1, skipped: 0 },
       defects: [
         { stage: 'raw', taskKey: 'PRICE_COLLECTION_KIS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
         { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', freshnessStatus: null, failedRecords: 2, overdue: false },
@@ -430,11 +470,11 @@ export const MOCK_OVERVIEW: SourceOverview = {
       /* BLOCKED 은 **기동 실패·충돌 전용**이다(LAUNCH_FAILED·LAUNCH_CONFLICT). 기동은 됐고
        * 실행이 terminal 실패면 DEGRADED 다 — TIMED_OUT 은 ORCHESTRATION_TERMINAL_FAILED. */
       opsStatus: 'DEGRADED',
-      counts: { due: 6, requiredDue: 6, fulfilled: 2, failed: 1, missed: 2, blocked: 0, pending: 1, skipped: 0 },
+      counts: { due: 6, requiredDue: 6, fulfilled: 2, failed: 1, missed: 1, blocked: 2, pending: 0, skipped: 0 },
       defects: [
         { stage: 'feature', taskKey: 'LOAD_DOCUMENTS', outcome: 'FAILED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
         /* MISSED 도 귀결이다 — overdue 는 미귀결 전용이라 여기 붙지 않는다 */
-        { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
+        { stage: 'feature', taskKey: 'ASSEMBLE_EVENTS', outcome: 'BLOCKED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
         { stage: 'feature', taskKey: 'TAG_NEWS', outcome: 'MISSED', dataStatus: null, freshnessStatus: null, failedRecords: null, overdue: false },
       ],
     },
@@ -474,14 +514,101 @@ const task = (o: Partial<TaskStatus> & Pick<TaskStatus, 'stage' | 'taskKey'>): T
   ...o,
 });
 
-export const MOCK_REPORT: SourceReport = {
-  run: {
-    runKey: MARKET_RUN,
-    launchStatus: 'LAUNCHED',
-    orchestrationStatus: 'RUNNING',
-    tradingDate: MOCK_TRADING_DATE,
-  },
-  tasks: [
+/**
+ * 대표 런의 상세 — **손으로 쓴 것은 풍부한 상세뿐이고, 작업 목록은 격자 슬롯에서 파생한다.**
+ *
+ * 실 `/sources/report` 는 그 런의 `ops_expected_task` 를 전부 낸다(`TASKS_SQL`). 여기만
+ * 여덟 줄로 두면 격자에서 새로 보이는 칸을 눌렀을 때 리포트에 그 행이 없다 — 방금 채운
+ * NAV·프로필·적재 행의 드릴다운이 통째로 검수에서 빠진다.
+ */
+function mockSlotAt(slot: GridSlot) {
+  const time = slot.runKey.match(/T(\d{2}:\d{2})/)?.[1];
+  return slot.tradingDate && time ? `${slot.tradingDate}T${time}:00+09:00` : null;
+}
+
+function mockExecutionStatus(gridCell: GridCell): ExecutionStatus | null {
+  if (gridCell.running) return 'RUNNING';
+  if (gridCell.outcome === 'FULFILLED') return 'SUCCEEDED';
+  if (gridCell.outcome === 'FAILED') {
+    return /TIMEOUT/i.test(gridCell.outcomeReason ?? '') ? 'TIMED_OUT' : 'FAILED';
+  }
+  return null;
+}
+
+/**
+ * 작업 → **원장 dataset**. `TaskStatus.dataset` 이 그 축이라 UI 카탈로그의 접기
+ * (`datasetCatalog` 는 산출 테이블을 수집 데이터셋 한 행으로 접는다)와 **다른 값**이다.
+ * 정본은 `ops/catalog.py` 이고 테스트가 전건 대조한다 — 접힌 값을 여기 적으면 실
+ * `/sources/report` 가 못 내는 라벨을 검수가 승인한다.
+ */
+const MOCK_DATASET: Record<string, string> = {
+  ETF_HOLDINGS_COLLECTION_KRX: 'etf_holdings',
+  PRICE_COLLECTION_KIS: 'price_daily',
+  INVESTOR_COLLECTION_KIS: 'investor_flow_daily',
+  ENRICH_CORP_CODE: 'company_profile',
+  NORMALIZE_ETF: 'etf_holdings',
+  NORMALIZE_PRICE: 'price_daily',
+  LOAD_PRICE_DAILY: 'price_daily',
+  LOAD_ETF_FLOW: 'investor_flow_load',
+  NEWS_COLLECTION_BIGKINDS: 'stock_news',
+  NORMALIZE_NEWS: 'news_articles',
+  LOAD_DOCUMENTS: 'document',
+  TAG_NEWS: 'news_assertions',
+  LOAD_ASSERTIONS: 'document_assertion',
+  ASSEMBLE_EVENTS: 'source_event',
+};
+
+/** 격자 셀 → 리포트 행. 대표 런과 파생 런이 **같은 변환**을 쓴다(둘이 갈리면 화면이 갈린다). */
+function taskFromCell(gridCell: GridCell, at: string | null): TaskStatus {
+    const executionStatus = mockExecutionStatus(gridCell);
+    const finishedAt = executionStatus !== null && executionStatus !== 'RUNNING' ? at : null;
+    const completeness =
+      gridCell.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && gridCell.dataStatus === 'VALID'
+        ? { expected: 33, received: 33, missing: 0 }
+        : gridCell.taskKey === 'INVESTOR_COLLECTION_KIS' && gridCell.dataStatus === 'INCOMPLETE'
+          ? { expected: 363, received: 361, missing: 2 }
+          : null;
+
+    return {
+      stage: gridCell.stage,
+      taskKey: gridCell.taskKey,
+      dataset: MOCK_DATASET[gridCell.taskKey] ?? null,
+      planStatus: gridCell.planStatus,
+      outcome: gridCell.outcome,
+      dataStatus: gridCell.dataStatus,
+      executionStatus,
+      recordsOut: gridCell.recordsOut,
+      failedRecords: gridCell.failedRecords,
+      completeness,
+      lastFinishedAt: finishedAt,
+      expectedAt: at,
+      deadlineAt: null,
+      missedAt: gridCell.outcome === 'MISSED' ? at : null,
+      fulfilledAt: gridCell.outcome === 'FULFILLED' ? at : null,
+      skipReason: gridCell.skipReason,
+      outcomeReason: gridCell.outcomeReason,
+      attempts:
+        executionStatus === null
+          ? []
+          : [
+              {
+                attemptNumber: 1,
+                ecsTaskArn: null,
+                executionStatus,
+                startedAt: at,
+                finishedAt,
+                exitCode: executionStatus === 'SUCCEEDED' ? 0 : executionStatus === 'RUNNING' ? null : 1,
+                failureReason:
+                  executionStatus === 'FAILED' || executionStatus === 'TIMED_OUT'
+                    ? gridCell.outcomeReason
+                    : null,
+                recordSource: 'WRAPPER',
+              },
+            ],
+    };
+}
+
+const RICH_TASKS: SourceReport['tasks'] = [
     /* 정상 — 완전성 대조까지 통과 */
     task({
       stage: 'raw',
@@ -557,49 +684,33 @@ export const MOCK_REPORT: SourceReport = {
     /* 이 런은 거래일이라 계획 스킵이 있을 수 없다 — 스킵 렌더 경로는 주말 런 드릴다운이
      * 덮는다(`mockReportForRun` 이 격자 슬롯에서 파생한다). */
     task({ stage: 'feature', taskKey: 'LOAD_ETF_FLOW', dataset: 'investor_flow_load', recordsOut: 1452 }),
-  ],
+  ];
+
+export const MOCK_REPORT: SourceReport = {
+  run: {
+
+    runKey: MARKET_RUN,
+    launchStatus: 'LAUNCHED',
+    orchestrationStatus: 'RUNNING',
+    tradingDate: MOCK_TRADING_DATE,
+  },
+  /* 격자 슬롯이 정본 — 상세를 쓴 작업만 그 위에 얹는다. 새 작업이 레인에 늘면 여기도
+   * 저절로 따라온다(안 그러면 리포트만 짧아져 드릴다운이 빈다). */
+  tasks: (() => {
+    const rich = new Map(RICH_TASKS.map((t) => [t.taskKey, t]));
+    const slot = MOCK_GRID.slots.find((x) => x.runKey === MARKET_RUN)!;
+    return slot.tasks.map(
+      (gridCell) => rich.get(gridCell.taskKey) ?? taskFromCell(gridCell, mockSlotAt(slot)),
+    );
+  })(),
   issues: [
     { issueType: 'INCOMPLETE', scope: 'task', taskKey: 'INVESTOR_COLLECTION_KIS', status: 'OPEN', occurrenceCount: 3, firstSeenAt: iso('15:47'), lastSeenAt: iso('16:10'), resolutionReason: null },
     { issueType: 'STALLED', scope: 'run', taskKey: null, status: 'RESOLVED', occurrenceCount: 1, firstSeenAt: iso('15:55'), lastSeenAt: iso('16:03'), resolutionReason: 'RETRY_SUCCEEDED' },
   ],
 };
 
-/**
- * 작업 → **원장 dataset**. `TaskStatus.dataset` 이 그 축이라 UI 카탈로그의 접기
- * (`datasetCatalog` 는 산출 테이블을 수집 데이터셋 한 행으로 접는다)와 **다른 값**이다.
- * 정본은 `ops/catalog.py` 이고 테스트가 전건 대조한다 — 접힌 값을 여기 적으면 실
- * `/sources/report` 가 못 내는 라벨을 검수가 승인한다.
- */
-const MOCK_DATASET: Record<string, string> = {
-  ETF_HOLDINGS_COLLECTION_KRX: 'etf_holdings',
-  PRICE_COLLECTION_KIS: 'price_daily',
-  INVESTOR_COLLECTION_KIS: 'investor_flow_daily',
-  ENRICH_CORP_CODE: 'company_profile',
-  NORMALIZE_ETF: 'etf_holdings',
-  NORMALIZE_PRICE: 'price_daily',
-  LOAD_PRICE_DAILY: 'price_daily',
-  LOAD_ETF_FLOW: 'investor_flow_load',
-  NEWS_COLLECTION_BIGKINDS: 'stock_news',
-  NORMALIZE_NEWS: 'news_articles',
-  LOAD_DOCUMENTS: 'document',
-  TAG_NEWS: 'news_assertions',
-  LOAD_ASSERTIONS: 'document_assertion',
-  ASSEMBLE_EVENTS: 'source_event',
-};
 
-function mockSlotAt(slot: GridSlot) {
-  const time = slot.runKey.match(/T(\d{2}:\d{2})/)?.[1];
-  return slot.tradingDate && time ? `${slot.tradingDate}T${time}:00+09:00` : null;
-}
 
-function mockExecutionStatus(gridCell: GridCell): ExecutionStatus | null {
-  if (gridCell.running) return 'RUNNING';
-  if (gridCell.outcome === 'FULFILLED') return 'SUCCEEDED';
-  if (gridCell.outcome === 'FAILED') {
-    return /TIMEOUT/i.test(gridCell.outcomeReason ?? '') ? 'TIMED_OUT' : 'FAILED';
-  }
-  return null;
-}
 
 /** 목 격자의 런·작업을 눌렀을 때 라이브 API 가 아니라 같은 픽스처의 원장 상세를 연다. */
 export function mockReportForRun(runKey: string): SourceReport | null {
@@ -610,54 +721,7 @@ export function mockReportForRun(runKey: string): SourceReport | null {
   if (!slot) return null;
 
   const at = mockSlotAt(slot);
-  const tasks = slot.tasks.map((gridCell): TaskStatus => {
-    const executionStatus = mockExecutionStatus(gridCell);
-    const finishedAt = executionStatus !== null && executionStatus !== 'RUNNING' ? at : null;
-    const completeness =
-      gridCell.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && gridCell.dataStatus === 'VALID'
-        ? { expected: 33, received: 33, missing: 0 }
-        : gridCell.taskKey === 'INVESTOR_COLLECTION_KIS' && gridCell.dataStatus === 'INCOMPLETE'
-          ? { expected: 363, received: 361, missing: 2 }
-          : null;
-
-    return {
-      stage: gridCell.stage,
-      taskKey: gridCell.taskKey,
-      dataset: MOCK_DATASET[gridCell.taskKey] ?? null,
-      planStatus: gridCell.planStatus,
-      outcome: gridCell.outcome,
-      dataStatus: gridCell.dataStatus,
-      executionStatus,
-      recordsOut: gridCell.recordsOut,
-      failedRecords: gridCell.failedRecords,
-      completeness,
-      lastFinishedAt: finishedAt,
-      expectedAt: at,
-      deadlineAt: null,
-      missedAt: gridCell.outcome === 'MISSED' ? at : null,
-      fulfilledAt: gridCell.outcome === 'FULFILLED' ? at : null,
-      skipReason: gridCell.skipReason,
-      outcomeReason: gridCell.outcomeReason,
-      attempts:
-        executionStatus === null
-          ? []
-          : [
-              {
-                attemptNumber: 1,
-                ecsTaskArn: null,
-                executionStatus,
-                startedAt: at,
-                finishedAt,
-                exitCode: executionStatus === 'SUCCEEDED' ? 0 : executionStatus === 'RUNNING' ? null : 1,
-                failureReason:
-                  executionStatus === 'FAILED' || executionStatus === 'TIMED_OUT'
-                    ? gridCell.outcomeReason
-                    : null,
-                recordSource: 'WRAPPER',
-              },
-            ],
-    };
-  });
+  const tasks = slot.tasks.map((gridCell) => taskFromCell(gridCell, at));
 
   const issues: SourceReport['issues'] = [];
   if (slot.launchStatus === 'LAUNCH_FAILED') {
