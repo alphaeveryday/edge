@@ -28,11 +28,16 @@ resource "aws_db_instance" "this" {
   # 마스터 비밀번호를 RDS 가 만들어 Secrets Manager 에 보관·로테이션(코드에 평문 없음).
   manage_master_user_password = true
 
-  # 에이전트 읽기전용 질의 경로는 비밀번호를 받지 않고 태스크 역할로
-  # rds:generate-db-auth-token 을 만들어 붙는다. 그래서 IAM 인증이 필요하다.
+  # IAM DB 인증은 끈다(ALPHA-933). 조직 SCP 가 rds-db:connect 를 explicitDeny 해
+  # 이 계정에서 IAM 토큰 접속은 원리적으로 불가하고 — 켜 두면 죽은 기능이기만 한 게
+  # 아니라 **지뢰**다: rds_iam 멤버십이 롤 상속(GRANT agent_ro TO edge → rds_iam)을
+  # 타고 마스터에 닿는 순간 RDS 가 마스터의 비밀번호 인증을 PAM 으로 돌려 전 앱의
+  # 신규 접속이 죽는다(2026-08-11 dev 실증 — V202608111500 직후 전면 PAM 실패,
+  # 수동 비활성으로 복구). V202608111600 이 rds_iam 멤버십도 회수한다. SCP 가 풀려
+  # 되켤 때는 그 상속 경로부터 재점검하라.
   # Postgres 에서 이 플래그는 in-place 변경이다 — 재부팅도 다운타임도 없으니
   # 운영 인스턴스에 그냥 apply 해도 된다(MySQL 과 달리 재시작이 걸리지 않는다).
-  iam_database_authentication_enabled = true
+  iam_database_authentication_enabled = false
 
   allocated_storage = var.allocated_storage
   storage_type      = "gp3"
