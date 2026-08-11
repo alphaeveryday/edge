@@ -962,8 +962,13 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * <p>⚠️ <b>대조를 같은 픽스처로 둔다</b> — 같은 데이터로 <b>다 지난 날</b>을 물으면 기준이 선다.
 	 * 이게 없으면 "표본이 없어서 null" 과 구별이 안 돼, 억제를 통째로 지우는 변이가 산다.
 	 *
-	 * <p>⚠️ 억제는 <b>기준 쪽만</b>이다 — 그 날 값은 실측이라 그대로 낸다. 그래서 오늘 픽스처를
-	 * 0 이 아니게 둔다.
+	 * <p>⚠️ 억제는 <b>기준 쪽만</b>이다 — 그 날 값은 실측이라 그대로 낸다.
+	 *
+	 * <p>⭐⭐ <b>오늘 픽스처는 네 칸을 다 채운다</b>({@code marketBound} × 그날 값의 유무). 한
+	 * 칸이라도 비면 억제를 <b>그 칸으로 좁히는</b> 변이가 산다 — 두 라운드 연속 그렇게 뚫렸다:
+	 * 처음엔 다섯을 전부 양수로 둬 {@code && today > 0} 이 살고, 그걸 고치며 장 산출을 전부 0 으로
+	 * 만들었더니 {@code && (today == 0 || !marketBound)} 가 살았다(둘 다 리뷰가 잡았다).
+	 * 그래서 {@code o.trig}=양수 · {@code o.pub}=0 · 뉴스 셋=양수로 갈라 둔다.
 	 */
 	@Test
 	void 오늘은_아직_안_끝났으니_기준을_안_준다() {
@@ -982,10 +987,15 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
 		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
 
-		/* 오늘 — **뉴스 셋만** 값이 있다. `o.pub`·`o.trig` 는 표본이 있는데 그날 값이 0 인 상태로
-		 * 둔다: ⭐ **이게 이 결함의 실제 형상이다**(dev 14:27 실측에서 `o.trig` 가 0/28.5 였다).
-		 * 다섯을 전부 양수로 채우면 억제를 `today > 0` 으로 좁히는 변이가 살아남고, 그 변이는
-		 * **정확히 막으려던 −100% 를 되살린다**(리뷰가 잡았다). */
+		/* 오늘 — **네 칸을 다 채운다**(위 javadoc):
+		 *   · `o.trig` = 양수 · 장에 매임   ← 이 칸이 비면 `(today == 0 || !marketBound)` 가 산다
+		 *   · `o.pub`  = 0    · 장에 매임   ← 이 칸이 비면 `&& today > 0` 이 산다
+		 *                                     ⭐ 그리고 **이게 이 결함의 실제 형상이다**
+		 *                                     (dev 14:27 실측에서 `o.trig` 가 0/28.5 였다)
+		 *   · 뉴스 셋  = 양수 · 안 매임
+		 * ⚠️ `insertPublished` 는 트리거를 **함께** 세우므로 `o.pub` 만 0 으로 두려면 트리거를
+		 * 따로 넣어야 한다(그래서 여기서 `insertTrigger` 를 직접 쓴다). */
+		insertTrigger("g-today", today.toString(), "etf-c");
 		insertDocument("d-today", "NEWS", today + "T09:00:00+09:00");
 		insertAssertion("a-today", "d-today", today + "T09:00:00+09:00");
 		insertSourceEvent("e-today", "NEWS", today + "T09:00:00+09:00");
@@ -994,12 +1004,12 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(outputs).extracting(OutputRow::id)
 				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
 		assertThat(outputs).allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
-		// 억제는 **기준 쪽만**이다 — 값이 있는 산출의 그날 값은 그대로 낸다.
-		assertThat(outputs).filteredOn(o -> NEWS_OUTPUTS.contains(o.id()))
-				.allSatisfy(o -> assertThat(o.today()).as("%s 그날 값", o.id()).isPositive());
-		// 표본이 있는데 그날 값이 0 인 증인 — 억제가 값의 크기와 무관해야 한다.
-		assertThat(outputs).filteredOn(o -> MARKET_OUTPUTS.contains(o.id()))
-				.allSatisfy(o -> assertThat(o.today()).as("%s 그날 값", o.id()).isZero());
+		/* 억제는 **기준 쪽만**이고 **값의 크기와 무관**하다 — 그날 값은 실측대로 낸다.
+		 * 양수 쪽에 장 산출({@code o.trig})이 **반드시 하나 있어야** 위 표의 네 칸이 찬다. */
+		assertThat(outputs).filteredOn(o -> o.today() > 0).extracting(OutputRow::id)
+				.containsExactlyInAnyOrder("o.trig", "o.doc", "o.asr", "o.evt");
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.pub")).singleElement()
+				.satisfies(o -> assertThat(o.today()).isZero());
 
 		/* 대조 — 같은 원장으로 다 지난 날을 물으면 기준이 선다. 억제 사유는 데이터가 아니라
 		 * **조회일**이다. ⚠️ **다섯 전부를 잰다**: 한 축만 보면 특정 산출의 기준을 영구히
@@ -1030,8 +1040,12 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
 		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
 
+		/* ⚠️ **거른 뒤 크기를 먼저 잰다.** `allSatisfy` 는 빈 목록에 **성공**하므로, 이 교차
+		 * 조건(미완결 ∧ 휴장)에서만 뉴스 셋을 응답에서 빼는 변이가 단언 없이 통과한다
+		 * (리뷰가 잡았다 — 이 클래스의 다른 테스트는 그 교차를 안 밟는다). */
 		assertThat(repository.facts(today).outputs())
 				.filteredOn(o -> NEWS_OUTPUTS.contains(o.id()))
+				.hasSize(NEWS_OUTPUTS.size())
 				.allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
 	}
 
