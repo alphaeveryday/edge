@@ -482,6 +482,32 @@ def test_moving_an_etf_from_reference_to_judged_is_not_a_loss(tmp_path):
     assert "sector_etf_ids" not in after   # 빈 축은 키 자체가 없다
 
 
+def test_reference_etf_demoted_to_a_constituent_is_refused(tmp_path):
+    # WHY: 위 이관 테스트의 **쌍**이다. 참조 계열 ETF 가 남의 holdings 구성종목이기도 한
+    #      경우(ETF-of-ETF·현금성 편입 — `build` 가 지원하는 형태), config 에서
+    #      `sector_etf_ids` 가 실수로 빠지면 그 ETF 는 구성종목 축으로 흡수된다. unit
+    #      집합은 멀쩡해서 유니버스 전체로 재는 판정은 통과하고, 층 분해의 섹터 후보만
+    #      통째로 사라진다. 참조 계열 축의 착지점을 두 ETF 축으로 좁혀야 승격(정당)과
+    #      누락(사고)이 갈린다.
+    storage = LocalStorage(tmp_path / "lake")
+    _holdings(storage, "2026-08-07",
+              [("005930", "091160"), ("000660", "091160"), ("091170", "091160")])
+    uri = str(tmp_path / "config" / "universe.json")
+    declared = SimpleNamespace(
+        krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"091160": "KR7091160002"})),
+        minute_universe=SimpleNamespace(sector_etf_ids=("091170",)),
+    )
+    build_minute_universe.run(storage, declared, uri, "20260811T070000Z", EARLY)
+    before = Path(uri).read_bytes()
+
+    declared.minute_universe = None   # config 누락 — 091170 이 구성종목으로 흡수된다
+
+    with pytest.raises(SystemExit, match="참조 계열 축이 직전 유니버스에서 크게 이탈해"):
+        build_minute_universe.run(storage, declared, uri, RUN_ID, EARLY)
+
+    assert Path(uri).read_bytes() == before
+
+
 def test_extended_hours_axis_survives_the_rebuild(tmp_path):
     # WHY: 시간외 축은 holdings 파생이 아니라 **종목별 실측 속성**이라(build 주석) 사람이
     #      한 번 채우면 아무도 다시 안 넣는다. 재생성이 그걸 지우면 그 종목들의 계획이

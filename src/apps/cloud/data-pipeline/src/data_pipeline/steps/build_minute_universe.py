@@ -329,22 +329,35 @@ def _refuse_membership_loss(before: Universe, after: Universe) -> None:
     (`Universe` 도크스트링 — 판정·구성종목·참조 계열), 참조 계열 전멸은 섹터층이
     통째로 빠진다는 뜻이다.
 
-    ⚠️ **단, 남았는지는 유니버스 전체에서 본다** — 축 대 축으로 대조하면 **축 사이의
+    ⚠️ **단, "남았다"의 범위는 축마다 다르다** — 축 대 축으로만 대조하면 **축 사이의
     정상적인 이동**이 소실로 잡힌다. 참조 계열 ETF 를 `etf_map` 에 넣어 판정 축으로
-    옮기는 절차(ALPHA-927, `build` 주석이 순서까지 적어 둔 그것)가 바로 그 형태다 —
-    unit 집합은 그대로인데 참조 계열 축만 비어, 그 이관을 이 가드가 막아 버린다.
-    잃었다는 것은 **수집 대상에서 사라졌다**는 뜻이지 다른 역할을 맡았다는 뜻이 아니다.
+    옮기는 절차(ALPHA-927, `build` 주석이 순서까지 적어 둔 그것)가 그 형태다 — unit
+    집합은 그대로인데 참조 계열 축만 빈다. 그래서 축마다 **정당한 착지점**을 준다
+    (`_LANDING`): 잃었다는 것은 그 종목이 **맡던 역할을 잃었다**는 뜻이다.
+
+    - 판정·구성종목 축은 유니버스 어디든 착지하면 남은 것으로 센다(수집은 계속된다).
+    - **참조 계열만 좁다.** 이 축은 holdings 파생이 아니라 순수 config 선언이라
+      (`[minute_universe].sector_etf_ids`), 사라지는 경우가 딱 둘이다 — 판정 축으로
+      **승격**(정당)이거나 config **누락**(사고)이다. 누락이면 그 ETF 는 남의 구성종목
+      으로 흡수돼 unit 집합은 멀쩡한 채 섹터층 후보만 통째로 없어진다. 착지점을
+      두 ETF 축으로 좁히면 그 둘이 갈린다.
 
     ponytail: 이탈만 본다 — 반대 방향(오염 멤버 대량 유입)은 대칭 비율로 못 막는다.
     08-11 에 테마 ETF 4종을 더한 정상 변경이 410→460 unit(+12%)이라 어떤 대칭 상한도
     그날 거짓 차단이었다. 유입은 축이 다른 문제다(수집 용량 — 별건).
     """
     units_after = set(after.unit_ids)
+    # 축 → 그 축의 멤버가 착지해도 '남은 것'으로 세는 범위(위 도크스트링)
+    landing = {
+        "etf_ids": units_after,
+        "constituent_ids": units_after,
+        "sector_etf_ids": set(after.sector_etf_ids) | set(after.etf_ids),
+    }
     axes = (("판정 ETF", "etf_ids"), ("구성종목", "constituent_ids"),
             ("참조 계열", "sector_etf_ids"))
     for label, field in axes:
         was = set(getattr(before, field))
-        kept = was & units_after
+        kept = was & landing[field]
         floor = math.ceil(len(was) * MIN_KEEP_RATIO)
         if len(kept) >= floor:
             continue
