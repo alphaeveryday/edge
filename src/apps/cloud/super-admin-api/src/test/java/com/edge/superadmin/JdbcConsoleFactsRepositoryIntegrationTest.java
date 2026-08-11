@@ -49,6 +49,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	/** {@code price_movement_trigger} 의 UNIQUE 를 피하려 시각을 갈라 주는 카운터. */
 	private int triggerSeq;
 
+	/** {@code explanation_result} 의 게시 grain UNIQUE 를 피하려 as-of 를 갈라 주는 카운터. */
+	private int publishedSeq;
+
 	@Autowired
 	private ConsoleFactsRepository repository;
 
@@ -174,6 +177,49 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				       available_at)
 				VALUES (?,?,'ET',?::timestamptz)
 				""", id, sourceClass, availableAt);
+	}
+
+	/**
+	 * 그 날 그 ETF 의 <b>게시된</b> 설명 한 건 — {@code o.pub} 이 세는 것.
+	 *
+	 * <p>{@code o.trig} 로 대신 못 잰다: {@code o.pub} 에는 그쪽에 없는
+	 * <b>{@code publication_status='PUBLISHED'} 술어</b>가 있다(리뷰가 잡았다 — "같은 계약"이라는
+	 * 내 정당화가 틀렸다). 그래서 사슬을 세운다:
+	 * {@code price_movement_trigger → etf_contribution_observation → explanation_route →
+	 * explanation_run → explanation_result}.
+	 */
+	private void insertPublished(String id, String tradingDate, String etf, String status) {
+		insertTrigger("trg-" + id, tradingDate, etf);
+		/* ⚠️ `uq_explanation_result_published_grain` 이 (종목, 거래일, as-of) 를 묶는다 — 같은
+		 * 종목·날짜의 게시 둘을 넣으려면 as-of 가 달라야 한다(재설명이 실제로 그 형태다).
+		 * 그래야 `count(DISTINCT etf_instrument_id)` 계약을 잴 수 있다. */
+		String at = "%sT15:%02d:00+09:00".formatted(tradingDate, publishedSeq++ % 60);
+		jdbc.update("""
+				INSERT INTO release_bundle (bundle_version, component_versions, component_hash, status)
+				VALUES ('v1', '{"engine":"1"}'::jsonb, ?, 'DRAFT')
+				ON CONFLICT (bundle_version) DO NOTHING
+				""", "a".repeat(64));
+		jdbc.update("""
+				INSERT INTO etf_contribution_observation (contribution_observation_id,
+				       price_movement_trigger_id, available_at, data_version)
+				VALUES (?,?,?::timestamptz,'d1')
+				""", "co-" + id, "trg-" + id, at);
+		jdbc.update("""
+				INSERT INTO explanation_route (explanation_route_id, contribution_observation_id,
+				       route_code, event_search_required, evaluated_at)
+				VALUES (?,?,'CONCENTRATED',true,?::timestamptz)
+				""", "rt-" + id, "co-" + id, at);
+		jdbc.update("""
+				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
+				       bundle_version, explanation_as_of, run_status, started_at, finished_at)
+				VALUES (?,?,'v1',?::timestamptz,'SUCCEEDED',?::timestamptz,?::timestamptz)
+				""", "run-" + id, "rt-" + id, at, at, at);   // SUCCEEDED 는 finished_at 을 요구한다
+		jdbc.update("""
+				INSERT INTO explanation_result (explanation_result_id, explanation_run_id,
+				       etf_instrument_id, trade_date, explanation_as_of, explanation_type,
+				       summary, publication_status)
+				VALUES (?,?,?,?::date,?::timestamptz,'EVENT_SUPPORTED','요약',?)
+				""", id, "run-" + id, etf, tradingDate, at, status);
 	}
 
 	private void insertTrigger(String id, String tradingDate, String etf) {
@@ -741,6 +787,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 같은 휴장일에 도는 다른 레인(뉴스) — 런 단위 제외였다면 이 런이 07-30 을 되살린다.
 		insertRun("r-news-0730", "news:2026-07-30T15:30", "news", "SUCCEEDED", "2026-07-30",
 				"2026-07-30T06:30:00Z", "2026-07-30T06:30:00Z", null);
+		/* 🔴 **같은 휴장일의 계획 결손 슬롯도 둔다.** 제외를 런 날짜 소스 안에서만 하고 `slotDays`
+		 * 를 안 거르면 이 이슈가 07-30 을 표본에 **되살린다** — 그게 "합집합 뒤 한 번"이 지키는
+		 * 것이고, 이 행이 없으면 그 변이가 통과한다(리뷰가 잡았다). */
+		insertMissingSlotIssue("i-hol", "news:2026-07-30T00:10", "OPEN");
 		// 07-31 만 표본이면 중앙값 = 2.0. 07-30(산출 0)이 섞이면 1.0 으로 내려간다.
 		insertTrigger("g1", "2026-07-31", "etf-a");
 		insertTrigger("g2", "2026-07-31", "etf-b");
@@ -772,6 +822,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 					assertThat(o.today()).isZero();   // 실측 0 은 그대로 낸다
 					assertThat(o.base()).isNull();    // 비교할 평소가 없다
 				});
+		// 장에 매인 산출은 **둘 다** 그렇다 — 한쪽만 재면 그 플래그를 개별로 뒤집는 변이가 산다.
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.pub")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isNull());
 		// 장에 안 매인 산출은 휴장일에도 기준을 준다(표본 하나 → 중앙값 0.0, null 이 아니다).
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
@@ -959,6 +1012,30 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 대비: 문서 산출은 뉴스만 센다 — 셋이 같은 계열이 아니라는 것이 이 대비의 요점이다.
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
 				.satisfies(o -> assertThat(o.today()).isEqualTo(1L));
+	}
+
+	/**
+	 * 🔴 <b>{@code o.pub} 은 게시된 것만 센다.</b> {@code publication_status} 술어는 이 산출에만
+	 * 있고 {@code o.trig} 에는 없다 — 빠지면 초안·철회분이 "게시 ETF" 로 집계돼 산출이 부풀고,
+	 * 그 위에 세운 기준도 함께 부푼다.
+	 *
+	 * <p>{@code count(DISTINCT etf_instrument_id)} 도 함께 잰다 — 같은 종목의 게시 둘을 넣는다.
+	 */
+	@Test
+	void 게시_산출은_게시된_것만_종목_단위로_센다() {
+		insertTradingDay(DAY.toString());
+		insertPublished("p1", DAY.toString(), "etf-a", "PUBLISHED");
+		insertPublished("p2", DAY.toString(), "etf-a", "PUBLISHED");   // 같은 종목 → 여전히 1종
+		insertPublished("p3", DAY.toString(), "etf-b", "DRAFT");       // 게시 아님
+		insertPublished("p4", DAY.toString(), "etf-c", "WITHDRAWN");   // 철회
+
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.pub")).singleElement()
+				.satisfies(o -> {
+					assertThat(o.label()).isEqualTo("게시 ETF");
+					assertThat(o.unit()).isEqualTo("종");
+					assertThat(o.today()).isEqualTo(1L);
+				});
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */

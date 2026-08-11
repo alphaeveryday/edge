@@ -326,9 +326,16 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 *
 	 * <p>⚠️ "런 0건인 날을 표본에서 빼는 쪽이 과민이라 안전하다"는 <b>거짓이다</b>. 편차 판정은
 	 * 양방향이라 기준이 올라가면 <b>위쪽 이상이 조용해진다</b> — 거짓 음성도 같이 만든다. 어느 쪽도
-	 * 안전하지 않으므로 더 그럴듯한 쪽을 고른다: {@code PLANNER_MISSING} 은 주말을 걸러 열리고
-	 * 휴장일에는 Planner 가 정상적으로 돌아 런 행이 생기므로(그래서 휴장 신호도 그때 남는다),
-	 * <b>런이 0건인 평일 = 거래일</b>일 확률이 압도적이다.
+	 * 안전하지 않으므로 더 그럴듯한 쪽을 고른다: 휴장일에는 Planner 가 정상적으로 돌아 런 행이
+	 * 생기므로(그래서 휴장 신호도 그때 남는다) <b>런이 0건인 평일 = 거래일</b>일 확률이 압도적이다.
+	 *
+	 * <p>🔴 <b>남는 불확실은 "장애와 휴장이 겹친 날" 하나다</b> — 평일 휴장인데 Planner 가 통째로
+	 * 실패하면 런이 없어 휴장 신호도 없고, 계획 결손일로만 표본에 들어와 <b>거래일로 오인된다</b>
+	 * (리뷰가 짚었다). 그 날을 조회하면 장 산출에 기준이 실린다. 계측이 없어 지금은 못 가르고,
+	 * 위 확률 판단이 그 대가를 감수한 것이다.
+	 *
+	 * <p>⚠️ {@code PLANNER_MISSING} 이 주말을 거른다고 읽으면 안 된다 — {@code _due_slots} 는
+	 * 레인별 주말 설정을 본다({@link #marketDay} 주석). 주말은 그 술어가 뺀다.
 	 */
 	private List<LocalDate> baseDays(LocalDate day, List<LocalDate> holidays) {
 		LocalDate upTo = day.minusDays(1);
