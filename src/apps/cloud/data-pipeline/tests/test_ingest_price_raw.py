@@ -337,8 +337,8 @@ def test_universe_missing_expected_etf_surfaced(tmp_path, caplog):
 
 
 def test_universe_includes_alphanumeric_short_codes(tmp_path):
-    # WHY: KRX 가 번호를 소진해 신규 상장분 단축코드에는 문자가 섞인다(우리 ETF 31종 중 7종).
-    #      숫자로만 거르면 그 7종이 유니버스에서 조용히 빠져 price_daily 에 영원히 안 들어오고,
+    # WHY: KRX 가 번호를 소진해 신규 상장분 단축코드에는 문자가 섞인다(우리 ETF 38종 중 8종).
+    #      숫자로만 거르면 그 8종이 유니버스에서 조용히 빠져 price_daily 에 영원히 안 들어오고,
     #      ETF 종가가 없으니 가격변동 트리거·설명의 대조축이 빈다(ALPHA-463).
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
