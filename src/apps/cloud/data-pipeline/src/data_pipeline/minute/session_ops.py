@@ -87,14 +87,13 @@ ENV_INAV_WORKER_SERVICES = "MINUTE_SESSION_INAV_WORKER_SERVICES"
 # 이미 가르므로 여기 넣는 것만으로 맞는다.
 ENV_SECTOR_INDEX_SOURCE_GROUP = "MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP"
 ENV_SECTOR_INDEX_WORKER_SERVICES = "MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES"
-# 설명 소비자(analysis-consumer, ALPHA-719) — 공용 목록에서 떼어 자기 목록으로 둔다
-# (ALPHA-910). 수명은 그대로 세션에 묶이지만(start 에서 1, stop 에서 0), 소유 축이
-# 분리돼야 그 desired 를 오토스케일링에 넘길 수 있다: 공용에 있으면 스케일러가 큐 깊이로
-# 올린 값을 매일 밤 stop 이 0 으로 덮어써 둘 다 틀린다.
-# ⚠️ 선택 레인 목록과 달리 **토글이 없다** — 이 서비스는 늘 세션과 함께 뜬다. 그런데도
-# **빈 값에 죽지 않는다**: 그 상태가 컷오버 중(구 task-def)이고 그때는 공용 목록이 아직
-# 소비자를 싣고 있다. 근거는 `_analysis_services` 도크스트링에 있다 — 여기가 아니라
-# 거기가 계약의 자리다(주석은 가드가 아니다).
+# 설명 소비자(analysis-consumer, ALPHA-719) — 공용 목록에서 **빼기만 한다**(ALPHA-912).
+# 수명이 더는 세션에 안 묶인다: desired 는 큐 잔여 일감을 보는 오토스케일링이 소유하고
+# (`analysis_autoscaling.tf`), 세션은 이 이름을 공용 스케일 대상에서 제외할 뿐이다.
+# ⚠️ 선택 레인 목록과 달리 **토글이 없고, 빈 값에 죽는다**(ALPHA-910 의 컷오버 관대함은
+# 회수됐다 — 그때는 빈 값이 "구 task-def"였지만 지금은 "공용이 다시 스케일한다"다).
+# 근거는 `_analysis_services` 도크스트링에 있다 — 여기가 아니라 거기가 계약의 자리다
+# (주석은 가드가 아니다).
 ENV_ANALYSIS_SERVICES = "MINUTE_SESSION_ANALYSIS_SERVICES"
 
 
@@ -160,18 +159,29 @@ def _services() -> list[str]:
 
 
 def _analysis_services() -> list[str]:
-    """설명 소비자의 서비스 목록. **비어 있을 수 있다** — 그 상태가 컷오버 중이다.
+    """설명 소비자의 서비스 목록. **비면 죽는다**(ALPHA-912 — 컷오버가 끝났다).
 
-    ⚠️ 다른 목록들과 달리 빈 값에 죽지 않는다. terraform 과 이미지 CD 는 각자 `push: dev`
-    로 발화하는 독립 워크플로라 어느 쪽이 먼저 착지할지 모르는데, 여기서 죽으면 이 이미지가
-    apply 보다 먼저 뜬 날 **거래일 판정 전에** 오케스트레이터가 끝나 1분 파이프라인이 통째로
-    안 뜬다. 빈 값은 배선 결손이 아니라 **구 task-def** 이고, 그때는 공용 목록이 아직
-    소비자를 싣고 있어 스케일은 그대로 된다(terraform 이 그래서 공용에서 안 뺐다).
-    공용 목록에서 실제로 빼는 시점(오토스케일링 부착)에 이 관대함을 회수한다 — 그때는
-    빈 값이 곧 "아무도 안 올린다"가 되므로 `_services` 와 같은 fail-loud 로 바꾼다.
+    이 값이 하는 일은 이제 하나다: `_services` 가 공용 목록에서 **뺄 이름**을 준다. 세션은
+    더 이상 이 서비스를 스케일하지 않는다 — desired 는 오토스케일링이 소유한다.
+
+    ⚠️ 그래서 빈 값의 뜻이 뒤집혔다. 예전엔 "구 task-def = 컷오버 중"이라 관대했다(공용
+    목록이 아직 소비자를 실어 스케일은 그대로 됐다). 지금 비면 **빼기가 안 돌아** 공용
+    경로가 이 서비스를 다시 스케일하고, 그러면 매일 밤 stop 이 스케일러의 desired 를 0 으로
+    덮어써 축이 도로 둘이 된다. 관대함이 지킬 대상이 사라진 게 아니라 **가릴 결함이 생겼다.**
+
+    ⚠️ 관대함을 걷는 근거가 된 배포 순서 위험(이미지가 apply 보다 먼저 착지)은 **이미
+    지나갔다** — 오토스케일링 apply 가 2026-08-11 에 착지했고 스케일러가 등록돼 있다.
+    이 이미지가 어느 순서로 뜨든 desired 를 올릴 주체는 있다.
     """
     raw = os.environ.get(ENV_ANALYSIS_SERVICES, "")
-    return [n.strip() for n in raw.split(",") if n.strip()]
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    if not names:
+        raise SystemExit(
+            f"{ENV_ANALYSIS_SERVICES} 가 비었다 — 공용 목록에서 설명 소비자를 뺄 근거가 없다. "
+            f"빈 값으로 통과시키면 공용 경로가 그 서비스를 다시 스케일해 "
+            f"오토스케일링이 정한 desired 를 매일 밤 덮어쓴다(ALPHA-912)"
+        )
+    return names
 
 
 def _lane_worker_services(lane: _OptionalLane) -> list[str]:
@@ -332,13 +342,21 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # 경로에서도** 성립시킨다 — `plan_session_cli` 의 except 는 (ValueError, OSError) 뿐이라
     # universe 객체를 읽는 S3 의 botocore ClientError 는 그대로 뚫고 나온다. 뒤에 두면 그
     # 한 번에 가격 레인이 통째로 안 뜬다. universe 를 읽는 레인이 생긴 지금 실재하는 경로다.
+    # ⚠️ 설명 소비자는 여기서 **안 올린다**(ALPHA-912). desired 를 큐 잔여 일감이 정하고
+    # (`analysis_autoscaling.tf`), 세션이 하루 한 번 1 을 쓰면 그 값을 덮어 스케일러가 다시
+    # 되돌리는 왕복만 생긴다. 개장 시각에 큐가 비어 있으면 0 대가 맞다.
+    # ⚠️ 대신 **그날 첫 설명이 늦어진다** — 여기서 올리던 1 이 소비자 폴링으로 SQS 큐를
+    # 깨워 두고 있었다. 큐는 6시간 무접근이면 자고(CloudWatch 계약), 깨어날 때 지표에
+    # **최대 15분** 지연이 붙는다("A delay of up to 15 minutes occurs in CloudWatch metrics
+    # when a queue is activated from an inactive state"). 08-10 실측은 5분이었다(공백
+    # 03:00~07:52 KST, 소비자 기동 07:47 의 5분 뒤 재개).
+    # 그 위에 **알람 탐지 ~3분**이 붙는다(08-11 실측: 09:01 첫 메시지 → 09:02 첫 지표 →
+    # 09:04:48 ALARM → 09:04:54 태스크 시작). 60초는 알람 `period` 이지 탐지 지연이 아니다 —
+    # 지표 배달과 평가 래그가 그 위에 얹힌다.
+    # 건당 588초짜리 레인이라 감내한다 — 개장 지연이 문제가 되면 세션을 되살리지 말고
+    # `aws_appautoscaling_scheduled_action` 으로 09:00 에 min 1 을 얹는 쪽이 싸다.
+    # `_services` 가 공용 목록에서 이 이름을 빼는 것이 세션이 이 서비스에 대해 하는 일의 전부다.
     _scale(desired=1, force=True)
-    # 설명 소비자는 가격 레인과 **같은 조건**으로 바로 뒤에 올린다(ALPHA-910) — 공용 목록에
-    # 얹혀 있던 때와 순서·시각·force 가 같다. 선택 레인처럼 자기 계획 성공을 기다리지 않는다:
-    # 이 서비스는 세션 원장을 안 보고 큐만 폴링해서, 세션이 없어도 기동을 거부하지 않는다.
-    # 목록이 비면 구 task-def 다 — 위 공용 스케일이 이미 이 서비스를 덮었으니 건너뛴다.
-    if analysis_services := _analysis_services():
-        _scale(desired=1, force=True, services=analysis_services)
 
     lane_exits = {}
     for lane, group in lane_groups:
@@ -496,11 +514,15 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         logger.info("대기 중 — %s", "; ".join(pending))
         time.sleep(POLL_INTERVAL_SEC)
 
+    # ⚠️ 설명 소비자는 여기서 **안 내린다**(ALPHA-912) — 잔여 일감이 0 이 되면 스케일러가
+    # 0 으로 내린다(실증됨). 여기서 0 을 쓰면 **아직 처리 중인 설명을 자른다**: 게이트는
+    # 이 서비스의 큐를 안 보므로(설명 큐는 게이트 밖 — `_gate_pending` 주석) 20:05 에
+    # 남아 있는 건이 있어도 stop 이 온다. 스케일러는 처리 중(비가시)까지 세어 그 동안
+    # 대수를 유지하니, 손을 떼면 **stop 으로 인한** 절단은 없어진다.
+    # ⚠️ 절단이 통째로 사라진 것은 아니다 — 버스트 중에 CD 가 재배포를 걸면 롤링이
+    # 처리 중인 태스크를 여전히 자른다(Fargate `stopTimeout` 상한 120초 < 건당 588초).
+    # 그건 이 변경이 만든 것도, 없앤 것도 아니다.
     _scale(desired=0, force=False)
-    # 설명 소비자 — 공용 목록에 얹혀 있던 때와 **같은 자리에서** 내린다(ALPHA-910). 게이트가
-    # 이 서비스의 큐를 안 보는 것도 그대로다(설명 큐는 게이트 밖 — `_gate_pending` 주석).
-    if analysis_services := _analysis_services():
-        _scale(desired=0, force=False, services=analysis_services)
     # ⚠️ 토글과 무관하게 **목록이 있으면 내린다** — 토글을 끈 날 그 서비스가 떠 있으면
     # 아무도 안 내려 계속 돈다(어제 켜고 오늘 끈 경우가 정확히 그 모양이다). 내리는 방향은
     # 과하게 잡아도 안전하다(이미 0 이면 no-op). 목록은 위에서 이미 해석해 뒀다.

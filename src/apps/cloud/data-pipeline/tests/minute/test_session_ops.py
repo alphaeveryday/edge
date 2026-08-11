@@ -122,8 +122,6 @@ def test_start_forces_new_deployment(monkeypatch, wiring):
     assert rc == 0
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-        {"desiredCount": 1, "forceNewDeployment": True,
-         "services": ["svc-analysis-consumer"]},
     ]
 
 
@@ -191,8 +189,6 @@ def test_stop_waits_then_scales_down(monkeypatch, wiring):
     assert rc == 0
     assert wiring.calls == [
         {"desiredCount": 0, "forceNewDeployment": False, "services": None},
-        {"desiredCount": 0, "forceNewDeployment": False,
-         "services": ["svc-analysis-consumer"]},
     ]
     # 진입 조회 1 + DRAINING 관측 1 + 연속 clear CLEAR_CONFIRMATIONS 회.
     # 한 번의 clear 로 내려가는 구현이면 이 값이 3 이다.
@@ -229,6 +225,9 @@ def test_scale_updates_every_service_with_force(monkeypatch):
     ecs = FakeEcs()
     monkeypatch.setenv(session_ops.ENV_CLUSTER, "arn:cluster/edge-dev")
     monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-worker,svc-relay,svc-consumer")
+    # `_services` 가 이 env 를 요구한다(ALPHA-912 — 비면 죽는다). 프로덕션 배선과 같은
+    # 모양으로 준다: 공용 목록에 없는 이름이라 빼기는 아무것도 안 지운다.
+    monkeypatch.setenv(session_ops.ENV_ANALYSIS_SERVICES, "svc-analysis-consumer")
     monkeypatch.setattr("data_pipeline.ops.aws.ecs_client", lambda: ecs)
 
     session_ops._scale(desired=1, force=True)
@@ -301,17 +300,34 @@ def test_missing_service_wiring_fails_loud(monkeypatch):
         session_ops._services()
 
 
-class TestAnalysisConsumerOwnList:
-    """설명 소비자를 공용 목록에서 뗀 축(ALPHA-910) — 소유는 분리되고 **수명은 그대로**다.
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "0", "-5"])
+def test_non_finite_timeout_is_rejected(monkeypatch, raw):
+    """NaN 은 `<= 0` 도 `경과 >= nan` 도 False 라 상한이 통째로 사라진다 — bounded wait 가 무한이 된다."""
+    monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, raw)
+    with pytest.raises(SystemExit):
+        session_ops._drain_timeout_sec()
 
-    이 분리의 목적은 desired 를 오토스케일링에 넘기는 것이고, 그 전제가 "세션이 이 값을
-    덮어쓰지 않는다"이다. 그래서 여기서 보는 것은 두 가지다: 자기 목록으로 실제로 오르내리는가
-    (안 그러면 장중 설명이 하루 통째로 안 난다), 그리고 공용 목록과 **섞이지 않는가**.
+
+class TestAnalysisConsumerOwnList:
+    """설명 소비자의 desired 소유 축(ALPHA-910 분리 → **ALPHA-912 이관 완료**).
+
+    ⚠️ 이 클래스의 계약이 **뒤집혔다.** ALPHA-910 에선 "자기 목록으로 오르내리는가"가 계약이었고,
+    지금은 **세션이 이 서비스를 아예 안 건드리는가**가 계약이다 — desired 는 큐 잔여 일감을
+    보는 오토스케일링이 소유한다. 세션이 하루 한 번이라도 쓰면 그 값이 스케일러의 판정을 덮고,
+    특히 20:05 의 0 은 **아직 처리 중인 설명을 자른다**(게이트가 이 큐를 안 본다).
+
+    그래서 여기서 보는 것은 둘이다: 세션의 스케일 호출에 이 이름이 **어느 경로로도** 안 실리는가,
+    그리고 공용 목록에서 빼는 근거(자기 목록 env)가 사라지면 **죽는가**.
     """
 
-    def test_공용_목록이_아니라_자기_목록으로_오른다(self, monkeypatch, wiring):
-        """공용 목록에 얹어 올리면 스케일 단위가 다시 하나로 붙어 분리가 무의미해진다 —
-        후속 스케일러가 이 서비스만 따로 움직일 수 없다."""
+    def test_세션은_소비자를_올리지_않는다(self, monkeypatch, wiring):
+        """세션이 1 을 쓰면 스케일러가 큐를 보고 정한 값을 덮는다 — 개장 시각에 큐가 비어
+        있으면 0 대가 맞다(첫 트리거에 붙는 지연은 `start_session_cli` 주석 참조).
+
+        ⚠️ 두 단언이 **서로 다른 것**을 지킨다. 앞의 `all(...)` 은 자기 목록 스케일이
+        되살아나는 것만 잡는다 — 픽스처가 `_scale` 을 통째로 스텁해 공용 호출은 늘
+        `services: None` 으로 기록되므로, 공용 경로로 되돌아가는 회귀는 **여기서 안 잡힌다**.
+        그걸 잡는 것은 아래 `_services()` 단언이다(빼기가 죽으면 그 줄이 죽는다)."""
         monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
         monkeypatch.setattr(session_ops, "plan_session_cli", lambda *a, **k: 0)
 
@@ -319,15 +335,28 @@ class TestAnalysisConsumerOwnList:
             FakeSettings(), dataset="price_minute", source_group="toss",
             universe="s3://b/u.json")
 
-        assert {"desiredCount": 1, "forceNewDeployment": True,
-                "services": ["svc-analysis-consumer"]} in wiring.calls
+        assert all("svc-analysis-consumer" not in (c["services"] or []) for c in wiring.calls), \
+            f"세션이 설명 소비자를 스케일했다 — 오토스케일링이 정한 desired 를 덮는다: {wiring.calls}"
         common = [c for c in wiring.calls if c["services"] is None]
         assert common == [{"desiredCount": 1, "forceNewDeployment": True, "services": None}], \
-            "공용 목록 호출은 그대로 한 번뿐이어야 한다 — 소비자가 거기 섞이면 분리가 없던 일이 된다"
+            "공용 목록 호출은 그대로 한 번뿐이어야 한다"
+        # 공용 호출이 소비자를 안 싣는 것은 `_services` 의 빼기가 도는 덕이다 — 그 빼기가
+        # 실제로 이 이름을 뺐는지 함께 본다(빼기가 죽어도 위 단언은 통과할 수 있다:
+        # 공용 목록 env 에 소비자가 없는 픽스처면 아무 일도 안 하고 초록이 된다).
+        monkeypatch.setenv(session_ops.ENV_SERVICES, "svc-worker,svc-analysis-consumer")
+        assert session_ops._services() == ["svc-worker"]
 
-    def test_계획이_실패하면_소비자도_안_오른다(self, monkeypatch, wiring):
-        """자기 목록이 됐다고 가격 레인과 다른 조건으로 뜨면 안 된다 — 세션이 없는 날
-        떠 있으면 다음 아침 force-new-deployment 밖이라 낡은 이미지로 남는다."""
+    def test_자기_목록_env_가_비면_죽는다(self, monkeypatch, wiring):
+        """ALPHA-910 의 컷오버 관대함을 회수한 자리다. 빈 값이면 `_services` 의 빼기가 돌
+        근거가 없어 **공용 경로가 소비자를 다시 스케일**하고, 그러면 매일 밤 stop 이
+        스케일러의 desired 를 0 으로 덮어 축이 도로 둘이 된다. 조용히 되돌아가면 안 된다."""
+        monkeypatch.delenv(session_ops.ENV_ANALYSIS_SERVICES, raising=False)
+
+        with pytest.raises(SystemExit, match=session_ops.ENV_ANALYSIS_SERVICES):
+            session_ops._services()
+
+    def test_계획이_실패하면_아무것도_안_오른다(self, monkeypatch, wiring):
+        """가격 계획이 실패한 날은 스케일 호출 자체가 없다."""
         monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
         monkeypatch.setattr(session_ops, "plan_session_cli", lambda *a, **k: 1)
 
@@ -336,11 +365,13 @@ class TestAnalysisConsumerOwnList:
             universe="s3://b/u.json")
 
         assert rc == 1
-        assert wiring.calls == [], "가격 계획이 실패한 날은 소비자도 안 올린다"
+        assert wiring.calls == []
 
-    def test_게이트가_빈_뒤_자기_목록으로_내려간다(self, monkeypatch, wiring):
-        """분리 전과 같은 자리에서 같이 내려간다 — 안 내려가면 야간 비용이 그대로 남고,
-        게이트 전에 내려가면 처리 중이던 설명이 결손된다."""
+    def test_세션은_소비자를_내리지_않는다(self, monkeypatch, wiring):
+        """20:05 의 0 은 **아직 처리 중인 설명을 자른다** — 게이트가 이 큐를 안 보므로
+        (설명 큐는 게이트 밖) 남은 건이 있어도 stop 은 온다. 스케일러는 처리 중(비가시)까지
+        세어 그동안 대수를 유지하니, 손을 떼는 것이 곧 그 절단을 없애는 것이다.
+        야간 비용은 스케일러가 잔여 0 에서 0 대로 내려 해결한다(실증됨)."""
         monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
         monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
         ledger = FakeLedger(["DRAINED"])
@@ -352,12 +383,11 @@ class TestAnalysisConsumerOwnList:
             FakeSettings(), dataset="price_minute", source_group="toss")
 
         assert rc == 0
-        assert {"desiredCount": 0, "forceNewDeployment": False,
-                "services": ["svc-analysis-consumer"]} in wiring.calls
+        assert all("svc-analysis-consumer" not in (c["services"] or []) for c in wiring.calls), \
+            f"세션이 설명 소비자를 내렸다 — 처리 중인 설명이 잘린다: {wiring.calls}"
 
-    def test_게이트가_안_비면_소비자도_안_내려간다(self, monkeypatch, wiring):
-        """상한 초과에서 공용만 살려 두고 소비자를 내리면, 큐 게이트가 못 본 설명 처리분이
-        조용히 끊긴다(설명 큐는 게이트 밖이라 이 서비스의 in-flight 를 아무도 안 센다)."""
+    def test_게이트가_안_비면_아무것도_안_내려간다(self, monkeypatch, wiring):
+        """상한 초과에서는 내리지 않는다 — 처리 중인 window 가 결손된다."""
         monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, "0.01")
         monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [("q", 3)])
         monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
@@ -390,27 +420,6 @@ class TestAnalysisConsumerOwnList:
         with pytest.raises(SystemExit, match="빼고 나면 빈다"):
             session_ops._services()
 
-    def test_컷오버_중_빈_목록은_죽지_않고_공용에_맡긴다(self, monkeypatch, wiring):
-        """이 이미지가 terraform apply 보다 **먼저** 착지한 날의 상태다(두 워크플로는 독립).
-        여기서 죽으면 거래일 판정 전이라 그날 1분 파이프라인이 통째로 안 뜬다 — 구 task-def
-        의 공용 목록이 아직 소비자를 싣고 있으므로 스케일은 그대로 된다."""
-        monkeypatch.delenv(session_ops.ENV_ANALYSIS_SERVICES, raising=False)
-        monkeypatch.setenv(session_ops.ENV_SERVICES,
-                           "svc-worker,svc-analysis-consumer,svc-relay")
-        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
-        monkeypatch.setattr(session_ops, "plan_session_cli", lambda *a, **k: 0)
-
-        rc = session_ops.start_session_cli(
-            FakeSettings(), dataset="price_minute", source_group="toss",
-            universe="s3://b/u.json")
-
-        assert rc == 0
-        assert wiring.calls == [
-            {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-        ], "구 task-def 에선 자기 목록 스케일이 없다 — 공용 한 번이 소비자까지 덮는다"
-        # 그 공용 한 번이 실제로 소비자를 포함해야 한다(빼기가 무조건 도는 회귀 방지).
-        assert "svc-analysis-consumer" in session_ops._services()
-
     def test_terraform_이_자기_목록_env_를_준다(self):
         """코드가 공용에서 빼는 근거가 이 env 다 — terraform 이 안 실으면 코드는 컷오버
         상태로 오인해 소유 축이 영영 안 갈린다(그리고 그 사실이 드러나는 자리가 없다).
@@ -429,29 +438,6 @@ class TestAnalysisConsumerOwnList:
             _tf_code(text),
         ), ("설명 소비자 목록 env 가 terraform 에서 그 서비스명을 안 싣는다 — "
             "코드가 공용에서 뺄 근거를 잃고 컷오버 상태로 오인한다")
-
-    def test_terraform_공용_목록은_컷오버_안전망으로_남아_있다(self):
-        """⚠️ 여기서 빼면 apply 가 이미지 CD 보다 **늦게** 착지한 날 구 이미지가 소비자를
-        아무 목록으로도 안 올린다 — 그날 장중 설명이 통째로 없다. 실제 제거는 새 이미지가
-        오래 떠 있는 오토스케일링 부착 PR 소관이다. 코드가 이미 빼내므로 남겨도 무해하다."""
-        try:
-            text = _module_tf()
-        except StopIteration:
-            pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
-
-        import re
-        block = re.search(r"MINUTE_SESSION_SERVICES\s*=\s*join\(.*?\n\s*\)\)", _tf_code(text), re.S)
-        assert block, "공용 목록 파생을 못 찾았다 — 이 계약 검사가 헛돌고 있다"
-        assert "aws_ecs_service.analysis_consumer.name" in block.group(0), \
-            "공용 목록에서 소비자를 뺐다 — apply 가 늦은 날 구 이미지가 소비자를 안 올린다"
-
-
-@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "0", "-5"])
-def test_non_finite_timeout_is_rejected(monkeypatch, raw):
-    """NaN 은 `<= 0` 도 `경과 >= nan` 도 False 라 상한이 통째로 사라진다 — bounded wait 가 무한이 된다."""
-    monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, raw)
-    with pytest.raises(SystemExit):
-        session_ops._drain_timeout_sec()
 
 
 class TestDisclosureLane:
@@ -479,8 +465,6 @@ class TestDisclosureLane:
         assert calls[2]["source_group"] == "dart" and calls[2]["universe"] is None
         assert wiring.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
             {"desiredCount": 1, "forceNewDeployment": True,
              "services": ["svc-disclosure-worker"]},
@@ -505,8 +489,6 @@ class TestDisclosureLane:
         assert rc == 2, "공시 실패가 exit 에 실려야 스케줄 기록에 남는다"
         assert wiring.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
         ], "뉴스는 올라가고 공시만 안 올라간다"
 
@@ -551,8 +533,6 @@ class TestNewsLane:
         assert calls[1]["universe"] is None, "뉴스 세션은 universe 를 쓰지 않는다"
         assert wiring.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
         ], "news-worker 는 뉴스 세션이 선 뒤 별도 목록으로 올라간다"
 
@@ -572,8 +552,6 @@ class TestNewsLane:
         assert rc == 2, "뉴스 실패가 exit 에 실려야 스케줄 기록에 남는다"
         assert wiring.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
         ], "news-worker 는 세션이 안 선 날 올리지 않는다"
 
     def test_앞_레인의_예외가_뒤_레인의_계획을_막지_않는다(self, monkeypatch, wiring):
@@ -696,8 +674,6 @@ class TestNewsLane:
         # 뉴스 워커는 별도 목록으로 함께 내려간다 — 세션이 안 선 날도 안전(desired 이미 0)
         assert wiring.calls == [
             {"desiredCount": 0, "forceNewDeployment": False, "services": None},
-            {"desiredCount": 0, "forceNewDeployment": False,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 0, "forceNewDeployment": False, "services": ["svc-news-worker"]},
         ]
 
@@ -809,8 +785,6 @@ class TestInavLane:
         assert calls[1]["universe"] == "s3://b/u.json"
         assert wiring.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
         ], "inav-worker 는 공용 목록이 아니라 자기 목록으로 올라간다"
 
@@ -869,8 +843,6 @@ class TestTwoPassengers:
             "price_minute", "news_minute", "etf_inav_minute"]
         assert both.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-news-worker"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
         ]
@@ -918,8 +890,6 @@ class TestTwoPassengers:
 
         assert both.calls == [
             {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-            {"desiredCount": 1, "forceNewDeployment": True,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 1, "forceNewDeployment": True, "services": ["svc-inav-worker"]},
         ], "뉴스 워커는 빠지고 iNAV 워커는 올라가야 한다"
 
@@ -986,8 +956,6 @@ class TestTwoPassengers:
         assert rc == 0
         assert wiring.calls == [
             {"desiredCount": 0, "forceNewDeployment": False, "services": None},
-            {"desiredCount": 0, "forceNewDeployment": False,
-             "services": ["svc-analysis-consumer"]},
             {"desiredCount": 0, "forceNewDeployment": False, "services": ["svc-inav-worker"]},
         ], "토글이 꺼져 있어도 목록에 있으면 내린다"
 
@@ -1234,8 +1202,6 @@ def test_승객_계획이_예외로_죽어도_구동_레인은_올라간다(monk
                      "(의미적 거부)이라 일시적 장애가 그쪽으로 분류되면 안 된다")
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-        {"desiredCount": 1, "forceNewDeployment": True,
-         "services": ["svc-analysis-consumer"]},
     ], "승객 계획의 예외가 구동 레인 스케일업을 삼키면 안 된다"
 
 
@@ -1278,8 +1244,6 @@ def test_뒤_레인_계획이_예외로_죽어도_앞_레인은_이미_올라가
                      "(의미적 거부)이라 일시적 장애가 그쪽으로 분류되면 안 된다")
     assert wiring.calls == [
         {"desiredCount": 1, "forceNewDeployment": True, "services": None},
-        {"desiredCount": 1, "forceNewDeployment": True,
-         "services": ["svc-analysis-consumer"]},
         {"desiredCount": 1, "forceNewDeployment": True, "services": [f"svc-{first.dataset}"]},
     ], f"{second.dataset} 의 예외가 이미 계획된 {first.dataset} 의 스케일업을 삼켰다"
 

@@ -377,9 +377,11 @@ resource "aws_iam_role_policy" "minute_session" {
       {
         Effect = "Allow"
         Action = ["ecs:UpdateService"]
-        # ⚠️ analysis_consumer 포함 — MINUTE_SESSION_ANALYSIS_SERVICES 로 스케일 대상인데
-        # 여기 빠지면 아침 스케일업이 AccessDenied 로 죽어 레인 전체가 안 뜬다(목록과 같은
-        # 축). 공용이든 자기 목록이든 **스케일 대상이면 여기 있어야 한다**.
+        # ⚠️ **스케일 대상이면 여기 있어야 한다** — 빠지면 아침 스케일업이 AccessDenied 로
+        # 죽어 레인 전체가 안 뜬다(목록과 같은 축).
+        # analysis_consumer 는 ALPHA-912 이후 **세션의 스케일 대상이 아니다**(desired 는
+        # 오토스케일링 소유). 여기 남은 것은 잉여지 근거가 아니다 — 공용 목록 정리(PR C)와
+        # 함께 뺀다. 그때까지 세션이 이 서비스로 UpdateService 를 부르는 경로는 없다.
         Resource = concat(
           [for service in aws_ecs_service.minute : service.id],
           [aws_ecs_service.analysis_consumer.id],
@@ -444,13 +446,15 @@ resource "aws_ecs_task_definition" "minute_session" {
         if !contains(local.session_bound_workers, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
-      # analysis-consumer(ALPHA-719)의 **자기 목록**(ALPHA-910). 세션 결속이라는 성질은
-      # 그대로다(트리거는 장중에만 발생하고, ReturnsNotReady 는 분봉 입력의 120초
-      # 재시도(ALPHA-710)라 세션 안에 풀린다) — 바뀌는 건 소유 축 하나뿐이고 시각도
-      # 그대로다(07:45→1 · 20:05→0). 공용 목록에 얹힌 채로는 오토스케일링을 붙여도 무효다:
-      # 스케일러가 큐 깊이로 올린 desired 를 세션 stop 이 매일 밤 0 으로 덮어쓴다.
-      # 이 값이 있으면 코드가 공용에서 그 이름을 빼고 여기로 스케일한다. 없으면(구 task-def)
-      # 공용 목록이 그대로 덮으므로 **어느 배포 순서에서도 소비자는 뜬다**.
+      # analysis-consumer(ALPHA-719)를 공용 스케일에서 **빼는 근거**(ALPHA-910 이 세운 축,
+      # ALPHA-912 로 컷오버 완료). 세션은 이 서비스를 더 이상 올리지도 내리지도 않는다 —
+      # desired 는 큐 잔여 일감을 보는 오토스케일링이 소유한다(`analysis_autoscaling.tf`).
+      # 공용 목록에 얹힌 채로는 오토스케일링을 붙여도 무효다: 스케일러가 올린 desired 를
+      # 세션 stop 이 매일 밤 0 으로 덮어쓴다.
+      # 🔴 **이 값을 지우지 마라 — 비면 세션이 죽는다**(`_analysis_services` 가 fail-loud).
+      # 공용 목록(위)에서 소비자를 빼고 나면 이 env 는 "뺄 게 없는 값"처럼 보이는데,
+      # 그때도 지우면 start·stop 이 둘 다 SystemExit 으로 죽어 1분 파이프라인이 통째로
+      # 안 뜬다. 잉여로 보이지만 **생존 토큰**이다. 계약의 자리는 그 도크스트링이다.
       # ⚠️ 설명 큐는 stop 게이트에 넣지 않는다 — 지연 재배달로 비가시인 메시지가 게이트
       # 깊이에 잡혀 레인 전체 스케일다운을 밤새 막는다. 미소비 잔여는 retention(7일)
       # 안에서 다음 세션이 집는다.
@@ -625,8 +629,8 @@ resource "aws_ecs_service" "analysis_consumer" {
 
   lifecycle {
     # 상주 3종과 같은 계약 — desired 는 terraform 밖에서 정하고, task-def 는 terraform 소유.
-    # ⚠️ 이 서비스만 desired 의 주인이 다르다: ALPHA-912 로 **오토스케일링이 최종 소유자**이고
-    # (`analysis_autoscaling.tf`), 세션 오케스트레이션은 컷오버가 끝날 때까지 공존할 뿐이다.
+    # ⚠️ 이 서비스만 desired 의 주인이 다르다: ALPHA-912 로 **오토스케일링이 소유한다**
+    # (`analysis_autoscaling.tf`). 세션은 이 서비스를 올리지도 내리지도 않는다.
     # 그래서 이 `ignore_changes` 는 그때보다 지금 **더** 필요하다 — 없으면 apply 마다
     # 스케일러가 정한 대수를 terraform 이 0 으로 되돌린다.
     ignore_changes = [desired_count]
