@@ -174,6 +174,18 @@ export function dateOfSlot(slot: { tradingDate: string | null; runKey: string })
   return slot.runKey.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
 }
 
+/*
+ * ⚠️ **`dataStatus === 'UNKNOWN'` 은 여기서 신호가 되지 않는다 — 의도다.**
+ *
+ * 원장은 완전성 신호가 없으면 성공 exit·양수 records 에도 UNKNOWN 을 적는다
+ * (`ops/wrapper.py` `derive_data_status`). 동봉 스냅샷 27행 중 **17행이 FULFILLED+UNKNOWN**
+ * 이라, 이걸 상태로 올리면 격자 대부분이 판정불가로 칠해져 이 축이 존재하는 이유인 **실행
+ * 신호가 사라진다**. 완전성 축이 대부분 UNKNOWN 인 것은 계측 부채이고 **ALPHA-728 이 그
+ * 자리**다(`rules/README.md` 「계측 티켓」). 이 축의 사실은 `outcome`(실행이 귀결됐는가)이고,
+ * 데이터 판정은 다른 축이다 — 두 축을 한 상태로 접으면 어느 쪽도 못 읽는다.
+ *
+ * 즉 여기 `정상` 은 "실행이 정상 귀결됐다"이지 "데이터가 검증됐다"가 아니다.
+ */
 function tally(counts: DayCounts, cell: GridCell) {
   if (cell.planStatus === 'SKIPPED') {
     counts.skipped += 1;

@@ -49,7 +49,10 @@ export const kindOf = (d: DatasetEntry): DatasetKindLabel =>
 export type DatasetDomain = '시장' | '뉴스';
 
 export interface DatasetEntry {
-  /** facts-snapshot 어휘 그대로 */
+  /**
+   * 행 id. 배치 행은 ops 원장의 dataset 어휘를, 실시간 행은 1분 원장 어휘를 쓴다 —
+   * **facts-snapshot 이 아니다**(그건 2026-08-03 로 얼린 픽스처라 이후 신설된 행을 모른다).
+   */
   id: string;
   label: string;
   /** 필터·배지용 메타데이터. 그룹 롤업 행을 만드는 데 쓰지 않는다 */

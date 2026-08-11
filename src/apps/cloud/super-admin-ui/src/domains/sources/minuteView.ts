@@ -39,7 +39,7 @@ export type ViewTone = 'active' | 'neutral' | 'gated' | 'warn' | 'blocked' | 'en
  *
  * 어휘 밖 dataset 은 'other' 로 둔다 — 모르는 것을 가격으로 접으면 없는 의미가 붙는다.
  */
-export type DatasetKind = 'price' | 'news' | 'other';
+export type DatasetKind = 'price' | 'news' | 'disclosure' | 'other';
 
 /**
  * 날짜 축 job 원장을 쓰는 데이터셋 — `news_extraction_job` 에는 `session_id` 도 `session_date` 도
@@ -49,15 +49,31 @@ export type DatasetKind = 'price' | 'news' | 'other';
  */
 export const NEWS_MINUTE_DATASET = 'news_minute';
 
+/**
+ * 공시(ALPHA-875) — **window 단위 산출물이 없는 dataset 이다.** 증분 커서가 없어 매 tick 이
+ * 그날 날짜창 전체를 다시 읽으므로, window 는 "그 분에 한 번 폴링했다"는 원장 단위다
+ * (`minute/states.py` DATASET_DISCLOSURE_MINUTE 주석). 뉴스와 같은 성질이라 같이 읽는다.
+ */
+export const DISCLOSURE_MINUTE_DATASET = 'disclosure_minute';
+
 export function datasetKind(dataset: string): DatasetKind {
   if (dataset === 'price_minute') return 'price';
   if (dataset === NEWS_MINUTE_DATASET) return 'news';
+  if (dataset === DISCLOSURE_MINUTE_DATASET) return 'disclosure';
   return 'other';
 }
 
-/** 창 축의 단위 이름 — 뉴스의 1분은 수집 창이 아니라 **poll 1회**로 읽힌다 */
+/**
+ * 1분이 **수집 창**인가 **poll 1회**인가 — 단위 명사를 정하는 술어다.
+ * 세 자리(단위 이름·건강도·이슈 목록)가 각자 `=== 'news'` 를 적고 있었다. 레인이 늘 때
+ * 한 곳만 고치면 나머지가 조용히 가격 어휘로 남으므로 술어를 한 곳에 둔다.
+ */
+export const isPollLane = (kind: DatasetKind): boolean =>
+  kind === 'news' || kind === 'disclosure';
+
+/** 창 축의 단위 이름 — 뉴스·공시의 1분은 수집 창이 아니라 **poll 1회**로 읽힌다 */
 export function windowUnit(kind: DatasetKind): string {
-  return kind === 'news' ? 'poll(1분)' : '창(1분)';
+  return isPollLane(kind) ? 'poll(1분)' : '창(1분)';
 }
 
 /* ── 실행 축 ── */
@@ -145,7 +161,7 @@ const hhmmOf = (iso: string | null) => (iso ? iso.slice(11, 16) : '—');
 export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionHealth {
   const w = s.windows;
   const kind = datasetKind(s.dataset);
-  const noun = kind === 'news' ? 'poll' : '창';
+  const noun = isPollLane(kind) ? 'poll' : '창';
   const evidenced = evidencedCount(s);
   /* 도래한 창의 하한 — 미도래·수집 중은 분모에 넣지 않는다 */
   const elapsed = evidenced + w.overdueNoEvidence;
@@ -304,10 +320,38 @@ const OTHER_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: strin
   },
 };
 
+/**
+ * 공시 poll 의 의미 덮어쓰기 — 뉴스와 같은 poll 축이지만 사실은 "기사"가 아니라 "공시"다.
+ * 뉴스 표를 재사용하면 공시 화면에 "신규 기사"가 뜬다.
+ */
+const DISCLOSURE_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
+  valid: { label: '신규 공시 관측', meaning: 'poll 이 돌았고 신규 공시를 관측한 분이다.' },
+  validEmpty: {
+    label: '정상 · 신규 0건',
+    meaning:
+      'poll 이 돌았고 그 분에 신규 공시가 없었다는 **증거가 남은** 분 — 정상 poll 증거다. 무증거(결과 증거 없음)와 다른 사실이라 합쳐 세지 않는다.',
+  },
+  pending: {
+    label: '미도래 · poll 중',
+    meaning:
+      '아직 기한이 안 온 분과 유효 lease 로 poll 중인 분이 한 통이다 — 이 응답은 둘을 가르지 않는다. 결함이 아니다.',
+  },
+  unmaterialized: {
+    label: 'poll 행 없음',
+    meaning: '예정 poll 수에는 있는데 원장에 행이 없다 — 어떤 집계에도 안 잡히는 materialize 결손 후보',
+  },
+};
+
+/** 어휘가 늘면 `Record` 가 여기서 컴파일을 막는다 — 새 레인이 조용히 가격 문구로 떨어지지 않게 */
 const SEGMENT_OVERRIDES: Record<
   DatasetKind,
   Partial<Record<SegmentKey, { label: string; meaning: string }>> | undefined
-> = { price: undefined, news: NEWS_SEGMENTS, other: OTHER_SEGMENTS };
+> = {
+  price: undefined,
+  news: NEWS_SEGMENTS,
+  disclosure: DISCLOSURE_SEGMENTS,
+  other: OTHER_SEGMENTS,
+};
 
 /**
  * 분별 전체 타임라인 대신 쓰는 구간 요약. 각 조각은 응답이 실제로 준 카운트이고,
@@ -462,10 +506,15 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   const out: Issue[] = [];
   const live = liveness(s);
   const w = s.windows;
-  /* 단위·명사는 dataset 이 정한다 — 뉴스 화면에 "창"·"거래"가 나오면 없는 의미가 붙는다 */
-  const news = datasetKind(s.dataset) === 'news';
-  const unit = windowUnit(datasetKind(s.dataset));
-  const noun = news ? 'poll' : '창';
+  /* 단위·명사는 dataset 이 정한다 — 뉴스·공시 화면에 "창"·"거래"가 나오면 없는 의미가 붙는다.
+   * ⚠️ `poll` 과 `news` 는 다른 축이다: 단위 명사는 poll 레인 공통이지만, **따라잡기(anchor
+   * 미도달)는 뉴스 worker 고유**다 — 공시는 증분 커서가 없어 매 tick 이 날짜창 전체를 다시
+   * 읽으므로 "뒤처진 anchor" 라는 사실 자체가 없다. 한 변수로 접으면 없는 기전이 붙는다. */
+  const kind = datasetKind(s.dataset);
+  const poll = isPollLane(kind);
+  const news = kind === 'news';
+  const unit = windowUnit(kind);
+  const noun = poll ? 'poll' : '창';
 
   if (live.kind === 'broken' || live.kind === 'failed') {
     out.push({
@@ -493,7 +542,7 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       detail: [
         '판정 — 기한(window_end) 경과 후 결과 증거 없음',
         '원장 상태 — DUE 또는 유효 lease 없는 CLAIMED (서버 DB 시계 판정)',
-        news
+        poll
           ? '구분 — 신규 0건(VALID_EMPTY)은 poll 실행 증거가 있어 정상 귀결로 따로 집계'
           : '구분 — 빈 데이터(VALID_EMPTY)는 실행 증거가 있어 정상 귀결로 따로 집계',
         '다음 확인 — 세션 heartbeat · lease · 관련 job',
@@ -508,7 +557,9 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       key: 'quality',
       title: news
         ? '품질 결함 poll — 잘린 poll(따라잡기) · 격리 · MISSING'
-        : '품질 결함 창 — 불완전 · 무효 · MISSING',
+        : poll
+          ? '품질 결함 poll — 격리 · MISSING'
+          : '품질 결함 창 — 불완전 · 무효 · MISSING',
       short: '품질 결함',
       count: quality,
       unit,
@@ -516,7 +567,9 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       range: rangeOf(qualityGaps),
       detail: news
         ? 'anchor 에 못 닿고 잘린 poll(관측이 뒤처졌다), 격리분이 있어 무효로 커밋된 poll, EOD 가 결손으로 판정한 분이다.'
-        : '결과는 남았지만 정상이 아닌 창과 EOD QC 가 결손으로 판정한 창이다.',
+        : poll
+          ? '격리분이 있어 무효로 커밋된 poll 과 EOD 가 결손으로 판정한 분이다.'
+          : '결과는 남았지만 정상이 아닌 창과 EOD QC 가 결손으로 판정한 창이다.',
     });
   }
 
@@ -524,13 +577,13 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   if (materialized !== s.expectedWindowCount) {
     out.push({
       key: 'ledgerMismatch',
-      title: `원장 불일치 — ${news ? '예정 poll' : '기대 창'} 수와 실재 행 수가 다르다`,
+      title: `원장 불일치 — ${poll ? '예정 poll' : '기대 창'} 수와 실재 행 수가 다르다`,
       short: '원장 불일치',
       count: Math.abs(s.expectedWindowCount - materialized),
       unit,
       tone: 'blocked',
       range: null,
-      detail: `${news ? '예정' : '기대'} ${s.expectedWindowCount} vs 실재 ${materialized}. 행이 없는 ${noun}은 무증거를 포함한 어떤 집계에도 안 잡히므로 위 숫자들을 그대로 믿으면 안 된다.`,
+      detail: `${poll ? '예정' : '기대'} ${s.expectedWindowCount} vs 실재 ${materialized}. 행이 없는 ${noun}은 무증거를 포함한 어떤 집계에도 안 잡히므로 위 숫자들을 그대로 믿으면 안 된다.`,
     });
   }
 

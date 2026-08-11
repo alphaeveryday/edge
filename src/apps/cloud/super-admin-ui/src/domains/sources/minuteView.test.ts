@@ -238,6 +238,31 @@ test('뉴스의 빈 결과는 "거래 없음"이 아니라 "신규 기사 0건"�
   assert.equal(priceEmpty.count, newsEmpty.count);
 });
 
+test('공시는 poll 레인이다 — 카탈로그가 poll 이라 부르는데 화면이 창이라 부르면 안 된다', () => {
+  /* disclosure_minute 는 증분 커서가 없어 매 tick 이 날짜창 전체를 다시 읽는다 — window 는
+   * 산출 단위가 아니라 "그 분에 한 번 폴링했다"는 원장 단위다(states.py). 카탈로그도 '1분
+   * poll' 로 노출한다. 여기서 'other' 로 떨어지면 단위·문구가 가격 어휘로 돌아간다. */
+  assert.equal(datasetKind('disclosure_minute'), 'disclosure');
+  assert.equal(windowUnit('disclosure'), windowUnit('news'), 'poll 레인은 단위가 같다');
+
+  const w = { valid: 3, validEmpty: 5 };
+  const s0 = session({ dataset: 'disclosure_minute', expectedWindowCount: 8, windows: w });
+  const empty = segments(s0).find((x) => x.key === 'validEmpty')!;
+  assert.match(empty.meaning, /신규 공시가 없었/);
+  assert.doesNotMatch(empty.meaning, /거래/, '가격 어휘가 새면 안 된다');
+  assert.doesNotMatch(empty.meaning, /기사/, '뉴스 표를 그대로 빌려 쓰면 안 된다');
+
+  /* ⚠️ 따라잡기(anchor 미도달)는 **뉴스 worker 고유**다 — 공시엔 그 기전이 없다.
+   * poll 이라는 이유로 뉴스 문구를 통째로 물려주면 없는 기전이 화면에 선다. */
+  const q = issues(
+    session({ dataset: 'disclosure_minute', expectedWindowCount: 4, windows: { valid: 3, invalid: 1 } }),
+    NO_JOBS,
+  ).find((x) => x.key === 'quality')!;
+  assert.match(q.title, /poll/);
+  assert.doesNotMatch(q.detail, /anchor/, '공시에 anchor 따라잡기는 없는 기전이다');
+  assert.doesNotMatch(q.title, /창/);
+});
+
 test('어휘 밖 dataset 의 빈 결과에 "거래 없음"을 붙이지 않는다 — 가른 뒤 도로 접지 않는다', () => {
   /* `datasetKind` 가 other 로 가르는 이유가 "모르는 것을 가격으로 접으면 없는 의미가 붙는다"
    * 인데, 문구 층이 뉴스만 덮어쓰면 other 는 가격 문구로 되돌아간다. 새 분 데이터셋

@@ -22,7 +22,11 @@ const a = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'basisTimeAbs'>): Analys
   basisTime: o.basisTimeAbs.slice(-5),
   doneTime: '—',
   confidence: null,
-  publicationStatus: null,
+  /* 기본은 **결과 행이 있는** 런이다 — `explanation_result.publication_status` 가
+   * `NOT NULL DEFAULT 'DRAFT'` 라 결과가 있으면 서버가 절대 null 을 안 보낸다.
+   * null 로 두면 실 API 가 낼 수 없는 조합(본문은 있는데 게시 상태 없음)이 되어,
+   * 픽스처가 서버 계약을 어기는 쪽으로 술어를 검증하게 된다. */
+  publicationStatus: 'DRAFT',
   result: '설명 본문',
   evidence: [],
   ...o,
@@ -71,6 +75,37 @@ test('진행 중인 분석은 유효 결과로 세지 않는다', () => {
   /* 상태가 완료여도 본문이 없으면 읽을 설명이 없다 */
   assert.equal(hasResult(a({ id: 'e', basisTimeAbs: 'T', result: '  ' })), false);
   assert.equal(hasResult(a({ id: 'c', basisTimeAbs: 'T' })), true);
+});
+
+test('완료인데 결과 행이 없는 런은 유효 설명이 아니다 — 서버가 본문 자리에 안내 문장을 넣는다', () => {
+  /* `AnalysisResponse.result` 는 결측 summary 를 "설명 본문이 원장에 없습니다 …" 로 바꿔
+   * 보내므로 **본문 길이로는 못 가른다**. 판별자는 `publicationStatus` 다 —
+   * publication_status 는 NOT NULL 이라 null 은 LEFT JOIN 이 만든 "결과 행 없음"뿐이다.
+   * 이걸 유효로 세면 그 안내 문장이 최신 유효 설명이 되어 **이전 정상 설명을 밀어낸다**. */
+  const noResultRow = a({
+    id: 'empty',
+    basisTimeAbs: '2026-08-03 15:30',
+    publicationStatus: null,
+    result: '설명 본문이 원장에 없습니다 — 완료 런의 explanation_result 가 없거나 비어 있는 원장 불일치입니다.',
+  });
+  assert.equal(hasResult(noResultRow), false);
+
+  const g = groupBySymbol([
+    a({ id: 'ok', basisTimeAbs: '2026-08-03 13:10', result: '유효 설명' }),
+    noResultRow,
+  ]);
+  assert.equal(g[0].latestValid?.id, 'ok', '안내 문장이 정상 설명을 밀어내면 안 된다');
+  assert.equal(g[0].attemptPending, true, '최신 시도는 읽을 설명이 없다');
+});
+
+test('종목 정렬의 코드순 타이브레이커에 실제로 닿는다 — id 로 먼저 가르면 영원히 못 닿는다', () => {
+  /* 종목이 다르면 run id 도 늘 달라, 시각이 같아도 id 비교에서 결판나 코드순에 도달하지
+   * 않는다. 그러면 화면 순서가 불투명한 run id 순이 된다. */
+  const g = groupBySymbol([
+    a({ id: 'zzz', basisTimeAbs: 'T', market: 'KRX', code: 'AAA', name: 'A' }),
+    a({ id: 'aaa', basisTimeAbs: 'T', market: 'KRX', code: 'BBB', name: 'B' }),
+  ]);
+  assert.deepEqual(g.map((x) => x.code), ['AAA', 'BBB'], '같은 시각이면 코드순');
 });
 
 test('본문이 블록에만 있어도 유효 결과다 — 빈 text 블록은 본문이 아니다', () => {

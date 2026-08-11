@@ -93,11 +93,18 @@ export function holdingsFlow(tasks: TaskStatus[]): HoldingsFlow {
     };
   }
 
-  /* 분모가 없으면 "결손 없음"이 아니라 계산 불가다 */
-  if (completeness === null || completeness.expected === null) {
+  /* 분모가 없으면 "결손 없음"이 아니라 계산 불가다.
+   * ⚠️ **분자도 마찬가지다** — 원장은 observer 가 수신 수를 못 얻으면 `expected` 만 남기고
+   * `received`·`missing` 을 null 로 적는다(`ops/wrapper.py` completeness 조립: `missing` 은
+   * `received is None` 이면 None). `expected` 만 보면 그 모양이 `missing ?? 0 === 0` 을 타고
+   * 결손 없음으로 서서, 계산조차 못 한 날의 상세 진입 액션이 사라진다. */
+  if (completeness === null || completeness.expected === null || completeness.missing === null) {
     return {
       state: 'unknown',
-      basis: '완전성 분모(기대 ETF 수)가 없어 누락을 계산할 수 없다 — 결손 없음이 아니다',
+      basis:
+        completeness?.expected == null
+          ? '완전성 분모(기대 ETF 수)가 없어 누락을 계산할 수 없다 — 결손 없음이 아니다'
+          : '완전성 분자(수신 수)가 없어 누락을 계산할 수 없다 — 결손 없음이 아니다',
       completeness,
       steps,
     };

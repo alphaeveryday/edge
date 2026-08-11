@@ -41,18 +41,25 @@ export interface SymbolGroup {
  * 고객 산문으로 그리고 `result` 는 폴백이라, 배열 길이만 세면 `text` 가 빈 블록도 본문으로
  * 선다 — 서버 파서가 text 를 검증하지 않으므로 **비어 있지 않은 text 하나**를 요구한다.
  *
- * 🔴 **가릴 수 없는 자리가 하나 남는다.** 완료 런에 결과가 없으면 서버가 `result` 를 빈 채로
- * 주지 않고 안내 문장으로 바꿔 보낸다(`AnalysisResponse.result` — "설명 본문이 원장에
- * 없습니다 …"). 그래서 **실 응답의 `result` 는 절대 비지 않고**, 이 술어는 그 런을 유효
- * 결과로 센다. 서버가 "없음"을 문장으로 평탄화한 결과라 화면 쪽에서 되돌릴 수 없다 —
- * 한글 문구를 매칭하면 서버 카피에 결합되고, 같은 행에서 오는 `confidence`·
- * `publicationStatus` 는 둘 다 nullable 이라 판별자가 못 된다(결과가 있는데도 null 일 수
- * 있어, 그걸로 가르면 **진짜 설명을 숨긴다**). 축을 서버가 내려 줘야 닫힌다.
+ * ⚠️ **본문 길이로는 "결과 없음"을 못 가른다.** 완료 런에 결과가 없으면 서버가 `result` 를
+ * 빈 채로 주지 않고 안내 문장으로 바꿔 보낸다(`AnalysisResponse.result` — "설명 본문이
+ * 원장에 없습니다 …"). 즉 **실 응답의 `result` 는 절대 비지 않는다.**
+ *
+ * 대신 `publicationStatus` 가 그 자리를 가른다: `explanation_result.publication_status` 는
+ * **`NOT NULL DEFAULT 'DRAFT'`** 이고(V202607150001 §explanation_result) 목록 SQL 이 그
+ * 테이블만 LEFT JOIN 하므로(`JdbcAnalysisRepository` LIST_SQL), `null` 은 **결과 행 자체가
+ * 없을 때만** 나온다. 같은 행의 `confidence_level` 은 nullable 이라 이 일을 못 한다 —
+ * 결과가 있는데도 null 일 수 있어 그걸로 가르면 진짜 설명을 숨긴다.
+ *
+ * 🔴 남는 자리 하나: 결과 행은 있는데 `summary` 가 **빈 문자열**이고 블록도 없는 경우
+ * (컬럼이 `NOT NULL` 이라 `''` 는 허용된다). 그때도 서버가 같은 안내 문장을 실어 보내고
+ * `publicationStatus` 는 non-null 이라 여기서 유효로 선다. 그건 서버가 "없음"을 문장으로
+ * 평탄화한 자리라 화면에서 되돌릴 수 없다(한글 문구 매칭은 서버 카피에 결합된다).
  */
 export function hasResult(a: Analysis): boolean {
   if (a.status !== 'COMPLETED') return false;
   if (a.resultBlocks?.some((b) => b.text.trim().length > 0)) return true;
-  return a.result.trim().length > 0;
+  return a.publicationStatus !== null && a.result.trim().length > 0;
 }
 
 export const symbolKey = (a: Pick<Analysis, 'market' | 'code'>) => `${a.market}:${a.code}`;
@@ -90,10 +97,16 @@ export function groupBySymbol(items: Analysis[]): SymbolGroup[] {
       todayCount: analyses.length,
     });
   }
-  /* 종목 정렬도 결정적으로 — 최신 시도 기준 시각순, 같으면 코드순 */
-  return groups.sort(
-    (x, y) => byBasisDesc(x.latestAttempt, y.latestAttempt) || x.code.localeCompare(y.code),
-  );
+  /* 종목 정렬도 결정적으로 — 최신 시도 기준 시각순, 같으면 코드순.
+   * ⚠️ 여기서 `byBasisDesc` 를 쓰면 안 된다: 그건 같은 시각일 때 **id** 로 가르는데
+   * 종목이 다르면 id 도 늘 달라, 코드순 타이브레이커에 영원히 닿지 않는다(같은 시각에
+   * 여러 종목이 생기면 화면 순서가 불투명한 run id 순이 된다). 시각만 비교한다. */
+  return groups.sort((x, y) => {
+    const bx = x.latestAttempt.basisTimeAbs;
+    const by = y.latestAttempt.basisTimeAbs;
+    if (bx !== by) return bx < by ? 1 : -1;
+    return x.code.localeCompare(y.code);
+  });
 }
 
 export function findGroup(items: Analysis[], market: string, code: string): SymbolGroup | undefined {
