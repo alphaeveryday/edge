@@ -185,7 +185,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 *
 	 * <p>🔴 <b>제외는 런 단위가 아니라 날짜 단위다.</b> 휴장 신호는 KR 시장 레인에만 붙는데 뉴스·
 	 * 공시 레인은 휴장일에도 돈다 — 런 단위로 상관시키면 그 레인의 런이 <b>같은 날짜를 다시 표본에
-	 * 넣는다</b>. 그래서 날짜 집합으로 뽑아 {@link #baseDays} 가 <b>합집합 뒤 한 번만</b> 뺀다.
+	 * 넣는다</b>. 그래서 날짜 집합으로 뽑는다.
+	 *
+	 * <p>{@link #baseDays} 가 <b>합집합 뒤에 한 번</b> 빼는 이유는 집합 대수가 아니라(양쪽에서 빼도
+	 * 결과는 같다) <b>빠뜨림을 구조적으로 막기 위해서</b>다 — 한 소스에서만 빼면 다른 소스가 같은
+	 * 날짜를 되살린다. 합집합 뒤 한 자리면 소스가 늘어도 자동으로 덮인다.
+	 *
+	 * <p>⚠️ 이 신호는 <b>평일 휴장만</b> 답한다. 주말은 {@link #marketDay} 가 달력으로 답한다.
 	 */
 	private static final String HOLIDAY_DAYS_SQL = """
 			SELECT DISTINCT r.trading_date
