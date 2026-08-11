@@ -297,12 +297,41 @@ export interface Segment {
 }
 
 /**
+ * poll 레인 **공통** 조각 — 단위 명사만 '창'에서 'poll' 로 바뀌고 기전은 같은 것들.
+ *
+ * ⚠️ 부분 덮어쓰기 표는 **빠뜨린 키가 곧 기본(가격) 문구로 떨어진다.** 실제로 공시 표가
+ * 결함 키를 안 덮어 "스텝이 유실을 판정한 창"이 공시 화면에 떴다. 레인마다 표를 따로
+ * 적으면 그 누락이 레인 수만큼 는다 — 공통을 깔고 레인 고유 사실만 덮는다.
+ */
+const POLL_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
+  missing: {
+    label: 'MISSING (EOD 판정)',
+    meaning: 'EOD reconciliation 이 결손으로 판정한 분 — 장중에는 매겨지지 않는다',
+  },
+  pending: {
+    label: '미도래 · poll 중',
+    meaning:
+      '아직 기한이 안 온 분과 유효 lease 로 poll 중인 분이 한 통이다 — 이 응답은 둘을 가르지 않는다. 결함이 아니다.',
+  },
+  unmaterialized: {
+    label: 'poll 행 없음',
+    meaning: '예정 poll 수에는 있는데 원장에 행이 없다 — 어떤 집계에도 안 잡히는 materialize 결손 후보',
+  },
+  noEvidence: {
+    label: '무증거',
+    meaning:
+      '판정: 기한 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. 이 사실만으로 실행체 사망을 단정하지 않는다.',
+  },
+};
+
+/**
  * 뉴스 poll 의 의미 덮어쓰기 — 같은 원장 컬럼이지만 사실이 다르다.
  * 근거: `data_pipeline/minute/commit.py` `commit_news_window`(격리→INVALID, truncated→
  * INCOMPLETE, 신규 0건→VALID_EMPTY) · `news_worker.py`(anchor 두 개와 따라잡기 예산).
  * 가격 문구를 그대로 두면 "거래가 없었다"가 뉴스 화면에 뜬다.
  */
 const NEWS_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
+  ...POLL_SEGMENTS,
   valid: {
     label: '신규 기사 관측',
     meaning: 'poll 이 돌았고 신규·정정 기사를 관측한 분이다.',
@@ -361,7 +390,19 @@ const OTHER_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: strin
  * 뉴스 표를 재사용하면 공시 화면에 "신규 기사"가 뜬다.
  */
 const DISCLOSURE_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
+  ...POLL_SEGMENTS,
   valid: { label: '신규 공시 관측', meaning: 'poll 이 돌았고 신규 공시를 관측한 분이다.' },
+  /* 공시의 불완전은 anchor 따라잡기가 아니다 — 증분 커서가 없어 그 기전 자체가 없다.
+   * `commit_disclosure_window` 는 하위 스텝 부분 실패를 INCOMPLETE 로 커밋한다. */
+  incomplete: {
+    label: '부분 실패 poll',
+    meaning:
+      'poll 은 돌았으나 하위 스텝이 부분 실패한 분(INCOMPLETE) — 성공으로 위장하지 않는다.',
+  },
+  invalid: {
+    label: '무효 커밋',
+    meaning: '실패 unit 이 있어 무효로 커밋된 poll 이다.',
+  },
   validEmpty: {
     label: '정상 · 신규 0건',
     meaning:

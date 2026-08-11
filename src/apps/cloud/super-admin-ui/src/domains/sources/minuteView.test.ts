@@ -495,3 +495,23 @@ test('원장 불일치는 요약에도 뜬다 — 상세만 "못 믿는다"고 �
   assert.equal(ok.kind, 'normal');
   assert.doesNotMatch(ok.reason, /불일치/);
 });
+
+test('poll 레인의 어느 조각에도 창·거래 어휘가 남지 않는다 — 덮은 키만 맞고 나머지가 새면 안 된다', () => {
+  /* 부분 덮어쓰기 표는 **빠뜨린 키가 곧 기본(가격) 문구로 떨어진다**. 키를 하나씩 세는
+   * 단언은 다음에 추가되는 키를 못 잡으므로, 전 조각을 구조로 검사한다. */
+  for (const dataset of ['news_minute', 'disclosure_minute']) {
+    const segs = segments(
+      session({
+        dataset,
+        expectedWindowCount: 12,
+        windows: { valid: 2, validEmpty: 2, incomplete: 2, invalid: 2, missing: 1, overdueNoEvidence: 2, due: 1 },
+      }),
+    );
+    assert.ok(segs.length >= 7, `${dataset}: 조각이 다 서야 이 단언이 의미가 있다`);
+    for (const seg of segs) {
+      assert.doesNotMatch(seg.label, /창/, `${dataset} ${seg.key}: 라벨에 '창'`);
+      assert.doesNotMatch(seg.meaning, /창(?!_end)/, `${dataset} ${seg.key}: 의미에 '창'`);
+      assert.doesNotMatch(seg.meaning, /거래/, `${dataset} ${seg.key}: 의미에 '거래'`);
+    }
+  }
+});
