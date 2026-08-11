@@ -370,8 +370,8 @@ def test_ready_event_distribution_renders_one_grounded_customer_paragraph():
     assert event["text"] == (
         "09:49, 포스코퓨처엠의 LFP 장기공급 합의 소식이 있었습니다. "
         "과거에 계약 체결 소식이 있었던 41건의 사례에서, 해당 종목들은 소식 당일 "
-        "시장 대비 평균 -3.10% 움직였습니다. 오늘 이 종목은 시장 대비 -3.60%로, "
-        "과거 41건 중 약 59%는 오늘보다 높게 움직였습니다."
+        "시장 대비 평균 -3.10% 움직였습니다. 오늘 이 종목은 시장 대비 -3.60% "
+        "움직였습니다. 과거 41건 중 약 59%는 시장 대비 성과가 이보다 좋았습니다."
     )
     assert event["evidence_refs"] == ["source_event:evt_selected"]
 
@@ -394,8 +394,8 @@ def test_event_distribution_near_zero_mean_reads_as_about_zero():
     assert "평균 0% 부근에서 움직였습니다" in event["text"]
     assert "+0.00%" not in event["text"]
     assert "과거에 시장 진출·철수 소식이 있었던 871건" in event["text"]
-    assert "오늘 이 종목은 시장 대비 +1.27%로" in event["text"]
-    assert "약 31%는 오늘보다 높게 움직였습니다" in event["text"]
+    assert "오늘 이 종목은 시장 대비 +1.27% 움직였습니다" in event["text"]
+    assert "약 31%는 시장 대비 성과가 이보다 좋았습니다" in event["text"]
 
 
 _PROSE_BANNED = (
@@ -442,14 +442,15 @@ def test_higher_share_clause_states_facts_even_at_extremes():
     from edge_analysis.statics.interval import _higher_share_clause
 
     assert _higher_share_clause(0.26, 213) == (
-        "과거 213건 중 약 74%는 오늘보다 높게 움직였습니다")
-    assert _higher_share_clause(1.0, 30) == "오늘보다 높게 움직인 사례는 없었습니다"
-    assert _higher_share_clause(0.0, 30) == "과거 30건 모두 오늘보다 높게 움직였습니다"
+        "과거 213건 중 약 74%는 시장 대비 성과가 이보다 좋았습니다")
+    assert _higher_share_clause(1.0, 30) == (
+        "과거 30건 중 시장 대비 성과가 이보다 좋았던 사례는 없었습니다")
+    assert _higher_share_clause(0.0, 30) == "과거 30건 모두 시장 대비 성과가 이보다 좋았습니다"
     # 반올림이 0%·100% 로 접히는 자리는 백분율 대신 건수 — "약 0%"는 거짓이다.
     assert _higher_share_clause(1 - 1 / 871, 871) == (
-        "과거 871건 중 1건이 오늘보다 높게 움직였습니다")
+        "과거 871건 중 1건이 시장 대비 성과가 이보다 좋았습니다")
     assert _higher_share_clause(1 / 871, 871) == (
-        "과거 871건 중 870건이 오늘보다 높게 움직였습니다")
+        "과거 871건 중 870건이 시장 대비 성과가 이보다 좋았습니다")
 
 def test_final_explanation_never_reads_a_prior_analysis_output():
     """A previous run's output must never become evidence for the current run."""
