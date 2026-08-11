@@ -331,8 +331,12 @@ policy_version = "l0-abs-v1"  # 엔진 POLICY_VERSION 과 동일 — 단일 정�
 # 1분 레인 universe.json **생성** 입력 — 수집 스텝은 아무도 이 섹션을 안 읽는다.
 # 1분 유니버스의 정본은 S3 `config/minute/universe.json` 객체 하나고(planner·worker·
 # consumer 가 --universe 로 같은 객체를 본다), 여기 값은 그걸 만드는 재료다:
-#   scripts/build_minute_universe.py → /tmp/universe.json → (확인) → aws s3 cp
+#   python -m data_pipeline.run build-minute-universe --universe s3://<lake>/config/minute/universe.json
+# (파일로만 뽑아 눈으로 볼 땐 scripts/build_minute_universe.py --out — 그건 업로드 안 한다)
 # 이 파일만 고치고 S3 를 안 갈면 아무것도 안 바뀐다.
+# ⚠️ 여기서 ETF 를 빼면 스텝의 이탈 가드가 거부한다 — 참조 계열 축의 대량 이탈은 설정
+# 누락과 구분되지 않기 때문이다(`_refuse_membership_loss`). 판정 축으로 **옮기는** 것
+# (etf_map 에 넣기)은 이탈이 아니라 승격이라 그대로 통과한다.
 #
 # ⚠️ **순서가 있다: 이미지 먼저, S3 나중.** `Universe` 는 extra="forbid" 라, 새 축
 # (sector_etf_ids)이 든 객체를 옛 이미지가 읽으면 ValidationError 다. 그중 치명적인
