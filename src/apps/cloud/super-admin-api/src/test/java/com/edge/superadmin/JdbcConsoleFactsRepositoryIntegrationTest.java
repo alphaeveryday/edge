@@ -50,6 +50,12 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	private static final LocalDate DAY = LocalDate.parse("2026-08-03");
 
+	/** 장이 서야 나오는 산출({@code marketBound}) — 장 안 서는 날 규칙이 기준을 비우는 대상. */
+	private static final List<String> MARKET_OUTPUTS = List.of("o.pub", "o.trig");
+
+	/** 장과 무관하게 도는 산출 — 그래서 <b>미완결일 억제만</b>이 이 셋의 기준을 비운다. */
+	private static final List<String> NEWS_OUTPUTS = List.of("o.doc", "o.asr", "o.evt");
+
 	/** {@code price_movement_trigger} 의 UNIQUE 를 피하려 시각을 갈라 주는 카운터. */
 	private int triggerSeq;
 
@@ -965,8 +971,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		LocalDate prior = previousWeekday(today);
 		LocalDate prior2 = previousWeekday(prior);
 
-		/* 기준 표본 둘 — `prior` 를 물었을 때도 기준이 서야 대조가 성립한다(`prior2` 가 그 표본). */
+		/* 기준 표본 둘 — `prior` 를 물었을 때도 **다섯 전부** 기준이 서야 대조가 성립한다
+		 * (`prior2` 가 그 표본이므로 거기에도 게시·문서를 함께 둔다). */
 		insertTradingDay(prior2.toString());
+		insertPublished("p-prior2", prior2.toString(), "etf-a", "PUBLISHED");
 		insertDocument("d-prior2", "NEWS", prior2 + "T09:00:00+09:00");
 		insertTradingDay(prior.toString());
 		insertPublished("p-prior", prior.toString(), "etf-a", "PUBLISHED");
@@ -974,8 +982,10 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
 		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
 
-		// 오늘 — 다섯 축 전부에 값이 있다(`insertPublished` 가 트리거도 함께 세운다).
-		insertPublished("p-today", today.toString(), "etf-b", "PUBLISHED");
+		/* 오늘 — **뉴스 셋만** 값이 있다. `o.pub`·`o.trig` 는 표본이 있는데 그날 값이 0 인 상태로
+		 * 둔다: ⭐ **이게 이 결함의 실제 형상이다**(dev 14:27 실측에서 `o.trig` 가 0/28.5 였다).
+		 * 다섯을 전부 양수로 채우면 억제를 `today > 0` 으로 좁히는 변이가 살아남고, 그 변이는
+		 * **정확히 막으려던 −100% 를 되살린다**(리뷰가 잡았다). */
 		insertDocument("d-today", "NEWS", today + "T09:00:00+09:00");
 		insertAssertion("a-today", "d-today", today + "T09:00:00+09:00");
 		insertSourceEvent("e-today", "NEWS", today + "T09:00:00+09:00");
@@ -983,17 +993,46 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		List<OutputRow> outputs = repository.facts(today).outputs();
 		assertThat(outputs).extracting(OutputRow::id)
 				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
-		assertThat(outputs).allSatisfy(o -> {
-			assertThat(o.base()).as("%s 기준", o.id()).isNull();
-			assertThat(o.today()).as("%s 그날 값", o.id()).isPositive();
-		});
+		assertThat(outputs).allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
+		// 억제는 **기준 쪽만**이다 — 값이 있는 산출의 그날 값은 그대로 낸다.
+		assertThat(outputs).filteredOn(o -> NEWS_OUTPUTS.contains(o.id()))
+				.allSatisfy(o -> assertThat(o.today()).as("%s 그날 값", o.id()).isPositive());
+		// 표본이 있는데 그날 값이 0 인 증인 — 억제가 값의 크기와 무관해야 한다.
+		assertThat(outputs).filteredOn(o -> MARKET_OUTPUTS.contains(o.id()))
+				.allSatisfy(o -> assertThat(o.today()).as("%s 그날 값", o.id()).isZero());
 
 		/* 대조 — 같은 원장으로 다 지난 날을 물으면 기준이 선다. 억제 사유는 데이터가 아니라
-		 * **조회일**이다. (뉴스 갈래로 잰다 — 주말에 도는 날 `marketBound` 두 축은 휴장 규약으로도
-		 * null 이 돼 이 대조가 무뎌진다.) */
+		 * **조회일**이다. ⚠️ **다섯 전부를 잰다**: 한 축만 보면 특정 산출의 기준을 영구히
+		 * 비우는 변이(`|| id.equals("o.pub")`)가 통과한다 — 당일은 어차피 전부 null 이고 휴장
+		 * 테스트도 그 축의 null 을 기대하므로 아무 단언도 안 깨진다(리뷰가 잡았다). */
 		assertThat(repository.facts(prior).outputs())
-				.filteredOn(o -> o.id().equals("o.doc")).singleElement()
-				.satisfies(o -> assertThat(o.base()).isEqualTo(1.0d));
+				.allSatisfy(o -> assertThat(o.base()).as("%s 기준(지난 날)", o.id()).isNotNull());
+	}
+
+	/**
+	 * 🔴 <b>두 억제가 <b>독립</b>이다 — 오늘이 장 안 서는 날이어도 뉴스 셋까지 기준이 없다.</b>
+	 *
+	 * <p>위 테스트만으로는 억제를 {@code targetDayIsIncomplete && !targetIsNonMarketDay} 로 좁히는
+	 * 변이가 <b>평일에 돌면 통과한다</b> — 실행 날짜에 결과가 매이는 자리였다(리뷰가 잡았다).
+	 * 오늘을 원장에서 결정적으로 휴장으로 만들면 그 변이가 뉴스 셋의 기준을 되살리고, 아직 쌓이는
+	 * 중인 값이 평일 중앙값과 비교된다.
+	 *
+	 * <p>뉴스 셋으로 재는 이유: {@code marketBound} 두 축은 휴장 규약으로도 null 이라 이 변이를
+	 * 못 가른다.
+	 */
+	@Test
+	void 오늘이_휴장이어도_뉴스_산출까지_기준을_안_준다() {
+		LocalDate today = kstToday();
+		LocalDate prior = previousWeekday(today);
+		insertHoliday(today.toString());   // 실행 요일과 무관하게 오늘을 장 안 서는 날로 고정
+		insertTradingDay(prior.toString());
+		insertDocument("d-prior", "NEWS", prior + "T09:00:00+09:00");
+		insertAssertion("a-prior", "d-prior", prior + "T09:00:00+09:00");
+		insertSourceEvent("e-prior", "NEWS", prior + "T09:00:00+09:00");
+
+		assertThat(repository.facts(today).outputs())
+				.filteredOn(o -> NEWS_OUTPUTS.contains(o.id()))
+				.allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
 	}
 
 	/**
