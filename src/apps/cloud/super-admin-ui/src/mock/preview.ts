@@ -483,36 +483,6 @@ export const MOCK_OVERVIEW: SourceOverview = {
 
 /* ─────────── /sources — 수집 상태 ─────────── */
 
-const task = (o: Partial<TaskStatus> & Pick<TaskStatus, 'stage' | 'taskKey'>): TaskStatus => ({
-  dataset: null,
-  planStatus: 'DUE',
-  outcome: 'FULFILLED',
-  dataStatus: 'UNKNOWN',
-  executionStatus: 'SUCCEEDED',
-  recordsOut: null,
-  failedRecords: 0,
-  completeness: null,
-  lastFinishedAt: iso('15:46'),
-  expectedAt: iso('15:40'),
-  deadlineAt: iso('16:40'),
-  missedAt: null,
-  fulfilledAt: iso('15:46'),
-  skipReason: null,
-  outcomeReason: null,
-  attempts: [
-    {
-      attemptNumber: 1,
-      ecsTaskArn: null,
-      executionStatus: 'SUCCEEDED',
-      startedAt: iso('15:40'),
-      finishedAt: iso('15:46'),
-      exitCode: 0,
-      failureReason: null,
-      recordSource: 'WRAPPER',
-    },
-  ],
-  ...o,
-});
 
 /**
  * 대표 런의 상세 — **손으로 쓴 것은 풍부한 상세뿐이고, 작업 목록은 격자 슬롯에서 파생한다.**
@@ -608,83 +578,39 @@ function taskFromCell(gridCell: GridCell, at: string | null): TaskStatus {
     };
 }
 
-const RICH_TASKS: SourceReport['tasks'] = [
-    /* 정상 — 완전성 대조까지 통과 */
-    task({
-      stage: 'raw',
-      taskKey: 'ETF_HOLDINGS_COLLECTION_KRX',
-      dataset: 'etf_holdings',
-      dataStatus: 'VALID',
-      recordsOut: 906,
-      completeness: { expected: 33, received: 33, missing: 0 },
-    }),
-    /* 부분 결손 — 실행은 성공인데 엔티티가 모자란다 */
-    task({
-      stage: 'raw',
-      taskKey: 'INVESTOR_COLLECTION_KIS',
-      dataset: 'investor_flow_daily',
-      dataStatus: 'INCOMPLETE',
-      recordsOut: 1450,
-      failedRecords: 2,
-      completeness: { expected: 363, received: 361, missing: 2 },
-      outcomeReason: 'PARTIAL_SYMBOLS',
-    }),
-    /* 실패 — 재시도 2회 소진 */
-    task({
-      stage: 'raw',
-      taskKey: 'PRICE_COLLECTION_KIS',
-      dataset: 'price_daily',
-      outcome: 'FAILED',
-      dataStatus: null,
-      executionStatus: 'FAILED',
-      recordsOut: null,
-      failedRecords: null,
-      fulfilledAt: null,
-      outcomeReason: 'UPSTREAM_TIMEOUT',
-      lastFinishedAt: iso('16:02'),
-      attempts: [
-        { attemptNumber: 1, ecsTaskArn: null, executionStatus: 'TIMED_OUT', startedAt: iso('15:40'), finishedAt: iso('15:51'), exitCode: null, failureReason: 'KIS 응답 지연 (60s QUERYTIMEOUT)', recordSource: 'WRAPPER' },
-        { attemptNumber: 2, ecsTaskArn: null, executionStatus: 'FAILED', startedAt: iso('15:52'), finishedAt: iso('16:02'), exitCode: 1, failureReason: 'KIS 응답 지연 (60s QUERYTIMEOUT)', recordSource: 'WRAPPER' },
-      ],
-    }),
-    /* 건수 신호를 안 남긴 작업 — "—" 는 0건 처리와 다르다 */
-    task({ stage: 'feature', taskKey: 'ENRICH_CORP_CODE', dataset: 'company_profile', recordsOut: 2, failedRecords: null }),
-    task({ stage: 'normalize', taskKey: 'NORMALIZE_ETF', dataset: 'etf_holdings', recordsOut: 906 }),
-    /* 선행 미충족 — 시도 행 자체가 없다 */
-    task({
-      stage: 'normalize',
-      taskKey: 'NORMALIZE_PRICE',
-      dataset: 'price_daily',
-      outcome: 'BLOCKED',
-      dataStatus: null,
-      executionStatus: null,
-      recordsOut: null,
-      failedRecords: null,
-      fulfilledAt: null,
-      outcomeReason: 'UPSTREAM_FAILED',
-      lastFinishedAt: null,
-      attempts: [],
-    }),
-    /* 아직 도는 중 */
-    task({
-      stage: 'feature',
-      taskKey: 'LOAD_PRICE_DAILY',
-      dataset: 'price_daily',
-      outcome: 'PENDING',
-      dataStatus: null,
-      executionStatus: 'RUNNING',
-      recordsOut: null,
-      failedRecords: null,
-      fulfilledAt: null,
-      lastFinishedAt: null,
-      attempts: [
-        { attemptNumber: 1, ecsTaskArn: null, executionStatus: 'RUNNING', startedAt: iso('16:05'), finishedAt: null, exitCode: null, failureReason: null, recordSource: 'WRAPPER' },
-      ],
-    }),
-    /* 이 런은 거래일이라 계획 스킵이 있을 수 없다 — 스킵 렌더 경로는 주말 런 드릴다운이
-     * 덮는다(`mockReportForRun` 이 격자 슬롯에서 파생한다). */
-    task({ stage: 'feature', taskKey: 'LOAD_ETF_FLOW', dataset: 'investor_flow_load', recordsOut: 1452 }),
-  ];
+/**
+ * 손으로 쓴 것은 **셀이 못 만드는 상세뿐**이다 — 재시도 이력과 완전성 대조.
+ * 상태 축(귀결·데이터 판정·시각)은 격자 셀에서 온다. 여기에 상태를 또 적으면 두 벌이 되고,
+ * 연쇄가 셀을 바꿀 때 이쪽만 낡아 드릴다운이 격자와 다른 말을 한다.
+ */
+/**
+ * 셀이 못 만드는 상세만 — **재시도 이력과 완전성 대조뿐이다.**
+ *
+ * ⚠️ 상태 축(귀결·데이터 판정·시각)은 여기 적지 않는다. 적으면 두 벌이 되고, 연쇄가 격자
+ * 셀을 바꿀 때 이쪽만 낡아 **누른 칸과 열린 상세가 다른 말을** 한다(실제로 그렇게 났다).
+ * 병합부가 이 두 필드만 읽으므로 나머지를 적어 봐야 무시된다 — 아예 안 적어 드리프트의
+ * 원천을 없앤다.
+ */
+const RICH_TASKS: Record<string, Pick<TaskStatus, 'attempts' | 'completeness'>> = {
+  /* 완전성 대조까지 통과 */
+  ETF_HOLDINGS_COLLECTION_KRX: {
+    completeness: { expected: 33, received: 33, missing: 0 },
+    attempts: [],
+  },
+  /* 부분 결손 — 실행은 성공인데 엔티티가 모자란다 */
+  INVESTOR_COLLECTION_KIS: {
+    completeness: { expected: 363, received: 361, missing: 2 },
+    attempts: [],
+  },
+  /* 실패 — 재시도 2회 소진. 셀은 시도 이력을 만들지 못한다 */
+  PRICE_COLLECTION_KIS: {
+    completeness: null,
+    attempts: [
+      { attemptNumber: 1, ecsTaskArn: null, executionStatus: 'TIMED_OUT', startedAt: iso('15:40'), finishedAt: iso('15:51'), exitCode: null, failureReason: 'KIS 응답 지연 (60s QUERYTIMEOUT)', recordSource: 'WRAPPER' },
+      { attemptNumber: 2, ecsTaskArn: null, executionStatus: 'FAILED', startedAt: iso('15:52'), finishedAt: iso('16:02'), exitCode: 1, failureReason: 'KIS 응답 지연 (60s QUERYTIMEOUT)', recordSource: 'WRAPPER' },
+    ],
+  },
+};
 
 export const MOCK_REPORT: SourceReport = {
   run: {
@@ -697,11 +623,18 @@ export const MOCK_REPORT: SourceReport = {
   /* 격자 슬롯이 정본 — 상세를 쓴 작업만 그 위에 얹는다. 새 작업이 레인에 늘면 여기도
    * 저절로 따라온다(안 그러면 리포트만 짧아져 드릴다운이 빈다). */
   tasks: (() => {
-    const rich = new Map(RICH_TASKS.map((t) => [t.taskKey, t]));
+
     const slot = MOCK_GRID.slots.find((x) => x.runKey === MARKET_RUN)!;
-    return slot.tasks.map(
-      (gridCell) => rich.get(gridCell.taskKey) ?? taskFromCell(gridCell, mockSlotAt(slot)),
-    );
+    /* ⚠️ **격자가 정본이다 — 상세로 행을 갈아치우지 않는다.** 통째로 바꾸면 손으로 쓴 낡은
+     * 귀결(연쇄로 BLOCKED 가 된 작업이 성공·진행 중으로 남는 식)이 드릴다운에 떠서, 운영자가
+     * 누른 칸과 열린 상세가 서로 다른 말을 한다. 상태 축은 셀에서 오고, 여기서는 셀이 못
+     * 만드는 것(재시도 이력·완전성 대조)만 얹는다. 테스트가 귀결 일치를 고정한다. */
+    return slot.tasks.map((gridCell) => {
+      const base = taskFromCell(gridCell, mockSlotAt(slot));
+      const extra = RICH_TASKS[gridCell.taskKey];
+      /* 상태 축은 셀에서만 온다 — 상세는 셀이 못 만드는 두 필드뿐이라 덮을 것이 없다 */
+      return extra ? { ...base, ...extra } : base;
+    });
   })(),
   issues: [
     { issueType: 'INCOMPLETE', scope: 'task', taskKey: 'INVESTOR_COLLECTION_KIS', status: 'OPEN', occurrenceCount: 3, firstSeenAt: iso('15:47'), lastSeenAt: iso('16:10'), resolutionReason: null },

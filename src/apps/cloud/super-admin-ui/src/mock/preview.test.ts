@@ -390,6 +390,16 @@ test('리포트는 그 런의 작업을 전부 낸다 — 격자에서 보이는
     );
   }
 
+  /* 상태 축은 셀에서만 온다 — 상세 표가 상태를 아예 안 들고 있어 드리프트의 원천이 없다.
+   * (전에는 상세가 행을 통째로 갈아, 연쇄로 BLOCKED 가 된 작업이 리포트에선 성공으로
+   * 남았다. 그때 "귀결이 같다"는 단언을 달았지만 병합을 고친 뒤로는 **구조상 깨질 수 없어**
+   * 아무것도 재지 못했다 — 단언 대신 원천을 없앴다.) */
+  const slot = MOCK_GRID.slots.find((x) => x.runKey === MOCK_REPORT.run?.runKey)!;
+  const gridOutcome = new Map(slot.tasks.map((t) => [t.taskKey, t.outcome]));
+  for (const t of MOCK_REPORT.tasks) {
+    assert.equal(t.outcome, gridOutcome.get(t.taskKey), `${t.taskKey}: 리포트 귀결이 격자와 다르다`);
+  }
+
   /* 상세가 살아 있는지 — 파생으로 바꾸면서 손으로 쓴 재시도·완전성이 날아가기 쉽다 */
   const rich = MOCK_REPORT.tasks.find((t) => t.taskKey === 'PRICE_COLLECTION_KIS')!;
   assert.ok(rich.attempts.length > 1, '재시도 상세가 남아야 한다');
