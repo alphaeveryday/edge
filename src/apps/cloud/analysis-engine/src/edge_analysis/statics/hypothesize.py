@@ -33,6 +33,8 @@ MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPH
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
 MAX_OBJECT_ROUNDS = 6               # 무한 루프 금지. 6 = list_options 1 + preview 3(사건
                                     # 분포 상한, ALPHA-938) + 재조회·거부 재시도 여유 2
+MAX_PREVIEW_SUBMISSIONS = 3         # 최종 제출 상한 - 프롬프트 계약("최대 3개")을 서버가
+                                    # 강제한다. 초과분은 사유와 함께 기각(수용분은 유지)
 
 _SYSTEM = """너는 인과 가설 에이전트다. 아래 **닫힌 어휘**의 값만 쓸 수 있다 - 목록 밖 값은 거부된다.
 
@@ -506,8 +508,24 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         record("hypothesis.raw", turn=turn + 1,
                hypotheses=_trace_safe(raw_hypotheses))
         if preview_mode:
+            overflow: list[str] = []
+            # 상한은 사건 분포 모드(전용 preview_system 을 넘긴 호출자)에만 건다 -
+            # 일반 preview 모드는 상한 계약이 없어(프롬프트가 "설계마다 preview")
+            # 여기서 자르면 유효 가설이 손실되는 회귀다.
+            distribution_mode = bool((object_tools or {}).get("preview_system"))
+            if (distribution_mode
+                    and len(raw_hypotheses) > MAX_PREVIEW_SUBMISSIONS):
+                # 상한은 서버가 강제한다(프롬프트 계약만으로는 게이트가 아니다) -
+                # 제출 순서 앞 3개는 유지하고 초과분은 사유째 원장 행이 된다.
+                # 사유는 요약 1행이다: 건별로 늘어놓으면 재시도 지시문의
+                # rejected[-6:] 창에서 실제 형식·handle 실패 사유를 밀어낸다.
+                dropped = len(raw_hypotheses) - MAX_PREVIEW_SUBMISSIONS
+                overflow = [f"제출 상한 {MAX_PREVIEW_SUBMISSIONS}개 초과 - "
+                            f"제출 순서 뒤의 {dropped}건을 기각합니다"]
+                raw_hypotheses = raw_hypotheses[:MAX_PREVIEW_SUBMISSIONS]
             valid, rej, rendered_hypotheses = _resolve_preview_hypotheses(
                 raw_hypotheses, preview_resolver)
+            rej += overflow
             if previewable_options and not raw_hypotheses:
                 # 형식 오독과 진짜 미제출을 가른다(Rule 12) - "READY preview 필요"
                 # 사유가 형식 불일치까지 덮으면 원장만 봐서는 모델이 제출을 안 한

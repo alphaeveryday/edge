@@ -366,3 +366,58 @@ def test_llm_can_preview_and_submit_up_to_three_distinct_events(monkeypatch):
     assert attempts["evt_b"]["preview_status"] == "READY"
     # 프롬프트 계약: 복수 상한이 명시돼야 모델이 두 번째 후보를 시도한다.
     assert "최대 3개" in systems[0]
+
+
+def test_submissions_beyond_the_cap_are_rejected_with_reason(monkeypatch):
+    """상한 3은 프롬프트 계약이 아니라 서버 게이트다 — 4개 제출이 오면 앞 3개만
+    수용하고 초과분은 사유째 원장 행이 된다(프롬프트만으로는 게이트가 아니다)."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=tuple(
+            EventCandidate(f"evt_{i}", f"thread_{i}", chr(65 + i), f"사건 {i}",
+                           "2026-08-07T10:31:00")
+            for i in range(4)
+        ), current_event_returns={chr(65 + i): 0.01 for i in range(4)},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            kwargs["source_event_id"], kwargs["instrument_id"], "CONTRACT.CANCEL",
+            41, -0.031, kwargs["today"], 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_ids = list(runtime._candidate_by_id)
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        *({"tool": "hypothesis.preview", "arguments": {
+            "candidate_id": cid,
+            "outcome_id": "outcome:market_adjusted_return_day_0",
+        }} for cid in candidate_ids),
+        {"hypotheses": [
+            {"preview_handle": None, "intent": f"{i}번 확인."} for i in range(4)
+        ]},
+    ))
+
+    def ask(_system, _user):
+        reply = next(replies)
+        if "hypotheses" in reply:
+            for hypothesis, handle in zip(reply["hypotheses"], runtime._previews):
+                hypothesis["preview_handle"] = handle
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    # 제출 순서 **앞** 3개가 수용된다(마지막·임의 3개 수용으로 바뀌는 회귀 차단).
+    submitted_order = list(runtime._previews)[:4]
+    assert [v.preview_handle for v in valid] == submitted_order[:3]
+    # 초과 사유는 요약 1행 - 건별로 늘어놓으면 재시도 지시문의 rejected[-6:] 창에서
+    # 실제 실패 사유를 밀어낸다.
+    assert rejected == ["제출 상한 3개 초과 - 제출 순서 뒤의 1건을 기각합니다"]
