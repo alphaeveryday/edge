@@ -459,4 +459,14 @@ test('마감 세션이 결함을 안고 있으면 깨끗한 종료로 그리지 
   );
   assert.equal(clean.tone, 'gated', '결함이 없으면 종전대로');
   assert.doesNotMatch(clean.reason, /남은 결함/);
+
+  /* 창은 멀쩡한데 job 만 고착된 마감 세션 — 이 분기가 고착 검사보다 먼저 반환하므로
+   * 창 축만 세면 깨끗하게 선다. 같은 세션의 issues() 는 그 job 을 드러내고 있다. */
+  const stuckOnly = session({ phase: 'FINALIZED', expectedWindowCount: 390, windows: { valid: 390 } });
+  const jobs = { ...NO_JOBS, claimedExpired: 1, dead: 2 };
+  const h = sessionHealth(stuckOnly, jobs);
+  assert.equal(h.tone, 'warn', '고착 job 이 있는데 깨끗한 종료로 서면 안 된다');
+  assert.match(h.reason, /고착 job 3/);
+  assert.doesNotMatch(h.reason, /남은 결함/, '창 결함은 없으니 그 문구는 안 붙는다');
+  assert.ok(issues(stuckOnly, jobs).length > 0, '같은 세션의 확인 항목은 그 job 을 드러낸다');
 });

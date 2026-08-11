@@ -207,15 +207,22 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
    * 가장 확정적인 결함인데 배지만 깨끗해진다. 국면(종료)은 유지하고 **톤과 사유**로
    * 드러낸다 — 국면을 장애로 바꾸면 서버가 안 한 판정을 화면이 만든다. */
   if (s.phase === 'DRAINED' || s.phase === 'QC_RUNNING' || s.phase === 'FINALIZED') {
-    const unresolved = defects + w.overdueNoEvidence;
+    /* ⚠️ **창 축만 세면 안 된다.** 이 분기는 아래 고착 job 경고보다도 먼저 반환하므로,
+     * 창 결함은 없고 job 만 고착(lease 만료·DEAD)된 마감 세션이 깨끗한 종료로 선다 —
+     * 같은 세션의 `quality.text` 와 `issues()` 는 그 job 을 그대로 드러내는데도. */
+    const windowDefects = defects + w.overdueNoEvidence;
+    const parts = [
+      windowDefects > 0 ? `남은 결함 ${windowDefects}${noun}` : null,
+      stuck > 0 ? `고착 job ${stuck}` : null,
+    ].filter(Boolean);
     return {
       ...base,
       kind: 'closed',
       label: '종료',
-      tone: unresolved > 0 ? 'warn' : 'gated',
+      tone: parts.length > 0 ? 'warn' : 'gated',
       reason:
         `phase=${s.phase} · 최종 연속 완결 ${hhmmOf(s.contiguousCompleteThrough)}` +
-        (unresolved > 0 ? ` · 남은 결함 ${unresolved}${noun}` : ''),
+        (parts.length > 0 ? ` · ${parts.join(' · ')}` : ''),
     };
   }
   if (s.phase === 'FAILED') {
