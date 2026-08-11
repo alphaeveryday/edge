@@ -198,6 +198,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 날짜를 되살린다. 합집합 뒤 한 자리면 소스가 늘어도 자동으로 덮인다.
 	 *
 	 * <p>⚠️ 이 신호는 <b>평일 휴장만</b> 답한다. 주말은 {@link #marketDay} 가 달력으로 답한다.
+	 *
+	 * <p>⚠️ <b>리터럴을 {@code IS NOT NULL} 로 바꾸는 변이는 테스트로 못 잡는다</b>(변이 검증에서
+	 * 생존). {@code skip_reason} 에 들어가는 값이 지금 <b>하나뿐</b>이라 두 술어가 동치이기 때문이다
+	 * ({@code ops/states.py} 에 {@code SKIP_NON_TRADING_DAY} 만 있고 쓰는 곳은 {@code planner.py} 의
+	 * 한 자리다). 죽이려면 프로듀서가 안 쓰는 값을 픽스처가 지어내야 해서 그러지 않았다.
+	 * 그래도 <b>리터럴을 유지한다</b> — 둘째 사유(예: 상류 결손)가 생기는 날 {@code IS NOT NULL} 은
+	 * 그것까지 조용히 휴장으로 세고, 그러면 그 날의 산출이 표본에서 통째로 빠진다.
 	 */
 	private static final String HOLIDAY_DAYS_SQL = """
 			SELECT DISTINCT %s AS d
