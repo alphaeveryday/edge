@@ -133,14 +133,28 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 *
 	 * <p>{@code o.pub}({@code explanation_result}) 이 아니라 이 테이블을 쓴다: 둘 다
 	 * {@code trade_date} 축 · {@code marketBound} · {@code count(DISTINCT etf_instrument_id)} 로
-	 * <b>같은 계약</b>인데, {@code explanation_result} 는 {@code explanation_run → explanation_route
-	 * → contribution_observation} 으로 이어지는 FK 사슬을 요구해 픽스처가 이 테스트와 무관한 행
-	 * 서넛을 더 만들어야 한다. 여기는 FK 가 없다.
+	 * <b>같은 계약</b>인데, {@code explanation_result} 는 {@code explanation_run → explanation_route}
+	 * 까지 더 요구해 이 테스트와 무관한 행이 더 늘어난다. ⚠️ 여기도 FK 가 없지는 않다 —
+	 * {@code ALTER TABLE} 로 {@code etf_profile} 을 물고 있어 아래처럼 종목 사슬 셋을 먼저 세운다.
 	 *
 	 * <p>{@code etf} 를 인자로 받는 이유는 그 산출이 {@code count(DISTINCT etf_instrument_id)} 라서다
 	 * — 같은 ETF 를 두 번 넣어도 1 이어야 하고, 그 계약은 값을 갈라야만 재진다.
 	 * {@code detected_at} 도 갈라 둔다({@code (etf,trade_date,detected_at)} 이 UNIQUE 다).
 	 */
+	/**
+	 * {@code available_at} 축 산출({@code o.doc})이 세는 문서 한 건.
+	 *
+	 * <p>{@code availableAt} 을 <b>오프셋 있는 문자열로 그대로 받는다</b> — KST/UTC 경계에 걸린
+	 * 시각을 픽스처가 직접 지정해야 존을 바꾸는 변이가 잡힌다.
+	 */
+	private void insertDocument(String id, String type, String availableAt) {
+		jdbc.update("""
+				INSERT INTO document (document_id, document_type, source_code, source_document_id,
+				       title, published_at, available_at)
+				VALUES (?,?,'BIGKINDS',?,?,?::timestamptz,?::timestamptz)
+				""", id, type, "src-" + id, "제목 " + id, availableAt, availableAt);
+	}
+
 	private void insertTrigger(String id, String tradingDate, String etf) {
 		/* `etf_instrument_id` 는 `etf_profile` FK 이고, 그건 다시 `instrument` 를, `instrument` 는
 		 * `(instrument_id, entity_type)` 으로 `entity` 를 문다 — 종목 하나에 세 행이 필요하다.
@@ -659,19 +673,22 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 */
 	@Test
 	void 산출은_그날_값과_직전_거래일_중앙값을_함께_낸다() {
-		insertTradingDay("2026-08-03");
-		insertTradingDay("2026-08-02");
-		insertTradingDay("2026-08-01");
-		insertTradingDay("2026-07-31");
-		/* 표본 셋을 **치우치게** 둔다: 07-31 → 0종, 08-02 → 1종, 08-01 → 5종.
+		insertTradingDay("2026-08-03");   // 월
+		insertTradingDay("2026-07-31");   // 금
+		insertTradingDay("2026-07-30");   // 목
+		insertTradingDay("2026-07-29");   // 수
+		/* ⚠️ 표본 날짜는 **평일**이어야 한다 — 주말은 표본에서 빠지므로(달력 규칙) 토·일을 쓰면
+		 * 그 날이 통째로 안 세진다.
+		 *
+		 * 표본 셋을 **치우치게** 둔다: 07-29 → 0종, 07-31 → 1종, 07-30 → 5종.
 		 * ⇒ 중앙값 1.0 · 평균 2.0 — 대칭으로 두면 둘이 같아져 **중앙값을 평균으로 바꾸는 변이가
 		 * 통과한다**(실제로 통과했다). 통계량 자체가 계약이면 표본이 그걸 갈라야 한다. */
-		insertTrigger("g1", "2026-08-02", "etf-a");
-		insertTrigger("g3", "2026-08-01", "etf-a");
-		insertTrigger("g4", "2026-08-01", "etf-b");
-		insertTrigger("g5", "2026-08-01", "etf-c");
-		insertTrigger("g6", "2026-08-01", "etf-d");
-		insertTrigger("g9", "2026-08-01", "etf-e");
+		insertTrigger("g1", "2026-07-31", "etf-a");
+		insertTrigger("g3", "2026-07-30", "etf-a");
+		insertTrigger("g4", "2026-07-30", "etf-b");
+		insertTrigger("g5", "2026-07-30", "etf-c");
+		insertTrigger("g6", "2026-07-30", "etf-d");
+		insertTrigger("g9", "2026-07-30", "etf-e");
 		/* 그날 값: 1종. 같은 ETF 를 **두 번** 넣어도 `DISTINCT` 라 1 이어야 한다 —
 		 * `count(*)` 로 바꾸는 변이가 여기서 죽는다. */
 		insertTrigger("g7", DAY.toString(), "etf-a");
@@ -698,14 +715,14 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 휴장일은_기준_표본에서_빠진다() {
 		insertTradingDay("2026-08-03");
-		insertTradingDay("2026-08-01");
-		insertHoliday("2026-08-02");
-		// 같은 휴장일에 도는 다른 레인(뉴스) — 런 단위 제외였다면 이 런이 08-02 를 되살린다.
-		insertRun("r-news-0802", "news:2026-08-02T15:30", "news", "SUCCEEDED", "2026-08-02",
-				"2026-08-02T06:30:00Z", "2026-08-02T06:30:00Z", null);
-		// 08-01 만 표본이면 중앙값 = 2.0. 08-02(산출 0)가 섞이면 1.0 으로 내려간다.
-		insertTrigger("g1", "2026-08-01", "etf-a");
-		insertTrigger("g2", "2026-08-01", "etf-b");
+		insertTradingDay("2026-07-31");
+		insertHoliday("2026-07-30");   // 평일(목)인데 휴장 — 달력이 아니라 원장이 답하는 자리
+		// 같은 휴장일에 도는 다른 레인(뉴스) — 런 단위 제외였다면 이 런이 07-30 을 되살린다.
+		insertRun("r-news-0730", "news:2026-07-30T15:30", "news", "SUCCEEDED", "2026-07-30",
+				"2026-07-30T06:30:00Z", "2026-07-30T06:30:00Z", null);
+		// 07-31 만 표본이면 중앙값 = 2.0. 07-30(산출 0)이 섞이면 1.0 으로 내려간다.
+		insertTrigger("g1", "2026-07-31", "etf-a");
+		insertTrigger("g2", "2026-07-31", "etf-b");
 
 		OutputRow trig = repository.facts(DAY).outputs().stream()
 				.filter(o -> o.id().equals("o.trig")).findFirst().orElseThrow();
@@ -723,8 +740,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 오늘이_휴장이면_장_산출만_기준을_안_준다() {
 		insertHoliday(DAY.toString());
-		insertTradingDay("2026-08-01");
-		insertTrigger("g1", "2026-08-01", "etf-a");
+		insertTradingDay("2026-07-31");
+		insertTrigger("g1", "2026-07-31", "etf-a");
 
 		List<OutputRow> outputs = repository.facts(DAY).outputs();
 		assertThat(outputs).extracting(OutputRow::id)
@@ -764,13 +781,13 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 계획_결손일도_기준_표본에_들어간다() {
 		insertTradingDay("2026-08-03");
-		insertTradingDay("2026-08-01");
-		// 08-02 는 런이 0건이고 계획 결손 이슈만 있다.
-		insertMissingSlotIssue("i1", "etf-daily:2026-08-02T15:40", "OPEN");
-		insertTrigger("g1", "2026-08-01", "etf-a");
-		insertTrigger("g2", "2026-08-01", "etf-b");
+		insertTradingDay("2026-07-31");
+		// 07-30(목)은 런이 0건이고 계획 결손 이슈만 있다.
+		insertMissingSlotIssue("i1", "etf-daily:2026-07-30T15:40", "OPEN");
+		insertTrigger("g1", "2026-07-31", "etf-a");
+		insertTrigger("g2", "2026-07-31", "etf-b");
 
-		// 표본 = {08-02: 0, 08-01: 2} ⇒ 중앙값 1.0. 08-02 가 빠지면 2.0 이 된다.
+		// 표본 = {07-30: 0, 07-31: 2} ⇒ 중앙값 1.0. 07-30 이 빠지면 2.0 이 된다.
 		assertThat(repository.facts(DAY).outputs())
 				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isEqualTo(1.0d));
@@ -784,20 +801,21 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 표본은_휴장일을_뺀_뒤_10개로_자른다() {
 		insertTradingDay(DAY.toString());
-		insertHoliday("2026-08-02");   // day 직전 11일 후보 중 하나가 휴장이다
+		insertHoliday("2026-07-27");   // day 직전 **평일** 11개 후보 중 하나가 휴장이다
 		/* 자르기가 제외보다 **앞이면** 최근 10개(08-02~07-24)를 집은 뒤 휴장을 빼 **9개**가 되고
 		 * 가장 오래된 07-23 이 영영 안 들어온다. 뒤면 제외 후 10개(08-01~07-23)가 그대로 남는다.
-		 * 그래서 두 경우를 가르는 신호는 **07-23 의 유무 하나**다.
+		 * 그래서 두 경우를 가르는 신호는 **가장 오래된 07-17 의 유무 하나**다.
 		 *
-		 * 값을 그 신호가 중앙값을 움직이게 배치한다 — 0 인 날 5개(07-23·07-24~07-27)와 1 인 날
-		 * 5개(07-28~08-01):
+		 * 값을 그 신호가 중앙값을 움직이게 배치한다 — 0 인 날 5개와 1 인 날 5개:
 		 *   · 옳게 10개  → [0,0,0,0,0,1,1,1,1,1] 가운데 둘 평균 = **0.5**
 		 *   · 잘못 9개   → [0,0,0,0,1,1,1,1,1]   가운데   = **1.0**
 		 * 값을 균일하게 두면 개수가 달라져도 중앙값이 같아 이 순서가 안 재진다. */
-		List<String> zeroDays = List.of("2026-07-23", "2026-07-24", "2026-07-25", "2026-07-26",
-				"2026-07-27");
-		List<String> oneDays = List.of("2026-07-28", "2026-07-29", "2026-07-30", "2026-07-31",
-				"2026-08-01");
+		/* ⚠️ 전부 평일이다 — 주말을 섞으면 그 날이 후보에서 먼저 빠져 11개가 안 된다.
+		 * 가장 오래된 07-17 의 유무가 두 순서를 가르는 신호다. */
+		List<String> zeroDays = List.of("2026-07-17", "2026-07-20", "2026-07-21", "2026-07-22",
+				"2026-07-23");
+		List<String> oneDays = List.of("2026-07-24", "2026-07-28", "2026-07-29", "2026-07-30",
+				"2026-07-31");
 		zeroDays.forEach(this::insertTradingDay);
 		oneDays.forEach(this::insertTradingDay);
 		for (int i = 0; i < oneDays.size(); i++) {
@@ -807,6 +825,79 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(repository.facts(DAY).outputs())
 				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isEqualTo(0.5d));
+	}
+
+	/**
+	 * 🔴 <b>주말은 원장이 답해 주지 않는다.</b> {@code NON_TRADING_DAY} 신호는 달력에 매인 레인이
+	 * 그날 <b>실제로 돌았을 때만</b> 생긴다 — 뉴스 레인은 주 7일 돌고 그 런에도 {@code trading_date}
+	 * 가 박히므로, 시장 레인이 안 돈 주말은 원장상 평범한 거래일처럼 보인다.
+	 *
+	 * <p>dev 실측(2026-08-11): 주말 {@code trading_date} 4일 중 <b>2일(08-08 토·08-09 일)이 뉴스
+	 * 런만 있고 skip 행이 0</b> 이었다. 그래서 이 픽스처가 그 형태를 그대로 만든다 — 주말에 뉴스
+	 * 런만 두고 skip 행은 안 둔다.
+	 */
+	@Test
+	void 시장_런이_안_돈_주말도_기준_표본에서_빠진다() {
+		insertTradingDay("2026-08-03");          // 월
+		insertTradingDay("2026-07-31");          // 금 — 유일한 정상 표본
+		// 08-01(토)·08-02(일)에 뉴스 런만 있다. skip 행이 없어 원장은 휴장이라고 말하지 않는다.
+		insertRun("r-news-0801", "news:2026-08-01T15:30", "news", "SUCCEEDED", "2026-08-01",
+				"2026-08-01T06:30:00Z", "2026-08-01T06:30:00Z", null);
+		insertRun("r-news-0802", "news:2026-08-02T15:30", "news", "SUCCEEDED", "2026-08-02",
+				"2026-08-02T06:30:00Z", "2026-08-02T06:30:00Z", null);
+		insertTrigger("g1", "2026-07-31", "etf-a");
+		insertTrigger("g2", "2026-07-31", "etf-b");
+
+		// 표본 = {07-31: 2} ⇒ 2.0. 주말이 섞이면 {0, 0, 2} 의 중앙값 0.0 이 된다.
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(2.0d));
+	}
+
+	/**
+	 * 🔴 <b>주말을 조회하면 장 산출의 기준을 안 준다</b> — 휴장일과 같은 이유이고, 같은 술어가
+	 * 답해야 한다. 원장에는 그 주말이 휴장이라는 신호가 없으므로 <b>달력이 답하는 자리</b>다.
+	 */
+	@Test
+	void 주말을_조회하면_장_산출의_기준을_안_준다() {
+		LocalDate saturday = LocalDate.parse("2026-08-01");
+		insertRun("r-news-0801", "news:2026-08-01T15:30", "news", "SUCCEEDED", "2026-08-01",
+				"2026-08-01T06:30:00Z", "2026-08-01T06:30:00Z", null);
+		insertTradingDay("2026-07-31");
+		insertTrigger("g1", "2026-07-31", "etf-a");
+
+		List<OutputRow> outputs = repository.facts(saturday).outputs();
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.trig")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isNull());
+		// 뉴스 갈래는 주말에도 도니까 기준을 그대로 준다 — marketBound 가 가르는 자리.
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
+	}
+
+	/**
+	 * 🔴 <b>{@code available_at} 축 산출의 날짜는 KST 로 자른다.</b> 뒤 세 산출({@code o.doc}·
+	 * {@code o.asr}·{@code o.evt})은 거래일 컬럼이 없어 수집 시각의 KST 날짜로 센다 — UTC 로 자르면
+	 * <b>KST 오전 9시 이전 수집분이 전날로 밀린다</b>.
+	 *
+	 * <p>그래서 픽스처를 정확히 그 경계에 둔다: {@code 2026-08-03T00:30+09:00} 은 KST 로 08-03 이고
+	 * UTC 로는 <b>08-02</b> 다. 존을 바꾸는 변이가 여기서 죽는다.
+	 *
+	 * <p>{@code document_type='NEWS'} 술어도 함께 잰다 — 공시 문서를 같은 날에 둬서, 술어가 빠지면
+	 * 그날 값이 2 가 된다.
+	 */
+	@Test
+	void available_at_산출은_KST_날짜로_세고_뉴스만_센다() {
+		insertTradingDay(DAY.toString());
+		insertDocument("d1", "NEWS", "2026-08-03T00:30:00+09:00");        // KST 08-03 · UTC 08-02
+		insertDocument("d2", "DISCLOSURE", "2026-08-03T10:00:00+09:00");  // 뉴스가 아니다
+
+		assertThat(repository.facts(DAY).outputs())
+				.filteredOn(o -> o.id().equals("o.doc")).singleElement()
+				.satisfies(o -> {
+					assertThat(o.label()).isEqualTo("뉴스 문서");
+					assertThat(o.unit()).isEqualTo("건");
+					assertThat(o.today()).isEqualTo(1L);
+				});
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */

@@ -163,10 +163,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	/**
 	 * 기준(중앙값)을 잴 <b>직전 거래일</b> 후보.
 	 *
-	 * <p>⚠️ <b>{@code trading_date} 는 거래일 달력이 아니다.</b> Planner 는 슬롯 날짜를 그대로 쓰고
-	 * ({@code plan_slot} 이 {@code is_trading_day} 와 <b>무관하게</b> 채운다), 휴장 판정은 기대 작업
-	 * 쪽에 {@code skip_reason='NON_TRADING_DAY'} 로 남는다. 안 빼면 평일 휴장일의 산출 0 이 표본에
-	 * 들어가 중앙값이 내려가고 편차 판정이 둔해진다.
+	 * <p>⚠️ <b>{@code trading_date} 는 거래일 달력이 아니다.</b> Planner 는 슬롯 날짜를 그대로 쓴다
+	 * ({@code ops/planner.py} 의 {@code plan_run} 이 {@code day = slot.date()} 를 그대로
+	 * {@code trading_date} 로 넘긴다 — 거래일인지 안 본다). 휴장 판정은 기대 작업 쪽에
+	 * {@code skip_reason='NON_TRADING_DAY'} 로 남고, 주말은 아예 신호가 없다({@link #marketDay}).
 	 *
 	 * <p>🔴 <b>여기서 10개로 자르지 않는다.</b> 자르고 나서 휴장일을 빼면 그중 하나가 휴장일일 때
 	 * 표본이 9개로 줄고 <b>11번째 거래일은 영영 안 들어온다</b>. 자르는 것은 {@link #baseDays} 가
@@ -274,14 +274,18 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 
 	/**
 	 * 산출별 <b>그 날의 값과 직전 거래일 중앙값</b>. 산출마다 조회 한 번이고, 오늘과 기준일을
-	 * <b>한 문장</b>으로 센다 — 나눠 세면 두 값이 다른 스냅샷에서 나와 편차율이 <b>존재한 적 없는
-	 * 비교</b>가 된다.
+	 * 한 문장으로 센다.
+	 *
+	 * <p>⚠️ <b>일관성을 주는 것은 이 문장 구성이 아니라 트랜잭션이다.</b> {@link #facts} 전체가
+	 * REPEATABLE READ 라 나눠 세도 같은 스냅샷을 읽는다 — 산출 다섯이 서로 다른 문장인데도
+	 * 서로 일관된 것이 그 증거다. 한 문장으로 세는 이유는 왕복을 줄이는 것뿐이고, <b>격리수준을
+	 * 낮추면</b> 그때야 나눠 센 값들이 갈린다.
 	 */
 	private List<OutputRow> outputs(LocalDate day) {
 		/* 휴장일 목록을 한 번만 읽어 두 자리가 같은 술어를 쓰게 한다 — 표본에서 빼는 자리와
 		 * "오늘이 휴장인가"를 묻는 자리가 갈리면 이 파일이 이미 겪은 종류의 결함이 된다. */
 		List<LocalDate> holidays = jdbc.queryForList(HOLIDAY_DAYS_SQL, LocalDate.class, day);
-		boolean targetIsHoliday = holidays.contains(day);
+		boolean targetIsNonMarketDay = !marketDay(day, holidays);
 		List<LocalDate> baseDays = baseDays(day, holidays);
 
 		List<LocalDate> queried = new ArrayList<>(baseDays);
@@ -300,7 +304,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			/* 🔴 휴장일에 장 산출의 기준을 주면 소비자가 −100% 편차로 판정한다. `today` 의 0 은
 			 * 실측이 맞지만 **비교할 평소가 없는 날**이라 기준 쪽을 비운다 — 없는 사실을 지어내지
 			 * 않고 이미 있는 "기준 없음" 규약을 탄다. */
-			Double median = spec.marketBound() && targetIsHoliday ? null : median(base);
+			Double median = spec.marketBound() && targetIsNonMarketDay ? null : median(base);
 			return new OutputRow(spec.id(), spec.label(), spec.unit(),
 					byDay.getOrDefault(day, 0L), median);
 		}).toList();
@@ -325,9 +329,30 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		TreeSet<LocalDate> days = new TreeSet<>(Comparator.reverseOrder());
 		days.addAll(jdbc.queryForList(BASE_DAYS_SQL, LocalDate.class, upTo));
 		days.addAll(slotDays(upTo));
-		// `holidays` 는 `day` 이하라 여기 후보(`upTo` 이하)를 덮는다.
-		days.removeAll(holidays);
-		return days.stream().limit(10).toList();
+		/* 장이 안 서는 날을 뺀다 — `holidays` 는 `day` 이하라 여기 후보(`upTo` 이하)를 덮는다.
+		 * ⚠️ 자르기는 이 뒤다(위 주석). */
+		return days.stream().filter(d -> marketDay(d, holidays)).limit(10).toList();
+	}
+
+	/**
+	 * 장이 서는 날인가 — <b>물음이 둘로 갈린다</b>.
+	 *
+	 * <p>🔴 <b>주말은 원장이 답해 주지 않는다.</b> {@code skip_reason='NON_TRADING_DAY'} 는 그날
+	 * <b>달력에 매인 레인이 실제로 돌았을 때만</b> 생긴다 — 뉴스 레인은 주 7일 돌고 그 런에도
+	 * {@code trading_date} 가 박히므로, 시장 레인이 안 돈 주말은 <b>원장상 평범한 거래일처럼
+	 * 보인다</b>. dev 실측(2026-08-11): 주말 {@code trading_date} 4일 중 2일(08-08 토·08-09 일)이
+	 * 뉴스 런만 있고 skip 행이 <b>0</b> 이었다. 그대로 두면 그 이틀의 시장 산출 0 이 기준 표본에
+	 * 섞이고, 그 날을 조회하면 비어야 할 {@code base} 가 실린다.
+	 *
+	 * <p>그래서 <b>주말은 달력이, 평일 휴장은 원장의 skip 신호가</b> 답한다. 주말 규칙은
+	 * data-pipeline 의 {@code ops/trading_calendar.py}({@code day.weekday() >= 5})와 같은 식이고,
+	 * Planner 의 슬롯 생성도 같은 기준을 쓴다({@code ops/entry.py} 의 {@code cand.weekday() >= 5}).
+	 *
+	 * <p>⚠️ <b>한 술어를 두 자리가 함께 쓴다</b> — 표본에서 빼는 자리와 "오늘 장이 섰나"를 묻는
+	 * 자리. 갈리면 이 파일이 이미 겪은 종류의 결함이 된다.
+	 */
+	private static boolean marketDay(LocalDate date, List<LocalDate> holidays) {
+		return date.getDayOfWeek().getValue() <= 5 && !holidays.contains(date);
 	}
 
 	/** 표본이 없으면 <b>null</b> — 기준 없음이지 0 이 아니다. 짝수면 가운데 둘의 평균이다. */
