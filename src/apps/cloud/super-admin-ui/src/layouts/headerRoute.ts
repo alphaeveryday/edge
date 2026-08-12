@@ -66,7 +66,14 @@ const underPrefix = (path: string, prefix: string): boolean =>
  * 티커가 CDN SPA fallback 에서 죽지 않게). `useLocation().pathname` 에는 쿼리가 없으므로 이
  * 함수는 경로만으로 답할 수 있는 데까지만 답하고, 종목 이름은 화면이 붙인다.
  */
-export function headerRoute(path: string): HeaderRoute {
+export function headerRoute(raw: string): HeaderRoute {
+  /* 🔴 라우터와 **같은 경로를 같게 봐야 한다.** React Router 는 `/analyses/symbol/` 를 그
+   * 화면에 매칭하는데 이 파서가 정확 비교를 하면 목록으로 분류해, 화면은 종목인데 헤더는
+   * "가격 변동 분석 목록"이고 뒤로가기까지 사라진다. 끝의 `/` 는 조각이 아니라 표기다.
+   * ⚠️ 퍼센트 인코딩(`/analyses/%73ymbol`)은 여기서 안 푼다 — 디코딩을 넣으면 `%2F` 가 조각
+   * 경계를 만들어 이 파서의 경계 검사를 우회한다. 손으로 친 그 주소는 헤더 이름만 틀린다. */
+  const path = raw.length > 1 && raw.endsWith('/') ? raw.replace(/\/+$/, '') : raw;
+
   const tenant = /^\/tenants\/([^/]+)$/.exec(path);
   if (tenant) {
     return {

@@ -50,6 +50,22 @@ export function AnalysisSymbolPage() {
   const preview = params.get('preview') === 'mock';
   const query = useAnalyses();
 
+  /* 🔴 **링크가 망가진 것과 종목이 조회 창 밖인 것은 다른 사실이다.** 빈 값으로 `findGroup`
+   * 을 부르면 당연히 못 찾고, 화면은 "최신 200건 창에 없습니다"라고 말한다 — 실제로는 주소에
+   * 종목이 없는 것이라 운영자가 **없는 종목을 조사하러 간다**. 조회 전에 가른다(Rule 12). */
+  if (!market || !code) {
+    return (
+      <div className="card card-pad">
+        <p className="t-sm m-0">종목이 지정되지 않은 주소입니다.</p>
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+          이 화면은 <span className="mono">market</span>·<span className="mono">code</span> 를 주소에서
+          받습니다 — 둘 중 하나가 비어 있어 어떤 종목도 조회하지 않았습니다(조회했는데 없는 것과
+          다릅니다). <Link to="/analyses">가격 변동 분석 목록에서 다시 선택</Link>
+        </p>
+      </div>
+    );
+  }
+
   if (!preview && query.isError) return <LoadError error={query.error} />;
   if (!preview && query.isPending) return <PageSkeleton rows={6} />;
 

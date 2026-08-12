@@ -755,3 +755,19 @@ export const MINUTE_API_GAPS: ApiGap[] = [
     why: '창 축의 시간 범위를 응답이 주지 않아 "장 시작~종료" 축을 그릴 근거가 없다.',
   },
 ];
+
+/**
+ * 이 응답에 **실어 보일 신호가 하나도 없는가.** 검수용 목을 대신 그려도 되는 유일한 조건이다.
+ *
+ * 🔴 이 판정을 잘못 좁히면 실 장애가 목 뒤로 사라진다. 처음엔 `sessions` 와 `newsJobs.dead`
+ * 만 봤는데, `MinuteJobCounts` 에는 `claimedExpired`(lease 없는 CLAIMED = **Consumer 사망
+ * 고착 후보**)·`waiting`·`claimed` 가 함께 있다. 세션이 없는 날에도 뉴스 job 은 날짜 축으로
+ * 따로 쌓이므로 "세션 0 · DEAD 0 · 고착 5" 는 정상 도달 상태이고, 그때 첫 화면이 실제 고착
+ * 대신 목을 보여 주고 있었다.
+ *
+ * ⭐ **칸 이름을 나열하지 않고 전 칸을 센다** — 집계에 필드가 늘어도 새지 않는다. 손으로 고른
+ * 칸 목록은 반드시 낡는다(이 트랙이 여러 번 겪었다).
+ */
+export function hasNoSignal(status: { sessions: unknown[]; newsJobs: MinuteJobCounts }): boolean {
+  return status.sessions.length === 0 && Object.values(status.newsJobs).every((n) => n === 0);
+}

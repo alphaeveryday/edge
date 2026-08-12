@@ -33,15 +33,21 @@ const a = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'basisTimeAbs'>): Analys
   ...o,
 });
 
-test('같은 종목의 분석이 한 행으로 접히고 오늘 분석 수가 된다', () => {
+test('같은 종목의 분석이 한 행으로 접히고, 시도 수는 **날짜를 안 가린다**', () => {
+  /* 🔴 픽스처 날짜를 갈라 두는 것이 이 테스트의 전부다. 셋 다 같은 날이면 구현을 "최신
+   * 날짜만 센다"로 되돌려도 통과한다 — 이 필드는 `todayCount` 라는 이름으로 살다가 화면이
+   * "오늘의 분석 이력 N건"이라 쓰게 만들었고, 목록 SQL(`JdbcAnalysisRepository.LIST_SQL`)에는
+   * 날짜 조건이 아예 없다. 세는 범위는 **조회 창 전체**지 오늘이 아니다. */
   const g = groupBySymbol([
     a({ id: '1', basisTimeAbs: '2026-08-03 10:22' }),
     a({ id: '2', basisTimeAbs: '2026-08-03 14:10' }),
-    a({ id: '3', basisTimeAbs: '2026-08-03 15:30' }),
+    a({ id: '3', basisTimeAbs: '2026-08-04 15:30' }),
   ]);
   assert.equal(g.length, 1, '종목당 한 행');
-  assert.equal(g[0].attemptCount, 3);
+  assert.equal(g[0].attemptCount, 3, '어제 것도 센다 — 날짜로 거르면 2가 된다');
   assert.equal(g[0].analyses.length, 3, '이력은 보존된다');
+  /* 표시 수와 이력 길이가 갈리면 화면이 "N건"이라 쓰고 N개가 아닌 표를 그린다 */
+  assert.equal(g[0].attemptCount, g[0].analyses.length);
 });
 
 test('최신은 기준 시각으로 정한다 — 늦게 끝난 과거 기준이 덮지 않는다', () => {

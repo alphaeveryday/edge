@@ -20,6 +20,17 @@ test('세 갈래가 같은 접두어를 나눠 쓴다', () => {
   assert.equal(headerRoute('/analyses/an-123').entity?.id, 'an-123');
 });
 
+test('끝의 슬래시는 조각이 아니다 — 라우터가 매칭하는 주소를 파서도 같게 봐야 한다', () => {
+  /* React Router 는 `/analyses/symbol/` 를 종목 화면에 매칭한다. 파서가 정확 비교를 하면
+   * 화면은 종목인데 헤더는 "가격 변동 분석 목록"이고 뒤로가기까지 사라진다. */
+  assert.equal(headerRoute('/analyses/symbol/').kind, 'symbol');
+  assert.equal(headerRoute('/analyses/symbol/').backTo, '/analyses');
+  assert.equal(headerRoute('/tenants/').kind, 'list');
+  assert.equal(headerRoute('/tenants/t-1/').kind, 'tenantDetail');
+  /* 루트만은 슬래시가 곧 경로다 — 지우면 빈 문자열이 돼 unknown 으로 떨어진다 */
+  assert.equal(headerRoute('/').kind, 'home');
+});
+
 test('접두어는 경로 조각 경계에서만 맞는다 — 없는 화면에 이름을 주지 않는다', () => {
   /* `startsWith` 만 쓰면 `/analyses-old` 가 "가격 변동 분석 목록"이 된다. 라우트가 없어
    * 실제로는 홈으로 리다이렉트되는데 헤더만 있는 화면 이름을 말하는 상태다. */

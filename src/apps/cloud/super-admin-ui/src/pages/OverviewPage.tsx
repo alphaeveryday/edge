@@ -20,7 +20,7 @@ import type {
 } from '../domains/sources';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
 import { laneLabel } from '../domains/sources/lanes';
-import { issues, liveness } from '../domains/sources/minuteView';
+import { hasNoSignal, issues, liveness } from '../domains/sources/minuteView';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -191,9 +191,10 @@ function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
   const query = useMinuteStatus();
   const { isPending, isError } = query;
   const real = query.data;
-  /* 실을 것이 없다 = 세션도 0이고 DEAD 도 0. 둘 중 하나라도 있으면 실측이 이긴다. */
-  const nothingReal =
-    !isPending && !isError && (real?.sessions.length ?? 0) === 0 && (real?.newsJobs.dead ?? 0) === 0;
+  /* 판정은 `minuteView.hasNoSignal` 이 한다(순수 모듈이라 변이가 잡힌다 — 여기 두면 안 잡히고,
+   * 실제로 이 자리가 `dead` 만 보다 고착 신호를 목으로 덮었다).
+   * ⭐ `real` 존재를 먼저 요구한다 — 응답이 없는데 "실을 게 없다"로 접으면 미도착이 목이 된다. */
+  const nothingReal = !isPending && !isError && !!real && hasNoSignal(real);
   const usingMock = preview && nothingReal;
   const data = usingMock ? MOCK_MINUTE : real;
 

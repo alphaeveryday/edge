@@ -13,6 +13,7 @@ import {
   datasetKind,
   evidencedCount,
   gapRuns,
+  hasNoSignal,
   issues,
   liveness,
   materializedCount,
@@ -530,5 +531,21 @@ test('poll 레인의 어느 조각에도 창·거래 어휘가 남지 않는다 
       assert.doesNotMatch(seg.meaning, /창(?!_end)/, `${dataset} ${seg.key}: 의미에 '창'`);
       assert.doesNotMatch(seg.meaning, /거래/, `${dataset} ${seg.key}: 의미에 '거래'`);
     }
+  }
+});
+
+test('실을 신호가 없다 = 세션 0 **그리고** 뉴스 job 전 칸 0', () => {
+  const zero = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 };
+  assert.equal(hasNoSignal({ sessions: [], newsJobs: zero }), true, '아무것도 없으면 참');
+  assert.equal(hasNoSignal({ sessions: [{}], newsJobs: zero }), false, '세션이 있으면 실측이 이긴다');
+
+  /* 🔴 칸마다 따로 재야 한다 — `dead` 만 보던 판이 실제로 있었고, 그때 고착 신호가 검수용
+   * 목 뒤로 사라졌다. 어느 칸 하나만 빠뜨려도 그 칸의 장애가 첫 화면에서 조용해진다. */
+  for (const k of Object.keys(zero) as (keyof typeof zero)[]) {
+    assert.equal(
+      hasNoSignal({ sessions: [], newsJobs: { ...zero, [k]: 3 } }),
+      false,
+      `${k} 가 3인데 "신호 없음"이라 답했다 — 그 칸의 장애가 목에 덮인다`,
+    );
   }
 });

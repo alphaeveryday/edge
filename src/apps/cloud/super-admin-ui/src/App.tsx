@@ -37,11 +37,14 @@ export function App() {
           <Route path="/lineage/news" element={<NewsLineagePage />} />
           <Route path="/impact/holdings" element={<HoldingsImpactPage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
-          {/* 종목 상세 — 구체 경로라 `:id` 보다 **먼저** 둔다. 뒤에 두면 `symbol` 이 분석 id 로
-              잡혀 상세 화면이 "해당 분석 건을 찾을 수 없습니다"를 띄운다.
-              시장·코드는 **경로가 아니라 쿼리**로 받는다(`symbols.symbolHref`) — CloudFront SPA
-              fallback 이 마지막 조각의 점(.)을 정적 파일로 갈라, `BRK.B` 류 티커의 공유 링크·
-              새로고침만 index.html 을 못 받는다. 사건 딥링크가 같은 이유로 쿼리다. */}
+          {/* 종목 상세 — 시장·코드를 **경로가 아니라 쿼리**로 받는다(`symbols.symbolHref`).
+              CloudFront SPA fallback(`spa-rewrite.js`)이 마지막 조각의 점(.)을 정적 파일로 갈라,
+              `BRK.B` 류 티커를 경로에 두면 그 종목의 **공유 링크·새로고침만** index.html 을 못
+              받는다 — 이 화면이 존재하는 이유가 정확히 공유 가능한 종목 이력이다. 사건 딥링크도
+              같은 이유로 쿼리다(ALPHA-738 A1).
+              ⚠️ 읽기 좋으라고 `:id` 앞에 뒀을 뿐 **선언 순서는 계약이 아니다** — react-router 7
+              은 정적 조각을 동적 조각보다 높게 랭크해 순서를 뒤집어도 여기로 매칭된다. 순서에
+              기대는 계약은 `layouts/headerRoute.ts` 쪽이다(거긴 손으로 쓴 if 체인이라 진짜다). */}
           <Route path="/analyses/symbol" element={<AnalysisSymbolPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
         </Route>

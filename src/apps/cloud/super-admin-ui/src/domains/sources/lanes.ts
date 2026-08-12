@@ -1,10 +1,14 @@
 /* 레인(`pipeline_type`) 어휘 — 원장 코드를 운영자 말로 (ALPHA-738).
  *
  * 🔴 **이 표는 반드시 낡는다.** 이식된 개요 화면이 `{'etf-daily', 'news'}` 둘만 들고 있었는데
- * 정본(`data_pipeline/ops/catalog.py`)에는 그 사이 `investor-intraday` 3작업이 늘어 있었다
- * (ALPHA-875). 개요 응답은 레인을 안 거른다 — `JdbcPipelineStatusRepository.OVERVIEW_SQL` 이
- * `DISTINCT ON (pipeline_type)` 으로 **원장에 있는 전 레인**을 낸다. 그래서 표에 없는 레인은
- * 첫 화면에 원장 코드가 그대로 찍힌다.
+ * 정본(`data_pipeline/ops/catalog.py`)에는 그 사이 `investor-intraday` 3작업이 **신설**돼
+ * 있었다(ALPHA-767·768·769 — 레인 이동이 아니라 신설이다). 개요 응답은 레인을 안 거른다 —
+ * `JdbcPipelineStatusRepository.OVERVIEW_SQL` 이 `DISTINCT ON (pipeline_type)` 으로 **원장에
+ * 있는 전 레인**을 낸다. 그래서 표에 없는 레인은 첫 화면에 원장 코드가 그대로 찍힌다.
+ *
+ * ⚠️ 표에 없는 레인이 **은퇴한 레인**일 수도 있다: `disclosure` 는 카탈로그 엔트리가 0 인데
+ * (ALPHA-875 가 1분 세션으로 보냈다) 과거 런 행은 원장에 남아 있어 조회에 잡힐 수 있다.
+ * 그때도 이름을 지어내지 않고 코드를 보여 주는 것이 맞다 — 아래 `laneLabel` 참고.
  *
  * ⚠️ **JSX 를 쓰지 않는다.** `OverviewPage.tsx` 안에 있는 동안은 `node --test` 가 파일을 못
  * 집어, 레인이 늘어도 아무 테스트가 안 깨졌다. 이 트랙이 같은 이유로 판정 모듈을 여러 번
