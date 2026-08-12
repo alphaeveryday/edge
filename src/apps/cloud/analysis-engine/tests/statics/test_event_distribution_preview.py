@@ -643,6 +643,10 @@ def test_duplicate_refusal_cap_forces_submission_and_is_observed(monkeypatch):
         {"hypotheses": []},                             # 재질의 턴
     ))
     seen_users: list[str] = []
+    records: list[dict] = []
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesize.record",
+        lambda event, **fields: records.append({"event": event, **fields}))
 
     def ask(system, user):
         seen_users.append(user)
@@ -659,7 +663,15 @@ def test_duplicate_refusal_cap_forces_submission_and_is_observed(monkeypatch):
     assert runtime_calls == ["hypothesis.list_options"]   # 실행은 1회뿐
     final_user = seen_users[-1]
     assert final_user.count("[도구 반려]") == 2            # 상한 2회까지만 교정
-    assert "도구 사용을 종료" in final_user or "hypotheses" in final_user
+    # 상한 초과는 제출 강제 전환이다 - _OBJECT_DONE 문구 자체를 단언한다.
+    assert "왕복 상한 소진" in final_user
+    # 반려는 예산을 소모하지 않는다 - 실행 표기는 1/6 하나뿐이어야 한다.
+    assert "[ObjectSet 결과 1/" in final_user
+    assert "[ObjectSet 결과 2/" not in final_user
+    # 반려도 관측이다(Rule 12) - 상한 초과분 포함 3회가 원장에 남는다.
+    refusals = [r for r in records if r.get("event") == "hypothesis.tool_result"
+                and r.get("error") == "DUPLICATE_TOOL_CALL"]
+    assert len(refusals) == 3
 
 
 def test_failed_call_may_be_retried_with_identical_arguments(monkeypatch):
