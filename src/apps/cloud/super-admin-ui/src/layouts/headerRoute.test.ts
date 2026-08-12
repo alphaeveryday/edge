@@ -27,19 +27,22 @@ test('🔴 화면명이 있는 경로는 사이드바에 있거나, 없다고 **
      * 그 nav 항목이 지워져 도달 경로가 0이 돼도 이 게이트가 침묵한다. 이 게이트를 만든 사고가
      * 정확히 그것(`/overview`)이라, 첫 커밋부터 같은 유형에 구멍을 낼 뻔했다. */
   ]);
-  /* ⚠️ 여기 있는 것은 **인바운드 링크도 없다** — 주소를 직접 쳐야만 닿는다. 살릴지 지울지
-   * 미결이라 남겨 두되, 목록이 늘면 그때마다 이 단언이 결정을 요구한다(README 라우트 표 참조). */
-  const UNREACHABLE_UNDECIDED = new Set(['/ops/summary']);
+  /* 🔴 **인바운드 0 이 여기서는 의도다.** 은퇴시킨 화면이라 라우트·컴포넌트만 살려 뒀고,
+   * 메뉴에서 빼는 것이 은퇴의 내용이다(계획 §6-3 — 개요는 자기 질문에 답할 수 없었다).
+   * ⚠️ 도달성만 보는 리뷰는 이걸 "죽은 라우트"라고 낸다. ALPHA-738 에서 실제로 그 지적을 받아
+   * `/overview` 를 사이드바에 넣었다가 되돌렸다(ALPHA-977) — 이 집합이 그 왕복을 막는 자리다.
+   * 목록에 더할 때는 **은퇴 결정이 문서에 있는지** 먼저 확인해라. 없으면 그건 그냥 죽은 라우트다. */
+  const RETIRED_ROUTE_ONLY = new Set(['/ops/summary', '/overview']);
 
   const orphans = HEADER_LIST_TITLES.map(([p]) => p).filter(
-    (p) => !nav.has(p) && !LINKED_ONLY.has(p) && !UNREACHABLE_UNDECIDED.has(p),
+    (p) => !nav.has(p) && !LINKED_ONLY.has(p) && !RETIRED_ROUTE_ONLY.has(p),
   );
   assert.deepEqual(orphans, [], '사이드바에도 없고 링크 목록에도 없는 화면이 생겼다');
 
-  /* 구 홈 병존(`rules/README.md` §6) — 라우트만 남기고 링크를 빼면 문서가 거짓이 된다 */
-  assert.ok(nav.has('/overview'), '`/overview` 가 사이드바에서 사라졌다 — 도달 경로가 0이다');
-  /* 라벨은 도착지 제목과 같아야 한다 — 다르면 잘못 온 줄 안다 */
-  assert.match(layout, /path: '\/overview', label: '레인 원장 요약'/);
+  /* 은퇴한 화면이 **메뉴로 되돌아오지 않는지**를 잰다 — 되돌아오는 쪽이 이 트랙의 실제 사고였다 */
+  for (const p of RETIRED_ROUTE_ONLY) {
+    assert.ok(!nav.has(p), `은퇴한 \`${p}\` 가 사이드바에 다시 올라왔다 — 계획 §6-3 을 먼저 읽어라`);
+  }
 });
 
 test('종목 상세가 분석 상세 정규식에 먹히지 않는다 (순서를 뒤집으면 헤더가 남의 이름을 말한다)', () => {
