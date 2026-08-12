@@ -52,10 +52,10 @@ nav:
   - Home: index.md
   - Diagrams:
       - Overview: diagrams/index.md
-      - 0 정보 구조: diagrams/0-information-architecture.md
-      - 1 서비스 아키텍처: diagrams/1-application-architecture.md
-      - 2 시스템 아키텍처: diagrams/2-system-architecture.md
-      - 3 클라우드 아키텍처: diagrams/3-cloud-architecture.md
+      - 1 정보 구조: diagrams/1-information-architecture.md
+      - 2 애플리케이션 아키텍처: diagrams/2-application-architecture.md
+      - 3 시스템 아키텍처: diagrams/3-system-architecture.md
+      - 4 클라우드 아키텍처: diagrams/4-cloud-architecture.md
   - 설계 · ADR: reference/adr/README.md
   - 계약:
       - Sync Protocol: reference/contracts/sync-protocol.md
