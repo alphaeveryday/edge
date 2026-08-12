@@ -79,7 +79,8 @@ import 에 확장자를 붙인다.
    `/console/facts`, 세션은 `/sources/minute`). §5 JSON 은 CLI 로 UI 없이 나온다.
    ⚠️ 둘을 합쳐도 **19규칙이 다 서지는 않는다** — `/console/facts` 에 AWS 상태·chain·queues·
    ETF 원장·재시도 상한이 없어 R03·R10·R11·R12·R15·R16 은 계속 `evaluated:false` 다. 어댑터 둘을
-   만들면 계측이 끝난다고 읽으면 안 된다(남은 것은 아래 "계측 티켓 7건" 이다).
+   만들면 계측이 끝난다고 읽으면 안 된다(남은 것은 아래 **계측 티켓 표**다 — 수를 여기 적으면
+   낡는다. 규모의 정본은 `rules.ts` 의 `dep` 집합이고 `rules.test.ts` 가 표와 맞물려 센다).
    **이 선택은 닫혔다** — 엔드포인트가 사실만 주고 평가는 여기 남는다
    ([ADR-0050](../../../../../../docs/adr/0050-console-facts-endpoint.md), 계약은
    [docs/contracts/console-facts-api.md](../../../../../../docs/contracts/console-facts-api.md)).
@@ -161,7 +162,8 @@ import 에 확장자를 붙인다.
 
 ## 계측 티켓 — ✅ 발번 완료 (2026-08-12)
 
-⚠️ **낱개 7건이 아니라 막힌 규칙·소유 모듈로 묶어 넷으로 발번했다.** 그리고 계획 §3-4 의 7건에
+⚠️ **낱개 7건이 아니라 막힌 규칙·소유 모듈로 묶어 넷으로 발번했고, 그중 하나(ALPHA-981)는
+사후에 반증돼 무효화했다**(아래). 그리고 계획 §3-4 의 7건에
 **R03·R10·R12 가 빠져 있었다** — 이 셋도 같은 이유로 못 도는데 목록에 없었다(아래 표가 정본이다).
 
 | 티켓 | 무엇 | 되살아나는 규칙 |
@@ -169,7 +171,29 @@ import 에 확장자를 붙인다.
 | [ALPHA-978](https://alphaeveryday.atlassian.net/browse/ALPHA-978) | 원장이 안 쓰는 판정 축 — per-ETF outcome · 재시도 정책 필드 · `actual_as_of` writer · 완전성 분모(엔티티 축만) | R07 · R08 · R15 · R16 |
 | [ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) | facts 응답이 안 싣는 축 — `aws_status` · `queues[]` · `chain` | R03 · R10 · R12 |
 | [ALPHA-980](https://alphaeveryday.atlassian.net/browse/ALPHA-980) | 선언·등록물 — 큐→구독 매핑 · 런북 등록(R17~R19 포함) · 런 kind | R11 (+ 런북 표면) |
-| [ALPHA-981](https://alphaeveryday.atlassian.net/browse/ALPHA-981) | `GRID_SQL` 에 `t.dataset` 한 컬럼 | — (UI 의 `DATASET_OF_TASK` 손 매핑 제거) |
+
+❌ **[ALPHA-981](https://alphaeveryday.atlassian.net/browse/ALPHA-981)(`GRID_SQL` 에 `t.dataset` 한
+컬럼)은 반증돼 무효화했다** — 애초에 규칙을 하나도 되살리지 않아 계측 티켓이 아니었고, 전제
+자체가 틀렸다. 원장의 `dataset` 은 **화면 행 축과 다른 축**이고 더 잘다:
+작업 있는 화면 행 **9개**가 원장 값 **19개**를 접고, 그 9행 중 **6행이 여러 값을 접는다**
+(`stock_news` 한 행이 여섯). 컬럼을 실어도 `DATASET_OF_TASK`(**26건**)가 `원장dataset → 행`
+(**19건**) 손매핑으로 바뀔 뿐이다 — "`taskKeys` 가 통째로 불필요해진다"가 여기서 무너진다.
+⚠️ 가드가 **사라지지는 않는다**(같은 정규식으로 원장 값을 뽑아 대조하면 된다) — 눈금이
+작업 키 26 에서 원장 값 19 로 굵어질 뿐이다. 반증은 손매핑이 남는다는 사실만으로 선다.
+⛔ **그 축이 무엇인지 설명하려는 시도를 세 번 했고 세 번 다 거짓이었다**(각각 다음 리뷰
+라운드가 반증했다):
+① "산출 **테이블** 단위" → 19개 중 **8개**가 DDL 이 없다.
+② "raw·normalize 가 이름을 공유하고 load 가 자기 이름을 갖는다" → `LOAD_PRICE_DAILY` 는
+   feature 인데 `price_daily` 를 공유하고, 뉴스 레인은 raw·normalize 가 갈린다.
+③ "**작업**마다 갈린다" → 26작업에 값 19개, **13작업(절반)이 값을 공유한다**.
+⭐⭐ ②를 지우며 쓴 ③이 **이 경고문과 같은 문단 안에** 있었다 — 경고가 자기 문단의 위반을
+못 잡았다. **버티는 것은 측정값뿐이다(19 > 9). 네 번째 설명을 쓰지 마라.**
+🔴 실제로 네 번째를 썼다 — ①에 "(레이크 파티션 키다)"를 붙였는데 8개 중 셋
+(`instrument_master`·`investor_flow_load`·`investor_flow_intraday_load`)은 적재 스텝의
+`DATASET` 상수다. 검증 라운드가 잡았다. **이 경고문 안에서도 라벨을 붙이지 마라.**
+⭐ 건진 것: 그 가드가 작업 키 **집합**만 대조하고 **접는 방향**은 안 재고 있었다 — 파이프라인이
+작업의 `dataset` 을 옮겨도 화면 행이 조용히 그대로다. `원장 dataset 값은 정확히 한 화면 행으로
+접힌다` 단언으로 막았다(변이 실증: 그 변이가 새 단언만 죽이고 기존 8건은 초록이었다).
 
 🔴 **지금 19규칙 중 여덟(R03·R07·R08·R10·R11·R12·R15·R16)이 `evaluated: false`** 다. 화면은 그걸
 "못 돎"으로 정직하게 그리지만, 운영자에게는 **그 축을 아무도 안 보고 있다**는 뜻이다.

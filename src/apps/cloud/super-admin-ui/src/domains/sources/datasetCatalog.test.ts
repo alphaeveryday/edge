@@ -126,6 +126,58 @@ test('ops 원장의 모든 작업이 정확히 한 데이터셋에 귀속된다 
   assert.equal(Object.keys(DATASET_OF_TASK).length, claimed.length);
 });
 
+/* ── 접는 **방향**은 위 두 단언이 못 잰다 ──
+ *
+ * 위는 작업 키 **집합**만 대조한다. 그래서 파이프라인이 어떤 작업의 `dataset` 을 다른 산출로
+ * 옮겨도(예: `NORMALIZE_ETF` 를 `etf_profile` 로) 화면 행은 조용히 그대로다 — 키가 늘지도
+ * 줄지도 않아 유령·누락 어느 쪽에도 안 걸린다.
+ *
+ * ⚠️ 원장의 `dataset` 은 **행 축과 다른 축**이고 더 잘다 — 값 19개가 작업 있는 행 9개로
+ * 접히고 그중 6행이 여러 값을 접는다(`stock_news` 한 행이 `stock_news`·`news_articles`·
+ * `news_assertions`·`document`·`document_assertion`·`source_event` 여섯).
+ * ⛔ **그 축이 무엇인지 설명하려는 시도가 세 번 다 거짓이었다** — "산출 테이블 단위"(19개 중
+ * 8개가 DDL 이 없다) · "raw·normalize 가 이름을 공유"(뉴스 레인은 갈린다) · "작업마다 갈린다"
+ * (26작업 19값, 13작업이 값을 공유). **측정값만 남긴다.** 원장 값은 행으로 못 쓴다 —
+ * ALPHA-981 이 정확히 그 전제("`t.dataset` 한 컬럼이면 `taskKeys` 가 불필요해진다")로 발번됐다가
+ * 이 측정으로 반증됐다. 접기 자체는 카탈로그의 몫으로 남기되, 그것이 **조대화**인지를 여기서 잰다:
+ * 원장 값 하나가 두 행에 걸치면 같은 산출을 놓고 두 행이 서로 다른 상태를 주장한다.
+ *
+ * 🔴 **이 단언이 재는 것은 그 방향의 절반이다.** 걸침은 그 작업의 원장 값을 **다른 작업도 쓸
+ * 때만** 생긴다 — 값 19개 중 13개가 단독이라, 단독 값을 가진 작업(`LOAD_DOCUMENTS`·
+ * `NORMALIZE_NEWS` 등 13개, 그중 11개는 출발 행에 다른 작업이 남아 「작업이 매여 있다」에도
+ * 안 걸린다)은 **엉뚱한 행으로 옮겨도 이 파일 전건 초록**이다. 나머지 절반을 막으려면 원장
+ * 값→행 매핑을 값으로 고정해야 하고, 그건 손으로 쓰는 표가 하나 더 느는 것이라 안 했다.
+ * ⚠️ 이 한계를 안 적으면 다음 사람이 "접는 방향은 이제 잠겼다"로 읽는다.
+ */
+test('원장 dataset 값은 정확히 한 화면 행으로 접힌다 — 걸치면 같은 산출을 두 행이 주장한다', () => {
+  const datasetOfTask = new Map<string, string>();
+  for (const m of pipelineSrc('ops/catalog.py').matchAll(/CatalogEntry\(([\s\S]*?)\n    \)/g)) {
+    const key = /task_key="([^"]+)"/.exec(m[1])?.[1];
+    /* `\b` 가 `log_dataset=`(로그 파티션 전용 별칭)을 걸러 낸다 — 그건 행 축이 아니다 */
+    const ledger = /\bdataset="([^"]+)"/.exec(m[1])?.[1];
+    if (key && ledger) datasetOfTask.set(key, ledger);
+  }
+  assert.ok(datasetOfTask.size > 20, '정본 추출이 실패하면 아래가 빈 집합끼리 비교된다');
+
+  const rowsOf = new Map<string, Set<string>>();
+  for (const [taskKey, row] of Object.entries(DATASET_OF_TASK)) {
+    const ledger = datasetOfTask.get(taskKey);
+    /* `dataset` 은 기본값 없는 필수 dataclass 필드라 "선언이 없다"는 파이썬에서 불가능하다 —
+     * 여기가 발화하면 **파싱 드리프트**다(위치인자 호출·리터럴 대신 상수·블록 종결자 변경). */
+    assert.ok(ledger, `${taskKey}: ops 카탈로그에서 dataset= 을 못 읽었다 (파싱 드리프트)`);
+    const rows = rowsOf.get(ledger) ?? new Set<string>();
+    rows.add(row);
+    rowsOf.set(ledger, rows);
+  }
+  assert.ok(rowsOf.size > 5, '접기 대조가 빈 채로 통과하고 있다');
+
+  assert.deepEqual(
+    [...rowsOf].filter(([, rows]) => rows.size > 1).map(([d, rows]) => `${d} → ${[...rows].join('·')}`),
+    [],
+    '원장 dataset 하나가 여러 행에 걸쳐 있다 — 그 산출의 상태를 두 행이 따로 그린다',
+  );
+});
+
 test('데이터셋의 레인 선언이 ops 정본과 같다 — 기동 실패 귀속이 여기에 매여 있다', () => {
   /* `rollup` 은 작업이 하나도 없는 기동 실패 런을 이 `lane` 으로 데이터셋에 귀속시킨다.
    * 선언이 낡으면 **엉뚱한 데이터셋이 장애로** 서거나, 진짜 실패가 어디에도 안 남는다.

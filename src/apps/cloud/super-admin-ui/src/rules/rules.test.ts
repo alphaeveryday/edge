@@ -1676,15 +1676,41 @@ test('계측 공백으로 못 도는 규칙 목록이 문서의 티켓 표와 �
   assert.deepEqual(
     withDep.filter((id) => !CONDITIONAL.includes(id)).sort(),
     [...BLOCKED].sort(),
-    '계측 공백 규칙 목록이 바뀌었다 — `rules/README` 의 티켓 표(ALPHA-978~981)를 같이 고쳐라',
+    '계측 공백 규칙 목록이 바뀌었다 — `rules/README` 의 티켓 표(ALPHA-978~980)를 같이 고쳐라',
   );
 
   /* 문서가 그 티켓들을 실제로 가리키는지 — "발번 대기" 로 되돌아가면 여기서 걸린다 */
   const readme = readFileSync(new URL('./README.md', import.meta.url), 'utf8');
-  for (const key of ['ALPHA-978', 'ALPHA-979', 'ALPHA-980', 'ALPHA-981']) {
+  for (const key of ['ALPHA-978', 'ALPHA-979', 'ALPHA-980']) {
     assert.ok(readme.includes(key), `${key} 가 rules/README 에서 사라졌다`);
   }
   assert.doesNotMatch(readme, /발번 대기/, '발번이 끝났는데 문서가 대기라고 말한다');
+
+  /* ALPHA-981 은 반증돼 무효화됐다(원장 `dataset` 값 19개가 화면 행 9개로 접힌다). 규칙을
+   * 하나도 되살리지 않으니 애초에 이 표의 행이 아니었다 — 되돌아오면 여기서 잡는다.
+   *
+   * ⭐ 부재는 결함의 모양과 결정의 모양이 같으므로 "표로 돌아오지 않았나"만 재면 **결정 기록
+   * 자체가 지워져도 초록**이다(`doesNotMatch` 는 부재가 통과 조건이라 공허하게 참이 된다).
+   * 그래서 토큰의 존재도 같이 못 박는다.
+   *
+   * ⚠️ 이 둘이 닫는 것은 **표 행 부활**과 **기록 소실** 둘뿐이다 — 산문으로 "재검토 결과
+   * 유효하다"고 뒤집으면 둘 다 통과한다. 결정 역전은 리뷰의 몫이지 이 단언의 몫이 아니다.
+   *
+   * ⚠️ 범위를 **티켓 표 안으로** 좁힌다. 문서 전체에 `| … ALPHA-981 …|` 를 금지하면 정당한
+   * 반증 기록 표·결정 이력 표·다른 표의 각주까지 "계측 티켓 표로 되돌아왔다"는 **거짓 사유**로
+   * 터진다(이 문서는 표를 많이 쓴다). */
+  assert.ok(
+    readme.includes('ALPHA-981'),
+    'ALPHA-981 반증 기록이 rules/README 에서 사라졌다 — 지우면 같은 티켓이 다시 발번된다',
+  );
+  /* 헤더 공백을 고정하면 마크다운 포매터의 열 정렬만으로 스모크가 터진다 — 사유 추적이 어렵다 */
+  const ticketTable = /^\|\s*티켓\s*\|.*\n(?:\|.*\n)+/m.exec(readme)?.[0] ?? '';
+  assert.ok(ticketTable.includes('ALPHA-978'), '계측 티켓 표를 못 찾았다 — 아래 단언이 공허해진다');
+  assert.doesNotMatch(
+    ticketTable,
+    /ALPHA-981/,
+    'ALPHA-981 이 계측 티켓 표로 되돌아왔다 — 반증된 티켓이다(README 의 ❌ 문단을 읽어라)',
+  );
 });
 
 test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수 있다 (소비자가 구분자를 다시 적지 않는다)', () => {
