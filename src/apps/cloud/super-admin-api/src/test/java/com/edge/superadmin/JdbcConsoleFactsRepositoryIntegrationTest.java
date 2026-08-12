@@ -20,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * 콘솔 사실 조회의 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축</b> 통합 테스트 — 실 스키마(Testcontainers + Flyway
@@ -1526,10 +1527,20 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		var chain = repository.facts(LocalDate.parse("2026-08-03")).chain();
 
-		assertThat(chain.feeds()).extracting(f -> f.id()).containsExactly("feed.batch",
-				"feed.intraday");
-		assertThat(chain.stages()).extracting(s -> s.id()).containsExactly("c.obs", "c.route",
-				"c.run", "c.res", "c.pub", "c.dlv");
+		/* 라벨·단위·출처까지 못 박는다 — 셋 다 서버가 내는 값이고(산출 축과 같은 규약) 화면이
+		 * 그대로 그린다. 값만 재면 라벨을 맞바꾸는 편집이 전건 초록이다(변이 실증). */
+		assertThat(chain.feeds()).extracting(f -> f.id(), f -> f.label(), f -> f.unit(), f -> f.src())
+				.containsExactly(
+						tuple("feed.batch", "배치 트리거", "ETF", "price_movement_trigger"),
+						tuple("feed.intraday", "장중 트리거", "건", "minute_price_trigger"));
+		assertThat(chain.stages()).extracting(s -> s.id(), s -> s.label(), s -> s.src())
+				.containsExactly(
+						tuple("c.obs", "관측", "etf_contribution_observation"),
+						tuple("c.route", "라우트", "explanation_route"),
+						tuple("c.run", "런", "explanation_run"),
+						tuple("c.res", "결과", "explanation_result"),
+						tuple("c.pub", "게시", "publication_status=PUBLISHED"),
+						tuple("c.dlv", "전달", "tenant_delivery NEW"));
 		assertThat(chain.feeds().get(0).v()).isEqualTo(1L);
 		assertThat(chain.stages()).extracting(s -> s.batch()).containsOnly(1L);
 	}
@@ -1570,6 +1581,29 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * <p>전자를 그대로 세면 테넌트가 둘인 순간 전달 단계가 설명 수의 두 배가 되어 단위가 조용히
 	 * 바뀐다. dev 는 테넌트가 하나라 <b>실물에서는 잠복</b>이다 — 여기서만 재진다.
 	 */
+	/**
+	 * 🔴 <b>게시 단계는 게시 상태를 실제로 본다.</b> 픽스처가 전부 게시본이면 그 술어를 지워도
+	 * (모든 결과를 게시로 세도) 전건 초록이다 — 변이 실증으로 나온 자리다. 초안 하나를 섞어
+	 * <code>c.res &gt; c.pub</code> 를 만든다.
+	 *
+	 * <p>⚠️ 발번 쪽의 {@code delivery_type = 'NEW'} 는 <b>여기서 겨눌 수 없다</b>. 전달은 2형상이고
+	 * ({@code V202608011200} — CORRECTION 폐지) {@code INVALIDATION} 은 본체 참조가 NULL 이라 조인에
+	 * 안 걸린다 — 그 술어가 거를 행을 <b>스키마가 만들 수 없다</b>(그 형상을 넣으려다 CHECK 에
+	 * 걸렸다). 못 잡는다고 리포지토리 주석에 밝혀 두고 리터럴은 유지한다.
+	 */
+	@Test
+	void 게시_단계는_게시_상태를_실제로_본다() {
+		insertPublished("res-pub", "2026-08-03", "etf-g", "PUBLISHED");
+		insertPublished("res-draft", "2026-08-03", "etf-h", "DRAFT");
+		deliverNew(insertTenant("t-pub"), "res-pub");
+
+		var stages = repository.facts(LocalDate.parse("2026-08-03")).chain().stages();
+
+		assertThat(stages.get(3).batch()).isEqualTo(2L);   // c.res — 둘 다 결과는 있다
+		assertThat(stages.get(4).batch()).isEqualTo(1L);   // c.pub — 초안은 게시가 아니다
+		assertThat(stages.get(5).batch()).isEqualTo(1L);   // c.dlv
+	}
+
 	@Test
 	void 테넌트_다중도와_재실행이_단계_수를_부풀리지_않는다() {
 		insertPublished("res-c", "2026-08-03", "etf-d", "PUBLISHED");
