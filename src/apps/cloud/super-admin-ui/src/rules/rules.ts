@@ -916,7 +916,7 @@ export const RULES: Rule[] = [
     name: '실시간 무증거 누적',
     kls: '무증거',
     base: 'P1',
-    desc: '기한이 지난 1분 창에 실행·결과 증거가 없다',
+    desc: '기한이 지난 1분 원장 단위에 실행·결과 증거가 없다',
     dep: null,
     source: 'DB_LEDGER',
     canRun: (f) => f.minute != null,

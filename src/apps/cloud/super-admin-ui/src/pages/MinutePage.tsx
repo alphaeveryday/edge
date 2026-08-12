@@ -30,6 +30,7 @@ import {
   gapRuns,
   healthyClaimed,
   hasNoSignal,
+  isCurrentKstDate,
   isPollLane,
   issues,
   liveness,
@@ -674,14 +675,14 @@ function ApiGapList({ gaps }: { gaps: ApiGap[] }) {
  */
 const RUNNING_STATUSES = new Set(['RUNNING']);
 
-function BatchRunning({ date }: { date: string }) {
+function BatchRunning({ historical }: { historical: boolean }) {
   const { data, isPending, isError } = useSourceOverview();
   /* 과거 날짜를 보고 있으면 "지금 도는 배치"를 섞지 않는다 — 이 블록은 현재 시점의 사실이다 */
-  if (date) return null;
+  if (historical) return null;
 
   const lanes = isPending || isError ? [] : data.lanes;
   const live = lanes.filter(
-    (l) => RUNNING_STATUSES.has(l.orchestrationStatus ?? '') || l.opsStatus === 'IN_PROGRESS',
+    (l) => !l.notToday && (RUNNING_STATUSES.has(l.orchestrationStatus ?? '') || l.opsStatus === 'IN_PROGRESS'),
   );
   const mock = live.length === 0;
   const view: OverviewLane[] = mock
@@ -854,6 +855,7 @@ function MinuteBody({
   mock?: boolean;
 }) {
   const tabs = datasetTabs(data, dataset);
+  const historical = !isCurrentKstDate(data.date);
   /* 어휘 밖 dataset 은 첫 탭으로 정규화한다 — 빈 화면을 내면 잘못된 링크가 "세션 없음"으로
    * 위장된다(그 날짜에 진짜로 세션이 없는 것과 구분이 사라진다). */
   const current = tabs.find((t) => t.id === dataset) ?? tabs[0];
@@ -900,12 +902,12 @@ function MinuteBody({
       </div>
 
       {/* ── 실행 중인 배치 — 수집 세션과 다른 축이라 합산하지 않는다 ── */}
-      <BatchRunning date={date} />
+      <BatchRunning historical={historical} />
 
       {/* ── 활성 수집 세션 — 데이터셋 선택으로 본문이 통째로 바뀐다 ── */}
       <p className="t-sm m-0" style={{ fontWeight: 600 }}>
         활성 수집 세션
-        {date && (
+        {historical && (
           <span className="t-xs" style={{ color: 'var(--fg-3)', fontWeight: 400 }}>
             {' '}
             — 지난 날짜({data.date})를 보고 있어 실행 중인 배치는 표시하지 않습니다

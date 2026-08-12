@@ -18,8 +18,9 @@ import {
   ledgerObservation,
   reconcile,
   statusView,
+  taskState,
 } from './runObservation.ts';
-import type { RunFact } from '../../rules/types.ts';
+import type { RunFact, TaskFact } from '../../rules/types.ts';
 
 const run = (o: Partial<RunFact> = {}): RunFact => ({
   id: 'etf-daily:2026-08-03T15:40',
@@ -161,4 +162,12 @@ test('없는 실패 상세를 지어내지 않는다 — 상태·종료만 값�
   for (const key of ['실패 state', 'error', 'cause', 'execution ARN', 'redrive 상태']) {
     assert.equal(ev.find((x) => x.label === key)!.value, null, key);
   }
+});
+
+test('PENDING 작업은 시도 수만으로 실행 중이라 추정하지 않는다', () => {
+  const task = {
+    task_key: 'collect', run_id: 'run-1', pipeline_type: 'news', stage: 'raw', required: true,
+    task_outcome: 'PENDING', attempts: 1,
+  } as TaskFact;
+  assert.equal(taskState(task), '대기');
 });

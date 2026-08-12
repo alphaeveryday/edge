@@ -71,6 +71,18 @@ export function datasetKind(dataset: string): DatasetKind {
 export const isPollLane = (kind: DatasetKind): boolean =>
   kind === 'news' || kind === 'disclosure';
 
+/** 서버 세션 날짜가 현재 KST 날짜인가. 쿼리 유무가 아니라 날짜 축 자체를 비교한다. */
+export function isCurrentKstDate(date: string, now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value;
+  return date === `${value('year')}-${value('month')}-${value('day')}`;
+}
+
 /** 창 축의 단위 이름 — 뉴스·공시의 1분은 수집 창이 아니라 **poll 1회**로 읽힌다 */
 export function windowUnit(kind: DatasetKind): string {
   return isPollLane(kind) ? 'poll(1분)' : '창(1분)';

@@ -13,10 +13,42 @@
  *
  * 모르는 enum 을 성공·실패로 접지 않는다 — 원문을 보존하고 크게 드러낸다(fail loud).
  */
-import type { RunFact } from '../../rules/types';
+import type { RunFact, TaskFact } from '../../rules/types';
 
 /** ui-kit BadgeTone 과 같은 어휘. 순수 모듈이 UI 를 import 하지 않도록 재선언한다 */
 export type ViewTone = 'active' | 'neutral' | 'gated' | 'warn' | 'blocked' | 'env';
+
+export type TaskState =
+  | '성공'
+  | '부분 결손'
+  | '대기'
+  | '실패'
+  | '타임아웃'
+  | '미기동'
+  | '선행 미충족'
+  | '계획 제외'
+  | '판정 없음';
+
+const TIMEOUT_REASON = /TIMED_OUT|TIMEOUT/i;
+
+/** Console facts에는 시도 상태가 없으므로 attempts 수만으로 실행 중을 만들지 않는다. */
+export function taskState(t: TaskFact): TaskState {
+  if (t.plan_status === 'SKIPPED') return '계획 제외';
+  switch (t.task_outcome) {
+    case 'FULFILLED':
+      return t.data_status === 'INCOMPLETE' || t.data_status === 'INVALID' ? '부분 결손' : '성공';
+    case 'FAILED':
+      return TIMEOUT_REASON.test(String(t.outcome_reason ?? '')) ? '타임아웃' : '실패';
+    case 'MISSED':
+      return '미기동';
+    case 'BLOCKED':
+      return '선행 미충족';
+    case 'PENDING':
+      return '대기';
+    default:
+      return '판정 없음';
+  }
+}
 
 export type StatusKind =
   | 'running'

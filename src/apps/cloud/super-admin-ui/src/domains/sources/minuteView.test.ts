@@ -17,6 +17,7 @@ import {
   healthyClaimed,
   hasNoSignal,
   hasPendingJobs,
+  isCurrentKstDate,
   issues,
   liveness,
   materializedCount,
@@ -265,6 +266,14 @@ test('공시는 poll 레인이다 — 카탈로그가 poll 이라 부르는데 �
   assert.match(q.title, /poll/);
   assert.doesNotMatch(q.detail, /anchor/, '공시에 anchor 따라잡기는 없는 기전이다');
   assert.doesNotMatch(q.title, /창/);
+});
+
+test('현재 날짜 판정은 쿼리 유무가 아니라 KST 날짜 축을 본다', () => {
+  const beforeKstMidnight = new Date('2026-08-11T14:59:59Z');
+  const afterKstMidnight = new Date('2026-08-11T15:00:00Z');
+  assert.equal(isCurrentKstDate('2026-08-11', beforeKstMidnight), true);
+  assert.equal(isCurrentKstDate('2026-08-12', beforeKstMidnight), false);
+  assert.equal(isCurrentKstDate('2026-08-12', afterKstMidnight), true);
 });
 
 test('어휘 밖 dataset 의 빈 결과에 "거래 없음"을 붙이지 않는다 — 가른 뒤 도로 접지 않는다', () => {

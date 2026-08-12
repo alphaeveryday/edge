@@ -34,8 +34,9 @@ import {
   isAwsTerminalFailure,
   ledgerObservation,
   reconcile,
+  taskState,
 } from './runObservation';
-import type { Observation } from './runObservation';
+import type { Observation, TaskState } from './runObservation';
 import { incidentHref, incidentOfVid, ledgerHref, runHref } from './investigation';
 import '../../styles/ops.css';
 
@@ -55,26 +56,9 @@ const STAGE_GROUP: Record<string, string> = {
 };
 const STAGE_ORDER = ['수집', '정제', '적재', '분석', '게시·전달'];
 
-/* ── 작업 상태 판정 ──
- * plan 축(plan_status)과 outcome 축(task_outcome)은 다른 축이다. 데이터가 없다고 상태를
- * 추정하지 않는다 — 아래는 전부 원장 필드의 직접 대응이고, 유일한 파생은 PENDING 을
- * 시도 유무로 가르는 것(시도가 있으면 실행 중, 없으면 대기)이다. */
-type TaskState =
-  | '성공'
-  | '부분 결손'
-  | '실행 중'
-  | '대기'
-  | '실패'
-  | '타임아웃'
-  | '미기동'
-  | '선행 미충족'
-  | '계획 제외'
-  | '판정 없음';
-
 const STATE_TONE: Record<TaskState, BadgeTone> = {
   성공: 'active',
   '부분 결손': 'warn',
-  '실행 중': 'env',
   대기: 'neutral',
   실패: 'blocked',
   타임아웃: 'blocked',
@@ -83,27 +67,6 @@ const STATE_TONE: Record<TaskState, BadgeTone> = {
   '계획 제외': 'gated',
   '판정 없음': 'neutral',
 };
-
-const TIMEOUT_REASON = /TIMED_OUT|TIMEOUT/i;
-
-function taskState(t: TaskFact): TaskState {
-  if (t.plan_status === 'SKIPPED') return '계획 제외';
-  switch (t.task_outcome) {
-    case 'FULFILLED':
-      /* 실행 성공과 데이터 유효는 다른 축이다 — 불완전한 산출이 온전히 초록으로 보이면 안 된다 */
-      return t.data_status === 'INCOMPLETE' || t.data_status === 'INVALID' ? '부분 결손' : '성공';
-    case 'FAILED':
-      return TIMEOUT_REASON.test(String(t.outcome_reason ?? '')) ? '타임아웃' : '실패';
-    case 'MISSED':
-      return '미기동';
-    case 'BLOCKED':
-      return '선행 미충족';
-    case 'PENDING':
-      return (t.attempts ?? 0) > 0 ? '실행 중' : '대기';
-    default:
-      return '판정 없음';
-  }
-}
 
 /**
  * 런 하나의 작업 — **원장이 준 것만**.
@@ -546,7 +509,6 @@ const FLOW_ORDER: TaskState[] = [
   '미기동',
   '선행 미충족',
   '부분 결손',
-  '실행 중',
   '대기',
   '판정 없음',
   '계획 제외',
@@ -592,7 +554,7 @@ function StageFlow({ groups }: { groups: [string, TaskFact[]][] }) {
           tip={
             '원장 stage 순서(수집 → 정제 → 적재)는 실제 의존 관계다 — 정제는 수집 산출을, 적재는 정제 산출을 읽는다.\n' +
             '같은 단계 안의 작업들은 서로 병렬이라 순서를 만들지 않고 한 칸으로 접는다.\n\n' +
-            '단계 상태는 그 단계 작업 중 가장 나쁜 것이다(실패 > 타임아웃 > 미기동 > 선행 미충족 > 부분 결손 > 실행 중 > 대기 > 계획 제외 > 성공).\n' +
+            '단계 상태는 그 단계 작업 중 가장 나쁜 것이다(실패 > 타임아웃 > 미기동 > 선행 미충족 > 부분 결손 > 대기 > 계획 제외 > 성공).\n' +
             '막힌 단계 뒤는 흐리게 두되 "그래서 못 했다"고 인과를 단정하지는 않는다 — 원장이 준 것은 각 단계의 귀결뿐이다.\n\n' +
             '산출량은 여기 넣지 않는다: 데이터셋마다 레코드 단위가 달라 비율로 비교하면 거짓 대비가 된다.'
           }
@@ -683,7 +645,6 @@ function RunTasks({
               [
                 ['성공', n('성공')],
                 ['부분 결손', n('부분 결손')],
-                ['실행 중', n('실행 중')],
                 ['대기', n('대기')],
                 ['실패', n('실패')],
                 ['타임아웃', n('타임아웃')],
@@ -906,7 +867,7 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
           </div>
         ))}
       </div>
-      {runTerminal && (state === '실행 중' || state === '대기') && (
+      {runTerminal && state === '대기' && (
         <p className="t-xs m-0" style={{ color: 'var(--warn)', marginTop: 8 }}>
           런은 {run.ledger_status} 로 끝났는데 이 작업의 귀결이 원장에 쓰이지 않았습니다 — 상태를 추정하지 않고
           원장 값 그대로 둡니다.
