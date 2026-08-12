@@ -90,17 +90,41 @@ DATA.nodes.forEach(n=>{
     el.setAttribute('aria-pressed','false'); el.tabIndex=0; }
   canvas.appendChild(el); byId[n.i]=n;
 });
-// 점선 프레임 제목: 굵게 + 내부 상자들의 시작 x 에 좌측 정렬
+// 프레임 제목 처리 — ① valign=top 대형 프레임: 내부 시작 x 로 패딩 정렬(굵게),
+// ② 소형 점선 무라벨 프레임의 별도 제목 라벨(Client·Service 등): 굵게 + 내부 상자 시작 x 로 이동
+function innerMinX(fr, skip){
+  let minX=Infinity;
+  DATA.nodes.forEach(k=>{
+    if(k===fr||k===skip) return;
+    if(k.x>=fr.x&&k.y>=fr.y&&k.x+k.w<=fr.x+fr.w&&k.y+k.h<=fr.y+fr.h) minX=Math.min(minX,k.x);
+  });
+  return minX;
+}
 DATA.nodes.forEach(n=>{
   const el=document.getElementById(n.i);
-  if(!el || !el.classList.contains('frame')) return;
-  let minX=Infinity;
+  if(!el) return;
+  if(el.classList.contains('frame')){
+    el.style.fontWeight='700';
+    const mx=innerMinX(n,null);
+    if(mx<Infinity) el.style.paddingLeft=(mx-n.x)+'px';
+    return;
+  }
+  if(!n.t || n.swim || n.isimg || CONN.has(n.i)) return;
+  let fr=null;
   DATA.nodes.forEach(m=>{
-    if(m===n) return;
-    if(m.x>=n.x&&m.y>=n.y&&m.x+m.w<=n.x+n.w&&m.y+m.h<=n.y+n.h) minX=Math.min(minX,m.x);
+    if(!m.dash||m.t||m===n) return;
+    const inTop = n.x>=m.x-2 && n.x+n.w<=m.x+m.w+2 && n.y>=m.y-2 && n.y+n.h<=m.y+Math.max(50,m.h*0.15);
+    if(inTop && (!fr||m.w*m.h<fr.w*fr.h)) fr=m;
   });
+  if(!fr) return;
   el.style.fontWeight='700';
-  if(minX<Infinity) el.style.paddingLeft=(minX-n.x)+'px';
+  const mx=innerMinX(fr,n);
+  if(mx<Infinity){
+    el.style.left=mx+'px';
+    el.style.justifyContent='flex-start';
+    el.style.textAlign='left';
+    el.style.paddingLeft='0';
+  }
 });
 canvas.appendChild(svg);
 function clamp(v,lo,hi){return Math.min(Math.max(v,lo),hi)}
