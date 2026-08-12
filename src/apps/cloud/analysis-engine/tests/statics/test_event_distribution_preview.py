@@ -736,10 +736,13 @@ def test_duplicate_guard_state_survives_proposal_retry_turns(monkeypatch):
         runtime_calls.append(name)
         return inner_call(name, arguments)
 
+    listopt = {"tool": "hypothesis.list_options", "arguments": {}}
     replies = iter((
-        {"tool": "hypothesis.list_options", "arguments": {}},   # 턴1 - 실행
-        {"hypotheses": []},                                     # 턴1 미제출 - 재시도
-        {"tool": "hypothesis.list_options", "arguments": {}},   # 턴2 첫 호출 - 반려돼야
+        dict(listopt),                    # 턴1 - 실행
+        dict(listopt),                    # 턴1 - 반려 1
+        dict(listopt),                    # 턴1 - 반려 2 (상한 도달)
+        {"hypotheses": []},               # 턴1 미제출 - 재시도
+        dict(listopt),                    # 턴2 첫 호출 - 상한 초과 → _OBJECT_DONE
         {"hypotheses": []},
     ))
     seen_users: list[str] = []
@@ -753,5 +756,10 @@ def test_duplicate_guard_state_survives_proposal_retry_turns(monkeypatch):
                           "resolve_preview": runtime.resolve,
                           "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM})
 
-    assert runtime_calls == ["hypothesis.list_options"]   # 턴2 반복은 실행 안 됨
-    assert any("[도구 반려]" in u for u in seen_users)
+    assert runtime_calls == ["hypothesis.list_options"]   # 턴2 반복도 실행 안 됨
+    # 반려 상한(2회)은 턴 누적이다 - 턴2 의 반복은 추가 교정 없이 곧장 제출 강제
+    # 전환된다(교정 문구 2회 + 상한 소진 문구). 턴마다 refusals 가 0 으로 초기화되면
+    # 턴2 에서 반려 문구가 3회째 찍혀 이 단언이 깨진다.
+    final_user = seen_users[-1]
+    assert final_user.count("[도구 반려]") == 2
+    assert "왕복 상한 소진" in final_user
