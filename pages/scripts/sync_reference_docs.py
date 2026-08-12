@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from xml.etree import ElementTree
 
 REPO_ROOT = Path.cwd()
 DOCS = REPO_ROOT / "docs"
@@ -26,71 +27,68 @@ IMAGES = REPO_ROOT / "pages" / "docs" / "assets" / "images"
 
 ANIMATED_LOGO_OVERLAY = r"""
 <style>
-  .edge-animation { pointer-events: none; }
-  .edge-data-1, .edge-data-2, .edge-data-3,
-  .edge-start, .edge-signal, .edge-finish { opacity: 0; }
-  .edge-data-1 { animation: edge-data-1 7.2s ease-in-out infinite; }
-  .edge-data-2 { animation: edge-data-2 7.2s ease-in-out infinite; }
-  .edge-data-3 { animation: edge-data-3 7.2s ease-in-out infinite; }
-  .edge-start { animation: edge-start 7.2s ease-in-out infinite; }
-  .edge-signal { animation: edge-signal 7.2s ease-in-out infinite; }
-  .edge-finish { animation: edge-finish 7.2s ease-in-out infinite; }
-  @keyframes edge-data-1 {
-    0%, 5%, 18%, 100% { opacity: 0; }
-    8%, 14% { opacity: .8; }
+  .edge-data {
+    animation-duration: 4.7s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in;
+    fill: #8feaff;
+    filter: drop-shadow(0 0 7px #71ddf7);
   }
-  @keyframes edge-data-2 {
-    0%, 10%, 23%, 100% { opacity: 0; }
-    13%, 19% { opacity: .8; }
+  .edge-data-far { animation-name: edge-data-far; }
+  .edge-data-mid { animation-name: edge-data-mid; }
+  .edge-data-near { animation-name: edge-data-near; }
+  .edge-flow {
+    animation: edge-flow 4.7s linear infinite;
+    fill: none;
+    filter: drop-shadow(0 0 7px #71ddf7);
+    opacity: 0;
+    stroke: #8feaff;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 8;
   }
-  @keyframes edge-data-3 {
-    0%, 15%, 29%, 100% { opacity: 0; }
-    18%, 25% { opacity: .85; }
+  @keyframes edge-data-far {
+    0%, 8% { opacity: 1; }
+    17%, 100% { opacity: 0; }
   }
-  @keyframes edge-start {
-    0%, 23%, 37%, 100% { opacity: 0; }
-    28% { opacity: .9; }
-    33% { opacity: .35; }
+  @keyframes edge-data-mid {
+    0%, 13% { opacity: 1; }
+    23%, 100% { opacity: 0; }
   }
-  @keyframes edge-signal {
-    0%, 29%, 67%, 100% { opacity: 0; }
-    32%, 63% { opacity: .95; }
+  @keyframes edge-data-near {
+    0%, 19% { opacity: 1; }
+    29%, 100% { opacity: 0; }
   }
-  @keyframes edge-finish {
-    0%, 65%, 80%, 100% { opacity: 0; }
-    70% { opacity: .9; }
-    76% { opacity: .25; }
+  @keyframes edge-flow {
+    0%, 29% { opacity: 0; stroke-dashoffset: 1; }
+    30% { opacity: 1; stroke-dashoffset: 1; }
+    72%, 81% { opacity: 1; stroke-dashoffset: 0; }
+    86%, 100% { opacity: 0; stroke-dashoffset: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
+    .edge-data { animation: none; fill: white; filter: none; opacity: 1; }
     .edge-animation { display: none; }
   }
 </style>
-<g class="edge-animation" fill="#8FB9FF" aria-hidden="true">
-  <g class="edge-data-1">
-    <path d="M0 64H15V79H0Z"/>
-    <rect x="38" y="26" width="15" height="15"/>
-    <rect x="21" y="140" width="15" height="15"/>
-  </g>
-  <g class="edge-data-2">
-    <rect x="38" y="102" width="15" height="15"/>
-    <rect x="115" y="26" width="15" height="15"/>
-    <rect x="53" y="178" width="15" height="15"/>
-  </g>
-  <g class="edge-data-3">
-    <rect x="78" y="64" width="45" height="15"/>
-    <rect x="60" y="140" width="70" height="15"/>
-    <rect x="120" y="178" width="20" height="15"/>
-    <path d="M115 102H155V117H115Z"/>
-  </g>
-  <circle class="edge-start" cx="180" cy="110" r="19" fill="none" stroke="#BBD3FF" stroke-width="7"/>
-  <circle class="edge-signal" cx="0" cy="0" r="7">
-    <animateMotion dur="7.2s" repeatCount="indefinite"
-      path="M180 110H415V200H660L750 110H1075"
-      keyPoints="0;0;1;1" keyTimes="0;.3;.67;1" calcMode="linear"/>
-  </circle>
-  <circle class="edge-finish" cx="1075" cy="110" r="19" fill="none" stroke="#BBD3FF" stroke-width="7"/>
+<g class="edge-animation" aria-hidden="true">
+  <path class="edge-flow" pathLength="1" d="M180 110H415V200H660L750 110H1075"/>
 </g>
 """
+
+ANIMATED_DATA_MARKERS = (
+    ('<path d="M0 64H15V79H0V64Z"', "edge-data-far"),
+    ('<rect x="38" y="26"', "edge-data-far"),
+    ('<rect x="38" y="102"', "edge-data-far"),
+    ('<rect x="21" y="140"', "edge-data-far"),
+    ('<rect x="53" y="178"', "edge-data-far"),
+    ('<rect x="78" y="64"', "edge-data-mid"),
+    ('<rect x="60" y="140"', "edge-data-mid"),
+    ('<rect x="115" y="26"', "edge-data-near"),
+    ('<rect x="120" y="178"', "edge-data-near"),
+    ('<path d="M151.08 102C150.377', "edge-data-near"),
+)
 
 # (원본, 대상) — 파일은 파일로, 디렉터리는 디렉터리로 복사한다.
 COPIES = [
@@ -114,11 +112,28 @@ COPIES = [
 def _write_animated_logo(src: Path, dst: Path) -> None:
     """공용 정적 로고에 Pages 전용 모션 레이어를 더한 독립 SVG를 생성한다."""
     logo = src.read_text(encoding="utf-8")
+    for marker, group in ANIMATED_DATA_MARKERS:
+        if logo.count(marker) != 1:
+            raise ValueError(f"[sync] 애니메이션 대상 도형이 예상과 다릅니다: {marker}")
+        tag_end = logo.index(">", logo.index(marker))
+        insert_at = tag_end - 1 if logo[tag_end - 1] == "/" else tag_end
+        logo = logo[:insert_at] + f' class="edge-data {group}"' + logo[insert_at:]
     closing_tag = "</svg>"
     if logo.count(closing_tag) != 1:
         raise ValueError(f"[sync] 로고 SVG 종료 태그가 예상과 다릅니다: {src}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     animated = logo.replace(closing_tag, ANIMATED_LOGO_OVERLAY + closing_tag)
+    # 문자열 주입은 원본 태그에 class 가 이미 있거나 속성값에 '>' 가 들어오면
+    # 조용히 어긋날 수 있다 — 파싱해 클래스가 실제 반영됐는지 확인하고 죽는다.
+    try:
+        root = ElementTree.fromstring(animated)
+    except ElementTree.ParseError as exc:
+        raise ValueError(f"[sync] 생성된 애니메이션 SVG 가 유효한 XML 이 아닙니다: {exc}") from exc
+    tagged = sum(1 for el in root.iter() if el.get("class", "").startswith("edge-data "))
+    if tagged != len(ANIMATED_DATA_MARKERS):
+        raise ValueError(
+            f"[sync] 애니메이션 클래스 주입 결과가 어긋납니다: {tagged}/{len(ANIMATED_DATA_MARKERS)}"
+        )
     dst.write_text(animated, encoding="utf-8")
 
 # reference/ 로 복사되는 repo 경로들 — 이 안을 가리키는 링크는 그대로 두어도 해결된다.
