@@ -227,6 +227,31 @@ resource "aws_sqs_queue" "scheduler_dlq" {
   message_retention_seconds = 1209600 # 14일
 }
 
+# 🔴 **큐에 쌓이는 것만으로는 아무도 모른다**(ALPHA-963). 이 DLQ 는 여태 소비자도 알람도
+# 없었다 — 원장을 타는 레인들은 Planner 미기동이 PLANNER_MISSING 으로도 드러나 견딜 수
+# 있었기 때문이다. 그런데 장전 유니버스 레인(premarket_pipeline.tf)은 **원장 밖**이라
+# 그 백스톱이 없고, 전달 실패(StartExecution 거부·역할 오류·스로틀로 재시도 소진)는
+# SFN 실행이 아예 안 생기므로 그쪽 알람 둘도 안 운다. 그 경로의 유일한 흔적이 이 큐다.
+# 그래서 깊이를 직접 센다 — 공용 큐라 다섯 레인 전부가 덤으로 덮인다.
+resource "aws_cloudwatch_metric_alarm" "scheduler_dlq_depth" {
+  alarm_name        = "${var.name}-scheduler-dlq-depth"
+  alarm_description = "스케줄 이벤트 전달이 재시도를 소진해 DLQ 로 갔다 — 그 슬롯은 아예 안 돌았다. 장전 유니버스 레인은 원장 밖이라 이 알람이 유일한 신호다."
+  namespace         = "AWS/SQS"
+  metric_name       = "ApproximateNumberOfMessagesVisible"
+  dimensions        = { QueueName = aws_sqs_queue.scheduler_dlq.name }
+
+  # 이 큐는 **대사도 소비자도 없어** 메시지가 보존기간(14일)까지 남는다 — 한 번 울면
+  # 사람이 비울 때까지 계속 우는 것이 맞다(놓친 슬롯은 저절로 회수되지 않는다).
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
 resource "aws_sqs_queue_policy" "scheduler_dlq" {
   queue_url = aws_sqs_queue.scheduler_dlq.id
   policy = jsonencode({

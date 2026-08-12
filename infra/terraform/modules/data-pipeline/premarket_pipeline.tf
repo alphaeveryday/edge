@@ -31,9 +31,14 @@
 # `sector_index_minute` — "전부 밖 = bounded" 로 시작했다(ALPHA-887).
 #
 # ⚠️ **대가는 관측 부재다.** 형제 레인은 Planner 가 pipeline_run 을 먼저 커밋해 Reconciler 의
-# PLANNER_MISSING 백스톱이 도는데, 이 레인엔 그게 없다. 그 구멍은 아래 **실패 알람 두 개 +
-# 스케줄러 DLQ** 가 메운다 — 이 레인은 "조용히 안 돌았다"가 정확히 막으려던 결함과 같은
-# 모양이라(신규 편입이 소리 없이 빠진다) 침묵을 그대로 둘 수 없다.
+# PLANNER_MISSING 백스톱이 도는데, 이 레인엔 그게 없다. 그 구멍을 **알람 셋**이 메운다 —
+# 이 레인은 "조용히 안 돌았다"가 정확히 막으려던 결함과 같은 모양이라(신규 편입이 소리 없이
+# 빠진다) 침묵을 그대로 둘 수 없다. 실패 지점마다 담당이 다르다:
+#   ① 체인 안 스텝 실패 → 정의 안 `PremarketNotifyFailure`(SNS)
+#   ② 실행이 TimeoutSeconds 로 죽음 → `ExecutionsTimedOut`(Catch 를 안 타 ①이 못 잡는다)
+#   ③ **실행이 아예 안 생김**(StartExecution 거부·역할 오류·스로틀) → 스케줄러 DLQ 깊이 알람
+#      (`ops_ledger.tf` `scheduler_dlq_depth`). ①②는 실행이 있어야 울므로 이 경로를 못 잡는다
+#      — 그 알람을 이 레인 때문에 신설했다.
 #
 # ⏭ 원장에 넣는 길은 열려 있다 — **작업을 0개 등록한 레인**으로 Planner 를 태우면 by_cli
 # 충돌 없이 pipeline_run 만 남길 수 있다(그러면 PLANNER_MISSING 도 살아난다). 코드 변경
