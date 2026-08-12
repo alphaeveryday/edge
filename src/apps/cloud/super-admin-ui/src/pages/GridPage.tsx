@@ -48,6 +48,7 @@ const STATE_CLASS: Record<DayState, string> = {
   주의: 'gd-s-warn',
   장애: 'gd-s-bad',
   '실행 중': 'gd-s-run',
+  대기: 'gd-s-none',
   '계획 스킵': 'gd-s-skip',
   '계획 없음': 'gd-s-none',
   '상태 미제공': 'gd-s-nostate',
@@ -57,6 +58,7 @@ const STATE_ORDER: DayState[] = [
   '주의',
   '장애',
   '실행 중',
+  '대기',
   '계획 스킵',
   '계획 없음',
   '상태 미제공',
@@ -66,6 +68,7 @@ const STATE_TONE: Record<DayState, BadgeTone> = {
   주의: 'warn',
   장애: 'blocked',
   '실행 중': 'env',
+  대기: 'neutral',
   '계획 스킵': 'gated',
   '계획 없음': 'neutral',
   '상태 미제공': 'neutral',
@@ -566,7 +569,7 @@ function DayDetail({
 
   const byState = (st: DayState) => r.executions.filter((e) => e.state === st).length;
   const summary: [DayState, number][] = (
-    ['정상', '주의', '장애', '실행 중', '계획 스킵'] as DayState[]
+    ['정상', '주의', '장애', '실행 중', '대기', '계획 스킵'] as DayState[]
   )
     .map((st) => [st, byState(st)] as [DayState, number])
     .filter(([, n]) => n > 0);

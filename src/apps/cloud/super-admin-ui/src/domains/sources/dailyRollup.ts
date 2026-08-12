@@ -36,6 +36,7 @@ export type DayState =
   | '주의'
   | '장애'
   | '실행 중'
+  | '대기'
   | '계획 스킵'
   | '계획 없음'
   | '상태 미제공';
@@ -241,7 +242,8 @@ export function stateOf(counts: DayCounts, cellCount: number): DayState {
   if (counts.failed > 0 || counts.noEvidence > 0) return '장애';
   if (counts.incomplete > 0 || counts.invalid > 0 || counts.failedRecords > 0) return '주의';
   /* 아직 끝나지 않은 것이 남아 있다 — 대기를 실패로 보지 않는다 */
-  if (counts.running > 0 || counts.pending > 0) return '실행 중';
+  if (counts.running > 0) return '실행 중';
+  if (counts.pending > 0) return '대기';
   return '정상';
 }
 
@@ -254,6 +256,7 @@ const DAY_ORDER: DayState[] = [
   '장애',
   '주의',
   '실행 중',
+  '대기',
   '정상',
   '계획 스킵',
   '상태 미제공',

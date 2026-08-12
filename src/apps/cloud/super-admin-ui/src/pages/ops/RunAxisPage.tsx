@@ -837,7 +837,7 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
     ['데이터셋', t.dataset ?? <Absent kind="none" />],
     ['시작', t.started_at ? kst(t.started_at) : <Absent kind="uninstrumented" />],
     ['종료', t.finished_at ? kst(t.finished_at) : t.fulfilled_at ? `${kst(String(t.fulfilled_at))} (완료 시각)` : <Absent kind="uninstrumented" />],
-    ['시도', t.attempts != null ? `${t.attempts}회 (마지막 #${Math.max(t.attempts, 1)})` : <Absent kind="none" />],
+    ['시도', t.attempts != null ? (t.attempts > 0 ? `${t.attempts}회 (마지막 #${t.attempts})` : '0회') : <Absent kind="none" />],
     ['exit code', t.exit_code != null ? String(t.exit_code) : <Absent kind="uninstrumented" />],
     ['귀결 사유', (t.outcome_reason as string) ?? (t.skip_reason as string) ?? <Absent kind="none" />],
     ['산출 행', t.records_out != null ? fmt(t.records_out) : <Absent kind="none" />],

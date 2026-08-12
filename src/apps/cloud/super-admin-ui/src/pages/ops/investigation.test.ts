@@ -184,6 +184,7 @@ test('실시간 세션 사건은 벤더를 원장 문맥에 싣는다 — 데이
   /* 라벨도 벤더를 말해야 한다 — 목적지가 벤더를 좁히는 마당에 라벨만 데이터셋이면 어느
    * 세션을 여는지 모른 채 이동한다 */
   assert.match(r.targets[0].label, /news_minute\/bigkinds/);
+  assert.match(r.targets[0].href, /sourceGroup=bigkinds/, '세션 화면 링크도 사건의 벤더를 보존한다');
 });
 
 test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 런까지 좁히지 않는다', () => {

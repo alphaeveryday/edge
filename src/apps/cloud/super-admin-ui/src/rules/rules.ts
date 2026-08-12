@@ -343,9 +343,15 @@ export const RULES: Rule[] = [
           metric: null,
           state: t.task_outcome ?? '판정 없음',
           why: `${t.stage} · ${t.pipeline_type} — ${
-            t.task_outcome === 'FAILED' ? '실행됐으나 실패' : '상류 실패로 미실행(PENDING)'
+            t.task_outcome === 'FAILED'
+              ? '실행됐으나 실패'
+              : t.task_outcome === 'BLOCKED'
+                ? '선행 미충족으로 진입하지 못함'
+                : t.task_outcome === 'PENDING'
+                  ? '아직 귀결되지 않음(PENDING)'
+                  : `필수 작업 미귀결(${t.task_outcome ?? '판정 없음'})`
           }`,
-          cause: t.task_outcome !== 'FAILED',
+          cause: t.task_outcome === 'BLOCKED',
           evidence: 'ops_expected_task.task_outcome',
           lastok: t.last_ok,
           okrate: t.ok_rate,

@@ -99,6 +99,11 @@ test('기한 전 대기는 실패·누락이 아니라 실행 중이다', () => 
   assert.equal(r.state, '실행 중');
 });
 
+test('도는 시도가 없는 PENDING은 실행 중이 아니라 대기다', () => {
+  assert.equal(stateOf(counts({ pending: 1 }), 1), '대기');
+  assert.equal(stateOf(counts({ running: 1, pending: 1 }), 2), '실행 중');
+});
+
 test('기대 실행은 계획이 있던 실행 인스턴스 수다 — DUE 셀 수가 아니다', () => {
   const r = rollup([
     slot('etf-daily:2026-08-03T15:40', '2026-08-03', [

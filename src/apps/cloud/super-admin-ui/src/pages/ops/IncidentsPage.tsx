@@ -443,7 +443,7 @@ export function IncidentsPage() {
   const sessions = minute.data?.sessions.length ?? 0;
   const batchRunning =
     overview.data?.lanes.filter(
-      (l) => l.orchestrationStatus === 'RUNNING' || l.opsStatus === 'IN_PROGRESS',
+      (l) => !l.notToday && (l.orchestrationStatus === 'RUNNING' || l.opsStatus === 'IN_PROGRESS'),
     ).length ?? 0;
 
   return (

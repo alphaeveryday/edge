@@ -172,12 +172,10 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
               : `실시간 데이터셋 ${datasetId} · ${date} (세션 전체)`,
             why:
               '실시간 데이터셋의 상위 단위는 데이터셋 × 세션 날짜다 — 1분 창은 그 세션의 하위 증거다.' +
-              /* 라벨은 벤더까지 말하는데 세션 화면은 아직 벤더로 안 좁힌다 — 약속과 도착지가
-               * 어긋난 상태를 문구로 밝힌다(좁히는 것은 화면 배선 PR 소관). */
               (vendor
-                ? ' 세션 화면은 아직 벤더로 좁히지 못해 이 데이터셋의 세션을 모두 보여준다.'
+                ? ` 세션 화면도 이 사건의 벤더(${vendor})로 좁힌다.`
                 : ' 이 사건은 벤더를 지목하지 않아 그 날짜의 세션 전체가 대상이다.'),
-            href: `/minute?date=${q(date)}&dataset=${q(datasetId)}`,
+            href: `/minute?date=${q(date)}&dataset=${q(datasetId)}${vendor ? `&sourceGroup=${q(vendor)}` : ''}`,
           },
         ],
         /* `targetId` 는 `dataset/sourceGroup` 이다(세션의 대상 축) — 벤더를 여기서 꺼내 넘긴다.

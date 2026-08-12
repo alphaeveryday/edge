@@ -24,6 +24,7 @@ import {
   qualityDefectCount,
   segments,
   sessionHealth,
+  sessionsForSourceGroup,
   windowUnit,
 } from './minuteView.ts';
 import type { MinuteGapWindow, MinuteJobCounts, MinuteSession } from './types.ts';
@@ -62,6 +63,13 @@ const session = (o: SessionOverride = {}): MinuteSession => ({
     overdueNoEvidence: 0,
     ...o.windows,
   },
+});
+
+test('조사 링크가 벤더를 지목하면 그 세션만 남기고, 벤더가 없으면 전체를 보존한다', () => {
+  const kis = session({ sessionId: 'kis', sourceGroup: 'kis' });
+  const bigkinds = session({ sessionId: 'bigkinds', sourceGroup: 'bigkinds' });
+  assert.deepEqual(sessionsForSourceGroup([kis, bigkinds], 'bigkinds').map((s) => s.sessionId), ['bigkinds']);
+  assert.deepEqual(sessionsForSourceGroup([kis, bigkinds]).map((s) => s.sessionId), ['kis', 'bigkinds']);
 });
 
 const gap = (start: string, end: string, dataStatus: string, noEvidence: boolean): MinuteGapWindow => ({

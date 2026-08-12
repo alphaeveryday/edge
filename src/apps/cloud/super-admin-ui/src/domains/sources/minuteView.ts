@@ -83,6 +83,14 @@ export function isCurrentKstDate(date: string, now = new Date()): boolean {
   return date === `${value('year')}-${value('month')}-${value('day')}`;
 }
 
+/** 사건이 벤더를 지목했을 때 그 세션만 남긴다. 벤더가 없으면 데이터셋 전체가 대상이다. */
+export function sessionsForSourceGroup(
+  sessions: MinuteSession[],
+  sourceGroup?: string,
+): MinuteSession[] {
+  return sourceGroup ? sessions.filter((session) => session.sourceGroup === sourceGroup) : sessions;
+}
+
 /** 창 축의 단위 이름 — 뉴스·공시의 1분은 수집 창이 아니라 **poll 1회**로 읽힌다 */
 export function windowUnit(kind: DatasetKind): string {
   return isPollLane(kind) ? 'poll(1분)' : '창(1분)';

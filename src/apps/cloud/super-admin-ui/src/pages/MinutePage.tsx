@@ -37,6 +37,7 @@ import {
   materializedCount,
   qualityDefectCount,
   segments,
+  sessionsForSourceGroup,
 } from '../domains/sources/minuteView';
 import type { ApiGap, Issue, Segment, ViewTone } from '../domains/sources/minuteView';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
@@ -779,6 +780,13 @@ export function MinutePage() {
     setParams(next, { replace: true });
   };
   const setDate = (v: string) => setParam('date', v);
+  const sourceGroup = params.get('sourceGroup')?.trim() || undefined;
+  const setDataset = (v: string) => {
+    const next = new URLSearchParams(params);
+    next.set('dataset', v);
+    next.delete('sourceGroup');
+    setParams(next, { replace: true });
+  };
   const { data, isPending, isError, error, dataUpdatedAt } = useMinuteStatus(date || undefined);
 
   if (isError) return <LoadError error={error} />;
@@ -800,7 +808,8 @@ export function MinutePage() {
             date={date}
             setDate={setDate}
             dataset={params.get('dataset') ?? ''}
-            setDataset={(v) => setParam('dataset', v)}
+            sourceGroup={sourceGroup}
+            setDataset={setDataset}
             updatedAt={dataUpdatedAt}
             mock
           />
@@ -815,7 +824,8 @@ export function MinutePage() {
       date={date}
       setDate={setDate}
       dataset={params.get('dataset') ?? ''}
-      setDataset={(v) => setParam('dataset', v)}
+      sourceGroup={sourceGroup}
+      setDataset={setDataset}
       updatedAt={dataUpdatedAt}
     />
   );
@@ -842,6 +852,7 @@ function MinuteBody({
   date,
   setDate,
   dataset,
+  sourceGroup,
   setDataset,
   updatedAt,
   mock = false,
@@ -850,6 +861,7 @@ function MinuteBody({
   date: string;
   setDate: (v: string) => void;
   dataset: string;
+  sourceGroup?: string;
   setDataset: (v: string) => void;
   updatedAt: number;
   mock?: boolean;
@@ -859,6 +871,7 @@ function MinuteBody({
   /* 어휘 밖 dataset 은 첫 탭으로 정규화한다 — 빈 화면을 내면 잘못된 링크가 "세션 없음"으로
    * 위장된다(그 날짜에 진짜로 세션이 없는 것과 구분이 사라진다). */
   const current = tabs.find((t) => t.id === dataset) ?? tabs[0];
+  const currentSessions = sessionsForSourceGroup(current.sessions, sourceGroup);
   const kind = datasetKind(current.id);
 
   return (
@@ -932,16 +945,19 @@ function MinuteBody({
         ))}
       </div>
 
-      {current.sessions.length === 0 ? (
+      {currentSessions.length === 0 ? (
         <div className="card card-pad">
-          <p className="t-sm m-0">이 날짜에 {DATASET_LABEL[current.id] ?? current.id} 세션이 없습니다.</p>
+          <p className="t-sm m-0">
+            이 날짜에 {DATASET_LABEL[current.id] ?? current.id}
+            {sourceGroup ? ` / ${sourceGroup}` : ''} 세션이 없습니다.
+          </p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             이 데이터셋이 계획되지 않았다는 사실입니다(비거래일 · 미가동 · 레인 미편입) — 오류가 아니라
             관측 결과입니다. 다른 데이터셋의 상태로 이 데이터셋을 대신 판정하지 않습니다.
           </p>
         </div>
       ) : (
-        current.sessions.map((s) =>
+        currentSessions.map((s) =>
           datasetKind(s.dataset) === 'news' ? (
             <NewsSessionCard key={s.sessionId} session={s} date={data.date} mock={mock} />
           ) : datasetKind(s.dataset) === 'price' ? (
