@@ -17,18 +17,18 @@ body{background:var(--bg);font-family:Pretendard,-apple-system,'Apple SD Gothic 
   transition:opacity .25s,border-color .25s,background .25s,box-shadow .25s}
 .node:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 svg.wires{position:absolute;inset:0;pointer-events:none}
-svg.wires path{fill:none;stroke:var(--wire);stroke-width:1.2;transition:opacity .25s,stroke .25s}
+svg.wires > path{fill:none;stroke:var(--wire);stroke-width:1.2;transition:opacity .25s,stroke .25s}
 body.focus .node{opacity:var(--dimN)}
 body.focus .node.on{opacity:1;border-color:var(--brand)}
 body.focus .node.sel{opacity:1;background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600;
   box-shadow:0 2px 12px rgba(0,48,159,.35)}
-body.focus svg.wires path{opacity:var(--dimW)}
-body.focus svg.wires path.on{opacity:1;stroke:var(--brand);stroke-width:2}
+body.focus svg.wires > path{opacity:var(--dimW)}
+body.focus svg.wires > path.on{opacity:1;stroke:var(--brand);stroke-width:2}
 body.peek .node{opacity:.45}
 body.peek .node.pk-on{opacity:1;border-color:var(--brand)}
 body.peek .node.pk-sel{opacity:1;box-shadow:0 1px 8px rgba(0,48,159,.25);border-color:var(--brand)}
-body.peek svg.wires path{opacity:.22}
-body.peek svg.wires path.pk-on{opacity:1;stroke:var(--brand);stroke-width:1.8}
+body.peek svg.wires > path{opacity:.22}
+body.peek svg.wires > path.pk-on{opacity:1;stroke:var(--brand);stroke-width:1.8}
 #hud{position:fixed;right:14px;bottom:14px;display:flex;gap:6px;z-index:5}
 #hud button{width:34px;height:34px;border:1px solid var(--node-bd);border-radius:8px;background:var(--node-bg);
   color:var(--fg);font-size:16px;cursor:pointer}
@@ -145,6 +145,7 @@ function setPeek(id){
   EDGES.forEach(p=>{
     const hit=!!id&&(p.dataset.a===id||p.dataset.b===id);
     p.classList.toggle('pk-on',hit);
+    if(!p.classList.contains('on')) p.setAttribute('marker-end',hit?'url(#ar-b)':'url(#ar)');
     if(hit){near[p.dataset.a]=true;near[p.dataset.b]=true}
   });
   NODES.forEach(n=>{n.classList.toggle('pk-on',!!near[n.id]);n.classList.toggle('pk-sel',!!id&&n.id===id)});

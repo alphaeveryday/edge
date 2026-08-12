@@ -24,7 +24,7 @@ body{background:var(--bg);font-family:Pretendard,-apple-system,'Apple SD Gothic 
 .node{cursor:pointer;user-select:none}
 .node:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 svg.wires{position:absolute;inset:0;pointer-events:none}
-svg.wires path{fill:none;stroke:var(--wire);stroke-width:1.3;transition:opacity .25s,stroke .25s}
+svg.wires > path{fill:none;stroke:var(--wire);stroke-width:1.3;transition:opacity .25s,stroke .25s}
 .elabel{position:absolute;transform:translate(-50%,-50%);font-size:10.5px;color:#47506a;
   background:rgba(255,255,255,.9);padding:0 4px;border-radius:3px;pointer-events:none;white-space:nowrap;
   transition:opacity .25s}
@@ -32,15 +32,15 @@ body.focus .box,body.focus .elabel{opacity:.14}
 body.focus .box.on{opacity:1;box-shadow:0 0 0 1.5px var(--brand)}
 body.focus .box.on-c{opacity:1!important}
 body.focus .box.sel{opacity:1;box-shadow:0 0 0 2.5px var(--brand),0 2px 14px rgba(0,48,159,.35)}
-body.focus svg.wires path{opacity:.06}
-body.focus svg.wires path.on{opacity:1;stroke:var(--brand)!important;stroke-width:2.2}
+body.focus svg.wires > path{opacity:.06}
+body.focus svg.wires > path.on{opacity:1;stroke:var(--brand)!important;stroke-width:2.2}
 body.focus .elabel.on{opacity:1}
 body.peek .box,body.peek .elabel{opacity:.45}
 body.peek .box.pk-on{opacity:1;box-shadow:0 0 0 1.5px var(--brand)}
 body.peek .box.pk-c{opacity:1!important}
 body.peek .box.pk-sel{opacity:1;box-shadow:0 0 0 2px var(--brand),0 1px 8px rgba(0,48,159,.25)}
-body.peek svg.wires path{opacity:.2}
-body.peek svg.wires path.pk-on{opacity:1;stroke:var(--brand)!important;stroke-width:1.9}
+body.peek svg.wires > path{opacity:.2}
+body.peek svg.wires > path.pk-on{opacity:1;stroke:var(--brand)!important;stroke-width:1.9}
 body.peek .elabel.pk-on{opacity:1}
 #hud{position:fixed;right:14px;bottom:14px;display:flex;gap:6px;z-index:5}
 #hud button{width:34px;height:34px;border:1px solid #c3cbdd;border-radius:8px;background:#fff;
@@ -235,11 +235,13 @@ function mark(idOrNull, cls, selCls){
     EDGES.forEach(p=>{
       const hit=p.dataset.a===idOrNull||p.dataset.b===idOrNull;
       p.classList.toggle(cls,hit);
-      if(cls==='on') p.setAttribute('marker-end',hit?'url(#ar-b)':(p.dataset.mk||'url(#ar)'));
+      if(hit) p.setAttribute('marker-end','url(#ar-b)');
+      else if(cls==='on'||!p.classList.contains('on')) p.setAttribute('marker-end',p.dataset.mk||'url(#ar)');
       if(hit){on[p.dataset.a]=true;on[p.dataset.b]=true;eon[p.dataset.i]=true;svg.appendChild(p);}
     });
   } else {
-    EDGES.forEach(p=>{p.classList.remove(cls); if(cls==='on') p.setAttribute('marker-end',p.dataset.mk||'url(#ar)');});
+    EDGES.forEach(p=>{p.classList.remove(cls);
+      if(cls==='on'||!p.classList.contains('on')) p.setAttribute('marker-end',p.dataset.mk||'url(#ar)');});
   }
   const childCls=cls==='on'?'on-c':'pk-c';
   BOXES.forEach(b=>{
