@@ -120,34 +120,49 @@ export function NewsLineagePage() {
 
   const ext = data.extraction;
   /* 미종결 job 을 못 읽었으면(대기·실패) **진행 중이 아니라고 단정하지 않는다** — 모름을
-   * "없음" 으로 접는 순간 목이 실을 덮는 그 자리로 돌아간다. */
-  const pendingUnknown = minute.isPending || minute.isError;
-  const pending = minute.data ? hasPendingJobs(minute.data.newsJobs) : false;
+   * "없음" 으로 접는 순간 목이 실을 덮는 그 자리로 돌아간다.
+   *
+   * 🔴 **날짜를 안 고르면 두 축이 안 맞는다.** 이 화면은 날짜가 없으면 **누적 전체**를 보는데
+   * (`SourceService.newsLineage` 는 `date==null` 이면 날짜 필터를 안 건다), `/sources/minute` 는
+   * `date==null` 이면 **오늘 하루**다(`LocalDate.now(KST)`). 그래서 어제 만들어진 미종결 job 은
+   * 오늘 집계에 0 으로 나오고, 그걸 "미종결 없음"으로 읽으면 **누적 화면이 백로그를 목으로
+   * 덮는다** — 고치려던 그 결함이 날짜 없는 축에서 그대로 재현된다. 전 기간 미종결 수를 주는
+   * 조회가 없으므로, 누적 보기에서는 **모른다**고 말한다. */
+  const cumulative = !date;
+  const pendingUnknown = cumulative || minute.isPending || minute.isError;
+  const pending = !cumulative && minute.data ? hasPendingJobs(minute.data.newsJobs) : false;
 
-  /* 문서도 추출 job 도 전무하고, **미종결 job 도 없다고 실제로 확인됐을 때만** 빈 화면이다 */
-  const empty =
-    data.summary.totalDocuments === 0 &&
-    data.documents.length === 0 &&
-    ext.succeeded + ext.dead === 0 &&
-    !pending &&
-    !pendingUnknown;
+  const noDocs = data.summary.totalDocuments === 0 && data.documents.length === 0;
+
+  /* 목 미리보기를 띄우는 조건. **막는 것은 "모름"이 아니라 "진행 중임을 알아낸 것"** 이다 —
+   * 모름까지 막으면 날짜를 안 고른 기본 보기에서 미리보기가 영영 안 떠, 초기 환경 검수라는
+   * 이 장치의 존재 이유가 사라진다. 대신 모를 때는 **안내 문구가 그 모름을 말한다**. */
+  const empty = noDocs && ext.succeeded + ext.dead === 0 && !pending;
 
   /* 진행 중이거나 모르는 상태는 **목으로 덮지 않고 그 사실을 얹는다**(Rule 12).
    * ⚠️ 막다른 카드로 만들지 않는다 — 실 `LineageBody` 를 그대로 그려야 날짜·표본·단계
    * 컨트롤이 살아 있어 운영자가 다른 날짜로 나갈 수 있다(그 화면은 0건도 정직하게 그린다). */
-  if (!empty && data.summary.totalDocuments === 0 && data.documents.length === 0) {
+  if (!empty && noDocs) {
     return (
       <div className="flex flex-col gap-4">
         <div className="card card-pad">
           <p className="t-sm m-0" style={{ fontWeight: 600 }}>
             {date ? `이 날짜(${date})의 문서가 아직 0건입니다.` : '문서가 아직 0건입니다.'}
           </p>
+          {/* 🔴 세 갈래는 **서로 다른 사실**이다. `pending` 이 아니면 전부 "못 읽었다"로 접으면,
+              추출이 이미 끝난 날(terminal 만 있는 날)에 대고 **없는 관측 공백을 조사하러**
+              보낸다 — 그 수는 바로 아래 표에 있는데도. */}
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             {pending
               ? `추출이 진행 중입니다 — 대기 ${minute.data!.newsJobs.waiting}건 · 처리 중 ${
                   minute.data!.newsJobs.claimed
                 }건. 미가동이 아니고, 목데이터로 대체하지도 않습니다.`
-              : '추출 job 상태를 못 읽었습니다 — 진행 중인지 미가동인지 지금은 알 수 없습니다. 아래는 실 응답이며 목데이터가 아닙니다.'}
+              : pendingUnknown
+                ? cumulative
+                  ? '누적 보기에서는 미종결 추출 job 수를 알 수 없습니다 — 그 수를 주는 조회가 날짜 단위뿐입니다. 날짜를 고르면 진행 중 여부를 말할 수 있습니다.'
+                  : '추출 job 상태를 못 읽었습니다 — 진행 중인지 미가동인지 지금은 알 수 없습니다.'
+                : `추출은 이 날짜에 이미 끝났습니다 — 성공 ${ext.succeeded}건 · 실패 ${ext.dead}건. 문서가 0건인 것은 진행 중이어서가 아닙니다.`}
+            {' '}아래는 실 응답이며 목데이터가 아닙니다.
           </p>
         </div>
         <LineageBody
@@ -166,10 +181,15 @@ export function NewsLineagePage() {
   if (empty) {
     return (
       <div className="flex flex-col gap-4">
+        {/* ⚠️ 이 경로는 **"진행 중을 알아내지 못했을 때"도 통과한다**(누적 보기·조회 실패).
+            그러니 "미가동"이라 단정하지 말고 확인한 범위를 그대로 적는다 — 아래 목데이터를
+            "지금 아무 일도 없다"의 근거로 읽으면 안 된다. */}
         <EmptyRealNotice>
           {date
-            ? `이 날짜(${date})에 수집된 문서가 없습니다 — 진행 중인 추출 job 도 없습니다.`
-            : '수집된 문서가 없습니다 — 원장(document)에 뉴스가 아직 적재되지 않았습니다.'}
+            ? pendingUnknown
+              ? `이 날짜(${date})에 수집된 문서가 없습니다 — 미종결 추출 job 이 있는지는 확인하지 못했습니다(1분 원장 조회 실패).`
+              : `이 날짜(${date})에 수집된 문서가 없고, 진행 중인 추출 job 도 없습니다.`
+            : '수집된 문서가 없습니다 — 원장(document)에 뉴스가 아직 적재되지 않았습니다. 누적 보기라 미종결 추출 job 유무는 알 수 없습니다(날짜를 고르면 답할 수 있습니다).'}
         </EmptyRealNotice>
         <MockPreview>
           <LineageBody
