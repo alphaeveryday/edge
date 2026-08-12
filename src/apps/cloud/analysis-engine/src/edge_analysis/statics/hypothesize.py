@@ -431,14 +431,21 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
 
 
 def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], dict],
-                 budget: int) -> tuple[dict, str, int, int, list[dict[str, object]], bool]:
-    """Run bounded structured tool calls; executable text is never an argument shape."""
+                 budget: int, duplicate_state: dict | None = None,
+                 ) -> tuple[dict, str, int, int, list[dict[str, object]], bool]:
+    """Run bounded structured tool calls; executable text is never an argument shape.
+
+    duplicate_state: 중복 판정 상태(last_call·last_call_ok·refusals)를 제안 재시도
+    턴 너머로 유지하는 가변 dict(ALPHA-970 검증 라운드) - 턴마다 초기화되면 재시도
+    턴 첫 호출이 직전 성공 호출과 같아도 반려 없이 예산을 소모한다.
+    """
     used = rejects = 0
     tool_summaries: list[dict[str, object]] = []
     previewable_options = False
-    last_call: tuple[str, str] | None = None
-    last_call_ok = False
-    duplicate_refusals = 0
+    state = duplicate_state if duplicate_state is not None else {}
+    last_call: tuple[str, str] | None = state.get("last_call")
+    last_call_ok = bool(state.get("last_call_ok"))
+    duplicate_refusals = int(state.get("refusals", 0))
     out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
@@ -459,6 +466,7 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
         key = (name, json.dumps(arguments, ensure_ascii=False, sort_keys=True))
         if key == last_call and last_call_ok:
             duplicate_refusals += 1
+            state["refusals"] = duplicate_refusals
             rejects += 1
             summary = {"tool": name, "ok": False, "error": "DUPLICATE_TOOL_CALL"}
             tool_summaries.append(summary)
@@ -472,10 +480,10 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
                      "진행하라(예: hypothesis.preview 호출 또는 hypotheses 제출).")
             out = ask_checked(ask, system, user)
             continue
-        last_call = key
+        last_call = state["last_call"] = key
         used += 1
         res = call(name, arguments)
-        last_call_ok = bool(res.get("ok"))
+        last_call_ok = state["last_call_ok"] = bool(res.get("ok"))
         if name == "hypothesis.list_options":
             generic_options = (res.get("triggers") and res.get("outcomes")
                                and res.get("layers") and res.get("exposures"))
@@ -553,6 +561,9 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     base = facts
     sql_used = sql_rejects = 0
     object_used = object_rejects = 0
+    # 중복 판정 상태는 재시도 턴 너머로 유지된다(ALPHA-970 검증 라운드) - 도구
+    # 결과는 결정론이라 턴이 바뀌어도 직전 성공 호출의 반복은 여전히 낭비다.
+    duplicate_state: dict = {}
     tool_summaries: list[dict[str, object]] = []
     previewable_options = False
     deadline = time.monotonic() + SQL_TIMEBOX_S
@@ -560,7 +571,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         user = base
         if object_tools:
             out, base, u, rj, summaries, available = _object_loop(
-                ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used)
+                ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used,
+                duplicate_state=duplicate_state)
             object_used += u
             object_rejects += rj
             tool_summaries.extend(summaries)

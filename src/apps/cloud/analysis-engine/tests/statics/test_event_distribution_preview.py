@@ -714,3 +714,44 @@ def test_failed_call_may_be_retried_with_identical_arguments(monkeypatch):
                           "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM})
 
     assert calls == ["hypothesis.list_options", "hypothesis.list_options"]
+
+
+def test_duplicate_guard_state_survives_proposal_retry_turns(monkeypatch):
+    """중복 판정 상태는 제안 재시도 턴 경계에서 초기화되지 않는다(검증 라운드).
+
+    WHY: 도구 결과는 결정론이라 턴이 바뀌어도 직전 성공 호출의 반복은 낭비다 -
+    턴마다 초기화되면 재시도 턴 첫 호출이 반려 없이 예산을 소모한다.
+    """
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 턴1 - 실행
+        {"hypotheses": []},                                     # 턴1 미제출 - 재시도
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 턴2 첫 호출 - 반려돼야
+        {"hypotheses": []},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        return next(replies)
+
+    propose(ask, facts="f", event_types=["CONTRACT.CANCEL"],
+            object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+                          "resolve_preview": runtime.resolve,
+                          "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM})
+
+    assert runtime_calls == ["hypothesis.list_options"]   # 턴2 반복은 실행 안 됨
+    assert any("[도구 반려]" in u for u in seen_users)
