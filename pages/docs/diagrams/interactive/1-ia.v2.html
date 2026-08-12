@@ -162,5 +162,19 @@ function fit(){scale=Math.min((vp.clientWidth-8)/DATA.w,(vp.clientHeight-8)/DATA
 document.getElementById('zin').onclick=e=>{e.stopPropagation();scale=Math.min(scale*1.25,3);apply()};
 document.getElementById('zout').onclick=e=>{e.stopPropagation();scale=Math.max(scale/1.25,.05);apply()};
 document.getElementById('zfit').onclick=e=>{e.stopPropagation();fit()};
+// Ctrl(⌘)+휠 = 커서 기준 줌 (트랙패드 핀치 포함). 일반 휠은 스크롤 유지 —
+// 임베드된 문서 페이지의 휠 스크롤을 가로채지 않기 위한 관례.
+vp.addEventListener('wheel',ev=>{
+  if(!(ev.ctrlKey||ev.metaKey)) return;
+  ev.preventDefault();
+  const rect=vp.getBoundingClientRect();
+  const px=ev.clientX-rect.left, py=ev.clientY-rect.top;
+  const wx=(vp.scrollLeft+px)/scale, wy=(vp.scrollTop+py)/scale;
+  const unit=ev.deltaMode===1?16:ev.deltaMode===2?vp.clientHeight:1; // line/page 모드 정규화(Firefox 등)
+  scale=Math.min(3, Math.max(.05, scale*Math.exp(-ev.deltaY*unit*.0015)));
+  apply();
+  vp.scrollLeft=wx*scale-px;
+  vp.scrollTop=wy*scale-py;
+},{passive:false});
 window.addEventListener('resize',fit); fit();
 </script></body></html>
