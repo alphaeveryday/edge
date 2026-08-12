@@ -20,7 +20,7 @@ import type {
 } from '../domains/sources';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
 import { laneLabel } from '../domains/sources/lanes';
-import { hasNoSignal, issues, liveness } from '../domains/sources/minuteView';
+import { hasNoSignal, healthyClaimed, issues, liveness } from '../domains/sources/minuteView';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
@@ -233,25 +233,39 @@ function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
               <Link to={`/lineage/news?date=${data!.date}`}>사유별 내역</Link>
             </p>
           )}
-          {/* 🔴 **DEAD 만 그리면 나머지 칸이 화면에서 사라진다.** `claimedExpired` 는 유효
-            * lease 없는 CLAIMED, 즉 **Consumer 가 죽은 채 물고 있는 job** 이다 — DEAD 로도
-            * 안 넘어가 영원히 조용하다. 이 카드가 목을 쓸지 정할 때는 전 칸을 세면서
-            * (`hasNoSignal`) 그리기는 DEAD 만 하면, 살려 낸 신호를 바로 다음 줄에서 버린다. */}
-          {data!.newsJobs.claimedExpired > 0 && (
-            <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
-              뉴스 추출 고착 {data!.newsJobs.claimedExpired}건 — 유효 lease 없이 CLAIMED 상태입니다
-              (Consumer 사망 후보, DEAD 로 넘어가지 않습니다).{' '}
-              <Link to="/minute">장중 1분 수집에서 확인</Link>
-            </p>
-          )}
-          {/* 대기·처리 중은 결함이 아니다 — 그래서 색을 쓰지 않는다. 다만 세션이 없는 날에도
-            * 뉴스 job 은 날짜 축으로 쌓이므로, "세션 없음"만 보이고 이 수가 안 보이면 화면이
-            * "아무 일도 없다"로 읽힌다. */}
-          {data!.newsJobs.waiting + data!.newsJobs.claimed > 0 && (
-            <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-              뉴스 추출 대기 {data!.newsJobs.waiting}건 · 처리 중 {data!.newsJobs.claimed}건
-            </p>
-          )}
+          {/* 🔴 **DEAD 만 그리면 나머지 칸이 화면에서 사라진다.** 목을 쓸지 정할 때는 전 칸을
+            * 세면서(`hasNoSignal`) 그리기는 DEAD 만 하면, 살려 낸 신호를 바로 다음 줄에서 버린다.
+            *
+            * ⚠️ **`claimedExpired` 는 `claimed` 의 부분집합이다** — 서버 SQL 이
+            * `FILTER (status='CLAIMED')` 와 `FILTER (status='CLAIMED' AND lease 없음/만료)` 로
+            * 센다(`JdbcMinuteStatusRepository`). 둘을 나란히 "고착 4 · 처리 중 4" 로 적으면
+            * 정상 처리 중이 0인데 4로 읽힌다. **유효 처리 중 = `claimed − claimedExpired`** 로
+            * 갈라서 그린다. */}
+          {(() => {
+            const j = data!.newsJobs;
+            const healthy = healthyClaimed(j);
+            return (
+              <>
+                {j.claimedExpired > 0 && (
+                  <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
+                    {/* ⚠️ "DEAD 로 안 넘어간다"고 쓰면 안 된다 — `minute/jobs.py` 의 claim 조건이
+                      * 만료 CLAIMED 를 **재청구 대상에 포함**하고, 재청구 뒤 영구 오류·재시도
+                      * 소진이면 DEAD 로 간다. 지금 사실은 "실행체 증거가 끊겼다"까지다. */}
+                    뉴스 추출 고착 {j.claimedExpired}건 — 유효 lease 없이 CLAIMED 상태입니다(실행체
+                    증거 끊김 — 재청구를 기다리는 중일 수 있습니다).{' '}
+                    <Link to="/minute">장중 1분 수집에서 확인</Link>
+                  </p>
+                )}
+                {/* 대기·처리 중은 결함이 아니라 색을 안 쓴다. 다만 세션이 없는 날에도 뉴스 job 은
+                  * 날짜 축으로 쌓이므로, 이 수가 안 보이면 화면이 "아무 일도 없다"로 읽힌다. */}
+                {j.waiting + healthy > 0 && (
+                  <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+                    뉴스 추출 대기 {j.waiting}건 · 처리 중 {healthy}건
+                  </p>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
     </div>

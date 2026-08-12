@@ -771,3 +771,14 @@ export const MINUTE_API_GAPS: ApiGap[] = [
 export function hasNoSignal(status: { sessions: unknown[]; newsJobs: MinuteJobCounts }): boolean {
   return status.sessions.length === 0 && Object.values(status.newsJobs).every((n) => n === 0);
 }
+
+/**
+ * **유효하게 처리 중인 job 수.** `claimedExpired` 는 `claimed` 의 **부분집합**이라 빼야 한다 —
+ * 서버가 `FILTER (status='CLAIMED')` 와 `FILTER (status='CLAIMED' AND lease 없음/만료)` 로
+ * 따로 세기 때문이다(`JdbcMinuteStatusRepository`).
+ *
+ * 🔴 두 값을 나란히 "고착 4건 · 처리 중 4건" 으로 적으면 **유효 처리 중이 0인데 4로 읽힌다** —
+ * 운영자가 "고착이 있지만 나머지는 돌고 있다"로 오판한다. 뺄셈 한 번이 그 오독을 없앤다.
+ */
+export const healthyClaimed = (jobs: MinuteJobCounts): number =>
+  Math.max(0, jobs.claimed - jobs.claimedExpired);

@@ -13,6 +13,7 @@ import {
   datasetKind,
   evidencedCount,
   gapRuns,
+  healthyClaimed,
   hasNoSignal,
   issues,
   liveness,
@@ -548,4 +549,17 @@ test('실을 신호가 없다 = 세션 0 **그리고** 뉴스 job 전 칸 0', ()
       `${k} 가 3인데 "신호 없음"이라 답했다 — 그 칸의 장애가 목에 덮인다`,
     );
   }
+});
+
+test('유효 처리 중은 고착을 뺀 값이다 — 부분집합을 나란히 세면 0이 N 으로 읽힌다', () => {
+  const j = (claimed: number, claimedExpired: number): MinuteJobCounts => ({
+    waiting: 0, claimed, claimedExpired, succeeded: 0, dead: 0,
+  });
+  /* 🔴 전부 고착이면 유효 처리 중은 0이다. 빼지 않으면 "고착 4 · 처리 중 4" 가 되어
+   * 실제로 도는 job 이 하나도 없는데 절반은 정상인 것처럼 보인다. */
+  assert.equal(healthyClaimed(j(4, 4)), 0);
+  assert.equal(healthyClaimed(j(4, 1)), 3);
+  assert.equal(healthyClaimed(j(0, 0)), 0);
+  /* 원장이 순간적으로 어긋나도 음수를 내지 않는다 — 화면에 "-1건" 이 뜨면 안 된다 */
+  assert.equal(healthyClaimed(j(1, 3)), 0);
 });
