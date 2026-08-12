@@ -345,6 +345,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 설명을 만들지 않고 큐로도 안 나간다(ALPHA-799). 지금은 writer 가 없어 0행이지만, 종류를
 	 * 안 거르면 그 writer 가 착지하는 날 피드만 조용히 부풀어 <b>없던 체인 손실</b>이 P0 로 선다.
 	 *
+	 * <p>⚠️ <b>발번의 {@code delivery_type = 'NEW'} 는 지금 아무 행도 못 거른다 — 그래서 테스트로
+	 * 겨눌 수 없다</b>(변이 실증: 지워도 전건 초록). 전달은 <b>2형상</b>이고(ADR-0044 — CORRECTION
+	 * 폐지, {@code V202608011200}) {@code INVALIDATION} 은 {@code explanation_result_id} 가 NULL
+	 * 이라({@code ck_tenant_delivery_payload}) 위 조인 조건에 애초에 안 걸린다. 그래도 남기는
+	 * 이유는 그 마이그레이션이 적어 둔 것과 같다: <b>3형상이 돌아오면 유형 술어가 필요해진다.</b>
+	 * 없는 형상을 픽스처가 지어내면서까지 죽이지 않는다(산출 축의 {@code skip_reason} 과 같은 판단).
+	 *
 	 * <p><b>세는 축이 전부 {@code DISTINCT} 다.</b> 두 자리에서 행이 불어난다 — 한 경로에 런이
 	 * 여럿일 수 있고({@code explanation_route_id} 에 UNIQUE 가 없다 — 재실행), 발번은 테넌트마다
 	 * 한 행이다. 후자를 그대로 세면 테넌트가 둘인 순간 "전달"이 설명 수의 두 배가 되어 단계
@@ -378,7 +385,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			           rs.explanation_result_id AS result_id,
 			           CASE WHEN rs.publication_status = 'PUBLISHED'
 			                THEN rs.explanation_result_id END AS published_id,
-			           dv.explanation_result_id AS delivered_id
+			           /* 🔴 세는 것은 **이 코호트 행의 결과**이지 발번 행이 가리키는 결과가 아니다.
+			            * `dv.explanation_result_id` 를 그대로 세면 조인 조건을 망가뜨려도(`= rs...`
+			            * → `IS NOT NULL`) 값이 그대로라 아무 단언도 안 깨진다 — 변이 실증. */
+			           CASE WHEN dv.explanation_result_id IS NOT NULL
+			                THEN rs.explanation_result_id END AS delivered_id
 			      FROM obs o
 			      LEFT JOIN explanation_route rt
 			             ON rt.contribution_observation_id = o.obs_id
