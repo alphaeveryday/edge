@@ -22,6 +22,14 @@
   width: auto;
 }
 
+/* Material 기본 헤더 버튼 hover/focus 감광(opacity 저하)을 로고에는 적용하지 않는다 */
+.md-header__button.md-logo:hover,
+.md-header__button.md-logo:focus,
+.md-nav__button.md-logo:hover,
+.md-nav__button.md-logo:focus {
+  opacity: 1;
+}
+
 /* 다이어그램 임베드 (diagrams/N-*.md 의 iframe) */
 .ep-diagram-frame iframe {
   width: 100%;
