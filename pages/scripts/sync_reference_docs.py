@@ -24,6 +24,74 @@ REFERENCE = REPO_ROOT / "pages" / "docs" / "reference"
 BRAND = REPO_ROOT / "src" / "libs" / "ui-kit" / "src" / "assets"
 IMAGES = REPO_ROOT / "pages" / "docs" / "assets" / "images"
 
+ANIMATED_LOGO_OVERLAY = r"""
+<style>
+  .edge-animation { pointer-events: none; }
+  .edge-data-1, .edge-data-2, .edge-data-3,
+  .edge-start, .edge-signal, .edge-finish { opacity: 0; }
+  .edge-data-1 { animation: edge-data-1 7.2s ease-in-out infinite; }
+  .edge-data-2 { animation: edge-data-2 7.2s ease-in-out infinite; }
+  .edge-data-3 { animation: edge-data-3 7.2s ease-in-out infinite; }
+  .edge-start { animation: edge-start 7.2s ease-in-out infinite; }
+  .edge-signal { animation: edge-signal 7.2s ease-in-out infinite; }
+  .edge-finish { animation: edge-finish 7.2s ease-in-out infinite; }
+  @keyframes edge-data-1 {
+    0%, 5%, 18%, 100% { opacity: 0; }
+    8%, 14% { opacity: .8; }
+  }
+  @keyframes edge-data-2 {
+    0%, 10%, 23%, 100% { opacity: 0; }
+    13%, 19% { opacity: .8; }
+  }
+  @keyframes edge-data-3 {
+    0%, 15%, 29%, 100% { opacity: 0; }
+    18%, 25% { opacity: .85; }
+  }
+  @keyframes edge-start {
+    0%, 23%, 37%, 100% { opacity: 0; }
+    28% { opacity: .9; }
+    33% { opacity: .35; }
+  }
+  @keyframes edge-signal {
+    0%, 29%, 67%, 100% { opacity: 0; }
+    32%, 63% { opacity: .95; }
+  }
+  @keyframes edge-finish {
+    0%, 65%, 80%, 100% { opacity: 0; }
+    70% { opacity: .9; }
+    76% { opacity: .25; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .edge-animation { display: none; }
+  }
+</style>
+<g class="edge-animation" fill="#8FB9FF" aria-hidden="true">
+  <g class="edge-data-1">
+    <path d="M0 64H15V79H0Z"/>
+    <rect x="38" y="26" width="15" height="15"/>
+    <rect x="21" y="140" width="15" height="15"/>
+  </g>
+  <g class="edge-data-2">
+    <rect x="38" y="102" width="15" height="15"/>
+    <rect x="115" y="26" width="15" height="15"/>
+    <rect x="53" y="178" width="15" height="15"/>
+  </g>
+  <g class="edge-data-3">
+    <rect x="78" y="64" width="45" height="15"/>
+    <rect x="60" y="140" width="70" height="15"/>
+    <rect x="120" y="178" width="20" height="15"/>
+    <path d="M115 102H155V117H115Z"/>
+  </g>
+  <circle class="edge-start" cx="180" cy="110" r="19" fill="none" stroke="#BBD3FF" stroke-width="7"/>
+  <circle class="edge-signal" cx="0" cy="0" r="7">
+    <animateMotion dur="7.2s" repeatCount="indefinite"
+      path="M180 110H415V200H660L750 110H1075"
+      keyPoints="0;0;1;1" keyTimes="0;.3;.67;1" calcMode="linear"/>
+  </circle>
+  <circle class="edge-finish" cx="1075" cy="110" r="19" fill="none" stroke="#BBD3FF" stroke-width="7"/>
+</g>
+"""
+
 # (원본, 대상) — 파일은 파일로, 디렉터리는 디렉터리로 복사한다.
 COPIES = [
     (DOCS / "context.md", REFERENCE / "context.md"),
@@ -41,6 +109,17 @@ COPIES = [
     (BRAND / "edge-logo-white.svg", IMAGES / "edge-logo-white.svg"),
     (BRAND / "edge-favicon.svg", IMAGES / "edge-favicon.svg"),
 ]
+
+
+def _write_animated_logo(src: Path, dst: Path) -> None:
+    """공용 정적 로고에 Pages 전용 모션 레이어를 더한 독립 SVG를 생성한다."""
+    logo = src.read_text(encoding="utf-8")
+    closing_tag = "</svg>"
+    if logo.count(closing_tag) != 1:
+        raise ValueError(f"[sync] 로고 SVG 종료 태그가 예상과 다릅니다: {src}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    animated = logo.replace(closing_tag, ANIMATED_LOGO_OVERLAY + closing_tag)
+    dst.write_text(animated, encoding="utf-8")
 
 # reference/ 로 복사되는 repo 경로들 — 이 안을 가리키는 링크는 그대로 두어도 해결된다.
 _COPIED_FILES = (
@@ -157,6 +236,15 @@ def main() -> int:
         else:
             _copy_file(src, dst, repo, ref)
         print(f"[sync] {src.relative_to(REPO_ROOT)} -> {dst.relative_to(REPO_ROOT)}")
+
+    animated_logo = IMAGES / "edge-logo-animated.svg"
+    static_logo = BRAND / "edge-logo-black.svg"
+    if static_logo.exists():
+        _write_animated_logo(static_logo, animated_logo)
+        print(
+            f"[sync] {static_logo.relative_to(REPO_ROOT)} + Pages animation"
+            f" -> {animated_logo.relative_to(REPO_ROOT)}"
+        )
 
     if missing:
         for path in missing:

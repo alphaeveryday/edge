@@ -2,7 +2,7 @@
    색은 Material 팔레트 변수만 사용해 라이트/다크 토글에 함께 반응한다. */
 
 /* 브랜드 컬러 — primary 를 로고 블루 #00309F 로 통일(헤더 배경 포함, 양 스킴 공통).
-   헤더가 항상 진청이므로 로고는 흰색 로고(edge-logo-black.svg) 단일 사용. */
+   헤더가 항상 진청이므로 로고는 흰색 워드마크 단일 사용. */
 :root {
   --md-primary-fg-color: #00309f;
   --md-primary-fg-color--light: #3355b4;
