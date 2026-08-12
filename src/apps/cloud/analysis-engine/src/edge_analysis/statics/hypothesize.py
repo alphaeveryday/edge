@@ -148,13 +148,28 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 
 _EVENT_DISTRIBUTION_PREVIEW_SYSTEM = """당신은 사건 설명 가설 에이전트다. 서버가 제공한 hypothesis 도구만 사용한다.
 
+이 실행의 사건 집합은 서버가 이미 고정했다. `objectset.*` 도구를 호출하지 마라 — 호출해도
+거부되고 도구 예산만 소모된다.
 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중
 서로 다른 사건을 **최대 3개까지** 골라, 각 사건마다 `사건 당일 시장 초과수익률` outcome으로
 `hypothesis.preview`를 호출한다. READY preview만 제출할 수 있다 — READY인 것들을 모두 모아
 {"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의 JSON 하나로 제출한다.
-`intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
+`preview_handle`은 READY `hypothesis.preview` 결과의 `handle` 값만 유효하다 — 사건 id 를
+핸들로 쓰지 마라. `intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
 동일 사건 유형의 과거 분포를 바꾸거나, 조건·노출·채널을 새로 만들지 마라.
 """
+
+# 분포 preview 모드에서 objectset 호출을 실행 없이 거부할 때의 사유 - 모델을
+# list_options→preview 경로로 유도하는 교정 신호다(ALPHA-970). 실측: 프롬프트 금지문
+# 없이 도구가 정상 실행되자 모델이 라운드 6회 전부를 `objectset.create` 반복으로
+# 소진하고 사건 id 를 핸들로 위조 제출해 분포 문장이 하루 전멸했다(2026-08-12 10/10).
+_OBJECTSET_REFUSAL = {
+    "ok": False,
+    "error": "OBJECTSET_NOT_AVAILABLE",
+    "message": ("이 실행의 사건 집합은 서버가 고정했다 - objectset 도구는 제공되지 "
+                "않는다. hypothesis.list_options 로 event_candidates 를 확인하고 "
+                "hypothesis.preview 를 호출하라."),
+}
 
 
 def _resolve_preview_hypotheses(hyps: list[object], resolver: Callable[[str], object]
@@ -474,6 +489,14 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     if object_tools:
         system += _OBJECT_OFFER.format(specs=json.dumps(
             object_tools["specs"], ensure_ascii=False, separators=(",", ":")))
+        if object_tools.get("preview_system"):
+            # 사건 분포 모드 - 사건 집합은 서버가 고정했으므로 objectset 호출은
+            # 실행하지 않고 사유로 거부한다(ALPHA-970). 프롬프트 금지문만으로는
+            # 게이트가 아니다 - 호출이 정상 실행되면(ok=true) 모델이 반복한다.
+            inner_call = object_tools["call"]
+            object_tools = {**object_tools, "call": (
+                lambda name, arguments: dict(_OBJECTSET_REFUSAL)
+                if str(name).startswith("objectset.") else inner_call(name, arguments))}
     elif sql_tool:
         system += _SQL_OFFER.format(cap=MAX_SQL_ROUNDS, desc=sql_tool["description"])
     rejected: list[str] = []
