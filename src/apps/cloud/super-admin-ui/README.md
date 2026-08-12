@@ -44,7 +44,14 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | 경로 | 화면 |
 |---|---|
 | `/login` | 운영자 로그인 (레이아웃 밖 공개 라우트 — 세션 만료·서버 오류·차단 배너 포함) |
-| `/` | 오늘 운영 현황 — Run Overview (레인별 최신 런 요약 + 장중 1분 레인 카드, 첫 화면 — ALPHA-683·692) |
+| `/` | `/ops/incidents`로 이동 — 규칙 엔진 사건 목록이 첫 화면 |
+| `/ops/incidents` | 파이프라인 문제·사건 목록 |
+| `/ops/incidents/detail?vid=` | 사건 상세 (점 든 대상도 안전하도록 식별자는 쿼리) |
+| `/ops/runs` · `/ops/runs/:runId` | 런·작업 귀결 목록 · 실행 상세 |
+| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이 |
+| `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계 |
+| `/ops/summary` | 파이프라인 개요 — ⚠️ **사이드바·인바운드 링크 없음**(주소 직접 입력만). ALPHA-738 이 새로 만든 경로라 "호환"할 구 주소는 없다. 살릴지 지울지 미결 |
+| `/overview` | 레인 원장 요약 (구 첫 화면 — 사이드바 `파이프라인` 절에 병존, `rules/README.md` §6) |
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
 | `/tenants/:id` | 테넌트 상세 (기본 정보 · 연결 상태 · 24H 호출 바 차트) |
 | `/sources` | 데이터 소스 수집 상태 |
@@ -62,7 +69,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 **그 종목의 공유 링크·새로고침만** index.html 을 못 받는다. 주소 조립은
 `domains/analyses/symbols.symbolHref` 한 곳이다.
 
-미매칭(`*`)은 `/`(Run Overview)로 리다이렉트(미인증이면 가드가 `/login` 으로).
+미매칭(`*`)은 `/`를 거쳐 `/ops/incidents`로 리다이렉트(미인증이면 가드가 `/login` 으로).
 2단계 인증(OTP) 뷰는 시안에 있으나 서버 2FA 미지원이라 범위 밖(ALPHA-474 계열 후속).
 **신규 IA 금지 항목 준수**: API Key 관리 메뉴 없음 · 테넌트 사용 중지/재개 버튼 없음 (epic ALPHA-424).
 
@@ -72,29 +79,26 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 (ALPHA-738 · [ADR-0050](../../../../docs/adr/0050-console-facts-endpoint.md)). 규칙 R01~R19 +
 인과 간선 + `evaluate()` 가 여기 살고 UI 를 모른다.
 
-⚠️ **판정 층만 있고 이 결과를 그리는 화면은 아직 없다.** 지금 소비자는 `eval:rules` CLI 와
-회귀 테스트뿐이고, 사실 공급(`domains/console` → `GET /api/v1/console/facts`)은 배선돼 있으나
-아직 아무도 안 부른다. 와이어 DTO 와 엔진 `Facts` 는 **형상이 달라**(camelCase vs snake_case)
-어댑터가 필요하고 그것도 화면 조각 몫이다.
-조각 3 이 들인 화면들(Overview·뉴스 계보·분석 목록·종목 이력)은 **이 층을 안 문다** —
-`/sources`·`/analyses` 기존 API 위에 서므로 규칙 엔진 착지와 독립이다.
+`pages/ops/*` 화면과 `consoleFacts` 어댑터가 이 결과를 소비한다. 와이어 DTO와 엔진 `Facts`의
+형상 차이(camelCase vs snake_case), 응답 값 검증, 배치 사실과 `/sources/minute` 실시간 축의
+결합은 그 어댑터·공통 훅에서 한 번만 처리한다.
 
 알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
 
 ## 화면 기반 조각 (`src/styles/` · `src/pages/_shared/` · `src/mock/` · `domains` 파생 모듈)
 
-화면이 올라설 토대다(ALPHA-738 조각 2). **조각 3 부터 실제로 쓰인다** — Overview·뉴스 계보·
-분석 목록·종목 이력이 이 조각들을 import 하므로 번들에 들어간다. `pages/ops/*`(규칙 엔진
-화면)는 아직 후속이다.
+화면이 올라설 토대다(ALPHA-738 조각 2). Overview·뉴스 계보·분석 목록·종목 이력과
+`pages/ops/*` 규칙 엔진 화면이 이 조각들을 import 하므로 번들에 들어간다.
 
 | 자리 | 무엇 |
 |---|---|
 | `styles/` 5 | ops·grid·minute·info-popover·mock-preview |
 | `pages/_shared/` | `InfoPopover`(portal 팝오버 — 포커스·Escape 처리) · `MockPreview` |
 | `mock/preview.ts` | 실 데이터 0건일 때 화면을 검수하는 미리보기 픽스처. `mock/preview.test.ts` 가 **서버가 낼 수 있는 응답인가**를 고정한다 |
-| `domains/sources/` 파생 5 | `dailyRollup`(데이터셋×날짜 롤업) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) |
+| `domains/sources/` 파생 6 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤) |
 | `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
 | `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
+| `pages/ops/` 판정 10 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
 
 ⚠️ **판정을 `.tsx` 에 두지 않는다.** `pnpm --filter super-admin-ui test` 는 `node --test
 'src/**/*.test.ts'` 라 **`.tsx` 를 아예 안 집는다** — 화면 파일 안의 분기는 변이를 걸어도 하나도

@@ -8,6 +8,7 @@
  * 실행: node --test src/domains/sources/minuteView.test.ts
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   datasetKind,
@@ -16,12 +17,14 @@ import {
   healthyClaimed,
   hasNoSignal,
   hasPendingJobs,
+  isCurrentKstDate,
   issues,
   liveness,
   materializedCount,
   qualityDefectCount,
   segments,
   sessionHealth,
+  sessionsForSourceGroup,
   windowUnit,
 } from './minuteView.ts';
 import type { MinuteGapWindow, MinuteJobCounts, MinuteSession } from './types.ts';
@@ -60,6 +63,13 @@ const session = (o: SessionOverride = {}): MinuteSession => ({
     overdueNoEvidence: 0,
     ...o.windows,
   },
+});
+
+test('조사 링크가 벤더를 지목하면 그 세션만 남기고, 벤더가 없으면 전체를 보존한다', () => {
+  const kis = session({ sessionId: 'kis', sourceGroup: 'kis' });
+  const bigkinds = session({ sessionId: 'bigkinds', sourceGroup: 'bigkinds' });
+  assert.deepEqual(sessionsForSourceGroup([kis, bigkinds], 'bigkinds').map((s) => s.sessionId), ['bigkinds']);
+  assert.deepEqual(sessionsForSourceGroup([kis, bigkinds]).map((s) => s.sessionId), ['kis', 'bigkinds']);
 });
 
 const gap = (start: string, end: string, dataStatus: string, noEvidence: boolean): MinuteGapWindow => ({
@@ -266,6 +276,14 @@ test('공시는 poll 레인이다 — 카탈로그가 poll 이라 부르는데 �
   assert.doesNotMatch(q.title, /창/);
 });
 
+test('현재 날짜 판정은 쿼리 유무가 아니라 KST 날짜 축을 본다', () => {
+  const beforeKstMidnight = new Date('2026-08-11T14:59:59Z');
+  const afterKstMidnight = new Date('2026-08-11T15:00:00Z');
+  assert.equal(isCurrentKstDate('2026-08-11', beforeKstMidnight), true);
+  assert.equal(isCurrentKstDate('2026-08-12', beforeKstMidnight), false);
+  assert.equal(isCurrentKstDate('2026-08-12', afterKstMidnight), true);
+});
+
 test('어휘 밖 dataset 의 빈 결과에 "거래 없음"을 붙이지 않는다 — 가른 뒤 도로 접지 않는다', () => {
   /* `datasetKind` 가 other 로 가르는 이유가 "모르는 것을 가격으로 접으면 없는 의미가 붙는다"
    * 인데, 문구 층이 뉴스만 덮어쓰면 other 는 가격 문구로 되돌아간다. 새 분 데이터셋
@@ -416,6 +434,17 @@ test('큐 고착·DEAD 도 주의로 올라온다 — heartbeat 만으로 정상
   assert.equal(sessionHealth(s, NO_JOBS).kind, 'normal');
   assert.equal(sessionHealth(s, { ...NO_JOBS, dead: 2 }).kind, 'caution');
   assert.equal(sessionHealth(s, { ...NO_JOBS, claimedExpired: 1 }).kind, 'caution');
+});
+
+test('job 축이 없는 레인은 0 채움으로 큐 정상 주장을 만들지 않는다', () => {
+  const h = sessionHealth(
+    session({ dataset: 'disclosure_minute', expectedWindowCount: 1, windows: { valid: 1 } }),
+    NO_JOBS,
+    false,
+  );
+  assert.equal(h.kind, 'normal');
+  assert.doesNotMatch(h.reason, /큐/);
+  assert.doesNotMatch(h.quality.text, /DEAD|처리 대기/);
 });
 
 test('MISSING 은 기한이 지난 창이다 — 커버리지 분모에서 빼면 만점으로 보인다', () => {
@@ -576,4 +605,50 @@ test('미종결 job 이 있으면 "볼 것 없음"이 아니다 — terminal 만
   /* terminal 만 있는 날은 진행 중이 아니다 — 반대 방향을 안 재면 상수 true 가 산다 */
   assert.equal(hasPendingJobs(j({ succeeded: 100, dead: 3 })), false);
   assert.equal(hasPendingJobs(j({})), false);
+});
+
+test('장중 화면은 공용 부재·부분집합 가드를 소비한다 — 판정 뒤 렌더에서 다시 버리지 않는다', () => {
+  const source = readFileSync(new URL('../../pages/MinutePage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /const empty = hasNoSignal\(data\)/, '화면이 신호 칸을 다시 손으로 세고 있다');
+  assert.match(source, /유효 처리 중[^\n]*healthyClaimed\(jobs\)/, '고착을 처리 중으로 다시 표시한다');
+  assert.match(source, /if \(isError && !data\) return <LoadError/, '재조회 오류가 직전 분봉 실측을 지운다');
+  assert.match(source, /const lanes = data\?\.lanes \?\? \[\]/, '배치 재조회 오류가 직전 레인 실측을 지운다');
+  assert.doesNotMatch(source, /const mock = live\.length === 0/, '실측 0건을 MOCK 실행으로 바꾼다');
+  assert.match(source, /데이터셋 전체의 계획 여부를 뜻하지 않습니다/, '없는 벤더를 데이터셋 미계획으로 확대한다');
+});
+
+/* 🔴 **위 관용구(`assert.match(source, …)`)는 "그 줄이 있는가"만 재고 "어디에 있는가"는 못 잰다.**
+ * 그래서 `isError` 배너가 파일에 존재하는데도 `empty` 조기 반환이 그보다 **앞**이라, 조회가
+ * 실패한 상태에서 화면이 문자 그대로 "오류가 아니라 관측 결과다"를 단언하는 결함이 초록으로
+ * 지나갔다(2026-08-12). 형제 화면 둘(`SourcesPage`)은 배너를 갖고 있어 더 안 보였다.
+ * 이 파일에서 순서를 재는 단언은 이것뿐이다 — 지우면 그 결함이 그대로 되돌아온다. */
+test('🔴 재조회 실패 표기가 부재 단정보다 **앞**에 온다 — 존재만 재면 순서 회귀를 놓친다', () => {
+  const raw = readFileSync(new URL('../../pages/MinutePage.tsx', import.meta.url), 'utf8');
+  /* ⚠️ **주석을 걷고 잰다.** 이 결함을 설명하는 주석이 그 문장을 그대로 인용하는 순간, 위치
+   * 단언이 코드가 아니라 주석을 집는다(실측: 첫 작성에서 정확히 그렇게 깨졌다). 이 레포의
+   * `readFileSync` + 정규식 관용구 전체가 같은 함정을 갖는다. */
+  const source = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+  const banner = source.indexOf('실시간 상태 재조회에 실패했습니다');
+  const claim = source.indexOf('오류가 아니라 관측 결과다');
+  assert.ok(banner > 0, '재조회 실패 배너가 사라졌다');
+  assert.ok(claim > 0, '부재 단정 문장이 사라졌다 — 이 테스트가 아무것도 안 잰다');
+  assert.ok(
+    banner < claim,
+    '부재를 단정하는 분기가 조회 실패 표기보다 앞이다 — 장애가 실측 0으로 읽힌다',
+  );
+  /* 그리고 그 단정이 **조기 반환**이면 안 된다 — 반환해 버리면 뒤에 뭘 두든 도달 못 한다 */
+  assert.doesNotMatch(
+    source,
+    /if \(empty\) \{\s*\n\s*return/,
+    'empty 가 조기 반환이면 그 뒤의 어떤 표기도 이 분기에 도달하지 못한다',
+  );
+  /* 🔴 그리고 **극성**을 잰다. 위 두 단언은 순서만 잠근다 — 삼항의 두 팔을 맞바꾸면
+   * (`{empty ?` → `{!empty ?`) 위치도 조기 반환 부재도 그대로라 전건 초록이었다(변이 실증).
+   * 그때 뜨는 화면은 원래 결함보다 나쁘다: 조회가 성공하고 **세션이 멀쩡히 있는 날**에
+   * "세션이 없습니다 · 오류가 아니라 관측 결과다"가 뜬다. `tsc` 도 통과한다(두 팔 다 유효 JSX). */
+  assert.match(
+    source,
+    /\{empty \? \(/,
+    'empty 분기의 극성이 뒤집혔다 — 세션이 있는 날에 "세션 없음" 이 뜬다',
+  );
 });

@@ -1,7 +1,46 @@
 /* 실행: node --test src/layouts/headerRoute.test.ts */
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { HEADER_LIST_TITLES, headerRoute, showBack } from './headerRoute.ts';
+
+/* 🔴 위 표와 사이드바가 안 묶여 있다는 사실을 정직하게 적어 두기만 했더니, **아무도 안 재는
+ * 축**이 됐다 — ALPHA-738 이 `/overview`(dev 에서 `/` = 첫 화면)를 사이드바에서 지우고 라우트만
+ * 남겨 도달 경로가 0이 됐는데 이 파일은 그 화면명을 단언하며 초록이었다(2026-08-12).
+ * `.tsx` 를 import 할 수는 없지만 **소스 텍스트는 읽을 수 있다**. 못 하는 것은 파싱이지
+ * 검사가 아니었다. */
+test('🔴 화면명이 있는 경로는 사이드바에 있거나, 없다고 **명시된** 것뿐이다', () => {
+  const layout = readFileSync(new URL('./AdminLayout.tsx', import.meta.url), 'utf8');
+  const nav = new Set([...layout.matchAll(/\bpath:\s*'([^']+)'/g)].map((m) => m[1]));
+  assert.ok(nav.size >= 5, '사이드바 경로를 못 읽었다 — 이 테스트가 아무것도 안 잰다');
+
+  /* 사이드바에 없는 것은 **다른 화면의 링크로만** 닿는다. 그게 의도라면 여기 적는다 —
+   * 적는 행위가 결정이고, 새 화면이 조용히 도달 불가로 태어나면 이 단언이 깨진다. */
+  const LINKED_ONLY = new Set([
+    '/sources', //        조사 경로의 "원장 근거" 링크(HoldingsImpact·IncidentDetail·RunAxis)
+    '/lineage/news', //   뉴스 사건 드릴다운
+    '/impact/holdings', // 구성종목 결손 사건 드릴다운
+    '/ops/chain', //      trendCatalog 의 "설명 생성 흐름" 드릴다운
+    '/ops/datasets', //   trendCatalog 의 "뉴스 처리 퍼널" 드릴다운
+    '/ops/delivery', //   investigation 의 경계 드릴다운
+    /* ⚠️ `/analyses` 를 여기 적었다가 뺐다 — **사이드바에 있는** 경로다. 허용 목록에 두면
+     * 그 nav 항목이 지워져 도달 경로가 0이 돼도 이 게이트가 침묵한다. 이 게이트를 만든 사고가
+     * 정확히 그것(`/overview`)이라, 첫 커밋부터 같은 유형에 구멍을 낼 뻔했다. */
+  ]);
+  /* ⚠️ 여기 있는 것은 **인바운드 링크도 없다** — 주소를 직접 쳐야만 닿는다. 살릴지 지울지
+   * 미결이라 남겨 두되, 목록이 늘면 그때마다 이 단언이 결정을 요구한다(README 라우트 표 참조). */
+  const UNREACHABLE_UNDECIDED = new Set(['/ops/summary']);
+
+  const orphans = HEADER_LIST_TITLES.map(([p]) => p).filter(
+    (p) => !nav.has(p) && !LINKED_ONLY.has(p) && !UNREACHABLE_UNDECIDED.has(p),
+  );
+  assert.deepEqual(orphans, [], '사이드바에도 없고 링크 목록에도 없는 화면이 생겼다');
+
+  /* 구 홈 병존(`rules/README.md` §6) — 라우트만 남기고 링크를 빼면 문서가 거짓이 된다 */
+  assert.ok(nav.has('/overview'), '`/overview` 가 사이드바에서 사라졌다 — 도달 경로가 0이다');
+  /* 라벨은 도착지 제목과 같아야 한다 — 다르면 잘못 온 줄 안다 */
+  assert.match(layout, /path: '\/overview', label: '레인 원장 요약'/);
+});
 
 test('종목 상세가 분석 상세 정규식에 먹히지 않는다 (순서를 뒤집으면 헤더가 남의 이름을 말한다)', () => {
   /* `/analyses/symbol` 은 `/analyses/<한 조각>` 이기도 하다. 종목을 먼저 안 물으면
@@ -67,6 +106,8 @@ test('뒤로가기는 목적지 하나에서 파생된다 — 버튼과 목적�
     ['/tenants/t-1', '/tenants'],
     ['/analyses/an-1', '/analyses'],
     ['/analyses/symbol', '/analyses'],
+    ['/ops/incidents/detail', '/ops/incidents'],
+    ['/ops/runs/run-1', '/ops/runs'],
   ];
   for (const [p, dest] of opened) {
     const r = headerRoute(p);
@@ -105,6 +146,14 @@ test('화면명 표가 기대 목록과 **양방향**으로 맞는다', () => {
     '/lineage/news': '뉴스 계보',
     '/impact/holdings': '구성종목 결손 영향',
     '/analyses': '가격 변동 분석 목록',
+    '/ops/incidents': '파이프라인 문제',
+    '/ops/runs': '런·작업 귀결',
+    '/ops/chain': '설명 생성 흐름',
+    '/ops/datasets': '데이터셋 신선도',
+    '/ops/trend': '산출·품질 추이',
+    '/ops/delivery': 'Cloud 게시·발번 경계',
+    '/ops/summary': '파이프라인 개요',
+    '/overview': '레인 원장 요약',
   };
   assert.deepEqual(
     Object.fromEntries(HEADER_LIST_TITLES.map(([p, t]) => [p, t])),
@@ -114,7 +163,7 @@ test('화면명 표가 기대 목록과 **양방향**으로 맞는다', () => {
   for (const [prefix, title] of Object.entries(EXPECTED)) {
     assert.equal(headerRoute(prefix).title, title, `${prefix} 의 화면명`);
   }
-  assert.equal(headerRoute('/').title, '오늘 운영 현황');
+  assert.equal(headerRoute('/').title, '', '루트는 사건 목록으로 리다이렉트되어 자체 화면명이 없다');
 });
 
 test('표의 접두어끼리 서로를 가리지 않는다 — 가리면 뒤엣것이 영영 안 뽑힌다', () => {

@@ -205,9 +205,10 @@ test('R05 필수 작업 미귀결 — required 미귀결만, 비필수·FULFILLE
   ];
   const v = hits(f, 'R05');
   assert.deepEqual(v.map((x) => x.target), ['failed', 'pending']);
-  // cause 플래그: FAILED=원인(false), PENDING=파생(true) — R05→R05 간선의 재료
+  // PENDING 자체는 상류 실패의 증거가 아니다 — BLOCKED 만 선행 미충족 인과를 갖는다.
   assert.equal(v[0].cause, false);
-  assert.equal(v[1].cause, true);
+  assert.equal(v[1].cause, false);
+  assert.match(v[1].why, /아직 귀결되지 않음/);
 });
 
 test('R05 경계 — 계획에서 제외된(SKIPPED) 필수 작업은 미귀결이 아니다', () => {
@@ -1002,6 +1003,14 @@ test('R18 무증거 창 — 임계 5창. 4창은 조용하고 5창부터 위반'
   assert.equal(v[0].sev, 'P1');
 });
 
+test('R18 — poll 레인은 사건 제목과 단위에도 poll 어휘를 보존한다', () => {
+  for (const dataset of ['news_minute', 'disclosure_minute']) {
+    const [v] = hits(withMinute([session({ dataset, overdueNoEvidence: 5 })]), 'R18');
+    assert.equal(v.unit, 'poll');
+    assert.match(v.title, /무증거 poll$/);
+  }
+});
+
 test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 두 사건으로 서면 6건으로 읽힌다)', () => {
   /* 뉴스 job 은 세션 연결 컬럼이 없어 `(dataset, date)` 집계 하나뿐이다. 벤더 축이 생기기 전에는
    * 대상이 데이터셋이라 겹쳤는데, 벤더를 실으면서 **같은 사실이 벤더 수만큼 독립 사건**이 됐다.
@@ -1201,13 +1210,24 @@ test('사건 병합 — 같은 런의 R05·R16 이 R04 카드 하나로 접히�
   const ev = evaluate(f, NOW);
   // 위반: R04 1 + R05 2 + R16 1 = 4건 — 전부 보존된다
   assert.equal(ev.violations.length, 4);
-  // 사건: R04 뿌리 하나 (R05 FAILED→R04, R05 PENDING→R05 FAILED→R04, R16→R04)
+  // 명시적인 런 실패가 있으므로 그 런에서 귀결되지 않은 작업은 R04 아래로 붙는다.
   assert.equal(ev.incidents.length, 1);
   const I = ev.incidents[0];
   assert.equal(I.root.rule, 'R04');
   assert.equal(I.size, 4);
   // 흡수 위반마다 인과 문구가 붙는다 — 지우면 못 믿을 화면이 된다
   assert.ok(I.members.every((m) => m.why.length > 0));
+});
+
+test('사건 병합 경계 — PENDING 은 같은 런의 실패 작업만으로 상류 실패 인과를 만들지 않는다', () => {
+  const f = emptyFacts();
+  f.tasks = [
+    task({ task_key: 'failed', run_id: 'runA', task_outcome: 'FAILED' }),
+    task({ task_key: 'pending', run_id: 'runA', task_outcome: 'PENDING' }),
+  ];
+  const ev = evaluate(f, NOW);
+  assert.equal(ev.incidents.length, 2);
+  assert.deepEqual(ev.incidents.map((I) => I.root.targetId).sort(), ['failed', 'pending']);
 });
 
 test('사건 병합 경계 — 다른 런의 작업 실패는 그 런 실패에 붙지 않는다(같은 런 ≠ 인과 아님, 간선 조건대로만)', () => {

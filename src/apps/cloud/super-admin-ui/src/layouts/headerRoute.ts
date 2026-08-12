@@ -20,6 +20,14 @@ const LIST_TITLES: readonly (readonly [prefix: string, title: string])[] = [
   ['/lineage/news', '뉴스 계보'],
   ['/impact/holdings', '구성종목 결손 영향'],
   ['/analyses', '가격 변동 분석 목록'],
+  ['/ops/incidents', '파이프라인 문제'],
+  ['/ops/runs', '런·작업 귀결'],
+  ['/ops/chain', '설명 생성 흐름'],
+  ['/ops/datasets', '데이터셋 신선도'],
+  ['/ops/trend', '산출·품질 추이'],
+  ['/ops/delivery', 'Cloud 게시·발번 경계'],
+  ['/ops/summary', '파이프라인 개요'],
+  ['/overview', '레인 원장 요약'],
 ] as const;
 
 export const HEADER_LIST_TITLES = LIST_TITLES;
@@ -28,6 +36,8 @@ export type HeaderKind =
   | 'tenantDetail'
   | 'symbol'
   | 'analysisDetail'
+  | 'incidentDetail'
+  | 'runDetail'
   | 'list'
   | 'home'
   | 'unknown';
@@ -118,10 +128,19 @@ export function headerRoute(raw: string): HeaderRoute {
     };
   }
 
+  if (path === '/ops/incidents/detail') {
+    return { kind: 'incidentDetail', title: '사건 상세', backTo: '/ops/incidents' };
+  }
+
+  const run = /^\/ops\/runs\/([^/]+)$/.exec(path);
+  if (run) {
+    return { kind: 'runDetail', title: '실행 상세', backTo: '/ops/runs', entity: { id: run[1] } };
+  }
+
   const listed = LIST_TITLES.find(([prefix]) => underPrefix(path, prefix));
   if (listed) return { kind: 'list', title: listed[1], backTo: null };
 
-  if (path === '/') return { kind: 'home', title: '오늘 운영 현황', backTo: null };
+  if (path === '/') return { kind: 'home', title: '', backTo: null };
   return { kind: 'unknown', title: '', backTo: null };
 }
 

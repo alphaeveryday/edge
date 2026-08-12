@@ -1,15 +1,23 @@
 /* EDGE Admin — 라우트 트리 (디자인 v0.1 IA + 로그인 ALPHA-616).
  *
  *   /login (공개)                  — 운영자 로그인
- *   RequireSession ▸ AdminLayout  — /(Overview) · /tenants(/:id) · /sources · /grid · /analyses(/:id)
+ *   RequireSession ▸ AdminLayout  — /ops/* · /overview · /tenants(/:id) · /sources · /grid · /analyses(/:id)
  *
  * 로그인 외 전 표면은 세션 필수(API fail-closed 와 짝) — 미인증·만료는 /login 으로 보낸다.
- * 첫 화면은 Run Overview 다(ALPHA-683) — 운영자의 첫 질문("오늘 정상인가")이 첫 화면이어야 한다.
+ * 첫 화면은 사건 목록이다(ALPHA-738) — 운영자의 첫 질문("지금 무엇이 걸렸나")을 먼저 답한다.
  */
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AdminLayout } from './layouts/AdminLayout';
 import { RequireSession } from './layouts/RequireSession';
 import { LoginPage } from './pages/LoginPage';
+import { IncidentsPage } from './pages/ops/IncidentsPage';
+import { IncidentsListPage } from './pages/ops/IncidentsListPage';
+import { IncidentDetailPage } from './pages/ops/IncidentDetailPage';
+import { RunAxisPage, RunDetailPage } from './pages/ops/RunAxisPage';
+import { ChainPage } from './pages/ops/ChainPage';
+import { DatasetPage } from './pages/ops/DatasetPage';
+import { TrendPage } from './pages/ops/TrendPage';
+import { DeliveryPage } from './pages/ops/DeliveryPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { TenantsPage } from './pages/TenantsPage';
 import { TenantDetailPage } from './pages/TenantDetailPage';
@@ -28,7 +36,17 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireSession />}>
         <Route element={<AdminLayout />}>
-          <Route path="/" element={<OverviewPage />} />
+          <Route path="/" element={<Navigate to="/ops/incidents" replace />} />
+          <Route path="/ops/summary" element={<IncidentsPage />} />
+          <Route path="/ops/incidents" element={<IncidentsListPage />} />
+          <Route path="/ops/incidents/detail" element={<IncidentDetailPage />} />
+          <Route path="/ops/runs" element={<RunAxisPage />} />
+          <Route path="/ops/runs/:runId" element={<RunDetailPage />} />
+          <Route path="/ops/chain" element={<ChainPage />} />
+          <Route path="/ops/datasets" element={<DatasetPage />} />
+          <Route path="/ops/trend" element={<TrendPage />} />
+          <Route path="/ops/delivery" element={<DeliveryPage />} />
+          <Route path="/overview" element={<OverviewPage />} />
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/tenants/:id" element={<TenantDetailPage />} />
           <Route path="/sources" element={<SourcesPage />} />
@@ -41,8 +59,7 @@ export function App() {
               CloudFront SPA fallback(`spa-rewrite.js`)이 마지막 조각의 점(.)을 정적 파일로 갈라,
               `BRK.B` 류 티커를 경로에 두면 그 종목의 **공유 링크·새로고침만** index.html 을 못
               받는다 — 이 화면이 존재하는 이유가 정확히 공유 가능한 종목 이력이다.
-              ⚠️ 사건 딥링크도 같은 이유로 쿼리로 **설계돼 있으나 그 화면은 아직 여기 없다**
-              (규칙 엔진 화면 미착지) — 선례는 그 설계지 돌고 있는 라우트가 아니다.
+              사건 딥링크도 같은 이유로 `/ops/incidents/detail?vid=` 쿼리를 쓴다.
               ⚠️ 읽기 좋으라고 `:id` 앞에 뒀을 뿐 **선언 순서는 계약이 아니다** — react-router 7
               은 정적 조각을 동적 조각보다 높게 랭크해 순서를 뒤집어도 여기로 매칭된다. 순서에
               기대는 계약은 `layouts/headerRoute.ts` 쪽이다(거긴 손으로 쓴 if 체인이라 진짜다). */}

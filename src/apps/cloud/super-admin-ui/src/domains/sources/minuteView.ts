@@ -71,6 +71,26 @@ export function datasetKind(dataset: string): DatasetKind {
 export const isPollLane = (kind: DatasetKind): boolean =>
   kind === 'news' || kind === 'disclosure';
 
+/** 서버 세션 날짜가 현재 KST 날짜인가. 쿼리 유무가 아니라 날짜 축 자체를 비교한다. */
+export function isCurrentKstDate(date: string, now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value;
+  return date === `${value('year')}-${value('month')}-${value('day')}`;
+}
+
+/** 사건이 벤더를 지목했을 때 그 세션만 남긴다. 벤더가 없으면 데이터셋 전체가 대상이다. */
+export function sessionsForSourceGroup(
+  sessions: MinuteSession[],
+  sourceGroup?: string,
+): MinuteSession[] {
+  return sourceGroup ? sessions.filter((session) => session.sourceGroup === sourceGroup) : sessions;
+}
+
 /** 창 축의 단위 이름 — 뉴스·공시의 1분은 수집 창이 아니라 **poll 1회**로 읽힌다 */
 export function windowUnit(kind: DatasetKind): string {
   return isPollLane(kind) ? 'poll(1분)' : '창(1분)';
@@ -158,7 +178,7 @@ export interface SessionHealth {
 /** ISO 의 시:분만 — 응답이 이미 KST 오프셋을 달고 오므로 자르는 것이 결정적이다(locale 불요) */
 const hhmmOf = (iso: string | null) => (iso ? iso.slice(11, 16) : '—');
 
-export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionHealth {
+export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts, hasJobAxis = true): SessionHealth {
   const w = s.windows;
   const kind = datasetKind(s.dataset);
   const noun = isPollLane(kind) ? 'poll' : '창';
@@ -170,7 +190,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
    * 창을 두 번 다르게 말한다. 마감·정산된 세션일수록 이 과대평가가 커진다. */
   const elapsed = evidenced + w.overdueNoEvidence + w.missing;
   const defects = qualityDefectCount(s);
-  const stuck = jobs.claimedExpired + jobs.dead;
+  const stuck = hasJobAxis ? jobs.claimedExpired + jobs.dead : 0;
   /* 기대 창 수와 원장 실재 행 수가 다르다 — 위 숫자들을 그대로 믿으면 안 된다는 사실이다.
    * `issues()` 는 이걸 내는데 여기서 안 보면 요약이 "정상"이라 하고 상세가 "원장 수를 못
    * 믿는다"고 해 둘이 어긋난다. 장애로 세우지는 않는다 — 세션이 죽은 게 아니라 **셈의
@@ -191,7 +211,9 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
   const quality = {
     defects,
     text:
-      kind === 'news'
+      !hasJobAxis
+        ? `품질 결함 ${defects}`
+        : kind === 'news'
         ? `잘린 poll·격리 ${defects} · 처리 대기 ${jobs.waiting} · DEAD ${jobs.dead}`
         : `품질 결함 ${defects} · DEAD ${jobs.dead}`,
   };
@@ -276,7 +298,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
     kind: 'normal',
     label: '정상',
     tone: 'active',
-    reason: '창·품질·실행·큐 이상 없고 원장 행 수도 기대와 같다',
+    reason: `${noun}·품질·실행${hasJobAxis ? '·큐' : ''} 이상 없고 원장 행 수도 기대와 같다`,
   };
 }
 

@@ -145,6 +145,8 @@ export const laneOf = (r: RunFact) => r.lane ?? LANE_UNKNOWN;
 
 /** 세션을 사람이 읽는 이름 — 화면(MinutePage)이 쓰는 표기와 같다 */
 const sessionLabel = (s: MinuteSessionFact) => `${s.dataset} / ${s.sourceGroup}`;
+const minuteUnit = (s: MinuteSessionFact) =>
+  s.dataset === 'news_minute' || s.dataset === 'disclosure_minute' ? 'poll' : '창';
 
 /**
  * 합성 대상 축 — **조각이 하나라도 비면 합성하지 않는다**(빈 문자열을 낸다).
@@ -341,9 +343,15 @@ export const RULES: Rule[] = [
           metric: null,
           state: t.task_outcome ?? '판정 없음',
           why: `${t.stage} · ${t.pipeline_type} — ${
-            t.task_outcome === 'FAILED' ? '실행됐으나 실패' : '상류 실패로 미실행(PENDING)'
+            t.task_outcome === 'FAILED'
+              ? '실행됐으나 실패'
+              : t.task_outcome === 'BLOCKED'
+                ? '선행 미충족으로 진입하지 못함'
+                : t.task_outcome === 'PENDING'
+                  ? '아직 귀결되지 않음(PENDING)'
+                  : `필수 작업 미귀결(${t.task_outcome ?? '판정 없음'})`
           }`,
-          cause: t.task_outcome !== 'FAILED',
+          cause: t.task_outcome === 'BLOCKED',
           evidence: 'ops_expected_task.task_outcome',
           lastok: t.last_ok,
           okrate: t.ok_rate,
@@ -911,10 +919,10 @@ export const RULES: Rule[] = [
   {
     id: 'R18',
     layer: '데이터셋',
-    name: '실시간 무증거 창 누적',
+    name: '실시간 무증거 누적',
     kls: '무증거',
     base: 'P1',
-    desc: '기한이 지난 1분 창에 실행·결과 증거가 없다',
+    desc: '기한이 지난 1분 원장 단위에 실행·결과 증거가 없다',
     dep: null,
     source: 'DB_LEDGER',
     canRun: (f) => f.minute != null,
@@ -929,9 +937,9 @@ export const RULES: Rule[] = [
           target: sessionLabel(s),
           targetId: sessionTarget(s),
           scope: f.minute!.date,
-          title: `${sessionLabel(s)} 무증거 창`,
+          title: `${sessionLabel(s)} 무증거 ${minuteUnit(s)}`,
           metric: s.overdueNoEvidence,
-          unit: '창',
+          unit: minuteUnit(s),
           why: '기한이 지났는데 증거가 없다 — 안 돌았는지 기록이 안 남았는지는 이 사실이 가르지 않는다',
           evidence: `minute_ingestion_window ${f.minute?.date} overdue_no_evidence`,
           drill: ['dataset', 'ds-' + s.dataset] as [string, string],
