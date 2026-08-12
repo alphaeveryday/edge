@@ -215,14 +215,23 @@ export function evaluateMetric(m: Metric): Verdict {
  * 중앙값·정상 범위·편차는 전부 이 계열에서 계산된다(따로 들고 있으면 어긋난다).
  */
 
-/** 거래일 축 — 주말을 건너뛰며 뒤로 센다. 고정 계산이라 새로고침해도 흔들리지 않는다 */
+/**
+ * 거래일 축 — 주말을 건너뛰며 뒤로 센다. 고정 계산이라 새로고침해도 흔들리지 않는다.
+ *
+ * 🔴 **마지막 점은 `endISO` 그 자체다 — 주말이어도 건너뛰지 않는다.** `endISO` 는 `meta.today`
+ * 이고 그건 "응답이 실제로 본 날"이라 거래일 보장이 없다(`rules/types.ts` 의 `meta` 계약, 그리고
+ * `?date=` 로 아무 날짜나 들어온다). 건너뛰면 그 날 원장에서 온 **실측값이 전 영업일 날짜를
+ * 달고**, `TrendPage` 의 규약("카드 날짜가 조회일과 다르면 그 지표는 응답 밖 축")이 그것을
+ * 정적 스냅샷으로 읽게 한다 — 값이 관대해지는 게 아니라 **출처가 뒤바뀐다**.
+ * 과거 점만 영업일로 센다.
+ */
 export function businessDays(endISO: string, count: number): string[] {
-  const out: string[] = [];
+  const out = [endISO];
   const d = new Date(`${endISO}T00:00:00Z`);
   while (out.length < count) {
+    d.setUTCDate(d.getUTCDate() - 1);
     const day = d.getUTCDay();
     if (day !== 0 && day !== 6) out.push(d.toISOString().slice(0, 10));
-    d.setUTCDate(d.getUTCDate() - 1);
   }
   return out.reverse();
 }

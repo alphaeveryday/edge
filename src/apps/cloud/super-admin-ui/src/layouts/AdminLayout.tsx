@@ -24,6 +24,11 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
       { path: '/grid', label: '실행 이력', icon: 'dashboard' },
       { path: '/minute', label: '현재 실행', icon: 'database' },
       { path: '/ops/trend', label: '추이', icon: 'trendChart' },
+      /* 구 홈 병존(`rules/README.md` §6) — 규칙 엔진이 "무엇이 걸렸는가"를, 이쪽이 "레인이 지금
+       * 어디까지 왔는가"를 답한다. ⚠️ 라우트만 남기고 이 줄을 빼면 **도달 경로가 0** 이 된다
+       * (dev 에서는 `/` 가 이 화면이었다) — 병존한다고 적어 둔 문서가 그 순간 거짓이 된다.
+       * 라벨은 도착지 제목과 같게 둔다(`headerRoute.ts`). */
+      { path: '/overview', label: '레인 원장 요약', icon: 'database' },
     ],
   },
   {

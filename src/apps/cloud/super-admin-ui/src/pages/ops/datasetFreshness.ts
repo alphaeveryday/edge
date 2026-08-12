@@ -20,6 +20,37 @@ export function taskRollup(tasks: TaskFact[]): 'fulfilled' | 'skipped' | 'unreso
   return due.every((task) => task.task_outcome === 'FULFILLED') ? 'fulfilled' : 'unresolved';
 }
 
+export type Rollup = ReturnType<typeof taskRollup>;
+
+/**
+ * 롤업 → 배지. **JSX 밖에 둔다** — 이 파일의 다른 판정과 같은 이유이고, 여기 없으면
+ * `node --test` 가 톤을 못 봐서 다음 결함이 그대로 반복된다.
+ *
+ * 🔴 이 함수가 생긴 이유: 롤업 순위(`failed` > `blocked` > `unresolved`)와 화면 톤이
+ * **반대로** 매겨져 있었다. `unresolved`=blocked(빨강) · `blocked`=warn(주황) 이라, 미귀결
+ * 흐름에 BLOCKED 작업이 **하나 더 생기면** 상태가 나빠졌는데 배지는 **덜 심각해졌다**.
+ * 순위와 톤은 같은 방향이어야 한다 — 그래서 둘을 한 자리에 두고 `SEVERITY` 로 잰다.
+ *
+ * 톤 어휘는 작업 단위(`taskView.taskStatusView`)와 맞춘다: FAILED=blocked · BLOCKED=warn ·
+ * PENDING/판정없음=neutral. 롤업이 작업보다 세게 칠하면 같은 사실이 두 화면에서 다르게 읽힌다.
+ *
+ * ⚠️ `unresolved` 를 `blocked`(빨강)로 올리지 마라 — 배치가 도는 동안 모든 흐름에 PENDING 이
+ * 있어 **표 전체가 상시 최고 심각도**가 되고, 그러면 그 색이 아무것도 못 가리킨다(원래 결함이
+ * 그 형태였다). 그리고 `unresolved` 는 "모른다"가 아니다: 계측 공백·축 부재는 여기 도달조차
+ * 안 하고 `notRun`·`Absent` 가 답한다. 여기 오는 것은 원장이 **명시적으로 쓴** PENDING·null 이다.
+ * 끝나고 나쁘게 끝난 것(`failed`·`blocked`)이 아직 안 끝난 것보다 위다 — 뒤집으면
+ * `[BLOCKED, PENDING]` 흐름에서 **선행이 깨졌다는 조치 가능한 사실**을 잃는다.
+ */
+export const ROLLUP_BADGE: Record<Rollup, { label: string; tone: BadgeTone }> = {
+  fulfilled: { label: '전건 귀결', tone: 'active' },
+  skipped: { label: '계획 제외', tone: 'neutral' },
+  failed: { label: '실패 포함', tone: 'blocked' },
+  blocked: { label: '선행 미충족 포함', tone: 'warn' },
+  unresolved: { label: '미귀결 포함', tone: 'neutral' },
+};
+
+export const rollupBadge = (tasks: TaskFact[]) => ROLLUP_BADGE[taskRollup(tasks)];
+
 export interface DatasetRunFlow {
   dataset: string;
   runId: string;

@@ -800,17 +800,9 @@ export function MinutePage() {
   /* 세션도 job 도 전무해야 "볼 것이 없는 화면"이다 — job 만 있어도 실데이터가 있는 것이다 */
   const empty = hasNoSignal(data);
 
-  if (empty) {
-    return (
-      <div className="flex flex-col gap-4">
-        <EmptyRealNotice>
-          이 날짜({data.date})의 세션이 없습니다 — 1분 파이프라인이 계획되지 않았다는 사실이다(비거래일
-          또는 미가동). 오류가 아니라 관측 결과다. 뉴스 추출 job 도 0건이다.
-        </EmptyRealNotice>
-      </div>
-    );
-  }
-
+  /* ⚠️ 재조회 실패 표기는 **분기 위**에 둔다. 분기마다 세우면 형제가 하나씩 빠지고, 하필
+   * 빠지는 쪽이 부재를 가장 세게 단정하는 분기다 — "세션이 없다 · 오류가 아니라 관측 결과다"를
+   * 조회가 실패한 상태로 쓰면 장애가 실측 0으로 읽힌다. */
   return (
     <>
       {isError && (
@@ -818,6 +810,14 @@ export function MinutePage() {
           실시간 상태 재조회에 실패했습니다 — 직전 실측을 유지합니다.
         </p>
       )}
+      {empty ? (
+        <div className="flex flex-col gap-4">
+          <EmptyRealNotice>
+            이 날짜({data.date})의 세션이 없습니다 — 1분 파이프라인이 계획되지 않았다는 사실이다(비거래일
+            또는 미가동). 오류가 아니라 관측 결과다. 뉴스 추출 job 도 0건이다.
+          </EmptyRealNotice>
+        </div>
+      ) : (
       <MinuteBody
       data={data}
       date={date}
@@ -827,6 +827,7 @@ export function MinutePage() {
       setDataset={setDataset}
       updatedAt={dataUpdatedAt}
       />
+      )}
     </>
   );
 }

@@ -41,9 +41,33 @@ const ev = {
     R('R17'), //  dep 없음 + axis:'minute'(실시간 응답 축)
     R('R13', { notRun: 'identity', note: 'R13: 사건 식별자 충돌 R13:o.pub — …' }),
     R('R04', { evaluated: true, notRun: undefined, violations: 2 }),
-    R('R12'), //  dep 없음 + 축 표기 없음(SQS) — 실시간 조회 상태를 붙이면 안 되는 규칙
+    R('R12'), //  dep 있음(SQS 미배선) — 실시간 조회 상태를 붙이면 안 되는 규칙
   ],
 };
+
+/* 🔴 `notRunReason` 의 `if (R?.axis === 'minute')` 가드를 `if (true)` 로 바꿔도 **전건 초록**
+ * 이었다(변이 실증, 2026-08-12). 위 R12 순회가 그 가드를 지키는 것처럼 보였지만 R12 는 `dep` 가
+ * 있어 **한 줄 위에서 조기 반환**해 가드에 도달조차 안 한다. 실제로 그 가드에 매달린 규칙은
+ * dep 도 axis 도 없는 일곱(R01·R02·R04·R05·R06·R09·R14)이고 픽스처에 하나도 없었다.
+ * ⚠️ 이 목록은 손으로 적지 않는다 — `RULES` 에서 세어 전건을 순회한다(규칙이 늘면 같이 는다). */
+test('실시간 축을 안 읽는 규칙에는 조회 상태가 새면 안 된다 — 가드가 매달린 일곱을 전수로 센다', () => {
+  const bare = RULES.filter((X) => !X.dep && X.axis !== 'minute');
+  assert.ok(bare.length > 0, '가드가 겨냥한 갈래가 비었다 — 이 테스트가 아무것도 안 잰다');
+  for (const X of bare) {
+    for (const f of ['pending', 'error'] as const) {
+      const why = notRunReason(R(X.id), f);
+      assert.equal(
+        why,
+        '못 돎 — 이 규칙이 읽을 사실 축이 이번 응답에 없다',
+        `${X.id}(축 표기 없음)에 실시간 조회 상태(${f})가 새어 나갔다: ${why}`,
+      );
+    }
+  }
+  /* 대조군 — 같은 상태에서 axis:'minute' 규칙은 조회 상태를 **받아야** 한다.
+   * 이게 없으면 위 단언은 "가드를 통째로 지워도" 통과한다(양방향 변이). */
+  assert.match(notRunReason(R('R17'), 'error'), /조회 실패/);
+  assert.match(notRunReason(R('R17'), 'pending'), /도착하지 않았다/);
+});
 
 test('못 돈 규칙은 종류를 안 가리고 전부 나온다 — `identity` 만 세면 계측 공백이 정상으로 읽힌다', () => {
   assert.deepEqual(unevaluatedRules(ev).map((r) => r.id), ['R08', 'R17', 'R13', 'R12']);

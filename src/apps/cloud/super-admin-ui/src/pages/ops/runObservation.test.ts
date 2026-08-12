@@ -174,6 +174,64 @@ test('PENDING 작업은 시도 이력이 있으면 미기동 대기로 숨기지
   assert.equal(taskState({ ...task, attempts: 0 }), '대기');
 });
 
+/* 🔴 `taskState` 는 단언이 PENDING×attempts 두 줄뿐이라 **판정 변이 넷이 살아남았다**
+ * (변이 실증, 2026-08-12). 그중 최악은 `data_status === 'INVALID'` 를 지우는 것 — 무효 데이터
+ * 작업이 `'성공'` 이 되고 `RunAxisPage` 의 `STATE_TONE.성공 = 'active'` 라 **초록으로 선다**.
+ * 이 콘솔이 존재하는 이유가 그 반대라, 같은 계약을 `freshness` 처럼 갈래 전수로 못박는다.
+ * ⚠️ 각 갈래를 **서로 다른 라벨**로 단언한다 — 두 갈래가 같은 값을 기대하면 맞바꿔도 안 잡힌다. */
+test('🔴 결함 있는 데이터를 초록으로 그리지 않는다 — outcome × data_status 갈래를 전수로 센다', () => {
+  /* ⚠️ 기본값에 `data_status: 'VALID'` 를 두지 않는다 — 각 갈래가 자기 축을 명시하게 한다 */
+  const t = (o: Partial<TaskFact>): TaskFact =>
+    ({
+      task_key: 'PRICE_COLLECTION_KIS', run_id: 'etf-daily:2026-08-03T15:40',
+      pipeline_type: 'etf-daily', stage: 'raw', dataset: 'price_daily',
+      required: true, plan_status: 'DUE', task_outcome: null, ...o,
+    }) as TaskFact;
+
+  /* FULFILLED 라도 데이터가 상하면 성공이 아니다. 두 값 **각각**을 단언한다 */
+  assert.equal(taskState(t({ task_outcome: 'FULFILLED', data_status: 'INVALID' })), '부분 결손');
+  assert.equal(taskState(t({ task_outcome: 'FULFILLED', data_status: 'INCOMPLETE' })), '부분 결손');
+  /* 대조군 — 성한 데이터는 성공이어야 한다. 없으면 위 둘은 "전부 부분 결손" 변이로도 통과한다 */
+  assert.equal(taskState(t({ task_outcome: 'FULFILLED', data_status: 'VALID' })), '성공');
+  assert.equal(taskState(t({ task_outcome: 'FULFILLED', data_status: null })), '성공');
+
+  /* 귀결 어휘 — 넷이 서로 다른 칸이다. 라벨을 맞바꾸면 미기동이 선행 미충족으로 읽힌다 */
+  assert.equal(taskState(t({ task_outcome: 'MISSED' })), '미기동');
+  assert.equal(taskState(t({ task_outcome: 'BLOCKED' })), '선행 미충족');
+  assert.equal(taskState(t({ task_outcome: 'FAILED' })), '실패');
+  assert.equal(taskState(t({ task_outcome: 'WEIRD_NEW_VALUE' })), '판정 없음');
+
+  /* 계획 제외는 **outcome 보다 앞선다** — 이 가드를 지우면 SKIPPED 가 '판정 없음' 으로 샌다 */
+  assert.equal(taskState(t({ plan_status: 'SKIPPED', task_outcome: null })), '계획 제외');
+  assert.equal(taskState(t({ plan_status: 'SKIPPED', task_outcome: 'FAILED' })), '계획 제외');
+
+  /* 타임아웃은 사유 문자열로만 갈린다 — 정규식을 무력화하면 전부 '실패' 로 접힌다 */
+  assert.equal(taskState(t({ task_outcome: 'FAILED', outcome_reason: 'States.Timeout TIMED_OUT' })), '타임아웃');
+  assert.equal(taskState(t({ task_outcome: 'FAILED', outcome_reason: 'boto ConnectionError' })), '실패');
+
+  /* 갈래가 서로 다른 값을 낸다는 것 자체를 센다 — 하나로 뭉개는 변이를 잡는다 */
+  const labels = new Set([
+    taskState(t({ task_outcome: 'FULFILLED', data_status: 'VALID' })),
+    taskState(t({ task_outcome: 'FULFILLED', data_status: 'INVALID' })),
+    taskState(t({ task_outcome: 'MISSED' })),
+    taskState(t({ task_outcome: 'BLOCKED' })),
+    taskState(t({ task_outcome: 'FAILED' })),
+    taskState(t({ plan_status: 'SKIPPED', task_outcome: null })),
+  ]);
+  assert.equal(labels.size, 6, '서로 다른 사실이 같은 칸으로 접혔다');
+});
+
+test('PENDING_REDRIVE 는 terminal 이 아니다 — 복구 대기를 끝난 실패로 세면 대조가 거짓이 된다', () => {
+  assert.equal(statusView('PENDING_REDRIVE').terminal, false);
+  assert.equal(statusView('PENDING_REDRIVE').kind, 'pendingRedrive');
+  /* 대조군 — 진짜 terminal 셋. 없으면 "전부 false" 변이가 통과한다 */
+  for (const raw of ['SUCCEEDED', 'FAILED', 'TIMED_OUT', 'ABORTED']) {
+    assert.equal(statusView(raw).terminal, true, raw);
+  }
+  assert.equal(statusView('RUNNING').terminal, false);
+  assert.equal(statusView('UNKNOWN').terminal, false);
+});
+
 test('완전성 분자 부재는 0이나 null 문자열이 아니라 집계 부재로 표시한다', () => {
   const task = {
     task_key: 'collect', run_id: 'run-1', pipeline_type: 'news', stage: 'raw', required: true,

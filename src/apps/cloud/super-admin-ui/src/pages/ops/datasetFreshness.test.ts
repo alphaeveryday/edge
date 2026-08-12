@@ -4,9 +4,15 @@
  * 비교하지 않은 것·비교할 수 없는 것이 그 칸에 서면 계측 공백이 정상으로 읽힌다.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { DatasetFact, TaskFact } from '../../rules/types.ts';
-import { datasetRunFlows, freshness, taskRollup } from './datasetFreshness.ts';
+import {
+  datasetRunFlows,
+  freshness,
+  ROLLUP_BADGE,
+  taskRollup,
+} from './datasetFreshness.ts';
 
 /** ⚠️ 자리마다 다른 값을 둔다 — 같은 값이면 두 필드를 맞바꾸는 실수가 안 잡힌다. */
 const ds = (o: Partial<DatasetFact>): DatasetFact => ({
@@ -34,6 +40,86 @@ test('계획에서 SKIPPED 된 작업은 필요한 작업의 귀결을 막지 �
     'skipped',
     '전부 계획 제외인 날은 초록 귀결도 미귀결도 아니다',
   );
+});
+
+/* 🔴 `taskRollup` 의 다섯 갈래 중 FULFILLED·FAILED·SKIPPED 만 재고 있어, MISSED 를 실패에서
+ * 빼거나 BLOCKED 갈래를 통째로 지워도 전건 초록이었다(변이 실증, 2026-08-12).
+ * `DatasetPage` 는 다섯을 각각 다른 배지로 그리므로, 접히면 화면이 사실을 잃는다. */
+test('🔴 귀결 다섯 갈래가 서로 다른 칸이다 — 접으면 실패가 "미귀결"로 흐려진다', () => {
+  const t = (o: Partial<TaskFact>) => ({ plan_status: 'DUE', ...o }) as TaskFact;
+  assert.equal(taskRollup([t({ task_outcome: 'MISSED' })]), 'failed');
+  assert.equal(taskRollup([t({ task_outcome: 'FAILED' })]), 'failed');
+  assert.equal(taskRollup([t({ task_outcome: 'BLOCKED' })]), 'blocked');
+  assert.equal(taskRollup([t({ task_outcome: 'PENDING' })]), 'unresolved');
+  assert.equal(taskRollup([t({ task_outcome: null })]), 'unresolved');
+  assert.equal(taskRollup([t({ task_outcome: 'FULFILLED' })]), 'fulfilled');
+  /* 모르는 어휘는 귀결로 세지 않는다 — `every(FULFILLED)` 가 그 자리를 지킨다 */
+  assert.equal(taskRollup([t({ task_outcome: 'WEIRD' })]), 'unresolved');
+
+  /* 섞이면 **더 나쁜 쪽**이 이긴다. 순서를 바꾸면 실패가 선행 미충족 뒤로 숨는다 */
+  assert.equal(
+    taskRollup([t({ task_outcome: 'FULFILLED' }), t({ task_outcome: 'BLOCKED' }), t({ task_outcome: 'FAILED' })]),
+    'failed',
+  );
+  assert.equal(
+    taskRollup([t({ task_outcome: 'FULFILLED' }), t({ task_outcome: 'PENDING' }), t({ task_outcome: 'BLOCKED' })]),
+    'blocked',
+  );
+  /* SKIPPED 는 분모에서 빠진다 — 남은 것이 전부 귀결이면 전건 귀결이다 */
+  assert.equal(
+    taskRollup([t({ plan_status: 'SKIPPED', task_outcome: null }), t({ task_outcome: 'FULFILLED' })]),
+    'fulfilled',
+  );
+});
+
+/* 🔴 위 테스트만 있을 때 **화면은 정반대를 그리고 있었고 전건 초록이었다.** 함수 안 순위만 재고
+ * 소비 자리의 톤을 한 줄도 안 봤기 때문이다 — `unresolved`=blocked(빨강) · `blocked`=warn(주황)
+ * 이라, 미귀결 흐름에 BLOCKED 작업이 **하나 더 생기면 배지가 덜 심각해졌다**.
+ * 순위를 못박는 단언은 **톤까지 내려가야** 의미가 있다. 그래서 톤 사상을 JSX 밖으로 내렸다. */
+test('🔴 롤업 순위와 배지 톤이 같은 방향이다 — 나빠졌는데 배지가 내려가면 안 된다', () => {
+  const t = (o: Partial<TaskFact>) => ({ plan_status: 'DUE', ...o }) as TaskFact;
+  const RANK: Record<string, number> = { active: 0, neutral: 1, warn: 2, blocked: 3 };
+
+  /* 표를 **전수로** 못박는다. 갈래 셋만 하드코딩했더니 `skipped`→active·`fulfilled`→neutral
+   * 변이가 살아남았다(실증) — 단조성 루프는 `[0,0,1,2,3]` 도 단조라 못 잡고, 아래 누적 순회는
+   * `skipped`(due 가 0이라야 나오는 배타 갈래)를 한 번도 안 밟는다.
+   * ⚠️ `skipped` 가 `active` 가 되면 "할 일이 아니었다"와 "다 잘 됐다"가 같은 초록으로 선다. */
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(ROLLUP_BADGE).map(([k, v]) => [k, v.tone])),
+    {
+      fulfilled: 'active',
+      skipped: 'neutral',
+      unresolved: 'neutral',
+      blocked: 'warn',
+      failed: 'blocked',
+    },
+    '롤업 배지 톤이 바뀌었다 — 순위와 같은 방향인지 다시 판단하고 이 표를 고쳐라',
+  );
+
+  /* 표만 고치고 함수를 안 고치면 위 단언은 통과하면서 화면이 어긋난다. 나쁜 것을 하나씩 더해
+   * `taskRollup` 의 분기 순서와 톤이 **함께** 역행하지 않는지 본다 */
+  const worse = [
+    { outcome: 'FULFILLED', expect: 'fulfilled' },
+    { outcome: 'PENDING', expect: 'unresolved' },
+    { outcome: 'BLOCKED', expect: 'blocked' },
+    { outcome: 'FAILED', expect: 'failed' },
+  ] as const;
+  const acc: TaskFact[] = [];
+  let last = -1;
+  for (const w of worse) {
+    acc.push(t({ task_outcome: w.outcome }));
+    const r = taskRollup(acc);
+    assert.equal(r, w.expect, `${w.outcome} 를 더했는데 롤업이 ${r} 다`);
+    const rank = RANK[ROLLUP_BADGE[r].tone];
+    assert.ok(rank >= last, `${w.outcome} 를 더했더니 배지 톤이 내려갔다(${r})`);
+    last = rank;
+  }
+
+  /* 소비 자리가 이 표를 실제로 쓰는지 — 손으로 칠하는 갈래가 돌아오면 여기서 걸린다 */
+  const page = readFileSync(new URL('./DatasetPage.tsx', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(page, /rollupBadge\(flow\.tasks\)\.tone/, '화면이 톤을 다시 손으로 정한다');
+  assert.doesNotMatch(page, /<StatusBadge tone="(blocked|warn)">\s*\S*\s*포함/, '갈래별 하드코딩 배지가 돌아왔다');
 });
 
 test('같은 데이터셋의 재실행은 run_id별 흐름으로 갈린다', () => {

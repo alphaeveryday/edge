@@ -50,8 +50,8 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/ops/runs` · `/ops/runs/:runId` | 런·작업 귀결 목록 · 실행 상세 |
 | `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이 |
 | `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계 |
-| `/ops/summary` | 규칙 엔진 개요 (메뉴 밖 호환 라우트) |
-| `/overview` | 레인별 최신 런 요약 (구 첫 화면) |
+| `/ops/summary` | 파이프라인 개요 — ⚠️ **사이드바·인바운드 링크 없음**(주소 직접 입력만). ALPHA-738 이 새로 만든 경로라 "호환"할 구 주소는 없다. 살릴지 지울지 미결 |
+| `/overview` | 레인 원장 요약 (구 첫 화면 — 사이드바 `파이프라인` 절에 병존, `rules/README.md` §6) |
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
 | `/tenants/:id` | 테넌트 상세 (기본 정보 · 연결 상태 · 24H 호출 바 차트) |
 | `/sources` | 데이터 소스 수집 상태 |

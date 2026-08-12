@@ -9,6 +9,7 @@
  * 실행: node --test src/domains/sources/dailyRollup.test.ts
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { dateOfSlot, datesOf, realtimeDayState, realtimeSessionState, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
@@ -23,6 +24,33 @@ test('같은 데이터셋의 한 벤더가 끊기면 다른 벤더가 살아 있
     ],
   } as MinuteStatus;
   assert.equal(realtimeDayState('price_minute', minute.date, minute)?.state, '장애');
+});
+
+/* 🔴 이 PR 이 `'실행 중'` 에서 `'대기'` 를 떼어 냈는데 격자가 그 새 상태를 `'계획 없음'` 과
+ * **같은 클래스**로 그렸다 — DOM 이 완전히 같아서 "계획은 있고 기한 전"(정상)과 "계획 행 자체가
+ * 없다"(계획 결손 후보)가 구분 불가였고, 범례에는 똑같이 생긴 박스 둘이 다른 라벨로 나란히 섰다.
+ * `stateOf` 는 테스트가 있었지만 **렌더 축은 아무도 안 봤다**(변이 실증, 2026-08-12). */
+test('🔴 격자에서 `대기` 와 `계획 없음` 은 다른 박스다 — 합치면 계획 결손이 정상으로 보인다', () => {
+  const source = readFileSync(new URL('../../pages/GridPage.tsx', import.meta.url), 'utf8');
+  const cls = (state: string) =>
+    source.match(new RegExp(`'?${state}'?\\s*:\\s*'(gd-s-[a-z]+)'`))?.[1];
+  const wait = cls('대기');
+  const none = cls('계획 없음');
+  assert.ok(wait && none, 'STATE_CLASS 에서 두 상태를 못 찾았다 — 이 테스트가 낡았다');
+  assert.notEqual(wait, none, '두 상태가 같은 박스로 그려진다');
+  /* 그리고 그 클래스가 실제로 **다르게 그려져야** 한다. 이름만 갈라 놓고 선언이 같으면
+   * (또는 비어 있으면) 화면은 그대로 구분 불가다 — 첫 수정이 둘 다 `background: #fff` 라
+   * 1px 테두리 스타일만 달랐고, 그 상태로도 이 테스트가 통과했다. 선언 본문을 비교한다. */
+  const css = readFileSync(new URL('../../styles/grid.css', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const body = (c: string) => css.match(new RegExp(`\\.${c}\\s*\\{([^}]*)\\}`))?.[1]?.trim() ?? '';
+  assert.ok(body(wait!).length > 0, `.${wait} 선언이 비었다 — 기본 박스로 접힌다`);
+  assert.ok(body(none!).length > 0, `.${none} 선언이 비었다`);
+  assert.notEqual(body(wait!), body(none!), '두 클래스가 같은 선언이라 화면에서 같은 박스다');
+  /* 대기는 **채움**으로 갈린다 — 테두리 스타일 하나에만 기대면 격자에서 안 읽힌다 */
+  assert.match(css, /\.gd-s-wait::after\s*\{/, '대기 박스의 채움 표식이 사라졌다');
+  /* 운영자 설명에도 그 갈래가 있어야 한다 — 박스만 갈라 놓고 안 적으면 못 읽는다 */
+  assert.match(source, /'대기 —/, 'STATUS_TIP 에 대기 항목이 없다');
 });
 
 test('실시간 상세는 벤더 세션마다 자기 실행체 상태를 갖는다', () => {

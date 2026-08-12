@@ -37,7 +37,7 @@ import type { DayExecution, DayRollup, DayState } from '../domains/sources/daily
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
-import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
+import { minuteSessionHref, RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { LoadError } from './_shared/LoadError';
 import '../styles/grid.css';
 
@@ -48,7 +48,7 @@ const STATE_CLASS: Record<DayState, string> = {
   주의: 'gd-s-warn',
   장애: 'gd-s-bad',
   '실행 중': 'gd-s-run',
-  대기: 'gd-s-none',
+  대기: 'gd-s-wait',
   '계획 스킵': 'gd-s-skip',
   '계획 없음': 'gd-s-none',
   '상태 미제공': 'gd-s-nostate',
@@ -92,9 +92,11 @@ const STATUS_TIP = [
   '정상 — 기한이 지난 기대 실행이 모두 정상 귀결됐다',
   '주의 — 불완전·무효·유실 등 확인이 필요하다',
   '장애 — 실패 또는 기한이 지난 무증거가 있다',
-  '실행 중 — 아직 끝나지 않은 것이 남았다. 기한 전 대기를 실패로 보지 않는다',
+  '실행 중 — 아직 끝나지 않은 것이 남았다',
+  '대기 — 계획은 있고 아직 기한 전이다. 기한 전 대기를 실패로 보지 않는다',
   '계획 스킵 — 계획 단계에서 빠졌다(비거래일 등). 안 한 게 아니라 할 일이 아니었다',
-  '계획 없음 — 그 날짜에 이 데이터셋의 계획 행 자체가 없다',
+  '계획 없음 — 그 날짜에 이 데이터셋의 계획 행 자체가 없다. 대기(계획은 있다)와 다른 사실이라',
+  '  박스 모양을 갈라 둔다 — 합치면 계획 결손 후보가 정상으로 보인다',
   '',
   '빈 데이터와 무증거는 합치지 않는다.',
   '  빈 데이터(VALID_EMPTY) — 돌았고 그 날 데이터가 없었다는 증거가 남았다. 정상이다.',
@@ -479,7 +481,10 @@ function DayDetail({
   /* 실시간 데이터셋 — 이 격자에는 그날의 판정이 없다. 세션 한 건을 실행 인스턴스로 세우고 보낸다.
    * 1분 창 390개를 최상위 실행 390개로 펼치지 않는다(상위 단위는 데이터셋 × 세션 날짜). */
   if (d.sessionDataset) {
-    const href = `/minute?date=${date}&dataset=${d.sessionDataset}`;
+    /* 링크는 손으로 조립하지 않는다 — 인코딩 계약이 `minuteSessionHref` 한 자리에 있고,
+     * 여기서 다시 적으면 구분자 든 벤더가 생기는 날 이 링크만 조용히 깨져 도착 화면이
+     * "이 벤더 세션이 없습니다"라는 **거짓 부재**를 단언한다. */
+    const href = minuteSessionHref(date, d.sessionDataset);
     const sessions = minute?.date === date
       ? minute.sessions.filter((session) => session.dataset === d.sessionDataset)
       : [];
@@ -525,7 +530,7 @@ function DayDetail({
             <tbody>
               {sessions.map((session) => {
                 const state = realtimeSessionState(session);
-                const sessionHref = `${href}&sourceGroup=${encodeURIComponent(session.sourceGroup)}`;
+                const sessionHref = minuteSessionHref(date, d.sessionDataset!, session.sourceGroup);
                 return (
                   <tr key={session.sessionId}>
                     <td className="mono">

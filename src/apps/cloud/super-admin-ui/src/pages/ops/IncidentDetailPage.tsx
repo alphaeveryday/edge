@@ -324,9 +324,13 @@ export function IncidentDetailPage() {
                   원장 근거 보기 →
                 </Link>
                 <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-                  이 사건의 문맥({[ledger?.runKey, ledger?.task, ledger?.dataset, ledger?.date]
+                  {/* ⚠️ 링크가 좁히는 축을 **하나도 빼지 않고** 적는다 — `sourceGroup` 이 빠져
+                      있었고, 그러면 벤더 하나로 좁힌 원장이 "왜 세션이 하나뿐이냐"로 읽힌다. */}
+                  이 사건의 문맥(
+                  {[ledger?.runKey, ledger?.task, ledger?.dataset, ledger?.sourceGroup, ledger?.date]
                     .filter(Boolean)
-                    .join(' · ')})으로 범위를 좁혀 원시 사실만 봅니다
+                    .join(' · ')}
+                  )으로 범위를 좁혀 원시 사실만 봅니다
                 </span>
               </>
             ) : (

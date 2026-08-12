@@ -198,6 +198,32 @@ test('실시간 세션 지름길도 벤더 축을 보존하고 구분자를 인�
   assert.doesNotMatch(source, /const real =[^\n]*hasNoSignal/, '0건을 응답 부재로 다시 접었다');
 });
 
+/* 🔴 `const date = facts.minute?.date ?? facts.meta.today` 를 `facts.meta.today` 로 바꿔도
+ * 전건 초록이었다(변이 실증, 2026-08-12) — 픽스처가 **두 날짜를 같은 값**으로 두고 있었다.
+ * `:155-156` 주석이 이 축을 이미 명시한다: "세션 응답이 말한 날이다 — meta.today 와 다를 수
+ * 있고, 다르면 드릴다운이 **없는 날짜의 세션**을 연다." 두 값을 갈라 놔야 그게 재진다. */
+test('실시간 드릴다운 날짜는 세션 응답이 말한 날이다 — meta.today 로 대체하면 없는 날을 연다', () => {
+  const f = {
+    ...FACTS,
+    meta: { db: '', aws: '', today: '2026-08-04' },
+    minute: {
+      /* 세션 응답이 하루 뒤처져 있다(폴링 시점 차) — 실측으로 도달하는 조합이다 */
+      date: '2026-08-03',
+      sessions: [
+        { dataset: 'price_minute', sourceGroup: 'kis', phase: 'ACTIVE', leaseExpired: true, overdueNoEvidence: 0, deadJobs: 0 },
+      ],
+      deadJobsByDataset: {},
+    },
+  } as unknown as Facts;
+  const r = investigate(
+    incident(violation({ targetId: 'price_minute/kis', drill: ['dataset', 'ds-price_minute'] })),
+    f,
+  );
+  assert.equal(r.ledger?.date, '2026-08-03', 'meta.today 가 세션 날짜를 덮었다');
+  assert.match(r.targets[0].href, /date=2026-08-03/);
+  assert.doesNotMatch(r.targets[0].href, /date=2026-08-04/);
+});
+
 test('사건 targetId의 첫 구분자 뒤를 벤더 전체로 보존한다', () => {
   const r = investigate(
     incident(violation({ targetId: 'news_minute/vendor/a&b', drill: ['dataset', 'ds-news_minute'] })),
