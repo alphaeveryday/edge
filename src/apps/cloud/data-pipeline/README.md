@@ -101,7 +101,10 @@
 > 부르는 배선: 기사 정본은 PG `document`+`news_document` 자연키, 결과는 feature 존 불변
 > artifact 이고 반환값이 그 바이트의 sha256 이다. artifact key 축은
 > `(job_id, redrive_generation, attempt)` — LLM 출력이 비결정적이라 시도마다 key 가
-> 갈려야 재시도가 자기 자신을 막지 않는다. 실패 분류의 terminal 은 payload↔원장 기사 축
+> 갈려야 재시도가 자기 자신을 막지 않는다. 그 job 축 키는 원장이 색인이라 배치가 못 보므로,
+> **같은 결과를 배치가 읽는 날짜축 feature 파티션에도 미러한다**(ALPHA-900) — 미러 없이는
+> 배치가 같은 기사를 다시 유료로 태운다. 미러 실패는 job 을 죽이지 않는다(재시도가 새 attempt·
+> 새 key 라 LLM 을 다시 부른다 — 미러 1건 손실보다 비싸다). 실패 분류의 terminal 은 payload↔원장 기사 축
 > 불일치 하나뿐이고 나머지는 예산이 판정한다), **EOD 세션 QC**(ALPHA-693 — drain 이 끝난
 > 세션의 `DUE` 잔존을 `MISSING` 으로 확정하고 `FINALIZED` 로 닫는다. `run qc-minute-session`.
 > 확정은 **도래한 window 만**이고 계획의 양 끝·연속성이 어긋나면 확정 대신 `FAILED` 다 —
@@ -857,7 +860,11 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 
 - `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 10000)·
   `--window-days`(기본 3, 오늘−N일 창)를 넘겨 한 실행의 LLM 호출 수와 스캔 범위를 묶는다
-  (창 미지정은 풀스캔이라 스캔이 O(전체 코퍼스), ALPHA-540). 상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
+  (창 미지정은 풀스캔이라 스캔이 O(전체 코퍼스), ALPHA-540). **창은 장중 미러 압축의 범위도
+  가른다**(ALPHA-900) — 창이 있는 런은 자기 창 안의 미러만 흡수하고, 창 밖으로 나간 조각
+  (backfill Consumer 가 오래된 기사를 뒤늦게 추출한 드문 경우)은 풀스캔 런이 정리한다. 창을
+  넓혀 잡으면 창 밖 canonical 기사까지 LLM 대상이 되어 `--limit` 을 먼저 소진한다.
+  상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
   기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다).
   LLM 호출은 기사별로 병렬 실행한다(ALPHA-519, `LLM_CONCURRENCY` env·기본 32·상한 100) —
   카운터·격리·병합은 취합 후 메인스레드라 순차 실행과 결과가 같다
@@ -891,6 +898,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   파티션 프리픽스를 만들어 그 날짜만 LIST 해야 한다
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
+  한 파티션에 같은 기사의 판정이 둘 있으면(배치 part 파일 + 장중 미러) **`tagged_at` 최신만
+  싣는다**(ALPHA-900, `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건
+  자연키가 갈린 옛 판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다.
   역할별 엔티티 해소(ALPHA-831 — 명부·채번 축 포함)와 해소율은 quality log 로 남고,
   채번 경로는 entity·concept 마스터 행도 만든다
 - `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
@@ -1115,7 +1125,16 @@ settings.targets.keywords            # ["금리", ...]
   ALPHA-860 — 그래서 canonical `lead_text` 는 결코 빈 문자열이 아니다). 본문 전문 크롤은 범위 밖이다.
 - **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
   에 태깅 결과를 **article_id 키로 멱등 병합**(입력 canonical 과 같은 파티션 축이라 한 canonical
-  파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제). **canonical 이 아니라 feature
+  파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제).
+  **이 파티션에는 writer 가 둘이다(ALPHA-900)** — 배치 `tag-news` 가 part 파일을 통째로 되쓰고,
+  1분 뉴스 Consumer 가 같은 파티션 아래 `minute/{article_id}.{input_fingerprint}.parquet` 로
+  기사당 미러를 남긴다. 그래야 두 레인의 LLM 장부가 서로를 본다 — 그 전에는 배치가 이 날짜축만,
+  장중이 job 축(`feature/news_extraction/job=…`)만 보고 있어 **같은 기사를 반드시 두 번 태웠다**.
+  미러 구역은 **다음 배치 런까지의 임시 자리**다: `tag-news` 가 읽어 part 파일에 병합한 뒤
+  지우고(`minute_mirrors_absorbed` 로 계측), 소비자(`load-assertions`)는 한 파티션에 같은 기사의
+  판정이 둘 있으면 `tagged_at` 최신만 싣는다(`rows_superseded`). 미러 키에 입력 지문이 들어가는
+  것은 정정 때문이다 — `article_id` 만 쓰면 배치가 읽고 지우는 사이의 정정 판정이 같은 키를
+  덮은 뒤 곧바로 삭제된다. 창(`--window-days`) 밖 미러는 **창 미지정 풀스캔 런**이 정리한다. **canonical 이 아니라 feature
   인 이유**: 여기 값은 벤더 원본의 결정론적 정규화가 아니라 **LLM 추론 결과**라 재실행이 값을 바꿀
   수 있고 호출마다 돈이 든다 — raw 에서 언제든 무료로 재생성되는 canonical 과 라이프사이클이 다르다.
   그래서 **한 번 만든 건 다시 만들지 않는다**(`tagger_version`·`ontology_version` 이 바뀔 때만 재태깅;
@@ -1637,6 +1656,8 @@ DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2
   python -m data_pipeline.run price-consumer --universe /path/universe.json --max-ticks 5
 # 상주 뉴스 추출 Consumer(1분 파이프라인, ALPHA-713) — News Job SQS 를 소비해 기사
 # 정본(PG document)을 읽고 tagging/extract 로 추출, feature 존에 결과를 불변 PUT 한다.
+# 그 결과를 배치가 읽는 날짜축 feature 파티션에도 미러한다(ALPHA-900) — 없으면 배치
+# tag-news 가 같은 기사를 다시 유료로 태운다.
 # 추출 성공은 event 계보(source_event 7종 + threading)로 **즉시 단건 조립**된다
 # (ALPHA-727, minute/event_assembly.py — assemble-events 와 같은 결정적 ID·스레드).
 # LLM 설정은 tag-news 와 같은 LLM_* env 관례(기본 base_url·model=DeepSeek).
