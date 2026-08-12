@@ -12,8 +12,9 @@ import java.util.List;
  * 뭉개지 않는 것도 {@link PipelineStatusRepository} 와 같다.
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
- * 축은 조각별로 하나씩 붙었고 <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축 +
- * 경계 축</b>으로 <b>전부 찼다</b>.
+ * 축은 조각별로 하나씩 붙었다 — <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축 +
+ * 경계 축 + 체인 축</b>. 아직 없는 축은 {@code aws_status}(ALPHA-979 조각 2)와
+ * {@code queues[]}(조각 3)이고, 둘 다 원장이 아니라 <b>AWS 제어면</b>을 물어야 나온다.
  *
  * <p>와이어의 <b>데이터셋 축은 여기 없다</b> — 원장에 그 테이블이 없어 작업에서 파생하고, 파생은
  * {@code ConsoleFactsService} 소관이다. 이 인터페이스는 그 재료({@link TaskRow} 뒤쪽 여섯 컬럼)만 낸다.
@@ -32,7 +33,29 @@ public interface ConsoleFactsRepository {
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
-			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary) {
+			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain) {
+	}
+
+	/**
+	 * 설명 생산 체인의 <b>그 날 코호트</b>(ALPHA-979) — 그 날 발화한 트리거가 단계마다 몇 건
+	 * 남았나. 두 목록의 <b>순서가 곧 흐름</b>이다: 소비자는 인접한 두 값을 비교해 감소를 손실로
+	 * 읽는다(R10). 원장에는 단계 사이의 선후가 없어 순서를 복원할 방법이 없다.
+	 *
+	 * <p>수는 전부 {@code long} 이다 — <b>0 이 실측</b>이라서다. 코호트를 정해 놓고 세므로 "못
+	 * 셌다"가 없다. 축 전체가 안 나가는 경우만 부재이고, 그건 이 record 가 {@code null} 인 것이다.
+	 *
+	 * <p>⚠️ <b>단위는 "설명 건수"이지 "발번 건수"가 아니다</b> — 마지막 단계까지 결과를 세고,
+	 * 테넌트 다중도는 여기가 아니라 {@link BoundaryRow} 가 답한다.
+	 */
+	record ChainRow(List<ChainFeed> feeds, List<ChainStage> stages) {
+	}
+
+	/** 체인의 입력 한 갈래. {@code unit} 이 갈래마다 다르다 — 배치는 ETF, 장중은 발화 건이다. */
+	record ChainFeed(String id, String label, String unit, String src, long v) {
+	}
+
+	/** 단계 하나 — 두 갈래를 나란히 낸다. 갈래를 가르는 것은 관측의 트리거 FK 하나뿐이다. */
+	record ChainStage(String id, String label, String src, long batch, long intraday) {
 	}
 
 	/**

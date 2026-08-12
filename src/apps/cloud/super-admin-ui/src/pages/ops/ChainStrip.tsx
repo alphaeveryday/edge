@@ -20,12 +20,13 @@ const DISPLAY_LABEL: Record<string, string> = { 'c.pub': 'Cloud 게시' };
 
 export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
   /* 축이 통째로 없으면 **빈 띠를 그리지 않는다** — 단계가 0개인 흐름은 "아무것도 안 흘렀다"로
-   * 읽히는데, 사실은 이 축의 계측이 없는 것이다(계약 §축별 소스: `chain` 은 소스 0). */
+   * 읽히는데, 사실은 이 응답이 그 축을 안 실은 것이다(계약 §체인 축). 축은 배선돼 있으므로
+   * (ALPHA-979 조각 1) 여기 도달하는 것은 그 축을 안 싣던 배포본을 보고 있다는 뜻이다. */
   if (!chain) {
     return (
       <div className="ops-chain-absent t-xs" style={{ color: 'var(--fg-3)' }}>
-        흐름 단계 집계는 <Absent kind="uninstrumented" /> — 단계별 건수를 세는 계측이 없습니다.
-        구간 손실(R10)도 같은 이유로 판정하지 못합니다.
+        흐름 단계 집계가 이번 응답에 <Absent kind="uninstrumented" /> — 단계별 건수가 오지
+        않았습니다. 구간 손실(R10)도 같은 이유로 판정하지 못합니다.
       </div>
     );
   }

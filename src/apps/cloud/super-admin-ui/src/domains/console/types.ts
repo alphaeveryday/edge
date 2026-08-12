@@ -5,7 +5,7 @@
  * 안 보낸다). 둘을 잇는 어댑터는 **한 곳**이어야 한다(아직 없다 — 화면 조각이 들여온다):
  * 규칙은 화면 도메인을 모르고, 도메인은 규칙을 모른다.
  *
- * 서버가 **안 보내는 축**은 여기에도 없다: `chain`·`queues`·`etfLedger`·`runbook`·`meta.aws`·
+ * 서버가 **안 보내는 축**은 여기에도 없다: `queues`·`etfLedger`·`runbook`·`meta.aws`·
  * `runs[].kind`·`runs[].awsStatus`·`tasks[].maxRetries`. 있는 척 선언하면 어댑터가 `?? []` 로
  * 메우게 되고, 그러면 계측 공백이 실측으로 위조된다.
  */
@@ -18,6 +18,7 @@ export interface ConsoleFactsDto {
   datasets: DatasetDto[];
   outputs: OutputDto[];
   boundary: BoundaryDto;
+  chain: ChainDto;
   meta: MetaDto;
 }
 
@@ -80,6 +81,38 @@ export interface BoundaryDto {
   /** 무효화 통지가 **안 간** 발번만 센다 — 정상 무효화는 여기 안 들어온다 */
   deliveryNowNonpublished: number;
   deliveryRows: number;
+}
+
+/**
+ * 설명 생산 체인 — 그 날 발화한 트리거가 단계마다 몇 건 남았나.
+ *
+ * **두 목록의 순서가 계약이다** — 소비자는 `feeds` 를 각 갈래의 첫 점으로 삼아 `stages` 를
+ * 순서대로 인접 비교해 감소를 손실로 읽는다. `feeds[0]` 이 배치, `feeds[1]` 이 장중이다(위치로
+ * 읽는다 — id 로 찾지 않는다).
+ *
+ * 🔴 **수에 `null` 이 없다.** 코호트를 정해 놓고 세므로 "못 셌다"가 없고, 0 은 **그 단계에서
+ * 사라졌다**는 실측이다. 이 축이 통째로 부재하는 응답(계측 없음)과 0 은 다른 사실이다.
+ */
+export interface ChainDto {
+  feeds: ChainFeedDto[];
+  stages: ChainStageDto[];
+}
+
+/** `unit` 이 갈래마다 다르다 — 배치는 ETF 종수, 장중은 발화 건수다. */
+export interface ChainFeedDto {
+  id: string;
+  label: string;
+  v: number;
+  unit: string;
+  src: string;
+}
+
+export interface ChainStageDto {
+  id: string;
+  label: string;
+  batch: number;
+  intraday: number;
+  src: string;
 }
 
 /** `today` 는 **응답이 실제로 본 날**이다 — 조회 기준일이지 "지금"도 거래일도 아니다.

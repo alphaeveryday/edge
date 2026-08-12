@@ -228,6 +228,15 @@ export const OUTPUT_FIELDS: Record<string, Check> = {
 export const BOUNDARY_FIELDS: Record<string, Check> = {
   publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
 };
+/* 🔴 **체인의 수에는 `null` 자리가 없다.** 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없고,
+ * 0 은 그 단계에서 사라졌다는 실측이다(R10 의 P0). `nullableCount` 를 쓰면 손상된 응답의 `null`
+ * 이 규칙 층까지 흘러가 그 단계만 비교에서 조용히 빠지고, 손실이 "여기는 안 셌구나"로 접힌다. */
+export const CHAIN_FEED_FIELDS: Record<string, Check> = {
+  id: text, label: text, v: count, unit: text, src: text,
+};
+export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
+  id: text, label: text, batch: count, intraday: count, src: text,
+};
 export const META_FIELDS: Record<string, Check> = { db: isoInstant, today: isoDate };
 
 /** 배열 원소는 **객체**여야 한다 — `[null]`·`[1]`·`[[]]` 가 여기서 걸린다. */
@@ -247,7 +256,7 @@ function offendingField(row: Record<string, unknown>, fields: Record<string, Che
  *
  * 검증 범위는 계약이 "검증 경계가 답할 몫"으로 열거한 것이다: 컬렉션 원소가 객체가 아닌 경우 ·
  * 음수·비정수 카운트 · 수여야 할 자리가 수가 아닌 경우 · 문자열·불리언 자리의 타입 · 필수 축의
- * 종류. **서버가 안 보내는 축(`chain`·`runbook`·`meta.aws`)은 검사하지 않는다** — 그건 계측
+ * 종류. **서버가 안 보내는 축(`queues`·`runbook`·`meta.aws`)은 검사하지 않는다** — 그건 계측
  * 공백이지 응답 결함이 아니고, 규칙이 `canRun` 으로 답할 몫이다.
  *
  * 🔴 **과하면 정상 응답을 통째로 버린다.** 서버가 정당하게 내는 `null`(비거래일 런의 거래일 ·
@@ -278,13 +287,31 @@ export function parseFacts(body: unknown): FactsParse {
     if (field) return bad(`${axis}.${field} 의 값이 계약과 다르다`);
   }
 
+  /* 체인만 형상이 둘이다 — 객체 하나 안에 배열이 둘이다. 그래서 위 두 루프 어느 쪽에도 안
+   * 들어간다. **빈 배열도 거부한다**: 소비자는 `feeds[0]`·`feeds[1]` 을 **위치로** 읽으므로
+   * (id 로 찾지 않는다) 갈래가 없는 응답은 그 자리에서 `undefined` 가 되고, 그러면 그 갈래의
+   * 첫 비교점이 사라져 손실 하나가 통째로 안 보인다. 계약상 갈래는 늘 둘이다. */
+  const chain = body.chain;
+  if (!isRow(chain)) return bad('chain 축이 객체가 아니다');
+  for (const [part, fields] of [['feeds', CHAIN_FEED_FIELDS],
+    ['stages', CHAIN_STAGE_FIELDS]] as const) {
+    const rows = chain[part];
+    if (!Array.isArray(rows) || rows.length === 0) return bad(`chain.${part} 가 비었다`);
+    for (const row of rows) {
+      if (!isRow(row)) return bad(`chain.${part} 원소가 객체가 아니다`);
+      const field = offendingField(row, fields);
+      if (field) return bad(`chain.${part}[].${field} 의 값이 계약과 다르다`);
+    }
+  }
+  if ((chain.feeds as unknown[]).length !== 2) return bad('chain.feeds 가 두 갈래가 아니다');
+
   return { ok: true, facts: toFacts(body as unknown as ConsoleFactsDto) };
 }
 
 /**
  * 검증된 와이어 → 엔진 사실. **이름만 바꾼다** — 값을 메우거나 접지 않는다.
  *
- * 서버가 안 보낸 축은 여기서도 안 만든다(`chain`·`runbook`·`meta.aws`). 빈 값으로 채우면
+ * 서버가 안 보낸 축은 여기서도 안 만든다(`queues`·`runbook`·`meta.aws`). 빈 값으로 채우면
  * 계측 없음이 실측으로 위조되고, 규칙이 `못 돎` 대신 `평가됨 · 위반 0` 을 세운다.
  */
 function toFacts(dto: ConsoleFactsDto): Facts {
@@ -336,6 +363,24 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       published_without_delivery: dto.boundary.publishedWithoutDelivery,
       delivery_now_nonpublished: dto.boundary.deliveryNowNonpublished,
       delivery_rows: dto.boundary.deliveryRows,
+    },
+    /* 순서를 **그대로 옮긴다** — 목록 순서가 곧 흐름이라 정렬하거나 id 로 다시 찾으면 서버가
+     * 정한 선후가 사라진다. 원장에는 단계 간 선후가 없어 여기서 복원할 방법도 없다. */
+    chain: {
+      feeds: dto.chain.feeds.map((f) => ({
+        id: f.id,
+        label: f.label,
+        v: f.v,
+        unit: f.unit,
+        src: f.src,
+      })),
+      stages: dto.chain.stages.map((s) => ({
+        id: s.id,
+        label: s.label,
+        batch: s.batch,
+        intraday: s.intraday,
+        src: s.src,
+      })),
     },
     meta: { db: dto.meta.db, today: dto.meta.today },
   };

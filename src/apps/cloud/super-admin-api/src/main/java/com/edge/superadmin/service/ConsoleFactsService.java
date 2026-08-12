@@ -3,6 +3,7 @@ package com.edge.superadmin.service;
 import com.edge.common.exception.GeneralException;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.BoundaryResponse;
+import com.edge.superadmin.dto.ConsoleFactsResponse.ChainResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.DatasetResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.MetaResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.OutputResponse;
@@ -100,6 +101,7 @@ public class ConsoleFactsService {
 				datasets(f.tasks()),
 				f.outputs().stream().map(OutputResponse::from).toList(),
 				BoundaryResponse.from(f.boundary()),
+				ChainResponse.from(f.chain()),
 				new MetaResponse(f.dbNow().toString(), f.today().toString()));
 	}
 

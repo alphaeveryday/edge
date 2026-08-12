@@ -10,6 +10,8 @@ import {
   awsObservation,
   axisOf,
   BOUNDARY_FIELDS,
+  CHAIN_FEED_FIELDS,
+  CHAIN_STAGE_FIELDS,
   DATASET_FIELDS,
   factsAxis,
   META_FIELDS,
@@ -160,6 +162,18 @@ const WIRE = (): ConsoleFactsDto => ({
   }],
   outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
   boundary: { publishedWithoutDelivery: 0, deliveryNowNonpublished: 1, deliveryRows: 114 },
+  /* 네 수를 전부 다르게 둔다 — 갈래(batch↔intraday)나 피드↔단계를 맞바꾸는 변이는 같은 값
+   * 위에서는 안 보인다. 단계도 **둘** 둔다: 하나면 목록 순서를 뒤집는 변이가 no-op 이 된다. */
+  chain: {
+    feeds: [
+      { id: 'feed.batch', label: '배치 트리거', v: 20, unit: 'ETF', src: 'price_movement_trigger' },
+      { id: 'feed.intraday', label: '장중 트리거', v: 65, unit: '건', src: 'minute_price_trigger' },
+    ],
+    stages: [
+      { id: 'c.obs', label: '관측', batch: 18, intraday: 3, src: 'etf_contribution_observation' },
+      { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
+    ],
+  },
   meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
 });
 
@@ -220,20 +234,46 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       delivery_now_nonpublished: 1,
       delivery_rows: 114,
     },
+    chain: {
+      feeds: [
+        { id: 'feed.batch', label: '배치 트리거', v: 20, unit: 'ETF', src: 'price_movement_trigger' },
+        { id: 'feed.intraday', label: '장중 트리거', v: 65, unit: '건', src: 'minute_price_trigger' },
+      ],
+      stages: [
+        { id: 'c.obs', label: '관측', batch: 18, intraday: 3, src: 'etf_contribution_observation' },
+        { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
+      ],
+    },
     meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
   });
 });
 
+test('🔴 체인의 순서를 어댑터가 바꾸지 않는다 — 목록 순서가 곧 흐름이다', () => {
+  /* `deepEqual` 은 순서를 보지만 픽스처가 이미 "옳은" 순서라 정렬을 **넣는** 변이만 잡는다.
+   * 여기서는 **서버가 준 순서가 무엇이든 그대로**임을 잰다 — 어댑터가 id 로 다시 찾거나
+   * 정렬하면, 원장에 단계 간 선후가 없어 복원할 방법이 없는 순서가 조용히 뒤집힌다.
+   * 뒤집힌 순서 위에서 R10 은 감소를 증가로 읽어 **P0 손실을 통째로 놓친다**. */
+  const w = WIRE();
+  w.chain.stages.reverse();
+  const r = parseFacts(w);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(r.facts.chain?.stages.map((s) => s.id), ['c.route', 'c.obs']);
+  assert.deepEqual(r.facts.chain?.stages.map((s) => s.batch), [17, 18]);
+});
+
 test('서버가 안 보낸 축을 어댑터가 만들어 내지 않는다', () => {
-  /* 🔴 `chain: {feeds:[],stages:[]}`·`runbook: {}` 로 메우면 계측 없음이 실측 0 으로 위조되고,
-   * 규칙이 `못 돎` 대신 `평가됨 · 위반 0`("손실 없음")을 세운다 — 이 트랙이 없애려는 칸 혼동이다. */
+  /* 🔴 `queues: []`·`runbook: {}` 로 메우면 계측 없음이 실측 0 으로 위조되고, 규칙이 `못 돎`
+   * 대신 `평가됨 · 위반 0`("봤고 괜찮다")을 세운다 — 이 트랙이 없애려는 칸 혼동이다.
+   * 남은 셋은 전부 **AWS 제어면**이라 ALPHA-979 조각 2·3 이 닫는다. */
   const r = parseFacts(WIRE());
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.equal(r.facts.chain, undefined, 'chain 축을 만들어 냈다');
   assert.equal(r.facts.runbook, undefined, 'runbook 축을 만들어 냈다');
   assert.equal(r.facts.meta.aws, undefined, 'AWS 관측 시각을 만들어 냈다');
   assert.equal(r.facts.queues, undefined, 'queues 축을 만들어 냈다');
+  /* 체인은 이제 **온다** — 이 단언이 없으면 위 셋을 지키느라 축을 통째로 떨구는 회귀가 초록이다 */
+  assert.notEqual(r.facts.chain, undefined, 'chain 축을 떨궜다');
 });
 
 test('런 행이 없는 슬롯의 계획 표시는 실린 것만 옮긴다', () => {
@@ -346,7 +386,46 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.datasets[0], DATASET_FIELDS, 'datasets');
   both(w.outputs[0], OUTPUT_FIELDS, 'outputs');
   both(w.boundary, BOUNDARY_FIELDS, 'boundary');
+  both(w.chain.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
+  both(w.chain.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
   both(w.meta, META_FIELDS, 'meta');
+});
+
+test('🔴 거부 — 체인의 수 자리에 null 이 오면 버린다 (그 단계만 비교에서 사라진다)', () => {
+  /* 이 축에는 `null` 자리가 없다 — 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없다.
+   * 통과시키면 규칙이 그 단계만 조용히 건너뛰고, **손실이 "여기는 안 셌구나"로 접힌다**.
+   * 갈래 하나만 망가진 응답도 같다: 나머지 갈래가 멀쩡해 화면은 정상으로 보인다. */
+  for (const [name, mutate] of [
+    ['stages[].batch 가 null', (w: ConsoleFactsDto) =>
+      { (w.chain.stages[0] as { batch: unknown }).batch = null; }],
+    ['stages[].intraday 가 null', (w: ConsoleFactsDto) =>
+      { (w.chain.stages[0] as { intraday: unknown }).intraday = null; }],
+    ['feeds[].v 가 null', (w: ConsoleFactsDto) => { (w.chain.feeds[0] as { v: unknown }).v = null; }],
+    ['feeds[].v 가 NaN', (w: ConsoleFactsDto) => { w.chain.feeds[0].v = NaN; }],
+    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain.stages[0].batch = -1; }],
+    ['stages[].label 이 null', (w: ConsoleFactsDto) =>
+      { (w.chain.stages[0] as { label: unknown }).label = null; }],
+    ['chain 이 배열', (w: ConsoleFactsDto) => { (w as { chain: unknown }).chain = []; }],
+    ['chain.stages 가 객체', (w: ConsoleFactsDto) => { (w.chain as { stages: unknown }).stages = {}; }],
+    ['chain.stages 원소가 스칼라', (w: ConsoleFactsDto) =>
+      { (w.chain.stages as unknown[])[0] = 1; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('🔴 거부 — 갈래가 둘이 아닌 체인은 버린다 (소비자가 위치로 읽는다)', () => {
+  /* `feeds[0]`=배치·`feeds[1]`=장중은 **위치 계약**이다(id 로 찾지 않는다). 한 갈래만 오면
+   * 그 자리가 `undefined` 가 되어 그 갈래의 첫 비교점이 사라지고, 트리거→관측 사이의 손실이
+   * 통째로 안 보인다 — 값이 틀리는 게 아니라 **묻는 것을 안 묻게** 된다. */
+  assert.equal(broken((w) => { w.chain.feeds.pop(); }).ok, false, '갈래 하나짜리를 통과시켰다');
+  assert.equal(broken((w) => { w.chain.feeds = []; }).ok, false, '빈 피드를 통과시켰다');
+  assert.equal(broken((w) => { w.chain.stages = []; }).ok, false, '빈 단계 목록을 통과시켰다');
+  assert.equal(
+    broken((w) => { w.chain.feeds.push({ ...w.chain.feeds[0], id: 'feed.third' }); }).ok,
+    false,
+    '셋째 갈래를 통과시켰다 — 위치 계약이 무너진다',
+  );
 });
 
 test('거부 — 안전 정수 범위를 넘은 건수는 이미 손상된 값이다', () => {

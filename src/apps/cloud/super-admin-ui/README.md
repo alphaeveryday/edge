@@ -98,7 +98,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `domains/sources/` 파생 6 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤) |
 | `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
 | `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
-| `pages/ops/` 판정 10 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
+| `pages/ops/` 판정 11 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4·ALPHA-979 조각 1). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `chainView`(장중 갈래가 입구에서 사라졌는가 — **관측 결과이지 축의 유무가 아니다**) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
 
 ⚠️ **판정을 `.tsx` 에 두지 않는다.** `pnpm --filter super-admin-ui test` 는 `node --test
 'src/**/*.test.ts'` 라 **`.tsx` 를 아예 안 집는다** — 화면 파일 안의 분기는 변이를 걸어도 하나도

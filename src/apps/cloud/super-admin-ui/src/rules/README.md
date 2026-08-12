@@ -169,7 +169,7 @@ import 에 확장자를 붙인다.
 | 티켓 | 무엇 | 되살아나는 규칙 |
 |---|---|---|
 | [ALPHA-978](https://alphaeveryday.atlassian.net/browse/ALPHA-978) | 원장이 안 쓰는 판정 축 — per-ETF outcome · 재시도 정책 필드 · `actual_as_of` writer · 완전성 분모(엔티티 축만) | R07 · R08 · R15 · R16 |
-| [ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) | facts 응답이 안 싣는 축 — `aws_status` · `queues[]` · `chain` | R03 · R10 · R12 |
+| [ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) | facts 응답이 안 싣는 축 — `aws_status` · `queues[]` · ~~`chain`~~ | R03 · R12 (~~R10~~ ✅) |
 | [ALPHA-980](https://alphaeveryday.atlassian.net/browse/ALPHA-980) | 선언·등록물 — 큐→구독 매핑 · 런북 등록(R17~R19 포함) · 런 kind | R11 (+ 런북 표면) |
 
 ❌ **[ALPHA-981](https://alphaeveryday.atlassian.net/browse/ALPHA-981)(`GRID_SQL` 에 `t.dataset` 한
@@ -195,8 +195,12 @@ import 에 확장자를 붙인다.
 작업의 `dataset` 을 옮겨도 화면 행이 조용히 그대로다. `원장 dataset 값은 정확히 한 화면 행으로
 접힌다` 단언으로 막았다(변이 실증: 그 변이가 새 단언만 죽이고 기존 8건은 초록이었다).
 
-🔴 **지금 19규칙 중 여덟(R03·R07·R08·R10·R11·R12·R15·R16)이 `evaluated: false`** 다. 화면은 그걸
+🔴 **지금 19규칙 중 일곱(R03·R07·R08·R11·R12·R15·R16)이 `evaluated: false`** 다. 화면은 그걸
 "못 돎"으로 정직하게 그리지만, 운영자에게는 **그 축을 아무도 안 보고 있다**는 뜻이다.
+✅ R10 은 여덟째였다 — ALPHA-979 **조각 1**(`chain` 축)이 배선하며 빠졌다. 티켓 행은 남는다:
+남은 두 축(`aws_status`·`queues[]`)이 AWS 제어면이라 조각 2·3 으로 이어진다.
+⚠️ R10 이 도는 것과 R10 이 **옳게** 도는 것은 다르다 — 진행 중인 하루의 감소는 "아직 처리 중"과
+"사라졌다"가 같은 모양이고, 그걸 가르는 사실이 원장에 없다(계약 §체인 축의 천장).
 ⚠️ R13 도 `dep` 이 있지만 **계측 공백이 아니다** — "오늘 판정할 산출이 없다"는 조건부 사유라
 날마다 갈린다. 위 여덟과 같이 세면 안 된다.
 

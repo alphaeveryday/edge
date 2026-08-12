@@ -398,6 +398,45 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertIssue(id, "PLANNER_MISSING", "slot", runKey, status);
 	}
 
+	/**
+	 * 그 날 그 종목의 <b>장중 트리거</b> 한 건. {@code kind} 로 {@code FIRE}/{@code REVERT} 를
+	 * 가른다 — 체인의 피드는 발화만 세야 하고, 그 계약은 회수 행을 실제로 넣어야만 재진다.
+	 *
+	 * <p>세션은 {@code (dataset, source_group, session_date)} 이 UNIQUE 라 날짜마다 하나로 접는다.
+	 * {@code window_start} 는 <b>KST 장중 시각</b>이다 — 체인이 그 값의 KST 날짜로 자르므로 UTC 로
+	 * 적으면 하루가 밀린다.
+	 */
+	private void insertMinuteTrigger(String id, String sessionDate, String entity, String kind,
+			String windowStart) {
+		jdbc.update("""
+				INSERT INTO minute_ingestion_session (session_id, dataset, source_group,
+				       session_date, universe_version, universe_hash, expected_window_count)
+				VALUES (?, 'price_minute', 'toss', ?::date, 'u1', 'h1', 391)
+				ON CONFLICT (dataset, source_group, session_date) DO NOTHING
+				""", "sess-" + sessionDate, sessionDate);
+		jdbc.update("""
+				INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id, window_start,
+				       generation, detection_policy_version, open_price, close_price, change_rate,
+				       threshold, cooldown_bucket, trigger_kind)
+				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?)
+				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind);
+	}
+
+	/** {@code uq_minute_price_trigger_cooldown (entity_id, cooldown_bucket)} 을 피한다. */
+	private long minuteTriggerSeq = 1;
+
+	/**
+	 * 장중 갈래의 관측을 그 분봉 트리거에 매단다 — {@link #insertPublished} 의 배치 갈래와 같은
+	 * 사슬이되 트리거 축만 다르다({@code ck_etf_contribution_one_trigger} — 정확히 하나).
+	 */
+	private void insertIntradayObservation(String id, String minuteTriggerId, String at) {
+		jdbc.update("""
+				INSERT INTO etf_contribution_observation (contribution_observation_id,
+				       minute_price_trigger_id, available_at, data_version)
+				VALUES (?,?,?::timestamptz,'d1')
+				""", id, minuteTriggerId, at);
+	}
+
 	private void insertIssue(String id, String type, String scope, String scopeKey, String status) {
 		jdbc.update("""
 				INSERT INTO ops_reconciliation_issue (issue_id, issue_type, scope, scope_key,
@@ -1464,6 +1503,117 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
 			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
 		});
+	}
+
+	/**
+	 * 🔴 <b>체인의 날짜 축은 트리거 하나뿐이다.</b> 단계마다 자기 테이블을 자기 날짜 컬럼으로 따로
+	 * 세면 서로 <b>다른 무리</b>를 센 수가 나란히 서고, 인접 비교(R10)가 없는 손실을 만든다.
+	 * 그래서 하류 행의 날짜를 <b>일부러 다른 날로</b> 밀어 둔다 — 어느 단계든 날짜로 거르는 순간
+	 * 그 단계가 0 이 되어 이 단언이 깨진다.
+	 *
+	 * <p>순서도 여기서 못 박는다. 목록 순서가 곧 흐름이고 원장에는 단계 간 선후가 없어, 순서를
+	 * 재배치하는 편집은 <b>어떤 값 단언도 안 깨뜨린 채</b> 손실 판정만 뒤섞는다.
+	 */
+	@Test
+	void 체인은_그_날_트리거의_자손을_날짜와_무관하게_끝까지_따라간다() {
+		insertPublished("res-a", "2026-08-03", "etf-a", "PUBLISHED");
+		/* 게시본의 거래일을 이틀 뒤로 민다 — 트리거는 08-03 에 있고 결과 행만 다른 날짜를 단다.
+		 * 실제로도 두 컬럼은 다른 사건의 날짜라(트리거는 발화일, 결과는 설명 대상 거래일) 갈릴 수
+		 * 있고, 갈렸을 때 코호트가 끊기면 안 된다. */
+		jdbc.update("UPDATE explanation_result SET trade_date = '2026-08-05'::date"
+				+ " WHERE explanation_result_id = 'res-a'");
+		deliverNew(insertTenant("t1"), "res-a");
+
+		var chain = repository.facts(LocalDate.parse("2026-08-03")).chain();
+
+		assertThat(chain.feeds()).extracting(f -> f.id()).containsExactly("feed.batch",
+				"feed.intraday");
+		assertThat(chain.stages()).extracting(s -> s.id()).containsExactly("c.obs", "c.route",
+				"c.run", "c.res", "c.pub", "c.dlv");
+		assertThat(chain.feeds().get(0).v()).isEqualTo(1L);
+		assertThat(chain.stages()).extracting(s -> s.batch()).containsOnly(1L);
+	}
+
+	/**
+	 * 갈래를 가르는 것은 <b>관측의 트리거 FK 하나</b>다 — 그 아래 단계에는 배치/장중을 가르는
+	 * 컬럼이 없다. 두 갈래를 <b>다른 수</b>로 두어야 갈래를 맞바꾸는 변이가 보인다.
+	 *
+	 * <p>🔴 <b>회수({@code REVERT}) 행은 피드가 아니다.</b> 노출을 <b>끝낸</b> 마커라 설명을 만들지
+	 * 않고 큐로도 안 나간다(ALPHA-799). 종류를 안 거르면 그 writer 가 착지하는 날 피드만 조용히
+	 * 부풀어 <b>없던 체인 손실</b>이 P0 로 선다. 지금 원장에 REVERT 가 0행이라 이 단언이 그 계약을
+	 * 지키는 유일한 자리다.
+	 */
+	@Test
+	void 장중_갈래는_발화_트리거만_세고_관측이_갈래를_가른다() {
+		insertPublished("res-b", "2026-08-03", "etf-b", "PUBLISHED");   // 배치 갈래 1건
+		insertMinuteTrigger("m1", "2026-08-03", "etf-c", "FIRE", "2026-08-03T09:31:00+09:00");
+		insertMinuteTrigger("m2", "2026-08-03", "etf-c", "FIRE", "2026-08-03T10:31:00+09:00");
+		insertMinuteTrigger("m3", "2026-08-03", "etf-c", "REVERT", "2026-08-03T11:31:00+09:00");
+		insertIntradayObservation("co-m1", "m1", "2026-08-03T09:32:00+09:00");
+
+		var chain = repository.facts(LocalDate.parse("2026-08-03")).chain();
+
+		assertThat(chain.feeds().get(0).v()).isEqualTo(1L);   // 배치 트리거
+		assertThat(chain.feeds().get(1).v()).isEqualTo(2L);   // 장중 발화 둘 — 회수는 안 센다
+		var obs = chain.stages().get(0);
+		assertThat(obs.batch()).isEqualTo(1L);
+		assertThat(obs.intraday()).isEqualTo(1L);
+		// 장중은 관측 뒤가 비었다 — 이것이 R10 이 P0 로 읽는 실제 형상이다.
+		assertThat(chain.stages().get(1).intraday()).isEqualTo(0L);
+	}
+
+	/**
+	 * 🔴 <b>단계의 단위는 "설명 건수"이지 "행 수"가 아니다.</b> 두 자리에서 행이 불어난다 —
+	 * 발번은 <b>테넌트마다</b> 한 행이고, 한 경로에 런이 여럿일 수 있다({@code explanation_route_id}
+	 * 에 UNIQUE 가 없다 — 재실행).
+	 *
+	 * <p>전자를 그대로 세면 테넌트가 둘인 순간 전달 단계가 설명 수의 두 배가 되어 단위가 조용히
+	 * 바뀐다. dev 는 테넌트가 하나라 <b>실물에서는 잠복</b>이다 — 여기서만 재진다.
+	 */
+	@Test
+	void 테넌트_다중도와_재실행이_단계_수를_부풀리지_않는다() {
+		insertPublished("res-c", "2026-08-03", "etf-d", "PUBLISHED");
+		deliverNew(insertTenant("t-one"), "res-c");
+		deliverNew(insertTenant("t-two"), "res-c");
+		/* 같은 경로의 둘째 런 — 경로·관측은 그대로 1 이어야 하고 런만 2 다. */
+		jdbc.update("""
+				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
+				       bundle_version, explanation_as_of, run_status, started_at)
+				VALUES ('run-c2', 'rt-res-c', 'v1', '2026-08-03T16:00:00+09:00'::timestamptz,
+				        'RUNNING', '2026-08-03T16:00:00+09:00'::timestamptz)
+				""");
+
+		var chain = repository.facts(LocalDate.parse("2026-08-03")).chain();
+
+		assertThat(chain.stages().get(0).batch()).isEqualTo(1L);   // c.obs
+		assertThat(chain.stages().get(1).batch()).isEqualTo(1L);   // c.route — 런이 둘이어도 1
+		assertThat(chain.stages().get(2).batch()).isEqualTo(2L);   // c.run — 재실행은 실제로 둘
+		assertThat(chain.stages().get(3).batch()).isEqualTo(1L);   // c.res
+		assertThat(chain.stages().get(5).batch()).isEqualTo(1L);   // c.dlv — 테넌트 둘, 설명 하나
+	}
+
+	/**
+	 * 다른 날 트리거는 코호트 밖이다 — 날짜 술어를 지우는 변이를 잡는다.
+	 *
+	 * <p>⚠️ <b>못 잡는 변이를 밝혀 둔다</b>: 장중 축의 {@code AT TIME ZONE 'Asia/Seoul'} 을 지워
+	 * UTC 날짜로 읽어도 이 테스트는 통과한다. 정규장은 09:00~15:30 KST = 00:00~06:30 UTC 라
+	 * <b>두 시간대의 날짜가 같다</b> — 갈리려면 KST 00:00~08:59 의 발화가 있어야 하는데 세션이 그
+	 * 시간대에 안 열린다. 없는 행을 지어내 죽이는 대신, 그 표현식이 <b>세션 시간이 바뀌면 비로소
+	 * 값을 갖는 방어</b>임을 여기 적는다(같은 판단: 산출 축의 {@code skip_reason} 리터럴).
+	 */
+	@Test
+	void 다른_날의_트리거는_코호트에_안_들어온다() {
+		insertTrigger("trg-yesterday", "2026-08-02", "etf-e");
+		insertTrigger("trg-today", "2026-08-03", "etf-e");
+		insertMinuteTrigger("m-yesterday", "2026-08-02", "etf-f", "FIRE",
+				"2026-08-02T09:31:00+09:00");
+
+		var yesterday = repository.facts(LocalDate.parse("2026-08-02")).chain();
+		assertThat(yesterday.feeds().get(0).v()).isEqualTo(1L);
+		assertThat(yesterday.feeds().get(1).v()).isEqualTo(1L);
+		var today = repository.facts(LocalDate.parse("2026-08-03")).chain();
+		assertThat(today.feeds().get(0).v()).isEqualTo(1L);
+		assertThat(today.feeds().get(1).v()).isEqualTo(0L);
 	}
 
 	/** 원장이 비면 DB 시계의 KST 오늘 — 날짜가 없으면 화면이 "무엇을 본 응답인가"를 못 말한다. */

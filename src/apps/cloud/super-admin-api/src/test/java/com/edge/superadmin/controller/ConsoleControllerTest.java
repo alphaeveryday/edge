@@ -5,6 +5,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
+import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
@@ -54,18 +57,45 @@ class ConsoleControllerTest {
 	/** 경계가 정합인 기본값 — 그 축을 안 겨누는 테스트가 값에 신경 쓰지 않게. */
 	private static final BoundaryRow CLEAN = new BoundaryRow(0L, 0L, 0L);
 
+	/**
+	 * 아무것도 안 흐른 체인 — 체인 축을 안 겨누는 테스트의 기본값.
+	 *
+	 * <p>목록을 <b>비우지 않는다</b>. 빈 목록은 "단계를 하나도 안 셌다"라 소비자가 인접 비교를
+	 * 통째로 건너뛰고, 그러면 다른 축을 겨눈 테스트들이 <b>체인이 없어도 통과하는</b> 응답 위에서
+	 * 돈다 — 축이 사라지는 회귀를 잡을 자리가 없어진다.
+	 */
+	private static final ChainRow EMPTY_CHAIN = chain(0L, 0L, 0L, 0L);
+
 	private FakeConsoleFactsRepository repository;
 
 	private static ConsoleFacts facts(RunRow... runs) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of(), CLEAN);
+		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of(), CLEAN,
+				EMPTY_CHAIN);
 	}
 
 	private static ConsoleFacts factsWithTask(TaskRow... tasks) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks), List.of(), CLEAN);
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks), List.of(), CLEAN,
+				EMPTY_CHAIN);
 	}
 
 	private static ConsoleFacts factsWithOutput(OutputRow... outputs) {
-		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(outputs), CLEAN);
+		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(outputs), CLEAN,
+				EMPTY_CHAIN);
+	}
+
+	/**
+	 * 피드 둘 + 단계 하나짜리 체인. <b>네 수를 전부 다르게</b> 받는다 — 같은 값을 두면 갈래
+	 * 맞바꿈(batch↔intraday)도 피드↔단계 맞바꿈도 안 보인다.
+	 */
+	private static ChainRow chain(long feedBatch, long feedIntraday, long obsBatch,
+			long obsIntraday) {
+		return new ChainRow(
+				List.of(new ChainFeed("feed.batch", "배치 트리거", "ETF", "price_movement_trigger",
+								feedBatch),
+						new ChainFeed("feed.intraday", "장중 트리거", "건", "minute_price_trigger",
+								feedIntraday)),
+				List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", obsBatch,
+						obsIntraday)));
 	}
 
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
@@ -169,12 +199,55 @@ class ConsoleControllerTest {
 	@Test
 	void 경계_축은_수_셋을_그대로_싣는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(),
-				new BoundaryRow(2L, 5L, 114L)))
+				new BoundaryRow(2L, 5L, 114L), EMPTY_CHAIN))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.boundary.publishedWithoutDelivery").value(2))
 				.andExpect(jsonPath("$.result.boundary.deliveryNowNonpublished").value(5))
 				.andExpect(jsonPath("$.result.boundary.deliveryRows").value(114));
+	}
+
+	/**
+	 * 체인 축은 <b>두 목록의 순서가 곧 흐름</b>이다 — 소비자가 인접한 두 값을 비교해 감소를 손실로
+	 * 읽는다. 순서를 뒤집는 편집은 어떤 값 단언도 안 깨뜨리므로 <b>위치를 직접 못 박는다</b>
+	 * ({@code feeds[0]}=배치 · {@code feeds[1]}=장중).
+	 *
+	 * <p>네 수를 전부 다르게 둔다 — 갈래를 맞바꾸거나 피드와 단계를 맞바꾸는 변이가 같은 값
+	 * 위에서는 안 보인다.
+	 */
+	@Test
+	void 체인_축은_피드와_단계를_순서대로_싣는다() throws Exception {
+		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
+				chain(20L, 65L, 18L, 3L)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.chain.feeds[0].id").value("feed.batch"))
+				.andExpect(jsonPath("$.result.chain.feeds[0].v").value(20))
+				.andExpect(jsonPath("$.result.chain.feeds[0].unit").value("ETF"))
+				.andExpect(jsonPath("$.result.chain.feeds[1].id").value("feed.intraday"))
+				.andExpect(jsonPath("$.result.chain.feeds[1].v").value(65))
+				.andExpect(jsonPath("$.result.chain.feeds[1].unit").value("건"))
+				.andExpect(jsonPath("$.result.chain.stages[0].id").value("c.obs"))
+				.andExpect(jsonPath("$.result.chain.stages[0].label").value("관측"))
+				.andExpect(jsonPath("$.result.chain.stages[0].src")
+						.value("etf_contribution_observation"))
+				.andExpect(jsonPath("$.result.chain.stages[0].batch").value(18))
+				.andExpect(jsonPath("$.result.chain.stages[0].intraday").value(3));
+	}
+
+	/**
+	 * 🔴 <b>체인의 0 은 실측이다</b> — 코호트를 정해 놓고 세므로 "못 셌다"가 없고, 단계가 0 이면
+	 * 그 앞 단계에서 <b>사라졌다</b>는 뜻이다(R10 의 P0). 그래서 이 축에는 {@code null} 자리가
+	 * 없고, 0 을 부재로 접어 필드를 빼면 손실이 "아직 계측이 없구나"로 읽힌다.
+	 */
+	@Test
+	void 체인의_0_은_필드를_빼지_않는다() throws Exception {
+		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
+				chain(20L, 65L, 0L, 0L)))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"batch\":0")))
+				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"intraday\":0")));
 	}
 
 	/**

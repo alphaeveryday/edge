@@ -6,6 +6,7 @@
 import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { ChainStrip } from './ChainStrip';
+import { intradayLostAtEntry } from './chainView';
 import { Absent, AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import '../../styles/ops.css';
 
@@ -43,9 +44,11 @@ export function ChainPage() {
         <ChainStrip chain={q.facts.chain} />
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            {/* "장중 갈래가 전량 사라진다"는 **관측 문장**이라 축이 있을 때만 쓴다 — 단계 집계가
-                없는 응답에서 그대로 두면 이번 응답이 하지 않은 관측을 화면이 단정한다. */}
-            {q.facts.chain && (
+            {/* 🔴 이 문장은 **관측 결과**다 — 축이 있는지가 아니라 **이번 응답의 값**이 정한다.
+                축이 오기 전에는 "축이 있으면 참"이었지만(목 스냅샷이 늘 0 이었다) 이제 실 원장이
+                오므로, 조건을 값에서 다시 세운다: 장중이 발화했는데 관측이 0 인 날에만 참이다.
+                안 그러면 장중 계보가 살아난 날 화면이 "전량 사라진다"를 계속 단정한다. */}
+            {intradayLostAtEntry(q.facts.chain) && (
               <>
                 장중 갈래는 관측 단계에서 전량이 사라집니다 — 체인에서 실패한 것이 아니라 체인에
                 들어가지 못한 것입니다.{' '}
