@@ -210,7 +210,11 @@
 > 인자로 받는다). 무변경이면 no-op 이고, 교체할 땐 직전 객체를 `.bak-<run_id>` 로 남긴다.
 > **거래일 07:30 KST 이후엔 스스로 거부한다** — 세션이 이미 그 유니버스로 계획됐을 수 있고,
 > 그러면 원장의 (universe_version, universe_hash) 는 옛 값에 고정된 채 객체만 바뀌어
-> worker·consumer 가 매 틱 blocked 로 돈다. 아직 스케줄 배선은 없어 수동 실행이다(후속).
+> worker·consumer 가 매 틱 blocked 로 돈다. 이 스텝은 **장전 레인**(ALPHA-963,
+> `premarket_pipeline.tf`)이 평일 07:00 KST 에 부른다 — `ingest-raw-etf --source krx`
+> → `normalize-etf` → `build-minute-universe` 체인이다. 그 레인은 **원장 밖**이라
+> (같은 CLI 를 시장 레인이 이미 소유해 `by_cli` 가 갈리지 않는다) Reconciler 백스톱이
+> 없고, 대신 알람 셋이 실패 지점을 나눠 본다(SFN 실패·타임아웃·스케줄러 DLQ 도착).
 > 객체 없이 스케일업하면 worker·consumer 는 기동 거부(fail-loud)다.
 > ⚠️ **수집 축과 판정 축은 다르다**(ALPHA-842). `unit_ids`(수집) = 판정 ETF + 구성종목 +
 > **참조 계열**(`sector_etf_ids`)이고, 트리거 판정은 `etf_ids` 만 받는다 — 층 분해의 섹터
@@ -1418,7 +1422,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 반영까지 하는 것은 **스텝**이다(ALPHA-953). 쓸 자리는 소비자와 같은 `--universe` URI 를
 # 인자로 받는다 — 상수로 박으면 var.minute_universe_uri 가 옮겨졌을 때 생산자와 소비자가
 # 둘 다 exit 0 으로 갈린다. 무변경이면 no-op(PUT 자체를 안 한다), 교체하면 직전 객체를
-# `<uri>.bak-<run_id>` 로 남긴다. 아직 스케줄 배선은 없다 — 수동 실행이다(후속).
+# `<uri>.bak-<run_id>` 로 남긴다. 평일 07:00 KST 에 장전 레인(ALPHA-963)이 이 스텝을
+# 부르므로 아래는 **수동 회수·확인용**이다(예: 그 런이 실패한 날).
 AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
   uv run --package data-pipeline python -m data_pipeline.run build-minute-universe \

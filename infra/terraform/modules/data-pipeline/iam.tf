@@ -283,7 +283,8 @@ resource "aws_iam_role_policy" "scheduler" {
     Statement = [
       {
         # 운영 원장(ALPHA-530): daily·reconcile 스케줄이 Planner/Reconciler ECS 태스크를 띄운다.
-        # StartExecution 은 이제 스케줄러가 아니라 Planner(ops_task 역할)가 소유한다(스펙 §5).
+        # StartExecution 은 **원장을 타는 레인에선** 스케줄러가 아니라 Planner(ops_task 역할)가
+        # 소유한다(스펙 §5). 예외는 장전 레인 하나뿐이고 아래에 그 문장이 따로 있다.
         Effect = "Allow"
         Action = ["ecs:RunTask"]
         # 1분 세션 스케일 오케스트레이션(ALPHA-712)도 같은 스케줄러 역할로 뜬다 —
@@ -294,6 +295,16 @@ resource "aws_iam_role_policy" "scheduler" {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
         Resource = [aws_iam_role.execution.arn, aws_iam_role.ops_task.arn, aws_iam_role.minute_session.arn]
+      },
+      {
+        # 장전 유니버스 레인(ALPHA-963)만 스케줄러가 SFN 을 **직접** 시작한다 — 그 레인은
+        # 원장 밖이라 Planner 를 안 거치기 때문이다(premarket_pipeline.tf 도입부).
+        # ⚠️ 이 SFN **하나로 한정**한다. 목록을 넓히면 원장을 타야 할 레인이 Planner 를
+        # 건너뛰고 시작될 수 있는 문이 열리고, 그 실행은 expected_task 없이 돌아 원장에
+        # 안 보인다 — 그건 조용한 실패다(스펙 §5 가 StartExecution 을 Planner 로 모은 이유).
+        Effect   = "Allow"
+        Action   = ["states:StartExecution"]
+        Resource = [aws_sfn_state_machine.premarket.arn]
       },
       {
         # 전달 실패 이벤트를 DLQ 로 흘린다(스펙 §5).

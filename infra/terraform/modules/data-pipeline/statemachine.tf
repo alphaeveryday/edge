@@ -358,7 +358,12 @@ locals {
       # investor_intraday_* 페이즈(ALPHA-769)도 같다 — investor_intraday_pipeline.tf 가 고른 부분집합이다.
       investor_intraday_raw       = local.investor_intraday_raw_jobs,
       investor_intraday_normalize = local.investor_intraday_normalize_jobs,
-      investor_intraday_feature   = local.investor_intraday_feature_jobs
+      investor_intraday_feature   = local.investor_intraday_feature_jobs,
+      # premarket_* 페이즈(ALPHA-963) — premarket_pipeline.tf 소관. 앞 둘은 부분집합
+      # 재사용이고 `premarket_universe` 만 그 파일이 새로 정의한 잡이다.
+      premarket_raw       = local.premarket_raw_jobs,
+      premarket_normalize = local.premarket_normalize_jobs,
+      premarket_universe  = local.premarket_universe_jobs
     } :
     phase => [
       for job in jobs : {
