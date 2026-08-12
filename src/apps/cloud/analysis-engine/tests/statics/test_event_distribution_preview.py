@@ -614,3 +614,88 @@ def test_duplicate_tool_calls_are_refused_without_consuming_budget(monkeypatch):
     # 반려 사유가 되물음에 실려 다음 단계로 유도한다. 예산 표기는 실행분만 센다.
     assert sum("[도구 반려]" in u for u in seen_users) >= 1
     assert not any("[ObjectSet 결과 3/" in u for u in seen_users)
+
+
+def test_duplicate_refusal_cap_forces_submission_and_is_observed(monkeypatch):
+    """중복 교정 상한(2회) 초과는 제출 단계로 강제 전환된다 - 무한 왕복 방지가 이
+    가드의 존재 이유라 상한 경로 자체를 단언한다(리뷰 R1). 반려는 rejects·
+    tool_result 로 관측된다(Rule 12 - 가드가 끊은 런과 정상 제출 런이 원장에서
+    구분돼야 한다)."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    listopt = {"tool": "hypothesis.list_options", "arguments": {}}
+    replies = iter((
+        dict(listopt), dict(listopt), dict(listopt),   # 실행 1 + 반려 2
+        dict(listopt),                                  # 상한 초과 - _OBJECT_DONE
+        {"hypotheses": []},                             # 제출 단계(미제출)
+        {"hypotheses": []},                             # 재질의 턴
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        return next(replies)
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    assert valid == []
+    assert runtime_calls == ["hypothesis.list_options"]   # 실행은 1회뿐
+    final_user = seen_users[-1]
+    assert final_user.count("[도구 반려]") == 2            # 상한 2회까지만 교정
+    assert "도구 사용을 종료" in final_user or "hypotheses" in final_user
+
+
+def test_failed_call_may_be_retried_with_identical_arguments(monkeypatch):
+    """직전 호출이 실패(ok=false)였다면 동일 인자 재시도는 정당하다 - 일시 오류
+    복구 경로를 가드가 없애면 안 된다(리뷰 R1)."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+    calls: list[str] = []
+    flaky = {"n": 0}
+    inner_call = runtime.call
+
+    def flaky_call(name, arguments):
+        calls.append(name)
+        flaky["n"] += 1
+        if flaky["n"] == 1:
+            return {"ok": False, "error": "EXECUTION_FAILED"}
+        return inner_call(name, arguments)
+
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 실패
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 재시도 - 실행돼야 함
+        {"hypotheses": []},
+        {"hypotheses": []},
+    ))
+
+    def ask(system, user):
+        return next(replies)
+
+    propose(ask, facts="f", event_types=["CONTRACT.CANCEL"],
+            object_tools={"specs": runtime.tool_specs(), "call": flaky_call,
+                          "resolve_preview": runtime.resolve,
+                          "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM})
+
+    assert calls == ["hypothesis.list_options", "hypothesis.list_options"]

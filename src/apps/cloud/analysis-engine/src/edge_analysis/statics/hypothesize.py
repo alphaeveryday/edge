@@ -437,20 +437,32 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
     tool_summaries: list[dict[str, object]] = []
     previewable_options = False
     last_call: tuple[str, str] | None = None
+    last_call_ok = False
     duplicate_refusals = 0
     out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
         if not name:
             break
+        if used >= budget:
+            # 예산 검사가 인자 추출보다 먼저다 - 소진 상태의 비정형 인자가
+            # ModelShapeError 로 제안 전체를 죽이면 정직 종료 계약이 깨진다.
+            user += _OBJECT_DONE
+            out = ask_checked(ask, system, user)
+            break
         arguments = object_field(out, "arguments")
-        # 직전과 동일한 호출은 실행·예산 소모 없이 교정한다(ALPHA-970 실측 2건:
-        # objectset.create 6연발, 가드 후엔 list_options 6연발 - 도구가 결정론이라
-        # 반복은 순수 낭비인데 예산을 태우면 preview 에 쓸 라운드가 사라진다).
+        # 직전과 동일하고 **성공했던** 호출은 실행·예산 소모 없이 교정한다(ALPHA-970
+        # 실측 2건: objectset.create 6연발, 가드 후엔 list_options 6연발 - 도구가
+        # 결정론이라 성공 반복은 순수 낭비인데 예산을 태우면 preview 라운드가
+        # 사라진다). 직전이 실패였다면 재시도는 정당하다(일시 오류 복구 경로 보존).
         # 교정 상한을 두 번만 주고 그 뒤엔 제출 단계로 넘긴다(무한 왕복 방지).
         key = (name, json.dumps(arguments, ensure_ascii=False, sort_keys=True))
-        if key == last_call:
+        if key == last_call and last_call_ok:
             duplicate_refusals += 1
+            rejects += 1
+            summary = {"tool": name, "ok": False, "error": "DUPLICATE_TOOL_CALL"}
+            tool_summaries.append(summary)
+            record("hypothesis.tool_result", **summary)   # 반려도 관측이다(Rule 12)
             if duplicate_refusals > MAX_DUPLICATE_REFUSALS:
                 user += _OBJECT_DONE
                 out = ask_checked(ask, system, user)
@@ -461,12 +473,9 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
             out = ask_checked(ask, system, user)
             continue
         last_call = key
-        if used >= budget:
-            user += _OBJECT_DONE
-            out = ask_checked(ask, system, user)
-            break
         used += 1
         res = call(name, arguments)
+        last_call_ok = bool(res.get("ok"))
         if name == "hypothesis.list_options":
             generic_options = (res.get("triggers") and res.get("outcomes")
                                and res.get("layers") and res.get("exposures"))
