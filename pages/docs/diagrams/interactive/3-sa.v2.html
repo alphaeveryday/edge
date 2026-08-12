@@ -90,6 +90,18 @@ DATA.nodes.forEach(n=>{
     el.setAttribute('aria-pressed','false'); el.tabIndex=0; }
   canvas.appendChild(el); byId[n.i]=n;
 });
+// 점선 프레임 제목: 굵게 + 내부 상자들의 시작 x 에 좌측 정렬
+DATA.nodes.forEach(n=>{
+  const el=document.getElementById(n.i);
+  if(!el || !el.classList.contains('frame')) return;
+  let minX=Infinity;
+  DATA.nodes.forEach(m=>{
+    if(m===n) return;
+    if(m.x>=n.x&&m.y>=n.y&&m.x+m.w<=n.x+n.w&&m.y+m.h<=n.y+n.h) minX=Math.min(minX,m.x);
+  });
+  el.style.fontWeight='700';
+  if(minX<Infinity) el.style.paddingLeft=(minX-n.x)+'px';
+});
 canvas.appendChild(svg);
 function clamp(v,lo,hi){return Math.min(Math.max(v,lo),hi)}
 function anchor(N,tx,ty){
