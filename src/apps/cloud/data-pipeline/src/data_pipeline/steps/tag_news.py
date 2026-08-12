@@ -266,6 +266,17 @@ def _tagged_at(row: object) -> str:
     두 writer 가 같은 ISO-8601 UTC(`+00:00` 오프셋)를 쓰므로 문자열 비교가 곧 시각
     비교다. 오프셋이 갈리면 이 비교가 조용히 틀리니, 미러를 쓰는 쪽도 같은 형식을
     유지해야 한다(`mirror_row_bytes`).
+
+    ⚠️ **두 writer 의 시각 의미가 정확히 같지는 않다.** 배치 행은 런 **시작** 시각을
+    한 런의 모든 행에 균일하게 찍고(`tagged_at = started_at`), 미러는 자기가 쓰인 시각을
+    찍는다. 그래서 이 스텝이 리스팅한 **뒤에** 도착한 미러는 삭제를 피하고, 다음 런의
+    병합에서 같은 런 후반에 나온 배치 판정보다 최신으로 잡힐 수 있다.
+
+    ⭐ **그 자리에서 미러가 이기는 것이 맞다.** 두 판정의 입력이 갈리는 경우는 정정뿐인데,
+    정정은 PG 정본에 먼저 반영되고(1분 `CanonicalWriter`) 레이크 canonical 에는 다음
+    `normalize_news` 에 온다 — 즉 미러가 **더 새 본문**을 보고 판정한 쪽이다. 입력이 같으면
+    지문도 같아 어느 행이 남든 `_is_current` 판정이 동일하다(LLM 비결정성의 두 표본).
+    배치 행에 행별 판정 시각을 찍는 쪽으로 바꿔도 이 결론은 안 바뀌므로 그대로 둔다.
     """
     value = row.get("tagged_at") if isinstance(row, dict) else None
     return value if isinstance(value, str) else ""
