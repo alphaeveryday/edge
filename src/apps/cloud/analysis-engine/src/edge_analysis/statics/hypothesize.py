@@ -481,6 +481,11 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
             out = ask_checked(ask, system, user)
             continue
         last_call = state["last_call"] = key
+        # 다른 호출로 전진하면 교정 카운터를 리셋한다(Codex P2) - 이월된 카운트가
+        # 이후 별개 중복의 첫 교정을 조기 _OBJECT_DONE 으로 바꾸면, 분포 모드에서
+        # UNAVAILABLE preview 뒤 다른 후보를 preview 할 기회가 사라진다. 실행이
+        # 예산을 소모하므로 리셋해도 전체 왕복은 여전히 유한하다.
+        duplicate_refusals = state["refusals"] = 0
         used += 1
         res = call(name, arguments)
         last_call_ok = state["last_call_ok"] = bool(res.get("ok"))

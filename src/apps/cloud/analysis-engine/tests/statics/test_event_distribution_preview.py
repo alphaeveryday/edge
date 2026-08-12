@@ -763,3 +763,57 @@ def test_duplicate_guard_state_survives_proposal_retry_turns(monkeypatch):
     final_user = seen_users[-1]
     assert final_user.count("[도구 반려]") == 2
     assert "왕복 상한 소진" in final_user
+
+
+def test_advancing_to_a_new_call_resets_the_refusal_counter(monkeypatch):
+    """다른 호출로 전진하면 교정 카운터가 리셋된다(Codex P2) - 이월 카운트가 이후
+    별개 중복의 첫 교정을 조기 제출 전환으로 바꾸면 다른 후보를 preview 할 기회가
+    사라진다. 실행이 예산을 소모하므로 리셋해도 왕복은 유한하다."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_id = next(iter(runtime._candidate_by_id))
+    listopt = {"tool": "hypothesis.list_options", "arguments": {}}
+    prev = {"tool": "hypothesis.preview", "arguments": {
+        "candidate_id": candidate_id,
+        "outcome_id": "outcome:market_adjusted_return_day_0"}}
+    replies = iter((
+        dict(listopt), dict(listopt), dict(listopt),   # 실행 1 + 반려 2 (상한 도달)
+        dict(prev),                                     # 전진 - 카운터 리셋돼야
+        dict(prev),                                     # preview 중복 - 첫 교정이어야
+        {"hypotheses": [{"preview_handle": None, "intent": "확인."}]},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        reply = next(replies)
+        if "hypotheses" in reply:
+            reply["hypotheses"][0]["preview_handle"] = next(iter(runtime._previews))
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    # 리셋이 없으면 preview 중복이 3회째 카운트로 _OBJECT_DONE 을 트리거해
+    # 제출이 강제되고 이 READY 제출 경로가 깨진다.
+    assert rejected == []
+    assert len(valid) == 1
+    assert seen_users[-1].count("[도구 반려]") == 3   # listopt 2회 + preview 1회 교정
