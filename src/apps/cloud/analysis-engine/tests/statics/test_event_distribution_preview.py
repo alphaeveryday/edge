@@ -513,7 +513,10 @@ def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(mon
 
     def ask(system, user):
         # 금지문·핸들 규칙이 시스템 프롬프트에 있어야 모델이 첫 라운드부터 교정된다.
-        assert "objectset" in system and "호출하지 마라" in system
+        assert "호출하지 마라" in system
+        # 어포던스 제거 - 금지문 뒤의 도구 계약이 objectset 을 다시 광고하면 모델이
+        # 그쪽을 따른다(리뷰 R1). 스펙·오퍼 예시에 objectset 이 없어야 한다.
+        assert "objectset.create" not in system
         seen_users.append(user)
         reply = next(replies)
         if "hypotheses" in reply:
