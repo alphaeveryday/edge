@@ -159,9 +159,22 @@ import 에 확장자를 붙인다.
 
 의도를 모르는 채 지우거나 고치지 않았다 — 인과 모델의 설계 판단이라 별도 조각 소관이다.
 
-## 계측 티켓 7건 (요청문 §4 — 발번 대기)
+## 계측 티켓 — ✅ 발번 완료 (2026-08-12)
 
-로컬 디자인 검수 후 PR 라운드에서 Jira 발번 예정. 대상: ① AnalyzeOne per-ETF outcome 원장(R15) ·
-② 큐→구독 서비스 매핑 선언(R11) · ③ CatalogEntry 재시도 정책 필드(R16) · ④ DatasetContract.actual_as_of
-writer(R08, KRX holdings 는 영구 UNKNOWN 이 설계 결정) · ⑤ 완전성 분모 확장 — 엔티티 축만(R07) ·
-⑥ task_key 별 런북 등록 · ⑦ 런 kind(정규/수동/백필) 기록.
+⚠️ **낱개 7건이 아니라 막힌 규칙·소유 모듈로 묶어 넷으로 발번했다.** 그리고 계획 §3-4 의 7건에
+**R03·R10·R12 가 빠져 있었다** — 이 셋도 같은 이유로 못 도는데 목록에 없었다(아래 표가 정본이다).
+
+| 티켓 | 무엇 | 되살아나는 규칙 |
+|---|---|---|
+| [ALPHA-978](https://alphaeveryday.atlassian.net/browse/ALPHA-978) | 원장이 안 쓰는 판정 축 — per-ETF outcome · 재시도 정책 필드 · `actual_as_of` writer · 완전성 분모(엔티티 축만) | R07 · R08 · R15 · R16 |
+| [ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) | facts 응답이 안 싣는 축 — `aws_status` · `queues[]` · `chain` | R03 · R10 · R12 |
+| [ALPHA-980](https://alphaeveryday.atlassian.net/browse/ALPHA-980) | 선언·등록물 — 큐→구독 매핑 · 런북 등록(R17~R19 포함) · 런 kind | R11 (+ 런북 표면) |
+| [ALPHA-981](https://alphaeveryday.atlassian.net/browse/ALPHA-981) | `GRID_SQL` 에 `t.dataset` 한 컬럼 | — (UI 의 `DATASET_OF_TASK` 손 매핑 제거) |
+
+🔴 **지금 19규칙 중 여덟(R03·R07·R08·R10·R11·R12·R15·R16)이 `evaluated: false`** 다. 화면은 그걸
+"못 돎"으로 정직하게 그리지만, 운영자에게는 **그 축을 아무도 안 보고 있다**는 뜻이다.
+⚠️ R13 도 `dep` 이 있지만 **계측 공백이 아니다** — "오늘 판정할 산출이 없다"는 조건부 사유라
+날마다 갈린다. 위 여덟과 같이 세면 안 된다.
+
+⭐ 각 규칙이 못 도는 **실제 이유는 `rules.ts` 의 `dep` 문구가 정본**이다. 이 표는 그걸 티켓으로
+묶은 것일 뿐이라, 둘이 어긋나면 `dep` 을 믿어라.

@@ -8,6 +8,7 @@
  * 관대해지면(거짓 음성 — 원장이 관대해지는 방향이 상습 오류다) 여기서 깨져야 한다.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { buildReport, evaluate, ruleOfVid, runbookOf } from './evaluate.ts';
 import { EDGES, RULES } from './rules.ts';
@@ -1654,6 +1655,36 @@ test('못 돌 수 있는 규칙은 저마다 다른 사유 문장을 갖는다 (
   assert.deepEqual(blank, [], `못 돈 사유가 빈 규칙: ${blank.join('·')}`);
   const deps = needDep.map((R) => R.dep);
   assert.equal(new Set(deps).size, deps.length, '사유 문장이 겹친다 — 규칙 구분이 사라진다');
+});
+
+/* 🔴 **계측 공백의 규모를 산문으로만 적으면 낡는다.** `rules/README` 가 "계측 티켓 7건"이라
+ * 적어 두고 발번을 미루는 동안 그 목록에서 **R03·R10·R12 가 빠져 있었다**(같은 이유로 못 도는데).
+ * 목록이 손으로 쓰이면 규칙이 늘 때 따라오지 않는다 — 여기서 세게 한다.
+ *
+ * ⚠️ 이 단언의 목적은 **숫자를 고정하는 것이 아니라 목록이 바뀌면 알아채는 것**이다. 티켓이
+ * 닫혀 `dep` 이 지워지면 여기가 깨지고, 그때 `rules/README` 의 표를 같이 고치면 된다.
+ * 그게 이 테스트가 사려는 것이다(문서와 코드가 따로 낡지 않게).
+ *
+ * ⚠️ **R13 은 세지 않는다** — `dep` 이 있지만 계측 공백이 아니라 "오늘 판정할 산출이 없다"는
+ * 조건부 사유다. 날마다 갈리므로 영구 공백과 같이 세면 규모가 부풀려진다. */
+test('계측 공백으로 못 도는 규칙 목록이 문서의 티켓 표와 같다 (손으로 쓴 목록은 반드시 낡는다)', () => {
+  const BLOCKED = ['R03', 'R07', 'R08', 'R10', 'R11', 'R12', 'R15', 'R16'];
+  /* R13 의 `dep` 은 조건부라 제외 — 판별자는 "그 축이 배선되면 사라지는가"다 */
+  const CONDITIONAL = ['R13'];
+
+  const withDep = RULES.filter((R) => R.dep).map((R) => R.id);
+  assert.deepEqual(
+    withDep.filter((id) => !CONDITIONAL.includes(id)).sort(),
+    [...BLOCKED].sort(),
+    '계측 공백 규칙 목록이 바뀌었다 — `rules/README` 의 티켓 표(ALPHA-978~981)를 같이 고쳐라',
+  );
+
+  /* 문서가 그 티켓들을 실제로 가리키는지 — "발번 대기" 로 되돌아가면 여기서 걸린다 */
+  const readme = readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+  for (const key of ['ALPHA-978', 'ALPHA-979', 'ALPHA-980', 'ALPHA-981']) {
+    assert.ok(readme.includes(key), `${key} 가 rules/README 에서 사라졌다`);
+  }
+  assert.doesNotMatch(readme, /발번 대기/, '발번이 끝났는데 문서가 대기라고 말한다');
 });
 
 test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수 있다 (소비자가 구분자를 다시 적지 않는다)', () => {
