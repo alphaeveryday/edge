@@ -148,13 +148,38 @@ _PREVIEW_SYSTEM = """당신은 인과 가설 에이전트다. 서버가 제공�
 
 _EVENT_DISTRIBUTION_PREVIEW_SYSTEM = """당신은 사건 설명 가설 에이전트다. 서버가 제공한 hypothesis 도구만 사용한다.
 
+이 실행의 사건 집합은 서버가 이미 고정했다. hypothesis 도구 외에는(`objectset.*`·`news.*` 등)
+호출하지 마라 — 호출해도 거부되고 도구 예산만 소모된다.
 먼저 `hypothesis.list_options`를 빈 arguments 객체로 호출한다. 여기의 event_candidates 중
 서로 다른 사건을 **최대 3개까지** 골라, 각 사건마다 `사건 당일 시장 초과수익률` outcome으로
 `hypothesis.preview`를 호출한다. READY preview만 제출할 수 있다 — READY인 것들을 모두 모아
 {"hypotheses": [{"preview_handle": "...", "intent": "..."}]} 형태의 JSON 하나로 제출한다.
-`intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
+`preview_handle`은 READY `hypothesis.preview` 결과의 `handle` 값만 유효하다 — 사건 id 를
+핸들로 쓰지 마라. `intent`에는 그 검정을 왜 확인할지 쓴다. 서버가 고정한 사건과
 동일 사건 유형의 과거 분포를 바꾸거나, 조건·노출·채널을 새로 만들지 마라.
 """
+
+# 분포 preview 모드의 도구 오퍼 - _OBJECT_OFFER 와 달리 objectset 예시를 광고하지
+# 않는다(ALPHA-970). 스펙도 호출부가 hypothesis.* 만 남겨 걸러 넣는다.
+_PREVIEW_OFFER = """
+
+[hypothesis 도구 · 필수] 도구 호출은 {{"tool": "hypothesis.list_options", "arguments": {{}}}} 모양의
+JSON 하나로 답한다. 실행 결과를 다음 호출에 쓴다. preview 가 끝나면 hypotheses JSON을 답한다.
+도구 계약:
+{specs}"""
+
+# 분포 preview 모드에서 hypothesis 외 도구 호출을 실행 없이 거부할 때의 사유 - 모델을
+# list_options→preview 경로로 유도하는 교정 신호다(ALPHA-970). 실측: 프롬프트 금지문
+# 없이 도구가 정상 실행되자 모델이 라운드 6회 전부를 `objectset.create` 반복으로
+# 소진하고 사건 id 를 핸들로 위조 제출해 분포 문장이 하루 전멸했다(2026-08-12 10/10).
+# objectset 만 막으면 같은 낭비가 위임 경로의 news.* 등으로 우회된다(Codex P2).
+_NON_HYPOTHESIS_REFUSAL = {
+    "ok": False,
+    "error": "TOOL_NOT_AVAILABLE",
+    "message": ("이 실행의 사건 집합은 서버가 고정했다 - hypothesis 도구만 제공된다. "
+                "hypothesis.list_options 로 event_candidates 를 확인하고 "
+                "hypothesis.preview 를 호출하라."),
+}
 
 
 def _resolve_preview_hypotheses(hyps: list[object], resolver: Callable[[str], object]
@@ -471,7 +496,24 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         series_families=sorted(series_families), measurable=sorted(measurable), n=n))
     if sql_tool and object_tools:
         raise ValueError("sql_tool and object_tools cannot be enabled together")
-    if object_tools:
+    if object_tools and object_tools.get("preview_system"):
+        # 사건 분포 모드(ALPHA-970) - 사건 집합은 서버가 고정했다. 세 겹으로 막는다:
+        # ① 스펙에서 objectset.* 를 걸러 어포던스 자체를 없앤다(금지문 뒤에서 도구
+        # 계약이 다시 objectset 을 광고하면 모델이 그쪽을 따른다), ② 오퍼 예시도
+        # hypothesis 도구로 바꾼다, ③ 그래도 호출하면 실행 없이 사유로 거부한다
+        # (프롬프트만으로는 게이트가 아니다 - ok=true 로 실행되면 모델이 반복한다).
+        specs = [s for s in object_tools["specs"]
+                 if str(s.get("name", "")).startswith("hypothesis.")]
+        system += _PREVIEW_OFFER.format(specs=json.dumps(
+            specs, ensure_ascii=False, separators=(",", ":")))
+        # 거부는 hypothesis.* 외 전부다 - objectset 만 막으면 위임 경로의 news.*
+        # 등으로 같은 낭비가 우회된다(Codex P2).
+        inner_call = object_tools["call"]
+        object_tools = {**object_tools, "call": (
+            lambda name, arguments: inner_call(name, arguments)
+            if str(name).startswith("hypothesis.")
+            else dict(_NON_HYPOTHESIS_REFUSAL))}
+    elif object_tools:
         system += _OBJECT_OFFER.format(specs=json.dumps(
             object_tools["specs"], ensure_ascii=False, separators=(",", ":")))
     elif sql_tool:

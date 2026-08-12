@@ -466,3 +466,85 @@ def test_fourth_distinct_preview_is_refused_at_the_tool(monkeypatch):
     # 거부도 퍼널에 남는다(fail-loud) - 미요청(PREVIEW_NOT_REQUESTED)과 구분된다.
     assert runtime.distribution_attempts()["evt_3"]["preview_reason"] == (
         "PREVIEW_LIMIT_EXCEEDED")
+
+
+def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(monkeypatch):
+    """분포 모드에서 objectset 호출은 실행 없이 거부돼야 한다(ALPHA-970).
+
+    WHY: 사건 집합은 서버가 고정하는데 호출이 정상 실행(ok=true)되자 모델이 도구
+    라운드 전부를 `objectset.create` 반복으로 소진하고 사건 id 를 핸들로 위조
+    제출해 분포 문장이 하루 전멸했다(2026-08-12 장중 10/10 실측). 거부 사유가
+    list_options→preview 경로로 유도하는 교정 신호다.
+    """
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_id = next(iter(runtime._candidate_by_id))
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    replies = iter((
+        {"tool": "objectset.create", "arguments": {"kind": "COMPANY_ENTITY"}},
+        # objectset 만 막으면 위임 경로의 news.* 로 같은 낭비가 우회된다(Codex P2)
+        # - hypothesis.* 외 전부가 거부돼야 한다.
+        {"tool": "news.find_threads", "arguments": {}},
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"tool": "hypothesis.preview", "arguments": {
+            "candidate_id": candidate_id,
+            "outcome_id": "outcome:market_adjusted_return_day_0",
+        }},
+        {"hypotheses": [{"preview_handle": None, "intent": "계약 해지의 과거 반응 확인."}]},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        # 금지문·핸들 규칙이 시스템 프롬프트에 있어야 모델이 첫 라운드부터 교정된다.
+        assert "호출하지 마라" in system
+        # 어포던스 제거 - 금지문 뒤의 도구 계약이 objectset 을 다시 광고하면 모델이
+        # 그쪽을 따른다(리뷰 R1). 스펙·오퍼 예시에 objectset 이 없어야 한다.
+        assert "objectset.create" not in system
+        seen_users.append(user)
+        reply = next(replies)
+        if "hypotheses" in reply:
+            reply["hypotheses"][0]["preview_handle"] = next(iter(runtime._previews))
+        return reply
+
+    # 운영(etfcell)처럼 objectset 스펙을 섞어 넣는다 - hypothesis.* 필터가 실제로
+    # 거르는지 이 스펙이 검증한다(리뷰 R2: 순수 hypothesis 스펙만 넣으면 필터가
+    # 제거돼도 단언이 통과한다).
+    objectset_spec = {"name": "objectset.create",
+                      "description": "Create a PIT object set.",
+                      "input_schema": {"type": "object"}}
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": [objectset_spec, *runtime.tool_specs()],
+                      "call": spying_call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    assert rejected == []
+    assert len(valid) == 1
+    # objectset 호출은 런타임까지 내려가지 않는다 - 실행 없는 거부다.
+    assert runtime_calls == ["hypothesis.list_options", "hypothesis.preview"]
+    # 거부 사유가 되물음에 실려 모델을 preview 경로로 유도한다.
+    assert sum("TOOL_NOT_AVAILABLE" in u.split("[ObjectSet 결과", 1)[-1]
+               for u in seen_users[1:]) >= 1
+    assert all("TOOL_NOT_AVAILABLE" in u for u in seen_users[2:])
