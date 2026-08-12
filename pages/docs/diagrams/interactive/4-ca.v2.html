@@ -88,7 +88,9 @@ DATA.nodes.forEach(n=>{
     el.textContent=n.t;
   }
   if(!n.swim && !n.isimg && n.valign==='top' && (n.t.startsWith('Availability Zone')||n.t==='Data subnet group')) el.style.paddingTop='0px';
-  if(n.lg) el.style.paddingLeft='34px'; // 좌상단 로고 자리 확보
+  if(n.lg){ // 좌상단 로고 자리 확보 + 제목을 로고 세로 중앙선에 정렬
+    el.style.paddingLeft='34px'; el.style.paddingTop='0px'; el.style.lineHeight='26px';
+  }
   el.style.zIndex=String(Math.max(1, 9999-Math.round((n.w*n.h)/500))); // 작은 상자가 항상 위 — 큰 프레임의 클릭 가로채기 방지
   if(CONN.has(n.i)){ el.classList.add('node'); el.setAttribute('role','button');
     el.setAttribute('aria-pressed','false'); el.tabIndex=0; }
