@@ -601,7 +601,7 @@ function RealtimeLedger({
   sourceGroup?: string;
 }) {
   const { data, isPending, isError, error } = useMinuteStatus(date, true);
-  if (isError) return <LoadError error={error} />;
+  if (isError && !data) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
   const ofDataset = data.sessions.filter((s) => s.dataset === dataset);
@@ -621,6 +621,11 @@ function RealtimeLedger({
   if (!session) {
     return (
       <div className="card card-pad">
+        {isError && (
+          <p className="t-xs m-0" style={{ color: 'var(--warn)', marginBottom: 8 }}>
+            실시간 원장 재조회에 실패했습니다 — 직전 실측을 유지합니다.
+          </p>
+        )}
         <p className="t-sm m-0">
           {ambiguous ? (
             <>어느 <span className="mono">{dataset}</span> 세션인지 문맥이 없습니다.</>
@@ -670,6 +675,11 @@ function RealtimeLedger({
   const runs = gapRuns(session.gaps);
   return (
     <div className="flex flex-col gap-4">
+      {isError && (
+        <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
+          실시간 원장 재조회에 실패했습니다 — 직전 실측을 유지합니다.
+        </p>
+      )}
       <div className="card">
         <div className="card-head">
           <span className="t-label">세션 행 (minute_ingestion_session)</span>

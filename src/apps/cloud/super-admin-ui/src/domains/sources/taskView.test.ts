@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { TaskStatus } from './types.ts';
 import { tasksInFocus, taskStatusView } from './taskView.ts';
@@ -22,4 +23,10 @@ test('지목한 작업이 없으면 런 전체로 넓히지 않는다', () => {
   const tasks = [task({ taskKey: 'A' }), task({ taskKey: 'B' })];
   assert.deepEqual(tasksInFocus(tasks, 'missing'), []);
   assert.deepEqual(tasksInFocus(tasks).map((t) => t.taskKey), ['A', 'B']);
+});
+
+test('실시간 원장 화면은 재조회 오류만으로 직전 세션 근거를 지우지 않는다', () => {
+  const source = readFileSync(new URL('../../pages/SourcesPage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /if \(isError && !data\) return <LoadError/, '캐시 data가 있어도 오류 화면으로 바뀐다');
+  assert.match(source, /실시간 원장 재조회에 실패했습니다 — 직전 실측을 유지합니다/);
 });

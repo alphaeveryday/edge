@@ -18,7 +18,7 @@ import { FUNNEL_DATE, FUNNEL_ORIGIN, funnelValue } from './newsFunnelSnapshot.ts
 import { buildSeries } from './trendMetrics.ts';
 import type { Metric, SeriesPoint } from './trendMetrics.ts';
 
-/** 기준일 지연 — (actual, expected] 사이의 거래일 수. 두 날짜 모두 실측 필드다 */
+/** 기준일 지연 — 거래소 휴장 캘린더 축이 없어 (actual, expected] 사이의 평일 수만 센다. */
 export function tradingLag(actualISO: string | null, expectedISO: string | null): number | null {
   if (!actualISO || !expectedISO) return null;
   if (actualISO >= expectedISO) return 0;
@@ -218,7 +218,8 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
         ? []
         : buildSeries({ today: lag, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: false, endDate: TODAY }),
     help: [
-      '기준일 지연 = 기대 기준일과 실제 기준일 사이의 거래일 수.',
+      '기준일 지연 = 기대 기준일과 실제 기준일 사이의 주말 제외 평일 수.',
+      '거래소 휴장 캘린더 축은 이 응답에 없어 공휴일·임시 휴장일은 제외하지 못한다.',
       d?.expected_as_of ? `기대 ${d.expected_as_of} · 실제 ${d.actual_as_of ?? '없음'}.` : '',
       '',
       '판정: 허용 지연 0거래일 — 하루라도 밀리면 분석이 오래된 스냅샷 위에서 돈다.',

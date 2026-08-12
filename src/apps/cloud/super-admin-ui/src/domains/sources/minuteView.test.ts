@@ -611,4 +611,8 @@ test('장중 화면은 공용 부재·부분집합 가드를 소비한다 — �
   const source = readFileSync(new URL('../../pages/MinutePage.tsx', import.meta.url), 'utf8');
   assert.match(source, /const empty = hasNoSignal\(data\)/, '화면이 신호 칸을 다시 손으로 세고 있다');
   assert.match(source, /유효 처리 중[^\n]*healthyClaimed\(jobs\)/, '고착을 처리 중으로 다시 표시한다');
+  assert.match(source, /if \(isError && !data\) return <LoadError/, '재조회 오류가 직전 분봉 실측을 지운다');
+  assert.match(source, /const lanes = data\?\.lanes \?\? \[\]/, '배치 재조회 오류가 직전 레인 실측을 지운다');
+  assert.doesNotMatch(source, /const mock = live\.length === 0/, '실측 0건을 MOCK 실행으로 바꾼다');
+  assert.match(source, /데이터셋 전체의 계획 여부를 뜻하지 않습니다/, '없는 벤더를 데이터셋 미계획으로 확대한다');
 });

@@ -41,8 +41,8 @@ import {
 } from '../domains/sources/minuteView';
 import type { ApiGap, Issue, Segment, ViewTone } from '../domains/sources/minuteView';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
-import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
-import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
+import { MOCK_OVERVIEW } from '../mock/preview';
+import { EmptyRealNotice, MockChip } from './_shared/MockPreview';
 import { REALTIME_DATASETS, RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
@@ -681,11 +681,11 @@ function BatchRunning({ historical }: { historical: boolean }) {
   /* 과거 날짜를 보고 있으면 "지금 도는 배치"를 섞지 않는다 — 이 블록은 현재 시점의 사실이다 */
   if (historical) return null;
 
-  const lanes = isPending || isError ? [] : data.lanes;
+  const lanes = data?.lanes ?? [];
   const live = lanes.filter(
     (l) => !l.notToday && (RUNNING_STATUSES.has(l.orchestrationStatus ?? '') || l.opsStatus === 'IN_PROGRESS'),
   );
-  const mock = live.length === 0;
+  const mock = data === undefined && !isPending;
   const view: OverviewLane[] = mock
     ? MOCK_OVERVIEW.lanes.filter(
         (l) => RUNNING_STATUSES.has(l.orchestrationStatus ?? '') || l.opsStatus === 'IN_PROGRESS',
@@ -712,6 +712,11 @@ function BatchRunning({ historical }: { historical: boolean }) {
         </span>
       </div>
       <div className="card-pad">
+        {isError && data && (
+          <p className="t-xs m-0" style={{ color: 'var(--warn)', marginBottom: 8 }}>
+            레인 요약 재조회에 실패했습니다 — 직전 실측을 유지합니다.
+          </p>
+        )}
         {isPending ? (
           <p className="t-sm m-0" style={{ color: 'var(--fg-3)' }}>
             불러오는 중…
@@ -726,7 +731,7 @@ function BatchRunning({ historical }: { historical: boolean }) {
               <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginBottom: 8 }}>
                 {isError
                   ? '레인 요약을 불러오지 못했습니다 — 아래는 목데이터입니다.'
-                  : '지금 도는 배치가 없어 화면 구조 확인용 목데이터를 보여줍니다.'}
+                  : '레인 요약을 불러오지 못해 화면 구조 확인용 목데이터를 보여줍니다.'}
               </p>
             )}
             <ul className="mn-runlist">
@@ -789,7 +794,7 @@ export function MinutePage() {
   };
   const { data, isPending, isError, error, dataUpdatedAt } = useMinuteStatus(date || undefined);
 
-  if (isError) return <LoadError error={error} />;
+  if (isError && !data) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
   /* 세션도 job 도 전무해야 "볼 것이 없는 화면"이다 — job 만 있어도 실데이터가 있는 것이다 */
@@ -802,24 +807,18 @@ export function MinutePage() {
           이 날짜({data.date})의 세션이 없습니다 — 1분 파이프라인이 계획되지 않았다는 사실이다(비거래일
           또는 미가동). 오류가 아니라 관측 결과다. 뉴스 추출 job 도 0건이다.
         </EmptyRealNotice>
-        <MockPreview>
-          <MinuteBody
-            data={MOCK_MINUTE}
-            date={date}
-            setDate={setDate}
-            dataset={params.get('dataset') ?? ''}
-            sourceGroup={sourceGroup}
-            setDataset={setDataset}
-            updatedAt={dataUpdatedAt}
-            mock
-          />
-        </MockPreview>
       </div>
     );
   }
 
   return (
-    <MinuteBody
+    <>
+      {isError && (
+        <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
+          실시간 상태 재조회에 실패했습니다 — 직전 실측을 유지합니다.
+        </p>
+      )}
+      <MinuteBody
       data={data}
       date={date}
       setDate={setDate}
@@ -827,7 +826,8 @@ export function MinutePage() {
       sourceGroup={sourceGroup}
       setDataset={setDataset}
       updatedAt={dataUpdatedAt}
-    />
+      />
+    </>
   );
 }
 
@@ -952,8 +952,10 @@ function MinuteBody({
             {sourceGroup ? ` / ${sourceGroup}` : ''} 세션이 없습니다.
           </p>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            이 데이터셋이 계획되지 않았다는 사실입니다(비거래일 · 미가동 · 레인 미편입) — 오류가 아니라
-            관측 결과입니다. 다른 데이터셋의 상태로 이 데이터셋을 대신 판정하지 않습니다.
+            {sourceGroup
+              ? '이 벤더 세션이 없다는 사실입니다 — 데이터셋 전체의 계획 여부를 뜻하지 않습니다.'
+              : '이 데이터셋이 계획되지 않았다는 사실입니다(비거래일 · 미가동 · 레인 미편입).'}{' '}
+            다른 데이터셋의 상태로 이 데이터셋을 대신 판정하지 않습니다.
           </p>
         </div>
       ) : (

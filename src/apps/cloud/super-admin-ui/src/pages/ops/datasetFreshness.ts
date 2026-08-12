@@ -11,9 +11,12 @@ import type { BadgeTone } from 'ui-kit';
 import type { DatasetFact, TaskFact } from '../../rules/types.ts';
 
 /** 계획에서 제외된 작업은 미귀결이 아니다. 실행 대상이었던 작업만 결과를 요구한다. */
-export function taskRollup(tasks: TaskFact[]): 'fulfilled' | 'skipped' | 'unresolved' {
+export function taskRollup(tasks: TaskFact[]): 'fulfilled' | 'skipped' | 'unresolved' | 'failed' | 'blocked' {
   const due = tasks.filter((task) => task.plan_status !== 'SKIPPED');
   if (due.length === 0) return 'skipped';
+  if (due.some((task) => task.task_outcome === 'FAILED' || task.task_outcome === 'MISSED')) return 'failed';
+  if (due.some((task) => task.task_outcome === 'BLOCKED')) return 'blocked';
+  if (due.some((task) => task.task_outcome == null || task.task_outcome === 'PENDING')) return 'unresolved';
   return due.every((task) => task.task_outcome === 'FULFILLED') ? 'fulfilled' : 'unresolved';
 }
 
@@ -31,6 +34,10 @@ export function datasetRunFlows(tasks: TaskFact[]): DatasetRunFlow[] {
     const key = `${dataset}\u0000${task.run_id}`;
     if (!groups.has(key)) groups.set(key, { dataset, runId: task.run_id, tasks: [] });
     groups.get(key)!.tasks.push(task);
+  }
+  const stage = (value: string) => ({ raw: 0, normalize: 1, feature: 2 }[value] ?? 3);
+  for (const group of groups.values()) {
+    group.tasks.sort((a, b) => stage(a.stage) - stage(b.stage) || a.task_key.localeCompare(b.task_key));
   }
   return [...groups.values()].sort(
     (a, b) => a.dataset.localeCompare(b.dataset) || a.runId.localeCompare(b.runId),

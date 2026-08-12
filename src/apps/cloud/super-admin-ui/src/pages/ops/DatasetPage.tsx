@@ -137,6 +137,10 @@ export function DatasetPage() {
                     <StatusBadge tone="active">전건 귀결</StatusBadge>
                   ) : taskRollup(flow.tasks) === 'skipped' ? (
                     <StatusBadge tone="neutral">계획 제외</StatusBadge>
+                  ) : taskRollup(flow.tasks) === 'failed' ? (
+                    <StatusBadge tone="blocked">실패 포함</StatusBadge>
+                  ) : taskRollup(flow.tasks) === 'blocked' ? (
+                    <StatusBadge tone="warn">선행 미충족 포함</StatusBadge>
                   ) : (
                     <StatusBadge tone="blocked">미귀결 포함</StatusBadge>
                   )}

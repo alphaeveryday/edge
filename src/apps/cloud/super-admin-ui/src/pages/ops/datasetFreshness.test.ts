@@ -27,7 +27,7 @@ test('계획에서 SKIPPED 된 작업은 필요한 작업의 귀결을 막지 �
   assert.equal(taskRollup(tasks), 'fulfilled');
   assert.equal(
     taskRollup([{ plan_status: 'DUE', task_outcome: 'FAILED' } as TaskFact]),
-    'unresolved',
+    'failed',
   );
   assert.equal(
     taskRollup([{ plan_status: 'SKIPPED', task_outcome: null } as TaskFact]),
@@ -43,7 +43,16 @@ test('같은 데이터셋의 재실행은 run_id별 흐름으로 갈린다', () 
     { ...base, run_id: 'run-2', task_outcome: 'FULFILLED' },
   ] as TaskFact[]);
   assert.deepEqual(flows.map((flow) => flow.runId), ['run-1', 'run-2']);
-  assert.deepEqual(flows.map((flow) => taskRollup(flow.tasks)), ['unresolved', 'fulfilled']);
+  assert.deepEqual(flows.map((flow) => taskRollup(flow.tasks)), ['failed', 'fulfilled']);
+});
+
+test('흐름의 화살표 순서는 서버 task_key 정렬이 아니라 stage 순서다', () => {
+  const flows = datasetRunFlows([
+    { dataset: 'holdings', run_id: 'run', stage: 'feature', task_key: 'LOAD' },
+    { dataset: 'holdings', run_id: 'run', stage: 'raw', task_key: 'COLLECT' },
+    { dataset: 'holdings', run_id: 'run', stage: 'normalize', task_key: 'NORMALIZE' },
+  ] as TaskFact[]);
+  assert.deepEqual(flows[0].tasks.map((task) => task.stage), ['raw', 'normalize', 'feature']);
 });
 
 test('🔴 기대 기준일이 없으면 FRESH 가 아니다 — 비교 안 한 것이 초록으로 서던 자리다', () => {
