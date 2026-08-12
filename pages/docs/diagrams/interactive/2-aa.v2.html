@@ -199,11 +199,13 @@ function mark(idOrNull, cls, selCls){
     EDGES.forEach(p=>{
       const hit=p.dataset.a===idOrNull||p.dataset.b===idOrNull;
       p.classList.toggle(cls,hit);
-      p.setAttribute('marker-end',hit?'url(#ar-b)':(p.dataset.mk||'url(#ar)'));
+      if(hit) p.setAttribute('marker-end','url(#ar-b)');
+      else if(cls==='on'||!p.classList.contains('on')) p.setAttribute('marker-end',p.dataset.mk||'url(#ar)');
       if(hit){on[p.dataset.a]=true;on[p.dataset.b]=true;eon[p.dataset.i]=true;svg.appendChild(p);}
     });
   } else {
-    EDGES.forEach(p=>{p.classList.remove(cls); p.setAttribute('marker-end',p.dataset.mk||'url(#ar)');});
+    EDGES.forEach(p=>{p.classList.remove(cls);
+      if(cls==='on'||!p.classList.contains('on')) p.setAttribute('marker-end',p.dataset.mk||'url(#ar)');});
   }
   const childCls=cls==='on'?'on-c':'pk-c';
   BOXES.forEach(b=>{

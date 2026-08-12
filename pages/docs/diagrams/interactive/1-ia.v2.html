@@ -145,7 +145,7 @@ function setPeek(id){
   EDGES.forEach(p=>{
     const hit=!!id&&(p.dataset.a===id||p.dataset.b===id);
     p.classList.toggle('pk-on',hit);
-    p.setAttribute('marker-end',hit?'url(#ar-b)':'url(#ar)');
+    if(!p.classList.contains('on')) p.setAttribute('marker-end',hit?'url(#ar-b)':'url(#ar)');
     if(hit){near[p.dataset.a]=true;near[p.dataset.b]=true}
   });
   NODES.forEach(n=>{n.classList.toggle('pk-on',!!near[n.id]);n.classList.toggle('pk-sel',!!id&&n.id===id)});
