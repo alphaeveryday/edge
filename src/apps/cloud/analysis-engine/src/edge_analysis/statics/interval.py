@@ -795,9 +795,14 @@ def beta_path_line(quarters: tuple[float, ...], contribution: float | None,
 # 못 얻었다)와 구분되지 않고, 그 둘을 겹치면 실패한 창을 여기서 재시도하게 된다.
 ROLL_UNSET = object()
 
+# "호출자가 봉을 안 넘겼다" 를 뜻하는 기본값. `roll` 과 같은 축이다 — `None` 은 여기서도
+# **넘긴 값**(재료가 없다)이 될 수 있어야 하므로 부재를 sentinel 로 가른다.
+BARS_UNSET = object()
+
 
 def window_facts(lake, ticker: str, instrument_id: str, day: str,
-                 t0: str, t1: str, *, roll=ROLL_UNSET) -> WindowFacts:
+                 t0: str, t1: str, *, roll=ROLL_UNSET,
+                 asked_bars=BARS_UNSET, state_bars=BARS_UNSET) -> WindowFacts:
     """원천에서 요청창 하나의 사실만 계산한다.
 
     ``roll`` 은 호출자가 같은 창으로 이미 뽑은 층 분해다. 넘어오면 재질의하지 않는다 -
@@ -816,10 +821,25 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
     있다(원장의 route_code 는 옛 분해, 산문은 지금 분해). 닫으려면 route 와 함께 그
     분해를 영속해야 한다 — 이 함수 밖의 일이다.
 
-    ⚠️ 남는 천장: 봉(`_bars`)·괴리(`premium_5m`)는 **여기서 다시 읽는다**. 주입된 분해와
-    그 둘 사이에도 정정이 끼어들 수 있어 층↔봉 스냅샷은 아직 한 벌이 아니다. 이 변경이
-    닫는 것은 원장 route_code ↔ 산문 근거의 갈림이고, 전 사실을 한 스냅샷으로 묶는 것은
-    별개 작업이다(창 하나를 통째로 고정하는 설계가 필요하다).
+    ``asked_bars``·``state_bars`` 는 호출자가 **1분 재료로 이미 집계한** 봉이다(ALPHA-892).
+    `roll` 과 같은 이유로 받는다 - 넘어오면 레이크(`bars_5m`)를 다시 읽지 않으므로 라우팅과
+    산문이 같은 가격을 본다. 각각 요구창(`slice_requested_bars`)·헤더창(`aggregate_window`)
+    을 덮고, 형상은 `_bars` 와 같은 `(ts, 시가, 종가)` 오름차순이다.
+
+    ⭐ 이 주입이 **판정불가를 구조적으로 없앤다.** 레이크 5분봉의 `ts` 는 5분 격자점
+    (09:00·09:05·…)뿐이라, ALPHA-854 이후 좁아진 요구창(예: 09:06~09:08)은 격자점을 하나도
+    품지 못해 `_window_ret` 이 영원히 빈 구간을 본다 - 기다려도 안 산다(2026-08-12 실측:
+    IntervalError 12건 중 10건이 이 모양, 발화 3.5~4시간 뒤 처리에도 동일 실패).
+    `slice_requested_bars` 는 봉 경계를 **요청 시작에 맞춰** 만들므로 격자를 비껴갈 수 없고,
+    구간이 안 닫힌 창(09:00~09:01)도 1분 재료라 닫힘을 기다리지 않는다.
+
+    ⚠️ 둘은 **한 세트다** - 한쪽만 주면 요구창과 헤더창이 서로 다른 축의 가격을 보므로
+    거부한다. 호출자가 봉을 아예 모르는 경우(`window_batch`·`explain` 단독 호출)만 기본값
+    으로 남아 레이크를 읽는다.
+
+    ⚠️ 남는 천장: 갭(`_gap`)·괴리(`premium_5m`)는 **여기서 다시 읽는다**. 갭은 전 거래일
+    이라 확정본이지만 괴리는 당일 축이라, 층↔봉↔괴리 스냅샷은 아직 한 벌이 아니다. 전
+    사실을 한 스냅샷으로 묶는 것은 별개 작업이다(창 하나를 통째로 고정하는 설계가 필요하다).
     """
     a, b, _why = clamp(t0, t1)
     date = dt.date.fromisoformat(day)
@@ -829,9 +849,17 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
     open_to_end = Window(
         "헤더", dt.datetime.combine(date, dt.time.fromisoformat(SESSION_OPEN)),
         end, "asked")
-    bars = _bars(lake, ticker, day)
-    window_return, _ = _window_ret(bars, asked)
-    intraday, _ = _window_ret(bars, open_to_end)
+    if (asked_bars is BARS_UNSET) != (state_bars is BARS_UNSET):
+        # 반쪽 주입을 조용히 받으면 요구창은 주입분, 헤더창은 레이크가 되어 한 산문 안에서
+        # 축이 갈린다. 이 함수가 `roll` 로 닫은 그 갈림이 봉으로 되살아나는 자리다.
+        raise ValueError(
+            "asked_bars·state_bars 는 함께 주입한다 — 한쪽만 주면 요구창과 헤더창의 축이 갈린다")
+    bars_view = "window.aggregated_bars"
+    if asked_bars is BARS_UNSET:
+        asked_bars = state_bars = _bars(lake, ticker, day)
+        bars_view = "bars_5m"
+    window_return, _ = _window_ret(asked_bars, asked)
+    intraday, _ = _window_ret(state_bars, open_to_end)
     gap = _gap(lake, ticker, day)
     header_return = None if gap is None or intraday is None else gap + intraday
     premium, _premium_note = premium_5m(
@@ -875,7 +903,9 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         evidence.append("요청창 사건")
     lineage = (
         {
-            "view": "bars_5m",
+            # 주입분과 레이크 재질의는 **다른 출처**다 - 한 이름으로 적으면 근거 표면이
+            # 읽은 적 없는 뷰를 읽었다고 말한다(ALPHA-892).
+            "view": bars_view,
             "fields": ("ts", "open", "close"),
             "entity": ticker,
             "window_start": a[:5],

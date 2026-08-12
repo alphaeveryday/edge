@@ -1,4 +1,5 @@
 import datetime as dt
+import math
 import re
 from types import SimpleNamespace
 
@@ -465,6 +466,71 @@ def test_missing_requested_window_return_fails_loud(monkeypatch):
 
     with pytest.raises(ValueError, match="5분 수익률을 계산하지 못했습니다"):
         window_facts(_Lake(), "091160", "iid", "2026-08-05", "11:00", "11:05")
+
+
+def _no_lake_queries(monkeypatch):
+    """봉 주입 테스트 공통 대역 — 층·괴리는 이 축과 무관하다."""
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.decompose",
+        lambda *args, **kwargs: SimpleNamespace(etf_name="T", layers=(), names=()))
+    monkeypatch.setattr(
+        "edge_analysis.statics.interval.premium_5m",
+        lambda *args, **kwargs: (None, "없음"))
+
+
+def test_injected_bars_stand_where_the_five_minute_grid_cannot(monkeypatch):
+    """요구창이 5분 격자점을 안 품어도 **주입 봉이면 선다**(ALPHA-892).
+
+    레이크 5분봉의 `ts` 는 격자점(…10:40·10:45…)뿐이라 `10:41~10:44` 같은 창은 봉을
+    하나도 못 고른다 - 봉이 늦게 오는 문제가 아니라 **기다려도 안 사는** 자리다(실측:
+    발화 3.5~4시간 뒤 처리에도 같은 사유로 죽었다). 호출자가 1분 재료로 창 경계에 맞춰
+    집계한 봉을 주면 그 구조적 부재가 사라진다.
+    """
+    import pytest
+
+    _no_lake_queries(monkeypatch)
+
+    # 먼저 결함을 못박는다 - 이 단언이 깨지면 아래 통과는 주입 덕이 아니다
+    with pytest.raises(ValueError, match="5분 수익률을 계산하지 못했습니다"):
+        window_facts(_Lake(), "091160", "iid", "2026-08-05", "10:41", "10:44")
+
+    facts = window_facts(
+        _Lake(), "091160", "iid", "2026-08-05", "10:41", "10:44",
+        asked_bars=[(dt.datetime(2026, 8, 5, 10, 41), 100.0, 110.0)],
+        state_bars=[(dt.datetime(2026, 8, 5, 9, 0), 100.0, 101.0),
+                    (dt.datetime(2026, 8, 5, 10, 41), 100.0, 110.0)])
+
+    # 값이 **주입분에서** 나왔다 - 레이크 봉(10:40 시가 101 → 13:20 종가 120)이었다면
+    # 다른 수익률이 나온다
+    assert facts.window_return == pytest.approx(math.log(110.0 / 100.0))
+    # 근거 표면이 읽지 않은 뷰를 읽었다고 말하지 않는다
+    assert facts.lineage[0]["view"] == "window.aggregated_bars"
+
+
+def test_bars_are_injected_as_a_pair_or_not_at_all(monkeypatch):
+    """반쪽 주입은 거부한다 — 요구창과 헤더창이 다른 축의 가격을 보게 된다."""
+    import pytest
+
+    _no_lake_queries(monkeypatch)
+    bars = [(dt.datetime(2026, 8, 5, 10, 41), 100.0, 110.0)]
+
+    for kwargs in ({"asked_bars": bars}, {"state_bars": bars}):
+        with pytest.raises(ValueError, match="함께 주입한다"):
+            window_facts(_Lake(), "091160", "iid", "2026-08-05", "10:41", "10:44",
+                         **kwargs)
+
+
+def test_absent_injection_still_reads_the_lake(monkeypatch):
+    """봉을 모르는 호출자(`window_batch`·`explain` 단독)는 기존 거동 그대로다."""
+    import pytest
+
+    _no_lake_queries(monkeypatch)
+
+    facts = window_facts(_Lake(), "091160", "iid", "2026-08-05", "10:40", "13:20")
+
+    # 레이크 봉 10:40(시가 101)~10:45(종가 103) — 13:20 봉은 창 끝이라 안 들어온다
+    assert facts.window_return == pytest.approx(math.log(103.0 / 101.0))
+    assert facts.lineage[0]["view"] == "bars_5m"
 
 # ── 기여회계 산문 (ALPHA-871) ─────────────────────────────────────────────
 def test_factor_block_states_the_layer_accounting_without_proxy_names():
