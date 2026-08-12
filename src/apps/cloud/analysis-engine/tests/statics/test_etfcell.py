@@ -77,6 +77,32 @@ def test_run_hands_the_injected_rollup_to_window_facts(monkeypatch):
     assert seen.get("roll") is sentinel, "run 이 주입분을 흘렸다"
 
 
+def test_run_hands_the_injected_bars_to_window_facts(monkeypatch):
+    """봉도 **그대로 전달만** 한다(ALPHA-892) — 위 `roll` 과 같은 seam, 같은 사각이다.
+
+    이 전달이 끊기면 산문이 레이크 5분봉 재질의로 되돌아가고, 요구창이 5분 격자점을
+    안 품는 날(09:06~09:08 등)이 다시 판정불가가 된다. 그런데 파이프라인 테스트는
+    `etfcell.run` 을 가짜로 바꾸고 interval 테스트는 `window_facts` 를 직접 부르므로
+    **어느 쪽도 그 회귀를 못 잡는다** — 이 지점만 이 테스트가 본다.
+    """
+    from edge_analysis.statics import etfcell
+
+    seen = {}
+
+    def fake_window_facts(*args, **kwargs):
+        seen.update(kwargs)
+        return _facts()
+
+    monkeypatch.setattr(etfcell, "window_facts", fake_window_facts)
+    asked, state = object(), object()
+    etfcell.run(object(), "091160", "2026-08-05", instrument_id="iid",
+                window_start="09:00", window_end="10:35", roll=None,
+                asked_bars=asked, state_bars=state)
+
+    assert seen.get("asked_bars") is asked, "run 이 요구창 봉을 흘렸다"
+    assert seen.get("state_bars") is state, "run 이 헤더창 봉을 흘렸다"
+
+
 def test_daily_run_respects_an_injected_rollup(monkeypatch):
     """하루 모드도 주입분을 쓴다 — 무조건 재대입하면 **파라미터를 조용히 무시**한다.
 

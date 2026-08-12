@@ -31,6 +31,7 @@ from ..config import PipelineError
 from .route import route_etf, say_route
 from .hypothesis_preview import PreviewExecutionError
 from .interval import (
+    BARS_UNSET,
     ROLL_UNSET,
     EventDistributionFact,
     build_block_plan,
@@ -126,13 +127,18 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         summary: bool = False, window_meta: dict | None = None,
         roll=ROLL_UNSET, current_event_returns: dict[str, float] | None = None,
         event_return_universe: tuple[str, ...] | None = None,
-        event_return_surface: dict | None = None) -> str:
+        event_return_surface: dict | None = None,
+        asked_bars=BARS_UNSET, state_bars=BARS_UNSET) -> str:
     """ETF 하루 또는 요청창 하나를 설명한다.
 
     ``roll`` 은 호출자가 **이미 계산한** 구간 층 분해다(`pipeline` 의 라우팅이 쓴 것).
     요청창 갈래가 그것을 그대로 쓴다 - 라우팅과 설명이 같은 분해를 봐야 원장의
     route_code 와 산문 근거의 계보가 갈리지 않는다. ``None`` 도 전달된 값이다(라우팅이
     못 얻었다는 사실). 계약은 `interval.window_facts` 가 갖는다.
+
+    ``asked_bars``·``state_bars`` 도 같은 축이다(ALPHA-892) - 호출자가 1분 재료로 집계한
+    요구창·헤더창 봉이고, 넘어오면 레이크 5분봉을 재질의하지 않는다. 계약(한 세트로 주는
+    것·형상)은 마찬가지로 `interval.window_facts` 가 갖는다.
     """
     if window_start is not None or window_end is not None:
         if not instrument_id or window_start is None or window_end is None:
@@ -153,7 +159,8 @@ def run(lake, etf: str, day: str, ask=None, *, instrument_id: str | None = None,
         collection_state: dict = {}
         try:
             facts = window_facts(
-                lake, etf, instrument_id, day, window_start, window_end, roll=roll)
+                lake, etf, instrument_id, day, window_start, window_end, roll=roll,
+                asked_bars=asked_bars, state_bars=state_bars)
             stat_tests, hypothesis_trials = _window_paneltest(
                 lake, instrument_id, day, ask, facts, news_out=scoped_news,
                 current_event_returns=current_event_returns,

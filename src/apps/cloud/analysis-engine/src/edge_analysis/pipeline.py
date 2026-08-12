@@ -145,12 +145,39 @@ def _ratio(numerator: float, base: float | None) -> float | None:
     return ratio if math.isfinite(ratio) else None
 
 
+def _unit_bars(
+    bars: tuple[AggregatedBar, ...], unit_id: str,
+) -> list[AggregatedBar]:
+    """그 unit 의 봉만 시각 오름차순으로. 집계 봉은 unit 이 섞여 들어온다."""
+    return sorted((bar for bar in bars if bar.unit_id == unit_id),
+                  key=lambda bar: bar.start)
+
+
+def _statics_bars(
+    bars: tuple[AggregatedBar, ...], unit_id: str,
+) -> list[tuple[datetime, float, float]]:
+    """산문(`statics.interval`)이 읽는 형상으로 좁힌다 - `(ts, 시가, 종가)` 오름차순.
+
+    거기 `_bars` 가 레이크에서 뽑던 것과 같은 튜플이다(ALPHA-892). 그 축을 넘겨야
+    라우팅과 산문이 같은 가격을 보고, 요구창이 5분 격자를 비껴가도 봉이 선다.
+
+    ⚠️ **naive KST 로 내린다.** 집계 봉은 tz-aware 인데(`WindowSpec` 이 KST 로 세운다)
+    레이크 5분봉은 `ts: timestamp[us] naive KST`(`lake/storage.py`)고, 산문의 창 경계도
+    `datetime.combine(date, time)` 이라 naive 다. aware 를 그대로 넘기면 `_window_ret`
+    의 `w.start <= ts < w.end` 가 **TypeError 로 매 런 죽는다** - 고치려는 결함보다 나쁘다.
+    `astimezone` 을 먼저 태우는 것은 호출자가 다른 tz 로 세운 창을 조용히 옮겨 적지
+    않기 위해서다(KST 가 아니면 시각이 바뀌어야 맞다).
+    """
+    return [(bar.start.astimezone(KST).replace(tzinfo=None),
+             float(bar.open), float(bar.close))
+            for bar in _unit_bars(bars, unit_id)]
+
+
 def _window_return(
     bars: tuple[AggregatedBar, ...], unit_id: str,
 ) -> float | None:
     """요청 구간 **안에서**의 수익률 - 분모가 그 구간 첫 봉의 시가다."""
-    selected = sorted((bar for bar in bars if bar.unit_id == unit_id),
-                      key=lambda bar: bar.start)
+    selected = _unit_bars(bars, unit_id)
     if not selected:
         return None
     return _ratio(float(selected[-1].close), float(selected[0].open))
@@ -619,8 +646,17 @@ def run(
             # `etfcell` 하루 갈래(자기 `pv` 를 뽑아 재라우팅해 원장과 갈리던 코너)는 이
             # 경로에서 도달 불가다 - `window` 가 무조건 조립되므로 구간 갈래만 탄다.
             # 그 갈래는 `etfcell` 수동 CLI 로만 남는다(ALPHA-806).
+            # 봉도 `roll` 과 같이 넘긴다(ALPHA-892). 산문이 레이크 5분봉을 재질의하면
+            # ① 라우팅이 쓴 가격과 갈리고 ② 요구창이 5분 격자점을 안 품는 날
+            # (09:06~09:08 등, ALPHA-854 로 창이 좁아진 뒤 흔하다) 봉이 0개라 판정불가로
+            # 죽는다 - 그건 지연 문제가 아니라 **기다려도 안 사는** 자리다.
             text = run_statics(lake, settings.etf_ticker, day_iso, ask,
-                               roll=roll, **window)
+                               roll=roll,
+                               asked_bars=_statics_bars(
+                                   requested.bars, settings.etf_ticker),
+                               state_bars=_statics_bars(
+                                   state_bars, settings.etf_ticker),
+                               **window)
         except Exception as exc:            # noqa: BLE001 - 표면 부재를 사유로 남긴다
             # 레이크가 못 서면 **설명이 없다고 말한다** - 빈 산문을 정상 분석으로
             # 위장하지 않는다(Rule 12). 계보는 그래도 남아 재실행 대상이 된다.

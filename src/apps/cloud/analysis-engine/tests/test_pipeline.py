@@ -793,10 +793,14 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
     그 계약 자체는 `test_injected_none_rollup_is_not_retried_here` 가 실물로 고정한다.
     """
     called = {}
+    handed_bars = {}
 
     def fake_statics(lake, ticker, day, ask=None, **kwargs):
         from edge_analysis.observability import record
         record("test.trace")
+        # 봉은 `window_meta` 처럼 값이 커서 따로 뺀다 — 아래 핸드오프 단언은 좌표를 본다
+        handed_bars.update(asked=kwargs.pop("asked_bars"),
+                           state=kwargs.pop("state_bars"))
         meta = kwargs.pop("window_meta")
         meta.update({
             "window_start": kwargs["window_start"],
@@ -871,6 +875,17 @@ def test_minute_trigger_input_swaps_target_and_persists_minute_axis(monkeypatch)
             "price_universe_count": 1, "current_return_count": 1,
         },
     }
+    # 같은 핸드오프로 **집계한 봉도 넘어간다**(ALPHA-892) — 산문이 레이크 5분봉을
+    # 재질의하면 라우팅이 쓴 가격과 갈리고, 요구창이 5분 격자를 비껴가는 날엔 봉 0개로
+    # 판정불가가 된다. 여기선 그날 첫 발화라 두 축이 같은 구간(09:00~10:31)을 덮는다.
+    assert [len(bars) for bars in (handed_bars["asked"], handed_bars["state"])] == [19, 19]
+    # naive KST 다 — 산문의 창 경계(`datetime.combine`)와 같은 축이어야 비교가 선다
+    assert handed_bars["asked"][0][0] == handed_bars["state"][0][0] == datetime(
+        2026, 7, 16, 9, 0)
+    # 형상은 산문이 읽는 `(ts, 시가, 종가)` 다 — 집계 봉 객체를 그대로 넘기면 거기서 깨진다
+    assert all(len(bar) == 3 and isinstance(bar[1], float)
+               for bar in handed_bars["asked"])
+
     window = store.explanation.raw["stage_results"]["window"]
     assert (window["window_start"], window["as_of"]) == ("09:00", "10:31")
     # 두 축의 좌표가 원장에 남아야 한다 — 남기지 않으면 나중에 "그 시점에 무엇을
@@ -1274,6 +1289,52 @@ def test_explain_window_spans_previous_trigger_to_this_one(monkeypatch):
     assert run(_SETTINGS, lake=_LateLake(), store=store,
                client=_FakeClient(), s3=_FakeS3()) == 0
     assert (captured["window_start"], captured["window_end"]) == ("14:20", "15:30")
+
+
+def test_aggregated_bars_are_handed_to_the_explanation_path(monkeypatch):
+    """집계한 봉이 **그대로** 산문 경로로 간다(ALPHA-892).
+
+    산문이 레이크 5분봉을 재질의하면 두 가지가 깨진다 — ① 라우팅이 판정에 쓴 가격과
+    갈리고, ② 요구창이 5분 격자점을 안 품는 날(09:06~09:08 등) 봉이 0개라 판정불가로
+    죽는다. 여기서 보는 것은 **경계**다: 요구창 봉의 첫 시각이 격자점이 아니라 요청
+    시작이어야 그 구조적 부재가 사라진다.
+    """
+    class _NoPreviousLookupStore(_FakeStore):
+        def fetch_previous_trigger_window(self, *args):
+            raise AssertionError("창을 받았는데도 원장을 뒤졌다")
+
+    captured = {}
+    monkeypatch.setattr(
+        "edge_analysis.statics.etfcell.run",
+        lambda *_a, **kw: captured.update(kw) or "고정 산출")
+
+    store = _NoPreviousLookupStore(trigger=_TRIGGER, prereqs=_PREREQS_OK)
+    # `causal_lake` 를 주입한다 — 안 주면 실제 `CausalLake` 가 생겨 S3·Glue 를 조회한다
+    # (오프라인이면 타임아웃까지 지연, 자격증명이 있으면 dev 레이크를 실제로 읽는다).
+    assert run(_SETTINGS, lake=_FakeLake(), store=store, client=_FakeClient(),
+               s3=_FakeS3(), causal_lake=object(),
+               explain_window=(datetime(2026, 7, 16, 9, 6, tzinfo=KST),
+                               datetime(2026, 7, 16, 9, 8, tzinfo=KST))) == 0
+
+    asked, state = captured["asked_bars"], captured["state_bars"]
+    assert asked and state, "봉을 안 넘겼다 — 산문이 레이크를 재질의한다"
+    # 요구창 봉은 **요청 시작**에서 시작한다. 09:05(격자점)면 5분봉을 넘긴 것이고,
+    # 그러면 09:06~09:08 창은 다시 빈 구간을 보게 된다.
+    assert asked[0][0] == datetime(2026, 7, 16, 9, 6)
+    assert state[0][0] == datetime(2026, 7, 16, 9, 0), "상태축은 09:00 부터다"
+    # 형상은 산문이 읽는 `(ts, 시가, 종가)` 다 — 집계 봉 객체를 그대로 넘기면 거기서 깨진다
+    assert all(len(bar) == 3 and isinstance(bar[1], float) for bar in asked + state)
+    # **소비자가 실제로 먹는지**를 여기서 본다. 형상만 보면 tz 를 놓친다 — 집계 봉은
+    # tz-aware 인데 산문의 창 경계는 naive(`datetime.combine`)라, aware 를 넘기면
+    # `_window_ret` 의 `w.start <= ts < w.end` 가 TypeError 로 **매 런** 죽는다.
+    # 그 실패는 이 파일의 단언으로는 안 잡히고 운영에서만 난다.
+    from edge_analysis.statics.interval import _window_ret
+    from edge_analysis.statics.windows import Window
+
+    ret, count = _window_ret(asked, Window(
+        "요구창", datetime(2026, 7, 16, 9, 6), datetime(2026, 7, 16, 9, 8), "asked"))
+    assert count > 0 and ret is not None, (
+        "산문이 이 봉으로 요구창 수익률을 못 낸다 — 판정불가가 그대로 남는다")
 
 
 def test_explicit_explain_window_overrides_the_trigger_default(monkeypatch):
