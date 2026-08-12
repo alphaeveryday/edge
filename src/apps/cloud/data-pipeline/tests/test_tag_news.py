@@ -577,24 +577,42 @@ class _WriteOnReadStorage(LocalStorage):
         return data
 
 
-def test_mirror_outside_the_tagging_window_is_still_compacted(tmp_path):
-    """창(`--window-days`)은 **태깅 비용**의 상한이지 압축 범위가 아니다 (ALPHA-900).
+def test_full_scan_compacts_mirrors_outside_any_tagging_window(tmp_path):
+    """창을 안 준 런은 canonical 파티션이 없는 날짜의 미러도 흡수한다 (ALPHA-900).
 
-    운영 SFN 은 `--window-days 3` 으로 돈다. backfill Consumer 가 그보다 오래된 기사에
-    미러를 남기거나 canonical 파티션이 없는 날짜에 남기면, 창을 그대로 쓰는 루프는 그
-    날짜를 영영 안 밟아 조각이 지워지지 않는다 — 그런데 `load_assertions` 는 feature
-    날짜를 풀스캔하므로 **매 런 그걸 다시 GET 한다**. 압축을 두는 이유가 사라진다.
+    backfill Consumer 가 오래된 기사를 뒤늦게 추출하면 그 조각이 남는데, 아무도 안
+    지우면 `load_assertions` 가 feature 날짜를 풀스캔하며 **매 런 다시 GET 한다**.
     """
     storage = LocalStorage(tmp_path)
     old = _article(published_at="2026-06-01T09:00:00+09:00")
-    # canonical 은 창 안의 다른 날짜에만 있다 — 옛 날짜엔 태깅 대상 기사가 아예 없다
     _write_canonical(storage, "ko", "2026-07-01", [_article()])
     mirror_key = _write_mirror(storage, old, tagged_at="2026-06-01T10:00:00+00:00")
+
+    calls: list = []
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls))
+
+    assert storage.list_keys(mirror_key) == []
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-06-01")] == ["a1"]
+    assert len(calls) == 1          # canonical 이 있는 날짜만 태웠다
+
+
+def test_windowed_run_never_tags_outside_its_window(tmp_path):
+    """⭐ 압축이 **태깅 범위를 넓히면 안 된다**. 창 밖 파티션에 미러가 하나 있다는 이유로
+    그 날짜가 루프에 들어오면, 거기 미태깅 canonical 기사들이 전부 LLM 대상이 되어
+    전역 `limit` 을 먼저 소진한다 — 창이 지키기로 한 비용 범위가 그대로 무너진다.
+    같은 이유로 명시 범위 백필이 자기 범위 밖 part 파일을 쓰게 되어서도 안 된다.
+    """
+    storage = LocalStorage(tmp_path)
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    # 창 밖 날짜: canonical 기사도 있고 미러도 있다
+    outside = _article("a-old", published_at="2026-06-01T09:00:00+09:00")
+    _write_canonical(storage, "ko", "2026-06-01", [outside])
+    _write_mirror(storage, outside, tagged_at="2026-06-01T10:00:00+00:00")
+    part_before = storage.list_keys(_part_key("ko", "2026-06-01"))
 
     calls: list = []
     tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls),
                  from_date="2026-07-01", to_date="2026-07-01")
 
-    assert storage.list_keys(mirror_key) == []          # 창 밖이어도 흡수했다
-    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-06-01")] == ["a1"]
-    assert len(calls) == 1                              # 창 안 기사만 태웠다(비용은 그대로)
+    assert len(calls) == 1                                   # 창 안 기사 하나만
+    assert storage.list_keys(_part_key("ko", "2026-06-01")) == part_before  # 안 썼다

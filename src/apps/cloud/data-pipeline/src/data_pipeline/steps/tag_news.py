@@ -202,15 +202,21 @@ def _partition_dates(storage: Storage, language: str, from_date: str | None, to_
 
 
 def _mirror_dates(storage: Storage, language: str) -> set[str]:
-    """장중 미러가 남아 있는 feature 파티션의 날짜 — **날짜창을 적용하지 않는다** (ALPHA-900).
+    """장중 미러가 남아 있는 feature 파티션의 날짜 — **풀스캔 런에서만** 본다 (ALPHA-900).
 
-    창(`--window-days`)은 **태깅 비용**의 상한이지 압축의 범위가 아니다. 창을 그대로
-    쓰면 backfill Consumer 가 오래된 기사에 남긴 미러나 canonical 파티션이 없는 날짜의
-    미러가 이 루프에 영영 안 들어와 지워지지 않는데, `load_assertions` 는 feature 날짜를
-    풀스캔하므로 그 조각을 **매 런 다시 GET 한다** — 압축을 두는 이유가 통째로 사라진다.
+    미러의 파티션 날짜는 기사 발행일이라 대개 당일이고, 그러면 태깅 창 안이라 이 함수가
+    필요 없다. 창 **밖**으로 나가는 건 backfill Consumer 가 오래된 기사를 뒤늦게 추출한
+    드문 경우인데, 그 조각을 아무도 안 지우면 `load_assertions` 가 feature 날짜를
+    풀스캔하며 **매 런 다시 GET 한다** — 그래서 정리할 자리가 필요하다.
 
-    canonical 날짜와 합집합으로 돈다. 미러만 있고 태깅 대상 기사가 없는 날짜는 LLM 을
-    한 번도 안 부르고 병합·삭제만 하고 끝난다(`changed` 가 False 여도 도는 그 경로다).
+    ⚠️ **그 자리는 창을 지정하지 않은 런뿐이다.** 창이 있는 런까지 여기로 넓히면 둘이
+    깨진다 — ①창 밖 canonical 기사가 태깅 대상이 되어 전역 `limit` 을 먼저 소진하고
+    (창이 지키기로 한 비용 범위가 무너진다) ②명시 범위 백필이 자기 범위 밖 파티션의
+    `part-00000.parquet` 을 쓰게 되어, 그 파티션을 동시에 쓰는 정규 런과 lost update 가
+    난다(운영자가 범위를 갈라 피하던 경합이다).
+
+    ⚠️ 대가는 **창 밖 조각이 다음 풀스캔까지 남는 것**이다. 발생 자체가 드물고
+    `minute_mirrors_absorbed` 로 드러나므로 수용한다 — 풀스캔은 수동·백필 경로다.
     """
     marker = feature_news_assertions_partition(language, "")  # ".../published_date="
     dates: set[str] = set()
@@ -360,10 +366,14 @@ def run(
     exit_code = 0
 
     for language in TAGGED_LANGUAGES:
-        # 태깅 대상 날짜(창 적용) ∪ 미러가 남은 날짜(창 미적용 — `_mirror_dates` 참조)
-        dates = sorted(set(_partition_dates(storage, language, from_date, to_date))
-                       | _mirror_dates(storage, language))
-        for published_date in dates:
+        taggable = set(_partition_dates(storage, language, from_date, to_date))
+        # 압축만 할 날짜 — 풀스캔 런에서만 더한다(`_mirror_dates` 의 ⚠️ 참조).
+        # ⚠️ 풀스캔의 `taggable` 은 canonical 날짜 **전량**이라, 여기서 새로 들어오는
+        # 날짜에는 canonical 파티션이 없다 — 아래 루프가 canonical 을 읽어도 0건이라
+        # 창 밖 기사가 태깅되는 일이 없다. 창이 있는 런은 이 집합이 아예 비어 있다.
+        mirror_dates = (_mirror_dates(storage, language)
+                        if from_date is None and to_date is None else set())
+        for published_date in sorted(taggable | mirror_dates):
             try:
                 articles = _read_canonical(storage, language, published_date)
                 existing, mirror_keys = _read_feature(storage, language, published_date)
