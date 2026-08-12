@@ -511,7 +511,23 @@ class NewsExtractionHandler:
                 f"기사 정본이 없다: ({stored['source_code']}, {stored['article_id']})",
                 code="ARTICLE_NOT_FOUND",
             )
-        self._mirror(article, stored["result"])
+        # ⚠️ **저장된 판정이 지금 읽은 본문의 것일 때만 미러한다.** 저장과 재개 사이에
+        # 기사가 정정되면 `article` 은 정정본인데 `stored["result"]` 는 옛 본문의 판정이라,
+        # 그대로 미러하면 **정정본 지문에 옛 판정이 붙는다** — 배치는 그걸 "현재 텍스트에
+        # 대한 유효한 판정"으로 인정해(`tag_news._is_current`) 재태깅을 건너뛰고, 정정은
+        # 영영 태깅되지 않는다. 지문 축이 막으려던 실패 그대로다.
+        # 판별은 저장 봉투가 이미 싣고 있는 `prompt_input_checksum`(그때 모델에 넣은 입력의
+        # 지문)으로 한다 — 새 배선이 필요 없다. 어긋나면 미러를 건너뛴다: 그 기사는 정정으로
+        # 새 job 이 생겨(원장이 content_changed 로 만든다) 정상 판정이 곧 미러된다.
+        if stored.get("prompt_input_checksum") == content_checksum(
+            [article.get("title"), article.get("lead_text"), article.get("published_at")]
+        ):
+            self._mirror(article, stored["result"])
+        else:
+            logger.warning(
+                "미러 생략(저장된 판정이 지금 본문의 것이 아니다) job=%s article=%s",
+                job_id, stored["article_id"],
+            )
         if status == _SUCCESS_STATUS:
             # fresh 경로가 PUT 뒤·조립 전에 죽은 경우의 복구 지점 — 조립은 멱등
             # (document_entity 자국 게이트)이라 이미 된 기사는 no-op 이다.

@@ -784,3 +784,38 @@ class TestReuseMirrorsRecordedFailures:
         handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
 
         assert (tmp_path / mirror_key).exists()
+
+
+class TestReuseDoesNotMisattributeAJudgement:
+    """저장과 재개 사이에 기사가 정정되면, 저장된 판정은 **지금 본문의 것이 아니다**.
+
+    그대로 미러하면 정정본 지문에 옛 판정이 붙어 배치가 "현재 텍스트에 대한 유효한 판정"
+    으로 인정하고(`tag_news._is_current`) 재태깅을 건너뛴다 — 정정이 영영 태깅되지 않는다.
+    지문 축이 막으려던 실패 그대로라, 여기서 미러를 건너뛰는 쪽이 옳다.
+    """
+
+    def test_corrected_article_does_not_get_the_old_judgement(self, tmp_path):
+        reader = FakeArticleReader()
+        handler = make_handler(tmp_path, reader=reader)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        for key in LocalStorage(tmp_path).list_keys("feature/news/assertions/"):
+            (tmp_path / key).unlink()
+        # 재개 전에 본문이 정정됐다
+        reader.rows[(SOURCE_CODE, ARTICLE_ID)] = {
+            **ARTICLE, "lead_text": "공급 규모가 3조원으로 정정됐다."}
+
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert LocalStorage(tmp_path).list_keys("feature/news/assertions/") == []
+
+    def test_unchanged_article_still_restores_its_mirror(self, tmp_path):
+        # 반례 — 본문이 그대로면 복구가 계속 돌아야 한다(그게 이 경로의 존재 이유다)
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        mirror_key = feature_news_assertions_minute_key(
+            "ko", "2026-07-31", ARTICLE_ID, tag_news._input_fingerprint(ARTICLE))
+        (tmp_path / mirror_key).unlink()
+
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert (tmp_path / mirror_key).exists()
