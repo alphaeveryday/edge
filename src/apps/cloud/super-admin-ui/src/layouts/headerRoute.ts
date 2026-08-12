@@ -1,4 +1,4 @@
-/* 헤더의 화면명·뒤로가기를 **경로 하나가** 정한다 (ALPHA-738 조각 3).
+/* 헤더의 화면명·뒤로가기를 **경로 하나가** 정한다 (ALPHA-738).
  *
  * ⚠️ **JSX 를 쓰지 않는다.** 이 판정이 `AdminLayout.tsx` 안에 있는 동안은
  * `node --test 'src/**\/*.test.ts'` 가 파일을 아예 안 집어, 경로 우선순위를 뒤바꾸거나
@@ -24,67 +24,81 @@ const LIST_TITLES: readonly (readonly [prefix: string, title: string])[] = [
 
 export const HEADER_LIST_TITLES = LIST_TITLES;
 
+export type HeaderKind =
+  | 'tenantDetail'
+  | 'symbol'
+  | 'analysisDetail'
+  | 'list'
+  | 'home'
+  | 'unknown';
+
 /**
  * 헤더가 알아야 하는 경로의 정체.
  *
- * `entity` 가 있는 갈래는 **대상 하나를 열고 있는 화면**이고, 그게 곧 뒤로가기가 필요한
- * 조건이다 — `showBack` 을 갈래 이름의 OR 목록으로 손수 유지하면 갈래를 더할 때 반드시
- * 한쪽이 빠진다(이 파일이 생기기 전 상태가 그랬다).
+ * ⭐ **`backTo` 를 라우트가 직접 들고 다닌다.** "버튼을 띄울까"와 "어디로 보낼까"를 따로 두면
+ * 갈래를 더할 때 한쪽만 고쳐지고, 그러면 버튼은 뜨는데 엉뚱한 목록으로 보낸다(안 걸린 갈래가
+ * 조용히 기본값을 탄다). 여기 한 자리로 묶으면 **갈릴 자리 자체가 없다** — 그게 이 트랙이
+ * 반복해서 배운 "손으로 유지되는 표기는 낡는다 → 집합으로 묶어라" 의 형태다.
  */
-export type HeaderRoute =
-  | { kind: 'tenantDetail'; title: string; entity: { id: string } }
-  | { kind: 'symbol'; title: string; entity: { market: string; code: string } }
-  | { kind: 'analysisDetail'; title: string; entity: { id: string } }
-  | { kind: 'list'; title: string }
-  | { kind: 'home'; title: string }
-  | { kind: 'unknown'; title: string };
+export interface HeaderRoute {
+  kind: HeaderKind;
+  title: string;
+  /** 돌아갈 목록. `null` 이면 뒤로가기 버튼이 없다. */
+  backTo: string | null;
+  /** 이름을 응답에서 찾아야 하는 상세 화면만 갖는다(경로가 못 답하는 부분). */
+  entity?: { id: string };
+}
 
 /**
- * 🔴 **순서가 계약이다.** `/analyses/symbol/KR/069500` 은 아래 셋 모두에 걸릴 수 있는 모양이다:
- * 종목 정규식 · 분석 상세 정규식(조각 수가 달라 실제론 안 걸린다) · `startsWith('/analyses')`.
- * 구체적인 것을 먼저 묻지 않으면 종목 화면이 헤더에서 **목록으로 위장**하고 뒤로가기를 잃는다.
+ * 접두어가 **경로 조각 경계에서** 끝나는가. `startsWith` 만 쓰면 `/analyses-old` 같은 오타
+ * 주소가 "가격 변동 분석 목록"으로 분류돼, 그런 화면이 없는데 헤더가 있는 화면 이름을 말한다.
+ * `/analyses` 자신과 `/analyses/…` 만 받는다.
+ */
+const underPrefix = (path: string, prefix: string): boolean =>
+  path === prefix || path.startsWith(`${prefix}/`);
+
+/**
+ * 🔴 **순서가 계약이다.** `/analyses/symbol` 은 아래 둘 모두에 걸리는 모양이다: 종목 화면과
+ * 분석 상세 정규식(`/analyses/<한 조각>`). 구체적인 것을 먼저 묻지 않으면 종목 화면이
+ * **`symbol` 이라는 id 의 분석 상세**로 분류돼, 헤더가 "가격 변동 분석 상세"를 말한다.
+ *
+ * ⭐ 시장·코드는 **쿼리에 있어서** 여기서 안 읽는다(`analyses/symbols.symbolHref` — 점 든
+ * 티커가 CDN SPA fallback 에서 죽지 않게). `useLocation().pathname` 에는 쿼리가 없으므로 이
+ * 함수는 경로만으로 답할 수 있는 데까지만 답하고, 종목 이름은 화면이 붙인다.
  */
 export function headerRoute(path: string): HeaderRoute {
   const tenant = /^\/tenants\/([^/]+)$/.exec(path);
-  if (tenant) return { kind: 'tenantDetail', title: '테넌트 상세', entity: { id: tenant[1] } };
-
-  const symbol = /^\/analyses\/symbol\/([^/]+)\/([^/]+)$/.exec(path);
-  if (symbol) {
+  if (tenant) {
     return {
-      kind: 'symbol',
-      title: '종목 분석 이력',
-      entity: { market: symbol[1], code: symbol[2] },
+      kind: 'tenantDetail',
+      title: '테넌트 상세',
+      backTo: '/tenants',
+      entity: { id: tenant[1] },
     };
+  }
+
+  /* 종목 상세는 분석 목록으로 돌아간다 — 그 화면 자신의 breadcrumb 첫 항과 같은 곳이어야
+   * 한다(갈리면 한 화면의 두 "돌아가기"가 다른 데로 간다). */
+  if (path === '/analyses/symbol') {
+    return { kind: 'symbol', title: '종목 분석 이력', backTo: '/analyses' };
   }
 
   const analysis = /^\/analyses\/([^/]+)$/.exec(path);
   if (analysis) {
-    return { kind: 'analysisDetail', title: '가격 변동 분석 상세', entity: { id: analysis[1] } };
+    return {
+      kind: 'analysisDetail',
+      title: '가격 변동 분석 상세',
+      backTo: '/analyses',
+      entity: { id: analysis[1] },
+    };
   }
 
-  const listed = LIST_TITLES.find(([prefix]) => path.startsWith(prefix));
-  if (listed) return { kind: 'list', title: listed[1] };
+  const listed = LIST_TITLES.find(([prefix]) => underPrefix(path, prefix));
+  if (listed) return { kind: 'list', title: listed[1], backTo: null };
 
-  if (path === '/') return { kind: 'home', title: '오늘 운영 현황' };
-  return { kind: 'unknown', title: '' };
+  if (path === '/') return { kind: 'home', title: '오늘 운영 현황', backTo: null };
+  return { kind: 'unknown', title: '', backTo: null };
 }
 
-/** 대상 하나를 열고 있으면 돌아갈 곳이 있다 — 갈래 목록이 아니라 `entity` 유무가 판별한다. */
-export const showBack = (route: HeaderRoute): boolean => 'entity' in route;
-
-/**
- * 뒤로가기가 가는 목록. `showBack` 이 참인 갈래마다 **반드시 하나씩** 있어야 한다 —
- * 여기 빠진 갈래는 버튼은 뜨는데 엉뚱한 목록으로 보낸다(안 걸린 갈래가 조용히 기본값을 탄다).
- * 종목 상세는 분석 목록으로 간다: 그 화면 자신의 breadcrumb 과 같은 곳이어야 한다.
- */
-export function backTo(route: HeaderRoute): string | null {
-  switch (route.kind) {
-    case 'tenantDetail':
-      return '/tenants';
-    case 'analysisDetail':
-    case 'symbol':
-      return '/analyses';
-    default:
-      return null;
-  }
-}
+/** 돌아갈 곳이 있으면 버튼이 있다 — 파생이라 두 판정이 갈릴 수 없다. */
+export const showBack = (route: HeaderRoute): boolean => route.backTo !== null;

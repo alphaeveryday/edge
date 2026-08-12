@@ -29,7 +29,16 @@ export interface SymbolGroup {
   latestAttempt: Analysis;
   /** 최신 시도가 유효 결과가 아니다(실패 또는 진행 중) */
   attemptPending: boolean;
-  todayCount: number;
+  /**
+   * 이 종목의 분석 **시도 수 — 조회 창(최신 200건) 안에서만** 이다.
+   *
+   * 🔴 이 필드는 `todayCount` 였는데 **오늘과 아무 상관이 없다**. 목록 SQL
+   * (`JdbcAnalysisRepository.LIST_SQL`)에는 날짜 조건이 없고 `explanation_as_of DESC`
+   * 로 전 종목을 합쳐 200건을 자를 뿐이다. 그 이름을 화면이 그대로 읽어 "오늘의 분석 이력
+   * N건"이라 적고 있었다 — 어제 3건만 남은 종목이 오늘 3건으로 보인다. 이름이 곧 거짓
+   * 주장이라 값이 아니라 **이름을 고쳤다**.
+   */
+  attemptCount: number;
 }
 
 /**
@@ -65,6 +74,25 @@ export function hasResult(a: Analysis): boolean {
 export const symbolKey = (a: Pick<Analysis, 'market' | 'code'>) => `${a.market}:${a.code}`;
 
 /**
+ * 종목 상세 주소 — 시장·코드를 **경로가 아니라 쿼리**로 싣는다.
+ *
+ * 🔴 CloudFront 의 SPA fallback(`infra/terraform/modules/static-site/spa-rewrite.js`)은
+ * "마지막 경로 조각에 점(.)이 있으면 정적 파일"로 가른다. `AnalysisMarket` 에 `NASDAQ` 이
+ * 있고 티커에는 제약이 없어(`BRK.B` 류), 코드를 경로에 두면 그 종목의 **공유 링크·새로고침만**
+ * index.html 을 못 받고 403/404 가 된다 — 앱 안에서 누른 링크는 서버를 안 타서 멀쩡하다.
+ * 즉 이 화면이 존재하는 이유(공유 가능한 종목 이력)만 골라서 깨진다. 이 트랙은 사건 딥링크에서
+ * 같은 이유로 이미 쿼리를 골랐다(ALPHA-738 A1).
+ *
+ * `URLSearchParams` 가 인코딩까지 맡는다 — 손으로 `?market=${m}` 을 조립하면 `&` 든 코드가
+ * 파라미터 경계를 만든다.
+ */
+export function symbolHref(market: string, code: string, preview = false): string {
+  const q = new URLSearchParams({ market, code });
+  if (preview) q.set('preview', 'mock');
+  return `/analyses/symbol?${q}`;
+}
+
+/**
  * 최신순 정렬 — 기준 시각(내림차순) → 같으면 id(내림차순, 결정적 실행 순서 대용).
  * 완료 시각은 정렬 축이 아니다.
  */
@@ -94,7 +122,7 @@ export function groupBySymbol(items: Analysis[]): SymbolGroup[] {
       latestValid,
       latestAttempt,
       attemptPending: !hasResult(latestAttempt),
-      todayCount: analyses.length,
+      attemptCount: analyses.length,
     });
   }
   /* 종목 정렬도 결정적으로 — 최신 시도 기준 시각순, 같으면 코드순.

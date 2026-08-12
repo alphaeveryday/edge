@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ErrorBoundary, Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 import { useTenants } from '../domains/tenants/hooks';
-import { backTo, headerRoute, showBack as routeShowsBack } from './headerRoute';
+import { headerRoute, showBack as routeShowsBack } from './headerRoute';
 import { EdgeLogo } from '../pages/_shared/EdgeLogo';
 
 interface NavEntry {
@@ -40,6 +40,7 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
 
 export function AdminLayout() {
   const location = useLocation();
+  const [search] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: session } = useSession();
@@ -69,16 +70,18 @@ export function AdminLayout() {
 
   let pageSub = '';
   if (route.kind === 'tenantDetail') {
-    pageSub = tenants?.find((t) => t.id === route.entity.id)?.name ?? '';
+    pageSub = tenants?.find((t) => t.id === route.entity!.id)?.name ?? '';
   } else if (route.kind === 'analysisDetail') {
-    const a = analyses?.find((x) => x.id === route.entity.id);
+    const a = analyses?.find((x) => x.id === route.entity!.id);
     pageSub = a ? `${a.name} ${a.code}` : '';
   } else if (route.kind === 'symbol') {
-    /* 종목명은 목록 응답에서만 온다 — 못 찾으면 시장·코드로 적는다(그 둘은 경로에 있어 늘
-     * 참이다). 빈칸으로 두면 헤더가 **어느 종목을 보는지 말하지 못한다.** */
-    const { market, code } = route.entity;
+    /* 종목은 시장·코드가 **쿼리**에 있다(점 든 티커가 CDN 에서 죽지 않게 — `symbolHref`).
+     * `headerRoute` 는 경로만 보므로 여기서 읽는다. 이름은 목록 응답에서만 오니 못 찾으면
+     * 시장·코드로 적는다 — 빈칸으로 두면 헤더가 어느 종목을 보는지 말하지 못한다. */
+    const market = search.get('market') ?? '';
+    const code = search.get('code') ?? '';
     const a = analyses?.find((x) => x.market === market && x.code === code);
-    pageSub = a ? `${a.name} ${a.code}` : `${market} ${code}`;
+    pageSub = a ? `${a.name} ${a.code}` : `${market} ${code}`.trim();
   }
   const showBack = routeShowsBack(route);
 
@@ -215,7 +218,7 @@ export function AdminLayout() {
             <button
               className="btn btn-ghost btn-icon"
               aria-label="뒤로"
-              onClick={() => navigate(backTo(route) ?? '/')}
+              onClick={() => navigate(route.backTo ?? '/')}
             >
               <Icon name="arrowLeft" className="ic" />
             </button>

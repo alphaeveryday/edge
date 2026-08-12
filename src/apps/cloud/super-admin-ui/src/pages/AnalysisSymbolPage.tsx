@@ -1,26 +1,52 @@
-/* 종목 상세 — 최신 유효 설명과 오늘의 분석 이력 (ALPHA-738).
+/* 종목 상세 — 최신 유효 설명과 그 종목의 분석 이력 (ALPHA-738).
  *
- * 목록이 종목당 한 행으로 접히므로, 그 종목의 **읽을 설명 하나**와 **오늘 무슨 시도가 있었나**를
+ * 목록이 종목당 한 행으로 접히므로, 그 종목의 **읽을 설명 하나**와 **무슨 시도가 있었나**를
  * 여기서 편다.
  *
  * 지키는 선:
  *   · 최신 유효 설명은 **변동 기준 시각** 기준이다 — 늦게 끝난 과거 기준이 덮지 않는다.
  *   · 최신 시도가 실패해도 이전 유효 설명을 지우지 않는다. 실패한 시도를 누르면 분석 결과가
- *     아니라 **관련 실행·문제**로 보낸다(없는 결과를 여는 죽은 링크를 만들지 않는다).
+ *     아니라 **파이프라인 실행 이력**으로 보낸다(없는 결과를 여는 죽은 링크를 만들지 않는다).
  *   · 게시·발번 등 전달 축은 이 화면의 범위 밖이라 표시하지 않는다.
+ *
+ * 🔴 **이 화면이 보는 것은 원장 전량이 아니라 조회 창이다.** `useAnalyses` 는
+ * `JdbcAnalysisRepository.LIST_SQL` 을 읽는데 거기엔 **종목 필터도 날짜 필터도 없고**
+ * `explanation_as_of DESC LIMIT 200` 뿐이다. 즉 전 종목을 합친 최신 200건에서 이 종목 몫만
+ * 걸러 본다. 그래서 이 화면은 두 가지를 **단정하면 안 된다**: ① "유효한 설명이 없다"(창 밖에
+ * 있을 수 있다) ② "오늘의 이력"(창에는 어제 것도 섞여 있다). 둘 다 문구로 창을 밝힌다.
  */
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Delta, PageSkeleton, StatusBadge } from 'ui-kit';
 import { ANALYSIS_CONFIDENCE_LABEL, ANALYSIS_STATUS_LABEL, ANALYSIS_STATUS_TONE } from '../domains/analyses';
+import type { Analysis } from '../domains/analyses';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { findGroup, hasResult } from '../domains/analyses/symbols';
 import { MOCK_ANALYSES } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
+/** 조회 창 크기 — 서버 `JdbcAnalysisRepository.LIST_LIMIT` 과 같은 수. 문구가 이 값을 쓴다. */
+const LIST_WINDOW = 200;
+
+/**
+ * 고객에게 실제로 나간 산문. **블록이 정본이고 `result` 는 폴백**이다(상세 화면과 같은 규약).
+ *
+ * ⚠️ `result` 만 쓰면 안 된다 — 서버는 `summary` 가 비면 `result` 를 안내 문장으로 바꿔 싣는다
+ * (`AnalysisResponse.result`). 블록에 본문이 있고 `summary` 만 빈 행에서는 `hasResult` 가
+ * **유효**로 세운 설명 자리에 "설명 본문이 원장에 없습니다"가 찍힌다 — 한 화면이 자기 판정과
+ * 모순되는 문장을 쓰는 셈이다.
+ */
+function resultTexts(a: Analysis): string[] {
+  const blocks = (a.resultBlocks ?? []).map((b) => b.text.trim()).filter((t) => t.length > 0);
+  return blocks.length > 0 ? blocks : [a.result];
+}
+
 export function AnalysisSymbolPage() {
-  const { market = '', code = '' } = useParams();
   const [params] = useSearchParams();
+  /* 🔴 시장·코드는 **쿼리**로 받는다(`symbols.symbolHref` 가 그렇게 만든다) — 경로에 두면
+   * 점 든 티커의 공유 링크가 CDN 에서 정적 파일로 갈려 죽는다. 거기 근거를 적어 뒀다. */
+  const market = params.get('market') ?? '';
+  const code = params.get('code') ?? '';
   const preview = params.get('preview') === 'mock';
   const query = useAnalyses();
 
@@ -33,12 +59,13 @@ export function AnalysisSymbolPage() {
   if (!group) {
     return (
       <div className="card card-pad">
-        <p className="t-sm m-0">이 종목의 분석이 없습니다.</p>
+        <p className="t-sm m-0">이 종목의 분석이 조회 창 안에 없습니다.</p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
           <span className="mono">
             {market} {code}
           </span>{' '}
-          의 분석 결과가 조회되지 않았습니다 — 다른 종목으로 대체하지 않습니다.{' '}
+          는 최신 {LIST_WINDOW}건 조회 창에 없습니다 — 이 종목의 분석이 없다는 뜻이 아니라
+          그보다 오래됐을 수 있다는 뜻입니다. 다른 종목으로 대체하지 않습니다.{' '}
           <Link to="/analyses">가격 변동 분석 목록으로</Link>
         </p>
       </div>
@@ -68,17 +95,20 @@ export function AnalysisSymbolPage() {
           </span>
           <span className="tag">{group.market}</span>
           {preview && <MockChip />}
+          {/* "오늘"이라 쓰지 않는다 — 목록 SQL 에 날짜 조건이 없어 이 수에는 어제 것도 섞인다 */}
           <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
-            오늘 분석 {group.todayCount}건
+            분석 시도 {group.attemptCount}건
           </span>
         </div>
         <div className="card-pad">
           {latestValid ? (
             <>
               <span className="t-label">최신 유효 설명</span>
-              <p className="t-body m-0" style={{ marginTop: 6 }}>
-                {latestValid.result}
-              </p>
+              {resultTexts(latestValid).map((t, i) => (
+                <p key={i} className="t-body m-0 whitespace-pre-line" style={{ marginTop: 6 }}>
+                  {t}
+                </p>
+              ))}
               <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
                 기준 시각 <b>{latestValid.basisTime}</b> · 완료 {latestValid.doneTime} ·{' '}
                 <Delta direction={latestValid.direction} pct={latestValid.changePct} />
@@ -93,8 +123,14 @@ export function AnalysisSymbolPage() {
           ) : (
             <>
               <span className="t-label">최신 유효 설명</span>
+              {/* 🔴 "없다"로 단정하지 않는다 — 조회 창이 전 종목 합산 최신 200건이라, 이 종목의
+                  마지막 유효 설명이 창 밖으로 밀렸을 수 있다(이 종목의 실패 시도만 창 안에
+                  남으면 정확히 그 모양이 된다). 부재를 실측처럼 쓰면 운영자가 "설명이 한 번도
+                  안 나온 종목"으로 읽는다. */}
               <p className="t-sm m-0" style={{ color: 'var(--fg-3)', marginTop: 6 }}>
-                아직 유효한 설명이 없습니다 — 오늘의 시도는 아래 이력에서 확인합니다.
+                조회 창(최신 {LIST_WINDOW}건) 안에 유효한 설명이 없습니다 — 이 종목에 설명이 없다는
+                뜻이 아니라, 있었다면 창 밖으로 밀렸을 수 있다는 뜻입니다. 창 안의 시도는 아래
+                이력에서 확인합니다.
               </p>
             </>
           )}
@@ -114,9 +150,12 @@ export function AnalysisSymbolPage() {
 
       <div className="card">
         <div className="card-head">
-          <span className="t-label">오늘의 분석 이력 {group.todayCount}건</span>
+          {/* 🔴 "오늘의"가 아니다 — 목록 SQL 에 날짜 조건이 없어 창에는 어제 것도 섞인다.
+              행마다 기준 시각을 **날짜까지** 보여야 같은 시각의 다른 날 분석이 안 겹친다. */}
+          <span className="t-label">분석 이력 {group.attemptCount}건</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            변동 기준 시각 최신순 · 실패한 시도는 관련 실행으로 갑니다
+            변동 기준 시각 최신순 · 최신 {LIST_WINDOW}건 조회 창 안 · 결과 없는 시도는 실행 이력으로
+            갑니다
           </span>
         </div>
         <table className="table">
@@ -150,8 +189,13 @@ export function AnalysisSymbolPage() {
                   {hasResult(a) ? (
                     <Link to={detail(a.id)}>분석 상세 →</Link>
                   ) : (
-                    /* 결과가 없는 시도는 분석 상세가 아니라 실행·문제가 답한다 */
-                    <Link to="/ops/incidents">관련 실행·문제 →</Link>
+                    /* 결과가 없는 시도는 분석 상세가 아니라 실행 축이 답한다.
+                     * 🔴 프로토타입은 여기서 `/ops/incidents` 로 보냈는데 **그 라우트가 없다** —
+                     * `App.tsx` 의 와일드카드가 홈으로 되돌려, 운영자는 실행 대신 첫 화면을 본다.
+                     * 규칙 엔진 화면(`/ops/*`)은 아직 안 들어왔다. 서버가 실패 런에 실어 보내는
+                     * 안내와 같은 곳을 가리킨다("실행 상세는 파이프라인 실행 이력에서" —
+                     * `AnalysisResponse.result`). 라우트가 생기면 그때 옮긴다. */
+                    <Link to="/grid">파이프라인 실행 이력 →</Link>
                   )}
                 </td>
               </tr>

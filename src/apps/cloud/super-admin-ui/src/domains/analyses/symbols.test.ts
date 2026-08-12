@@ -3,13 +3,14 @@
  * 지키는 의도:
  *   · **완료 시각으로 최신을 정하지 않는다** — 과거 기준의 늦은 완료가 최신 설명을 덮으면 안 된다.
  *   · **최신 시도가 실패해도 이전 유효 설명은 남는다** — 두 축을 따로 들고 다닌다.
- *   · 같은 종목의 장중 분석이 오늘 분석 수로 접힌다(목록이 평평해지지 않는다).
+ *   · 같은 종목의 장중 분석이 시도 수로 접힌다(목록이 평평해지지 않는다).
+ *   · 종목 딥링크는 **쿼리**다 — 점 든 티커가 CDN SPA fallback 에서 죽지 않게.
  *
  * 실행: node --test src/domains/analyses/symbols.test.ts
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { byBasisDesc, groupBySymbol, hasResult, symbolKey } from './symbols.ts';
+import { byBasisDesc, groupBySymbol, hasResult, symbolHref, symbolKey } from './symbols.ts';
 import type { Analysis } from './types.ts';
 
 const a = (o: Partial<Analysis> & Pick<Analysis, 'id' | 'basisTimeAbs'>): Analysis => ({
@@ -39,7 +40,7 @@ test('같은 종목의 분석이 한 행으로 접히고 오늘 분석 수가 �
     a({ id: '3', basisTimeAbs: '2026-08-03 15:30' }),
   ]);
   assert.equal(g.length, 1, '종목당 한 행');
-  assert.equal(g[0].todayCount, 3);
+  assert.equal(g[0].attemptCount, 3);
   assert.equal(g[0].analyses.length, 3, '이력은 보존된다');
 });
 
@@ -169,4 +170,32 @@ test('정렬은 기준 시각 내림차순이다', () => {
   const older = a({ id: '1', basisTimeAbs: '2026-08-03 10:00' });
   const newer = a({ id: '2', basisTimeAbs: '2026-08-03 15:00' });
   assert.ok(byBasisDesc(newer, older) < 0, '최신이 앞');
+});
+
+test('종목 딥링크는 코드를 경로에 두지 않는다 — 점 든 티커가 CDN 에서 죽는다', () => {
+  /* 🔴 CloudFront SPA fallback(`spa-rewrite.js`)은 "마지막 경로 조각에 점(.)이 있으면 정적
+   * 파일"로 가른다. `/analyses/symbol/NASDAQ/BRK.B` 로 두면 앱 안 클릭은 멀쩡한데
+   * **공유 링크·새로고침만** index.html 을 못 받아 403/404 가 된다 — 이 화면이 존재하는 이유가
+   * 정확히 공유 가능한 종목 이력이라, 그 하나만 골라서 깨지는 모양이다. */
+  const href = symbolHref('NASDAQ', 'BRK.B');
+  assert.ok(!href.split('?')[0].includes('.'), `경로 조각에 점이 남았다: ${href}`);
+  assert.ok(href.startsWith('/analyses/symbol?'), href);
+
+  const q = new URLSearchParams(href.split('?')[1]);
+  assert.equal(q.get('market'), 'NASDAQ');
+  assert.equal(q.get('code'), 'BRK.B', '값은 그대로 되읽혀야 한다');
+});
+
+test('구분자가 든 코드가 파라미터 경계를 못 만든다 (손으로 조립하면 깨진다)', () => {
+  const q = new URLSearchParams(symbolHref('KRX', 'A&b=c').split('?')[1]);
+  assert.equal(q.get('code'), 'A&b=c');
+  assert.equal(q.get('market'), 'KRX', '코드가 market 을 덮어쓰면 다른 종목이 열린다');
+});
+
+test('미리보기 표시는 붙일 때만 붙는다 — 실 조회에 목 파라미터를 흘리지 않는다', () => {
+  assert.equal(new URLSearchParams(symbolHref('KRX', '069500').split('?')[1]).get('preview'), null);
+  assert.equal(
+    new URLSearchParams(symbolHref('KRX', '069500', true).split('?')[1]).get('preview'),
+    'mock',
+  );
 });

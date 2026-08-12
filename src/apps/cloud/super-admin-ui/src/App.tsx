@@ -38,8 +38,11 @@ export function App() {
           <Route path="/impact/holdings" element={<HoldingsImpactPage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
           {/* 종목 상세 — 구체 경로라 `:id` 보다 **먼저** 둔다. 뒤에 두면 `symbol` 이 분석 id 로
-              잡혀 상세 화면이 "해당 분석 건을 찾을 수 없습니다"를 띄운다. */}
-          <Route path="/analyses/symbol/:market/:code" element={<AnalysisSymbolPage />} />
+              잡혀 상세 화면이 "해당 분석 건을 찾을 수 없습니다"를 띄운다.
+              시장·코드는 **경로가 아니라 쿼리**로 받는다(`symbols.symbolHref`) — CloudFront SPA
+              fallback 이 마지막 조각의 점(.)을 정적 파일로 갈라, `BRK.B` 류 티커의 공유 링크·
+              새로고침만 index.html 을 못 받는다. 사건 딥링크가 같은 이유로 쿼리다. */}
+          <Route path="/analyses/symbol" element={<AnalysisSymbolPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
         </Route>
       </Route>

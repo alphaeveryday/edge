@@ -13,13 +13,13 @@ import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type {
   MinuteSession,
-  MinuteStatus,
   OpsStatus,
   OverviewDefect,
   OverviewLane,
   SourceOverview,
 } from '../domains/sources';
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
+import { laneLabel } from '../domains/sources/lanes';
 import { issues, liveness } from '../domains/sources/minuteView';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
@@ -40,8 +40,6 @@ const OPS: Record<OpsStatus, { label: string; tone: BadgeTone; desc: string }> =
    * "실행 여부"로 좁혀 쓰면 실행 축이 SUCCEEDED 인 카드와 문구가 모순된다 */
   UNKNOWN: { label: '확인 불가', tone: 'neutral', desc: '판정 근거 부족 — 드릴다운 확인 필요' },
 };
-
-const LANE_LABEL: Record<string, string> = { 'etf-daily': '시장(EOD)', news: '뉴스' };
 
 /** 결함 사유 — 축 원문을 운영자 어휘로. 여러 축이 겹치면 전부 나열한다(뭉개면 원인이 사라진다). */
 function defectReasons(d: OverviewDefect): string[] {
@@ -74,7 +72,7 @@ function LaneCard({ lane, mock = false }: { lane: OverviewLane; mock?: boolean }
     <div className="card">
       <div className="card-head">
         <span className="t-label">
-          {LANE_LABEL[lane.pipelineType] ?? lane.pipelineType} 레인 {mock && <MockChip />}
+          {laneLabel(lane.pipelineType)} 레인 {mock && <MockChip />}
         </span>
         <StatusBadge tone={ops.tone}>{ops.label}</StatusBadge>
         {/* 오늘 런이 아니면 판정 전체가 지난 런 기준이라는 사실이 상태보다 먼저 보여야 한다 */}
@@ -180,25 +178,39 @@ function MinuteSessionLine({ s }: { s: MinuteSession }) {
   );
 }
 
-function MinuteLaneCard({ mockData }: { mockData?: MinuteStatus }) {
+/**
+ * 🔴 **개요 레인이 비었다는 사실은 1분 원장에 대해 아무것도 말하지 않는다.** 둘은 별개
+ * 원장이다(ops 런 vs 1분 세션 창). 그래서 이 카드는 개요의 목 여부를 **그대로 받지 않고**,
+ * 목을 쓸지 자기 조회 결과로 정한다: 이번 조회가 성공했고 실을 것이 없을 때만 목이다.
+ *
+ * 앞서 개요가 `mock` 을 그대로 넘기고 있었고, 그러면 초기 환경에서 **실제 1분 장애·실 세션이
+ * 검수용 목 뒤로 사라진다** — `isError`·`isPending` 가드가 `!mockData` 로 막혀 있어 조회 실패도
+ * 안 보였다. 부재를 "괜찮다"로 접는 그 자리다.
+ */
+function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
   const query = useMinuteStatus();
   const { isPending, isError } = query;
-  const data = mockData ?? query.data;
+  const real = query.data;
+  /* 실을 것이 없다 = 세션도 0이고 DEAD 도 0. 둘 중 하나라도 있으면 실측이 이긴다. */
+  const nothingReal =
+    !isPending && !isError && (real?.sessions.length ?? 0) === 0 && (real?.newsJobs.dead ?? 0) === 0;
+  const usingMock = preview && nothingReal;
+  const data = usingMock ? MOCK_MINUTE : real;
 
   return (
     <div className="card">
       <div className="card-head">
-        <span className="t-label">장중 1분 레인 {mockData && <MockChip />}</span>
+        <span className="t-label">장중 1분 레인 {usingMock && <MockChip />}</span>
         <Link to="/minute" className="t-xs">
           장중 1분 수집 상세 →
         </Link>
       </div>
-      {!mockData && isError ? (
+      {isError ? (
         /* 첫 화면 전체를 죽이지 않는다 — 이 카드만 실패를 밝힌다(조회 실패 ≠ 미가동) */
         <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
           1분 원장 조회 실패 — 미가동이 아니라 조회 오류입니다.
         </p>
-      ) : !mockData && isPending ? (
+      ) : isPending ? (
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>불러오는 중…</p>
       ) : (
         <>
@@ -257,7 +269,7 @@ function OverviewBody({ data, mock = false }: { data: SourceOverview; mock?: boo
 
       {/* 장중 1분 레인 — EOD 레인만 보이면 장중 절반이 첫 화면의 사각이다(ALPHA-692, 멘토
        * "왜 전부 하루 주기냐"). ops 런 레인과 실행 모델이 달라 별도 카드로 요약만 얹는다. */}
-      <MinuteLaneCard mockData={mock ? MOCK_MINUTE : undefined} />
+      <MinuteLaneCard preview={mock} />
 
       {/* 발행 분포는 이 콘솔의 경계 밖 — 없는 숫자를 지어내지 않고 소재만 밝힌다(계획 §6-1) */}
       <div className="card">

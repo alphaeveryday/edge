@@ -17,7 +17,7 @@ import { Delta, Icon, PageSkeleton, StatusBadge } from 'ui-kit';
 import type { Analysis, AnalysisMarket, AnalysisStatus } from '../domains/analyses';
 import { ANALYSIS_STATUS_LABEL, ANALYSIS_STATUS_TONE } from '../domains/analyses';
 import { useAnalyses } from '../domains/analyses/hooks';
-import { groupBySymbol } from '../domains/analyses/symbols';
+import { groupBySymbol, hasResult, symbolHref } from '../domains/analyses/symbols';
 import type { SymbolGroup } from '../domains/analyses/symbols';
 import { MOCK_ANALYSES } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
@@ -99,7 +99,7 @@ function AnalysesBody({ items, mock = false }: { items: Analysis[]; mock?: boole
         <SymbolTable
           groups={groups}
           mock={mock}
-          onOpen={(g) => navigate(withPreview(`/analyses/symbol/${g.market}/${g.code}`, mock))}
+          onOpen={(g) => navigate(symbolHref(g.market, g.code, mock))}
         />
       ) : (
         <HistoryTable
@@ -131,7 +131,7 @@ function SymbolTable({
             <th>시장</th>
             <th className="col-num">최신 변동</th>
             <th>최신 설명 기준</th>
-            <th className="col-num">오늘 분석</th>
+            <th className="col-num">분석 시도</th>
             <th>최신 유효 결과</th>
             <th>최근 생성</th>
           </tr>
@@ -162,7 +162,7 @@ function SymbolTable({
                 )}
               </td>
               <td className="col-muted num whitespace-nowrap">{g.latestValid?.basisTime ?? '—'}</td>
-              <td className="col-num">{g.todayCount}건</td>
+              <td className="col-num">{g.attemptCount}건</td>
               <td>
                 {g.latestValid ? (
                   <StatusBadge tone="active">있음</StatusBadge>
@@ -236,8 +236,12 @@ function HistoryTable({
                   {ANALYSIS_STATUS_LABEL[a.status]}
                 </StatusBadge>
               </td>
+              {/* 🔴 `a.result.trim()` 으로 세면 **전 행이 '있음'** 이다 — 서버는 결과가 없어도
+                  `result` 를 비워 보내지 않고 상태별 안내 문장으로 바꿔 싣는다
+                  (`AnalysisResponse.result`, `symbols.hasResult` 주석이 이미 적어 둔 사실).
+                  판정은 그 계약을 아는 `hasResult` 한 곳이 한다. */}
               <td className="t-xs" style={{ color: 'var(--fg-3)' }}>
-                {a.result.trim() ? '있음' : '없음'}
+                {hasResult(a) ? '있음' : '없음'}
               </td>
               <td className="col-muted num whitespace-nowrap">{a.doneTime}</td>
             </tr>
