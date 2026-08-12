@@ -7,9 +7,16 @@ kernel(ALPHA-672)이 실행 자격·재시도·격리·ack 을 전부 정하므�
 payload(job_id·source_code·article_id·source_item_id·input_fingerprint·generation)
 → (source_code, article_id) 로 기사 정본 읽기        ← PG document + news_document
 → tagging.extract_assertions(article, complete_fn)   ← 결정 로직·프롬프트는 기존 것 그대로
-→ feature 존 결과 artifact 불변 PUT
+→ feature 존 결과 artifact 불변 PUT                  ← job 축(원장이 색인)
+→ 같은 결과를 날짜축 feature 파티션에 미러            ← 배치가 보는 자리 (ALPHA-900)
 → 그 바이트의 sha256 을 반환 (= job.result_checksum)
 ```
+
+**미러는 두 레인의 LLM 장부를 잇는 유일한 자리다**(`_mirror`). job 축 키는 원장이
+색인이라 배치가 못 보고, 배치 `tag_news` 의 재태깅 skip 도 `load_assertions` 의 소비도
+날짜축 파티션 하나만 본다 — 그래서 여기 한 장을 더 남기지 않으면 같은 기사가 반드시
+두 번 유료 호출된다. 미러 행의 형식 정본은 `steps/tag_news.mirror_row_bytes` 다(재구현
+금지 — 지문·버전 축의 형식이 갈리면 skip 이 조용히 안 걸린다).
 
 **추출 로직을 복제하지 않는다.** 프롬프트·doc_class 어휘·역할 검증은 `tagging/extract.py`
 하나가 정본이고, 이 모듈은 그것을 job 단위로 부르는 배선일 뿐이다 — 복제하면 배치
@@ -52,11 +59,18 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Protocol
 
 from ..config import DbConfig
 from ..db import connect as _default_connect
-from ..lake.storage import Storage, news_extraction_result_key
+from ..lake.storage import (
+    Storage,
+    feature_news_assertions_minute_key,
+    news_extraction_result_key,
+)
+from ..steps.normalize_news import _KST
+from ..steps.tag_news import mirror_row_bytes
 from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
 from ..tagging.ontology import ontology_version
 from .artifacts import put_immutable, sha256_bytes
@@ -83,6 +97,12 @@ _RETRY_STATUSES = {"llm_error": "LLM_ERROR"}
 # 이 job 의 재시도로는 도달할 수 없다. 배치 태깅과 같은 정책이다(Rule 7 — 갈라 두지 않는다).
 _RECORDED_STATUSES = frozenset({"no_title", "llm_unparseable", "bad_doc_class"})
 _SUCCESS_STATUS = "ok"
+
+# 벤더가 **선언한** 시간대 — canonical `published_at` 문자열을 PG 왕복에서 복원하는 축이다
+# (ALPHA-900). 정본은 `steps/normalize_news._normalize` 의 `parse_datetime(..., naive_tz=)`
+# 인자이고 여기는 그 역함수다: bigkinds 는 KST, 나머지(fmp)는 `parse_datetime` 기본값 UTC.
+# 벤더가 늘면 두 곳을 같이 늘려야 한다 — 여기만 빠지면 그 벤더의 지문이 조용히 갈린다.
+_VENDOR_TZ = {"bigkinds": _KST}
 
 # 결과 artifact 가 반드시 담는 계보 — `_envelope` 가 만드는 키 집합과 같아야 한다.
 # 재사용 경로가 이걸로 "우리가 쓴 결과인가"를 판정하므로, 필드를 늘리면 여기도 늘린다.
@@ -176,7 +196,18 @@ class PgArticleReader:
             "language_code": language_code,
             # 프롬프트 입력은 **문자열**이다(`build_prompt` 계약) — datetime 을 그대로
             # 넘기면 파이썬 repr 이 프롬프트에 새어 배치 태깅과 다른 입력이 된다.
-            "published_at": None if published_at is None else published_at.isoformat(),
+            #
+            # ⚠️ **그런데 `.isoformat()` 만으로는 배치와 같은 문자열이 안 나온다**
+            # (ALPHA-900). `document.published_at` 은 `TIMESTAMPTZ` 라 psycopg 가
+            # **세션 tz**(RDS 기본 UTC)로 되돌려 주는데, canonical 에 실린 값은 벤더가
+            # 선언한 tz 의 오프셋을 달고 있다(bigkinds = KST). 같은 **순간**이지만 표기가
+            # 갈리고, `tag_news._input_fingerprint` 는 이 문자열을 그대로 해싱하므로
+            # 지문이 다른 값이 된다 — 재태깅 skip 이 전건 불발한다.
+            # 그래서 벤더 선언 tz 로 되돌려 canonical 문자열을 복원한다. KST 는 고정
+            # 오프셋(DST 없음)이라 왕복이 바이트 단위로 일치한다.
+            "published_at": None if published_at is None else published_at.astimezone(
+                _VENDOR_TZ.get(source_code, timezone.utc)
+            ).isoformat(),
         }
 
 
@@ -358,6 +389,7 @@ class NewsExtractionHandler:
             attempt=attempt, redrive_generation=redrive_generation, result=result,
         )).encode("utf-8")
         checksum = put_immutable(self.storage, key, data)
+        self._mirror(article, result)
         # 판정으로 기록하고 끝내는 실패(no_title·llm_unparseable·bad_doc_class)는 job 이
         # SUCCEEDED 라 원장만 보면 정상과 구분되지 않는다 — 로그 등급으로라도 드러낸다.
         # 하루 단위 집계·판정은 EOD QC 소관이다(PR 8, 이 artifact 의 status 를 읽는다).
@@ -376,6 +408,50 @@ class NewsExtractionHandler:
             )
             logger.info("event 조립 job=%s article=%s %s", job_id, article_id, assembled)
         return checksum
+
+    def _mirror(self, article: dict, result: dict) -> None:
+        """추출 결과를 배치가 보는 **날짜축 feature 파티션**에도 남긴다 (ALPHA-900).
+
+        job 축 artifact(`news_extraction_result_key`)는 원장이 색인이라 배치가 못 본다.
+        배치 `tag_news` 의 재태깅 skip 도, `load_assertions` 의 소비도 날짜축 파티션
+        하나만 보므로, 여기 한 장을 더 남기는 것이 두 레인의 LLM 장부를 잇는 전부다.
+        얻는 것이 둘이다 — 이중 LLM 과금이 사라지고, 장중이 뽑은 `confidence`·다중역할
+        argument 가 다음 배치 런에 DB 로 착지한다(`load_assertions` 의 rowcount==0 갈래).
+
+        ⚠️ **실패해도 job 을 죽이지 않는다.** 판정 artifact 는 이미 불변으로 남았고,
+        여기서 예외를 올리면 job 이 재시도된다 — 재시도는 attempt 가 달라 **새 key** 라
+        `_reuse` 를 못 타고 LLM 을 다시 유료로 부른다. 미러를 놓친 대가는 그 기사 한 건의
+        재태깅뿐이라, 부르는 값보다 싸다. 대신 조용히 넘기지 않는다(Rule 12) — 로그로
+        드러내고, 배치 쪽 `minute_mirrors_absorbed` 가 0 이면 이 경로가 안 도는 것이다.
+        """
+        published_at = article.get("published_at")
+        article_id = article.get("article_id")
+        if not isinstance(published_at, str) or len(published_at) < 10:
+            # 파티션 날짜를 못 정한다. 정제 품질 게이트가 발행시각 결측 기사의 canonical
+            # 진입을 막으므로(`quality.validate_news_meta`) 배치도 이 기사를 태깅 대상으로
+            # 삼지 않는다 — 미러를 안 남겨도 이중 호출이 생기지 않는다.
+            logger.warning("미러 생략(발행시각 없음) article=%s", article_id)
+            return
+        # 언어 미상이면 실제로 쓴 프롬프트의 언어로 남긴다 — 위에서 미상을 한국어
+        # 프롬프트로 진행시킨 그 판단과 같은 값이어야 배치의 언어 파티션과 만난다.
+        language = article.get("language_code") or PROMPT_LANGUAGES[0]
+        # 파티션 날짜는 canonical 과 같은 산식이다(`normalize_news._write_canonical` 의
+        # `published_at[:10]`) — 위 tz 복원이 있어야 이 절단이 같은 날짜를 낸다.
+        # 배치와 같은 ISO-8601 UTC(`+00:00`) — 병합 승자 판정이 문자열 비교다
+        # (`tag_news._tagged_at`).
+        fingerprint, data = mirror_row_bytes(
+            article, result, datetime.now(timezone.utc).isoformat())
+        # ⚠️ 키에 지문이 들어간다 — 같은 기사라도 **본문이 다르면 다른 객체**다. 배치가
+        # 미러를 읽어 병합하고 지우는 사이에 정정 판정이 같은 키를 덮으면, 배치는 자기가
+        # 읽은 것을 지운다고 믿지만 실제로는 아무도 안 읽은 최신 판정이 사라진다.
+        mirror_key = feature_news_assertions_minute_key(
+            language, published_at[:10], article_id, fingerprint)
+        try:
+            self.storage.put_bytes(mirror_key, data)
+        except Exception:
+            logger.exception("미러 적재 실패(진행) article=%s key=%s", article_id, mirror_key)
+            return
+        logger.info("미러 적재 article=%s key=%s", article_id, mirror_key)
 
     def _reuse(self, key: str, job_id: str, attempt: int) -> str:
         """저장된 시도 결과를 그대로 확정한다 — 단, **읽을 수 있을 때만**.
@@ -424,16 +500,37 @@ class NewsExtractionHandler:
         logger.info(
             "이미 저장된 시도 결과 재사용 job=%s attempt=%d status=%s", job_id, attempt, status
         )
+        # fresh 경로가 PUT 뒤·미러 전에 죽었으면 미러가 없다 — 같은 복구 지점에서
+        # 같이 되살린다. ⚠️ **성공만 되살리면 안 된다**: `llm_unparseable`·`bad_doc_class`
+        # 도 fresh 경로는 미러하고 배치도 결과로 캐시하므로(재시도 축이 아니다), 여기서
+        # 빼면 그 기사만 배치가 다시 유료로 태운다. 조립은 성공에만 해당해 아래에 남긴다.
+        article = self.article_reader.read(
+            source_code=stored["source_code"], article_id=stored["article_id"])
+        if article is None:
+            raise TransientJobError(
+                f"기사 정본이 없다: ({stored['source_code']}, {stored['article_id']})",
+                code="ARTICLE_NOT_FOUND",
+            )
+        # ⚠️ **저장된 판정이 지금 읽은 본문의 것일 때만 미러한다.** 저장과 재개 사이에
+        # 기사가 정정되면 `article` 은 정정본인데 `stored["result"]` 는 옛 본문의 판정이라,
+        # 그대로 미러하면 **정정본 지문에 옛 판정이 붙는다** — 배치는 그걸 "현재 텍스트에
+        # 대한 유효한 판정"으로 인정해(`tag_news._is_current`) 재태깅을 건너뛰고, 정정은
+        # 영영 태깅되지 않는다. 지문 축이 막으려던 실패 그대로다.
+        # 판별은 저장 봉투가 이미 싣고 있는 `prompt_input_checksum`(그때 모델에 넣은 입력의
+        # 지문)으로 한다 — 새 배선이 필요 없다. 어긋나면 미러를 건너뛴다: 그 기사는 정정으로
+        # 새 job 이 생겨(원장이 content_changed 로 만든다) 정상 판정이 곧 미러된다.
+        if stored.get("prompt_input_checksum") == content_checksum(
+            [article.get("title"), article.get("lead_text"), article.get("published_at")]
+        ):
+            self._mirror(article, stored["result"])
+        else:
+            logger.warning(
+                "미러 생략(저장된 판정이 지금 본문의 것이 아니다) job=%s article=%s",
+                job_id, stored["article_id"],
+            )
         if status == _SUCCESS_STATUS:
             # fresh 경로가 PUT 뒤·조립 전에 죽은 경우의 복구 지점 — 조립은 멱등
             # (document_entity 자국 게이트)이라 이미 된 기사는 no-op 이다.
-            article = self.article_reader.read(
-                source_code=stored["source_code"], article_id=stored["article_id"])
-            if article is None:
-                raise TransientJobError(
-                    f"기사 정본이 없다: ({stored['source_code']}, {stored['article_id']})",
-                    code="ARTICLE_NOT_FOUND",
-                )
             assembled = self.event_assembler.assemble(
                 source_code=stored["source_code"], article_id=stored["article_id"],
                 article=article, result=stored["result"],

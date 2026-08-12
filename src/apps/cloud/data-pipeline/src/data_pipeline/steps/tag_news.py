@@ -17,6 +17,12 @@ canonical 뉴스(`language=ko`)를 읽어 기사마다 `extract_assertions` 를 
 title·lead 를 대표로 삼아 **정정을 반영**하므로 canonical 텍스트는 바뀔 수 있다) · `llm_error`
 status(판정이 아니라 '물어보지도 못했다'는 뜻).
 
+**장중 레인의 판정도 여기서 본다(ALPHA-900)**: 1분 뉴스 Consumer 가 같은 파티션의
+`minute/` 구역에 기사당 미러를 남기므로(`lake.feature_news_assertions_minute_key`),
+이 스텝은 장중이 이미 태깅한 기사를 skip 하고 그 판정을 part 파일에 흡수한 뒤 조각을
+지운다. 두 레인의 LLM 장부가 서로를 보는 유일한 자리다 — 그 전에는 배치가 canonical
+날짜축만, 장중이 job 축만 보고 있어 같은 기사를 반드시 두 번 태웠다.
+
 **ko 만 태깅한다**: 프롬프트가 한국 금융 뉴스 전용("너는 한국 금융 뉴스에서…")이다. 영어(FMP)
 기사에 이 프롬프트를 씌우면 조용히 품질이 무너지므로, 언어 파티션에서 아예 고른다. 영어는 별도
 프롬프트가 생길 때 대상에 넣는다(그때 이 상수만 늘린다).
@@ -43,7 +49,13 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from ..lake import Storage, canonical_news_articles_partition, feature_news_assertions_partition, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_news_articles_partition,
+    feature_news_assertions_minute_prefix,
+    feature_news_assertions_partition,
+    quality_log_key,
+)
 from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
 from ..tagging.ontology import ontology_version
 
@@ -189,6 +201,40 @@ def _partition_dates(storage: Storage, language: str, from_date: str | None, to_
     return sorted(dates)
 
 
+def _mirror_dates(
+    storage: Storage, language: str, from_date: str | None, to_date: str | None
+) -> set[str]:
+    """장중 미러가 남아 있는 feature 파티션의 날짜 — **태깅과 같은 창으로 거른다** (ALPHA-900).
+
+    canonical 파티션이 없는 날짜에도 미러는 생긴다 — 기사 정본은 PG 이고 canonical 은 다음
+    `normalize_news` 에 오므로, 장중만 본 기사의 발행일이 아직 canonical 에 없을 수 있다.
+    `_partition_dates` 는 canonical 만 열거하니 그런 날짜는 루프에 안 들어오고, 그러면
+    미러가 **영영 흡수되지 않는다** — 소비자(`load_assertions`)는 흡수 전 미러를 안 읽으므로
+    그 장중 판정이 DB 에 영영 안 실린다(이 티켓이 노리는 값 하나가 통째로 사라진다).
+
+    ⚠️ **창은 그대로 적용한다.** 창을 무시하고 합치면 둘이 깨진다 — ①창 밖 canonical 기사가
+    태깅 대상이 되어 전역 `limit` 을 먼저 소진하고(창이 지키기로 한 비용 범위가 무너진다)
+    ②명시 범위 백필이 자기 범위 밖 파티션의 `part-00000.parquet` 을 쓰게 되어, 그 파티션을
+    동시에 쓰는 정규 런과 lost update 가 난다(운영자가 범위를 갈라 피하던 경합이다).
+
+    ⚠️ 대가는 **창 밖 조각이 다음 풀스캔까지 남는 것**이다(창 미지정이면 여기도 전량이다).
+    발생이 드물고 `minute_mirrors_absorbed` 로 드러나므로 수용한다.
+    """
+    marker = feature_news_assertions_partition(language, "")  # ".../published_date="
+    dates: set[str] = set()
+    for key in storage.list_keys(marker):
+        rest = key[len(marker):]
+        date, _, tail = rest.partition("/")
+        if not date or not tail.startswith("minute/"):
+            continue
+        if from_date is not None and date < from_date:
+            continue
+        if to_date is not None and date > to_date:
+            continue
+        dates.add(date)
+    return dates
+
+
 def _read_canonical(storage: Storage, language: str, published_date: str) -> list[dict]:
     rows: list[dict] = []
     prefix = canonical_news_articles_partition(language, published_date)
@@ -198,13 +244,92 @@ def _read_canonical(storage: Storage, language: str, published_date: str) -> lis
     return rows
 
 
-def _read_feature(storage: Storage, language: str, published_date: str) -> list[dict]:
+def _read_feature(
+    storage: Storage, language: str, published_date: str
+) -> tuple[list[dict], list[str]]:
+    """(파티션의 feature 행 전량, **흡수 대상 장중 미러 키**) — ALPHA-900.
+
+    미러 키를 함께 돌려주는 이유는 이 스텝이 그걸 지워야 하기 때문이다. 장중 레인은
+    `(기사, 그 기사의 어느 텍스트)` 마다 객체를 남기는데(writer 가 동시다발이라 part
+    파일을 공유할 수 없다), 그대로 두면 이 함수가 파티션마다 수천 GET 을 하게 된다. 병합해 part 파일에 실은 뒤 지워
+    **다음 배치 런까지만** 존재하게 한다(`feature_news_assertions_minute_prefix`).
+    """
     rows: list[dict] = []
+    mirror_keys: list[str] = []
     prefix = feature_news_assertions_partition(language, published_date)
+    mirror_marker = feature_news_assertions_minute_prefix(language, published_date)
     for key in storage.list_keys(prefix + "/"):
-        if key.endswith(".parquet"):
-            rows.extend(_read_parquet_rows(storage.get_bytes(key)))
-    return rows
+        if not key.endswith(".parquet"):
+            continue
+        rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+        if key.startswith(mirror_marker):
+            mirror_keys.append(key)
+    return rows, mirror_keys
+
+
+def _tagged_at(row: object) -> str:
+    """병합 승자 판정 축 — 결측·비문자열은 가장 오래된 것으로 본다.
+
+    두 writer 가 같은 ISO-8601 UTC(`+00:00` 오프셋)를 쓰므로 문자열 비교가 곧 시각
+    비교다. 오프셋이 갈리면 이 비교가 조용히 틀리니, 미러를 쓰는 쪽도 같은 형식을
+    유지해야 한다(`mirror_row_bytes`).
+
+    ⚠️ **두 writer 의 시각 의미가 정확히 같지는 않다.** 배치 행은 런 **시작** 시각을
+    한 런의 모든 행에 균일하게 찍고(`tagged_at = started_at`), 미러는 자기가 쓰인 시각을
+    찍는다. 그래서 이 스텝이 리스팅한 **뒤에** 도착한 미러는 삭제를 피하고, 다음 런의
+    병합에서 같은 런 후반에 나온 배치 판정보다 최신으로 잡힐 수 있다.
+
+    ⭐ **그 자리에서 미러가 이기는 것이 맞다.** 두 판정의 입력이 갈리는 경우는 정정뿐인데,
+    정정은 PG 정본에 먼저 반영되고(1분 `CanonicalWriter`) 레이크 canonical 에는 다음
+    `normalize_news` 에 온다 — 즉 미러가 **더 새 본문**을 보고 판정한 쪽이다. 입력이 같으면
+    지문도 같아 어느 행이 남든 `_is_current` 판정이 동일하다(LLM 비결정성의 두 표본).
+    배치 행에 행별 판정 시각을 찍는 쪽으로 바꿔도 이 결론은 안 바뀌므로 그대로 둔다.
+    """
+    value = row.get("tagged_at") if isinstance(row, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _merge_by_article(rows: list[dict]) -> dict:
+    """한 파티션의 feature 행을 `article_id` 키로 접는다 — **최신 판정이 이긴다**.
+
+    ⚠️ 리스팅 순서에 맡기면 **틀린 쪽이 이긴다.** 키 정렬로는 `minute/…` 가 앞이고
+    `part-00000.parquet` 이 뒤라 나중 것이 덮는데, 정정 기사에서는 그게 거꾸로다 —
+    배치가 옛 본문으로 내린 판정(part 파일)이 장중이 정정 본문으로 내린 판정(미러)을
+    이기면, 다음 런의 지문 대조가 어긋나 **재태깅이 그대로 난다**. 이 스텝이 미러를
+    두는 목적 자체가 사라지므로 시각으로 명시한다.
+    """
+    by_id: dict = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        article_id = row.get("article_id")
+        current = by_id.get(article_id)
+        if current is None or _tagged_at(row) >= _tagged_at(current):
+            by_id[article_id] = row
+    return by_id
+
+
+def mirror_row_bytes(article: dict, result: dict, tagged_at: str) -> tuple[str, bytes]:
+    """장중 추출 결과 1건 → 배치와 **같은 형식**의 feature 행 바이트 (ALPHA-900).
+
+    장중 레인(`minute/news_consumer`)이 부른다. 여기 있는 이유는 형식의 정본이 하나여야
+    하기 때문이다 — `_is_current` 가 보는 축 셋(`input_fingerprint`·`tagger_version`·
+    `ontology_version`)의 형식이 조금이라도 갈리면 skip 이 안 걸려 미러가 헛돈다.
+    행 조립·지문 산식을 저쪽에서 재구현하면 그 어긋남이 조용히 생긴다.
+
+    지문을 함께 돌려주는 것은 그 값이 **미러 키에도 들어가기** 때문이다
+    (`lake.feature_news_assertions_minute_key` — 같은 기사의 다른 판정이 서로를 덮으면
+    배치의 압축 창에서 최신 판정이 유실된다). 호출부가 따로 계산하면 두 값이 갈릴 자리가
+    생기므로 한 번만 계산해 함께 준다.
+
+    ⚠️ `article` 은 **canonical 과 같은 표현**이어야 한다. 특히 `published_at` 은
+    문자열이고 벤더 선언 tz 의 오프셋을 달고 있어야 한다 — 같은 순간이라도 표기가 다르면
+    지문이 다른 값이 된다(`PgArticleReader` 가 그 복원을 진다).
+    """
+    fingerprint = _input_fingerprint(article)
+    return fingerprint, _write_parquet_rows(
+        [_feature_row(article, result, tagged_at, fingerprint)]
+    )
 
 
 def _feature_row(article: dict, result: dict, tagged_at: str, fingerprint: str) -> dict:
@@ -251,6 +376,8 @@ def run(
     skipped_no_mention = 0  # mentions 없어 태깅 대상이 아닌 수 (LLM 미호출, ALPHA-416)
     tagged = 0          # 이번 런에서 LLM 을 부른 수
     limited = 0         # limit 에 걸려 안 부른 수
+    mirrors_absorbed = 0    # part 파일에 병합하고 지운 장중 미러 조각 수 (ALPHA-900)
+    mirrors_dropped_no_mention = 0  # mentions 게이트가 배제한 기사의 미러 (ALPHA-900/416)
     status_counts: Counter = Counter()
     reason_counts: Counter = Counter()
     failures: list[dict] = []
@@ -258,10 +385,15 @@ def run(
     exit_code = 0
 
     for language in TAGGED_LANGUAGES:
-        for published_date in _partition_dates(storage, language, from_date, to_date):
+        taggable = set(_partition_dates(storage, language, from_date, to_date))
+        # 미러가 남은 날짜 — canonical 이 아직 없는 날짜를 여기서 집는다. 창은 같이 걸어
+        # 창 밖 기사가 태깅되거나 범위 밖 파티션을 쓰는 일이 없게 한다(`_mirror_dates`).
+        # 새로 들어오는 날짜에는 canonical 이 없으므로 아래 루프가 읽어도 0건이다.
+        mirror_dates = _mirror_dates(storage, language, from_date, to_date)
+        for published_date in sorted(taggable | mirror_dates):
             try:
                 articles = _read_canonical(storage, language, published_date)
-                existing = _read_feature(storage, language, published_date)
+                existing, mirror_keys = _read_feature(storage, language, published_date)
             except Exception as exc:
                 # 한 파티션의 읽기 실패가 나머지 파티션을 죽이지 않게 격리하되, 조용히 넘기지
                 # 않는다(Rule 12) — exit 을 비0으로 올려 런이 성공으로 위장되지 않게.
@@ -271,13 +403,14 @@ def run(
                 exit_code = 1
                 continue
 
-            by_id = {r.get("article_id"): r for r in existing if isinstance(r, dict)}
+            by_id = _merge_by_article(existing)
             merged = dict(by_id)
             changed = False
 
             # 1) 선택(순차·LLM 미호출): 비-LLM 게이트로 태깅 대상만 고른다. limit 은 전 파티션에
             #    걸친 상한이라 확정 tagged + 이번에 고른 수로 판정(순차 tagged>=limit 와 동치).
             to_tag: list[tuple[object, dict, str]] = []  # (article_id, article, fingerprint)
+            no_mention_ids: set = set()   # 이 파티션에서 mentions 게이트가 배제한 기사
             for article in articles:
                 if not isinstance(article, dict):
                     # canonical 은 이 스텝이 안 쓰지만, 비객체 행이 섞이면 .get 에서 파티션이
@@ -289,6 +422,7 @@ def run(
                 if not _has_mentions(article):
                     # 유니버스 종목이 안 잡힌 기사 — 다운스트림이 버릴 기사에 LLM 을 안 태운다.
                     skipped_no_mention += 1
+                    no_mention_ids.add(article.get("article_id"))
                     continue
                 article_id = article.get("article_id")
                 fingerprint = _input_fingerprint(article)
@@ -320,14 +454,33 @@ def run(
                 merged[article_id] = _feature_row(article, result, tagged_at, fingerprint)
                 changed = True
 
-            if not changed:
+            # 미러가 있으면 이번 런에 새 태깅이 없어도 되쓴다 — 그게 압축이다(ALPHA-900).
+            # 안 그러면 태깅할 게 없는 파티션의 미러가 영영 안 지워져 매 런 GET 을 늘린다.
+            if not changed and not mirror_keys:
                 continue
             try:
                 prefix = feature_news_assertions_partition(language, published_date)
-                rows = [merged[a] for a in sorted(merged, key=lambda x: (x is None, x))]
+                # ⚠️ **mentions 게이트가 배제한 기사는 미러가 있어도 안 싣는다**(ALPHA-900).
+                # 1분 레인에는 아직 그 게이트가 없어서(ALPHA-690) 유니버스 무관 기사의 미러가
+                # 온다. 그대로 흡수하면 `load_assertions` 는 mentions 를 안 보므로, **배치가
+                # 일부러 feature 집합 밖에 둔 기사**의 assertion 이 DB 에 착지한다 — 두 레인의
+                # 대상 집합이 갈린다(Rule 7). 판정 근거는 job 축 artifact 에 영구히 남으므로
+                # 여기서 빼도 증거가 사라지지는 않는다.
+                rows = [merged[a] for a in sorted(merged, key=lambda x: (x is None, x))
+                        if a not in no_mention_ids]
+                mirrors_dropped_no_mention += len(merged) - len(rows)
                 storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(rows))
                 parts_written += 1
                 rows_written += len(rows)
+                if mirror_keys:
+                    # **쓰기가 끝난 뒤에** 지운다 — 순서가 뒤집히면 되쓰기가 실패한 파티션의
+                    # 장중 판정이 통째로 사라진다. 지우는 대상은 위에서 읽어 병합한 키뿐이다.
+                    # ⚠️ 그게 안전한 것은 **미러 키에 입력 지문이 들어가기 때문**이다 —
+                    # 읽고 지우는 사이에 도착한 정정 판정은 본문이 달라 다른 키라, 여기서
+                    # 안 지워지고 다음 런이 흡수한다. 키가 `article_id` 뿐이면 그 정정이
+                    # 같은 키를 덮고 곧바로 지워져, **아무도 안 읽은 최신 판정이 유실된다**.
+                    storage.delete_keys(mirror_keys)
+                    mirrors_absorbed += len(mirror_keys)
             except Exception as exc:
                 logger.exception("feature 적재 실패: %s/%s", language, published_date)
                 failures.append({"language": language, "published_date": published_date,
@@ -347,6 +500,14 @@ def run(
         "articles_read": read, "articles_tagged": tagged,
         "articles_skipped_already_tagged": skipped, "articles_left_by_limit": limited,
         "articles_skipped_no_mention": skipped_no_mention,
+        # 흡수한 장중 미러 조각 수(ALPHA-900). 이 값이 0 인데 장중 레인이 돌았다면 미러가
+        # 안 떨어진 것이다 — 그 경우 `articles_skipped_already_tagged` 도 안 올라 이중
+        # 과금이 그대로다. 둘을 나란히 봐야 교차 dedup 이 실제로 걸렸는지 판별된다.
+        "minute_mirrors_absorbed": mirrors_absorbed,
+        # mentions 게이트가 배제한 기사라 part 에 안 실은 미러 행 수(ALPHA-900/416).
+        # 1분 레인에 같은 게이트가 서면(ALPHA-690) 이 값이 0 으로 수렴한다 — 그때까지는
+        # 두 레인의 대상 집합 차이를 이 숫자가 드러낸다.
+        "minute_mirrors_dropped_no_mention": mirrors_dropped_no_mention,
         "status_counts": dict(status_counts), "reason_counts": dict(reason_counts),
         "partitions_written": parts_written, "rows_written": rows_written,
         "failures": failures, "exit_code": exit_code,
@@ -374,8 +535,9 @@ def run(
         exit_code = 1
 
     logger.info(
-        "tag_news: read=%d tagged=%d skipped=%d no_mention=%d limited=%d status=%s parts=%d rows=%d",
-        read, tagged, skipped, skipped_no_mention, limited, dict(status_counts),
-        parts_written, rows_written,
+        "tag_news: read=%d tagged=%d skipped=%d no_mention=%d limited=%d mirrors=%d "
+        "status=%s parts=%d rows=%d",
+        read, tagged, skipped, skipped_no_mention, limited, mirrors_absorbed,
+        dict(status_counts), parts_written, rows_written,
     )
     return exit_code

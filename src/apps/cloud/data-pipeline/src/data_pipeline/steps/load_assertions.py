@@ -64,7 +64,13 @@ from edge_ontology import load_authority_registry, load_relations
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, plan_resolution
-from ..lake import Storage, feature_news_assertions_partition, quality_log_key
+from ..lake import (
+    Storage,
+    feature_news_assertions_minute_prefix,
+    feature_news_assertions_partition,
+    quality_log_key,
+)
+from .tag_news import _merge_by_article
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +124,8 @@ def run(
     """feature 뉴스 assertion → document_assertion·assertion_argument 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     rows_read = rows_not_ok = rows_no_assertion = rows_malformed = 0
+    rows_superseded = 0   # 같은 기사의 더 낡은 판정이라 안 실은 행 (ALPHA-900)
+    mirrors_unabsorbed = 0  # 아직 흡수 안 된 장중 미러 조각이라 안 읽은 객체 (ALPHA-900)
     folded = missing_document = skipped_incomplete = skipped_partial = 0
     skipped_no_resolved_argument = 0
     created = already = arguments_inserted = 0
@@ -147,55 +155,81 @@ def run(
                      if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
             for date in dates:
                 prefix = feature_news_assertions_partition(language, date)
+                mirror_marker = feature_news_assertions_minute_prefix(language, date)
+                partition_rows: list[dict] = []
                 for key in storage.list_keys(prefix + "/"):
                     if not key.endswith(".parquet"):
                         continue
-                    for row in _read_parquet_rows(storage.get_bytes(key)):
-                        rows_read += 1
-                        if row.get("status") != "ok":
-                            rows_not_ok += 1
-                            continue
-                        article_id = row.get("article_id")
-                        try:
-                            assertions = json.loads(row.get("assertions") or "[]")
-                            if not isinstance(assertions, list):
-                                raise ValueError("assertions 가 리스트가 아님")
-                        except (ValueError, TypeError):
-                            # 행 단위 격리 — 한 이상치가 잡을 무너뜨리지 않는다.
+                    if key.startswith(mirror_marker):
+                        # ⚠️ **흡수 전 장중 미러는 아직 확정이 아니다**(ALPHA-900). 이 파티션의
+                        # 정본은 `tag_news` 가 되쓴 part 파일이고, 미러는 그 스텝이 읽어
+                        # 병합하기 전까지의 임시 조각이다. 여기서 바로 읽으면 `tag_news` 가
+                        # 거는 게이트(canonical mentions 판정 — 배치가 일부러 feature 집합
+                        # 밖에 두는 기사)를 **통째로 우회한다**: SFN 은 TagNews 뒤에
+                        # LoadAssertions 를 돌리는데, 그 사이에 도착한 미러는 게이트를 한 번도
+                        # 안 거친 채 DB 로 간다.
+                        # 건너뛰어도 지연이 없다 — 같은 SFN 런의 TagNews 가 흡수한 미러는 이미
+                        # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
+                        mirrors_unabsorbed += 1
+                        continue
+                    partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+                # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치가 쓴 part
+                # 파일과 장중이 남긴 미러가 한 파티션에 공존하는 창이 있고, 그 둘이 같은
+                # 기사의 **다른 본문**에 대한 판정이면 사건 자연키가 갈려 둘 다 적재된다 —
+                # 정정 전 사건이 DB 에 영구히 남는다(`ON CONFLICT DO NOTHING` 이라 나중에
+                # 덮이지도 않는다). 그래서 `tag_news` 의 압축과 **같은 규칙**으로 기사마다
+                # 최신 판정만 남긴다(규칙이 갈리면 두 소비자가 다른 사실을 본다).
+                # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
+                # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
+                unkeyed = [r for r in partition_rows if not r.get("article_id")]
+                keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
+                rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
+                for row in [*keyed.values(), *unkeyed]:
+                    rows_read += 1
+                    if row.get("status") != "ok":
+                        rows_not_ok += 1
+                        continue
+                    article_id = row.get("article_id")
+                    try:
+                        assertions = json.loads(row.get("assertions") or "[]")
+                        if not isinstance(assertions, list):
+                            raise ValueError("assertions 가 리스트가 아님")
+                    except (ValueError, TypeError):
+                        # 행 단위 격리 — 한 이상치가 잡을 무너뜨리지 않는다.
+                        rows_malformed += 1
+                        continue
+                    if not article_id or not assertions:
+                        rows_no_assertion += 1
+                        continue
+                    for assertion in assertions:
+                        if not isinstance(assertion, dict):
                             rows_malformed += 1
                             continue
-                        if not article_id or not assertions:
-                            rows_no_assertion += 1
+                        event_type = assertion.get("event_type_code")
+                        predicate = assertion.get("predicate_code")
+                        arguments = assertion.get("arguments")
+                        if not event_type or not predicate or not isinstance(arguments, list):
+                            # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
+                            skipped_incomplete += 1
                             continue
-                        for assertion in assertions:
-                            if not isinstance(assertion, dict):
-                                rows_malformed += 1
-                                continue
-                            event_type = assertion.get("event_type_code")
-                            predicate = assertion.get("predicate_code")
-                            arguments = assertion.get("arguments")
-                            if not event_type or not predicate or not isinstance(arguments, list):
-                                # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
-                                skipped_incomplete += 1
-                                continue
-                            if assertion.get("completeness") != "complete":
-                                # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
-                                # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
-                                # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
-                                skipped_partial += 1
-                                continue
-                            nk = (source_code, article_id, str(event_type), str(predicate))
-                            entry = candidates.get(nk)
-                            if entry is None:
-                                entry = candidates[nk] = {
-                                    "confidence": _confidence(assertion.get("confidence")),
-                                    "arguments": [],
-                                }
-                            else:
-                                # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
-                                # 하나다. 스칼라는 첫 주장이 대표, arguments 는 union.
-                                folded += 1
-                            entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
+                        if assertion.get("completeness") != "complete":
+                            # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
+                            # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
+                            # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
+                            skipped_partial += 1
+                            continue
+                        nk = (source_code, article_id, str(event_type), str(predicate))
+                        entry = candidates.get(nk)
+                        if entry is None:
+                            entry = candidates[nk] = {
+                                "confidence": _confidence(assertion.get("confidence")),
+                                "arguments": [],
+                            }
+                        else:
+                            # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
+                            # 하나다. 스칼라는 첫 주장이 대표, arguments 는 union.
+                            folded += 1
+                        entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
 
         # 역할→종별 계약(`role_bindings_v0_1.yaml`). assemble-events 가 이미 읽는 그 표다
         # — 같은 계보의 두 writer 가 다른 계약을 보고 있었다(ALPHA-802). 어휘가 깨져 있으면
@@ -400,6 +434,12 @@ def run(
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "languages": list(_SOURCE_CODE_BY_LANGUAGE), "from_date": from_date, "to_date": to_date,
         "rows_read": rows_read, "rows_not_ok": rows_not_ok,
+        # 같은 기사의 낡은 판정이라 안 실은 행 — 유실이 아니라 **대체**다(ALPHA-900).
+        # 0 이 아니면 배치 part 파일과 장중 미러가 겹친 창을 지났다는 뜻이다.
+        "rows_superseded": rows_superseded,
+        # 아직 흡수 안 돼 이번 런이 안 읽은 미러 조각 수(ALPHA-900). 유실이 아니라 **대기**다
+        # — 다음 tag_news 가 게이트를 거쳐 part 파일로 흡수하면 그때 실린다.
+        "minute_mirrors_unabsorbed": mirrors_unabsorbed,
         "rows_no_assertion": rows_no_assertion, "rows_malformed": rows_malformed,
         "assertions_considered": len(candidates), "assertions_folded": folded,
         "missing_document": missing_document, "skipped_incomplete": skipped_incomplete,

@@ -10,7 +10,10 @@ import json
 from data_pipeline.lake import (
     LocalStorage,
     canonical_news_articles_partition,
+    feature_news_assertions_minute_key,
+    feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
+    quality_log_prefix,
 )
 from data_pipeline.steps import tag_news
 from data_pipeline.tagging.extract import TAGGER_VERSION
@@ -422,3 +425,257 @@ def test_parallel_results_map_to_correct_article(tmp_path):
         title_marker = re.search(r"MARK\d+", r["title"]).group(0)
         supplier = json.loads(r["assertions"])[0]["arguments"][0]["text"]
         assert supplier == title_marker, f"{r['article_id']}: 제목 {title_marker} 인데 supplier {supplier} — 오매핑"
+
+
+# ── 장중 미러 흡수 (ALPHA-900) ───────────────────────────
+# 배치와 1분 레인이 서로의 LLM 장부를 못 봐서 같은 기사를 두 번 유료로 태우던 것을,
+# 1분 레인이 같은 파티션의 `minute/` 구역에 남기는 기사당 미러로 잇는다. 여기서 고정하는
+# 건 셋이다 — ①미러가 실제로 skip 을 걸어 돈을 안 쓰는가 ②흡수 뒤 지워져 파티션이
+# 안 부푸는가 ③**어느 판정이 이기는가**(정렬 순서에 맡기면 정정 기사에서 거꾸로 진다).
+
+def _minute_result(**over) -> dict:
+    result = {"doc_class": "EVENT", "status": "ok", "assertions": [], "reasons": [],
+              "ontology_version": ontology_version(), "tagger_version": TAGGER_VERSION}
+    result.update(over)
+    return result
+
+
+def _write_mirror(storage, article: dict, *, tagged_at: str, language: str = "ko") -> str:
+    fingerprint, data = tag_news.mirror_row_bytes(article, _minute_result(), tagged_at)
+    key = feature_news_assertions_minute_key(
+        language, article["published_at"][:10], article["article_id"], fingerprint)
+    storage.put_bytes(key, data)
+    return key
+
+
+def _part_key(language: str, published_date: str) -> str:
+    return f"{feature_news_assertions_partition(language, published_date)}/part-00000.parquet"
+
+
+def test_minute_mirror_skips_the_second_paid_call(tmp_path):
+    # 이 배선의 존재 이유다. 미러가 있는데도 LLM 을 부르면 이중 과금이 그대로다 —
+    # 그리고 그 실패는 조용하다(원장은 양쪽 다 초록이다).
+    storage = LocalStorage(tmp_path)
+    article = _article()
+    _write_canonical(storage, "ko", "2026-07-01", [article])
+    mirror_key = _write_mirror(storage, article, tagged_at="2026-07-01T10:00:00+00:00")
+
+    calls: list = []
+    assert tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls)) == 0
+
+    assert calls == []                                   # 한 번도 안 불렀다
+    assert storage.list_keys(mirror_key) == []           # 흡수하고 지웠다
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert [r["article_id"] for r in rows] == ["a1"]     # part 파일에 남았다
+
+
+def test_absorbed_mirror_does_not_pile_up_across_runs(tmp_path):
+    # 안 지우면 파티션마다 미러가 무한히 쌓이고 `_read_feature` 가 매 런 그걸 전부 GET
+    # 한다 — 이 스텝이 canonical 을 풀스캔하므로 비용이 날짜 수만큼 곱해진다.
+    storage = LocalStorage(tmp_path)
+    article = _article()
+    _write_canonical(storage, "ko", "2026-07-01", [article])
+    _write_mirror(storage, article, tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    prefix = feature_news_assertions_partition("ko", "2026-07-01")
+    assert storage.list_keys(prefix + "/") == [_part_key("ko", "2026-07-01")]
+
+
+def test_mirror_alone_triggers_compaction_without_new_tagging(tmp_path):
+    # 태깅할 게 없는 파티션(전건 skip)에서도 미러는 흡수돼야 한다. `changed` 만 보고
+    # 건너뛰면 그런 파티션의 미러가 영영 안 지워져 위 누적이 그대로 난다.
+    storage = LocalStorage(tmp_path)
+    article = _article()
+    _write_canonical(storage, "ko", "2026-07-01", [article])
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))   # part 파일 확정
+    mirror_key = _write_mirror(storage, article, tagged_at="2026-07-02T10:00:00+00:00")
+
+    calls: list = []
+    tag_news.run(storage, "run-2", complete_fn=_fake_complete(calls))
+
+    assert calls == []
+    assert storage.list_keys(mirror_key) == []
+
+
+def test_newest_judgement_wins_not_the_key_order(tmp_path):
+    # ⭐ 정정 기사의 함정. 배치가 옛 본문으로 내린 판정은 `part-00000.parquet` 에 있고
+    #    장중이 정정 본문으로 내린 판정은 `minute/…` 에 있는데, 키 정렬로는 part 파일이
+    #    **뒤**라 나중에 읽혀 이긴다. 그러면 지문이 canonical(정정본)과 어긋나 재태깅이
+    #    그대로 나고, 미러를 둔 목적이 통째로 사라진다.
+    storage = LocalStorage(tmp_path)
+    corrected = _article(title="삼성전자, SK하이닉스와 공급계약 해지")
+    _write_canonical(storage, "ko", "2026-07-01", [corrected])
+    # 배치의 옛 판정: 정정 전 제목에 대한 지문 + 더 이른 시각
+    stale = tag_news._feature_row(
+        _article(), _minute_result(), "2026-07-01T00:10:00+00:00",
+        tag_news._input_fingerprint(_article()))
+    storage.put_bytes(_part_key("ko", "2026-07-01"), tag_news._write_parquet_rows([stale]))
+    # 장중의 최신 판정: 정정본 지문 + 더 늦은 시각
+    _write_mirror(storage, corrected, tagged_at="2026-07-01T10:00:00+00:00")
+
+    calls: list = []
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls))
+
+    assert calls == []
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    assert [r["input_fingerprint"] for r in rows] == [tag_news._input_fingerprint(corrected)]
+
+
+def test_absorption_count_is_visible(tmp_path):
+    # 조용한 0 금지(Rule 12). 이 값이 0 인데 장중 레인이 돌았다면 미러가 안 떨어진
+    # 것이고, 그때는 skip 도 안 걸려 이중 과금이 그대로다 — 둘을 나란히 봐야 판별된다.
+    storage = LocalStorage(tmp_path)
+    article = _article()
+    _write_canonical(storage, "ko", "2026-07-01", [article])
+    _write_mirror(storage, article, tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    log = json.loads(storage.get_bytes(
+        storage.list_keys(quality_log_prefix(tag_news.DATASET))[0]))
+    assert log["minute_mirrors_absorbed"] == 1
+    assert log["articles_skipped_already_tagged"] == 1
+
+
+def test_correction_arriving_mid_absorption_survives(tmp_path):
+    """⭐ 압축 창의 경합. 배치가 미러를 읽은 **뒤** 장중이 같은 기사의 정정 판정을 쓰면,
+    배치의 삭제가 그걸 지우면 안 된다 — 배치는 자기가 읽은 것을 지운다고 믿지만, 키가
+    `article_id` 뿐이면 실제로 지워지는 건 **아무도 안 읽은 최신 판정**이다. 지문이 키에
+    들어가 두 판정이 다른 객체가 되므로 살아남는다.
+    """
+    storage = _WriteOnReadStorage(tmp_path)
+    old = _article()
+    corrected = _article(title="삼성전자, SK하이닉스와 공급계약 해지")
+    _write_canonical(storage, "ko", "2026-07-01", [old])
+    old_key = _write_mirror(storage, old, tagged_at="2026-07-01T10:00:00+00:00")
+    # 배치가 old_key 를 읽는 순간 장중이 정정 판정을 쓴다
+    storage.on_read = lambda: _write_mirror(
+        storage, corrected, tagged_at="2026-07-01T10:00:05+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    remaining = storage.list_keys(
+        feature_news_assertions_minute_prefix("ko", "2026-07-01"))
+    assert old_key not in remaining          # 읽고 병합한 것은 지웠다
+    assert len(remaining) == 1               # 정정 판정은 살아남았다
+    assert tag_news._read_parquet_rows(storage.get_bytes(remaining[0]))[0][
+        "input_fingerprint"] == tag_news._input_fingerprint(corrected)
+
+
+class _WriteOnReadStorage(LocalStorage):
+    """미러를 처음 읽는 순간 콜백을 한 번 부른다 — read→delete 사이의 창을 재현한다."""
+
+    on_read = None
+
+    def get_bytes(self, key):
+        data = super().get_bytes(key)
+        if self.on_read is not None and "/minute/" in key:
+            callback, self.on_read = self.on_read, None
+            callback()
+        return data
+
+
+def test_full_scan_compacts_mirrors_outside_any_tagging_window(tmp_path):
+    """창을 안 준 런은 canonical 파티션이 없는 날짜의 미러도 흡수한다 (ALPHA-900).
+
+    backfill Consumer 가 오래된 기사를 뒤늦게 추출하면 그 조각이 남는데, 아무도 안
+    지우면 `load_assertions` 가 feature 날짜를 풀스캔하며 **매 런 다시 GET 한다**.
+    """
+    storage = LocalStorage(tmp_path)
+    old = _article(published_at="2026-06-01T09:00:00+09:00")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    mirror_key = _write_mirror(storage, old, tagged_at="2026-06-01T10:00:00+00:00")
+
+    calls: list = []
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls))
+
+    assert storage.list_keys(mirror_key) == []
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-06-01")] == ["a1"]
+    assert len(calls) == 1          # canonical 이 있는 날짜만 태웠다
+
+
+def test_windowed_run_never_tags_outside_its_window(tmp_path):
+    """⭐ 압축이 **태깅 범위를 넓히면 안 된다**. 창 밖 파티션에 미러가 하나 있다는 이유로
+    그 날짜가 루프에 들어오면, 거기 미태깅 canonical 기사들이 전부 LLM 대상이 되어
+    전역 `limit` 을 먼저 소진한다 — 창이 지키기로 한 비용 범위가 그대로 무너진다.
+    같은 이유로 명시 범위 백필이 자기 범위 밖 part 파일을 쓰게 되어서도 안 된다.
+    """
+    storage = LocalStorage(tmp_path)
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    # 창 밖 날짜: canonical 기사도 있고 미러도 있다
+    outside = _article("a-old", published_at="2026-06-01T09:00:00+09:00")
+    _write_canonical(storage, "ko", "2026-06-01", [outside])
+    _write_mirror(storage, outside, tagged_at="2026-06-01T10:00:00+00:00")
+    part_before = storage.list_keys(_part_key("ko", "2026-06-01"))
+
+    calls: list = []
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls),
+                 from_date="2026-07-01", to_date="2026-07-01")
+
+    assert len(calls) == 1                                   # 창 안 기사 하나만
+    assert storage.list_keys(_part_key("ko", "2026-06-01")) == part_before  # 안 썼다
+
+
+def test_no_mention_article_mirror_is_not_absorbed(tmp_path):
+    """⭐ 두 레인의 **대상 집합**이 갈리면 안 된다 (ALPHA-900/416).
+
+    배치는 mentions 없는 기사를 일부러 태깅 대상에서 뺀다(유니버스 무관 — 다운스트림이
+    어차피 버린다). 1분 레인에는 아직 그 게이트가 없어서(ALPHA-690) 그런 기사의 미러가
+    온다. 그대로 흡수하면 `load_assertions` 는 mentions 를 안 보므로 **배치가 일부러 뺀
+    기사**의 assertion 이 DB 에 착지한다.
+    """
+    storage = LocalStorage(tmp_path)
+    no_mention = _article("a-무관", mentions="[]")
+    _write_canonical(storage, "ko", "2026-07-01", [_article(), no_mention])
+    _write_mirror(storage, no_mention, tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    ids = [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01")]
+    assert ids == ["a1"]                    # 무관 기사는 feature 집합 밖이다
+    log = json.loads(storage.get_bytes(storage.list_keys(quality_log_prefix(tag_news.DATASET))[0]))
+    assert log["minute_mirrors_dropped_no_mention"] == 1   # 조용히 사라지지 않는다
+
+
+def test_intraday_only_article_mirror_is_kept(tmp_path):
+    """반례 — canonical 에 없는 기사(장중만 본 기사)의 미러는 **버리면 안 된다**.
+
+    mentions 를 판정할 근거가 아예 없는 것이지 '무관하다'가 아니다. 버리면 이 PR 이
+    노리는 두 번째 값(장중 판정이 `load_assertions` 로 착지)이 통째로 사라진다.
+    """
+    storage = LocalStorage(tmp_path)
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    intraday_only = _article("a-장중만")
+    _write_mirror(storage, intraday_only, tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    ids = sorted(r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01"))
+    assert ids == ["a-장중만", "a1"]
+
+
+def test_windowed_run_absorbs_in_window_mirror_without_canonical(tmp_path):
+    """⭐ canonical 이 아직 없는 날짜의 미러도 **창 안이면** 흡수한다 (ALPHA-900).
+
+    기사 정본은 PG 이고 canonical 은 다음 `normalize_news` 에 온다 — 장중만 본 기사의
+    발행일이 아직 canonical 에 없을 수 있다. `_partition_dates` 는 canonical 만 열거하니
+    그런 날짜는 루프에 안 들어오고, 그러면 미러가 영영 흡수되지 않는다. 소비자는 흡수 전
+    미러를 안 읽으므로(ALPHA-900) **그 장중 판정이 DB 에 영영 안 실린다** — 이 티켓이
+    노리는 값 하나가 통째로 사라진다.
+
+    ⚠️ 운영 SFN 은 **항상** `--window-days` 를 준다. 창 있는 런에서 미러 날짜를 통째로
+    빼면 이 경로가 스케줄 경로에서 상시로 죽는다.
+    """
+    storage = LocalStorage(tmp_path)
+    # 창 안이지만 canonical 파티션이 없는 날짜 — 장중만 본 기사다
+    intraday_only = _article("a-장중만", published_at="2026-07-02T09:00:00+09:00")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    mirror_key = _write_mirror(storage, intraday_only, tagged_at="2026-07-02T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]),
+                 from_date="2026-07-01", to_date="2026-07-03")
+
+    assert storage.list_keys(mirror_key) == []
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-02")] == ["a-장중만"]
