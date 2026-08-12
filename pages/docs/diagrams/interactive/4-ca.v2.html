@@ -34,6 +34,7 @@ body.focus .box.on-c{opacity:1!important}
 body.focus .box.sel{opacity:1;box-shadow:0 0 0 2.5px var(--brand),0 2px 14px rgba(0,48,159,.35)}
 body.focus svg.wires > path{opacity:.06}
 body.focus svg.wires > path.on{opacity:1;stroke:var(--brand)!important;stroke-width:2.2}
+body.focus svg.wires > path.on-k{opacity:1}
 body.focus .elabel.on{opacity:1}
 body.peek .box,body.peek .elabel{opacity:.45}
 body.peek .box.pk-on{opacity:1;box-shadow:0 0 0 1.5px var(--brand)}
@@ -41,6 +42,7 @@ body.peek .box.pk-c{opacity:1!important}
 body.peek .box.pk-sel{opacity:1;box-shadow:0 0 0 2px var(--brand),0 1px 8px rgba(0,48,159,.25)}
 body.peek svg.wires > path{opacity:.2}
 body.peek svg.wires > path.pk-on{opacity:1;stroke:var(--brand)!important;stroke-width:1.9}
+body.peek svg.wires > path.pk-k{opacity:1}
 body.peek .elabel.pk-on{opacity:1}
 #hud{position:fixed;right:14px;bottom:14px;display:flex;gap:6px;z-index:10001}
 #hud button{width:34px;height:34px;border:1px solid #c3cbdd;border-radius:8px;background:#fff;
@@ -233,6 +235,11 @@ function mark(idOrNull, cls, selCls){
     while(c&&hop++<20){ if(on[c]) return true; c=PARENT[c]; }
     return false;
   }
+  const edgeKeep=cls==='on'?'on-k':'pk-k';
+  const vis=x=>!!on[x]||keptBy(x);
+  EDGES.forEach(p=>{
+    p.classList.toggle(edgeKeep, !!(idOrNull&&!p.classList.contains(cls)&&vis(p.dataset.a)&&vis(p.dataset.b)));
+  });
   BOXES.forEach(b=>{
     b.classList.toggle(cls,!!on[b.id]);
     b.classList.toggle(childCls,!!(idOrNull&&!on[b.id]&&keptBy(b.id)));
