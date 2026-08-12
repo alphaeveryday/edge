@@ -24,6 +24,11 @@ body.focus .node.sel{opacity:1;background:var(--brand);border-color:var(--brand)
   box-shadow:0 2px 12px rgba(0,48,159,.35)}
 body.focus svg.wires path{opacity:var(--dimW)}
 body.focus svg.wires path.on{opacity:1;stroke:var(--brand);stroke-width:2}
+body.peek .node{opacity:.45}
+body.peek .node.pk-on{opacity:1;border-color:var(--brand)}
+body.peek .node.pk-sel{opacity:1;box-shadow:0 1px 8px rgba(0,48,159,.25);border-color:var(--brand)}
+body.peek svg.wires path{opacity:.22}
+body.peek svg.wires path.pk-on{opacity:1;stroke:var(--brand);stroke-width:1.8}
 #hud{position:fixed;right:14px;bottom:14px;display:flex;gap:6px;z-index:5}
 #hud button{width:34px;height:34px;border:1px solid var(--node-bd);border-radius:8px;background:var(--node-bg);
   color:var(--fg);font-size:16px;cursor:pointer}
@@ -132,8 +137,21 @@ DATA.edges.forEach(e=>{
 });
 const EDGES=[...svg.querySelectorAll('path[data-a]')], NODES=[...canvas.querySelectorAll('.node')];
 let SEL=null;
+// 호버 미리보기(peek) — 클릭 포커스보다 옅은 강조. 선택이 잡혀 있는 동안엔 끼어들지 않는다.
+function setPeek(id){
+  if(id && SEL) return;
+  document.body.classList.toggle('peek', !!id);
+  const near={}; if(id) near[id]=true;
+  EDGES.forEach(p=>{
+    const hit=!!id&&(p.dataset.a===id||p.dataset.b===id);
+    p.classList.toggle('pk-on',hit);
+    if(hit){near[p.dataset.a]=true;near[p.dataset.b]=true}
+  });
+  NODES.forEach(n=>{n.classList.toggle('pk-on',!!near[n.id]);n.classList.toggle('pk-sel',!!id&&n.id===id)});
+}
 function setFocus(id){
   SEL=id;
+  setPeek(null);
   if(!id){document.body.classList.remove('focus');
     EDGES.forEach(p=>{p.classList.remove('on');p.setAttribute('marker-end','url(#ar)')});
     NODES.forEach(n=>{n.classList.remove('on','sel');n.setAttribute('aria-pressed','false')}); return}
@@ -149,6 +167,8 @@ function setFocus(id){
     n.setAttribute('aria-pressed', String(n.id===id))});
 }
 NODES.forEach(n=>{
+  n.addEventListener('mouseenter',()=>setPeek(n.id));
+  n.addEventListener('mouseleave',()=>setPeek(null));
   n.addEventListener('click',ev=>{ev.stopPropagation();setFocus(SEL===n.id?null:n.id)});
   n.addEventListener('keydown',ev=>{
     if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();setFocus(SEL===n.id?null:n.id)}
