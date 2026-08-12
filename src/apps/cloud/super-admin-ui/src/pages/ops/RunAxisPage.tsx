@@ -933,4 +933,3 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
     </div>
   );
 }
-

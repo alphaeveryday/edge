@@ -207,4 +207,3 @@ test('모든 지표가 판정 메타데이터와 드릴다운을 갖는다', () 
     if (m.comparisonType !== 'uninstrumented') assert.notEqual(m.threshold, null, `${m.id} 임계 없음`);
   }
 });
-

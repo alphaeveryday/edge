@@ -65,4 +65,3 @@ export const FUNNEL_ORIGIN =
 /** 단계 접두사로 값 하나 — 없으면 `null`(0 이 아니다) */
 export const funnelValue = (stage: string): number | null =>
   FUNNEL.find((s) => s.stage.startsWith(stage))?.value ?? null;
-

@@ -17,9 +17,9 @@ import type {
 import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
 import { datasetKind, gapRuns, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
-import { MOCK_MINUTE, MOCK_REPORT, mockReportForRun } from '../mock/preview';
+import { MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
-import { incidentHref, incidentOfVid } from './ops/investigation';
+import { incidentHref, incidentOfVid, REALTIME_DATASETS } from './ops/investigation';
 import { FETCH_LABEL, fetchTip, isCurrent, notRunReason, unevaluatedFor } from './ops/notRun';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
@@ -421,7 +421,7 @@ function IssuesCard({ issues, focusTask }: { issues: ReconciliationIssue[]; focu
           </tr>
         </thead>
         <tbody>
-          {issues.map((issue) => (
+          {scoped.map((issue) => (
             <tr key={`${issue.issueType}-${issue.scope}-${issue.taskKey}-${issue.firstSeenAt}`}>
               <td className="font-semibold">{issue.issueType}</td>
               <td className="col-muted">
@@ -453,8 +453,6 @@ function IssuesCard({ issues, focusTask }: { issues: ReconciliationIssue[]; focu
 }
 
 /** 실시간 수집 데이터셋 — 어휘 정본은 data_pipeline/minute/states.py */
-const REALTIME_DATASETS = new Set(['price_minute', 'news_minute']);
-
 /**
  * 조사 문맥 breadcrumb — **query 문자열을 그대로 찍지 않는다.** 사건은 평가 결과에서, 런·작업은
  * 원장 응답에서 실제로 찾아 표시하고, 못 찾으면 "원장에서 확인되지 않음"이라고 쓴다.
@@ -625,9 +623,8 @@ function LedgerNoContext() {
  * 라 데이터셋만으로 고르면 벤더가 다른 세션 행(sessionId·phase·lease)이 아무 경고 없이 선다 —
  * 사건은 벤더로 갈렸는데 근거는 남의 것을 보여주는 셈이다.
  *
- * ⚠️ **목 폴백 판정은 데이터셋 축으로만 한다.** 벤더까지 넣어 `real` 을 재면, 실 응답에
- * 그 벤더가 없을 때 목으로 떨어져 **목 세션의 sessionId·phase·lease** 가 서거나 "세션이
- * 계획되지 않았다는 사실입니다"라는 거짓 단언이 난다. 좁힘은 view 를 고른 **뒤에** 한다.
+ * 실 응답에 행이 없으면 다른 날짜·데이터셋의 목 세션으로 대체하지 않는다. 날짜 축 job은
+ * 세션과 독립이므로 뉴스 세션이 없어도 그 수치는 보존한다.
  */
 function RealtimeLedger({
   dataset,
@@ -642,9 +639,8 @@ function RealtimeLedger({
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
-  const real = data.sessions.some((s) => s.dataset === dataset);
-  const view = real ? data : MOCK_MINUTE;
-  const ofDataset = view.sessions.filter((s) => s.dataset === dataset);
+  const ofDataset = data.sessions.filter((s) => s.dataset === dataset);
+  const real = ofDataset.length > 0;
   /* 벤더가 문맥에 없는데 후보가 둘 이상이면 **고르지 않는다.** 예전엔 조용히 `[0]` 을 집어,
    * 손으로 친 주소나 벤더를 빠뜨린 링크가 남의 세션 행(sessionId·phase·lease)을 근거처럼
    * 세웠다. 생산자마다 주석을 다는 것보다 소비자 한 곳에서 막는 게 짧다. */
@@ -686,17 +682,18 @@ function RealtimeLedger({
         {/* 부재 문장은 **고를 수 없는 게 아니라 없는** 경우에만 쓴다(위 갈래와 배타다) */}
         {!ambiguous && (
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            {/* ⚠️ **부재는 `real` 로만 가른다.** 목 폴백일 때 `ofDataset` 은 목의 행이라, 그걸로
-                 "이 데이터셋의 세션은 있다"를 말하면 실 응답엔 없는 세션의 존재를 단언하게 된다.
-                 `ofDataset.length > 0` 를 같이 묻지 않는 이유: `real` 이면 `view === data` 라
-                 그 필터가 반드시 하나 이상을 낸다 — 둘을 묶으면 죽은 항이 조건처럼 보인다. */}
             {real
               ? /* 데이터셋 행은 있는데 그 벤더가 없다 — "세션이 없다"와 다른 사실이다.
                    벤더를 안 밝히고 부재라 말하면 있는 세션을 없다고 단언하게 된다. */
                 `이 데이터셋의 세션은 있지만 source_group=${sourceGroup} 인 행이 없습니다 — 다른 벤더의 세션으로 대체하지 않습니다.`
               : /* 어느 응답의 부재인지 밝힌다 — 이 화면의 나머지 카드는 지금 목 미리보기를 그리고
                    있어서, 밝히지 않으면 목이 말한 부재로 읽힌다. */
-                '실 응답에 이 데이터셋의 세션 행이 없습니다 — 계획되지 않았다는 뜻입니다(비거래일 · 미가동 · 레인 미편입). 다른 날짜나 다른 데이터셋의 세션으로 대체하지 않습니다.'}
+                '실 응답에 이 데이터셋의 세션 행이 없습니다. 비거래일·미가동·레인 미편입 중 어느 이유인지는 이 응답이 답하지 않습니다.'}
+          </p>
+        )}
+        {!ambiguous && datasetKind(dataset) === 'news' && data.newsJobs.dead > 0 && (
+          <p className="t-xs mono m-0" style={{ color: 'var(--danger)', marginTop: 8 }}>
+            세션과 별도인 날짜 축 news job: {JSON.stringify(data.newsJobs)}
           </p>
         )}
       </div>
@@ -709,7 +706,7 @@ function RealtimeLedger({
     <div className="flex flex-col gap-4">
       <div className="card">
         <div className="card-head">
-          <span className="t-label">세션 행 (minute_ingestion_session) {!real && <MockChip />}</span>
+          <span className="t-label">세션 행 (minute_ingestion_session)</span>
           <StatusBadge tone={live.tone}>{live.label}</StatusBadge>
           <span className="t-xs mono" style={{ color: 'var(--fg-3)' }}>{session.sessionId}</span>
         </div>
@@ -825,7 +822,7 @@ function RealtimeLedger({
         <div className="card-pad">
           <p className="t-xs mono m-0">
             {JSON.stringify(
-              datasetKind(dataset) === 'news' ? view.newsJobs : session.priceJobs,
+              datasetKind(dataset) === 'news' ? data.newsJobs : session.priceJobs,
             )}
           </p>
         </div>
@@ -858,7 +855,7 @@ export function SourcesPage() {
   const hasContext = Boolean(runKey || dataset || incidentId);
   const { data: report, isPending, isError, error } = useSourceReport(
     runKey,
-    !mockPreview && hasContext && !realtime,
+    !mockPreview && runKey !== undefined && !realtime,
   );
 
   if (!hasContext) return <LedgerNoContext />;

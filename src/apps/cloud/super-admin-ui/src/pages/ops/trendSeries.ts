@@ -40,4 +40,3 @@ export function points(values: number[], range: [number, number]): { x: number; 
     y: 1 - (v - lo) / (hi - lo),
   }));
 }
-

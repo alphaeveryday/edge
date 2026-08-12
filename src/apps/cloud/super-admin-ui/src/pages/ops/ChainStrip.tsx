@@ -100,4 +100,3 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
     </div>
   );
 }
-

@@ -24,6 +24,7 @@ import { GROUP_LABEL, evaluateMetric, formatValue } from './trendMetrics';
 import { asOfLabel } from './trendAsOf';
 import type { Metric, MetricGroup, Verdict } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
+import { useMinuteStatus } from '../../domains/sources/hooks';
 import { extent, points } from './trendSeries';
 import '../../styles/ops.css';
 
@@ -173,14 +174,15 @@ function MetricCard({ metric, today }: { metric: Metric; today: string }) {
 export function TrendPage() {
   const [filter, setFilter] = useState<Filter>('abnormal');
   const q = useConsoleFactsQuery();
+  const minute = useMinuteStatus(q.ready ? q.facts.meta.today : undefined, q.ready);
   useFocusRow(q.ready);
 
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
    * 한 번만 돌아 화면이 첫 응답에 영원히 고정된다. */
   const evaluated = useMemo(
-    () => (q.ready ? buildMetrics(q.facts).map((m) => ({ m, v: evaluateMetric(m) })) : []),
-    [q],
+    () => (q.ready ? buildMetrics(q.facts, minute.isError ? undefined : minute.data).map((m) => ({ m, v: evaluateMetric(m) })) : []),
+    [q, minute.data, minute.isError],
   );
   if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
@@ -199,6 +201,28 @@ export function TrendPage() {
   return (
     <div className="flex flex-col gap-4">
       <AxisHeader q={q} question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
+
+      <div className="card">
+        <div className="card-head">
+          <span className="t-label">산출 축</span>
+          <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+            사건의 산출 ID와 같은 앵커입니다
+          </span>
+        </div>
+        <table className="table">
+          <thead><tr><th>산출</th><th className="num">오늘</th><th className="num">기준</th><th>단위</th></tr></thead>
+          <tbody>
+            {q.facts.outputs.map((output) => (
+              <tr key={output.id} id={`out-${output.id}`}>
+                <td>{output.label} <span className="mono t-xs">{output.id}</span></td>
+                <td className="num">{output.today.toLocaleString('ko-KR')}</td>
+                <td className="num">{output.base?.toLocaleString('ko-KR') ?? '—'}</td>
+                <td>{output.unit}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <div className="card">
         <div className="card-head">
@@ -260,4 +284,3 @@ export function TrendPage() {
     </div>
   );
 }
-

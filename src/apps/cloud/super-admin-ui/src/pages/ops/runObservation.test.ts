@@ -162,4 +162,3 @@ test('없는 실패 상세를 지어내지 않는다 — 상태·종료만 값�
     assert.equal(ev.find((x) => x.label === key)!.value, null, key);
   }
 });
-

@@ -23,4 +23,3 @@ export function asOfLabel(metric: Metric, today: string): string | null {
   if (last === undefined) return null;
   return last === today ? '오늘' : last;
 }
-

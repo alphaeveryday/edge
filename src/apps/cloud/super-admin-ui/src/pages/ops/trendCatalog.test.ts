@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
 import type { Facts } from '../../rules/types.ts';
+import type { MinuteStatus } from '../../domains/sources/types.ts';
 import { buildMetrics } from './trendCatalog.ts';
 import { FUNNEL_DATE } from './newsFunnelSnapshot.ts';
 import { evaluateMetric } from './trendMetrics.ts';
@@ -47,6 +48,21 @@ test('🔴 축이 없어도 카탈로그를 만드는 동안 죽지 않는다 �
   assert.doesNotThrow(() => buildMetrics(WIRED));
   /* 축이 없다고 지표가 목록에서 사라지지도 않는다 — 사라지면 계측 부채가 화면에서 증발한다 */
   assert.equal(buildMetrics(BARE).length, buildMetrics(factsJson as unknown as Facts).length);
+});
+
+test('오늘 분봉 원장이 있으면 0과 양수를 모두 목값 대신 확정값으로 쓴다', () => {
+  const minute = {
+    date: WIRED.meta.today,
+    sessions: [{
+      dataset: 'price_minute',
+      windows: { overdueNoEvidence: 0 },
+      priceJobs: { dead: 3 },
+    }],
+  } as MinuteStatus;
+  const metrics = buildMetrics(WIRED, minute);
+  assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.value, 0);
+  assert.equal(metrics.find((m) => m.id === 'i.dead_jobs')!.series.at(-1)!.value, 3);
+  assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.isMock, false);
 });
 
 test('🔴 체인 축 부재를 0 으로 그리지 않는다 — "결과 생성률 0%" 는 거짓 경보다', () => {
@@ -160,4 +176,3 @@ test('🔴 퍼널 계열은 **스냅샷 날**에 찍힌다 — 조회일에 찍�
   /* 응답에서 온 지표는 반대로 **조회일**에 찍힌다 — 한쪽만 맞추면 축이 뒤바뀌어도 통과한다 */
   assert.equal(last('n.documents'), other, '응답 지표가 스냅샷 날에 찍혔다');
 });
-

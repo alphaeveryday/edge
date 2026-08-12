@@ -24,7 +24,6 @@ import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type { MinuteStatus, SourceGrid } from '../domains/sources';
 import { useMinuteStatus, useSourceGrid } from '../domains/sources/hooks';
-import { liveness } from '../domains/sources/minuteView';
 import {
   ALL_DATASETS,
   CATALOG_SOURCE,
@@ -33,7 +32,7 @@ import {
   kindOf,
 } from '../domains/sources/datasetCatalog';
 import type { DatasetDomain, DatasetEntry, DatasetKindLabel } from '../domains/sources/datasetCatalog';
-import { datesOf, rollup } from '../domains/sources/dailyRollup';
+import { datesOf, realtimeDayState, rollup } from '../domains/sources/dailyRollup';
 import type { DayExecution, DayRollup, DayState } from '../domains/sources/dailyRollup';
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
@@ -165,13 +164,13 @@ export function GridPage() {
   const { data: grid, isPending, isError, error } = useSourceGrid();
   /* 실시간 레인의 하루치 세션 — 격자 원장에 없는 행을 세션 원장이 답할 수 있는 만큼만 채운다.
    * 실패해도 격자는 그린다(세션이 없으면 예전처럼 상태 미제공). */
-  const { data: minute } = useMinuteStatus();
+  const { data: minute, isError: minuteError } = useMinuteStatus();
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
   /* 격자가 비면 상태 인코딩을 전혀 볼 수 없다 — 사실을 먼저 밝히고 검수용 목을 붙인다 */
-  if (grid.slots.length === 0) {
+  if (grid.slots.length === 0 && (!minute || minuteError)) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyRealNotice>최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.</EmptyRealNotice>
@@ -182,7 +181,7 @@ export function GridPage() {
     );
   }
 
-  return <GridBody grid={grid} minute={minute} />;
+  return <GridBody grid={grid} minute={minuteError ? undefined : minute} minuteError={minuteError} />;
 }
 
 interface Selection {
@@ -210,22 +209,18 @@ function sessionState(
   minute?: MinuteStatus,
 ): { state: DayState; basis: string } | null {
   if (!d.sessionDataset || !minute || minute.date !== date) return null;
-  const s = minute.sessions.find((x) => x.dataset === d.sessionDataset);
-  if (!s) return null;
-  const l = liveness(s);
-  if (l.kind === 'live') return { state: '실행 중', basis: l.basis };
-  /* 살아 있지 않은 것을 상태 미제공으로 덮으면 원장이 관대해지는 쪽으로 틀린다 */
-  if (l.kind === 'broken' || l.kind === 'failed') return { state: '장애', basis: l.basis };
-  return null;
+  return realtimeDayState(d.sessionDataset, date, minute);
 }
 
 function GridBody({
   grid,
   minute,
+  minuteError = false,
   mock = false,
 }: {
   grid: SourceGrid;
   minute?: MinuteStatus;
+  minuteError?: boolean;
   mock?: boolean;
 }) {
   const [kindFilter, setKindFilter] = useState<DatasetKindLabel | 'all'>('all');
@@ -245,7 +240,12 @@ function GridBody({
   }, [selected]);
 
   /* 필터는 **행**에만 건다 — 슬롯을 걸러 날짜 축까지 바뀌면 필터를 바꿀 때마다 열이 움직인다 */
-  const dates = useMemo(() => datesOf(grid.slots), [grid.slots]);
+  const dates = useMemo(() => {
+    const batchDates = datesOf(grid.slots);
+    return minute && !batchDates.includes(minute.date)
+      ? [...batchDates, minute.date].sort()
+      : batchDates;
+  }, [grid.slots, minute]);
   const rolled = useMemo(() => rollup(grid.slots), [grid.slots]);
   const at = (datasetId: string, date: string) => rolled.get(`${datasetId}|${date}`);
 
@@ -270,6 +270,11 @@ function GridBody({
 
   return (
     <div className="flex flex-col gap-4">
+      {minuteError && (
+        <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
+          실시간 세션 축을 갱신하지 못해 이 격자에는 표시하지 않습니다.
+        </div>
+      )}
       <div className="card">
         <div className="card-head">
           <span className="t-label">파이프라인 실행 이력 {mock && <MockChip />}</span>

@@ -207,4 +207,3 @@ export function awsFailureEvidence(r: RunFact): { label: string; value: string |
     { label: 'redrive 상태', value: null },
   ];
 }
-

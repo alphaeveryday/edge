@@ -29,6 +29,7 @@ import type { AxisFetch } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
+import { hasNoSignal } from '../../domains/sources/minuteView';
 import '../../styles/ops.css';
 
 const SCOPE_TIP = [
@@ -77,10 +78,10 @@ const REALTIME_TIP = [
   '결손처럼 보인다. 응답이 도래 여부를 직접 주지 않아 증거+무증거를 하한으로 쓴다.',
 ].join('\n');
 
-function RealtimeShortcut() {
-  const { data, isPending, isError } = useMinuteStatus();
+function RealtimeShortcut({ date }: { date: string }) {
+  const { data, isPending, isError } = useMinuteStatus(date);
   /* 세션이 없으면 목으로 미리보기 — 실측이 없다는 사실을 먼저 말하고 나서다 */
-  const real = !isPending && !isError && data.sessions.length > 0;
+  const real = !isPending && !isError && !hasNoSignal(data);
   const view = real ? data : MOCK_MINUTE;
 
   return (
@@ -400,7 +401,7 @@ function ImmediateAction({
 export function IncidentsPage() {
   /* 실시간 축이 실린 평가 — 사건 목록의 유일한 출처다(shared.useConsoleEvaluation) */
   const ev = useConsoleEvaluation();
-  const minute = useMinuteStatus();
+  const minute = useMinuteStatus(ev.ready ? ev.facts.meta.today : undefined, ev.ready);
   const overview = useSourceOverview();
   if (!ev.ready) return <ConsoleGate q={ev} />;
   const { pipeline, facts } = ev;
@@ -448,7 +449,7 @@ export function IncidentsPage() {
         unevaluated={unevaluated.length}
         stale={p0Stale}
       />
-      <RealtimeShortcut />
+      <RealtimeShortcut date={facts.meta.today} />
     </div>
   );
 }
@@ -462,4 +463,3 @@ function hm(iso: string): string {
     hour12: false,
   }).format(new Date(iso));
 }
-

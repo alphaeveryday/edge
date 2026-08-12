@@ -263,4 +263,3 @@ export function buildSeries(spec: SeriesSpec): SeriesPoint[] {
     { date: dates[dates.length - 1], value: spec.today, isMock: spec.todayIsMock },
   ];
 }
-

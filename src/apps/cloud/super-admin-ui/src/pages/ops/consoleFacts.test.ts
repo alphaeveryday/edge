@@ -506,4 +506,3 @@ test('거부 — 응답 자체가 객체가 아니면 그 사실을 사유로 �
     assert.match(r.reason, /응답이 객체가 아니다/, `${JSON.stringify(body)} 의 사유가 원인을 안 가리킨다`);
   }
 });
-

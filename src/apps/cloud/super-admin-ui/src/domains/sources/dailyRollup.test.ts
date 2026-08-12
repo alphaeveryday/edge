@@ -10,9 +10,20 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dateOfSlot, datesOf, rollup, stateOf } from './dailyRollup.ts';
+import { dateOfSlot, datesOf, realtimeDayState, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
-import type { GridCell, GridSlot } from './types.ts';
+import type { GridCell, GridSlot, MinuteStatus } from './types.ts';
+
+test('같은 데이터셋의 한 벤더가 끊기면 다른 벤더가 살아 있어도 장애다', () => {
+  const minute = {
+    date: '2026-08-12',
+    sessions: [
+      { dataset: 'price_minute', phase: 'ACTIVE', leaseExpired: false },
+      { dataset: 'price_minute', phase: 'ACTIVE', leaseExpired: true },
+    ],
+  } as MinuteStatus;
+  assert.equal(realtimeDayState('price_minute', minute.date, minute)?.state, '장애');
+});
 
 const cell = (o: Partial<GridCell> & Pick<GridCell, 'taskKey'>): GridCell => ({
   stage: 'raw',

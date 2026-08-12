@@ -8,7 +8,14 @@
  * 판정 불가·기준 부재를 그 칸에 그리면 계측 공백이 정상으로 읽힌다.
  */
 import type { BadgeTone } from 'ui-kit';
-import type { DatasetFact } from '../../rules/types.ts';
+import type { DatasetFact, TaskFact } from '../../rules/types.ts';
+
+/** 계획에서 제외된 작업은 미귀결이 아니다. 실행 대상이었던 작업만 결과를 요구한다. */
+export function allDueTasksFulfilled(tasks: TaskFact[]): boolean {
+  return tasks
+    .filter((task) => task.plan_status !== 'SKIPPED')
+    .every((task) => task.task_outcome === 'FULFILLED');
+}
 
 export interface Freshness {
   label: string;
@@ -71,4 +78,3 @@ export function freshness(d: DatasetFact): Freshness {
     return { label: 'STALE', tone: 'blocked', tip: '분석이 오래된 스냅샷 위에서 돈다' };
   return { label: 'FRESH', tone: 'active', tip: 'actual_as_of 가 기대 기준일 이상' };
 }
-

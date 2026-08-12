@@ -208,4 +208,3 @@ export function ChainPage() {
     </div>
   );
 }
-

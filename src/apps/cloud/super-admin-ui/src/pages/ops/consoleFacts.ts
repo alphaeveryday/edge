@@ -340,4 +340,3 @@ function toFacts(dto: ConsoleFactsDto): Facts {
     meta: { db: dto.meta.db, today: dto.meta.today },
   };
 }
-

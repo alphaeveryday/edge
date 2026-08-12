@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { incidentHref, incidentOfVid, investigate, ledgerHref } from './investigation.ts';
+import { incidentHref, incidentOfVid, investigate, ledgerHref, REALTIME_DATASETS } from './investigation.ts';
 import { evaluate } from '../../rules/evaluate.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
@@ -41,6 +41,13 @@ const violation = (o: Partial<Violation>): Violation => {
   const v = base(o);
   return { ...v, targetId: v.targetId ?? v.target } as Violation;
 };
+
+test('규칙이 평가하는 모든 분봉 데이터셋은 실시간 원장으로 라우팅한다', () => {
+  assert.deepEqual(
+    [...REALTIME_DATASETS].sort(),
+    ['disclosure_minute', 'etf_inav_minute', 'news_minute', 'price_minute', 'sector_index_minute'],
+  );
+});
 
 const base = (o: Partial<Violation>) =>
   ({
@@ -371,4 +378,3 @@ test('벤더 없는 실시간 사건은 R19 만이 아니다 — 계약 축 규�
   assert.doesNotMatch(r.ledgerNote ?? '', /수는 날짜 축 집계/, '이 사건에서 거짓인 사유를 말했다');
   assert.match(r.ledgerNote ?? '', /벤더를 지목하지 않아/);
 });
-

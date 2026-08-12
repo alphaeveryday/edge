@@ -176,7 +176,8 @@ export function useConsoleEvaluation(): ConsoleEvaluation {
   /* `isError` 를 같이 꺼내는 이유: 실시간 축 부재의 뜻이 셋이다 — 도착 전 · 조회 실패 ·
    * (응답은 왔는데) 축이 없다. `data` 만 보면 셋이 한 문장으로 뭉쳐, 응답 대기와 API 장애가
    * 화면에서 "계측 없음"과 구분되지 않는다. */
-  const { data, isError } = useMinuteStatus();
+  const factsDate = q.ready ? q.facts.meta.today : undefined;
+  const { data, isError } = useMinuteStatus(factsDate, q.ready);
   return useMemo(() => {
     if (!q.ready) return q;
     const facts: Facts = data ? { ...q.facts, minute: minuteFacts(data) } : q.facts;
@@ -337,4 +338,3 @@ export function AxisHeader({
     </div>
   );
 }
-

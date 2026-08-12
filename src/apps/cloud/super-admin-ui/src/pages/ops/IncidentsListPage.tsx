@@ -347,4 +347,3 @@ function RuleCatalog({ results, axisFetch }: { results: RuleResult[]; axisFetch:
     </details>
   );
 }
-

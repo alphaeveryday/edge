@@ -13,6 +13,7 @@
  *   · Cloud 게시·테넌트 발번·소비자 전달은 전달 화면 소관이라 지표로 두지 않는다.
  */
 import type { Facts, OutputFact } from '../../rules/types.ts';
+import type { MinuteStatus } from '../../domains/sources/types.ts';
 import { FUNNEL_DATE, FUNNEL_ORIGIN, funnelValue } from './newsFunnelSnapshot.ts';
 import { buildSeries } from './trendMetrics.ts';
 import type { Metric, SeriesPoint } from './trendMetrics.ts';
@@ -237,8 +238,17 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
  * ErrorBoundary 밖이라 **흰 화면**이 된다. 사실을 인자로 받으면 그 `!` 들이 함께 없어진다 —
  * 부재는 죽을 자리가 아니라 `uninstrumented` 로 그릴 자리다.
  */
-export function buildMetrics(f: Facts): Metric[] {
+export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
   const TODAY = f.meta.today;
+  const priceSessions = minute?.date === TODAY
+    ? minute.sessions.filter((s) => s.dataset === 'price_minute')
+    : [];
+  const noEvidenceToday = priceSessions.length > 0
+    ? priceSessions.reduce((sum, s) => sum + s.windows.overdueNoEvidence, 0)
+    : undefined;
+  const deadJobsToday = priceSessions.length > 0
+    ? Math.max(...priceSessions.map((s) => s.priceJobs.dead))
+    : undefined;
   const doc = output(f, 'o.doc');
   const trig = output(f, 'o.trig');
   const res = chain(f, 'c.res');
@@ -309,15 +319,17 @@ export function buildMetrics(f: Facts): Metric[] {
     comparisonType: 'maxCount',
     threshold: 0,
     direction: 'lowerIsBetter',
-    source: 'MOCK',
-    series: buildSeries({ today: 4, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: true, endDate: TODAY }),
+    source: noEvidenceToday === undefined ? 'MOCK' : 'DB_LEDGER',
+    series: buildSeries({ today: noEvidenceToday ?? 4, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: noEvidenceToday === undefined, endDate: TODAY }),
     help: [
       '무증거 창 = 기한(window_end)이 지났는데 결과 증거가 없는 창(DUE 또는 유효 lease 없는 CLAIMED).',
       '',
       '판정: 1개 이상이면 이상 — 결손은 분포로 보지 않는다.',
       '이 수치만으로 미실행·실행체 사망을 확정하지 않는다.',
       '',
-      '⚠️ 계열 전체가 검수용 목이다 — 일별 요약 엔드포인트가 없다.',
+      noEvidenceToday === undefined
+        ? '⚠️ 계열 전체가 검수용 목이다 — 일별 요약 엔드포인트가 없다.'
+        : '오늘 값은 분봉 원장 실측이고 과거 값만 검수용 목이다.',
     ].join('\n'),
     drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
   },
@@ -351,15 +363,17 @@ export function buildMetrics(f: Facts): Metric[] {
     comparisonType: 'maxCount',
     threshold: 0,
     direction: 'lowerIsBetter',
-    source: 'MOCK',
-    series: buildSeries({ today: 2, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: true, endDate: TODAY }),
+    source: deadJobsToday === undefined ? 'MOCK' : 'DB_LEDGER',
+    series: buildSeries({ today: deadJobsToday ?? 2, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: deadJobsToday === undefined, endDate: TODAY }),
     help: [
       '재시도가 소진된 처리 job 수(DB job 원장의 status=DEAD). 실제 큐 지표가 아니다.',
       '',
       '판정: 1건 이상이면 이상.',
       '이 응답에는 해소 축이 없어 당일 누적이다 — 이미 복구됐는지는 알 수 없다.',
       '',
-      '⚠️ 계열 전체가 검수용 목이다.',
+      deadJobsToday === undefined
+        ? '⚠️ 계열 전체가 검수용 목이다.'
+        : '오늘 값은 분봉 원장 실측이고 과거 값만 검수용 목이다.',
     ].join('\n'),
     drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
   },
@@ -626,4 +640,3 @@ export function buildMetrics(f: Facts): Metric[] {
   },
   ];
 }
-

@@ -5,8 +5,8 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DatasetFact } from '../../rules/types.ts';
-import { freshness } from './datasetFreshness.ts';
+import type { DatasetFact, TaskFact } from '../../rules/types.ts';
+import { allDueTasksFulfilled, freshness } from './datasetFreshness.ts';
 
 /** ⚠️ 자리마다 다른 값을 둔다 — 같은 값이면 두 필드를 맞바꾸는 실수가 안 잡힌다. */
 const ds = (o: Partial<DatasetFact>): DatasetFact => ({
@@ -17,6 +17,18 @@ const ds = (o: Partial<DatasetFact>): DatasetFact => ({
   collected_at: '2026-08-03T15:41:58+09:00',
   unverifiable: null,
   ...o,
+});
+
+test('계획에서 SKIPPED 된 작업은 필요한 작업의 귀결을 막지 않는다', () => {
+  const tasks = [
+    { plan_status: 'DUE', task_outcome: 'FULFILLED' },
+    { plan_status: 'SKIPPED', task_outcome: null },
+  ] as TaskFact[];
+  assert.equal(allDueTasksFulfilled(tasks), true);
+  assert.equal(
+    allDueTasksFulfilled([{ plan_status: 'DUE', task_outcome: 'FAILED' } as TaskFact]),
+    false,
+  );
 });
 
 test('🔴 기대 기준일이 없으면 FRESH 가 아니다 — 비교 안 한 것이 초록으로 서던 자리다', () => {
@@ -93,4 +105,3 @@ test('초록은 **근거가 전부 있을 때만** 선다 — 상태 공간 전�
     '근거 없이 초록이 섰다',
   );
 });
-

@@ -53,7 +53,13 @@ export interface Investigation {
 }
 
 /** 실시간 수집 데이터셋 — 어휘 정본은 data_pipeline/minute/states.py */
-const REALTIME_DATASETS = new Set(['price_minute', 'news_minute']);
+export const REALTIME_DATASETS = new Set([
+  'price_minute',
+  'news_minute',
+  'etf_inav_minute',
+  'disclosure_minute',
+  'sector_index_minute',
+]);
 
 const q = (v: string) => encodeURIComponent(v);
 
@@ -350,4 +356,3 @@ export function incidentOfVid(
   const owner = incidents.find((i) => i.members.some((m) => m.v.vid === vid));
   return owner ? { incident: owner, member: true } : null;
 }
-

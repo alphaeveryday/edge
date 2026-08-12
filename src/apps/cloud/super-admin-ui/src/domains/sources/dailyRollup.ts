@@ -20,8 +20,9 @@
  *   · 아직 기한 전인 대기(PENDING)는 실패·누락으로 판정하지 않는다.
  *   · 서버 판정(outcome·dataStatus·running)을 다시 정의하지 않는다 — 세기만 한다.
  */
-import type { GridCell, GridSlot } from './types.ts';
+import type { GridCell, GridSlot, MinuteStatus } from './types.ts';
 import { ALL_DATASETS, DATASET_OF_TASK } from './datasetCatalog.ts';
+import { liveness } from './minuteView.ts';
 
 /**
  * 하루·실행 하나의 상태.
@@ -38,6 +39,20 @@ export type DayState =
   | '계획 스킵'
   | '계획 없음'
   | '상태 미제공';
+
+/** 같은 데이터셋·날짜의 벤더 세션을 모두 보고, 하나라도 끊겼으면 장애를 보존한다. */
+export function realtimeDayState(
+  dataset: string,
+  date: string,
+  minute?: MinuteStatus,
+): { state: DayState; basis: string } | null {
+  if (!minute || minute.date !== date) return null;
+  const states = minute.sessions.filter((s) => s.dataset === dataset).map(liveness);
+  const failed = states.find((s) => s.kind === 'failed' || s.kind === 'broken');
+  if (failed) return { state: '장애', basis: failed.basis };
+  const live = states.find((s) => s.kind === 'live');
+  return live ? { state: '실행 중', basis: live.basis } : null;
+}
 
 export interface DayCounts {
   /** 기한이 지난 기대 실행 중 정상 귀결 */
