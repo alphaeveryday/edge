@@ -14,7 +14,7 @@ import { useSearchParams } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
 import type { NewsLineage, NewsLineageDocument, NewsLineageStage } from '../domains/sources';
 import { useMinuteStatus, useNewsLineage } from '../domains/sources/hooks';
-import { hasPendingJobs } from '../domains/sources/minuteView';
+import { hasPendingJobs, healthyClaimed } from '../domains/sources/minuteView';
 import { mockLineage } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
@@ -129,8 +129,13 @@ export function NewsLineagePage() {
    * 덮는다** — 고치려던 그 결함이 날짜 없는 축에서 그대로 재현된다. 전 기간 미종결 수를 주는
    * 조회가 없으므로, 누적 보기에서는 **모른다**고 말한다. */
   const cumulative = !date;
-  const pendingUnknown = cumulative || minute.isPending || minute.isError;
-  const pending = !cumulative && minute.data ? hasPendingJobs(minute.data.newsJobs) : false;
+  /* ⭐ **0 과 양수는 대칭이 아니다.** 오늘 집계는 누적의 **부분집합**이라, 오늘 미종결이
+   * 있으면 누적에도 확실히 있다(양수는 확정). 반대로 오늘 0 은 어제 것을 못 본 것이라
+   * 아무것도 증명하지 않는다(0 은 모름). 그래서 `pending` 은 두 보기에서 똑같이 읽고,
+   * **모름은 `pendingUnknown` 이 따로 진다** — `cumulative` 로 `pending` 을 통째로 눌러
+   * 버리면 알아낸 진행 중까지 버려 목이 실 작업을 덮는다. */
+  const pending = minute.data ? hasPendingJobs(minute.data.newsJobs) : false;
+  const pendingUnknown = !pending && (cumulative || minute.isPending || minute.isError);
 
   const noDocs = data.summary.totalDocuments === 0 && data.documents.length === 0;
 
@@ -154,9 +159,19 @@ export function NewsLineagePage() {
               보낸다 — 그 수는 바로 아래 표에 있는데도. */}
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
             {pending
-              ? `추출이 진행 중입니다 — 대기 ${minute.data!.newsJobs.waiting}건 · 처리 중 ${
-                  minute.data!.newsJobs.claimed
-                }건. 미가동이 아니고, 목데이터로 대체하지도 않습니다.`
+              ? /* ⚠️ `claimed` 를 그대로 쓰면 안 된다 — `claimedExpired` 가 그 부분집합이라
+                 * lease 가 전부 끊긴 날에도 "처리 중 N건"이 뜬다. 개요 카드와 같은
+                 * `healthyClaimed` 를 쓰고 고착은 따로 밝힌다(기다릴 일과 조사할 일이 다르다). */
+                /* ⚠️ 누적 보기에서 이 수는 **오늘치**다(그 조회가 날짜 단위뿐이라 그렇다).
+                 * 라벨 없이 적으면 "누적 미종결이 이만큼"으로 읽혀 또 같은 오독이 된다 —
+                 * 진행 중이라는 **사실**만 확정이고 수는 하한이다. */
+                `추출이 진행 중입니다(${cumulative ? '오늘치 기준 — 이전 날짜는 이 수에 없습니다' : `${date} 기준`}) — 대기 ${
+                  minute.data!.newsJobs.waiting
+                }건 · 처리 중 ${healthyClaimed(minute.data!.newsJobs)}건${
+                  minute.data!.newsJobs.claimedExpired > 0
+                    ? ` · 고착 ${minute.data!.newsJobs.claimedExpired}건(유효 lease 없음 — 기다릴 것이 아니라 확인할 것입니다)`
+                    : ''
+                }. 미가동이 아니고, 목데이터로 대체하지도 않습니다.`
               : pendingUnknown
                 ? cumulative
                   ? '누적 보기에서는 미종결 추출 job 수를 알 수 없습니다 — 그 수를 주는 조회가 날짜 단위뿐입니다. 날짜를 고르면 진행 중 여부를 말할 수 있습니다.'
