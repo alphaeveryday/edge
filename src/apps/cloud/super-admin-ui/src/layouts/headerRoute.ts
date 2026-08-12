@@ -66,13 +66,31 @@ const underPrefix = (path: string, prefix: string): boolean =>
  * 티커가 CDN SPA fallback 에서 죽지 않게). `useLocation().pathname` 에는 쿼리가 없으므로 이
  * 함수는 경로만으로 답할 수 있는 데까지만 답하고, 종목 이름은 화면이 붙인다.
  */
+/**
+ * 라우터가 같게 보는 주소를 이 파서도 같게 보게 만든다. 갈리면 **본문은 A 화면인데 헤더는 B
+ * 화면 이름**을 말하고, 상세 화면에서는 뒤로가기까지 사라진다.
+ *
+ * 두 가지를 맞춘다:
+ * 1. 끝의 `/` 는 조각이 아니라 표기다 — React Router 는 `/analyses/symbol/` 를 그 화면에 매칭한다.
+ * 2. 퍼센트 인코딩을 푼다(`/analyses/%73ymbol` → `/analyses/symbol`). 라우터는 디코딩해 매칭한다.
+ *
+ * 🔴 **디코딩이 조각 경계를 만들면 그 결과를 버린다.** `%2F` 는 "조각 안의 슬래시"라 풀면
+ * 없던 경계가 생기고, 이 파일의 경계 검사(`underPrefix`·`[^/]+`)가 통째로 우회된다 —
+ * `/analyses/a%2Fb` 가 두 조각으로 보여 엉뚱한 갈래로 떨어진다. 조각 수가 그대로일 때만 쓴다.
+ * 잘못된 인코딩(`%zz`)은 `decodeURIComponent` 가 던지므로 원본을 유지한다.
+ */
+function normalizePath(raw: string): string {
+  const trimmed = raw.length > 1 ? raw.replace(/\/+$/, '') || '/' : raw;
+  try {
+    const decoded = decodeURIComponent(trimmed);
+    return decoded.split('/').length === trimmed.split('/').length ? decoded : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 export function headerRoute(raw: string): HeaderRoute {
-  /* 🔴 라우터와 **같은 경로를 같게 봐야 한다.** React Router 는 `/analyses/symbol/` 를 그
-   * 화면에 매칭하는데 이 파서가 정확 비교를 하면 목록으로 분류해, 화면은 종목인데 헤더는
-   * "가격 변동 분석 목록"이고 뒤로가기까지 사라진다. 끝의 `/` 는 조각이 아니라 표기다.
-   * ⚠️ 퍼센트 인코딩(`/analyses/%73ymbol`)은 여기서 안 푼다 — 디코딩을 넣으면 `%2F` 가 조각
-   * 경계를 만들어 이 파서의 경계 검사를 우회한다. 손으로 친 그 주소는 헤더 이름만 틀린다. */
-  const path = raw.length > 1 && raw.endsWith('/') ? raw.replace(/\/+$/, '') : raw;
+  const path = normalizePath(raw);
 
   const tenant = /^\/tenants\/([^/]+)$/.exec(path);
   if (tenant) {

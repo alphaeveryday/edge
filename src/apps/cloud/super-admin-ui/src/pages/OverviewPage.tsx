@@ -223,7 +223,7 @@ function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
           ) : (
             data!.sessions.map((s) => <MinuteSessionLine key={s.sessionId} s={s} />)
           )}
-          {/* 뉴스 추출 DEAD — 세션(창 원장)과 별개 축이라 세션 유무와 무관하게 신호를 낸다
+          {/* 뉴스 추출 job — 세션(창 원장)과 별개 축이라 세션 유무와 무관하게 신호를 낸다
             * (ALPHA-697). 사유별 내역은 /lineage/news 의 추출 카드가 답한다. 이 카운트는
             * 서버가 data.date(오늘 KST)로 집계한 값이라 링크도 같은 날짜를 들고 내려간다 —
             * 날짜를 버리면 상세가 누적 사유를 보여줘 오늘 장애를 오진한다. */}
@@ -231,6 +231,25 @@ function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
             <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
               뉴스 추출 DEAD {data!.newsJobs.dead}건 —{' '}
               <Link to={`/lineage/news?date=${data!.date}`}>사유별 내역</Link>
+            </p>
+          )}
+          {/* 🔴 **DEAD 만 그리면 나머지 칸이 화면에서 사라진다.** `claimedExpired` 는 유효
+            * lease 없는 CLAIMED, 즉 **Consumer 가 죽은 채 물고 있는 job** 이다 — DEAD 로도
+            * 안 넘어가 영원히 조용하다. 이 카드가 목을 쓸지 정할 때는 전 칸을 세면서
+            * (`hasNoSignal`) 그리기는 DEAD 만 하면, 살려 낸 신호를 바로 다음 줄에서 버린다. */}
+          {data!.newsJobs.claimedExpired > 0 && (
+            <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
+              뉴스 추출 고착 {data!.newsJobs.claimedExpired}건 — 유효 lease 없이 CLAIMED 상태입니다
+              (Consumer 사망 후보, DEAD 로 넘어가지 않습니다).{' '}
+              <Link to="/minute">장중 1분 수집에서 확인</Link>
+            </p>
+          )}
+          {/* 대기·처리 중은 결함이 아니다 — 그래서 색을 쓰지 않는다. 다만 세션이 없는 날에도
+            * 뉴스 job 은 날짜 축으로 쌓이므로, "세션 없음"만 보이고 이 수가 안 보이면 화면이
+            * "아무 일도 없다"로 읽힌다. */}
+          {data!.newsJobs.waiting + data!.newsJobs.claimed > 0 && (
+            <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+              뉴스 추출 대기 {data!.newsJobs.waiting}건 · 처리 중 {data!.newsJobs.claimed}건
             </p>
           )}
         </>
@@ -245,32 +264,30 @@ export function OverviewPage() {
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={4} />;
 
-  /* 레인이 없으면 원장의 구조(레인 → 필수 작업 → 결함)를 볼 수 없다 — 사실을 먼저 밝힌다 */
-  if (data.lanes.length === 0) {
-    return (
-      <div className="flex flex-col gap-4">
-        {/* 빈 원장은 정상 상태다(초기 환경) — 에러 화면이 아니다 */}
-        <EmptyRealNotice>원장에 기록된 파이프라인 실행이 아직 없습니다.</EmptyRealNotice>
-        <MockPreview>
-          <OverviewBody data={MOCK_OVERVIEW} mock />
-        </MockPreview>
-      </div>
-    );
-  }
+  /* 레인이 없으면 원장의 구조(레인 → 필수 작업 → 결함)를 볼 수 없다 — 사실을 먼저 밝힌다.
+   * 빈 원장은 정상 상태다(초기 환경) — 에러 화면이 아니다. */
+  const lanesEmpty = data.lanes.length === 0;
 
-  return <OverviewBody data={data} />;
-}
-
-function OverviewBody({ data, mock = false }: { data: SourceOverview; mock?: boolean }) {
   return (
     <div className="flex flex-col gap-4">
-      {data.lanes.map((lane) => (
-        <LaneCard key={lane.pipelineType} lane={lane} mock={mock} />
-      ))}
+      {lanesEmpty ? (
+        <>
+          <EmptyRealNotice>원장에 기록된 파이프라인 실행이 아직 없습니다.</EmptyRealNotice>
+          <MockPreview>
+            <LaneCards data={MOCK_OVERVIEW} mock />
+          </MockPreview>
+        </>
+      ) : (
+        <LaneCards data={data} />
+      )}
 
-      {/* 장중 1분 레인 — EOD 레인만 보이면 장중 절반이 첫 화면의 사각이다(ALPHA-692, 멘토
-       * "왜 전부 하루 주기냐"). ops 런 레인과 실행 모델이 달라 별도 카드로 요약만 얹는다. */}
-      <MinuteLaneCard preview={mock} />
+      {/* 🔴 **1분 카드는 목 경계 밖이다.** 안에 두면 이 카드가 고른 실데이터까지 "아래 내용은
+       * 목데이터이며 실제 운영 데이터가 아닙니다" 아래에 그려져, 운영자가 진짜 장애를 검수용
+       * 목으로 읽는다 — 목이 실을 덮던 결함을 고치다 **표기가 실을 덮는** 반대편으로 넘어갔다.
+       * ops 레인과 1분은 별개 원장이니 경계도 따로다: 목을 쓸지는 이 카드가 자기 조회로 정하고
+       * (`hasNoSignal`), 목일 때의 표시는 카드 안의 MOCK 칩이 진다.
+       * 장중 1분을 첫 화면에 두는 이유는 EOD 레인만 보이면 장중 절반이 사각이라서다(ALPHA-692). */}
+      <MinuteLaneCard preview={lanesEmpty} />
 
       {/* 발행 분포는 이 콘솔의 경계 밖 — 없는 숫자를 지어내지 않고 소재만 밝힌다(계획 §6-1) */}
       <div className="card">
@@ -280,5 +297,15 @@ function OverviewBody({ data, mock = false }: { data: SourceOverview; mock?: boo
         </p>
       </div>
     </div>
+  );
+}
+
+function LaneCards({ data, mock = false }: { data: SourceOverview; mock?: boolean }) {
+  return (
+    <>
+      {data.lanes.map((lane) => (
+        <LaneCard key={lane.pipelineType} lane={lane} mock={mock} />
+      ))}
+    </>
   );
 }

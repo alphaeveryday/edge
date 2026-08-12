@@ -52,7 +52,9 @@ export function AnalysisSymbolPage() {
 
   /* 🔴 **링크가 망가진 것과 종목이 조회 창 밖인 것은 다른 사실이다.** 빈 값으로 `findGroup`
    * 을 부르면 당연히 못 찾고, 화면은 "최신 200건 창에 없습니다"라고 말한다 — 실제로는 주소에
-   * 종목이 없는 것이라 운영자가 **없는 종목을 조사하러 간다**. 조회 전에 가른다(Rule 12). */
+   * 종목이 없는 것이라 운영자가 **없는 종목을 조사하러 간다**(Rule 12).
+   * ⚠️ 조회 자체를 막는 게 아니다 — `useAnalyses` 는 훅이라 위에서 이미 걸렸고, 조기 반환을
+   * 훅 앞으로 올리면 렌더마다 훅 수가 갈린다. 여기서 가르는 것은 **응답의 해석**이다. */
   if (!market || !code) {
     return (
       <div className="card card-pad">
@@ -75,14 +77,27 @@ export function AnalysisSymbolPage() {
   if (!group) {
     return (
       <div className="card card-pad">
-        <p className="t-sm m-0">이 종목의 분석이 조회 창 안에 없습니다.</p>
+        {/* 🔴 **무엇을 뒤졌는지 밝힌다.** 미리보기에서는 실 원장이 아니라 목 픽스처를 뒤졌는데
+            "최신 200건 조회 창에 없습니다"라고 말하면, 목 링크를 연 운영자가 **실 원장에 그
+            종목이 없다**고 읽는다. 조회한 대상이 다르면 부재의 뜻도 다르다. */}
+        <p className="t-sm m-0">
+          {preview ? '이 종목이 목 픽스처에 없습니다.' : '이 종목의 분석이 조회 창 안에 없습니다.'}
+        </p>
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
           <span className="mono">
             {market} {code}
           </span>{' '}
-          는 최신 {LIST_WINDOW}건 조회 창에 없습니다 — 이 종목의 분석이 없다는 뜻이 아니라
-          그보다 오래됐을 수 있다는 뜻입니다. 다른 종목으로 대체하지 않습니다.{' '}
-          <Link to="/analyses">가격 변동 분석 목록으로</Link>
+          {preview ? (
+            <>
+              은 화면 검수용 목데이터에 없습니다 — 실 원장을 조회한 결과가 아닙니다.{' '}
+            </>
+          ) : (
+            <>
+              는 최신 {LIST_WINDOW}건 조회 창에 없습니다 — 이 종목의 분석이 없다는 뜻이 아니라
+              그보다 오래됐을 수 있다는 뜻입니다.{' '}
+            </>
+          )}
+          다른 종목으로 대체하지 않습니다. <Link to="/analyses">가격 변동 분석 목록으로</Link>
         </p>
       </div>
     );

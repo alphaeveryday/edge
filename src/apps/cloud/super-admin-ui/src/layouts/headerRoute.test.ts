@@ -29,6 +29,23 @@ test('끝의 슬래시는 조각이 아니다 — 라우터가 매칭하는 주�
   assert.equal(headerRoute('/tenants/t-1/').kind, 'tenantDetail');
   /* 루트만은 슬래시가 곧 경로다 — 지우면 빈 문자열이 돼 unknown 으로 떨어진다 */
   assert.equal(headerRoute('/').kind, 'home');
+  assert.equal(headerRoute('//').kind, 'home', '슬래시만 남아도 루트다');
+});
+
+test('인코딩된 조각을 라우터와 같게 푼다 — 단, 새 조각 경계를 만들면 안 푼다', () => {
+  /* 라우터는 디코딩해 매칭하므로 `/analyses/%73ymbol` 은 종목 화면이다. 파서가 안 풀면
+   * 본문은 종목 이력인데 헤더는 "가격 변동 분석 상세"라 말한다. */
+  assert.equal(headerRoute('/analyses/%73ymbol').kind, 'symbol');
+  assert.equal(headerRoute('/tenants/%74-1').entity?.id, 't-1');
+
+  /* 🔴 `%2F` 는 **조각 안의** 슬래시다. 풀면 없던 경계가 생겨 경계 검사가 통째로 우회된다 —
+   * `/analyses/a%2Fb` 는 조각 하나(=분석 상세)여야지 두 조각으로 보이면 안 된다. */
+  const slashInSegment = headerRoute('/analyses/a%2Fb');
+  assert.equal(slashInSegment.kind, 'analysisDetail', '조각 수가 늘면 디코딩 결과를 버린다');
+  assert.equal(slashInSegment.entity?.id, 'a%2Fb', '원본을 유지한다');
+
+  /* 잘못된 인코딩은 던진다 — 화면 전체를 죽이지 않고 원본으로 판정한다 */
+  assert.equal(headerRoute('/analyses/%zz').kind, 'analysisDetail');
 });
 
 test('접두어는 경로 조각 경계에서만 맞는다 — 없는 화면에 이름을 주지 않는다', () => {
