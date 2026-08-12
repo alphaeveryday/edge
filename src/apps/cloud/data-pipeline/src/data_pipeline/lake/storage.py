@@ -641,6 +641,39 @@ def feature_news_assertions_partition(language: str, published_date: str) -> str
     return f"feature/news/assertions/language={language}/published_date={published_date}"
 
 
+def feature_news_assertions_minute_prefix(language: str, published_date: str) -> str:
+    """위 파티션 **안**의 장중 미러 구역 (끝 슬래시 포함) — ALPHA-900.
+
+    장중 레인이 추출 결과를 배치와 같은 날짜축에 남기는 자리다. 그래야 배치
+    `tag_news` 의 재태깅 skip 이 걸리고(`_is_current` 의 지문·버전 축), `load_assertions`
+    가 그 판정을 주워 `confidence` 를 DB 에 착지시킨다 — 두 소비자 모두 이 파티션만 본다.
+
+    ⚠️ **파티션 part 파일과 한 구역에 섞지 않는 이유는 writer 수다.** 배치는 파티션을
+    통째로 되쓰는 writer 하나지만(`part-00000.parquet`), 장중은 job 을 `max_concurrency`
+    로 병렬 처리하고 realtime·backfill 두 서비스로 뜬다. 같은 part 파일을 read-merge-write
+    하면 lost update 가 상시로 나서 미러가 절감으로 이어지지 않는다. 그래서 기사당 객체다.
+
+    ⚠️ **누적을 그대로 두면 안 된다.** `tag_news._read_feature` 는 파티션 아래 `.parquet`
+    을 전부 GET 하므로, 미러가 쌓이면 파티션마다 수천 왕복이 된다. 흡수한 미러는 그 스텝이
+    지운다(`Storage.delete_keys`) — 이 구역은 **다음 배치 런까지의 임시 자리**이지
+    영구 보관소가 아니다. 정본은 흡수 뒤의 part 파일이다.
+    """
+    return f"{feature_news_assertions_partition(language, published_date)}/minute/"
+
+
+def feature_news_assertions_minute_key(
+    language: str, published_date: str, article_id: str
+) -> str:
+    """장중 미러 1건의 키 — 기사 하나가 객체 하나다 (ALPHA-900).
+
+    키가 `article_id` 라 같은 기사를 다시 추출하면 **자기 자신을 덮는다**(자가 dedup).
+    job 축 결과 키(`news_extraction_result_key`)와 달리 attempt·generation 이 없는 것은
+    의도다 — 저기는 "어느 시도가 무엇을 냈나"의 기록이고, 여기는 "이 기사의 현재 판정"
+    하나다. 시도별 근거가 필요하면 job 축을 봐라(원장 `result_checksum` 이 색인이다).
+    """
+    return f"{feature_news_assertions_minute_prefix(language, published_date)}{article_id}.parquet"
+
+
 def news_extraction_result_key(
     job_id: str, redrive_generation: int, attempt: int
 ) -> str:
@@ -1021,6 +1054,14 @@ class Storage(Protocol):
 
     def list_keys(self, prefix: str) -> list[str]: ...
 
+    # 멱등 삭제 — 없는 키는 성공이다(같은 압축이 두 번 돌아도 두 번째가 안 죽는다).
+    #
+    # ⚠️ **재생성 가능한 중간 산출물의 압축용이다.** raw 존과 `put_immutable` 이 지키는
+    # 불변 계약에는 쓰지 마라 — 거기 바이트는 판정의 근거라 지우면 복원할 수 없다.
+    # 현재 유일한 호출부는 `steps/tag_news` 가 흡수를 끝낸 장중 미러 조각이고, 그건
+    # 같은 파티션의 part 파일에 이미 병합된 뒤다(ALPHA-900).
+    def delete_keys(self, keys: list[str]) -> None: ...
+
 
 class LocalStorage:
     """로컬 파일 스텁 — 키를 루트 아래 동일 상대경로 파일로 저장한다."""
@@ -1054,6 +1095,13 @@ class LocalStorage:
         )
         return sorted(k for k in keys if k.startswith(prefix))
 
+    def delete_keys(self, keys: list[str]) -> None:
+        # missing_ok: 없는 키를 지우는 건 성공이다(프로토콜 주석) — 빈 디렉터리는
+        # 남겨 둔다. S3 에는 디렉터리가 없어, 지우면 두 백엔드의 list_keys 결과가
+        # 갈릴 일이 애초에 없는 쪽으로 맞춘다.
+        for key in keys:
+            self._path(key).unlink(missing_ok=True)
+
 
 class S3Storage:
     """S3 백엔드. boto3 는 지연 import — 단위테스트는 boto3 없이 모듈을 import 한다."""
@@ -1082,6 +1130,16 @@ class S3Storage:
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
             keys.extend(obj["Key"] for obj in page.get("Contents", []))
         return sorted(keys)
+
+    def delete_keys(self, keys: list[str]) -> None:  # pragma: no cover - 통합
+        # delete_objects 는 한 번에 1,000 키가 상한이라 끊어 보낸다. S3 는 없는 키의
+        # 삭제도 성공으로 답하므로 로컬 백엔드의 missing_ok 와 계약이 같다.
+        for start in range(0, len(keys), 1000):
+            chunk = keys[start:start + 1000]
+            self.client.delete_objects(
+                Bucket=self.bucket,
+                Delete={"Objects": [{"Key": key} for key in chunk]},
+            )
 
 
 def make_storage(config: StorageConfig) -> Storage:

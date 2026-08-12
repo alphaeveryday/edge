@@ -20,7 +20,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake.storage import LocalStorage, news_extraction_result_key
+from data_pipeline.lake.storage import (
+    LocalStorage,
+    feature_news_assertions_minute_key,
+    feature_news_assertions_partition,
+    news_extraction_result_key,
+)
 from data_pipeline.minute.consumer import PermanentJobError, TransientJobError
 from data_pipeline.minute.jobs import news_job_id
 from data_pipeline.minute.models import content_checksum
@@ -29,6 +34,7 @@ from data_pipeline.minute.news_consumer import (
     NewsExtractionHandler,
     PgArticleReader,
 )
+from data_pipeline.steps import tag_news
 from data_pipeline.tagging.extract import TAGGER_VERSION
 from data_pipeline.tagging.ontology import ontology_version
 
@@ -590,7 +596,12 @@ class TestPgArticleReader:
         return result, conn.log[0]
 
     def test_reads_news_row_by_natural_key(self, tmp_path):
-        published = datetime(2026, 7, 31, 9, 5, tzinfo=timezone(timedelta(hours=9)))
+        # ⚠️ 픽스처가 **UTC** 인 것은 의도다(ALPHA-900). `document.published_at` 은
+        # TIMESTAMPTZ 이고 `db.connect` 는 `SET timezone` 을 안 하므로, psycopg 는 세션
+        # tz(RDS 기본 UTC)로 되돌린 datetime 을 준다 — 여기 KST 를 넣으면 그게 곧
+        # `.isoformat()` 이라 tz 복원이 통째로 빠져도 초록이 난다(픽스처가 프로덕션
+        # 형상을 반영해야 한다).
+        published = datetime(2026, 7, 31, 0, 5, tzinfo=timezone.utc)
         result, (sql, params) = self._read(("제목", published, "ko", "리드"))
 
         assert params == (SOURCE_CODE, ARTICLE_ID)   # 자연키 두 축을 다 바인딩한다
@@ -601,7 +612,10 @@ class TestPgArticleReader:
         # "기사 없음"이 돼 그 job 이 예산 소진으로 DEAD 가 된다. `in sql` 로 "JOIN" 만
         # 보면 INNER 회귀를 그대로 통과시킨다(Rule 9 — 반례를 거부하는 단언이어야).
         assert "LEFT JOIN news_document" in sql
-        # 프롬프트 입력은 문자열이다 — datetime 을 그대로 넘기면 배치와 다른 입력이 된다
+        # 프롬프트 입력은 문자열이다 — datetime 을 그대로 넘기면 배치와 다른 입력이 된다.
+        # 그리고 **벤더 선언 tz 로 복원**돼야 한다: canonical 에 실린 문자열이 그 표현이고
+        # (`normalize_news` 가 bigkinds 를 KST 로 읽는다), 배치 지문은 이 문자열을 그대로
+        # 해싱하므로 UTC 표기로 새면 재태깅 skip 이 전건 불발한다(ALPHA-900).
         assert result["published_at"] == "2026-07-31T09:05:00+09:00"
         assert (result["title"], result["lead_text"]) == ("제목", "리드")
         assert result["article_id"] == ARTICLE_ID
@@ -618,6 +632,15 @@ class TestPgArticleReader:
         # 빈 기사로 접으면 "행이 없다"와 "제목이 없다"가 같은 결과가 된다
         result, _ = self._read(None)
         assert result is None
+
+    def test_unknown_vendor_falls_back_to_utc_not_the_local_clock(self):
+        # 벤더 표에 없는 소스는 `parse_datetime` 기본값(UTC)으로 읽힌 것이다 — 그 역함수도
+        # UTC 여야 한다. `astimezone()` 을 인자 없이 부르면 **컨테이너 로컬 tz** 로 접혀,
+        # 배포 환경마다 지문이 달라지고 로컬에서는 그게 안 보인다.
+        conn = _FakeConn(("제목", datetime(2026, 7, 31, 0, 5, tzinfo=timezone.utc), "en", None))
+        reader = PgArticleReader(db=DbConfig(password="x"), connect_fn=lambda db: conn)
+        result = reader.read(source_code="fmp", article_id=ARTICLE_ID)
+        assert result["published_at"] == "2026-07-31T00:05:00+00:00"
 
 
 class TestEnvelopeContract:
@@ -639,3 +662,102 @@ class TestKernelIntegration:
         handler = make_handler(tmp_path)
         checksum = handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
         assert _JOB_ID_PATTERN.fullmatch(checksum)
+
+
+class TestBatchMirror:
+    """장중 판정을 배치가 보게 만드는 미러 (ALPHA-900).
+
+    의도: 이 배선이 틀리는 방향도 **조용하다**. 미러가 안 떨어지거나 지문이 한 글자만
+    갈려도 job 은 SUCCEEDED 이고 원장은 초록인데, 배치가 그 기사를 다시 유료로 태운다 —
+    아무 신호도 안 남는다. 그래서 여기서는 "파일이 생겼다"가 아니라 **"배치가 실제로
+    skip 하는 값인가"**를 고정한다.
+    """
+
+    def _mirror_key(self, published_date: str = "2026-07-31") -> str:
+        return feature_news_assertions_minute_key("ko", published_date, ARTICLE_ID)
+
+    def test_mirror_carries_the_fingerprint_batch_skips_on(self, tmp_path):
+        # ⭐ 이 PR 전체가 걸린 단언이다. 배치의 재태깅 skip 은 `_is_current` 가 보는 축
+        #    셋이 전부 맞을 때만 걸린다 — 하나라도 형식이 갈리면 미러는 남는데 skip 은
+        #    안 걸려 이중 과금이 그대로다. 그래서 "파일 존재"가 아니라 **배치의 판정
+        #    함수에 그대로 먹여** 통과하는지를 본다(반례를 거부하는 단언, Rule 9).
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        rows = _read_parquet(tmp_path / self._mirror_key())
+        assert len(rows) == 1
+        # canonical 행(배치가 보는 그 표현)으로 지문을 계산해 대조한다 — 미러가 자기
+        # 값을 그대로 되읽는 자기충족 단언이면 tz 회귀를 통과시킨다.
+        canonical_row = {"title": ARTICLE["title"], "lead_text": ARTICLE["lead_text"],
+                         "published_at": ARTICLE["published_at"]}
+        assert tag_news._is_current(rows[0], tag_news._input_fingerprint(canonical_row))
+
+    def test_mirror_lands_in_the_partition_the_batch_reads(self, tmp_path):
+        # 파티션이 어긋나면 배치는 미러를 영영 못 본다. 날짜 축은 canonical 과 같은
+        # 산식(`published_at[:10]`)이라 **KST 날짜**여야 한다 — UTC 로 접히면
+        # 2026-07-31T09:05+09:00 이 07-31 이 아니라 07-30 파티션에 떨어진다.
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        prefix = feature_news_assertions_partition("ko", "2026-07-31")
+        keys = LocalStorage(tmp_path).list_keys(prefix + "/")
+        assert keys == [self._mirror_key()]
+
+    def test_mirror_failure_does_not_buy_the_call_twice(self, tmp_path):
+        # 미러 실패로 예외를 올리면 job 이 재시도되는데, 재시도는 attempt 가 달라 **새
+        # key** 라 `_reuse` 를 못 타고 LLM 을 다시 유료로 부른다. 놓친 미러의 대가(재태깅
+        # 1건)보다 크다 — 그래서 삼키고 진행한다.
+        handler = make_handler(tmp_path)
+        handler.storage = _MirrorRefusingStorage(tmp_path)
+
+        checksum = handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert len(checksum) == 64                      # job 은 정상 확정된다
+        assert not (tmp_path / self._mirror_key()).exists()
+
+    def test_article_without_published_at_is_skipped_not_crashed(self, tmp_path):
+        # 발행시각이 없으면 파티션 날짜를 정할 수 없다. 여기서 터지면 정상 경로(품질
+        # 게이트가 이미 canonical 진입을 막은 기사)가 레인을 멈춘다.
+        reader = FakeArticleReader({(SOURCE_CODE, ARTICLE_ID): {**ARTICLE, "published_at": None}})
+        handler = make_handler(tmp_path, reader=reader)
+
+        checksum = handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert len(checksum) == 64
+        assert LocalStorage(tmp_path).list_keys("feature/news/assertions/") == []
+
+    def test_reuse_path_backfills_a_missing_mirror(self, tmp_path):
+        # fresh 경로가 artifact PUT 뒤·미러 전에 죽은 상태의 복구다. 여기서 안 쓰면 그
+        # 기사의 미러는 영영 없고(같은 시도는 `_reuse` 로만 재개된다), 배치가 다시 태운다.
+        handler = make_handler(tmp_path)
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        (tmp_path / self._mirror_key()).unlink()
+
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert (tmp_path / self._mirror_key()).exists()
+
+    def test_recorded_failure_is_mirrored_like_the_batch_records_it(self, tmp_path):
+        # llm_unparseable 등은 배치도 결과로 캐시해 재태깅하지 않는다(RETRYABLE 아님).
+        # 미러를 안 남기면 두 레인의 정책이 갈려(Rule 7) 배치가 그 기사만 다시 태운다.
+        handler = make_handler(tmp_path, llm=RecordingLlm("이건 JSON 이 아니다"))
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        rows = _read_parquet(tmp_path / self._mirror_key())
+        assert rows[0]["status"] == "llm_unparseable"
+
+
+class _MirrorRefusingStorage(LocalStorage):
+    """미러 키에만 실패하는 백엔드 — job artifact 쓰기는 정상이어야 한다."""
+
+    def put_bytes(self, key, data):
+        if "/minute/" in key:
+            raise OSError("미러 백엔드 장애")
+        super().put_bytes(key, data)
+
+
+def _read_parquet(path):
+    import io
+    import pyarrow.parquet as pq
+
+    return pq.read_table(io.BytesIO(path.read_bytes())).to_pylist()
