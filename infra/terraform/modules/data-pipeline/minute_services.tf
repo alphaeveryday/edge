@@ -371,11 +371,23 @@ resource "aws_iam_role_policy" "minute_session" {
     Version = "2012-10-17"
     Statement = [
       {
-        # universe 정본 읽기 — plan 단계가 window 범위와 universe_hash 를 여기서 뽑는다.
-        # 쓰기는 없다(이 태스크는 레이크에 아무것도 안 만든다).
+        # universe 정본·1분 canonical artifact 읽기 — plan 단계가 window 범위와
+        # universe_hash 를, 롤업이 재료를 여기서 뽑는다.
+        # ⚠️ **쓰기를 여기 더하지 마라** — Resource 가 버킷 전체라 레이크 **전역 쓰기**가
+        # 된다. 쓰기는 아래 프리픽스 한정 문장이 따로 진다(ALPHA-955).
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:ListBucket"]
         Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
+      },
+      {
+        # 5분 파생 산출 (ALPHA-955 — `rollup-minute-session`). 이 태스크가 레이크에
+        # 만드는 **유일한** 것이고, 그래서 프리픽스를 그 하나로 못박는다
+        # (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례).
+        # 없으면 매일 AccessDenied 인데 **스케줄러는 RunTask 제출까지만 보므로 조용한
+        # 실패**다 — 스텝의 exit≠0 을 보는 백스톱이 이 레인엔 없다.
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${var.lake_bucket_arn}/canonical/market_data/intraday_5m/*"]
       },
       {
         Effect = "Allow"
@@ -495,7 +507,51 @@ resource "aws_ecs_task_definition" "minute_session" {
 }
 
 locals {
-  minute_session_schedules = {
+  # 업종지수 롤업은 **그 레인이 편입된 날에만** 존재한다 — `..._source_group` 이 그 레인의
+  # 킬 스위치인데(비우면 start 가 세션을 계획하지 않는다), 스케줄만 남으면 매일 빈
+  # `--source-group` 으로 어휘 검증에 걸려 exit 2 를 낸다. 끌 거면 같이 꺼진다.
+  minute_session_schedules = merge(local.minute_session_lifecycle_schedules,
+    var.minute_session_sector_index_source_group == "" ? {} : {
+      "rollup-sector" = local.minute_session_sector_rollup_schedule
+  })
+
+  # 업종지수 5분 파생 확정 (ALPHA-955). **가격이 아니라 업종지수만** 이 자리에 있다 —
+  # 두 레인의 마감 시각이 다르기 때문이다. 업종지수 세션은 09:00~15:30(정규장 390
+  # window — `EXTENDED_HOURS_DATASETS` 밖이고 universe 도 없다)이고, 가격 세션은
+  # 20:00 까지 계획하므로 이 시각에 가격을 롤업하면 뒤 4시간이 빠진 부분본이 남는다.
+  # 가격 EOD 확정은 ALPHA-839 소관이고 20:05 stop 뒤여야 한다.
+  #
+  # 왜 16:00 인가 — 하한을 정하는 것은 수집 종료가 아니라 **마지막 커밋이 언제까지
+  # 들어오나**다. 워커는 20:05 스케일다운까지 살아 recovery 로 결손 window 를 계속
+  # 재청구한다. 그런데 이 소스는 **소급이 불가**해서(한 콜이 늘 "지금 기준 100봉",
+  # `kis_sector_index.py` 도크스트링) 마감 후 벤더 페이지는 13:50~15:30 에 얼어붙는다
+  # — 그 앞 구간은 기다려도 영영 안 채워지고, 그 뒤 구간은 recovery 예산(tick 당 1,
+  # tick 5초)으로 몇 분이면 소진된다. 15:30 + 30분이면 채워질 것은 다 채워져 있다.
+  # ⚠️ 그 대가는 16:00 **이후** 착지하는 늦은 recovery 커밋을 놓치는 것이다(그날
+  # 재실행이 없다). 벤더가 장 마감 직전 오래 죽은 날에만 성립하고, 그때도 잃는 것은
+  # 13:50~15:30 구간뿐이다 — 더 미뤄서 얻는 것보다 결손을 일찍 보는 편이 낫다고 봤다.
+  #
+  # ⚠️ 상태(`minute_session_schedule_state`)를 start/stop 과 **공유한다**. 이 롤업만
+  # 따로 끄는 손잡이는 없다 — 필요해지면 그때 가른다. 실패해도 산출이 없을 뿐 기존
+  # 파일을 덮지 않아(`_rollup_day` 가드) 급히 꺼야 할 성질이 아니다.
+  #
+  # 🔴 **실패는 이 스케줄에서 안 보인다** — 스케줄러는 RunTask 제출까지만 보므로
+  # 컨테이너 exit≠0 이 관측되지 않는다(이 레인 공통. DLQ·retry_policy 는 이 유형을 못
+  # 잡는다: 제출은 성공하고 태스크가 나중에 죽는다). 백스톱은 **다음 날 실행의 구멍
+  # 판정**이다 — 이 스텝이 매번 `unfilled_settled_days` 로 "원장이 멈춘 거래일인데 5분
+  # 산출이 없는 날"을 함께 보고한다. 업종지수 세션도 stop 이 승객 레인까지 drain 하므로
+  # (`session_ops.stop_session_cli`) settled 로 잡힌다. ⚠️ 그건 **로그**지 경보가 아니다
+  # — 경보는 이 레인 전체가 함께 받아야 할 별건이다.
+  minute_session_sector_rollup_schedule = {
+    expression = var.minute_session_sector_rollup_expression
+    # `--session-date` 를 안 준다 = 오늘(KST). 16:00 KST 는 그날이라 맞다 —
+    # 스케줄러가 넘기는 시각은 UTC 지만 스텝이 KST 로 잡는다(`rollup_session_cli`).
+    command = ["rollup-minute-session",
+      "--dataset", "sector_index_minute",
+    "--source-group", var.minute_session_sector_index_source_group]
+  }
+
+  minute_session_lifecycle_schedules = {
     start = {
       expression = var.minute_session_start_expression
       command = ["start-minute-session",
