@@ -782,3 +782,18 @@ export function hasNoSignal(status: { sessions: unknown[]; newsJobs: MinuteJobCo
  */
 export const healthyClaimed = (jobs: MinuteJobCounts): number =>
   Math.max(0, jobs.claimed - jobs.claimedExpired);
+
+/**
+ * 아직 끝나지 않은 job 이 있는가 — **"0 건"이 진행 중인지 미가동인지 가르는 술어**다.
+ *
+ * 🔴 terminal 두 칸(`succeeded`·`dead`)만 세면 **정상 운영 중인 날이 "볼 것 없음"으로 접힌다**:
+ * 문서가 아직 안 나온 시점에는 job 이 PENDING/RETRY_WAIT/CLAIMED 뿐이라 둘 다 0 이다.
+ * 그 상태를 "없음"으로 그리면 화면이 검수용 목데이터로 그 불확실성을 덮는다(Rule 12).
+ *
+ * ⭐ `news_extraction_job` 은 **한 테이블**이고 날짜 축도 하나다(`created_at` 의 KST 반개구간)
+ * — 계보 응답이 terminal 둘만 좁혀 셀 뿐이라, 나머지 칸은 `/sources/minute` 의 같은 날짜
+ * 집계가 답한다(`JdbcNewsLineageRepository` 자바독이 "`/minute` 콘솔과 같은 규칙"이라고 적어
+ * 뒀다). 그래서 새 서버 축 없이 이 술어가 선다.
+ */
+export const hasPendingJobs = (jobs: MinuteJobCounts): boolean =>
+  jobs.waiting + jobs.claimed > 0;

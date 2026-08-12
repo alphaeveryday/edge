@@ -13,7 +13,8 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageSkeleton } from 'ui-kit';
 import type { NewsLineage, NewsLineageDocument, NewsLineageStage } from '../domains/sources';
-import { useNewsLineage } from '../domains/sources/hooks';
+import { useMinuteStatus, useNewsLineage } from '../domains/sources/hooks';
+import { hasPendingJobs } from '../domains/sources/minuteView';
 import { mockLineage } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
@@ -106,23 +107,68 @@ export function NewsLineagePage() {
   /* 타일 클릭 드릴다운(ALPHA-697) — 필터는 목록만 좁히고 집계 타일 분모는 유지된다(서버 계약) */
   const [stage, setStage] = useState<NewsLineageStage | undefined>(undefined);
   const { data, isPending, isError, error } = useNewsLineage(date || undefined, limit, stage);
+  /* 🔴 **계보 응답만으로는 "0 건"의 뜻을 못 가른다.** 추출 요약이 terminal 두 칸
+   * (`succeeded`·`dead`)만 세는데, 문서가 아직 안 나온 시점의 job 은 PENDING/RETRY_WAIT/
+   * CLAIMED 뿐이라 둘 다 0 이다 — 정상 운영 중인 날이 "볼 것 없음"으로 접힌다.
+   * 나머지 칸은 `/sources/minute` 의 같은 날짜 집계가 답한다: `news_extraction_job` 은 한
+   * 테이블이고 날짜 축도 하나다(`created_at` 의 KST 반개구간 — `JdbcNewsLineageRepository`
+   * 자바독이 "`/minute` 콘솔과 같은 규칙"이라고 적어 뒀다). 그래서 새 서버 축이 필요 없다. */
+  const minute = useMinuteStatus(date || undefined);
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
 
   const ext = data.extraction;
-  /* 문서도 추출 job 도 전무해야 "볼 것이 없는 화면"이다 */
+  /* 미종결 job 을 못 읽었으면(대기·실패) **진행 중이 아니라고 단정하지 않는다** — 모름을
+   * "없음" 으로 접는 순간 목이 실을 덮는 그 자리로 돌아간다. */
+  const pendingUnknown = minute.isPending || minute.isError;
+  const pending = minute.data ? hasPendingJobs(minute.data.newsJobs) : false;
+
+  /* 문서도 추출 job 도 전무하고, **미종결 job 도 없다고 실제로 확인됐을 때만** 빈 화면이다 */
   const empty =
     data.summary.totalDocuments === 0 &&
     data.documents.length === 0 &&
-    ext.succeeded + ext.dead === 0;
+    ext.succeeded + ext.dead === 0 &&
+    !pending &&
+    !pendingUnknown;
+
+  /* 진행 중이거나 모르는 상태는 **목으로 덮지 않고 그 사실을 얹는다**(Rule 12).
+   * ⚠️ 막다른 카드로 만들지 않는다 — 실 `LineageBody` 를 그대로 그려야 날짜·표본·단계
+   * 컨트롤이 살아 있어 운영자가 다른 날짜로 나갈 수 있다(그 화면은 0건도 정직하게 그린다). */
+  if (!empty && data.summary.totalDocuments === 0 && data.documents.length === 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="card card-pad">
+          <p className="t-sm m-0" style={{ fontWeight: 600 }}>
+            {date ? `이 날짜(${date})의 문서가 아직 0건입니다.` : '문서가 아직 0건입니다.'}
+          </p>
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+            {pending
+              ? `추출이 진행 중입니다 — 대기 ${minute.data!.newsJobs.waiting}건 · 처리 중 ${
+                  minute.data!.newsJobs.claimed
+                }건. 미가동이 아니고, 목데이터로 대체하지도 않습니다.`
+              : '추출 job 상태를 못 읽었습니다 — 진행 중인지 미가동인지 지금은 알 수 없습니다. 아래는 실 응답이며 목데이터가 아닙니다.'}
+          </p>
+        </div>
+        <LineageBody
+          data={data}
+          date={date}
+          setDate={setDate}
+          limit={limit}
+          setLimit={setLimit}
+          stage={stage}
+          setStage={setStage}
+        />
+      </div>
+    );
+  }
 
   if (empty) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyRealNotice>
           {date
-            ? `이 날짜(${date})에 수집된 문서가 없습니다.`
+            ? `이 날짜(${date})에 수집된 문서가 없습니다 — 진행 중인 추출 job 도 없습니다.`
             : '수집된 문서가 없습니다 — 원장(document)에 뉴스가 아직 적재되지 않았습니다.'}
         </EmptyRealNotice>
         <MockPreview>

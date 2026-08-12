@@ -15,6 +15,7 @@ import {
   gapRuns,
   healthyClaimed,
   hasNoSignal,
+  hasPendingJobs,
   issues,
   liveness,
   materializedCount,
@@ -562,4 +563,17 @@ test('유효 처리 중은 고착을 뺀 값이다 — 부분집합을 나란히
   assert.equal(healthyClaimed(j(0, 0)), 0);
   /* 원장이 순간적으로 어긋나도 음수를 내지 않는다 — 화면에 "-1건" 이 뜨면 안 된다 */
   assert.equal(healthyClaimed(j(1, 3)), 0);
+});
+
+test('미종결 job 이 있으면 "볼 것 없음"이 아니다 — terminal 만 세면 진행 중인 날이 접힌다', () => {
+  const j = (o: Partial<MinuteJobCounts>): MinuteJobCounts => ({
+    waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, ...o,
+  });
+  /* 🔴 이 조합이 정확히 문제의 상태다 — 문서는 아직 0건이고 terminal 도 0인데 실제로는 돌고 있다 */
+  assert.equal(hasPendingJobs(j({ waiting: 5 })), true, 'PENDING/RETRY_WAIT 가 있으면 진행 중');
+  assert.equal(hasPendingJobs(j({ claimed: 2 })), true, 'CLAIMED 가 있으면 진행 중');
+  assert.equal(hasPendingJobs(j({ claimed: 2, claimedExpired: 2 })), true, '고착도 미종결이다');
+  /* terminal 만 있는 날은 진행 중이 아니다 — 반대 방향을 안 재면 상수 true 가 산다 */
+  assert.equal(hasPendingJobs(j({ succeeded: 100, dead: 3 })), false);
+  assert.equal(hasPendingJobs(j({})), false);
 });
