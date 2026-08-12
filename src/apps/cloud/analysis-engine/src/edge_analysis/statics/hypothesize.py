@@ -34,6 +34,8 @@ MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPH
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
 MAX_OBJECT_ROUNDS = 6               # 무한 루프 금지. 6 = list_options 1 + preview 3(사건
                                     # 분포 상한, ALPHA-938) + 재조회·거부 재시도 여유 2
+MAX_DUPLICATE_REFUSALS = 2          # 직전과 동일한 도구 호출의 무예산 교정 상한(ALPHA-970)
+                                    # - 초과하면 제출 단계로 넘긴다(무한 왕복 방지)
 # 최종 제출 상한 - preview 도구 상한(hypothesis_preview.MAX_DISTRIBUTION_PREVIEWS)과
 # 단일 출처다: 두 게이트(도구 실행·최종 제출)가 갈리면 프롬프트 계약("최대 3개")이
 # 한쪽에서만 강제된다. 초과분은 사유와 함께 기각(수용분은 유지).
@@ -429,23 +431,64 @@ def _sql_loop(ask: Ask, system: str, user: str, call: Callable[[str], dict],
 
 
 def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], dict],
-                 budget: int) -> tuple[dict, str, int, int, list[dict[str, object]], bool]:
-    """Run bounded structured tool calls; executable text is never an argument shape."""
+                 budget: int, duplicate_state: dict | None = None,
+                 ) -> tuple[dict, str, int, int, list[dict[str, object]], bool]:
+    """Run bounded structured tool calls; executable text is never an argument shape.
+
+    duplicate_state: 중복 판정 상태(last_call·last_call_ok·refusals)를 제안 재시도
+    턴 너머로 유지하는 가변 dict(ALPHA-970 검증 라운드) - 턴마다 초기화되면 재시도
+    턴 첫 호출이 직전 성공 호출과 같아도 반려 없이 예산을 소모한다.
+    """
     used = rejects = 0
     tool_summaries: list[dict[str, object]] = []
     previewable_options = False
+    state = duplicate_state if duplicate_state is not None else {}
+    last_call: tuple[str, str] | None = state.get("last_call")
+    last_call_ok = bool(state.get("last_call_ok"))
+    duplicate_refusals = int(state.get("refusals", 0))
     out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
         if not name:
             break
         if used >= budget:
+            # 예산 검사가 인자 추출보다 먼저다 - 소진 상태의 비정형 인자가
+            # ModelShapeError 로 제안 전체를 죽이면 정직 종료 계약이 깨진다.
             user += _OBJECT_DONE
             out = ask_checked(ask, system, user)
             break
-        used += 1
         arguments = object_field(out, "arguments")
+        # 직전과 동일하고 **성공했던** 호출은 실행·예산 소모 없이 교정한다(ALPHA-970
+        # 실측 2건: objectset.create 6연발, 가드 후엔 list_options 6연발 - 도구가
+        # 결정론이라 성공 반복은 순수 낭비인데 예산을 태우면 preview 라운드가
+        # 사라진다). 직전이 실패였다면 재시도는 정당하다(일시 오류 복구 경로 보존).
+        # 교정 상한을 두 번만 주고 그 뒤엔 제출 단계로 넘긴다(무한 왕복 방지).
+        key = (name, json.dumps(arguments, ensure_ascii=False, sort_keys=True))
+        if key == last_call and last_call_ok:
+            duplicate_refusals += 1
+            state["refusals"] = duplicate_refusals
+            rejects += 1
+            summary = {"tool": name, "ok": False, "error": "DUPLICATE_TOOL_CALL"}
+            tool_summaries.append(summary)
+            record("hypothesis.tool_result", **summary)   # 반려도 관측이다(Rule 12)
+            if duplicate_refusals > MAX_DUPLICATE_REFUSALS:
+                user += _OBJECT_DONE
+                out = ask_checked(ask, system, user)
+                break
+            user += (f"\n\n[도구 반려] {name}: 직전 호출과 도구·인자가 동일하다 - "
+                     "결과는 위에 이미 있고 다시 계산해도 같다. 다음 단계로 "
+                     "진행하라(예: hypothesis.preview 호출 또는 hypotheses 제출).")
+            out = ask_checked(ask, system, user)
+            continue
+        last_call = state["last_call"] = key
+        # 다른 호출로 전진하면 교정 카운터를 리셋한다(Codex P2) - 이월된 카운트가
+        # 이후 별개 중복의 첫 교정을 조기 _OBJECT_DONE 으로 바꾸면, 분포 모드에서
+        # UNAVAILABLE preview 뒤 다른 후보를 preview 할 기회가 사라진다. 실행이
+        # 예산을 소모하므로 리셋해도 전체 왕복은 여전히 유한하다.
+        duplicate_refusals = state["refusals"] = 0
+        used += 1
         res = call(name, arguments)
+        last_call_ok = state["last_call_ok"] = bool(res.get("ok"))
         if name == "hypothesis.list_options":
             generic_options = (res.get("triggers") and res.get("outcomes")
                                and res.get("layers") and res.get("exposures"))
@@ -523,6 +566,9 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
     base = facts
     sql_used = sql_rejects = 0
     object_used = object_rejects = 0
+    # 중복 판정 상태는 재시도 턴 너머로 유지된다(ALPHA-970 검증 라운드) - 도구
+    # 결과는 결정론이라 턴이 바뀌어도 직전 성공 호출의 반복은 여전히 낭비다.
+    duplicate_state: dict = {}
     tool_summaries: list[dict[str, object]] = []
     previewable_options = False
     deadline = time.monotonic() + SQL_TIMEBOX_S
@@ -530,7 +576,8 @@ def propose(ask: Ask, *, facts: str, event_types: list[str],
         user = base
         if object_tools:
             out, base, u, rj, summaries, available = _object_loop(
-                ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used)
+                ask, system, user, object_tools["call"], MAX_OBJECT_ROUNDS - object_used,
+                duplicate_state=duplicate_state)
             object_used += u
             object_rejects += rj
             tool_summaries.extend(summaries)

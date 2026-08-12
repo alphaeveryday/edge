@@ -548,3 +548,272 @@ def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(mon
     assert sum("TOOL_NOT_AVAILABLE" in u.split("[ObjectSet 결과", 1)[-1]
                for u in seen_users[1:]) >= 1
     assert all("TOOL_NOT_AVAILABLE" in u for u in seen_users[2:])
+
+
+def test_duplicate_tool_calls_are_refused_without_consuming_budget(monkeypatch):
+    """직전과 동일한 도구 호출은 실행·예산 소모 없이 교정된다(ALPHA-970).
+
+    WHY: objectset 가드 후에도 모델이 `hypothesis.list_options` 를 6연발해 예산을
+    소진하고 preview 직전에 멈추는 런이 실측됐다(2026-08-12 verify970). 도구가
+    결정론이라 반복은 순수 낭비다 - 예산을 태우면 preview 에 쓸 라운드가 사라진다.
+    """
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_id = next(iter(runtime._candidate_by_id))
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 중복 - 반려
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 중복 - 반려
+        {"tool": "hypothesis.preview", "arguments": {
+            "candidate_id": candidate_id,
+            "outcome_id": "outcome:market_adjusted_return_day_0",
+        }},
+        {"hypotheses": [{"preview_handle": None, "intent": "계약 해지의 과거 반응 확인."}]},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        reply = next(replies)
+        if "hypotheses" in reply:
+            reply["hypotheses"][0]["preview_handle"] = next(iter(runtime._previews))
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    assert rejected == []
+    assert len(valid) == 1
+    # 중복 호출은 런타임까지 내려가지 않는다 - 실행이 한 번뿐이다.
+    assert runtime_calls == ["hypothesis.list_options", "hypothesis.preview"]
+    # 반려 사유가 되물음에 실려 다음 단계로 유도한다. 예산 표기는 실행분만 센다.
+    assert sum("[도구 반려]" in u for u in seen_users) >= 1
+    assert not any("[ObjectSet 결과 3/" in u for u in seen_users)
+
+
+def test_duplicate_refusal_cap_forces_submission_and_is_observed(monkeypatch):
+    """중복 교정 상한(2회) 초과는 제출 단계로 강제 전환된다 - 무한 왕복 방지가 이
+    가드의 존재 이유라 상한 경로 자체를 단언한다(리뷰 R1). 반려는 rejects·
+    tool_result 로 관측된다(Rule 12 - 가드가 끊은 런과 정상 제출 런이 원장에서
+    구분돼야 한다)."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    listopt = {"tool": "hypothesis.list_options", "arguments": {}}
+    replies = iter((
+        dict(listopt), dict(listopt), dict(listopt),   # 실행 1 + 반려 2
+        dict(listopt),                                  # 상한 초과 - _OBJECT_DONE
+        {"hypotheses": []},                             # 제출 단계(미제출)
+        {"hypotheses": []},                             # 재질의 턴
+    ))
+    seen_users: list[str] = []
+    records: list[dict] = []
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesize.record",
+        lambda event, **fields: records.append({"event": event, **fields}))
+
+    def ask(system, user):
+        seen_users.append(user)
+        return next(replies)
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    assert valid == []
+    assert runtime_calls == ["hypothesis.list_options"]   # 실행은 1회뿐
+    final_user = seen_users[-1]
+    assert final_user.count("[도구 반려]") == 2            # 상한 2회까지만 교정
+    # 상한 초과는 제출 강제 전환이다 - _OBJECT_DONE 문구 자체를 단언한다.
+    assert "왕복 상한 소진" in final_user
+    # 반려는 예산을 소모하지 않는다 - 실행 표기는 1/6 하나뿐이어야 한다.
+    assert "[ObjectSet 결과 1/" in final_user
+    assert "[ObjectSet 결과 2/" not in final_user
+    # 반려도 관측이다(Rule 12) - 상한 초과분 포함 3회가 원장에 남는다.
+    refusals = [r for r in records if r.get("event") == "hypothesis.tool_result"
+                and r.get("error") == "DUPLICATE_TOOL_CALL"]
+    assert len(refusals) == 3
+    # 무예산 계약은 예산 카운터 원장으로 직접 단언한다 - 실행 1회만 세야 한다.
+    rounds = [r for r in records if r.get("event") == "hypothesize.objectset_rounds"]
+    assert rounds and rounds[-1]["rounds"] == 1
+
+
+def test_failed_call_may_be_retried_with_identical_arguments(monkeypatch):
+    """직전 호출이 실패(ok=false)였다면 동일 인자 재시도는 정당하다 - 일시 오류
+    복구 경로를 가드가 없애면 안 된다(리뷰 R1)."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+    calls: list[str] = []
+    flaky = {"n": 0}
+    inner_call = runtime.call
+
+    def flaky_call(name, arguments):
+        calls.append(name)
+        flaky["n"] += 1
+        if flaky["n"] == 1:
+            return {"ok": False, "error": "EXECUTION_FAILED"}
+        return inner_call(name, arguments)
+
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 실패
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 재시도 - 실행돼야 함
+        {"hypotheses": []},
+        {"hypotheses": []},
+    ))
+
+    def ask(system, user):
+        return next(replies)
+
+    propose(ask, facts="f", event_types=["CONTRACT.CANCEL"],
+            object_tools={"specs": runtime.tool_specs(), "call": flaky_call,
+                          "resolve_preview": runtime.resolve,
+                          "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM})
+
+    assert calls == ["hypothesis.list_options", "hypothesis.list_options"]
+
+
+def test_duplicate_guard_state_survives_proposal_retry_turns(monkeypatch):
+    """중복 판정 상태는 제안 재시도 턴 경계에서 초기화되지 않는다(검증 라운드).
+
+    WHY: 도구 결과는 결정론이라 턴이 바뀌어도 직전 성공 호출의 반복은 낭비다 -
+    턴마다 초기화되면 재시도 턴 첫 호출이 반려 없이 예산을 소모한다.
+    """
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    listopt = {"tool": "hypothesis.list_options", "arguments": {}}
+    replies = iter((
+        dict(listopt),                    # 턴1 - 실행
+        dict(listopt),                    # 턴1 - 반려 1
+        dict(listopt),                    # 턴1 - 반려 2 (상한 도달)
+        {"hypotheses": []},               # 턴1 미제출 - 재시도
+        dict(listopt),                    # 턴2 첫 호출 - 상한 초과 → _OBJECT_DONE
+        {"hypotheses": []},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        return next(replies)
+
+    propose(ask, facts="f", event_types=["CONTRACT.CANCEL"],
+            object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+                          "resolve_preview": runtime.resolve,
+                          "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM})
+
+    assert runtime_calls == ["hypothesis.list_options"]   # 턴2 반복도 실행 안 됨
+    # 반려 상한(2회)은 턴 누적이다 - 턴2 의 반복은 추가 교정 없이 곧장 제출 강제
+    # 전환된다(교정 문구 2회 + 상한 소진 문구). 턴마다 refusals 가 0 으로 초기화되면
+    # 턴2 에서 반려 문구가 3회째 찍혀 이 단언이 깨진다.
+    final_user = seen_users[-1]
+    assert final_user.count("[도구 반려]") == 2
+    assert "왕복 상한 소진" in final_user
+
+
+def test_advancing_to_a_new_call_resets_the_refusal_counter(monkeypatch):
+    """다른 호출로 전진하면 교정 카운터가 리셋된다(Codex P2) - 이월 카운트가 이후
+    별개 중복의 첫 교정을 조기 제출 전환으로 바꾸면 다른 후보를 preview 할 기회가
+    사라진다. 실행이 예산을 소모하므로 리셋해도 왕복은 유한하다."""
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_id = next(iter(runtime._candidate_by_id))
+    listopt = {"tool": "hypothesis.list_options", "arguments": {}}
+    prev = {"tool": "hypothesis.preview", "arguments": {
+        "candidate_id": candidate_id,
+        "outcome_id": "outcome:market_adjusted_return_day_0"}}
+    replies = iter((
+        dict(listopt), dict(listopt), dict(listopt),   # 실행 1 + 반려 2 (상한 도달)
+        dict(prev),                                     # 전진 - 카운터 리셋돼야
+        dict(prev),                                     # preview 중복 - 첫 교정이어야
+        {"hypotheses": [{"preview_handle": None, "intent": "확인."}]},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        reply = next(replies)
+        if "hypotheses" in reply:
+            reply["hypotheses"][0]["preview_handle"] = next(iter(runtime._previews))
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": runtime.call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    # 리셋이 없으면 preview 중복이 3회째 카운트로 _OBJECT_DONE 을 트리거해
+    # 제출이 강제되고 이 READY 제출 경로가 깨진다.
+    assert rejected == []
+    assert len(valid) == 1
+    assert seen_users[-1].count("[도구 반려]") == 3   # listopt 2회 + preview 1회 교정
