@@ -502,6 +502,9 @@ def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(mon
 
     replies = iter((
         {"tool": "objectset.create", "arguments": {"kind": "COMPANY_ENTITY"}},
+        # objectset 만 막으면 위임 경로의 news.* 로 같은 낭비가 우회된다(Codex P2)
+        # - hypothesis.* 외 전부가 거부돼야 한다.
+        {"tool": "news.find_threads", "arguments": {}},
         {"tool": "hypothesis.list_options", "arguments": {}},
         {"tool": "hypothesis.preview", "arguments": {
             "candidate_id": candidate_id,
@@ -542,4 +545,6 @@ def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(mon
     # objectset 호출은 런타임까지 내려가지 않는다 - 실행 없는 거부다.
     assert runtime_calls == ["hypothesis.list_options", "hypothesis.preview"]
     # 거부 사유가 되물음에 실려 모델을 preview 경로로 유도한다.
-    assert any("OBJECTSET_NOT_AVAILABLE" in u for u in seen_users[1:])
+    assert sum("TOOL_NOT_AVAILABLE" in u.split("[ObjectSet 결과", 1)[-1]
+               for u in seen_users[1:]) >= 1
+    assert all("TOOL_NOT_AVAILABLE" in u for u in seen_users[2:])
