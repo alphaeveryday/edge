@@ -17,22 +17,22 @@ interface NavEntry {
 
 const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
   {
-    section: '운영 현황',
-    /* 화면명은 답하는 질문이다 — "오늘 정상 발행 가능한가"(ALPHA-683) */
-    items: [{ path: '/', label: '오늘 운영 현황', icon: 'dashboard' }],
+    section: '파이프라인',
+    items: [
+      { path: '/ops/incidents', label: '문제', icon: 'fileText' },
+      { path: '/ops/runs', label: '실행', icon: 'clipboardCheck' },
+      { path: '/grid', label: '실행 이력', icon: 'dashboard' },
+      { path: '/minute', label: '현재 실행', icon: 'database' },
+      { path: '/ops/trend', label: '추이', icon: 'trendChart' },
+    ],
   },
   {
     section: '테넌트 관리',
     items: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
   {
-    section: '가격 변동 분석 관리',
+    section: '분석 결과',
     items: [
-      { path: '/sources', label: '데이터 소스 수집 상태', icon: 'database' },
-      { path: '/grid', label: '파이프라인 실행 이력', icon: 'dashboard' },
-      { path: '/minute', label: '장중 1분 수집', icon: 'database' },
-      { path: '/lineage/news', label: '뉴스 계보', icon: 'database' },
-      { path: '/impact/holdings', label: '구성종목 결손 영향', icon: 'trendChart' },
       { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
     ],
   },

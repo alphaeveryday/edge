@@ -67,6 +67,8 @@ test('뒤로가기는 목적지 하나에서 파생된다 — 버튼과 목적�
     ['/tenants/t-1', '/tenants'],
     ['/analyses/an-1', '/analyses'],
     ['/analyses/symbol', '/analyses'],
+    ['/ops/incidents/detail', '/ops/incidents'],
+    ['/ops/runs/run-1', '/ops/runs'],
   ];
   for (const [p, dest] of opened) {
     const r = headerRoute(p);
@@ -105,6 +107,14 @@ test('화면명 표가 기대 목록과 **양방향**으로 맞는다', () => {
     '/lineage/news': '뉴스 계보',
     '/impact/holdings': '구성종목 결손 영향',
     '/analyses': '가격 변동 분석 목록',
+    '/ops/incidents': '파이프라인 문제',
+    '/ops/runs': '런·작업 귀결',
+    '/ops/chain': '설명 생성 흐름',
+    '/ops/datasets': '데이터셋 신선도',
+    '/ops/trend': '산출·품질 추이',
+    '/ops/delivery': 'Cloud 게시·발번 경계',
+    '/ops/summary': '파이프라인 개요',
+    '/overview': '레인 원장 요약',
   };
   assert.deepEqual(
     Object.fromEntries(HEADER_LIST_TITLES.map(([p, t]) => [p, t])),
@@ -114,7 +124,7 @@ test('화면명 표가 기대 목록과 **양방향**으로 맞는다', () => {
   for (const [prefix, title] of Object.entries(EXPECTED)) {
     assert.equal(headerRoute(prefix).title, title, `${prefix} 의 화면명`);
   }
-  assert.equal(headerRoute('/').title, '오늘 운영 현황');
+  assert.equal(headerRoute('/').title, '', '루트는 사건 목록으로 리다이렉트되어 자체 화면명이 없다');
 });
 
 test('표의 접두어끼리 서로를 가리지 않는다 — 가리면 뒤엣것이 영영 안 뽑힌다', () => {

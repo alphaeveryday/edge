@@ -8,6 +8,7 @@
  * 실행: node --test src/domains/sources/minuteView.test.ts
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   datasetKind,
@@ -576,4 +577,10 @@ test('미종결 job 이 있으면 "볼 것 없음"이 아니다 — terminal 만
   /* terminal 만 있는 날은 진행 중이 아니다 — 반대 방향을 안 재면 상수 true 가 산다 */
   assert.equal(hasPendingJobs(j({ succeeded: 100, dead: 3 })), false);
   assert.equal(hasPendingJobs(j({})), false);
+});
+
+test('장중 화면은 공용 부재·부분집합 가드를 소비한다 — 판정 뒤 렌더에서 다시 버리지 않는다', () => {
+  const source = readFileSync(new URL('../../pages/MinutePage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /const empty = hasNoSignal\(data\)/, '화면이 신호 칸을 다시 손으로 세고 있다');
+  assert.match(source, /유효 처리 중[^\n]*healthyClaimed\(jobs\)/, '고착을 처리 중으로 다시 표시한다');
 });
