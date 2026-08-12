@@ -13,6 +13,9 @@ import {
   datasetKind,
   evidencedCount,
   gapRuns,
+  healthyClaimed,
+  hasNoSignal,
+  hasPendingJobs,
   issues,
   liveness,
   materializedCount,
@@ -531,4 +534,46 @@ test('poll 레인의 어느 조각에도 창·거래 어휘가 남지 않는다 
       assert.doesNotMatch(seg.meaning, /거래/, `${dataset} ${seg.key}: 의미에 '거래'`);
     }
   }
+});
+
+test('실을 신호가 없다 = 세션 0 **그리고** 뉴스 job 전 칸 0', () => {
+  const zero = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 };
+  assert.equal(hasNoSignal({ sessions: [], newsJobs: zero }), true, '아무것도 없으면 참');
+  assert.equal(hasNoSignal({ sessions: [{}], newsJobs: zero }), false, '세션이 있으면 실측이 이긴다');
+
+  /* 🔴 칸마다 따로 재야 한다 — `dead` 만 보던 판이 실제로 있었고, 그때 고착 신호가 검수용
+   * 목 뒤로 사라졌다. 어느 칸 하나만 빠뜨려도 그 칸의 장애가 첫 화면에서 조용해진다. */
+  for (const k of Object.keys(zero) as (keyof typeof zero)[]) {
+    assert.equal(
+      hasNoSignal({ sessions: [], newsJobs: { ...zero, [k]: 3 } }),
+      false,
+      `${k} 가 3인데 "신호 없음"이라 답했다 — 그 칸의 장애가 목에 덮인다`,
+    );
+  }
+});
+
+test('유효 처리 중은 고착을 뺀 값이다 — 부분집합을 나란히 세면 0이 N 으로 읽힌다', () => {
+  const j = (claimed: number, claimedExpired: number): MinuteJobCounts => ({
+    waiting: 0, claimed, claimedExpired, succeeded: 0, dead: 0,
+  });
+  /* 🔴 전부 고착이면 유효 처리 중은 0이다. 빼지 않으면 "고착 4 · 처리 중 4" 가 되어
+   * 실제로 도는 job 이 하나도 없는데 절반은 정상인 것처럼 보인다. */
+  assert.equal(healthyClaimed(j(4, 4)), 0);
+  assert.equal(healthyClaimed(j(4, 1)), 3);
+  assert.equal(healthyClaimed(j(0, 0)), 0);
+  /* 원장이 순간적으로 어긋나도 음수를 내지 않는다 — 화면에 "-1건" 이 뜨면 안 된다 */
+  assert.equal(healthyClaimed(j(1, 3)), 0);
+});
+
+test('미종결 job 이 있으면 "볼 것 없음"이 아니다 — terminal 만 세면 진행 중인 날이 접힌다', () => {
+  const j = (o: Partial<MinuteJobCounts>): MinuteJobCounts => ({
+    waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, ...o,
+  });
+  /* 🔴 이 조합이 정확히 문제의 상태다 — 문서는 아직 0건이고 terminal 도 0인데 실제로는 돌고 있다 */
+  assert.equal(hasPendingJobs(j({ waiting: 5 })), true, 'PENDING/RETRY_WAIT 가 있으면 진행 중');
+  assert.equal(hasPendingJobs(j({ claimed: 2 })), true, 'CLAIMED 가 있으면 진행 중');
+  assert.equal(hasPendingJobs(j({ claimed: 2, claimedExpired: 2 })), true, '고착도 미종결이다');
+  /* terminal 만 있는 날은 진행 중이 아니다 — 반대 방향을 안 재면 상수 true 가 산다 */
+  assert.equal(hasPendingJobs(j({ succeeded: 100, dead: 3 })), false);
+  assert.equal(hasPendingJobs(j({})), false);
 });

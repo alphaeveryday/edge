@@ -755,3 +755,45 @@ export const MINUTE_API_GAPS: ApiGap[] = [
     why: '창 축의 시간 범위를 응답이 주지 않아 "장 시작~종료" 축을 그릴 근거가 없다.',
   },
 ];
+
+/**
+ * 이 응답에 **실어 보일 신호가 하나도 없는가.** 검수용 목을 대신 그려도 되는 유일한 조건이다.
+ *
+ * 🔴 이 판정을 잘못 좁히면 실 장애가 목 뒤로 사라진다. 처음엔 `sessions` 와 `newsJobs.dead`
+ * 만 봤는데, `MinuteJobCounts` 에는 `claimedExpired`(lease 없는 CLAIMED = **Consumer 사망
+ * 고착 후보**)·`waiting`·`claimed` 가 함께 있다. 세션이 없는 날에도 뉴스 job 은 날짜 축으로
+ * 따로 쌓이므로 "세션 0 · DEAD 0 · 고착 5" 는 정상 도달 상태이고, 그때 첫 화면이 실제 고착
+ * 대신 목을 보여 주고 있었다.
+ *
+ * ⭐ **칸 이름을 나열하지 않고 전 칸을 센다** — 집계에 필드가 늘어도 새지 않는다. 손으로 고른
+ * 칸 목록은 반드시 낡는다(이 트랙이 여러 번 겪었다).
+ */
+export function hasNoSignal(status: { sessions: unknown[]; newsJobs: MinuteJobCounts }): boolean {
+  return status.sessions.length === 0 && Object.values(status.newsJobs).every((n) => n === 0);
+}
+
+/**
+ * **유효하게 처리 중인 job 수.** `claimedExpired` 는 `claimed` 의 **부분집합**이라 빼야 한다 —
+ * 서버가 `FILTER (status='CLAIMED')` 와 `FILTER (status='CLAIMED' AND lease 없음/만료)` 로
+ * 따로 세기 때문이다(`JdbcMinuteStatusRepository`).
+ *
+ * 🔴 두 값을 나란히 "고착 4건 · 처리 중 4건" 으로 적으면 **유효 처리 중이 0인데 4로 읽힌다** —
+ * 운영자가 "고착이 있지만 나머지는 돌고 있다"로 오판한다. 뺄셈 한 번이 그 오독을 없앤다.
+ */
+export const healthyClaimed = (jobs: MinuteJobCounts): number =>
+  Math.max(0, jobs.claimed - jobs.claimedExpired);
+
+/**
+ * 아직 끝나지 않은 job 이 있는가 — **"0 건"이 진행 중인지 미가동인지 가르는 술어**다.
+ *
+ * 🔴 terminal 두 칸(`succeeded`·`dead`)만 세면 **정상 운영 중인 날이 "볼 것 없음"으로 접힌다**:
+ * 문서가 아직 안 나온 시점에는 job 이 PENDING/RETRY_WAIT/CLAIMED 뿐이라 둘 다 0 이다.
+ * 그 상태를 "없음"으로 그리면 화면이 검수용 목데이터로 그 불확실성을 덮는다(Rule 12).
+ *
+ * ⭐ `news_extraction_job` 은 **한 테이블**이고 날짜 축도 하나다(`created_at` 의 KST 반개구간)
+ * — 계보 응답이 terminal 둘만 좁혀 셀 뿐이라, 나머지 칸은 `/sources/minute` 의 같은 날짜
+ * 집계가 답한다(`JdbcNewsLineageRepository` 자바독이 "`/minute` 콘솔과 같은 규칙"이라고 적어
+ * 뒀다). 그래서 새 서버 축 없이 이 술어가 선다.
+ */
+export const hasPendingJobs = (jobs: MinuteJobCounts): boolean =>
+  jobs.waiting + jobs.claimed > 0;

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ErrorBoundary, Icon, Modal, Toaster, toast } from 'ui-kit';
 import type { IconName } from 'ui-kit';
 import { useAnalyses } from '../domains/analyses/hooks';
 import { useLogout, useSession, useUpdateDisplayName } from '../domains/session/hooks';
 import { useTenants } from '../domains/tenants/hooks';
+import { headerRoute, showBack as routeShowsBack } from './headerRoute';
 import { EdgeLogo } from '../pages/_shared/EdgeLogo';
 
 interface NavEntry {
@@ -39,6 +40,7 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
 
 export function AdminLayout() {
   const location = useLocation();
+  const [search] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: session } = useSession();
@@ -60,38 +62,28 @@ export function AdminLayout() {
   }, [menuOpen]);
 
   // ---- 헤더 타이틀/서브 (라우트 → 화면명, 상세는 대상 엔티티 이름) ----
+  /* 경로 판정은 `headerRoute.ts` 가 한다(순수 모듈이라 테스트가 붙는다 — 여기 두면 안 잡힌다).
+   * 이름 조회만 여기 남는다: 응답이 있어야 답할 수 있어 경로 혼자로는 못 만든다. */
   const path = location.pathname;
-  const tenantId = path.match(/^\/tenants\/([^/]+)$/)?.[1];
-  const analysisId = path.match(/^\/analyses\/([^/]+)$/)?.[1];
-  const tenant = tenantId ? tenants?.find((t) => t.id === tenantId) : undefined;
-  const analysis = analysisId ? analyses?.find((a) => a.id === analysisId) : undefined;
+  const route = headerRoute(path);
+  const pageTitle = route.title;
 
-  let pageTitle = '';
   let pageSub = '';
-  if (tenantId) {
-    pageTitle = '테넌트 상세';
-    pageSub = tenant?.name ?? '';
-  } else if (analysisId) {
-    pageTitle = '가격 변동 분석 상세';
-    pageSub = analysis ? `${analysis.name} ${analysis.code}` : '';
-  } else if (path.startsWith('/tenants')) {
-    pageTitle = '테넌트 목록';
-  } else if (path.startsWith('/sources')) {
-    pageTitle = '데이터 소스 수집 상태';
-  } else if (path.startsWith('/grid')) {
-    pageTitle = '파이프라인 실행 이력';
-  } else if (path.startsWith('/minute')) {
-    pageTitle = '장중 1분 수집';
-  } else if (path.startsWith('/analyses')) {
-    pageTitle = '가격 변동 분석 목록';
-  } else if (path.startsWith('/lineage/news')) {
-    pageTitle = '뉴스 계보';
-  } else if (path.startsWith('/impact/holdings')) {
-    pageTitle = '구성종목 결손 영향';
-  } else if (path === '/') {
-    pageTitle = '오늘 운영 현황';
+  if (route.kind === 'tenantDetail') {
+    pageSub = tenants?.find((t) => t.id === route.entity!.id)?.name ?? '';
+  } else if (route.kind === 'analysisDetail') {
+    const a = analyses?.find((x) => x.id === route.entity!.id);
+    pageSub = a ? `${a.name} ${a.code}` : '';
+  } else if (route.kind === 'symbol') {
+    /* 종목은 시장·코드가 **쿼리**에 있다(점 든 티커가 CDN 에서 죽지 않게 — `symbolHref`).
+     * `headerRoute` 는 경로만 보므로 여기서 읽는다. 이름은 목록 응답에서만 오니 못 찾으면
+     * 시장·코드로 적는다 — 빈칸으로 두면 헤더가 어느 종목을 보는지 말하지 못한다. */
+    const market = search.get('market') ?? '';
+    const code = search.get('code') ?? '';
+    const a = analyses?.find((x) => x.market === market && x.code === code);
+    pageSub = a ? `${a.name} ${a.code}` : `${market} ${code}`.trim();
   }
-  const showBack = Boolean(tenantId || analysisId);
+  const showBack = routeShowsBack(route);
 
   const saveProfile = () => {
     const name = profileDraft.trim();
@@ -226,7 +218,7 @@ export function AdminLayout() {
             <button
               className="btn btn-ghost btn-icon"
               aria-label="뒤로"
-              onClick={() => navigate(tenantId ? '/tenants' : '/analyses')}
+              onClick={() => navigate(route.backTo ?? '/')}
             >
               <Icon name="arrowLeft" className="ic" />
             </button>
