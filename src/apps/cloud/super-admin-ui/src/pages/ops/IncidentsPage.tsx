@@ -29,7 +29,7 @@ import type { AxisFetch } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
-import { hasNoSignal, hasPendingJobs, healthyClaimed } from '../../domains/sources/minuteView';
+import { hasNoSignal, healthyClaimed } from '../../domains/sources/minuteView';
 import '../../styles/ops.css';
 
 const SCOPE_TIP = [
@@ -83,6 +83,8 @@ function RealtimeShortcut({ date }: { date: string }) {
   /* 세션이 없으면 목으로 미리보기 — 실측이 없다는 사실을 먼저 말하고 나서다 */
   const real = !isPending && !isError && !hasNoSignal(data);
   const view = real ? data : MOCK_MINUTE;
+  const newsJobsVisible = Object.values(view.newsJobs).some((count) => count > 0);
+  const newsJobsDefect = view.newsJobs.claimedExpired > 0 || view.newsJobs.dead > 0;
 
   return (
     <div className="card">
@@ -112,12 +114,14 @@ function RealtimeShortcut({ date }: { date: string }) {
               </p>
             )}
             <ul className="ops-rt-list">
-              {view.sessions.length === 0 && hasPendingJobs(view.newsJobs) && (
+              {newsJobsVisible && (
                 <li className="ops-rt">
                   <Link to={`/minute?date=${view.date}&dataset=news_minute`} className="ops-rt-link ops-rt-axes">
                     <span className="ops-rt-head">
                       <span className="t-label">뉴스 후속 처리 job</span>
-                      <StatusBadge tone="blocked">확인 필요</StatusBadge>
+                      <StatusBadge tone={newsJobsDefect ? 'blocked' : 'active'}>
+                        {newsJobsDefect ? '확인 필요' : '처리 중'}
+                      </StatusBadge>
                       <span className="t-xs ops-lane-link">상세 →</span>
                     </span>
                     <span className="t-xs ops-rt-axis">
@@ -128,7 +132,7 @@ function RealtimeShortcut({ date }: { date: string }) {
               )}
               {view.sessions.map((s) => {
                 const kind = datasetKind(s.dataset);
-                const h = sessionHealth(s, kind === 'news' ? view.newsJobs : s.priceJobs);
+                const h = sessionHealth(s, s.priceJobs, kind === 'price');
                 return (
                   <li key={s.sessionId} className="ops-rt">
                     <Link

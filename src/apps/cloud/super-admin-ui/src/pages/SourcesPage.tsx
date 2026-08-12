@@ -15,7 +15,7 @@ import type {
   TaskStatus,
 } from '../domains/sources';
 import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
-import { datasetKind, gapRuns, hasPendingJobs, isPollLane, liveness, segments } from '../domains/sources/minuteView';
+import { datasetKind, gapRuns, isPollLane, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
@@ -692,8 +692,8 @@ function RealtimeLedger({
                 '실 응답에 이 데이터셋의 세션 행이 없습니다. 비거래일·미가동·레인 미편입 중 어느 이유인지는 이 응답이 답하지 않습니다.'}
           </p>
         )}
-        {!ambiguous && kind === 'news' && hasPendingJobs(data.newsJobs) && (
-          <p className="t-xs mono m-0" style={{ color: 'var(--danger)', marginTop: 8 }}>
+        {!ambiguous && kind === 'news' && Object.values(data.newsJobs).some((count) => count > 0) && (
+          <p className="t-xs mono m-0" style={{ color: data.newsJobs.claimedExpired > 0 || data.newsJobs.dead > 0 ? 'var(--danger)' : 'var(--fg-3)', marginTop: 8 }}>
             세션과 별도인 날짜 축 news job: {JSON.stringify(data.newsJobs)}
           </p>
         )}
@@ -1086,7 +1086,7 @@ function SourcesBody({
       </div>
       <HoldingsDatasetFlow report={report} runKey={runKey} />
 
-      {report.issues.length > 0 && <IssuesCard issues={report.issues} focusTask={focusTask} />}
+      {report.issues.length > 0 && <IssuesCard issues={report.issues} focusTask={focusedExists ? focusTask : undefined} />}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         산출·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
       </p>

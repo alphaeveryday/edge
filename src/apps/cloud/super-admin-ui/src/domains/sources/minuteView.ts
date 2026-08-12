@@ -158,7 +158,7 @@ export interface SessionHealth {
 /** ISO 의 시:분만 — 응답이 이미 KST 오프셋을 달고 오므로 자르는 것이 결정적이다(locale 불요) */
 const hhmmOf = (iso: string | null) => (iso ? iso.slice(11, 16) : '—');
 
-export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionHealth {
+export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts, hasJobAxis = true): SessionHealth {
   const w = s.windows;
   const kind = datasetKind(s.dataset);
   const noun = isPollLane(kind) ? 'poll' : '창';
@@ -170,7 +170,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
    * 창을 두 번 다르게 말한다. 마감·정산된 세션일수록 이 과대평가가 커진다. */
   const elapsed = evidenced + w.overdueNoEvidence + w.missing;
   const defects = qualityDefectCount(s);
-  const stuck = jobs.claimedExpired + jobs.dead;
+  const stuck = hasJobAxis ? jobs.claimedExpired + jobs.dead : 0;
   /* 기대 창 수와 원장 실재 행 수가 다르다 — 위 숫자들을 그대로 믿으면 안 된다는 사실이다.
    * `issues()` 는 이걸 내는데 여기서 안 보면 요약이 "정상"이라 하고 상세가 "원장 수를 못
    * 믿는다"고 해 둘이 어긋난다. 장애로 세우지는 않는다 — 세션이 죽은 게 아니라 **셈의
@@ -191,7 +191,9 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
   const quality = {
     defects,
     text:
-      kind === 'news'
+      !hasJobAxis
+        ? `품질 결함 ${defects}`
+        : kind === 'news'
         ? `잘린 poll·격리 ${defects} · 처리 대기 ${jobs.waiting} · DEAD ${jobs.dead}`
         : `품질 결함 ${defects} · DEAD ${jobs.dead}`,
   };
@@ -276,7 +278,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts): SessionH
     kind: 'normal',
     label: '정상',
     tone: 'active',
-    reason: '창·품질·실행·큐 이상 없고 원장 행 수도 기대와 같다',
+    reason: `${noun}·품질·실행${hasJobAxis ? '·큐' : ''} 이상 없고 원장 행 수도 기대와 같다`,
   };
 }
 

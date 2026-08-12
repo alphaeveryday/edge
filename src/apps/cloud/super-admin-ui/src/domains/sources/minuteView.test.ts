@@ -419,6 +419,17 @@ test('큐 고착·DEAD 도 주의로 올라온다 — heartbeat 만으로 정상
   assert.equal(sessionHealth(s, { ...NO_JOBS, claimedExpired: 1 }).kind, 'caution');
 });
 
+test('job 축이 없는 레인은 0 채움으로 큐 정상 주장을 만들지 않는다', () => {
+  const h = sessionHealth(
+    session({ dataset: 'disclosure_minute', expectedWindowCount: 1, windows: { valid: 1 } }),
+    NO_JOBS,
+    false,
+  );
+  assert.equal(h.kind, 'normal');
+  assert.doesNotMatch(h.reason, /큐/);
+  assert.doesNotMatch(h.quality.text, /DEAD|처리 대기/);
+});
+
 test('MISSING 은 기한이 지난 창이다 — 커버리지 분모에서 빼면 만점으로 보인다', () => {
   /* EOD reconciliation 이 결손으로 판정한 창은 기한이 확실히 지났다. 분모에서 빼면
    * `기한 도래 N 중 증거 N` 이 되어 커버리지가 만점인데, 같은 창을 품질 결함이 세고 있다 —
