@@ -275,6 +275,22 @@ def render_block_plan(plan: tuple[OutputBlock, ...], *, summary: bool = False) -
     return re.sub(r"([+-]\d+(?:\.\d+)?)%p?", _summary_number, text) if summary else text
 
 
+#: 봉을 레이크에서 직접 읽었을 때의 출처 이름. 주입 경로는 `read_via` 가 대신 말한다.
+LAKE_BARS_SYSTEM = "S3.bars_5m"
+
+
+def bars_source_label(lineage) -> str:
+    """봉 lineage 가 말하는 **실제 읽은 경로**. 없으면 종전 레이크 이름(ALPHA-892).
+
+    근거 카드·원장 두 표면이 같은 답을 써야 한다 - 한쪽만 고치면 같은 런이 두 출처를
+    주장한다. `view` 는 게이트 키라 못 바꾸므로 `read_via` 가 유일한 판별자다.
+    """
+    for entry in lineage or ():
+        if str(entry.get("view")) == "bars_5m":
+            return str(entry.get("read_via") or LAKE_BARS_SYSTEM)
+    return LAKE_BARS_SYSTEM
+
+
 def final_explanation_payload(facts: WindowFacts) -> dict:
     """최종 저장 모양. 고정 블록과 원천 조회키를 한 객체에 둔다."""
     plan = {block.key: block for block in build_block_plan(facts)}
@@ -289,18 +305,26 @@ def final_explanation_payload(facts: WindowFacts) -> dict:
             "evidence_refs": list(dict.fromkeys(refs)),
         }
 
+    # 봉 출처는 **읽은 경로**를 따른다(ALPHA-892). 주입 봉을 쓰고도 `S3.bars_5m` 이라
+    # 적으면 원장과 근거 카드가 읽은 적 없는 데이터셋을 출처로 주장한다 - 게이트는
+    # 통과하므로 아무도 안 알려준다. lineage 가 없거나 옛 모양이면 종전 값이다.
+    bars_system = bars_source_label(facts.lineage)
+    # ⚠️ 헤더만 출처가 둘이다 — `header_return = gap + intraday` 인데 갭의 분모(전 거래일
+    # 종가)는 **주입 경로에서도 레이크가 낸다**(`_gap`). 봉 출처 하나만 적으면 헤더를
+    # 재현하는 데 필요한 의존을 숨긴다. 미주입 런은 둘이 같아 종전 그대로다.
+    header_systems = tuple(dict.fromkeys((bars_system, LAKE_BARS_SYSTEM)))
     blocks = [
-        block("H", "헤더", plan["header"].lines, ("S3.bars_5m",),
+        block("H", "헤더", plan["header"].lines, header_systems,
               (f"bars_5m:{facts.ticker}",)),
         block("1", "기여 분해",
               plan["contribution"].lines + plan["breadth"].lines,
-              ("S3.bars_5m", "RDB.etf_holding_snapshot"),
+              (bars_system, "RDB.etf_holding_snapshot"),
               plan["contribution"].evidence_ids),
-        block("2", "시간 구간", plan["path"].lines, ("S3.bars_5m",),
+        block("2", "시간 구간", plan["path"].lines, (bars_system,),
               (f"bars_5m:{facts.ticker}",)),
         # 제목도 고객 어휘다(ALPHA-949) — 콘솔(super-admin)이 block_title 을 그대로 띄운다.
         block("3", "움직임 분해", plan["relative"].lines,
-              ("S3.bars_5m", "S3.layers_daily")),
+              (bars_system, "S3.layers_daily")),
     ]
     def _lines(*keys: str) -> tuple[str, ...]:
         return tuple(line for key in keys
@@ -440,8 +464,16 @@ def _bars(lake, ticker: str, day: str) -> list[tuple[dt.datetime, float, float]]
         "AND open > 0 AND close > 0 ORDER BY ts")]
 
 
-def _gap(lake, ticker: str, day: str) -> float | None:
+def _gap(lake, ticker: str, day: str, *, day_open: float | None = None) -> float | None:
     """ln(당일 첫 봉 시가 / 전 거래일 마지막 봉 종가).
+
+    ``day_open`` 은 호출자가 **자기 봉에서 뽑은** 당일 첫 시가다(ALPHA-892). 분자를
+    여기서 다시 읽으면 `intraday` 와 다른 스냅샷이 섞여 `gap + intraday` 가 전일종가→
+    현재종가 항등식을 잃는다. 전 거래일 종가는 확정본이라 그대로 레이크에서 읽는다.
+
+    ⚠️ 남는 천장: 레이크에 **당일 행이 아직 없으면**(장 초반 롤업 전) 아래 가드가
+    `None` 을 돌려주므로 주입 경로에서도 헤더가 안 선다. 주입이 고치는 것은 요구창이고,
+    갭의 전일 종가는 여전히 레이크 축이다 - 이 창을 닫으려면 전일 종가도 넘겨야 한다.
 
     **5분봉 자체가 답한다.** 일봉(`s3_price_daily`)을 쓰려다 날짜 커버리지가 달라
     갭이 통째로 미계측이 됐다(실측 000660 06-01). 같은 격자·같은 소스에서 뽑으면
@@ -454,7 +486,8 @@ def _gap(lake, ticker: str, day: str) -> float | None:
         "GROUP BY 1 ORDER BY 1 DESC LIMIT 2")
     if len(rows) < 2 or str(rows[0][0]) != day:
         return None
-    o, pc = float(rows[0][1]), float(rows[1][2])
+    o = float(rows[0][1]) if day_open is None else day_open
+    pc = float(rows[1][2])
     return math.log(o / pc) if o > 0 and pc > 0 else None
 
 
@@ -854,13 +887,17 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         # 축이 갈린다. 이 함수가 `roll` 로 닫은 그 갈림이 봉으로 되살아나는 자리다.
         raise ValueError(
             "asked_bars·state_bars 는 함께 주입한다 — 한쪽만 주면 요구창과 헤더창의 축이 갈린다")
-    bars_view = "window.aggregated_bars"
+    bars_read_via = "window.aggregated_bars"
     if asked_bars is BARS_UNSET:
         asked_bars = state_bars = _bars(lake, ticker, day)
-        bars_view = "bars_5m"
+        bars_read_via = LAKE_BARS_SYSTEM
     window_return, _ = _window_ret(asked_bars, asked)
     intraday, _ = _window_ret(state_bars, open_to_end)
-    gap = _gap(lake, ticker, day)
+    # 갭의 분자(당일 첫 시가)는 **`intraday` 와 같은 봉에서** 와야 한다. 둘이 다른
+    # 스냅샷을 보면 `gap + intraday` 가 전일종가→현재종가 항등식을 잃는다(주입 시가 101 ·
+    # 레이크 시가 100 이면 log(100/99)+log(110/101) 이 나온다 — 어느 쪽도 아닌 값이다).
+    day_open = next((float(bar[1]) for bar in state_bars), None)
+    gap = _gap(lake, ticker, day, day_open=day_open)
     header_return = None if gap is None or intraday is None else gap + intraday
     premium, _premium_note = premium_5m(
         lake, ticker, day, window_start=a, window_end=b)
@@ -903,9 +940,13 @@ def window_facts(lake, ticker: str, instrument_id: str, day: str,
         evidence.append("요청창 사건")
     lineage = (
         {
-            # 주입분과 레이크 재질의는 **다른 출처**다 - 한 이름으로 적으면 근거 표면이
-            # 읽은 적 없는 뷰를 읽었다고 말한다(ALPHA-892).
-            "view": bars_view,
+            # ⚠️ `view` 는 표시 문자열이 아니라 **게이트 키**다 - `evidence_rows` 가
+            # `"bars_5m" in lineage_views` 로 price_etf 근거 행을 만들고, 없으면 H·2·3
+            # 블록이 근거 0으로 EvidenceFormatError 를 낸다. 데이터셋 정체(5분 격자·
+            # 구간시작 라벨)는 주입분도 같으므로 이름을 유지하고, **읽은 경로**만
+            # 따로 적는다 - 읽은 적 없는 S3 를 읽었다고 말하지 않기 위해서다(ALPHA-892).
+            "view": "bars_5m",
+            "read_via": bars_read_via,
             "fields": ("ts", "open", "close"),
             "entity": ticker,
             "window_start": a[:5],

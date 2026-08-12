@@ -503,8 +503,33 @@ def test_injected_bars_stand_where_the_five_minute_grid_cannot(monkeypatch):
     # 값이 **주입분에서** 나왔다 - 레이크 봉(10:40 시가 101 → 13:20 종가 120)이었다면
     # 다른 수익률이 나온다
     assert facts.window_return == pytest.approx(math.log(110.0 / 100.0))
-    # 근거 표면이 읽지 않은 뷰를 읽었다고 말하지 않는다
-    assert facts.lineage[0]["view"] == "window.aggregated_bars"
+    # 근거 표면이 읽지 않은 S3 를 읽었다고 말하지 않는다. 단 `view` 는 **게이트 키**라
+    # 유지한다 — `evidence_rows` 가 이 이름으로 price_etf 행을 만들고, 바꾸면 H·2·3
+    # 블록이 근거 0으로 EvidenceFormatError 를 낸다(정상 산문이 통째로 죽는다).
+    assert facts.lineage[0]["view"] == "bars_5m"
+    assert facts.lineage[0]["read_via"] == "window.aggregated_bars"
+    # 출처를 말하는 표면이 셋(lineage·원장 블록·근거 카드)이다 — lineage 만 고치면
+    # 나머지 둘이 읽은 적 없는 5분봉을 계속 주장한다. 게이트는 통과하므로 안 드러난다.
+    payload = final_explanation_payload(facts)
+    blocks = {b["block_code"]: b for b in payload["blocks"]}
+    # 헤더만 출처가 둘이다 — 갭의 분모(전 거래일 종가)는 주입 경로에서도 레이크가 낸다.
+    assert blocks["H"]["source_systems"] == ["window.aggregated_bars", "S3.bars_5m"]
+    # 구간 블록은 주입 봉만 쓴다 — 여기 레이크가 남으면 안 읽은 출처를 주장하는 것이다
+    assert blocks["2"]["source_systems"] == ["window.aggregated_bars"]
+    # 근거 카드는 **독립 구현**이라(evidence_rows 의 자체 next()) 여기서 같이 태운다.
+    # 안 태우면 한쪽만 상수로 회귀해도 이 테스트가 통과한다.
+    from edge_analysis.statics.evidence_rows import build_evidence_rows
+
+    built = build_evidence_rows(
+        blocks=payload["blocks"], lineage=list(facts.lineage), stat_tests=[],
+        events=[], ticker="091160", etf_name="T", day="2026-08-05",
+        window_end="10:44", sector_name=None)
+    bars_rows = [row for row in built.rows
+                 if row.type == "PRICE" and "5분봉" in row.content]
+    assert bars_rows and all(
+        row.source == "window.aggregated_bars" for row in bars_rows), (
+        f"근거 카드가 읽은 적 없는 5분봉을 출처로 말한다: "
+        f"{[row.source for row in bars_rows]}")
 
 
 def test_bars_are_injected_as_a_pair_or_not_at_all(monkeypatch):
@@ -531,6 +556,29 @@ def test_absent_injection_still_reads_the_lake(monkeypatch):
     # 레이크 봉 10:40(시가 101)~10:45(종가 103) — 13:20 봉은 창 끝이라 안 들어온다
     assert facts.window_return == pytest.approx(math.log(103.0 / 101.0))
     assert facts.lineage[0]["view"] == "bars_5m"
+    assert facts.lineage[0]["read_via"] == "S3.bars_5m"
+
+
+def test_header_gap_uses_the_same_open_as_the_injected_window(monkeypatch):
+    """갭의 분자(당일 첫 시가)가 `intraday` 와 **같은 봉**에서 온다(ALPHA-892).
+
+    `_gap` 이 레이크에서 당일 첫 시가를 다시 읽으면 `gap + intraday` 가 전일종가→현재
+    종가 항등식을 잃는다 - 두 스냅샷이 갈린 날 헤더가 어느 쪽도 아닌 값이 된다.
+    """
+    import pytest
+
+    _no_lake_queries(monkeypatch)
+    # 레이크는 당일 시가 100·전일 종가 99 를 말한다(_Lake.sql 의 GROUP BY 응답).
+    # 주입 봉은 시가 101 로 다르다 - 정정이 끼어든 날의 모양이다.
+    facts = window_facts(
+        _Lake(), "091160", "iid", "2026-08-05", "10:41", "10:44",
+        asked_bars=[(dt.datetime(2026, 8, 5, 10, 41), 101.0, 110.0)],
+        state_bars=[(dt.datetime(2026, 8, 5, 9, 0), 101.0, 105.0),
+                    (dt.datetime(2026, 8, 5, 10, 41), 101.0, 110.0)])
+
+    # 항등식: gap + intraday == ln(현재종가 110 / 전일종가 99). 레이크 시가 100 을
+    # 섞으면 ln(100/99) + ln(110/101) 이 나와 이 단언이 깨진다.
+    assert facts.header_return == pytest.approx(math.log(110.0 / 99.0))
 
 # ── 기여회계 산문 (ALPHA-871) ─────────────────────────────────────────────
 def test_factor_block_states_the_layer_accounting_without_proxy_names():

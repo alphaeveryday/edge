@@ -205,9 +205,15 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     # key → (row 재료). 채번 전 단계 — 정렬 뒤 ref 를 붙인다. lineage 가 없으면
     # 가격 행도 없다 — 그러면 아래 게이트가 헤더·구간 문장에서 스스로 죽는다(§5).
     specs: dict[str, EvidenceRow] = {}
+    # 출처는 lineage 가 말하는 **읽은 경로**다(ALPHA-892) — 봉을 호출자가 집계해 넘긴
+    # 런은 5분봉 데이터셋을 읽지 않는다. `view` 는 게이트 키라 그대로 두고 `read_via`
+    # 만 본다. 옛 lineage(키 없음)는 종전 값이라 기존 근거 카드가 안 바뀐다.
+    bars_vendor = next(
+        (str(entry.get("read_via") or "S3.bars_5m") for entry in lineage
+         if str(entry.get("view")) == "bars_5m"), "S3.bars_5m")
     if "bars_5m" in lineage_views:
         specs["price_etf"] = price_row(
-            0, dataset=f"{etf_name} 5분봉", vendor="S3.bars_5m", as_of=when)
+            0, dataset=f"{etf_name} 5분봉", vendor=bars_vendor, as_of=when)
 
     constituents = sorted({
         ref.removeprefix("bars_5m:")
@@ -218,7 +224,7 @@ def build_evidence_rows(*, blocks: list[dict], lineage: list[dict] | tuple,
     if constituents:
         specs["price_members"] = price_row(
             0, dataset=f"구성종목 5분봉({len(constituents)}종목)",
-            vendor="S3.bars_5m", as_of=when)
+            vendor=bars_vendor, as_of=when)
     if "1" in codes:
         # 구성비중이 있어야 기여 분해가 선다 — 기준일은 T-1 확정 비중이지만 엔진
         # 산출에는 스냅샷 기준일이 없어 설명일을 적는다(§9 미결로 보고).

@@ -160,8 +160,16 @@ def _statics_bars(
 
     거기 `_bars` 가 레이크에서 뽑던 것과 같은 튜플이다(ALPHA-892). 그 축을 넘겨야
     라우팅과 산문이 같은 가격을 보고, 요구창이 5분 격자를 비껴가도 봉이 선다.
+
+    ⚠️ **naive KST 로 내린다.** 집계 봉은 tz-aware 인데(`WindowSpec` 이 KST 로 세운다)
+    레이크 5분봉은 `ts: timestamp[us] naive KST`(`lake/storage.py`)고, 산문의 창 경계도
+    `datetime.combine(date, time)` 이라 naive 다. aware 를 그대로 넘기면 `_window_ret`
+    의 `w.start <= ts < w.end` 가 **TypeError 로 매 런 죽는다** - 고치려는 결함보다 나쁘다.
+    `astimezone` 을 먼저 태우는 것은 호출자가 다른 tz 로 세운 창을 조용히 옮겨 적지
+    않기 위해서다(KST 가 아니면 시각이 바뀌어야 맞다).
     """
-    return [(bar.start, float(bar.open), float(bar.close))
+    return [(bar.start.astimezone(KST).replace(tzinfo=None),
+             float(bar.open), float(bar.close))
             for bar in _unit_bars(bars, unit_id)]
 
 
