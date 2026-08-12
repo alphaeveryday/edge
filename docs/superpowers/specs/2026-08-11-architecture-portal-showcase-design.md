@@ -43,13 +43,13 @@ sync 스크립트의 `_COPIED_DIRS` 재타깃을 피하기 위함. 데이터플�
 "설계·ADR") → ③ 번호 산출물 인덱스:
 
 ```
-0~3  다이어그램 (확정 4종)
-4·5  다이어그램 (후보 2종 — 채택 시 번호 편입, 미채택 시 이후 번호를 당겨 공번 없이 확정)
-6    설계 결정 — ADR 현황판 50건
-7    계약 5건 (sync-protocol · event-bundle-schema · sync-auth · publication-api · console-facts-api)
-8    데이터플로우
-9    발전 과정 (evolution)
-10   회고 7건 (sprint 1~7)
+1~4  다이어그램 (확정 4종 — 2026-08-12 1-base 로 전환, "서비스"는 "애플리케이션"으로 통일)
+5·6  다이어그램 (후보 2종 — 채택 시 번호 편입, 미채택 시 이후 번호를 당겨 공번 없이 확정)
+7    설계 결정 — ADR 현황판 50건
+8    계약 5건 (sync-protocol · event-bundle-schema · sync-auth · publication-api · console-facts-api)
+9    데이터플로우
+10   발전 과정 (evolution)
+11   회고 7건 (sprint 1~7)
 ```
 
 ## 다이어그램 계획
@@ -58,10 +58,10 @@ sync 스크립트의 `_COPIED_DIRS` 재타깃을 피하기 위함. 데이터플�
 
 | # | 제목 | 근거 문서 |
 |---|---|---|
-| 0 | 정보 구조 (IA) | information-architecture.md |
-| 1 | 서비스 아키텍처 (cloud/onprem 하이브리드) | application-architecture.md |
-| 2 | 시스템 아키텍처 (파이프라인·팬아웃·스크리닝) | system-architecture.md |
-| 3 | 클라우드 아키텍처 (AWS) | cloud-architecture.md |
+| 1 | 정보 구조 (Information Architecture) | information-architecture.md |
+| 2 | 애플리케이션 아키텍처 (cloud/onprem 하이브리드) | application-architecture.md |
+| 3 | 시스템 아키텍처 (파이프라인·팬아웃·스크리닝) | system-architecture.md |
+| 4 | 클라우드 아키텍처 (AWS) | cloud-architecture.md |
 
 후보 2종 — 채택 여부는 자산 준비도를 보고 결정(미채택이어도 인덱스 번호제라 후일 추가 용이):
 

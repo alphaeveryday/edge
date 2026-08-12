@@ -5,9 +5,9 @@
 
 | # | 제목 | 근거 문서 |
 |---|---|---|
-| 0 | [정보 구조 (IA)](0-information-architecture.md) | [information-architecture.md](../reference/architecture/information-architecture.md) |
-| 1 | [서비스 아키텍처](1-application-architecture.md) | [application-architecture.md](../reference/architecture/application-architecture.md) |
-| 2 | [시스템 아키텍처](2-system-architecture.md) | [system-architecture.md](../reference/architecture/system-architecture.md) |
-| 3 | [클라우드 아키텍처 (AWS)](3-cloud-architecture.md) | [cloud-architecture.md](../reference/architecture/cloud-architecture.md) |
+| 1 | [정보 구조 (Information Architecture)](1-information-architecture.md) | [information-architecture.md](../reference/architecture/information-architecture.md) |
+| 2 | [애플리케이션 아키텍처 (Application Architecture)](2-application-architecture.md) | [application-architecture.md](../reference/architecture/application-architecture.md) |
+| 3 | [시스템 아키텍처 (System Architecture)](3-system-architecture.md) | [system-architecture.md](../reference/architecture/system-architecture.md) |
+| 4 | [클라우드 아키텍처 (Cloud Architecture)](4-cloud-architecture.md) | [cloud-architecture.md](../reference/architecture/cloud-architecture.md) |
 
-후보 2장(데이터 파이프라인 · Agent)은 채택 확정 시 4·5번으로 추가된다.
+후보 2장(데이터 파이프라인 · Agent)은 채택 확정 시 5·6번으로 추가된다.
