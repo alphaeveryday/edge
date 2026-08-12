@@ -4,6 +4,8 @@
 로컬에서 빌드·미리보기할 때는 **sync 를 먼저** 돌려야 한다 — reference 문서와
 브랜드 로고·파비콘(캐노니컬 `src/libs/ui-kit/src/assets`, ALPHA-950·952)은 커밋되지 않고
 sync 가 복사해 넣는 빌드 산출물이라, 건너뛰면 로고·reference 링크가 깨진다.
+헤더 로고는 sync 가 캐노니컬 로고에 Pages 전용 모션 레이어를 더해 생성하는
+`edge-logo-animated.svg` 다(ALPHA-971) — 마찬가지로 커밋되지 않는다.
 
 ```bash
 # repo root 에서 (시스템 python 은 PEP 668 로 직설치가 막히므로 venv 사용)
