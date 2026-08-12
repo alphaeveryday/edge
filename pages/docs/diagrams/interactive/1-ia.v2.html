@@ -196,5 +196,28 @@ vp.addEventListener('wheel',ev=>{
   vp.scrollLeft=wx*scale-px;
   vp.scrollTop=wy*scale-py;
 },{passive:false});
+// 드래그 팬 — 빈 영역을 잡고 끌면 화면 이동. 드래그 직후의 click 은 무시(선택 해제 오발동 방지).
+(function(){
+  let panning=false, moved=false, sx=0, sy=0, sl=0, st=0;
+  vp.style.cursor='grab';
+  vp.addEventListener('mousedown',ev=>{
+    if(ev.button!==0) return;
+    if(ev.target.closest && ev.target.closest('#hud')) return; // 상자 위에서도 팬 시작 가능(끌면 팬, 안 끌면 클릭)
+    panning=true; moved=false; sx=ev.clientX; sy=ev.clientY; sl=vp.scrollLeft; st=vp.scrollTop;
+    vp.style.cursor='grabbing'; ev.preventDefault();
+  });
+  window.addEventListener('mousemove',ev=>{
+    if(!panning) return;
+    const dx=ev.clientX-sx, dy=ev.clientY-sy;
+    if(Math.abs(dx)+Math.abs(dy)>4) moved=true;
+    vp.scrollLeft=sl-dx; vp.scrollTop=st-dy;
+  });
+  window.addEventListener('mouseup',()=>{
+    if(panning){panning=false; vp.style.cursor='grab';}
+  });
+  document.body.addEventListener('click',ev=>{
+    if(moved){moved=false; ev.stopImmediatePropagation();}
+  },{capture:true});
+})();
 window.addEventListener('resize',fit); fit();
 </script></body></html>
