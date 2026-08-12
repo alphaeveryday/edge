@@ -60,6 +60,7 @@ const STATE_TONE: Record<TaskState, BadgeTone> = {
   성공: 'active',
   '부분 결손': 'warn',
   대기: 'neutral',
+  미귀결: 'warn',
   실패: 'blocked',
   타임아웃: 'blocked',
   미기동: 'blocked',
@@ -509,6 +510,7 @@ const FLOW_ORDER: TaskState[] = [
   '미기동',
   '선행 미충족',
   '부분 결손',
+  '미귀결',
   '대기',
   '판정 없음',
   '계획 제외',
@@ -554,7 +556,7 @@ function StageFlow({ groups }: { groups: [string, TaskFact[]][] }) {
           tip={
             '원장 stage 순서(수집 → 정제 → 적재)는 실제 의존 관계다 — 정제는 수집 산출을, 적재는 정제 산출을 읽는다.\n' +
             '같은 단계 안의 작업들은 서로 병렬이라 순서를 만들지 않고 한 칸으로 접는다.\n\n' +
-            '단계 상태는 그 단계 작업 중 가장 나쁜 것이다(실패 > 타임아웃 > 미기동 > 선행 미충족 > 부분 결손 > 대기 > 계획 제외 > 성공).\n' +
+            '단계 상태는 그 단계 작업 중 가장 나쁜 것이다(실패 > 타임아웃 > 미기동 > 선행 미충족 > 부분 결손 > 미귀결 > 대기 > 계획 제외 > 성공).\n' +
             '막힌 단계 뒤는 흐리게 두되 "그래서 못 했다"고 인과를 단정하지는 않는다 — 원장이 준 것은 각 단계의 귀결뿐이다.\n\n' +
             '산출량은 여기 넣지 않는다: 데이터셋마다 레코드 단위가 달라 비율로 비교하면 거짓 대비가 된다.'
           }
@@ -645,6 +647,7 @@ function RunTasks({
               [
                 ['성공', n('성공')],
                 ['부분 결손', n('부분 결손')],
+                ['미귀결', n('미귀결')],
                 ['대기', n('대기')],
                 ['실패', n('실패')],
                 ['타임아웃', n('타임아웃')],
@@ -867,7 +870,7 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
           </div>
         ))}
       </div>
-      {runTerminal && state === '대기' && (
+      {runTerminal && (state === '대기' || state === '미귀결') && (
         <p className="t-xs m-0" style={{ color: 'var(--warn)', marginTop: 8 }}>
           런은 {run.ledger_status} 로 끝났는데 이 작업의 귀결이 원장에 쓰이지 않았습니다 — 상태를 추정하지 않고
           원장 값 그대로 둡니다.

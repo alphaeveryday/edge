@@ -164,10 +164,11 @@ test('없는 실패 상세를 지어내지 않는다 — 상태·종료만 값�
   }
 });
 
-test('PENDING 작업은 시도 수만으로 실행 중이라 추정하지 않는다', () => {
+test('PENDING 작업은 시도 이력이 있으면 미기동 대기로 숨기지 않되 실행 중이라 추정하지 않는다', () => {
   const task = {
     task_key: 'collect', run_id: 'run-1', pipeline_type: 'news', stage: 'raw', required: true,
     task_outcome: 'PENDING', attempts: 1,
   } as TaskFact;
-  assert.equal(taskState(task), '대기');
+  assert.equal(taskState(task), '미귀결');
+  assert.equal(taskState({ ...task, attempts: 0 }), '대기');
 });

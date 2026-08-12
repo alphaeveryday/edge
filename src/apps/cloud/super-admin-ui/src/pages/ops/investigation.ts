@@ -63,6 +63,11 @@ export const REALTIME_DATASETS = new Set([
 
 const q = (v: string) => encodeURIComponent(v);
 
+/** 실시간 세션 identity(dataset × sourceGroup × date)를 화면 간 링크에 보존한다. */
+export function minuteSessionHref(date: string, dataset: string, sourceGroup?: string): string {
+  return `/minute?date=${q(date)}&dataset=${q(dataset)}${sourceGroup ? `&sourceGroup=${q(sourceGroup)}` : ''}`;
+}
+
 /**
  * 사건 하나의 조사 경로. `facts` 는 런 행 존재 여부처럼 **화면이 추정하면 안 되는 사실**을
  * 확인하는 데만 쓴다(예: 계획됐는데 런 행이 없는 슬롯인가).
@@ -175,7 +180,7 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
               (vendor
                 ? ` 세션 화면도 이 사건의 벤더(${vendor})로 좁힌다.`
                 : ' 이 사건은 벤더를 지목하지 않아 그 날짜의 세션 전체가 대상이다.'),
-            href: `/minute?date=${q(date)}&dataset=${q(datasetId)}${vendor ? `&sourceGroup=${q(vendor)}` : ''}`,
+            href: minuteSessionHref(date, datasetId, vendor),
           },
         ],
         /* `targetId` 는 `dataset/sourceGroup` 이다(세션의 대상 축) — 벤더를 여기서 꺼내 넘긴다.

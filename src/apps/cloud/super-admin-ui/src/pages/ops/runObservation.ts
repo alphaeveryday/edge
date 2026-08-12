@@ -22,6 +22,7 @@ export type TaskState =
   | '성공'
   | '부분 결손'
   | '대기'
+  | '미귀결'
   | '실패'
   | '타임아웃'
   | '미기동'
@@ -31,7 +32,7 @@ export type TaskState =
 
 const TIMEOUT_REASON = /TIMED_OUT|TIMEOUT/i;
 
-/** Console facts에는 시도 상태가 없으므로 attempts 수만으로 실행 중을 만들지 않는다. */
+/** Console facts에는 시도 상태가 없다. 시도 이력의 존재와 현재 실행 상태를 혼동하지 않는다. */
 export function taskState(t: TaskFact): TaskState {
   if (t.plan_status === 'SKIPPED') return '계획 제외';
   switch (t.task_outcome) {
@@ -44,7 +45,7 @@ export function taskState(t: TaskFact): TaskState {
     case 'BLOCKED':
       return '선행 미충족';
     case 'PENDING':
-      return '대기';
+      return (t.attempts ?? 0) > 0 ? '미귀결' : '대기';
     default:
       return '판정 없음';
   }

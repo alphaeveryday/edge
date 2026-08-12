@@ -26,7 +26,7 @@ import { AwsObservedAt, ConsoleGate, Info, useConsoleEvaluation } from './shared
 import { axisOf } from './consoleFacts';
 import { FETCH_LABEL, isCurrent, unevaluatedRules, unreadNote } from './notRun';
 import type { AxisFetch } from './notRun';
-import { incidentHref } from './investigation';
+import { incidentHref, minuteSessionHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
 import { hasNoSignal, hasPendingJobs, healthyClaimed } from '../../domains/sources/minuteView';
@@ -138,7 +138,7 @@ function RealtimeShortcut({ date }: { date: string }) {
                 return (
                   <li key={s.sessionId} className="ops-rt">
                     <Link
-                      to={`/minute?date=${view.date}&dataset=${s.dataset}`}
+                      to={minuteSessionHref(view.date, s.dataset, s.sourceGroup)}
                       className="ops-rt-link ops-rt-axes"
                     >
                       <span className="ops-rt-head">

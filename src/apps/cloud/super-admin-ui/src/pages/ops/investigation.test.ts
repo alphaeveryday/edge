@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { incidentHref, incidentOfVid, investigate, ledgerHref, REALTIME_DATASETS } from './investigation.ts';
+import { incidentHref, incidentOfVid, investigate, ledgerHref, minuteSessionHref, REALTIME_DATASETS } from './investigation.ts';
 import { evaluate } from '../../rules/evaluate.ts';
 import type { Facts, Incident, Violation } from '../../rules/types.ts';
 
@@ -185,6 +185,15 @@ test('실시간 세션 사건은 벤더를 원장 문맥에 싣는다 — 데이
    * 세션을 여는지 모른 채 이동한다 */
   assert.match(r.targets[0].label, /news_minute\/bigkinds/);
   assert.match(r.targets[0].href, /sourceGroup=bigkinds/, '세션 화면 링크도 사건의 벤더를 보존한다');
+});
+
+test('실시간 세션 지름길도 벤더 축을 보존하고 구분자를 인코딩한다', () => {
+  assert.equal(
+    minuteSessionHref('2026-08-03', 'news_minute', 'vendor/a&b'),
+    '/minute?date=2026-08-03&dataset=news_minute&sourceGroup=vendor%2Fa%26b',
+  );
+  const source = readFileSync(new URL('./IncidentsPage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /minuteSessionHref\(view\.date, s\.dataset, s\.sourceGroup\)/);
 });
 
 test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 런까지 좁히지 않는다', () => {
