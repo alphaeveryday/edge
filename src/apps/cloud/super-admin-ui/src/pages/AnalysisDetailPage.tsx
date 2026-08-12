@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { Delta, Icon, PageSkeleton, StatusBadge, formatDelta, toast } from 'ui-kit';
 import {
   ANALYSIS_CONFIDENCE_LABEL,
@@ -15,18 +15,29 @@ import {
 } from '../domains/analyses';
 import type { StatTestDetail } from '../domains/analyses';
 import { useAnalysis, useAnalysisActions } from '../domains/analyses/hooks';
+import { MOCK_ANALYSES } from '../mock/preview';
+import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 
 export function AnalysisDetailPage() {
   const { id } = useParams();
-  const { analysis: a, isPending, isError, error } = useAnalysis(id);
+  const [params] = useSearchParams();
+  /* 목 미리보기에서 온 링크는 **같은 목**을 읽는다 — 실데이터 0건인 목록에서 목 행을 눌렀는데
+   * 여기가 실 API 를 읽으면 "해당 분석 건을 찾을 수 없습니다"가 뜬다. 방금 본 행이 없다고
+   * 답하는 화면이라 목 미리보기 자체가 죽은 링크가 된다(ALPHA-738 조각 3). */
+  const preview = params.get('preview') === 'mock';
+  const live = useAnalysis(id);
+  const a = preview ? MOCK_ANALYSES.find((x) => x.id === id) : live.analysis;
+  const { isPending, isError, error } = live;
   const { invalidateAnalysis } = useAnalysisActions();
 
   const [confirmingInvalidate, setConfirmingInvalidate] = useState(false);
   const [invalidateReason, setInvalidateReason] = useState('');
 
-  if (isError) return <LoadError error={error} />;
-  if (isPending) return <PageSkeleton rows={5} />;
+  /* 조회 상태는 **실 조회에만** 물어야 한다 — 목을 그리는 중에 실 API 가 실패하면 목이
+   * 에러 화면에 가려지고, 대기 중이면 목이 스켈레톤 뒤에서 영영 안 나온다. */
+  if (!preview && isError) return <LoadError error={error} />;
+  if (!preview && isPending) return <PageSkeleton rows={5} />;
   if (!a) {
     return (
       <div className="p-10 text-center" style={{ color: 'var(--fg-3)', fontSize: 13 }}>
@@ -38,10 +49,11 @@ export function AnalysisDetailPage() {
     );
   }
 
-  return (
+  const body = (
     <div className="flex max-w-[1100px] flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2.5">
         <span className="t-h1">{a.name}</span>
+        {preview && <MockChip />}
         <span className="mono" style={{ color: 'var(--fg-3)' }}>{a.code}</span>
         <span className="tag">{a.market}</span>
         <Delta direction={a.direction} pct={a.changePct} style={{ fontSize: 16 }} />
@@ -204,7 +216,16 @@ export function AnalysisDetailPage() {
               {/* 무효화(ALPHA-440) — 게시본을 내리고 전 수신 테넌트에 INVALIDATION 이
                * 전파된다. 되돌리기 없음(설계). 게시본(PUBLISHED)에서만 활성 — 구
                * 정정/제외/복원 오버레이는 ALPHA-737 로 은퇴했다. */}
-              {a.publicationStatus === 'PUBLISHED' ? (
+              {/* 🔴 미리보기에서는 **버튼 자체를 안 만든다**. 목 분석도 `publicationStatus:
+                * 'PUBLISHED'` 라 활성 조건을 통과하는데, 누르면 목 id 로 실 원장에 되돌릴 수
+                * 없는 무효화를 시도한다 — `MockPreview` 가 "실제 운영 데이터가 아닙니다"라고
+                * 적어 둔 영역에서 유일하게 원장을 건드리는 자리가 된다. 비활성 버튼으로 두지
+                * 않는 이유: 이 카드에서 물어야 할 것은 "지금 누를 수 있나"가 아니라 **왜 없나**다. */}
+              {preview ? (
+                <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+                  미리보기에서는 관리 액션을 쓸 수 없습니다 — 목데이터는 원장을 건드리지 않습니다.
+                </span>
+              ) : a.publicationStatus === 'PUBLISHED' ? (
                 confirmingInvalidate ? (
                   <div
                     className="flex flex-col gap-2 rounded-[5px] p-2.5"
@@ -275,6 +296,8 @@ export function AnalysisDetailPage() {
       </div>
     </div>
   );
+
+  return preview ? <MockPreview>{body}</MockPreview> : body;
 }
 
 /** 코드→라벨 — 미지 코드(스키마가 라벨보다 먼저 진화한 경우)는 원문 코드 폴백. crash 금지(신뢰 경계). */

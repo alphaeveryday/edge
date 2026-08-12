@@ -19,6 +19,7 @@ import { MinutePage } from './pages/MinutePage';
 import { NewsLineagePage } from './pages/NewsLineagePage';
 import { HoldingsImpactPage } from './pages/HoldingsImpactPage';
 import { AnalysesPage } from './pages/AnalysesPage';
+import { AnalysisSymbolPage } from './pages/AnalysisSymbolPage';
 import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
 
 export function App() {
@@ -36,6 +37,9 @@ export function App() {
           <Route path="/lineage/news" element={<NewsLineagePage />} />
           <Route path="/impact/holdings" element={<HoldingsImpactPage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
+          {/* 종목 상세 — 구체 경로라 `:id` 보다 **먼저** 둔다. 뒤에 두면 `symbol` 이 분석 id 로
+              잡혀 상세 화면이 "해당 분석 건을 찾을 수 없습니다"를 띄운다. */}
+          <Route path="/analyses/symbol/:market/:code" element={<AnalysisSymbolPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
         </Route>
       </Route>
