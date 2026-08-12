@@ -616,3 +616,41 @@ def test_windowed_run_never_tags_outside_its_window(tmp_path):
 
     assert len(calls) == 1                                   # 창 안 기사 하나만
     assert storage.list_keys(_part_key("ko", "2026-06-01")) == part_before  # 안 썼다
+
+
+def test_no_mention_article_mirror_is_not_absorbed(tmp_path):
+    """⭐ 두 레인의 **대상 집합**이 갈리면 안 된다 (ALPHA-900/416).
+
+    배치는 mentions 없는 기사를 일부러 태깅 대상에서 뺀다(유니버스 무관 — 다운스트림이
+    어차피 버린다). 1분 레인에는 아직 그 게이트가 없어서(ALPHA-690) 그런 기사의 미러가
+    온다. 그대로 흡수하면 `load_assertions` 는 mentions 를 안 보므로 **배치가 일부러 뺀
+    기사**의 assertion 이 DB 에 착지한다.
+    """
+    storage = LocalStorage(tmp_path)
+    no_mention = _article("a-무관", mentions="[]")
+    _write_canonical(storage, "ko", "2026-07-01", [_article(), no_mention])
+    _write_mirror(storage, no_mention, tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    ids = [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01")]
+    assert ids == ["a1"]                    # 무관 기사는 feature 집합 밖이다
+    log = json.loads(storage.get_bytes(storage.list_keys(quality_log_prefix(tag_news.DATASET))[0]))
+    assert log["minute_mirrors_dropped_no_mention"] == 1   # 조용히 사라지지 않는다
+
+
+def test_intraday_only_article_mirror_is_kept(tmp_path):
+    """반례 — canonical 에 없는 기사(장중만 본 기사)의 미러는 **버리면 안 된다**.
+
+    mentions 를 판정할 근거가 아예 없는 것이지 '무관하다'가 아니다. 버리면 이 PR 이
+    노리는 두 번째 값(장중 판정이 `load_assertions` 로 착지)이 통째로 사라진다.
+    """
+    storage = LocalStorage(tmp_path)
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    intraday_only = _article("a-장중만")
+    _write_mirror(storage, intraday_only, tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    ids = sorted(r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01"))
+    assert ids == ["a-장중만", "a1"]

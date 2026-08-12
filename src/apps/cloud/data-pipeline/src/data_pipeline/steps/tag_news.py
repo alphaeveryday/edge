@@ -370,6 +370,7 @@ def run(
     tagged = 0          # 이번 런에서 LLM 을 부른 수
     limited = 0         # limit 에 걸려 안 부른 수
     mirrors_absorbed = 0    # part 파일에 병합하고 지운 장중 미러 조각 수 (ALPHA-900)
+    mirrors_dropped_no_mention = 0  # mentions 게이트가 배제한 기사의 미러 (ALPHA-900/416)
     status_counts: Counter = Counter()
     reason_counts: Counter = Counter()
     failures: list[dict] = []
@@ -404,6 +405,7 @@ def run(
             # 1) 선택(순차·LLM 미호출): 비-LLM 게이트로 태깅 대상만 고른다. limit 은 전 파티션에
             #    걸친 상한이라 확정 tagged + 이번에 고른 수로 판정(순차 tagged>=limit 와 동치).
             to_tag: list[tuple[object, dict, str]] = []  # (article_id, article, fingerprint)
+            no_mention_ids: set = set()   # 이 파티션에서 mentions 게이트가 배제한 기사
             for article in articles:
                 if not isinstance(article, dict):
                     # canonical 은 이 스텝이 안 쓰지만, 비객체 행이 섞이면 .get 에서 파티션이
@@ -415,6 +417,7 @@ def run(
                 if not _has_mentions(article):
                     # 유니버스 종목이 안 잡힌 기사 — 다운스트림이 버릴 기사에 LLM 을 안 태운다.
                     skipped_no_mention += 1
+                    no_mention_ids.add(article.get("article_id"))
                     continue
                 article_id = article.get("article_id")
                 fingerprint = _input_fingerprint(article)
@@ -452,7 +455,15 @@ def run(
                 continue
             try:
                 prefix = feature_news_assertions_partition(language, published_date)
-                rows = [merged[a] for a in sorted(merged, key=lambda x: (x is None, x))]
+                # ⚠️ **mentions 게이트가 배제한 기사는 미러가 있어도 안 싣는다**(ALPHA-900).
+                # 1분 레인에는 아직 그 게이트가 없어서(ALPHA-690) 유니버스 무관 기사의 미러가
+                # 온다. 그대로 흡수하면 `load_assertions` 는 mentions 를 안 보므로, **배치가
+                # 일부러 feature 집합 밖에 둔 기사**의 assertion 이 DB 에 착지한다 — 두 레인의
+                # 대상 집합이 갈린다(Rule 7). 판정 근거는 job 축 artifact 에 영구히 남으므로
+                # 여기서 빼도 증거가 사라지지는 않는다.
+                rows = [merged[a] for a in sorted(merged, key=lambda x: (x is None, x))
+                        if a not in no_mention_ids]
+                mirrors_dropped_no_mention += len(merged) - len(rows)
                 storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(rows))
                 parts_written += 1
                 rows_written += len(rows)
@@ -488,6 +499,10 @@ def run(
         # 안 떨어진 것이다 — 그 경우 `articles_skipped_already_tagged` 도 안 올라 이중
         # 과금이 그대로다. 둘을 나란히 봐야 교차 dedup 이 실제로 걸렸는지 판별된다.
         "minute_mirrors_absorbed": mirrors_absorbed,
+        # mentions 게이트가 배제한 기사라 part 에 안 실은 미러 행 수(ALPHA-900/416).
+        # 1분 레인에 같은 게이트가 서면(ALPHA-690) 이 값이 0 으로 수렴한다 — 그때까지는
+        # 두 레인의 대상 집합 차이를 이 숫자가 드러낸다.
+        "minute_mirrors_dropped_no_mention": mirrors_dropped_no_mention,
         "status_counts": dict(status_counts), "reason_counts": dict(reason_counts),
         "partitions_written": parts_written, "rows_written": rows_written,
         "failures": failures, "exit_code": exit_code,
