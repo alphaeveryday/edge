@@ -422,6 +422,39 @@ variable "investor_intraday_state_machine_timeout_seconds" {
   default     = 1500
 }
 
+# ── 장전 유니버스 레인 (ALPHA-963) ────────────────────────────────────
+variable "premarket_schedule_expression" {
+  # 07:00 인 이유는 **뒤에서 정해진다** — `build-minute-universe` 가 거래일 07:30 이후 교체를
+  # 거부하고(REBUILD_CUTOFF_KST, ALPHA-953), 세션 계획은 07:45 다. 즉 이 체인은 07:30 까지
+  # 끝나야 하고 30분이 그 예산이다(실측 근거는 아래 타임아웃 변수).
+  # ⚠️ 이 값을 늦추면 예산이 그만큼 줄고, 07:30 을 넘기면 매일 스텝이 거부해 **레인이 조용히
+  # 무의미해진다**(수집·정제는 돌고 유니버스만 안 바뀐다). 늦출 거면 마감 상수부터 봐라.
+  description = "장전 유니버스 레인 스케줄(KST). 07:30 교체 마감 앞에 체인이 끝나야 한다."
+  type        = string
+  default     = "cron(0 7 ? * MON-FRI *)"
+}
+
+variable "premarket_schedule_state" {
+  # 신설 레인이라 겹침 창이 없다(장중수급 ALPHA-769 와 같은 근거) — 기본 ENABLED.
+  # ⚠️ 끄면 신규 편입 종목이 다시 하루씩 늦는다(ALPHA-936 의 그 결손). 끌 일이 생기면
+  # 그 하루가 대가라는 것을 알고 꺼라.
+  description = "장전 유니버스 SFN 스케줄 상태. 신설이라 겹침 창이 없어 기본 ENABLED."
+  type        = string
+  default     = "ENABLED"
+}
+
+variable "premarket_state_machine_timeout_seconds" {
+  # **교체 마감(07:30)까지가 상한이다** — 07:00 시작이면 1800s. 그보다 길게 두면 SFN 은
+  # 살아 있는데 마지막 스텝이 마감에 걸려 거부하는, 실패 사유가 두 겹인 상태가 된다.
+  # 체인 실측 근거: KRX holdings 수집은 `krx_etf_deadline_sec` 로 앱이 먼저 끊고(느린 게
+  # 그 엔드포인트의 성질이다, ALPHA-368), 정제·유니버스 재빌드는 각각 canonical 한 벌
+  # 읽기라 분 단위다. ECS 3연속 기동(최대 122초/회, ALPHA-688)이 오히려 큰 몫이다.
+  # 1500s = 마감까지 300s 를 남긴다 — 타임아웃이 마감보다 **먼저** 울려야 사유가 하나다.
+  description = "장전 유니버스 SFN 실행 타임아웃. 07:30 교체 마감보다 먼저 울리도록 마감 앞에 둔다."
+  type        = number
+  default     = 1500
+}
+
 # 운영 원장 Reconciler(ALPHA-530) 주기 실행. daily(schedule_state)와 별개로 켠다.
 variable "reconcile_schedule_state" {
   description = "Reconciler 스케줄. 검증 동안 DISABLED, 원장 컷오버 시 ENABLED."
