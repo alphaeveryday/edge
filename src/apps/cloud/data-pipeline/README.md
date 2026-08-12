@@ -1140,6 +1140,9 @@ settings.targets.keywords            # ["금리", ...]
   미러가 오고, `load-assertions` 는 mentions 를 안 본다. 그래서 `tag-news` 가 흡수 시점에
   거르고(`minute_mirrors_dropped_no_mention`), 소비는 흡수된 part 파일만 본다. 지연은 없다 —
   SFN 이 `TagNews` 뒤에 `LoadAssertions` 를 돌리므로 같은 런에서 흡수분이 실린다.
+  ⚠️ 그래서 **흡수는 canonical 이 없는 날짜에도 닿아야 한다** — 기사 정본은 PG 이고 canonical
+  은 다음 `normalize-news` 에 오므로 장중만 본 기사의 발행일이 아직 canonical 에 없을 수 있다.
+  `tag-news` 는 canonical 날짜에 **미러가 남은 날짜(같은 창으로 거른)**를 합쳐 돈다.
   ⚠️ canonical 에 **아예 없는** 기사(장중만 본 기사)의 미러는 거르지 않는다 — mentions 를 판정할
   근거가 없는 것이지 무관한 게 아니다. 미러 키에 입력 지문이 들어가는
   것은 정정 때문이다 — `article_id` 만 쓰면 배치가 읽고 지우는 사이의 정정 판정이 같은 키를

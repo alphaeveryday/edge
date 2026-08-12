@@ -654,3 +654,28 @@ def test_intraday_only_article_mirror_is_kept(tmp_path):
 
     ids = sorted(r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01"))
     assert ids == ["a-장중만", "a1"]
+
+
+def test_windowed_run_absorbs_in_window_mirror_without_canonical(tmp_path):
+    """⭐ canonical 이 아직 없는 날짜의 미러도 **창 안이면** 흡수한다 (ALPHA-900).
+
+    기사 정본은 PG 이고 canonical 은 다음 `normalize_news` 에 온다 — 장중만 본 기사의
+    발행일이 아직 canonical 에 없을 수 있다. `_partition_dates` 는 canonical 만 열거하니
+    그런 날짜는 루프에 안 들어오고, 그러면 미러가 영영 흡수되지 않는다. 소비자는 흡수 전
+    미러를 안 읽으므로(ALPHA-900) **그 장중 판정이 DB 에 영영 안 실린다** — 이 티켓이
+    노리는 값 하나가 통째로 사라진다.
+
+    ⚠️ 운영 SFN 은 **항상** `--window-days` 를 준다. 창 있는 런에서 미러 날짜를 통째로
+    빼면 이 경로가 스케줄 경로에서 상시로 죽는다.
+    """
+    storage = LocalStorage(tmp_path)
+    # 창 안이지만 canonical 파티션이 없는 날짜 — 장중만 본 기사다
+    intraday_only = _article("a-장중만", published_at="2026-07-02T09:00:00+09:00")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    mirror_key = _write_mirror(storage, intraday_only, tagged_at="2026-07-02T10:00:00+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]),
+                 from_date="2026-07-01", to_date="2026-07-03")
+
+    assert storage.list_keys(mirror_key) == []
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-02")] == ["a-장중만"]
