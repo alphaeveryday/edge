@@ -166,14 +166,21 @@ export function AnalysisSymbolPage() {
             </>
           )}
 
-          {/* 최신 시도가 유효 결과가 아니면 그 사실을 따로 말한다(설명을 덮지 않는다) */}
+          {/* 최신 시도가 유효 결과가 아니면 그 사실을 따로 말한다(설명을 덮지 않는다).
+            *
+            * 🔴 **꼬리 문장이 `latestValid` 유무에 매여 있다.** `attemptPending` 은 "최신 시도가
+            * 유효하지 않다"만 뜻하고 이전 유효 설명의 존재를 함의하지 않는다 — 창 안에 실패
+            * 시도만 남은 종목이면 위에서 "유효한 설명이 없습니다"라고 해 놓고 여기서 "위 설명은
+            * 그 이전 기준의 유효 결과입니다"라고 말해 **한 카드가 자기 자신과 모순**된다. */}
           {group.attemptPending && (
             <p className="t-xs m-0" style={{ color: 'var(--fg-2)', marginTop: 10 }}>
               최근 생성 시도 <b>{latestAttempt.basisTime}</b>{' '}
               <StatusBadge tone={ANALYSIS_STATUS_TONE[latestAttempt.status]}>
                 {ANALYSIS_STATUS_LABEL[latestAttempt.status]}
               </StatusBadge>{' '}
-              — 위 설명은 그 이전 기준의 유효 결과입니다.
+              {latestValid
+                ? '— 위 설명은 그 이전 기준의 유효 결과입니다.'
+                : '— 이 시도에는 읽을 결과가 없고, 창 안에 대신 보여 줄 이전 설명도 없습니다.'}
             </p>
           )}
         </div>
