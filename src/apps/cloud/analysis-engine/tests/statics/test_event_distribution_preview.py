@@ -548,3 +548,69 @@ def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(mon
     assert sum("TOOL_NOT_AVAILABLE" in u.split("[ObjectSet 결과", 1)[-1]
                for u in seen_users[1:]) >= 1
     assert all("TOOL_NOT_AVAILABLE" in u for u in seen_users[2:])
+
+
+def test_duplicate_tool_calls_are_refused_without_consuming_budget(monkeypatch):
+    """직전과 동일한 도구 호출은 실행·예산 소모 없이 교정된다(ALPHA-970).
+
+    WHY: objectset 가드 후에도 모델이 `hypothesis.list_options` 를 6연발해 예산을
+    소진하고 preview 직전에 멈추는 런이 실측됐다(2026-08-12 verify970). 도구가
+    결정론이라 반복은 순수 낭비다 - 예산을 태우면 preview 에 쓸 라운드가 사라진다.
+    """
+    event_sets = SimpleNamespace(as_of="2026-08-07T12:05:00", call=lambda *_: {})
+    runtime = HypothesisPreviewRuntime(
+        object(), event_sets, day="2026-08-07", candidates=(
+            EventCandidate("anchor", "thread_1", "A", "공급계약 해지",
+                           "2026-08-07T10:31:00"),
+        ), current_event_returns={"A": -0.036},
+    )
+
+    def preview(*_args, **kwargs):
+        distribution = EventDistributionPreview(
+            "anchor", "A", "CONTRACT.CANCEL", 41, -0.031, -0.036, 0.42)
+        return EventDistributionPreviewResult(
+            "READY", "READY", distribution, 1, 41, 30)
+
+    monkeypatch.setattr(
+        "edge_analysis.statics.hypothesis_preview.event_distribution_preview", preview)
+    candidate_id = next(iter(runtime._candidate_by_id))
+    runtime_calls: list[str] = []
+    inner_call = runtime.call
+
+    def spying_call(name, arguments):
+        runtime_calls.append(name)
+        return inner_call(name, arguments)
+
+    replies = iter((
+        {"tool": "hypothesis.list_options", "arguments": {}},
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 중복 - 반려
+        {"tool": "hypothesis.list_options", "arguments": {}},   # 중복 - 반려
+        {"tool": "hypothesis.preview", "arguments": {
+            "candidate_id": candidate_id,
+            "outcome_id": "outcome:market_adjusted_return_day_0",
+        }},
+        {"hypotheses": [{"preview_handle": None, "intent": "계약 해지의 과거 반응 확인."}]},
+    ))
+    seen_users: list[str] = []
+
+    def ask(system, user):
+        seen_users.append(user)
+        reply = next(replies)
+        if "hypotheses" in reply:
+            reply["hypotheses"][0]["preview_handle"] = next(iter(runtime._previews))
+        return reply
+
+    valid, rejected = propose(
+        ask, facts="f", event_types=["CONTRACT.CANCEL"],
+        object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+                      "resolve_preview": runtime.resolve,
+                      "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
+    )
+
+    assert rejected == []
+    assert len(valid) == 1
+    # 중복 호출은 런타임까지 내려가지 않는다 - 실행이 한 번뿐이다.
+    assert runtime_calls == ["hypothesis.list_options", "hypothesis.preview"]
+    # 반려 사유가 되물음에 실려 다음 단계로 유도한다. 예산 표기는 실행분만 센다.
+    assert sum("[도구 반려]" in u for u in seen_users) >= 1
+    assert not any("[ObjectSet 결과 3/" in u for u in seen_users)

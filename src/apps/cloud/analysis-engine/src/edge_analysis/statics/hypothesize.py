@@ -34,6 +34,8 @@ MAX_SQL_ROUNDS = 4                  # propose 한 번당 sql 왕복 상한 (ALPH
 SQL_TIMEBOX_S = 120.0               # sql 탐색 전체 벽시계 상한 — 상한 초과는 정직 종료
 MAX_OBJECT_ROUNDS = 6               # 무한 루프 금지. 6 = list_options 1 + preview 3(사건
                                     # 분포 상한, ALPHA-938) + 재조회·거부 재시도 여유 2
+MAX_DUPLICATE_REFUSALS = 2          # 직전과 동일한 도구 호출의 무예산 교정 상한(ALPHA-970)
+                                    # - 초과하면 제출 단계로 넘긴다(무한 왕복 방지)
 # 최종 제출 상한 - preview 도구 상한(hypothesis_preview.MAX_DISTRIBUTION_PREVIEWS)과
 # 단일 출처다: 두 게이트(도구 실행·최종 제출)가 갈리면 프롬프트 계약("최대 3개")이
 # 한쪽에서만 강제된다. 초과분은 사유와 함께 기각(수용분은 유지).
@@ -434,17 +436,36 @@ def _object_loop(ask: Ask, system: str, user: str, call: Callable[[str, dict], d
     used = rejects = 0
     tool_summaries: list[dict[str, object]] = []
     previewable_options = False
+    last_call: tuple[str, str] | None = None
+    duplicate_refusals = 0
     out = ask_checked(ask, system, user)
     while isinstance(out, dict):
         name = str(out.get("tool") or "").strip()
         if not name:
             break
+        arguments = object_field(out, "arguments")
+        # 직전과 동일한 호출은 실행·예산 소모 없이 교정한다(ALPHA-970 실측 2건:
+        # objectset.create 6연발, 가드 후엔 list_options 6연발 - 도구가 결정론이라
+        # 반복은 순수 낭비인데 예산을 태우면 preview 에 쓸 라운드가 사라진다).
+        # 교정 상한을 두 번만 주고 그 뒤엔 제출 단계로 넘긴다(무한 왕복 방지).
+        key = (name, json.dumps(arguments, ensure_ascii=False, sort_keys=True))
+        if key == last_call:
+            duplicate_refusals += 1
+            if duplicate_refusals > MAX_DUPLICATE_REFUSALS:
+                user += _OBJECT_DONE
+                out = ask_checked(ask, system, user)
+                break
+            user += (f"\n\n[도구 반려] {name}: 직전 호출과 도구·인자가 동일하다 - "
+                     "결과는 위에 이미 있고 다시 계산해도 같다. 다음 단계로 "
+                     "진행하라(예: hypothesis.preview 호출 또는 hypotheses 제출).")
+            out = ask_checked(ask, system, user)
+            continue
+        last_call = key
         if used >= budget:
             user += _OBJECT_DONE
             out = ask_checked(ask, system, user)
             break
         used += 1
-        arguments = object_field(out, "arguments")
         res = call(name, arguments)
         if name == "hypothesis.list_options":
             generic_options = (res.get("triggers") and res.get("outcomes")
