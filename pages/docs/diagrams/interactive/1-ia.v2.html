@@ -202,7 +202,7 @@ vp.addEventListener('wheel',ev=>{
   vp.style.cursor='grab';
   vp.addEventListener('mousedown',ev=>{
     if(ev.button!==0) return;
-    if(ev.target.closest && ev.target.closest('.node,#hud')) return;
+    if(ev.target.closest && ev.target.closest('#hud')) return; // 상자 위에서도 팬 시작 가능(끌면 팬, 안 끌면 클릭)
     panning=true; moved=false; sx=ev.clientX; sy=ev.clientY; sl=vp.scrollLeft; st=vp.scrollTop;
     vp.style.cursor='grabbing'; ev.preventDefault();
   });
