@@ -24,7 +24,8 @@ locals {
   # fail-loud 다.
   # 생산자는 `build-minute-universe` 스텝이고(ALPHA-953) **이 값을 그대로 `--universe`
   # 로 받는다** — 그래서 이 변수를 옮겨도 생산자와 소비자가 갈리지 않는다. ⚠️ 다만 그
-  # 스텝의 스케줄 배선은 아직 없다(후속) — 지금은 수동 실행이다.
+  # 그 스텝은 장전 레인(ALPHA-963, premarket_pipeline.tf)이 평일 07:00 KST 에 부른다 —
+  # 세션 계획(07:45) 전이자 스텝 자신의 교체 마감(07:30) 앞이다.
   minute_universe_uri = (
     var.minute_universe_uri != "" ? var.minute_universe_uri
     : "s3://${var.lake_bucket_name}/config/minute/universe.json"
