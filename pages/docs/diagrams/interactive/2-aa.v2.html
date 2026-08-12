@@ -17,7 +17,7 @@ body{background:var(--bg);font-family:Pretendard,-apple-system,'Apple SD Gothic 
 .box.frame{align-items:flex-start;justify-content:flex-start;text-align:left;padding:8px 12px;border-radius:10px}
 .box.swim{align-items:flex-start;justify-content:center;padding:0;overflow:hidden}
 .box.swim .swim-title{width:100%;padding:5px 6px;font-weight:700;text-align:center}
-.box.plain{border:none;background:transparent!important;font-weight:600;overflow:visible}
+.box.plain{border:none;background:transparent!important;font-weight:600;overflow:visible;padding:0}
 .icon-cap{position:absolute;top:100%;left:50%;transform:translateX(-50%);white-space:pre;text-align:center;
   font-size:12px;font-weight:600;padding-top:4px;color:var(--fg)}
 .box:not(.node){pointer-events:none}
@@ -65,7 +65,7 @@ svg.appendChild(defs);
 const CONN=new Set(DATA.conn), byId={};
 DATA.nodes.forEach(n=>{
   const el=document.createElement('div');
-  const isFrame=!n.swim && n.valign==='top';
+  const isFrame=!n.swim && !n.isimg && n.valign==='top';
   el.className='box'+(n.swim?' swim':'')+(isFrame?' frame':'')+(n.isimg?' plain':'');
   el.id=n.i;
   el.style.cssText=`left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px;`+
@@ -225,6 +225,11 @@ function setPeek(id){
   mark(id,'pk-on','pk-sel');
 }
 NODES.forEach(n=>{
+  if(!n.textContent.trim() && !n.getAttribute('aria-label')){
+    const NAMED={'FsdlY2k_L9ahukHfzdEe-34':'금융사 통제 환경 데이터베이스','SBUGKqe5XOb1rZlI4G-q-4':'EDGE 환경 데이터베이스'};
+    const kid=DATA.nodes.find(m=>OWNER[m.i]===n.id && m.t);
+    n.setAttribute('aria-label', NAMED[n.id]||(kid?kid.t.replace(/\n/g,' '):'다이어그램 노드'));
+  }
   n.addEventListener('mouseenter',()=>setPeek(n.id));
   n.addEventListener('mouseleave',()=>setPeek(null));
   n.addEventListener('click',ev=>{ev.stopPropagation();setFocus(SEL===n.id?null:n.id)});
