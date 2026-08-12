@@ -839,18 +839,17 @@ def test_no_concept_is_minted_for_an_assertion_that_cannot_be_loaded(tmp_path, m
 def test_stale_judgement_in_the_same_partition_is_not_loaded(tmp_path, monkeypatch):
     """정정된 기사의 **옛 판정**이 DB 에 남지 않는다 (ALPHA-900).
 
-    장중 미러가 들어오면서 한 파티션에 같은 기사의 판정이 둘 공존하는 창이 생겼다 —
-    배치가 옛 본문으로 쓴 part 행과, 장중이 정정 본문으로 남긴 미러 행이다. 사건
-    자연키가 갈리면 둘 다 INSERT 되고, `ON CONFLICT DO NOTHING` 이라 나중에 덮이지도
-    않아 **존재한 적 없는 사건이 영구히 남는다**. 기사마다 최신 판정만 싣는다.
+    한 파티션에 같은 기사의 판정이 둘 있으면(part 파일이 여럿인 경우) 사건 자연키가 갈려
+    둘 다 INSERT 되고, `ON CONFLICT DO NOTHING` 이라 나중에 덮이지도 않아 **존재한 적 없는
+    사건이 영구히 남는다**. `tag_news` 의 압축과 같은 규칙으로 기사마다 최신만 싣는다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row(
         "a1", [_assertion(event_type_code="SUPPLY_CONTRACT")],
         input_fingerprint="fp-old", tagged_at="2026-07-15T02:00:00+00:00")])
-    # 장중이 정정 본문으로 내린 판정 — 다른 사건이다(계약 수주 → 해지)
+    # 더 최신 판정이 같은 파티션의 다른 part 파일에 있다(계약 수주 → 해지)
     storage.put_bytes(
-        f"{feature_news_assertions_minute_prefix('ko', '2026-07-15')}a1.fp-new.parquet",
+        f"{feature_news_assertions_partition('ko', '2026-07-15')}/part-00001.parquet",
         _feature_parquet([_feature_row(
             "a1", [_assertion(event_type_code="SUPPLY_CONTRACT", predicate_code="CANCEL")],
             input_fingerprint="fp-new", tagged_at="2026-07-15T05:00:00+00:00")]))
@@ -862,6 +861,28 @@ def test_stale_judgement_in_the_same_partition_is_not_loaded(tmp_path, monkeypat
     # 옛 판정(WIN)은 안 실린다 — 실리면 취소된 계약이 DB 에 영구히 남는다
     assert [row[3] for row in _inserts(conn, "document_assertion")] == ["CANCEL"]
     assert _log(storage)["rows_superseded"] == 1
+
+
+def test_unabsorbed_minute_mirror_is_not_loaded(tmp_path, monkeypatch):
+    """⭐ 흡수 전 장중 미러는 **아직 확정이 아니다** (ALPHA-900).
+
+    SFN 은 TagNews 뒤에 LoadAssertions 를 돌리는데 그 사이에도 1분 Consumer 는 미러를
+    쓴다. 여기서 바로 읽으면 `tag_news` 가 거는 게이트(canonical mentions 판정 — 배치가
+    일부러 feature 집합 밖에 두는 기사)를 **한 번도 안 거친 판정**이 DB 로 간다.
+    건너뛰어도 지연이 없다 — 같은 런의 TagNews 가 흡수한 분은 이미 part 파일에 있다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion()])])
+    storage.put_bytes(
+        f"{feature_news_assertions_minute_prefix('ko', '2026-07-15')}a2.fp-x.parquet",
+        _feature_parquet([_feature_row("a2", [_assertion(event_type_code="LAYOFF")])]))
+    conn = _FakeConn(documents=[("a1", "doc_D1"), ("a2", "doc_D2")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    assert [row[1] for row in _inserts(conn, "document_assertion")] == ["doc_D1"]
+    assert _log(storage)["minute_mirrors_unabsorbed"] == 1   # 유실이 아니라 대기다
 
 
 def test_rows_without_article_id_are_not_folded_into_one(tmp_path, monkeypatch):

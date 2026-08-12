@@ -64,7 +64,12 @@ from edge_ontology import load_authority_registry, load_relations
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, plan_resolution
-from ..lake import Storage, feature_news_assertions_partition, quality_log_key
+from ..lake import (
+    Storage,
+    feature_news_assertions_minute_prefix,
+    feature_news_assertions_partition,
+    quality_log_key,
+)
 from .tag_news import _merge_by_article
 
 logger = logging.getLogger(__name__)
@@ -120,6 +125,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     rows_read = rows_not_ok = rows_no_assertion = rows_malformed = 0
     rows_superseded = 0   # 같은 기사의 더 낡은 판정이라 안 실은 행 (ALPHA-900)
+    mirrors_unabsorbed = 0  # 아직 흡수 안 된 장중 미러 조각이라 안 읽은 객체 (ALPHA-900)
     folded = missing_document = skipped_incomplete = skipped_partial = 0
     skipped_no_resolved_argument = 0
     created = already = arguments_inserted = 0
@@ -149,9 +155,22 @@ def run(
                      if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
             for date in dates:
                 prefix = feature_news_assertions_partition(language, date)
+                mirror_marker = feature_news_assertions_minute_prefix(language, date)
                 partition_rows: list[dict] = []
                 for key in storage.list_keys(prefix + "/"):
                     if not key.endswith(".parquet"):
+                        continue
+                    if key.startswith(mirror_marker):
+                        # ⚠️ **흡수 전 장중 미러는 아직 확정이 아니다**(ALPHA-900). 이 파티션의
+                        # 정본은 `tag_news` 가 되쓴 part 파일이고, 미러는 그 스텝이 읽어
+                        # 병합하기 전까지의 임시 조각이다. 여기서 바로 읽으면 `tag_news` 가
+                        # 거는 게이트(canonical mentions 판정 — 배치가 일부러 feature 집합
+                        # 밖에 두는 기사)를 **통째로 우회한다**: SFN 은 TagNews 뒤에
+                        # LoadAssertions 를 돌리는데, 그 사이에 도착한 미러는 게이트를 한 번도
+                        # 안 거친 채 DB 로 간다.
+                        # 건너뛰어도 지연이 없다 — 같은 SFN 런의 TagNews 가 흡수한 미러는 이미
+                        # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
+                        mirrors_unabsorbed += 1
                         continue
                     partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
                 # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치가 쓴 part
@@ -418,6 +437,9 @@ def run(
         # 같은 기사의 낡은 판정이라 안 실은 행 — 유실이 아니라 **대체**다(ALPHA-900).
         # 0 이 아니면 배치 part 파일과 장중 미러가 겹친 창을 지났다는 뜻이다.
         "rows_superseded": rows_superseded,
+        # 아직 흡수 안 돼 이번 런이 안 읽은 미러 조각 수(ALPHA-900). 유실이 아니라 **대기**다
+        # — 다음 tag_news 가 게이트를 거쳐 part 파일로 흡수하면 그때 실린다.
+        "minute_mirrors_unabsorbed": mirrors_unabsorbed,
         "rows_no_assertion": rows_no_assertion, "rows_malformed": rows_malformed,
         "assertions_considered": len(candidates), "assertions_folded": folded,
         "missing_document": missing_document, "skipped_incomplete": skipped_incomplete,

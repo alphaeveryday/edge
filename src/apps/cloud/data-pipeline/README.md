@@ -898,9 +898,11 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   파티션 프리픽스를 만들어 그 날짜만 LIST 해야 한다
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
-  한 파티션에 같은 기사의 판정이 둘 있으면(배치 part 파일 + 장중 미러) **`tagged_at` 최신만
-  싣는다**(ALPHA-900, `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건
-  자연키가 갈린 옛 판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다.
+  한 파티션에 같은 기사의 판정이 둘 있으면 **`tagged_at` 최신만 싣는다**(ALPHA-900,
+  `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건 자연키가 갈린 옛
+  판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다. **흡수 전 장중 미러는
+  읽지 않는다**(`minute_mirrors_unabsorbed`) — 그 조각은 아직 `tag-news` 의 mentions 게이트를
+  안 거쳤다.
   역할별 엔티티 해소(ALPHA-831 — 명부·채번 축 포함)와 해소율은 quality log 로 남고,
   채번 경로는 entity·concept 마스터 행도 만든다
 - `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
@@ -1131,8 +1133,15 @@ settings.targets.keywords            # ["금리", ...]
   기사당 미러를 남긴다. 그래야 두 레인의 LLM 장부가 서로를 본다 — 그 전에는 배치가 이 날짜축만,
   장중이 job 축(`feature/news_extraction/job=…`)만 보고 있어 **같은 기사를 반드시 두 번 태웠다**.
   미러 구역은 **다음 배치 런까지의 임시 자리**다: `tag-news` 가 읽어 part 파일에 병합한 뒤
-  지우고(`minute_mirrors_absorbed` 로 계측), 소비자(`load-assertions`)는 한 파티션에 같은 기사의
-  판정이 둘 있으면 `tagged_at` 최신만 싣는다(`rows_superseded`). 미러 키에 입력 지문이 들어가는
+  지우고(`minute_mirrors_absorbed` 로 계측), **소비자(`load-assertions`)는 흡수 전 미러를 아예
+  안 읽는다**(`minute_mirrors_unabsorbed` — 유실이 아니라 대기다). 흡수 전 조각을 바로 읽으면
+  `tag-news` 가 거는 mentions 게이트를 통째로 우회하기 때문이다: 배치는 유니버스 무관 기사를
+  일부러 태깅에서 빼는데(ALPHA-416) 1분 레인에는 아직 그 게이트가 없어(ALPHA-690) 그런 기사의
+  미러가 오고, `load-assertions` 는 mentions 를 안 본다. 그래서 `tag-news` 가 흡수 시점에
+  거르고(`minute_mirrors_dropped_no_mention`), 소비는 흡수된 part 파일만 본다. 지연은 없다 —
+  SFN 이 `TagNews` 뒤에 `LoadAssertions` 를 돌리므로 같은 런에서 흡수분이 실린다.
+  ⚠️ canonical 에 **아예 없는** 기사(장중만 본 기사)의 미러는 거르지 않는다 — mentions 를 판정할
+  근거가 없는 것이지 무관한 게 아니다. 미러 키에 입력 지문이 들어가는
   것은 정정 때문이다 — `article_id` 만 쓰면 배치가 읽고 지우는 사이의 정정 판정이 같은 키를
   덮은 뒤 곧바로 삭제된다. 창(`--window-days`) 밖 미러는 **창 미지정 풀스캔 런**이 정리한다. **canonical 이 아니라 feature
   인 이유**: 여기 값은 벤더 원본의 결정론적 정규화가 아니라 **LLM 추론 결과**라 재실행이 값을 바꿀
