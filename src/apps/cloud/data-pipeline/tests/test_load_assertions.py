@@ -11,7 +11,11 @@ import json
 
 from data_pipeline.config import DbConfig
 from data_pipeline.entity_resolution import ResolutionIndex
-from data_pipeline.lake import LocalStorage, feature_news_assertions_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    feature_news_assertions_minute_prefix,
+    feature_news_assertions_partition,
+)
 from data_pipeline.steps import load_assertions
 
 _COLUMNS = ("article_id", "published_at", "title", "input_fingerprint", "doc_class",
@@ -830,3 +834,58 @@ def test_no_concept_is_minted_for_an_assertion_that_cannot_be_loaded(tmp_path, m
     assert _inserts(conn, "concept") == []
     log = _log(storage)
     assert log["missing_document"] == 1 and log["concepts_minted"] == 0
+
+
+def test_stale_judgement_in_the_same_partition_is_not_loaded(tmp_path, monkeypatch):
+    """정정된 기사의 **옛 판정**이 DB 에 남지 않는다 (ALPHA-900).
+
+    장중 미러가 들어오면서 한 파티션에 같은 기사의 판정이 둘 공존하는 창이 생겼다 —
+    배치가 옛 본문으로 쓴 part 행과, 장중이 정정 본문으로 남긴 미러 행이다. 사건
+    자연키가 갈리면 둘 다 INSERT 되고, `ON CONFLICT DO NOTHING` 이라 나중에 덮이지도
+    않아 **존재한 적 없는 사건이 영구히 남는다**. 기사마다 최신 판정만 싣는다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row(
+        "a1", [_assertion(event_type_code="SUPPLY_CONTRACT")],
+        input_fingerprint="fp-old", tagged_at="2026-07-15T02:00:00+00:00")])
+    # 장중이 정정 본문으로 내린 판정 — 다른 사건이다(계약 수주 → 해지)
+    storage.put_bytes(
+        f"{feature_news_assertions_minute_prefix('ko', '2026-07-15')}a1.fp-new.parquet",
+        _feature_parquet([_feature_row(
+            "a1", [_assertion(event_type_code="SUPPLY_CONTRACT", predicate_code="CANCEL")],
+            input_fingerprint="fp-new", tagged_at="2026-07-15T05:00:00+00:00")]))
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    # 옛 판정(WIN)은 안 실린다 — 실리면 취소된 계약이 DB 에 영구히 남는다
+    assert [row[3] for row in _inserts(conn, "document_assertion")] == ["CANCEL"]
+    assert _log(storage)["rows_superseded"] == 1
+
+
+def test_rows_without_article_id_are_not_folded_into_one(tmp_path, monkeypatch):
+    """article_id 결손 행을 기사 키로 접으면 여러 결손이 하나로 뭉쳐 `rows_no_assertion`
+    이 실제보다 작게 보고된다 — 결손 규모가 조용히 줄어든다(Rule 12)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [
+        _feature_row("", [_assertion()]), _feature_row("", [_assertion()])])
+    conn = _FakeConn(documents=[])
+    _setup(monkeypatch, conn)
+
+    load_assertions.run(storage, "R1", db=_db())
+
+    log = _log(storage)
+    assert (log["rows_read"], log["rows_no_assertion"]) == (2, 2)
+    assert log["rows_superseded"] == 0
+
+
+def _feature_parquet(rows: list[dict]) -> bytes:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schema = pa.schema([(c, pa.string()) for c in _COLUMNS])
+    table = pa.Table.from_pylist([{c: r.get(c) for c in _COLUMNS} for r in rows], schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    return buf.getvalue()

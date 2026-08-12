@@ -662,16 +662,26 @@ def feature_news_assertions_minute_prefix(language: str, published_date: str) ->
 
 
 def feature_news_assertions_minute_key(
-    language: str, published_date: str, article_id: str
+    language: str, published_date: str, article_id: str, input_fingerprint: str
 ) -> str:
-    """장중 미러 1건의 키 — 기사 하나가 객체 하나다 (ALPHA-900).
+    """장중 미러 1건의 키 — `(기사, 그 기사의 어느 텍스트)` 가 객체 하나다 (ALPHA-900).
 
-    키가 `article_id` 라 같은 기사를 다시 추출하면 **자기 자신을 덮는다**(자가 dedup).
-    job 축 결과 키(`news_extraction_result_key`)와 달리 attempt·generation 이 없는 것은
-    의도다 — 저기는 "어느 시도가 무엇을 냈나"의 기록이고, 여기는 "이 기사의 현재 판정"
-    하나다. 시도별 근거가 필요하면 job 축을 봐라(원장 `result_checksum` 이 색인이다).
+    **같은 텍스트의 재추출은 자기 자신을 덮는다**(자가 dedup) — 재시도·redrive 는 본문이
+    같아 지문도 같으므로 조각이 안 쌓인다. job 축 결과 키(`news_extraction_result_key`)와
+    달리 attempt·generation 이 없는 것은 그래서다: 저기는 "어느 시도가 무엇을 냈나"의
+    기록이고, 여기는 "이 텍스트에 대한 판정" 하나다.
+
+    ⚠️ **지문이 키에 있는 이유는 배치의 압축과 겹치는 창 때문이다.** `article_id` 만
+    키로 쓰면, 배치가 미러를 읽어 part 파일에 병합하고 **지우는 사이에** 장중이 같은
+    기사의 정정 판정을 같은 키로 덮어쓸 수 있다 — 배치는 자기가 읽은 것을 지운다고
+    믿지만 실제로 지워지는 것은 **아직 아무도 안 읽은 최신 판정**이다. 지문이 갈리면
+    키도 갈려 그 판정이 살아남고, 병합 승자 규칙(`tag_news._merge_by_article`)이
+    다음 런에 최신을 고른다.
     """
-    return f"{feature_news_assertions_minute_prefix(language, published_date)}{article_id}.parquet"
+    return (
+        f"{feature_news_assertions_minute_prefix(language, published_date)}"
+        f"{article_id}.{input_fingerprint}.parquet"
+    )
 
 
 def news_extraction_result_key(
@@ -1134,12 +1144,24 @@ class S3Storage:
     def delete_keys(self, keys: list[str]) -> None:  # pragma: no cover - 통합
         # delete_objects 는 한 번에 1,000 키가 상한이라 끊어 보낸다. S3 는 없는 키의
         # 삭제도 성공으로 답하므로 로컬 백엔드의 missing_ok 와 계약이 같다.
+        #
+        # ⚠️ **부분 실패는 HTTP 200 으로 온다** — 권한·객체 잠금으로 일부만 못 지워도
+        # 예외가 아니라 응답 `Errors` 에 담긴다. 삼키면 호출부(`tag_news`)가 전건
+        # 흡수·삭제로 계수하고 런도 성공으로 끝나는데 조각은 남는다(Rule 12). 올리면
+        # 그 파티션이 exit 비0으로 드러나고, 되쓰기는 이미 끝났으므로 다음 런이
+        # 같은 조각을 다시 흡수한다(멱등).
         for start in range(0, len(keys), 1000):
             chunk = keys[start:start + 1000]
-            self.client.delete_objects(
+            response = self.client.delete_objects(
                 Bucket=self.bucket,
                 Delete={"Objects": [{"Key": key} for key in chunk]},
             )
+            errors = response.get("Errors") or []
+            if errors:
+                raise RuntimeError(
+                    f"S3 삭제 부분 실패 {len(errors)}/{len(chunk)}건: "
+                    f"{[(e.get('Key'), e.get('Code')) for e in errors[:5]]}"
+                )
 
 
 def make_storage(config: StorageConfig) -> Storage:

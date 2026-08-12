@@ -216,8 +216,8 @@ def _read_feature(
     """(파티션의 feature 행 전량, **흡수 대상 장중 미러 키**) — ALPHA-900.
 
     미러 키를 함께 돌려주는 이유는 이 스텝이 그걸 지워야 하기 때문이다. 장중 레인은
-    기사당 객체를 남기는데(writer 가 동시다발이라 part 파일을 공유할 수 없다), 그대로
-    두면 이 함수가 파티션마다 수천 GET 을 하게 된다. 병합해 part 파일에 실은 뒤 지워
+    `(기사, 그 기사의 어느 텍스트)` 마다 객체를 남기는데(writer 가 동시다발이라 part
+    파일을 공유할 수 없다), 그대로 두면 이 함수가 파티션마다 수천 GET 을 하게 된다. 병합해 part 파일에 실은 뒤 지워
     **다음 배치 런까지만** 존재하게 한다(`feature_news_assertions_minute_prefix`).
     """
     rows: list[dict] = []
@@ -264,7 +264,7 @@ def _merge_by_article(rows: list[dict]) -> dict:
     return by_id
 
 
-def mirror_row_bytes(article: dict, result: dict, tagged_at: str) -> bytes:
+def mirror_row_bytes(article: dict, result: dict, tagged_at: str) -> tuple[str, bytes]:
     """장중 추출 결과 1건 → 배치와 **같은 형식**의 feature 행 바이트 (ALPHA-900).
 
     장중 레인(`minute/news_consumer`)이 부른다. 여기 있는 이유는 형식의 정본이 하나여야
@@ -272,12 +272,18 @@ def mirror_row_bytes(article: dict, result: dict, tagged_at: str) -> bytes:
     `ontology_version`)의 형식이 조금이라도 갈리면 skip 이 안 걸려 미러가 헛돈다.
     행 조립·지문 산식을 저쪽에서 재구현하면 그 어긋남이 조용히 생긴다.
 
+    지문을 함께 돌려주는 것은 그 값이 **미러 키에도 들어가기** 때문이다
+    (`lake.feature_news_assertions_minute_key` — 같은 기사의 다른 판정이 서로를 덮으면
+    배치의 압축 창에서 최신 판정이 유실된다). 호출부가 따로 계산하면 두 값이 갈릴 자리가
+    생기므로 한 번만 계산해 함께 준다.
+
     ⚠️ `article` 은 **canonical 과 같은 표현**이어야 한다. 특히 `published_at` 은
     문자열이고 벤더 선언 tz 의 오프셋을 달고 있어야 한다 — 같은 순간이라도 표기가 다르면
     지문이 다른 값이 된다(`PgArticleReader` 가 그 복원을 진다).
     """
-    return _write_parquet_rows(
-        [_feature_row(article, result, tagged_at, _input_fingerprint(article))]
+    fingerprint = _input_fingerprint(article)
+    return fingerprint, _write_parquet_rows(
+        [_feature_row(article, result, tagged_at, fingerprint)]
     )
 
 
@@ -407,8 +413,11 @@ def run(
                 rows_written += len(rows)
                 if mirror_keys:
                     # **쓰기가 끝난 뒤에** 지운다 — 순서가 뒤집히면 되쓰기가 실패한 파티션의
-                    # 장중 판정이 통째로 사라진다. 지우는 대상은 위에서 읽어 병합한 키뿐이라,
-                    # 리스팅 이후에 도착한 미러는 살아남아 다음 런이 흡수한다.
+                    # 장중 판정이 통째로 사라진다. 지우는 대상은 위에서 읽어 병합한 키뿐이다.
+                    # ⚠️ 그게 안전한 것은 **미러 키에 입력 지문이 들어가기 때문**이다 —
+                    # 읽고 지우는 사이에 도착한 정정 판정은 본문이 달라 다른 키라, 여기서
+                    # 안 지워지고 다음 런이 흡수한다. 키가 `article_id` 뿐이면 그 정정이
+                    # 같은 키를 덮고 곧바로 지워져, **아무도 안 읽은 최신 판정이 유실된다**.
                     storage.delete_keys(mirror_keys)
                     mirrors_absorbed += len(mirror_keys)
             except Exception as exc:

@@ -177,3 +177,36 @@ def test_delete_keys_is_idempotent(tmp_path):
     storage.delete_keys(["feature/x/minute/a.parquet"])
 
     assert storage.list_keys("feature/x/") == []
+
+
+def test_s3_delete_partial_failure_is_not_swallowed():
+    # WHY: S3 는 일부만 못 지워도 **HTTP 200** 에 `Errors` 를 담아 준다. 삼키면 호출부
+    #      (`tag_news`)가 전건 흡수로 계수하고 런도 성공으로 끝나는데 조각은 남는다 —
+    #      다음 런마다 헛된 GET 이 늘고, 남은 조각이 part 파일과 다른 판정이면
+    #      `load_assertions` 가 둘을 함께 본다(Rule 12).
+    storage = S3Storage(bucket="b")
+    storage._client = _FakeS3(
+        {"Deleted": [{"Key": "k1"}],
+         "Errors": [{"Key": "k2", "Code": "AccessDenied"}]})
+
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        storage.delete_keys(["k1", "k2"])
+
+
+def test_s3_delete_without_errors_succeeds():
+    # 반례 — 정상 응답을 실패로 읽으면 매 런이 비0으로 끝난다
+    storage = S3Storage(bucket="b")
+    storage._client = _FakeS3({"Deleted": [{"Key": "k1"}]})
+
+    storage.delete_keys(["k1"])
+
+    assert storage._client.calls == [("b", ["k1"])]
+
+
+class _FakeS3:
+    def __init__(self, response):
+        self.response, self.calls = response, []
+
+    def delete_objects(self, *, Bucket, Delete):
+        self.calls.append((Bucket, [o["Key"] for o in Delete["Objects"]]))
+        return self.response

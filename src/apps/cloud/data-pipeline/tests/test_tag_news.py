@@ -11,6 +11,7 @@ from data_pipeline.lake import (
     LocalStorage,
     canonical_news_articles_partition,
     feature_news_assertions_minute_key,
+    feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
     quality_log_prefix,
 )
@@ -440,9 +441,10 @@ def _minute_result(**over) -> dict:
 
 
 def _write_mirror(storage, article: dict, *, tagged_at: str, language: str = "ko") -> str:
+    fingerprint, data = tag_news.mirror_row_bytes(article, _minute_result(), tagged_at)
     key = feature_news_assertions_minute_key(
-        language, article["published_at"][:10], article["article_id"])
-    storage.put_bytes(key, tag_news.mirror_row_bytes(article, _minute_result(), tagged_at))
+        language, article["published_at"][:10], article["article_id"], fingerprint)
+    storage.put_bytes(key, data)
     return key
 
 
@@ -535,3 +537,41 @@ def test_absorption_count_is_visible(tmp_path):
         storage.list_keys(quality_log_prefix(tag_news.DATASET))[0]))
     assert log["minute_mirrors_absorbed"] == 1
     assert log["articles_skipped_already_tagged"] == 1
+
+
+def test_correction_arriving_mid_absorption_survives(tmp_path):
+    """⭐ 압축 창의 경합. 배치가 미러를 읽은 **뒤** 장중이 같은 기사의 정정 판정을 쓰면,
+    배치의 삭제가 그걸 지우면 안 된다 — 배치는 자기가 읽은 것을 지운다고 믿지만, 키가
+    `article_id` 뿐이면 실제로 지워지는 건 **아무도 안 읽은 최신 판정**이다. 지문이 키에
+    들어가 두 판정이 다른 객체가 되므로 살아남는다.
+    """
+    storage = _WriteOnReadStorage(tmp_path)
+    old = _article()
+    corrected = _article(title="삼성전자, SK하이닉스와 공급계약 해지")
+    _write_canonical(storage, "ko", "2026-07-01", [old])
+    old_key = _write_mirror(storage, old, tagged_at="2026-07-01T10:00:00+00:00")
+    # 배치가 old_key 를 읽는 순간 장중이 정정 판정을 쓴다
+    storage.on_read = lambda: _write_mirror(
+        storage, corrected, tagged_at="2026-07-01T10:00:05+00:00")
+
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete([]))
+
+    remaining = storage.list_keys(
+        feature_news_assertions_minute_prefix("ko", "2026-07-01"))
+    assert old_key not in remaining          # 읽고 병합한 것은 지웠다
+    assert len(remaining) == 1               # 정정 판정은 살아남았다
+    assert tag_news._read_parquet_rows(storage.get_bytes(remaining[0]))[0][
+        "input_fingerprint"] == tag_news._input_fingerprint(corrected)
+
+
+class _WriteOnReadStorage(LocalStorage):
+    """미러를 처음 읽는 순간 콜백을 한 번 부른다 — read→delete 사이의 창을 재현한다."""
+
+    on_read = None
+
+    def get_bytes(self, key):
+        data = super().get_bytes(key)
+        if self.on_read is not None and "/minute/" in key:
+            callback, self.on_read = self.on_read, None
+            callback()
+        return data

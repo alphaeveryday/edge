@@ -437,15 +437,17 @@ class NewsExtractionHandler:
         language = article.get("language_code") or PROMPT_LANGUAGES[0]
         # 파티션 날짜는 canonical 과 같은 산식이다(`normalize_news._write_canonical` 의
         # `published_at[:10]`) — 위 tz 복원이 있어야 이 절단이 같은 날짜를 낸다.
+        # 배치와 같은 ISO-8601 UTC(`+00:00`) — 병합 승자 판정이 문자열 비교다
+        # (`tag_news._tagged_at`).
+        fingerprint, data = mirror_row_bytes(
+            article, result, datetime.now(timezone.utc).isoformat())
+        # ⚠️ 키에 지문이 들어간다 — 같은 기사라도 **본문이 다르면 다른 객체**다. 배치가
+        # 미러를 읽어 병합하고 지우는 사이에 정정 판정이 같은 키를 덮으면, 배치는 자기가
+        # 읽은 것을 지운다고 믿지만 실제로는 아무도 안 읽은 최신 판정이 사라진다.
         mirror_key = feature_news_assertions_minute_key(
-            language, published_at[:10], article_id)
+            language, published_at[:10], article_id, fingerprint)
         try:
-            self.storage.put_bytes(
-                mirror_key,
-                # 배치와 같은 ISO-8601 UTC(`+00:00`) — 병합 승자 판정이 문자열 비교다
-                # (`tag_news._tagged_at`).
-                mirror_row_bytes(article, result, datetime.now(timezone.utc).isoformat()),
-            )
+            self.storage.put_bytes(mirror_key, data)
         except Exception:
             logger.exception("미러 적재 실패(진행) article=%s key=%s", article_id, mirror_key)
             return

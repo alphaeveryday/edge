@@ -673,8 +673,11 @@ class TestBatchMirror:
     skip 하는 값인가"**를 고정한다.
     """
 
-    def _mirror_key(self, published_date: str = "2026-07-31") -> str:
-        return feature_news_assertions_minute_key("ko", published_date, ARTICLE_ID)
+    def _mirror_key(self, article: dict | None = None) -> str:
+        article = article or ARTICLE
+        return feature_news_assertions_minute_key(
+            "ko", article["published_at"][:10], ARTICLE_ID,
+            tag_news._input_fingerprint(article))
 
     def test_mirror_carries_the_fingerprint_batch_skips_on(self, tmp_path):
         # ⭐ 이 PR 전체가 걸린 단언이다. 배치의 재태깅 skip 은 `_is_current` 가 보는 축
