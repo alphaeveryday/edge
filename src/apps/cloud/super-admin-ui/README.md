@@ -52,8 +52,15 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/minute` | 장중 1분 수집 (세션 생존·창 집계·결손 창 목록 — 무증거 vs 빈 데이터 구분, ALPHA-651) |
 | `/lineage/news` | 뉴스 계보 (funnel 타일 N/M%+(i) 산출 정의·단계 필터·언론사·원문 링크·1분 추출 요약 — ALPHA-685·697) |
 | `/impact/holdings` | 구성종목 결손 영향 (누락 ETF → 기준일 분석 지목 + 권장 조치 — ALPHA-686) |
-| `/analyses` | 가격 변동 분석 목록 (검색·상태·시장 필터) |
-| `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 정정 · 제외/복원) |
+| `/analyses` | 가격 변동 분석 목록 (종목별 최신 / 분석 이력 두 보기 · 검색·상태·시장 필터) |
+| `/analyses/symbol?market=&code=` | 종목 분석 이력 (최신 유효 설명 + 그 종목의 시도 전량 — ALPHA-738) |
+| `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴) |
+
+⚠️ **종목 이력은 시장·코드를 경로가 아니라 쿼리로 받는다.** CloudFront 의 SPA fallback
+([`spa-rewrite.js`](../../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
+조각에 점(`.`)이 있으면 정적 파일"로 가르기 때문에, 점 든 티커(`BRK.B` 류)를 경로에 두면
+**그 종목의 공유 링크·새로고침만** index.html 을 못 받는다. 주소 조립은
+`domains/analyses/symbols.symbolHref` 한 곳이다.
 
 미매칭(`*`)은 `/`(Run Overview)로 리다이렉트(미인증이면 가드가 `/login` 으로).
 2단계 인증(OTP) 뷰는 시안에 있으나 서버 2FA 미지원이라 범위 밖(ALPHA-474 계열 후속).
@@ -69,21 +76,29 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 회귀 테스트뿐이고, 사실 공급(`domains/console` → `GET /api/v1/console/facts`)은 배선돼 있으나
 아직 아무도 안 부른다. 와이어 DTO 와 엔진 `Facts` 는 **형상이 달라**(camelCase vs snake_case)
 어댑터가 필요하고 그것도 화면 조각 몫이다.
+조각 3 이 들인 화면들(Overview·뉴스 계보·분석 목록·종목 이력)은 **이 층을 안 문다** —
+`/sources`·`/analyses` 기존 API 위에 서므로 규칙 엔진 착지와 독립이다.
 
 알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
 
 ## 화면 기반 조각 (`src/styles/` · `src/pages/_shared/` · `src/mock/` · `domains` 파생 모듈)
 
-화면(`pages/ops/*`)이 올라설 토대만 먼저 들였다(ALPHA-738 조각 2). **아직 라우팅에 안 붙고
-아무 데서도 import 되지 않아 번들에 들어가지 않는다** — 화면은 후속 조각이다.
+화면이 올라설 토대다(ALPHA-738 조각 2). **조각 3 부터 실제로 쓰인다** — Overview·뉴스 계보·
+분석 목록·종목 이력이 이 조각들을 import 하므로 번들에 들어간다. `pages/ops/*`(규칙 엔진
+화면)는 아직 후속이다.
 
 | 자리 | 무엇 |
 |---|---|
 | `styles/` 5 | ops·grid·minute·info-popover·mock-preview |
 | `pages/_shared/` | `InfoPopover`(portal 팝오버 — 포커스·Escape 처리) · `MockPreview` |
 | `mock/preview.ts` | 실 데이터 0건일 때 화면을 검수하는 미리보기 픽스처. `mock/preview.test.ts` 가 **서버가 낼 수 있는 응답인가**를 고정한다 |
-| `domains/sources/` 파생 4 | `dailyRollup`(데이터셋×날짜 롤업) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현) |
-| `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 |
+| `domains/sources/` 파생 5 | `dailyRollup`(데이터셋×날짜 롤업) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) |
+| `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
+| `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
+
+⚠️ **판정을 `.tsx` 에 두지 않는다.** `pnpm --filter super-admin-ui test` 는 `node --test
+'src/**/*.test.ts'` 라 **`.tsx` 를 아예 안 집는다** — 화면 파일 안의 분기는 변이를 걸어도 하나도
+안 잡힌다. 그래서 위 표의 순수 모듈들이 존재한다(이 트랙에서 같은 이유로 여러 번 내렸다).
 
 ⚠️ **`datasetCatalog` 의 정본은 파이프라인 소스다** — `data_pipeline/ops/catalog.py`(작업 어휘)와
 `data_pipeline/minute/states.py`(1분 dataset 어휘). 두 언어를 잇는 자동 가드가 없어
