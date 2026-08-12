@@ -523,9 +523,16 @@ def test_distribution_mode_refuses_objectset_calls_and_still_reaches_preview(mon
             reply["hypotheses"][0]["preview_handle"] = next(iter(runtime._previews))
         return reply
 
+    # 운영(etfcell)처럼 objectset 스펙을 섞어 넣는다 - hypothesis.* 필터가 실제로
+    # 거르는지 이 스펙이 검증한다(리뷰 R2: 순수 hypothesis 스펙만 넣으면 필터가
+    # 제거돼도 단언이 통과한다).
+    objectset_spec = {"name": "objectset.create",
+                      "description": "Create a PIT object set.",
+                      "input_schema": {"type": "object"}}
     valid, rejected = propose(
         ask, facts="f", event_types=["CONTRACT.CANCEL"],
-        object_tools={"specs": runtime.tool_specs(), "call": spying_call,
+        object_tools={"specs": [objectset_spec, *runtime.tool_specs()],
+                      "call": spying_call,
                       "resolve_preview": runtime.resolve,
                       "preview_system": _EVENT_DISTRIBUTION_PREVIEW_SYSTEM},
     )
