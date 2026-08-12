@@ -303,6 +303,10 @@ export function parseFacts(body: unknown): FactsParse {
       if (field) return bad(`chain.${part}[].${field} 의 값이 계약과 다르다`);
     }
   }
+  /* 🔴 **셋째 갈래도 거부한다 — 이건 "모르는 필드는 거부하지 않는다"의 예외다.** 그 규약은
+   * 서버의 전진 배포가 화면을 멈추면 안 된다는 뜻인데, 여기서 통과시키면 소비자가 위치로
+   * 읽는 탓에 **셋째 갈래를 한 번도 안 보고 "손실 없음"을 세운다** — 이 콘솔이 없애려는
+   * 칸 혼동 그대로다. 축이 늘면 규칙도 같이 고쳐야 하므로 그때는 시끄럽게 실패하는 편이 옳다. */
   if ((chain.feeds as unknown[]).length !== 2) return bad('chain.feeds 가 두 갈래가 아니다');
 
   return { ok: true, facts: toFacts(body as unknown as ConsoleFactsDto) };
