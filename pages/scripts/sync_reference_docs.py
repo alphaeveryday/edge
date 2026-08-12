@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from xml.etree import ElementTree
 
 REPO_ROOT = Path.cwd()
 DOCS = REPO_ROOT / "docs"
@@ -122,6 +123,17 @@ def _write_animated_logo(src: Path, dst: Path) -> None:
         raise ValueError(f"[sync] 로고 SVG 종료 태그가 예상과 다릅니다: {src}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     animated = logo.replace(closing_tag, ANIMATED_LOGO_OVERLAY + closing_tag)
+    # 문자열 주입은 원본 태그에 class 가 이미 있거나 속성값에 '>' 가 들어오면
+    # 조용히 어긋날 수 있다 — 파싱해 클래스가 실제 반영됐는지 확인하고 죽는다.
+    try:
+        root = ElementTree.fromstring(animated)
+    except ElementTree.ParseError as exc:
+        raise ValueError(f"[sync] 생성된 애니메이션 SVG 가 유효한 XML 이 아닙니다: {exc}") from exc
+    tagged = sum(1 for el in root.iter() if el.get("class", "").startswith("edge-data "))
+    if tagged != len(ANIMATED_DATA_MARKERS):
+        raise ValueError(
+            f"[sync] 애니메이션 클래스 주입 결과가 어긋납니다: {tagged}/{len(ANIMATED_DATA_MARKERS)}"
+        )
     dst.write_text(animated, encoding="utf-8")
 
 # reference/ 로 복사되는 repo 경로들 — 이 안을 가리키는 링크는 그대로 두어도 해결된다.
