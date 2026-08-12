@@ -17,6 +17,26 @@ export function taskRollup(tasks: TaskFact[]): 'fulfilled' | 'skipped' | 'unreso
   return due.every((task) => task.task_outcome === 'FULFILLED') ? 'fulfilled' : 'unresolved';
 }
 
+export interface DatasetRunFlow {
+  dataset: string;
+  runId: string;
+  tasks: TaskFact[];
+}
+
+/** 데이터셋 흐름은 실행별 사실이다. 같은 날의 재실행을 한 화살표로 합치지 않는다. */
+export function datasetRunFlows(tasks: TaskFact[]): DatasetRunFlow[] {
+  const groups = new Map<string, DatasetRunFlow>();
+  for (const task of tasks) {
+    const dataset = task.dataset ?? '—';
+    const key = `${dataset}\u0000${task.run_id}`;
+    if (!groups.has(key)) groups.set(key, { dataset, runId: task.run_id, tasks: [] });
+    groups.get(key)!.tasks.push(task);
+  }
+  return [...groups.values()].sort(
+    (a, b) => a.dataset.localeCompare(b.dataset) || a.runId.localeCompare(b.runId),
+  );
+}
+
 export interface Freshness {
   label: string;
   tone: BadgeTone;

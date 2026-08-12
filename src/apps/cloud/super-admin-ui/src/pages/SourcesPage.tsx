@@ -6,17 +6,16 @@ import { ApiError } from '../api/client';
 import type {
   Attempt,
   DataStatus,
-  ExecutionStatus,
   LaunchStatus,
   OrchestrationStatus,
   ReconciliationIssue,
   SourceReport,
-  TaskOutcome,
   TaskStatus,
 } from '../domains/sources';
 import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
 import { datasetKind, gapRuns, isPollLane, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
+import { tasksInFocus, taskStatusView } from '../domains/sources/taskView';
 import { MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
 import { incidentHref, incidentOfVid, REALTIME_DATASETS } from './ops/investigation';
@@ -28,14 +27,6 @@ import '../styles/ops.css';
 
 /* 원장 어휘를 그대로 라벨링한다 — 화면에서 새 상태 이름을 만들지 않는다(ALPHA-181 이 새 상태
  * 테이블을 안 만든 것과 같은 이유: 어휘가 하나 늘 때마다 대조할 곳이 하나 늘어난다). */
-const OUTCOME: Record<TaskOutcome, { label: string; tone: BadgeTone }> = {
-  FULFILLED: { label: '완료', tone: 'active' },
-  FAILED: { label: '실패', tone: 'blocked' },
-  MISSED: { label: '미실행', tone: 'blocked' },
-  BLOCKED: { label: '선행 미충족', tone: 'warn' },
-  PENDING: { label: '대기', tone: 'neutral' },
-};
-
 const ORCHESTRATION: Record<OrchestrationStatus, { label: string; tone: BadgeTone }> = {
   SUCCEEDED: { label: '성공', tone: 'active' },
   RUNNING: { label: '실행 중', tone: 'env' },
@@ -69,18 +60,6 @@ function dataDefect(status: DataStatus | null) {
   if (status === null || DATA_BENIGN.includes(status)) return undefined;
   return DATA_DEFECT[status] ?? status;
 }
-/* outcome 이 PENDING 일 때 **시도 축**이 말해주는 것. PENDING 은 "아직 판정 못 함"이지 "대기"가
- * 아니다 — 원장은 attempt 종료와 outcome 갱신을 별개 _safe 호출로 쓰므로, 앞만 커밋되면
- * `PENDING + FAILED` 가 정상적으로 존재한다(Reconciler 가 고치기 전까지, dev 는 그마저 DISABLED).
- * RUNNING 만 예외로 두면 **확정된 실패가 '대기'로** 보인다 — 관대해지는 쪽이라 위험하다. */
-const PENDING_BY_ATTEMPT: Record<ExecutionStatus, { label: string; tone: BadgeTone }> = {
-  RUNNING: { label: '실행 중', tone: 'env' },
-  FAILED: { label: '시도 실패', tone: 'blocked' },
-  TIMED_OUT: { label: '시도 시간초과', tone: 'blocked' },
-  // 시도는 끝났는데 판정이 안 쓰였다 — 원장 기록이 빠진 것이지 정상이 아니다.
-  SUCCEEDED: { label: '판정 누락', tone: 'warn' },
-};
-
 const STAGE_LABEL: Record<string, string> = {
   raw: '수집',
   normalize: '정제',
@@ -204,19 +183,7 @@ function TaskRow({ task }: { task: TaskStatus }) {
   /* 원장 어휘가 늘어나면(소유는 data-pipeline) 여기 맵에 없는 값이 내려온다. undefined 를
    * 그대로 역참조하면 대시보드가 통째로 흰 화면이 된다 — 모르는 상태는 원문 그대로 보여주고
    * 화면은 살려둔다. 운영 화면이 죽는 것이 모르는 라벨보다 나쁘다. */
-  const badge =
-    task.planStatus === 'SKIPPED'
-      ? { label: '계획 제외', tone: 'gated' as BadgeTone }
-      : task.outcome === null
-        ? { label: '판정 없음', tone: 'neutral' as BadgeTone }
-        : /* outcome 은 작업이 **끝나야** 쓰인다. 그동안 PENDING 인 채로 시도 축만 움직이므로,
-             PENDING 이면 시도가 말해주는 것을 그대로 낸다. 시도가 아예 없을 때만 "대기"다. */
-          task.outcome === 'PENDING' && task.executionStatus !== null
-          ? (PENDING_BY_ATTEMPT[task.executionStatus] ?? {
-              label: task.executionStatus,
-              tone: 'neutral' as BadgeTone,
-            })
-          : (OUTCOME[task.outcome] ?? { label: task.outcome, tone: 'neutral' as BadgeTone });
+  const badge = taskStatusView(task);
 
   /* 재시도가 시작돼도 원장은 이전 outcome 을 되돌리지 않는다(`record_attempt_start` 는 attempt 만
      만든다). 그래서 "이전 시도는 실패했고 지금 다시 돌고 있다"는 **두 사실**이 동시에 참이다.
@@ -320,9 +287,7 @@ function HoldingsDatasetFlow({ report, runKey }: { report: SourceReport; runKey?
             <div key={s.label} className="t-xs ops-fact">
               <span style={{ color: 'var(--fg-3)' }}>{s.label}</span>
               <span>
-                {s.task.planStatus === 'SKIPPED'
-                  ? '계획 제외'
-                  : (OUTCOME[s.task.outcome ?? 'PENDING']?.label ?? s.task.outcome ?? '판정 없음')}
+                {taskStatusView(s.task).label}
                 {dataDefect(s.task.dataStatus) && ` · ${dataDefect(s.task.dataStatus)}`}
               </span>
             </div>
@@ -979,10 +944,8 @@ function SourcesBody({
   mock?: boolean;
 }) {
   const run = report.run;
-  const focusedExists = focusTask !== undefined && report.tasks.some((t) => t.taskKey === focusTask);
-  const visibleTasks = focusedExists
-    ? report.tasks.filter((t) => t.taskKey === focusTask)
-    : report.tasks;
+  const visibleTasks = tasksInFocus(report.tasks, focusTask);
+  const focusedExists = focusTask !== undefined && visibleTasks.length > 0;
   const orchestration = run?.orchestrationStatus
     ? (ORCHESTRATION[run.orchestrationStatus] ?? {
         label: run.orchestrationStatus,
@@ -1054,6 +1017,12 @@ function SourcesBody({
                 </Link>
               </p>
             )}
+            {focusTask !== undefined && !focusedExists && (
+              <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
+                이 실행에 지목한 작업 <span className="mono">{focusTask}</span>이 없습니다 — 다른 작업으로
+                넓히지 않습니다.
+              </p>
+            )}
             <table className="table">
               <thead>
                 <tr>
@@ -1084,9 +1053,11 @@ function SourcesBody({
           </>
         )}
       </div>
-      <HoldingsDatasetFlow report={report} runKey={runKey} />
+      {focusTask === undefined && <HoldingsDatasetFlow report={report} runKey={runKey} />}
 
-      {report.issues.length > 0 && <IssuesCard issues={report.issues} focusTask={focusedExists ? focusTask : undefined} />}
+      {report.issues.length > 0 && (focusTask === undefined || focusedExists) && (
+        <IssuesCard issues={report.issues} focusTask={focusTask} />
+      )}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         산출·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
       </p>

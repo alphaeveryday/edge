@@ -32,7 +32,7 @@ import {
   kindOf,
 } from '../domains/sources/datasetCatalog';
 import type { DatasetDomain, DatasetEntry, DatasetKindLabel } from '../domains/sources/datasetCatalog';
-import { datesOf, realtimeDayState, rollup } from '../domains/sources/dailyRollup';
+import { datesOf, realtimeDayState, realtimeSessionState, rollup } from '../domains/sources/dailyRollup';
 import type { DayExecution, DayRollup, DayState } from '../domains/sources/dailyRollup';
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
@@ -173,7 +173,7 @@ export function GridPage() {
   if (isPending) return <PageSkeleton rows={6} />;
 
   /* 격자가 비면 상태 인코딩을 전혀 볼 수 없다 — 사실을 먼저 밝히고 검수용 목을 붙인다 */
-  if (grid.slots.length === 0 && (!minute || minuteError)) {
+  if (grid.slots.length === 0 && !minute) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyRealNotice>최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.</EmptyRealNotice>
@@ -184,7 +184,7 @@ export function GridPage() {
     );
   }
 
-  return <GridBody grid={grid} minute={minuteError ? undefined : minute} minuteError={minuteError} />;
+  return <GridBody grid={grid} minute={minute} minuteError={minuteError} />;
 }
 
 interface Selection {
@@ -275,7 +275,7 @@ function GridBody({
     <div className="flex flex-col gap-4">
       {minuteError && (
         <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
-          실시간 세션 축을 갱신하지 못해 이 격자에는 표시하지 않습니다.
+          실시간 세션 축을 갱신하지 못했습니다 — {minute ? '직전 실측을 유지합니다.' : '상태 미제공으로 표시합니다.'}
         </div>
       )}
       <div className="card">
@@ -396,6 +396,7 @@ function GridBody({
         <DayDetail
           sel={selected}
           live={sessionState(selected.dataset, selected.date, minute)}
+          minute={minute}
           mock={mock}
           onClose={() => setSelected(null)}
         />
@@ -463,11 +464,13 @@ function boxTip(
 function DayDetail({
   sel,
   live,
+  minute,
   mock,
   onClose,
 }: {
   sel: Selection;
   live?: { state: DayState; basis: string } | null;
+  minute?: MinuteStatus;
   mock: boolean;
   onClose: () => void;
 }) {
@@ -477,6 +480,9 @@ function DayDetail({
    * 1분 창 390개를 최상위 실행 390개로 펼치지 않는다(상위 단위는 데이터셋 × 세션 날짜). */
   if (d.sessionDataset) {
     const href = `/minute?date=${date}&dataset=${d.sessionDataset}`;
+    const sessions = minute?.date === date
+      ? minute.sessions.filter((session) => session.dataset === d.sessionDataset)
+      : [];
     return (
       <div className="card" id="gd-detail">
         <div className="card-head">
@@ -517,28 +523,32 @@ function DayDetail({
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td className="mono">
-                  {d.sessionDataset} · {date}
-                </td>
-                <td>
-                  <span className="chip">실시간 세션</span>
-                </td>
-                <td>
-                  <StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>
-                    {live?.state ?? '상태 미제공'}
-                  </StatusBadge>
-                </td>
-                <td>
-                  <Link to={href} className="gd-linkbtn">
-                    세션 상세 →
-                  </Link>
-                </td>
-              </tr>
+              {sessions.map((session) => {
+                const state = realtimeSessionState(session);
+                const sessionHref = `${href}&sourceGroup=${encodeURIComponent(session.sourceGroup)}`;
+                return (
+                  <tr key={session.sessionId}>
+                    <td className="mono">
+                      {d.sessionDataset} / {session.sourceGroup} · {date}
+                    </td>
+                    <td><span className="chip">실시간 세션</span></td>
+                    <td><StatusBadge tone={STATE_TONE[state.state]}>{state.state}</StatusBadge></td>
+                    <td><Link to={sessionHref} className="gd-linkbtn">세션 상세 →</Link></td>
+                  </tr>
+                );
+              })}
+              {sessions.length === 0 && (
+                <tr>
+                  <td className="mono">{d.sessionDataset} · {date}</td>
+                  <td><span className="chip">실시간 세션</span></td>
+                  <td><StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>{live?.state ?? '상태 미제공'}</StatusBadge></td>
+                  <td><Link to={href} className="gd-linkbtn">세션 상세 →</Link></td>
+                </tr>
+              )}
             </tbody>
           </table>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
-            실행 인스턴스는 <b>데이터셋 × 세션 날짜</b> 한 건입니다 — 1분 창·poll 은 그 세션의 하위
+            실행 인스턴스는 <b>데이터셋 × 벤더 × 세션 날짜</b>입니다 — 1분 창·poll 은 각 세션의 하위
             증거라 여기서 실행으로 펼치지 않습니다.
           </p>
         </div>

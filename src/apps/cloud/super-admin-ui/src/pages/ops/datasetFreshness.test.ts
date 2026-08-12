@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { DatasetFact, TaskFact } from '../../rules/types.ts';
-import { freshness, taskRollup } from './datasetFreshness.ts';
+import { datasetRunFlows, freshness, taskRollup } from './datasetFreshness.ts';
 
 /** ⚠️ 자리마다 다른 값을 둔다 — 같은 값이면 두 필드를 맞바꾸는 실수가 안 잡힌다. */
 const ds = (o: Partial<DatasetFact>): DatasetFact => ({
@@ -34,6 +34,16 @@ test('계획에서 SKIPPED 된 작업은 필요한 작업의 귀결을 막지 �
     'skipped',
     '전부 계획 제외인 날은 초록 귀결도 미귀결도 아니다',
   );
+});
+
+test('같은 데이터셋의 재실행은 run_id별 흐름으로 갈린다', () => {
+  const base = { dataset: 'price_daily', task_key: 'collect', plan_status: 'DUE' };
+  const flows = datasetRunFlows([
+    { ...base, run_id: 'run-1', task_outcome: 'FAILED' },
+    { ...base, run_id: 'run-2', task_outcome: 'FULFILLED' },
+  ] as TaskFact[]);
+  assert.deepEqual(flows.map((flow) => flow.runId), ['run-1', 'run-2']);
+  assert.deepEqual(flows.map((flow) => taskRollup(flow.tasks)), ['unresolved', 'fulfilled']);
 });
 
 test('🔴 기대 기준일이 없으면 FRESH 가 아니다 — 비교 안 한 것이 초록으로 서던 자리다', () => {

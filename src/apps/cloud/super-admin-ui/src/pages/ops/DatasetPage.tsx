@@ -4,9 +4,8 @@
  * 설명 생산 흐름이고, 이 데이터셋들이 그 재료다.
  */
 import { StatusBadge } from 'ui-kit';
-import type { TaskFact } from '../../rules/types';
 /* 판정은 JSX 밖에 둔다 — 여기 두면 `node --test` 가 import 을 못 해 변이가 하나도 안 잡힌다 */
-import { freshness, taskRollup } from './datasetFreshness';
+import { datasetRunFlows, freshness, taskRollup } from './datasetFreshness';
 import { Absent, AxisHeader, ConsoleGate, Info, kst, useConsoleFactsQuery, useFocusRow } from './shared';
 import { NewsFunnel } from './NewsFunnel';
 import '../../styles/ops.css';
@@ -16,12 +15,7 @@ export function DatasetPage() {
   useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
   const { datasets, tasks } = q.facts;
-  const byDataset = new Map<string, TaskFact[]>();
-  for (const t of tasks) {
-    const key = t.dataset ?? '—';
-    if (!byDataset.has(key)) byDataset.set(key, []);
-    byDataset.get(key)!.push(t);
-  }
+  const flows = datasetRunFlows(tasks);
 
   return (
     <div className="flex flex-col gap-4">
@@ -127,19 +121,21 @@ export function DatasetPage() {
           <thead>
             <tr>
               <th>데이터셋</th>
+              <th>실행</th>
               <th>작업</th>
               <th>결과</th>
             </tr>
           </thead>
           <tbody>
-            {[...byDataset.entries()].map(([d, xs]) => (
-              <tr key={d}>
-                <td className="mono">{d}</td>
-                <td className="col-muted t-xs">{xs.map((x) => x.task_key).join(' → ')}</td>
+            {flows.map((flow) => (
+              <tr key={`${flow.dataset}@${flow.runId}`}>
+                <td className="mono">{flow.dataset}</td>
+                <td className="mono t-xs">{flow.runId}</td>
+                <td className="col-muted t-xs">{flow.tasks.map((x) => x.task_key).join(' → ')}</td>
                 <td>
-                  {taskRollup(xs) === 'fulfilled' ? (
+                  {taskRollup(flow.tasks) === 'fulfilled' ? (
                     <StatusBadge tone="active">전건 귀결</StatusBadge>
-                  ) : taskRollup(xs) === 'skipped' ? (
+                  ) : taskRollup(flow.tasks) === 'skipped' ? (
                     <StatusBadge tone="neutral">계획 제외</StatusBadge>
                   ) : (
                     <StatusBadge tone="blocked">미귀결 포함</StatusBadge>
