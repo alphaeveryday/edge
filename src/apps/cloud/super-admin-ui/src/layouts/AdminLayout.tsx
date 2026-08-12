@@ -24,11 +24,12 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
       { path: '/grid', label: '실행 이력', icon: 'dashboard' },
       { path: '/minute', label: '현재 실행', icon: 'database' },
       { path: '/ops/trend', label: '추이', icon: 'trendChart' },
-      /* 구 홈 병존(`rules/README.md` §6) — 규칙 엔진이 "무엇이 걸렸는가"를, 이쪽이 "레인이 지금
-       * 어디까지 왔는가"를 답한다. ⚠️ 라우트만 남기고 이 줄을 빼면 **도달 경로가 0** 이 된다
-       * (dev 에서는 `/` 가 이 화면이었다) — 병존한다고 적어 둔 문서가 그 순간 거짓이 된다.
-       * 라벨은 도착지 제목과 같게 둔다(`headerRoute.ts`). */
-      { path: '/overview', label: '레인 원장 요약', icon: 'database' },
+      /* 🔴 `/overview`(구 홈)를 **여기 넣지 마라.** 은퇴시킨 화면이다 — 계획 §6-3: "개요는 자기
+       * 질문('지금 정상인가')에 답할 수 없었다. 답하려면 규칙 P0/P1 과 sessionHealth 를 합쳐야
+       * 하는데 합칠 근거가 없다. 나머지 줄은 전부 다른 화면의 더 나쁜 사본이다."
+       * 라우트·컴포넌트만 살려 뒀고(숨긴 라우트와 같은 처리) **메뉴 노출은 은퇴의 내용**이다.
+       * ⚠️ 도달성만 보는 리뷰는 이걸 "죽은 라우트"로 낸다 — 실제로 ALPHA-738 에서 그 지적을
+       * 받아 이 줄을 넣었다가 되돌렸다(ALPHA-977). 인바운드 0 은 여기서 **의도**다. */
     ],
   },
   {
