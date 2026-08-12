@@ -672,6 +672,9 @@ def test_duplicate_refusal_cap_forces_submission_and_is_observed(monkeypatch):
     refusals = [r for r in records if r.get("event") == "hypothesis.tool_result"
                 and r.get("error") == "DUPLICATE_TOOL_CALL"]
     assert len(refusals) == 3
+    # 무예산 계약은 예산 카운터 원장으로 직접 단언한다 - 실행 1회만 세야 한다.
+    rounds = [r for r in records if r.get("event") == "hypothesize.objectset_rounds"]
+    assert rounds and rounds[-1]["rounds"] == 1
 
 
 def test_failed_call_may_be_retried_with_identical_arguments(monkeypatch):
