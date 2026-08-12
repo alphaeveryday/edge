@@ -14,6 +14,7 @@ import {
   ABSENCE_LABEL,
   awsFailureEvidence,
   awsObservation,
+  completenessText,
   isAwsTerminalFailure,
   ledgerObservation,
   reconcile,
@@ -171,4 +172,14 @@ test('PENDING 작업은 시도 이력이 있으면 미기동 대기로 숨기지
   } as TaskFact;
   assert.equal(taskState(task), '미귀결');
   assert.equal(taskState({ ...task, attempts: 0 }), '대기');
+});
+
+test('완전성 분자 부재는 0이나 null 문자열이 아니라 집계 부재로 표시한다', () => {
+  const task = {
+    task_key: 'collect', run_id: 'run-1', pipeline_type: 'news', stage: 'raw', required: true,
+    task_outcome: 'FULFILLED', completeness_expected: 100, completeness_received: null,
+  } as TaskFact;
+  assert.equal(completenessText(task), '집계 없음 / 기대 100');
+  assert.equal(completenessText({ ...task, completeness_received: 0 }), '0/100');
+  assert.equal(completenessText({ ...task, completeness_expected: null }), null);
 });

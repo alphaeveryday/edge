@@ -81,8 +81,8 @@ const REALTIME_TIP = [
 
 function RealtimeShortcut({ date }: { date: string }) {
   const { data, isPending, isError } = useMinuteStatus(date);
-  /* 세션이 없으면 목으로 미리보기 — 실측이 없다는 사실을 먼저 말하고 나서다 */
-  const real = !isPending && !isError && !hasNoSignal(data);
+  /* 성공 응답의 0은 실측이다. 재조회 실패 때 data가 남아 있으면 직전 실측도 보존한다. */
+  const real = data !== undefined;
   const view = real ? data : MOCK_MINUTE;
   const newsJobsVisible = Object.values(view.newsJobs).some((count) => count > 0);
   const newsJobsDefect = view.newsJobs.claimedExpired > 0 || view.newsJobs.dead > 0;
@@ -108,11 +108,16 @@ function RealtimeShortcut({ date }: { date: string }) {
           </p>
         ) : (
           <>
-            {!real && (
+            {isError && (
               <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginBottom: 8 }}>
-                {isError
-                  ? '실시간 상태를 불러오지 못했습니다 — 아래는 목데이터입니다.'
-                  : '오늘 실시간 세션이 없습니다(비거래일 · 미가동) — 아래는 목데이터입니다.'}
+                {real
+                  ? '실시간 상태 재조회에 실패했습니다 — 직전 실측을 유지합니다.'
+                  : '실시간 상태를 불러오지 못했습니다 — 아래는 목데이터입니다.'}
+              </p>
+            )}
+            {real && hasNoSignal(view) && (
+              <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginBottom: 8 }}>
+                오늘 실시간 세션과 후속 처리 job이 없습니다(비거래일 · 미가동) — 실측 0건입니다.
               </p>
             )}
             <ul className="ops-rt-list">

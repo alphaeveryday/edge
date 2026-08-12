@@ -181,8 +181,8 @@ export function TrendPage() {
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
    * 한 번만 돌아 화면이 첫 응답에 영원히 고정된다. */
   const evaluated = useMemo(
-    () => (q.ready ? buildMetrics(q.facts, minute.isError ? undefined : minute.data).map((m) => ({ m, v: evaluateMetric(m) })) : []),
-    [q, minute.data, minute.isError],
+    () => (q.ready ? buildMetrics(q.facts, minute.data).map((m) => ({ m, v: evaluateMetric(m) })) : []),
+    [q, minute.data],
   );
   if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
@@ -201,6 +201,12 @@ export function TrendPage() {
   return (
     <div className="flex flex-col gap-4">
       <AxisHeader q={q} question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
+
+      {minute.isError && (
+        <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
+          분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 MOCK 계열입니다.'}
+        </p>
+      )}
 
       <div className="card">
         <div className="card-head">

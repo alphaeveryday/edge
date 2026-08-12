@@ -194,6 +194,17 @@ test('실시간 세션 지름길도 벤더 축을 보존하고 구분자를 인�
   );
   const source = readFileSync(new URL('./IncidentsPage.tsx', import.meta.url), 'utf8');
   assert.match(source, /minuteSessionHref\(view\.date, s\.dataset, s\.sourceGroup\)/);
+  assert.match(source, /const real = data !== undefined/, '실측 0건이나 보존된 직전 data를 MOCK으로 덮는다');
+  assert.doesNotMatch(source, /const real =[^\n]*hasNoSignal/, '0건을 응답 부재로 다시 접었다');
+});
+
+test('사건 targetId의 첫 구분자 뒤를 벤더 전체로 보존한다', () => {
+  const r = investigate(
+    incident(violation({ targetId: 'news_minute/vendor/a&b', drill: ['dataset', 'ds-news_minute'] })),
+    FACTS,
+  );
+  assert.equal(r.ledger?.sourceGroup, 'vendor/a&b');
+  assert.match(r.targets[0].href, /sourceGroup=vendor%2Fa%26b/);
 });
 
 test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 런까지 좁히지 않는다', () => {

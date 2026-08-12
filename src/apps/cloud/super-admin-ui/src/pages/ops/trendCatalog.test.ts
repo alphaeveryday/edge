@@ -12,11 +12,12 @@
  *   ③ 스냅샷을 실측이라 말하지 않는다 — 뉴스 퍼널은 응답 밖 축이라 오늘 점도 목이다.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
 import type { Facts } from '../../rules/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
-import { buildMetrics } from './trendCatalog.ts';
+import { buildMetrics, latestTask } from './trendCatalog.ts';
 import { FUNNEL_DATE } from './newsFunnelSnapshot.ts';
 import { evaluateMetric } from './trendMetrics.ts';
 
@@ -67,6 +68,22 @@ test('오늘 분봉 원장이 있으면 0과 양수를 모두 목값 대신 확�
   assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.value, 2);
   assert.equal(metrics.find((m) => m.id === 'i.dead_jobs')!.series.at(-1)!.value, 7);
   assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.isMock, false);
+});
+
+test('오늘 분봉 응답이 빈 배열이어도 관측된 0이다 — 세션 부재를 MOCK 값으로 바꾸지 않는다', () => {
+  const minute = { date: WIRED.meta.today, sessions: [] } as unknown as MinuteStatus;
+  const metrics = buildMetrics(WIRED, minute);
+  for (const id of ['i.no_evidence', 'i.dead_jobs']) {
+    const point = metrics.find((m) => m.id === id)!.series.at(-1)!;
+    assert.equal(point.value, 0, id);
+    assert.equal(point.isMock, false, `${id}: 실측 0이 MOCK으로 바뀌었다`);
+  }
+});
+
+test('추이 화면은 재조회 오류만으로 React Query가 보존한 분봉 실측을 버리지 않는다', () => {
+  const source = readFileSync(new URL('./TrendPage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /buildMetrics\(q\.facts, minute\.data\)/);
+  assert.doesNotMatch(source, /minute\.isError\s*\?\s*undefined\s*:\s*minute\.data/);
 });
 
 test('🔴 체인 축 부재를 0 으로 그리지 않는다 — "결과 생성률 0%" 는 거짓 경보다', () => {
@@ -143,6 +160,23 @@ test('🔴 완전성 분모 0 을 초록으로 그리지 않는다 — 0/0 은 N
   /* 분모가 있으면 그때는 판정한다 — 부재 갈래가 값 갈래를 잡아먹지 않았는지 함께 본다 */
   const real = evaluateMetric(byId(task(100, 94), 'b.price_daily'));
   assert.equal(real.kind, 'abnormal', '94% 는 최소 95% 미달이다');
+});
+
+test('같은 작업 키의 여러 슬롯은 배열 순서가 아니라 가장 늦은 run_key를 오늘 값으로 쓴다', () => {
+  const base = {
+    task_key: 'PRICE_COLLECTION_KIS', pipeline_type: 'etf-daily', trading_date: '2026-08-03',
+    stage: 'raw', dataset: 'price_daily', required: true, plan_status: 'DUE',
+    task_outcome: 'FULFILLED', data_status: 'VALID', completeness_expected: 100, attempts: 1,
+  };
+  const facts: Facts = {
+    ...WIRED,
+    tasks: [
+      { ...base, run_id: 'etf-daily:2026-08-03T16:40', completeness_received: 99 },
+      { ...base, run_id: 'etf-daily:2026-08-03T15:40', completeness_received: 40 },
+    ],
+  };
+  assert.equal(latestTask(facts, 'PRICE_COLLECTION_KIS')?.completeness_received, 99);
+  assert.equal(evaluateMetric(byId(facts, 'b.price_daily')).actual, 0.99);
 });
 
 test('🔴 뉴스 퍼널 지표는 오늘 점도 스냅샷이다 — "오늘 실측" 이라고 말하면 안 된다', () => {

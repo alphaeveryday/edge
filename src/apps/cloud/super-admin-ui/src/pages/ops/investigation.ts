@@ -161,7 +161,8 @@ export function investigate(incident: Incident, facts: Facts): Investigation {
      * ⚠️ 빈 조각은 여기 안 온다 — `rules.ts` 의 `sessionTarget` 이 조각이 비면 합성 자체를
      * 안 하고, 그 위반은 엔진에서 `못 돎(identity)` 으로 접힌다. 그 가드가 없으면
      * `price_minute/` 가 여기서 `vendor === ''` 로 떨어져 **벤더 없는 사건**으로 읽힌다. */
-    const vendor = v.targetId.split('/')[1];
+    const slash = v.targetId.indexOf('/');
+    const vendor = slash >= 0 ? v.targetId.slice(slash + 1) : undefined;
     if (REALTIME_DATASETS.has(datasetId)) {
       return {
         targets: [

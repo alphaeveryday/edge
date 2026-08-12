@@ -51,6 +51,13 @@ export function taskState(t: TaskFact): TaskState {
   }
 }
 
+/** 완전성 분모와 분자는 독립 nullable 축이다. 분자 부재를 문자열 `null`이나 실측 0으로 만들지 않는다. */
+export function completenessText(t: TaskFact): string | null {
+  if (t.completeness_expected == null) return null;
+  if (t.completeness_received == null) return `집계 없음 / 기대 ${t.completeness_expected}`;
+  return `${t.completeness_received}/${t.completeness_expected}`;
+}
+
 export type StatusKind =
   | 'running'
   | 'succeeded'

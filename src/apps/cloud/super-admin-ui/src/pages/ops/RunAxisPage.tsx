@@ -31,6 +31,7 @@ import {
   ABSENCE_MEANING,
   awsFailureEvidence,
   awsObservation,
+  completenessText,
   isAwsTerminalFailure,
   ledgerObservation,
   reconcile,
@@ -783,11 +784,9 @@ function TaskRows({
           )}
         </td>
         <td>
-          {t.completeness_expected != null ? (
+          {completenessText(t) != null ? (
             <>
-              <span className="num">
-                {t.completeness_received}/{t.completeness_expected}
-              </span>
+              <span className="num">{completenessText(t)}</span>
               {t.cmpl_mock && <MockChip />}
             </>
           ) : (
@@ -847,8 +846,8 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
     ['유실', t.failed_records != null ? fmt(t.failed_records) : <Absent kind="none" />],
     [
       '완전성',
-      t.completeness_expected != null
-        ? `${t.completeness_received}/${t.completeness_expected}`
+      completenessText(t) != null
+        ? completenessText(t)!
         : '분모 없음 (평가 대상 아님)',
     ],
   ];

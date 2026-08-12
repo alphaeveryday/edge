@@ -33,7 +33,11 @@ export function tradingLag(actualISO: string | null, expectedISO: string | null)
   return n;
 }
 
-const task = (f: Facts, key: string) => f.tasks.find((t) => t.task_key === key);
+/** 같은 작업이 여러 슬롯에 있으면 run_key의 시각 규약상 가장 늦은 슬롯을 오늘 값으로 쓴다. */
+export const latestTask = (f: Facts, key: string) =>
+  f.tasks
+    .filter((t) => t.task_key === key)
+    .sort((a, b) => b.run_id.localeCompare(a.run_id))[0];
 const dataset = (f: Facts, id: string) => f.datasets.find((d) => d.id === id);
 /* 축이 통째로 없으면 `null` — 부재를 0 으로 그리면 "결과 생성률 0%" 라는 거짓 경보가 된다
  * (`coverageMetric`·`lagMetric` 의 `comparisonType: 'uninstrumented'` 규약과 같은 방향). */
@@ -48,7 +52,7 @@ const output = (f: Facts, id: string) => f.outputs.find((o) => o.id === id);
  * `hasBase`(R13 의 `base: 0`)와 같은 판단이다: 나눗셈이 성립하지 않는 분모는 기준이 아니다.
  */
 function coverage(f: Facts, taskKey: string): { value: number | null; mock: boolean } {
-  const t = task(f, taskKey);
+  const t = latestTask(f, taskKey);
   const expected = t?.completeness_expected;
   if (!t || expected == null || expected <= 0 || t.completeness_received == null) {
     return { value: null, mock: false };
@@ -155,7 +159,7 @@ function coverageMetric(
   denomLabel: string,
 ): Metric {
   const c = coverage(f, taskKey);
-  const t = task(f, taskKey);
+  const t = latestTask(f, taskKey);
   const TODAY = f.meta.today;
   return {
     id,
@@ -240,13 +244,14 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
  */
 export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
   const TODAY = f.meta.today;
-  const priceSessions = minute?.date === TODAY
+  const minuteObserved = minute?.date === TODAY;
+  const priceSessions = minuteObserved
     ? minute.sessions.filter((s) => s.dataset === 'price_minute')
     : [];
-  const noEvidenceToday = priceSessions.length > 0
+  const noEvidenceToday = minuteObserved
     ? priceSessions.reduce((sum, s) => sum + s.windows.overdueNoEvidence, 0)
     : undefined;
-  const deadJobsToday = priceSessions.length > 0
+  const deadJobsToday = minuteObserved
     ? priceSessions.reduce((sum, s) => sum + s.priceJobs.dead, 0)
     : undefined;
   const doc = output(f, 'o.doc');
