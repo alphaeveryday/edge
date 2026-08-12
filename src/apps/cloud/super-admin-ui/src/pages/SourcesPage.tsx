@@ -15,7 +15,7 @@ import type {
   TaskStatus,
 } from '../domains/sources';
 import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
-import { datasetKind, gapRuns, liveness, segments } from '../domains/sources/minuteView';
+import { datasetKind, gapRuns, hasPendingJobs, isPollLane, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import { MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
@@ -650,7 +650,8 @@ function RealtimeLedger({
     : ambiguous
       ? undefined
       : ofDataset[0];
-  const kindLabel = datasetKind(dataset) === 'news' ? 'poll' : '창';
+  const kind = datasetKind(dataset);
+  const kindLabel = isPollLane(kind) ? 'poll' : '창';
 
   if (!session) {
     return (
@@ -691,7 +692,7 @@ function RealtimeLedger({
                 '실 응답에 이 데이터셋의 세션 행이 없습니다. 비거래일·미가동·레인 미편입 중 어느 이유인지는 이 응답이 답하지 않습니다.'}
           </p>
         )}
-        {!ambiguous && datasetKind(dataset) === 'news' && data.newsJobs.dead > 0 && (
+        {!ambiguous && kind === 'news' && hasPendingJobs(data.newsJobs) && (
           <p className="t-xs mono m-0" style={{ color: 'var(--danger)', marginTop: 8 }}>
             세션과 별도인 날짜 축 news job: {JSON.stringify(data.newsJobs)}
           </p>
@@ -810,11 +811,11 @@ function RealtimeLedger({
         </div>
       </div>
 
-      <div className="card">
+      {kind === 'price' || kind === 'news' ? <div className="card">
         <div className="card-head">
           <span className="t-label">job 집계</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            {datasetKind(dataset) === 'news'
+            {kind === 'news'
               ? '뉴스 추출 job 은 세션 연결 컬럼이 없어 날짜 축 집계입니다'
               : 'price_window_job — 세션 축'}
           </span>
@@ -822,11 +823,15 @@ function RealtimeLedger({
         <div className="card-pad">
           <p className="t-xs mono m-0">
             {JSON.stringify(
-              datasetKind(dataset) === 'news' ? data.newsJobs : session.priceJobs,
+              kind === 'news' ? data.newsJobs : session.priceJobs,
             )}
           </p>
         </div>
-      </div>
+      </div> : (
+        <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
+          이 데이터셋에는 이 응답이 제공하는 후속 처리 job 축이 없습니다.
+        </div>
+      )}
     </div>
   );
 }

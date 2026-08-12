@@ -247,7 +247,7 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
     ? priceSessions.reduce((sum, s) => sum + s.windows.overdueNoEvidence, 0)
     : undefined;
   const deadJobsToday = priceSessions.length > 0
-    ? Math.max(...priceSessions.map((s) => s.priceJobs.dead))
+    ? priceSessions.reduce((sum, s) => sum + s.priceJobs.dead, 0)
     : undefined;
   const doc = output(f, 'o.doc');
   const trig = output(f, 'o.trig');

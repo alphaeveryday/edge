@@ -28,6 +28,15 @@ import { MockChip, MockPreview } from './_shared/MockPreview';
 import { LoadError } from './_shared/LoadError';
 import '../styles/ops.css';
 
+/** 서버가 지정한 런 부재만 404 의미로 쓴다. 프록시·라우팅 404는 조회 장애다. */
+function isRunNotFound(error: ApiError): boolean {
+  return (
+    typeof error.body === 'object' &&
+    error.body !== null &&
+    (error.body as { code?: unknown }).code === 'ADMN4041'
+  );
+}
+
 /** 조사 경로 — 실제 식별자로만 만든다. 사건에서 왔으면 그 문맥을 유지한다 */
 function Crumb({ runKey, incidentId }: { runKey?: string; incidentId?: string }) {
   const ev = useConsoleEvaluation();
@@ -133,7 +142,7 @@ export function HoldingsImpactPage() {
 
   if (isError) {
     /* 지정한 런이 없으면 **최신 런으로 대체하지 않는다** — 오타가 다른 런의 결손으로 보인다 */
-    if (error instanceof ApiError && error.status === 404) {
+    if (error instanceof ApiError && error.status === 404 && isRunNotFound(error)) {
       return (
         <div className="flex flex-col gap-4">
           <Crumb runKey={runKey} incidentId={incidentId} />

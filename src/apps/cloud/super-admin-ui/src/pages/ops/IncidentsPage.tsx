@@ -29,7 +29,7 @@ import type { AxisFetch } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
-import { hasNoSignal } from '../../domains/sources/minuteView';
+import { hasNoSignal, hasPendingJobs, healthyClaimed } from '../../domains/sources/minuteView';
 import '../../styles/ops.css';
 
 const SCOPE_TIP = [
@@ -112,6 +112,20 @@ function RealtimeShortcut({ date }: { date: string }) {
               </p>
             )}
             <ul className="ops-rt-list">
+              {view.sessions.length === 0 && hasPendingJobs(view.newsJobs) && (
+                <li className="ops-rt">
+                  <Link to={`/minute?date=${view.date}&dataset=news_minute`} className="ops-rt-link ops-rt-axes">
+                    <span className="ops-rt-head">
+                      <span className="t-label">뉴스 후속 처리 job</span>
+                      <StatusBadge tone="blocked">확인 필요</StatusBadge>
+                      <span className="t-xs ops-lane-link">상세 →</span>
+                    </span>
+                    <span className="t-xs ops-rt-axis">
+                      대기 {view.newsJobs.waiting} · 유효 처리 중 {healthyClaimed(view.newsJobs)} · 고착 {view.newsJobs.claimedExpired} · DEAD {view.newsJobs.dead}
+                    </span>
+                  </Link>
+                </li>
+              )}
               {view.sessions.map((s) => {
                 const kind = datasetKind(s.dataset);
                 const h = sessionHealth(s, kind === 'news' ? view.newsJobs : s.priceJobs);

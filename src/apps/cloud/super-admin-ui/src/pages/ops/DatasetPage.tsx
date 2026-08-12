@@ -6,7 +6,7 @@
 import { StatusBadge } from 'ui-kit';
 import type { TaskFact } from '../../rules/types';
 /* 판정은 JSX 밖에 둔다 — 여기 두면 `node --test` 가 import 을 못 해 변이가 하나도 안 잡힌다 */
-import { allDueTasksFulfilled, freshness } from './datasetFreshness';
+import { freshness, taskRollup } from './datasetFreshness';
 import { Absent, AxisHeader, ConsoleGate, Info, kst, useConsoleFactsQuery, useFocusRow } from './shared';
 import { NewsFunnel } from './NewsFunnel';
 import '../../styles/ops.css';
@@ -137,8 +137,10 @@ export function DatasetPage() {
                 <td className="mono">{d}</td>
                 <td className="col-muted t-xs">{xs.map((x) => x.task_key).join(' → ')}</td>
                 <td>
-                  {allDueTasksFulfilled(xs) ? (
+                  {taskRollup(xs) === 'fulfilled' ? (
                     <StatusBadge tone="active">전건 귀결</StatusBadge>
+                  ) : taskRollup(xs) === 'skipped' ? (
+                    <StatusBadge tone="neutral">계획 제외</StatusBadge>
                   ) : (
                     <StatusBadge tone="blocked">미귀결 포함</StatusBadge>
                   )}

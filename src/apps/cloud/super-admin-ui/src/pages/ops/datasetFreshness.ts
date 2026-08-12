@@ -11,10 +11,10 @@ import type { BadgeTone } from 'ui-kit';
 import type { DatasetFact, TaskFact } from '../../rules/types.ts';
 
 /** 계획에서 제외된 작업은 미귀결이 아니다. 실행 대상이었던 작업만 결과를 요구한다. */
-export function allDueTasksFulfilled(tasks: TaskFact[]): boolean {
-  return tasks
-    .filter((task) => task.plan_status !== 'SKIPPED')
-    .every((task) => task.task_outcome === 'FULFILLED');
+export function taskRollup(tasks: TaskFact[]): 'fulfilled' | 'skipped' | 'unresolved' {
+  const due = tasks.filter((task) => task.plan_status !== 'SKIPPED');
+  if (due.length === 0) return 'skipped';
+  return due.every((task) => task.task_outcome === 'FULFILLED') ? 'fulfilled' : 'unresolved';
 }
 
 export interface Freshness {

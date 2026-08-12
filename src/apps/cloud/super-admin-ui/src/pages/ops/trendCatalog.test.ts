@@ -57,11 +57,15 @@ test('오늘 분봉 원장이 있으면 0과 양수를 모두 목값 대신 확�
       dataset: 'price_minute',
       windows: { overdueNoEvidence: 0 },
       priceJobs: { dead: 3 },
+    }, {
+      dataset: 'price_minute',
+      windows: { overdueNoEvidence: 2 },
+      priceJobs: { dead: 4 },
     }],
   } as MinuteStatus;
   const metrics = buildMetrics(WIRED, minute);
-  assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.value, 0);
-  assert.equal(metrics.find((m) => m.id === 'i.dead_jobs')!.series.at(-1)!.value, 3);
+  assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.value, 2);
+  assert.equal(metrics.find((m) => m.id === 'i.dead_jobs')!.series.at(-1)!.value, 7);
   assert.equal(metrics.find((m) => m.id === 'i.no_evidence')!.series.at(-1)!.isMock, false);
 });
 

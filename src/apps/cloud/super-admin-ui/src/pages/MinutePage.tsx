@@ -30,6 +30,7 @@ import {
   gapRuns,
   healthyClaimed,
   hasNoSignal,
+  isPollLane,
   issues,
   liveness,
   materializedCount,
@@ -40,7 +41,7 @@ import type { ApiGap, Issue, Segment, ViewTone } from '../domains/sources/minute
 import { useMinuteStatus, useSourceOverview } from '../domains/sources/hooks';
 import { MOCK_MINUTE, MOCK_OVERVIEW } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
-import { RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
+import { REALTIME_DATASETS, RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { InfoPopover } from './_shared/InfoPopover';
 import { LoadError } from './_shared/LoadError';
 import '../styles/minute.css';
@@ -385,6 +386,52 @@ function PriceSessionCard({
         </div>
 
         <GapEvidence session={s} noun="창" date={date} />
+      </div>
+    </div>
+  );
+}
+
+const NO_JOB_AXIS: MinuteJobCounts = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 };
+
+/** 가격·뉴스 전용 job 의미가 없는 실시간 레인. 세션·창/poll 원장만 그대로 보인다. */
+function GenericSessionCard({
+  session: s,
+  date,
+  mock = false,
+}: {
+  session: MinuteSession;
+  date: string;
+  mock?: boolean;
+}) {
+  const live = liveness(s);
+  const kind = datasetKind(s.dataset);
+  const poll = isPollLane(kind);
+  const noun = poll ? 'poll' : '창';
+  const list = issues(s, NO_JOB_AXIS);
+  return (
+    <div className="card">
+      <div className="card-head mn-head">
+        <span className="t-label">{s.dataset} / {s.sourceGroup} {mock && <MockChip />}</span>
+        <StatusBadge tone={tone(live.tone)}>{live.label}</StatusBadge>
+        <InfoPopover text={live.basis} label="실행 상태" title="실행 상태 판정 근거" />
+        <span className="t-xs mn-meta">phase {s.phase} · heartbeat {clock(s.heartbeatAt)}</span>
+      </div>
+      <div className="card-pad">
+        <div className="mn-section">
+          <div className="mn-section-head">
+            <span className="t-label">{noun} 구성</span>
+            <span className="t-xs" style={{ color: 'var(--fg-3)' }}>예정 {s.expectedWindowCount}{poll ? '회' : '개'} 기준</span>
+          </div>
+          <SegmentBar session={s} unit={poll ? '회' : '창'} />
+        </div>
+        <div className="mn-section">
+          <div className="mn-section-head"><span className="t-label">현재 확인할 항목</span></div>
+          <IssueTable list={list} />
+        </div>
+        <GapEvidence session={s} noun={noun} date={date} />
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          이 데이터셋에는 이 응답이 제공하는 후속 처리 job 축이 없습니다.
+        </p>
       </div>
     </div>
   );
@@ -778,8 +825,9 @@ export function MinutePage() {
  * 추출 job 이 날짜 축이라 세션이 없는 날에도 볼 사실이 있고, 탭이 사라지면 "뉴스 세션이
  * 안 섰다"는 사실 자체가 화면에서 없어진다.
  */
-function datasetTabs(data: MinuteStatus): { id: string; sessions: MinuteSession[] }[] {
-  const ids = [...new Set([...data.sessions.map((s) => s.dataset), 'news_minute'])];
+function datasetTabs(data: MinuteStatus, requested: string): { id: string; sessions: MinuteSession[] }[] {
+  const requestedKnown = REALTIME_DATASETS.has(requested) ? [requested] : [];
+  const ids = [...new Set([...data.sessions.map((s) => s.dataset), 'news_minute', ...requestedKnown])];
   ids.sort((a, b) => {
     const ai = DATASET_ORDER.indexOf(a);
     const bi = DATASET_ORDER.indexOf(b);
@@ -805,7 +853,7 @@ function MinuteBody({
   updatedAt: number;
   mock?: boolean;
 }) {
-  const tabs = datasetTabs(data);
+  const tabs = datasetTabs(data, dataset);
   /* 어휘 밖 dataset 은 첫 탭으로 정규화한다 — 빈 화면을 내면 잘못된 링크가 "세션 없음"으로
    * 위장된다(그 날짜에 진짜로 세션이 없는 것과 구분이 사라진다). */
   const current = tabs.find((t) => t.id === dataset) ?? tabs[0];
@@ -894,8 +942,10 @@ function MinuteBody({
         current.sessions.map((s) =>
           datasetKind(s.dataset) === 'news' ? (
             <NewsSessionCard key={s.sessionId} session={s} date={data.date} mock={mock} />
-          ) : (
+          ) : datasetKind(s.dataset) === 'price' ? (
             <PriceSessionCard key={s.sessionId} session={s} date={data.date} mock={mock} />
+          ) : (
+            <GenericSessionCard key={s.sessionId} session={s} date={data.date} mock={mock} />
           ),
         )
       )}

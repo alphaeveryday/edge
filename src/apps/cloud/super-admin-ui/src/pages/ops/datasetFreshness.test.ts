@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { DatasetFact, TaskFact } from '../../rules/types.ts';
-import { allDueTasksFulfilled, freshness } from './datasetFreshness.ts';
+import { freshness, taskRollup } from './datasetFreshness.ts';
 
 /** ⚠️ 자리마다 다른 값을 둔다 — 같은 값이면 두 필드를 맞바꾸는 실수가 안 잡힌다. */
 const ds = (o: Partial<DatasetFact>): DatasetFact => ({
@@ -24,10 +24,15 @@ test('계획에서 SKIPPED 된 작업은 필요한 작업의 귀결을 막지 �
     { plan_status: 'DUE', task_outcome: 'FULFILLED' },
     { plan_status: 'SKIPPED', task_outcome: null },
   ] as TaskFact[];
-  assert.equal(allDueTasksFulfilled(tasks), true);
+  assert.equal(taskRollup(tasks), 'fulfilled');
   assert.equal(
-    allDueTasksFulfilled([{ plan_status: 'DUE', task_outcome: 'FAILED' } as TaskFact]),
-    false,
+    taskRollup([{ plan_status: 'DUE', task_outcome: 'FAILED' } as TaskFact]),
+    'unresolved',
+  );
+  assert.equal(
+    taskRollup([{ plan_status: 'SKIPPED', task_outcome: null } as TaskFact]),
+    'skipped',
+    '전부 계획 제외인 날은 초록 귀결도 미귀결도 아니다',
   );
 });
 
