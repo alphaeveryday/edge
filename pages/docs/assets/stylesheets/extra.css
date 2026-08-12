@@ -25,7 +25,7 @@
 /* 다이어그램 임베드 (diagrams/N-*.md 의 iframe) */
 .ep-diagram-frame iframe {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 7 / 4;
   height: auto;
   border: 1px solid var(--md-default-fg-color--lightest);
   border-radius: 6px;
