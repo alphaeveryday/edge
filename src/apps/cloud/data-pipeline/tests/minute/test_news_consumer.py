@@ -764,3 +764,23 @@ def _read_parquet(path):
     import pyarrow.parquet as pq
 
     return pq.read_table(io.BytesIO(path.read_bytes())).to_pylist()
+
+
+class TestReuseMirrorsRecordedFailures:
+    """reuse 복구가 성공만 미러하면 기록형 실패 기사만 배치가 다시 유료로 태운다.
+
+    `llm_unparseable`·`bad_doc_class` 는 fresh 경로가 미러하고 배치도 결과로 캐시한다
+    (재시도 축이 아니다 — RETRYABLE 은 `llm_error` 뿐). 두 경로의 정책이 갈리면(Rule 7)
+    PUT 뒤 미러 전에 죽은 그 기사들만 조용히 이중 과금된다.
+    """
+
+    def test_recorded_failure_mirror_is_restored_on_reuse(self, tmp_path):
+        handler = make_handler(tmp_path, llm=RecordingLlm("이건 JSON 이 아니다"))
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+        mirror_key = feature_news_assertions_minute_key(
+            "ko", "2026-07-31", ARTICLE_ID, tag_news._input_fingerprint(ARTICLE))
+        (tmp_path / mirror_key).unlink()
+
+        handler(job_id=JOB_ID, payload=payload(), attempt=1, redrive_generation=0)
+
+        assert (tmp_path / mirror_key).exists()

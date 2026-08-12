@@ -500,19 +500,21 @@ class NewsExtractionHandler:
         logger.info(
             "이미 저장된 시도 결과 재사용 job=%s attempt=%d status=%s", job_id, attempt, status
         )
+        # fresh 경로가 PUT 뒤·미러 전에 죽었으면 미러가 없다 — 같은 복구 지점에서
+        # 같이 되살린다. ⚠️ **성공만 되살리면 안 된다**: `llm_unparseable`·`bad_doc_class`
+        # 도 fresh 경로는 미러하고 배치도 결과로 캐시하므로(재시도 축이 아니다), 여기서
+        # 빼면 그 기사만 배치가 다시 유료로 태운다. 조립은 성공에만 해당해 아래에 남긴다.
+        article = self.article_reader.read(
+            source_code=stored["source_code"], article_id=stored["article_id"])
+        if article is None:
+            raise TransientJobError(
+                f"기사 정본이 없다: ({stored['source_code']}, {stored['article_id']})",
+                code="ARTICLE_NOT_FOUND",
+            )
+        self._mirror(article, stored["result"])
         if status == _SUCCESS_STATUS:
             # fresh 경로가 PUT 뒤·조립 전에 죽은 경우의 복구 지점 — 조립은 멱등
             # (document_entity 자국 게이트)이라 이미 된 기사는 no-op 이다.
-            article = self.article_reader.read(
-                source_code=stored["source_code"], article_id=stored["article_id"])
-            if article is None:
-                raise TransientJobError(
-                    f"기사 정본이 없다: ({stored['source_code']}, {stored['article_id']})",
-                    code="ARTICLE_NOT_FOUND",
-                )
-            # fresh 경로가 PUT 뒤·미러 전에 죽었으면 미러가 없다 — 같은 복구 지점에서
-            # 같이 되살린다. 키가 article_id 라 이미 있으면 같은 내용으로 덮는다(ALPHA-900).
-            self._mirror(article, stored["result"])
             assembled = self.event_assembler.assemble(
                 source_code=stored["source_code"], article_id=stored["article_id"],
                 article=article, result=stored["result"],

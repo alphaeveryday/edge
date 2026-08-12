@@ -575,3 +575,26 @@ class _WriteOnReadStorage(LocalStorage):
             callback, self.on_read = self.on_read, None
             callback()
         return data
+
+
+def test_mirror_outside_the_tagging_window_is_still_compacted(tmp_path):
+    """창(`--window-days`)은 **태깅 비용**의 상한이지 압축 범위가 아니다 (ALPHA-900).
+
+    운영 SFN 은 `--window-days 3` 으로 돈다. backfill Consumer 가 그보다 오래된 기사에
+    미러를 남기거나 canonical 파티션이 없는 날짜에 남기면, 창을 그대로 쓰는 루프는 그
+    날짜를 영영 안 밟아 조각이 지워지지 않는다 — 그런데 `load_assertions` 는 feature
+    날짜를 풀스캔하므로 **매 런 그걸 다시 GET 한다**. 압축을 두는 이유가 사라진다.
+    """
+    storage = LocalStorage(tmp_path)
+    old = _article(published_at="2026-06-01T09:00:00+09:00")
+    # canonical 은 창 안의 다른 날짜에만 있다 — 옛 날짜엔 태깅 대상 기사가 아예 없다
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    mirror_key = _write_mirror(storage, old, tagged_at="2026-06-01T10:00:00+00:00")
+
+    calls: list = []
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls),
+                 from_date="2026-07-01", to_date="2026-07-01")
+
+    assert storage.list_keys(mirror_key) == []          # 창 밖이어도 흡수했다
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-06-01")] == ["a1"]
+    assert len(calls) == 1                              # 창 안 기사만 태웠다(비용은 그대로)

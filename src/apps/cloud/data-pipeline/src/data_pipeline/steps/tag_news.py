@@ -201,6 +201,27 @@ def _partition_dates(storage: Storage, language: str, from_date: str | None, to_
     return sorted(dates)
 
 
+def _mirror_dates(storage: Storage, language: str) -> set[str]:
+    """장중 미러가 남아 있는 feature 파티션의 날짜 — **날짜창을 적용하지 않는다** (ALPHA-900).
+
+    창(`--window-days`)은 **태깅 비용**의 상한이지 압축의 범위가 아니다. 창을 그대로
+    쓰면 backfill Consumer 가 오래된 기사에 남긴 미러나 canonical 파티션이 없는 날짜의
+    미러가 이 루프에 영영 안 들어와 지워지지 않는데, `load_assertions` 는 feature 날짜를
+    풀스캔하므로 그 조각을 **매 런 다시 GET 한다** — 압축을 두는 이유가 통째로 사라진다.
+
+    canonical 날짜와 합집합으로 돈다. 미러만 있고 태깅 대상 기사가 없는 날짜는 LLM 을
+    한 번도 안 부르고 병합·삭제만 하고 끝난다(`changed` 가 False 여도 도는 그 경로다).
+    """
+    marker = feature_news_assertions_partition(language, "")  # ".../published_date="
+    dates: set[str] = set()
+    for key in storage.list_keys(marker):
+        rest = key[len(marker):]
+        date, _, tail = rest.partition("/")
+        if date and tail.startswith("minute/"):
+            dates.add(date)
+    return dates
+
+
 def _read_canonical(storage: Storage, language: str, published_date: str) -> list[dict]:
     rows: list[dict] = []
     prefix = canonical_news_articles_partition(language, published_date)
@@ -339,7 +360,10 @@ def run(
     exit_code = 0
 
     for language in TAGGED_LANGUAGES:
-        for published_date in _partition_dates(storage, language, from_date, to_date):
+        # 태깅 대상 날짜(창 적용) ∪ 미러가 남은 날짜(창 미적용 — `_mirror_dates` 참조)
+        dates = sorted(set(_partition_dates(storage, language, from_date, to_date))
+                       | _mirror_dates(storage, language))
+        for published_date in dates:
             try:
                 articles = _read_canonical(storage, language, published_date)
                 existing, mirror_keys = _read_feature(storage, language, published_date)
