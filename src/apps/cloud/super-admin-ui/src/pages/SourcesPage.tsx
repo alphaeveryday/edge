@@ -692,7 +692,7 @@ function RealtimeLedger({
                 '실 응답에 이 데이터셋의 세션 행이 없습니다. 비거래일·미가동·레인 미편입 중 어느 이유인지는 이 응답이 답하지 않습니다.'}
           </p>
         )}
-        {!ambiguous && kind === 'news' && Object.values(data.newsJobs).some((count) => count > 0) && (
+        {kind === 'news' && Object.values(data.newsJobs).some((count) => count > 0) && (
           <p className="t-xs mono m-0" style={{ color: data.newsJobs.claimedExpired > 0 || data.newsJobs.dead > 0 ? 'var(--danger)' : 'var(--fg-3)', marginTop: 8 }}>
             세션과 별도인 날짜 축 news job: {JSON.stringify(data.newsJobs)}
           </p>

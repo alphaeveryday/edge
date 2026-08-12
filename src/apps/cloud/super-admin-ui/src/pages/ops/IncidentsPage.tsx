@@ -29,7 +29,7 @@ import type { AxisFetch } from './notRun';
 import { incidentHref } from './investigation';
 import { evaluateMetric } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
-import { hasNoSignal, healthyClaimed } from '../../domains/sources/minuteView';
+import { hasNoSignal, hasPendingJobs, healthyClaimed } from '../../domains/sources/minuteView';
 import '../../styles/ops.css';
 
 const SCOPE_TIP = [
@@ -67,7 +67,8 @@ const REALTIME_TIP = [
   '  생존 — 세션 lease·heartbeat(서버 DB 시계 판정)',
   '  진행 — 연속 완결 워터마크와 마지막 기록',
   '  커버리지 — **기한이 도래한 창** 중 결과 증거가 남은 창',
-  '  품질 — 불완전·무효·MISSING·DEAD·유효 lease 없는 claim',
+  '  품질 — 불완전·무효·MISSING',
+  '후속 처리 job 은 세션과 입도가 다르며, 그 축을 제공하는 가격·뉴스에서만 별도로 본다.',
   '',
   '전체 상태는 가장 나쁜 축을 따르되 그 이유를 옆에 적는다.',
   '  수집기가 정상이어도 품질 결함이 있으면 주의',
@@ -85,6 +86,7 @@ function RealtimeShortcut({ date }: { date: string }) {
   const view = real ? data : MOCK_MINUTE;
   const newsJobsVisible = Object.values(view.newsJobs).some((count) => count > 0);
   const newsJobsDefect = view.newsJobs.claimedExpired > 0 || view.newsJobs.dead > 0;
+  const newsJobsRunning = hasPendingJobs(view.newsJobs);
 
   return (
     <div className="card">
@@ -120,7 +122,7 @@ function RealtimeShortcut({ date }: { date: string }) {
                     <span className="ops-rt-head">
                       <span className="t-label">뉴스 후속 처리 job</span>
                       <StatusBadge tone={newsJobsDefect ? 'blocked' : 'active'}>
-                        {newsJobsDefect ? '확인 필요' : '처리 중'}
+                        {newsJobsDefect ? '확인 필요' : newsJobsRunning ? '처리 중' : '완료'}
                       </StatusBadge>
                       <span className="t-xs ops-lane-link">상세 →</span>
                     </span>

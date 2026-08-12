@@ -1002,6 +1002,14 @@ test('R18 무증거 창 — 임계 5창. 4창은 조용하고 5창부터 위반'
   assert.equal(v[0].sev, 'P1');
 });
 
+test('R18 — poll 레인은 사건 제목과 단위에도 poll 어휘를 보존한다', () => {
+  for (const dataset of ['news_minute', 'disclosure_minute']) {
+    const [v] = hits(withMinute([session({ dataset, overdueNoEvidence: 5 })]), 'R18');
+    assert.equal(v.unit, 'poll');
+    assert.match(v.title, /무증거 poll$/);
+  }
+});
+
 test('R19 — 날짜 축 집계는 벤더마다 복제하지 않는다 (3건이 두 사건으로 서면 6건으로 읽힌다)', () => {
   /* 뉴스 job 은 세션 연결 컬럼이 없어 `(dataset, date)` 집계 하나뿐이다. 벤더 축이 생기기 전에는
    * 대상이 데이터셋이라 겹쳤는데, 벤더를 실으면서 **같은 사실이 벤더 수만큼 독립 사건**이 됐다.
