@@ -233,21 +233,27 @@ resource "aws_sqs_queue" "scheduler_dlq" {
 # 그 백스톱이 없고, 전달 실패(StartExecution 거부·역할 오류·스로틀로 재시도 소진)는
 # SFN 실행이 아예 안 생기므로 그쪽 알람 둘도 안 운다. 그 경로의 유일한 흔적이 이 큐다.
 # 그래서 깊이를 직접 센다 — 공용 큐라 다섯 레인 전부가 덤으로 덮인다.
-resource "aws_cloudwatch_metric_alarm" "scheduler_dlq_depth" {
-  alarm_name        = "${var.name}-scheduler-dlq-depth"
+resource "aws_cloudwatch_metric_alarm" "scheduler_dlq_arrivals" {
+  alarm_name        = "${var.name}-scheduler-dlq-arrivals"
   alarm_description = "스케줄 이벤트 전달이 재시도를 소진해 DLQ 로 갔다 — 그 슬롯은 아예 안 돌았다. 장전 유니버스 레인은 원장 밖이라 이 알람이 유일한 신호다."
   namespace         = "AWS/SQS"
-  metric_name       = "ApproximateNumberOfMessagesVisible"
-  dimensions        = { QueueName = aws_sqs_queue.scheduler_dlq.name }
+  # 🔴 **깊이가 아니라 도착 수를 센다.** `ApproximateNumberOfMessagesVisible`(레벨)로 재면
+  # 알람이 **래칭**된다 — CloudWatch 는 OK→ALARM **전이**에서만 통보하는데, 이 큐는 대사도
+  # 소비자도 없어 한 번 쌓이면 사람이 비울 때까지 깊이가 0 으로 안 돌아온다. 그러면 첫 실패
+  # 뒤의 **모든** 실패가 무음이다 — 다른 레인이 남긴 메시지 하나가 장전 레인의 알람을 영구히
+  # 삼키는 형태이고, 이 레인엔 그걸 받쳐 줄 원장 백스톱이 없다.
+  # `NumberOfMessagesSent` 는 그 창에 **새로 도착한 수**라 조용한 창에서 0 으로 돌아온다 —
+  # 실패할 때마다 새 전이가 나고, 그게 이 알람이 물어야 할 사건("또 놓쳤다")과 일치한다.
+  metric_name = "NumberOfMessagesSent"
+  dimensions  = { QueueName = aws_sqs_queue.scheduler_dlq.name }
 
-  # 이 큐는 **대사도 소비자도 없어** 메시지가 보존기간(14일)까지 남는다 — 한 번 울면
-  # 사람이 비울 때까지 계속 우는 것이 맞다(놓친 슬롯은 저절로 회수되지 않는다).
-  statistic           = "Maximum"
+  statistic           = "Sum"
   period              = 300
   evaluation_periods  = 1
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  # 도착이 없는 창은 지표가 아예 안 나온다 — 그건 정상(대부분의 창)이다.
+  treat_missing_data = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
