@@ -202,7 +202,7 @@ export interface EtfLedgerRow {
   etf: string;
   name: string;
   triggered: boolean;
-  outcome: string;
+  outcome: string | null;
   error?: string | null;
   published?: boolean;
   delivered?: boolean;

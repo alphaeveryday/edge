@@ -444,6 +444,45 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			  FROM cohort
 			""";
 
+	/** 배치·장중을 합쳐 ETF별 최신 트리거 하나와 그 트리거의 최신 실행만 고른다. */
+	private static final String ETF_LEDGER_SQL = """
+			WITH trigger_cohort AS (
+			    SELECT price_movement_trigger_id AS batch_id, NULL::text AS minute_id,
+			           etf_instrument_id AS etf_id, detected_at AS triggered_at
+			      FROM price_movement_trigger
+			     WHERE trade_date = ?
+			    UNION ALL
+			    SELECT NULL::text, m.trigger_id, COALESCE(i.instrument_id, m.entity_id), m.window_start
+			      FROM minute_price_trigger m
+			      LEFT JOIN instrument i
+			        ON i.market_code = 'XKRX' AND i.ticker = m.entity_id
+			     WHERE trigger_kind = 'FIRE'
+			       AND (m.window_start AT TIME ZONE 'Asia/Seoul')::date = ?
+			), latest_trigger AS (
+			    SELECT *
+			      FROM (SELECT t.*,
+			                   row_number() OVER (PARTITION BY etf_id
+			                                      ORDER BY triggered_at DESC,
+			                                               COALESCE(batch_id, minute_id) DESC) AS rn
+			              FROM trigger_cohort t) ranked
+			     WHERE rn = 1
+			)
+			SELECT t.etf_id, COALESCE(e.display_name, t.etf_id) AS display_name,
+			       (SELECT r.run_status
+			          FROM etf_contribution_observation o
+			          JOIN explanation_route rt
+			            ON rt.contribution_observation_id = o.contribution_observation_id
+			          JOIN explanation_run r
+			            ON r.explanation_route_id = rt.explanation_route_id
+			         WHERE o.price_movement_trigger_id IS NOT DISTINCT FROM t.batch_id
+			           AND o.minute_price_trigger_id IS NOT DISTINCT FROM t.minute_id
+			         ORDER BY r.explanation_as_of DESC, r.started_at DESC, r.explanation_run_id DESC
+			         LIMIT 1) AS outcome
+			  FROM latest_trigger t
+			  LEFT JOIN entity e ON e.entity_id = t.etf_id
+			 ORDER BY t.etf_id
+			""";
+
 	/**
 	 * 체인 단계 하나 — {@code column} 은 {@link #CHAIN_SQL} 이 낸 컬럼의 <b>접두어</b>이고 갈래마다
 	 * {@code _batch}·{@code _intraday} 가 붙는다. {@code label}·{@code src} 를 서버가 내는 것은
@@ -520,7 +559,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
 						rs.getLong("delivery_rows"))),
-				jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day));
+				jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
+				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
+						rs.getString("etf_id"), rs.getString("display_name"),
+						rs.getString("outcome")), day, day));
 	}
 
 	/**

@@ -5,6 +5,7 @@ import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.BoundaryResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.ChainResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.DatasetResponse;
+import com.edge.superadmin.dto.ConsoleFactsResponse.EtfLedgerResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.MetaResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.OutputResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
@@ -120,6 +121,7 @@ public class ConsoleFactsService {
 				queues == null ? null : queues.stream().map(QueueResponse::from).toList(),
 				BoundaryResponse.from(f.boundary()),
 				ChainResponse.from(f.chain()),
+				EtfLedgerResponse.from(f.etfLedger()),
 				new MetaResponse(f.dbNow().toString(), f.today().toString(),
 						aws.at() == null ? null : aws.at().toString()));
 	}

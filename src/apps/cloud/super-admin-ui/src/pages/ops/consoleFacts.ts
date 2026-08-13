@@ -243,6 +243,9 @@ export const CHAIN_FEED_FIELDS: Record<string, Check> = {
 export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
   id: text, label: text, batch: count, intraday: count, src: text,
 };
+export const ETF_LEDGER_ROW_FIELDS: Record<string, Check> = {
+  etf: text, name: text, triggered: bool, outcome: nullableText, error: nullableText,
+};
 export const META_FIELDS: Record<string, Check> = {
   db: isoInstant, aws: optionalNullableInstant, today: isoDate,
 };
@@ -335,6 +338,18 @@ export function parseFacts(body: unknown): FactsParse {
     if ((chain.feeds as unknown[]).length < 2) return bad('chain.feeds 가 두 갈래가 아니다');
   }
 
+  const etfLedger = body.etfLedger;
+  if (etfLedger !== undefined) {
+    if (!isRow(etfLedger) || !Array.isArray(etfLedger.rows)) {
+      return bad('etfLedger.rows 축이 배열이 아니다');
+    }
+    for (const row of etfLedger.rows) {
+      if (!isRow(row)) return bad('etfLedger.rows 원소가 객체가 아니다');
+      const field = offendingField(row, ETF_LEDGER_ROW_FIELDS);
+      if (field) return bad(`etfLedger.rows[].${field} 의 값이 계약과 다르다`);
+    }
+  }
+
   return { ok: true, facts: toFacts(body as unknown as ConsoleFactsDto) };
 }
 
@@ -424,6 +439,12 @@ function toFacts(dto: ConsoleFactsDto): Facts {
             })),
           },
         }
+      : {}),
+    ...(dto.etfLedger
+      ? { etf_ledger: { rows: dto.etfLedger.rows.map((r) => ({
+          etf: r.etf, name: r.name, triggered: r.triggered,
+          outcome: r.outcome, error: r.error,
+        })) } }
       : {}),
     meta: {
       db: dto.meta.db,

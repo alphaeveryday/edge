@@ -13,6 +13,7 @@ import {
   CHAIN_FEED_FIELDS,
   CHAIN_STAGE_FIELDS,
   DATASET_FIELDS,
+  ETF_LEDGER_ROW_FIELDS,
   factsAxis,
   META_FIELDS,
   minuteFacts,
@@ -177,6 +178,9 @@ const WIRE = (): ConsoleFactsDto => ({
       { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
     ],
   },
+  etfLedger: { rows: [
+    { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
+  ] },
   meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03' },
 });
 
@@ -250,6 +254,9 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
         { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
       ],
     },
+    etf_ledger: { rows: [
+      { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
+    ] },
     meta: {
       db: '2026-08-03T16:20:00+09:00',
       aws: '2026-08-03T16:20:03+09:00',
@@ -281,6 +288,7 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   delete w.runs[0].awsStop;
   delete w.meta.aws;
   delete w.queues;
+  delete w.etfLedger;
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
@@ -289,6 +297,7 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   assert.equal(r.facts.runs[0].aws_status, undefined, 'AWS 상태를 만들어 냈다');
   assert.equal(r.facts.runs[0].aws_stop, undefined, 'AWS 종료 시각을 만들어 냈다');
   assert.equal(r.facts.queues, undefined, 'queues 축을 만들어 냈다');
+  assert.equal(r.facts.etf_ledger, undefined, 'etf_ledger 축을 만들어 냈다');
   /* 체인은 이제 **온다** — 이 단언이 없으면 위 셋을 지키느라 축을 통째로 떨구는 회귀가 초록이다 */
   assert.notEqual(r.facts.chain, undefined, 'chain 축을 떨궜다');
 });
@@ -362,11 +371,25 @@ test('허용 — 정당한 null 은 거부하지 않는다', () => {
   w.tasks[0].recordsOut = null;
   w.outputs[0].base = null;
   w.datasets[0].unverifiable = null;
+  w.etfLedger!.rows[0].outcome = null;
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : `정상 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
   assert.equal(r.facts.runs[0].lane, null);
   assert.equal(r.facts.outputs[0].base, null);
+});
+
+test('거부 — ETF 원장 상태 형상이 틀리면 R15에 흘리지 않는다', () => {
+  for (const [name, mutate] of [
+    ['rows가 배열 아님', (w: ConsoleFactsDto) =>
+      { (w.etfLedger as { rows: unknown }).rows = {}; }],
+    ['triggered가 문자열', (w: ConsoleFactsDto) =>
+      { (w.etfLedger!.rows[0] as { triggered: unknown }).triggered = 'true'; }],
+    ['outcome이 수', (w: ConsoleFactsDto) =>
+      { (w.etfLedger!.rows[0] as { outcome: unknown }).outcome = 1; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
 });
 
 test('거부 사유는 어느 축인지 말한다 — 조회 실패 문장이 원인을 가리켜야 한다', () => {
@@ -406,6 +429,7 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.boundary, BOUNDARY_FIELDS, 'boundary');
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
   both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
+  both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
   both(w.meta, META_FIELDS, 'meta');
 });
 

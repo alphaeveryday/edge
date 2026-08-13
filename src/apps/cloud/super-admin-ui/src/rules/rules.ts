@@ -823,7 +823,7 @@ export const RULES: Rule[] = [
     kls: '고장',
     base: 'P0',
     desc: 'ETF 단위로 분석이 실패해 설명이 만들어지지 않았다',
-    dep: 'AnalyzeOne per-ETF outcome 원장',
+    dep: 'ETF별 최신 트리거 설명 실행 축',
     /* `source: 'MOCK'` 이었다 — 규칙의 `source` 는 **정적**이라, 실 원장이 붙은 뒤에도 리포트가
      * `mock:false` 와 `source:'MOCK'` 을 동시에 낸다(모순). 목 여부는 사실이 `etf_ledger.mock` 로
      * 말하고 위반의 `mock` 이 나르므로, 여기는 축의 성격만 적는다. */

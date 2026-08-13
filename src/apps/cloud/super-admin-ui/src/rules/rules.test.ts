@@ -33,7 +33,7 @@ function emptyFacts(): Facts {
 
 /**
  * **옵셔널 축을 전부 뺀** 사실 — 실 응답의 최소 형상이다(계약 §「무엇이 실제로 나가는가」:
- * 서버가 `queues`·`etf_ledger`·`runbook`을 안 보내고, 나중에 붙은 `chain`·`meta.aws`도
+ * 구 서버가 `queues`·`etf_ledger`·`runbook`을 안 보내고, 나중에 붙은 `chain`·`meta.aws`도
  * API 롤백·UI 선배포 때는 없을 수 있다).
  *
  * 빼는 목록을 각 테스트가 손으로 적으면 축이 하나 늘 때 한 곳만 갱신된다 — 이 트랙에서 반복된
