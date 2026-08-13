@@ -6,6 +6,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
+import com.edge.superadmin.repository.RunControlPlane;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -28,9 +29,12 @@ import java.util.List;
  * 체인 축</b>. 축을 하나씩 더하는 동안 지킨 규약이 이것이었다: 빈 배열은 "봤는데 없었다"이고
  * <b>필드 부재는 "아직 안 본다"</b>라 규칙 층이 그 둘을 다르게 센다.
  *
- * <p>아직 부재하는 축은 <b>AWS 제어면 둘</b>이다 — {@code runs[].awsStatus}(ALPHA-979 조각 2)와
- * {@code queues[]}(조각 3). 원장이 아니라 SFN·SQS 를 물어야 나오는 사실이라 필드가 아예 없고,
- * 그래서 규칙 R03·R12 가 <b>못 돎</b> 으로 선다(ADR-0050).
+ * <p>여기에 <b>제어면 축</b>이 붙었다(ALPHA-979 조각 2) — {@code runs[].awsStatus}·
+ * {@code awsStop}·{@code meta.aws}. 원장이 아니라 SFN 을 물어야 나오는 사실이고,
+ * <b>원장 값으로 폴백하지 않는다</b>: 못 봤으면 {@code null} 이다.
+ *
+ * <p>아직 부재하는 축은 {@code queues[]} 하나다(조각 3 — SQS). 그래서 규칙 R12 가 <b>못 돎</b>
+ * 으로 선다(ADR-0050).
  *
  * <p>표시 문자열을 만들지 않는다 — 건수·시각·판정 코드를 raw 로 내리고 포맷은 UI 소관이다
  * ({@link SourceReportResponse} 와 같은 규약).
@@ -53,11 +57,17 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	public record RunResponse(String id, String lane, String tradingDate, String ledgerStatus,
 			String ledgerUpdated, String deadline,
 			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean planned,
-			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean noRunRow) {
+			@JsonInclude(JsonInclude.Include.NON_NULL) Boolean noRunRow,
+			String awsStatus, String awsStop) {
 
-		public static RunResponse from(RunRow r) {
+		/**
+		 * @param aws 이 런의 제어면 관측. <b>{@code null} 이면 못 봤다</b> — 원장 값으로 폴백하지
+		 *            않는다. 두 축을 합치는 순간 대조가 무의미해진다(ALPHA-979 조각 2 · R03).
+		 */
+		public static RunResponse from(RunRow r, RunControlPlane.RunState aws) {
 			return new RunResponse(r.runKey(), r.lane(), iso(r.tradingDate()), r.ledgerStatus(),
-					iso(r.ledgerUpdated()), iso(r.deadline()), r.planned(), r.noRunRow());
+					iso(r.ledgerUpdated()), iso(r.deadline()), r.planned(), r.noRunRow(),
+					aws == null ? null : aws.status(), aws == null ? null : iso(aws.stopAt()));
 		}
 	}
 
@@ -181,9 +191,16 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 		}
 	}
 
-	/** {@code today} 는 실제로 조회한 날 — 요청이 date 를 생략했을 때 무엇을 본 응답인가.
-	 *  <b>거래일이라는 보장은 없다</b>(계획만 있던 날·원장이 빈 경우의 KST 오늘). */
-	public record MetaResponse(String db, String today) {
+	/**
+	 * {@code today} 는 실제로 조회한 날 — 요청이 date 를 생략했을 때 무엇을 본 응답인가.
+	 * <b>거래일이라는 보장은 없다</b>(계획만 있던 날·원장이 빈 경우의 KST 오늘).
+	 *
+	 * <p>{@code aws} 는 <b>제어면을 언제 봤는가</b>다(ALPHA-979 조각 2). 부재가 두 형상이고 뜻이
+	 * 다르다 — <b>키가 없으면</b> 이 축을 안 싣던 배포본이고, <b>키가 있고 {@code null} 이면</b>
+	 * 물어봤는데 못 봤다(권한·장애). 화면이 그 둘을 다르게 그린다({@code awsObservation}).
+	 * 그래서 이 필드는 <b>{@code null} 이어도 싣는다</b>.
+	 */
+	public record MetaResponse(String db, String today, String aws) {
 	}
 
 	private static String iso(OffsetDateTime at) {

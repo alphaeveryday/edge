@@ -47,10 +47,29 @@ resource "aws_iam_role_policy" "execution_secrets" {
   })
 }
 
-# 태스크 역할: 앱이 런타임에 쓰는 AWS 권한(현재 없음 — 필요 시 정책 부착)
+# 태스크 역할: 앱이 런타임에 쓰는 AWS 권한
 resource "aws_iam_role" "task" {
   name               = "${var.name}-task"
   assume_role_policy = data.aws_iam_policy_document.assume.json
+}
+
+# ⚠️ **앱이 실제로 부르는 API 만 적는다.** 정책을 코드보다 넓게 잡으면 안 쓰는 권한이 남고,
+# 좁게 잡으면 AccessDenied 가 앱의 폴백에 삼켜져 리소스도 생기고 apply 도 초록인데 그 경로만
+# 영영 안 돈다(ALPHA-671 선례). 비면 정책 자체를 안 만든다 — 빈 정책도 감사 대상이다.
+resource "aws_iam_role_policy" "task" {
+  count = length(var.task_policy_statements) > 0 ? 1 : 0
+
+  name = "${var.name}-task"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [for s in var.task_policy_statements : {
+      Effect   = "Allow"
+      Action   = s.actions
+      Resource = s.resources
+    }]
+  })
 }
 
 # ── 보안그룹 ────────────────────────────────────────────

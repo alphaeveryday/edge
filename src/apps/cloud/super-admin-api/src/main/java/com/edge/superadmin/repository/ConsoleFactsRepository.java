@@ -95,10 +95,16 @@ public interface ConsoleFactsRepository {
 	 * ({@code ops_reconciliation_issue PLANNER_MISSING}). 실재하는 런 행에는 {@code null} 이다 —
 	 * "스케줄 상 있어야 할 슬롯인가"를 답하는 계측이 원장에 없기 때문이고(크론 설정은 DB 밖),
 	 * 없는 것을 {@code false} 로 채우면 모름이 "계획된 적 없다"는 단정으로 뒤집힌다.
+	 *
+	 * <p>{@code executionArn} 은 <b>와이어에 안 나간다</b> — 제어면에 물을 때 쓰는 내부 locator 다
+	 * (ALPHA-979 조각 2). {@code sfn_execution_arn}(확인된 것)이 있으면 그것, 없으면
+	 * {@code expected_execution_arn}(Planner 가 계산한 것)이다. ⚠️ 후자의 <b>존재는 실행의 증거가
+	 * 아니다</b>(스키마 주석) — 그래서 이 값으로 "실행이 있다"를 말하지 않고, 오직 물어보는 데만 쓴다.
+	 * 답이 "그런 실행 없음"이면 그것이 관측 결과다.
 	 */
 	record RunRow(String runKey, String lane, LocalDate tradingDate, String ledgerStatus,
 			OffsetDateTime ledgerUpdated, OffsetDateTime deadline, Boolean planned,
-			Boolean noRunRow) {
+			Boolean noRunRow, String executionArn) {
 	}
 
 	/**
