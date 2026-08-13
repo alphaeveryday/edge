@@ -182,6 +182,8 @@ const isoInstant: Check = (v) => {
 };
 const nullableDate: Check = (v) => v === null || isoDate(v);
 const nullableInstant: Check = (v) => v === null || isoInstant(v);
+const optionalNullableText: Check = (v) => v === undefined || nullableText(v);
+const optionalNullableInstant: Check = (v) => v === undefined || nullableInstant(v);
 const bool: Check = (v) => typeof v === 'boolean';
 /** 서버가 그 슬롯에만 싣는 필드 — 없는 것이 정상이다(필드 단위 `NON_NULL`). */
 const optionalBool: Check = (v) => v === undefined || bool(v);
@@ -209,6 +211,7 @@ const nullableRatio: Check = (v) => v === null || ratio(v);
 export const RUN_FIELDS: Record<string, Check> = {
   id: text, lane: nullableText, tradingDate: nullableDate, ledgerStatus: nullableText,
   ledgerUpdated: nullableInstant, deadline: nullableInstant,
+  awsStatus: optionalNullableText, awsStop: optionalNullableInstant,
   planned: optionalBool, noRunRow: optionalBool,
 };
 export const TASK_FIELDS: Record<string, Check> = {
@@ -237,7 +240,9 @@ export const CHAIN_FEED_FIELDS: Record<string, Check> = {
 export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
   id: text, label: text, batch: count, intraday: count, src: text,
 };
-export const META_FIELDS: Record<string, Check> = { db: isoInstant, today: isoDate };
+export const META_FIELDS: Record<string, Check> = {
+  db: isoInstant, aws: optionalNullableInstant, today: isoDate,
+};
 
 /** 배열 원소는 **객체**여야 한다 — `[null]`·`[1]`·`[[]]` 가 여기서 걸린다. */
 const isRow = (v: unknown): v is Record<string, unknown> =>
@@ -256,8 +261,9 @@ function offendingField(row: Record<string, unknown>, fields: Record<string, Che
  *
  * 검증 범위는 계약이 "검증 경계가 답할 몫"으로 열거한 것이다: 컬렉션 원소가 객체가 아닌 경우 ·
  * 음수·비정수 카운트 · 수여야 할 자리가 수가 아닌 경우 · 문자열·불리언 자리의 타입 · 필수 축의
- * 종류. **서버가 안 보내는 축(`queues`·`runbook`·`meta.aws`)은 검사하지 않는다** — 그건 계측
- * 공백이지 응답 결함이 아니고, 규칙이 `canRun` 으로 답할 몫이다.
+ * 종류. **서버가 안 보내는 축(`queues`·`runbook`)은 검사하지 않는다** — 그건 계측 공백이지
+ * 응답 결함이 아니고, 규칙이 `canRun` 으로 답할 몫이다. 나중에 붙은 AWS 축은 부재도 허용하되
+ * 값이 오면 검사한다.
  *
  * 🔴 **과하면 정상 응답을 통째로 버린다.** 서버가 정당하게 내는 `null`(비거래일 런의 거래일 ·
  * 슬롯 키를 못 읽은 레인 · 기준 없는 산출 · 미배선 완전성)을 거부하면 그날의 사고가 화면에서
@@ -321,7 +327,7 @@ export function parseFacts(body: unknown): FactsParse {
 /**
  * 검증된 와이어 → 엔진 사실. **이름만 바꾼다** — 값을 메우거나 접지 않는다.
  *
- * 서버가 안 보낸 축은 여기서도 안 만든다(`queues`·`runbook`·`meta.aws`). 빈 값으로 채우면
+ * 서버가 안 보낸 축은 여기서도 안 만든다(`queues`·`runbook` 및 선배포 중 AWS 축). 빈 값으로 채우면
  * 계측 없음이 실측으로 위조되고, 규칙이 `못 돎` 대신 `평가됨 · 위반 0` 을 세운다.
  */
 function toFacts(dto: ConsoleFactsDto): Facts {
@@ -333,6 +339,8 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       ledger_status: r.ledgerStatus,
       ledger_updated: r.ledgerUpdated,
       deadline: r.deadline,
+      ...(r.awsStatus !== undefined ? { aws_status: r.awsStatus } : {}),
+      ...(r.awsStop !== undefined ? { aws_stop: r.awsStop } : {}),
       ...(r.planned !== undefined ? { planned: r.planned } : {}),
       ...(r.noRunRow !== undefined ? { no_run_row: r.noRunRow } : {}),
     })),
@@ -398,6 +406,10 @@ function toFacts(dto: ConsoleFactsDto): Facts {
           },
         }
       : {}),
-    meta: { db: dto.meta.db, today: dto.meta.today },
+    meta: {
+      db: dto.meta.db,
+      ...(dto.meta.aws !== undefined ? { aws: dto.meta.aws } : {}),
+      today: dto.meta.today,
+    },
   };
 }

@@ -259,6 +259,9 @@ export const RULES: Rule[] = [
     run: (f) =>
       f.runs
         .filter((r) => r.aws_status && r.ledger_status && r.aws_status !== r.ledger_status)
+        /* AWS 종료 뒤 Reconciler 가 아직 원장을 훑지 않은 정상 지연은 불일치가 아니다. */
+        .filter((r) => !(r.ledger_updated && r.aws_stop
+          && new Date(r.ledger_updated) < new Date(r.aws_stop)))
         .map((r) => ({
           target: r.id,
           title: '두 표면이 다름',

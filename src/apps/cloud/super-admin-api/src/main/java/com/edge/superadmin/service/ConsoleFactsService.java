@@ -12,7 +12,9 @@ import com.edge.superadmin.dto.ConsoleFactsResponse.TaskResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
+import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
+import com.edge.superadmin.repository.RunControlPlane;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -84,8 +86,11 @@ public class ConsoleFactsService {
 
 	private final ConsoleFactsRepository facts;
 
-	public ConsoleFactsService(ConsoleFactsRepository facts) {
+	private final RunControlPlane controlPlane;
+
+	public ConsoleFactsService(ConsoleFactsRepository facts, RunControlPlane controlPlane) {
 		this.facts = facts;
+		this.controlPlane = controlPlane;
 	}
 
 	/**
@@ -95,14 +100,30 @@ public class ConsoleFactsService {
 	 */
 	public ConsoleFactsResponse facts(String date) {
 		ConsoleFacts f = facts.facts(date == null ? null : parseDateParam(date));
+		/* 🔴 **제어면은 원장을 읽은 뒤에 묻는다.** 원장 스냅샷(REPEATABLE READ)이 준 런 집합이
+		 * 곧 물어볼 대상이라, 순서를 뒤집으면 원장에 없는 실행을 묻거나 새로 생긴 런을 빠뜨린다.
+		 * 그리고 이 조회는 **트랜잭션 밖**이다 — 외부 호출을 DB 트랜잭션 안에 넣으면 AWS 지연이
+		 * 그대로 커넥션 점유가 된다. */
+		RunControlPlane.Observation aws = controlPlane.describe(
+				f.runs().stream().map(RunRow::executionArn).filter(Objects::nonNull).toList());
 		return new ConsoleFactsResponse(
-				f.runs().stream().map(RunResponse::from).toList(),
+				f.runs().stream().map(r -> RunResponse.from(r, awsOf(aws, r))).toList(),
 				f.tasks().stream().map(TaskResponse::from).toList(),
 				datasets(f.tasks()),
 				f.outputs().stream().map(OutputResponse::from).toList(),
 				BoundaryResponse.from(f.boundary()),
 				ChainResponse.from(f.chain()),
-				new MetaResponse(f.dbNow().toString(), f.today().toString()));
+				new MetaResponse(f.dbNow().toString(), f.today().toString(),
+						aws.at() == null ? null : aws.at().toString()));
+	}
+
+	/**
+	 * 이 런의 제어면 관측. <b>제어면 자체를 못 본 경우와 그 실행만 없는 경우가 같은 {@code null}
+	 * 이다</b> — 런 단위로는 둘을 가를 수 없고, 가르는 것은 {@code meta.aws} 다(전자는 그것도
+	 * null). 런 필드에 사유를 더 만들지 않는 이유이기도 하다: 사유는 축 단위의 사실이다.
+	 */
+	private static RunControlPlane.RunState awsOf(RunControlPlane.Observation aws, RunRow r) {
+		return r.executionArn() == null ? null : aws.byArn().get(r.executionArn());
 	}
 
 	/**

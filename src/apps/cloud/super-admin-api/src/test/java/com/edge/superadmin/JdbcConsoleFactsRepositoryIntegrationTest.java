@@ -610,13 +610,15 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertTradingDay("2026-08-01");
 
 		assertThat(repository.facts(DAY).runs()).containsExactly(
+				/* ⏭ 조각 2: `executionArn` 은 `insertRun` 이 ARN 을 안 넣어 null 이다 —
+				 * 이 테스트는 런 축의 **원장 컬럼**을 재고 제어면 locator 는 겨누지 않는다. */
 				new RunRow("etf-daily:2026-08-03T09:00", "etf-daily", DAY, "SUCCEEDED",
-						OffsetDateTime.parse("2026-08-03T00:30:00Z"), null, null, null),
+						OffsetDateTime.parse("2026-08-03T00:30:00Z"), null, null, null, null),
 				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
 						OffsetDateTime.parse("2026-08-03T07:20:34Z"),
-						OffsetDateTime.parse("2026-08-03T08:00:00Z"), null, null),
+						OffsetDateTime.parse("2026-08-03T08:00:00Z"), null, null, null),
 				new RunRow("news:2026-08-03T09:00", "news", null, "RUNNING",
-						OffsetDateTime.parse("2026-08-03T00:10:00Z"), null, null, null));
+						OffsetDateTime.parse("2026-08-03T00:10:00Z"), null, null, null, null));
 	}
 
 	/**

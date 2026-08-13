@@ -313,7 +313,7 @@ export interface Facts {
    */
   runbook?: Record<string, RunbookEntry>;
   /**
-   * `aws` 는 AWS 제어면 관측 시각 — **미배선이라 실 응답에 없다**(C 축).
+   * `aws` 는 AWS 제어면 관측 시각. 나중에 붙은 축이라 API 롤백·UI 선배포 때는 없을 수 있다.
    *
    * `today` 는 **응답이 실제로 본 날**이고 거래일이라는 보장이 없다. `?date=` 를 주면 그 날짜가
    * 그대로 실리고(dev 실측), 생략했을 때만 "원장이 아는 가장 최근 날"이다 — 뒤엣것만 알고 쓰면

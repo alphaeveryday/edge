@@ -14,6 +14,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.service.ConsoleFactsService;
 import com.edge.superadmin.support.FakeConsoleFactsRepository;
+import com.edge.superadmin.support.FakeRunControlPlane;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.test.web.servlet.MockMvc;
@@ -67,6 +68,9 @@ class ConsoleControllerTest {
 	private static final ChainRow EMPTY_CHAIN = chain(0L, 0L, 0L, 0L);
 
 	private FakeConsoleFactsRepository repository;
+
+	/** ⏭ 조각 2 진행 중 — 기본은 "제어면을 못 봤다". 그 축을 겨누는 테스트가 따로 주입한다. */
+	private FakeRunControlPlane controlPlane = FakeRunControlPlane.unavailable();
 
 	private static ConsoleFacts facts(RunRow... runs) {
 		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of(), CLEAN,
@@ -149,7 +153,7 @@ class ConsoleControllerTest {
 	private MockMvc mvc(ConsoleFacts facts) {
 		repository = new FakeConsoleFactsRepository(facts);
 		return MockMvcBuilders
-				.standaloneSetup(new ConsoleController(new ConsoleFactsService(repository)))
+				.standaloneSetup(new ConsoleController(new ConsoleFactsService(repository, controlPlane)))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -656,8 +660,8 @@ class ConsoleControllerTest {
 		 * 곧 **와이어**다. 조각 3 에서 서비스가 실제 파생 로직을 갖게 되면 그때 물리는 자리다. */
 		mvc(facts(
 				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
-						DB_NOW, DB_NOW.plusHours(1), null, null),
-				new RunRow("news:2026-08-03T15:30", "news", DAY, "RUNNING", DB_NOW, null, null, null)))
+						DB_NOW, DB_NOW.plusHours(1), null, null, null),
+				new RunRow("news:2026-08-03T15:30", "news", DAY, "RUNNING", DB_NOW, null, null, null, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.runs.length()").value(2))
@@ -679,7 +683,7 @@ class ConsoleControllerTest {
 	@Test
 	void 런의_모르는_값은_null_로_싣는다_키를_빼지_않는다() throws Exception {
 		String body = mvc(facts(new RunRow("news:2026-08-03T15:30", "news", null, "RUNNING",
-				DB_NOW, null, null, null)))
+				DB_NOW, null, null, null, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andReturn().getResponse().getContentAsString();
@@ -699,9 +703,9 @@ class ConsoleControllerTest {
 	void 계획_여부는_런_행이_없는_슬롯에만_실린다() throws Exception {
 		String body = mvc(facts(
 				new RunRow("etf-daily:2026-08-03T15:40", "etf-daily", DAY, "SUCCEEDED",
-						DB_NOW, null, null, null),
+						DB_NOW, null, null, null, null),
 				new RunRow("etf-daily:2026-08-03T09:00", "etf-daily", DAY, null, null, null,
-						true, true)))
+						true, true, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.runs[1].planned").value(true))

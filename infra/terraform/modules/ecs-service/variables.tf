@@ -128,3 +128,14 @@ variable "enable_execute_command" {
   type        = bool
   default     = false
 }
+
+# 앱이 런타임에 쓰는 AWS 권한. **호출하는 API 하나하나를 적는다** — 넓게 잡으면 안 쓰는 권한이
+# 남고, 좁게 잡으면 AccessDenied 를 앱이 폴백으로 삼켜 그 경로만 조용히 안 돈다(ALPHA-671).
+variable "task_policy_statements" {
+  description = "태스크 역할 인라인 정책 문장. 비면 정책을 안 만든다."
+  type = list(object({
+    actions   = list(string)
+    resources = list(string)
+  }))
+  default = []
+}

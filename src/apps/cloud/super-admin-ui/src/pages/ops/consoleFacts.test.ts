@@ -147,7 +147,8 @@ const WIRE = (): ConsoleFactsDto => ({
   runs: [{
     id: 'etf-daily:2026-08-03T15:40', lane: 'etf-daily', tradingDate: '2026-08-03',
     ledgerStatus: 'RUNNING', ledgerUpdated: '2026-08-03T16:10:36+09:00',
-    deadline: '2026-08-03T21:40:00+09:00',
+    deadline: '2026-08-03T21:40:00+09:00', awsStatus: 'SUCCEEDED',
+    awsStop: '2026-08-03T16:12:27+09:00',
   }],
   tasks: [{
     taskKey: 'T', runId: 'etf-daily:2026-08-03T15:40', pipelineType: 'etf-daily',
@@ -174,7 +175,7 @@ const WIRE = (): ConsoleFactsDto => ({
       { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
     ],
   },
-  meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
+  meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03' },
 });
 
 /** 한 자리만 망가뜨린 응답 — 나머지는 정상이라 거부가 그 자리 때문임이 분명하다. */
@@ -200,6 +201,8 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       ledger_status: 'RUNNING',
       ledger_updated: '2026-08-03T16:10:36+09:00',
       deadline: '2026-08-03T21:40:00+09:00',
+      aws_status: 'SUCCEEDED',
+      aws_stop: '2026-08-03T16:12:27+09:00',
     }],
     tasks: [{
       task_key: 'T',
@@ -244,7 +247,11 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
         { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
       ],
     },
-    meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
+    meta: {
+      db: '2026-08-03T16:20:00+09:00',
+      aws: '2026-08-03T16:20:03+09:00',
+      today: '2026-08-03',
+    },
   });
 });
 
@@ -262,15 +269,21 @@ test('🔴 체인의 순서를 어댑터가 바꾸지 않는다 — 목록 순�
   assert.deepEqual(r.facts.chain?.stages.map((s) => s.batch), [17, 18]);
 });
 
-test('서버가 안 보낸 축을 어댑터가 만들어 내지 않는다', () => {
+test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는다', () => {
   /* 🔴 `queues: []`·`runbook: {}` 로 메우면 계측 없음이 실측 0 으로 위조되고, 규칙이 `못 돎`
    * 대신 `평가됨 · 위반 0`("봤고 괜찮다")을 세운다 — 이 트랙이 없애려는 칸 혼동이다.
-   * 남은 셋은 전부 **AWS 제어면**이라 ALPHA-979 조각 2·3 이 닫는다. */
-  const r = parseFacts(WIRE());
+   * AWS 축은 선배포 중 없을 수 있고, queues 는 ALPHA-979 조각 3이 닫는다. */
+  const w = WIRE();
+  delete w.runs[0].awsStatus;
+  delete w.runs[0].awsStop;
+  delete w.meta.aws;
+  const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.equal(r.facts.runbook, undefined, 'runbook 축을 만들어 냈다');
   assert.equal(r.facts.meta.aws, undefined, 'AWS 관측 시각을 만들어 냈다');
+  assert.equal(r.facts.runs[0].aws_status, undefined, 'AWS 상태를 만들어 냈다');
+  assert.equal(r.facts.runs[0].aws_stop, undefined, 'AWS 종료 시각을 만들어 냈다');
   assert.equal(r.facts.queues, undefined, 'queues 축을 만들어 냈다');
   /* 체인은 이제 **온다** — 이 단언이 없으면 위 셋을 지키느라 축을 통째로 떨구는 회귀가 초록이다 */
   assert.notEqual(r.facts.chain, undefined, 'chain 축을 떨궜다');
@@ -391,6 +404,22 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.meta, META_FIELDS, 'meta');
 });
 
+test('AWS 축의 null 은 조회 실패 형상으로 보존한다 — 키 부재와 접지 않는다', () => {
+  const w = WIRE();
+  w.runs[0].awsStatus = null;
+  w.runs[0].awsStop = null;
+  w.meta.aws = null;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.ok('aws_status' in r.facts.runs[0]);
+  assert.equal(r.facts.runs[0].aws_status, null);
+  assert.ok('aws_stop' in r.facts.runs[0]);
+  assert.equal(r.facts.runs[0].aws_stop, null);
+  assert.ok('aws' in r.facts.meta);
+  assert.equal(r.facts.meta.aws, null);
+});
+
 test('🔴 거부 — 체인의 수 자리에 null 이 오면 버린다 (그 단계만 비교에서 사라진다)', () => {
   /* 이 축에는 `null` 자리가 없다 — 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없다.
    * 통과시키면 규칙이 그 단계만 조용히 건너뛰고, **손실이 "여기는 안 셌구나"로 접힌다**.
@@ -475,6 +504,9 @@ test('거부 — 무검증으로 새던 자리들', () => {
     ['planned: "false"', (w: ConsoleFactsDto) => { (w.runs[0] as { planned: unknown }).planned = 'false'; }],
     ['noRunRow: 1', (w: ConsoleFactsDto) => { (w.runs[0] as { noRunRow: unknown }).noRunRow = 1; }],
     ['ledgerStatus 가 객체', (w: ConsoleFactsDto) => { (w.runs[0] as { ledgerStatus: unknown }).ledgerStatus = {}; }],
+    ['awsStatus 가 객체', (w: ConsoleFactsDto) => { (w.runs[0] as { awsStatus: unknown }).awsStatus = {}; }],
+    ['awsStop 이 비시각', (w: ConsoleFactsDto) => { w.runs[0].awsStop = 'x'; }],
+    ['meta.aws 가 비시각', (w: ConsoleFactsDto) => { w.meta.aws = 'x'; }],
     ['taskOutcome 가 객체', (w: ConsoleFactsDto) => { (w.tasks[0] as { taskOutcome: unknown }).taskOutcome = {}; }],
     ['stage 가 null', (w: ConsoleFactsDto) => { (w.tasks[0] as { stage: unknown }).stage = null; }],
     ['pipelineType 이 수', (w: ConsoleFactsDto) => { (w.tasks[0] as { pipelineType: unknown }).pipelineType = 1; }],

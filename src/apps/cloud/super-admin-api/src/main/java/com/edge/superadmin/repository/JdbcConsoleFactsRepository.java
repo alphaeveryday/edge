@@ -74,7 +74,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 */
 	private static final String RUNS_SQL = """
 			SELECT r.run_key, r.pipeline_type, r.trading_date, r.orchestration_status,
-			       r.updated_at, r.hard_deadline_at
+			       r.updated_at, r.hard_deadline_at,
+			       COALESCE(r.sfn_execution_arn, r.expected_execution_arn) AS execution_arn
 			  FROM ops_pipeline_run r
 			 WHERE %s
 			""".formatted(DAY_WINDOW);
@@ -741,7 +742,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getObject("updated_at", OffsetDateTime.class),
 				rs.getObject("hard_deadline_at", OffsetDateTime.class),
 				// 실재하는 런에는 "계획된 슬롯인가"를 답할 계측이 없다 — 인터페이스 주석 참조.
-				null, null);
+				null, null,
+				rs.getString("execution_arn"));
 	}
 
 	/**
@@ -761,7 +763,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			log.warn("PLANNER_MISSING 슬롯 키를 못 읽었다: {} — planner 의 slot_run_key"
 					+ "(<lane>:<YYYY-MM-DDTHH:MM>) 형식과 갈렸는지 확인 필요", runKey);
 		}
-		return new RunRow(runKey, lane, slotDate, null, null, null, true, true);
+		/* 런 행이 없으니 실행 ARN 도 없다 — 제어면에 물을 대상 자체가 없다. 계산해 넣지 않는다:
+		 * `expected_execution_arn` 은 Planner 가 런 행을 만들 때 함께 남기는 값이고, 여기서
+		 * 지어내면 "계획은 있는데 런 행이 없다"는 사실이 "실행이 없다"는 제어면 관측으로 바뀐다. */
+		return new RunRow(runKey, lane, slotDate, null, null, null, true, true, null);
 	}
 
 	private static TaskRow mapTask(ResultSet rs, int rowNum) throws SQLException {

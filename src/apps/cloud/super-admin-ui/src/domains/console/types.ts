@@ -5,8 +5,8 @@
  * 안 보낸다). 둘을 잇는 어댑터는 **한 곳**이어야 한다(아직 없다 — 화면 조각이 들여온다):
  * 규칙은 화면 도메인을 모르고, 도메인은 규칙을 모른다.
  *
- * 서버가 **안 보내는 축**은 여기에도 없다: `queues`·`etfLedger`·`runbook`·`meta.aws`·
- * `runs[].kind`·`runs[].awsStatus`·`tasks[].maxRetries`. 있는 척 선언하면 어댑터가 `?? []` 로
+ * 서버가 **안 보내는 축**은 여기에도 없다: `queues`·`etfLedger`·`runbook`·
+ * `runs[].kind`·`tasks[].maxRetries`. 있는 척 선언하면 어댑터가 `?? []` 로
  * 메우게 되고, 그러면 계측 공백이 실측으로 위조된다.
  */
 
@@ -35,6 +35,9 @@ export interface RunDto {
   ledgerStatus: string | null;
   ledgerUpdated: string | null;
   deadline: string | null;
+  /** 나중에 붙은 제어면 축 — API 롤백·UI 선배포 동안은 키 자체가 없을 수 있다. */
+  awsStatus?: string | null;
+  awsStop?: string | null;
   planned?: boolean;
   noRunRow?: boolean;
 }
@@ -124,5 +127,7 @@ export interface ChainStageDto {
  *  뒤엣것만 적어 두면 과거 조회 응답에 "원장 최신일"이라는 거짓 라벨이 붙는다. */
 export interface MetaDto {
   db: string;
+  /** 키 부재=미배선, null=조회 실패라 두 형상을 보존한다. */
+  aws?: string | null;
   today: string;
 }

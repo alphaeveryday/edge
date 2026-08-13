@@ -33,7 +33,8 @@ function emptyFacts(): Facts {
 
 /**
  * **옵셔널 축을 전부 뺀** 사실 — 실 응답의 최소 형상이다(계약 §「무엇이 실제로 나가는가」:
- * 서버가 `chain`·`queues`·`etf_ledger`·`runbook`·`meta.aws` 를 안 보낸다).
+ * 서버가 `queues`·`etf_ledger`·`runbook`을 안 보내고, 나중에 붙은 `chain`·`meta.aws`도
+ * API 롤백·UI 선배포 때는 없을 수 있다).
  *
  * 빼는 목록을 각 테스트가 손으로 적으면 축이 하나 늘 때 한 곳만 갱신된다 — 이 트랙에서 반복된
  * 모양이라 자리를 하나로 둔다. `Facts` 에 옵셔널 축이 새로 생기면 여기에 더해라.
@@ -168,6 +169,19 @@ test('R03 제어면·원장 불일치 — 양쪽 다 있고 다를 때만, 한�
     run({ id: 'one-side', aws_status: 'FAILED' }), // 원장 부재 — R02/R04 소관
   ];
   assert.deepEqual(hits(f, 'R03').map((v) => v.target), ['diff']);
+});
+
+test('R03 — AWS 종료 뒤 원장을 아직 안 훑은 Reconciler 지연은 불일치에서 뺀다', () => {
+  const f = emptyFacts();
+  f.runs = [
+    run({ id: 'not-scanned', aws_status: 'SUCCEEDED', aws_stop: '2026-08-03T16:13:06+09:00',
+      ledger_status: 'RUNNING', ledger_updated: '2026-08-03T16:10:45+09:00' }),
+    run({ id: 'scanned-after-stop', aws_status: 'SUCCEEDED', aws_stop: '2026-08-03T16:13:06+09:00',
+      ledger_status: 'RUNNING', ledger_updated: '2026-08-03T16:14:00+09:00' }),
+    run({ id: 'scanned-at-stop', aws_status: 'SUCCEEDED', aws_stop: '2026-08-03T16:13:06+09:00',
+      ledger_status: 'RUNNING', ledger_updated: '2026-08-03T16:13:06+09:00' }),
+  ];
+  assert.deepEqual(hits(f, 'R03').map((v) => v.target), ['scanned-after-stop', 'scanned-at-stop']);
 });
 
 test('R04 런 실패 — 원장 terminal 실패는 위반', () => {
@@ -1389,14 +1403,14 @@ test('리포트 — evaluated:false 와 violations:0 이 구분되고, 흡수 �
   assert.equal(rep.incidents[0].members[0].cause, '런이 죽어 작업이 귀결되지 못했다');
 });
 
-test('스냅샷 회귀 — 동봉 스냅샷은 위반 24 · 사건 15 · P0 6 (레퍼런스 v4 대비 R14 강등 제거분 +1)', async () => {
+test('스냅샷 회귀 — 동봉 스냅샷은 위반 23 · 사건 14 · P0 6', async () => {
   const { readFileSync } = await import('node:fs');
   const facts = JSON.parse(
     readFileSync(new URL('./facts-snapshot.json', import.meta.url), 'utf8'),
   ) as Facts;
   const ev = evaluate(facts);
   /* 픽스처가 아니라 **동봉 스냅샷 위에서** 규약을 전수 검사한다 — 픽스처는 룰이 만든 값의
-   * 한 갈래만 밟지만 스냅샷은 실제로 걸린 24건 전부를 준다 */
+   * 한 갈래만 밟지만 스냅샷은 실제로 걸린 23건 전부를 준다 */
   ev.violations.forEach(assertContract);
   /* 29 → 24 · 20 → 15 는 **회귀가 아니라 정정**이다(ALPHA-946). 이 스냅샷은 `as_of.db` 가
    * `2026-08-03T16:20 KST` 이고 `trade_date` 가 같은 08-03 인 **미완결 당일의 캡처**인데,
@@ -1405,8 +1419,10 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 24 · 사건 15 · P0 6 (�
    * (`JdbcConsoleFactsRepository.outputs`). 픽스처가 서버가 낼 수 없는 응답을 들고 있으면
    * 그 픽스처가 결함을 정답으로 고정한다.
    * ⇒ R13 이 다섯 건 전부 못 세우고, 그 다섯이 전부 **독립 사건**이었으므로 사건도 5 준다. */
-  assert.equal(ev.violations.length, 24);
-  assert.equal(ev.incidents.length, 15);
+  /* ALPHA-979 조각 2: R03 한 건은 ledger_updated < aws_stop 이라 Reconciler 가 아직 종료를
+   * 훑기 전인 정상 지연이다. 위반·독립 사건에서 각각 하나 빠지고 P0 수는 그대로다. */
+  assert.equal(ev.violations.length, 23);
+  assert.equal(ev.incidents.length, 14);
   /* 사건 P0 는 안 움직인다 — R13 은 P1 이다. ⚠️ 그것만으로 "줄어든 것이 R13 뿐"이 **증명되지는
    * 않는다**(그렇게 적었다가 리뷰에 뒤집혔다 — 다른 규칙의 P1 하나가 사라지고 또 하나가 새로
    * 걸려도 총계 셋이 같다). 그 상쇄는 아래 **규칙별 건수**가 잡는다. */
@@ -1426,7 +1442,7 @@ test('스냅샷 회귀 — 동봉 스냅샷은 위반 24 · 사건 15 · P0 6 (�
   const byRule: Record<string, number> = {};
   for (const v of ev.violations) byRule[v.rule] = (byRule[v.rule] ?? 0) + 1;
   assert.deepEqual(byRule, {
-    R01: 1, R02: 2, R03: 1, R04: 1, R05: 3, R06: 4, R07: 1, R08: 1,
+    R01: 1, R02: 2, R04: 1, R05: 3, R06: 4, R07: 1, R08: 1,
     R09: 2, R10: 2, R11: 1, R14: 1, R15: 1, R16: 3,
   }, 'R13 외의 규칙에서도 건수가 움직였다 — 총계가 같아도 이건 회귀다');
 
@@ -1668,19 +1684,19 @@ test('못 돌 수 있는 규칙은 저마다 다른 사유 문장을 갖는다 (
  * ⚠️ **R13 은 세지 않는다** — `dep` 이 있지만 계측 공백이 아니라 "오늘 판정할 산출이 없다"는
  * 조건부 사유다. 날마다 갈리므로 영구 공백과 같이 세면 규모가 부풀려진다. */
 test('계측 공백으로 못 도는 규칙 목록이 문서의 티켓 표와 같다 (손으로 쓴 목록은 반드시 낡는다)', () => {
-  /* R10 이 여기 있었다 — ALPHA-979 **조각 1**이 `chain` 을 배선하며 빠졌다. 티켓 행은 남는다:
-   * 남은 두 축(`aws_status`·`queues[]`)이 AWS 제어면이라 조각 2·3 이다. 그래서 이 목록과 문서의
+  /* R10·R03 이 여기 있었다 — ALPHA-979 조각 1·2가 `chain`·`aws_status` 를 배선하며 빠졌다.
+   * 티켓 행은 남고 `queues[]` 조각 3만 남았다. 그래서 이 목록과 문서의
    * 표는 **행 단위로 안 맞는다** — 아래 대조는 "티켓 키가 문서에 있는가"까지다. */
-  const BLOCKED = ['R03', 'R07', 'R08', 'R11', 'R12', 'R15', 'R16'];
+  const BLOCKED = ['R07', 'R08', 'R11', 'R12', 'R15', 'R16'];
   /* `dep` 이 있어도 **계측 공백이 아닌** 규칙들. 판별자는 "그 축이 배선되면 사라지는가"다.
    * · R13 — "오늘 판정할 산출이 없다"는 날마다 갈리는 조건부 사유다.
-   * · R10 — 축은 배선됐다. 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
+   * · R03·R10 — 축은 배선됐다. 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
    *   계측이 아니라 배포 시차다. ⚠️ **도달 가능한 갈래다** — 검증 경계가 이 축만 옵셔널로
    *   받으므로(`consoleFacts.test.ts` 의 「체인 축이 통째로 없는 응답은 거부하지 않는다」)
    *   API 롤백 한 번에 실제로 이 상태가 된다.
    * 여기 넣는 것이 세는 것보다 나은 이유: 같이 세면 계측 공백의 규모가 부풀려지고, 그 수가
    * 그대로 "아무도 안 보는 축이 몇 개인가"로 읽힌다. */
-  const CONDITIONAL = ['R13', 'R10'];
+  const CONDITIONAL = ['R13', 'R03', 'R10'];
 
   const withDep = RULES.filter((R) => R.dep).map((R) => R.id);
   assert.deepEqual(
