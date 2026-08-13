@@ -1590,11 +1590,22 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 🔴 <b>재실행이 진짜 결손을 상쇄하면 안 된다.</b> 경로 둘 중 하나만 런이 붙고 그 하나가 두 번
 	 * 돌면, 런 <b>행</b>은 2 라 경로→런이 조용해지고 "설명을 아예 못 받은 ETF" 가 화면 어디에도
 	 * 안 뜬다. 도달 여부로 세면 런 단계가 1 로 떨어져 그 손실이 제자리에서 보인다.
+	 *
+	 * <p>🔴 <b>단계마다 하나씩 멈춘 코호트를 둔다.</b> 어느 한 단계에 "여기서 멈춘" 구성원이
+	 * 없으면 그 단계의 도달 술어를 지우는 변이가 살아남는다 — 실측으로 나온 자리다(관측은
+	 * 있는데 라우트가 없는 형상이 픽스처에 없어 {@code route_id IS NOT NULL} 이 무단언이었다).
 	 */
 	@Test
 	void 재실행이_진짜_결손을_상쇄하지_않는다() {
 		insertPublished("res-ok", "2026-08-03", "etf-k", "PUBLISHED");
-		/* 둘째 관측은 경로까지만 가고 런이 없다 — 이것이 감춰지면 안 되는 손실이다. */
+		/* ① 관측만 있고 라우트가 없다 — 라우터가 못 돈 형상. */
+		insertTrigger("trg-noroute", "2026-08-03", "etf-n");
+		jdbc.update("""
+				INSERT INTO etf_contribution_observation (contribution_observation_id,
+				       price_movement_trigger_id, available_at, data_version)
+				VALUES ('co-noroute', 'trg-noroute', '2026-08-03T15:41:00+09:00'::timestamptz, 'd1')
+				""");
+		/* ② 라우트까지만 가고 런이 없다 — 이것이 재실행에 덮이면 안 되는 손실이다. */
 		insertTrigger("trg-lost", "2026-08-03", "etf-l");
 		jdbc.update("""
 				INSERT INTO etf_contribution_observation (contribution_observation_id,
@@ -1607,7 +1618,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				VALUES ('rt-lost', 'co-lost', 'PRICE_ONLY', false,
 				        '2026-08-03T15:41:00+09:00'::timestamptz)
 				""");
-		/* 살아남은 경로가 두 번 돈다 — 행을 세면 런이 2 라 위 결손을 정확히 덮는다. */
+		/* ③ 살아남은 경로가 두 번 돈다 — 행을 세면 런이 2 라 ②를 정확히 덮는다. */
 		jdbc.update("""
 				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
 				       bundle_version, explanation_as_of, run_status, started_at)
@@ -1617,9 +1628,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		var stages = repository.facts(LocalDate.parse("2026-08-03")).chain().stages();
 
-		assertThat(stages.get(0).batch()).isEqualTo(2L);   // c.obs
-		assertThat(stages.get(1).batch()).isEqualTo(2L);   // c.route
-		assertThat(stages.get(2).batch()).isEqualTo(1L);   // c.run — 여기서 하나가 멈췄다
+		assertThat(stages.get(0).batch()).isEqualTo(3L);   // c.obs
+		assertThat(stages.get(1).batch()).isEqualTo(2L);   // c.route — ①이 여기서 멈췄다
+		assertThat(stages.get(2).batch()).isEqualTo(1L);   // c.run — ②가 여기서 멈췄다
 		assertThat(stages.get(3).batch()).isEqualTo(1L);   // c.res
 	}
 

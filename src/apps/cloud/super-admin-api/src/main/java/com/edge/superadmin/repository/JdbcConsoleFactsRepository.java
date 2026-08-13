@@ -370,6 +370,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 게시 대상이 아닌지({@code publishable=false}), 운영자가 내렸는지({@code WITHDRAWN})가
 	 * 같은 모양이다. 그래서 결과→게시의 감소에는 <b>설계된 것이 섞인다</b>(계약 §체인 축).
 	 *
+	 * <p>⚠️ <b>테스트로 못 죽이는 변이 둘</b>(변이 실증 — 억지로 안 죽인다):
+	 * ① 라우트 단계를 {@code count(DISTINCT route_id)} 로 되돌리기 — {@code explanation_route}
+	 *    의 {@code contribution_observation_id} 가 UNIQUE 라 관측과 1:1 이고 <b>동치</b>다.
+	 * ② 게시 단계를 {@code count(DISTINCT published_id)} 로 되돌리기 — 한 관측에 게시본이 둘인
+	 *    상태를 <b>프로듀서가 만들지 않는다</b>(엔진이 이미 게시본이 있으면 DRAFT 로 넣는다).
+	 *    스키마는 허용하므로 방어로는 유효하다. 없는 상태를 픽스처가 지어내면서까지 죽이지 않는다.
+	 *
 	 * <p>⚠️ <b>진행 중인 하루는 손실처럼 보인다</b>(알려진 천장). 이 축은 "지금까지 몇 건이
 	 * 도착했나"이지 "몇 건이 끝내 사라졌나"가 아니다 — 아직 처리 중인 트리거는 하류 단계에
 	 * 없으므로 감소로 보인다. 그것을 서버가 가리려면 "이 트리거는 처리될 기회를 가졌나"를 답하는
