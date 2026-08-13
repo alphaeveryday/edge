@@ -1,7 +1,10 @@
 /* 설명 생성 흐름 스트립 (ALPHA-738).
  *
  * 체인은 하나다. 배치 트리거와 장중 트리거는 별개 파이프라인이 아니라 같은 체인의 두 입력이라
- * (etf_contribution_observation 이 두 트리거 FK 를 모두 갖는다) 단계마다 배치/장중을 나란히 낸다.
+ * 단계마다 배치/장중을 나란히 낸다 — 합류 지점이 `etf_contribution_observation` 이다.
+ * ⚠️ "두 트리거 FK 를 모두 갖는다"고 적혀 있었는데 거짓이다: 한 행은 **정확히 하나**를 갖는다
+ * (`ck_etf_contribution_one_trigger`). 그 표가 두 축을 **받는다**는 뜻이었고, 갈래를 가르는 것도
+ * 바로 그 배타성이다(하류 단계에는 배치/장중 컬럼이 없다).
  *
  * **어디서 끝나는가**: Cloud 게시까지다. tenant_delivery 발번은 Cloud→테넌트 전달 경계이고
  * 그 뒤(Sync Agent·Intake·Screening·온프렘 최종 게시·소비자 노출)는 온프렘 영역이라

@@ -228,9 +228,9 @@ export const OUTPUT_FIELDS: Record<string, Check> = {
 export const BOUNDARY_FIELDS: Record<string, Check> = {
   publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
 };
-/* 🔴 **체인의 수에는 `null` 자리가 없다.** 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없고,
- * 0 은 그 단계에서 사라졌다는 실측이다(R10 의 P0). `nullableCount` 를 쓰면 손상된 응답의 `null`
- * 이 규칙 층까지 흘러가 그 단계만 비교에서 조용히 빠지고, 손실이 "여기는 안 셌구나"로 접힌다. */
+/* 🔴 **체인의 수에는 `null` 자리가 없다.** 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없다.
+ * `nullableCount` 를 쓰면 손상된 응답의 `null` 이 규칙 층까지 흘러가 그 단계만 비교에서 조용히
+ * 빠지고, 그러면 **그 단계에서 난 감소가 통째로 안 보인다**(R10 은 유한수만 점으로 센다). */
 export const CHAIN_FEED_FIELDS: Record<string, Check> = {
   id: text, label: text, v: count, unit: text, src: text,
 };
@@ -287,27 +287,33 @@ export function parseFacts(body: unknown): FactsParse {
     if (field) return bad(`${axis}.${field} 의 값이 계약과 다르다`);
   }
 
-  /* 체인만 형상이 둘이다 — 객체 하나 안에 배열이 둘이다. 그래서 위 두 루프 어느 쪽에도 안
-   * 들어간다. **빈 배열도 거부한다**: 소비자는 `feeds[0]`·`feeds[1]` 을 **위치로** 읽으므로
-   * (id 로 찾지 않는다) 갈래가 없는 응답은 그 자리에서 `undefined` 가 되고, 그러면 그 갈래의
-   * 첫 비교점이 사라져 손실 하나가 통째로 안 보인다. 계약상 갈래는 늘 둘이다. */
+  /* 체인만 형상이 둘이다 — 객체 하나 안에 배열이 둘이라 위 두 루프 어느 쪽에도 안 들어간다.
+   *
+   * 🔴 **축 자체가 없는 것은 거부하지 않는다.** 다른 축과 달리 이건 나중에 붙은 축이라 안 싣는
+   * 배포본이 실재한다(API 롤백·UI 선배포). 거부하면 체인 카드 하나 때문에 **ops 전 화면**이
+   * "응답이 계약과 다릅니다" 한 장으로 바뀐다 — 규칙 엔진은 축 부재를 표현할 수단(`canRun`)을
+   * 이미 갖고 있으므로 그쪽으로 흘려보내는 것이 옳다. 있으면 **전 필드를 검사한다.** */
   const chain = body.chain;
-  if (!isRow(chain)) return bad('chain 축이 객체가 아니다');
-  for (const [part, fields] of [['feeds', CHAIN_FEED_FIELDS],
-    ['stages', CHAIN_STAGE_FIELDS]] as const) {
-    const rows = chain[part];
-    if (!Array.isArray(rows) || rows.length === 0) return bad(`chain.${part} 가 비었다`);
-    for (const row of rows) {
-      if (!isRow(row)) return bad(`chain.${part} 원소가 객체가 아니다`);
-      const field = offendingField(row, fields);
-      if (field) return bad(`chain.${part}[].${field} 의 값이 계약과 다르다`);
+  if (chain !== undefined) {
+    if (!isRow(chain)) return bad('chain 축이 객체가 아니다');
+    for (const [part, fields] of [['feeds', CHAIN_FEED_FIELDS],
+      ['stages', CHAIN_STAGE_FIELDS]] as const) {
+      const rows = chain[part];
+      if (!Array.isArray(rows) || rows.length === 0) return bad(`chain.${part} 가 비었다`);
+      for (const row of rows) {
+        if (!isRow(row)) return bad(`chain.${part} 원소가 객체가 아니다`);
+        const field = offendingField(row, fields);
+        if (field) return bad(`chain.${part}[].${field} 의 값이 계약과 다르다`);
+      }
     }
+    /* 갈래가 **모자라면** 거부한다 — 소비자는 `feeds[0]`·`feeds[1]` 을 **위치로** 읽으므로
+     * (id 로 찾지 않는다) 한 갈래만 오면 그 자리가 `undefined` 가 되고, 그 갈래의 첫 비교점이
+     * 사라져 트리거→관측 손실이 통째로 안 보인다.
+     * ⚠️ **넘치는 것은 거부하지 않는다** — "모르는 필드는 거부하지 않는다"와 같은 이유다(전진
+     * 배포가 화면을 멈추면 안 된다). 대가를 밝혀 둔다: 셋째 갈래가 생기면 R10 이 그 갈래를
+     * **한 번도 안 본다**. 축이 늘 때 규칙을 같이 고치는 것 말고 이걸 잡는 자동 가드는 없다. */
+    if ((chain.feeds as unknown[]).length < 2) return bad('chain.feeds 가 두 갈래가 아니다');
   }
-  /* 🔴 **셋째 갈래도 거부한다 — 이건 "모르는 필드는 거부하지 않는다"의 예외다.** 그 규약은
-   * 서버의 전진 배포가 화면을 멈추면 안 된다는 뜻인데, 여기서 통과시키면 소비자가 위치로
-   * 읽는 탓에 **셋째 갈래를 한 번도 안 보고 "손실 없음"을 세운다** — 이 콘솔이 없애려는
-   * 칸 혼동 그대로다. 축이 늘면 규칙도 같이 고쳐야 하므로 그때는 시끄럽게 실패하는 편이 옳다. */
-  if ((chain.feeds as unknown[]).length !== 2) return bad('chain.feeds 가 두 갈래가 아니다');
 
   return { ok: true, facts: toFacts(body as unknown as ConsoleFactsDto) };
 }
@@ -369,23 +375,29 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       delivery_rows: dto.boundary.deliveryRows,
     },
     /* 순서를 **그대로 옮긴다** — 목록 순서가 곧 흐름이라 정렬하거나 id 로 다시 찾으면 서버가
-     * 정한 선후가 사라진다. 원장에는 단계 간 선후가 없어 여기서 복원할 방법도 없다. */
-    chain: {
-      feeds: dto.chain.feeds.map((f) => ({
-        id: f.id,
-        label: f.label,
-        v: f.v,
-        unit: f.unit,
-        src: f.src,
-      })),
-      stages: dto.chain.stages.map((s) => ({
-        id: s.id,
-        label: s.label,
-        batch: s.batch,
-        intraday: s.intraday,
-        src: s.src,
-      })),
-    },
+     * 정한 선후가 사라진다. 원장에는 단계 간 선후가 없어 여기서 복원할 방법도 없다.
+     * 안 온 축은 **만들지 않는다**(다른 부재 축과 같은 규약) — 빈 목록으로 채우면 R10 이
+     * `못 돎` 대신 `평가됨 · 위반 0` 을 세운다. */
+    ...(dto.chain
+      ? {
+          chain: {
+            feeds: dto.chain.feeds.map((f) => ({
+              id: f.id,
+              label: f.label,
+              v: f.v,
+              unit: f.unit,
+              src: f.src,
+            })),
+            stages: dto.chain.stages.map((s) => ({
+              id: s.id,
+              label: s.label,
+              batch: s.batch,
+              intraday: s.intraday,
+              src: s.src,
+            })),
+          },
+        }
+      : {}),
     meta: { db: dto.meta.db, today: dto.meta.today },
   };
 }

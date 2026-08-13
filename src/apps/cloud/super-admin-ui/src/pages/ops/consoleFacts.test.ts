@@ -254,7 +254,7 @@ test('🔴 체인의 순서를 어댑터가 바꾸지 않는다 — 목록 순�
    * 정렬하면, 원장에 단계 간 선후가 없어 복원할 방법이 없는 순서가 조용히 뒤집힌다.
    * 뒤집힌 순서 위에서 R10 은 감소를 증가로 읽어 **P0 손실을 통째로 놓친다**. */
   const w = WIRE();
-  w.chain.stages.reverse();
+  w.chain!.stages.reverse();
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
@@ -386,8 +386,8 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.datasets[0], DATASET_FIELDS, 'datasets');
   both(w.outputs[0], OUTPUT_FIELDS, 'outputs');
   both(w.boundary, BOUNDARY_FIELDS, 'boundary');
-  both(w.chain.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
-  both(w.chain.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
+  both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
+  both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
   both(w.meta, META_FIELDS, 'meta');
 });
 
@@ -397,35 +397,61 @@ test('🔴 거부 — 체인의 수 자리에 null 이 오면 버린다 (그 단
    * 갈래 하나만 망가진 응답도 같다: 나머지 갈래가 멀쩡해 화면은 정상으로 보인다. */
   for (const [name, mutate] of [
     ['stages[].batch 가 null', (w: ConsoleFactsDto) =>
-      { (w.chain.stages[0] as { batch: unknown }).batch = null; }],
+      { (w.chain!.stages[0] as { batch: unknown }).batch = null; }],
     ['stages[].intraday 가 null', (w: ConsoleFactsDto) =>
-      { (w.chain.stages[0] as { intraday: unknown }).intraday = null; }],
-    ['feeds[].v 가 null', (w: ConsoleFactsDto) => { (w.chain.feeds[0] as { v: unknown }).v = null; }],
-    ['feeds[].v 가 NaN', (w: ConsoleFactsDto) => { w.chain.feeds[0].v = NaN; }],
-    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain.stages[0].batch = -1; }],
+      { (w.chain!.stages[0] as { intraday: unknown }).intraday = null; }],
+    ['feeds[].v 가 null', (w: ConsoleFactsDto) => { (w.chain!.feeds[0] as { v: unknown }).v = null; }],
+    ['feeds[].v 가 NaN', (w: ConsoleFactsDto) => { w.chain!.feeds[0].v = NaN; }],
+    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain!.stages[0].batch = -1; }],
     ['stages[].label 이 null', (w: ConsoleFactsDto) =>
-      { (w.chain.stages[0] as { label: unknown }).label = null; }],
+      { (w.chain!.stages[0] as { label: unknown }).label = null; }],
     ['chain 이 배열', (w: ConsoleFactsDto) => { (w as { chain: unknown }).chain = []; }],
-    ['chain.stages 가 객체', (w: ConsoleFactsDto) => { (w.chain as { stages: unknown }).stages = {}; }],
+    ['chain.stages 가 객체', (w: ConsoleFactsDto) => { (w.chain as unknown as { stages: unknown }).stages = {}; }],
     ['chain.stages 원소가 스칼라', (w: ConsoleFactsDto) =>
-      { (w.chain.stages as unknown[])[0] = 1; }],
+      { (w.chain!.stages as unknown[])[0] = 1; }],
   ] as const) {
     assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
   }
 });
 
-test('🔴 거부 — 갈래가 둘이 아닌 체인은 버린다 (소비자가 위치로 읽는다)', () => {
+test('🔴 거부 — 갈래가 모자란 체인은 버린다 (소비자가 위치로 읽는다)', () => {
   /* `feeds[0]`=배치·`feeds[1]`=장중은 **위치 계약**이다(id 로 찾지 않는다). 한 갈래만 오면
    * 그 자리가 `undefined` 가 되어 그 갈래의 첫 비교점이 사라지고, 트리거→관측 사이의 손실이
    * 통째로 안 보인다 — 값이 틀리는 게 아니라 **묻는 것을 안 묻게** 된다. */
-  assert.equal(broken((w) => { w.chain.feeds.pop(); }).ok, false, '갈래 하나짜리를 통과시켰다');
-  assert.equal(broken((w) => { w.chain.feeds = []; }).ok, false, '빈 피드를 통과시켰다');
-  assert.equal(broken((w) => { w.chain.stages = []; }).ok, false, '빈 단계 목록을 통과시켰다');
-  assert.equal(
-    broken((w) => { w.chain.feeds.push({ ...w.chain.feeds[0], id: 'feed.third' }); }).ok,
-    false,
-    '셋째 갈래를 통과시켰다 — 위치 계약이 무너진다',
-  );
+  assert.equal(broken((w) => { w.chain!.feeds.pop(); }).ok, false, '갈래 하나짜리를 통과시켰다');
+  assert.equal(broken((w) => { w.chain!.feeds = []; }).ok, false, '빈 피드를 통과시켰다');
+  assert.equal(broken((w) => { w.chain!.stages = []; }).ok, false, '빈 단계 목록을 통과시켰다');
+});
+
+test('갈래가 늘어난 체인은 거부하지 않는다 — 전진 배포가 화면을 멈추면 안 된다', () => {
+  /* ⚠️ 한때 `!== 2` 로 막았다가 되돌렸다. 같은 파일의 규약("모르는 필드는 거부하지 않는다")과
+   * 정면으로 부딪히고, 파급이 체인 카드가 아니라 **ops 전 화면**이다(검증 실패는 화면 단위
+   * 조회 실패다). 대가는 밝혀 둔다 — 셋째 갈래가 생기면 R10 이 그 갈래를 **한 번도 안 본다**.
+   * 그걸 잡는 자동 가드는 없고, 축이 늘 때 규칙을 같이 고치는 것이 유일한 방어다. */
+  const w = WIRE();
+  w.chain!.feeds.push({ ...w.chain!.feeds[0], id: 'feed.third' });
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `전진 배포 응답을 거부했다: ${r.reason}`);
+  if (!r.ok) return;
+  /* 앞 두 갈래는 그대로 위치를 지킨다 — 늘어난 축이 기존 판정을 밀어내지 않는다 */
+  assert.deepEqual(r.facts.chain?.feeds.map((f) => f.id),
+    ['feed.batch', 'feed.intraday', 'feed.third']);
+});
+
+test('🔴 체인 축이 통째로 없는 응답은 거부하지 않는다 — 그 축만 못 돎으로 선다', () => {
+  /* 🔴 이 축은 나중에 붙었다 — 안 싣는 배포본이 실재한다(API 롤백 · UI 선배포). 거부하면
+   * 체인 카드 하나 때문에 Run·Dataset·Delivery·Trend·Incidents 까지 **전부** 빈다.
+   * 규칙 엔진은 축 부재를 표현할 수단(`canRun`)을 이미 갖고 있으므로 그쪽으로 흘려보낸다.
+   * ⚠️ 이 단언이 없던 동안 화면·규칙 주석 셋이 "축이 없으면 이렇게 그린다"고 적고 있었는데
+   * 그 상태가 **앱에서 도달 불가**였다(리뷰가 잡았다) — 산문만 있고 경로가 없던 자리다. */
+  const w = WIRE();
+  delete w.chain;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `축 부재를 응답 결함으로 읽었다: ${r.reason}`);
+  if (!r.ok) return;
+  assert.equal(r.facts.chain, undefined, '없는 축을 만들어 냈다');
+  /* 나머지 축은 멀쩡히 온다 — 부재가 다른 축을 안 끌고 내려간다 */
+  assert.equal(r.facts.outputs.length, 1);
 });
 
 test('거부 — 안전 정수 범위를 넘은 건수는 이미 손상된 값이다', () => {

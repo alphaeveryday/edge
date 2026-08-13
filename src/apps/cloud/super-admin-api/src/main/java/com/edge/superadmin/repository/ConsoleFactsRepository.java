@@ -44,8 +44,12 @@ public interface ConsoleFactsRepository {
 	 * <p>수는 전부 {@code long} 이다 — <b>0 이 실측</b>이라서다. 코호트를 정해 놓고 세므로 "못
 	 * 셌다"가 없다. 축 전체가 안 나가는 경우만 부재이고, 그건 이 record 가 {@code null} 인 것이다.
 	 *
-	 * <p>⚠️ <b>단위는 "설명 건수"이지 "발번 건수"가 아니다</b> — 마지막 단계까지 결과를 세고,
-	 * 테넌트 다중도는 여기가 아니라 {@link BoundaryRow} 가 답한다.
+	 * <p><b>단계가 세는 것은 "그 단계에 도달한 코호트 구성원 수"</b>이지 그 단계의 행 수가 아니다.
+	 * 그래서 각 단계는 앞 단계의 부분집합이고, 감소는 언제나 "여기서 멈춘 구성원"을 뜻한다.
+	 * 행을 세면 재실행 같은 다중도가 손실로도 은폐로도 읽힌다(구현 주석에 실증 둘).
+	 *
+	 * <p>흐름은 <b>Cloud 게시에서 끝난다</b> — 발번 이후는 전달 경계의 물음이고
+	 * {@link BoundaryRow} 가 답한다(ADR-0026).
 	 */
 	record ChainRow(List<ChainFeed> feeds, List<ChainStage> stages) {
 	}

@@ -145,9 +145,13 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * {@code stages} 를 순서대로 인접 비교한다 — 순서를 재배치하면 아무것도 안 깨진 채 손실 판정만
 	 * 뒤섞인다. {@code feeds[0]} 이 배치, {@code feeds[1]} 이 장중이다(위치로 읽는다).
 	 *
-	 * <p>⚠️ <b>이 축이 없는 응답과 값이 0 인 응답은 다르다.</b> 축 부재는 "단계를 세는 계측이
-	 * 없다"이고 0 은 "코호트를 따라갔더니 그 단계에 아무것도 없었다"라 <b>후자는 P0 손실</b>이다.
-	 * 그래서 수는 전부 {@code long} 이고 이 축에는 {@code null} 자리가 없다.
+	 * <p>⚠️ <b>이 축이 없는 응답과 값이 0 인 응답은 다르다.</b> 축 부재는 "안 물어봤다"이고 0 은
+	 * "코호트를 따라갔더니 그 단계에 아무도 도달 못 했다"는 <b>실측</b>이다. 그래서 수는 전부
+	 * {@code long} 이고 이 축에는 {@code null} 자리가 없다.
+	 *
+	 * <p>⚠️ <b>0 자체가 위반인 것은 아니다.</b> 소비자(R10)는 인접한 두 값의 <b>감소</b>를 보므로,
+	 * 앞 단계도 0 이면 아무 위반도 안 선다(그 갈래는 애초에 아무것도 안 흘렀다). 그렇게 적었다가
+	 * 정정했다 — "0 이면 손실"은 이 응답이 하지 않는 판정이다.
 	 */
 	public record ChainResponse(List<ChainFeedResponse> feeds, List<ChainStageResponse> stages) {
 

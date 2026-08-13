@@ -59,9 +59,11 @@ R03(제어면·원장 불일치)·R11·R12(큐)가 읽는 사실은 DB 에 없�
   없다(R10·R13). 뒤 6개는 화면에 `못 돎` 으로 서야 한다 — `평가됨 · 위반 0` 과 같은 칸에 그리면
   계측 공백이 정상으로 보인다.
   - ⚠️ **R10 은 그 뒤 배선됐다**([ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979)
-    조각 1, 2026-08-13). 체인 일곱 단계의 출처가 전부 클라우드 DB 의 실테이블이라
-    (`price_movement_trigger` … `tenant_delivery`) super-admin-api 가 SQL 로 조립한다.
-    이 줄의 "소스 자체가 없다"에서 **R10 은 빠진다** — 계약의 §체인 축이 정본이다.
+    조각 1, 2026-08-13). 체인이 읽는 표가 전부 클라우드 DB 에 있어(`price_movement_trigger` ·
+    `minute_price_trigger` · `etf_contribution_observation` · `explanation_route` ·
+    `explanation_run` · `explanation_result`) super-admin-api 가 SQL 로 조립한다 — 없던 것은
+    소스가 아니라 **집계**였다. 이 줄의 "소스 자체가 없다"에서 **R10 은 빠진다**.
+    축의 형상(피드 2 + 단계 5)과 그 천장은 계약의 §체인 축이 정본이다.
 - 🔴 **R08(신선도 위반)은 지금 `평가됨` 인데 실 응답에서 `못 돎` 이 된다.** 계약 연결 작업이
   하나뿐이고 그 `actual_as_of_date` 가 [ADR-0043](0043-dataset-contract-freshness.md) 상 영구
   NULL 이기 때문이다. 목이 가리고 있던 계측 공백이 드러나는 것이므로 **회귀가 아니라 정정**이다.

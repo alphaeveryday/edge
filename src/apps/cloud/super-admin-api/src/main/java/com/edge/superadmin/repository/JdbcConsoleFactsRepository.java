@@ -27,7 +27,14 @@ import java.util.stream.Collectors;
  * 산출 축 + 경계 축 + 체인 축</b>. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도
  * 컬럼을 재료로 {@code ConsoleFactsService} 가 접는다.
  *
- * <p>날짜 축은 <b>거래일</b>({@code trading_date})이되 {@link #RUN_DAY} 한 식으로만 묻는다.
+ * <p><b>원장 축</b>(런·작업·산출)의 날짜는 {@link #RUN_DAY} <b>한 식으로만</b> 묻는다 — 한 자리라도
+ * 다르게 쓰면 그 런이 창에는 들어오는데 최신 날짜에 안 잡혀 기본 화면에서 사라진다.
+ *
+ * <p>⚠️ <b>체인 축은 그 식을 안 쓴다</b>(ALPHA-979). 세는 대상이 런이 아니라 <b>트리거</b>이고
+ * 그 표들은 원장이 아니다 — {@code price_movement_trigger.trade_date} 와
+ * {@code minute_price_trigger.window_start} 를 각각 본다. 즉 이 파일에는 날짜 술어가 <b>셋</b>
+ * 이고, 하나로 합칠 수 없다(다른 사건의 날짜다). {@code RUN_DAY} 의 불변식은 원장 축 안에서만
+ * 성립한다고 읽어라.
  *
  * <p>⚠️ <b>"비거래일 런은 그 컬럼이 NULL 이다"는 사실이 아니다.</b> {@code ops/planner.py} 의
  * {@code plan_run} 은 {@code trading_date=day.isoformat()} 을 <b>무조건</b> 넘기고, 그것이
@@ -342,20 +349,26 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 뻗으므로 갈래가 자동으로 따라온다 — 하류 테이블에는 배치/장중을 가르는 컬럼이 없다.
 	 *
 	 * <p><b>분봉 트리거는 {@code FIRE} 만 센다.</b> {@code REVERT} 는 노출 <b>회수</b> 마커라
-	 * 설명을 만들지 않고 큐로도 안 나간다(ALPHA-799). 지금은 writer 가 없어 0행이지만, 종류를
-	 * 안 거르면 그 writer 가 착지하는 날 피드만 조용히 부풀어 <b>없던 체인 손실</b>이 P0 로 선다.
+	 * 설명을 만들지 않는다(ALPHA-799 — 무효화만 한다). ⚠️ "큐로도 안 나간다"고 적었다가 정정했다:
+	 * {@code ExposureReverted} 의 destination 은 발화와 <b>같은 큐</b>다
+	 * ({@code data_pipeline/minute/jobs.py} 의 {@code TRIGGER_EVENT_DESTINATIONS}). 세지 않는
+	 * 근거는 <b>설명을 안 만든다</b>는 것 하나다. 지금은 writer 가 종류를 안 적어 실제 행이
+	 * 0 이지만, 안 거르면 그 writer 가 착지하는 날 피드만 조용히 부풀어 <b>없던 손실</b>이 선다.
 	 *
-	 * <p>⚠️ <b>발번의 {@code delivery_type = 'NEW'} 는 지금 아무 행도 못 거른다 — 그래서 테스트로
-	 * 겨눌 수 없다</b>(변이 실증: 지워도 전건 초록). 전달은 <b>2형상</b>이고(ADR-0044 — CORRECTION
-	 * 폐지, {@code V202608011200}) {@code INVALIDATION} 은 {@code explanation_result_id} 가 NULL
-	 * 이라({@code ck_tenant_delivery_payload}) 위 조인 조건에 애초에 안 걸린다. 그래도 남기는
-	 * 이유는 그 마이그레이션이 적어 둔 것과 같다: <b>3형상이 돌아오면 유형 술어가 필요해진다.</b>
-	 * 없는 형상을 픽스처가 지어내면서까지 죽이지 않는다(산출 축의 {@code skip_reason} 과 같은 판단).
+	 * <p>🔴 <b>단계는 "그 단계의 행 수"가 아니라 "코호트 구성원이 그 단계에 도달했는가"를 센다.</b>
+	 * 행을 세면 <b>다중도가 손실로 읽힌다</b> — 리뷰가 실 스키마에서 두 형상을 실증했다:
+	 * ① <b>재실행</b>({@code explanation_route_id} 에 UNIQUE 가 없다). 엔진은 그 경로에 이미
+	 *    PUBLISHED 가 있으면 새 결과를 <b>DRAFT 로</b> 넣으므로
+	 *    ({@code edge_analysis/adapters/eventstore.py}) 결과 2 · 게시 1 이 되어 R10 이
+	 *    <b>"결과 → 게시 2 → 1"</b> 을 P0 로 낸다. 규칙 문구가 배제하는 "설계된 감소" 그 자체다.
+	 * ② <b>재실행이 진짜 결손을 상쇄</b>. 경로 20 중 10 은 런이 없고 10 이 두 번 돌면 런 행도
+	 *    20 이라, 화면에 "ETF 10종이 설명을 아예 못 받았다"가 <b>어디에도 안 뜬다</b>.
+	 * 도달 여부로 세면 각 단계의 집합이 앞 단계의 부분집합이라 <b>단조성이 구조적으로 보장</b>되고,
+	 * 남는 감소는 전부 "여기서 멈춘 구성원 수"라는 한 가지 뜻이 된다.
 	 *
-	 * <p><b>세는 축이 전부 {@code DISTINCT} 다.</b> 두 자리에서 행이 불어난다 — 한 경로에 런이
-	 * 여럿일 수 있고({@code explanation_route_id} 에 UNIQUE 가 없다 — 재실행), 발번은 테넌트마다
-	 * 한 행이다. 후자를 그대로 세면 테넌트가 둘인 순간 "전달"이 설명 수의 두 배가 되어 단계
-	 * 단위가 <b>설명 건수에서 발번 건수로</b> 조용히 바뀐다. 발번의 다중도는 경계 축이 답한다.
+	 * <p>⚠️ 그래도 <b>못 가르는 것</b>: {@code DRAFT} 는 사유를 안 남긴다 — 아직 처리 중인지,
+	 * 게시 대상이 아닌지({@code publishable=false}), 운영자가 내렸는지({@code WITHDRAWN})가
+	 * 같은 모양이다. 그래서 결과→게시의 감소에는 <b>설계된 것이 섞인다</b>(계약 §체인 축).
 	 *
 	 * <p>⚠️ <b>진행 중인 하루는 손실처럼 보인다</b>(알려진 천장). 이 축은 "지금까지 몇 건이
 	 * 도착했나"이지 "몇 건이 끝내 사라졌나"가 아니다 — 아직 처리 중인 트리거는 하류 단계에
@@ -384,12 +397,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			           er.explanation_run_id AS run_id,
 			           rs.explanation_result_id AS result_id,
 			           CASE WHEN rs.publication_status = 'PUBLISHED'
-			                THEN rs.explanation_result_id END AS published_id,
-			           /* 🔴 세는 것은 **이 코호트 행의 결과**이지 발번 행이 가리키는 결과가 아니다.
-			            * `dv.explanation_result_id` 를 그대로 세면 조인 조건을 망가뜨려도(`= rs...`
-			            * → `IS NOT NULL`) 값이 그대로라 아무 단언도 안 깨진다 — 변이 실증. */
-			           CASE WHEN dv.explanation_result_id IS NOT NULL
-			                THEN rs.explanation_result_id END AS delivered_id
+			                THEN rs.explanation_result_id END AS published_id
 			      FROM obs o
 			      LEFT JOIN explanation_route rt
 			             ON rt.contribution_observation_id = o.obs_id
@@ -397,24 +405,27 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			             ON er.explanation_route_id = rt.explanation_route_id
 			      LEFT JOIN explanation_result rs
 			             ON rs.explanation_run_id = er.explanation_run_id
-			      LEFT JOIN tenant_delivery dv
-			             ON dv.explanation_result_id = rs.explanation_result_id
-			            AND dv.delivery_type = 'NEW'
 			)
 			SELECT (SELECT count(*) FROM batch_trigger) AS feed_batch,
 			       (SELECT count(*) FROM intraday_trigger) AS feed_intraday,
 			       count(DISTINCT obs_id) FILTER (WHERE is_batch) AS obs_batch,
 			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch) AS obs_intraday,
-			       count(DISTINCT route_id) FILTER (WHERE is_batch) AS route_batch,
-			       count(DISTINCT route_id) FILTER (WHERE NOT is_batch) AS route_intraday,
-			       count(DISTINCT run_id) FILTER (WHERE is_batch) AS run_batch,
-			       count(DISTINCT run_id) FILTER (WHERE NOT is_batch) AS run_intraday,
-			       count(DISTINCT result_id) FILTER (WHERE is_batch) AS result_batch,
-			       count(DISTINCT result_id) FILTER (WHERE NOT is_batch) AS result_intraday,
-			       count(DISTINCT published_id) FILTER (WHERE is_batch) AS published_batch,
-			       count(DISTINCT published_id) FILTER (WHERE NOT is_batch) AS published_intraday,
-			       count(DISTINCT delivered_id) FILTER (WHERE is_batch) AS delivered_batch,
-			       count(DISTINCT delivered_id) FILTER (WHERE NOT is_batch) AS delivered_intraday
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND route_id IS NOT NULL)
+			           AS route_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND route_id IS NOT NULL)
+			           AS route_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND run_id IS NOT NULL)
+			           AS run_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND run_id IS NOT NULL)
+			           AS run_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND result_id IS NOT NULL)
+			           AS result_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND result_id IS NOT NULL)
+			           AS result_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND published_id IS NOT NULL)
+			           AS published_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND published_id IS NOT NULL)
+			           AS published_intraday
 			  FROM cohort
 			""";
 
@@ -431,17 +442,19 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * <b>순서가 계약이다</b> — 소비자는 이 배열을 순서대로 인접 비교한다(R10). 정렬 키가 따로 없고
 	 * 단계 사이의 선후는 원장 어디에도 없다(테이블 이름으로는 복원 안 된다).
 	 *
-	 * <p>온프렘 수신 단계는 <b>안 싣는다</b>. 스냅샷 목에는 {@code c.onprem}(관측 불가)이 있었지만
-	 * 소비자가 없다 — R10 은 {@code blind} 단계를 비교에서 빼고 화면은 Cloud 게시에서 잘라 그린다
-	 * (ADR-0026 경계). 아무도 안 읽는 칸을 서버가 만들면 그 칸의 뜻이 낡는 것을 아무도 못 잡는다.
+	 * <p><b>Cloud 게시에서 끝난다.</b> 발번({@code tenant_delivery})도 온프렘 수신도 안 싣는다 —
+	 * 그 뒤는 전달 경계의 물음이고(ADR-0026) 화면도 거기서 잘라 그린다({@code ChainStrip} 의
+	 * {@code LAST_STAGE_ID}). ⚠️ 한 번 {@code c.dlv} 를 실었다가 뺐다: R10 은 그 단계까지 비교해
+	 * <b>"게시 → 전달" P0 를 낼 수 있는데</b> 화면에는 그 단계 노드가 없어 딥링크가 조용히
+	 * 아무 데도 안 닿았다(리뷰가 잡았다). 게시했는데 발번이 없는 것은
+	 * {@code boundary.publishedWithoutDelivery} 가 이미 답한다 — 답이 둘이면 한쪽만 낡는다.
 	 */
 	private static final List<StageSpec> CHAIN_STAGES = List.of(
 			new StageSpec("c.obs", "관측", "etf_contribution_observation", "obs"),
 			new StageSpec("c.route", "라우트", "explanation_route", "route"),
 			new StageSpec("c.run", "런", "explanation_run", "run"),
 			new StageSpec("c.res", "결과", "explanation_result", "result"),
-			new StageSpec("c.pub", "게시", "publication_status=PUBLISHED", "published"),
-			new StageSpec("c.dlv", "전달", "tenant_delivery NEW", "delivered"));
+			new StageSpec("c.pub", "게시", "publication_status=PUBLISHED", "published"));
 
 	/**
 	 * 두 갈래의 입력. <b>순서가 계약이다</b> — 소비자가 {@code feeds[0]}=배치·{@code feeds[1]}=장중

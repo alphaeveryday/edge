@@ -18,7 +18,9 @@ export interface ConsoleFactsDto {
   datasets: DatasetDto[];
   outputs: OutputDto[];
   boundary: BoundaryDto;
-  chain: ChainDto;
+  /** 🔴 **옵셔널이다** — 이 축을 안 싣는 배포본(롤백·UI 선배포)이 실재할 수 있고, 그때
+   *  응답을 거부하면 체인 카드 하나 때문에 **ops 전 화면**이 빈다. 없으면 R10 이 `못 돎`. */
+  chain?: ChainDto;
   meta: MetaDto;
 }
 
@@ -90,8 +92,10 @@ export interface BoundaryDto {
  * 순서대로 인접 비교해 감소를 손실로 읽는다. `feeds[0]` 이 배치, `feeds[1]` 이 장중이다(위치로
  * 읽는다 — id 로 찾지 않는다).
  *
- * 🔴 **수에 `null` 이 없다.** 코호트를 정해 놓고 세므로 "못 셌다"가 없고, 0 은 **그 단계에서
- * 사라졌다**는 실측이다. 이 축이 통째로 부재하는 응답(계측 없음)과 0 은 다른 사실이다.
+ * 🔴 **수에 `null` 이 없다.** 코호트를 정해 놓고 세므로 "못 셌다"가 없고, 0 은 **아무도 그
+ * 단계에 도달 못 했다**는 실측이다. 축이 통째로 없는 응답("안 물어봤다")과는 다른 사실이다.
+ * ⚠️ 다만 **0 자체가 위반은 아니다** — R10 은 인접한 두 값의 감소를 보므로 앞 단계도 0 이면
+ * 아무 위반도 안 선다.
  */
 export interface ChainDto {
   feeds: ChainFeedDto[];
