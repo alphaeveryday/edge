@@ -175,14 +175,18 @@ Terraform의 1분 파이프라인 원큐와 각 DLQ를 SQS `GetQueueAttributes`�
 수 있고 그건 writer 결함이다. 요청당 한 줄로 접어 경고를 남기고(행마다 찍으면 결함 하나가
 로그량을 요청량 × 작업 수로 증폭한다), 그 작업 자체는 `tasks[]` 에 그대로 남는다.
 
+`etf_nav.actualAsOf`는 `NAV_COLLECTION_KIS` 원장에 기록된 KIS 응답 원본
+`stck_bsop_date`의 최댓값이다. 요청창 종료일·실행일·수집 시각에서 파생하지 않으며, 유효한
+응답 거래일 증거가 없으면 기존 nullable 계약대로 `null`이다.
+
 ⚠️ **소비자가 읽는데 이 축이 안 주는 필드가 하나 있다 — `windowContract`.** 규칙 엔진의
 신선도 규칙(R08)은 **창 계약**(as-of 가 아니라 기간으로 신선도를 보는 데이터셋)을 판정에서 빼는데,
 그 구분을 이 응답이 안 준다. 채워지면 창 계약 데이터셋이 일반 as-of 계약으로 판정돼
 `actual < expected` 에서 **거짓 STALE** 이 설 자리다.
 
 **다만 화면이 붙는다고 발화하지 않는다** — 원장에 창 계약이 하나도 없기 때문이다. 계약을 다는
-카탈로그 항목은 `ETF_HOLDINGS_COLLECTION_KRX` 하나뿐이고(`ops/catalog.py`), 그 계약
-`ETF_HOLDINGS_KRX_EOD` 는 as-of 계약이다(`LATEST_KR_TRADING_DAY`). `Cadence`·`ExpectedAsOfRule`
+카탈로그 항목은 `ETF_HOLDINGS_COLLECTION_KRX`와 `NAV_COLLECTION_KIS`이고(`ops/catalog.py`),
+각 계약은 모두 as-of 계약이다(`LATEST_KR_TRADING_DAY`). `Cadence`·`ExpectedAsOfRule`
 어느 enum 에도 창 계약을 표현할 값이 없다(`ops/contracts.py`). 규칙 쪽 술어도 `contract` 를
 **먼저** 보므로 계약 없는 데이터셋은 이 필드와 무관하게 이미 빠진다. 그래서 이 구멍은
 **창 계약 성격의 계약이 레지스트리에 들어오는 날** 함께 열린다 — 그때 서버가 이 필드를 싣거나
@@ -216,8 +220,8 @@ as-of·수집 시각·신선도)은 스키마가 이미 그렇게 묶어 두므�
 기대일 접기가 **정상 경로**다.
 
 ⚠️ **`NOT_APPLICABLE` 은 오늘 나가지 않는다** — 계약이 걸린 카탈로그 엔트리는
-`ETF_HOLDINGS_COLLECTION_KRX` 하나뿐이고 그 엔트리는 `kr_trading_calendar` 를 켜지 않아 휴장일에도
-`DUE` 로 선다(플래그를 켠 다섯 엔트리는 계약이 없다). 스키마와 Planner 가 그 조합을 **허용**하므로
+`ETF_HOLDINGS_COLLECTION_KRX`와 `NAV_COLLECTION_KIS` 모두 `kr_trading_calendar` 를 켜지 않아
+휴장일에도 `DUE` 로 선다(플래그를 켠 다섯 엔트리는 계약이 없다). 스키마와 Planner 가 그 조합을 **허용**하므로
 갈래는 두되, "휴장일이 이 코드로 온다"고 읽으면 안 된다.
 
 ⚠️ **`ACTUAL_AS_OF_MISSING` 도 스키마상 안 나오는 자리다** — 계약 ∧ `DUE` 면 상태가 non-null 이고

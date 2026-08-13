@@ -91,6 +91,7 @@ class _Cursor:
                     row["data_status"], row["required"],
                     snapshot["expected_entity_count"] if snapshot else None,
                     row.get("dataset_contract_key"),
+                    row.get("expected_as_of_date"),
                 )]
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)

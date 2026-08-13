@@ -10,7 +10,9 @@ from data_pipeline.ops import catalog, contracts
 def test_catalog_contract_references_are_registered_and_required_matches():
     """WHY: dangling key나 required 이중 SSOT는 Planner 의미를 배포마다 바꾼다."""
     linked = [entry for entry in catalog.entries() if entry.contract_key]
-    assert [entry.task_key for entry in linked] == ["ETF_HOLDINGS_COLLECTION_KRX"]
+    assert [entry.task_key for entry in linked] == [
+        "NAV_COLLECTION_KIS", "ETF_HOLDINGS_COLLECTION_KRX",
+    ]
     for entry in linked:
         contract = contracts.require(entry.contract_key)
         assert entry.required == contract.required

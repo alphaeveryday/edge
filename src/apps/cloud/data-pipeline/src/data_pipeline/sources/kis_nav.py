@@ -52,6 +52,8 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 
 class KisNavSource:
     source_name = "kis"
+    # KIS 응답 자체의 거래일이다. 질의 날짜나 fetched_at provenance와 독립된 actual-as-of 증거다.
+    actual_as_of_field = "stck_bsop_date"
     # 엔드포인트·질의 파라미터는 하위 어댑터가 갈아끼운다(kis_inav.KisInavSource) —
     # rt_cd 판정·EGW00201 재시도·malformed 행 격리는 한 곳(_fetch_etf)에 남긴다.
     tr_id = TR_ID_NAV_DAILY
