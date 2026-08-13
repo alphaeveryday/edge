@@ -376,8 +376,13 @@ def run(
     skipped_no_mention = 0  # mentions 없어 태깅 대상이 아닌 수 (LLM 미호출, ALPHA-416)
     tagged = 0          # 이번 런에서 LLM 을 부른 수
     limited = 0         # limit 에 걸려 안 부른 수
-    mirrors_absorbed = 0    # part 파일에 병합하고 지운 장중 미러 조각 수 (ALPHA-900)
-    mirrors_dropped_no_mention = 0  # mentions 게이트가 배제한 기사의 미러 (ALPHA-900/416)
+    # ⚠️ 아래 둘은 **"흡수됐다"의 증거가 아니다** — 이름보다 넓게 센다. 권한이 없어 삭제가
+    # 늘 실패하던 동안 `mirrors_absorbed` 는 구조적으로 0 이라 이 어긋남이 안 드러났다.
+    mirrors_absorbed = 0    # 지운 장중 미러 조각 수 — mentions 게이트로 part 에 **안 실린**
+                            # 조각도 함께 지워지므로 여기 포함된다(part 적재분 ≠ 이 값). (ALPHA-900)
+    mirrors_dropped_no_mention = 0  # 되쓰기에서 빠진 행 수 — 미러 유래가 대부분이지만 **예전에
+                            # 태깅돼 part 에 있던 행**이 지금 mentions 를 잃어도 여기 들어간다.
+                            # 두 레인의 대상 집합 차이를 재려면 그만큼 상한이다. (ALPHA-900/416)
     status_counts: Counter = Counter()
     reason_counts: Counter = Counter()
     failures: list[dict] = []
@@ -500,13 +505,19 @@ def run(
         "articles_read": read, "articles_tagged": tagged,
         "articles_skipped_already_tagged": skipped, "articles_left_by_limit": limited,
         "articles_skipped_no_mention": skipped_no_mention,
-        # 흡수한 장중 미러 조각 수(ALPHA-900). 이 값이 0 인데 장중 레인이 돌았다면 미러가
-        # 안 떨어진 것이다 — 그 경우 `articles_skipped_already_tagged` 도 안 올라 이중
-        # 과금이 그대로다. 둘을 나란히 봐야 교차 dedup 이 실제로 걸렸는지 판별된다.
+        # 지운 장중 미러 조각 수(ALPHA-900) — **part 에 실린 수가 아니다**(선언부 주석 참조).
+        # ⚠️ **0 을 "미러가 안 떨어졌다"로 읽지 마라.** 삭제만 실패해도 0 이 된다 — 카운터가
+        # `delete_keys` **뒤에** 오르기 때문이다. 그 경우 병합·되쓰기는 이미 끝났는데 0 으로
+        # 보인다(2026-08-12 dev 실측: 미러 1,034·part 적재 325행인데 이 값 0, 원인은 IAM).
+        # 판별자는 같은 로그의 `exit_code`·`failures[].reasons` 이고, 그 다음이 미러 구역에
+        # 조각이 남아 있는지다. `articles_skipped_already_tagged` 와 나란히 봐야 교차 dedup 이
+        # 실제로 걸렸는지 판별되는 것은 그 셋을 통과한 뒤다.
         "minute_mirrors_absorbed": mirrors_absorbed,
-        # mentions 게이트가 배제한 기사라 part 에 안 실은 미러 행 수(ALPHA-900/416).
-        # 1분 레인에 같은 게이트가 서면(ALPHA-690) 이 값이 0 으로 수렴한다 — 그때까지는
-        # 두 레인의 대상 집합 차이를 이 숫자가 드러낸다.
+        # 되쓰기에서 빠진 행 수(ALPHA-900/416) — mentions 게이트가 배제한 기사다.
+        # 1분 레인에 같은 게이트가 서면(ALPHA-690) 이 값이 0 으로 수렴한다. 그때까지 두 레인의
+        # 대상 집합 차이를 드러내되 **차이 자체가 아니라 그 하한**이다: ①canonical 에 없는
+        # 기사(장중만 본 기사)는 `no_mention_ids` 에 못 들어가 게이트를 아예 안 거치고
+        # ②예전에 태깅돼 part 에 있던 행이 지금 mentions 를 잃은 경우도 여기 섞인다.
         "minute_mirrors_dropped_no_mention": mirrors_dropped_no_mention,
         "status_counts": dict(status_counts), "reason_counts": dict(reason_counts),
         "partitions_written": parts_written, "rows_written": rows_written,
