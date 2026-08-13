@@ -7,8 +7,8 @@
 ## 착지 현황 — 이 문서는 **dev 에 있는 것만** 적는다
 
 정본은 dev 다. 축은 조각별로 하나씩 붙었고 **원장에서 나오는 것은 여덟이 전부 찼다** — 이
-문서가 곧 응답 전체다. 아직 없는 축은 **AWS 제어면 둘**(`runs[].awsStatus`·`queues[]`)이고,
-그건 원장이 아니라 SFN·SQS 를 물어야 나온다([ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) 조각 2·3).
+문서가 곧 응답 전체다. 아직 없는 축은 **SQS 제어면**(`queues[]`) 하나고, 원장이 아니라 SQS 를
+물어야 나온다([ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) 조각 3).
 
 ⚠️ 축을 더 붙일 일이 생기면 **그 축의 절을 그 조각과 함께** 여기 넣고, 붙기 전까지는 응답에
 필드를 **아예 두지 않는다**(빈 배열이 아니다 — §부재를 싣는 규약).
@@ -23,6 +23,7 @@
 | 산출 축 | `outputs[]` + 기준선(중앙값) | ✅ |
 | 경계 축 | `boundary` | ✅ |
 | 체인 축 | `chain` — 그 날 트리거의 자손을 단계마다 센다 | ✅ |
+| SFN 제어면 축 | `runs[].awsStatus`·`awsStop` + `meta.aws` | ✅ |
 
 ## 엔드포인트
 
@@ -43,12 +44,15 @@ GET /api/v1/console/facts[?date=YYYY-MM-DD]
         "tradingDate": "2026-08-03",          // 비거래일 런은 null (키는 있다)
         "ledgerStatus": "SUCCEEDED",          // = orchestration_status, 원장 어휘 그대로
         "ledgerUpdated": "2026-08-03T07:20:34Z",
-        "deadline": null                      // hard_deadline_at 없으면 null
+        "deadline": null,                     // hard_deadline_at 없으면 null
+        "awsStatus": "SUCCEEDED",             // SFN 원문 상태. 못 봤으면 null
+        "awsStop": "2026-08-03T07:18:06Z"     // SFN 종료 시각. 진행 중·미관측이면 null
       }
     ],
     "meta": {
       "db": "2026-08-03T07:20:34Z",   // DB 시계 — 화면의 "언제 기준인가"
-      "today": "2026-08-03"           // 실제로 본 날
+      "today": "2026-08-03",          // 실제로 본 날
+      "aws": "2026-08-03T07:20:35Z"   // SFN 관측 시각. 조회 실패면 null
     }
   }
 }
@@ -548,6 +552,22 @@ Run·Dataset·Delivery·Trend·Incidents 까지 **전 화면**이 "응답이 계
 않는다 — 전진 배포를 멈추지 않기 위해서다. ⚠️ 대가 **둘**: 셋째 갈래가 생기면 R10 이 그
 갈래를 한 번도 안 보고, 화면은 그 칸을 **장중 색으로** 칠한다(`ChainStrip` 이 첫 칸만 배치로
 가른다). 축이 늘 때 규칙과 화면을 같이 고치는 것 말고 이걸 잡는 자동 가드는 없다.
+
+## SFN 제어면 축
+
+원장 상태와 독립인 Step Functions `DescribeExecution` 관측을 `runs[].awsStatus`·`awsStop`에 싣고,
+관측 시각을 `meta.aws`에 싣는다. 실행 ARN은 `sfn_execution_arn`을 우선하고 Planner가 계산한
+`expected_execution_arn`을 조회 locator로만 보조 사용한다. 후자의 존재는 실행 증거가 아니다.
+
+부재 형상은 둘이다. 키가 없으면 이 축을 안 싣던 API 배포본이고, 키가 있으면서 `null`이면
+조회했지만 제어면을 못 봤다. UI 검증 경계는 롤백·선배포 스큐를 위해 이 세 필드를 옵셔널로
+받되, 값이 오면 상태 문자열과 ISO 시각을 검사한다. 첫 AWS 조회가 실패하면 부분 성공으로
+접지 않고 축 전체를 비운다. `ExecutionDoesNotExist`는 관측 성공·해당 실행 없음이라 그 런만
+상태가 `null`이다.
+
+R03은 상태가 다르더라도 `ledgerUpdated < awsStop`이면 Reconciler가 종료 뒤 아직 원장을 훑지
+않은 정상 지연으로 보고 위반에서 뺀다. 두 시각이 같거나 원장이 더 늦게 갱신됐는데도 상태가
+다를 때만 투영 불일치다.
 
 ## 조회 창
 
