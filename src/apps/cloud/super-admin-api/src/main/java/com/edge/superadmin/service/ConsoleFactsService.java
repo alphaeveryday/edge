@@ -8,6 +8,7 @@ import com.edge.superadmin.dto.ConsoleFactsResponse.DatasetResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.MetaResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.OutputResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
+import com.edge.superadmin.dto.ConsoleFactsResponse.QueueResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.TaskResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
@@ -15,6 +16,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.edge.superadmin.repository.RunControlPlane;
+import com.edge.superadmin.repository.QueueControlPlane;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -87,10 +89,13 @@ public class ConsoleFactsService {
 	private final ConsoleFactsRepository facts;
 
 	private final RunControlPlane controlPlane;
+	private final QueueControlPlane queueControlPlane;
 
-	public ConsoleFactsService(ConsoleFactsRepository facts, RunControlPlane controlPlane) {
+	public ConsoleFactsService(ConsoleFactsRepository facts, RunControlPlane controlPlane,
+			QueueControlPlane queueControlPlane) {
 		this.facts = facts;
 		this.controlPlane = controlPlane;
+		this.queueControlPlane = queueControlPlane;
 	}
 
 	/**
@@ -106,11 +111,13 @@ public class ConsoleFactsService {
 		 * 그대로 커넥션 점유가 된다. */
 		RunControlPlane.Observation aws = controlPlane.describe(
 				f.runs().stream().map(RunRow::executionArn).filter(Objects::nonNull).toList());
+		List<QueueControlPlane.QueueState> queues = queueControlPlane.observe();
 		return new ConsoleFactsResponse(
 				f.runs().stream().map(r -> RunResponse.from(r, awsOf(aws, r))).toList(),
 				f.tasks().stream().map(TaskResponse::from).toList(),
 				datasets(f.tasks()),
 				f.outputs().stream().map(OutputResponse::from).toList(),
+				queues == null ? null : queues.stream().map(QueueResponse::from).toList(),
 				BoundaryResponse.from(f.boundary()),
 				ChainResponse.from(f.chain()),
 				new MetaResponse(f.dbNow().toString(), f.today().toString(),

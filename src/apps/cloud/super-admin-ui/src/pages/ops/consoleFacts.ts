@@ -228,6 +228,9 @@ export const DATASET_FIELDS: Record<string, Check> = {
 export const OUTPUT_FIELDS: Record<string, Check> = {
   id: text, label: text, unit: text, today: count, base: nullableRatio,
 };
+export const QUEUE_FIELDS: Record<string, Check> = {
+  name: text, visible: count, inFlight: count, dlq: count,
+};
 export const BOUNDARY_FIELDS: Record<string, Check> = {
   publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
 };
@@ -261,7 +264,7 @@ function offendingField(row: Record<string, unknown>, fields: Record<string, Che
  *
  * 검증 범위는 계약이 "검증 경계가 답할 몫"으로 열거한 것이다: 컬렉션 원소가 객체가 아닌 경우 ·
  * 음수·비정수 카운트 · 수여야 할 자리가 수가 아닌 경우 · 문자열·불리언 자리의 타입 · 필수 축의
- * 종류. **서버가 안 보내는 축(`queues`·`runbook`)은 검사하지 않는다** — 그건 계측 공백이지
+ * 종류. **서버가 안 보내는 축(`runbook`)은 검사하지 않는다** — 그건 계측 공백이지
  * 응답 결함이 아니고, 규칙이 `canRun` 으로 답할 몫이다. 나중에 붙은 AWS 축은 부재도 허용하되
  * 값이 오면 검사한다.
  *
@@ -291,6 +294,17 @@ export function parseFacts(body: unknown): FactsParse {
     if (!isRow(row)) return bad(`${axis} 축이 객체가 아니다`);
     const field = offendingField(row, fields);
     if (field) return bad(`${axis}.${field} 의 값이 계약과 다르다`);
+  }
+
+  /* 나중에 붙은 축이라 부재·null을 모두 받는다. 값이 온 경우만 전수 검사한다. */
+  const queues = body.queues;
+  if (queues !== undefined && queues !== null) {
+    if (!Array.isArray(queues)) return bad('queues 축이 배열이 아니다');
+    for (const row of queues) {
+      if (!isRow(row)) return bad('queues 원소가 객체가 아니다');
+      const field = offendingField(row, QUEUE_FIELDS);
+      if (field) return bad(`queues[].${field} 의 값이 계약과 다르다`);
+    }
   }
 
   /* 체인만 형상이 둘이다 — 객체 하나 안에 배열이 둘이라 위 두 루프 어느 쪽에도 안 들어간다.
@@ -327,7 +341,7 @@ export function parseFacts(body: unknown): FactsParse {
 /**
  * 검증된 와이어 → 엔진 사실. **이름만 바꾼다** — 값을 메우거나 접지 않는다.
  *
- * 서버가 안 보낸 축은 여기서도 안 만든다(`queues`·`runbook` 및 선배포 중 AWS 축). 빈 값으로 채우면
+ * 서버가 안 보낸 축은 여기서도 안 만든다(`runbook` 및 선배포 중 AWS·SQS 축). 빈 값으로 채우면
  * 계측 없음이 실측으로 위조되고, 규칙이 `못 돎` 대신 `평가됨 · 위반 0` 을 세운다.
  */
 function toFacts(dto: ConsoleFactsDto): Facts {
@@ -377,6 +391,11 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       base: o.base,
       unit: o.unit,
     })),
+    ...(Array.isArray(dto.queues)
+      ? { queues: dto.queues.map((q) => ({
+          name: q.name, visible: q.visible, in_flight: q.inFlight, dlq: q.dlq,
+        })) }
+      : {}),
     boundary: {
       published_without_delivery: dto.boundary.publishedWithoutDelivery,
       delivery_now_nonpublished: dto.boundary.deliveryNowNonpublished,

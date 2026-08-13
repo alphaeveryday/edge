@@ -7,8 +7,7 @@
 ## 착지 현황 — 이 문서는 **dev 에 있는 것만** 적는다
 
 정본은 dev 다. 축은 조각별로 하나씩 붙었고 **원장에서 나오는 것은 여덟이 전부 찼다** — 이
-문서가 곧 응답 전체다. 아직 없는 축은 **SQS 제어면**(`queues[]`) 하나고, 원장이 아니라 SQS 를
-물어야 나온다([ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) 조각 3).
+문서가 곧 응답 전체다. ALPHA-979의 세 제어면 조각까지 배선됐다.
 
 ⚠️ 축을 더 붙일 일이 생기면 **그 축의 절을 그 조각과 함께** 여기 넣고, 붙기 전까지는 응답에
 필드를 **아예 두지 않는다**(빈 배열이 아니다 — §부재를 싣는 규약).
@@ -24,6 +23,7 @@
 | 경계 축 | `boundary` | ✅ |
 | 체인 축 | `chain` — 그 날 트리거의 자손을 단계마다 센다 | ✅ |
 | SFN 제어면 축 | `runs[].awsStatus`·`awsStop` + `meta.aws` | ✅ |
+| SQS 제어면 축 | `queues[]` | ✅ |
 
 ## 엔드포인트
 
@@ -57,6 +57,20 @@ GET /api/v1/console/facts[?date=YYYY-MM-DD]
   }
 }
 ```
+
+## 큐 축
+
+Terraform의 1분 파이프라인 원큐와 각 DLQ를 SQS `GetQueueAttributes`로 관측한다. `visible`은
+원큐 대기, `inFlight`는 원큐 처리 중, `dlq`는 DLQ의 visible·in-flight·delayed 합계다. DLQ
+메시지가 상태 사이를 이동하는 순간에도 R12가 유실을 놓치지 않게 합계로 센다.
+
+```json
+"queues": [{ "name": "news-extraction-realtime", "visible": 7, "inFlight": 3, "dlq": 2 }]
+```
+
+한 큐라도 조회에 실패하면 부분 성공을 전체 관측처럼 내리지 않고 `queues: null`로 싣는다. 구 API
+응답에는 필드 자체가 없을 수 있으므로 UI 검증 경계는 부재도 받는다. 둘 다 R12는 `못 돎`이고,
+성공한 빈 배열만 “전 큐를 봤고 메시지가 없었다”는 실측이다.
 
 ## 런 축
 

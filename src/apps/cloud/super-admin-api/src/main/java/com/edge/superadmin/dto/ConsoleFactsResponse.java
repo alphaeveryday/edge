@@ -7,6 +7,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.RunControlPlane;
+import com.edge.superadmin.repository.QueueControlPlane.QueueState;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -33,15 +34,21 @@ import java.util.List;
  * {@code awsStop}·{@code meta.aws}. 원장이 아니라 SFN 을 물어야 나오는 사실이고,
  * <b>원장 값으로 폴백하지 않는다</b>: 못 봤으면 {@code null} 이다.
  *
- * <p>아직 부재하는 축은 {@code queues[]} 하나다(조각 3 — SQS). 그래서 규칙 R12 가 <b>못 돎</b>
- * 으로 선다(ADR-0050).
+ * <p>SQS 제어면도 {@code queues[]}로 붙었다(조각 3). 일부 조회 실패를 성공처럼 내리지 않고 축
+ * 전체를 {@code null}로 두므로 R12가 <b>못 돎</b>으로 남는다(ADR-0050).
  *
  * <p>표시 문자열을 만들지 않는다 — 건수·시각·판정 코드를 raw 로 내리고 포맷은 UI 소관이다
  * ({@link SourceReportResponse} 와 같은 규약).
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
-		List<DatasetResponse> datasets, List<OutputResponse> outputs, BoundaryResponse boundary,
+		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
 		ChainResponse chain, MetaResponse meta) {
+
+	public record QueueResponse(String name, long visible, long inFlight, long dlq) {
+		public static QueueResponse from(QueueState q) {
+			return new QueueResponse(q.name(), q.visible(), q.inFlight(), q.dlq());
+		}
+	}
 
 	/**
 	 * 런 하나. {@code id} 는 {@code run_key} 다 — 사건 식별자의 대상 축이라 내부 id 를 쓰면

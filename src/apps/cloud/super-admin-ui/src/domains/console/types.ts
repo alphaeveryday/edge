@@ -5,7 +5,7 @@
  * 안 보낸다). 둘을 잇는 어댑터는 **한 곳**이어야 한다(아직 없다 — 화면 조각이 들여온다):
  * 규칙은 화면 도메인을 모르고, 도메인은 규칙을 모른다.
  *
- * 서버가 **안 보내는 축**은 여기에도 없다: `queues`·`etfLedger`·`runbook`·
+ * 서버가 **안 보내는 축**은 여기에도 없다: `etfLedger`·`runbook`·
  * `runs[].kind`·`tasks[].maxRetries`. 있는 척 선언하면 어댑터가 `?? []` 로
  * 메우게 되고, 그러면 계측 공백이 실측으로 위조된다.
  */
@@ -17,6 +17,8 @@ export interface ConsoleFactsDto {
   tasks: TaskDto[];
   datasets: DatasetDto[];
   outputs: OutputDto[];
+  /** 롤백·UI 선배포 시 부재, SQS 관측 실패 시 null이다. */
+  queues?: QueueDto[] | null;
   boundary: BoundaryDto;
   /** 🔴 **옵셔널이다** — 이 축을 안 싣는 배포본(롤백·UI 선배포)이 실재할 수 있고, 그때
    *  응답을 거부하면 체인 카드 하나 때문에 **ops 전 화면**이 빈다. 없으면 R10 이 `못 돎`. */
@@ -79,6 +81,13 @@ export interface OutputDto {
   today: number;
   base: number | null;
   unit: string;
+}
+
+export interface QueueDto {
+  name: string;
+  visible: number;
+  inFlight: number;
+  dlq: number;
 }
 
 export interface BoundaryDto {

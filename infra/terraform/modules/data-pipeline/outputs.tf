@@ -50,6 +50,26 @@ output "minute_service_names" {
   value       = [for s in aws_ecs_service.minute : s.name]
 }
 
+output "minute_queue_urls" {
+  description = "1분 파이프라인 원큐 URL — 콘솔 SQS 제어면 관측 대상"
+  value       = { for name, queue in aws_sqs_queue.minute : name => queue.url }
+}
+
+output "minute_queue_arns" {
+  description = "1분 파이프라인 원큐 ARN — 콘솔 GetQueueAttributes IAM 대상"
+  value       = { for name, queue in aws_sqs_queue.minute : name => queue.arn }
+}
+
+output "minute_dlq_urls" {
+  description = "1분 파이프라인 DLQ URL — 콘솔 SQS 제어면 관측 대상"
+  value       = { for name, queue in aws_sqs_queue.minute_dlq : name => queue.url }
+}
+
+output "minute_dlq_arns" {
+  description = "1분 파이프라인 DLQ ARN — 콘솔 GetQueueAttributes IAM 대상"
+  value       = { for name, queue in aws_sqs_queue.minute_dlq : name => queue.arn }
+}
+
 output "alarm_topic_arn" {
   description = "파이프라인 알람 SNS 토픽. 감시 대상이 다른 모듈에 있는 알람(예: RDS)도 이 토픽 하나로 모은다 — 알림 채널을 쪼개면 구독을 두 번 확인해야 한다"
   value       = aws_sns_topic.alarms.arn

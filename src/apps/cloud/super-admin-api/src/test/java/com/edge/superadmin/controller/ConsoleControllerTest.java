@@ -12,9 +12,11 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
+import com.edge.superadmin.repository.QueueControlPlane.QueueState;
 import com.edge.superadmin.service.ConsoleFactsService;
 import com.edge.superadmin.support.FakeConsoleFactsRepository;
 import com.edge.superadmin.support.FakeRunControlPlane;
+import com.edge.superadmin.support.FakeQueueControlPlane;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.test.web.servlet.MockMvc;
@@ -71,6 +73,7 @@ class ConsoleControllerTest {
 
 	/** ⏭ 조각 2 진행 중 — 기본은 "제어면을 못 봤다". 그 축을 겨누는 테스트가 따로 주입한다. */
 	private FakeRunControlPlane controlPlane = FakeRunControlPlane.unavailable();
+	private FakeQueueControlPlane queueControlPlane = new FakeQueueControlPlane();
 
 	private static ConsoleFacts facts(RunRow... runs) {
 		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of(), CLEAN,
@@ -153,7 +156,8 @@ class ConsoleControllerTest {
 	private MockMvc mvc(ConsoleFacts facts) {
 		repository = new FakeConsoleFactsRepository(facts);
 		return MockMvcBuilders
-				.standaloneSetup(new ConsoleController(new ConsoleFactsService(repository, controlPlane)))
+				.standaloneSetup(new ConsoleController(new ConsoleFactsService(repository, controlPlane,
+						queueControlPlane)))
 				.setControllerAdvice(new ExceptionAdvice())
 				.build();
 	}
@@ -191,6 +195,19 @@ class ConsoleControllerTest {
 				"\"outputs\":[]")
 				// 경계는 배열이 아니라 객체 하나다 — 수 셋이 늘 실린다(실측 0 이 사실이다).
 				.contains("\"boundary\":{");
+	}
+
+	/** 큐의 네 값은 서로 다른 자리다 — 맞바꿈이 R12의 DLQ 판정을 바꾸지 못하게 와이어를 잰다. */
+	@Test
+	void SQS_관측을_큐_축에_그대로_싣는다() throws Exception {
+		queueControlPlane.returns(List.of(new QueueState("news-realtime", 7L, 3L, 2L)));
+		mvc(facts())
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.queues[0].name").value("news-realtime"))
+				.andExpect(jsonPath("$.result.queues[0].visible").value(7))
+				.andExpect(jsonPath("$.result.queues[0].inFlight").value(3))
+				.andExpect(jsonPath("$.result.queues[0].dlq").value(2));
 	}
 
 	/**
