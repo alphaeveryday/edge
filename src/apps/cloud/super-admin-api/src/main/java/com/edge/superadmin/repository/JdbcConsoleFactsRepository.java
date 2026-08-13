@@ -23,11 +23,18 @@ import java.util.stream.Collectors;
 /**
  * {@link ConsoleFactsRepository} 의 JdbcTemplate 구현(ALPHA-738).
  *
- * <p>축이 전부 찼다 — <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축 + 경계 축</b>.
- * 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도 컬럼을
- * 재료로 {@code ConsoleFactsService} 가 접는다.
+ * <p>원장에서 나오는 축은 여기서 전부 낸다 — <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 +
+ * 산출 축 + 경계 축 + 체인 축</b>. 와이어의 데이터셋 축은 여기서 안 낸다 — 작업의 계약·신선도
+ * 컬럼을 재료로 {@code ConsoleFactsService} 가 접는다.
  *
- * <p>날짜 축은 <b>거래일</b>({@code trading_date})이되 {@link #RUN_DAY} 한 식으로만 묻는다.
+ * <p><b>원장 축</b>(런·작업·산출)의 날짜는 {@link #RUN_DAY} <b>한 식으로만</b> 묻는다 — 한 자리라도
+ * 다르게 쓰면 그 런이 창에는 들어오는데 최신 날짜에 안 잡혀 기본 화면에서 사라진다.
+ *
+ * <p>⚠️ <b>체인 축은 그 식을 안 쓴다</b>(ALPHA-979). 세는 대상이 런이 아니라 <b>트리거</b>이고
+ * 그 표들은 원장이 아니다 — {@code price_movement_trigger.trade_date} 와
+ * {@code minute_price_trigger.window_start} 를 각각 본다. 즉 이 파일에는 날짜 술어가 <b>셋</b>
+ * 이고, 하나로 합칠 수 없다(다른 사건의 날짜다). {@code RUN_DAY} 의 불변식은 원장 축 안에서만
+ * 성립한다고 읽어라.
  *
  * <p>⚠️ <b>"비거래일 런은 그 컬럼이 NULL 이다"는 사실이 아니다.</b> {@code ops/planner.py} 의
  * {@code plan_run} 은 {@code trading_date=day.isoformat()} 을 <b>무조건</b> 넘기고, 그것이
@@ -328,6 +335,158 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			       (SELECT count(*) FROM tenant_delivery) AS delivery_rows
 			""";
 
+	/**
+	 * 설명 생산 체인의 <b>그 날 코호트</b> — 트리거에서 발번까지 각 단계에 몇 건이 남았나(ALPHA-979).
+	 *
+	 * <p><b>이 축의 전부는 "같은 무리를 끝까지 따라간다"이다.</b> 단계마다 자기 테이블을 자기
+	 * 날짜 컬럼으로 따로 세면 안 된다 — 그 수들은 서로 다른 무리를 센 것이라 인접 비교(R10 이
+	 * 하는 일)가 의미를 잃는다. 예: 15:40 배치가 만든 관측을 자정 넘겨 게시하면 날짜별 집계는
+	 * 관측 20 · 게시 0 을 내지만 실제로 사라진 건 하나도 없다. 그래서 <b>그 날의 트리거</b>만
+	 * 날짜로 고르고, 나머지 단계는 전부 그 트리거의 자손을 {@code LEFT JOIN} 으로 따라간다.
+	 *
+	 * <p><b>갈래는 관측이 가른다.</b> {@code etf_contribution_observation} 은 두 트리거 FK 중
+	 * 정확히 하나를 갖고({@code ck_etf_contribution_one_trigger}), 그 뒤 단계는 관측 하나에서
+	 * 뻗으므로 갈래가 자동으로 따라온다 — 하류 테이블에는 배치/장중을 가르는 컬럼이 없다.
+	 *
+	 * <p><b>분봉 트리거는 {@code FIRE} 만 센다.</b> {@code REVERT} 는 노출 <b>회수</b> 마커라
+	 * 설명을 만들지 않는다(ALPHA-799 — 무효화만 한다). ⚠️ "큐로도 안 나간다"고 적었다가 정정했다:
+	 * {@code ExposureReverted} 의 destination 은 발화와 <b>같은 큐</b>다
+	 * ({@code data_pipeline/minute/jobs.py} 의 {@code TRIGGER_EVENT_DESTINATIONS}). 세지 않는
+	 * 근거는 <b>설명을 안 만든다</b>는 것 하나다. 지금은 writer 가 종류를 안 적어 실제 행이
+	 * 0 이지만, 안 거르면 그 writer 가 착지하는 날 피드만 조용히 부풀어 <b>없던 손실</b>이 선다.
+	 *
+	 * <p>🔴 <b>단계는 "그 단계의 행 수"가 아니라 "코호트 구성원이 그 단계에 도달했는가"를 센다.</b>
+	 * 행을 세면 <b>다중도가 손실로 읽힌다</b> — 리뷰가 실 스키마에서 두 형상을 실증했다:
+	 * ① <b>재실행</b>({@code explanation_route_id} 에 UNIQUE 가 없다). 엔진은 그 경로에 이미
+	 *    PUBLISHED 가 있으면 새 결과를 <b>DRAFT 로</b> 넣으므로
+	 *    ({@code edge_analysis/adapters/eventstore.py}) 결과 2 · 게시 1 이 되어 R10 이
+	 *    <b>"결과 → 게시 2 → 1"</b> 을 P0 로 낸다. 규칙 문구가 배제하는 "설계된 감소" 그 자체다.
+	 * ② <b>재실행이 진짜 결손을 상쇄</b>. 경로 20 중 10 은 런이 없고 10 이 두 번 돌면 런 행도
+	 *    20 이라, 화면에 "ETF 10종이 설명을 아예 못 받았다"가 <b>어디에도 안 뜬다</b>.
+	 * 도달 여부로 세면 각 단계의 집합이 앞 단계의 부분집합이라 <b>단조성이 구조적으로 보장</b>되고,
+	 * 남는 감소는 전부 "여기서 멈춘 구성원 수"라는 한 가지 뜻이 된다.
+	 *
+	 * <p>⚠️ 그래도 <b>결과→게시의 감소에는 설계된 것이 섞인다</b>. 원장에 남는 것은
+	 * {@code publication_status} 하나이고 사유가 없다. 그 감소를 만드는 것은 <b>정확히 둘</b>이다:
+	 * <b>표면 부재</b>(내용 없는 결과라 자리를 안 준다 — 엔진 로그의 {@code surface_absent})와
+	 * <b>운영자 무효화</b>({@code WITHDRAWN} 전이, ALPHA-440). 둘 다 설계된 것이다.
+	 *
+	 * <p>⚠️ 여기 "아직 처리 중"과 "재실행"도 섞인다고 적었다가 정정했다 — 둘 다 <b>이 비교에
+	 * 도달하지 않는다</b>. 처리 중이면 {@code explanation_result} 행 자체가 없어 <b>런에서
+	 * 멈추고</b>({@code publication_status} 는 INSERT 시점에 확정된다), 재실행분이 DRAFT 로
+	 * 떨어져도 그 경로의 첫 결과는 여전히 게시본이라 <b>도달 여부로 세면 관측이 게시에 닿는다</b>.
+	 * 후자는 이 커밋이 바꾼 셈법이 없앤 것이고, 없앤 것을 남은 사유로 적으면 안 된다.
+	 *
+	 * <p>⚠️ <b>테스트로 못 죽이는 변이 둘</b>(변이 실증 — 억지로 안 죽인다):
+	 * ① 라우트 단계를 {@code count(DISTINCT route_id)} 로 되돌리기 — {@code explanation_route}
+	 *    의 {@code contribution_observation_id} 가 UNIQUE 라 관측과 1:1 이고 <b>동치</b>다.
+	 * ② 게시 단계를 {@code count(DISTINCT published_id)} 로 되돌리기 — 한 관측에 게시본이 둘인
+	 *    상태를 <b>프로듀서가 만들지 않는다</b>(엔진이 이미 게시본이 있으면 DRAFT 로 넣는다).
+	 *    스키마는 허용하므로 방어로는 유효하다. 없는 상태를 픽스처가 지어내면서까지 죽이지 않는다.
+	 *
+	 * <p>⚠️ <b>진행 중인 하루는 손실처럼 보인다</b>(알려진 천장). 이 축은 "지금까지 몇 건이
+	 * 도착했나"이지 "몇 건이 끝내 사라졌나"가 아니다 — 아직 처리 중인 트리거는 하류 단계에
+	 * 없으므로 감소로 보인다. 그것을 서버가 가리려면 "이 트리거는 처리될 기회를 가졌나"를 답하는
+	 * 사실이 필요한데 원장에 없다. 값을 접지 않고 그대로 낸다(계약 §체인 축에 등재).
+	 */
+	private static final String CHAIN_SQL = """
+			WITH batch_trigger AS (
+			    SELECT price_movement_trigger_id AS trigger_id
+			      FROM price_movement_trigger
+			     WHERE trade_date = ?
+			), intraday_trigger AS (
+			    SELECT trigger_id
+			      FROM minute_price_trigger
+			     WHERE trigger_kind = 'FIRE'
+			       AND (window_start AT TIME ZONE 'Asia/Seoul')::date = ?
+			), obs AS (
+			    SELECT o.contribution_observation_id AS obs_id,
+			           o.price_movement_trigger_id IS NOT NULL AS is_batch
+			      FROM etf_contribution_observation o
+			     WHERE o.price_movement_trigger_id IN (SELECT trigger_id FROM batch_trigger)
+			        OR o.minute_price_trigger_id IN (SELECT trigger_id FROM intraday_trigger)
+			), cohort AS (
+			    SELECT o.obs_id, o.is_batch,
+			           rt.explanation_route_id AS route_id,
+			           er.explanation_run_id AS run_id,
+			           rs.explanation_result_id AS result_id,
+			           CASE WHEN rs.publication_status = 'PUBLISHED'
+			                THEN rs.explanation_result_id END AS published_id
+			      FROM obs o
+			      LEFT JOIN explanation_route rt
+			             ON rt.contribution_observation_id = o.obs_id
+			      LEFT JOIN explanation_run er
+			             ON er.explanation_route_id = rt.explanation_route_id
+			      LEFT JOIN explanation_result rs
+			             ON rs.explanation_run_id = er.explanation_run_id
+			)
+			SELECT (SELECT count(*) FROM batch_trigger) AS feed_batch,
+			       (SELECT count(*) FROM intraday_trigger) AS feed_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch) AS obs_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch) AS obs_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND route_id IS NOT NULL)
+			           AS route_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND route_id IS NOT NULL)
+			           AS route_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND run_id IS NOT NULL)
+			           AS run_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND run_id IS NOT NULL)
+			           AS run_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND result_id IS NOT NULL)
+			           AS result_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND result_id IS NOT NULL)
+			           AS result_intraday,
+			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND published_id IS NOT NULL)
+			           AS published_batch,
+			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND published_id IS NOT NULL)
+			           AS published_intraday
+			  FROM cohort
+			""";
+
+	/**
+	 * 체인 단계 하나 — {@code column} 은 {@link #CHAIN_SQL} 이 낸 컬럼의 <b>접두어</b>이고 갈래마다
+	 * {@code _batch}·{@code _intraday} 가 붙는다. {@code label}·{@code src} 를 서버가 내는 것은
+	 * 산출 축({@link OutputSpec})과 같은 규약이다 — 개체 이름은 사실의 일부이고, 이 응답이 안 만드는
+	 * 것은 <b>포맷된 문자열</b>(날짜·수의 표기)이다.
+	 */
+	private record StageSpec(String id, String label, String src, String column) {
+	}
+
+	/**
+	 * <b>순서가 계약이다</b> — 소비자는 이 배열을 순서대로 인접 비교한다(R10). 정렬 키가 따로 없고
+	 * 단계 사이의 선후는 원장 어디에도 없다(테이블 이름으로는 복원 안 된다).
+	 *
+	 * <p><b>Cloud 게시에서 끝난다.</b> 발번({@code tenant_delivery})도 온프렘 수신도 안 싣는다 —
+	 * 그 뒤는 전달 경계의 물음이고(ADR-0026) 화면도 거기서 잘라 그린다({@code ChainStrip} 의
+	 * {@code LAST_STAGE_ID}). ⚠️ 한 번 {@code c.dlv} 를 실었다가 뺐다: R10 은 그 단계까지 비교해
+	 * <b>"게시 → 전달" P0 를 낼 수 있는데</b> 화면에는 그 단계 노드가 없어 딥링크가 조용히
+	 * 아무 데도 안 닿았다(리뷰가 잡았다). 게시했는데 발번이 없는 것은
+	 * {@code boundary.publishedWithoutDelivery} 가 이미 답한다 — 답이 둘이면 한쪽만 낡는다.
+	 */
+	private static final List<StageSpec> CHAIN_STAGES = List.of(
+			new StageSpec("c.obs", "관측", "etf_contribution_observation", "obs"),
+			new StageSpec("c.route", "라우트", "explanation_route", "route"),
+			new StageSpec("c.run", "런", "explanation_run", "run"),
+			new StageSpec("c.res", "결과", "explanation_result", "result"),
+			new StageSpec("c.pub", "게시", "publication_status=PUBLISHED", "published"));
+
+	/**
+	 * 두 갈래의 입력. <b>순서가 계약이다</b> — 소비자가 {@code feeds[0]}=배치·{@code feeds[1]}=장중
+	 * 으로 위치를 읽고, 그 값을 각 갈래의 첫 비교점으로 쓴다(R10·{@code ChainStrip}).
+	 *
+	 * <p>단위가 갈린다: 배치는 ETF 하나에 하루 한 행이고({@code uq_price_movement_trigger} 가
+	 * {@code (etf, trade_date, detected_at)} 이라 <b>보장은 아니다</b> — {@code detected_at} 이
+	 * 결정적 15:30 이라 실질 하나다), 장중은 같은 종목이 하루에 여러 번 발화한다.
+	 */
+	private static final List<FeedSpec> CHAIN_FEEDS = List.of(
+			new FeedSpec("feed.batch", "배치 트리거", "ETF", "price_movement_trigger", "feed_batch"),
+			new FeedSpec("feed.intraday", "장중 트리거", "건", "minute_price_trigger",
+					"feed_intraday"));
+
+	/** {@code column} 은 {@link #CHAIN_SQL} 의 컬럼 이름 그대로다(갈래가 하나라 접두어가 아니다). */
+	private record FeedSpec(String id, String label, String unit, String src, String column) {
+	}
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcConsoleFactsRepository(JdbcTemplate jdbc) {
@@ -359,7 +518,27 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
-						rs.getLong("delivery_rows"))));
+						rs.getLong("delivery_rows"))),
+				jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day));
+	}
+
+	/**
+	 * 한 행짜리 집계를 두 목록으로 편다 — 목록의 <b>순서는 스펙 상수가 정한다</b>({@link #CHAIN_STAGES}·
+	 * {@link #CHAIN_FEEDS}). SQL 의 SELECT 순서에 기대지 않는 이유는 그 순서가 흐름을 뜻한다는
+	 * 계약이 어디에도 안 적히기 때문이다 — 컬럼을 재배치하는 흔한 편집이 소비자의 인접 비교를
+	 * 조용히 뒤섞는다.
+	 */
+	private static ChainRow mapChain(ResultSet rs, int rowNum) throws SQLException {
+		List<ChainFeed> feeds = new ArrayList<>();
+		for (FeedSpec f : CHAIN_FEEDS) {
+			feeds.add(new ChainFeed(f.id(), f.label(), f.unit(), f.src(), rs.getLong(f.column())));
+		}
+		List<ChainStage> stages = new ArrayList<>();
+		for (StageSpec s : CHAIN_STAGES) {
+			stages.add(new ChainStage(s.id(), s.label(), s.src(), rs.getLong(s.column() + "_batch"),
+					rs.getLong(s.column() + "_intraday")));
+		}
+		return new ChainRow(List.copyOf(feeds), List.copyOf(stages));
 	}
 
 	/**

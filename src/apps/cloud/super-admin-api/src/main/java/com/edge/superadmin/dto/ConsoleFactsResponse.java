@@ -1,6 +1,9 @@
 package com.edge.superadmin.dto;
 
 import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
+import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
@@ -21,16 +24,20 @@ import java.util.List;
  * {@code @JsonInclude} 를 걸지 않는다 — NON_NULL 을 위에 걸면 "집계 없음(null)"이 조용히
  * "계측 없음(필드 부재)"으로 바뀌어, 콘솔이 없애려는 칸 혼동을 서버가 다시 만든다.
  *
- * <p>축이 전부 찼다 — <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축 + 경계 축</b>.
- * 축을 하나씩 더하는 동안 지킨 규약이 이것이었다: 빈 배열은 "봤는데 없었다"이고 <b>필드 부재는
- * "아직 안 본다"</b>라 규칙 층이 그 둘을 다르게 센다. 이제 부재하는 축은 없다.
+ * <p>원장 축은 전부 찼다 — <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축 + 경계 축 +
+ * 체인 축</b>. 축을 하나씩 더하는 동안 지킨 규약이 이것이었다: 빈 배열은 "봤는데 없었다"이고
+ * <b>필드 부재는 "아직 안 본다"</b>라 규칙 층이 그 둘을 다르게 센다.
+ *
+ * <p>아직 부재하는 축은 <b>AWS 제어면 둘</b>이다 — {@code runs[].awsStatus}(ALPHA-979 조각 2)와
+ * {@code queues[]}(조각 3). 원장이 아니라 SFN·SQS 를 물어야 나오는 사실이라 필드가 아예 없고,
+ * 그래서 규칙 R03·R12 가 <b>못 돎</b> 으로 선다(ADR-0050).
  *
  * <p>표시 문자열을 만들지 않는다 — 건수·시각·판정 코드를 raw 로 내리고 포맷은 UI 소관이다
  * ({@link SourceReportResponse} 와 같은 규약).
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, BoundaryResponse boundary,
-		MetaResponse meta) {
+		ChainResponse chain, MetaResponse meta) {
 
 	/**
 	 * 런 하나. {@code id} 는 {@code run_key} 다 — 사건 식별자의 대상 축이라 내부 id 를 쓰면
@@ -128,6 +135,49 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 		public static BoundaryResponse from(BoundaryRow b) {
 			return new BoundaryResponse(b.publishedWithoutDelivery(), b.deliveryNowNonpublished(),
 					b.deliveryRows());
+		}
+	}
+
+	/**
+	 * 설명 생산 체인 — 그 날 발화한 트리거가 단계마다 몇 건 남았나(ALPHA-979).
+	 *
+	 * <p><b>두 목록의 순서가 계약이다.</b> 소비자는 {@code feeds} 를 각 갈래의 첫 점으로 삼아
+	 * {@code stages} 를 순서대로 인접 비교한다 — 순서를 재배치하면 아무것도 안 깨진 채 손실 판정만
+	 * 뒤섞인다. {@code feeds[0]} 이 배치, {@code feeds[1]} 이 장중이다(위치로 읽는다).
+	 *
+	 * <p>⚠️ <b>이 축이 없는 응답과 값이 0 인 응답은 다르다.</b> 축 부재는 "안 물어봤다"이고 0 은
+	 * "코호트를 따라갔더니 그 단계에 아무도 도달 못 했다"는 <b>실측</b>이다. 그래서 수는 전부
+	 * {@code long} 이고 이 축에는 {@code null} 자리가 없다.
+	 *
+	 * <p>⚠️ <b>0 자체가 위반인 것은 아니다.</b> 소비자(R10)는 인접한 두 값의 <b>감소</b>를 보므로,
+	 * 앞 단계도 0 이면 아무 위반도 안 선다(그 갈래는 애초에 아무것도 안 흘렀다). 그렇게 적었다가
+	 * 정정했다 — "0 이면 손실"은 이 응답이 하지 않는 판정이다.
+	 */
+	public record ChainResponse(List<ChainFeedResponse> feeds, List<ChainStageResponse> stages) {
+
+		public static ChainResponse from(ChainRow c) {
+			return new ChainResponse(c.feeds().stream().map(ChainFeedResponse::from).toList(),
+					c.stages().stream().map(ChainStageResponse::from).toList());
+		}
+	}
+
+	/** 입력 한 갈래. {@code unit} 이 갈래마다 다르다 — 배치는 ETF 종수, 장중은 발화 건수다. */
+	public record ChainFeedResponse(String id, String label, long v, String unit, String src) {
+
+		public static ChainFeedResponse from(ChainFeed f) {
+			return new ChainFeedResponse(f.id(), f.label(), f.v(), f.unit(), f.src());
+		}
+	}
+
+	/**
+	 * 단계 하나 — 두 갈래를 나란히 낸다. 갈래는 {@code etf_contribution_observation} 의 트리거 FK
+	 * 하나가 가르고, 그 아래 단계에는 배치/장중을 가르는 컬럼이 <b>없다</b>(관측에서 상속한다).
+	 */
+	public record ChainStageResponse(String id, String label, long batch, long intraday,
+			String src) {
+
+		public static ChainStageResponse from(ChainStage s) {
+			return new ChainStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src());
 		}
 	}
 

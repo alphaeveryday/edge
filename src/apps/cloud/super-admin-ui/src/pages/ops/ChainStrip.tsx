@@ -1,7 +1,10 @@
 /* 설명 생성 흐름 스트립 (ALPHA-738).
  *
  * 체인은 하나다. 배치 트리거와 장중 트리거는 별개 파이프라인이 아니라 같은 체인의 두 입력이라
- * (etf_contribution_observation 이 두 트리거 FK 를 모두 갖는다) 단계마다 배치/장중을 나란히 낸다.
+ * 단계마다 배치/장중을 나란히 낸다 — 합류 지점이 `etf_contribution_observation` 이다.
+ * ⚠️ "두 트리거 FK 를 모두 갖는다"고 적혀 있었는데 거짓이다: 한 행은 **정확히 하나**를 갖는다
+ * (`ck_etf_contribution_one_trigger`). 그 표가 두 축을 **받는다**는 뜻이었고, 갈래를 가르는 것도
+ * 바로 그 배타성이다(하류 단계에는 배치/장중 컬럼이 없다).
  *
  * **어디서 끝나는가**: Cloud 게시까지다. tenant_delivery 발번은 Cloud→테넌트 전달 경계이고
  * 그 뒤(Sync Agent·Intake·Screening·온프렘 최종 게시·소비자 노출)는 온프렘 영역이라
@@ -20,12 +23,13 @@ const DISPLAY_LABEL: Record<string, string> = { 'c.pub': 'Cloud 게시' };
 
 export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
   /* 축이 통째로 없으면 **빈 띠를 그리지 않는다** — 단계가 0개인 흐름은 "아무것도 안 흘렀다"로
-   * 읽히는데, 사실은 이 축의 계측이 없는 것이다(계약 §축별 소스: `chain` 은 소스 0). */
+   * 읽히는데, 사실은 이 응답이 그 축을 안 실은 것이다(계약 §체인 축). 축은 배선돼 있으므로
+   * (ALPHA-979 조각 1) 여기 도달하는 것은 그 축을 안 싣던 배포본을 보고 있다는 뜻이다. */
   if (!chain) {
     return (
       <div className="ops-chain-absent t-xs" style={{ color: 'var(--fg-3)' }}>
-        흐름 단계 집계는 <Absent kind="uninstrumented" /> — 단계별 건수를 세는 계측이 없습니다.
-        구간 손실(R10)도 같은 이유로 판정하지 못합니다.
+        흐름 단계 집계가 이번 응답에 <Absent kind="uninstrumented" /> — 단계별 건수가 오지
+        않았습니다. 구간 손실(R10)도 같은 이유로 판정하지 못합니다.
       </div>
     );
   }

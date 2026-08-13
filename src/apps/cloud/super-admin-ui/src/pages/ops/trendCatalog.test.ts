@@ -21,7 +21,7 @@ import { buildMetrics, latestTask } from './trendCatalog.ts';
 import { FUNNEL_DATE } from './newsFunnelSnapshot.ts';
 import { evaluateMetric } from './trendMetrics.ts';
 
-/** 서버가 실제로 보내는 축만 — `chain`·`etf_ledger`·`runbook`·`meta.aws` 는 없다(계약 §축별 소스). */
+/** 서버가 실제로 보내는 축만 — `etf_ledger`·`runbook`·`meta.aws`·`queues` 는 없다(계약 §축별 소스). */
 const WIRED: Facts = {
   runs: [],
   tasks: [],
@@ -31,6 +31,18 @@ const WIRED: Facts = {
     { id: 'o.trig', label: '트리거 이벤트', today: 47, base: 51, unit: '건' },
   ],
   boundary: { published_without_delivery: 0, delivery_now_nonpublished: 1, delivery_rows: 114 },
+  /* 체인은 이제 온다(ALPHA-979 조각 1). 단계 값을 **서로 다르게** 둔다 — 같으면 `c.run`·`c.res`
+   * 를 맞바꾸는 변이가 비율 1.0 위에서 안 보인다. */
+  chain: {
+    feeds: [
+      { id: 'feed.batch', label: '배치 트리거', v: 20, unit: 'ETF', src: 'price_movement_trigger' },
+      { id: 'feed.intraday', label: '장중 트리거', v: 65, unit: '건', src: 'minute_price_trigger' },
+    ],
+    stages: [
+      { id: 'c.run', label: '런', batch: 16, intraday: 0, src: 'explanation_run' },
+      { id: 'c.res', label: '결과', batch: 12, intraday: 0, src: 'explanation_result' },
+    ],
+  },
   meta: { db: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
 };
 
@@ -87,15 +99,31 @@ test('추이 화면은 재조회 오류만으로 React Query가 보존한 분봉
 });
 
 test('🔴 체인 축 부재를 0 으로 그리지 않는다 — "결과 생성률 0%" 는 거짓 경보다', () => {
-  /* `chain` 은 실 응답에 **항상** 없다(소스 0). 그러니 이 두 지표는 실 운영에서 매일 이 갈래다. */
+  /* 축이 배선된 뒤에도(ALPHA-979 조각 1) 이 갈래는 살아 있다 — 그 축을 안 싣던 배포본을 보는
+   * 동안이다. 부재를 0 으로 접으면 그때 "결과 생성률 0%" 가 매일 뜬다. */
+  const noChain: Facts = { ...WIRED, chain: undefined };
   for (const id of ['a.results', 'a.run_to_result']) {
-    const m = byId(WIRED, id);
+    const m = byId(noChain, id);
     assert.equal(m.comparisonType, 'uninstrumented', `${id} 가 판정을 만들어 냈다`);
     assert.deepEqual(m.series, [], `${id} 에 없는 계열이 생겼다`);
     const v = evaluateMetric(m);
     assert.equal(v.kind, 'uninstrumented', `${id} 판정 종류`);
     assert.equal(v.actual, null, `${id} 오늘 값이 0 으로 그려졌다`);
   }
+});
+
+test('🔴 체인 축이 오면 그 두 지표가 실제로 선다 — 부재 갈래가 값 갈래를 잡아먹지 않았다', () => {
+  /* ⭐ 부재만 단언하면 **축을 아예 안 읽는 회귀가 초록**이다(부재가 통과 조건이라 공허하게 참).
+   * 값 갈래를 같이 건다 — 그래야 어댑터가 `chain` 을 떨구거나 여기가 계속 `null` 을 읽는 변이가
+   * 죽는다. 값은 픽스처의 `c.res`/`c.run` = 12/16 이라 **1.0 이 아니다**: 둘을 맞바꾸는 변이는
+   * 비율이 1 일 때 안 보인다. */
+  const results = byId(WIRED, 'a.results');
+  assert.notEqual(results.comparisonType, 'uninstrumented', '축이 왔는데 계속 판정 불가다');
+  assert.equal(evaluateMetric(results).actual, 12);
+
+  const rate = byId(WIRED, 'a.run_to_result');
+  assert.notEqual(rate.comparisonType, 'uninstrumented', '축이 왔는데 계속 판정 불가다');
+  assert.equal(evaluateMetric(rate).actual, 12 / 16);
 });
 
 test('🔴 per-ETF 원장 부재를 "실패 0종" 으로 그리지 않는다', () => {
