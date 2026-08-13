@@ -366,9 +366,16 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 도달 여부로 세면 각 단계의 집합이 앞 단계의 부분집합이라 <b>단조성이 구조적으로 보장</b>되고,
 	 * 남는 감소는 전부 "여기서 멈춘 구성원 수"라는 한 가지 뜻이 된다.
 	 *
-	 * <p>⚠️ 그래도 <b>못 가르는 것</b>: {@code DRAFT} 는 사유를 안 남긴다 — 아직 처리 중인지,
-	 * 게시 대상이 아닌지({@code publishable=false}), 운영자가 내렸는지({@code WITHDRAWN})가
-	 * 같은 모양이다. 그래서 결과→게시의 감소에는 <b>설계된 것이 섞인다</b>(계약 §체인 축).
+	 * <p>⚠️ 그래도 <b>결과→게시의 감소에는 설계된 것이 섞인다</b>. 원장에 남는 것은
+	 * {@code publication_status} 하나이고 사유가 없다. 그 감소를 만드는 것은 <b>정확히 둘</b>이다:
+	 * <b>표면 부재</b>(내용 없는 결과라 자리를 안 준다 — 엔진 로그의 {@code surface_absent})와
+	 * <b>운영자 무효화</b>({@code WITHDRAWN} 전이, ALPHA-440). 둘 다 설계된 것이다.
+	 *
+	 * <p>⚠️ 여기 "아직 처리 중"과 "재실행"도 섞인다고 적었다가 정정했다 — 둘 다 <b>이 비교에
+	 * 도달하지 않는다</b>. 처리 중이면 {@code explanation_result} 행 자체가 없어 <b>런에서
+	 * 멈추고</b>({@code publication_status} 는 INSERT 시점에 확정된다), 재실행분이 DRAFT 로
+	 * 떨어져도 그 경로의 첫 결과는 여전히 게시본이라 <b>도달 여부로 세면 관측이 게시에 닿는다</b>.
+	 * 후자는 이 커밋이 바꾼 셈법이 없앤 것이고, 없앤 것을 남은 사유로 적으면 안 된다.
 	 *
 	 * <p>⚠️ <b>테스트로 못 죽이는 변이 둘</b>(변이 실증 — 억지로 안 죽인다):
 	 * ① 라우트 단계를 {@code count(DISTINCT route_id)} 로 되돌리기 — {@code explanation_route}
