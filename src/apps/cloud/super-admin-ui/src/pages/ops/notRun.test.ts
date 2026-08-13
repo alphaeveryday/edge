@@ -41,7 +41,7 @@ const ev = {
     R('R17'), //  dep 없음 + axis:'minute'(실시간 응답 축)
     R('R13', { notRun: 'identity', note: 'R13: 사건 식별자 충돌 R13:o.pub — …' }),
     R('R04', { evaluated: true, notRun: undefined, violations: 2 }),
-    R('R12'), //  dep 있음(SQS 미배선) — 실시간 조회 상태를 붙이면 안 되는 규칙
+    R('R12'), // dep 있음(구 API의 SQS 축 부재) — 실시간 조회 상태를 붙이면 안 되는 규칙
   ],
 };
 
@@ -124,14 +124,12 @@ test('`dep` 이 없는 규칙에 "사실 축 부재"를 쓰지 않는다 — dep
   assert.equal(kinds.size, 3);
 });
 
-test('조회 상태는 **그 축을 읽는 규칙에만** 붙는다 — R12 는 현재 SQS 미배선을 말한다', () => {
-  /* R12 의 축은 SQS(`f.queues`)이고 현재 계약 응답에는 그 축이 없다. 실시간 조회가 실패한 날
-   * R12 에 "조회 실패"라고 쓰면, 이 함수가 없애려던 오독(장애↔미배선)을 **반대 방향으로** 낸다.
-   * #746 이후 `dep` 가 이 사실을 직접 나르므로 모든 조회 상태에서 같은 SQS 사유여야 한다. */
+test('조회 상태는 **그 축을 읽는 규칙에만** 붙는다 — R12 는 구 API 응답을 말한다', () => {
+  /* R12 의 축은 SQS(`f.queues`)라 실시간 조회 상태와 무관하다. 구 API 응답에서만 못 돈다. */
   const r12 = ev.rules[4];
   for (const f of ['loaded', 'stale', 'pending', 'error'] as const) {
     const why = notRunReason(r12, f);
-    assert.match(why, /SQS 큐 지표 조회 배선/, `R12 의 실제 미배선 사유가 사라졌다: ${why}`);
+    assert.match(why, /queues 축이 없다/, `R12 의 배포 시차 사유가 사라졌다: ${why}`);
     assert.ok(!why.includes(FETCH_LABEL[f]), `실시간 조회 상태(${f})가 남의 축 규칙에 새어 나갔다`);
   }
   /* 같은 상태에서 R17 은 조회 상태를 받는다 — 축 표기가 갈라내는 것이 이 차이다 */

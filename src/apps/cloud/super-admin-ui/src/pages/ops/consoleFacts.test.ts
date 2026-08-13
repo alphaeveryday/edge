@@ -17,6 +17,7 @@ import {
   META_FIELDS,
   minuteFacts,
   OUTPUT_FIELDS,
+  QUEUE_FIELDS,
   parseFacts,
   RUN_FIELDS,
   TASK_FIELDS,
@@ -162,6 +163,7 @@ const WIRE = (): ConsoleFactsDto => ({
     collectedAt: '2026-08-03T15:41:58+09:00', unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
   }],
   outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+  queues: [{ name: 'news-realtime', visible: 7, inFlight: 3, dlq: 2 }],
   boundary: { publishedWithoutDelivery: 0, deliveryNowNonpublished: 1, deliveryRows: 114 },
   /* 네 수를 전부 다르게 둔다 — 갈래(batch↔intraday)나 피드↔단계를 맞바꾸는 변이는 같은 값
    * 위에서는 안 보인다. 단계도 **둘** 둔다: 하나면 목록 순서를 뒤집는 변이가 no-op 이 된다. */
@@ -232,6 +234,7 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
     }],
     outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+    queues: [{ name: 'news-realtime', visible: 7, in_flight: 3, dlq: 2 }],
     boundary: {
       published_without_delivery: 0,
       delivery_now_nonpublished: 1,
@@ -277,6 +280,7 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   delete w.runs[0].awsStatus;
   delete w.runs[0].awsStop;
   delete w.meta.aws;
+  delete w.queues;
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
@@ -398,10 +402,31 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.tasks[0], TASK_FIELDS, 'tasks');
   both(w.datasets[0], DATASET_FIELDS, 'datasets');
   both(w.outputs[0], OUTPUT_FIELDS, 'outputs');
+  both(w.queues![0], QUEUE_FIELDS, 'queues');
   both(w.boundary, BOUNDARY_FIELDS, 'boundary');
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
   both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
   both(w.meta, META_FIELDS, 'meta');
+});
+
+test('SQS 축의 null은 관측 실패로 보존해 R12를 실행하지 않는다', () => {
+  const w = WIRE();
+  w.queues = null;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.facts.queues, undefined);
+});
+
+test('거부 — 큐 깊이가 음수거나 수가 아니면 응답 전체를 버린다', () => {
+  for (const [name, mutate] of [
+    ['visible 음수', (w: ConsoleFactsDto) => { w.queues![0].visible = -1; }],
+    ['inFlight 문자열', (w: ConsoleFactsDto) =>
+      { (w.queues![0] as { inFlight: unknown }).inFlight = '3'; }],
+    ['dlq 소수', (w: ConsoleFactsDto) => { w.queues![0].dlq = 0.5; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
 });
 
 test('AWS 축의 null 은 조회 실패 형상으로 보존한다 — 키 부재와 접지 않는다', () => {

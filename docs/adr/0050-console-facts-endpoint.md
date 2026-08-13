@@ -31,7 +31,8 @@
 R03(제어면·원장 불일치)·R11·R12(큐)가 읽는 사실은 DB 에 없다 — Step Functions `DescribeExecution`
 과 SQS `GetQueueAttributes` 가 필요하다. 이걸 별도 엔드포인트로 가르지 않고 같은 응답에 넣되,
 **실패해도 DB 축을 막지 않는다**. SFN은 `runs[].awsStatus`·`awsStop`과 `meta.aws`로 붙었고,
-조회 실패는 `meta.aws: null` + 런별 AWS 값 `null`로 축 전체를 비운다. SQS `queues[]`는 후속이다.
+조회 실패는 `meta.aws: null` + 런별 AWS 값 `null`로 축 전체를 비운다. SQS도 `queues[]`로 붙었고,
+한 큐라도 조회에 실패하면 `queues: null`로 축 전체를 비운다(ALPHA-979 조각 3).
 
 `[]` 로 보내지 않는 것이 핵심이다 — `[]` 는 "큐가 0개"라는 거짓말이고, 규칙이 그걸 통과시켜
 `평가됨 · 위반 0`("봤고 괜찮다")이 된다. `null` 이면 `canRun` 이 false 라 `못 돎` 으로 남는다.
@@ -55,9 +56,8 @@ R03(제어면·원장 불일치)·R11·R12(큐)가 읽는 사실은 DB 에 없�
 ## 결과
 
 - 계약은 [docs/contracts/console-facts-api.md](../contracts/console-facts-api.md).
-- **19규칙 중 `facts` 단독 8개, `/sources/minute` 까지 오면 11개**가 실 응답만으로 선다.
-  나머지는 **AWS 호출이 붙어야 돌거나**(R12) 계측이 없거나(R08·R11·R15·R16) 소스 자체가
-  없다(R10·R13). 뒤 6개는 화면에 `못 돎` 으로 서야 한다 — `평가됨 · 위반 0` 과 같은 칸에 그리면
+- **R12까지 SQS 실 응답으로 선다.** 남은 계측 공백(R08·R11·R15·R16)은 화면에 `못 돎` 으로
+  서야 한다 — `평가됨 · 위반 0` 과 같은 칸에 그리면
   계측 공백이 정상으로 보인다.
   - ⚠️ **R10 은 그 뒤 배선됐다**([ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979)
     조각 1, 2026-08-13). 체인이 읽는 표가 전부 클라우드 DB 에 있어(`price_movement_trigger` ·
@@ -67,6 +67,8 @@ R03(제어면·원장 불일치)·R11·R12(큐)가 읽는 사실은 DB 에 없�
     축의 형상(피드 2 + 단계 5)과 그 천장은 계약의 §체인 축이 정본이다.
   - **R03도 그 뒤 배선됐다**(ALPHA-979 조각 2, 2026-08-13). SFN 종료 뒤 Reconciler가 아직
     원장을 훑지 않은 `ledger_updated < aws_stop`은 정상 지연이라 위반에서 제외한다.
+  - **R12도 그 뒤 배선됐다**(ALPHA-979 조각 3, 2026-08-13). SQS 조회가 일부라도 실패하면
+    부분 관측을 내리지 않고 축 전체를 `null`로 둔다.
 - 🔴 **R08(신선도 위반)은 지금 `평가됨` 인데 실 응답에서 `못 돎` 이 된다.** 계약 연결 작업이
   하나뿐이고 그 `actual_as_of_date` 가 [ADR-0043](0043-dataset-contract-freshness.md) 상 영구
   NULL 이기 때문이다. 목이 가리고 있던 계측 공백이 드러나는 것이므로 **회귀가 아니라 정정**이다.

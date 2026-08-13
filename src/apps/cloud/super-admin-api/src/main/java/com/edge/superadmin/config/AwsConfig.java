@@ -5,13 +5,20 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sfn.SfnClient;
+import software.amazon.awssdk.services.sqs.SqsClient;
+
+import com.edge.superadmin.repository.QueueControlPlane.QueueCatalog;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.Map;
 
 /**
- * AWS 제어면 클라이언트(ALPHA-979 조각 2). 이 앱이 AWS 를 부르는 <b>유일한</b> 자리다.
+ * AWS 제어면 클라이언트(ALPHA-979 조각 2·3). 이 앱이 AWS 를 부르는 <b>유일한</b> 자리다.
  *
  * <p>⚠️ <b>기동을 막지 않는다.</b> 자격증명은 SDK 가 요청 시점에 푼다(태스크 역할). 그래서
  * 로컬·테스트처럼 자격이 없는 환경에서도 빈 생성은 성공하고, 실패는 <b>조회 시점</b>에
- * {@code RunControlPlane} 의 "제어면을 못 봤다"로 접힌다 — 콘솔 전체가 AWS 때문에 안 뜨는
+ * 각 제어면의 "못 봤다"로 접힌다 — 콘솔 전체가 AWS 때문에 안 뜨는
  * 쪽이 더 나쁘다(ADR-0050: AWS 실패가 DB 축을 막지 않는다).
  *
  * <p>리전만은 명시한다. SDK 는 환경에서 리전을 못 찾으면 <b>빈 생성에서</b> 던지는데, 그러면
@@ -24,5 +31,18 @@ public class AwsConfig {
 	@Bean
 	SfnClient sfnClient(@Value("${aws.region:${AWS_REGION:ap-northeast-2}}") String region) {
 		return SfnClient.builder().region(Region.of(region)).build();
+	}
+
+	@Bean
+	SqsClient sqsClient(@Value("${aws.region:${AWS_REGION:ap-northeast-2}}") String region) {
+		return SqsClient.builder().region(Region.of(region)).build();
+	}
+
+	@Bean
+	QueueCatalog queueCatalog(ObjectMapper mapper,
+			@Value("${console.aws.queue-urls:{}}") String queueUrls,
+			@Value("${console.aws.dlq-urls:{}}") String dlqUrls) throws Exception {
+		TypeReference<Map<String, String>> type = new TypeReference<>() { };
+		return new QueueCatalog(mapper.readValue(queueUrls, type), mapper.readValue(dlqUrls, type));
 	}
 }

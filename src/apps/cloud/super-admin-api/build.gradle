@@ -27,11 +27,12 @@ dependencies {
 	implementation 'org.springframework.security:spring-security-crypto'
 	// AWS SDK v2 — **이 워크스페이스의 첫 AWS 의존이다**(ALPHA-979 조각 2). 콘솔이 런의
 	// 제어면 상태를 직접 물어야 원장 투영과 대조가 선다. Step Functions 모듈만 가져온다 —
-	// BOM 이 전 서비스 아티팩트를 관리하지만 여기서 여는 것은 sfn 하나다.
-	// ⚠️ 앱이 부르는 API 는 DescribeExecution 하나이고 태스크 역할 정책도 그 하나다
+	// BOM 이 전 서비스 아티팩트를 관리하지만 여기서 여는 것은 sfn·sqs뿐이다.
+	// ⚠️ 앱이 부르는 API 는 DescribeExecution·GetQueueAttributes이고 태스크 역할 정책도 둘뿐이다
 	// (infra/terraform/envs/dev/main.tf). 늘릴 땐 정책과 코드를 같이 세라.
 	implementation platform('software.amazon.awssdk:bom:2.52.1')
 	implementation 'software.amazon.awssdk:sfn'
+	implementation 'software.amazon.awssdk:sqs'
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'org.postgresql:postgresql'
 	annotationProcessor 'org.projectlombok:lombok'

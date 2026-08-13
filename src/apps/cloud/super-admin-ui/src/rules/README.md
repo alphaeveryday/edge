@@ -55,7 +55,7 @@ import 에 확장자를 붙인다.
    `RuleResult.notRun` 이 어느 쪽인지 구조로 낸다:
    - `notRun: 'axis'` — `canRun` 이 거짓(읽을 사실 축이 없다). `canRun` 을 가진 규칙 **열하나가
      전부** 대상이다: R03(AWS 상태 전무)·R08(actual 근거 전무)·R10(비교할 점 2개 미만)·R11(구독
-     매핑 필드 부재)·R12(큐 축 부재)·R13(기준 있는 산출 전무)·R15(per-ETF 원장 부재)·R16(정책
+     매핑 필드 부재)·R12(구 API의 큐 축 부재)·R13(기준 있는 산출 전무)·R15(per-ETF 원장 부재)·R16(정책
      필드 전무)·R17~R19(minute 축 부재). 목록을 손으로 적어 세 개(R03·R10·R13)를 빠뜨렸던
      자리다 — 정본은 `RULES` 의 `canRun` 유무이지 이 문장이 아니다.
    - `notRun: 'identity'` — 축은 있었는데 **응답이 사건을 못 가르게** 줬다(사건 식별자 충돌·빈 대상/범위
@@ -77,8 +77,8 @@ import 에 확장자를 붙인다.
 5. **실행 위치** — 명세는 "서버 쪽이 자연스럽다" 했으나 UI 워크스페이스의 순수 TS 모듈 + node CLI 로 구현했다.
    판정이 클라이언트에 남는 이유는 **실시간 축이 다른 응답에서 오기 때문**이다(사실은
    `/console/facts`, 세션은 `/sources/minute`). §5 JSON 은 CLI 로 UI 없이 나온다.
-   ⚠️ 둘을 합쳐도 **19규칙이 다 서지는 않는다** — `/console/facts` 에 queues·
-   ETF 원장·재시도 상한이 없어 R11·R12·R15·R16 은 계속 `evaluated:false` 다. 어댑터 둘을
+   ⚠️ 둘을 합쳐도 **19규칙이 다 서지는 않는다** — `/console/facts` 에 큐 구독 매핑·ETF 원장·
+   재시도 상한이 없어 R11·R15·R16 은 계속 `evaluated:false` 다. 어댑터 둘을
    만들면 계측이 끝난다고 읽으면 안 된다(남은 것은 아래 **계측 티켓 표**다 — 수를 여기 적으면
    낡는다. 규모의 정본은 `rules.ts` 의 `dep` 집합이고 `rules.test.ts` 가 표와 맞물려 센다).
    **이 선택은 닫혔다** — 엔드포인트가 사실만 주고 평가는 여기 남는다
@@ -169,7 +169,7 @@ import 에 확장자를 붙인다.
 | 티켓 | 무엇 | 되살아나는 규칙 |
 |---|---|---|
 | [ALPHA-978](https://alphaeveryday.atlassian.net/browse/ALPHA-978) | 원장이 안 쓰는 판정 축 — per-ETF outcome · 재시도 정책 필드 · `actual_as_of` writer · 완전성 분모(엔티티 축만) | R07 · R08 · R15 · R16 |
-| [ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) | facts 응답이 안 싣는 축 — ~~`aws_status`~~ · `queues[]` · ~~`chain`~~ | R12 (~~R03·R10~~ ✅) |
+| [ALPHA-979](https://alphaeveryday.atlassian.net/browse/ALPHA-979) | facts 응답이 안 싣던 축 — ~~`aws_status` · `queues[]` · `chain`~~ | ~~R03·R10·R12~~ ✅ |
 | [ALPHA-980](https://alphaeveryday.atlassian.net/browse/ALPHA-980) | 선언·등록물 — 큐→구독 매핑 · 런북 등록(R17~R19 포함) · 런 kind | R11 (+ 런북 표면) |
 
 ❌ **[ALPHA-981](https://alphaeveryday.atlassian.net/browse/ALPHA-981)(`GRID_SQL` 에 `t.dataset` 한
@@ -195,10 +195,9 @@ import 에 확장자를 붙인다.
 작업의 `dataset` 을 옮겨도 화면 행이 조용히 그대로다. `원장 dataset 값은 정확히 한 화면 행으로
 접힌다` 단언으로 막았다(변이 실증: 그 변이가 새 단언만 죽이고 기존 8건은 초록이었다).
 
-🔴 **지금 19규칙 중 여섯(R07·R08·R11·R12·R15·R16)이 `evaluated: false`** 다. 화면은 그걸
+🔴 **지금 19규칙 중 다섯(R07·R08·R11·R15·R16)이 `evaluated: false`** 다. 화면은 그걸
 "못 돎"으로 정직하게 그리지만, 운영자에게는 **그 축을 아무도 안 보고 있다**는 뜻이다.
-✅ R10·R03 은 각각 ALPHA-979 **조각 1·2**가 `chain`·`aws_status` 축을 배선하며 빠졌다.
-티켓 행은 남는다: 남은 `queues[]` 축은 조각 3으로 이어진다.
+✅ R10·R03·R12는 ALPHA-979 **조각 1·2·3**이 `chain`·`aws_status`·`queues[]` 축을 배선하며 빠졌다.
 ⚠️ R10 이 도는 것과 R10 이 **옳게** 도는 것은 다르다 — 진행 중인 하루의 감소는 "아직 처리 중"과
 "사라졌다"가 같은 모양이고, 그걸 가르는 사실이 원장에 없다(계약 §체인 축의 천장).
 ⚠️ R13 도 `dep` 이 있지만 **계측 공백이 아니다** — "오늘 판정할 산출이 없다"는 조건부 사유라

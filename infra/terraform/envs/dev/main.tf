@@ -155,6 +155,8 @@ module "super_admin_api" {
   environment = {
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
     SPRING_DATASOURCE_USERNAME = module.rds.master_username
+    CONSOLE_AWS_QUEUE_URLS     = jsonencode(module.data_pipeline.minute_queue_urls)
+    CONSOLE_AWS_DLQ_URLS       = jsonencode(module.data_pipeline.minute_dlq_urls)
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.rds.master_user_secret_arn}:password::"
@@ -170,19 +172,28 @@ module "super_admin_api" {
     data.aws_secretsmanager_secret.admin_bootstrap_operator.arn,
   ]
 
-  # 콘솔이 런의 **AWS 실행 상태**를 직접 조회한다(ALPHA-979 조각 2 — 규칙 R03).
+  # 콘솔이 런의 **AWS 실행 상태**와 큐 깊이를 직접 조회한다(ALPHA-979 조각 2·3 — R03·R12).
   # 원장의 orchestration_status 는 Reconciler 가 15분마다 옮겨 적은 **투영**이라, 제어면과
   # 대조하려면 콘솔이 스스로 물어야 한다. 어느 쪽도 상대를 덮지 않는 것이 이 축의 계약이다.
   #
-  # ⚠️ **앱이 부르는 API 는 DescribeExecution 하나뿐이다** — ListExecutions·GetExecutionHistory
-  # 는 안 쓴다(ARN 은 원장이 준다). 늘리려면 코드부터 세라(ALPHA-671).
+  # ⚠️ **앱이 부르는 API 는 DescribeExecution·GetQueueAttributes 둘뿐이다** —
+  # ListExecutions·GetExecutionHistory 는 안 쓴다(ARN 은 원장이 준다). 늘리려면 코드부터 세라.
   # ⚠️ 리소스를 레인별로 **열거하지 않는다**: 레인이 늘 때 그 레인의 런만 AccessDenied 로
   # 조용히 관측 불가가 되고, 그건 정확히 이 축이 없애려는 "안 봤는데 괜찮아 보이는" 상태다.
   # 대신 실행(execution) 네임스페이스로 좁힌다 — 상태머신 자체는 못 만지고 못 멈춘다.
-  task_policy_statements = [{
-    actions   = ["states:DescribeExecution"]
-    resources = ["arn:aws:states:${var.region}:${data.aws_caller_identity.current.account_id}:execution:edge-dev-data-pipeline*:*"]
-  }]
+  task_policy_statements = [
+    {
+      actions   = ["states:DescribeExecution"]
+      resources = ["arn:aws:states:${var.region}:${data.aws_caller_identity.current.account_id}:execution:edge-dev-data-pipeline*:*"]
+    },
+    {
+      actions = ["sqs:GetQueueAttributes"]
+      resources = concat(
+        values(module.data_pipeline.minute_queue_arns),
+        values(module.data_pipeline.minute_dlq_arns),
+      )
+    },
+  ]
 
   # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다(sync 와 동일한 fresh apply 경쟁).
   depends_on = [module.super_admin_alb]
