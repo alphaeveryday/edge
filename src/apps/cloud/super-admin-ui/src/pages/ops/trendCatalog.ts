@@ -556,7 +556,7 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
         comparisonType: 'maxCount',
         threshold: 0,
         direction: 'lowerIsBetter',
-        source: 'MOCK',
+        source: f.etf_ledger.mock === true ? 'MOCK' : 'DB_LEDGER',
         series: buildSeries({
           today: f.etf_ledger.rows.filter((r) => r.outcome === 'FAILED').length,
           pin: 0,
@@ -566,11 +566,12 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
           endDate: TODAY,
         }),
         help: [
-          '분석이 실패로 끝난 ETF 수(per-ETF 분석 원장).',
+          '조회일 ETF별 최신 트리거의 최신 설명 실행이 실패로 끝난 ETF 수.',
           '',
           '판정: 1종 이상이면 이상.',
-          '⚠️ per-ETF 원장이 계측되지 않아 이 값은 목이다 — 개별 ops task 가 없고 SFN·stdout·DB',
-          '결과로 간접 관측한다.',
+          ...(f.etf_ledger.mock === true
+            ? ['⚠️ 이 응답의 ETF 원장은 목 데이터다.']
+            : ['오늘 값은 설명 실행 원장에서 왔다. 과거 계열은 응답에 없어 검수용 목이다.']),
         ].join('\n'),
         drill: { href: '/analyses', label: '분석 결과 목록' },
       }

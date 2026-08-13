@@ -13,8 +13,7 @@ import java.util.List;
  *
  * <p><b>계측이 없는 축은 이 인터페이스에 없다</b>(계약 §부재를 싣는 규약 — "필드를 안 보낸다").
  * 축은 조각별로 하나씩 붙었다 — <b>조회 창 + 런 축(계획 결손 슬롯 포함) + 작업 축 + 산출 축 +
- * 경계 축 + 체인 축</b>. 아직 없는 축은 {@code aws_status}(ALPHA-979 조각 2)와
- * {@code queues[]}(조각 3)이고, 둘 다 원장이 아니라 <b>AWS 제어면</b>을 물어야 나온다.
+ * 경계 축 + 체인 축 + ETF 귀결 축</b>. AWS 상태와 큐는 원장이 아니라 제어면을 물어 얻는다.
  *
  * <p>와이어의 <b>데이터셋 축은 여기 없다</b> — 원장에 그 테이블이 없어 작업에서 파생하고, 파생은
  * {@code ConsoleFactsService} 소관이다. 이 인터페이스는 그 재료({@link TaskRow} 뒤쪽 여섯 컬럼)만 낸다.
@@ -33,7 +32,12 @@ public interface ConsoleFactsRepository {
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
-			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain) {
+			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
+			List<EtfAnalysisRow> etfLedger) {
+	}
+
+	/** 조회일에 발화한 ETF별 <b>최신 트리거</b>의 최신 설명 실행 상태(R15). */
+	record EtfAnalysisRow(String etf, String name, String outcome) {
 	}
 
 	/**

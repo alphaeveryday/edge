@@ -4,6 +4,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
+import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.RunControlPlane;
@@ -27,7 +28,7 @@ import java.util.List;
  * "계측 없음(필드 부재)"으로 바뀌어, 콘솔이 없애려는 칸 혼동을 서버가 다시 만든다.
  *
  * <p>원장 축은 전부 찼다 — <b>조회 창 + 런 축 + 작업 축 + 데이터셋 축 + 산출 축 + 경계 축 +
- * 체인 축</b>. 축을 하나씩 더하는 동안 지킨 규약이 이것이었다: 빈 배열은 "봤는데 없었다"이고
+ * 체인 축 + ETF 귀결 축</b>. 축을 하나씩 더하는 동안 지킨 규약이 이것이었다: 빈 배열은 "봤는데 없었다"이고
  * <b>필드 부재는 "아직 안 본다"</b>라 규칙 층이 그 둘을 다르게 센다.
  *
  * <p>여기에 <b>제어면 축</b>이 붙었다(ALPHA-979 조각 2) — {@code runs[].awsStatus}·
@@ -42,7 +43,20 @@ import java.util.List;
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
-		ChainResponse chain, MetaResponse meta) {
+		ChainResponse chain, EtfLedgerResponse etfLedger, MetaResponse meta) {
+
+	public record EtfLedgerResponse(List<EtfLedgerRowResponse> rows) {
+		public static EtfLedgerResponse from(List<EtfAnalysisRow> rows) {
+			return new EtfLedgerResponse(rows.stream().map(EtfLedgerRowResponse::from).toList());
+		}
+	}
+
+	public record EtfLedgerRowResponse(String etf, String name, boolean triggered,
+			String outcome, String error) {
+		private static EtfLedgerRowResponse from(EtfAnalysisRow row) {
+			return new EtfLedgerRowResponse(row.etf(), row.name(), true, row.outcome(), null);
+		}
+	}
 
 	public record QueueResponse(String name, long visible, long inFlight, long dlq) {
 		public static QueueResponse from(QueueState q) {

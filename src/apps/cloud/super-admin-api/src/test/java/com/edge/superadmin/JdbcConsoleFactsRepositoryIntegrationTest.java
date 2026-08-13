@@ -1589,6 +1589,89 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
+	 * R15의 단위는 그날의 실행 전건이 아니라 <b>ETF별 최신 트리거 하나</b>다. 이전 트리거가
+	 * 실패했어도 더 늦은 트리거가 성공했으면 현재 실패 ETF로 남으면 안 된다.
+	 */
+	@Test
+	void ETF_원장은_그날의_최신_트리거만_고른다() {
+		insertPublished("old", "2026-08-03", "etf-latest", "DRAFT");
+		jdbc.update("UPDATE explanation_run SET run_status = 'FAILED'"
+				+ " WHERE explanation_run_id = 'run-old'");
+		insertPublished("new", "2026-08-03", "etf-latest", "DRAFT");
+
+		assertThat(repository.facts(DAY).etfLedger())
+				.singleElement()
+				.satisfies(row -> {
+					assertThat(row.etf()).isEqualTo("etf-latest");
+					assertThat(row.name()).isEqualTo("etf-latest");
+					assertThat(row.outcome()).isEqualTo("SUCCEEDED");
+				});
+	}
+
+	/** 배치의 instrument id와 장중의 KRX ticker를 같은 ETF 축으로 정규화한 뒤 최신을 고른다. */
+	@Test
+	void ETF_원장은_배치와_장중의_서로_다른_식별자축을_합친다() {
+		insertPublished("batch-cross", "2026-08-03", "etf-cross", "DRAFT");
+		jdbc.update("UPDATE explanation_run SET run_status = 'FAILED'"
+				+ " WHERE explanation_run_id = 'run-batch-cross'");
+		insertMinuteTrigger("minute-cross", "2026-08-03", "ETF-CROSS", "FIRE",
+				"2026-08-03T16:00:00+09:00");
+		insertIntradayObservation("co-cross", "minute-cross", "2026-08-03T16:01:00+09:00");
+		jdbc.update("""
+				INSERT INTO explanation_route (explanation_route_id, contribution_observation_id,
+				       route_code, event_search_required, evaluated_at)
+				VALUES ('rt-cross', 'co-cross', 'PRICE_ONLY', false,
+				        '2026-08-03T16:01:00+09:00'::timestamptz)
+				""");
+		jdbc.update("""
+				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
+				       bundle_version, explanation_as_of, run_status, started_at, finished_at)
+				VALUES ('run-cross', 'rt-cross', 'v1',
+				        '2026-08-03T16:02:00+09:00'::timestamptz, 'SUCCEEDED',
+				        '2026-08-03T16:02:00+09:00'::timestamptz,
+				        '2026-08-03T16:03:00+09:00'::timestamptz)
+				""");
+
+		assertThat(repository.facts(DAY).etfLedger()).singleElement().satisfies(row -> {
+			assertThat(row.etf()).isEqualTo("etf-cross");
+			assertThat(row.outcome()).isEqualTo("SUCCEEDED");
+		});
+	}
+
+	/** 장중 트리거는 entity FK가 없다 — 이름 마스터가 늦어도 실패 행 자체를 버리면 안 된다. */
+	@Test
+	void ETF_원장은_entity가_없는_장중_실패도_식별자로_보존한다() {
+		insertMinuteTrigger("m-orphan", "2026-08-03", "etf-orphan", "FIRE",
+				"2026-08-03T10:00:00+09:00");
+		insertIntradayObservation("co-orphan", "m-orphan", "2026-08-03T10:01:00+09:00");
+		jdbc.update("""
+				INSERT INTO release_bundle (bundle_version, component_versions, component_hash, status)
+				VALUES ('v1', '{"engine":"1"}'::jsonb, ?, 'DRAFT')
+				ON CONFLICT (bundle_version) DO NOTHING
+				""", "a".repeat(64));
+		jdbc.update("""
+				INSERT INTO explanation_route (explanation_route_id, contribution_observation_id,
+				       route_code, event_search_required, evaluated_at)
+				VALUES ('rt-orphan', 'co-orphan', 'PRICE_ONLY', false,
+				        '2026-08-03T10:01:00+09:00'::timestamptz)
+				""");
+		jdbc.update("""
+				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
+				       bundle_version, explanation_as_of, run_status, started_at, finished_at)
+				VALUES ('run-orphan', 'rt-orphan', 'v1',
+				        '2026-08-03T10:02:00+09:00'::timestamptz, 'FAILED',
+				        '2026-08-03T10:02:00+09:00'::timestamptz,
+				        '2026-08-03T10:03:00+09:00'::timestamptz)
+				""");
+
+		assertThat(repository.facts(DAY).etfLedger()).singleElement().satisfies(row -> {
+			assertThat(row.etf()).isEqualTo("etf-orphan");
+			assertThat(row.name()).isEqualTo("etf-orphan");
+			assertThat(row.outcome()).isEqualTo("FAILED");
+		});
+	}
+
+	/**
 	 * 🔴 <b>재실행이 진짜 결손을 상쇄하면 안 된다.</b> 경로 둘 중 하나만 런이 붙고 그 하나가 두 번
 	 * 돌면, 런 <b>행</b>은 2 라 경로→런이 조용해지고 "설명을 아예 못 받은 ETF" 가 화면 어디에도
 	 * 안 뜬다. 도달 여부로 세면 런 단계가 1 로 떨어져 그 손실이 제자리에서 보인다.

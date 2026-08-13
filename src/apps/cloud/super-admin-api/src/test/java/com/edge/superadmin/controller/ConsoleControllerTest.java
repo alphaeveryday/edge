@@ -9,6 +9,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
+import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
@@ -35,8 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 콘솔 사실 응답의 <b>일곱 축 전부</b> 계약(ALPHA-738) — 조회 창·런·계획 결손 슬롯·작업·데이터셋·
- * 산출·경계.
+ * 콘솔 사실 응답 계약(ALPHA-738) — 조회 창·런·계획 결손 슬롯·작업·데이터셋·산출·경계·체인·
+ * ETF 귀결과 제어면 축.
  *
  * <p>지키는 것 셋 — ① 요청한 날이 <b>그대로 아래로 내려가는가</b>(게이트가 값을 조용히 바꾸면
  * 화면은 다른 날을 보고도 모른다) ② 원장이 <b>실제로 무엇을 봤는지</b> 되돌려주는가 ③ 런 축이
@@ -77,17 +78,17 @@ class ConsoleControllerTest {
 
 	private static ConsoleFacts facts(RunRow... runs) {
 		return new ConsoleFacts(DAY, DB_NOW, List.of(runs), List.of(), List.of(), CLEAN,
-				EMPTY_CHAIN);
+				EMPTY_CHAIN, List.of());
 	}
 
 	private static ConsoleFacts factsWithTask(TaskRow... tasks) {
 		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(tasks), List.of(), CLEAN,
-				EMPTY_CHAIN);
+				EMPTY_CHAIN, List.of());
 	}
 
 	private static ConsoleFacts factsWithOutput(OutputRow... outputs) {
 		return new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(outputs), CLEAN,
-				EMPTY_CHAIN);
+				EMPTY_CHAIN, List.of());
 	}
 
 	/**
@@ -220,7 +221,7 @@ class ConsoleControllerTest {
 	@Test
 	void 경계_축은_수_셋을_그대로_싣는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(),
-				new BoundaryRow(2L, 5L, 114L), EMPTY_CHAIN))
+				new BoundaryRow(2L, 5L, 114L), EMPTY_CHAIN, List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.boundary.publishedWithoutDelivery").value(2))
@@ -239,7 +240,7 @@ class ConsoleControllerTest {
 	@Test
 	void 체인_축은_피드와_단계를_순서대로_싣는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				chain(20L, 65L, 18L, 3L)))
+				chain(20L, 65L, 18L, 3L), List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.chain.feeds[0].id").value("feed.batch"))
@@ -264,11 +265,24 @@ class ConsoleControllerTest {
 	@Test
 	void 체인의_0_은_필드를_빼지_않는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				chain(20L, 65L, 0L, 0L)))
+				chain(20L, 65L, 0L, 0L), List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"batch\":0")))
 				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"intraday\":0")));
+	}
+
+	@Test
+	void ETF_원장은_최신_트리거의_실행_상태를_싣는다() throws Exception {
+		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
+				EMPTY_CHAIN, List.of(new EtfAnalysisRow("ETF-1", "첫 ETF", "FAILED"),
+						new EtfAnalysisRow("ETF-2", "둘째 ETF", null))))
+				.perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.etfLedger.rows[0].etf").value("ETF-1"))
+				.andExpect(jsonPath("$.result.etfLedger.rows[0].triggered").value(true))
+				.andExpect(jsonPath("$.result.etfLedger.rows[0].outcome").value("FAILED"))
+				.andExpect(jsonPath("$.result.etfLedger.rows[1].outcome").value(org.hamcrest.Matchers.nullValue()));
 	}
 
 	/**

@@ -1,7 +1,7 @@
 /* 지표 카탈로그가 **부재를 만나는 자리** (ALPHA-738 D).
  *
  * 이 파일이 겨누는 것은 판정 산식이 아니라(그건 `trendMetrics.test.ts`) **축이 없을 때의 거동**
- * 이다. 실 응답에는 `chain`·`etf_ledger`·`news_funnel` 이 아예 없고 `outputs` 도 산출마다 있다
+ * 이다. 실 응답에는 `news_funnel` 이 아예 없고 `outputs` 도 산출마다 있다
  * 없다 하므로, 지표 카탈로그가 그 부재를 어떻게 다루느냐가 곧 화면의 진실성이다:
  *
  *   ① 모듈 평가에서 죽지 않는다 — 예전에는 `export const METRICS` 가 import 시점에
@@ -21,7 +21,7 @@ import { buildMetrics, latestTask } from './trendCatalog.ts';
 import { FUNNEL_DATE } from './newsFunnelSnapshot.ts';
 import { evaluateMetric } from './trendMetrics.ts';
 
-/** 서버가 실제로 보내는 축만 — `etf_ledger`·`runbook`·`meta.aws`·`queues` 는 없다(계약 §축별 소스). */
+/** 서버가 실제로 보내는 축만 — `runbook` 은 없다(계약 §축별 소스). */
 const WIRED: Facts = {
   runs: [],
   tasks: [],
@@ -136,6 +136,14 @@ test('🔴 per-ETF 원장 부재를 "실패 0종" 으로 그리지 않는다', (
     'a.failed_etfs',
   );
   assert.equal(evaluateMetric(withLedger).actual, 1);
+  assert.equal(withLedger.source, 'MOCK');
+
+  const withRealLedger = byId(
+    { ...WIRED, etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }] } },
+    'a.failed_etfs',
+  );
+  assert.equal(withRealLedger.source, 'DB_LEDGER', '실원장을 목으로 표시했다');
+  assert.doesNotMatch(withRealLedger.help, /계측되지 않아|목 데이터/, '실원장을 목이라고 설명했다');
 });
 
 test('산출 축이 안 실린 날 그 지표는 판정 불가다 — `!` 로 죽지도, 0 으로 서지도 않는다', () => {

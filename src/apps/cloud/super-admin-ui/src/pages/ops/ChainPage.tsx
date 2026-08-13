@@ -68,8 +68,8 @@ export function ChainPage() {
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
             {ledger ? (
               <>
-                {rows.length}종 · Cloud 게시 {published.length} / 실패 {failed.length} / 트리거 없음{' '}
-                {rows.filter((r) => !r.triggered).length}
+                {rows.length}종 · 실패 {failed.length}
+                {ledger.mock && <> · Cloud 게시 {published.length}</>}
               </>
             ) : (
               <Absent kind="uninstrumented" />
@@ -79,9 +79,11 @@ export function ChainPage() {
                 (ledger?.why ?? '') +
                 (ledger
                   ? `\n\n이 원장이 있으면 "설명 미생성 ${failed.length}종이 어느 ETF인지"에 답할 수 있고, R15 가 대상을 지목한다. ` +
-                    '지금은 AnalyzeOne 이 ETF 단위 귀결·오류를 남기지 않아 목값이다.'
+                    (ledger.mock
+                      ? '이 값은 목 원장이다.'
+                      : '조회일에 발화한 ETF별 최신 트리거의 최신 설명 실행 상태다.')
                   : 'per-ETF 분석 귀결 원장이 이번 응답에 없다 — 표를 비워 두는 것이 아니라 축 자체가 없다. ' +
-                    'AnalyzeOne 이 ETF 단위 귀결·오류를 남기지 않아 셀 값이 아예 없고, R15 도 그래서 판정하지 못한다.')
+                    '조회일의 ETF별 최신 트리거·설명 실행 상태가 없어 셀 값이 없고, R15 도 그래서 판정하지 못한다.')
               }
               label="ETF별 분석 귀결"
             />
@@ -92,8 +94,8 @@ export function ChainPage() {
         {!ledger ? (
           <div className="card-pad">
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-              ETF별 분석 귀결 원장은 <Absent kind="uninstrumented" /> 입니다 — per-ETF 로 분석
-              성공·실패를 남기는 원장이 없어 <b>어느 ETF가 실패했는지</b> 이 콘솔이 답하지 못합니다.
+              ETF별 분석 귀결 원장은 <Absent kind="uninstrumented" /> 입니다 — 이번 응답에는
+              최신 트리거 실행 축이 없어 <b>어느 ETF가 실패했는지</b> 이 콘솔이 답하지 못합니다.
               R15 도 같은 이유로 판정하지 못합니다.
             </p>
           </div>
@@ -110,10 +112,12 @@ export function ChainPage() {
                 title={
                   `${r.name} (${r.etf})\n` +
                   `트리거: ${r.triggered ? '발화' : '미발화(정상 변동)'}\n` +
-                  `귀결: ${r.outcome}` +
+                  `귀결: ${r.outcome ?? '실행 없음'}` +
                   (r.error ? `\n오류: ${r.error}` : '') +
-                  `\nCloud 게시: ${r.published ? 'PUBLISHED' : '—'}` +
-                  `\n테넌트 발번: ${r.delivered ? 'NEW' : '—'} · 이 화면 책임 밖 — 전달 경계에서 확인`
+                  (ledger.mock
+                    ? `\nCloud 게시: ${r.published ? 'PUBLISHED' : '—'}` +
+                      `\n테넌트 발번: ${r.delivered ? 'NEW' : '—'} · 이 화면 책임 밖 — 전달 경계에서 확인`
+                    : '')
                 }
               >
                 <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -126,7 +130,11 @@ export function ChainPage() {
                       r.outcome === 'FAILED' ? 'var(--down)' : r.published ? 'var(--up)' : 'var(--fg-4)',
                   }}
                 >
-                  {r.outcome === 'FAILED' ? '분석 실패' : r.published ? 'Cloud 게시' : '트리거 없음'}
+                  {r.outcome === 'FAILED'
+                    ? '분석 실패'
+                    : r.outcome === 'SUCCEEDED'
+                      ? '분석 완료'
+                      : r.outcome ?? '실행 없음'}
                 </div>
               </div>
             ))}
