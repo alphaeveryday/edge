@@ -71,6 +71,22 @@ resource "aws_iam_role_policy" "task" {
         Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
       },
       {
+        # 장중 뉴스 미러 조각의 압축 삭제(ALPHA-900) — `steps/tag_news` 가 part 파일에
+        # 병합한 뒤 지운다(`lake/storage.Storage.delete_keys` 의 유일한 호출부).
+        #
+        # ⚠️ **위 문장과 합치지 마라.** 레이크 전역 `DeleteObject` 는 raw 존의 불변
+        # 계약을 깬다 — 거기 바이트는 판정의 근거라 지우면 복원할 수 없는데, 그 계약을
+        # 지금 지키는 것은 `delete_keys` 독스트링의 산문뿐이다. prefix 로 좁혀 **IAM 이
+        # 그 경계를 지게** 둔다 — 미러 구역 밖을 지우려는 코드는 런타임 AccessDenied 로
+        # 드러난다.
+        #
+        # `*` 둘은 `language=…`·`published_date=…` 다. IAM 의 `*` 는 `/` 를 넘어 매칭하지만
+        # part 파일 키에는 `minute/` 세그먼트가 없어 이 문장에 안 걸린다(삭제 대상 아님).
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject"]
+        Resource = ["${var.lake_bucket_arn}/feature/news/assertions/*/*/minute/*"]
+      },
+      {
         # KIS 토큰 공유 캐시(ALPHA-573) — 이 역할까지가 읽기·쓰기 주체다. 시크릿(앱키)은 지금도
         # execution 역할이 주입하고, 여긴 그 앱키로 받은 **토큰**만 다룬다. 실패하면 컨테이너가
         # 각자 발급하는 현행 동작으로 폴백하므로 권한 부족이 런을 깨지는 않는다(느려질 뿐).
