@@ -179,3 +179,53 @@ resource "aws_db_event_subscription" "this" {
 
   event_categories = ["availability", "recovery", "notification", "failure"]
 }
+
+# 마스터 비밀번호 로테이션이 **언제** 도는지를 우리가 정한다. 위 manage_master_user_password
+# 는 시크릿을 만들어 주지만 일정은 안 준다 — AWS 가 `AutomaticallyAfterDays: 7` 만 걸고
+# 시각은 자기가 임의로 잡는다. 2026-08-14 에 그 시각이 **장중 10:08:06 KST** 로 떨어졌다.
+#
+# 로테이션은 돌고 있는 태스크를 반드시 죽인다. DB 비밀번호는 ECS `secrets` 로 태스크 기동
+# 시 1회 주입되고 앱이 스스로 다시 읽지 않으므로, 로테이션을 가로질러 살아 있는 태스크는
+# 낡은 비밀번호를 쥔 채 `FATAL: password authentication failed for user "edge"` 로 떨어진다.
+# 이건 ECS 주입 방식의 성질이지 결함이 아니다 — 그래서 처방은 재시도가 아니라 **아무것도
+# 안 돌 때 로테이션하게 만드는 것**이다.
+# 그날 대가: price-worker 가 window 처리 중 S3 PUT 만 성공하고 원장 커밋에 실패해 고아
+# 아티팩트가 남았고, 재청구가 같은 불변 키에 다른 바이트를 써서 ArtifactImmutabilityError
+# 크래시 루프에 갇혔다(53회, 약 5시간, 결손 200분+). 고아 자가복구는 ALPHA-694 소관이고
+# 이 자리는 그 방아쇠 하나를 없앤다.
+#
+# 토요일 09:00~12:00 KST(= 토 00:00~03:00 UTC). 어느 세션(프리마켓 08:10 · 정규 09:00~15:30
+# · 시간외 ~20:05)에도 안 겹치는 가장 먼 자리이고, 주 1회라는 기존 주기도 그대로다.
+# ⚠️ duration 을 빼면 창이 **그 UTC 하루 끝까지** 열린다(AWS 문서) — 토 09:00 KST 부터
+# 일 08:59 KST 까지가 되어 고정한 의미가 절반만 남는다. 3h 로 못박는다.
+# schedule_expression 과 automatically_after_days 는 배타다 — 이 블록이 후자를 대체한다.
+# cron 제약(AWS 문서): 분 필드는 0 이어야 하고 연 필드는 * 여야 한다 — 위 식은 둘 다 만족한다.
+#
+# 상주 서비스(super-admin-api·tenant-sync-api, 둘 다 desired 1)는 창을 옮겨도 여전히 죽지만
+# **스스로 돌아온다** — 08-14 실측: 10:08 로테이션 → ALB 헬스체크 unhealthy(10:34:13
+# "Request timed out") → ECS 가 태스크 교체(10:32 시작·10:33 등록) → 약 25분 만에 복구.
+# 워커가 5시간 갇힌 것과 갈린 이유는 로테이션이 아니라 고아 아티팩트다(ALPHA-694).
+# 그러니 이 자리가 상주 서비스를 위해 더 할 일은 없다 — 25분짜리 공백이 토요일 오전으로
+# 옮겨갈 뿐이고 그게 이 변경이 노린 전부다. 자격증명 재적재는 별건이다.
+#
+# 🔴 **파괴 경로에 함정이 있다.** 이 리소스를 지우면 provider 가 CancelRotateSecret 을 부르는데,
+# 그 API 는 "The secret is managed by another service" 를 InvalidRequestException 으로 낼 수
+# 있다(AWS API 레퍼런스의 명시된 사유). 실측은 못 했다 — 확인하려면 실제로 지워 봐야 한다.
+# 그러니 이 모듈을 걷어내거나 DB 를 교체할 때는 **먼저 `tofu state rm` 으로 이 리소스를
+# state 에서 떼고** 진행하라. 안 그러면 apply 가 이 단계에서 서고 그 뒤 전부가 막힌다.
+# (생성 경로는 다르다 — RDS 문서가 "You can modify some of the settings, such as the
+#  rotation schedule" 로 명시 허용한다.)
+resource "aws_secretsmanager_secret_rotation" "master_password" {
+  secret_id = aws_db_instance.this.master_user_secret[0].secret_arn
+
+  # 🔴 기본값이 true 다. 명시하지 않으면 **apply 하는 순간 로테이션이 한 번 더 돈다** —
+  # 즉 이 사고를 막으려는 변경이 apply 시각에 같은 사고를 일으킨다. 이 레포는 머지가 곧
+  # apply 라(terraform-apply.yml 이 dev push 에 걸려 있다) apply 시각을 따로 고를 여지도
+  # 없다. false 는 직전 로테이션이 이미 있어야 성립하는데 2026-08-14 10:08 이 그것이다.
+  rotate_immediately = false
+
+  rotation_rules {
+    schedule_expression = "cron(0 0 ? * SAT *)"
+    duration            = "3h"
+  }
+}

@@ -20,7 +20,7 @@ infra/terraform/
     ├── ecs-cluster/        # ECS 클러스터 + Service Connect + Fargate CP
     ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
     ├── alb/                # 공개 엣지 ALB (호스트 단위 1:1, mTLS verify 옵션 — ADR-0034. 호출자: sync·super-admin ALB)
-    ├── rds/                # PostgreSQL(private·관리형 비밀번호) + 관측(FreeableMemory 경보·Performance Insights — 경보는 data-pipeline 토픽으로, ALPHA-919)
+    ├── rds/                # PostgreSQL(private·관리형 비밀번호·로테이션 창 고정) + 관측(FreeableMemory 경보·Performance Insights — 경보는 data-pipeline 토픽으로, ALPHA-919)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
@@ -42,6 +42,7 @@ infra/terraform/
 - **클러스터 분리** — 상시 API(`edge-dev-service`) / 배치(`edge-dev-worker`).
 - **배치 = Step Functions** — 시장 레인 data-pipeline(raw→normalize→feature→analyze 4페이즈, 구 analysis-engine SFN 흡수 — ALPHA-408)을 `ecs:runTask.sync` 로 오케스트레이션(재시도·실패알림). 4페이즈는 **시장 SFN 만의 형태**다 — 뉴스·공시·장중 수급 레인은 analyze 페이즈가 없는 별도 state machine 이다(뉴스는 태깅·이벤트 조립까지, 공시·장중 수급은 적재까지. 위 모듈 트리). 구 임시 news-pipeline SFN 은 ALPHA-549 에서 제거 — `pipeline` 모듈은 lake 버킷만 존치.
 - **비밀번호는 코드/state 에 없음** — RDS 관리형 시크릿, 외부 키는 Secrets Manager(값 수동 주입).
+- **로테이션 시각은 우리가 정한다** — 관리형 시크릿의 기본값(`AutomaticallyAfterDays: 7`)은 **주기만** 주고 시각은 AWS 가 임의로 잡는다. 그 시각이 2026-08-14 장중 10:08 에 떨어져 전 워커가 인증 실패로 죽었고 분봉이 5시간 멎었다(ALPHA-986). `modules/rds` 의 `aws_secretsmanager_secret_rotation` 이 창을 **토요일 09:00\~12:00 KST** 로 못박는다. 로테이션은 돌고 있는 태스크를 반드시 죽인다 — 비밀번호가 ECS `secrets` 로 기동 시 1회 주입되기 때문이고, 그래서 처방이 재시도가 아니라 창 이동이다.
 
 ## 사용
 
