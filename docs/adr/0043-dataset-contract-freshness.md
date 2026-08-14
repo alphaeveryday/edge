@@ -155,6 +155,8 @@ plan/outcome/issue 축에서 드러내며 데이터의 나이와 섞지 않는�
 `LATEST_KR_TRADING_DAY` 기대일을 snapshot한다. raw writer는 collection log에 응답 원본의
 유효한 `stck_bsop_date` 집합을 남기고 wrapper가 그 최댓값과 reducer를 freshness evidence로
 원장에 기록한다. 최댓값이 기대일과 같으면 `FRESH`, 이전이면 `STALE`, 이후면 `UNKNOWN`이다.
+wrapper가 FRESH/STALE을 판정한 시각을 `observed_at`에 함께 기록하며, UNKNOWN이면 과거 평가를
+무효화하기 위해 null을 유지한다.
 
 ## 대안
 

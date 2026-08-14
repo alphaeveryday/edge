@@ -259,8 +259,13 @@ class Ledger:
             # 을 적용하면, 같은 raw 키를 덮어쓴 재시도가 로그를 못 남기고 죽었을 때 **앞 시도의
             # collected_at 이 바뀐 raw 객체에 그대로 붙어** 남는다(edge-review 2라운드).
             sets.append("collected_at=now()" if freshness.get("collected") else "collected_at=NULL")
-            # 새 immutable 산출물은 Monitor의 과거 평가를 무효화한다. writer는 평가 시각을 만들지 않는다.
-            sets.append("observed_at=NULL")
+            # FRESH/STALE은 wrapper가 기대일과 evidence를 실제로 비교한 판정이라 평가 시각을
+            # 함께 쓴다. UNKNOWN은 새 산출물이 Monitor의 과거 평가를 무효화하므로 NULL이다.
+            sets.append(
+                "observed_at=now()"
+                if freshness.get("status") in (states.FRESHNESS_FRESH, states.FRESHNESS_STALE)
+                else "observed_at=NULL"
+            )
             sets.append("freshness_status=%s"); params.append(freshness["status"])
             sets.append("freshness_reason=%s"); params.append(freshness["reason"])
             sets.append("freshness_evidence=%s::jsonb")

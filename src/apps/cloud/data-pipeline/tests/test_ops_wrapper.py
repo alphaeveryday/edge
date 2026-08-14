@@ -137,6 +137,7 @@ def test_kis_nav_uses_latest_vendor_trade_date_as_actual_as_of():
     row = db.etasks_by_id["et1"]
     assert row["actual_as_of_date"] == "2026-07-24"
     assert row["freshness_status"] == states.FRESHNESS_FRESH
+    assert row["observed_at"] == "SET"
     assert row["freshness_evidence"]["source_field"] == "stck_bsop_date"
 
 
