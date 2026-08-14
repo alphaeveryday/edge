@@ -97,7 +97,7 @@ def run(
     # 행을 그대로 append 해 전부 보존한다 — 중복 판정·upsert 는 후속 canonical 소관.
     partitions: dict[str, list[dict]] = defaultdict(list)
     received_etf_ids: set[str] = set()
-    actual_as_of_values: set[str] = set()
+    actual_as_of_values: list[object] = []
     fetched = 0
     status, error, reason = "success", None, None
     exit_code = 0
@@ -110,8 +110,10 @@ def run(
             # 붙이는 our_etf_id를 distinct로 세야 기대 snapshot과 같은 grain이 된다(ALPHA-611).
             received_etf_ids.add(record["our_etf_id"])
             evidence_field = getattr(source, "actual_as_of_field", None)
-            if evidence_field and record.get(evidence_field) is not None:
-                actual_as_of_values.add(str(record[evidence_field]))
+            if evidence_field:
+                # 저장한 모든 행의 증거를 그대로 넘긴다. 결측/비문자 값을 제외하면 일부 행의
+                # 스키마 드리프트가 정상 행에 가려져 거짓 FRESH/STALE 이 된다.
+                actual_as_of_values.append(record.get(evidence_field))
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("ETF 수집 중단(4xx/429): %s", exc)
@@ -168,7 +170,7 @@ def run(
             # 원장 관측용 공통 봉투(ALPHA-181). ETF 단위 실패는 그 ETF 구성 전량 유실이다.
             "ops": {"records_out": saved, "failed_records": len(failed_etfs),
                     "received_count": len(received_etf_ids),
-                    **({"actual_as_of_values": sorted(actual_as_of_values)}
+                    **({"actual_as_of_values": actual_as_of_values}
                        if getattr(source, "actual_as_of_field", None) else {})},
         })
     except Exception:

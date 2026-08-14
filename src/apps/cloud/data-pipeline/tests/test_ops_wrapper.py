@@ -161,6 +161,25 @@ def test_kis_nav_invalid_vendor_dates_preserve_unknown():
     assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
 
 
+def test_kis_nav_partial_date_evidence_preserves_unknown():
+    """WHY: 저장 행 하나라도 기준일이 없으면 나머지 정상 날짜만으로 검증 완료할 수 없다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="NAV_COLLECTION_KIS", contract_key=contracts.ETF_NAV_KIS_DAILY)
+    db.etasks_by_id["et1"]["expected_as_of_date"] = "2026-07-24"
+
+    wrapper.instrument(
+        lambda: 0, task_key="NAV_COLLECTION_KIS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/nav", observe_data_fn=lambda ec: {
+            "artifact_observed": True, "records_out": 2, "failed_records": 0,
+            "actual_as_of_values": ["20260724", None],
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["actual_as_of_date"] is None
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+
+
 def test_unobserved_retry_resets_prior_collection_evidence():
     """WHY: 재시도는 같은 raw 키를 덮어쓴다 — 로그를 못 남기고 죽은 재시도가 앞 시도의
     collected_at 을 물려받으면, 옛 수집 시각이 바뀐 raw 객체의 증거로 남는다(관대한 방향).

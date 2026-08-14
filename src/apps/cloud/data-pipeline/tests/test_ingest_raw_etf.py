@@ -98,6 +98,23 @@ def test_saves_ingest_date_partition_and_log(tmp_path):
     assert log["ops"]["received_count"] == 2
 
 
+def test_actual_as_of_evidence_preserves_missing_values(tmp_path):
+    # WHY: 날짜 없는 저장 행을 증거 집합에서 버리면 정상 행 하나가 스키마 드리프트를 가려
+    #      wrapper가 거짓 FRESH/STALE을 기록한다. 결측도 넘겨 전체 행 검증을 실패시켜야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    config = EtfSource(base_url=settings.etf.source.base_url, api_key="k", etf_map={"SPY": "SPY"})
+    source = FmpEtfSource(
+        config,
+        FakeClient({"SPY": [_holding("NVDA"), {"symbol": "SPY", "asset": "AAPL"}]}),
+    )
+    source.actual_as_of_field = "updatedAt"
+
+    assert ingest_raw_etf.run(settings, storage, source, "20260703T000000Z") == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["ops"]["actual_as_of_values"] == ["2026-07-11 09:07:03", None]
+
+
 def test_raw_preserves_duplicate_holding_rows(tmp_path):
     # WHY: raw 는 받은 행을 전부 보존한다 — FMP 가 같은 구성종목을 두 번 줘도(이상치)
     #      조용히 버리지 않는다. (etf,asset,as_of) 정체성 dedup 은 후속 canonical 소관.
