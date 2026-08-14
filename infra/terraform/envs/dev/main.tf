@@ -77,16 +77,21 @@ module "network" {
 }
 
 # ── 클러스터: 상시 API(service) / 배치(worker) 분리 ─────
+# `container_insights = false`: 모듈 기본은 true 지만 dev 에서는 끈다 — 이 지표를 읽는
+# 소비자가 레포에 하나도 없다(알람·대시보드·코드 어디에도 `ContainerInsights` 참조 0).
+# 관측을 쓰기 시작하면 그때 켠다.
 module "service_cluster" {
-  source         = "../../modules/ecs-cluster"
-  name           = "${local.prefix}-service"
-  namespace_name = "edge.internal"
+  source             = "../../modules/ecs-cluster"
+  name               = "${local.prefix}-service"
+  namespace_name     = "edge.internal"
+  container_insights = false
 }
 
 module "worker_cluster" {
-  source         = "../../modules/ecs-cluster"
-  name           = "${local.prefix}-worker"
-  namespace_name = "edge-worker.internal"
+  source             = "../../modules/ecs-cluster"
+  name               = "${local.prefix}-worker"
+  namespace_name     = "edge-worker.internal"
+  container_insights = false
 }
 
 # ── RDS (PostgreSQL, 격리된 data tier) ──────────────────
