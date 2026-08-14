@@ -12,6 +12,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from ..lake import Storage, collection_log_prefix, quality_log_prefix
 from . import catalog, planner, reconciler, states, wrapper
+from . import contracts
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
 
@@ -251,7 +252,7 @@ def _observe_from_log(
     # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).
     if "received_count" in ops:
         signals["received_count"] = ops["received_count"]
-    if entry.contract_key == ETF_HOLDINGS_KRX_EOD:
+    if entry.contract_key in (ETF_HOLDINGS_KRX_EOD, contracts.ETF_NAV_KIS_DAILY):
         # collected_at은 "현재 시도가 raw 산출물과 로그를 새로 남겼다"는 증명이 있을 때만 쓴다.
         # 같은 run_id의 옛 로그, skipped/깨진 로그, 0건 로그는 수집 산출물 증거가 아니다.
         records_out = ops.get("records_out")
@@ -286,6 +287,8 @@ def _observe_from_log(
             and current_log
         ):
             signals["artifact_observed"] = True
+            if entry.contract_key == contracts.ETF_NAV_KIS_DAILY:
+                signals["actual_as_of_values"] = ops.get("actual_as_of_values")
     return signals
 
 

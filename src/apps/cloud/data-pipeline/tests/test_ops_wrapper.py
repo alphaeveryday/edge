@@ -119,6 +119,67 @@ def test_krx_without_artifact_keeps_planner_evidence_missing():
     assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
 
 
+def test_kis_nav_uses_latest_vendor_trade_date_as_actual_as_of():
+    """WHY: NAV 날짜창에는 여러 거래일이 정상적으로 섞인다. 요청일이 아니라 KIS 응답의
+    stck_bsop_date 최댓값이 이 전달 경계가 실제로 확보한 최신 업무 기준일이다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="NAV_COLLECTION_KIS", contract_key=contracts.ETF_NAV_KIS_DAILY)
+    db.etasks_by_id["et1"]["expected_as_of_date"] = "2026-07-24"
+
+    wrapper.instrument(
+        lambda: 0, task_key="NAV_COLLECTION_KIS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/nav", observe_data_fn=lambda ec: {
+            "artifact_observed": True, "records_out": 2, "failed_records": 0,
+            "actual_as_of_values": ["20260723", "20260724"],
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["actual_as_of_date"] == "2026-07-24"
+    assert row["freshness_status"] == states.FRESHNESS_FRESH
+    assert row["observed_at"] == "SET"
+    assert row["freshness_evidence"]["source_field"] == "stck_bsop_date"
+
+
+def test_kis_nav_invalid_vendor_dates_preserve_unknown():
+    """WHY: 형식이 깨진 벤더 날짜를 요청일이나 실행일로 메우면 거짓 FRESH가 된다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="NAV_COLLECTION_KIS", contract_key=contracts.ETF_NAV_KIS_DAILY)
+    db.etasks_by_id["et1"]["expected_as_of_date"] = "2026-07-24"
+
+    wrapper.instrument(
+        lambda: 0, task_key="NAV_COLLECTION_KIS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/nav", observe_data_fn=lambda ec: {
+            "artifact_observed": True, "records_out": 1, "failed_records": 0,
+            # strptime은 6~7자리도 관대하게 받으므로 정확한 8자리 검증이 따로 필요하다.
+            "actual_as_of_values": ["202681"],
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["actual_as_of_date"] is None
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+
+
+def test_kis_nav_partial_date_evidence_preserves_unknown():
+    """WHY: 저장 행 하나라도 기준일이 없으면 나머지 정상 날짜만으로 검증 완료할 수 없다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="NAV_COLLECTION_KIS", contract_key=contracts.ETF_NAV_KIS_DAILY)
+    db.etasks_by_id["et1"]["expected_as_of_date"] = "2026-07-24"
+
+    wrapper.instrument(
+        lambda: 0, task_key="NAV_COLLECTION_KIS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/nav", observe_data_fn=lambda ec: {
+            "artifact_observed": True, "records_out": 2, "failed_records": 0,
+            "actual_as_of_values": ["20260724", None],
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["actual_as_of_date"] is None
+    assert row["freshness_status"] == states.FRESHNESS_UNKNOWN
+
+
 def test_unobserved_retry_resets_prior_collection_evidence():
     """WHY: 재시도는 같은 raw 키를 덮어쓴다 — 로그를 못 남기고 죽은 재시도가 앞 시도의
     collected_at 을 물려받으면, 옛 수집 시각이 바뀐 raw 객체의 증거로 남는다(관대한 방향).

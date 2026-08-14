@@ -224,6 +224,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="NAV_COLLECTION_KIS", stage="raw", dataset="etf_nav", required=True,
         cli_command=("ingest-raw-nav",), sfn_state_name="CollectKisNav",
         ecs_task_definition="kis", source_vendor="kis",
+        contract_key=contracts.ETF_NAV_KIS_DAILY,
     ),
     CatalogEntry(
         task_key="ETF_PROFILE_COLLECTION_KIS", stage="raw", dataset="etf_profile", required=True,

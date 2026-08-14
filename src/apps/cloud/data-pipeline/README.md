@@ -1317,6 +1317,9 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   `collected_at=NULL`·reason=`EVIDENCE_MISSING`으로 리셋해, 같은 raw 키를 덮어쓴 재시도에 앞
   시도의 수집 증거가 남지 않게 한다(카운터와 같은 규칙). 계약 미연결 작업의
   freshness NULL은 `UNKNOWN`이 아니라 `NOT_APPLICABLE`이다.
+  `NAV_COLLECTION_KIS`는 `ETF_NAV_KIS_DAILY` 계약을 참조한다. KIS 응답 원본의
+  `stck_bsop_date` 집합 중 최댓값을 `actual_as_of_date`로 쓰며, 질의 종료일·실행일·
+  `fetched_at`으로 대체하지 않는다. 유효 날짜가 없으면 `UNKNOWN`을 보존한다.
 - **카운터 저장**(ALPHA-182) — 봉투의 두 값은 판정에만 쓰이고 버려졌었다. 이제 `expected_task`
   의 `records_out`·`failed_records` 컬럼에도 남는다(운영 대시보드의 건수 열, ALPHA-514 — 없으면
   런×작업마다 S3 로그를 뒤져야 한다). **판정 규칙은 그대로다** — 저장 전용이다. 결측·malformed

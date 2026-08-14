@@ -36,6 +36,7 @@ class DatasetContract:
 
 
 ETF_HOLDINGS_KRX_EOD = "ETF_HOLDINGS_KRX_EOD"
+ETF_NAV_KIS_DAILY = "ETF_NAV_KIS_DAILY"
 
 _CONTRACTS = {
     ETF_HOLDINGS_KRX_EOD: DatasetContract(
@@ -48,6 +49,18 @@ _CONTRACTS = {
         required=True,
         retry_owner=RetryOwner.SFN,
         # ADR-0043은 소유 위치만 정했고 첫 계약의 실제 값은 정하지 않았다. 추측하지 않고 드러낸다.
+        operational_owner=None,
+        runbook_uri=None,
+    ),
+    ETF_NAV_KIS_DAILY: DatasetContract(
+        contract_key=ETF_NAV_KIS_DAILY,
+        version="1",
+        cadence=Cadence.MARKET_EVENT,
+        timezone="Asia/Seoul",
+        expected_as_of_rule=ExpectedAsOfRule.LATEST_KR_TRADING_DAY,
+        allowed_as_of_lag_trading_days=0,
+        required=True,
+        retry_owner=RetryOwner.SFN,
         operational_owner=None,
         runbook_uri=None,
     ),

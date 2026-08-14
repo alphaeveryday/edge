@@ -91,6 +91,7 @@ class _Cursor:
                     row["data_status"], row["required"],
                     snapshot["expected_entity_count"] if snapshot else None,
                     row.get("dataset_contract_key"),
+                    row.get("expected_as_of_date"),
                 )]
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)
@@ -213,7 +214,9 @@ class _Cursor:
             row["collected_at"] = "SET"
         elif "collected_at=NULL" in s:
             row["collected_at"] = None
-        if "observed_at=NULL" in s:
+        if "observed_at=now()" in s:
+            row["observed_at"] = "SET"
+        elif "observed_at=NULL" in s:
             row["observed_at"] = None
         for col in ("freshness_status", "freshness_reason"):
             if f"{col}=%s" in s:

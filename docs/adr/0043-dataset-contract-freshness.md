@@ -69,6 +69,9 @@ ADR-0030의 실행 원칙을 바꾸면 안 된다.
   실제 기준일을 확보하지 못하면 null로 두며, 요청일이나 파일 파티션 날짜로 추정하지 않는다.
 - source evidence가 행 단위라면 수신한 행들이 하나의 기준일에 합의해야 한다. 값이 없거나
   파싱할 수 없거나 행마다 다르면 날짜를 설정하지 않는다.
+- 날짜창 시계열 계약은 계약에 명시한 reducer를 적용할 수 있다. KIS ETF NAV 일별 전달 경계는
+  응답 원본의 `stck_bsop_date`만 증거로 인정하고 유효한 응답 거래일의 최댓값을
+  `actual_as_of`로 기록한다. 질의 종료일·실행일·`fetched_at`은 대체 증거가 아니다.
 - EOD 기준일에 임의 시각을 붙여 `TIMESTAMPTZ`로 만들지 않는다. 장중 데이터셋은 후속 계약에서
   timestamp grain과 cutoff 규칙을 별도로 정의해야 하며, 이 ADR의 `DATE` 컬럼에 넣지 않는다.
 - `collected_at`과 `observed_at`은 UTC `TIMESTAMPTZ`로 저장하고 표시에만 계약 timezone을 쓴다.
@@ -145,6 +148,15 @@ plan/outcome/issue 축에서 드러내며 데이터의 나이와 섞지 않는�
 `freshness_status=UNKNOWN`, reason=`ACTUAL_AS_OF_UNVERIFIED`를 저장하며 `FRESH`/`STALE`를
 만들지 않는다. writer가 먼저 nullable 필드를 채우고 observe-only로 검증한 뒤 reader, UI
 순으로 배포한다. 이 ADR에는 스키마, 파이프라인, API, UI 변경을 포함하지 않는다.
+
+### 후속 적용: KIS ETF NAV
+
+`NAV_COLLECTION_KIS`는 `ETF_NAV_KIS_DAILY` 계약을 참조한다. Planner는 holdings 계약과 같은
+`LATEST_KR_TRADING_DAY` 기대일을 snapshot한다. raw writer는 collection log에 응답 원본의
+유효한 `stck_bsop_date` 집합을 남기고 wrapper가 그 최댓값과 reducer를 freshness evidence로
+원장에 기록한다. 최댓값이 기대일과 같으면 `FRESH`, 이전이면 `STALE`, 이후면 `UNKNOWN`이다.
+wrapper가 FRESH/STALE을 판정한 시각을 `observed_at`에 함께 기록하며, UNKNOWN이면 과거 평가를
+무효화하기 위해 null을 유지한다.
 
 ## 대안
 

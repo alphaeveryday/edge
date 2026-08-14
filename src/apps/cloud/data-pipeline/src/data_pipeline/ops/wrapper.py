@@ -17,10 +17,12 @@ import json
 import logging
 import math
 import os
+import re
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime
 
-from . import states
+from . import contracts, states
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
 
@@ -275,21 +277,56 @@ def instrument(
         counters={"records_out": _counter(signals.get("records_out")),
                   "failed_records": _counter(signals.get("failed_records"))},
         freshness=_freshness_signal(
-            expected, observed=signals.get("artifact_observed") is True),
+            expected, observed=signals.get("artifact_observed") is True,
+            actual_as_of_values=signals.get("actual_as_of_values")),
         fulfilled=exit_code == 0,
     ))
     return exit_code
 
 
-def _freshness_signal(expected: dict, *, observed: bool) -> dict | None:
+def _freshness_signal(
+    expected: dict, *, observed: bool, actual_as_of_values: object = None,
+) -> dict | None:
     """계약 연결 작업의 freshness 를 **매 시도** 덮기 위한 신호(예외 경로 포함).
 
     관측 시도만 조건으로 걸면 미관측 재시도(raw 는 덮어썼는데 로그를 못 남기고 죽음)가 앞
     시도의 수집 증거를 물려받는다 — 미관측은 EVIDENCE_MISSING 으로 리셋하는 쪽이 엄격한
     방향이다. KRX 는 응답에 기준일 증거가 없어(ALPHA-653) actual 은 항상 None/UNKNOWN 이다.
     """
-    if expected.get("dataset_contract_key") != ETF_HOLDINGS_KRX_EOD:
+    contract_key = expected.get("dataset_contract_key")
+    if contract_key not in (ETF_HOLDINGS_KRX_EOD, contracts.ETF_NAV_KIS_DAILY):
         return None
+    if contract_key == contracts.ETF_NAV_KIS_DAILY and observed:
+        try:
+            raw_values = list(actual_as_of_values)
+            if not raw_values or not all(
+                isinstance(v, str) and re.fullmatch(r"[0-9]{8}", v) for v in raw_values
+            ):
+                raise ValueError("invalid actual-as-of evidence")
+            values = sorted({datetime.strptime(v, "%Y%m%d").date().isoformat()
+                             for v in raw_values})
+        except (TypeError, ValueError):
+            values = []
+        if values:
+            actual = values[-1]
+            expected_as_of = expected.get("expected_as_of_date")
+            if expected_as_of is None or actual > str(expected_as_of):
+                return {
+                    "actual_as_of_date": actual, "collected": True,
+                    "status": states.FRESHNESS_UNKNOWN,
+                    "reason": "ACTUAL_AS_OF_AFTER_EXPECTED" if expected_as_of else "EVIDENCE_MISSING",
+                    "evidence": {"source_field": "stck_bsop_date", "reducer": "MAX",
+                                 "values": values},
+                }
+            status = (states.FRESHNESS_FRESH if actual == str(expected_as_of)
+                      else states.FRESHNESS_STALE)
+            return {
+                "actual_as_of_date": actual, "collected": True, "status": status,
+                "reason": "AS_OF_MATCH" if status == states.FRESHNESS_FRESH
+                          else "ACTUAL_AS_OF_BEFORE_EXPECTED",
+                "evidence": {"source_field": "stck_bsop_date", "reducer": "MAX",
+                             "values": values},
+            }
     return {
         "actual_as_of_date": None,
         "collected": observed,

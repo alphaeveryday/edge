@@ -62,7 +62,7 @@ export function DatasetPage() {
                   <td>{d.expected_as_of ?? <Absent kind="none" />}</td>
                   <td>
                     {d.actual_as_of ?? (
-                      <span className="t-xs" style={{ color: 'var(--fg-4)' }} title="actual_as_of writer 가 없어 근거 자체가 없다 — 오래됐다는 뜻이 아니다">
+                      <span className="t-xs" style={{ color: 'var(--fg-4)' }} title="검증 가능한 actual_as_of 근거가 없다 — 오래됐다는 뜻이 아니다">
                         근거 없음
                       </span>
                     )}
