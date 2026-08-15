@@ -15,10 +15,16 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from ..config import Settings
-from ..lake import Storage, canonical_etf_holdings_partition, collection_log_key, raw_price_partition
+from ..lake import (
+    Storage,
+    canonical_etf_holdings_partition,
+    canonical_price_daily_partition,
+    collection_log_key,
+    raw_price_partition,
+)
 from ..parse import krx_short_code
 from ..sources import FmpPriceSource, KisDailyPriceSource, StopFetch
 
@@ -161,6 +167,57 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
 
     return pq.read_table(io.BytesIO(data)).to_pylist()
 
+
+# 유니버스 신규 편입 종목에만 붙이는 이력 창(달력일). 400일 ≈ 270거래일 (ALPHA-989).
+#
+# **이 숫자를 정하는 것은 소비자다.** 일봉 이력의 가장 깊은 살아 있는 소비자는
+# `analysis-engine/statics/attribute.py` 의 `SIGMA_N`(60거래일 창) · `SIGMA_MIN_N`(최소 40)
+# 이고, 그 위에 `paneltest` w20 · `vocab.MIN_N`(30) · `tool_stability`(2×30 사건일)가 얹힌다.
+# 60거래일 창이 **롤링**이라 하한을 딱 60에 맞추면 몇 주 뒤 다시 모자란다 — 4배 여유를 둔다.
+# 저쪽 상수가 움직이면 여기도 옮겨라(레포가 달라 import 로 못 묶는다 — 5분봉 백필 스크립트의
+# `--min-days` 가 같은 이유로 같은 처지였다).
+#
+# 왜 `DEFAULT_PRICE_LOOKBACK_DAYS` 상향이 아닌가: 신규 편입 종목이 필요로 하는 건 5일이
+# 아니라 수백 거래일인데, 그 창을 **전 종목**(413종)에 매일 물리면 수집량이 통째로 커진다.
+NEWCOMER_LOOKBACK_DAYS = 400
+
+
+def _newcomers(storage: Storage, universe: list[str], window_end: str) -> tuple[list[str], str]:
+    """(유니버스 신규 편입 티커, 그들에게 붙일 창 하한) — canonical 일봉 **최신 파티션에
+    없는** 티커 (ALPHA-989).
+
+    유니버스는 canonical holdings 파생이라 ETF 가 추가되면 **즉시** 넓어지는데, 수집 창은
+    `DEFAULT_PRICE_LOOKBACK_DAYS`(5일)다. 그래서 넓어진 유니버스는 최근 5일만 다시 긁고 그
+    이전 날짜에는 새 종목이 **영영** 안 채워진다 — dev 레이크에서 절벽이 세 번 났고
+    (07-13 233→341 · 07-27 343→365 · 08-06 362→413) 셋 다 같은 모양이었다. 유니버스가
+    넓어진 그 런이 곧 이력을 메우게 하는 것이 이 판정의 자리다.
+
+    판정 기준을 "최신 파티션"으로 둔 대가 둘을 명시한다:
+
+    - ⚠️ holdings 에 남은 상장폐지·거래정지 티커는 매 런 편입으로 잡혀 하루 1콜을 쓴다
+      (이력이 없으니 페이지1에서 `new==0` 으로 끝난다). 로그로 드러낸다.
+    - 그날 하루만 결측이었던 종목도 잡힌다 — 낭비가 아니라 **자가복구**다(그 구멍이 메워진다).
+
+    canonical 이 통째로 비었으면 빈 목록이다. 전 종목이 '신규'라 판정이 뜻을 잃고, 첫 런이
+    곧 이력의 시작이기 때문이다 — 새 레이크의 이력은 이 경로가 아니라 명시적 `--from` 백필이
+    맡는다(그게 ALPHA-989 의 나머지 절반이다).
+    """
+    marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="
+    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 '최신'으로 읽는다 — holdings 쪽
+    # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정을 쓴다(사실을 하나로).
+    dates = {d for d in dates if _is_calendar_date(d)}
+    if not dates:
+        return [], window_end
+    known: set[str] = set()
+    for key in storage.list_keys(canonical_price_daily_partition("KR", max(dates)) + "/"):
+        if key.endswith(".parquet"):
+            known |= {t for row in _read_parquet_rows(storage.get_bytes(key))
+                      if (t := row.get("ticker"))}
+    since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
+    return sorted(t for t in universe if t not in known), since
+
+
 JOB_NAME = "ingest_price_raw"
 DATASET = "price_daily"  # collection_log·raw 파티션의 dataset= 키
 
@@ -214,6 +271,11 @@ def run(
     fetched = 0
     status, error, reason = "success", None, None
     exit_code = 0
+    # 2차 수집(신규 편입 이력)이 소스의 `fetch_failures` 를 리셋하기 전에 옮겨 둔 1차분.
+    carried_failures: list[dict] = []
+    # **1차 수집이** 계획한 대상 수. 2차는 신규 편입분만이라 이 값을 덮으면 안 된다 —
+    # 아래 "매핑 대상 0 = skip" 판정이 편입 종목 수를 런 전체로 착각한다.
+    planned_first: int | None = None
 
     try:
         # 수집 유니버스 — 소스가 옵트인하면(KIS, ALPHA-419) canonical KR holdings 최신
@@ -222,13 +284,39 @@ def run(
         # holdings 읽기 실패도 이 try 안 — "결과는 항상 collection_log" 계약을 지킨다.
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = 0
+        newcomers: list[str] = []
+        newcomer_since = ""
         if getattr(source, "universe_from_holdings", False):
             universe = _kr_holdings_universe(storage, expected_etfs=_krx_expected_etfs(settings))
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
             symbols = sorted(set(symbols) | set(universe))
+            # 창 하한은 `to_date`(호출부가 벤더 달력으로 뽑은 창 끝, ALPHA-883) 기준이다 —
+            # 여기서 달력을 다시 고르면 사실이 두 벌이 된다. 창 미지정 백필 진입에 대비해
+            # started_date 로만 떨어진다.
+            newcomers, newcomer_since = _newcomers(storage, universe, to_date or started_date)
+        # 이미 그만큼 깊은 창으로 도는 런(명시 `--from` 백필)은 2차 수집이 순수 낭비다.
+        if newcomers and from_date is not None and from_date <= newcomer_since:
+            newcomers = []
+        log["symbols_newcomer"] = len(newcomers)
+        log["newcomer_window_from"] = newcomer_since if newcomers else None
         for record in source.fetch(symbols, from_date, to_date):
             fetched += 1
             partitions[record["market"]].append(record)
+        planned_first = getattr(source, "planned_symbols", None)
+        if newcomers:
+            # 유니버스가 넓어진 그 런이 이력을 메운다(ALPHA-989). 편입은 드문 사건이라
+            # 평시엔 이 분기 자체가 안 돈다 — 조용히 지나가지 않게 로그로 드러낸다.
+            logger.warning(
+                "유니버스 신규 편입 %d종 — 이력 창(%s~%s)으로 추가 수집: %s",
+                len(newcomers), newcomer_since, to_date or started_date, ",".join(newcomers),
+            )
+            # ⚠️ `fetch` 는 진입 때 `fetch_failures` 를 **리셋**한다 — 2차 호출이 1차분 실패를
+            # 지우기 전에 옮겨 둔다. 안 옮기면 1차에서 죽은 심볼이 런 상태(partial/error)에서
+            # 사라져 결손이 성공으로 마감된다.
+            carried_failures.extend(getattr(source, "fetch_failures", []))
+            for record in source.fetch(newcomers, newcomer_since, to_date):
+                fetched += 1
+                partitions[record["market"]].append(record)
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("가격 수집 중단(4xx/429): %s", exc)
@@ -257,7 +345,7 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     #  - MAX_PAGES 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로 본다
     #    (ALPHA-351). 절단도 아래 로그(failed_symbols)엔 남겨 fail-loud 는 유지한다.
-    failed_symbols = getattr(source, "fetch_failures", [])
+    failed_symbols = carried_failures + list(getattr(source, "fetch_failures", []))
     real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
     if status == "success" and real_failures:
         if saved == 0:
@@ -268,7 +356,7 @@ def run(
 
     # 활성 소스인데 매핑된 대상이 0개면(심볼맵 누락·전 대상 미매핑 KR 등) 수집이
     # 사실상 불가능한 설정 — success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).
-    if status == "success" and getattr(source, "planned_symbols", None) == 0:
+    if status == "success" and planned_first == 0:
         status, reason = "skipped", "no mapped targets"
 
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한

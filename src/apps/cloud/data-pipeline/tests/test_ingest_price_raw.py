@@ -380,3 +380,173 @@ def test_disabled_skip_survives_log_write_failure(tmp_path):
     source = FmpPriceSource(config, FakeClient({}))
 
     assert ingest_price_raw.run(settings, storage, source, "20260703T000000Z") == 1
+
+
+def _write_price_daily(storage, trade_date: str, tickers: list[str]) -> None:
+    """canonical KR 일봉 파티션 픽스처 — 그날 존재하는 티커 집합만 세운다."""
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    table = pa.Table.from_pylist(
+        [{"ticker": t, "close": 1.0} for t in tickers],
+        schema=pa.schema([("ticker", pa.string()), ("close", pa.float64())]))
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    storage.put_bytes(f"{canonical_price_daily_partition('KR', trade_date)}/part-00000.parquet",
+                      buf.getvalue())
+
+
+class _RecordingSource:
+    """옵트인 소스 — fetch 호출을 (symbols, from, to) 로 전부 기록한다.
+
+    실제 어댑터 계약을 그대로 흉내낸다: `fetch` 진입 시 `fetch_failures` 를 **리셋**하고
+    `planned_symbols` 를 그 호출의 대상 수로 덮는다(kis_price.fetch L124-126). 이 두 리셋이
+    2차 수집을 붙일 때 1차분을 지우는 자리라, 흉내내지 않으면 회귀를 못 잡는다.
+    """
+
+    source_name = "kis"
+    enabled = True
+    universe_from_holdings = True
+
+    def __init__(self, failures_by_call: dict[int, list[dict]] | None = None,
+                 planned_by_call: dict[int, int] | None = None):
+        self.calls: list[tuple[list[str], str | None, str | None]] = []
+        self.fetch_failures: list[dict] = []
+        self.planned_symbols: int | None = None
+        self._failures = failures_by_call or {}
+        self._planned = planned_by_call or {}
+
+    def fetch(self, symbols, from_date=None, to_date=None):
+        n = len(self.calls)
+        self.calls.append((list(symbols), from_date, to_date))
+        self.fetch_failures = list(self._failures.get(n, []))       # 진입 리셋
+        self.planned_symbols = self._planned.get(n, len(symbols))   # 진입 덮어쓰기
+        return iter(({"market": "KR", "our_ticker": s} for s in symbols))
+
+
+def test_newcomer_gets_history_window_others_keep_incremental(tmp_path):
+    # WHY: 유니버스는 holdings 파생이라 ETF 추가에 **즉시** 넓어지는데 수집 창은 5일이다 —
+    #      그래서 새 종목은 최근 5일만 채워지고 그 이전 날짜에는 영영 안 들어온다(dev 레이크
+    #      절벽 3회 · 결손 1,613셀, ALPHA-989). 유니버스가 넓어진 그 런이 이력을 메워야 한다.
+    #      전 종목에 긴 창을 물리는 것은 답이 아니므로 **편입분만** 두 번째 창으로 간다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160"), ("000660", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["000660", "091160", "NVDA"])  # 042700 이 없다
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+
+    assert len(source.calls) == 2
+    (first_syms, first_from, _), (second_syms, second_from, second_to) = source.calls
+    assert first_from is None and {"042700", "000660", "091160"} <= set(first_syms)
+    assert second_syms == ["042700"]        # 편입분만 — 이미 이력이 있는 종목은 안 간다
+    assert second_from == "2025-07-10"      # 2026-08-14 − 400일
+    assert second_to == "2026-08-14"
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["symbols_newcomer"] == 1
+    assert log["newcomer_window_from"] == "2025-07-10"
+
+
+def test_no_newcomer_means_no_second_fetch(tmp_path):
+    # WHY: 편입은 드문 사건이다(5주에 3회). 평시 런의 수집량·소요가 이 변경으로 늘면
+    #      15:40 시장 레인 전체가 매일 그 대가를 치른다 — 분기 자체가 안 돌아야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+
+    assert len(source.calls) == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["symbols_newcomer"] == 0
+    assert log["newcomer_window_from"] is None
+
+
+def test_second_fetch_does_not_erase_first_pass_failures(tmp_path):
+    # WHY: 어댑터의 `fetch` 는 진입 때 `fetch_failures` 를 리셋한다. 2차 수집을 그냥 붙이면
+    #      1차에서 죽은 심볼이 런 상태에서 **사라져** partial(exit 1)이어야 할 런이
+    #      success(exit 0)로 마감된다 — 결손을 성공으로 위장하는 그 자리다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
+    source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+
+    assert len(source.calls) == 2
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+    assert log["records_failed_symbols"] == 1
+    assert log["failed_symbols"][0]["symbol"] == "000660"
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_second_fetch_planned_count_does_not_flip_run_to_skipped(tmp_path):
+    # WHY: "매핑 대상 0 = skip" 은 **런 전체**의 판정이고, 런의 대상 집합을 정하는 것은
+    #      1차 수집이다. 2차의 `planned_symbols`(편입분만)를 그대로 읽으면 정상 수집한 런이
+    #      대상 0으로 뒤집혀 skip 으로 위장된다 — 수집분이 있는데 skip 은 거짓이다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource(planned_by_call={1: 0})  # 2차가 대상 0을 보고
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "success"
+    assert log["reason"] is None
+
+
+def test_explicit_deep_backfill_window_skips_second_fetch(tmp_path):
+    # WHY: 운영자가 이미 그만큼 깊은 `--from` 으로 도는 백필 런에서는 2차 수집이 같은 창을
+    #      한 번 더 긁는 순수 낭비다(KIS 는 콜당 100건·0.5초 간격이라 413종이면 분 단위).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2025-01-01", "2026-08-14") == 0
+
+    assert len(source.calls) == 1  # 1차 창(2025-01-01)이 편입 창(2025-07-10)보다 깊다
+
+
+def test_empty_canonical_price_declares_no_newcomers(tmp_path):
+    # WHY: canonical 이 통째로 비면 전 종목이 '신규'라 판정이 뜻을 잃는다. 그때 긴 창을
+    #      붙이면 새 레이크의 첫 런이 전 종목 400일 수집으로 부풀고, 그건 이 경로가 아니라
+    #      명시적 `--from` 백필이 맡는 일이다(스텝이 백필 정책을 몰래 정하지 않는다).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert len(source.calls) == 1
+
+
+def test_newcomer_scan_ignores_malformed_price_partition_keys(tmp_path):
+    # WHY: '최신 파티션'은 사전순 max 로 고른다 — 비달력일 키가 상위를 차지하면 그 파티션의
+    #      티커 집합을 기준으로 삼아 **정상 종목 전체가 편입으로 잡힌다**(413종 400일 수집).
+    #      holdings 쪽이 같은 이유로 같은 판정을 이미 갖고 있다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "9999-99-99", ["111111"])
+    _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
+
+    newcomers, since = ingest_price_raw._newcomers(
+        storage, ["042700", "091160", "000660"], "2026-08-14")
+    assert newcomers == ["000660"]
+    assert since == "2025-07-10"
