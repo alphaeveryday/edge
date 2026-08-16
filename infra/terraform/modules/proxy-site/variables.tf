@@ -33,3 +33,15 @@ variable "price_class" {
   type        = string
   default     = "PriceClass_200" # 아시아(서울 엣지) 포함
 }
+
+variable "api_origin_port" {
+  description = "API 직행 오리진 HTTP 포트(같은 박스의 다른 컨테이너) — null 이면 API behavior 없음(단일 오리진 유지)"
+  type        = number
+  default     = null
+}
+
+variable "api_path_pattern" {
+  description = "API 직행 behavior 의 경로 패턴 (api_origin_port 지정 시에만 사용)"
+  type        = string
+  default     = "/api/v1/*"
+}

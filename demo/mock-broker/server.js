@@ -1,7 +1,10 @@
 // 증권사 엣지 프록시 자리의 데모 서버 — 실제 배치에서 이 자리는 증권사 엣지(프록시)다.
-// ADR-0053 으로 위젯의 Publication API 직접 호출이 표준이 됐다(고객 식별·채널 헤더 폐지).
-// 데모의 중계 형상 자체의 은퇴(설명 경로를 proxy-site behavior 로 분리)는 후속 재배선 PR 소관이라,
-// 이 서버는 당분간 헤더 없는 단순 프록시 + 폴백 처리로 남는다.
+// ADR-0053 으로 위젯의 Publication API 직접 호출이 표준이다: 박스 배치에서는 CloudFront 가
+// /api/v1/* 를 publication-api 컨테이너로 직행시키고(proxy-site behavior, ALPHA-992), 이
+// 서버는 정적 위젯·시세·차트만 서빙한다. 로컬(compose)에는 그 엣지가 없으므로 이 서버가
+// /api/v1/* 를 무변형 passthrough 하는 엣지 스탠드인을 겸한다 — 형상 매핑·폴백 중계
+// (/api/broker/ai-analysis)는 은퇴했고 상태 해석은 위젯(broker-api.js)이 직접 한다.
+// 엣지와 동일하게 쿠키·인증 헤더는 오리진에 전달하지 않는다(ADR-0053 결정 5 strip).
 // 시세(/api/broker/quotes)도 같은 전제로 이 레이어가 외부 소스(토스증권 공식 Open API)를
 // 프록시한다 — 시세는 증권사 자체 데이터. 키 미설정이면 스냅샷 폴백으로 동작한다.
 // 의존성 0 — node:20 내장 http/fetch 만 사용.
@@ -27,9 +30,6 @@ const QUOTES_CACHE_MS = 7000; // 새로고침 연타·관객 다수에도 상류
 const QUOTES_FALLBACK = JSON.parse(fs.readFileSync(path.join(__dirname, 'quotes-fallback.json'), 'utf8'));
 
 // 계약 권장: 5xx·통신 실패는 폴백 문구로 처리해 설명 미제공이 고객 화면 오류로 보이지 않게 한다.
-const FALLBACK_MESSAGE = 'AI 분석을 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
-const NO_DATA_MESSAGE = '이 종목·일자에 대해 제공되는 AI 분석이 아직 없습니다.';
-const UNKNOWN_ETF_MESSAGE = '지원하지 않는 종목입니다. (국내 상장 ETF 대상)';
 const CHART_FALLBACK_MESSAGE = '차트를 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
 
 const CONTENT_TYPES = {
@@ -43,37 +43,30 @@ const CONTENT_TYPES = {
   '.woff2': 'font/woff2',
 };
 
-// resolve 값은 broker-api.js 가 화면에 그대로 넘기는 형상:
-// { state: 'OK', data } | { state: 'NO_DATA', message } | { state: 'FALLBACK', message }
-async function getAiAnalysis(ticker, tradeDate) {
-  const upstream = new URL('/api/v1/explanations/' + encodeURIComponent(ticker), PUBLICATION_API_URL);
-  if (tradeDate) {
-    upstream.searchParams.set('trade_date', tradeDate);
-  }
-  let res;
+// 엣지 스탠드인 passthrough(로컬 전용 경로) — CloudFront behavior 와 같은 의미론: 경로·쿼리·
+// 상태·본문 무변형, 쿠키·인증 헤더 미전달(strip). 상태 해석은 위젯이 한다(형상 매핑 없음).
+async function passthroughPublicationApi(url, res) {
+  const upstream = new URL(url.pathname + url.search, PUBLICATION_API_URL);
+  let upstreamRes;
   try {
-    res = await fetch(upstream, { signal: AbortSignal.timeout(5000) });
+    upstreamRes = await fetch(upstream, { signal: AbortSignal.timeout(5000) });
   } catch (err) {
-    console.warn('[mock-broker] Publication API 호출 실패', err.message);
-    return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
+    console.warn('[mock-broker] publication-api passthrough 실패', err.message);
+    res.writeHead(502);
+    res.end();
+    return;
   }
-  if (res.status === 200) {
-    return { state: 'OK', data: await res.json() };
+  const body = Buffer.from(await upstreamRes.arrayBuffer());
+  const headers = {};
+  const contentType = upstreamRes.headers.get('content-type');
+  if (contentType) {
+    headers['Content-Type'] = contentType;
   }
-  if (res.status === 204) {
-    return { state: 'NO_DATA', message: NO_DATA_MESSAGE };
-  }
-  if (res.status === 404) {
-    return { state: 'NO_DATA', message: UNKNOWN_ETF_MESSAGE };
-  }
-  if (res.status === 400) {
-    // 400은 일시 장애가 아니라 호출측 통합 버그 신호다 — 폴백 문구로 코팅하되 로그에 드러낸다
-    console.warn('[mock-broker] Publication API 400 — 요청 파라미터/헤더 확인 필요 (ticker=%s, trade_date=%s)', ticker, tradeDate);
-  }
-  return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
+  res.writeHead(upstreamRes.status, headers);
+  res.end(body);
 }
 
-// ── 시세 프록시 — getAiAnalysis 와 대칭인 두 번째 상류 호출 (토스증권 공식 Open API) ──
+// ── 시세 프록시 — 두 번째 상류 호출 (토스증권 공식 Open API) ──
 
 let tokenCache = { accessToken: null, expiresAt: 0 };
 let dailyCandleCache = { date: null, bySymbol: null };
@@ -522,26 +515,18 @@ const server = http.createServer(function (req, res) {
       });
     return;
   }
-  if (url.pathname === '/api/broker/ai-analysis') {
+  if (url.pathname.startsWith('/api/v1/')) {
     if (req.method !== 'GET') {
       res.writeHead(405);
       res.end();
       return;
     }
-    const ticker = url.searchParams.get('ticker');
-    if (!ticker) {
-      sendJson(res, { state: 'FALLBACK', message: FALLBACK_MESSAGE });
-      return;
-    }
-    getAiAnalysis(ticker, url.searchParams.get('trade_date'))
-      .catch(function (err) {
-        // 손상 JSON·URL 조립 실패 등 getAiAnalysis 내부 try 밖 예외 — 응답 미종료로 행 걸리지 않게 폴백
-        console.warn('[mock-broker] ai-analysis 처리 실패', err.message);
-        return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
-      })
-      .then(function (body) {
-        sendJson(res, body);
-      });
+    passthroughPublicationApi(url, res).catch(function (err) {
+      // fetch 밖 예외(URL 조립 등) — 응답 미종료로 행 걸리지 않게 502 로 종료
+      console.warn('[mock-broker] passthrough 처리 실패', err.message);
+      res.writeHead(502);
+      res.end();
+    });
     return;
   }
   serveStatic(res, url.pathname);

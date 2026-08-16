@@ -55,6 +55,12 @@ variable "mock_broker_port" {
   default     = 8080
 }
 
+variable "publication_api_port" {
+  description = "publication-api 호스트 포트 — 설명 조회 직행 behavior(ADR-0053)의 CloudFront 오리진 대상. null 이면 인바운드 없음(비공개 유지)"
+  type        = number
+  default     = null
+}
+
 variable "cert_parameter_arn" {
   description = "데모 mTLS 클라이언트 인증서를 담은 SSM SecureString 파라미터 ARN(instance profile 이 읽음)"
   type        = string

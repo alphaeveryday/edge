@@ -40,7 +40,7 @@
 | [0030](0030-raw-phase-partial-failure.md) | raw 페이즈는 부분 실패를 격리한다 — 전량 성공 게이트 제거 | 승인됨 |
 | [0031](0031-serving-to-publication.md) | serving-api를 Publication 도메인으로 리네이밍 | 승인됨 (호출자·노출 기록 조항 대체 → [0053](0053-widget-direct-serving-no-personalization.md)) |
 | [0032](0032-retire-gateway.md) | gateway 은퇴 — 클라우드 엣지를 ALB 직결로 | 승인됨 |
-| [0033](0033-demo-onprem-stack.md) | 데모 온프렘 terraform 스택 분리 — 실 클라우드와 state 격리 | 승인됨 (스택 열거 중 Redis 대체 → [0051](0051-byoc-deployment-topology.md)) |
+| [0033](0033-demo-onprem-stack.md) | 데모 온프렘 terraform 스택 분리 — 실 클라우드와 state 격리 | 승인됨 (Redis 대체 → [0051](0051-byoc-deployment-topology.md) · 데모 프록시 문면 대체 → [0053](0053-widget-direct-serving-no-personalization.md)) |
 | [0034](0034-host-per-edge-alb.md) | 공개 엣지 호스트 단위 분리 — 서비스당 ALB 1개, 경로 라우팅 없음 | 승인됨 |
 | [0035](0035-widget-ui-build-artifact.md) | 위젯 UI를 빌드 산출물로 납품 — 실행 서버 없음 | 승인됨 (런타임 경로 문면 대체 → [0053](0053-widget-direct-serving-no-personalization.md)) |
 | [0036](0036-sync-agent-intake-topology.md) | Sync 온프렘 토폴로지 — Sync Agent(DMZ)+Intake(내부망) 2모듈 표준 | 승인됨 (조율 메커니즘 대체 → [0052](0052-sync-two-module-standard-reaffirmed.md)) |

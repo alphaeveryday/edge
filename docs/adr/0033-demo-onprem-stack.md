@@ -1,6 +1,6 @@
 # ADR-0033: 데모 온프렘 terraform 스택 분리 — 실 클라우드와 state 격리
 
-- 상태: 승인됨 (스택 열거 중 Redis 는 [0051](0051-byoc-deployment-topology.md) 결정 6이 대체)
+- 상태: 승인됨 (스택 열거 중 Redis 는 [0051](0051-byoc-deployment-topology.md) 결정 6이 대체; 데모 프록시 문면(단일 mock-broker 오리진)은 [0053](0053-widget-direct-serving-no-personalization.md) 구현이 부분 대체 — 설명 조회 /api/v1/* 는 별도 behavior 로 publication-api 직행, ALPHA-992)
 - 날짜: 2026-07-21
 
 ## 맥락

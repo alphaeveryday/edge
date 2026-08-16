@@ -6,7 +6,7 @@
 ## 왜 이 시나리오인가
 
 - 요청당 서버 쓰기는 `serving_request_metric` 1행(ALPHA-501)이다 — `exposure_log` INSERT 는 ADR-0053 으로 폐지됐다. 이 쓰기 경로는 캐시로 가릴 수 없다 — 캐시 도입 전후로 무엇이 줄고 무엇이 남는지 가르는 것이 baseline 의 목적이다.
-- 측정 대상은 publication-api 직접 호출이다. mock-broker 2홉(`:18090`)은 데모 경로라 측정에 끼우지 않는다.
+- 측정 대상은 publication-api 직접 호출이다. mock-broker(`:18090`, 로컬 passthrough 경유 — ALPHA-992)는 데모 경로라 측정에 끼우지 않는다.
 
 ## 전제
 

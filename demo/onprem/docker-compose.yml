@@ -8,7 +8,7 @@
 #   - sync-agent 대상 = 실 cloud sync 전용 mTLS ALB(로컬은 tenant-sync-api 컨테이너). trust store
 #     미주입 dev 라 현재는 클라이언트 cert 없이 평문 HTTPS — cert·인가는 후속(ALPHA-445).
 #   - cloud 서비스(postgres·flyway·super-admin-api·tenant-sync-api)는 없다 — AWS 에 있다.
-#   - 호스트 노출은 CloudFront 오리진 2개(mock-broker·tenant-console-ui)뿐. DB·앱 포트는 compose 내부망만(공개 박스 표면 최소화).
+#   - 호스트 노출은 CloudFront 오리진 3개(mock-broker·tenant-console-ui·publication-api :8084 설명 조회 직행 — ADR-0053)뿐. 나머지 DB·앱 포트는 compose 내부망만(공개 박스 표면 최소화).
 #
 # 네트워크 3망(dmz/data/serving, ALPHA-561) — ADR-0036 경계를 compose 네트워크로 강제:
 #   - sync-agent=dmz 만(외부와 닿는 유일 컴포넌트, postgres-onprem 에 못 닿음), intake=dmz+data(수신 브리지),
@@ -125,10 +125,14 @@ services:
       - data
 
   # MTS 위젯이 직접 호출하는 조회 표면(Published만·무헤더, ADR-0053) — 온프렘 PG 조회.
+  # 호스트 포트 공개는 CloudFront 설명 조회 직행 behavior 의 오리진 연결용(ALPHA-992) —
+  # SG 가 CloudFront origin-facing 프리픽스로만 인바운드를 연다(포트·behavior·SG 한 단위).
   publication-api:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/publication-api:${IMAGE_TAG:-0.1.0}
     container_name: edge-publication-api
     restart: unless-stopped
+    ports:
+      - "${PUBLICATION_API_PORT:-8084}:8080"
     depends_on:
       flyway-onprem:
         condition: service_completed_successfully
@@ -143,9 +147,10 @@ services:
       - data
       - serving
 
-  # 증권사 자체 제작 API(mock-broker) + 가상 MTS 정적 서빙. 화면 → mock-broker → publication-api 2홉.
-  # 호스트 노출(CloudFront 오리진) — 정적(mts-ai-tab, 이미지 내장)+API 를 모두 서빙(ALPHA-632).
-  # SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
+  # 가상 MTS 정적 서빙 + 시세·차트 API(mock-broker). 설명 조회는 이 컨테이너를 거치지 않는다 —
+  # CloudFront /api/v1/* behavior 가 publication-api(:8084)로 직행한다(ADR-0053, ALPHA-992;
+  # 이 컨테이너의 /api/v1 passthrough 는 엣지 없는 로컬 compose 전용 스탠드인).
+  # 호스트 노출(CloudFront 오리진), SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
   mock-broker:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/mock-broker:${IMAGE_TAG:-0.1.0}
     container_name: edge-mock-broker

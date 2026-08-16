@@ -27,7 +27,7 @@
 #   docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c 'TABLE sync_state'   # intake 적재 확인
 #   curl localhost:18084/api/v1/explanations/069500   # publication-api (무헤더 — ADR-0053)
 #   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세 — AI 분석·시세·차트 실호출, 나머지 탭 목업)
-#   curl "localhost:18090/api/broker/ai-analysis?ticker=069500"   # mock-broker → publication-api 2홉
+#   curl "localhost:18090/api/v1/explanations/069500"   # mock-broker passthrough → publication-api (위젯 직접 호출 경로 — ADR-0053)
 
 services:
   postgres:
@@ -170,8 +170,8 @@ services:
       - "18084:8080"
 
   # [demo] 증권사 엣지 프록시 자리(mock-broker) + 가상 MTS 정적 서빙.
-  # 화면 → mock-broker → publication-api 실 HTTP 2홉(헤더 없음 — ADR-0053). 중계 형상의
-  # 은퇴(설명 경로 proxy-site behavior 분리)는 데모 재배선 후속 PR 소관.
+  # 설명 조회(/api/v1/*)는 무변형 passthrough(로컬 엣지 스탠드인 — 박스에서는 CloudFront
+  # behavior 가 publication-api 직행, ADR-0053·ALPHA-992). 시세·차트는 /api/broker/*.
   mock-broker:
     build:
       context: ./demo

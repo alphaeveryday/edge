@@ -22,20 +22,20 @@ PORT=18090 node demo/mock-broker/server.js
 
 ## 구조 — 계약의 신뢰경계 재현
 
-현행 데모는 mock-broker 중계 형상이다 — 표준은 위젯 직접 호출(동일 오리진 프록시 경유, [ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md))이며 설명 경로 재배선은 후속 PR 소관이다.
+설명 조회는 위젯의 Publication API **직접 호출**이다([ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md), ALPHA-992) — 동일 오리진 `/api/v1/*` 경로를 박스에서는 CloudFront behavior 가, 로컬에서는 mock-broker 의 무변형 passthrough(엣지 스탠드인, 쿠키·인증 헤더 strip)가 publication-api 로 보낸다. 응답 상태(200/204/404 등)의 화면 해석은 broker-api.js 가 한다.
 
 ```
 app.js (MTS 3화면 — 홈·검색·종목상세)
-  → broker-api.js   /api/broker/* fetch — 얇은 래퍼(브라우저 mock 없음)
-    → mock-broker (demo/mock-broker/server.js)   증권사 엣지 프록시 자리 — 상태 매핑, 폴백 처리 (헤더 없음, ADR-0053)
-      → publication-api (src/apps/onprem/publication-api)   On-Premise Publication API      (/api/broker/ai-analysis)
+  → broker-api.js   데이터 호출 계층 — 상태 해석·폴백 처리
+    → publication-api (src/apps/onprem/publication-api)   설명 조회 직접 호출   (/api/v1/explanations/{ticker} — 엣지(CloudFront/passthrough) 경유 동일 오리진)
+    → mock-broker (demo/mock-broker/server.js)   증권사 자체 데이터 전제 표면
       → 토스증권 공식 Open API (openapi.tossinvest.com)   실시간 시세·일봉 소스 — 시세 7초 캐시   (/api/broker/quotes · /api/broker/chart)
 ```
 
-- **실데이터는 세 경로다.** AI 분석 탭(publication-api 프록시), 시세(지수·관심종목·상세 헤더 가격 — 토스증권 Open API 프록시, 장중 실시간가·마감 후 당일 종가), 차트 탭(같은 소스 — 기본 '1일'은 최근 거래일 분봉(최신 봉 날짜로 필터해 장전·휴장엔 자동으로 직전 거래일, TTL 60초 캐시), 1주~1년은 일봉 약 250봉(티커당 KST 날짜 1회 캐시). count 상한 200이라 nextBefore 로 한 페이지 더 잇고, 기간 슬라이스·통계 카드는 화면이 파생한다). 호가·뉴스·커뮤니티 등 나머지는 증권사 자체 데이터라는 전제의 화면 고정값(목업)이다.
+- **실데이터는 세 경로다.** AI 분석 탭(publication-api 직접 호출), 시세(지수·관심종목·상세 헤더 가격 — 토스증권 Open API 프록시, 장중 실시간가·마감 후 당일 종가), 차트 탭(같은 소스 — 기본 '1일'은 최근 거래일 분봉(최신 봉 날짜로 필터해 장전·휴장엔 자동으로 직전 거래일, TTL 60초 캐시), 1주~1년은 일봉 약 250봉(티커당 KST 날짜 1회 캐시). count 상한 200이라 nextBefore 로 한 페이지 더 잇고, 기간 슬라이스·통계 카드는 화면이 파생한다). 호가·뉴스·커뮤니티 등 나머지는 증권사 자체 데이터라는 전제의 화면 고정값(목업)이다.
 - 종목 유니버스(검색 노출 36종·이름·ETF 여부 — 홈 관심종목은 앞 4종)는 [demo/mock-broker/quotes-fallback.json](../mock-broker/quotes-fallback.json)이 SSOT다. 분석 유니버스 ETF 32종(게임산업 300950 은 ALPHA-624 확장분 — 분석 도착 전 NO_DATA)이 검색으로 이어진다. 키 미설정·외부 API 실패 시 이 스냅샷으로 폴백해 화면이 깨지지 않는다. 화살표·색·등락률 표기는 숫자에서 화면이 파생한다.
 - 현재가 API에는 전일대비가 없어 mock-broker 가 일봉(count=2)으로 전일종가를 KST 날짜당 1회 캐시해 등락을 계산한다.
-- 고객 식별·채널 헤더는 폐지됐다(ADR-0053) — mock-broker 는 헤더 없는 단순 프록시다. 실제 연동에서 이 자리는 증권사 엣지(프록시)이고, 위젯의 Publication API 직접 호출(동일 오리진 프록시 경유)이 표준이다. 데모의 설명 경로도 proxy-site behavior 분리로 직접 호출 형상으로 재배선한다(후속 PR).
+- 고객 식별·채널 헤더는 폐지됐고(ADR-0053) 설명 경로는 직접 호출로 재배선됐다(ALPHA-992). 실제 연동에서 엣지(프록시) 자리는 증권사 소관이며, 그 엣지의 책임(rate limit·쿠키/인증 헤더 strip)은 계약 문서(docs/contracts/publication-api.md)가 명시한다.
 
 ## 실시간 시세 키 (선택)
 
@@ -81,5 +81,5 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
 | `/?ticker=305720` | 204 — 상장 종목이나 설명 없음(정상) 안내 |
 | `/?ticker=000001` | 404 — 미지원 종목 안내 |
 | `/?trade_date=2026-07-01` | 204 — 해당 기준일 게시분 없음 (기본 종목 069500) |
-| `/?trade_date=2026-7-1` | 400 — 형식 오류(폴백 문구 + mock-broker 로그 경고) |
+| `/?trade_date=2026-7-1` | 400 — 형식 오류(폴백 문구 + 브라우저 콘솔 `[broker-api]` 경고 — 상태 해석이 위젯 소관, ALPHA-992) |
 | publication-api 중지 후 조회 | 5xx/통신 실패 — 폴백 문구 |
