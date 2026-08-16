@@ -22,3 +22,7 @@ publication:
   # 조회 캐시 TTL(ALPHA-433) — 프로세스 간 무효화 경로가 없어 이 값이 곧 차단·정정
   # 반영 지연의 상한이다. 늘릴 때는 컴플라이언스 검토 선행(ExplanationStore 주석 참조).
   serve-cache-ttl: ${PUBLICATION_SERVE_CACHE_TTL:3s}
+  cors:
+    # 별도 API 호스트로 직접 호출하는 테넌트만 위젯 오리진을 등록한다(ADR-0053 결정 5).
+    # 기본형(위젯 도메인 동일 오리진 프록시)은 빈 값 = CORS 미등록.
+    allowed-origins: ${PUBLICATION_CORS_ALLOWED_ORIGINS:}

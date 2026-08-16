@@ -23,7 +23,8 @@ import java.io.IOException;
  * serving_request_metric 에 기록한다(Dashboard ALPHA-128 데이터 소스).
  *
  * route 는 원시 URI 가 아니라 MVC 매핑 패턴이다 — 카디널리티 통제·경로 파라미터
- * (티커 등) 유입 방지. 에러 코드는 실패(4xx·5xx) 응답 본문(공통 봉투)의 code 만
+ * (티커 등) 유입 방지. 매핑 없는 요청(임의 /api/** 플러딩)은 기록하지 않는다 —
+ * 인증 없는 공개 표면의 메트릭 자체 상한(ADR-0053). 에러 코드는 실패(4xx·5xx) 응답 본문(공통 봉투)의 code 만
  * 파싱한다 — 비JSON·형상 밖 응답은 NULL(코드 미상)이 정직한 값(스키마 CHECK 와 동일
  * 규율). 기록 실패는 로그로 드러내되 서빙 응답을 깨뜨리지 않는다 — 감사(exposure_log,
  * 같은 트랜잭션 fail-loud)와 달리 관측이 서빙을 죽이면 주객전도라는 의도적 선택.
@@ -81,20 +82,32 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 	private void record(HttpServletRequest request, int status,
 			ContentCachingResponseWrapper bodySource) {
 		try {
+			String route = route(request);
+			// 컨트롤러에 매핑되지 않은 경로는 기록하지 않는다(ADR-0053 — 메트릭 자체 상한).
+			// 인증 없는 공개 표면이라 임의 /api/** 플러딩이 행 단위로 적재되면 엣지 rate limit
+			// 이 뚫리는 순간 DB 쓰기가 무한하다 — 매핑된 라우트(유한 집합)만 관측 대상으로
+			// 남긴다. 매핑 부재(null)뿐 아니라 Boot 기본 정적 리소스 핸들러의 전역 패턴
+			// ("/**")도 제외한다 — 실 MVC 에서는 미매칭 /api/** 가 그 핸들러에 잡혀 404 가
+			// 되므로 null 검사만으로는 상한이 성립하지 않는다.
+			if (UNMATCHED_ROUTE.equals(route) || "/**".equals(route)) {
+				return;
+			}
 			String errorCode = status >= 400 && bodySource != null ? errorCode(bodySource) : null;
 			metrics.save(new ServingRequestMetric(truncate(request.getMethod(), METHOD_MAX_LENGTH),
-					route(request), (short) status, errorCode));
+					route, (short) status, errorCode));
 		} catch (Exception e) {
 			log.error("요청 메트릭 기록 실패 — 서빙 응답은 유지한다 (method={} uri={})",
 					request.getMethod(), request.getRequestURI(), e);
 		}
 	}
 
+	private static final String UNMATCHED_ROUTE = "UNMATCHED";
+
 	private static String route(HttpServletRequest request) {
 		Object pattern = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
 		String route = switch (pattern) {
 			case PathPattern p -> p.getPatternString();
-			case null -> "UNMATCHED";   // 매핑 없는 요청(프레임워크 404 등)
+			case null -> UNMATCHED_ROUTE;   // 매핑 없는 요청(프레임워크 404 등) — 기록 제외 대상
 			default -> pattern.toString();
 		};
 		return truncate(route, ROUTE_MAX_LENGTH);

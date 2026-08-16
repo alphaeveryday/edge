@@ -30,7 +30,6 @@
 - [ ] Flyway cloud/onprem 마이그레이션 세트 분리 + 도메인 물리 스키마(state-machine.md ERD 기준) 작성
 - [ ] Walking skeleton: Tenant Sync API → Sync Agent → Raw Event Store → 상태 분기 1건 관통
 - [ ] Screening Worker — 확신도 게이트 잔여: max_risk 컬럼 수축 drop (융합 위험등급 산정은 ADR-0046 으로 폐기 — UNCERTAIN 상시 검수+min_confidence 게이트로 구현 완료(ALPHA-634), 남은 것은 후속 수축 PR 뿐)
-- [ ] Publication API — 요청/응답 스펙 정의(조회 단위·고객 해시 전달 위치) 후 구현 + Exposure Log 기록
 - [ ] Tenant Console·Super Admin Console — console-ia/ 기준 재구축
 - [ ] 로컬 개발 환경 정의 — cloud+onprem 동시 구동 compose
 

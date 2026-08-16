@@ -11,11 +11,10 @@ Tenant Console
 └── Settings
 ```
 
-> **감사·노출 이력은 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Audit Log 브라우징 메뉴는 재설계에서 두지 않으며, 콘솔에서는 각 설명 상세("상태 변경 이력"·"컴플라이언스 검사 결과")로 확인한다. 감사 레코드 자체는 **DB에 보존**된다(context.md의 Audit Log·Exposure Log 컴포넌트):
+> **감사 이력은 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Audit Log 브라우징 메뉴는 재설계에서 두지 않으며, 콘솔에서는 각 설명 상세("상태 변경 이력"·"컴플라이언스 검사 결과")로 확인한다. 감사 레코드 자체는 **DB에 보존**된다:
 > - **콘텐츠 이력**: 콘텐츠 ID, 종목, 상태 변경/검수/정정/무효화/정책 변경 이력, 작업자, 시각, 사유
-> - **노출 재현**: 콘텐츠 ID, 종목, 고객 식별 해시, 기간, 채널, 실제 노출 문구, 노출 시각/채널, 근거 데이터, 컴플라이언스 검사 결과, 검수 결과
 >
-> 재현 규칙(리비전 체인·조회=노출)은 [../domain/exposure-log.md](../domain/exposure-log.md)·[../domain/state-machine.md](../domain/state-machine.md)가 SSOT. 민원 재현의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존 + 설명 상세 경유)가 기준.
+> 고객 단위 **노출 재현(Exposure Log)은 [ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)으로 폐지**됐다 — 재구성 근거는 게시·정정 이력과 정책 이력이다([../domain/exposure-log.md](../domain/exposure-log.md)). 상태 규칙은 [../domain/state-machine.md](../domain/state-machine.md)가 SSOT.
 
 **Dashboard**
 

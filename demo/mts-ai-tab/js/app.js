@@ -226,8 +226,8 @@
     el('st-chg').textContent = stock.chgDetail;
     el('st-chg').style.color = stock.color;
     renderFavAlert();
-    // AI 분석 호출은 탭이 실제로 열릴 때만 — 성공 조회는 publication-api 가
-    // exposure_log(고객 노출 이력)로 기록하므로, 보지 않은 화면을 노출로 남기지 않는다.
+    // AI 분석 호출은 탭이 실제로 열릴 때만 — 보지 않은 화면의 불필요한 조회를 만들지
+    // 않는다(구 exposure_log 노출 기록은 ADR-0053 으로 폐지).
     state.aiFetched = false;
     state.aiRequestSeq++; // 이전 종목의 in-flight 응답 무효화
     state.chartByInterval = {}; // 차트도 탭이 열릴 때만 조회 — 딥링크로 AI 탭 직행 시 불필요한 호출을 막는다

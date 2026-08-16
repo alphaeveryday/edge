@@ -1,6 +1,6 @@
 # ADR-0031: serving-api를 Publication 도메인으로 리네이밍
 
-- 상태: 승인됨
+- 상태: 승인됨 — 호출자 문면(호출자=금융사 API·고객 해시)과 노출 기록(exposure 컴포넌트) 소유 조항은 대체됨 → [ADR-0053](0053-widget-direct-serving-no-personalization.md) (2026-08-17; 리네이밍·도메인 구획 자체는 불변)
 - 날짜: 2026-07-20
 
 ## 맥락

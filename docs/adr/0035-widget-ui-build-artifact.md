@@ -1,6 +1,6 @@
 # ADR-0035: 위젯 UI를 빌드 산출물로 납품 — 실행 서버 없음
 
-- 상태: 승인됨
+- 상태: 승인됨 — 런타임 경로 문면(위젯→증권사 백엔드/API GW→Publication API)과 "Publication API 계약 영향 없음" 결과 조항은 대체됨 → [ADR-0053](0053-widget-direct-serving-no-personalization.md) (위젯 직접 호출, 2026-08-17; 빌드 산출물 납품 결정 자체는 불변)
 - 날짜: 2026-07-21
 
 ## 맥락

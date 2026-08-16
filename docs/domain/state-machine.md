@@ -38,10 +38,10 @@
 
 핵심 도메인 추상화 (기능 확장을 막지 않되 MVP UI는 가격 변동 설명에 집중):
 
-`event` / `evidence` / `analysis_item` / `screening_check` / `review_task` / `publication` / `exposure_log`
+`event` / `evidence` / `analysis_item` / `screening_check` / `review_task` / `publication` (구 `exposure_log` 는 ADR-0053 으로 은퇴)
 
 - `analysis_item.analysis_type`: 현재 **PRICE_MOVEMENT**만 사용. 향후 MARKET_BRIEFING, DISCLOSURE_SUMMARY 확장 가능하나 MVP UI 비노출.
-- 감사 재현은 `analysis_item_status_history`(append-only)와 exposure log 로 "어느 시점에 어느 문구가 노출되었는지"를 복원한다. (구 정정 리비전 체인은 폐지 — 과거 이력의 CORRECTED 어휘는 상태 이력 원장에만 남는다, ADR-0044.)
+- 감사 재현은 `analysis_item_status_history`(append-only)와 게시·정정 이력(`publication`·`console_action_log`)·정책 이력으로 "어느 시점에 어떤 게시 상태였는지"를 복원한다 — 고객 단위 노출 재현(exposure log)은 폐지됐다([ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)). (구 정정 리비전 체인은 폐지 — 과거 이력의 CORRECTED 어휘는 상태 이력 원장에만 남는다, ADR-0044.)
 
 **상태값**:
 

@@ -15,7 +15,6 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDate;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -23,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 콘솔 제공 범위 토글(serving_scope)의 서빙단 실효화(ALPHA-614)를 실 Postgres 로 검증한다.
  * WHY: 토글이 저장만 되고 서빙이 이를 읽지 않으면 이해상충 제외가 고객 노출을 통제하지 못한다 —
- * 판정은 게시분 조회 앞단에서 걸러 "설명 없음"(204·Exposure 미기록)으로 수렴해야 하고, 상위
+ * 판정은 게시분 조회 앞단에서 걸러 "설명 없음"(204)으로 수렴해야 하고, 상위
  * (MARKET) 차단이 하위(INSTRUMENT) 토글에 우선해야 한다.
  *
  * <p>이 테스트만 게시분 조회 캐시(ALPHA-433 ExplanationStore serveCache)를 끈다(TTL 0s) —
@@ -50,7 +49,6 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
-		jdbc.update("DELETE FROM exposure_log");
 		jdbc.update("DELETE FROM serving_scope");
 		jdbc.update("DELETE FROM publication");
 		jdbc.update("DELETE FROM analysis_item");
@@ -62,18 +60,16 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	@Test
-	void scope_행이_없으면_기본_제공이라_200이고_Exposure가_기록된다() throws Exception {
+	void scope_행이_없으면_기본_제공이라_200이다() throws Exception {
 		// WHY: 옵트아웃 모델 — 토글 이력이 없는 종목은 종전처럼 노출돼야 한다(판정 도입이 기본 제공을 깨면 안 된다).
 		serve().andExpect(status().isOk()).andExpect(jsonPath("$.etf.ticker").value(TICKER));
-		assertThat(exposureCount()).isEqualTo(1);
 	}
 
 	@Test
-	void INSTRUMENT_토글_OFF면_204이고_Exposure는_기록되지_않는다() throws Exception {
-		// WHY: 종목 제외가 곧 고객 노출 차단이어야 한다 — 게시분이 있어도 204 로 수렴하고, 노출이 없었으니 기록도 없어야 감사 수치가 정확하다.
+	void INSTRUMENT_토글_OFF면_204다() throws Exception {
+		// WHY: 종목 제외가 곧 고객 노출 차단이어야 한다 — 게시분이 있어도 204 로 수렴한다.
 		insertScope("INSTRUMENT", TICKER, false);
 		serve().andExpect(status().isNoContent());
-		assertThat(exposureCount()).isZero();
 	}
 
 	@Test
@@ -81,7 +77,6 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 		// WHY: 재개(enabled=true) 행은 행 부재와 같게 제공으로 돌아와야 한다 — 차단이 비가역이면 운영이 불가능하다.
 		insertScope("INSTRUMENT", TICKER, true);
 		serve().andExpect(status().isOk());
-		assertThat(exposureCount()).isEqualTo(1);
 	}
 
 	@Test
@@ -90,25 +85,18 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 		insertScope("MARKET", "XKRX", false);
 		insertScope("INSTRUMENT", TICKER, true);
 		serve().andExpect(status().isNoContent());
-		assertThat(exposureCount()).isZero();
 	}
 
 	@Test
 	void 미상장_코드는_판정_이전에_404다() throws Exception {
 		// WHY: 404(미상장)와 204(차단·설명 없음)는 다른 질문이다 — 제공 범위 판정 도입이 상장 여부 계약(SERV4040)을 흔들면 안 된다.
-		mvc.perform(get("/api/v1/explanations/999999")
-						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/999999"))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("SERV4040"));
 	}
 
 	private ResultActions serve() throws Exception {
-		return mvc.perform(get("/api/v1/explanations/" + TICKER)
-				.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"));
-	}
-
-	private int exposureCount() {
-		return jdbc.queryForObject("SELECT count(*) FROM exposure_log", Integer.class);
+		return mvc.perform(get("/api/v1/explanations/" + TICKER));
 	}
 
 	private void insertScope(String scopeType, String scopeKey, boolean enabled) {

@@ -39,8 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 캐시는 테스트 클래스 사이에 살아남아, 같은 (ticker, 거래일) 키를 쓰는 다른 클래스와 서로의
  * 시드를 덮어쓴다(PublicationRepositoryIntegrationTest 가 305720·2026-07-15 을 쓴다).
  * ② <b>클래스당 1회 시드</b> — 메서드마다 재시드하면 publication_id 가 바뀌는데 캐시는 이전 id 를
- * 든 채로 남고, Exposure 기록이 그 죽은 id 로 INSERT 되어 FK 위반
- * (exposure_log_publication_id_fkey)으로 500 이 된다. 메서드 간에 갈아끼우는 것은 정책 행뿐이고,
+ * 든 채로 남아 죽은 게시분을 서빙할 수 있다. 메서드 간에 갈아끼우는 것은 정책 행뿐이고,
  * 그건 캐시 밖이라 안전하다.
  *
  * <p>기대 문자열을 상수 참조가 아니라 리터럴로 둔 것은 의도적이다 — 상수를 참조하면 상수 자체가
@@ -165,8 +164,7 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 
 	private ResultActions serve() throws Exception {
 		return mvc.perform(get("/api/v1/explanations/" + TICKER)
-				.param("trade_date", TRADE_DATE.toString())
-				.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"));
+				.param("trade_date", TRADE_DATE.toString()));
 	}
 
 	/** 활성 버전 발행 — 활성 1건 부분 유니크(arbiter)라 기존 활성은 먼저 종결돼 있어야 한다. */

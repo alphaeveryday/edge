@@ -3,7 +3,6 @@ package com.edge.publication.metrics;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.publication.controller.ExplanationController;
 import com.edge.publication.entity.ServingRequestMetric;
-import com.edge.publication.exposure.ExposureLogRecorder;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.PolicyVersionRepository;
@@ -67,17 +66,6 @@ class RequestMetricFilterTest {
 		}
 	}
 
-	private static final class NoopRecorder extends ExposureLogRecorder {
-		NoopRecorder() {
-			super(null);
-		}
-
-		@Override
-		public void record(long publicationId, String ticker, String summarySnapshot,
-				String customerHash, String channel) {
-		}
-	}
-
 	private static final class CapturingMetrics implements ServingRequestMetricRepository {
 		final List<ServingRequestMetric> saved = new ArrayList<>();
 		RuntimeException saveThrow;
@@ -99,7 +87,7 @@ class RequestMetricFilterTest {
 	void setUp() {
 		metrics = new CapturingMetrics();
 		ExplanationService service = new ExplanationService(
-				new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES, NO_POLICY);
+				new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -109,8 +97,7 @@ class RequestMetricFilterTest {
 
 	@Test
 	void 성공_조회는_라우트_패턴과_상태를_기록하고_응답_본문은_온전하다() throws Exception {
-		mvc.perform(get("/api/v1/explanations/069500")
-						.header("X-Customer-Hash", "h").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/069500"))
 				.andExpect(status().isOk())
 				// 기록을 위해 응답을 감싸도 본문이 클라이언트에 그대로 전달돼야 한다.
 				.andExpect(jsonPath("$.summary").isNotEmpty());
@@ -126,17 +113,16 @@ class RequestMetricFilterTest {
 
 	@Test
 	void 실패_응답은_도메인_에러_코드까지_기록된다() throws Exception {
-		// Dashboard 에러율 집계는 상태 코드만으로 부족하다 — 4001(해시 누락)과 4004(형식)를
+		// Dashboard 에러율 집계는 상태 코드만으로 부족하다 — 4004(형식)와 4040(미상장)을
 		// 구분해야 연동 버그의 원인을 짚을 수 있다.
-		mvc.perform(get("/api/v1/explanations/069500").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/069500").param("trade_date", "2026/07/15"))
 				.andExpect(status().isBadRequest());
-		mvc.perform(get("/api/v1/explanations/999999")
-						.header("X-Customer-Hash", "h").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/999999"))
 				.andExpect(status().isNotFound());
 
 		assertThat(metrics.saved).hasSize(2);
 		assertThat(metrics.saved.get(0).getStatusCode()).isEqualTo((short) 400);
-		assertThat(metrics.saved.get(0).getErrorCode()).isEqualTo("SERV4001");
+		assertThat(metrics.saved.get(0).getErrorCode()).isEqualTo("SERV4004");
 		assertThat(metrics.saved.get(1).getStatusCode()).isEqualTo((short) 404);
 		assertThat(metrics.saved.get(1).getErrorCode()).isEqualTo("SERV4040");
 	}
@@ -144,8 +130,7 @@ class RequestMetricFilterTest {
 	@Test
 	void 설명_없는_204_도_에러_코드_없이_기록된다() throws Exception {
 		// 204 는 정상 상태(설명 없는 날) — 트래픽 집계엔 포함되고 에러로 분류되지 않는다.
-		mvc.perform(get("/api/v1/explanations/305720")
-						.header("X-Customer-Hash", "h").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/305720"))
 				.andExpect(status().isNoContent());
 
 		assertThat(metrics.saved).singleElement().satisfies(m -> {
@@ -156,11 +141,9 @@ class RequestMetricFilterTest {
 
 	@Test
 	void 메트릭_기록_실패는_서빙_응답을_깨뜨리지_않는다() throws Exception {
-		// 관측이 서빙을 죽이면 주객전도 — 실패는 로그로 드러내고 응답은 지킨다(감사인
-		// exposure_log 의 fail-loud 와 의도적으로 다른 선택).
+		// 관측이 서빙을 죽이면 주객전도 — 실패는 로그로 드러내고 응답은 지킨다.
 		metrics.saveThrow = new RuntimeException("DB down");
-		mvc.perform(get("/api/v1/explanations/069500")
-						.header("X-Customer-Hash", "h").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/069500"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.summary").isNotEmpty());
 	}
@@ -172,19 +155,45 @@ class RequestMetricFilterTest {
 	}
 
 	@Test
+	void 미매칭_API_경로는_기록하지_않는다() throws Exception {
+		// 인증 없는 공개 표면의 메트릭 자체 상한(ADR-0053) — 임의 /api/** 플러딩이 행으로
+		// 적재되면 엣지 rate limit 이 뚫리는 순간 DB 쓰기가 무한하다. 매핑된 라우트만 기록한다.
+		mvc.perform(get("/api/no/such/route")).andExpect(status().isNotFound());
+		assertThat(metrics.saved).isEmpty();
+	}
+
+	@Test
+	void 정적_리소스_전역_패턴도_기록하지_않는다() throws Exception {
+		// 실 MVC 는 Boot 기본 정적 리소스 핸들러("/**")가 미매칭 /api/** 를 잡아 매핑 속성이
+		// null 이 아니다 — 그 경로가 기록되면 위 상한이 프로덕션에서 성립하지 않는다.
+		// standaloneSetup 은 그 핸들러를 안 태우므로 매핑 속성을 직접 재현한다.
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/flood/xyz");
+		request.setAttribute(
+				org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/**");
+		new RequestMetricFilter(metrics).doFilter(request, new MockHttpServletResponse(),
+				(req, res) -> ((HttpServletResponse) res).setStatus(404));
+		assertThat(metrics.saved).isEmpty();
+	}
+
+	@Test
 	void 미처리_예외는_200_이_아니라_500_으로_기록된다() throws Exception {
 		// advice 밖으로 새는 예외는 컨테이너 ERROR dispatch 로 500 이 된다 — 래퍼 기본
 		// 상태(200)를 기록하면 실패 요청이 성공으로 적재돼 Dashboard 에러율이 왜곡된다.
 		MockMvc failing = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
-						new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES, NO_POLICY)))
+						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+					// 미매칭 미기록(ADR-0053) 도입 후 기록의 전제는 매핑 성립 — 실 운영에서
+					// 컨트롤러 예외는 DispatcherServlet 이 매핑 후 던지므로 속성이 있다. 그
+					// 상황을 재현한다(매핑 전 필터 예외는 미매칭이라 기록 제외가 맞다).
+					request.setAttribute(
+							org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+							"/api/v1/explanations/{etfTicker}");
 					throw new RuntimeException("boom");
 				})
 				.build();
 
-		assertThatThrownBy(() -> failing.perform(get("/api/v1/explanations/069500")
-				.header("X-Customer-Hash", "h").header("X-Channel", "MTS")));
+		assertThatThrownBy(() -> failing.perform(get("/api/v1/explanations/069500")));
 
 		assertThat(metrics.saved).singleElement().satisfies(m -> {
 			assertThat(m.getStatusCode()).isEqualTo((short) 500);
@@ -198,6 +207,10 @@ class RequestMetricFilterTest {
 		// 요청을 500 으로 또 적재해 트래픽 수·에러율이 함께 왜곡된다 — 기록은 요청당 1회다.
 		MockHttpServletRequest request =
 				new MockHttpServletRequest("GET", "/api/v1/explanations/069500");
+		// 기록의 전제 = 매핑 성립(미매칭 미기록, ADR-0053) — MVC 밖 단위 재현이라 직접 채운다.
+		request.setAttribute(
+				org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+				"/api/v1/explanations/{etfTicker}");
 		HttpServletResponse broken = new HttpServletResponseWrapper(new MockHttpServletResponse()) {
 			@Override
 			public jakarta.servlet.ServletOutputStream getOutputStream() {
@@ -221,8 +234,11 @@ class RequestMetricFilterTest {
 		// 어휘(SERV*·COMMON*)만 집계한다는 계약이 깨진다 — 미상(NULL)으로 수렴해야 한다.
 		MockMvc numericCode = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
-						new ExplanationService(new SeededStore(), new NoopRecorder(), ALLOW_ALL_SCOPES, NO_POLICY)))
+						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+					request.setAttribute(
+							org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+							"/api/v1/explanations/{etfTicker}");
 					HttpServletResponse res = (HttpServletResponse) response;
 					res.setStatus(400);
 					res.setContentType("application/json");

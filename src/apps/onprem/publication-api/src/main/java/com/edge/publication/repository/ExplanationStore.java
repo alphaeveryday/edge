@@ -67,8 +67,8 @@ public class ExplanationStore {
 		this.publications = publications;
 		this.knownTickers = knownTickers;
 		// 조회 캐시(ALPHA-433) — 급등 시 동일 종목 집중 조회(hot-key)의 중복 읽기를 제거한다.
-		// 응답은 고객별 요소가 없어 (ticker, trade_date) 단위로 공유 가능하고, Exposure 기록은
-		// 캐시와 무관하게 요청마다 남는다(조회=노출, ADR-0013 — 캐시는 read path 만 가린다).
+		// 응답은 고객별 요소가 없어 (ticker, trade_date) 단위로 공유 가능하다(고객 컨텍스트
+		// 폐지 — ADR-0053. 요청 메트릭 기록은 캐시 밖 필터라 캐시 적중과 무관하게 남는다).
 		// 검수·차단 이벤트의 프로세스 간 무효화 경로가 없으므로 TTL 이 곧 차단·정정 반영
 		// 지연의 상한이다 — 늘릴 때는 컴플라이언스 검토가 선행돼야 한다.
 		// "게시분 없음"(empty)도 캐시한다: 신규 게시 노출이 최대 TTL 만큼 늦는 대신

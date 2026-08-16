@@ -1,7 +1,7 @@
-// 증권사 자체 제작 API(mock-broker) 데모 서버 — 실제 배치에서는 증권사 Backend/API Gateway 자리다.
-// 계약 원칙(docs/contracts/publication-api.md): MTS 화면은 Publication API를 직접 호출하지 않는다.
-// 화면은 이 서버의 /api/broker/* 만 호출하고, Publication API 호출·고객 해시·채널 부착·폴백 처리는
-// 전부 이 레이어 책임이다(ADR-0035 런타임 경로: 위젯 UI → 증권사 백엔드 → On-Prem Publication API).
+// 증권사 엣지 프록시 자리의 데모 서버 — 실제 배치에서 이 자리는 증권사 엣지(프록시)다.
+// ADR-0053 으로 위젯의 Publication API 직접 호출이 표준이 됐다(고객 식별·채널 헤더 폐지).
+// 데모의 중계 형상 자체의 은퇴(설명 경로를 proxy-site behavior 로 분리)는 후속 재배선 PR 소관이라,
+// 이 서버는 당분간 헤더 없는 단순 프록시 + 폴백 처리로 남는다.
 // 시세(/api/broker/quotes)도 같은 전제로 이 레이어가 외부 소스(토스증권 공식 Open API)를
 // 프록시한다 — 시세는 증권사 자체 데이터. 키 미설정이면 스냅샷 폴백으로 동작한다.
 // 의존성 0 — node:20 내장 http/fetch 만 사용.
@@ -25,11 +25,6 @@ const QUOTES_ENABLED = Boolean(TOSS_CLIENT_ID && TOSS_CLIENT_SECRET);
 const QUOTES_CACHE_MS = 7000; // 새로고침 연타·관객 다수에도 상류 호출은 7초 1회
 // 폴백 스냅샷이 곧 종목(검색 전체·관심종목=앞 4종)·지수 유니버스다 — 종목명·ETF 여부는 여기서, 숫자만 실시간 소스에서 온다.
 const QUOTES_FALLBACK = JSON.parse(fs.readFileSync(path.join(__dirname, 'quotes-fallback.json'), 'utf8'));
-
-// 데모용 고객 해시 — 실제 해시 생성 규칙·salt는 증권사 관리 영역(ADR-0013, 벤더 불관여).
-// 원본 고객 ID/계좌번호는 Publication API로 절대 전달하지 않는다.
-const DEMO_CUSTOMER_HASH = 'demo-c7f3a91b2e';
-const CHANNEL = 'MTS';
 
 // 계약 권장: 5xx·통신 실패는 폴백 문구로 처리해 설명 미제공이 고객 화면 오류로 보이지 않게 한다.
 const FALLBACK_MESSAGE = 'AI 분석을 일시적으로 불러올 수 없습니다. 잠시 후 다시 확인해 주세요.';
@@ -57,10 +52,7 @@ async function getAiAnalysis(ticker, tradeDate) {
   }
   let res;
   try {
-    res = await fetch(upstream, {
-      headers: { 'X-Customer-Hash': DEMO_CUSTOMER_HASH, 'X-Channel': CHANNEL },
-      signal: AbortSignal.timeout(5000),
-    });
+    res = await fetch(upstream, { signal: AbortSignal.timeout(5000) });
   } catch (err) {
     console.warn('[mock-broker] Publication API 호출 실패', err.message);
     return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
