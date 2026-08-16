@@ -18,7 +18,7 @@
 
 **feature/\* · fix/\* → dev: Squash 머지**
 - PR 하나 = 커밋 하나 = 되돌릴 수 있는 단위. PR 내부 중간 커밋은 `dev`에 남기지 않는다.
-- Squash 시 **PR 제목이 최종 커밋 메시지**가 되므로 Conventional Commits 형식([[0003-branch-strategy]], [README.md](../../README.md))을 정확히 따른다.
+- Squash 시 **PR 제목이 최종 커밋 메시지**가 되므로 Conventional Commits 형식([[0003-branch-strategy]], [git-conventions.md](../git-conventions.md))을 정확히 따른다.
 - 머지 후 feature/fix 브랜치는 **삭제**한다. 브랜치가 일회용이라 발산이 생기지 않는다.
 
 **dev → main: Merge commit (`--no-ff`), PR 필수**

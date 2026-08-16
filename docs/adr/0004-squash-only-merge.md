@@ -13,7 +13,7 @@ PR 안의 중간 커밋(작업 흔적)이 통합 브랜치 히스토리를 어�
 ## 결정
 **Squash 머지만 허용한다.** Merge commit·Rebase 머지는 사용하지 않는다.
 - PR 하나 = 커밋 하나 = 되돌릴 수 있는 단위.
-- Squash 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제목은 Conventional Commits 형식([[0003-branch-strategy]]와 함께 [README.md](../../README.md) 참고)을 정확히 따른다.
+- Squash 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제목은 Conventional Commits 형식([[0003-branch-strategy]]와 함께 [git-conventions.md](../git-conventions.md) 참고)을 정확히 따른다.
 - GitHub 저장소 설정에서 Squash만 켜고 나머지 머지 방식은 끈다(4단계 규칙 강제 시).
 
 ## 대안

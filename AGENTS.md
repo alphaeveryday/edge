@@ -62,11 +62,11 @@ If you genuinely think a convention is harmful, surface it. Don't fork silently.
 Default to surfacing uncertainty, not hiding it.
 
 ## Git Workflow
-- Full convention lives in README.md ("Git 컨벤션") — branch strategy, commit/PR title, merge policy. That is the SSOT.
+- Full convention lives in docs/git-conventions.md — branch strategy, commit/PR title, merge policy. That is the SSOT.
 - Hard rule: never commit or PR directly to `main`. Branch ladder is `feature/*`·`fix/*` → `dev` → `main`. Open PRs against `dev` (except a `dev` → `main` release PR).
-- Jira issue key: put it in the branch name (`feature/<KEY>-slug`) and reference it in the commit/PR footer as `Refs: <KEY>`. Keep the title pure Conventional Commits — the key lives only in the footer. For squash merges put `Refs:` at the bottom of the PR description (the PR template does this). Details in README.
+- Jira issue key: put it in the branch name (`feature/<KEY>-slug`) and reference it in the commit/PR footer as `Refs: <KEY>`. Keep the title pure Conventional Commits — the key lives only in the footer. For squash merges put `Refs:` at the bottom of the PR description (the PR template does this). Details in docs/git-conventions.md.
 - Issue-first: feat/fix work requires a Jira issue (key required on the branch). Trivial docs/chore with no issue may be keyless (omit the `Refs:` footer). Branch types are only `feature/*`·`fix/*` — the prefix marks work nature, the commit `type` marks each change. Tracker is Jira; do not add GitHub issue templates.
-- Parallel work: concurrent sessions/branches must each use their own `git worktree` (never share one checkout — branches and working trees entangle) and take non-overlapping tickets/work units. Details in README "Git 컨벤션 › 병렬 작업".
+- Parallel work: concurrent sessions/branches must each use their own `git worktree` (never share one checkout — branches and working trees entangle) and take non-overlapping tickets/work units. Details in docs/git-conventions.md "병렬 작업".
 
 ## Instruction File Convention
 - AGENTS.md is the single source of truth (SSOT) for agent instructions.
@@ -74,6 +74,6 @@ Default to surfacing uncertainty, not hiding it.
   `@AGENTS.md` line) only when a folder genuinely needs its own instructions.
   Do not add them to every folder.
 - Nested files contain folder-specific content only. Do not copy root rules into them.
-- A per-module README (e.g. `src/apps/foo/README.md`) is added only when that package has non-obvious local concerns (its own build/run steps, env, quirks). Module roles live in the root README — do not duplicate.
+- A per-module README (e.g. `src/apps/foo/README.md`) is added only when that package has non-obvious local concerns (its own build/run steps, env, quirks). Module roles live in docs/repo-structure.md — do not duplicate.
 - `.claude/skills` and `.claude/rules` hold Claude-specific executable units, not prose that restates AGENTS.md. Do not put competing instructions in `.claude/rules`; AGENTS.md stays the SSOT.
 - Harness change history (what changed under `.claude/skills` and why) lives in `.claude/harness-changelog.md`. Not in CLAUDE.md — that file is always loaded into context, so keep it thin (ADR-0002). Not in `docs/` — that is the design-knowledge SSOT, and tooling history is neither design knowledge nor an operating rule.

@@ -1,6 +1,6 @@
 # data-pipeline
 
-> 역할/아키텍처는 루트 [README](../../../../README.md)·[docs/context.md](../../../../docs/context.md)가 SSOT.
+> 역할/아키텍처는 [docs/repo-structure.md](../../../../docs/repo-structure.md)·[docs/context.md](../../../../docs/context.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 >
 > 현재 범위는 **수집 설정 관리 + 원본저장(Step1)** — FMP(미국) 뉴스·가격(OHLCV 일봉)·

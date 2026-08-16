@@ -6,13 +6,13 @@ description: edge 저장소에서 git/Jira가 얽힌 모든 작업 요청에 반
 # pr-cycle — 티켓 한 장의 Git 작업 사이클
 
 티켓 하나를 이슈 확인 → 브랜치 → 커밋 → PR → Squash 머지 → 이슈 전환까지 거버넌스 위반 없이 가져간다.
-규칙의 SSOT는 루트 [README.md](../../../README.md)의 "Git 컨벤션"이다 — 이 스킬과 README가 충돌하면 README를 따르고, 이 스킬의 갱신을 제안하라.
+규칙의 SSOT는 [docs/git-conventions.md](../../../docs/git-conventions.md)다 — 이 스킬과 그 문서가 충돌하면 문서를 따르고, 이 스킬의 갱신을 제안하라.
 
 ## Phase 0 — 컨텍스트 확인
 
 `git branch --show-current`와 `git status`·`git worktree list`, 필요 시 `gh pr list --head <브랜치>`로 현재 위치를 파악하고 모드를 정한다.
 
-**점유 감지 — 모드 판정보다 먼저.** 지금 보이는 브랜치·미커밋 변경이 **이 세션의 것인지**부터 가린다. 다음 중 하나면 병렬 상황이다 — ① 이 사이클과 무관한 `feature/*`·`fix/*` 가 체크아웃돼 있거나 무관한 미커밋 변경이 있다(다른 세션이 이 체크아웃을 점유 중일 수 있다), ② `git worktree list` 에 **현재 작업 폴더도 메인 체크아웃도 아닌** worktree 가 보인다(다른 세션이 이미 병렬 진행 중). 병렬 상황에서 공유 체크아웃 위에서 `git switch`·커밋을 하면 상대 세션의 브랜치 전환·파일 저장과 섞여 **커밋이 엉키고 작업이 유실**된다(README "병렬 작업"). 이 체크아웃을 건드리지 말고 **2단계의 worktree 분기**로 사이클을 시작한다. 단, **이 사이클의 브랜치가 이미 체크아웃된 폴더**(메인 체크아웃이든 자기 worktree 든)가 있으면 병렬이어도 정상 재진입이다 — 새 폴더를 만들지 말고 그 폴더에서 모드 표대로 이어간다(같은 브랜치의 이중 체크아웃은 git 이 막는다). 내 잔재인지 남의 진행분인지 판단이 안 서면 사용자에게 확인한다.
+**점유 감지 — 모드 판정보다 먼저.** 지금 보이는 브랜치·미커밋 변경이 **이 세션의 것인지**부터 가린다. 다음 중 하나면 병렬 상황이다 — ① 이 사이클과 무관한 `feature/*`·`fix/*` 가 체크아웃돼 있거나 무관한 미커밋 변경이 있다(다른 세션이 이 체크아웃을 점유 중일 수 있다), ② `git worktree list` 에 **현재 작업 폴더도 메인 체크아웃도 아닌** worktree 가 보인다(다른 세션이 이미 병렬 진행 중). 병렬 상황에서 공유 체크아웃 위에서 `git switch`·커밋을 하면 상대 세션의 브랜치 전환·파일 저장과 섞여 **커밋이 엉키고 작업이 유실**된다(docs/git-conventions.md "병렬 작업"). 이 체크아웃을 건드리지 말고 **2단계의 worktree 분기**로 사이클을 시작한다. 단, **이 사이클의 브랜치가 이미 체크아웃된 폴더**(메인 체크아웃이든 자기 worktree 든)가 있으면 병렬이어도 정상 재진입이다 — 새 폴더를 만들지 말고 그 폴더에서 모드 표대로 이어간다(같은 브랜치의 이중 체크아웃은 git 이 막는다). 내 잔재인지 남의 진행분인지 판단이 안 서면 사용자에게 확인한다.
 
 아래 모드 표는 현재 폴더(메인 체크아웃 또는 자기 worktree)의 상태가 **이 세션 자신의 것일 때** 적용한다:
 
@@ -48,7 +48,7 @@ git switch -c feature/<이슈키>-<슬러그>   # 버그면 fix/
 git push -u origin <브랜치>
 ```
 
-**worktree 분기 (병렬일 때):** Phase 0 점유 감지에 걸렸으면 같은 체크아웃에서 `git switch` 하지 않고 폴더를 분리한다 (worktree 규약·정리 명령은 README "병렬 작업"이 SSOT). 새 사이클과 기존 사이클 재진입(진행 중·PR 보완 모드)의 형태가 다르다:
+**worktree 분기 (병렬일 때):** Phase 0 점유 감지에 걸렸으면 같은 체크아웃에서 `git switch` 하지 않고 폴더를 분리한다 (worktree 규약·정리 명령은 docs/git-conventions.md "병렬 작업"이 SSOT). 새 사이클과 기존 사이클 재진입(진행 중·PR 보완 모드)의 형태가 다르다:
 
 ```bash
 git fetch origin
@@ -106,7 +106,7 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
     ```
   - "no checks reported" 로 끝나면 통과가 아니라 **워크플로가 아예 안 돈 것**이다(Actions 한도 소진기 push 는 job 이 시작되지 않고 소급 실행도 없다). 왜 안 돌았는지 확인 전에는 머지하지 않는다.
 - `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계) 통과 + 위 체크 전건 통과면 **확인 없이 실행한다** — 그 둘이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
-- **마이그레이션 단조성 재확인 (머지 직전, 브랜치에 `src/libs/schema/migrations-*` 신규 파일이 있을 때만)** — CI 의 단조성 guard 는 체크 시점 base 기준이라 병렬 PR 머지 경합에서 역행 착지 창이 열린다(README "스키마 마이그레이션 머지 게이트", ALPHA-623 실증). `git fetch origin dev` 후 신규 버전이 최신 `origin/dev` 해당 세트의 최고 버전보다 큰지 확인한다:
+- **마이그레이션 단조성 재확인 (머지 직전, 브랜치에 `src/libs/schema/migrations-*` 신규 파일이 있을 때만)** — CI 의 단조성 guard 는 체크 시점 base 기준이라 병렬 PR 머지 경합에서 역행 착지 창이 열린다(docs/git-conventions.md "스키마 마이그레이션 머지 게이트", ALPHA-623 실증). `git fetch origin dev` 후 신규 버전이 최신 `origin/dev` 해당 세트의 최고 버전보다 큰지 확인한다:
   ```bash
   git fetch origin dev --quiet
   git ls-tree -r --name-only origin/dev -- src/libs/schema/migrations-cloud/ | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1   # onprem 세트도 동일
@@ -114,7 +114,7 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
   역행이면 머지하지 말고 **전방 리네임**(내용 그대로 더 큰 버전, 버전 인용 주석·테스트 경로 동반 갱신 + `src/libs/schema/rename-recovery.allowlist` 에 쌍 선언 — guard 는 선언된 리네임만 허용) 후 4단계 게이트부터 재진입한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
 - **worktree 사이클이면 `--delete-branch` 를 뺀다** — gh 가 로컬 브랜치를 지우려고 base(`dev`)로 전환을 시도하는데 `dev` 는 메인 체크아웃이 잡고 있어 실패한다. 머지 후 원격 브랜치는 `git push origin --delete <브랜치>` 로 지우고, 로컬 브랜치·폴더는 8단계에서 정리한다.
-- `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(README의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
+- `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(docs/git-conventions.md의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
 
 ## 8. 사이클 마감
 

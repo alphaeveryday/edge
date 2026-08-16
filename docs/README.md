@@ -2,7 +2,7 @@
 
 이 디렉토리는 시스템의 **설계 지식** — 제품 컨텍스트, 구조, 데이터 계약, 결정 기록 — 의 **단일 출처(SSOT)** 다.
 여기 문서와 다른 문서·발표 자료가 충돌하면 이 디렉토리가 기준이다. **변경은 PR 리뷰 필수** — docs/를 리뷰 없는 직접 커밋으로 고치지 않는다.
-운영 규칙(브랜치·커밋·머지)은 docs가 아니라 루트 [README.md](../README.md)·[AGENTS.md](../AGENTS.md)에 둔다.
+운영 규칙(브랜치·커밋·머지)은 [git-conventions.md](git-conventions.md)·[AGENTS.md](../AGENTS.md)에 둔다.
 
 > **적용 시점**: 2026-07 아키텍처 피벗 이후 ([adr/0010](adr/0010-hybrid-onprem-pivot.md)). 이 디렉토리와 충돌하는 기존 문서(Cloud-only / embed widget 구조)는 전부 폐기된 방향이다.
 
@@ -11,6 +11,8 @@
 | 문서 | 무엇을 담나 | 언제 보나 |
 |---|---|---|
 | [context.md](context.md) | 제품 정의·변경 배경, 기존 vs 신규, 하이브리드 아키텍처 개요, Cloud/On-Prem 책임 분리, 서비스/API 변경표 | 전체 그림을 잡을 때 (필독) |
+| [repo-structure.md](repo-structure.md) | 저장소 구조 — 모노레포 트리·워크스페이스·apps/libs 역할표·데이터 흐름 (구 루트 README 본문) | 모듈 위치·역할이 헷갈릴 때 |
+| [git-conventions.md](git-conventions.md) | Git 컨벤션 SSOT — 브랜치 전략·커밋/PR 제목·머지 정책·worktree (구 루트 README 본문) | 브랜치·커밋·PR·머지 전 |
 | [scope.md](scope.md) | MVP 제외 범위 (명시적 아웃) | 기능 범위가 헷갈릴 때 |
 | [implementation.md](implementation.md) | 구현 결정 현행 스펙 — 코드베이스, 데모 토폴로지, Rule 배포 경로, DB 변경 절차, 현행 CD | 구현·배포·스키마를 바꾸기 전 |
 | [roadmap.md](roadmap.md) | MVP 이후 확장 가능 영역 | "이건 지금인가 나중인가" 판단 시 |
@@ -54,7 +56,7 @@
 
 ## 무엇을 어디에 두나
 - 설계·결정·계약 → `docs/` (새 문서는 위 지도에 등록).
-- 운영 규칙(브랜치/커밋/머지) → 루트 README / AGENTS가 SSOT.
+- 운영 규칙(브랜치/커밋/머지) → [git-conventions.md](git-conventions.md)가 SSOT (AGENTS.md 는 요약·경성 규칙만).
 - 결정은 ADR로 증류한다 — 회의록·PRD 원본은 레포에 두지 않는다.
 
 ## 원문 이관 기록 (2026-07-13)
