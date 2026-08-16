@@ -17,7 +17,7 @@
 **변경 배경**:
 
 - 기존 구조는 모든 기능을 Vendor Cloud에 두고 증권사 MTS/HTS에 임베드 widget을 제공하는 방식이었다 (widget-api, 클라우드 tenant-console-api, 범용 gateway, Super Admin의 API Key 관리 포함).
-- 금융권 고객 데이터 비반출 요구와 준법감시인 통제 요구를 충족하기 위해, **고객 접점·컴플라이언스·검수·노출 이력을 전부 증권사 On-Premise로 이동**하는 하이브리드 구조로 전환했다.
+- 금융권 고객 데이터 비반출 요구와 준법감시인 통제 요구를 충족하기 위해, **고객 접점·컴플라이언스·검수를 전부 증권사 On-Premise로 이동**하는 하이브리드 구조로 전환했다(구 노출 이력 축은 이후 [ADR-0053](adr/0053-widget-direct-serving-no-personalization.md)으로 폐지).
 - **규제 서사 (2026-07-13 재정렬)**: 2026년 망분리 규제 완화 흐름(4월 SaaS 망분리 예외 시행세칙 시행, 6월 보안 목적 생성형 AI 비조치의견서 발급, 일정 보안역량 충족 금융회사 대상 전면 해제 방안 검토 중 — 시한은 당국 미공표)으로 "클라우드는 승인이 어려우니 온프렘"이라는 회피 논거는 시효가 짧아지고 있다. EDGE의 온프렘 배치 근거는 규제 회피가 아니라 다음 두 가지다: ① 개인신용정보를 직접 처리하는 핵심 시스템은 완화 이후에도 엄격한 통제가 유지된다 ② 규제 패러다임이 자율보안-결과책임으로 전환되면서 사고 책임은 금융사에 남으므로, 통제권·감사 재현성을 금융사 내부에 두는 구조 자체가 제품 가치다. 모든 대외 문서·발표에서 이 프레임을 사용한다.
 - MVP는 **국내 ETF 가격 변동 이유 설명 기능** 하나에 집중한다 (범위 확정: [adr/0024](adr/0024-scope-domestic-etf.md) — 물리 스키마는 미국 ETF 확장성 선반영).
 
@@ -39,7 +39,7 @@
 | 연동 방향 | 클라우드 → 증권사 (widget 서빙) | On-Prem Sync Agent(DMZ) → Cloud **Pull only** (outbound HTTPS/mTLS) |
 | Gateway | 범용 클라우드 gateway | 제거 — 공개 엣지는 ALB 직결(ADR-0032) |
 | API Key | Super Admin이 테넌트 API Key 관리 | API Key 메뉴 없음. Cloud Sync 인증서만 존재 |
-| 고객 데이터 | 클라우드 저장 (RLS 격리) | On-Prem에만 저장 (물리 격리) |
+| 고객 데이터 | 클라우드 저장 (RLS 격리) | 비수취 — 어느 플레인에도 저장하지 않음 ([ADR-0053](adr/0053-widget-direct-serving-no-personalization.md); 전환 당시는 On-Prem 물리 격리) |
 | 멀티테넌시 | 단일 스키마 PostgreSQL RLS | 테넌트별 On-Prem 물리 격리 (RLS 폐기, [implementation.md](implementation.md)) |
 
 **금지 사항 (불변 규칙)**:
