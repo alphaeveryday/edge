@@ -46,6 +46,12 @@ variable "console_domain" {
   default     = "demo-console.edgesignal.dev"
 }
 
+variable "publication_api_port" {
+  description = "publication-api 호스트 포트 — 설명 조회 직행 behavior(ADR-0053) 오리진. compose 의 PUBLICATION_API_PORT 와 일치해야 한다"
+  type        = number
+  default     = 8084
+}
+
 variable "console_port" {
   description = "검수 콘솔(tenant-console-ui nginx) 호스트 포트 — CloudFront 오리진이 프록시할 대상"
   type        = number

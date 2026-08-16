@@ -2,7 +2,7 @@
 
 `demo-onprem` EC2 박스(`infra/terraform/envs/demo-onprem`)가 compose 하나로 온프렘 런타임을 기동하기 위한 박스 전용 `docker-compose.yml`. 루트 `docker-compose.yml`(로컬 풀스택)의 **온프렘/데모 서브셋**만 떼어낸 것으로, 이미지는 ECR 을 참조하고 `sync-agent` 는 실 cloud(`sync-dev.edgesignal.dev`)를 outbound Pull 한다. 근거: ADR-0017·0033.
 
-관통 경로(고객경로): cloud 분석 → `tenant_delivery`(outbox) → **[sync 경계]** → `sync-agent` → `intake` → `screening-worker`(AUTO_PUBLISHED 자동 게시) → `publication-api` → `mock-broker` → MTS.
+관통 경로(고객경로): cloud 분석 → `tenant_delivery`(outbox) → **[sync 경계]** → `sync-agent` → `intake` → `screening-worker`(AUTO_PUBLISHED 자동 게시) → `publication-api` → MTS 위젯 직접 호출(CloudFront `/api/v1/*` behavior — ADR-0053, ALPHA-992; 시세·차트·정적은 `mock-broker`).
 
 ## 서비스 (9 컨테이너)
 
@@ -28,6 +28,7 @@ compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 
 | `ONPREM_DB_PASSWORD` | `edge` | 온프렘 PG 비밀번호(데모) |
 | `MOCK_BROKER_PORT` | `8080` | mock-broker 호스트 노출 포트(CloudFront 오리진) |
 | `CONSOLE_PORT` | `8090` | 검수 콘솔 호스트 노출 포트(CloudFront 오리진 — ALPHA-627) |
+| `PUBLICATION_API_PORT` | `8084` | publication-api 호스트 노출 포트(CloudFront 설명 조회 직행 behavior 오리진 — ADR-0053, ALPHA-992; terraform `publication_api_port` 와 일치) |
 | `CONSOLE_BOOTSTRAP_ADMIN_PASSWORD` | **필수(기본값 없음)** | 콘솔 관리자 부트스트랩 비번 — 공개 콘솔이라 미설정이면 compose 가 기동 거부(fail-loud) |
 | `CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD` | **필수(기본값 없음)** | 콘솔 검수자 부트스트랩 비번 — 위와 동일 |
 | `INTAKE_POLL_MS` / `SCREENING_POLL_MS` | `5000` | 폴링 주기(데모 시연용 짧게) |
@@ -88,7 +89,7 @@ docker compose exec postgres-onprem psql -U edge -d edge_onprem -c \
 - `build:` → `image:`(ECR). 박스는 소스 빌드 안 함.
 - `SPRING_PROFILES_ACTIVE` override 없음 → 이미지 기본 `prod` = ECS JSON 로깅(ALPHA-531). 로컬은 `""` 로 평문.
 - `sync-agent` 대상 = 실 cloud sync ALB(로컬은 컨테이너). trust store 미주입 dev 라 현재 평문 HTTPS — cert·인가는 후속.
-- cloud 서비스 없음(AWS 에 있음). 호스트 노출은 CloudFront 오리진 2개 — `mock-broker`(:8080)·`tenant-console-ui`(:8090, ALPHA-627) — 뿐이고 DB·앱 포트는 내부망만(공개 박스 표면 최소화).
+- cloud 서비스 없음(AWS 에 있음). 호스트 노출은 CloudFront 오리진 3개 — `mock-broker`(:8080)·`tenant-console-ui`(:8090, ALPHA-627)·`publication-api`(:8084, 설명 조회 직행 — ADR-0053) — 뿐이고 나머지 DB·앱 포트는 내부망만(공개 박스 표면 최소화, SG 는 셋 다 CloudFront origin-facing 프리픽스 한정).
 - 네트워크 3망 세분화(위 절) — 로컬 풀스택은 단일 기본 네트워크(ECS Service Connect 토폴로지 재현이 목적, 망분리 미적용).
 
 ## 이 문서의 범위 밖 (완료·후속 현황)

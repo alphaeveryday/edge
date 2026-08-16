@@ -170,8 +170,8 @@ services:
       - "18084:8080"
 
   # [demo] 증권사 엣지 프록시 자리(mock-broker) + 가상 MTS 정적 서빙.
-  # 화면 → mock-broker → publication-api 실 HTTP 2홉(헤더 없음 — ADR-0053). 중계 형상의
-  # 은퇴(설명 경로 proxy-site behavior 분리)는 데모 재배선 후속 PR 소관.
+  # 설명 조회(/api/v1/*)는 무변형 passthrough(로컬 엣지 스탠드인 — 박스에서는 CloudFront
+  # behavior 가 publication-api 직행, ADR-0053·ALPHA-992). 시세·차트는 /api/broker/*.
   mock-broker:
     build:
       context: ./demo

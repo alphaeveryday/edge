@@ -125,10 +125,14 @@ services:
       - data
 
   # MTS 위젯이 직접 호출하는 조회 표면(Published만·무헤더, ADR-0053) — 온프렘 PG 조회.
+  # 호스트 포트 공개는 CloudFront 설명 조회 직행 behavior 의 오리진 연결용(ALPHA-992) —
+  # SG 가 CloudFront origin-facing 프리픽스로만 인바운드를 연다(포트·behavior·SG 한 단위).
   publication-api:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/publication-api:${IMAGE_TAG:-0.1.0}
     container_name: edge-publication-api
     restart: unless-stopped
+    ports:
+      - "${PUBLICATION_API_PORT:-8084}:8080"
     depends_on:
       flyway-onprem:
         condition: service_completed_successfully

@@ -149,7 +149,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   description       = "all egress (ECR pull, cloud sync mTLS, SSM)"
 }
 
-# CloudFront 오리진 프리픽스 등에서만 mock-broker 포트로 인바운드. publication-api 는 비공개(내부 유지).
+# CloudFront 오리진 프리픽스 등에서만 mock-broker 포트로 인바운드.
 resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
   count             = length(var.ingress_prefix_list_ids)
   security_group_id = aws_security_group.this.id
@@ -158,6 +158,18 @@ resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
   from_port         = var.mock_broker_port
   to_port           = var.mock_broker_port
   description       = "mock-broker from allowed prefix list (e.g. CloudFront origin-facing)"
+}
+
+# publication-api 설명 조회 직행(ADR-0053, ALPHA-992) — CloudFront 오리진 프리픽스로만 인바운드.
+# 포트 공개는 behavior·SG 와 한 단위의 신뢰경계 변경이다(behavior 만 추가하면 오리진 연결이 없어 502).
+resource "aws_vpc_security_group_ingress_rule" "publication_from_prefix" {
+  count             = var.publication_api_port != null ? length(var.ingress_prefix_list_ids) : 0
+  security_group_id = aws_security_group.this.id
+  prefix_list_id    = var.ingress_prefix_list_ids[count.index]
+  ip_protocol       = "tcp"
+  from_port         = var.publication_api_port
+  to_port           = var.publication_api_port
+  description       = "publication-api direct serving from allowed prefix list (ADR-0053)"
 }
 
 # 검수 콘솔(tenant-console-ui) 포트 인바운드(ALPHA-627) — CloudFront 오리진 프록시 대상.
