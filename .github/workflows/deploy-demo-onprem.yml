@@ -118,15 +118,18 @@ jobs:
             [ "\$state" = running ] || fail=1
           done
           [ "\$fail" -eq 0 ] || { echo 'ERROR: 일부 온프렘 서비스가 running 이 아님(crash-loop 의심)'; exit 1; }
-          # 설명 조회 직행 오리진 스모크(ADR-0053, ALPHA-992) — CloudFront behavior 가 향하는
-          # 호스트 포트(8084 = terraform publication_api_port 기본값)가 실제로 응답하는지 박스
-          # 안에서 단언한다. running 검사만으로는 박스 .env 가 PUBLICATION_API_PORT 를 다른
-          # 값으로 덮어 behavior 목적지와 어긋난 경우를 못 잡는다 — 그래서 .env 가 아니라
-          # behavior 목적지(8084)를 본다. 200(게시분 있음)·204(없음) 둘 다 정상, 그 외·연결
-          # 실패는 배포 실패다.
-          code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 localhost:8084/api/v1/explanations/069500 || echo 000)"
+          # 설명 조회 직행 오리진 스모크(ADR-0053, ALPHA-992) — compose 가 실제로 공개한
+          # publication-api 호스트 포트가 응답하는지 박스 안에서 단언한다(running 검사는
+          # 포트 미공개·기동 직후 미응답을 못 잡는다). 포트는 compose 와 같은 원천(.env,
+          # 없으면 기본 8084)에서 읽는다 — 비기본 포트 정상 구성도 지원한다. 한계: terraform
+          # publication_api_port(CloudFront behavior 목적지)와 .env 가 서로 어긋난 구성은 박스
+          # 안에서 판별 불가 — 두 값의 일치 요구는 demo/onprem/README 가 명시한다. 200(게시분
+          # 있음)·204(없음) 둘 다 정상, 그 외·연결 실패는 배포 실패다.
+          smoke_port="\$(grep -s '^PUBLICATION_API_PORT=' .env | cut -d= -f2)"
+          code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "localhost:\${smoke_port:-8084}/api/v1/explanations/069500" || echo 000)"
           echo "publication-api direct origin smoke: \$code"
-          case "\$code" in 200|204) ;; *) echo 'ERROR: publication-api 직행 오리진 스모크 실패(포트 불일치·기동 실패 의심)'; exit 1;; esac
+          # case 문을 안 쓰는 이유: heredoc 이 \$( ) 안에 있어 짝 안 맞는 괄호가 조립을 깨뜨린다(bash 함정).
+          if [ "\$code" != 200 ] && [ "\$code" != 204 ]; then echo 'ERROR: publication-api 직행 오리진 스모크 실패(포트 불일치·기동 실패 의심)'; exit 1; fi
           BOX
           )"
 
