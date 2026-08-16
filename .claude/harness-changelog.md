@@ -1,6 +1,6 @@
 # 하네스 변경 이력
 
-`CLAUDE.md` 의 하네스(pr-cycle·edge-review·docs-sync·codex-review-loop) 구성이 언제·왜 바뀌었는지 기록한다. 규약 본문은 [CLAUDE.md](../CLAUDE.md), Git 컨벤션 SSOT 는 [README.md](../README.md) 다.
+`CLAUDE.md` 의 하네스(pr-cycle·edge-review·docs-sync·codex-review-loop) 구성이 언제·왜 바뀌었는지 기록한다. 규약 본문은 [CLAUDE.md](../CLAUDE.md), Git 컨벤션 SSOT 는 [docs/git-conventions.md](../docs/git-conventions.md) 다.
 
 | 날짜 | 변경 내용 | 대상 | 사유 |
 |------|----------|------|------|

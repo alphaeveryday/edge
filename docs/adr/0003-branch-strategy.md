@@ -15,7 +15,7 @@
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`.
 - 릴리스는 `dev → main` 머지 후 `main`에 태그.
 
-운영 규칙 본문은 [README.md](../../README.md)의 "Git 컨벤션"이 SSOT.
+운영 규칙 본문은 [git-conventions.md](../git-conventions.md)가 SSOT.
 
 ## 대안
 - **GitHub Flow(main + feature만)** — 통합 검증 지점이 없고, 다수 변경이 곧장 main으로 향해 위험하다.

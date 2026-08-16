@@ -6,7 +6,7 @@ description: edge 저장소에서 git/Jira가 얽힌 모든 작업 요청에 반
 # pr-cycle — 티켓 한 장의 Git 작업 사이클
 
 티켓 하나를 이슈 확인 → 브랜치 → 커밋 → PR → Squash 머지 → 이슈 전환까지 거버넌스 위반 없이 가져간다.
-규칙의 SSOT는 루트 [README.md](../../../README.md)의 "Git 컨벤션"이다 — 이 스킬과 README가 충돌하면 README를 따르고, 이 스킬의 갱신을 제안하라.
+규칙의 SSOT는 [docs/git-conventions.md](../../../docs/git-conventions.md)다 — 이 스킬과 그 문서가 충돌하면 문서를 따르고, 이 스킬의 갱신을 제안하라.
 
 ## Phase 0 — 컨텍스트 확인
 
