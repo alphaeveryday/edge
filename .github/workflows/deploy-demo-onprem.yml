@@ -127,10 +127,17 @@ jobs:
           # 있음)·204(없음) 둘 다 정상, 그 외·연결 실패는 배포 실패다.
           # dotenv 관용 표기 수용: 마지막 정의 승리(compose 동일), 값은 숫자만 추출(따옴표·공백 무시).
           smoke_port="\$(grep -s '^ *PUBLICATION_API_PORT *=' .env | tail -n1 | sed 's/[^0-9]//g')"
-          code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "localhost:\${smoke_port:-8084}/api/v1/explanations/069500" || echo 000)"
-          echo "publication-api direct origin smoke: \$code"
+          # 재시도 창 필수 — running 은 리스닝이 아니다: Boot 기동(t3.small ~30-60s)이 끝나기 전
+          # 1회 curl 은 연결 실패(000)로 정상 배포를 실패 처리한다(2026-08-17 run 31966196183 실측).
           # case 문을 안 쓰는 이유: heredoc 이 \$( ) 안에 있어 짝 안 맞는 괄호가 조립을 깨뜨린다(bash 함정).
-          if [ "\$code" != 200 ] && [ "\$code" != 204 ]; then echo 'ERROR: publication-api 직행 오리진 스모크 실패(포트 불일치·기동 실패 의심)'; exit 1; fi
+          code=000
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "localhost:\${smoke_port:-8084}/api/v1/explanations/069500")" || code=000
+            echo "publication-api direct origin smoke try \$i: \$code"
+            if [ "\$code" = 200 ] || [ "\$code" = 204 ]; then break; fi
+            sleep 10
+          done
+          if [ "\$code" != 200 ] && [ "\$code" != 204 ]; then echo 'ERROR: publication-api 직행 오리진 스모크 실패(2분 재시도 후에도 미응답 — 포트 불일치·기동 실패 의심)'; exit 1; fi
           BOX
           )"
 
