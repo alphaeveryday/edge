@@ -50,7 +50,7 @@
 
 ### 2-7. CI/CD
 
-<!-- TODO: self-hosted 러너, 자작 게이트(PR 타이틀·스키마 단조성·ERD 대조), SSM 배포 -->
+<!-- TODO: 러너 왕복 이력(hosted↔self-hosted, 현재 GitHub-hosted), 자작 게이트(PR 타이틀·스키마 단조성·ERD 대조), SSM 배포 -->
 
 ### 2-8. 설계 결정 기록(ADR)
 
