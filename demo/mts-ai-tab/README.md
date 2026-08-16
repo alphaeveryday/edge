@@ -22,7 +22,7 @@ PORT=18090 node demo/mock-broker/server.js
 
 ## 구조 — 계약의 신뢰경계 재현
 
-[docs/contracts/publication-api.md](../../docs/contracts/publication-api.md)의 원칙(MTS는 Publication API를 직접 호출하지 않는다)을 실 HTTP 홉으로 재현한다 (ADR-0035 런타임 경로).
+현행 데모는 mock-broker 중계 형상이다 — 표준은 위젯 직접 호출(동일 오리진 프록시 경유, [ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md))이며 설명 경로 재배선은 후속 PR 소관이다.
 
 ```
 app.js (MTS 3화면 — 홈·검색·종목상세)

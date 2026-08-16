@@ -98,11 +98,13 @@ class ExplanationControllerTest {
 	}
 
 	@Test
-	void 폐지된_헤더를_보내도_무시되고_정상_동작한다() throws Exception {
+	void 폐지된_헤더는_값과_무관하게_무시되고_정상_동작한다() throws Exception {
 		// WHY: ADR-0053 전환기 — 구 계약(X-Customer-Hash·X-Channel)으로 호출하던 소비자가
-		// 헤더를 아직 보내더라도 400 이 아니라 정상 서빙이어야 한다(헤더는 읽지 않고 무시).
+		// 헤더를 아직 보내더라도 400 이 아니라 정상 서빙이어야 한다. 구 검증이 거부하던
+		// 값(공백 해시·허용값 밖 채널)까지 200 이어야 "읽지 않고 무시" 계약이 고정된다 —
+		// 선택적 헤더 검증이 재도입되면 이 테스트가 깨진다.
 		mvc.perform(get("/api/v1/explanations/069500")
-						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
+						.header("X-Customer-Hash", " ").header("X-Channel", "APP"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.publication_id").value("1"));
 	}

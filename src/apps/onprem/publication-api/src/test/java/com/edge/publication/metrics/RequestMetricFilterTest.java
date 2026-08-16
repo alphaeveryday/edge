@@ -155,6 +155,14 @@ class RequestMetricFilterTest {
 	}
 
 	@Test
+	void 미매칭_API_경로는_기록하지_않는다() throws Exception {
+		// 인증 없는 공개 표면의 메트릭 자체 상한(ADR-0053) — 임의 /api/** 플러딩이 행으로
+		// 적재되면 엣지 rate limit 이 뚫리는 순간 DB 쓰기가 무한하다. 매핑된 라우트만 기록한다.
+		mvc.perform(get("/api/no/such/route")).andExpect(status().isNotFound());
+		assertThat(metrics.saved).isEmpty();
+	}
+
+	@Test
 	void 미처리_예외는_200_이_아니라_500_으로_기록된다() throws Exception {
 		// advice 밖으로 새는 예외는 컨테이너 ERROR dispatch 로 500 이 된다 — 래퍼 기본
 		// 상태(200)를 기록하면 실패 요청이 성공으로 적재돼 Dashboard 에러율이 왜곡된다.
@@ -162,6 +170,12 @@ class RequestMetricFilterTest {
 				.standaloneSetup(new ExplanationController(
 						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+					// 미매칭 미기록(ADR-0053) 도입 후 기록의 전제는 매핑 성립 — 실 운영에서
+					// 컨트롤러 예외는 DispatcherServlet 이 매핑 후 던지므로 속성이 있다. 그
+					// 상황을 재현한다(매핑 전 필터 예외는 미매칭이라 기록 제외가 맞다).
+					request.setAttribute(
+							org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+							"/api/v1/explanations/{etfTicker}");
 					throw new RuntimeException("boom");
 				})
 				.build();
@@ -180,6 +194,10 @@ class RequestMetricFilterTest {
 		// 요청을 500 으로 또 적재해 트래픽 수·에러율이 함께 왜곡된다 — 기록은 요청당 1회다.
 		MockHttpServletRequest request =
 				new MockHttpServletRequest("GET", "/api/v1/explanations/069500");
+		// 기록의 전제 = 매핑 성립(미매칭 미기록, ADR-0053) — MVC 밖 단위 재현이라 직접 채운다.
+		request.setAttribute(
+				org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+				"/api/v1/explanations/{etfTicker}");
 		HttpServletResponse broken = new HttpServletResponseWrapper(new MockHttpServletResponse()) {
 			@Override
 			public jakarta.servlet.ServletOutputStream getOutputStream() {
@@ -205,6 +223,9 @@ class RequestMetricFilterTest {
 				.standaloneSetup(new ExplanationController(
 						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+					request.setAttribute(
+							org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+							"/api/v1/explanations/{etfTicker}");
 					HttpServletResponse res = (HttpServletResponse) response;
 					res.setStatus(400);
 					res.setContentType("application/json");

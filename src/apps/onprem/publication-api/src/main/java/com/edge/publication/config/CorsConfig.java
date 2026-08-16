@@ -19,6 +19,12 @@ public class CorsConfig implements WebMvcConfigurer {
 
 	public CorsConfig(@Value("${publication.cors.allowed-origins:}") List<String> allowedOrigins) {
 		this.allowedOrigins = allowedOrigins.stream().filter(o -> !o.isBlank()).toList();
+		if (this.allowedOrigins.stream().anyMatch(o -> o.contains("*"))) {
+			// 와일드카드는 "위젯 오리진만 등록" 계약을 설정 실수 하나로 무너뜨린다 —
+			// 조용히 열지 않고 기동을 막아 드러낸다(Rule 12).
+			throw new IllegalArgumentException(
+					"publication.cors.allowed-origins 는 구체 오리진만 허용한다 — 와일드카드(*) 금지 (ADR-0053)");
+		}
 	}
 
 	@Override
