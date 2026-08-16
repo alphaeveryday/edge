@@ -1,7 +1,7 @@
 # publication-api 부하 baseline 측정 절차 (ALPHA-496)
 
 로컬 compose 스택의 publication-api 를 대상으로 조회 폭증 시나리오의 baseline 을 측정한다.
-개선(ALPHA-433 캐시·ALPHA-434 Exposure Log) 전후 비교의 측정 기반이므로, **같은 절차로 재측정 가능해야 한다** — 절차를 바꾸면 이 문서를 갱신한다.
+개선(ALPHA-433 캐시) 전후 비교의 측정 기반이므로, **같은 절차로 재측정 가능해야 한다** — 절차를 바꾸면 이 문서를 갱신한다. (구 ALPHA-434 Exposure Log 개선 축은 ADR-0053 의 exposure_log 폐지로 사문.)
 
 ## 왜 이 시나리오인가
 
