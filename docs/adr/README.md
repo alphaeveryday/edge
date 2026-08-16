@@ -60,3 +60,4 @@
 | [0050](0050-console-facts-endpoint.md) | 콘솔 규칙 엔진의 사실 공급 — 엔드포인트는 사실만, 평가는 클라이언트 | 승인됨 |
 | [0051](0051-byoc-deployment-topology.md) | BYOC 배포 토폴로지 — 증권사 클라우드 사상, 단계형 구성과 승격 조건 | 승인됨 |
 | [0052](0052-sync-two-module-standard-reaffirmed.md) | Sync 온프렘 토폴로지 재검토 — 클라우드 사상에서도 2모듈 표준 유지, 근거 재정초 | 승인됨 |
+| [0053](0053-widget-direct-serving-no-personalization.md) | 고객 컨텍스트 제거 — MTS 위젯 직접 호출, Exposure Log 은퇴 | 제안됨 |
