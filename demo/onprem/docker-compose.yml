@@ -147,9 +147,10 @@ services:
       - data
       - serving
 
-  # 증권사 자체 제작 API(mock-broker) + 가상 MTS 정적 서빙. 화면 → mock-broker → publication-api 2홉.
-  # 호스트 노출(CloudFront 오리진) — 정적(mts-ai-tab, 이미지 내장)+API 를 모두 서빙(ALPHA-632).
-  # SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
+  # 가상 MTS 정적 서빙 + 시세·차트 API(mock-broker). 설명 조회는 이 컨테이너를 거치지 않는다 —
+  # CloudFront /api/v1/* behavior 가 publication-api(:8084)로 직행한다(ADR-0053, ALPHA-992;
+  # 이 컨테이너의 /api/v1 passthrough 는 엣지 없는 로컬 compose 전용 스탠드인).
+  # 호스트 노출(CloudFront 오리진), SG 인바운드=CloudFront 프리픽스(demo-onprem 모듈).
   mock-broker:
     image: ${IMAGE_REGISTRY:-393229433969.dkr.ecr.ap-northeast-2.amazonaws.com}/edge/mock-broker:${IMAGE_TAG:-0.1.0}
     container_name: edge-mock-broker

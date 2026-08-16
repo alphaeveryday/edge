@@ -76,10 +76,11 @@ module "demo_onprem" {
 # 가상 MTS 페이지 — mock-broker(:8080)가 정적(mts-ai-tab, 이미지에 내장)+시세·차트 API 를
 # 서빙하고, 설명 조회(/api/v1/*)만 별도 behavior 로 publication-api 에 직행한다(ADR-0053 —
 # 위젯 직접 호출의 동일 오리진 프록시 표준형, 쿠키·인증 헤더 strip).
-# ⚠️ 알고 수용: 엣지 rate limit(WAF)은 데모에 두지 않는다 — ADR-0053 이 "공개 노출의 필수
-# 전제"로 명시한 것은 실납품 계약 축이고, 데모는 종전(mock-broker 중계 시절)에도 같은 표면이
-# 무제한 공개였어 신규 위험이 아니다. 서버 측 자체 상한(미매칭 미기록)은 publication-api 에
-# 있다. 실 트래픽 이상 징후 시 WAF rate rule 을 이 distribution 에 후속 부착한다.
+# ⚠️ 알고 수용: 엣지 rate limit(WAF)은 데모에 두지 않는다 — ADR-0053 의 "공개 노출의 필수
+# 전제"는 실납품 계약 축이고, 데모는 종전(mock-broker 중계 시절)에도 같은 표면이 무제한
+# 공개였어 신규 위험이 아니다. 유효 경로 플러딩의 serving_request_metric 행 적재는 **남는
+# 위험이며**(publication-api 의 자체 상한은 미매칭 경로만 거른다) 데모 트래픽 규모·상시
+# 과금 회피로 수용한다. 실 트래픽 이상 징후 시 WAF rate rule 을 이 distribution 에 부착한다.
 # 구 S3 이중 서빙(이미지와 버킷에 정적 중복 + S3 sync CD 잡)을 제거하고 오리진을 박스로 일원화.
 module "mts_site" {
   source = "../../modules/proxy-site"

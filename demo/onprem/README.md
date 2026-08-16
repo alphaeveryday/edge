@@ -11,7 +11,7 @@
 
 ## 네트워크 3망 (dmz/data/serving — ALPHA-561, ADR-0036)
 
-compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 는 **dmz 만**이라 `postgres-onprem` 에 못 닿고(DMZ 컴포넌트의 DB 접근 금지), `intake` 가 dmz+data 브리지로 유일한 수신 경로다. `data` 는 `internal`(외부 라우팅 차단)이라 data 전용 서비스(`postgres-onprem`·`flyway-onprem`·`screening-worker`)는 인터넷 egress 가 불가하다. 서빙 면은 `mock-broker`(serving 만)→`publication-api`(data+serving), `tenant-console-ui`(serving 만)→`tenant-console-api`(data+serving). 배치 전체와 한계(dmz/serving 경유 egress 잔존)는 compose 헤더 주석 참조.
+compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 는 **dmz 만**이라 `postgres-onprem` 에 못 닿고(DMZ 컴포넌트의 DB 접근 금지), `intake` 가 dmz+data 브리지로 유일한 수신 경로다. `data` 는 `internal`(외부 라우팅 차단)이라 data 전용 서비스(`postgres-onprem`·`flyway-onprem`·`screening-worker`)는 인터넷 egress 가 불가하다. 서빙 면은 `publication-api`(data+serving, CloudFront /api/v1/* 직행 오리진 — ADR-0053)·`mock-broker`(serving 만 — 시세·차트·정적, 로컬 전용 /api/v1 passthrough), `tenant-console-ui`(serving 만)→`tenant-console-api`(data+serving). 배치 전체와 한계(dmz/serving 경유 egress 잔존)는 compose 헤더 주석 참조.
 
 ## 마이그레이션 SQL 번들 (필수)
 
