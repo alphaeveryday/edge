@@ -26,8 +26,8 @@ import java.io.IOException;
  * (티커 등) 유입 방지. 매핑 없는 요청(임의 /api/** 플러딩)은 기록하지 않는다 —
  * 인증 없는 공개 표면의 메트릭 자체 상한(ADR-0053). 에러 코드는 실패(4xx·5xx) 응답 본문(공통 봉투)의 code 만
  * 파싱한다 — 비JSON·형상 밖 응답은 NULL(코드 미상)이 정직한 값(스키마 CHECK 와 동일
- * 규율). 기록 실패는 로그로 드러내되 서빙 응답을 깨뜨리지 않는다 — 감사(exposure_log,
- * 같은 트랜잭션 fail-loud)와 달리 관측이 서빙을 죽이면 주객전도라는 의도적 선택.
+ * 규율). 기록 실패는 로그로 드러내되 서빙 응답을 깨뜨리지 않는다 — 관측이 서빙을
+ * 죽이면 주객전도라는 의도적 선택.
  */
 @Component
 public class RequestMetricFilter extends OncePerRequestFilter {

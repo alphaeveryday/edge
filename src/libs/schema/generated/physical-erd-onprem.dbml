@@ -45,15 +45,6 @@ Table "console_action_log" {
   "occurred_at" timestamptz [not null]
 }
 
-Table "exposure_log" {
-  "exposure_log_id" bigint [pk, increment]
-  "publication_id" bigint [not null]
-  "customer_hash" varchar(128) [not null]
-  "channel" varchar(20) [not null]
-  "summary_snapshot" text [not null]
-  "exposed_at" timestamptz [not null]
-}
-
 Table "member" {
   "member_id" bigint [pk, increment]
   "email" text [not null]
@@ -161,7 +152,6 @@ Table "sync_state" {
 Ref: "analysis_item_status_history"."actor_id" > "member"."member_id"
 Ref: "analysis_item_status_history"."analysis_item_id" > "analysis_item"."explanation_result_id"
 Ref: "console_action_log"."actor_id" > "member"."member_id"
-Ref: "exposure_log"."publication_id" > "publication"."publication_id"
 Ref: "policy_version"."created_by" > "member"."member_id"
 Ref: "publication"."analysis_item_id" > "analysis_item"."explanation_result_id"
 Ref: "publication"."unpublished_by" > "member"."member_id"
