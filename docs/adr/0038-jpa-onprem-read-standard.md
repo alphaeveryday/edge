@@ -1,6 +1,6 @@
 # ADR-0038: 온프렘 조회 표준으로 JPA 도입 — 스키마는 Flyway SSOT, 앱은 validate-only
 
-- 상태: 승인됨
+- 상태: 승인됨 — 가변 엔티티 예시 문면(ExposureLog·ExposureLogRecorder)은 대체됨 → [ADR-0053](0053-widget-direct-serving-no-personalization.md) (Exposure Log 은퇴, 2026-08-17; JPA·validate-only 표준 자체는 불변)
 - 날짜: 2026-07-24
 
 ## 맥락

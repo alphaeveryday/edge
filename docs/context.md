@@ -34,7 +34,7 @@
 | 항목 | 기존 (폐기) | 신규 (현행) |
 | --- | --- | --- |
 | 배치 | 모든 기능 Vendor Cloud | Cloud = 비개인화 공통 분석만 / On-Prem = 고객 접점·컴플라이언스 전부 |
-| 고객 화면 | 벤더 서빙 embed widget (widget-api) | EDGE 위젯 UI **빌드 산출물 납품**(증권사가 MTS/HTS에 임베드·호스팅) 또는 증권사 자체 UI → 증권사 백엔드 → On-Prem Publication API ([ADR-0035](adr/0035-widget-ui-build-artifact.md)) |
+| 고객 화면 | 벤더 서빙 embed widget (widget-api) | EDGE 위젯 UI **빌드 산출물 납품**(증권사가 MTS/HTS에 임베드·호스팅) 또는 증권사 자체 UI → 증권사 엣지(프록시) → On-Prem Publication API 직접 호출 ([ADR-0035](adr/0035-widget-ui-build-artifact.md)·[ADR-0053](adr/0053-widget-direct-serving-no-personalization.md)) |
 | Tenant Console | 클라우드 tenant-console-api | 증권사 On-Premise 배포 |
 | 연동 방향 | 클라우드 → 증권사 (widget 서빙) | On-Prem Sync Agent(DMZ) → Cloud **Pull only** (outbound HTTPS/mTLS) |
 | Gateway | 범용 클라우드 gateway | 제거 — 공개 엣지는 ALB 직결(ADR-0032) |
@@ -61,7 +61,7 @@ flowchart TB
         CES --> TSA["Tenant Sync API"]
     end
     subgraph onprem["증권사 On-Premise"]
-        MTS["MTS / HTS / Internal"] -->|증권사 내부 Backend/API GW 경유| SVA["Publication API"]
+        MTS["MTS 위젯"] -->|증권사 엣지 프록시 경유 직접 호출 — ADR-0053| SVA["Publication API"]
         PS["Published Store"] --> SC["Publication Cache"] --> SVA
         SA["Sync Agent (DMZ)"] -->|"검증 번들 전달"| IN["Intake (내부망)"]
         IN --> RES["Raw Event Store"]
@@ -105,7 +105,6 @@ flowchart TB
 | Published Store | 최종 노출 확정 문구 저장 |
 | Publication Cache | Published 데이터 조회 캐시 (publication-api 인프로세스 Caffeine — ALPHA-433) |
 | Publication API | MTS/HTS/Internal에 Published 상태만 반환 |
-| Exposure Log | 고객 노출 이력 (민원/감사 재현용) |
 | Audit Log | 콘텐츠 상태 변경/검수/정책 변경 이력 |
 | Tenant On-Prem DB | 위 전부의 저장소 (PostgreSQL) |
 

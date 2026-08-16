@@ -1,6 +1,6 @@
 # ADR-0013: Exposure Log 기록 — 조회 시점 자동 기록, 고객 해시는 증권사 생성
 
-- 상태: 승인됨
+- 상태: 대체됨 — [ADR-0053](0053-widget-direct-serving-no-personalization.md) (고객 컨텍스트 제거 — 위젯 직접 호출·Exposure Log 은퇴, 2026-08-17)
 - 날짜: 2026-07-12
 - 결정 로그: 확정 결정 #2 (2026-07-12)
 

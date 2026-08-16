@@ -1,6 +1,6 @@
 # ADR-0053: 고객 컨텍스트 제거 — MTS 위젯 직접 호출, Exposure Log 은퇴
 
-- 상태: 제안됨
+- 상태: 승인됨 (2026-08-17 — 구현 착수로 승인 전환, ALPHA-991 PR ②)
 - 날짜: 2026-08-17
 - 관련: ALPHA-991 · ADR-0010(하이브리드 온프렘 — 노출 이력 항목 부분 대체)
   · ADR-0013(Exposure Log — 이 ADR 이 대체) · ADR-0031(Publication 리네이밍 —
@@ -143,14 +143,13 @@ mock-broker 를 프록시) — mock-broker 의 고객 해시가 형식 요건만
   스냅샷 재도입을 정면으로 재결정한다. API 가 단말에 직접 노출되어 엣지 보호가
   증권사 구성 품질에 의존한다(계약 문서로 경계만 명시). 채널 축 관측이
   사라진다(재도입 조건 명시로 상쇄).
-- 따라오는 의무: 승인 전환 시 — ADR-0013 상태를 대체됨(0053)으로,
-  ADR-0010(노출 이력 항목)·ADR-0031(호출자 문면 + Publication 도메인의 노출
-  기록·exposure 컴포넌트 소유 조항)·ADR-0033(데모 프록시 문면 — 설명 조회
-  경로가 별도 behavior 로 publication-api 에 분리된다)·ADR-0035(런타임 경로
-  문면 + "Publication API 계약 영향 없음·새 데이터 표면 없음" 결과 조항)·
-  ADR-0038(ExposureLog = 유일 가변 JPA 엔티티 문면)에 부분 대체 표기
-  (0046→0047 선례), README 색인 갱신, 사문화 티켓 2건(ALPHA-778·775)을
-  사유와 함께 종결. 문서 정합 — docs/domain/exposure-log.md·
+- 따라오는 의무: ~~ADR-0013 대체됨 표기, ADR-0010(노출 이력 항목)·ADR-0031
+  (호출자 문면 + 노출 기록·exposure 컴포넌트 소유 조항)·ADR-0035(런타임 경로
+  문면 + "계약 영향 없음·새 데이터 표면 없음" 결과 조항)·ADR-0038(ExposureLog
+  = 유일 가변 JPA 엔티티 문면) 부분 대체 표기, README 색인~~(승인 전환과 함께
+  이행 — ALPHA-991 PR ②). 남은 것: ADR-0033(데모 프록시 문면 — 설명 조회
+  경로의 별도 behavior 분리) 부분 대체 표기는 데모 재배선 PR 과 동행, 사문화
+  티켓 2건(ALPHA-778·775)은 사유와 함께 종결. 문서 정합 — docs/domain/exposure-log.md·
   data-residency.md(고객별 노출 이력 서술)·docs/context.md·state-machine.md 등
   호출 경로·노출 기록을 문면으로 갖는 문서 전수는 구현 PR 의 docs-sync 게이트가
   이 ADR 을 기준으로 쓸어낸다. 계약 문서(publication-api.md·openapi.yaml·
