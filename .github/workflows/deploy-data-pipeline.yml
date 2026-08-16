@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     # 빌드(~5분) + 롤링 대상 9종 대기(각 10분 상한, 순차 최악 90분) 수용.
     # ⚠️ 다른 문서가 세는 "세션 오케스트레이션이 스케일하는 상주 서비스"와 **집합이 다르다**
     # — 저건 analysis-consumer 를 포함하는데 그건 analysis-engine 이미지라

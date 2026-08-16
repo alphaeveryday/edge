@@ -53,7 +53,7 @@ concurrency:
 
 jobs:
   changed-modules-build:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     # 전체 모듈(빌드 설정·libs 변경) 실행의 상한. 단일 모듈 PR 은 훨씬 짧게 끝난다.
     timeout-minutes: 40
 

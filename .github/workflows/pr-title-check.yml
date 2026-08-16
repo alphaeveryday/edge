@@ -21,7 +21,7 @@ permissions: {}
 
 jobs:
   validate:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - name: PR 제목 형식 검증
         env:
