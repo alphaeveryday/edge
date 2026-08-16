@@ -19,3 +19,8 @@
 SET search_path TO public;
 
 DROP TABLE exposure_log;
+
+-- serving_request_metric 의 기존 COMMENT(V202607261410)가 "감사는 exposure_log 소관"을
+-- 문면으로 갖는다 — 적용된 마이그레이션은 수정하지 않으므로 여기서 재선언한다.
+COMMENT ON TABLE serving_request_metric IS
+'publication-api 요청 메트릭 원장(ALPHA-501) — writer = publication-api(요청 필터), reader = tenant-console-api(Dashboard 집계, ALPHA-128). 관측 용도라 고객 식별자·노출 문구를 싣지 않는다. Exposure Log 은퇴(ADR-0053) 후 서빙 경로의 유일한 기록 축.';
