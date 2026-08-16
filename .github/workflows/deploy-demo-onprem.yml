@@ -137,7 +137,7 @@ jobs:
             if [ "\$code" = 200 ] || [ "\$code" = 204 ]; then break; fi
             sleep 10
           done
-          if [ "\$code" != 200 ] && [ "\$code" != 204 ]; then echo 'ERROR: publication-api 직행 오리진 스모크 실패(2분 재시도 후에도 미응답 — 포트 불일치·기동 실패 의심)'; exit 1; fi
+          if [ "\$code" != 200 ] && [ "\$code" != 204 ]; then echo 'ERROR: publication-api 직행 오리진 스모크 실패(최대 ~4분 재시도 후에도 미응답 — 포트 불일치·기동 실패 의심)'; exit 1; fi
           BOX
           )"
 
