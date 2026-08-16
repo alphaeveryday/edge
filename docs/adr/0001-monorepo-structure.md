@@ -15,7 +15,7 @@
 - 런타임별 워크스페이스 루트를 분리한다: `settings.gradle`(JVM, Groovy DSL) · `pnpm-workspace.yaml`(Node) · `pyproject.toml`(Python).
 - 빈 폴더는 `.gitkeep`으로 구조를 추적하고, 빌드 산출물 `out/`은 추적하지 않는다.
 
-자세한 구조는 [README.md](../../README.md) 참고.
+자세한 구조는 [repo-structure.md](../repo-structure.md) 참고.
 
 ## 대안
 - **멀티레포(런타임/서비스별 분리)** — 공유 스키마·계약을 저장소 간 동기화해야 하고, 크로스-런타임 변경이 원자적이지 않다. 표류 위험이 커서 폐기.

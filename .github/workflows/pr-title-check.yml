@@ -1,7 +1,7 @@
 # PR 제목 Conventional Commits 검증 (ALPHA-401)
 #
 # Squash 머지(feature/fix → dev)에서는 PR 제목이 곧 dev 의 최종 커밋 메시지다
-# (README "Git 컨벤션 › 커밋·PR 제목"이 SSOT — type 어휘·형식은 그 절과 1:1).
+# (docs/git-conventions.md "커밋·PR 제목"이 SSOT — type 어휘·형식은 그 절과 1:1).
 # 형식 위반을 PR 체크 실패로 드러낸다 — private/free 플랜은 브랜치 보호를 못 써
 # 체크가 머지를 물리적으로 막지는 못한다(schema-validate·test-python 과 동일 제약).
 # 머지 전 체크 확인은 pr-cycle 운영 규율이 담당한다.
