@@ -56,7 +56,7 @@
 
 ## 무엇을 어디에 두나
 - 설계·결정·계약 → `docs/` (새 문서는 위 지도에 등록).
-- 운영 규칙(브랜치/커밋/머지) → [git-conventions.md](git-conventions.md) / AGENTS가 SSOT.
+- 운영 규칙(브랜치/커밋/머지) → [git-conventions.md](git-conventions.md)가 SSOT (AGENTS.md 는 요약·경성 규칙만).
 - 결정은 ADR로 증류한다 — 회의록·PRD 원본은 레포에 두지 않는다.
 
 ## 원문 이관 기록 (2026-07-13)
