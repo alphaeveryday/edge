@@ -4,7 +4,9 @@
 >
 > **[설계 뷰]** 논리 설계 개요다. 현행·계약의 권위는 SSOT에 있다 — 서비스/책임 경계 상세는 [../context.md](../context.md), 콘솔 화면·메뉴 상세는 [super-admin-console.md](../console-ia/super-admin-console.md)·[tenant-console.md](../console-ia/tenant-console.md). 논리명↔배포 모듈은 [system-architecture.md의 논리→배포 매핑](system-architecture.md#논리--배포-모듈-매핑) 참조. 충돌 시 SSOT 우선.
 >
-> ⚠️ **위젯 접점**: 이 문서의 "위젯 UI 임베드" 서술은 **SSOT로 전진됨** — EDGE 위젯 UI를 **빌드 산출물로 납품**(실행 서버 없음, 증권사가 임베드·호스팅)하는 것이 현행이다 ([../context.md](../context.md) §2, [../adr/0035](../adr/0035-widget-ui-build-artifact.md)). 데이터는 증권사 백엔드 경유로만 On-Prem Publication API에 도달하며 위젯이 벤더 클라우드를 직접 호출하지 않는다.
+> ⚠️ **위젯 접점**: 이 문서의 "위젯 UI 임베드" 서술은 **SSOT로 전진됨** — EDGE 위젯 UI를 **빌드 산출물로 납품**(실행 서버 없음, 증권사가 임베드·호스팅)하는 것이 현행이다 ([../context.md](../context.md) §2, [../adr/0035](../adr/0035-widget-ui-build-artifact.md)). 위젯이 벤더 클라우드를 직접 호출하지 않는 것은 그대로다.
+>
+> ⚠️ **호출 경로·고객 컨텍스트**: 아래 "금융사 구축 API"(중계 백엔드)와 "계정계 보유 여부 확인" 서술은 **[ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)으로 폐지됨** — 개인화 없음이 확정되어 위젯이 증권사 엣지(프록시) 경유로 On-Prem Publication API 를 **직접 호출**하고, 고객 식별은 어떤 형태로도 받지 않는다. 다이어그램 갱신은 뷰 재작도 PR 소관.
 
 ## 개요
 

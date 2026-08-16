@@ -3,6 +3,8 @@
 > 원본: `EDGE_아키텍처_v0_2.pptx` — Slide 3 (System Architecture)
 >
 > **[설계 뷰]** 논리 설계 개요다. 현행 배포·계약의 권위는 SSOT([../context.md](../context.md))에 있다. 이 문서의 Service·Worker는 **논리 단위**이며, 실제 배포 모듈로의 대응은 아래 [논리 → 배포 모듈 매핑](#논리--배포-모듈-매핑)을 따른다. 충돌 시 SSOT 우선.
+>
+> ⚠️ **Customer System 경유 서술은 [ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)으로 폐지됨** — 위젯이 증권사 엣지(프록시) 경유로 Publication Service 를 직접 호출하며 고객 식별을 받지 않는다. 다이어그램 갱신은 뷰 재작도 PR 소관.
 
 ## 개요
 

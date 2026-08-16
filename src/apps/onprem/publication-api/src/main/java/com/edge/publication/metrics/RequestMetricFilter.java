@@ -83,10 +83,13 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 			ContentCachingResponseWrapper bodySource) {
 		try {
 			String route = route(request);
-			// 미매칭 경로는 기록하지 않는다(ADR-0053 — 메트릭 자체 상한). 인증 없는 공개
-			// 표면이라 임의 /api/** 플러딩이 행 단위로 적재되면 엣지 rate limit 이 뚫리는
-			// 순간 DB 쓰기가 무한하다 — 매핑된 라우트(유한 집합)만 관측 대상으로 남긴다.
-			if (UNMATCHED_ROUTE.equals(route)) {
+			// 컨트롤러에 매핑되지 않은 경로는 기록하지 않는다(ADR-0053 — 메트릭 자체 상한).
+			// 인증 없는 공개 표면이라 임의 /api/** 플러딩이 행 단위로 적재되면 엣지 rate limit
+			// 이 뚫리는 순간 DB 쓰기가 무한하다 — 매핑된 라우트(유한 집합)만 관측 대상으로
+			// 남긴다. 매핑 부재(null)뿐 아니라 Boot 기본 정적 리소스 핸들러의 전역 패턴
+			// ("/**")도 제외한다 — 실 MVC 에서는 미매칭 /api/** 가 그 핸들러에 잡혀 404 가
+			// 되므로 null 검사만으로는 상한이 성립하지 않는다.
+			if (UNMATCHED_ROUTE.equals(route) || "/**".equals(route)) {
 				return;
 			}
 			String errorCode = status >= 400 && bodySource != null ? errorCode(bodySource) : null;

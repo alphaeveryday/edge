@@ -163,6 +163,19 @@ class RequestMetricFilterTest {
 	}
 
 	@Test
+	void 정적_리소스_전역_패턴도_기록하지_않는다() throws Exception {
+		// 실 MVC 는 Boot 기본 정적 리소스 핸들러("/**")가 미매칭 /api/** 를 잡아 매핑 속성이
+		// null 이 아니다 — 그 경로가 기록되면 위 상한이 프로덕션에서 성립하지 않는다.
+		// standaloneSetup 은 그 핸들러를 안 태우므로 매핑 속성을 직접 재현한다.
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/flood/xyz");
+		request.setAttribute(
+				org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/**");
+		new RequestMetricFilter(metrics).doFilter(request, new MockHttpServletResponse(),
+				(req, res) -> ((HttpServletResponse) res).setStatus(404));
+		assertThat(metrics.saved).isEmpty();
+	}
+
+	@Test
 	void 미처리_예외는_200_이_아니라_500_으로_기록된다() throws Exception {
 		// advice 밖으로 새는 예외는 컨테이너 ERROR dispatch 로 500 이 된다 — 래퍼 기본
 		// 상태(200)를 기록하면 실패 요청이 성공으로 적재돼 Dashboard 에러율이 왜곡된다.
