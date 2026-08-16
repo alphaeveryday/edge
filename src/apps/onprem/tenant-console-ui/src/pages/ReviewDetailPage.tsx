@@ -23,7 +23,7 @@ import { kstMinute, kstSecond } from '../lib/time';
  * 검수 상세(ALPHA-436, 구 439 흡수) — 실 analysis_item 원장 기반: 원문·근거(evidences)·
  * 파생 사유(screening_check)·검사 결과·상태 변경 이력. 액션은 실계약 4종(승인·수정
  * 승인·반려·차단 — 임시 저장은 실계약에 없어 편집은 화면 로컬, 승인 시 수정 승인으로
- * 전달). 감사·노출 이력은 별도 메뉴가 아니라 이 상세로 확인한다(콘솔 IA).
+ * 전달). 감사 이력은 별도 메뉴가 아니라 이 상세로 확인한다(콘솔 IA — 고객 단위 노출 이력은 ADR-0053 으로 폐지).
  */
 export function ReviewDetailPage() {
   const { id } = useParams();

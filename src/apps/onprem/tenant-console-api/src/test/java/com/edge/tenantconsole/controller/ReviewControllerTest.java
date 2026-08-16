@@ -568,7 +568,7 @@ class ReviewControllerTest {
 
 	@Test
 	void 상세는_근거_사유_검사결과_상태이력을_한_번에_준다() throws Exception {
-		// WHY: 감사·노출 이력은 별도 메뉴가 아니다(콘솔 IA, 구 ALPHA-439 흡수) — 상세가
+		// WHY: 감사 이력은 별도 메뉴가 아니다(콘솔 IA, 구 ALPHA-439 흡수) — 상세가
 		// "왜 검수로 왔고(사유·검사 결과) 어떤 전이를 거쳤나(이력)"를 재현해야 한다.
 		items.item = new AnalysisItemEntity("er-rev-1", "069500", "KODEX 200",
 				LocalDate.of(2026, 7, 15), "검수 대기 요약", null, "LOW", "REVIEW_REQUIRED",
