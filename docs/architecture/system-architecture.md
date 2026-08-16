@@ -128,7 +128,7 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 | Relay Worker | Sync Agent (DMZ) | EDGE Cloud를 outbound pull·검증. 기존 SSOT·코드 명칭 유지([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 | Intake Worker | Intake (내부망) | Sync Agent가 검증한 번들 수신·저장 ([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 
-> 위 온프렘 배포 모듈은 전부 walking skeleton 으로 구현됐다(`sync-agent`·`intake`·`screening-worker`·`publication-api`·`tenant-console-api`·`-ui` — [docs/repo-structure.md](../repo-structure.md) 프로젝트 상태). Screening 의 정책 룰 엔진·검수 콘솔 연동은 후속이다.
+> 위 온프렘 배포 모듈은 전부 walking skeleton 으로 구현됐다(`sync-agent`·`intake`·`screening-worker`·`publication-api`·`tenant-console-api`·`-ui` — [docs/repo-structure.md](../repo-structure.md) 프로젝트 상태).
 
 **클라우드 (Vendor Cloud)**
 

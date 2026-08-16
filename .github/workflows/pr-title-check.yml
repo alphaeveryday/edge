@@ -31,18 +31,18 @@ jobs:
         run: |
           set -u
           ok=0
-          # type(scope): 제목 — type 은 README 어휘 9종, scope 는 소문자·숫자·하이픈
+          # type(scope): 제목 — type 은 docs/git-conventions.md 어휘 9종, scope 는 소문자·숫자·하이픈
           # (선택, 전역 변경은 생략), 제목은 공백이 아닌 문자로 시작해야 한다(공백뿐
           # 제목 차단). "한국어 제목" 규약은 기계 강제하지 않는다 — 영문 용어 혼용
           # 관행·봇 PR(dependabot 등 영문 제목)과 충돌하므로 언어는 리뷰 소관.
           printf '%s' "$TITLE" \
             | grep -qE '^(feat|fix|docs|refactor|test|chore|build|ci|perf)(\([a-z0-9-]+\))?: [^[:space:]].*$' \
-            || { echo "::error::PR 제목이 'type(scope): 제목' 형식이 아닙니다 — README › Git 컨벤션 › 커밋·PR 제목"; ok=1; }
+            || { echo "::error::PR 제목이 'type(scope): 제목' 형식이 아닙니다 — docs/git-conventions.md › 커밋·PR 제목"; ok=1; }
           # 제목은 마침표 없이 끝난다.
           printf '%s' "$TITLE" | grep -qE '\.$' \
-            && { echo "::error::제목은 마침표로 끝나지 않습니다 — README › Git 컨벤션"; ok=1; }
+            && { echo "::error::제목은 마침표로 끝나지 않습니다 — docs/git-conventions.md"; ok=1; }
           # 이슈 키는 제목이 아니라 PR 설명 맨 아래 Refs: 푸터에만 둔다.
           printf '%s' "$TITLE" | grep -qE 'ALPHA-[0-9]+' \
-            && { echo "::error::이슈 키는 제목이 아니라 PR 설명의 'Refs:' 푸터에 둡니다 — README › Git 컨벤션"; ok=1; }
+            && { echo "::error::이슈 키는 제목이 아니라 PR 설명의 'Refs:' 푸터에 둡니다 — docs/git-conventions.md"; ok=1; }
           [ "$ok" -eq 0 ] && echo "PR 제목 형식 OK"
           exit "$ok"
