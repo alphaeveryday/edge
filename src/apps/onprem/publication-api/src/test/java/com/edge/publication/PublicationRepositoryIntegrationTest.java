@@ -1,10 +1,8 @@
 package com.edge.publication;
 
-import com.edge.publication.entity.ExposureLog;
 import com.edge.publication.entity.Publication;
 import com.edge.publication.entity.ServingRequestMetric;
 import com.edge.publication.repository.ExplanationStore;
-import com.edge.publication.repository.ExposureLogRepository;
 import com.edge.publication.repository.PublicationRepository;
 import com.edge.publication.repository.ServingRequestMetricRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,9 +35,6 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 	private PublicationRepository publications;
 
 	@Autowired
-	private ExposureLogRepository exposureLogs;
-
-	@Autowired
 	private ServingRequestMetricRepository requestMetrics;
 
 	@Autowired
@@ -50,7 +45,6 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 
 	@BeforeEach
 	void clean() {
-		jdbc.update("DELETE FROM exposure_log");
 		jdbc.update("DELETE FROM serving_request_metric");
 		jdbc.update("DELETE FROM publication");
 		jdbc.update("DELETE FROM analysis_item");
@@ -137,24 +131,6 @@ class PublicationRepositoryIntegrationTest extends OnpremPostgresIntegrationTest
 		seedPublication("a-orig", "305720", LocalDate.of(2026, 7, 15), "PUBLISHED");
 		assertThat(explanationStore.findPublished("305720", LocalDate.of(2026, 7, 15)))
 				.hasValueSatisfying(e -> assertThat(e.summary()).isEqualTo("요약 a-orig"));
-	}
-
-	@Test
-	void exposureLog_save_는_노출_이력을_적재한다() {
-		// WHY: 조회=노출(ADR-0013) — 이 기록이 민원·감사 재현의 원천이다.
-		seedAnalysisItem("a-exp", "069500", "KODEX 200", LocalDate.of(2026, 7, 15), "AUTO_PUBLISHED", null);
-		long pubId = seedPublication("a-exp", "069500", LocalDate.of(2026, 7, 15), "PUBLISHED");
-
-		ExposureLog saved = exposureLogs.save(new ExposureLog(pubId, "hash-7", "MTS", "변동 요인 후보 스냅샷"));
-
-		assertThat(saved.getExposureLogId()).isNotNull();
-		// 고객 해시·문구 스냅샷이 제자리에 적재되는지 확인한다 — 감사 재현이 이 행의 존재 이유라
-		// 컬럼 매핑/생성자 인자가 뒤바뀌면(감사 손상) 이 검증이 깨져야 한다(Rule 9).
-		Map<String, Object> row = jdbc.queryForMap(
-				"SELECT customer_hash, channel, summary_snapshot FROM exposure_log WHERE publication_id = ?", pubId);
-		assertThat(row.get("customer_hash")).isEqualTo("hash-7");
-		assertThat(row.get("channel")).isEqualTo("MTS");
-		assertThat(row.get("summary_snapshot")).isEqualTo("변동 요인 후보 스냅샷");
 	}
 
 	@Test

@@ -1,7 +1,7 @@
-// 증권사 자체 제작 API 호출 — 실제 서버는 demo/mock-broker (same-origin 서빙).
-// 계약 원칙(docs/contracts/publication-api.md): MTS 화면은 Publication API를 직접 호출하지 않는다.
-// Publication API 호출·고객 해시·채널 부착·상태 매핑은 전부 mock-broker(서버) 책임이고,
-// 이 모듈은 브로커 API 를 fetch 하는 얇은 래퍼다.
+// 브로커 API 호출 — 실제 서버는 demo/mock-broker (same-origin 서빙).
+// ADR-0053 으로 위젯의 Publication API 직접 호출(동일 오리진 프록시 경유)이 표준이 됐다 —
+// 데모의 설명 경로 재배선(proxy-site behavior 분리)은 후속 PR 소관이고, 그때까지
+// mock-broker 가 헤더 없는 프록시·상태 매핑·폴백 처리를 맡는다. 이 모듈은 얇은 fetch 래퍼다.
 (function () {
   'use strict';
 

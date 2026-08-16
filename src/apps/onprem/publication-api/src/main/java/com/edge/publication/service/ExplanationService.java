@@ -2,7 +2,6 @@ package com.edge.publication.service;
 
 import com.edge.publication.dto.ExplanationResponse;
 import com.edge.publication.entity.ServingScopeEntity;
-import com.edge.publication.exposure.ExposureLogRecorder;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.PolicyVersionRepository;
@@ -15,9 +14,9 @@ import java.time.LocalDate;
 import java.util.Optional;
 
 /**
- * 조회 오케스트레이션: 제공 범위 판정 → Published 조회 → 응답 조립(활성 정책의 면책 문구 동반)
- * → Exposure 기록.
+ * 조회 오케스트레이션: 제공 범위 판정 → Published 조회 → 응답 조립(활성 정책의 면책 문구 동반).
  * Published 외 상태는 이 서비스에 존재조차 하지 않는다 — 저장소가 Published 만 안다(제품 보장).
+ * 노출 이력(Exposure Log)은 기록하지 않는다 — 고객 단위 감사 요건과 함께 폐지됐다(ADR-0053).
  */
 @Service
 public class ExplanationService {
@@ -43,14 +42,12 @@ public class ExplanationService {
 	private static final String MARKET_KRX = "XKRX";
 
 	private final ExplanationStore store;
-	private final ExposureLogRecorder exposureLogRecorder;
 	private final ServingScopeRepository servingScopes;
 	private final PolicyVersionRepository policyVersions;
 
-	public ExplanationService(ExplanationStore store, ExposureLogRecorder exposureLogRecorder,
+	public ExplanationService(ExplanationStore store,
 			ServingScopeRepository servingScopes, PolicyVersionRepository policyVersions) {
 		this.store = store;
-		this.exposureLogRecorder = exposureLogRecorder;
 		this.servingScopes = servingScopes;
 		this.policyVersions = policyVersions;
 	}
@@ -59,19 +56,15 @@ public class ExplanationService {
 		return store.isKnownTicker(ticker);
 	}
 
-	/** 200 대상이 있으면 응답을 만들고 그 시점에 Exposure 를 기록한다(조회=노출). */
-	public Optional<ExplanationResponse> serve(String ticker, LocalDate tradeDate,
-			String customerHash, String channel) {
-		// 제공 범위 차단은 게시분 조회 앞단에서 걸러 "설명 없음"(204·Exposure 미기록)으로 수렴한다 —
+	/** 200 대상이 있으면 응답을 만든다 — 없으면 empty(컨트롤러가 204 로 수렴). */
+	public Optional<ExplanationResponse> serve(String ticker, LocalDate tradeDate) {
+		// 제공 범위 차단은 게시분 조회 앞단에서 걸러 "설명 없음"(204)으로 수렴한다 —
 		// 제외 사실을 고객 단에 드러내지 않고, 콘솔 토글이 캐시 없이 요청마다 즉시 반영된다(신선도 우선).
 		if (isServingBlocked(ticker)) {
 			return Optional.empty();
 		}
-		return store.findPublished(ticker, tradeDate).map(e -> {
-			ExplanationResponse response = toResponse(e, resolveDisclaimer());
-			exposureLogRecorder.record(e.publicationId(), e.ticker(), e.summary(), customerHash, channel);
-			return response;
-		});
+		return store.findPublished(ticker, tradeDate)
+				.map(e -> toResponse(e, resolveDisclaimer()));
 	}
 
 	/**
@@ -81,8 +74,8 @@ public class ExplanationService {
 	 * 아니라 노출 화면에 동반되는 <b>현행 안내</b>라, 컴플라이언스가 문구를 고치면 이미 게시된
 	 * 설명에도 즉시 적용되는 편이 통제 수단으로서 맞다. 같은 이유로 제공 범위 판정과 같이 캐시하지
 	 * 않는다 — 게시분 캐시(ALPHA-433)는 read path 만 가리고 이 조회는 그 밖이라, 발행 즉시 반영된다.
-	 * 과거 게시분에 당시 문구를 되살리는 소급 재현은 하지 않는다(감사 재현은 노출 시점 문구
-	 * 스냅샷을 남기는 Exposure Log 소관 — 다만 그 스냅샷은 summary 축이다).
+	 * 과거 게시분에 당시 문구를 되살리는 소급 재현은 하지 않는다 — 노출 시점 재현 요건 자체가
+	 * 폐지됐고(ADR-0053), 문구 변경 이력은 정책 버전 활성 구간으로만 남는다.
 	 *
 	 * <p>활성 버전 0건(첫 발행 전)은 정상 상태다 — 면책 문구는 테넌트 컴플라이언스 콘텐츠라
 	 * 시드로 발행하지 않는다(policy_version 스키마 COMMENT). 그 구간은 콘솔이 편집 화면에 보여주는

@@ -1,7 +1,6 @@
 package com.edge.publication.controller;
 
 import com.edge.common.exception.ExceptionAdvice;
-import com.edge.publication.exposure.ExposureLogRecorder;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.service.ExplanationService;
@@ -14,20 +13,19 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 계약(publication-api.md) 시맨틱을 검증한다 — 증권사 백엔드가 의존하는 약속이 깨지면 실패해야 한다.
+ * 계약(publication-api.md) 시맨틱을 검증한다 — MTS 위젯이 의존하는 약속이 깨지면 실패해야 한다.
+ * 요청은 무헤더가 정상이다(ADR-0053 — 고객 식별·채널 헤더 폐지, 인증 없는 공개 읽기 표면).
  * Boot 4 는 @WebMvcTest 슬라이스가 없어 standaloneSetup 을 쓴다.
- * 저장소·기록기는 DB(JPA) 구현이 됐으므로 시드 대역으로 대체한다 — 여기서 지키는
+ * 저장소는 DB(JPA) 구현이 됐으므로 시드 대역으로 대체한다 — 여기서 지키는
  * 것은 HTTP 계약이고, 실 DB 경로는 compose E2E(스키마 제약 포함)가 확인한다.
  */
 class ExplanationControllerTest {
@@ -60,35 +58,15 @@ class ExplanationControllerTest {
 		}
 	}
 
-	/** 기록 대역 — DB 대신 호출을 수집한다(계약: 200 시점에만 기록). */
-	private static final class CapturingRecorder extends ExposureLogRecorder {
-		record Captured(long publicationId, String summarySnapshot, String customerHash, String channel) {
-		}
-
-		final List<Captured> records = new ArrayList<>();
-
-		CapturingRecorder() {
-			super(null);
-		}
-
-		@Override
-		public void record(long publicationId, String ticker, String summarySnapshot,
-				String customerHash, String channel) {
-			records.add(new Captured(publicationId, summarySnapshot, customerHash, channel));
-		}
-	}
-
 	private MockMvc mvc;
-	private CapturingRecorder recorder;
 
 	@BeforeEach
 	void setUp() {
-		recorder = new CapturingRecorder();
 		// 제공 범위 판정·면책 문구 조회는 실 DB 통합 테스트(ExplanationScopeIntegrationTest·
 		// ExplanationDisclaimerIntegrationTest) 소관 — 여기서는 각각 행 부재(전부 제공)와 정책
 		// 미발행(기본 문구)으로 두어 기존 HTTP 계약만 검증한다.
 		ExplanationService service = new ExplanationService(
-				new SeededStore(), recorder, (scopeType, scopeKey) -> Optional.empty(), Optional::empty);
+				new SeededStore(), (scopeType, scopeKey) -> Optional.empty(), Optional::empty);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -100,8 +78,7 @@ class ExplanationControllerTest {
 		// WHY: 화면(가상 MTS 포함)이 이 필드명으로 렌더링한다. disclaimer 는 규정상 필수 노출 문구.
 		// 정책 미발행 구간이라 기본 문구가 실린다 — 이 값은 콘솔이 첫 발행 전 편집 화면에
 		// 투영하는 문구와 같아야 한다(ALPHA-772).
-		mvc.perform(get("/api/v1/explanations/069500")
-						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/069500"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.publication_id").value("1"))
 				.andExpect(jsonPath("$.etf.ticker").value("069500"))
@@ -121,52 +98,33 @@ class ExplanationControllerTest {
 	}
 
 	@Test
-	void 조회_성공_시점에_Exposure가_기록된다() throws Exception {
-		// WHY: 조회=노출(ADR-0013) — 이 기록이 민원·감사 재현의 원천이다. 문구 스냅샷까지 남아야 한다.
+	void 폐지된_헤더를_보내도_무시되고_정상_동작한다() throws Exception {
+		// WHY: ADR-0053 전환기 — 구 계약(X-Customer-Hash·X-Channel)으로 호출하던 소비자가
+		// 헤더를 아직 보내더라도 400 이 아니라 정상 서빙이어야 한다(헤더는 읽지 않고 무시).
 		mvc.perform(get("/api/v1/explanations/069500")
-						.header("X-Customer-Hash", "hash-7").header("X-Channel", "HTS"))
-				.andExpect(status().isOk());
-
-		assertThat(recorder.records).hasSize(1);
-		var r = recorder.records.getFirst();
-		assertThat(r.publicationId()).isEqualTo(1L);
-		assertThat(r.customerHash()).isEqualTo("hash-7");
-		assertThat(r.channel()).isEqualTo("HTS");
-		assertThat(r.summarySnapshot()).contains("변동 요인 후보");
+						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.publication_id").value("1"));
 	}
 
 	@Test
-	void 설명_없음은_204이고_Exposure는_기록되지_않는다() throws Exception {
-		// WHY: 204 는 정상 상태(설명 없는 날) — 노출이 없었으므로 기록도 없어야 감사 수치가 정확하다.
-		mvc.perform(get("/api/v1/explanations/305720")
-						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
+	void 설명_없음은_204다() throws Exception {
+		// WHY: 204 는 정상 상태(설명 없는 날) — 상장 여부(404)와 다른 질문이다.
+		mvc.perform(get("/api/v1/explanations/305720"))
 				.andExpect(status().isNoContent());
-		assertThat(recorder.records).isEmpty();
 	}
 
 	@Test
 	void 미상장_코드는_404다() throws Exception {
-		mvc.perform(get("/api/v1/explanations/999999")
-						.header("X-Customer-Hash", "hash-1").header("X-Channel", "MTS"))
+		mvc.perform(get("/api/v1/explanations/999999"))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("SERV4040"));
 	}
 
 	@Test
-	void 필수_헤더_누락과_잘못된_형식은_400_공통_포맷이다() throws Exception {
-		// WHY: 원본 고객 ID 를 받지 않는 대신 해시가 필수 — 누락 호출은 연동 버그 신호(fail-loud).
-		mvc.perform(get("/api/v1/explanations/069500").header("X-Channel", "MTS"))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("SERV4001"));
-		mvc.perform(get("/api/v1/explanations/069500").header("X-Customer-Hash", "h"))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("SERV4002"));
-		mvc.perform(get("/api/v1/explanations/069500")
-						.header("X-Customer-Hash", "h").header("X-Channel", "APP"))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("SERV4003"));
-		mvc.perform(get("/api/v1/explanations/069500").param("trade_date", "2026/07/15")
-						.header("X-Customer-Hash", "h").header("X-Channel", "MTS"))
+	void 잘못된_trade_date_형식은_400_공통_포맷이다() throws Exception {
+		// WHY: 형식 오류는 연동 버그 신호(fail-loud) — 조용히 무시하고 최신분을 주면 오배선이 숨는다.
+		mvc.perform(get("/api/v1/explanations/069500").param("trade_date", "2026/07/15"))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("SERV4004"));
 	}

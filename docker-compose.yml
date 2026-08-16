@@ -25,7 +25,7 @@
 #   curl "localhost:18083/api/v1/sync/bundle?after=0"   # tenant-sync-api (공통 응답 포맷 — 신규 없음은 result 생략, ADR-0042)
 #   curl "localhost:18085/internal/v1/bundles?after=0"   # sync-agent — 무변형 릴레이(항상 200)
 #   docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c 'TABLE sync_state'   # intake 적재 확인
-#   curl -H "X-Customer-Hash: h" -H "X-Channel: MTS" localhost:18084/api/v1/explanations/069500   # publication-api
+#   curl localhost:18084/api/v1/explanations/069500   # publication-api (무헤더 — ADR-0053)
 #   open http://localhost:18090                          # mock-broker — 가상 MTS 데모(홈·검색·종목상세 — AI 분석·시세·차트 실호출, 나머지 탭 목업)
 #   curl "localhost:18090/api/broker/ai-analysis?ticker=069500"   # mock-broker → publication-api 2홉
 
@@ -169,8 +169,9 @@ services:
     ports:
       - "18084:8080"
 
-  # [demo] 증권사 자체 제작 API(mock-broker) + 가상 MTS 정적 서빙 — ADR-0035 런타임 경로 재현.
-  # 화면 → mock-broker → publication-api 실 HTTP 2홉. 고객 해시·채널 부착은 이 레이어 책임.
+  # [demo] 증권사 엣지 프록시 자리(mock-broker) + 가상 MTS 정적 서빙.
+  # 화면 → mock-broker → publication-api 실 HTTP 2홉(헤더 없음 — ADR-0053). 중계 형상의
+  # 은퇴(설명 경로 proxy-site behavior 분리)는 데모 재배선 후속 PR 소관.
   mock-broker:
     build:
       context: ./demo
