@@ -162,9 +162,19 @@ resource "aws_vpc_security_group_ingress_rule" "from_prefix" {
 
 # publication-api 설명 조회 직행(ADR-0053, ALPHA-992) — CloudFront 오리진 프리픽스로만 인바운드.
 # 포트 공개는 behavior·SG 와 한 단위의 신뢰경계 변경이다(behavior 만 추가하면 오리진 연결이 없어 502).
+# 콘솔 SG 와 같은 이유로 별도 SG 다 — CloudFront 프리픽스 규칙은 weight 55 라 기존 SG 에
+# 두 번째 규칙을 넣으면 110 > 60(기본 할당량)으로 apply 가 실패한다(아래 콘솔 SG 주석 참조).
+resource "aws_security_group" "publication" {
+  count       = var.publication_api_port != null ? 1 : 0
+  name        = "${var.name}-publication"
+  description = "demo on-prem box ${var.name} publication-api direct serving"
+  vpc_id      = var.vpc_id
+  tags        = { Name = "${var.name}-publication" }
+}
+
 resource "aws_vpc_security_group_ingress_rule" "publication_from_prefix" {
   count             = var.publication_api_port != null ? length(var.ingress_prefix_list_ids) : 0
-  security_group_id = aws_security_group.this.id
+  security_group_id = aws_security_group.publication[0].id
   prefix_list_id    = var.ingress_prefix_list_ids[count.index]
   ip_protocol       = "tcp"
   from_port         = var.publication_api_port
@@ -202,7 +212,7 @@ resource "aws_instance" "this" {
   ami                         = data.aws_ami.al2023.id
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
-  vpc_security_group_ids      = concat([aws_security_group.this.id], aws_security_group.console[*].id)
+  vpc_security_group_ids      = concat([aws_security_group.this.id], aws_security_group.console[*].id, aws_security_group.publication[*].id)
   iam_instance_profile        = aws_iam_instance_profile.this.name
   associate_public_ip_address = true
 
