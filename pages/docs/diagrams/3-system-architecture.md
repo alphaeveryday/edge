@@ -18,7 +18,7 @@
 
 <div class="ep-version-note">
   <p data-version="v2">v2(v0.2)는 v1 의 도메인 수직 분해를 환경 분리 위에 다시 얹었다. 금융사 쪽은 Publication·검수·정책 중심의 서비스군과 Intake·Screening·Relay Worker 로, EDGE 쪽은 분석 파이프라인 중심으로 재편되고, 두 환경은 DMZ 의 Relay Worker → API Gateway 경로로만 통신한다.</p>
-  <p data-version="v1" hidden>v1(v0.1)은 도메인별 마이크로서비스 분해다. Client → Gateway → Services 아래 도메인마다 Queue·Worker·Cache·Database 를 수직으로 세우고, 분석은 Scheduler 가 모는 Ingestion → Processing → Analysis Worker 열로 두었다.</p>
+  <p data-version="v1" hidden>v1(v0.1)은 도메인별 마이크로서비스 분해다. Client → Gateway → Services 아래 도메인별 Cache·Database 를 세우고 이메일·웹훅·알림·사용량 같은 비동기 경로에만 Queue·Worker 를 두었으며, 분석은 Scheduler 가 모는 Ingestion → Processing → Analysis Worker 열로 두었다. 이 Cloud-only 구조는 폐기된 방향이다.</p>
 </div>
 
 !!! note "설계 뷰 — 원본 v0.2 기준"

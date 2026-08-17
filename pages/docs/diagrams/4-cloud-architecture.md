@@ -17,8 +17,8 @@ ECS 클러스터 분리·RDS·CloudFront 등 실 배포 토폴로지.
 </div>
 
 <div class="ep-version-note">
-  <p data-version="v2">v2(v0.2)는 v1 의 AWS 단일 구성에 고객사 온프레미스 환경을 분리해 추가했다. 고객사는 채널·내부 통제·DB·DMZ 구역으로 나뉘어 DMZ 의 Relay Worker 만 아웃바운드로 AWS 와 통신하고, AWS 쪽은 파이프라인용·서빙용 ECS 클러스터로 갈라져 3계층 서브넷과 다중 AZ 이중화를 갖춘다.</p>
-  <p data-version="v1" hidden>v1(v0.1)은 단일 AWS 계정 토폴로지다. 2개 AZ 의 VPC 에 ECS 서비스(Gateway·Widget·Tenant Console)와 RDS·ElastiCache 를 두고, 분석 파이프라인은 EventBridge 가 모는 Step Functions ECS 태스크 열로 그렸다.</p>
+  <p data-version="v2">v2(v0.2)는 v1 의 AWS 단일 구성에 증권사 관리 환경(On-Prem)을 분리해 추가했다. 증권사 쪽은 채널·내부 통제·DB·DMZ 구역으로 나뉘어 DMZ 의 Relay Worker 만 아웃바운드로 AWS 와 통신하고, AWS 쪽은 파이프라인용·서빙용 ECS 클러스터로 갈라져 3계층 서브넷과 다중 AZ 이중화를 갖춘다.</p>
+  <p data-version="v1" hidden>v1(v0.1)은 AWS 단일 환경 토폴로지다. 2개 AZ 의 VPC 에 ECS 서비스(Gateway·Widget·Tenant Console)와 RDS·ElastiCache 를 두고, 분석 파이프라인은 EventBridge 가 모는 Step Functions ECS 태스크 열로 그렸다. 증권사 관리 환경이 없는 이 Cloud-only 구조는 폐기된 방향이다.</p>
 </div>
 
 !!! note "설계 뷰 — 원본 v0.2 기준"
