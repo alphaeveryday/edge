@@ -27,10 +27,10 @@ API 서버를 4대로 늘리는 과정에서 Redis 도입이 필요한지 부하
 ## 실행
 
 ```bash
-# 루트에서 (온프렘 PG + 스키마 + 시드 포함)
-docker compose up --build publication-api   # host 18084
-curl -i localhost:18084/api/v1/explanations/069500  # 200
-curl -i localhost:18084/api/v1/explanations/305720  # 204
+# 루트에서 전체 스택 기동 — cloud 시드가 sync-agent → intake → screening-worker 경로로 적재된다
+docker compose up --build                            # publication-api 는 host 18084
+curl -i localhost:18084/api/v1/explanations/069500   # 200 (동기화로 게시분 도착 후)
+curl -i localhost:18084/api/v1/explanations/305720   # 204 (게시분 없는 종목)
 ```
 
 ## 개발 문서
