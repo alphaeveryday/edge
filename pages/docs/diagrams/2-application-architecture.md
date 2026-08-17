@@ -4,7 +4,7 @@ cloud/onprem 하이브리드 — 클라우드에서 만들고 증권사 통제 �
 
 상자를 클릭하면 상위·하위 1단계가 함께 강조된다.
 
-<p class="ep-diagram-meta">버전: <strong>v2</strong> (현재) ·
+<p class="ep-diagram-meta">버전: <strong>v2</strong> (현재) · <a href="#v1">v1</a> ·
 <a href="../interactive/2-aa.v2.html" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
 
 <div class="ep-diagram-frame">
@@ -16,6 +16,13 @@ cloud/onprem 하이브리드 — 클라우드에서 만들고 증권사 통제 �
     context·contracts 등 SSOT 에 있으며, 충돌 시 SSOT 가 우선한다.
 
 근거 문서(설계 뷰): [application-architecture.md](../reference/architecture/application-architecture.md)
+
+### v1 — 초기 설계 (v0.1) { #v1 }
+
+??? note "v1 정적 이미지 펼치기"
+    ![EDGE 애플리케이션 아키텍처 다이어그램 v1](images/2-aa.v1.png)
+
+    [원본 크기로 열기 ↗](images/2-aa.v1.png){ target=_blank rel=noopener }
 
 ---
 
