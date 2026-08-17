@@ -67,7 +67,6 @@ CACHE_MODE=two-level CACHE_L2_TTL=30s CACHE_L2_JITTER=5s docker compose -p edge-
 | `CACHE_TTL` | `3s` | L1(로컬) TTL |
 | `CACHE_L2_TTL` | `10s` | L2(Redis) TTL |
 | `CACHE_L2_JITTER` | `0s` | L2 만료 분산 폭 |
-| `EXPOSURE_ENABLED` | `true` | 노출 로그 쓰기 |
 | `REQUEST_METRIC_ENABLED` | `true` | 요청 메트릭 쓰기 |
 
 **1대 실험**은 인스턴스를 줄이고 nginx 를 우회한다 — LB 홉이 지연에 섞이지 않게.
@@ -77,9 +76,11 @@ docker compose -p edge-pubcache stop api-2 api-3 api-4
 # k6 BASE_URL=http://localhost:18101
 ```
 
-`EXPOSURE_ENABLED`·`REQUEST_METRIC_ENABLED` 를 `false` 로 둔 것이 **read suite**, 기본값 그대로가
-**full suite** 다. 두 토글의 **기본값은 true 이며 이 실험이 그 계약을 바꾸지 않는다** — 끄는 것은
-읽기 경로만 분리해 보기 위한 실험 조작이지 운영 프로필 변경이 아니다.
+`REQUEST_METRIC_ENABLED` 를 `false` 로 둔 것이 **read suite**, 기본값 그대로가
+**full suite** 다. 이 토글의 **기본값은 true 이며 이 실험이 그 계약을 바꾸지 않는다** — 끄는 것은
+읽기 경로만 분리해 보기 위한 실험 조작이지 운영 프로필 변경이 아니다. (노출 로그 토글은 없다 —
+ADR-0053 은퇴로 앱에 소비자가 없어, 초기 하네스가 걸었던 `EXPOSURE_ENABLED` 는 no-op 이었다.
+read/full 의 실측 차이는 전부 요청 메트릭 쓰기 축이다.)
 
 ## suite
 
@@ -92,8 +93,8 @@ docker compose -p edge-pubcache stop api-2 api-3 api-4
 | T1 | two-level | 4 | hot-key | L1+L2 합산 이득이 R1·C1 을 넘는가 |
 | E1 | 전 모드 | 4 | cold-start | 빈 캐시에서 첫 요청 폭이 DB 를 때리는 크기 |
 | E2 | caffeine · two-level | 4 | synchronized-expiry | TTL 동시 만료로 미스가 한 점에 몰리는지 |
-| E3 | two-level | 4 | synchronized-expiry | `CACHE_L2_JITTER` 가 E2 의 스파이크를 실제로 흩는가 |
-| E4 | 채택 후보 | 1→2→4 | hot-key | 인스턴스를 늘릴 때 처리량이 선형으로 붙는가 |
+| E3 | two-level | 4 | synchronized-expiry | `CACHE_L2_JITTER` 가 E2 의 스파이크를 흩는가 — 단일 hot-key 한정, 다종 키 동시 만료는 사정거리 밖(일지 참조) |
+| E4 | 채택 후보 | 3→4 | hot-key | api-4 정지→재합류 — 합류 인스턴스의 콜드 미스를 L2 가 흡수하는가 (1·2대 처리량은 미측정) |
 | E5 | redis · two-level | 4 | hot-key | `docker compose stop redis` — L2 장애 시 죽는지 원본으로 떨어지는지 |
 | E6 | 채택 후보 | 4 | publication-change | 게시·차단 반영 지연(캐시가 낡은 응답을 얼마나 오래 붙드는가) |
 | F1 | 채택 후보 | 4 | hot-key (full) | 쓰기 토글 켠 채 — 캐시로 못 가리는 잔여 쓰기 부하 |
@@ -103,8 +104,8 @@ docker compose -p edge-pubcache stop api-2 api-3 api-4
 ## 실행·수집
 
 ```bash
-scripts/run-matrix.sh        # suite 격자 실행
-scripts/collect-result.sh    # 실행 결과를 results/<run_id>/ 로 모음
+scripts/run-matrix.sh        # suite 격자 실행 — run 마다 collect-result.sh 를 자동 호출한다
+scripts/collect-result.sh <run_id> <start_epoch> <end_epoch>   # 수동 재수집 시에만 직접 실행
 ```
 
 관측: Grafana http://localhost:13000 (대시보드 `publication-cache`), Prometheus http://localhost:19090.

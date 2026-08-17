@@ -31,8 +31,8 @@ x-api-env: &api-env
   PUBLICATION_SERVE_CACHE_TTL: ${CACHE_TTL:-3s}
   PUBLICATION_CACHE_L2_TTL: ${CACHE_L2_TTL:-10s}
   PUBLICATION_CACHE_L2_JITTER: ${CACHE_L2_JITTER:-0s}
-  # read/full suite 구분 — 쓰기 경로(노출 로그·요청 메트릭)를 끄면 읽기만 남는다.
-  PUBLICATION_EXPOSURE_ENABLED: ${EXPOSURE_ENABLED:-true}
+  # read/full suite 구분 — 쓰기 경로(요청 메트릭)를 끄면 읽기만 남는다.
+  # 노출 로그는 ADR-0053 으로 은퇴해 대응 토글이 없다.
   PUBLICATION_REQUEST_METRIC_ENABLED: ${REQUEST_METRIC_ENABLED:-true}
   SPRING_DATA_REDIS_HOST: redis
   SPRING_DATA_REDIS_PORT: "6379"

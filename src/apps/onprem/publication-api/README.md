@@ -31,7 +31,7 @@ MTS 위젯이 직접 호출하는 조회 표면 — `GET /api/v1/explanations/{e
 - Redis 장애를 주입해도(60s 정지) 오류 0·DB 도달은 L1 등가로 유계(요청 대비 1/310) — fail-open 이 안전한 이유이자 Redis 가 없어도 되는 이유.
 - **전환 조건(실측 좌표)**: 균등 접근 기준 워킹셋 **약 800종**(L1 적중 50% 붕괴 무릎 실측 798~800 — 수식 `요청률×TTL÷(키수×인스턴스수)`) / 로더 고비용화(현 ~1ms) / 인스턴스 수십 대(현 4) / DB 공유 자원화 / 캐시 외 Redis 용도 발생. 단 무릎은 접근 분포의 함수다 — 현실 분포(인기 종목 90% 쏠림)에선 실제 유니버스(1,088종)에서도 적중률 90%가 유지된다.
 
-부하 실험 전용 토글(기본값 = 제품 계약 그대로, 실험 compose 만 덮는다): `publication.exposure.enabled`·`publication.request-metric.enabled`(read-path 프로필에서 동기 쓰기 분리 — false 는 계약 위반 상태라 기동 warn), `PUBLICATION_HTTP_PERCENTILES_HISTOGRAM`(p99 히스토그램, 기본 false — env 로 percentiles-histogram 을 직접 바인딩하면 relaxed binding 이 double[] 로 오해석해 기동이 죽는다), `management.health.redis.enabled=false`(기본 — caffeine 모드에서 Redis 부재로 health DOWN 방지).
+부하 실험 전용 토글(기본값 = 제품 계약 그대로, 실험 compose 만 덮는다): `publication.request-metric.enabled`(read-path 프로필에서 동기 쓰기 분리 — false 는 계약 위반 상태라 기동 warn), `PUBLICATION_HTTP_PERCENTILES_HISTOGRAM`(p99 히스토그램, 기본 false — env 로 percentiles-histogram 을 직접 바인딩하면 relaxed binding 이 double[] 로 오해석해 기동이 죽는다), `management.health.redis.enabled=false`(기본 — caffeine 모드에서 Redis 부재로 health DOWN 방지).
 
 ## 재작성 지점
 

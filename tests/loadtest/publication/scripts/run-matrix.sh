@@ -161,12 +161,13 @@ else
 	unset PUB_KNOWN_TICKERS || true
 fi
 
-# read suite 는 쓰기 경로(노출 로그·요청 메트릭)를 끈다 — 캐시가 가리는 read path 만 남긴다.
+# read suite 는 쓰기 경로(요청 메트릭)를 끈다 — 캐시가 가리는 read path 만 남긴다.
 # full suite(F1)만 켠다: 캐시로 못 가리는 쓰기 잔여가 얼마인지 보는 것이 목적이다.
+# 노출 로그 토글은 없다 — ADR-0053 은퇴로 앱에 소비자가 없어 no-op 이었다.
 if [ "$WRITE_SUITE" = "full" ]; then
-	EXPOSURE_ENABLED=true; REQUEST_METRIC_ENABLED=true
+	REQUEST_METRIC_ENABLED=true
 else
-	EXPOSURE_ENABLED=false; REQUEST_METRIC_ENABLED=false
+	REQUEST_METRIC_ENABLED=false
 fi
 
 CACHE_TTL="${CACHE_TTL:-3s}"
@@ -220,7 +221,7 @@ wait_all_healthy() {
 export CACHE_MODE="$MODE"
 export CACHE_TTL CACHE_L2_TTL
 export CACHE_L2_JITTER="$JITTER"
-export EXPOSURE_ENABLED REQUEST_METRIC_ENABLED
+export REQUEST_METRIC_ENABLED
 
 info "suite=$SUITE mode=$MODE instances=${N} scenario=$SCENARIO write=$WRITE_SUITE ttl=$CACHE_TTL l2=$CACHE_L2_TTL jitter=$JITTER"
 
@@ -301,11 +302,17 @@ for CURRENT_RATE in $RATES; do
 				# 전환이 응답에 반영되기까지 걸리는 시간이 곧 TTL 상한의 실측치다.
 				# 반복마다 이전 rep 의 --block 잔재를 걷어낸다 — 잔재가 있으면 setup 이
 				# 204 를 받아 baseline 이 무너지고 이후 200 이 전부 fresh 로 집계된다.
-				"$SCRIPT_DIR/prepare-data.sh" --reset-scope >/dev/null 2>&1 || true
+				# 초기화·주입 실패는 run 무효다 — 삼키면 변경 없는 스택의 응답이
+				# 전부 fresh 로 집계돼 성공한 실험처럼 남는다(fail-loud).
+				"$SCRIPT_DIR/prepare-data.sh" --reset-scope >/dev/null \
+					|| { err "E6 reset-scope 실패 — run 중단"; exit 1; }
+				rm -f "$RUN_DIR/inject-failed"
 				( sleep "$EVENT_AT"
-				  "$SCRIPT_DIR/prepare-data.sh" --new-snapshot 069500 >/dev/null 2>&1
+				  "$SCRIPT_DIR/prepare-data.sh" --new-snapshot 069500 >/dev/null \
+					|| { echo new-snapshot >> "$RUN_DIR/inject-failed"; exit 1; }
 				  sleep 30
-				  "$SCRIPT_DIR/prepare-data.sh" --block 069500 >/dev/null 2>&1 ) &
+				  "$SCRIPT_DIR/prepare-data.sh" --block 069500 >/dev/null \
+					|| { echo block >> "$RUN_DIR/inject-failed"; exit 1; } ) &
 				BG_PID=$!
 				;;
 		esac
@@ -330,6 +337,10 @@ for CURRENT_RATE in $RATES; do
 
 		if [ -n "$BG_PID" ]; then
 			wait "$BG_PID" 2>/dev/null || true
+		fi
+		if [ -f "$RUN_DIR/inject-failed" ]; then
+			err "E6 변경 주입 실패($(tr '\n' ',' < "$RUN_DIR/inject-failed")) — 이 run 은 무효다"
+			exit 1
 		fi
 
 		"$SCRIPT_DIR/collect-result.sh" "$RUN_ID" "$START" "$END" || err "Prometheus 수집 실패(계속 진행)"
