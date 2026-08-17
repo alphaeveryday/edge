@@ -14,6 +14,11 @@
   <iframe data-version="v1" src="../interactive/1-ia.v1.html" title="EDGE 정보 구조 다이어그램 v1 — 인터랙티브" loading="lazy" hidden></iframe>
 </div>
 
+<div class="ep-version-note">
+  <p data-version="v2">v2(v0.2)는 v1 의 단일 콘솔을 슈퍼 어드민 콘솔과 고객사 운영 콘솔로 분리했다. 하이브리드 전환으로 검수·제공 관리가 고객사 몫이 되면서 고객사 콘솔은 가격 변동 설명의 검수·기준 관리 중심으로, 슈퍼 어드민 콘솔은 테넌트·분석 파이프라인 운영 중심으로 재편됐고, 위젯은 종목별 가격 변동 설명 하나로 수렴했다.</p>
+  <p data-version="v1" hidden>v1(v0.1)은 단일 SaaS 콘솔을 전제로 그린 정보 구조다. 조직(고객사) 콘솔 하나에 인증·대시보드·애플리케이션·컴플라이언스·구성원·설정을 담고, 위젯은 종목 분석 정보 화면 하나로 두었다.</p>
+</div>
+
 !!! note "설계 뷰 — 원본 v0.2 기준"
     이 다이어그램은 설계 시점(v0.2)의 정보 구조다. 현행 화면·메뉴의 권위는
     [콘솔 IA SSOT](../reference/console-ia/super-admin-console.md)에 있으며, 충돌 시 SSOT 가 우선한다.

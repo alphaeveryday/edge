@@ -16,6 +16,11 @@ ECS 클러스터 분리·RDS·CloudFront 등 실 배포 토폴로지.
   <iframe data-version="v1" src="../interactive/4-ca.v1.html" title="EDGE 클라우드 아키텍처 다이어그램 v1 — 인터랙티브" loading="lazy" hidden></iframe>
 </div>
 
+<div class="ep-version-note">
+  <p data-version="v2">v2(v0.2)는 v1 의 AWS 단일 구성에 고객사 온프레미스 환경을 분리해 추가했다. 고객사는 채널·내부 통제·DB·DMZ 구역으로 나뉘어 DMZ 의 Relay Worker 만 아웃바운드로 AWS 와 통신하고, AWS 쪽은 파이프라인용·서빙용 ECS 클러스터로 갈라져 3계층 서브넷과 다중 AZ 이중화를 갖춘다.</p>
+  <p data-version="v1" hidden>v1(v0.1)은 단일 AWS 계정 토폴로지다. 2개 AZ 의 VPC 에 ECS 서비스(Gateway·Widget·Tenant Console)와 RDS·ElastiCache 를 두고, 분석 파이프라인은 EventBridge 가 모는 Step Functions ECS 태스크 열로 그렸다.</p>
+</div>
+
 !!! note "설계 뷰 — 원본 v0.2 기준"
     이 다이어그램은 설계 시점(v0.2)의 클라우드 토폴로지다(다중 AZ 등 목표 구성 포함).
     현행 인프라의 권위는 infra/terraform 등 SSOT 에 있으며, 충돌 시 SSOT 가 우선한다.
