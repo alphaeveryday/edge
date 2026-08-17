@@ -38,7 +38,20 @@
 
 ### 2-4. DB 스키마 SSOT
 
-<!-- TODO: Flyway 2세트 + 생성 ERD(CI 대조) + expand-contract 마이그레이션 -->
+[![Cloud 데이터 모델 개요](docs/data-model/cloud-overview.svg)](docs/data-model/README.md)
+
+| 도메인 | 책임 | 상세 ERD |
+|---|---|---|
+| 기준정보·금융상품 | 공유 동일성, 분류, 상품 프로필 | [열기](docs/data-model/domains/reference/) |
+| 문서·공시 사실 | 뉴스 수집 상태, 원문, 명제, 구조화된 공시 사실 | [열기](docs/data-model/domains/documents/) |
+| 시장 데이터·수집 | 수집 상태, 가격·수급·NAV·구성종목 관측, 변동 분해 | [열기](docs/data-model/domains/market/) |
+| 이벤트·근거 | 사건, 참여자 역할, 증거, 사건 스레드 | [열기](docs/data-model/domains/events/) |
+| 설명 생성·계보 | 설명 경로, 실행 입력, 결과와 증거 계보 | [열기](docs/data-model/domains/explanation/) |
+| 테넌트 전송 | 릴리스, 전송 원장, 동기화 커서 | [열기](docs/data-model/domains/delivery/) |
+| 운영 원장 | 작업 기대값·시도, 조정, 관리자 활동 | [열기](docs/data-model/domains/operations/) |
+
+루트에서는 도메인 사이의 흐름만 보여줍니다. 각 도메인 디렉터리에 들어가면 해당 도메인의
+상세 물리 FK ERD를 확인할 수 있습니다.
 
 ### 2-5. 데이터 파이프라인 · 분석 엔진
 

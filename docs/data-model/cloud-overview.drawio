@@ -1,0 +1,72 @@
+<mxfile host="Electron" agent="edge-erd-generator">
+  <diagram id="cloud-domain-overview" name="Cloud domain overview">
+    <mxGraphModel dx="1436" dy="1729" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="920" pageHeight="490" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="canvas" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=none;connectable=0;movable=0;resizable=0;editable=0;" value="" vertex="1">
+          <mxGeometry height="490" width="920" as="geometry" />
+        </mxCell>
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=25;fontColor=#0f172a;fontStyle=1;" value="Cloud 데이터 모델" vertex="1">
+          <mxGeometry height="34" width="500" x="35" y="18" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontColor=#64748b;fontStyle=0;" value="루트에서는 도메인 흐름만, 각 도메인에서는 물리 FK를 확인합니다" vertex="1">
+          <mxGeometry height="24" width="620" x="35" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;기준정보·금융상품&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;entity · actor · instrument · concept&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="35" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;문서·공시 사실&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;document · assertion · disclosure_fact&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="335" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;시장 데이터·수집&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;minute ingestion · price · flow&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="35" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;이벤트·근거&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;source_event · evidence · thread&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="335" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;설명 생성·계보&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;route · run · result · lineage&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="635" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;테넌트 전송&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;tenant · release · delivery cursor&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="635" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="domain-7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7aa2e3;strokeWidth=1.5;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;spacingRight=12;" value="&lt;div style=&quot;font-size:15px;font-weight:700;color:#172554;&quot;&gt;운영 원장&lt;/div&gt;&lt;div style=&quot;margin-top:12px;font-size:11px;color:#475569;&quot;&gt;task · reconciliation · admin audit&lt;/div&gt;" vertex="1">
+          <mxGeometry height="78" width="250" x="335" y="375" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-1" edge="1" parent="1" source="domain-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-2" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-2" edge="1" parent="1" source="domain-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-3" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-3" edge="1" parent="1" source="domain-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-4" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-4" edge="1" parent="1" source="domain-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-4" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-5" edge="1" parent="1" source="domain-4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-5" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-6" edge="1" parent="1" source="domain-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-6" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="flow-7" edge="1" parent="1" source="domain-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-7" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="414" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="flow-8" edge="1" parent="1" source="domain-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7c93b5;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;" target="domain-7" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="414" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
