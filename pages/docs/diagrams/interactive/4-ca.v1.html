@@ -260,7 +260,7 @@ function setPeek(id){
 }
 NODES.forEach(n=>{
   if(!n.textContent.trim() && !n.getAttribute('aria-label')){
-    const NAMED={'FsdlY2k_L9ahukHfzdEe-34':'금융사 통제 환경 데이터베이스','SBUGKqe5XOb1rZlI4G-q-4':'EDGE 환경 데이터베이스'};
+    const NAMED={"MSZnOsBF_ynknIUazmD6-3":"Gateway Service","MSZnOsBF_ynknIUazmD6-7":"Widget Service","MSZnOsBF_ynknIUazmD6-10":"Tenant Console Service","MSZnOsBF_ynknIUazmD6-12":"Gateway Service","MSZnOsBF_ynknIUazmD6-16":"Widget Service","MSZnOsBF_ynknIUazmD6-19":"Tenant Console Service","7LyFc7aHEGke3M7NJR3C-2":"ECS Cluster","7LyFc7aHEGke3M7NJR3C-33":"Process News Task","7LyFc7aHEGke3M7NJR3C-35":"Scheduler (AWS EventBridge)","MSZnOsBF_ynknIUazmD6-39":"NAT gateway","MSZnOsBF_ynknIUazmD6-42":"Internet Gateway","MSZnOsBF_ynknIUazmD6-45":"DNS (AWS Route 53)","MSZnOsBF_ynknIUazmD6-51":"CDN (AWS CloudFront)","MSZnOsBF_ynknIUazmD6-57":"NAT gateway","MSZnOsBF_ynknIUazmD6-62":"ALB","MSZnOsBF_ynknIUazmD6-73":"Primary Cache (AWS ElastiCache)","MSZnOsBF_ynknIUazmD6-83":"ECS Cluster"};
     const kid=DATA.nodes.find(m=>OWNER[m.i]===n.id && m.t);
     n.setAttribute('aria-label', NAMED[n.id]||(kid?kid.t.replace(/\n/g,' '):'다이어그램 노드'));
   }
