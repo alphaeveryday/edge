@@ -20,6 +20,8 @@
 ??? note "v1 정적 이미지 펼치기"
     ![EDGE 정보 구조 다이어그램 v1](images/1-ia.v1.png)
 
+    [원본 크기로 열기 ↗](images/1-ia.v1.png){ target=_blank rel=noopener }
+
 ---
 
 [목록](index.md) · [다음 → 2 애플리케이션 아키텍처](2-application-architecture.md)

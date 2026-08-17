@@ -22,6 +22,8 @@ cloud/onprem 하이브리드 — 클라우드에서 만들고 증권사 통제 �
 ??? note "v1 정적 이미지 펼치기"
     ![EDGE 애플리케이션 아키텍처 다이어그램 v1](images/2-aa.v1.png)
 
+    [원본 크기로 열기 ↗](images/2-aa.v1.png){ target=_blank rel=noopener }
+
 ---
 
 [← 1 정보 구조](1-information-architecture.md) · [목록](index.md) · [다음 → 3 시스템 아키텍처](3-system-architecture.md)

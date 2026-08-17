@@ -22,6 +22,8 @@
 ??? note "v1 정적 이미지 펼치기"
     ![EDGE 시스템 아키텍처 다이어그램 v1](images/3-sa.v1.png)
 
+    [원본 크기로 열기 ↗](images/3-sa.v1.png){ target=_blank rel=noopener }
+
 ---
 
 [← 2 애플리케이션 아키텍처](2-application-architecture.md) · [목록](index.md) · [다음 → 4 클라우드 아키텍처](4-cloud-architecture.md)

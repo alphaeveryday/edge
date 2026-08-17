@@ -22,6 +22,8 @@ ECS 클러스터 분리·RDS·CloudFront 등 실 배포 토폴로지.
 ??? note "v1 정적 이미지 펼치기"
     ![EDGE 클라우드 아키텍처 다이어그램 v1](images/4-ca.v1.png)
 
+    [원본 크기로 열기 ↗](images/4-ca.v1.png){ target=_blank rel=noopener }
+
 ---
 
 [← 3 시스템 아키텍처](3-system-architecture.md) · [목록](index.md)
