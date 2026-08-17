@@ -7,11 +7,13 @@ document.addEventListener("DOMContentLoaded", function () {
     var frame = meta && meta.nextElementSibling;
     if (!link || !frame || !frame.classList.contains("ep-diagram-frame")) return;
     var hrefs = { v2: link.getAttribute("href"), v1: link.getAttribute("data-href-v1") };
-    sel.addEventListener("change", function () {
+    var apply = function () {
       frame.querySelectorAll("[data-version]").forEach(function (el) {
         el.hidden = el.dataset.version !== sel.value;
       });
       if (hrefs[sel.value]) link.setAttribute("href", hrefs[sel.value]);
-    });
+    };
+    sel.addEventListener("change", apply);
+    apply(); // 새로고침 시 브라우저가 복원한 폼 값과 뷰어를 동기화
   });
 });

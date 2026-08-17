@@ -46,6 +46,10 @@
 }
 
 /* v1 정적 이미지 뷰 — iframe 과 같은 프레임 스타일 */
+.ep-diagram-frame img[hidden] {
+  display: none; /* display: block 이 UA 의 [hidden] 규칙을 덮지 않게 */
+}
+
 .ep-diagram-frame img {
   display: block;
   width: 100%;
