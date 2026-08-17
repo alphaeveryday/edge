@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/data-model/**"
       - "src/libs/schema/generated/physical-erd.dbml"
+      - "src/libs/schema/generated/physical-erd-onprem.dbml"
       - "src/libs/schema/scripts/validate-doc-erd.py"
       - ".github/workflows/data-model-validate.yml"
 
