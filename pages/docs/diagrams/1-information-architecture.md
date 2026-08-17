@@ -5,7 +5,7 @@
 <p class="ep-diagram-meta">버전:
 <select class="ep-version-select" aria-label="다이어그램 버전 선택">
   <option value="v2" selected>v2 (현재)</option>
-  <option value="v1">v1 — 초기 설계 (v0.1)</option>
+  <option value="v1">v1</option>
 </select> ·
 <a class="ep-open-full" href="../interactive/1-ia.v2.html" data-href-v1="../interactive/1-ia.v1.html" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
 
