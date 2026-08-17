@@ -82,6 +82,13 @@ test_out.txt
 # 로컬 레이크 캐시. 실 데이터는 S3 에 있고 이건 재현 가능한 사본이다.
 .lake/
 
+# 캐시 실험 산출물(k6 요약·메트릭 덤프). 머신·실행마다 달라지는 측정치라 저장소에 두지
+# 않는다 - 채택 결과만 코드·문서로 간다.
+# 디렉터리 자체가 아니라 내용물을 무시한다 - 디렉터리를 통째로 제외하면 git 이 안으로
+# 내려가지 않아 .gitkeep 예외가 먹지 않는다.
+tests/loadtest/publication/results/*
+!tests/loadtest/publication/results/.gitkeep
+
 .tmp/
 *.dtmp
 .$*
