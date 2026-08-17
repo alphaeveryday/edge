@@ -33,8 +33,10 @@ publication:
     # none|caffeine|redis|two-level. 미지정=caffeine(기존 단일 인스턴스 동작 그대로).
     mode: ${PUBLICATION_CACHE_MODE:caffeine}
     # L2(Redis) TTL — L1(serve-cache-ttl)보다 길어야 한다(two-level 조립 시 검증).
-    # redis·two-level 모드의 차단·정정 반영 상한은 이 값+jitter, two-level 최악은
-    # 만료 직전 L2 구본이 L1 에 재적재되는 경우라 +L1 TTL(serve-cache-ttl)까지 가산된다.
+    # redis·two-level 모드에서 게시 상태 변경(무효화·문구 수정·신규 게시)의 반영 상한은
+    # 이 값+jitter, two-level 최악은 만료 직전 L2 구본이 L1 에 재적재되는 경우라
+    # +L1 TTL(serve-cache-ttl)까지 가산된다. 제공 범위(scope) 차단은 캐시 앞단에서
+    # 매 요청 판정되므로 이 지연과 무관하게 즉시다.
     l2-ttl: ${PUBLICATION_CACHE_L2_TTL:10s}
     # 동시 만료 실험의 대조군 보존을 위해 기본 0 — jitter 는 실험 변수다.
     l2-jitter: ${PUBLICATION_CACHE_L2_JITTER:0s}

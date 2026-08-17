@@ -254,9 +254,11 @@ WARMUP_S="$(to_seconds "$WARMUP")"
 # 무슨 일이 일어나는지가 관측 대상이다.
 EVENT_AT=$((WARMUP_S + DUR_S / 2))
 # E6 는 EVENT_AT+30s 에 2차 주입(차단)이 있다 — duration 이 짧으면 주입이 측정 창
-# 밖에서 성공해 전환 없는 데이터가 유효 run 처럼 남는다. 최소 창을 강제한다.
-if [ "$SCENARIO" = "publication-change" ] && [ "$DUR_S" -lt 90 ]; then
-	err "publication-change 는 --duration 90s 이상이 필요하다 (차단 주입 $((DUR_S / 2 + 30))s > 측정 창 ${DUR_S}s)"
+# 밖에서 성공해 전환 없는 데이터가 유효 run 처럼 남는다. 주입을 결정하는 것은
+# SPECIAL 이다(SCENARIO 는 --scenario 로 덮일 수 있다). 90s = 창 안 주입(60s)에
+# 차단 후 관측 여유 30s 를 더한 최소값이다.
+if [ "$SPECIAL" = "publication-change" ] && [ "$DUR_S" -lt 90 ]; then
+	err "publication-change 주입은 --duration 90s 이상이 필요하다 (차단 주입 $((DUR_S / 2 + 30))s + 관측 여유 30s > 측정 창 ${DUR_S}s)"
 	exit 2
 fi
 
