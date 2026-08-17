@@ -46,7 +46,7 @@ MTS 위젯이 직접 호출하는 조회 표면 — `GET /api/v1/explanations/{e
 
 ```bash
 # 루트에서 전체 스택 기동 — cloud 시드가 sync-agent → intake → screening-worker 경로로 적재된다
-docker compose up --build                            # publication-api 는 host 18084
+docker compose up --build -d                         # publication-api 는 host 18084
 curl -i localhost:18084/api/v1/explanations/069500   # 200 (동기화로 게시분 도착 후, 무헤더 — ADR-0053)
 curl -i localhost:18084/api/v1/explanations/305720   # 204 (게시분 없는 종목)
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:publication-api:bootRun)
