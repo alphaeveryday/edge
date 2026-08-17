@@ -9,6 +9,9 @@ import com.edge.publication.repository.PolicyVersionRepository;
 import com.edge.publication.repository.ServingRequestMetricRepository;
 import com.edge.publication.repository.ServingScopeRepository;
 import com.edge.publication.service.ExplanationService;
+import com.edge.publication.cache.CaffeineServeCache;
+import com.github.benmanes.caffeine.cache.Ticker;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,7 +60,10 @@ class RequestMetricFilterTest {
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {
 		SeededStore() {
-			super(null, Set.of("069500", "305720"), java.time.Duration.ofSeconds(3));
+			super(null, Set.of("069500", "305720"),
+					new CaffeineServeCache(java.time.Duration.ofSeconds(3), Ticker.systemTicker(),
+							new SimpleMeterRegistry()),
+					new SimpleMeterRegistry());
 		}
 
 		@Override
@@ -91,7 +97,7 @@ class RequestMetricFilterTest {
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
-				.addFilters(new RequestMetricFilter(metrics))
+				.addFilters(new RequestMetricFilter(metrics, true))
 				.build();
 	}
 
@@ -170,7 +176,7 @@ class RequestMetricFilterTest {
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/flood/xyz");
 		request.setAttribute(
 				org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/**");
-		new RequestMetricFilter(metrics).doFilter(request, new MockHttpServletResponse(),
+		new RequestMetricFilter(metrics, true).doFilter(request, new MockHttpServletResponse(),
 				(req, res) -> ((HttpServletResponse) res).setStatus(404));
 		assertThat(metrics.saved).isEmpty();
 	}
@@ -182,7 +188,7 @@ class RequestMetricFilterTest {
 		MockMvc failing = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
 						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
-				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+				.addFilters(new RequestMetricFilter(metrics, true), (request, response, chain) -> {
 					// 미매칭 미기록(ADR-0053) 도입 후 기록의 전제는 매핑 성립 — 실 운영에서
 					// 컨트롤러 예외는 DispatcherServlet 이 매핑 후 던지므로 속성이 있다. 그
 					// 상황을 재현한다(매핑 전 필터 예외는 미매칭이라 기록 제외가 맞다).
@@ -217,7 +223,7 @@ class RequestMetricFilterTest {
 				throw new IllegalStateException("client disconnected");
 			}
 		};
-		RequestMetricFilter filter = new RequestMetricFilter(metrics);
+		RequestMetricFilter filter = new RequestMetricFilter(metrics, true);
 
 		assertThatThrownBy(() -> filter.doFilter(request, broken, (req, res) -> {
 			((HttpServletResponse) res).setStatus(200);
@@ -229,13 +235,43 @@ class RequestMetricFilterTest {
 	}
 
 	@Test
+	void 비활성화되면_기록하지_않고_응답_본문도_그대로다() throws Exception {
+		// 다중 인스턴스 캐시 로컬 실험(LOCAL-1)의 read-path 프로필 — 요청당 INSERT 가 캐시 효과를
+		// 가려 끄지만, 끈 상태가 응답을 바꾸면 실험 결과를 그대로 신뢰할 수 없다.
+		MockMvc disabled = MockMvcBuilders
+				.standaloneSetup(new ExplanationController(new ExplanationService(
+						new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
+				.setControllerAdvice(new ExceptionAdvice())
+				.addFilters(new RequestMetricFilter(metrics, false))
+				.build();
+
+		disabled.perform(get("/api/v1/explanations/069500")
+						.header("X-Customer-Hash", "h").header("X-Channel", "MTS"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.summary").isNotEmpty());
+
+		assertThat(metrics.saved).isEmpty();
+	}
+
+	@Test
+	void 비활성화되면_API_경로도_필터_대상에서_빠진다() throws Exception {
+		// 기록만 건너뛰는 게 아니라 필터 자체가 서지 않아야 한다 — ContentCachingResponseWrapper
+		// 래핑·본문 복사 비용이 남으면 대조군이 오염된다.
+		MockHttpServletRequest request =
+				new MockHttpServletRequest("GET", "/api/v1/explanations/069500");
+
+		assertThat(new RequestMetricFilter(metrics, false).shouldNotFilter(request)).isTrue();
+		assertThat(new RequestMetricFilter(metrics, true).shouldNotFilter(request)).isFalse();
+	}
+
+	@Test
 	void 비문자열_code_는_에러_코드로_강제되지_않는다() throws Exception {
 		// {"code":4001} 같은 비문자열 code 가 "4001" 로 변환돼 적재되면 문자열 도메인
 		// 어휘(SERV*·COMMON*)만 집계한다는 계약이 깨진다 — 미상(NULL)으로 수렴해야 한다.
 		MockMvc numericCode = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
 						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
-				.addFilters(new RequestMetricFilter(metrics), (request, response, chain) -> {
+				.addFilters(new RequestMetricFilter(metrics, true), (request, response, chain) -> {
 					request.setAttribute(
 							org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
 							"/api/v1/explanations/{etfTicker}");

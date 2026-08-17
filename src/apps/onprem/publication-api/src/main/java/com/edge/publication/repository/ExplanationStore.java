@@ -1,10 +1,13 @@
 package com.edge.publication.repository;
 
+import com.edge.publication.cache.CaffeineServeCache;
+import com.edge.publication.cache.ServeCache;
 import com.edge.publication.entity.AnalysisItem;
 import com.edge.publication.entity.Publication;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Limit;
@@ -52,32 +55,35 @@ public class ExplanationStore {
 	private final PublicationRepository publications;
 	private final Set<String> knownTickers;
 	private final ObjectMapper objectMapper = new ObjectMapper();
-	private final Cache<String, Optional<PublishedExplanation>> serveCache;
+	// 조회 캐시(ALPHA-433). 어느 모드가 꽂히든 이 층의 계약은 같다 — 캐시 정책·TTL 의 뜻은
+	// com.edge.publication.cache 패키지에 있다(다중 인스턴스 캐시 로컬 실험 LOCAL-4/5).
+	private final ServeCache serveCache;
+	// 모드 불문 "실제 DB 에 도달한 횟수"의 단일 계측 지점 — 캐시 효과를 여기 하나로 읽는다.
+	private final Counter dbLoads;
 
 	@Autowired
 	public ExplanationStore(PublicationRepository publications,
 			@Value("${publication.known-tickers}") Set<String> knownTickers,
-			@Value("${publication.serve-cache-ttl:3s}") Duration serveCacheTtl) {
+			ServeCache serveCache, MeterRegistry registry) {
+		this.publications = publications;
+		this.knownTickers = knownTickers;
+		this.serveCache = serveCache;
+		this.dbLoads = registry.counter("publication.cache.db.loads");
+	}
+
+	// 캐시 설정 없이 기본(L1) 조립만 원하는 테스트용 — 컨트롤러·파싱 테스트가 쓴다.
+	protected ExplanationStore(PublicationRepository publications, Set<String> knownTickers,
+			Duration serveCacheTtl) {
 		this(publications, knownTickers, serveCacheTtl, Ticker.systemTicker());
 	}
 
 	// 테스트 시간 주입 시임 — TTL 만료(스테일 상한)를 실제 대기 없이 검증한다.
+	// 기존 캐시 계약 테스트가 이 생성자로 L1 만 조립한다(실험 설정과 무관한 기본 동작).
 	ExplanationStore(PublicationRepository publications, Set<String> knownTickers,
 			Duration serveCacheTtl, Ticker ticker) {
-		this.publications = publications;
-		this.knownTickers = knownTickers;
-		// 조회 캐시(ALPHA-433) — 급등 시 동일 종목 집중 조회(hot-key)의 중복 읽기를 제거한다.
-		// 응답은 고객별 요소가 없어 (ticker, trade_date) 단위로 공유 가능하다(고객 컨텍스트
-		// 폐지 — ADR-0053. 요청 메트릭 기록은 캐시 밖 필터라 캐시 적중과 무관하게 남는다).
-		// 검수·차단 이벤트의 프로세스 간 무효화 경로가 없으므로 TTL 이 곧 차단·정정 반영
-		// 지연의 상한이다 — 늘릴 때는 컴플라이언스 검토가 선행돼야 한다.
-		// "게시분 없음"(empty)도 캐시한다: 신규 게시 노출이 최대 TTL 만큼 늦는 대신
-		// 204 폭주도 같은 상한으로 막는다.
-		this.serveCache = Caffeine.newBuilder()
-				.expireAfterWrite(serveCacheTtl)
-				.maximumSize(10_000)
-				.ticker(ticker)
-				.build();
+		this(publications, knownTickers,
+				new CaffeineServeCache(serveCacheTtl, ticker, new SimpleMeterRegistry()),
+				new SimpleMeterRegistry());
 	}
 
 	/** 상장 여부(404 판별) — 종목 마스터 동기화 전의 설정 allowlist. */
@@ -91,12 +97,10 @@ public class ExplanationStore {
 	 * 거래일을 우선 정렬한다(과거일 검수분이 늦게 게시돼도 최신 거래일이 이긴다).
 	 */
 	public Optional<PublishedExplanation> findPublished(String ticker, LocalDate tradeDate) {
-		// 같은 키의 동시 미스는 Caffeine 이 로더 1회로 합친다(stampede 방지).
-		return serveCache.get(cacheKey(ticker, tradeDate), key -> load(ticker, tradeDate));
-	}
-
-	private static String cacheKey(String ticker, LocalDate tradeDate) {
-		return tradeDate == null ? ticker + "|latest" : ticker + "|" + tradeDate;
+		return serveCache.getOrLoad(ticker, tradeDate, (t, d) -> {
+			dbLoads.increment();
+			return load(t, d);
+		});
 	}
 
 	// package-private: 캐시 테스트(ExplanationStoreCacheTest)가 로더를 대역으로 바꿔

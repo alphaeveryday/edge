@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerMapping;
@@ -28,6 +29,9 @@ import java.io.IOException;
  * 파싱한다 — 비JSON·형상 밖 응답은 NULL(코드 미상)이 정직한 값(스키마 CHECK 와 동일
  * 규율). 기록 실패는 로그로 드러내되 서빙 응답을 깨뜨리지 않는다 — 관측이 서빙을
  * 죽이면 주객전도라는 의도적 선택.
+ *
+ * <p>{@code publication.request-metric.enabled=false} 는 다중 인스턴스 캐시 로컬 실험(LOCAL-1)
+ * 전용 토글이다 — 요청당 INSERT 가 read-path 프로필의 병목이 되어 캐시 효과를 가린다. 기본값은 true.
  */
 @Component
 public class RequestMetricFilter extends OncePerRequestFilter {
@@ -39,16 +43,25 @@ public class RequestMetricFilter extends OncePerRequestFilter {
 	private static final int ERROR_CODE_MAX_LENGTH = 20;
 
 	private final ServingRequestMetricRepository metrics;
+	private final boolean enabled;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
-	public RequestMetricFilter(ServingRequestMetricRepository metrics) {
+	public RequestMetricFilter(ServingRequestMetricRepository metrics,
+			@Value("${publication.request-metric.enabled:true}") boolean enabled) {
 		this.metrics = metrics;
+		this.enabled = enabled;
+		if (!enabled) {
+			// 다중 인스턴스 캐시 로컬 실험(LOCAL-1) 전용 — 이 상태에서는 Dashboard(ALPHA-128)의
+			// 트래픽·에러율 데이터 소스가 통째로 비므로, 실 운영에서 켜졌는지 기동 로그로 확인 가능해야 한다.
+			log.warn("요청 메트릭 기록 비활성 — 부하실험 전용, serving_request_metric 미적재");
+		}
 	}
 
 	@Override
 	protected boolean shouldNotFilter(HttpServletRequest request) {
-		// 콘솔·관측 경로(actuator 등)는 서빙 메트릭 대상이 아니다.
-		return !request.getRequestURI().startsWith("/api/");
+		// 콘솔·관측 경로(actuator 등)는 서빙 메트릭 대상이 아니다. 비활성 시에도 걸러 내
+		// ContentCachingResponseWrapper 래핑·본문 복사 비용까지 없앤다(LOCAL-1 대조군).
+		return !enabled || !request.getRequestURI().startsWith("/api/");
 	}
 
 	@Override
