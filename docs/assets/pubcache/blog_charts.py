@@ -121,7 +121,7 @@ for mode, color, name in [('caffeine', C_CAF, '인프로세스만'), ('two-level
     ax.annotate(lbl, (xs[-1], meds[-1]), xytext=(0, 11), textcoords='offset points',
                 ha='center', color=INK, fontsize=10.5, fontweight='bold')
 ax.axvline(800, color=BASELINE, linewidth=1, linestyle=(0, (4, 4)), zorder=1)
-ax.annotate('L1 붕괴 무릎 N≈800\n(hit 50%, 예측치와 일치)', (800, 12.6), ha='center',
+ax.annotate('L1 임계점 N≈800\n(적중률 50%, 예측과 일치)', (800, 12.6), ha='center',
             color=INK2, fontsize=9.5)
 ax.annotate('실제 유니버스\n1,088종 (hit 42%)', (1088, 0.35), ha='center',
             color=INK2, fontsize=9.5)
@@ -137,7 +137,7 @@ ax.set_xlim(88, 7200)
 ax.set_ylabel('p99 지연 (ms)', fontsize=10)
 ax.set_xlabel('워킹셋 키 수 N (로그 눈금)', fontsize=10)
 style_ax(ax)
-ax.set_title('워킹셋 크기 스윕 — L1 무릎을 지나면 2계층의 L2 왕복 비용이 꼬리를 키운다',
+ax.set_title('워킹셋 크기 스윕 — L1 임계점을 지나면 2계층의 L2 왕복 비용이 꼬리를 키운다',
              loc='left', fontsize=14.5, fontweight='bold', color=INK, pad=26)
 ax.text(0, 1.035, '균등 접근 · 1,600 rps · API 4대 · L1 2s + L2 3s  (N=800·1,088은 3분×3회 중앙값·반투명 점=반복, 나머지는 단일 2분 run)',
         transform=ax.transAxes, fontsize=10, color=INK2)

@@ -20,7 +20,7 @@ API 서버를 4대로 늘리는 과정에서 Redis 도입이 필요한지 부하
 
 ![조회 종목 수를 늘렸을 때의 p99 변화](../../../../docs/assets/pubcache/2-working-set-sweep-p99.png)
 
-오히려 조회 종목 수를 늘리자 Redis를 겹친 two-level은 캐시 미스마다 네트워크 왕복이 붙어 p99가 2.4ms에서 11.9ms까지 나빠졌습니다. Caffeine만 남긴 이유입니다.
+오히려 조회 종목 수를 늘리자 Redis를 겹친 two-level은 캐시 미스마다 네트워크 왕복이 붙어 p99가 2.4ms에서 12.0ms까지 나빠졌습니다. Caffeine만 남긴 이유입니다.
 
 실험 설계와 상세 결과는 [기술 블로그 4부작](https://choyoungseo20.github.io)에 정리했습니다.
 
