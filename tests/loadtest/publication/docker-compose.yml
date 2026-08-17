@@ -1,0 +1,197 @@
+# publication-api 다중 인스턴스 캐시 실험 스택 — 로컬 탐색 전용.
+#
+# 목적: 캐시 모드(none·caffeine·redis·two-level)와 인스턴스 수(1·4)를 격자로 돌려
+#       조회 폭증 시 지연·DB 부하가 어떻게 갈리는지 측정한다. 운영 토폴로지 재현이
+#       아니라 실험 장치다 — 루트 docker-compose.yml 과 포트·프로젝트명이 겹치지
+#       않게 잡아 두 스택을 동시에 띄울 수 있다.
+#
+# 핵심 정합성:
+#   - 스키마는 SSOT(src/libs/schema/migrations-onprem) 그대로 — 루트 flyway-onprem 과 같은 명령.
+#   - publication-api 이미지는 루트와 같은 빌드 컨텍스트(src/)·Dockerfile 을 쓴다.
+#   - DB 볼륨을 두지 않는다 — 실험 간 상태가 새지 않도록 down 하면 리셋되는 게 원칙.
+#   - 자원은 서비스마다 cpus·mem_limit 로 고정한다(비-swarm 필드). 인스턴스 수를
+#     바꿔가며 비교하려면 인스턴스 1대당 몫이 실행마다 같아야 한다.
+#
+# 사용: README.md 참조.
+
+name: edge-pubcache
+
+# api-1..4 공통 환경. 인스턴스별로 다른 것은 INSTANCE_ID 와 host 포트뿐이다.
+x-api-env: &api-env
+  # 로컬은 default profile — 평문 로그. 배포 이미지의 ENV SPRING_PROFILES_ACTIVE=prod 를 무력화.
+  SPRING_PROFILES_ACTIVE: ""
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge_onprem
+  SPRING_DATASOURCE_USERNAME: edge
+  SPRING_DATASOURCE_PASSWORD: edge
+  # 분석 유니버스 32종 — 루트 compose 와 동일(quotes-fallback.json 참조).
+  # 워킹셋 스윕(suite W)이 합성 allowlist 를 주입하는 시임 — 미지정 시 기존과 동일하다.
+  PUBLICATION_KNOWN_TICKERS: ${PUB_KNOWN_TICKERS:-069500,305720,091160,0005G0,0093A0,0167A0,0176P0,0182R0,0190G0,0210A0,091230,139260,261060,266370,300950,363580,388420,395160,395270,396500,455850,469150,471760,471780,471990,474590,475300,475310,476260,482030,486240,488210,494220}
+  # 실험 축 — 셸 env 로 갈아끼운다(README 의 suite 표).
+  PUBLICATION_CACHE_MODE: ${CACHE_MODE:-caffeine}
+  PUBLICATION_SERVE_CACHE_TTL: ${CACHE_TTL:-3s}
+  PUBLICATION_CACHE_L2_TTL: ${CACHE_L2_TTL:-10s}
+  PUBLICATION_CACHE_L2_JITTER: ${CACHE_L2_JITTER:-0s}
+  # read/full suite 구분 — 쓰기 경로(노출 로그·요청 메트릭)를 끄면 읽기만 남는다.
+  PUBLICATION_EXPOSURE_ENABLED: ${EXPOSURE_ENABLED:-true}
+  PUBLICATION_REQUEST_METRIC_ENABLED: ${REQUEST_METRIC_ENABLED:-true}
+  SPRING_DATA_REDIS_HOST: redis
+  SPRING_DATA_REDIS_PORT: "6379"
+  # 짧은 타임아웃 — L2 가 느려질 때 요청이 끌려가지 않고 원본 경로로 떨어지게 한다.
+  SPRING_DATA_REDIS_TIMEOUT: 150ms
+  SPRING_DATA_REDIS_CONNECT_TIMEOUT: 200ms
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,prometheus
+  # 히스토그램 버킷 노출 — Prometheus 쪽에서 p95·p99 를 뽑으려면 필요하다.
+  # management.metrics.distribution.percentiles-histogram 을 env 로 직접 바인딩하면
+  # relaxed binding 이 percentiles.histogram(double[]) 으로 오해석해 기동이 죽는다 —
+  # 앱 yaml 의 전용 토글(PUBLICATION_HTTP_PERCENTILES_HISTOGRAM, 기본 false)을 쓴다.
+  PUBLICATION_HTTP_PERCENTILES_HISTOGRAM: "true"
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=60"
+
+x-api-common: &api-common
+  build:
+    context: ../../../src
+    dockerfile: apps/onprem/publication-api/Dockerfile
+  depends_on:
+    flyway:
+      condition: service_completed_successfully
+  # healthcheck 없음 — 런타임 이미지(eclipse-temurin:21-jre)에 curl·wget 이 없다.
+  # 기동 확인은 스크립트가 host 포트로 /actuator/health 를 폴링한다(루트 compose 도 동일).
+  cpus: 1.0
+  mem_limit: 768m
+
+services:
+  # 실험 전용 DB — 볼륨 없음(down 하면 데이터 소멸). 루트 온프렘 DB(:55433)와 포트 분리.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: edge_onprem
+      POSTGRES_USER: edge
+      POSTGRES_PASSWORD: edge
+    ports:
+      - "55434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edge -d edge_onprem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    cpus: 2.0
+    mem_limit: 1g
+
+  # SSOT 온프렘 스키마 적용 후 종료. 시드는 태우지 않는다 — 데이터는 prepare-data.sh 가 넣는다.
+  flyway:
+    image: flyway/flyway:10.21.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../../../src/libs/schema/migrations-onprem:/flyway/sql:ro
+    command: >-
+      -url=jdbc:postgresql://postgres:5432/edge_onprem
+      -user=edge -password=edge
+      -connectRetries=10
+      -locations=filesystem:/flyway/sql
+      -ignoreMigrationPatterns=repeatable:missing
+      migrate
+
+  # api-1..4 — 4대를 명시 선언한다. 1대 실험은 api-2..4 를 stop 하고 :18101 직결(README).
+  api-1:
+    <<: *api-common
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-1
+    ports:
+      - "18101:8080"
+
+  api-2:
+    <<: *api-common
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-2
+    ports:
+      - "18102:8080"
+
+  api-3:
+    <<: *api-common
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-3
+    ports:
+      - "18103:8080"
+
+  api-4:
+    <<: *api-common
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-4
+    ports:
+      - "18104:8080"
+
+  # 부하 진입점 — k6 는 이쪽(:18100)을 때린다. LB 자체가 병목이 되면 안 되므로 가볍게 잡는다.
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "18100:80"
+    depends_on:
+      - api-1
+      - api-2
+      - api-3
+      - api-4
+    cpus: 0.5
+    mem_limit: 128m
+
+  # L2 캐시. 영속화를 모두 끈다 — 실험 중 fork·AOF 쓰기가 지연에 섞이지 않게.
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru --save "" --appendonly no
+    ports:
+      - "63790:6379"
+    cpus: 1.0
+    # maxmemory 1GB + 자체 오버헤드 여유. 컨테이너 한도가 maxmemory 와 같으면
+    # 축출 전에 OOM kill 이 먼저 난다.
+    mem_limit: 1536m
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "19090:9090"
+    cpus: 0.5
+    mem_limit: 512m
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      # 로컬 실험 전용 — 로그인 없이 대시보드를 본다. 배포 경로에 복사하지 말 것.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "13000:3000"
+    cpus: 0.5
+    mem_limit: 512m
+
+  # 캐시 적중·축출·메모리 관측. 호스트 포트 불필요 — Prometheus 가 내부망에서 긁는다.
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      - redis
+    cpus: 0.25
+    mem_limit: 128m
+
+  # DB 쪽 잔여 부하(캐시가 걷어내지 못한 몫) 관측.
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://edge:edge@postgres:5432/edge_onprem?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cpus: 0.25
+    mem_limit: 128m
