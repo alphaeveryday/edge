@@ -89,9 +89,9 @@ API 서버를 4대로 늘리면서 Redis 도입 여부를 부하 테스트 104�
 
 ![캐시의 DB 오프로딩 — 같은 부하에서 DB 호출이 캐시 없음 대비 수백~수천 분의 일로 줄어든다](docs/assets/pubcache/3-db-offloading.png)
 
-반면 조회 종목 수를 늘리면 Redis를 얹은 two-level은 캐시 미스마다 네트워크 왕복이 붙어 p99가 5배 나빠집니다(11.9ms vs 2.4ms). Caffeine 단독으로 결정한 근거입니다.
+반면 조회 종목 수를 늘리면 Redis를 얹은 two-level은 캐시 미스마다 네트워크 왕복이 붙어 p99가 5배 나빠집니다(12.0ms vs 2.4ms). Caffeine 단독으로 결정한 근거입니다.
 
-![워킹셋 크기 스윕 — L1 무릎을 지나면 two-level의 L2 왕복 비용이 꼬리 지연을 키운다](docs/assets/pubcache/2-working-set-sweep-p99.png)
+![워킹셋 크기 스윕 — L1 임계점을 지나면 two-level의 L2 왕복 비용이 꼬리 지연을 키운다](docs/assets/pubcache/2-working-set-sweep-p99.png)
 
 실험 설계와 상세 결과는 [기술 블로그 4부작](https://choyoungseo20.github.io)에 정리했습니다.
 
