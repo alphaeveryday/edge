@@ -40,7 +40,7 @@ suite 매핑 (캐시 모드 / 인스턴스 / 시나리오 / 쓰기 경로):
   E4  two-level  4대  hot-key              read   측정 중 api-4 늦은 합류(스케일 아웃)
   E5  two-level  4대  hot-key              read   측정 중 redis 정지·복귀
   E6  two-level  4대  publication-change   read   측정 중 새 스냅샷·종목 차단
-  F1  two-level  4대  hot-key              full   노출 로그·요청 메트릭 켠 전체 경로
+  F1  two-level  4대  hot-key              full   요청 메트릭 쓰기 켠 전체 경로
   W   (--mode 필수) 4대 working-set        read   워킹셋 스윕(--working-set 필수) — L1 무릎 찾기
   S   caffeine   4대  hot-spike            read   핫키 스파이크(램프 내장, --duration 무시 가능)
 
@@ -253,6 +253,12 @@ WARMUP_S="$(to_seconds "$WARMUP")"
 # 이벤트는 warm-up 이 끝나고 측정 구간 중간에 터뜨린다 — 캐시가 채워진 정상 상태에서
 # 무슨 일이 일어나는지가 관측 대상이다.
 EVENT_AT=$((WARMUP_S + DUR_S / 2))
+# E6 는 EVENT_AT+30s 에 2차 주입(차단)이 있다 — duration 이 짧으면 주입이 측정 창
+# 밖에서 성공해 전환 없는 데이터가 유효 run 처럼 남는다. 최소 창을 강제한다.
+if [ "$SCENARIO" = "publication-change" ] && [ "$DUR_S" -lt 90 ]; then
+	err "publication-change 는 --duration 90s 이상이 필요하다 (차단 주입 $((DUR_S / 2 + 30))s > 측정 창 ${DUR_S}s)"
+	exit 2
+fi
 
 RATES="${SWEEP:-$RATE}"
 GIT_SHA="$(git -C "$STACK_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"

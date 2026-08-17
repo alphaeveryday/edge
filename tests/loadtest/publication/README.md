@@ -104,7 +104,7 @@ read/full 의 실측 차이는 전부 요청 메트릭 쓰기 축이다.)
 ## 실행·수집
 
 ```bash
-scripts/run-matrix.sh        # suite 격자 실행 — run 마다 collect-result.sh 를 자동 호출한다
+scripts/run-matrix.sh --suite <id>   # suite 격자 실행(--suite 필수) — run 마다 collect-result.sh 를 자동 호출한다
 scripts/collect-result.sh <run_id> <start_epoch> <end_epoch>   # 수동 재수집 시에만 직접 실행
 ```
 
