@@ -45,6 +45,18 @@
   color: var(--md-default-fg-color--light);
 }
 
+/* 버전별 설계 근거 — 뷰어 아래, 드롭다운과 함께 전환 */
+.ep-version-note {
+  margin-top: 0.6rem;
+  font-size: 0.72rem;
+  line-height: 1.65;
+  color: var(--md-default-fg-color--light);
+}
+
+.ep-version-note p {
+  margin: 0;
+}
+
 .ep-version-select {
   font: inherit;
   color: inherit;
