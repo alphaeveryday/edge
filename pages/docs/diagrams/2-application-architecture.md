@@ -9,11 +9,11 @@ cloud/onprem 하이브리드 — 클라우드에서 만들고 증권사 통제 �
   <option value="v2" selected>v2 (현재)</option>
   <option value="v1">v1 — 초기 설계 (v0.1)</option>
 </select> ·
-<a class="ep-open-full" href="../interactive/2-aa.v2.html" data-href-v1="../images/2-aa.v1.png" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
+<a class="ep-open-full" href="../interactive/2-aa.v2.html" data-href-v1="../interactive/2-aa.v1.html" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
 
 <div class="ep-diagram-frame">
   <iframe data-version="v2" src="../interactive/2-aa.v2.html" title="EDGE 애플리케이션 아키텍처 다이어그램 v2 — 인터랙티브" loading="lazy"></iframe>
-  <img data-version="v1" src="../images/2-aa.v1.png" alt="EDGE 애플리케이션 아키텍처 다이어그램 v1 — 정적 이미지" loading="lazy" hidden>
+  <iframe data-version="v1" src="../interactive/2-aa.v1.html" title="EDGE 애플리케이션 아키텍처 다이어그램 v1 — 인터랙티브" loading="lazy" hidden></iframe>
 </div>
 
 !!! note "설계 뷰 — 원본 v0.2 기준"

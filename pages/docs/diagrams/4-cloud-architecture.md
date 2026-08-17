@@ -9,11 +9,11 @@ ECS 클러스터 분리·RDS·CloudFront 등 실 배포 토폴로지.
   <option value="v2" selected>v2 (현재)</option>
   <option value="v1">v1 — 초기 설계 (v0.1)</option>
 </select> ·
-<a class="ep-open-full" href="../interactive/4-ca.v2.html" data-href-v1="../images/4-ca.v1.png" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
+<a class="ep-open-full" href="../interactive/4-ca.v2.html" data-href-v1="../interactive/4-ca.v1.html" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
 
 <div class="ep-diagram-frame">
   <iframe data-version="v2" src="../interactive/4-ca.v2.html" title="EDGE 클라우드 아키텍처 다이어그램 v2 — 인터랙티브" loading="lazy"></iframe>
-  <img data-version="v1" src="../images/4-ca.v1.png" alt="EDGE 클라우드 아키텍처 다이어그램 v1 — 정적 이미지" loading="lazy" hidden>
+  <iframe data-version="v1" src="../interactive/4-ca.v1.html" title="EDGE 클라우드 아키텍처 다이어그램 v1 — 인터랙티브" loading="lazy" hidden></iframe>
 </div>
 
 !!! note "설계 뷰 — 원본 v0.2 기준"
