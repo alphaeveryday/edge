@@ -27,12 +27,21 @@ dependencies {
 	// 조회 캐시(ALPHA-433) — 단일 인스턴스 인프로세스 캐시. 별도 캐시 서버(Redis)는 온프렘
 	// 반입 컴포넌트를 늘려 보류했다(버전은 Boot dependency management 관리).
 	implementation 'com.github.ben-manes.caffeine:caffeine'
+	// 다중 인스턴스 캐시 로컬 실험(LOCAL-4/5) — Redis L2 후보 실측용. 도입 확정이 아니다:
+	// ADR-0051 결정 6(온프렘 외부 의존 = Postgres 하나, Redis 반입 보류)은 유지되며,
+	// 기본 프로필(publication.cache.mode=caffeine)에서는 Redis 에 연결하지 않는다.
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	// 실험 관측(LOCAL-2) — /actuator/prometheus 노출. metrics 코어는 actuator starter 에 포함,
+	// registry 만 얹으면 export 자동설정이 활성화된다.
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	// 엔티티↔스키마 정합 검증: 실 Postgres 컨테이너에 onprem 마이그레이션을 적용하고
 	// Hibernate validate 를 실통과시킨다(H2 는 JSONB·IDENTITY 등 Postgres 문법 미지원).
 	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
 	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	// Redis L2 통합 테스트(실 직렬화·TTL·장애 fallback) — 버전은 Boot BOM 관리.
+	testImplementation 'com.redis:testcontainers-redis'
 	// Boot 4 는 자동설정을 기술별 모듈로 분리했다 — Flyway 자동설정(마이그레이션을 JPA 검증 전에
 	// 실행)은 spring-boot-flyway 에 있고 flyway-core 만으론 트리거되지 않는다.
 	testImplementation 'org.springframework.boot:spring-boot-flyway'

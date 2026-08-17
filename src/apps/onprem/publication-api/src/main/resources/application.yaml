@@ -26,3 +26,32 @@ publication:
     # 별도 API 호스트로 직접 호출하는 테넌트만 위젯 오리진을 등록한다(ADR-0053 결정 5).
     # 기본형(위젯 도메인 동일 오리진 프록시)은 빈 값 = CORS 미등록.
     allowed-origins: ${PUBLICATION_CORS_ALLOWED_ORIGINS:}
+  # 다중 인스턴스 캐시 로컬 실험(LOCAL-1~5) 설정. 기본값은 전부 현행 동작과 동일해야 한다 —
+  # 실험값은 tests/loadtest/publication compose 의 env 로만 덮는다.
+  cache:
+    # none|caffeine|redis|two-level. 미지정=caffeine(기존 단일 인스턴스 동작 그대로).
+    mode: ${PUBLICATION_CACHE_MODE:caffeine}
+    # L2(Redis) TTL — L1(serve-cache-ttl)보다 길어야 한다(two-level 조립 시 검증).
+    l2-ttl: ${PUBLICATION_CACHE_L2_TTL:10s}
+    # 동시 만료 실험의 대조군 보존을 위해 기본 0 — jitter 는 실험 변수다.
+    l2-jitter: ${PUBLICATION_CACHE_L2_JITTER:0s}
+  request-metric:
+    # 요청 원장(serving_request_metric, ALPHA-128 Dashboard reader)도 동일 — 부하 프로필 전용 토글.
+    enabled: ${PUBLICATION_REQUEST_METRIC_ENABLED:true}
+
+management:
+  health:
+    redis:
+      # starter-data-redis 가 RedisHealthIndicator 를 자동 등록한다 — Redis 는 실험 전용이라
+      # 기본(caffeine) 모드에서 health 가 Redis 부재로 DOWN 되지 않도록 끈다.
+      enabled: false
+  metrics:
+    tags:
+      # 다중 인스턴스 실험에서 인스턴스별 지표 분리용 — compose 가 INSTANCE_ID=api-1..4 주입.
+      instance: ${INSTANCE_ID:local}
+    distribution:
+      percentiles-histogram:
+        # PromQL histogram_quantile(p99) 전제 — 실험 compose 만 켠다(기본 false = 현행 동작).
+        # env 로 percentiles-histogram 을 직접 바인딩하면 relaxed binding 이 percentiles.histogram
+        # (double[]) 으로 오해석해 기동이 죽는다 — 그래서 전용 토글을 둔다.
+        "[http.server.requests]": ${PUBLICATION_HTTP_PERCENTILES_HISTOGRAM:false}
