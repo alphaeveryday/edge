@@ -1,0 +1,458 @@
+{
+ "phaseB": {
+  "none": [
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.914,
+    "p99": 1.886,
+    "l1_hit_ratio": null,
+    "l2_ops": null,
+    "l2_hit_ratio": null,
+    "loaders_total": 286842.6004331964,
+    "loaders_per_req": 0.9959777932479277,
+    "loaders_vs_theory": null,
+    "theoretical_loaders": null
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.875,
+    "p99": 1.891,
+    "l1_hit_ratio": null,
+    "l2_ops": null,
+    "l2_hit_ratio": null,
+    "loaders_total": 287997.3146755465,
+    "loaders_per_req": 0.9999872037789678,
+    "loaders_vs_theory": null,
+    "theoretical_loaders": null
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.797,
+    "p99": 1.801,
+    "l1_hit_ratio": null,
+    "l2_ops": null,
+    "l2_hit_ratio": null,
+    "loaders_total": 287999.9222213162,
+    "loaders_per_req": 0.9999962577258975,
+    "loaders_vs_theory": null,
+    "theoretical_loaders": null
+   }
+  ],
+  "caffeine": [
+   {
+    "measure_reqs": 288000,
+    "actual_rps": 1600.0,
+    "p95": 0.748,
+    "p99": 1.523,
+    "l1_hit_ratio": 0.996305382049735,
+    "l2_ops": null,
+    "l2_hit_ratio": null,
+    "loaders_total": 1061.6432773120632,
+    "loaders_per_req": 0.003686261379555775,
+    "loaders_vs_theory": 0.9830030345482067,
+    "theoretical_loaders": 1080.0
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.74,
+    "p99": 1.53,
+    "l1_hit_ratio": 0.9963094593747526,
+    "l2_ops": null,
+    "l2_hit_ratio": null,
+    "loaders_total": 1062.866795264156,
+    "loaders_per_req": 0.0036904968915530017,
+    "loaders_vs_theory": 0.9841359215408853,
+    "theoretical_loaders": 1080.0
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.771,
+    "p99": 1.61,
+    "l1_hit_ratio": 0.9963166271973508,
+    "l2_ops": null,
+    "l2_hit_ratio": null,
+    "loaders_total": 1047.7444774428557,
+    "loaders_per_req": 0.0036379890258813534,
+    "loaders_vs_theory": 0.9701337754100515,
+    "theoretical_loaders": 1080.0
+   }
+  ],
+  "redis": [
+   {
+    "measure_reqs": 288000,
+    "actual_rps": 1600.0,
+    "p95": 0.912,
+    "p99": 2.0410099999999973,
+    "l1_hit_ratio": null,
+    "l2_ops": 1575.4529182343438,
+    "l2_hit_ratio": 0.9992821827164274,
+    "loaders_total": 857.6160681117382,
+    "loaders_per_req": 0.0029778335698324243,
+    "loaders_vs_theory": 4.764533711731879,
+    "theoretical_loaders": 180.0
+   },
+   {
+    "measure_reqs": 288000,
+    "actual_rps": 1600.0,
+    "p95": 0.835,
+    "p99": 1.77,
+    "l1_hit_ratio": null,
+    "l2_ops": 1599.9729739934871,
+    "l2_hit_ratio": 0.9993317527659624,
+    "loaders_total": 192.45195259308431,
+    "loaders_per_req": 0.000668235946503765,
+    "loaders_vs_theory": 1.069177514406024,
+    "theoretical_loaders": 180.0
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.93,
+    "p99": 1.872,
+    "l1_hit_ratio": null,
+    "l2_ops": 1599.9217269879734,
+    "l2_hit_ratio": 0.999334431844866,
+    "loaders_total": 191.67425139424765,
+    "loaders_per_req": 0.0006655332842394562,
+    "loaders_vs_theory": 1.0648569521902647,
+    "theoretical_loaders": 180.0
+   }
+  ],
+  "two-level": [
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.75,
+    "p99": 1.572,
+    "l1_hit_ratio": 0.9963059525866056,
+    "l2_ops": 5.907585678604594,
+    "l2_hit_ratio": 0.8648268171607459,
+    "loaders_total": 143.738488633064,
+    "loaders_per_req": 0.0004990902414681338,
+    "loaders_vs_theory": 0.7985471590725778,
+    "theoretical_loaders": 180.0
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.713,
+    "p99": 1.367,
+    "l1_hit_ratio": 0.9963134911370511,
+    "l2_ops": 5.898324113208918,
+    "l2_hit_ratio": 0.8612534228323468,
+    "loaders_total": 147.30701071197063,
+    "loaders_per_req": 0.0005114809001078838,
+    "loaders_vs_theory": 0.8183722817331702,
+    "theoretical_loaders": 180.0
+   },
+   {
+    "measure_reqs": 288001,
+    "actual_rps": 1600.0055555555555,
+    "p95": 0.687,
+    "p99": 1.401,
+    "l1_hit_ratio": 0.9963128380537984,
+    "l2_ops": 5.899409691410885,
+    "l2_hit_ratio": 0.8629284898681444,
+    "loaders_total": 145.555379151875,
+    "loaders_per_req": 0.0005053988671979438,
+    "loaders_vs_theory": 0.8086409952881944,
+    "theoretical_loaders": 180.0
+   }
+  ]
+ },
+ "W": {
+  "caffeine": {
+   "100": [
+    {
+     "measure_reqs": 192001,
+     "actual_rps": 1600.0083333333334,
+     "p95": 0.755,
+     "p99": 1.424,
+     "l1_hit_ratio": 0.8883750491803066,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 20784.603221822043,
+     "loaders_per_req": 0.1082525779648129,
+     "loaders_vs_theory": 28.867504474752838,
+     "theoretical_loaders": 720.0
+    }
+   ],
+   "300": [
+    {
+     "measure_reqs": 192001,
+     "actual_rps": 1600.0083333333334,
+     "p95": 0.84,
+     "p99": 1.567,
+     "l1_hit_ratio": 0.7256692377843663,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 50794.708952097804,
+     "loaders_per_req": 0.264554397904687,
+     "loaders_vs_theory": 70.54820687791361,
+     "theoretical_loaders": 720.0
+    }
+   ],
+   "800": [
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.724,
+     "p99": 1.487,
+     "l1_hit_ratio": 0.4979813722039016,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 144020.9965526789,
+     "loaders_per_req": 0.5000711683385783,
+     "loaders_vs_theory": 133.3527745858138,
+     "theoretical_loaders": 1080.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.667,
+     "p99": 1.369,
+     "l1_hit_ratio": 0.49962703159169103,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 144106.83052706043,
+     "loaders_per_req": 0.5003692019370086,
+     "loaders_vs_theory": 133.43225048801892,
+     "theoretical_loaders": 1080.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.764,
+     "p99": 1.669,
+     "l1_hit_ratio": 0.49912899074964473,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 144239.7781286339,
+     "loaders_per_req": 0.500830823950729,
+     "loaders_vs_theory": 133.55535011910544,
+     "theoretical_loaders": 1080.0
+    }
+   ],
+   "1088": [
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.782,
+     "p99": 1.71,
+     "l1_hit_ratio": 0.42312712571015987,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 165406.9518696548,
+     "loaders_per_req": 0.5743276997984549,
+     "loaders_vs_theory": 153.15458506449517,
+     "theoretical_loaders": 1080.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.708,
+     "p99": 1.597,
+     "l1_hit_ratio": 0.4234973950679941,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 166078.07124238543,
+     "loaders_per_req": 0.5766579673070074,
+     "loaders_vs_theory": 153.77599189109762,
+     "theoretical_loaders": 1080.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.734,
+     "p99": 1.756,
+     "l1_hit_ratio": 0.4241928332547837,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 165835.01890032063,
+     "loaders_per_req": 0.5758140384940352,
+     "loaders_vs_theory": 153.5509434262228,
+     "theoretical_loaders": 1080.0
+    }
+   ],
+   "3000": [
+    {
+     "measure_reqs": 192001,
+     "actual_rps": 1600.0083333333334,
+     "p95": 0.807,
+     "p99": 1.997,
+     "l1_hit_ratio": 0.20955991223824127,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 145783.16821877216,
+     "loaders_per_req": 0.7592833798718348,
+     "loaders_vs_theory": 202.47662252607245,
+     "theoretical_loaders": 720.0
+    }
+   ],
+   "5000": [
+    {
+     "measure_reqs": 192001,
+     "actual_rps": 1600.0083333333334,
+     "p95": 0.876,
+     "p99": 2.393,
+     "l1_hit_ratio": 0.13681274139296515,
+     "l2_ops": null,
+     "l2_hit_ratio": null,
+     "loaders_total": 158831.66014102203,
+     "loaders_per_req": 0.8272439213390661,
+     "loaders_vs_theory": 220.5995279736417,
+     "theoretical_loaders": 720.0
+    }
+   ]
+  },
+  "two-level": {
+   "100": [
+    {
+     "measure_reqs": 192001,
+     "actual_rps": 1600.0083333333334,
+     "p95": 0.947,
+     "p99": 1.688,
+     "l1_hit_ratio": 0.8879987338644936,
+     "l2_ops": 168.65261050130192,
+     "l2_hit_ratio": 0.836437949982481,
+     "loaders_total": 3378.672100434306,
+     "loaders_per_req": 0.01759715887122622,
+     "loaders_vs_theory": 28.155600836952548,
+     "theoretical_loaders": 120.0
+    }
+   ],
+   "300": [
+    {
+     "measure_reqs": 192001,
+     "actual_rps": 1600.0083333333334,
+     "p95": 1.088,
+     "p99": 2.091,
+     "l1_hit_ratio": 0.7252679796250102,
+     "l2_ops": 419.4521100632133,
+     "l2_hit_ratio": 0.8064278721640715,
+     "loaders_total": 10089.999956621019,
+     "loaders_per_req": 0.05255180940006052,
+     "loaders_vs_theory": 84.08333297184183,
+     "theoretical_loaders": 120.0
+    }
+   ],
+   "800": [
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.953,
+     "p99": 1.752,
+     "l1_hit_ratio": 0.5001645793249064,
+     "l2_ops": 795.4535763439694,
+     "l2_hit_ratio": 0.7360646005442273,
+     "loaders_total": 37906.368864146796,
+     "loaders_per_req": 0.1316188793238454,
+     "loaders_vs_theory": 210.59093813414887,
+     "theoretical_loaders": 180.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.912,
+     "p99": 1.775,
+     "l1_hit_ratio": 0.4996067487327826,
+     "l2_ops": 800.6341776872956,
+     "l2_hit_ratio": 0.7371163616009149,
+     "loaders_total": 37885.252633846074,
+     "loaders_per_req": 0.13154555933432896,
+     "loaders_vs_theory": 210.4736257435893,
+     "theoretical_loaders": 180.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 0.937,
+     "p99": 1.791,
+     "l1_hit_ratio": 0.5000422475290165,
+     "l2_ops": 799.7212778021112,
+     "l2_hit_ratio": 0.7371554237234889,
+     "loaders_total": 37836.43209592936,
+     "loaders_per_req": 0.13137604416626805,
+     "loaders_vs_theory": 210.20240053294089,
+     "theoretical_loaders": 180.0
+    }
+   ],
+   "1088": [
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 1.021,
+     "p99": 1.968,
+     "l1_hit_ratio": 0.42289517046883934,
+     "l2_ops": 918.6892876437751,
+     "l2_hit_ratio": 0.7009052929456421,
+     "loaders_total": 49539.21601309171,
+     "loaders_per_req": 0.17201056945320228,
+     "loaders_vs_theory": 275.2178667393984,
+     "theoretical_loaders": 180.0
+    },
+    {
+     "measure_reqs": 288000,
+     "actual_rps": 1600.0,
+     "p95": 0.974,
+     "p99": 1.8580099999999975,
+     "l1_hit_ratio": 0.42419115339033214,
+     "l2_ops": 921.3193041579556,
+     "l2_hit_ratio": 0.7008732604933717,
+     "loaders_total": 49606.22850713258,
+     "loaders_per_req": 0.17224384898309925,
+     "loaders_vs_theory": 275.5901583729588,
+     "theoretical_loaders": 180.0
+    },
+    {
+     "measure_reqs": 288001,
+     "actual_rps": 1600.0055555555555,
+     "p95": 1.054,
+     "p99": 1.999,
+     "l1_hit_ratio": 0.4238549298055188,
+     "l2_ops": 921.8468523586536,
+     "l2_hit_ratio": 0.7017152773014114,
+     "loaders_total": 49495.10986739391,
+     "loaders_per_req": 0.1718574236457301,
+     "loaders_vs_theory": 274.9728325966328,
+     "theoretical_loaders": 180.0
+    }
+   ],
+   "3000": [
+    {
+     "measure_reqs": 192000,
+     "actual_rps": 1600.0,
+     "p95": 1.145,
+     "p99": 6.265039999999993,
+     "l1_hit_ratio": 0.20790364559198166,
+     "l2_ops": 1214.5941044526073,
+     "l2_hit_ratio": 0.5250061460428413,
+     "loaders_total": 69443.90315965135,
+     "loaders_per_req": 0.3616869956231841,
+     "loaders_vs_theory": 578.6991929970947,
+     "theoretical_loaders": 120.0
+    }
+   ],
+   "5000": [
+    {
+     "measure_reqs": 192000,
+     "actual_rps": 1600.0,
+     "p95": 1.192,
+     "p99": 11.945229999999961,
+     "l1_hit_ratio": 0.13658115976739224,
+     "l2_ops": 1313.0940619057947,
+     "l2_hit_ratio": 0.4141225301302585,
+     "loaders_total": 92389.6198272078,
+     "loaders_per_req": 0.4811959366000406,
+     "loaders_vs_theory": 769.913498560065,
+     "theoretical_loaders": 120.0
+    }
+   ]
+  }
+ }
+}

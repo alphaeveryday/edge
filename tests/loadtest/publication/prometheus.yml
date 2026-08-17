@@ -1,0 +1,27 @@
+global:
+  # 실험 창이 1~5분으로 짧다 — 15s 기본값이면 구간당 표본이 몇 개 안 남아
+  # 캐시 만료 같은 초 단위 파동이 그래프에서 사라진다.
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: publication-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - api-1:8080
+          - api-2:8080
+          - api-3:8080
+          - api-4:8080
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
