@@ -2,7 +2,7 @@
 
 콘솔·위젯 등 사용자 표면의 정보 구조. 상자를 클릭하면 상위·하위 1단계가 함께 강조된다.
 
-<p class="ep-diagram-meta">버전: <strong>v2</strong> (현재) · v1 은 준비 중 ·
+<p class="ep-diagram-meta">버전: <strong>v2</strong> (현재) · <a href="#v1">v1</a> ·
 <a href="../interactive/1-ia.v2.html" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
 
 <div class="ep-diagram-frame">
@@ -14,6 +14,11 @@
     [콘솔 IA SSOT](../reference/console-ia/super-admin-console.md)에 있으며, 충돌 시 SSOT 가 우선한다.
 
 근거 문서(설계 뷰): [information-architecture.md](../reference/architecture/information-architecture.md)
+
+### v1 — 초기 설계 (v0.1) { #v1 }
+
+??? note "v1 정적 이미지 펼치기"
+    ![EDGE 정보 구조 다이어그램 v1](images/1-ia.v1.png)
 
 ---
 
