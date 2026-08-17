@@ -15,6 +15,7 @@
 | [git-conventions.md](git-conventions.md) | Git 컨벤션 SSOT — 브랜치 전략·커밋/PR 제목·머지 정책·worktree (구 루트 README 본문) | 브랜치·커밋·PR·머지 전 |
 | [scope.md](scope.md) | MVP 제외 범위 (명시적 아웃) | 기능 범위가 헷갈릴 때 |
 | [implementation.md](implementation.md) | 구현 결정 현행 스펙 — 코드베이스, 데모 토폴로지, Rule 배포 경로, DB 변경 절차, 현행 CD | 구현·배포·스키마를 바꾸기 전 |
+| [data-model/](data-model/) | 물리 데이터 모델 ERD — Cloud 7도메인 + On-Prem 세트 (Flyway 파생 DBML 과 CI 대조) | 테이블·FK 관계를 볼 때 |
 | [roadmap.md](roadmap.md) | MVP 이후 확장 가능 영역 | "이건 지금인가 나중인가" 판단 시 |
 | [writing-rules.md](writing-rules.md) | 문서 작성 톤 규칙 (모든 산출물 공통) | 문서·UI 문구·발표 자료 작성 시 |
 | [contracts/sync-protocol.md](contracts/sync-protocol.md) | Sync 프로토콜 계약 (cursor·fan-out·멱등성·목표 계약) — 양단 모두 영서 소유 ([adr/0026](adr/0026-ownership-boundary-db.md)) | Sync 채널 양단을 만질 때 |

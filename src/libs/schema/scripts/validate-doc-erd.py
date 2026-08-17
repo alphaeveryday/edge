@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate domain documentation ERDs against the Flyway-derived Cloud DBML."""
+"""Validate documentation ERDs against the Flyway-derived DBML of both schema sets."""
 
 from collections import Counter
 from pathlib import Path
@@ -9,8 +9,14 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[4]
-DBML_PATH = ROOT / "src/libs/schema/generated/physical-erd.dbml"
-DOMAINS_PATH = ROOT / "docs/data-model/domains"
+GENERATED_PATH = ROOT / "src/libs/schema/generated"
+DOCS_PATH = ROOT / "docs/data-model"
+# 세트마다 (라벨, DBML, ERD glob). Cloud 는 71테이블이라 도메인별로 쪼갰고 온프렘은 13테이블이라
+# 한 장이다 — 세트가 늘면 여기에 한 줄 더한다.
+SETS = (
+    ("Cloud", GENERATED_PATH / "physical-erd.dbml", DOCS_PATH / "domains", "*/erd.drawio"),
+    ("Onprem", GENERATED_PATH / "physical-erd-onprem.dbml", DOCS_PATH / "onprem", "erd.drawio"),
+)
 
 
 def parse_dbml(text: str) -> tuple[set[str], list[tuple[str, str]]]:
@@ -256,14 +262,14 @@ def validate_domain(
     return tables, errors
 
 
-def main() -> int:
-    dbml_tables, dbml_refs = parse_dbml(DBML_PATH.read_text())
+def validate_set(label: str, dbml_path: Path, docs_path: Path, pattern: str) -> list[str]:
+    dbml_tables, dbml_refs = parse_dbml(dbml_path.read_text())
     covered_tables = set()
     errors = []
 
-    drawio_paths = sorted(DOMAINS_PATH.glob("*/erd.drawio"))
+    drawio_paths = sorted(docs_path.glob(pattern))
     if not drawio_paths:
-        errors.append("no domain draw.io files found")
+        errors.append(f"{label}: no draw.io files found under {docs_path.name}/")
 
     for drawio_path in drawio_paths:
         tables, domain_errors = validate_domain(drawio_path, dbml_refs)
@@ -273,11 +279,16 @@ def main() -> int:
     uncovered_tables = sorted(dbml_tables - covered_tables)
     unknown_tables = sorted(covered_tables - dbml_tables)
     if uncovered_tables:
-        errors.append(f"Cloud tables absent from all domain ERDs: {uncovered_tables}")
+        errors.append(f"{label} tables absent from all ERDs: {uncovered_tables}")
     if unknown_tables:
-        errors.append(f"domain ERDs contain tables absent from Cloud DBML: {unknown_tables}")
+        errors.append(f"{label} ERDs contain tables absent from {label} DBML: {unknown_tables}")
 
-    print(f"Cloud table coverage: {len(dbml_tables) - len(uncovered_tables)}/{len(dbml_tables)}")
+    print(f"{label} table coverage: {len(dbml_tables) - len(uncovered_tables)}/{len(dbml_tables)}")
+    return errors
+
+
+def main() -> int:
+    errors = [error for entry in SETS for error in validate_set(*entry)]
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)
     return 1 if errors else 0
