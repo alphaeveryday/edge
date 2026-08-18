@@ -8,7 +8,7 @@ GET /api/v1/explanations/{etf_ticker}?trade_date=
 
 ## 캐시 성능 실험
 
-API 서버를 4대로 늘리는 과정에서 Redis 도입이 필요한지 부하 테스트 104회로 확인했습니다. 결론은 Redis 없이 인프로세스 캐시(Caffeine)만 유지하는 것이었습니다.
+API 서버를 4대로 늘리는 과정에서 Redis 도입이 필요한지 부하 테스트 75회로 확인했습니다. 결론은 Redis 없이 인프로세스 캐시(Caffeine)만 유지하는 것이었습니다.
 
 ![고정 부하에서 캐시 모드별 응답 지연 비교](../../../../docs/assets/pubcache/1-mode-latency-p95-p99.png)
 

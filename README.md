@@ -79,7 +79,7 @@ Flyway 세트는 둘입니다 — Cloud 세트 71테이블, On-Prem 세트 13테
 
 ### 2-7. 성능 실험
 
-API 서버를 4대로 늘리면서 Redis 도입 여부를 부하 테스트 104회로 검증했고, Redis 없이 인프로세스 캐시(Caffeine)만 쓰기로 결정했습니다.
+API 서버를 4대로 늘리면서 Redis 도입 여부를 부하 테스트 75회로 검증했고, Redis 없이 인프로세스 캐시(Caffeine)만 쓰기로 결정했습니다.
 
 ![고정 부하에서 캐시 모드별 응답 지연 — 전 모드 1~2ms로 지연 축에서는 차이가 없다](docs/assets/pubcache/1-mode-latency-p95-p99.png)
 
