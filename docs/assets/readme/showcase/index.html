@@ -1,0 +1,174 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>edge — 주요 기능</title>
+<!--
+  README `### 1-3. 주요 기능 · 데모` 에 박히는 feature-showcase.jpg 의 원본이다.
+  문구·스크린샷을 고쳤으면 레포 루트에서 아래를 돌려 이미지를 다시 뽑고 함께
+  커밋한다(Chrome 은 PNG 만 내므로 sips 로 JPEG 변환한다 — 내용이 스크린샷이라
+  PNG 로 두면 용량만 2 배가 된다):
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+      --window-size=1200,2935 --screenshot=/tmp/showcase.png \
+      "file://$PWD/docs/assets/readme/showcase/index.html"
+    sips -s format jpeg -s formatOptions 82 /tmp/showcase.png \
+      --out docs/assets/readme/feature-showcase.jpg
+
+  --window-size 의 높이는 페이지 전체 높이여야 한다 — 헤드리스 Chrome 은 뷰포트만
+  찍으므로 모자라면 아래가 잘리고 남으면 빈 여백이 붙는다. 블록을 더하거나 빼면
+  그 값도 같이 고치고, 뽑은 이미지 아래끝을 눈으로 확인한다.
+-->
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --ink: #2c3444;
+    --muted: #8891a4;
+    --accent: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 72px 0 96px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", Inter, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { width: 1040px; margin: 0 auto; }
+
+  /* ── 섹션 헤더 ── */
+  header { text-align: center; margin-bottom: 96px; }
+  header img { height: 26px; margin-bottom: 22px; }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: .18em;
+    color: var(--muted); margin-bottom: 12px;
+  }
+  h1 { font-size: 27px; font-weight: 700; margin: 0 0 14px; letter-spacing: -.01em; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: 14px; color: var(--muted); margin: 0; line-height: 1.7; }
+
+  /* ── 기능 블록 — 테두리·배경 없이 여백으로만 나눈다 ── */
+  .block {
+    display: grid;
+    grid-template-columns: 46% 1fr;
+    gap: 8%;
+    align-items: start;
+    margin-bottom: 128px;
+  }
+  .block:last-child { margin-bottom: 0; }
+  .block.flip .shot { order: 2; }
+
+  .shot img { display: block; width: 100%; height: auto; }
+  /* 스크린샷은 화면 내용을 덜어내지 않는다 — 사이드바·표·행 수 전부 원본이고
+     (레퍼런스도 같다), 아래쪽 빈 여백만 잘라 블록이 흰 공간으로 늘어지지 않게 했다.
+     폰은 데모 사이트가 자기 CSS 로 베젤을 그려 넣으므로 테두리를 더하지 않고
+     폭만 줄여 가운데 둔다. */
+  .shot.phone { display: flex; justify-content: center; }
+  /* 폰은 베젤 바깥 흰 여백까지 잘라낸 413x872 다. 사각형 JPEG 이라 둥근 베젤
+     바깥 네 귀퉁이에 흰 삼각형이 남는데, 데모 사이트의 베젤 반경(54px)을
+     폭·높이 비율로 환산해 그만큼 깎아 배경과 잇는다. */
+  .shot.phone img { width: 62%; border-radius: 13.1% / 6.2%; }
+
+  /* 타이포·간격은 레퍼런스(asyncrum landing_feature_list, 873px 기준)를 이 캔버스
+     폭 1040px 으로 환산한 값이다(×1.19). 가장 크게 벌어지는 자리는 설명문→불릿
+     사이(≈26px→31px)라, 여기를 좁히면 블록이 통째로 뭉쳐 보인다. */
+  .copy h2 { font-size: 22px; font-weight: 700; margin: 0 0 16px; letter-spacing: -.01em; }
+  .copy p { font-size: 14px; color: var(--muted); margin: 0 0 30px; line-height: 1.7; }
+  .copy ul { margin: 0; padding: 0; list-style: none; }
+  .copy li {
+    font-size: 13px; line-height: 1.6; margin-bottom: 13px;
+    padding-left: 15px; position: relative;
+  }
+  .copy li:last-child { margin-bottom: 0; }
+  .copy li::before {
+    content: ""; position: absolute; left: 0; top: 7.5px;
+    width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <img src="edge-logo.svg" alt="EDGE">
+    <div class="eyebrow">AI GUARDRAIL · CAUSAL INFERENCE</div>
+    <h1>근거가 없으면, <em>말하지 않습니다</em></h1>
+    <p class="lede">검증된 근거만 설명이 됩니다. 무엇을 내보낼지는 증권사 정책이 정합니다.</p>
+  </header>
+
+  <div class="block">
+    <div class="shot phone"><img src="01-mts-ai.jpg" alt="MTS 종목 상세의 AI 분석 탭"></div>
+    <div class="copy">
+      <h2>가격 변동 설명</h2>
+      <p>투자자가 보유 종목 화면에서 "왜 움직였는지"를 그 자리에서 확인합니다.</p>
+      <ul>
+        <li>시장 전체 흐름과 이 종목 고유 요인을 갈라서 제시</li>
+        <li>뉴스 · 공시를 과거 유사 사례와 대조한 결과를 함께 표시</li>
+        <li>계산하지 못한 항목은 계산하지 못했다고 밝힘</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="block flip">
+    <div class="shot"><img src="02-console-dashboard.jpg" alt="테넌트 콘솔 대시보드"></div>
+    <div class="copy">
+      <h2>운영 대시보드</h2>
+      <p>지금 몇 건이 나갔고 몇 건이 사람 손을 기다리는지 한 화면에서 잡힙니다.</p>
+      <ul>
+        <li>자동 제공 · 검수 대기 · 점검 차단 · 반려를 한 줄에</li>
+        <li>설명이 며칠째 안 들어오면 수신 상태가 먼저 알림</li>
+        <li>제공 API 요청 수와 에러율로 소비 쪽까지 확인</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="shot"><img src="03-screening-policy.jpg" alt="점검 기준 관리"></div>
+    <div class="copy">
+      <h2>점검 기준 관리</h2>
+      <p>어떤 설명이 사람을 거치지 않고 나갈 수 있는지, 증권사가 규칙으로 정합니다.</p>
+      <ul>
+        <li>금칙어는 차단용 · 검수용을 나눠 등록</li>
+        <li>출처 수 · 확신도에 임계값을 걸어 미달분을 자동 발행에서 제외</li>
+        <li>원인을 확인하지 못한 건은 확신도와 무관하게 항상 사람에게</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="block flip">
+    <div class="shot"><img src="04-review-queue.jpg" alt="검수 관리 대기열"></div>
+    <div class="copy">
+      <h2>검수 관리</h2>
+      <p>기준에 걸린 설명은 사람이 보고 결정합니다.</p>
+      <ul>
+        <li>무슨 기준에 걸렸는지가 건마다 사유로 붙음</li>
+        <li>설명 본문과 근거를 나란히 두고 판단</li>
+        <li>승인 · 반려는 누가 언제 했는지 감사 로그에 기록</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="shot"><img src="05-scope.jpg" alt="제공 범위 설정"></div>
+    <div class="copy">
+      <h2>제공 범위 설정</h2>
+      <p>준비된 설명이라도 어디까지 내보낼지는 따로 정합니다.</p>
+      <ul>
+        <li>시장 단위로 한 번에, 종목 단위로 개별 조정</li>
+        <li>새로 편입된 종목은 켜기 전까지 나가지 않음</li>
+        <li>설정은 다음 발행부터 바로 적용</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="block flip">
+    <div class="shot"><img src="06-pipeline-history.jpg" alt="파이프라인 실행 이력"></div>
+    <div class="copy">
+      <h2>파이프라인 관측</h2>
+      <p>설명의 재료가 되는 수집 레인이 그날 어떤 상태였는지 확인합니다.</p>
+      <ul>
+        <li>데이터셋별 수집 상태를 하루 한 칸으로</li>
+        <li>예정된 실행과 실제 실행을 대조해 누락을 드러냄</li>
+        <li>정상 · 주의 · 장애를 색으로 갈라 이상한 날만 눈에 띔</li>
+      </ul>
+    </div>
+  </div>
+</div>
