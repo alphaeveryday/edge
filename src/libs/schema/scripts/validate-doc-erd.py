@@ -29,6 +29,41 @@ def parse_dbml(text: str) -> tuple[set[str], list[tuple[str, str]]]:
     return tables, refs
 
 
+WHITE = ("#ffffff", "#fff", "white")
+
+
+def has_white_canvas(svg_path: Path) -> bool:
+    """전면(뷰박스 전체)을 덮는 흰 사각형이 있는가 — 부분 흰 rect(라벨 배경 등)는 안 센다."""
+    text = svg_path.read_text()
+    root = ET.parse(svg_path).getroot()
+    view_box = [float(value) for value in (root.get("viewBox") or "").split()]
+    if len(view_box) != 4 or not (view_box[2] and view_box[3]):
+        return False  # viewBox 가 없으면 '덮는다'를 잴 수 없다 — 통과시키지 않는다
+    width, height = view_box[2], view_box[3]
+    # 손으로 쓴 SVG 는 배경을 `.canvas` 클래스로 칠한다 — 클래스 이름만 보면 그 규칙이
+    # 어두운 색으로 바뀌어도 통과한다. 스타일 블록의 실제 fill 을 확인한다.
+    canvas_is_white = bool(
+        re.search(r"\.canvas\s*\{[^}]*fill\s*:\s*(#ffffff|#fff|white)\b", text, re.IGNORECASE)
+    )
+
+    def covers(element, attribute: str, extent: float) -> bool:
+        value = element.get(attribute, "0")
+        if value.strip().endswith("%"):
+            return float(value.strip().rstrip("%")) >= 100
+        return float(value.rstrip("px") or 0) >= extent
+
+    return any(
+        (
+            (element.get("class") == "canvas" and canvas_is_white)
+            or (element.get("fill") or "").lower() in WHITE
+        )
+        and covers(element, "width", width)
+        and covers(element, "height", height)
+        for element in root.iter()
+        if element.tag.endswith("rect")
+    )
+
+
 def parse_svg_relations(
     svg_path: Path,
     tables_by_id: dict[str, str],
@@ -226,6 +261,15 @@ def validate_domain(
         missing_svg_tables = sorted(table for table in tables if table not in svg)
         if missing_svg_tables:
             errors.append(f"{domain}: SVG missing tables {missing_svg_tables}")
+        # 배경은 흰색 하나로 통일한다(docs/data-model/README.md). draw.io CLI export 는
+        # 투명 배경 + `color-scheme: light dark` 를 내므로 그대로 커밋하면 GitHub 다크
+        # 테마에서 배경이 검게 깔린다 — 그림이 보는 사람 테마에 따라 달라진다.
+        if re.search(r"light\s+dark", svg):
+            errors.append(
+                f"{domain}: SVG defers to the viewer color scheme (color-scheme: light dark)"
+            )
+        if not has_white_canvas(svg_path):
+            errors.append(f"{domain}: SVG has no opaque white background covering the canvas")
         drawio_relations = Counter()
         for cell in cells.values():
             if (
