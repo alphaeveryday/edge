@@ -117,15 +117,14 @@ for mode, color, name in [('caffeine', C_CAF, '인프로세스만'), ('two-level
             marker='o', markersize=6.5, markeredgecolor=SURFACE, markeredgewidth=1.4)
     ax.annotate(name, (xs[-1], meds[-1]), xytext=(10, 0), textcoords='offset points',
                 va='center', color=color, fontsize=11.5, fontweight='bold')
-    lbl = '12.0' if meds[-1] > 11.5 else f'{meds[-1]:.1f}'  # 글4 표(12.0ms 반올림)와 표기 통일
-    ax.annotate(lbl, (xs[-1], meds[-1]), xytext=(0, 11), textcoords='offset points',
+    ax.annotate(f'{meds[-1]:.1f}', (xs[-1], meds[-1]), xytext=(0, 11), textcoords='offset points',
                 ha='center', color=INK, fontsize=10.5, fontweight='bold')
 ax.axvline(800, color=BASELINE, linewidth=1, linestyle=(0, (4, 4)), zorder=1)
 ax.annotate('L1 임계점 N≈800\n(적중률 50%, 예측과 일치)', (800, 12.6), ha='center',
             color=INK2, fontsize=9.5)
 ax.annotate('실제 유니버스\n1,088종 (hit 42%)', (1088, 0.35), ha='center',
             color=INK2, fontsize=9.5)
-ax.annotate('miss마다 L2 왕복이 추가되는\n대워킹셋 역효과 (12.0 vs 2.4ms)', (3350, 8.6),
+ax.annotate('miss마다 L2 왕복이 추가되는\n대워킹셋 역효과 (11.9 vs 2.4ms)', (3350, 8.6),
             ha='right', color=INK2, fontsize=9.5)
 l1hits = {100: 88.8, 300: 72.6, 800: 50.0, 1088: 42.4, 3000: 21.0, 5000: 13.7}
 ax.set_xscale('log')
