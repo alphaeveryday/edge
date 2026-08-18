@@ -1,6 +1,6 @@
 # publication-api
 
-증권사 MTS 위젯이 호출하는 조회 API입니다. 검수를 통과해 게시된 가격 변동 설명만 내보냅니다.
+증권사 MTS가 호출하는 조회 API입니다. 검수를 통과해 게시된 가격 변동 설명만 내보냅니다.
 
 ```
 GET /api/v1/explanations/{etf_ticker}?trade_date=
