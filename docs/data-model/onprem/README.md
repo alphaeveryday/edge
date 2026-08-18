@@ -1,4 +1,4 @@
-# 온프렘 테넌트 콘솔
+# 온프렘 테넌트 DB
 
 증권사 관리 환경(On-Prem)에 배포되는 세트다. 번들 수신(`received_bundle`·`sync_state`)에서 시작해
 정책 심의(`policy_version`·`screening_rule`·`screening_check`), 검수(`review_task`), 게시(`publication`)까지
@@ -8,4 +8,4 @@
 Cloud 세트와는 FK로 이어지지 않는다 — 경계는 커서(`sync_state.last_cursor`)와 번들 본문이며,
 `analysis_item.explanation_result_id`가 Cloud의 설명 결과와 논리적으로만 대응한다.
 
-![온프렘 테넌트 콘솔 ERD](erd.svg)
+![온프렘 테넌트 DB ERD](erd.svg)

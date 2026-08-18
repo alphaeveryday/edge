@@ -21,6 +21,4 @@ Cloud 도메인 간 흐름은 overview로, 상세 물리 FK는 각 도메인의 
 ## On-Prem 세트
 
 Flyway 세트는 둘이고 위 도메인은 Cloud 세트다. 증권사 관리 환경에 배포되는 On-Prem 세트는
-13테이블이라 도메인으로 쪼개지 않고 한 장으로 둔다 — [온프렘 테넌트 콘솔](onprem/).
-
-그림을 갱신하는 절차(export·배경·제목 규약)는 [libs/schema README](../../src/libs/schema/README.md)에 둔다.
+13테이블이라 도메인으로 쪼개지 않고 한 장으로 둔다 — [온프렘 테넌트 DB](onprem/).

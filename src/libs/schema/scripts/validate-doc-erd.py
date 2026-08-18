@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Validate documentation ERDs against the Flyway-derived DBML of both schema sets."""
+"""Validate documentation ERDs against the Flyway-derived DBML of both schema sets.
+
+그림 쪽 규약(여기가 유일한 기록이다):
+- SVG 배경은 흰색 하나 — draw.io export 는 `--svg-theme light` 로 내고 전면
+  `<rect width="100%" height="100%" fill="#ffffff"/>` 를 넣는다(아래 두 검사가 강제).
+- 좌상단에 제목 25px bold(#0f172a)·부제 13px(#64748b) — 손으로 쓴 SVG 는 `.title`·`.subtitle`
+  클래스, export 는 drawio 의 `heading-title`·`heading-subtitle` 셀. **이 축은 가드가 없다.**
+- 컬럼 행 라벨은 평문(html=0). HTML 라벨은 export 에 래스터 폴백 `<image>` 를 낳고(41KB→712KB),
+  markdown 에 박힌 SVG 는 foreignObject 를 렌더하지 않아 그 래스터가 보이는 층이 된다.
+"""
 
 from collections import Counter
 from pathlib import Path
@@ -267,9 +276,13 @@ def validate_domain(
         if re.search(r"light\s+dark", svg):
             errors.append(
                 f"{domain}: SVG defers to the viewer color scheme (color-scheme: light dark)"
+                " — re-export with --svg-theme light"
             )
         if not has_white_canvas(svg_path):
-            errors.append(f"{domain}: SVG has no opaque white background covering the canvas")
+            errors.append(
+                f"{domain}: SVG has no opaque white background covering the canvas"
+                ' — add <rect width="100%" height="100%" fill="#ffffff"/> as the first child'
+            )
         drawio_relations = Counter()
         for cell in cells.values():
             if (
@@ -282,7 +295,11 @@ def validate_domain(
             child_label = cells.get(f"{edge_id}-child")
             parent_label = cells.get(f"{edge_id}-parent")
             if child_label is None or parent_label is None:
-                errors.append(f"{domain}: {edge_id} is missing cardinality labels")
+                errors.append(
+                    f"{domain}: {edge_id} is missing cardinality labels"
+                    " — labels drawn in the draw.io app get random ids;"
+                    f" rename them to {edge_id}-child / {edge_id}-parent"
+                )
                 continue
             drawio_relations[
                 (
