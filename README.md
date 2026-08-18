@@ -79,19 +79,17 @@ Flyway 세트는 둘입니다 — Cloud 세트 71테이블, On-Prem 세트 13테
 
 ### 2-7. 성능 실험
 
-API 서버를 4대로 늘리면서 Redis 도입 여부를 부하 테스트 75회로 검증했고, Redis 없이 인프로세스 캐시(Caffeine)만 쓰기로 결정했습니다.
+API 서버 4대·1,600 req/s 환경에서 Redis 도입 여부를 75회 부하 테스트로 검증했습니다. Caffeine만으로 3분간 DB 조회가 288,000회에서 1,062회로 줄어, 현재 규모에서는 Redis를 도입하지 않았습니다.
 
 ![고정 부하에서 캐시 모드별 응답 지연 — 전 모드 1~2ms로 지연 축에서는 차이가 없다](docs/assets/pubcache/1-mode-latency-p95-p99.png)
 
-캐시 없음·Caffeine·Redis·two-level 네 구성 모두 p99 1~2ms로, 응답 지연에는 차이가 없습니다. 차이는 DB 부하에서 납니다.
+네 캐시 구성의 p99는 모두 1~2ms였습니다. 응답 지연보다 DB 조회 횟수가 결정 기준이 됐습니다.
 
 ![캐시의 DB 오프로딩 — 같은 부하에서 DB 호출이 캐시 없음 대비 수백~수천 분의 일로 줄어든다](docs/assets/pubcache/3-db-offloading.png)
 
-반면 조회 종목 수를 늘리면 Redis를 얹은 two-level은 캐시 미스마다 네트워크 왕복이 붙어 p99가 5배 나빠집니다(12.0ms vs 2.4ms). Caffeine 단독으로 결정한 근거입니다.
-
 ![워킹셋 크기 스윕 — L1 임계점을 지나면 two-level의 L2 왕복 비용이 꼬리 지연을 키운다](docs/assets/pubcache/2-working-set-sweep-p99.png)
 
-실험 설계와 상세 결과는 [기술 블로그 4부작](https://choyoungseo20.github.io)에 정리했습니다.
+로컬 캐시의 임계점과 Redis 재검토 조건은 [후속 실험](https://choyoungseo20.github.io/posts/measuring-the-cache-boundary)에 정리했습니다. 전체 과정은 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis)과 [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler)에서 확인할 수 있습니다.
 
 ### 2-8. CI/CD
 
