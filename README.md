@@ -87,9 +87,11 @@ API 서버 4대·1,600 req/s 환경에서 Redis 도입 여부를 75회 부하 �
 
 ![캐시의 DB 오프로딩 — 같은 부하에서 DB 호출이 캐시 없음 대비 수백~수천 분의 일로 줄어든다](docs/assets/pubcache/3-db-offloading.png)
 
+로컬 캐시의 임계점과 Redis 재검토 조건은 [후속 29회 실험](https://choyoungseo20.github.io/posts/measuring-the-cache-boundary)에서 따로 측정했습니다.
+
 ![워킹셋 크기 스윕 — L1 임계점을 지나면 two-level의 L2 왕복 비용이 꼬리 지연을 키운다](docs/assets/pubcache/2-working-set-sweep-p99.png)
 
-로컬 캐시의 임계점과 Redis 재검토 조건은 [후속 실험](https://choyoungseo20.github.io/posts/measuring-the-cache-boundary)에 정리했습니다. 전체 과정은 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis)과 [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler)에서 확인할 수 있습니다.
+전체 과정은 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis)과 [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler)에서 확인할 수 있습니다.
 
 ### 2-8. CI/CD
 
