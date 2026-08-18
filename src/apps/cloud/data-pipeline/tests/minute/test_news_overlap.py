@@ -49,7 +49,10 @@ class TestSeedPoll:
         )
         assert len(outcome.frontier_new_articles) == 100  # budget 만큼
         assert outcome.reached_anchor is True
-        assert outcome.truncated is True  # 120건 중 100건 — 더 있다, 위장 금지
+        # 최초 poll 은 과거 전체를 따라잡는 작업이 아니라 realtime 연속성의 시작점을
+        # 정하는 bounded seed 다. feed 뒤에 20건이 더 있어도 상단 블록을 성공 anchor 로
+        # 확정해야 다음 poll 이 그 지점을 발견해 정상적으로 따라잡을 수 있다.
+        assert outcome.truncated is False
         assert len(outcome.next_anchor_ids) == 10
 
     def test_first_poll_small_feed_not_truncated(self):
