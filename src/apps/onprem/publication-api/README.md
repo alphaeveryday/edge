@@ -14,6 +14,8 @@ API 서버 4대·1,600 req/s 환경에서 캐시 전략을 75회 부하 테스�
 
 ![캐시 구성별 DB 조회 횟수 비교](../../../../docs/assets/pubcache/3-db-offloading.png)
 
+캐시 임계점과 접근 분포는 후속 29회 실험에서 따로 측정했습니다.
+
 ![조회 종목 수를 늘렸을 때의 p99 변화](../../../../docs/assets/pubcache/2-working-set-sweep-p99.png)
 
 실험 과정과 판단 근거는 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis), [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler), [캐시 임계점 후속 실험](https://choyoungseo20.github.io/posts/measuring-the-cache-boundary)에 정리했습니다.

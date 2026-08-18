@@ -150,3 +150,9 @@ Caffeine only 결정은 **현재 서빙 형태(소수 종목 노출·핫키 집�
 2. 본 측정: `scripts/run-matrix.sh --suite B0..F1 --repeat 3` (무릎점 스윕 먼저), 글2·글3.
 3. 글1 초안 완료: `choyoungseo20.github.io/_posts/2026-08-16-multi-instance-does-not-require-redis.md` (1,986단어, 실측 수치 없음 — 형식 검수 통과).
 4. E4(scale-out)·E5(Redis 장애)·E6(게시·차단) 시나리오는 스크립트만 검증(bash -n) — 실런 미수행.
+
+## 2026-08-18 추가 — E6 caffeine 재실측 (채택 구성 실측 근거 확보)
+
+- **동기**: E6(게시·차단 반영)는 two-level 로만 측정돼, "채택한 로컬 캐시 구성이 SLO 를 지켰다"는 서술의 실측 근거가 없었다(가산 논증만 존재). `--mode caffeine` 으로 동일 조건(rate 1600·3m·3반복·명목 이벤트 시각 t+120/150 규약) 재실행.
+- **결과**: 새 게시 반영(마지막 stale − INSERT) 3.21 / 3.21 / 4.12s — two-level(4.22~4.45s)보다 빠르며 SLO 5s 충족(L1 TTL 단독 상한과 방향 일치). 차단 전환 폭(마지막 fresh ↔ 첫 blocked) 0.00 / 0.00 / 0.01s — 차단 판정이 캐시 밖이라 모드 무관함을 재확인.
+- **run**: `20260818T155133Z/155514Z/155855Z-E6-caffeine-4x-r1..3` (로컬 results/). 코드베이스는 원 실험 이후 ADR-0053(Exposure 은퇴)이 반영된 dev — E6 측정 대상(캐시 전파)과 무관. 이미지 재빌드 없이 돌리면 구 이미지가 `missing table [exposure_log]` validate 실패로 기동하지 않는다(재현 시 `compose build` 선행).
