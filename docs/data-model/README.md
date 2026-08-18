@@ -1,10 +1,10 @@
 # 데이터 모델
 
-Cloud 도메인 간 흐름은 overview로, 상세 물리 FK는 각 도메인의 ERD로 구분한다.
+두 Flyway 세트의 도메인 흐름은 overview로, 상세 물리 FK는 각 ERD로 구분한다.
 
-## Cloud 도메인 개요
+## 개요 — 두 세트와 그 경계
 
-![Cloud 데이터 모델 개요](cloud-overview.svg)
+![데이터 모델 개요](overview.svg)
 
 ## Cloud 도메인별 물리 관계
 
