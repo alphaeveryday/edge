@@ -196,6 +196,7 @@ git config core.hooksPath .githooks
 - `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
   문서다 — 예: `src/apps/analysis-engine/docs/logical-erd.dbml`.
 - **두 DBML 은 문서 ERD(`docs/data-model/`)와도 대조된다** — `scripts/validate-doc-erd.py` 가
-  테이블 전수·FK 방향·카디널리티 라벨을 draw.io 원본과 SVG 양쪽에 대조하고, `data-model-validate`
+  테이블 전수·FK 방향·카디널리티 라벨을 draw.io 원본과 SVG 양쪽에 대조하고(SVG 배경 흰색
+  통일도 같이 검사한다), `data-model-validate`
   CI 가 그 dbml 이 바뀐 PR 에서 돈다. 표나 FK 가 늘면 **같은 PR 에서 그림도 갱신**해야 초록이 된다
   (Cloud 는 `domains/<도메인>/`, 온프렘은 `onprem/`).
