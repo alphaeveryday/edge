@@ -215,14 +215,27 @@ class NewsWorker(MinuteWorkerLoop):
             )
             success_ids = () if anchor is None else anchor["success_anchor_ids"]
             head_ids = () if anchor is None else anchor["head_anchor_ids"]
-            # lag 신호는 **직전 poll 이 anchor 에 닿았는가**다 — anchor **값**을 비교하면
-            # 빈 응답처럼 head 를 보존한 미완 poll 이 "따라잡음"으로 오독돼 다음 poll 이
-            # 얕은 예산으로 돌고 backlog 가 한 tick 더 밀린다.
-            lagging = anchor is not None and (
+            legacy_seed_recovery = (
+                anchor is not None
+                and anchor["success_poll_at"] is None
+                and not success_ids
+                and bool(head_ids)
+            )
+            # lag 신호는 **직전 poll 이 anchor 에 닿았는가**다. timestamp는 head를
+            # 보존한 빈 미완 poll을 잡고, ID 차이는 같은 tick의 두 poll이 같은 now를
+            # 공유해 timestamp가 같아지는 경우를 잡는다. 둘 다 빈 행은 아직 seed 전이지
+            # lag가 아니므로 일반 page 예산을 써야 한다.
+            lagging = anchor is not None and bool(success_ids or head_ids) and (
                 anchor["success_poll_at"] is None
                 or anchor["head_poll_at"] > anchor["success_poll_at"]
+                or head_ids != success_ids
             )
-            target_ids = success_ids if lagging else head_ids
+            # 구버전 bounded seed는 head만 저장하고 success를 비워 둬 활성 세션을
+            # 영구 lagging으로 만들었다. 그 상태에는 이미 관측한 head가 유효한 시작점이므로
+            # 빈 success 대신 head를 목표로 삼아 배포 후 첫 poll에서 스스로 복구한다.
+            target_ids = head_ids if legacy_seed_recovery else (
+                success_ids if lagging else head_ids
+            )
             feed = RawPagePreserver(
                 inner=self.feed, storage=self.storage, source=cfg.source_code,
                 market=cfg.market, session_date=cfg.session_date,
@@ -255,10 +268,16 @@ class NewsWorker(MinuteWorkerLoop):
             # 기록한다) — 같은 기사 집합을 같은 내용으로 다시 봤다면 같은 값이다
             checksum = observation_checksum(observations)
             # 빈 응답(소스 hiccup·개장 전)은 frontier 에 대해 아무것도 증명하지 않는다 —
-            # 그걸로 anchor 를 비우면 다음 poll 이 seed 로 되돌아가 예산을 통째로 쓰고
-            # truncated(INCOMPLETE) 로 끝난다. 관측 0건이면 anchor 를 건드리지 않는다.
+            # 그걸로 anchor 를 비우면 다음 non-empty poll 이 불필요한 seed 로 돌아간다.
+            # legacy seed 복구도 target을 못 찾은 새 head로 덮으면 다음 poll이 거짓으로
+            # 따라잡으므로, 실제 legacy head에 닿을 때까지 같은 target을 보존한다.
             saw_articles = bool(outcome.next_anchor_ids)
-            head_anchor_ids = outcome.next_anchor_ids if saw_articles else head_ids
+            preserve_legacy_head = legacy_seed_recovery and outcome.truncated
+            head_anchor_ids = (
+                outcome.next_anchor_ids
+                if saw_articles and not preserve_legacy_head
+                else head_ids
+            )
             manifest_key = minute_poll_manifest_key(
                 cfg.dataset, cfg.source_code, cfg.market, cfg.session_date,
                 window_hhmm, claim["attempt_count"],

@@ -14,8 +14,10 @@ anchor 를 만날 때까지" 훑는 방식이다:
 - anchor 미도달 = 신규분이 page budget 을 넘었다는 뜻 — 잘라서 성공으로 위장하지
   않고 **미완(truncated)** 으로 표시한다(fail loud). 호출자(Worker, 5-2)가
   INCOMPLETE 로 기록하고 recovery 를 예약한다.
-- 첫 poll(anchor 없음)은 budget 만큼의 bounded seed 다 — budget 을 다 쓰고도 더
-  있을 수 있으면 같은 이유로 truncated 다.
+- 첫 poll(anchor 없음)은 budget 만큼의 bounded seed 다. 과거 전체를 소진하는
+  backfill 이 아니라 realtime 연속성의 시작점을 정하는 동작이므로, 관측한 최신 상단
+  블록을 성공 anchor 로 확정한다. 빈 poll 은 저장할 상단 블록이 없어 다음 non-empty
+  poll 이 다시 seed 가 된다.
 
 feed 는 주입 계약(fetch_page(poll_index, page, page_size))이다. 실제 BigKinds
 wrapper(5-2)는 `NewsPage`로 명시적 isLimitPage를 보존하고, 결정적 fake의 list 반환은
@@ -33,7 +35,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..config import DbConfig
 from ..db import connect as _default_connect
@@ -75,8 +77,8 @@ class PollOutcome:
     - frontier_new_articles: anchor 앞이라 **위치로도** 신규가 증명된 부분집합.
       관측·지표용이며 job 판정의 근거로 단독 사용 금지(위 경고).
     - reached_anchor: anchor 를 만났나 (앵커가 없던 첫 poll 은 True — seed 성공)
-    - truncated: **budget 안에서 anchor 에 닿지 못했다**(또는 seed 가 budget 을
-      다 썼다). 이것만이 이 컨트롤러가 판정할 수 있는 미완이다 — `truncated=False`
+    - truncated: **budget 안에서 기존 anchor 에 닿지 못했다**. 이것만이 이
+      컨트롤러가 판정할 수 있는 미완이다 — `truncated=False`
       는 "budget 이 모자라지 않았다"는 뜻이지 **완전성 증명이 아니다**(아래 참조).
     - next_anchor_ids: 이번 최신 page 상단 ID들. 성공이면 durable success anchor,
       truncated면 다음 realtime poll의 head로 쓰되 이전 성공 anchor는 recovery용으로
@@ -120,7 +122,6 @@ def poll_new_articles(
     next_anchor: list[str] = []
     reached = False
     pages_used = 0
-    feed_ended = False
     for page in range(1, max_pages + 1):
         fetched = feed.fetch_page(poll_index, page, page_size)
         pages_used = page
@@ -139,7 +140,6 @@ def poll_new_articles(
         if not rows:
             # BigKinds 는 짧은 page 뒤에도 다음 page 가 있을 수 있다(soft cap/server
             # dedup). 빈 page 만 feed 끝의 기계 신호로 취급한다.
-            feed_ended = True
             break
         validated_rows: list[tuple[str, dict]] = []
         for row in rows:
@@ -207,13 +207,14 @@ def poll_new_articles(
             # 이 컨트롤러는 저지연 전달만 책임진다.
             break
         if page_is_last:
-            feed_ended = True
             break
     if not anchor_ids:
-        # 첫 poll(seed): 만날 anchor 자체가 없다. 빈 page 로 끝을 확인하지 못한 채
-        # budget 을 다 썼으면 짧은 마지막 page 여도 뒤가 있을 수 있어 truncated 다.
+        # 첫 poll(seed): 과거 feed 전체를 따라잡는 backfill 이 아니라 realtime
+        # 연속성의 시작점을 정한다. budget 안에서 관측한 최신 상단 블록을 성공으로
+        # 확정해야 다음 poll 이 그 anchor 를 목표로 따라잡을 수 있다. 빈 seed 는
+        # Worker가 anchor를 전진시키지 않아 첫 non-empty poll이 다시 이 경로를 탄다.
         reached = True
-        truncated = not feed_ended
+        truncated = False
     else:
         # anchor 가 피드에서 사라졌더라도 연속성을 증명하지 못했다. feed 끝을 anchor
         # 도달로 접으면 보존기간/서버 누락을 success 로 위장하므로 INCOMPLETE 입력이다.
@@ -403,8 +404,8 @@ class NewsSourceLedger:
                 return None
             return {
                 "success_anchor_ids": tuple(row[0]), "head_anchor_ids": tuple(row[1]),
-                # 두 시각이 lag 의 **권위 신호**다 — anchor 값이 같아도(빈 응답으로
-                # head 를 보존한 경우) 직전 poll 이 anchor 에 못 닿았으면 lagging 이다
+                # 시각과 ID 차이가 lag의 durable 신호다. 빈 miss는 ID를 보존하므로
+                # _upsert_anchor_tx가 head 시각을 success보다 뒤로 두어 구분한다.
                 "success_poll_at": row[2], "head_poll_at": row[3],
             }
 
@@ -418,10 +419,14 @@ class NewsSourceLedger:
         `success_anchor_ids=None` 은 **이번 poll 이 truncated** 라는 뜻이다: head 만
         전진시키고 성공 anchor 는 그대로 둔다. truncated poll 의 head 로 성공 anchor
         를 덮으면 아직 못 따라잡은 구간이 영영 조회 범위 밖으로 나간다(v0.7 8절).
+
+        한 tick의 realtime/recovery poll은 같은 `now`를 공유한다. 미완 poll의 head
+        시각을 1µs 뒤로 두어 ID까지 보존되는 빈 miss도 다음 poll에서 lag로 식별한다.
         """
         advance = success_anchor_ids is not None
         head_json = canonical_json(list(head_anchor_ids))
         success_json = canonical_json(list(success_anchor_ids or ()))
+        head_poll_at = now if advance else now + timedelta(microseconds=1)
         cur.execute(
             """
             INSERT INTO news_poll_anchor (
@@ -438,7 +443,7 @@ class NewsSourceLedger:
                 updated_at = now()
             """,
             (session_id, source_code, success_json, head_json,
-             now if advance else None, now, advance, advance),
+             now if advance else None, head_poll_at, advance, advance),
         )
 
     def observe(

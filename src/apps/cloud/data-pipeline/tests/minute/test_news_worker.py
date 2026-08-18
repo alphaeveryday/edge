@@ -95,6 +95,61 @@ class TestFirstPollAndJobs:
         anchor = db.anchors[(session_id, "bigkinds")]
         assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"] != []
 
+    def test_bounded_seed_establishes_success_anchor_without_reaching_feed_end(
+        self, tmp_path,
+    ):
+        # realtime seed 는 과거 feed 전체를 소진하는 backfill 이 아니다. 첫 page 예산에서
+        # 최신 블록을 기준점으로 확정해야 다음 poll 이 그 anchor 를 발견해 따라잡는다.
+        db = FakeMinuteDB()
+        worker, _, session_id = build_worker(
+            db, tmp_path, windows=2,
+            scenario={"scenario": "seed", "initial_count": 5},
+            page_size=2, max_pages=1, recovery_max_pages=8,
+        )
+
+        assert worker.tick(NOW) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert statuses(db)["0901"] == "VALID"
+        assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"]
+        assert len(anchor["success_anchor_ids"]) == 2
+        assert len(db.jobs) == 2, "seed 예산 밖의 과거 기사를 realtime 이 backfill 했다"
+
+        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        assert statuses(db)["0900"] == "VALID_EMPTY"
+        assert len(db.jobs) == 2, "직전 seed anchor를 못 찾아 기존 기사를 다시 만들었다"
+
+    def test_empty_first_poll_allows_later_nonempty_seed(self, tmp_path):
+        # 개장 전 빈 poll 은 저장할 기준점이 없다. 빈 anchor를 성공 커서로 굳히지 않고,
+        # 첫 기사가 나타난 poll 이 실제 bounded seed가 되어야 한다.
+        class EmptyThenArticleFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if poll_index == 0 or page > 2:
+                    return []
+                news_id = "seed" if page == 1 else "older"
+                return [{"NEWS_ID": news_id, "DATE": "20260731",
+                         "TITLE": news_id, "CONTENT": "본문", "PROVIDER": "p",
+                         "PROVIDER_LINK_PAGE": f"https://news.example/{news_id}"}]
+
+        db = FakeMinuteDB()
+        worker, _, session_id = build_worker(
+            db, tmp_path, feed=EmptyThenArticleFeed(), windows=2,
+            max_pages=1, recovery_max_pages=8,
+        )
+
+        assert worker.tick(NOW) == "PROCESSED"
+        assert statuses(db)["0901"] == "VALID_EMPTY"
+        empty_anchor = db.anchors[(session_id, "bigkinds")]
+        assert empty_anchor["success_anchor_ids"] == []
+        assert empty_anchor["head_anchor_ids"] == []
+        assert empty_anchor["success_poll_at"] is None
+
+        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        assert statuses(db)["0900"] == "VALID"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"] != []
+        assert anchor["success_anchor_ids"] == ["seed"]
+        assert len(db.jobs) == 1, "첫 non-empty seed가 recovery 예산으로 과거 page를 읽었다"
+
     def test_job_identity_is_article_content_fingerprint(self, tmp_path):
         db = FakeMinuteDB()
         worker, _, _ = build_worker(db, tmp_path)
@@ -224,29 +279,93 @@ class TestLedgerIsTheAuthority:
 
 
 class TestTruncationAndRecovery:
-    def test_truncated_poll_keeps_success_anchor_and_next_poll_catches_up(self, tmp_path):
-        # page budget 을 넘긴 poll 은 INCOMPLETE 로 드러내고(성공 위장 금지) 성공
-        # anchor 를 전진시키지 않는다 — 그 상태가 곧 recovery 예약이고, 다음 poll 이
-        # recovery 예산으로 더 깊이 읽어 따라잡는다
+    def test_existing_empty_success_anchor_recovers_from_saved_head(self, tmp_path):
+        # 구버전이 만든 활성 세션은 success가 비었어도 head에는 최신 기준점이 있다.
+        # 그 head를 target으로 삼아야 배포 직후 다음 poll에서 교착을 스스로 복구한다.
+        class CatchableLegacyHeadFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": "fresh", "DATE": "20260731", "TITLE": "신규",
+                     "CONTENT": "c1", "PROVIDER": "p",
+                     "PROVIDER_LINK_PAGE": "https://news.example/fresh"},
+                    {"NEWS_ID": "legacy-head", "DATE": "20260731", "TITLE": "기존",
+                     "CONTENT": "c0", "PROVIDER": "p",
+                     "PROVIDER_LINK_PAGE": "https://news.example/legacy"},
+                ]
+
         db = FakeMinuteDB()
         worker, _, session_id = build_worker(
-            db, tmp_path, windows=2,
-            scenario={"scenario": "burst", "initial_count": 5},
+            db, tmp_path, feed=CatchableLegacyHeadFeed(),
             page_size=2, max_pages=1, recovery_max_pages=8,
         )
-        # realtime lane 은 **최신** due window 부터다 — 0901 → 0900 순으로 poll 한다
-        assert worker.tick(NOW) == "PROCESSED"
-        assert statuses(db)["0901"] == "INCOMPLETE"
-        anchor = db.anchors[(session_id, "bigkinds")]
-        assert anchor["success_anchor_ids"] == []          # 성공 anchor 미전진
-        assert len(anchor["head_anchor_ids"]) == 2         # head 만 전진
-        assert len(db.jobs) == 2                           # 읽은 만큼은 즉시 job
+        db.anchors[(session_id, "bigkinds")] = {
+            "session_id": session_id,
+            "source_code": "bigkinds",
+            "success_anchor_ids": [],
+            "head_anchor_ids": ["legacy-head"],
+            "success_poll_at": None,
+            "head_poll_at": NOW - timedelta(minutes=1),
+        }
 
-        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        assert worker.tick(NOW) == "PROCESSED"
         assert statuses(db)["0900"] == "VALID"
         anchor = db.anchors[(session_id, "bigkinds")]
         assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"]
-        assert len(db.jobs) == 5, "따라잡기 poll 이 나머지 기사를 걷지 못했다"
+        [manifest_key] = worker.storage.list_keys("operations_archive/")
+        manifest = json.loads(worker.storage.get_bytes(manifest_key))
+        assert manifest["target_anchor_ids"] == ["legacy-head"], \
+            "빈 success를 다시 seed로 취급해 저장된 head를 따라잡지 않았다"
+
+    def test_legacy_head_survives_misses_until_it_is_reached(self, tmp_path):
+        # legacy head를 못 찾은 poll의 새 상단으로 덮으면, 다음 poll이 그 새 상단을
+        # 발견하고 누락 구간을 따라잡지 않은 채 성공한다. 실제 legacy ID를 볼 때까지
+        # 복구 target은 고정돼야 한다.
+        class DelayedLegacyHeadFeed:
+            pages = {
+                0: ["new-1", "new-0"],
+                1: ["new-2", "new-1"],
+                2: ["new-3", "legacy-head"],
+            }
+
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": news_id, "DATE": "20260731", "TITLE": news_id,
+                     "CONTENT": "c", "PROVIDER": "p",
+                     "PROVIDER_LINK_PAGE": f"https://news.example/{news_id}"}
+                    for news_id in self.pages[poll_index]
+                ]
+
+        db = FakeMinuteDB()
+        worker, _, session_id = build_worker(
+            db, tmp_path, feed=DelayedLegacyHeadFeed(), windows=3,
+            page_size=2, max_pages=1, recovery_max_pages=8,
+        )
+        db.anchors[(session_id, "bigkinds")] = {
+            "session_id": session_id,
+            "source_code": "bigkinds",
+            "success_anchor_ids": [],
+            "head_anchor_ids": ["legacy-head"],
+            "success_poll_at": None,
+            "head_poll_at": NOW - timedelta(minutes=1),
+        }
+
+        assert worker.tick(NOW) == "PROCESSED"
+        assert db.anchors[(session_id, "bigkinds")]["head_anchor_ids"] == ["legacy-head"]
+        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == []
+        assert anchor["head_anchor_ids"] == ["legacy-head"]
+        assert sorted(statuses(db).values()) == ["DUE", "INCOMPLETE", "INCOMPLETE"]
+
+        assert worker.tick(NOW + timedelta(seconds=2)) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"]
+        assert anchor["success_anchor_ids"] == ["new-3", "legacy-head"]
+        assert sorted(statuses(db).values()) == ["INCOMPLETE", "INCOMPLETE", "VALID"]
 
     def test_burst_after_catchup_does_not_lose_earlier_frontier(self, tmp_path):
         # 따라잡은 뒤 burst 가 나면 성공 anchor 는 **직전 성공 지점**으로 남아야 한다 —
@@ -517,6 +636,83 @@ class TestProductionDefaults:
         assert sorted(statuses(db).values()) == ["VALID", "VALID"]
         # poll 0(기사 2건) + poll 1(신규 1건) — 같은 tick 안에서 둘 다 전달된다
         assert len(db.jobs) == 3
+
+    def test_same_tick_anchor_miss_remains_lagging_on_next_tick(self, tmp_path):
+        # 한 tick의 realtime/recovery poll은 같은 now를 공유한다. 성공 직후 miss가 나면
+        # 두 timestamp가 같으므로 시각만 비교해서는 lag를 잃고 새 head에 거짓 성공한다.
+        class SameTickMissFeed:
+            snapshots = {
+                0: ["anchor"],
+                1: ["new-1"],
+                2: ["new-2", "new-1"],
+            }
+
+            def fetch_page(self, poll_index, page, page_size):
+                if page > 1:
+                    return []
+                return [
+                    {"NEWS_ID": news_id, "DATE": "20260731", "TITLE": news_id,
+                     "CONTENT": "c", "PROVIDER": "p",
+                     "PROVIDER_LINK_PAGE": f"https://news.example/{news_id}"}
+                    for news_id in self.snapshots[poll_index]
+                ]
+
+        db = FakeMinuteDB()
+        worker, _, session_id = build_worker(
+            db, tmp_path, feed=SameTickMissFeed(), windows=3,
+            page_size=2, max_pages=1, recovery_max_pages=2,
+            recovery_budget_per_tick=1,
+        )
+
+        assert worker.tick(NOW) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == ["anchor"]
+        assert anchor["head_anchor_ids"] == ["new-1"]
+        assert anchor["success_poll_at"] == NOW
+        assert anchor["head_poll_at"] > anchor["success_poll_at"]
+
+        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == ["anchor"]
+        assert sorted(statuses(db).values()) == ["INCOMPLETE", "INCOMPLETE", "VALID"]
+
+    def test_same_tick_empty_miss_uses_recovery_budget_on_next_tick(self, tmp_path):
+        # 빈 miss는 head ID도 성공 ID 그대로다. 같은 now까지 그대로 저장하면 다음 tick이
+        # lag를 잃고 일반 1-page 예산만 써 2 page의 기존 anchor를 못 찾는다.
+        class SameTickEmptyMissFeed:
+            def fetch_page(self, poll_index, page, page_size):
+                if poll_index == 0:
+                    ids = ["anchor"] if page == 1 else []
+                elif poll_index == 1:
+                    ids = []
+                else:
+                    ids = ["new-2", "new-1"] if page == 1 else (
+                        ["anchor"] if page == 2 else []
+                    )
+                return [
+                    {"NEWS_ID": news_id, "DATE": "20260731", "TITLE": news_id,
+                     "CONTENT": "c", "PROVIDER": "p",
+                     "PROVIDER_LINK_PAGE": f"https://news.example/{news_id}"}
+                    for news_id in ids
+                ]
+
+        db = FakeMinuteDB()
+        worker, _, session_id = build_worker(
+            db, tmp_path, feed=SameTickEmptyMissFeed(), windows=3,
+            page_size=2, max_pages=1, recovery_max_pages=2,
+            recovery_budget_per_tick=1,
+        )
+
+        assert worker.tick(NOW) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"] == ["anchor"]
+        assert anchor["head_poll_at"] > anchor["success_poll_at"]
+
+        assert worker.tick(NOW + timedelta(seconds=1)) == "PROCESSED"
+        anchor = db.anchors[(session_id, "bigkinds")]
+        assert anchor["success_anchor_ids"] == anchor["head_anchor_ids"]
+        assert anchor["success_anchor_ids"] == ["new-2", "new-1"]
+        assert sorted(statuses(db).values()) == ["INCOMPLETE", "VALID", "VALID"]
 
     def test_same_tick_content_conflict_retries_instead_of_quarantine(self, tmp_path):
         # 같은 tick 의 두 poll 이 같은 기사의 다른 본문을 보면 어느 쪽이 최신인지
