@@ -45,7 +45,8 @@ public class AdminAuthFilter extends OncePerRequestFilter {
 
 	// super-admin-console.md 화면 표면의 코드 대응물(ALPHA-515) — 전부 인증 필수.
 	// ⚠️ 화면 표면이 **아닌** 것도 여기 온다(인증은 IA 와 무관하게 전 표면에 걸린다) —
-	// /api/v1/console/facts 는 IA 표에 행이 없는 것이 맞다. 클래스 javadoc 참조.
+	// /api/v1/console/facts 와 /api/v1/console/trends/* 는 IA 표에 행이 없는 것이 맞다.
+	// 클래스 javadoc 참조.
 	private static final List<Rule> RULES = List.of(
 			new Rule("POST", Pattern.compile("/api/v1/auth/logout")),
 			new Rule("GET", Pattern.compile("/api/v1/auth/session")),
@@ -58,6 +59,7 @@ public class AdminAuthFilter extends OncePerRequestFilter {
 			new Rule("GET", Pattern.compile("/api/v1/sources/minute")),
 			new Rule("GET", Pattern.compile("/api/v1/sources/impact/holdings")),
 			new Rule("GET", Pattern.compile("/api/v1/console/facts")),
+			new Rule("GET", Pattern.compile("/api/v1/console/trends/entity-resolution")),
 			new Rule("GET", Pattern.compile("/api/v1/analyses")),
 			new Rule("POST", Pattern.compile("/api/v1/analyses/[^/]+/invalidate")),
 			new Rule("GET", Pattern.compile("/api/v1/session")),

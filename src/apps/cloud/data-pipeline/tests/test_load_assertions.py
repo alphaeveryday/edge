@@ -768,6 +768,7 @@ def test_resolution_rate_counts_every_axis_that_actually_attached(tmp_path, monk
                         ("ISSUER", "미등록회사")))])])   # 미해소
     conn = _FakeConn(documents=[("a1", "doc_D1")])
     _setup(monkeypatch, conn)
+    monkeypatch.setenv("OPS_LEDGER_ATTEMPT_ID", "attempt-current")
 
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
@@ -779,6 +780,7 @@ def test_resolution_rate_counts_every_axis_that_actually_attached(tmp_path, monk
     # 원장에는 ticker 전용 resolved가 아니라 실제로 붙은 세 축 전체가 같은 pair로 흘러야 한다.
     assert _log(storage)["ops"]["entity_resolution_arguments_total"] == 4
     assert _log(storage)["ops"]["entity_resolution_arguments_resolved"] == 3
+    assert _log(storage)["ops_attempt_id"] == "attempt-current"
     # 분자가 **어느 사유로** 붙었는지는 위 세 줄이 그대로 말한다(1+1+1=3). 예전엔 사유
     # 허용목록을 로그에 싣고 그 목록을 여기서 대조했는데, 그건 코드가 아는 사실의 사본이라
     # 축이 늘 때 같이 드리프트한다 — 지금은 붙은 것을 직접 세므로 목록 자체가 없다.

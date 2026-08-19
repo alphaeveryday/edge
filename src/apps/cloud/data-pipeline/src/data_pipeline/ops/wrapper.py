@@ -101,11 +101,18 @@ def _counter(value) -> int | None:
     return None
 
 
-def _entity_resolution_counters(signals: dict) -> dict[str, int | None]:
+def _entity_resolution_counters(
+    signals: dict, *, expected_attempt_id: str | None,
+) -> dict[str, int | None]:
     """엔티티 해소 분자·분모를 같은 시도의 유효한 pair로만 저장한다."""
     total_key = "entity_resolution_arguments_total"
     resolved_key = "entity_resolution_arguments_resolved"
     empty = {total_key: None, resolved_key: None}
+    if (expected_attempt_id is None
+            or signals.get("entity_resolution_attempt_id") != expected_attempt_id):
+        if total_key in signals or resolved_key in signals:
+            logger.warning("엔티티 해소 pair의 attempt 증거가 현재 실행과 다름 — 원장에 NULL로 남긴다")
+        return empty
     # producer가 로그에 성공값만 쓰더라도 같은 run_id 재시도의 로그 저장이 실패하면 이전 로그를
     # observer가 읽을 수 있다. 최신 시도가 정확한 int 0일 때만 pair를 승인한다(ALPHA-1000).
     exit_code = signals.get("exit_code")
@@ -235,8 +242,22 @@ def instrument(
         sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
     ))
 
+    def run_with_attempt_marker():
+        previous = os.environ.get("OPS_LEDGER_ATTEMPT_ID")
+        if attempt_id is None:
+            os.environ.pop("OPS_LEDGER_ATTEMPT_ID", None)
+        else:
+            os.environ["OPS_LEDGER_ATTEMPT_ID"] = attempt_id
+        try:
+            return run_fn()
+        finally:
+            if previous is None:
+                os.environ.pop("OPS_LEDGER_ATTEMPT_ID", None)
+            else:
+                os.environ["OPS_LEDGER_ATTEMPT_ID"] = previous
+
     try:
-        exit_code = run_fn()  # ← 본 작업. 예외는 삼키지 않고 그대로 전파한다.
+        exit_code = run_with_attempt_marker()  # ← 본 작업. 예외는 삼키지 않고 그대로 전파한다.
     except BaseException as exc:
         # 예외로 죽어도 attempt 를 **RUNNING 으로 남기지 않는다**(ALPHA-181). 남기면 Reconciler 가
         # 이미 끝난 실행을 STALLED 로 오판하고, STALLED 는 resolve 경로가 없어 영구 OPEN 이다.
@@ -286,15 +307,18 @@ def instrument(
     data_status = derive_data_status(signals)
     exec_status = states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
 
+    entity_resolution_counters = _entity_resolution_counters(
+        signals, expected_attempt_id=attempt_id,
+    )
     if attempt_id is not None:
         _safe(lambda: ledger.record_attempt_end(
             attempt_id, execution_status=exec_status, exit_code=exit_code,
             failure_reason=None if exit_code == 0 else "step_nonzero_exit",
             data_status=data_status,
+            entity_resolution_counters=entity_resolution_counters,
         ))
     # 실행 성공/실패(outcome)와 데이터 상태(data_status)는 별개 축이다 — 데이터가 INCOMPLETE 여도
     # 실행이 성공했으면 outcome=FULFILLED 다(attempt 를 실패로 바꾸지 않는다, 스펙 §3.2·시나리오 D).
-    entity_resolution_counters = _entity_resolution_counters(signals)
     _safe(lambda: ledger.update_task_outcome(
         expected_task_id,
         task_outcome=states.OUTCOME_FULFILLED if exit_code == 0 else states.OUTCOME_FAILED,

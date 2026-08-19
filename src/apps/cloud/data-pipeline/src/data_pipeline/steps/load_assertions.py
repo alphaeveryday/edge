@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 from edge_ontology import load_authority_registry, load_relations
@@ -431,6 +432,7 @@ def run(
                        if resolution_denominator else None)
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
+        "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "languages": list(_SOURCE_CODE_BY_LANGUAGE), "from_date": from_date, "to_date": to_date,
         "rows_read": rows_read, "rows_not_ok": rows_not_ok,

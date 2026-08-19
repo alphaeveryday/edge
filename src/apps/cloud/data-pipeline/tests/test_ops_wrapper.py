@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from data_pipeline.config import DbConfig
@@ -16,6 +18,10 @@ d = wrapper.derive_data_status
 
 def _ledger(db):
     return Ledger(db=_DB, connect_fn=db.connect)
+
+
+def _attempt_id(db):
+    return db.attempts[-1]["attempt_id"]
 
 
 def _seed(
@@ -482,6 +488,7 @@ def test_instrument_stores_envelope_counters():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 2736, "failed_records": 4,
+            "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
         },
@@ -490,9 +497,27 @@ def test_instrument_stores_envelope_counters():
     assert row["records_out"] == 2736 and row["failed_records"] == 4
     assert row["entity_resolution_arguments_total"] == 4
     assert row["entity_resolution_arguments_resolved"] == 3
+    assert db.attempts[0]["entity_resolution_arguments_total"] == 4
+    assert db.attempts[0]["entity_resolution_arguments_resolved"] == 3
     # 카운터는 저장 전용 — 판정 축은 종전 규칙 그대로다(실패 있음 → INCOMPLETE).
     assert row["data_status"] == states.DATA_INCOMPLETE
     assert row["task_outcome"] == states.OUTCOME_FULFILLED
+
+
+def test_instrument_scopes_attempt_marker_to_the_wrapped_run(monkeypatch):
+    """WHY: 공유 로그의 pair는 이 wrapper attempt임을 증명해야 하고 기존 프로세스 환경도 보존한다."""
+    db = FakeOpsDB()
+    _seed(db)
+    monkeypatch.setenv("OPS_LEDGER_ATTEMPT_ID", "outer-attempt")
+
+    def run():
+        assert os.environ["OPS_LEDGER_ATTEMPT_ID"] == _attempt_id(db)
+        return 0
+
+    wrapper.instrument(run, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+                       ecs_task_arn="arn:task/1")
+
+    assert os.environ["OPS_LEDGER_ATTEMPT_ID"] == "outer-attempt"
 
 
 def test_instrument_leaves_counters_null_when_envelope_missing():
@@ -517,6 +542,7 @@ def test_instrument_leaves_counters_null_when_envelope_malformed():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": -5, "failed_records": "x",
+            "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 2,
             "entity_resolution_arguments_resolved": 3,
         },
@@ -534,13 +560,30 @@ def test_incomplete_entity_resolution_pair_is_loud_and_null(caplog):
     with caplog.at_level("WARNING"):
         pair = wrapper._entity_resolution_counters({
             "exit_code": 0,
+            "entity_resolution_attempt_id": "attempt-1",
             "entity_resolution_arguments_total": 4,
-        })
+        }, expected_attempt_id="attempt-1")
     assert pair == {
         "entity_resolution_arguments_total": None,
         "entity_resolution_arguments_resolved": None,
     }
     assert "pair가 불완전" in caplog.text
+
+
+def test_entity_resolution_pair_requires_the_same_attempt(caplog):
+    """WHY: 같은 run_id의 겹친 재시도가 공유 로그를 덮어써도 다른 시도의 pair를 승인하지 않는다."""
+    with caplog.at_level("WARNING"):
+        pair = wrapper._entity_resolution_counters({
+            "exit_code": 0,
+            "entity_resolution_attempt_id": "attempt-newer",
+            "entity_resolution_arguments_total": 4,
+            "entity_resolution_arguments_resolved": 3,
+        }, expected_attempt_id="attempt-older")
+    assert pair == {
+        "entity_resolution_arguments_total": None,
+        "entity_resolution_arguments_resolved": None,
+    }
+    assert "attempt 증거가 현재 실행과 다름" in caplog.text
 
 
 def test_retry_without_envelope_clears_previous_counters():
@@ -556,6 +599,7 @@ def test_retry_without_envelope_clears_previous_counters():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 100, "failed_records": 0,
+            "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
         },
@@ -583,6 +627,7 @@ def test_nonzero_exit_rejects_stale_entity_resolution_pair():
         ecs_task_arn="arn:task/failed",
         observe_data_fn=lambda ec: {
             "records_out": 100, "failed_records": 0,
+            "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
         },
@@ -602,6 +647,7 @@ def test_step_exception_clears_counters():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 2736, "failed_records": 0,
+            "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
         },

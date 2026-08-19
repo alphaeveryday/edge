@@ -2,6 +2,7 @@ package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
+import com.edge.superadmin.dto.EntityResolutionTrendResponse;
 import com.edge.superadmin.service.ConsoleFactsService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -29,5 +30,12 @@ public class ConsoleController {
 	@GetMapping("/api/v1/console/facts")
 	public ApiResponse<ConsoleFactsResponse> facts(@RequestParam(required = false) String date) {
 		return ApiResponse.onSuccess(consoleFacts.facts(date));
+	}
+
+	/** @param date 이 날짜(KST) 이하의 관측만 본다. 생략하면 API 서버 시계의 KST 오늘까지다. */
+	@GetMapping("/api/v1/console/trends/entity-resolution")
+	public ApiResponse<EntityResolutionTrendResponse> entityResolutionTrend(
+			@RequestParam(required = false) String date) {
+		return ApiResponse.onSuccess(consoleFacts.entityResolutionTrend(date));
 	}
 }

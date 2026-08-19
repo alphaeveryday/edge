@@ -10,6 +10,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
+import com.edge.superadmin.repository.ConsoleFactsRepository.EntityResolutionPoint;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
@@ -862,5 +863,41 @@ class ConsoleControllerTest {
 				.andExpect(status().isBadRequest());
 		mvc.perform(get("/api/v1/console/facts").param("date", "2020-01-01"))
 				.andExpect(status().isOk());
+	}
+
+	@Test
+	void 엔티티_해소_추이는_실제_계수와_nullable_비율을_그대로_내린다() throws Exception {
+		MockMvc mvc = mvc(facts());
+		repository.trend = List.of(
+				new EntityResolutionPoint(LocalDate.parse("2026-08-01"), 4L, 3L),
+				new EntityResolutionPoint(LocalDate.parse("2026-08-02"), 0L, 0L));
+
+		String body = mvc.perform(get("/api/v1/console/trends/entity-resolution")
+						.param("date", "2026-08-02"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.points.length()").value(2))
+				.andExpect(jsonPath("$.result.points[0].date").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.points[0].totalArguments").value(4))
+				.andExpect(jsonPath("$.result.points[0].resolvedArguments").value(3))
+				.andExpect(jsonPath("$.result.points[0].rate").value(0.75))
+				.andExpect(jsonPath("$.result.points[1].rate").value(nullValue()))
+				.andReturn().getResponse().getContentAsString();
+
+		assertThat(repository.requestedTrendDate).isEqualTo(LocalDate.parse("2026-08-02"));
+		assertThat(body).contains("\"rate\":null");
+	}
+
+	@Test
+	void 엔티티_해소_추이는_계측이_없으면_빈_목록이고_잘못된_날짜는_400이다() throws Exception {
+		MockMvc mvc = mvc(facts());
+
+		mvc.perform(get("/api/v1/console/trends/entity-resolution"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.points.length()").value(0));
+		assertThat(repository.requestedTrendDate)
+				.isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Seoul")));
+
+		mvc.perform(get("/api/v1/console/trends/entity-resolution").param("date", "2026-8-3"))
+				.andExpect(status().isBadRequest());
 	}
 }

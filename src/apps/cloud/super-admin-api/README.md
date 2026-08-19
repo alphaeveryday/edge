@@ -56,6 +56,11 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 [docs/contracts/console-facts-api.md](../../../../docs/contracts/console-facts-api.md),
 결정 근거는 [ADR-0050](../../../../docs/adr/0050-console-facts-endpoint.md).
 
+`GET /api/v1/console/trends/entity-resolution?date=`는 하루 facts와 분리된 최근 일별 사실이다.
+`LOAD_ASSERTIONS`의 성공 wrapper attempt에 직접 저장된 분자·분모만 최대 10개 내리고, 같은 날짜는
+가장 최근 런·재시도 하나로 접는다. 이 경로도 판정하지 않으며 계약은 같은 문서의
+「엔티티 해소 추이」 절이 정본이다(ALPHA-1001).
+
 **사실 축(런·작업·데이터셋·산출·경계·체인)은 조각별로 하나씩 붙는다** — 무엇이 dev 에 있는지는
 계약 문서 머리의 표가 정본이다. ⚠️ 그 현황을 여기 숫자로 옮겨 적지 마라: 조각마다 두 곳을
 고쳐야 하고, 한 번 놓치면 이 문단이 조용히 낡는다(실제로 조각 2~4 동안 그랬다).
