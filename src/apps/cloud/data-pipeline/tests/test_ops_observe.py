@@ -69,6 +69,25 @@ def test_optional_received_count_flows_at_entity_grain(tmp_path):
     assert signals["received_count"] == 32
 
 
+def test_optional_entity_resolution_pair_flows_without_reinterpretation(tmp_path):
+    """WHY: observer가 rate나 ticker-only resolved를 재구성하면 producer의 해소 정의가 갈린다."""
+    storage = _storage(tmp_path)
+    entry = _entry("LOAD_ASSERTIONS")
+    _write_log(storage, entry, {
+        "run_id": _RUN,
+        "ops": {
+            "records_out": 100,
+            "failed_records": 0,
+            "entity_resolution_arguments_total": 4,
+            "entity_resolution_arguments_resolved": 3,
+        },
+    })
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+    assert signals["entity_resolution_arguments_total"] == 4
+    assert signals["entity_resolution_arguments_resolved"] == 3
+
+
 def test_failed_records_make_it_incomplete(tmp_path):
     # WHY: 이 티켓 전체의 유일한 데이터-정합성 위험 — 유실 건수가 흘러가지 않으면 부분 유실이
     #      VALID 로 위장된다(edge-review G/H 가 원래 잡은 결함의 재발).

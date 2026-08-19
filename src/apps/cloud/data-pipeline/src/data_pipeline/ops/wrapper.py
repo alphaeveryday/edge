@@ -101,6 +101,33 @@ def _counter(value) -> int | None:
     return None
 
 
+def _entity_resolution_counters(signals: dict) -> dict[str, int | None]:
+    """엔티티 해소 분자·분모를 같은 시도의 유효한 pair로만 저장한다."""
+    total_key = "entity_resolution_arguments_total"
+    resolved_key = "entity_resolution_arguments_resolved"
+    empty = {total_key: None, resolved_key: None}
+    # producer가 로그에 성공값만 쓰더라도 같은 run_id 재시도의 로그 저장이 실패하면 이전 로그를
+    # observer가 읽을 수 있다. 최신 시도가 정확한 int 0일 때만 pair를 승인한다(ALPHA-1000).
+    exit_code = signals.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code != 0:
+        return empty
+    present = (total_key in signals, resolved_key in signals)
+    if not any(present):
+        return empty                       # 이 계측을 내지 않는 task
+    if not all(present):
+        logger.warning("엔티티 해소 카운터 pair가 불완전하다 — 원장에 둘 다 NULL 로 남긴다")
+        return empty
+    if signals.get(total_key) is None and signals.get(resolved_key) is None:
+        return empty                       # 실패 시도가 명시적으로 이전 값을 지우는 경로
+    total = _counter(signals[total_key])
+    resolved = _counter(signals[resolved_key])
+    if total is None or resolved is None or resolved > total:
+        logger.warning("엔티티 해소 카운터 pair가 유효하지 않다(total=%r resolved=%r) — "
+                       "원장에 둘 다 NULL 로 남긴다", signals[total_key], signals[resolved_key])
+        return empty
+    return {total_key: total, resolved_key: resolved}
+
+
 def derive_data_status(signals: dict) -> str:
     """산출 데이터 신호 → data_status. **정직하게** — 근거 부족은 UNKNOWN(스펙 §3.3·§6).
 
@@ -267,6 +294,7 @@ def instrument(
         ))
     # 실행 성공/실패(outcome)와 데이터 상태(data_status)는 별개 축이다 — 데이터가 INCOMPLETE 여도
     # 실행이 성공했으면 outcome=FULFILLED 다(attempt 를 실패로 바꾸지 않는다, 스펙 §3.2·시나리오 D).
+    entity_resolution_counters = _entity_resolution_counters(signals)
     _safe(lambda: ledger.update_task_outcome(
         expected_task_id,
         task_outcome=states.OUTCOME_FULFILLED if exit_code == 0 else states.OUTCOME_FAILED,
@@ -275,7 +303,8 @@ def instrument(
         # 판정에 쓴 그 신호를 그대로 싣는다(ALPHA-182) — 대시보드(ALPHA-514)의 건수 열.
         # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),
-                  "failed_records": _counter(signals.get("failed_records"))},
+                  "failed_records": _counter(signals.get("failed_records")),
+                  **entity_resolution_counters},
         freshness=_freshness_signal(
             expected, observed=signals.get("artifact_observed") is True,
             actual_as_of_values=signals.get("actual_as_of_values")),

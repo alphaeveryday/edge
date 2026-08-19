@@ -37,6 +37,8 @@ def _seed(
            "required": True, "missed_at": None, "fulfilled_at": None, "blocked_at": None,
            "outcome_reason": None, "current_attempt_id": None, "completeness": None,
            "records_out": None, "failed_records": None,
+           "entity_resolution_arguments_total": None,
+           "entity_resolution_arguments_resolved": None,
            "dataset_contract_key": contract_key,
            "freshness_status": states.FRESHNESS_UNKNOWN if contract_key else None,
            "freshness_reason": states.FRESHNESS_EVIDENCE_MISSING if contract_key else None,
@@ -478,10 +480,16 @@ def test_instrument_stores_envelope_counters():
     wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": 2736, "failed_records": 4},
+        observe_data_fn=lambda ec: {
+            "records_out": 2736, "failed_records": 4,
+            "entity_resolution_arguments_total": 4,
+            "entity_resolution_arguments_resolved": 3,
+        },
     )
     row = db.etasks_by_id["et1"]
     assert row["records_out"] == 2736 and row["failed_records"] == 4
+    assert row["entity_resolution_arguments_total"] == 4
+    assert row["entity_resolution_arguments_resolved"] == 3
     # 카운터는 저장 전용 — 판정 축은 종전 규칙 그대로다(실패 있음 → INCOMPLETE).
     assert row["data_status"] == states.DATA_INCOMPLETE
     assert row["task_outcome"] == states.OUTCOME_FULFILLED
@@ -495,6 +503,8 @@ def test_instrument_leaves_counters_null_when_envelope_missing():
                        ledger=_ledger(db), ecs_task_arn="arn:task/1")
     row = db.etasks_by_id["et1"]
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["entity_resolution_arguments_total"] is None
+    assert row["entity_resolution_arguments_resolved"] is None
     assert row["data_status"] == states.DATA_UNKNOWN
 
 
@@ -505,12 +515,32 @@ def test_instrument_leaves_counters_null_when_envelope_malformed():
     rc = wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": -5, "failed_records": "x"},
+        observe_data_fn=lambda ec: {
+            "records_out": -5, "failed_records": "x",
+            "entity_resolution_arguments_total": 2,
+            "entity_resolution_arguments_resolved": 3,
+        },
     )
     row = db.etasks_by_id["et1"]
     assert rc == 0
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["entity_resolution_arguments_total"] is None
+    assert row["entity_resolution_arguments_resolved"] is None
     assert row["data_status"] == states.DATA_UNKNOWN
+
+
+def test_incomplete_entity_resolution_pair_is_loud_and_null(caplog):
+    """WHY: 한쪽만 남은 수치는 그럴듯한 해소율로 조립할 수 없어 pair 전체를 폐기해야 한다."""
+    with caplog.at_level("WARNING"):
+        pair = wrapper._entity_resolution_counters({
+            "exit_code": 0,
+            "entity_resolution_arguments_total": 4,
+        })
+    assert pair == {
+        "entity_resolution_arguments_total": None,
+        "entity_resolution_arguments_resolved": None,
+    }
+    assert "pair가 불완전" in caplog.text
 
 
 def test_retry_without_envelope_clears_previous_counters():
@@ -524,9 +554,14 @@ def test_retry_without_envelope_clears_previous_counters():
     wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": 100, "failed_records": 0},
+        observe_data_fn=lambda ec: {
+            "records_out": 100, "failed_records": 0,
+            "entity_resolution_arguments_total": 4,
+            "entity_resolution_arguments_resolved": 3,
+        },
     )
     assert db.etasks_by_id["et1"]["records_out"] == 100
+    assert db.etasks_by_id["et1"]["entity_resolution_arguments_resolved"] == 3
 
     wrapper.instrument(  # 같은 expected_task 재시도 — 이번엔 봉투가 없다
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
@@ -534,7 +569,28 @@ def test_retry_without_envelope_clears_previous_counters():
     )
     row = db.etasks_by_id["et1"]
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["entity_resolution_arguments_total"] is None
+    assert row["entity_resolution_arguments_resolved"] is None
     assert row["data_status"] == states.DATA_UNKNOWN
+
+
+def test_nonzero_exit_rejects_stale_entity_resolution_pair():
+    """WHY: 같은 run_id의 새 로그 저장이 실패하면 observer가 앞 성공 로그의 pair를 읽을 수 있다."""
+    db = FakeOpsDB()
+    _seed(db)
+    wrapper.instrument(
+        lambda: 1, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/failed",
+        observe_data_fn=lambda ec: {
+            "records_out": 100, "failed_records": 0,
+            "entity_resolution_arguments_total": 4,
+            "entity_resolution_arguments_resolved": 3,
+        },
+    )
+    row = db.etasks_by_id["et1"]
+    assert row["task_outcome"] == states.OUTCOME_FAILED
+    assert row["entity_resolution_arguments_total"] is None
+    assert row["entity_resolution_arguments_resolved"] is None
 
 
 def test_step_exception_clears_counters():
@@ -544,7 +600,11 @@ def test_step_exception_clears_counters():
     wrapper.instrument(
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
-        observe_data_fn=lambda ec: {"records_out": 2736, "failed_records": 0},
+        observe_data_fn=lambda ec: {
+            "records_out": 2736, "failed_records": 0,
+            "entity_resolution_arguments_total": 4,
+            "entity_resolution_arguments_resolved": 3,
+        },
     )
     assert db.etasks_by_id["et1"]["records_out"] == 2736
 
@@ -557,3 +617,5 @@ def test_step_exception_clears_counters():
     row = db.etasks_by_id["et1"]
     assert row["task_outcome"] == states.OUTCOME_FAILED
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["entity_resolution_arguments_total"] is None
+    assert row["entity_resolution_arguments_resolved"] is None

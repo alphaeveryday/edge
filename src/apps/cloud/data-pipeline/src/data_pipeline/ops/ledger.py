@@ -237,8 +237,8 @@ class Ledger:
             sets.append("current_attempt_id=%s"); params.append(current_attempt_id)
         if completeness is not None:
             sets.append("completeness=%s::jsonb"); params.append(_jsonb(completeness))
-        # 카운터는 저장 전용(ALPHA-182) — 판정 축에 관여하지 않는다. **dict 를 받으면 두 컬럼을
-        # 항상 함께 쓴다**(값이 None 이어도 NULL 로 덮는다). 값별로 "None 이면 안 건드림"으로 두면
+        # 카운터는 저장 전용(ALPHA-182) — 판정 축에 관여하지 않는다. **dict 를 받으면 모든 카운터
+        # 컬럼을 함께 쓴다**(값이 None 이어도 NULL 로 덮는다). 값별로 "None 이면 안 건드림"으로 두면
         # 같은 expected_task 의 재시도가 봉투를 못 내놨을 때 **앞 시도의 카운터가 최신 판정에
         # 그대로 붙어** 대시보드가 옛 수치를 지금 결과로 읽는다(edge-review 2패스 합치).
         #
@@ -252,6 +252,10 @@ class Ledger:
         if counters is not None:
             sets.append("records_out=%s"); params.append(counters.get("records_out"))
             sets.append("failed_records=%s"); params.append(counters.get("failed_records"))
+            sets.append("entity_resolution_arguments_total=%s")
+            params.append(counters.get("entity_resolution_arguments_total"))
+            sets.append("entity_resolution_arguments_resolved=%s")
+            params.append(counters.get("entity_resolution_arguments_resolved"))
         if freshness is not None:
             sets.append("actual_as_of_date=%s"); params.append(freshness.get("actual_as_of_date"))
             # 수집 시각은 산출물을 **관측한** 시도만 주장한다(collected 플래그). counters 와 같은

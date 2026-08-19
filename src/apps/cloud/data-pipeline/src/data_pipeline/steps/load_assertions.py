@@ -486,6 +486,10 @@ def run(
             "failed_records": (len(failures) + rows_malformed + missing_document
                                + skipped_incomplete + skipped_partial
                                + skipped_no_resolved_argument),
+            # 성공해 원장에 실린 시도의 해소율만 추이로 쓴다. 실패 시도는 top-level 품질 로그에
+            # 진단값을 남기되 저장 pair는 NULL로 보내 앞 시도의 성공값을 지운다(ALPHA-1000).
+            "entity_resolution_arguments_total": args_total if exit_code == 0 else None,
+            "entity_resolution_arguments_resolved": resolved_any if exit_code == 0 else None,
         },
     }
     try:

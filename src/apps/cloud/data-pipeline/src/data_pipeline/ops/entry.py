@@ -252,6 +252,11 @@ def _observe_from_log(
     # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).
     if "received_count" in ops:
         signals["received_count"] = ops["received_count"]
+    # 엔티티 해소율은 LOAD_ASSERTIONS만 선택적으로 내는 저장 전용 pair다. 여기서 비율을
+    # 재계산하거나 기본값을 만들지 않는다 — producer가 센 같은 시도의 원시 카운터를 보존한다.
+    for key in ("entity_resolution_arguments_total", "entity_resolution_arguments_resolved"):
+        if key in ops:
+            signals[key] = ops[key]
     if entry.contract_key in (ETF_HOLDINGS_KRX_EOD, contracts.ETF_NAV_KIS_DAILY):
         # collected_at은 "현재 시도가 raw 산출물과 로그를 새로 남겼다"는 증명이 있을 때만 쓴다.
         # 같은 run_id의 옛 로그, skipped/깨진 로그, 0건 로그는 수집 산출물 증거가 아니다.
