@@ -77,6 +77,19 @@ test('완전성은 ±25% 가 아니라 계약 최소 비율로 본다', () => {
   assert.equal(formatValue(m, v.actual), '94.0%');
 });
 
+test('별도 주의 지표만 최소 비율 미달을 주황으로 판정한다', () => {
+  const caution = evaluateMetric(metric({
+    comparisonType: 'minRatio', threshold: 0.6, metricType: 'rate',
+    abnormalTone: 'warn', series: flat([0.599]),
+  }));
+  const existing = evaluateMetric(metric({
+    comparisonType: 'minRatio', threshold: 0.6, metricType: 'rate', series: flat([0.599]),
+  }));
+  assert.equal(caution.kind, 'abnormal');
+  assert.equal(caution.tone, 'warn');
+  assert.equal(existing.tone, 'blocked', '기존 최소 비율 판정까지 주황으로 약화하면 안 된다');
+});
+
 test('결손 수는 0 초과면 이상이다 — 분포로 보지 않는다', () => {
   const m = metric({
     comparisonType: 'maxCount' as ComparisonType,

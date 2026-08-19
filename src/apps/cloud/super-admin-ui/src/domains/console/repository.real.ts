@@ -1,5 +1,6 @@
 /* console 도메인 — super-admin-api 연동 구현 (ALPHA-738) */
 import { apiClient } from '../../api/client';
+import { parseEntityResolutionTrend } from './entityResolutionTrend';
 import type { ConsoleRepository } from './repository';
 import type { ConsoleFactsDto } from './types';
 
@@ -10,4 +11,10 @@ export const realConsoleRepository: ConsoleRepository = {
     apiClient.get<ConsoleFactsDto>(
       date !== undefined ? `/console/facts?date=${encodeURIComponent(date)}` : '/console/facts',
     ),
+  entityResolutionTrend: (date) =>
+    apiClient.get<unknown>(
+      date !== undefined
+        ? `/console/trends/entity-resolution?date=${encodeURIComponent(date)}`
+        : '/console/trends/entity-resolution',
+    ).then((value) => parseEntityResolutionTrend(value, date)),
 };

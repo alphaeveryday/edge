@@ -597,6 +597,7 @@ button.kpi.ops-sev.ops-sev-on {
 .tr-today { fill: var(--fg-1); }
 /* 이탈한 오늘 점 — 색과 크기가 함께 바뀐다(색만으로 말하지 않는다) */
 .tr-out { fill: var(--down); stroke: var(--bg-surface); stroke-width: 1.5; }
+.tr-warn { fill: var(--warn); stroke: var(--bg-surface); stroke-width: 1.5; }
 
 .tr-figures {
   display: flex;
