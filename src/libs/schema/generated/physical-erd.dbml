@@ -827,6 +827,8 @@ Table "ops_task_attempt" {
   "data_status" text
   "record_source" text [not null]
   "created_at" timestamptz [not null]
+  "entity_resolution_arguments_total" bigint
+  "entity_resolution_arguments_resolved" bigint
 }
 
 Table "price_daily" {
