@@ -1,5 +1,5 @@
 /* console 도메인 — repository 인터페이스 (다른 도메인과 같은 관례) */
-import type { ConsoleFactsDto } from './types';
+import type { ConsoleFactsDto, EntityResolutionTrendDto } from './types';
 
 export interface ConsoleRepository {
   /**
@@ -9,4 +9,7 @@ export interface ConsoleRepository {
    *             거래일이라는 보장은 없다. 미래 날짜는 서버가 400 이다.
    */
   facts(date?: string): Promise<ConsoleFactsDto>;
+
+  /** 기준일 이하 최근 뉴스 argument 엔티티 해소율 실측. */
+  entityResolutionTrend(date?: string): Promise<EntityResolutionTrendDto>;
 }

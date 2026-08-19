@@ -28,6 +28,18 @@ export interface ConsoleFactsDto {
   meta: MetaDto;
 }
 
+/** 뉴스 argument 엔티티 해소율의 최근 일별 실측. `rate: null`은 실제 0/0 관측이다. */
+export interface EntityResolutionTrendDto {
+  points: EntityResolutionTrendPointDto[];
+}
+
+export interface EntityResolutionTrendPointDto {
+  date: string;
+  totalArguments: number;
+  resolvedArguments: number;
+  rate: number | null;
+}
+
 export interface EtfLedgerDto {
   rows: EtfLedgerRowDto[];
 }

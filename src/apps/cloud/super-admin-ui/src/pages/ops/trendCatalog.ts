@@ -1,7 +1,7 @@
 /* 추이 지표 카탈로그 — facts 를 지표로 옮긴다 (ALPHA-738).
  *
- * 여기서만 사실을 읽는다(trendMetrics 는 순수 계산). 오늘 값은 가능한 한 facts 실측이고,
- * **일별 계열을 주는 응답이 없어** 과거 점은 구조화된 목이다 — 점마다 isMock 을 들고 다닌다.
+ * 여기서만 사실을 읽는다(trendMetrics 는 순수 계산). 일별 API가 없는 지표의 과거 점은
+ * 구조화된 목이고, 엔티티 해소율은 별도 API의 실측만 쓴다 — 점마다 isMock 을 들고 다닌다.
  *
  * 지표를 고른 기준(요구 §3):
  *   · 일배치는 데이터셋마다 하나씩 식별되게 — 트리거 하나가 일배치 전체를 대표하지 않는다.
@@ -13,6 +13,7 @@
  *   · Cloud 게시·테넌트 발번·소비자 전달은 전달 화면 소관이라 지표로 두지 않는다.
  */
 import type { Facts, OutputFact } from '../../rules/types.ts';
+import type { EntityResolutionTrendDto } from '../../domains/console/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 import { FUNNEL_DATE, FUNNEL_ORIGIN, funnelValue } from './newsFunnelSnapshot.ts';
 import { buildSeries } from './trendMetrics.ts';
@@ -148,6 +149,64 @@ function funnelRate(spec: {
   };
 }
 
+function nextDay(date: string): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + 1);
+  return value.toISOString().slice(0, 10);
+}
+
+/** 관측이 끊긴 구간을 선으로 잇지 않도록 최신 연속 일별 구간만 그린다. */
+function latestContinuousRates(points: EntityResolutionTrendDto['points']): SeriesPoint[] {
+  const series: SeriesPoint[] = [];
+  let followingDate: string | null = null;
+  for (let i = points.length - 1; i >= 0; i -= 1) {
+    const point = points[i];
+    if (point.rate === null || (followingDate !== null && nextDay(point.date) !== followingDate)) break;
+    series.unshift({ date: point.date, value: point.rate, isMock: false });
+    followingDate = point.date;
+  }
+  return series;
+}
+
+/** 실제 API 점만 쓰며, 최신 0/0은 0%가 아니라 판정 불가다. */
+export function entityResolutionMetric(trend?: EntityResolutionTrendDto): Metric {
+  const points = trend?.points ?? [];
+  const latest = points.at(-1);
+  const series = latestContinuousRates(points);
+  const base = {
+    id: 'n.entity_resolution_rate',
+    label: '뉴스 엔티티 해소율',
+    group: 'news' as const,
+    unit: '비율',
+    metricType: 'rate' as const,
+    direction: 'higherIsBetter' as const,
+    source: 'DB_LEDGER' as const,
+    help: [
+      '엔티티 해소율 = 하나 이상의 엔티티에 연결된 argument / 전체 argument.',
+      latest
+        ? `최신 관측 ${latest.resolvedArguments.toLocaleString('ko-KR')} / ${latest.totalArguments.toLocaleString('ko-KR')}.`
+        : '아직 저장된 관측이 없다.',
+      '',
+      '판정: 최신 비율 60% 미만이면 주의(주황)다. 60% 이상은 기준 충족이다.',
+      '0/0은 비율이 아니므로 계측 없음이며 정상·이상 어느 쪽에도 세지 않는다.',
+      series.length < points.length && latest?.rate !== null
+        ? '관측 공백은 선으로 잇지 않고 최신 연속 일별 구간만 그린다.'
+        : '',
+      '',
+      '계열은 API가 반환한 원장 실측만 사용한다. 과거 값을 만들거나 미해소 원인을 추정하지 않는다.',
+    ].join('\n'),
+    drill: { href: '/ops/datasets?focus=news-funnel', label: '뉴스 처리 퍼널' },
+  };
+  if (!latest || latest.rate === null) return uninstrumented(base);
+  return {
+    ...base,
+    comparisonType: 'minRatio',
+    threshold: 0.6,
+    abnormalTone: 'warn',
+    series,
+  };
+}
+
 /* ── 일배치 ── 데이터셋마다 하나씩 */
 
 function coverageMetric(
@@ -243,7 +302,7 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
  * ErrorBoundary 밖이라 **흰 화면**이 된다. 사실을 인자로 받으면 그 `!` 들이 함께 없어진다 —
  * 부재는 죽을 자리가 아니라 `uninstrumented` 로 그릴 자리다.
  */
-export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
+export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?: EntityResolutionTrendDto): Metric[] {
   const TODAY = f.meta.today;
   const minuteObserved = minute?.date === TODAY;
   const priceSessions = minuteObserved
@@ -259,11 +318,9 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
   const trig = output(f, 'o.trig');
   const res = chain(f, 'c.res');
   const run = chain(f, 'c.run');
-  /* 유니버스 매칭률·assertion 생성률의 분자·분모 — 응답 밖 축(스냅샷)이다 */
+  /* 유니버스 매칭률의 분자·분모 — 응답 밖 축(스냅샷)이다 */
   const universe = funnelValue('유니버스 매칭');
   const deduped = funnelValue('중복 제거');
-  const assertion = funnelValue('assertion');
-  const rdsDocs = funnelValue('RDS 문서');
 
   return [
   /* 일배치 */
@@ -421,7 +478,7 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
         help: OUTPUT_ABSENT('o.doc'),
         drill: { href: '/ops/datasets?focus=news-funnel', label: '뉴스 처리 퍼널' },
       }),
-  /* 🔴 아래 둘은 **응답이 아니라 스냅샷**을 읽는다(`news_funnel` 은 이 응답 밖 축이다).
+  /* 🔴 아래 지표는 **응답이 아니라 스냅샷**을 읽는다(`news_funnel` 은 이 응답 밖 축이다).
    * 그래서 오늘 점도 실측이 아니고 — 계열 전체가 목이라 카드가 `MOCK 계열` 로 선다.
    * `source: 'DB_LEDGER'` 로 두면 오늘 값이 실 원장에서 온 것처럼 읽힌다. */
   funnelRate({
@@ -444,24 +501,7 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus): Metric[] {
       `⚠️ ${FUNNEL_ORIGIN}`,
     ],
   }),
-  funnelRate({
-    id: 'n.assertion_rate',
-    label: '뉴스 assertion 생성률',
-    numerator: assertion,
-    denominator: rdsDocs,
-    pin: 0.24,
-    endDate: FUNNEL_DATE,
-    help: [
-      'assertion 생성률 = assertion 이 남은 문서 / RDS 문서.',
-      `${FUNNEL_DATE} 스냅샷 기준 ${assertion?.toLocaleString('ko-KR') ?? '—'} / ${rdsDocs?.toLocaleString('ko-KR') ?? '—'}.`,
-      '',
-      '판정: 계약된 최소 비율이 없어 분포(중앙값 ±25%)로 본다.',
-      '⚠️ 없음의 사유가 한 통이다 — NO_EVENT · 추출 실패 · 미실행을 가르는 계측이 없어,',
-      '이 비율의 하락을 곧바로 실패로 읽지 않는다.',
-      '',
-      `⚠️ ${FUNNEL_ORIGIN}`,
-    ],
-  }),
+  entityResolutionMetric(entityResolution),
 
   /* 분석 결과 — 단위가 같은 것끼리만 비율을 낸다 */
   res !== null

@@ -12,8 +12,8 @@
  *   · 이 화면의 범위는 파이프라인 실행·데이터셋 산출/완전성·장중 수집·분석 결과 생성까지다.
  *     Cloud 게시·테넌트 발번·소비자 전달은 전달 화면 소관이라 지표로 두지 않는다.
  *
- * 실측과 목: 오늘 값은 가능한 한 facts 실측이고, **일별 계열을 주는 응답이 없어** 과거 점은
- * 구조화된 목이다. 점마다 `isMock` 을 들고 다니고 카드가 그 사실을 배지로 낸다.
+ * 실측과 목: 일별 API가 없는 지표는 과거 점을 구조화된 목으로 만들고, 일별 API가 있는 지표는
+ * 실측 계열을 그대로 준다. 점마다 `isMock` 을 들고 다니고 카드가 그 사실을 배지로 낸다.
  */
 import type { FactSource } from '../../rules/types.ts';
 import { median } from './trendSeries.ts';
@@ -67,6 +67,8 @@ export interface Metric {
   /** 판정 임계. medianDelta 는 비율(0.25), minRatio 는 비율, 나머지는 절대값. 없으면 null */
   threshold: number | null;
   direction: Direction;
+  /** 이 지표의 이상 톤. 생략하면 기존 판정처럼 blocked다. */
+  abnormalTone?: 'warn' | 'blocked';
   source: FactSource;
   /* 계열에 목이 섞였는지는 **점마다**(`SeriesPoint.isMock`) 안다 — 지표 단위 플래그를 따로
    * 두지 않는다. 소비자가 0이었고, 두 벌이면 갈린다: 기준(`base`)이 없는 날의 계열은 실측
@@ -146,7 +148,7 @@ export function evaluateMetric(m: Metric): Verdict {
     return {
       kind: out ? 'abnormal' : 'normal',
       label: out ? `분포 밖 · ${pct > 0 ? '증가' : '감소'}` : '정상 범위',
-      tone: out ? 'blocked' : 'active',
+      tone: out ? (m.abnormalTone ?? 'blocked') : 'active',
       basis: `직전 ${history.length}영업일 중앙값 대비 ${pct > 0 ? '+' : ''}${pct}% (임계 ±${Math.round(th * 100)}%)`,
       actual,
       expected: base,
@@ -175,7 +177,7 @@ export function evaluateMetric(m: Metric): Verdict {
     return {
       kind: out ? 'abnormal' : 'normal',
       label: out ? '기준 미달' : '기준 충족',
-      tone: out ? 'blocked' : 'active',
+      tone: out ? (m.abnormalTone ?? 'blocked') : 'active',
       basis: `${(actual * 100).toFixed(1)}% — 최소 ${(th * 100).toFixed(0)}% 기준 ${out ? '미달' : '충족'}`,
       actual,
       expected: th,
@@ -198,7 +200,7 @@ export function evaluateMetric(m: Metric): Verdict {
   return {
     kind: out ? 'abnormal' : 'normal',
     label: out ? bad : good,
-    tone: out ? 'blocked' : 'active',
+    tone: out ? (m.abnormalTone ?? 'blocked') : 'active',
     basis: `${actual.toLocaleString('ko-KR')}${unitWord} — 허용 ${th.toLocaleString('ko-KR')}${unitWord} ${out ? '초과' : '이내'}`,
     actual,
     expected: th,

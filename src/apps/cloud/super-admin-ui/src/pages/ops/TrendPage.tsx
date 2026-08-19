@@ -25,6 +25,7 @@ import { asOfLabel } from './trendAsOf';
 import type { Metric, MetricGroup, Verdict } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
 import { useMinuteStatus } from '../../domains/sources/hooks';
+import { useEntityResolutionTrend } from '../../domains/console/hooks';
 import { extent, points } from './trendSeries';
 import '../../styles/ops.css';
 
@@ -81,7 +82,7 @@ function Spark({ metric, verdict, asOf }: { metric: Metric; verdict: Verdict; as
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
       role="img"
-      aria-label={`${metric.label} ${values.length}영업일 추이 — ${asOf ?? '마지막 값'} ${formatValue(
+      aria-label={`${metric.label} ${values.length}개 관측 추이 — ${asOf ?? '마지막 값'} ${formatValue(
         metric,
         verdict.actual,
       )}, 기준 ${formatValue(metric, verdict.expected)}, ${verdict.label}`}
@@ -105,7 +106,9 @@ function Spark({ metric, verdict, asOf }: { metric: Metric; verdict: Verdict; as
         cx={last.x * W}
         cy={last.y * H}
         r={abnormal ? 4.5 : 3}
-        className={abnormal ? 'tr-today tr-out' : 'tr-today'}
+        className={
+          abnormal ? (verdict.tone === 'warn' ? 'tr-today tr-warn' : 'tr-today tr-out') : 'tr-today'
+        }
       />
     </svg>
   );
@@ -175,14 +178,21 @@ export function TrendPage() {
   const [filter, setFilter] = useState<Filter>('abnormal');
   const q = useConsoleFactsQuery();
   const minute = useMinuteStatus(q.ready ? q.facts.meta.today : undefined, q.ready);
+  const entityResolution = useEntityResolutionTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   useFocusRow(q.ready);
 
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
    * 한 번만 돌아 화면이 첫 응답에 영원히 고정된다. */
   const evaluated = useMemo(
-    () => (q.ready ? buildMetrics(q.facts, minute.data).map((m) => ({ m, v: evaluateMetric(m) })) : []),
-    [q, minute.data],
+    () => {
+      if (!q.ready) return [];
+      const metrics = buildMetrics(q.facts, minute.data, entityResolution.data);
+      return metrics
+        .filter((m) => entityResolution.data !== undefined || m.id !== 'n.entity_resolution_rate')
+        .map((m) => ({ m, v: evaluateMetric(m) }));
+    },
+    [q, minute.data, entityResolution.data],
   );
   if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
@@ -197,6 +207,8 @@ export function TrendPage() {
       ? evaluated.filter((x) => x.v.kind === 'abnormal')
       : evaluated.filter((x) => x.m.group === filter);
   const uninstrumented = evaluated.filter((x) => x.v.kind === 'uninstrumented').length;
+  const entityResolutionPending = entityResolution.isPending && entityResolution.data === undefined;
+  const entityResolutionFailed = entityResolution.isError && entityResolution.data === undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -205,6 +217,19 @@ export function TrendPage() {
       {minute.isError && (
         <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
           분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 MOCK 계열입니다.'}
+        </p>
+      )}
+
+      {entityResolutionPending && (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          엔티티 해소율 실측을 불러오는 중입니다 — 판정은 응답 뒤에 표시합니다.
+        </p>
+      )}
+
+      {entityResolution.isError && (
+        <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
+          엔티티 해소율 재조회에 실패했습니다 —{' '}
+          {entityResolution.data ? '직전 실측을 유지합니다.' : '해당 지표를 판정하지 않습니다.'}
         </p>
       )}
 
@@ -259,7 +284,11 @@ export function TrendPage() {
           {shown.length === 0 ? (
             <p className="t-sm m-0" style={{ color: 'var(--fg-3)' }}>
               {filter === 'abnormal'
-                ? '현재 기준을 벗어난 지표가 없습니다.'
+                ? entityResolutionPending
+                  ? '엔티티 해소율 조회 중이라 전체 이상 여부가 아직 확정되지 않았습니다.'
+                  : entityResolutionFailed
+                    ? '엔티티 해소율 조회 실패로 전체 이상 여부를 확인할 수 없습니다.'
+                    : '현재 기준을 벗어난 지표가 없습니다.'
                 : '이 분류에 지표가 없습니다.'}
               {filter === 'abnormal' && uninstrumented > 0 && (
                 <>
@@ -279,9 +308,8 @@ export function TrendPage() {
 
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 12 }}>
             조회일 {q.facts.meta.today} 기준(원장이 아는 가장 최근 날 — 거래일 달력이 아닙니다) ·
-            일별 계열을 주는 응답이 없어 과거 점은 검수용 목입니다. <b>카드의 날짜가 조회일과
-            다르면 그 지표는 이 응답 밖 축</b>이라 그 날짜의 스냅샷입니다(카드마다
-            표시). 뉴스의 단계별 감소는{' '}
+            DB_LEDGER 계열은 카드에 표시된 날짜의 실측입니다. 일별 API가 없는 지표의 과거 점만
+            검수용 목이며, 응답 밖 값은 스냅샷 칩으로 구분합니다. 뉴스의 단계별 감소는{' '}
             <Link to="/ops/datasets?focus=news-funnel">데이터 화면의 뉴스 처리 퍼널</Link>이 답합니다 —
             여기서 반복하지 않습니다.
           </p>

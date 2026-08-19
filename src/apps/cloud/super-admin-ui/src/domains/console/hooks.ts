@@ -16,3 +16,13 @@ export function useConsoleFacts(date?: string) {
     refetchInterval: 60_000,
   });
 }
+
+/** facts가 실제로 본 날짜와 같은 축의 엔티티 해소율 최근 관측을 1분마다 갱신한다. */
+export function useEntityResolutionTrend(date?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['console', 'trends', 'entity-resolution', date ?? null],
+    queryFn: () => consoleRepository.entityResolutionTrend(date),
+    enabled,
+    refetchInterval: 60_000,
+  });
+}

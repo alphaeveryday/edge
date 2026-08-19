@@ -48,7 +48,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/ops/incidents` | 파이프라인 문제·사건 목록 |
 | `/ops/incidents/detail?vid=` | 사건 상세 (점 든 대상도 안전하도록 식별자는 쿼리) |
 | `/ops/runs` · `/ops/runs/:runId` | 런·작업 귀결 목록 · 실행 상세 |
-| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이 |
+| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이(뉴스 엔티티 해소율 실측, 60% 미만은 주황 주의) |
 | `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계 |
 | `/ops/summary` | 파이프라인 개요 — **은퇴**(라우트·컴포넌트만 존치). 사이드바·인바운드 링크 없음이 의도다 |
 | `/overview` | 레인 원장 요약 (구 첫 화면) — **은퇴**(라우트·컴포넌트만 존치). 개요는 자기 질문("지금 정상인가")에 답할 수 없어 메뉴에서 뺐다 |
@@ -81,7 +81,8 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 
 `pages/ops/*` 화면과 `consoleFacts` 어댑터가 이 결과를 소비한다. 와이어 DTO와 엔진 `Facts`의
 형상 차이(camelCase vs snake_case), 응답 값 검증, 배치 사실과 `/sources/minute` 실시간 축의
-결합은 그 어댑터·공통 훅에서 한 번만 처리한다.
+결합은 그 어댑터·공통 훅에서 한 번만 처리한다. 별도 일별 응답은
+`domains/console/entityResolutionTrend`가 날짜·카운터·비율 불변식을 검증한다.
 
 알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
 
@@ -98,7 +99,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `domains/sources/` 파생 6 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤) |
 | `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
 | `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
-| `pages/ops/` 판정 11 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4·ALPHA-979 조각 1). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `chainView`(장중 갈래가 입구에서 사라졌는가 — **관측 결과이지 축의 유무가 아니다**) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
+| `pages/ops/` 판정 11 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4·ALPHA-979 조각 1·ALPHA-1003). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `chainView`(장중 갈래가 입구에서 사라졌는가 — **관측 결과이지 축의 유무가 아니다**) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기, 엔티티 해소율 60% 미만 주황) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
 
 ⚠️ **판정을 `.tsx` 에 두지 않는다.** `pnpm --filter super-admin-ui test` 는 `node --test
 'src/**/*.test.ts'` 라 **`.tsx` 를 아예 안 집는다** — 화면 파일 안의 분기는 변이를 걸어도 하나도

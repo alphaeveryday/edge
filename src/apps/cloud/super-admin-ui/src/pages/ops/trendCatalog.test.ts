@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
 import type { Facts } from '../../rules/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
-import { buildMetrics, latestTask } from './trendCatalog.ts';
+import { buildMetrics, entityResolutionMetric, latestTask } from './trendCatalog.ts';
 import { FUNNEL_DATE } from './newsFunnelSnapshot.ts';
 import { evaluateMetric } from './trendMetrics.ts';
 
@@ -94,8 +94,71 @@ test('오늘 분봉 응답이 빈 배열이어도 관측된 0이다 — 세션 �
 
 test('추이 화면은 재조회 오류만으로 React Query가 보존한 분봉 실측을 버리지 않는다', () => {
   const source = readFileSync(new URL('./TrendPage.tsx', import.meta.url), 'utf8');
-  assert.match(source, /buildMetrics\(q\.facts, minute\.data\)/);
+  assert.match(source, /buildMetrics\(q\.facts, minute\.data, entityResolution\.data\)/);
   assert.doesNotMatch(source, /minute\.isError\s*\?\s*undefined\s*:\s*minute\.data/);
+});
+
+test('엔티티 해소율은 API 실측만 쓰고 60% 경계에서 주황과 초록을 가른다', () => {
+  const points = [
+    { date: '2026-08-18', totalArguments: 10, resolvedArguments: 7, rate: 0.7 },
+    { date: '2026-08-19', totalArguments: 1000, resolvedArguments: 599, rate: 0.599 },
+  ];
+  const low = entityResolutionMetric({ points });
+  assert.deepEqual(low.series, points.map((p) => ({ date: p.date, value: p.rate, isMock: false })));
+  assert.equal(evaluateMetric(low).tone, 'warn');
+  assert.equal(evaluateMetric(low).label, '기준 미달');
+
+  const edge = entityResolutionMetric({ points: [{ ...points[1], resolvedArguments: 600, rate: 0.6 }] });
+  assert.equal(evaluateMetric(edge).tone, 'active');
+  assert.equal(evaluateMetric(edge).label, '기준 충족');
+});
+
+test('빈 관측과 최신 0/0은 0% 경보를 만들지 않는다', () => {
+  for (const trend of [
+    { points: [] },
+    { points: [{ date: '2026-08-19', totalArguments: 0, resolvedArguments: 0, rate: null }] },
+  ]) {
+    const metric = entityResolutionMetric(trend);
+    assert.deepEqual(metric.series, []);
+    assert.equal(evaluateMetric(metric).kind, 'uninstrumented');
+    assert.equal(evaluateMetric(metric).actual, null);
+  }
+});
+
+test('0/0 또는 날짜 공백을 건너뛰어 거짓 연속 추이를 만들지 않는다', () => {
+  const latest = { date: '2026-08-19', totalArguments: 10, resolvedArguments: 6, rate: 0.6 };
+  for (const points of [
+    [
+      { date: '2026-08-17', totalArguments: 10, resolvedArguments: 7, rate: 0.7 },
+      { date: '2026-08-18', totalArguments: 0, resolvedArguments: 0, rate: null },
+      latest,
+    ],
+    [
+      { date: '2026-08-17', totalArguments: 10, resolvedArguments: 7, rate: 0.7 },
+      latest,
+    ],
+  ]) {
+    const metric = entityResolutionMetric({ points });
+    assert.deepEqual(metric.series, [{ date: latest.date, value: latest.rate, isMock: false }]);
+    assert.match(metric.help, /관측 공백은 선으로 잇지 않고/);
+  }
+});
+
+test('추이 화면은 facts가 본 날짜로 해소율을 조회하고 직전 실측을 재조회 오류만으로 버리지 않는다', () => {
+  const source = readFileSync(new URL('./TrendPage.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../../styles/ops.css', import.meta.url), 'utf8');
+  assert.match(source, /useEntityResolutionTrend\(q\.ready \? q\.facts\.meta\.today : undefined, q\.ready\)/);
+  assert.match(source, /buildMetrics\(q\.facts, minute\.data, entityResolution\.data\)/);
+  assert.doesNotMatch(source, /entityResolution\.isError\s*\?\s*undefined\s*:\s*entityResolution\.data/);
+  assert.match(source, /entityResolution\.data !== undefined \|\| m\.id !== 'n\.entity_resolution_rate'/);
+  assert.match(source, /조회 중이라 전체 이상 여부가 아직 확정되지 않았습니다/);
+  assert.match(source, /조회 실패로 전체 이상 여부를 확인할 수 없습니다/);
+  assert.match(source, /\$\{values\.length\}개 관측 추이/);
+  assert.doesNotMatch(source, /\$\{values\.length\}영업일 추이/);
+  assert.match(source, /verdict\.tone === 'warn' \? 'tr-today tr-warn'/, '주의 점도 빨강으로 그리면 안 된다');
+  assert.match(css, /\.tr-warn \{ fill: var\(--warn\)/, '주의 점은 기존 주황 토큰을 써야 한다');
+  assert.match(source, /DB_LEDGER 계열은 카드에 표시된 날짜의 실측/);
+  assert.doesNotMatch(source, /카드의 날짜가 조회일과\s*다르면 그 지표는 이 응답 밖 축/);
 });
 
 test('🔴 체인 축 부재를 0 으로 그리지 않는다 — "결과 생성률 0%" 는 거짓 경보다', () => {
@@ -219,7 +282,7 @@ test('🔴 뉴스 퍼널 지표는 오늘 점도 스냅샷이다 — "오늘 실
   /* `news_funnel` 은 이 응답 밖 축이라(계약 §범위 결정) 값이 응답의 거래일 것이 아니다.
    * `todayIsMock: false` 로 두면 카드가 "오늘 실측 · 과거 MOCK" 칩을 달아 **응답에서 온 값**
    * 이라고 말한다 — 화면에서 이 둘을 가르는 유일한 축이 그 플래그다. */
-  for (const id of ['n.universe_rate', 'n.assertion_rate']) {
+  for (const id of ['n.universe_rate']) {
     const m = byId(WIRED, id);
     /* `SNAPSHOT` 이지 `MOCK` 이 아니다 — 한때 관측한 값과 지어낸 값을 한 칸에 그리지 않는다.
      * `DB_LEDGER` 였다면 오늘 원장에서 온 수라고 말하는 것이라 그쪽이 가장 나쁘다. */
@@ -244,7 +307,7 @@ test('🔴 퍼널 계열은 **스냅샷 날**에 찍힌다 — 조회일에 찍�
     const s = byId(later, id).series;
     return s[s.length - 1]?.date;
   };
-  for (const id of ['n.universe_rate', 'n.assertion_rate']) {
+  for (const id of ['n.universe_rate']) {
     assert.equal(last(id), FUNNEL_DATE, `${id} 계열이 조회일에 찍혔다`);
   }
   /* 응답에서 온 지표는 반대로 **조회일**에 찍힌다 — 한쪽만 맞추면 축이 뒤바뀌어도 통과한다 */
