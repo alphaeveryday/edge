@@ -771,6 +771,8 @@ Table "ops_expected_task" {
   "freshness_status" text
   "freshness_reason" text
   "freshness_evidence" jsonb
+  "entity_resolution_arguments_total" bigint
+  "entity_resolution_arguments_resolved" bigint
 }
 
 Table "ops_pipeline_run" {
