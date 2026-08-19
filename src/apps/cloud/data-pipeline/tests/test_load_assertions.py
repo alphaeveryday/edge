@@ -776,6 +776,9 @@ def test_resolution_rate_counts_every_axis_that_actually_attached(tmp_path, monk
     assert res["resolved"] == 1 and res["registry_hit"] == 1 and res["minted"] == 1
     assert res["resolved_any"] == 3
     assert res["rate"] == 0.75          # 분자가 resolved 하나면 0.25 가 된다
+    # 원장에는 ticker 전용 resolved가 아니라 실제로 붙은 세 축 전체가 같은 pair로 흘러야 한다.
+    assert _log(storage)["ops"]["entity_resolution_arguments_total"] == 4
+    assert _log(storage)["ops"]["entity_resolution_arguments_resolved"] == 3
     # 분자가 **어느 사유로** 붙었는지는 위 세 줄이 그대로 말한다(1+1+1=3). 예전엔 사유
     # 허용목록을 로그에 싣고 그 목록을 여기서 대조했는데, 그건 코드가 아는 사실의 사본이라
     # 축이 늘 때 같이 드리프트한다 — 지금은 붙은 것을 직접 세므로 목록 자체가 없다.
@@ -812,6 +815,8 @@ def test_rollback_does_not_claim_minted_concepts(tmp_path, monkeypatch):
     log = _log(storage)
     assert log["concepts_minted"] == 0, "롤백됐는데 개념을 세웠다고 로그가 주장한다"
     assert log["created"] == 0 and log["arguments_inserted"] == 0
+    assert log["ops"]["entity_resolution_arguments_total"] is None
+    assert log["ops"]["entity_resolution_arguments_resolved"] is None
 
 
 def test_no_concept_is_minted_for_an_assertion_that_cannot_be_loaded(tmp_path, monkeypatch):
