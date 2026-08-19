@@ -11,6 +11,7 @@ import com.edge.superadmin.dto.ConsoleFactsResponse.OutputResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.QueueResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.TaskResponse;
+import com.edge.superadmin.dto.EntityResolutionTrendResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
@@ -124,6 +125,15 @@ public class ConsoleFactsService {
 				EtfLedgerResponse.from(f.etfLedger()),
 				new MetaResponse(f.dbNow().toString(), f.today().toString(),
 						aws.at() == null ? null : aws.at().toString()));
+	}
+
+	/**
+	 * @param date 마지막 관측일(KST). 생략하면 애플리케이션 시계의 KST 오늘까지다.
+	 * @return 최근 실제 관측 10개. 배선 전 날짜를 0% 점으로 합성하지 않는다.
+	 */
+	public EntityResolutionTrendResponse entityResolutionTrend(String date) {
+		return EntityResolutionTrendResponse.from(
+				facts.entityResolutionTrend(date == null ? LocalDate.now(KST) : parseDateParam(date)));
 	}
 
 	/**

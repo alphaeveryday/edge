@@ -75,6 +75,7 @@ def test_optional_entity_resolution_pair_flows_without_reinterpretation(tmp_path
     entry = _entry("LOAD_ASSERTIONS")
     _write_log(storage, entry, {
         "run_id": _RUN,
+        "ops_attempt_id": "attempt-1",
         "ops": {
             "records_out": 100,
             "failed_records": 0,
@@ -86,6 +87,7 @@ def test_optional_entity_resolution_pair_flows_without_reinterpretation(tmp_path
     signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
     assert signals["entity_resolution_arguments_total"] == 4
     assert signals["entity_resolution_arguments_resolved"] == 3
+    assert signals["entity_resolution_attempt_id"] == "attempt-1"
 
 
 def test_failed_records_make_it_incomplete(tmp_path):

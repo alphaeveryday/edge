@@ -30,6 +30,19 @@ public interface ConsoleFactsRepository {
 	 */
 	ConsoleFacts facts(LocalDate date);
 
+	/**
+	 * {@code date} 이하의 최근 엔티티 해소 관측 10개. 같은 날 여러 뉴스 런이 있으면
+	 * <b>마지막으로 갱신된 성공 관측 하나</b>만 남고, 반환 순서는 오래된 날부터다.
+	 *
+	 * <p>{@code date} 가 null 이면 DB 시계의 KST 오늘까지 본다. 과거 행을 백필하지 않으므로
+	 * 배선 전 날짜는 점을 합성하지 않고 목록에서 빠진다.
+	 */
+	List<EntityResolutionPoint> entityResolutionTrend(LocalDate date);
+
+	/** 분모가 0 일 수 있어 비율은 이 원천 형이 아니라 와이어 매핑에서 nullable 로 계산한다. */
+	record EntityResolutionPoint(LocalDate date, long totalArguments, long resolvedArguments) {
+	}
+
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,

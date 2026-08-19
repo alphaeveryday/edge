@@ -362,16 +362,30 @@ class Ledger:
     def record_attempt_end(
         self, attempt_id: str, *, execution_status: str, exit_code: int | None = None,
         failure_reason: str | None = None, data_status: str | None = None,
+        entity_resolution_counters: dict | None = None,
     ) -> bool:
         """attempt 종료 기록. bounded retry, 실패해도 본 작업 결과 불변(성공 여부만 bool 반환)."""
         for i in range(_END_RETRY_ATTEMPTS):
             try:
                 with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+                    sets = [
+                        "execution_status=%s", "finished_at=now()", "exit_code=%s",
+                        "failure_reason=%s", "data_status=COALESCE(%s, data_status)",
+                    ]
+                    params = [execution_status, exit_code, failure_reason, data_status]
+                    if entity_resolution_counters is not None:
+                        sets.extend((
+                            "entity_resolution_arguments_total=%s",
+                            "entity_resolution_arguments_resolved=%s",
+                        ))
+                        params.extend((
+                            entity_resolution_counters.get("entity_resolution_arguments_total"),
+                            entity_resolution_counters.get("entity_resolution_arguments_resolved"),
+                        ))
+                    params.append(attempt_id)
                     cur.execute(
-                        "UPDATE ops_task_attempt SET execution_status=%s, finished_at=now(),"
-                        " exit_code=%s, failure_reason=%s,"
-                        " data_status=COALESCE(%s, data_status) WHERE attempt_id=%s",
-                        (execution_status, exit_code, failure_reason, data_status, attempt_id),
+                        f"UPDATE ops_task_attempt SET {', '.join(sets)} WHERE attempt_id=%s",
+                        tuple(params),
                     )
                 return True
             except Exception:

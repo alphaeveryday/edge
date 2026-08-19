@@ -3,6 +3,7 @@ package com.edge.superadmin.support;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * standalone 컨트롤러 테스트용 {@link ConsoleFactsRepository} 손 페이크(레포 hand-fake 관례).
@@ -14,8 +15,10 @@ public class FakeConsoleFactsRepository implements ConsoleFactsRepository {
 
 	private final ConsoleFacts facts;
 
-	/** 마지막으로 요청된 날짜. 생략 요청이면 null 이다. */
+	/** 마지막으로 요청된 날짜. */
 	public LocalDate requestedDate;
+	public LocalDate requestedTrendDate;
+	public List<EntityResolutionPoint> trend = List.of();
 
 	public FakeConsoleFactsRepository(ConsoleFacts facts) {
 		this.facts = facts;
@@ -25,5 +28,11 @@ public class FakeConsoleFactsRepository implements ConsoleFactsRepository {
 	public ConsoleFacts facts(LocalDate date) {
 		this.requestedDate = date;
 		return facts;
+	}
+
+	@Override
+	public List<EntityResolutionPoint> entityResolutionTrend(LocalDate date) {
+		this.requestedTrendDate = date;
+		return trend;
 	}
 }

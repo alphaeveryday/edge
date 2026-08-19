@@ -1300,7 +1300,9 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   `LOAD_ASSERTIONS`만 저장 전용 선택 pair
   `entity_resolution_arguments_total`·`entity_resolution_arguments_resolved`를 함께 낸다. 분모는
   실체 역할 argument, 분자는 ticker·명부·채번으로 실제 접지된 `resolved_any`다. observer는
-  비율을 재계산하지 않고 두 원시 카운터만 그대로 전달한다.
+  비율을 재계산하지 않고 두 원시 카운터만 그대로 전달한다. wrapper가 실행 중에 주입한
+  `ops_attempt_id`가 현재 attempt와 일치할 때만 pair를 승인하므로, 같은 run의 겹친 재시도가 공유
+  로그를 덮어써도 다른 시도의 값으로 오인하지 않는다.
 - **ETF 수집 완전성**(ALPHA-611) — `NAV_COLLECTION_KIS`·`ETF_PROFILE_COLLECTION_KIS`·
   `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
   `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이
@@ -1331,9 +1333,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   ("신호 없음"이 "0건 처리"로 위장되지 않게, Rule 12). 스코프는 **그 작업의 마지막 시도**다 —
   매 시도가 두 컬럼을 함께 덮고, Reconciler 는 판정을 뒤집어도 건수를 몰라 다시 쓰지 않는다.
   그래서 `FAILED` 옆의 건수는 앞 시도의 것일 수 있다.
-  `LOAD_ASSERTIONS`의 엔티티 해소 pair도 같은 원장 행에 저장한다(ALPHA-1000). 둘은 성공 exit의
-  같은 시도에서만 함께 기록되고, 한쪽 결측·malformed·`resolved > total`·비정상 exit이면 모두
-  **NULL**로 덮는다. 기존 행은 백필하지 않았으므로 NULL은 0건이 아니라 계측 전/없음이다.
+  `LOAD_ASSERTIONS`의 엔티티 해소 pair는 호환용 task 행과 함께 그 값을 만든 정확한 attempt 행에도
+  저장한다(ALPHA-1000·ALPHA-1002). 둘은 성공 exit의 같은 시도에서만 함께 기록되고, 한쪽
+  결측·malformed·`resolved > total`·비정상 exit이면 모두 **NULL**로 덮는다. 기존 행은 백필하지
+  않았으므로 NULL은 0건이 아니라 계측 전/없음이다.
 
 ### 실행 흐름 (스펙 §5)
 

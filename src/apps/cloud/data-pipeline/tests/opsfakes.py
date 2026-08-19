@@ -245,7 +245,9 @@ class _Cursor:
             return
         self.db.attempts.append({"attempt_id": p[0], "etid": p[1], "number": p[2], "arn": p[3],
                                  "status": p[4], "sfn_arn": p[5], "sfn_state": p[6], "source": p[7],
-                                 "exit_code": None, "started_at": "STARTED"})
+                                 "exit_code": None, "started_at": "STARTED",
+                                 "entity_resolution_arguments_total": None,
+                                 "entity_resolution_arguments_resolved": None})
         self._rows = [(p[0],)]
 
     def _ins_backfill(self, p):
@@ -255,7 +257,9 @@ class _Cursor:
             return
         self.db.attempts.append({"attempt_id": p[0], "etid": p[1], "arn": p[2], "status": p[3],
                                  "exit_code": p[4], "sfn_arn": p[5], "sfn_state": p[6],
-                                 "source": p[7], "number": None, "started_at": "STARTED"})
+                                 "source": p[7], "number": None, "started_at": "STARTED",
+                                 "entity_resolution_arguments_total": None,
+                                 "entity_resolution_arguments_resolved": None})
         self._rows = [(p[0],)]
 
     def _attempts_for(self, p):
@@ -263,10 +267,14 @@ class _Cursor:
                        a["started_at"]) for a in self.db.attempts if a["etid"] == p[0]]
 
     def _upd_attempt(self, p):
-        # (status, exit_code, failure_reason, data_status, attempt_id)
-        a = next((x for x in self.db.attempts if x["attempt_id"] == p[4]), None)
+        # 기본: (status, exit_code, failure_reason, data_status, attempt_id)
+        # 해소 pair 동반: 위 네 값 + (total, resolved, attempt_id)
+        a = next((x for x in self.db.attempts if x["attempt_id"] == p[-1]), None)
         if a:
             a["status"] = p[0]; a["exit_code"] = p[1]
+            if len(p) == 7:
+                a["entity_resolution_arguments_total"] = p[4]
+                a["entity_resolution_arguments_resolved"] = p[5]
 
     def _upsert_issue(self, p):
         # (new_id, issue_type, scope, scope_key, dedupe_key, evidence_json)

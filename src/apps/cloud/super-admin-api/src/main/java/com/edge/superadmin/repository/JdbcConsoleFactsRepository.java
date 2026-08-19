@@ -157,6 +157,50 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			""".formatted(DAY_WINDOW);
 
 	/**
+	 * 엔티티 해소율의 최근 일별 관측. {@code LOAD_ASSERTIONS} 는 feature corpus 전량을 다시 읽으므로
+	 * 한 attempt의 pair가 그 실행 시점의 스냅샷이고, 같은 날 여러 런이면 가장 늦게 생성된 성공 런,
+	 * 한 런의 재시도면 가장 늦게 시작한 성공 wrapper attempt를 그 날의 점으로 쓴다. 카운터가 attempt
+	 * 자체에 있어 Reconciler의 task outcome 갱신이나 겹친 재시도 완료 순서와 섞이지 않는다.
+	 *
+	 * <p>실패·계측 없음은 점이 아니다. 0으로 합성하면 배선 전 날짜가 0% 품질로 보이므로
+	 * {@code SUCCEEDED}와 비NULL pair를 함께 요구한다. pair의 범위·동시성은 스키마 CHECK가
+	 * 보장하므로 읽기 경로에서 같은 검증을 복제하지 않는다.
+	 */
+	private static final String ENTITY_RESOLUTION_TREND_SQL = """
+			WITH ranked AS (
+			    SELECT %s AS d,
+			           a.entity_resolution_arguments_total AS total_arguments,
+			           a.entity_resolution_arguments_resolved AS resolved_arguments,
+			           row_number() OVER (
+			               PARTITION BY %s
+			               ORDER BY r.created_at DESC, a.started_at DESC, a.attempt_id DESC
+			           ) AS rn
+			      FROM ops_expected_task t
+			      JOIN ops_pipeline_run r ON r.pipeline_run_id = t.pipeline_run_id
+			      JOIN ops_task_attempt a ON a.expected_task_id = t.expected_task_id
+			     WHERE t.task_key = 'LOAD_ASSERTIONS'
+			       AND t.plan_status = 'DUE'
+			       AND a.entity_resolution_arguments_total IS NOT NULL
+			       AND a.entity_resolution_arguments_resolved IS NOT NULL
+			       AND a.execution_status = 'SUCCEEDED'
+			       AND a.record_source = 'WRAPPER'
+			       AND a.started_at IS NOT NULL
+			       AND a.finished_at IS NOT NULL
+			       AND %s <= COALESCE(CAST(? AS date),
+			                          (now() AT TIME ZONE 'Asia/Seoul')::date)
+			), recent AS (
+			    SELECT d, total_arguments, resolved_arguments
+			      FROM ranked
+			     WHERE rn = 1
+			     ORDER BY d DESC
+			     LIMIT 10
+			)
+			SELECT d, total_arguments, resolved_arguments
+			  FROM recent
+			 ORDER BY d
+			""".formatted(RUN_DAY, RUN_DAY, RUN_DAY);
+
+	/**
 	 * 계획만 있고 런 행이 없는 슬롯의 <b>날짜</b> — 런이 하나도 안 뜬 날을 조회 창 후보로 살린다.
 	 * 그런 날이야말로 콘솔이 열려야 하는 날이라, 런 축만 보면 기본 조회가 그 날을 건너뛴다.
 	 *
@@ -563,6 +607,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
 						rs.getString("etf_id"), rs.getString("display_name"),
 						rs.getString("outcome")), day, day));
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<EntityResolutionPoint> entityResolutionTrend(LocalDate date) {
+		return jdbc.query(ENTITY_RESOLUTION_TREND_SQL, (rs, i) -> new EntityResolutionPoint(
+				rs.getObject("d", LocalDate.class),
+				rs.getLong("total_arguments"),
+				rs.getLong("resolved_arguments")), date);
 	}
 
 	/**
