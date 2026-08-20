@@ -1092,3 +1092,55 @@ def test_partition_listing_failure_is_isolated_too(tmp_path):
         storage, ["091160", "042700"], "2026-08-14")
     assert reason == ""                  # 예외가 아니라 물러나기다
     assert newcomers == ["042700"]       # 08-12 기준으로 판정이 계속된다
+
+
+def _write_depth_history(storage, tickers: list[str], days: int = 65, end: str = "2026-08-13"):
+    """`days` 개 거래일 파티션에 같은 티커 집합을 깔아 깊이 판정의 배경을 만든다."""
+    from datetime import date, timedelta
+
+    d = date.fromisoformat(end)
+    for _ in range(days):
+        _write_price_daily(storage, d.isoformat(), tickers)
+        d -= timedelta(days=1)
+
+
+def test_shallow_ticker_stays_eligible_until_history_lands(tmp_path):
+    # WHY: **존재는 이력을 증명하지 못한다.** 티커는 얕게도 들어온다 — ① 판정 불가 런에서
+    #      증분 5일치만 ② 이력 fetch 가 실패해도 어댑터가 모은 봉을 그대로 냄 ③ MAX_PAGES
+    #      절단. 셋 다 결과가 같다: '이미 있음'이 되어 400일 이력이 영영 재시도되지 않는다.
+    #      SFN 이 partial 런도 정제로 보내므로 그 얕은 행은 실제로 canonical 에 들어간다.
+    #      최신뿐 아니라 **과거 파티션**도 봐야 얕게 들어온 티커가 자격을 유지한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])                      # 091160 은 깊은 이력
+    for d in ("2026-08-11", "2026-08-12", "2026-08-13"):           # 042700 은 최근 3일만
+        _write_price_daily(storage, d, ["091160", "042700"])
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""
+    assert newcomers == ["042700"]   # 최신에 '있는데도' 편입 — 얕기 때문이다
+
+
+def test_deep_ticker_is_not_flagged(tmp_path):
+    # WHY: 깊이 판정이 정상 종목을 계속 편입으로 잡으면 매일 412종에 400일 창이 붙는다 —
+    #      깊이가 채워진 티커는 반드시 빠져야 한다(그게 '성공할 때까지'의 종료 조건이다).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "042700"])
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""
+    assert newcomers == []
+
+
+def test_shallow_canonical_cannot_answer_depth_so_presence_only(tmp_path):
+    # WHY: canonical 자체가 얕으면(새 레이크·부트스트랩) '오래전에도 있었나'에 답할 수 없다.
+    #      답할 수 없는 것을 '아니오'로 읽으면 **전 종목이 편입**이 되어 412종에 400일 창이
+    #      붙는다. 모르는 것을 아는 척하지 않고 존재 판정만 쓴다(Rule 12).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"], days=5)   # 깊이 요건에 한참 못 미친다
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""
+    assert newcomers == ["042700"]   # 091160 을 얕다고 몰지 않는다

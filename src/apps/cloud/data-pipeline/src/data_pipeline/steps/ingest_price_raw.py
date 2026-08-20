@@ -185,6 +185,25 @@ NEWCOMER_LOOKBACK_DAYS = 400
 # **다른 사실**이라 따로 둔다(저건 부분 스냅샷 보강, 이건 못 쓰는 최신 파티션 회피).
 NEWCOMER_REFERENCE_PARTITIONS = 10
 
+# 편입 판정을 **존재가 아니라 깊이**로 하기 위한 소급 파티션 수(거래일).
+#
+# 존재만 보면 "canonical 에 있다"가 "이력이 있다"를 증명하지 못한다. 티커는 **불완전하게도**
+# 들어올 수 있다 — ① 판정 불가 런에서 증분 5일치만 실려 들어감 ② 이력 fetch 가 유효 페이지를
+# 읽다가 실패해도 어댑터가 모은 봉을 그대로 냄(`kis_price._fetch_symbol`) ③ MAX_PAGES 절단.
+# 셋 다 결과가 같다: **얕게 들어와서 '이미 있음'이 되고 이력은 영영 재시도되지 않는다.**
+# SFN 이 partial 런도 정제로 계속 보내므로(`statemachine.tf` NotifyRawPartial) 그 얕은 행은
+# 실제로 canonical 에 들어간다.
+#
+# 그래서 최신 기준 파티션 **하나 더**, 이만큼 과거의 파티션도 본다. 둘 중 하나에라도 없으면
+# 편입이다 — 얕게 들어온 티커는 과거 파티션에 없으므로 **성공할 때까지 자격이 유지된다**
+# (새 상태 저장 없이 "keep eligible until success"). 어댑터가 최신→과거로 페이지네이션해
+# 절단이 **과거 끝**을 잃는다는 점이 이 판정과 맞물린다.
+#
+# 값은 소비자 깊이(analysis-engine `attribute.SIGMA_N` = 60거래일)에 맞춘다. 대가: 갓 상장한
+# 종목은 이 기간 동안 계속 편입으로 잡혀 하루 몇 콜을 더 쓴다 — 영구가 아니라 **자연 소멸**
+# 한다(그만큼 지나면 과거 파티션에도 들어간다).
+NEWCOMER_DEPTH_PARTITIONS = 60
+
 
 def _newcomers(
     storage: Storage, universe: list[str], window_end: str
@@ -255,7 +274,13 @@ def _newcomers(
                 "canonical 일봉 trade_date=%s 파티션이 비었다 — 이전 파티션으로 물러난다",
                 candidate)
             continue
-        return sorted(t for t in universe if t not in known), since, ""
+        # 깊이 축 — 이 티커가 **오래전에도** 있었는가. 없으면 얕게 들어온 것이라 편입으로
+        # 남긴다. canonical 자체가 그만큼 깊지 않으면 그 질문에 답할 수 없으므로(부트스트랩)
+        # 존재 판정만 쓴다 — 답할 수 없는 것을 '아니오'로 읽으면 전 종목이 편입이 된다.
+        deep = _deep_reference_tickers(storage, sorted(dates, reverse=True), candidate)
+        shallow = sorted(t for t in universe if t not in known or (deep is not None and t not in deep))
+        return shallow, since, ""
+
 
     # 소급 상한 안에 쓸 수 있는 파티션이 하나도 없다. **여기서 조용히 성공하면 안 된다** —
     # 같은 런의 1차 수집이 신규 티커의 최근 5일을 canonical 에 넣으므로, 다음 런부터 그
@@ -264,6 +289,25 @@ def _newcomers(
     # partial 로 내린다 — 최근 10개 canonical 파티션이 전부 못 쓸 상태라는 건 알람이 맞다.
     scanned = min(len(dates), NEWCOMER_REFERENCE_PARTITIONS)
     return [], window_end, f"no_usable_partition(scanned={scanned})"
+
+
+def _deep_reference_tickers(
+    storage: Storage, newest_first: list[str], latest_usable: str
+) -> set[str] | None:
+    """`latest_usable` 에서 `NEWCOMER_DEPTH_PARTITIONS` 만큼 과거의 쓸 수 있는 파티션의
+    티커 집합. canonical 이 그만큼 깊지 않거나 쓸 수 있는 게 없으면 None(판정 보류).
+
+    None 과 빈 집합은 다르다 — 빈 집합은 '그때 아무도 없었다'라 전 종목이 편입이 되고,
+    None 은 '그 질문에 답할 수 없다'라 존재 판정만 쓴다(Rule 12 — 모르는 것을 아는 척 안 한다).
+    """
+    # 슬라이스가 깊이 요건을 겸한다 — canonical 이 그만큼 깊지 않으면 빈 목록이라 루프가
+    # 안 돌고 아래 None 으로 떨어진다(별도 가드를 두면 같은 사실이 두 벌이 된다).
+    older = [d for d in newest_first if d < latest_usable]
+    for candidate in older[NEWCOMER_DEPTH_PARTITIONS - 1:]:
+        known, unreadable = _partition_tickers(storage, candidate)
+        if not unreadable and known:
+            return known
+    return None
 
 
 def _partition_tickers(storage: Storage, trade_date: str) -> tuple[set[str], int]:
