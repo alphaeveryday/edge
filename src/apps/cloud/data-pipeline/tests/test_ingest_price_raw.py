@@ -1144,3 +1144,29 @@ def test_shallow_canonical_cannot_answer_depth_so_presence_only(tmp_path):
         storage, ["091160", "042700"], "2026-08-14")
     assert reason == ""
     assert newcomers == ["042700"]   # 091160 을 얕다고 몰지 않는다
+
+
+def test_partition_discovery_listing_failure_still_collects(tmp_path):
+    # WHY: 파티션 **발견** 조회(`list_keys(marker)`)는 파티션별 조회와 달리 물러날 곳이
+    #      없다 — 그래서 감싸지 않으면 S3 일시 오류 한 번에 1차 fetch 전에 런이 죽고,
+    #      새 raw 가 안 생겨 매 런이 같은 자리에서 죽는다. 판정만 포기하고 수집은 계속한다.
+    settings = _settings(tmp_path)
+
+    class DiscoveryFailingStorage(LocalStorage):
+        def list_keys(self, prefix):
+            if prefix.endswith("/trade_date="):
+                raise OSError("S3 ListObjects 실패")
+            return super().list_keys(prefix)
+
+    storage = DiscoveryFailingStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    source = _RecordingSource()
+
+    code = ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14")
+
+    assert len(source.calls) == 1              # 1차 수집이 **돌았다**
+    assert storage.list_keys("raw") != []
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "scan_failed(list_partitions)"
+    assert log["status"] == "partial" and code == 1   # 불확실성은 드러난다

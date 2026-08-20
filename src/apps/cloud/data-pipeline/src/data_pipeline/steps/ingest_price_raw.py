@@ -232,7 +232,15 @@ def _newcomers(
     맡는다(그게 ALPHA-989 의 나머지 절반이다).
     """
     marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="
-    found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    try:
+        found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    except Exception:
+        # 파티션 **발견** 조회다. 파티션별 조회(`_partition_tickers`)와 달리 물러날 곳이
+        # 없지만, 여기서 예외를 올리면 1차 fetch 전에 런이 죽어 그날 수집이 통째로 안 된다
+        # — 그리고 새 raw 가 안 생겨 매 런이 같은 자리에서 죽는다. 판정만 포기하고 사유를
+        # 남긴다(호출부가 런을 partial 로 내린다).
+        logger.exception("canonical 일봉 파티션 목록 조회 실패 — 편입 판정을 건너뛴다")
+        return [], window_end, "scan_failed(list_partitions)"
     found.discard("")
     # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 기준으로 삼는다 — holdings 쪽
     # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정·같은 경고를 쓴다(사실을 하나로).
