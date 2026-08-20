@@ -654,14 +654,20 @@ def test_previously_tagged_article_that_lost_mentions_survives_rewrite(tmp_path)
     tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls))
     assert len(calls) == 1                       # a1 의 판정이 part 에 실렸다
 
-    # 정정으로 a1 이 mentions 를 잃고, 다른 기사의 미러가 있어 되쓰기가 도는 파티션
+    # 정정으로 a1 이 mentions 를 잃고, 다른 기사의 미러가 있어 되쓰기가 도는 파티션.
+    # a1 자신의 더 최신 미러도 온다(게이트 없는 1분 레인, ALPHA-690) — 병합 승자는 미러지만
+    # 게이트 배제 기사이므로 착지해야 하는 것은 part 에 실려 있던 판정이다.
     _write_canonical(storage, "ko", "2026-07-01", [_article(mentions="[]")])
     _write_mirror(storage, _article("a-장중만"), tagged_at="2026-07-01T10:00:00+00:00")
+    _write_mirror(storage, _article(), tagged_at="2099-01-01T00:00:00+00:00")
 
     tag_news.run(storage, "run-2", complete_fn=_fake_complete([]))
 
-    ids = sorted(r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01"))
-    assert ids == ["a-장중만", "a1"]             # 옛 유료 판정이 살아남는다
+    rows = {r["article_id"]: r for r in _read_feature(storage, "ko", "2026-07-01")}
+    assert sorted(rows) == ["a-장중만", "a1"]    # 옛 유료 판정이 살아남는다
+    # 살아남은 것은 part 판정이지 미러 승자가 아니다 — 승자를 실으면 mentions 게이트를
+    # 1분 레인 판정이 우회해 두 레인의 대상 집합이 다시 갈린다(ALPHA-900/416).
+    assert rows["a1"]["tagged_at"] != "2099-01-01T00:00:00+00:00"
     log_key = [k for k in storage.list_keys(quality_log_prefix(tag_news.DATASET)) if "run-2" in k][0]
     log = json.loads(storage.get_bytes(log_key))
     assert log["minute_mirrors_dropped_no_mention"] == 0   # part 행은 이 축에 안 섞인다

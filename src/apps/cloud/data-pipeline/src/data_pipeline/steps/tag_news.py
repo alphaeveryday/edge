@@ -246,21 +246,23 @@ def _read_canonical(storage: Storage, language: str, published_date: str) -> lis
 
 def _read_feature(
     storage: Storage, language: str, published_date: str
-) -> tuple[list[dict], list[str], set]:
-    """(파티션의 feature 행 전량, **흡수 대상 장중 미러 키**, part 유래 article_id 집합).
+) -> tuple[list[dict], list[str], list[dict]]:
+    """(파티션의 feature 행 전량, **흡수 대상 장중 미러 키**, part 유래 행).
 
     미러 키를 함께 돌려주는 이유는 이 스텝이 그걸 지워야 하기 때문이다(ALPHA-900). 장중 레인은
     `(기사, 그 기사의 어느 텍스트)` 마다 객체를 남기는데(writer 가 동시다발이라 part
     파일을 공유할 수 없다), 그대로 두면 이 함수가 파티션마다 수천 GET 을 하게 된다. 병합해 part 파일에 실은 뒤 지워
     **다음 배치 런까지만** 존재하게 한다(`feature_news_assertions_minute_prefix`).
 
-    part 유래 id 집합을 함께 돌려주는 이유는 되쓰기의 mentions 배제가 **미러로만 온 행**에만
+    part 유래 행을 따로도 돌려주는 이유는 되쓰기의 mentions 배제가 **미러 유래 행**에만
     걸려야 하기 때문이다(ALPHA-982) — 예전에 태깅돼 part 에 실린 판정은 정정으로 mentions 를
-    잃어도 지우면 안 된다(레이크 버킷은 버저닝이 없어 복구 불가).
+    잃어도 지우면 안 된다(레이크 버킷은 버저닝이 없어 복구 불가). id 집합이 아니라 행인 것은,
+    같은 기사에 더 최신 미러가 있으면 병합 승자가 미러라 — 보존할 것이 병합 결과가 아니라
+    **part 에 실려 있던 그 판정**이기 때문이다.
     """
     rows: list[dict] = []
     mirror_keys: list[str] = []
-    part_ids: set = set()
+    part_rows: list[dict] = []
     prefix = feature_news_assertions_partition(language, published_date)
     mirror_marker = feature_news_assertions_minute_prefix(language, published_date)
     for key in storage.list_keys(prefix + "/"):
@@ -271,8 +273,8 @@ def _read_feature(
         if key.startswith(mirror_marker):
             mirror_keys.append(key)
         else:
-            part_ids.update(r.get("article_id") for r in batch if isinstance(r, dict))
-    return rows, mirror_keys, part_ids
+            part_rows.extend(batch)
+    return rows, mirror_keys, part_rows
 
 
 def _tagged_at(row: object) -> str:
@@ -405,7 +407,7 @@ def run(
         for published_date in sorted(taggable | mirror_dates):
             try:
                 articles = _read_canonical(storage, language, published_date)
-                existing, mirror_keys, part_ids = _read_feature(storage, language, published_date)
+                existing, mirror_keys, part_rows = _read_feature(storage, language, published_date)
             except Exception as exc:
                 # 한 파티션의 읽기 실패가 나머지 파티션을 죽이지 않게 격리하되, 조용히 넘기지
                 # 않는다(Rule 12) — exit 을 비0으로 올려 런이 성공으로 위장되지 않게.
@@ -416,6 +418,7 @@ def run(
                 continue
 
             by_id = _merge_by_article(existing)
+            part_by_id = _merge_by_article(part_rows)
             merged = dict(by_id)
             changed = False
 
@@ -478,11 +481,18 @@ def run(
                 # 일부러 feature 집합 밖에 둔 기사**의 assertion 이 DB 에 착지한다 — 두 레인의
                 # 대상 집합이 갈린다(Rule 7). 판정 근거는 job 축 artifact 에 영구히 남으므로
                 # 여기서 빼도 증거가 사라지지는 않는다.
-                # ⚠️ 배제는 **미러로만 온 행**에 한한다(ALPHA-982) — 예전에 태깅돼 part 에 실린
+                # ⚠️ 배제는 **미러 유래 행**에 한한다(ALPHA-982) — 예전에 태깅돼 part 에 실린
                 # 행은 정정으로 mentions 를 잃어도 지우지 않는다. 지우면 유료 판정이 레이크에서
-                # 영구 소실되고(버저닝 없음), mentions 가 돌아오면 다시 유료 호출된다.
-                rows = [merged[a] for a in sorted(merged, key=lambda x: (x is None, x))
-                        if a not in no_mention_ids or a in part_ids]
+                # 영구 소실되고(버저닝 없음), mentions 가 돌아오면 다시 유료 호출된다. 같은
+                # 기사에 더 최신 미러가 있으면 병합 승자가 미러인데, 그 미러도 게이트 배제
+                # 대상이므로 병합 결과가 아니라 **part 에 실려 있던 판정**을 되쓴다 — 승자를
+                # 실으면 게이트 없는 1분 레인(ALPHA-690)의 판정이 게이트를 우회해 착지한다.
+                rows = []
+                for a in sorted(merged, key=lambda x: (x is None, x)):
+                    if a not in no_mention_ids:
+                        rows.append(merged[a])
+                    elif a in part_by_id:
+                        rows.append(part_by_id[a])
                 mirrors_dropped_no_mention += len(merged) - len(rows)
                 storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(rows))
                 parts_written += 1
