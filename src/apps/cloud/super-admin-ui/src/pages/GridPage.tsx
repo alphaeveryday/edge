@@ -330,10 +330,12 @@ function GridBody({
   }, [grid.slots, minute]);
   const rolled = useMemo(() => rollup(grid.slots), [grid.slots]);
   const at = (datasetId: string, date: string) => rolled.get(`${datasetId}|${date}`);
+  const selectedRowMissing = selected?.dataset.inOpsGrid &&
+    !dates.some((date) => rolled.has(`${selected.dataset.id}|${date}`));
 
   useEffect(() => {
-    if (selected && !dates.includes(selected.date)) setSelected(null);
-  }, [dates, selected]);
+    if (selected && (!dates.includes(selected.date) || selectedRowMissing)) setSelected(null);
+  }, [dates, selected, selectedRowMissing]);
 
   /* 이 창에서 셀이 하나도 없는 배치 데이터셋은 감춘다 — 통째로 빈 행은 소음이다.
    * 실시간 데이터셋은 이 격자에 셀이 아예 없는 게 정상이라 그 규칙에서 뺀다. */

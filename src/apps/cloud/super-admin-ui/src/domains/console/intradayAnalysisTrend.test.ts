@@ -65,6 +65,11 @@ test('실행 이력은 30일 API를 한 번 조회하고 순수 판정을 스트
   assert.ok(gridPageOwner > 0 && gridPageOwner < source.indexOf('{isError ? ('), '독립 축 선택은 grid query 분기 위에서 소유한다');
   const gridBody = source.slice(source.indexOf('function GridBody'), source.indexOf('const OUTCOME_TONE'));
   assert.doesNotMatch(gridBody, /setSelectedOutcomeDate/, '그리드 전용 전환이 독립 축 선택을 직접 지우지 않는다');
+  assert.match(
+    gridBody,
+    /selectedRowMissing[\s\S]*!dates\.some\(\(date\) => rolled\.has/,
+    '재조회로 데이터셋 행 전체가 사라진 선택만 정리하고 유효한 계획 없음 셀은 남긴다',
+  );
   assert.doesNotMatch(source, /OutcomeWithFallback/, '독립 축 상세를 grid query 분기마다 다시 마운트하지 않는다');
   assert.match(source, /id="gd-outcome-detail" tabIndex=\{-1\}/, '선택 상세는 프로그래밍 방식으로 초점을 받을 수 있다');
 });
