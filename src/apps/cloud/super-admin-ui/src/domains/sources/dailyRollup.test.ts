@@ -13,9 +13,94 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { dateOfSlot, datesOf, realtimeDayState, realtimeSessionState, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
-import type { GridCell, GridSlot, MinuteStatus } from './types.ts';
+import { jobEvidence, leaseEvidence, newsDateJobEvidence } from './minuteView.ts';
+import type { GridCell, GridSlot, MinuteSession, MinuteStatus } from './types.ts';
 
-test('같은 데이터셋의 한 벤더가 끊기면 다른 벤더가 살아 있어도 장애다', () => {
+const minuteSession = (sourceGroup: string, values: Partial<MinuteSession> = {}): MinuteSession => ({
+  sessionId: `session-${sourceGroup}`, dataset: 'price_minute', sourceGroup, phase: 'ACTIVE',
+  universeVersion: 'v1', expectedWindowCount: 390, processedThrough: null,
+  contiguousCompleteThrough: null, heartbeatAt: null, leaseExpiresAt: null, leaseExpired: false,
+  windows: { due: 0, claimed: 0, valid: 0, validEmpty: 0, incomplete: 0, missing: 0, invalid: 0, overdueNoEvidence: 0 },
+  gaps: [], priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+  ...values,
+});
+
+const minuteStatus = (sessions: MinuteSession[]): MinuteStatus => ({
+  date: '2026-08-12', sessions,
+  newsJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+});
+
+test('실패 1/3은 주의이고 실패 3/3만 장애다', () => {
+  const partial = minuteStatus([
+    minuteSession('kis'), minuteSession('toss'), minuteSession('backup', { leaseExpired: true }),
+  ]);
+  const partialState = realtimeDayState('price_minute', partial.date, partial)!;
+  assert.equal(partialState.state, '주의');
+  assert.equal(partialState.failedSessions, 1);
+  assert.equal(partialState.totalSessions, 3);
+  assert.match(partialState.basis, /실패 세션 1 \/ 전체 3/);
+
+  const failed = minuteStatus(['kis', 'toss', 'backup'].map((vendor) => minuteSession(vendor, { phase: 'FAILED' })));
+  const failedState = realtimeDayState('price_minute', failed.date, failed)!;
+  assert.equal(failedState.state, '장애');
+  assert.equal(failedState.failedSessions, 3);
+  assert.equal(failedState.totalSessions, 3);
+});
+
+test('빈 데이터와 무증거는 세션 생존 실패로 재분류하지 않는다', () => {
+  const validEmpty = minuteStatus([minuteSession('kis', { windows: { ...minuteSession('x').windows, validEmpty: 390 } })]);
+  assert.equal(realtimeDayState('price_minute', validEmpty.date, validEmpty)?.state, '실행 중');
+
+  const noEvidence = minuteStatus([minuteSession('kis', { windows: { ...minuteSession('x').windows, overdueNoEvidence: 5 } })]);
+  assert.equal(realtimeDayState('price_minute', noEvidence.date, noEvidence)?.state, '실행 중');
+});
+
+test('생존 판정이 없는 세션도 실패/전체 분모는 숨기지 않는다', () => {
+  const terminal = minuteStatus([
+    minuteSession('kis', { phase: 'FINALIZED', leaseExpired: null }),
+    minuteSession('toss', { phase: 'PLANNED', leaseExpired: null }),
+  ]);
+  const terminalState = realtimeDayState('price_minute', terminal.date, terminal)!;
+  assert.equal(terminalState.state, '상태 미제공');
+  assert.equal(terminalState.failedSessions, 0);
+  assert.equal(terminalState.totalSessions, 2);
+  assert.match(terminalState.basis, /phase=FINALIZED/);
+  assert.deepEqual(realtimeDayState('price_minute', terminal.date, minuteStatus([])), {
+    state: '상태 미제공', basis: '기록된 세션 없음', failedSessions: 0, totalSessions: 0,
+  });
+});
+
+test('실시간 상세는 실패 분모와 window·lease·job 근거를 함께 표시한다', () => {
+  const source = readFileSync(new URL('../../pages/GridPage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /실패 세션 \{live\.failedSessions\} \/ 전체 \{live\.totalSessions\}/);
+  assert.match(source, /<th>창 증거<\/th>[\s\S]*<th>lease 근거<\/th>[\s\S]*<th>job 근거<\/th>/);
+  assert.match(source, /날짜 job\(세션 귀속 아님\)/, '날짜 job을 벤더 세션 근거로 위장하지 않는다');
+  assert.match(source, /job 축 미제공/, 'job 축 없는 데이터셋에 뉴스 날짜 job을 붙이지 않는다');
+  assert.equal(source.match(/날짜 job\(세션 귀속 아님\)/g)?.length, 1, '날짜 job은 벤더마다 복제하지 않는다');
+  assert.match(source, /일부 벤더 실행체 실패는 주의, 전체 벤더 실패만 장애/);
+  assert.match(source, /실행체 생존\(실행 중 · 주의 · 장애\)/);
+  assert.equal(source.match(/newsDateJobEvidence\(minuteDetail\)/g)?.length, 1, '날짜 job 근거는 표 밖에서 한 번만 그린다');
+});
+
+test('뉴스 날짜 job 조회 상태를 실패·대기와 구분한다', () => {
+  assert.equal(newsDateJobEvidence({ kind: 'error' }), '조회 실패');
+  assert.equal(newsDateJobEvidence({ kind: 'stale' }), '다른 날짜 응답 · 선택 날짜 조회 대기');
+  assert.equal(newsDateJobEvidence({ kind: 'loading' }), '조회 중');
+  assert.equal(newsDateJobEvidence(undefined), '상태 미제공');
+});
+
+test('job 포함 관계와 종료 세션의 원시 lease 근거를 보존한다', () => {
+  assert.match(
+    jobEvidence({ waiting: 0, claimed: 4, claimedExpired: 4, succeeded: 1, dead: 0 }),
+    /처리 중 0 · 유효 lease 없음 4/,
+  );
+  const closed = minuteSession('kis', {
+    phase: 'FINALIZED', leaseExpired: true, leaseExpiresAt: '2026-08-12T15:30:00+09:00',
+  });
+  assert.match(leaseEvidence(closed), /phase=FINALIZED[\s\S]*lease 만료[\s\S]*2026-08-12T15:30:00\+09:00/);
+});
+
+test('실시간 상세는 벤더 세션마다 자기 실행체 상태를 갖는다', () => {
   const minute = {
     date: '2026-08-12',
     sessions: [
@@ -23,7 +108,7 @@ test('같은 데이터셋의 한 벤더가 끊기면 다른 벤더가 살아 있
       { dataset: 'price_minute', phase: 'ACTIVE', leaseExpired: true },
     ],
   } as MinuteStatus;
-  assert.equal(realtimeDayState('price_minute', minute.date, minute)?.state, '장애');
+  assert.deepEqual(minute.sessions.map((s) => realtimeSessionState(s).state), ['실행 중', '장애']);
 });
 
 /* 🔴 이 PR 이 `'실행 중'` 에서 `'대기'` 를 떼어 냈는데 격자가 그 새 상태를 `'계획 없음'` 과
@@ -51,17 +136,6 @@ test('🔴 격자에서 `대기` 와 `계획 없음` 은 다른 박스다 — �
   assert.match(css, /\.gd-s-wait::after\s*\{/, '대기 박스의 채움 표식이 사라졌다');
   /* 운영자 설명에도 그 갈래가 있어야 한다 — 박스만 갈라 놓고 안 적으면 못 읽는다 */
   assert.match(source, /'대기 —/, 'STATUS_TIP 에 대기 항목이 없다');
-});
-
-test('실시간 상세는 벤더 세션마다 자기 실행체 상태를 갖는다', () => {
-  const minute = {
-    date: '2026-08-12',
-    sessions: [
-      { dataset: 'price_minute', sourceGroup: 'kis', phase: 'ACTIVE', leaseExpired: false },
-      { dataset: 'price_minute', sourceGroup: 'toss', phase: 'ACTIVE', leaseExpired: true },
-    ],
-  } as MinuteStatus;
-  assert.deepEqual(minute.sessions.map((s) => realtimeSessionState(s).state), ['실행 중', '장애']);
 });
 
 const cell = (o: Partial<GridCell> & Pick<GridCell, 'taskKey'>): GridCell => ({

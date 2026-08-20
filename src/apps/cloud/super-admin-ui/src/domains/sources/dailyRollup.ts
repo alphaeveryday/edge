@@ -49,18 +49,26 @@ export function realtimeSessionState(session: MinuteSession): { state: DayState;
   return { state: '상태 미제공', basis: live.basis };
 }
 
-/** 같은 데이터셋·날짜의 벤더 세션을 모두 보고, 하나라도 끊겼으면 장애를 보존한다. */
+/** 같은 데이터셋·날짜의 벤더 세션을 모두 보고, 일부 장애와 전량 장애를 가른다. */
 export function realtimeDayState(
   dataset: string,
   date: string,
   minute?: MinuteStatus,
-): { state: DayState; basis: string } | null {
+): { state: DayState; basis: string; failedSessions: number; totalSessions: number } | null {
   if (!minute || minute.date !== date) return null;
   const states = minute.sessions.filter((s) => s.dataset === dataset).map(realtimeSessionState);
-  const failed = states.find((s) => s.state === '장애');
-  if (failed) return failed;
+  const failed = states.filter((s) => s.state === '장애');
+  const counts = { failedSessions: failed.length, totalSessions: states.length };
+  if (failed.length > 0 && failed.length === states.length) {
+    return { state: '장애', basis: `실패 세션 ${failed.length} / 전체 ${states.length} · ${failed[0].basis}`, ...counts };
+  }
+  if (failed.length > 0) {
+    return { state: '주의', basis: `실패 세션 ${failed.length} / 전체 ${states.length} · ${failed[0].basis}`, ...counts };
+  }
   const live = states.find((s) => s.state === '실행 중');
-  return live ?? null;
+  return live
+    ? { ...live, ...counts }
+    : { state: '상태 미제공', basis: states[0]?.basis ?? '기록된 세션 없음', ...counts };
 }
 
 export interface DayCounts {

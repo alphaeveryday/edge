@@ -38,6 +38,7 @@ import {
 import type { DatasetDomain, DatasetEntry, DatasetKindLabel } from '../domains/sources/datasetCatalog';
 import { datesOf, realtimeDayState, realtimeSessionState, rollup } from '../domains/sources/dailyRollup';
 import type { DayExecution, DayRollup, DayState } from '../domains/sources/dailyRollup';
+import { datasetKind, jobEvidence, leaseEvidence, newsDateJobEvidence } from '../domains/sources/minuteView';
 import { MOCK_GRID } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
@@ -102,6 +103,7 @@ const STATUS_TIP = [
   '정상 — 기한이 지난 기대 실행이 모두 정상 귀결됐다',
   '주의 — 불완전·무효·유실 등 확인이 필요하다',
   '장애 — 실패 또는 기한이 지난 무증거가 있다',
+  '실시간 세션 — 일부 벤더 실행체 실패는 주의, 전체 벤더 실패만 장애다',
   '실행 중 — 아직 끝나지 않은 것이 남았다',
   '대기 — 계획은 있고 아직 기한 전이다. 기한 전 대기를 실패로 보지 않는다',
   '계획 스킵 — 계획 단계에서 빠졌다(비거래일 등). 안 한 게 아니라 할 일이 아니었다',
@@ -257,17 +259,17 @@ interface Selection {
  * 지키는 선:
  *   · 세션 응답은 하루치다 — 채워지는 날짜는 응답이 말한 그 하루뿐이고 나머지는 여전히
  *     `상태 미제공` 이다. 없는 날짜의 판정을 옆 날짜에서 복사하지 않는다.
- *   · **창 카운트로 그날의 귀결(정상·주의)을 만들지 않는다.** 진행 중인 세션에 완결 판정을
+ *   · **창 카운트로 그날의 귀결을 만들지 않는다.** 진행 중인 세션에 완결 판정을
  *     붙이는 셈이고, 커버리지 분모도 하한이라(minuteView 참고) 근거가 못 된다.
  *   · 실행체 생존만 편다 — `liveness` 는 phase 와 leaseExpired(서버 DB 시계 판정)의 파생이라
  *     화면이 새로 만드는 판정이 아니다. 종료 국면·lease 부재는 그날의 귀결을 답하지 않으므로
- *     null 로 두고 `상태 미제공` 에 맡긴다.
+ *     `상태 미제공` 으로 두되, 확인된 세션 분모는 함께 보존한다.
  */
 function sessionState(
   d: DatasetEntry,
   date: string,
   minute?: MinuteStatus,
-): { state: DayState; basis: string } | null {
+): ReturnType<typeof realtimeDayState> {
   if (!d.sessionDataset || !minute || minute.date !== date) return null;
   return realtimeDayState(d.sessionDataset, date, minute);
 }
@@ -483,7 +485,7 @@ function GridBody({
             데이터셋을 주지 않아 화면이 작업을 데이터셋으로 묶습니다. 상태와 기대 실행 수는 원장
             값에서만 셉니다. 실시간 데이터셋의 판정 출처는 <b>minute_ingestion_session/window</b>이고,
             그 원장에는 최근 7일 일별 요약 엔드포인트가 없습니다 — 세션 응답이 답하는 <b>하루</b>만
-            그 세션의 실행체 생존(실행 중 · 장애)을 펴고, 나머지 날짜는 <b>상태 미제공</b>으로 둡니다.
+            그 세션의 실행체 생존(실행 중 · 주의 · 장애)을 펴고, 나머지 날짜는 <b>상태 미제공</b>으로 둡니다.
             창 카운트로 그날의 귀결을 만들지 않습니다.
           </p>
         </div>
@@ -713,6 +715,11 @@ function DayDetail({
           <StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>
             {live?.state ?? '상태 미제공'}
           </StatusBadge>
+          {live && (
+            <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+              실패 세션 {live.failedSessions} / 전체 {live.totalSessions}
+            </span>
+          )}
           <InfoPopover
             label="판정 출처"
             title="판정 출처"
@@ -722,7 +729,7 @@ function DayDetail({
                 ? '이 원장에는 최근 7일 일별 요약 엔드포인트가 없다. 다만 세션 응답이 이 날짜의\n' +
                   '세션을 주므로 그 실행체 생존 판정만 그대로 편다:\n' +
                   `${live.basis}\n\n` +
-                  '창 카운트로 그날의 귀결(정상·주의)을 만들지는 않는다 — 진행 중인 세션에\n' +
+                  '창 카운트로 그날의 귀결을 만들지는 않는다 — 진행 중인 세션에\n' +
                   '완결 판정을 붙이는 셈이라 근거가 없다. 분·poll 단위는 세션 상세가 답한다.'
                 : '이 원장에는 최근 7일 일별 요약 엔드포인트가 없어 격자가 이 날짜의 판정 값을 받지 못했다.\n' +
                   '데이터 출처가 다른 것은 운영 상태가 아니므로 상태 어휘로 쓰지 않는다 —\n' +
@@ -746,6 +753,8 @@ function DayDetail({
                 <th>유형</th>
                 <th>상태</th>
                 <th>창 증거</th>
+                <th>lease 근거</th>
+                <th>job 근거</th>
                 <th>상세</th>
               </tr>
             </thead>
@@ -766,19 +775,27 @@ function DayDetail({
                       {session.windows.invalid} · 무증거 {session.windows.overdueNoEvidence} / 기대{' '}
                       {session.expectedWindowCount}
                     </td>
+                    <td className="t-xs">{leaseEvidence(session)}</td>
+                    <td className="t-xs">
+                      {datasetKind(session.dataset) === 'price'
+                        ? `세션 job · ${jobEvidence(session.priceJobs)}`
+                        : datasetKind(session.dataset) === 'news'
+                          ? '날짜 job 축은 표 아래에 별도 표시'
+                          : 'job 축 미제공'}
+                    </td>
                     <td><Link to={sessionHref} className="gd-linkbtn">세션 상세 →</Link></td>
                   </tr>
                 );
               })}
               {minuteDetail?.kind === 'ready' && sessions.length === 0 && (
                 <tr>
-                  <td colSpan={4}>이 날짜에 기록된 {d.label} 벤더 세션이 없습니다.</td>
+                  <td colSpan={6}>이 날짜에 기록된 {d.label} 벤더 세션이 없습니다.</td>
                   <td><Link to={href} className="gd-linkbtn">날짜 상세 →</Link></td>
                 </tr>
               )}
               {detailMessage && (
                 <tr>
-                  <td colSpan={4}>{detailMessage}</td>
+                  <td colSpan={6}>{detailMessage}</td>
                   <td><Link to={href} className="gd-linkbtn">날짜 상세 →</Link></td>
                 </tr>
               )}
@@ -788,11 +805,18 @@ function DayDetail({
                   <td><span className="chip">실시간 세션</span></td>
                   <td><StatusBadge tone={STATE_TONE['상태 미제공']}>상태 미제공</StatusBadge></td>
                   <td>—</td>
+                  <td>—</td>
+                  <td>—</td>
                   <td><Link to={href} className="gd-linkbtn">세션 상세 →</Link></td>
                 </tr>
               )}
             </tbody>
           </table>
+          {d.sessionDataset && datasetKind(d.sessionDataset) === 'news' && (
+            <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
+              날짜 job(세션 귀속 아님) · {newsDateJobEvidence(minuteDetail)}
+            </p>
+          )}
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
             실행 인스턴스는 <b>데이터셋 × 벤더 × 세션 날짜</b>입니다 — 1분 창·poll 은 각 세션의 하위
             증거라 여기서 실행으로 펼치지 않습니다.
