@@ -182,9 +182,15 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
 NEWCOMER_LOOKBACK_DAYS = 400
 
 
-def _newcomers(storage: Storage, universe: list[str], window_end: str) -> tuple[list[str], str]:
-    """(유니버스 신규 편입 티커, 그들에게 붙일 창 하한) — canonical 일봉 **최신 파티션에
-    없는** 티커 (ALPHA-989).
+def _newcomers(
+    storage: Storage, universe: list[str], window_end: str
+) -> tuple[list[str], str, str]:
+    """(유니버스 신규 편입 티커, 그들에게 붙일 창 하한, **판정 포기 사유**) — canonical 일봉
+    **최신 파티션에 없는** 티커 (ALPHA-989).
+
+    세 번째 값은 판정을 못 한 사유다(정상이면 빈 문자열). 호출부가 collection_log 에 실어
+    운영에서 보이게 한다 — 로그 한 줄만으로는 "판정을 건너뛴 런"과 "편입이 없던 런"이
+    바깥에서 같은 모양(symbols_newcomer=0)이라 구분이 안 된다.
 
     유니버스는 canonical holdings 파생이라 ETF 가 추가되면 **즉시** 넓어지는데, 수집 창은
     `DEFAULT_PRICE_LOOKBACK_DAYS`(5일)다. 그래서 넓어진 유니버스는 최근 5일만 다시 긁고 그
@@ -203,19 +209,48 @@ def _newcomers(storage: Storage, universe: list[str], window_end: str) -> tuple[
     맡는다(그게 ALPHA-989 의 나머지 절반이다).
     """
     marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="
-    dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    found.discard("")
     # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 '최신'으로 읽는다 — holdings 쪽
-    # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정을 쓴다(사실을 하나로).
-    dates = {d for d in dates if _is_calendar_date(d)}
+    # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정·같은 경고를 쓴다(사실을 하나로).
+    dates = {d for d in found if _is_calendar_date(d)}
+    if found - dates:
+        logger.warning("canonical 일봉 비정상 trade_date 파티션 키 무시: %s", sorted(found - dates))
     if not dates:
-        return [], window_end
+        # canonical 이 통째로 비었다 — 손상이 아니라 새 레이크다(아래 도크스트링).
+        return [], window_end, ""
+    latest = max(dates)
     known: set[str] = set()
-    for key in storage.list_keys(canonical_price_daily_partition("KR", max(dates)) + "/"):
+    unreadable = 0
+    for key in storage.list_keys(canonical_price_daily_partition("KR", latest) + "/"):
         if key.endswith(".parquet"):
-            known |= {t for row in _read_parquet_rows(storage.get_bytes(key))
-                      if (t := row.get("ticker"))}
+            for row in _read_parquet_rows(storage.get_bytes(key)):
+                # truthy 만 보면 **타입 드리프트를 못 잡는다** — ticker 가 int64 로 바뀌면
+                # `known` 은 정수 집합이 되고 유니버스(문자열)와 하나도 안 겹쳐 전 종목이
+                # 신규 편입으로 잡힌다(`unreadable` 은 0이라 아래 가드도 통과). 유니버스와
+                # **같은 형태**(공백 없는 비어있지 않은 str)일 때만 읽힌 것으로 센다.
+                ticker = row.get("ticker")
+                if isinstance(ticker, str) and ticker == ticker.strip() != "":
+                    known.add(ticker)
+                else:
+                    unreadable += 1
+    if unreadable or not known:
+        # 🔴 **최신 파티션에서 티커를 못 읽은 행이 있다** — 스키마 드리프트(정제가 컬럼명을
+        # 바꿈)·빈 parquet·ticker null 이다. 이걸 "그 종목들이 없다"로 읽으면 손상 파일에
+        # 실려 있던 종목이 통째로 신규 편입이 되어 400일 창이 붙는다(전 파일이 드리프트하면
+        # 413종 = 수집량 400배). 0과 부재는 대칭이 아니다 — 판정을 포기한다.
+        #
+        # ⚠️ **한 행만 못 읽어도 포기한다.** 파티션은 거래일 하나라 티커당 한 행이고
+        # (`_merge_partition` 이 ticker 키로 병합), 정상이라면 못 읽는 행이 0 이어야 한다.
+        # "정상 행이 하나라도 있으면 통과"로 두면 부분 드리프트가 가드를 그냥 지나간다.
+        reason = f"unreadable_latest_partition(trade_date={latest},rows={unreadable})"
+        logger.error(
+            "canonical 일봉 최신 파티션(trade_date=%s)에서 티커를 못 읽은 행 %d — 신규 편입 "
+            "판정을 건너뛴다(스키마 드리프트·빈 파티션 의심). 읽은 티커 %d종",
+            latest, unreadable, len(known))
+        return [], window_end, reason
     since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
-    return sorted(t for t in universe if t not in known), since
+    return sorted(t for t in universe if t not in known), since, ""
 
 
 JOB_NAME = "ingest_price_raw"
@@ -245,6 +280,10 @@ def run(
         "window_from": from_date,
         "window_to": to_date,
         "started_at": started_at.isoformat(),
+        # 편입 판정의 상태는 **모든 경로에 존재해야** 한다 — 조건부 필드면 '없음'이
+        # 구버전 로그·비활성 런·스캔 전 실패 셋을 한 모양으로 뭉갠다. 여기 초기값이
+        # "스캔에 도달하지 못했다"이고, 아래에서 도달한 경로만 덮어쓴다.
+        "newcomer_scan": "not_reached",
     }
 
     if not source.enabled:
@@ -286,16 +325,30 @@ def run(
         log["symbols_from_holdings"] = 0
         newcomers: list[str] = []
         newcomer_since = ""
+        scan_skip = ""
         if getattr(source, "universe_from_holdings", False):
             universe = _kr_holdings_universe(storage, expected_etfs=_krx_expected_etfs(settings))
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
             symbols = sorted(set(symbols) | set(universe))
             # 창 하한은 `to_date`(호출부가 벤더 달력으로 뽑은 창 끝, ALPHA-883) 기준이다 —
-            # 여기서 달력을 다시 고르면 사실이 두 벌이 된다. 창 미지정 백필 진입에 대비해
-            # started_date 로만 떨어진다.
-            newcomers, newcomer_since = _newcomers(storage, universe, to_date or started_date)
+            # 여기서 달력을 다시 고르면 사실이 두 벌이 된다.
+            # ⚠️ `--from` 만 준 백필은 `to_date=None` 으로 들어오고, 그때 폴백 `started_date`
+            # 는 **UTC** 다. 어댑터는 그 자리에서 KST 오늘로 떨어지므로(kis_price `end_default`)
+            # 00:00~08:59 KST 진입이면 창 **길이**가 400 대신 401일이 된다. 이 축은 증분 창과
+            # 다르다 — 증분은 하루가 밀리면 그날 데이터를 통째로 잃지만, 여기 하루는 이미
+            # 4배 여유를 둔 이력 창이 하루 더 깊어질 뿐이다. 그 대가를 치르고 네 번째 KST
+            # 상수를 만들지 않는다. `from_date` 로 나가는 값은 아래 로그와 같은 값 하나다.
+            newcomers, newcomer_since, scan_skip = _newcomers(
+                storage, universe, to_date or started_date)
+            log["newcomer_scan"] = scan_skip or "ok"
+        else:
+            # 유니버스를 holdings 에서 파생하지 않는 소스(FMP)는 편입 판정 자체가 없다 —
+            # "안 돌았다"와 "못 돌았다"는 다른 사실이다.
+            log["newcomer_scan"] = "not_applicable"
         # 이미 그만큼 깊은 창으로 도는 런(명시 `--from` 백필)은 2차 수집이 순수 낭비다.
         if newcomers and from_date is not None and from_date <= newcomer_since:
+            # 편입은 있었지만 1차 창이 이미 그만큼 깊다 — 편입 0 인 런과 구분해 남긴다.
+            log["newcomer_scan"] = "covered_by_primary_window"
             newcomers = []
         log["symbols_newcomer"] = len(newcomers)
         log["newcomer_window_from"] = newcomer_since if newcomers else None

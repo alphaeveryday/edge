@@ -546,7 +546,209 @@ def test_newcomer_scan_ignores_malformed_price_partition_keys(tmp_path):
     _write_price_daily(storage, "9999-99-99", ["111111"])
     _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
 
-    newcomers, since = ingest_price_raw._newcomers(
+    newcomers, since, _ = ingest_price_raw._newcomers(
         storage, ["042700", "091160", "000660"], "2026-08-14")
     assert newcomers == ["000660"]
     assert since == "2025-07-10"
+
+
+def test_unreadable_latest_partition_is_not_read_as_everyone_new(tmp_path, caplog):
+    # WHY: 0과 부재는 대칭이 아니다. 최신 파티션이 있는데 티커를 하나도 못 읽는 것(정제가
+    #      컬럼명을 바꿈·빈 parquet·전 행 null)을 "아무도 없다"로 읽으면 유니버스 **전체**가
+    #      신규 편입이 되어 413종에 400일 창이 붙고(수집량 400배), 그 런이 success 로 끝나
+    #      canonical 손상이 성공 뒤로 숨는다 — 판정을 포기하고 사유를 남겨야 한다(Rule 12).
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(  # ticker 컬럼이 없는 파티션(스키마 드리프트)
+        [{"symbol": "042700", "close": 1.0}],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.ERROR):
+        newcomers, _, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "000660"], "2026-08-14")
+    assert newcomers == []  # 전 종목을 신규로 몰지 않는다
+    assert reason.startswith("unreadable_latest_partition")
+    assert any("티커를 못 읽은 행" in r.getMessage() for r in caplog.records)
+
+
+def test_malformed_price_partition_key_is_surfaced(tmp_path, caplog):
+    # WHY: 판정에서 빼는 것만으로는 부족하다 — canonical 에 비정상 파티션이 생겼다는 사실
+    #      자체가 결함 신호인데 조용히 버리면 아무도 모른다. 3줄 위 holdings 스캔이 같은
+    #      상황에서 이미 경고한다(Rule 11 — 같은 파일 안에서 관례가 갈리면 안 된다).
+    import logging
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "9999-99-99", ["111111"])
+    _write_price_daily(storage, "2026-08-13", ["042700"])
+
+    with caplog.at_level(logging.WARNING):
+        ingest_price_raw._newcomers(storage, ["042700"], "2026-08-14")
+    assert any("비정상 trade_date 파티션 키 무시" in r.getMessage() and "9999-99-99" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_partial_ticker_drift_also_abandons_the_judgment(tmp_path, caplog):
+    # WHY: **부분** 드리프트가 진짜 함정이다. 파일 하나만 정상이면 `known` 이 비지 않아
+    #      "티커를 하나도 못 읽었나" 식 가드는 그냥 통과하고, 손상 파일에 실려 있던 수백
+    #      종목이 전부 신규 편입으로 잡혀 각자 400일 창을 받는다 — 게다가 런은 성공한다.
+    #      정상 파티션은 티커당 한 행이라(_merge_partition 이 ticker 키로 병합) 못 읽는
+    #      행은 0이어야 한다. 한 행만 못 읽어도 판정을 포기한다.
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    prefix = canonical_price_daily_partition("KR", "2026-08-13")
+    _write_price_daily(storage, "2026-08-13", ["091160"])          # 정상 파일
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(                            # 같은 파티션의 드리프트 파일
+        [{"symbol": t, "close": 1.0} for t in ("042700", "000660")],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(f"{prefix}/part-00001.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.ERROR):
+        newcomers, _, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "000660", "091160"], "2026-08-14")
+    assert newcomers == []          # known={091160} 이라 안 걸렀으면 2종이 신규로 잡혔다
+    assert reason == "unreadable_latest_partition(trade_date=2026-08-13,rows=2)"
+    assert any("읽은 티커 1종" in r.getMessage() for r in caplog.records)
+
+
+def test_skipped_newcomer_scan_is_distinguishable_in_the_ledger(tmp_path):
+    # WHY: 판정을 건너뛴 런과 편입이 없던 런은 밖에서 같은 모양이다(symbols_newcomer=0).
+    #      로그 한 줄은 CloudWatch 를 뒤져야 보이고, 원장을 읽는 소비자는 둘을 구분 못 한다
+    #      — 손상이 '편입 없음'으로 위장된다(Rule 12). 사유를 collection_log 에 남긴다.
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(
+        [{"symbol": "091160", "close": 1.0}],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["symbols_newcomer"] == 0
+    assert log["newcomer_scan"].startswith("unreadable_latest_partition")  # '편입 없음'과 구분된다
+
+
+def test_healthy_scan_records_ok_in_the_ledger(tmp_path):
+    # WHY: 위 구분이 성립하려면 정상 런이 반드시 "ok"를 남겨야 한다 — 필드가 조건부로만
+    #      존재하면 '없음'이 다시 두 가지 뜻(정상/구버전)을 갖는다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "ok"
+
+
+def test_ticker_type_drift_is_unreadable_not_absent(tmp_path, caplog):
+    # WHY: '읽혔다'를 truthy 로만 판정하면 **타입 드리프트를 못 잡는다**. ticker 가 int64 로
+    #      바뀌면 known 은 정수 집합이 되어 문자열 유니버스와 하나도 안 겹치고, unreadable 은
+    #      0 이라 앞선 가드도 통과한다 — 전 종목(413)에 400일 2차 fetch 가 붙어 KIS 쿼터를
+    #      태운다. 유니버스와 같은 형태일 때만 읽힌 것으로 세야 한다.
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(   # ticker 가 정수 — truthy 지만 유니버스와 남남
+        [{"ticker": 42700, "close": 1.0}, {"ticker": 91160, "close": 2.0}],
+        schema=pa.schema([("ticker", pa.int64()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.ERROR):
+        newcomers, _, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "091160"], "2026-08-14")
+    assert newcomers == []                       # 전 종목을 신규로 몰지 않는다
+    assert reason == "unreadable_latest_partition(trade_date=2026-08-13,rows=2)"
+    assert any("읽은 티커 0종" in r.getMessage() for r in caplog.records)
+
+
+def test_padded_ticker_is_unreadable_too(tmp_path):
+    # WHY: 공백이 붙은 티커는 truthy 한 str 이라 타입 검사만으론 통과하는데, 유니버스는
+    #      `krx_short_code` 로 정규화된 값이라 매칭이 안 된다 — 그 종목이 조용히 편입으로
+    #      잡힌다. 정준형이 아닌 값은 '있다'가 아니라 '못 읽었다'다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-13", ["042700", " 091160"])
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["042700", "091160"], "2026-08-14")
+    assert newcomers == []
+    assert reason == "unreadable_latest_partition(trade_date=2026-08-13,rows=1)"
+
+
+def test_newcomer_scan_field_exists_on_every_path(tmp_path):
+    # WHY: 필드 부재가 '구버전 로그'·'비활성 런'·'스캔 전 실패' 셋을 한 모양으로 뭉개면
+    #      원장 소비자는 손상을 정상과 구분할 수 없다. 조기 종료·비옵트인 경로에서도
+    #      값이 있어야 그 구분이 성립한다(Rule 12).
+    settings = _settings(tmp_path)
+
+    # ① 비활성 소스 — 스캔에 도달하지 못했다
+    storage = LocalStorage(tmp_path / "lake1")
+    config = PriceSource(base_url=settings.price.source.base_url, api_key=None, symbol_map=_MAP)
+    assert ingest_price_raw.run(
+        settings, storage, FmpPriceSource(config, FakeClient({})), "r1") == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["newcomer_scan"] == "not_reached"
+
+    # ② holdings 파생을 안 쓰는 소스(FMP) — 판정 자체가 없는 런
+    storage = LocalStorage(tmp_path / "lake2")
+    config = PriceSource(base_url=settings.price.source.base_url, api_key="k", symbol_map=_MAP)
+    assert ingest_price_raw.run(
+        settings, storage, FmpPriceSource(config, FakeClient({"NVDA": [_bar("2026-08-14")]})),
+        "r2") == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["newcomer_scan"] == "not_applicable"
+
+
+def test_deep_primary_window_is_distinguishable_from_no_newcomer(tmp_path):
+    # WHY: 명시 --from 백필은 편입이 **있어도** 2차를 안 돈다. 그 런과 '편입이 없던 런'이
+    #      원장에서 같은 모양(symbols_newcomer=0)이면, 백필이 편입분을 덮었는지 아니면
+    #      애초에 없었는지 사후에 못 가린다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2025-01-01", "2026-08-14") == 0
+    assert len(source.calls) == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "covered_by_primary_window"
+    assert log["symbols_newcomer"] == 0
