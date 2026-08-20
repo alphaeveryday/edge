@@ -201,6 +201,72 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			""".formatted(RUN_DAY, RUN_DAY, RUN_DAY);
 
 	/**
+	 * 장중 발화 코호트의 일별 도달 사실. 날짜는 트리거에서만 자르고 하류는 그 자손을 따라간다.
+	 * 라우트별 최신 실행은 현재 상태(active/failed)를, 전체 실행은 결과 존재와 <b>현재</b>
+	 * PUBLISHED 결과 보유 여부를 답한다. 그래서 재실행이 수를 부풀리지 않고, 새 DRAFT 재실행만으로
+	 * 기존 게시본이 사라지지는 않는다. WITHDRAWN 전이는 게시 이력이 아니라 현재 상태라 감소한다.
+	 */
+	private static final String INTRADAY_ANALYSIS_TREND_SQL = """
+			WITH days AS (
+			    SELECT generate_series(CAST(? AS date) - (? - 1), CAST(? AS date),
+			                           interval '1 day')::date AS d
+			), trigger_cohort AS (
+			    SELECT m.trigger_id,
+			           (m.window_start AT TIME ZONE 'Asia/Seoul')::date AS d
+			      FROM minute_price_trigger m
+			     WHERE m.trigger_kind = 'FIRE'
+			       AND m.window_start >= ((CAST(? AS date) - (? - 1))::timestamp
+			                              AT TIME ZONE 'Asia/Seoul')
+			       AND m.window_start < ((CAST(? AS date) + 1)::timestamp
+			                             AT TIME ZONE 'Asia/Seoul')
+			), observation AS (
+			    SELECT t.d, t.trigger_id, o.contribution_observation_id AS obs_id,
+			           rt.explanation_route_id AS route_id
+			      FROM trigger_cohort t
+			      LEFT JOIN etf_contribution_observation o
+			        ON o.minute_price_trigger_id = t.trigger_id
+			      LEFT JOIN explanation_route rt
+			        ON rt.contribution_observation_id = o.contribution_observation_id
+			), latest_run AS (
+			    SELECT DISTINCT ON (r.explanation_route_id)
+			           r.explanation_route_id AS route_id, r.explanation_run_id AS run_id,
+			           r.run_status
+			      FROM explanation_run r
+			      JOIN observation o ON o.route_id = r.explanation_route_id
+			     ORDER BY r.explanation_route_id, r.explanation_as_of DESC,
+			              r.started_at DESC, r.explanation_run_id DESC
+			), reached AS (
+			    SELECT r.explanation_route_id AS route_id,
+			           bool_or(x.explanation_result_id IS NOT NULL) AS has_result,
+			           bool_or(x.publication_status = 'PUBLISHED') AS has_published
+			      FROM explanation_run r
+			      JOIN observation o ON o.route_id = r.explanation_route_id
+			      LEFT JOIN explanation_result x ON x.explanation_run_id = r.explanation_run_id
+			     GROUP BY r.explanation_route_id
+			), cohort AS (
+			    SELECT o.*, lr.run_id, lr.run_status,
+			           COALESCE(re.has_result, false) AS has_result,
+			           COALESCE(re.has_published, false) AS has_published
+			      FROM observation o
+			      LEFT JOIN latest_run lr ON lr.route_id = o.route_id
+			      LEFT JOIN reached re ON re.route_id = o.route_id
+			)
+			SELECT now() AS as_of, d.d,
+			       count(DISTINCT c.trigger_id) AS triggers,
+			       count(DISTINCT c.obs_id) AS observations,
+			       count(DISTINCT c.obs_id) FILTER (WHERE c.run_id IS NOT NULL) AS runs,
+			       count(DISTINCT c.obs_id) FILTER (
+			           WHERE c.run_status IN ('PENDING', 'RUNNING')) AS active_runs,
+			       count(DISTINCT c.obs_id) FILTER (WHERE c.run_status = 'FAILED') AS failed_runs,
+			       count(DISTINCT c.obs_id) FILTER (WHERE c.has_result) AS results,
+			       count(DISTINCT c.obs_id) FILTER (WHERE c.has_published) AS published
+			  FROM days d
+			  LEFT JOIN cohort c ON c.d = d.d
+			 GROUP BY d.d
+			 ORDER BY d.d
+			""";
+
+	/**
 	 * 계획만 있고 런 행이 없는 슬롯의 <b>날짜</b> — 런이 하나도 안 뜬 날을 조회 창 후보로 살린다.
 	 * 그런 날이야말로 콘솔이 열려야 하는 날이라, 런 축만 보면 기본 조회가 그 날을 건너뛴다.
 	 *
@@ -616,6 +682,23 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getObject("d", LocalDate.class),
 				rs.getLong("total_arguments"),
 				rs.getLong("resolved_arguments")), date);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days) {
+		List<IntradayAnalysisPoint> points = new ArrayList<>();
+		OffsetDateTime[] asOf = new OffsetDateTime[1];
+		jdbc.query(INTRADAY_ANALYSIS_TREND_SQL, (RowCallbackHandler) rs -> {
+			if (asOf[0] == null) {
+				asOf[0] = rs.getObject("as_of", OffsetDateTime.class);
+			}
+			points.add(new IntradayAnalysisPoint(rs.getObject("d", LocalDate.class),
+					rs.getLong("triggers"), rs.getLong("observations"), rs.getLong("runs"),
+					rs.getLong("active_runs"), rs.getLong("failed_runs"), rs.getLong("results"),
+					rs.getLong("published")));
+		}, maxDate, days, maxDate, maxDate, days, maxDate);
+		return new IntradayAnalysisTrend(asOf[0], List.copyOf(points));
 	}
 
 	/**

@@ -3,6 +3,7 @@ package com.edge.superadmin.controller;
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.EntityResolutionTrendResponse;
+import com.edge.superadmin.dto.IntradayAnalysisTrendResponse;
 import com.edge.superadmin.service.ConsoleFactsService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -37,5 +38,13 @@ public class ConsoleController {
 	public ApiResponse<EntityResolutionTrendResponse> entityResolutionTrend(
 			@RequestParam(required = false) String date) {
 		return ApiResponse.onSuccess(consoleFacts.entityResolutionTrend(date));
+	}
+
+	/** 장중 발화 코호트의 최근 일별 분석·게시 도달 사실. */
+	@GetMapping("/api/v1/console/trends/intraday-analysis")
+	public ApiResponse<IntradayAnalysisTrendResponse> intradayAnalysisTrend(
+			@RequestParam(required = false) String maxDate,
+			@RequestParam(defaultValue = "30") int days) {
+		return ApiResponse.onSuccess(consoleFacts.intradayAnalysisTrend(maxDate, days));
 	}
 }
