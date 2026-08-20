@@ -229,8 +229,13 @@ def _newcomers(
     # part-00000 을 쓴다(벤더 교차 충돌이 그 날 키를 전부 지우면 그렇다) ② 스키마 드리프트.
     # 그때 판정을 그냥 포기하면 **원 결함이 되살아난다** — 같은 런의 1차 수집이 신규 티커의
     # 최근 5일을 canonical 에 넣으므로 다음 런부터 그 티커는 '이미 있음'으로 보이고, 이력
-    # 창은 영영 안 붙는다. 기준이 하루 낡는 대가는 편입 후보가 조금 넓어지는 것뿐이다
-    # (과수집 방향 = 안전한 쪽). holdings 스캔이 부분 스냅샷에 대해 하는 것과 같은 자세다.
+    # 창은 영영 안 붙는다.
+    #
+    # **기준이 낡아도 놓치지 않는다** — 신규 상장·편입 종목은 더 오래된 파티션에도 없으므로
+    # 물러난 기준에서도 그대로 편입으로 잡힌다. 낡은 기준이 못 잡는 것은 '최근 파티션에만
+    # 빠진 종목'(거래정지 등)뿐인데, 그건 이미 이력이 있어 손실이 아니라 콜 낭비를 던 것이다.
+    # 틀리는 방향이 한쪽으로만 열려 있다는 뜻이라 물러나기가 안전하다.
+    # holdings 스캔이 부분 스냅샷에 대해 하는 것과 같은 자세다.
     for candidate in sorted(dates, reverse=True)[:NEWCOMER_REFERENCE_PARTITIONS]:
         known, unreadable = _partition_tickers(storage, candidate)
         if unreadable:
@@ -250,7 +255,11 @@ def _newcomers(
             date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
         return sorted(t for t in universe if t not in known), since, ""
 
-    # 소급 상한 안에 쓸 수 있는 파티션이 없다 — 판정을 포기하고 사유를 남긴다(Rule 12).
+    # 소급 상한 안에 쓸 수 있는 파티션이 하나도 없다. **여기서 조용히 성공하면 안 된다** —
+    # 같은 런의 1차 수집이 신규 티커의 최근 5일을 canonical 에 넣으므로, 다음 런부터 그
+    # 티커는 '이미 있음'으로 보이고 400일 이력은 영영 안 붙는다(ALPHA-989 그 자체). 사유만
+    # 남기고 넘어가면 그 영구 결손을 아무도 모른 채 지나간다. 호출부가 이 사유를 보고 런을
+    # partial 로 내린다 — 최근 10개 canonical 파티션이 전부 못 쓸 상태라는 건 알람이 맞다.
     scanned = min(len(dates), NEWCOMER_REFERENCE_PARTITIONS)
     return [], window_end, f"no_usable_partition(scanned={scanned})"
 
@@ -268,10 +277,24 @@ def _partition_tickers(storage: Storage, trade_date: str) -> tuple[set[str], int
         if key.endswith(".parquet"):
             for row in _read_parquet_rows(storage.get_bytes(key)):
                 ticker = row.get("ticker")
-                if isinstance(ticker, str) and ticker != "" and ticker == ticker.strip():
-                    known.add(ticker)
-                else:
+                if not isinstance(ticker, str) or not ticker.strip():
+                    # 문자열이 아니거나(int64 드리프트) 사실상 빈 값 — 못 읽었다.
+                    # truthy 만 보면 타입 드리프트를 못 잡는다: ticker 가 int64 로 바뀌면
+                    # 집합이 정수가 되어 문자열 유니버스와 하나도 안 겹치는데 '못 읽은 행'은
+                    # 0이라 어느 가드에도 안 걸린다.
                     unreadable += 1
+                    continue
+                if ticker != ticker.strip():
+                    # ⚠️ 공백이 붙은 티커는 **상류가 통과시킨다** — `normalize_price._blank`
+                    # 는 strip 후 비지 않으면 canonical 로 보낸다. 여기서 그걸 '못 읽음'으로
+                    # 치면 정상 파티션을 통째로 버리고, 그 값이 계속 있으면 편입 판정이
+                    # 영영 멈춘다(가드가 상류 계약보다 엄격하면 그 차이가 곧 결함이다).
+                    # 정체성은 정돈한 코드다(`parse.krx_short_code` 와 같은 축) — 정돈해
+                    # 읽되 사실은 드러낸다.
+                    logger.warning(
+                        "canonical 일봉 trade_date=%s 에 공백이 붙은 ticker %r — 정돈해 읽는다",
+                        trade_date, ticker)
+                known.add(ticker.strip())
     return known, unreadable
 
 
@@ -337,6 +360,8 @@ def run(
     # **1차 수집이** 계획한 대상 수. 2차는 신규 편입분만이라 이 값을 덮으면 안 된다 —
     # 아래 "매핑 대상 0 = skip" 판정이 편입 종목 수를 런 전체로 착각한다.
     planned_first: int | None = None
+    # 편입 판정 근거를 못 찾았는가 — 런을 partial 로 내리는 축(아래 실패 판정과 나란히).
+    scan_incomplete = False
 
     try:
         # 수집 유니버스 — 소스가 옵트인하면(KIS, ALPHA-419) canonical KR holdings 최신
@@ -367,6 +392,13 @@ def run(
             newcomers, newcomer_since, scan_skip = _newcomers(
                 storage, universe, to_date or started_date)
             log["newcomer_scan"] = scan_skip or "ok"
+            if scan_skip:
+                # 판정 근거를 못 찾았다 = 이 런이 놓친 편입 종목의 이력이 **영구** 결손이
+                # 될 수 있다. 수집 자체는 됐으니 error 는 아니지만 success 도 아니다.
+                logger.error(
+                    "신규 편입 판정 불가(%s) — 이 런에 편입 종목이 있었다면 그 이력은 "
+                    "영구 결손이다(다음 런은 '이미 있음'으로 본다)", scan_skip)
+                scan_incomplete = True
         else:
             # 유니버스를 holdings 에서 파생하지 않는 소스(FMP)는 편입 판정 자체가 없다 —
             # "안 돌았다"와 "못 돌았다"는 다른 사실이다.
@@ -439,7 +471,12 @@ def run(
             by_symbol[key] = failure
     failed_symbols = list(by_symbol.values())
     real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
-    if status == "success" and real_failures:
+    if status == "success" and scan_incomplete:
+        # 심볼 실패와 같은 급으로 다룬다 — 저장분은 있지만 온전치 않다. `failed_records` 는
+        # 건드리지 않는다(원장을 영구 INCOMPLETE 로 만드는 축이고, 이건 심볼 실패가 아니다).
+        status, exit_code = "partial", 1
+        error = error or f"신규 편입 판정 불가 ({log['newcomer_scan']})"
+    if status in ("success", "partial") and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
             error = f"모든 수집 심볼 실패 ({len(real_failures)}건)"

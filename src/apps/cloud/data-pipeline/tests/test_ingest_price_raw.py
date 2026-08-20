@@ -412,18 +412,21 @@ class _RecordingSource:
     universe_from_holdings = True
 
     def __init__(self, failures_by_call: dict[int, list[dict]] | None = None,
-                 planned_by_call: dict[int, int] | None = None):
+                 planned_by_call: dict[int, int] | None = None, emit: bool = True):
         self.calls: list[tuple[list[str], str | None, str | None]] = []
         self.fetch_failures: list[dict] = []
         self.planned_symbols: int | None = None
         self._failures = failures_by_call or {}
         self._planned = planned_by_call or {}
+        self._emit = emit
 
     def fetch(self, symbols, from_date=None, to_date=None):
         n = len(self.calls)
         self.calls.append((list(symbols), from_date, to_date))
         self.fetch_failures = list(self._failures.get(n, []))       # 진입 리셋
         self.planned_symbols = self._planned.get(n, len(symbols))   # 진입 덮어쓰기
+        if not self._emit:
+            return iter(())   # 전 심볼 실패 = 저장분 0
         return iter(({"market": "KR", "our_ticker": s} for s in symbols))
 
 
@@ -647,12 +650,17 @@ def test_skipped_newcomer_scan_is_distinguishable_in_the_ledger(tmp_path):
         f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
     source = _RecordingSource()
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    # 판정 근거를 못 찾은 런은 **조용히 성공하면 안 된다** — 같은 런의 1차 수집이 신규
+    # 티커를 canonical 에 넣어 다음 런부터 '이미 있음'으로 보이므로, 놓친 편입 종목의
+    # 이력은 영구 결손이 된다. 저장분은 있으니 error 가 아니라 partial 이다.
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
 
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
     assert log["symbols_newcomer"] == 0
     assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"  # '편입 없음'과 구분된다
+    assert log["ops"]["failed_records"] == 0   # 심볼 실패가 아니다 — 원장을 영구 INCOMPLETE 로 만들지 않는다
 
 
 def test_healthy_scan_records_ok_in_the_ledger(tmp_path):
@@ -698,17 +706,25 @@ def test_ticker_type_drift_is_unreadable_not_absent(tmp_path, caplog):
     assert any("읽은 티커 0종" in r.getMessage() for r in caplog.records)
 
 
-def test_padded_ticker_is_unreadable_too(tmp_path):
-    # WHY: 공백이 붙은 티커는 truthy 한 str 이라 타입 검사만으론 통과하는데, 유니버스는
-    #      `krx_short_code` 로 정규화된 값이라 매칭이 안 된다 — 그 종목이 조용히 편입으로
-    #      잡힌다. 정준형이 아닌 값은 '있다'가 아니라 '못 읽었다'다.
+def test_padded_ticker_is_tidied_not_discarded(tmp_path, caplog):
+    # WHY: 가드가 **상류 게이트보다 엄격하면 그 차이가 곧 결함**이다.
+    #      `normalize_price._blank` 는 strip 후 비지 않으면 canonical 로 보내므로
+    #      ' 091160' 은 정상 통과한 행이다. 그걸 '못 읽음'으로 치면 정상 파티션을 통째로
+    #      버리고, 그 값이 계속 있으면 편입 판정이 영영 멈춰 이력이 영구 결손된다.
+    #      정체성은 정돈한 코드다(`parse.krx_short_code` 와 같은 축) — 정돈해 읽되
+    #      드러낸다.
+    import logging
+
     storage = LocalStorage(tmp_path / "lake")
     _write_price_daily(storage, "2026-08-13", ["042700", " 091160"])
 
-    newcomers, _, reason = ingest_price_raw._newcomers(
-        storage, ["042700", "091160"], "2026-08-14")
-    assert newcomers == []
-    assert reason == "no_usable_partition(scanned=1)"
+    with caplog.at_level(logging.WARNING):
+        newcomers, since, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "091160", "000660"], "2026-08-14")
+    assert reason == ""                  # 파티션을 버리지 않는다
+    assert newcomers == ["000660"]       # ' 091160' 이 091160 으로 읽혀 편입이 아니다
+    assert since == "2025-07-10"
+    assert any("공백이 붙은 ticker" in r.getMessage() for r in caplog.records)
 
 
 def test_newcomer_scan_field_exists_on_every_path(tmp_path):
@@ -892,3 +908,43 @@ def test_all_reference_partitions_unusable_abandons_with_reason(tmp_path):
     newcomers, _, reason = ingest_price_raw._newcomers(storage, ["042700"], "2026-08-14")
     assert newcomers == []
     assert reason == "no_usable_partition(scanned=3)"
+
+
+def test_scan_incomplete_does_not_mask_symbol_failures(tmp_path):
+    # WHY: partial 판정이 두 축(판정 불가·심볼 실패)에서 오는데, 한쪽이 먼저 status 를
+    #      바꾸면 뒤 판정이 `status == "success"` 조건에 걸려 통째로 건너뛸 수 있다 —
+    #      그러면 실패 심볼이 런 상태에 반영되지 않고 failed_records 도 안 오른다.
+    #      두 사실은 서로를 가리지 않아야 한다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", [])  # 빈 파티션 → 판정 근거 없음
+    source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+    assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"
+    assert log["records_failed_symbols"] == 1     # 심볼 실패가 판정 불가에 가려지지 않는다
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_scan_incomplete_must_not_soften_a_total_collection_failure(tmp_path):
+    # WHY: partial 을 만드는 축이 둘이라(판정 불가·심볼 실패) **먼저 온 쪽이 뒤를 가린다.**
+    #      판정 불가가 status 를 partial 로 올려 두면, 뒤의 실패 판정이 `status ==
+    #      "success"` 조건에 걸려 통째로 건너뛴다 — 전 심볼이 죽어 저장분이 0인 런이
+    #      error 가 아니라 partial 로 마감된다. 덜 심각하게 보고하는 것도 위장이다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", [])   # 판정 근거 없음 → scan_incomplete
+    source = _RecordingSource(                       # 그리고 전 심볼 실패 → 저장분 0
+        failures_by_call={0: [{"symbol": "042700", "error": "boom"}]}, emit=False)
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_saved"] == 0
+    assert log["status"] == "error"        # partial 이면 실패가 판정 불가에 가려진 것이다
+    assert "모든 수집 심볼 실패" in log["error"]
