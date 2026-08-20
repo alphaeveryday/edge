@@ -39,6 +39,12 @@ import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
 import { InfoPopover } from './_shared/InfoPopover';
 import { minuteSessionHref, RUN_DETAIL_UNAVAILABLE } from './ops/investigation';
 import { LoadError } from './_shared/LoadError';
+import {
+  minuteDetailData,
+  resolveMinuteDetail,
+  shouldFetchMinuteDetail,
+} from '../domains/sources/minuteHistory';
+import type { MinuteDetailState } from '../domains/sources/minuteHistory';
 import '../styles/grid.css';
 
 /* 상태 → 박스 모양. 색 하나에만 기대지 않도록 테두리·사선·빈 칸을 함께 쓴다.
@@ -169,7 +175,7 @@ export function GridPage() {
   const { data: grid, isPending, isError, error } = useSourceGrid();
   /* 실시간 레인의 하루치 세션 — 격자 원장에 없는 행을 세션 원장이 답할 수 있는 만큼만 채운다.
    * 실패해도 격자는 그린다(세션이 없으면 예전처럼 상태 미제공). */
-  const { data: minute, isError: minuteError } = useMinuteStatus();
+  const { data: minute, isError: minuteError, dataUpdatedAt: minuteUpdatedAt } = useMinuteStatus();
 
   if (isError) return <LoadError error={error} />;
   if (isPending) return <PageSkeleton rows={6} />;
@@ -186,7 +192,14 @@ export function GridPage() {
     );
   }
 
-  return <GridBody grid={grid} minute={minute} minuteError={minuteError} />;
+  return (
+    <GridBody
+      grid={grid}
+      minute={minute}
+      minuteError={minuteError}
+      minuteUpdatedAt={minuteUpdatedAt}
+    />
+  );
 }
 
 interface Selection {
@@ -221,16 +234,37 @@ function GridBody({
   grid,
   minute,
   minuteError = false,
+  minuteUpdatedAt = 0,
   mock = false,
 }: {
   grid: SourceGrid;
   minute?: MinuteStatus;
   minuteError?: boolean;
+  minuteUpdatedAt?: number;
   mock?: boolean;
 }) {
   const [kindFilter, setKindFilter] = useState<DatasetKindLabel | 'all'>('all');
   const [domainFilter, setDomainFilter] = useState<DatasetDomain | 'all'>('all');
   const [selected, setSelected] = useState<Selection | null>(null);
+  const selectedMinuteDate = selected?.dataset.sessionDataset ? selected.date : undefined;
+  const fetchSelectedMinute = shouldFetchMinuteDetail(selectedMinuteDate, minute?.date, mock);
+  const selectedMinuteQuery = useMinuteStatus(selectedMinuteDate, fetchSelectedMinute);
+  const selectedMinuteData = minuteDetailData(
+    selectedMinuteDate,
+    minute,
+    minuteUpdatedAt,
+    selectedMinuteQuery.data,
+    selectedMinuteQuery.dataUpdatedAt,
+  );
+  const selectedMinuteDetail = selectedMinuteDate && selected?.dataset.sessionDataset && !mock
+    ? resolveMinuteDetail(
+        selectedMinuteDate,
+        selected.dataset.sessionDataset,
+        selectedMinuteData,
+        selectedMinuteQuery.isPending,
+        fetchSelectedMinute ? selectedMinuteQuery.isError : minuteError,
+      )
+    : undefined;
 
   /* 상세 카드는 격자 아래에 붙는다 — 데이터셋·날짜가 늘면 접힌 화면 밖이라 박스를 눌러도
    * 아무 일이 없는 것처럼 보인다(10일 × 10행에서 top 815px 을 쟀다).
@@ -397,8 +431,7 @@ function GridBody({
       {selected && (
         <DayDetail
           sel={selected}
-          live={sessionState(selected.dataset, selected.date, minute)}
-          minute={minute}
+          minuteDetail={selectedMinuteDetail}
           mock={mock}
           onClose={() => setSelected(null)}
         />
@@ -465,14 +498,12 @@ function boxTip(
  */
 function DayDetail({
   sel,
-  live,
-  minute,
+  minuteDetail,
   mock,
   onClose,
 }: {
   sel: Selection;
-  live?: { state: DayState; basis: string } | null;
-  minute?: MinuteStatus;
+  minuteDetail?: MinuteDetailState;
   mock: boolean;
   onClose: () => void;
 }) {
@@ -485,9 +516,17 @@ function DayDetail({
      * 여기서 다시 적으면 구분자 든 벤더가 생기는 날 이 링크만 조용히 깨져 도착 화면이
      * "이 벤더 세션이 없습니다"라는 **거짓 부재**를 단언한다. */
     const href = minuteSessionHref(date, d.sessionDataset);
-    const sessions = minute?.date === date
-      ? minute.sessions.filter((session) => session.dataset === d.sessionDataset)
-      : [];
+    const sessions = minuteDetail?.kind === 'ready' ? minuteDetail.sessions : [];
+    const live = minuteDetail?.kind === 'ready'
+      ? sessionState(d, date, minuteDetail.minute)
+      : null;
+    const detailMessage = minuteDetail?.kind === 'loading'
+      ? '선택 날짜의 장중 세션을 불러오는 중입니다.'
+      : minuteDetail?.kind === 'error'
+        ? '선택 날짜의 장중 세션을 조회하지 못했습니다. 세션 부재로 판단하지 않습니다.'
+        : minuteDetail?.kind === 'stale'
+          ? '다른 날짜의 응답은 표시하지 않습니다. 선택 날짜 응답을 기다리고 있습니다.'
+          : null;
     return (
       <div className="card" id="gd-detail">
         <div className="card-head">
@@ -518,12 +557,18 @@ function DayDetail({
           </button>
         </div>
         <div className="card-pad">
+          {minuteDetail?.kind === 'ready' && minuteDetail.refreshFailed && (
+            <p className="t-xs" style={{ color: 'var(--fg-3)', marginTop: 0 }}>
+              세션 갱신에 실패해 이 날짜의 직전 실측을 유지합니다.
+            </p>
+          )}
           <table className="table">
             <thead>
               <tr>
                 <th>실행 인스턴스</th>
                 <th>유형</th>
                 <th>상태</th>
+                <th>창 증거</th>
                 <th>상세</th>
               </tr>
             </thead>
@@ -538,15 +583,34 @@ function DayDetail({
                     </td>
                     <td><span className="chip">실시간 세션</span></td>
                     <td><StatusBadge tone={STATE_TONE[state.state]}>{state.state}</StatusBadge></td>
+                    <td className="t-xs">
+                      정상 {session.windows.valid} · 빈 데이터 {session.windows.validEmpty} · 불완전{' '}
+                      {session.windows.incomplete} · 결손 {session.windows.missing} · 무효{' '}
+                      {session.windows.invalid} · 무증거 {session.windows.overdueNoEvidence} / 기대{' '}
+                      {session.expectedWindowCount}
+                    </td>
                     <td><Link to={sessionHref} className="gd-linkbtn">세션 상세 →</Link></td>
                   </tr>
                 );
               })}
-              {sessions.length === 0 && (
+              {minuteDetail?.kind === 'ready' && sessions.length === 0 && (
+                <tr>
+                  <td colSpan={4}>이 날짜에 기록된 {d.label} 벤더 세션이 없습니다.</td>
+                  <td><Link to={href} className="gd-linkbtn">날짜 상세 →</Link></td>
+                </tr>
+              )}
+              {detailMessage && (
+                <tr>
+                  <td colSpan={4}>{detailMessage}</td>
+                  <td><Link to={href} className="gd-linkbtn">날짜 상세 →</Link></td>
+                </tr>
+              )}
+              {!minuteDetail && mock && (
                 <tr>
                   <td className="mono">{d.sessionDataset} · {date}</td>
                   <td><span className="chip">실시간 세션</span></td>
-                  <td><StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>{live?.state ?? '상태 미제공'}</StatusBadge></td>
+                  <td><StatusBadge tone={STATE_TONE['상태 미제공']}>상태 미제공</StatusBadge></td>
+                  <td>—</td>
                   <td><Link to={href} className="gd-linkbtn">세션 상세 →</Link></td>
                 </tr>
               )}
