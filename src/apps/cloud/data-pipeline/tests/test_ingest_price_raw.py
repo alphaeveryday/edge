@@ -576,7 +576,7 @@ def test_unreadable_latest_partition_is_not_read_as_everyone_new(tmp_path, caplo
         newcomers, _, reason = ingest_price_raw._newcomers(
             storage, ["042700", "000660"], "2026-08-14")
     assert newcomers == []  # 전 종목을 신규로 몰지 않는다
-    assert reason.startswith("unreadable_latest_partition")
+    assert reason == "no_usable_partition(scanned=1)"
     assert any("티커를 못 읽은 행" in r.getMessage() for r in caplog.records)
 
 
@@ -622,7 +622,7 @@ def test_partial_ticker_drift_also_abandons_the_judgment(tmp_path, caplog):
         newcomers, _, reason = ingest_price_raw._newcomers(
             storage, ["042700", "000660", "091160"], "2026-08-14")
     assert newcomers == []          # known={091160} 이라 안 걸렀으면 2종이 신규로 잡혔다
-    assert reason == "unreadable_latest_partition(trade_date=2026-08-13,rows=2)"
+    assert reason == "no_usable_partition(scanned=1)"
     assert any("읽은 티커 1종" in r.getMessage() for r in caplog.records)
 
 
@@ -652,7 +652,7 @@ def test_skipped_newcomer_scan_is_distinguishable_in_the_ledger(tmp_path):
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["symbols_newcomer"] == 0
-    assert log["newcomer_scan"].startswith("unreadable_latest_partition")  # '편입 없음'과 구분된다
+    assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"  # '편입 없음'과 구분된다
 
 
 def test_healthy_scan_records_ok_in_the_ledger(tmp_path):
@@ -694,7 +694,7 @@ def test_ticker_type_drift_is_unreadable_not_absent(tmp_path, caplog):
         newcomers, _, reason = ingest_price_raw._newcomers(
             storage, ["042700", "091160"], "2026-08-14")
     assert newcomers == []                       # 전 종목을 신규로 몰지 않는다
-    assert reason == "unreadable_latest_partition(trade_date=2026-08-13,rows=2)"
+    assert reason == "no_usable_partition(scanned=1)"
     assert any("읽은 티커 0종" in r.getMessage() for r in caplog.records)
 
 
@@ -708,7 +708,7 @@ def test_padded_ticker_is_unreadable_too(tmp_path):
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["042700", "091160"], "2026-08-14")
     assert newcomers == []
-    assert reason == "unreadable_latest_partition(trade_date=2026-08-13,rows=1)"
+    assert reason == "no_usable_partition(scanned=1)"
 
 
 def test_newcomer_scan_field_exists_on_every_path(tmp_path):
@@ -752,3 +752,143 @@ def test_deep_primary_window_is_distinguishable_from_no_newcomer(tmp_path):
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["newcomer_scan"] == "covered_by_primary_window"
     assert log["symbols_newcomer"] == 0
+
+
+def test_same_symbol_failing_in_both_fetches_counts_once(tmp_path):
+    # WHY: `failed_symbols` 의 축은 **심볼**이다(records_failed_symbols·ops.failed_records).
+    #      편입 종목이 1차(증분 창)와 2차(이력 창) 모두에서 죽으면 실패 심볼은 1종인데,
+    #      두 목록을 그냥 이으면 2로 보고돼 원장이 실제보다 나쁜 상태를 가리킨다 —
+    #      failed_records 는 원장 완전성 판정의 입력이라 부풀면 런이 영구 INCOMPLETE 다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
+    fail = [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}]
+    source = _RecordingSource(failures_by_call={0: fail, 1: fail})  # 같은 심볼이 두 번
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+
+    assert len(source.calls) == 2
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_failed_symbols"] == 1      # 2종이 아니다
+    assert log["ops"]["failed_records"] == 1
+    assert log["status"] == "partial"
+
+
+def test_real_failure_beats_truncation_for_the_same_symbol(tmp_path):
+    # WHY: 중복 제거가 **절단을 남기면** 더 나쁘다. 절단(kind=truncation)은 성공으로 치는
+    #      종류라(ALPHA-351 — 데이터는 유효하고 다음 창이 이어받는다), 실제 실패를 절단이
+    #      덮으면 partial 이어야 할 런이 success·exit 0 으로 끝난다. 심각한 쪽이 이겨야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource(failures_by_call={
+        0: [{"symbol": "042700", "our_ticker": "042700", "kind": "truncation", "error": "잘림"}],
+        1: [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}],
+    })
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_failed_symbols"] == 1
+    assert log["failed_symbols"][0].get("kind") != "truncation"  # 실제 실패가 남았다
+    assert log["status"] == "partial"                            # 절단만 남았으면 success 였다
+
+
+def test_scan_failure_is_not_reported_as_never_reached(tmp_path):
+    # WHY: 스캔에 **못 간 런**과 **갔다가 죽은 런**은 진단이 다르다(전자는 비활성·설정,
+    #      후자는 레이크 장애·비달력일 창). 둘 다 not_reached 로 남으면 원장만 보고는
+    #      어느 쪽인지 못 가린다 — '모든 경로에 값이 있다'가 '값이 사실이다'는 아니다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    source = _RecordingSource()
+
+    # 비달력일 창 끝 → _newcomers 안에서 date.fromisoformat 이 죽는다
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-13-99") == 1
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "error"
+    assert log["newcomer_scan"] == "scan_failed"   # not_reached 가 아니다
+
+
+def test_empty_latest_partition_falls_back_instead_of_abandoning(tmp_path, caplog):
+    # WHY: **판정을 포기하면 원 결함이 되살아난다.** `normalize_price._write_canonical` 은
+    #      병합 결과가 0행이어도 part-00000 을 쓴다(벤더 교차 충돌이 그날 키를 전부 지우면
+    #      그렇다). 그 빈 파티션을 만난 런이 판정을 포기하면, 같은 런의 1차 수집이 신규
+    #      티커의 최근 5일을 canonical 에 넣어 다음 런부터는 '이미 있음'으로 보인다 —
+    #      400일 이력은 영영 안 붙는다(ALPHA-989 그 자체). 기준을 하루 물리는 대가는
+    #      편입 후보가 조금 넓어지는 것뿐이고, 그건 과수집 = 안전한 방향이다.
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-12", ["091160", "000660"])   # 쓸 수 있는 기준
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(                              # 최신인데 0행
+        [], schema=pa.schema([("ticker", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.WARNING):
+        newcomers, since, reason = ingest_price_raw._newcomers(
+            storage, ["091160", "000660", "042700"], "2026-08-14")
+    assert reason == ""                 # 포기하지 않는다
+    assert newcomers == ["042700"]      # 08-12 기준으로 정상 판정
+    assert since == "2025-07-10"
+    assert any("파티션이 비었다" in r.getMessage() for r in caplog.records)
+
+
+def test_drifted_latest_partition_falls_back_to_clean_one(tmp_path):
+    # WHY: 위와 같은 이유가 스키마 드리프트에도 적용된다 — 최신이 못 쓸 뿐이지 이전 기준이
+    #      멀쩡하면 판정은 계속돼야 한다. 손상 파티션을 기준으로 삼지 않는 것과, 판정
+    #      자체를 포기하는 것은 다른 일이다.
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-12", ["091160"])
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(
+        [{"symbol": "091160", "close": 1.0}],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""
+    assert newcomers == ["042700"]
+
+
+def test_all_reference_partitions_unusable_abandons_with_reason(tmp_path):
+    # WHY: 물러나기에도 바닥이 있어야 한다 — 상한 안 전부가 못 쓸 파티션이면 그때는 정말
+    #      판정할 근거가 없다. 그 사실이 원장에 남아야 '편입 없음'과 구분된다.
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    empty = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(
+        [], schema=pa.schema([("ticker", pa.string()), ("close", pa.float64())])), empty)
+    for d in ("2026-08-11", "2026-08-12", "2026-08-13"):
+        storage.put_bytes(
+            f"{canonical_price_daily_partition('KR', d)}/part-00000.parquet", empty.getvalue())
+
+    newcomers, _, reason = ingest_price_raw._newcomers(storage, ["042700"], "2026-08-14")
+    assert newcomers == []
+    assert reason == "no_usable_partition(scanned=3)"

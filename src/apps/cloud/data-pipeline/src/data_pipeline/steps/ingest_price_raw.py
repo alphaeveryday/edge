@@ -181,6 +181,10 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
 # 아니라 수백 거래일인데, 그 창을 **전 종목**(413종)에 매일 물리면 수집량이 통째로 커진다.
 NEWCOMER_LOOKBACK_DAYS = 400
 
+# 편입 판정의 기준 파티션을 찾아 거슬러 올라가는 상한. holdings 쪽 상한과 숫자는 같지만
+# **다른 사실**이라 따로 둔다(저건 부분 스냅샷 보강, 이건 못 쓰는 최신 파티션 회피).
+NEWCOMER_REFERENCE_PARTITIONS = 10
+
 
 def _newcomers(
     storage: Storage, universe: list[str], window_end: str
@@ -211,46 +215,64 @@ def _newcomers(
     marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="
     found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     found.discard("")
-    # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 '최신'으로 읽는다 — holdings 쪽
+    # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 기준으로 삼는다 — holdings 쪽
     # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정·같은 경고를 쓴다(사실을 하나로).
     dates = {d for d in found if _is_calendar_date(d)}
     if found - dates:
         logger.warning("canonical 일봉 비정상 trade_date 파티션 키 무시: %s", sorted(found - dates))
     if not dates:
-        # canonical 이 통째로 비었다 — 손상이 아니라 새 레이크다(아래 도크스트링).
+        # canonical 이 통째로 비었다 — 손상이 아니라 새 레이크다(위 도크스트링).
         return [], window_end, ""
-    latest = max(dates)
+
+    # 최신 하나만 보지 않고 **쓸 수 있는 파티션을 만날 때까지 물러난다.** 최신이 못 쓸 수
+    # 있기 때문이다: ① `normalize_price._write_canonical` 은 병합 결과가 0행이어도
+    # part-00000 을 쓴다(벤더 교차 충돌이 그 날 키를 전부 지우면 그렇다) ② 스키마 드리프트.
+    # 그때 판정을 그냥 포기하면 **원 결함이 되살아난다** — 같은 런의 1차 수집이 신규 티커의
+    # 최근 5일을 canonical 에 넣으므로 다음 런부터 그 티커는 '이미 있음'으로 보이고, 이력
+    # 창은 영영 안 붙는다. 기준이 하루 낡는 대가는 편입 후보가 조금 넓어지는 것뿐이다
+    # (과수집 방향 = 안전한 쪽). holdings 스캔이 부분 스냅샷에 대해 하는 것과 같은 자세다.
+    for candidate in sorted(dates, reverse=True)[:NEWCOMER_REFERENCE_PARTITIONS]:
+        known, unreadable = _partition_tickers(storage, candidate)
+        if unreadable:
+            # 못 읽은 행이 하나라도 있으면 그 파티션은 기준으로 못 쓴다 — '그 종목들이
+            # 없다'로 읽으면 손상 파일에 실려 있던 종목이 통째로 편입으로 잡힌다.
+            logger.error(
+                "canonical 일봉 trade_date=%s 에서 티커를 못 읽은 행 %d (읽은 티커 %d종) — "
+                "기준으로 쓰지 않고 이전 파티션으로 물러난다(스키마 드리프트 의심)",
+                candidate, unreadable, len(known))
+            continue
+        if not known:
+            logger.warning(
+                "canonical 일봉 trade_date=%s 파티션이 비었다 — 이전 파티션으로 물러난다",
+                candidate)
+            continue
+        since = (
+            date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
+        return sorted(t for t in universe if t not in known), since, ""
+
+    # 소급 상한 안에 쓸 수 있는 파티션이 없다 — 판정을 포기하고 사유를 남긴다(Rule 12).
+    scanned = min(len(dates), NEWCOMER_REFERENCE_PARTITIONS)
+    return [], window_end, f"no_usable_partition(scanned={scanned})"
+
+
+def _partition_tickers(storage: Storage, trade_date: str) -> tuple[set[str], int]:
+    """그 파티션의 (읽은 티커 집합, 못 읽은 행 수).
+
+    '읽혔다'는 유니버스와 **같은 형태**일 때만이다 — 공백 없는 비어있지 않은 str.
+    truthy 만 보면 타입 드리프트를 못 잡는다: ticker 가 int64 로 바뀌면 집합이 정수가 되어
+    문자열 유니버스와 하나도 안 겹치는데 '못 읽은 행'은 0이라 어느 가드에도 안 걸린다.
+    """
     known: set[str] = set()
     unreadable = 0
-    for key in storage.list_keys(canonical_price_daily_partition("KR", latest) + "/"):
+    for key in storage.list_keys(canonical_price_daily_partition("KR", trade_date) + "/"):
         if key.endswith(".parquet"):
             for row in _read_parquet_rows(storage.get_bytes(key)):
-                # truthy 만 보면 **타입 드리프트를 못 잡는다** — ticker 가 int64 로 바뀌면
-                # `known` 은 정수 집합이 되고 유니버스(문자열)와 하나도 안 겹쳐 전 종목이
-                # 신규 편입으로 잡힌다(`unreadable` 은 0이라 아래 가드도 통과). 유니버스와
-                # **같은 형태**(공백 없는 비어있지 않은 str)일 때만 읽힌 것으로 센다.
                 ticker = row.get("ticker")
-                if isinstance(ticker, str) and ticker == ticker.strip() != "":
+                if isinstance(ticker, str) and ticker != "" and ticker == ticker.strip():
                     known.add(ticker)
                 else:
                     unreadable += 1
-    if unreadable or not known:
-        # 🔴 **최신 파티션에서 티커를 못 읽은 행이 있다** — 스키마 드리프트(정제가 컬럼명을
-        # 바꿈)·빈 parquet·ticker null 이다. 이걸 "그 종목들이 없다"로 읽으면 손상 파일에
-        # 실려 있던 종목이 통째로 신규 편입이 되어 400일 창이 붙는다(전 파일이 드리프트하면
-        # 413종 = 수집량 400배). 0과 부재는 대칭이 아니다 — 판정을 포기한다.
-        #
-        # ⚠️ **한 행만 못 읽어도 포기한다.** 파티션은 거래일 하나라 티커당 한 행이고
-        # (`_merge_partition` 이 ticker 키로 병합), 정상이라면 못 읽는 행이 0 이어야 한다.
-        # "정상 행이 하나라도 있으면 통과"로 두면 부분 드리프트가 가드를 그냥 지나간다.
-        reason = f"unreadable_latest_partition(trade_date={latest},rows={unreadable})"
-        logger.error(
-            "canonical 일봉 최신 파티션(trade_date=%s)에서 티커를 못 읽은 행 %d — 신규 편입 "
-            "판정을 건너뛴다(스키마 드리프트·빈 파티션 의심). 읽은 티커 %d종",
-            latest, unreadable, len(known))
-        return [], window_end, reason
-    since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
-    return sorted(t for t in universe if t not in known), since, ""
+    return known, unreadable
 
 
 JOB_NAME = "ingest_price_raw"
@@ -338,6 +360,10 @@ def run(
             # 다르다 — 증분은 하루가 밀리면 그날 데이터를 통째로 잃지만, 여기 하루는 이미
             # 4배 여유를 둔 이력 창이 하루 더 깊어질 뿐이다. 그 대가를 치르고 네 번째 KST
             # 상수를 만들지 않는다. `from_date` 로 나가는 값은 아래 로그와 같은 값 하나다.
+            # 스캔 **진입**을 먼저 남긴다 — 아래 호출이 예외로 죽으면(파티션 읽기 실패·
+            # window_end 가 비달력일) 초기값 "not_reached" 가 그대로 남아 '스캔에 못 갔다'로
+            # 위장된다. 실제로는 갔다가 죽은 것이고, 그 둘은 진단이 다르다.
+            log["newcomer_scan"] = "scan_failed"
             newcomers, newcomer_since, scan_skip = _newcomers(
                 storage, universe, to_date or started_date)
             log["newcomer_scan"] = scan_skip or "ok"
@@ -398,7 +424,20 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     #  - MAX_PAGES 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로 본다
     #    (ALPHA-351). 절단도 아래 로그(failed_symbols)엔 남겨 fail-loud 는 유지한다.
-    failed_symbols = carried_failures + list(getattr(source, "fetch_failures", []))
+    # 같은 심볼이 1·2차 수집에서 모두 실패하면 **한 번만** 센다 — 이 목록의 축은 심볼이고
+    # (`records_failed_symbols`·`ops.failed_records`), 두 번 세면 실패 1종이 2종으로 보고돼
+    # 원장이 실제보다 나쁜 상태를 가리킨다.
+    by_symbol: dict[tuple, dict] = {}
+    for failure in carried_failures + list(getattr(source, "fetch_failures", [])):
+        key = (failure.get("our_ticker"), failure.get("symbol"))
+        prev = by_symbol.get(key)
+        if prev is None:
+            by_symbol[key] = failure
+        elif prev.get("kind") == "truncation" and failure.get("kind") != "truncation":
+            # ⚠️ 절단이 실제 실패를 덮으면 안 된다 — 절단은 성공으로 치는 종류라(ALPHA-351)
+            # 그걸 남기면 partial 이어야 할 런이 success 로 끝난다. 심각한 쪽이 이긴다.
+            by_symbol[key] = failure
+    failed_symbols = list(by_symbol.values())
     real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
     if status == "success" and real_failures:
         if saved == 0:
