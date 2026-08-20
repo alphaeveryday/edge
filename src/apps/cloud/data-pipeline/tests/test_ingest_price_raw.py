@@ -425,7 +425,7 @@ class _RecordingSource:
         self.calls.append((list(symbols), from_date, to_date))
         self.fetch_failures = list(self._failures.get(n, []))       # 진입 리셋
         self.planned_symbols = self._planned.get(n, len(symbols))   # 진입 덮어쓰기
-        if not self._emit:
+        if not self._emit or n in getattr(self, "_emit_calls", set()):
             return iter(())   # 전 심볼 실패 = 저장분 0
         return iter(({"market": "KR", "our_ticker": s} for s in symbols))
 
@@ -441,12 +441,14 @@ def test_newcomer_gets_history_window_others_keep_incremental(tmp_path):
     _write_price_daily(storage, "2026-08-13", ["000660", "091160", "NVDA"])  # 042700 이 없다
     source = _RecordingSource()
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
 
     assert len(source.calls) == 2
     (first_syms, first_from, _), (second_syms, second_from, second_to) = source.calls
-    assert first_from is None and {"042700", "000660", "091160"} <= set(first_syms)
-    assert second_syms == ["042700"]        # 편입분만 — 이미 이력이 있는 종목은 안 간다
+    assert first_from == "2026-08-09"                 # 나머지는 증분 창 그대로
+    assert {"000660", "091160"} <= set(first_syms)
+    assert "042700" not in first_syms      # 편입분은 증분 창에서 **빠진다**
+    assert second_syms == ["042700"]       # 이력 창으로만 받는다
     assert second_from == "2025-07-10"      # 2026-08-14 − 400일
     assert second_to == "2026-08-14"
 
@@ -465,7 +467,7 @@ def test_no_newcomer_means_no_second_fetch(tmp_path):
     _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
     source = _RecordingSource()
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
 
     assert len(source.calls) == 1
     log = json.loads(storage.get_bytes(
@@ -484,7 +486,7 @@ def test_second_fetch_does_not_erase_first_pass_failures(tmp_path):
     _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
     source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
 
     assert len(source.calls) == 2
     log = json.loads(storage.get_bytes(
@@ -505,7 +507,7 @@ def test_second_fetch_planned_count_does_not_flip_run_to_skipped(tmp_path):
     _write_price_daily(storage, "2026-08-13", ["091160"])
     source = _RecordingSource(planned_by_call={1: 0})  # 2차가 대상 0을 보고
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
 
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
@@ -537,7 +539,7 @@ def test_empty_canonical_price_declares_no_newcomers(tmp_path):
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     source = _RecordingSource()
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
     assert len(source.calls) == 1
 
 
@@ -653,7 +655,7 @@ def test_skipped_newcomer_scan_is_distinguishable_in_the_ledger(tmp_path):
     # 판정 근거를 못 찾은 런은 **조용히 성공하면 안 된다** — 같은 런의 1차 수집이 신규
     # 티커를 canonical 에 넣어 다음 런부터 '이미 있음'으로 보이므로, 놓친 편입 종목의
     # 이력은 영구 결손이 된다. 저장분은 있으니 error 가 아니라 partial 이다.
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
 
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
@@ -672,7 +674,7 @@ def test_healthy_scan_records_ok_in_the_ledger(tmp_path):
     _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
     source = _RecordingSource()
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["newcomer_scan"] == "ok"
@@ -782,7 +784,7 @@ def test_same_symbol_failing_in_both_fetches_counts_once(tmp_path):
     fail = [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}]
     source = _RecordingSource(failures_by_call={0: fail, 1: fail})  # 같은 심볼이 두 번
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
 
     assert len(source.calls) == 2
     log = json.loads(storage.get_bytes(
@@ -805,7 +807,7 @@ def test_real_failure_beats_truncation_for_the_same_symbol(tmp_path):
         1: [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}],
     })
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["records_failed_symbols"] == 1
@@ -921,7 +923,7 @@ def test_scan_incomplete_does_not_mask_symbol_failures(tmp_path):
     _write_price_daily(storage, "2026-08-13", [])  # 빈 파티션 → 판정 근거 없음
     source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["status"] == "partial"
@@ -942,7 +944,7 @@ def test_scan_incomplete_must_not_soften_a_total_collection_failure(tmp_path):
     source = _RecordingSource(                       # 그리고 전 심볼 실패 → 저장분 0
         failures_by_call={0: [{"symbol": "042700", "error": "boom"}]}, emit=False)
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 1
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["records_saved"] == 0
@@ -964,7 +966,7 @@ def test_corrupt_parquet_does_not_stop_the_days_collection(tmp_path):
         f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", b"not-parquet")
     source = _RecordingSource()
 
-    code = ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14")
+    code = ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14")
 
     assert len(source.calls) == 1                        # 1차 수집이 **돌았다**
     assert storage.list_keys("raw") != []                # 그리고 raw 가 저장됐다
@@ -1022,3 +1024,71 @@ def test_partition_with_one_corrupt_file_is_not_accepted_partially(tmp_path):
     assert reason == ""
     # 08-13 을 부분 뷰로 받아들였으면 042700 이 편입으로 잡혔다. 08-12 로 물러나야 0종이다.
     assert newcomers == []
+
+
+def test_unbounded_primary_window_covers_newcomers(tmp_path):
+    # WHY: 하한 없는 창(`--to` 만 준 백필)은 어댑터가 종목 이력 끝까지 페이지네이션하므로
+    #      400일 이력 창보다 **깊다**. 그때 2차 수집은 순수 낭비다 — 'from_date 가 None 이면
+    #      증분'이라고 읽으면 편입분을 두 번 받는다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])   # 042700 편입
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert len(source.calls) == 1
+    assert "042700" in source.calls[0][0]                   # 1차 창이 이미 덮는다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "covered_by_primary_window"
+
+
+def test_failed_history_fetch_leaves_no_rows_so_it_retries(tmp_path):
+    # WHY: **partial 로 보고했는데 결손이 영구가 되는** 자리다. 편입 종목을 증분 창에서도
+    #      받으면 이력 fetch 가 실패해도 5일치는 남고, SFN 은 partial 런도 정제로 계속
+    #      보내므로(statemachine.tf NotifyRawPartial) 그 5일치가 canonical 에 들어간다.
+    #      그러면 다음 런의 존재 기반 판정이 '이미 있음'으로 보고 400일 이력은 영영
+    #      재시도되지 않는다. 편입분을 증분 창에서 빼면 실패한 종목은 행이 하나도 안 남아
+    #      계속 편입으로 잡힌다 — 새 상태 저장 없이 성공할 때까지 자격이 유지된다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource(                       # 2차(이력) 창에서 편입 종목이 죽는다
+        failures_by_call={1: [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}]})
+    source._emit_calls = {1}                          # 그 창은 행을 안 낸다
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+
+    [raw_key] = storage.list_keys("raw")
+    tickers = {json.loads(line)["our_ticker"]
+               for line in storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()}
+    assert "042700" not in tickers   # 실패한 편입분의 행이 **하나도 없다** → 다음 런이 다시 잡는다
+    assert {"091160", "005930"} <= tickers   # 나머지는 증분 창으로 정상 수집됐다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+
+
+def test_partition_listing_failure_is_isolated_too(tmp_path):
+    # WHY: 파일 읽기만 격리하면 절반이다 — 목록 조회(S3 ListObjects)도 실패한다. 그게
+    #      예외로 올라가면 파일 손상과 똑같이 그날 수집 전체가 죽고, 새 raw 가 안 생겨
+    #      매 런이 같은 자리에서 죽는다. 봇이 "per candidate/file" 이라 한 candidate 쪽이다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    class ListFailingStorage(LocalStorage):
+        def list_keys(self, prefix):
+            if prefix.startswith(canonical_price_daily_partition("KR", "2026-08-13")):
+                raise OSError("S3 ListObjects 실패")
+            return super().list_keys(prefix)
+
+    storage = ListFailingStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-12", ["091160"])   # 멀쩡한 이전 기준
+    _write_price_daily(storage, "2026-08-13", ["091160"])   # 이 파티션의 목록 조회가 죽는다
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""                  # 예외가 아니라 물러나기다
+    assert newcomers == ["042700"]       # 08-12 기준으로 판정이 계속된다

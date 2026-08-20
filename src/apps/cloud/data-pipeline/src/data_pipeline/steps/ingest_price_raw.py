@@ -275,7 +275,14 @@ def _partition_tickers(storage: Storage, trade_date: str) -> tuple[set[str], int
     """
     known: set[str] = set()
     unreadable = 0
-    for key in storage.list_keys(canonical_price_daily_partition("KR", trade_date) + "/"):
+    try:
+        keys = list(storage.list_keys(canonical_price_daily_partition("KR", trade_date) + "/"))
+    except Exception:
+        # 파일 읽기와 같은 이유로 목록 조회도 격리한다 — 여기서 올리면 그날 수집이 죽는다.
+        logger.exception("canonical 일봉 trade_date=%s 목록 조회 실패 — 이 파티션은 기준에서 뺀다",
+                         trade_date)
+        return set(), 1
+    for key in keys:
         if key.endswith(".parquet"):
             try:
                 rows = _read_parquet_rows(storage.get_bytes(key))
@@ -370,9 +377,6 @@ def run(
     exit_code = 0
     # 2차 수집(신규 편입 이력)이 소스의 `fetch_failures` 를 리셋하기 전에 옮겨 둔 1차분.
     carried_failures: list[dict] = []
-    # **1차 수집이** 계획한 대상 수. 2차는 신규 편입분만이라 이 값을 덮으면 안 된다 —
-    # 아래 "매핑 대상 0 = skip" 판정이 편입 종목 수를 런 전체로 착각한다.
-    planned_first: int | None = None
     # 편입 판정 근거를 못 찾았는가 — 런을 partial 로 내리는 축(아래 실패 판정과 나란히).
     scan_incomplete = False
 
@@ -417,30 +421,43 @@ def run(
             # "안 돌았다"와 "못 돌았다"는 다른 사실이다.
             log["newcomer_scan"] = "not_applicable"
         # 이미 그만큼 깊은 창으로 도는 런(명시 `--from` 백필)은 2차 수집이 순수 낭비다.
-        if newcomers and from_date is not None and from_date <= newcomer_since:
+        if newcomers and (from_date is None or from_date <= newcomer_since):
             # 편입은 있었지만 1차 창이 이미 그만큼 깊다 — 편입 0 인 런과 구분해 남긴다.
             log["newcomer_scan"] = "covered_by_primary_window"
             newcomers = []
         log["symbols_newcomer"] = len(newcomers)
         log["newcomer_window_from"] = newcomer_since if newcomers else None
-        for record in source.fetch(symbols, from_date, to_date):
-            fetched += 1
-            partitions[record["market"]].append(record)
-        planned_first = getattr(source, "planned_symbols", None)
+        # 🔴 **편입분은 이력 창으로만 받는다 — 증분 창에서 뺀다.** 둘 다 받으면 이력 fetch 가
+        # 실패해도 증분 5일치는 남고, SFN 은 partial 런도 NormalizeParallel 로 **계속 보내므로**
+        # (`statemachine.tf` NotifyRawPartial) 그 5일치가 canonical 에 들어간다. 그러면 다음
+        # 런의 존재 기반 판정이 그 티커를 '이미 있음'으로 보고, **400일 이력은 영영 재시도되지
+        # 않는다** — partial 로 보고했는데 결손은 영구다. 빼 두면 실패한 종목은 행이 하나도
+        # 안 남아 계속 편입으로 잡힌다(성공할 때까지 자격 유지 = 새 상태 저장 없이 자가복구).
+        # 이력 창은 증분 창을 포함하므로(위 가드가 아닌 경우만 여기 온다) 커버리지 손실은 없다.
+        newcomer_set = set(newcomers)
+        passes = [([s for s in symbols if s not in newcomer_set], from_date, to_date)]
         if newcomers:
-            # 유니버스가 넓어진 그 런이 이력을 메운다(ALPHA-989). 편입은 드문 사건이라
-            # 평시엔 이 분기 자체가 안 돈다 — 조용히 지나가지 않게 로그로 드러낸다.
+            # 편입은 드문 사건이라 평시엔 이 창 자체가 안 생긴다 — 로그로 드러낸다.
             logger.warning(
-                "유니버스 신규 편입 %d종 — 이력 창(%s~%s)으로 추가 수집: %s",
+                "유니버스 신규 편입 %d종 — 이력 창(%s~%s)으로 수집(증분 창에서 제외): %s",
                 len(newcomers), newcomer_since, to_date or started_date, ",".join(newcomers),
             )
-            # ⚠️ `fetch` 는 진입 때 `fetch_failures` 를 **리셋**한다 — 2차 호출이 1차분 실패를
-            # 지우기 전에 옮겨 둔다. 안 옮기면 1차에서 죽은 심볼이 런 상태(partial/error)에서
-            # 사라져 결손이 성공으로 마감된다.
-            carried_failures.extend(getattr(source, "fetch_failures", []))
-            for record in source.fetch(newcomers, newcomer_since, to_date):
+            passes.append((newcomers, newcomer_since, to_date))
+        planned_total: int | None = None
+        for index, (pass_symbols, window_from, window_to) in enumerate(passes):
+            if index:
+                # ⚠️ `fetch` 는 진입 때 `fetch_failures` 를 **리셋**한다 — 다음 호출이 앞 실패를
+                # 지우기 전에 옮겨 둔다. 안 옮기면 앞에서 죽은 심볼이 런 상태(partial/error)
+                # 에서 사라져 결손이 성공으로 마감된다.
+                carried_failures.extend(getattr(source, "fetch_failures", []))
+            for record in source.fetch(pass_symbols, window_from, window_to):
                 fetched += 1
                 partitions[record["market"]].append(record)
+            # "매핑 대상 0 = skip" 은 **런 전체**의 판정이라 창별로 나눠 세면 안 된다 — 편입
+            # 창만 보고 0을 읽으면 정상 수집한 런이 skip 으로 위장된다. 합으로 센다.
+            planned = getattr(source, "planned_symbols", None)
+            if planned is not None:
+                planned_total = (planned_total or 0) + planned
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("가격 수집 중단(4xx/429): %s", exc)
@@ -498,7 +515,7 @@ def run(
 
     # 활성 소스인데 매핑된 대상이 0개면(심볼맵 누락·전 대상 미매핑 KR 등) 수집이
     # 사실상 불가능한 설정 — success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).
-    if status == "success" and planned_first == 0:
+    if status == "success" and planned_total == 0:
         status, reason = "skipped", "no mapped targets"
 
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한
