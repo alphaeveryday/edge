@@ -236,6 +236,10 @@ def _newcomers(
     # 빠진 종목'(거래정지 등)뿐인데, 그건 이미 이력이 있어 손실이 아니라 콜 낭비를 던 것이다.
     # 틀리는 방향이 한쪽으로만 열려 있다는 뜻이라 물러나기가 안전하다.
     # holdings 스캔이 부분 스냅샷에 대해 하는 것과 같은 자세다.
+    # 창 하한은 루프 **앞**에서 만든다 — 비달력일 `window_end` 는 입력 오류이고 1차 fetch 도
+    # 같은 값을 쓰므로, 파티션 읽기 성패와 무관하게 즉시 올라가야 한다(여기서 삼키면 창이
+    # 틀린 채로 수집이 돈다). 읽기 실패와 달리 이건 격리 대상이 아니다.
+    since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
     for candidate in sorted(dates, reverse=True)[:NEWCOMER_REFERENCE_PARTITIONS]:
         known, unreadable = _partition_tickers(storage, candidate)
         if unreadable:
@@ -251,8 +255,6 @@ def _newcomers(
                 "canonical 일봉 trade_date=%s 파티션이 비었다 — 이전 파티션으로 물러난다",
                 candidate)
             continue
-        since = (
-            date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
         return sorted(t for t in universe if t not in known), since, ""
 
     # 소급 상한 안에 쓸 수 있는 파티션이 하나도 없다. **여기서 조용히 성공하면 안 된다** —
@@ -275,7 +277,18 @@ def _partition_tickers(storage: Storage, trade_date: str) -> tuple[set[str], int
     unreadable = 0
     for key in storage.list_keys(canonical_price_daily_partition("KR", trade_date) + "/"):
         if key.endswith(".parquet"):
-            for row in _read_parquet_rows(storage.get_bytes(key)):
+            try:
+                rows = _read_parquet_rows(storage.get_bytes(key))
+            except Exception:
+                # 🔴 **여기서 예외를 올리면 그날 가격 수집이 통째로 안 돈다** — 이 판정은
+                # 1차 `source.fetch` **앞**에 있어서, 깨진 parquet 하나나 S3 일시 오류가
+                # 수집 전체를 죽인다. 게다가 새 raw 가 안 생겨 그 파티션이 계속 최신으로
+                # 남으므로 **매 런이 같은 자리에서 죽는다**(수동 복구 전까지 영구 정지).
+                # 파일 단위로 격리해 그 파티션을 '못 씀'으로 분류하고 이전으로 물러난다.
+                logger.exception("canonical 일봉 parquet 읽기 실패: %s — 이 파티션은 기준에서 뺀다", key)
+                unreadable += 1
+                continue
+            for row in rows:
                 ticker = row.get("ticker")
                 if not isinstance(ticker, str) or not ticker.strip():
                     # 문자열이 아니거나(int64 드리프트) 사실상 빈 값 — 못 읽었다.

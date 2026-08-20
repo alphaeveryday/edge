@@ -948,3 +948,77 @@ def test_scan_incomplete_must_not_soften_a_total_collection_failure(tmp_path):
     assert log["records_saved"] == 0
     assert log["status"] == "error"        # partial 이면 실패가 판정 불가에 가려진 것이다
     assert "모든 수집 심볼 실패" in log["error"]
+
+
+def test_corrupt_parquet_does_not_stop_the_days_collection(tmp_path):
+    # WHY: 이 판정은 1차 `source.fetch` **앞**에 있다. 깨진 parquet 하나나 S3 일시 오류가
+    #      예외로 올라가면 그날 가격 수집이 통째로 안 돈다 — 그리고 새 raw 가 안 생기니
+    #      그 파티션이 계속 최신으로 남아 **매 런이 같은 자리에서 죽는다**(수동 복구 전까지
+    #      영구 정지). 보조 판정이 본 수집을 죽이면 안 된다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    storage.put_bytes(                                   # parquet 이 아닌 바이트
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", b"not-parquet")
+    source = _RecordingSource()
+
+    code = ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14")
+
+    assert len(source.calls) == 1                        # 1차 수집이 **돌았다**
+    assert storage.list_keys("raw") != []                # 그리고 raw 가 저장됐다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_saved"] > 0
+    assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"
+    assert log["status"] == "partial" and code == 1      # 판정 불가는 여전히 드러난다
+
+
+def test_corrupt_latest_partition_falls_back_to_a_readable_one(tmp_path):
+    # WHY: 깨진 파일은 '그 파티션을 못 씀'이지 '판정 불가'가 아니다 — 이전 파티션이 멀쩡하면
+    #      편입 판정은 계속돼야 한다. 여기서 포기하면 그 런의 편입 종목 이력이 영구 결손된다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-12", ["091160"])
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", b"corrupt")
+
+    newcomers, since, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""
+    assert newcomers == ["042700"]
+    assert since == "2025-07-10"
+
+
+def test_malformed_window_end_is_not_swallowed(tmp_path):
+    # WHY: 비달력일 창 끝은 **입력 오류**이고 1차 fetch 도 같은 값을 쓴다 — 읽기 실패처럼
+    #      격리해 삼키면 창이 틀린 채로 수집이 돈다. 파티션을 하나도 못 읽는 상황에서도
+    #      이 오류는 그대로 올라와야 한다(격리 대상이 아니다).
+    import pytest
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    with pytest.raises(ValueError):
+        ingest_price_raw._newcomers(storage, ["091160"], "2026-13-99")
+
+
+def test_partition_with_one_corrupt_file_is_not_accepted_partially(tmp_path):
+    # WHY: 파티션에 정상 파일과 깨진 파일이 섞이면 `known` 이 비지 않는다 — 그걸 그대로
+    #      기준으로 삼으면 **깨진 파일에 실려 있던 종목이 통째로 신규 편입**으로 잡혀 각자
+    #      400일 창을 받는다. 부분 스키마 드리프트와 같은 함정이 손상 경로로 재현되는 자리다.
+    #      못 읽은 파일이 하나라도 있으면 그 파티션은 기준에서 뺀다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-12", ["091160", "042700"])       # 멀쩡한 이전 기준
+    _write_price_daily(storage, "2026-08-13", ["091160"])                 # 최신의 정상 파일
+    storage.put_bytes(                                                     # 같은 파티션의 깨진 파일
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00001.parquet", b"corrupt")
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == ""
+    # 08-13 을 부분 뷰로 받아들였으면 042700 이 편입으로 잡혔다. 08-12 로 물러나야 0종이다.
+    assert newcomers == []
