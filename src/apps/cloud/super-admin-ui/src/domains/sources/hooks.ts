@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { sourcesRepository } from './index';
 import type { NewsLineageStage } from './types';
+import { minuteStatusQueryKey } from './minuteHistory';
 
 /**
  * @param runKey 볼 런의 슬롯 키. 없으면 최신 런.
@@ -56,7 +57,7 @@ export function useHoldingsImpact(runKey?: string, enabled = true) {
  */
 export function useMinuteStatus(date?: string, enabled = true) {
   return useQuery({
-    queryKey: ['sources', 'minute', date ?? null],
+    queryKey: minuteStatusQueryKey(date),
     queryFn: () => sourcesRepository.minuteStatus(date),
     enabled,
     refetchInterval: 60_000,
