@@ -19,6 +19,7 @@
  *   3. **DEAD 의 해소 여부**. 당일 누적 카운트뿐이라 "지금 장애"라고 단정할 수 없다.
  */
 import type { MinuteGapWindow, MinuteJobCounts, MinuteSession } from './types.ts';
+import type { MinuteDetailState } from './minuteHistory.ts';
 
 /** ui-kit BadgeTone 과 같은 어휘지만 모듈이 UI 를 import 하지 않도록 여기서 재선언한다 */
 export type ViewTone = 'active' | 'neutral' | 'gated' | 'warn' | 'blocked' | 'env';
@@ -804,6 +805,25 @@ export function hasNoSignal(status: { sessions: unknown[]; newsJobs: MinuteJobCo
  */
 export const healthyClaimed = (jobs: MinuteJobCounts): number =>
   Math.max(0, jobs.claimed - jobs.claimedExpired);
+
+/** job 카운터의 포함 관계를 보존한 짧은 원장 근거. */
+export const jobEvidence = (jobs: MinuteJobCounts): string =>
+  `대기 ${jobs.waiting} · 처리 중 ${healthyClaimed(jobs)} · 유효 lease 없음 ${jobs.claimedExpired} · 성공 ${jobs.succeeded} · DEAD ${jobs.dead}`;
+
+/** 뉴스 날짜 job은 세션 귀속이 아니며, 조회 실패를 로딩으로 위장하지 않는다. */
+export function newsDateJobEvidence(detail: MinuteDetailState | undefined): string {
+  if (!detail) return '상태 미제공';
+  if (detail.kind === 'ready') return jobEvidence(detail.minute.newsJobs);
+  if (detail.kind === 'error') return '조회 실패';
+  if (detail.kind === 'stale') return '다른 날짜 응답 · 선택 날짜 조회 대기';
+  return '조회 중';
+}
+
+/** phase 판정과 별개로 서버가 준 lease 원시 값을 숨기지 않는다. */
+export const leaseEvidence = (session: MinuteSession): string => {
+  const lease = session.leaseExpired === true ? '만료' : session.leaseExpired === false ? '유효' : '부재';
+  return `${liveness(session).basis} · lease ${lease} · lease_expires_at ${session.leaseExpiresAt ?? '—'}`;
+};
 
 /**
  * 아직 끝나지 않은 job 이 있는가 — **"0 건"이 진행 중인지 미가동인지 가르는 술어**다.

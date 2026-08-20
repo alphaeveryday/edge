@@ -57,6 +57,7 @@ export function resolveMinuteDetail(
       refreshFailed: isError,
     };
   }
+  if (data && isError) return { kind: 'error' };
   if (data) return { kind: 'stale' };
   if (isError) return { kind: 'error' };
   if (isPending) return { kind: 'loading' };

@@ -86,6 +86,11 @@ test('다른 날짜의 늦은 응답은 선택 날짜의 빈 세션으로 합성
     resolveMinuteDetail('2026-08-18', 'price_minute', status('2026-08-19', [session()]), false, false),
     { kind: 'stale' },
   );
+  assert.deepEqual(
+    resolveMinuteDetail('2026-08-18', 'price_minute', status('2026-08-19', [session()]), false, true),
+    { kind: 'error' },
+    '다른 날짜 응답만 남은 채 선택 날짜 조회가 실패하면 대기로 위장하지 않는다',
+  );
 });
 
 test('초기 조회 실패는 부재가 아니며, 같은 날짜의 직전 실측은 갱신 실패 뒤에도 유지한다', () => {
