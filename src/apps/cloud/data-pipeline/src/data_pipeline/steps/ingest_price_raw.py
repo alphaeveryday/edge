@@ -208,11 +208,14 @@ NEWCOMER_DEPTH_PARTITIONS = 60
 def _newcomers(
     storage: Storage, universe: list[str], window_end: str
 ) -> tuple[list[str], str, str]:
-    """(유니버스 신규 편입 티커, 그들에게 붙일 창 하한, **판정 포기 사유**) — canonical 일봉
-    **최신 파티션에 없는** 티커 (ALPHA-989).
+    """(유니버스 신규 편입 티커, 그들에게 붙일 창 하한, **판정 상태**) — canonical 일봉에
+    **이력이 얕은** 티커 (ALPHA-989).
 
-    세 번째 값은 판정을 못 한 사유다(정상이면 빈 문자열). 호출부가 collection_log 에 실어
-    운영에서 보이게 한다 — 로그 한 줄만으로는 "판정을 건너뛴 런"과 "편입이 없던 런"이
+    세 번째 값은 판정 상태다. **`ok` 로 시작하면 판정이 섰다**는 뜻이고 괄호 안은 어떤
+    모드로 섰는지다(`ok` · `ok(depth_unavailable)` · `ok(bootstrap_empty_canonical)`).
+    그 밖은 판정을 **못 했다**는 뜻이라 호출부가 런을 partial 로 내린다
+    (`no_usable_partition(...)` · `scan_failed(...)`). 호출부가 collection_log 에 실어
+    운영에서 보이게 한다 — 로그 한 줄만으로는 "판정을 못 한 런"과 "편입이 없던 런"이
     바깥에서 같은 모양(symbols_newcomer=0)이라 구분이 안 된다.
 
     유니버스는 canonical holdings 파생이라 ETF 가 추가되면 **즉시** 넓어지는데, 수집 창은
@@ -231,7 +234,11 @@ def _newcomers(
     곧 이력의 시작이기 때문이다 — 새 레이크의 이력은 이 경로가 아니라 명시적 `--from` 백필이
     맡는다(그게 ALPHA-989 의 나머지 절반이다).
     """
-    marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="
+    # 창 하한을 **가장 먼저** 만든다 — 비달력일 `window_end` 는 입력 오류이고 1차 fetch 도
+    # 같은 값을 쓰므로, 파티션 읽기 성패와 무관하게 즉시 올라가야 한다(삼키면 창이 틀린 채로
+    # 수집이 돈다). 읽기 실패와 달리 이건 격리 대상이 아니다.
+    since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
+    marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="'''
     try:
         found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     except Exception:
@@ -240,7 +247,7 @@ def _newcomers(
         # — 그리고 새 raw 가 안 생겨 매 런이 같은 자리에서 죽는다. 판정만 포기하고 사유를
         # 남긴다(호출부가 런을 partial 로 내린다).
         logger.exception("canonical 일봉 파티션 목록 조회 실패 — 편입 판정을 건너뛴다")
-        return [], window_end, "scan_failed(list_partitions)"
+        return [], since, "scan_failed(list_partitions)"
     found.discard("")
     # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 기준으로 삼는다 — holdings 쪽
     # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정·같은 경고를 쓴다(사실을 하나로).
@@ -248,8 +255,13 @@ def _newcomers(
     if found - dates:
         logger.warning("canonical 일봉 비정상 trade_date 파티션 키 무시: %s", sorted(found - dates))
     if not dates:
-        # canonical 이 통째로 비었다 — 손상이 아니라 새 레이크다(위 도크스트링).
-        return [], window_end, ""
+        # canonical 이 통째로 비었다 — 손상이 아니라 새 레이크다. **아무도 이력이 없으므로
+        # 전 종목이 편입이다.** 예전엔 여기서 빈 목록을 냈는데, 그러면 첫 런이 증분 5일치만
+        # 넣고 그 다음부터는 '이미 있음'으로 보여 이력이 영영 안 붙는다 — dev 레이크가 실제로
+        # 그렇게 27거래일에 갇혀 있었다(ALPHA-989 의 발단). 한 번 깊게 받으면 파티션이 깊어져
+        # 다음 런부터 깊이 검사가 켜지므로 이 모드는 **한 런으로 끝난다.**
+        logger.warning("canonical 일봉이 비었다 — 유니버스 전체(%d종)를 편입으로 본다", len(universe))
+        return sorted(universe), since, "ok(bootstrap_empty_canonical)"
 
     # 최신 하나만 보지 않고 **쓸 수 있는 파티션을 만날 때까지 물러난다.** 최신이 못 쓸 수
     # 있기 때문이다: ① `normalize_price._write_canonical` 은 병합 결과가 0행이어도
@@ -263,10 +275,6 @@ def _newcomers(
     # 빠진 종목'(거래정지 등)뿐인데, 그건 이미 이력이 있어 손실이 아니라 콜 낭비를 던 것이다.
     # 틀리는 방향이 한쪽으로만 열려 있다는 뜻이라 물러나기가 안전하다.
     # holdings 스캔이 부분 스냅샷에 대해 하는 것과 같은 자세다.
-    # 창 하한은 루프 **앞**에서 만든다 — 비달력일 `window_end` 는 입력 오류이고 1차 fetch 도
-    # 같은 값을 쓰므로, 파티션 읽기 성패와 무관하게 즉시 올라가야 한다(여기서 삼키면 창이
-    # 틀린 채로 수집이 돈다). 읽기 실패와 달리 이건 격리 대상이 아니다.
-    since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
     for candidate in sorted(dates, reverse=True)[:NEWCOMER_REFERENCE_PARTITIONS]:
         known, unreadable = _partition_tickers(storage, candidate)
         if unreadable:
@@ -285,9 +293,22 @@ def _newcomers(
         # 깊이 축 — 이 티커가 **오래전에도** 있었는가. 없으면 얕게 들어온 것이라 편입으로
         # 남긴다. canonical 자체가 그만큼 깊지 않으면 그 질문에 답할 수 없으므로(부트스트랩)
         # 존재 판정만 쓴다 — 답할 수 없는 것을 '아니오'로 읽으면 전 종목이 편입이 된다.
+        # 깊이 축 — 이 티커가 **오래전에도** 있었는가. 없으면 얕게 들어온 것이라 편입이다.
+        #
+        # ⚠️ 깊이를 **답할 수 없을 때**(canonical 이 그만큼 깊지 않거나 그 시점 파티션이 전부
+        # 못 쓸 때) 검사를 생략하면 그 구간에서 오염이 그대로 성립한다 — 판정 불가 런의 증분
+        # 5일치나 실패한 이력의 부분 행이 '이미 있음'을 만들고 재시도 자격이 사라진다.
+        # 모르는 것은 '증명되지 않음'이지 '괜찮음'이 아니다. 전 종목을 편입으로 본다.
+        # 비싸 보이지만 **한 런으로 끝난다** — 400일 창을 한 번 받으면 파티션이 깊어져
+        # 다음 런부터 검사가 켜진다. 그 모드가 켜졌다는 사실은 원장에 남긴다.
         deep = _deep_reference_tickers(storage, sorted(dates, reverse=True), candidate)
-        shallow = sorted(t for t in universe if t not in known or (deep is not None and t not in deep))
-        return shallow, since, ""
+        if deep is None:
+            logger.warning(
+                "canonical 일봉이 깊이 판정(%d거래일)을 답할 만큼 깊지 않다 — 유니버스 전체를 "
+                "편입으로 본다(400일 창 한 번이면 해소된다)", NEWCOMER_DEPTH_PARTITIONS)
+        shallow = sorted(
+            t for t in universe if t not in known or deep is None or t not in deep)
+        return shallow, since, "ok" if deep is not None else "ok(depth_unavailable)"
 
 
     # 소급 상한 안에 쓸 수 있는 파티션이 하나도 없다. **여기서 조용히 성공하면 안 된다** —
@@ -296,7 +317,7 @@ def _newcomers(
     # 남기고 넘어가면 그 영구 결손을 아무도 모른 채 지나간다. 호출부가 이 사유를 보고 런을
     # partial 로 내린다 — 최근 10개 canonical 파티션이 전부 못 쓸 상태라는 건 알람이 맞다.
     scanned = min(len(dates), NEWCOMER_REFERENCE_PARTITIONS)
-    return [], window_end, f"no_usable_partition(scanned={scanned})"
+    return [], since, f"no_usable_partition(scanned={scanned})"
 
 
 def _deep_reference_tickers(
@@ -441,7 +462,7 @@ def run(
         log["symbols_from_holdings"] = 0
         newcomers: list[str] = []
         newcomer_since = ""
-        scan_skip = ""
+        scan_status = "ok"
         if getattr(source, "universe_from_holdings", False):
             universe = _kr_holdings_universe(storage, expected_etfs=_krx_expected_etfs(settings))
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
@@ -458,15 +479,15 @@ def run(
             # window_end 가 비달력일) 초기값 "not_reached" 가 그대로 남아 '스캔에 못 갔다'로
             # 위장된다. 실제로는 갔다가 죽은 것이고, 그 둘은 진단이 다르다.
             log["newcomer_scan"] = "scan_failed"
-            newcomers, newcomer_since, scan_skip = _newcomers(
+            newcomers, newcomer_since, scan_status = _newcomers(
                 storage, universe, to_date or started_date)
-            log["newcomer_scan"] = scan_skip or "ok"
-            if scan_skip:
+            log["newcomer_scan"] = scan_status
+            if not scan_status.startswith("ok"):
                 # 판정 근거를 못 찾았다 = 이 런이 놓친 편입 종목의 이력이 **영구** 결손이
                 # 될 수 있다. 수집 자체는 됐으니 error 는 아니지만 success 도 아니다.
                 logger.error(
                     "신규 편입 판정 불가(%s) — 이 런에 편입 종목이 있었다면 그 이력은 "
-                    "영구 결손이다(다음 런은 '이미 있음'으로 본다)", scan_skip)
+                    "영구 결손이다(다음 런은 '이미 있음'으로 본다)", scan_status)
                 scan_incomplete = True
         else:
             # 유니버스를 holdings 에서 파생하지 않는 소스(FMP)는 편입 판정 자체가 없다 —

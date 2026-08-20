@@ -399,6 +399,16 @@ def _write_price_daily(storage, trade_date: str, tickers: list[str]) -> None:
                       buf.getvalue())
 
 
+def _write_depth_history(storage, tickers: list[str], days: int = 65, end: str = "2026-08-13"):
+    """`days` 개 거래일 파티션에 같은 티커 집합을 깔아 깊이 판정의 배경을 만든다."""
+    from datetime import date, timedelta
+
+    d = date.fromisoformat(end)
+    for _ in range(days):
+        _write_price_daily(storage, d.isoformat(), tickers)
+        d -= timedelta(days=1)
+
+
 class _RecordingSource:
     """옵트인 소스 — fetch 호출을 (symbols, from, to) 로 전부 기록한다.
 
@@ -437,6 +447,7 @@ def test_newcomer_gets_history_window_others_keep_incremental(tmp_path):
     #      전 종목에 긴 창을 물리는 것은 답이 아니므로 **편입분만** 두 번째 창으로 간다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["000660", "091160", "NVDA"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160"), ("000660", "091160")])
     _write_price_daily(storage, "2026-08-13", ["000660", "091160", "NVDA"])  # 042700 이 없다
     source = _RecordingSource()
@@ -463,6 +474,7 @@ def test_no_newcomer_means_no_second_fetch(tmp_path):
     #      15:40 시장 레인 전체가 매일 그 대가를 치른다 — 분기 자체가 안 돌아야 한다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
     source = _RecordingSource()
@@ -482,6 +494,7 @@ def test_second_fetch_does_not_erase_first_pass_failures(tmp_path):
     #      success(exit 0)로 마감된다 — 결손을 성공으로 위장하는 그 자리다(Rule 12).
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
     source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
@@ -503,6 +516,7 @@ def test_second_fetch_planned_count_does_not_flip_run_to_skipped(tmp_path):
     #      대상 0으로 뒤집혀 skip 으로 위장된다 — 수집분이 있는데 skip 은 거짓이다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])
     source = _RecordingSource(planned_by_call={1: 0})  # 2차가 대상 0을 보고
@@ -530,17 +544,25 @@ def test_explicit_deep_backfill_window_skips_second_fetch(tmp_path):
     assert len(source.calls) == 1  # 1차 창(2025-01-01)이 편입 창(2025-07-10)보다 깊다
 
 
-def test_empty_canonical_price_declares_no_newcomers(tmp_path):
-    # WHY: canonical 이 통째로 비면 전 종목이 '신규'라 판정이 뜻을 잃는다. 그때 긴 창을
-    #      붙이면 새 레이크의 첫 런이 전 종목 400일 수집으로 부풀고, 그건 이 경로가 아니라
-    #      명시적 `--from` 백필이 맡는 일이다(스텝이 백필 정책을 몰래 정하지 않는다).
+def test_empty_canonical_flags_everyone_so_bootstrap_gets_history(tmp_path):
+    # WHY: canonical 이 비었으면 **아무도 이력이 없다.** 예전엔 여기서 빈 목록을 냈는데,
+    #      그러면 첫 런이 증분 5일치만 넣고 그 다음부터는 '이미 있음'으로 보여 이력이 영영
+    #      안 붙는다 — dev 레이크가 실제로 그렇게 27거래일에 갇혀 있었다(ALPHA-989 의 발단).
+    #      전 종목에 400일 창을 한 번 물리면 파티션이 깊어져 다음 런부터 깊이 검사가 켜지므로
+    #      이 모드는 **한 런으로 끝난다**. 비싸 보이는 쪽이 실은 유일하게 수렴하는 쪽이다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     source = _RecordingSource()
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
-    assert len(source.calls) == 1
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
+    assert len(source.calls) == 2
+    assert source.calls[1][1] == "2025-07-10"          # 이력 창으로 받는다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "ok(bootstrap_empty_canonical)"
+    assert log["status"] == "success"                  # 판정이 선 것이지 못 한 게 아니다
 
 
 def test_newcomer_scan_ignores_malformed_price_partition_keys(tmp_path):
@@ -548,6 +570,7 @@ def test_newcomer_scan_ignores_malformed_price_partition_keys(tmp_path):
     #      티커 집합을 기준으로 삼아 **정상 종목 전체가 편입으로 잡힌다**(413종 400일 수집).
     #      holdings 쪽이 같은 이유로 같은 판정을 이미 갖고 있다.
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "9999-99-99", ["111111"])
     _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
 
@@ -670,6 +693,7 @@ def test_healthy_scan_records_ok_in_the_ledger(tmp_path):
     #      존재하면 '없음'이 다시 두 가지 뜻(정상/구버전)을 갖는다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
     source = _RecordingSource()
@@ -718,12 +742,13 @@ def test_padded_ticker_is_tidied_not_discarded(tmp_path, caplog):
     import logging
 
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "2026-08-13", ["042700", " 091160"])
 
     with caplog.at_level(logging.WARNING):
         newcomers, since, reason = ingest_price_raw._newcomers(
             storage, ["042700", "091160", "000660"], "2026-08-14")
-    assert reason == ""                  # 파티션을 버리지 않는다
+    assert reason == "ok"                # 파티션을 버리지 않는다
     assert newcomers == ["000660"]       # ' 091160' 이 091160 으로 읽혀 편입이 아니다
     assert since == "2025-07-10"
     assert any("공백이 붙은 ticker" in r.getMessage() for r in caplog.records)
@@ -759,6 +784,7 @@ def test_deep_primary_window_is_distinguishable_from_no_newcomer(tmp_path):
     #      애초에 없었는지 사후에 못 가린다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
     source = _RecordingSource()
@@ -779,6 +805,7 @@ def test_same_symbol_failing_in_both_fetches_counts_once(tmp_path):
     #      failed_records 는 원장 완전성 판정의 입력이라 부풀면 런이 영구 INCOMPLETE 다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
     fail = [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}]
@@ -800,6 +827,7 @@ def test_real_failure_beats_truncation_for_the_same_symbol(tmp_path):
     #      덮으면 partial 이어야 할 런이 success·exit 0 으로 끝난다. 심각한 쪽이 이겨야 한다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])
     source = _RecordingSource(failures_by_call={
@@ -849,6 +877,7 @@ def test_empty_latest_partition_falls_back_instead_of_abandoning(tmp_path, caplo
     from data_pipeline.lake import canonical_price_daily_partition
 
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "000660"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "2026-08-12", ["091160", "000660"])   # 쓸 수 있는 기준
     buf = io.BytesIO()
     pq.write_table(pa.Table.from_pylist(                              # 최신인데 0행
@@ -859,7 +888,7 @@ def test_empty_latest_partition_falls_back_instead_of_abandoning(tmp_path, caplo
     with caplog.at_level(logging.WARNING):
         newcomers, since, reason = ingest_price_raw._newcomers(
             storage, ["091160", "000660", "042700"], "2026-08-14")
-    assert reason == ""                 # 포기하지 않는다
+    assert reason == "ok"               # 포기하지 않는다
     assert newcomers == ["042700"]      # 08-12 기준으로 정상 판정
     assert since == "2025-07-10"
     assert any("파티션이 비었다" in r.getMessage() for r in caplog.records)
@@ -876,6 +905,7 @@ def test_drifted_latest_partition_falls_back_to_clean_one(tmp_path):
     from data_pipeline.lake import canonical_price_daily_partition
 
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "2026-08-12", ["091160"])
     buf = io.BytesIO()
     pq.write_table(pa.Table.from_pylist(
@@ -886,7 +916,7 @@ def test_drifted_latest_partition_falls_back_to_clean_one(tmp_path):
 
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""
+    assert reason == "ok"
     assert newcomers == ["042700"]
 
 
@@ -939,6 +969,7 @@ def test_scan_incomplete_must_not_soften_a_total_collection_failure(tmp_path):
     #      error 가 아니라 partial 로 마감된다. 덜 심각하게 보고하는 것도 위장이다(Rule 12).
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", [])   # 판정 근거 없음 → scan_incomplete
     source = _RecordingSource(                       # 그리고 전 심볼 실패 → 저장분 0
@@ -983,13 +1014,14 @@ def test_corrupt_latest_partition_falls_back_to_a_readable_one(tmp_path):
     from data_pipeline.lake import canonical_price_daily_partition
 
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "2026-08-12", ["091160"])
     storage.put_bytes(
         f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", b"corrupt")
 
     newcomers, since, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""
+    assert reason == "ok"
     assert newcomers == ["042700"]
     assert since == "2025-07-10"
 
@@ -1014,6 +1046,7 @@ def test_partition_with_one_corrupt_file_is_not_accepted_partially(tmp_path):
     from data_pipeline.lake import canonical_price_daily_partition
 
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "042700"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "2026-08-12", ["091160", "042700"])       # 멀쩡한 이전 기준
     _write_price_daily(storage, "2026-08-13", ["091160"])                 # 최신의 정상 파일
     storage.put_bytes(                                                     # 같은 파티션의 깨진 파일
@@ -1021,7 +1054,7 @@ def test_partition_with_one_corrupt_file_is_not_accepted_partially(tmp_path):
 
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""
+    assert reason == "ok"
     # 08-13 을 부분 뷰로 받아들였으면 042700 이 편입으로 잡혔다. 08-12 로 물러나야 0종이다.
     assert newcomers == []
 
@@ -1032,6 +1065,7 @@ def test_unbounded_primary_window_covers_newcomers(tmp_path):
     #      증분'이라고 읽으면 편입분을 두 번 받는다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])   # 042700 편입
     source = _RecordingSource()
@@ -1053,6 +1087,7 @@ def test_failed_history_fetch_leaves_no_rows_so_it_retries(tmp_path):
     #      계속 편입으로 잡힌다 — 새 상태 저장 없이 성공할 때까지 자격이 유지된다.
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "005930"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_holdings(storage, "2026-08-13", [("042700", "091160")])
     _write_price_daily(storage, "2026-08-13", ["091160"])
     source = _RecordingSource(                       # 2차(이력) 창에서 편입 종목이 죽는다
@@ -1085,23 +1120,14 @@ def test_partition_listing_failure_is_isolated_too(tmp_path):
             return super().list_keys(prefix)
 
     storage = ListFailingStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
     _write_price_daily(storage, "2026-08-12", ["091160"])   # 멀쩡한 이전 기준
     _write_price_daily(storage, "2026-08-13", ["091160"])   # 이 파티션의 목록 조회가 죽는다
 
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""                  # 예외가 아니라 물러나기다
+    assert reason == "ok"                # 예외가 아니라 물러나기다
     assert newcomers == ["042700"]       # 08-12 기준으로 판정이 계속된다
-
-
-def _write_depth_history(storage, tickers: list[str], days: int = 65, end: str = "2026-08-13"):
-    """`days` 개 거래일 파티션에 같은 티커 집합을 깔아 깊이 판정의 배경을 만든다."""
-    from datetime import date, timedelta
-
-    d = date.fromisoformat(end)
-    for _ in range(days):
-        _write_price_daily(storage, d.isoformat(), tickers)
-        d -= timedelta(days=1)
 
 
 def test_shallow_ticker_stays_eligible_until_history_lands(tmp_path):
@@ -1117,7 +1143,7 @@ def test_shallow_ticker_stays_eligible_until_history_lands(tmp_path):
 
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""
+    assert reason == "ok"
     assert newcomers == ["042700"]   # 최신에 '있는데도' 편입 — 얕기 때문이다
 
 
@@ -1129,21 +1155,22 @@ def test_deep_ticker_is_not_flagged(tmp_path):
 
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""
+    assert reason == "ok"
     assert newcomers == []
 
 
-def test_shallow_canonical_cannot_answer_depth_so_presence_only(tmp_path):
-    # WHY: canonical 자체가 얕으면(새 레이크·부트스트랩) '오래전에도 있었나'에 답할 수 없다.
-    #      답할 수 없는 것을 '아니오'로 읽으면 **전 종목이 편입**이 되어 412종에 400일 창이
-    #      붙는다. 모르는 것을 아는 척하지 않고 존재 판정만 쓴다(Rule 12).
+def test_unanswerable_depth_is_not_proven_not_fine(tmp_path):
+    # WHY: 깊이를 **답할 수 없을 때** 검사를 생략하면 그 구간에서 오염이 그대로 성립한다 —
+    #      판정 불가 런의 증분 5일치나 실패한 이력의 부분 행이 '이미 있음'을 만들고 재시도
+    #      자격이 사라진다. 모르는 것은 '증명되지 않음'이지 '괜찮음'이 아니다(Rule 12).
+    #      전 종목을 편입으로 보되, 400일 창 한 번이면 파티션이 깊어져 이 모드가 꺼진다.
     storage = LocalStorage(tmp_path / "lake")
     _write_depth_history(storage, ["091160"], days=5)   # 깊이 요건에 한참 못 미친다
 
     newcomers, _, reason = ingest_price_raw._newcomers(
         storage, ["091160", "042700"], "2026-08-14")
-    assert reason == ""
-    assert newcomers == ["042700"]   # 091160 을 얕다고 몰지 않는다
+    assert reason == "ok(depth_unavailable)"            # 모드가 원장에 드러난다
+    assert newcomers == ["042700", "091160"]            # 091160 도 증명되지 않았다
 
 
 def test_partition_discovery_listing_failure_still_collects(tmp_path):
