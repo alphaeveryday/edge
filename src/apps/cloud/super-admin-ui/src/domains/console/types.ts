@@ -40,6 +40,23 @@ export interface EntityResolutionTrendPointDto {
   rate: number | null;
 }
 
+/** 장중 FIRE 코호트가 분석·게시 단계에 도달한 최근 일별 실측. */
+export interface IntradayAnalysisTrendDto {
+  asOf: string;
+  points: IntradayAnalysisTrendPointDto[];
+}
+
+export interface IntradayAnalysisTrendPointDto {
+  date: string;
+  triggers: number;
+  observations: number;
+  runs: number;
+  activeRuns: number;
+  failedRuns: number;
+  results: number;
+  published: number;
+}
+
 export interface EtfLedgerDto {
   rows: EtfLedgerRowDto[];
 }

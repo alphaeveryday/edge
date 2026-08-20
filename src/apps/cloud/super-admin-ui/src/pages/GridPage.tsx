@@ -24,6 +24,10 @@ import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type { MinuteStatus, SourceGrid } from '../domains/sources';
 import { useMinuteStatus, useSourceGrid } from '../domains/sources/hooks';
+import type { IntradayAnalysisTrendDto } from '../domains/console';
+import { useIntradayAnalysisTrend } from '../domains/console/hooks';
+import { intradayOutcome, kstDateAt } from '../domains/console/intradayAnalysisTrend';
+import type { IntradayOutcomeKind } from '../domains/console/intradayAnalysisTrend';
 import {
   ALL_DATASETS,
   CATALOG_SOURCE,
@@ -176,36 +180,74 @@ export function GridPage() {
   /* 실시간 레인의 하루치 세션 — 격자 원장에 없는 행을 세션 원장이 답할 수 있는 만큼만 채운다.
    * 실패해도 격자는 그린다(세션이 없으면 예전처럼 상태 미제공). */
   const { data: minute, isError: minuteError, dataUpdatedAt: minuteUpdatedAt } = useMinuteStatus();
+  const intraday = useIntradayAnalysisTrend(undefined, 30);
+  const [selectedOutcomeDate, setSelectedOutcomeDate] = useState<string | null>(null);
 
-  if (isError) return <LoadError error={error} />;
-  if (isPending) return <PageSkeleton rows={6} />;
+  useEffect(() => {
+    if (!selectedOutcomeDate) return;
+    window.requestAnimationFrame(() => {
+      const detail = document.getElementById('gd-outcome-detail');
+      detail?.focus({ preventScroll: true });
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      detail?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'nearest' });
+    });
+  }, [selectedOutcomeDate]);
 
-  /* 격자가 비면 상태 인코딩을 전혀 볼 수 없다 — 사실을 먼저 밝히고 검수용 목을 붙인다 */
-  if (grid.slots.length === 0 && !minute) {
-    return (
-      <div className="flex flex-col gap-4">
-        <EmptyRealNotice>최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.</EmptyRealNotice>
-        <MockPreview>
-          <GridBody grid={MOCK_GRID} mock />
-        </MockPreview>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (
+      selectedOutcomeDate &&
+      intraday.data &&
+      !intraday.data.points.some((point) => point.date === selectedOutcomeDate)
+    ) {
+      setSelectedOutcomeDate(null);
+    }
+  }, [intraday.data, selectedOutcomeDate]);
+
+  const closeOutcome = () => {
+    const trigger = selectedOutcomeDate;
+    setSelectedOutcomeDate(null);
+    if (trigger) {
+      window.requestAnimationFrame(() => document.getElementById(`gd-outcome-day-${trigger}`)?.focus());
+    }
+  };
 
   return (
-    <GridBody
-      grid={grid}
-      minute={minute}
-      minuteError={minuteError}
-      minuteUpdatedAt={minuteUpdatedAt}
-    />
+    <div className="flex flex-col gap-4">
+      <IntradayOutcomeStrip
+        trend={intraday.data}
+        pending={intraday.isPending}
+        failed={intraday.isError}
+        selectedDate={selectedOutcomeDate ?? undefined}
+        onSelectDate={(date) => setSelectedOutcomeDate(selectedOutcomeDate === date ? null : date)}
+      />
+      {selectedOutcomeDate && (
+        <IntradayOutcomeDetail
+          date={selectedOutcomeDate}
+          trend={intraday.data}
+          pending={intraday.isPending}
+          failed={intraday.isError}
+          onClose={closeOutcome}
+        />
+      )}
+      {isError ? (
+        <LoadError error={error} />
+      ) : isPending ? (
+        <PageSkeleton rows={6} />
+      ) : (
+        <GridBody
+          grid={grid}
+          minute={minute}
+          minuteError={minuteError}
+          minuteUpdatedAt={minuteUpdatedAt}
+        />
+      )}
+    </div>
   );
 }
 
 interface Selection {
   dataset: DatasetEntry;
   date: string;
-  rollup?: DayRollup;
 }
 
 /**
@@ -246,6 +288,7 @@ function GridBody({
   const [kindFilter, setKindFilter] = useState<DatasetKindLabel | 'all'>('all');
   const [domainFilter, setDomainFilter] = useState<DatasetDomain | 'all'>('all');
   const [selected, setSelected] = useState<Selection | null>(null);
+  const selectedTarget = selected ? `dataset:${selected.dataset.id}:${selected.date}` : null;
   const selectedMinuteDate = selected?.dataset.sessionDataset ? selected.date : undefined;
   const fetchSelectedMinute = shouldFetchMinuteDetail(selectedMinuteDate, minute?.date, mock);
   const selectedMinuteQuery = useMinuteStatus(selectedMinuteDate, fetchSelectedMinute);
@@ -271,12 +314,12 @@ function GridBody({
    * `block: 'nearest'` 로 최소한만 굴린다 — 카드를 화면 맨 위로 올리면 어느 박스를 눌렀는지
    * 시야에서 잃는다. 모션 축소 설정은 존중한다. */
   useEffect(() => {
-    if (!selected) return;
+    if (!selectedTarget) return;
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     document
       .getElementById('gd-detail')
       ?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'nearest' });
-  }, [selected]);
+  }, [selectedTarget]);
 
   /* 필터는 **행**에만 건다 — 슬롯을 걸러 날짜 축까지 바뀌면 필터를 바꿀 때마다 열이 움직인다 */
   const dates = useMemo(() => {
@@ -288,6 +331,10 @@ function GridBody({
   const rolled = useMemo(() => rollup(grid.slots), [grid.slots]);
   const at = (datasetId: string, date: string) => rolled.get(`${datasetId}|${date}`);
 
+  useEffect(() => {
+    if (selected && !dates.includes(selected.date)) setSelected(null);
+  }, [dates, selected]);
+
   /* 이 창에서 셀이 하나도 없는 배치 데이터셋은 감춘다 — 통째로 빈 행은 소음이다.
    * 실시간 데이터셋은 이 격자에 셀이 아예 없는 게 정상이라 그 규칙에서 뺀다. */
   const rows = ALL_DATASETS.filter((d) => {
@@ -295,6 +342,16 @@ function GridBody({
     if (domainFilter !== 'all' && d.domain !== domainFilter) return false;
     return !d.inOpsGrid || dates.some((date) => at(d.id, date) !== undefined);
   });
+
+  /* 실측 결과 스트립은 이 분기 밖 GridPage에 남고, 목 격자는 아래에서 따로 검수한다. */
+  if (grid.slots.length === 0 && !minute && !mock) {
+    return (
+      <div className="flex flex-col gap-4">
+        <EmptyRealNotice>최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.</EmptyRealNotice>
+        <MockPreview><GridBody grid={MOCK_GRID} mock /></MockPreview>
+      </div>
+    );
+  }
 
   /**
    * 셀 상태 — **데이터 출처를 상태로 만들지 않는다.** 배치든 실시간이든 같은 어휘를 쓰고,
@@ -402,7 +459,9 @@ function GridBody({
                             aria-pressed={sel}
                             title={boxTip(d, date, r, sessionState(d, date, minute))}
                             aria-label={`${d.label} ${date} ${st} — 그날 실행 목록 보기`}
-                            onClick={() => setSelected(sel ? null : { dataset: d, date, rollup: r })}
+                            onClick={() => {
+                              setSelected(sel ? null : { dataset: d, date });
+                            }}
                           >
                             <StateBox state={st} />
                           </button>
@@ -429,14 +488,130 @@ function GridBody({
       </div>
 
       {selected && (
-        <DayDetail
-          sel={selected}
-          minuteDetail={selectedMinuteDetail}
-          mock={mock}
-          onClose={() => setSelected(null)}
-        />
+            <DayDetail
+              sel={{ ...selected, rollup: at(selected.dataset.id, selected.date) }}
+              minuteDetail={selectedMinuteDetail}
+              mock={mock}
+              onClose={() => setSelected(null)}
+            />
       )}
     </div>
+  );
+}
+
+const OUTCOME_TONE: Record<IntradayOutcomeKind, BadgeTone> = {
+  collecting: 'env', none: 'neutral', complete: 'active', partial: 'warn', missing: 'blocked',
+};
+
+function IntradayOutcomeStrip({ trend, pending, failed, selectedDate, onSelectDate }: {
+  trend?: IntradayAnalysisTrendDto;
+  pending: boolean;
+  failed: boolean;
+  selectedDate?: string;
+  onSelectDate: (date: string) => void;
+}) {
+  const current = trend ? kstDateAt(trend.asOf) : '';
+  return (
+    <section className="card" aria-labelledby="gd-outcome-title">
+      <div className="card-head gd-outcome-head">
+        <span className="t-label" id="gd-outcome-title">장중 분석 귀결</span>
+        <span className="t-xs" style={{ color: 'var(--fg-3)' }}>최근 30일 · 수집 상태와 별도인 분석 결과 축</span>
+      </div>
+      <div className="card-pad" style={{ paddingTop: 0 }}>
+        {failed && trend && (
+          <p className="t-xs" style={{ color: 'var(--warn)', marginTop: 0 }}>
+            분석 귀결 재조회에 실패해 직전 실측을 유지합니다.
+          </p>
+        )}
+        {!trend ? (
+          <p className="t-sm m-0" role="status" style={{ color: 'var(--fg-3)' }}>
+            {pending ? '장중 분석 귀결을 불러오는 중입니다.' : '장중 분석 귀결 상태 미제공 — 조회 실패를 0건으로 표시하지 않습니다.'}
+          </p>
+        ) : (
+          <div className="gd-outcome-scroll" aria-label="최근 30일 장중 분석 귀결">
+            {[...trend.points].reverse().map((point) => {
+              const outcome = intradayOutcome(point, current);
+              return (
+                <button
+                  key={point.date}
+                  id={`gd-outcome-day-${point.date}`}
+                  type="button"
+                  className={`gd-outcome-day gd-outcome-${outcome.kind}${selectedDate === point.date ? ' gd-outcome-selected' : ''}`}
+                  aria-label={`${point.date} ${outcome.label}, 결과 ${point.results}/${point.triggers}, 게시 ${point.published}`}
+                  aria-pressed={selectedDate === point.date}
+                  onClick={() => onSelectDate(point.date)}
+                >
+                  <span className="gd-outcome-date">{mmdd(point.date)}</span>
+                  <span className="gd-outcome-mark" aria-hidden="true" />
+                  <span className="gd-outcome-label">{outcome.label}</span>
+                  <span className="gd-outcome-ratio">결과 {point.results}/{point.triggers}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
+          판정은 FIRE 트리거의 결과 도달 여부만 봅니다. 현재일은 완료 여부를 확정하지 않으며,
+          데이터셋 수집 상태를 이 색으로 덮어쓰지 않습니다.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function IntradayOutcomeDetail({ date, trend, pending, failed, onClose }: {
+  date: string;
+  trend?: IntradayAnalysisTrendDto;
+  pending: boolean;
+  failed: boolean;
+  onClose?: () => void;
+}) {
+  const point = trend?.points.find((candidate) => candidate.date === date);
+  const outcome = point && trend ? intradayOutcome(point, kstDateAt(trend.asOf)) : null;
+  return (
+    <section className="card" id="gd-outcome-detail" tabIndex={-1} aria-labelledby="gd-outcome-detail-title">
+      <div className="card-head gd-outcome-head">
+        <span className="t-label" id="gd-outcome-detail-title">장중 분석 귀결 · {date}</span>
+        {outcome ? <StatusBadge tone={OUTCOME_TONE[outcome.kind]}>{outcome.label}</StatusBadge> : <StatusBadge tone="neutral">상태 미제공</StatusBadge>}
+        <span className="t-xs" style={{ color: 'var(--fg-3)', marginLeft: 'auto' }}>
+          분석 결과 축 · 아래 데이터셋 수집 상세와 별도
+        </span>
+        {onClose && <button type="button" className="btn btn-sm" onClick={onClose}>닫기</button>}
+      </div>
+      <div className="card-pad">
+        {point ? (
+          <>
+            {failed && <p className="t-xs" style={{ color: 'var(--warn)', marginTop: 0 }}>재조회에 실패해 이 날짜의 직전 실측을 유지합니다.</p>}
+            <div className="gd-outcome-flow" aria-label={`장중 분석 흐름: 트리거 ${point.triggers}, 관측 ${point.observations}, 실행 ${point.runs}, 결과 ${point.results}, 게시 ${point.published}`}>
+              <OutcomeStage label="트리거" value={point.triggers} denominator={point.triggers} />
+              <OutcomeStage label="관측" value={point.observations} denominator={point.triggers} />
+              <OutcomeStage label="실행" value={point.runs} denominator={point.triggers} />
+              <OutcomeStage label="결과" value={point.results} denominator={point.triggers} />
+              <OutcomeStage label="게시" value={point.published} denominator={point.triggers} last />
+            </div>
+            <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 10 }}>
+              최신 실행 상태 중 진행 {point.activeRuns} · 실패 {point.failedRuns} · DB 기준시각{' '}
+              {new Date(trend!.asOf).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false })}
+            </p>
+          </>
+        ) : (
+          <p className="t-sm m-0" role="status" style={{ color: 'var(--fg-3)' }}>
+            {pending ? '선택 날짜의 분석 귀결을 불러오는 중입니다.' : '선택 날짜의 분석 귀결 상태 미제공 — 조회 실패·응답 부재를 발화 0건으로 합성하지 않습니다.'}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function OutcomeStage({ label, value, denominator, last = false }: {
+  label: string; value: number; denominator: number; last?: boolean;
+}) {
+  return (
+    <>
+      <span className="gd-outcome-stage"><span>{label}</span><b>{value}/{denominator}</b></span>
+      {!last && <span className="gd-outcome-arrow" aria-hidden="true">→</span>}
+    </>
   );
 }
 
@@ -502,7 +677,7 @@ function DayDetail({
   mock,
   onClose,
 }: {
-  sel: Selection;
+  sel: Selection & { rollup?: DayRollup };
   minuteDetail?: MinuteDetailState;
   mock: boolean;
   onClose: () => void;

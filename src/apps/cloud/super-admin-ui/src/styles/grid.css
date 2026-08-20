@@ -183,3 +183,51 @@
   color: var(--fg-2);
   font-weight: 600;
 }
+
+/* 장중 분석 결과는 데이터셋 행이 아니라 별도 축이다. 색 + 표식 모양 + 텍스트를 함께 쓴다. */
+.gd-outcome-head { flex-wrap: wrap; white-space: normal; }
+.gd-outcome-scroll {
+  display: flex;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  padding: 2px 2px var(--sp-3);
+}
+.gd-outcome-day {
+  display: grid;
+  grid-template-columns: 12px auto;
+  gap: 2px var(--sp-2);
+  min-width: 112px;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--fg-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gd-outcome-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gd-outcome-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gd-outcome-date { grid-column: 1 / -1; font-size: 10px; color: var(--fg-3); }
+.gd-outcome-mark { width: 10px; height: 10px; margin-top: 2px; border: 1px solid var(--border-strong); }
+.gd-outcome-label { font-size: var(--xs-size); font-weight: 600; white-space: nowrap; }
+.gd-outcome-ratio { grid-column: 1 / -1; font-size: 10px; color: var(--fg-3); }
+.gd-outcome-complete .gd-outcome-mark { border-radius: 50%; background: var(--up); }
+.gd-outcome-partial .gd-outcome-mark { background: var(--warn); transform: rotate(45deg); }
+.gd-outcome-missing .gd-outcome-mark { background: var(--down); }
+.gd-outcome-none .gd-outcome-mark { border-style: dashed; background: transparent; }
+.gd-outcome-collecting .gd-outcome-mark { border: 2px solid var(--accent); border-radius: 50%; background: transparent; }
+.gd-outcome-flow { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.gd-outcome-stage {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 82px;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--xs-size);
+  color: var(--fg-3);
+}
+.gd-outcome-stage b { font-size: var(--sm-size); color: var(--fg-1); font-variant-numeric: tabular-nums; }
+.gd-outcome-arrow { color: var(--fg-4); }

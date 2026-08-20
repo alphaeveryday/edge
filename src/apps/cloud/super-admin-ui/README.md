@@ -55,7 +55,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
 | `/tenants/:id` | 테넌트 상세 (기본 정보 · 연결 상태 · 24H 호출 바 차트) |
 | `/sources` | 데이터 소스 수집 상태 |
-| `/grid` | 파이프라인 실행 이력 (데이터셋×날짜 격자 — 배치 실행 목록과 선택 날짜의 실시간 벤더 세션·창 증거 드릴다운) |
+| `/grid` | 파이프라인 실행 이력 (데이터셋×날짜 수집 격자 + 별도 장중 분석 귀결 30일 스트립 — 선택 날짜의 결과 흐름과 벤더 세션·창 증거를 서로 다른 축으로 드릴다운) |
 | `/minute` | 장중 1분 수집 (세션 생존·창 집계·결손 창 목록 — 무증거 vs 빈 데이터 구분, ALPHA-651) |
 | `/lineage/news` | 뉴스 계보 (funnel 타일 N/M%+(i) 산출 정의·단계 필터·언론사·원문 링크·1분 추출 요약 — ALPHA-685·697) |
 | `/impact/holdings` | 구성종목 결손 영향 (누락 ETF → 기준일 분석 지목 + 권장 조치 — ALPHA-686) |
@@ -82,7 +82,8 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 `pages/ops/*` 화면과 `consoleFacts` 어댑터가 이 결과를 소비한다. 와이어 DTO와 엔진 `Facts`의
 형상 차이(camelCase vs snake_case), 응답 값 검증, 배치 사실과 `/sources/minute` 실시간 축의
 결합은 그 어댑터·공통 훅에서 한 번만 처리한다. 별도 일별 응답은
-`domains/console/entityResolutionTrend`가 날짜·카운터·비율 불변식을 검증한다.
+`domains/console/entityResolutionTrend`와 `intradayAnalysisTrend`가 각각 날짜·카운터·비율/단계
+단조성 불변식을 검증한다. 장중 분석 귀결 판정은 수집 상태와 합치지 않는다.
 
 알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
 
