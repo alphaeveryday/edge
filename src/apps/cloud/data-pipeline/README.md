@@ -301,6 +301,25 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # 8종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 8종이 샌다).
 # 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
 # 컨테이너 사이로도 공유한다(ALPHA-573 — 아래 ingest-raw-nav 항목).
+#
+# ⭐ **유니버스에 처음 들어온 종목은 이력 창으로 한 번 더 받는다**(ALPHA-989). 유니버스가
+# holdings 파생이라 ETF 가 추가되면 즉시 넓어지는데 증분 창은 5일이라, 넓어진 유니버스는
+# 최근 5일만 다시 긁고 그 이전 날짜에는 새 종목이 **영영** 안 채워졌다(dev 레이크에서 절벽
+# 3회·결손 1,613셀). 그래서 "유니버스에 있는데 canonical 일봉 기준 파티션에 없는 티커"에만
+# `NEWCOMER_LOOKBACK_DAYS`(400일 ≈ 270거래일) 창으로 2차 수집을 붙인다. 전 종목에 그 창을
+# 매일 물리면 수집량이 통째로 커지므로 **편입분만** 간다. 창 길이를 정하는 건 소비자다 —
+# 가장 깊은 것이 analysis-engine `attribute.SIGMA_N`(60거래일 롤링)이고 4배 여유를 뒀다.
+# 편입이 없는 런은 2차 fetch 자체가 안 돈다. 이미 그만큼 깊은 `--from` 백필도 안 돈다.
+#
+# 판정 상태는 collection_log 의 `newcomer_scan` 에 **모든 경로에서** 남는다:
+#   ok · not_applicable(holdings 파생 아닌 소스) · not_reached(스캔 전 종료) ·
+#   scan_failed(스캔 중 예외) · covered_by_primary_window(1차 창이 이미 깊다) ·
+#   no_usable_partition(scanned=N)
+# 편입 종목 수는 `symbols_newcomer`, 붙인 창 하한은 `newcomer_window_from` 이다.
+# ⚠️ `no_usable_partition` 은 런을 **partial(exit 1)** 로 내린다 — 기준 파티션을 못 찾은 런에
+# 편입 종목이 있었다면 그 이력은 **영구** 결손이다(다음 런은 '이미 있음'으로 본다). 조용히
+# 성공으로 마감하면 아무도 모른다. 단 `ops.failed_records` 는 안 올린다(심볼 실패가 아니라
+# 원장을 영구 INCOMPLETE 로 만들면 안 된다).
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달
