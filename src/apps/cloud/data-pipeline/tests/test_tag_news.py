@@ -639,6 +639,34 @@ def test_no_mention_article_mirror_is_not_absorbed(tmp_path):
     assert log["minute_mirrors_dropped_no_mention"] == 1   # 조용히 사라지지 않는다
 
 
+def test_previously_tagged_article_that_lost_mentions_survives_rewrite(tmp_path):
+    """⭐ 정정으로 mentions 를 잃은 기사의 옛 유료 판정을 되쓰기가 지우면 안 된다 (ALPHA-982).
+
+    normalize_news 는 같은 URL 재적재에서 최신 본문으로 정정을 반영하는데, 정정 제목에서
+    종목명이 빠지면 합성 mentions 가 빈다. 그때 파티션에 미러가 하나라도 있으면 되쓰기가
+    돌고, 옛 코드는 part 에 실려 있던 유료 판정까지 mentions 배제식에 쓸어 담아 레이크에서
+    영구 소실시켰다(버킷 버저닝 없음) — mentions 가 돌아오면 `_is_current` 가 행을 못 찾아
+    다시 유료 호출하는 이중 과금이다. 배제는 **미러로만 온 행**에 한해야 한다.
+    """
+    storage = LocalStorage(tmp_path)
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    calls: list = []
+    tag_news.run(storage, "run-1", complete_fn=_fake_complete(calls))
+    assert len(calls) == 1                       # a1 의 판정이 part 에 실렸다
+
+    # 정정으로 a1 이 mentions 를 잃고, 다른 기사의 미러가 있어 되쓰기가 도는 파티션
+    _write_canonical(storage, "ko", "2026-07-01", [_article(mentions="[]")])
+    _write_mirror(storage, _article("a-장중만"), tagged_at="2026-07-01T10:00:00+00:00")
+
+    tag_news.run(storage, "run-2", complete_fn=_fake_complete([]))
+
+    ids = sorted(r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01"))
+    assert ids == ["a-장중만", "a1"]             # 옛 유료 판정이 살아남는다
+    log_key = [k for k in storage.list_keys(quality_log_prefix(tag_news.DATASET)) if "run-2" in k][0]
+    log = json.loads(storage.get_bytes(log_key))
+    assert log["minute_mirrors_dropped_no_mention"] == 0   # part 행은 이 축에 안 섞인다
+
+
 def test_intraday_only_article_mirror_is_kept(tmp_path):
     """반례 — canonical 에 없는 기사(장중만 본 기사)의 미러는 **버리면 안 된다**.
 
