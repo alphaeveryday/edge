@@ -43,6 +43,20 @@ public interface ConsoleFactsRepository {
 	record EntityResolutionPoint(LocalDate date, long totalArguments, long resolvedArguments) {
 	}
 
+	/**
+	 * {@code maxDate} 로 끝나는 장중 분석 코호트의 연속 {@code days}일 사실.
+	 * 날짜가 비어도 0인 점을 내며, 반환 순서는 오래된 날부터다.
+	 */
+	IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days);
+
+	record IntradayAnalysisTrend(OffsetDateTime asOf, List<IntradayAnalysisPoint> points) {
+	}
+
+	/** 단계 수는 행 수가 아니라 그 단계에 도달한 장중 관측 수라 재실행에도 단조성을 지킨다. */
+	record IntradayAnalysisPoint(LocalDate date, long triggers, long observations, long runs,
+			long activeRuns, long failedRuns, long results, long published) {
+	}
+
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,

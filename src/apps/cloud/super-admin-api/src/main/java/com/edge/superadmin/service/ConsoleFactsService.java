@@ -12,6 +12,7 @@ import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.QueueResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.TaskResponse;
 import com.edge.superadmin.dto.EntityResolutionTrendResponse;
+import com.edge.superadmin.dto.IntradayAnalysisTrendResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
 import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
@@ -39,9 +40,9 @@ import java.util.stream.Stream;
  * 콘솔 사실 응답 조립(ALPHA-738).
  *
  * <p>여기서 위반을 판정하지 않는다 — 규칙은 프론트의 순수 함수다. 나머지 축에서 이 서비스가 하는
- * 일은 원장 행을 <b>와이어 형으로 옮기는 것</b>(1:1)뿐이고, <b>여러 행을 하나로 접는 축은
- * 데이터셋 축뿐</b>이다({@link #datasets}) — {@code dataset_contract} 테이블이 없어 작업의 컬럼을
- * {@code dataset} 으로 묶는 것 말고는 그 축을 세울 방법이 없다.
+ * 일은 원장 행을 <b>와이어 형으로 옮기는 것</b>(1:1)뿐이고, 하루 {@link #facts(String)} 안에서
+ * <b>여러 행을 하나로 접는 축은 데이터셋 축뿐</b>이다({@link #datasets}) — 추이 엔드포인트의
+ * 일별 집계는 리포지토리가 완성된 점으로 돌려주는 별도 조회다.
  *
  * <p>⚠️ "서버가 파생을 안 한다"는 뜻은 아니다 — 런 축의 계획 결손 슬롯은 리포지토리가
  * {@code scope_key} 를 파싱해 <b>행을 합성한다</b>. 다만 그건 슬롯 하나가 행 하나라 접기가 없다.
@@ -134,6 +135,18 @@ public class ConsoleFactsService {
 	public EntityResolutionTrendResponse entityResolutionTrend(String date) {
 		return EntityResolutionTrendResponse.from(
 				facts.entityResolutionTrend(date == null ? LocalDate.now(KST) : parseDateParam(date)));
+	}
+
+	/** 장중 분석 귀결의 연속 날짜 사실. 빈 날도 0인 점으로 남긴다. */
+	public IntradayAnalysisTrendResponse intradayAnalysisTrend(String maxDate, int days) {
+		if (days < 1 || days > 366) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		LocalDate end = maxDate == null ? LocalDate.now(KST) : parseDateParam(maxDate);
+		if (end.minusDays(days - 1L).getYear() < 1) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		return IntradayAnalysisTrendResponse.from(facts.intradayAnalysisTrend(end, days));
 	}
 
 	/**

@@ -97,6 +97,58 @@ GET /api/v1/console/trends/entity-resolution[?date=YYYY-MM-DD]
 `totalArguments: 0`은 실제 0건 관측이라 점과 두 계수는 남긴다. 다만 `0/0`은 비율이 아니므로
 그때 `rate`는 `null`이다. 서버는 이 값으로 정상·이상이나 색상을 판정하지 않는다.
 
+### 장중 분석 귀결 추이
+
+하루 facts의 장중 체인을 여러 날짜에 걸쳐 비교할 수 있도록 연속 날짜 사실 표면을 둔다.
+
+```
+GET /api/v1/console/trends/intraday-analysis[?maxDate=YYYY-MM-DD&days=30]
+```
+
+`maxDate`는 마지막 날짜(KST)이며 생략하면 API 서버 시계의 KST 오늘이다. `days` 기본값은 30,
+허용 범위는 1–366이다. 날짜 형식 오류·미래 날짜·범위 밖 일수는 400이다. 응답은 `maxDate`로
+끝나는 정확히 `days`개의 점을 오래된 순서로 내며, 원장 행이 없는 날짜도 모든 수가 0인 점으로
+남긴다. `asOf`는 조회한 DB 시각이다.
+
+```jsonc
+{
+  "result": {
+    "asOf": "2026-08-20T04:50:00Z",
+    "points": [
+      {
+        "date": "2026-08-20",
+        "triggers": 65,
+        "observations": 61,
+        "runs": 60,
+        "activeRuns": 2,
+        "failedRuns": 1,
+        "results": 57,
+        "published": 55
+      }
+    ]
+  }
+}
+```
+
+- 코호트는 그 날짜의 `minute_price_trigger.trigger_kind='FIRE'` 행이다. `REVERT`는 설명을 만들지
+  않는 회수 마커라 제외한다.
+- `observations`·`runs`·`results`·`published`는 행 수가 아니라 그 단계에 도달한 코호트 관측
+  수다. 따라서 재실행이 단계를 부풀리거나 결손을 상쇄하지 않고
+  `triggers >= observations >= runs >= results >= published`가 구조적으로 성립한다.
+- `activeRuns`·`failedRuns`는 라우트별 최신 실행을 `explanation_as_of`·`started_at`·ID 순으로
+  골라 각각 `PENDING|RUNNING`, `FAILED`인 관측 수다. `CANCELLED`는 `runs`에는 들지만 두 부분
+  상태에는 들지 않는다.
+- `results`는 전체 재실행 중 결과에 한 번이라도 도달했는지를 센다. `published`는 그 결과들 중
+  **현재** `PUBLISHED`인 것이 있는 관측 수다. 새 실패/DRAFT 재실행만으로 기존 게시본이
+  사라지지는 않지만, 운영자가 `WITHDRAWN`으로 전이하면 현재 게시 수는 감소한다. 상태 전이 이력은
+  이 원장에 없으므로 "과거에 게시된 적 있음"을 뜻하지 않는다.
+- 서버는 정상·이상, 색상, 감소 원인을 판정하지 않는다.
+
+dev 실데이터 사전 성능 게이트(2026-08-20)는 장중 트리거 678건에서 30일 집계 22.45ms,
+임시 파일 0이었다. 트리거 표 순차 스캔은 16 shared-hit blocks/0.35ms이고 하류는 기존 인덱스를
+사용했다. 현재 유입률 약 38건/일에서는 선행 인덱스를 추가하지 않는다. 실행계획이 악화되면
+`window_start` 선두 인덱스를 먼저 검토한다.
+
 ## 큐 축
 
 Terraform의 1분 파이프라인 원큐와 각 DLQ를 SQS `GetQueueAttributes`로 관측한다. `visible`은

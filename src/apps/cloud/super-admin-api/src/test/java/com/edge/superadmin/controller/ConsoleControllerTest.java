@@ -11,6 +11,8 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EntityResolutionPoint;
+import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisPoint;
+import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisTrend;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
@@ -898,6 +900,62 @@ class ConsoleControllerTest {
 				.isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Seoul")));
 
 		mvc.perform(get("/api/v1/console/trends/entity-resolution").param("date", "2026-8-3"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 장중_분석_추이는_기준시각과_서로_다른_단계_계수를_그대로_내린다() throws Exception {
+		MockMvc mvc = mvc(facts());
+		repository.intradayTrend = new IntradayAnalysisTrend(DB_NOW, List.of(
+				new IntradayAnalysisPoint(LocalDate.parse("2026-08-01"), 8L, 7L, 6L, 2L,
+						1L, 5L, 4L),
+				new IntradayAnalysisPoint(LocalDate.parse("2026-08-02"), 0L, 0L, 0L, 0L,
+						0L, 0L, 0L)));
+
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
+						.param("maxDate", "2026-08-02").param("days", "2"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.asOf").value(DB_NOW.toString()))
+				.andExpect(jsonPath("$.result.points.length()").value(2))
+				.andExpect(jsonPath("$.result.points[0].date").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.points[0].triggers").value(8))
+				.andExpect(jsonPath("$.result.points[0].observations").value(7))
+				.andExpect(jsonPath("$.result.points[0].runs").value(6))
+				.andExpect(jsonPath("$.result.points[0].activeRuns").value(2))
+				.andExpect(jsonPath("$.result.points[0].failedRuns").value(1))
+				.andExpect(jsonPath("$.result.points[0].results").value(5))
+				.andExpect(jsonPath("$.result.points[0].published").value(4))
+				.andExpect(jsonPath("$.result.points[1].published").value(0));
+
+		assertThat(repository.requestedIntradayMaxDate).isEqualTo(LocalDate.parse("2026-08-02"));
+		assertThat(repository.requestedIntradayDays).isEqualTo(2);
+	}
+
+	@Test
+	void 장중_분석_추이는_기본_30일이고_범위_밖과_잘못된_날짜는_400이다() throws Exception {
+		MockMvc mvc = mvc(facts());
+		repository.intradayTrend = new IntradayAnalysisTrend(DB_NOW, List.of());
+
+		LocalDate before = LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis"))
+				.andExpect(status().isOk());
+		LocalDate after = LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+		assertThat(repository.requestedIntradayMaxDate)
+				.isIn(before, after);
+		assertThat(repository.requestedIntradayDays).isEqualTo(30);
+
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis").param("days", "0"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis").param("days", "367"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
+						.param("maxDate", "2026-8-3"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
+						.param("maxDate", "9999-12-31"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
+						.param("maxDate", "0001-01-01").param("days", "366"))
 				.andExpect(status().isBadRequest());
 	}
 }

@@ -19,6 +19,9 @@ public class FakeConsoleFactsRepository implements ConsoleFactsRepository {
 	public LocalDate requestedDate;
 	public LocalDate requestedTrendDate;
 	public List<EntityResolutionPoint> trend = List.of();
+	public LocalDate requestedIntradayMaxDate;
+	public int requestedIntradayDays;
+	public IntradayAnalysisTrend intradayTrend;
 
 	public FakeConsoleFactsRepository(ConsoleFacts facts) {
 		this.facts = facts;
@@ -34,5 +37,12 @@ public class FakeConsoleFactsRepository implements ConsoleFactsRepository {
 	public List<EntityResolutionPoint> entityResolutionTrend(LocalDate date) {
 		this.requestedTrendDate = date;
 		return trend;
+	}
+
+	@Override
+	public IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days) {
+		this.requestedIntradayMaxDate = maxDate;
+		this.requestedIntradayDays = days;
+		return intradayTrend;
 	}
 }
