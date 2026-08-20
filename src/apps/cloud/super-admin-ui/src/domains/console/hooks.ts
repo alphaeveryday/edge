@@ -26,3 +26,12 @@ export function useEntityResolutionTrend(date?: string, enabled = true) {
     refetchInterval: 60_000,
   });
 }
+
+/** 실행 이력의 결과 축. 날짜별 facts N+1 대신 최근 일별 전용 API를 한 번만 조회한다. */
+export function useIntradayAnalysisTrend(maxDate?: string, days = 30) {
+  return useQuery({
+    queryKey: ['console', 'trends', 'intraday-analysis', maxDate ?? null, days],
+    queryFn: () => consoleRepository.intradayAnalysisTrend(maxDate, days),
+    refetchInterval: 60_000,
+  });
+}
