@@ -301,6 +301,42 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # 8종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 8종이 샌다).
 # 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
 # 컨테이너 사이로도 공유한다(ALPHA-573 — 아래 ingest-raw-nav 항목).
+#
+# ⭐ **유니버스에 처음 들어온 종목은 이력 창으로 한 번 더 받는다**(ALPHA-989). 유니버스가
+# holdings 파생이라 ETF 가 추가되면 즉시 넓어지는데 증분 창은 5일이라, 넓어진 유니버스는
+# 최근 5일만 다시 긁고 그 이전 날짜에는 새 종목이 **영영** 안 채워졌다(dev 레이크에서 절벽
+# 3회·결손 1,613셀). 그래서 편입 종목에만 `NEWCOMER_LOOKBACK_DAYS`(400일 ≈ 270거래일) 창을
+# 붙인다. 전 종목에 그 창을 매일 물리면 수집량이 통째로 커지므로 **편입분만** 간다. 창
+# 길이를 정하는 건 소비자다 — 가장 깊은 것이 analysis-engine `attribute.SIGMA_N`(60거래일
+# 롤링)이고 4배 여유를 뒀다. 편입이 없는 런은 이력 수집 자체가 안 돈다. 이미 그만큼 깊은
+# `--from` 백필도, 하한 없는 창(`--to` 만 준 백필)도 안 돈다.
+#
+# ⭐ **판정은 존재가 아니라 깊이다.** "canonical 에 있다"는 "이력이 있다"를 증명하지 못한다 —
+# 티커는 얕게도 들어온다(판정 불가 런의 증분 5일치 · 이력 fetch 가 실패해도 어댑터가 모은
+# 봉을 냄 · MAX_PAGES 절단). SFN 은 partial 런도 정제로 계속 보내므로 그 얕은 행이 실제로
+# canonical 에 들어가고, 존재만 보면 그 티커는 '이미 있음'이 되어 이력이 영영 재시도되지
+# 않는다. 그래서 최신 기준 파티션과 **`NEWCOMER_DEPTH_PARTITIONS`(60거래일) 과거 파티션**
+# 둘을 보고, 하나에라도 없으면 편입이다 — 성공할 때까지 자격이 유지된다(상태 저장 없음).
+# canonical 이 그만큼 깊지 않으면(부트스트랩·손상) 답할 수 없는데, 그건 '괜찮음'이 아니라
+# '증명되지 않음'이라 **전 종목을 편입으로 본다**(`ok(depth_unavailable)` ·
+# `ok(bootstrap_empty_canonical)`). ⚠️ 그 런은 유니버스 전체 × 400일이다(실측 앵커:
+# ALPHA-989 백필 실런이 413종 × 378일에 10분 32초 — 400일이면 ~11분) —
+# 다만 한 번 받으면 파티션이 깊어져 다음 런부터 이 모드가 꺼지므로 **한 런으로 끝난다.**
+# ⚠️ 대가: 갓 상장한 종목은 60거래일이 찰 때까지 계속 편입으로 잡혀 하루 몇 콜을 더 쓴다
+# (영구가 아니라 자연 소멸. 실측 2026-08-19 dev: 0210A0 1종이 이 상태).
+#
+# **편입분은 증분 창에서 뺀다** — 둘 다 받으면 이력 fetch 가 실패해도 증분 5일치가 남아
+# 위의 얕은 유입이 된다. 빼 두면 실패한 종목은 행이 하나도 안 남아 다음 런이 다시 잡는다.
+#
+# 판정 상태는 collection_log 의 `newcomer_scan` 에 **모든 경로에서** 남는다:
+#   ok · not_applicable(holdings 파생 아닌 소스) · not_reached(스캔 전 종료) ·
+#   scan_failed(스캔 중 예외) · covered_by_primary_window(1차 창이 이미 깊다) ·
+#   no_usable_partition(scanned=N)
+# 편입 종목 수는 `symbols_newcomer`, 붙인 창 하한은 `newcomer_window_from` 이다.
+# ⚠️ `no_usable_partition` 은 런을 **partial(exit 1)** 로 내린다 — 기준 파티션을 못 찾은 런에
+# 편입 종목이 있었다면 그 이력은 **영구** 결손이다(다음 런은 '이미 있음'으로 본다). 조용히
+# 성공으로 마감하면 아무도 모른다. 단 `ops.failed_records` 는 안 올린다(심볼 실패가 아니라
+# 원장을 영구 INCOMPLETE 로 만들면 안 된다).
 DATA_PIPELINE_KIS_PRICE__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_PRICE__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-price-raw --source kis
 # 백필 예: 2026-06 한 달

@@ -380,3 +380,820 @@ def test_disabled_skip_survives_log_write_failure(tmp_path):
     source = FmpPriceSource(config, FakeClient({}))
 
     assert ingest_price_raw.run(settings, storage, source, "20260703T000000Z") == 1
+
+
+def _write_price_daily(storage, trade_date: str, tickers: list[str]) -> None:
+    """canonical KR 일봉 파티션 픽스처 — 그날 존재하는 티커 집합만 세운다."""
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    table = pa.Table.from_pylist(
+        [{"ticker": t, "close": 1.0} for t in tickers],
+        schema=pa.schema([("ticker", pa.string()), ("close", pa.float64())]))
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    storage.put_bytes(f"{canonical_price_daily_partition('KR', trade_date)}/part-00000.parquet",
+                      buf.getvalue())
+
+
+def _write_depth_history(storage, tickers: list[str], days: int = 65, end: str = "2026-08-13"):
+    """`days` 개 거래일 파티션에 같은 티커 집합을 깔아 깊이 판정의 배경을 만든다."""
+    from datetime import date, timedelta
+
+    d = date.fromisoformat(end)
+    for _ in range(days):
+        _write_price_daily(storage, d.isoformat(), tickers)
+        d -= timedelta(days=1)
+
+
+class _RecordingSource:
+    """옵트인 소스 — fetch 호출을 (symbols, from, to) 로 전부 기록한다.
+
+    실제 어댑터 계약을 그대로 흉내낸다: `fetch` 진입 시 `fetch_failures` 를 **리셋**하고
+    `planned_symbols` 를 그 호출의 대상 수로 덮는다(kis_price.fetch L124-126). 이 두 리셋이
+    2차 수집을 붙일 때 1차분을 지우는 자리라, 흉내내지 않으면 회귀를 못 잡는다.
+    """
+
+    source_name = "kis"
+    enabled = True
+    universe_from_holdings = True
+
+    def __init__(self, failures_by_call: dict[int, list[dict]] | None = None,
+                 planned_by_call: dict[int, int] | None = None, emit: bool = True):
+        self.calls: list[tuple[list[str], str | None, str | None]] = []
+        self.fetch_failures: list[dict] = []
+        self.planned_symbols: int | None = None
+        self._failures = failures_by_call or {}
+        self._planned = planned_by_call or {}
+        self._emit = emit
+
+    def fetch(self, symbols, from_date=None, to_date=None):
+        n = len(self.calls)
+        self.calls.append((list(symbols), from_date, to_date))
+        self.fetch_failures = list(self._failures.get(n, []))       # 진입 리셋
+        self.planned_symbols = self._planned.get(n, len(symbols))   # 진입 덮어쓰기
+        if not self._emit or n in getattr(self, "_emit_calls", set()):
+            return iter(())   # 전 심볼 실패 = 저장분 0
+        return iter(({"market": "KR", "our_ticker": s} for s in symbols))
+
+
+def test_newcomer_gets_history_window_others_keep_incremental(tmp_path):
+    # WHY: 유니버스는 holdings 파생이라 ETF 추가에 **즉시** 넓어지는데 수집 창은 5일이다 —
+    #      그래서 새 종목은 최근 5일만 채워지고 그 이전 날짜에는 영영 안 들어온다(dev 레이크
+    #      절벽 3회 · 결손 1,613셀, ALPHA-989). 유니버스가 넓어진 그 런이 이력을 메워야 한다.
+    #      전 종목에 긴 창을 물리는 것은 답이 아니므로 **편입분만** 두 번째 창으로 간다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["000660", "091160", "NVDA"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160"), ("000660", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["000660", "091160", "NVDA"])  # 042700 이 없다
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
+
+    assert len(source.calls) == 2
+    (first_syms, first_from, _), (second_syms, second_from, second_to) = source.calls
+    assert first_from == "2026-08-09"                 # 나머지는 증분 창 그대로
+    assert {"000660", "091160"} <= set(first_syms)
+    assert "042700" not in first_syms      # 편입분은 증분 창에서 **빠진다**
+    assert second_syms == ["042700"]       # 이력 창으로만 받는다
+    assert second_from == "2025-07-10"      # 2026-08-14 − 400일
+    assert second_to == "2026-08-14"
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["symbols_newcomer"] == 1
+    assert log["newcomer_window_from"] == "2025-07-10"
+
+
+def test_no_newcomer_means_no_second_fetch(tmp_path):
+    # WHY: 편입은 드문 사건이다(5주에 3회). 평시 런의 수집량·소요가 이 변경으로 늘면
+    #      15:40 시장 레인 전체가 매일 그 대가를 치른다 — 분기 자체가 안 돌아야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
+
+    assert len(source.calls) == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["symbols_newcomer"] == 0
+    assert log["newcomer_window_from"] is None
+
+
+def test_second_fetch_does_not_erase_first_pass_failures(tmp_path):
+    # WHY: 어댑터의 `fetch` 는 진입 때 `fetch_failures` 를 리셋한다. 2차 수집을 그냥 붙이면
+    #      1차에서 죽은 심볼이 런 상태에서 **사라져** partial(exit 1)이어야 할 런이
+    #      success(exit 0)로 마감된다 — 결손을 성공으로 위장하는 그 자리다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
+    source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+
+    assert len(source.calls) == 2
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+    assert log["records_failed_symbols"] == 1
+    assert log["failed_symbols"][0]["symbol"] == "000660"
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_second_fetch_planned_count_does_not_flip_run_to_skipped(tmp_path):
+    # WHY: "매핑 대상 0 = skip" 은 **런 전체**의 판정이고, 런의 대상 집합을 정하는 것은
+    #      1차 수집이다. 2차의 `planned_symbols`(편입분만)를 그대로 읽으면 정상 수집한 런이
+    #      대상 0으로 뒤집혀 skip 으로 위장된다 — 수집분이 있는데 skip 은 거짓이다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource(planned_by_call={1: 0})  # 2차가 대상 0을 보고
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "success"
+    assert log["reason"] is None
+
+
+def test_explicit_deep_backfill_window_skips_second_fetch(tmp_path):
+    # WHY: 운영자가 이미 그만큼 깊은 `--from` 으로 도는 백필 런에서는 2차 수집이 같은 창을
+    #      한 번 더 긁는 순수 낭비다(KIS 는 콜당 100건·0.5초 간격이라 413종이면 분 단위).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2025-01-01", "2026-08-14") == 0
+
+    assert len(source.calls) == 1  # 1차 창(2025-01-01)이 편입 창(2025-07-10)보다 깊다
+
+
+def test_empty_canonical_flags_everyone_so_bootstrap_gets_history(tmp_path):
+    # WHY: canonical 이 비었으면 **아무도 이력이 없다.** 예전엔 여기서 빈 목록을 냈는데,
+    #      그러면 첫 런이 증분 5일치만 넣고 그 다음부터는 '이미 있음'으로 보여 이력이 영영
+    #      안 붙는다 — dev 레이크가 실제로 그렇게 27거래일에 갇혀 있었다(ALPHA-989 의 발단).
+    #      전 종목에 400일 창을 한 번 물리면 파티션이 깊어져 다음 런부터 깊이 검사가 켜지므로
+    #      이 모드는 **한 런으로 끝난다**. 비싸 보이는 쪽이 실은 유일하게 수렴하는 쪽이다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
+    assert len(source.calls) == 2
+    assert source.calls[1][1] == "2025-07-10"          # 이력 창으로 받는다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "ok(bootstrap_empty_canonical)"
+    assert log["status"] == "success"                  # 판정이 선 것이지 못 한 게 아니다
+
+
+def test_newcomer_scan_ignores_malformed_price_partition_keys(tmp_path):
+    # WHY: '최신 파티션'은 사전순 max 로 고른다 — 비달력일 키가 상위를 차지하면 그 파티션의
+    #      티커 집합을 기준으로 삼아 **정상 종목 전체가 편입으로 잡힌다**(413종 400일 수집).
+    #      holdings 쪽이 같은 이유로 같은 판정을 이미 갖고 있다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "9999-99-99", ["111111"])
+    _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
+
+    newcomers, since, _ = ingest_price_raw._newcomers(
+        storage, ["042700", "091160", "000660"], "2026-08-14")
+    assert newcomers == ["000660"]
+    assert since == "2025-07-10"
+
+
+def test_unreadable_latest_partition_is_not_read_as_everyone_new(tmp_path, caplog):
+    # WHY: 0과 부재는 대칭이 아니다. 최신 파티션이 있는데 티커를 하나도 못 읽는 것(정제가
+    #      컬럼명을 바꿈·빈 parquet·전 행 null)을 "아무도 없다"로 읽으면 유니버스 **전체**가
+    #      신규 편입이 되어 413종에 400일 창이 붙고(수집량 400배), 그 런이 success 로 끝나
+    #      canonical 손상이 성공 뒤로 숨는다 — 판정을 포기하고 사유를 남겨야 한다(Rule 12).
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(  # ticker 컬럼이 없는 파티션(스키마 드리프트)
+        [{"symbol": "042700", "close": 1.0}],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.ERROR):
+        newcomers, _, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "000660"], "2026-08-14")
+    assert newcomers == []  # 전 종목을 신규로 몰지 않는다
+    assert reason == "no_usable_partition(scanned=1)"
+    assert any("티커를 못 읽은 행" in r.getMessage() for r in caplog.records)
+
+
+def test_malformed_price_partition_key_is_surfaced(tmp_path, caplog):
+    # WHY: 판정에서 빼는 것만으로는 부족하다 — canonical 에 비정상 파티션이 생겼다는 사실
+    #      자체가 결함 신호인데 조용히 버리면 아무도 모른다. 3줄 위 holdings 스캔이 같은
+    #      상황에서 이미 경고한다(Rule 11 — 같은 파일 안에서 관례가 갈리면 안 된다).
+    import logging
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "9999-99-99", ["111111"])
+    _write_price_daily(storage, "2026-08-13", ["042700"])
+
+    with caplog.at_level(logging.WARNING):
+        ingest_price_raw._newcomers(storage, ["042700"], "2026-08-14")
+    assert any("비정상 trade_date 파티션 키 무시" in r.getMessage() and "9999-99-99" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_partial_ticker_drift_also_abandons_the_judgment(tmp_path, caplog):
+    # WHY: **부분** 드리프트가 진짜 함정이다. 파일 하나만 정상이면 `known` 이 비지 않아
+    #      "티커를 하나도 못 읽었나" 식 가드는 그냥 통과하고, 손상 파일에 실려 있던 수백
+    #      종목이 전부 신규 편입으로 잡혀 각자 400일 창을 받는다 — 게다가 런은 성공한다.
+    #      정상 파티션은 티커당 한 행이라(_merge_partition 이 ticker 키로 병합) 못 읽는
+    #      행은 0이어야 한다. 한 행만 못 읽어도 판정을 포기한다.
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    prefix = canonical_price_daily_partition("KR", "2026-08-13")
+    _write_price_daily(storage, "2026-08-13", ["091160"])          # 정상 파일
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(                            # 같은 파티션의 드리프트 파일
+        [{"symbol": t, "close": 1.0} for t in ("042700", "000660")],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(f"{prefix}/part-00001.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.ERROR):
+        newcomers, _, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "000660", "091160"], "2026-08-14")
+    assert newcomers == []          # known={091160} 이라 안 걸렀으면 2종이 신규로 잡혔다
+    assert reason == "no_usable_partition(scanned=1)"
+    assert any("읽은 티커 1종" in r.getMessage() for r in caplog.records)
+
+
+def test_skipped_newcomer_scan_is_distinguishable_in_the_ledger(tmp_path):
+    # WHY: 판정을 건너뛴 런과 편입이 없던 런은 밖에서 같은 모양이다(symbols_newcomer=0).
+    #      로그 한 줄은 CloudWatch 를 뒤져야 보이고, 원장을 읽는 소비자는 둘을 구분 못 한다
+    #      — 손상이 '편입 없음'으로 위장된다(Rule 12). 사유를 collection_log 에 남긴다.
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(
+        [{"symbol": "091160", "close": 1.0}],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+    source = _RecordingSource()
+
+    # 판정 근거를 못 찾은 런은 **조용히 성공하면 안 된다** — 같은 런의 1차 수집이 신규
+    # 티커를 canonical 에 넣어 다음 런부터 '이미 있음'으로 보이므로, 놓친 편입 종목의
+    # 이력은 영구 결손이 된다. 저장분은 있으니 error 가 아니라 partial 이다.
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+    assert log["symbols_newcomer"] == 0
+    assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"  # '편입 없음'과 구분된다
+    assert log["ops"]["failed_records"] == 0   # 심볼 실패가 아니다 — 원장을 영구 INCOMPLETE 로 만들지 않는다
+
+
+def test_healthy_scan_records_ok_in_the_ledger(tmp_path):
+    # WHY: 위 구분이 성립하려면 정상 런이 반드시 "ok"를 남겨야 한다 — 필드가 조건부로만
+    #      존재하면 '없음'이 다시 두 가지 뜻(정상/구버전)을 갖는다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["042700", "091160"])
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 0
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "ok"
+
+
+def test_ticker_type_drift_is_unreadable_not_absent(tmp_path, caplog):
+    # WHY: '읽혔다'를 truthy 로만 판정하면 **타입 드리프트를 못 잡는다**. ticker 가 int64 로
+    #      바뀌면 known 은 정수 집합이 되어 문자열 유니버스와 하나도 안 겹치고, unreadable 은
+    #      0 이라 앞선 가드도 통과한다 — 전 종목(413)에 400일 2차 fetch 가 붙어 KIS 쿼터를
+    #      태운다. 유니버스와 같은 형태일 때만 읽힌 것으로 세야 한다.
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(   # ticker 가 정수 — truthy 지만 유니버스와 남남
+        [{"ticker": 42700, "close": 1.0}, {"ticker": 91160, "close": 2.0}],
+        schema=pa.schema([("ticker", pa.int64()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.ERROR):
+        newcomers, _, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "091160"], "2026-08-14")
+    assert newcomers == []                       # 전 종목을 신규로 몰지 않는다
+    assert reason == "no_usable_partition(scanned=1)"
+    assert any("읽은 티커 0종" in r.getMessage() for r in caplog.records)
+
+
+def test_padded_ticker_is_tidied_not_discarded(tmp_path, caplog):
+    # WHY: 가드가 **상류 게이트보다 엄격하면 그 차이가 곧 결함**이다.
+    #      `normalize_price._blank` 는 strip 후 비지 않으면 canonical 로 보내므로
+    #      ' 091160' 은 정상 통과한 행이다. 그걸 '못 읽음'으로 치면 정상 파티션을 통째로
+    #      버리고, 그 값이 계속 있으면 편입 판정이 영영 멈춰 이력이 영구 결손된다.
+    #      정체성은 정돈한 코드다(`parse.krx_short_code` 와 같은 축) — 정돈해 읽되
+    #      드러낸다.
+    import logging
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["042700", "091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "2026-08-13", ["042700", " 091160"])
+
+    with caplog.at_level(logging.WARNING):
+        newcomers, since, reason = ingest_price_raw._newcomers(
+            storage, ["042700", "091160", "000660"], "2026-08-14")
+    assert reason == "ok"                # 파티션을 버리지 않는다
+    assert newcomers == ["000660"]       # ' 091160' 이 091160 으로 읽혀 편입이 아니다
+    assert since == "2025-07-10"
+    assert any("공백이 붙은 ticker" in r.getMessage() for r in caplog.records)
+
+
+def test_newcomer_scan_field_exists_on_every_path(tmp_path):
+    # WHY: 필드 부재가 '구버전 로그'·'비활성 런'·'스캔 전 실패' 셋을 한 모양으로 뭉개면
+    #      원장 소비자는 손상을 정상과 구분할 수 없다. 조기 종료·비옵트인 경로에서도
+    #      값이 있어야 그 구분이 성립한다(Rule 12).
+    settings = _settings(tmp_path)
+
+    # ① 비활성 소스 — 스캔에 도달하지 못했다
+    storage = LocalStorage(tmp_path / "lake1")
+    config = PriceSource(base_url=settings.price.source.base_url, api_key=None, symbol_map=_MAP)
+    assert ingest_price_raw.run(
+        settings, storage, FmpPriceSource(config, FakeClient({})), "r1") == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["newcomer_scan"] == "not_reached"
+
+    # ② holdings 파생을 안 쓰는 소스(FMP) — 판정 자체가 없는 런
+    storage = LocalStorage(tmp_path / "lake2")
+    config = PriceSource(base_url=settings.price.source.base_url, api_key="k", symbol_map=_MAP)
+    assert ingest_price_raw.run(
+        settings, storage, FmpPriceSource(config, FakeClient({"NVDA": [_bar("2026-08-14")]})),
+        "r2") == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["newcomer_scan"] == "not_applicable"
+
+
+def test_deep_primary_window_is_distinguishable_from_no_newcomer(tmp_path):
+    # WHY: 명시 --from 백필은 편입이 **있어도** 2차를 안 돈다. 그 런과 '편입이 없던 런'이
+    #      원장에서 같은 모양(symbols_newcomer=0)이면, 백필이 편입분을 덮었는지 아니면
+    #      애초에 없었는지 사후에 못 가린다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2025-01-01", "2026-08-14") == 0
+    assert len(source.calls) == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "covered_by_primary_window"
+    assert log["symbols_newcomer"] == 0
+
+
+def test_same_symbol_failing_in_both_fetches_counts_once(tmp_path):
+    # WHY: `failed_symbols` 의 축은 **심볼**이다(records_failed_symbols·ops.failed_records).
+    #      편입 종목이 1차(증분 창)와 2차(이력 창) 모두에서 죽으면 실패 심볼은 1종인데,
+    #      두 목록을 그냥 이으면 2로 보고돼 원장이 실제보다 나쁜 상태를 가리킨다 —
+    #      failed_records 는 원장 완전성 판정의 입력이라 부풀면 런이 영구 INCOMPLETE 다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])  # 042700 편입
+    fail = [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}]
+    source = _RecordingSource(failures_by_call={0: fail, 1: fail})  # 같은 심볼이 두 번
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+
+    assert len(source.calls) == 2
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_failed_symbols"] == 1      # 2종이 아니다
+    assert log["ops"]["failed_records"] == 1
+    assert log["status"] == "partial"
+
+
+def test_real_failure_beats_truncation_for_the_same_symbol(tmp_path):
+    # WHY: 중복 제거가 **절단을 남기면** 더 나쁘다. 절단(kind=truncation)은 성공으로 치는
+    #      종류라(ALPHA-351 — 데이터는 유효하고 다음 창이 이어받는다), 실제 실패를 절단이
+    #      덮으면 partial 이어야 할 런이 success·exit 0 으로 끝난다. 심각한 쪽이 이겨야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource(failures_by_call={
+        0: [{"symbol": "042700", "our_ticker": "042700", "kind": "truncation", "error": "잘림"}],
+        1: [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}],
+    })
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_failed_symbols"] == 1
+    assert log["failed_symbols"][0].get("kind") != "truncation"  # 실제 실패가 남았다
+    assert log["status"] == "partial"                            # 절단만 남았으면 success 였다
+
+
+def test_scan_failure_is_not_reported_as_never_reached(tmp_path):
+    # WHY: 스캔에 **못 간 런**과 **갔다가 죽은 런**은 진단이 다르다(전자는 비활성·설정,
+    #      후자는 레이크 장애·비달력일 창). 둘 다 not_reached 로 남으면 원장만 보고는
+    #      어느 쪽인지 못 가린다 — '모든 경로에 값이 있다'가 '값이 사실이다'는 아니다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    source = _RecordingSource()
+
+    # 비달력일 창 끝 → _newcomers 안에서 date.fromisoformat 이 죽는다
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-13-99") == 1
+
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "error"
+    assert log["newcomer_scan"] == "scan_failed"   # not_reached 가 아니다
+
+
+def test_empty_latest_partition_falls_back_instead_of_abandoning(tmp_path, caplog):
+    # WHY: **판정을 포기하면 원 결함이 되살아난다.** `normalize_price._write_canonical` 은
+    #      병합 결과가 0행이어도 part-00000 을 쓴다(벤더 교차 충돌이 그날 키를 전부 지우면
+    #      그렇다). 그 빈 파티션을 만난 런이 판정을 포기하면, 같은 런의 1차 수집이 신규
+    #      티커의 최근 5일을 canonical 에 넣어 다음 런부터는 '이미 있음'으로 보인다 —
+    #      400일 이력은 영영 안 붙는다(ALPHA-989 그 자체). 기준을 하루 물리는 대가는
+    #      편입 후보가 조금 넓어지는 것뿐이고, 그건 과수집 = 안전한 방향이다.
+    import io
+    import logging
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "000660"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "2026-08-12", ["091160", "000660"])   # 쓸 수 있는 기준
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(                              # 최신인데 0행
+        [], schema=pa.schema([("ticker", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    with caplog.at_level(logging.WARNING):
+        newcomers, since, reason = ingest_price_raw._newcomers(
+            storage, ["091160", "000660", "042700"], "2026-08-14")
+    assert reason == "ok"               # 포기하지 않는다
+    assert newcomers == ["042700"]      # 08-12 기준으로 정상 판정
+    assert since == "2025-07-10"
+    assert any("파티션이 비었다" in r.getMessage() for r in caplog.records)
+
+
+def test_drifted_latest_partition_falls_back_to_clean_one(tmp_path):
+    # WHY: 위와 같은 이유가 스키마 드리프트에도 적용된다 — 최신이 못 쓸 뿐이지 이전 기준이
+    #      멀쩡하면 판정은 계속돼야 한다. 손상 파티션을 기준으로 삼지 않는 것과, 판정
+    #      자체를 포기하는 것은 다른 일이다.
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "2026-08-12", ["091160"])
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(
+        [{"symbol": "091160", "close": 1.0}],
+        schema=pa.schema([("symbol", pa.string()), ("close", pa.float64())])), buf)
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", buf.getvalue())
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok"
+    assert newcomers == ["042700"]
+
+
+def test_all_reference_partitions_unusable_abandons_with_reason(tmp_path):
+    # WHY: 물러나기에도 바닥이 있어야 한다 — 상한 안 전부가 못 쓸 파티션이면 그때는 정말
+    #      판정할 근거가 없다. 그 사실이 원장에 남아야 '편입 없음'과 구분된다.
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    empty = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(
+        [], schema=pa.schema([("ticker", pa.string()), ("close", pa.float64())])), empty)
+    for d in ("2026-08-11", "2026-08-12", "2026-08-13"):
+        storage.put_bytes(
+            f"{canonical_price_daily_partition('KR', d)}/part-00000.parquet", empty.getvalue())
+
+    newcomers, _, reason = ingest_price_raw._newcomers(storage, ["042700"], "2026-08-14")
+    assert newcomers == []
+    assert reason == "no_usable_partition(scanned=3)"
+
+
+def test_scan_incomplete_does_not_mask_symbol_failures(tmp_path):
+    # WHY: partial 판정이 두 축(판정 불가·심볼 실패)에서 오는데, 한쪽이 먼저 status 를
+    #      바꾸면 뒤 판정이 `status == "success"` 조건에 걸려 통째로 건너뛸 수 있다 —
+    #      그러면 실패 심볼이 런 상태에 반영되지 않고 failed_records 도 안 오른다.
+    #      두 사실은 서로를 가리지 않아야 한다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", [])  # 빈 파티션 → 판정 근거 없음
+    source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+    assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"
+    assert log["records_failed_symbols"] == 1     # 심볼 실패가 판정 불가에 가려지지 않는다
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_scan_incomplete_must_not_soften_a_total_collection_failure(tmp_path):
+    # WHY: partial 을 만드는 축이 둘이라(판정 불가·심볼 실패) **먼저 온 쪽이 뒤를 가린다.**
+    #      판정 불가가 status 를 partial 로 올려 두면, 뒤의 실패 판정이 `status ==
+    #      "success"` 조건에 걸려 통째로 건너뛴다 — 전 심볼이 죽어 저장분이 0인 런이
+    #      error 가 아니라 partial 로 마감된다. 덜 심각하게 보고하는 것도 위장이다(Rule 12).
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", [])   # 판정 근거 없음 → scan_incomplete
+    source = _RecordingSource(                       # 그리고 전 심볼 실패 → 저장분 0
+        failures_by_call={0: [{"symbol": "042700", "error": "boom"}]}, emit=False)
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_saved"] == 0
+    assert log["status"] == "error"        # partial 이면 실패가 판정 불가에 가려진 것이다
+    assert "모든 수집 심볼 실패" in log["error"]
+
+
+def test_corrupt_parquet_does_not_stop_the_days_collection(tmp_path):
+    # WHY: 이 판정은 1차 `source.fetch` **앞**에 있다. 깨진 parquet 하나나 S3 일시 오류가
+    #      예외로 올라가면 그날 가격 수집이 통째로 안 돈다 — 그리고 새 raw 가 안 생기니
+    #      그 파티션이 계속 최신으로 남아 **매 런이 같은 자리에서 죽는다**(수동 복구 전까지
+    #      영구 정지). 보조 판정이 본 수집을 죽이면 안 된다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    storage.put_bytes(                                   # parquet 이 아닌 바이트
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", b"not-parquet")
+    source = _RecordingSource()
+
+    code = ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14")
+
+    assert len(source.calls) == 1                        # 1차 수집이 **돌았다**
+    assert storage.list_keys("raw") != []                # 그리고 raw 가 저장됐다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["records_saved"] > 0
+    assert log["newcomer_scan"] == "no_usable_partition(scanned=1)"
+    assert log["status"] == "partial" and code == 1      # 판정 불가는 여전히 드러난다
+
+
+def test_corrupt_latest_partition_falls_back_to_a_readable_one(tmp_path):
+    # WHY: 깨진 파일은 '그 파티션을 못 씀'이지 '판정 불가'가 아니다 — 이전 파티션이 멀쩡하면
+    #      편입 판정은 계속돼야 한다. 여기서 포기하면 그 런의 편입 종목 이력이 영구 결손된다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "2026-08-12", ["091160"])
+    storage.put_bytes(
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00000.parquet", b"corrupt")
+
+    newcomers, since, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok"
+    assert newcomers == ["042700"]
+    assert since == "2025-07-10"
+
+
+def test_malformed_window_end_is_not_swallowed(tmp_path):
+    # WHY: 비달력일 창 끝은 **입력 오류**이고 1차 fetch 도 같은 값을 쓴다 — 읽기 실패처럼
+    #      격리해 삼키면 창이 틀린 채로 수집이 돈다. 파티션을 하나도 못 읽는 상황에서도
+    #      이 오류는 그대로 올라와야 한다(격리 대상이 아니다).
+    import pytest
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    with pytest.raises(ValueError):
+        ingest_price_raw._newcomers(storage, ["091160"], "2026-13-99")
+
+
+def test_partition_with_one_corrupt_file_is_not_accepted_partially(tmp_path):
+    # WHY: 파티션에 정상 파일과 깨진 파일이 섞이면 `known` 이 비지 않는다 — 그걸 그대로
+    #      기준으로 삼으면 **깨진 파일에 실려 있던 종목이 통째로 신규 편입**으로 잡혀 각자
+    #      400일 창을 받는다. 부분 스키마 드리프트와 같은 함정이 손상 경로로 재현되는 자리다.
+    #      못 읽은 파일이 하나라도 있으면 그 파티션은 기준에서 뺀다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "042700"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "2026-08-12", ["091160", "042700"])       # 멀쩡한 이전 기준
+    _write_price_daily(storage, "2026-08-13", ["091160"])                 # 최신의 정상 파일
+    storage.put_bytes(                                                     # 같은 파티션의 깨진 파일
+        f"{canonical_price_daily_partition('KR', '2026-08-13')}/part-00001.parquet", b"corrupt")
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok"
+    # 08-13 을 부분 뷰로 받아들였으면 042700 이 편입으로 잡혔다. 08-12 로 물러나야 0종이다.
+    assert newcomers == []
+
+
+def test_unbounded_primary_window_covers_newcomers(tmp_path):
+    # WHY: 하한 없는 창(`--to` 만 준 백필)은 어댑터가 종목 이력 끝까지 페이지네이션하므로
+    #      400일 이력 창보다 **깊다**. 그때 2차 수집은 순수 낭비다 — 'from_date 가 None 이면
+    #      증분'이라고 읽으면 편입분을 두 번 받는다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])   # 042700 편입
+    source = _RecordingSource()
+
+    assert ingest_price_raw.run(settings, storage, source, "r1", None, "2026-08-14") == 0
+    assert len(source.calls) == 1
+    assert "042700" in source.calls[0][0]                   # 1차 창이 이미 덮는다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "covered_by_primary_window"
+
+
+def test_failed_history_fetch_leaves_no_rows_so_it_retries(tmp_path):
+    # WHY: **partial 로 보고했는데 결손이 영구가 되는** 자리다. 편입 종목을 증분 창에서도
+    #      받으면 이력 fetch 가 실패해도 5일치는 남고, SFN 은 partial 런도 정제로 계속
+    #      보내므로(statemachine.tf NotifyRawPartial) 그 5일치가 canonical 에 들어간다.
+    #      그러면 다음 런의 존재 기반 판정이 '이미 있음'으로 보고 400일 이력은 영영
+    #      재시도되지 않는다. 편입분을 증분 창에서 빼면 실패한 종목은 행이 하나도 안 남아
+    #      계속 편입으로 잡힌다 — 새 상태 저장 없이 성공할 때까지 자격이 유지된다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "005930"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    _write_price_daily(storage, "2026-08-13", ["091160"])
+    source = _RecordingSource(                       # 2차(이력) 창에서 편입 종목이 죽는다
+        failures_by_call={1: [{"symbol": "042700", "our_ticker": "042700", "error": "boom"}]})
+    source._emit_calls = {1}                          # 그 창은 행을 안 낸다
+
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+
+    [raw_key] = storage.list_keys("raw")
+    tickers = {json.loads(line)["our_ticker"]
+               for line in storage.get_bytes(raw_key).decode("utf-8").strip().splitlines()}
+    assert "042700" not in tickers   # 실패한 편입분의 행이 **하나도 없다** → 다음 런이 다시 잡는다
+    assert {"091160", "005930"} <= tickers   # 나머지는 증분 창으로 정상 수집됐다
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["status"] == "partial"
+
+
+def test_partition_listing_failure_is_isolated_too(tmp_path):
+    # WHY: 파일 읽기만 격리하면 절반이다 — 목록 조회(S3 ListObjects)도 실패한다. 그게
+    #      예외로 올라가면 파일 손상과 똑같이 그날 수집 전체가 죽고, 새 raw 가 안 생겨
+    #      매 런이 같은 자리에서 죽는다. 봇이 "per candidate/file" 이라 한 candidate 쪽이다.
+    from data_pipeline.lake import canonical_price_daily_partition
+
+    class ListFailingStorage(LocalStorage):
+        def list_keys(self, prefix):
+            if prefix.startswith(canonical_price_daily_partition("KR", "2026-08-13")):
+                raise OSError("S3 ListObjects 실패")
+            return super().list_keys(prefix)
+
+    storage = ListFailingStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])   # 깊이 축은 중립 — 이 테스트가 재는 축이 아니다
+    _write_price_daily(storage, "2026-08-12", ["091160"])   # 멀쩡한 이전 기준
+    _write_price_daily(storage, "2026-08-13", ["091160"])   # 이 파티션의 목록 조회가 죽는다
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok"                # 예외가 아니라 물러나기다
+    assert newcomers == ["042700"]       # 08-12 기준으로 판정이 계속된다
+
+
+def test_shallow_ticker_stays_eligible_until_history_lands(tmp_path):
+    # WHY: **존재는 이력을 증명하지 못한다.** 티커는 얕게도 들어온다 — ① 판정 불가 런에서
+    #      증분 5일치만 ② 이력 fetch 가 실패해도 어댑터가 모은 봉을 그대로 냄 ③ MAX_PAGES
+    #      절단. 셋 다 결과가 같다: '이미 있음'이 되어 400일 이력이 영영 재시도되지 않는다.
+    #      SFN 이 partial 런도 정제로 보내므로 그 얕은 행은 실제로 canonical 에 들어간다.
+    #      최신뿐 아니라 **과거 파티션**도 봐야 얕게 들어온 티커가 자격을 유지한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"])                      # 091160 은 깊은 이력
+    for d in ("2026-08-11", "2026-08-12", "2026-08-13"):           # 042700 은 최근 3일만
+        _write_price_daily(storage, d, ["091160", "042700"])
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok"
+    assert newcomers == ["042700"]   # 최신에 '있는데도' 편입 — 얕기 때문이다
+
+
+def test_deep_ticker_is_not_flagged(tmp_path):
+    # WHY: 깊이 판정이 정상 종목을 계속 편입으로 잡으면 매일 412종에 400일 창이 붙는다 —
+    #      깊이가 채워진 티커는 반드시 빠져야 한다(그게 '성공할 때까지'의 종료 조건이다).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160", "042700"])
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok"
+    assert newcomers == []
+
+
+def test_unanswerable_depth_is_not_proven_not_fine(tmp_path):
+    # WHY: 깊이를 **답할 수 없을 때** 검사를 생략하면 그 구간에서 오염이 그대로 성립한다 —
+    #      판정 불가 런의 증분 5일치나 실패한 이력의 부분 행이 '이미 있음'을 만들고 재시도
+    #      자격이 사라진다. 모르는 것은 '증명되지 않음'이지 '괜찮음'이 아니다(Rule 12).
+    #      전 종목을 편입으로 보되, 400일 창 한 번이면 파티션이 깊어져 이 모드가 꺼진다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_depth_history(storage, ["091160"], days=5)   # 깊이 요건에 한참 못 미친다
+
+    newcomers, _, reason = ingest_price_raw._newcomers(
+        storage, ["091160", "042700"], "2026-08-14")
+    assert reason == "ok(depth_unavailable)"            # 모드가 원장에 드러난다
+    assert newcomers == ["042700", "091160"]            # 091160 도 증명되지 않았다
+
+
+def test_partition_discovery_listing_failure_still_collects(tmp_path):
+    # WHY: 파티션 **발견** 조회(`list_keys(marker)`)는 파티션별 조회와 달리 물러날 곳이
+    #      없다 — 그래서 감싸지 않으면 S3 일시 오류 한 번에 1차 fetch 전에 런이 죽고,
+    #      새 raw 가 안 생겨 매 런이 같은 자리에서 죽는다. 판정만 포기하고 수집은 계속한다.
+    settings = _settings(tmp_path)
+
+    class DiscoveryFailingStorage(LocalStorage):
+        def list_keys(self, prefix):
+            if prefix.endswith("/trade_date="):
+                raise OSError("S3 ListObjects 실패")
+            return super().list_keys(prefix)
+
+    storage = DiscoveryFailingStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-08-13", [("042700", "091160")])
+    source = _RecordingSource()
+
+    code = ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14")
+
+    assert len(source.calls) == 1              # 1차 수집이 **돌았다**
+    assert storage.list_keys("raw") != []
+    log = json.loads(storage.get_bytes(
+        [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
+    assert log["newcomer_scan"] == "scan_failed(list_partitions)"
+    assert log["status"] == "partial" and code == 1   # 불확실성은 드러난다

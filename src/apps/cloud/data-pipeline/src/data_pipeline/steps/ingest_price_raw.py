@@ -15,10 +15,16 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from ..config import Settings
-from ..lake import Storage, canonical_etf_holdings_partition, collection_log_key, raw_price_partition
+from ..lake import (
+    Storage,
+    canonical_etf_holdings_partition,
+    canonical_price_daily_partition,
+    collection_log_key,
+    raw_price_partition,
+)
 from ..parse import krx_short_code
 from ..sources import FmpPriceSource, KisDailyPriceSource, StopFetch
 
@@ -161,6 +167,230 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
 
     return pq.read_table(io.BytesIO(data)).to_pylist()
 
+
+# 유니버스 신규 편입 종목에만 붙이는 이력 창(달력일). 400일 ≈ 270거래일 (ALPHA-989).
+#
+# **이 숫자를 정하는 것은 소비자다.** 일봉 이력의 가장 깊은 살아 있는 소비자는
+# `analysis-engine/statics/attribute.py` 의 `SIGMA_N`(60거래일 창) · `SIGMA_MIN_N`(최소 40)
+# 이고, 그 위에 `paneltest` w20 · `vocab.MIN_N`(30) · `tool_stability`(2×30 사건일)가 얹힌다.
+# 60거래일 창이 **롤링**이라 하한을 딱 60에 맞추면 몇 주 뒤 다시 모자란다 — 4배 여유를 둔다.
+# 저쪽 상수가 움직이면 여기도 옮겨라(레포가 달라 import 로 못 묶는다 — 5분봉 백필 스크립트의
+# `--min-days` 가 같은 이유로 같은 처지였다).
+#
+# 왜 `DEFAULT_PRICE_LOOKBACK_DAYS` 상향이 아닌가: 신규 편입 종목이 필요로 하는 건 5일이
+# 아니라 수백 거래일인데, 그 창을 **전 종목**(413종)에 매일 물리면 수집량이 통째로 커진다.
+NEWCOMER_LOOKBACK_DAYS = 400
+
+# 편입 판정의 기준 파티션을 찾아 거슬러 올라가는 상한. holdings 쪽 상한과 숫자는 같지만
+# **다른 사실**이라 따로 둔다(저건 부분 스냅샷 보강, 이건 못 쓰는 최신 파티션 회피).
+NEWCOMER_REFERENCE_PARTITIONS = 10
+
+# 편입 판정을 **존재가 아니라 깊이**로 하기 위한 소급 파티션 수(거래일).
+#
+# 존재만 보면 "canonical 에 있다"가 "이력이 있다"를 증명하지 못한다. 티커는 **불완전하게도**
+# 들어올 수 있다 — ① 판정 불가 런에서 증분 5일치만 실려 들어감 ② 이력 fetch 가 유효 페이지를
+# 읽다가 실패해도 어댑터가 모은 봉을 그대로 냄(`kis_price._fetch_symbol`) ③ MAX_PAGES 절단.
+# 셋 다 결과가 같다: **얕게 들어와서 '이미 있음'이 되고 이력은 영영 재시도되지 않는다.**
+# SFN 이 partial 런도 정제로 계속 보내므로(`statemachine.tf` NotifyRawPartial) 그 얕은 행은
+# 실제로 canonical 에 들어간다.
+#
+# 그래서 최신 기준 파티션 **하나 더**, 이만큼 과거의 파티션도 본다. 둘 중 하나에라도 없으면
+# 편입이다 — 얕게 들어온 티커는 과거 파티션에 없으므로 **성공할 때까지 자격이 유지된다**
+# (새 상태 저장 없이 "keep eligible until success"). 어댑터가 최신→과거로 페이지네이션해
+# 절단이 **과거 끝**을 잃는다는 점이 이 판정과 맞물린다.
+#
+# 값은 소비자 깊이(analysis-engine `attribute.SIGMA_N` = 60거래일)에 맞춘다. 대가: 갓 상장한
+# 종목은 이 기간 동안 계속 편입으로 잡혀 하루 몇 콜을 더 쓴다 — 영구가 아니라 **자연 소멸**
+# 한다(그만큼 지나면 과거 파티션에도 들어간다).
+NEWCOMER_DEPTH_PARTITIONS = 60
+
+
+def _newcomers(
+    storage: Storage, universe: list[str], window_end: str
+) -> tuple[list[str], str, str]:
+    """(유니버스 신규 편입 티커, 그들에게 붙일 창 하한, **판정 상태**) — canonical 일봉에
+    **이력이 얕은** 티커 (ALPHA-989).
+
+    세 번째 값은 판정 상태다. **`ok` 로 시작하면 판정이 섰다**는 뜻이고 괄호 안은 어떤
+    모드로 섰는지다(`ok` · `ok(depth_unavailable)` · `ok(bootstrap_empty_canonical)`).
+    그 밖은 판정을 **못 했다**는 뜻이라 호출부가 런을 partial 로 내린다
+    (`no_usable_partition(...)` · `scan_failed(...)`). 호출부가 collection_log 에 실어
+    운영에서 보이게 한다 — 로그 한 줄만으로는 "판정을 못 한 런"과 "편입이 없던 런"이
+    바깥에서 같은 모양(symbols_newcomer=0)이라 구분이 안 된다.
+
+    유니버스는 canonical holdings 파생이라 ETF 가 추가되면 **즉시** 넓어지는데, 수집 창은
+    `DEFAULT_PRICE_LOOKBACK_DAYS`(5일)다. 그래서 넓어진 유니버스는 최근 5일만 다시 긁고 그
+    이전 날짜에는 새 종목이 **영영** 안 채워진다 — dev 레이크에서 절벽이 세 번 났고
+    (07-13 233→341 · 07-27 343→365 · 08-06 362→413) 셋 다 같은 모양이었다. 유니버스가
+    넓어진 그 런이 곧 이력을 메우게 하는 것이 이 판정의 자리다.
+
+    판정 기준을 "최신 파티션"으로 둔 대가 둘을 명시한다:
+
+    - ⚠️ holdings 에 남은 상장폐지·거래정지 티커는 매 런 편입으로 잡혀 하루 1콜을 쓴다
+      (이력이 없으니 페이지1에서 `new==0` 으로 끝난다). 로그로 드러낸다.
+    - 그날 하루만 결측이었던 종목도 잡힌다 — 낭비가 아니라 **자가복구**다(그 구멍이 메워진다).
+
+    canonical 이 통째로 비었으면 빈 목록이다. 전 종목이 '신규'라 판정이 뜻을 잃고, 첫 런이
+    곧 이력의 시작이기 때문이다 — 새 레이크의 이력은 이 경로가 아니라 명시적 `--from` 백필이
+    맡는다(그게 ALPHA-989 의 나머지 절반이다).
+    """
+    # 창 하한을 **가장 먼저** 만든다 — 비달력일 `window_end` 는 입력 오류이고 1차 fetch 도
+    # 같은 값을 쓰므로, 파티션 읽기 성패와 무관하게 즉시 올라가야 한다(삼키면 창이 틀린 채로
+    # 수집이 돈다). 읽기 실패와 달리 이건 격리 대상이 아니다.
+    since = (date.fromisoformat(window_end) - timedelta(days=NEWCOMER_LOOKBACK_DAYS)).isoformat()
+    marker = canonical_price_daily_partition("KR", "")  # ".../trade_date="'''
+    try:
+        found = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
+    except Exception:
+        # 파티션 **발견** 조회다. 파티션별 조회(`_partition_tickers`)와 달리 물러날 곳이
+        # 없지만, 여기서 예외를 올리면 1차 fetch 전에 런이 죽어 그날 수집이 통째로 안 된다
+        # — 그리고 새 raw 가 안 생겨 매 런이 같은 자리에서 죽는다. 판정만 포기하고 사유를
+        # 남긴다(호출부가 런을 partial 로 내린다).
+        logger.exception("canonical 일봉 파티션 목록 조회 실패 — 편입 판정을 건너뛴다")
+        return [], since, "scan_failed(list_partitions)"
+    found.discard("")
+    # 비달력일 키가 정렬 상위를 차지하면 엉뚱한 파티션을 기준으로 삼는다 — holdings 쪽
+    # `_latest_kr_holdings_rows` 가 같은 이유로 같은 판정·같은 경고를 쓴다(사실을 하나로).
+    dates = {d for d in found if _is_calendar_date(d)}
+    if found - dates:
+        logger.warning("canonical 일봉 비정상 trade_date 파티션 키 무시: %s", sorted(found - dates))
+    if not dates:
+        # canonical 이 통째로 비었다 — 손상이 아니라 새 레이크다. **아무도 이력이 없으므로
+        # 전 종목이 편입이다.** 예전엔 여기서 빈 목록을 냈는데, 그러면 첫 런이 증분 5일치만
+        # 넣고 그 다음부터는 '이미 있음'으로 보여 이력이 영영 안 붙는다 — dev 레이크가 실제로
+        # 그렇게 27거래일에 갇혀 있었다(ALPHA-989 의 발단). 한 번 깊게 받으면 파티션이 깊어져
+        # 다음 런부터 깊이 검사가 켜지므로 이 모드는 **한 런으로 끝난다.**
+        logger.warning("canonical 일봉이 비었다 — 유니버스 전체(%d종)를 편입으로 본다", len(universe))
+        return sorted(universe), since, "ok(bootstrap_empty_canonical)"
+
+    # 최신 하나만 보지 않고 **쓸 수 있는 파티션을 만날 때까지 물러난다.** 최신이 못 쓸 수
+    # 있기 때문이다: ① `normalize_price._write_canonical` 은 병합 결과가 0행이어도
+    # part-00000 을 쓴다(벤더 교차 충돌이 그 날 키를 전부 지우면 그렇다) ② 스키마 드리프트.
+    # 그때 판정을 그냥 포기하면 **원 결함이 되살아난다** — 같은 런의 1차 수집이 신규 티커의
+    # 최근 5일을 canonical 에 넣으므로 다음 런부터 그 티커는 '이미 있음'으로 보이고, 이력
+    # 창은 영영 안 붙는다.
+    #
+    # **기준이 낡아도 놓치지 않는다** — 신규 상장·편입 종목은 더 오래된 파티션에도 없으므로
+    # 물러난 기준에서도 그대로 편입으로 잡힌다. 낡은 기준이 못 잡는 것은 '최근 파티션에만
+    # 빠진 종목'(거래정지 등)뿐인데, 그건 이미 이력이 있어 손실이 아니라 콜 낭비를 던 것이다.
+    # 틀리는 방향이 한쪽으로만 열려 있다는 뜻이라 물러나기가 안전하다.
+    # holdings 스캔이 부분 스냅샷에 대해 하는 것과 같은 자세다.
+    for candidate in sorted(dates, reverse=True)[:NEWCOMER_REFERENCE_PARTITIONS]:
+        known, unreadable = _partition_tickers(storage, candidate)
+        if unreadable:
+            # 못 읽은 행이 하나라도 있으면 그 파티션은 기준으로 못 쓴다 — '그 종목들이
+            # 없다'로 읽으면 손상 파일에 실려 있던 종목이 통째로 편입으로 잡힌다.
+            logger.error(
+                "canonical 일봉 trade_date=%s 에서 티커를 못 읽은 행 %d (읽은 티커 %d종) — "
+                "기준으로 쓰지 않고 이전 파티션으로 물러난다(스키마 드리프트 의심)",
+                candidate, unreadable, len(known))
+            continue
+        if not known:
+            logger.warning(
+                "canonical 일봉 trade_date=%s 파티션이 비었다 — 이전 파티션으로 물러난다",
+                candidate)
+            continue
+        # 깊이 축 — 이 티커가 **오래전에도** 있었는가. 없으면 얕게 들어온 것이라 편입이다.
+        #
+        # ⚠️ 깊이를 **답할 수 없을 때**(canonical 이 그만큼 깊지 않거나 그 시점 파티션이 전부
+        # 못 쓸 때) 검사를 생략하면 그 구간에서 오염이 그대로 성립한다 — 판정 불가 런의 증분
+        # 5일치나 실패한 이력의 부분 행이 '이미 있음'을 만들고 재시도 자격이 사라진다.
+        # 모르는 것은 '증명되지 않음'이지 '괜찮음'이 아니다. 전 종목을 편입으로 본다.
+        # 비싸 보이지만 **한 런으로 끝난다** — 400일 창을 한 번 받으면 파티션이 깊어져
+        # 다음 런부터 검사가 켜진다. 그 모드가 켜졌다는 사실은 원장에 남긴다.
+        deep = _deep_reference_tickers(storage, sorted(dates, reverse=True), candidate)
+        if deep is None:
+            logger.warning(
+                "canonical 일봉이 깊이 판정(%d거래일)을 답할 만큼 깊지 않다 — 유니버스 전체를 "
+                "편입으로 본다(400일 창 한 번이면 해소된다)", NEWCOMER_DEPTH_PARTITIONS)
+        shallow = sorted(
+            t for t in universe if t not in known or deep is None or t not in deep)
+        return shallow, since, "ok" if deep is not None else "ok(depth_unavailable)"
+
+
+    # 소급 상한 안에 쓸 수 있는 파티션이 하나도 없다. **여기서 조용히 성공하면 안 된다** —
+    # 같은 런의 1차 수집이 신규 티커의 최근 5일을 canonical 에 넣으므로, 다음 런부터 그
+    # 티커는 '이미 있음'으로 보이고 400일 이력은 영영 안 붙는다(ALPHA-989 그 자체). 사유만
+    # 남기고 넘어가면 그 영구 결손을 아무도 모른 채 지나간다. 호출부가 이 사유를 보고 런을
+    # partial 로 내린다 — 최근 10개 canonical 파티션이 전부 못 쓸 상태라는 건 알람이 맞다.
+    scanned = min(len(dates), NEWCOMER_REFERENCE_PARTITIONS)
+    return [], since, f"no_usable_partition(scanned={scanned})"
+
+
+def _deep_reference_tickers(
+    storage: Storage, newest_first: list[str], latest_usable: str
+) -> set[str] | None:
+    """`latest_usable` 에서 `NEWCOMER_DEPTH_PARTITIONS` 만큼 과거의 쓸 수 있는 파티션의
+    티커 집합. canonical 이 그만큼 깊지 않거나 쓸 수 있는 게 없으면 None(판정 보류).
+
+    None 과 빈 집합은 뜻이 다르지만 **결과는 같다** — 빈 집합은 '그때 아무도 없었다', None 은
+    '그 질문에 답할 수 없다'이고, 둘 다 어느 티커도 깊다고 증명하지 못한다. 그래서 호출부는
+    None 을 '괜찮음'이 아니라 '증명되지 않음'으로 읽어 **전 종목을 편입으로 본다**(Rule 12 —
+    모르는 것을 아는 척 안 한다). 400일 창을 한 번 받으면 파티션이 깊어져 다음 런부터 이
+    모드가 꺼지므로 한 런으로 끝난다.
+    """
+    # 슬라이스가 깊이 요건을 겸한다 — canonical 이 그만큼 깊지 않으면 빈 목록이라 루프가
+    # 안 돌고 아래 None 으로 떨어진다(별도 가드를 두면 같은 사실이 두 벌이 된다).
+    older = [d for d in newest_first if d < latest_usable]
+    for candidate in older[NEWCOMER_DEPTH_PARTITIONS - 1:]:
+        known, unreadable = _partition_tickers(storage, candidate)
+        if not unreadable and known:
+            return known
+    return None
+
+
+def _partition_tickers(storage: Storage, trade_date: str) -> tuple[set[str], int]:
+    """그 파티션의 (읽은 티커 집합, 못 읽은 행 수).
+
+    '읽혔다'는 유니버스와 **같은 형태**일 때만이다 — 공백 없는 비어있지 않은 str.
+    truthy 만 보면 타입 드리프트를 못 잡는다: ticker 가 int64 로 바뀌면 집합이 정수가 되어
+    문자열 유니버스와 하나도 안 겹치는데 '못 읽은 행'은 0이라 어느 가드에도 안 걸린다.
+    """
+    known: set[str] = set()
+    unreadable = 0
+    try:
+        keys = list(storage.list_keys(canonical_price_daily_partition("KR", trade_date) + "/"))
+    except Exception:
+        # 파일 읽기와 같은 이유로 목록 조회도 격리한다 — 여기서 올리면 그날 수집이 죽는다.
+        logger.exception("canonical 일봉 trade_date=%s 목록 조회 실패 — 이 파티션은 기준에서 뺀다",
+                         trade_date)
+        return set(), 1
+    for key in keys:
+        if key.endswith(".parquet"):
+            try:
+                rows = _read_parquet_rows(storage.get_bytes(key))
+            except Exception:
+                # 🔴 **여기서 예외를 올리면 그날 가격 수집이 통째로 안 돈다** — 이 판정은
+                # 1차 `source.fetch` **앞**에 있어서, 깨진 parquet 하나나 S3 일시 오류가
+                # 수집 전체를 죽인다. 게다가 새 raw 가 안 생겨 그 파티션이 계속 최신으로
+                # 남으므로 **매 런이 같은 자리에서 죽는다**(수동 복구 전까지 영구 정지).
+                # 파일 단위로 격리해 그 파티션을 '못 씀'으로 분류하고 이전으로 물러난다.
+                logger.exception("canonical 일봉 parquet 읽기 실패: %s — 이 파티션은 기준에서 뺀다", key)
+                unreadable += 1
+                continue
+            for row in rows:
+                ticker = row.get("ticker")
+                if not isinstance(ticker, str) or not ticker.strip():
+                    # 문자열이 아니거나(int64 드리프트) 사실상 빈 값 — 못 읽었다.
+                    # truthy 만 보면 타입 드리프트를 못 잡는다: ticker 가 int64 로 바뀌면
+                    # 집합이 정수가 되어 문자열 유니버스와 하나도 안 겹치는데 '못 읽은 행'은
+                    # 0이라 어느 가드에도 안 걸린다.
+                    unreadable += 1
+                    continue
+                if ticker != ticker.strip():
+                    # ⚠️ 공백이 붙은 티커는 **상류가 통과시킨다** — `normalize_price._blank`
+                    # 는 strip 후 비지 않으면 canonical 로 보낸다. 여기서 그걸 '못 읽음'으로
+                    # 치면 정상 파티션을 통째로 버리고, 그 값이 계속 있으면 편입 판정이
+                    # 영영 멈춘다(가드가 상류 계약보다 엄격하면 그 차이가 곧 결함이다).
+                    # 정체성은 정돈한 코드다(`parse.krx_short_code` 와 같은 축) — 정돈해
+                    # 읽되 사실은 드러낸다.
+                    logger.warning(
+                        "canonical 일봉 trade_date=%s 에 공백이 붙은 ticker %r — 정돈해 읽는다",
+                        trade_date, ticker)
+                known.add(ticker.strip())
+    return known, unreadable
+
+
 JOB_NAME = "ingest_price_raw"
 DATASET = "price_daily"  # collection_log·raw 파티션의 dataset= 키
 
@@ -188,6 +418,10 @@ def run(
         "window_from": from_date,
         "window_to": to_date,
         "started_at": started_at.isoformat(),
+        # 편입 판정의 상태는 **모든 경로에 존재해야** 한다 — 조건부 필드면 '없음'이
+        # 구버전 로그·비활성 런·스캔 전 실패 셋을 한 모양으로 뭉갠다. 여기 초기값이
+        # "스캔에 도달하지 못했다"이고, 아래에서 도달한 경로만 덮어쓴다.
+        "newcomer_scan": "not_reached",
     }
 
     if not source.enabled:
@@ -214,6 +448,10 @@ def run(
     fetched = 0
     status, error, reason = "success", None, None
     exit_code = 0
+    # 2차 수집(신규 편입 이력)이 소스의 `fetch_failures` 를 리셋하기 전에 옮겨 둔 1차분.
+    carried_failures: list[dict] = []
+    # 편입 판정 근거를 못 찾았는가 — 런을 partial 로 내리는 축(아래 실패 판정과 나란히).
+    scan_incomplete = False
 
     try:
         # 수집 유니버스 — 소스가 옵트인하면(KIS, ALPHA-419) canonical KR holdings 최신
@@ -222,13 +460,77 @@ def run(
         # holdings 읽기 실패도 이 try 안 — "결과는 항상 collection_log" 계약을 지킨다.
         symbols = list(settings.targets.symbols)
         log["symbols_from_holdings"] = 0
+        newcomers: list[str] = []
+        newcomer_since = ""
+        scan_status = "ok"
         if getattr(source, "universe_from_holdings", False):
             universe = _kr_holdings_universe(storage, expected_etfs=_krx_expected_etfs(settings))
             log["symbols_from_holdings"] = len(set(universe) - set(symbols))
             symbols = sorted(set(symbols) | set(universe))
-        for record in source.fetch(symbols, from_date, to_date):
-            fetched += 1
-            partitions[record["market"]].append(record)
+            # 창 하한은 `to_date`(호출부가 벤더 달력으로 뽑은 창 끝, ALPHA-883) 기준이다 —
+            # 여기서 달력을 다시 고르면 사실이 두 벌이 된다.
+            # ⚠️ `--from` 만 준 백필은 `to_date=None` 으로 들어오고, 그때 폴백 `started_date`
+            # 는 **UTC** 다. 어댑터는 그 자리에서 KST 오늘로 떨어지므로(kis_price `end_default`)
+            # 00:00~08:59 KST 진입이면 창 **길이**가 400 대신 401일이 된다. 이 축은 증분 창과
+            # 다르다 — 증분은 하루가 밀리면 그날 데이터를 통째로 잃지만, 여기 하루는 이미
+            # 4배 여유를 둔 이력 창이 하루 더 깊어질 뿐이다. 그 대가를 치르고 네 번째 KST
+            # 상수를 만들지 않는다. `from_date` 로 나가는 값은 아래 로그와 같은 값 하나다.
+            # 스캔 **진입**을 먼저 남긴다 — 아래 호출이 예외로 죽으면(파티션 읽기 실패·
+            # window_end 가 비달력일) 초기값 "not_reached" 가 그대로 남아 '스캔에 못 갔다'로
+            # 위장된다. 실제로는 갔다가 죽은 것이고, 그 둘은 진단이 다르다.
+            log["newcomer_scan"] = "scan_failed"
+            newcomers, newcomer_since, scan_status = _newcomers(
+                storage, universe, to_date or started_date)
+            log["newcomer_scan"] = scan_status
+            if not scan_status.startswith("ok"):
+                # 판정 근거를 못 찾았다 = 이 런이 놓친 편입 종목의 이력이 **영구** 결손이
+                # 될 수 있다. 수집 자체는 됐으니 error 는 아니지만 success 도 아니다.
+                logger.error(
+                    "신규 편입 판정 불가(%s) — 이 런에 편입 종목이 있었다면 그 이력은 "
+                    "영구 결손이다(다음 런은 '이미 있음'으로 본다)", scan_status)
+                scan_incomplete = True
+        else:
+            # 유니버스를 holdings 에서 파생하지 않는 소스(FMP)는 편입 판정 자체가 없다 —
+            # "안 돌았다"와 "못 돌았다"는 다른 사실이다.
+            log["newcomer_scan"] = "not_applicable"
+        # 이미 그만큼 깊은 창으로 도는 런(명시 `--from` 백필)은 2차 수집이 순수 낭비다.
+        if newcomers and (from_date is None or from_date <= newcomer_since):
+            # 편입은 있었지만 1차 창이 이미 그만큼 깊다 — 편입 0 인 런과 구분해 남긴다.
+            log["newcomer_scan"] = "covered_by_primary_window"
+            newcomers = []
+        log["symbols_newcomer"] = len(newcomers)
+        log["newcomer_window_from"] = newcomer_since if newcomers else None
+        # 🔴 **편입분은 이력 창으로만 받는다 — 증분 창에서 뺀다.** 둘 다 받으면 이력 fetch 가
+        # 실패해도 증분 5일치는 남고, SFN 은 partial 런도 NormalizeParallel 로 **계속 보내므로**
+        # (`statemachine.tf` NotifyRawPartial) 그 5일치가 canonical 에 들어간다. 그러면 다음
+        # 런의 존재 기반 판정이 그 티커를 '이미 있음'으로 보고, **400일 이력은 영영 재시도되지
+        # 않는다** — partial 로 보고했는데 결손은 영구다. 빼 두면 실패한 종목은 행이 하나도
+        # 안 남아 계속 편입으로 잡힌다(성공할 때까지 자격 유지 = 새 상태 저장 없이 자가복구).
+        # 이력 창은 증분 창을 포함하므로(위 가드가 아닌 경우만 여기 온다) 커버리지 손실은 없다.
+        newcomer_set = set(newcomers)
+        passes = [([s for s in symbols if s not in newcomer_set], from_date, to_date)]
+        if newcomers:
+            # 편입은 드문 사건이라 평시엔 이 창 자체가 안 생긴다 — 로그로 드러낸다.
+            logger.warning(
+                "유니버스 신규 편입 %d종 — 이력 창(%s~%s)으로 수집(증분 창에서 제외): %s",
+                len(newcomers), newcomer_since, to_date or started_date, ",".join(newcomers),
+            )
+            passes.append((newcomers, newcomer_since, to_date))
+        planned_total: int | None = None
+        for index, (pass_symbols, window_from, window_to) in enumerate(passes):
+            if index:
+                # ⚠️ `fetch` 는 진입 때 `fetch_failures` 를 **리셋**한다 — 다음 호출이 앞 실패를
+                # 지우기 전에 옮겨 둔다. 안 옮기면 앞에서 죽은 심볼이 런 상태(partial/error)
+                # 에서 사라져 결손이 성공으로 마감된다.
+                carried_failures.extend(getattr(source, "fetch_failures", []))
+            for record in source.fetch(pass_symbols, window_from, window_to):
+                fetched += 1
+                partitions[record["market"]].append(record)
+            # "매핑 대상 0 = skip" 은 **런 전체**의 판정이라 창별로 나눠 세면 안 된다 — 편입
+            # 창만 보고 0을 읽으면 정상 수집한 런이 skip 으로 위장된다. 합으로 센다.
+            planned = getattr(source, "planned_symbols", None)
+            if planned is not None:
+                planned_total = (planned_total or 0) + planned
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
         logger.error("가격 수집 중단(4xx/429): %s", exc)
@@ -257,9 +559,27 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     #  - MAX_PAGES 절단(kind=truncation)은 데이터 유효 + 다음 창 이어받음이라 성공으로 본다
     #    (ALPHA-351). 절단도 아래 로그(failed_symbols)엔 남겨 fail-loud 는 유지한다.
-    failed_symbols = getattr(source, "fetch_failures", [])
+    # 같은 심볼이 1·2차 수집에서 모두 실패하면 **한 번만** 센다 — 이 목록의 축은 심볼이고
+    # (`records_failed_symbols`·`ops.failed_records`), 두 번 세면 실패 1종이 2종으로 보고돼
+    # 원장이 실제보다 나쁜 상태를 가리킨다.
+    by_symbol: dict[tuple, dict] = {}
+    for failure in carried_failures + list(getattr(source, "fetch_failures", [])):
+        key = (failure.get("our_ticker"), failure.get("symbol"))
+        prev = by_symbol.get(key)
+        if prev is None:
+            by_symbol[key] = failure
+        elif prev.get("kind") == "truncation" and failure.get("kind") != "truncation":
+            # ⚠️ 절단이 실제 실패를 덮으면 안 된다 — 절단은 성공으로 치는 종류라(ALPHA-351)
+            # 그걸 남기면 partial 이어야 할 런이 success 로 끝난다. 심각한 쪽이 이긴다.
+            by_symbol[key] = failure
+    failed_symbols = list(by_symbol.values())
     real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
-    if status == "success" and real_failures:
+    if status == "success" and scan_incomplete:
+        # 심볼 실패와 같은 급으로 다룬다 — 저장분은 있지만 온전치 않다. `failed_records` 는
+        # 건드리지 않는다(원장을 영구 INCOMPLETE 로 만드는 축이고, 이건 심볼 실패가 아니다).
+        status, exit_code = "partial", 1
+        error = error or f"신규 편입 판정 불가 ({log['newcomer_scan']})"
+    if status in ("success", "partial") and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
             error = f"모든 수집 심볼 실패 ({len(real_failures)}건)"
@@ -268,7 +588,7 @@ def run(
 
     # 활성 소스인데 매핑된 대상이 0개면(심볼맵 누락·전 대상 미매핑 KR 등) 수집이
     # 사실상 불가능한 설정 — success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).
-    if status == "success" and getattr(source, "planned_symbols", None) == 0:
+    if status == "success" and planned_total == 0:
         status, reason = "skipped", "no mapped targets"
 
     # 로그 쓰기도 best-effort — 스토리지가 통째로 죽어 로그마저 못 남기면 최소한
