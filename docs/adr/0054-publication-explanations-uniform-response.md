@@ -70,13 +70,16 @@ publication-api 설명 조회(`GET /api/v1/explanations/{etf_ticker}`)는 성공
 
 - **마이그레이션은 확장-수축 3단계다** (ADR-0042 M1→M2→M3 패턴 재사용, 구현은
   별도 티켓으로 분리):
-  - **M1 — 위젯 관용(확장):** `broker-api.js` 가 공통 포맷 200 을 추가
-    수용한다(204 수용 유지) — 단 **성공 envelope 형상 전체를 검증한 뒤**
-    해석한다: `ApiResponse` 성공 형상(`isSuccess === true`·`code`·`message`
-    존재와 타입)을 확인한 응답만 `result` 있음 = `OK`·생략 = `NO_DATA` 로
-    해석하고, 형상 위반(`{}`·`isSuccess:false` 200·필드 결손 등)은 전부
-    `FALLBACK`. `result` 유무만 보면 기형 응답이 정상 `NO_DATA` 로 그려져
-    이 ADR 이 없애려는 fail-silent 를 재생산한다. 데모 박스 재배포.
+  - **M1 — 위젯 관용(확장):** `broker-api.js` 가 **세 형상을 병행
+    수용**한다 — ① 현행 204(=`NO_DATA`), ② 현행 맨몸 `ExplanationResponse`
+    200(=`OK` — M2 전의 서버는 여전히 이 형상이므로 envelope 를 전 200 에
+    요구하면 정상 게시분이 전부 폴백이 된다), ③ 신규 공통 포맷 200. ③은
+    **성공 envelope 형상 전체를 검증한 뒤** 해석한다: `ApiResponse` 성공
+    형상(`isSuccess === true`·`code`·`message` 존재와 타입)을 확인한 응답만
+    `result` 있음 = `OK`·생략 = `NO_DATA` 로 해석하고, 어느 형상에도 맞지
+    않는 응답(`{}`·`isSuccess:false` 200·필드 결손 등)은 전부 `FALLBACK`.
+    `result` 유무만 보면 기형 응답이 정상 `NO_DATA` 로 그려져 이 ADR 이
+    없애려는 fail-silent 를 재생산한다. 데모 박스 재배포.
   - **M2 — 서버 전환:** `ExplanationController` 의 204 제거·envelope 적용,
     `openapi.yaml`·[publication-api.md](../contracts/publication-api.md)(204
     조항·비포장 조항)·모듈 runbook(`publication-api/README.md`·
@@ -86,8 +89,9 @@ publication-api 설명 조회(`GET /api/v1/explanations/{etf_ticker}`)는 성공
     `summarize.py`·`publication-baseline.js`, 문서 포함) 동반 갱신 —
     낡은 판정을 남기면 실험이 성공으로 끝나며 전파·차단 측정만 조용히
     오염된다. 데모 박스 재배포.
-  - **M3 — 위젯 정리(수축):** `broker-api.js` 의 204 분기 제거 — 이후 204
-    수신은 폴백 화면으로 표면화. 데모 박스 재배포.
+  - **M3 — 위젯 정리(수축):** `broker-api.js` 의 구형 두 분기(204·맨몸
+    200)를 제거 — 이후 204·비 envelope 200 수신은 폴백 화면으로 표면화.
+    데모 박스 재배포.
   - 순서 위반(M1 전에 M2) 시 위젯이 정상 게시분을 폴백 화면으로 그린다.
 - **실 연동은 갱신된 계약이 기준이다.** 이 전환은 실 납품 전에 완결한다 —
   이후 증권사 연동(자체 UI 포함)은 M2 에서 갱신된
