@@ -79,8 +79,11 @@ publication-api 설명 조회(`GET /api/v1/explanations/{etf_ticker}`)는 성공
   - **M2 — 서버 전환:** `ExplanationController` 의 204 제거·envelope 적용,
     `openapi.yaml`·[publication-api.md](../contracts/publication-api.md)(204
     조항·비포장 조항)·모듈 runbook(`publication-api/README.md`·
-    `DEVELOPMENT.md` 의 204·negative cache·검증 명령 서술) 동반 갱신. 데모
-    박스 재배포.
+    `DEVELOPMENT.md` 의 204·negative cache·검증 명령 서술)·부하 실험
+    스크립트(`tests/loadtest/publication/k6` — 204 판정·루트
+    `explanation_as_of` 파싱을 새 형상으로 이행, 문서 포함) 동반 갱신 —
+    스크립트를 남기면 실험이 성공으로 끝나며 전파 측정만 조용히 오염된다.
+    데모 박스 재배포.
   - **M3 — 위젯 정리(수축):** `broker-api.js` 의 204 분기 제거 — 이후 204
     수신은 폴백 화면으로 표면화. 데모 박스 재배포.
   - 순서 위반(M1 전에 M2) 시 위젯이 정상 게시분을 폴백 화면으로 그린다.
