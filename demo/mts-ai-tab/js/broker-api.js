@@ -8,9 +8,42 @@
   const NO_DATA_MESSAGE = '이 종목·일자에 대해 제공되는 AI 분석이 아직 없습니다.';
   const UNKNOWN_ETF_MESSAGE = '지원하지 않는 종목입니다. (국내 상장 ETF 대상)';
 
-  // MTS 화면이 쓰는 유일한 진입점 — Publication API 계약(200/204/404/4xx/5xx)을 화면 상태로
+  // MTS 화면이 쓰는 유일한 진입점 — Publication API 계약을 화면 상태로
   // 해석하는 자리가 여기다(구 mock-broker 중계의 매핑을 위젯으로 이관, ALPHA-992).
   // resolve 값: { state: 'OK', data } | { state: 'NO_DATA', message } | { state: 'FALLBACK', message }
+  //
+  // 과도기(ADR-0054 M1): 서버 전환(M2) 전후의 세 형상을 병행 수용한다 —
+  //   ① 204(구 설명 없음), ② 맨몸 ExplanationResponse 200(구 성공),
+  //   ③ 공통 응답 포맷 200({isSuccess, code, message[, result]} — result 생략 = 설명 없음).
+  // M3(수축)에서 ①·② 분기를 제거한다. ③은 성공 envelope 형상 전체를 검증한 뒤 해석한다 —
+  // result 유무만 보면 기형 응답({} 등)이 정상 NO_DATA 로 그려져 fail-silent 가 된다.
+  function classifyExplanationBody(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
+    }
+    if (!('isSuccess' in body)) {
+      // ② 맨몸 DTO(M2 전 서버) — 필수 필드로 형상을 확인한다.
+      if (typeof body.publication_id === 'string') {
+        return { state: 'OK', data: body };
+      }
+      return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
+    }
+    // ③ 공통 응답 포맷 — 성공 형상(isSuccess·code·message 존재와 타입)을 전부 확인한다.
+    if (body.isSuccess !== true || typeof body.code !== 'string' || typeof body.message !== 'string') {
+      return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
+    }
+    if (!('result' in body)) {
+      return { state: 'NO_DATA', message: NO_DATA_MESSAGE };
+    }
+    // "result": null 명시·기형 result 는 계약 위반 — NO_DATA 로 오독하지 않고 폴백으로 드러낸다.
+    const result = body.result;
+    if (result && typeof result === 'object' && !Array.isArray(result)
+        && typeof result.publication_id === 'string') {
+      return { state: 'OK', data: result };
+    }
+    return { state: 'FALLBACK', message: FALLBACK_MESSAGE };
+  }
+
   function getAiAnalysis(ticker, tradeDate) {
     let url = '/api/v1/explanations/' + encodeURIComponent(ticker);
     if (tradeDate) {
@@ -20,9 +53,7 @@
     return fetch(url, { signal: AbortSignal.timeout(5000) })
       .then(function (res) {
         if (res.status === 200) {
-          return res.json().then(function (data) {
-            return { state: 'OK', data: data };
-          });
+          return res.json().then(classifyExplanationBody);
         }
         if (res.status === 204) {
           return { state: 'NO_DATA', message: NO_DATA_MESSAGE };
