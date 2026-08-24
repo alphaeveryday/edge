@@ -1,6 +1,6 @@
 # ADR-0053: 고객 컨텍스트 제거 — MTS 위젯 직접 호출, Exposure Log 은퇴
 
-- 상태: 승인됨 (2026-08-17 — 구현 착수로 승인 전환, ALPHA-991 PR ②)
+- 상태: 승인됨 (2026-08-17 — 구현 착수로 승인 전환, ALPHA-991 PR ②) — "바뀌지 않는 것"의 응답 형상·204 수렴 문면은 대체됨 → [ADR-0054](0054-publication-explanations-uniform-response.md) (경로·면책 문구 동반·serving_scope 판정·캐시 방향은 불변, 2026-08-24)
 - 날짜: 2026-08-17
 - 관련: ALPHA-991 · ADR-0010(하이브리드 온프렘 — 노출 이력 항목 부분 대체)
   · ADR-0013(Exposure Log — 이 ADR 이 대체) · ADR-0031(Publication 리네이밍 —
