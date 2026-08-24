@@ -71,19 +71,21 @@ publication-api 설명 조회(`GET /api/v1/explanations/{etf_ticker}`)는 성공
 - **마이그레이션은 확장-수축 3단계다** (ADR-0042 M1→M2→M3 패턴 재사용, 구현은
   별도 티켓으로 분리):
   - **M1 — 위젯 관용(확장):** `broker-api.js` 가 공통 포맷 200 을 추가
-    수용한다(204 수용 유지) — 단 **envelope 전체를 검증한 뒤** 해석한다:
-    `isSuccess === true` 확인 후 `result` 있음 = `OK`·생략 = `NO_DATA`,
-    그 외 형상(`{}`·`isSuccess:false` 200 등)은 전부 `FALLBACK`.
-    `result` 유무만 보면 기형 응답이 정상 `NO_DATA` 로 그려져 이 ADR 이
-    없애려는 fail-silent 를 재생산한다. 데모 박스 재배포.
+    수용한다(204 수용 유지) — 단 **성공 envelope 형상 전체를 검증한 뒤**
+    해석한다: `ApiResponse` 성공 형상(`isSuccess === true`·`code`·`message`
+    존재와 타입)을 확인한 응답만 `result` 있음 = `OK`·생략 = `NO_DATA` 로
+    해석하고, 형상 위반(`{}`·`isSuccess:false` 200·필드 결손 등)은 전부
+    `FALLBACK`. `result` 유무만 보면 기형 응답이 정상 `NO_DATA` 로 그려져
+    이 ADR 이 없애려는 fail-silent 를 재생산한다. 데모 박스 재배포.
   - **M2 — 서버 전환:** `ExplanationController` 의 204 제거·envelope 적용,
     `openapi.yaml`·[publication-api.md](../contracts/publication-api.md)(204
     조항·비포장 조항)·모듈 runbook(`publication-api/README.md`·
-    `DEVELOPMENT.md` 의 204·negative cache·검증 명령 서술)·부하 실험
-    스크립트(`tests/loadtest/publication/k6` — 204 판정·루트
-    `explanation_as_of` 파싱을 새 형상으로 이행, 문서 포함) 동반 갱신 —
-    스크립트를 남기면 실험이 성공으로 끝나며 전파 측정만 조용히 오염된다.
-    데모 박스 재배포.
+    `DEVELOPMENT.md` 의 204·negative cache·검증 명령 서술)·**부하 실험
+    하네스 전체**(`tests/loadtest` 트리를 204·루트 `explanation_as_of`
+    기준으로 전수 스캔 — k6 스크립트·grafana 대시보드 쿼리·
+    `summarize.py`·`publication-baseline.js`, 문서 포함) 동반 갱신 —
+    낡은 판정을 남기면 실험이 성공으로 끝나며 전파·차단 측정만 조용히
+    오염된다. 데모 박스 재배포.
   - **M3 — 위젯 정리(수축):** `broker-api.js` 의 204 분기 제거 — 이후 204
     수신은 폴백 화면으로 표면화. 데모 박스 재배포.
   - 순서 위반(M1 전에 M2) 시 위젯이 정상 게시분을 폴백 화면으로 그린다.
