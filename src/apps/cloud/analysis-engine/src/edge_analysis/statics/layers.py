@@ -37,6 +37,7 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -508,6 +509,59 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
     return tuple(out[:top]), wsum, wtot, halted, adv, dec
 
 
+
+# 유효한 holdings 행의 SQL 술어 — `adapters/lake._weight`(유한·0 이상 수치) +
+# 티커 비공백 판정과 같은 집합이다(canonical weight_pct 는 float64 — normalize_etf).
+# ⚠️ 파티션 판정(HAVING)과 행 필터가 이 하나를 나눠 쓴다 — 갈리면 "파티션은
+# 통과했는데 행 집합이 리더마다 다른" 두 번째 드리프트가 된다(ALPHA-1027 리뷰).
+logger = logging.getLogger(__name__)
+
+HOLDING_ROW_VALID_SQL = (
+    "(trim(coalesce(CAST(constituent_ticker AS VARCHAR), '')) <> '' "
+    "AND weight_pct IS NOT NULL AND isfinite(weight_pct) AND weight_pct >= 0)"
+)
+
+
+def weighted_asof_subquery(etf: str, day: str | None = None) -> str:
+    """비중 결손 **과반** 파티션을 건너뛴 최신 as_of 를 고르는 서브쿼리 (ALPHA-1027).
+
+    `adapters/lake.load_holdings` 의 파티션 선택 계약(ALPHA-951)의 SQL 판 — 유효 행
+    (티커 비공백 + 비중이 유한한 0 이상 수치, `_weight` 와 같은 판정)이 절반 미만인
+    파티션은 프리마켓 수집분(비중 없이 구성만)이라 분해의 근거가 아니다. 이걸 각
+    리더가 복제하면 한쪽만 고쳐진다(08-13~ 장중 기여 분해 상시 사망의 원인) —
+    layers 와 batch 가 이 한 함수를 쓴다. `day` 가 None 이면 상한 없음(batch).
+    """
+    bound = f" AND as_of_date <= DATE '{day}'" if day else ""
+    return (
+        "(SELECT as_of_date FROM s3_etf_holdings "
+        f"WHERE market = 'KR' AND etf_id = '{etf}'{bound} "
+        "GROUP BY as_of_date "
+        f"HAVING 2 * count(*) FILTER (WHERE {HOLDING_ROW_VALID_SQL}) >= count(*) "
+        "ORDER BY as_of_date DESC LIMIT 1)"
+    )
+
+
+def warn_if_partition_skipped(lake, etf: str, day: str | None = None) -> None:
+    """가드가 최신 파티션을 건너뛰었으면 경고를 남긴다 — 조용한 skip 금지(Rule 12).
+
+    adapters 리더는 건너뛴 파티션과 결손율을 경고하는데 SQL 리더가 무성이면
+    운영자는 stale holdings 로 귀속이 돌고 있음을 탐지할 수 없다. 관측용이라
+    실패는 삼킨다(뷰 부재 등 — 본 질의의 예외 경로와 같은 사정).
+    """
+    bound = f" AND as_of_date <= DATE '{day}'" if day else ""
+    try:
+        chosen, latest = lake.sql(
+            f"SELECT {weighted_asof_subquery(etf, day)}, "
+            "(SELECT max(as_of_date) FROM s3_etf_holdings "
+            f"WHERE market = 'KR' AND etf_id = '{etf}'{bound})")[0]
+    except Exception:                                      # noqa: BLE001 - 관측 전용
+        return
+    if latest is not None and chosen != latest:
+        logger.warning(
+            "holdings 파티션 결손 과반 — 건너뜀: etf=%s 최신=%s 선택=%s",
+            etf, latest, chosen)
+
+
 @lru_cache(maxsize=8192)
 def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
     """[(ticker, name, weight)] - **as_of ≤ day** 최신 스냅샷만 (선견 금지).
@@ -525,15 +579,19 @@ def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
     # 환경에서 `s3_etf_holdings` 뷰가 미등록이라 `CatalogException` 이 났고, 바로 아래
     # 백필 폴백(`etf_holdings_fmp`)은 한 번도 실행되지 않았다 - 폴백을 써 놓고 도달
     # 불가로 둔 것이다. 표 부재는 사유이지 예외가 아니다.
+    warn_if_partition_skipped(lake, etf, day)
     rows: list = []
     try:
         rows = lake.sql(
             f"SELECT constituent_ticker, any_value(constituent_name), "
             f"       any_value(weight_pct) "
             f"FROM s3_etf_holdings WHERE market = 'KR' AND etf_id = '{etf}' "
-            f"  AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings "
-            f"                    WHERE market = 'KR' AND etf_id = '{etf}' "
-            f"                      AND as_of_date <= DATE '{day}') "
+            # 과반-NULL 파티션 배제 — max() 를 그대로 쓰면 프리마켓 수집분이 최신으로
+            # 뽑혀 장중 기여 분해가 죽는다(ALPHA-1027, adapters 리더와 같은 계약).
+            f"  AND as_of_date = {weighted_asof_subquery(etf, day)} "
+            # 행 필터도 같은 술어 — 통과한 파티션 안의 무효 행(음수·NaN)이 정렬·
+            # 기여 계산에 들어가면 adapters 리더와 행 집합이 갈린다.
+            f"  AND {HOLDING_ROW_VALID_SQL} "
             f"GROUP BY 1")
     except Exception:                                      # noqa: BLE001 - 뷰 없음
         rows = []

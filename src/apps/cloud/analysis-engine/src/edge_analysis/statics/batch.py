@@ -25,6 +25,8 @@ from collections import Counter
 from pathlib import Path
 
 from .expressive import SLOTS, Survey, append_ledger, survey_cell
+from .layers import (HOLDING_ROW_VALID_SQL, warn_if_partition_skipped,
+                     weighted_asof_subquery)
 from .registry import roadmap
 
 
@@ -36,14 +38,15 @@ def cells(lake, etf_id: str, d0: str, d1: str, top: int = 8) -> list[tuple[str, 
     가설을 내는 곳이고, 어휘 구멍이 거기서 드러난다.
     """
     from .paneltest import _base
+    warn_if_partition_skipped(lake, etf_id)
     # `_base` 가 이미 WITH 체인을 연다 - 두 번째 WITH 를 붙이면 파서가 죽는다.
     rows = lake.sql(_base(d1) + f"""
         , h AS (
             SELECT constituent_ticker AS tk, weight_pct
             FROM s3_etf_holdings
             WHERE etf_id = '{etf_id}' AND market = 'KR'
-              AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings
-                                WHERE etf_id = '{etf_id}')
+              AND as_of_date = {weighted_asof_subquery(etf_id)}
+              AND {HOLDING_ROW_VALID_SQL}
               AND constituent_ticker ~ '^[0-9]{{6}}$'
             ORDER BY weight_pct DESC LIMIT {top}
         )
