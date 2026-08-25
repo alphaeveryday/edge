@@ -520,8 +520,8 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 # Store 48테이블에 쓰는 첫 경로다.
 #
 # 멱등: 자연키 (market_code, ticker) 로 찾고 없을 때만 새 ULID 를 발번한다(ADR-0027) — 재실행이
-# ID 를 바꾸면 그 ID 를 참조하던 FK 가 전부 끊긴다. MIC 없는 행(원화현금)은 instrument.market_code
-# 가 NOT NULL 이라 스키마 자신의 규칙으로 빠진다.
+# ID 를 바꾸면 그 ID 를 참조하던 FK 가 전부 끊긴다. 현금·옵션은 자산 유형으로 먼저 분류해
+# `skipped_unsupported_asset`으로 계측하고 instrument 후보에서 제외한다.
 #
 # DB 설정은 DATA_PIPELINE_DB__* (스토리지와 같은 인프라 네임스페이스). 비밀번호는 env 주입만.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
@@ -1211,6 +1211,13 @@ settings.targets.keywords            # ["금리", ...]
   KRX `trd_dd`(우리가 지정). **market-스코프 파티션이라 한 파티션엔 한 벤더만**(US=fmp·KR=krx disjoint)
   → 가격의 벤더 교차 충돌 가드가 불필요하다. 같은 키 재적재는 최신 fetched_at 우선. `weight_pct·shares·
   market_value` 는 참고 필드(KRX 해외기초는 대시(-)→null), `source_vendor`(fmp|krx)는 컬럼(provenance).
+  KRX `SECUGRP_ID/MKT_ID`의 실측 조합은 `constituent_asset_type`(`EQUITY|CASH|OPTION|UNKNOWN`)
+  으로 보존한다. holdings·instrument 적재기는 주식만 적재하고 현금·옵션은
+  `skipped_unsupported_asset`과 유형별 수로
+  계측하되 유실에는 넣지 않는다. 미지 유형은 `skipped_unknown_asset_type`으로 유실에 남긴다
+  (ALPHA-1017).
+  파티션을 갱신할 때는 기존 직접 자식 `part-*.parquet`와 새 행을 합쳐 `part-00000.parquet`로
+  수렴시킨 뒤 나머지 직접 자식 part만 지운다. 중첩 보관 객체와 raw 입력은 삭제하지 않는다.
   🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다** — 파티션은 지워지지 않아 config 에서 뺀
   ETF 의 옛 행이 남고, 참조 계열(명부만 필요한 ETF)도 섞여 들어온다. 읽는 쪽은 유니버스 뿌리
   (`krx_etf.source.etf_map` 키)로 한 번 거른다 — `ingest-price-raw`·`load-etf-holdings`·

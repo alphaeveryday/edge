@@ -71,8 +71,8 @@ resource "aws_iam_role_policy" "task" {
         Resource = [var.lake_bucket_arn, "${var.lake_bucket_arn}/*"]
       },
       {
-        # 장중 뉴스 미러 조각의 압축 삭제(ALPHA-900) — `steps/tag_news` 가 part 파일에
-        # 병합한 뒤 지운다(`lake/storage.Storage.delete_keys` 의 유일한 호출부).
+        # 장중 뉴스 미러 조각(ALPHA-900)과 ETF canonical 구형 part(ALPHA-1017)의 압축 삭제.
+        # 각 writer가 단일 part에 병합한 뒤 같은 데이터셋 안의 나머지 part만 지운다.
         #
         # ⚠️ **위 문장과 합치지 마라.** 레이크 전역 `DeleteObject` 는 raw 존의 불변
         # 계약을 깬다 — 거기 바이트는 판정의 근거라 지우면 복원할 수 없는데, 그 계약을
@@ -80,11 +80,21 @@ resource "aws_iam_role_policy" "task" {
         # 그 경계를 지게** 둔다 — 미러 구역 밖을 지우려는 코드는 런타임 AccessDenied 로
         # 드러난다.
         #
-        # `*` 둘은 `language=…`·`published_date=…` 다. IAM 의 `*` 는 `/` 를 넘어 매칭하지만
-        # part 파일 키에는 `minute/` 세그먼트가 없어 이 문장에 안 걸린다(삭제 대상 아님).
-        Effect   = "Allow"
+        # 첫 Resource의 `*` 둘은 `language=…`·`published_date=…` 다. IAM 의 `*` 는 `/` 를
+        # 넘어 매칭하지만 part 파일 키에는 `minute/` 세그먼트가 없어 이 문장에 안 걸린다.
+        Effect = "Allow"
+        Action = ["s3:DeleteObject"]
+        Resource = [
+          "${var.lake_bucket_arn}/feature/news/assertions/*/*/minute/*",
+          "${var.lake_bucket_arn}/canonical/holdings/etf_holdings/market=*/as_of_date=*/part-*.parquet",
+        ]
+      },
+      {
+        # S3 ARN wildcard는 `/`도 넘는다. 위 Allow가 날짜 파티션 아래 중첩 객체까지 잡지 못하게
+        # 한 단계 더 깊은 키는 명시적으로 거부한다(직접 자식 part 파일만 삭제 가능).
+        Effect   = "Deny"
         Action   = ["s3:DeleteObject"]
-        Resource = ["${var.lake_bucket_arn}/feature/news/assertions/*/*/minute/*"]
+        Resource = ["${var.lake_bucket_arn}/canonical/holdings/etf_holdings/market=*/as_of_date=*/*/*"]
       },
       {
         # KIS 토큰 공유 캐시(ALPHA-573) — 이 역할까지가 읽기·쓰기 주체다. 시크릿(앱키)은 지금도

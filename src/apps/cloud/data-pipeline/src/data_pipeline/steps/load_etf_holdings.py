@@ -73,6 +73,19 @@ _CREATED_SAMPLE_LIMIT = 5
 _WEIGHT_SUM_LO, _WEIGHT_SUM_HI = 0.90, 1.10
 
 
+def _fetched_at(value: object) -> datetime | None:
+    """정상 ISO 시각을 UTC로 돌려준다. 결측·비문자열·파싱 실패는 None이다."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
     import pyarrow.parquet as pq
@@ -154,6 +167,8 @@ def _weight_ratio(weight_pct) -> tuple[float | None, bool]:
     `(None, False)` 로 돌려 호출부가 bad_weight 로 격리하게 한다."""
     if weight_pct is None:
         return None, True
+    if isinstance(weight_pct, bool):
+        return None, False
     try:
         pct = float(weight_pct)
     except (TypeError, ValueError):
@@ -181,7 +196,13 @@ def run(
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_unknown_etf = 0
     skipped_unknown_constituent = skipped_bad_weight = skipped_self = skipped_foreign_etf = 0
-    already = created = updated = profiles_created = 0
+    skipped_unsupported_asset = 0
+    skipped_unknown_asset_type = 0
+    skipped_bad_fetched_at = 0
+    deduplicated_rows = 0
+    unsupported_asset_counts: dict[str, int] = {}
+    unknown_asset_types: set[str] = set()
+    already = created = updated = profiles_created = skipped_identity_conflict = 0
     created_sample: list[dict] = []
     unknown_etfs: set[str] = set()
     unknown_constituents: set[str] = set()
@@ -193,10 +214,10 @@ def run(
         if input_run_id is not None and (from_date is not None or to_date is not None):
             raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
         manifest = _manifest_partitions(storage, input_run_id) if input_run_id is not None else None
-        # (market, etf_id, constituent_mic, constituent_ticker, as_of_date) → 후보. constituent_mic
-        # 를 키에 **포함**한다 — 빼면 XKRX·XKOS 동명 종목 두 보유행이 한 후보로 뭉쳐 하나가
-        # 유실된다(Codex 지적). 같은 키가 여러 parquet 에 걸리면 최신 fetched_at 이 이긴다.
-        candidates: dict[tuple[str, str, str, str, str], dict] = {}
+        # canonical 자연키 (market, etf_id, constituent_ticker, as_of_date) → 후보. MIC는
+        # 정정 가능한 속성이므로 키에서 빼고, 같은 키가 여러 parquet에 걸리면 최신 fetched_at이 이긴다.
+        candidates: dict[tuple[str, str, str, str], dict] = {}
+        logical_rows: dict[tuple[str, str, str, str], tuple[dict, datetime]] = {}
         for market in _MICS_BY_MARKET:
             dates = (sorted(date for item_market, date in manifest if item_market == market)
                      if manifest is not None else [
@@ -215,51 +236,85 @@ def run(
                 for key in parquet_keys:
                     for row in _read_parquet_rows(storage.get_bytes(key)):
                         partition_rows += 1
-                        if row.get("market") != market or row.get("as_of_date") != date:
+                        read += 1
+                        row_market, as_of = row.get("market"), row.get("as_of_date")
+                        if any(
+                            not isinstance(value, str) or not value.strip() or value != value.strip()
+                            for value in (row_market, as_of)
+                        ):
+                            skipped_missing_identity += 1
+                            continue
+                        if row_market != market or as_of != date:
                             raise ValueError(
                                 "canonical 행과 파티션이 일치하지 않는다: "
                                 f"market={market}, date={date}, key={key}"
                             )
-                        read += 1
                         etf_id, ct = row.get("etf_id"), row.get("constituent_ticker")
-                        mic, as_of = row.get("constituent_mic"), row.get("as_of_date")
-                        if not etf_id or not ct or not as_of:
+                        identities = (etf_id, ct)
+                        if any(
+                            not isinstance(value, str) or not value.strip() or value != value.strip()
+                            for value in identities
+                        ):
                             # 정체성 없는 행은 키를 만들 수 없다 — 세고 뺀다(Rule 12).
-                            # constituent_mic 결측은 여기서 막지 않는다 — 비상장(원화현금 등)은
-                            # MIC 이 없고 아래 해소에서 자연히 unknown 으로 걸린다.
+                            # constituent_mic 결측은 여기서 막지 않는다 — 자산유형 판정 뒤 주식만
+                            # 구성종목 해소 실패로 센다.
                             skipped_missing_identity += 1
                             continue
-                        if expected_etfs is not None and etf_id not in expected_etfs:
-                            # 유니버스 뿌리가 아닌 ETF(폐지분·참조 계열)는 **유실이 아니라
-                            # 대상 밖**이다 — 세되 failed_records 에는 안 넣는다. 넣으면
-                            # 마스터에 없는 ETF 가 매 런 잡혀 원장이 영구 INCOMPLETE 다
-                            # (skipped_self 를 유실로 세지 않는 것과 같은 판단).
-                            #
-                            # ⚠️ **정체성 가드 뒤에 둔다.** 앞에 두면 etf_id 결측 행이
-                            # `x not in expected_etfs` 를 만족해 skipped_missing_identity
-                            # 대신 여기로 새고, 그 순간 유실이 유실로 안 세어진다.
-                            skipped_foreign_etf += 1
+                        raw_fetched_at = row.get("fetched_at")
+                        parsed_fetched_at = _fetched_at(raw_fetched_at)
+                        if parsed_fetched_at is None:
+                            skipped_bad_fetched_at += 1
                             continue
-                        fetched_at = row.get("fetched_at")
-                        ratio, weight_ok = _weight_ratio(row.get("weight_pct"))
-                        cand_key = (market, etf_id, mic or "", ct, as_of)
-                        prev = candidates.get(cand_key)
-                        if prev is not None and (fetched_at or "") < prev["fetched_at_raw"]:
-                            continue
-                        candidates[cand_key] = {
-                            "mic": mic, "weight_ratio": ratio, "weight_ok": weight_ok,
-                            "available_at": fetched_at or started_at.isoformat(),
-                            "fetched_at_raw": fetched_at or "",
-                        }
+                        cand_key = (market, etf_id, ct, as_of)
+                        prev = logical_rows.get(cand_key)
+                        if prev is not None:
+                            deduplicated_rows += 1
+                            if parsed_fetched_at < prev[1]:
+                                continue
+                        logical_rows[cand_key] = (row, parsed_fetched_at)
                 if manifest is not None and partition_rows == 0:
                     raise ValueError(f"manifest 파티션이 0행이다: market={market}, date={date}")
+
+        for cand_key, (row, parsed_fetched_at) in logical_rows.items():
+            market, etf_id, ct, _as_of = cand_key
+            mic = row.get("constituent_mic")
+            raw_asset_type = row.get("constituent_asset_type")
+            asset_type = raw_asset_type if isinstance(raw_asset_type, str) else "UNKNOWN"
+            if asset_type not in {"EQUITY", "CASH", "OPTION"}:
+                skipped_unknown_asset_type += 1
+                unknown_asset_types.add(asset_type)
+                continue
+            if asset_type in {"CASH", "OPTION"}:
+                skipped_unsupported_asset += 1
+                unsupported_asset_counts[asset_type] = unsupported_asset_counts.get(asset_type, 0) + 1
+                continue
+            if expected_etfs is not None and etf_id not in expected_etfs:
+                skipped_foreign_etf += 1
+                continue
+            if not isinstance(mic, str) or not mic.strip() or mic != mic.strip():
+                skipped_unknown_constituent += 1
+                unknown_constituents.add(f"{market}:{ct}")
+                continue
+            ratio, weight_ok = _weight_ratio(row.get("weight_pct"))
+            candidates[cand_key] = {
+                "mic": mic, "weight_ratio": ratio, "weight_ok": weight_ok,
+                "asset_type": asset_type,
+                "available_at": row["fetched_at"],
+                "fetched_at": parsed_fetched_at,
+            }
 
         with connect(db) as conn:
             resolved = {
                 market: _instrument_ids(conn, mics) for market, mics in _MICS_BY_MARKET.items()
             }
+            ids_by_ticker: dict[str, dict[str, set[str]]] = {}
+            for resolved_market, (_etf_ids, by_key) in resolved.items():
+                market_ids: dict[str, set[str]] = {}
+                for (_mic, ticker), instrument_id in by_key.items():
+                    market_ids.setdefault(ticker, set()).add(instrument_id)
+                ids_by_ticker[resolved_market] = market_ids
             profiled: set[str] = set()
-            for (market, etf_id, _mic_key, ct, as_of), fact in sorted(candidates.items()):
+            for (market, etf_id, ct, as_of), fact in sorted(candidates.items()):
                 etf_ids, by_key = resolved[market]
                 etf_instrument_id = etf_ids.get(etf_id)
                 if etf_instrument_id is None:
@@ -295,6 +350,21 @@ def run(
                         profiles_created += 1
                     profiled.add(etf_instrument_id)
                 with conn.cursor() as cur:
+                    stale_ids = sorted(
+                        ids_by_ticker[market].get(ct, set()) - {constituent_instrument_id}
+                    )
+                    if stale_ids:
+                        cur.execute(
+                            "SELECT EXISTS (SELECT 1 FROM etf_holding_snapshot"
+                            " WHERE etf_instrument_id = %s AND trade_date = %s"
+                            " AND constituent_instrument_id = ANY(%s))",
+                            (etf_instrument_id, as_of, stale_ids),
+                        )
+                        if cur.fetchone()[0]:
+                            # instrument MIC 이전은 ADR-0027 별건이다. 보유행만 새 ID로 옮기면
+                            # 마스터 정체성과 어긋나므로 중복 INSERT 대신 명시적 유실로 막는다.
+                            skipped_identity_conflict += 1
+                            continue
                     cur.execute(
                         "INSERT INTO etf_holding_snapshot (etf_instrument_id,"
                         " constituent_instrument_id, trade_date, weight_ratio,"
@@ -349,6 +419,13 @@ def run(
         "skipped_unknown_etf": skipped_unknown_etf,
         "unknown_etfs": sorted(unknown_etfs),
         "skipped_unknown_constituent": skipped_unknown_constituent,
+        "skipped_unsupported_asset": skipped_unsupported_asset,
+        "unsupported_asset_counts": dict(sorted(unsupported_asset_counts.items())),
+        "skipped_unknown_asset_type": skipped_unknown_asset_type,
+        "unknown_asset_types": sorted(unknown_asset_types),
+        "skipped_bad_fetched_at": skipped_bad_fetched_at,
+        # 동일 자연키의 여러 물리 행은 최신 fetched_at 한 건으로 수렴한 정상 중복이다.
+        "deduplicated_rows": deduplicated_rows,
         # 마스터가 모르는 구성종목 목록 — instrument 마스터 확장(US 등)의 근거다.
         "unknown_constituents": sorted(unknown_constituents),
         "skipped_bad_weight": skipped_bad_weight,
@@ -356,6 +433,7 @@ def run(
         "skipped_foreign_etf": skipped_foreign_etf,
         "etf_profiles_created": profiles_created,
         "already_present": already, "created": created, "updated": updated,
+        "skipped_identity_conflict": skipped_identity_conflict,
         "weight_sum_anomalies": weight_sum_anomalies,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
@@ -366,7 +444,9 @@ def run(
         "ops": {
             "records_out": already + created + updated,
             "failed_records": (len(failures) + skipped_missing_identity + skipped_unknown_etf
-                               + skipped_unknown_constituent + skipped_bad_weight),
+                               + skipped_unknown_constituent + skipped_unknown_asset_type
+                               + skipped_bad_fetched_at + skipped_bad_weight
+                               + skipped_identity_conflict),
         },
     }
     if weight_sum_anomalies:

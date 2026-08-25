@@ -14,7 +14,8 @@ disclosure_segment)의 blocking/경고 분리·canonical 멱등 병합을 합친
 정규화가 흡수하는 벤더 이형(raw 무변형으로 보존된 원본):
   - FMP(US): asset·name·isin·sharesNumber·weightPercentage·marketValue·updatedAt(datetime)
   - KRX(KR): COMPST_ISU_CD·COMPST_ISU_NM·COMPST_ISU_CD2·COMPST_ISU_CU1_SHRS·COMPST_RTO·
-    VALU_AMT·MKT_ID + trd_dd(우리가 지정한 기준일). 수치는 콤마 포함 문자열일 수 있어 정규화가
+    VALU_AMT·MKT_ID·SECUGRP_ID + trd_dd(우리가 지정한 기준일). 수치는 콤마 포함 문자열일
+    수 있어 정규화가
     흡수하고, MKT_ID(STK/KSQ)는 MIC(ISO 10383)로 흡수한다 — FMP 는 거래소를 안 줘 MIC 가 None.
 벤더 판별은 raw 키의 source= 파티션으로 한다(레코드 내용 아님 — 키가 규약의 SSOT).
 
@@ -93,19 +94,42 @@ def _text(record: dict, key: str) -> str | None:
 def _krx_mic(record: dict) -> str | None:
     """KRX 구성종목의 거래소 MIC. 비상장(원화현금 등)은 MKT_ID 가 비어 None 이다.
 
-    None 은 결측이 아니라 **'거래소에 상장된 종목이 아니다'** 는 사실이다 — 실측상 원화현금
-    (`KRD010010001`)은 MKT_ID·SECUGRP_ID 가 둘 다 빈 문자열로 온다. 우리 RDB 는
-    `instrument.market_code NOT NULL` 이라 MIC 없는 행은 애초에 instrument 가 될 수 없으므로,
-    별도 증권유형 어휘를 만들지 않고 이 한 필드로 구분이 선다.
+    None 만으로 비상장 자산이라고 단정하지 않는다. 원화현금은 MKT_ID·SECUGRP_ID 가 모두
+    비지만 새 시장 코드도 MIC 매핑 전에는 None 이므로, 자산 유형은 `_constituent_asset_type`이
+    원본 코드 조합으로 별도 판정한다.
     """
     mkt_id = _text(record, "MKT_ID")
     if not mkt_id:
+        return None
+    if mkt_id == "DRV" and _text(record, "SECUGRP_ID") == "OP":
         return None
     mic = _KRX_MIC_BY_MKT_ID.get(mkt_id)
     if mic is None:
         # 조용히 None 으로 뭉개면 새 시장이 생겼을 때 전 종목이 시장 없이 적재된다.
         logger.warning("알 수 없는 KRX MKT_ID=%r — MIC 없이 통과(매핑 추가 필요)", mkt_id)
     return mic
+
+
+def _constituent_asset_type(vendor: str, record: dict) -> str:
+    """벤더 원본 코드 → 적재 지원 여부를 판단할 최소 자산 어휘.
+
+    KRX 2026-08-24 실측 조합만 확정적으로 분류한다. 나머지를 지원 제외로 낙관하지 않고
+    UNKNOWN으로 남겨 하류의 failed_records 그물이 계속 작동하게 한다.
+    """
+    if vendor != "krx":
+        return "UNKNOWN"
+    raw_secugrp_id = record.get("SECUGRP_ID")
+    raw_mkt_id = record.get("MKT_ID")
+    secugrp_id = raw_secugrp_id if isinstance(raw_secugrp_id, str) else None
+    mkt_id = raw_mkt_id if isinstance(raw_mkt_id, str) else None
+    ticker = _text(record, "COMPST_ISU_CD")
+    if secugrp_id == "ST" and mkt_id in _KRX_MIC_BY_MKT_ID:
+        return "EQUITY"
+    if ticker == "KRD010010001" and secugrp_id == "" and mkt_id == "":
+        return "CASH"
+    if secugrp_id == "OP" and mkt_id == "DRV":
+        return "OPTION"
+    return "UNKNOWN"
 
 
 def _ref_number(value: object) -> float | None:
@@ -171,6 +195,7 @@ def _normalize(vendor: str, record: dict) -> dict:
         # asset·name·isin·securityCusip·sharesNumber·weightPercentage·marketValue·updatedAt
         # 이 전부) None 이다. 한 벤더만 채우는 nullable 은 기존 관례(해외기초 대시 비중)와 같다.
         "constituent_mic": _krx_mic(record) if vendor == "krx" else None,
+        "constituent_asset_type": _constituent_asset_type(vendor, record),
         "weight_pct": _ref_number(record.get(fields["weight_pct"])),
         "shares": _ref_number(record.get(fields["shares"])),
         "market_value": _ref_number(record.get(fields["market_value"])),
@@ -186,7 +211,8 @@ def _normalize(vendor: str, record: dict) -> dict:
 # ── canonical 적재 ───────────────────────────────────────
 _CANONICAL_COLUMNS = (
     "market", "etf_id", "constituent_ticker", "constituent_isin", "constituent_name",
-    "constituent_mic", "weight_pct", "shares", "market_value", "currency", "as_of_date",
+    "constituent_mic", "constituent_asset_type", "weight_pct", "shares", "market_value",
+    "currency", "as_of_date",
     "source_vendor", "fetched_at",
 )
 
@@ -200,6 +226,7 @@ def _canonical_schema():
         ("market", pa.string()), ("etf_id", pa.string()),
         ("constituent_ticker", pa.string()), ("constituent_isin", pa.string()),
         ("constituent_name", pa.string()), ("constituent_mic", pa.string()),
+        ("constituent_asset_type", pa.string()),
         ("weight_pct", pa.float64()),
         ("shares", pa.float64()), ("market_value", pa.float64()),
         ("currency", pa.string()), ("as_of_date", pa.string()),
@@ -235,7 +262,7 @@ def _fetched_at(row: dict) -> datetime:
         dt = datetime.fromisoformat(text)
     except ValueError:
         return _OLDEST
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else _OLDEST
 
 
 def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
@@ -273,11 +300,20 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict[s
     for (market, as_of_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_etf_holdings_partition(market, as_of_date)
         existing: list[dict] = []
+        partition_keys = []
         for key in storage.list_keys(prefix + "/"):
-            if key.endswith(".parquet"):
+            relative = key.removeprefix(prefix + "/")
+            if relative.startswith("part-") and relative.endswith(".parquet") and "/" not in relative:
+                partition_keys.append(key)
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
-        storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
+        target_key = f"{prefix}/part-00000.parquet"
+        storage.put_bytes(target_key, _write_parquet_rows(merged))
+        # canonical 파티션은 단일 파일 계약이다. 구형 part를 남기면 로더가 새 스키마와 함께
+        # 다시 읽어 중복·UNKNOWN 유실로 계측한다. 새 파일 기록 성공 뒤라 교체 중 데이터도 잃지 않는다.
+        stale_keys = [key for key in partition_keys if key != target_key]
+        if stale_keys:
+            storage.delete_keys(stale_keys)
         partitions.append({"market": market, "as_of_date": as_of_date})
         rows_written += len(merged)
     return partitions, rows_written
@@ -337,6 +373,11 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # 예기치 못한 행 단위 크래시도 배치를 죽이지 않게 격리한다(Rule 12).
                 logger.exception("행 정규화 실패(격리): %s", raw_key)
                 failures.append({"raw_key": raw_key, "reasons": ["row_error"], "error": str(exc)})
+                continue
+
+            if _fetched_at(row) == _OLDEST:
+                failures.append({"raw_key": raw_key, "source_vendor": vendor,
+                                 "reasons": ["bad_fetched_at"]})
                 continue
 
             ref = {"market": row["market"], "etf_id": row["etf_id"],

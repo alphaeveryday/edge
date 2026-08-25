@@ -25,10 +25,8 @@
 정한 표준 절차). 이미 있으면 건드리지 않는다 — 재실행이 ID 를 바꾸면 그 ID 를 참조하는 FK 가
 전부 끊긴다. ALPHA-362 가 시딩한 9종도 이 경로로 자연히 걸린다.
 
-**MIC 가 없는 행은 종목이 아니다**: KRX 는 원화현금(`KRD010010001`) 같은 비상장 보유분을 함께
-준다(MKT_ID·SECUGRP_ID 가 빈 문자열 → canonical `constituent_mic` = null, ALPHA-370). 우리 스키마는
-`instrument.market_code NOT NULL` 이라 **스키마 자신의 규칙으로** 제외된다 — 별도 증권유형 어휘를
-만들지 않는다.
+**주식만 마스터에 세운다**: canonical `constituent_asset_type=EQUITY`만 입력으로 받고,
+현금·옵션은 지원 제외로 계측한다. 미지 유형과 주식의 MIC 결측은 실제 유실로 남긴다(ALPHA-1017).
 
 `dart_corp_code` 는 채우지 않는다 — canonical 에 없고, 로더가 DART API 를 부르면 관심사가 섞인다.
 NULL 로 두면 별도 `enrich-corp-code` 스텝이 corpCode.xml 매칭으로 채운다(ALPHA-491). nullable 이라
@@ -78,6 +76,18 @@ _MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
 _CREATED_SAMPLE_LIMIT = 200
 
 
+def _fetched_at(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
     import pyarrow.parquet as pq
@@ -94,6 +104,13 @@ def _partition_dates(storage: Storage, market: str) -> list[str]:
         if date:
             dates.add(date)
     return sorted(dates)
+
+
+def _is_iso_date(value: str) -> bool:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date().isoformat() == value
+    except ValueError:
+        return False
 
 
 def _existing_tickers(conn, mics: set[str]) -> dict[tuple[str, str], str]:
@@ -226,6 +243,10 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = skipped_foreign_etf = 0
+    skipped_unsupported_asset = skipped_unknown_asset_type = 0
+    skipped_missing_identity = skipped_bad_fetched_at = skipped_unknown_mic = 0
+    deduplicated_rows = 0
+    unsupported_asset_counts: dict[str, int] = {}
     instruments_read = profiles_no_mic = skipped_non_common = 0
     profiles_no_share_class = 0
     mic_conflicts: list[dict] = []
@@ -245,8 +266,16 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         # 이 시장분만 세는 지역 카운터 — 아래 게이트가 쓴다. 위 누적값(read·skipped_*)을 쓰면
         # 시장이 둘 이상일 때 합계끼리 비교해 엉뚱한 시장을 지목한다(같은 파일의
         # instrument_profile_all_dropped 게이트가 이미 같은 이유로 market_* 를 따로 센다).
-        market_read = market_no_mic = market_foreign = 0
+        market_read = market_no_mic = market_unknown_mic = market_foreign = 0
+        market_unsupported = market_unknown_asset_type = 0
+        logical_rows: dict[tuple[str, str], tuple[dict, datetime]] = {}
         dates = _partition_dates(storage, market)
+        bad_dates = [date for date in dates if not _is_iso_date(date)]
+        if bad_dates:
+            failures.append({"market": market, "reasons": ["bad_partition_date"],
+                             "dates": bad_dates})
+            exit_code = 1
+            dates = []
         if dates:
             prefix = canonical_etf_holdings_partition(market, dates[-1])
             for key in storage.list_keys(prefix + "/"):
@@ -255,36 +284,91 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
                 for row in _read_parquet_rows(storage.get_bytes(key)):
                     read += 1
                     market_read += 1
-                    mic, ticker = row.get("constituent_mic"), row.get("constituent_ticker")
-                    if not mic or not ticker:
-                        skipped_no_mic += 1
-                        market_no_mic += 1
+                    row_market, as_of = row.get("market"), row.get("as_of_date")
+                    if any(
+                        not isinstance(value, str) or not value.strip() or value != value.strip()
+                        for value in (row_market, as_of)
+                    ):
+                        skipped_missing_identity += 1
                         continue
-                    if expected_etfs is not None and row.get("etf_id") not in expected_etfs:
-                        # 마스터 시딩 축은 분석 유니버스다 — 유니버스 뿌리 밖 ETF 의 구성종목을
-                        # 주워 담으면 수집하지도 분석하지도 않는 회사가 마스터에 선다.
-                        # (KRX 상장 전종목 입력은 아래 별개 축이라 이 필터와 무관하다.)
-                        # ⚠️ mic/ticker 가드 **뒤**다 — 앞에 두면 etf_id 결측 행이 여기로 새어
-                        # skipped_no_mic(유실)에서 빠진다.
-                        skipped_foreign_etf += 1
-                        market_foreign += 1
+                    if row_market != market or as_of != dates[-1]:
+                        failures.append({
+                            "market": market,
+                            "reasons": ["partition_identity_mismatch"],
+                            "error": ("canonical 행과 파티션이 일치하지 않는다: "
+                                      f"date={dates[-1]}, key={key}"),
+                        })
+                        exit_code = 1
                         continue
-                    all_rows.setdefault((mic, ticker), row)
+                    etf_id, ticker = row.get("etf_id"), row.get("constituent_ticker")
+                    identities = (etf_id, ticker)
+                    if any(
+                        not isinstance(value, str) or not value.strip() or value != value.strip()
+                        for value in identities
+                    ):
+                        skipped_missing_identity += 1
+                        continue
+                    mic = row.get("constituent_mic")
+                    parsed_fetched_at = _fetched_at(row.get("fetched_at"))
+                    if parsed_fetched_at is None:
+                        skipped_bad_fetched_at += 1
+                        continue
+                    candidate_key = (etf_id, ticker)
+                    previous = logical_rows.get(candidate_key)
+                    if previous is not None:
+                        deduplicated_rows += 1
+                        if parsed_fetched_at < previous[1]:
+                            continue
+                    logical_rows[candidate_key] = (row, parsed_fetched_at)
+            for row, parsed_fetched_at in logical_rows.values():
+                etf_id, ticker = row["etf_id"], row["constituent_ticker"]
+                raw_asset_type = row.get("constituent_asset_type")
+                asset_type = raw_asset_type if isinstance(raw_asset_type, str) else "UNKNOWN"
+                if asset_type in {"CASH", "OPTION"}:
+                    skipped_unsupported_asset += 1
+                    market_unsupported += 1
+                    unsupported_asset_counts[asset_type] = (
+                        unsupported_asset_counts.get(asset_type, 0) + 1
+                    )
+                    continue
+                if asset_type != "EQUITY":
+                    skipped_unknown_asset_type += 1
+                    market_unknown_asset_type += 1
+                    continue
+                if expected_etfs is not None and etf_id not in expected_etfs:
+                    skipped_foreign_etf += 1
+                    market_foreign += 1
+                    continue
+                mic = row.get("constituent_mic")
+                if not isinstance(mic, str) or not mic.strip() or mic != mic.strip():
+                    skipped_no_mic += 1
+                    market_no_mic += 1
+                    continue
+                if mic not in _MICS_BY_MARKET[market]:
+                    skipped_unknown_mic += 1
+                    market_unknown_mic += 1
+                    continue
+                master_key = (mic, ticker)
+                previous = all_rows.get(master_key)
+                if previous is None or parsed_fetched_at >= previous["_fetched_at"]:
+                    all_rows[master_key] = {**row, "_fetched_at": parsed_fetched_at}
             # 읽었는데 **한 행도 못 쓴** 상태 — 아래 instrument_profile_all_dropped 와 같은
             # 게이트고, 그쪽 도크스트링의 두 규율을 그대로 따른다: (1) 탈락 축을 **다 더한다**
-            # (2) 시장별 지역 카운터로 본다. 축 하나만 보면 게이트가 죽는다 — KR canonical 에는
-            # 원화현금(MIC 없음) 행이 **매 런 정상적으로** 들어와 no_mic 이 0이 아니므로,
-            # foreign == read 는 실제로 성립하지 않는다(그게 이 게이트가 필요한 바로 그 상황이다).
+            # (2) 시장별 지역 카운터로 본다. 지원 제외 현금·옵션은 판정 분모에서도 빼야
+            # 정상 제외만 있는 파티션을 전량 유실로 오인하지 않는다.
             #
             # 왜 필요한가: etf_id 어휘가 config 와 갈리면(오타·정규화 변경) 구성종목 축이 통째로
             # 빠지는데, KRX 전종목 축이 마스터를 덮어 줘 런은 초록으로 끝난다 — 그때 "구성종목이
             # 이긴다"는 이름 우선순위가 말없이 사라진다. 침묵이 결함이다(Rule 12).
             # 비0으로 끝내지 않는 것도 형제 게이트와 같은 정책이다(한 파일에 두 정책 금지, Rule 7).
+            eligible_read = (len(logical_rows) - market_unsupported - market_unknown_asset_type
+                             - market_unknown_mic)
             unusable = market_no_mic + market_foreign
-            if market_read and market_read == unusable:
+            if eligible_read and eligible_read == unusable:
                 failures.append({"market": market, "reasons": ["constituents_all_foreign"],
                                  "error": f"구성종목 {market_read}건이 전부 사용 불가"
-                                          f"(MIC 결측 {market_no_mic}·유니버스 뿌리 밖 "
+                                          f"(MIC 결측 {market_no_mic}·MIC 미지원 {market_unknown_mic}"
+                                          "·유니버스 뿌리 밖 "
                                           f"{market_foreign}) — etf_id 어휘가 "
                                           "krx_etf.source.etf_map 과 갈렸는지 확인"})
 
@@ -308,9 +392,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
             market_read += 1
             mic, ticker = profile.get("market_code"), profile.get("ticker")
             if not mic or not ticker:
-                # 정제단이 이미 걸렀어야 하는 행. 구성종목의 원화현금(MIC 없음)과 **사유가
-                # 다르므로** 카운터를 따로 둔다 — 저쪽은 매 런 정상적으로 나오는 값이라
-                # 합치면 이쪽의 이상을 원장이 못 본다.
+                # 정제단이 이미 걸렀어야 하는 행. 구성종목의 지원 제외 자산과 **사유가
+                # 다르므로** 카운터를 따로 둔다.
                 profiles_no_mic += 1
                 market_no_mic += 1
                 continue
@@ -483,6 +566,13 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "markets": list(LOADED_MARKETS),
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
+        "skipped_unsupported_asset": skipped_unsupported_asset,
+        "unsupported_asset_counts": dict(sorted(unsupported_asset_counts.items())),
+        "skipped_unknown_asset_type": skipped_unknown_asset_type,
+        "skipped_missing_identity": skipped_missing_identity,
+        "skipped_bad_fetched_at": skipped_bad_fetched_at,
+        "skipped_unknown_mic": skipped_unknown_mic,
+        "deduplicated_rows": deduplicated_rows,
         "skipped_foreign_etf": skipped_foreign_etf,
         "instrument_profiles_read": instruments_read,
         "instrument_profiles_no_mic": profiles_no_mic,
@@ -498,10 +588,14 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         "etfs_read": etfs_read, "etfs_already_present": etfs_existing, "etfs_created": etfs_created,
         "failures": failures, "exit_code": exit_code,
         # 원장 관측용 공통 봉투(ALPHA-181). 마스터는 구성종목·ETF 두 축을 한 테이블에 적재하므로
-        # 둘을 합친다. MIC 미해소(skipped_no_mic)는 그 종목이 마스터에 안 들어간 유실이다.
+        # 둘을 합친다. 지원 제외 현금·옵션은 유실이 아니지만, 미지 유형과 주식 MIC 미해소는 유실이다.
         "ops": {
             "records_out": existing + created + etfs_existing + etfs_created,
-            "failed_records": (len(failures) + skipped_no_mic + profiles_no_mic
+            "failed_records": (len(failures) + skipped_no_mic + skipped_unknown_asset_type
+                               + skipped_missing_identity
+                               + skipped_bad_fetched_at
+                               + skipped_unknown_mic
+                               + profiles_no_mic
                                + profiles_no_share_class + len(mic_conflicts)),
         },
     }

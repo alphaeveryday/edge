@@ -1080,11 +1080,12 @@ class Storage(Protocol):
     #
     # ⚠️ **재생성 가능한 중간 산출물의 압축용이다.** raw 존과 `put_immutable` 이 지키는
     # 불변 계약에는 쓰지 마라 — 거기 바이트는 판정의 근거라 지우면 복원할 수 없다.
-    # 현재 유일한 호출부는 `steps/tag_news` 가 흡수를 끝낸 장중 미러 조각이고, 그건
-    # 같은 파티션의 part 파일에 이미 병합된 뒤다(ALPHA-900).
+    # 호출부는 `steps/tag_news` 가 흡수를 끝낸 장중 미러 조각(ALPHA-900)과
+    # `steps/normalize_etf` 가 단일 part로 병합한 뒤 남은 같은 파티션의 직접 자식
+    # part 파일(ALPHA-1017)뿐이다.
     #
     # ⚠️ **위 계약은 산문이 아니라 IAM 이 진다** — 태스크 롤의 `s3:DeleteObject` 는
-    # 미러 프리픽스로 좁혀져 있다(`modules/data-pipeline/iam.tf`). 다른 존·다른
+    # 두 객체 형태로 좁혀져 있다(`modules/data-pipeline/iam.tf`). 다른 존·다른
     # 프리픽스를 지우려 부르면 여기서가 아니라 런타임 AccessDenied 로 죽는다.
     def delete_keys(self, keys: list[str]) -> None: ...
 
