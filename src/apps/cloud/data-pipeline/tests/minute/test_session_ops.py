@@ -81,6 +81,7 @@ def wiring(monkeypatch):
         session_ops, "_scale",
         lambda *, desired, force, services=None: ecs.update_service(
             desiredCount=desired, forceNewDeployment=force, services=services))
+    monkeypatch.setattr(session_ops, "qc_session_cli", lambda *a, **k: 0)
     return ecs
 
 
@@ -193,6 +194,61 @@ def test_stop_waits_then_scales_down(monkeypatch, wiring):
     # 진입 조회 1 + DRAINING 관측 1 + 연속 clear CLEAR_CONFIRMATIONS 회.
     # 한 번의 clear 로 내려가는 구현이면 이 값이 3 이다.
     assert ledger.observed == 1 + 1 + session_ops.CLEAR_CONFIRMATIONS
+
+
+def test_stop_qcs_every_live_lane_before_scale_down(monkeypatch, wiring):
+    """한 레인의 QC 실패가 뒤 레인이나 안전한 scale-down을 막으면 안 된다."""
+    monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+    monkeypatch.setenv(session_ops.ENV_NEWS_WORKER_SERVICES, "svc-news-worker")
+    monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+    monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+
+    class DrainedLedger:
+        def session_snapshot(self, *, session_id):
+            return {"phase": "DRAINED"}
+
+        def request_drain(self, *, session_id, now):
+            return True
+
+    qcs = []
+    monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: DrainedLedger())
+    monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+    monkeypatch.setattr(
+        session_ops, "qc_session_cli",
+        lambda settings, *, session_id: qcs.append(session_id) or (1 if len(qcs) == 1 else 2),
+    )
+
+    rc = session_ops.stop_session_cli(
+        FakeSettings(), dataset="price_minute", source_group="toss")
+
+    assert rc == 2, "QC exit은 2가 1보다 우선한다"
+    assert len(qcs) == 2, "앞 레인 실패 뒤에도 모든 활성 레인을 QC해야 한다"
+    assert wiring.calls == [
+        {"desiredCount": 0, "forceNewDeployment": False, "services": None},
+        {"desiredCount": 0, "forceNewDeployment": False, "services": ["svc-news-worker"]},
+    ]
+
+
+def test_stop_does_not_qc_when_drain_fails(monkeypatch, wiring):
+    """drain 실패 뒤 QC하면 움직이는 원장을 확정할 수 있으므로 호출 자체가 없어야 한다."""
+    class FailingLedger:
+        def session_snapshot(self, *, session_id):
+            return {"phase": "ACTIVE"}
+
+        def request_drain(self, *, session_id, now):
+            raise RuntimeError("db")
+
+    qcs = []
+    monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: FailingLedger())
+    monkeypatch.setattr(session_ops, "JobLedger", lambda **_: FakeJobs())
+    monkeypatch.setattr(session_ops, "qc_session_cli", lambda *a, **k: qcs.append(k) or 0)
+
+    rc = session_ops.stop_session_cli(
+        FakeSettings(), dataset="price_minute", source_group="toss")
+
+    assert rc == 2
+    assert qcs == []
+    assert wiring.calls == []
 
 
 def test_late_message_resets_the_clear_streak(monkeypatch, wiring):

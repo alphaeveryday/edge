@@ -189,8 +189,10 @@
 > 업종지수 세션은 09:00~15:30 이고 가격은 20:00 까지라, 가격 EOD 확정은 이 시각을 쓸 수
 > 없다(ALPHA-839 소관).
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
-> 연속 확인). 스케줄러는 RunTask **제출**까지만 보지만, ECS Task State Change rule이
-> minute-session task family의 컨테이너 exit≠0을 기존 alarm SNS topic으로 올린다.
+> 연속 확인). 게이트가 풀리면 설정된 전 레인을 QC한 뒤 scale-down한다. 한 레인의 QC 실패도
+> 나머지 레인 QC와 안전한 scale-down을 막지 않는다. 스케줄러는 RunTask **제출**까지만 보지만,
+> ECS Task State Change rule이 minute-session task family의 컨테이너 exit≠0을 기존 alarm
+> SNS topic으로 올린다.
 > ⚠️ **analysis-consumer 는 세션이 스케일하지 않는다**(ALPHA-912 — 컷오버 완료). desired 는
 > 큐 잔여 일감(가시+처리중)을 보는 오토스케일링이 소유하고(`analysis_autoscaling.tf`),
 > 세션이 이 서비스에 대해 하는 일은 **공용 목록에서 이름을 빼는 것뿐**이다 —
@@ -1842,13 +1844,14 @@ MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP=kis \
 MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES=edge-dev-data-pipeline-sector-index-worker \
   python -m data_pipeline.run start-minute-session --dataset price_minute \
     --source-group kis --universe s3://edge-dev-pipeline-lake/config/minute/universe.json
-# stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → desired 1→0. 게이트는 셋이고
+# stop: drain 요청 → **원장 게이트**가 빌 때까지 폴링 → 활성 전 레인 QC → desired 1→0.
+# 한 레인 QC 실패도 뒤 레인과 scale-down을 막지 않고, 최종 exit 은 2 > 1 > 0 으로 집계한다. 게이트는 셋이고
 # 순서대로 비어야 한다 — session.phase 가 DRAINED 이후(= in-flight window 0) → 게이트 큐
 # 깊이 0 → 미발행 outbox NEW 0. 큐 깊이는 approximate 라 **연속 5회(≈60초)** 확인한다.
 # ⚠️ 시각으로 내리지 않는 이유가 이것이다 — 15:30 이 지났다고 내리면 recovery 레인이
 # 집고 있던 window 가 조용히 결손된다.
-# exit: 0=내렸음(또는 오늘 세션이 없어 스케일 미변경) / 1=상한까지 게이트가 안 비어
-# **내리지 않았다**(사람이 원장을 본다) / 2=요청 자체를 못 함(설정·DB).
+# exit: 0=QC 성공/재사용 뒤 내렸음(또는 오늘 세션이 없어 미변경) / 1=상한까지 게이트가
+# 안 비어 **내리지 않았거나** QC 불변식 위반 / 2=drain 또는 QC 실행 자체를 못 함.
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill,edge-dev-data-pipeline-analysis-consumer \

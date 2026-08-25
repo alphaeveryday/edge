@@ -7,7 +7,7 @@
 
 ```text
 start-minute-session (Premarket) : 거래일 판정 → 세션 계획 → desired 0→1
-stop-minute-session  (EOD)       : drain 요청 → 원장 게이트 대기 → desired 1→0
+stop-minute-session  (EOD)       : drain 요청 → 원장 게이트 대기 → 전 레인 QC → desired 1→0
 ```
 
 **오케스트레이터는 EventBridge Scheduler → ECS RunTask 다**(SFN·Lambda 아님). 이유:
@@ -41,6 +41,7 @@ from typing import NamedTuple
 from ..db import stable_domain_id
 from ..ops.trading_calendar import is_trading_day
 from .jobs import JobLedger
+from .eod import qc_session_cli
 from .models import KST
 from .repository import MinuteLedger
 from .session_cli import plan_session_cli
@@ -414,8 +415,9 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
 def stop_session_cli(settings, *, dataset: str | None, source_group: str | None) -> int:
     """`run stop-minute-session` — EOD 스케줄이 부른다.
 
-    exit: 0=게이트가 비어 내렸음(또는 그 날 세션이 없어 내릴 것만 내렸음)
-    / 1=상한까지 게이트가 안 비었다(**내리지 않았다**) / 2=요청 자체를 못 함(설정·DB).
+    exit: 0=게이트가 비어 전 레인 QC 후 내렸음(또는 그 날 세션이 없어 미변경)
+    / 1=게이트 상한 초과(**내리지 않음**) 또는 QC 불변식 위반
+    / 2=drain/QC 실행 자체를 못 함. QC 실패 뒤에도 안전한 scale-down 은 마친다.
 
     ⚠️ 상한 초과에서 **내리지 않는 쪽을 택한다.** 내리면 처리 중이던 window 가 조용히
     결손되고, 안 내리면 Fargate 태스크 3개가 다음 스케줄까지 떠 있을 뿐이다(다음날
@@ -514,6 +516,16 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         logger.info("대기 중 — %s", "; ".join(pending))
         time.sleep(POLL_INTERVAL_SEC)
 
+    qc_exit = 0
+    for lane in live:
+        session_id = ids[lane]
+        try:
+            lane_exit = qc_session_cli(settings, session_id=session_id)
+        except Exception:
+            logger.exception("세션 QC 실행 실패: %s(%s/%s)", session_id, lane[0], lane[1])
+            lane_exit = 2
+        qc_exit = max(qc_exit, lane_exit)
+
     # ⚠️ 설명 소비자는 여기서 **안 내린다**(ALPHA-912) — 잔여 일감이 0 이 되면 스케일러가
     # 0 으로 내린다(실증됨). 여기서 0 을 쓰면 **아직 처리 중인 설명을 자른다**: 게이트는
     # 이 서비스의 큐를 안 보므로(설명 큐는 게이트 밖 — `_gate_pending` 주석) 20:05 에
@@ -529,8 +541,8 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     for workers in lane_workers.values():
         if workers:
             _scale(desired=0, force=False, services=workers)
-    logger.info("세션 종료: sessions=%s — 게이트 전건 비었음", session_ids)
-    return 0
+    logger.info("세션 종료: sessions=%s — 게이트 전건 비었음, qc_exit=%d", session_ids, qc_exit)
+    return qc_exit
 
 
 def _gate_pending(ledger: MinuteLedger, jobs: JobLedger, *,
