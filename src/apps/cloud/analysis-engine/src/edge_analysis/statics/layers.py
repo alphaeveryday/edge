@@ -508,6 +508,30 @@ def _names(lake, etf: str, day: str, layers: list[Layer], top: int,
     return tuple(out[:top]), wsum, wtot, halted, adv, dec
 
 
+
+def weighted_asof_subquery(etf: str, day: str | None = None) -> str:
+    """비중 결손 **과반** 파티션을 건너뛴 최신 as_of 를 고르는 서브쿼리 (ALPHA-1027).
+
+    `adapters/lake.load_holdings` 의 파티션 선택 계약(ALPHA-951)의 SQL 판 — 유효 행
+    (티커 비공백 + 비중이 유한한 0 이상 수치, `_weight` 와 같은 판정)이 절반 미만인
+    파티션은 프리마켓 수집분(비중 없이 구성만)이라 분해의 근거가 아니다. 이걸 각
+    리더가 복제하면 한쪽만 고쳐진다(08-13~ 장중 기여 분해 상시 사망의 원인) —
+    layers 와 batch 가 이 한 함수를 쓴다. `day` 가 None 이면 상한 없음(batch).
+    """
+    bound = f" AND as_of_date <= DATE '{day}'" if day else ""
+    return (
+        "(SELECT as_of_date FROM s3_etf_holdings "
+        f"WHERE market = 'KR' AND etf_id = '{etf}'{bound} "
+        "GROUP BY as_of_date "
+        "HAVING 2 * count(*) FILTER (WHERE "
+        "trim(coalesce(CAST(constituent_ticker AS VARCHAR), '')) <> '' "
+        "AND TRY_CAST(weight_pct AS DOUBLE) IS NOT NULL "
+        "AND isfinite(TRY_CAST(weight_pct AS DOUBLE)) "
+        "AND TRY_CAST(weight_pct AS DOUBLE) >= 0) >= count(*) "
+        "ORDER BY as_of_date DESC LIMIT 1)"
+    )
+
+
 @lru_cache(maxsize=8192)
 def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
     """[(ticker, name, weight)] - **as_of ≤ day** 최신 스냅샷만 (선견 금지).
@@ -531,9 +555,9 @@ def holdings(lake, etf: str, day: str) -> list[tuple[str, str, float]]:
             f"SELECT constituent_ticker, any_value(constituent_name), "
             f"       any_value(weight_pct) "
             f"FROM s3_etf_holdings WHERE market = 'KR' AND etf_id = '{etf}' "
-            f"  AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings "
-            f"                    WHERE market = 'KR' AND etf_id = '{etf}' "
-            f"                      AND as_of_date <= DATE '{day}') "
+            # 과반-NULL 파티션 배제 — max() 를 그대로 쓰면 프리마켓 수집분이 최신으로
+            # 뽑혀 장중 기여 분해가 죽는다(ALPHA-1027, adapters 리더와 같은 계약).
+            f"  AND as_of_date = {weighted_asof_subquery(etf, day)} "
             f"GROUP BY 1")
     except Exception:                                      # noqa: BLE001 - 뷰 없음
         rows = []

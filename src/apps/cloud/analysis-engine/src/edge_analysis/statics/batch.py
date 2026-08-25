@@ -25,6 +25,7 @@ from collections import Counter
 from pathlib import Path
 
 from .expressive import SLOTS, Survey, append_ledger, survey_cell
+from .layers import weighted_asof_subquery
 from .registry import roadmap
 
 
@@ -42,8 +43,8 @@ def cells(lake, etf_id: str, d0: str, d1: str, top: int = 8) -> list[tuple[str, 
             SELECT constituent_ticker AS tk, weight_pct
             FROM s3_etf_holdings
             WHERE etf_id = '{etf_id}' AND market = 'KR'
-              AND as_of_date = (SELECT max(as_of_date) FROM s3_etf_holdings
-                                WHERE etf_id = '{etf_id}')
+              AND as_of_date = {weighted_asof_subquery(etf_id)}
+              AND weight_pct IS NOT NULL
               AND constituent_ticker ~ '^[0-9]{{6}}$'
             ORDER BY weight_pct DESC LIMIT {top}
         )
