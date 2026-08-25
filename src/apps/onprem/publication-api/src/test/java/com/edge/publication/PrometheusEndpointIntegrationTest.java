@@ -35,7 +35,8 @@ class PrometheusEndpointIntegrationTest extends OnpremPostgresIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
-		// 상장 판정이 종목 마스터로 옮겨졌다 — serveOnce() 의 305720 이 미상장이면 404 로 죽는다.
+		// 상장 판정(404)이 종목 마스터로 옮겨졌다 — serveOnce() 의 305720 이 미상장이면
+		// 조회가 404 로 죽어 캐시 지표가 깨어나지 않는다.
 		jdbc.update("INSERT INTO etf_instrument (etf_ticker, etf_name) VALUES (?, ?) "
 				+ "ON CONFLICT (etf_ticker) DO NOTHING", "305720", "테스트 ETF");
 		rest = RestClient.create("http://localhost:" + port);
@@ -74,7 +75,7 @@ class PrometheusEndpointIntegrationTest extends OnpremPostgresIntegrationTest {
 		rest.get().uri("/api/v1/explanations/305720")
 				.header("X-Customer-Hash", "hash-1")
 				.header("X-Channel", "MTS")
-				// 설명 없는 날(204)이어도 캐시는 조회된다 — 시드 없이 지표만 깨우기 위한 선택.
+				// 설명 없는 날(result 생략 200)이어도 캐시는 조회된다 — 게시분 시드 없이 지표만 깨우기 위한 선택.
 				.retrieve()
 				.toBodilessEntity();
 	}

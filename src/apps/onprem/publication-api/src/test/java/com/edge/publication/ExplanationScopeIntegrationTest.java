@@ -22,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 콘솔 제공 범위 토글(serving_scope)의 서빙단 실효화(ALPHA-614)를 실 Postgres 로 검증한다.
  * WHY: 토글이 저장만 되고 서빙이 이를 읽지 않으면 이해상충 제외가 고객 노출을 통제하지 못한다 —
- * 판정은 게시분 조회 앞단에서 걸러 "설명 없음"(204)으로 수렴해야 하고, 상위
+ * 판정은 게시분 조회 앞단에서 걸러 "설명 없음"(result 생략 200, ADR-0054)으로 수렴해야 하고, 상위
  * (MARKET) 차단이 하위(INSTRUMENT) 토글에 우선해야 한다.
  *
  * <p>이 테스트만 게시분 조회 캐시(ALPHA-433 ExplanationStore serveCache)를 끈다(TTL 0s) —
@@ -52,7 +52,8 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 		jdbc.update("DELETE FROM serving_scope");
 		jdbc.update("DELETE FROM publication");
 		jdbc.update("DELETE FROM analysis_item");
-		// 상장 판정이 종목 마스터로 옮겨졌다 — 시드 없으면 전 시나리오가 SERV4040 으로 빠진다.
+		// 상장 판정(404)이 종목 마스터로 옮겨졌다 — 시드 없으면 전 시나리오가 SERV4040 으로 빠진다.
+		// 999999(미상장 케이스)는 넣지 않는다.
 		jdbc.update("INSERT INTO etf_instrument (etf_ticker, etf_name) VALUES (?, ?) "
 				+ "ON CONFLICT (etf_ticker) DO NOTHING", TICKER, "KODEX 200");
 		seedPublishedExplanation();
@@ -63,36 +64,37 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 	}
 
 	@Test
-	void scope_행이_없으면_기본_제공이라_200이다() throws Exception {
+	void scope_행이_없으면_기본_제공이라_게시분이_실린다() throws Exception {
 		// WHY: 옵트아웃 모델 — 토글 이력이 없는 종목은 종전처럼 노출돼야 한다(판정 도입이 기본 제공을 깨면 안 된다).
-		serve().andExpect(status().isOk()).andExpect(jsonPath("$.etf.ticker").value(TICKER));
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result.etf.ticker").value(TICKER));
 	}
 
 	@Test
-	void INSTRUMENT_토글_OFF면_204다() throws Exception {
-		// WHY: 종목 제외가 곧 고객 노출 차단이어야 한다 — 게시분이 있어도 204 로 수렴한다.
+	void INSTRUMENT_토글_OFF면_설명_없음으로_수렴한다() throws Exception {
+		// WHY: 종목 제외가 곧 고객 노출 차단이어야 한다 — 게시분이 있어도 "설명 없음"
+		// (result 생략 200, ADR-0054)으로 수렴한다. 형상 전수 검증은 ExplanationControllerTest 소관.
 		insertScope("INSTRUMENT", TICKER, false);
-		serve().andExpect(status().isNoContent());
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result").doesNotExist());
 	}
 
 	@Test
-	void INSTRUMENT_토글이_재개enabled_true면_다시_200이다() throws Exception {
+	void INSTRUMENT_토글이_재개enabled_true면_다시_게시분이_실린다() throws Exception {
 		// WHY: 재개(enabled=true) 행은 행 부재와 같게 제공으로 돌아와야 한다 — 차단이 비가역이면 운영이 불가능하다.
 		insertScope("INSTRUMENT", TICKER, true);
-		serve().andExpect(status().isOk());
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result.etf.ticker").value(TICKER));
 	}
 
 	@Test
-	void MARKET_XKRX_OFF는_종목이_enabled여도_전역_차단이라_204다() throws Exception {
+	void MARKET_XKRX_OFF는_종목이_enabled여도_전역_차단이라_설명_없음이다() throws Exception {
 		// WHY: 상위(MARKET) 차단이 하위(INSTRUMENT) 토글에 우선한다 — KRX 단일 유니버스 전제(ADR-0024)의 전역 스위치라 종목 ON 을 무시하고 차단해야 한다.
 		insertScope("MARKET", "XKRX", false);
 		insertScope("INSTRUMENT", TICKER, true);
-		serve().andExpect(status().isNoContent());
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result").doesNotExist());
 	}
 
 	@Test
 	void 미상장_코드는_판정_이전에_404다() throws Exception {
-		// WHY: 404(미상장)와 204(차단·설명 없음)는 다른 질문이다 — 제공 범위 판정 도입이 상장 여부 계약(SERV4040)을 흔들면 안 된다.
+		// WHY: 404(미상장)와 "설명 없음"(차단·게시분 부재)은 다른 질문이다 — 제공 범위 판정 도입이 상장 여부 계약(SERV4040)을 흔들면 안 된다.
 		mvc.perform(get("/api/v1/explanations/999999"))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("SERV4040"));

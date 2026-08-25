@@ -60,7 +60,9 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 
 	@DynamicPropertySource
 	static void dedicatedContext(DynamicPropertyRegistry registry) {
-		// 캐시 TTL 을 테스트 길이보다 충분히 크게 고정한다 — 기본 3s 면 CI 정지·GC 로 요청
+		// 이 등록이 곧 전용 컨텍스트의 근거다(클래스 주석 ①) — 기본 컨텍스트와 프로퍼티가 갈려
+		// 별도 캐시 인스턴스를 받는다. 겸해서, 캐시 TTL 을 테스트 길이보다 충분히 크게 고정한다
+		// — 기본 3s 면 CI 정지·GC 로 요청
 		// 사이에 만료될 수 있고, 그러면 두 번째 요청이 DB 미스 경로로 돌아 "캐시를 켠 채
 		// 즉시 반영"이라는 검증 대상이 우연히 성립한다(캐시가 문구를 가리는 회귀를 놓친다).
 		registry.add("publication.serve-cache-ttl", () -> "60s");
@@ -81,7 +83,7 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		jdbc.update("DELETE FROM screening_check");
 		jdbc.update("DELETE FROM screening_rule");
 		jdbc.update("DELETE FROM policy_version");
-		// 상장 판정이 종목 마스터로 옮겨졌다 — 시드 없으면 전 시나리오가 SERV4040 으로 빠진다.
+		// 상장 판정(404)이 종목 마스터로 옮겨졌다 — 시드 없으면 전 시나리오가 SERV4040 으로 빠진다.
 		jdbc.update("INSERT INTO etf_instrument (etf_ticker, etf_name) VALUES (?, ?) "
 				+ "ON CONFLICT (etf_ticker) DO NOTHING", TICKER, "테스트 ETF");
 		seedPublishedExplanationOnce();
@@ -96,7 +98,7 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		// WHY: 이 티켓의 본체 — 콘솔이 발행한 문구가 고객 응답에 도달해야 한다(종전에는 상수가 실렸다).
 		publishPolicy(1, "테넌트가 발행한 안내 문구입니다.");
 		serve().andExpect(status().isOk())
-				.andExpect(jsonPath("$.disclaimer").value("테넌트가 발행한 안내 문구입니다."));
+				.andExpect(jsonPath("$.result.disclaimer").value("테넌트가 발행한 안내 문구입니다."));
 	}
 
 	@Test
@@ -104,20 +106,20 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		// WHY: 조회 시점 최신값 규칙. 게시분 캐시를 켠 채로도 문구가 즉시 갈려야 한다 —
 		// 컴플라이언스 통제는 다음 게시를 기다릴 수 없다.
 		publishPolicy(1, "1차 안내 문구.");
-		serve().andExpect(jsonPath("$.disclaimer").value("1차 안내 문구."));
+		serve().andExpect(jsonPath("$.result.disclaimer").value("1차 안내 문구."));
 
 		deactivateActivePolicy();
 		publishPolicy(2, "2차로 정정된 안내 문구.");
 
 		serve().andExpect(status().isOk())
-				.andExpect(jsonPath("$.disclaimer").value("2차로 정정된 안내 문구."));
+				.andExpect(jsonPath("$.result.disclaimer").value("2차로 정정된 안내 문구."));
 	}
 
 	@Test
 	void 정책_미발행이면_콘솔_기본_문구로_수렴한다() throws Exception {
 		// WHY: 활성 0건은 정상 상태다(면책 문구는 테넌트 콘텐츠라 시드로 발행하지 않는다 —
 		// policy_version 스키마 COMMENT). 그 구간의 문구가 콘솔 투영과 달라선 안 된다.
-		serve().andExpect(status().isOk()).andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result.disclaimer").value(CONSOLE_DEFAULT));
 	}
 
 	@Test
@@ -127,7 +129,7 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		publishPolicy(1, "이미 종결된 옛 문구.");
 		deactivateActivePolicy();
 
-		serve().andExpect(status().isOk()).andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result.disclaimer").value(CONSOLE_DEFAULT));
 	}
 
 	@Test
@@ -143,7 +145,7 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		serviceLogger.addAppender(captured);
 		try {
 			serve().andExpect(status().isOk())
-					.andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+					.andExpect(jsonPath("$.result.disclaimer").value(CONSOLE_DEFAULT));
 			assertThat(captured.list).anySatisfy(event -> {
 				assertThat(event.getLevel()).isEqualTo(Level.ERROR);
 				assertThat(event.getFormattedMessage()).contains("면책 문구가 비어 있다");
@@ -161,7 +163,7 @@ class ExplanationDisclaimerIntegrationTest extends OnpremPostgresIntegrationTest
 		// 고객에게 새어 나간다. 스키마는 activated_at·deactivated_at 이 함께 NULL 인 행을 허용한다.
 		insertUnactivatedPolicy(1, "아직 활성화되지 않은 문구.");
 
-		serve().andExpect(status().isOk()).andExpect(jsonPath("$.disclaimer").value(CONSOLE_DEFAULT));
+		serve().andExpect(status().isOk()).andExpect(jsonPath("$.result.disclaimer").value(CONSOLE_DEFAULT));
 	}
 
 	private ResultActions serve() throws Exception {

@@ -63,7 +63,7 @@ public class ExplanationService {
 		return etfInstrumentRepository.existsByEtfTicker(ticker);
 	}
 
-	/** 200 대상이 있으면 응답을 만든다 — 없으면 empty(컨트롤러가 204 로 수렴). */
+	/** 게시분이 있으면 응답을 만든다 — 없으면 empty(컨트롤러가 result 생략 200 으로 수렴, ADR-0054). */
 	public Optional<ExplanationResponse> serve(String ticker, LocalDate tradeDate) {
 
 		if (!isKnownTicker(ticker)) {
@@ -107,7 +107,7 @@ public class ExplanationService {
 	}
 
 	/**
-	 * 콘솔 제공 범위(옵트아웃) 판정 — 차단이면 게시분을 조회하지 않고 204 로 수렴시킨다.
+	 * 콘솔 제공 범위(옵트아웃) 판정 — 차단이면 게시분을 조회하지 않고 "설명 없음"(result 생략 200)으로 수렴시킨다.
 	 * 규칙: ① MARKET(XKRX) OFF = 전역 차단(상위 우선 — 종목 토글 무시) ② INSTRUMENT(ticker)
 	 * OFF = 종목 차단 ③ 행 부재·enabled=true = 제공. 조회는 요청당 PK 룩업 2회로 캐시 없음
 	 * (Rule 2) — 콘솔 토글의 즉시 반영이 신선도 우선이라 게시분 캐시와 달리 캐시하지 않는다.
