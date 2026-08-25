@@ -42,6 +42,17 @@ def _duck_lake():
             "INSERT INTO s3_etf_holdings VALUES ('KR', ?, ?, ?, 10.0, ?)",
             [ETF, tk, f"종목{tk}", GOOD_DAY],
         )
+    # 정상 파티션에 섞인 **무효 행**(음수·NaN) — 과반은 유지된다(10/12). 파티션은
+    # 통과하되 이 행들은 어느 리더의 행 집합에도 들어가면 안 된다(_weight 계약).
+    con.execute(
+        "INSERT INTO s3_etf_holdings VALUES ('KR', ?, '999990', '음수', -5.0, ?)",
+        [ETF, GOOD_DAY],
+    )
+    con.execute(
+        "INSERT INTO s3_etf_holdings VALUES "
+        "('KR', ?, '999991', '낫어넘버', CAST('nan' AS DOUBLE), ?)",
+        [ETF, GOOD_DAY],
+    )
     con.execute(
         "INSERT INTO s3_etf_holdings VALUES ('KR', ?, ?, '원화현금', 100.0, ?)",
         [ETF, CASH, POISON_DAY],
@@ -81,6 +92,12 @@ def _same_partitions_as_dict() -> dict[str, list[dict]]:
          "constituent_name": f"종목{tk}", "weight_pct": 10.0}
         for tk in GOOD_TICKERS
     ]
+    good += [
+        {"etf_id": ETF, "constituent_ticker": "999990",
+         "constituent_name": "음수", "weight_pct": -5.0},
+        {"etf_id": ETF, "constituent_ticker": "999991",
+         "constituent_name": "낫어넘버", "weight_pct": float("nan")},
+    ]
     poison = [{"etf_id": ETF, "constituent_ticker": CASH,
                "constituent_name": "원화현금", "weight_pct": 100.0}]
     poison += [
@@ -107,6 +124,9 @@ def test_sql_reader_skips_poisoned_latest_partition():
     assert sorted(t for t, _, _ in got) == sorted(GOOD_TICKERS)
     assert all(abs(w - 0.10) < 1e-9 for _, _, w in got)
     assert CASH not in {t for t, _, _ in got}
+    # 통과한 파티션 안의 무효 행(음수·NaN)도 행 집합에서 빠진다 — 파티션 판정과
+    # 행 필터가 같은 술어를 쓰는 계약(HOLDING_ROW_VALID_SQL).
+    assert {"999990", "999991"}.isdisjoint({t for t, _, _ in got})
 
 
 def test_readers_agree_on_partition_choice():
@@ -118,9 +138,11 @@ def test_readers_agree_on_partition_choice():
     sql_got = layers.holdings(_duck_lake(), ETF, POISON_DAY)
     sql_chosen = GOOD_DAY if sorted(t for t, _, _ in sql_got) == sorted(GOOD_TICKERS) \
         else POISON_DAY
-    _, parquet_chosen = _StubLake(_same_partitions_as_dict()).load_holdings(
+    parquet_rows, parquet_chosen = _StubLake(_same_partitions_as_dict()).load_holdings(
         ETF, "KR", date.fromisoformat(POISON_DAY))
     assert sql_chosen == parquet_chosen == GOOD_DAY
+    # 행 집합까지 같아야 패리티다 — 무효 행(음수·NaN)을 한쪽만 실으면 정렬·기여가 갈린다.
+    assert sorted(t for t, _, _ in sql_got) == sorted(h.ticker for h in parquet_rows)
 
 
 def test_batch_query_carries_the_same_gate():
@@ -139,9 +161,10 @@ def test_batch_query_carries_the_same_gate():
             return []
 
     assert cells(_CaptureLake(), ETF, "2026-08-20", "2026-08-21") == []
-    assert len(seen) == 1
-    assert weighted_asof_subquery(ETF) in seen[0]
-    assert "max(as_of_date)" not in seen[0]
+    # 첫 호출은 skip 경고 프로브, 마지막이 본 질의다.
+    main = seen[-1]
+    assert weighted_asof_subquery(ETF) in main
+    assert "SELECT max(as_of_date)" not in main.split("FROM h")[0].split(", h AS")[1]
 
 
 def test_gate_subquery_prefers_valid_partition_and_empties_when_all_poisoned():
@@ -176,3 +199,50 @@ def test_gate_subquery_prefers_valid_partition_and_empties_when_all_poisoned():
             return con.execute(q).fetchall()
 
     assert layers.holdings(_PoisonOnlyLake(), ETF, POISON_DAY) == []
+
+
+def test_exactly_half_valid_partition_is_accepted_by_both_readers():
+    """유효 정확히 절반은 **통과**다(>= 계약) — 두 리더가 같이 그 파티션을 쓴다.
+
+    이 경계가 리더마다 갈리면(>= vs >) "파티션은 한쪽만 건너뛰는" 08-13 형태가
+    경계값에서 재발한다. adapters 게이트가 `2*유효 >= 전체` 라서 SQL 도 같아야 한다.
+    """
+    half_day = "2026-08-22"
+    con = duckdb.connect(":memory:")
+    con.execute(
+        "CREATE TABLE s3_etf_holdings (market VARCHAR, etf_id VARCHAR,"
+        " constituent_ticker VARCHAR, constituent_name VARCHAR,"
+        " weight_pct DOUBLE, as_of_date DATE)"
+    )
+    rows = []
+    for i in range(5):
+        con.execute("INSERT INTO s3_etf_holdings VALUES ('KR', ?, ?, ?, 20.0, ?)",
+                    [ETF, f"{200000 + i}", f"반{i}", half_day])
+        rows.append({"etf_id": ETF, "constituent_ticker": f"{200000 + i}",
+                     "constituent_name": f"반{i}", "weight_pct": 20.0})
+    for i in range(5):
+        con.execute("INSERT INTO s3_etf_holdings VALUES ('KR', ?, ?, ?, NULL, ?)",
+                    [ETF, f"{200100 + i}", f"눌{i}", half_day])
+        rows.append({"etf_id": ETF, "constituent_ticker": f"{200100 + i}",
+                     "constituent_name": f"눌{i}", "weight_pct": None})
+
+    assert con.execute(
+        f"SELECT {weighted_asof_subquery(ETF, half_day)}").fetchall()[0][0] \
+        == date.fromisoformat(half_day)
+    _, chosen = _StubLake({half_day: rows}).load_holdings(
+        ETF, "KR", date.fromisoformat(half_day))
+    assert chosen == half_day
+
+
+def test_skipped_partition_is_warned(caplog):
+    """SQL 리더도 건너뛴 사실을 경고로 남긴다 — 조용한 skip 금지(Rule 12).
+
+    adapters 리더는 원래 경고한다. SQL 쪽이 무성이면 stale holdings 로 귀속이
+    돌고 있음을 운영자가 탐지할 수 없다.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="edge_analysis.statics.layers"):
+        layers.holdings(_duck_lake(), ETF, POISON_DAY)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("건너뜀" in m and POISON_DAY in m and GOOD_DAY in m for m in messages)
