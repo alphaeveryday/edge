@@ -5,7 +5,7 @@
 // run-matrix 가 수행한다 — 이 스크립트는 관측만 한다.
 //   fresh_responses   기준값과 다른 as_of (변경 반영)
 //   stale_responses   기준값과 같은 as_of (캐시가 아직 구본을 준다)
-//   blocked_responses 204 (차단·게시분 없음으로 전환)
+//   blocked_responses 200 + result 부재 (차단·게시분 없음으로 전환 — ADR-0054, 구 204)
 //
 // 사용 예: BASE_URL=http://localhost:18100 RATE=100 DURATION=3m k6 run publication-change.js
 import {
@@ -15,6 +15,7 @@ import {
   WARMUP,
   DURATION,
   headers,
+  hasResult,
   arrivalRate,
   thresholds,
   summaryTrendStats,
@@ -42,11 +43,11 @@ export function setup() {
     headers: headers(),
     tags: { phase: 'setup' },
   });
-  if (res.status !== 200) {
-    // 204 로 시작하면 기준 as_of 가 없다 — 이후 200 은 전부 fresh 로 센다.
+  if (res.status !== 200 || !hasResult(res)) {
+    // 게시분 없이 시작하면 기준 as_of 가 없다 — 이후 게시분 응답은 전부 fresh 로 센다.
     return { baselineAsOf: null };
   }
-  return { baselineAsOf: res.json('explanation_as_of') };
+  return { baselineAsOf: res.json('result.explanation_as_of') };
 }
 
 export function warmup() {
@@ -55,13 +56,14 @@ export function warmup() {
 
 export function measure(data) {
   const res = doRequest(HOT_TICKER, 'measure');
-  if (res.status === 204) {
+  if (res.status !== 200) return;
+  if (!hasResult(res)) {
+    // 차단·게시분 없음 — 상태코드가 아니라 result 부재가 신호다(ADR-0054).
     blockedResponses.add(1);
     return;
   }
-  if (res.status !== 200) return;
 
-  const asOf = res.json('explanation_as_of');
+  const asOf = res.json('result.explanation_as_of');
   if (asOf === data.baselineAsOf) staleResponses.add(1);
   else freshResponses.add(1);
 }

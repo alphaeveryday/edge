@@ -2,7 +2,7 @@
 # 캐시 실험 스택(edge-pubcache)의 게시 데이터 시드 — 멱등.
 #
 # WHY: 캐시 실험은 "200 이 나오는 조회"를 측정해야 의미가 있다. 게시분이 없으면
-# 서빙은 204 로 수렴하고(ExplanationService.serve), 그건 캐시가 아니라 negative
+# 서빙은 "설명 없음"(result 생략 200)으로 수렴하고(ExplanationService.serve), 그건 캐시가 아니라 negative
 # 캐시만 재는 실험이 된다. 그래서 마지막에 실제 HTTP 200 을 확인하고 끝낸다.
 #
 # 스키마 SSOT: src/libs/schema/migrations-onprem — INSERT 컬럼은 거기서 확인했다.
@@ -21,8 +21,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STACK_DIR="$(dirname "$SCRIPT_DIR")"
 COMPOSE=(docker compose -p edge-pubcache -f "$STACK_DIR/docker-compose.yml")
 
-# 분석 유니버스 — 루트 docker-compose.yml 의 PUBLICATION_KNOWN_TICKERS 와 같은 목록.
-# 여기 없는 종목을 조회하면 서빙이 404 를 낸다(allowlist 판정, ExplanationStore.isKnownTicker).
+# 분석 유니버스 — 데모 시드(seed-local-onprem)와 같은 계열의 목록.
+# 상장 판별은 etf_instrument 조회다(ADR-0054 후속) — 아래 seed_instruments 가 이 목록을
+# 종목 마스터에 함께 시드하며, 미시드 종목 조회는 서빙이 404 를 낸다.
 ALL_TICKERS="069500 305720 091160 0005G0 0093A0 0167A0 0176P0 0182R0 0190G0 0210A0 \
 091230 139260 261060 266370 300950 363580 388420 395160 395270 396500 455850 469150 \
 471760 471780 471990 474590 475300 475310 476260 482030 486240 488210 494220"
@@ -46,7 +47,7 @@ usage() {
   --synthetic <n>           합성 티커 LT00001..LT<n> 을 시드 (워킹셋 스윕용, 33종 유니버스 대체)
   --reset-scope             실험이 넣은 serving_scope 차단 행 삭제
   --new-snapshot <ticker>   더 새로운 explanation_as_of 스냅샷 1쌍 추가 ("유효 최신 승리" 전환 유도)
-  --block <ticker>          serving_scope INSTRUMENT enabled=false 로 차단 (204 전환 유도)
+  --block <ticker>          serving_scope INSTRUMENT enabled=false 로 차단 (result 생략 200 전환 유도)
   -h, --help                이 도움말
 
 옵션 없이 실행하면 기본 시드(정책 버전·analysis_item·publication) 후 HTTP 200 을 확인한다.
@@ -109,6 +110,20 @@ build_values() {
 	printf '%s' "$out"
 }
 
+# ── 1'. 종목 마스터 ─────────────────────────────────────────────────────────
+# 상장 판별(404)이 etf_instrument 조회로 옮겨졌다(ADR-0054 후속) — 시드 종목이
+# 여기 없으면 게시분이 있어도 전부 404 라 실험이 캐시에 닿지 못한다.
+seed_instruments() {
+	local values
+	values="$(build_values 999)"  # 유니버스 전체 — cold-count 와 무관하게 항상 전량
+	psql_run <<SQL
+INSERT INTO etf_instrument (etf_ticker, etf_name)
+SELECT t.ticker, 'LOADTEST ' || t.ticker
+  FROM (VALUES $values) AS t(ticker)
+ON CONFLICT (etf_ticker) DO NOTHING;
+SQL
+}
+
 # ── 2·3. analysis_item + publication ─────────────────────────────────────────
 # 한 psql 호출 = 한 트랜잭션이라 두 INSERT 의 now() 가 같은 값이다 — publication 의
 # explanation_as_of 는 analysis_item 복사본이어야 하므로(V202608041130 규율) 중요하다.
@@ -160,12 +175,23 @@ SQL
 # 은 seed_items 와 같은 규율을 그대로 따른다.
 #
 # 티커 형식 계약: 'LT' + 5자리 zero-pad, 1부터 (LT00001 … LT05000). 대문자 고정.
-# run-matrix 가 만드는 PUBLICATION_KNOWN_TICKERS allowlist·k6 시나리오의 키 생성과
-# 정확히 같은 형식이어야 한다 — 어긋나면 서빙이 404 를 낸다.
+# k6 시나리오(lib.js syntheticTicker)의 키 생성과 정확히 같은 형식이어야 한다 —
+# 어긋나면 etf_instrument 시드와 조회 키가 갈려 서빙이 404 를 낸다.
 seed_items_synthetic() {
 	local n="$1"
 	psql_run <<SQL
 BEGIN;
+
+-- 상장 판별(etf_instrument) — 합성 티커도 종목 마스터에 있어야 404 를 넘는다(ADR-0054 후속).
+INSERT INTO etf_instrument (etf_ticker, etf_name)
+SELECT t.ticker, 'LOADTEST ' || t.ticker
+  FROM (
+        SELECT '$HOT' AS ticker
+        UNION ALL
+        SELECT 'LT' || lpad(g::text, 5, '0') FROM generate_series(1, $n) g
+       ) AS t
+ON CONFLICT (etf_ticker) DO NOTHING;
+
 
 INSERT INTO analysis_item (
     explanation_result_id, etf_instrument_id, etf_ticker, etf_name,
@@ -269,25 +295,38 @@ DO UPDATE SET enabled = FALSE, updated_at = now();
 SQL
 }
 
-# ── 7. 200 확인 ──────────────────────────────────────────────────────────────
-# 204 만 나오면 측정이 무의미하다(캐시가 가릴 read path 자체가 없다).
+# ── 7. 게시분 서빙 확인 ──────────────────────────────────────────────────────
+# 성공은 항상 200 + 공통 응답 포맷이고 게시분 유무는 result 필드로 갈린다(ADR-0054).
+# result 없는 200 만 나오면 측정이 무의미하다(캐시가 가릴 read path 자체가 없다).
 # api-1 직결로 본다 — nginx 를 끼면 어느 인스턴스가 답했는지 흐려진다.
 check_serving() {
-	local ticker="$1" code
-	code="$(curl -s -o /dev/null -w '%{http_code}' \
+	local ticker="$1" code body
+	body="$(mktemp)"
+	code="$(curl -s -o "$body" -w '%{http_code}' \
 		-H 'X-Customer-Hash: seed-check' -H 'X-Channel: INTERNAL' \
 		"http://localhost:18101/api/v1/explanations/$ticker" || echo 000)"
 	if [ "$code" != "200" ]; then
 		err "시드 확인 실패: $ticker -> HTTP $code (200 이어야 한다)"
 		case "$code" in
-			204) err "  204 = 게시분 없음 또는 제공 범위 차단. --reset-scope 후 재시드하라." ;;
-			404) err "  404 = PUBLICATION_KNOWN_TICKERS allowlist 밖 종목이다."
-			     err "        합성 티커라면 allowlist 미주입이다 — PUB_KNOWN_TICKERS 를 export 하고 스택을 재생성하라." ;;
+			404) err "  404 = 종목 마스터(etf_instrument) 미시드 종목이다 — 재시드하라." ;;
 			000) err "  연결 실패 = api-1(:18101)이 아직 안 떴다." ;;
 		esac
+		rm -f "$body"
 		return 1
 	fi
-	info "시드 확인 OK: $ticker -> 200"
+	if ! grep -q '^{"isSuccess":true' "$body"; then
+		err "시드 확인 실패: $ticker -> 200 이지만 성공 envelope 형상이 아니다(계약 위반 응답)."
+		rm -f "$body"
+		return 1
+	fi
+	if ! grep -q '"result":{' "$body"; then
+		err "시드 확인 실패: $ticker -> 200 이지만 result 없음(게시분 부재 또는 제공 범위 차단)."
+		err "  --reset-scope 후 재시드하라."
+		rm -f "$body"
+		return 1
+	fi
+	rm -f "$body"
+	info "시드 확인 OK: $ticker -> 200 (result 있음)"
 }
 
 # ── 실행 ─────────────────────────────────────────────────────────────────────
@@ -296,6 +335,7 @@ case "$SYNTHETIC" in
 esac
 
 seed_policy
+seed_instruments
 if [ "$SYNTHETIC" -gt 0 ]; then
 	# INSERT 태그("INSERT 0 <행수>")를 그대로 남긴다 — N=5000 시드가 몇 행 들어갔고
 	# 몇 초 걸렸는지 눈으로 확인해야 스윕 앞단에서 시간을 잡아먹는지 판단할 수 있다.
@@ -326,9 +366,9 @@ fi
 
 if [ "$ACTION_TAKEN" -eq 0 ]; then
 	if [ "$SYNTHETIC" -gt 0 ]; then
-		# 합성 표본 1종을 반드시 함께 본다 — 핫키는 기본 allowlist 에 있어서
-		# 200 이 나오지만, 합성 티커가 주입되지 않았으면(PUB_KNOWN_TICKERS 미설정)
-		# 404 라 워킹셋 스윕 전체가 무의미해진다.
+		# 합성 표본 1종을 반드시 함께 본다 — 핫키는 유니버스 시드에 있어서 200 이
+		# 나오지만, 합성 티커의 etf_instrument 시드가 빠졌으면 404 라 워킹셋 스윕
+		# 전체가 무의미해진다.
 		check_serving "$HOT"
 		check_serving "LT00001"
 	else

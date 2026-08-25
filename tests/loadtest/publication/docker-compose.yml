@@ -23,9 +23,8 @@ x-api-env: &api-env
   SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/edge_onprem
   SPRING_DATASOURCE_USERNAME: edge
   SPRING_DATASOURCE_PASSWORD: edge
-  # 분석 유니버스 32종 — 루트 compose 와 동일(quotes-fallback.json 참조).
-  # 워킹셋 스윕(suite W)이 합성 allowlist 를 주입하는 시임 — 미지정 시 기존과 동일하다.
-  PUBLICATION_KNOWN_TICKERS: ${PUB_KNOWN_TICKERS:-069500,305720,091160,0005G0,0093A0,0167A0,0176P0,0182R0,0190G0,0210A0,091230,139260,261060,266370,300950,363580,388420,395160,395270,396500,455850,469150,471760,471780,471990,474590,475300,475310,476260,482030,486240,488210,494220}
+  # 상장 판별(404)은 etf_instrument 조회다(ADR-0054 후속) — 유니버스·합성 티커는
+  # prepare-data.sh 가 종목 마스터에 시드한다(구 PUBLICATION_KNOWN_TICKERS 은퇴).
   # 실험 축 — 셸 env 로 갈아끼운다(README 의 suite 표).
   PUBLICATION_CACHE_MODE: ${CACHE_MODE:-caffeine}
   PUBLICATION_SERVE_CACHE_TTL: ${CACHE_TTL:-3s}

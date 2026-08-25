@@ -53,7 +53,8 @@ suite 매핑 (캐시 모드 / 인스턴스 / 시나리오 / 쓰기 경로):
   --instances <1..4>    인스턴스 수 덮어쓰기
   --scenario <이름>     k6 시나리오 파일명 덮어쓰기
   --working-set <n>     suite W 전용(필수) — 서로 다른 키 수. 합성 티커 LT00001..LT<n> 을
-                        시드하고 allowlist 로 주입한다. 핫키 비율은 HOT_RATIO 로(기본 0).
+                        etf_instrument·게시분에 시드한다(allowlist env 은퇴 — 스택
+                        재생성 불요). 핫키 비율은 HOT_RATIO 로(기본 0).
   -h, --help            이 도움말
 
 결과: results/<run_id>/{summary.json, raw.json.gz, meta.json, prom/*.json}
@@ -131,12 +132,10 @@ case "$N" in 1|2|3|4) ;; *) err "--instances 는 1~4 다: $N"; exit 2 ;; esac
 
 # ── W 전용 배선: 합성 워킹셋 ─────────────────────────────────────────────────
 # WHY: 워킹셋 스윕은 "서로 다른 키가 몇 개일 때 L1 이 무너지나"를 재는 실험이라
-# 키 공급을 세 곳이 같은 형식으로 합의해야 한다 — ① allowlist(서빙 404 판정),
-# ② DB 시드(200 판정), ③ k6 키 생성. 계약은 'LT' + 5자리 zero-pad, 1부터.
-#
-# 오염 방지: W 가 아닌 suite 에서는 PUB_KNOWN_TICKERS 를 반드시 비운다. 셸에 남은
-# 값이 compose 의 ${PUB_KNOWN_TICKERS:-<33종>} 을 덮으면 기존 suite 가 조용히
-# 다른 유니버스로 돌아간다.
+# 키 공급을 두 곳이 같은 형식으로 합의해야 한다 — ① DB 시드(etf_instrument 404 판정
+# + 게시분 200 판정, prepare-data --synthetic), ② k6 키 생성(lib.js syntheticTicker).
+# 계약은 'LT' + 5자리 zero-pad, 1부터. (구 allowlist env 주입은 ADR-0054 후속으로 은퇴 —
+# 스택 재생성 없이 시드만으로 유니버스가 바뀐다.)
 SEED_ARGS="--reset-scope"
 K6_EXTRA=()
 if [ "$SUITE" = "W" ]; then
@@ -146,19 +145,11 @@ if [ "$SUITE" = "W" ]; then
 	esac
 	[ "$WORKING_SET" -gt 0 ] || { err "--working-set 은 1 이상이어야 한다"; exit 2; }
 
-	# 35KB 급 문자열이라 bash 루프(3.2 는 문자열 누적 O(n^2))보다 python3 가 빠르고 안전하다.
-	PUB_KNOWN_TICKERS="$(python3 -c "
-import sys
-n = int(sys.argv[1])
-print(','.join(['069500'] + ['LT%05d' % i for i in range(1, n + 1)]))
-" "$WORKING_SET")"
-	export PUB_KNOWN_TICKERS
 	SEED_ARGS="--reset-scope --synthetic $WORKING_SET"
 	K6_EXTRA=(-e "WORKING_SET=$WORKING_SET" -e "HOT_RATIO=${HOT_RATIO:-0}")
 	info "워킹셋 $WORKING_SET 종(LT00001..LT$(printf '%05d' "$WORKING_SET")) + hot 069500, hot_ratio=${HOT_RATIO:-0}"
 else
 	[ -z "$WORKING_SET" ] || { err "--working-set 은 suite W 전용이다"; exit 2; }
-	unset PUB_KNOWN_TICKERS || true
 fi
 
 # read suite 는 쓰기 경로(요청 메트릭)를 끈다 — 캐시가 가리는 read path 만 남긴다.
@@ -244,7 +235,8 @@ else
 fi
 
 # --reset-scope: 앞선 suite(E6 의 --block 등)가 남긴 차단 잔재를 걷어낸다 — 잔재가 있으면
-# hot 티커가 204 라 200 검증이 (정당하게) 실패한다. 모든 suite 는 깨끗한 scope 에서 시작.
+# hot 티커가 "설명 없음"(result 생략 200)이라 게시분 검증이 (정당하게) 실패한다.
+# 모든 suite 는 깨끗한 scope 에서 시작.
 # shellcheck disable=SC2086 -- SEED_ARGS 는 의도적 단어 분리(W 는 --synthetic 이 붙는다)
 "$SCRIPT_DIR/prepare-data.sh" $SEED_ARGS || { err "시드 실패 — 측정을 중단한다"; exit 1; }
 
@@ -306,10 +298,10 @@ for CURRENT_RATE in $RATES; do
 				BG_PID=$!
 				;;
 			publication-change)
-				# 정합성 실험: 새 스냅샷(유효 최신 승리 전환) → 종목 차단(204 전환).
+				# 정합성 실험: 새 스냅샷(유효 최신 승리 전환) → 종목 차단(result 생략 200 전환).
 				# 전환이 응답에 반영되기까지 걸리는 시간이 곧 TTL 상한의 실측치다.
 				# 반복마다 이전 rep 의 --block 잔재를 걷어낸다 — 잔재가 있으면 setup 이
-				# 204 를 받아 baseline 이 무너지고 이후 200 이 전부 fresh 로 집계된다.
+				# "설명 없음"(result 생략 200)을 받아 baseline 이 무너지고 이후 게시분 응답이 전부 fresh 로 집계된다.
 				# 초기화·주입 실패는 run 무효다 — 삼키면 변경 없는 스택의 응답이
 				# 전부 fresh 로 집계돼 성공한 실험처럼 남는다(fail-loud).
 				"$SCRIPT_DIR/prepare-data.sh" --reset-scope >/dev/null \
