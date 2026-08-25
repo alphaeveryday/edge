@@ -68,6 +68,10 @@ def _short_code(isin: str) -> str:
 
 
 class KrxEtfSource:
+    """KRX 데이터시스템 ETF 구성종목 어댑터 — etf_map 이 곧 유니버스.
+    deadline_sec 은 ETF 요청 사이에 검사하는 소프트 상한이다 — 넘긴 것을
+    발견하면 스스로 접고 받은 것은 저장한다(진행 중 요청은 끊지 않는다)."""
+
     source_name = "krx"
 
     def __init__(
@@ -95,6 +99,7 @@ class KrxEtfSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND 회원ID·비밀번호(env 주입) 존재."""
         # 자격증명은 env 로만 주입(커밋 금지) — 둘 중 하나라도 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.mbr_id) and bool(self.pw)
 

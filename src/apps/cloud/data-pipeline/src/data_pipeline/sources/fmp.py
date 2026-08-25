@@ -35,6 +35,9 @@ def market_for(our_ticker: str) -> str:
 
 
 class FmpNewsSource:
+    """FMP 종목 뉴스 어댑터 — 심볼·창당 페이지네이션으로 기사 배열을 raw
+    무변형 보존한다(모듈 도크스트링)."""
+
     source_name = "fmp"
 
     def __init__(
@@ -55,6 +58,7 @@ class FmpNewsSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND api_key(env 주입) 존재."""
         # 키는 env 로만 주입된다(커밋 금지) — 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.api_key)
 
@@ -66,6 +70,7 @@ class FmpNewsSource:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> str:
+        """벤더 질의 URL — apikey 가 포함되므로 로그에 남기지 않는다."""
         # apikey 가 포함되므로 이 URL 을 로그에 남기지 않는다.
         url = f"{self.base_url}?symbols={fmp_symbol}&page={page}&limit={self.limit}"
         if from_date:

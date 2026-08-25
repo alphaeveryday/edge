@@ -43,6 +43,9 @@ DEFAULT_ANNUAL_LIMIT = 4
 
 
 class FmpFinancialSource:
+    """FMP 재무제표 어댑터 — 심볼당 3문서 × 2주기 팬아웃으로 회계기간 행을
+    raw 보존한다(모듈 도크스트링)."""
+
     source_name = "fmp"
 
     def __init__(
@@ -70,10 +73,12 @@ class FmpFinancialSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND api_key(env 주입) 존재."""
         # 키는 env 로만 주입된다(커밋 금지) — 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.api_key)
 
     def request_url(self, endpoint: str, fmp_symbol: str, period: str, limit: int) -> str:
+        """벤더 질의 URL — apikey 가 포함되므로 로그에 남기지 않는다."""
         # apikey 가 포함되므로 이 URL 을 로그에 남기지 않는다.
         return (
             f"{self.base_url}/{endpoint}?symbol={fmp_symbol}"

@@ -59,6 +59,9 @@ SESSION_FIRST_SLOT = time(9, 30)
 
 
 class KisInvestorEstimateSource:
+    """KIS 장중 투자자 추정 어댑터 — 슬롯 기반 스냅샷. 수집 가능 시각 판정은
+    `skip_reason` 이 진다(비거래일엔 라벨을 지어낼 수 없다)."""
+
     source_name = "kis"
 
     def __init__(self, config: KisInvestorSourceConfig, client: PoliteClient):
@@ -83,6 +86,7 @@ class KisInvestorEstimateSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND 앱키·시크릿(env 주입) 존재."""
         # 앱키·시크릿은 env 로만 주입(커밋 금지) — 둘 중 하나라도 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.app_key) and bool(self.app_secret)
 

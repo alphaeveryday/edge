@@ -42,6 +42,12 @@ class StopFetch(Exception):
 
 
 class PoliteClient:
+    """발신 **슬롯 획득**을 1/min_interval 로 pace 하는 공유 HTTP 클라이언트(thread-safe).
+
+    실제 발신 시각·인접 간격은 보장 대상이 아니다 — 보장 범위와 그 절충은
+    `_respect_interval` 도크스트링이 정본이다. 재시도·StopFetch 는 `request()`.
+    """
+
     def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0):
         self.min_interval = min_interval
         self.timeout = timeout

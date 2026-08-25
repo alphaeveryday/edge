@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 class FmpPriceSource:
+    """FMP EOD 가격 어댑터 — 심볼·창당 1콜로 일봉 배열을 raw 보존한다
+    (심볼맵은 가격 전용 — 모듈 도크스트링)."""
+
     source_name = "fmp"
 
     def __init__(self, config: PriceSource, client: PoliteClient):
@@ -47,12 +50,14 @@ class FmpPriceSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND api_key(env 주입) 존재."""
         # 키는 env 로만 주입된다(커밋 금지) — 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.api_key)
 
     def request_url(
         self, fmp_symbol: str, *, from_date: str | None = None, to_date: str | None = None
     ) -> str:
+        """벤더 질의 URL — apikey 가 포함되므로 로그에 남기지 않는다."""
         # apikey 가 포함되므로 이 URL 을 로그에 남기지 않는다.
         url = f"{self.base_url}?symbol={fmp_symbol}"
         if from_date:

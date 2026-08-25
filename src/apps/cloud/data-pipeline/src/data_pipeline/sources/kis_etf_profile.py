@@ -48,6 +48,9 @@ MAX_RATE_RETRY = 5
 
 
 class KisEtfProfileSource:
+    """KIS 상품기본조회(CTPF1604R) ETF 프로필 어댑터 — ETF 당 1콜 스냅샷,
+    NAV 와 같은 etf_map 을 공유한다(모듈 도크스트링)."""
+
     source_name = "kis"
 
     def __init__(
@@ -70,6 +73,7 @@ class KisEtfProfileSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND 앱키·시크릿(env 주입) 존재."""
         return self.config_enabled and bool(self.app_key) and bool(self.app_secret)
 
     def plan(self) -> list[tuple[str, str]]:
