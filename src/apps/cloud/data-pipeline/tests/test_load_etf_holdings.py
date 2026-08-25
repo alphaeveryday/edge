@@ -14,7 +14,11 @@ import json
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_holdings_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import load_etf_holdings
 
 _COLUMNS = ("market", "etf_id", "constituent_ticker", "constituent_mic", "weight_pct",
@@ -136,6 +140,21 @@ def _log(storage, run_id: str = "R1") -> dict:
             if "etf_holding_snapshot" in k and f"run_id={run_id}/" in k]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _write_normalize_manifest(storage, run_id: str, partitions: list[tuple[str, str]]) -> None:
+    storage.put_bytes(
+        canonical_run_manifest_key("etf_holdings", run_id),
+        json.dumps({
+            "run_id": run_id,
+            "job_name": "normalize_etf",
+            "canonical_written": True,
+            "canonical_partitions": [
+                {"market": market, "as_of_date": as_of_date}
+                for market, as_of_date in partitions
+            ],
+        }).encode("utf-8"),
+    )
 
 
 def test_canonical_구성종목이_마트_행이_된다(tmp_path, monkeypatch):
@@ -372,6 +391,33 @@ def test_창으로_적재_대상_거래일을_좁힌다(tmp_path, monkeypatch):
     assert load_etf_holdings.run(storage, "R1", db=_db(),
                                  from_date="2026-07-15", to_date="2026-07-15") == 0
     assert [p[2] for p in _inserts(conn)] == ["2026-07-15"]
+
+
+def test_normalize_manifest가_지목한_파티션만_적재한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1011): 정규 실행이 과거 canonical 전부를 재판정하면 오늘 1,000행이 24,372행으로
+    # 부풀고 스캔 비용도 무상한 증가한다. 수집일을 추측하지 않고 정제가 실제 쓴 기준일을 따른다.
+    storage = LocalStorage(tmp_path / "lake")
+    for date in ("2026-07-14", "2026-07-15", "2026-07-16"):
+        _write_canonical(storage, "KR", date, [_hold_row(as_of_date=date)])
+    _write_normalize_manifest(storage, "N1", [("KR", "2026-07-15")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+    assert [p[2] for p in _inserts(conn)] == ["2026-07-15"]
+    assert _log(storage, "L1")["rows_read"] == 1
+
+
+def test_normalize_manifest가_없으면_전체로_넓히지_않고_실패한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1011): 계보가 없을 때 풀스캔으로 폴백하면 배선 오류가 과거 전체 재처리로 성공해
+    # 문제를 숨긴다. DB 연결 전 실패하고 quality log에 근거를 남겨야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_hold_row()])
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="missing") == 1
+    log = _log(storage, "L1")
+    assert log["rows_read"] == 0
+    assert log["failures"][0]["reasons"] == ["load_error"]
 
 
 def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):
