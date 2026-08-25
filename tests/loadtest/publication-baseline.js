@@ -36,7 +36,8 @@ export const options = {
     http_req_failed: ['rate<0.01'],
     // 계약 밖 응답(201·3xx 등)은 http_req_failed 에 안 잡힌다 — check 실패를
     // 실행 실패로 승격해 잘못된 실행이 성공 baseline 으로 기록되지 않게 한다.
-    // 200/204 만 정상이므로 단 1건의 이탈(404 등)도 fail-loud 로 드러낸다.
+    // 200 만 정상(ADR-0054 — 게시분 없음도 200 + result 부재)이므로 단 1건의
+    // 이탈(404·구 204 등)도 fail-loud 로 드러낸다.
     checks: ['rate==1'],
   },
   // 기본 출력엔 p(99)가 없다 — README 기록 항목과 맞춘다.
@@ -56,9 +57,15 @@ export default function () {
     tags: { hot: String(hot) },
   });
 
-  // 200(노출)·204(게시분 없음 — 정상)만 정상. 404 는 시드/지원종목 불일치 신호다.
-  check(res, { 'status 200/204': (r) => r.status === 200 || r.status === 204 });
-  if (res.status === 200) {
+  // 성공은 항상 200 + 성공 envelope 다(ADR-0054). 404·비 envelope 200 은 계약 위반 신호다.
+  // 키 순서 고정(@JsonPropertyOrder — isSuccess 첫 키)이라 prefix 검사가 형상 판별이 된다.
+  check(res, {
+    'status 200 envelope': (r) =>
+      r.status === 200 && typeof r.body === 'string' && r.body.indexOf('{"isSuccess":true') === 0,
+  });
+  // 게시분 노출 응답만 센다 — result 부재 200(게시분 없음)은 제외(구 204 와 같은 구분).
+  // result 값은 항상 객체다 — "result":null 명시 같은 계약 위반은 세지 않는다.
+  if (res.status === 200 && typeof res.body === 'string' && res.body.indexOf('"result":{') !== -1) {
     okResponses.add(1);
   }
 }

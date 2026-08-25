@@ -39,7 +39,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "RPS by status",
-      "description": "explanations 엔드포인트 처리량. status 로 쪼개 200/204 를 함께 본다.",
+      "description": "상태코드별 요청률 총량. 차단·게시분 없음 전환은 ADR-0054 이후 본문 result 유무라 상태코드로 갈리지 않는다 — 전환 관측은 k6 카운터(status_200/status_200_noresult·blocked_responses)가 담당한다.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -607,8 +607,8 @@
     {
       "id": 14,
       "type": "timeseries",
-      "title": "200 vs 204",
-      "description": "차단·게시 변경이 서빙에 반영되는 시점을 본다 — 토글을 건 뒤 200 이 204 로 넘어가기까지의 지연이 캐시 무효화 지연이다.",
+      "title": "설명 서빙 요청률 (200)",
+      "description": "성공 응답률 총량. 게시분 유무·차단 전환은 ADR-0054 이후 상태코드가 아니라 본문 result 유무라 서버 HTTP 지표로는 갈리지 않는다 — 전환 시점 관측은 k6 클라이언트 카운터(status_200/status_200_noresult, publication-change 의 fresh/stale/blocked + e6_timeline.py)가 담당한다.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -628,15 +628,6 @@
           },
           "expr": "sum(rate(http_server_requests_seconds_count{status=\"200\",uri=~\".*explanations.*\"}[30s]))",
           "legendFormat": "200"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(http_server_requests_seconds_count{status=\"204\",uri=~\".*explanations.*\"}[30s]))",
-          "legendFormat": "204"
         }
       ],
       "fieldConfig": {

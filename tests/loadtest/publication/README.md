@@ -49,8 +49,8 @@ curl -i -H "X-Customer-Hash: smoke" -H "X-Channel: MTS" \
   "localhost:18100/api/v1/explanations/069500"
 ```
 
-- 204 만 나오면 캐시가 채워질 원본이 없다는 뜻 — 히트율도 쓰기 부하도 측정되지 않는다.
-- 404 는 `PUBLICATION_KNOWN_TICKERS` 와 종목 불일치.
+- result 없는 200 만 나오면(게시분 부재·차단 — ADR-0054, 구 204) 캐시가 채워질 원본이 없다는 뜻 — 히트율도 쓰기 부하도 측정되지 않는다.
+- 404 는 종목 마스터(`etf_instrument`) 미시드 — prepare-data 가 유니버스·합성 티커를 함께 시드한다(구 `PUBLICATION_KNOWN_TICKERS` 은퇴).
 
 ## 실험 축 갈아끼우기
 

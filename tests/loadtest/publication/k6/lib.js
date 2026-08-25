@@ -30,10 +30,22 @@ export function ttlSeconds() {
   return n;
 }
 
-// 캐시 히트/미스 자체는 서버 지표로 본다. 여기서는 200(게시분 있음)과
-// 204(게시분 없음·차단)를 분리 집계해 응답 구성이 바뀌는 순간을 잡는다.
+// 캐시 히트/미스 자체는 서버 지표로 본다. 여기서는 게시분 있음(200 + result)과
+// 게시분 없음·차단(200 + result 부재 — ADR-0054, 구 204)을 분리 집계해 응답 구성이
+// 바뀌는 순간을 잡는다. 구분은 상태코드가 아니라 본문 result 필드 유무다.
 export const status200 = new Counter('status_200');
-export const status204 = new Counter('status_204');
+export const statusNoResult = new Counter('status_200_noresult');
+
+// 형상 판별 — JSON 파싱 대신 부분 문자열 검사(고 RATE 에서 러너 CPU 절약).
+// 서버 직렬화는 키 순서가 고정이라(ApiResponse @JsonPropertyOrder — isSuccess 가 첫 키)
+// prefix 로 성공 envelope 를, "result":{ 로 게시분 유무를 판별할 수 있다. result 값은
+// 항상 객체이므로 "result":null 명시·비객체 같은 계약 위반은 게시분으로 세지 않는다.
+export function isSuccessEnvelope(res) {
+  return typeof res.body === 'string' && res.body.indexOf('{"isSuccess":true') === 0;
+}
+export function hasResult(res) {
+  return typeof res.body === 'string' && res.body.indexOf('"result":{') !== -1;
+}
 
 // 런타임 VU 확장은 부하 발생기 자원을 소비해 측정을 왜곡한다 — RATE 에 비례해 선할당.
 export function preAllocatedVUs(rate) {
@@ -92,14 +104,18 @@ export function doRequest(ticker, phase) {
     tags: { phase: phase, ticker: ticker },
   });
 
-  // 200(게시분 노출)·204(게시분 없음 — 정상)만 정상. 404 는 시드/지원종목 불일치 신호다.
+  // 성공은 항상 200 + 성공 envelope 다(ADR-0054 — 게시분 없음도 200 + result 부재).
+  // 404 는 시드/종목 마스터 불일치, 204·비 envelope 200 은 계약 위반 = 즉시 실패 신호다
+  // (프록시·HTML 오응답이 정상 측정으로 저장되는 것을 막는다 — Rule 12).
   check(
     res,
-    { 'status 200/204': (r) => r.status === 200 || r.status === 204 },
+    { 'status 200 envelope': (r) => r.status === 200 && isSuccessEnvelope(r) },
     { phase: phase }
   );
-  if (res.status === 200) status200.add(1);
-  else if (res.status === 204) status204.add(1);
+  if (res.status === 200 && isSuccessEnvelope(res)) {
+    if (hasResult(res)) status200.add(1);
+    else statusNoResult.add(1);
+  }
 
   return res;
 }
@@ -130,11 +146,13 @@ export function doRequestLite(ticker, phase) {
 
   check(
     res,
-    { 'status 200/204': (r) => r.status === 200 || r.status === 204 },
+    { 'status 200 envelope': (r) => r.status === 200 && isSuccessEnvelope(r) },
     { phase: phase }
   );
-  if (res.status === 200) status200.add(1);
-  else if (res.status === 204) status204.add(1);
+  if (res.status === 200 && isSuccessEnvelope(res)) {
+    if (hasResult(res)) status200.add(1);
+    else statusNoResult.add(1);
+  }
 
   return res;
 }

@@ -157,7 +157,10 @@ def collect_run(run_dir):
         # k6 는 드롭이 0 이면 카운터 자체를 내보내지 않는다.
         "dropped": meta.get("dropped_iterations") or 0,
         "status_200": metrics.get("status_200", {}).get("count", 0),
-        "status_204": metrics.get("status_204", {}).get("count", 0),
+        # 구 키 폴백 — ADR-0054 전 정본 런의 raw 는 status_204 로 기록돼 있다(재처리 호환).
+        "status_200_noresult": metrics.get(
+            "status_200_noresult", metrics.get("status_204", {})
+        ).get("count", 0),
         "l1_hit_ratio": (l1.get("hit", 0.0) / l1_total) if l1_total else None,
         "l2_ops": l2_total if l2_total else None,
         "l2_hit_ratio": (l2.get("hit", 0.0) / l2_total) if l2_total else None,
@@ -221,7 +224,7 @@ def build_markdown(groups):
 
 
 def build_detail(groups):
-    lines = ["", "### 판정 보조", "", "| 구성 | 반복 | 200 / 204 | loader/요청 | loader/이론치 배율 | 이론치(3m) | pg xact/s | hikari pending 최대 |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    lines = ["", "### 판정 보조", "", "| 구성 | 반복 | result / no result | loader/요청 | loader/이론치 배율 | 이론치(3m) | pg xact/s | hikari pending 최대 |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for (suite, mode, inst), runs in groups:
         theory = agg(runs, "theoretical_loaders")
         lines.append(
@@ -230,7 +233,7 @@ def build_detail(groups):
                 inst=inst,
                 n=len(runs),
                 s200=fmt(agg(runs, "status_200"), 0),
-                s204=fmt(agg(runs, "status_204"), 0),
+                s204=fmt(agg(runs, "status_200_noresult"), 0),
                 lpr=fmt(agg(runs, "loaders_per_req"), 4),
                 mult=fmt(agg(runs, "loaders_vs_theory"), 2, 1.0, "x"),
                 theory=fmt(theory, 0),
