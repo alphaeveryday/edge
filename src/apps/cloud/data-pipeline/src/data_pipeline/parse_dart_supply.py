@@ -141,7 +141,12 @@ def parse_date_value(text: object | None) -> date | None:
 
 
 def parse_date_range(text: object | None) -> tuple[date | None, date | None]:
-    """텍스트에서 날짜 구간 (시작, 끝) — 최대 둘을 순서대로, 못 찾은 칸은 None."""
+    """텍스트의 날짜 최대 둘을 (첫째, 둘째) 로 — 부족한 칸은 None.
+
+    구분자형 표기(./년월- 구분) 앞 둘을 먼저 검사하고, 유효한 것이 **하나도
+    없을 때만** 8자리 컴팩트 표기 폴백을 본다(두 형식을 섞어 세지 않는다).
+    각 단계 모두 앞의 두 표기만 보며, 무효 표기는 건너뛰어 자리가 당겨진다.
+    """
     value = _normalize_text(text)
     # '-' 는 문자군 끝(리터럴) — parse_date_value 와 동일 이유(컴팩트 날짜 오파싱 방지, Codex P2).
     matches = re.findall(r"(\d{4})\s*[./년-]\s*(\d{1,2})\s*[./월-]\s*(\d{1,2})", value)

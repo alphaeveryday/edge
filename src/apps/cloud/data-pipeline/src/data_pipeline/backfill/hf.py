@@ -87,7 +87,10 @@ class HfDataset:
         return self._get(f"{RESOLVE}/{self.repo}/resolve/{self.revision}/{path}")[0]
 
     def oid_of(self, path: str) -> str:
-        """path 의 현재 oid — 목록에 없으면 HfError."""
+        """목록 스냅샷(_cache) 기준 path 의 oid — 없으면 HfError.
+
+        폴더를 한 번 읽은 뒤의 상류 변경은 이 인스턴스에 반영되지 않는다.
+        """
         folder = path.rsplit("/", 1)[0]
         for f in self.files(folder):
             if f.path == path:
