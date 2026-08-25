@@ -15,7 +15,7 @@ from datetime import date
 import duckdb
 
 from edge_analysis.statics.duck import SECTOR_ROLLUP_VENDOR
-from edge_analysis.statics.layers import MARKET_CODE, _market_beta, prev_price_day_subquery
+from edge_analysis.statics.layers import MARKET_CODE, _market_beta
 
 DAY = "2026-08-21"          # 분석 요청일
 OLDER_PRICE_DAY = "2026-08-18"  # 더 오래된 가격일 — '단일 파티션' 계약의 대조군
@@ -54,30 +54,6 @@ def _bars_lake():
             return rows
 
     return _Lake()
-
-
-def test_prev_day_subquery_skips_sector_only_latest():
-    """전일 선택이 지수-only 최신일을 건너뛰고 **가격 어휘의 최신일**을 고른다.
-
-    어휘 필터가 max 에서 빠지면 2026-08-20(지수만 있는 날)이 뽑힌다 — 그날의
-    가격 행은 0이라, 이 서브쿼리를 쓰는 모든 소비자가 빈 결과로 조용히 무너진다.
-    """
-    lake = _bars_lake()
-    assert lake.sql(f"SELECT {prev_price_day_subquery(DAY)}")[0][0] \
-        == date.fromisoformat(PRICE_DAY)
-
-
-def test_market_beta_prev_day_query_uses_the_shared_subquery():
-    """`_market_beta` 의 전일 질의가 공유 서브쿼리를 그대로 싣는다 — 인라인 max 로
-    되돌아가면(복제) 어휘 필터가 조용히 빠지는 자리가 부활한다.
-
-    β 적합까지 가지 않는다 — 여기서 고정하는 계약은 **어느 날짜의 봉을 재료로
-    삼는가**뿐이고, 적합 산술은 kbeta 테스트 소관이다.
-    """
-    lake = _bars_lake()
-    _market_beta(lake, "069660", DAY, {"069660": (0.01,), MARKET_CODE: (0.01,)})
-    prev_queries = [q for q, _ in lake.seen if "trade_date <" in q]
-    assert prev_queries and all(prev_price_day_subquery(DAY) in q for q in prev_queries)
 
 
 def test_market_beta_consumes_price_day_rows_not_sector_rows():

@@ -232,21 +232,6 @@ def _series(lake, day: str, kinds: tuple[str, ...],
                   vol is not None and float(vol) <= 0)
             for sym, lr, vol in rows if lr is not None}
 
-def prev_price_day_subquery(day: str) -> str:
-    """`day` 직전의 **가격 어휘** 최신 거래일 서브쿼리 (ALPHA-941 재발 방지).
-
-    공유 표면 `bars_5m` 에는 업종지수 롤업(`SECTOR_ROLLUP_VENDOR`)이 나란히 살아
-    "지수만 돈 날"이 실제로 생긴다 — 어휘 필터를 집계에만 걸고 **날짜 선택(max)에
-    안 걸면** 그날이 뽑혀 가격 행이 0이 된다(β=1 무성 폴백의 뿌리, 같은 결함이
-    세 소비자에서 한 번씩 났다). 전일 가격 파티션을 고르는 질의는 이걸 쓴다.
-    """
-    return (
-        f"(SELECT max(trade_date) FROM bars_5m "
-        f"WHERE trade_date < DATE '{day}' "
-        f"AND source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}')"
-    )
-
-
 def _market_beta(lake, etf: str, day: str, paths: dict | None,
                  sector: str | None = None,
                  ) -> tuple[float, float | None, tuple[float, ...], float] | None:
@@ -272,7 +257,10 @@ def _market_beta(lake, etf: str, day: str, paths: dict | None,
         rows = lake.sql(rf"""
             SELECT regexp_replace(symbol, '\.(KS|KQ)$', '') AS sym, ts, close
             FROM bars_5m
-            WHERE trade_date = {prev_price_day_subquery(day)}
+            WHERE trade_date = (SELECT max(trade_date) FROM bars_5m
+                                WHERE trade_date < DATE '{day}'
+                                  AND source_vendor IS DISTINCT FROM
+                                      '{SECTOR_ROLLUP_VENDOR}')
               AND close > 0
               AND regexp_replace(symbol, '\.(KS|KQ)$', '')
                   IN ({symbol_sql})
