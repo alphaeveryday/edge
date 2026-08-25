@@ -144,6 +144,7 @@ const cell = (o: Partial<GridCell> & Pick<GridCell, 'taskKey'>): GridCell => ({
   outcome: 'FULFILLED',
   dataStatus: 'UNKNOWN',
   recordsOut: 1,
+  unsupportedRecords: null,
   failedRecords: 0,
   skipReason: null,
   outcomeReason: null,
@@ -187,6 +188,24 @@ test('빈 데이터와 무증거는 다른 칸에 센다 — 합쳐 실패로 �
   assert.equal(r.counts.failed, 0, '무증거를 failed 에 합치지 않는다');
   /* 무증거는 장애지만, 빈 데이터는 그 판정에 기여하지 않는다 */
   assert.equal(r.state, '장애');
+});
+
+test('지원 제외는 실행 상세에 보존하지만 주의·유실 집계에는 넣지 않는다', () => {
+  const r = rollup([
+    slot('etf-daily:2026-08-24T15:40', '2026-08-24', [
+      cell({
+        taskKey: 'LOAD_ETF_HOLDINGS',
+        dataStatus: 'VALID',
+        recordsOut: 958,
+        unsupportedRecords: 42,
+        failedRecords: 0,
+      }),
+    ]),
+  ]).get('etf_holdings|2026-08-24')!;
+
+  assert.equal(r.state, '정상');
+  assert.equal(r.counts.failedRecords, 0);
+  assert.equal(r.executions[0].tasks[0].unsupportedRecords, 42);
 });
 
 test('빈 데이터만 있으면 정상이다 — 돌았고 데이터가 없었다는 증거다', () => {

@@ -115,8 +115,15 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
 			String outcome, Long recordsOut, Long failedRecords, String completeness) {
-		insertTask(id, runId, taskKey, stage, dataset, outcome, true, recordsOut, failedRecords,
+		insertTask(id, runId, taskKey, stage, dataset, outcome, true, recordsOut, null, failedRecords,
 				completeness);
+	}
+
+	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
+			String outcome, Long recordsOut, Long unsupportedRecords, Long failedRecords,
+			String completeness) {
+		insertTask(id, runId, taskKey, stage, dataset, outcome, true, recordsOut,
+				unsupportedRecords, failedRecords, completeness);
 	}
 
 	/**
@@ -129,14 +136,21 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
 			String outcome, boolean required, Long recordsOut, Long failedRecords,
 			String completeness) {
+		insertTask(id, runId, taskKey, stage, dataset, outcome, required, recordsOut, null,
+				failedRecords, completeness);
+	}
+
+	private void insertTask(String id, String runId, String taskKey, String stage, String dataset,
+			String outcome, boolean required, Long recordsOut, Long unsupportedRecords,
+			Long failedRecords, String completeness) {
 		jdbc.update("""
 				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
 				       dataset, plan_status, task_outcome, data_status, required,
-				       records_out, failed_records, completeness, idempotency_key)
-				VALUES (?,?,?,?,?,'DUE',?,?,?,?,?,?::jsonb,?)
+				       records_out, unsupported_records, failed_records, completeness, idempotency_key)
+				VALUES (?,?,?,?,?,'DUE',?,?,?,?,?,?,?::jsonb,?)
 				""", id, runId, taskKey, stage, dataset, outcome,
 				"PENDING".equals(outcome) ? "UNKNOWN" : "VALID", required, recordsOut,
-				failedRecords, completeness, id);
+				unsupportedRecords, failedRecords, completeness, id);
 	}
 
 	/**
@@ -747,28 +761,29 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 작업_축은_완전성_jsonb_와_시도_수를_함께_낸다() {
 		insertTradingDay("2026-08-03");
-		insertTask("t1", "r-2026-08-03", "COLLECT", "raw", "price", "FULFILLED", 906L, 0L,
+		insertTask("t1", "r-2026-08-03", "LOAD_ETF_HOLDINGS", "feature", "etf_holding_snapshot", "FULFILLED", 906L, 42L, 0L,
 				"{\"expected\":33,\"received\":30,\"missing\":3}");
-		insertTask("t2", "r-2026-08-03", "LOAD", "feature", "price", "PENDING", false, null, null,
+		insertTask("t2", "r-2026-08-03", "LOAD_PRICE_DAILY", "feature", "price", "PENDING", false, null, null,
 				null);
 		insertAttempt("a1", "t1");
 		insertAttempt("a2", "t1");
 
 		assertThat(repository.facts(DAY).tasks()).satisfiesExactly(
 				t -> {
-					assertThat(t.taskKey()).isEqualTo("COLLECT");
+					assertThat(t.taskKey()).isEqualTo("LOAD_ETF_HOLDINGS");
 					/* 런과 같은 축으로 매인다 — 내부 id 면 와이어에서 런 축과 안 이어진다. */
 					assertThat(t.runKey()).isEqualTo("etf-daily:2026-08-03T15:40");
 					assertThat(t.pipelineType()).isEqualTo("etf-daily");
 					assertThat(t.tradingDate()).isEqualTo(DAY);
-					assertThat(t.stage()).isEqualTo("raw");
-					assertThat(t.dataset()).isEqualTo("price");
+					assertThat(t.stage()).isEqualTo("feature");
+					assertThat(t.dataset()).isEqualTo("etf_holding_snapshot");
 					assertThat(t.required()).isTrue();
 					assertThat(t.planStatus()).isEqualTo("DUE");
 					assertThat(t.taskOutcome()).isEqualTo("FULFILLED");
 					assertThat(t.required()).isTrue();
 					assertThat(t.dataStatus()).isEqualTo("VALID");
 					assertThat(t.recordsOut()).isEqualTo(906L);
+					assertThat(t.unsupportedRecords()).isEqualTo(42L);
 					assertThat(t.failedRecords()).isZero();
 					/* 세 값을 **서로 다르게** 둔다 — 같으면 `expected`↔`received` 키를 맞바꾸는
 					 * 변이가 통과한다(조각 2 의 `created_at`==`updated_at` 과 같은 병이다). */
@@ -779,10 +794,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				},
 				t -> {
 					/* 🔴 여기가 요점이다 — 원장이 안 준 값은 **null 이지 0 이 아니다**. */
-					assertThat(t.taskKey()).isEqualTo("LOAD");
+					assertThat(t.taskKey()).isEqualTo("LOAD_PRICE_DAILY");
 					assertThat(t.required()).isFalse();   // 상수 true 로 바꾸는 변이를 잡는다
 					assertThat(t.dataStatus()).isEqualTo("UNKNOWN");
 					assertThat(t.recordsOut()).isNull();
+					assertThat(t.unsupportedRecords()).isNull();
 					assertThat(t.failedRecords()).isNull();
 					assertThat(t.completenessExpected()).isNull();
 					assertThat(t.attempts()).isZero();   // count(*) 라 0 이 실측이다

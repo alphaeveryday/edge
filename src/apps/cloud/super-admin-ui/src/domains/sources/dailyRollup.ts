@@ -97,6 +97,7 @@ export interface DayTask {
   planStatus: string;
   dataStatus: string | null;
   recordsOut: number | null;
+  unsupportedRecords: number | null;
   failedRecords: number | null;
   reason: string | null;
   running: boolean;
@@ -345,6 +346,7 @@ export function rollup(slots: GridSlot[]): Map<string, DayRollup> {
         planStatus: cell.planStatus,
         dataStatus: cell.dataStatus,
         recordsOut: cell.recordsOut,
+        unsupportedRecords: cell.unsupportedRecords ?? null,
         failedRecords: cell.failedRecords,
         reason: cell.skipReason ?? cell.outcomeReason,
         running: cell.running,

@@ -96,6 +96,7 @@ const cell = (
   outcome: 'FULFILLED',
   dataStatus: 'UNKNOWN',
   recordsOut: 1452,
+  unsupportedRecords: null,
   failedRecords: 0,
   skipReason: null,
   outcomeReason: null,
@@ -166,6 +167,13 @@ const marketTasks = (over: Record<string, Partial<GridCell>> = {}): GridCell[] =
     MARKET_TASKS.map((t) =>
       t.taskKey === 'ETF_HOLDINGS_COLLECTION_KRX' && !over[t.taskKey]
         ? verified(t)
+        : t.taskKey === 'LOAD_ETF_HOLDINGS' && !over[t.taskKey]
+          ? cell(t, {
+              recordsOut: 958,
+              unsupportedRecords: 42,
+              failedRecords: 0,
+              dataStatus: 'VALID',
+            })
         : cell(t, over[t.taskKey] ?? { recordsOut: 906 }),
     ),
   );
@@ -593,6 +601,7 @@ function taskFromCell(gridCell: GridCell, at: string | null): TaskStatus {
       dataStatus: gridCell.dataStatus,
       executionStatus,
       recordsOut: gridCell.recordsOut,
+      unsupportedRecords: gridCell.unsupportedRecords,
       failedRecords: gridCell.failedRecords,
       completeness,
       lastFinishedAt: finishedAt,

@@ -100,6 +100,8 @@ export interface TaskDto {
   taskOutcome: string | null;
   dataStatus: string | null;
   recordsOut: number | null;
+  /** API/UI 독립 배포 중 구 API는 이 필드를 아직 생략할 수 있다. */
+  unsupportedRecords?: number | null;
   failedRecords: number | null;
   completenessExpected: number | null;
   completenessReceived: number | null;

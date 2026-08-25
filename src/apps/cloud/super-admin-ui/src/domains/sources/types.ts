@@ -101,6 +101,9 @@ export interface TaskStatus {
    * 못 믿을 값이면 원장이 NULL 로 남긴다(ALPHA-182). 0 으로 표시하면 "0건 처리"와 구분이 사라진다.
    */
   recordsOut: number | null;
+  /** 정상 처리했지만 현재 모델이 지원하지 않아 적재하지 않은 건수. null/부재는 미계측이다. */
+  /** 구 API와의 독립 배포 구간에는 부재할 수 있다. */
+  unsupportedRecords?: number | null;
   failedRecords: number | null;
   /** 기대 유니버스를 배선한 작업만 값이 있다. 행 수(recordsOut)와 다른 ETF entity 개수다. */
   completeness: TaskCompleteness | null;
@@ -167,6 +170,7 @@ export interface GridCell {
   outcome: TaskOutcome | null;
   dataStatus: DataStatus | null;
   recordsOut: number | null;
+  unsupportedRecords?: number | null;
   failedRecords: number | null;
   skipReason: string | null;
   outcomeReason: string | null;

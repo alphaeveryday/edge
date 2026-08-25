@@ -58,7 +58,7 @@ public interface PipelineStatusRepository {
 
 	/**
 	 * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축을 합치지 않는 이유는
-	 * {@link TaskStatus} 와 같고, {@code recordsOut}·{@code failedRecords} 의 null 계약(모름 ≠ 0)도
+	 * {@link TaskStatus} 와 같고, 건수 필드의 null 계약(모름 ≠ 0)도
 	 * 같다(ALPHA-182).
 	 *
 	 * <p>{@code running} — <b>귀결이 아직 없는데(PENDING) 도는 물리 시도가 있는가</b>. outcome 은
@@ -72,7 +72,8 @@ public interface PipelineStatusRepository {
 	 * 안 보인다 — 그 정밀도는 시도 전량을 싣는 드릴다운(574) 소관이다.
 	 */
 	record GridCell(String stage, String taskKey, String planStatus, String outcome,
-			String dataStatus, Long recordsOut, Long failedRecords, String skipReason,
+			String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
+			String skipReason,
 			String outcomeReason, boolean running) {
 	}
 
@@ -106,7 +107,8 @@ public interface PipelineStatusRepository {
 	 * 축</b>이다 — 실행이 성공(FULFILLED)해도 산출 데이터는 INCOMPLETE 일 수 있다. 이 축을 빼면
 	 * 데이터가 불완전한 작업이 화면에서 온전히 초록으로 보인다(Rule 12).
 	 *
-	 * <p>{@code recordsOut}·{@code failedRecords}는 <b>null 이 정상값</b>이다(ALPHA-182) — 신호가
+	 * <p>{@code recordsOut}·{@code unsupportedRecords}·{@code failedRecords}는 <b>null 이
+	 * 정상값</b>이다(ALPHA-182·1020) — 신호가
 	 * 없거나 못 믿을 값이면 0 으로 메우지 않는다. 0 으로 내리면 화면에서 "0건 처리"와 "모름"이
 	 * 구분되지 않는다.
 	 *
@@ -133,7 +135,8 @@ public interface PipelineStatusRepository {
 	 *                         내부 ID 이고, {@link #currentAttempt()} 의 근거로만 쓴다
 	 */
 	record TaskStatus(String stage, String taskKey, String dataset, String planStatus,
-			String outcome, String dataStatus, Long recordsOut, Long failedRecords,
+			String outcome, String dataStatus, Long recordsOut, Long unsupportedRecords,
+			Long failedRecords,
 			CompletenessStatus completeness,
 			OffsetDateTime expectedAt, OffsetDateTime deadlineAt, OffsetDateTime missedAt,
 			OffsetDateTime fulfilledAt, String skipReason, String outcomeReason,

@@ -156,7 +156,7 @@ const WIRE = (): ConsoleFactsDto => ({
     taskKey: 'T', runId: 'etf-daily:2026-08-03T15:40', pipelineType: 'etf-daily',
     tradingDate: '2026-08-03', stage: 'raw', dataset: 'etf_holdings', required: true,
     planStatus: 'DUE', taskOutcome: 'FULFILLED', dataStatus: 'VALID',
-    recordsOut: 906, failedRecords: 0,
+    recordsOut: 906, unsupportedRecords: 42, failedRecords: 0,
     completenessExpected: 33, completenessReceived: 30, completenessMissing: 3, attempts: 2,
   }],
   datasets: [{
@@ -223,6 +223,7 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       task_outcome: 'FULFILLED',
       data_status: 'VALID',
       records_out: 906,
+      unsupported_records: 42,
       failed_records: 0,
       completeness_expected: 33,
       completeness_received: 30,
@@ -263,6 +264,15 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       today: '2026-08-03',
     },
   });
+});
+
+test('구 API의 지원 제외 필드 부재를 허용한다 — UI 선배포가 실행이력 전체를 깨면 안 된다', () => {
+  const wire = WIRE();
+  delete wire.tasks[0].unsupportedRecords;
+  const r = parseFacts(wire);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.facts.tasks[0].unsupported_records, undefined);
 });
 
 test('🔴 체인의 순서를 어댑터가 바꾸지 않는다 — 목록 순서가 곧 흐름이다', () => {

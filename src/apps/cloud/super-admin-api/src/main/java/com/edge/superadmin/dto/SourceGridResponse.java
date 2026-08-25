@@ -32,12 +32,14 @@ public record SourceGridResponse(int days, List<SlotResponse> slots) {
 	}
 
 	public record CellResponse(String stage, String taskKey, String planStatus, String outcome,
-			String dataStatus, Long recordsOut, Long failedRecords, String skipReason,
+			String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
+			String skipReason,
 			String outcomeReason, boolean running) {
 
 		public static CellResponse from(GridCell cell) {
 			return new CellResponse(cell.stage(), cell.taskKey(), cell.planStatus(),
-					cell.outcome(), cell.dataStatus(), cell.recordsOut(), cell.failedRecords(),
+					cell.outcome(), cell.dataStatus(), cell.recordsOut(), cell.unsupportedRecords(),
+					cell.failedRecords(),
 					cell.skipReason(), cell.outcomeReason(), cell.running());
 		}
 	}

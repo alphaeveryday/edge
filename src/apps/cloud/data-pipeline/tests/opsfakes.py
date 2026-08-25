@@ -174,7 +174,7 @@ class _Cursor:
                "freshness_evidence": None,
                "missed_at": None, "fulfilled_at": None, "blocked_at": None,
                "outcome_reason": None, "current_attempt_id": None, "completeness": None,
-               "records_out": None, "failed_records": None,
+               "records_out": None, "unsupported_records": None, "failed_records": None,
                "entity_resolution_arguments_total": None,
                "entity_resolution_arguments_resolved": None}
         self.db.etasks[key] = row
@@ -207,7 +207,7 @@ class _Cursor:
         if "completeness=%s::jsonb" in s:
             row["completeness"] = json.loads(p[i]); i += 1
         # 실제 ledger 의 sets 순서와 같아야 한다 — 어긋나면 파라미터가 밀려 엉뚱한 컬럼에 박힌다.
-        for col in ("records_out", "failed_records",
+        for col in ("records_out", "unsupported_records", "failed_records",
                     "entity_resolution_arguments_total",
                     "entity_resolution_arguments_resolved"):
             if f"{col}=%s" in s:

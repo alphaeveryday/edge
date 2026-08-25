@@ -20,6 +20,7 @@ const task = (o: Partial<TaskStatus> & Pick<TaskStatus, 'taskKey'>): TaskStatus 
   dataStatus: 'VALID',
   executionStatus: 'SUCCEEDED',
   recordsOut: 33,
+  unsupportedRecords: null,
   failedRecords: 0,
   completeness: null,
   lastFinishedAt: null,

@@ -224,9 +224,13 @@ Terraform의 1분 파이프라인 원큐와 각 DLQ를 SQS `GetQueueAttributes`�
 그 날의 기대 작업 전건. `runId` 는 런의 `id`(=`run_key`)와 **같은 축**이다 — 내부
 `pipeline_run_id` 를 쓰면 와이어에서 런 축과 안 이어진다. 창은 런 축과 **같은 식**을 쓴다.
 
-⚠️ **모르는 값은 `null` 이다.** `records_out`·`failed_records`·`completeness_*` 는 원장이 안 준
+⚠️ **모르는 값은 `null` 이다.** `records_out`·`unsupported_records`·`failed_records`·
+`completeness_*` 는 원장이 안 준
 경우가 있는데, JDBC 의 `getLong` 은 SQL NULL 을 **0 으로 준다** — 접히면 "0건 처리"와 "신호 없음"이
 화면에서 같은 칸이 된다. `attempts` 는 `count(*)` 라 0 이 실측이다.
+
+`unsupported_records`는 정상 입력이지만 현재 적재 모델이 지원하지 않아 제외한 건수다. 유실이나
+`INCOMPLETE` 판정에 포함하지 않으며, 과거·비계측 작업의 `null`을 0으로 바꾸지 않는다.
 
 ⚠️ **정렬은 파이프라인 순서다**(`raw` → `normalize` → 그 외). 문자열 순이면 역순이 된다
 (`feature` < `normalize` < `raw`).

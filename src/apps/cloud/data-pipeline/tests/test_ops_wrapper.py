@@ -42,7 +42,7 @@ def _seed(
            "plan_status": "DUE", "task_outcome": "PENDING", "data_status": "UNKNOWN",
            "required": True, "missed_at": None, "fulfilled_at": None, "blocked_at": None,
            "outcome_reason": None, "current_attempt_id": None, "completeness": None,
-           "records_out": None, "failed_records": None,
+           "records_out": None, "unsupported_records": None, "failed_records": None,
            "entity_resolution_arguments_total": None,
            "entity_resolution_arguments_resolved": None,
            "dataset_contract_key": contract_key,
@@ -482,9 +482,9 @@ def test_malformed_counter_is_logged_not_swallowed(caplog):
 def test_instrument_stores_envelope_counters():
     """봉투 카운터가 원장 행에 남는다 — 없으면 대시보드가 런×작업마다 S3 로그를 뒤져야 한다."""
     db = FakeOpsDB()
-    _seed(db)
+    _seed(db, task_key="LOAD_ETF_HOLDINGS")
     wrapper.instrument(
-        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        lambda: 0, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 2736, "failed_records": 4,
@@ -495,6 +495,7 @@ def test_instrument_stores_envelope_counters():
     )
     row = db.etasks_by_id["et1"]
     assert row["records_out"] == 2736 and row["failed_records"] == 4
+    assert row["unsupported_records"] is None
     assert row["entity_resolution_arguments_total"] == 4
     assert row["entity_resolution_arguments_resolved"] == 3
     assert db.attempts[0]["entity_resolution_arguments_total"] == 4
@@ -502,6 +503,54 @@ def test_instrument_stores_envelope_counters():
     # 카운터는 저장 전용 — 판정 축은 종전 규칙 그대로다(실패 있음 → INCOMPLETE).
     assert row["data_status"] == states.DATA_INCOMPLETE
     assert row["task_outcome"] == states.OUTCOME_FULFILLED
+
+
+def test_non_etf_task_cannot_store_unsupported_records():
+    """WHY: ETF 전용 신호가 다른 producer의 동명 키로 원장을 오염시키면 안 된다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_PRICE_DAILY")
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/1",
+        observe_data_fn=lambda ec: {
+            "records_out": 10, "unsupported_records": 42, "failed_records": 0,
+        },
+    )
+    assert db.etasks_by_id["et1"]["unsupported_records"] is None
+
+
+def test_unsupported_records_is_storage_only_not_incomplete():
+    """정상 지원 제외가 있어도 실제 유실이 0이면 데이터는 VALID다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_ETF_HOLDINGS", expected_count=33)
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/1",
+        observe_data_fn=lambda ec: {
+            "records_out": 958, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
+            "received_count": 33,
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert row["unsupported_records"] == 42
+    assert row["data_status"] == states.DATA_VALID
+
+
+def test_stale_attempt_cannot_store_unsupported_records():
+    """WHY: 같은 run_id의 앞 quality log를 재시도가 읽어도 옛 지원 제외 수치를 쓰면 안 된다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_ETF_HOLDINGS")
+    wrapper.instrument(
+        lambda: 1, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/current",
+        observe_data_fn=lambda ec: {
+            "records_out": 958, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": "stale-attempt",
+        },
+    )
+    assert db.etasks_by_id["et1"]["unsupported_records"] is None
 
 
 def test_instrument_scopes_attempt_marker_to_the_wrapped_run(monkeypatch):
@@ -528,6 +577,7 @@ def test_instrument_leaves_counters_null_when_envelope_missing():
                        ledger=_ledger(db), ecs_task_arn="arn:task/1")
     row = db.etasks_by_id["et1"]
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["unsupported_records"] is None
     assert row["entity_resolution_arguments_total"] is None
     assert row["entity_resolution_arguments_resolved"] is None
     assert row["data_status"] == states.DATA_UNKNOWN
@@ -541,7 +591,7 @@ def test_instrument_leaves_counters_null_when_envelope_malformed():
         lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
-            "records_out": -5, "failed_records": "x",
+            "records_out": -5, "unsupported_records": "x", "failed_records": "x",
             "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 2,
             "entity_resolution_arguments_resolved": 3,
@@ -550,6 +600,7 @@ def test_instrument_leaves_counters_null_when_envelope_malformed():
     row = db.etasks_by_id["et1"]
     assert rc == 0
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["unsupported_records"] is None
     assert row["entity_resolution_arguments_total"] is None
     assert row["entity_resolution_arguments_resolved"] is None
     assert row["data_status"] == states.DATA_UNKNOWN
@@ -593,26 +644,29 @@ def test_retry_without_envelope_clears_previous_counters():
     지금 결과로 읽는다 — 이 레포 계측 결함의 일관된 방향(원장이 관대해지는 쪽)이다.
     """
     db = FakeOpsDB()
-    _seed(db)
+    _seed(db, task_key="LOAD_ETF_HOLDINGS")
     wrapper.instrument(
-        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        lambda: 0, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
-            "records_out": 100, "failed_records": 0,
+            "records_out": 100, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
             "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
         },
     )
     assert db.etasks_by_id["et1"]["records_out"] == 100
+    assert db.etasks_by_id["et1"]["unsupported_records"] == 42
     assert db.etasks_by_id["et1"]["entity_resolution_arguments_resolved"] == 3
 
     wrapper.instrument(  # 같은 expected_task 재시도 — 이번엔 봉투가 없다
-        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        lambda: 0, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/2",
     )
     row = db.etasks_by_id["et1"]
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["unsupported_records"] is None
     assert row["entity_resolution_arguments_total"] is None
     assert row["entity_resolution_arguments_resolved"] is None
     assert row["data_status"] == states.DATA_UNKNOWN
@@ -641,27 +695,30 @@ def test_nonzero_exit_rejects_stale_entity_resolution_pair():
 def test_step_exception_clears_counters():
     """예외로 죽은 시도는 산출을 세지 못했다 — '실패했지만 2736건 처리'를 만들지 않는다."""
     db = FakeOpsDB()
-    _seed(db)
+    _seed(db, task_key="LOAD_ETF_HOLDINGS")
     wrapper.instrument(
-        lambda: 0, task_key="LOAD_PRICE_DAILY", run_id="R", ledger=_ledger(db),
+        lambda: 0, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
-            "records_out": 2736, "failed_records": 0,
+            "records_out": 2736, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
             "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
         },
     )
     assert db.etasks_by_id["et1"]["records_out"] == 2736
+    assert db.etasks_by_id["et1"]["unsupported_records"] == 42
 
     def _boom():
         raise RuntimeError("적재 중 커넥션 끊김")
 
     with pytest.raises(RuntimeError):
-        wrapper.instrument(_boom, task_key="LOAD_PRICE_DAILY", run_id="R",
+        wrapper.instrument(_boom, task_key="LOAD_ETF_HOLDINGS", run_id="R",
                            ledger=_ledger(db), ecs_task_arn="arn:task/2")
     row = db.etasks_by_id["et1"]
     assert row["task_outcome"] == states.OUTCOME_FAILED
     assert row["records_out"] is None and row["failed_records"] is None
+    assert row["unsupported_records"] is None
     assert row["entity_resolution_arguments_total"] is None
     assert row["entity_resolution_arguments_resolved"] is None

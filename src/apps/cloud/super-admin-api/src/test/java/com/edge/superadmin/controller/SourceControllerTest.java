@@ -77,17 +77,17 @@ class SourceControllerTest {
 				LocalDate.of(2026, 7, 27), List.of(
 				// 실패 후 재시도로 성공 — 마지막 한 건만 보면 실패했다는 사실이 사라진다.
 				// 원장은 성공한 2번 시도를 현재 결과로 지목한다(current_attempt_id).
-				new TaskStatus("raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
-						"FULFILLED", "VALID", 2736L, 0L, null, null, null, null, FINISHED, null, null,
+				new TaskStatus("feature", "LOAD_ETF_HOLDINGS", "etf_holding_snapshot", "DUE",
+						"FULFILLED", "VALID", 2736L, 42L, 0L, null, null, null, null, FINISHED, null, null,
 						List.of(attempt(1, "FAILED", 1, "ecs task exited", "WRAPPER"),
 								attempt(2, "SUCCEEDED", 0, null, "RECONCILER_BACKFILL")),
 						"att-2"),
 				new TaskStatus("raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "SKIPPED",
-						null, null, null, null, null, null, null, null, null, "NON_TRADING_DAY", null,
+						null, null, null, null, null, null, null, null, null, null, "NON_TRADING_DAY", null,
 						List.of(), null),
 				// 실행은 성공인데 데이터는 불완전 — 두 축이 따로 내려가는지 잠근다.
 				new TaskStatus("feature", "TAG_NEWS", "news_assertions", "DUE",
-						"FULFILLED", "INCOMPLETE", null, null, null, null, null, null, FINISHED, null,
+						"FULFILLED", "INCOMPLETE", null, null, null, null, null, null, null, FINISHED, null,
 						null, List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER")), "att-1")),
 				List.of(new IssueStatus("LEDGER_GAP", "task", "TAG_NEWS", "OPEN", 3,
 						STARTED, FINISHED, null)));
@@ -107,11 +107,12 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.run.orchestrationStatus").value("FAILED"))
 				.andExpect(jsonPath("$.result.run.tradingDate").value("2026-07-27"))
 				.andExpect(jsonPath("$.result.tasks.length()").value(3))
-				.andExpect(jsonPath("$.result.tasks[0].stage").value("raw"))
-				.andExpect(jsonPath("$.result.tasks[0].taskKey").value("PRICE_COLLECTION_KIS"))
+				.andExpect(jsonPath("$.result.tasks[0].stage").value("feature"))
+				.andExpect(jsonPath("$.result.tasks[0].taskKey").value("LOAD_ETF_HOLDINGS"))
 				.andExpect(jsonPath("$.result.tasks[0].planStatus").value("DUE"))
 				.andExpect(jsonPath("$.result.tasks[0].outcome").value("FULFILLED"))
-				.andExpect(jsonPath("$.result.tasks[0].recordsOut").value(2736));
+				.andExpect(jsonPath("$.result.tasks[0].recordsOut").value(2736))
+				.andExpect(jsonPath("$.result.tasks[0].unsupportedRecords").value(42));
 	}
 
 	@Test
@@ -124,6 +125,7 @@ class SourceControllerTest {
 				// 실행 성공 옆의 데이터 결손 — 이 축이 빠지면 불완전한 산출이 온전한 초록이 된다.
 				.andExpect(jsonPath("$.result.tasks[2].dataStatus").value("INCOMPLETE"))
 				.andExpect(jsonPath("$.result.tasks[2].recordsOut").doesNotExist())
+				.andExpect(jsonPath("$.result.tasks[2].unsupportedRecords").value(nullValue()))
 				.andExpect(jsonPath("$.result.tasks[2].failedRecords").doesNotExist())
 				// 완전성 미배선 작업은 빈 객체가 아니라 null — 기대값이 있는 UNKNOWN과 구분한다.
 				// doesNotExist() 는 키 부재도 통과시켜 이 구분을 못 잠근다. 키는 있고 값이 null
@@ -140,13 +142,13 @@ class SourceControllerTest {
 						// missing 을 일부러 33-32 와 다르게 둔다 — 1 이면 재계산하는 API 도
 						// 통과해 "원장 값 그대로"라는 이 테스트의 전제를 못 잠근다.
 						new TaskStatus("raw", "ETF_HOLDINGS_COLLECTION_KRX", "etf_holdings", "DUE",
-								"FULFILLED", "INCOMPLETE", 4120L, 0L,
+								"FULFILLED", "INCOMPLETE", 4120L, null, 0L,
 								new CompletenessStatus(33L, 32L, 3L),
 								null, null, null, FINISHED, null, null, List.of(), null),
 						// 기대 스냅샷은 있지만 observer가 수신 수를 못 낸 상태. null을 0으로 만들면
 						// "33개 모두 누락"이라는 거짓 사실이 된다.
 						new TaskStatus("raw", "NAV_COLLECTION_KIS", "etf_nav", "DUE",
-								"FULFILLED", "UNKNOWN", null, null,
+								"FULFILLED", "UNKNOWN", null, null, null,
 								new CompletenessStatus(33L, null, null),
 								null, null, null, FINISHED, null, null, List.of(), null)),
 				List.of());
@@ -202,7 +204,7 @@ class SourceControllerTest {
 		//      원장의 current_attempt_id 가 그 답을 이미 갖고 있으므로 그걸 따른다.
 		PipelineRunStatus run = new PipelineRunStatus(RUN_KEY, "LAUNCHED", "SUCCEEDED", null,
 				List.of(new TaskStatus("raw", "NAV_COLLECTION_KIS", "etf_nav", "DUE",
-						"FULFILLED", "VALID", 30L, 0L, null, null, null, null, FINISHED, null, null,
+						"FULFILLED", "VALID", 30L, null, 0L, null, null, null, null, FINISHED, null, null,
 						List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER"),
 								// 시각상 마지막이지만 실제로는 먼저 있었던 실패의 사후 복구다.
 								attempt(2, "FAILED", 1, "ecs task exited",
@@ -255,17 +257,17 @@ class SourceControllerTest {
 		List<GridSlot> slots = List.of(
 				new GridSlot("etf-daily:2026-07-26T15:40", "LAUNCHED", "SUCCEEDED",
 						LocalDate.of(2026, 7, 26), List.of(
-						new GridCell("raw", "PRICE_COLLECTION_KIS", "DUE", "FULFILLED", "VALID",
-								2736L, 0L, null, null, false),
+						new GridCell("feature", "LOAD_ETF_HOLDINGS", "DUE", "FULFILLED", "VALID",
+								2736L, 42L, 0L, null, null, false),
 						new GridCell("raw", "NEWS_COLLECTION_BIGKINDS", "SKIPPED", null, null,
-								null, null, "NON_TRADING_DAY", null, false),
+								null, null, null, "NON_TRADING_DAY", null, false),
 						new GridCell("feature", "TAG_NEWS", "DUE", "FULFILLED", "INCOMPLETE",
-								null, null, null, null, false),
+								null, null, null, null, null, false),
 						// WHY: outcome 은 wrapper 가 끝날 때 쓴다 — 실행 중엔 PENDING 인 채로
 						//      running 만 참이라, 이 축이 안 내려가면 런이 도는 내내 진행 중
 						//      작업이 "아직 시작도 안 함"과 같은 셀로 보인다(#297 P2 와 동형).
 						new GridCell("feature", "ASSEMBLE_EVENTS", "DUE", "PENDING", "UNKNOWN",
-								null, null, null, null, true))),
+								null, null, null, null, null, true))),
 				// WHY: 기동 실패는 orchestration 이 영영 null 이고 기대 작업도 없다 — 이 슬롯을
 				//      열에서 빼면 "아예 못 뜬 런"이 격자에서 사라진다(부재가 1급 신호인 화면).
 				new GridSlot("etf-daily:2026-07-27T15:40", "LAUNCH_FAILED", null, null, List.of()));
@@ -279,6 +281,7 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.slots[0].tasks.length()").value(4))
 				.andExpect(jsonPath("$.result.slots[0].tasks[0].outcome").value("FULFILLED"))
 				.andExpect(jsonPath("$.result.slots[0].tasks[0].recordsOut").value(2736))
+				.andExpect(jsonPath("$.result.slots[0].tasks[0].unsupportedRecords").value(42))
 				.andExpect(jsonPath("$.result.slots[0].tasks[0].running").value(false))
 				// plan 축과 outcome 축은 격자에서도 합쳐지지 않는다.
 				.andExpect(jsonPath("$.result.slots[0].tasks[1].planStatus").value("SKIPPED"))

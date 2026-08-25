@@ -325,8 +325,15 @@ def instrument(
         data_status=data_status, current_attempt_id=attempt_id,
         completeness=completeness,
         # 판정에 쓴 그 신호를 그대로 싣는다(ALPHA-182) — 대시보드(ALPHA-514)의 건수 열.
-        # 매 시도가 두 값을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상 **최신 시도의 것**이다.
+        # 매 시도가 기본 건수들을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상
+        # **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),
+                  # 저장 전용 정상 제외 건수 — data_status 판정에는 관여하지 않는다.
+                  "unsupported_records": (
+                      _counter(signals.get("unsupported_records"))
+                      if (task_key == "LOAD_ETF_HOLDINGS" and attempt_id is not None
+                          and signals.get("ops_attempt_id") == attempt_id)
+                      else None),
                   "failed_records": _counter(signals.get("failed_records")),
                   **entity_resolution_counters},
         freshness=_freshness_signal(

@@ -141,7 +141,9 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	private static final String TASKS_SQL = """
 			SELECT t.task_key, r.run_key, r.pipeline_type, r.trading_date, t.stage, t.dataset,
 			       t.required, t.plan_status, t.task_outcome, t.data_status,
-			       t.records_out, t.failed_records,
+			       t.records_out,
+			       CASE WHEN t.task_key = 'LOAD_ETF_HOLDINGS' THEN t.unsupported_records END AS unsupported_records,
+			       t.failed_records,
 			       (t.completeness ->> 'expected')::bigint AS completeness_expected,
 			       (t.completeness ->> 'received')::bigint AS completeness_received,
 			       (t.completeness ->> 'missing')::bigint AS completeness_missing,
@@ -961,6 +963,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getString("data_status"),
 				// getLong 은 SQL NULL 을 0 으로 준다 — "0건 처리"와 "신호 없음"이 갈려야 한다.
 				nullableLong(rs, "records_out"),
+				nullableLong(rs, "unsupported_records"),
 				nullableLong(rs, "failed_records"),
 				nullableLong(rs, "completeness_expected"),
 				nullableLong(rs, "completeness_received"),

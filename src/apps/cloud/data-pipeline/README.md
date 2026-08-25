@@ -1215,7 +1215,8 @@ settings.targets.keywords            # ["금리", ...]
   으로 보존한다. holdings·instrument 적재기는 주식만 적재하고 현금·옵션은
   `skipped_unsupported_asset`과 유형별 수로
   계측하되 유실에는 넣지 않는다. 미지 유형은 `skipped_unknown_asset_type`으로 유실에 남긴다
-  (ALPHA-1017).
+  (ALPHA-1017). `load-etf-holdings`는 정상 제외 합계를 `ops.unsupported_records`에도 남겨 실행
+  이력에서 적재·지원 제외·유실을 분리한다(ALPHA-1020).
   파티션을 갱신할 때는 기존 직접 자식 `part-*.parquet`와 새 행을 합쳐 `part-00000.parquet`로
   수렴시킨 뒤 나머지 직접 자식 part만 지운다. 중첩 보관 객체와 raw 입력은 삭제하지 않는다.
   🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다** — 파티션은 지워지지 않아 config 에서 뺀
@@ -1334,7 +1335,9 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   `PRICE_COLLECTION_KIS`·`NORMALIZE_PRICE`·`LOAD_PRICE_DAILY`(정제→feature 게이트 직후 첫 price
   canonical consumer). 종목 반복은 작업이 아니라 completeness/manifest, 개별 규칙은 quality_check.
 - **`ops` 로그 봉투**(ALPHA-181) — 모든 스텝이 자기 로그(collection_log·quality_log)에
-  `"ops": {"records_out": N, "failed_records": M}` 를 남긴다. 관측(`ops/entry.py:_observe_from_log`)은
+  `"ops": {"records_out": N, "failed_records": M}` 를 남긴다. ETF holdings 적재는 선택적 저장
+  신호 `unsupported_records`도 낸다. 로그의 `ops_attempt_id`가 현재 원장 시도와 일치할 때만
+  저장해 같은 `run_id` 재시도의 옛 로그를 최신 건수로 오인하지 않는다. 관측(`ops/entry.py:_observe_from_log`)은
   **이 봉투만** 읽으므로 task_key 별 분기가 없다 — 새 작업을 카탈로그에 등록해도 리더를 안 고친다.
   봉투가 스텝 안에 사는 이유: 어느 카운터가 유실인지는 스텝만 안다(적재의
   `skipped_unknown_etf`·`skipped_unknown_instrument` 는 유실, `skipped_self`·
@@ -1374,12 +1377,14 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   `NAV_COLLECTION_KIS`는 `ETF_NAV_KIS_DAILY` 계약을 참조한다. KIS 응답 원본의
   `stck_bsop_date` 집합 중 최댓값을 `actual_as_of_date`로 쓰며, 질의 종료일·실행일·
   `fetched_at`으로 대체하지 않는다. 유효 날짜가 없으면 `UNKNOWN`을 보존한다.
-- **카운터 저장**(ALPHA-182) — 봉투의 두 값은 판정에만 쓰이고 버려졌었다. 이제 `expected_task`
-  의 `records_out`·`failed_records` 컬럼에도 남는다(운영 대시보드의 건수 열, ALPHA-514 — 없으면
+- **카운터 저장**(ALPHA-182·1020) — 봉투 카운터는 판정 뒤 버리지 않고 `expected_task`의
+  `records_out`·`unsupported_records`·`failed_records` 컬럼에 남긴다(운영 대시보드의 건수 열,
+  ALPHA-514 — 없으면
   런×작업마다 S3 로그를 뒤져야 한다). **판정 규칙은 그대로다** — 저장 전용이다. 결측·malformed
   (음수·NaN·소수·BIGINT 초과)는 0 이 아니라 **NULL** 이고, 값이 있는데 못 쓰면 경고를 남긴다
   ("신호 없음"이 "0건 처리"로 위장되지 않게, Rule 12). 스코프는 **그 작업의 마지막 시도**다 —
-  매 시도가 두 컬럼을 함께 덮고, Reconciler 는 판정을 뒤집어도 건수를 몰라 다시 쓰지 않는다.
+  매 시도가 세 컬럼을 함께 덮고, Reconciler 는 판정을 뒤집어도 건수를 몰라 다시 쓰지 않는다.
+  `unsupported_records`는 정상 지원 제외라 `INCOMPLETE`나 유실 합계에 관여하지 않는다.
   그래서 `FAILED` 옆의 건수는 앞 시도의 것일 수 있다.
   `LOAD_ASSERTIONS`의 엔티티 해소 pair는 호환용 task 행과 함께 그 값을 만든 정확한 attempt 행에도
   저장한다(ALPHA-1000·ALPHA-1002). 둘은 성공 exit의 같은 시도에서만 함께 기록되고, 한쪽

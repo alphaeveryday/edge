@@ -382,6 +382,9 @@ const FAILED_TIP =
 const RECORDS_TIP =
   '산출 = 작업이 원장에 기록한 records_out 이다.\n' +
   '"—" 는 0 이 아니라 **계측 값이 기록되지 않았다**는 뜻이다 — 0건 처리와 구분한다(ALPHA-182 의 NULL 계약).';
+const UNSUPPORTED_TIP =
+  '지원 제외 = 입력은 정상이지만 현재 적재 모델이 지원하지 않아 제외한 건수다. 유실이나 INCOMPLETE가 아니다.\n' +
+  '"—" 는 0 이 아니라 이 계측을 내지 않은 과거·다른 작업이라는 뜻이다.';
 const PLAN_TIP =
   '이 목록은 ops_expected_task(계획 스냅샷) 행이다 — 계획에 있는 작업만 나오고, plan_status 가 계획 축, ' +
   'task_outcome 이 실제 축이다. 두 축을 대조해 계획 제외·미기동을 가른다.\n' +
@@ -697,6 +700,9 @@ function RunTasks({
                   산출 행 <Info tip={RECORDS_TIP} label="산출 행" />
                 </th>
                 <th className="num">
+                  지원 제외 <Info tip={UNSUPPORTED_TIP} label="지원 제외" />
+                </th>
+                <th className="num">
                   유실 <Info tip={FAILED_TIP} label="유실" />
                 </th>
                 <th>데이터 판정</th>
@@ -711,7 +717,7 @@ function RunTasks({
             {groups.map(([group, items]) => (
               <tbody key={group}>
                 <tr>
-                  <td colSpan={7} className="t-label" style={{ paddingTop: 14 }}>
+                  <td colSpan={8} className="t-label" style={{ paddingTop: 14 }}>
                     {group} {items.length}개
                   </td>
                 </tr>
@@ -773,6 +779,9 @@ function TaskRows({
           <StatusBadge tone={STATE_TONE[state]}>{state}</StatusBadge>
         </td>
         <td className="num">{t.records_out != null ? fmt(t.records_out) : <Absent kind="none" />}</td>
+        <td className="num">
+          {t.unsupported_records != null ? fmt(t.unsupported_records) : <Absent kind="none" />}
+        </td>
         <td className="num" style={t.failed_records ? { color: 'var(--warn)', fontWeight: 600 } : undefined}>
           {t.failed_records != null ? fmt(t.failed_records) : <Absent kind="none" />}
         </td>
@@ -816,7 +825,7 @@ function TaskRows({
       </tr>
       {open && (
         <tr id={detailId}>
-          <td colSpan={7} style={{ background: 'var(--bg-sunken)' }}>
+          <td colSpan={8} style={{ background: 'var(--bg-sunken)' }}>
             <TaskDetail run={run} task={t} state={state} />
           </td>
         </tr>
@@ -843,6 +852,7 @@ function TaskDetail({ run, task: t, state }: { run: RunFact; task: TaskFact; sta
     ['exit code', t.exit_code != null ? String(t.exit_code) : <Absent kind="uninstrumented" />],
     ['귀결 사유', (t.outcome_reason as string) ?? (t.skip_reason as string) ?? <Absent kind="none" />],
     ['산출 행', t.records_out != null ? fmt(t.records_out) : <Absent kind="none" />],
+    ['지원 제외', t.unsupported_records != null ? fmt(t.unsupported_records) : <Absent kind="none" />],
     ['유실', t.failed_records != null ? fmt(t.failed_records) : <Absent kind="none" />],
     [
       '완전성',

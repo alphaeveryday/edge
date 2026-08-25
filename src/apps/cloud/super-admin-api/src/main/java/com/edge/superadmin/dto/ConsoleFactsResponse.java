@@ -101,14 +101,16 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 */
 	public record TaskResponse(String taskKey, String runId, String pipelineType,
 			String tradingDate, String stage, String dataset, boolean required, String planStatus,
-			String taskOutcome, String dataStatus, Long recordsOut, Long failedRecords,
+			String taskOutcome, String dataStatus, Long recordsOut, Long unsupportedRecords,
+			Long failedRecords,
 			Long completenessExpected, Long completenessReceived, Long completenessMissing,
 			long attempts) {
 
 		public static TaskResponse from(TaskRow t) {
 			return new TaskResponse(t.taskKey(), t.runKey(), t.pipelineType(),
 					iso(t.tradingDate()), t.stage(), t.dataset(), t.required(), t.planStatus(),
-					t.taskOutcome(), t.dataStatus(), t.recordsOut(), t.failedRecords(),
+					t.taskOutcome(), t.dataStatus(), t.recordsOut(), t.unsupportedRecords(),
+					t.failedRecords(),
 					t.completenessExpected(), t.completenessReceived(), t.completenessMissing(),
 					t.attempts());
 		}

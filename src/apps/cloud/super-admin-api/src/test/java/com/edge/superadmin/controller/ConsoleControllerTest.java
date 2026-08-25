@@ -112,7 +112,7 @@ class ConsoleControllerTest {
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
 	private static TaskRow task(Long recordsOut, Long completenessExpected) {
 		return new TaskRow("COLLECT", "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw",
-				"price", true, "DUE", "FULFILLED", "VALID", recordsOut, 0L, completenessExpected,
+				"price", true, "DUE", "FULFILLED", "VALID", recordsOut, null, 0L, completenessExpected,
 				33L, 0L, 2L, "price@v1", DAY, DAY, DB_NOW, "FRESH", "AS_OF_MATCH");
 	}
 
@@ -152,7 +152,7 @@ class ConsoleControllerTest {
 			String planStatus, LocalDate expectedAsOf, LocalDate actualAsOf,
 			OffsetDateTime collectedAt, String freshnessStatus, String freshnessReason) {
 		return new TaskRow(taskKey, "etf-daily:2026-08-03T15:40", "etf-daily", DAY, "raw", dataset,
-				true, planStatus, "FULFILLED", "VALID", 906L, 0L, 33L, 33L, 0L, 1L,
+				true, planStatus, "FULFILLED", "VALID", 906L, null, 0L, 33L, 33L, 0L, 1L,
 				contractKey, expectedAsOf, actualAsOf, collectedAt, freshnessStatus,
 				freshnessReason);
 	}
@@ -780,7 +780,8 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.tasks[0].freshnessReason").doesNotHaveJsonPath())
 				.andReturn().getResponse().getContentAsString();
 
-		assertThat(body).contains("\"recordsOut\":null", "\"completenessExpected\":null")
+		assertThat(body).contains("\"recordsOut\":null", "\"unsupportedRecords\":null",
+				"\"completenessExpected\":null")
 				/* 이 둘은 어느 축에도 없는 이름이라 통째 검사가 여전히 맞다 — 데이터셋 축의
 				 * 판정 코드는 `unverifiable` 이고 원장 어휘를 그대로 흘리지 않는다. */
 				.doesNotContain("freshnessStatus", "freshnessReason");
