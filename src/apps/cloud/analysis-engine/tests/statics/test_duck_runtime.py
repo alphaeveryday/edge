@@ -347,6 +347,11 @@ def test_stale_iceberg_falls_back_and_says_why():
     assert lk._bars_iceberg() is False
     assert "bars_5m_iceberg" in lk.unbound
     assert "bars_5m" not in lk.exists          # 정본이라 말하지 않는다
+    # 판정 질의는 **스캔 전체**에 어휘 필터를 건다 — max·분자·분모가 전부 가격
+    # 집합이어야 한다(ALPHA-941). 집계에만 걸면 "지수만 돈 날"이 newest 로 뽑힌다.
+    judged = [q for q in lk.con.sql if "max(trade_date)" in q]
+    assert judged and all(
+        f"source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'" in q for q in judged)
     # **부재 분기의 문구도 고정한다.** 앞 두 삼항을 맞바꾸면 적재가 한 번도 안 돈 날이
     # "돌다 말았다"(부분 착지)로 보고되는데, 그 스왑을 잡는 단언이 없었다(Rule 9).
     assert "요청일이 없다" in lk.stale_5m and "0종" in lk.stale_5m
