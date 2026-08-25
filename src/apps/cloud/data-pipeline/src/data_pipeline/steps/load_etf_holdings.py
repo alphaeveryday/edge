@@ -64,6 +64,9 @@ DATASET = "etf_holding_snapshot"
 # ETF 자신은 전부 XKRX 지만 구성종목 때문에 세 MIC 를 다 조회한다(ALPHA-377 Codex P1 과 동종).
 # US 는 구성종목이 마스터에 없어(ALPHA-371) 여기 넣어도 전량 미등록으로 걸린다.
 _MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
+# normalize_etf가 만들 수 있는 market. loader는 현재 KR만 소비하지만 US가 같은 manifest에 함께
+# 있는 것은 정상이다(FMP 재활성화 시). 소비 범위와 manifest 어휘를 섞지 않는다.
+_MANIFEST_MARKETS = frozenset(("KR", "US"))
 
 _CREATED_SAMPLE_LIMIT = 5
 # ETF 별 비중 합 정상 범위 — 1 근처여야 한다(부분 커버리지·정제 깨짐이면 크게 벗어난다).
@@ -93,6 +96,8 @@ def _manifest_partitions(storage: Storage, input_run_id: str) -> set[tuple[str, 
     """
     key = canonical_run_manifest_key("etf_holdings", input_run_id)
     log = json.loads(storage.get_bytes(key).decode("utf-8"))
+    if not isinstance(log, dict) or log.get("run_id") != input_run_id:
+        raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
     if log.get("job_name") != "normalize_etf" or log.get("canonical_written") is not True:
         raise ValueError(f"완료된 normalize-etf manifest가 아니다: run_id={input_run_id}")
     raw = log.get("canonical_partitions")
@@ -103,9 +108,19 @@ def _manifest_partitions(storage: Storage, input_run_id: str) -> set[tuple[str, 
         if not isinstance(item, dict):
             raise ValueError(f"canonical_partitions 항목이 객체가 아니다: run_id={input_run_id}")
         market, as_of = item.get("market"), item.get("as_of_date")
-        if not isinstance(market, str) or not market or not isinstance(as_of, str) or not as_of:
+        try:
+            valid_date = (
+                isinstance(as_of, str)
+                and datetime.strptime(as_of, "%Y-%m-%d").strftime("%Y-%m-%d") == as_of
+            )
+        except ValueError:
+            valid_date = False
+        if market not in _MANIFEST_MARKETS or not valid_date:
             raise ValueError(f"canonical_partitions 항목이 유효하지 않다: {item!r}")
-        partitions.add((market, as_of))
+        partition = (market, as_of)
+        if partition in partitions:
+            raise ValueError(f"canonical_partitions 항목이 중복됐다: {item!r}")
+        partitions.add(partition)
     return partitions
 
 
@@ -191,10 +206,20 @@ def run(
                      ])
             for date in dates:
                 prefix = canonical_etf_holdings_partition(market, date)
-                for key in storage.list_keys(prefix + "/"):
-                    if not key.endswith(".parquet"):
-                        continue
+                parquet_keys = [
+                    key for key in storage.list_keys(prefix + "/") if key.endswith(".parquet")
+                ]
+                if manifest is not None and not parquet_keys:
+                    raise ValueError(f"manifest 파티션에 parquet가 없다: market={market}, date={date}")
+                partition_rows = 0
+                for key in parquet_keys:
                     for row in _read_parquet_rows(storage.get_bytes(key)):
+                        partition_rows += 1
+                        if row.get("market") != market or row.get("as_of_date") != date:
+                            raise ValueError(
+                                "canonical 행과 파티션이 일치하지 않는다: "
+                                f"market={market}, date={date}, key={key}"
+                            )
                         read += 1
                         etf_id, ct = row.get("etf_id"), row.get("constituent_ticker")
                         mic, as_of = row.get("constituent_mic"), row.get("as_of_date")
@@ -226,6 +251,8 @@ def run(
                             "available_at": fetched_at or started_at.isoformat(),
                             "fetched_at_raw": fetched_at or "",
                         }
+                if manifest is not None and partition_rows == 0:
+                    raise ValueError(f"manifest 파티션이 0행이다: market={market}, date={date}")
 
         with connect(db) as conn:
             resolved = {

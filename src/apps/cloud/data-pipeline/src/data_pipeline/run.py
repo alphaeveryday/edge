@@ -706,6 +706,20 @@ def _dispatch(args, settings, storage, run_id) -> int:
             raise SystemExit(
                 "load-etf-holdings는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
             )
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-etf-holdings의 --from은 --to보다 늦을 수 없다")
         return load_etf_holdings.run(
             storage, run_id, db=db_config_from_env(settings.db),
             input_run_id=args.input_run_id,

@@ -674,6 +674,18 @@ def test_load_etf_holdings_forwards_normalize_run_scope(monkeypatch):
     assert captured["input_run_id"] == "N1"
 
 
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_etf_holdings_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1011): 불량·역전 날짜를 문자열 필터로 처리하면 모든 파티션이 빠진 0건을 성공으로
+    # 보고한다. 복구가 끝난 것처럼 보이지 않도록 loader 호출 전에 거부해야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-etf-holdings", "--run-id", "R", *argv])
+
+
 @pytest.mark.parametrize(("step", "module", "argv"), [
     ("load-etf-holdings", "load_etf_holdings", ["load-etf-holdings", "--all"]),
     ("load-price-triggers", "load_price_triggers", ["load-price-triggers"]),
