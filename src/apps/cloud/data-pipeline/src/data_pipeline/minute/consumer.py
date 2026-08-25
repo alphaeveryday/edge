@@ -250,6 +250,7 @@ class SqsQueue:
 
     @property
     def receive_client(self):  # pragma: no cover - 실 AWS 경로
+        """receive 전용 client — long poll 을 견디게 늘린 read timeout(생성자 주석)."""
         if self._receive_client is None:
             from ..ops.aws import sqs_client
 
@@ -275,6 +276,11 @@ class SqsQueue:
         self, *, queue_url: str, max_messages: int, wait_seconds: int,
         visibility_seconds: int,
     ) -> tuple[ConsumerMessage, ...]:
+        """long polling 으로 최대 max_messages 건을 받는다.
+
+        MessageId·ReceiptHandle·Body 중 하나라도 없는 항목은 다룰 수 없는
+        메시지다 — 크게 남기고 건너뛴다(조용히 빈 값으로 만들지 않는다).
+        """
         response = self.receive_client.receive_message(
             QueueUrl=queue_url,
             MaxNumberOfMessages=max_messages,
@@ -302,11 +308,13 @@ class SqsQueue:
         return tuple(messages)
 
     def delete(self, *, queue_url: str, receipt_handle: str) -> None:
+        """메시지 ack(삭제) — 되돌릴 수 없다. 판정 가능할 때만 부른다(모듈 도크스트링)."""
         self.control_client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
     def change_visibility(
         self, *, queue_url: str, receipt_handle: str, seconds: int
     ) -> None:
+        """메시지 visibility 를 seconds 로 변경한다 — 재표시 시각은 DB 가 정한 값을 따른다."""
         self.control_client.change_message_visibility(
             QueueUrl=queue_url, ReceiptHandle=receipt_handle, VisibilityTimeout=seconds
         )
@@ -314,6 +322,12 @@ class SqsQueue:
 
 @dataclass
 class ConsumerConfig:
+    """Consumer kernel 설정 — 큐·동시성·visibility/lease·논리 retry 예산 노브.
+
+    값이 갈리는 노브의 근거는 각 필드 주석에 있다(특히 max_attempts 와 SQS
+    maxReceiveCount 의 관계 — v0.7 12.4).
+    """
+
     consumer_id: str
     kind: str          # news | price — 이 Consumer 가 보는 job 테이블
     queue_url: str
@@ -429,6 +443,7 @@ class MinuteConsumer:
         )
 
     def request_stop(self) -> None:
+        """SIGTERM 용 — 다음 tick 부터 새 receive 를 멈춘다(in-flight 는 tick 안에서 끝난다)."""
         self.stopping = True
 
     def close(self) -> None:
@@ -813,9 +828,14 @@ class DlqReconciler:
     seen: set = field(default_factory=set)
 
     def request_stop(self) -> None:
+        """SIGTERM 용 — 다음 tick 에 멈춘다."""
         self.stopping = True
 
     def tick(self, now: datetime) -> Counter:
+        """한 사이클 — 각 DLQ 를 받아 메시지별 판정 어휘를 센 Counter 를 반환한다.
+
+        판정은 `_reconcile` 이, 재수신 중복 계수는 `seen` 이 접는다.
+        """
         counts: Counter = Counter()
         if self.stopping:
             return Counter(stopped=1)

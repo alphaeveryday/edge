@@ -61,6 +61,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class NewsWorkerConfig:
+    """News Worker loop 설정 — poll 예산·anchor·lease·차단 쿨다운 노브.
+
+    값이 갈리는 노브의 근거는 각 필드 주석에 있다. `recovery_max_pages < max_pages`
+    는 생성 시점에 거부한다 — 따라잡기 poll 이 평상시보다 얕으면 lag 이 영구화된다.
+    """
+
     worker_id: str
     dataset: str
     source_code: str
@@ -114,6 +120,10 @@ class RawPagePreserver:
     written_keys: list[str] = field(default_factory=list)
 
     def fetch_page(self, poll_index: int, page: int, page_size: int):
+        """feed 계약 그대로 위임하되, 반환 전에 rows 를 raw 존에 보존한다.
+
+        보존 키는 `written_keys` 에 축적된다 — poll manifest 가 싣는다.
+        """
         fetched = self.inner.fetch_page(poll_index, page, page_size)
         rows = fetched.rows if isinstance(fetched, NewsPage) else fetched
         if not isinstance(rows, (list, tuple)):

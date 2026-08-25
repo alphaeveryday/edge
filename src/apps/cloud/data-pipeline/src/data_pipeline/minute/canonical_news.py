@@ -104,6 +104,11 @@ class PgNewsCanonicalWriter:
     def upsert_tx(
         self, cur, *, dataset: str, window_start: datetime, records: tuple[dict, ...]
     ) -> int:
+        """commit 트랜잭션의 커서로 기사 records 를 canonical 에 upsert 한다 — 쓴 행 수 반환.
+
+        `observed_at` 은 한 트랜잭션에 하나(주입 clock, aware 강제) — 내용은 최신
+        관측, 시각은 단조 증가라는 축 계약은 모듈 도크스트링 참조.
+        """
         # ⚠️ `window_start` 는 **관측 시각이 아니다**(아래 available_at 주석 참조).
         observed_at = self.clock()
         if observed_at.tzinfo is None or observed_at.tzinfo.utcoffset(observed_at) is None:

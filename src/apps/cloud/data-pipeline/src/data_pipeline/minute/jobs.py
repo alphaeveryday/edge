@@ -99,6 +99,7 @@ def news_job_id(
     *, source_code: str, article_id: str, input_fingerprint: str,
     tagger_version: str, ontology_version: str,
 ) -> str:
+    """뉴스 job 의 결정적 ID — 자연키·입력 지문·tagger/ontology 버전에서 유도(v0.7 10.6)."""
     return _sha256_of(
         [source_code, article_id, input_fingerprint, tagger_version, ontology_version]
     )
@@ -107,6 +108,7 @@ def news_job_id(
 def price_job_id(
     *, session_id: str, window_start: datetime, generation: int, trigger_schema_version: str,
 ) -> str:
+    """가격 job 의 결정적 ID — session·window·세대·trigger 스키마 버전에서 유도(v0.7 10.6)."""
     return _sha256_of([session_id, window_start, generation, trigger_schema_version])
 
 
@@ -211,6 +213,7 @@ class JobLedger:
         self, *, session_id: str, window_start: datetime, generation: int,
         trigger_schema_version: str,
     ) -> tuple[str, bool]:
+        """identity UNIQUE 충돌은 no-op — (job_id, created). `insert_news_job` 과 같은 결."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             return self._insert_price_job_tx(
                 cur, session_id=session_id, window_start=window_start,
@@ -390,6 +393,10 @@ class JobLedger:
         self, *, kind: str, job_id: str, worker_id: str, attempt: int,
         redrive_generation: int, now: datetime, result_checksum: str,
     ) -> bool:
+        """SUCCEEDED 확정 — claim 정체성(worker·attempt·redrive)이 맞을 때만 전이한다.
+
+        반환 False = 전이 실패(탈취·상태 불일치) — 호출자가 ack 여부를 가른다.
+        """
         return self._transition(
             kind, job_id, worker_id, attempt, redrive_generation,
             to_status="SUCCEEDED", now=now, result_checksum=result_checksum,

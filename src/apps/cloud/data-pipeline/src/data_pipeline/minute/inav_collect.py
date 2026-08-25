@@ -215,6 +215,8 @@ class KisInavCollector:
     def collect(
         self, request: CollectionRequest, now: datetime
     ) -> tuple[CollectionResult, tuple[dict, ...], dict[str, list[str]]]:
+        """collector 계약 — `(result, records, manifest)`. 순회·판정은
+        `collect_inav_units` 에, KIS 결합은 `_rows_for` 에 있다."""
         return collect_inav_units(
             request, now,
             rows_for=lambda unit_id: self._rows_for(unit_id),

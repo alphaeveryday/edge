@@ -65,7 +65,9 @@ class CanonicalWriter(Protocol):
     """
 
     def upsert_tx(self, cur, *, dataset: str, window_start: datetime,
-                  records: tuple[dict, ...]) -> int: ...
+                  records: tuple[dict, ...]) -> int:
+        """commit 트랜잭션의 커서로 records 를 canonical 에 쓰고 쓴 행 수를 반환한다."""
+        ...
 
 
 class CommitRejectedError(RuntimeError):

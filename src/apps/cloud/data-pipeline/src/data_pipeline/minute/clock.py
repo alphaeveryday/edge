@@ -26,9 +26,11 @@ class VirtualClock:
         self._now = _require_aware(start, "start").astimezone(timezone.utc)
 
     def now(self) -> datetime:
+        """현재 가상 시각 — UTC aware."""
         return self._now
 
     def advance(self, delta: timedelta) -> datetime:
+        """delta 만큼 전진해 새 현재 시각을 반환한다. 음수 delta 는 거부한다."""
         if delta < timedelta(0):
             raise ValueError("시계는 뒤로 가지 않는다")
         self._now += delta
@@ -39,4 +41,5 @@ class SystemClock:
     """운영용 실제 시계 — VirtualClock 과 같은 now() 계약(UTC aware)."""
 
     def now(self) -> datetime:
+        """현재 실제 시각 — UTC aware."""
         return datetime.now(timezone.utc)

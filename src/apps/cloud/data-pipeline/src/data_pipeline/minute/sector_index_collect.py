@@ -122,6 +122,8 @@ class KisSectorIndexCollector:
     def collect(
         self, request: CollectionRequest, now: datetime
     ) -> tuple[CollectionResult, tuple[dict, ...], dict[str, list[str]]]:
+        """collector 계약 그대로 — 순회·판정은 `collect_sector_index_units` 에,
+        KIS 결합은 `_candles_for` 에 있다."""
         return collect_sector_index_units(
             request, now,
             candles_for=lambda unit_id: self._candles_for(unit_id, request.window_end),

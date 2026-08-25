@@ -80,6 +80,12 @@ def universe_matches(ledger: MinuteLedger, session_id: str, universe: Universe) 
 
 @dataclass
 class WorkerConfig:
+    """Price Worker 설정 — 값이 갈리는 노브의 근거는 각 필드 주석에 있다.
+
+    특히 `is_backfill` 은 기본값이 없다(빠뜨리면 TypeError 로 죽는 게 의도) —
+    과거 봉이 실시간 트리거·설명을 돌린 08-08 사고의 재발 방지다.
+    """
+
     worker_id: str
     dataset: str
     source: str
@@ -159,6 +165,7 @@ class MinuteWorkerLoop:
         window_hhmm = claim["window_start"].astimezone(KST).strftime("%H%M")
 
         def manifest_for(generation: int) -> tuple[str, bytes, str]:
+            """세대 후보 하나의 (artifact_key, manifest_bytes, manifest_checksum)."""
             artifact_key = self._artifact_key(window_hhmm, generation)
             manifest = build_window_manifest(
                 dataset=cfg.dataset, session_id=self.session_id,
