@@ -18,6 +18,7 @@ from edge_analysis.statics.duck import SECTOR_ROLLUP_VENDOR
 from edge_analysis.statics.layers import MARKET_CODE, _market_beta, prev_price_day_subquery
 
 DAY = "2026-08-21"          # 분석 요청일
+OLDER_PRICE_DAY = "2026-08-18"  # 더 오래된 가격일 — '단일 파티션' 계약의 대조군
 PRICE_DAY = "2026-08-19"    # 가격 롤업이 착지한 마지막 날
 SECTOR_ONLY_DAY = "2026-08-20"  # 지수 롤업만 돈 날 — 오염된 '최신일'
 
@@ -28,12 +29,13 @@ def _bars_lake():
         "CREATE TABLE bars_5m (symbol VARCHAR, ts TIMESTAMP, close DOUBLE,"
         " trade_date DATE, source_vendor VARCHAR)"
     )
-    for i in range(3):
-        for sym in (f"{MARKET_CODE}.KS", "069660.KS"):
-            con.execute(
-                "INSERT INTO bars_5m VALUES (?, ?, 100.0, ?, '1m_rollup')",
-                [sym, f"{PRICE_DAY} 09:{5 * i:02d}:00", PRICE_DAY],
-            )
+    for day in (OLDER_PRICE_DAY, PRICE_DAY):
+        for i in range(3):
+            for sym in (f"{MARKET_CODE}.KS", "069660.KS"):
+                con.execute(
+                    "INSERT INTO bars_5m VALUES (?, ?, 100.0, ?, '1m_rollup')",
+                    [sym, f"{day} 09:{5 * i:02d}:00", day],
+                )
     for i in range(3):
         con.execute(
             "INSERT INTO bars_5m VALUES ('1005', ?, 300.0, ?, ?)",
@@ -44,11 +46,12 @@ def _bars_lake():
     class _Lake:
         def __init__(self):
             self.exists: dict = {}
-            self.seen: list[str] = []
+            self.seen: list[tuple[str, list]] = []  # (질의, 반환 행) — 실소비 검증용
 
         def sql(self, q: str):
-            self.seen.append(q)
-            return con.execute(q).fetchall()
+            rows = con.execute(q).fetchall()
+            self.seen.append((q, rows))
+            return rows
 
     return _Lake()
 
@@ -73,18 +76,23 @@ def test_market_beta_prev_day_query_uses_the_shared_subquery():
     """
     lake = _bars_lake()
     _market_beta(lake, "069660", DAY, {"069660": (0.01,), MARKET_CODE: (0.01,)})
-    prev_queries = [q for q in lake.seen if "trade_date <" in q]
+    prev_queries = [q for q, _ in lake.seen if "trade_date <" in q]
     assert prev_queries and all(prev_price_day_subquery(DAY) in q for q in prev_queries)
 
 
-def test_market_beta_reads_price_day_rows_not_sector_rows():
-    """전일 재료가 실제로 가격 날의 봉이다 — 지수-only 날이 뽑히면 재료가 0행이라
-    β=1 폴백 사유가 남는다(그 폴백 자체가 이 결함의 관측면이었다).
+def test_market_beta_consumes_price_day_rows_not_sector_rows():
+    """`_market_beta` 가 **실제로 받아 간 행**이 가격 날의 봉이다.
+
+    검증 대상은 내가 다시 실행한 SQL 이 아니라 함수가 소비한 결과 그 자체다 —
+    바깥 날짜 조건이 틀어져도(예: `=` → `<>`) 여기서 깨져야 한다. 지수-only
+    날이 뽑히면 재료가 0행이 되고, 그게 β=1 무성 폴백의 뿌리였다.
     """
     lake = _bars_lake()
     _market_beta(lake, "069660", DAY, {"069660": (0.01,), MARKET_CODE: (0.01,)})
-    # 전일 질의의 결과를 재현해 행이 가격 날 것인지 직접 확인한다.
-    rows = lake.sql(
-        rf"SELECT DISTINCT trade_date FROM bars_5m "
-        rf"WHERE trade_date = {prev_price_day_subquery(DAY)}")
-    assert [r[0] for r in rows] == [date.fromisoformat(PRICE_DAY)]
+    consumed = [rows for q, rows in lake.seen if "trade_date <" in q]
+    assert consumed and consumed[0], "전일 질의가 행을 소비하지 못했다"
+    # SELECT 는 (sym, ts, close) — ts 의 날짜로 어느 파티션의 봉인지 판정한다.
+    # **직전 하루 단일 파티션**이 계약이다: 더 오래된 가격일(08-18)이 섞이면
+    # (`=` → `<=` 류 완화) β 를 전 이력으로 적합하는 다른 함수가 된다.
+    assert {ts.date() for _, ts, _ in consumed[0]} == {date.fromisoformat(PRICE_DAY)}
+    assert {sym for sym, _, _ in consumed[0]} == {"069660", MARKET_CODE}
