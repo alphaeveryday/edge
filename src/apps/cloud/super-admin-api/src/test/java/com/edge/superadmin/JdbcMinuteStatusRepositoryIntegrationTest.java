@@ -67,6 +67,36 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	@Test
+	void 허용된_실패가_있는_VALID_창도_문제창에_표시한다() {
+		insertSession("sess-partial", "price_minute", "kis", DAY, "ACTIVE");
+		insertWindow("sess-partial", PAST, "VALID");
+		insertWindow("sess-partial", PAST.plusMinutes(1), "VALID");
+		jdbc.update("""
+				UPDATE minute_ingestion_window SET failed_unit_count = 0
+				WHERE session_id = 'sess-partial' AND window_start = ?
+				""", PAST.plusMinutes(1));
+		insertSession("sess-other-day", "price_minute", "kis", DAY.plusDays(1), "ACTIVE");
+		insertWindow("sess-other-day", PAST, "VALID");
+		jdbc.update("""
+				UPDATE minute_ingestion_window
+				SET expected_unit_count = 462, succeeded_unit_count = 461,
+				    failed_unit_count = 1, missing_units = '["0220W0"]'::jsonb
+				WHERE session_id = 'sess-partial' AND window_start = ?
+				""", PAST);
+		jdbc.update("""
+				UPDATE minute_ingestion_window SET failed_unit_count = 1
+				WHERE session_id = 'sess-other-day' AND window_start = ?
+				""", PAST);
+
+		SessionSummary summary = repository.status(DAY).sessions().get(0);
+
+		assertThat(summary.gaps()).hasSize(1);
+		assertThat(summary.gaps().get(0).windowStart().toInstant()).isEqualTo(PAST.toInstant());
+		assertThat(summary.gaps().get(0).dataStatus()).isEqualTo("VALID");
+		assertThat(summary.gaps().get(0).noEvidence()).isFalse();
+	}
+
+	@Test
 	void lease_부재는_null_만료는_true_로_구분한다() {
 		// WHY: PLANNED(기동 증거 없음)와 ACTIVE+만료(증거 끊김)는 다른 사실이다 — 뭉개면
 		//      "아직 안 뜬 세션"과 "죽은 세션"이 화면에서 같아진다.

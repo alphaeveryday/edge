@@ -72,7 +72,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			""";
 
 	/**
-	 * 결손·무증거 창 전량 — 상한을 두지 않는 이유는 창이 장 시작 시 하루치로 materialize 돼
+	 * 실패 unit·결손·무증거 창 전량 — 상한을 두지 않는 이유는 창이 장 시작 시 하루치로 materialize 돼
 	 * 세션당 최대 수백 행으로 유계이기 때문이다(무한 스캔 아님). 집계만 내리고 목록을 자르면
 	 * "표시된 집계를 목록으로 검증할 길"이 끊긴다.
 	 */
@@ -84,6 +84,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			  JOIN minute_ingestion_session s ON s.session_id = w.session_id
 			 WHERE s.session_date = ?
 			   AND (w.data_status IN ('MISSING','INCOMPLETE','INVALID')
+			        OR w.failed_unit_count > 0
 			        OR
 			""" + NO_EVIDENCE_PREDICATE + """
 			       )
