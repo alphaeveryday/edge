@@ -574,21 +574,27 @@ class _Cursor:
                 assert clause in s, f"record_publish_failure SQL 에 {clause} 가 없다"
             self._publish_failure(params)
         elif s.startswith("SELECT session_date FROM minute_ingestion_session"):
-            # 5분 파생 구멍 판정(ALPHA-839). phase 집합과 하한 절이 SQL 에서 빠지면 fake
+            # 5분 파생 구멍 판정(ALPHA-839). FINALIZED 조건과 하한 절이 SQL 에서 빠지면 fake
             # 가 Python 으로 재현해 버려 못 잡는다 — 문면을 못 박는다(Rule 9). 하한이
             # 없으면 이 writer 소관 밖의 옛 거래일이 영영 결손 목록에 남는다.
-            # ⚠️ `phase = 'FINALIZED'` 단일값이면 안 된다 — dev 원장에 FINALIZED 가
-            # 0건이라(전 세션 DRAINED 정지) 판정이 영영 빈 목록을 낸다.
-            # ⚠️ 상한(`< %s`)이 SQL 에서 빠지면 오늘이 후보에 들어와 진행 중인 DRAINING 을
-            # 고착으로 오인한다 — 매일 거짓 양성으로 시작한다.
-            assert "phase = ANY(%s)" in s
+            # QC로 checksum까지 봉인된 날만 settled다. phase 집합으로 넓히면 DRAINED·
+            # QC_RUNNING·FAILED의 미확정 재료를 후속 결손 판정이 소비한다.
+            # ⚠️ 상한(`< %s`)이 SQL 에서 빠지면 오늘의 확정 세션까지 과거 결손 감시와
+            # 중복된다 — 오늘 산출 결과는 현재 실행의 key/exit가 판정한다.
+            assert "phase = 'FINALIZED'" in s
+            # 범위(`[0-9a-f]`)는 DB collation에 따라 fake의 ASCII 집합과 갈릴 수 있다.
+            assert "final_checksum ~ '^[0123456789abcdef]{64}$'" in s
+            assert "phase = ANY(%s)" not in s
             assert "session_date >= %s" in s
             assert "session_date < %s" in s
             self._rows = sorted(
                 (row["session_date"],) for row in self.db.sessions.values()
                 if (row["dataset"], row["source_group"]) == (params[0], params[1])
-                and row["phase"] in params[2]
-                and params[3] <= row["session_date"] < params[4]
+                and row["phase"] == "FINALIZED"
+                and isinstance(row.get("final_checksum"), str)
+                and len(row["final_checksum"]) == 64
+                and all(c in "0123456789abcdef" for c in row["final_checksum"])
+                and params[2] <= row["session_date"] < params[3]
             )
         else:
             raise AssertionError(f"FakeMinuteDB 가 모르는 SQL: {s[:120]}")
