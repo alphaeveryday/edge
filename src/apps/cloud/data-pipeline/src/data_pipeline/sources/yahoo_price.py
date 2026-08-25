@@ -61,6 +61,9 @@ def _number(value) -> float | None:
 
 
 class YahooPriceSource:
+    """야후 일봉 어댑터(무인증) — KR 종목 + 지수 대조축 전용(US 는 FMP 소관,
+    지수는 plan 이 항상 포함한다)."""
+
     source_name = "yahoo"
 
     def __init__(self, config: YahooPriceSourceConfig):
@@ -73,6 +76,7 @@ class YahooPriceSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그가 유일한 스위치(인증 없음)."""
         # 인증이 없다 — 설정 플래그가 유일한 스위치.
         return self.config_enabled
 

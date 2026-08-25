@@ -136,6 +136,7 @@ class SsmTokenCache:
 
     @classmethod
     def from_env(cls) -> SsmTokenCache | None:
+        """env 에 캐시 파라미터 이름이 있으면 캐시를, 없으면 None(각자 발급 경로)."""
         param = os.environ.get(CACHE_PARAM_ENV)
         return cls(param) if param else None
 

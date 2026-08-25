@@ -88,6 +88,9 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 
 
 class KisInvestorSource:
+    """KIS 투자자 수급(확정치) 어댑터 — KR 전용, 유니버스는 canonical holdings
+    에서 파생한다(universe_from_holdings)."""
+
     source_name = "kis"
 
     def __init__(self, config: KisInvestorSourceConfig, client: PoliteClient):
@@ -112,6 +115,7 @@ class KisInvestorSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND 앱키·시크릿(env 주입) 존재."""
         # 앱키·시크릿은 env 로만 주입(커밋 금지) — 둘 중 하나라도 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.app_key) and bool(self.app_secret)
 

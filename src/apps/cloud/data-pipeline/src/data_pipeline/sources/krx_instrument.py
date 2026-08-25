@@ -71,6 +71,7 @@ class KrxInstrumentSource:
 
     @property
     def source_name(self) -> str:
+        """소스 라벨 — raw provenance·로그의 축."""
         return "krx"
 
     @property
@@ -98,6 +99,11 @@ class KrxInstrumentSource:
         return list(_ENDPOINT_BY_BOARD)
 
     def fetch(self) -> Iterator[dict]:
+        """시장 보드 3건을 순회해 상장종목 행(raw)을 낸다.
+
+        4xx(StopFetch)는 시장 하나가 아니라 소스 전체 문제라 전파한다 —
+        행 단위 이상은 `fetch_failures` 로 격리된다.
+        """
         # 재호출이면 앞선 실패 목록을 비운다 — 안 비우면 두 번째 fetch 가 첫 번째의 실패까지
         # 세어 런 상태가 실제보다 나빠진다(krx_etf 와 같은 계약).
         self.fetch_failures = []

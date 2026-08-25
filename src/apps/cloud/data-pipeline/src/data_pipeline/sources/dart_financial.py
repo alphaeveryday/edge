@@ -52,6 +52,9 @@ STOP_STATUS_CODES = {"010", "011", "012", "020", "800", "901"}
 
 
 class DartFinancialSource:
+    """OpenDART 재무 주요계정 어댑터 — 종목 × 사업연도 × 보고서유형 팬아웃
+    (FMP 재무와 같은 관례 인터페이스)."""
+
     source_name = "dart"
 
     def __init__(self, config: DartFinancialSourceConfig, client: PoliteClient):
@@ -68,6 +71,7 @@ class DartFinancialSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND api_key(env 주입) 존재."""
         return self.config_enabled and bool(self.api_key)
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:

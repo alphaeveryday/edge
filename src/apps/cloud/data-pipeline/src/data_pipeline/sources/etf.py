@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 class FmpEtfSource:
+    """FMP ETF 구성종목(holdings) 스냅샷 어댑터 — etf_map 의 키가 곧 수집
+    유니버스다(날짜창 없음, ETF 당 1콜)."""
+
     source_name = "fmp"
 
     def __init__(self, config: EtfSource, client: PoliteClient):
@@ -48,10 +51,12 @@ class FmpEtfSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND api_key(env 주입) 존재."""
         # 키는 env 로만 주입된다(커밋 금지) — 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.api_key)
 
     def request_url(self, fmp_symbol: str) -> str:
+        """벤더 질의 URL — apikey 가 포함되므로 로그에 남기지 않는다."""
         # apikey 가 포함되므로 이 URL 을 로그에 남기지 않는다.
         return f"{self.base_url}?symbol={fmp_symbol}&apikey={self.api_key}"
 

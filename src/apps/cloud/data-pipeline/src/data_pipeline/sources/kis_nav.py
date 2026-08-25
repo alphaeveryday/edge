@@ -51,6 +51,9 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 
 
 class KisNavSource:
+    """KIS NAV 일별 추이 어댑터 — etf_map 이 곧 유니버스. 엔드포인트·질의
+    파라미터는 하위 어댑터(kis_inav)가 갈아끼운다(클래스 속성 주석)."""
+
     source_name = "kis"
     # KIS 응답 자체의 거래일이다. 질의 날짜나 fetched_at provenance와 독립된 actual-as-of 증거다.
     actual_as_of_field = "stck_bsop_date"
@@ -89,6 +92,7 @@ class KisNavSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND 앱키·시크릿(env 주입) 존재."""
         # 앱키·시크릿은 env 로만 주입(커밋 금지) — 둘 중 하나라도 없으면 이 소스는 건너뛴다.
         return self.config_enabled and bool(self.app_key) and bool(self.app_secret)
 

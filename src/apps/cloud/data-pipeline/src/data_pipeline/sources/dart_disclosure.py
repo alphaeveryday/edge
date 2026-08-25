@@ -160,6 +160,9 @@ def _to_dart_date(value: str | None) -> str | None:
 
 
 class DartDisclosureSource:
+    """OpenDART 공시목록 어댑터 — 날짜창의 시장 전체를 페이지네이션하고
+    유니버스는 질의 축이 아니라 필터다(모듈 도크스트링)."""
+
     source_name = "dart"
 
     def __init__(self, config: DartDisclosureSourceConfig, client: PoliteClient):
@@ -207,6 +210,7 @@ class DartDisclosureSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그 AND api_key(env 주입) 존재."""
         return self.config_enabled and bool(self.api_key)
 
     def plan(self, symbols: list[str]) -> list[tuple[str, str]]:

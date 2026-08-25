@@ -42,6 +42,12 @@ class StopFetch(Exception):
 
 
 class PoliteClient:
+    """발신률을 1/min_interval 로 묶는 공유 HTTP 클라이언트(thread-safe).
+
+    간격 강제·재시도·StopFetch 는 `request()` 한 곳에 있다 — 보장 범위와
+    절충은 모듈·`_respect_interval` 도크스트링 참조.
+    """
+
     def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0):
         self.min_interval = min_interval
         self.timeout = timeout

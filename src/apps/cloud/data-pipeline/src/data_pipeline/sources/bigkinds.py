@@ -98,6 +98,9 @@ def _is_count(value: object) -> bool:
 
 
 class BigKindsNewsSource:
+    """카테고리 주도 BigKinds 국내 뉴스 어댑터 — 검색어 없이 그날 경제 뉴스
+    전체를 raw 보존한다(계약·이유는 모듈 도크스트링)."""
+
     source_name = "bigkinds"
     preserve_all_rows = True  # raw 전량 보존: ingest_raw 의 FMP dedup/mention merge 를 끈다.
 
@@ -115,6 +118,7 @@ class BigKindsNewsSource:
 
     @property
     def enabled(self) -> bool:
+        """수집 가능 여부 — 설정 플래그가 유일한 스위치(무인증 공개 엔드포인트)."""
         return self.config_enabled
 
     def _note_failure(self, reason: str, *, page: int | None = None,
