@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.kis_minute import (
     MAX_DAY_PAGES,
+    KisDayIncompleteError,
     KisHistoricalMinuteClient,
     KisMinuteClient,
     KisSourceError,
@@ -233,6 +234,15 @@ class TestParse:
         with pytest.raises(ValueError):
             parse_minute_row(broken, "005930")
 
+    def test_int64_min_volume_sentinel_is_missing(self):
+        assert parse_minute_row(
+            {**row(), "cntg_vol": "-9223372036854775808"}, "0220W0") is None
+
+    @pytest.mark.parametrize("volume", ["-1", "1E+999", "abc", True])
+    def test_only_int64_min_volume_sentinel_is_accepted(self, volume):
+        with pytest.raises(ValueError):
+            parse_minute_row({**row(), "cntg_vol": volume}, "005930")
+
 
 class TestCandles:
     def test_requests_window_end_as_hour(self):
@@ -250,6 +260,12 @@ class TestCandles:
         client, _ = make_client([TOKEN, ok([row("103000"), row("102900")])])
         candles = client.candles("005930", window_end=WINDOW_END)
         assert [c.window_end.strftime("%H%M") for c in candles] == ["1030", "1029"]
+
+    def test_omits_int64_min_volume_sentinel_row(self):
+        missing = {**row("103000"), "cntg_vol": "-9223372036854775808"}
+        client, _ = make_client([TOKEN, ok([missing, row("102900")])])
+        candles = client.candles("0220W0", window_end=WINDOW_END)
+        assert [c.window_end.strftime("%H%M") for c in candles] == ["1029"]
 
     def test_empty_output2_is_empty_result(self):
         # 빈 list 는 정상 — 그 창에 봉이 없다(collector 가 missing 으로 센다)
@@ -545,6 +561,15 @@ class TestHistoricalCandles:
         client, fake = self.hist([TOKEN, ok([row("091000"), self.other_day("090900")])])
         assert len(client.candles("005930", window_end=self.at("0910"))) == 1
         assert len(fake.calls) == 2  # 토큰 1 + 페이지 1
+
+    def test_historical_sentinel_is_missing_not_synthetic_no_trade(self):
+        sentinel = {**row("152900"), "cntg_vol": "-9223372036854775808"}
+        client, fake = self.hist([TOKEN, ok([row("153000"), sentinel])])
+
+        for hhmm in ("1530", "1529"):
+            with pytest.raises(KisDayIncompleteError, match="벤더 데이터 없음"):
+                client.candles("0220W0", window_end=self.at(hhmm))
+        assert len(fake.calls) == 2  # 토큰 1 + 첫 페이지 1 — 결정적 하루 실패는 캐시
 
     def test_day_is_fetched_once_for_all_windows(self):
         # window 마다 부르면 390 × 362 = 141k 콜이다 — 앱키 유량은 전역이라 그 차이가
