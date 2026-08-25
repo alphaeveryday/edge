@@ -363,6 +363,18 @@
         <mxCell id="table-13-row-0" parent="table-13" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="PK  single_row  ·  boolean" vertex="1">
           <mxGeometry height="25" width="270" y="38" as="geometry" />
         </mxCell>
+        <mxCell id="table-14" parent="1" style="swimlane;horizontal=1;startSize=38;rounded=0;html=0;fillColor=#e8f0fe;swimlaneFillColor=#ffffff;strokeColor=#7aa2e3;fontColor=#172554;fontStyle=1;align=left;spacingLeft=10;verticalAlign=middle;collapsible=0;" value="etf_instrument" vertex="1">
+          <mxGeometry height="113" width="270" x="1390" y="350" as="geometry" />
+        </mxCell>
+        <mxCell id="table-14-row-0" parent="table-14" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="PK  etf_ticker  ·  varchar(20)" vertex="1">
+          <mxGeometry height="25" width="270" y="38" as="geometry" />
+        </mxCell>
+        <mxCell id="table-14-row-1" parent="table-14" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="etf_name  ·  text" vertex="1">
+          <mxGeometry height="25" width="270" y="63" as="geometry" />
+        </mxCell>
+        <mxCell id="table-14-row-2" parent="table-14" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="updated_at  ·  timestamptz" vertex="1">
+          <mxGeometry height="25" width="270" y="88" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
