@@ -88,8 +88,8 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 
 
 class KisInvestorSource:
-    """KIS 투자자 수급(확정치) 어댑터 — KR 전용, 유니버스는 canonical holdings
-    에서 파생한다(universe_from_holdings)."""
+    """KIS 투자자 수급(확정치) 어댑터 — KR 전용. 스텝이 정적 targets 에
+    canonical holdings 파생분을 union 한다(universe_from_holdings)."""
 
     source_name = "kis"
 

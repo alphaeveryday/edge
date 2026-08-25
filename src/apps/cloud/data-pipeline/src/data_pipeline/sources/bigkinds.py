@@ -98,8 +98,9 @@ def _is_count(value: object) -> bool:
 
 
 class BigKindsNewsSource:
-    """카테고리 주도 BigKinds 국내 뉴스 어댑터 — 검색어 없이 그날 경제 뉴스
-    전체를 raw 보존한다(계약·이유는 모듈 도크스트링)."""
+    """카테고리 주도 BigKinds 국내 뉴스 어댑터 — 검색어 없이 설정 카테고리의
+    날짜창 뉴스를 페이지네이션해 수신분을 raw 보존한다. 전량 보장은 아니다 —
+    페이지 상한·벤더 신호로 절단될 수 있고, 절단은 실패 목록에 기록된다."""
 
     source_name = "bigkinds"
     preserve_all_rows = True  # raw 전량 보존: ingest_raw 의 FMP dedup/mention merge 를 끈다.

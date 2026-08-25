@@ -49,8 +49,8 @@ def _yyyymmdd(date_str: str | None) -> str | None:
 
 
 class KisDailyPriceSource:
-    """KIS 국내 일봉 어댑터 — KR 전용, KRX 코드 항등 매핑 기본, 유니버스는
-    canonical holdings 에서 파생한다."""
+    """KIS 국내 일봉 어댑터 — KR 전용, KRX 코드 항등 매핑 기본. 스텝이 정적
+    targets 에 canonical holdings 파생분을 union 한다(universe_from_holdings)."""
 
     source_name = "kis"
 

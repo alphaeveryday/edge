@@ -68,8 +68,9 @@ def _short_code(isin: str) -> str:
 
 
 class KrxEtfSource:
-    """KRX 데이터시스템 ETF 구성종목 어댑터 — etf_map 이 곧 유니버스,
-    deadline_sec 상한에 닿으면 스스로 접고 받은 것은 저장한다."""
+    """KRX 데이터시스템 ETF 구성종목 어댑터 — etf_map 이 곧 유니버스.
+    deadline_sec 은 ETF 요청 사이에 검사하는 소프트 상한이다 — 넘긴 것을
+    발견하면 스스로 접고 받은 것은 저장한다(진행 중 요청은 끊지 않는다)."""
 
     source_name = "krx"
 
