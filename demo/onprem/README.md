@@ -84,6 +84,30 @@ docker compose exec postgres-onprem psql -U edge -d edge_onprem -c \
 
 = **0 이어야 배포**한다. 0 이 아니면 아직 구형 미점검 행이 남은 것 — T1 이중형상 빌드가 계속 소진하도록 두고 나중에 재확인한다. (T4 는 온프렘 전용이라 `dev` 머지가 이 박스를 자동배포하지 않으므로, 이 확인은 다음 `deploy-demo-onprem` 실행 직전 게이트다.)
 
+## etf_instrument 시드 (서빙 전환 빌드 배포 "전" 준비 — ADR-0054 후속)
+
+상장 판별(404)이 설정 allowlist 에서 종목 마스터 `etf_instrument` 로 옮겨졌다. 마이그레이션은
+빈 테이블만 만들고, 데이터 소유는 증권사 환경이라 배포 번들에 시드가 실리지 않는다
+(`seed-local-onprem` 은 로컬 compose 전용 — CI·CD 미포함). **서빙 전환 빌드가 시드 없이 뜨면
+전 종목이 404** 이므로, 전환 빌드를 배포하기 전에 테이블과 데이터를 먼저 준비한다.
+스키마 확장과 서빙 전환이 별도 커밋인 것이 이 순서의 장치다:
+
+1. 스키마 확장 커밋까지 포함된 번들(구 서버 — allowlist 판정이라 빈 테이블 무영향)로 재배포
+   → flyway 가 `etf_instrument` 를 만든다.
+2. SSM 으로 시드 적재. 내용은 레포 로컬 시드와 동일(`src/libs/schema/seed-local-onprem/`
+   `R__seed_etf_instrument.sql`, 38종 — 멱등이라 재실행 무해):
+
+   ```bash
+   # 시드 SQL 을 박스에 올린 뒤 (또는 SSM Run Command 로 파일 내용 전달)
+   docker compose exec -T postgres-onprem psql -U edge -d edge_onprem < R__seed_etf_instrument.sql
+   docker compose exec postgres-onprem psql -U edge -d edge_onprem -c "SELECT count(*) FROM etf_instrument;"   # = 38
+   ```
+
+3. 서빙 전환 빌드 배포 — 시드가 이미 있어 404 공백 구간이 생기지 않는다.
+
+순서를 건너뛰고 전환 빌드를 곧장 배포했다면, 시드 적재(2)까지 전 종목이 404 다 — 적재
+즉시 회복된다(앱 재기동 불요, 판정은 매 요청 DB 조회).
+
 ## 로컬 풀스택과의 차이
 
 - `build:` → `image:`(ECR). 박스는 소스 빌드 안 함.

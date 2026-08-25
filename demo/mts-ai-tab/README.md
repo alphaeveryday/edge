@@ -22,7 +22,7 @@ PORT=18090 node demo/mock-broker/server.js
 
 ## 구조 — 계약의 신뢰경계 재현
 
-설명 조회는 위젯의 Publication API **직접 호출**이다([ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md), ALPHA-992) — 동일 오리진 `/api/v1/*` 경로를 박스에서는 CloudFront behavior 가, 로컬에서는 mock-broker 의 무변형 passthrough(엣지 스탠드인, 쿠키·인증 헤더 strip)가 publication-api 로 보낸다. 응답 상태(200/204/404 등)의 화면 해석은 broker-api.js 가 한다.
+설명 조회는 위젯의 Publication API **직접 호출**이다([ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md), ALPHA-992) — 동일 오리진 `/api/v1/*` 경로를 박스에서는 CloudFront behavior 가, 로컬에서는 mock-broker 의 무변형 passthrough(엣지 스탠드인, 쿠키·인증 헤더 strip)가 publication-api 로 보낸다. 응답의 화면 해석은 broker-api.js 가 한다 — 성공은 200 + 공통 응답 포맷이고 설명 없음은 result 키 생략이다(ADR-0054, 과도기 M1 은 구 204·맨몸 200 도 병행 수용).
 
 ```
 app.js (MTS 3화면 — 홈·검색·종목상세)
@@ -66,9 +66,9 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
 
 응답 데이터는 cloud 시드(`src/libs/schema/seed-local-cloud`)의 전달 레코드가 동기화 경로
 (sync-agent→intake→screening-worker)를 관통해 만든 온프렘 게시분이다
-(200 게시분: 091160 = 2026-07-16 수령 디자인 리포트, 069500 = 2026-07-15. compose 가
-`PUBLICATION_KNOWN_TICKERS` 로 091160 을 지원 종목에 추가한다).
-게시 상태를 바꾸면 화면에 즉시 반영된다: `docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c "UPDATE publication SET status='UNPUBLISHED' WHERE status='PUBLISHED';"` → 조회가 204(NO_DATA)로 바뀐다.
+(200 게시분: 091160 = 2026-07-16 수령 디자인 리포트, 069500 = 2026-07-15. 지원 종목
+판별은 온프렘 종목 마스터 etf_instrument — 로컬은 seed-local-onprem 시드가 38종을 공급한다).
+게시 상태를 바꾸면 화면에 즉시 반영된다: `docker exec edge-postgres-onprem psql -U edge -d edge_onprem -c "UPDATE publication SET status='UNPUBLISHED' WHERE status='PUBLISHED';"` → 조회가 설명 없음(result 생략 200, NO_DATA 안내)으로 바뀐다.
 
 `/`는 홈 화면에서 시작한다 — 검색·관심종목에서 종목을 탭해 상세로 들어가고, AI 분석 탭을 누르면
 실호출이 나간다. 관심종목의 삼성전자 등 비 ETF 종목은 AI 분석 탭에서 404(미지원 종목) 상태가
@@ -78,8 +78,8 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
 |---|---|
 | `/?ticker=091160` | 200 — KODEX 반도체 리포트(수령 디자인 본문) 노출 |
 | `/?ticker=069500` | 200 — KODEX 200 설명 노출 |
-| `/?ticker=305720` | 204 — 상장 종목이나 설명 없음(정상) 안내 |
+| `/?ticker=305720` | 설명 없음(result 생략 200) — 상장 종목이나 설명 없음(정상) 안내 |
 | `/?ticker=000001` | 404 — 미지원 종목 안내 |
-| `/?trade_date=2026-07-01` | 204 — 해당 기준일 게시분 없음 (기본 종목 069500) |
+| `/?trade_date=2026-07-01` | 설명 없음(result 생략 200) — 해당 기준일 게시분 없음 (기본 종목 069500) |
 | `/?trade_date=2026-7-1` | 400 — 형식 오류(폴백 문구 + 브라우저 콘솔 `[broker-api]` 경고 — 상태 해석이 위젯 소관, ALPHA-992) |
 | publication-api 중지 후 조회 | 5xx/통신 실패 — 폴백 문구 |
