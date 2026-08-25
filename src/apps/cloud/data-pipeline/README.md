@@ -189,8 +189,8 @@
 > 업종지수 세션은 09:00~15:30 이고 가격은 20:00 까지라, 가격 EOD 확정은 이 시각을 쓸 수
 > 없다(ALPHA-839 소관).
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
-> 연속 확인). ⚠️ 스케줄러는 RunTask **제출**까지만 보므로 컨테이너 exit≠0 은 관측되지
-> 않는다 — daily 레인의 Reconciler 같은 백스톱이 이 레인엔 아직 없다.
+> 연속 확인). 스케줄러는 RunTask **제출**까지만 보지만, ECS Task State Change rule이
+> minute-session task family의 컨테이너 exit≠0을 기존 alarm SNS topic으로 올린다.
 > ⚠️ **analysis-consumer 는 세션이 스케일하지 않는다**(ALPHA-912 — 컷오버 완료). desired 는
 > 큐 잔여 일감(가시+처리중)을 보는 오토스케일링이 소유하고(`analysis_autoscaling.tf`),
 > 세션이 이 서비스에 대해 하는 일은 **공용 목록에서 이름을 빼는 것뿐**이다 —
@@ -1531,7 +1531,7 @@ DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 # 한다(그게 계약이고 크론이 그것을 지킨다). 비거래일엔 흔들 계획이 없어 시각을 안 본다.
 # ⚠️ **새 축을 담은 객체는 이미지 배포 뒤에 올린다.** Universe 는 extra="forbid" 라
 # 옛 이미지가 읽으면 ValidationError 이고, planner 가 exit 2 면 스케일업을 안 해 그날
-# 레인이 안 뜬다(그 실패는 관측되지 않는다 — 위 "exit≠0 은 관측되지 않는다" 참고).
+# 레인이 안 뜬다(그 실패는 minute-session non-zero exit 경보로 드러난다).
 # 반대 순서는 안전하다(축 기본값이 ()이라 옛 객체는 그대로 읽힌다).
 #
 # 파일로만 뽑아 눈으로 대조할 땐 스크립트를 쓴다(업로드하지 않는다. `--out` 없으면 stdout).
