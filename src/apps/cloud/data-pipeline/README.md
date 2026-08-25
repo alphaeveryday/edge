@@ -1587,10 +1587,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 #   · `settled_day_count` — 그 **분모**(후보 일수). 빈 목록은 "구멍 없음"과 "본 게 없음"
 #     둘 다라 분모 없이는 못 가른다
 # ⚠️ 판정 축 셋:
-#   · 세션 phase = `session_ops.DRAINED_PHASES` **+ `DRAINING`**. FINALIZED 로 물으면 안
-#     된다 — dev 실측(2026-08-07)에서 FINALIZED 는 **0건**이고 전 세션이 DRAINED 에 멈춰
-#     있다(`qc-minute-session` 이 안 돈다). DRAINING 을 넣는 것은 stop 이 상한 초과한 날이
-#     거기 영구 고착하는데 **그날이 rollup 도 실패할 확률이 가장 높기** 때문이다.
+#   · 세션 phase = `FINALIZED`이고 `final_checksum`이 64자리 소문자 sha256인 값. EOD QC가
+#     원장과 artifact를 대조해 checksum으로 봉인한 날만 settled다. DRAINED·QC_RUNNING·
+#     FAILED와 checksum이 없거나 잘못된 FINALIZED는 후속 rollup 결손 판정의 후보가 아니다.
 #   · 날짜 창은 `[rollup.scan_lower(), 오늘)` — **`--session-date` 와 무관하게 오늘**이
 #     상한이고, 하한은 롤업이 소유하는 가장 이른 날이다(경계 앞 예외를 포함한다 —
 #     소유하는 날은 감시해야 구멍이 조용히 남지 않는다).
@@ -1626,10 +1625,16 @@ DATA_PIPELINE_DB__PASSWORD=... \
 #   업종지수는 09:00~15:30 격자라 그 하한이 훨씬 이르다(16:00 근거는 terraform 주석).
 #   `OPS_KR_HOLIDAYS` 는 `aws_ecs_task_definition.minute_session` 에 **이미 주입돼 있다**
 #   — 그 task-def 를 재사용하면 자동 충족이고, 새 task-def 를 파면 필수다.
+AWS_PROFILE=edge \
+DATA_PIPELINE_STORAGE__BACKEND=s3 \
+DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04
 # 업종지수(45종 → part-sector-index.parquet). source-group 은 kis 뿐이다.
+AWS_PROFILE=edge \
+DATA_PIPELINE_STORAGE__BACKEND=s3 \
+DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset sector_index_minute \
     --source-group kis --session-date 2026-08-10
@@ -1852,14 +1857,21 @@ MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES=edge-dev-data-pipeline-sector-index-
 # 집고 있던 window 가 조용히 결손된다.
 # exit: 0=QC 성공/재사용 뒤 내렸음(또는 오늘 세션이 없어 미변경) / 1=상한까지 게이트가
 # 안 비어 **내리지 않았거나** QC 불변식 위반 / 2=drain 또는 QC 실행 자체를 못 함.
+AWS_PROFILE=edge \
+DATA_PIPELINE_STORAGE__BACKEND=s3 \
+DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
 MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill,edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
+MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP=dart \
+MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES=edge-dev-data-pipeline-disclosure-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
 MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
+MINUTE_SESSION_SECTOR_INDEX_SOURCE_GROUP=kis \
+MINUTE_SESSION_SECTOR_INDEX_WORKER_SERVICES=edge-dev-data-pipeline-sector-index-worker \
 MINUTE_SESSION_GATE_QUEUES=https://sqs.../edge-dev-data-pipeline-price-analysis-realtime,https://sqs.../edge-dev-data-pipeline-news-extraction-realtime \
 MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis

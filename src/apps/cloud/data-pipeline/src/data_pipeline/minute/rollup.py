@@ -546,11 +546,9 @@ def unfilled_settled_days(
     만드는 대신 **파티션 부재**를 물어보는 것으로 1차를 대신한다: 재료(1분)가 더 이상
     변하지 않는 날에 파생이 없으면 그건 결손이고, 그 판정에 새 표가 필요 없다.
 
-    ⚠️ 세션 축이 `FINALIZED` 가 **아니다**. 의미상으론 그게 정확해 보이지만 dev 실측
-    (2026-08-07)에서 `FINALIZED` 세션은 **0건**이다 — 전 세션이 `DRAINED` 에 멈춰 있고
-    `qc-minute-session` 이 돌지 않는다. `FINALIZED` 로 물으면 이 판정은 영영 빈 목록을
-    내면서 "구멍 없음"으로 보인다(안 본 것을 0건으로 확정하는 자리다). 정확한 축과 그
-    확장 사유는 `_settled_session_dates` 에 있다.
+    세션 축은 `FINALIZED` 다. EOD QC가 원장과 artifact를 대조해 checksum으로 봉인한
+    날만 재료가 더 이상 변하지 않는 것으로 인정한다. `DRAINED`·`QC_RUNNING`·`FAILED`는
+    QC가 끝나지 않았으므로 후속 결손 판정의 후보가 아니다.
 
     ⚠️ 파티션 축이 둘이다. "파티션이 통째로 비었나" 하나로 물으면 `_rollup_day` 가 타
     writer 파일 때문에 거부한 날이 영원히 "채워짐"으로 보이고(파생은 영영 안 나오는데
@@ -609,35 +607,34 @@ def unfilled_settled_days(
 def _settled_session_dates(
     ledger, *, dataset: str, source_group: str, before: date
 ) -> list[str]:
-    """원장이 더 이상 진행하지 않는 세션의 거래일 — **롤업이 소유하는 날**·`before` 이전.
+    """QC로 확정된 세션의 거래일 — **롤업이 소유하는 날**·`before` 이전.
 
     🔴 창을 `WRITER_SINCE` 로만 잡으면 **소유권과 감시가 갈린다**. 예외일
     (`WRITER_OWNED_BEFORE_SINCE`)은 정의상 경계보다 앞이므로, 롤업 소유가 되면서 동시에
     이 판정에서 영구 제외된다 — 그날이 비어 있어도 매일 `unfilled=[] contested=[]` 로
     초록이 나고, 백필은 이미 손을 뗐으니 채울 주체도 없다. **소유하는 날은 감시한다.**
 
-    ⚠️ phase 집합에 `DRAINING` 을 **포함한다**. `DRAINED_PHASES` 만 쓰면 `stop` 이 상한
-    초과로 exit 1 한 날이 `DRAINING` 에 영구 고착하는데(ack 할 워커가 이미 없고 다음날
-    start 는 새 session_id 를 만든다), 그날은 rollup 도 실패할 확률이 가장 높다 —
-    **가장 위험한 날이 판정에서 구조적으로 빠진다.**
+    `FINALIZED`만 보는 이유는 phase 이름이 아니라 QC가 기록한 `final_checksum`의 경계다.
+    DRAINED 이전은 아직 작업 중이고, DRAINED 이후라도 QC_RUNNING·FAILED는 원장과 artifact
+    대조가 끝나지 않았다. 이 상태를 settled로 세면 미확정 재료의 파생 부재를 결손으로
+    확정한다.
 
     ⚠️ `before` 는 **오늘(KST)** 이다 — `--session-date` 로 지목한 대상 날짜가 아니다.
-    오늘을 빼는 이유는 진행 중인 `DRAINING` 을 고착으로 오인하지 않기 위해서고(오늘의
-    결손은 실행 자신의 exit code 와 `key` 가 말한다), **대상 날짜를 빼면 안 되는** 이유는
+    오늘을 빼는 이유는 오늘의 산출 결과를 과거 결손 감시와 중복 판정하지 않기 위해서다
+    (오늘의 결손은 실행 자신의 exit code 와 `key` 가 말한다). **대상 날짜를 빼면 안 되는** 이유는
     과거 하루를 손으로 되돌리는 실행 — 이 스텝이 존재하는 이유 — 에서 감시 창이 가장
     좁아지기 때문이다. 실측: 대상일을 넘기면 하한(`>= WRITER_SINCE`)과 상한이 겹쳐
     **후보가 구조적으로 항상 0**이 되고, 분모 경보가 거짓으로 뜬다. 날짜를 여기 적지
     않는다 — 경계는 옮겨지고(ALPHA-836), 박아 두면 옮길 때 하나만 고쳐진다.
     """
-    from .session_ops import DRAINED_PHASES
-
     with ledger.connect_fn(ledger.db) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT session_date FROM minute_ingestion_session "
-            "WHERE dataset = %s AND source_group = %s AND phase = ANY(%s) "
+            "WHERE dataset = %s AND source_group = %s "
+            "AND phase = 'FINALIZED' "
+            "AND final_checksum ~ '^[0123456789abcdef]{64}$' "
             "AND session_date >= %s AND session_date < %s ORDER BY session_date",
-            (dataset, source_group, sorted(DRAINED_PHASES | {"DRAINING"}),
-             date.fromisoformat(scan_lower()), before),
+            (dataset, source_group, date.fromisoformat(scan_lower()), before),
         )
         # 하한은 예외까지 담게 **넓히고**, 소유 판정은 `writer_owns` 하나로 한다 — 넓힌
         # 구간에는 백필 소유일도 섞여 오므로 여기서 다시 걸러야 두 축이 안 갈린다.

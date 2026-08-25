@@ -821,12 +821,13 @@ class TestSectorIndexRollup:
 
 
 class TestUnfilledSettledDays:
-    """구멍 판정 — 원장이 멈춘 거래일에 파생이 없는 날."""
+    """구멍 판정 — QC로 확정된 거래일에 파생이 없는 날."""
 
-    def settle(self, fx, session_date: str, phase: str = "DRAINED"):
+    def settle(self, fx, session_date: str, phase: str = "FINALIZED"):
         for row in fx.db.sessions.values():
             if row["session_date"] == date.fromisoformat(session_date):
                 row["phase"] = phase
+                row["final_checksum"] = "a" * 64 if phase == "FINALIZED" else None
 
     def scan(self, fx, before: date = SESSION_DAY + timedelta(days=1), *,
              dataset: str = DATASET_PRICE_MINUTE, source_group: str = "toss"):
@@ -896,10 +897,9 @@ class TestUnfilledSettledDays:
         self.settle(fx, older)
         assert older not in self.unfilled(fx)
 
-    def test_drained_day_without_partition_is_reported(self, tmp_path):
-        # ⚠️ 축이 DRAINED 다. FINALIZED 로 물으면 dev 원장에서 영영 0건이다 — 실측
-        # 2026-08-07 기준 FINALIZED 세션이 **한 건도 없고** 전부 DRAINED 에 멈춰 있다
-        # (qc-minute-session 이 안 돈다). 안 본 것을 "구멍 없음"으로 확정하는 자리다.
+    def test_finalized_day_without_partition_is_reported(self, tmp_path):
+        # QC가 checksum으로 봉인한 날인데 파생이 없으면 후속 결손이다. FINALIZED를
+        # 후보로 세지 않으면 실제 구멍을 "본 게 없음"으로 숨긴다.
         fx = Fixture(tmp_path)
         self.settle(fx, SESSION_DATE)
         assert self.unfilled(fx) == [SESSION_DATE]
@@ -966,24 +966,29 @@ class TestUnfilledSettledDays:
         assert self.unfilled(fx) == [SESSION_DATE]
         assert self.contested(fx) == []
 
-    def test_live_session_is_not_a_hole(self, tmp_path):
-        # 아직 도는 세션(PLANNED·ACTIVE·DRAINING)은 원장이 움직이는 중이라 "재료가
-        # 안 변하는데 파생이 없다"가 성립하지 않는다 — 장중에 오늘이 결손으로 잡히면
-        # 목록이 매일 거짓 양성으로 시작한다.
+    def test_only_finalized_session_is_settled(self, tmp_path):
+        # FINALIZED 전에는 재료가 확정되지 않았다. 특히 DRAINED를 포함하면 stop과 QC
+        # 사이의 정상 창을, QC_RUNNING·FAILED를 포함하면 판정 미완료를 후속 결손으로
+        # 오인한다.
         fx = Fixture(tmp_path)
-        assert self.unfilled(fx) == []          # 계획 직후 = PLANNED
-        self.settle(fx, SESSION_DATE, phase="ACTIVE")
-        assert self.unfilled(fx) == []
-        self.settle(fx, SESSION_DATE, phase="FAILED")   # QC 가 모순을 찾은 날은 본다
+        for phase in ("PLANNED", "ACTIVE", "DRAINING", "DRAINED", "QC_RUNNING", "FAILED"):
+            self.settle(fx, SESSION_DATE, phase=phase)
+            assert self.unfilled(fx) == [], phase
+        self.settle(fx, SESSION_DATE, phase="FINALIZED")
         assert self.unfilled(fx) == [SESSION_DATE]
 
-    def test_stuck_draining_day_is_reported(self, tmp_path):
-        # stop 이 상한 초과로 exit 1 하면 세션이 DRAINING 에 영구 고착한다(ack 할 워커가
-        # 없고 다음날 start 는 새 session_id 를 만든다). 그날은 rollup 도 실패할 확률이
-        # 가장 높으므로, DRAINED_PHASES 만 보면 **가장 위험한 날이 판정에서 빠진다**.
+    def test_finalized_without_valid_checksum_is_not_settled(self, tmp_path):
+        # phase만 손으로 바뀐 malformed 행은 QC 봉인이 아니다. 스키마가 이 결합과
+        # checksum 형식을 제약하지 않으므로 소비자가 유효한 sha256까지 확인해야 한다.
         fx = Fixture(tmp_path)
-        self.settle(fx, SESSION_DATE, phase="DRAINING")
-        assert self.unfilled(fx) == [SESSION_DATE]
+        self.settle(fx, SESSION_DATE)
+        malformed = (None, "", "a" * 63, "a" * 65, "A" * 64, "g" * 64)
+        for checksum in malformed:
+            for row in fx.db.sessions.values():
+                if row["session_date"] == SESSION_DAY:
+                    row["final_checksum"] = checksum
+            assert self.unfilled(fx) == [], checksum
+            assert self.candidates(fx) == 0, checksum
 
     def test_today_is_excluded(self, tmp_path):
         # 오늘은 이 판정의 대상이 아니다 — 진행 중인 DRAINING 을 고착으로 오인하면 매일
@@ -1033,9 +1038,13 @@ class TestRollupSessionCli:
         monkeypatch.setattr(mod, "_scan_before", lambda: SESSION_DAY + timedelta(days=7))
         return db
 
-    def plan(self, db, session_date: str, *, phase: str = "DRAINED") -> str:
+    def plan(self, db, session_date: str, *, phase: str = "FINALIZED") -> str:
         """원장에 실제 세션을 만든다 — dict 를 손으로 심으면 필드가 빠져 `session_snapshot`
-        이 KeyError 로 죽고, 그게 except 에 잡혀 **테스트가 의도한 경로를 안 밟는다**."""
+        이 KeyError 로 죽고, 그게 except 에 잡혀 **테스트가 의도한 경로를 안 밟는다**.
+
+        기본 phase는 settled 판정의 유일한 자격인 FINALIZED다. 다른 lifecycle phase를
+        검증하는 테스트만 명시적으로 덮는다.
+        """
         from data_pipeline.config import DbConfig
         from data_pipeline.minute.repository import MinuteLedger
 
@@ -1048,6 +1057,7 @@ class TestRollupSessionCli:
             windows=plan_session_windows(day, universe=UNIVERSE, extended_hours=True),
         )
         db.sessions[sid]["phase"] = phase
+        db.sessions[sid]["final_checksum"] = "a" * 64 if phase == "FINALIZED" else None
         return sid
 
     def run(self, settings, **kw):
