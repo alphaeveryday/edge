@@ -39,6 +39,7 @@ def _krx_row(**over) -> dict:
     row = {"COMPST_ISU_CD": "005930", "COMPST_ISU_CD2": "KR7005930003",
            "COMPST_ISU_NM": "삼성전자", "COMPST_ISU_CU1_SHRS": "1,000",
            "VALU_AMT": "5,000,000", "COMPST_AMT": "5,000,000", "COMPST_RTO": "30.5",
+           "SECUGRP_ID": "ST", "MKT_ID": "STK",
            "our_etf_id": "069500", "market": "KR", "isin": "KR7069500007",
            "trd_dd": "20260714", "fetched_at": "2026-07-14T00:00:00+00:00"}
     row.update(over)
@@ -225,19 +226,58 @@ def test_krx_non_listed_holding_has_no_mic(tmp_path):
     # WHY: 원화현금(KRD010010001)은 MKT_ID·SECUGRP_ID 가 빈 문자열로 온다(실측) — 거래소에
     #      상장된 종목이 아니다. MIC=None 이 곧 그 사실이고, 우리 RDB 는
     #      instrument.market_code NOT NULL 이라 이 행은 애초에 instrument 가 될 수 없다.
-    #      그래서 별도 증권유형 어휘를 만들지 않는다. 단 구성종목 자체는 canonical 에 보존한다
+    #      canonical 에 CASH로 명시해 하류가 지원 제외와 실제 유실을 구분한다. 구성종목 자체는 보존한다
     #      (ETF 의 실제 보유분이라 비중합이 맞아야 한다).
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("krx", "KR"), [
         _krx_row(COMPST_ISU_CD="KRD010010001", COMPST_ISU_CD2="KRD010010001",
-                 COMPST_ISU_NM="원화현금", MKT_ID="", COMPST_RTO="0.03"),
+                 COMPST_ISU_NM="원화현금", SECUGRP_ID="", MKT_ID="", COMPST_RTO="0.03"),
     ])
     assert normalize_etf.run(storage, "R1") == 0
 
     rows = _canonical_rows(storage, "KR", "2026-07-14")
     assert len(rows) == 1, "비상장 보유분도 canonical 에는 남아야 한다(비중합 보존)"
     assert rows[0]["constituent_mic"] is None
+    assert rows[0]["constituent_asset_type"] == "CASH"
     assert rows[0]["weight_pct"] == 0.03
+
+
+def test_krx_asset_type_uses_only_observed_code_combinations():
+    # WHY: 지원 제외를 넓게 추측하면 새 자산 유형이 유실에서 사라진다. 실측 조합만 분류하고
+    #      미지 코드는 UNKNOWN으로 남겨 하류 실패 계측이 계속 울려야 한다.
+    assert normalize_etf._constituent_asset_type("krx", _krx_row()) == "EQUITY"
+    assert normalize_etf._constituent_asset_type(
+        "krx", _krx_row(COMPST_ISU_CD="KRD010010001", SECUGRP_ID="", MKT_ID="")
+    ) == "CASH"
+    assert normalize_etf._constituent_asset_type(
+        "krx", _krx_row(SECUGRP_ID="OP", MKT_ID="DRV")
+    ) == "OPTION"
+    assert normalize_etf._constituent_asset_type(
+        "krx", _krx_row(SECUGRP_ID="BD", MKT_ID="STK")
+    ) == "UNKNOWN"
+    for malformed in (None, [], True):
+        assert normalize_etf._constituent_asset_type(
+            "krx", _krx_row(COMPST_ISU_CD="KRD010010001", SECUGRP_ID=malformed, MKT_ID="")
+        ) == "UNKNOWN"
+    for secugrp_id, mkt_id in ((" ", " "), ("st", "stk"), (" op ", " drv ")):
+        assert normalize_etf._constituent_asset_type(
+            "krx", _krx_row(
+                COMPST_ISU_CD="KRD010010001", SECUGRP_ID=secugrp_id, MKT_ID=mkt_id
+            )
+        ) == "UNKNOWN"
+    missing_codes = _krx_row(COMPST_ISU_CD="KRD010010001")
+    missing_codes.pop("SECUGRP_ID")
+    missing_codes.pop("MKT_ID")
+    assert normalize_etf._constituent_asset_type("krx", missing_codes) == "UNKNOWN"
+    assert normalize_etf._constituent_asset_type("fmp", _fmp_row()) == "UNKNOWN"
+
+
+def test_krx_option_does_not_emit_unknown_market_warning(caplog):
+    # WHY: DRV는 OP와 함께 오면 관측된 정상 옵션 조합이다. 지원 제외 행마다 매핑 누락 경고가
+    #      뜨면 실제 새 시장 코드 경고가 정상 노이즈에 묻힌다.
+    with caplog.at_level("WARNING"):
+        assert normalize_etf._krx_mic(_krx_row(SECUGRP_ID="OP", MKT_ID="DRV")) is None
+    assert not caplog.records
 
 
 def test_unknown_krx_market_id_surfaces_instead_of_silent_null(tmp_path, caplog):
@@ -263,3 +303,35 @@ def test_fmp_holdings_have_no_mic(tmp_path):
 
     rows = _canonical_rows(storage, "US", "2026-07-11")
     assert rows[0]["constituent_mic"] is None
+
+
+def test_canonical_rewrite_removes_stale_part_files(tmp_path):
+    # WHY: 새 스키마 part-00000만 덮고 구형 part를 남기면 하류가 둘 다 읽어 같은 행을
+    # EQUITY와 UNKNOWN으로 이중 계측한다. 파티션은 한 파일로 원자적으로 수렴해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [_krx_row()])
+    assert normalize_etf.run(storage, "R1") == 0
+    prefix = canonical_etf_holdings_partition("KR", "2026-07-14")
+    part0 = f"{prefix}/part-00000.parquet"
+    storage.put_bytes(f"{prefix}/part-00001.parquet", storage.get_bytes(part0))
+    nested = f"{prefix}/archive/part-backup.parquet"
+    storage.put_bytes(nested, storage.get_bytes(part0))
+
+    assert normalize_etf.run(storage, "R2") == 0
+    assert f"{prefix}/part-00001.parquet" not in storage.list_keys(prefix + "/")
+    assert part0 in storage.list_keys(prefix + "/")
+    assert storage.get_bytes(nested), "직접 자식이 아닌 보관 객체를 삭제했다"
+
+
+def test_timezone_없는_fetched_at은_canonical_최신행으로_승격하지_않는다(tmp_path):
+    # WHY: 절대시각이 아닌 값을 UTC로 가정하면 유효한 기존 행을 덮고, 하류는 그 행을 다시
+    # 거부해 보유관계 자체가 사라진다. 생산 단계에서 bad_fetched_at으로 격리해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [
+        _krx_row(fetched_at="2026-07-14T02:00:00")
+    ])
+
+    assert normalize_etf.run(storage, "R1") == 0
+    log = _quality_log(storage)
+    assert log["records_passed"] == 0
+    assert log["failures"][0]["reasons"] == ["bad_fetched_at"]

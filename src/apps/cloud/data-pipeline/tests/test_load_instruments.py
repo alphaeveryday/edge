@@ -17,7 +17,7 @@ from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
 from data_pipeline.steps import load_instruments
 
 _COLUMNS = ("market", "etf_id", "constituent_ticker", "constituent_isin", "constituent_name",
-            "constituent_mic", "weight_pct", "shares", "market_value", "currency",
+            "constituent_mic", "constituent_asset_type", "weight_pct", "shares", "market_value", "currency",
             "as_of_date", "source_vendor", "fetched_at")
 
 
@@ -39,7 +39,8 @@ def _write_canonical(storage, market: str, as_of: str, rows: list[dict]) -> None
 def _holding(ticker: str, name: str, mic: str | None = "XKRX", **over) -> dict:
     row = {"market": "KR", "etf_id": "091160", "constituent_ticker": ticker,
            "constituent_isin": f"KR7{ticker}00", "constituent_name": name,
-           "constituent_mic": mic, "weight_pct": 10.0, "shares": 100.0, "market_value": 1e8,
+           "constituent_mic": mic, "constituent_asset_type": "EQUITY",
+           "weight_pct": 10.0, "shares": 100.0, "market_value": 1e8,
            "currency": "KRW", "as_of_date": "2026-07-15", "source_vendor": "krx",
            "fetched_at": "2026-07-15T00:00:00+00:00"}
     row.update(over)
@@ -151,7 +152,9 @@ def test_holding_without_mic_is_not_an_instrument(tmp_path, monkeypatch):
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("005930", "삼성전자"),
-        _holding("KRD010010001", "원화현금", mic=None),
+        _holding("KRD010010001", "원화현금", mic=None, constituent_asset_type="CASH"),
+        _holding("KR4101W80000", "KOSPI200 위클리 옵션", mic=None,
+                 constituent_asset_type="OPTION"),
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
@@ -159,6 +162,25 @@ def test_holding_without_mic_is_not_an_instrument(tmp_path, monkeypatch):
     assert load_instruments.run(storage, "R1", db=_db()) == 0
     tickers = [t for (_i, _m, t, _c) in _inserts(conn, "instrument")]
     assert tickers == ["005930"], "비상장 보유분이 종목으로 둔갑했다"
+
+
+@pytest.mark.parametrize("asset_type", [None, []], ids=["missing-column", "malformed-list"])
+def test_unknown_asset_type_is_not_seeded_as_equity(tmp_path, monkeypatch, asset_type):
+    """미지 유형을 MIC만 보고 주식으로 세우면 새 KRX 유형이 회사·주식으로 조용히 오염된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+    monkeypatch.setattr(
+        load_instruments, "_read_parquet_rows",
+        lambda _data: [_holding("005930", "삼성전자", constituent_asset_type=asset_type)],
+    )
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    assert _inserts(conn, "instrument") == []
+    log = _quality(storage)
+    assert log["skipped_unknown_asset_type"] == 1
+    assert log["ops"]["failed_records"] == 1
 
 
 def test_existing_ticker_is_not_recreated(tmp_path, monkeypatch):
@@ -196,7 +218,9 @@ def test_run_log_records_what_happened(tmp_path, monkeypatch):
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("005930", "삼성전자"),
-        _holding("KRD010010001", "원화현금", mic=None),
+        _holding("KRD010010001", "원화현금", mic=None, constituent_asset_type="CASH"),
+        _holding("KR4101W80000", "KOSPI200 위클리 옵션", mic=None,
+                 constituent_asset_type="OPTION"),
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
@@ -204,8 +228,11 @@ def test_run_log_records_what_happened(tmp_path, monkeypatch):
     assert load_instruments.run(storage, "R1", db=_db()) == 0
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
-    assert log["constituents_read"] == 2
-    assert log["skipped_no_mic"] == 1
+    assert log["constituents_read"] == 3
+    assert log["skipped_no_mic"] == 0
+    assert log["skipped_unsupported_asset"] == 2
+    assert log["unsupported_asset_counts"] == {"CASH": 1, "OPTION": 1}
+    assert log["ops"]["failed_records"] == 0
     assert log["created"] == 1
     assert log["created_rows"][0]["ticker"] == "005930"
 
@@ -495,14 +522,14 @@ def test_profile_row_without_mic_is_not_an_instrument(tmp_path, monkeypatch):
     WHY: `instrument.market_code NOT NULL` 이라 넣으면 터진다. 조용히 건너뛰면 몇 종이
     빠졌는지 아무도 모르므로 센다(Rule 12).
 
-    ⭐**구성종목의 `skipped_no_mic` 과 다른 카운터**여야 한다. 저쪽은 원화현금 때문에 매 런
-    정상적으로 1 이상이라, 합치면 이쪽의 이상(정제 canonical 이 낡아 전 행이 떨어지는 것)이
-    정상값에 묻혀 원장에서 안 보인다.
+    ⭐구성종목의 지원 제외 카운터와 다른 카운터여야 한다. 전종목 MIC 결측은 정제 canonical이
+    낡았다는 이상이며 정상 현금과 합치면 원장에서 원인이 가려진다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("069500", "KODEX200구성", mic="XKRX"),
-        _holding("KRD010010001", "원화현금", mic=None)])          # 구성종목 축의 정상 결측
+        _holding("KRD010010001", "원화현금", mic=None,
+                 constituent_asset_type="CASH")])                 # 구성종목 축의 정상 제외
     _write_instrument_profile(storage, "KR", "2026-08-06", [
         _instrument_profile_row("005930", "삼성전자"),
         _instrument_profile_row("XXXXXX", "미상", mic=None)])     # 전종목 축의 이상
@@ -514,7 +541,7 @@ def test_profile_row_without_mic_is_not_an_instrument(tmp_path, monkeypatch):
     assert len(_inserts(conn, "instrument")) == 2                 # 069500 + 005930
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     log = json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
-    assert log["skipped_no_mic"] == 1                 # 구성종목 축(원화현금)
+    assert log["skipped_unsupported_asset"] == 1       # 구성종목 축(원화현금)
     assert log["instrument_profiles_no_mic"] == 1     # 전종목 축 — 합쳐지면 안 된다
     assert log["instrument_profiles_read"] == 2
 
@@ -762,20 +789,16 @@ def test_유니버스_뿌리_밖_ETF_의_구성종목은_마스터에_시딩하�
     assert tickers == ["005930"], "참조 계열 구성종목이 마스터에 시딩됐다"
 
 
-def test_MIC_결측_행은_대상_밖으로_재분류되지_않는다(tmp_path, monkeypatch):
-    """`etf_id` 결측 행은 `skipped_no_mic`(유실)에 남는다 — 검사 **순서**가 의미다.
+def test_대상밖_ETF는_MIC_결측보다_먼저_정상제외한다(tmp_path, monkeypatch):
+    """유니버스 밖 ETF의 구성종목 품질은 현재 실행 대상이 아니므로 MIC 결측도 정상 제외다.
 
-    유니버스 뿌리 검사는 `x not in expected_etfs` 라 etf_id 가 없는 행도 참이 된다.
-    mic/ticker 가드보다 앞에 두면 그 행이 `skipped_foreign_etf`(유실 아님)로 새고
-    `ops.failed_records` 에서 빠진다 — MIC 해소 유실을 원장이 못 본다.
-
-    같은 주장이 `load_etf_holdings` 쪽엔 테스트가 있는데 여기엔 없었다(리뷰 지적):
-    주석만 있고 변이가 초록으로 통과했다. 주장은 테스트로 못 박는다.
+    단 identity 결측은 그보다 먼저 실패로 잡는다. 따라서 `etf_id`가 유효한 대상 밖 행만
+    MIC와 무관하게 `skipped_foreign_etf`로 빠져야 한다.
     """
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("005930", "삼성전자"),
-        _holding("105560", "KB금융", mic=None, etf_id=None),  # MIC 도 etf_id 도 없다
+        _holding("105560", "KB금융", mic=None, etf_id="102970"),  # MIC 결측 + 뿌리 밖
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
@@ -784,8 +807,44 @@ def test_MIC_결측_행은_대상_밖으로_재분류되지_않는다(tmp_path, 
         storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})) == 0
 
     log = _quality(storage)
-    assert log["skipped_no_mic"] == 1, "MIC 유실 행이 '대상 밖'으로 재분류됐다"
+    assert log["skipped_no_mic"] == 0
+    assert log["skipped_foreign_etf"] == 1
+
+
+def test_ETF_ID_결측_행은_대상_밖으로_재분류되지_않는다(tmp_path, monkeypatch):
+    """MIC가 정상이어도 etf_id가 없으면 유니버스 필터의 정상 제외가 아니라 canonical 손상이다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자"),
+        _holding("105560", "KB금융", etf_id=None),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(
+        storage, "R1", db=_db(), expected_etfs=frozenset({"091160"})
+    ) == 0
+    log = _quality(storage)
+    assert log["skipped_missing_identity"] == 1
     assert log["skipped_foreign_etf"] == 0
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_정체성_결측은_지원제외_유형보다_먼저_실패한다(tmp_path, monkeypatch):
+    """CASH라도 etf_id가 없으면 정상 지원 제외가 아니라 canonical identity 손상이다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("KRD010010001", "원화현금", mic=None, etf_id=None,
+                 constituent_asset_type="CASH"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    log = _quality(storage)
+    assert log["skipped_missing_identity"] == 1
+    assert log["skipped_unsupported_asset"] == 0
+    assert log["ops"]["failed_records"] == 1
 
 
 def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는다(tmp_path, monkeypatch):
@@ -800,11 +859,11 @@ def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는�
     _write_canonical(storage, "KR", "2026-07-15", [
         _holding("005930", "삼성전자", etf_id="102970"),
         _holding("000660", "SK하이닉스", etf_id="102970"),
-        # ⚠️ **운영 파티션 모양을 담는다.** KR canonical 에는 원화현금(MIC 없음) 행이 매 런
+        # ⚠️ **운영 파티션 모양을 담는다.** KR canonical 에는 지원 제외 원화현금 행이 매 런
         #    정상적으로 들어온다. 이 행이 없으면 게이트를 `foreign == read` 로 잘못 짜도
         #    테스트가 통과한다 — 실제로 그렇게 짰다가 리뷰에서 잡혔다(그 형태는 운영에서
         #    영원히 안 터진다. 게이트가 필요한 바로 그 상황에서 죽는다).
-        _holding("KRW", "원화현금", mic=None),
+        _holding("KRW", "원화현금", mic=None, constituent_asset_type="CASH"),
     ])
     conn = _FakeConn()
     monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
@@ -815,7 +874,7 @@ def test_구성종목이_전량_뿌리_밖이면_조용히_성공하지_않는�
     [gate] = [f for f in log["failures"] if f.get("reasons") == ["constituents_all_foreign"]]
     # 사유를 축별로 적는다 — "3건 전부 사용 불가"만 남으면 원화현금 때문인지 어휘가 갈린
     # 것인지 구분이 안 된다.
-    assert "MIC 결측 1" in gate["error"] and "뿌리 밖 2" in gate["error"]
+    assert "MIC 결측 0" in gate["error"] and "뿌리 밖 2" in gate["error"]
 
 
 def test_전량_탈락_게이트는_시장별로_본다(tmp_path, monkeypatch):
@@ -847,3 +906,109 @@ def test_전량_탈락_게이트는_시장별로_본다(tmp_path, monkeypatch):
              if f.get("reasons") == ["constituents_all_foreign"]]
     assert [g["market"] for g in gates] == ["US"], \
         "건강한 KR 이 US 의 전량 탈락을 가렸거나, 멀쩡한 KR 을 지목했다"
+
+
+def test_구성종목_행과_파티션_정체성이_다르면_적재하지_않는다(tmp_path, monkeypatch):
+    # WHY: KR 파티션의 US 행을 XKRX 종목으로 만들면 손상 데이터가 정상 마스터로 둔갑한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자", market="US", as_of_date="1999-01-01")
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 1
+    log = _quality(storage)
+    assert any(f["reasons"] == ["partition_identity_mismatch"] for f in log["failures"])
+    assert not _inserts(conn, "instrument")
+
+
+def test_구성종목_part_중복은_최신_fetched_at_행이_이긴다(tmp_path, monkeypatch):
+    # WHY: 파티션에 여러 part가 남아도 오래된 회사명으로 신규 마스터가 영구 고정되면 안 된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "OLD", fetched_at="2026-07-15T00:00:00+00:00")
+    ])
+    prefix = canonical_etf_holdings_partition("KR", "2026-07-15")
+    old = storage.get_bytes(f"{prefix}/part-00000.parquet")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "NEW", fetched_at="2026-07-16T00:00:00+00:00")
+    ])
+    storage.put_bytes(f"{prefix}/part-00001.parquet", storage.get_bytes(f"{prefix}/part-00000.parquet"))
+    storage.put_bytes(f"{prefix}/part-00000.parquet", old)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    assert _inserts(conn, "entity")[0][1] == "NEW"
+    log = _quality(storage)
+    assert log["deduplicated_rows"] == 1
+    assert log["ops"]["failed_records"] == 0
+
+
+def test_지원제외_part_중복도_논리행_한건으로_계측한다(tmp_path, monkeypatch):
+    # WHY: 현금 part 복제가 지원 제외 수를 늘리면 로더 둘이 같은 canonical을 서로 다르게 설명한다.
+    storage = LocalStorage(tmp_path / "lake")
+    cash = _holding("KRD010010001", "원화현금", mic=None, constituent_asset_type="CASH")
+    _write_canonical(storage, "KR", "2026-07-15", [cash])
+    prefix = canonical_etf_holdings_partition("KR", "2026-07-15")
+    storage.put_bytes(
+        f"{prefix}/part-00001.parquet", storage.get_bytes(f"{prefix}/part-00000.parquet")
+    )
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    log = _quality(storage)
+    assert log["skipped_unsupported_asset"] == 1
+    assert log["deduplicated_rows"] == 1
+    assert log["ops"]["failed_records"] == 0
+
+
+def test_서로_다른_ETF의_동일_현금은_각_보유행으로_센다(tmp_path, monkeypatch):
+    # WHY: 구성종목 마스터 자연키로 먼저 접으면 38개 ETF의 현금 보유가 1건으로 축소돼
+    # 대시보드의 1000=958+42 설명이 깨진다. part 중복만 접고 ETF별 보유행은 보존한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("KRD010010001", "원화현금", mic=None, etf_id="091160",
+                 constituent_asset_type="CASH"),
+        _holding("KRD010010001", "원화현금", mic=None, etf_id="102970",
+                 constituent_asset_type="CASH"),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    log = _quality(storage)
+    assert log["skipped_unsupported_asset"] == 2
+    assert log["deduplicated_rows"] == 0
+
+
+def test_비달력_최신_파티션은_종목_마스터를_오염시키지_않는다(tmp_path, monkeypatch):
+    # WHY: instrument writer가 날짜를 DB에 쓰지 않아 잘못된 파티션도 DB 오류 없이 종목을 만든다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "9999-99-99", [
+        _holding("005930", "삼성전자", as_of_date="9999-99-99")
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 1
+    assert not _inserts(conn, "instrument")
+    assert _quality(storage)["failures"][0]["reasons"] == ["bad_partition_date"]
+
+
+def test_KR_주식의_미지원_MIC는_마스터에_쓰지_않는다(tmp_path, monkeypatch):
+    # WHY: instrument.market_code에 FK가 없어 XNAS 오염도 DB가 받아주므로 writer가 시장 어휘를 막는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [
+        _holding("005930", "삼성전자", mic="XNAS")
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db()) == 0
+    log = _quality(storage)
+    assert log["skipped_unknown_mic"] == 1
+    assert log["ops"]["failed_records"] == 1
+    assert not _inserts(conn, "instrument")
