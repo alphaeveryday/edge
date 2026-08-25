@@ -47,7 +47,7 @@ public interface MinuteStatusRepository {
 			long missing, long invalid, long overdueNoEvidence) {
 	}
 
-	/** 결손·무증거 창 하나 — "그 구간이 어디인가"의 근거 목록(집계만 있는 화면 금지). */
+	/** 실패 unit·결손·무증거 창 하나 — "그 구간이 어디인가"의 근거 목록. */
 	record GapWindow(OffsetDateTime windowStart, OffsetDateTime windowEnd, String dataStatus,
 			boolean noEvidence) {
 	}

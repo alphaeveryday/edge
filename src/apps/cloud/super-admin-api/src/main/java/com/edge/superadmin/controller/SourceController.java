@@ -54,7 +54,7 @@ public class SourceController {
 		return ApiResponse.onSuccess(sourceService.holdingsImpact(runKey));
 	}
 
-	/** 장중 1분 파이프라인 요약(ALPHA-651) — 세션·창 집계·결손 창 목록. 검증은 서비스가 한다. */
+	/** 장중 1분 파이프라인 요약(ALPHA-651) — 세션·창 집계·문제 창 목록. 검증은 서비스가 한다. */
 	@GetMapping("/api/v1/sources/minute")
 	public ApiResponse<MinuteStatusResponse> minuteStatus(
 			@RequestParam(required = false) String date) {
