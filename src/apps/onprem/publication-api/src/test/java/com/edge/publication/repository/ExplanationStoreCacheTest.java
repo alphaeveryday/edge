@@ -10,7 +10,6 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,7 +36,7 @@ class ExplanationStoreCacheTest {
 		int loads = 0;
 
 		CountingStore(Duration ttl, Ticker ticker) {
-			super(null, Set.of("069500", "305720"), ttl, ticker);
+			super(null, ttl, ticker);
 		}
 
 		@Override

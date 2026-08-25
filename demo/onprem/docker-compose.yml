@@ -140,9 +140,10 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-onprem:5432/edge_onprem
       SPRING_DATASOURCE_USERNAME: edge
       SPRING_DATASOURCE_PASSWORD: ${ONPREM_DB_PASSWORD:-edge}
-      # 종목 마스터 동기화 전 allowlist — 분석 유니버스 32종(검색 노출과 일치, quotes-fallback.json 참조 — 300950 은 ALPHA-624 확장분) + 204 시나리오 305720.
-      # 133690(TIGER 미국나스닥100)은 의도적 제외 — AI 탭 404(미지원 종목) 시나리오 보존.
-      PUBLICATION_KNOWN_TICKERS: ${PUBLICATION_KNOWN_TICKERS:-069500,305720,091160,0005G0,0093A0,0167A0,0176P0,0182R0,0190G0,0210A0,091230,139260,261060,266370,300950,363580,388420,395160,395270,396500,455850,469150,471760,471780,471990,474590,475300,475310,476260,482030,486240,488210,494220}
+      # 상장 여부(404) 판별은 종목 마스터(etf_instrument)로 한다 — 구 PUBLICATION_KNOWN_TICKERS
+      # allowlist 은퇴(ADR-0054 후속 서빙 전환). 박스 유니버스는 배포 직후 수동 시드 38종
+      # (README "etf_instrument 시드" 절) — 133690(TIGER 미국나스닥100)은 의도적 제외로
+      # AI 탭 404(미지원 종목) 시나리오 보존.
     networks:
       - data
       - serving

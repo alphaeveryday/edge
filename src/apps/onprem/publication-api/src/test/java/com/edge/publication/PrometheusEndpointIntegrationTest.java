@@ -2,7 +2,9 @@ package com.edge.publication;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -26,10 +28,16 @@ class PrometheusEndpointIntegrationTest extends OnpremPostgresIntegrationTest {
 	@LocalServerPort
 	private int port;
 
+	@Autowired
+	private JdbcTemplate jdbc;
+
 	private RestClient rest;
 
 	@BeforeEach
 	void setUp() {
+		// 상장 판정이 종목 마스터로 옮겨졌다 — serveOnce() 의 305720 이 미상장이면 404 로 죽는다.
+		jdbc.update("INSERT INTO etf_instrument (etf_ticker, etf_name) VALUES (?, ?) "
+				+ "ON CONFLICT (etf_ticker) DO NOTHING", "305720", "테스트 ETF");
 		rest = RestClient.create("http://localhost:" + port);
 	}
 

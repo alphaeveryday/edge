@@ -3,6 +3,7 @@ package com.edge.publication.metrics;
 import com.edge.common.exception.ExceptionAdvice;
 import com.edge.publication.controller.ExplanationController;
 import com.edge.publication.entity.ServingRequestMetric;
+import com.edge.publication.repository.EtfInstrumentRepository;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.PolicyVersionRepository;
@@ -45,6 +46,9 @@ class RequestMetricFilterTest {
 
 	// 제공 범위 판정은 실 DB 통합 테스트(ExplanationScopeIntegrationTest) 소관 — 메트릭 계약
 	// 검증은 행 부재(전부 제공)로 둔다.
+	// 상장 판정 대역 — 시드와 같은 두 종목만 상장(404 기록 검증 보존).
+	private static final EtfInstrumentRepository LISTED_TICKERS = Set.of("069500", "305720")::contains;
+
 	private static final ServingScopeRepository ALLOW_ALL_SCOPES = (scopeType, scopeKey) -> Optional.empty();
 
 	// 면책 문구 조회도 마찬가지 — 실 DB 통합 테스트(ExplanationDisclaimerIntegrationTest) 소관이라
@@ -60,7 +64,7 @@ class RequestMetricFilterTest {
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {
 		SeededStore() {
-			super(null, Set.of("069500", "305720"),
+			super(null,
 					new CaffeineServeCache(java.time.Duration.ofSeconds(3), Ticker.systemTicker(),
 							new SimpleMeterRegistry()),
 					new SimpleMeterRegistry());
@@ -93,7 +97,7 @@ class RequestMetricFilterTest {
 	void setUp() {
 		metrics = new CapturingMetrics();
 		ExplanationService service = new ExplanationService(
-				new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY);
+				new SeededStore(), LISTED_TICKERS, ALLOW_ALL_SCOPES, NO_POLICY);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -187,7 +191,7 @@ class RequestMetricFilterTest {
 		// 상태(200)를 기록하면 실패 요청이 성공으로 적재돼 Dashboard 에러율이 왜곡된다.
 		MockMvc failing = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
-						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
+						new ExplanationService(new SeededStore(), LISTED_TICKERS, ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics, true), (request, response, chain) -> {
 					// 미매칭 미기록(ADR-0053) 도입 후 기록의 전제는 매핑 성립 — 실 운영에서
 					// 컨트롤러 예외는 DispatcherServlet 이 매핑 후 던지므로 속성이 있다. 그
@@ -240,7 +244,7 @@ class RequestMetricFilterTest {
 		// 가려 끄지만, 끈 상태가 응답을 바꾸면 실험 결과를 그대로 신뢰할 수 없다.
 		MockMvc disabled = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(new ExplanationService(
-						new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
+						new SeededStore(), LISTED_TICKERS, ALLOW_ALL_SCOPES, NO_POLICY)))
 				.setControllerAdvice(new ExceptionAdvice())
 				.addFilters(new RequestMetricFilter(metrics, false))
 				.build();
@@ -270,7 +274,7 @@ class RequestMetricFilterTest {
 		// 어휘(SERV*·COMMON*)만 집계한다는 계약이 깨진다 — 미상(NULL)으로 수렴해야 한다.
 		MockMvc numericCode = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(
-						new ExplanationService(new SeededStore(), ALLOW_ALL_SCOPES, NO_POLICY)))
+						new ExplanationService(new SeededStore(), LISTED_TICKERS, ALLOW_ALL_SCOPES, NO_POLICY)))
 				.addFilters(new RequestMetricFilter(metrics, true), (request, response, chain) -> {
 					request.setAttribute(
 							org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,

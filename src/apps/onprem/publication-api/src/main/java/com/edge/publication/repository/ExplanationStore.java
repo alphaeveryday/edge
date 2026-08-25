@@ -9,7 +9,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -21,7 +20,6 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * Published 설명 조회 — Publication API 의 유일한 데이터 소스.
@@ -53,7 +51,6 @@ public class ExplanationStore {
 	}
 
 	private final PublicationRepository publications;
-	private final Set<String> knownTickers;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 	// 조회 캐시(ALPHA-433). 어느 모드가 꽂히든 이 층의 계약은 같다 — 캐시 정책·TTL 의 뜻은
 	// com.edge.publication.cache 패키지에 있다(다중 인스턴스 캐시 로컬 실험 LOCAL-4/5).
@@ -63,32 +60,23 @@ public class ExplanationStore {
 
 	@Autowired
 	public ExplanationStore(PublicationRepository publications,
-			@Value("${publication.known-tickers}") Set<String> knownTickers,
 			ServeCache serveCache, MeterRegistry registry) {
 		this.publications = publications;
-		this.knownTickers = knownTickers;
 		this.serveCache = serveCache;
 		this.dbLoads = registry.counter("publication.cache.db.loads");
 	}
 
 	// 캐시 설정 없이 기본(L1) 조립만 원하는 테스트용 — 컨트롤러·파싱 테스트가 쓴다.
-	protected ExplanationStore(PublicationRepository publications, Set<String> knownTickers,
-			Duration serveCacheTtl) {
-		this(publications, knownTickers, serveCacheTtl, Ticker.systemTicker());
+	protected ExplanationStore(PublicationRepository publications, Duration serveCacheTtl) {
+		this(publications, serveCacheTtl, Ticker.systemTicker());
 	}
 
 	// 테스트 시간 주입 시임 — TTL 만료(스테일 상한)를 실제 대기 없이 검증한다.
 	// 기존 캐시 계약 테스트가 이 생성자로 L1 만 조립한다(실험 설정과 무관한 기본 동작).
-	ExplanationStore(PublicationRepository publications, Set<String> knownTickers,
-			Duration serveCacheTtl, Ticker ticker) {
-		this(publications, knownTickers,
+	ExplanationStore(PublicationRepository publications, Duration serveCacheTtl, Ticker ticker) {
+		this(publications,
 				new CaffeineServeCache(serveCacheTtl, ticker, new SimpleMeterRegistry()),
 				new SimpleMeterRegistry());
-	}
-
-	/** 상장 여부(404 판별) — 종목 마스터 동기화 전의 설정 allowlist. */
-	public boolean isKnownTicker(String ticker) {
-		return knownTickers.contains(ticker);
 	}
 
 	/**

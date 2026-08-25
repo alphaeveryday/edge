@@ -43,7 +43,7 @@ class ExplanationControllerTest {
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {
 		SeededStore() {
-			super(null, Set.of("069500", "305720"), Duration.ofSeconds(3));
+			super(null, Duration.ofSeconds(3));
 		}
 
 		@Override
@@ -65,8 +65,10 @@ class ExplanationControllerTest {
 		// 제공 범위 판정·면책 문구 조회는 실 DB 통합 테스트(ExplanationScopeIntegrationTest·
 		// ExplanationDisclaimerIntegrationTest) 소관 — 여기서는 각각 행 부재(전부 제공)와 정책
 		// 미발행(기본 문구)으로 두어 기존 HTTP 계약만 검증한다.
+		// 상장 판정 대역은 시드와 같은 두 종목만 상장으로 두어 404(미상장) 계약을 살린다.
 		ExplanationService service = new ExplanationService(
-				new SeededStore(), (scopeType, scopeKey) -> Optional.empty(), Optional::empty);
+				new SeededStore(), Set.of("069500", "305720")::contains,
+				(scopeType, scopeKey) -> Optional.empty(), Optional::empty);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())

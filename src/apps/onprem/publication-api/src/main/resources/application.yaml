@@ -16,9 +16,8 @@ spring:
     open-in-view: false
 
 publication:
-  # 상장 여부 판별(404) — 종목 마스터 동기화 도입 전의 설정 allowlist.
-  # 404(미상장)와 204(상장이나 설명 없음)는 다른 질문이다.
-  known-tickers: ${PUBLICATION_KNOWN_TICKERS:069500,305720}
+  # 상장 여부 판별(404)은 종목 마스터(etf_instrument, 증권사 환경 소유)로 한다 —
+  # 구 설정 allowlist(known-tickers)는 은퇴. 404(미상장)와 204(상장이나 설명 없음)는 다른 질문이다.
   # 조회 캐시 TTL(ALPHA-433) — 프로세스 간 무효화 경로가 없어 이 값이 곧 차단·정정
   # 반영 지연의 상한이다(기본 caffeine 모드 기준 — redis·two-level 실험 모드의 상한은
   # 아래 l2-ttl 주석 참조). 늘릴 때는 컴플라이언스 검토 선행(ExplanationStore 주석 참조).

@@ -52,6 +52,9 @@ class ExplanationScopeIntegrationTest extends OnpremPostgresIntegrationTest {
 		jdbc.update("DELETE FROM serving_scope");
 		jdbc.update("DELETE FROM publication");
 		jdbc.update("DELETE FROM analysis_item");
+		// 상장 판정이 종목 마스터로 옮겨졌다 — 시드 없으면 전 시나리오가 SERV4040 으로 빠진다.
+		jdbc.update("INSERT INTO etf_instrument (etf_ticker, etf_name) VALUES (?, ?) "
+				+ "ON CONFLICT (etf_ticker) DO NOTHING", TICKER, "KODEX 200");
 		seedPublishedExplanation();
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(explanationService))
