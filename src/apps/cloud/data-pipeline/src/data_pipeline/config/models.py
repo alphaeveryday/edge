@@ -310,6 +310,8 @@ class DartDisclosureSource(BaseModel):
 
 
 class NewsConfig(BaseModel):
+    """[news] 섹션 — 벤더별 뉴스 소스 dict(최소 1개)."""
+
     model_config = ConfigDict(extra="forbid")
 
     # 최소 1개 — 소스가 0개면 수집할 원천이 없다(빈 dict는 실패).
@@ -317,48 +319,64 @@ class NewsConfig(BaseModel):
 
 
 class PriceConfig(BaseModel):
+    """[price] 섹션 — FMP 가격 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: PriceSource
 
 
 class KisPriceConfig(BaseModel):
+    """[kis_price] 섹션 — KIS 일봉 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: KisPriceSource
 
 
 class YahooPriceConfig(BaseModel):
+    """[yahoo_price] 섹션 — 야후 가격 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: YahooPriceSourceConfig
 
 
 class KisNavConfig(BaseModel):
+    """[kis_nav] 섹션 — KIS NAV 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: KisNavSource
 
 
 class KisInvestorConfig(BaseModel):
+    """[kis_investor] 섹션 — KIS 투자자 수급 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: KisInvestorSource
 
 
 class FinancialConfig(BaseModel):
+    """[financial] 섹션 — FMP 재무 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: FinancialSource
 
 
 class EtfConfig(BaseModel):
+    """[etf] 섹션 — FMP ETF holdings 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: EtfSource
 
 
 class KrxEtfConfig(BaseModel):
+    """[krx_etf] 섹션 — KRX ETF 구성종목 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: KrxEtfSource
@@ -383,18 +401,24 @@ class KrxInstrumentSource(BaseModel):
 
 
 class KrxInstrumentConfig(BaseModel):
+    """[krx_instrument] 섹션 — KRX 종목기본정보 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: KrxInstrumentSource
 
 
 class DartFinancialConfig(BaseModel):
+    """[dart_financial] 섹션 — OpenDART 재무 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: DartFinancialSource
 
 
 class DartDisclosureConfig(BaseModel):
+    """[dart_disclosure] 섹션 — OpenDART 공시 소스 래퍼."""
+
     model_config = ConfigDict(extra="forbid")
 
     source: DartDisclosureSource

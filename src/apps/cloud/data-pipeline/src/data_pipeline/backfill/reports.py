@@ -56,6 +56,7 @@ VIEW_URL = "https://www.korea.kr/briefing/pressReleaseView.do?newsId={nid}"
 
 
 def run_id_for(ingest_date: str, tag: str = "") -> str:
+    """이 소스·수집일의 결정적 run_id."""
     stamp = ingest_date.replace("-", "")
     return f"{RUN_PREFIX}-{SOURCE}-{stamp}{('-' + tag) if tag else ''}"
 

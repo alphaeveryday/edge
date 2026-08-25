@@ -37,6 +37,8 @@ _TIME_FN = re.compile(r"^(month|year|day)\((\w+)\)$")
 
 @dataclass(frozen=True)
 class Column:
+    """테이블 컬럼 하나 — note 는 문서용 설명이다."""
+
     name: str
     type: str
     note: str = ""
@@ -96,13 +98,16 @@ class Table:
 
     # ── 경로·DDL ───────────────────────────────────────────────────────
     def location(self, bucket: str = BUCKET, prefix: str = "") -> str:
+        """테이블의 S3 위치 URI."""
         head = f"{prefix.rstrip('/')}/" if prefix else ""
         return f"s3://{bucket}/{head}canonical/{self.group}/{self.name}"
 
     def column_names(self) -> tuple[str, ...]:
+        """컬럼 이름 튜플."""
         return tuple(c.name for c in self.columns)
 
     def ddl(self, database: str, *, bucket: str = BUCKET, prefix: str = "") -> str:
+        """검증 후 Iceberg CREATE TABLE DDL 문자열을 만든다."""
         self.validate()
         cols = ",\n  ".join(f"{c.name} {c.type}" for c in self.columns)
         props = {"table_type": "ICEBERG", "format": "parquet",
@@ -123,6 +128,7 @@ class Table:
 # 정체뿐이다. 스키마를 종류별로 따로 쓰면 같은 뜻의 컬럼이 갈리고(title vs headline),
 # 종류를 넘나드는 조회가 UNION 에서 깨진다.
 def report_columns(extra: tuple[Column, ...] = ()) -> tuple[Column, ...]:
+    """보고서 4종이 공유하는 공통 컬럼 스키마(+extra) — 위 주석의 UNION 정합 근거."""
     return (
         Column("report_id", "string", "<source>:<source_id> 자연키"),
         Column("content_hash", "string", "제목+본문 해시. 정체의 두 번째 축"),

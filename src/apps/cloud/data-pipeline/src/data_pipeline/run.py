@@ -135,6 +135,8 @@ DEFAULT_PRICE_LOOKBACK_DAYS = 5
 
 
 def make_run_id(now: datetime | None = None) -> str:
+    """run_id(YYYYMMDDTHHMMSSZ) — 인자 없으면 현재 UTC. `now` 는 변환 없이 그대로
+    포맷하므로 UTC aware 를 넘겨야 접미사 Z 가 사실이 된다."""
     return (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
 
 
@@ -215,6 +217,7 @@ def default_window(now: datetime, lookback_days: int = DEFAULT_LOOKBACK_DAYS) ->
 
 
 def main(argv: list[str] | None = None) -> int:
+    """data-pipeline 스텝 CLI 엔트리포인트 — step 별 분기, 종료 코드 반환."""
     parser = argparse.ArgumentParser(prog="data-pipeline")
     parser.add_argument(
         "step",

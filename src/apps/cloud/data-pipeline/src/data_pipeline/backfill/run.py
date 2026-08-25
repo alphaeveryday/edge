@@ -36,6 +36,7 @@ def _storage(a):
 
 
 def main(argv: list[str] | None = None) -> int:
+    """백필 CLI 엔트리포인트(financial·reports·verify) — 종료 코드 반환."""
     ap = argparse.ArgumentParser(prog="data_pipeline.backfill.run")
     ap.add_argument("cmd", choices=["financial", "reports", "verify"])
     ap.add_argument("--bucket", default="")

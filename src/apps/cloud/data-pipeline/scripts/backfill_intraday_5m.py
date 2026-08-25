@@ -516,6 +516,7 @@ def _collect_kis(days, targets, covered, a):
 
 
 def main() -> int:
+    """장중 5분봉 백필 CLI 엔트리포인트 — 종료 코드 반환."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--bucket", default=DEFAULT_BUCKET)
     ap.add_argument("--vendor", choices=sorted(VENDORS), required=True,

@@ -245,6 +245,7 @@ def run(
     closes_cache: dict[str, dict[str, float]] = {}
 
     def closes_of(date: str) -> dict[str, float]:  # ETF 무관 — ETF 루프 전반에서 재사용
+        """그 거래일의 종가 맵 — 날짜당 1회만 읽는 캐시."""
         if date not in closes_cache:
             closes_cache[date] = _closes(storage, config.market, date)
         return closes_cache[date]

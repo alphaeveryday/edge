@@ -39,6 +39,7 @@ diff에서 문서에 등장할 수 있는 사실만 골라낸다. 코드 내부 
 | 배포/이미지 태그/인프라 | infra/terraform/README.md · envs/*/terraform.tfvars 주석 |
 | 모듈 내부 동작/테스트 개수/실행법 | 해당 모듈 README (예: src/apps/cloud/data-pipeline/README.md) |
 | 코드 흐름/연동을 서술하는 인라인 주석 | 변경된 소스 파일 자체 — "추후 X로 교체 예정"류 주석이 이미 실현된 사실과 어긋나지 않는지 |
+| 변경된 공개 함수·클래스의 동작·계약 | 그 정의의 docstring — 서술(반환·예외·보장 범위)이 변경 후 동작과 일치하는지. 존재 여부는 CI 게이트(data-pipeline `test_docstring_coverage`)가 잡으므로 여기선 **정합만** 본다 |
 | 아키텍처 결정(구조를 바꾸는 선택) | docs/adr/ — 기록이 없으면 ADR 초안을 제안하고(0000-template 사용) docs/adr/README.md 목록에 등록 |
 
 새 문서를 만들게 되면 docs/README.md의 문서 지도에 등록한다.

@@ -19,6 +19,7 @@ from .tables import DB_DRAFT, DB_PROD, REPORT_CURRENT, as_of_sql, latest_view
 
 
 def main(argv: list[str] | None = None) -> int:
+    """canonical(Iceberg) 적재 CLI 엔트리포인트 — cmd 별 분기, 종료 코드 반환."""
     ap = argparse.ArgumentParser(description="canonical(Iceberg) 적재")
     ap.add_argument("cmd", choices=["reports", "financials", "ddl", "asof"])
     ap.add_argument("--run-id", default="")

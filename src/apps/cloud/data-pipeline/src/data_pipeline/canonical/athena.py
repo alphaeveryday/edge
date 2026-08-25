@@ -53,6 +53,11 @@ class Athena:
         return self.client
 
     def run(self, sql: str, *, database: str = "") -> list[tuple[str, ...]]:
+        """SQL 한 건을 동기 실행해 결과 행(문자열 튜플)을 낸다 — 비성공 종료는 AthenaError.
+
+        ⚠️ 결과는 **첫 페이지(MaxResults=1000)뿐**이다 — NextToken 을 따라가지
+        않으므로 그보다 큰 SELECT 는 조용히 절단된다(DDL·MERGE 용도 전제).
+        """
         c = self._client()
         kwargs: dict = {"QueryString": sql, "WorkGroup": self.workgroup}
         if database:

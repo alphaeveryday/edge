@@ -49,6 +49,8 @@ _UNIT_PATTERNS: tuple[tuple[re.Pattern[str], str, bool | None], ...] = (
 
 @dataclass(frozen=True)
 class AmountParse:
+    """금액 표면 파싱 결과 — 값·단위·판정 플래그·통화 표시 여부."""
+
     value: float | None
     unit: str | None
     parse_flag: str
@@ -146,6 +148,11 @@ def _is_calendar_year(value: float | None, unit: str | None) -> bool:
 
 
 def parse_amount(surface: str | None) -> AmountParse:
+    """금액 표면 문자열 하나를 `AmountParse` 로 판정한다.
+
+    범위·근사·통화 관례를 다루되, 애매하면(무관한 수 여럿) 추측하지 않고
+    거부 플래그로 남긴다.
+    """
     if not surface or not surface.strip():
         return _NO_NUMBER
     text = unicodedata.normalize("NFKC", surface).strip()

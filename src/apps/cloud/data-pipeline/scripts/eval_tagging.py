@@ -37,6 +37,7 @@ from data_pipeline.tagging import extract, llm  # noqa: E402
 
 
 def main() -> int:
+    """골드셋 표본으로 태깅 추출을 평가한다 — 종료 코드 반환."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--gold", required=True, type=pathlib.Path)
     parser.add_argument("--sample", type=int, default=150)

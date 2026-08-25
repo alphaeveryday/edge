@@ -51,6 +51,7 @@ def _missing(exc: Exception) -> bool:
 
 
 def sha256(data: bytes) -> str:
+    """바이트의 sha256 hex."""
     return hashlib.sha256(data).hexdigest()
 
 
@@ -74,11 +75,13 @@ class Manifest:
 
     # ── 왕복 ────────────────────────────────────────────────────────
     def to_bytes(self) -> bytes:
+        """JSON 직렬화(정렬 키) — `from_bytes` 와 왕복한다."""
         return json.dumps(self.__dict__, ensure_ascii=False,
                           indent=1, sort_keys=True).encode("utf-8")
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Manifest:
+        """JSON 역직렬화 — version 불일치는 ValueError(옛 형식을 새 규칙으로 읽지 않는다)."""
         raw = json.loads(data)
         got = raw.pop("version", 0)
         if got != MANIFEST_VERSION:
@@ -105,6 +108,7 @@ class Manifest:
             raise
 
     def save(self, storage) -> str:
+        """매니페스트를 레이크의 정위치 키에 쓰고 그 키를 반환한다."""
         key = manifest_key(self.source, self.dataset, self.run_id, self.prefix)
         storage.put_bytes(key, self.to_bytes())
         return key
@@ -141,17 +145,21 @@ class Manifest:
 
     @property
     def ok(self) -> list[str]:
+        """성공 항목의 티커 목록(정렬)."""
         return sorted(t for t, v in self.items.items() if not v.get("error"))
 
     @property
     def failed(self) -> list[str]:
+        """실패 항목의 티커 목록(정렬)."""
         return sorted(t for t, v in self.items.items() if v.get("error"))
 
     @property
     def rows(self) -> int:
+        """전 항목 행 수 합."""
         return sum(int(v.get("rows") or 0) for v in self.items.values())
 
     def close(self) -> None:
+        """종료 시각을 찍는다."""
         self.finished_at = datetime.now(UTC).isoformat()
 
     # ── 검증 ────────────────────────────────────────────────────────

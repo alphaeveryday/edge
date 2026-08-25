@@ -32,6 +32,8 @@ class HfError(RuntimeError):
 
 @dataclass(frozen=True)
 class HfFile:
+    """데이터셋 파일 하나 — oid(git blob sha)가 내용 정체다."""
+
     path: str
     size: int
     oid: str          # git blob sha — 내용 정체
@@ -81,9 +83,14 @@ class HfDataset:
                        for f in self.files(folder) if f.path.endswith(".parquet")})
 
     def fetch(self, path: str) -> bytes:
+        """파일 원본 바이트 — 실패는 HfError."""
         return self._get(f"{RESOLVE}/{self.repo}/resolve/{self.revision}/{path}")[0]
 
     def oid_of(self, path: str) -> str:
+        """목록 스냅샷(_cache) 기준 path 의 oid — 없으면 HfError.
+
+        폴더를 한 번 읽은 뒤의 상류 변경은 이 인스턴스에 반영되지 않는다.
+        """
         folder = path.rsplit("/", 1)[0]
         for f in self.files(folder):
             if f.path == path:
