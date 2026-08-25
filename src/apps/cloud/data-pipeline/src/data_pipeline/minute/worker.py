@@ -57,6 +57,10 @@ from .rollup import maybe_rollup
 logger = logging.getLogger(__name__)
 
 
+def _failed_units(units: dict) -> list:
+    return units["missing"] + units["invalid"]
+
+
 def universe_matches(ledger: MinuteLedger, session_id: str, universe: Universe) -> bool:
     """원장이 고정한 universe 와 내 설정이 같은가 — window 를 처리할 자격.
 
@@ -477,7 +481,7 @@ class PriceWorker(MinuteWorkerLoop):
             failed_unit_count=result.failed_count, record_count=len(records),
             checksum=artifact_checksum, manifest_uri=manifest_key,
             manifest_checksum=manifest_checksum,
-            missing_units=units["missing"] or None,
+            missing_units=_failed_units(units) or None,
             stage_timestamps=result.stage_timestamps,
             trigger_schema_version=cfg.trigger_schema_version,
             destination=cfg.destination, artifact_generation=generation,
@@ -609,7 +613,7 @@ class InavWorker(MinuteWorkerLoop):
             failed_unit_count=result.failed_count, record_count=len(records),
             checksum=artifact_checksum, manifest_uri=manifest_key,
             manifest_checksum=manifest_checksum,
-            missing_units=units["missing"] or None,
+            missing_units=_failed_units(units) or None,
             stage_timestamps=result.stage_timestamps,
             artifact_generation=generation,
         )
@@ -715,7 +719,7 @@ class SectorIndexWorker(MinuteWorkerLoop):
             failed_unit_count=result.failed_count, record_count=len(records),
             checksum=artifact_checksum, manifest_uri=manifest_key,
             manifest_checksum=manifest_checksum,
-            missing_units=units["missing"] or None,
+            missing_units=_failed_units(units) or None,
             stage_timestamps=result.stage_timestamps,
             artifact_generation=generation,
         )

@@ -117,12 +117,25 @@ class TestResultContract:
         with pytest.raises(ValidationError):
             make_result(succeeded_count=347, failed_count=0)
 
-    def test_valid_status_with_failures_rejected(self):
-        # 실패가 있는데 VALID 면 status 만 믿는 소비자가 누락 window 를 정상 확정한다
+    def test_valid_status_accepts_only_failures_within_contract(self):
+        # 400종의 1종은 허용하지만 4종 또는 45종의 1종은 창 계약을 넘는다.
+        ok = make_result(
+            status="VALID", expected_count=400, succeeded_count=399, failed_count=1)
+        assert ok.failed_count == 1
         with pytest.raises(ValidationError):
-            make_result(status="VALID", succeeded_count=343, failed_count=5)
-        ok = make_result(status="INCOMPLETE", succeeded_count=343, failed_count=5)
-        assert ok.failed_count == 5
+            make_result(
+                status="VALID", expected_count=400, succeeded_count=396, failed_count=4)
+        with pytest.raises(ValidationError):
+            make_result(
+                status="VALID", expected_count=45, succeeded_count=44, failed_count=1)
+        with pytest.raises(ValidationError):
+            make_result(
+                status="INCOMPLETE", expected_count=400, succeeded_count=399, failed_count=1)
+        with pytest.raises(ValidationError):
+            make_result(
+                status="INVALID", expected_count=400, succeeded_count=399, failed_count=1)
+        incomplete = make_result(status="INCOMPLETE", succeeded_count=343, failed_count=5)
+        assert incomplete.failed_count == 5
 
     def test_counts_strict_no_coercion(self):
         # '3'(str)·True(bool) 가 수량으로 강제되면 잘못된 직렬화가 조용히 통과한다
