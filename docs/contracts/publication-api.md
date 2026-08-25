@@ -26,22 +26,29 @@ GET /api/v1/explanations/{etf_ticker}?trade_date={yyyy-MM-dd}
 
 - `etf_ticker`: 국내 상장 ETF 종목코드 (MVP 커버리지 — [../adr/0024](../adr/0024-scope-domestic-etf.md)). `[확정 필요 — 식별자 체계: 종목코드 vs ISIN. 초안은 종목코드]`
 - `trade_date` 생략 시 **최신 거래일**의 게시분 — 화면(AI 분석 탭)은 "가장 최근 거래일의 분석"을 원하므로 게시 시각이 아니라 거래일 기준이다. 과거 거래일 분석이 나중에 게시(지연 검수)돼도 최신 거래일 게시분이 우선한다. 같은 거래일에 유효 스냅샷이 여럿 공존하면 `explanation_as_of` 최신이 이긴다(무효화분 제외 — "유효 최신 승리", ADR-0045 결정 3·ALPHA-743). 최신이 무효화되면 직전 유효 스냅샷이 이 규칙만으로 자동 재노출된다. 응답의 `explanation_as_of`가 스냅샷 기준시각을 말한다. 동률은 게시 시각으로 해소.
-**응답 200** (노출 가능한 설명이 있을 때):
+**응답 200** — 성공은 항상 200 + 공통 응답 포맷(jvm-common `ApiResponse`)이다([ADR-0054](../adr/0054-publication-explanations-uniform-response.md)). 설명이 있으면 `result` 에 실리고, 없으면 `result` 키 자체가 생략된다.
+
+노출 가능한 설명이 있을 때 — `result` 내용:
 
 ```json
 {
-  "publication_id": "...",
-  "etf": { "ticker": "069500", "name": "KODEX 200" },
-  "trade_date": "2026-07-15",
-  "summary": "반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
-  "confidence_level": "MEDIUM",
-  "evidences": [
-    { "kind": "NEWS", "title": "반도체 수출 반등", "source": "...", "published_at": "..." }
-  ],
-  "disclaimer": "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.",
-  "published_at": "2026-07-15T16:40:00+09:00",
-  "explanation_as_of": "2026-07-15T16:00:00+09:00",
-  "content_as_of": "2026-07-15T10:30:00+09:00"
+  "isSuccess": true,
+  "code": "COMMON200",
+  "message": "성공입니다.",
+  "result": {
+    "publication_id": "...",
+    "etf": { "ticker": "069500", "name": "KODEX 200" },
+    "trade_date": "2026-07-15",
+    "summary": "반도체 비중 상위 구성종목의 동반 상승이 반영된 것으로 보이는 공개 정보 기반 변동 요인 후보입니다.",
+    "confidence_level": "MEDIUM",
+    "evidences": [
+      { "kind": "NEWS", "title": "반도체 수출 반등", "source": "...", "published_at": "..." }
+    ],
+    "disclaimer": "본 내용은 공개 정보 기반의 변동 요인 후보이며 투자 권유가 아닙니다.",
+    "published_at": "2026-07-15T16:40:00+09:00",
+    "explanation_as_of": "2026-07-15T16:00:00+09:00",
+    "content_as_of": "2026-07-15T10:30:00+09:00"
+  }
 }
 ```
 
@@ -51,17 +58,17 @@ GET /api/v1/explanations/{etf_ticker}?trade_date={yyyy-MM-dd}
 - `evidences` 요소 형상은 `{kind, title, source, published_at}`(근거 뉴스/공시 문서 목록)로 **확정**(ALPHA-395 — [event-bundle-schema.md](event-bundle-schema.md) "경계면 컬럼" 절). 번들 `evidences`가 온프렘 저장(`analysis_item.evidences`)을 거쳐 이 응답으로 서빙된다(`ExplanationStore`가 파싱하는 형상 — 저장분에는 `source_uri`(ALPHA-739, 검수 콘솔용)도 있으나 **서빙 계약에는 싣지 않는다**: 내부 lineage URI 를 고객 표면에 노출하지 않음). 반대 요인 등 부가 텍스트는 물리 스키마에 전용 컬럼이 없어(candidate: `stage_results` JSONB) 계약에 넣지 않는다 — 필요해지면 스키마 확장(양자 합의) 후 추가.
 - 노출 이력은 기록하지 않는다(ADR-0053 — 고객 단위 감사 요건 폐지). 민원 대응의 재구성 근거는 게시·정정 이력(`publication`·`console_action_log`)과 정책 이력(`policy_version` 활성 구간)이다 — 특정 고객에게 무엇이 나갔는가는 재구성 대상이 아니다.
 
-**응답 204** (해당 ETF·일자에 노출 가능한 설명이 없을 때): 정상 상태다 — 모든 ETF가 매일 설명을 갖지 않는다. body 없음.
+**설명 없음** (해당 ETF·일자에 노출 가능한 설명이 없을 때): 정상 상태다 — 모든 ETF가 매일 설명을 갖지 않는다. 200 + `result` 키 생략으로 응답한다(`{ "isSuccess": true, "code": "COMMON200", "message": "..." }`). `"result": null` 명시가 아니라 **키 부재**다 — 소비자는 키 존재로 판별한다. 구 204 응답은 폐지됐다(ADR-0054).
 
 **에러**:
 
 | 코드 | 의미 |
 |---|---|
-| 400 | 잘못된 `trade_date` 형식 |
-| 404 | 알 수 없는 ETF 종목코드 |
+| 400 | 잘못된 `trade_date` 형식 (`COMMON400`) |
+| 404 | 알 수 없는 ETF 종목코드 (`SERV4040`) |
 | 5xx | 서버 오류 — 위젯은 폴백 문구 처리 권장(설명 미제공이 고객 화면 오류로 보이지 않게) |
 
-- 에러 body 형상은 jvm-common 공통 응답 포맷 `ApiResponse` — `{ "isSuccess": false, "code": "SERV4004", "message": "..." }`(result 생략). 도메인 코드 `SERV4004`(400)·`SERV4040`(404) — `SERV4001`~`4003`(헤더 검증)은 ADR-0053 으로 폐지됐고 번호는 재사용하지 않는다. 프레임워크 예외는 상태코드 기반 공통 코드(`COMMON404` 등). 성공(200) 본문은 이 포맷으로 감싸지 않는다. (확정 — ALPHA-498, 코드 `PublicationErrorStatus`·openapi `ErrorResponse`)
+- 에러 body 형상은 jvm-common 공통 응답 포맷 `ApiResponse` — `{ "isSuccess": false, "code": "SERV4040", "message": "..." }`(result 생략). 도메인 코드는 `SERV4040`(404)뿐이고, `trade_date` 형식 위반(400)은 프레임워크 변환 실패라 공통 코드 `COMMON400` 이다. `SERV4001`~`4003`(헤더 검증, ADR-0053)·`SERV4004`(구 trade_date 도메인 코드 — 파싱을 프레임워크 변환에 위임하며 폐지)는 은퇴됐고 번호는 재사용하지 않는다. 그 외 프레임워크 예외도 상태코드 기반 공통 코드(`COMMON404` 등). (코드 `PublicationErrorStatus`·openapi `ErrorResponse`)
 
 ### 미확정 목록
 

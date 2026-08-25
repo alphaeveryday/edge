@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import java.io.InputStream;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EventBundleContractTest {
 
 	private final JsonSchema schema = loadSchema();
-	private final ExplanationStore store = new ExplanationStore(null, Set.of(), java.time.Duration.ofSeconds(3));
+	private final ExplanationStore store = new ExplanationStore(null, java.time.Duration.ofSeconds(3));
 
 	private static JsonSchema loadSchema() {
 		JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);

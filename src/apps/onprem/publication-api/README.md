@@ -26,7 +26,7 @@ GET /api/v1/explanations/{etf_ticker}?trade_date=
 # 루트에서 전체 스택 기동 — cloud 시드가 sync-agent → intake → screening-worker 경로로 적재된다
 docker compose up --build -d                         # publication-api 는 host 18084
 curl -i localhost:18084/api/v1/explanations/069500   # 200 (동기화로 게시분 도착 후)
-curl -i localhost:18084/api/v1/explanations/305720   # 204 (게시분 없는 종목)
+curl -i localhost:18084/api/v1/explanations/305720   # 200 result 생략 (게시분 없는 종목)
 ```
 
 ## 개발 문서

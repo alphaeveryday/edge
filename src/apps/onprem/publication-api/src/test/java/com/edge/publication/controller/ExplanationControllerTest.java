@@ -8,6 +8,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -43,7 +46,7 @@ class ExplanationControllerTest {
 	/** 시드 대역 — 069500 = 게시분 존재, 305720 = 상장이나 설명 없음, 그 외 = 미상장. */
 	private static final class SeededStore extends ExplanationStore {
 		SeededStore() {
-			super(null, Set.of("069500", "305720"), Duration.ofSeconds(3));
+			super(null, Duration.ofSeconds(3));
 		}
 
 		@Override
@@ -64,9 +67,11 @@ class ExplanationControllerTest {
 	void setUp() {
 		// 제공 범위 판정·면책 문구 조회는 실 DB 통합 테스트(ExplanationScopeIntegrationTest·
 		// ExplanationDisclaimerIntegrationTest) 소관 — 여기서는 각각 행 부재(전부 제공)와 정책
-		// 미발행(기본 문구)으로 두어 기존 HTTP 계약만 검증한다.
+		// 미발행(기본 문구)으로 두어 기존 HTTP 계약만 검증한다. 상장 판정 대역은 시드와 같은
+		// 두 종목만 상장으로 두어 404(미상장) 계약을 살린다 — ticker -> true 면 404 케이스가 죽는다.
 		ExplanationService service = new ExplanationService(
-				new SeededStore(), (scopeType, scopeKey) -> Optional.empty(), Optional::empty);
+				new SeededStore(), Set.of("069500", "305720")::contains,
+				(scopeType, scopeKey) -> Optional.empty(), Optional::empty);
 		mvc = MockMvcBuilders
 				.standaloneSetup(new ExplanationController(service))
 				.setControllerAdvice(new ExceptionAdvice())
@@ -80,21 +85,23 @@ class ExplanationControllerTest {
 		// 투영하는 문구와 같아야 한다(ALPHA-772).
 		mvc.perform(get("/api/v1/explanations/069500"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.publication_id").value("1"))
-				.andExpect(jsonPath("$.etf.ticker").value("069500"))
-				.andExpect(jsonPath("$.trade_date").value("2026-07-15"))
-				.andExpect(jsonPath("$.summary").isNotEmpty())
-				.andExpect(jsonPath("$.confidence_level").value("MEDIUM"))
-				.andExpect(jsonPath("$.evidences[0].kind").value("NEWS"))
-				.andExpect(jsonPath("$.disclaimer").value(
+				// 공통 응답 포맷(ADR-0054) — 게시분은 result 아래에 실린다.
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.result.publication_id").value("1"))
+				.andExpect(jsonPath("$.result.etf.ticker").value("069500"))
+				.andExpect(jsonPath("$.result.trade_date").value("2026-07-15"))
+				.andExpect(jsonPath("$.result.summary").isNotEmpty())
+				.andExpect(jsonPath("$.result.confidence_level").value("MEDIUM"))
+				.andExpect(jsonPath("$.result.evidences[0].kind").value("NEWS"))
+				.andExpect(jsonPath("$.result.disclaimer").value(
 						"본 설명은 뉴스·공시 등 공개 데이터를 기반으로 자동 생성된 참고 정보이며, "
 								+ "특정 종목의 매수·매도를 권유하지 않습니다. 투자 판단과 책임은 투자자 본인에게 있습니다."))
-				.andExpect(jsonPath("$.published_at").isNotEmpty())
+				.andExpect(jsonPath("$.result.published_at").isNotEmpty())
 				// 스냅샷 기준시각(ADR-0045) — openapi required. 매핑 누락·오배선(published_at
 				// 재사용) 회귀를 값 단언으로 거부한다(SEED as_of = 16:00 KST).
-				.andExpect(jsonPath("$.explanation_as_of").value("2026-07-15T16:00:00+09:00"))
+				.andExpect(jsonPath("$.result.explanation_as_of").value("2026-07-15T16:00:00+09:00"))
 				// 콘텐츠 기준시각(ALPHA-918) — 산문이 말하는 창의 끝을 소비자가 옳은 시각으로 쓸 수 있게 노출
-				.andExpect(jsonPath("$.content_as_of").value("2026-07-15T10:30:00+09:00"));
+				.andExpect(jsonPath("$.result.content_as_of").value("2026-07-15T10:30:00+09:00"));
 	}
 
 	@Test
@@ -106,14 +113,26 @@ class ExplanationControllerTest {
 		mvc.perform(get("/api/v1/explanations/069500")
 						.header("X-Customer-Hash", " ").header("X-Channel", "APP"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.publication_id").value("1"));
+				.andExpect(jsonPath("$.result.publication_id").value("1"));
 	}
 
 	@Test
-	void 설명_없음은_204다() throws Exception {
-		// WHY: 204 는 정상 상태(설명 없는 날) — 상장 여부(404)와 다른 질문이다.
-		mvc.perform(get("/api/v1/explanations/305720"))
-				.andExpect(status().isNoContent());
+	void 설명_없음은_200에_result_키가_없다() throws Exception {
+		// WHY: 설명 없음은 정상 상태(설명 없는 날) — 상장 여부(404)와 다른 질문이고, ADR-0054 로
+		// 204 대신 공통 포맷 200 + result 생략이다. 부재는 키 부재여야 한다 — "result": null 명시가
+		// 섞이면 소비자 형상 검증이 갈리므로(ALPHA-599 선례) doesNotExist() 가 아니라 키 집합
+		// 전수 비교로 거부한다.
+		String body = mvc.perform(get("/api/v1/explanations/305720"))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString();
+
+		JsonNode root = new ObjectMapper().readTree(body);
+		assertThat(root.size()).isEqualTo(3);
+		assertThat(root.has("isSuccess")).isTrue();
+		assertThat(root.get("isSuccess").asBoolean()).isTrue();
+		assertThat(root.has("code")).isTrue();
+		assertThat(root.has("message")).isTrue();
+		assertThat(root.has("result")).isFalse();
 	}
 
 	@Test
@@ -126,8 +145,23 @@ class ExplanationControllerTest {
 	@Test
 	void 잘못된_trade_date_형식은_400_공통_포맷이다() throws Exception {
 		// WHY: 형식 오류는 연동 버그 신호(fail-loud) — 조용히 무시하고 최신분을 주면 오배선이 숨는다.
+		// 파싱은 프레임워크 변환(@DateTimeFormat) 소관이라 코드는 공통 COMMON400 이다(SERV4004 폐지).
 		mvc.perform(get("/api/v1/explanations/069500").param("trade_date", "2026/07/15"))
 				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.code").value("SERV4004"));
+				.andExpect(jsonPath("$.code").value("COMMON400"));
+	}
+
+	@Test
+	void 빈_trade_date는_생략과_같다() throws Exception {
+		// WHY: ALPHA-498 수용집합 — 폼·프록시가 만드는 trade_date= 를 400 으로 거부하면 정상
+		// 연동이 깨진다. 프레임워크 변환기가 빈 문자열을 null 로 접는 동작에 기대므로, 그 전제가
+		// 버전업 등으로 무너지면 이 테스트가 잡는다.
+		mvc.perform(get("/api/v1/explanations/069500").param("trade_date", ""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.publication_id").value("1"));
+		// 공백뿐인 값도 생략과 동치다 — openapi anyOf(`^\s*$`)가 전사하는 수용집합의 나머지 절반.
+		mvc.perform(get("/api/v1/explanations/069500").param("trade_date", "   "))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.publication_id").value("1"));
 	}
 }

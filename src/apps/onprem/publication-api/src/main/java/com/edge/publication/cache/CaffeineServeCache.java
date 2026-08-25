@@ -20,7 +20,7 @@ import java.util.function.BiFunction;
  * 검수·차단 이벤트의 프로세스 간 무효화 경로가 없으므로 TTL 이 곧 차단·정정 반영
  * 지연의 상한이다 — 늘릴 때는 컴플라이언스 검토가 선행돼야 한다.
  * "게시분 없음"(empty)도 캐시한다: 신규 게시 노출이 최대 TTL 만큼 늦는 대신
- * 204 폭주도 같은 상한으로 막는다.
+ * 설명 없음 응답 폭주도 같은 상한으로 막는다.
  */
 public class CaffeineServeCache implements ServeCache {
 

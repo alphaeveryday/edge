@@ -18,7 +18,7 @@ public interface ServeCache {
 
 	/**
 	 * 캐시에 있으면 그것을, 없으면 {@code loader} 로 적재해 돌려준다.
-	 * "게시분 없음"(empty)도 캐시 대상이라 반환·로더 모두 Optional 이다(204 폭주 방어).
+	 * "게시분 없음"(empty)도 캐시 대상이라 반환·로더 모두 Optional 이다(설명 없음 응답 폭주 방어).
 	 */
 	Optional<PublishedExplanation> getOrLoad(String ticker, LocalDate tradeDate,
 			BiFunction<String, LocalDate, Optional<PublishedExplanation>> loader);

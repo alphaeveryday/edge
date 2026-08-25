@@ -1,7 +1,10 @@
 package com.edge.publication.service;
 
+import com.edge.common.exception.GeneralException;
 import com.edge.publication.dto.ExplanationResponse;
 import com.edge.publication.entity.ServingScopeEntity;
+import com.edge.publication.error.PublicationErrorStatus;
+import com.edge.publication.repository.EtfInstrumentRepository;
 import com.edge.publication.repository.ExplanationStore;
 import com.edge.publication.repository.ExplanationStore.PublishedExplanation;
 import com.edge.publication.repository.PolicyVersionRepository;
@@ -42,27 +45,37 @@ public class ExplanationService {
 	private static final String MARKET_KRX = "XKRX";
 
 	private final ExplanationStore store;
-	private final ServingScopeRepository servingScopes;
-	private final PolicyVersionRepository policyVersions;
+	private final EtfInstrumentRepository etfInstrumentRepository;
+	private final ServingScopeRepository servingScopeRepository;
+	private final PolicyVersionRepository policyVersionRepository;
 
-	public ExplanationService(ExplanationStore store,
-			ServingScopeRepository servingScopes, PolicyVersionRepository policyVersions) {
+	public ExplanationService(ExplanationStore store, EtfInstrumentRepository etfInstrumentRepository,
+	                          ServingScopeRepository servingScopeRepository,
+							  PolicyVersionRepository policyVersionRepository) {
 		this.store = store;
-		this.servingScopes = servingScopes;
-		this.policyVersions = policyVersions;
+		this.etfInstrumentRepository = etfInstrumentRepository;
+		this.servingScopeRepository = servingScopeRepository;
+		this.policyVersionRepository = policyVersionRepository;
 	}
 
+	/** 상장 여부(404 판별) — 종목 마스터(etf_instrument, 증권사 환경 소유 데이터)로 판정한다. */
 	public boolean isKnownTicker(String ticker) {
-		return store.isKnownTicker(ticker);
+		return etfInstrumentRepository.existsByEtfTicker(ticker);
 	}
 
-	/** 200 대상이 있으면 응답을 만든다 — 없으면 empty(컨트롤러가 204 로 수렴). */
+	/** 게시분이 있으면 응답을 만든다 — 없으면 empty(컨트롤러가 result 생략 200 으로 수렴, ADR-0054). */
 	public Optional<ExplanationResponse> serve(String ticker, LocalDate tradeDate) {
-		// 제공 범위 차단은 게시분 조회 앞단에서 걸러 "설명 없음"(204)으로 수렴한다 —
+
+		if (!isKnownTicker(ticker)) {
+			throw new GeneralException(PublicationErrorStatus.UNKNOWN_ETF);
+		}
+
+		// 제공 범위 차단은 게시분 조회 앞단에서 걸러 "설명 없음"으로 수렴한다 —
 		// 제외 사실을 고객 단에 드러내지 않고, 콘솔 토글이 캐시 없이 요청마다 즉시 반영된다(신선도 우선).
 		if (isServingBlocked(ticker)) {
 			return Optional.empty();
 		}
+
 		return store.findPublished(ticker, tradeDate)
 				.map(e -> toResponse(e, resolveDisclaimer()));
 	}
@@ -82,7 +95,7 @@ public class ExplanationService {
 	 * 것과 같은 기본 문구로 수렴시킨다.
 	 */
 	private String resolveDisclaimer() {
-		Optional<String> active = policyVersions.findActiveDisclaimerText();
+		Optional<String> active = policyVersionRepository.findActiveDisclaimerText();
 		if (active.isPresent() && active.get().isBlank()) {
 			// 콘솔은 공백 발행을 거부하므로(ScreeningService.updateDisclaimer 의 INVALID_REQUEST)
 			// 여기 걸린다면 콘솔 밖 경로(마이그레이션·직접 SQL)가 만든 무결성 이상이다. 고객에겐
@@ -94,7 +107,7 @@ public class ExplanationService {
 	}
 
 	/**
-	 * 콘솔 제공 범위(옵트아웃) 판정 — 차단이면 게시분을 조회하지 않고 204 로 수렴시킨다.
+	 * 콘솔 제공 범위(옵트아웃) 판정 — 차단이면 게시분을 조회하지 않고 "설명 없음"(result 생략 200)으로 수렴시킨다.
 	 * 규칙: ① MARKET(XKRX) OFF = 전역 차단(상위 우선 — 종목 토글 무시) ② INSTRUMENT(ticker)
 	 * OFF = 종목 차단 ③ 행 부재·enabled=true = 제공. 조회는 요청당 PK 룩업 2회로 캐시 없음
 	 * (Rule 2) — 콘솔 토글의 즉시 반영이 신선도 우선이라 게시분 캐시와 달리 캐시하지 않는다.
@@ -110,7 +123,7 @@ public class ExplanationService {
 	}
 
 	private boolean isScopeDisabled(String scopeType, String scopeKey) {
-		return servingScopes.findByScopeTypeAndScopeKey(scopeType, scopeKey)
+		return servingScopeRepository.findByScopeTypeAndScopeKey(scopeType, scopeKey)
 				.map(ServingScopeEntity::isEnabled)
 				.map(enabled -> !enabled)
 				.orElse(false);
