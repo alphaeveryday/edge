@@ -314,7 +314,7 @@ class SqsQueue:
     def change_visibility(
         self, *, queue_url: str, receipt_handle: str, seconds: int
     ) -> None:
-        """메시지 visibility 를 seconds 로 변경한다 — 재표시 시각은 DB 가 정한 값을 따른다."""
+        """메시지 visibility 를 seconds 로 변경한다 — transport 호출일 뿐, 값의 결정은 호출자 소관이다."""
         self.control_client.change_message_visibility(
             QueueUrl=queue_url, ReceiptHandle=receipt_handle, VisibilityTimeout=seconds
         )
