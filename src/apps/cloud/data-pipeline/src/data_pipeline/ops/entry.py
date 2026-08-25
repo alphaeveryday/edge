@@ -142,6 +142,7 @@ def instrument(settings, storage: Storage, task_key: str, run_id: str, run_fn):
     attempt_started_at = None
 
     def run_current_attempt():
+        """attempt 시작 시각을 기록하고 본 작업을 돈다 — observer 의 not_before 하한."""
         nonlocal attempt_started_at
         # wrapper가 원장 attempt를 연 뒤 실제 작업을 시작하는 경계다. 같은 run_id의 이전 ECS
         # 재시도 로그를 현재 시도의 산출물로 승인하지 않도록 observer에 이 하한을 넘긴다.
@@ -320,6 +321,7 @@ def _etf_universe_provider(settings):
     entity_ids = tuple(sorted(krx_etf.source.etf_map))
 
     def provide(task_key: str) -> dict | None:
+        """ETF 유니버스 작업이면 기대 universe snapshot dict, 아니면 None."""
         if task_key not in _ETF_UNIVERSE_TASK_KEYS:
             return None
         # 작업별 snapshot JSON이 서로 공유된 mutable list를 갖지 않게 매번 새로 만든다.

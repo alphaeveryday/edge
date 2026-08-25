@@ -10,19 +10,27 @@ from .trading_calendar import latest_kr_trading_day
 
 
 class Cadence(str, Enum):
+    """계약 케이던스 어휘 — 현재 MARKET_EVENT 하나."""
+
     MARKET_EVENT = "MARKET_EVENT"
 
 
 class ExpectedAsOfRule(str, Enum):
+    """expected-as-of 해석 규칙 어휘 — 해석은 `resolve_expected_as_of` 가 한다."""
+
     LATEST_KR_TRADING_DAY = "LATEST_KR_TRADING_DAY"
 
 
 class RetryOwner(str, Enum):
+    """재시도 소유 주체 어휘 — 현재 SFN 하나."""
+
     SFN = "SFN"
 
 
 @dataclass(frozen=True)
 class DatasetContract:
+    """데이터셋 전달 계약 한 건(ADR-0043) — Catalog 는 contract_key 로만 참조한다."""
+
     contract_key: str
     version: str
     cadence: Cadence
@@ -68,14 +76,17 @@ _CONTRACTS = {
 
 
 def entries() -> tuple[DatasetContract, ...]:
+    """등록된 계약 전부."""
     return tuple(_CONTRACTS.values())
 
 
 def get(contract_key: str) -> DatasetContract | None:
+    """contract_key → 계약, 없으면 None."""
     return _CONTRACTS.get(contract_key)
 
 
 def require(contract_key: str) -> DatasetContract:
+    """contract_key → 계약, 미등록이면 ValueError(fail loud)."""
     contract = get(contract_key)
     if contract is None:
         raise ValueError(f"등록되지 않은 Dataset Contract: {contract_key}")
@@ -87,6 +98,7 @@ def resolve_expected_as_of(
     slot_date: date,
     holidays: frozenset[str] | None = None,
 ) -> date:
+    """계약 규칙으로 slot_date 의 기대 as-of 날짜를 해석한다 — 미지 규칙은 ValueError."""
     if contract.expected_as_of_rule == ExpectedAsOfRule.LATEST_KR_TRADING_DAY:
         return latest_kr_trading_day(slot_date, holidays)
     raise ValueError(f"지원하지 않는 expected-as-of 규칙: {contract.expected_as_of_rule}")
