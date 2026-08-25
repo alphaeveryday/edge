@@ -443,6 +443,9 @@ def run(
         # 0 이 아닌 값은 "파티션에 대상 밖 ETF 가 있다"는 사실이라 조용히 버리면 안 된다.
         "ops": {
             "records_out": already + created + updated,
+            # 현금·옵션은 현재 holdings 모델의 지원 범위 밖이다. 정상 제외를 실제 유실과
+            # 분리해 원장에서 `적재 + 지원 제외 + 유실`로 같은 입력 범위를 설명할 수 있게 한다.
+            "unsupported_records": skipped_unsupported_asset,
             "failed_records": (len(failures) + skipped_missing_identity + skipped_unknown_etf
                                + skipped_unknown_constituent + skipped_unknown_asset_type
                                + skipped_bad_fetched_at + skipped_bad_weight

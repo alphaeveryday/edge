@@ -251,6 +251,7 @@ class Ledger:
         # → 소비자는 "FAILED 옆의 건수는 앞 시도의 것일 수 있다"를 전제로 읽는다.
         if counters is not None:
             sets.append("records_out=%s"); params.append(counters.get("records_out"))
+            sets.append("unsupported_records=%s"); params.append(counters.get("unsupported_records"))
             sets.append("failed_records=%s"); params.append(counters.get("failed_records"))
             sets.append("entity_resolution_arguments_total=%s")
             params.append(counters.get("entity_resolution_arguments_total"))

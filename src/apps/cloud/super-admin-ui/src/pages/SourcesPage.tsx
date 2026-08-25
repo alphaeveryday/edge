@@ -66,9 +66,9 @@ const STAGE_LABEL: Record<string, string> = {
   feature: '적재',
 };
 
-/** 건수 표시 — null 은 "모름"이라 0 으로 쓰지 않는다(ALPHA-182 의 NULL 계약을 화면까지 보존). */
-function count(value: number | null) {
-  return value === null ? '—' : value.toLocaleString('ko-KR');
+/** 건수 표시 — null/구 API의 부재는 "모름"이라 0 으로 쓰지 않는다(ALPHA-182). */
+function count(value: number | null | undefined) {
+  return value == null ? '—' : value.toLocaleString('ko-KR');
 }
 
 function finishedAt(iso: string | null) {
@@ -168,7 +168,7 @@ function TaskDetailRow({ task }: { task: TaskStatus }) {
   return (
     <tr>
       <td />
-      <td colSpan={6} className="t-xs" style={{ color: 'var(--fg-3)', paddingTop: 0 }}>
+      <td colSpan={7} className="t-xs" style={{ color: 'var(--fg-3)', paddingTop: 0 }}>
         {facts.length > 0 && <span style={{ display: 'block' }}>{facts.join(' · ')}</span>}
         {task.attempts.map((a, i) => (
           <AttemptLine key={a.ecsTaskArn ?? i} attempt={a} index={i} />
@@ -224,6 +224,7 @@ function TaskRow({ task }: { task: TaskStatus }) {
       </td>
       <td className="num">{finishedAt(task.lastFinishedAt)}</td>
       <td className="col-num num">{count(task.recordsOut)}</td>
+      <td className="col-num num">{count(task.unsupportedRecords)}</td>
       <td className="col-num num">{count(task.failedRecords)}</td>
     </tr>
   );
@@ -246,6 +247,9 @@ const ISSUE_SCOPE_LABEL: Record<string, string> = { run: '런', task: '작업', 
 const RECORDS_TIP =
   '산출 = 작업이 원장에 기록한 records_out 이다.\n' +
   '"—" 는 0 이 아니라 **계측 값이 기록되지 않았다**는 뜻이다 — 0건 처리와 구분한다(ALPHA-182 NULL 계약).';
+const UNSUPPORTED_TIP =
+  '지원 제외 = 입력은 정상이지만 현재 적재 모델이 지원하지 않아 제외한 건수다. 유실이나 INCOMPLETE가 아니다.\n' +
+  '"—" 는 0 이 아니라 과거·비계측 작업이라는 뜻이다.';
 const FAILED_TIP =
   '유실 = 작업이 원장에 기록한 failed_records 다. 스텝이 스스로 판정한 값이고 잡마다 단위가 다르다.\n' +
   '"—" 는 0 이 아니라 계측 값이 기록되지 않았다는 뜻이다.';
@@ -1045,6 +1049,9 @@ function SourcesBody({
                     산출 <InfoPopover label="산출" text={RECORDS_TIP} />
                   </th>
                   <th className="col-num">
+                    지원 제외 <InfoPopover label="지원 제외" text={UNSUPPORTED_TIP} />
+                  </th>
+                  <th className="col-num">
                     유실 <InfoPopover label="유실" text={FAILED_TIP} />
                   </th>
                 </tr>
@@ -1069,7 +1076,7 @@ function SourcesBody({
         <IssuesCard issues={report.issues} focusTask={focusTask} />
       )}
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-        산출·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
+        산출·지원 제외·유실이 “—”인 작업은 건수 신호를 남기지 않은 것입니다 — 0건 처리와 다릅니다.
       </p>
       <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
         이 화면은 <b>실행 원장 상세</b>입니다 — 시도(attempt) 전량과 대조 이슈가 여기 있습니다.

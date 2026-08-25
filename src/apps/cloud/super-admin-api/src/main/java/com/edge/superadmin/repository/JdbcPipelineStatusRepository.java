@@ -58,7 +58,9 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 	 */
 	private static final String TASKS_SQL = """
 			SELECT expected_task_id, stage, task_key, dataset, plan_status, task_outcome,
-			       data_status, records_out, failed_records, expected_at, deadline_at,
+			       data_status, records_out,
+			       CASE WHEN task_key = 'LOAD_ETF_HOLDINGS' THEN unsupported_records END AS unsupported_records,
+			       failed_records, expected_at, deadline_at,
 			       missed_at, fulfilled_at, skip_reason, outcome_reason, current_attempt_id,
 			       completeness IS NOT NULL AS has_completeness,
 			       (completeness ->> 'expected')::bigint AS completeness_expected,
@@ -124,7 +126,9 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			SELECT r.pipeline_run_id, r.run_key, r.launch_status, r.orchestration_status,
 			       r.trading_date,
 			       t.stage, t.task_key, t.plan_status, t.task_outcome, t.data_status,
-			       t.records_out, t.failed_records, t.skip_reason, t.outcome_reason,
+			       t.records_out,
+			       CASE WHEN t.task_key = 'LOAD_ETF_HOLDINGS' THEN t.unsupported_records END AS unsupported_records,
+			       t.failed_records, t.skip_reason, t.outcome_reason,
 			       (t.task_outcome = 'PENDING'
 			        AND EXISTS (SELECT 1 FROM ops_task_attempt a
 			                     WHERE a.expected_task_id = t.expected_task_id
@@ -236,6 +240,7 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 						rs.getString("task_outcome"),
 						rs.getString("data_status"),
 						nullableLong(rs, "records_out"),
+						nullableLong(rs, "unsupported_records"),
 						nullableLong(rs, "failed_records"),
 						rs.getString("skip_reason"),
 						rs.getString("outcome_reason"),
@@ -326,6 +331,7 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 				// getLong 은 SQL NULL 을 0 으로 돌려준다 — wasNull 로 갈라야 "0건 처리"와
 				// "신호 없음"이 화면에서 구분된다(ALPHA-182 의 NULL 계약).
 				nullableLong(rs, "records_out"),
+				nullableLong(rs, "unsupported_records"),
 				nullableLong(rs, "failed_records"),
 				mapCompleteness(rs),
 				rs.getObject("expected_at", OffsetDateTime.class),

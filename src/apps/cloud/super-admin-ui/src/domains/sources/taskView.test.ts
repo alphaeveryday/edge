@@ -6,7 +6,8 @@ import { tasksInFocus, taskStatusView } from './taskView.ts';
 
 const task = (o: Partial<TaskStatus> = {}): TaskStatus => ({
   stage: 'raw', taskKey: 'collect', dataset: 'price_daily', planStatus: 'DUE', outcome: 'PENDING',
-  dataStatus: null, executionStatus: null, recordsOut: null, failedRecords: null,
+  dataStatus: null, executionStatus: null, recordsOut: null, unsupportedRecords: null,
+  failedRecords: null,
   lastFinishedAt: null, expectedAt: null, deadlineAt: null, missedAt: null, fulfilledAt: null, skipReason: null, outcomeReason: null,
   completeness: null, attempts: [], ...o,
 });

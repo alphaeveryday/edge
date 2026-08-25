@@ -50,6 +50,35 @@ def test_envelope_flows_into_data_status(tmp_path):
     assert "received_count" not in signals  # 아직 완전성 미배선인 작업의 기존 봉투도 그대로 유효
 
 
+def test_optional_unsupported_records_flows_without_becoming_a_failure(tmp_path):
+    """지원 제외는 관측·저장하되 실제 유실 판정에는 섞지 않는다."""
+    storage = _storage(tmp_path)
+    entry = _entry("LOAD_ETF_HOLDINGS")
+    _write_log(storage, entry, {
+        "run_id": _RUN,
+        "ops": {"records_out": 958, "unsupported_records": 42, "failed_records": 0},
+    })
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+    assert signals["unsupported_records"] == 42
+    # expected_count는 observer가 아니라 Planner snapshot에서 wrapper가 덮어쓰는 값이다.
+    signals.update(expected_count=33, received_count=33)
+    assert wrapper.derive_data_status(signals) == states.DATA_VALID
+
+
+def test_unsupported_records_is_optional_for_existing_envelopes(tmp_path):
+    """기존 producer의 봉투를 깨지 않는다 — 미계측은 0이 아니라 필드 부재다."""
+    storage = _storage(tmp_path)
+    entry = _entry("LOAD_PRICE_DAILY")
+    _write_log(storage, entry, {
+        "run_id": _RUN,
+        "ops": {"records_out": 10, "failed_records": 0},
+    })
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+    assert "unsupported_records" not in signals
+
+
 def test_optional_received_count_flows_at_entity_grain(tmp_path):
     """ETF 수집기가 센 unique entity 수가 보존돼야 Planner snapshot과 독립 대조할 수 있다."""
     storage = _storage(tmp_path)

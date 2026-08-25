@@ -89,6 +89,8 @@ export interface TaskFact {
   task_outcome: string | null;
   data_status?: string | null;
   records_out?: number | null;
+  /** 정상 지원 제외 수치. 판정 조건이 아니라 작업 상세에 보여주는 저장 사실이다. */
+  unsupported_records?: number | null;
   failed_records?: number | null;
   /** 완전성 분모 — null 이면 분모 미배선(위반 아님, 평가 대상 아님) */
   completeness_expected?: number | null;

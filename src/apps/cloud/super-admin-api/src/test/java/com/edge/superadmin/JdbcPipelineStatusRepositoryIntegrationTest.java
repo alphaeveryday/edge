@@ -54,13 +54,21 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 	private void insertTask(String id, String runId, String stage, String taskKey, String dataset,
 			String planStatus, String outcome, String dataStatus, Long recordsOut,
 			Long failedRecords) {
+		insertTask(id, runId, stage, taskKey, dataset, planStatus, outcome, dataStatus,
+				recordsOut, null, failedRecords);
+	}
+
+	private void insertTask(String id, String runId, String stage, String taskKey, String dataset,
+			String planStatus, String outcome, String dataStatus, Long recordsOut,
+			Long unsupportedRecords, Long failedRecords) {
 		jdbc.update("""
 				INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage,
-				       dataset, plan_status, task_outcome, data_status, records_out, failed_records,
+				       dataset, plan_status, task_outcome, data_status, records_out,
+				       unsupported_records, failed_records,
 				       idempotency_key)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 				""", id, runId, taskKey, stage, dataset, planStatus, outcome, dataStatus,
-				recordsOut, failedRecords, runId + taskKey);
+				recordsOut, unsupportedRecords, failedRecords, runId + taskKey);
 	}
 
 	private void insertAttempt(String id, String taskId, String arn, String finishedAt,
@@ -95,8 +103,8 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 	void 최신_런의_모든_축을_컬럼명_그대로_읽는다() {
 		insertRun("r1", "etf-daily:2026-07-27T15:40", "LAUNCHED", "FAILED", "2026-07-27",
 				"2026-07-27T06:40:00Z");
-		insertTask("t1", "r1", "raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE", "FULFILLED",
-				"INCOMPLETE", 2736L, 4L);
+		insertTask("t1", "r1", "feature", "LOAD_ETF_HOLDINGS", "etf_holding_snapshot", "DUE", "FULFILLED",
+				"INCOMPLETE", 2736L, 42L, 4L);
 		insertAttempt("a1", "t1", "arn:aws:ecs:task/1", "2026-07-27T06:45:00Z",
 				"2026-07-27T06:41:00Z");
 
@@ -107,9 +115,9 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		assertThat(run.orchestrationStatus()).isEqualTo("FAILED");
 		assertThat(run.tradingDate()).isEqualTo("2026-07-27");
 		assertThat(run.tasks()).singleElement().satisfies(t -> {
-			assertThat(t.taskKey()).isEqualTo("PRICE_COLLECTION_KIS");
-			assertThat(t.stage()).isEqualTo("raw");
-			assertThat(t.dataset()).isEqualTo("price_daily");
+			assertThat(t.taskKey()).isEqualTo("LOAD_ETF_HOLDINGS");
+			assertThat(t.stage()).isEqualTo("feature");
+			assertThat(t.dataset()).isEqualTo("etf_holding_snapshot");
 			assertThat(t.planStatus()).isEqualTo("DUE");
 			assertThat(t.outcome()).isEqualTo("FULFILLED");
 			// 실행은 성공(FULFILLED)인데 데이터는 불완전하다 — 이 두 축이 함께 와야
@@ -117,6 +125,7 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 			assertThat(t.dataStatus()).isEqualTo("INCOMPLETE");
 			assertThat(t.currentAttempt().executionStatus()).isEqualTo("SUCCEEDED");
 			assertThat(t.recordsOut()).isEqualTo(2736L);
+			assertThat(t.unsupportedRecords()).isEqualTo(42L);
 			assertThat(t.failedRecords()).isEqualTo(4L);
 			assertThat(t.currentAttempt().finishedAt()).isNotNull();
 		});
@@ -134,6 +143,7 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		TaskStatus task = repository.latestRun().orElseThrow().tasks().getFirst();
 
 		assertThat(task.recordsOut()).isNull();
+		assertThat(task.unsupportedRecords()).isNull();
 		assertThat(task.failedRecords()).isNull();
 		assertThat(task.completeness()).isNull();
 		assertThat(task.attempts()).isEmpty();       // 시도가 없으면 빈 목록이다(null 아님)
@@ -445,10 +455,10 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		insertRun("g-new", "etf-daily:2026-07-27T15:40", "LAUNCHED", "FAILED", "2026-07-27",
 				daysAgo(1));
 		// stage 를 feature→raw 순으로 삽입 — 문자열 정렬이면 feature 가 앞이라 CASE 정렬이 검증된다.
-		insertTask("gt-new-f", "g-new", "feature", "TAG_NEWS", "news_assertions", "DUE",
-				"FULFILLED", "UNKNOWN", null, null);
+		insertTask("gt-new-f", "g-new", "feature", "LOAD_ETF_HOLDINGS", "etf_holding_snapshot", "DUE",
+				"FULFILLED", "UNKNOWN", null, 42L, null);
 		insertTask("gt-new-r", "g-new", "raw", "PRICE_COLLECTION_KIS", "price_daily", "DUE",
-				"FAILED", "UNKNOWN", null, 4L);
+				"FAILED", "UNKNOWN", null, 42L, 4L);
 		insertRun("g-old", "etf-daily:2026-07-26T15:40", "LAUNCHED", "SUCCEEDED", "2026-07-26",
 				daysAgo(2));
 		insertTask("gt-old", "g-old", "raw", "NEWS_COLLECTION_BIGKINDS", "stock_news", "SKIPPED",
@@ -475,7 +485,7 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		// 셀은 런별로 묶이고, 한 런 안에서는 파이프라인 순서(raw→feature)다.
 		assertThat(slots.getLast().tasks())
 				.extracting(PipelineStatusRepository.GridCell::taskKey)
-				.containsExactly("PRICE_COLLECTION_KIS", "ASSEMBLE_EVENTS", "TAG_NEWS");
+				.containsExactly("PRICE_COLLECTION_KIS", "ASSEMBLE_EVENTS", "LOAD_ETF_HOLDINGS");
 		assertThat(slots.getFirst().tasks()).singleElement().satisfies(c -> {
 			assertThat(c.planStatus()).isEqualTo("SKIPPED");
 			assertThat(c.outcome()).isNull();
@@ -483,7 +493,9 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		});
 		// 건수 NULL 은 격자 경로에서도 0 으로 뭉개지지 않는다(ALPHA-182).
 		assertThat(slots.getLast().tasks().getFirst().recordsOut()).isNull();
+		assertThat(slots.getLast().tasks().getFirst().unsupportedRecords()).isNull();
 		assertThat(slots.getLast().tasks().getFirst().failedRecords()).isEqualTo(4L);
+		assertThat(slots.getLast().tasks().getLast().unsupportedRecords()).isEqualTo(42L);
 		// 실행 중 신호 — 귀결 전(PENDING)이면서 RUNNING 시도가 있는 작업만 참이다.
 		assertThat(slots.getLast().tasks().get(1).running()).isTrue();     // PENDING + RUNNING
 		assertThat(slots.getLast().tasks().getFirst().running()).isFalse(); // FAILED + 죽은 RUNNING 잔재

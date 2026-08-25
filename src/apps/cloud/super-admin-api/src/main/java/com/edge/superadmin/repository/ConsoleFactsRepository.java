@@ -145,7 +145,8 @@ public interface ConsoleFactsRepository {
 	 */
 	record TaskRow(String taskKey, String runKey, String pipelineType, LocalDate tradingDate,
 			String stage, String dataset, boolean required, String planStatus, String taskOutcome,
-			String dataStatus, Long recordsOut, Long failedRecords, Long completenessExpected,
+			String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
+			Long completenessExpected,
 			Long completenessReceived, Long completenessMissing, long attempts,
 			String datasetContractKey, LocalDate expectedAsOf, LocalDate actualAsOf,
 			OffsetDateTime collectedAt, String freshnessStatus, String freshnessReason) {

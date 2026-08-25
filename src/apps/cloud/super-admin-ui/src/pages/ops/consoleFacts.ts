@@ -197,6 +197,7 @@ const optionalBool: Check = (v) => v === undefined || bool(v);
  */
 const count: Check = (v) => Number.isSafeInteger(v) && (v as number) >= 0;
 const nullableCount: Check = (v) => v === null || count(v);
+const optionalNullableCount: Check = (v) => v === undefined || nullableCount(v);
 /** 기준값 — 짝수 표본의 중앙값이라 소수가 정상이다. */
 const ratio: Check = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const nullableRatio: Check = (v) => v === null || ratio(v);
@@ -217,7 +218,8 @@ export const RUN_FIELDS: Record<string, Check> = {
 export const TASK_FIELDS: Record<string, Check> = {
   taskKey: text, runId: text, pipelineType: text, tradingDate: nullableDate, stage: text,
   dataset: nullableText, required: bool, planStatus: text, taskOutcome: nullableText,
-  dataStatus: nullableText, recordsOut: nullableCount, failedRecords: nullableCount,
+  dataStatus: nullableText, recordsOut: nullableCount, unsupportedRecords: optionalNullableCount,
+  failedRecords: nullableCount,
   completenessExpected: nullableCount, completenessReceived: nullableCount,
   completenessMissing: nullableCount, attempts: count,
 };
@@ -385,6 +387,7 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       task_outcome: t.taskOutcome,
       data_status: t.dataStatus,
       records_out: t.recordsOut,
+      unsupported_records: t.unsupportedRecords,
       failed_records: t.failedRecords,
       completeness_expected: t.completenessExpected,
       completeness_received: t.completenessReceived,

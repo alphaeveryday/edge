@@ -946,6 +946,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                 <th>귀결</th>
                 <th>데이터</th>
                 <th className="num">산출</th>
+                <th className="num">지원 제외</th>
                 <th className="num">유실</th>
                 <th>사유</th>
               </tr>
@@ -964,6 +965,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                   </td>
                   <td className="col-muted">{t.dataStatus ?? '—'}</td>
                   <td className="num">{t.recordsOut ?? '—'}</td>
+                  <td className="num">{t.unsupportedRecords ?? '—'}</td>
                   <td className="num">{t.failedRecords ?? '—'}</td>
                   <td className="col-muted t-xs">{t.reason ?? '—'}</td>
                 </tr>

@@ -299,7 +299,9 @@ def test_현금과_옵션은_지원제외로_세고_유실에서_뺀다(tmp_path
     assert log["rows_read"] == 3 and log["created"] == 1
     assert log["skipped_unsupported_asset"] == 2
     assert log["unsupported_asset_counts"] == {"CASH": 1, "OPTION": 1}
-    assert log["ops"] == {"records_out": 1, "failed_records": 0}
+    # WHY: 정상 지원 제외를 유실과 분리해야 3행 입력을 적재 1 + 지원 제외 2 + 유실 0으로
+    # 설명할 수 있다. 현금·옵션을 failed_records에 넣으면 정상 런이 INCOMPLETE가 된다.
+    assert log["ops"] == {"records_out": 1, "unsupported_records": 2, "failed_records": 0}
 
 
 def test_미지_자산유형은_지원제외로_숨기지_않는다(tmp_path, monkeypatch):

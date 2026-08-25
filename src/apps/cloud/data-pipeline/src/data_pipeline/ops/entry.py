@@ -248,6 +248,11 @@ def _observe_from_log(
         "request_completed": completed,
         "empty_allowed": entry.empty_allowed,
     }
+    # 지원 제외는 일부 작업만 내는 저장 전용 신호다. 공통 봉투의 필수값으로 만들면 아직 이
+    # 계측을 내지 않는 모든 작업이 UNKNOWN 으로 회귀한다. 값이 있으면 그대로 넘기고 검증은
+    # 원장에 쓰기 직전 wrapper의 공통 카운터 검증이 맡는다.
+    if "unsupported_records" in ops:
+        signals["unsupported_records"] = ops["unsupported_records"]
     if "ops_attempt_id" in log:
         signals["entity_resolution_attempt_id"] = log["ops_attempt_id"]
     # 완전성의 실제값은 entity grain 을 아는 스텝만 선택적으로 낸다. 공통 필수 봉투로 올리면
