@@ -140,11 +140,14 @@ services:
         condition: service_healthy
     volumes:
       - ./src/libs/schema/migrations-onprem:/flyway/sql:ro
+      # 로컬 전용 시드(seed-local-onprem — SSOT 밖, CI·CD 미포함): 증권사 소유
+      # 종목 마스터(etf_instrument)가 "이미 있다"를 재현한다.
+      - ./src/libs/schema/seed-local-onprem:/flyway/seed:ro
     command: >-
       -url=jdbc:postgresql://postgres-onprem:5432/edge_onprem
       -user=edge -password=edge
       -connectRetries=10
-      -locations=filesystem:/flyway/sql
+      -locations=filesystem:/flyway/sql,filesystem:/flyway/seed
       -ignoreMigrationPatterns=repeatable:missing
       migrate
 

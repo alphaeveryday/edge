@@ -45,6 +45,12 @@ Table "console_action_log" {
   "occurred_at" timestamptz [not null]
 }
 
+Table "etf_instrument" {
+  "etf_ticker" varchar(20) [pk]
+  "etf_name" text [not null]
+  "updated_at" timestamptz [not null]
+}
+
 Table "member" {
   "member_id" bigint [pk, increment]
   "email" text [not null]
