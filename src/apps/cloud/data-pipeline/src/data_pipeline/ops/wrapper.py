@@ -243,6 +243,7 @@ def instrument(
     ))
 
     def run_with_attempt_marker():
+        """OPS_LEDGER_ATTEMPT_ID env 를 이 시도의 것으로 바꿔 본 작업을 돌리고 원복한다."""
         previous = os.environ.get("OPS_LEDGER_ATTEMPT_ID")
         if attempt_id is None:
             os.environ.pop("OPS_LEDGER_ATTEMPT_ID", None)

@@ -21,12 +21,14 @@ def _region() -> str | None:
 
 
 def stepfunctions_client():
+    """SFN 클라이언트 — 지연 import·region 명시(모듈 도크스트링)."""
     import boto3
 
     return boto3.client("stepfunctions", region_name=_region())
 
 
 def ecs_client():
+    """ECS 클라이언트 — 지연 import·region 명시(모듈 도크스트링)."""
     import boto3
 
     return boto3.client("ecs", region_name=_region())

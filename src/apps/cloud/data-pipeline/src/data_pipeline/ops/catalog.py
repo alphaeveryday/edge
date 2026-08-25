@@ -527,6 +527,7 @@ def entries(pipeline_type: str | None = None) -> tuple[CatalogEntry, ...]:
 
 
 def get(task_key: str) -> CatalogEntry | None:
+    """task_key → 엔트리, 없으면 None(미등록 작업)."""
     return CATALOG.get(task_key)
 
 

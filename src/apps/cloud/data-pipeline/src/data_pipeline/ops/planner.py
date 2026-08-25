@@ -43,6 +43,8 @@ _ORCH_MAP = {
 
 @dataclass
 class PlanResult:
+    """plan 호출 한 번의 결과 요약 — `created` 는 이 호출이 run 을 새로 만들었는지다."""
+
     pipeline_run_id: str
     run_key: str
     execution_name: str

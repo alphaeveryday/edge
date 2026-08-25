@@ -137,6 +137,7 @@ def execution_evidence(events: list[dict]) -> dict[str, list[dict]]:
     memo: dict[object, object] = {}   # eid -> 소속 entered-id(occurrence 키)
 
     def owning_entered_id(ev):
+        """이벤트가 속한 TaskStateEntered 의 id(occurrence 키) — previousEventId 체인을 memo 로 거슬러 찾는다."""
         chain: list[object] = []
         cur = ev
         result = None

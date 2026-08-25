@@ -290,6 +290,7 @@ class Ledger:
             )
 
     def set_eligible(self, expected_task_id: str) -> None:
+        """기대 작업의 eligible_at 을 최초 1회 찍는다 — 재호출 시 eligible_at 은 유지되고 updated_at 만 갱신된다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE ops_expected_task SET eligible_at=COALESCE(eligible_at, now()),"
@@ -434,6 +435,7 @@ class Ledger:
             return str(cur.fetchone()[0])
 
     def attempts_for(self, expected_task_id: str) -> list[dict]:
+        """한 기대 작업의 attempt 행 전부 — created_at 순."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT attempt_id, ecs_task_arn, execution_status, exit_code, record_source,"
@@ -488,6 +490,7 @@ class Ledger:
 
     # ── Reconciler 조회 ───────────────────────────────────────
     def get_pipeline_run(self, run_key: str) -> dict | None:
+        """run_key → pipeline_run 행 dict, 없으면 None."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT pipeline_run_id, run_key, execution_name, expected_execution_arn,"
@@ -504,6 +507,7 @@ class Ledger:
             return dict(zip(keys, row))
 
     def expected_tasks_for(self, pipeline_run_id: str) -> list[dict]:
+        """한 run 의 기대 작업 행 전부."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT expected_task_id, task_key, stage, plan_status, task_outcome,"
