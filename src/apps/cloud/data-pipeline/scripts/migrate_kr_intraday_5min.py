@@ -37,6 +37,7 @@ def _is_ticker_parquet(key: str) -> bool:
 
 
 def main() -> None:
+    """KR 5분봉 파티션 마이그레이션 스크립트 — 드라이런 지원."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", default="edge-dev-pipeline-lake")
     parser.add_argument("--workers", type=int, default=24)

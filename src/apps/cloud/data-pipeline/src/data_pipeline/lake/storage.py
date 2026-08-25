@@ -1070,11 +1070,17 @@ def minute_window_manifest_key(
 class Storage(Protocol):
     """레이크 키-바이트 저장 계약. 키는 위 빌더가 만든 상대경로."""
 
-    def put_bytes(self, key: str, data: bytes) -> None: ...
+    def put_bytes(self, key: str, data: bytes) -> None:
+        """key 에 바이트를 쓴다 — 덮어쓰기 방지(불변 계약)는 `put_immutable` 몫이다."""
+        ...
 
-    def get_bytes(self, key: str) -> bytes: ...
+    def get_bytes(self, key: str) -> bytes:
+        """key 의 바이트 — 없으면 백엔드별 not-found 예외."""
+        ...
 
-    def list_keys(self, prefix: str) -> list[str]: ...
+    def list_keys(self, prefix: str) -> list[str]:
+        """문자열 prefix 로 시작하는 키 전부(정렬)."""
+        ...
 
     # 멱등 삭제 — 없는 키는 성공이다(같은 압축이 두 번 돌아도 두 번째가 안 죽는다).
     #
@@ -1087,7 +1093,9 @@ class Storage(Protocol):
     # ⚠️ **위 계약은 산문이 아니라 IAM 이 진다** — 태스크 롤의 `s3:DeleteObject` 는
     # 두 객체 형태로 좁혀져 있다(`modules/data-pipeline/iam.tf`). 다른 존·다른
     # 프리픽스를 지우려 부르면 여기서가 아니라 런타임 AccessDenied 로 죽는다.
-    def delete_keys(self, keys: list[str]) -> None: ...
+    def delete_keys(self, keys: list[str]) -> None:
+        """멱등 일괄 삭제 — 용도 제한·IAM 계약은 위 주석 참조."""
+        ...
 
 
 class LocalStorage:
@@ -1100,14 +1108,17 @@ class LocalStorage:
         return self.root / key
 
     def put_bytes(self, key: str, data: bytes) -> None:
+        """부모 디렉터리를 만들고 파일로 쓴다."""
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
     def get_bytes(self, key: str) -> bytes:
+        """파일 바이트 — 없으면 FileNotFoundError."""
         return self._path(key).read_bytes()
 
     def list_keys(self, prefix: str) -> list[str]:
+        """S3 와 같은 문자열 prefix 매칭 — forward-slash 키, 정렬(아래 주석)."""
         # S3 처럼 '문자열 prefix' 매칭 — prefix 를 디렉터리로 취급하면 백엔드 간
         # 동작이 갈린다(컴포넌트 중간을 자르는 prefix·전체 키 전달 등). 두 백엔드의
         # 키 규약을 일치시켜 로컬 통과·배포 S3 불일치를 막는다.
@@ -1123,6 +1134,7 @@ class LocalStorage:
         return sorted(k for k in keys if k.startswith(prefix))
 
     def delete_keys(self, keys: list[str]) -> None:
+        """멱등 삭제(missing_ok) — 빈 디렉터리는 남긴다(아래 주석)."""
         # missing_ok: 없는 키를 지우는 건 성공이다(프로토콜 주석) — 빈 디렉터리는
         # 남겨 둔다. S3 에는 디렉터리가 없어, 지우면 두 백엔드의 list_keys 결과가
         # 갈릴 일이 애초에 없는 쪽으로 맞춘다.
@@ -1139,6 +1151,7 @@ class S3Storage:
 
     @property
     def client(self):  # pragma: no cover - 통합(실 S3)
+        """지연 생성 S3 client."""
         if self._client is None:
             import boto3
 
@@ -1146,12 +1159,15 @@ class S3Storage:
         return self._client
 
     def put_bytes(self, key: str, data: bytes) -> None:  # pragma: no cover - 통합
+        """put_object 로 쓴다."""
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
 
     def get_bytes(self, key: str) -> bytes:  # pragma: no cover - 통합
+        """get_object 바이트 — 없으면 ClientError(NoSuchKey)."""
         return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
 
     def list_keys(self, prefix: str) -> list[str]:  # pragma: no cover - 통합
+        """list_objects_v2 페이지네이션 전량(정렬)."""
         paginator = self.client.get_paginator("list_objects_v2")
         keys: list[str] = []
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
@@ -1159,6 +1175,7 @@ class S3Storage:
         return sorted(keys)
 
     def delete_keys(self, keys: list[str]) -> None:  # pragma: no cover - 통합
+        """1,000키 단위 delete_objects — 부분 실패 처리는 아래 주석 참조."""
         # delete_objects 는 한 번에 1,000 키가 상한이라 끊어 보낸다. S3 는 없는 키의
         # 삭제도 성공으로 답하므로 로컬 백엔드의 missing_ok 와 계약이 같다.
         #

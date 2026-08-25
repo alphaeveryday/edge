@@ -53,6 +53,7 @@ class Athena:
         return self.client
 
     def run(self, sql: str, *, database: str = "") -> list[tuple[str, ...]]:
+        """SQL 한 건을 동기 실행해 결과 행(문자열 튜플)을 낸다 — 비성공 종료는 AthenaError."""
         c = self._client()
         kwargs: dict = {"QueryString": sql, "WorkGroup": self.workgroup}
         if database:

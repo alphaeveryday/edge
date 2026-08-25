@@ -56,6 +56,7 @@ def normalize_url(url: str | None) -> str | None:
 
 
 def url_hash(url: str | None) -> str | None:
+    """정규화 URL 의 sha256 hex — 정규화 불가면 None."""
     normalized = normalize_url(url)
     if not normalized:
         return None

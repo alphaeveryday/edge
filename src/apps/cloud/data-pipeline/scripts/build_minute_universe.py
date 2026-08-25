@@ -51,6 +51,7 @@ from data_pipeline.steps.build_minute_universe import (  # noqa: E402
 
 
 def main() -> None:
+    """1분 유니버스 스냅샷을 만들어 파일 또는 stdout 에 쓴다."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", help="쓸 파일 경로(없으면 stdout)")
     args = parser.parse_args()

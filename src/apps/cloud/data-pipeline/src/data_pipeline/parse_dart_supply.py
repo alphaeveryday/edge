@@ -107,6 +107,7 @@ def parse_krw_amount(text: object | None) -> int | None:
 
 
 def parse_ratio_pct(text: object | None) -> float | None:
+    """텍스트에서 비율(%) 수치 하나를 뽑는다 — 없으면 None."""
     value = _normalize_text(text)
     if _is_nullish(value):
         return None
@@ -115,6 +116,7 @@ def parse_ratio_pct(text: object | None) -> float | None:
 
 
 def parse_date_value(text: object | None) -> date | None:
+    """텍스트에서 날짜 하나 — 구분자형 우선, 8자리 컴팩트 폴백, 실패는 None."""
     value = _normalize_text(text)
     if _is_nullish(value):
         return None
@@ -139,6 +141,7 @@ def parse_date_value(text: object | None) -> date | None:
 
 
 def parse_date_range(text: object | None) -> tuple[date | None, date | None]:
+    """텍스트에서 날짜 구간 (시작, 끝) — 최대 둘을 순서대로, 못 찾은 칸은 None."""
     value = _normalize_text(text)
     # '-' 는 문자군 끝(리터럴) — parse_date_value 와 동일 이유(컴팩트 날짜 오파싱 방지, Codex P2).
     matches = re.findall(r"(\d{4})\s*[./년-]\s*(\d{1,2})\s*[./월-]\s*(\d{1,2})", value)
@@ -313,6 +316,7 @@ def parse_supply(html_or_xml_text: str) -> dict[str, Any]:
 def _select_primary_member(names: list[str], archive: zipfile.ZipFile) -> str:
     """ZIP 멤버 중 본문 문서를 고른다 — xml > htm/html/txt > 기타, 동급이면 큰 파일 우선."""
     def rank(name: str) -> tuple[int, int, str]:
+        """정렬 키 — (형식 등급, -크기, 이름)."""
         lowered = name.lower()
         if lowered.endswith(".xml"):
             bucket = 0

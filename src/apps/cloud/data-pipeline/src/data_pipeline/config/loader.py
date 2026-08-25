@@ -155,6 +155,7 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """설정 소스 우선순위를 정하는 pydantic-settings 훅 — env > 파일(init)."""
         # 환경변수(높은 우선순위)가 파일에서 읽어 주입한 init 데이터를 덮어쓴다(env > file).
         return (env_settings, init_settings)
 

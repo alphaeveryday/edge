@@ -358,6 +358,7 @@ def _gate_batch(complete_fn, system: str, chunk: list[dict], view: ProcessRegist
     drops: dict[str, int] = {}
 
     def drop(reason: str, count: int = 1) -> None:
+        """드롭 사유 카운터 증가."""
         drops[reason] = drops.get(reason, 0) + count
 
     raw_items = payload.get("items")
@@ -698,6 +699,7 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
 
 
 def load_entity_index(conn) -> dict[str, str]:
+    """instrument 표의 ticker → instrument_id 색인."""
     with conn.cursor() as cur:
         cur.execute("SELECT ticker, instrument_id FROM instrument")
         return {str(t): str(i) for t, i in cur.fetchall()}

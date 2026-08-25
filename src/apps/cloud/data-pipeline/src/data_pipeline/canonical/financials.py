@@ -84,6 +84,7 @@ def unpivot_sql(database: str, staging: str, *, run_id: str,
         for code, (kind, _) in REPRT_PERIOD.items())
 
     def case(idx: int) -> str:
+        """MEASURES 분기 CASE 식 — 각 measure 튜플의 idx 번째 원소를 팔로 쓴다."""
         arms = "\n           ".join(
             f"WHEN m.period_kind = '{m[0]}' AND m.amount_kind = '{m[1]}' THEN {m[idx]}"
             for m in MEASURES)

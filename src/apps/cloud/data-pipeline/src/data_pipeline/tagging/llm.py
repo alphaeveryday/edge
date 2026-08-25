@@ -69,6 +69,7 @@ def openai_compatible_complete_fn(
     is_deepseek = "deepseek" in base_url.lower()
 
     def complete(system: str, user: str) -> str:
+        """JSON 모드 chat completion 한 번 — 응답 본문 문자열을 반환한다."""
         request_body: dict = {
             "model": model_name,
             "messages": [{"role": "system", "content": system},
