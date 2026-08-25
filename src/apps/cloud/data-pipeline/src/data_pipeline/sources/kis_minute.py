@@ -64,6 +64,7 @@ INTERVAL_SECONDS = 60
 # 아래 연접 `strptime` 이 한쪽 자리를 훔쳐가지 못한다(kis_sector_index 와 같은 문).
 _YMD_LEN = 8
 _HHMMSS_LEN = 6
+_NO_DATA_INT64_MIN = "-9223372036854775808"
 
 KST = timezone(timedelta(hours=9))
 
@@ -92,8 +93,8 @@ class KisDayIncompleteError(KisUnitError):
     """
 
 
-def parse_minute_row(raw: dict, symbol: str) -> Candle:
-    """`output2` 행 하나 → `Candle`. 필드가 빠지거나 형이 다르면 즉시 raise 한다.
+def parse_minute_row(raw: dict, symbol: str) -> Candle | None:
+    """`output2` 행 하나 → `Candle` 또는 벤더의 데이터 없음이면 `None`.
 
     ⚠️ `stck_cntg_hour` 는 **구간의 끝**이다(실측) — window_start 는 1분 앞이다.
     응답에 시간대 표기가 없어 **KST 로 고정**한다(KRX 로컬 시장 전용 TR).
@@ -145,8 +146,11 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle:
     #     거기서만 가드가 일한다 — `_fetch_day` 안에 있다.
     # 지수 어댑터도 페이지 전체를 돌려주므로 노출은 같다 — 그쪽 격자 가드도 같은 값을
     # 치르고 있다. 여기서 따라 할 이유가 아니다.
+    raw_volume = raw.get("cntg_vol")
+    if raw_volume == _NO_DATA_INT64_MIN:
+        return None
     values = {name: to_decimal(raw.get(key), key, symbol) for name, key in _PRICE_FIELDS}
-    volume = to_decimal(raw.get("cntg_vol"), "cntg_vol", symbol)
+    volume = to_decimal(raw_volume, "cntg_vol", symbol)
     # currency 는 KIS 가 주지 않는다 — 지어내지 않고 None 으로 둔다(KRX 전용이라 KRW 지만,
     # 관측하지 않은 값을 artifact 에 싣지 않는다는 규약이 더 중요하다)
     return build_candle(symbol, window_end=end, span_seconds=INTERVAL_SECONDS,
@@ -186,7 +190,8 @@ class KisMinuteClient:
         """
         hour = window_end.astimezone(KST).strftime("%H%M%S")
         rows = self._rows(symbol, hour)
-        return tuple(parse_minute_row(row, symbol) for row in rows)
+        return tuple(candle for row in rows
+                     if (candle := parse_minute_row(row, symbol)) is not None)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -488,6 +493,9 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                 if trade_date != self._ymd:
                     continue
                 candle = parse_minute_row(raw, symbol)
+                if candle is None:
+                    raise KisDayIncompleteError(
+                        f"KIS 소급 분봉 {symbol} {trade_date}: 벤더 데이터 없음")
                 if candle.window_end.second:
                     # 분 격자를 벗어난 봉 하나가 그 뒤 합성 전부를 같은 오프셋으로 밀어
                     # 계획된 window 키와 어긋나게 만든다 — 예외도 로그도 없이 그 종목의
