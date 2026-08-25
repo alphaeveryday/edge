@@ -384,8 +384,8 @@ resource "aws_iam_role_policy" "minute_session" {
         # 5분 파생 산출 (ALPHA-955 — `rollup-minute-session`). 이 태스크가 레이크에
         # 만드는 **유일한** 것이고, 그래서 프리픽스를 그 하나로 못박는다
         # (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례).
-        # 없으면 매일 AccessDenied 인데 **스케줄러는 RunTask 제출까지만 보므로 조용한
-        # 실패**다 — 스텝의 exit≠0 을 보는 백스톱이 이 레인엔 없다.
+        # 없으면 매일 AccessDenied 다. Scheduler 자체는 RunTask 제출까지만 보지만 아래
+        # ECS Task State Change rule 이 이 task family의 exit≠0 을 알람 토픽으로 올린다.
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = ["${var.lake_bucket_arn}/canonical/market_data/intraday_5m/*"]
@@ -536,13 +536,12 @@ locals {
   # 따로 끄는 손잡이는 없다 — 필요해지면 그때 가른다. 실패해도 산출이 없을 뿐 기존
   # 파일을 덮지 않아(`_rollup_day` 가드) 급히 꺼야 할 성질이 아니다.
   #
-  # 🔴 **실패는 이 스케줄에서 안 보인다** — 스케줄러는 RunTask 제출까지만 보므로
-  # 컨테이너 exit≠0 이 관측되지 않는다(이 레인 공통. DLQ·retry_policy 는 이 유형을 못
-  # 잡는다: 제출은 성공하고 태스크가 나중에 죽는다). 백스톱은 **다음 날 실행의 구멍
-  # 판정**이다 — 이 스텝이 매번 `unfilled_settled_days` 로 "원장이 멈춘 거래일인데 5분
+  # Scheduler의 DLQ·retry_policy는 RunTask 제출 뒤의 컨테이너 exit≠0을 못 보지만,
+  # 아래 ECS Task State Change rule이 이 task family의 non-zero를 알람 토픽으로 올린다.
+  # **다음 날 실행의 구멍 판정**도 별도 진단으로 남는다 — 이 스텝이 매번
+  # `unfilled_settled_days` 로 "원장이 멈춘 거래일인데 5분
   # 산출이 없는 날"을 함께 보고한다. 업종지수 세션도 stop 이 승객 레인까지 drain 하므로
-  # (`session_ops.stop_session_cli`) settled 로 잡힌다. ⚠️ 그건 **로그**지 경보가 아니다
-  # — 경보는 이 레인 전체가 함께 받아야 할 별건이다.
+  # (`session_ops.stop_session_cli`) settled 로 잡힌다.
   minute_session_sector_rollup_schedule = {
     expression = var.minute_session_sector_rollup_expression
     # `--session-date` 를 안 준다 = 오늘(KST). 16:00 KST 는 그날이라 맞다 —
@@ -603,9 +602,8 @@ resource "aws_scheduler_schedule" "minute_session" {
 
     # 재시도는 **컨테이너 기동 실패**만 덮는다 — 스케줄러는 RunTask **제출**까지만 보므로
     # 컨테이너가 뜬 뒤의 exit≠0(DB 장애로 start 가 2, 상한 초과로 stop 이 1)은 스케줄러엔
-    # 성공으로 보인다. ⚠️ 그 공백을 메울 백스톱이 이 레인엔 아직 없다(daily 레인은
-    # Reconciler 가 메운다) — start 가 그렇게 실패하면 **그 날은 통째로 안 돈다**.
-    # 지금의 신호는 컨테이너 로그와 desired_count 뿐이다.
+    # 성공으로 보인다. 아래 ECS Task State Change rule이 이 task family의 exit≠0을 기존
+    # 알람 토픽으로 올린다. start 가 실패하면 그 날은 통째로 안 돌 수 있으므로 경보가 필요하다.
     # 상한을 짧게 두는 이유: start 는 개장 전에 떠야 의미가 있고, stop 의 늦은 재시도는
     # 이미 지난 세션을 상대로 돌아 게이트가 비자마자 내려 무해하다.
     retry_policy {
@@ -614,6 +612,73 @@ resource "aws_scheduler_schedule" "minute_session" {
     }
     dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
+}
+
+# Scheduler 는 RunTask 제출까지만 보므로 컨테이너 exit 1/2는 DLQ에 가지 않는다.
+# lifecycle task family만, 그리고 실제 data-pipeline 컨테이너가 non-zero로 멈춘 경우만
+# 기존 운영 알람 토픽에 전달한다(ALPHA-1026).
+resource "aws_cloudwatch_event_rule" "minute_session_failure" {
+  name        = "${var.name}-minute-session-failure"
+  description = "Alert when a minute-session lifecycle task exits non-zero"
+
+  event_pattern = jsonencode({
+    source        = ["aws.ecs"]
+    "detail-type" = ["ECS Task State Change"]
+    detail = {
+      lastStatus = ["STOPPED"]
+      taskDefinitionArn = [{
+        prefix = "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${aws_ecs_task_definition.minute_session.family}:"
+      }]
+      containers = {
+        name     = [local.container_name]
+        exitCode = [{ anything-but = 0 }]
+      }
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "minute_session_failure" {
+  rule      = aws_cloudwatch_event_rule.minute_session_failure.name
+  target_id = "alarm-sns"
+  arn       = aws_sns_topic.alarms.arn
+  role_arn  = aws_iam_role.minute_session_failure_events.arn
+}
+
+data "aws_iam_policy_document" "minute_session_failure_events_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudwatch_event_rule.minute_session_failure.arn]
+    }
+  }
+}
+
+resource "aws_iam_role" "minute_session_failure_events" {
+  name               = "${var.name}-minute-session-failure-events"
+  assume_role_policy = data.aws_iam_policy_document.minute_session_failure_events_assume.json
+}
+
+resource "aws_iam_role_policy" "minute_session_failure_events" {
+  name = "${var.name}-minute-session-failure-events"
+  role = aws_iam_role.minute_session_failure_events.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "sns:Publish"
+      Resource = aws_sns_topic.alarms.arn
+    }]
+  })
 }
 
 # ── 분봉 트리거 설명 소비자 (ALPHA-719) ────────────────────────────────
