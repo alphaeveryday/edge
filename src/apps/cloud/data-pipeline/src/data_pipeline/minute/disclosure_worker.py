@@ -168,6 +168,8 @@ def build_poll_manifest(
 
 @dataclass
 class DisclosureWorkerConfig:
+    """Disclosure Worker loop 설정 — 값이 갈리는 노브의 근거는 각 필드 주석에 있다."""
+
     worker_id: str
     dataset: str
     source_code: str

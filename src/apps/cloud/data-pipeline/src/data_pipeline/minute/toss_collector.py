@@ -39,11 +39,14 @@ class TossPriceCollector:
     _artifact_uri: str = field(default="pending://artifact", repr=False)
 
     def kind_of(self, unit_id: str) -> str:
+        """토스 호출 경로 분기 — 지수 심볼이면 "index", 아니면 "stock"."""
         return "index" if unit_id in self.index_symbols else "stock"
 
     def collect(
         self, request: CollectionRequest, now: datetime
     ) -> tuple[CollectionResult, tuple[dict, ...], dict[str, list[str]]]:
+        """collector 계약 — `(result, records, manifest)`. 판정·조립은 벤더 공통
+        `collect_units` 에 위임하고, 이 벤더가 정하는 건 `_candle_for` 뿐이다."""
         return collect_units(
             request, now,
             candle_for=lambda unit_id: self._candle_for(unit_id, request),

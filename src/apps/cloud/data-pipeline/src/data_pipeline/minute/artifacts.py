@@ -35,6 +35,7 @@ class ArtifactImmutabilityError(RuntimeError):
 
 
 def sha256_bytes(data: bytes) -> str:
+    """바이트의 sha256 hex — artifact·manifest checksum 유도의 단일 함수."""
     return hashlib.sha256(data).hexdigest()
 
 
@@ -104,6 +105,7 @@ def build_window_manifest(
 
 
 def serialize_manifest(manifest: dict) -> bytes:
+    """manifest 의 결정적 직렬화 — canonical_json 규약의 바이트(checksum 유도용)."""
     return canonical_json(manifest).encode("utf-8")
 
 

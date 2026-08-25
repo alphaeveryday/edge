@@ -136,6 +136,7 @@ def canonical_json(payload: object) -> str:
 
 
 def content_checksum(payload: object) -> str:
+    """`canonical_json` 바이트의 sha256 hex — v0.7 10.6 규약의 결정적 checksum."""
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
@@ -399,6 +400,7 @@ class Universe(BaseModel):
 
 
 def load_universe(path: Path) -> Universe:
+    """로컬 universe.json 을 읽어 검증된 `Universe` 로 만든다 — URI 판은 `load_universe_uri`."""
     return Universe.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 

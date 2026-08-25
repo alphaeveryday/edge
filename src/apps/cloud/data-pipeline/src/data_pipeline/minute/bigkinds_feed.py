@@ -55,6 +55,12 @@ class BigKindsMinuteFeed:
     session_date: str  # YYYY-MM-DD — 세션 축과 같은 날짜만 조회
 
     def fetch_page(self, poll_index: int, page: int, page_size: int) -> NewsPage:
+        """feed 계약 구현 — 세션 날짜 하루의 기사 page 하나를 `NewsPage` 로 반환한다.
+
+        page 는 1-base(내부에서 0-base 변환). 차단 시그니처(403·429·400+HTML)는
+        `BlockedFeedError`, 형상 밖 응답(resultList 비목록)은 ValueError — fail loud.
+        is_last 는 벤더 신호 또는 빈 페이지뿐, 미달 페이지는 마지막이 아니다.
+        """
         if page < 1 or page_size < 1:
             raise ValueError("page 는 1-base, page_size 는 양수다")
         try:

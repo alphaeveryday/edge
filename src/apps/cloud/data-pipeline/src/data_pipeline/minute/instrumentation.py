@@ -54,6 +54,11 @@ class JsonlInstrumentationWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self, record: Mapping[str, object]) -> None:
+        """record 한 건을 JSONL 한 줄로 append 한다.
+
+        필드 집합이 JSONL_FIELDS 와 다르면(누락·미지) 쓰지 않고 즉시 ValueError —
+        모듈 도크스트링의 fail-loud 계약.
+        """
         missing = set(JSONL_FIELDS) - record.keys()
         unknown = record.keys() - set(JSONL_FIELDS)
         if missing or unknown:

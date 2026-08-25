@@ -121,13 +121,17 @@ class ArticleReader(Protocol):
     없으면 None — 없는 것을 빈 기사로 접으면 제목 없는 기사와 구분되지 않는다.
     """
 
-    def read(self, *, source_code: str, article_id: str) -> dict | None: ...
+    def read(self, *, source_code: str, article_id: str) -> dict | None:
+        """기사 정본 한 건 — 없으면 None."""
+        ...
 
 
 class JobIdentityReader(Protocol):
     """job 이 **생성 시점에 고정한** 정체성 읽기 — 실구현은 `JobLedger.news_job_identity`."""
 
-    def news_job_identity(self, *, job_id: str) -> dict | None: ...
+    def news_job_identity(self, *, job_id: str) -> dict | None:
+        """job 생성 시점에 고정된 정체성 dict — 없으면 None."""
+        ...
 
 
 class EventAssembler(Protocol):
@@ -136,7 +140,9 @@ class EventAssembler(Protocol):
     fresh·reuse 어느 경로에서 불러도 안전하고, 예외는 전파돼 job 재시도가 된다."""
 
     def assemble(self, *, source_code: str, article_id: str,
-                 article: dict, result: dict) -> dict: ...
+                 article: dict, result: dict) -> dict:
+        """추출 결과 한 건을 event 계보로 조립한다 — 멱등, 예외는 전파."""
+        ...
 
 
 @dataclass
@@ -167,6 +173,11 @@ class PgArticleReader:
     connect_fn: Callable = _default_connect
 
     def read(self, *, source_code: str, article_id: str) -> dict | None:
+        """`ArticleReader` 계약 구현 — 프롬프트 입력 형태의 기사 dict, 없으면 None.
+
+        리드 없는 기사도 기사다 — LEFT JOIN 인 이유와 시각 문자열 복원 규약은
+        아래 본문 주석 참조.
+        """
         # ⚠️ LEFT JOIN 이다 — `news_document` 행이 **없을 수도, 있는데 리드가 NULL 일
         # 수도** 있다. 배치는 리드가 있을 때만 그 자식 행을 리드로 채우지만(`if
         # doc["lead_text"]`), 리드 없는 행 자체는 여러 경로가 만든다 — publisher

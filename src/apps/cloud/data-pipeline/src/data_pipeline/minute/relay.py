@@ -109,6 +109,12 @@ class PublishFailure:
 
 @dataclass
 class RelayConfig:
+    """Relay 설정 — destination→큐 URL 라우팅 표와 lease·backoff 노브.
+
+    필수 destination 누락·어휘 밖 키는 기동 시점에 거부한다(`__post_init__`) —
+    런타임 DEAD 격리는 한 건짜리 사고용이지 설정 누락을 감당하지 못한다.
+    """
+
     relay_id: str
     # destination -> queue URL. 큐는 환경마다 다르므로 설정에서 온다(계획 §11 큐 3종).
     queue_urls: Mapping[str, str]
@@ -219,6 +225,7 @@ class SqsPublisher:
 
     @property
     def client(self):  # pragma: no cover - 실 AWS 경로
+        """지연 생성 SQS client — 주입이 없으면 첫 접근에 만든다."""
         if self._client is None:
             from ..ops.aws import sqs_client
 
@@ -228,6 +235,11 @@ class SqsPublisher:
     def publish_batch(
         self, queue_url: str, messages: tuple[OutboxMessage, ...]
     ) -> tuple[frozenset[str], tuple[PublishFailure, ...]]:
+        """한 큐로 messages 를 발행한다 — `(성공 event_id 집합, 실패 목록)`.
+
+        SQS 배치·크기 상한은 여기서 흡수한다. 메시지 단위 상한 초과는 호출 전에
+        terminal 실패로 가른다 — 재시도해도 영원히 안 들어간다.
+        """
         published: set[str] = set()
         failures: list[PublishFailure] = []
         sendable: list[OutboxMessage] = []
@@ -328,6 +340,7 @@ class OutboxRelay:
     _tick_started: float = field(default=0.0, repr=False)
 
     def request_stop(self) -> None:
+        """SIGTERM 용 — 진행 중 tick 을 끝내고 다음 tick 에 STOPPED 로 멈춘다."""
         self.stopping = True
 
     def tick(self, now: datetime) -> str:
