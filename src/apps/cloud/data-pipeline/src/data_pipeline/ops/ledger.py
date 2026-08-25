@@ -290,7 +290,7 @@ class Ledger:
             )
 
     def set_eligible(self, expected_task_id: str) -> None:
-        """기대 작업의 eligible_at 을 최초 1회 찍는다(COALESCE — 재호출 no-op)."""
+        """기대 작업의 eligible_at 을 최초 1회 찍는다 — 재호출 시 eligible_at 은 유지되고 updated_at 만 갱신된다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE ops_expected_task SET eligible_at=COALESCE(eligible_at, now()),"
