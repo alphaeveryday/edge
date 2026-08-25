@@ -150,8 +150,12 @@ def status_of(received: list, no_trade: list, missing: list, invalid: list) -> s
 
     ⚠️ 전 종목이 no_trade 면 VALID_EMPTY 다 — VALID 로 접으면 '데이터가 있다'와
     '없는 게 정상이다'가 같은 상태가 돼 EOD QC 가 둘을 못 가른다.
-    ⚠️ invalid 는 재시도로 안 풀리는 축이라 INCOMPLETE(재시도 대상)와 섞지 않는다.
+    실패 합계가 기대 unit 의 1% 이하이면서 3종 이하이면 나머지 관측으로 확정한다.
     """
+    expected = len(received) + len(no_trade) + len(missing) + len(invalid)
+    failed = len(missing) + len(invalid)
+    if failed <= 3 and failed * 100 <= expected:
+        return WINDOW_VALID if received else WINDOW_VALID_EMPTY
     if invalid:
         return WINDOW_INVALID
     if missing:

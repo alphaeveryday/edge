@@ -214,6 +214,19 @@ class TestPriceScenarios:
         record_units = {r["unit_id"] for r in records}
         assert record_units.isdisjoint(config["missing_unit_ids"])
 
+    def test_one_missing_in_400_units_uses_shared_valid_contract(self):
+        unit_ids = tuple(f"u{i:03d}" for i in range(400))
+        request = CollectionRequest(
+            **{**make_request().model_dump(), "unit_ids": unit_ids}
+        )
+        result, _, manifest = FakePriceCollector(
+            {"missing_unit_ids": ["u399"]}, seed=1
+        ).collect(request, NOW)
+
+        assert result.status == DATA_VALID
+        assert result.failed_count == 1
+        assert manifest["missing"] == ["u399"]
+
     def test_no_trade_distinct_from_missing(self):
         # 무거래는 성공(분봉 없음이 사실)이고 missing 은 실패다 — 계획 §9 구분.
         # 개수 단언만으론 "no-trade unit 이 record 를 내고 정상 unit 이 누락"되는 상쇄를

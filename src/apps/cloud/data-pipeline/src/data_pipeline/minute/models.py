@@ -222,8 +222,13 @@ class CollectionResult(BaseModel):
                 f"unit 분류 불완전: succeeded({self.succeeded_count})+failed"
                 f"({self.failed_count}) != expected({self.expected_count})"
             )
-        if self.failed_count > 0 and self.status in (WINDOW_VALID, WINDOW_VALID_EMPTY):
-            # 실패가 있는데 VALID 면 status 만 믿는 소비자가 누락 window 를 정상 확정한다
+        within_tolerance = (
+            self.failed_count <= 3
+            and self.failed_count * 100 <= self.expected_count
+        )
+        is_valid = self.status in (WINDOW_VALID, WINDOW_VALID_EMPTY)
+        if within_tolerance != is_valid:
+            # 결과 어휘와 실패 수량은 수집 판정 계약(1% AND 3종)을 양방향으로 지킨다.
             raise ValueError(f"failed_count={self.failed_count} 인데 status={self.status}")
         return self
 
