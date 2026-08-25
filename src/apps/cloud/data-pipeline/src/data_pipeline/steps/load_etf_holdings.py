@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from datetime import datetime, timezone
 
 from ..config import DbConfig
@@ -411,6 +412,7 @@ def run(
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
+        "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "markets": list(_MICS_BY_MARKET), "input_run_id": input_run_id,
         "from_date": from_date, "to_date": to_date,

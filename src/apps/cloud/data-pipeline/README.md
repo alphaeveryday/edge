@@ -1336,7 +1336,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   canonical consumer). 종목 반복은 작업이 아니라 completeness/manifest, 개별 규칙은 quality_check.
 - **`ops` 로그 봉투**(ALPHA-181) — 모든 스텝이 자기 로그(collection_log·quality_log)에
   `"ops": {"records_out": N, "failed_records": M}` 를 남긴다. ETF holdings 적재는 선택적 저장
-  신호 `unsupported_records`도 낸다. 관측(`ops/entry.py:_observe_from_log`)은
+  신호 `unsupported_records`도 낸다. 로그의 `ops_attempt_id`가 현재 원장 시도와 일치할 때만
+  저장해 같은 `run_id` 재시도의 옛 로그를 최신 건수로 오인하지 않는다. 관측(`ops/entry.py:_observe_from_log`)은
   **이 봉투만** 읽으므로 task_key 별 분기가 없다 — 새 작업을 카탈로그에 등록해도 리더를 안 고친다.
   봉투가 스텝 안에 사는 이유: 어느 카운터가 유실인지는 스텝만 안다(적재의
   `skipped_unknown_etf`·`skipped_unknown_instrument` 는 유실, `skipped_self`·

@@ -329,8 +329,11 @@ def instrument(
         # **최신 시도의 것**이다.
         counters={"records_out": _counter(signals.get("records_out")),
                   # 저장 전용 정상 제외 건수 — data_status 판정에는 관여하지 않는다.
-                  "unsupported_records": (_counter(signals.get("unsupported_records"))
-                                          if task_key == "LOAD_ETF_HOLDINGS" else None),
+                  "unsupported_records": (
+                      _counter(signals.get("unsupported_records"))
+                      if (task_key == "LOAD_ETF_HOLDINGS" and attempt_id is not None
+                          and signals.get("ops_attempt_id") == attempt_id)
+                      else None),
                   "failed_records": _counter(signals.get("failed_records")),
                   **entity_resolution_counters},
         freshness=_freshness_signal(

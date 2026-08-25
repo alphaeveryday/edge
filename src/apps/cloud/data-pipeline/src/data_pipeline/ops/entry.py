@@ -254,6 +254,7 @@ def _observe_from_log(
     if "unsupported_records" in ops:
         signals["unsupported_records"] = ops["unsupported_records"]
     if "ops_attempt_id" in log:
+        signals["ops_attempt_id"] = log["ops_attempt_id"]
         signals["entity_resolution_attempt_id"] = log["ops_attempt_id"]
     # 완전성의 실제값은 entity grain 을 아는 스텝만 선택적으로 낸다. 공통 필수 봉투로 올리면
     # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).

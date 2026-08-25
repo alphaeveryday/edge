@@ -56,11 +56,13 @@ def test_optional_unsupported_records_flows_without_becoming_a_failure(tmp_path)
     entry = _entry("LOAD_ETF_HOLDINGS")
     _write_log(storage, entry, {
         "run_id": _RUN,
+        "ops_attempt_id": "attempt-current",
         "ops": {"records_out": 958, "unsupported_records": 42, "failed_records": 0},
     })
 
     signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
     assert signals["unsupported_records"] == 42
+    assert signals["ops_attempt_id"] == "attempt-current"
     # expected_count는 observer가 아니라 Planner snapshot에서 wrapper가 덮어쓰는 값이다.
     signals.update(expected_count=33, received_count=33)
     assert wrapper.derive_data_status(signals) == states.DATA_VALID

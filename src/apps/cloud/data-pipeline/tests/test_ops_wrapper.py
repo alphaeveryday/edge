@@ -528,6 +528,7 @@ def test_unsupported_records_is_storage_only_not_incomplete():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 958, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
             "received_count": 33,
         },
     )
@@ -535,6 +536,21 @@ def test_unsupported_records_is_storage_only_not_incomplete():
     row = db.etasks_by_id["et1"]
     assert row["unsupported_records"] == 42
     assert row["data_status"] == states.DATA_VALID
+
+
+def test_stale_attempt_cannot_store_unsupported_records():
+    """WHY: 같은 run_id의 앞 quality log를 재시도가 읽어도 옛 지원 제외 수치를 쓰면 안 된다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_ETF_HOLDINGS")
+    wrapper.instrument(
+        lambda: 1, task_key="LOAD_ETF_HOLDINGS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/current",
+        observe_data_fn=lambda ec: {
+            "records_out": 958, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": "stale-attempt",
+        },
+    )
+    assert db.etasks_by_id["et1"]["unsupported_records"] is None
 
 
 def test_instrument_scopes_attempt_marker_to_the_wrapped_run(monkeypatch):
@@ -634,6 +650,7 @@ def test_retry_without_envelope_clears_previous_counters():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 100, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
             "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
@@ -684,6 +701,7 @@ def test_step_exception_clears_counters():
         ecs_task_arn="arn:task/1",
         observe_data_fn=lambda ec: {
             "records_out": 2736, "unsupported_records": 42, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
             "entity_resolution_attempt_id": _attempt_id(db),
             "entity_resolution_arguments_total": 4,
             "entity_resolution_arguments_resolved": 3,
