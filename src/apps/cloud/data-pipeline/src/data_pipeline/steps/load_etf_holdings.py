@@ -45,7 +45,12 @@ from datetime import datetime, timezone
 
 from ..config import DbConfig
 from ..db import connect, ensure_etf_profile
-from ..lake import Storage, canonical_etf_holdings_partition, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_etf_holdings_partition,
+    canonical_run_manifest_key,
+    quality_log_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,9 @@ DATASET = "etf_holding_snapshot"
 # ETF 자신은 전부 XKRX 지만 구성종목 때문에 세 MIC 를 다 조회한다(ALPHA-377 Codex P1 과 동종).
 # US 는 구성종목이 마스터에 없어(ALPHA-371) 여기 넣어도 전량 미등록으로 걸린다.
 _MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
+# normalize_etf가 만들 수 있는 market. loader는 현재 KR만 소비하지만 US가 같은 manifest에 함께
+# 있는 것은 정상이다(FMP 재활성화 시). 소비 범위와 manifest 어휘를 섞지 않는다.
+_MANIFEST_MARKETS = frozenset(("KR", "US"))
 
 _CREATED_SAMPLE_LIMIT = 5
 # ETF 별 비중 합 정상 범위 — 1 근처여야 한다(부분 커버리지·정제 깨짐이면 크게 벗어난다).
@@ -78,6 +86,42 @@ def _partition_dates(storage: Storage, market: str) -> list[str]:
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     dates.discard("")
     return sorted(dates)
+
+
+def _manifest_partitions(storage: Storage, input_run_id: str) -> set[tuple[str, str]]:
+    """normalize-etf 실행 로그가 증명한 canonical 파티션 집합.
+
+    checked_date 를 추측하거나 quality log 전체를 LIST하지 않고 run_id 직접 키를 GET한다.
+    없거나 불완전하면 범위를 넓히지 않고 실패한다(Rule 12).
+    """
+    key = canonical_run_manifest_key("etf_holdings", input_run_id)
+    log = json.loads(storage.get_bytes(key).decode("utf-8"))
+    if not isinstance(log, dict) or log.get("run_id") != input_run_id:
+        raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
+    if log.get("job_name") != "normalize_etf" or log.get("canonical_written") is not True:
+        raise ValueError(f"완료된 normalize-etf manifest가 아니다: run_id={input_run_id}")
+    raw = log.get("canonical_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"canonical_partitions가 없는 구형 manifest다: run_id={input_run_id}")
+    partitions: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"canonical_partitions 항목이 객체가 아니다: run_id={input_run_id}")
+        market, as_of = item.get("market"), item.get("as_of_date")
+        try:
+            valid_date = (
+                isinstance(as_of, str)
+                and datetime.strptime(as_of, "%Y-%m-%d").strftime("%Y-%m-%d") == as_of
+            )
+        except ValueError:
+            valid_date = False
+        if market not in _MANIFEST_MARKETS or not valid_date:
+            raise ValueError(f"canonical_partitions 항목이 유효하지 않다: {item!r}")
+        partition = (market, as_of)
+        if partition in partitions:
+            raise ValueError(f"canonical_partitions 항목이 중복됐다: {item!r}")
+        partitions.add(partition)
+    return partitions
 
 
 def _instrument_ids(conn, mics: tuple[str, ...]) -> tuple[dict[str, str], dict[tuple[str, str], str]]:
@@ -125,13 +169,14 @@ def run(
     *,
     db: DbConfig,
     expected_etfs: frozenset[str] | None = None,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
     """canonical 구성종목 → etf_holding_snapshot 적재. 성공 0, 장애 시 비0.
 
-    창(from/to) 미지정 = as_of_date 전체 스캔. 멱등 skip 이라 재실행 비용은 신규분뿐이고,
-    놓친 날짜도 다음 런이 자연 회복한다(load-etf-nav 와 같은 모델).
+    input_run_id 지정 = 그 normalize-etf 실행이 쓴 파티션만 처리한다. from/to 는 명시 백필,
+    셋 다 미지정은 호출자가 명시적으로 선택한 전체 스캔이다. 서로 섞으면 범위가 모호해 거부한다.
     """
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_unknown_etf = 0
@@ -145,21 +190,36 @@ def run(
     exit_code = 0
 
     try:
+        if input_run_id is not None and (from_date is not None or to_date is not None):
+            raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
+        manifest = _manifest_partitions(storage, input_run_id) if input_run_id is not None else None
         # (market, etf_id, constituent_mic, constituent_ticker, as_of_date) → 후보. constituent_mic
         # 를 키에 **포함**한다 — 빼면 XKRX·XKOS 동명 종목 두 보유행이 한 후보로 뭉쳐 하나가
         # 유실된다(Codex 지적). 같은 키가 여러 parquet 에 걸리면 최신 fetched_at 이 이긴다.
         candidates: dict[tuple[str, str, str, str, str], dict] = {}
         for market in _MICS_BY_MARKET:
-            dates = [
-                d for d in _partition_dates(storage, market)
-                if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)
-            ]
+            dates = (sorted(date for item_market, date in manifest if item_market == market)
+                     if manifest is not None else [
+                         d for d in _partition_dates(storage, market)
+                         if (from_date is None or d >= from_date)
+                         and (to_date is None or d <= to_date)
+                     ])
             for date in dates:
                 prefix = canonical_etf_holdings_partition(market, date)
-                for key in storage.list_keys(prefix + "/"):
-                    if not key.endswith(".parquet"):
-                        continue
+                parquet_keys = [
+                    key for key in storage.list_keys(prefix + "/") if key.endswith(".parquet")
+                ]
+                if manifest is not None and not parquet_keys:
+                    raise ValueError(f"manifest 파티션에 parquet가 없다: market={market}, date={date}")
+                partition_rows = 0
+                for key in parquet_keys:
                     for row in _read_parquet_rows(storage.get_bytes(key)):
+                        partition_rows += 1
+                        if row.get("market") != market or row.get("as_of_date") != date:
+                            raise ValueError(
+                                "canonical 행과 파티션이 일치하지 않는다: "
+                                f"market={market}, date={date}, key={key}"
+                            )
                         read += 1
                         etf_id, ct = row.get("etf_id"), row.get("constituent_ticker")
                         mic, as_of = row.get("constituent_mic"), row.get("as_of_date")
@@ -191,6 +251,8 @@ def run(
                             "available_at": fetched_at or started_at.isoformat(),
                             "fetched_at_raw": fetched_at or "",
                         }
+                if manifest is not None and partition_rows == 0:
+                    raise ValueError(f"manifest 파티션이 0행이다: market={market}, date={date}")
 
         with connect(db) as conn:
             resolved = {
@@ -280,7 +342,8 @@ def run(
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "markets": list(_MICS_BY_MARKET), "from_date": from_date, "to_date": to_date,
+        "markets": list(_MICS_BY_MARKET), "input_run_id": input_run_id,
+        "from_date": from_date, "to_date": to_date,
         "rows_read": read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_unknown_etf": skipped_unknown_etf,

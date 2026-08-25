@@ -251,10 +251,10 @@ locals {
     {
       # ETF 구성종목 적재(ALPHA-379) — canonical etf_holdings → etf_holding_snapshot.
       # LoadEtfNav·LoadPriceDaily 와 같은 슬롯(normalize 뒤 canonical 을 읽는다).
-      # 창 미지정 = canonical 전체 스캔 + 멱등(비중이 바뀐 정정만 UPDATE).
+      # 같은 run의 NormalizeEtf manifest가 지목한 파티션만 읽는다(ALPHA-1011).
       state        = "LoadEtfHoldings"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-etf-holdings', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-etf-holdings', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # 투자자 수급 적재(ALPHA-385) — canonical investor_flow_daily → investor_flow_daily.

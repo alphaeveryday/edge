@@ -653,8 +653,41 @@ def test_absurd_window_days_fails_loud(monkeypatch):
     assert "window" not in captured
 
 
+def test_load_etf_holdings_requires_an_explicit_scope(monkeypatch):
+    # WHY(ALPHA-1011): 범위 누락이 암묵적 과거 전체 스캔으로 성공하면 SFN 배선 회귀가 데이터가
+    # 쌓일수록 비싸지는 형태로 숨는다. 전체가 필요하면 운영자가 --all 을 직접 써야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+        main(["load-etf-holdings", "--run-id", "R"])
+
+
+def test_load_etf_holdings_forwards_normalize_run_scope(monkeypatch):
+    # WHY(ALPHA-1011): ASL 이 넘긴 run 계보가 CLI 에서 사라지면 로더의 manifest 경로가 있어도
+    # 정규 실행은 쓸 수 없다. 날짜 추측 대신 실제 normalize run_id 를 그대로 전달한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_etf_holdings, "run",
+                        lambda *a, **kw: captured.update(kw) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-etf-holdings", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured["input_run_id"] == "N1"
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_etf_holdings_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1011): 불량·역전 날짜를 문자열 필터로 처리하면 모든 파티션이 빠진 0건을 성공으로
+    # 보고한다. 복구가 끝난 것처럼 보이지 않도록 loader 호출 전에 거부해야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-etf-holdings", "--run-id", "R", *argv])
+
+
 @pytest.mark.parametrize(("step", "module", "argv"), [
-    ("load-etf-holdings", "load_etf_holdings", ["load-etf-holdings"]),
+    ("load-etf-holdings", "load_etf_holdings", ["load-etf-holdings", "--all"]),
     ("load-price-triggers", "load_price_triggers", ["load-price-triggers"]),
     ("normalize-news", "normalize_news", ["normalize-news"]),
     ("load-instruments", "load_instruments", ["load-instruments"]),

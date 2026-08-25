@@ -745,6 +745,18 @@ def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     )
 
 
+def canonical_run_manifest_key(dataset: str, run_id: str) -> str:
+    """정제 실행이 실제로 갱신한 canonical 파티션 manifest의 직접 조회 키.
+
+    quality log는 UTC checked_date 축이라 run_id만 아는 하류가 찾으려면 날짜 전체를 LIST해야 한다.
+    실행 계보 소비자는 이 키를 GET해 파티션 수와 무관한 비용으로 정확한 입력 범위를 얻는다.
+    """
+    return (
+        f"operations_archive/canonical_run_manifests/dataset={dataset}"
+        f"/run_id={run_id}/manifest.json"
+    )
+
+
 def quality_log_prefix(dataset: str) -> str:
     """그 dataset 의 품질 로그가 사는 프리픽스(날짜 이하 전부). 관측이 run_id 로 훑을 때 쓴다.
 

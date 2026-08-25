@@ -7,6 +7,7 @@ from data_pipeline.lake import (
     LocalStorage,
     S3Storage,
     canonical_etf_holdings_partition,
+    canonical_run_manifest_key,
     canonical_supply_contract_fact_partition,
     collection_log_key,
     is_raw_disclosure_key,
@@ -131,6 +132,15 @@ def test_canonical_supply_contract_fact_partition_is_report_date_keyed():
     assert (
         canonical_supply_contract_fact_partition("2026-06-23")
         == "canonical/disclosures/supply_contract_fact/report_date=2026-06-23"
+    )
+
+
+def test_canonical_run_manifest_is_directly_keyed_by_run():
+    # WHY(ALPHA-1011): 하류가 quality log 날짜 전체를 LIST하면 canonical 풀스캔을 없애고도 실행 수에
+    # 비례하는 다른 스캔이 남는다. run_id 하나로 정확히 GET 가능한 경로여야 한다.
+    assert canonical_run_manifest_key("etf_holdings", "R1") == (
+        "operations_archive/canonical_run_manifests/dataset=etf_holdings/"
+        "run_id=R1/manifest.json"
     )
 
 

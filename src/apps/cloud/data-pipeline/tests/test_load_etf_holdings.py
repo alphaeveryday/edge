@@ -14,7 +14,11 @@ import json
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_holdings_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import load_etf_holdings
 
 _COLUMNS = ("market", "etf_id", "constituent_ticker", "constituent_mic", "weight_pct",
@@ -136,6 +140,21 @@ def _log(storage, run_id: str = "R1") -> dict:
             if "etf_holding_snapshot" in k and f"run_id={run_id}/" in k]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _write_normalize_manifest(storage, run_id: str, partitions: list[tuple[str, str]]) -> None:
+    storage.put_bytes(
+        canonical_run_manifest_key("etf_holdings", run_id),
+        json.dumps({
+            "run_id": run_id,
+            "job_name": "normalize_etf",
+            "canonical_written": True,
+            "canonical_partitions": [
+                {"market": market, "as_of_date": as_of_date}
+                for market, as_of_date in partitions
+            ],
+        }).encode("utf-8"),
+    )
 
 
 def test_canonical_구성종목이_마트_행이_된다(tmp_path, monkeypatch):
@@ -372,6 +391,111 @@ def test_창으로_적재_대상_거래일을_좁힌다(tmp_path, monkeypatch):
     assert load_etf_holdings.run(storage, "R1", db=_db(),
                                  from_date="2026-07-15", to_date="2026-07-15") == 0
     assert [p[2] for p in _inserts(conn)] == ["2026-07-15"]
+
+
+def test_normalize_manifest가_지목한_파티션만_적재한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1011): 정규 실행이 과거 canonical 전부를 재판정하면 오늘 1,000행이 24,372행으로
+    # 부풀고 스캔 비용도 무상한 증가한다. 수집일을 추측하지 않고 정제가 실제 쓴 기준일을 따른다.
+    storage = LocalStorage(tmp_path / "lake")
+    for date in ("2026-07-14", "2026-07-15", "2026-07-16"):
+        _write_canonical(storage, "KR", date, [_hold_row(as_of_date=date)])
+    _write_normalize_manifest(storage, "N1", [("KR", "2026-07-15")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+    assert [p[2] for p in _inserts(conn)] == ["2026-07-15"]
+    assert _log(storage, "L1")["rows_read"] == 1
+
+
+def test_normalize_manifest가_없으면_전체로_넓히지_않고_실패한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1011): 계보가 없을 때 풀스캔으로 폴백하면 배선 오류가 과거 전체 재처리로 성공해
+    # 문제를 숨긴다. DB 연결 전 실패하고 quality log에 근거를 남겨야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_hold_row()])
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="missing") == 1
+    log = _log(storage, "L1")
+    assert log["rows_read"] == 0
+    assert log["failures"][0]["reasons"] == ["load_error"]
+
+
+@pytest.mark.parametrize("mutation", ["wrong_run", "bad_market", "bad_date", "duplicate"])
+def test_잘못된_manifest는_과거_파티션으로_넓히지_않고_실패한다(
+    tmp_path, monkeypatch, mutation,
+):
+    # WHY(ALPHA-1011): manifest는 정규 실행 범위의 권위다. 계보·시장·날짜·유일성이 깨진 값을
+    # 받아들이면 잘못된 과거 파티션을 정상 범위로 승인하므로 DB를 열기 전에 거부해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_hold_row()])
+    partitions = [("KR", "2026-07-16")]
+    _write_normalize_manifest(storage, "N1", partitions)
+    key = canonical_run_manifest_key("etf_holdings", "N1")
+    manifest = json.loads(storage.get_bytes(key))
+    if mutation == "wrong_run":
+        manifest["run_id"] = "N2"
+    elif mutation == "bad_market":
+        manifest["canonical_partitions"][0]["market"] = "ZZ"
+    elif mutation == "bad_date":
+        manifest["canonical_partitions"][0]["as_of_date"] = "2026-07-32"
+    else:
+        manifest["canonical_partitions"].append(manifest["canonical_partitions"][0].copy())
+    storage.put_bytes(key, json.dumps(manifest).encode())
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 1
+    assert _log(storage, "L1")["rows_read"] == 0
+
+
+def test_manifest가_지목한_parquet가_없으면_0건_성공으로_위장하지_않는다(tmp_path):
+    # WHY(ALPHA-1011): manifest 작성 뒤 산출물 삭제·복원 누락이 생겼는데 0건 성공하면 하류
+    # 결손이 정상 완료로 보인다. manifest의 비어 있지 않은 파티션은 실제 parquet가 있어야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_normalize_manifest(storage, "N1", [("KR", "2026-07-16")])
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 1
+    assert _log(storage, "L1")["rows_read"] == 0
+
+
+def test_US_partition이_함께_있는_normalize_manifest는_정상이다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1011): normalize-etf는 KR·US를 한 manifest에 기록한다. loader가 KR만 소비한다는
+    # 이유로 정상 US 항목까지 malformed로 보면 FMP 재활성화 시 KR 적재도 함께 중단된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_hold_row()])
+    _write_normalize_manifest(storage, "N1", [("KR", "2026-07-16"), ("US", "2026-07-16")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+    assert _log(storage, "L1")["rows_read"] == 1
+
+
+def test_통과행이_없는_normalize의_빈_manifest는_정상_0건이다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1011): 입력 전량이 normalize 게이트에서 탈락한 실행은 빈 manifest가 정당하다.
+    # 비어 있는 Parquet 손상과 달리 처리할 파티션 자체가 없으므로 scope를 넓히지 않고 0건 완료한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_normalize_manifest(storage, "N1", [])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+    assert _log(storage, "L1")["rows_read"] == 0
+
+
+@pytest.mark.parametrize("damage", ["empty", "wrong_market", "wrong_date"])
+def test_manifest_parquet_내용이_파티션과_다르면_실패한다(tmp_path, damage):
+    # WHY(ALPHA-1011): 직접 키 manifest만 맞아도 Parquet가 0행이거나 다른 파티션 행이면 실제
+    # 입력 범위는 보장되지 않는다. 정상 빈 normalize는 빈 manifest이므로 이 손상과 구별된다.
+    storage = LocalStorage(tmp_path / "lake")
+    rows = [] if damage == "empty" else [_hold_row()]
+    if damage == "wrong_market":
+        rows[0]["market"] = "US"
+    elif damage == "wrong_date":
+        rows[0]["as_of_date"] = "2026-07-15"
+    _write_canonical(storage, "KR", "2026-07-16", rows)
+    _write_normalize_manifest(storage, "N1", [("KR", "2026-07-16")])
+
+    assert load_etf_holdings.run(storage, "L1", db=_db(), input_run_id="N1") == 1
+    assert _log(storage, "L1")["ops"]["failed_records"] == 1
 
 
 def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):

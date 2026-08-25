@@ -292,7 +292,9 @@ def main(argv: list[str] | None = None) -> int:
     # 전체를 읽는다 — **백필·복구 수단**이다(실패한 런의 raw 를 나중에 주워오거나, 정체성
     # 로직 변경을 이미 수집된 구 raw 에 소급할 때). 어느 쪽이든 적재는 멱등이다.
     parser.add_argument("--input-run-id", default=None,
-                        help="normalize-* 대상 수집 run_id(미지정=전체 raw 백필). 적재는 멱등")
+                        help="normalize-* 대상 수집 run_id 또는 load-etf-holdings 정제 run_id")
+    parser.add_argument("--all", action="store_true", dest="all_partitions",
+                        help="load-etf-holdings: 명시적 canonical 전체 스캔")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출
@@ -501,6 +503,8 @@ def main(argv: list[str] | None = None) -> int:
         # 키우는 게 아니라 미지정 풀스캔(tag-news)·--from/--to 백필(assemble)이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
+    if args.all_partitions and args.step != "load-etf-holdings":
+        raise SystemExit("--all 은 load-etf-holdings 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -692,11 +696,33 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # ETF 구성종목 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
-    # (canonical as_of_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    # ETF 구성종목 적재의 정규 경로는 normalize run manifest가 지목한 파티션만 읽는다.
+    # 날짜창은 명시 백필, 전체 스캔은 --all 을 직접 쓴 경우뿐이다(ALPHA-1011).
     if args.step == "load-etf-holdings":
+        scopes = sum((args.input_run_id is not None,
+                      args.from_date is not None or args.to_date is not None,
+                      args.all_partitions))
+        if scopes != 1:
+            raise SystemExit(
+                "load-etf-holdings는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+            )
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-etf-holdings의 --from은 --to보다 늦을 수 없다")
         return load_etf_holdings.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
             expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
         )

@@ -78,6 +78,10 @@ def test_both_vendors_normalize_to_common_schema(tmp_path):
     assert kr[0]["weight_pct"] == 30.5 and kr[0]["shares"] == 1000.0 and kr[0]["currency"] == "KRW"
     log = _quality_log(storage)
     assert (log["records_read"], log["records_passed"], log["records_failed"]) == (2, 2, 0)
+    assert log["canonical_partitions"] == [
+        {"market": "KR", "as_of_date": "2026-07-14"},
+        {"market": "US", "as_of_date": "2026-07-11"},
+    ]
 
 
 def test_foreign_underlying_dash_weight_nulled_but_row_preserved(tmp_path):

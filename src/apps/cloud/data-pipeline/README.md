@@ -1217,6 +1217,11 @@ settings.targets.keywords            # ["금리", ...]
   `load-price-triggers`·`normalize-news`·`load-instruments` 다섯이 같은 정본
   (`_krx_expected_etfs`)을 `expected_etfs` 인자로 받는다. 안 거르면 마스터에 없는 ETF 가 매 런
   `failed_records` 로 잡혀 원장이 **영구 INCOMPLETE** 가 된다.
+  `normalize-etf` 는 실제로 갱신한 파티션을
+  `operations_archive/canonical_run_manifests/dataset=etf_holdings/run_id=…/manifest.json` 에도
+  남긴다. 정규 `load-etf-holdings --input-run-id <normalize-run>` 은 이 직접 키를 GET 해 그
+  파티션만 읽는다 — 과거 전체 스캔은 `--all`, 과거 일부 복구는 `--input-run-id` 또는
+  `--from/--to` 를 명시한 운영 경로뿐이다. 범위 없는 호출은 거부한다(ALPHA-1011).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

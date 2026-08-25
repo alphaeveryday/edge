@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from ..lake import (
     Storage,
     canonical_etf_holdings_partition,
+    canonical_run_manifest_key,
     is_raw_etf_key,
     parse_raw_etf_key,
     quality_log_key,
@@ -260,14 +261,15 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     return [acc[k] for k in sorted(acc, key=lambda k: (str(k[0]), str(k[1])))]
 
 
-def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
+def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict[str, str]], int]:
     """통과 행을 (market,as_of_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
-    반환: (쓴 파티션 수, 쓴 행 수)."""
+    반환: (쓴 파티션 식별자, 쓴 행 수). 식별자는 하류 적재가 이 실행의 산출만 읽는 manifest 다."""
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
         by_partition[(row["market"], row["as_of_date"])].append(row)
 
-    parts_written = rows_written = 0
+    partitions: list[dict[str, str]] = []
+    rows_written = 0
     for (market, as_of_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_etf_holdings_partition(market, as_of_date)
         existing: list[dict] = []
@@ -276,9 +278,9 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
         storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
-        parts_written += 1
+        partitions.append({"market": market, "as_of_date": as_of_date})
         rows_written += len(merged)
-    return parts_written, rows_written
+    return partitions, rows_written
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
@@ -350,10 +352,20 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 warnings.append({**ref, "reasons": warn})
 
     # 스코프든 전체 런이든 canonical 을 쓴다(ALPHA-389) — 병합이 기존 행을 읽어 합친다.
-    parts_written = canonical_rows = 0
+    partitions: list[dict[str, str]] = []
+    canonical_rows = 0
     canonical_written = True
     try:
-        parts_written, canonical_rows = _write_canonical(storage, passing)
+        partitions, canonical_rows = _write_canonical(storage, passing)
+        storage.put_bytes(
+            canonical_run_manifest_key(DATASET, run_id),
+            json.dumps({
+                "run_id": run_id,
+                "job_name": JOB_NAME,
+                "canonical_written": True,
+                "canonical_partitions": partitions,
+            }, ensure_ascii=False).encode("utf-8"),
+        )
     except Exception:
         logger.exception("canonical 적재 실패")
         # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
@@ -379,7 +391,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "failures": failures,
                 "warnings": warnings,
                 "canonical_written": canonical_written,
-                "canonical_partitions_written": parts_written,
+                "canonical_partitions": partitions,
+                "canonical_partitions_written": len(partitions),
                 "canonical_rows_written": canonical_rows,
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -393,6 +406,6 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         "normalize_etf 완료: raw_files=%d read=%d passed=%d failed=%d warned=%d "
         "canonical_parts=%d canonical_rows=%d",
         len(raw_keys), read, len(passing), len(failures), len(warnings),
-        parts_written, canonical_rows,
+        len(partitions), canonical_rows,
     )
     return exit_code
