@@ -114,35 +114,6 @@ def _confidence(value: object) -> float | None:
     return float(value) if 0.0 <= float(value) <= 1.0 else None
 
 
-def _parsed_time(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _newer_source_row(current: dict, candidate: dict) -> dict:
-    """날짜 경계 복사본은 재태깅 시각이 아니라 source revision으로 고른다."""
-    current_source = _parsed_time(current.get("source_fetched_at"))
-    candidate_source = _parsed_time(candidate.get("source_fetched_at"))
-    if current_source is not None and candidate_source is not None:
-        if candidate_source != current_source:
-            return candidate if candidate_source > current_source else current
-    else:
-        current_published = _parsed_time(current.get("published_at"))
-        candidate_published = _parsed_time(candidate.get("published_at"))
-        if current_published != candidate_published:
-            if current_published is None:
-                return candidate
-            if candidate_published is None:
-                return current
-            return candidate if candidate_published > current_published else current
-    return _merge_by_article([current, candidate]).get(current.get("article_id"), current)
-
-
 def run(
     storage: Storage,
     run_id: str,
@@ -181,13 +152,9 @@ def run(
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
         candidates: dict[tuple[str, str, str, str], dict] = {}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
-            dates = _partition_dates(storage, language)
-            keyed: dict[str, tuple[str, dict]] = {}
-            unkeyed: list[dict] = []
-            selected_keyed_rows_read = 0
+            dates = [d for d in _partition_dates(storage, language)
+                     if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
             for date in dates:
-                selected = ((from_date is None or date >= from_date)
-                            and (to_date is None or date <= to_date))
                 prefix = feature_news_assertions_partition(language, date)
                 mirror_marker = feature_news_assertions_minute_prefix(language, date)
                 partition_rows: list[dict] = []
@@ -204,79 +171,66 @@ def run(
                         # 안 거친 채 DB 로 간다.
                         # 건너뛰어도 지연이 없다 — 같은 SFN 런의 TagNews 가 흡수한 미러는 이미
                         # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
-                        if selected:
-                            mirrors_unabsorbed += 1
+                        mirrors_unabsorbed += 1
                         continue
                     partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
-                if selected:
-                    unkeyed.extend(r for r in partition_rows if not r.get("article_id"))
-                partition_keyed = [r for r in partition_rows if r.get("article_id")]
-                if selected:
-                    selected_keyed_rows_read += len(partition_keyed)
-                for article_id, row in _merge_by_article(partition_keyed).items():
-                    current = keyed.get(article_id)
-                    if current is None:
-                        keyed[article_id] = (date, row)
-                    else:
-                        winner = _newer_source_row(current[1], row)
-                        keyed[article_id] = (date, row) if winner is row else current
-            # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치 part와 장중
-            # 미러뿐 아니라 게시시각 정정은 같은 article_id를 날짜 경계 양쪽에 남긴다.
-            # 날짜별로 접으면 서로 다른 사건 자연키가 모두 DB에 영구 적재되므로 전체 날짜의
-            # source revision을 먼저 비교한다. from/to는 그 전역 승자의 날짜에 마지막으로 건다.
-            # 그래야 경계 한쪽만 복구해도 반대편의 최신 복사본을 무시해 옛 사건을 넣지 않는다.
-            # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
-            # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
-            selected_keyed = [row for date, row in keyed.values()
-                              if (from_date is None or date >= from_date)
-                              and (to_date is None or date <= to_date)]
-            rows_superseded += selected_keyed_rows_read - len(selected_keyed)
-            for row in [*selected_keyed, *unkeyed]:
-                rows_read += 1
-                if row.get("status") != "ok":
-                    rows_not_ok += 1
-                    continue
-                article_id = row.get("article_id")
-                try:
-                    assertions = json.loads(row.get("assertions") or "[]")
-                    if not isinstance(assertions, list):
-                        raise ValueError("assertions 가 리스트가 아님")
-                except (ValueError, TypeError):
-                    # 행 단위 격리 — 한 이상치가 잡을 무너뜨리지 않는다.
-                    rows_malformed += 1
-                    continue
-                if not article_id or not assertions:
-                    rows_no_assertion += 1
-                    continue
-                for assertion in assertions:
-                    if not isinstance(assertion, dict):
+                # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치가 쓴 part
+                # 파일과 장중이 남긴 미러가 한 파티션에 공존하는 창이 있고, 그 둘이 같은
+                # 기사의 **다른 본문**에 대한 판정이면 사건 자연키가 갈려 둘 다 적재된다 —
+                # 정정 전 사건이 DB 에 영구히 남는다(`ON CONFLICT DO NOTHING` 이라 나중에
+                # 덮이지도 않는다). 그래서 `tag_news` 의 압축과 **같은 규칙**으로 기사마다
+                # 최신 판정만 남긴다(규칙이 갈리면 두 소비자가 다른 사실을 본다).
+                # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
+                # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
+                unkeyed = [r for r in partition_rows if not r.get("article_id")]
+                keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
+                rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
+                for row in [*keyed.values(), *unkeyed]:
+                    rows_read += 1
+                    if row.get("status") != "ok":
+                        rows_not_ok += 1
+                        continue
+                    article_id = row.get("article_id")
+                    try:
+                        assertions = json.loads(row.get("assertions") or "[]")
+                        if not isinstance(assertions, list):
+                            raise ValueError("assertions 가 리스트가 아님")
+                    except (ValueError, TypeError):
+                        # 행 단위 격리 — 한 이상치가 잡을 무너뜨리지 않는다.
                         rows_malformed += 1
                         continue
-                    event_type = assertion.get("event_type_code")
-                    predicate = assertion.get("predicate_code")
-                    arguments = assertion.get("arguments")
-                    if not event_type or not predicate or not isinstance(arguments, list):
-                        # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
-                        skipped_incomplete += 1
+                    if not article_id or not assertions:
+                        rows_no_assertion += 1
                         continue
-                    if assertion.get("completeness") != "complete":
-                        # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
-                        # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
-                        # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
-                        skipped_partial += 1
-                        continue
-                    nk = (source_code, article_id, str(event_type), str(predicate))
-                    entry = candidates.get(nk)
-                    if entry is None:
-                        entry = candidates[nk] = {
-                            "confidence": _confidence(assertion.get("confidence")),
-                            "arguments": [],
-                        }
-                    else:
-                        # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
-                        # 하나다. 스칼라는 첫 주장이 대표, arguments 는 union.
-                        folded += 1
-                    entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
+                    for assertion in assertions:
+                        if not isinstance(assertion, dict):
+                            rows_malformed += 1
+                            continue
+                        event_type = assertion.get("event_type_code")
+                        predicate = assertion.get("predicate_code")
+                        arguments = assertion.get("arguments")
+                        if not event_type or not predicate or not isinstance(arguments, list):
+                            # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
+                            skipped_incomplete += 1
+                            continue
+                        if assertion.get("completeness") != "complete":
+                            # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
+                            # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
+                            # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
+                            skipped_partial += 1
+                            continue
+                        nk = (source_code, article_id, str(event_type), str(predicate))
+                        entry = candidates.get(nk)
+                        if entry is None:
+                            entry = candidates[nk] = {
+                                "confidence": _confidence(assertion.get("confidence")),
+                                "arguments": [],
+                            }
+                        else:
+                            # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
+                            # 하나다. 스칼라는 첫 주장이 대표, arguments 는 union.
+                            folded += 1
+                        entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
 
         # 역할→종별 계약(`role_bindings_v0_1.yaml`). assemble-events 가 이미 읽는 그 표다
         # — 같은 계보의 두 writer 가 다른 계약을 보고 있었다(ALPHA-802). 어휘가 깨져 있으면

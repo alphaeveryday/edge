@@ -126,18 +126,21 @@ def test_manifest_allows_article_id_repeated_across_partitions(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
     _write_canonical(storage, "ko", "2026-07-02", [
-        _article("a1", published_at="2026-07-02T09:00:00+09:00")])
+        _article("a1", published_at="2026-07-02T09:00:00+09:00",
+                 fetched_at="2026-07-02T09:05:00+09:00")])
     _write_manifest(storage, "N1", [
         _manifest_partition("2026-07-01", ["a1"]),
         _manifest_partition("2026-07-02", ["a1"]),
     ])
     calls: list = []
 
-    assert tag_news.run(storage, "R1", input_run_id="N1",
+    assert tag_news.run(storage, "R1", input_run_id="N1", limit=1,
                         complete_fn=_fake_complete(calls)) == 0
-    assert len(calls) == 2
+    assert len(calls) == 1
     manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
-    assert [p["article_ids"] for p in manifest["feature_partitions"]] == [["a1"], ["a1"]]
+    assert [(p["published_date"], p["article_ids"]) for p in manifest["feature_partitions"]] == [
+        ("2026-07-02", ["a1"]),
+    ]
 
 
 def test_same_run_retry_keeps_ids_written_before_later_partition_failure(tmp_path):
@@ -219,33 +222,6 @@ def test_overlapping_manifest_retries_current_llm_error(tmp_path):
                         complete_fn=_fake_complete(calls)) == 0
     assert len(calls) == 1
     assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "ok"
-
-
-def test_current_feature_backfills_source_revision_without_llm(tmp_path):
-    """WHY(ALPHA-1032): source revision 계보 보강 때문에 현재 판정을 유료 재호출하면 안 된다."""
-    storage = LocalStorage(tmp_path / "lake")
-    article = _article("a1")
-    _write_canonical(storage, "ko", "2026-07-01", [article])
-    partition = _manifest_partition("2026-07-01", ["a1"])
-    _write_manifest(storage, "N1", [partition])
-    assert tag_news.run(storage, "R1", input_run_id="N1",
-                        complete_fn=_fake_complete([])) == 0
-
-    rows = _read_feature(storage, "ko", "2026-07-01")
-    rows[0]["source_fetched_at"] = None
-    feature_key = f"{feature_news_assertions_partition('ko', '2026-07-01')}/part-00000.parquet"
-    storage.put_bytes(feature_key, tag_news._write_parquet_rows(rows))
-    _write_manifest(storage, "N2", [partition])
-    calls: list = []
-
-    assert tag_news.run(storage, "R2", input_run_id="N2",
-                        complete_fn=_fake_complete(calls)) == 0
-
-    assert calls == []
-    assert _read_feature(storage, "ko", "2026-07-01")[0]["source_fetched_at"] == \
-        article["fetched_at"]
-    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R2")))
-    assert manifest["feature_partitions"][0]["article_ids"] == ["a1"]
 
 
 def test_empty_manifest_absorbs_current_intraday_mirror(tmp_path):

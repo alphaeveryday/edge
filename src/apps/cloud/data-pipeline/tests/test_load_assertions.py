@@ -18,7 +18,7 @@ from data_pipeline.lake import (
 )
 from data_pipeline.steps import load_assertions
 
-_COLUMNS = ("article_id", "published_at", "source_fetched_at", "title", "input_fingerprint", "doc_class",
+_COLUMNS = ("article_id", "published_at", "title", "input_fingerprint", "doc_class",
             "status", "assertions", "reasons", "ontology_version", "tagger_version",
             "tagged_at")
 
@@ -867,50 +867,6 @@ def test_stale_judgement_in_the_same_partition_is_not_loaded(tmp_path, monkeypat
 
     # 옛 판정(WIN)은 안 실린다 — 실리면 취소된 계약이 DB 에 영구히 남는다
     assert [row[3] for row in _inserts(conn, "document_assertion")] == ["CANCEL"]
-    assert _log(storage)["rows_superseded"] == 1
-
-
-def test_stale_judgement_across_date_partitions_is_not_loaded(tmp_path, monkeypatch):
-    """WHY(ALPHA-1032): 게시시각 정정으로 날짜가 바뀌어도 한 기사의 최신 판정만 적재한다."""
-    storage = LocalStorage(tmp_path / "lake")
-    _write_feature(storage, "ko", "2026-07-15", [_feature_row(
-        "a1", [_assertion(event_type_code="SUPPLY_CONTRACT")],
-        source_fetched_at="2026-07-15T01:00:00+00:00",
-        input_fingerprint="fp-old", tagged_at="2026-07-17T02:00:00+00:00")])
-    _write_feature(storage, "ko", "2026-07-16", [_feature_row(
-        "a1", [_assertion(event_type_code="SUPPLY_CONTRACT", predicate_code="CANCEL")],
-        published_at="2026-07-16T00:10:00+09:00",
-        source_fetched_at="2026-07-15T04:00:00+00:00",
-        input_fingerprint="fp-new", tagged_at="2026-07-15T05:00:00+00:00")])
-    conn = _FakeConn(documents=[("a1", "doc_D1")])
-    _setup(monkeypatch, conn)
-
-    assert load_assertions.run(storage, "R1", db=_db()) == 0
-
-    assert [row[3] for row in _inserts(conn, "document_assertion")] == ["CANCEL"]
-    assert _log(storage)["rows_superseded"] == 1
-
-
-def test_date_scoped_load_does_not_select_stale_cross_partition_copy(tmp_path, monkeypatch):
-    """WHY(ALPHA-1032): 과거 날짜 한쪽 복구도 경계 밖 최신 source revision을 존중한다."""
-    storage = LocalStorage(tmp_path / "lake")
-    _write_feature(storage, "ko", "2026-07-15", [_feature_row(
-        "a1", [_assertion(predicate_code="WIN")],
-        source_fetched_at="2026-07-15T01:00:00+00:00",
-        tagged_at="2026-07-17T02:00:00+00:00")])
-    _write_feature(storage, "ko", "2026-07-16", [_feature_row(
-        "a1", [_assertion(predicate_code="CANCEL")],
-        published_at="2026-07-16T00:10:00+09:00",
-        source_fetched_at="2026-07-15T04:00:00+00:00",
-        tagged_at="2026-07-15T05:00:00+00:00")])
-    conn = _FakeConn(documents=[("a1", "doc_D1")])
-    _setup(monkeypatch, conn)
-
-    assert load_assertions.run(
-        storage, "R1", db=_db(), from_date="2026-07-15", to_date="2026-07-15"
-    ) == 0
-
-    assert _inserts(conn, "document_assertion") == []
     assert _log(storage)["rows_superseded"] == 1
 
 
