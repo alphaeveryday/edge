@@ -597,9 +597,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 위반 fact 만 뺀다(한 건이 배치 롤백 안 되게). 멱등: document 자연키·fact_id=결정적 파생
 # ON CONFLICT. --from/--to 는 report_date 창(미지정=전체 스캔).
 # 창 인자가 하나 더 있다(ALPHA-721): --window-days N 은 오늘−N일 창을 앱이 계산해 넘긴다.
-# ASL 이 날짜 산술을 못 해 --from/--to 를 만들 수 없어서다 — 장중 공시 레인처럼 하루 여러 번
-# 도는 호출부가 썼다(875 시절 — 987 컷오버로 그 레인은 미편입이고, 지금 스케줄 경로(18:10
-# SFN)는 옵션 없이 돈다). 명시 --from/--to 가 우선하고,
+# ASL 이 날짜 산술을 못 해 --from/--to 를 만들 수 없어서다 — 721·724 시절 다슬롯 공시 SFN
+# 을 위한 흔적이다(875 의 1분 워커는 CLI 가 아니라 스텝 함수에 날짜창을 직접 넘겼고, 987
+# 이후 스케줄 경로(18:10 SFN)는 옵션 없이 돈다). 명시 --from/--to 가 우선하고,
 # 둘 다 없으면 종전대로 풀스캔이다(백로그 회수 경로 보존 — 987 이후 스케줄 경로가 이쪽이다).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-disclosure
