@@ -237,6 +237,7 @@ class DisclosureWorker(MinuteWorkerLoop):
             )
             outcome = ingest_raw_disclosure.collect(
                 self.settings, self.storage, self.source, run_id, query_from, query_to,
+                ingest_lane="minute",
             )
             raw_status = str(outcome["log"].get("status"))
             step_exits = {"ingest": int(outcome["exit_code"])}
