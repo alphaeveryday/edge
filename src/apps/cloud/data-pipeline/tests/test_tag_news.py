@@ -21,7 +21,9 @@ from data_pipeline.steps import tag_news
 from data_pipeline.tagging.extract import TAGGER_VERSION
 from data_pipeline.tagging.ontology import ontology_version
 
-_CANONICAL_COLUMNS = ("article_id", "published_at", "title", "lead_text", "language", "mentions")
+_CANONICAL_COLUMNS = (
+    "article_id", "published_at", "title", "lead_text", "language", "mentions", "fetched_at",
+)
 
 
 def _write_canonical(storage, language: str, published_date: str, rows: list[dict]) -> None:
@@ -52,6 +54,7 @@ def _read_feature(storage, language: str, published_date: str) -> list[dict]:
 def _article(article_id: str = "a1", **over) -> dict:
     # mentions 기본값이 있어야 태깅된다 — mentions 게이트(ALPHA-416)가 무언급 기사를 거른다.
     row = {"article_id": article_id, "published_at": "2026-07-01T09:00:00+00:00",
+           "fetched_at": "2026-07-01T09:05:00+00:00",
            "title": "삼성전자, SK하이닉스와 공급계약 체결", "lead_text": "리드", "language": "ko",
            "mentions": json.dumps([{"market": "KR", "ticker": "005930"}])}
     row.update(over)
@@ -118,18 +121,26 @@ def test_manifest_missing_article_id_fails_loud(tmp_path):
     assert _read_feature(storage, "ko", "2026-07-01") == []
 
 
-def test_manifest_rejects_article_id_repeated_across_partitions(tmp_path):
-    """WHY(ALPHA-1032): 논리 기사 하나를 날짜별로 중복 태깅하면 비용·1기사 1행 계약이 깨진다."""
+def test_manifest_allows_article_id_repeated_across_partitions(tmp_path):
+    """WHY(ALPHA-1032): 게시시각 정정은 같은 URL 해시를 날짜 경계 양쪽에 둘 수 있다."""
     storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    _write_canonical(storage, "ko", "2026-07-02", [
+        _article("a1", published_at="2026-07-02T09:00:00+09:00",
+                 fetched_at="2026-07-02T09:05:00+09:00")])
     _write_manifest(storage, "N1", [
         _manifest_partition("2026-07-01", ["a1"]),
         _manifest_partition("2026-07-02", ["a1"]),
     ])
     calls: list = []
 
-    assert tag_news.run(storage, "R1", input_run_id="N1",
-                        complete_fn=_fake_complete(calls)) == 1
-    assert calls == []
+    assert tag_news.run(storage, "R1", input_run_id="N1", limit=1,
+                        complete_fn=_fake_complete(calls)) == 0
+    assert len(calls) == 1
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert [(p["published_date"], p["article_ids"]) for p in manifest["feature_partitions"]] == [
+        ("2026-07-02", ["a1"]),
+    ]
 
 
 def test_same_run_retry_keeps_ids_written_before_later_partition_failure(tmp_path):

@@ -261,7 +261,6 @@ def _manifest_partitions(storage: Storage, input_run_id: str) -> list[dict]:
         raise ValueError(f"canonical_partitions가 없는 구형 manifest다: run_id={input_run_id}")
     result: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    seen_article_ids: set[str] = set()
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError("canonical_partitions 항목이 객체가 아니다")
@@ -281,12 +280,60 @@ def _manifest_partitions(storage: Storage, input_run_id: str) -> list[dict]:
         if (item.get("key") != expected or not isinstance(article_ids, list)
                 or not article_ids or article_ids != sorted(set(article_ids))
                 or any(not isinstance(value, str) or not value.strip()
-                       or value != value.strip() for value in article_ids)
-                or seen_article_ids.intersection(article_ids)):
+                       or value != value.strip() for value in article_ids)):
             raise ValueError(f"canonical 직접 범위가 유효하지 않다: {item!r}")
-        seen_article_ids.update(article_ids)
         result.append({**item, "article_ids": frozenset(article_ids)})
     return result
+
+
+def _canonical_revision(row: dict) -> tuple[datetime, datetime]:
+    """재태깅 시각과 무관한 canonical 원문 revision. fetched_at 우선, published_at 보조."""
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    parsed: list[datetime] = []
+    for field in ("fetched_at", "published_at"):
+        value = row.get(field)
+        try:
+            timestamp = datetime.fromisoformat(value) if isinstance(value, str) else oldest
+        except ValueError:
+            timestamp = oldest
+        parsed.append(timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc))
+    return parsed[0], parsed[1]
+
+
+def _scoped_canonical_rows(
+    storage: Storage, partitions: list[dict]
+) -> dict[tuple[str, str], list[dict]]:
+    """manifest 전량을 검증한 뒤 article_id별 최신 source revision만 파티션에 배정한다."""
+    rows_by_partition: dict[tuple[str, str], list[dict]] = {}
+    winners: dict[str, tuple[tuple[datetime, datetime], tuple[str, str]]] = {}
+    for item in partitions:
+        partition = (item["language"], item["published_date"])
+        article_ids = item["article_ids"]
+        found: set[str] = set()
+        rows: list[dict] = []
+        for row in _read_parquet_rows(storage.get_bytes(item["key"])):
+            article_id = row.get("article_id")
+            if article_id not in article_ids:
+                continue
+            if article_id in found:
+                raise ValueError(f"manifest article_id가 canonical에 중복됐다: {article_id}")
+            published_at = row.get("published_at")
+            if not isinstance(published_at, str) or published_at[:10] != item["published_date"]:
+                raise ValueError(f"manifest article_id의 canonical 날짜가 파티션과 다르다: {article_id}")
+            found.add(article_id)
+            rows.append(row)
+            candidate = (_canonical_revision(row), partition)
+            if article_id not in winners or candidate >= winners[article_id]:
+                winners[article_id] = candidate
+        missing = article_ids - found
+        if missing:
+            raise ValueError(f"manifest article_id가 canonical에 없다: {sorted(missing)!r}")
+        rows_by_partition[partition] = rows
+    return {
+        partition: [row for row in rows
+                    if winners[row["article_id"]][1] == partition]
+        for partition, rows in rows_by_partition.items()
+    }
 
 
 def _feature_manifest_bytes(
@@ -527,12 +574,15 @@ def run(
         } for (language, published_date), article_ids in sorted(changed_by_partition.items())]
 
     scoped: dict[tuple[str, str], tuple[str, frozenset[str]]] | None = None
+    scoped_articles: dict[tuple[str, str], list[dict]] = {}
     if input_run_id is not None:
         try:
+            manifest_partitions = _manifest_partitions(storage, input_run_id)
             scoped = {
                 (item["language"], item["published_date"]): (item["key"], item["article_ids"])
-                for item in _manifest_partitions(storage, input_run_id)
+                for item in manifest_partitions
             }
+            scoped_articles = _scoped_canonical_rows(storage, manifest_partitions)
         except Exception as exc:
             logger.exception("normalize-news manifest 읽기 실패")
             failures.append({"reasons": ["input_manifest_error"], "error": str(exc)})
@@ -562,27 +612,7 @@ def run(
                 if scope is None:
                     articles = [] if scoped is not None else _read_canonical(storage, language, published_date)
                 else:
-                    canonical_key, article_ids = scope
-                    articles = []
-                    found: set[str] = set()
-                    for row in _read_parquet_rows(storage.get_bytes(canonical_key)):
-                        article_id = row.get("article_id")
-                        if article_id not in article_ids:
-                            continue
-                        if article_id in found:
-                            raise ValueError(
-                                f"manifest article_id가 canonical에 중복됐다: {article_id}"
-                            )
-                        published_at = row.get("published_at")
-                        if not isinstance(published_at, str) or published_at[:10] != published_date:
-                            raise ValueError(
-                                f"manifest article_id의 canonical 날짜가 파티션과 다르다: {article_id}"
-                            )
-                        found.add(article_id)
-                        articles.append(row)
-                    missing = article_ids - found
-                    if missing:
-                        raise ValueError(f"manifest article_id가 canonical에 없다: {sorted(missing)!r}")
+                    articles = scoped_articles[(language, published_date)]
                 existing, mirror_keys, part_rows, mirror_ids = _read_feature(
                     storage, language, published_date)
             except Exception as exc:
