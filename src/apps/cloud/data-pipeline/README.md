@@ -188,8 +188,9 @@
 > 시간외 격자 dataset 이 가격뿐, dev 정본에 시간외 축 없음), `aws_scheduler_schedule.minute_session`).
 > 같은 자원이 **업종지수 5분 파생 확정**도 부른다(평일 16:00 KST — `rollup-minute-session
 > --dataset sector_index_minute`, ALPHA-955). 시각이 다른 이유는 격자가 달라서다:
-> 업종지수 세션은 09:00~15:30 이고 가격은 20:00 까지라, 가격 EOD 확정은 이 시각을 쓸 수
-> 없다(ALPHA-839 소관).
+> 업종지수 세션은 늘 09:00~15:30 인데 가격은 시간외 종목이 정본에 있으면 20:00 까지
+> 넓어질 수 있어(지금 dev 는 시간외 축이 없어 둘 다 15:30 이지만 축은 승계로 되살아난다),
+> 가격 EOD 확정은 이 시각에 못박을 수 없다(ALPHA-839 소관).
 > 내리는 조건은 **시각이 아니라 원장 상태**다(phase DRAINED → 큐 깊이 0 → outbox NEW 0,
 > 연속 확인). 게이트가 풀리면 설정된 전 레인을 QC한 뒤 scale-down한다. 한 레인의 QC 실패도
 > 나머지 레인 QC와 안전한 scale-down을 막지 않는다. 스케줄러는 RunTask **제출**까지만 보지만,
