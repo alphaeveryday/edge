@@ -870,6 +870,25 @@ def test_stale_judgement_in_the_same_partition_is_not_loaded(tmp_path, monkeypat
     assert _log(storage)["rows_superseded"] == 1
 
 
+def test_stale_judgement_across_date_partitions_is_not_loaded(tmp_path, monkeypatch):
+    """WHY(ALPHA-1032): 게시시각 정정으로 날짜가 바뀌어도 한 기사의 최신 판정만 적재한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row(
+        "a1", [_assertion(event_type_code="SUPPLY_CONTRACT")],
+        input_fingerprint="fp-old", tagged_at="2026-07-15T02:00:00+00:00")])
+    _write_feature(storage, "ko", "2026-07-16", [_feature_row(
+        "a1", [_assertion(event_type_code="SUPPLY_CONTRACT", predicate_code="CANCEL")],
+        published_at="2026-07-16T00:10:00+09:00",
+        input_fingerprint="fp-new", tagged_at="2026-07-15T05:00:00+00:00")])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    assert [row[3] for row in _inserts(conn, "document_assertion")] == ["CANCEL"]
+    assert _log(storage)["rows_superseded"] == 1
+
+
 def test_unabsorbed_minute_mirror_is_not_loaded(tmp_path, monkeypatch):
     """⭐ 흡수 전 장중 미러는 **아직 확정이 아니다** (ALPHA-900).
 
