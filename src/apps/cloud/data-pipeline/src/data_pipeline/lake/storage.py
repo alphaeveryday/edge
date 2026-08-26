@@ -757,6 +757,14 @@ def canonical_run_manifest_key(dataset: str, run_id: str) -> str:
     )
 
 
+def feature_run_manifest_key(dataset: str, run_id: str) -> str:
+    """feature producer가 현재 실행에서 바꾼 직접 파티션·논리 ID manifest 키."""
+    return (
+        f"operations_archive/feature_run_manifests/dataset={dataset}"
+        f"/run_id={run_id}/manifest.json"
+    )
+
+
 def quality_log_prefix(dataset: str) -> str:
     """그 dataset 의 품질 로그가 사는 프리픽스(날짜 이하 전부). 관측이 run_id 로 훑을 때 쓴다.
 

@@ -9,10 +9,12 @@ import json
 
 from data_pipeline.lake import (
     LocalStorage,
+    canonical_run_manifest_key,
     canonical_news_articles_partition,
     feature_news_assertions_minute_key,
     feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
+    feature_run_manifest_key,
     quality_log_prefix,
 )
 from data_pipeline.steps import tag_news
@@ -54,6 +56,177 @@ def _article(article_id: str = "a1", **over) -> dict:
            "mentions": json.dumps([{"market": "KR", "ticker": "005930"}])}
     row.update(over)
     return row
+
+
+def _write_manifest(storage, run_id: str, partitions: list[dict]) -> None:
+    storage.put_bytes(canonical_run_manifest_key("news_articles", run_id), json.dumps({
+        "run_id": run_id, "producer": "normalize_news", "canonical_written": True,
+        "canonical_partitions": partitions,
+    }).encode())
+
+
+def _manifest_partition(date: str, article_ids: list[str]) -> dict:
+    return {"language": "ko", "published_date": date,
+            "key": f"{canonical_news_articles_partition('ko', date)}/part-00000.parquet",
+            "article_ids": article_ids}
+
+
+def test_manifest_scope_reads_only_current_logical_ids(tmp_path):
+    """WHY(ALPHA-1032): 병합 parquet 전체를 처리하면 직접 key여도 과거 ID를 다시 읽는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a-old"), _article("a-new")])
+    _write_manifest(storage, "N1", [_manifest_partition("2026-07-01", ["a-new"])])
+    list_calls: list[str] = []
+    original_list_keys = storage.list_keys
+    storage.list_keys = lambda prefix: list_calls.append(prefix) or original_list_keys(prefix)
+
+    calls: list = []
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete(calls)) == 0
+
+    assert len(calls) == 1
+    normal_list_calls = list(list_calls)
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01")] == ["a-new"]
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is True
+    assert manifest["feature_partitions"][0]["article_ids"] == ["a-new"]
+    assert canonical_news_articles_partition("ko", "") not in list_calls
+    assert f"{feature_news_assertions_partition('ko', '2026-07-01')}/" not in normal_list_calls
+
+
+def test_missing_input_manifest_fails_without_full_scan(tmp_path):
+    """WHY(ALPHA-1032): 계보 결손을 canonical 전체 스캔으로 넓히면 정상 비용 회귀가 숨는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    calls: list = []
+
+    assert tag_news.run(storage, "R1", input_run_id="missing",
+                        complete_fn=_fake_complete(calls)) == 1
+    assert calls == []
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is False
+
+
+def test_manifest_missing_article_id_fails_loud(tmp_path):
+    """WHY(ALPHA-1032): 직접 key가 있어도 ID 결손이면 손상 manifest이지 빈 성공이 아니다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    _write_manifest(storage, "N1", [_manifest_partition("2026-07-01", ["a1", "missing"])])
+
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete([])) == 1
+    assert _read_feature(storage, "ko", "2026-07-01") == []
+
+
+def test_manifest_rejects_article_id_repeated_across_partitions(tmp_path):
+    """WHY(ALPHA-1032): 논리 기사 하나를 날짜별로 중복 태깅하면 비용·1기사 1행 계약이 깨진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_manifest(storage, "N1", [
+        _manifest_partition("2026-07-01", ["a1"]),
+        _manifest_partition("2026-07-02", ["a1"]),
+    ])
+    calls: list = []
+
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete(calls)) == 1
+    assert calls == []
+
+
+def test_same_run_retry_keeps_ids_written_before_later_partition_failure(tmp_path):
+    """WHY(ALPHA-1032): 재시도가 앞선 부분 성공을 skip해도 feature 계보는 유실되면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    _write_canonical(storage, "ko", "2026-07-02", [
+        _article("a2", published_at="2026-07-02T09:00:00+09:00")])
+    _write_manifest(storage, "N1", [
+        _manifest_partition("2026-07-01", ["a1"]),
+        _manifest_partition("2026-07-02", ["a2"]),
+    ])
+    original_put = storage.put_bytes
+
+    def fail_second_feature(key, data):
+        if "feature/news/assertions" in key and "published_date=2026-07-02" in key:
+            raise OSError("의도된 두 번째 파티션 실패")
+        return original_put(key, data)
+
+    storage.put_bytes = fail_second_feature
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete([])) == 1
+    storage.put_bytes = original_put
+
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete([])) == 0
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is True
+    assert [p["article_ids"] for p in manifest["feature_partitions"]] == [["a1"], ["a2"]]
+
+
+def test_same_run_retry_recovers_id_when_manifest_checkpoint_put_failed(tmp_path):
+    """WHY(ALPHA-1032): feature만 저장된 장애 뒤 재시도가 current 행을 skip해도 계보는 남아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    _write_manifest(storage, "N1", [_manifest_partition("2026-07-01", ["a1"])])
+    original_put = storage.put_bytes
+    manifest_key = feature_run_manifest_key("news_assertions", "R1")
+    manifest_puts = 0
+
+    def fail_checkpoint(key, data):
+        nonlocal manifest_puts
+        if key == manifest_key:
+            manifest_puts += 1
+            if manifest_puts == 2:
+                raise OSError("의도된 checkpoint 실패")
+        return original_put(key, data)
+
+    storage.put_bytes = fail_checkpoint
+    first_calls: list = []
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete(first_calls)) == 1
+    storage.put_bytes = original_put
+
+    second_calls: list = []
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete(second_calls)) == 0
+    manifest = json.loads(storage.get_bytes(manifest_key))
+    assert len(first_calls) == 1
+    assert second_calls == []
+    assert manifest["feature_written"] is True
+    assert manifest["feature_partitions"][0]["article_ids"] == ["a1"]
+
+
+def test_overlapping_manifest_retries_current_llm_error(tmp_path):
+    """WHY(ALPHA-1032): 다음 전일·당일 겹침 수집이 같은 ID를 다시 내면 llm_error를 재판정한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
+    partition = _manifest_partition("2026-07-01", ["a1"])
+    _write_manifest(storage, "N1", [partition])
+
+    def boom(_system, _user):
+        raise RuntimeError("일시 실패")
+
+    assert tag_news.run(storage, "R1", input_run_id="N1", complete_fn=boom) == 0
+    _write_manifest(storage, "N2", [partition])
+    calls: list = []
+    assert tag_news.run(storage, "R2", input_run_id="N2",
+                        complete_fn=_fake_complete(calls)) == 0
+    assert len(calls) == 1
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "ok"
+
+
+def test_empty_manifest_absorbs_current_intraday_mirror(tmp_path):
+    """WHY(ALPHA-1032): canonical이 아직 없는 장중 판정도 다음 LoadAssertions에 넘겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_manifest(storage, "N1", [])
+    current_date = tag_news.datetime.now(tag_news._KST).date().isoformat()
+    article = _article("a-minute", published_at=f"{current_date}T08:00:00+09:00")
+    mirror_key = _write_mirror(storage, article, tagged_at=f"{current_date}T08:01:00+09:00")
+
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete([])) == 0
+
+    assert storage.list_keys(mirror_key) == []
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_partitions"][0]["article_ids"] == ["a-minute"]
 
 
 def _fake_complete(calls: list):
@@ -155,20 +328,25 @@ def test_english_articles_are_not_tagged(tmp_path):
 
 
 def test_limit_caps_llm_calls_and_leaves_rest_for_next_run(tmp_path):
-    """비용 상한 — 상한에 걸린 기사는 버려지는 게 아니라 다음 런에서 이어서 태깅돼야 한다."""
+    """WHY(ALPHA-1032): 상한 잔여를 완료 처리하면 run별 manifest 범위에서 영구 누락된다."""
     storage = LocalStorage(tmp_path / "lake")
 
     _write_canonical(storage, "ko", "2026-07-01", [_article("a1"), _article("a2"), _article("a3")])
 
     first: list = []
-    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=2) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=2) == 1
     assert len(first) == 2
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 2
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is False
 
     second: list = []
-    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second)) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(second)) == 0
     assert len(second) == 1  # 남은 1건만 — 이미 태깅된 2건은 안 부른다
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 3
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is True
+    assert manifest["feature_partitions"][0]["article_ids"] == ["a1", "a2", "a3"]
 
 
 def test_date_window_prunes_partitions(tmp_path):
@@ -355,19 +533,19 @@ def test_concurrent_tagging_preserves_all_rows_and_call_count(tmp_path):
 def test_limit_respected_under_concurrency(tmp_path):
     """WHY: limit 은 선택 단계(순차)에서 확정 tagged + 이번에 고른 수로 판정한다 — 병렬 실행이
     이 상한을 흘리면 비용 가드가 깨진다. 20건·limit=5·concurrency=8 이면 정확히 5건만 태깅되고
-    나머지 15는 다음 런으로 남아야 한다(순차판과 동치).
+    나머지 15는 동일 run 재시도로 남아야 한다(순차판과 동치).
     """
     storage = LocalStorage(tmp_path / "lake")
     articles = [_article(f"a{i}") for i in range(20)]
     _write_canonical(storage, "ko", "2026-07-01", articles)
 
     first: list = []
-    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=5, concurrency=8) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=5, concurrency=8) == 1
     assert len(first) == 5
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 5
 
     second: list = []
-    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second), concurrency=8) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(second), concurrency=8) == 0
     assert len(second) == 15  # 남은 15건만 — 이미 태깅된 5건은 안 부른다
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 20
 
@@ -699,8 +877,7 @@ def test_windowed_run_absorbs_in_window_mirror_without_canonical(tmp_path):
     미러를 안 읽으므로(ALPHA-900) **그 장중 판정이 DB 에 영영 안 실린다** — 이 티켓이
     노리는 값 하나가 통째로 사라진다.
 
-    ⚠️ 운영 SFN 은 **항상** `--window-days` 를 준다. 창 있는 런에서 미러 날짜를 통째로
-    빼면 이 경로가 스케줄 경로에서 상시로 죽는다.
+    명시 기간 복구에서도 미러 날짜를 빼면 canonical보다 먼저 온 장중 판정을 회수하지 못한다.
     """
     storage = LocalStorage(tmp_path)
     # 창 안이지만 canonical 파티션이 없는 날짜 — 장중만 본 기사다

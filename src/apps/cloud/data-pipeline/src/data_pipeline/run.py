@@ -13,14 +13,8 @@
 (analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
 
 수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표·ETF holdings 는 스냅샷이라 창 없음).
-tag-news 는 --from/--to 를 **태깅 대상 파티션 프루닝**에 쓴다(raw 수집 창이 아니라 canonical
-published_date 범위이며, 미지정은 증분 기본창이 아니라 전체다):
-  - 미지정: 풀스캔 — 창 밖 미태깅·정정본까지 쓸어담는 회수 경로다(수동 백필 기본).
-  - 일일 SFN: --window-days N 으로 오늘−N일 창을 앱이 계산해 좁힌다(read=O(전체 코퍼스)
-    스캔이 런타임을 지배하므로 창이 곧 속도). EventBridge Scheduler 는 정적 입력만 넣어
-    '오늘−N'을 못 만들므로, 창은 이 엔트리가 런타임 시계로 정한다. 넓게 둘수록(한 날짜가
-    N+1회 스캔) 일시적 llm_error 가 창 안에서 자가 회복한다.
-  - 명시(백필): 일회성 RunTask 로 --from/--to 를 넘겨 과거 구간을 적재한다(--window-days 보다 우선).
+tag-news 정상 경로는 --input-run-id 로 NormalizeNews manifest의 직접 파티션과 현재 article_id만
+읽는다. 과거 재태깅은 --from/--to, 전체 복구는 명시적 --all만 허용한다.
 run_id 는 미지정 시 UTC 타임스탬프. 같은 run_id·창으로 재실행하면 raw 파티션 파일을
 같은 키에 다시 써 겹쳐쓰기된다(재현 실행).
 """
@@ -143,8 +137,7 @@ def make_run_id(now: datetime | None = None) -> str:
 
 # 증분 창의 날짜는 **프로세스 시계가 아니라 벤더 달력**이다(ALPHA-883). 우리가 만든 날짜
 # 문자열이 그대로 벤더 질의에 실리기 때문이다 — BigKinds `search_page` 의 startDate/endDate 가
-# 그 자리이고, 그 벤더는 KST 벽시계로 라벨한다(`normalize_news._KST`). canonical 뉴스 파티션도
-# `published_at[:10]` 이라 KST 날짜 키라, 그 파티션을 고르는 `tag-news` 창도 같은 축이다.
+# 그 자리이고, 그 벤더는 KST 벽시계로 라벨한다(`normalize_news._KST`).
 #
 # UTC 로 날짜를 뽑으면 KST=UTC+9 이라 **09:00 KST 이전에 도는 슬롯에서 하루가 밀린다.** 지금
 # 안 깨지는 유일한 이유는 모든 스케줄 슬롯이 09:00 KST 이후이기 때문이고(공시 09:00 은 정확히
@@ -174,10 +167,6 @@ _WINDOW_CALENDAR: dict[tuple[str, str | None], timezone] = {
     ("ingest-raw-inav", None): KST,                  # KIS
     ("ingest-raw-investor", None): KST,              # KIS
     ("ingest-raw-disclosure", None): KST,            # DART
-    # canonical 뉴스 파티션(`published_at[:10]`)은 벤더마다 달력이 다르다 — normalize 가
-    # BigKinds 는 KST 로, FMP 는 UTC 로 라벨한다. tag-news 는 벤더가 안 갈려 한쪽을 골라야
-    # 하고, 실제로 도는 건 KR 레인이라 KST 다.
-    ("tag-news", None): KST,
     ("load-disclosure", None): KST,                  # canonical 공시(report_date = DART 접수일)
 }
 
@@ -298,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-run-id", default=None,
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
-                        help="load-documents·load-etf-holdings: 명시적 canonical 전체 스캔")
+                        help="tag-news·load-documents·load-etf-holdings: 명시적 전체 스캔")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출
@@ -306,8 +295,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None,
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     parser.add_argument("--window-days", type=int, default=None,
-                        help="tag-news·assemble-events·load-disclosure: 대상 파티션을 오늘−N일 창으로"
-                             " 제한(미지정: tag-news·load-disclosure=풀스캔, assemble-events=오늘"
+                        help="assemble-events·load-disclosure: 대상 파티션을 오늘−N일 창으로"
+                             " 제한(미지정: load-disclosure=풀스캔, assemble-events=오늘"
                              " 하루). --from/--to 가 우선")
     # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
@@ -493,9 +482,9 @@ def main(argv: list[str] | None = None) -> int:
     # `--window-days` 도 소비하는 스텝에서만 받는다(--deadline-sec 과 같은 이유 — 조용히
     # 무시하면 창이 걸렸다고 오인하고 SFN 배선 오류도 안 드러난다, Rule 12).
     if args.window_days is not None:
-        if args.step not in ("tag-news", "assemble-events", "load-disclosure"):
+        if args.step not in ("assemble-events", "load-disclosure"):
             raise SystemExit(
-                "--window-days 는 tag-news·assemble-events·load-disclosure 에서만 쓴다 — "
+                "--window-days 는 assemble-events·load-disclosure 에서만 쓴다 — "
                 f"이 스텝({args.step})에서는 무시되므로 거부한다"
             )
         # 음수 창은 역전 창(오늘+N, 오늘)이 되어 전 파티션을 제외한다 — 0건 처리를 exit 0
@@ -504,11 +493,11 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"--window-days 는 음수일 수 없다: {args.window_days}")
         # 상한: 창은 최근 파티션 소급 폭이다 — 비상식 값(예 800000)은 date 연산 하한을 넘겨
         # collection_log 도 못 남기고 크래시한다(OverflowError). 과거 전체가 필요하면 창을
-        # 키우는 게 아니라 미지정 풀스캔(tag-news)·--from/--to 백필(assemble)이 그 경로다.
+        # 키우는 게 아니라 명시적 --from/--to 백필이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
-    if args.all_partitions and args.step not in ("load-documents", "load-etf-holdings"):
-        raise SystemExit("--all 은 load-documents·load-etf-holdings 전용이다")
+    if args.all_partitions and args.step not in ("tag-news", "load-documents", "load-etf-holdings"):
+        raise SystemExit("--all 은 tag-news·load-documents·load-etf-holdings 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -684,7 +673,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # `--window-days` 를 받는 유일한 적재 스텝이다(ALPHA-721). 형제 로더들은 하루 1회만 돌아
     # 전체 스캔을 견디지만, 공시는 장중 레인이 붙으면 슬롯마다 그 스캔이 곱해진다
     # (news-load-fullscan-problem 과 같은 축). ASL 은 날짜 연산을 못 해 `--from/--to` 를
-    # 만들 수 없으므로 창 **폭**을 받아 여기서 날짜로 편다 — tag-news·assemble-events 와 같은
+    # 만들 수 없으므로 창 **폭**을 받아 여기서 날짜로 편다 — assemble-events 와 같은
     # 패턴이고, 명시 `--from/--to` 가 주어지면 그쪽이 이긴다(백필 경로 보존).
     if args.step == "load-disclosure":
         load_from, load_to = args.from_date, args.to_date
@@ -806,14 +795,28 @@ def _dispatch(args, settings, storage, run_id) -> int:
             expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
         )
 
-    # 태깅은 canonical 을 읽는 스텝이라 수집 날짜창의 의미가 다르다 — raw 를 가져올 창이 아니라
-    # **태깅 대상 published_date 파티션**을 좁히는 창이다(미지정=풀스캔). 그래서 아래 증분 기본창
-    # (어제~오늘) 자동 계산을 타지 않도록 여기서 분기한다 — 태깅에 기본창을 조용히 씌우면 과거
-    # 기사가 영영 태깅되지 않는다(풀스캔이 곧 백로그·정정본 회수 경로다).
-    # 대신 일일 SFN 경로는 --window-days 로 창을 **명시 opt-in** 한다: read=O(전체 코퍼스) 스캔이
-    # 런타임을 지배하므로(LLM 아님) 창이 곧 속도다. 창 밖 회수는 넓은 창(N일=한 날짜가 N+1회
-    # 스캔돼 일시적 llm_error 자가 회복) + 필요 시 풀스캔 수동 실행이 맡는다(ALPHA-540).
+    # 정상 TagNews는 NormalizeNews manifest의 직접 parquet와 현재 article_id만 읽는다.
+    # 날짜창은 명시 백필, 전체 스캔은 --all을 직접 쓴 경우뿐이다(ALPHA-1032).
     if args.step == "tag-news":
+        scopes = sum((args.input_run_id is not None,
+                      args.from_date is not None or args.to_date is not None,
+                      args.all_partitions))
+        if scopes != 1:
+            raise SystemExit("tag-news는 --input-run-id, --from/--to, --all 중 하나가 필요하다")
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("tag-news의 --from은 --to보다 늦을 수 없다")
         # LLM 설정은 **여기서** env 로 읽는다. llm.py 는 인자만 받고 env 를 모른다 —
         # DATA_PIPELINE_* 는 수집 설정(load_settings) 네임스페이스인데 LLM 은 수집 소스가
         # 아니라 거기 안 든다. 관례는 analysis-engine analyze_daily.py 와 같은 LLM_* 키다.
@@ -828,14 +831,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
         )
         # LLM 호출 병렬도도 LLM_* env 관례로 받는다(미지정=기본, 상한은 tag_news 가 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", tag_news.DEFAULT_TAG_CONCURRENCY))
-        # 음수·비소비 스텝 거부는 파싱 직후의 공통 가드가 맡는다(assemble-events 와 공유).
-        # 명시 --from/--to 가 최우선(백필). 없고 --window-days 만 있으면 오늘−N일 창으로 좁힌다.
-        from_date, to_date = args.from_date, args.to_date
-        if from_date is None and to_date is None and args.window_days is not None:
-            from_date, to_date = default_window(
-                datetime.now(window_calendar_tz(args.step, args.source)), args.window_days)
         return tag_news.run(storage, run_id, complete_fn=complete_fn,
-                            from_date=from_date, to_date=to_date, limit=args.limit,
+                            input_run_id=args.input_run_id,
+                            from_date=args.from_date, to_date=args.to_date, limit=args.limit,
                             concurrency=concurrency)
 
     # 재무제표는 point-in-time 폴링이라 날짜창을 쓰지 않는다 — 먼저 분기해 창 계산을 건너뛴다.

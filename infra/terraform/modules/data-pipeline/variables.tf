@@ -495,34 +495,15 @@ variable "log_retention_days" {
   default = 14
 }
 
-# tag-news 는 기사 하나당 LLM 을 한 번 부르고, 창을 안 주면 canonical 전체가 대상이다
-# (다른 스텝과 달리 미지정이 증분 기본창이 아니다). run.py 의 --limit 은 "실수로 큰 금액이
-# 나가는 걸 호출부가 막을 수 있게" 둔 가드이고, SFN 이 그 호출부다. 상한을 안 주면 재태깅
-# 축(TAGGER_VERSION·온톨로지 범프)이 발동한 다음 런이 전 기간을 한 번에 태깅한다.
+# tag-news 는 기사 하나당 LLM 을 한 번 부른다. 정상 SFN은 NormalizeNews manifest 범위만
+# 처리하고, run.py 의 --limit 은 그 범위에서 "실수로 큰 금액이 나가는 걸 호출부가 막는"
+# 가드다. 상한을 안 주면 재태깅 축(TAGGER_VERSION·온톨로지 범프)이 발동한 다음 런이 현재
+# manifest 범위를 한 번에 태깅한다.
 # 상한에 걸린 잔여분은 다음 런이 이어받는다 — 미태깅 기사만 고르므로 진척이 누적된다.
 variable "tag_news_limit" {
   description = "tag-news 가 한 실행에서 새로 LLM 을 부를 기사 수 상한(비용 가드). 잔여는 다음 실행이 이어받는다."
   type        = number
   default     = 10000
-}
-
-# 뉴스 SFN TagNews 의 태깅 대상 창(오늘−N일, 주 7일 2슬롯 — ALPHA-553·874·893). read=O(전체 코퍼스)
-# 스캔 상한이 목적이다(ALPHA-540). 넓게 둘수록 창 밖 회수가 튼튼하다 — 한 날짜가 슬롯×(N+1)회
-# 스캔돼 일시적 llm_error 가 창 안에서 자가 회복하고(멱등 skip 이라 재스캔 비용은 스캔뿐),
-# 창보다 오래된 정정본만 풀스캔 수동 실행이 맡는다. --window-days 미주입(수동·백필)은 풀스캔
-# 유지 — 이 변수는 SFN 경로만.
-variable "tag_news_window_days" {
-  description = "뉴스 SFN tag-news 태깅 대상 창(오늘−N일). 스캔 비용↔창 밖 회수 여유의 트레이드오프."
-  type        = number
-  default     = 3
-  validation {
-    # 음수는 역전 창(오늘+N,오늘)이라 전 파티션을 제외해 0건 태깅을 성공으로 위장하고(Rule 12),
-    # 소수는 command 로 "3.5" 가 실려 run.py 의 argparse type=int 가 거부해 매 런이 즉시 실패한다.
-    # 상한(3650)은 run.py 공통 가드(ALPHA-592)와 짝 — 없으면 plan 은 통과하고 매 런이 거부된다.
-    # 셋 다 plan 시점에 잡는다(run.py 도 음수·상한은 런타임에 재차 거른다).
-    condition     = var.tag_news_window_days >= 0 && var.tag_news_window_days <= 3650 && floor(var.tag_news_window_days) == var.tag_news_window_days
-    error_message = "tag_news_window_days 는 0~3650 의 정수여야 한다(음수=역전 창, 소수=argparse int 거부, 초과=런타임 거부)."
-  }
 }
 
 # 뉴스 SFN AssembleEvents 의 조립 대상 창(오늘−N일, ALPHA-592). 기본 1 = [어제, 오늘] 겹침.
