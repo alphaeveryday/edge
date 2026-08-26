@@ -487,6 +487,12 @@ def test_exactly_one_ledger_owns_disclosure(monkeypatch):
     if root is None:
         pytest.skip("envs/dev/main.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
     dev_tf = (root / "infra/terraform/envs/dev/main.tf").read_text(encoding="utf-8")
+    # 주석을 걷고 매칭한다 — 안 걷으면 두 인자를 주석 처리(배선 해제의 가장 흔한 형태)해도
+    # 주석 속 문자열이 계속 매칭돼 이 단언이 통과한다(test_ops_catalog._strip_hcl_comments
+    # 와 같은 규율). 착지값 검사라 값 안에 //·# 가 없어 줄 선두 판정으로 충분하다.
+    dev_tf = re.sub(r"/\*.*?\*/", "", "\n".join(
+        ln for ln in dev_tf.splitlines() if not ln.lstrip().startswith(("#", "//"))),
+        flags=re.S)  # re.S 없으면 여러 줄 /* … */ 이 안 걷혀 주석 속 대입문이 매칭된다
     toggle = re.search(
         r'^\s*minute_session_disclosure_source_group\s*=\s*"([^"]*)"', dev_tf, re.M)
     assert toggle, ("dev 가 minute_session_disclosure_source_group 를 명시하지 않는다 — "
