@@ -73,7 +73,11 @@ class StubSteps:
         self.load_calls: list[dict] = []
         self.assemble_calls: list[dict] = []
 
-    def collect(self, settings, storage, source, run_id, from_date=None, to_date=None):
+    def collect(self, settings, storage, source, run_id, from_date=None, to_date=None,
+                *, ingest_lane):
+        # 실물 collect() 계약과 동일하게 필수다 — 워커가 이 인자를 빠뜨리면 여기서 죽어야
+        # 배치 워터마크(ALPHA-987)의 레인 구분 전제가 픽스처 뒤로 숨지 않는다.
+        assert ingest_lane == "minute"
         self.collect_windows.append((from_date, to_date))
         self.collect_run_ids.append(run_id)
         return {

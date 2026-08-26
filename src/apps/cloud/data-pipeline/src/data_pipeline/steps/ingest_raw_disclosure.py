@@ -125,7 +125,10 @@ def run(
     from_date/to_date 는 소스에 넘길 수집 날짜창(YYYY-MM-DD). None 이면 소스 기본(최신분) —
     스케줄 증분·백필 창은 run 엔트리가 정해 넘긴다(뉴스와 동형).
     """
-    return collect(settings, storage, source, run_id, from_date, to_date)["exit_code"]
+    # 이 진입점이 곧 배치 레인이다(SFN·CLI) — 1분 레인은 collect() 를 직접 부른다.
+    return collect(
+        settings, storage, source, run_id, from_date, to_date, ingest_lane="batch"
+    )["exit_code"]
 
 
 def collect(
@@ -135,8 +138,17 @@ def collect(
     run_id: str,
     from_date: str | None = None,
     to_date: str | None = None,
+    *,
+    ingest_lane: str,
 ) -> dict:
     """`run` 과 같은 수집을 하고 **관측을 돌려준다** (ALPHA-875 — 1분 레인이 쓴다).
+
+    ingest_lane 은 이 런이 어느 수집 경로였는지("batch" | "minute") — 로그에 그대로 남는다.
+    두 레인이 같은 collection_log 프리픽스를 쓰고 `job_name`·run_id 로는 구분되지 않아
+    (run_id 접두는 규약이 아니다), 이 필드가 없으면 배치 워터마크(ALPHA-987)가 1분 레인
+    로그를 배치 완주로 오인한다. 기본값을 두지 않는다 — 새 호출부가 조용히 어느 레인으로
+    떨어지면 그 오인이 되살아난다. ⚠️ `lane` 이라 부르지 않는다: minute 쪽 `lane` 은
+    window 클레임 축("realtime"|"recovery")으로 이미 쓰는 다른 축이다.
 
     반환:
       - `exit_code` : `run` 이 그대로 내보내는 값
@@ -156,12 +168,18 @@ def collect(
     (`collection_log_key`) 호출자가 키를 재구성하려면 그 날짜를 맞혀야 하는데, UTC 자정이
     09:00 KST — 즉 이 레인 격자의 **한복판**이다. 개장 시각 tick 마다 키를 틀릴 수 있다.
     """
+    if ingest_lane not in ("batch", "minute"):
+        # 오타난 레인이 로그에 그대로 실리면 수집은 성공하는데 워터마크는 그 런을 어느
+        # 레인에도 귀속하지 못한다 — 생산자에서 즉시 죽인다(Rule 12, `_WINDOW_CALENDAR`
+        # 의 미선언 fail-loud 와 같은 자세).
+        raise ValueError(f"알 수 없는 ingest_lane: {ingest_lane!r} (batch|minute)")
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]  # = ingest_date
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
     log: dict = {
         "run_id": run_id,
         "job_name": JOB_NAME,
+        "ingest_lane": ingest_lane,
         "source_vendor": vendor,
         "window_from": from_date,
         "window_to": to_date,
@@ -178,6 +196,10 @@ def collect(
         logger.warning("%s 공시 비활성(api_key 미주입) — 수집 건너뜀", vendor)
         skipped = {**log, "status": "skipped",
                    "reason": f"{vendor} disabled or no api_key",
+                   # 창을 읽은 적이 없으니 절단도 아니다 — 값 자체는 status=skipped 가
+                   # 가리지만, 필드는 넣는다: "필드 부재 = PR1 이전 로그" 판별이 새 로그
+                   # 전부에 성립해야 워터마크가 부재를 레거시로 접을 수 있다.
+                   "list_truncated": False,
                    "ops": {"records_out": 0, "failed_records": 0}}
         try:
             _write_log(storage, vendor, started_date, run_id, skipped)
@@ -359,6 +381,11 @@ def collect(
         for record in records
         if isinstance(record.get("rcept_no"), str) and record["rcept_no"].strip()
     }))
+    # 목록을 끝까지 못 읽었나(`_stop_early` → `_segment_truncated`). `fetch()` 는 절단되면
+    # 뒤 세그먼트를 돌지 않고 즉시 돌아오므로 순회가 끝난 뒤의 이 값이 곧 "이 창이 온전한가"다.
+    # ⚠️ 단독으로는 완주 증명이 아니다 — StopFetch·status 이상 경로는 이 플래그를 세우지 않고
+    # 죽는다(목록 미완인데 값은 False). 완주를 묻는 소비자(워터마크)는 status 와 함께 본다.
+    list_truncated = bool(getattr(source, "_segment_truncated", False))
     payload = {
         **log,
         "status": status,
@@ -400,6 +427,9 @@ def collect(
         "report_name_filters": list(getattr(source, "report_name_filters", [])),
         "universe_matched": getattr(source, "universe_matched", 0),
         "type_matched": getattr(source, "type_matched", 0),
+        # 원장 워터마크(ALPHA-987)의 완주 판정 입력 — 종전엔 반환값으로만 냈으나(875 는 배치
+        # 로그 바이트를 바꾸지 않으려 했다) 로그를 되읽는 소비자가 생겨 로그에도 남긴다.
+        "list_truncated": list_truncated,
         "finished_at": datetime.now(timezone.utc).isoformat(),
         # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
         # records_out 은 메타 건수로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
@@ -429,11 +459,9 @@ def collect(
         "log": payload,
         "rcept_nos": observed_rcept_nos,
         "raw_keys": raw_keys,
-        # 목록을 끝까지 못 읽었나. `fetch()` 는 절단되면 뒤 세그먼트를 돌지 않고 즉시
-        # 돌아오므로(그 자리에서 `_segment_truncated` 를 세운 채) 순회가 끝난 뒤의 이 값이
-        # 곧 "이 창이 온전한가"다. **로그에는 넣지 않는다** — 배치 경로의 collection_log
-        # 바이트를 이 PR 이 바꾸지 않게 한다(절단은 이미 failed_targets 사유로 남는다).
-        "list_truncated": bool(getattr(source, "_segment_truncated", False)),
+        # payload 와 같은 값 — 산출 시점의 주석 참조. (종전 "로그에는 넣지 않는다" 결정은
+        # ALPHA-987 워터마크가 로그를 소비하게 되며 뒤집혔다.)
+        "list_truncated": list_truncated,
     }
 
 

@@ -7,6 +7,8 @@ ZIP)은 rcept_no 별 객체로 무변형 저장한다. 특히 특정 corp 의 �
 
 import json
 
+import pytest
+
 from data_pipeline.config import load_settings
 from data_pipeline.lake import LocalStorage, raw_disclosure_document_key
 from data_pipeline.sources.http import StopFetch
@@ -650,3 +652,51 @@ def test_attenuation_axes_recorded_in_collection_log(tmp_path):
     # `is_target` 을 정한 기준도 함께 — 없으면 나중에 필터를 넓혔을 때 어느 런이 어느
     # 기준이었는지 복원되지 않아 "보존해 뒀다가 재파싱"이라는 이 티켓의 전제가 깨진다.
     assert log["report_name_filters"] == ["공급계약", "사업보고서", "배당"]
+
+
+def test_log_carries_ingest_lane_and_list_truncated(tmp_path):
+    # WHY: 두 레인이 같은 collection_log 프리픽스를 쓰고 run_id 접두는 규약이 아니라,
+    #      이 두 필드가 없으면 배치 워터마크(ALPHA-987)가 1분 레인 로그를 배치 완주로
+    #      오인한다. "필드 부재 = 워터마크 자격 없음" 규칙의 전제가 "새 로그엔 반드시
+    #      있다"이므로, 이 진입점(run = 배치 레인)이 두 값을 로그에 싣는지 고정한다.
+    code, storage = _run(tmp_path, FakeSource(records=[_rec("A1")]))
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["ingest_lane"] == "batch"
+    assert log["list_truncated"] is False
+
+    # 절단이 실제로 로그에 실리는지 — 상수 False 를 박아도 위만으로는 초록이다.
+    truncated = FakeSource(records=[_rec("A1")])
+    truncated._segment_truncated = True
+    _, storage2 = _run(tmp_path, truncated, storage=LocalStorage(tmp_path / "lake2"),
+                       run_id="r2")
+    assert _log(storage2, "r2")["list_truncated"] is True
+
+    # minute 레인이 로그에 그대로 실리는지 — 상수 "batch" 를 박아도 위만으로는 초록이다.
+    storage3 = LocalStorage(tmp_path / "lake3")
+    ingest_raw_disclosure.collect(
+        _settings(tmp_path), storage3, FakeSource(records=[_rec("A1")]), "r3",
+        ingest_lane="minute",
+    )
+    assert _log(storage3, "r3")["ingest_lane"] == "minute"
+
+
+def test_skipped_log_still_carries_lane_fields(tmp_path):
+    # WHY: "필드 부재 = PR1 이전 로그" 판별은 **새 로그 전부**에 두 필드가 있어야 성립한다.
+    #      skip 경로만 빠지면 키 미주입기의 새 로그가 레거시로 오인돼 판별자가 둘로 갈린다.
+    code, storage = _run(tmp_path, FakeSource(enabled=False))
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["status"] == "skipped"
+    assert log["ingest_lane"] == "batch"
+    assert log["list_truncated"] is False
+
+
+def test_unknown_ingest_lane_rejected(tmp_path):
+    # WHY: 오타난 레인이 로그에 실리면 수집은 성공하는데 워터마크는 그 런을 어느 레인에도
+    #      귀속하지 못한다 — 생산자에서 죽어야(Rule 12) 오기록이 로그로 새지 않는다.
+    with pytest.raises(ValueError, match="ingest_lane"):
+        ingest_raw_disclosure.collect(
+            _settings(tmp_path), LocalStorage(tmp_path / "lake"),
+            FakeSource(records=[_rec("A1")]), "r1", ingest_lane="minuite",
+        )
