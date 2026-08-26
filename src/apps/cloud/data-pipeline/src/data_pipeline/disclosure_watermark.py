@@ -77,6 +77,17 @@ def find_watermark(storage: Storage, *, today_utc: date, today_kst: date) -> str
         for key in storage.list_keys(f"{prefix}started_date={day}/"):
             if not key.endswith("/log.json"):
                 continue
+            if "/run_id=mdw_" in key:
+                # 비용 프리필터 — 전이기(컷오버 후 탐색 범위에 1분 레인 로그가 남는 ~10일)
+                # 한정 효과다: 실측 dev 는 하루 최대 720개 mdw 로그라 전량 GET 이 런당 5분+
+                # 인데, 원장 deadline(1200s)을 절반 넘게 태운다. `mdw_` 접두는 `_run_id_for`
+                # (stable_domain_id)가 결정적으로 붙이는 형식이라 내용을 읽어도
+                # ingest_lane=minute 으로 탈락할 로그다. "run_id 접두는 규약이 아니다"
+                # (양성 식별 금지)와 다르다 — 이건 **음성** 프리필터라 판정은 여전히 필드가
+                # 한다. 잔여 위험: 운영자가 `--run-id mdw_…` 로 배치를 돌리면 그 로그가
+                # 후보에서 빠진다 — cli 는 애초에 체인을 시드하지 못하고(연장만 가능) 잃는
+                # 것은 연장 한 번 = 다음 런의 여분 재독이라 방향이 안전하다.
+                continue
             raw = storage.get_bytes(key)  # 실패는 전파 — 위 docstring 의 이유
             try:
                 log = json.loads(raw)

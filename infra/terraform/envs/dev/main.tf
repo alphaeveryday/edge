@@ -558,31 +558,48 @@ module "data_pipeline" {
   # ⚠️ 이 스케줄이 켜지면 `OPS_DISCLOSURE_SCHED_HHMM` 도 함께 주입된다(ops_ledger.tf 조건부) —
   # 그때부터 Reconciler 가 공시 슬롯 결측을 판정한다.
   #
-  # ── 두 번째 컷오버(ALPHA-875): SFN 10슬롯 → 1분 레인 ──
-  # 724 가 시장 SFN → 공시 SFN 으로 옮긴 그 스텝들을 이제 **1분 세션**이 소유한다. 같은
-  # 이유로 같은 apply 다: 두 레인의 CLI 가 글자 그대로 같아, 한쪽만 먼저 가면
-  # `catalog.by_cli` 가 먼저 온 엔트리를 돌려줘 한쪽이 영구 MISSED 가 된다.
-  # 🔴 **순서는 Worker → 스케줄이다.** 스케줄을 먼저 내리면 그 사이 매 거래일이 공시 전건
-  # 결손인데 EOD QC 는 `ok=True`·exit 0 으로 확정한다(MISSING 은 위반이 아니라 판정 결과다).
-  # 그래서 이 apply 는 `minute_session_disclosure_source_group`(= 1분 레인 켜기)과
-  # 아래 DISABLED 가 **한 트랜잭션**이어야 한다.
+  # ── 두 번째 컷오버(ALPHA-875): SFN 10슬롯 → 1분 레인 ── (기록으로 남긴다)
+  # 724 가 시장 SFN → 공시 SFN 으로 옮긴 그 스텝들을 875 가 1분 세션으로 보냈었다.
   #
-  # 🔴 **그런데 한 apply 는 필요조건일 뿐 충분조건이 아니다**(Codex P1). 같은 apply 는
-  # *이중 소유*만 막고 **그날치 공백**은 못 막는다: dev 머지는 terraform-apply 를 즉시
-  # 태우는데(`terraform-apply.yml` — push:dev + infra 경로), 새 `disclosure-worker` 서비스는
-  # `desired_count = 0` 으로 태어나고 그 값을 올리는 주체는 **아침 07:45 의
-  # `start-minute-session` 하나뿐**이다(terraform 은 `ignore_changes`). 즉 거래일 07:45 이후에
-  # apply 가 착지하면, 그 순간 SFN 은 꺼지는데 워커는 **다음 거래일 아침까지 안 뜬다** —
-  # 그날 남은 공시 창이 통째로 생산자 없이 지나간다.
+  # ── 세 번째 컷오버(ALPHA-987): 1분 레인 → 저녁 배치 1슬롯 (875 의 dev 되돌림) ──
+  # 동기는 dev 비용: 1분 세션 stop 을 20:05 → 16:10 으로 당기려면 시간외 격자(08:00–20:00)
+  # dataset 이 가격 하나만 남아야 하는데, 공시 레인 격자는 universe 무관 08:00–20:00 이라
+  # stop 이 매 거래일 230 window 를 봉인한다(stop 은 레인별이 아니라 전 레인 일괄 드레인).
+  # 슬롯은 10개가 아니라 **18:10 하나**다 — 당일 집합은 18:00 에 안 닫히지만(19:09 도착
+  # 실측) 늦은 꼬리·런 실패는 워터마크 창(`disclosure_watermark.py`, 아래 dart env)이 다음
+  # 런에서 회수한다. 875 의 3부 계약을 그대로 되돌린다(같은 apply):
+  #   ① 아래 ENABLED  ② `minute_session_disclosure_source_group = ""`  ③ catalog 4엔트리 복원
+  # ⚠️ ②가 빠지면 증상은 MISSED 가 아니라 **이중 수집**이다(두 레인이 같은 창을 긁어 DART
+  # 일 한도 "020"). ①이 빠지면 카탈로그 기대 슬롯이 매 거래일 전건 MISSED 다. 양쪽 정합은
+  # `test_ops_planner` 의 소유권 검사가 이 파일을 읽어 잠근다.
   #
-  # 코드로 막지 않는다(apply 시각을 terraform 이 알 수 없고, 조건부 apply 는 더 나쁜 상태를
-  # 만든다). **운영 순서로 막는다** — 셋 중 하나:
-  #   ① 비거래일에 머지한다(제일 싸다. 주말이면 SFN 크론이 MON-FRI 라 잃는 창도 없다)
-  #   ② 거래일이면 **07:45 KST 전**에 착지시킨다(그날 세션이 공시 레인을 포함해 계획된다)
-  #   ③ 이미 지났으면 apply 뒤 `start-minute-session` 을 **수동으로 한 번** 돌린다
-  #      (`plan_session` 이 멱등이라 안전하다. 대가: 공용 목록에 force-new-deployment 가
-  #       걸려 가격·소비자 서비스가 롤링 재기동된다 — tick 경계에서 멈추므로 손실은 없다)
-  disclosure_schedule_state = "DISABLED"
+  # 🔴 **착지 타이밍**(875 의 Codex P1 과 대칭 — 이번엔 방향이 반대다): 거래일 아침 세션이
+  # 이미 공시 레인을 계획한 날 apply 가 뜨면 그날이 어그러진다. ⚠️ "16:10 전 착지" 는
+  # 안전하지 **않다**(Codex 반증): stop 은 실행 시점의 이 설정을 읽으므로, apply 뒤의
+  # stop 은 공시 레인을 드레인 목록(`lanes`)에서 **뺀 채** disclosure-worker 만 desired=0
+  # 으로 내린다 — 그날 공시 세션이 ACTIVE·미완료 window 로 영구 잔류하고 실행 중 tick 이
+  # 게이트 없이 절단된다. 안전한 착지는 둘뿐:
+  #   ① 비거래일 머지(제일 싸다)
+  #   ② 거래일이면 **20:05(구 stop) 이후** — 그날 세션은 구 설정의 stop 이 이미 정상
+  #      드레인했다. 그날 18:10 슬롯 기대가 소급 생겨 하루 거짓 MISSED 가 남는 것(다음
+  #      거래일부터 정상)과, 이미지 CD·terraform-apply 가 독립 워크플로라는 경합(875 와
+  #      동일)도 이 시각이 함께 해소한다 — 다음 18:10 발화까지 ~22시간이라 CD 가 그 안에
+  #      끝나고, 옛 이미지 Planner(공시 엔트리 0)가 새 슬롯을 계획하는 창이 없다.
+  disclosure_schedule_state = "ENABLED"
+  # 저녁 1슬롯 — 모듈 기본(09~18시 정각 10슬롯)을 dev 가 override 한다. 원장 슬롯 기준
+  # (`OPS_DISCLOSURE_SCHED_HHMM`)은 이 cron 에서 파생되므로 자동으로 따라온다.
+  disclosure_schedule_expressions = {
+    "h18" = "cron(10 18 ? * MON-FRI *)"
+  }
+  # ② 1분 레인 공시 미편입 — 이 값이 컷오버 스위치다(variables.tf 주석). 비면 start 가
+  # 공시 세션을 계획하지 않고 disclosure-worker 도 안 올린다(서비스 정의는 롤백 경로로 남는다).
+  minute_session_disclosure_source_group = ""
+  # 1분 세션 stop 20:05 → 16:10 (ALPHA-985 의 원래 목표). 공시가 배치로 떠나 시간외 격자
+  # dataset 이 가격뿐이고, dev 정본에 `extended_hours_ids` 축이 없어 가격 격자는 09:00–15:30
+  # 이다 — 16:10 이면 recovery runway 40분(275분에서 축소, dev 라 감수).
+  # ⚠️ `_carry_extended` 가 직전 정본에서 시간외 축을 승계한다 — 사람이 한 번 넣으면 가격
+  # 격자도 20:00 까지 넓어져 이 값을 되돌려야 한다.
+  minute_session_stop_expression = "cron(10 16 ? * MON-FRI *)"
 
   # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
   # ENABLED 라 이 줄은 **명시일 뿐 값을 바꾸지 않는다** — 그래도 적는 이유는 위 두 레인과 나란히

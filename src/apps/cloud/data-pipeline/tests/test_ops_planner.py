@@ -455,43 +455,57 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_disclosure_left_the_ops_ledger_for_the_minute_lane(monkeypatch):
-    # WHY(ALPHA-875): 724 가 세운 가드를 **전제가 바뀌어** 다시 쓴다. 그때 잠근 것은
-    #      "공시가 원장 밖에서 도는데 화면에 흔적 0" 인 상태였다. 이제 공시는 원장 밖이 아니라
-    #      **다른 원장**(minute_ingestion_session/window)에 있다 — 그래서 잠글 불변식이 바뀐다:
-    #      **정확히 한 원장만 공시를 소유한다.**
+def test_exactly_one_ledger_owns_disclosure(monkeypatch):
+    # WHY(ALPHA-875 → 987): 불변식은 그대로다 — **정확히 한 원장만 공시를 소유한다.**
+    #      875 는 1분 원장이 소유하는 상태를 잠갔고, 987 이 저녁 배치로 되돌리며 방향만
+    #      뒤집혔다: 이제 ops 원장(SFN 슬롯)이 소유하고 1분 레인은 비어야 한다.
     #
-    #      둘 다 소유하면 724 가 겪은 그 모양이 그대로 돌아온다(`by_cli` 오귀속). 둘 다 안
-    #      소유하면 724 가 막으려던 조용한 상태다. 그래서 양쪽을 함께 단언한다.
-    # ops 원장: 공시 레인이 비었다(엔트리도, 시장 레인 잔재도 없다)
-    assert list(catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)) == []
+    #      둘 다 소유하면 이중 수집(두 레인이 같은 창을 각자 긁어 DART 일 한도 "020"),
+    #      둘 다 안 소유하면 724 가 막으려던 조용한 전건 결손이다. 그래서 양쪽을 함께
+    #      단언한다 — 카탈로그(코드)와 terraform 토글이 **한 커밋 안에서** 일치해야
+    #      컷오버가 반쪽으로 착지할 수 없다.
+    # ops 원장: 공시 레인 4작업이 있다(소유자).
+    assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
+        "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
+        "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE",
+    }
     assert not [e for e in catalog.entries(catalog.PIPELINE_TYPE)
                 if "DISCLOSURE" in e.task_key]
-    # 1분 원장: 어휘에 있다 — 여기까지 비면 공시를 아무도 기대하지 않는 상태다
+    # 1분 원장: 어휘·상수는 남는다(875 가 박은 상수 — 롤백 경로). 소유 여부는 이게 아니라
+    # terraform 토글이 정한다.
     assert minute_states.DATASET_DISCLOSURE_MINUTE in minute_states.MINUTE_DATASETS
     allowed = minute_states.SOURCE_GROUPS_BY_DATASET[minute_states.DATASET_DISCLOSURE_MINUTE]
     assert allowed == frozenset({"dart"})
-    # ⚠️ **위 둘로는 부족하다** — 그건 PR A 가 박은 상수라 1분 레인을 꺼도 그대로다.
-    # 실제 소유 스위치는 terraform 토글이고, 그게 비면 start 가 공시 세션을 계획하지 않아
-    # Worker 가 영영 안 뜬다: 스케줄은 DISABLED·카탈로그는 비었으므로 **아무도 공시를
-    # 수집하지 않는데 아무 테스트도 안 깨지는** 상태가 된다(리뷰 실증: 기본값을 ""로 바꿔도
-    # 108/108 통과). 724 가 막으려던 그 조용한 상태라 여기서 함께 단언한다.
-    # (관용구는 `test_price_worker` 의 `minute_session_source_group` 대조와 같다.)
+    # ⚠️ 실제 소유 스위치는 terraform 토글이다(875 리뷰 실증: 상수만 봐선 레인을 꺼도
+    # 아무 테스트도 안 깨진다). dev 가 **비워야**(미편입) 1분 레인이 공시 세션을 계획하지
+    # 않는다 — 카탈로그 4엔트리와 이 값이 어긋나면 이중 수집 또는 전건 결손이다.
+    # 모듈 기본값은 "dart"(레거시)로 남아 있어 **dev override 를 본다** — 875 는 기본값을
+    # 스위치로 썼지만 987 은 envs/dev/main.tf 가 명시 override 로 비운다.
     import re
     root = next((p for p in Path(__file__).resolve().parents
-                 if (p / "infra/terraform/modules/data-pipeline/variables.tf").exists()), None)
+                 if (p / "infra/terraform/envs/dev/main.tf").exists()), None)
     if root is None:
-        pytest.skip("variables.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
-    tf = (root / "infra/terraform/modules/data-pipeline/variables.tf").read_text(encoding="utf-8")
+        pytest.skip("envs/dev/main.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+    dev_tf = (root / "infra/terraform/envs/dev/main.tf").read_text(encoding="utf-8")
+    # 주석을 걷고 매칭한다 — 안 걷으면 두 인자를 주석 처리(배선 해제의 가장 흔한 형태)해도
+    # 주석 속 문자열이 계속 매칭돼 이 단언이 통과한다(test_ops_catalog._strip_hcl_comments
+    # 와 같은 규율). 착지값 검사라 값 안에 //·# 가 없어 줄 선두 판정으로 충분하다.
+    dev_tf = re.sub(r"/\*.*?\*/", "", "\n".join(
+        ln for ln in dev_tf.splitlines() if not ln.lstrip().startswith(("#", "//"))),
+        flags=re.S)  # re.S 없으면 여러 줄 /* … */ 이 안 걷혀 주석 속 대입문이 매칭된다
     toggle = re.search(
-        r'variable\s+"minute_session_disclosure_source_group"\s*\{.*?default\s*=\s*"([^"]*)"',
-        tf, re.DOTALL)
-    assert toggle, "minute_session_disclosure_source_group 기본값을 못 찾았다"
-    assert toggle.group(1) in allowed, (
-        f"1분 레인 토글이 비었거나 어휘 밖이다: {toggle.group(1)!r} — 스케줄도 카탈로그도 "
-        "꺼진 지금 이 값이 공시를 수집하는 유일한 근거다")
-    # ⚠️ ARN 표에는 **남긴다** — SFN 정의는 롤백 경로로 살아 있고(스케줄만 DISABLED),
-    #    표에서 빼면 되돌리는 apply 가 폴백으로 남의 SFN 을 기동한다.
+        r'^\s*minute_session_disclosure_source_group\s*=\s*"([^"]*)"', dev_tf, re.M)
+    assert toggle, ("dev 가 minute_session_disclosure_source_group 를 명시하지 않는다 — "
+                    "모듈 기본값(dart)이 적용돼 1분 레인이 공시를 다시 소유한다(이중 수집)")
+    assert toggle.group(1) == "", (
+        f"1분 레인 토글이 비어 있지 않다: {toggle.group(1)!r} — 카탈로그가 공시를 소유하는 "
+        "지금 이 값이 차 있으면 두 레인이 같은 창을 긁는다")
+    # 스케줄도 함께 — ENABLED 가 아니면 카탈로그 기대(슬롯)가 영구 MISSED 다.
+    sched = re.search(r'^\s*disclosure_schedule_state\s*=\s*"([^"]*)"', dev_tf, re.M)
+    assert sched and sched.group(1) == "ENABLED", (
+        "disclosure_schedule_state 가 ENABLED 가 아니다 — 카탈로그 4엔트리가 돌지 않는 "
+        "슬롯을 기대한다(매 거래일 전건 MISSED)")
+    # ARN 표: 배치 레인이 실제 기동 경로다.
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
 
 
