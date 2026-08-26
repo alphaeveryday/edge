@@ -12,13 +12,11 @@ canonical 의 (source_vendor, article_id). `ON CONFLICT DO NOTHING` 으로 제�
 것**으로 안다(ALPHA-906 이전에는 행별 `rowcount` 였다 — 배치에서는 그 축이 성립하지 않는다.
 근거는 아래 document 배치 주석).
 
-**창(from/to) 미지정 = published_date 전체 스캔.** 놓친 날짜의 **누락 INSERT** 는 다음 런이
-주워 간다(load-price-triggers 와 같은 모델) — 다만 충돌 갈래가 `DO NOTHING` 이라 canonical
-쪽 정정은 회수되지 않는다. ⚠️ 그 회복력의 대가는 **재실행 비용이 신규분에 비례하지 않는
-것**이다: 신규가 0건이어도 파티션 전량을 다시 읽어 후보를 만들고 그 전량을 DB 로 보낸다.
-2026-08-09 dev 실측 `read=318,284 already=314,712 created=1,902` — 이 스텝 하나가 뉴스 SFN
-런의 대부분을 먹었고, 상한에 물린 런은 전건이 여기서 미완이었다(ALPHA-906). 그래서 아래
-적재는 후보마다 왕복하지 않고 **문마다 후보 전량을 배치로** 보낸다.
+정상 SFN은 NormalizeNews run manifest의 직접 parquet 키를 GET하고 그 실행의 `article_id`만
+적재한다(ALPHA-1031). manifest 결손·손상은 과거 canonical로 넓히지 않고 실패한다. 과거 일부
+복구는 `from/to`, 전체 복구는 CLI의 명시적 `--all`만 허용한다. 2026-08-09 dev 풀스캔 실측
+`read=318,284 already=314,712 created=1,902`가 전환의 근거다. 적재 자체는 후보마다 왕복하지
+않고 **문마다 후보 전량을 배치로** 보내는 ALPHA-906 경로를 유지한다.
 
 `available_at`(NOT NULL)은 canonical `fetched_at`(수집 시각)이고, 결측이면
 `published_at` 으로 대신한다 — "우리가 이 문서를 쓸 수 있게 된 시각"의 가장 보수적인
@@ -42,7 +40,12 @@ from datetime import datetime, timezone
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..lake import Storage, canonical_news_articles_partition, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_news_articles_partition,
+    canonical_run_manifest_key,
+    quality_log_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,15 +107,120 @@ def _partition_dates(storage: Storage, language: str) -> list[str]:
     return sorted(dates)
 
 
+def _manifest_partitions(
+    storage: Storage, input_run_id: str
+) -> list[tuple[str, str, str, frozenset[str]]]:
+    """NormalizeNews가 증명한 직접 parquet 키와 현재 실행 article_id 범위."""
+    key = canonical_run_manifest_key("news_articles", input_run_id)
+    manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id:
+        raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
+    if (manifest.get("producer") != "normalize_news"
+            or manifest.get("canonical_written") is not True):
+        raise ValueError(f"완료된 normalize-news manifest가 아니다: run_id={input_run_id}")
+    raw = manifest.get("canonical_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"canonical_partitions가 없는 구형 manifest다: run_id={input_run_id}")
+
+    partitions: list[tuple[str, str, str, frozenset[str]]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"canonical_partitions 항목이 객체가 아니다: run_id={input_run_id}")
+        language, published_date = item.get("language"), item.get("published_date")
+        try:
+            valid_date = (
+                isinstance(published_date, str)
+                and datetime.strptime(published_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                == published_date
+            )
+        except ValueError:
+            valid_date = False
+        if language not in LANGUAGES or not valid_date:
+            raise ValueError(f"canonical_partitions 항목이 유효하지 않다: {item!r}")
+        partition = (language, published_date)
+        if partition in seen:
+            raise ValueError(f"canonical_partitions 항목이 중복됐다: {item!r}")
+        seen.add(partition)
+
+        parquet_key = item.get("key")
+        expected_key = f"{canonical_news_articles_partition(language, published_date)}/part-00000.parquet"
+        if parquet_key != expected_key:
+            raise ValueError(f"canonical 직접 키가 파티션과 일치하지 않는다: {item!r}")
+        article_ids = item.get("article_ids")
+        if (not isinstance(article_ids, list) or not article_ids
+                or any(not isinstance(article_id, str) or not article_id.strip()
+                       or article_id != article_id.strip() for article_id in article_ids)
+                or article_ids != sorted(set(article_ids))):
+            raise ValueError(f"article_ids가 유효한 정렬·고유 목록이 아니다: {item!r}")
+        partitions.append((language, published_date, parquet_key, frozenset(article_ids)))
+    return partitions
+
+
+def _input_rows(
+    storage: Storage,
+    *,
+    input_run_id: str | None,
+    from_date: str | None,
+    to_date: str | None,
+) -> Iterator[tuple[str, dict]]:
+    """정상 manifest 범위 또는 명시 복구 범위의 canonical 행을 낸다."""
+    if input_run_id is not None:
+        for language, published_date, key, article_ids in _manifest_partitions(
+            storage, input_run_id
+        ):
+            found: set[str] = set()
+            for row in _read_parquet_rows(storage.get_bytes(key)):
+                article_id = row.get("article_id")
+                if article_id not in article_ids:
+                    continue
+                if article_id in found:
+                    raise ValueError(
+                        f"manifest article_id가 canonical에 중복됐다: key={key}, article_id={article_id}"
+                    )
+                published_at = row.get("published_at")
+                if not isinstance(published_at, str) or published_at[:10] != published_date:
+                    raise ValueError(
+                        "manifest article_id의 canonical 날짜가 파티션과 다르다: "
+                        f"key={key}, article_id={article_id}"
+                    )
+                found.add(article_id)
+                yield language, row
+            missing = article_ids - found
+            if missing:
+                raise ValueError(
+                    f"manifest article_id가 canonical에 없다: key={key}, article_ids={sorted(missing)!r}"
+                )
+        return
+
+    for language in LANGUAGES:
+        dates = [
+            date for date in _partition_dates(storage, language)
+            if (from_date is None or date >= from_date) and (to_date is None or date <= to_date)
+        ]
+        for date in dates:
+            prefix = canonical_news_articles_partition(language, date)
+            for key in storage.list_keys(prefix + "/"):
+                if not key.endswith(".parquet"):
+                    continue
+                for row in _read_parquet_rows(storage.get_bytes(key)):
+                    yield language, row
+
+
 def run(
     storage: Storage,
     run_id: str,
     *,
     db: DbConfig,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
-    """canonical 뉴스 → document 적재. 성공 0, 장애 시 비0."""
+    """canonical 뉴스 → document 적재. 성공 0, 장애 시 비0.
+
+    input_run_id는 NormalizeNews manifest의 현재 논리 ID만 처리한다. from/to는 명시 백필,
+    셋 다 미지정은 호출자가 명시적으로 선택한 전체 스캔이다. 서로 섞으면 거부한다.
+    """
     started_at = datetime.now(timezone.utc)
     read = skipped_missing_identity = skipped_no_available_at = 0
     already = created = lead_written = publisher_written = lead_unclaimed = 0
@@ -122,45 +230,41 @@ def run(
     exit_code = 0
 
     try:
+        if input_run_id is not None and (from_date is not None or to_date is not None):
+            raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
         # (source_code, source_document_id) → 적재 후보. 같은 기사가 여러 파티션에 오면
         # (드묾 — 같은 URL 재게시) 첫 행으로 접는다: 자연키가 하나면 문서도 하나다.
         candidates: dict[tuple[str, str], dict] = {}
-        for language in LANGUAGES:
-            dates = [d for d in _partition_dates(storage, language)
-                     if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
-            for date in dates:
-                prefix = canonical_news_articles_partition(language, date)
-                for key in storage.list_keys(prefix + "/"):
-                    if not key.endswith(".parquet"):
-                        continue
-                    for row in _read_parquet_rows(storage.get_bytes(key)):
-                        read += 1
-                        source_code = row.get("source_vendor")
-                        article_id = row.get("article_id")
-                        if not source_code or not article_id:
-                            # 자연키 결손 — 넣으면 NOT NULL 위반이거나(즉시 실패) 멱등의
-                            # 근거가 사라진다(같은 기사가 매 런 새 행). 세고 뺀다.
-                            skipped_missing_identity += 1
-                            continue
-                        available_at = row.get("fetched_at") or row.get("published_at")
-                        if not available_at:
-                            # available_at 은 NOT NULL — 시간 축이 없는 문서는 적재 불가.
-                            skipped_no_available_at += 1
-                            continue
-                        candidates.setdefault((source_code, article_id), {
-                            "language_code": language,
-                            "title": row.get("title"),
-                            "published_at": row.get("published_at"),
-                            "available_at": available_at,
-                            # ⚠️ `available_at` 과 **따로** 싣는다(ALPHA-696). 리드 승자
-                            # 판정은 순수한 수집 시각으로만 해야 하는데, 위 `available_at`
-                            # 은 `published_at` 폴백이 섞여 있어 미래 시각이 들어올 수
-                            # 있다. 그 값을 축으로 쓰면 이 행의 리드 승격이 영구 차단된다.
-                            "fetched_at": row.get("fetched_at"),
-                            "source_uri": row.get("url"),
-                            "lead_text": row.get("lead_text"),
-                            "publisher": row.get("publisher"),
-                        })
+        for language, row in _input_rows(
+            storage, input_run_id=input_run_id, from_date=from_date, to_date=to_date
+        ):
+            read += 1
+            source_code = row.get("source_vendor")
+            article_id = row.get("article_id")
+            if not source_code or not article_id:
+                # 자연키 결손 — 넣으면 NOT NULL 위반이거나(즉시 실패) 멱등의
+                # 근거가 사라진다(같은 기사가 매 런 새 행). 세고 뺀다.
+                skipped_missing_identity += 1
+                continue
+            available_at = row.get("fetched_at") or row.get("published_at")
+            if not available_at:
+                # available_at 은 NOT NULL — 시간 축이 없는 문서는 적재 불가.
+                skipped_no_available_at += 1
+                continue
+            candidates.setdefault((source_code, article_id), {
+                "language_code": language,
+                "title": row.get("title"),
+                "published_at": row.get("published_at"),
+                "available_at": available_at,
+                # ⚠️ `available_at` 과 **따로** 싣는다(ALPHA-696). 리드 승자
+                # 판정은 순수한 수집 시각으로만 해야 하는데, 위 `available_at`
+                # 은 `published_at` 폴백이 섞여 있어 미래 시각이 들어올 수
+                # 있다. 그 값을 축으로 쓰면 이 행의 리드 승격이 영구 차단된다.
+                "fetched_at": row.get("fetched_at"),
+                "source_uri": row.get("url"),
+                "lead_text": row.get("lead_text"),
+                "publisher": row.get("publisher"),
+            })
 
         ordered = sorted(candidates.items())
 
@@ -344,7 +448,8 @@ def run(
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "languages": list(LANGUAGES), "from_date": from_date, "to_date": to_date,
+        "languages": list(LANGUAGES), "input_run_id": input_run_id,
+        "from_date": from_date, "to_date": to_date,
         "articles_read": read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_no_available_at": skipped_no_available_at,

@@ -653,6 +653,52 @@ def test_absurd_window_days_fails_loud(monkeypatch):
     assert "window" not in captured
 
 
+def test_load_documents_requires_an_explicit_scope(monkeypatch):
+    # WHY(ALPHA-1031): 범위 누락이 암묵적 canonical 풀스캔으로 성공하면 SFN 배선 회귀가
+    #      데이터가 쌓일수록 비싸지는 형태로 숨는다. 전체 복구도 --all로 의도를 드러내야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+        main(["load-documents", "--run-id", "R"])
+
+
+def test_load_documents_forwards_normalize_run_scope(monkeypatch):
+    # WHY(ALPHA-1031): SFN이 넘긴 NormalizeNews run_id가 CLI에서 사라지면 manifest 소비 경로가
+    #      있어도 정상 실행은 쓸 수 없고, 날짜 추측이나 풀스캔으로 퇴행한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_documents, "run",
+                        lambda *args, **kwargs: captured.update(kwargs) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-documents", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured["input_run_id"] == "N1"
+
+
+def test_load_documents_explicit_all_preserves_full_recovery(monkeypatch):
+    # WHY(ALPHA-1031): 정상 경로를 좁혀도 운영자가 의도적으로 선택한 전체 복구는 남아야 한다.
+    #      --all 자체는 스텝에 전달할 데이터가 아니라 '범위 없음=전체'를 승인하는 CLI 표식이다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_documents, "run",
+                        lambda *args, **kwargs: captured.update(kwargs) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-documents", "--run-id", "R", "--all"]) == 0
+    assert captured["input_run_id"] is None
+    assert captured["from_date"] is None and captured["to_date"] is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_documents_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1031): 불량·역전 날짜를 문자열 필터로 처리하면 0건 성공이 되어 복구 완료처럼 보인다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-documents", "--run-id", "R", *argv])
+
+
 def test_load_etf_holdings_requires_an_explicit_scope(monkeypatch):
     # WHY(ALPHA-1011): 범위 누락이 암묵적 과거 전체 스캔으로 성공하면 SFN 배선 회귀가 데이터가
     # 쌓일수록 비싸지는 형태로 숨는다. 전체가 필요하면 운영자가 --all 을 직접 써야 한다.
