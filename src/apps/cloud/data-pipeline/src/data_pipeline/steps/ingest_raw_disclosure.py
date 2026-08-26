@@ -119,15 +119,22 @@ def run(
     run_id: str,
     from_date: str | None = None,
     to_date: str | None = None,
+    *,
+    window_meta: dict | None = None,
 ) -> int:
     """배치 진입점 — 수집 실행. 성공 0, 중단/실패 비0 반환(SFN·CLI 가 쓰는 계약).
 
     from_date/to_date 는 소스에 넘길 수집 날짜창(YYYY-MM-DD). None 이면 소스 기본(최신분) —
     스케줄 증분·백필 창은 run 엔트리가 정해 넘긴다(뉴스와 동형).
+
+    window_meta 는 창 결정 관측(`disclosure_watermark.resolve_window` 의 window_source·
+    watermark_shadow 등) — 로그에 그대로 실린다. 창 결정이 이 스텝 밖(run 엔트리)에서
+    일어나므로 관측만 받아 적는다.
     """
     # 이 진입점이 곧 배치 레인이다(SFN·CLI) — 1분 레인은 collect() 를 직접 부른다.
     return collect(
-        settings, storage, source, run_id, from_date, to_date, ingest_lane="batch"
+        settings, storage, source, run_id, from_date, to_date,
+        ingest_lane="batch", window_meta=window_meta,
     )["exit_code"]
 
 
@@ -140,6 +147,7 @@ def collect(
     to_date: str | None = None,
     *,
     ingest_lane: str,
+    window_meta: dict | None = None,
 ) -> dict:
     """`run` 과 같은 수집을 하고 **관측을 돌려준다** (ALPHA-875 — 1분 레인이 쓴다).
 
@@ -177,6 +185,11 @@ def collect(
     started_date = started_at.isoformat()[:10]  # = ingest_date
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
     log: dict = {
+        # 창 결정 관측(window_source·watermark_shadow 등, ALPHA-987) — 배치 엔트리만
+        # 넘긴다(1분 레인은 세션 격자가 창을 정해 이 축이 없다). **맨 앞**에 편다:
+        # 아래 명시 필드가 항상 이겨야 임의 dict 가 run_id·ingest_lane 같은 로그
+        # 정체성을 조용히 덮지 못한다(워터마크 술어·run_id 소비자가 그 정체성을 믿는다).
+        **(window_meta or {}),
         "run_id": run_id,
         "job_name": JOB_NAME,
         "ingest_lane": ingest_lane,

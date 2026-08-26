@@ -422,6 +422,10 @@ class DartDisclosureConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: DartDisclosureSource
+    # 배치 증분 창을 원장 워터마크로 정한다(ALPHA-987, `disclosure_watermark.py`).
+    # False(기본) = 그림자: 창은 종전대로 두고 계산 결과만 로그로 대조한다. 컷오버
+    # terraform 이 `DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW=true` 로 켠다.
+    watermark_window: bool = False
 
 
 class MinuteRelayConfig(BaseModel):
