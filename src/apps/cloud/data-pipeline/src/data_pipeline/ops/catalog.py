@@ -8,10 +8,10 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 35개 중 26개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+**등록 범위: ECS Task state 35개 중 30개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
 뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27 → **ALPHA-724 공시 레인
 컷오버로 소유 레인 이동(총계 27 유지)** → **ALPHA-769 장중 수급 레인 신설로 27→30** →
-**ALPHA-875 공시 4작업이 SFN 원장을 떠나 30→26**). state 수
+ALPHA-875 공시 4작업이 SFN 원장을 떠나 30→26 → **ALPHA-987 저녁 배치 복귀로 26→30**). state 수
 35 = `statemachine.tf` 33 + `news_pipeline.tf` 2(NewsLoadAssertions·NewsAssembleEvents).
 ⚠️ 이건 **정의 파일** 기준이지 레인 기준이 아니다 — `disclosure_pipeline.tf`·
 `investor_intraday_pipeline.tf` 는 state 를 새로 정의하지 않고 statemachine.tf 잡 정의를
@@ -45,17 +45,16 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 잠깐의 MISSED 는 자가 해소되지만 **미등록 유예는 잊히면 조용히 영구화된다**(공시가 원장 밖에서
 도는데 화면에 아무 흔적이 없다) — 그래서 관대한 쪽이 아니라 시끄러운 쪽을 골랐다(Rule 12).
 
-**레인(pipeline_type) 축**(ALPHA-591·724·769·875): 카탈로그는 시장 레인(`etf-daily`, 17작업)·뉴스 레인
-(`news`, 6작업)·장중 수급 레인(`investor-intraday`, 3작업)을 함께 담는다. 공시 레인
-(`disclosure`)은 **엔트리가 0 이다** — ALPHA-875 가 1분 세션으로 보냈다(아래 컷오버 블록).
-`DISCLOSURE_PIPELINE_TYPE` 상수와 롤백 절차의 "4엔트리"는 되살릴 때의 개수이지 현재 보유가
-아니다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
+**레인(pipeline_type) 축**(ALPHA-591·724·769·875·987): 카탈로그는 시장 레인(`etf-daily`, 17작업)·
+뉴스 레인(`news`, 6작업)·공시 레인(`disclosure`, 4작업 — 875 가 1분 세션으로 보냈던 것을
+987 이 저녁 배치 18:10 1슬롯로 되돌렸다)·장중 수급 레인(`investor-intraday`, 3작업)을 함께
+담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
 
-**제외 9개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12).
-등록 26 + 제외 9 = state 35 이고, `test_ops_catalog` 의 `_NOT_INSTRUMENTED` 가 이 표의 정본이다:
+**제외 5개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12).
+등록 30 + 제외 5 = state 35 이고, `test_ops_catalog` 의 `_NOT_INSTRUMENTED` 가 이 표의 정본이다:
 
 | 제외 | state | 왜 |
 |---|---|---|
@@ -87,11 +86,10 @@ revision 위에서 돌고, Reconciler 가 resolve 불가한 LEDGER_GAP 을 연�
 원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
 않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
 
-⚠️ 수집 커버리지는 `Collect*` state 13개 중 7개 등록 — 시장 9개 중 5개 + 뉴스 2개 중 1개
-(BigKinds) + 장중 수급 1개 중 1개다. 미등록 6개는 FMP 4개(토글 off — 그중 `CollectFmpNews` 는
-시장이 아니라 **뉴스 레인** 몫이라 시장 분모에 넣지 마라)·`CollectDartFinancial`(소비자 0)·
-`CollectDartDisclosure`. **공시(DART)는 등록 0 이다** — ALPHA-875 가 1분 세션으로 보냈다
-(결손은 ops 원장이 아니라 `minute_ingestion_window` 에 드러난다). 조용한 누락이 실제로 나는
+⚠️ 수집 커버리지는 `Collect*` state 13개 중 8개 등록 — 시장 9개 중 5개 + 뉴스 2개 중 1개
+(BigKinds) + 공시 1개 중 1개(DART — 987 저녁 배치 복귀) + 장중 수급 1개 중 1개다. 미등록
+5개는 FMP 4개(토글 off — 그중 `CollectFmpNews` 는 시장이 아니라 **뉴스 레인** 몫이라 시장
+분모에 넣지 마라)·`CollectDartFinancial`(소비자 0). 조용한 누락이 실제로 나는
 곳이 수집이므로(ALPHA-387·578) 커버리지의 **모양**이 숫자보다 중요하다.
 """
 

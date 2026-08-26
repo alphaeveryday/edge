@@ -178,8 +178,8 @@
 > analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 > `infra/terraform/modules/data-pipeline/minute_services.tf`,
 > desired_count 0 에 lifecycle ignore_changes — desired 를 terraform 밖에서 정하게 두고
-> apply 가 장중 워커를 내리지 않게 한다. 그 주체는 **나머지 9종은 세션 오케스트레이션**이고,
-> **analysis-consumer 만 오토스케일링**이다(ALPHA-912, 아래). ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
+> apply 가 장중 워커를 내리지 않게 한다. 그 주체는 **8종은 세션 오케스트레이션**(정의 10종 중
+> disclosure-worker 는 987 미편입), **analysis-consumer 는 오토스케일링**이다(ALPHA-912, 아래). ⚠️ CD 의 상주 서비스 롤아웃은 repo variable
 > `MINUTE_SERVICES_DEPLOYED=true` 일 때만 돈다 — 이미지 CD 와 apply 는 순서 보장이
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
 > 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
@@ -977,11 +977,14 @@ partial/실패면 다음으로 넘어가지 않아 오염된 raw 위에 canonica
 > ※ task-def 는 시크릿 세트 단위로 만든다(`tasks.tf` 의 `secret_sets` 맵에 키를 넣으면 자동 생성) —
 > 현재 9개: `fmp`·`bigkinds`·`kis`·`dart`·`krx`·`deepseek`·`rds`·`events`(LLM+DB)·`rds_dart`(DB+DART).
 > 전부 같은 이미지를
-> 쓰고 command override 로 스텝을 고른다. 스케줄러는 여전히 `DISABLED` 라 실제 cron 기동은
-> 컷오버(스케줄러 ENABLED) 전까지 안 뜬다 — 브랜치 검증은 아래 수동 실행으로 한다.
+> 쓰고 command override 로 스텝을 고른다. 스케줄러 현황(레인별 ENABLED 시각)은
+> infra/terraform/README.md 가 정본이다 — 시장 15:40·뉴스 00:10/08:10·공시 18:10(ALPHA-987)·
+> 장중 수급 5슬롯 전부 ENABLED 다.
 
-Scheduler 는 최초 `DISABLED` 로 생성한다. 수동 검증은 `terraform output data_pipeline_state_machine_arn`
-값으로 `aws stepfunctions start-execution --input '{"run_id":"manual-YYYYMMDDTHHMMSSZ"}'` 를 실행한다.
+수동 실행·백필은 `plan-run`(Planner) 경유가 계약이다 — 그 실행이 자기 슬롯으로 원장에 남아
+관측된다. `aws stepfunctions start-execution` 직접 시작은 pipeline_run/expected_task 가 없는
+**무원장 실행**이라 Reconciler 대조 밖이다(신규 배선의 최초 검증처럼 원장이 아직 없는 경우가
+아니면 쓰지 마라).
 
 ## 설정 계약
 
@@ -1437,7 +1440,7 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시와
   장중 수급 것만 **스케줄이 ENABLED 일 때만 주입한다**(ALPHA-722·769) — 슬롯 기준은 Reconciler
   에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
-  판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(공시 최대 10개·장중 수급 5개).
+  판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(공시 1개(18:10)·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
 - **주말은 레인마다 다르다**(ALPHA-874) — 뉴스 크론만 주 7일이고 시장·공시(987 저녁 배치, 18:10)·장중 수급은 MON-FRI 다.
   그래서 `OPS_DAILY_SCHED_WEEKEND`·`OPS_NEWS_SCHED_WEEKEND`·`OPS_DISCLOSURE_SCHED_WEEKEND`·
@@ -1502,7 +1505,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 계획하면 매 거래일 08:00~08:59 의 60 window 가 아무도 못 채운 채 DUE 로 남고, iNAV 는
 # 소급이 불가라 영구 결손이다. 시간외 종목이 든 universe 를 줘도 안 넓힌다.
 # ⚠️ **공시 세션(`--dataset disclosure_minute --source-group dart`)은 정확히 반대 사례다**
-# (ALPHA-875): `--universe` 를 **안 받는데**(주면 거부) 격자는 **720**이다. DART 당일접수가
+# (ALPHA-875 — 🔴 987 컷오버로 지금은 **계획하지 마라**: 공시는 저녁 배치(18:10)가 소유한다.
+# 이 세션을 계획해 워커를 돌리면 배치와 같은 DART 창을 이중 수집한다. 아래는 롤백 시에만): `--universe` 를 **안 받는데**(주면 거부) 격자는 **720**이다. DART 당일접수가
 # 07:30~18:00 이라 정규장 격자면 16·17·18시 접수분을 다음 거래일까지 못 본다. iNAV 를 막은
 # 근거(어댑터 하한·소급 불가)가 공시에는 안 걸린다 — 매 tick 이 날짜창 전체를 재독하고
 # `ingest_date`(UTC) 파티션을 고르는 소비자가 없다(정제 두 스텝은 raw 전량 스캔).
@@ -1774,7 +1778,9 @@ DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=https://sqs.../news-extraction-rea
 # 로컬 확인용 — WINDOW_FAILED 가 있거나 한 window 도 못 본 채 차단만 됐으면 exit 1.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run news-worker --session-date 2026-08-04 --max-ticks 3
-# 상주 Disclosure Worker(1분 파이프라인, ALPHA-875) — 공시를 매분 폴링한다. **수집만이 아니라
+# 상주 Disclosure Worker(1분 파이프라인, ALPHA-875 — 🔴 987 컷오버로 **미편입**: 공시는 저녁
+# 배치가 소유하고 이 워커는 롤백 경로다. 배치 스케줄이 켜진 채 돌리면 이중 수집이다) —
+# 공시를 매분 폴링한다. **수집만이 아니라
 # 체인 전체**를 한 window 에서 돈다: collect → normalize(공급계약) → normalize(사업부문)
 # → load → assemble. CLI 가 아니라 스텝 함수를 부르므로 `catalog.by_cli` 동시 소유 충돌이 없다.
 # 세션이 먼저 계획돼 있어야 한다(plan-minute-session --dataset disclosure_minute
