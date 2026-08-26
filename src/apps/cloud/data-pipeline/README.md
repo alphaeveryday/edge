@@ -1064,10 +1064,10 @@ settings.targets.keywords            # ["금리", ...]
   가리킨다** — 증분 커서가 없어 매 실행이 날짜창 전체를 재독하므로, 장치가 없으면 하루 여러 번
   도는 레인이 같은 ZIP 을 슬롯 수만큼 받는다. 메타는 그래도 **전건 저장**한다(창 전체 관측이
   완전성 근거다 — 접으면 런 사이 rcept_no 집합 비교가 성립하지 않는다).
-  ⚠️ 1분 레인(ALPHA-875)이 붙으면서 그 "슬롯 수"가 하루 10 → **720 window** 가 됐다 — 본문은
-  seen-map 이 막지만 **메타는 설계상 매 window 가 창 전체를 다시 쓴다**. 즉 이 존의 하루 메타
-  량이 ~70배이고(하루 수십만 행 규모), `ingest_date` 프리픽스의 `run_id=` 파티션도 그만큼 늘어
-  seen-map LIST 가 하루 안에서 점점 커진다. 대가를 알고 택한 형상이지만(완전성 근거를 스스로
+  ⚠️ 1분 레인(ALPHA-875)이 붙었던 동안은 그 "슬롯 수"가 하루 10 → **720 window** 라 이 존의
+  하루 메타량이 ~70배였다(본문은 seen-map 이 막았다). **987 이 저녁 배치(하루 1런)로 되돌려
+  지금은 그 증가가 멈췄고**, 8/10~8/26 에 쌓인 720-window 파티션만 과거 구간에 남아 있다.
+  대가를 알고 택했던 형상이고(완전성 근거를 스스로
   없앨 수 없다) `raw_keys` 없이 부르는 배치 경로(`normalize-disclosure` 풀스캔·백필)는 그
   커진 존을 훑게 된다. 재사용 건수는
   collection_log 의 `documents_reused` 로 드러나고, 본문 fetch 가 실패한 건은 객체가 없어
@@ -1314,8 +1314,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 SFN 원장 밖 1분 세션으로 보낸 몫이었고
-  **26 → 30 은 ALPHA-987 이 저녁 배치로 되돌린 복원**이라
-  공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 35개 중 — **정의 파일**
+  **26 → 30 은 ALPHA-987 이 저녁 배치로 되돌린 복원**이다)(ECS Task state 35개 중 — **정의 파일**
   기준으로 `statemachine.tf` 33 + `news_pipeline.tf` 2 다. 공시·장중 수급 .tf 는 state 를
   새로 정의하지 않고 부분집합 필터로 재사용하므로 저 33 안에 있다 — 레인별 계수는
   `pipeline_type` 축을 써라. 36→35 는 ALPHA-806 이 AnalyzeOne 을 걷어낸 몫이다.
@@ -1323,15 +1322,14 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
-  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 9개는 ① `fmp` 수집
+  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 5개는 ① `fmp` 수집
   4개(**FMP 공용키 bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을
   등록하면 매 런 MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`
   (**하류 소비자 0** — `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할
-  이유 없는 실패 경보가 된다) ③ **공시 체인 4개**(`CollectDartDisclosure`·`NormalizeDisclosure`·
-  `NormalizeDisclosureSegment`·`LoadDisclosure` — ALPHA-875 가 1분 세션으로 넘겨 스케줄이
-  DISABLED 다). `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이 analyze
-  페이즈를 걷었다 — 36→35). **KRX ETF 는 ALPHA-596 이 직접 계측으로 올렸다**(같이 올렸던 DART
-  공시는 위 ③ 으로 빠졌다) — `tasks.tf` 가 두
+  이유 없는 실패 경보가 된다). 공시 체인 4개(`CollectDartDisclosure`·`NormalizeDisclosure`·
+  `NormalizeDisclosureSegment`·`LoadDisclosure`)는 875 가 여기 제외로 두었다가 **987 이 저녁
+  배치로 되돌리며 재등록됐다**. `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이
+  analyze 페이즈를 걷었다 — 36→35). **KRX ETF·DART 공시는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
   task-def 에 DB env 를 주면서, 컨테이너 종료 즉시 판정되고 그전엔 못 얻던 `records_out`·
   `failed_records`·`data_status` 가 함께 올라온다("벤더 컨테이너에 RDS 접속을 주는 신뢰경계
   변경"이라는 전제는 실측 결과 이미 무너져 있었다: 실행 역할·보안그룹이 task-def 전체 공유라
@@ -1344,8 +1342,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
-  을 내는 별건이다). 수집 커버리지는 `Collect*` 13개 중 7개 — 시장 9개 중 5개 + 뉴스 2개 중
-  1개(BigKinds) + 장중 수급 1개 중 1개다. 공시(DART)는 ALPHA-875 로 여기서 빠졌다.
+  을 내는 별건이다). 수집 커버리지는 `Collect*` 13개 중 8개 — 시장 9개 중 5개 + 뉴스 2개 중
+  1개(BigKinds) + 공시 1개 중 1개(DART — 987 저녁 배치 복귀) + 장중 수급 1개 중 1개다.
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다 —
   `instrumented=True`↔`tasks.tf` DB env 배선 대조 포함(어긋나면 그 작업이 조용히 계측 없이 돈다).
   MVP 3작업(ALPHA-530)이었던 것:
@@ -1441,7 +1439,7 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
   판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(공시 최대 10개·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
-- **주말은 레인마다 다르다**(ALPHA-874) — 뉴스 크론만 주 7일이고 시장·장중 수급은 MON-FRI 다(공시 레인은 ALPHA-875 로 꺼져 이 축의 대상이 아니다 — 1분 세션은 거래일 판정을 `start-minute-session` 이 한다).
+- **주말은 레인마다 다르다**(ALPHA-874) — 뉴스 크론만 주 7일이고 시장·공시(987 저녁 배치, 18:10)·장중 수급은 MON-FRI 다.
   그래서 `OPS_DAILY_SCHED_WEEKEND`·`OPS_NEWS_SCHED_WEEKEND`·`OPS_DISCLOSURE_SCHED_WEEKEND`·
   `OPS_INVESTOR_INTRADAY_SCHED_WEEKEND` 가 HH:MM 과 **같은 cron 의 일·요일 필드**에서 파생돼 함께
   주입된다(`"true"`/`"false"`, `entry._lane_sched_weekend`). 이게 없으면 주말 건너뛰기가 레인 무관
@@ -1821,8 +1819,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... \
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
   python -m data_pipeline.run sector-index-worker --session-date 2026-08-10 --max-ticks 3
-# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882·887) — 상주 서비스 10종의 desired_count
+# 세션 스케일 오케스트레이션(1분 파이프라인, ALPHA-712·717·719·875·882·887) — 상주 서비스의 desired_count
 # 를 세션 수명에 맞춰 바꾸는 **유일한 주체**다(terraform 은 그 값을 ignore_changes 로 뒀다).
+# 실제 스케일 대상은 8종이다: 정의 10종 중 analysis-consumer 는 오토스케일링 소유(코드가
+# 공용 목록에서 뺀다, ALPHA-912), disclosure-worker 는 987 컷오버로 미편입(source_group 빈 값).
 # EventBridge Scheduler 가 부르지만 손으로도 같은 명령을 친다.
 #
 # ⚠️ **`--dataset` 은 구동 레인(price_minute)만 받는다.** 선택 레인 넷(news_minute·
@@ -1857,7 +1857,9 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
-MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP=dart \
+# ⚠️ 공시 source_group 은 **빈 값**이다(987 컷오버 — 공시는 저녁 배치 소유. dart 를 넣으면
+# 1분 레인이 공시 세션을 계획해 18:10 배치와 같은 창을 이중 수집한다. terraform 실물과 동일값)
+MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP= \
 MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES=edge-dev-data-pipeline-disclosure-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
 MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
@@ -1882,7 +1884,7 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
-MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP=dart \
+MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP= \
 MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES=edge-dev-data-pipeline-disclosure-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
 MINUTE_SESSION_INAV_WORKER_SERVICES=edge-dev-data-pipeline-inav-worker \
@@ -1893,9 +1895,9 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **12개**(daily 1·뉴스 2·
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **14개**(daily 1·뉴스 2·
 공시 1(18:10, ALPHA-987 — dev 가 cron 맵을 1슬롯으로 override)·장중 수급 5 =plan-run, reconcile 1,
-1분 세션 start·stop 2) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
+장전 유니버스 1(SFN 직접), 1분 세션 start·stop·rollup-sector 3) + DLQ. 1분 세션 3개만 `aws_ecs_task_definition.minute_session`
 (전용 IAM 역할 — 레이크 읽기 + 상주 서비스 10종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환, 공시·장중 수급은 처음부터). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
