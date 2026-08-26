@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-run-id", default=None,
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
-                        help="tag-news·load-documents·load-etf-holdings: 명시적 전체 스캔")
+                        help="tag-news·load-documents·load-etf-holdings·load-assertions: 명시적 전체 스캔")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출
@@ -496,8 +496,10 @@ def main(argv: list[str] | None = None) -> int:
         # 키우는 게 아니라 명시적 --from/--to 백필이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
-    if args.all_partitions and args.step not in ("tag-news", "load-documents", "load-etf-holdings"):
-        raise SystemExit("--all 은 tag-news·load-documents·load-etf-holdings 전용이다")
+    if args.all_partitions and args.step not in (
+        "tag-news", "load-documents", "load-etf-holdings", "load-assertions"
+    ):
+        raise SystemExit("--all 은 tag-news·load-documents·load-etf-holdings·load-assertions 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -754,10 +756,33 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # assertion 적재는 feature published_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
+    # assertion 적재의 정상 경로는 TagNews feature manifest가 지목한 직접 key와 ID만 읽는다.
+    # 날짜창은 명시 복구, 전체 스캔은 --all을 직접 쓴 경우뿐이다(ALPHA-1033).
     if args.step == "load-assertions":
+        scopes = sum((args.input_run_id is not None,
+                      args.from_date is not None or args.to_date is not None,
+                      args.all_partitions))
+        if scopes != 1:
+            raise SystemExit(
+                "load-assertions는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+            )
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-assertions의 --from은 --to보다 늦을 수 없다")
         return load_assertions.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
         )
 

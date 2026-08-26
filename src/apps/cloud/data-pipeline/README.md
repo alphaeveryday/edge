@@ -618,11 +618,15 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # non_entity(TIME·VALUE·TEXT)를 미해소로 세면 분모가 부풀어 마스터 확대의 효과를 못 잰다.
 # 분자는 **붙은 것 전부**다(resolved+registry_hit+minted) — 07-31 이전 값과 정의가 다르다.
 # non_entity 는 이제 적재도 안 한다(ALPHA-831 — 예전엔 분모에서만 뺐다).
-# 역할 종별 분포·어휘 밖 역할 이름도 같은 로그에 남는다.
+# 역할 종별 분포·어휘 밖 역할 이름도 같은 로그에 남는다. 정상 SFN은 TagNews feature
+# manifest의 직접 part만 GET하고 현재 article_id만 논리 처리한다(ALPHA-1033). 누적 part의
+# 과거 행은 `physical_rows_read`, manifest 범위는 `logical_rows_read`로 구분한다. 아래는 같은
+# 범위의 수동 재실행이며 일부 복구는 --from/--to, 전체 복구는 명시적 --all을 쓴다.
 # 멱등: uq_document_assertion_natural(document_id, event_type, predicate) ON CONFLICT.
 # 전무 해소 주장은 넣지 않는다. modality_code 는 어휘 확정 전까지 비운다(ALPHA-361).
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
-  uv run --package data-pipeline python -m data_pipeline.run load-assertions
+  uv run --package data-pipeline python -m data_pipeline.run load-assertions \
+    --input-run-id <tag-news-run-id>
 
 # 이벤트 조립(RDB+LLM, ALPHA-412·ALPHA-545) — canonical 뉴스 제목을 v4 2콜(게이트/타입판별
 # → 타입별 추출)로 정규화해 source_event 계보·참여자(event_argument)·측정값(event_measure)·
@@ -944,8 +948,11 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   **전체**를 LIST 한 뒤 날짜를 거르므로 window 당 2 LIST(supply·segment)가 남고 그 비용은
   report_date 파티션 수에 비례해 자란다. 거래일당 +1 이라 당장은 견디지만, 줄이려면 창에서
   파티션 프리픽스를 만들어 그 날짜만 LIST 해야 한다
-- `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553) — feature assertion →
+- `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553·1033) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
+  정상 경로는 TagNews manifest의 직접 part만 GET하고 현재 `article_id`만 논리 처리한다.
+  결손·손상 manifest는 풀스캔으로 넓히지 않고 실패하며, 누적 part의 물리 읽기 행과 manifest
+  논리 행을 quality log에서 분리한다. 과거 일부/전체 복구는 `--from/--to`/명시 `--all`이다.
   한 파티션에 같은 기사의 판정이 둘 있으면 **`tagged_at` 최신만 싣는다**(ALPHA-900,
   `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건 자연키가 갈린 옛
   판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다. **흡수 전 장중 미러는

@@ -127,7 +127,7 @@ locals {
           Overrides = {
             ContainerOverrides = [{
               Name        = local.container_name
-              "Command.$" = "States.Array('load-assertions', '--run-id', $.run_id)"
+              "Command.$" = "States.Array('load-assertions', '--run-id', $.run_id, '--input-run-id', $.run_id)"
               # 운영 원장(ALPHA-591): 직렬 state 는 페이즈 빌더 밖이라 별도 주입 — 없으면 이
               # attempt 의 sfn_state_name·실행 ARN 이 NULL 로 남아 attempt↔SFN 계보가 끊긴다.
               Environment = [

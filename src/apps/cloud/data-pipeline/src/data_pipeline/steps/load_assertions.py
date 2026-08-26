@@ -46,7 +46,8 @@ ADR-0027 대비: 도메인 ID 는 `<접두사>_<ULID>` 가 기본이지만 이 �
 
 **document 연결**: feature 행에 source_vendor 가 없어 언어→벤더 고정(ko=bigkinds,
 분석엔진과 같은 가정)으로 자연키 SELECT 해소. document 행이 없으면 결손으로 세고
-건너뛴다 — load-documents 가 선행 스텝이라 다음 런이 자연 회복한다.
+건너뛴다. 정상 범위는 TagNews manifest로 고정되므로 LoadDocuments와의 일시 결손은 같은
+`input_run_id`를 멱등 재실행해 회수한다(ALPHA-1033).
 
 `modality_code` 는 비운다 — 어휘 미정의(ALPHA-361). 값을 발명하면 그게 계약이 된다.
 `available_at` 은 **document 의 가용 시각**이다 — 주장의 PIT 기준은 원문 발행·수집이지
@@ -67,6 +68,7 @@ from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, plan_resolution
 from ..lake import (
     Storage,
+    feature_run_manifest_key,
     feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
     quality_log_key,
@@ -107,6 +109,60 @@ def _partition_dates(storage: Storage, language: str) -> list[str]:
     return sorted(dates)
 
 
+def _manifest_partitions(
+    storage: Storage, input_run_id: str
+) -> list[tuple[str, str, str, frozenset[str]]]:
+    """TagNews가 증명한 직접 feature key와 현재 실행 article_id 범위."""
+    key = feature_run_manifest_key("news_assertions", input_run_id)
+    manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id:
+        raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
+    if manifest.get("producer") != "tag_news" or manifest.get("feature_written") is not True:
+        raise ValueError(f"완료된 tag-news manifest가 아니다: run_id={input_run_id}")
+    raw = manifest.get("feature_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"feature_partitions가 없는 구형 manifest다: run_id={input_run_id}")
+
+    partitions: list[tuple[str, str, str, frozenset[str]]] = []
+    seen_partitions: set[tuple[str, str]] = set()
+    seen_article_ids: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"feature_partitions 항목이 객체가 아니다: run_id={input_run_id}")
+        language, published_date = item.get("language"), item.get("published_date")
+        try:
+            valid_date = (
+                isinstance(published_date, str)
+                and datetime.strptime(published_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                == published_date
+            )
+        except ValueError:
+            valid_date = False
+        if language not in _SOURCE_CODE_BY_LANGUAGE or not valid_date:
+            raise ValueError(f"feature_partitions 항목이 유효하지 않다: {item!r}")
+        partition = (language, published_date)
+        if partition in seen_partitions:
+            raise ValueError(f"feature_partitions 항목이 중복됐다: {item!r}")
+        seen_partitions.add(partition)
+
+        parquet_key = item.get("key")
+        expected_key = f"{feature_news_assertions_partition(language, published_date)}/part-00000.parquet"
+        if parquet_key != expected_key:
+            raise ValueError(f"feature 직접 키가 파티션과 일치하지 않는다: {item!r}")
+        article_ids = item.get("article_ids")
+        if (not isinstance(article_ids, list) or not article_ids
+                or any(not isinstance(value, str) or not value.strip()
+                       or value != value.strip() for value in article_ids)
+                or article_ids != sorted(set(article_ids))):
+            raise ValueError(f"article_ids가 유효한 정렬·고유 목록이 아니다: {item!r}")
+        duplicated = seen_article_ids.intersection(article_ids)
+        if duplicated:
+            raise ValueError(f"article_id가 feature 파티션 사이에 중복됐다: {sorted(duplicated)!r}")
+        seen_article_ids.update(article_ids)
+        partitions.append((language, published_date, parquet_key, frozenset(article_ids)))
+    return partitions
+
+
 def _confidence(value: object) -> float | None:
     """CHECK(0~1) 를 어길 값은 NULL 로 — 게이트 통과값으로 강제하지 않는다(coerce 금지)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -114,17 +170,29 @@ def _confidence(value: object) -> float | None:
     return float(value) if 0.0 <= float(value) <= 1.0 else None
 
 
+def _matches_partition_date(value: object, published_date: str) -> bool:
+    """feature 시각이 유효한 timezone-aware ISO이고 manifest 파티션 날짜와 같은가."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.date().isoformat() == published_date
+
+
 def run(
     storage: Storage,
     run_id: str,
     *,
     db: DbConfig,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
-    """feature 뉴스 assertion → document_assertion·assertion_argument 적재. 성공 0, 장애 시 비0."""
+    """manifest 정상 범위 또는 명시 복구 범위의 feature assertion을 DB에 적재한다."""
     started_at = datetime.now(timezone.utc)
-    rows_read = rows_not_ok = rows_no_assertion = rows_malformed = 0
+    physical_rows_read = rows_read = rows_not_ok = rows_no_assertion = rows_malformed = 0
     rows_superseded = 0   # 같은 기사의 더 낡은 판정이라 안 실은 행 (ALPHA-900)
     mirrors_unabsorbed = 0  # 아직 흡수 안 된 장중 미러 조각이라 안 읽은 객체 (ALPHA-900)
     folded = missing_document = skipped_incomplete = skipped_partial = 0
@@ -147,21 +215,34 @@ def run(
     created_sample: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
+    # manifest GET·검증도 아래 실패 경계 안이다. 그 전에 깨져도 quality log가 0건 범위를
+    # 기록할 수 있도록 후보 컨테이너는 경계 밖에서 만든다(ALPHA-1033 fail-loud).
+    candidates: dict[tuple[str, str, str, str], dict] = {}
 
     try:
+        if input_run_id is not None and (from_date is not None or to_date is not None):
+            raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
+        manifest_partitions = (
+            _manifest_partitions(storage, input_run_id) if input_run_id is not None else None
+        )
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
-        candidates: dict[tuple[str, str, str, str], dict] = {}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
-            dates = [d for d in _partition_dates(storage, language)
-                     if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
-            for date in dates:
+            scopes = (
+                [(date, key, ids) for lang, date, key, ids in manifest_partitions if lang == language]
+                if manifest_partitions is not None else
+                [(date, None, None) for date in _partition_dates(storage, language)
+                 if (from_date is None or date >= from_date)
+                 and (to_date is None or date <= to_date)]
+            )
+            for date, direct_key, article_ids in scopes:
                 prefix = feature_news_assertions_partition(language, date)
                 mirror_marker = feature_news_assertions_minute_prefix(language, date)
                 partition_rows: list[dict] = []
-                for key in storage.list_keys(prefix + "/"):
-                    if not key.endswith(".parquet"):
+                keys = [direct_key] if direct_key is not None else storage.list_keys(prefix + "/")
+                for parquet_key in keys:
+                    if not parquet_key.endswith(".parquet"):
                         continue
-                    if key.startswith(mirror_marker):
+                    if parquet_key.startswith(mirror_marker):
                         # ⚠️ **흡수 전 장중 미러는 아직 확정이 아니다**(ALPHA-900). 이 파티션의
                         # 정본은 `tag_news` 가 되쓴 part 파일이고, 미러는 그 스텝이 읽어
                         # 병합하기 전까지의 임시 조각이다. 여기서 바로 읽으면 `tag_news` 가
@@ -173,7 +254,9 @@ def run(
                         # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
                         mirrors_unabsorbed += 1
                         continue
-                    partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
+                    batch = _read_parquet_rows(storage.get_bytes(parquet_key))
+                    physical_rows_read += len(batch)
+                    partition_rows.extend(batch)
                 # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치가 쓴 part
                 # 파일과 장중이 남긴 미러가 한 파티션에 공존하는 창이 있고, 그 둘이 같은
                 # 기사의 **다른 본문**에 대한 판정이면 사건 자연키가 갈려 둘 다 적재된다 —
@@ -182,9 +265,27 @@ def run(
                 # 최신 판정만 남긴다(규칙이 갈리면 두 소비자가 다른 사실을 본다).
                 # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
                 # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
-                unkeyed = [r for r in partition_rows if not r.get("article_id")]
-                keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
-                rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
+                if article_ids is not None:
+                    selected = [r for r in partition_rows if r.get("article_id") in article_ids]
+                    keyed = _merge_by_article(selected)
+                    missing = article_ids - keyed.keys()
+                    if missing:
+                        raise ValueError(
+                            f"manifest article_id가 feature에 없다: key={direct_key}, "
+                            f"article_ids={sorted(missing)!r}"
+                        )
+                    for article_id, row in keyed.items():
+                        if not _matches_partition_date(row.get("published_at"), date):
+                            raise ValueError(
+                                "manifest article_id의 feature 날짜가 파티션과 다르다: "
+                                f"key={direct_key}, article_id={article_id}"
+                            )
+                    unkeyed: list[dict] = []
+                    rows_superseded += len(selected) - len(keyed)
+                else:
+                    unkeyed = [r for r in partition_rows if not r.get("article_id")]
+                    keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
+                    rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
                 for row in [*keyed.values(), *unkeyed]:
                     rows_read += 1
                     if row.get("status") != "ok":
@@ -434,7 +535,9 @@ def run(
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "languages": list(_SOURCE_CODE_BY_LANGUAGE), "from_date": from_date, "to_date": to_date,
+        "languages": list(_SOURCE_CODE_BY_LANGUAGE), "input_run_id": input_run_id,
+        "from_date": from_date, "to_date": to_date,
+        "physical_rows_read": physical_rows_read, "logical_rows_read": rows_read,
         "rows_read": rows_read, "rows_not_ok": rows_not_ok,
         # 같은 기사의 낡은 판정이라 안 실은 행 — 유실이 아니라 **대체**다(ALPHA-900).
         # 0 이 아니면 배치 part 파일과 장중 미러가 겹친 창을 지났다는 뜻이다.
@@ -518,9 +621,9 @@ def run(
         logger.warning("load_assertions: 역할 없는 argument %d건 — 그 자리는 적재하지 않았다",
                        args_role_missing)
     logger.info(
-        "load_assertions: rows=%d considered=%d missing_doc=%d no_resolved=%d created=%d"
+        "load_assertions: physical_rows=%d logical_rows=%d considered=%d missing_doc=%d no_resolved=%d created=%d"
         " already=%d args_inserted=%d resolution=%s",
-        rows_read, len(candidates), missing_document, skipped_no_resolved_argument,
+        physical_rows_read, rows_read, len(candidates), missing_document, skipped_no_resolved_argument,
         created, already, arguments_inserted,
         f"{resolution_rate:.3f}" if resolution_rate is not None else "n/a",
     )
