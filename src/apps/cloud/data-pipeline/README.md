@@ -1861,6 +1861,8 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 # 그대로 낸다 — 세션 없이 뜬 Worker 는 기동을 거부해 하루 종일 재기동 루프를 돈다.
 # ⚠️ 스케일업은 항상 force-new-deployment 다(desired 0 동안 CD 재배포가 no-op 라, 빼면
 # 직전 세션의 낡은 다이제스트로 뜬다).
+# ⚠️ 공시 source_group 은 **빈 값**이다(987 컷오버 — 공시는 저녁 배치 소유. dart 를 넣으면
+# 1분 레인이 공시 세션을 계획해 18:10 배치와 같은 창을 이중 수집한다. terraform 실물과 동일값).
 DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
@@ -1868,8 +1870,6 @@ MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeli
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
-# ⚠️ 공시 source_group 은 **빈 값**이다(987 컷오버 — 공시는 저녁 배치 소유. dart 를 넣으면
-# 1분 레인이 공시 세션을 계획해 18:10 배치와 같은 창을 이중 수집한다. terraform 실물과 동일값)
 MINUTE_SESSION_DISCLOSURE_SOURCE_GROUP= \
 MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES=edge-dev-data-pipeline-disclosure-worker \
 MINUTE_SESSION_INAV_SOURCE_GROUP=kis \
