@@ -146,10 +146,12 @@ def resolve_window(
     """이 런이 실제로 쓸 (from, to) 와 collection_log 에 실을 window_meta 를 정한다.
 
     enabled=False(그림자)면 창은 종전대로(scheduled_window) 두고 워터마크 계산 결과만
-    `watermark_shadow` 로 로그에 남긴다 — 배포 직후부터 계산이 실제 창과 일치하는지
-    관측할 수 있게(회수 대상은 마감일에만 생겨 그냥 두면 두 달 반 동안 "잘 도는 것"과
-    "조용히 안 도는 것"이 구분되지 않는다). explicit(운영자 `--from/--to`)는 항상
-    그대로 존중한다(`window_source="cli"`).
+    `watermark_shadow` 로 로그에 남긴다. ⚠️ dev 는 배치 스케줄이 꺼져 있어(ALPHA-875)
+    이 경로를 상시 부르는 주체가 없다 — 그림자 관측은 **컷오버 전 수동 배치 런**이 만들고,
+    컷오버 후에는 활성 모드의 `window_source`·`recovered_days` 가 매 런 관측을 잇는다
+    (회수 대상은 마감일에만 생겨 그냥 두면 "잘 도는 것"과 "조용히 안 도는 것"이 구분되지
+    않는다 — 폴백이 지속되면 window_source 가 매 런 시끄럽다). explicit(운영자
+    `--from/--to`)는 항상 그대로 존중한다(`window_source="cli"`).
 
     워터마크 조회 실패·부재는 fail-loud 로 죽이지 않고 기본창 폴백 + `window_source` 로
     드러낸다 — 스케줄러 retry=0 이라 여기서 죽으면 그날 수집 자체가 죽어, 회수 장치의
