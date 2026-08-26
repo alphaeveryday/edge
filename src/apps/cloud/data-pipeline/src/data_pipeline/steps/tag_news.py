@@ -61,6 +61,7 @@ from ..lake import (
 )
 from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
 from ..tagging.ontology import ontology_version
+from .normalize_news import _union_mentions
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +307,7 @@ def _scoped_canonical_rows(
     """manifest 전량을 검증한 뒤 article_id별 최신 source revision만 파티션에 배정한다."""
     rows_by_partition: dict[tuple[str, str], list[dict]] = {}
     winners: dict[str, tuple[tuple[datetime, datetime], tuple[str, str]]] = {}
+    mentions_by_article: dict[str, list[object]] = {}
     for item in partitions:
         partition = (item["language"], item["published_date"])
         article_ids = item["article_ids"]
@@ -322,6 +324,7 @@ def _scoped_canonical_rows(
                 raise ValueError(f"manifest article_id의 canonical 날짜가 파티션과 다르다: {article_id}")
             found.add(article_id)
             rows.append(row)
+            mentions_by_article.setdefault(article_id, []).append(row.get("mentions"))
             candidate = (_canonical_revision(row), partition)
             if article_id not in winners or candidate >= winners[article_id]:
                 winners[article_id] = candidate
@@ -330,8 +333,8 @@ def _scoped_canonical_rows(
             raise ValueError(f"manifest article_id가 canonical에 없다: {sorted(missing)!r}")
         rows_by_partition[partition] = rows
     return {
-        partition: [row for row in rows
-                    if winners[row["article_id"]][1] == partition]
+        partition: [{**row, "mentions": _union_mentions(*mentions_by_article[row["article_id"]])}
+                    for row in rows if winners[row["article_id"]][1] == partition]
         for partition, rows in rows_by_partition.items()
     }
 
