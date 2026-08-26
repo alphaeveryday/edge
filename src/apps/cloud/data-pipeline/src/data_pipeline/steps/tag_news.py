@@ -261,7 +261,6 @@ def _manifest_partitions(storage: Storage, input_run_id: str) -> list[dict]:
         raise ValueError(f"canonical_partitions가 없는 구형 manifest다: run_id={input_run_id}")
     result: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    seen_article_ids: set[str] = set()
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError("canonical_partitions 항목이 객체가 아니다")
@@ -281,10 +280,8 @@ def _manifest_partitions(storage: Storage, input_run_id: str) -> list[dict]:
         if (item.get("key") != expected or not isinstance(article_ids, list)
                 or not article_ids or article_ids != sorted(set(article_ids))
                 or any(not isinstance(value, str) or not value.strip()
-                       or value != value.strip() for value in article_ids)
-                or seen_article_ids.intersection(article_ids)):
+                       or value != value.strip() for value in article_ids)):
             raise ValueError(f"canonical 직접 범위가 유효하지 않다: {item!r}")
-        seen_article_ids.update(article_ids)
         result.append({**item, "article_ids": frozenset(article_ids)})
     return result
 
