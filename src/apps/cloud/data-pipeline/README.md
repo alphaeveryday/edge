@@ -1844,10 +1844,11 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 #   ⚠️ **자기 워커를 소유해도 이 조건은 안 풀린다**(ALPHA-882) — 소유와 구동 레인은
 #   다른 축이다(`states.SCALED_DATASETS`). news_minute 이 news-worker 를, etf_inav_minute
 #   이 inav-worker 를 소유하는 지금도 둘 다 인자로는 못 온다.
-# **네 레인 다 이 명령에 얹혀 계획·드레인된다** — 인자가 아니라 아래 토글 env 로 켠다
-# (`MINUTE_SESSION_{NEWS,DISCLOSURE,INAV,SECTOR_INDEX}_SOURCE_GROUP`). ⚠️ **토글 env 가
-# 없는 레인은 계획도 스케일도 안 된다** — 그 레인만 조용히 빠진 채 세션이 선다
-# (`session_ops._OPTIONAL_LANES`). 손으로 칠 때 아래 예시에서 한 쌍을 빼면 그 결과다.
+# **선택 레인은 이 명령에 얹혀 계획·드레인된다 — 단 토글 env 가 켜진 레인만이다**
+# (`MINUTE_SESSION_{NEWS,DISCLOSURE,INAV,SECTOR_INDEX}_SOURCE_GROUP`). 현재 dev 는
+# 공시 토글이 빈 값이라(987 컷오버) 실제로 얹히는 선택 레인은 셋(news·inav·sector)이다.
+# ⚠️ **토글 env 가 없는(빈) 레인은 계획도 스케일도 안 된다** — 그 레인만 조용히 빠진 채
+# 세션이 선다(`session_ops._OPTIONAL_LANES`). 손으로 칠 때 아래 예시에서 한 쌍을 빼면 그 결과다.
 # terraform 의
 # `minute_session_dataset` 기본값도 price_minute 라 실제 경로는 없지만, 손으로 치던
 # 사람은 `--dataset` 에서 막힌다.
