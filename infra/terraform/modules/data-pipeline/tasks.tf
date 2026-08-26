@@ -168,8 +168,8 @@ locals {
   # 거래일 PDF 를 주므로 그 날짜로 라벨해야 한다. Planner 와 **같은** 휴장일 집합을 받아야
   # "Planner 는 비거래일로 건너뛴 날을 수집은 거래일로 라벨"하는 모순이 안 생긴다.
   env_sets = {
-    rds      = local.db_env
-    events   = local.db_env
+    rds    = local.db_env
+    events = local.db_env
     # iNAV(ALPHA-557)는 거래일·개장 이후에만 수집한다 — 응답에 날짜가 없어 거래일을 수집
     # 시각으로 붙이는데 KIS 가 휴장일에도 직전 거래일 값을 주기 때문. 그 판정이 KRX 와 **같은**
     # 휴장일 집합을 봐야 한다. 안 주면 is_trading_day 가 평일 공휴일을 거래일로 보고 가드가
@@ -183,7 +183,12 @@ locals {
     bigkinds = local.db_env
     rds_dart = local.db_env
     krx      = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
-    dart     = local.db_env
+    # 워터마크 창(ALPHA-987, `disclosure_watermark.py`)은 배치 레인이 공시를 소유할 때만
+    # 켠다 — 스케줄 상태에서 **파생**시켜 컷오버가 한 트랜잭션으로 묶인다(별도 토글이면
+    # 한쪽만 뒤집힌 배포에서 그림자/활성이 소유와 어긋난다). DISABLED 환경은 그림자 기본.
+    dart = merge(local.db_env, var.disclosure_schedule_state == "ENABLED" ? {
+      DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW = "true"
+    } : {})
     # TAG_NEWS wrapper 기록용(ALPHA-610) — 위 krx·dart 와 같은 이유. 이 컨테이너는 기사별 LLM
     # 실패를 격리해 exit 0 으로 끝나므로, 원장이 봉투(failed_records)를 읽지 못하면 전건 실패도
     # 초록으로 보인다. 이 배선(#379)이 한 배포 앞서고 카탈로그 플래그 전환이 뒤따랐다 —

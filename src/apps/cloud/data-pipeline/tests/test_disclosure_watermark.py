@@ -302,3 +302,25 @@ def test_shadow_lookup_error_run_is_not_eligible(tmp_path):
              watermark_shadow={"source": "fallback_lookup_error", "window_from": None,
                                "window_to": None, "matches_actual": False})
     assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
+
+
+def test_mdw_keys_are_skipped_without_get(tmp_path):
+    # WHY: 전이기엔 탐색 범위에 1분 레인 로그가 하루 최대 720개 남는다(실측 4,661개/11일,
+    #      전량 GET ≈ 5분+) — 원장 deadline(1200s)의 절반을 조회가 태운다. mdw 접두는
+    #      `_run_id_for` 가 결정적으로 붙이므로 GET 없이 걸러도 판정이 같다(음성 프리필터 —
+    #      틀려도 후보를 잃고 폴백하는 안전 방향). GET 횟수로 프리필터의 실재를 단언한다.
+    class CountGet(LocalStorage):
+        def __init__(self, root):
+            super().__init__(root)
+            self.gets = 0
+
+        def get_bytes(self, key):
+            self.gets += 1
+            return super().get_bytes(key)
+
+    storage = CountGet(tmp_path)
+    _put_log(storage, "2026-08-26", "mdw_s1_0900_1", ingest_lane="minute",
+             window_to="2026-08-26")
+    _put_log(storage, "2026-08-25", "r_ok", window_to="2026-08-25")
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-25"
+    assert storage.gets == 1  # mdw 키는 GET 자체가 없다
