@@ -168,6 +168,11 @@ def collect(
     (`collection_log_key`) 호출자가 키를 재구성하려면 그 날짜를 맞혀야 하는데, UTC 자정이
     09:00 KST — 즉 이 레인 격자의 **한복판**이다. 개장 시각 tick 마다 키를 틀릴 수 있다.
     """
+    if ingest_lane not in ("batch", "minute"):
+        # 오타난 레인이 로그에 그대로 실리면 수집은 성공하는데 워터마크는 그 런을 어느
+        # 레인에도 귀속하지 못한다 — 생산자에서 즉시 죽인다(Rule 12, `_WINDOW_CALENDAR`
+        # 의 미선언 fail-loud 와 같은 자세).
+        raise ValueError(f"알 수 없는 ingest_lane: {ingest_lane!r} (batch|minute)")
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]  # = ingest_date
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
@@ -191,6 +196,10 @@ def collect(
         logger.warning("%s 공시 비활성(api_key 미주입) — 수집 건너뜀", vendor)
         skipped = {**log, "status": "skipped",
                    "reason": f"{vendor} disabled or no api_key",
+                   # 창을 읽은 적이 없으니 절단도 아니다 — 값 자체는 status=skipped 가
+                   # 가리지만, 필드는 넣는다: "필드 부재 = PR1 이전 로그" 판별이 새 로그
+                   # 전부에 성립해야 워터마크가 부재를 레거시로 접을 수 있다.
+                   "list_truncated": False,
                    "ops": {"records_out": 0, "failed_records": 0}}
         try:
             _write_log(storage, vendor, started_date, run_id, skipped)

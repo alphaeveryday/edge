@@ -7,6 +7,8 @@ ZIP)은 rcept_no 별 객체로 무변형 저장한다. 특히 특정 corp 의 �
 
 import json
 
+import pytest
+
 from data_pipeline.config import load_settings
 from data_pipeline.lake import LocalStorage, raw_disclosure_document_key
 from data_pipeline.sources.http import StopFetch
@@ -669,3 +671,32 @@ def test_log_carries_ingest_lane_and_list_truncated(tmp_path):
     _, storage2 = _run(tmp_path, truncated, storage=LocalStorage(tmp_path / "lake2"),
                        run_id="r2")
     assert _log(storage2, "r2")["list_truncated"] is True
+
+    # minute 레인이 로그에 그대로 실리는지 — 상수 "batch" 를 박아도 위만으로는 초록이다.
+    storage3 = LocalStorage(tmp_path / "lake3")
+    ingest_raw_disclosure.collect(
+        _settings(tmp_path), storage3, FakeSource(records=[_rec("A1")]), "r3",
+        ingest_lane="minute",
+    )
+    assert _log(storage3, "r3")["ingest_lane"] == "minute"
+
+
+def test_skipped_log_still_carries_lane_fields(tmp_path):
+    # WHY: "필드 부재 = PR1 이전 로그" 판별은 **새 로그 전부**에 두 필드가 있어야 성립한다.
+    #      skip 경로만 빠지면 키 미주입기의 새 로그가 레거시로 오인돼 판별자가 둘로 갈린다.
+    code, storage = _run(tmp_path, FakeSource(enabled=False))
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["status"] == "skipped"
+    assert log["ingest_lane"] == "batch"
+    assert log["list_truncated"] is False
+
+
+def test_unknown_ingest_lane_rejected(tmp_path):
+    # WHY: 오타난 레인이 로그에 실리면 수집은 성공하는데 워터마크는 그 런을 어느 레인에도
+    #      귀속하지 못한다 — 생산자에서 죽어야(Rule 12) 오기록이 로그로 새지 않는다.
+    with pytest.raises(ValueError, match="ingest_lane"):
+        ingest_raw_disclosure.collect(
+            _settings(tmp_path), LocalStorage(tmp_path / "lake"),
+            FakeSource(records=[_rec("A1")]), "r1", ingest_lane="minuite",
+        )
