@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import load_settings
 from .db import db_config_from_env
+from . import disclosure_watermark
 from .minute.consumer import dlq_reconcile_cli, redrive_cli
 from .minute.news_consumer import news_consumer_cli
 from .minute.disclosure_worker import disclosure_worker_cli
@@ -1059,12 +1060,24 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return ingest_raw_investor.run(settings, storage, investor_source, run_id, from_date, to_date)
     if args.step == "ingest-raw-disclosure":
         # 공시는 KR·단일 벤더(OpenDART)라 --source 분기가 없다. 재무(fnlttSinglAcnt)와 별개
-        # API·별개 잡이다. 날짜창은 뉴스와 동형(위에서 증분/백필 창을 채웠다).
+        # API·별개 잡이다. 날짜창은 뉴스와 동형으로 위에서 채워졌고, 여기서 원장 워터마크
+        # (ALPHA-987)가 스케줄 창을 재결정한다 — 그림자(기본)면 계산만 로그로 대조하고,
+        # `watermark_window=true` 면 실제 창으로 쓴다. `--from/--to` 는 항상 그대로 존중.
         if settings.dart_disclosure is None:
             raise SystemExit("dart_disclosure.source 설정이 없다 — sources.toml 확인")
+        (from_date, to_date), window_meta = disclosure_watermark.resolve_window(
+            storage,
+            enabled=settings.dart_disclosure.watermark_window,
+            explicit=args.from_date is not None or args.to_date is not None,
+            scheduled_window=(from_date, to_date),
+            # 창 날짜는 벤더 달력(KST), 로그 파티션은 UTC — 축이 둘이라 따로 넘긴다.
+            today_kst=datetime.now(window_calendar_tz(args.step, args.source)).date(),
+            today_utc=datetime.now(timezone.utc).date(),
+        )
         disclosure_source = DartDisclosureSource(settings.dart_disclosure.source, PoliteClient())
         return ingest_raw_disclosure.run(
-            settings, storage, disclosure_source, run_id, from_date, to_date
+            settings, storage, disclosure_source, run_id, from_date, to_date,
+            window_meta=window_meta,
         )
     raise AssertionError(f"unreachable step: {args.step}")
 

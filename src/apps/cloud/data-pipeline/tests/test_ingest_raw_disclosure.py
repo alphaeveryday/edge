@@ -681,6 +681,21 @@ def test_log_carries_ingest_lane_and_list_truncated(tmp_path):
     assert _log(storage3, "r3")["ingest_lane"] == "minute"
 
 
+def test_window_meta_lands_in_collection_log(tmp_path):
+    # WHY: 창 결정 관측(window_source 등)은 run 엔트리가 정하고 이 스텝은 받아 적는다 —
+    #      이 전달이 끊겨도 수집은 멀쩡히 돌아서, 그림자 대조가 조용히 사라진 채 두 달 반
+    #      뒤 컷오버 검증 근거가 없는 걸 그때야 알게 된다(ALPHA-987 완료 조건).
+    storage = LocalStorage(tmp_path / "lake")
+    code = ingest_raw_disclosure.run(
+        _settings(tmp_path), storage, FakeSource(records=[_rec("A1")]), "r1",
+        window_meta={"window_source": "watermark", "recovered_days": 2},
+    )
+    assert code == 0
+    log = _log(storage, "r1")
+    assert log["window_source"] == "watermark"
+    assert log["recovered_days"] == 2
+
+
 def test_skipped_log_still_carries_lane_fields(tmp_path):
     # WHY: "필드 부재 = PR1 이전 로그" 판별은 **새 로그 전부**에 두 필드가 있어야 성립한다.
     #      skip 경로만 빠지면 키 미주입기의 새 로그가 레거시로 오인돼 판별자가 둘로 갈린다.
