@@ -171,7 +171,8 @@
 > trade_date 는 트리거 행이 정본, 계보는 `minute_price_trigger_id` 축)까지다.
 > AWS 리소스는 terraform 에 정의됐다(ALPHA-711 — SQS 원 큐 4종+DLQ, 상주 서비스 10종
 > price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-713) +
-> news-worker(ALPHA-717) + disclosure-worker(ALPHA-875 — 한 window 가 체인 전체) +
+> news-worker(ALPHA-717) + disclosure-worker(ALPHA-875 — 한 window 가 체인 전체.
+> ⚠️ 987 컷오버로 **미편입** — 공시는 저녁 배치가 소유하고 이 서비스는 롤백 경로로만 남는다) +
 > inav-worker(ALPHA-882 — 장중 iNAV 생산자. 소비자가 없어
 > 큐는 안 늘어난다) + sector-index-worker(ALPHA-887 — 업종지수 45종 생산자) +
 > analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
@@ -183,7 +184,8 @@
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
 > 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
 > — `run start-minute-session`·`run stop-minute-session` 을 EventBridge Scheduler 가
-> 부른다(Premarket 07:45 / EOD 20:05 KST, `aws_scheduler_schedule.minute_session`).
+> 부른다(Premarket 07:45 / EOD 16:10 KST — 987 이 20:05 에서 당겼다(공시가 배치로 떠나
+> 시간외 격자 dataset 이 가격뿐, dev 정본에 시간외 축 없음), `aws_scheduler_schedule.minute_session`).
 > 같은 자원이 **업종지수 5분 파생 확정**도 부른다(평일 16:00 KST — `rollup-minute-session
 > --dataset sector_index_minute`, ALPHA-955). 시각이 다른 이유는 격자가 달라서다:
 > 업종지수 세션은 09:00~15:30 이고 가격은 20:00 까지라, 가격 EOD 확정은 이 시각을 쓸 수
@@ -200,13 +202,13 @@
 > **축을 가르는 주체는 terraform 이 아니라 코드다**). 그 env 가 비면 **죽는다**: 빼기가 안
 > 돌아 공용 경로가 이 서비스를 다시 스케일하고, 그러면 매일 밤 stop 이 스케일러의 desired 를
 > 덮어 축이 도로 둘이 된다(ALPHA-910 의 컷오버 관대함은 여기서 회수됐다).
-> ⚠️ 그래서 **20:05 에 이 서비스를 내리는 주체가 없다** — 그게 의도다. 게이트는 설명 큐를
+> ⚠️ 그래서 **세션 stop(16:10)에 이 서비스를 내리는 주체가 없다** — 그게 의도다. 게이트는 설명 큐를
 > 안 보므로(아래) 예전엔 처리 중인 설명이 stop 에 잘렸는데, 스케일러는 처리 중(비가시)까지
 > 세어 그동안 대수를 유지한다. 야간 비용은 잔여 0 에서 0대로 내려가 해결된다.
 > ⚠️ **절단이 통째로 사라진 것은 아니다** — 버스트 중 CD 재배포의 롤링은 여전히 처리 중인
 > 태스크를 자른다(Fargate `stopTimeout` 상한 120초 < 건당 588초). 그건 별개 축이다.
 > ⚠️ 그리고 이제 desired 를 0 으로 내리는 주체가 **오토스케일링 하나뿐**이다 — 세션의
-> 20:05 하드스톱이 CloudWatch 를 안 보는 유일한 천장이었다.
+> EOD 하드스톱(현 16:10)이 CloudWatch 를 안 보는 유일한 천장이었다.
 > terraform 공용 목록에 이름이 아직 남아 있으나 코드가 늘 빼내므로 잉여다 — 제거는 후속
 > 정합성 정리(PR C) 소관이고, 남아 있어도 동작은 같다.
 > ⚠️ universe 정본 객체(config/minute/universe.json)는 **`build-minute-universe` 스텝**이
@@ -717,10 +719,11 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 `CollectDartDisclosure → [NormalizeDisclosure·NormalizeDisclosureSegment] →
 LoadDisclosure` 를 돌았고(부분집합 필터 재사용, 새 state 정의 0개 — 체인은 Feature 의
 LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
-시장 SFN 에서 공시 체인이 빠졌다(15:40 런은 공시를 돌리지 않는다). ⚠️ **그 다음이 현재
-상태다: ALPHA-875 가 공시를 1분 세션으로 넘겼다** — 이 SFN 스케줄은 이제 DISABLED 이고
-(`disclosure_schedule_state`, dev `main.tf`) 카탈로그 공시 엔트리도 0 이다. 공시 실행과
-결손은 ops 원장이 아니라 `minute_ingestion_window` 에서 본다(`disclosure-worker`).
+시장 SFN 에서 공시 체인이 빠졌다(15:40 런은 공시를 돌리지 않는다). 875 가 공시를 1분
+세션으로 넘겼다가, ⚠️ **987 이 저녁 배치로 되돌린 것이 현재 상태다**: 이 SFN 스케줄이
+**평일 18:10 KST 1슬롯**으로 ENABLED 이고 카탈로그 공시 엔트리도 4개다. 공시 실행과
+결손은 다시 ops 원장에서 본다. 증분 창은 원장 워터마크(`disclosure_watermark.py`)가
+직전 완주 런의 window_to 당일부터로 정해 늦은 노출 꼬리·런 실패를 다음 런이 회수한다.
 
 ⚠️ `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
 붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
@@ -932,8 +935,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721). 공시는 장중 레인이 붙으면
   canonical 스캔이 슬롯마다 곱해진다. 뉴스 `load-documents`는 ALPHA-1031에서 manifest 직접
   키·현재 논리 ID 소비로 전환됐으며, 이 공시 경로의 LIST 제거는 별도 작업이다.
-  그 레인이 실제로 붙었다(ALPHA-875 `disclosure-worker`) — 1분 레인은 이 함수를 **질의 날짜창으로
-  좁혀** 부른다. ⚠️ 좁혀지는 것은 parquet GET 뿐이다: `_read_facts` 가 `report_date=` 프리픽스
+  그 레인이 실제로 붙었었다(ALPHA-875 `disclosure-worker` — 987 이 저녁 배치로 되돌려
+  지금은 미편입) — 1분 레인은 이 함수를 **질의 날짜창으로 좁혀** 불렀다. ⚠️ 좁혀지는 것은 parquet GET 뿐이다: `_read_facts` 가 `report_date=` 프리픽스
   **전체**를 LIST 한 뒤 날짜를 거르므로 window 당 2 LIST(supply·segment)가 남고 그 비용은
   report_date 파티션 수에 비례해 자란다. 거래일당 +1 이라 당장은 견디지만, 줄이려면 창에서
   파티션 프리픽스를 만들어 그 날짜만 LIST 해야 한다
@@ -1306,11 +1309,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 26작업 =
-  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 장중 수급 레인
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4 + 장중 수급 레인
   (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
-  늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 **SFN 원장 밖 1분 세션으로** 보낸 몫이라
+  늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 SFN 원장 밖 1분 세션으로 보낸 몫이었고
+  **26 → 30 은 ALPHA-987 이 저녁 배치로 되돌린 복원**이라
   공시 레인(`disclosure`)은 이제 엔트리가 0 이다)(ECS Task state 35개 중 — **정의 파일**
   기준으로 `statemachine.tf` 33 + `news_pipeline.tf` 2 다. 공시·장중 수급 .tf 는 state 를
   새로 정의하지 않고 부분집합 필터로 재사용하므로 저 33 안에 있다 — 레인별 계수는
@@ -1336,7 +1340,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 26작업이 전부 자기
+  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 30작업이 전부 자기
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
@@ -1407,10 +1411,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 ### 실행 흐름 (스펙 §5)
 
 ```
-EventBridge(daily·news×2(00:10·08:10)·장중수급×5 — 공시 10슬롯은 ALPHA-875 컷오버로 DISABLED, 1분 세션이 소유) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
+EventBridge(daily·news×2(00:10·08:10)·공시×1(18:10 — ALPHA-987 저녁 배치 복귀)·장중수급×5) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
                                               → commit → 결정적 execution_name → SFN StartExecution
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
-각 ECS 태스크(26작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+각 ECS 태스크(30작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
 ```
 
@@ -1629,8 +1633,9 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 아래 명령은 **그 스케줄이 못 채운 날을 손으로 되돌릴 때** 쓴다.
 # 🔴 **가격은 아직 스케줄이 없다** — 장중 후크가 매일 만들고 있어 당장 공백은 없지만,
 # 지나간 날은 이 명령으로만 채워진다(EOD 확정 스케줄은 ALPHA-839 PR2).
-#   시각이 업종지수와 다를 수밖에 없다: cron 20:05 + 상한 1800초 + 확인분 60초 = 최악
-#   20:36 이고 stop 태스크의 Fargate 기동(59~122초)이 더 붙어 실제 최악은 ~20:38 이다.
+#   시각이 업종지수와 다를 수밖에 없다: stop cron 16:10(ALPHA-987) + 상한 1800초 + 확인분
+#   60초 = 최악 16:41 이고 stop 태스크의 Fargate 기동(59~122초)이 더 붙어 실제 최악은
+#   ~16:43 이다.
 #   그 전에 뜨면 늦은 recovery 커밋이 5분 파생에 영영 안 들어간다(후크와의 배타성은
 #   코드가 아니라 스케줄 시각이 진다 — 이 스텝은 phase 게이트를 의도적으로 안 건다).
 #   업종지수는 09:00~15:30 격자라 그 하한이 훨씬 이르다(16:00 근거는 terraform 주석).
@@ -1888,8 +1893,9 @@ MINUTE_SESSION_DRAIN_TIMEOUT_SEC=1800 \
   python -m data_pipeline.run stop-minute-session --dataset price_minute --source-group kis
 ```
 
-배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **21개**(daily 1·뉴스 2·
-장중 수급 5 =plan-run, reconcile 1, 1분 세션 start·stop 2 — 공시 10 은 DISABLED) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
+배포는 `aws_ecs_task_definition.ops`(data-pipeline 이미지 재사용) + 스케줄러 **12개**(daily 1·뉴스 2·
+공시 1(18:10, ALPHA-987 — dev 가 cron 맵을 1슬롯으로 override)·장중 수급 5 =plan-run, reconcile 1,
+1분 세션 start·stop 2) + DLQ. 1분 세션 2개만 `aws_ecs_task_definition.minute_session`
 (전용 IAM 역할 — 레이크 읽기 + 상주 서비스 10종 `ecs:UpdateService` + 게이트 큐(realtime 2종) 조회)을 띄운다. 설명 큐는 게이트에 없다 — 지연 재배달(장중 returns 대기) 비가시 메시지가 레인 전체를 밤새 붙잡는다(잔여는 다음 세션 소비).
 네 레인 스케줄 모두 SFN 직접 시작이 아니라 **Planner 경유**다
 (뉴스는 ALPHA-591 에서 전환, 공시·장중 수급은 처음부터). 원장 DB 는 canonical 과 같은 Cloud Event Store(public 스키마,
