@@ -127,7 +127,7 @@ def test_manifest_allows_article_id_repeated_across_partitions(tmp_path):
     _write_canonical(storage, "ko", "2026-07-01", [_article("a1")])
     _write_canonical(storage, "ko", "2026-07-02", [
         _article("a1", published_at="2026-07-02T09:00:00+09:00",
-                 fetched_at="2026-07-02T09:05:00+09:00")])
+                 fetched_at="2026-07-02T09:05:00+09:00", mentions="[]")])
     _write_manifest(storage, "N1", [
         _manifest_partition("2026-07-01", ["a1"]),
         _manifest_partition("2026-07-02", ["a1"]),
