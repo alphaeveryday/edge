@@ -511,13 +511,11 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 # 재현이 깨지기 때문이다. tagger_version·ontology_version 이 바뀔 때만 재태깅한다. 단
 # llm_error(호출 자체 실패)는 판정이 아니라서 다음 런이 재시도한다.
 #
-# --from/--to 는 여기선 **태깅 대상 published_date 파티션**을 좁히는 창이다(raw 수집 창이
-# 아니고, 미지정은 증분 기본창이 아니라 전체). 일일 SFN 은 --window-days N 으로 오늘−N일 창만
-# 스캔한다 — 전량 스캔(실측 17분)의 대부분은 LLM 이 아니라 canonical 스캔이라 창이 곧 속도다
-# (ALPHA-540). --limit 은 이번 런에서 새로 LLM 을 부를 기사 수 상한 — mentions ≥ 1
-# 게이트(유니버스 종목이 안 잡힌 기사는 태깅 안 함, ALPHA-416)·창·limit 이 곧 비용 통제다.
-LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --limit 50 --window-days 3
-#   기간 지정(백필): ... run tag-news --from 2026-07-01 --to 2026-07-08   # 미지정=풀스캔
+# 정상 실행은 NormalizeNews manifest의 직접 parquet와 현재 article_id만 읽는다. --from/--to는
+# 명시적 과거 복구, --all은 명시적 전체 복구다. --limit은 이번 런의 새 LLM 호출 수 상한이다.
+LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --input-run-id 20260701T000000Z --limit 50
+#   기간 복구: ... run tag-news --from 2026-07-01 --to 2026-07-08
+#   전체 복구: ... run tag-news --all
 
 # 종목 마스터 적재(Step4, RDB) — canonical ETF 구성종목(market=KR)의 **최신 기준일** 중
 # **유니버스 뿌리(`krx_etf.source.etf_map`) 안 ETF 만** 읽어(뿌리 밖 구성종목을 주워 담으면
@@ -901,12 +899,12 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 시크릿이 다른 잡은 task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread
 추출 + 가격이벤트 생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
 
-- `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN 은 `--limit`(기본 10000)·
-  `--window-days`(기본 3, 오늘−N일 창)를 넘겨 한 실행의 LLM 호출 수와 스캔 범위를 묶는다
-  (창 미지정은 풀스캔이라 스캔이 O(전체 코퍼스), ALPHA-540). **창은 장중 미러 압축의 범위도
-  가른다**(ALPHA-900) — 창이 있는 런은 자기 창 안의 미러만 흡수하고, 창 밖으로 나간 조각
-  (backfill Consumer 가 오래된 기사를 뒤늦게 추출한 드문 경우)은 풀스캔 런이 정리한다. 창을
-  넓혀 잡으면 창 밖 canonical 기사까지 LLM 대상이 되어 `--limit` 을 먼저 소진한다.
+- `tag-news`(→ 레이크 feature 존, **deepseek 세트**) — SFN은 `--input-run-id`로 NormalizeNews
+  manifest의 직접 parquet와 현재 논리 ID만 읽고 `--limit`(기본 10000)으로 LLM 호출 수를 묶는다.
+  KST 전일·당일 장중 미러 prefix는 직접 조회해 canonical이 아직 없는 미러도 흡수한다.
+  실제 변경한 파티션·`article_id`는
+  `operations_archive/feature_run_manifests/dataset=news_assertions/run_id=…/manifest.json`에
+  기록하며, 모든 파티션과 quality log가 성공한 뒤에만 `feature_written=true`가 된다.
   상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
   기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다).
   LLM 호출은 기사별로 병렬 실행한다(ALPHA-519, `LLM_CONCURRENCY` env·기본 32·상한 100) —
@@ -1174,7 +1172,7 @@ settings.targets.keywords            # ["금리", ...]
   남긴다(ALPHA-1030). 같은 run 재시도는 먼저 `canonical_written=false`로 이전 완료 표식을
   무효화하고, canonical과 quality log가 모두 성공한 뒤에만 `true`로 교체한다. 입력 0건은 빈
   `canonical_partitions`를 가진 유효 manifest다. `LoadDocuments`는 이 직접 키와 현재 논리 ID만
-  소비하며(ALPHA-1031), `TagNews` 전환은 후속 작업이다.
+  소비하며(ALPHA-1031), `TagNews`도 같은 범위를 소비한다(ALPHA-1032).
 - **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
   에 태깅 결과를 **article_id 키로 멱등 병합**(입력 canonical 과 같은 파티션 축이라 한 canonical
   파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제).
@@ -1192,11 +1190,12 @@ settings.targets.keywords            # ["금리", ...]
   SFN 이 `TagNews` 뒤에 `LoadAssertions` 를 돌리므로 같은 런에서 흡수분이 실린다.
   ⚠️ 그래서 **흡수는 canonical 이 없는 날짜에도 닿아야 한다** — 기사 정본은 PG 이고 canonical
   은 다음 `normalize-news` 에 오므로 장중만 본 기사의 발행일이 아직 canonical 에 없을 수 있다.
-  `tag-news` 는 canonical 날짜에 **미러가 남은 날짜(같은 창으로 거른)**를 합쳐 돈다.
+  `tag-news`는 manifest 날짜와 KST 전일·당일의 정확한 미러 prefix를 함께 조회한다.
   ⚠️ canonical 에 **아예 없는** 기사(장중만 본 기사)의 미러는 거르지 않는다 — mentions 를 판정할
   근거가 없는 것이지 무관한 게 아니다. 미러 키에 입력 지문이 들어가는
   것은 정정 때문이다 — `article_id` 만 쓰면 배치가 읽고 지우는 사이의 정정 판정이 같은 키를
-  덮은 뒤 곧바로 삭제된다. 창(`--window-days`) 밖 미러는 **창 미지정 풀스캔 런**이 정리한다. **canonical 이 아니라 feature
+  덮은 뒤 곧바로 삭제된다. 오래된 backfill 미러는 명시적 날짜 또는 `--all` 복구가 정리한다.
+  **canonical 이 아니라 feature
   인 이유**: 여기 값은 벤더 원본의 결정론적 정규화가 아니라 **LLM 추론 결과**라 재실행이 값을 바꿀
   수 있고 호출마다 돈이 든다 — raw 에서 언제든 무료로 재생성되는 canonical 과 라이프사이클이 다르다.
   그래서 **한 번 만든 건 다시 만들지 않는다**(`tagger_version`·`ontology_version` 이 바뀔 때만 재태깅;

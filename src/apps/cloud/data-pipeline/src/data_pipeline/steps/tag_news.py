@@ -47,13 +47,16 @@ import json
 import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from ..lake import (
     Storage,
+    canonical_run_manifest_key,
     canonical_news_articles_partition,
     feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
+    feature_run_manifest_key,
     quality_log_key,
 )
 from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
@@ -63,6 +66,7 @@ logger = logging.getLogger(__name__)
 
 JOB_NAME = "tag_news"
 DATASET = "news_assertions"
+_KST = ZoneInfo("Asia/Seoul")
 
 # 태깅 대상 언어. 정본은 프롬프트를 가진 모듈이다(`tagging.extract.PROMPT_LANGUAGES`) —
 # 영어 프롬프트가 생기면 거기 한 곳만 늘린다.
@@ -244,10 +248,105 @@ def _read_canonical(storage: Storage, language: str, published_date: str) -> lis
     return rows
 
 
+def _manifest_partitions(storage: Storage, input_run_id: str) -> list[dict]:
+    """NormalizeNews manifest를 검증해 직접 key와 현재 article_id 범위를 돌려준다."""
+    key = canonical_run_manifest_key("news_articles", input_run_id)
+    manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
+    if (not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id
+            or manifest.get("producer") != "normalize_news"
+            or manifest.get("canonical_written") is not True):
+        raise ValueError(f"완료된 normalize-news manifest가 아니다: run_id={input_run_id}")
+    raw = manifest.get("canonical_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"canonical_partitions가 없는 구형 manifest다: run_id={input_run_id}")
+    result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    seen_article_ids: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("canonical_partitions 항목이 객체가 아니다")
+        language, published_date = item.get("language"), item.get("published_date")
+        try:
+            valid_date = (isinstance(published_date, str)
+                          and datetime.strptime(published_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                          == published_date)
+        except ValueError:
+            valid_date = False
+        partition = (language, published_date)
+        if language not in ("ko", "en") or not valid_date or partition in seen:
+            raise ValueError(f"canonical_partitions 항목이 유효하지 않다: {item!r}")
+        seen.add(partition)
+        expected = f"{canonical_news_articles_partition(language, published_date)}/part-00000.parquet"
+        article_ids = item.get("article_ids")
+        if (item.get("key") != expected or not isinstance(article_ids, list)
+                or not article_ids or article_ids != sorted(set(article_ids))
+                or any(not isinstance(value, str) or not value.strip()
+                       or value != value.strip() for value in article_ids)
+                or seen_article_ids.intersection(article_ids)):
+            raise ValueError(f"canonical 직접 범위가 유효하지 않다: {item!r}")
+        seen_article_ids.update(article_ids)
+        result.append({**item, "article_ids": frozenset(article_ids)})
+    return result
+
+
+def _feature_manifest_bytes(
+    run_id: str, written: bool, partitions: list[dict], started_at: str
+) -> bytes:
+    return json.dumps({
+        "run_id": run_id, "producer": JOB_NAME, "feature_written": written,
+        "started_at": started_at, "feature_partitions": partitions,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")
+
+
+def _existing_feature_partitions(storage: Storage, run_id: str) -> tuple[list[dict], str | None]:
+    """동일 run 재시도에서 앞선 시도가 이미 바꾼 논리 ID 계보를 복원한다."""
+    key = feature_run_manifest_key(DATASET, run_id)
+    if not storage.list_keys(key):
+        return [], None
+    manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
+    if (not isinstance(manifest, dict) or manifest.get("run_id") != run_id
+            or manifest.get("producer") != JOB_NAME
+            or not isinstance(manifest.get("feature_written"), bool)):
+        raise ValueError(f"기존 tag-news manifest가 유효하지 않다: run_id={run_id}")
+    raw = manifest.get("feature_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"feature_partitions가 없는 manifest다: run_id={run_id}")
+    started_at = manifest.get("started_at")
+    try:
+        parsed_started_at = datetime.fromisoformat(started_at)
+    except (TypeError, ValueError):
+        raise ValueError(f"started_at이 없는 manifest다: run_id={run_id}") from None
+    if parsed_started_at.tzinfo is None:
+        raise ValueError(f"started_at에 시간대가 없다: run_id={run_id}")
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("feature_partitions 항목이 객체가 아니다")
+        language, published_date = item.get("language"), item.get("published_date")
+        try:
+            valid_date = (isinstance(published_date, str)
+                          and datetime.strptime(published_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                          == published_date)
+        except ValueError:
+            valid_date = False
+        partition = (language, published_date)
+        expected = f"{feature_news_assertions_partition(language, published_date)}/part-00000.parquet"
+        article_ids = item.get("article_ids")
+        if (language not in TAGGED_LANGUAGES or not valid_date or partition in seen
+                or item.get("key") != expected
+                or not isinstance(article_ids, list) or not article_ids
+                or article_ids != sorted(set(article_ids))
+                or any(not isinstance(value, str) or not value.strip()
+                       or value != value.strip() for value in article_ids)):
+            raise ValueError(f"feature_partitions 항목이 유효하지 않다: {item!r}")
+        seen.add(partition)
+    return raw, started_at
+
+
 def _read_feature(
     storage: Storage, language: str, published_date: str
-) -> tuple[list[dict], list[str], list[dict]]:
-    """(파티션의 feature 행 전량, **흡수 대상 장중 미러 키**, part 유래 행).
+) -> tuple[list[dict], list[str], list[dict], set[str]]:
+    """(feature 행 전량, 흡수 대상 미러 키, part 유래 행, 미러 article_id)를 돌려준다.
 
     미러 키를 함께 돌려주는 이유는 이 스텝이 그걸 지워야 하기 때문이다(ALPHA-900). 장중 레인은
     `(기사, 그 기사의 어느 텍스트)` 마다 객체를 남기는데(writer 가 동시다발이라 part
@@ -262,19 +361,23 @@ def _read_feature(
     """
     rows: list[dict] = []
     mirror_keys: list[str] = []
+    mirror_ids: set[str] = set()
     part_rows: list[dict] = []
     prefix = feature_news_assertions_partition(language, published_date)
     mirror_marker = feature_news_assertions_minute_prefix(language, published_date)
-    for key in storage.list_keys(prefix + "/"):
-        if not key.endswith(".parquet"):
-            continue
+    part_key = f"{prefix}/part-00000.parquet"
+    keys = ([key for key in storage.list_keys(part_key) if key == part_key]
+            + [key for key in storage.list_keys(mirror_marker) if key.endswith(".parquet")])
+    for key in keys:
         batch = _read_parquet_rows(storage.get_bytes(key))
         rows.extend(batch)
         if key.startswith(mirror_marker):
             mirror_keys.append(key)
+            mirror_ids.update(row.get("article_id") for row in batch
+                              if isinstance(row, dict) and row.get("article_id"))
         else:
             part_rows.extend(batch)
-    return rows, mirror_keys, part_rows
+    return rows, mirror_keys, part_rows, mirror_ids
 
 
 def _tagged_at(row: object) -> str:
@@ -363,12 +466,16 @@ def run(
     run_id: str,
     *,
     complete_fn,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int | None = None,
     concurrency: int = DEFAULT_TAG_CONCURRENCY,
 ) -> int:
     """canonical 뉴스(ko) → 태깅 → feature 멱등 병합 + quality_log. 성공 0, 장애 시 비0.
+
+    정상 실행은 input_run_id의 NormalizeNews manifest가 지목한 직접 key와 article_id만 읽고,
+    from/to 또는 전체 복구 실행만 canonical 파티션을 열거한다.
 
     limit 은 **이번 런에서 새로 LLM 을 부를 기사 수 상한**이다(이미 태깅된 건 세지 않는다).
     미지정이면 대상 전부를 태깅한다 — 실수로 큰 비용이 나가는 걸 호출부가 막을 수 있게 둔다.
@@ -377,9 +484,18 @@ def run(
     merged 병합은 결과 취합 뒤 메인스레드에서 순차로 해 경합을 없앤다 — 순차 실행과 결과 동일.
     """
     concurrency = max(1, min(concurrency, MAX_TAG_CONCURRENCY))
-    started_at = datetime.now(timezone.utc)
-    tagged_at = started_at.isoformat()
+    now = datetime.now(timezone.utc)
+    tagged_at = now.isoformat()
     checked_date = tagged_at[:10]
+    manifest_key = feature_run_manifest_key(DATASET, run_id)
+    try:
+        prior_partitions, prior_started_at = _existing_feature_partitions(storage, run_id)
+        tagged_at = prior_started_at or tagged_at
+        storage.put_bytes(
+            manifest_key, _feature_manifest_bytes(run_id, False, prior_partitions, tagged_at))
+    except Exception:
+        logger.exception("feature run manifest 초기화 실패")
+        return 1
 
     read = 0            # canonical 에서 본 기사 수
     skipped = 0         # 이미 현재 버전으로 태깅돼 건너뛴 수 (LLM 미호출)
@@ -397,17 +513,78 @@ def run(
     failures: list[dict] = []
     parts_written = rows_written = 0
     exit_code = 0
+    changed_by_partition = {
+        (item["language"], item["published_date"]): set(item["article_ids"])
+        for item in prior_partitions
+    }
+
+    def changed_partitions() -> list[dict]:
+        """이번 run이 실제 변경한 feature 파티션 계보를 정렬해 돌려준다."""
+        return [{
+            "language": language, "published_date": published_date,
+            "key": f"{feature_news_assertions_partition(language, published_date)}/part-00000.parquet",
+            "article_ids": sorted(article_ids),
+        } for (language, published_date), article_ids in sorted(changed_by_partition.items())]
+
+    scoped: dict[tuple[str, str], tuple[str, frozenset[str]]] | None = None
+    if input_run_id is not None:
+        try:
+            scoped = {
+                (item["language"], item["published_date"]): (item["key"], item["article_ids"])
+                for item in _manifest_partitions(storage, input_run_id)
+            }
+        except Exception as exc:
+            logger.exception("normalize-news manifest 읽기 실패")
+            failures.append({"reasons": ["input_manifest_error"], "error": str(exc)})
+            exit_code = 1
+            scoped = {}
+
+    today = now.astimezone(_KST).date()
+    current_mirror_dates = (set() if exit_code else {
+        (today - timedelta(days=1)).isoformat(), today.isoformat()
+    })
 
     for language in TAGGED_LANGUAGES:
-        taggable = set(_partition_dates(storage, language, from_date, to_date))
+        if scoped is None:
+            taggable = set(_partition_dates(storage, language, from_date, to_date))
+            mirror_dates = _mirror_dates(storage, language, from_date, to_date)
+        else:
+            taggable = {date for lang, date in scoped if lang == language}
+            # 정상 실행은 상위 feature prefix를 열거하지 않는다. canonical이 아직 없는 장중
+            # 미러도 흡수하도록 KST 전일·당일의 정확한 prefix를 함께 조회한다.
+            mirror_dates = current_mirror_dates | taggable
         # 미러가 남은 날짜 — canonical 이 아직 없는 날짜를 여기서 집는다. 창은 같이 걸어
         # 창 밖 기사가 태깅되거나 범위 밖 파티션을 쓰는 일이 없게 한다(`_mirror_dates`).
         # 새로 들어오는 날짜에는 canonical 이 없으므로 아래 루프가 읽어도 0건이다.
-        mirror_dates = _mirror_dates(storage, language, from_date, to_date)
         for published_date in sorted(taggable | mirror_dates):
             try:
-                articles = _read_canonical(storage, language, published_date)
-                existing, mirror_keys, part_rows = _read_feature(storage, language, published_date)
+                scope = scoped.get((language, published_date)) if scoped is not None else None
+                if scope is None:
+                    articles = [] if scoped is not None else _read_canonical(storage, language, published_date)
+                else:
+                    canonical_key, article_ids = scope
+                    articles = []
+                    found: set[str] = set()
+                    for row in _read_parquet_rows(storage.get_bytes(canonical_key)):
+                        article_id = row.get("article_id")
+                        if article_id not in article_ids:
+                            continue
+                        if article_id in found:
+                            raise ValueError(
+                                f"manifest article_id가 canonical에 중복됐다: {article_id}"
+                            )
+                        published_at = row.get("published_at")
+                        if not isinstance(published_at, str) or published_at[:10] != published_date:
+                            raise ValueError(
+                                f"manifest article_id의 canonical 날짜가 파티션과 다르다: {article_id}"
+                            )
+                        found.add(article_id)
+                        articles.append(row)
+                    missing = article_ids - found
+                    if missing:
+                        raise ValueError(f"manifest article_id가 canonical에 없다: {sorted(missing)!r}")
+                existing, mirror_keys, part_rows, mirror_ids = _read_feature(
+                    storage, language, published_date)
             except Exception as exc:
                 # 한 파티션의 읽기 실패가 나머지 파티션을 죽이지 않게 격리하되, 조용히 넘기지
                 # 않는다(Rule 12) — exit 을 비0으로 올려 런이 성공으로 위장되지 않게.
@@ -421,6 +598,13 @@ def run(
             part_by_id = _merge_by_article(part_rows)
             merged = dict(by_id)
             changed = False
+            # feature 쓰기 뒤 checkpoint PUT만 실패한 이전 시도도 같은 run 시작 시각으로
+            # 식별해 계보를 복원한다. 미러는 checkpoint 성공 전까지 지우지 않아 별도로 복원된다.
+            recovered_run_ids = {
+                row.get("article_id") for row in part_rows
+                if row.get("article_id") and row.get("tagged_at") == tagged_at
+            }
+            changed_ids: set[str] = set()
 
             # 1) 선택(순차·LLM 미호출): 비-LLM 게이트로 태깅 대상만 고른다. limit 은 전 파티션에
             #    걸친 상한이라 확정 tagged + 이번에 고른 수로 판정(순차 tagged>=limit 와 동치).
@@ -468,10 +652,15 @@ def run(
                     reason_counts[str(reason)] += 1
                 merged[article_id] = _feature_row(article, result, tagged_at, fingerprint)
                 changed = True
+                changed_ids.add(article_id)
+
+            if mirror_keys:
+                changed_ids.update(article_id for article_id in mirror_ids
+                                   if by_id.get(article_id) != part_by_id.get(article_id))
 
             # 미러가 있으면 이번 런에 새 태깅이 없어도 되쓴다 — 그게 압축이다(ALPHA-900).
             # 안 그러면 태깅할 게 없는 파티션의 미러가 영영 안 지워져 매 런 GET 을 늘린다.
-            if not changed and not mirror_keys:
+            if not changed and not mirror_keys and not recovered_run_ids:
                 continue
             try:
                 prefix = feature_news_assertions_partition(language, published_date)
@@ -497,13 +686,21 @@ def run(
                 storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(rows))
                 parts_written += 1
                 rows_written += len(rows)
+                output_by_id = {row.get("article_id"): row for row in rows}
+                landed_ids = sorted(recovered_run_ids | {
+                    value for value in changed_ids
+                    if value in output_by_id and output_by_id[value] != part_by_id.get(value)
+                })
+                if landed_ids:
+                    changed_by_partition.setdefault((language, published_date), set()).update(landed_ids)
+                    # 동일 run 재시도가 뒤 파티션 실패 전에 성공한 ID 계보를 잃지 않게 매 파티션
+                    # 성공 뒤 incomplete manifest도 진전시킨다. 완료 표식은 전체 성공 뒤에만 쓴다.
+                    storage.put_bytes(
+                        manifest_key,
+                        _feature_manifest_bytes(run_id, False, changed_partitions(), tagged_at))
                 if mirror_keys:
-                    # **쓰기가 끝난 뒤에** 지운다 — 순서가 뒤집히면 되쓰기가 실패한 파티션의
-                    # 장중 판정이 통째로 사라진다. 지우는 대상은 위에서 읽어 병합한 키뿐이다.
-                    # ⚠️ 그게 안전한 것은 **미러 키에 입력 지문이 들어가기 때문**이다 —
-                    # 읽고 지우는 사이에 도착한 정정 판정은 본문이 달라 다른 키라, 여기서
-                    # 안 지워지고 다음 런이 흡수한다. 키가 `article_id` 뿐이면 그 정정이
-                    # 같은 키를 덮고 곧바로 지워져, **아무도 안 읽은 최신 판정이 유실된다**.
+                    # feature와 계보 checkpoint가 모두 남은 뒤 지운다. checkpoint가 실패하면
+                    # 미러가 재시도의 복구 원본이다. 새 정정은 지문이 다른 키라 이 목록에 없다.
                     storage.delete_keys(mirror_keys)
                     mirrors_absorbed += len(mirror_keys)
             except Exception as exc:
@@ -564,6 +761,24 @@ def run(
         # 로그를 못 남기면 이 런이 뭘 했는지 사후에 알 수 없다 — 결과를 성공으로 두지 않는다.
         logger.exception("quality_log 적재 실패")
         exit_code = 1
+
+    if exit_code == 0:
+        try:
+            storage.put_bytes(
+                manifest_key, _feature_manifest_bytes(run_id, True, changed_partitions(), tagged_at))
+        except Exception:
+            logger.exception("feature run manifest 완료 기록 실패")
+            exit_code = 1
+            failure = {"reasons": ["feature_manifest_write_error"]}
+            failures.append(failure)
+            log["failures"] = failures
+            log["exit_code"] = exit_code
+            try:
+                storage.put_bytes(
+                    quality_log_key(DATASET, checked_date, run_id),
+                    json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"))
+            except Exception:
+                logger.exception("feature manifest 실패 quality_log 갱신 실패")
 
     logger.info(
         "tag_news: read=%d tagged=%d skipped=%d no_mention=%d limited=%d mirrors=%d "

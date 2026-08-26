@@ -37,12 +37,11 @@ def test_window_calendar_tz_is_declared_per_step_and_vendor():
     # yahoo 는 미국 서비스지만 index_map 이 ^KS11·^KQ11 이라 **한국 달력**이다 — 벤더 국적이
     # 아니라 그 데이터가 어느 시장의 날짜인가가 기준임을 여기서 못박는다.
     assert run_mod.window_calendar_tz("ingest-price-raw", "yahoo") == run_mod.KST
-    for step in ("tag-news", "load-disclosure", "ingest-raw-disclosure",
+    for step in ("load-disclosure", "ingest-raw-disclosure",
                  "ingest-raw-investor", "ingest-raw-nav", "ingest-raw-inav"):
         assert run_mod.window_calendar_tz(step, None) == run_mod.KST, step
     # 벤더가 안 갈리는 스텝은 무의미한 --source 를 무시한다(분기도 안 본다) — 그것 때문에
     # 창 계산이 죽으면 이 변경이 없던 실패를 만든다.
-    assert run_mod.window_calendar_tz("tag-news", "bigkinds") == run_mod.KST
 
 
 def test_undeclared_window_calendar_fails_loud():
@@ -127,7 +126,6 @@ def test_cli_passes_vendor_calendar_to_window(monkeypatch):
     for argv, expected, label in [
         (["ingest-raw", "--source", "bigkinds", "--run-id", "R1"], run_mod.KST, "BigKinds=KST"),
         (["ingest-raw", "--source", "fmp", "--run-id", "R1"], timezone.utc, "FMP=미국 달력"),
-        (["tag-news", "--run-id", "R1", "--window-days", "3"], run_mod.KST, "canonical 파티션=KST"),
         (["load-disclosure", "--run-id", "R1", "--window-days", "3"], run_mod.KST, "DART=KST"),
     ]:
         seen.clear()
@@ -393,70 +391,34 @@ def _spy_tag_news(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, complete_fn, from_date, to_date, limit, concurrency):
+    def fake_run(storage, run_id, *, complete_fn, input_run_id, from_date, to_date,
+                 limit, concurrency):
         captured["window"] = (from_date, to_date)
+        captured["input_run_id"] = input_run_id
         return 0
 
     monkeypatch.setattr(run_mod.tag_news, "run", fake_run)
     return run_mod, captured
 
 
-def test_tag_news_window_days_prunes_to_recent_partitions(monkeypatch):
-    # WHY: 일일 SFN 은 ASL 로 날짜 산술을 못 해 --window-days 만 넘긴다 — run 이 그걸 오늘−N
-    #      창으로 번역해야 read=O(전체 코퍼스) 풀스캔(실측 17분)이 최근 파티션으로 좁혀진다
-    #      (ALPHA-540). 배선이 끊기면 컴파일은 되고 매 런이 다시 전량 스캔하므로 값으로 고정.
+def test_tag_news_forwards_normalize_manifest_scope(monkeypatch):
+    # WHY(ALPHA-1032): SFN의 run_id가 사라지면 정상 경로가 다시 날짜 추측·풀스캔으로 퇴행한다.
     run_mod, captured = _spy_tag_news(monkeypatch)
-    monkeypatch.setattr(run_mod, "default_window", lambda now, days: (f"from-{days}", f"to-{days}"))
-    assert main(["tag-news", "--run-id", "R1", "--window-days", "3"]) == 0
-    assert captured["window"] == ("from-3", "to-3")
-
-
-def test_tag_news_explicit_window_overrides_window_days(monkeypatch):
-    # WHY: 명시 --from/--to(백필)는 --window-days 보다 우선해야 한다 — 과거 구간 백필이
-    #      조용히 최근 N일로 좁혀지면 그 구간이 영영 태깅되지 않는다.
-    run_mod, captured = _spy_tag_news(monkeypatch)
-
-    def _boom(*a, **k):
-        raise AssertionError("명시 창이 있으면 default_window 를 부르면 안 된다")
-
-    monkeypatch.setattr(run_mod, "default_window", _boom)
-    assert main(["tag-news", "--run-id", "R", "--window-days", "3",
-                 "--from", "2026-01-01", "--to", "2026-01-05"]) == 0
-    assert captured["window"] == ("2026-01-01", "2026-01-05")
-
-
-def test_tag_news_without_window_is_full_scan(monkeypatch):
-    # WHY: --window-days 미주입(수동·백필 기본)은 풀스캔이어야 창 밖 미태깅·정정본 회수 경로가
-    #      살아 있다(백로그 보전). from/to 가 None 으로 넘어가 tag_news 가 전체 파티션을 본다.
-    run_mod, captured = _spy_tag_news(monkeypatch)
-
-    def _boom(*a, **k):
-        raise AssertionError("창 미주입은 풀스캔 — default_window 를 부르면 안 된다")
-
-    monkeypatch.setattr(run_mod, "default_window", _boom)
-    assert main(["tag-news", "--run-id", "R"]) == 0
+    assert main(["tag-news", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured["input_run_id"] == "N1"
     assert captured["window"] == (None, None)
 
 
-def test_tag_news_negative_window_days_fails_loud(monkeypatch):
-    # WHY: 음수 --window-days 는 default_window 를 (오늘+N, 오늘) 역전 창으로 만들어
-    #      _partition_dates 가 전 파티션을 제외 → 0건 태깅 후 exit 0 으로 성공 위장한다.
-    #      그건 Rule 12 위반이라 조용히 0건이 아니라 즉시 실패해야 한다(SFN 이 성공으로 오판 금지).
-    run_mod, captured = _spy_tag_news(monkeypatch)
+def test_tag_news_requires_explicit_scope(monkeypatch):
+    _spy_tag_news(monkeypatch)
+    with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+        main(["tag-news", "--run-id", "R"])
 
-    def _boom(*a, **k):
-        raise AssertionError("음수 창은 default_window 에 닿기 전에 거부돼야 한다")
 
-    monkeypatch.setattr(run_mod, "default_window", _boom)
-    with pytest.raises(SystemExit):
-        main(["tag-news", "--run-id", "R", "--window-days", "-3"])
-    assert "window" not in captured, "음수 창은 tag_news.run 에 닿으면 안 된다"
-
-    # 명시 --from 이 함께 와 창 계산이 무시되는 경로에서도 음수는 거부한다 — 잘못된 입력이
-    # "명시 창이 이겼으니 괜찮다"로 조용히 삼켜지면 안 된다(Rule 12, 가드는 분기 밖에 있어야).
-    with pytest.raises(SystemExit):
-        main(["tag-news", "--run-id", "R", "--from", "2026-01-01", "--window-days", "-3"])
-    assert "window" not in captured
+def test_tag_news_explicit_all_preserves_full_recovery(monkeypatch):
+    _run_mod, captured = _spy_tag_news(monkeypatch)
+    assert main(["tag-news", "--run-id", "R", "--all"]) == 0
+    assert captured["input_run_id"] is None and captured["window"] == (None, None)
 
 
 def _spy_load_disclosure(monkeypatch):
@@ -616,7 +578,7 @@ def test_assemble_window_days_reaches_step(monkeypatch):
 
 def test_assemble_explicit_window_beats_window_days(monkeypatch):
     # WHY: 명시 --from/--to(백필·회수)는 창 폭보다 우선해야 한다 — 회수 실행이 조용히 최근
-    #      N일로 좁혀지면 그 구간이 영영 조립되지 않는다(tag-news 와 같은 규약).
+    #      N일로 좁혀지면 그 구간이 영영 조립되지 않는다.
     run_mod, captured = _spy_assemble(monkeypatch)
     assert main(["assemble-events", "--run-id", "R", "--window-days", "1",
                  "--from", "2026-07-27", "--to", "2026-07-27"]) == 0
@@ -629,12 +591,12 @@ def test_window_days_rejected_on_non_consuming_step(monkeypatch):
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     with pytest.raises(SystemExit) as err:
         main(["normalize-price", "--run-id", "R", "--window-days", "1"])
-    assert "tag-news·assemble-events" in str(err.value)
+    assert "assemble-events·load-disclosure" in str(err.value)
 
 
 def test_assemble_negative_window_days_fails_loud(monkeypatch):
     # WHY: 음수 창은 역전 창(오늘+N, 오늘)이 되어 전 파티션을 제외 → 0건 조립을 exit 0
-    #      성공으로 위장한다(tag-news 음수 가드와 같은 축 — 이제 공통 가드 하나가 막는다).
+    #      성공으로 위장한다(공통 가드가 막는다).
     run_mod, captured = _spy_assemble(monkeypatch)
     with pytest.raises(SystemExit) as err:
         main(["assemble-events", "--run-id", "R", "--window-days", "-1"])

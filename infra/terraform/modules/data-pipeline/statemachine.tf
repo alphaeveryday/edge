@@ -207,7 +207,7 @@ locals {
     {
       state        = "TagNews"
       taskdef_key  = "deepseek"
-      command_expr = "States.Array('tag-news', '--run-id', $.run_id, '--limit', '${var.tag_news_limit}', '--window-days', '${var.tag_news_window_days}')"
+      command_expr = "States.Array('tag-news', '--run-id', $.run_id, '--input-run-id', $.run_id, '--limit', '${var.tag_news_limit}')"
     },
     {
       # ETF 가격변동 트리거(ALPHA-406) — canonical 일봉 → price_movement_trigger.
