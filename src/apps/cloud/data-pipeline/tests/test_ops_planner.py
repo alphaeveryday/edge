@@ -743,6 +743,17 @@ def test_assemble_window_covers_what_the_collection_window_collected():
         "리터럴이면 위 default·validation 이 아무것도 강제하지 못한다")
 
 
+def test_load_documents_receives_the_normalize_run_manifest_scope():
+    # WHY(ALPHA-1031): loader 구현이 manifest를 지원해도 실제 SFN 명령이 run 계보를 넘기지 않으면
+    #      정상 배치는 시작 전에 실패하거나, 범위 가드를 걷는 순간 canonical 풀스캔으로 퇴행한다.
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+    assert (
+        "States.Array('load-documents', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)" in sm
+    ), "LoadDocuments가 현재 NormalizeNews run_id를 manifest 범위로 전달하지 않는다"
+
+
 def test_premarket_news_slot_plus_timeout_lands_before_the_minute_lane_opens():
     # WHY(ALPHA-893): 뉴스 SFN 타임아웃을 묶던 불변식이 **바뀌었다**. 옛 상한 25분의 근거는
     #      "인접 슬롯 간격 30분(15:00·15:30)보다 짧아야 실행이 안 겹친다" 였는데 그 두 슬롯이

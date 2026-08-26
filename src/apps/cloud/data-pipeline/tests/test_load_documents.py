@@ -12,8 +12,14 @@ import io
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_news_articles_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_news_articles_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import load_documents
 
 _COLUMNS = ("article_id", "source_vendor", "market", "title", "url", "normalized_url",
@@ -284,6 +290,45 @@ def _db() -> DbConfig:
     return DbConfig(password="x")
 
 
+def _write_normalize_manifest(storage, run_id: str, partitions: list[dict]) -> None:
+    storage.put_bytes(
+        canonical_run_manifest_key("news_articles", run_id),
+        json.dumps({
+            "run_id": run_id,
+            "producer": "normalize_news",
+            "canonical_written": True,
+            "canonical_partitions": partitions,
+        }).encode("utf-8"),
+    )
+
+
+def _manifest_partition(language: str, date: str, article_ids: list[str]) -> dict:
+    return {
+        "language": language,
+        "published_date": date,
+        "key": f"{canonical_news_articles_partition(language, date)}/part-00000.parquet",
+        "article_ids": sorted(article_ids),
+    }
+
+
+class _ReadSpy:
+    def __init__(self, inner):
+        self.inner = inner
+        self.list_calls: list[str] = []
+        self.get_calls: list[str] = []
+
+    def list_keys(self, prefix):
+        self.list_calls.append(prefix)
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        self.get_calls.append(key)
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        return self.inner.put_bytes(key, data)
+
+
 def _inserts(conn) -> list:
     return [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO DOCUMENT ")]
 
@@ -291,6 +336,137 @@ def _inserts(conn) -> list:
 def _news_doc_inserts(conn) -> list:
     """news_document 에 실제로 실린 (document_id, lead_text) — 자연키 해석 **후** 값이다."""
     return conn.news_documents
+
+
+def test_manifest_reads_only_direct_keys_and_current_article_ids(tmp_path, monkeypatch):
+    # WHY(ALPHA-1031): 정상 실행은 과거 파티션을 LIST/GET하거나 같은 파티션의 과거 ID를
+    #      현재 실행 계측에 섞으면 안 된다. 00:10 실행의 전날 기사도 manifest에 있으면 읽어야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "ko", "2026-08-25", [
+        _article("old-same-partition", published_at="2026-08-25T08:00:00+09:00"),
+        _article("current-yesterday", published_at="2026-08-25T23:59:00+09:00"),
+    ])
+    _write_canonical(inner, "ko", "2026-08-26", [
+        _article("current-today", published_at="2026-08-26T00:01:00+09:00"),
+    ])
+    _write_canonical(inner, "ko", "2026-08-24", [_article("old-partition")])
+    partitions = [
+        _manifest_partition("ko", "2026-08-25", ["current-yesterday"]),
+        _manifest_partition("ko", "2026-08-26", ["current-today"]),
+    ]
+    _write_normalize_manifest(inner, "N1", partitions)
+    storage = _ReadSpy(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+
+    assert storage.list_calls == []
+    assert storage.get_calls == [
+        canonical_run_manifest_key("news_articles", "N1"),
+        partitions[0]["key"],
+        partitions[1]["key"],
+    ]
+    assert [params[2] for params in _inserts(conn)] == ["current-today", "current-yesterday"]
+    keys = inner.list_keys("operations_archive/data_quality_logs/")
+    log = json.loads(inner.get_bytes(keys[0]).decode("utf-8"))
+    assert log["input_run_id"] == "N1"
+    assert log["articles_read"] == 2
+    assert log["ops"] == {"records_out": 2, "failed_records": 0}
+
+
+def test_same_manifest_run_is_idempotent(tmp_path, monkeypatch):
+    # WHY(ALPHA-1031): 동일 run 재실행은 같은 현재 ID 범위를 다시 보되 자연키 충돌을 신규로
+    #      세지 않아야 한다. 재실행을 위해 범위를 전체 canonical로 넓히는 것도 금지다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-08-26", [
+        _article("a1", published_at="2026-08-26T00:01:00+09:00")
+    ])
+    _write_normalize_manifest(
+        storage, "N1", [_manifest_partition("ko", "2026-08-26", ["a1"])]
+    )
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+    assert load_documents.run(storage, "L2", db=_db(), input_run_id="N1") == 0
+
+    keys = storage.list_keys("operations_archive/data_quality_logs/")
+    second = json.loads(storage.get_bytes([key for key in keys if "run_id=L2/" in key][0]))
+    assert second["articles_read"] == 1
+    assert second["created"] == 0 and second["already_present"] == 1
+
+
+def test_missing_manifest_fails_without_widening_scope(tmp_path):
+    # WHY(ALPHA-1031): 계보 결손을 풀스캔 성공으로 바꾸면 SFN 배선 오류가 데이터가 쌓일수록
+    #      비싸지는 형태로 숨는다. manifest 직접 GET 실패 뒤 canonical LIST/GET은 없어야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "ko", "2026-08-26", [_article("old")])
+    storage = _ReadSpy(inner)
+
+    assert load_documents.run(storage, "L1", db=_db(), input_run_id="missing") == 1
+
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("news_articles", "missing")]
+    keys = inner.list_keys("operations_archive/data_quality_logs/")
+    log = json.loads(inner.get_bytes(keys[0]))
+    assert log["articles_read"] == 0
+    assert log["ops"]["records_out"] == 0
+
+
+def test_empty_completed_manifest_is_a_valid_zero_row_run(tmp_path, monkeypatch):
+    # WHY(ALPHA-1031): producer가 통과행 0건을 증명한 빈 manifest는 결손이 아니다. 과거
+    #      canonical을 회수하지 않고 정상 0건으로 끝나야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "ko", "2026-08-25", [_article("old")])
+    _write_normalize_manifest(inner, "N1", [])
+    storage = _ReadSpy(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_documents, "connect", _fake_connect(conn))
+
+    assert load_documents.run(storage, "L1", db=_db(), input_run_id="N1") == 0
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("news_articles", "N1")]
+    assert _inserts(conn) == []
+
+
+def test_manifest_missing_logical_id_fails_loud(tmp_path):
+    # WHY(ALPHA-1031): 직접 parquet가 있어도 manifest 논리 ID가 없으면 범위 증명이 깨진 것이다.
+    #      일부만 적재하고 성공하면 articles_read·failed_records가 현재 실행을 거짓 보고한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-08-26", [_article("present")])
+    _write_normalize_manifest(
+        storage, "N1", [_manifest_partition("ko", "2026-08-26", ["missing"])]
+    )
+
+    assert load_documents.run(storage, "L1", db=_db(), input_run_id="N1") == 1
+    keys = storage.list_keys("operations_archive/data_quality_logs/")
+    log = json.loads(storage.get_bytes(keys[0]))
+    assert log["articles_read"] == 0
+    assert log["ops"]["failed_records"] == 1
+
+
+@pytest.mark.parametrize("damage", ["incomplete", "wrong_key", "duplicate_ids"])
+def test_corrupt_manifest_fails_before_reading_canonical(tmp_path, damage):
+    # WHY(ALPHA-1031): manifest는 정상 범위의 권위다. 완료 표식·직접 키·논리 ID 유일성 중
+    #      하나라도 깨진 값을 승인하면 잘못된 범위를 정상 실행으로 기록한다.
+    inner = LocalStorage(tmp_path / "lake")
+    partition = _manifest_partition("ko", "2026-08-26", ["a1"])
+    _write_normalize_manifest(inner, "N1", [partition])
+    key = canonical_run_manifest_key("news_articles", "N1")
+    manifest = json.loads(inner.get_bytes(key))
+    if damage == "incomplete":
+        manifest["canonical_written"] = False
+    elif damage == "wrong_key":
+        manifest["canonical_partitions"][0]["key"] = "canonical/news/wrong.parquet"
+    else:
+        manifest["canonical_partitions"][0]["article_ids"] = ["a1", "a1"]
+    inner.put_bytes(key, json.dumps(manifest).encode("utf-8"))
+    storage = _ReadSpy(inner)
+
+    assert load_documents.run(storage, "L1", db=_db(), input_run_id="N1") == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [key]
 
 
 def test_new_article_becomes_a_news_document_row(tmp_path, monkeypatch):

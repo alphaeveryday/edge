@@ -225,11 +225,11 @@ locals {
       command_expr = "States.Array('load-etf-nav', '--run-id', $.run_id)"
     },
     {
-      # 문서 마스터(ALPHA-374·410) — canonical 뉴스 → document. 창 미지정 = 전체 스캔 +
-      # 자연키 멱등 skip. assertion 적재(LoadAssertions, 페이즈 뒤 직렬)의 FK 선행이다.
+      # 문서 마스터(ALPHA-374·410·1031) — NormalizeNews manifest가 지목한 직접 parquet와
+      # 현재 실행 article_id만 document로 적재한다. assertion 적재의 FK 선행이다.
       state        = "LoadDocuments"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-documents', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-documents', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # 공시 fact 적재(ALPHA-476) — canonical 공시 → document(DISCLOSURE)·disclosure_document·

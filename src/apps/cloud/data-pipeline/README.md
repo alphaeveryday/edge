@@ -578,10 +578,11 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 신선도를 주장하지 않고(published_at 폴백 금지) 그 노출을 로그의 lead_unclaimed_freshness
 # 로 센다(결손엔 빈 문자열도 포함 — 분모는 같은 로그의 lead_attempted, ALPHA-848).
 # publisher 는 별도 축이라 이 가드가 없다.
-# --from/--to 는 published_date
-# 파티션을 좁히는 창(미지정=전체 스캔). SFN feature 페이즈에 편입됨(ALPHA-410) — 아래는 수동 백필용.
+# 정상 SFN은 NormalizeNews manifest의 직접 parquet와 현재 article_id만 읽는다(ALPHA-1031).
+# 아래는 같은 범위의 수동 재실행. 일부 복구는 --from/--to, 전체 복구는 명시적 --all을 쓴다.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
-  uv run --package data-pipeline python -m data_pipeline.run load-documents
+  uv run --package data-pipeline python -m data_pipeline.run load-documents \
+    --input-run-id <normalize-run-id>
 
 # 공시 적재(RDB, ALPHA-476) — canonical 공시(supply_contract_fact·business_segment_fact)를
 # document(document_type='DISCLOSURE')·disclosure_document·disclosure_fact·타입별 child 로.
@@ -915,8 +916,10 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 구성종목 가중 proxy
   3% 게이트(엔진 L0 정본, ALPHA-411). 창 미지정 = canonical 전체 스캔 + (etf, trade_date)
   멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
-- `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410) — canonical 뉴스 →
-  document. 자연키 멱등, LoadAssertions 의 FK 선행. 문마다 후보 전량을 `executemany` 로
+- `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410·1031) —
+  NormalizeNews manifest의 직접 parquet만 GET하고 현재 실행 `article_id`를 document로 적재한다.
+  결손·손상 manifest는 전체로 넓히지 않고 실패한다. 자연키 멱등, LoadAssertions의 FK 선행.
+  문마다 후보 전량을 `executemany` 로
   보낸다(ALPHA-906) — 예전엔 후보마다 최대 3왕복(document·lead·publisher)이라 31.8만 행이면
   왕복이 최대 95만 번이었고, 그것이 뉴스 SFN 이 상한에 물리던 원인이었다(TIMED_OUT 전건이 이 스텝
   미완). `created` 와 로그 표본은 `RETURNING` 이 돌려준 행에서만 뽑는다 — 배치의 `rowcount`
@@ -924,11 +927,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
   dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
-  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721) — 형제 로더들은 하루에 한두
-  슬롯만 돌아 canonical 풀스캔을 안고 가지만, 공시는 장중 레인이 붙으면 그 스캔이 슬롯마다
-  곱해진다. ⚠️ "안고 간다"가 "싸다"는 뜻은 아니다 — `load-documents` 는 31.8만 행 풀스캔이
-  뉴스 SFN 상한을 넘겨 왕복을 배치로 접어야 했다(ALPHA-906). 풀스캔 자체를 없애는 것은
-  ALPHA-579(적재 7스텝 창 적용) 소관이고 아직 안 붙었다.
+  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721). 공시는 장중 레인이 붙으면
+  canonical 스캔이 슬롯마다 곱해진다. 뉴스 `load-documents`는 ALPHA-1031에서 manifest 직접
+  키·현재 논리 ID 소비로 전환됐으며, 이 공시 경로의 LIST 제거는 별도 작업이다.
   그 레인이 실제로 붙었다(ALPHA-875 `disclosure-worker`) — 1분 레인은 이 함수를 **질의 날짜창으로
   좁혀** 부른다. ⚠️ 좁혀지는 것은 parquet GET 뿐이다: `_read_facts` 가 `report_date=` 프리픽스
   **전체**를 LIST 한 뒤 날짜를 거르므로 window 당 2 LIST(supply·segment)가 남고 그 비용은
@@ -1168,8 +1169,8 @@ settings.targets.keywords            # ["금리", ...]
   `operations_archive/canonical_run_manifests/dataset=news_articles/run_id=…/manifest.json` 에
   남긴다(ALPHA-1030). 같은 run 재시도는 먼저 `canonical_written=false`로 이전 완료 표식을
   무효화하고, canonical과 quality log가 모두 성공한 뒤에만 `true`로 교체한다. 입력 0건은 빈
-  `canonical_partitions`를 가진 유효 manifest다. 현재는 additive producer만 배포한 상태이며
-  `LoadDocuments`·`TagNews`의 이 범위 소비 전환은 후속 작업이다.
+  `canonical_partitions`를 가진 유효 manifest다. `LoadDocuments`는 이 직접 키와 현재 논리 ID만
+  소비하며(ALPHA-1031), `TagNews` 전환은 후속 작업이다.
 - **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
   에 태깅 결과를 **article_id 키로 멱등 병합**(입력 canonical 과 같은 파티션 축이라 한 canonical
   파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제).

@@ -6,7 +6,7 @@
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
-        [--source VENDOR] [--input-run-id RUN_ID] [--limit N] [--window-days N]
+        [--source VENDOR] [--input-run-id RUN_ID] [--all] [--limit N] [--window-days N]
         [--interval-sec N]
 
 태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
@@ -295,9 +295,9 @@ def main(argv: list[str] | None = None) -> int:
     # 전체를 읽는다 — **백필·복구 수단**이다(실패한 런의 raw 를 나중에 주워오거나, 정체성
     # 로직 변경을 이미 수집된 구 raw 에 소급할 때). 어느 쪽이든 적재는 멱등이다.
     parser.add_argument("--input-run-id", default=None,
-                        help="normalize-* 대상 수집 run_id 또는 load-etf-holdings 정제 run_id")
+                        help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
-                        help="load-etf-holdings: 명시적 canonical 전체 스캔")
+                        help="load-documents·load-etf-holdings: 명시적 canonical 전체 스캔")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출
@@ -506,8 +506,8 @@ def main(argv: list[str] | None = None) -> int:
         # 키우는 게 아니라 미지정 풀스캔(tag-news)·--from/--to 백필(assemble)이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
-    if args.all_partitions and args.step != "load-etf-holdings":
-        raise SystemExit("--all 은 load-etf-holdings 전용이다")
+    if args.all_partitions and args.step not in ("load-documents", "load-etf-holdings"):
+        raise SystemExit("--all 은 load-documents·load-etf-holdings 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -648,17 +648,37 @@ def _dispatch(args, settings, storage, run_id) -> int:
             storage, run_id, db=db_config_from_env(settings.db), source=corp_source
         )
 
-    # 문서 마스터도 canonical 을 읽어 DB 에 쓰는 적재 스텝이다. 창(--from/--to)은 수집 창이
-    # 아니라 **적재 대상 published_date 파티션**을 좁힌다(미지정=전체, 멱등 skip 이라 재실행
-    # 비용은 신규분뿐) — 그래서 아래 증분 기본창 계산을 타지 않게 여기서 분기한다.
+    # 문서 마스터의 정규 경로는 NormalizeNews manifest가 지목한 직접 parquet와 현재 실행
+    # article_id만 읽는다. 날짜창은 명시 백필, 전체 스캔은 --all을 직접 쓴 경우뿐이다.
     if args.step == "load-documents":
+        scopes = sum((args.input_run_id is not None,
+                      args.from_date is not None or args.to_date is not None,
+                      args.all_partitions))
+        if scopes != 1:
+            raise SystemExit(
+                "load-documents는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+            )
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-documents의 --from은 --to보다 늦을 수 없다")
         return load_documents.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # 공시 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
-    # (canonical report_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    # 공시 적재는 canonical report_date 파티션을 읽어 DB에 쓴다(미지정=전체 + 멱등 skip).
     #
     # `--window-days` 를 받는 유일한 적재 스텝이다(ALPHA-721). 형제 로더들은 하루 1회만 돌아
     # 전체 스캔을 견디지만, 공시는 장중 레인이 붙으면 슬롯마다 그 스캔이 곱해진다
@@ -683,16 +703,14 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # 가격 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
-    # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    # 가격 적재는 canonical trade_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
     if args.step == "load-price-daily":
         return load_price_daily.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # NAV 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
-    # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    # NAV 적재는 canonical trade_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
     if args.step == "load-etf-nav":
         return load_etf_nav.run(
             storage, run_id, db=db_config_from_env(settings.db),
@@ -730,8 +748,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
             expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
         )
 
-    # 투자자 수급 적재도 canonical 을 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
-    # (canonical trade_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    # 투자자 수급 적재는 canonical trade_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
     if args.step == "load-etf-flow":
         return load_etf_flow.run(
             storage, run_id, db=db_config_from_env(settings.db),
@@ -747,8 +764,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # assertion 적재는 feature 를 읽어 DB 에 쓴다 — 창 의미는 load-documents 와 같다
-    # (feature published_date 파티션 프루닝, 미지정=전체 + 멱등 skip).
+    # assertion 적재는 feature published_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
     if args.step == "load-assertions":
         return load_assertions.run(
             storage, run_id, db=db_config_from_env(settings.db),
