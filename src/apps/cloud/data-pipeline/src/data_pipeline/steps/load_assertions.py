@@ -114,6 +114,35 @@ def _confidence(value: object) -> float | None:
     return float(value) if 0.0 <= float(value) <= 1.0 else None
 
 
+def _parsed_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _newer_source_row(current: dict, candidate: dict) -> dict:
+    """날짜 경계 복사본은 재태깅 시각이 아니라 source revision으로 고른다."""
+    current_source = _parsed_time(current.get("source_fetched_at"))
+    candidate_source = _parsed_time(candidate.get("source_fetched_at"))
+    if current_source is not None and candidate_source is not None:
+        if candidate_source != current_source:
+            return candidate if candidate_source > current_source else current
+    else:
+        current_published = _parsed_time(current.get("published_at"))
+        candidate_published = _parsed_time(candidate.get("published_at"))
+        if current_published != candidate_published:
+            if current_published is None:
+                return candidate
+            if candidate_published is None:
+                return current
+            return candidate if candidate_published > current_published else current
+    return _merge_by_article([current, candidate]).get(current.get("article_id"), current)
+
+
 def run(
     storage: Storage,
     run_id: str,
@@ -152,12 +181,13 @@ def run(
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
         candidates: dict[tuple[str, str, str, str], dict] = {}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
-            dates = [d for d in _partition_dates(storage, language)
-                     if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
-            keyed: dict = {}
+            dates = _partition_dates(storage, language)
+            keyed: dict[str, tuple[str, dict]] = {}
             unkeyed: list[dict] = []
-            keyed_rows_read = 0
+            selected_keyed_rows_read = 0
             for date in dates:
+                selected = ((from_date is None or date >= from_date)
+                            and (to_date is None or date <= to_date))
                 prefix = feature_news_assertions_partition(language, date)
                 mirror_marker = feature_news_assertions_minute_prefix(language, date)
                 partition_rows: list[dict] = []
@@ -174,25 +204,34 @@ def run(
                         # 안 거친 채 DB 로 간다.
                         # 건너뛰어도 지연이 없다 — 같은 SFN 런의 TagNews 가 흡수한 미러는 이미
                         # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
-                        mirrors_unabsorbed += 1
+                        if selected:
+                            mirrors_unabsorbed += 1
                         continue
                     partition_rows.extend(_read_parquet_rows(storage.get_bytes(key)))
-                unkeyed.extend(r for r in partition_rows if not r.get("article_id"))
+                if selected:
+                    unkeyed.extend(r for r in partition_rows if not r.get("article_id"))
                 partition_keyed = [r for r in partition_rows if r.get("article_id")]
-                keyed_rows_read += len(partition_keyed)
+                if selected:
+                    selected_keyed_rows_read += len(partition_keyed)
                 for article_id, row in _merge_by_article(partition_keyed).items():
                     current = keyed.get(article_id)
-                    keyed[article_id] = (
-                        row if current is None else _merge_by_article([current, row])[article_id]
-                    )
+                    if current is None:
+                        keyed[article_id] = (date, row)
+                    else:
+                        winner = _newer_source_row(current[1], row)
+                        keyed[article_id] = (date, row) if winner is row else current
             # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치 part와 장중
             # 미러뿐 아니라 게시시각 정정은 같은 article_id를 날짜 경계 양쪽에 남긴다.
-            # 날짜별로 접으면 서로 다른 사건 자연키가 모두 DB에 영구 적재되므로, 선택한
-            # 날짜 범위 전체에서 tag_news와 같은 규칙으로 최신 판정 하나만 남긴다.
+            # 날짜별로 접으면 서로 다른 사건 자연키가 모두 DB에 영구 적재되므로 전체 날짜의
+            # source revision을 먼저 비교한다. from/to는 그 전역 승자의 날짜에 마지막으로 건다.
+            # 그래야 경계 한쪽만 복구해도 반대편의 최신 복사본을 무시해 옛 사건을 넣지 않는다.
             # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
             # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
-            rows_superseded += keyed_rows_read - len(keyed)
-            for row in [*keyed.values(), *unkeyed]:
+            selected_keyed = [row for date, row in keyed.values()
+                              if (from_date is None or date >= from_date)
+                              and (to_date is None or date <= to_date)]
+            rows_superseded += selected_keyed_rows_read - len(selected_keyed)
+            for row in [*selected_keyed, *unkeyed]:
                 rows_read += 1
                 if row.get("status") != "ok":
                     rows_not_ok += 1

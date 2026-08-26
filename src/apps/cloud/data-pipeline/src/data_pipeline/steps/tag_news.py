@@ -91,6 +91,7 @@ RETRYABLE_STATUSES = frozenset({"llm_error"})
 _FEATURE_COLUMNS = (
     "article_id",
     "published_at",
+    "source_fetched_at",
     "title",
     "input_fingerprint",
     "doc_class",
@@ -446,6 +447,7 @@ def _feature_row(article: dict, result: dict, tagged_at: str, fingerprint: str) 
     return {
         "article_id": article.get("article_id"),
         "published_at": article.get("published_at"),
+        "source_fetched_at": article.get("fetched_at"),
         "title": article.get("title"),
         "input_fingerprint": fingerprint,
         "doc_class": result.get("doc_class"),
@@ -624,6 +626,12 @@ def run(
                 fingerprint = _input_fingerprint(article)
                 if _is_current(by_id.get(article_id), fingerprint):
                     skipped += 1
+                    current = by_id[article_id]
+                    source_fetched_at = article.get("fetched_at")
+                    if current.get("source_fetched_at") != source_fetched_at:
+                        merged[article_id] = {**current, "source_fetched_at": source_fetched_at}
+                        changed = True
+                        changed_ids.add(article_id)
                     continue
                 if limit is not None and tagged + len(to_tag) >= limit:
                     limited += 1

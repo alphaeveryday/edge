@@ -21,7 +21,9 @@ from data_pipeline.steps import tag_news
 from data_pipeline.tagging.extract import TAGGER_VERSION
 from data_pipeline.tagging.ontology import ontology_version
 
-_CANONICAL_COLUMNS = ("article_id", "published_at", "title", "lead_text", "language", "mentions")
+_CANONICAL_COLUMNS = (
+    "article_id", "published_at", "title", "lead_text", "language", "mentions", "fetched_at",
+)
 
 
 def _write_canonical(storage, language: str, published_date: str, rows: list[dict]) -> None:
@@ -52,6 +54,7 @@ def _read_feature(storage, language: str, published_date: str) -> list[dict]:
 def _article(article_id: str = "a1", **over) -> dict:
     # mentions 기본값이 있어야 태깅된다 — mentions 게이트(ALPHA-416)가 무언급 기사를 거른다.
     row = {"article_id": article_id, "published_at": "2026-07-01T09:00:00+00:00",
+           "fetched_at": "2026-07-01T09:05:00+00:00",
            "title": "삼성전자, SK하이닉스와 공급계약 체결", "lead_text": "리드", "language": "ko",
            "mentions": json.dumps([{"market": "KR", "ticker": "005930"}])}
     row.update(over)
@@ -216,6 +219,33 @@ def test_overlapping_manifest_retries_current_llm_error(tmp_path):
                         complete_fn=_fake_complete(calls)) == 0
     assert len(calls) == 1
     assert _read_feature(storage, "ko", "2026-07-01")[0]["status"] == "ok"
+
+
+def test_current_feature_backfills_source_revision_without_llm(tmp_path):
+    """WHY(ALPHA-1032): source revision 계보 보강 때문에 현재 판정을 유료 재호출하면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    article = _article("a1")
+    _write_canonical(storage, "ko", "2026-07-01", [article])
+    partition = _manifest_partition("2026-07-01", ["a1"])
+    _write_manifest(storage, "N1", [partition])
+    assert tag_news.run(storage, "R1", input_run_id="N1",
+                        complete_fn=_fake_complete([])) == 0
+
+    rows = _read_feature(storage, "ko", "2026-07-01")
+    rows[0]["source_fetched_at"] = None
+    feature_key = f"{feature_news_assertions_partition('ko', '2026-07-01')}/part-00000.parquet"
+    storage.put_bytes(feature_key, tag_news._write_parquet_rows(rows))
+    _write_manifest(storage, "N2", [partition])
+    calls: list = []
+
+    assert tag_news.run(storage, "R2", input_run_id="N2",
+                        complete_fn=_fake_complete(calls)) == 0
+
+    assert calls == []
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["source_fetched_at"] == \
+        article["fetched_at"]
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R2")))
+    assert manifest["feature_partitions"][0]["article_ids"] == ["a1"]
 
 
 def test_empty_manifest_absorbs_current_intraday_mirror(tmp_path):
