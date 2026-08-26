@@ -39,6 +39,7 @@ from ..lake import (
     Storage,
     canonical_etf_holdings_partition,
     canonical_news_articles_partition,
+    canonical_run_manifest_key,
     is_raw_news_key,
     parse_raw_news_key,
     quality_log_key,
@@ -352,19 +353,22 @@ def _duplicate_signals(rows: list[dict], published_date: str) -> list[dict]:
     return signals
 
 
-def _write_canonical(storage: Storage, passing: list[dict], signals: list[dict]) -> tuple[int, int]:
+def _write_canonical(
+    storage: Storage, passing: list[dict], signals: list[dict]
+) -> tuple[list[dict], int]:
     """통과 행을 (language, published_date) 파티션별로 기존 canonical 과 article_id(원문 URL 해시)
     키로 멱등 병합해 쓴다. language 는 벤더 고정 파생(파티션 키, 컬럼 아님). 근접중복 신호는 각
     파티션 내에서만 감지된다 — 언어가 다르면 파티션이 갈려 교차언어 near-dup 은 안 잡힌다(의도:
     다운스트림 언어분기 대비). 신호는 signals 에 append(호출부가 quality_log 에 반영).
-    반환: (쓴 파티션 수, 행 수)."""
+    반환: (이번 실행이 쓴 파티션 manifest 항목, 병합 뒤 canonical 행 수)."""
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
         # 게이트 통과행은 published_at 이 유효(결측·범위밖 아님)라 [:10] 파티션이 결정적(멱등).
         published_date = row["published_at"][:10]
         by_partition[(row["language"], published_date)].append(_canonical_row(row))
 
-    parts_written = rows_written = 0
+    partitions: list[dict] = []
+    rows_written = 0
     for (language, published_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_news_articles_partition(language, published_date)
         # 파티션의 기존 parquet 을 전부 읽어 병합한다. 이 스텝은 항상 part-00000 하나로 되써
@@ -375,10 +379,26 @@ def _write_canonical(storage: Storage, passing: list[dict], signals: list[dict])
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
         signals.extend(_duplicate_signals(merged, published_date))
-        storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
-        parts_written += 1
+        key = f"{prefix}/part-00000.parquet"
+        storage.put_bytes(key, _write_parquet_rows(merged))
+        partitions.append({
+            "language": language,
+            "published_date": published_date,
+            "key": key,
+            # 하류 범위는 병합 뒤 파티션 전체가 아니라 이 실행에서 실제 통과한 논리 ID다.
+            "article_ids": sorted({row["article_id"] for row in new_rows}),
+        })
         rows_written += len(merged)
-    return parts_written, rows_written
+    return partitions, rows_written
+
+
+def _manifest_bytes(run_id: str, canonical_written: bool, partitions: list[dict]) -> bytes:
+    return json.dumps({
+        "run_id": run_id,
+        "producer": JOB_NAME,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None,
@@ -487,16 +507,30 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None,
     # _merge_partition 으로 합치지(덮어쓰지) 않는다. 스코프 런이 자기 런의 행만 병합해도
     # 기존 행은 그대로 남는다.
     duplicate_signals: list[dict] = []
-    parts_written = canonical_rows = 0
-    canonical_written = True  # quality_log 계약 유지(스코프 여부와 무관하게 이제 항상 쓴다)
+    partitions: list[dict] = []
+    canonical_rows = 0
+    manifest_key = canonical_run_manifest_key(DATASET, run_id)
+    manifest_initialized = True
     try:
-        parts_written, canonical_rows = _write_canonical(storage, passing, duplicate_signals)
+        # 같은 run_id 재시도가 실패해도 이전 성공 manifest가 완료 표식으로 남지 않게 먼저
+        # 미완료 상태로 덮는다. 하류는 canonical_written=true만 유효 범위로 승인한다.
+        storage.put_bytes(manifest_key, _manifest_bytes(run_id, False, []))
     except Exception:
-        logger.exception("canonical 적재 실패")
-        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
-        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
-        canonical_written = False
+        logger.exception("canonical run manifest 초기화 실패")
+        manifest_initialized = False
         exit_code = 1
+
+    canonical_written = False
+    if manifest_initialized:
+        canonical_written = True  # quality_log 계약 유지(스코프 여부와 무관하게 이제 항상 쓴다)
+        try:
+            partitions, canonical_rows = _write_canonical(storage, passing, duplicate_signals)
+        except Exception:
+            logger.exception("canonical 적재 실패")
+            # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
+            # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
+            canonical_written = False
+            exit_code = 1
 
     try:
         storage.put_bytes(
@@ -523,7 +557,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None,
                 "mention_index_error": name_index_error,
                 "detected_name_counts": dict(detected_name_counts),
                 "canonical_written": canonical_written,
-                "canonical_partitions_written": parts_written,
+                "canonical_partitions_written": len(partitions),
                 "canonical_rows_written": canonical_rows,
                 "duplicate_signals": duplicate_signals,
                 "started_at": started_at.isoformat(),
@@ -535,10 +569,21 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None,
         logger.exception("quality_log 기록 실패 — 검증 결과 유실")
         exit_code = exit_code or 1
 
+    if canonical_written and exit_code == 0:
+        try:
+            # canonical과 감사 로그가 모두 성공한 뒤에만 완료 manifest로 교체한다. 이 PUT이
+            # 실행의 commit marker라 실패하면 초기화한 false manifest가 그대로 남는다.
+            storage.put_bytes(manifest_key, _manifest_bytes(run_id, True, partitions))
+        except Exception:
+            # manifest가 없으면 하류는 이번 실행의 정확한 범위를 증명할 수 없다. canonical 자체가
+            # 기록됐더라도 정상 완료로 넘기지 않아 consumer가 과거 전체로 넓힐 여지를 막는다.
+            logger.exception("canonical run manifest 기록 실패")
+            exit_code = 1
+
     logger.info(
         "normalize_news 완료: raw_files=%d read=%d passed=%d failed=%d warned=%d "
         "canonical_parts=%d canonical_rows=%d dup_signals=%d",
         len(raw_keys), read, len(passing), len(failures), len(warnings),
-        parts_written, canonical_rows, len(duplicate_signals),
+        len(partitions), canonical_rows, len(duplicate_signals),
     )
     return exit_code

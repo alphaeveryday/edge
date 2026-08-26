@@ -1163,6 +1163,13 @@ settings.targets.keywords            # ["금리", ...]
   `lead_text` 는 벤더 리드(BigKinds `CONTENT` 200~256자 스니펫·FMP `text`)를 자르지 않고 통과시킨
   것으로, 태깅 입력이다(결측은 NULL — 게이트 대상 아님. **공백뿐이어도 NULL 로 접는다**,
   ALPHA-860 — 그래서 canonical `lead_text` 는 결코 빈 문자열이 아니다). 본문 전문 크롤은 범위 밖이다.
+  `normalize-news` 는 현재 실행이 실제로 쓴 파티션의 `language`·`published_date`·직접 parquet 키와
+  그 파티션에서 이번 입력이 통과시킨 `article_id`만
+  `operations_archive/canonical_run_manifests/dataset=news_articles/run_id=…/manifest.json` 에
+  남긴다(ALPHA-1030). 같은 run 재시도는 먼저 `canonical_written=false`로 이전 완료 표식을
+  무효화하고, canonical과 quality log가 모두 성공한 뒤에만 `true`로 교체한다. 입력 0건은 빈
+  `canonical_partitions`를 가진 유효 manifest다. 현재는 additive producer만 배포한 상태이며
+  `LoadDocuments`·`TagNews`의 이 범위 소비 전환은 후속 작업이다.
 - **feature(뉴스 assertion, 태깅 Step3)** — `feature/news/assertions/language=ko/published_date=…/part-*.parquet`
   에 태깅 결과를 **article_id 키로 멱등 병합**(입력 canonical 과 같은 파티션 축이라 한 canonical
   파티션이 한 feature 파티션에 대응 — 날짜창 프루닝이 곧 비용 통제).
