@@ -46,6 +46,12 @@ def _quality_log(storage) -> dict:
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
 
+def _manifest(storage, run_id: str) -> dict:
+    from data_pipeline.lake import canonical_run_manifest_key
+
+    return json.loads(storage.get_bytes(canonical_run_manifest_key("news_articles", run_id)))
+
+
 def _canonical_rows(storage, published_date: str, language: str | None = None) -> list[dict]:
     # language=None 이면 그 날짜의 모든 언어 파티션(ko·en)을 합쳐 읽는다 — 단일벤더 테스트는 자기
     # 언어만 있으니 무관하고, 언어 배치 자체를 검증하는 테스트는 language= 로 한 파티션만 읽는다.
@@ -225,6 +231,7 @@ def test_raw_read_failure_is_fail_loud(tmp_path):
     assert normalize_news.run(storage, "N1") == 1  # fail-loud
     log = _quality_log(storage)
     assert "raw_read_error" in log["failures"][0]["reasons"]
+    assert _manifest(storage, "N1")["canonical_written"] is False
 
 
 def test_quality_log_write_failure_is_fail_loud(tmp_path):
@@ -235,6 +242,139 @@ def test_quality_log_write_failure_is_fail_loud(tmp_path):
     storage = _FailingStorage(inner, fail_put="data_quality_logs")
 
     assert normalize_news.run(storage, "N1") == 1  # fail-loud
+    assert _manifest(storage, "N1")["canonical_written"] is False
+
+
+def test_manifest_contains_only_current_run_partitions_and_article_ids(tmp_path):
+    # WHY(ALPHA-1030): 하류가 파티션 전체나 과거 canonical을 다시 읽지 않으려면 manifest가
+    #      이번 input run에서 통과한 논리 ID만 지목해야 한다. 같은 파티션의 과거 ID와 탈락 ID가
+    #      섞이면 범위를 만들고도 현재 실행 계측이 다시 누적량으로 부푼다.
+    storage = LocalStorage(tmp_path / "lake")
+    old = _fmp_row(url="https://e.com/old")
+    current = _fmp_row(url="https://e.com/current")
+    rejected = _fmp_row(url="https://e.com/rejected", title="  ")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [old])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"), [current, rejected])
+    assert normalize_news.run(storage, "N1", input_run_id="R1") == 0
+
+    assert normalize_news.run(storage, "N2", input_run_id="R2") == 0
+
+    assert _manifest(storage, "N2") == {
+        "run_id": "N2",
+        "producer": "normalize_news",
+        "canonical_written": True,
+        "canonical_partitions": [{
+            "language": "en",
+            "published_date": "2026-07-01",
+            "key": (
+                "canonical/news/news_articles/language=en/"
+                "published_date=2026-07-01/part-00000.parquet"
+            ),
+            "article_ids": [_aid(current)],
+        }],
+    }
+
+
+def test_empty_input_writes_valid_empty_manifest(tmp_path):
+    # WHY(ALPHA-1030): 입력 0건은 계보 결손이 아니라 유효한 실행 결과다. 빈 manifest가 있어야
+    #      하류가 "처리할 것 없음"과 "producer 실패"를 구분하고 풀스캔으로 넓히지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    assert normalize_news.run(storage, "N1", input_run_id="empty") == 0
+    assert _manifest(storage, "N1")["canonical_partitions"] == []
+
+
+def test_same_run_manifest_is_deterministic_and_idempotent(tmp_path):
+    # WHY(ALPHA-1030): 동일 run 재시도마다 ID 순서나 바이트가 달라지면 manifest 자체가 새 산출처럼
+    #      보여 계보 비교가 흔들린다. 현재 논리 ID를 정렬하고 런 시각을 넣지 않아야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    rows = [_fmp_row(url="https://e.com/b"), _fmp_row(url="https://e.com/a")]
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), rows)
+
+    assert normalize_news.run(storage, "N1", input_run_id="R1") == 0
+    from data_pipeline.lake import canonical_run_manifest_key
+    key = canonical_run_manifest_key("news_articles", "N1")
+    first = storage.get_bytes(key)
+    assert normalize_news.run(storage, "N1", input_run_id="R1") == 0
+
+    assert storage.get_bytes(key) == first
+    assert _manifest(storage, "N1")["canonical_partitions"][0]["article_ids"] == sorted(
+        {_aid(row) for row in rows}
+    )
+
+
+def test_canonical_failure_does_not_publish_manifest(tmp_path):
+    # WHY(ALPHA-1030): canonical이 기록되지 않았는데 manifest가 있으면 하류가 존재하지 않거나
+    #      불완전한 산출을 승인한다. producer는 완료 manifest 없이 비0으로 끝나야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+    storage = _FailingStorage(inner, fail_put="canonical/news/")
+
+    assert normalize_news.run(storage, "N1") == 1
+    assert _manifest(storage, "N1")["canonical_written"] is False
+    assert _quality_log(storage)["canonical_written"] is False
+
+
+def test_failed_same_run_retry_invalidates_previous_success_manifest(tmp_path):
+    # WHY(ALPHA-1030): run_id 직접 키는 재시도에서도 하나다. 첫 성공 뒤 재시도가 실패했는데 이전
+    #      true manifest가 남으면 하류가 stale article_ids를 완료 산출로 승인하므로, 작업 시작 시
+    #      false tombstone으로 먼저 무효화해야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+    assert normalize_news.run(inner, "N1") == 0
+    assert _manifest(inner, "N1")["canonical_written"] is True
+
+    storage = _FailingStorage(inner, fail_put="canonical/news/")
+    assert normalize_news.run(storage, "N1") == 1
+
+    assert _manifest(inner, "N1") == {
+        "run_id": "N1",
+        "producer": "normalize_news",
+        "canonical_written": False,
+        "canonical_partitions": [],
+    }
+
+
+def test_manifest_initialization_failure_does_not_change_canonical(tmp_path):
+    # WHY(ALPHA-1030): 기존 성공 manifest를 false로 무효화할 수 없는데 canonical부터 바꾸면
+    #      하류가 stale article_ids를 완료 범위로 읽는다. manifest PUT이 막히면 canonical은
+    #      이전 성공 상태 그대로 두고 비0 종료해야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    old = _fmp_row(url="https://e.com/old")
+    new = _fmp_row(url="https://e.com/new")
+    _write_raw(inner, _raw_key("fmp", "US"), [old])
+    assert normalize_news.run(inner, "N1") == 0
+    from data_pipeline.lake import canonical_run_manifest_key
+    manifest_key = canonical_run_manifest_key("news_articles", "N1")
+    first_manifest = inner.get_bytes(manifest_key)
+    _write_raw(inner, _raw_key("fmp", "US"), [new])
+    storage = _FailingStorage(inner, fail_put="canonical_run_manifests")
+
+    assert normalize_news.run(storage, "N1") == 1
+    assert [row["article_id"] for row in _canonical_rows(inner, "2026-07-01")] == [_aid(old)]
+    assert _manifest(inner, "N1")["canonical_written"] is True
+    assert inner.get_bytes(manifest_key) == first_manifest
+    assert _quality_log(storage)["canonical_written"] is False
+
+
+def test_completed_manifest_write_failure_is_fail_loud(tmp_path):
+    # WHY(ALPHA-1030): false tombstone까지 성공했어도 마지막 완료 PUT이 실패하면 하류가 정확한
+    #      현재 범위를 얻지 못한다. canonical 성공만으로 exit 0이 되거나 false 표식이 true로
+    #      보이면 안 된다.
+    class _CompletedManifestFailingStorage(_FailingStorage):
+        def put_bytes(self, key, data):
+            if "canonical_run_manifests" in key and json.loads(data)["canonical_written"] is True:
+                raise OSError("의도된 완료 manifest 쓰기 실패")
+            return self.inner.put_bytes(key, data)
+
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+    storage = _CompletedManifestFailingStorage(inner)
+
+    assert normalize_news.run(storage, "N1") == 1
+    assert len(inner.list_keys("canonical/news/")) == 1
+    assert _manifest(inner, "N1")["canonical_written"] is False
+    assert _quality_log(storage)["canonical_written"] is True
 
 
 def test_blocking_row_not_double_counted_as_warning(tmp_path):
