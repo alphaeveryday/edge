@@ -650,6 +650,52 @@ def test_load_documents_explicit_all_preserves_full_recovery(monkeypatch):
     assert captured["from_date"] is None and captured["to_date"] is None
 
 
+def test_load_assertions_requires_an_explicit_scope(monkeypatch):
+    """WHY(ALPHA-1033): SFN 인자 회귀가 암묵적 feature 풀스캔으로 성공하면 데이터가
+    쌓일수록 정상 실행 비용이 다시 증가한다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+        main(["load-assertions", "--run-id", "R"])
+
+
+def test_load_assertions_forwards_tag_news_run_scope(monkeypatch):
+    """WHY(ALPHA-1033): 현재 TagNews run_id가 CLI에서 사라지면 manifest 소비 코드가 있어도
+    정상 SFN은 날짜 추측이나 전체 스캔으로 퇴행한다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_assertions, "run",
+                        lambda *args, **kwargs: captured.update(kwargs) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-assertions", "--run-id", "R", "--input-run-id", "T1"]) == 0
+    assert captured["input_run_id"] == "T1"
+
+
+def test_load_assertions_explicit_all_preserves_full_recovery(monkeypatch):
+    """WHY(ALPHA-1033): 정상 범위를 좁혀도 운영자가 의도적으로 선택한 전체 복구는
+    남아야 하며, --all만 암묵적 전체 모드를 승인한다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_assertions, "run",
+                        lambda *args, **kwargs: captured.update(kwargs) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-assertions", "--run-id", "R", "--all"]) == 0
+    assert captured["input_run_id"] is None
+    assert captured["from_date"] is None and captured["to_date"] is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_assertions_rejects_invalid_recovery_window(monkeypatch, argv):
+    """WHY(ALPHA-1033): 불량·역전 날짜가 0건 성공이면 복구 완료로 오인된다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-assertions", "--run-id", "R", *argv])
+
+
 @pytest.mark.parametrize("argv", [
     ["--from", "2026-08-32", "--to", "2026-08-32"],
     ["--from", "2026-08-20", "--to", "2026-08-10"],

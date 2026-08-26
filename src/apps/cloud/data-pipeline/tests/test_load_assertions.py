@@ -9,10 +9,13 @@
 import io
 import json
 
+import pytest
+
 from data_pipeline.config import DbConfig
 from data_pipeline.entity_resolution import ResolutionIndex
 from data_pipeline.lake import (
     LocalStorage,
+    feature_run_manifest_key,
     feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
 )
@@ -44,6 +47,42 @@ def _write_feature(storage, language: str, date: str, rows: list[dict]) -> None:
     pq.write_table(table, buf)
     storage.put_bytes(
         f"{feature_news_assertions_partition(language, date)}/part-00000.parquet", buf.getvalue())
+
+
+def _manifest_partition(language: str, date: str, article_ids: list[str]) -> dict:
+    return {
+        "language": language,
+        "published_date": date,
+        "key": f"{feature_news_assertions_partition(language, date)}/part-00000.parquet",
+        "article_ids": sorted(article_ids),
+    }
+
+
+def _write_feature_manifest(storage, run_id: str, partitions: list[dict]) -> None:
+    storage.put_bytes(feature_run_manifest_key("news_assertions", run_id), json.dumps({
+        "run_id": run_id,
+        "producer": "tag_news",
+        "feature_written": True,
+        "feature_partitions": partitions,
+    }).encode("utf-8"))
+
+
+class _ReadSpy:
+    def __init__(self, inner):
+        self.inner = inner
+        self.list_calls: list[str] = []
+        self.get_calls: list[str] = []
+
+    def list_keys(self, prefix):
+        self.list_calls.append(prefix)
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        self.get_calls.append(key)
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        return self.inner.put_bytes(key, data)
 
 
 def _feature_row(article_id: str, assertions: list | str, **over) -> dict:
@@ -145,6 +184,186 @@ def _log(storage) -> dict:
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
 
+def test_manifest_reads_direct_keys_and_reports_physical_and_logical_rows(tmp_path, monkeypatch):
+    """WHY(ALPHA-1033): 누적 part의 과거 행은 물리 읽기에만 남고 현재 manifest ID만
+    적재·실패 계측에 들어가야 한다. 상위 LIST나 manifest 밖 파티션 GET은 범위 회귀다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _write_feature(inner, "ko", "2026-08-25", [
+        _feature_row("old-same-partition", [_assertion()],
+                     published_at="2026-08-25T08:00:00+09:00"),
+        _feature_row("current-yesterday", [_assertion()],
+                     published_at="2026-08-25T23:59:00+09:00"),
+    ])
+    _write_feature(inner, "ko", "2026-08-26", [
+        _feature_row("current-today", [_assertion()],
+                     published_at="2026-08-26T00:01:00+09:00"),
+    ])
+    _write_feature(inner, "ko", "2026-08-24", [_feature_row("old-partition", [_assertion()])])
+    partitions = [
+        _manifest_partition("ko", "2026-08-25", ["current-yesterday"]),
+        _manifest_partition("ko", "2026-08-26", ["current-today"]),
+    ]
+    _write_feature_manifest(inner, "T1", partitions)
+    storage = _ReadSpy(inner)
+    conn = _FakeConn(documents=[("current-yesterday", "doc_D1"), ("current-today", "doc_D2")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    assert storage.list_calls == []
+    assert storage.get_calls == [
+        feature_run_manifest_key("news_assertions", "T1"),
+        partitions[0]["key"], partitions[1]["key"],
+    ]
+    log = _log(inner)
+    assert log["physical_rows_read"] == 3
+    assert log["logical_rows_read"] == 2
+    assert log["assertions_considered"] == 2
+    assert log["ops"] == {
+        "records_out": 2, "failed_records": 0,
+        "entity_resolution_arguments_total": 2,
+        "entity_resolution_arguments_resolved": 2,
+    }
+
+
+def test_same_feature_manifest_run_is_idempotent(tmp_path, monkeypatch):
+    """WHY(ALPHA-1033): 실패한 동일 TagNews run 재실행은 같은 논리 범위를 다시 읽고,
+    자연키 기존 행을 신규로 세지 않아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("a1", [_assertion()], published_at="2026-08-26T00:01:00+09:00")])
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["a1"])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")],
+                     existing_assertions={("doc_D1", "SUPPLY_CONTRACT", "WIN")})
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    log = _log(storage)
+    assert log["logical_rows_read"] == 1
+    assert log["created"] == 0 and log["already_present"] == 1
+
+
+def test_missing_document_recovers_by_replaying_the_same_manifest(tmp_path, monkeypatch):
+    """WHY(ALPHA-1033): 정상 다음 런을 과거 feature 재독에 쓰지 않는다. LoadDocuments와의
+    일시 결손은 같은 TagNews manifest를 재실행해 정확히 그 ID만 회수해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("a1", [_assertion()], published_at="2026-08-26T00:01:00+09:00")])
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["a1"])])
+
+    _setup(monkeypatch, _FakeConn())
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    first = _log(storage)
+    assert first["missing_document"] == 1
+    assert first["ops"]["records_out"] == 0 and first["ops"]["failed_records"] == 1
+
+    recovered = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, recovered)
+    assert load_assertions.run(storage, "L2", db=_db(), input_run_id="T1") == 0
+    logs = storage.list_keys("operations_archive/data_quality_logs/")
+    second = json.loads(storage.get_bytes([key for key in logs if "run_id=L2/" in key][0]))
+    assert second["logical_rows_read"] == 1
+    assert second["created"] == 1 and second["ops"]["failed_records"] == 0
+
+
+def test_empty_completed_feature_manifest_does_not_list_or_get_parquet(tmp_path, monkeypatch):
+    """WHY(ALPHA-1033): 생산자가 0건을 증명한 완료 manifest는 결손이 아니며, 과거
+    feature를 회수하지 않는 0건 성공이어야 한다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _write_feature(inner, "ko", "2026-08-25", [_feature_row("old", [_assertion()])])
+    _write_feature_manifest(inner, "T1", [])
+    storage = _ReadSpy(inner)
+    _setup(monkeypatch, _FakeConn())
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    assert storage.list_calls == []
+    assert storage.get_calls == [feature_run_manifest_key("news_assertions", "T1")]
+    assert _log(inner)["logical_rows_read"] == 0
+
+
+def test_missing_feature_manifest_fails_without_full_scan(tmp_path):
+    """WHY(ALPHA-1033): 계보 결손을 상위 feature 풀스캔으로 숨기면 정상 비용과 현재 실행
+    실패 집계가 다시 과거 전체에 비례한다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _write_feature(inner, "ko", "2026-08-26", [_feature_row("old", [_assertion()])])
+    storage = _ReadSpy(inner)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="missing") == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [feature_run_manifest_key("news_assertions", "missing")]
+
+
+@pytest.mark.parametrize("damage", [
+    "incomplete", "wrong_producer", "wrong_run", "wrong_key", "duplicate_ids", "cross_duplicate",
+])
+def test_corrupt_feature_manifest_fails_before_parquet_read(tmp_path, damage):
+    """WHY(ALPHA-1033): manifest 전량을 먼저 검증해야 손상 계보의 앞 파티션 일부를
+    적재한 뒤 뒤늦게 실패하는 부분 착지가 없다."""
+    inner = LocalStorage(tmp_path / "lake")
+    partitions = [
+        _manifest_partition("ko", "2026-08-25", ["a1"]),
+        _manifest_partition("ko", "2026-08-26", ["a2"]),
+    ]
+    _write_feature_manifest(inner, "T1", partitions)
+    key = feature_run_manifest_key("news_assertions", "T1")
+    manifest = json.loads(inner.get_bytes(key))
+    if damage == "incomplete":
+        manifest["feature_written"] = False
+    elif damage == "wrong_producer":
+        manifest["producer"] = "normalize_news"
+    elif damage == "wrong_run":
+        manifest["run_id"] = "T2"
+    elif damage == "wrong_key":
+        manifest["feature_partitions"][0]["key"] = "feature/news/wrong.parquet"
+    elif damage == "duplicate_ids":
+        manifest["feature_partitions"][0]["article_ids"] = ["a1", "a1"]
+    else:
+        manifest["feature_partitions"][1]["article_ids"] = ["a1"]
+    inner.put_bytes(key, json.dumps(manifest).encode("utf-8"))
+    storage = _ReadSpy(inner)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [key]
+
+
+def test_manifest_missing_logical_id_fails_loud(tmp_path):
+    """WHY(ALPHA-1033): 직접 파일이 있어도 현재 ID가 없으면 손상 계보다. 일부 성공으로
+    두면 records_out·failed_records가 현재 실행 완전성을 거짓 보고한다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _write_feature(inner, "ko", "2026-08-26", [
+        _feature_row("present", [_assertion()], published_at="2026-08-26T00:01:00+09:00")])
+    partition = _manifest_partition("ko", "2026-08-26", ["missing"])
+    _write_feature_manifest(inner, "T1", [partition])
+    storage = _ReadSpy(inner)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [feature_run_manifest_key("news_assertions", "T1"), partition["key"]]
+    log = _log(inner)
+    assert log["logical_rows_read"] == 0
+    assert log["ops"]["records_out"] == 0 and log["ops"]["failed_records"] == 1
+
+
+@pytest.mark.parametrize("published_at", [
+    "2026-08-26T99:99:99", "2026-08-26", "not-a-timestamp",
+])
+def test_manifest_scope_rejects_invalid_or_naive_feature_timestamp(tmp_path, published_at):
+    """WHY(ALPHA-1033): 날짜 접두사만 맞는 손상 시각이 manifest 검증을 우회하면 현재 ID가
+    정상 범위로 인증되어 DB까지 도달한다. 전체 ISO 시각과 timezone까지 유효해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("a1", [_assertion()], published_at=published_at)])
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["a1"])])
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
+    log = _log(storage)
+    assert log["logical_rows_read"] == 0
+    assert log["ops"]["records_out"] == 0 and log["ops"]["failed_records"] == 1
+
+
 def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):
     """주장 1건 = document_assertion 1행 + 해소된 argument — document_id 는 자연키로
     해소된 실제 행이어야 FK 가 살고, available_at 은 **그 document 의 가용 시각**이다.
@@ -231,7 +450,7 @@ def test_partial_assertion_is_not_persisted_as_confirmed(tmp_path, monkeypatch):
 
 def test_missing_document_is_skipped_not_a_broken_fk(tmp_path, monkeypatch):
     """document 행이 없으면(로더 선행 전) FK 위반으로 죽는 대신 결손으로 세고 넘어간다 —
-    load-documents 가 선행 스텝이라 다음 런이 자연 회복한다."""
+    정상 manifest 경로는 같은 input_run_id 재실행으로 회수한다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_feature(storage, "ko", "2026-07-15", [_feature_row("a-없음", [_assertion()])])
     conn = _FakeConn(documents=[])
@@ -825,7 +1044,7 @@ def test_no_concept_is_minted_for_an_assertion_that_cannot_be_loaded(tmp_path, m
     """적재 안 될 주장에는 채번하지 않는다 — 고아 개념 금지(ALPHA-831).
 
     WHY: 채번 루프와 적재 루프가 둘로 나뉘어 있다. 문서 행이 없으면 그 주장은 안 실리는데
-    (`missing_document` — 모듈 독스트링이 "다음 런이 자연 회복한다"고 적은 **정상 경로**다),
+    (`missing_document` — 같은 manifest 재실행으로 회수하는 **정상 결손 경로**다),
     채번 루프가 그 조건을 안 보면 참조 없는 개념 마스터만 남는다. 두 루프의 거르는 조건이
     같아야 한다.
     """

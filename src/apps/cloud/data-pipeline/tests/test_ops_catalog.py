@@ -448,6 +448,16 @@ def test_serial_states_inject_ops_env():
             f"{state} 에 OPS_SFN_STATE_NAME 주입이 없다"
 
 
+def test_news_load_assertions_uses_current_tag_news_manifest():
+    """WHY(ALPHA-1033): 로더가 명시 범위를 강제해도 정상 SFN이 현재 run_id를 넘기지 않으면
+    매 스케줄 실행이 시작 전에 실패한다. 날짜 추측이나 풀스캔으로 우회할 수 없는 배선이다."""
+    tf = _NEWS_PIPELINE_TF.read_text(encoding="utf-8")
+    assert (
+        "States.Array('load-assertions', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)"
+    ) in tf
+
+
 def test_dependencies_encode_the_asl_gates():
     """WHY: 의존은 "언제 실행 가능해졌나"의 SSOT 이고, 그게 MISSED 와 BLOCKED 를 가른다.
     ASL 게이트와 어긋나면 게이트가 닫힌 런에서 원인을 오귀속한다(같은 원인이 작업마다 다른
