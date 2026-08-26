@@ -17,8 +17,11 @@ TODAY_UTC = date(2026, 8, 26)
 
 
 def _put_log(storage, started_date, run_id, **fields):
+    # window_source 기본이 "watermark"(정상 스케줄 런) — 부재는 PR2 이전 로그라 자격이
+    # 없으므로, 부재를 검증하는 테스트가 명시적으로 빼고 만든다.
     payload = {"job_name": "ingest_raw_disclosure", "status": "success",
-               "list_truncated": False, "ingest_lane": "batch", **fields}
+               "list_truncated": False, "ingest_lane": "batch",
+               "window_source": "watermark", **fields}
     key = collection_log_key("dart", "disclosures", started_date, run_id)
     storage.put_bytes(key, json.dumps(payload).encode("utf-8"))
 
@@ -30,7 +33,7 @@ def test_watermark_is_max_window_to_not_latest_run(tmp_path):
     storage = LocalStorage(tmp_path)
     _put_log(storage, "2026-08-25", "run_a", window_to="2026-08-25")
     _put_log(storage, "2026-08-26", "run_backfill", window_to="2026-07-01")  # 더 최근 런
-    assert dw.find_watermark(storage, today_utc=TODAY_UTC) == "2026-08-25"
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-25"
 
 
 def test_minute_and_legacy_logs_are_not_eligible(tmp_path):
@@ -44,7 +47,7 @@ def test_minute_and_legacy_logs_are_not_eligible(tmp_path):
               "window_to": "2026-08-26"}  # PR1 이전 — ingest_lane·list_truncated 부재
     storage.put_bytes(collection_log_key("dart", "disclosures", "2026-08-26", "run_old"),
                       json.dumps(legacy).encode("utf-8"))
-    assert dw.find_watermark(storage, today_utc=TODAY_UTC) is None
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
 
 
 def test_incomplete_runs_are_not_eligible(tmp_path):
@@ -57,11 +60,11 @@ def test_incomplete_runs_are_not_eligible(tmp_path):
     _put_log(storage, "2026-08-25", "r_stop", status="stopped", window_to="2026-08-25")
     _put_log(storage, "2026-08-25", "r_err", status="error", window_to="2026-08-25")
     _put_log(storage, "2026-08-25", "r_skip", status="skipped", window_to="2026-08-25")
-    assert dw.find_watermark(storage, today_utc=TODAY_UTC) is None
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
     # partial(본문만 실패, 목록 완주)은 자격이 있다 — 전진 안 하면 남의 회사 malformed 행
     # 1건(영구 재현)으로 워터마크가 영구 정지한다. 본문 재시도는 당일 재독이 준다.
     _put_log(storage, "2026-08-25", "r_partial", status="partial", window_to="2026-08-25")
-    assert dw.find_watermark(storage, today_utc=TODAY_UTC) == "2026-08-25"
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-25"
 
 
 def test_probe_range_is_bounded(tmp_path):
@@ -69,7 +72,7 @@ def test_probe_range_is_bounded(tmp_path):
     #      부르는 창이라 자동 회수 대상이 아니다(폴백 + 수동 백필 소관).
     storage = LocalStorage(tmp_path)
     _put_log(storage, "2026-08-10", "r1", window_to="2026-08-10")  # 16일 전 — 범위 밖
-    assert dw.find_watermark(storage, today_utc=TODAY_UTC) is None
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
 
 
 def test_corrupt_log_is_skipped_not_fatal(tmp_path):
@@ -78,7 +81,7 @@ def test_corrupt_log_is_skipped_not_fatal(tmp_path):
     storage.put_bytes(collection_log_key("dart", "disclosures", "2026-08-26", "r_bad"),
                       b"not json")
     _put_log(storage, "2026-08-25", "r_ok", window_to="2026-08-25")
-    assert dw.find_watermark(storage, today_utc=TODAY_UTC) == "2026-08-25"
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-25"
 
 
 def test_enabled_steady_state_window_equals_legacy_default(tmp_path):
@@ -192,3 +195,110 @@ def test_shadow_mode_only_observes(tmp_path):
         scheduled_window=("2026-08-25", "2026-08-26"),
         today_kst=TODAY_KST, today_utc=TODAY_UTC)
     assert meta2["watermark_shadow"]["matches_actual"] is False
+
+
+def test_lookup_error_fallback_run_log_is_not_eligible(tmp_path):
+    # WHY: 조회 실패 폴백 런은 자기 앞의 체인을 못 본 채 좁은 기본창을 돌았다 — 그 성공
+    #      로그가 워터마크가 되면 그때 못 본 결손(직전 워터마크~기본창 사이)이 모든 자동
+    #      창 밖으로 밀려 영구 확정된다. 반대로 콜드스타트 폴백(fallback_no_watermark)은
+    #      앞 체인이 없어 씨앗으로 정당하다 — 빼면 워터마크가 영영 서지 못한다.
+    storage = LocalStorage(tmp_path)
+    _put_log(storage, "2026-08-23", "r_chain", window_to="2026-08-23")
+    _put_log(storage, "2026-08-25", "r_fb", window_to="2026-08-25",
+             window_source="fallback_lookup_error")
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-23"
+    _put_log(storage, "2026-08-25", "r_seed", window_to="2026-08-24",
+             window_source="fallback_no_watermark")
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-24"
+
+
+def test_malformed_candidates_do_not_break_or_win(tmp_path):
+    # WHY: 자격 필드를 갖춘 로그도 window_to 가 비날짜이거나 로그 자체가 비객체 JSON 일 수
+    #      있다 — 하나가 조회를 죽이면(예외가 resolve_window 폴백으로 새면) 정상 후보까지
+    #      버려지고, 미래 window_to(운영자 미래 백필)가 문자열 max 를 이기면 창이 [오늘,
+    #      오늘]로 좁아져 어제의 늦은 노출 꼬리를 놓친다. 전부 그 후보만 제외돼야 한다.
+    storage = LocalStorage(tmp_path)
+    storage.put_bytes(collection_log_key("dart", "disclosures", "2026-08-26", "r_list"),
+                      b"[]")  # 유효 JSON 이지만 비객체
+    _put_log(storage, "2026-08-26", "r_baddate", window_to="not-a-date")
+    _put_log(storage, "2026-08-26", "r_future", window_to="2026-08-30")  # 미래 백필
+    _put_log(storage, "2026-08-25", "r_ok", window_to="2026-08-25")
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-25"
+
+
+def test_cli_run_extends_only_when_contiguous(tmp_path):
+    # WHY: 비연속 수동 창(--from 25 --to 25 단발)이 워터마크를 점프시키면 직전 워터마크와의
+    #      사이(20~24)가 자동 회수에서 영영 빠진다 — cli 런은 창 시작이 기준에 닿을 때만
+    #      연장 자격이 있다. 연속 백필(체인에 닿는 창)은 정당하게 전진시킨다.
+    storage = LocalStorage(tmp_path)
+    _put_log(storage, "2026-08-19", "r_chain", window_to="2026-08-19")
+    _put_log(storage, "2026-08-25", "r_manual", window_source="cli",
+             window_from="2026-08-25", window_to="2026-08-25")  # 20~24 미커버
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-19"
+    _put_log(storage, "2026-08-25", "r_bridge", window_source="cli",
+             window_from="2026-08-20", window_to="2026-08-24")  # 체인에 닿는다
+    # 사다리: bridge(20~24)가 기준 19 에 닿아 24 로, 그러면 manual(25)도 닿아 25 로.
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) == "2026-08-25"
+
+
+def test_cli_only_history_cannot_seed_the_chain(tmp_path):
+    # WHY: cli 런만으론 체인을 못 연다 — 씨앗은 "체인이 없음을 확인한" 스케줄 런
+    #      (fallback_no_watermark)이 심는다. 수동 단발이 씨앗이 되면 그 앞 결손이 접힌다.
+    storage = LocalStorage(tmp_path)
+    _put_log(storage, "2026-08-25", "r_manual", window_source="cli",
+             window_from="2026-08-25", window_to="2026-08-25")
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
+
+
+def test_get_failure_propagates_as_lookup_error(tmp_path):
+    # WHY: GET 인프라 장애를 파싱 실패와 섞어 삼키면 "워터마크 없음"이 되고, 그 폴백 런의
+    #      로그가 콜드스타트 씨앗으로 오인돼 장애 당시 못 본 결손이 접힌다 — GET 실패는
+    #      전파돼 fallback_lookup_error(자격 없는 라벨)로 기록돼야 한다.
+    class DenyGet(LocalStorage):
+        def get_bytes(self, key):
+            raise PermissionError("AccessDenied")
+
+    storage = DenyGet(tmp_path)
+    _put_log(LocalStorage(tmp_path), "2026-08-25", "r1", window_to="2026-08-25")
+    actual, meta = dw.resolve_window(
+        storage, enabled=True, explicit=False,
+        scheduled_window=("2026-08-25", "2026-08-26"),
+        today_kst=TODAY_KST, today_utc=TODAY_UTC)
+    assert actual == ("2026-08-25", "2026-08-26")
+    assert meta["window_source"] == "fallback_lookup_error"
+
+
+def test_unknown_window_source_label_is_not_eligible(tmp_path):
+    # WHY: 자격은 화이트리스트다 — fallback_lookup_error 를 지명해 빼는 차단목록이면
+    #      오기·드리프트로 변형된 라벨("fallback_lookup_eror" 등)이 자격을 얻어, 체인을
+    #      못 본 런이 결손을 접는 경로가 철자 하나로 되살아난다.
+    storage = LocalStorage(tmp_path)
+    _put_log(storage, "2026-08-25", "r_typo", window_to="2026-08-25",
+             window_source="fallback_lookup_eror")
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
+
+
+def test_pre_pr2_log_without_window_source_is_not_eligible(tmp_path):
+    # WHY: PR2 이전 로그(window_source 부재)는 스케줄 런과 수동 단발 백필이 같은 무라벨이라
+    #      연속성을 판별할 수 없다 — 자격을 주면 배포 전 단발 백필([25,25])이 체인을
+    #      점프시켜 그 앞 결손이 자동 회수에서 영영 빠진다. 부재 = 자격 없음
+    #      (`ingest_lane` 부재 = PR1 이전과 동형 규칙).
+    storage = LocalStorage(tmp_path)
+    legacy = {"job_name": "ingest_raw_disclosure", "status": "success",
+              "list_truncated": False, "ingest_lane": "batch",
+              "window_to": "2026-08-25"}  # window_source 없음
+    storage.put_bytes(collection_log_key("dart", "disclosures", "2026-08-25", "r_pre_pr2"),
+                      json.dumps(legacy).encode("utf-8"))
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None
+
+
+def test_shadow_lookup_error_run_is_not_eligible(tmp_path):
+    # WHY: 그림자 런의 조회 실패는 window_source 가 아니라 watermark_shadow.source 에
+    #      남는다 — 겉 라벨만 거르면 그 런의 로그가 자격을 얻어, 활성 런과 같은 이유
+    #      (체인을 못 본 채 돈 런)로 결손을 접는다.
+    storage = LocalStorage(tmp_path)
+    _put_log(storage, "2026-08-25", "r_shadow_err", window_to="2026-08-25",
+             window_source="default",
+             watermark_shadow={"source": "fallback_lookup_error", "window_from": None,
+                               "window_to": None, "matches_actual": False})
+    assert dw.find_watermark(storage, today_utc=TODAY_UTC, today_kst=TODAY_KST) is None

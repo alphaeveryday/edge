@@ -383,6 +383,10 @@ DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
 # 런이 어느 기준이었는지 복원하려면 필요하다). 정제는 원래부터 report_nm 으로 라우팅해 와서
 # 비대상 행은 `records_skipped_type` 으로 빠진다 — 정제 스텝은 손댈 것이 없다.
 # 날짜창은 뉴스와 동형(미지정=증분 어제~오늘, 백필은 --from/--to). 인증키는 env 주입.
+# 단 배치 증분 창은 원장 워터마크(disclosure_watermark.py, ALPHA-987)가 재결정한다 —
+# 기본은 그림자(창 불변, 계산-실제 대조만 collection_log 에 기록)이고
+# dart_disclosure.watermark_window=true 면 직전 완주 런의 window_to 당일부터로 넓혀
+# 직전 런 실패·건너뜀을 자동 회수한다(부재·조회 실패는 기본창 폴백 + window_source 기록).
 # 수집 대상은 canonical KR holdings ETF 별 최신 파티션 합집합의 **구성종목** ∪ targets
 # (가격과 같은 축, ALPHA-477 — 합집합 규칙은 ALPHA-590). KRX 단축코드는 list 행의 stock_code 와 항등이라 심볼맵 없이 수집되고,
 # symbol_map 은 예외 오버라이드 축. ETF 자기 티커는 출처와 무관하게 뺀다 — DART 신고자가 아니다.

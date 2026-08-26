@@ -695,6 +695,16 @@ def test_window_meta_lands_in_collection_log(tmp_path):
     assert log["window_source"] == "watermark"
     assert log["recovered_days"] == 2
 
+    # 임의 dict 가 로그 정체성(run_id·ingest_lane 등)을 덮지 못한다 — 워터마크 술어와
+    # run_id 기반 로그 소비가 그 정체성을 믿는다(명시 필드가 병합보다 뒤 = 항상 이긴다).
+    storage2 = LocalStorage(tmp_path / "lake2")
+    ingest_raw_disclosure.run(
+        _settings(tmp_path), storage2, FakeSource(records=[_rec("A1")]), "r2",
+        window_meta={"ingest_lane": "minute", "run_id": "evil"},
+    )
+    log2 = _log(storage2, "r2")
+    assert log2["ingest_lane"] == "batch" and log2["run_id"] == "r2"
+
 
 def test_skipped_log_still_carries_lane_fields(tmp_path):
     # WHY: "필드 부재 = PR1 이전 로그" 판별은 **새 로그 전부**에 두 필드가 있어야 성립한다.

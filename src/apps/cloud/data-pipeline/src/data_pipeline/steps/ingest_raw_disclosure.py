@@ -185,13 +185,14 @@ def collect(
     started_date = started_at.isoformat()[:10]  # = ingest_date
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
     log: dict = {
+        # 창 결정 관측(window_source·watermark_shadow 등, ALPHA-987) — 배치 엔트리만
+        # 넘긴다(1분 레인은 세션 격자가 창을 정해 이 축이 없다). **맨 앞**에 편다:
+        # 아래 명시 필드가 항상 이겨야 임의 dict 가 run_id·ingest_lane 같은 로그
+        # 정체성을 조용히 덮지 못한다(워터마크 술어·run_id 소비자가 그 정체성을 믿는다).
+        **(window_meta or {}),
         "run_id": run_id,
         "job_name": JOB_NAME,
         "ingest_lane": ingest_lane,
-        # 창 결정 관측(window_source·watermark_shadow 등, ALPHA-987) — 배치 엔트리만
-        # 넘긴다(1분 레인은 세션 격자가 창을 정해 이 축이 없다). 키 충돌이 없도록
-        # 예약 필드가 아닌 이름만 온다는 전제는 resolve_window 가 진다.
-        **(window_meta or {}),
         "source_vendor": vendor,
         "window_from": from_date,
         "window_to": to_date,

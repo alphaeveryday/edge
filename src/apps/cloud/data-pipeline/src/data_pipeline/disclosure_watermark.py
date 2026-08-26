@@ -41,7 +41,7 @@ _SOURCE = "dart"
 _DATASET = "disclosures"
 
 
-def find_watermark(storage: Storage, *, today_utc: date) -> str | None:
+def find_watermark(storage: Storage, *, today_utc: date, today_kst: date) -> str | None:
     """직전 완주 배치 런의 `window_to`(YYYY-MM-DD) — 없으면 None.
 
     `started_date=`(UTC 일) 파티션을 오늘부터 `WATERMARK_MAX_WINDOW_DAYS` 일 역방향으로
@@ -49,21 +49,42 @@ def find_watermark(storage: Storage, *, today_utc: date) -> str | None:
     이유: 오늘 돌린 과거 구간 수동 백필(window_to 가 과거)이 워터마크를 뒤로 당기면
     안 된다 — 최근 창을 완주한 런이 있으면 그쪽이 이긴다.
 
-    깨진 로그(JSON 파싱 실패)는 그 로그만 자격 없음으로 건너뛴다 — 하나가 조회 전체를
-    죽이면 폴백이 상시화된다. 스토리지 예외(list/get 실패)는 전파한다 — 호출자가
-    `fallback_lookup_error` 로 접는다.
+    ⚠️ max 는 **연속성이 있어야** 건전하다 — 어떤 런의 window_to 로 전진하는 것은 그 창
+    시작 이전이 이미 덮여 있을 때만 결손을 만들지 않는다. 그래서 두 단계다:
+
+    1. **스케줄 런**(window_source 가 watermark·fallback_no_watermark·default(그림자))만으로
+       기준을 세운다 — watermark 런의 시작은 직전 워터마크(자기 앵커), fallback_no_watermark
+       는 "체인이 없음을 확인한" 콜드스타트 씨앗, 그림자 시대는 1분 레인이 커버하던
+       기간이라 체인 계약 밖이다. window_source **부재(PR2 이전)는 자격 없음** — 스케줄
+       런과 수동 단발 백필이 같은 무라벨이라 연속성을 판별할 수 없다. **fallback_lookup_error 런은 제외**:
+       자기 앞의 체인을 못 본 채 좁은 기본창을 돌았으므로 이 로그가 워터마크가 되면 그때
+       못 본 결손이 모든 자동 창 밖으로 밀려 영구 확정된다(그림자 런의 조회 실패도
+       `watermark_shadow.source` 로 같은 이유로 거른다).
+    2. **cli 런**(운영자 백필)은 창 시작이 기준에 닿을 때만(window_from ≤ 기준+1일) 연장
+       자격을 준다 — 비연속 수동 창([25,25] 단발 등)이 기준을 점프시키면 그 사이 결손이
+       자동 회수에서 영영 빠진다. 연속 백필은 정당하게 전진시킨다.
+
+    개별 로그의 결함(JSON 파싱 실패·비객체·날짜 비정상·미래 창)은 그 로그만 자격 없음으로
+    건너뛴다 — 하나가 조회 전체를 죽이면 폴백이 상시화된다. 스토리지 예외(list/**get** 실패)는
+    전파한다 — 호출자가 `fallback_lookup_error` 로 접는다(파싱 실패와 섞어 삼키면 인프라
+    장애가 "워터마크 없음"이 되어, 그 폴백 런이 콜드스타트 씨앗으로 오인된다).
     """
     prefix = collection_log_prefix(_SOURCE, _DATASET)
-    best: str | None = None
+    chain: list[date] = []
+    manual: list[tuple[date, date]] = []  # (window_from, window_to)
     for offset in range(WATERMARK_MAX_WINDOW_DAYS + 1):  # 오늘 포함 역방향
         day = (today_utc - timedelta(days=offset)).isoformat()
         for key in storage.list_keys(f"{prefix}started_date={day}/"):
             if not key.endswith("/log.json"):
                 continue
+            raw = storage.get_bytes(key)  # 실패는 전파 — 위 docstring 의 이유
             try:
-                log = json.loads(storage.get_bytes(key))
-            except Exception:
+                log = json.loads(raw)
+            except ValueError:
                 logger.warning("워터마크 조회: 로그 파싱 실패 — 제외 %s", key)
+                continue
+            if not isinstance(log, dict):
+                logger.warning("워터마크 조회: 로그가 객체가 아님 — 제외 %s", key)
                 continue
             if log.get("ingest_lane") != "batch":
                 continue  # minute 레인·필드 부재(레거시) 모두 자격 없음
@@ -71,10 +92,46 @@ def find_watermark(storage: Storage, *, today_utc: date) -> str | None:
                 continue  # stopped·error 는 절단 플래그 없이 죽는다 — status 로 거른다
             if log.get("list_truncated") is not False:
                 continue  # True 는 절단, 부재(레거시)는 판정 불가 — 둘 다 자격 없음
-            window_to = log.get("window_to")
-            if isinstance(window_to, str) and window_to and (best is None or window_to > best):
-                best = window_to
-    return best
+            source_label = log.get("window_source")
+            if source_label not in ("default", "watermark", "fallback_no_watermark", "cli"):
+                # **화이트리스트다** — fallback_lookup_error 를 지명해 빼는 차단목록이면
+                # 오기·스키마 드리프트로 변형된 라벨이 자격을 얻는다. 모르는 라벨은 체인을
+                # 봤다는 증명이 없는 쪽으로 접는다. **부재(None)도 자격 없음**: PR2 이전
+                # 로그는 스케줄 런과 수동 백필이 같은 무라벨이라 연속성을 판별할 수 없다
+                # (`ingest_lane` 부재 = PR1 이전과 동형 규칙). 체인 부트스트랩은 컷오버 후
+                # 첫 스케줄 런의 fallback_no_watermark 씨앗이 담당하므로 잃는 것이 없다.
+                continue
+            shadow = log.get("watermark_shadow")
+            if isinstance(shadow, dict) and shadow.get("source") == "fallback_lookup_error":
+                continue  # 그림자 런의 조회 실패 — 겉 라벨(default)만으론 안 걸린다
+            try:
+                window_to = date.fromisoformat(log.get("window_to"))
+            except (TypeError, ValueError):
+                logger.warning("워터마크 조회: window_to 비날짜 — 제외 %s", key)
+                continue
+            if window_to > today_kst:
+                # 미래로 끝나는 창(운영자 미래 백필)은 현재까지의 커버리지를 증명하지
+                # 못한다 — max 에 넣으면 정상 워터마크를 이겨 창을 [오늘,오늘]로 좁힌다.
+                continue
+            if source_label == "cli":
+                try:
+                    window_from = date.fromisoformat(log.get("window_from"))
+                except (TypeError, ValueError):
+                    continue  # 시작을 모르는 수동 창은 연속성을 증명할 수 없다
+                manual.append((window_from, window_to))
+            else:
+                chain.append(window_to)
+    best = max(chain, default=None)
+    if best is None:
+        return None  # cli 런만으론 체인을 못 연다 — 다음 스케줄 런이 씨앗을 심는다
+    # cli 연장 — 연속인 것만, 고정점까지(연속 백필 여러 개가 사다리를 이룰 수 있다).
+    extended = True
+    while extended:
+        extended = False
+        for window_from, window_to in manual:
+            if window_to > best and window_from <= best + timedelta(days=1):
+                best, extended = window_to, True
+    return best.isoformat()
 
 
 def resolve_window(
@@ -101,7 +158,7 @@ def resolve_window(
     커버한 구간을 대량 재수집하지 않는다).
     """
     try:
-        watermark = find_watermark(storage, today_utc=today_utc)
+        watermark = find_watermark(storage, today_utc=today_utc, today_kst=today_kst)
         lookup_failed = False
     except Exception:
         logger.exception("워터마크 조회 실패 — 기본창 폴백")
@@ -120,8 +177,8 @@ def resolve_window(
         computed = None
     else:
         source = "watermark"
-        # min(): 시계 어긋남·미래 window_to 백필 방어 — from 이 to 를 넘으면 창이 무효다.
-        computed = (min(watermark, today), today)
+        # 불변식: watermark ≤ 오늘 — find_watermark 가 미래 window_to 를 제외한다.
+        computed = (watermark, today)
 
     if explicit:
         actual, label = scheduled_window, "cli"
