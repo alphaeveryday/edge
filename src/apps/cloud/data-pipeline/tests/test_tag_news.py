@@ -328,20 +328,25 @@ def test_english_articles_are_not_tagged(tmp_path):
 
 
 def test_limit_caps_llm_calls_and_leaves_rest_for_next_run(tmp_path):
-    """비용 상한 — 상한에 걸린 기사는 버려지는 게 아니라 다음 런에서 이어서 태깅돼야 한다."""
+    """WHY(ALPHA-1032): 상한 잔여를 완료 처리하면 run별 manifest 범위에서 영구 누락된다."""
     storage = LocalStorage(tmp_path / "lake")
 
     _write_canonical(storage, "ko", "2026-07-01", [_article("a1"), _article("a2"), _article("a3")])
 
     first: list = []
-    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=2) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=2) == 1
     assert len(first) == 2
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 2
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is False
 
     second: list = []
-    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second)) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(second)) == 0
     assert len(second) == 1  # 남은 1건만 — 이미 태깅된 2건은 안 부른다
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 3
+    manifest = json.loads(storage.get_bytes(feature_run_manifest_key("news_assertions", "R1")))
+    assert manifest["feature_written"] is True
+    assert manifest["feature_partitions"][0]["article_ids"] == ["a1", "a2", "a3"]
 
 
 def test_date_window_prunes_partitions(tmp_path):
@@ -528,19 +533,19 @@ def test_concurrent_tagging_preserves_all_rows_and_call_count(tmp_path):
 def test_limit_respected_under_concurrency(tmp_path):
     """WHY: limit 은 선택 단계(순차)에서 확정 tagged + 이번에 고른 수로 판정한다 — 병렬 실행이
     이 상한을 흘리면 비용 가드가 깨진다. 20건·limit=5·concurrency=8 이면 정확히 5건만 태깅되고
-    나머지 15는 다음 런으로 남아야 한다(순차판과 동치).
+    나머지 15는 동일 run 재시도로 남아야 한다(순차판과 동치).
     """
     storage = LocalStorage(tmp_path / "lake")
     articles = [_article(f"a{i}") for i in range(20)]
     _write_canonical(storage, "ko", "2026-07-01", articles)
 
     first: list = []
-    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=5, concurrency=8) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(first), limit=5, concurrency=8) == 1
     assert len(first) == 5
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 5
 
     second: list = []
-    assert tag_news.run(storage, "R2", complete_fn=_fake_complete(second), concurrency=8) == 0
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete(second), concurrency=8) == 0
     assert len(second) == 15  # 남은 15건만 — 이미 태깅된 5건은 안 부른다
     assert len(_read_feature(storage, "ko", "2026-07-01")) == 20
 

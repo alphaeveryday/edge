@@ -710,9 +710,11 @@ def run(
                 exit_code = 1
 
     if limited:
-        # 상한에 걸려 남긴 건 실패가 아니지만 조용히 두면 '전부 태깅됐다'로 오독된다(Rule 12).
-        logger.warning("limit=%s 로 %d건을 이번 런에서 태깅하지 않았다 — 재실행하면 이어서 태깅된다",
-                       limit, limited)
+        # 완료 manifest를 쓰면 run별 입력 범위의 잔여가 다음 실행에서 사라질 수 있다. 부분 계보는
+        # 위 checkpoint에 남겼으므로 같은 run 재시도가 current 행을 skip하고 잔여를 이어간다.
+        logger.error("limit=%s 로 %d건이 남았다 — 동일 run 재시도가 필요하다", limit, limited)
+        failures.append({"reasons": ["limit_exceeded"], "count": limited})
+        exit_code = 1
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,

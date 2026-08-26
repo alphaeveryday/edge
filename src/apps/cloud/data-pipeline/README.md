@@ -905,7 +905,7 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   실제 변경한 파티션·`article_id`는
   `operations_archive/feature_run_manifests/dataset=news_assertions/run_id=…/manifest.json`에
   기록하며, 모든 파티션과 quality log가 성공한 뒤에만 `feature_written=true`가 된다.
-  상한에 걸린 잔여는 다음 실행이 이어받는다(mentions 있는 미태깅
+  상한에 걸린 잔여가 있으면 manifest를 완료하지 않고 같은 run 재시도가 이어받는다(mentions 있는 미태깅
   기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다).
   LLM 호출은 기사별로 병렬 실행한다(ALPHA-519, `LLM_CONCURRENCY` env·기본 32·상한 100) —
   카운터·격리·병합은 취합 후 메인스레드라 순차 실행과 결과가 같다
