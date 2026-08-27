@@ -5,6 +5,7 @@
 거기서 이미 검사하므로, 여기선 **슬롯 축**에서만 틀릴 수 있는 것을 본다.
 """
 
+import hashlib
 import io
 import json
 
@@ -52,6 +53,15 @@ def _write_manifest(storage, run_id="N1", *, partitions=None, **over):
                    "/part-00000.parquet",
             "winner_ids": [{"ticker": "005930", "asof_slot": "0930"}],
         }]
+    partitions = [
+        {
+            **partition,
+            "sha256": partition.get("sha256") or hashlib.sha256(
+                storage.get_bytes(partition["key"])
+            ).hexdigest(),
+        }
+        for partition in partitions
+    ]
     manifest = {
         "run_id": run_id, "producer": "normalize_investor_estimate",
         "canonical_written": True, "canonical_partitions": partitions,
@@ -452,7 +462,8 @@ def test_빈_완료_manifest는_canonical을_조회하지_않는다(tmp_path, mo
 
 @pytest.mark.parametrize("damage", [
     "wrong_run", "wrong_producer", "incomplete", "missing_partitions",
-    "wrong_key", "duplicate_partition", "duplicate_winner", "missing_winner_field",
+    "wrong_key", "missing_sha256", "bad_sha256", "duplicate_partition",
+    "duplicate_winner", "missing_winner_field",
 ])
 def test_manifest_결손과_손상은_풀스캔_없이_실패한다(tmp_path, monkeypatch, damage):
     # WHY(ALPHA-1036): manifest 오류를 전량 스캔으로 복구하면 승인되지 않은 과거 행이 적재된다.
@@ -472,6 +483,10 @@ def test_manifest_결손과_손상은_풀스캔_없이_실패한다(tmp_path, mo
         manifest.pop("canonical_partitions")
     elif damage == "wrong_key":
         manifest["canonical_partitions"][0]["key"] = "canonical/wrong.parquet"
+    elif damage == "missing_sha256":
+        manifest["canonical_partitions"][0].pop("sha256")
+    elif damage == "bad_sha256":
+        manifest["canonical_partitions"][0]["sha256"] = "A" * 64
     elif damage == "duplicate_partition":
         manifest["canonical_partitions"].append(manifest["canonical_partitions"][0].copy())
     elif damage == "duplicate_winner":
@@ -524,6 +539,30 @@ def test_manifest_winner가_canonical에_없거나_중복이면_실패한다(
 
     assert step.run(storage, "R1", db=_db(), input_run_id="N1") == 1
     assert _inserts(conn) == []
+
+
+def test_manifest_이후_canonical이_덮어써지면_계보_오염_대신_실패한다(
+    tmp_path, monkeypatch,
+):
+    # WHY(ALPHA-1036): canonical part key는 날짜별 가변 객체다. 앞 run의 manifest commit 뒤
+    #      다른 normalize가 같은 winner를 덮어쓰면 hash 검증 없이는 뒤 값을 앞 run_id로 적재해
+    #      lineage를 조용히 오염시킨다. 범위를 full scan으로 넓히지 말고 hard-fail해야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, [_flow_row(net_qty_total_est=100)])
+    _write_manifest(inner)
+    _write_canonical(inner, [_flow_row(net_qty_total_est=999)])
+    storage = _SpyStorage(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(step, "connect", _fake_connect(conn))
+
+    assert step.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert _inserts(conn) == []
+    assert storage.list_calls == []
+    assert storage.get_calls == [
+        canonical_run_manifest_key("investor_flow_intraday", "N1"),
+        f"{canonical_investor_flow_intraday_partition('KR', '2026-08-05')}"
+        "/part-00000.parquet",
+    ]
 
 
 def test_한_종목_DB_실패는_다른_winner를_보존하고_부분실패한다(tmp_path, monkeypatch):

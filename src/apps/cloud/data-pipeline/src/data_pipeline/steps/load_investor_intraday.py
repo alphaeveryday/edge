@@ -17,6 +17,7 @@ fetched_at 으로 수렴시키므로 마트가 DO NOTHING 이면 두 계층이 �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Iterator
@@ -79,7 +80,7 @@ def _partition_dates(storage: Storage, market: str) -> list[str]:
 
 def _manifest_partitions(
     storage: Storage, input_run_id: str,
-) -> list[tuple[str, str, str, frozenset[tuple[str, str]]]]:
+) -> list[tuple[str, str, str, str, frozenset[tuple[str, str]]]]:
     """NormalizeInvestorEstimate가 승인한 직접 key와 현재 실행 winner 범위."""
     manifest_key = canonical_run_manifest_key("investor_flow_intraday", input_run_id)
     manifest = json.loads(storage.get_bytes(manifest_key).decode("utf-8"))
@@ -92,7 +93,7 @@ def _manifest_partitions(
     if not isinstance(raw, list):
         raise ValueError(f"canonical_partitions가 없는 manifest다: run_id={input_run_id}")
 
-    partitions: list[tuple[str, str, str, frozenset[tuple[str, str]]]] = []
+    partitions: list[tuple[str, str, str, str, frozenset[tuple[str, str]]]] = []
     seen_partitions: set[tuple[str, str]] = set()
     for item in raw:
         if not isinstance(item, dict):
@@ -119,6 +120,13 @@ def _manifest_partitions(
         )
         if parquet_key != expected_key:
             raise ValueError(f"canonical 직접 키가 파티션과 일치하지 않는다: {item!r}")
+        parquet_sha256 = item.get("sha256")
+        if not (
+            isinstance(parquet_sha256, str)
+            and len(parquet_sha256) == 64
+            and all(char in "0123456789abcdef" for char in parquet_sha256)
+        ):
+            raise ValueError(f"canonical sha256이 유효하지 않다: {item!r}")
         raw_winners = item.get("winner_ids")
         if not isinstance(raw_winners, list) or not raw_winners:
             raise ValueError(f"winner_ids가 없는 manifest 파티션이다: {item!r}")
@@ -135,7 +143,9 @@ def _manifest_partitions(
             winner_ids.append((ticker, asof_slot))
         if winner_ids != sorted(set(winner_ids)):
             raise ValueError(f"winner_ids가 정렬·고유 목록이 아니다: {item!r}")
-        partitions.append((market, trade_date, parquet_key, frozenset(winner_ids)))
+        partitions.append(
+            (market, trade_date, parquet_key, parquet_sha256, frozenset(winner_ids))
+        )
     return partitions
 
 
@@ -148,9 +158,17 @@ def _input_rows(
 ) -> Iterator[tuple[str, str, dict, bool]]:
     """물리로 읽은 행과 현재 manifest의 논리 범위 여부를 함께 낸다."""
     if input_run_id is not None:
-        for market, trade_date, key, winner_ids in _manifest_partitions(storage, input_run_id):
+        for market, trade_date, key, expected_sha256, winner_ids in _manifest_partitions(
+            storage, input_run_id,
+        ):
             found: set[tuple[str, str]] = set()
-            for row in _read_parquet_rows(storage.get_bytes(key)):
+            parquet_bytes = storage.get_bytes(key)
+            if hashlib.sha256(parquet_bytes).hexdigest() != expected_sha256:
+                raise ValueError(
+                    f"canonical 바이트가 manifest 이후 바뀌었다: key={key}, "
+                    f"run_id={input_run_id}"
+                )
+            for row in _read_parquet_rows(parquet_bytes):
                 winner_id = (row.get("ticker"), row.get("asof_slot"))
                 selected = winner_id in winner_ids
                 if selected:

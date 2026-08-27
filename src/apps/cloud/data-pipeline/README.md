@@ -1165,9 +1165,11 @@ settings.targets.keywords            # ["금리", ...]
   실패는 다른 winner의 canonical·manifest 기록을 막지 않지만 quality log와 exit 2에 남으며,
   raw 목록/읽기 또는 canonical·quality·manifest 저장 실패는 exit 1과
   `canonical_written=false`로 fail-closed 한다. `load-investor-intraday` 정상 경로(ALPHA-1036)는
-  같은 run의 manifest를 직접 GET해 명시된 parquet key와 winner만 적재한다. 누적 parquet의
+  같은 run의 manifest를 직접 GET해 명시된 parquet key와 winner만 적재하고 SHA-256이 producer가
+  확정한 바이트와 같은지 검증한다. 누적 parquet의
   과거 행은 `physical_rows_read`, 현재 winner는 `logical_rows_read`로 분리한다. manifest가 없거나
-  손상됐거나 winner가 canonical에 없으면 LIST·전체 스캔으로 넓히지 않고 exit 1로 실패한다.
+  손상됐거나 hash가 달라졌거나 winner가 canonical에 없으면 LIST·전체 스캔으로 넓히지 않고
+  exit 1로 실패한다.
   개별 DB 행 오류는 savepoint로 격리해 다른 winner를 commit하되 quality와 exit 2에 남긴다.
   정제 exit 2도 성공 winner 적재까지 진행하지만 장중 수급 SFN의 최종 상태는 Failed로 닫힌다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
