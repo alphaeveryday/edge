@@ -8,7 +8,11 @@ EOD 정제(test_normalize_investor)와 겹치는 것을 다시 검사하지 않�
 
 import json
 
-from data_pipeline.lake import LocalStorage, canonical_investor_flow_intraday_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_investor_flow_intraday_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import normalize_investor_estimate as step
 
 
@@ -54,6 +58,34 @@ def _quality_log(storage) -> dict:
     keys = storage.list_keys("operations_archive/data_quality_logs/")
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _manifest(storage, run_id: str) -> dict:
+    return json.loads(storage.get_bytes(canonical_run_manifest_key("investor_flow_intraday", run_id)))
+
+
+class _FailingStorage:
+    def __init__(self, inner, *, fail_put: str | None = None, fail_get: str | None = None,
+                 fail_list: str | None = None):
+        self.inner = inner
+        self.fail_put = fail_put
+        self.fail_get = fail_get
+        self.fail_list = fail_list
+
+    def list_keys(self, prefix):
+        if self.fail_list and self.fail_list in prefix:
+            raise OSError("의도된 목록 조회 실패")
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        if self.fail_get and self.fail_get in key:
+            raise OSError("의도된 읽기 실패")
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        if self.fail_put and self.fail_put in key:
+            raise OSError("의도된 쓰기 실패")
+        return self.inner.put_bytes(key, data)
 
 
 def test_가집계_문자열이_추정_수량_행이_된다(tmp_path):
@@ -114,7 +146,7 @@ def test_슬롯_없는_행은_canonical_로_가지_않는다(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_row(slot="0930"), _kis_row(bsop_hour_gb="  ")])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert [r["asof_slot"] for r in _canonical_rows(storage)] == ["0930"]
     log = _quality_log(storage)
     assert log["records_failed"] == 1
@@ -129,7 +161,7 @@ def test_비문자열_슬롯은_새_정체성으로_인증되지_않는다(tmp_p
     _write_raw(storage, _raw_key(), [_kis_row(slot="0930"), _kis_row(bsop_hour_gb=930),
                                      _kis_row(bsop_hour_gb=[])])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert [r["asof_slot"] for r in _canonical_rows(storage)] == ["0930"]
     log = _quality_log(storage)
     assert [f["reasons"] for f in log["failures"]] == [["bad_asof_slot"], ["bad_asof_slot"]]
@@ -142,7 +174,7 @@ def test_NUL_이_든_슬롯은_적재_전에_막힌다(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_row(slot="0930"), _kis_row(slot="1120\x00")])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert [r["asof_slot"] for r in _canonical_rows(storage)] == ["0930"]
     assert _quality_log(storage)["failures"][0]["reasons"] == ["bad_asof_slot"]
 
@@ -157,7 +189,7 @@ def test_불량_fetched_at_은_통과하지_않는다(tmp_path):
                                      _kis_row(slot="1120", fetched_at="garbage"),
                                      _kis_row(slot="1320", fetched_at=None)])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert [r["asof_slot"] for r in _canonical_rows(storage)] == ["0930"]
     assert [f["reasons"] for f in _quality_log(storage)["failures"]] == [
         ["bad_fetched_at"], ["missing_field"]]
@@ -173,7 +205,7 @@ def test_오프셋_없는_수집시각은_통과하지_않는다(tmp_path):
                                      _kis_row(slot="1120", fetched_at="2026-08-05"),
                                      _kis_row(slot="1320", fetched_at="2026-08-05T09:30:00")])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert [r["asof_slot"] for r in _canonical_rows(storage)] == ["0930"]
     assert [f["reasons"] for f in _quality_log(storage)["failures"]] == [
         ["bad_fetched_at"], ["bad_fetched_at"]]
@@ -187,7 +219,7 @@ def test_int64_를_넘는_수량은_격리한다(tmp_path):
     _write_raw(storage, _raw_key(), [_kis_row(slot="0930"),
                                      _kis_row(slot="1120", sum_fake_ntby_qty=str(2**80))])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert [r["asof_slot"] for r in _canonical_rows(storage)] == ["0930"]
     assert _quality_log(storage)["failures"][0]["reasons"] == ["out_of_range"]
 
@@ -198,7 +230,7 @@ def test_추정_수량이_하나라도_없으면_행이_탈락한다(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_row(orgn_fake_ntby_qty="")])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert _canonical_rows(storage) == []
     assert _quality_log(storage)["failures"][0]["reasons"] == ["missing_field"]
 
@@ -209,7 +241,7 @@ def test_거래일_라벨이_실재하지_않는_날짜면_탈락한다(tmp_path
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_row(asof_date="2026-02-31")])
 
-    assert step.run(storage, "N1") == 0
+    assert step.run(storage, "N1") == 2
     assert _quality_log(storage)["failures"][0]["reasons"] == ["bad_trade_date"]
 
 
@@ -236,3 +268,178 @@ def test_재실행이_멱등이다(tmp_path):
     first = _canonical_rows(storage)
     assert step.run(storage, "N2") == 0
     assert _canonical_rows(storage) == first
+
+
+def test_manifest는_변경분이_아닌_이번_실행의_모든_winner를_기록한다(tmp_path):
+    # WHY(ALPHA-1035): 후속 로더 범위는 canonical 값의 변경 여부가 아니라 이번 normalize가
+    #      성공적으로 확정한 논리 winner다. 동일 값 재확정을 빼면 정상 슬롯 재실행이 0건으로
+    #      축소되고, 중복 raw를 그대로 싣으면 같은 PK를 두 번 처리한다.
+    storage = LocalStorage(tmp_path / "lake")
+    same = _kis_row(slot="0930", our_ticker="005930")
+    _write_raw(storage, _raw_key(run_id="R0"), [same])
+    assert step.run(storage, "N0", input_run_id="R0") == 0
+
+    _write_raw(storage, _raw_key(run_id="R1"), [
+        same,
+        _kis_row(slot="1120", our_ticker="000660", fetched_at="2026-08-05T01:00:00+00:00"),
+        _kis_row(slot="1120", our_ticker="000660", fetched_at="2026-08-05T02:00:00+00:00"),
+    ])
+    assert step.run(storage, "N1", input_run_id="R1") == 0
+
+    prefix = canonical_investor_flow_intraday_partition("KR", "2026-08-05")
+    assert _manifest(storage, "N1") == {
+        "run_id": "N1",
+        "producer": "normalize_investor_estimate",
+        "canonical_written": True,
+        "canonical_partitions": [{
+            "market": "KR",
+            "trade_date": "2026-08-05",
+            "key": f"{prefix}/part-00000.parquet",
+            "winner_ids": [
+                {"ticker": "000660", "asof_slot": "1120"},
+                {"ticker": "005930", "asof_slot": "0930"},
+            ],
+        }],
+    }
+
+
+def test_부분_행_실패는_성공_manifest를_보존하고_실행은_실패한다(tmp_path):
+    # WHY(ALPHA-1035): 한 종목 불량 때문에 다른 성공 winner의 계보를 버리면 후속 처리가 막히고,
+    #      반대로 exit 0이면 부분 유실이 SFN에서 숨는다. 성공 범위와 전체 상태를 분리한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(), [
+        _kis_row(slot="0930", our_ticker="005930"),
+        _kis_row(slot="1120", our_ticker="000660", orgn_fake_ntby_qty=""),
+    ])
+
+    assert step.run(storage, "N1", input_run_id="R1") == 2
+    assert [(row["ticker"], row["asof_slot"]) for row in _canonical_rows(storage)] == [
+        ("005930", "0930")
+    ]
+    assert _manifest(storage, "N1")["canonical_partitions"][0]["winner_ids"] == [
+        {"ticker": "005930", "asof_slot": "0930"}
+    ]
+    log = _quality_log(storage)
+    assert log["ops"] == {"records_out": 1, "failed_records": 1}
+    assert (log["failures"][0]["ticker"], log["failures"][0]["asof_slot"]) == (
+        "000660", "1120"
+    )
+
+
+def test_빈_입력은_유효한_빈_완료_manifest다(tmp_path):
+    # WHY(ALPHA-1035): 0건은 producer 실패가 아니다. 완료된 빈 범위가 있어야 consumer가
+    #      결손과 구분하고 canonical 전체 스캔으로 넓히지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    assert step.run(storage, "N1", input_run_id="empty") == 0
+    assert _manifest(storage, "N1") == {
+        "run_id": "N1",
+        "producer": "normalize_investor_estimate",
+        "canonical_written": True,
+        "canonical_partitions": [],
+    }
+
+
+def test_동일_run_manifest는_결정적이고_멱등이다(tmp_path):
+    # WHY(ALPHA-1035): 재시도마다 winner 순서나 바이트가 달라지면 같은 계보가 새 산출처럼 보여
+    #      비교와 감사 결과가 흔들린다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(), [
+        _kis_row(slot="1120", our_ticker="005930"),
+        _kis_row(slot="0930", our_ticker="000660"),
+    ])
+
+    assert step.run(storage, "N1", input_run_id="R1") == 0
+    key = canonical_run_manifest_key("investor_flow_intraday", "N1")
+    first = storage.get_bytes(key)
+    assert step.run(storage, "N1", input_run_id="R1") == 0
+    assert storage.get_bytes(key) == first
+
+
+def test_canonical_실패는_완료_manifest를_남기지_않는다(tmp_path):
+    # WHY(ALPHA-1035): 일부/없는 canonical을 완료 범위로 승인하면 consumer가 손상 계보를 읽는다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(), [_kis_row()])
+    storage = _FailingStorage(inner, fail_put="canonical/market_data/investor_flow_intraday")
+
+    assert step.run(storage, "N1") == 1
+    assert _manifest(inner, "N1")["canonical_written"] is False
+    assert _quality_log(storage)["canonical_written"] is False
+
+
+def test_raw_저장소_실패는_부분성공으로_승격하지_않는다(tmp_path):
+    # WHY(ALPHA-1035): 손상 행은 종목 단위 부분 실패지만 raw GET 실패는 입력 자체를 확인하지
+    # 못한 hard failure다. 이를 exit 2로 승인하면 빈/부분 manifest를 loader가 정상 범위로 믿는다.
+    inner = LocalStorage(tmp_path / "lake")
+    raw_key = _raw_key()
+    _write_raw(inner, raw_key, [_kis_row()])
+    storage = _FailingStorage(inner, fail_get=raw_key)
+
+    assert step.run(storage, "N1") == 1
+    assert _manifest(inner, "N1")["canonical_written"] is False
+    log = _quality_log(inner)
+    assert log["records_failed"] == 1
+    assert log["failures"][0]["reasons"] == ["raw_read_error"]
+    assert log["canonical_written"] is True
+
+
+def test_raw_목록_실패는_이전_완료_manifest를_무효화한다(tmp_path):
+    # WHY(ALPHA-1035): LIST가 marker 초기화보다 먼저 실패하면 같은 run 재시도의 이전 승인 범위가
+    # 살아남아 consumer가 실패한 재시도를 성공으로 오인한다. 목록 장애도 hard failure 증적이다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(), [_kis_row()])
+    assert step.run(inner, "N1") == 0
+    assert _manifest(inner, "N1")["canonical_written"] is True
+
+    storage = _FailingStorage(inner, fail_list="raw/")
+    assert step.run(storage, "N1") == 1
+    assert _manifest(inner, "N1")["canonical_written"] is False
+    log = _quality_log(inner)
+    assert log["records_failed"] == 1
+    assert log["failures"][0]["reasons"] == ["raw_list_error"]
+
+
+def test_quality_실패는_완료_manifest를_남기지_않는다(tmp_path):
+    # WHY(ALPHA-1035): 성공/실패 감사 로그가 유실된 실행을 완료 계보로 공개하면 부분 실패 여부를
+    #      복원할 수 없다. canonical이 써졌어도 미완료 marker를 유지한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(), [_kis_row()])
+    storage = _FailingStorage(inner, fail_put="data_quality_logs")
+
+    assert step.run(storage, "N1") == 1
+    assert _manifest(inner, "N1")["canonical_written"] is False
+
+
+def test_manifest_초기화_실패는_canonical을_바꾸지_않는다(tmp_path):
+    # WHY(ALPHA-1035): 이전 완료 manifest를 무효화할 수 없는데 canonical부터 바꾸면 stale
+    #      winner_ids가 새 파일을 가리킨다. 초기 marker PUT이 막히면 쓰기를 시작하지 않는다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(run_id="R1"), [_kis_row(sum_fake_ntby_qty="100")])
+    assert step.run(inner, "N1", input_run_id="R1") == 0
+    first_rows = _canonical_rows(inner)
+    first_manifest = _manifest(inner, "N1")
+    _write_raw(inner, _raw_key(run_id="R2"), [
+        _kis_row(sum_fake_ntby_qty="200", fetched_at="2026-08-05T02:00:00+00:00")
+    ])
+    storage = _FailingStorage(inner, fail_put="canonical_run_manifests")
+
+    assert step.run(storage, "N1", input_run_id="R2") == 1
+    assert _canonical_rows(inner) == first_rows
+    assert _manifest(inner, "N1") == first_manifest
+
+
+def test_완료_manifest_쓰기_실패는_fail_loud다(tmp_path):
+    # WHY(ALPHA-1035): 마지막 commit marker가 실패하면 canonical 성공만으로 완료할 수 없다.
+    class _CompletedManifestFailingStorage(_FailingStorage):
+        def put_bytes(self, key, data):
+            if "canonical_run_manifests" in key and json.loads(data)["canonical_written"] is True:
+                raise OSError("의도된 완료 manifest 쓰기 실패")
+            return self.inner.put_bytes(key, data)
+
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(), [_kis_row()])
+    storage = _CompletedManifestFailingStorage(inner)
+
+    assert step.run(storage, "N1") == 1
+    assert _canonical_rows(inner)
+    assert _manifest(inner, "N1")["canonical_written"] is False

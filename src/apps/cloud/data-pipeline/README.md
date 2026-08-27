@@ -1151,6 +1151,14 @@ settings.targets.keywords            # ["금리", ...]
   한 축 많다** — 하루 4~5 슬롯이 한 종목·한 날짜에 공존하므로 ticker 단독으로 병합하면 마지막
   슬롯이 앞을 덮어 장중 추이가 사라진다. 거래일은 raw 의 `asof_date`(수집이 붙인 provenance)가
   주고, 같은 슬롯 재관측은 최신 fetched_at 이 이긴다.
+  `normalize-investor-estimate`는 매 실행
+  `operations_archive/canonical_run_manifests/dataset=investor_flow_intraday/run_id=…/manifest.json`
+  에 직접 parquet 키와 이번 실행에서 게이트를 통과한 모든 `(ticker,asof_slot)` winner를 기록한다
+  (ALPHA-1035). 값이 바뀐 행만이 아니라 같은 값 재확정도 포함하고 논리 키는 중복 제거한다. 행
+  실패는 다른 winner의 canonical·manifest 기록을 막지 않지만 quality log와 exit 2에 남으며,
+  raw 목록/읽기 또는 canonical·quality·manifest 저장 실패는 exit 1과
+  `canonical_written=false`로 fail-closed 한다. 이 단계에서는 producer만 추가되어 아래 기존
+  `load-investor-intraday`의 전체 동기화 범위는 아직 바뀌지 않는다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
