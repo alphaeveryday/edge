@@ -315,6 +315,8 @@ def run(
     try:
         if input_run_id is not None and (from_date is not None or to_date is not None):
             raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
+        if (from_date is None) != (to_date is None):
+            raise ValueError("from_date와 to_date는 함께 써야 한다")
         # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면 최신
         # fetched_at 이 이긴다 — canonical 병합(_merge_partition)과 같은 규칙이다.
         candidates: dict[tuple[str, str, str], dict] = {}

@@ -710,6 +710,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
             raise SystemExit(
                 "load-price-daily는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
             )
+        if (args.from_date is None) != (args.to_date is None):
+            raise SystemExit("load-price-daily의 --from과 --to는 함께 써야 한다")
         parsed_dates = []
         for name, value in (("--from", args.from_date), ("--to", args.to_date)):
             if value is None:

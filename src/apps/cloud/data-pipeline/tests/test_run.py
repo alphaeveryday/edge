@@ -636,6 +636,10 @@ def test_load_price_daily_requires_exactly_one_explicit_scope(monkeypatch):
         with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
             main(argv)
 
+    for bound in ("--from", "--to"):
+        with pytest.raises(SystemExit, match="함께 써야"):
+            main(["load-price-daily", "--run-id", "R", bound, "2026-08-20"])
+
 
 def test_load_price_daily_forwards_manifest_scope_and_preserves_explicit_all(monkeypatch):
     # WHY(ALPHA-1038): 정상 SFN은 실제 normalize run을 그대로 넘기고, 전체 복구는 운영자가
