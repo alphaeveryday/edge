@@ -34,6 +34,18 @@ def test_content_hash_is_deterministic():
     assert len(catalog.content_hash()) == 64  # sha256 hex
 
 
+def test_only_intraday_manifest_steps_fulfill_on_partial_exit():
+    # WHY(ALPHA-1036): 비0 성공 산출은 일반 규칙이 아니라 winner를 commit하는 정제·적재의
+    # 계약이다. 다른 작업에 exit 2를 넓히면 실제 실패가 downstream 완료로 오인된다.
+    partial = {"NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY"}
+    assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
+    assert all(
+        entry.fulfilled_exit_codes == (0,)
+        for entry in catalog.entries()
+        if entry.task_key not in partial
+    )
+
+
 def test_by_sfn_state_maps_registered_only():
     assert catalog.by_sfn_state("CollectKisPrice").task_key == "PRICE_COLLECTION_KIS"
     assert catalog.by_sfn_state("NormalizePrice").task_key == "NORMALIZE_PRICE"

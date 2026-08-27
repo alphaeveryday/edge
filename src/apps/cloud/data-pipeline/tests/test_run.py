@@ -685,6 +685,54 @@ def test_load_assertions_explicit_all_preserves_full_recovery(monkeypatch):
     assert captured["from_date"] is None and captured["to_date"] is None
 
 
+def test_load_investor_intraday_requires_an_explicit_scope(monkeypatch):
+    # WHY(ALPHA-1036): SFN에서 input run이 빠졌을 때 암묵적 canonical 풀스캔으로 성공하면
+    # manifest 소비 코드가 있어도 정상 운영 경로는 조용히 예전 동작으로 퇴행한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+        main(["load-investor-intraday", "--run-id", "R"])
+
+
+def test_load_investor_intraday_forwards_normalize_run_scope(monkeypatch):
+    # WHY(ALPHA-1036): 현재 normalize run_id가 CLI에서 사라지면 loader는 manifest 직접 key와
+    # winner 범위를 찾을 수 없다. 날짜 추측 없이 받은 값을 그대로 전달해야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_investor_intraday, "run",
+                        lambda *args, **kwargs: captured.update(kwargs) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main([
+        "load-investor-intraday", "--run-id", "R", "--input-run-id", "N1",
+    ]) == 0
+    assert captured["input_run_id"] == "N1"
+
+
+def test_load_investor_intraday_explicit_all_preserves_full_recovery(monkeypatch):
+    # WHY(ALPHA-1036): 정상 경로를 좁혀도 운영자가 의도한 전체 복구 표면은 남기되, `--all`을
+    # 직접 쓴 경우만 범위 없음이 전체라는 뜻이 되어야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+    monkeypatch.setattr(run_mod.load_investor_intraday, "run",
+                        lambda *args, **kwargs: captured.update(kwargs) or 0)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-investor-intraday", "--run-id", "R", "--all"]) == 0
+    assert captured["input_run_id"] is None
+    assert captured["from_date"] is None and captured["to_date"] is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_investor_intraday_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1036): 불량·역전 날짜가 문자열 필터에서 0건 성공하면 복구 완료로 오인된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-investor-intraday", "--run-id", "R", *argv])
+
+
 @pytest.mark.parametrize("argv", [
     ["--from", "2026-08-32", "--to", "2026-08-32"],
     ["--from", "2026-08-20", "--to", "2026-08-10"],

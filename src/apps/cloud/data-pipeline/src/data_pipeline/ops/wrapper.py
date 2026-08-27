@@ -22,7 +22,7 @@ import urllib.request
 from collections.abc import Callable
 from datetime import datetime
 
-from . import contracts, states
+from . import catalog, contracts, states
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
 
@@ -305,7 +305,16 @@ def instrument(
         }
         if expected_count is not None else None
     )
-    data_status = derive_data_status(signals)
+    entry = catalog.get(task_key)
+    fulfilled_exit_codes = entry.fulfilled_exit_codes if entry is not None else (0,)
+    output_fulfilled = (
+        isinstance(exit_code, int) and not isinstance(exit_code, bool)
+        and exit_code in fulfilled_exit_codes
+    )
+    # exit 2는 물리 실행 실패를 보존하되 성공 산출의 품질을 관측한다. 그대로 넘기면
+    # derive_data_status의 nonzero 게이트가 UNKNOWN으로 덮어 부분 실패(INCOMPLETE)가 숨는다.
+    data_signals = {**signals, "exit_code": 0 if output_fulfilled else exit_code}
+    data_status = derive_data_status(data_signals)
     exec_status = states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
 
     entity_resolution_counters = _entity_resolution_counters(
@@ -322,7 +331,7 @@ def instrument(
     # 실행이 성공했으면 outcome=FULFILLED 다(attempt 를 실패로 바꾸지 않는다, 스펙 §3.2·시나리오 D).
     _safe(lambda: ledger.update_task_outcome(
         expected_task_id,
-        task_outcome=states.OUTCOME_FULFILLED if exit_code == 0 else states.OUTCOME_FAILED,
+        task_outcome=(states.OUTCOME_FULFILLED if output_fulfilled else states.OUTCOME_FAILED),
         data_status=data_status, current_attempt_id=attempt_id,
         completeness=completeness,
         # 판정에 쓴 그 신호를 그대로 싣는다(ALPHA-182) — 대시보드(ALPHA-514)의 건수 열.
@@ -340,7 +349,7 @@ def instrument(
         freshness=_freshness_signal(
             expected, observed=signals.get("artifact_observed") is True,
             actual_as_of_values=signals.get("actual_as_of_values")),
-        fulfilled=exit_code == 0,
+        fulfilled=output_fulfilled,
     ))
     return exit_code
 

@@ -364,6 +364,32 @@ def test_instrument_incomplete_data_keeps_outcome_fulfilled():
     assert row["completeness"] == {"expected": 31, "received": 30, "missing": 1}
 
 
+@pytest.mark.parametrize("task_key", [
+    "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
+])
+def test_partial_manifest_exit_keeps_attempt_failed_but_fulfills_output(task_key):
+    # WHY(ALPHA-1036): exit 2는 실패를 숨기지 않는 물리 실패이면서 commit된 winner는 사용
+    # 가능하다. attempt/outcome/data 세 축을 한 상태로 뭉치면 downstream이나 품질이 거짓이다.
+    db = FakeOpsDB()
+    _seed(db, task_key=task_key)
+
+    rc = wrapper.instrument(
+        lambda: 2, task_key=task_key, run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/partial",
+        observe_data_fn=lambda ec: {
+            "records_out": 1, "failed_records": 1, "request_completed": True,
+        },
+    )
+
+    row = db.etasks_by_id["et1"]
+    assert rc == 2
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+    assert db.attempts[0]["exit_code"] == 2
+    assert row["task_outcome"] == states.OUTCOME_FULFILLED
+    assert row["data_status"] == states.DATA_INCOMPLETE
+    assert row["fulfilled_at"] == "SET"
+
+
 def test_ledger_expected_count_overrides_observer_self_report():
     """수집기가 분모도 30으로 줄여 신고해 30/30 만점을 만드는 축소 채점을 막는다."""
     db = FakeOpsDB()

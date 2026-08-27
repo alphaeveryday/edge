@@ -878,14 +878,19 @@ issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
     돌려도 체인이 닫힌다 — 복구·검증용이다
     (`src/` 에서. 수집은 KIS 앱키, 적재는 DB 접속이 필요하다 — 위 각 절의 env 와 같다):
     ```bash
+    RUN_ID=manual-investor-20260827-0935
+    export RUN_ID
     # 수집 — 거래일이고 09:30(KST) 이후일 때만. 아니면 사유를 남기고 skip(exit 0)한다
     DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_INVESTOR__SOURCE__APP_SECRET=... \
-      uv run --package data-pipeline python -m data_pipeline.run ingest-raw-investor-estimate
-    # 정제 — --input-run-id 로 한 슬롯 런만 좁힐 수 있다(미지정=전체 raw, 멱등)
-    uv run --package data-pipeline python -m data_pipeline.run normalize-investor-estimate
-    # 적재 — 창 미지정 = trade_date 전체 스캔 + 멱등. 선행: 이 테이블의 Flyway 적용 완료
+      uv run --package data-pipeline python -m data_pipeline.run ingest-raw-investor-estimate \
+      --run-id "$RUN_ID"
+    # 정제 — 같은 수집 run만 읽고 canonical winner manifest를 확정한다
+    uv run --package data-pipeline python -m data_pipeline.run normalize-investor-estimate \
+      --run-id "$RUN_ID" --input-run-id "$RUN_ID"
+    # 적재 — 같은 manifest의 직접 parquet와 winner만 읽는다. 선행: Flyway 적용 완료
     DATA_PIPELINE_DB__HOST=127.0.0.1 DATA_PIPELINE_DB__PASSWORD=... \
-      uv run --package data-pipeline python -m data_pipeline.run load-investor-intraday
+      uv run --package data-pipeline python -m data_pipeline.run load-investor-intraday \
+      --run-id "$RUN_ID" --input-run-id "$RUN_ID"
     ```
     - **컬럼은 추정 수량 3개뿐**(`net_qty_foreign_est`·`net_qty_institution_est`·
       `net_qty_total_est`). 벤더가 `frgn`·`orgn`·`sum` 가집계 수량만 주고 개인·기관 세분·
@@ -1159,8 +1164,12 @@ settings.targets.keywords            # ["금리", ...]
   덮어써도 consumer가 앞 run_id에 뒤 run 값을 붙이지 않게 fail-closed 하는 근거다. 행
   실패는 다른 winner의 canonical·manifest 기록을 막지 않지만 quality log와 exit 2에 남으며,
   raw 목록/읽기 또는 canonical·quality·manifest 저장 실패는 exit 1과
-  `canonical_written=false`로 fail-closed 한다. 이 단계에서는 producer만 추가되어 아래 기존
-  `load-investor-intraday`의 전체 동기화 범위는 아직 바뀌지 않는다.
+  `canonical_written=false`로 fail-closed 한다. `load-investor-intraday` 정상 경로(ALPHA-1036)는
+  같은 run의 manifest를 직접 GET해 명시된 parquet key와 winner만 적재한다. 누적 parquet의
+  과거 행은 `physical_rows_read`, 현재 winner는 `logical_rows_read`로 분리한다. manifest가 없거나
+  손상됐거나 winner가 canonical에 없으면 LIST·전체 스캔으로 넓히지 않고 exit 1로 실패한다.
+  개별 DB 행 오류는 savepoint로 격리해 다른 winner를 commit하되 quality와 exit 2에 남긴다.
+  정제 exit 2도 성공 winner 적재까지 진행하지만 장중 수급 SFN의 최종 상태는 Failed로 닫힌다.
 - **수집 로그** — `operations_archive/collection_logs/source=…/dataset=…/started_date=…/run_id=…/log.json`
   (`dataset=`로 갈라 같은 벤더의 뉴스·가격·재무 로그가 같은 run_id 를 공유해도 안 덮어쓴다)
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`

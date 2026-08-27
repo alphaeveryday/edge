@@ -1,8 +1,9 @@
 """장중 투자자 추정 적재 — canonical investor_flow_intraday → 동명 테이블 (ALPHA-768).
 
-`canonical/market_data/investor_flow_intraday/market=…/trade_date=…` 를 읽어 금융상품·거래일·
-**슬롯** grain 의 장중 추정 순매수를 Cloud Event Store 에 적재한다. 수집(ALPHA-767) → 정제
-(normalize_investor_estimate) → 이 스텝이 체인의 끝이다.
+정상 경로는 `normalize_investor_estimate`가 같은 run_id로 확정한 manifest의 직접 parquet key와
+winner만 읽어 금융상품·거래일·**슬롯** grain의 장중 추정 순매수를 Cloud Event Store에 적재한다.
+manifest가 없거나 손상되면 canonical 전체 스캔으로 넓히지 않고 실패한다. 수집(ALPHA-767) →
+정제(normalize_investor_estimate) → 이 스텝이 체인의 끝이다.
 
 EOD 적재(`load_etf_flow`, ALPHA-385)와 같은 모델이라 instrument 해소·MIC 규약·게이트 헬퍼를
 그대로 import 한다. **다른 것은 키 축 하나다** — 정체성에 `asof_slot` 이 붙어 하루 4~5 슬롯이
@@ -18,17 +19,24 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from ..config import DbConfig
 from ..db import connect
-from ..lake import Storage, canonical_investor_flow_intraday_partition, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_investor_flow_intraday_partition,
+    canonical_run_manifest_key,
+    quality_log_key,
+)
 from .load_etf_flow import _MICS_BY_MARKET, _instrument_ids, _is_int, _read_parquet_rows
 from .normalize_investor import _fetched_at
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "load_investor_intraday"
+_PARTIAL_EXIT_CODE = 2
 # 품질 로그 dataset. normalize_investor_estimate 가 canonical dataset 을 "investor_flow_intraday"
 # 로 쓰는데 SFN 은 모든 스텝에 같은 run_id 를 넘긴다 — 로그 키가 같으면 이 로더가 정제 로그를
 # 덮어써 records_failed 증거가 사라진다(load_etf_flow 와 같은 근거). "_load" 로 분리.
@@ -69,6 +77,115 @@ def _partition_dates(storage: Storage, market: str) -> list[str]:
     return sorted(dates)
 
 
+def _manifest_partitions(
+    storage: Storage, input_run_id: str,
+) -> list[tuple[str, str, str, frozenset[tuple[str, str]]]]:
+    """NormalizeInvestorEstimate가 승인한 직접 key와 현재 실행 winner 범위."""
+    manifest_key = canonical_run_manifest_key("investor_flow_intraday", input_run_id)
+    manifest = json.loads(storage.get_bytes(manifest_key).decode("utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id:
+        raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
+    if (manifest.get("producer") != "normalize_investor_estimate"
+            or manifest.get("canonical_written") is not True):
+        raise ValueError(f"완료된 normalize-investor-estimate manifest가 아니다: run_id={input_run_id}")
+    raw = manifest.get("canonical_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"canonical_partitions가 없는 manifest다: run_id={input_run_id}")
+
+    partitions: list[tuple[str, str, str, frozenset[tuple[str, str]]]] = []
+    seen_partitions: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"canonical_partitions 항목이 객체가 아니다: run_id={input_run_id}")
+        market, trade_date = item.get("market"), item.get("trade_date")
+        try:
+            valid_date = (
+                isinstance(trade_date, str)
+                and datetime.strptime(trade_date, "%Y-%m-%d").strftime("%Y-%m-%d") == trade_date
+            )
+        except ValueError:
+            valid_date = False
+        if market not in _MICS_BY_MARKET or not valid_date:
+            raise ValueError(f"canonical_partitions 항목이 유효하지 않다: {item!r}")
+        partition = (market, trade_date)
+        if partition in seen_partitions:
+            raise ValueError(f"canonical_partitions 항목이 중복됐다: {item!r}")
+        seen_partitions.add(partition)
+
+        parquet_key = item.get("key")
+        expected_key = (
+            f"{canonical_investor_flow_intraday_partition(market, trade_date)}"
+            "/part-00000.parquet"
+        )
+        if parquet_key != expected_key:
+            raise ValueError(f"canonical 직접 키가 파티션과 일치하지 않는다: {item!r}")
+        raw_winners = item.get("winner_ids")
+        if not isinstance(raw_winners, list) or not raw_winners:
+            raise ValueError(f"winner_ids가 없는 manifest 파티션이다: {item!r}")
+        winner_ids: list[tuple[str, str]] = []
+        for winner in raw_winners:
+            if not isinstance(winner, dict) or set(winner) != {"ticker", "asof_slot"}:
+                raise ValueError(f"winner_ids 항목이 유효하지 않다: {item!r}")
+            ticker, asof_slot = winner.get("ticker"), winner.get("asof_slot")
+            if not all(
+                isinstance(value, str) and value.strip() and value == value.strip()
+                for value in (ticker, asof_slot)
+            ):
+                raise ValueError(f"winner_ids 항목이 유효하지 않다: {item!r}")
+            winner_ids.append((ticker, asof_slot))
+        if winner_ids != sorted(set(winner_ids)):
+            raise ValueError(f"winner_ids가 정렬·고유 목록이 아니다: {item!r}")
+        partitions.append((market, trade_date, parquet_key, frozenset(winner_ids)))
+    return partitions
+
+
+def _input_rows(
+    storage: Storage,
+    *,
+    input_run_id: str | None,
+    from_date: str | None,
+    to_date: str | None,
+) -> Iterator[tuple[str, str, dict, bool]]:
+    """물리로 읽은 행과 현재 manifest의 논리 범위 여부를 함께 낸다."""
+    if input_run_id is not None:
+        for market, trade_date, key, winner_ids in _manifest_partitions(storage, input_run_id):
+            found: set[tuple[str, str]] = set()
+            for row in _read_parquet_rows(storage.get_bytes(key)):
+                winner_id = (row.get("ticker"), row.get("asof_slot"))
+                selected = winner_id in winner_ids
+                if selected:
+                    if winner_id in found:
+                        raise ValueError(
+                            f"manifest winner가 canonical에 중복됐다: key={key}, winner={winner_id!r}"
+                        )
+                    if row.get("market") != market or row.get("trade_date") != trade_date:
+                        raise ValueError(
+                            f"manifest winner의 canonical 파티션 정체성이 다르다: "
+                            f"key={key}, winner={winner_id!r}"
+                        )
+                    found.add(winner_id)
+                yield market, trade_date, row, selected
+            missing = winner_ids - found
+            if missing:
+                raise ValueError(
+                    f"manifest winner가 canonical에 없다: key={key}, winners={sorted(missing)!r}"
+                )
+        return
+
+    for market in _MICS_BY_MARKET:
+        dates = [
+            date for date in _partition_dates(storage, market)
+            if (from_date is None or date >= from_date) and (to_date is None or date <= to_date)
+        ]
+        for trade_date in dates:
+            prefix = canonical_investor_flow_intraday_partition(market, trade_date)
+            for key in storage.list_keys(prefix + "/"):
+                if not key.endswith(".parquet"):
+                    continue
+                for row in _read_parquet_rows(storage.get_bytes(key)):
+                    yield market, trade_date, row, True
+
+
 def _load_violation(fact: dict, trade_date: str) -> str | None:
     """적재 전 방어선(Rule 12). 위반이면 사유, 아니면 None.
 
@@ -104,8 +221,12 @@ def _load_violation(fact: dict, trade_date: str) -> str | None:
         # 적재되면 뒤에 온 불량 행이 최신성 판정을 우회해 정상 값을 덮는다.
         return "bad_trade_date"
     try:
-        datetime.fromisoformat(str(fact["available_at"]))
+        available_at = datetime.fromisoformat(fact["available_at"])
     except ValueError:
+        return "bad_available_at"
+    if available_at.tzinfo is None or available_at.utcoffset() is None:
+        # 날짜만·naive datetime도 fromisoformat은 받지만 '언제 이용 가능했는지'가 정해지지
+        # 않는다. PostgreSQL 세션 timezone에 따라 다른 순간으로 저장되면 PIT가 깨진다.
         return "bad_available_at"
     return None
 
@@ -115,16 +236,18 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
     """canonical 장중 추정 → investor_flow_intraday 적재. 성공 0, 장애 시 비0.
 
-    창(from/to) 미지정 = trade_date 전체 스캔. 멱등 skip 이라 재실행 비용은 신규 슬롯뿐이고,
-    놓친 슬롯도 다음 런이 자연 회복한다(load_etf_flow 와 같은 모델).
+    input_run_id는 정제 manifest의 직접 key와 winner만 처리한다. from/to는 명시 복구 범위이고,
+    셋 다 미지정은 호출자가 명시적으로 선택한 전체 스캔이다. 서로 섞으면 거부한다.
     """
     started_at = datetime.now(timezone.utc)
-    read = skipped_missing_identity = skipped_unknown_instrument = skipped_load_violation = 0
+    physical_read = read = 0
+    skipped_missing_identity = skipped_unknown_instrument = skipped_load_violation = 0
     skipped_ambiguous_ticker = 0
     already = created = updated = 0
     created_sample: list[dict] = []
@@ -135,61 +258,50 @@ def run(
     exit_code = 0
 
     try:
+        if input_run_id is not None and (from_date is not None or to_date is not None):
+            raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
         # (market, ticker, trade_date, asof_slot) → 적재 후보. ⚠️ 슬롯이 키에 없으면 하루의
         # 마지막 슬롯이 앞 슬롯을 덮어 장중 추이가 사라진다. 같은 키가 여러 parquet 에 걸리면
         # 최신 fetched_at 이 이긴다 — canonical 병합과 같은 규칙이다.
         candidates: dict[tuple[str, str, str, str], dict] = {}
-        for market in _MICS_BY_MARKET:
-            dates = [
-                d for d in _partition_dates(storage, market)
-                if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)
-            ]
-            for date in dates:
-                prefix = canonical_investor_flow_intraday_partition(market, date)
-                for key in storage.list_keys(prefix + "/"):
-                    if not key.endswith(".parquet"):
-                        continue
-                    for row in _read_parquet_rows(storage.get_bytes(key)):
-                        read += 1
-                        ticker, trade_date = row.get("ticker"), row.get("trade_date")
-                        asof_slot = row.get("asof_slot")
-                        if not all(isinstance(v, str) and v.strip()
-                                   for v in (ticker, trade_date, asof_slot)):
-                            # 정체성 3축은 비어있지 않은 문자열이어야 한다. 비문자열(드리프트로
-                            # 실린 int slot 등)·공백을 통과시키면 아래 sorted(candidates) 에서
-                            # str/int 비교가 TypeError 를 내 바깥 try 가 load_error 로 잡아 **정상
-                            # 행까지 전체 롤백**한다 — 게이트가 스스로 죽는다(Rule 12).
-                            skipped_missing_identity += 1
-                            continue
-                        if row.get("market") != market or trade_date != date:
-                            # 행의 정체성이 자기가 놓인 파티션과 어긋난다. 정제는 행 값으로
-                            # 파티션을 정하므로 정상 경로엔 없다 — 어긋났다면 손상·수기 편집이다.
-                            # 그냥 쓰면 ① 다른 시장 수급이 KR instrument 에 붙고(로더는 파티션
-                            # 으로 MIC 를 고른다) ② 행의 trade_date 가 `--from/--to` 창 밖이어도
-                            # 적재돼 창 계약이 조용히 깨진다.
-                            skipped_missing_identity += 1
-                            continue
-                        fetched_at = row.get("fetched_at")
-                        cand_key = (market, ticker, trade_date, asof_slot)
-                        prev = candidates.get(cand_key)
-                        # '최신 우선'은 **실제 시각**으로 가른다(정제의 병합과 같은 규칙).
-                        # 문자열 비교는 오프셋이 다르면 어긋나 — '…T10:00+09:00'(01:00Z)이
-                        # '…T02:00+00:00'보다 크게 읽혀 더 오래된 추정치가 DB 에 남는다.
-                        if prev is not None and _fetched_at(row) < _fetched_at(prev):
-                            continue
-                        fact = {col: row.get(col) for col in _NET_COLUMNS}
-                        # available_at = '우리가 이 관측을 쓸 수 있게 된 시각'. 수집 시각이 가장
-                        # 보수적인 근사다(load_etf_flow 와 같은 규약). ⚠️ 슬롯 시각이 아니다 —
-                        # asof_slot 은 도메인 미관측이라 시각으로 해석하지 않는다.
-                        #
-                        # 결측을 실행 시각으로 **대체하지 않는다**(형제 로더와 다른 점): 정제가
-                        # fetched_at 을 필수로 보장하므로 여기서 비어 있다는 건 canonical 이
-                        # 손상됐다는 뜻인데, 대체하면 관측 가능 시각을 지어내면서 그 손상까지
-                        # 정상 적재로 집계된다. 아래 게이트가 `bad_available_at` 으로 드러낸다.
-                        fact["available_at"] = fetched_at
-                        # 원문 보존 — 위 '최신 우선' 비교가 이 키를 실제 시각으로 읽는다.
-                        fact["fetched_at"] = fetched_at
-                        candidates[cand_key] = fact
+        for market, partition_date, row, selected in _input_rows(
+            storage, input_run_id=input_run_id, from_date=from_date, to_date=to_date,
+        ):
+            physical_read += 1
+            if not selected:
+                continue
+            read += 1
+            ticker, trade_date = row.get("ticker"), row.get("trade_date")
+            asof_slot = row.get("asof_slot")
+            if not all(isinstance(v, str) and v.strip()
+                       for v in (ticker, trade_date, asof_slot)):
+                # 정체성 3축은 비어있지 않은 문자열이어야 한다. 비문자열(드리프트로
+                # 실린 int slot 등)·공백을 통과시키면 아래 sorted(candidates) 에서
+                # str/int 비교가 TypeError 를 내 바깥 try 가 load_error 로 잡아 **정상
+                # 행까지 전체 롤백**한다 — 게이트가 스스로 죽는다(Rule 12).
+                skipped_missing_identity += 1
+                continue
+            if row.get("market") != market or trade_date != partition_date:
+                # manifest 정상 경로는 _input_rows가 날짜까지 hard-fail한다. 복구 스캔에서도
+                # 시장이 파티션과 어긋난 손상 행을 다른 MIC 종목에 붙이지 않는다.
+                skipped_missing_identity += 1
+                continue
+            fetched_at = row.get("fetched_at")
+            cand_key = (market, ticker, trade_date, asof_slot)
+            prev = candidates.get(cand_key)
+            # '최신 우선'은 **실제 시각**으로 가른다(정제의 병합과 같은 규칙).
+            # 문자열 비교는 오프셋이 다르면 어긋나 — '…T10:00+09:00'(01:00Z)이
+            # '…T02:00+00:00'보다 크게 읽혀 더 오래된 추정치가 DB 에 남는다.
+            if prev is not None and _fetched_at(row) < _fetched_at(prev):
+                continue
+            fact = {col: row.get(col) for col in _NET_COLUMNS}
+            # available_at = '우리가 이 관측을 쓸 수 있게 된 시각'. 수집 시각이 가장
+            # 보수적인 근사다(load_etf_flow 와 같은 규약). ⚠️ 슬롯 시각이 아니다 —
+            # asof_slot 은 도메인 미관측이라 시각으로 해석하지 않는다.
+            # 결측은 실행 시각으로 대체하지 않고 아래 게이트에서 드러낸다.
+            fact["available_at"] = fetched_at
+            fact["fetched_at"] = fetched_at
+            candidates[cand_key] = fact
 
         with connect(db) as conn:
             instruments = {
@@ -221,13 +333,28 @@ def run(
                 params += [fact[col] for col in _NET_COLUMNS]
                 params += [fact["available_at"], run_id]
                 with conn.cursor() as cur:
-                    cur.execute(_UPSERT_SQL, params)
-                    row = cur.fetchone()
-                    if row is None:
+                    cur.execute("SAVEPOINT investor_intraday_row")
+                    try:
+                        cur.execute(_UPSERT_SQL, params)
+                        result = cur.fetchone()
+                    except Exception as exc:
+                        # 한 종목의 DB 제약/값 오류가 다른 winner의 성공을 롤백하지 않도록 이
+                        # 행만 되돌린다. 연결 자체가 죽어 ROLLBACK이 실패하면 바깥 hard failure다.
+                        cur.execute("ROLLBACK TO SAVEPOINT investor_intraday_row")
+                        cur.execute("RELEASE SAVEPOINT investor_intraday_row")
+                        failures.append({
+                            "market": market, "ticker": ticker, "trade_date": trade_date,
+                            "asof_slot": asof_slot, "reasons": ["row_load_error"],
+                            "error": str(exc),
+                        })
+                        exit_code = _PARTIAL_EXIT_CODE
+                        continue
+                    cur.execute("RELEASE SAVEPOINT investor_intraday_row")
+                    if result is None:
                         # 값이 같아 UPDATE 조건이 걸러낸 경우 — 재실행의 정상 경로다.
                         already += 1
                         continue
-                    if row[0]:
+                    if result[0]:
                         # xmax<>0 = 기존 행을 갱신했다(벤더 가집계 정정이 마트까지 흘렀다).
                         updated += 1
                         continue
@@ -239,17 +366,25 @@ def run(
                         "net_qty_total_est": fact["net_qty_total_est"],
                     })
     except Exception as exc:
-        # 커밋 경계는 런 전체다 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
+        # 연결·manifest·canonical 범위 오류는 hard failure다. DB 행 오류만 위 savepoint에서
+        # 격리하고, 이 경로는 트랜잭션 전체가 롤백됐다고 보수적으로 기록한다.
         logger.exception("장중 투자자 추정 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
-        created, updated, created_sample = 0, 0, []
+        already, created, updated, created_sample = 0, 0, 0, []
         exit_code = 1
+
+    if exit_code == 0 and (
+        skipped_missing_identity + skipped_unknown_instrument
+        + skipped_ambiguous_ticker + skipped_load_violation
+    ):
+        exit_code = _PARTIAL_EXIT_CODE
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "markets": list(_MICS_BY_MARKET), "from_date": from_date, "to_date": to_date,
-        "rows_read": read,
+        "markets": list(_MICS_BY_MARKET), "input_run_id": input_run_id,
+        "from_date": from_date, "to_date": to_date,
+        "physical_rows_read": physical_read, "logical_rows_read": read, "rows_read": read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_unknown_instrument": skipped_unknown_instrument,
         # 마스터가 모르는 종목 목록 — instrument 마스터 확장이 얼마나 필요한지의 근거다.
@@ -274,7 +409,7 @@ def run(
                           json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"))
     except Exception:
         logger.exception("적재 로그 기록 실패")
-        exit_code = exit_code or 1
+        exit_code = 1
 
     logger.info(
         "load_investor_intraday 완료: read=%d created=%d updated=%d already=%d "

@@ -265,16 +265,11 @@ locals {
       command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id)"
     },
     {
-      # 장중 투자자 추정 적재(ALPHA-768) — canonical investor_flow_intraday →
-      # investor_flow_intraday. 창 미지정 = canonical 전체 스캔 + 멱등(값이 바뀐 정정만 UPDATE).
-      #
-      # ⚠️ **하루 5슬롯인데 창을 붙이지 않는다** — 공시 레인이 같은 판단을 한 자리다
-      # (disclosure_pipeline.tf `LoadDisclosure` 주석). 그 풀스캔이 곧 백로그 회수 경로라서,
-      # 창을 붙이면 슬롯 하나가 죽었을 때 주워올 경로가 사라진다. 비용도 작다: canonical 은
-      # `trade_date` 파티션당 작은 parquet 하나다.
+      # 장중 투자자 추정 적재(ALPHA-768·1036) — 현재 normalize manifest의 직접 parquet와
+      # winner만 읽는다. 결손·손상 시 범위를 전량으로 넓히지 않고 실패한다.
       state        = "LoadInvestorIntraday"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-investor-intraday', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-investor-intraday', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
   ]
 

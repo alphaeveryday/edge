@@ -326,6 +326,126 @@ def test_confirmed_ecs_stopped_transitions_running_attempt():
     assert db.attempts[0]["status"] == states.EXEC_SUCCEEDED
 
 
+def test_partial_normalize_exit_fulfills_dependency_but_attempt_stays_failed():
+    # WHY(ALPHA-1036): 정제가 일부 행을 거부해도 commit된 manifest winner는 loader가 소비한다.
+    # Reconciler가 exit 2를 미완으로 보면 실제 loader가 영구 BLOCKED로 오귀속된다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+
+    _reconcile(db, history=_entered(
+        "NormalizeInvestorEstimate", arn="arn:task/normalize", succeeded=True, exit_code=2,
+    ))
+
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_dependency_uses_latest_retry_not_any_past_success():
+    # WHY: 앞 normalize가 성공했어도 최신 redrive가 hard-fail이면 그 manifest는 소비 가능하다고
+    #      단정할 수 없다. outcome과 달리 dependency만 any-success면 loader를 MISSED로 오귀속한다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+
+    _reconcile(db, history=_multi(
+        "NormalizeInvestorEstimate", [("arn:task/old", 2), ("arn:task/latest", 1)],
+    ))
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
+    assert db.etasks_by_id["e2"]["eligible_at"] is None
+
+
+def test_dependency_uses_same_arn_wrapper_exit_while_sfn_evidence_lags():
+    # WHY: wrapper가 exit 2를 확정한 뒤 SFN TaskSucceeded가 아직 안 보이는 창에도 loader 의존은
+    #      풀려야 한다. 단, 앞 occurrence의 exit가 아니라 최신 ECS ARN과 같은 원장 행만 쓴다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "task_outcome": states.OUTCOME_FULFILLED, "fulfilled_at": "SET",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+    db.attempts.extend([
+        {"attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "latest", "etid": "e1", "arn": "arn:task/latest",
+         "status": states.EXEC_FAILED, "exit_code": 2, "source": "WRAPPER",
+         "started_at": _OLD},
+    ])
+
+    _reconcile(
+        db,
+        history=_multi("NormalizeInvestorEstimate", [
+            ("arn:task/old", 0), ("arn:task/latest", None),
+        ]),
+        ecs=FakeEcs(tasks={
+            "arn:task/latest": {"lastStatus": "STOPPED", "exitCode": 2},
+        }),
+    )
+
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_reconciler_does_not_flip_wrapper_partial_fulfilled_back_to_failed():
+    # WHY(ALPHA-1036): wrapper가 exit 2를 이미 FULFILLED로 기록한 운영 순서에서 Reconciler의
+    # terminal=FAILED 분기가 다시 FAILED로 덮으면 같은 증거가 실행 시점에 따라 두 결론을 낸다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FULFILLED, "fulfilled_at": "SET",
+        "eligible_at": _OLD, "deadline_at": _FUTURE,
+    }])
+
+    _reconcile(db, history=_entered(
+        "NormalizeInvestorEstimate", arn="arn:task/normalize", succeeded=True, exit_code=2,
+    ))
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+
+
+def test_reconciler_preserves_partial_fulfilled_before_sfn_exit_evidence_arrives():
+    # WHY(ALPHA-1036): wrapper 원장은 exit 2를 이미 알지만 SFN history에는 TaskSubmitted만 보이는
+    #      짧은 창이 있다. ECS STOPPED만으로 FAILED로 되돌리면 다음 polling에서 다시 FULFILLED가
+    #      되어 같은 증거가 타이밍에 따라 왕복한다. 단, 앞 재시도 ARN의 exit는 쓰면 안 된다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FULFILLED, "fulfilled_at": "SET",
+        "eligible_at": _OLD, "deadline_at": _FUTURE,
+    }])
+    db.attempts.extend([
+        {"attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "current", "etid": "e1", "arn": "arn:task/normalize",
+         "status": states.EXEC_FAILED, "exit_code": 2, "source": "WRAPPER",
+         "started_at": _OLD},
+    ])
+
+    _reconcile(
+        db,
+        history=_entered("NormalizeInvestorEstimate", arn="arn:task/normalize"),
+        ecs=FakeEcs(tasks={
+            "arn:task/normalize": {"lastStatus": "STOPPED", "exitCode": 2},
+        }),
+    )
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+
+
 def test_ledger_gap_backfills_attempt_and_opens_issue():
     """시나리오 14 — ECS ARN 있고 attempt 없음 → backfill + LEDGER_GAP."""
     db = FakeOpsDB()

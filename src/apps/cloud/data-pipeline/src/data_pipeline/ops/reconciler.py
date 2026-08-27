@@ -301,8 +301,9 @@ def reconcile_run(
             summary["launch_unconfirmed"] = True
         return summary
 
-    deps_done = _completed_task_keys(evidence)
-    for task in ledger.expected_tasks_for(run_id):
+    tasks = ledger.expected_tasks_for(run_id)
+    deps_done = _completed_task_keys(evidence, ledger=ledger, tasks=tasks)
+    for task in tasks:
         if task["plan_status"] == states.PLAN_SKIPPED:
             continue
         _reconcile_task(ledger, task, run_id=run_id, evidence=evidence, ecs=ecs,
@@ -312,15 +313,39 @@ def reconcile_run(
     return summary
 
 
-def _completed_task_keys(evidence: dict[str, list[dict]]) -> set[str]:
-    """선행 완료 = 어느 occurrence든 컨테이너 exit0 확인. exit code 없는 TaskSucceeded 는 신뢰
-    안 한다(edge-review). exit0 미확인이면 미완으로 봐 downstream 은 BLOCKED(보수적·안전)."""
+def _completed_task_keys(
+    evidence: dict[str, list[dict]], *, ledger: Ledger, tasks: list[dict],
+) -> set[str]:
+    """선행 완료 = 최신 occurrence에서 카탈로그가 승인한 exit 확인.
+
+    SFN exit 증거가 늦으면 같은 ECS ARN의 wrapper attempt를 보조로 쓰되, 과거 재시도의 성공을
+    최신 실패에 붙이지 않는다. 미확인이면 downstream은 BLOCKED로 둔다.
+    """
     done: set[str] = set()
+    task_by_key = {task["task_key"]: task for task in tasks}
     for entry in catalog.entries():
         occs = evidence.get(entry.sfn_state_name, [])
-        if any(o.get("exit_code") == 0 for o in occs):
+        if not occs:
+            continue
+        latest = occs[-1]
+        exit_code = latest.get("exit_code")
+        task = task_by_key.get(entry.task_key)
+        if exit_code is None and latest.get("ecs_task_arn") and task is not None:
+            matching = next(
+                (attempt for attempt in ledger.attempts_for(task["expected_task_id"])
+                 if attempt.get("ecs_task_arn") == latest["ecs_task_arn"]),
+                None,
+            )
+            if matching is not None:
+                exit_code = matching.get("exit_code")
+        if _output_fulfilled(entry, exit_code):
             done.add(entry.task_key)
     return done
+
+
+def _output_fulfilled(entry: catalog.CatalogEntry, exit_code: object) -> bool:
+    return (isinstance(exit_code, int) and not isinstance(exit_code, bool)
+            and exit_code in entry.fulfilled_exit_codes)
 
 
 def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, hard_deadline,
@@ -429,13 +454,29 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
     etid = task["expected_task_id"]
     if latest.get("ecs_task_arn"):
         terminal = latest.get("_terminal")
-        if terminal == states.EXEC_SUCCEEDED and outcome != states.OUTCOME_FULFILLED:
-            ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FULFILLED, fulfilled=True)
-            if outcome == states.OUTCOME_MISSED:   # 비래치: 늦은 성공(missed_at 보존)
-                ledger.resolve_issue(f"missed:{run_id}:{task['task_key']}",
-                                     resolution_reason="late_attempt_succeeded",
-                                     resolution_source="reconciler")
-                summary["fulfilled_late"].append(task["task_key"])
+        entry = catalog.get(task["task_key"])
+        exit_code = latest.get("exit_code")
+        if exit_code is None:
+            # SFN history보다 ECS STOPPED가 먼저 보이는 짧은 창에도 wrapper가 같은 ARN으로 남긴
+            # exit code는 잃지 않는다. ARN을 맞추지 않으면 앞 재시도의 성공을 새 실패에 붙인다.
+            matching = next(
+                (attempt for attempt in ledger.attempts_for(etid)
+                 if attempt.get("ecs_task_arn") == latest["ecs_task_arn"]),
+                None,
+            )
+            if matching is not None:
+                exit_code = matching.get("exit_code")
+        output_fulfilled = entry is not None and _output_fulfilled(entry, exit_code)
+        if output_fulfilled:
+            if outcome != states.OUTCOME_FULFILLED:
+                ledger.update_task_outcome(
+                    etid, task_outcome=states.OUTCOME_FULFILLED, fulfilled=True,
+                )
+                if outcome == states.OUTCOME_MISSED:   # 비래치: 늦은 성공(missed_at 보존)
+                    ledger.resolve_issue(f"missed:{run_id}:{task['task_key']}",
+                                         resolution_reason="late_attempt_succeeded",
+                                         resolution_source="reconciler")
+                    summary["fulfilled_late"].append(task["task_key"])
         elif terminal == states.EXEC_FAILED and outcome != states.OUTCOME_FAILED:
             ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
                                        outcome_reason="attempt_failed")

@@ -43,6 +43,30 @@ locals {
       StringEquals = "succeeded"
     }
   ]
+  # 정제 exit 2는 성공 winner를 canonical+manifest에 commit한 입력 부분 실패다. exit 1이나
+  # ECS 자체 실패와 달리 manifest consumer를 계속할 수 있다.
+  investor_intraday_normalize_continue_checks = [
+    for index, _ in local.investor_intraday_normalize_jobs : {
+      Or = [
+        {
+          Variable     = "$.normalize_results[${index}].status"
+          StringEquals = "succeeded"
+        },
+        {
+          And = [
+            {
+              Variable  = "$.normalize_results[${index}].exit_code"
+              IsPresent = true
+            },
+            {
+              Variable      = "$.normalize_results[${index}].exit_code"
+              NumericEquals = 2
+            },
+          ]
+        },
+      ]
+    }
+  ]
   investor_intraday_feature_success_checks = [
     for index, _ in local.investor_intraday_feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
@@ -116,9 +140,30 @@ locals {
         Next       = "InvestorIntradayNormalizeCheckResults"
       }
       InvestorIntradayNormalizeCheckResults = {
-        Type    = "Choice"
-        Choices = [{ And = local.investor_intraday_normalize_success_checks, Next = "InvestorIntradayFeatureParallel" }]
+        Type = "Choice"
+        Choices = [
+          { And = local.investor_intraday_normalize_success_checks, Next = "InvestorIntradayFeatureParallel" },
+          { And = local.investor_intraday_normalize_continue_checks, Next = "InvestorIntradayNotifyNormalizePartial" },
+        ]
         Default = "InvestorIntradayNotifyFailure"
+      }
+      InvestorIntradayNotifyNormalizePartial = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::sns:publish"
+        ResultPath = null
+        Next       = "InvestorIntradayFeatureParallel"
+        # 알림 장애가 이미 commit된 winner의 적재를 막지 않는다. 오류는 실행 입력에 보존되고,
+        # normalize exit 2 때문에 마지막 상태는 어차피 Failed로 닫힌다.
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.normalize_partial_notification_error"
+          Next        = "InvestorIntradayFeatureParallel"
+        }]
+        Parameters = {
+          TopicArn    = aws_sns_topic.alarms.arn
+          "Subject.$" = "States.Format('[${var.name}-investor-intraday] normalize 부분 실패 — run {}', $.run_id)"
+          "Message.$" = "States.JsonToString($)"
+        }
       }
       InvestorIntradayFeatureParallel = {
         Type       = "Parallel"
@@ -132,11 +177,16 @@ locals {
         Choices = [{ And = local.investor_intraday_feature_success_checks, Next = "InvestorIntradayRawPartialCheck" }]
         Default = "InvestorIntradayNotifyFailure"
       }
-      # raw 부분 실패 런의 마감 판정(세 선례와 동형) — 다운스트림을 끝까지 돌린 뒤 raw 를 다시
-      # 보고 부분 실패였으면 FAILED 로 끝낸다. 알림은 이미 위에서 쐈으므로 SNS 를 안 탄다.
+      # raw/normalize 부분 실패 런의 마감 판정 — 성공 winner 적재 뒤에도 전체 런은 FAILED다.
       InvestorIntradayRawPartialCheck = {
-        Type    = "Choice"
-        Choices = [{ And = local.investor_intraday_raw_success_checks, Next = "InvestorIntradaySucceeded" }]
+        Type = "Choice"
+        Choices = [{
+          And = concat(
+            local.investor_intraday_raw_success_checks,
+            local.investor_intraday_normalize_success_checks,
+          )
+          Next = "InvestorIntradaySucceeded"
+        }]
         Default = "InvestorIntradayFailed"
       }
       InvestorIntradaySucceeded = { Type = "Succeed" }

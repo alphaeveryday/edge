@@ -946,7 +946,7 @@ def test_장중_수급_레인_임계가_슬롯_간격과_타임아웃_안에_있
         assert e.stalled_after_seconds < sfn_timeout, e.task_key
 
 
-def test_장중_수급_레인은_달력_플래그가_작업마다_다르다():
+def test_장중_수급_레인은_manifest_전환_후_세_작업_모두_거래일만_기대한다():
     """WHY(ALPHA-769): `kr_trading_calendar` 세 갈래가 이 레인 설계의 핵심 판단인데 어느
     테스트도 안 들고 있었다 — 세 값 중 무엇을 뒤집어도 전 스위트가 초록이었다(edge-review).
 
@@ -959,9 +959,8 @@ def test_장중_수급_레인은_달력_플래그가_작업마다_다르다():
       `skip_reason` 으로 돌아서고(0건), 정제는 `--input-run-id` 로 그 런의 raw 만 읽어 진짜
       0건이다. False 로 두면 `empty_allowed=False` 라 **공휴일마다 UNKNOWN 이 2건씩** 쌓여
       (실측: `derive_data_status` 가 0건·완료·empty_allowed=False → UNKNOWN) 진짜 결손과 섞인다.
-    * 적재 False — 창 인자 없이 도는 **canonical 전량 스캔**이라 공휴일에도 실일을 한다(앞
-      슬롯이 실패해 남은 백로그를 줍는다). True 면 그 회수 실행에 attempt 가 안 붙어, 다시
-      실패해도 원장에 자리조차 없다(Rule 12).
+    * 적재 True — 현재 normalize manifest만 읽으므로 공휴일의 빈 manifest에는 실일이 없다.
+      과거 백로그는 암묵적 전량 스캔으로 회수하지 않는다(ALPHA-1036).
     """
     by_key = {e.task_key: e for e in catalog.entries(catalog.INVESTOR_INTRADAY_PIPELINE_TYPE)}
     assert set(by_key) == {
@@ -971,16 +970,49 @@ def test_장중_수급_레인은_달력_플래그가_작업마다_다르다():
     }, "레인 구성이 바뀌었다 — 달력 판단을 다시 하라"
     assert by_key["INVESTOR_INTRADAY_COLLECTION_KIS"].kr_trading_calendar is True
     assert by_key["NORMALIZE_INVESTOR_INTRADAY"].kr_trading_calendar is True
-    # 창 없는 전량 스캔이라 공휴일에도 실일을 한다 — SKIPPED 뒤로 가리면 안 된다.
-    assert by_key["LOAD_INVESTOR_INTRADAY"].kr_trading_calendar is False
-    # 그 근거(창 인자 부재)가 terraform 에 그대로 있는지 함께 든다 — 나중에 `--from/--to` 를
-    # 붙이면 전량 스캔이 아니게 되고, 그때는 이 레인도 공시처럼 전부 False 가 아니라 반대로
-    # 적재를 True 로 되돌려야 한다. 근거가 코드에서 사라졌는데 값만 남는 것을 막는다.
+    assert by_key["LOAD_INVESTOR_INTRADAY"].kr_trading_calendar is True
+    # 그 근거(manifest run 전달)가 terraform 에 그대로 있는지 함께 든다. 배선이 빠지면 CLI가
+    # fail-loud 해야 하지만, 카탈로그 달력 판단의 근거도 함께 사라진다.
     # ⚠️ **주석을 먼저 걷는다.** 배선을 뗄 때 가장 흔한 형태가 삭제가 아니라 주석 처리인데,
     # 원문을 그대로 훑으면 창 인자를 붙이면서 옛 줄을 주석에 남긴 변경이 그대로 통과한다 —
     # 근거는 사라졌는데 단언만 초록이다(`test_ops_catalog._strip_hcl_comments` 와 같은 규율).
     sm = test_ops_catalog._strip_hcl_comments(
         (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
-    assert "States.Array('load-investor-intraday', '--run-id', $.run_id)" in sm, (
-        "load-investor-intraday 의 command 가 바뀌었다 — 창 인자가 붙었다면 "
-        "'공휴일에도 전량 스캔으로 실일을 한다'는 False 의 근거가 사라진다")
+    assert (
+        "States.Array('load-investor-intraday', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)" in sm
+    ), "정상 장중 적재는 현재 normalize manifest run_id를 받아야 한다"
+
+
+def test_장중_수급_정제_부분실패는_manifest_적재_후_SFN을_실패로_마감한다():
+    """WHY(ALPHA-1036): exit 2는 성공 winner가 있는 부분 실패다. 즉시 막으면 정상 종목도
+    적재되지 않고, 마지막 성공으로 닫으면 실패 종목이 전체 실행 상태에서 숨는다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "investor_intraday_pipeline.tf").read_text(
+            encoding="utf-8"))
+
+    check = re.search(
+        r"InvestorIntradayNormalizeCheckResults\s*=\s*\{(?P<body>.*?)\n\s*\}", sm, re.S)
+    assert check
+    continue_checks = sm.split("investor_intraday_normalize_continue_checks = [", 1)[1].split(
+        "investor_intraday_feature_success_checks = [", 1)[0]
+    assert re.search(
+        r'Variable\s*=\s*"\$\.normalize_results\[\$\{index\}\]\.exit_code".*?'
+        r'IsPresent\s*=\s*true.*?NumericEquals\s*=\s*2', continue_checks, re.S
+    ), "TaskFailed에는 exit_code가 없으므로 존재 확인 뒤 exit 2를 비교해야 한다"
+    assert 'Next = "InvestorIntradayNotifyNormalizePartial"' in check.group("body")
+    assert 'Default = "InvestorIntradayNotifyFailure"' in check.group("body")
+
+    notify = sm.split("InvestorIntradayNotifyNormalizePartial = {", 1)[1].split(
+        "InvestorIntradayFeatureParallel = {", 1)[0]
+    assert re.search(r'Next\s*=\s*"InvestorIntradayFeatureParallel"', notify)
+    assert re.search(
+        r'Catch\s*=\s*\[\{.*?ErrorEquals\s*=\s*\["States\.ALL"\].*?'
+        r'ResultPath\s*=\s*"\$\.normalize_partial_notification_error".*?'
+        r'Next\s*=\s*"InvestorIntradayFeatureParallel"', notify, re.S,
+    ), "부분 실패 알림 장애가 이미 확정된 winner 적재를 막으면 안 된다"
+    final = sm.split("InvestorIntradayRawPartialCheck = {", 1)[1].split(
+        "InvestorIntradaySucceeded = {", 1)[0]
+    assert "local.investor_intraday_raw_success_checks" in final
+    assert "local.investor_intraday_normalize_success_checks" in final
+    assert 'Default = "InvestorIntradayFailed"' in final

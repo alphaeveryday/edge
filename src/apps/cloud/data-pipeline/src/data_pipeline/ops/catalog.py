@@ -145,6 +145,9 @@ class CatalogEntry:
     # 이 작업이 속한 레인(ALPHA-591). Planner 가 `entries(pipeline_type)` 로 자기 레인만
     # 계획한다 — 시장 일일런 기대에 뉴스 작업이 섞이면(또는 그 반대) 매 런 MISSED 다.
     pipeline_type: str = "etf-daily"
+    # 성공 산출을 commit한 뒤 부분 실패를 비0으로 드러내는 스텝의 output 성공 코드.
+    # 물리 attempt는 여전히 FAILED지만 downstream 의존과 expected outcome은 충족한다.
+    fulfilled_exit_codes: tuple[int, ...] = (0,)
     # 데이터 전달 계약은 별도 typed registry가 소유한다(ADR-0043). Catalog는 stable key만 참조.
     contract_key: str | None = None
 
@@ -464,8 +467,8 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     #   `> threshold` 인데 SFN 이 1500s 에 실행을 죽여 경과가 1500 을 넘는 순간이 오지 않아
     #   **영원히 발화하지 않는다**(공시 레인이 실제로 밟은 함정).
     #
-    # ⚠️ `kr_trading_calendar` 가 **작업마다 다르다** — 수집·정제는 True, 적재는 False.
-    # 기준은 레인이 아니라 "그 작업이 공휴일에 **실제로 일을 하는가**"다(ALPHA-181 의 함정은
+    # ⚠️ `kr_trading_calendar` 는 세 작업 모두 True다. 기준은 레인이 아니라
+    # "그 작업이 공휴일에 **실제로 일을 하는가**"다(ALPHA-181 의 함정은
     # 실제로 돌아서 값을 만든 실행이 SKIPPED 뒤로 사라지는 것이다).
     #
     # * 수집 True — 장중 투자자 추정은 **비거래일에 존재 자체를 하지 않는다.** 그날 어댑터는
@@ -474,14 +477,8 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     #   결손과 섞인다.
     # * 정제 True — `--input-run-id $.run_id` 로 **그 런이 수집한 raw 만** 읽으므로(run.py)
     #   공휴일엔 입력이 진짜 0건이다. 가려질 산출이 없다.
-    # * 적재 **False** — 여기만 다르다. `load-investor-intraday` 는 창 인자 없이 도는
-    #   **canonical 전량 스캔**이라(load_investor_intraday.py) 공휴일에도 실일을 한다:
-    #   앞선 슬롯이 RDS 장애로 실패해 남은 백로그를 이 스캔이 줍는다 — 그게 창을 안 붙인
-    #   이유이기도 하다(statemachine.tf 의 LoadInvestorIntraday 주석). True 로 두면 그 회수
-    #   실행에 attempt 가 아예 안 붙고(wrapper 가 PLAN_SKIPPED 를 그냥 통과시킨다), 다시
-    #   실패해도 원장에 **어느 작업이 실패했는지 자리조차 없다**. 화면엔 "휴장이라 안 했다"로
-    #   남는데 실제로는 실패한 것이다(Rule 12). 공휴일 정상 런은 `already=N` 이 records_out
-    #   으로 세어져 UNKNOWN 도 아니다.
+    # * 적재 True — ALPHA-1036부터 normalize manifest의 현재 winner만 읽는다. 공휴일 정제의
+    #   유효한 빈 manifest에는 적재할 행이 없고, 과거 백로그를 암묵적으로 전량 스캔하지 않는다.
     CatalogEntry(
         task_key="INVESTOR_INTRADAY_COLLECTION_KIS", stage="raw",
         dataset="investor_flow_intraday", required=True,
@@ -504,6 +501,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         deadline_offset_seconds=700, stalled_after_seconds=900,
         kr_trading_calendar=True,
         pipeline_type="investor-intraday",
+        # 2 = 성공 winner manifest commit + 일부 행 실패. loader는 승인된 winner를 처리하되
+        # Step Functions 전체 런과 quality는 실패를 숨기지 않는다(ALPHA-1035·1036).
+        fulfilled_exit_codes=(0, 2),
     ),
     # 의존은 이 SFN 의 `InvestorIntradayNormalizeCheckResults` 게이트다 — 시장 레인 작업
     # (ENRICH_CORP_CODE 등)을 걸 수 없다. 그건 이 런에 존재하지 않아 영영 eligible 이 안 된다
@@ -517,8 +517,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="rds",
         depends_on=("NORMALIZE_INVESTOR_INTRADAY",),
         deadline_offset_seconds=800, stalled_after_seconds=900,
-        kr_trading_calendar=False,  # 창 없는 전량 스캔이라 공휴일에도 실일을 한다 — 위 주석
+        kr_trading_calendar=True,
         pipeline_type="investor-intraday",
+        fulfilled_exit_codes=(0, 2),  # 일부 DB 행 실패여도 성공 winner는 commit된다
     ),
 )
 
@@ -627,6 +628,7 @@ def content_hash() -> str:
             "log_dataset": e.log_dataset,
             "empty_allowed": e.empty_allowed,
             "pipeline_type": e.pipeline_type,
+            "fulfilled_exit_codes": list(e.fulfilled_exit_codes),
             "contract_key": e.contract_key,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
