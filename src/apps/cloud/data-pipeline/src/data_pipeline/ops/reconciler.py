@@ -212,15 +212,27 @@ def _terminal_status(occ: dict | None, ecs, cluster_arn: str | None) -> str | No
     """
     if occ is None:
         return None
-    if occ.get("exit_code") is not None:
-        return states.EXEC_SUCCEEDED if occ["exit_code"] == 0 else states.EXEC_FAILED
-    if occ.get("ecs_task_arn"):
-        ecs_status = _ecs_terminal_status(ecs, occ["ecs_task_arn"], cluster_arn)
-        if ecs_status is not None:
-            return ecs_status
-    if occ.get("sfn_terminal_failed"):
-        return states.EXEC_FAILED
-    return None
+    if occ.get("_terminal_checked") is True:
+        return occ.get("_terminal")
+
+    exit_code = occ.get("exit_code")
+    status = None
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+        status = states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
+    elif occ.get("ecs_task_arn"):
+        ecs_exit_code = _ecs_exit_code(ecs, occ["ecs_task_arn"], cluster_arn)
+        if ecs_exit_code is not None:
+            # status로 축약하지 않고 occurrence에 보존해야 attempt backfill·exit 2 fulfillment·
+            # downstream dependency가 SFN history와 같은 정수 증거를 쓴다.
+            occ["exit_code"] = ecs_exit_code
+            status = states.EXEC_SUCCEEDED if ecs_exit_code == 0 else states.EXEC_FAILED
+    if status is None and occ.get("sfn_terminal_failed"):
+        status = states.EXEC_FAILED
+    # occurrence dict는 reconcile 한 번의 snapshot이다. 확인 실패도 memoize해 dependency와
+    # outcome이 서로 다른 시점의 두 DescribeTasks 응답을 섞지 않게 한다. 다음 polling은 새 dict다.
+    occ["_terminal_checked"] = True
+    occ["_terminal"] = status
+    return status
 
 
 def reconcile_run(
@@ -302,7 +314,10 @@ def reconcile_run(
         return summary
 
     tasks = ledger.expected_tasks_for(run_id)
-    deps_done = _completed_task_keys(evidence, ledger=ledger, tasks=tasks)
+    _hydrate_occurrence_evidence(
+        evidence, ledger=ledger, tasks=tasks, ecs=ecs, cluster_arn=cluster_arn,
+    )
+    deps_done = _completed_task_keys(evidence)
     for task in tasks:
         if task["plan_status"] == states.PLAN_SKIPPED:
             continue
@@ -313,32 +328,45 @@ def reconcile_run(
     return summary
 
 
-def _completed_task_keys(
-    evidence: dict[str, list[dict]], *, ledger: Ledger, tasks: list[dict],
-) -> set[str]:
-    """선행 완료 = 최신 occurrence에서 카탈로그가 승인한 exit 확인.
+def _hydrate_occurrence_evidence(
+    evidence: dict[str, list[dict]], *, ledger: Ledger, tasks: list[dict], ecs,
+    cluster_arn: str | None,
+) -> None:
+    """한 reconcile snapshot의 occurrence에 ledger/ECS 종료 증거를 한 번 채운다.
 
-    SFN exit 증거가 늦으면 같은 ECS ARN의 wrapper attempt를 보조로 쓰되, 과거 재시도의 성공을
-    최신 실패에 붙이지 않는다. 미확인이면 downstream은 BLOCKED로 둔다.
+    SFN exit가 없으면 같은 ARN의 ledger attempt, 그마저 없으면 ECS를 쓴다. 모든 occurrence를
+    먼저 hydrate해야 dependency·attempt·outcome이 같은 snapshot을 보고 retry의 과거 ARN도
+    이미 원장 exit가 있으면 ECS를 다시 조회하지 않는다.
     """
-    done: set[str] = set()
     task_by_key = {task["task_key"]: task for task in tasks}
     for entry in catalog.entries():
+        task = task_by_key.get(entry.task_key)
+        if task is None:
+            continue
         occs = evidence.get(entry.sfn_state_name, [])
         if not occs:
             continue
-        latest = occs[-1]
-        exit_code = latest.get("exit_code")
-        task = task_by_key.get(entry.task_key)
-        if exit_code is None and latest.get("ecs_task_arn") and task is not None:
-            matching = next(
-                (attempt for attempt in ledger.attempts_for(task["expected_task_id"])
-                 if attempt.get("ecs_task_arn") == latest["ecs_task_arn"]),
-                None,
-            )
-            if matching is not None:
-                exit_code = matching.get("exit_code")
-        if _output_fulfilled(entry, exit_code):
+        attempts_by_arn = {
+            attempt.get("ecs_task_arn"): attempt
+            for attempt in ledger.attempts_for(task["expected_task_id"])
+            if attempt.get("ecs_task_arn")
+        }
+        for occ in occs:
+            exit_code = occ.get("exit_code")
+            if exit_code is None and occ.get("ecs_task_arn"):
+                matching = attempts_by_arn.get(occ["ecs_task_arn"])
+                exit_code = matching.get("exit_code") if matching is not None else None
+                if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                    occ["exit_code"] = exit_code
+            _terminal_status(occ, ecs, cluster_arn)
+
+
+def _completed_task_keys(evidence: dict[str, list[dict]]) -> set[str]:
+    """선행 완료 = hydrate된 최신 occurrence에서 카탈로그가 승인한 exit 확인."""
+    done: set[str] = set()
+    for entry in catalog.entries():
+        occs = evidence.get(entry.sfn_state_name, [])
+        if occs and _output_fulfilled(entry, occs[-1].get("exit_code")):
             done.add(entry.task_key)
     return done
 
@@ -360,7 +388,7 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
 
     deps_met = all(d in deps_done for d in entry.depends_on)
     if eligible_at is None and deps_met:
-        ledger.set_eligible(etid)
+        task["updated_at"] = ledger.set_eligible(etid)
         eligible_at = now
 
     if not occs:
@@ -433,11 +461,18 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
             _open(ledger, states.ISSUE_LEDGER_GAP, f"ledger_gap:{etid}:{arn}", None, task, summary,
                   "ledger_gap")
         return
-    if matching["execution_status"] == states.EXEC_RUNNING:
-        if terminal is not None:
-            ledger.record_attempt_end(matching["attempt_id"], execution_status=terminal,
-                                      exit_code=occ.get("exit_code"))
-        else:
+    exit_code = occ.get("exit_code")
+    has_integer_exit = isinstance(exit_code, int) and not isinstance(exit_code, bool)
+    if terminal is not None and matching["execution_status"] == states.EXEC_RUNNING:
+        ledger.record_attempt_end(matching["attempt_id"], execution_status=terminal,
+                                  exit_code=exit_code)
+    elif terminal is not None and matching.get("exit_code") is None and has_integer_exit:
+        # 구버전 reconciler가 terminal/NULL로 backfill한 행은 실제 정수 exit를 찾았을 때만 보정한다.
+        # SFN terminal만 있고 exit가 계속 없으면 매 polling마다 finished_at을 다시 찍지 않는다.
+        ledger.record_attempt_end(matching["attempt_id"], execution_status=terminal,
+                                  exit_code=exit_code)
+    elif matching["execution_status"] == states.EXEC_RUNNING:
+        if terminal is None:
             started = _parse_ts(matching.get("started_at"))
             # 작업별 임계가 정본이고, 호출부가 명시하면 그게 이긴다(운영 오버라이드).
             # LLM 스텝은 1시간을 정상적으로 넘고, STALLED 는 resolve 경로가 없어 한 번 열리면
@@ -456,16 +491,6 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
         terminal = latest.get("_terminal")
         entry = catalog.get(task["task_key"])
         exit_code = latest.get("exit_code")
-        if exit_code is None:
-            # SFN history보다 ECS STOPPED가 먼저 보이는 짧은 창에도 wrapper가 같은 ARN으로 남긴
-            # exit code는 잃지 않는다. ARN을 맞추지 않으면 앞 재시도의 성공을 새 실패에 붙인다.
-            matching = next(
-                (attempt for attempt in ledger.attempts_for(etid)
-                 if attempt.get("ecs_task_arn") == latest["ecs_task_arn"]),
-                None,
-            )
-            if matching is not None:
-                exit_code = matching.get("exit_code")
         output_fulfilled = entry is not None and _output_fulfilled(entry, exit_code)
         if output_fulfilled:
             if outcome != states.OUTCOME_FULFILLED:
@@ -481,7 +506,13 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
             ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
                                        outcome_reason="attempt_failed")
             summary["failed"].append(task["task_key"])
-        # terminal None → 미확정, 건드리지 않는다(attempt 는 RUNNING/STALLED 로 이미 처리).
+        elif terminal is None and outcome != states.OUTCOME_PENDING:
+            # 앞 occurrence의 확정 결과는 최신 retry의 결과가 아니다. 최신 시도가 미확정인 동안
+            # dependency와 outcome 모두 PENDING이어야 하며, 앞 실패 사유도 현재 판정에 남기지
+            # 않는다. 단 wrapper가 이 snapshot 뒤 최신 결과를 썼다면 CAS가 그 결과를 보존한다.
+            ledger.reset_task_outcome_if_unchanged(
+                etid, observed_updated_at=task["updated_at"],
+            )
     elif latest.get("failed_to_start"):
         # RunTask submit 실패 + ARN 없음 — 가짜 attempt 안 만들고 outcome 으로만(스펙 §6).
         ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
@@ -493,8 +524,8 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
               run_id, task, summary, "evidence_lost")
 
 
-def _ecs_terminal_status(ecs, task_arn: str, cluster_arn: str | None) -> str | None:
-    """DescribeTasks 로 실제 종료 확인. STOPPED + exit code 있을 때만 성패, 아니면 None.
+def _ecs_exit_code(ecs, task_arn: str, cluster_arn: str | None) -> int | None:
+    """DescribeTasks로 실제 종료 확인. STOPPED의 정수 exit code, 확인 불가면 None.
 
     **cluster 를 반드시 넘긴다** — 생략하면 default 클러스터를 조회해 실제 태스크를 못 찾는다.
     """
@@ -511,9 +542,9 @@ def _ecs_terminal_status(ecs, task_arn: str, cluster_arn: str | None) -> str | N
         return None
     containers = tasks[0].get("containers") or []
     exit_code = containers[0].get("exitCode") if containers else None
-    if exit_code is None:
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
         return None   # STOPPED 인데 exit code 미상 — FAILED 로 단정하지 않는다
-    return states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
+    return exit_code
 
 
 def _open(ledger, issue_type, dedupe_key, run_id, task, summary, bucket):

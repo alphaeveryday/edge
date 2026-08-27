@@ -289,14 +289,28 @@ class Ledger:
                 tuple(params),
             )
 
-    def set_eligible(self, expected_task_id: str) -> None:
-        """기대 작업의 eligible_at 을 최초 1회 찍는다 — 재호출 시 eligible_at 은 유지되고 updated_at 만 갱신된다."""
+    def set_eligible(self, expected_task_id: str):
+        """eligible_at을 최초 1회 찍고 이 writer가 만든 updated_at 버전을 반환한다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE ops_expected_task SET eligible_at=COALESCE(eligible_at, now()),"
-                " updated_at=now() WHERE expected_task_id=%s",
+                " updated_at=now() WHERE expected_task_id=%s RETURNING updated_at",
                 (expected_task_id,),
             )
+            row = cur.fetchone()
+            return row[0] if row is not None else None
+
+    def reset_task_outcome_if_unchanged(
+        self, expected_task_id: str, *, observed_updated_at,
+    ) -> bool:
+        """관측 뒤 다른 writer가 갱신하지 않은 expected_task만 PENDING으로 되돌린다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ops_expected_task SET task_outcome=%s, outcome_reason=NULL,"
+                " updated_at=now() WHERE expected_task_id=%s AND updated_at=%s",
+                (states.OUTCOME_PENDING, expected_task_id, observed_updated_at),
+            )
+            return cur.rowcount > 0
 
     # ── task_attempt ──────────────────────────────────────────
     def record_attempt_start(
@@ -511,12 +525,13 @@ class Ledger:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT expected_task_id, task_key, stage, plan_status, task_outcome,"
-                " data_status, required, eligible_at, deadline_at, missed_at"
+                " data_status, required, eligible_at, deadline_at, missed_at, updated_at"
                 " FROM ops_expected_task WHERE pipeline_run_id=%s",
                 (pipeline_run_id,),
             )
             keys = ("expected_task_id", "task_key", "stage", "plan_status", "task_outcome",
-                    "data_status", "required", "eligible_at", "deadline_at", "missed_at")
+                    "data_status", "required", "eligible_at", "deadline_at", "missed_at",
+                    "updated_at")
             return [dict(zip(keys, r)) for r in cur.fetchall()]
 
     def resolve_issue(
