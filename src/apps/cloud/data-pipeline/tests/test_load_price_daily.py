@@ -104,11 +104,13 @@ class _FailingQualityStorage(_TrackingStorage):
 class _FakeCursor:
     """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
 
-    def __init__(self, log: list, instrument_rows: list, existing: dict, fail_instruments: set[str]):
+    def __init__(self, log: list, instrument_rows: list, existing: dict,
+                 fail_instruments: set[str], fail_confirmations: set[str]):
         self._log = log
         self._instrument_rows = instrument_rows  # [(ticker, instrument_id), …] — 중복 ticker 가능
         self._existing = existing
         self._fail_instruments = fail_instruments
+        self._fail_confirmations = fail_confirmations
         self._rows: list = []
         self._returning = None
         self.rowcount = 1
@@ -134,6 +136,9 @@ class _FakeCursor:
             else:
                 self._returning, self.rowcount = (True,), 1
             self._existing[key] = value
+        elif upper.startswith("UPDATE PRICE_DAILY SET DATA_VERSION"):
+            if params[1] in self._fail_confirmations:
+                raise ValueError("의도된 재확정 stamp DB 실패")
 
     def fetchall(self):
         return self._rows
@@ -149,7 +154,8 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, instruments=None, existing=None, instrument_rows=None, fail_instruments=()):
+    def __init__(self, instruments=None, existing=None, instrument_rows=None,
+                 fail_instruments=(), fail_confirmations=()):
         self.log: list = []
         # instrument_rows 를 직접 주면(중복 ticker 테스트) 그대로, 아니면 dict 에서 파생한다.
         if instrument_rows is not None:
@@ -159,10 +165,12 @@ class _FakeConn:
             self.instrument_rows = list(instruments.items())
         self.existing = dict(existing or {})
         self.fail_instruments = set(fail_instruments)
+        self.fail_confirmations = set(fail_confirmations)
 
     def cursor(self):
         return _FakeCursor(
             self.log, self.instrument_rows, self.existing, self.fail_instruments,
+            self.fail_confirmations,
         )
 
 
@@ -231,6 +239,8 @@ def test_manifest_정상경로는_KR_winner만_GET하고_건수를_분리한다(
 
     assert load_price_daily.run(storage, "R1", db=_db(), input_run_id="N1") == 0
     assert [params[0] for params in _inserts(conn)] == ["inst_samsung"]
+    assert _inserts(conn)[0][-1] == "N1", (
+        "manifest 재시도에서도 downstream 조인용 version은 producer run_id여야 한다")
     assert storage.listed == []
     assert canonical_run_manifest_key("price_daily", "N1") in storage.gotten
     assert canonical_price_daily_partition("KR", "2026-07-16") in storage.gotten[1]
@@ -342,6 +352,52 @@ def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
     first, second = _log(storage, "R1"), _log(storage, "R2")
     assert first["created"] == 1 and first["already_present"] == 0
     assert second["created"] == 0 and second["already_present"] == 1  # 신규 0 = 멱등
+    confirmations = [params for sql, params in conn.log
+                     if sql.upper().startswith("UPDATE PRICE_DAILY SET DATA_VERSION")]
+    assert confirmations == [("R2", "inst_samsung", "2026-07-16")], (
+        "값이 같은 재확정 winner도 현재 loader 성공 version을 남겨야 한다")
+
+
+def test_실패한_winner는_현재_run_version으로_stamp하지_않는다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1039): 이번 loader 행 실패 뒤 과거 DB 값이 남아도 data_version까지 현재
+    # run으로 바뀌면 trigger가 stale 가격을 성공 winner로 오인한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_price_row()])
+    conn = _FakeConn(
+        existing={("inst_samsung", "2026-07-16"): (70000.0, 70000.0, 1)},
+        fail_instruments={"inst_samsung"},
+    )
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R2", db=_db()) == 2
+    assert not any(sql.upper().startswith("UPDATE PRICE_DAILY SET DATA_VERSION")
+                   for sql, _params in conn.log)
+
+
+def test_재확정_stamp_실패도_다른_winner를_보존하고_exit2(tmp_path, monkeypatch):
+    # WHY(ALPHA-1039): equal-value confirmation UPDATE도 DB 개별 행 작업이다. savepoint 밖이면
+    # 이 한 건 실패가 앞뒤 성공 winner를 전부 롤백해 부분 성공 계약을 깨뜨린다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _price_row("005930"), _price_row("000660"),
+    ])
+    same = (71500.0, 71500.0, 12_345_678)
+    conn = _FakeConn(
+        instruments={"005930": "inst_samsung", "000660": "inst_hynix"},
+        existing={("inst_samsung", "2026-07-16"): same},
+        fail_confirmations={"inst_samsung"},
+    )
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R2", db=_db()) == 2
+    log = _log(storage, "R2")
+    assert log["created"] == 1 and log["already_present"] == 0
+    assert log["failures"][0]["reasons"] == ["row_load_error"]
+    statements = [sql for sql, _params in conn.log]
+    update_index = next(i for i, sql in enumerate(statements)
+                        if sql.upper().startswith("UPDATE PRICE_DAILY SET DATA_VERSION"))
+    rollback_index = statements.index("ROLLBACK TO SAVEPOINT price_daily_row")
+    assert update_index < rollback_index
 
 
 def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(tmp_path, monkeypatch):

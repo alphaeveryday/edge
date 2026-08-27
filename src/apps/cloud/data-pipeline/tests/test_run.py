@@ -659,6 +659,48 @@ def test_load_price_daily_forwards_manifest_scope_and_preserves_explicit_all(mon
     assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
 
 
+def test_load_price_triggers_forwards_manifest_scope_and_preserves_explicit_all(monkeypatch):
+    # WHY(ALPHA-1039): 정상 SFN의 run_id가 사라지면 트리거가 canonical 가격·holdings 전체
+    # 탐색으로 돌아간다. 전체 복구는 운영자가 --all을 직접 쓴 경우에만 허용한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = []
+    monkeypatch.setattr(
+        run_mod.load_price_triggers, "run",
+        lambda *args, **kwargs: captured.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-price-triggers", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured[-1]["input_run_id"] == "N1"
+    assert main(["load-price-triggers", "--run-id", "R", "--all"]) == 0
+    assert captured[-1]["input_run_id"] is None
+    assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
+
+
+def test_load_price_triggers_requires_exactly_one_explicit_scope(monkeypatch):
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    for argv in (
+        ["load-price-triggers", "--run-id", "R"],
+        ["load-price-triggers", "--run-id", "R", "--input-run-id", "N1", "--all"],
+        ["load-price-triggers", "--run-id", "R", "--input-run-id", "N1",
+         "--from", "2026-08-20", "--to", "2026-08-21"],
+    ):
+        with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+            main(argv)
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_price_triggers_rejects_invalid_recovery_window(monkeypatch, argv):
+    # 불량 창이 0건 성공으로 끝나면 수동 복구 완료로 오인된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-price-triggers", "--run-id", "R", *argv])
+
+
 @pytest.mark.parametrize("argv", [
     ["--from", "2026-08-32", "--to", "2026-08-32"],
     ["--from", "2026-08-20", "--to", "2026-08-10"],
@@ -837,7 +879,7 @@ def test_load_etf_holdings_rejects_invalid_recovery_window(monkeypatch, argv):
 
 @pytest.mark.parametrize(("step", "module", "argv"), [
     ("load-etf-holdings", "load_etf_holdings", ["load-etf-holdings", "--all"]),
-    ("load-price-triggers", "load_price_triggers", ["load-price-triggers"]),
+    ("load-price-triggers", "load_price_triggers", ["load-price-triggers", "--all"]),
     ("normalize-news", "normalize_news", ["normalize-news"]),
     ("load-instruments", "load_instruments", ["load-instruments"]),
 ])

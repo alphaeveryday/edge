@@ -1046,3 +1046,50 @@ def test_가격_정제_부분실패는_manifest_적재_후_시장_SFN을_실패�
     assert "local.raw_ingest_success_checks" in final
     assert "local.normalize_success_checks" in final
     assert 'Default = "PipelineFailed"' in final
+
+
+def test_가격_트리거는_DB_loader_뒤에서_manifest_범위를_처리하고_strict_마감한다():
+    """WHY(ALPHA-1039): 트리거가 feature Parallel 안에 남으면 가격·holdings commit보다 먼저
+    읽는 경합이 생긴다. 두 loader의 exit 0/2 뒤에는 실행하되, 어느 부분 실패도 전체 SFN
+    성공으로 세탁하지 않아야 한다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+
+    assert 'j.state != "LoadPriceTriggers"' in sm
+    feature_gate = sm.split("FeatureCheckResults = {", 1)[1].split(
+        "LoadPriceTriggers = merge", 1)[0]
+    assert 'local.feature_continue_checks' in feature_gate
+    assert 'Next = "LoadPriceTriggers"' in feature_gate
+    price_continue = sm.split("feature_price_continue_check = {", 1)[1].split(
+        "feature_continue_checks = concat", 1)[0]
+    assert "NumericEquals = 2" in price_continue
+
+    trigger = sm.split("LoadPriceTriggers = merge", 1)[1].split(
+        "LoadPriceTriggersCheckExitCode = {", 1)[0]
+    assert (
+        "States.Array('load-price-triggers', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)" in trigger
+    )
+    trigger_exit = sm.split("LoadPriceTriggersCheckExitCode = {", 1)[1].split(
+        "RawPartialCheck = {", 1)[0]
+    assert "NumericEquals = 0" in trigger_exit and "NumericEquals = 2" in trigger_exit
+    assert 'Default = "NotifyFailure"' in trigger_exit
+    partial_check = sm.split("FeaturePartialCheck = {", 1)[1].split(
+        "NotifyFeaturePartial = {", 1)[0]
+    assert "local.feature_price_index" in partial_check
+    assert re.search(
+        r'Variable\s*=\s*"\$\.ecs\.Containers\[0\]\.ExitCode".*?'
+        r'NumericEquals\s*=\s*2', partial_check, re.S,
+    )
+    assert 'Next = "NotifyFeaturePartial"' in partial_check
+    notify = sm.split("NotifyFeaturePartial = {", 1)[1].split(
+        "RawPartialCheck = {", 1)[0]
+    assert re.search(r'Next\s*=\s*"RawPartialCheck"', notify)
+    assert "feature_partial_notification_error" in notify
+
+    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
+    assert "local.feature_success_checks" in final
+    assert re.search(
+        r'Variable\s*=\s*"\$\.ecs\.Containers\[0\]\.ExitCode".*?NumericEquals\s*=\s*0',
+        final, re.S,
+    )

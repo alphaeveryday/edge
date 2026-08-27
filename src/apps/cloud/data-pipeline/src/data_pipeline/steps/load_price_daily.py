@@ -7,7 +7,9 @@ canonical 전체 스캔으로 넓히지 않고 실패한다. 날짜창·전체 �
 
 **멱등**: PK `(instrument_id, trade_date)` 가 곧 멱등의 근거다 — 같은 값 재적재는
 `ON CONFLICT … DO UPDATE … WHERE (…) IS DISTINCT FROM (…)` 의 WHERE 가 걸러내 아무 행도
-반환하지 않고 already 로 세어진다. 벤더 정정(값이 실제로 바뀐 경우)만 UPDATE 로 흐른다 —
+반환하지 않고 already 로 세어진다. 다만 현재 manifest에서 성공 재확정됐음을 downstream이
+구분하도록 `data_version`만 현재 run으로 stamp한다. 벤더 정정(값이 실제로 바뀐 경우)만 값
+UPDATE 로 흐른다 —
 canonical 이 최신 fetched_at 으로 수렴시키므로(normalize 의 _merge_partition) 마트가 DO
 NOTHING 이면 두 계층이 영구 불일치한다(load_etf_nav 와 같은 근거).
 
@@ -311,6 +313,9 @@ def run(
     check_violations: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
+    # manifest 소비 재시도는 loader attempt run_id와 producer run_id가 다를 수 있다.
+    # downstream 정상 경로는 producer manifest ID로 성공 범위를 조인하므로 그 ID를 stamp한다.
+    confirmed_data_version = input_run_id or run_id
 
     try:
         if input_run_id is not None and (from_date is not None or to_date is not None):
@@ -402,9 +407,18 @@ def run(
                             " RETURNING (xmax <> 0) AS was_update",
                             (instrument_id, trade_date, fact["close_price"],
                              fact["adjusted_close_price"], fact["volume"],
-                             fact["available_at"], run_id),
+                             fact["available_at"], confirmed_data_version),
                         )
                         row = cur.fetchone()
+                        if row is None:
+                            # 값이 같아 UPDATE 조건이 걸러진 재확정 winner도 같은 row
+                            # savepoint 안에서 stamp한다. 이 UPDATE만 실패해도 다른 성공
+                            # winner를 보존하는 exit 2여야 한다.
+                            cur.execute(
+                                "UPDATE price_daily SET data_version = %s"
+                                " WHERE instrument_id = %s AND trade_date = %s",
+                                (confirmed_data_version, instrument_id, trade_date),
+                            )
                     except Exception as exc:
                         cur.execute("ROLLBACK TO SAVEPOINT price_daily_row")
                         cur.execute("RELEASE SAVEPOINT price_daily_row")
@@ -417,6 +431,10 @@ def run(
                     cur.execute("RELEASE SAVEPOINT price_daily_row")
                     if row is None:
                         # 값이 같아 UPDATE 조건이 걸러낸 경우 — 재실행의 정상 경로다.
+                        # 그래도 현재 manifest에서 **성공 재확정**된 사실은 data_version에
+                        # 남긴다. downstream trigger가 이 stamp로 현재 loader 성공 범위를
+                        # 구분한다 — stamp가 없으면 이번 행 실패 뒤 남은 과거 DB 값을 현재
+                        # winner로 오인한다(ALPHA-1039).
                         already += 1
                         continue
                     if row[0]:

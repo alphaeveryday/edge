@@ -6,9 +6,8 @@
  * `JdbcPipelineStatusRepository.OVERVIEW_SQL` 이 `DISTINCT ON (pipeline_type)` 으로 **원장에
  * 있는 전 레인**을 낸다. 그래서 표에 없는 레인은 첫 화면에 원장 코드가 그대로 찍힌다.
  *
- * ⚠️ 표에 없는 레인이 **은퇴한 레인**일 수도 있다: `disclosure` 는 카탈로그 엔트리가 0 인데
- * (ALPHA-875 가 1분 세션으로 보냈다) 과거 런 행은 원장에 남아 있어 조회에 잡힐 수 있다.
- * 그때도 이름을 지어내지 않고 코드를 보여 주는 것이 맞다 — 아래 `laneLabel` 참고.
+ * `disclosure` 는 ALPHA-987에서 18:10 일배치로 복원됐다. 레인 이동 때 이 표를 함께 바꾸지
+ * 않으면 첫 화면에 원장 코드가 그대로 찍히므로 아래 테스트가 정본과 전건 대조한다.
  *
  * ⚠️ **JSX 를 쓰지 않는다.** `OverviewPage.tsx` 안에 있는 동안은 `node --test` 가 파일을 못
  * 집어, 레인이 늘어도 아무 테스트가 안 깨졌다. 이 트랙이 같은 이유로 판정 모듈을 여러 번
@@ -22,6 +21,7 @@
 export const LANE_LABEL: Record<string, string> = {
   'etf-daily': '시장(EOD)',
   news: '뉴스',
+  disclosure: '공시',
   'investor-intraday': '수급(장중)',
 };
 

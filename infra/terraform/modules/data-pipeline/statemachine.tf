@@ -211,10 +211,11 @@ locals {
     },
     {
       # ETF 가격변동 트리거(ALPHA-406) — canonical 일봉 → price_movement_trigger.
-      # 창 미지정 = canonical 전체 스캔 + 멱등 skip 이라 놓친 날을 다음 런이 자연 회복한다.
+      # ALPHA-1039에서 시장 SFN의 feature 병렬 뒤 직렬 상태로 옮긴다. 잡 정의는 원장·CLI
+      # 정본 재사용을 위해 남기고 market_feature_jobs에서만 뺀다.
       state        = "LoadPriceTriggers"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-price-triggers', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-price-triggers', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # ETF NAV 마트 적재(ALPHA-383) — canonical etf_nav → etf_nav_daily. feature 페이즈에
@@ -298,7 +299,12 @@ locals {
   ]
   market_raw_jobs       = [for j in local.raw_ingest_jobs : j if !contains(local.market_excluded_states, j.state)]
   market_normalize_jobs = [for j in local.normalize_jobs : j if !contains(local.market_excluded_states, j.state)]
-  market_feature_jobs   = [for j in local.feature_jobs : j if !contains(local.market_excluded_states, j.state)]
+  # LoadPriceTriggers는 LoadPriceDaily·LoadEtfHoldings DB commit 뒤에만 실행해야 하므로 아래
+  # 직렬 꼬리에서 직접 정의한다. Parallel에 남으면 어느 쪽보다 먼저 떠 stale DB를 읽는다.
+  market_feature_jobs = [
+    for j in local.feature_jobs : j
+    if !contains(local.market_excluded_states, j.state) && j.state != "LoadPriceTriggers"
+  ]
 
   raw_ingest_success_checks = [
     for index, _ in local.market_raw_jobs : {
@@ -358,6 +364,44 @@ locals {
       StringEquals = "succeeded"
     }
   ]
+
+  # LoadPriceDaily exit 2는 manifest 성공 winner를 DB에 보존한 부분 실패다. 트리거는 그
+  # 성공 범위를 계속 처리하되 마지막 RawPartialCheck의 strict feature_success_checks가
+  # 전체 SFN을 FAILED로 닫는다. 다른 feature는 전량 성공이어야 한다.
+  feature_non_price_load_success_checks = [
+    for index, job in local.market_feature_jobs : {
+      Variable     = "$.feature_results[${index}].status"
+      StringEquals = "succeeded"
+    } if job.state != "LoadPriceDaily"
+  ]
+  feature_price_index = index(
+    [for job in local.market_feature_jobs : job.state],
+    "LoadPriceDaily",
+  )
+  feature_price_continue_check = {
+    Or = [
+      {
+        Variable     = "$.feature_results[${local.feature_price_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.feature_results[${local.feature_price_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.feature_results[${local.feature_price_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
+  feature_continue_checks = concat(
+    local.feature_non_price_load_success_checks,
+    [local.feature_price_continue_check],
+  )
 
   ecs_run_task_base = {
     Resource   = "arn:aws:states:::ecs:runTask.sync"
@@ -680,10 +724,94 @@ locals {
       FeatureCheckResults = {
         Type = "Choice"
         Choices = [{
-          And  = local.feature_success_checks
-          Next = "RawPartialCheck"
+          And  = local.feature_continue_checks
+          Next = "LoadPriceTriggers"
         }]
         Default = "NotifyFailure"
+      }
+      # 가격·holdings loader의 DB commit을 모두 본 뒤 현재 NormalizePrice manifest 범위만
+      # 평가한다(ALPHA-1039). exit 2는 성공 ETF를 보존한 부분 실패라 마지막 strict gate까지
+      # 진행하지만, exit 1/Task 실패는 범위를 신뢰할 수 없어 즉시 NotifyFailure다.
+      LoadPriceTriggers = merge(local.ecs_run_task_base, {
+        Type = "Task"
+        Next = "LoadPriceTriggersCheckExitCode"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "NotifyFailure"
+        }]
+        Parameters = merge(local.ecs_run_task_base.Parameters, {
+          TaskDefinition = aws_ecs_task_definition.this["rds"].arn
+          Overrides = {
+            ContainerOverrides = [{
+              Name        = local.container_name
+              "Command.$" = "States.Array('load-price-triggers', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+              Environment = [
+                { Name = "OPS_SFN_STATE_NAME", Value = "LoadPriceTriggers" },
+                { Name = "OPS_SFN_EXECUTION_ARN", "Value.$" = "$$.Execution.Id" },
+              ]
+            }]
+          }
+        })
+      })
+      LoadPriceTriggersCheckExitCode = {
+        Type = "Choice"
+        Choices = [
+          {
+            Variable      = "$.ecs.Containers[0].ExitCode"
+            NumericEquals = 0
+            Next          = "FeaturePartialCheck"
+          },
+          {
+            Variable      = "$.ecs.Containers[0].ExitCode"
+            NumericEquals = 2
+            Next          = "FeaturePartialCheck"
+          },
+        ]
+        Default = "NotifyFailure"
+      }
+      # 가격 DB loader 또는 트리거의 exit 2는 성공 범위를 보존했지만 운영상 실패다. 최종
+      # strict gate만으로 FAILED 처리하면 SNS를 우회하므로, 여기서 한 번 알리고 마감한다.
+      FeaturePartialCheck = {
+        Type = "Choice"
+        Choices = [{
+          Or = [
+            {
+              And = [
+                {
+                  Variable  = "$.feature_results[${local.feature_price_index}].exit_code"
+                  IsPresent = true
+                },
+                {
+                  Variable      = "$.feature_results[${local.feature_price_index}].exit_code"
+                  NumericEquals = 2
+                },
+              ]
+            },
+            {
+              Variable      = "$.ecs.Containers[0].ExitCode"
+              NumericEquals = 2
+            },
+          ]
+          Next = "NotifyFeaturePartial"
+        }]
+        Default = "RawPartialCheck"
+      }
+      NotifyFeaturePartial = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::sns:publish"
+        ResultPath = null
+        Next       = "RawPartialCheck"
+        Parameters = {
+          TopicArn    = aws_sns_topic.alarms.arn
+          "Subject.$" = "States.Format('[${var.name}] feature 부분 실패 — run {}', $.run_id)"
+          "Message.$" = "States.JsonToString($)"
+        }
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.feature_partial_notification_error"
+          Next        = "RawPartialCheck"
+        }]
       }
       # raw 부분 실패 런의 **마감 판정**(ALPHA-460) — 막는 게이트가 아니다. 다운스트림을 끝까지
       # 돌린 뒤 raw 를 다시 보고, 부분 실패였으면 런을 FAILED 로 끝낸다. 알림은 이미 raw 직후
@@ -698,7 +826,15 @@ locals {
       RawPartialCheck = {
         Type = "Choice"
         Choices = [{
-          And  = concat(local.raw_ingest_success_checks, local.normalize_success_checks)
+          And = concat(
+            local.raw_ingest_success_checks,
+            local.normalize_success_checks,
+            local.feature_success_checks,
+            [{
+              Variable      = "$.ecs.Containers[0].ExitCode"
+              NumericEquals = 0
+            }],
+          )
           Next = "PipelineSucceeded"
         }]
         Default = "PipelineFailed"

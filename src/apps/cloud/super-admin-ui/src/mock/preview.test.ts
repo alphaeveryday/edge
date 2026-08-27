@@ -18,6 +18,8 @@ import {
   MOCK_MINUTE,
   MOCK_OVERVIEW,
   MOCK_REPORT,
+  MARKET_TASKS,
+  NEWS_TASKS,
   mockReportForRun,
 } from './preview.ts';
 
@@ -319,12 +321,16 @@ test('격자 슬롯은 그 레인의 ops 작업을 전부 담는다 — 일부�
 });
 
 test('픽스처가 안 담은 레인을 드러낸다 — 조용히 빠지면 그 화면이 없는 줄 모른다', () => {
-  /* ops 에는 레인이 셋(etf-daily·news·investor-intraday)인데 격자 픽스처는 둘만 담는다.
+  /* 격자 픽스처는 etf-daily·news만 담고 disclosure·investor-intraday는 담지 않는다.
    * 불가능한 조합은 아니지만(그 레인 런이 없던 날일 수 있다) **검수 공백**이다 —
    * 여기서 이름을 불러 두면 다음 사람이 "없다"를 "안 만든다"로 읽지 않는다. */
   const inFixture = new Set(MOCK_GRID.slots.map((s) => s.runKey.split(':')[0]));
   const missing = [...OPS_BY_LANE.keys()].filter((l) => !inFixture.has(l));
-  assert.deepEqual(missing, ['investor-intraday'], '안 담은 레인 목록이 바뀌었다 — 의도인지 확인하라');
+  assert.deepEqual(
+    missing,
+    ['disclosure', 'investor-intraday'],
+    '안 담은 레인 목록이 바뀌었다 — 의도인지 확인하라',
+  );
 });
 
 /** 작업 → 선행 작업 — 정본은 `ops/catalog.py` 의 `depends_on` */
@@ -366,16 +372,15 @@ test('닫힌 게이트 뒤에 성공한 작업이 없다 — 선행 미충족은
 test('픽스처의 선행 선언이 ops 정본과 같다 — 여기서 갈리면 위 연쇄가 거짓을 만든다', () => {
   /* 연쇄를 픽스처의 `dependsOn` 에서 파생하므로, 그 선언이 낡으면 **틀린 연쇄가 조용히
    * 정답처럼** 굳는다. 선언 자체를 정본과 맞물린다. */
-  const declared = new Map(
-    [...MOCK_GRID.slots.flatMap((s) => s.tasks)].map((t) => [t.taskKey, t] as const),
-  );
-  for (const [key, deps] of OPS_DEPENDS) {
-    if (!declared.has(key)) continue;
-    assert.ok(deps.length > 0, `${key}: 정본 추출이 비었다`);
+  const declared = [...MARKET_TASKS, ...NEWS_TASKS];
+  for (const task of declared) {
+    assert.deepEqual(
+      task.dependsOn ?? [],
+      OPS_DEPENDS.get(task.taskKey) ?? [],
+      `${task.taskKey}: 픽스처와 ops 정본의 선행 작업이 다르다`,
+    );
   }
-  /* 픽스처가 담은 작업 중 정본에 선행이 있는데 픽스처 목록엔 없는 것 — 위 단언이 아무것도
-   * 안 재게 되는 형태라 따로 잡는다. */
-  const covered = [...OPS_DEPENDS.keys()].filter((k) => declared.has(k));
+  const covered = declared.filter((task) => OPS_DEPENDS.has(task.taskKey));
   assert.ok(covered.length >= 10, `선행 있는 작업이 ${covered.length}개만 담겼다`);
 });
 
