@@ -97,6 +97,8 @@ class _Cursor:
             self._etasks_for(p)
         elif s.startswith("UPDATE ops_expected_task SET eligible_at"):
             self._set_eligible(p)
+        elif "WHERE expected_task_id=%s AND updated_at=%s" in s:
+            self._reset_etask_if_unchanged(p)
         elif s.startswith("UPDATE ops_expected_task SET"):
             self._upd_etask(s, p)
         elif "SELECT count(*) FROM ops_task_attempt" in s:
@@ -176,7 +178,7 @@ class _Cursor:
                "outcome_reason": None, "current_attempt_id": None, "completeness": None,
                "records_out": None, "unsupported_records": None, "failed_records": None,
                "entity_resolution_arguments_total": None,
-               "entity_resolution_arguments_resolved": None}
+               "entity_resolution_arguments_resolved": None, "updated_at": 1}
         self.db.etasks[key] = row
         self.db.etasks_by_id[p[0]] = row
         self._rows = [(p[0],)]
@@ -188,13 +190,24 @@ class _Cursor:
                 out.append((row["expected_task_id"], row["task_key"], row["stage"],
                             row["plan_status"], row["task_outcome"], row["data_status"],
                             row["required"], row["eligible_at"], row["deadline_at"],
-                            row["missed_at"]))
+                            row["missed_at"], row.get("updated_at", 1)))
         self._rows = out
 
     def _set_eligible(self, p):
         row = self.db.etasks_by_id.get(p[0])
-        if row and row["eligible_at"] is None:
-            row["eligible_at"] = "ELIGIBLE"
+        if row:
+            if row["eligible_at"] is None:
+                row["eligible_at"] = "ELIGIBLE"
+            row["updated_at"] = row.get("updated_at", 1) + 1
+            self._rows = [(row["updated_at"],)]
+
+    def _reset_etask_if_unchanged(self, p):
+        row = self.db.etasks_by_id.get(p[1])
+        if row and row.get("updated_at", 1) == p[2]:
+            row["task_outcome"] = p[0]
+            row["outcome_reason"] = None
+            row["updated_at"] = row.get("updated_at", 1) + 1
+            self.rowcount = 1
 
     def _upd_etask(self, s, p):
         row = self.db.etasks_by_id.get(p[-1])
@@ -234,6 +247,7 @@ class _Cursor:
             row["missed_at"] = "SET"
         if "blocked_at=COALESCE" in s and row["blocked_at"] is None:
             row["blocked_at"] = "SET"
+        row["updated_at"] = row.get("updated_at", 1) + 1
 
     def _find_attempt(self, etid, arn):
         return next((a for a in self.db.attempts if a["etid"] == etid and a["arn"] == arn), None)

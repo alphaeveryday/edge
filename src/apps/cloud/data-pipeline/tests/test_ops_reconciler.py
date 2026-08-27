@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from data_pipeline.config import DbConfig
+from data_pipeline.ops import reconciler as reconciler_mod
 from data_pipeline.ops import states
 from data_pipeline.ops.ledger import Ledger
 from data_pipeline.ops.reconciler import (
@@ -40,7 +41,7 @@ def _seed(db, tasks, *, hard_deadline=None):
                "task_outcome": "PENDING", "data_status": "UNKNOWN", "required": True,
                "eligible_at": None, "deadline_at": None, "missed_at": None,
                "fulfilled_at": None, "blocked_at": None, "outcome_reason": None,
-               "current_attempt_id": None, "completeness": None, **t}
+               "current_attempt_id": None, "completeness": None, "updated_at": 1, **t}
         db.etasks[(_RID, t["task_key"])] = db.etasks_by_id[t["expected_task_id"]] = row
 
 
@@ -324,6 +325,224 @@ def test_confirmed_ecs_stopped_transitions_running_attempt():
     _reconcile(db, history=_entered("CollectKisPrice", arn="arn:task/kis"),
                ecs=FakeEcs(tasks={"arn:task/kis": {"lastStatus": "STOPPED", "exitCode": 0}}))
     assert db.attempts[0]["status"] == states.EXEC_SUCCEEDED
+    assert db.attempts[0]["exit_code"] == 0
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+
+
+def test_ecs_exit2_recovers_partial_fulfillment_and_dependency_without_other_evidence():
+    # WHY(ALPHA-1036): SFN output과 wrapper attempt가 함께 유실된 ledger gap에서도 ECS는 실제
+    #      exit 2를 가진다. 이를 단순 FAILED로 축약하면 manifest 산출을 미완으로 오판해 loader를
+    #      BLOCKED로 남긴다. 같은 정수 증거가 attempt·outcome·dependency에 모두 흘러야 한다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+
+    _reconcile(
+        db,
+        history=_entered("NormalizeInvestorEstimate", arn="arn:task/normalize"),
+        ecs=FakeEcs(tasks={
+            "arn:task/normalize": {"lastStatus": "STOPPED", "exitCode": 2},
+        }),
+    )
+
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+    assert db.attempts[0]["exit_code"] == 2
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_ecs_exit2_repairs_terminal_null_attempt_and_is_read_once_per_reconcile():
+    # WHY: 구버전 backfill은 exit 2를 FAILED/NULL로 축약했다. 새 판정이 메모리에서만 2를 써도
+    #      원장을 보정하지 않으면 ECS 보존 종료 뒤 근거가 다시 사라진다. 같은 polling에서 ECS를
+    #      두 번 읽으면 dependency/outcome이 서로 다른 순간을 볼 수 있으므로 1회여야 한다.
+    class CountingEcs(FakeEcs):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.calls = 0
+
+        def describe_tasks(self, **kwargs):
+            self.calls += 1
+            return super().describe_tasks(**kwargs)
+
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+    db.attempts.append({
+        "attempt_id": "legacy", "etid": "e1", "arn": "arn:task/normalize",
+        "status": states.EXEC_FAILED, "exit_code": None, "source": "RECONCILER_BACKFILL",
+        "started_at": _OLD,
+    })
+    ecs = CountingEcs(tasks={
+        "arn:task/normalize": {"lastStatus": "STOPPED", "exitCode": 2},
+    })
+
+    _reconcile(
+        db, history=_entered("NormalizeInvestorEstimate", arn="arn:task/normalize"), ecs=ecs,
+    )
+
+    assert ecs.calls == 1
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+    assert db.attempts[0]["exit_code"] == 2
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_terminal_null_attempt_without_integer_exit_is_not_rewritten_each_poll():
+    # WHY: SFN은 TaskFailed를 확정했지만 ECS가 정수 exit를 주지 못하는 경우가 있다. 이미 종료된
+    #      legacy attempt를 NULL로 매번 다시 닫으면 polling마다 finished_at이 바뀌어 이력이 흔들린다.
+    class RecordingLedger:
+        def __init__(self):
+            self.end_calls = []
+
+        def attempts_for(self, _expected_task_id):
+            return [{
+                "attempt_id": "legacy", "ecs_task_arn": "arn:task/normalize",
+                "execution_status": states.EXEC_FAILED, "exit_code": None,
+            }]
+
+        def record_attempt_end(self, *args, **kwargs):
+            self.end_calls.append((args, kwargs))
+
+    ledger = RecordingLedger()
+    reconciler_mod._reconcile_attempt(
+        ledger, "e1",
+        {"ecs_task_arn": "arn:task/normalize", "_terminal": states.EXEC_FAILED,
+         "exit_code": None},
+        entry=reconciler_mod.catalog.get("NORMALIZE_INVESTOR_INTRADAY"),
+        sfn_execution_arn="arn:exec", now=_NOW, stalled_after_seconds=None,
+        task={"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1"},
+        summary={"stalled": [], "ledger_gap": []},
+    )
+
+    assert ledger.end_calls == []
+
+
+def test_partial_normalize_exit_fulfills_dependency_but_attempt_stays_failed():
+    # WHY(ALPHA-1036): 정제가 일부 행을 거부해도 commit된 manifest winner는 loader가 소비한다.
+    # Reconciler가 exit 2를 미완으로 보면 실제 loader가 영구 BLOCKED로 오귀속된다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+
+    _reconcile(db, history=_entered(
+        "NormalizeInvestorEstimate", arn="arn:task/normalize", succeeded=True, exit_code=2,
+    ))
+
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_dependency_uses_latest_retry_not_any_past_success():
+    # WHY: 앞 normalize가 성공했어도 최신 redrive가 hard-fail이면 그 manifest는 소비 가능하다고
+    #      단정할 수 없다. outcome과 달리 dependency만 any-success면 loader를 MISSED로 오귀속한다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+
+    _reconcile(db, history=_multi(
+        "NormalizeInvestorEstimate", [("arn:task/old", 2), ("arn:task/latest", 1)],
+    ))
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FAILED
+    assert db.etasks_by_id["e2"]["eligible_at"] is None
+
+
+def test_dependency_uses_same_arn_wrapper_exit_while_sfn_evidence_lags():
+    # WHY: wrapper가 exit 2를 확정한 뒤 SFN TaskSucceeded가 아직 안 보이는 창에도 loader 의존은
+    #      풀려야 한다. 단, 앞 occurrence의 exit가 아니라 최신 ECS ARN과 같은 원장 행만 쓴다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "task_outcome": states.OUTCOME_FULFILLED, "fulfilled_at": "SET",
+         "eligible_at": _OLD, "deadline_at": _FUTURE},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+    db.attempts.extend([
+        {"attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "latest", "etid": "e1", "arn": "arn:task/latest",
+         "status": states.EXEC_FAILED, "exit_code": 2, "source": "WRAPPER",
+         "started_at": _OLD},
+    ])
+
+    _reconcile(
+        db,
+        history=_multi("NormalizeInvestorEstimate", [
+            ("arn:task/old", 0), ("arn:task/latest", None),
+        ]),
+        ecs=FakeEcs(tasks={
+            "arn:task/latest": {"lastStatus": "STOPPED", "exitCode": 2},
+        }),
+    )
+
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_reconciler_does_not_flip_wrapper_partial_fulfilled_back_to_failed():
+    # WHY(ALPHA-1036): wrapper가 exit 2를 이미 FULFILLED로 기록한 운영 순서에서 Reconciler의
+    # terminal=FAILED 분기가 다시 FAILED로 덮으면 같은 증거가 실행 시점에 따라 두 결론을 낸다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FULFILLED, "fulfilled_at": "SET",
+        "eligible_at": _OLD, "deadline_at": _FUTURE,
+    }])
+
+    _reconcile(db, history=_entered(
+        "NormalizeInvestorEstimate", arn="arn:task/normalize", succeeded=True, exit_code=2,
+    ))
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+
+
+def test_reconciler_preserves_partial_fulfilled_before_sfn_exit_evidence_arrives():
+    # WHY(ALPHA-1036): wrapper 원장은 exit 2를 이미 알지만 SFN history에는 TaskSubmitted만 보이는
+    #      짧은 창이 있다. ECS STOPPED만으로 FAILED로 되돌리면 다음 polling에서 다시 FULFILLED가
+    #      되어 같은 증거가 타이밍에 따라 왕복한다. 단, 앞 재시도 ARN의 exit는 쓰면 안 된다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FULFILLED, "fulfilled_at": "SET",
+        "eligible_at": _OLD, "deadline_at": _FUTURE,
+    }])
+    db.attempts.extend([
+        {"attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "current", "etid": "e1", "arn": "arn:task/normalize",
+         "status": states.EXEC_FAILED, "exit_code": 2, "source": "WRAPPER",
+         "started_at": _OLD},
+    ])
+
+    _reconcile(
+        db,
+        history=_entered("NormalizeInvestorEstimate", arn="arn:task/normalize"),
+        ecs=FakeEcs(tasks={
+            "arn:task/normalize": {"lastStatus": "STOPPED", "exitCode": 2},
+        }),
+    )
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
 
 
 def test_ledger_gap_backfills_attempt_and_opens_issue():
@@ -458,6 +677,98 @@ def test_retry_running_second_attempt_not_misjudged_by_stale_exit():
     assert attempts["arn:task/1"] == states.EXEC_FAILED
     assert attempts["arn:task/2"] == states.EXEC_RUNNING     # stale exit1 로 FAILED 오판 안 함
     assert db.etasks_by_id["e1"]["task_outcome"] != states.OUTCOME_FAILED
+
+
+@pytest.mark.parametrize("past_outcome", [states.OUTCOME_FAILED, states.OUTCOME_FULFILLED])
+@pytest.mark.parametrize("eligible_at", [_OLD, None])
+def test_unconfirmed_latest_retry_resets_past_terminal_outcome(past_outcome, eligible_at):
+    # WHY: expected_task는 retry 전후에도 같은 행이다. 앞 occurrence의 FAILED/FULFILLED를 유지하면
+    #      최신 retry가 RUNNING인데도 대시보드와 의존 판정이 과거 결과를 현재 결과로 노출한다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
+        "task_outcome": past_outcome, "outcome_reason": "past_attempt_failed",
+        "eligible_at": eligible_at,
+    }])
+
+    _reconcile(db, history=_multi(
+        "CollectKisPrice", [("arn:task/old", 1), ("arn:task/latest", None)],
+    ))
+
+    task = db.etasks_by_id["e1"]
+    assert task["task_outcome"] == states.OUTCOME_PENDING
+    assert task["outcome_reason"] is None
+
+
+@pytest.mark.parametrize("wrapper_attempt_id", ["latest", "old", None])
+def test_unconfirmed_retry_does_not_overwrite_concurrent_wrapper_completion(wrapper_attempt_id):
+    # WHY: SFN history를 읽은 뒤 wrapper가 최신 attempt를 확정할 수 있다. Reconciler가 오래된
+    #      snapshot으로 무조건 PENDING을 쓰면 같은 outcome인 재실패도 current attempt와 함께 잃는다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FAILED, "outcome_reason": "old_failure",
+        "current_attempt_id": "old", "eligible_at": _OLD,
+    }])
+
+    class RacingLedger(Ledger):
+        def reset_task_outcome_if_unchanged(self, expected_task_id, *, observed_updated_at):
+            self.update_task_outcome(
+                expected_task_id, task_outcome=states.OUTCOME_FAILED,
+                outcome_reason="latest_failure", current_attempt_id=wrapper_attempt_id,
+            )
+            return super().reset_task_outcome_if_unchanged(
+                expected_task_id, observed_updated_at=observed_updated_at,
+            )
+
+    reconcile_run(
+        RacingLedger(db=_DB, connect_fn=db.connect), run_key=_RUN_KEY, now=_NOW,
+        sfn_client=FakeSfn(
+            history=_multi("CollectKisPrice", [
+                ("arn:task/old", 1), ("arn:task/latest", None),
+            ]),
+            describe={"status": "RUNNING"},
+        ),
+        ecs_client=FakeEcs(),
+    )
+
+    task = db.etasks_by_id["e1"]
+    assert task["task_outcome"] == states.OUTCOME_FAILED
+    assert task["outcome_reason"] == "latest_failure"
+    assert task["current_attempt_id"] == (wrapper_attempt_id or "old")
+
+
+def test_retry_occurrences_reuse_each_matching_ledger_exit_without_ecs_queries():
+    # WHY: hydration이 latest에만 적용되면 과거 retry는 이미 원장 exit가 있어도 ECS를 다시 읽는다.
+    #      occurrence마다 자기 ARN의 원장 증거를 승격하고 latest만 outcome/dependency를 결정한다.
+    class CountingEcs(FakeEcs):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def describe_tasks(self, **kwargs):
+            self.calls += 1
+            return super().describe_tasks(**kwargs)
+
+    db = FakeOpsDB()
+    _seed(db, [{"task_key": "PRICE_COLLECTION_KIS", "expected_task_id": "e1",
+                "eligible_at": _OLD}])
+    db.attempts.extend([
+        {"attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+         "status": states.EXEC_FAILED, "exit_code": 1, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "latest", "etid": "e1", "arn": "arn:task/latest",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _OLD},
+    ])
+    ecs = CountingEcs()
+
+    _reconcile(db, history=_multi(
+        "CollectKisPrice", [("arn:task/old", None), ("arn:task/latest", None)],
+    ), ecs=ecs)
+
+    assert ecs.calls == 0
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
 
 
 def test_planner_missing_when_slot_has_no_run():
