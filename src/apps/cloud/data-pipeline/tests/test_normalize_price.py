@@ -1,8 +1,13 @@
 """normalize_price 스텝 테스트 — 벤더 이형 흡수 + 정합성 게이트 + quality_log(ALPHA-133)."""
 
+import hashlib
 import json
 
-from data_pipeline.lake import LocalStorage
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_price_daily_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import normalize_price
 
 
@@ -36,10 +41,41 @@ def _kis_row(**over) -> dict:
     return row
 
 
-def _quality_log(storage) -> dict:
+def _quality_log(storage, run_id: str | None = None) -> dict:
     keys = storage.list_keys("operations_archive/data_quality_logs/")
+    if run_id is not None:
+        keys = [key for key in keys if f"/run_id={run_id}/" in key]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _manifest(storage, run_id: str) -> dict:
+    key = canonical_run_manifest_key("price_daily", run_id)
+    return json.loads(storage.get_bytes(key).decode("utf-8"))
+
+
+class _FailingStorage:
+    def __init__(self, inner, *, fail_put: str | None = None, fail_get: str | None = None,
+                 fail_list: str | None = None):
+        self.inner = inner
+        self.fail_put = fail_put
+        self.fail_get = fail_get
+        self.fail_list = fail_list
+
+    def list_keys(self, prefix):
+        if self.fail_list and self.fail_list in prefix:
+            raise OSError("의도된 목록 조회 실패")
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        if self.fail_get and self.fail_get in key:
+            raise OSError("의도된 읽기 실패")
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        if self.fail_put and self.fail_put in key:
+            raise OSError("의도된 쓰기 실패")
+        return self.inner.put_bytes(key, data)
 
 
 def _canonical_rows(storage, market: str, trade_date: str) -> list[dict]:
@@ -75,7 +111,7 @@ def test_yahoo_normalizes_but_unknown_vendor_still_fails(tmp_path):
                [_fmp_row(our_ticker="KS11", market="KR", yahoo_symbol="^KS11")])
     _write_raw(storage, _raw_key("mystery", "KR"), [_fmp_row(our_ticker="X", market="KR")])
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert (log["records_passed"], log["records_failed"]) == (1, 1)
     assert log["failures"][0]["reasons"] == ["unsupported_vendor"]
@@ -156,7 +192,7 @@ def test_cross_vendor_collision_fail_loud(tmp_path):
     _write_raw(storage, _raw_key("fmp", "KR"), [_fmp_row(our_ticker="005930", market="KR")])
     _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(our_ticker="005930")])
 
-    assert normalize_price.run(storage, "N1") == 1  # fail-loud
+    assert normalize_price.run(storage, "N1") == 2  # 성공 범위 보존 부분 실패
     assert _canonical_rows(storage, "KR", "2026-07-01") == []  # 충돌 키 제외
     log = _quality_log(storage)
     assert len(log["vendor_collisions"]) == 1
@@ -170,7 +206,7 @@ def test_failed_rows_excluded_from_canonical(tmp_path):
     _write_raw(storage, _raw_key("fmp", "US"),
                [_fmp_row(our_ticker="OK"), _fmp_row(our_ticker="BAD", high=7.0, low=9.0)])
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     rows = _canonical_rows(storage, "US", "2026-07-01")
     assert [r["ticker"] for r in rows] == ["OK"]
 
@@ -182,7 +218,7 @@ def test_ohlcv_violation_isolated_and_logged(tmp_path):
     _write_raw(storage, _raw_key("fmp", "US"),
                [_fmp_row(our_ticker="AAPL"), _fmp_row(our_ticker="BAD", high=7.0, low=9.0)])
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 1 and log["records_failed"] == 1
     failure = log["failures"][0]
@@ -196,7 +232,7 @@ def test_missing_and_non_numeric_reported(tmp_path):
     _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row(close=None)])           # 결측
     _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(stck_clpr="비수치")])   # 비수치
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     reasons = {r for f in log["failures"] for r in f["reasons"]}
     assert "missing_field" in reasons and "non_numeric" in reasons
@@ -215,7 +251,7 @@ def test_nan_inf_bool_prices_rejected_not_silently_passed(tmp_path):
     key = _raw_key("fmp", "US")
     storage.put_bytes(key, (nan_line + "\n" + inf_line + "\n" + bool_line + "\n").encode("utf-8"))
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0 and log["records_failed"] == 3
     assert all("non_numeric" in f["reasons"] for f in log["failures"])
@@ -228,7 +264,7 @@ def test_kis_malformed_calendar_date_rejected(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(stck_bsop_date="20260231")])
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0 and log["records_failed"] == 1
     assert "bad_trade_date" in log["failures"][0]["reasons"]
@@ -242,7 +278,7 @@ def test_unpadded_dates_rejected_both_vendors(tmp_path):
     _write_raw(storage, _raw_key("kis", "KR"), [_kis_row(stck_bsop_date="202671")])
     _write_raw(storage, _raw_key("fmp", "US"), [_fmp_row(date="2026-7-1")])
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0 and log["records_failed"] == 2
     assert all("bad_trade_date" in f["reasons"] for f in log["failures"])
@@ -257,7 +293,7 @@ def test_non_object_row_isolated_not_crash(tmp_path):
     body = "null\n" + json.dumps(_fmp_row()) + "\n[]\n"
     storage.put_bytes(key, body.encode("utf-8"))
 
-    assert normalize_price.run(storage, "N1") == 0  # 크래시 없이 완료
+    assert normalize_price.run(storage, "N1") == 2  # 성공 범위 보존 부분 실패
     log = _quality_log(storage)
     assert log["records_passed"] == 1 and log["records_failed"] == 2
     assert all("non_object_row" in f["reasons"] for f in log["failures"])
@@ -321,7 +357,7 @@ def test_unhashable_market_isolated_not_crash(tmp_path):
     bad = json.dumps(_fmp_row(market=[]))  # unhashable market
     storage.put_bytes(_raw_key("fmp", "US"), (good + "\n" + bad + "\n").encode("utf-8"))
 
-    assert normalize_price.run(storage, "N1") == 0  # 크래시 없이 완료
+    assert normalize_price.run(storage, "N1") == 2  # 성공 범위 보존 부분 실패
     log = _quality_log(storage)
     assert log["records_passed"] == 1 and log["records_failed"] == 1
     assert "missing_field" in log["failures"][0]["reasons"]
@@ -349,6 +385,117 @@ def test_input_run_id_scopes_validation(tmp_path):
     assert [r["ticker"] for r in _canonical_rows(storage, "US", "2026-07-01")] == ["MSFT"]
 
 
+def test_manifest_records_kr_us_current_winners_with_direct_key_and_sha(tmp_path):
+    # WHY(ALPHA-1037): producer 범위는 변경분이 아니라 이번 run의 성공 winner 전체다. KR·US를
+    #      모두 싣고 같은 값 재확정도 보존해야 PR04가 지원 시장만 선택할 수 있다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R0"), [_fmp_row()])
+    assert normalize_price.run(storage, "N0", input_run_id="R0") == 0
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"), [
+        _fmp_row(),
+        _fmp_row(our_ticker="MSFT", close=10.0, fetched_at="2026-07-01T00:00:00+00:00"),
+        _fmp_row(our_ticker="MSFT", close=10.5, fetched_at="2026-07-01T01:00:00+00:00"),
+    ])
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R1"), [_kis_row()])
+
+    assert normalize_price.run(storage, "N1", input_run_id="R1") == 0
+    manifest = _manifest(storage, "N1")
+    assert manifest["producer"] == "normalize_price"
+    assert manifest["canonical_written"] is True
+    assert [part["market"] for part in manifest["canonical_partitions"]] == ["KR", "US"]
+    by_market = {part["market"]: part for part in manifest["canonical_partitions"]}
+    assert by_market["KR"]["winner_ids"] == [{"ticker": "005930"}]
+    assert by_market["US"]["winner_ids"] == [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+    for part in manifest["canonical_partitions"]:
+        assert part["key"] == (
+            f'{canonical_price_daily_partition(part["market"], part["trade_date"])}/part-00000.parquet'
+        )
+        assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
+    msft = next(row for row in _canonical_rows(storage, "US", "2026-07-01")
+                if row["ticker"] == "MSFT")
+    assert msft["close"] == 10.5
+
+
+def test_partial_row_failure_preserves_success_manifest_and_returns_2(tmp_path):
+    # WHY(ALPHA-1037): 한 행 불량이 다른 성공 winner 계보를 폐기하면 loader가 처리할 수 없다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US"), [
+        _fmp_row(our_ticker="OK"),
+        _fmp_row(our_ticker="BAD", high=7.0, low=9.0),
+    ])
+
+    assert normalize_price.run(storage, "N1", input_run_id="R1") == 2
+    [part] = _manifest(storage, "N1")["canonical_partitions"]
+    assert part["winner_ids"] == [{"ticker": "OK"}]
+    assert _quality_log(storage)["ops"] == {"records_out": 1, "failed_records": 1}
+
+
+def test_cross_vendor_collision_is_excluded_from_manifest_but_other_winner_survives(tmp_path):
+    # WHY(ALPHA-1037): 교차 벤더 키를 manifest에 남기면 canonical에서 제외한 오염 후보를
+    #      consumer가 성공 winner로 다시 처리한다. 충돌은 exit 2지만 같은 파티션 성공은 보존한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "KR", run_id="R0"), [
+        _fmp_row(our_ticker="005930", market="KR"),
+    ])
+    assert normalize_price.run(storage, "N0", input_run_id="R0") == 0
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R1"), [
+        _kis_row(our_ticker="005930"),
+        _kis_row(our_ticker="000660"),
+    ])
+
+    assert normalize_price.run(storage, "N1", input_run_id="R1") == 2
+    [part] = _manifest(storage, "N1")["canonical_partitions"]
+    assert part["winner_ids"] == [{"ticker": "000660"}]
+    assert [row["ticker"] for row in _canonical_rows(storage, "KR", "2026-07-01")] == [
+        "000660"
+    ]
+    log = _quality_log(storage, "N1")
+    assert log["ops"] == {"records_out": 1, "failed_records": 1}
+    assert log["vendor_collisions"][0]["ticker"] == "005930"
+
+
+def test_empty_input_writes_valid_empty_completed_manifest(tmp_path):
+    # WHY(ALPHA-1037): 정상 0건과 manifest 결손을 구분해야 consumer가 풀스캔으로 넓히지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    assert normalize_price.run(storage, "N1", input_run_id="empty") == 0
+    assert _manifest(storage, "N1") == {
+        "run_id": "N1",
+        "producer": "normalize_price",
+        "canonical_written": True,
+        "canonical_partitions": [],
+    }
+
+
+def test_canonical_or_quality_failure_keeps_manifest_incomplete(tmp_path):
+    # WHY(ALPHA-1037): canonical 또는 quality가 유실된 실행은 성공 winner 계보로 승인할 수 없다.
+    for failing_prefix in ("canonical/market_data/price_daily", "data_quality_logs"):
+        inner = LocalStorage(tmp_path / failing_prefix.replace("/", "_"))
+        _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+        storage = _FailingStorage(inner, fail_put=failing_prefix)
+
+        assert normalize_price.run(storage, "N1", input_run_id="R1") == 1
+        assert _manifest(inner, "N1")["canonical_written"] is False
+
+
+def test_manifest_integrity_failure_is_fatal_and_invalidates_marker(tmp_path):
+    # WHY(ALPHA-1037): 완료 marker 바이트가 손상되면 consumer는 direct key·ID를 신뢰할 수 없다.
+    class _CorruptCompletedManifestStorage(_FailingStorage):
+        def get_bytes(self, key):
+            data = self.inner.get_bytes(key)
+            if "canonical_run_manifests" in key and json.loads(data)["canonical_written"] is True:
+                return b"{}"
+            return data
+
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key("fmp", "US"), [_fmp_row()])
+
+    assert normalize_price.run(
+        _CorruptCompletedManifestStorage(inner), "N1", input_run_id="R1"
+    ) == 1
+    assert _manifest(inner, "N1")["canonical_written"] is False
+
+
 def test_scoped_run_covers_all_vendors_of_a_run(tmp_path):
     # WHY: 스코프가 canonical 을 쓰게 되면서(ALPHA-389) 벤더 교차 충돌 감지는 **스코프가 그
     #      키를 쓰는 모든 벤더를 포함한다**는 전제 위에 선다. SFN 이 그 전제를 만족한다 — 9개
@@ -360,7 +507,7 @@ def test_scoped_run_covers_all_vendors_of_a_run(tmp_path):
     _write_raw(storage, _raw_key("kis", "KR", run_id="N1"), [_kis_row(our_ticker="005930")])
 
     # 같은 런 스코프 → 두 벤더가 다 보인다 → 충돌 fail-loud(둘 다 제외).
-    assert normalize_price.run(storage, "N2", input_run_id="N1") == 1
+    assert normalize_price.run(storage, "N2", input_run_id="N1") == 2
     assert _canonical_rows(storage, "KR", "2026-07-01") == []
 
 
@@ -375,7 +522,7 @@ def test_vendors_do_not_overlap_by_design(tmp_path):
     #      **한계**: 이건 이 프로세스가 로드한 설정을 볼 뿐이라, 커밋된 sources.toml 은
     #      지키지만 배포된 taskdef 의 env 오버라이드(DATA_PIPELINE_PRICE__SOURCE__SYMBOL_MAP)
     #      까지는 못 본다 — env > file 이므로 CI 초록인 채 prod 만 겹칠 수 있다. 그때도
-    #      조용하진 않다: 런타임에 _merge_partition 이 충돌을 fail-loud 로 잡아 exit 1 이고
+    #      조용하진 않다: 런타임에 _merge_partition 이 충돌을 fail-loud 로 잡아 exit 2 이고
     #      SFN 이 실패 알림을 낸다. 잃는 건 '충돌 후 단일벤더 스코프 복구가 되살리는' 케이스뿐.
     from data_pipeline import load_settings
 
@@ -403,7 +550,7 @@ def test_kis_dateless_extra_row_fails_gracefully(tmp_path):
     del dateless["stck_bsop_date"]
     _write_raw(storage, _raw_key("kis", "KR"), [dateless])
 
-    assert normalize_price.run(storage, "N1") == 0
+    assert normalize_price.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_failed"] == 1
     assert "missing_field" in log["failures"][0]["reasons"]
