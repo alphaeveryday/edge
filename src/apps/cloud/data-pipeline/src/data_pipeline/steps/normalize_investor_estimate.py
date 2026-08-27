@@ -33,17 +33,25 @@ fetched_at 으로 수렴한다. 같은 슬롯의 앞선 관측은 남기지 않�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 
-from ..lake import Storage, is_raw_investor_estimate_key, parse_raw_investor_key, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_run_manifest_key,
+    is_raw_investor_estimate_key,
+    parse_raw_investor_key,
+    quality_log_key,
+)
 from .normalize_investor import _blank, _dedup, _fetched_at, _to_int
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "normalize_investor_estimate"
 DATASET = "investor_flow_intraday"
+_PARTIAL_EXIT_CODE = 2
 
 # 표준 컬럼 → KIS 장중 추정 필드(실측: `.dev/etf-flow-collection-plan.md` §2.5). `fake`=가집계라
 # 컬럼명에 `_est` 를 남겨 **표면에서 잠정임이 읽히게** 한다 — EOD 확정 컬럼과 이름이 같으면
@@ -233,16 +241,17 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     return [acc[k] for k in sorted(acc)]
 
 
-def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
+def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict], int]:
     """통과 행을 (market, trade_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
-    반환: (쓴 파티션 수, 쓴 행 수)."""
+    반환: (이번 실행의 성공 winner manifest 항목, 병합 뒤 canonical 행 수)."""
     from ..lake import canonical_investor_flow_intraday_partition
 
     by_partition: dict[tuple[str, str], list[dict]] = {}
     for row in passing:
         by_partition.setdefault((row["market"], row["trade_date"]), []).append(row)
 
-    parts_written = rows_written = 0
+    partitions: list[dict] = []
+    rows_written = 0
     for (market, trade_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_investor_flow_intraday_partition(market, trade_date)
         existing: list[dict] = []
@@ -250,14 +259,43 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
             if key.endswith(".parquet"):
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
-        storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
-        parts_written += 1
+        key = f"{prefix}/part-00000.parquet"
+        parquet_bytes = _write_parquet_rows(merged)
+        storage.put_bytes(key, parquet_bytes)
+        partitions.append({
+            "market": market,
+            "trade_date": trade_date,
+            "key": key,
+            # canonical key는 다음 normalize가 덮어쓸 수 있다. consumer가 이 run이 확정한
+            # 바이트와 같은지 확인해야 앞 run_id에 뒤 run 값을 붙이는 계보 오염을 막는다.
+            "sha256": hashlib.sha256(parquet_bytes).hexdigest(),
+            # 값이 바뀐 행만이 아니라 이번 실행에서 게이트를 통과해 확정한 모든 논리 키다.
+            # 같은 값 재확정도 하류의 현재 실행 범위이므로 포함하고, 중복 관측은 한 번만 남긴다.
+            "winner_ids": [
+                {"ticker": ticker, "asof_slot": asof_slot}
+                for ticker, asof_slot in sorted({
+                    (row["ticker"], row["asof_slot"]) for row in new_rows
+                })
+            ],
+        })
         rows_written += len(merged)
-    return parts_written, rows_written
+    return partitions, rows_written
+
+
+def _manifest_bytes(run_id: str, canonical_written: bool, partitions: list[dict]) -> bytes:
+    return json.dumps({
+        "run_id": run_id,
+        "producer": JOB_NAME,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
-    """raw investor_flow_intraday → 정규화 → 게이트 → quality_log. 성공 0, 스토리지 장애 시 비0.
+    """raw investor_flow_intraday → 정규화 → 게이트 → quality_log.
+
+    성공 0, 격리된 입력 실패 2, 저장 실패 1. 부분 실패 2는 장중 수급 SFN이 성공 winner의
+    적재를 계속한 뒤 전체 실행을 실패로 마감하는 제어 신호다.
 
     input_run_id 지정 시 그 수집 런(=한 슬롯)의 raw 만 읽는다. 미지정이면 전체를 읽는다 —
     같은 날 앞 슬롯을 다시 훑어도 멱등이라 결과가 같다(EOD 정제와 동형).
@@ -265,14 +303,29 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
 
-    raw_keys = [k for k in storage.list_keys("raw/") if is_raw_investor_estimate_key(k)]
-    if input_run_id is not None:
-        raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
-
     read = 0
     failures: list[dict] = []
     passing: list[dict] = []
     exit_code = 0
+    manifest_key = canonical_run_manifest_key(DATASET, run_id)
+    manifest_initialized = True
+    try:
+        # raw 목록부터 실패해도 같은 run의 이전 성공 범위를 승인하지 않도록 가장 먼저 무효화한다.
+        storage.put_bytes(manifest_key, _manifest_bytes(run_id, False, []))
+    except Exception:
+        logger.exception("canonical run manifest 초기화 실패")
+        manifest_initialized = False
+        exit_code = 1
+
+    try:
+        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_investor_estimate_key(k)]
+    except Exception as exc:
+        logger.exception("raw 목록 조회 실패")
+        raw_keys = []
+        failures.append({"raw_key": None, "reasons": ["raw_list_error"], "error": str(exc)})
+        exit_code = 1
+    if input_run_id is not None:
+        raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
     for raw_key in raw_keys:
         try:
@@ -317,15 +370,18 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 continue
             passing.append(row)
 
-    parts_written = canonical_rows = 0
-    canonical_written = True
-    try:
-        parts_written, canonical_rows = _write_canonical(storage, passing)
-    except Exception:
-        logger.exception("canonical 적재 실패")
-        canonical_written = False
-        exit_code = 1
+    partitions: list[dict] = []
+    canonical_rows = 0
+    canonical_written = False
+    if manifest_initialized:
+        try:
+            partitions, canonical_rows = _write_canonical(storage, passing)
+            canonical_written = True
+        except Exception:
+            logger.exception("canonical 적재 실패")
+            exit_code = 1
 
+    quality_written = True
     try:
         storage.put_bytes(
             quality_log_key(DATASET, checked_date, run_id),
@@ -342,7 +398,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "ops": {"records_out": len(passing), "failed_records": len(failures)},
                 "failures": failures,
                 "canonical_written": canonical_written,
-                "canonical_partitions_written": parts_written,
+                "canonical_partitions": partitions,
+                "canonical_partitions_written": len(partitions),
                 "canonical_rows_written": canonical_rows,
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -350,11 +407,24 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         )
     except Exception:
         logger.exception("quality_log 기록 실패 — 검증 결과 유실")
+        quality_written = False
         exit_code = exit_code or 1
+
+    # 행 실패는 다른 성공 winner의 계보를 폐기하지 않는다. canonical과 quality가 온전히
+    # 기록됐으면 성공 범위를 commit하되, 아래 반환 코드는 비0으로 부분 실패를 SFN에 드러낸다.
+    if canonical_written and quality_written and exit_code != 1:
+        try:
+            storage.put_bytes(manifest_key, _manifest_bytes(run_id, True, partitions))
+        except Exception:
+            logger.exception("canonical run manifest 기록 실패")
+            exit_code = 1
+
+    if failures and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
 
     logger.info(
         "normalize_investor_estimate 완료: raw_files=%d read=%d passed=%d failed=%d "
         "canonical_parts=%d canonical_rows=%d",
-        len(raw_keys), read, len(passing), len(failures), parts_written, canonical_rows,
+        len(raw_keys), read, len(passing), len(failures), len(partitions), canonical_rows,
     )
     return exit_code
