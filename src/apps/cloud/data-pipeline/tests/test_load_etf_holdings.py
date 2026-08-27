@@ -58,11 +58,13 @@ def _hold_row(etf_id: str = "091160", constituent_ticker: str = "005930",
 
 
 class _FakeCursor:
-    def __init__(self, log, instruments, existing, existing_profiles):
+    def __init__(self, log, instruments, existing, existing_versions, existing_profiles, statuses):
         self._log = log
         self._instruments = instruments  # [(market_code, ticker, id, type), …]
         self._existing = existing
+        self._existing_versions = existing_versions
         self._existing_profiles = existing_profiles
+        self._statuses = statuses
         self._rows: list = []
         self._returning = None
         self.rowcount = 1
@@ -76,17 +78,22 @@ class _FakeCursor:
         elif upper.startswith("INSERT INTO ETF_PROFILE"):
             self.rowcount = 0 if params[0] in self._existing_profiles else 1
             self._existing_profiles.add(params[0])
-        elif upper.startswith("INSERT INTO ETF_HOLDING_SNAPSHOT"):
+        elif upper.startswith("INSERT INTO ETF_HOLDING_SNAPSHOT_STATUS"):
+            self._statuses[(params[0], params[1])] = params[2:]
+            self.rowcount = 1
+        elif upper.startswith("INSERT INTO ETF_HOLDING_SNAPSHOT ("):
             key = (params[0], params[1], params[2])  # etf, constituent, trade_date
             weight = params[3]
             prev = self._existing.get(key, "∅")
+            prev_version = self._existing_versions.get(key)
             if prev == "∅":
                 self._returning, self.rowcount = (False,), 1
-            elif prev == weight:
+            elif prev == weight and prev_version == params[5]:
                 self._returning, self.rowcount = None, 0
             else:
                 self._returning, self.rowcount = (True,), 1
             self._existing[key] = weight
+            self._existing_versions[key] = params[5]
         elif upper.startswith("SELECT EXISTS (SELECT 1 FROM ETF_HOLDING_SNAPSHOT"):
             etf_id, trade_date, stale_ids = params
             self._returning = (any(
@@ -117,10 +124,15 @@ class _FakeConn:
             ("XKRX", "000660", "inst_hynix", "EQUITY"),
         ]
         self.existing = dict(existing or {})
+        self.existing_versions: dict[tuple, str] = {}
         self.existing_profiles = set(existing_profiles or ())
+        self.statuses: dict[tuple, tuple] = {}
 
     def cursor(self):
-        return _FakeCursor(self.log, self.instruments, self.existing, self.existing_profiles)
+        return _FakeCursor(
+            self.log, self.instruments, self.existing, self.existing_versions,
+            self.existing_profiles, self.statuses,
+        )
 
 
 def _fake_connect(conn):
@@ -138,7 +150,7 @@ def _db() -> DbConfig:
 
 
 def _inserts(conn) -> list:
-    return [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO ETF_HOLDING_SNAPSHOT")]
+    return [p for sql, p in conn.log if sql.upper().startswith("INSERT INTO ETF_HOLDING_SNAPSHOT (")]
 
 
 def _profile_inserts(conn) -> list:
@@ -233,8 +245,8 @@ def test_정상_합은_이상으로_남지_않는다(tmp_path, monkeypatch):
 
 
 def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
-    # WHY: 창 미지정이 전체 스캔이라 매 런이 과거 as_of_date 를 다시 훑는다. 멱등이 아니면
-    #      PK(etf, constituent, trade_date) 위반으로 배치가 통째로 죽는다.
+    # WHY: PK 중복은 생기지 않아야 하고, 같은 값이어도 현재 런이 재확정한
+    #      version으로 stamp해야 교정 snapshot에서 사라진 종목과 구분한다.
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [_hold_row()])
     conn = _FakeConn()
@@ -245,7 +257,82 @@ def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
 
     first, second = _log(storage, "R1"), _log(storage, "R2")
     assert first["created"] == 1 and first["already_present"] == 0
-    assert second["created"] == 0 and second["already_present"] == 1
+    assert second["created"] == 0 and second["updated"] == 1
+    assert conn.existing_versions[("inst_kodex", "inst_samsung", "2026-07-16")] == "R2"
+
+
+def test_snapshot_status가_거부행과_정확한_version을_보존한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1039): DB에는 통과행만 남으므로 전체/유효 건수를 별도로 남기지
+    # 않으면 거부행 과반 snapshot이 100% 정상으로 위장된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _hold_row(constituent_ticker="005930", weight_pct=60.0),
+        _hold_row(constituent_ticker="000660", weight_pct=float("nan")),
+        _hold_row(constituent_ticker="999999", weight_pct=float("nan")),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (3, 1, "R1")
+
+
+def test_snapshot_status의_valid는_실제_stamp_가능한_행만_세는다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1039): ticker/weight만 정상이어도 지원 제외 자산이나 마스터 미등록
+    # 구성종목은 current version에 없다. 그 행들이 valid를 올리면 실제 1행만 있는
+    # snapshot이 3/3 good으로 위장돼 트리거를 만든다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _hold_row(constituent_ticker="005930", weight_pct=60.0),
+        _hold_row(constituent_ticker="CASH", constituent_mic=None,
+                  constituent_asset_type="CASH", weight_pct=20.0),
+        _hold_row(constituent_ticker="999999", weight_pct=20.0),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (3, 1, "R1")
+
+
+def test_snapshot_status_denominator는_part_중복을_논리_행으로_수렴한다(
+    tmp_path, monkeypatch,
+):
+    # WHY(ALPHA-1039): 같은 자연키가 part 3개에 있어도 loader winner는 1행이다. 물리
+    # 건수를 denominator로 쓰면 정상 snapshot이 (3,1)로 탈락해 옛 holdings로 폴백한다.
+    storage = LocalStorage(tmp_path / "lake")
+    for index, fetched_at in enumerate((
+        "2026-07-20T04:00:00+00:00",
+        "2026-07-20T05:00:00+00:00",
+        "2026-07-20T06:00:00+00:00",
+    )):
+        _write_canonical(
+            storage, "KR", "2026-07-16", [_hold_row(fetched_at=fetched_at)],
+            part=f"part-{index:05d}",
+        )
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (1, 1, "R1")
+
+
+def test_snapshot_version이_교정에서_제거된_구성종목을_가린다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1039): upsert mart에 옛 행이 남아도 trigger는 status와 같은 version만
+    # 읽으므로, 교정 canonical에서 빠진 종목을 재사용하지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _hold_row(constituent_ticker="005930"), _hold_row(constituent_ticker="000660")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+    assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
+
+    _write_canonical(storage, "KR", "2026-07-16", [_hold_row(constituent_ticker="005930")])
+    assert load_etf_holdings.run(storage, "R2", db=_db()) == 0
+
+    assert conn.existing_versions[("inst_kodex", "inst_samsung", "2026-07-16")] == "R2"
+    assert conn.existing_versions[("inst_kodex", "inst_hynix", "2026-07-16")] == "R1"
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (1, 1, "R2")
 
 
 def test_미등록_ETF_는_적재하지_않고_수치로_남는다(tmp_path, monkeypatch):

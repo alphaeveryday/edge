@@ -28,6 +28,7 @@ import json
 import logging
 import math
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from ..config import DbConfig, PriceTriggersConfig
 from ..db import connect, domain_id, ensure_etf_profile
@@ -47,10 +48,13 @@ DATASET = "price_movement_trigger"
 # market_code 를 MIC 로 들고 있어, ticker 만으로 조회하면 시장이 모호했다(구 ALPHA-448).
 # 시장을 고정하면 (market_code, ticker) 자연키로 ticker 가 유일해 그 모호성이 사라진다.
 _MIC_BY_MARKET = {"KR": "XKRX"}
+_MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
 
 # 결정적 detected_at — KRX 정규장 마감. 시각을 런타임 시계로 찍으면 재실행마다
 # uq(etf, trade_date, detected_at)의 세 번째 키가 달라져 중복 행이 쌓인다.
 _MARKET_CLOSE_KST = "T15:30:00+09:00"
+
+_PARTIAL_EXIT_CODE = 2
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
@@ -76,7 +80,7 @@ def _num(value: object) -> float | None:
     inf 는 비교 게이트를 조용히 통과해 CHECK 위반(런 전체 롤백)이나 가짜 수익률 커밋을
     만든다 — 결측 취급이 유일하게 안전하다(coerce-to-passing 금지).
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
         return None
     return float(value) if math.isfinite(value) else None
 
@@ -180,6 +184,124 @@ def _etf_instrument_ids(conn, mic: str) -> dict[str, str]:
         return {str(t): str(i) for t, i in cur.fetchall()}
 
 
+def _market_instrument_ids(
+    conn, mics: tuple[str, ...]
+) -> tuple[dict[str, str], set[str]]:
+    """시장 MIC 집합의 ticker→instrument_id와 모호 ticker.
+
+    price manifest는 지역(KR)만 주므로 세 MIC를 함께 본다. 같은 ticker가 서로 다른
+    instrument에 걸치면 어느 가격인지 고를 수 없어 그 ticker만 격리한다.
+    """
+    ids: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ticker, instrument_id FROM instrument WHERE market_code = ANY(%s)",
+            (list(mics),),
+        )
+        for ticker, instrument_id in cur.fetchall():
+            ticker, instrument_id = str(ticker), str(instrument_id)
+            if ticker in ids and ids[ticker] != instrument_id:
+                ambiguous.add(ticker)
+            ids[ticker] = instrument_id
+    return ids, ambiguous
+
+
+def _manifest_targets(
+    storage: Storage, input_run_id: str,
+) -> tuple[int, int, int, int, dict[str, frozenset[str]]]:
+    """NormalizePrice manifest의 전체/선택 계측과 KR 거래일별 winner ticker."""
+    # LoadPriceDaily와 같은 manifest 검증을 공유한다. direct key·SHA 형식·정렬/고유 ID와
+    # KR·US 전체 구조까지 검증하되 parquet는 GET하지 않는다 — 가격은 선행 loader가 DB에
+    # 적재했고 이 스텝의 정상 입력은 DB 원장이다.
+    from .load_price_daily import _manifest_partitions as price_manifest_partitions
+
+    partition_total, winner_total, selected = price_manifest_partitions(storage, input_run_id)
+    targets: dict[str, frozenset[str]] = {}
+    for _market, trade_date, _key, _sha256, winner_ids in selected:
+        targets[trade_date] = winner_ids
+    return (
+        partition_total,
+        len(selected),
+        winner_total,
+        sum(len(winner_ids) for winner_ids in targets.values()),
+        targets,
+    )
+
+
+def _latest_good_holdings(
+    conn, etf_instrument_ids: list[str], trade_date: str,
+) -> dict[str, tuple[str, list[tuple[str, float]]]]:
+    """ETF별 ``trade_date`` 이하 최신-good DB holdings.
+
+    good은 loader가 canonical 전체·유효 행을 보존한 status에서 유효 행이 과반인
+    스냅샷이다. holdings는 그 status의 정확한 data_version만 읽어, 교정 시
+    제거된 구성종목이 옛 version에 남아도 선택되지 않는다.
+    미래 스냅샷 폴백은 look-ahead라 정상 manifest 경로에서는 쓰지 않는다.
+    """
+    if not etf_instrument_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "WITH ranked_dates AS ("
+            " SELECT etf_instrument_id, trade_date, data_version,"
+            " row_number() OVER (PARTITION BY etf_instrument_id"
+            "                    ORDER BY trade_date DESC) AS rn"
+            " FROM etf_holding_snapshot_status"
+            " WHERE etf_instrument_id = ANY(%s) AND trade_date <= %s"
+            "   AND 2 * valid_row_count >= input_row_count"
+            ")"
+            " SELECT h.etf_instrument_id, h.constituent_instrument_id, h.weight_ratio,"
+            " h.trade_date"
+            " FROM ranked_dates d JOIN etf_holding_snapshot h"
+            "   ON h.etf_instrument_id = d.etf_instrument_id"
+            "  AND h.trade_date = d.trade_date"
+            "  AND h.data_version = d.data_version"
+            " WHERE d.rn = 1 AND h.weight_ratio IS NOT NULL",
+            (etf_instrument_ids, trade_date),
+        )
+        rows = cur.fetchall()
+    dates: dict[str, str] = {}
+    holdings: dict[str, list[tuple[str, float]]] = {}
+    for etf_id, constituent_id, weight, as_of in rows:
+        etf_id = str(etf_id)
+        dates[etf_id] = as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of)
+        holdings.setdefault(etf_id, []).append((str(constituent_id), float(weight)))
+    return {etf_id: (dates[etf_id], rows) for etf_id, rows in holdings.items()}
+
+
+def _db_closes(
+    conn, instrument_ids: list[str], trade_date: str, data_version: str,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """현재 loader 성공 행과 instrument별 직전 거래일 종가를 PK 범위 조회한다."""
+    if not instrument_ids:
+        return {}, {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT current.instrument_id, current.close_price, previous.close_price"
+            " FROM price_daily current"
+            " LEFT JOIN LATERAL ("
+            "   SELECT close_price FROM price_daily previous"
+            "   WHERE previous.instrument_id = current.instrument_id"
+            "     AND previous.trade_date < current.trade_date"
+            "   ORDER BY previous.trade_date DESC LIMIT 1"
+            " ) previous ON TRUE"
+            " WHERE current.instrument_id = ANY(%s) AND current.trade_date = %s"
+            "   AND current.data_version = %s",
+            (instrument_ids, trade_date, data_version),
+        )
+        rows = cur.fetchall()
+    current: dict[str, float] = {}
+    previous: dict[str, float] = {}
+    for instrument_id, close, prev_close in rows:
+        close_num, prev_num = _num(close), _num(prev_close)
+        if close_num is not None and close_num > 0:
+            current[str(instrument_id)] = close_num
+        if prev_num is not None and prev_num > 0:
+            previous[str(instrument_id)] = prev_num
+    return current, previous
+
+
 def _existing_triggers(
     conn, etf_instrument_ids: list[str]
 ) -> dict[str, dict[str, list[tuple[str, str, bool]]]]:
@@ -220,14 +342,14 @@ def run(
     db: DbConfig,
     expected_etfs: frozenset[str] | None = None,
     config: PriceTriggersConfig,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
-    """canonical 일봉·holdings → proxy 게이트 → 트리거 적재. 성공 0, 장애 시 비0.
+    """가격 manifest·DB 원장 → proxy 게이트 → 트리거 적재. 성공 0, 장애 시 비0.
 
-    창(from/to) 미지정이면 canonical 전체를 훑는다 — 멱등 skip 이라 재실행 비용은 신규분
-    뿐이고, 알림을 놓친 날도 다음 런이 자연 회복한다.
-    # ponytail: 전체 스캔은 파티션 수(연 ~250)에 선형 — 파티션이 수년치로 늘면 기본 창 도입
+    input_run_id는 현재 NormalizePrice winner만 DB에서 평가한다. from/to와 인자 미지정은
+    기존 명시 복구 호출자가 선택한 canonical 경로다.
     """
     started_at = datetime.now(timezone.utc)
     considered = missing_holdings = missing_price = gated_out = 0
@@ -241,6 +363,20 @@ def run(
     # ETF 가 같은 날짜 coverage 로 서로 덮지 않는다.
     coverage_by_etf_date: dict[str, dict[str, float]] = {}
     exit_code = 0
+    manifest_partitions_total = manifest_partitions_selected = 0
+    manifest_winners_total = manifest_winners_selected = 0
+    target_tickers_resolved = holdings_rows_read = logical_targets = 0
+    current_prices_read = previous_prices_read = 0
+    unknown_target_tickers: set[str] = set()
+    ambiguous_target_tickers: set[str] = set()
+    manifest_scope: dict[
+        str,
+        tuple[
+            dict[str, tuple[str, list[tuple[str, float]]]],
+            dict[str, float],
+            dict[str, float],
+        ],
+    ] = {}
 
     closes_cache: dict[str, dict[str, float]] = {}
 
@@ -259,20 +395,65 @@ def run(
                 storage, config.market, as_of, expected_etfs)
         return holdings_cache[as_of]
 
-    try:
-        price_marker = canonical_price_daily_partition(config.market, "")
-        dates = _partition_values(storage, price_marker)
-        # canonical 최초 날짜는 분모(직전 거래일)가 레이크에 없다 — 구조적 제외라 결손
-        # 신호에 섞지 않는다(매 런 +1 상수 노이즈가 실제 결손을 묻는다).
-        prev_by_date = {dates[i]: dates[i - 1] for i in range(1, len(dates))}
-        targets = [d for d in dates[1:]
-                   if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
+    def remove_stale_without_replacement(
+        conn, trigger_ids: list[str], etf_ticker: str, trade_date: str,
+    ) -> bool:
+        """replacement가 없는 stale 삭제도 한 셀 단위로 격리한다."""
+        nonlocal replaced_stale_policy, exit_code
+        if not trigger_ids:
+            return True
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT price_trigger_stale")
+            try:
+                for trigger_id in trigger_ids:
+                    cur.execute(
+                        "DELETE FROM price_movement_trigger"
+                        " WHERE price_movement_trigger_id = %s",
+                        (trigger_id,),
+                    )
+            except Exception as exc:
+                cur.execute("ROLLBACK TO SAVEPOINT price_trigger_stale")
+                cur.execute("RELEASE SAVEPOINT price_trigger_stale")
+                failures.append({
+                    "reasons": ["row_load_error"],
+                    "etf_ticker": etf_ticker,
+                    "trade_date": trade_date,
+                    "error": str(exc),
+                })
+                exit_code = _PARTIAL_EXIT_CODE
+                return False
+            cur.execute("RELEASE SAVEPOINT price_trigger_stale")
+        replaced_stale_policy += len(trigger_ids)
+        return True
 
-        # holdings 기준일: 거래일 이하의 최신 스냅샷(없으면 최초) — 엔진과 같은 선택 규칙.
-        # 단 엔진은 **결손 과반 파티션을 배제**한다(ALPHA-951, `lake.load_holdings`) —
-        # 그런 파티션에선 트리거는 서고 설명은 이전 스냅샷으로 서서 둘이 갈린다.
-        holdings_dates = _partition_values(
-            storage, canonical_etf_holdings_partition(config.market, ""))
+    try:
+        if input_run_id is not None and (from_date is not None or to_date is not None):
+            raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
+        if (from_date is None) != (to_date is None):
+            raise ValueError("from_date와 to_date는 함께 써야 한다")
+        manifest_targets: dict[str, frozenset[str]] = {}
+        if input_run_id is not None:
+            (
+                manifest_partitions_total,
+                manifest_partitions_selected,
+                manifest_winners_total,
+                manifest_winners_selected,
+                manifest_targets,
+            ) = _manifest_targets(storage, input_run_id)
+            targets = sorted(manifest_targets)
+            prev_by_date: dict[str, str] = {}
+            holdings_dates: list[str] = []
+        else:
+            price_marker = canonical_price_daily_partition(config.market, "")
+            dates = _partition_values(storage, price_marker)
+            # canonical 최초 날짜는 분모(직전 거래일)가 레이크에 없다 — 구조적 제외라 결손
+            # 신호에 섞지 않는다(매 런 +1 상수 노이즈가 실제 결손을 묻는다).
+            prev_by_date = {dates[i]: dates[i - 1] for i in range(1, len(dates))}
+            targets = [d for d in dates[1:]
+                       if (from_date is None or d >= from_date)
+                       and (to_date is None or d <= to_date)]
+            holdings_dates = _partition_values(
+                storage, canonical_etf_holdings_partition(config.market, ""))
 
         with connect(db) as conn:
             # 마스터 해소는 시장(MIC) 고정 — (market_code, ticker) 자연키라 ticker 가 유일하다.
@@ -286,7 +467,80 @@ def run(
             # 꽂힌다. holdings 에 있으나 마스터에 없는 ETF 는 그 ETF 만 skip+카운트한다 —
             # 1종 시드 누락이 나머지 유니버스를 죽이면 안 된다(구 missing_etf_master 는 런
             # 전체 exit 1 이었다).
-            if config.etf_ticker is not None:
+            if input_run_id is not None:
+                mics = _MICS_BY_MARKET.get(config.market, ())
+                price_ids, ambiguous = _market_instrument_ids(conn, mics)
+                candidate_tickers = set(master)
+                if expected_etfs is not None:
+                    candidate_tickers &= expected_etfs
+                if config.etf_ticker is not None:
+                    if config.etf_ticker not in master:
+                        raise ValueError(f"instrument 마스터에 없는 ETF 필터: {config.etf_ticker}")
+                    if (expected_etfs is not None
+                            and config.etf_ticker not in expected_etfs):
+                        raise ValueError(f"유니버스 뿌리 밖 ETF 필터: {config.etf_ticker}")
+                    candidate_tickers &= {config.etf_ticker}
+                etf_ids = [master[ticker] for ticker in sorted(candidate_tickers)]
+                related_tickers: set[str] = set()
+                id_to_ticker = {instrument_id: ticker for ticker, instrument_id in master.items()}
+                for date, winner_tickers in manifest_targets.items():
+                    ambiguous_here = winner_tickers & ambiguous
+                    unknown_here = winner_tickers - price_ids.keys() - ambiguous
+                    ambiguous_target_tickers |= ambiguous_here
+                    unknown_target_tickers |= unknown_here
+                    resolved_ids = {
+                        price_ids[ticker] for ticker in winner_tickers
+                        if ticker in price_ids and ticker not in ambiguous
+                    }
+                    target_tickers_resolved += len(resolved_ids)
+                    holdings_by_id = _latest_good_holdings(conn, etf_ids, date)
+                    missing_ids = sorted(set(etf_ids) - holdings_by_id.keys())
+                    if missing_ids:
+                        missing_holdings += len(missing_ids)
+                        failures.append({
+                            "reasons": ["missing_holdings"],
+                            "trade_date": date,
+                            "etf_instrument_ids": missing_ids,
+                        })
+                        exit_code = _PARTIAL_EXIT_CODE
+                    related_by_ticker: dict[str, tuple[str, list[tuple[str, float]]]] = {}
+                    for etf_id, (as_of, holdings) in holdings_by_id.items():
+                        if any(constituent_id in resolved_ids for constituent_id, _ in holdings):
+                            ticker = id_to_ticker[etf_id]
+                            related_by_ticker[ticker] = (as_of, holdings)
+                            related_tickers.add(ticker)
+                    # manifest의 물리 winner가 곧 DB 가격 범위다. 관련 ETF가 없는 winner도
+                    # 현재/직전 가격 결손을 검증해야 하므로 holdings 교집합으로 더 줄이지 않는다.
+                    current, previous = _db_closes(
+                        conn, sorted(resolved_ids), date, input_run_id)
+                    missing_current = sorted(resolved_ids - current.keys())
+                    missing_previous = sorted(resolved_ids - previous.keys())
+                    missing_price_ids = set(missing_current) | set(missing_previous)
+                    if missing_price_ids:
+                        missing_price += len(missing_price_ids)
+                        failures.append({
+                            "reasons": ["missing_db_price"],
+                            "trade_date": date,
+                            "missing_current_instrument_ids": missing_current,
+                            "missing_previous_instrument_ids": missing_previous,
+                        })
+                        exit_code = _PARTIAL_EXIT_CODE
+                    holdings_rows_read += sum(
+                        len(holdings) for _as_of, holdings in holdings_by_id.values()
+                    )
+                    logical_targets += len(related_by_ticker)
+                    current_prices_read += len(current)
+                    previous_prices_read += len(previous)
+                    manifest_scope[date] = (related_by_ticker, current, previous)
+                universe = sorted(related_tickers)
+                if ambiguous_target_tickers or unknown_target_tickers:
+                    failures.append({
+                        "reasons": ["unresolved_manifest_tickers"],
+                        "unknown_tickers": sorted(unknown_target_tickers),
+                        "ambiguous_tickers": sorted(ambiguous_target_tickers),
+                    })
+                    exit_code = _PARTIAL_EXIT_CODE
+            elif config.etf_ticker is not None:
                 # 옵션 단일 실행 필터(dev 검증·백필) — 그 한 종만 해소한다. 전 스냅샷을 미리
                 # 스캔하지 않는다: 필터 밖 ETF·과거 파티션의 손상 parquet 이 대상 ETF 실행까지
                 # 롤백시키면 필터가 격리를 못 하는 셈이 된다(홀딩스는 아래 date 루프가 대상
@@ -365,9 +619,15 @@ def run(
                 # 부르지 않는다. 트리거를 하나도 안 만든 ETF(전량 gated_out)엔 불필요.
                 profile_ensured = False
                 for date in targets:
+                    if input_run_id is not None:
+                        related, current_closes, previous_closes = manifest_scope[date]
+                        selected_holdings = related.get(etf_ticker)
+                        if selected_holdings is None:
+                            continue
                     considered += 1
                     rows = etf_existing.get(date, [])
                     kept_for_date = False
+                    stale_trigger_ids: list[str] = []
                     for policy, trigger_id, has_lineage in rows:
                         if policy == config.policy_version:
                             continue  # 현행 정책 행 — 아래에서 already 판정
@@ -378,49 +638,46 @@ def run(
                             stale_policy_kept += 1
                             kept_for_date = True
                             continue
-                        # 구정책·무참조 — 잠정 정책(0.5%) 계열 정리. 지우고 새 정책으로 재평가.
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "DELETE FROM price_movement_trigger"
-                                " WHERE price_movement_trigger_id = %s",
-                                (trigger_id,),
-                            )
-                        replaced_stale_policy += 1
+                        # 구정책·무참조 — 판정 결과가 replacement면 INSERT와 같은 savepoint에서
+                        # 지운다. 먼저 지우면 INSERT 실패를 삼킨 뒤 삭제만 commit된다.
+                        stale_trigger_ids.append(trigger_id)
                     if any(policy == config.policy_version for policy, _i, _l in rows):
+                        if not remove_stale_without_replacement(
+                                conn, stale_trigger_ids, etf_ticker, date):
+                            continue
                         already += 1
                         continue
                     if kept_for_date:
                         # 계보 때문에 남긴 구정책 행이 이 날짜를 대표한다 — 옆에 새 행을 더 꽂으면
                         # 소비자가 (etf, date)로 두 행을 보게 된다.
+                        if not remove_stale_without_replacement(
+                                conn, stale_trigger_ids, etf_ticker, date):
+                            continue
                         continue
 
-                    # holdings 는 거래일 이하 최신 스냅샷, 없으면 **가장 이른 미래 스냅샷**으로
-                    # 폴백한다 — 엔진 load_etf_holdings 와 같은 선택(정책 정본 정합, ALPHA-418).
-                    # 미래 스냅샷은 look-ahead 지만, 과거 스냅샷 소급 수집이 비싸고 ETF 리밸런싱이
-                    # 완만해 proxy 근사로 수용한다(유저 결정 2026-07-18) — 최초 스냅샷(2026-07-15)
-                    # 이전 구간에만 작동하는 이행기 폴백이고, 사용 사실은 as_of 와 함께 수치로
-                    # 드러낸다(Rule 12).
-                    # 스냅샷 선택은 파티션 존재가 아니라 **대상 ETF 행 존재** 기준이다 — 파티션은
-                    # (market, as_of_date) 단위라 ETF 단위 격리 실패로 다른 ETF 만 있을 수 있다
-                    # (Codex #144 P2 ×2: 과거·미래 양쪽). 과거(≤date) 최신 → 없으면 가장 이른
-                    # 미래 순으로, 이 ETF 행이 있는 첫 스냅샷을 고른다.
-                    as_of_eligible = [x for x in holdings_dates if x <= date]
-                    as_of = next(
-                        (x for x in reversed(as_of_eligible) if holdings_of(x).get(etf_ticker)),
-                        None)
-                    if as_of is None:
+                    if input_run_id is not None:
+                        as_of, holdings = selected_holdings
+                        proxy_ret, coverage = _proxy_return(
+                            holdings, current_closes, previous_closes)
+                    else:
+                        # 명시 복구는 역사적 정책을 보존한다: 과거(≤date) 최신, 없으면 최초 미래.
+                        # 정상 manifest 경로는 위 DB latest-good 쿼리로 look-ahead를 금지한다.
+                        as_of_eligible = [x for x in holdings_dates if x <= date]
                         as_of = next(
-                            (x for x in holdings_dates
-                             if x > date and holdings_of(x).get(etf_ticker)), None)
-                        if as_of is not None:
-                            future_asof_used += 1
-                    holdings = holdings_of(as_of).get(etf_ticker, []) if as_of else []
-                    if not holdings:
-                        missing_holdings += 1
-                        continue
-
-                    proxy_ret, coverage = _proxy_return(holdings, closes_of(date),
-                                                        closes_of(prev_by_date[date]))
+                            (x for x in reversed(as_of_eligible)
+                             if holdings_of(x).get(etf_ticker)), None)
+                        if as_of is None:
+                            as_of = next(
+                                (x for x in holdings_dates
+                                 if x > date and holdings_of(x).get(etf_ticker)), None)
+                            if as_of is not None:
+                                future_asof_used += 1
+                        holdings = holdings_of(as_of).get(etf_ticker, []) if as_of else []
+                        if not holdings:
+                            missing_holdings += 1
+                            continue
+                        proxy_ret, coverage = _proxy_return(
+                            holdings, closes_of(date), closes_of(prev_by_date[date]))
                     # 게이트 판정과 **무관하게** 남긴다 — 최소 하한(ALPHA-453)을 정하려면 트리거가
                     # 난 날뿐 아니라 걸러진 날의 분포도 필요하다.
                     #
@@ -432,42 +689,67 @@ def run(
                     # 전체 거래일의 가격 파티션을 다시 읽어 비용이 히스토리에 비례해 는다(Codex #149).
                     etf_coverage[date] = round(coverage, 4)
                     if proxy_ret is None:
-                        missing_price += 1
+                        if not remove_stale_without_replacement(
+                                conn, stale_trigger_ids, etf_ticker, date):
+                            continue
+                        if input_run_id is not None:
+                            exit_code = _PARTIAL_EXIT_CODE
+                        else:
+                            missing_price += 1
                         continue
                     if abs(proxy_ret) < config.abs_threshold:
+                        if not remove_stale_without_replacement(
+                                conn, stale_trigger_ids, etf_ticker, date):
+                            continue
                         gated_out += 1
                         continue
                     trigger_id = domain_id("pmt")
-                    # price_movement_trigger.etf_instrument_id 도 etf_profile 을 참조한다. NAV
-                    # 적재(LoadEtfNav)와 같은 Parallel 페이즈라 실행 순서가 없어, 프로필 생성을
-                    # 남에게 의존하면 먼저 도는 런에서 FK 위반으로 비결정적으로 실패한다.
-                    # 자기 선행은 자기가 보장한다(멱등이라 중복 생성은 없다).
-                    if not profile_ensured:
-                        ensure_etf_profile(conn, etf_instrument_id)
-                        profile_ensured = True
                     with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO price_movement_trigger (price_movement_trigger_id,"
-                            " etf_instrument_id, trade_date, detected_at, observed_return,"
-                            " market_relative_return, absolute_gate_triggered,"
-                            " relative_gate_triggered, detection_policy_version, detection_reason)"
-                            " VALUES (%s, %s, %s, %s, %s, NULL, TRUE, FALSE, %s, %s)",
-                            (
-                                trigger_id,
-                                etf_instrument_id,
-                                date,
-                                f"{date}{_MARKET_CLOSE_KST}",
-                                proxy_ret,
-                                config.policy_version,
-                                # 엔진 l0_gate 와 같은 사유 포맷 — 정책 정본 추적성. 뒤에 coverage 를
-                                # 덧붙인다(ALPHA-452): 이 트리거가 구성종목 몇 %의 가격으로 판정됐는지가
-                                # 행 자체에 없으면, 소비자(설명·검수)가 근거의 두께를 알 수 없다.
-                                # 컬럼 신설 대신 이 필드를 쓰는 이유 — 엔진은 이 값을 읽어 나르기만 하고
-                                # 파싱하지 않아(daily_pipeline.py 의 trigger["reason"]) 늘려도 안전하다.
-                                f"abs|{proxy_ret:.4f}|>={config.abs_threshold}"
-                                f"|coverage={coverage:.4f}",
-                            ),
-                        )
+                        cur.execute("SAVEPOINT price_trigger_row")
+                        try:
+                            for stale_trigger_id in stale_trigger_ids:
+                                cur.execute(
+                                    "DELETE FROM price_movement_trigger"
+                                    " WHERE price_movement_trigger_id = %s",
+                                    (stale_trigger_id,),
+                                )
+                            # price_movement_trigger.etf_instrument_id 는 etf_profile 을 참조한다.
+                            # 자기 FK 선행과 행 INSERT를 같은 savepoint에 둬 한 ETF 실패가 앞선
+                            # 성공 ETF를 롤백시키지 않게 한다.
+                            if not profile_ensured:
+                                ensure_etf_profile(conn, etf_instrument_id)
+                                profile_ensured = True
+                            cur.execute(
+                                "INSERT INTO price_movement_trigger (price_movement_trigger_id,"
+                                " etf_instrument_id, trade_date, detected_at, observed_return,"
+                                " market_relative_return, absolute_gate_triggered,"
+                                " relative_gate_triggered, detection_policy_version, detection_reason)"
+                                " VALUES (%s, %s, %s, %s, %s, NULL, TRUE, FALSE, %s, %s)",
+                                (
+                                    trigger_id,
+                                    etf_instrument_id,
+                                    date,
+                                    f"{date}{_MARKET_CLOSE_KST}",
+                                    proxy_ret,
+                                    config.policy_version,
+                                    f"abs|{proxy_ret:.4f}|>={config.abs_threshold}"
+                                    f"|coverage={coverage:.4f}",
+                                ),
+                            )
+                        except Exception as exc:
+                            cur.execute("ROLLBACK TO SAVEPOINT price_trigger_row")
+                            cur.execute("RELEASE SAVEPOINT price_trigger_row")
+                            profile_ensured = False
+                            failures.append({
+                                "reasons": ["row_load_error"],
+                                "etf_ticker": etf_ticker,
+                                "trade_date": date,
+                                "error": str(exc),
+                            })
+                            exit_code = _PARTIAL_EXIT_CODE
+                            continue
+                        cur.execute("RELEASE SAVEPOINT price_trigger_row")
+                    replaced_stale_policy += len(stale_trigger_ids)
                     created += 1
                     created_rows.append({"etf_ticker": etf_ticker, "trade_date": date,
                                          "observed_return": proxy_ret,
@@ -486,6 +768,19 @@ def run(
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "market": config.market, "etf_tickers": universe, "etf_filter": config.etf_ticker,
+        "input_run_id": input_run_id, "from_date": from_date, "to_date": to_date,
+        "manifest_partitions_total": manifest_partitions_total,
+        "manifest_partitions_selected": manifest_partitions_selected,
+        "manifest_winners_total": manifest_winners_total,
+        "manifest_winners_selected": manifest_winners_selected,
+        "target_tickers_resolved": target_tickers_resolved,
+        "physical_price_targets": target_tickers_resolved,
+        "unknown_target_tickers": sorted(unknown_target_tickers),
+        "ambiguous_target_tickers": sorted(ambiguous_target_tickers),
+        "holdings_rows_read": holdings_rows_read,
+        "logical_etf_targets": logical_targets,
+        "current_prices_read": current_prices_read,
+        "previous_prices_read": previous_prices_read,
         "skipped_unknown_etf": skipped_unknown_etf,
         "abs_threshold": config.abs_threshold, "policy_version": config.policy_version,
         "considered": considered, "missing_holdings": missing_holdings,
@@ -514,7 +809,15 @@ def run(
         # 재판정하지 않은 것을 이 런의 근거로 쓰면 유실 카운터와 스코프가 어긋난다.
         "ops": {
             "records_out": created,
-            "failed_records": len(failures) + skipped_unknown_etf,
+            "failed_records": (
+                missing_holdings + missing_price
+                + len(unknown_target_tickers) + len(ambiguous_target_tickers)
+                + sum(1 for failure in failures
+                      if set(failure.get("reasons", ()))
+                      & {"load_error", "row_load_error"})
+                if input_run_id is not None
+                else len(failures) + skipped_unknown_etf
+            ),
         },
     }
     try:
@@ -527,8 +830,12 @@ def run(
     logger.info(
         "load_price_triggers: etfs=%d skipped_unknown_etf=%d considered=%d missing_holdings=%d"
         " missing_price=%d gated_out=%d already=%d replaced_stale=%d stale_kept=%d created=%d"
-        " failures=%d",
+        " failures=%d manifest=%d/%d winners=%d/%d holdings_rows=%d logical_targets=%d"
+        " prices=%d/%d",
         len(universe), skipped_unknown_etf, considered, missing_holdings, missing_price,
         gated_out, already, replaced_stale_policy, stale_policy_kept, created, len(failures),
+        manifest_partitions_selected, manifest_partitions_total,
+        manifest_winners_selected, manifest_winners_total, holdings_rows_read, logical_targets,
+        current_prices_read, previous_prices_read,
     )
     return exit_code

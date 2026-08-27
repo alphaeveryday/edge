@@ -39,6 +39,7 @@ def test_only_manifest_steps_fulfill_on_partial_exit():
     # 계약이다. 다른 작업에 exit 2를 넓히면 실제 실패가 downstream 완료로 오인된다.
     partial = {
         "NORMALIZE_PRICE", "LOAD_PRICE_DAILY",
+        "LOAD_PRICE_TRIGGERS",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
@@ -482,13 +483,16 @@ def test_dependencies_encode_the_asl_gates():
         if e.stage == "normalize":
             assert e.depends_on == () or e.task_key == "NORMALIZE_PRICE", \
                 f"{e.task_key}: 정제에 raw 의존을 걸면 수집 실패 런에서 실제로 성공한 정제가 BLOCKED 다"
-    # 시장 feature 로더 5개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만
-    # 다르면 안 된다. LOAD_DISCLOSURE 는 ALPHA-724 로 공시 레인이라 여기 없다(그 레인의
+    # 시장 병렬 feature 로더 4개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만
+    # 다르면 안 된다. LoadPriceTriggers는 ALPHA-1039에서 가격·holdings commit 뒤 직렬 꼬리로
+    # 이동했다. LOAD_DISCLOSURE 는 ALPHA-724 로 공시 레인이라 여기 없다(그 레인의
     # 자체 게이트를 따른다 — 시장 EnrichCorpCode 의존은 레인 밖이라 복사할 수 없다).
-    gate = {"LOAD_PRICE_DAILY", "LOAD_PRICE_TRIGGERS", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS",
+    gate = {"LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS",
             "LOAD_ETF_FLOW"}
     for key in gate:
         assert catalog.get(key).depends_on == ("ENRICH_CORP_CODE",), key
+    assert catalog.get("LOAD_PRICE_TRIGGERS").depends_on == (
+        "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW")
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
     # 정제 전량 성공 게이트(ASL `NormalizeCheckResults`) — **개수가 아니라 정확한 집합**을
     # terraform 에서 도출해 대조한다(edge-review). 길이만 보면 게이트 멤버가 **바뀌어도**

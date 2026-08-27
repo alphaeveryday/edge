@@ -16,12 +16,14 @@
 import io
 import json
 import pathlib
+from decimal import Decimal
 
 from data_pipeline.config import DbConfig, PriceTriggersConfig
 from data_pipeline.lake import (
     LocalStorage,
     canonical_etf_holdings_partition,
     canonical_price_daily_partition,
+    canonical_run_manifest_key,
 )
 from data_pipeline.steps import load_price_triggers
 
@@ -74,6 +76,9 @@ class _FakeCursor:
 
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
+        if (flat.startswith("INSERT INTO price_movement_trigger")
+                and params[2] in self._conn.failed_trigger_dates):
+            raise RuntimeError("injected row failure")
         self._conn.log.append((flat, params))
         if flat.startswith("SELECT ticker, instrument_id"):
             # 시장(MIC) 고정 조회라 ticker 가 유일 — (ticker, id) dict 를 준다(ALPHA-465).
@@ -96,12 +101,13 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, master=None, existing=None):
+    def __init__(self, master=None, existing=None, failed_trigger_dates=()):
         self.log: list = []
         # ETF ticker → instrument_id (마스터). 기본은 _ETF 한 종.
         self.master = {_ETF: "inst_ETF"} if master is None else master
         # etf_instrument_id → {trade_date → [(policy_version, trigger_id, 계보 참조 여부), ...]}
         self.existing = existing or {}
+        self.failed_trigger_dates = set(failed_trigger_dates)
 
     def cursor(self):
         return _FakeCursor(self)
@@ -141,6 +147,242 @@ def _quality_log(storage):
             "price_movement_trigger" in k]
     assert len(keys) == 1
     return json.loads(storage.get_bytes(keys[0]))
+
+
+class _TrackingStorage(LocalStorage):
+    """정상 manifest 경로가 canonical 탐색으로 넓어지는 회귀를 관측한다."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.get_calls: list[str] = []
+        self.list_calls: list[str] = []
+
+    def get_bytes(self, key):
+        self.get_calls.append(key)
+        return super().get_bytes(key)
+
+    def list_keys(self, prefix):
+        self.list_calls.append(prefix)
+        return super().list_keys(prefix)
+
+
+def _write_price_manifest(storage, run_id: str, partitions: list[tuple[str, str, list[str]]]):
+    manifest = {
+        "producer": "normalize_price",
+        "run_id": run_id,
+        "canonical_written": True,
+        "canonical_partitions": [
+            {
+                "market": market,
+                "trade_date": trade_date,
+                "key": f"{canonical_price_daily_partition(market, trade_date)}"
+                       "/part-00000.parquet",
+                "sha256": "0" * 64,
+                "winner_ids": [{"ticker": ticker} for ticker in tickers],
+            }
+            for market, trade_date, tickers in partitions
+        ],
+    }
+    storage.put_bytes(canonical_run_manifest_key("price_daily", run_id),
+                      json.dumps(manifest).encode())
+
+
+def _patch_manifest_db(monkeypatch, *, closes_by_date):
+    monkeypatch.setattr(
+        load_price_triggers, "_market_instrument_ids",
+        lambda _conn, _mics: ({"005930": "inst_STOCK"}, set()),
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_latest_good_holdings",
+        lambda _conn, _etfs, date: {
+            "inst_ETF": (date, [("inst_STOCK", 1.0)])
+        },
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_db_closes",
+        lambda _conn, _ids, date, _data_version: closes_by_date[date],
+    )
+
+
+def test_manifest_path_reads_only_manifest_and_db_scope(tmp_path, monkeypatch):
+    """WHY(ALPHA-1039): 정상 런이 canonical LIST/parquet GET으로 돌아가면 비용이 다시
+    히스토리에 비례한다. producer의 KR·US 전체 manifest는 검증하되, 현재 지원 범위 KR만
+    DB 가격·holdings와 결합하고 US는 실패로 세지 않아야 한다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260827T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-08-27", ["005930"]),
+        ("US", "2026-08-27", ["AAPL"]),
+    ])
+    _patch_manifest_db(
+        monkeypatch,
+        closes_by_date={"2026-08-27": ({"inst_STOCK": 110.0}, {"inst_STOCK": 100.0})},
+    )
+
+    conn = _FakeConn()
+    assert _run(storage, conn, monkeypatch, input_run_id=input_run_id) == 0
+    assert storage.list_calls == [], "정상 manifest 경로는 canonical LIST를 하면 안 된다"
+    assert storage.get_calls == [canonical_run_manifest_key("price_daily", input_run_id)]
+    assert len(_inserts(conn)) == 1
+
+    # 품질 로그 접근은 그 자체가 LIST/GET이라 I/O 계약 단언 뒤에 한다.
+    log = _quality_log(storage)
+    assert (log["manifest_partitions_total"], log["manifest_partitions_selected"]) == (2, 1)
+    assert (log["manifest_winners_total"], log["manifest_winners_selected"]) == (2, 1)
+    assert log["physical_price_targets"] == 1
+    assert log["logical_etf_targets"] == 1
+    assert (log["holdings_rows_read"], log["current_prices_read"],
+            log["previous_prices_read"]) == (1, 1, 1)
+    assert log["ops"]["failed_records"] == 0
+
+
+def test_manifest_partial_price_preserves_successful_trigger_and_exits_two(
+    tmp_path, monkeypatch,
+):
+    """WHY(ALPHA-1039): 한 target의 직전 가격 결손이 앞선 성공 ETF까지 롤백시키면 exit 2의
+    의미가 없다. 성공 범위는 commit 대상으로 남고 전체 상태만 부분 실패여야 한다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260827T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-08-26", ["005930"]),
+        ("KR", "2026-08-27", ["005930"]),
+    ])
+    _patch_manifest_db(monkeypatch, closes_by_date={
+        "2026-08-26": ({"inst_STOCK": 110.0}, {"inst_STOCK": 100.0}),
+        "2026-08-27": ({"inst_STOCK": 111.0}, {}),
+    })
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id=input_run_id) == 2
+    assert len(_inserts(conn)) == 1
+    log = _quality_log(storage)
+    assert log["created"] == 1 and log["missing_price"] == 1
+    assert log["exit_code"] == 2
+
+
+def test_manifest_row_failure_isolated_by_savepoint(tmp_path, monkeypatch):
+    """DB 한 행 실패는 성공 날짜를 보존하는 exit 2다. savepoint가 없으면 PostgreSQL
+    트랜잭션 전체가 aborted 상태가 되어 다음 성공 행도 쓸 수 없다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260827T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-08-26", ["005930"]),
+        ("KR", "2026-08-27", ["005930"]),
+    ])
+    _patch_manifest_db(monkeypatch, closes_by_date={
+        "2026-08-26": ({"inst_STOCK": 110.0}, {"inst_STOCK": 100.0}),
+        "2026-08-27": ({"inst_STOCK": 121.0}, {"inst_STOCK": 110.0}),
+    })
+    conn = _FakeConn(
+        existing={"inst_ETF": {
+            "2026-08-26": [("pipeline-absolute-v0", "pmt_STALE", False)],
+        }},
+        failed_trigger_dates={"2026-08-26"},
+    )
+
+    assert _run(storage, conn, monkeypatch, input_run_id=input_run_id) == 2
+    assert [params[2] for _sql, params in _inserts(conn)] == ["2026-08-27"]
+    assert any(sql == "ROLLBACK TO SAVEPOINT price_trigger_row" for sql, _ in conn.log)
+    statements = [sql for sql, _ in conn.log]
+    savepoint_index = statements.index("SAVEPOINT price_trigger_row")
+    delete_index = next(i for i, sql in enumerate(statements)
+                        if sql.startswith("DELETE FROM price_movement_trigger"))
+    rollback_index = statements.index("ROLLBACK TO SAVEPOINT price_trigger_row")
+    assert savepoint_index < delete_index < rollback_index, (
+        "stale 삭제와 실패한 replacement INSERT는 같은 savepoint에서 롤백돼야 한다")
+    log = _quality_log(storage)
+    assert log["created"] == 1
+    assert log["replaced_stale_policy"] == 0
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_corrupt_manifest_fails_without_canonical_fallback(tmp_path, monkeypatch):
+    """manifest 무결성이 깨졌을 때 canonical 전체 스캔은 승인 범위를 재구성할 수 없다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260827T064000Z"
+    _write_price_manifest(storage, input_run_id, [("KR", "2026-08-27", ["005930"])])
+    key = canonical_run_manifest_key("price_daily", input_run_id)
+    manifest = json.loads(LocalStorage.get_bytes(storage, key))
+    manifest["canonical_partitions"][0]["key"] = "canonical/price_daily/wrong.parquet"
+    storage.put_bytes(key, json.dumps(manifest).encode())
+    storage.get_calls.clear()
+
+    assert _run(storage, _FakeConn(), monkeypatch, input_run_id=input_run_id) == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [key]
+
+
+def test_empty_completed_manifest_is_a_bounded_success(tmp_path, monkeypatch):
+    """공휴일의 빈 완료 manifest에는 처리할 winner가 없다. 이를 손상으로 보거나 과거
+    canonical을 찾아 나서면 정상 0건과 백로그 재평가를 구분할 수 없다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260827T064000Z"
+    _write_price_manifest(storage, input_run_id, [])
+
+    assert _run(storage, _FakeConn(), monkeypatch, input_run_id=input_run_id) == 0
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("price_daily", input_run_id)]
+    log = _quality_log(storage)
+    assert log["manifest_partitions_total"] == 0
+    assert log["physical_price_targets"] == 0
+    assert log["logical_etf_targets"] == 0
+
+
+class _QueryCursor:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, sql, params=None):
+        self.conn.sql = " ".join(sql.split())
+        self.conn.params = params
+
+    def fetchall(self):
+        return self.conn.rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class _QueryConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.sql = ""
+        self.params = None
+
+    def cursor(self):
+        return _QueryCursor(self)
+
+
+def test_manifest_db_queries_are_date_bounded_and_index_shaped():
+    """WHY(ALPHA-1039): 정상 경로가 DB를 쓰더라도 전 테이블을 훑거나 미래 holdings를 고르면
+    canonical 스캔 제거가 비용 또는 look-ahead 오류로 바뀔 뿐이다. 기존 복합 인덱스의 선두
+    키와 날짜 범위를 유지한다."""
+    holdings_conn = _QueryConn([
+        ("inst_ETF", "inst_STOCK", 1.0, "2026-08-26"),
+    ])
+    holdings = load_price_triggers._latest_good_holdings(
+        holdings_conn, ["inst_ETF"], "2026-08-27")
+    assert holdings == {"inst_ETF": ("2026-08-26", [("inst_STOCK", 1.0)])}
+    assert "etf_instrument_id = ANY(%s) AND trade_date <= %s" in holdings_conn.sql
+    assert "ORDER BY trade_date DESC" in holdings_conn.sql
+    assert "2 * valid_row_count >= input_row_count" in holdings_conn.sql
+    assert "h.data_version = d.data_version" in holdings_conn.sql
+
+    # psycopg는 NUMERIC을 Decimal로 돌려준다. float 전용 위생 함수면 실 DB 가격이 전량
+    # 결측으로 오인되어 정상 manifest 런이 매일 exit 2가 된다.
+    prices_conn = _QueryConn([("inst_STOCK", Decimal("110"), Decimal("100"))])
+    current, previous = load_price_triggers._db_closes(
+        prices_conn, ["inst_STOCK"], "2026-08-27", "20260827T064000Z")
+    assert current == {"inst_STOCK": 110.0}
+    assert previous == {"inst_STOCK": 100.0}
+    assert "current.instrument_id = ANY(%s) AND current.trade_date = %s" in prices_conn.sql
+    assert "current.data_version = %s" in prices_conn.sql
+    assert "previous.instrument_id = current.instrument_id" in prices_conn.sql
+    assert "previous.trade_date < current.trade_date" in prices_conn.sql
+    assert "ORDER BY previous.trade_date DESC LIMIT 1" in prices_conn.sql
 
 
 def test_observed_return_is_holdings_weighted_proxy(tmp_path, monkeypatch):
@@ -432,7 +674,8 @@ def test_windowed_run_excludes_etfs_only_in_snapshots_after_window(tmp_path, mon
     _write_prices(storage, "2026-07-16", [{"ticker": "005930", "close": 11000.0}])  # +10%
     conn = _FakeConn(master={"091160": "inst_A", "888888": "inst_B"})
 
-    assert _run(storage, conn, monkeypatch, etf_ticker=None, to_date="2026-07-16") == 0
+    assert _run(storage, conn, monkeypatch, etf_ticker=None,
+                from_date="2026-07-15", to_date="2026-07-16") == 0
     log = _quality_log(storage)
     assert "091160" in log["etf_tickers"]
     assert "888888" not in log["etf_tickers"]  # 창+1 밖 스냅샷의 ETF 는 백필에 안 끌려든다

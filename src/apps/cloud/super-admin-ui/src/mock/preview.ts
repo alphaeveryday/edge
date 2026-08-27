@@ -50,7 +50,7 @@ type FixtureTask = {
   dependsOn?: string[];
 };
 
-const MARKET_TASKS: FixtureTask[] = [
+export const MARKET_TASKS: FixtureTask[] = [
   /* ⚠️ **etf-daily 전량이어야 한다.** planner 는 `catalog.entries(pipeline_type)` 를 통째로
    * 계획하므로(`ops/planner.py`), 일부만 담은 런은 실 `/sources/grid`·`/sources/overview` 가
    * 낼 수 없다 — 개요 due 가 그 수에 매이고, 빠진 데이터셋의 행·드릴다운이 검수에서 통째로
@@ -70,14 +70,14 @@ const MARKET_TASKS: FixtureTask[] = [
   { stage: 'feature', taskKey: 'LOAD_ETF_NAV', dependsOn: ['ENRICH_CORP_CODE'] },
   { stage: 'feature', taskKey: 'LOAD_ETF_FLOW', dependsOn: ['ENRICH_CORP_CODE'] },
   { stage: 'feature', taskKey: 'LOAD_INSTRUMENTS', dependsOn: ['NORMALIZE_PRICE', 'NORMALIZE_ETF', 'NORMALIZE_ETF_PROFILE', 'NORMALIZE_ETF_NAV', 'NORMALIZE_INVESTOR'] },
-  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS', dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS', dependsOn: ['LOAD_PRICE_DAILY', 'LOAD_ETF_NAV', 'LOAD_ETF_HOLDINGS', 'LOAD_ETF_FLOW'] },
   { stage: 'feature', taskKey: 'ENRICH_CORP_CODE', dependsOn: ['LOAD_INSTRUMENTS'] },
 ];
 /* ⚠️ `MOCK_OVERVIEW` 의 뉴스 레인이 `due: 6` 과 TAG_NEWS·ASSEMBLE_EVENTS 결함을 선언한다.
  * 격자·리포트는 **이 목록에서** 파생하므로 여기가 짧으면 개요가 말한 결함 행을 드릴다운에서
  * 영영 못 그린다 — 픽스처가 스스로와 모순되고 그 UI 경로가 검수에서 빠진다.
  * 여섯은 ops 카탈로그의 뉴스 작업 전량과 같다. */
-const NEWS_TASKS: FixtureTask[] = [
+export const NEWS_TASKS: FixtureTask[] = [
   { stage: 'raw', taskKey: 'NEWS_COLLECTION_BIGKINDS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_NEWS' },
   { stage: 'feature', taskKey: 'TAG_NEWS', dependsOn: ['NORMALIZE_NEWS'] },

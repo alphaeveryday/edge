@@ -309,7 +309,15 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     ),
     CatalogEntry(
         task_key="LOAD_PRICE_TRIGGERS", stage="feature", dataset="price_movement_trigger",
-        required=True, cli_command=("load-price-triggers",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadPriceTriggers",
+        required=True, cli_command=("load-price-triggers",),
+        # ASL feature gate의 terminal 전부가 직렬 꼬리 진입 전제다. 실제 가격과
+        # holdings만 읽지만 NAV나 flow가 실패하면 state 자체가 실행되지 않으므로,
+        # Ops도 MISSED가 아닌 BLOCKED로 같은 원인을 기록해야 한다. exit 2는 성공
+        # 범위를 commit한 부분 성공이므로 downstream dependency를 충족한다(ALPHA-1039).
+        depends_on=(
+            "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW",
+        ),
+        fulfilled_exit_codes=(0, 2), sfn_state_name="LoadPriceTriggers",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
     ),
     CatalogEntry(

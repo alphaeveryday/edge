@@ -208,6 +208,7 @@ def run(
     unknown_etfs: set[str] = set()
     unknown_constituents: set[str] = set()
     weight_sums: dict[str, float] = {}  # "market:etf_id:as_of" → 비중 합(정상성 점검용)
+    snapshot_counts: dict[tuple[str, str, str], list[int]] = {}
     failures: list[dict] = []
     exit_code = 0
 
@@ -251,6 +252,13 @@ def run(
                                 f"market={market}, date={date}, key={key}"
                             )
                         etf_id, ct = row.get("etf_id"), row.get("constituent_ticker")
+                        etf_id_valid = (
+                            isinstance(etf_id, str) and etf_id.strip() == etf_id and bool(etf_id)
+                        )
+                        ct_valid = isinstance(ct, str) and ct.strip() == ct and bool(ct)
+                        if etf_id_valid and not ct_valid:
+                            # 논리 키가 없어 dedup 불가능한 거부 행은 물리 결손으로 남긴다.
+                            snapshot_counts.setdefault((market, etf_id, as_of), [0, 0])[0] += 1
                         identities = (etf_id, ct)
                         if any(
                             not isinstance(value, str) or not value.strip() or value != value.strip()
@@ -264,6 +272,9 @@ def run(
                         raw_fetched_at = row.get("fetched_at")
                         parsed_fetched_at = _fetched_at(raw_fetched_at)
                         if parsed_fetched_at is None:
+                            # 시각이 없으면 동일 키 후보의 winner를 가릴 수 없으므로
+                            # logical_rows에 섞지 않고 개별 거부 행으로 denominator에 보존한다.
+                            snapshot_counts.setdefault((market, etf_id, as_of), [0, 0])[0] += 1
                             skipped_bad_fetched_at += 1
                             continue
                         cand_key = (market, etf_id, ct, as_of)
@@ -278,6 +289,9 @@ def run(
 
         for cand_key, (row, parsed_fetched_at) in logical_rows.items():
             market, etf_id, ct, _as_of = cand_key
+            # 정상 키 행은 물리 part 개수가 아니라 최신 fetched_at으로 수렴한
+            # 논리 winner 한 건만 completeness denominator에 세단다.
+            snapshot_counts.setdefault((market, etf_id, _as_of), [0, 0])[0] += 1
             mic = row.get("constituent_mic")
             raw_asset_type = row.get("constituent_asset_type")
             asset_type = raw_asset_type if isinstance(raw_asset_type, str) else "UNKNOWN"
@@ -366,6 +380,11 @@ def run(
                             # 마스터 정체성과 어긋나므로 중복 INSERT 대신 명시적 유실로 막는다.
                             skipped_identity_conflict += 1
                             continue
+                    if ratio is not None:
+                        # latest-good에 기여하는 valid는 raw 형식만 정상인 행이 아니라
+                        # 정체성·자산유형·FK·자기보유 게이트를 모두 통과해 현재
+                        # data_version으로 실제 stamp될 non-null 비중 행만 세는다.
+                        snapshot_counts[(market, etf_id, as_of)][1] += 1
                     cur.execute(
                         "INSERT INTO etf_holding_snapshot (etf_instrument_id,"
                         " constituent_instrument_id, trade_date, weight_ratio,"
@@ -376,6 +395,10 @@ def run(
                         "     data_version = EXCLUDED.data_version"
                         " WHERE etf_holding_snapshot.weight_ratio"
                         "       IS DISTINCT FROM EXCLUDED.weight_ratio"
+                        "    OR etf_holding_snapshot.available_at"
+                        "       IS DISTINCT FROM EXCLUDED.available_at"
+                        "    OR etf_holding_snapshot.data_version"
+                        "       IS DISTINCT FROM EXCLUDED.data_version"
                         " RETURNING (xmax <> 0) AS was_update",
                         (etf_instrument_id, constituent_instrument_id, as_of, ratio,
                          fact["available_at"], run_id),
@@ -393,6 +416,29 @@ def run(
                         "etf_instrument_id": etf_instrument_id, "etf_id": etf_id,
                         "constituent_ticker": ct, "trade_date": as_of, "weight_ratio": ratio,
                     })
+            for (market, etf_id, as_of), (input_count, valid_count) in sorted(
+                snapshot_counts.items()
+            ):
+                if expected_etfs is not None and etf_id not in expected_etfs:
+                    continue
+                etf_instrument_id = resolved[market][0].get(etf_id)
+                if etf_instrument_id is None:
+                    continue
+                if etf_instrument_id not in profiled:
+                    if ensure_etf_profile(conn, etf_instrument_id):
+                        profiles_created += 1
+                    profiled.add(etf_instrument_id)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO etf_holding_snapshot_status (etf_instrument_id,"
+                        " trade_date, input_row_count, valid_row_count, data_version)"
+                        " VALUES (%s, %s, %s, %s, %s)"
+                        " ON CONFLICT (etf_instrument_id, trade_date) DO UPDATE SET"
+                        " input_row_count = EXCLUDED.input_row_count,"
+                        " valid_row_count = EXCLUDED.valid_row_count,"
+                        " data_version = EXCLUDED.data_version, loaded_at = now()",
+                        (etf_instrument_id, as_of, input_count, valid_count, run_id),
+                    )
     except Exception as exc:
         # 커밋 경계는 런 전체다 — 예외면 롤백이라 부분 적재가 없다. 트레이스백으로 죽는 대신
         # 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).

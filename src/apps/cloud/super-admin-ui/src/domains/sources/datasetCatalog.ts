@@ -197,6 +197,27 @@ export const DATASET_GROUPS: DatasetGroup[] = [
     ],
   },
   {
+    group: '공시',
+    datasets: [
+      {
+        /* ALPHA-987에서 1분 세션 소관이던 공시를 18:10 일배치로 복원했다. 한 SFN의
+         * 수집·정제·적재를 독립 스케줄/재시도 단위인 한 행으로 접는다. */
+        id: 'disclosures',
+        lane: 'disclosure',
+        domain: '시장',
+        label: '공시',
+        taskKeys: [
+          'DISCLOSURE_COLLECTION_DART',
+          'NORMALIZE_DISCLOSURE',
+          'NORMALIZE_DISCLOSURE_SEGMENT',
+          'LOAD_DISCLOSURE',
+        ],
+        cadence: daily('일 1회 · 18:10 슬롯'),
+        inOpsGrid: true,
+      },
+    ],
+  },
+  {
     group: '실시간',
     datasets: [
       {
@@ -248,9 +269,8 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         sessionDataset: 'etf_inav_minute',
       },
       {
-        /* 공시(ALPHA-875) — ops 격자에서 이 레인으로 **옮겨왔다**. window 는 산출물 단위가
-         * 아니라 "그 분에 한 번 폴링했다"는 원장 단위다(증분 커서가 없어 매 tick 이 그날
-         * 날짜창 전체를 다시 읽는다) — 뉴스와 같은 성질이라 poll 로 읽는다. */
+        /* 공시 1분 세션의 과거 원장은 보존한다. 현재 수집은 ALPHA-987에서 18:10 일배치로
+         * 복원됐으며, 이 행은 기존 세션 이력을 조회하는 축이다. */
         id: 'disclosure_minute',
         domain: '시장',
         label: '공시 (실시간)',
