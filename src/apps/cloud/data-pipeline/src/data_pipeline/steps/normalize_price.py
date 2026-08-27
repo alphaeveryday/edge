@@ -19,18 +19,26 @@ raw price_daily(FMP·KIS 두 벤더, 이형 스키마)를 읽어 **표준 OHLCV 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 from datetime import datetime, timezone
 
-from ..lake import Storage, is_raw_price_key, parse_raw_price_key, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_run_manifest_key,
+    is_raw_price_key,
+    parse_raw_price_key,
+    quality_log_key,
+)
 from ..quality import validate_ohlcv
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "normalize_price"
 DATASET = "price_daily"
+_PARTIAL_EXIT_CODE = 2
 
 # market → 표준 통화. 통화는 FX 환산하지 않고 market 별로 태깅만 한다(환산은 의미 파괴).
 _CURRENCY = {"US": "USD", "KR": "KRW"}
@@ -259,16 +267,19 @@ def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: lis
     return [acc[t] for t in sorted(acc)]
 
 
-def _write_canonical(storage: Storage, passing: list[dict], collisions: list[dict]) -> tuple[int, int]:
+def _write_canonical(
+    storage: Storage, passing: list[dict], collisions: list[dict]
+) -> tuple[list[dict], int]:
     """통과 행을 (market,trade_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
-    반환: (쓴 파티션 수, 쓴 행 수)."""
+    반환: (이번 실행의 성공 winner manifest 항목, 병합 뒤 canonical 행 수)."""
     from ..lake import canonical_price_daily_partition
 
     by_partition: dict[tuple[str, str], list[dict]] = {}
     for row in passing:
         by_partition.setdefault((row["market"], row["trade_date"]), []).append(row)
 
-    parts_written = rows_written = 0
+    partitions: list[dict] = []
+    rows_written = 0
     for (market, trade_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_price_daily_partition(market, trade_date)
         # 파티션의 기존 parquet 을 전부 읽어 병합한다(여러 파트가 있어도 유실 없이 읽는다).
@@ -278,15 +289,56 @@ def _write_canonical(storage: Storage, passing: list[dict], collisions: list[dic
         for key in storage.list_keys(prefix + "/"):
             if key.endswith(".parquet"):
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
-        merged = _merge_partition(existing, new_rows, collisions)
-        storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
-        parts_written += 1
+        # manifest 범위는 기존 canonical 변경분이 아니라 현재 실행의 gate 통과 winner다.
+        # 현재 실행 winner와 실제 canonical 병합을 따로 계산한다. 후자는 원본 new_rows를
+        # 모두 받아야 기존 canonical과 새 벤더의 충돌 키도 canonical에서 빠진다.
+        current_collisions: list[dict] = []
+        canonical_collisions: list[dict] = []
+        current_winners = _merge_partition([], new_rows, current_collisions)
+        merged = _merge_partition(existing, new_rows, canonical_collisions)
+        for collision in [*current_collisions, *canonical_collisions]:
+            if collision not in collisions:
+                collisions.append(collision)
+        key = f"{prefix}/part-00000.parquet"
+        parquet_bytes = _write_parquet_rows(merged)
+        storage.put_bytes(key, parquet_bytes)
+        digest = hashlib.sha256(parquet_bytes).hexdigest()
+        if hashlib.sha256(storage.get_bytes(key)).hexdigest() != digest:
+            raise OSError(f"canonical parquet 무결성 검증 실패: {key}")
+
+        conflicted = {
+            item["ticker"] for item in collisions
+            if item["market"] == market and item["trade_date"] == trade_date
+        }
+        winner_ids = [
+            {"ticker": ticker}
+            for ticker in sorted({row["ticker"] for row in current_winners} - conflicted)
+        ]
+        if winner_ids:
+            partitions.append({
+                "market": market,
+                "trade_date": trade_date,
+                "key": key,
+                "sha256": digest,
+                "winner_ids": winner_ids,
+            })
         rows_written += len(merged)
-    return parts_written, rows_written
+    return partitions, rows_written
+
+
+def _manifest_bytes(run_id: str, canonical_written: bool, partitions: list[dict]) -> bytes:
+    return json.dumps({
+        "run_id": run_id,
+        "producer": JOB_NAME,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
-    """raw price_daily → 정규화 → 게이트 → quality_log. 성공 0, 스토리지 장애 시 비0.
+    """raw price_daily → 정규화 → 게이트 → quality_log.
+
+    성공 0, 격리된 행·벤더 충돌 2, 저장·무결성 실패 1.
 
     input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다
     (ALPHA-389 — SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다.
@@ -294,14 +346,31 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
 
-    raw_keys = [k for k in storage.list_keys("raw/") if is_raw_price_key(k)]
+    manifest_key = canonical_run_manifest_key(DATASET, run_id)
+    manifest_initialized = True
+    exit_code = 0
+    try:
+        # 같은 run 재시도가 실패해도 이전 완료 범위를 승인하지 않도록 먼저 무효화한다.
+        storage.put_bytes(manifest_key, _manifest_bytes(run_id, False, []))
+    except Exception:
+        logger.exception("canonical run manifest 초기화 실패")
+        manifest_initialized = False
+        exit_code = 1
+
+    try:
+        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_price_key(k)]
+    except Exception as exc:
+        logger.exception("raw 목록 조회 실패")
+        raw_keys = []
+        failures = [{"raw_key": None, "reasons": ["raw_list_error"], "error": str(exc)}]
+        exit_code = 1
+    else:
+        failures = []
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
     read = 0
-    failures: list[dict] = []
     passing: list[dict] = []  # 게이트 통과 행 — 루프 뒤 canonical 로 멱등 병합
-    exit_code = 0
 
     for raw_key in raw_keys:
         try:
@@ -369,21 +438,22 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     # 지키려고 정제를 영구히 O(전체 raw) 로 둘 이유가 없다(Rule 2·Rule 7).
     # 벤더가 실제로 겹치게 되면 전체 런·같은 런 스코프가 여전히 충돌을 fail-loud 로 잡는다.
     collisions: list[dict] = []
-    parts_written = canonical_rows = 0
-    canonical_written = True  # quality_log 계약 유지(스코프 여부와 무관하게 이제 항상 쓴다)
-    try:
-        parts_written, canonical_rows = _write_canonical(storage, passing, collisions)
-    except Exception:
-        logger.exception("canonical 적재 실패")
-        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
-        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
-        canonical_written = False
-        exit_code = 1
+    partitions: list[dict] = []
+    canonical_rows = 0
+    canonical_written = False
+    if manifest_initialized:
+        try:
+            partitions, canonical_rows = _write_canonical(storage, passing, collisions)
+            canonical_written = True
+        except Exception:
+            logger.exception("canonical 적재·무결성 검증 실패")
+            exit_code = 1
     if collisions:
-        # 벤더 교차 충돌은 fail-loud — 로그·quality_log 로 드러내고 비0 종료(§6b).
-        logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 canonical 제외", len(collisions))
-        exit_code = exit_code or 1
+        logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 winner 제외", len(collisions))
 
+    manifest_winners = sum(len(part["winner_ids"]) for part in partitions)
+
+    quality_written = True
     try:
         storage.put_bytes(
             quality_log_key(DATASET, checked_date, run_id),
@@ -397,11 +467,16 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "records_passed": len(passing),
                 "records_failed": len(failures),
                 # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
-                "ops": {"records_out": len(passing), "failed_records": len(failures)},
+                "ops": {
+                    "records_out": manifest_winners,
+                    "failed_records": len(failures) + len(collisions),
+                },
                 "failures": failures,
                 "canonical_written": canonical_written,
-                "canonical_partitions_written": parts_written,
+                "canonical_partitions": partitions,
+                "canonical_partitions_written": len(partitions),
                 "canonical_rows_written": canonical_rows,
+                "manifest_winners": manifest_winners,
                 "vendor_collisions": collisions,
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -410,12 +485,36 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     except Exception:
         # 품질 로그마저 못 남기면 검증 결과가 통째로 유실된다 — 최소한 비0 종료로 알린다.
         logger.exception("quality_log 기록 실패 — 검증 결과 유실")
-        exit_code = exit_code or 1
+        quality_written = False
+        exit_code = 1
+
+    if canonical_written and quality_written and exit_code != 1:
+        try:
+            # 완료 marker 전 같은 구조의 incomplete manifest를 왕복 검증한다. 이후 완료
+            # 바이트도 다시 읽어 손상된 marker를 consumer에게 공개하지 않는다.
+            pending = _manifest_bytes(run_id, False, partitions)
+            storage.put_bytes(manifest_key, pending)
+            if storage.get_bytes(manifest_key) != pending:
+                raise OSError("incomplete manifest 무결성 검증 실패")
+            completed = _manifest_bytes(run_id, True, partitions)
+            storage.put_bytes(manifest_key, completed)
+            if storage.get_bytes(manifest_key) != completed:
+                raise OSError("완료 manifest 무결성 검증 실패")
+        except Exception:
+            logger.exception("canonical run manifest 기록·무결성 검증 실패")
+            exit_code = 1
+            try:
+                storage.put_bytes(manifest_key, _manifest_bytes(run_id, False, partitions))
+            except Exception:
+                logger.exception("손상 manifest 무효화 실패")
+
+    if (failures or collisions) and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
 
     logger.info(
         "normalize_price 완료: raw_files=%d read=%d passed=%d failed=%d "
-        "canonical_parts=%d canonical_rows=%d collisions=%d",
+        "canonical_parts=%d canonical_rows=%d winners=%d collisions=%d",
         len(raw_keys), read, len(passing), len(failures),
-        parts_written, canonical_rows, len(collisions),
+        len(partitions), canonical_rows, manifest_winners, len(collisions),
     )
     return exit_code
