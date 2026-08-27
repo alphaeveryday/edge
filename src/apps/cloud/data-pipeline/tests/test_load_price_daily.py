@@ -8,13 +8,18 @@
 롤백되며, CHECK 위반 행(0·음수 adj_close)을 안 격리하면 ck_price_daily_values 로 배치가 죽는다.
 """
 
+import hashlib
 import io
 import json
 
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_price_daily_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_price_daily_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import load_price_daily
 
 _COLUMNS = ("market", "ticker", "trade_date", "close", "adj_close", "volume",
@@ -46,13 +51,64 @@ def _price_row(ticker: str = "005930", trade_date: str = "2026-07-16", **over) -
     return row
 
 
+def _write_manifest(storage, run_id: str, partitions: list[tuple[str, str, list[str]]]) -> None:
+    items = []
+    for market, trade_date, winners in partitions:
+        key = f"{canonical_price_daily_partition(market, trade_date)}/part-00000.parquet"
+        data = storage.get_bytes(key)
+        items.append({
+            "market": market,
+            "trade_date": trade_date,
+            "key": key,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "winner_ids": [{"ticker": ticker} for ticker in winners],
+        })
+    manifest = {
+        "run_id": run_id,
+        "producer": "normalize_price",
+        "canonical_written": True,
+        "canonical_partitions": items,
+    }
+    storage.put_bytes(
+        canonical_run_manifest_key("price_daily", run_id),
+        json.dumps(manifest, sort_keys=True).encode("utf-8"),
+    )
+
+
+class _TrackingStorage:
+    def __init__(self, inner):
+        self.inner = inner
+        self.listed: list[str] = []
+        self.gotten: list[str] = []
+
+    def list_keys(self, prefix):
+        self.listed.append(prefix)
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        self.gotten.append(key)
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        return self.inner.put_bytes(key, data)
+
+
+class _FailingQualityStorage(_TrackingStorage):
+    def put_bytes(self, key, data):
+        """quality log 쓰기만 실패시켜 fatal 저장 계약을 검증한다."""
+        if "data_quality_logs" in key:
+            raise OSError("의도된 quality 쓰기 실패")
+        return self.inner.put_bytes(key, data)
+
+
 class _FakeCursor:
     """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
 
-    def __init__(self, log: list, instrument_rows: list, existing: dict):
+    def __init__(self, log: list, instrument_rows: list, existing: dict, fail_instruments: set[str]):
         self._log = log
         self._instrument_rows = instrument_rows  # [(ticker, instrument_id), …] — 중복 ticker 가능
         self._existing = existing
+        self._fail_instruments = fail_instruments
         self._rows: list = []
         self._returning = None
         self.rowcount = 1
@@ -64,6 +120,8 @@ class _FakeCursor:
         if upper.startswith("SELECT TICKER, INSTRUMENT_ID FROM INSTRUMENT"):
             self._rows = list(self._instrument_rows)
         elif upper.startswith("INSERT INTO PRICE_DAILY"):
+            if params[0] in self._fail_instruments:
+                raise ValueError("의도된 개별 행 DB 실패")
             # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신=(True,) /
             # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key = (params[0], params[1])
@@ -91,7 +149,7 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, instruments=None, existing=None, instrument_rows=None):
+    def __init__(self, instruments=None, existing=None, instrument_rows=None, fail_instruments=()):
         self.log: list = []
         # instrument_rows 를 직접 주면(중복 ticker 테스트) 그대로, 아니면 dict 에서 파생한다.
         if instrument_rows is not None:
@@ -100,9 +158,12 @@ class _FakeConn:
             instruments = instruments if instruments is not None else {"005930": "inst_samsung"}
             self.instrument_rows = list(instruments.items())
         self.existing = dict(existing or {})
+        self.fail_instruments = set(fail_instruments)
 
     def cursor(self):
-        return _FakeCursor(self.log, self.instrument_rows, self.existing)
+        return _FakeCursor(
+            self.log, self.instrument_rows, self.existing, self.fail_instruments,
+        )
 
 
 def _fake_connect(conn):
@@ -150,6 +211,107 @@ def test_canonical_가격이_마트_행이_된다(tmp_path, monkeypatch):
     assert data_version == "R1"
 
 
+def test_manifest_정상경로는_KR_winner만_GET하고_건수를_분리한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1038): producer는 KR·US를 모두 싣지만 현재 loader는 KR만 지원한다. US를
+    # 실패로 세거나 GET하면 지원 범위와 물리 I/O가 다시 섞이고, canonical LIST는 풀스캔 회귀다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [
+        _price_row("005930"), _price_row("000660"),
+    ])
+    _write_canonical(inner, "US", "2026-07-16", [
+        _price_row("AAPL", market="US"),
+    ])
+    _write_manifest(inner, "N1", [
+        ("KR", "2026-07-16", ["005930"]),
+        ("US", "2026-07-16", ["AAPL"]),
+    ])
+    storage = _TrackingStorage(inner)
+    conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+    assert [params[0] for params in _inserts(conn)] == ["inst_samsung"]
+    assert storage.listed == []
+    assert canonical_run_manifest_key("price_daily", "N1") in storage.gotten
+    assert canonical_price_daily_partition("KR", "2026-07-16") in storage.gotten[1]
+    assert all("market=US" not in key for key in storage.gotten)
+    log = _log(inner)
+    assert log["manifest_partitions_total"] == 2
+    assert log["manifest_partitions_selected"] == 1
+    assert log["manifest_winners_total"] == 2
+    assert log["manifest_winners_selected"] == 1
+    assert log["physical_rows_read"] == 2
+    assert log["logical_rows_read"] == 1
+    assert log["ops"] == {"records_out": 1, "failed_records": 0}
+
+
+@pytest.mark.parametrize("damage", ["missing", "sha", "winner"])
+def test_manifest_결손_손상은_풀스캔_fallback없이_exit1(tmp_path, monkeypatch, damage):
+    # WHY(ALPHA-1038): 계보가 없거나 손상됐을 때 canonical LIST로 넓히면 실패 런이 과거 전체를
+    # 성공 적재한 것처럼 보인다. 저장된 canonical이 있어도 normal path는 hard fail이어야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [_price_row()])
+    if damage != "missing":
+        _write_manifest(inner, "N1", [("KR", "2026-07-16", ["005930"])])
+        manifest_key = canonical_run_manifest_key("price_daily", "N1")
+        manifest = json.loads(inner.get_bytes(manifest_key))
+        if damage == "sha":
+            manifest["canonical_partitions"][0]["sha256"] = "0" * 64
+        else:
+            manifest["canonical_partitions"][0]["winner_ids"] = [{"ticker": "000660"}]
+        inner.put_bytes(manifest_key, json.dumps(manifest).encode("utf-8"))
+    storage = _TrackingStorage(inner)
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(_FakeConn()))
+
+    assert load_price_daily.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert storage.listed == []
+    assert _log(inner)["failures"][0]["reasons"] == ["load_error"]
+
+
+def test_빈_완료_manifest는_정상_0건으로_처리한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1038): 정상 0건과 manifest 결손은 다르다. 빈 완료 marker까지 실패시키면
+    # 휴장일이 장애로 위장되고, 반대로 결손을 빈 것으로 보면 풀스캔 방지 계약이 무너진다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_manifest(storage, "N1", [])
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(_FakeConn()))
+
+    assert load_price_daily.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+    log = _log(storage)
+    assert log["manifest_partitions_total"] == 0
+    assert log["manifest_winners_total"] == 0
+    assert log["physical_rows_read"] == 0 and log["logical_rows_read"] == 0
+
+
+def test_quality_저장_실패는_exit1(tmp_path, monkeypatch):
+    # WHY(ALPHA-1038): DB가 성공해도 감사 로그가 유실되면 성공 범위를 신뢰할 수 없으므로
+    # 행 부분 실패(exit 2)가 아니라 저장 실패(exit 1)여야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [_price_row()])
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(_FakeConn()))
+
+    assert load_price_daily.run(_FailingQualityStorage(inner), "R1", db=_db()) == 1
+
+
+def test_DB_개별_행_실패는_정상_winner를_보존하고_exit2(tmp_path, monkeypatch):
+    # WHY(ALPHA-1038): 한 종목 제약 오류가 같은 manifest의 다른 winner까지 롤백하면 성공
+    # 범위를 보존한다는 producer/consumer 계약이 DB 경계에서 깨진다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _price_row("005930"), _price_row("000660"),
+    ])
+    conn = _FakeConn(
+        instruments={"005930": "inst_samsung", "000660": "inst_hynix"},
+        fail_instruments={"inst_hynix"},
+    )
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
+    log = _log(storage)
+    assert log["created"] == 1
+    assert log["failures"][0]["reasons"] == ["row_load_error"]
+    assert log["ops"] == {"records_out": 1, "failed_records": 1}
+
+
 def test_파생_수익률과_미소스_컬럼은_적재하지_않는다(tmp_path, monkeypatch):
     # WHY: simple_return·log_return 은 전일종가+경계처리가 필요한 파생 피처(별도 레이어)이고,
     #      turnover_value·price_basis 는 canonical 이 나르지도 소비처도 없다. INSERT 문에
@@ -167,8 +329,8 @@ def test_파생_수익률과_미소스_컬럼은_적재하지_않는다(tmp_path
 
 
 def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
-    # WHY: 창 미지정이 canonical 전체 스캔이라 매 런이 과거 거래일을 다시 훑는다. 멱등이
-    #      아니면 PK(instrument_id, trade_date) 위반으로 배치가 통째로 죽는다.
+    # WHY: 명시 --all 복구가 canonical 전체를 다시 훑어도 멱등이어야 한다. 아니면
+    #      PK(instrument_id, trade_date) 위반으로 배치가 통째로 죽는다.
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [_price_row()])
     conn = _FakeConn()
@@ -191,7 +353,7 @@ def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(t
     conn = _FakeConn()
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
-    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
 
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 등록된 것만
     log = _log(storage)
@@ -234,7 +396,7 @@ def test_MIC_가로지른_중복_ticker_는_적재하지_않고_센다(tmp_path,
     ])
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
-    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 모호하지 않은 것만
     log = _log(storage)
     assert log["created"] == 1
@@ -252,7 +414,7 @@ def test_CHECK_위반_행은_격리하고_센다(tmp_path, monkeypatch):
     conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
-    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
 
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 정상 행만
     log = _log(storage)
@@ -291,7 +453,7 @@ def test_비수치_값은_배치를_죽이지_않고_격리된다(tmp_path, monk
     conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
-    assert load_price_daily.run(storage, "R1", db=_db()) == 0   # 롤백 아님 — 정상 종료
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2   # 정상 행 보존 부분 실패
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]   # 수치 close 행은 살아남는다
     log = _log(storage)
     assert log["created"] == 1
@@ -309,15 +471,14 @@ def test_결손_행은_적재하지_않고_센다(tmp_path, monkeypatch):
     conn = _FakeConn()
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
-    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
     log = _log(storage)
     assert log["created"] == 1
     assert log["skipped_missing_identity"] == 1
 
 
 def test_창으로_적재_대상_거래일을_좁힌다(tmp_path, monkeypatch):
-    # WHY: 전체 스캔이 기본이라 백필·복구는 되지만, 특정 구간만 다시 넣고 싶을 때 창이 없으면
-    #      매번 전량을 훑는다. 창 필터가 끊기면 조용히 전체가 대상이 된다.
+    # WHY: 명시 백필·복구에서 특정 구간만 다시 넣을 때 창 필터가 끊기면 조용히 전체가 대상이 된다.
     storage = LocalStorage(tmp_path / "lake")
     for date in ("2026-07-14", "2026-07-15", "2026-07-16"):
         _write_canonical(storage, "KR", date, [_price_row(trade_date=date)])

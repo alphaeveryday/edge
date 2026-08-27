@@ -1016,3 +1016,33 @@ def test_장중_수급_정제_부분실패는_manifest_적재_후_SFN을_실패�
     assert "local.investor_intraday_raw_success_checks" in final
     assert "local.investor_intraday_normalize_success_checks" in final
     assert 'Default = "InvestorIntradayFailed"' in final
+
+
+def test_가격_정제_부분실패는_manifest_적재_후_시장_SFN을_실패로_마감한다():
+    """WHY(ALPHA-1038): NormalizePrice exit 2를 즉시 막으면 성공 KR winner가 DB에 못 가고,
+    성공으로 닫으면 부분 유실이 SFN 상태에서 숨는다. loader 실행과 최종 FAILED를 모두 고정한다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+
+    assert (
+        "States.Array('load-price-daily', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)" in sm
+    )
+    continue_check = sm.split("normalize_price_continue_check = {", 1)[1].split(
+        "normalize_continue_checks = concat", 1)[0]
+    assert re.search(
+        r'Variable\s*=\s*"\$\.normalize_results\[\$\{local\.normalize_price_index\}\]'
+        r'\.exit_code".*?IsPresent\s*=\s*true.*?NumericEquals\s*=\s*2',
+        continue_check, re.S,
+    )
+    gate = sm.split("NormalizeCheckResults = {", 1)[1].split(
+        "NotifyNormalizePartial = {", 1)[0]
+    assert 'Next = "NotifyNormalizePartial"' in gate
+    assert 'Default = "NotifyFailure"' in gate
+    notify = sm.split("NotifyNormalizePartial = {", 1)[1].split("LoadInstruments =", 1)[0]
+    assert re.search(r'Next\s*=\s*"LoadInstruments"', notify)
+    assert "normalize_partial_notification_error" in notify
+    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
+    assert "local.raw_ingest_success_checks" in final
+    assert "local.normalize_success_checks" in final
+    assert 'Default = "PipelineFailed"' in final

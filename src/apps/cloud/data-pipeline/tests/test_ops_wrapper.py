@@ -365,10 +365,11 @@ def test_instrument_incomplete_data_keeps_outcome_fulfilled():
 
 
 @pytest.mark.parametrize("task_key", [
+    "NORMALIZE_PRICE", "LOAD_PRICE_DAILY",
     "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
 ])
 def test_partial_manifest_exit_keeps_attempt_failed_but_fulfills_output(task_key):
-    # WHY(ALPHA-1036): exit 2는 실패를 숨기지 않는 물리 실패이면서 commit된 winner는 사용
+    # WHY(ALPHA-1036·1038): exit 2는 실패를 숨기지 않는 물리 실패이면서 commit된 winner는 사용
     # 가능하다. attempt/outcome/data 세 축을 한 상태로 뭉치면 downstream이나 품질이 거짓이다.
     db = FakeOpsDB()
     _seed(db, task_key=task_key)
