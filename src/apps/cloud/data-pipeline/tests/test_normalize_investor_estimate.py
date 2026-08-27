@@ -6,6 +6,7 @@ EOD 정제(test_normalize_investor)와 겹치는 것을 다시 검사하지 않�
 데이터셋이 갈린다는 사실.
 """
 
+import hashlib
 import json
 
 from data_pipeline.lake import (
@@ -287,6 +288,7 @@ def test_manifest는_변경분이_아닌_이번_실행의_모든_winner를_기�
     assert step.run(storage, "N1", input_run_id="R1") == 0
 
     prefix = canonical_investor_flow_intraday_partition("KR", "2026-08-05")
+    key = f"{prefix}/part-00000.parquet"
     assert _manifest(storage, "N1") == {
         "run_id": "N1",
         "producer": "normalize_investor_estimate",
@@ -294,7 +296,8 @@ def test_manifest는_변경분이_아닌_이번_실행의_모든_winner를_기�
         "canonical_partitions": [{
             "market": "KR",
             "trade_date": "2026-08-05",
-            "key": f"{prefix}/part-00000.parquet",
+            "key": key,
+            "sha256": hashlib.sha256(storage.get_bytes(key)).hexdigest(),
             "winner_ids": [
                 {"ticker": "000660", "asof_slot": "1120"},
                 {"ticker": "005930", "asof_slot": "0930"},

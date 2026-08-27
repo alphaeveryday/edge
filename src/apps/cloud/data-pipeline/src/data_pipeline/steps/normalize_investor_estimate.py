@@ -33,6 +33,7 @@ fetched_at 으로 수렴한다. 같은 슬롯의 앞선 관측은 남기지 않�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -259,11 +260,15 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict],
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
         key = f"{prefix}/part-00000.parquet"
-        storage.put_bytes(key, _write_parquet_rows(merged))
+        parquet_bytes = _write_parquet_rows(merged)
+        storage.put_bytes(key, parquet_bytes)
         partitions.append({
             "market": market,
             "trade_date": trade_date,
             "key": key,
+            # canonical key는 다음 normalize가 덮어쓸 수 있다. consumer가 이 run이 확정한
+            # 바이트와 같은지 확인해야 앞 run_id에 뒤 run 값을 붙이는 계보 오염을 막는다.
+            "sha256": hashlib.sha256(parquet_bytes).hexdigest(),
             # 값이 바뀐 행만이 아니라 이번 실행에서 게이트를 통과해 확정한 모든 논리 키다.
             # 같은 값 재확정도 하류의 현재 실행 범위이므로 포함하고, 중복 관측은 한 번만 남긴다.
             "winner_ids": [

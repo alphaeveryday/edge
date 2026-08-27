@@ -1153,8 +1153,10 @@ settings.targets.keywords            # ["금리", ...]
   주고, 같은 슬롯 재관측은 최신 fetched_at 이 이긴다.
   `normalize-investor-estimate`는 매 실행
   `operations_archive/canonical_run_manifests/dataset=investor_flow_intraday/run_id=…/manifest.json`
-  에 직접 parquet 키와 이번 실행에서 게이트를 통과한 모든 `(ticker,asof_slot)` winner를 기록한다
-  (ALPHA-1035). 값이 바뀐 행만이 아니라 같은 값 재확정도 포함하고 논리 키는 중복 제거한다. 행
+  에 직접 parquet 키·그 바이트의 SHA-256과 이번 실행에서 게이트를 통과한 모든
+  `(ticker,asof_slot)` winner를 기록한다(ALPHA-1035). 값이 바뀐 행만이 아니라 같은 값
+  재확정도 포함하고 논리 키는 중복 제거한다. SHA-256은 뒤 normalize가 같은 canonical 키를
+  덮어써도 consumer가 앞 run_id에 뒤 run 값을 붙이지 않게 fail-closed 하는 근거다. 행
   실패는 다른 winner의 canonical·manifest 기록을 막지 않지만 quality log와 exit 2에 남으며,
   raw 목록/읽기 또는 canonical·quality·manifest 저장 실패는 exit 1과
   `canonical_written=false`로 fail-closed 한다. 이 단계에서는 producer만 추가되어 아래 기존
