@@ -241,12 +241,11 @@ locals {
       command_expr = "States.Array('load-disclosure', '--run-id', $.run_id)"
     },
     {
-      # 가격 원장 적재(ALPHA-377) — canonical price_daily → price_daily. LoadEtfNav 와 같은 슬롯:
-      # normalize 가 canonical 을 쓴 뒤라야 읽을 대상이 있어 feature 페이즈에 둔다.
-      # 창 미지정 = canonical 전체 스캔 + 멱등(같은 값이면 no-op, 정정이면 UPDATE).
+      # 가격 원장 적재(ALPHA-377·1038) — NormalizePrice manifest의 KR direct key와 현재
+      # winner만 읽는다. US manifest 항목은 현재 미지원 범위라 실패로 세지 않는다.
       state        = "LoadPriceDaily"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-price-daily', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-price-daily', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # ETF 구성종목 적재(ALPHA-379) — canonical etf_holdings → etf_holding_snapshot.
@@ -314,6 +313,44 @@ locals {
       StringEquals = "succeeded"
     }
   ]
+
+  # NormalizePrice exit 2는 성공 winner manifest를 확정한 부분 실패다. 다른 normalize는
+  # 전량 성공이어야 하며, price만 exit 2여도 feature를 실행한다. 마지막 판정은 아래의 엄격한
+  # normalize_success_checks를 다시 사용해 전체 SFN을 FAILED로 닫는다.
+  normalize_non_price_success_checks = [
+    for index, job in local.market_normalize_jobs : {
+      Variable     = "$.normalize_results[${index}].status"
+      StringEquals = "succeeded"
+    } if job.state != "NormalizePrice"
+  ]
+  normalize_price_index = index(
+    [for job in local.market_normalize_jobs : job.state],
+    "NormalizePrice",
+  )
+  normalize_price_continue_check = {
+    Or = [
+      {
+        Variable     = "$.normalize_results[${local.normalize_price_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.normalize_results[${local.normalize_price_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.normalize_results[${local.normalize_price_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
+  normalize_continue_checks = concat(
+    local.normalize_non_price_success_checks,
+    [local.normalize_price_continue_check],
+  )
 
   feature_success_checks = [
     for index, _ in local.market_feature_jobs : {
@@ -520,19 +557,34 @@ locals {
       }
       NormalizeCheckResults = {
         Type = "Choice"
-        Choices = [{
-          And  = local.normalize_success_checks
-          Next = "LoadInstruments"
-        }]
+        Choices = [
+          { And = local.normalize_success_checks, Next = "LoadInstruments" },
+          { And = local.normalize_continue_checks, Next = "NotifyNormalizePartial" },
+        ]
         Default = "NotifyFailure"
       }
-      # 정제 전량 성공일 때만 **마스터 적재**로 넘어간다 — 실행 내 순서 제어다.
+      NotifyNormalizePartial = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::sns:publish"
+        ResultPath = null
+        Next       = "LoadInstruments"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.normalize_partial_notification_error"
+          Next        = "LoadInstruments"
+        }]
+        Parameters = {
+          TopicArn    = aws_sns_topic.alarms.arn
+          "Subject.$" = "States.Format('[${var.name}] normalize 부분 실패 — run {}', $.run_id)"
+          "Message.$" = "States.JsonToString($)"
+        }
+      }
+      # 정제 전량 성공 또는 NormalizePrice exit 2일 때 **마스터 적재**로 넘어간다.
       #
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
-      # 두 적재 잡은 **canonical 을 full-scan** 하므로 여기 걸린 건 자동 회복된다: 이번 실행이
-      # 멈춰도 다음 성공 실행이 밀린 canonical 을 함께 소비한다. load-instruments 는 자연키
-      # 멱등이라 재실행이 중복을 만들지 않는다. 즉 feature 는 아직 옛 모델이고, 그래서 안전하다.
+      # 다른 적재 잡은 아직 canonical full-scan으로 다음 런에 회복되지만 LoadPriceDaily는 현재
+      # manifest만 읽는다. 그래서 price exit 2의 성공 winner는 이 실행에서 반드시 적재한다.
       # 종목·ETF 마스터 적재 — feature 병렬 **앞 직렬**이다(ALPHA-462). fact 로더들
       # (LoadEtfNav·LoadPriceTriggers)이 instrument/etf_profile 을 FK 로 참조하는데, 같은
       # 병렬 페이즈에 두면 마스터 커밋 전에 fact 로더가 instrument 스냅샷을 읽어 그 ETF 를
@@ -646,7 +698,7 @@ locals {
       RawPartialCheck = {
         Type = "Choice"
         Choices = [{
-          And  = local.raw_ingest_success_checks
+          And  = concat(local.raw_ingest_success_checks, local.normalize_success_checks)
           Next = "PipelineSucceeded"
         }]
         Default = "PipelineFailed"

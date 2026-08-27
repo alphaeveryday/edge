@@ -192,6 +192,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         depends_on=("PRICE_COLLECTION_KIS",),
         deadline_offset_seconds=5400,
         kr_trading_calendar=True,
+        fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="LOAD_PRICE_DAILY",
@@ -212,6 +213,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         log_dataset="price_daily_load",
         kr_trading_calendar=True,
         empty_allowed=False,
+        fulfilled_exit_codes=(0, 2),
     ),
     # ── KIS 수집 4 ────────────────────────────────────────────────────────────────
     # ⚠️ `kr_trading_calendar` 는 **기존 3작업 말고는 전부 False** 다(ALPHA-181). True 면 KR
@@ -294,10 +296,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="LOAD_INSTRUMENTS", stage="feature", dataset="instrument_master", required=True,
         cli_command=("load-instruments",), sfn_state_name="LoadInstruments",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
-        # ASL `NormalizeCheckResults` = 정제 **전량 성공** 게이트. 하나라도 죽으면 이 뒤가 통째로
-        # 미진입인데, 의존을 비워 두면 그게 MISSED("시작조차 안 됐다")로 찍힌다 — 진실은
-        # BLOCKED(게이트가 닫혔다)다. ADR-0030 과 충돌하지 않는다: 그건 raw→정제 얘기고
-        # (그래서 정제 엔트리는 의존이 비어 있다) 여긴 정제→feature 게이트다.
+        # ASL `NormalizeCheckResults`는 전량 성공 또는 NormalizePrice exit 2에서 열린다.
+        # `fulfilled_exit_codes=(0,2)`가 그 부분 성공을 의존 충족으로 보존하고, 다른 normalize
+        # 실패는 BLOCKED로 남긴다. 의존을 비우면 게이트 미진입이 MISSED로 오귀속된다.
         # ⚠️ 공시 정제 2개가 빠졌다(ALPHA-724) — 그 스텝이 시장 SFN 의 `NormalizeCheckResults`
         # 게이트 멤버가 아니게 됐기 때문이다. 남겨두면 시장 런에서 **영영 충족되지 않는 의존**이
         # 되어 이 작업이 BLOCKED 로 굳는다(그 정제는 다른 SFN 에서 돌므로 이 런엔 자리가 없다).

@@ -623,6 +623,49 @@ def test_load_documents_requires_an_explicit_scope(monkeypatch):
         main(["load-documents", "--run-id", "R"])
 
 
+def test_load_price_daily_requires_exactly_one_explicit_scope(monkeypatch):
+    # WHY(ALPHA-1038): SFN의 run 계보가 빠져도 암묵적 canonical 풀스캔으로 성공하면 배선
+    # 회귀가 데이터가 쌓일수록 비싸지는 형태로 숨는다. 범위 혼합도 모호하므로 거부한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    for argv in (
+        ["load-price-daily", "--run-id", "R"],
+        ["load-price-daily", "--run-id", "R", "--input-run-id", "N1", "--all"],
+        ["load-price-daily", "--run-id", "R", "--input-run-id", "N1",
+         "--from", "2026-08-20"],
+    ):
+        with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+            main(argv)
+
+
+def test_load_price_daily_forwards_manifest_scope_and_preserves_explicit_all(monkeypatch):
+    # WHY(ALPHA-1038): 정상 SFN은 실제 normalize run을 그대로 넘기고, 전체 복구는 운영자가
+    # --all을 직접 쓴 경우에만 범위 없음으로 전달해야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = []
+    monkeypatch.setattr(
+        run_mod.load_price_daily, "run",
+        lambda *args, **kwargs: captured.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-price-daily", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured[-1]["input_run_id"] == "N1"
+    assert main(["load-price-daily", "--run-id", "R", "--all"]) == 0
+    assert captured[-1]["input_run_id"] is None
+    assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_price_daily_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1038): 불량·역전 문자열이 0건 성공이면 복구 완료로 오인된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-price-daily", "--run-id", "R", *argv])
+
+
 def test_load_documents_forwards_normalize_run_scope(monkeypatch):
     # WHY(ALPHA-1031): SFN이 넘긴 NormalizeNews run_id가 CLI에서 사라지면 manifest 소비 경로가
     #      있어도 정상 실행은 쓸 수 없고, 날짜 추측이나 풀스캔으로 퇴행한다.

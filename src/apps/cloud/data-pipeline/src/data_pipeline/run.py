@@ -497,12 +497,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
     if args.all_partitions and args.step not in (
-        "tag-news", "load-documents", "load-etf-holdings", "load-investor-intraday",
+        "tag-news", "load-documents", "load-price-daily", "load-etf-holdings",
+        "load-investor-intraday",
         "load-assertions",
     ):
         raise SystemExit(
-            "--all 은 tag-news·load-documents·load-etf-holdings·load-investor-intraday·"
-            "load-assertions 전용이다"
+            "--all 은 tag-news·load-documents·load-price-daily·load-etf-holdings·"
+            "load-investor-intraday·load-assertions 전용이다"
         )
 
     logging.basicConfig(
@@ -699,10 +700,33 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # 가격 적재는 canonical trade_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
+    # 가격 적재 정상 경로는 NormalizePrice manifest의 KR direct key와 winner만 읽는다.
+    # 날짜창은 명시 복구, 전체 스캔은 --all을 직접 쓴 경우뿐이다(ALPHA-1038).
     if args.step == "load-price-daily":
+        scopes = sum((args.input_run_id is not None,
+                      args.from_date is not None or args.to_date is not None,
+                      args.all_partitions))
+        if scopes != 1:
+            raise SystemExit(
+                "load-price-daily는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+            )
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-price-daily의 --from은 --to보다 늦을 수 없다")
         return load_price_daily.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
         )
 
