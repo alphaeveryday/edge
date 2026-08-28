@@ -208,7 +208,7 @@ def _union_partitions(
 
 def _carry_forward(
     storage: Storage, *, exclude: str, now: datetime,
-    counters: dict[str, int], failures: list[dict],
+    counters: dict[str, int], failures: list[dict], scope_ids: dict[str, set[str]],
 ) -> tuple[list[tuple[str, str, str, frozenset[str]]], list[str]]:
     """생산됐지만 아직 이 스텝이 안 실은 manifest 범위를 함께 싣는다 (ALPHA-1052).
 
@@ -255,7 +255,9 @@ def _carry_forward(
             if age > timedelta(days=_CARRY_LOOKBACK_DAYS):
                 counters["stale"] += 1
                 continue
-            partitions.extend(_manifest_partitions(storage, run_id))
+            carried_scope = _manifest_partitions(storage, run_id)
+            scope_ids[run_id] = {aid for *_, ids in carried_scope for aid in ids}
+            partitions.extend(carried_scope)
         except Exception as exc:
             # 한 manifest 의 손상이 나머지 회수와 이번 런을 죽이지 않게 격리한다.
             logger.exception("미소비 manifest 회수 실패(격리): run_id=%s", run_id)
@@ -329,8 +331,13 @@ def run(
     carry_counters: dict[str, int] = {
         "pending": 0, "carried": 0, "unfinished": 0, "stale": 0,
         "failed": 0, "over_limit": 0, "discovery_failed": 0, "marker_failed": 0,
+        "blocked_by_missing_document": 0,
     }
     carried_run_ids: list[str] = []
+    # 이번 런 범위에 든 run_id → 그 manifest 의 article_id 전량. 소비 마커를 manifest 별로
+    # 판정하려면 결손이 **어느 범위의 것인지** 알아야 한다(ALPHA-1052).
+    scope_ids_by_run: dict[str, set[str]] = {}
+    missing_article_ids: set[str] = set()
 
     try:
         if input_run_id is not None and (from_date is not None or to_date is not None):
@@ -339,9 +346,11 @@ def run(
             _manifest_partitions(storage, input_run_id) if input_run_id is not None else None
         )
         if manifest_partitions is not None:
+            scope_ids_by_run[input_run_id] = {
+                article_id for *_, ids in manifest_partitions for article_id in ids}
             carried_partitions, carried_run_ids = _carry_forward(
                 storage, exclude=input_run_id, now=started_at,
-                counters=carry_counters, failures=failures,
+                counters=carry_counters, failures=failures, scope_ids=scope_ids_by_run,
             )
             manifest_partitions = _union_partitions(manifest_partitions + carried_partitions)
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
@@ -552,6 +561,10 @@ def run(
                 doc_row = doc_by_key.get((source_code, article_id))
                 if doc_row is None:
                     missing_document += 1
+                    # 어느 기사가 결손인지 남긴다 — 소비 마커를 **manifest 별로** 판정하는
+                    # 재료다(ALPHA-1052). 개수만 세면 한 manifest 의 결손이 온전히 실린
+                    # 다른 manifest 의 마커까지 막아 회수가 수렴하지 않는다.
+                    missing_article_ids.add(article_id)
                     continue
                 document_id, doc_available_at = doc_row
 
@@ -688,11 +701,18 @@ def run(
     # 수단이 바로 "같은 input_run_id 재실행"이다(ALPHA-1033, 모듈 docstring·
     # `test_missing_document_recovers_by_replaying_the_same_manifest`). 여기서 마커를
     # 남기면 그 재실행 자격이 사라진다.
+    # ⚠️ 그런데 그 판정은 **manifest 별**이어야 한다. 전역 `missing_document` 로 막으면 회수한
+    # T0 의 결손 하나가 온전히 실린 T1 의 마커까지 막아, T1 범위가 매 런 다시 실리고 pending
+    # 이 무한히 자란다 — 수렴과 온전한 회수를 동시에 못 준다(edge-review 2라운드).
     # 나머지 제외 카운터(`rows_malformed`·`skipped_partial`·`skipped_no_resolved_argument`)는
     # 게이트가 아니다 — 재실행해도 같은 값이 나오는 **결정적 제외**라 막으면 이 범위가 영영
     # 소비 완료가 안 되고 매 런 다시 실린다(반대 방향의 같은 고장).
-    if exit_code == 0 and missing_document == 0 and input_run_id is not None:
-        for consumed_run_id in [input_run_id, *carried_run_ids]:
+    if exit_code == 0 and input_run_id is not None:
+        landed = [r for r in [input_run_id, *carried_run_ids]
+                  if not (scope_ids_by_run.get(r, set()) & missing_article_ids)]
+        carry_counters["blocked_by_missing_document"] = (
+            1 + len(carried_run_ids)) - len(landed)
+        for consumed_run_id in landed:
             try:
                 storage.put_bytes(
                     run_manifest_consumed_key(

@@ -590,20 +590,34 @@ def test_uncarryable_manifest_is_counted_not_silently_dropped(tmp_path, monkeypa
     assert storage.list_keys(_consumed_key("T0")) == []
 
 
-def test_missing_document_leaves_the_manifest_unconsumed(tmp_path, monkeypatch):
-    """WHY(ALPHA-1052): `missing_document` 는 **exit 0 인 결손**이다 — document 가 아직 안
-    실린 기사는 건너뛰고 세는 게 이 스텝의 계약이고, 그 회수 수단이 바로 "같은
-    input_run_id 재실행"이다(ALPHA-1033). exit 0 만 보고 마커를 남기면 그 재실행 자격이
-    사라져, 회수 장치가 스스로 영구 유실을 만든다."""
+@pytest.mark.parametrize("missing,unconsumed,consumed", [
+    ("current", "T1", "T0"),   # 이번 런 범위가 결손 — 회수한 T0 은 온전히 실렸다
+    ("older", "T0", "T1"),     # 회수 범위가 결손 — 이번 런 T1 은 온전히 실렸다
+])
+def test_missing_document_blocks_only_its_own_manifest(
+    tmp_path, monkeypatch, missing, unconsumed, consumed
+):
+    """WHY(ALPHA-1052): `missing_document` 는 **exit 0 인 결손**이고, 그 회수 수단이 바로
+    "같은 input_run_id 재실행"이다(ALPHA-1033). exit 0 만 보고 마커를 남기면 그 재실행
+    자격이 사라진다 — 그래서 결손이 있는 manifest 는 미소비로 남아야 한다.
+
+    **그런데 판정은 manifest 별이어야 한다.** 전역 카운터로 막으면 한 범위의 결손이 온전히
+    실린 다른 범위의 마커까지 막아, 그 범위가 매 런 다시 실리고 pending 이 무한히 자란다 —
+    수렴과 온전한 회수를 동시에 못 준다. 두 방향을 다 건다: 결손이 이번 런 쪽일 때와
+    회수 쪽일 때, 막히는 것은 **그쪽 하나뿐**이어야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     _two_runs_lake(storage)
-    conn = _FakeConn(documents=[("older", "doc_OLD")])  # "current" 의 document 가 아직 없다
+    present = "older" if missing == "current" else "current"
+    conn = _FakeConn(documents=[(present, f"doc_{present.upper()}")])
     _setup(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
-    assert _log(storage)["missing_document"] == 1
-    assert storage.list_keys(_consumed_key("T1")) == []
-    assert storage.list_keys(_consumed_key("T0")) == []
+
+    log = _log(storage)
+    assert log["missing_document"] == 1
+    assert log["manifest_carry_forward"]["blocked_by_missing_document"] == 1
+    assert storage.list_keys(_consumed_key(unconsumed)) == []
+    assert storage.list_keys(_consumed_key(consumed))
 
 
 def test_uncarryable_manifests_do_not_starve_the_queue(tmp_path, monkeypatch):

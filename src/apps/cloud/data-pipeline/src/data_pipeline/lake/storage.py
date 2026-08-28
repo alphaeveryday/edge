@@ -784,6 +784,16 @@ def run_manifest_consumed_key(kind: str, dataset: str, run_id: str, consumer: st
     의 canonical manifest 는 `tag_news` 와 `load_documents` 가 각각 읽는다. 한 마커를 공유하면
     먼저 끝난 쪽이 상대의 미소비를 지운다.
 
+    ⚠️ **마커의 단위는 run_id 다 — manifest 의 세대가 아니다.** 생산자가 같은 run_id 로
+    manifest 를 다시 써 범위를 넓히면(`tag_news._existing_feature_partitions` 가 그 재시도를
+    지원한다) 자동 회수는 그 2세대를 미소비로 못 본다. 자동 경로에서는 도달하지 않는다:
+    뉴스 SFN 에 `Retry` 가 없고(2026-08-28 정의 확인) run_id 는 실행마다 새로 나므로, 한
+    소비 성공과 다음 생산 사이가 벌어지지 않는다. 남는 것은 **사람이 같은 run_id 로
+    tag-news 를 다시 돌린 경우**뿐이고, 그때는 같은 손이 `--input-run-id` 로 이 스텝도
+    재실행한다(그 경로는 마커와 무관하게 자기 manifest 를 항상 읽는다). 세대를 보려면
+    manifest 지문을 마커에 넣고 대조해야 하는데, 그러면 LIST 한 번이던 탐색이 run 마다
+    GET 둘로 바뀐다 — 도달 불가한 경로에 그 비용을 내지 않는다.
+
     ⚠️ 마커는 **소비자가 자기 성공을 증명한 뒤에만** 쓴다. 원장(ops_task_attempt)으로 대신할
     수 없다 — 원장 기록은 본 작업을 막지 않으려 예외를 삼키므로(ledger.py 스펙 §3.4) 기록이
     없는 것과 실패한 것이 구분되지 않는다. 그 축으로 회수를 판정하면 **관대한 방향으로**
