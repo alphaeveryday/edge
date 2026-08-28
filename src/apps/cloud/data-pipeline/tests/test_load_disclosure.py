@@ -6,6 +6,7 @@
 배치를 통째로 죽이며, 멱등이 깨지면 재실행이 fact_id 를 바꿔 설명이 인용할 계보가 끊긴다.
 """
 
+import hashlib
 import io
 import json
 
@@ -17,6 +18,7 @@ from data_pipeline.db import stable_domain_id
 from data_pipeline.lake import (
     LocalStorage,
     canonical_business_segment_fact_partition,
+    canonical_run_manifest_key,
     canonical_supply_contract_fact_partition,
 )
 from data_pipeline.steps import load_disclosure
@@ -70,8 +72,10 @@ def _segment(rcept_no, ordinal, **over):
 
 
 class _FakeCursor:
-    def __init__(self, log, profiles, existing_docs, actors):
-        self._log, self._profiles, self._existing, self._actors = log, profiles, existing_docs, actors
+    def __init__(self, conn):
+        self._conn = conn
+        self._log, self._profiles = conn.log, conn._profiles
+        self._existing, self._actors = conn._existing, conn._actors
         self.rowcount = 1
         self._result: list = []
 
@@ -79,12 +83,41 @@ class _FakeCursor:
         norm = " ".join(sql.split())
         self._log.append((norm, params))
         upper = norm.upper()
-        if upper.startswith("SELECT DART_CORP_CODE"):
+        if upper.startswith("INSERT INTO DISCLOSURE_LOAD_PENDING"):
+            rcept_no, dtype, rows, digest, first_run, last_run = params
+            old = self._conn.pending.get(rcept_no)
+            attempts = old["attempt_count"] if old and old["payload_sha256"] == digest else 0
+            self._conn.pending[rcept_no] = {
+                "disclosure_type": dtype, "rows": rows, "payload_sha256": digest,
+                "attempt_count": attempts, "first_run": old["first_run"] if old else first_run,
+                "last_run": last_run,
+            }
+        elif upper.startswith("SELECT RCEPT_NO, DISCLOSURE_TYPE, CANONICAL_ROWS"):
+            self._result = [(r, v["disclosure_type"], v["rows"], v["payload_sha256"],
+                             v["attempt_count"]) for r, v in sorted(self._conn.pending.items())]
+        elif upper.startswith("UPDATE DISCLOSURE_LOAD_PENDING"):
+            code, error, rcept_no, digest = params
+            item = self._conn.pending.get(rcept_no)
+            if item and item["payload_sha256"] == digest:
+                item["attempt_count"] += 1
+                item["last_error_code"] = code
+                item["last_error"] = error
+        elif upper.startswith("DELETE FROM DISCLOSURE_LOAD_PENDING"):
+            rcept_no, digest = params
+            item = self._conn.pending.get(rcept_no)
+            self.rowcount = int(bool(item and item["payload_sha256"] == digest))
+            if self.rowcount:
+                del self._conn.pending[rcept_no]
+        elif upper.startswith("SELECT COUNT(*) FROM DISCLOSURE_LOAD_PENDING"):
+            self._result = [(len(self._conn.pending),)]
+        elif upper.startswith("SELECT DART_CORP_CODE"):
             codes = params[0]
             self._result = [(c, self._profiles[c]) for c in codes if c in self._profiles]
         elif upper.startswith("SELECT A.ACTOR_ID, E.DISPLAY_NAME"):
             self._result = list(self._actors)
         elif upper.startswith("INSERT INTO DOCUMENT "):
+            if params[2] in self._conn.fail_docs:
+                raise RuntimeError(f"temporary failure: {params[2]}")
             self.rowcount = 0 if (params[1], params[2]) in self._existing else 1
         else:
             self.rowcount = 1
@@ -104,14 +137,16 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, profiles=None, existing_docs=None, actors=()):
+    def __init__(self, profiles=None, existing_docs=None, actors=(), fail_docs=()):
         self.log: list = []
         self._profiles = profiles if profiles is not None else {"00126380": "actor_samsung"}
         self._existing = existing_docs or set()
         self._actors = actors
+        self.fail_docs = set(fail_docs)
+        self.pending: dict[str, dict] = {}
 
     def cursor(self):
-        return _FakeCursor(self.log, self._profiles, self._existing, self._actors)
+        return _FakeCursor(self)
 
 
 def _fake_connect(conn):
@@ -141,6 +176,131 @@ def _run(storage, conn, monkeypatch, **kw):
 def _log(storage):
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _write_manifest(storage, run_id, dataset, producer, builder, date=None, rcept_nos=()):
+    partitions = []
+    if date is not None:
+        key = f"{builder(date)}/part-00000.parquet"
+        data = storage.get_bytes(key)
+        partitions.append({
+            "report_date": date, "key": key, "sha256": hashlib.sha256(data).hexdigest(),
+            "winner_ids": [{"rcept_no": value} for value in sorted(rcept_nos)],
+        })
+    storage.put_bytes(canonical_run_manifest_key(dataset, run_id), json.dumps({
+        "run_id": run_id, "producer": producer, "canonical_written": True,
+        "canonical_partitions": partitions,
+    }).encode())
+
+
+def _dual_manifests(storage, run_id, *, supply=(), segment=()):
+    _write_manifest(
+        storage, run_id, "supply_contract_fact", "normalize_disclosure",
+        canonical_supply_contract_fact_partition,
+        "2026-06-30" if supply else None, supply,
+    )
+    _write_manifest(
+        storage, run_id, "business_segment_fact", "normalize_disclosure_segment",
+        canonical_business_segment_fact_partition,
+        "2026-06-30" if segment else None, segment,
+    )
+
+
+def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): process가 적재 직전에 죽어도 current winner가 먼저 DB 원장에 있어야
+    다음 정상 실행이 회수한다. 성공 삭제는 typed fact와 같은 transaction 안에서만 일어난다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert conn.pending == {}
+    statements = [sql for sql, _ in conn.log]
+    assert next(i for i, sql in enumerate(statements)
+                if sql.startswith("INSERT INTO disclosure_load_pending")) < next(
+                    i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO document "))
+    assert _log(storage)["pending_ledger"] == {
+        "before": 1, "after": 0, "succeeded": 1, "failed": 0, "failed_items": [],
+        "retention": "until_success", "retry": "once_per_normal_run_no_lifetime_cutoff",
+    }
+
+
+def test_unresolved_issuer_stays_pending_and_next_normal_run_recovers(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): issuer master가 늦게 채워지는 것이 기존 full scan의 자동 회수 이유였다.
+    원장은 성공 전에는 보존되고, 다음 정상 실행에서 같은 payload를 다시 시도해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1", corp_code="99999999")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn(profiles={})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert conn.pending["R1"]["attempt_count"] == 1
+    assert conn.pending["R1"]["last_error_code"] == "unresolved_issuer"
+
+    # 같은 run 중복 실행도 INSERT를 늘리거나 attempt 이력을 초기화하지 않는다.
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R1"}
+    assert conn.pending["R1"]["attempt_count"] == 2
+
+    _dual_manifests(storage, "T2")
+    conn._profiles["99999999"] = "actor_late"
+    assert load_disclosure.run(storage, "T2", db=_db(), input_run_id="T2") == 0
+    assert conn.pending == {}
+
+
+def test_one_temporary_failure_does_not_rollback_other_pending_items(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 한 공시의 DB 일시 실패 때문에 앞뒤 성공 공시와 원장 삭제까지
+    롤백되면 backlog가 매번 통째로 재처리된다. savepoint는 실패 ID만 남겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
+           [_supply("R1"), _supply("R2"), _supply("R3")])
+    _dual_manifests(storage, "T1", supply=("R1", "R2", "R3"))
+    conn = _FakeConn(fail_docs={"R2"})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R2"}
+    assert [params[2] for sql, params in conn.log
+            if sql.startswith("INSERT INTO document ")] == ["R1", "R2", "R3"]
+    ledger = _log(storage)["pending_ledger"]
+    assert (ledger["succeeded"], ledger["failed"], ledger["after"]) == (2, 1, 1)
+    assert ledger["failed_items"][0]["rcept_no"] == "R2"
+
+
+def test_non_finite_payload_is_retained_without_blocking_valid_winner(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): canonical은 NaN/Infinity를 담을 수 있지만 PostgreSQL JSONB는 못 담는다.
+    원장 직렬화가 전체 enqueue를 죽이지 않고 그 ID만 검증 실패 pending으로 남겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
+           [_supply("R-bad", ratio_pct=float("inf")), _supply("R-ok")])
+    _dual_manifests(storage, "T1", supply=("R-bad", "R-ok"))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R-bad"}
+    assert conn.pending["R-bad"]["last_error_code"] == "no_valid_fact"
+    assert [params[2] for sql, params in conn.log
+            if sql.startswith("INSERT INTO document ")] == ["R-ok"]
+
+
+def test_corrupt_or_incomplete_manifest_never_enqueues_or_falls_back(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): manifest 손상을 full scan으로 확대하면 incomplete canonical PUT을
+    정상 winner로 오인한다. 원장 commit 전 fail-loud하고 pending을 만들지 않는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    key = canonical_run_manifest_key("supply_contract_fact", "T1")
+    manifest = json.loads(storage.get_bytes(key))
+    manifest["canonical_written"] = False
+    storage.put_bytes(key, json.dumps(manifest).encode())
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 1
+    assert conn.pending == {}
+    assert _inserts(conn, "document") == []
 
 
 def test_supply_becomes_document_and_typed_fact(tmp_path, monkeypatch):

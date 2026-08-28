@@ -505,8 +505,9 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # canonical_written=true가 된다. 행 격리는 성공 winner를 확정한 exit 2(하류 처리 뒤 실행은
 # INCOMPLETE/FAILED), 저장·무결성 실패는 incomplete manifest를 남기는 exit 1(해당 호출의 하류
 # 차단)이다. 아직 LoadDisclosure는 issuer 미해소 자동 회수를 위해 canonical 전체를 스캔하므로,
-# 실패 뒤 공유 canonical에 남은 파티션을 후속 정상 런이 회수할 수 있다. durable pending ledger가
-# 이 회수를 대체하면서 manifest consumer로 전환하는 작업은 ALPHA-1045 범위다.
+# 실패 뒤 공유 canonical에 남은 파티션을 후속 정상 런이 회수할 수 있다. ALPHA-1045 PR02는
+# completed dual manifest winner를 DB pending ledger에 먼저 commit하고 성공 ID만 제거한다.
+# 기존 full scan 제거와 manifest-only consumer 전환은 ledger 회수 검증 뒤 후속 PR 범위다.
 # 정상 0건도 canonical_written=true·빈 canonical_partitions로 producer 미실행과 구분한다.
 
 # ETF 구성종목 정제(Step2) — raw etf_holdings(FMP US·KRX KR) → 공통 구성종목 fact 정규화 + 게이트.

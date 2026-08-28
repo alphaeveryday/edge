@@ -100,8 +100,9 @@ class StubSteps:
         self.segment_calls.append({"run_id": run_id, "raw_keys": raw_keys})
         return self.segment_exit
 
-    def load(self, storage, run_id, *, db, from_date=None, to_date=None):
-        self.load_calls.append({"run_id": run_id, "from": from_date, "to": to_date})
+    def load(self, storage, run_id, *, db, input_run_id=None, from_date=None, to_date=None):
+        self.load_calls.append({"run_id": run_id, "input_run_id": input_run_id,
+                                "from": from_date, "to": to_date})
         return 0
 
     def assemble(self, storage, run_id, *, db, from_date=None, to_date=None):
@@ -175,7 +176,11 @@ def test_질의_창이_세션_날짜에서_나온다_벽시계가_아니다(tmp_
     for call in steps.load_calls:
         assert call["to"] == SESSION_DATE
     assert steps.assemble_calls
-    assert steps.assemble_calls == steps.load_calls
+    assert steps.assemble_calls == [
+        {key: value for key, value in call.items() if key != "input_run_id"}
+        for call in steps.load_calls
+    ]
+    assert all(call["input_run_id"] == call["run_id"] for call in steps.load_calls)
 
 
 def test_창_폭은_당일이고_세션_첫_tick만_D_1을_포함한다(tmp_path, monkeypatch):
