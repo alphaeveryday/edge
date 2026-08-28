@@ -439,6 +439,26 @@ def test_moved_article_tie_prefers_the_later_partition(tmp_path, monkeypatch):
     assert event_type == "SUPPLY_CONTRACT"
 
 
+def test_manifest_array_order_does_not_decide_the_tie(tmp_path, monkeypatch):
+    """WHY(ALPHA-1051): 동률 승자가 manifest 배열 순서에 걸리면 **생산자 구현이 적재 행을
+    정한다** — `_manifest_partitions` 는 날짜·키·파티션 중복만 보고 정렬은 검증하지 않으니
+    뒤집힌 배열이 오면 같은 입력에 다른 주장이 실린다. 소비 순서는 이 파일이 세워야 한다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _moved_article_lake(inner, old_tagged_at="2026-08-27T15:14:45+00:00",
+                        new_tagged_at="2026-08-27T15:14:45+00:00")
+    _write_feature_manifest(inner, "T1", [           # 배열이 날짜 내림차순 — 생산자가 뒤집어 썼다
+        _manifest_partition("ko", "2026-08-28", ["moved"]),
+        _manifest_partition("ko", "2026-08-27", ["moved"]),
+    ])
+    conn = _FakeConn(documents=[("moved", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(inner, "L1", db=_db(), input_run_id="T1") == 0
+
+    [(_, _, event_type, _, _, _)] = _inserts(conn, "document_assertion")
+    assert event_type == "SUPPLY_CONTRACT"  # 배열 순서와 무관하게 늦은 파티션이 이긴다
+
+
 def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):
     """주장 1건 = document_assertion 1행 + 해소된 argument — document_id 는 자연키로
     해소된 실제 행이어야 FK 가 살고, available_at 은 **그 document 의 가용 시각**이다.

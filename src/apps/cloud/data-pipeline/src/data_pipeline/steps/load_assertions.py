@@ -53,9 +53,12 @@ ADR-0027 대비: 도메인 ID 는 `<접두사>_<ULID>` 가 기본이지만 이 �
 URL)` 이라 불변인데 파티션 키 `published_date` 는 **이동한다** — BigKinds 가 같은 원문 URL 을
 다른 `DATE`·`NEWS_ID` 로 재등록하는 것이 실측됐다(2026-08-28 00:12 수집분 8건: 08-27 11:14
 발행이 08-28 23:32 로 재등록). 옛 파티션 행은 아무도 지우지 않으므로(레이크 버킷은 버저닝이
-없어 삭제가 복구 불가, ALPHA-982 와 같은 이유) 한 기사가 두 파티션에 남는다. 이 스텝은 그걸
-**언어 단위 `_merge_by_article` 로 최신 판정만 남겨** 흡수한다 — 파티션 안 압축(part↔미러,
+없어 삭제가 복구 불가, ALPHA-982 와 같은 이유) 한 기사가 두 파티션에 남는다. 이 스텝은
+**언어 단위 `_merge_by_article` 로 최신 판정만 싣는다** — 파티션 안 압축(part↔미러,
 ALPHA-900)과 같은 규칙이다. 실패로 다루면 그날 런 전체가 죽고 그 범위가 유실된다(ALPHA-1052).
+⚠️ 보장 범위는 **이 런이 무엇을 싣는가**까지다. 앞선 런이 이미 실은 옛 판정은 자연키가
+갈리면 DB 에 그대로 남는다(`ON CONFLICT DO NOTHING` 이라 덮이지도 않는다 — ALPHA-900 이
+파티션 안에서 적은 것과 같은 잔재이고, 지우는 주체는 아직 없다: ALPHA-1052).
 
 `modality_code` 는 비운다 — 어휘 미정의(ALPHA-361). 값을 발명하면 그게 계약이 된다.
 `available_at` 은 **document 의 가용 시각**이다 — 주장의 PIT 기준은 원문 발행·수집이지
@@ -240,12 +243,20 @@ def run(
             # 파티션마다 접은 행을 여기 모아 **언어 단위로 한 번 더** 접는다(아래 주석).
             language_keyed: list[dict] = []
             language_unkeyed: list[dict] = []
-            scopes = (
+            # ⚠️ **날짜 오름차순은 여기서 세운다**(ALPHA-1051). 아래 언어 단위 접기의 동률
+            # 규칙("늦은 파티션이 이긴다")이 순회 순서에 걸려 있는데, manifest 경로의 순서는
+            # 생산자가 정한 배열 순서다 — `_manifest_partitions` 는 날짜·키·파티션 중복만
+            # 보고 정렬은 검증하지 않는다. 생산자(`tag_news.changed_partitions`)가 지금은
+            # 정렬해 쓰지만 그건 **이 파일이 강제하는 사실이 아니라 저쪽의 구현**이고,
+            # 뒤집힌 배열이 오면 같은 입력에 다른 행이 적재된다. 여기서 정렬해 두 경로의
+            # 순회 순서를 같게 만든다(`_partition_dates` 는 이미 오름차순이다).
+            scopes = sorted(
                 [(date, key, ids) for lang, date, key, ids in manifest_partitions if lang == language]
                 if manifest_partitions is not None else
                 [(date, None, None) for date in _partition_dates(storage, language)
                  if (from_date is None or date >= from_date)
-                 and (to_date is None or date <= to_date)]
+                 and (to_date is None or date <= to_date)],
+                key=lambda scope: scope[0],
             )
             for date, direct_key, article_ids in scopes:
                 prefix = feature_news_assertions_partition(language, date)
