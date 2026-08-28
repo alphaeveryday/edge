@@ -529,7 +529,10 @@ def test_overlapping_scopes_read_the_part_file_once(tmp_path, monkeypatch):
     inner.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
         "run_id": "T0", "producer": "tag_news", "feature_written": True,
         "started_at": "2026-08-25T15:00:00+00:00",
-        "feature_partitions": [_manifest_partition("ko", "2026-08-26", ["older"])],
+        # ⚠️ `current` 가 **두 manifest 에 다 있다** — tag_news 가 두 런에서 같은 기사를
+        # 다시 태깅하면(미러 흡수 뒤 재태깅) 정상으로 생기는 모양이다. 이게 없으면 두 범위가
+        # 같은 파티션을 가리켜도 행이 안 겹쳐 겹침 처리가 시험되지 않는다.
+        "feature_partitions": [_manifest_partition("ko", "2026-08-26", ["older", "current"])],
     }).encode("utf-8"))
     _write_feature_manifest(
         inner, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
@@ -540,7 +543,13 @@ def test_overlapping_scopes_read_the_part_file_once(tmp_path, monkeypatch):
 
     part_key = _manifest_partition("ko", "2026-08-26", [])["key"]
     assert storage.get_calls.count(part_key) == 1     # 두 범위가 같은 part 를 한 번만 GET
-    assert _log(inner)["physical_rows_read"] == 2     # 4 면 이중 계수다
+    log = _log(inner)
+    assert log["physical_rows_read"] == 2             # 4 면 이중 계수다
+    # ⚠️ GET 만 한 번이면 충분하지 않다 — 같은 행을 두 범위가 각각 담으면 언어 단위 접기가
+    # 그 차이를 **파티션 이동으로 계수해** ALPHA-1051 신호가 거짓이 된다. 이동은 없었다.
+    assert log["rows_moved_partitions"] == 0
+    assert log["rows_superseded"] == 0
+    assert log["logical_rows_read"] == 2
 
 
 def test_consumed_manifest_is_not_carried_again(tmp_path, monkeypatch):
@@ -610,6 +619,8 @@ def test_a_broken_carried_scope_never_kills_this_run(tmp_path, monkeypatch, door
     assert loaded == {"SUPPLY_CONTRACT"}
     carry = _log(storage)["manifest_carry_forward"]
     assert (carry["pending"], carry["carried"], carry["failed"]) == (1, 0, 1)
+    # 읽기 실패는 문서 결손이 아니다 — 섞으면 두 사유가 로그에서 안 갈린다
+    assert carry["blocked_by_missing_document"] == 0
     assert storage.list_keys(_consumed_key("T0")) == []   # 다음 런이 다시 집는다
     assert storage.list_keys(_consumed_key("T1"))         # 제 범위는 소비 완료다
 

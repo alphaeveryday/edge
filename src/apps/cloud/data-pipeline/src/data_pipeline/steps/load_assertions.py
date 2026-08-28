@@ -332,6 +332,8 @@ def run(
     missing_article_ids: set[str] = set()
     failed_carried: set[str] = set()   # 읽기 단계에서 격리된 회수 범위 — 마커를 안 남긴다
     parquet_cache: dict[str, list[dict]] = {}
+    seen_scope_rows: set[tuple[str, str, str]] = set()   # 소유자 범위가 겹칠 때 같은 행 재적재 방지
+    counted_partitions: set[tuple[str, str]] = set()     # 파티션 단위 계수를 소유자마다 반복하지 않게
 
     try:
         if input_run_id is not None and (from_date is not None or to_date is not None):
@@ -379,12 +381,12 @@ def run(
                 key=lambda scope: scope[0],
             )
             for date, direct_key, article_ids, owner in scopes:
-              # ⚠️ **회수 범위의 실패는 여기서 막는다**(ALPHA-1052). manifest JSON 이 멀쩡해도
-              # 그 범위의 parquet GET·`missing`·날짜 대조가 죽을 수 있다 — 옛 manifest 가
-              # 가리키는 article_id 가 그 사이 되쓰기로 part 에서 사라졌다면(ALPHA-982) 매
-              # 후속 런이 같은 자리에서 죽어 레인이 창 만료까지 정지한다. 제 범위(owner
-              # None)의 실패는 이 런의 계약이라 그대로 올린다.
-              try:
+                # ⚠️ **회수 범위의 실패는 여기서 막는다**(ALPHA-1052). manifest JSON 이
+                # 멀쩡해도 그 범위의 parquet GET·`missing`·날짜 대조가 죽을 수 있다 — 옛
+                # manifest 가 가리키는 article_id 가 그 사이 되쓰기로 part 에서 사라졌다면
+                # (ALPHA-982) 매 후속 런이 같은 자리에서 죽어 레인이 창 만료까지 정지한다.
+                # 제 범위(owner None)의 실패는 이 런의 계약이라 그대로 올린다.
+                try:
                     prefix = feature_news_assertions_partition(language, date)
                     mirror_marker = feature_news_assertions_minute_prefix(language, date)
                     partition_rows: list[dict] = []
@@ -437,12 +439,25 @@ def run(
                                     f"key={direct_key}, article_id={article_id}"
                                 )
                         unkeyed: list[dict] = []
-                        rows_superseded += len(selected) - len(keyed)
+                        if (language, date) not in counted_partitions:
+                            rows_superseded += len(selected) - len(keyed)
                     else:
                         unkeyed = [r for r in partition_rows if not r.get("article_id")]
                         keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
-                        rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
-                    language_keyed.extend(keyed.values())
+                        if (language, date) not in counted_partitions:
+                            rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
+                    # ⚠️ **같은 파티션을 두 소유자 범위가 함께 가리키는 것이 정상이다**(인접
+                    # 날짜·이동 기사). 그때 같은 행을 두 번 담으면 아래 언어 단위 접기가 그
+                    # 차이를 **파티션 이동으로 계수해** `rows_moved_partitions` 가 이동 없이
+                    # 증가한다 — ALPHA-1051 이 새로 만든 신호가 거짓이 된다. 파티션 안에서
+                    # 접힌 수(`rows_superseded`)도 소유자 수만큼 반복 계수된다. 담는 자리에서
+                    # 한 번만 세고 한 번만 담는다(edge-review 검증 라운드).
+                    counted_partitions.add((language, date))
+                    for article_id, row in keyed.items():
+                        if (language, date, article_id) in seen_scope_rows:
+                            continue
+                        seen_scope_rows.add((language, date, article_id))
+                        language_keyed.append(row)
                     language_unkeyed.extend(unkeyed)
                 # ⚠️ **한 기사가 두 파티션에 있을 수 있다**(ALPHA-1051). 벤더가 같은 원문 URL 을
                 # 다른 날짜로 재등록하면 `published_date` 가 이동하는데 옛 파티션 행은 남는다.
@@ -452,17 +467,17 @@ def run(
                 # 그래서 파티션 안과 **같은 규칙**으로 한 번 더 접는다(최신 `tagged_at` 승).
                 # 같은 런이 두 파티션을 다 바꾸면 배치 행의 `tagged_at`(런 시작 시각)이 균일해
                 # 동률인데, 그때는 날짜 오름차순 순회 + `>=` 로 **늦은 날짜가 이긴다**. 결정적이다.
-              except Exception as exc:
-                  if owner is None:
-                      raise
-                  logger.exception("회수 범위 읽기 실패(격리): run_id=%s", owner)
-                  failures.append({"reasons": ["carry_forward_read_error"],
-                                   "input_run_id": owner, "error": str(exc)})
-                  if owner not in failed_carried:
-                      carry_counters["failed"] += 1
-                      carry_counters["carried"] -= 1
-                      failed_carried.add(owner)
-                  continue
+                except Exception as exc:
+                    if owner is None:
+                        raise
+                    logger.exception("회수 범위 읽기 실패(격리): run_id=%s", owner)
+                    failures.append({"reasons": ["carry_forward_read_error"],
+                                     "input_run_id": owner, "error": str(exc)})
+                    if owner not in failed_carried:
+                        carry_counters["failed"] += 1
+                        carry_counters["carried"] -= 1
+                        failed_carried.add(owner)
+                    continue
 
             merged = _merge_by_article(language_keyed)
             rows_moved_partitions += len(language_keyed) - len(merged)
@@ -731,11 +746,12 @@ def run(
     # 게이트가 아니다 — 재실행해도 같은 값이 나오는 **결정적 제외**라 막으면 이 범위가 영영
     # 소비 완료가 안 되고 매 런 다시 실린다(반대 방향의 같은 고장).
     if exit_code == 0 and input_run_id is not None:
-        landed = [r for r in [input_run_id, *carried_run_ids]
-                  if r not in failed_carried
-                  and not (scope_ids_by_run.get(r, set()) & missing_article_ids)]
-        carry_counters["blocked_by_missing_document"] = (
-            1 + len(carried_run_ids)) - len(landed)
+        # 읽기 단계에서 격리된 범위는 이 카운터의 분모가 아니다 — 섞으면 읽기 실패가 문서
+        # 결손으로도 중복 보고돼, 두 사유가 로그에서 안 갈린다(edge-review 검증 라운드).
+        eligible = [r for r in [input_run_id, *carried_run_ids] if r not in failed_carried]
+        landed = [r for r in eligible
+                  if not (scope_ids_by_run.get(r, set()) & missing_article_ids)]
+        carry_counters["blocked_by_missing_document"] = len(eligible) - len(landed)
         for consumed_run_id in landed:
             try:
                 storage.put_bytes(
