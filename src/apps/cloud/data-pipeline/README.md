@@ -960,7 +960,15 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   논리 행을 quality log에서 분리한다. 과거 일부/전체 복구는 `--from/--to`/명시 `--all`이다.
   한 파티션에 같은 기사의 판정이 둘 있으면 **`tagged_at` 최신만 싣는다**(ALPHA-900,
   `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건 자연키가 갈린 옛
-  판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다. **흡수 전 장중 미러는
+  판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다.
+  **파티션 사이도 같은 규칙이다**(ALPHA-1051, `rows_moved_partitions`) — `article_id` 는 원문
+  URL 해시라 불변인데 `published_date` 는 벤더 재등록으로 **이동하고**(BigKinds 가 같은 URL 을
+  다른 `DATE`·`NEWS_ID` 로 다시 준다) 옛 파티션 행은 아무도 지우지 않아 한 기사가 두 파티션에
+  남는다. 이걸 manifest 손상으로 보고 실패하면 그 런의 범위가 통째로 유실된다(ALPHA-1052) —
+  손상이 아니므로 최신 판정만 싣고 계속 간다. 소비 순서는 이 스텝이 날짜 오름차순으로
+  세운다(동률이면 늦은 파티션 승 — 생산자 배열 순서에 안 걸리게). 보장 범위는 **이번 런이
+  싣는 행**까지고, 앞선 런이 이미 실은 옛 판정은 자연키가 갈리면 DB 에 남는다(ALPHA-1052).
+  **흡수 전 장중 미러는
   읽지 않는다**(`minute_mirrors_unabsorbed`) — 그 조각은 아직 `tag-news` 의 mentions 게이트를
   안 거쳤다.
   역할별 엔티티 해소(ALPHA-831 — 명부·채번 축 포함)와 해소율은 quality log 로 남고,
