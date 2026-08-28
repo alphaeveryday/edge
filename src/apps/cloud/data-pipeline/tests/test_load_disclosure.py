@@ -716,6 +716,29 @@ def test_newer_canonical_wins_when_its_enqueue_previously_failed(tmp_path, monke
     assert _inserts(conn, "supply_contract_fact")[0][5] == 200
 
 
+def test_equal_revision_manifest_winners_drop_stale_segment_ordinals(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): parser correction이 segment 수를 줄여도 shared merge에는 옛 ordinal이
+    남는다. 값이 같은 현재 winner 집합은 manifest 범위를 따라야 obsolete fact를 재적재하지 않는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    current = _segment("R1", 0)
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [current, _segment("R1", 1, segment_name="obsolete")])
+    _dual_manifests(storage, "T2")
+    payload = json.dumps([current], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn = _FakeConn()
+    conn.pending["R1"] = {
+        "disclosure_type": "BUSINESS_SEGMENT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(current["fetched_at"]),
+        "attempt_count": 0, "first_run": "T1", "last_run": "T1",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T2") == 0
+
+    assert conn.pending == {}
+    assert len(_inserts(conn, "business_segment_fact")) == 1
+
+
 def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
     """DB 가 터지면 트레이스백이 아니라 비0 종료 + 로그로 드러나야 한다(Rule 12). 롤백된 런이
     만들었다고 주장하면 다음 사람이 DB 에 있다고 믿는다."""

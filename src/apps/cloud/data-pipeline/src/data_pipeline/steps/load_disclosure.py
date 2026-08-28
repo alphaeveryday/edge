@@ -237,9 +237,20 @@ def _merge_pending(canonical_rows: list[dict], pending: dict[str, list[dict]],
     for rcept_no, pending_rows in pending.items():
         current = grouped.get(rcept_no)
         item = pending_by_rcept[rcept_no]
-        # 동률이면 가장 최근 normalizer가 쓴 shared canonical이 파서 correction 정본이다.
-        if current is None or item["source_fetched_at"] > _source_revision(current):
+        pending_revision = item["source_fetched_at"]
+        current_revision = _source_revision(current) if current is not None else None
+        if current is None or pending_revision > current_revision:
             grouped[rcept_no] = pending_rows
+        elif pending_revision == current_revision:
+            current_by_identity = {
+                (row["rcept_no"], row.get("segment_ordinal")): row for row in current
+            }
+            # pending winner 행이 shared canonical과 같으면 manifest의 정확한 ID 집합이
+            # 이긴다. 값이 다른 동률 correction이면 shared canonical을 유지한다.
+            if all(current_by_identity.get(
+                    (row["rcept_no"], row.get("segment_ordinal"))) == row
+                    for row in pending_rows):
+                grouped[rcept_no] = pending_rows
     return [row for rcept_no in sorted(grouped) for row in grouped[rcept_no]]
 
 
