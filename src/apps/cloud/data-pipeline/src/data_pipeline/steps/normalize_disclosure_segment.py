@@ -30,6 +30,7 @@ from ..lake import (
     Storage,
     canonical_business_segment_fact_partition,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     is_raw_disclosure_key,
     parse_raw_disclosure_key,
     quality_log_key,
@@ -175,7 +176,7 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     return [acc[k] for k in sorted(acc, key=lambda k: (str(k[0]), int(k[1])))]
 
 
-def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict], int]:
+def _write_canonical(storage: Storage, passing: list[dict], run_id: str) -> tuple[list[dict], int]:
     by_partition: dict[str, list[dict]] = defaultdict(list)
     for row in passing:
         by_partition[row["report_date"]].append(row)
@@ -196,9 +197,13 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict],
         digest = hashlib.sha256(parquet_bytes).hexdigest()
         if hashlib.sha256(storage.get_bytes(key)).hexdigest() != digest:
             raise OSError(f"canonical parquet 무결성 검증 실패: {key}")
+        manifest_key = canonical_run_partition_key(DATASET, run_id, report_date)
+        storage.put_bytes(manifest_key, parquet_bytes)
+        if hashlib.sha256(storage.get_bytes(manifest_key)).hexdigest() != digest:
+            raise OSError(f"run canonical parquet 무결성 검증 실패: {manifest_key}")
         partitions.append({
             "report_date": report_date,
-            "key": key,
+            "key": manifest_key,
             "sha256": digest,
             "winner_ids": [
                 {"rcept_no": rcept_no, "segment_ordinal": ordinal}
@@ -345,7 +350,7 @@ def run(
     canonical_written = False
     if manifest_initialized:
         try:
-            partitions, canonical_rows = _write_canonical(storage, passing)
+            partitions, canonical_rows = _write_canonical(storage, passing, run_id)
             canonical_written = True
         except Exception:
             logger.exception("canonical 적재·무결성 검증 실패")

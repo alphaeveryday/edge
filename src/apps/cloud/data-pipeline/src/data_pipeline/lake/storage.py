@@ -757,6 +757,14 @@ def canonical_run_manifest_key(dataset: str, run_id: str) -> str:
     )
 
 
+def canonical_run_partition_key(dataset: str, run_id: str, report_date: str) -> str:
+    """manifest 소비용 run-scoped immutable canonical parquet 키."""
+    return (
+        f"operations_archive/canonical_run_artifacts/dataset={dataset}"
+        f"/run_id={run_id}/report_date={report_date}/part-00000.parquet"
+    )
+
+
 def feature_run_manifest_key(dataset: str, run_id: str) -> str:
     """feature producer가 현재 실행에서 바꾼 직접 파티션·논리 ID manifest 키."""
     return (

@@ -53,6 +53,7 @@ from ..lake import (
     Storage,
     canonical_business_segment_fact_partition,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     canonical_supply_contract_fact_partition,
     quality_log_key,
 )
@@ -77,10 +78,8 @@ _PARTIAL_EXIT_CODE = 2
 _PENDING_ENQUEUE_LOCK = 0x444953434C4F5355
 
 _MANIFESTS = (
-    ("supply_contract_fact", "normalize_disclosure", "SUPPLY_CONTRACT",
-     canonical_supply_contract_fact_partition),
-    ("business_segment_fact", "normalize_disclosure_segment", "BUSINESS_SEGMENT",
-     canonical_business_segment_fact_partition),
+    ("supply_contract_fact", "normalize_disclosure", "SUPPLY_CONTRACT"),
+    ("business_segment_fact", "normalize_disclosure_segment", "BUSINESS_SEGMENT"),
 )
 
 
@@ -89,7 +88,7 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
     winners: list[dict] = []
     seen: set[str] = set()
     seen_keys: set[str] = set()
-    for dataset, producer, disclosure_type, builder in _MANIFESTS:
+    for dataset, producer, disclosure_type in _MANIFESTS:
         manifest = json.loads(storage.get_bytes(
             canonical_run_manifest_key(dataset, run_id)).decode("utf-8"))
         if (not isinstance(manifest, dict) or manifest.get("run_id") != run_id
@@ -104,7 +103,7 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
                               and date.fromisoformat(report_date).isoformat() == report_date)
             except ValueError:
                 valid_date = False
-            expected_key = (f"{builder(report_date)}/part-00000.parquet"
+            expected_key = (canonical_run_partition_key(dataset, run_id, report_date)
                             if valid_date else None)
             key, digest, ids = part.get("key"), part.get("sha256"), part.get("winner_ids")
             if (key != expected_key or key in seen_keys
@@ -230,15 +229,16 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
 
 def _source_revision(rows: list[dict]) -> datetime:
     """canonical fetched_at 최댓값을 payload의 단조 source revision으로 확정한다."""
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
     revisions = []
     for row in rows:
         value = row.get("fetched_at")
         try:
-            revision = datetime.fromisoformat(value) if isinstance(value, str) else None
+            revision = datetime.fromisoformat(value) if isinstance(value, str) else oldest
         except ValueError:
-            revision = None
-        if revision is None or revision.tzinfo is None:
-            raise ValueError(f"공시 canonical fetched_at이 유효하지 않다: {value!r}")
+            revision = oldest
+        if revision.tzinfo is None:
+            revision = revision.replace(tzinfo=timezone.utc)
         revisions.append(revision)
     return max(revisions)
 

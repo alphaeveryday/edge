@@ -21,6 +21,7 @@ from data_pipeline.lake import (
     LocalStorage,
     canonical_business_segment_fact_partition,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     canonical_supply_contract_fact_partition,
 )
 from data_pipeline.steps import load_disclosure
@@ -196,6 +197,8 @@ def _write_manifest(storage, run_id, dataset, producer, builder, date=None, rcep
     if date is not None:
         key = f"{builder(date)}/part-00000.parquet"
         data = storage.get_bytes(key)
+        key = canonical_run_partition_key(dataset, run_id, date)
+        storage.put_bytes(key, data)
         if producer == "normalize_disclosure_segment":
             winner_ids = [
                 {"rcept_no": row["rcept_no"], "segment_ordinal": row["segment_ordinal"]}
@@ -322,6 +325,34 @@ def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_pa
     assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
     assert len(_inserts(conn, "business_segment_fact")) == 2
     assert conn.pending == {}
+
+
+def test_run_scoped_manifest_survives_shared_canonical_overwrite(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 다른 normalize 런이 report-date canonical을 덮어써도 먼저 완료된
+    manifest의 immutable 바이트는 남아야 그 winner를 durable ledger에 넣을 수 있다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1", amount_krw=1)])
+    _dual_manifests(storage, "T-old", supply=("R1",))
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1", amount_krw=2,
+                                   fetched_at="2026-07-16T02:00:00+00:00")])
+    _dual_manifests(storage, "T-new", supply=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T-old") == 0
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 1
+
+
+def test_source_revision_matches_producer_leniency():
+    """WHY(ALPHA-1045): producer가 허용한 결측·오류·naive fetched_at을 consumer가 더 엄격하게
+    막으면 completed manifest 전체가 enqueue되지 않는다."""
+    oldest = datetime.min.replace(tzinfo=load_disclosure.timezone.utc)
+    assert load_disclosure._source_revision([_supply("R1", fetched_at=None)]) == oldest
+    assert load_disclosure._source_revision([_supply("R1", fetched_at="bad")]) == oldest
+    assert load_disclosure._source_revision([
+        _supply("R1", fetched_at="2026-07-16T01:00:00")
+    ]).tzinfo is not None
 
 
 def test_unresolved_issuer_stays_pending_and_next_normal_run_recovers(tmp_path, monkeypatch):

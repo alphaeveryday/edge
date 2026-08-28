@@ -44,6 +44,7 @@ from datetime import datetime, timedelta, timezone
 from ..lake import (
     Storage,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     canonical_supply_contract_fact_partition,
     is_raw_disclosure_key,
     parse_raw_disclosure_key,
@@ -212,7 +213,7 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     return [acc[r] for r in sorted(acc)]
 
 
-def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict], int]:
+def _write_canonical(storage: Storage, passing: list[dict], run_id: str) -> tuple[list[dict], int]:
     """통과 fact 를 report_date 파티션별로 기존 canonical 과 rcept_no 키로 멱등 병합해 쓴다.
     반환: (이번 실행의 성공 winner manifest 항목, 병합 뒤 canonical 행 수)."""
     by_partition: dict[str, list[dict]] = defaultdict(list)
@@ -238,9 +239,13 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict],
         digest = hashlib.sha256(parquet_bytes).hexdigest()
         if hashlib.sha256(storage.get_bytes(key)).hexdigest() != digest:
             raise OSError(f"canonical parquet 무결성 검증 실패: {key}")
+        manifest_key = canonical_run_partition_key(DATASET, run_id, report_date)
+        storage.put_bytes(manifest_key, parquet_bytes)
+        if hashlib.sha256(storage.get_bytes(manifest_key)).hexdigest() != digest:
+            raise OSError(f"run canonical parquet 무결성 검증 실패: {manifest_key}")
         partitions.append({
             "report_date": report_date,
-            "key": key,
+            "key": manifest_key,
             "sha256": digest,
             "winner_ids": [
                 {"rcept_no": rcept_no}
@@ -400,7 +405,7 @@ def run(
     canonical_written = False
     if manifest_initialized:
         try:
-            partitions, canonical_rows = _write_canonical(storage, passing)
+            partitions, canonical_rows = _write_canonical(storage, passing, run_id)
             canonical_written = True
         except Exception:
             logger.exception("canonical 적재·무결성 검증 실패")
