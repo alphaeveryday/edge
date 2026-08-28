@@ -26,7 +26,8 @@ RESTRICT 로 요구한다. canonical 의 `corp_code`(8자리 dart)를 `company_p
 **durable pending ledger(ALPHA-1045)**: 정상 경로는 공급계약·사업부문 completed manifest의
 direct key·SHA·winner를 검증하고 canonical 행 자체를 `disclosure_load_pending`에 먼저 commit한다.
 성공한 ID만 typed-fact transaction 안에서 삭제한다. issuer 미해소·검증 거절·일시 DB 실패는
-다음 정상 실행이 다시 시도하며, 보존 만료와 lifetime retry cutoff는 없다(한 ID당 한 실행 1회).
+다음 eligible 정상 실행이 다시 시도하며, 보존 만료와 lifetime retry cutoff는 없다(날짜 범위
+실행은 같은 report_date 범위만, 무창 실행은 전량을 한 ID당 한 실행 1회 시도한다).
 항목별 SAVEPOINT라 한 ID 실패가 다른 성공을 롤백하지 않는다. 기존 canonical full scan은 아직
 옛 backlog를 회수하므로 유지한다 — 원장만으로 회수가 증명된 뒤 consumer 전환 PR에서 제거한다.
 
@@ -183,9 +184,9 @@ def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
                 " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error_code ELSE NULL END,"
                 " last_error=CASE WHEN disclosure_load_pending.payload_sha256"
                 " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error ELSE NULL END"
-                " WHERE disclosure_load_pending.source_fetched_at < EXCLUDED.source_fetched_at"
-                " OR (disclosure_load_pending.source_fetched_at = EXCLUDED.source_fetched_at"
-                " AND disclosure_load_pending.payload_sha256 = EXCLUDED.payload_sha256)",
+                # fetched_at 동률은 advisory lock으로 직렬화된 enqueue 순서가 revision이다.
+                # 파서 재실행은 같은 raw 관측에서도 payload를 정정할 수 있으므로 뒤 실행이 이긴다.
+                " WHERE disclosure_load_pending.source_fetched_at <= EXCLUDED.source_fetched_at",
                 (winner["rcept_no"], winner["disclosure_type"], winner["payload"],
                  winner["payload_sha256"], winner["source_fetched_at"], run_id, run_id),
             )
@@ -205,6 +206,24 @@ def _pending_rows(conn) -> list[dict]:
                  "rows": json.loads(rows) if isinstance(rows, str) else rows,
                  "payload_sha256": digest, "attempt_count": attempts}
                 for r, t, rows, digest, attempts in cur.fetchall()]
+
+
+def _pending_in_window(pending: list[dict], from_date: str | None,
+                       to_date: str | None) -> list[dict]:
+    """범위 실행은 그 report_date의 pending만 재시도한다. 무창 실행은 전부 회수한다."""
+    if from_date is None and to_date is None:
+        return pending
+    selected = []
+    for item in pending:
+        report_dates = {row.get("report_date") for row in item["rows"]
+                        if isinstance(row, dict) and isinstance(row.get("report_date"), str)}
+        if len(report_dates) != 1:
+            continue
+        report_date = next(iter(report_dates))
+        if ((from_date is None or report_date >= from_date)
+                and (to_date is None or report_date <= to_date)):
+            selected.append(item)
+    return selected
 
 
 def _mark_pending_failure(conn, pending: dict | None, code: str, error: str | None = None) -> None:
@@ -414,8 +433,9 @@ def run(
         seen_fact_ids: set[str] = set()
 
         with connect(db) as conn:
-            pending = _pending_rows(conn) if input_run_id is not None else []
-            pending_before = len(pending)
+            all_pending = _pending_rows(conn) if input_run_id is not None else []
+            pending_before = len(all_pending)
+            pending = _pending_in_window(all_pending, from_date, to_date)
             pending_by_rcept = {item["rcept_no"]: item for item in pending}
             # 원장 payload가 같은 논리 ID의 canonical full-scan 행보다 우선한다. 그래야 mutable
             # parquet가 다음 정제에 덮여도 enqueue 시점 winner를 정확히 재시도한다.
@@ -580,7 +600,8 @@ def run(
         "pending_ledger": {
             "before": pending_before, "after": pending_after, "succeeded": pending_succeeded,
             "failed": len(pending_failures), "failed_items": pending_failures[:_SAMPLE_LIMIT],
-            "retention": "until_success", "retry": "once_per_normal_run_no_lifetime_cutoff",
+            "retention": "until_success",
+            "retry": "once_per_eligible_run_no_lifetime_cutoff",
         },
         # 원장 관측용 공통 봉투(ALPHA-181). 산출은 fact 행이다(문서는 그 부속). 발행사 미해소·
         # 보고일 결측·유효 fact 없음·거절은 그 공시가 fact 로 안 남은 유실이다.

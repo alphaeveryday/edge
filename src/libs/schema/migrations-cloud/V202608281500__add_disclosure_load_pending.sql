@@ -23,7 +23,7 @@ CREATE TABLE disclosure_load_pending (
 );
 
 COMMENT ON TABLE disclosure_load_pending IS
-'Completed disclosure manifest winners awaiting successful typed-fact load. Rows have no age expiry or lifetime retry cutoff: each normal run tries each ID at most once, success deletes it atomically, and failures remain observable through attempt_count/error fields.';
+'Completed disclosure manifest winners awaiting successful typed-fact load. Rows have no age expiry or lifetime retry cutoff: each eligible run tries each ID at most once (bounded runs match report_date; unbounded runs try all), success deletes it atomically, and failures remain observable through attempt_count/error fields.';
 
 CREATE INDEX idx_disclosure_load_pending_retry
     ON disclosure_load_pending (last_attempted_at NULLS FIRST, first_seen_at, rcept_no);

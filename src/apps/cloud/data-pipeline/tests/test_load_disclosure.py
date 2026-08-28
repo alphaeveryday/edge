@@ -89,9 +89,7 @@ class _FakeCursor:
         if upper.startswith("INSERT INTO DISCLOSURE_LOAD_PENDING"):
             rcept_no, dtype, rows, digest, source_fetched_at, first_run, last_run = params
             old = self._conn.pending.get(rcept_no)
-            accepted = (not old or source_fetched_at > old["source_fetched_at"]
-                        or (source_fetched_at == old["source_fetched_at"]
-                            and digest == old["payload_sha256"]))
+            accepted = not old or source_fetched_at >= old["source_fetched_at"]
             self.rowcount = int(accepted)
             if not accepted:
                 return
@@ -247,7 +245,7 @@ def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path,
                     i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO document "))
     assert _log(storage)["pending_ledger"] == {
         "before": 1, "after": 0, "succeeded": 1, "failed": 0, "failed_items": [],
-        "retention": "until_success", "retry": "once_per_normal_run_no_lifetime_cutoff",
+        "retention": "until_success", "retry": "once_per_eligible_run_no_lifetime_cutoff",
     }
 
 
@@ -290,6 +288,28 @@ def test_older_source_revision_cannot_replace_newer_pending(tmp_path, monkeypatc
         load_disclosure._enqueue_winners(_db(), storage, "old-run")
 
     assert conn.pending["R1"]["payload_sha256"] == "a" * 64
+
+
+def test_equal_source_revision_accepts_later_parser_correction(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 같은 raw 관측을 새 파서로 재정규화하면 fetched_at은 같고 payload만
+    바뀐다. enqueue lock의 뒤 실행을 거부하면 correction과 무관한 winner까지 함께 막힌다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    revision = datetime.fromisoformat("2026-07-16T02:00:00+00:00")
+    winner = {
+        "rcept_no": "R1", "disclosure_type": "SUPPLY_CONTRACT", "rows": [_supply("R1")],
+        "payload": "old-parser", "payload_sha256": "a" * 64,
+        "source_fetched_at": revision,
+    }
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [winner])
+    load_disclosure._enqueue_winners(_db(), storage, "parser-v1")
+    corrected = {**winner, "payload": "new-parser", "payload_sha256": "b" * 64}
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [corrected])
+
+    load_disclosure._enqueue_winners(_db(), storage, "parser-v2")
+
+    assert conn.pending["R1"]["payload_sha256"] == "b" * 64
 
 
 def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
@@ -616,6 +636,28 @@ def test_window_prunes_partitions(tmp_path, monkeypatch):
     conn = _FakeConn()
     assert _run(storage, conn, monkeypatch, from_date="2026-06-30", to_date="2026-06-30") == 0
     assert [p[2] for p in _inserts(conn, "document")] == ["R-in"]
+
+
+def test_window_does_not_consume_pending_outside_event_assembly_scope(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 창 밖 pending을 typed fact로 성공·삭제하면 같은 창으로 도는 event
+    assembler가 그 fact를 못 보고 durable recovery가 조용히 끊긴다. 무창 실행이 회수해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _dual_manifests(storage, "T1")
+    conn = _FakeConn()
+    old = _supply("R-old", report_date="2026-06-29")
+    payload = json.dumps([old], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn.pending["R-old"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(old["fetched_at"]),
+        "attempt_count": 0, "first_run": "old", "last_run": "old",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1",
+                from_date="2026-06-30", to_date="2026-06-30") == 0
+
+    assert set(conn.pending) == {"R-old"}
+    assert _inserts(conn, "document") == []
 
 
 def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
