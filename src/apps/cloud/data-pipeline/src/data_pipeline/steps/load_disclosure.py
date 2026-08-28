@@ -154,7 +154,8 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
                                      separators=(",", ":"))
                 winners.append({"rcept_no": rcept_no, "disclosure_type": disclosure_type,
                                 "rows": selected_rows, "payload": payload,
-                                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest()})
+                                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                                "source_fetched_at": _source_revision(selected_rows)})
     return winners
 
 
@@ -165,24 +166,34 @@ def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
         winners = _manifest_winners(storage, run_id)
         if not winners:
             return
-        cur.executemany(
-            "INSERT INTO disclosure_load_pending (rcept_no, disclosure_type, canonical_rows,"
-            " payload_sha256, first_seen_run_id, last_seen_run_id)"
-            " VALUES (%s,%s,%s,%s,%s,%s)"
-            " ON CONFLICT (rcept_no) DO UPDATE SET"
-            " disclosure_type=EXCLUDED.disclosure_type, canonical_rows=EXCLUDED.canonical_rows,"
-            " payload_sha256=EXCLUDED.payload_sha256, last_seen_run_id=EXCLUDED.last_seen_run_id,"
-            " last_seen_at=now(), attempt_count=CASE WHEN disclosure_load_pending.payload_sha256"
-            " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.attempt_count ELSE 0 END,"
-            " last_attempted_at=CASE WHEN disclosure_load_pending.payload_sha256"
-            " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_attempted_at ELSE NULL END,"
-            " last_error_code=CASE WHEN disclosure_load_pending.payload_sha256"
-            " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error_code ELSE NULL END,"
-            " last_error=CASE WHEN disclosure_load_pending.payload_sha256"
-            " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error ELSE NULL END",
-            [(w["rcept_no"], w["disclosure_type"], w["payload"], w["payload_sha256"], run_id, run_id)
-             for w in winners],
-        )
+        for winner in winners:
+            cur.execute(
+                "INSERT INTO disclosure_load_pending (rcept_no, disclosure_type, canonical_rows,"
+                " payload_sha256, source_fetched_at, first_seen_run_id, last_seen_run_id)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+                " ON CONFLICT (rcept_no) DO UPDATE SET"
+                " disclosure_type=EXCLUDED.disclosure_type, canonical_rows=EXCLUDED.canonical_rows,"
+                " payload_sha256=EXCLUDED.payload_sha256,"
+                " source_fetched_at=EXCLUDED.source_fetched_at,"
+                " last_seen_run_id=EXCLUDED.last_seen_run_id,"
+                " last_seen_at=now(), attempt_count=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.attempt_count ELSE 0 END,"
+                " last_attempted_at=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_attempted_at ELSE NULL END,"
+                " last_error_code=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error_code ELSE NULL END,"
+                " last_error=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error ELSE NULL END"
+                " WHERE disclosure_load_pending.source_fetched_at < EXCLUDED.source_fetched_at"
+                " OR (disclosure_load_pending.source_fetched_at = EXCLUDED.source_fetched_at"
+                " AND disclosure_load_pending.payload_sha256 = EXCLUDED.payload_sha256)",
+                (winner["rcept_no"], winner["disclosure_type"], winner["payload"],
+                 winner["payload_sha256"], winner["source_fetched_at"], run_id, run_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError(
+                    f"공시 pending source revision이 역행·충돌한다: rcept_no={winner['rcept_no']}"
+                )
 
 
 def _pending_rows(conn) -> list[dict]:
@@ -215,6 +226,21 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
     import pyarrow.parquet as pq
 
     return pq.read_table(io.BytesIO(data)).to_pylist()
+
+
+def _source_revision(rows: list[dict]) -> datetime:
+    """canonical fetched_at 최댓값을 payload의 단조 source revision으로 확정한다."""
+    revisions = []
+    for row in rows:
+        value = row.get("fetched_at")
+        try:
+            revision = datetime.fromisoformat(value) if isinstance(value, str) else None
+        except ValueError:
+            revision = None
+        if revision is None or revision.tzinfo is None:
+            raise ValueError(f"공시 canonical fetched_at이 유효하지 않다: {value!r}")
+        revisions.append(revision)
+    return max(revisions)
 
 
 def _partition_dates(storage: Storage, marker: str) -> list[str]:

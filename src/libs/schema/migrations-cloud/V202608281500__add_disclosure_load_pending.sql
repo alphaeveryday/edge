@@ -6,6 +6,7 @@ CREATE TABLE disclosure_load_pending (
     -- so the loader can reject it loudly; PostgreSQL JSONB cannot represent those values.
     canonical_rows    TEXT NOT NULL,
     payload_sha256    CHAR(64) NOT NULL,
+    source_fetched_at TIMESTAMPTZ NOT NULL,
     first_seen_run_id TEXT NOT NULL,
     last_seen_run_id  TEXT NOT NULL,
     first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -120,6 +120,7 @@ Table "disclosure_load_pending" {
   "disclosure_type" text [not null]
   "canonical_rows" text [not null]
   "payload_sha256" character(64) [not null]
+  "source_fetched_at" timestamptz [not null]
   "first_seen_run_id" text [not null]
   "last_seen_run_id" text [not null]
   "first_seen_at" timestamptz [not null]

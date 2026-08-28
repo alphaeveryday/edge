@@ -9,9 +9,11 @@
 import hashlib
 import io
 import json
+from datetime import datetime
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from data_pipeline.config import DbConfig
 from data_pipeline.db import stable_domain_id
@@ -84,11 +86,18 @@ class _FakeCursor:
         self._log.append((norm, params))
         upper = norm.upper()
         if upper.startswith("INSERT INTO DISCLOSURE_LOAD_PENDING"):
-            rcept_no, dtype, rows, digest, first_run, last_run = params
+            rcept_no, dtype, rows, digest, source_fetched_at, first_run, last_run = params
             old = self._conn.pending.get(rcept_no)
+            accepted = (not old or source_fetched_at > old["source_fetched_at"]
+                        or (source_fetched_at == old["source_fetched_at"]
+                            and digest == old["payload_sha256"]))
+            self.rowcount = int(accepted)
+            if not accepted:
+                return
             attempts = old["attempt_count"] if old and old["payload_sha256"] == digest else 0
             self._conn.pending[rcept_no] = {
                 "disclosure_type": dtype, "rows": rows, "payload_sha256": digest,
+                "source_fetched_at": source_fetched_at,
                 "attempt_count": attempts, "first_run": old["first_run"] if old else first_run,
                 "last_run": last_run,
             }
@@ -255,6 +264,29 @@ def test_manifest_read_and_enqueue_are_serialized(tmp_path, monkeypatch):
     load_disclosure._enqueue_winners(_db(), storage, "T1")
 
     assert observed == [(storage, "T1", "SELECT pg_advisory_xact_lock(%s)")]
+
+
+def test_older_source_revision_cannot_replace_newer_pending(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): lock 획득 순서는 source 최신순이 아니다. 늦게 도착한 과거 fetched_at이
+    최신 correction을 덮지 못하게 실제 source revision으로 조건부 upsert해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    winner = {
+        "rcept_no": "R1", "disclosure_type": "SUPPLY_CONTRACT", "rows": [_supply("R1")],
+        "payload": "new", "payload_sha256": "a" * 64,
+        "source_fetched_at": datetime.fromisoformat("2026-07-16T02:00:00+00:00"),
+    }
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [winner])
+    load_disclosure._enqueue_winners(_db(), storage, "new-run")
+
+    stale = {**winner, "payload": "old", "payload_sha256": "b" * 64,
+             "source_fetched_at": datetime.fromisoformat("2026-07-16T01:00:00+00:00")}
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [stale])
+    with pytest.raises(ValueError, match="source revision"):
+        load_disclosure._enqueue_winners(_db(), storage, "old-run")
+
+    assert conn.pending["R1"]["payload_sha256"] == "a" * 64
 
 
 def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
