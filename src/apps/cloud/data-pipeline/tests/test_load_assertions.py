@@ -632,6 +632,73 @@ def test_one_poisoned_carried_run_does_not_block_the_others(tmp_path, monkeypatc
     assert storage.list_keys(_consumed_key("T0")) == []   # 오염된 run 만 남는다
 
 
+def test_a_rolled_back_group_claims_none_of_its_counters(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): **savepoint 는 DB 쓰기만 되돌린다 — 카운터는 파이썬 변수다.** 롤백된
+    그룹이 이미 올린 `created`·`arguments_inserted`·해소율 분모가 그대로 남으면
+    `ops.records_out` 이 실제 커밋 행보다 커진다. 그룹이 착지 못 했으면 그 그룹의 수는
+    아무것도 안 실어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    # 회수 범위에 주장 둘 — 앞 하나는 INSERT 성공, 뒤에서 터진다. savepoint 가 앞 것도
+    # 되돌리므로 카운터도 앞 것까지 되돌아가야 한다.
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("older", [_assertion(event_type_code="LANDS_FIRST"),
+                               _assertion(event_type_code="OLDER_RUN")],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["older"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
+                     fail_on_event="OLDER_RUN")
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    log = _log(storage)
+    # 자기 범위 한 건만 실렸다 — 롤백된 그룹의 LANDS_FIRST 는 어느 수에도 안 든다
+    assert log["created"] == 1
+    assert log["ops"]["records_out"] == 1
+    assert log["arguments_inserted"] == 1
+    assert log["argument_resolution"]["total"] == 1
+    assert len(log["created_rows_sample"]) == 1
+
+
+def test_a_rolled_back_group_blocks_every_manifest_claiming_its_articles(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 후보는 한 그룹에만 들어가지만 **기사는 여러 manifest 가 주장한다**
+    (재태깅으로 정상 생긴다). 겹치는 기사를 앞 그룹이 가져갔는데 그 그룹이 롤백되면, 뒤
+    manifest 의 그룹은 비어 있어 "성공"으로 보이고 마커를 받는다 — 그러면 그 기사는 어느
+    manifest 로도 다시 안 실린다(앞 manifest 는 창 만료 때 skipped 로 닫힌다)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("shared", [_assertion(event_type_code="OLDER_RUN")],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00")])
+    for run_id in ("T0", "T00"):        # 둘 다 같은 기사를 주장한다
+        storage.put_bytes(feature_run_manifest_key("news_assertions", run_id), json.dumps({
+            "run_id": run_id, "producer": "tag_news", "feature_written": True,
+            "started_at": "2026-08-25T15:00:00+00:00",
+            "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["shared"])],
+        }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _FakeConn(documents=[("shared", "doc_SHR"), ("current", "doc_CUR")],
+                     fail_on_event="OLDER_RUN")
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    # 후보를 안 가진 쪽도 그 기사를 주장하므로 미소비로 남는다
+    assert storage.list_keys(_consumed_key("T0")) == []
+    assert storage.list_keys(_consumed_key("T00")) == []
+    assert storage.list_keys(_consumed_key("T1"))      # 자기 범위는 온전하다
+
+
 def test_a_rolled_back_group_does_not_claim_its_minted_concepts(tmp_path, monkeypatch):
     """WHY(ALPHA-1053): 채번(entity·concept)이 그룹 밖에 있으면 롤백된 그룹의 개념이 로그에
     남아 **만들지 않은 마스터를 만들었다고 주장한다**(ALPHA-830 과 같은 자리). 이번 세션에서

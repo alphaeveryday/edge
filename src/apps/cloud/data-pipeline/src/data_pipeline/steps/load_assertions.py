@@ -331,6 +331,7 @@ def run(
     # 판정하려면 결손이 **어느 범위의 것인지** 알아야 한다(ALPHA-1052).
     scope_ids_by_run: dict[str, set[str]] = {}
     missing_article_ids: set[str] = set()
+    rolled_back_article_ids: set[str] = set()  # 롤백된 그룹이 들고 있던 기사 (ALPHA-1053)
     failed_carried: set[str] = set()   # 읽기 단계에서 격리된 회수 범위 — 마커를 안 남긴다
     parquet_cache: dict[str, list[dict]] = {}
     seen_scope_rows: set[tuple[str, str, str]] = set()   # 소유자 범위가 겹칠 때 같은 행 재적재 방지
@@ -542,6 +543,11 @@ def run(
         with connect(db) as conn:
             index = load_resolution_index(conn)
 
+            # ⚠️ 이 조회는 그룹 savepoint **밖**이다 — 전 그룹의 article_id 를 한 번에 묻는다.
+            # 실패하면 이번 런 전체가 죽는다(격리 안 됨). 그대로 두는 이유: 읽기이고, 자기
+            # 범위만으로도 같은 모양의 질의가 나가며, 그룹마다 쪼개면 왕복이 그룹 수만큼 는다.
+            # 다만 **회수분만큼 IN 목록이 길어지는 것은 사실**이라, 여기서 timeout 이 관측되면
+            # 그때 그룹별로 쪼갠다(edge-review 1R 비수용, PLAUSIBLE).
             article_ids_by_source: dict[str, set[str]] = {}
             for source_code, article_id, _e, _p in candidates:
                 article_ids_by_source.setdefault(source_code, set()).add(article_id)
@@ -595,6 +601,17 @@ def run(
             for group_run, group_candidates in groups:
                 pending_concepts = {}   # 그룹마다 새로 — 롤백 단위가 그룹이다
                 group_concepts = 0
+                # ⚠️ **savepoint 는 DB 쓰기만 되돌린다 — 카운터는 파이썬 변수다.** 되돌리지
+                # 않으면 롤백된 그룹의 `created`·`arguments_inserted`·해소율 분모까지 로그가
+                # 주장해, `ops.records_out` 이 실제 커밋 행보다 커진다. 이 트랙에서 계측 거짓을
+                # 다섯 번 잡았다 — 그룹이 착지 못 했으면 **그 그룹의 수는 아무것도 안 싣는다**.
+                snapshot = (
+                    created, already, arguments_inserted, missing_document,
+                    skipped_no_resolved_argument, args_total, resolved_any,
+                    args_role_missing, non_entity_resolved,
+                    dict(args_by_reason), dict(args_by_role_kind), dict(unknown_roles),
+                    dict(unresolved_texts), list(created_sample), set(missing_article_ids),
+                )
                 try:
                     with conn.transaction() if group_run is not None else nullcontext():
                         # ⭐개념 행을 **assertion_argument 보다 먼저** 세운다 — entity(CONCEPT) →
@@ -758,9 +775,15 @@ def run(
                     # ⚠️ 커넥션 자체가 죽으면 중첩 롤백도 못 한다 — psycopg3 가 그 예외를
                     # 그대로 올리므로 위 `raise` 와 같은 경로로 간다(격리 불가를 성공으로
                     # 위장하지 않는다).
+                    (created, already, arguments_inserted, missing_document,
+                     skipped_no_resolved_argument, args_total, resolved_any,
+                     args_role_missing, non_entity_resolved,
+                     args_by_reason, args_by_role_kind, unknown_roles,
+                     unresolved_texts, created_sample, missing_article_ids) = snapshot
                     logger.exception("회수 범위 적재 실패(격리): run_id=%s", group_run)
                     failures.append({"reasons": ["carry_forward_load_error"],
                                      "input_run_id": group_run, "error": str(exc)})
+                    rolled_back_article_ids.update(nk[1] for nk in group_candidates)
                     carry_counters["load_failed"] += 1
                     if group_run not in failed_carried:
                         carry_counters["carried"] -= 1
@@ -811,8 +834,14 @@ def run(
         # 읽기 단계에서 격리된 범위는 이 카운터의 분모가 아니다 — 섞으면 읽기 실패가 문서
         # 결손으로도 중복 보고돼, 두 사유가 로그에서 안 갈린다(edge-review 검증 라운드).
         eligible = [r for r in [input_run_id, *carried_run_ids] if r not in failed_carried]
+        # ⚠️ **후보는 한 그룹에만 들어가지만 기사는 여러 manifest 가 주장한다.** 겹치는 기사를
+        # 앞 그룹이 가져갔는데 그 그룹이 롤백되면, 뒤 manifest 의 그룹은 비어 있어 "성공"으로
+        # 보이고 마커를 받는다 — 그 기사는 어느 manifest 로도 다시 안 실린다(앞 manifest 는
+        # 창 만료 때 skipped 로 닫힌다). 실패한 그룹이 들고 있던 기사를 **가진** manifest 는
+        # 전부 미소비로 남겨야 한다. `missing_document` 와 같은 축의 판정이다.
         landed = [r for r in eligible
-                  if not (scope_ids_by_run.get(r, set()) & missing_article_ids)]
+                  if not (scope_ids_by_run.get(r, set())
+                          & (missing_article_ids | rolled_back_article_ids))]
         carry_counters["blocked_by_missing_document"] = len(eligible) - len(landed)
         for consumed_run_id in landed:
             try:
