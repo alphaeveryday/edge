@@ -70,6 +70,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 from edge_ontology import load_authority_registry, load_relations
@@ -322,7 +323,7 @@ def run(
     # 가 "몇 개가 밀려 있었고 무엇이 실패했나"를 말해야 한다(Rule 12).
     carry_counters: dict[str, int] = {
         "pending": 0, "carried": 0, "unfinished": 0, "stale": 0,
-        "failed": 0, "over_limit": 0, "discovery_failed": 0, "marker_failed": 0,
+        "failed": 0, "load_failed": 0, "over_limit": 0, "discovery_failed": 0, "marker_failed": 0,
         "blocked_by_missing_document": 0,
     }
     carried_run_ids: list[str] = []
@@ -555,159 +556,220 @@ def run(
                     for sdi, did, avail in cur.fetchall():
                         doc_by_key[(source_code, sdi)] = (did, avail)
 
-            # ⭐개념 행을 **assertion_argument 보다 먼저** 세운다 — entity(CONCEPT) →
-            # concept → assertion_argument 순서가 FK 다. 순서가 뒤집히면 마지막 INSERT 가
-            # 없는 부모를 가리켜 터진다.
+            # ⚠️ **회수 범위의 적재를 격리한다**(ALPHA-1053). ALPHA-1052 는 읽기·검증만
+            # manifest 별로 격리했고 적재는 한 트랜잭션이라, 회수 행이 실패하면 온전한 이번
+            # 런까지 롤백됐다 — 그러면 같은 미소비 manifest 가 다음 런에도 다시 들어와 창
+            # 만료(7일)까지 레인이 반복 정지한다. ALPHA-1052 가 선언한 "회수는 보조 작업이라
+            # 이번 런을 안 죽인다"가 적재 단계에서 거짓이었다.
             #
-            # 이 루프가 candidates 전체를 한 번 돌며 채번 계획을 먼저 모은다: argument 를
-            # 보는 것은 아래 적재 루프와 같지만, 개념은 **전량을 모아 한 번에** 세워야
-            # executemany 한 쌍으로 끝난다(assertion 마다 왕복하면 2,400회가 된다).
-            for (source_code, article_id, _e, _p), entry in candidates.items():
-                # 아래 적재 루프와 **같은 조건**으로 거른다. 문서 행이 없으면 그
-                # 주장은 안 실리는데(missing_document — 정상 경로다), 여기서
-                # 채번하면 참조 없는 개념 마스터만 남는다.
-                if (source_code, article_id) not in doc_by_key:
+            # ⚠️ 방아쇠는 **어휘가 아니다**. `event_type_code`·`predicate_code` 는 FK 도
+            # CHECK 도 없는 VARCHAR 라 어휘 밖 값도 그냥 들어간다(스키마 실측). 남는 것은
+            # 길이 초과와 데드락·전송 오류이고 둘 다 자기 범위 행도 똑같이 어긴다 — 즉 이
+            # 격리가 막는 것은 "회수 행이 특별히 위험해서"가 아니라 **회수가 트랜잭션을 키워
+            # 어떤 실패든 회수분까지 말려들고 그게 매 런 반복되는 것**이다.
+            #
+            # 회수 run **마다** savepoint 다(psycopg3 는 중첩 `transaction()` 이 곧 savepoint).
+            # 하나로 묶으면 오염된 manifest 하나가 건강한 회수분까지 매 런 되돌려 그쪽도 영영
+            # 수렴 못 한다 — ALPHA-1052 3라운드에서 상한을 앞에서 잘랐을 때와 같은 모양이다.
+            groups: list[tuple[str | None, dict]] = []
+            if scope_ids_by_run:
+                remaining = dict(candidates)
+                own_ids = scope_ids_by_run.get(input_run_id, set())
+                # 겹치는 기사는 **자기 그룹**이다 — 이 런의 계약이라 격리 대상이 아니다.
+                own = {nk: remaining.pop(nk) for nk in list(remaining) if nk[1] in own_ids}
+                groups.append((None, own))
+                for carried_run_id in carried_run_ids:
+                    ids = scope_ids_by_run.get(carried_run_id, set())
+                    groups.append((carried_run_id,
+                                   {nk: remaining.pop(nk)
+                                    for nk in list(remaining) if nk[1] in ids}))
+                if remaining:
+                    # 어느 범위도 주장하지 않는 후보는 없어야 한다 — 있으면 귀속 규칙이 샌
+                    # 것이라 조용히 버리지 않고 자기 그룹에 실어 적재는 지킨다(Rule 12).
+                    logger.warning("load_assertions: 범위 미귀속 후보 %d건 — 자기 그룹으로 싣는다",
+                                   len(remaining))
+                    groups[0][1].update(remaining)
+            else:
+                groups.append((None, candidates))
+
+            for group_run, group_candidates in groups:
+                pending_concepts = {}   # 그룹마다 새로 — 롤백 단위가 그룹이다
+                group_concepts = 0
+                try:
+                    with conn.transaction() if group_run is not None else nullcontext():
+                        # ⭐개념 행을 **assertion_argument 보다 먼저** 세운다 — entity(CONCEPT) →
+                        # concept → assertion_argument 순서가 FK 다. 순서가 뒤집히면 마지막 INSERT 가
+                        # 없는 부모를 가리켜 터진다.
+                        #
+                        # 이 루프가 candidates 전체를 한 번 돌며 채번 계획을 먼저 모은다: argument 를
+                        # 보는 것은 아래 적재 루프와 같지만, 개념은 **전량을 모아 한 번에** 세워야
+                        # executemany 한 쌍으로 끝난다(assertion 마다 왕복하면 2,400회가 된다).
+                        for (source_code, article_id, _e, _p), entry in group_candidates.items():
+                            # 아래 적재 루프와 **같은 조건**으로 거른다. 문서 행이 없으면 그
+                            # 주장은 안 실리는데(missing_document — 정상 경로다), 여기서
+                            # 채번하면 참조 없는 개념 마스터만 남는다.
+                            if (source_code, article_id) not in doc_by_key:
+                                continue
+                            for argument in entry["arguments"]:
+                                role_code = argument.get("role_code")
+                                if not role_code:
+                                    continue
+                                eid, _reason, minted = plan_resolution(
+                                    index, str(role_code), argument.get("text"))
+                                if minted is not None and eid is not None:
+                                    pending_concepts.setdefault(eid, minted)
+                        if pending_concepts:
+                            with conn.cursor() as cur:
+                                # ON CONFLICT DO NOTHING — assemble-events 가 같은 개념을 이미 세웠을 수
+                                # 있다. 같은 산식(concept_key+stable_domain_id)을 쓰므로 **같은 행**이고,
+                                # 그게 두 writer 가 한 개념을 공유하는 방식이다.
+                                cur.executemany(
+                                    "INSERT INTO entity (entity_id, entity_type, display_name, status)"
+                                    " VALUES (%s,'CONCEPT',%s,'ACTIVE') ON CONFLICT (entity_id) DO NOTHING",
+                                    [(cid, name) for cid, (name, _k) in sorted(pending_concepts.items())],
+                                )
+                                cur.executemany(
+                                    # concept_type 은 엔티티 종별 그대로 — 제품과 위치가 한 통에 섞이면
+                                    # 소비자가 구분할 수 없다(assemble-events 와 같은 규약).
+                                    "INSERT INTO concept (concept_id, concept_type) VALUES (%s,%s)"
+                                    " ON CONFLICT (concept_id) DO NOTHING",
+                                    [(cid, kind) for cid, (_n, kind) in sorted(pending_concepts.items())],
+                                )
+                            group_concepts = len(pending_concepts)
+
+                        for (source_code, article_id, event_type, predicate), entry in sorted(group_candidates.items()):
+                            doc_row = doc_by_key.get((source_code, article_id))
+                            if doc_row is None:
+                                missing_document += 1
+                                # 어느 기사가 결손인지 남긴다 — 소비 마커를 **manifest 별로** 판정하는
+                                # 재료다(ALPHA-1052). 개수만 세면 한 manifest 의 결손이 온전히 실린
+                                # 다른 manifest 의 마커까지 막아 회수가 수렴하지 않는다.
+                                missing_article_ids.add(article_id)
+                                continue
+                            document_id, doc_available_at = doc_row
+
+                            resolved_args: dict[tuple[str, str], float | None] = {}
+                            for argument in entry["arguments"]:
+                                role_code = argument.get("role_code")
+                                if not role_code:
+                                    # 여기서 `or "ISSUER"` 로 채우던 자리다(ALPHA-802). 지어낸 역할은
+                                    # 적재 후 모델이 뽑은 값과 구분이 안 된다 — 출처 컬럼이 없고,
+                                    # 아래 setdefault 가 같은 엔티티의 진짜 ISSUER 와 한 행으로 접는다.
+                                    # 채우지 말고 탈락시킨다(모듈 독스트링).
+                                    args_role_missing += 1
+                                    continue
+                                role_code = str(role_code)
+                                relation = relations.get(role_code)
+                                kind = ("entity" if relation is not None and relation.is_entity else
+                                        "non_entity" if relation is not None else "out_of_vocabulary")
+                                args_by_role_kind[kind] += 1
+                                if relation is None:
+                                    # 어휘 밖 = 추출단과 온톨로지가 갈렸다는 신호다. 개수만 세면 못 고친다
+                                    # — 어느 역할인지 이름을 남긴다(실측 0건이라 목록은 짧다).
+                                    unknown_roles[role_code] = unknown_roles.get(role_code, 0) + 1
+
+                                # ⭐역할별 해소 — 온톨로지의 identity 표가 축을 정한다(ALPHA-831).
+                                # 예전엔 역할과 무관하게 instrument 인덱스 하나에 때려서, 티커가 아닌
+                                # 축(명부·채번)은 **구조적으로** 못 붙었다. 채번된 개념은 아래에서
+                                # entity → concept 순서로 세운다(FK).
+                                entity_id, reason, minted = plan_resolution(
+                                    index, role_code, argument.get("text"))
+                                if kind == "entity":
+                                    # 해소율 분모는 **실체 역할만** 센다. non_entity(TIME·VALUE·TEXT)는
+                                    # 애초에 실체를 가리키지 않는 자리라, 미해소로 세면 분모가 부풀어
+                                    # 뒤따르는 마스터 확대의 효과를 잴 수 없다. ⚠️ 온톨로지가 "적재하지
+                                    # 않는다"고 정한 대상은 `event_argument` 다 — 여기선 분모에서만 뺀다.
+                                    args_total += 1
+                                    args_by_reason[reason] = args_by_reason.get(reason, 0) + 1
+                                    if entity_id is not None:
+                                        resolved_any += 1
+                                    if entity_id is None:
+                                        text = argument.get("text")
+                                        if isinstance(text, str) and text.strip():
+                                            text = text.strip()
+                                            # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
+                                            # ⚠️ 한때 정책 제외(척도·문장꼴)를 빼고 셌다(ALPHA-857).
+                                            # 그 정책 자체가 온톨로지 근거 없이 이 writer 에만 걸려
+                                            # 있어 되돌렸으므로(ALPHA-861), 뺄 것도 없어졌다 — 지금
+                                            # 안 붙은 것은 **전부 못 붙인 것**이다.
+                                            unresolved_texts[text] = unresolved_texts.get(text, 0) + 1
+                                elif kind == "non_entity" and entity_id is not None:
+                                    # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
+                                    # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
+                                    # 것은 0 이 "이번 런엔 없었다"가 아니라 **"그 경로가 닫혔다"**를
+                                    # 뜻하기 때문이다 — 0 이 아니게 되면 분기가 새는 것이다.
+                                    non_entity_resolved += 1
+                                if entity_id is None:
+                                    continue
+                                resolved_args.setdefault((role_code, entity_id), entry["confidence"])
+
+                            if not resolved_args:
+                                skipped_no_resolved_argument += 1
+                                continue
+
+                            with conn.cursor() as cur:
+                                # 자연키에서 결정적으로 뽑는다(ALPHA-456) — 랜덤 ULID 였을 때는 이 테이블의
+                                # 다른 writer(assemble-events)와 값이 갈렸고, 먼저 도는 이 스텝의 랜덤값이
+                                # 남아 그걸 재료로 쓰는 source_event_id 까지 랜덤을 상속했다. 산식은
+                                # assemble-events 와 **같은 함수**여야 한다(각자 구현하면 salt·구분자
+                                # 하나에 다시 갈린다).
+                                assertion_id = stable_domain_id(
+                                    "asrt", document_id, event_type, predicate)
+                                cur.execute(
+                                    "INSERT INTO document_assertion (assertion_id, document_id,"
+                                    " event_type_code, predicate_code, confidence, available_at)"
+                                    " VALUES (%s, %s, %s, %s, %s, %s)"
+                                    " ON CONFLICT (document_id, event_type_code, predicate_code) DO NOTHING",
+                                    (assertion_id, document_id, event_type, predicate,
+                                     entry["confidence"], doc_available_at),
+                                )
+                                if cur.rowcount == 0:
+                                    # 이미 있다(assemble-events 의 FK 비계 선생성 포함) — 소유 컬럼
+                                    # confidence 를 UPDATE 로 확정 착지시키고 그 행의 ID 로 arguments 를
+                                    # union 한다. 행 생성 경주에서 져도 이 스텝의 판정이 유실되지 않는다.
+                                    already += 1
+                                    cur.execute(
+                                        "UPDATE document_assertion SET confidence = %s"
+                                        " WHERE document_id = %s AND event_type_code = %s"
+                                        " AND predicate_code = %s RETURNING assertion_id",
+                                        (entry["confidence"], document_id, event_type, predicate),
+                                    )
+                                    assertion_id = cur.fetchone()[0]
+                                else:
+                                    created += 1
+                                    if len(created_sample) < _CREATED_SAMPLE_LIMIT:
+                                        created_sample.append({"assertion_id": assertion_id,
+                                                               "document_id": document_id,
+                                                               "event_type_code": event_type,
+                                                               "predicate_code": predicate})
+                                for (role_code, entity_id), confidence in sorted(resolved_args.items()):
+                                    cur.execute(
+                                        "INSERT INTO assertion_argument (assertion_id, role_code,"
+                                        " entity_id, confidence) VALUES (%s, %s, %s, %s)"
+                                        " ON CONFLICT (assertion_id, role_code, entity_id) DO NOTHING",
+                                        (assertion_id, role_code, entity_id, confidence),
+                                    )
+                                    arguments_inserted += cur.rowcount
+                except Exception as exc:
+                    if group_run is None:
+                        raise
+                    # 이 회수 범위만 savepoint 로 되돌린다. 마커를 안 남겨 다음 런이 다시
+                    # 집고, 반복되면 창 만료 때 `skipped` 로 닫힌다(ALPHA-1052).
+                    # ⚠️ 커넥션 자체가 죽으면 중첩 롤백도 못 한다 — psycopg3 가 그 예외를
+                    # 그대로 올리므로 위 `raise` 와 같은 경로로 간다(격리 불가를 성공으로
+                    # 위장하지 않는다).
+                    logger.exception("회수 범위 적재 실패(격리): run_id=%s", group_run)
+                    failures.append({"reasons": ["carry_forward_load_error"],
+                                     "input_run_id": group_run, "error": str(exc)})
+                    carry_counters["load_failed"] += 1
+                    if group_run not in failed_carried:
+                        carry_counters["carried"] -= 1
+                        failed_carried.add(group_run)
                     continue
-                for argument in entry["arguments"]:
-                    role_code = argument.get("role_code")
-                    if not role_code:
-                        continue
-                    eid, _reason, minted = plan_resolution(
-                        index, str(role_code), argument.get("text"))
-                    if minted is not None and eid is not None:
-                        pending_concepts.setdefault(eid, minted)
-            if pending_concepts:
-                with conn.cursor() as cur:
-                    # ON CONFLICT DO NOTHING — assemble-events 가 같은 개념을 이미 세웠을 수
-                    # 있다. 같은 산식(concept_key+stable_domain_id)을 쓰므로 **같은 행**이고,
-                    # 그게 두 writer 가 한 개념을 공유하는 방식이다.
-                    cur.executemany(
-                        "INSERT INTO entity (entity_id, entity_type, display_name, status)"
-                        " VALUES (%s,'CONCEPT',%s,'ACTIVE') ON CONFLICT (entity_id) DO NOTHING",
-                        [(cid, name) for cid, (name, _k) in sorted(pending_concepts.items())],
-                    )
-                    cur.executemany(
-                        # concept_type 은 엔티티 종별 그대로 — 제품과 위치가 한 통에 섞이면
-                        # 소비자가 구분할 수 없다(assemble-events 와 같은 규약).
-                        "INSERT INTO concept (concept_id, concept_type) VALUES (%s,%s)"
-                        " ON CONFLICT (concept_id) DO NOTHING",
-                        [(cid, kind) for cid, (_n, kind) in sorted(pending_concepts.items())],
-                    )
-                concepts_minted = len(pending_concepts)
+                # 그룹이 커밋 경계를 넘겼을 때만 계측에 싣는다 — 롤백된 그룹의 채번을 세면
+                # 로그가 만들지 않은 개념 마스터를 만들었다고 주장한다(ALPHA-830 과 같은 자리).
+                concepts_minted += group_concepts
 
-            for (source_code, article_id, event_type, predicate), entry in sorted(candidates.items()):
-                doc_row = doc_by_key.get((source_code, article_id))
-                if doc_row is None:
-                    missing_document += 1
-                    # 어느 기사가 결손인지 남긴다 — 소비 마커를 **manifest 별로** 판정하는
-                    # 재료다(ALPHA-1052). 개수만 세면 한 manifest 의 결손이 온전히 실린
-                    # 다른 manifest 의 마커까지 막아 회수가 수렴하지 않는다.
-                    missing_article_ids.add(article_id)
-                    continue
-                document_id, doc_available_at = doc_row
-
-                resolved_args: dict[tuple[str, str], float | None] = {}
-                for argument in entry["arguments"]:
-                    role_code = argument.get("role_code")
-                    if not role_code:
-                        # 여기서 `or "ISSUER"` 로 채우던 자리다(ALPHA-802). 지어낸 역할은
-                        # 적재 후 모델이 뽑은 값과 구분이 안 된다 — 출처 컬럼이 없고,
-                        # 아래 setdefault 가 같은 엔티티의 진짜 ISSUER 와 한 행으로 접는다.
-                        # 채우지 말고 탈락시킨다(모듈 독스트링).
-                        args_role_missing += 1
-                        continue
-                    role_code = str(role_code)
-                    relation = relations.get(role_code)
-                    kind = ("entity" if relation is not None and relation.is_entity else
-                            "non_entity" if relation is not None else "out_of_vocabulary")
-                    args_by_role_kind[kind] += 1
-                    if relation is None:
-                        # 어휘 밖 = 추출단과 온톨로지가 갈렸다는 신호다. 개수만 세면 못 고친다
-                        # — 어느 역할인지 이름을 남긴다(실측 0건이라 목록은 짧다).
-                        unknown_roles[role_code] = unknown_roles.get(role_code, 0) + 1
-
-                    # ⭐역할별 해소 — 온톨로지의 identity 표가 축을 정한다(ALPHA-831).
-                    # 예전엔 역할과 무관하게 instrument 인덱스 하나에 때려서, 티커가 아닌
-                    # 축(명부·채번)은 **구조적으로** 못 붙었다. 채번된 개념은 아래에서
-                    # entity → concept 순서로 세운다(FK).
-                    entity_id, reason, minted = plan_resolution(
-                        index, role_code, argument.get("text"))
-                    if kind == "entity":
-                        # 해소율 분모는 **실체 역할만** 센다. non_entity(TIME·VALUE·TEXT)는
-                        # 애초에 실체를 가리키지 않는 자리라, 미해소로 세면 분모가 부풀어
-                        # 뒤따르는 마스터 확대의 효과를 잴 수 없다. ⚠️ 온톨로지가 "적재하지
-                        # 않는다"고 정한 대상은 `event_argument` 다 — 여기선 분모에서만 뺀다.
-                        args_total += 1
-                        args_by_reason[reason] = args_by_reason.get(reason, 0) + 1
-                        if entity_id is not None:
-                            resolved_any += 1
-                        if entity_id is None:
-                            text = argument.get("text")
-                            if isinstance(text, str) and text.strip():
-                                text = text.strip()
-                                # 미해소 상위 표현이 별칭 축 도입 판단의 근거다(티켓 완료 조건).
-                                # ⚠️ 한때 정책 제외(척도·문장꼴)를 빼고 셌다(ALPHA-857).
-                                # 그 정책 자체가 온톨로지 근거 없이 이 writer 에만 걸려
-                                # 있어 되돌렸으므로(ALPHA-861), 뺄 것도 없어졌다 — 지금
-                                # 안 붙은 것은 **전부 못 붙인 것**이다.
-                                unresolved_texts[text] = unresolved_texts.get(text, 0) + 1
-                    elif kind == "non_entity" and entity_id is not None:
-                        # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
-                        # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
-                        # 것은 0 이 "이번 런엔 없었다"가 아니라 **"그 경로가 닫혔다"**를
-                        # 뜻하기 때문이다 — 0 이 아니게 되면 분기가 새는 것이다.
-                        non_entity_resolved += 1
-                    if entity_id is None:
-                        continue
-                    resolved_args.setdefault((role_code, entity_id), entry["confidence"])
-
-                if not resolved_args:
-                    skipped_no_resolved_argument += 1
-                    continue
-
-                with conn.cursor() as cur:
-                    # 자연키에서 결정적으로 뽑는다(ALPHA-456) — 랜덤 ULID 였을 때는 이 테이블의
-                    # 다른 writer(assemble-events)와 값이 갈렸고, 먼저 도는 이 스텝의 랜덤값이
-                    # 남아 그걸 재료로 쓰는 source_event_id 까지 랜덤을 상속했다. 산식은
-                    # assemble-events 와 **같은 함수**여야 한다(각자 구현하면 salt·구분자
-                    # 하나에 다시 갈린다).
-                    assertion_id = stable_domain_id(
-                        "asrt", document_id, event_type, predicate)
-                    cur.execute(
-                        "INSERT INTO document_assertion (assertion_id, document_id,"
-                        " event_type_code, predicate_code, confidence, available_at)"
-                        " VALUES (%s, %s, %s, %s, %s, %s)"
-                        " ON CONFLICT (document_id, event_type_code, predicate_code) DO NOTHING",
-                        (assertion_id, document_id, event_type, predicate,
-                         entry["confidence"], doc_available_at),
-                    )
-                    if cur.rowcount == 0:
-                        # 이미 있다(assemble-events 의 FK 비계 선생성 포함) — 소유 컬럼
-                        # confidence 를 UPDATE 로 확정 착지시키고 그 행의 ID 로 arguments 를
-                        # union 한다. 행 생성 경주에서 져도 이 스텝의 판정이 유실되지 않는다.
-                        already += 1
-                        cur.execute(
-                            "UPDATE document_assertion SET confidence = %s"
-                            " WHERE document_id = %s AND event_type_code = %s"
-                            " AND predicate_code = %s RETURNING assertion_id",
-                            (entry["confidence"], document_id, event_type, predicate),
-                        )
-                        assertion_id = cur.fetchone()[0]
-                    else:
-                        created += 1
-                        if len(created_sample) < _CREATED_SAMPLE_LIMIT:
-                            created_sample.append({"assertion_id": assertion_id,
-                                                   "document_id": document_id,
-                                                   "event_type_code": event_type,
-                                                   "predicate_code": predicate})
-                    for (role_code, entity_id), confidence in sorted(resolved_args.items()):
-                        cur.execute(
-                            "INSERT INTO assertion_argument (assertion_id, role_code,"
-                            " entity_id, confidence) VALUES (%s, %s, %s, %s)"
-                            " ON CONFLICT (assertion_id, role_code, entity_id) DO NOTHING",
-                            (assertion_id, role_code, entity_id, confidence),
-                        )
-                        arguments_inserted += cur.rowcount
     except Exception as exc:
         # 커밋 경계는 런 전체 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
         logger.exception("assertion 적재 실패(롤백)")

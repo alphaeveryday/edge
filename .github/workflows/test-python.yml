@@ -147,7 +147,16 @@ jobs:
         env:
           E2E_PGHOST: 127.0.0.1
           # E2E_PGPORT 는 "Start ephemeral Postgres" 스텝이 $GITHUB_ENV 로 넘긴다.
-        run: uv run pytest apps/cloud/analysis-engine/tests/e2e -q
+        # data-pipeline e2e 를 같은 호출에 넣는 이유: 이 잡만 실 스키마 Postgres 를 갖는다.
+        # 앱별 분리 규칙(파일 헤더)은 **같은 basename 충돌** 때문인데 두 e2e 디렉터리의
+        # 파일명이 겹치지 않아 안전하다 — 겹치는 이름을 새로 만들지 마라.
+        # ⚠️ 여기서만 검증되는 것이 있다: savepoint 로 회수 범위만 되돌린다는 ALPHA-1053 의
+        # 주장은 실 Postgres 가 아니면 증명되지 않는다(단위는 fake conn 이라 제어 흐름만 본다).
+        run: >
+          uv run pytest
+          apps/cloud/analysis-engine/tests/e2e
+          apps/cloud/data-pipeline/tests/e2e
+          -q
 
       # 영속 러너에 컨테이너·포트를 남기지 않는다.
       - name: Tear down ephemeral Postgres
