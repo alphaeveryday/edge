@@ -310,7 +310,6 @@ def run(
     # 이 런이 채번한 개념: entity_id → (표시명, concept_type). 적재 직전에 한 번에
     # 세운다 — argument 마다 INSERT 하면 같은 개념에 왕복이 반복된다.
     pending_concepts: dict[str, tuple[str, str]] = {}
-    concepts_minted = 0
     # 미해소 표현 → 빈도. 별칭 축 도입 판단의 근거다(ALPHA-802).
     unresolved_texts: dict[str, int] = {}
     created_sample: list[dict] = []
@@ -324,7 +323,7 @@ def run(
     carry_counters: dict[str, int] = {
         "pending": 0, "carried": 0, "unfinished": 0, "stale": 0,
         "failed": 0, "load_failed": 0, "over_limit": 0, "discovery_failed": 0, "marker_failed": 0,
-        "blocked_by_missing_document": 0,
+        "blocked_by_missing_document": 0, "blocked_by_rollback": 0,
     }
     carried_run_ids: list[str] = []
     # 이번 런 범위에 든 run_id → 그 manifest 의 article_id 전량. 소비 마커를 manifest 별로
@@ -332,6 +331,7 @@ def run(
     scope_ids_by_run: dict[str, set[str]] = {}
     missing_article_ids: set[str] = set()
     rolled_back_article_ids: set[str] = set()  # 롤백된 그룹이 들고 있던 기사 (ALPHA-1053)
+    minted_concept_ids: set[str] = set()       # 커밋된 그룹이 세운 개념 — 그룹 간 중복 제거
     failed_carried: set[str] = set()   # 읽기 단계에서 격리된 회수 범위 — 마커를 안 남긴다
     parquet_cache: dict[str, list[dict]] = {}
     seen_scope_rows: set[tuple[str, str, str]] = set()   # 소유자 범위가 겹칠 때 같은 행 재적재 방지
@@ -600,7 +600,7 @@ def run(
 
             for group_run, group_candidates in groups:
                 pending_concepts = {}   # 그룹마다 새로 — 롤백 단위가 그룹이다
-                group_concepts = 0
+                group_concepts: set[str] = set()
                 # ⚠️ **savepoint 는 DB 쓰기만 되돌린다 — 카운터는 파이썬 변수다.** 되돌리지
                 # 않으면 롤백된 그룹의 `created`·`arguments_inserted`·해소율 분모까지 로그가
                 # 주장해, `ops.records_out` 이 실제 커밋 행보다 커진다. 이 트랙에서 계측 거짓을
@@ -652,7 +652,11 @@ def run(
                                     " ON CONFLICT (concept_id) DO NOTHING",
                                     [(cid, kind) for cid, (_n, kind) in sorted(pending_concepts.items())],
                                 )
-                            group_concepts = len(pending_concepts)
+                            # ⚠️ **개수가 아니라 id 집합**이다. 같은 MINT 대상(예: METRIC
+                            # "매출")이 자기 범위와 회수 범위에 다 있으면 그룹마다 세어 DB
+                            # 에는 한 행인데 로그는 둘이라 한다 — 전역 dict 였을 땐 그게
+                            # 접혔다(edge-review 2R).
+                            group_concepts = set(pending_concepts)
 
                         for (source_code, article_id, event_type, predicate), entry in sorted(group_candidates.items()):
                             doc_row = doc_by_key.get((source_code, article_id))
@@ -791,7 +795,7 @@ def run(
                     continue
                 # 그룹이 커밋 경계를 넘겼을 때만 계측에 싣는다 — 롤백된 그룹의 채번을 세면
                 # 로그가 만들지 않은 개념 마스터를 만들었다고 주장한다(ALPHA-830 과 같은 자리).
-                concepts_minted += group_concepts
+                minted_concept_ids |= group_concepts
 
     except Exception as exc:
         # 커밋 경계는 런 전체 — connect() 가 예외면 롤백이라 부분 적재가 없다(Rule 12).
@@ -800,7 +804,9 @@ def run(
         created = already = arguments_inserted = 0
         # 채번도 같은 트랜잭션이라 롤백된다 — 되돌리지 않으면 로그가 만들지
         # 않은 개념 마스터를 만들었다고 주장한다(ALPHA-830 에서 겪은 것과 같은 자리).
-        concepts_minted = 0
+        # ⚠️ **커밋된 그룹의 채번도 함께 지운다**: 여기 오면 바깥 트랜잭션이 통째로
+        # 롤백돼 savepoint 안에서 성공했던 그룹의 쓰기도 남지 않는다(ALPHA-1053).
+        minted_concept_ids = set()
         created_sample = []
         exit_code = 1
 
@@ -842,7 +848,15 @@ def run(
         landed = [r for r in eligible
                   if not (scope_ids_by_run.get(r, set())
                           & (missing_article_ids | rolled_back_article_ids))]
-        carry_counters["blocked_by_missing_document"] = len(eligible) - len(landed)
+        # 차단 사유를 섞지 않는다 — 문서 결손과 그룹 롤백은 대응이 다르다(전자는 상류
+        # LoadDocuments 재실행, 후자는 그 manifest 의 데이터 문제). 한 수로 합치면 로그만
+        # 보고 어느 쪽인지 못 가른다(edge-review 2R).
+        carry_counters["blocked_by_missing_document"] = sum(
+            1 for r in eligible if scope_ids_by_run.get(r, set()) & missing_article_ids)
+        carry_counters["blocked_by_rollback"] = sum(
+            1 for r in eligible
+            if not (scope_ids_by_run.get(r, set()) & missing_article_ids)
+            and scope_ids_by_run.get(r, set()) & rolled_back_article_ids)
         for consumed_run_id in landed:
             try:
                 storage.put_bytes(
@@ -893,7 +907,7 @@ def run(
         # 역할별 해소 축의 성적(ALPHA-831). `**args_by_reason` 에 minted·registry_hit·
         # registry_miss 등이 사유로 섞여 들어온다 — 그게 무엇을 회수했고 무엇을 남겼는지
         # 보는 유일한 창이다.
-        "concepts_minted": concepts_minted,
+        "concepts_minted": len(minted_concept_ids),
         "argument_resolution": {
             # 분모 정의를 로그 자신이 들고 있어야 한다 — 이 필드가 없으면 ALPHA-802 이전에
             # 찍힌 로그(분모=argument 총수)와 이후 로그를 나란히 놓고 비교할 때 정의가
@@ -960,9 +974,10 @@ def run(
         # 이건 앞선 런이 죽었다는 뜻이고, 회수됐든 아니든 사람이 알아야 하는 신호다.
         logger.warning(
             "load_assertions: 미소비 manifest %d건 — 회수 %d건"
-            "(미완료 %d·창밖 %d·실패 %d·상한초과 %d)",
+            "(미완료 %d·창밖 %d·읽기실패 %d·적재실패 %d·상한초과 %d)",
             carry_counters["pending"], carry_counters["carried"], carry_counters["unfinished"],
-            carry_counters["stale"], carry_counters["failed"], carry_counters["over_limit"],
+            carry_counters["stale"], carry_counters["failed"], carry_counters["load_failed"],
+            carry_counters["over_limit"],
         )
     if rows_moved_partitions:
         # 버린 판정이 있었다는 사실은 품질 로그를 열어야 보이는 수치로 두지 않는다(Rule 12).

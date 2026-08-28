@@ -698,6 +698,50 @@ def test_a_rolled_back_group_blocks_every_manifest_claiming_its_articles(tmp_pat
     assert storage.list_keys(_consumed_key("T00")) == []
     assert storage.list_keys(_consumed_key("T1"))      # 자기 범위는 온전하다
 
+    # 차단 사유는 섞이면 안 된다 — 문서 결손과 그룹 롤백은 대응이 다르다(전자는 상류
+    # LoadDocuments 재실행, 후자는 그 manifest 의 데이터 문제). 결손은 한 건도 없었다.
+    # ⚠️ 이 단언은 **T00 이라야 도달한다**: 적재가 터진 T0 는 `failed_carried` 로 이미
+    # eligible 에서 빠져, 겹치는 기사를 주장하는 다른 manifest 가 없으면 이 분기가 안 돈다.
+    log = _log(storage)
+    assert log["missing_document"] == 0
+    carry = log["manifest_carry_forward"]
+    assert carry["blocked_by_missing_document"] == 0
+    assert carry["blocked_by_rollback"] == 1
+    assert carry["load_failed"] == 1
+
+
+def test_a_concept_minted_in_two_groups_is_counted_once(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 채번을 그룹 안으로 옮기면서 `concepts_minted` 가 그룹별 **개수의 합**이
+    됐다. 같은 MINT 대상이 자기 범위와 회수 범위에 다 있으면 DB 에는 `ON CONFLICT DO NOTHING`
+    으로 한 행인데 로그는 둘이라 한다 — 전역 dict 였을 땐 그게 접혔다. 그룹 분리가 만든 회귀다."""
+    storage = LocalStorage(tmp_path / "lake")
+    same_metric = [{"role_code": "METRIC", "text": "매출", "entity_id": None},
+                   {"role_code": "ISSUER", "text": "삼성전자", "entity_id": None}]
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("older", [_assertion(event_type_code="OLDER_RUN",
+                                          arguments=same_metric)],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion(arguments=same_metric)],
+                     published_at="2026-08-26T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["older"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"SUPPLY_CONTRACT", "OLDER_RUN"}   # 두 그룹 다 커밋됐다(전제)
+    minted = {params[0] for params in _inserts(conn, "concept")}
+    assert len(minted) == 1, "같은 MINT 대상인데 개념 행이 둘이다"
+    assert _log(storage)["concepts_minted"] == 1, "그룹마다 세어 DB 행보다 크게 보고했다"
+
 
 def test_a_rolled_back_group_does_not_claim_its_minted_concepts(tmp_path, monkeypatch):
     """WHY(ALPHA-1053): 채번(entity·concept)이 그룹 밖에 있으면 롤백된 그룹의 개념이 로그에
