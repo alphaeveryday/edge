@@ -115,6 +115,21 @@ Table "disclosure_fact" {
   "available_at" timestamptz [not null]
 }
 
+Table "disclosure_load_pending" {
+  "rcept_no" text [pk]
+  "disclosure_type" text [not null]
+  "canonical_rows" text [not null]
+  "payload_sha256" character(64) [not null]
+  "first_seen_run_id" text [not null]
+  "last_seen_run_id" text [not null]
+  "first_seen_at" timestamptz [not null]
+  "last_seen_at" timestamptz [not null]
+  "attempt_count" int [not null]
+  "last_attempted_at" timestamptz
+  "last_error_code" text
+  "last_error" text
+}
+
 Table "document" {
   "document_id" text [pk]
   "document_type" varchar(20) [not null]
