@@ -1018,6 +1018,34 @@ def test_장중_수급_정제_부분실패는_manifest_적재_후_SFN을_실패�
     assert 'Default = "InvestorIntradayFailed"' in final
 
 
+def test_공시_정제_부분실패는_dual_manifest_적재_후_SFN을_실패로_마감한다():
+    """WHY(ALPHA-1044): 두 producer의 exit 2는 각 성공 winner manifest를 확정했다. 즉시
+    막으면 성공 범위를 못 싣고, 성공으로 닫으면 다른 행의 격리가 실행 상태에서 숨는다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "disclosure_pipeline.tf").read_text(
+            encoding="utf-8"))
+
+    continue_checks = sm.split("disclosure_normalize_continue_checks = [", 1)[1].split(
+        "disclosure_feature_success_checks = [", 1)[0]
+    assert re.search(
+        r'Variable\s*=\s*"\$\.normalize_results\[\$\{index\}\]\.exit_code".*?'
+        r'IsPresent\s*=\s*true.*?NumericEquals\s*=\s*2', continue_checks, re.S
+    ), "ECS TaskFailed와 producer exit 2를 구분해야 한다"
+    gate = sm.split("DisclosureNormalizeCheckResults = {", 1)[1].split(
+        "DisclosureNotifyNormalizePartial = {", 1)[0]
+    assert 'Next = "DisclosureNotifyNormalizePartial"' in gate
+    assert 'Default = "DisclosureNotifyFailure"' in gate
+    notify = sm.split("DisclosureNotifyNormalizePartial = {", 1)[1].split(
+        "DisclosureFeatureParallel = {", 1)[0]
+    assert re.search(r'Next\s*=\s*"DisclosureFeatureParallel"', notify)
+    assert "normalize_partial_notification_error" in notify
+    final = sm.split("DisclosureRawPartialCheck = {", 1)[1].split(
+        "DisclosureSucceeded = {", 1)[0]
+    assert "local.disclosure_raw_success_checks" in final
+    assert "local.disclosure_normalize_success_checks" in final
+    assert 'Default = "DisclosureFailed"' in final
+
+
 def test_가격_정제_부분실패는_manifest_적재_후_시장_SFN을_실패로_마감한다():
     """WHY(ALPHA-1038): NormalizePrice exit 2를 즉시 막으면 성공 KR winner가 DB에 못 가고,
     성공으로 닫으면 부분 유실이 SFN 상태에서 숨는다. loader 실행과 최종 FAILED를 모두 고정한다."""

@@ -499,6 +499,16 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure
 uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-segment
 #   특정 런만: ... run normalize-disclosure-segment --input-run-id 20260701T000000Z
 
+# 두 공시 정제는 run별 canonical manifest를 각각 남긴다. supply_contract_fact는 rcept_no,
+# business_segment_fact는 (rcept_no, segment_ordinal)을 winner_ids로 기록하며, 파티션의 직접
+# part-00000.parquet 키와 SHA-256도 함께 고정한다. canonical·quality log가 모두 성공한 뒤에만
+# canonical_written=true가 된다. 행 격리는 성공 winner를 확정한 exit 2(하류 처리 뒤 실행은
+# INCOMPLETE/FAILED), 저장·무결성 실패는 incomplete manifest를 남기는 exit 1(해당 호출의 하류
+# 차단)이다. 아직 LoadDisclosure는 issuer 미해소 자동 회수를 위해 canonical 전체를 스캔하므로,
+# 실패 뒤 공유 canonical에 남은 파티션을 후속 정상 런이 회수할 수 있다. durable pending ledger가
+# 이 회수를 대체하면서 manifest consumer로 전환하는 작업은 ALPHA-1045 범위다.
+# 정상 0건도 canonical_written=true·빈 canonical_partitions로 producer 미실행과 구분한다.
+
 # ETF 구성종목 정제(Step2) — raw etf_holdings(FMP US·KRX KR) → 공통 구성종목 fact 정규화 + 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(fmp=US·krx=KR, 수집 날짜창 없음). 정체성(market·etf_id·
 # 구성종목·as_of_date)은 blocking, 비중·주식수·평가금액은 참고필드(대시(-)·결측=null, 범위 이상만

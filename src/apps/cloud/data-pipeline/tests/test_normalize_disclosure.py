@@ -7,6 +7,7 @@ canonical 멱등 병합 + quality_log (ALPHA-345).
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import zipfile
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from data_pipeline.lake import (
     LocalStorage,
+    canonical_run_manifest_key,
     canonical_supply_contract_fact_partition,
     raw_disclosure_document_key,
     raw_disclosure_partition,
@@ -102,6 +104,31 @@ def _canonical_rows(storage, report_date: str) -> list[dict]:
         if key.endswith(".parquet"):
             rows.extend(normalize_disclosure._read_parquet_rows(storage.get_bytes(key)))
     return rows
+
+
+def _manifest(storage, run_id: str) -> dict:
+    return json.loads(storage.get_bytes(
+        canonical_run_manifest_key("supply_contract_fact", run_id)
+    ).decode("utf-8"))
+
+
+class _FailCompletedManifestStorage:
+    """완료 marker PUT만 실패시키고 incomplete 무효화는 허용한다."""
+
+    def __init__(self, inner, manifest_key: str):
+        self.inner = inner
+        self.manifest_key = manifest_key
+
+    def list_keys(self, prefix):
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        if key == self.manifest_key and json.loads(data).get("canonical_written") is True:
+            raise OSError("completed manifest write failed")
+        return self.inner.put_bytes(key, data)
 
 
 def test_backfill_window_filters_raw_by_filing_date(tmp_path):
@@ -232,7 +259,7 @@ def test_missing_document_body_is_failure_not_crash(tmp_path):
     rec = _supply_record("20260623800004", document_raw_path=None)
     _write_run(storage, [(rec, None)])
 
-    assert normalize_disclosure.run(storage, "D1") == 0
+    assert normalize_disclosure.run(storage, "D1") == 2
     assert _canonical_rows(storage, "2026-06-23") == []
     log = _quality_log(storage)
     assert log["records_failed"] == 1
@@ -245,7 +272,7 @@ def test_non_object_row_is_isolated(tmp_path):
     key = f"{raw_disclosure_partition(SOURCE, MARKET, INGEST_DATE, 'R1')}/part-00000.ndjson"
     storage.put_bytes(key, (json.dumps([1, 2, 3]) + "\n").encode("utf-8"))
 
-    assert normalize_disclosure.run(storage, "D1") == 0
+    assert normalize_disclosure.run(storage, "D1") == 2
     log = _quality_log(storage)
     assert log["records_failed"] == 1
     assert log["failures"][0]["reasons"] == ["non_object_row"]
@@ -259,7 +286,7 @@ def test_empty_parse_body_is_blocked(tmp_path):
     body = _doc_zip("<html><head><title>x/공급</title></head><body>표없음</body></html>", rcept_no)
     _write_run(storage, [(_supply_record(rcept_no), body)])
 
-    assert normalize_disclosure.run(storage, "D1") == 0
+    assert normalize_disclosure.run(storage, "D1") == 2
     assert _canonical_rows(storage, "2026-06-23") == []
     log = _quality_log(storage)
     assert log["records_failed"] == 1
@@ -279,7 +306,7 @@ def test_oversized_amount_does_not_kill_canonical_batch(tmp_path):
         (_supply_record(good), _doc_zip(_supply_html(amount="1,200,000,000원"), good)),
     ])
 
-    assert normalize_disclosure.run(storage, "D1") == 0
+    assert normalize_disclosure.run(storage, "D1") == 2
     rows = _canonical_rows(storage, "2026-06-23")
     assert {r["rcept_no"] for r in rows} == {good}  # 정상 행만 적재, poison 격리
     log = _quality_log(storage)
@@ -296,7 +323,7 @@ def test_malformed_report_nm_is_failure_not_silent_skip(tmp_path):
     rec = _supply_record(rcept_no, report_nm=None)
     _write_run(storage, [(rec, _doc_zip(_supply_html(), rcept_no))])
 
-    assert normalize_disclosure.run(storage, "D1") == 0
+    assert normalize_disclosure.run(storage, "D1") == 2
     assert _canonical_rows(storage, "2026-06-23") == []
     log = _quality_log(storage)
     assert log["records_skipped_type"] == 0
@@ -311,7 +338,7 @@ def test_bad_rcept_dt_is_blocked(tmp_path):
     rec = _supply_record(rcept_no, rcept_dt="20260231")
     _write_run(storage, [(rec, _doc_zip(_supply_html(), rcept_no))])
 
-    assert normalize_disclosure.run(storage, "D1") == 0
+    assert normalize_disclosure.run(storage, "D1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0
     assert "missing_report_date" in log["failures"][0]["reasons"]
@@ -377,3 +404,87 @@ def test_scoped_run_writes_canonical(tmp_path):
     log = _quality_log(storage)
     assert log["canonical_written"] is True
     assert log["records_passed"] == 1
+
+
+def test_manifest_records_current_winner_with_direct_key_and_sha(tmp_path):
+    # WHY(ALPHA-1044): 하류가 날짜 prefix를 LIST하지 않으려면 producer가 직접 parquet key와
+    # 무결성, 이번 실행의 논리 winner를 함께 확정해야 한다. 같은 값 재확정도 변경분이 아니라
+    # 현재 winner이므로 manifest에서 빠지면 안 된다.
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20260623800030"
+    record = _supply_record(rcept_no)
+    body = _doc_zip(_supply_html(), rcept_no)
+    _write_run(storage, [(record, body), (record, body)])
+
+    assert normalize_disclosure.run(storage, "D1", input_run_id="R1") == 0
+    manifest = _manifest(storage, "D1")
+    assert manifest["producer"] == "normalize_disclosure"
+    assert manifest["canonical_written"] is True
+    assert len(manifest["canonical_partitions"]) == 1
+    part = manifest["canonical_partitions"][0]
+    assert part["winner_ids"] == [{"rcept_no": rcept_no}]
+    assert part["key"] == (
+        f"{canonical_supply_contract_fact_partition('2026-06-23')}/part-00000.parquet"
+    )
+    assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
+    assert _quality_log(storage)["ops"]["records_out"] == 1
+
+
+def test_empty_run_commits_empty_manifest_and_same_run_is_stable(tmp_path):
+    # WHY(ALPHA-1044): 0건 정상 실행도 "미실행"과 구분되는 완료 증거여야 하고, 같은 run 재시도는
+    # 동일 바이트를 남겨야 consumer가 빈 완료를 오류나 새 범위로 오독하지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+
+    assert normalize_disclosure.run(storage, "D1") == 0
+    key = canonical_run_manifest_key("supply_contract_fact", "D1")
+    first = storage.get_bytes(key)
+    assert _manifest(storage, "D1")["canonical_partitions"] == []
+    assert _manifest(storage, "D1")["canonical_written"] is True
+    assert normalize_disclosure.run(storage, "D1") == 0
+    assert storage.get_bytes(key) == first
+
+
+def test_partial_failure_preserves_success_manifest_and_returns_2(tmp_path):
+    # WHY(ALPHA-1044): 한 공시 실패 때문에 같은 run의 정상 winner 계보까지 폐기하면 후속 ledger가
+    # 성공분을 회수할 수 없다. 성공 manifest는 완료하되 worker에는 부분 실패를 크게 알린다.
+    storage = LocalStorage(tmp_path / "lake")
+    good = "20260623800031"
+    bad = _supply_record("20260623800032", document_raw_path=None)
+    _write_run(storage, [(_supply_record(good), _doc_zip(_supply_html(), good)), (bad, None)])
+
+    assert normalize_disclosure.run(storage, "D1") == 2
+    assert _manifest(storage, "D1")["canonical_written"] is True
+    assert _manifest(storage, "D1")["canonical_partitions"][0]["winner_ids"] == [
+        {"rcept_no": good}
+    ]
+
+
+def test_canonical_failure_leaves_manifest_incomplete(tmp_path, monkeypatch):
+    # WHY(ALPHA-1044): canonical 저장이 실패했는데 이전/빈 완료 marker가 남으면 하류가 없는
+    # 산출을 승인한다. 같은 run 시작 시 쓴 incomplete marker가 그대로 남아야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20260623800033"
+    _write_run(storage, [(_supply_record(rcept_no), _doc_zip(_supply_html(), rcept_no))])
+    monkeypatch.setattr(normalize_disclosure, "_write_canonical",
+                        lambda *args: (_ for _ in ()).throw(OSError("write failed")))
+
+    assert normalize_disclosure.run(storage, "D1") == 1
+    assert _manifest(storage, "D1") == {
+        "canonical_partitions": [], "canonical_written": False,
+        "producer": "normalize_disclosure", "run_id": "D1",
+    }
+
+
+def test_completed_manifest_write_failure_is_invalidated(tmp_path):
+    # WHY(ALPHA-1044): 완료 marker 저장 실패 뒤 pending에 winner가 남더라도 canonical_written=false
+    # 여야 하류가 부분 기록을 승인하지 않는다. 무효화 PUT까지 막히지 않는 실스토리지 실패를 모사한다.
+    inner = LocalStorage(tmp_path / "lake")
+    manifest_key = canonical_run_manifest_key("supply_contract_fact", "D1")
+    storage = _FailCompletedManifestStorage(inner, manifest_key)
+    rcept_no = "20260623800034"
+    _write_run(storage, [(_supply_record(rcept_no), _doc_zip(_supply_html(), rcept_no))])
+
+    assert normalize_disclosure.run(storage, "D1") == 1
+    manifest = _manifest(inner, "D1")
+    assert manifest["canonical_written"] is False
+    assert manifest["canonical_partitions"][0]["winner_ids"] == [{"rcept_no": rcept_no}]
