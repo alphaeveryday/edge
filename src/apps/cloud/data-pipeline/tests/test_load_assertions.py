@@ -295,7 +295,7 @@ def test_missing_feature_manifest_fails_without_full_scan(tmp_path):
 
 
 @pytest.mark.parametrize("damage", [
-    "incomplete", "wrong_producer", "wrong_run", "wrong_key", "duplicate_ids", "cross_duplicate",
+    "incomplete", "wrong_producer", "wrong_run", "wrong_key", "duplicate_ids",
 ])
 def test_corrupt_feature_manifest_fails_before_parquet_read(tmp_path, damage):
     """WHY(ALPHA-1033): manifest 전량을 먼저 검증해야 손상 계보의 앞 파티션 일부를
@@ -316,10 +316,8 @@ def test_corrupt_feature_manifest_fails_before_parquet_read(tmp_path, damage):
         manifest["run_id"] = "T2"
     elif damage == "wrong_key":
         manifest["feature_partitions"][0]["key"] = "feature/news/wrong.parquet"
-    elif damage == "duplicate_ids":
-        manifest["feature_partitions"][0]["article_ids"] = ["a1", "a1"]
     else:
-        manifest["feature_partitions"][1]["article_ids"] = ["a1"]
+        manifest["feature_partitions"][0]["article_ids"] = ["a1", "a1"]
     inner.put_bytes(key, json.dumps(manifest).encode("utf-8"))
     storage = _ReadSpy(inner)
 
@@ -362,6 +360,83 @@ def test_manifest_scope_rejects_invalid_or_naive_feature_timestamp(tmp_path, pub
     log = _log(storage)
     assert log["logical_rows_read"] == 0
     assert log["ops"]["records_out"] == 0 and log["ops"]["failed_records"] == 1
+
+
+def _moved_article_lake(storage, *, old_tagged_at: str, new_tagged_at: str) -> None:
+    """한 기사가 두 파티션에 있는 레이크 — 08-27 판정과 08-28 판정.
+
+    벤더가 같은 원문 URL 을 다른 날짜로 재등록한 실측 형태다(ALPHA-1051, 2026-08-28 8건).
+    사건유형을 갈라 둬 **어느 파티션의 판정이 실렸는지**가 적재 행으로 드러나게 한다.
+    """
+    _write_feature(storage, "ko", "2026-08-27", [
+        _feature_row("moved", [_assertion(event_type_code="OLD_PARTITION_JUDGEMENT")],
+                     published_at="2026-08-27T11:14:07+09:00", tagged_at=old_tagged_at)])
+    _write_feature(storage, "ko", "2026-08-28", [
+        _feature_row("moved", [_assertion()],
+                     published_at="2026-08-28T23:32:51+09:00", tagged_at=new_tagged_at)])
+
+
+def test_moved_article_loads_the_latest_judgement_not_both(tmp_path, monkeypatch):
+    """WHY(ALPHA-1051): `article_id` 는 원문 URL 해시라 불변인데 파티션 키 `published_date`
+    는 벤더 재등록으로 **이동한다** — 옛 파티션 행은 아무도 안 지우므로 한 기사가 두
+    파티션에 남는다. 이걸 manifest 손상으로 보고 죽으면 그 런의 범위가 통째로 유실된다
+    (ALPHA-1052). 최신 판정만 싣고 계속 돌아야 한다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _moved_article_lake(inner, old_tagged_at="2026-08-27T02:18:18+00:00",
+                        new_tagged_at="2026-08-27T15:14:45+00:00")
+    _write_feature_manifest(inner, "T1", [
+        _manifest_partition("ko", "2026-08-27", ["moved"]),
+        _manifest_partition("ko", "2026-08-28", ["moved"]),
+    ])
+    storage = _ReadSpy(inner)
+    conn = _FakeConn(documents=[("moved", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    [(_, _, event_type, _, _, _)] = _inserts(conn, "document_assertion")
+    assert event_type == "SUPPLY_CONTRACT"  # 08-28 판정 — 옛 파티션 판정은 안 실린다
+    log = _log(storage)
+    assert log["rows_moved_partitions"] == 1
+    assert log["logical_rows_read"] == 1  # 두 물리 행이 논리 한 기사로 접혔다
+
+
+def test_date_window_scope_folds_a_moved_article_by_the_same_rule(tmp_path, monkeypatch):
+    """WHY(ALPHA-1051): 복구용 `--from/--to` 경로에는 파티션 간 처리가 없어, 두 판정이
+    날짜와 무관한 자연키 fold 에서 조용히 섞였다(순회가 날짜 오름차순이라 **낡은 쪽**
+    confidence 가 대표가 된다). 두 경로가 다른 사실을 만들면 안 된다(Rule 7).
+
+    **여기선 늦은 파티션의 판정이 더 낡다** — 벤더가 미래 날짜를 되돌린 정정 형태다.
+    이 배치라야 승자 축이 순회 순서가 아니라 `tagged_at` 임이 드러난다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _moved_article_lake(storage, old_tagged_at="2026-08-28T09:00:00+00:00",
+                        new_tagged_at="2026-08-27T15:14:45+00:00")
+    conn = _FakeConn(documents=[("moved", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db(),
+                               from_date="2026-08-27", to_date="2026-08-28") == 0
+
+    [(_, _, event_type, _, _, _)] = _inserts(conn, "document_assertion")
+    assert event_type == "OLD_PARTITION_JUDGEMENT"  # 늦은 파티션이어도 판정이 낡으면 진다
+    assert _log(storage)["rows_moved_partitions"] == 1
+
+
+def test_moved_article_tie_prefers_the_later_partition(tmp_path, monkeypatch):
+    """WHY(ALPHA-1051): 한 런이 두 파티션을 다 바꾸면 배치가 찍는 `tagged_at`(런 시작
+    시각)이 균일해 동률이 난다. 그때 승자가 순회에 흔들리면 같은 입력이 런마다 다른 행을
+    만든다 — 날짜 오름차순 순회 + `>=` 로 **늦은 파티션**이 결정적으로 이겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _moved_article_lake(storage, old_tagged_at="2026-08-27T15:14:45+00:00",
+                        new_tagged_at="2026-08-27T15:14:45+00:00")
+    conn = _FakeConn(documents=[("moved", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db(),
+                               from_date="2026-08-27", to_date="2026-08-28") == 0
+
+    [(_, _, event_type, _, _, _)] = _inserts(conn, "document_assertion")
+    assert event_type == "SUPPLY_CONTRACT"
 
 
 def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):

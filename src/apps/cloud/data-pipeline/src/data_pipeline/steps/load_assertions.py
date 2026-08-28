@@ -49,6 +49,14 @@ ADR-0027 대비: 도메인 ID 는 `<접두사>_<ULID>` 가 기본이지만 이 �
 건너뛴다. 정상 범위는 TagNews manifest로 고정되므로 LoadDocuments와의 일시 결손은 같은
 `input_run_id`를 멱등 재실행해 회수한다(ALPHA-1033).
 
+⚠️ **"한 기사는 한 파티션" 은 거짓이다**(ALPHA-1051). 정체성은 `article_id = url_hash(원문
+URL)` 이라 불변인데 파티션 키 `published_date` 는 **이동한다** — BigKinds 가 같은 원문 URL 을
+다른 `DATE`·`NEWS_ID` 로 재등록하는 것이 실측됐다(2026-08-28 00:12 수집분 8건: 08-27 11:14
+발행이 08-28 23:32 로 재등록). 옛 파티션 행은 아무도 지우지 않으므로(레이크 버킷은 버저닝이
+없어 삭제가 복구 불가, ALPHA-982 와 같은 이유) 한 기사가 두 파티션에 남는다. 이 스텝은 그걸
+**언어 단위 `_merge_by_article` 로 최신 판정만 남겨** 흡수한다 — 파티션 안 압축(part↔미러,
+ALPHA-900)과 같은 규칙이다. 실패로 다루면 그날 런 전체가 죽고 그 범위가 유실된다(ALPHA-1052).
+
 `modality_code` 는 비운다 — 어휘 미정의(ALPHA-361). 값을 발명하면 그게 계약이 된다.
 `available_at` 은 **document 의 가용 시각**이다 — 주장의 PIT 기준은 원문 발행·수집이지
 추출 프로세스 시각(tagged_at)이 아니다(ALPHA-538 로 tagged_at 사용 폐지).
@@ -125,7 +133,6 @@ def _manifest_partitions(
 
     partitions: list[tuple[str, str, str, frozenset[str]]] = []
     seen_partitions: set[tuple[str, str]] = set()
-    seen_article_ids: set[str] = set()
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError(f"feature_partitions 항목이 객체가 아니다: run_id={input_run_id}")
@@ -155,10 +162,12 @@ def _manifest_partitions(
                        or value != value.strip() for value in article_ids)
                 or article_ids != sorted(set(article_ids))):
             raise ValueError(f"article_ids가 유효한 정렬·고유 목록이 아니다: {item!r}")
-        duplicated = seen_article_ids.intersection(article_ids)
-        if duplicated:
-            raise ValueError(f"article_id가 feature 파티션 사이에 중복됐다: {sorted(duplicated)!r}")
-        seen_article_ids.update(article_ids)
+        # ⚠️ **파티션 간 `article_id` 중복은 손상이 아니다**(ALPHA-1051). 벤더가 같은 원문
+        # URL 의 기사를 다른 날짜로 재등록하면 `published_date` 파티션이 이동하는데,
+        # `article_id = url_hash(원문 URL)` 이라 정체성은 그대로다 — 옛 파티션 행은 아무도
+        # 지우지 않으므로 한 기사가 두 파티션에 존재하는 상태가 정상으로 성립한다.
+        # 여기서 막으면 그날 런 전체가 죽고 그 범위가 통째로 유실된다(ALPHA-1052).
+        # 이동은 아래 `run()` 이 언어 단위 `_merge_by_article` 로 최신 판정만 남겨 흡수한다.
         partitions.append((language, published_date, parquet_key, frozenset(article_ids)))
     return partitions
 
@@ -194,6 +203,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     physical_rows_read = rows_read = rows_not_ok = rows_no_assertion = rows_malformed = 0
     rows_superseded = 0   # 같은 기사의 더 낡은 판정이라 안 실은 행 (ALPHA-900)
+    rows_moved_partitions = 0  # 파티션을 옮긴 기사라 옛 파티션 판정을 버린 행 (ALPHA-1051)
     mirrors_unabsorbed = 0  # 아직 흡수 안 된 장중 미러 조각이라 안 읽은 객체 (ALPHA-900)
     folded = missing_document = skipped_incomplete = skipped_partial = 0
     skipped_no_resolved_argument = 0
@@ -227,6 +237,9 @@ def run(
         )
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
+            # 파티션마다 접은 행을 여기 모아 **언어 단위로 한 번 더** 접는다(아래 주석).
+            language_keyed: list[dict] = []
+            language_unkeyed: list[dict] = []
             scopes = (
                 [(date, key, ids) for lang, date, key, ids in manifest_partitions if lang == language]
                 if manifest_partitions is not None else
@@ -286,52 +299,64 @@ def run(
                     unkeyed = [r for r in partition_rows if not r.get("article_id")]
                     keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
                     rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
-                for row in [*keyed.values(), *unkeyed]:
-                    rows_read += 1
-                    if row.get("status") != "ok":
-                        rows_not_ok += 1
-                        continue
-                    article_id = row.get("article_id")
-                    try:
-                        assertions = json.loads(row.get("assertions") or "[]")
-                        if not isinstance(assertions, list):
-                            raise ValueError("assertions 가 리스트가 아님")
-                    except (ValueError, TypeError):
-                        # 행 단위 격리 — 한 이상치가 잡을 무너뜨리지 않는다.
+                language_keyed.extend(keyed.values())
+                language_unkeyed.extend(unkeyed)
+            # ⚠️ **한 기사가 두 파티션에 있을 수 있다**(ALPHA-1051). 벤더가 같은 원문 URL 을
+            # 다른 날짜로 재등록하면 `published_date` 가 이동하는데 옛 파티션 행은 남는다.
+            # 파티션 안에서만 접으면 그 둘이 여기까지 살아 나와 아래 자연키 fold 에서
+            # **날짜와 무관하게** 합쳐진다 — 순회가 날짜 오름차순이라 낡은 쪽 confidence 가
+            # 대표가 되고, 사건유형·서술이 갈리면 정정 전 주장이 따로 적재된다.
+            # 그래서 파티션 안과 **같은 규칙**으로 한 번 더 접는다(최신 `tagged_at` 승).
+            # 같은 런이 두 파티션을 다 바꾸면 배치 행의 `tagged_at`(런 시작 시각)이 균일해
+            # 동률인데, 그때는 날짜 오름차순 순회 + `>=` 로 **늦은 날짜가 이긴다**. 결정적이다.
+            merged = _merge_by_article(language_keyed)
+            rows_moved_partitions += len(language_keyed) - len(merged)
+            for row in [*merged.values(), *language_unkeyed]:
+                rows_read += 1
+                if row.get("status") != "ok":
+                    rows_not_ok += 1
+                    continue
+                article_id = row.get("article_id")
+                try:
+                    assertions = json.loads(row.get("assertions") or "[]")
+                    if not isinstance(assertions, list):
+                        raise ValueError("assertions 가 리스트가 아님")
+                except (ValueError, TypeError):
+                    # 행 단위 격리 — 한 이상치가 잡을 무너뜨리지 않는다.
+                    rows_malformed += 1
+                    continue
+                if not article_id or not assertions:
+                    rows_no_assertion += 1
+                    continue
+                for assertion in assertions:
+                    if not isinstance(assertion, dict):
                         rows_malformed += 1
                         continue
-                    if not article_id or not assertions:
-                        rows_no_assertion += 1
+                    event_type = assertion.get("event_type_code")
+                    predicate = assertion.get("predicate_code")
+                    arguments = assertion.get("arguments")
+                    if not event_type or not predicate or not isinstance(arguments, list):
+                        # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
+                        skipped_incomplete += 1
                         continue
-                    for assertion in assertions:
-                        if not isinstance(assertion, dict):
-                            rows_malformed += 1
-                            continue
-                        event_type = assertion.get("event_type_code")
-                        predicate = assertion.get("predicate_code")
-                        arguments = assertion.get("arguments")
-                        if not event_type or not predicate or not isinstance(arguments, list):
-                            # 자연키 결손 주장 — 넣으면 NOT NULL 위반이거나 멱등 축이 사라진다.
-                            skipped_incomplete += 1
-                            continue
-                        if assertion.get("completeness") != "complete":
-                            # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
-                            # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
-                            # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
-                            skipped_partial += 1
-                            continue
-                        nk = (source_code, article_id, str(event_type), str(predicate))
-                        entry = candidates.get(nk)
-                        if entry is None:
-                            entry = candidates[nk] = {
-                                "confidence": _confidence(assertion.get("confidence")),
-                                "arguments": [],
-                            }
-                        else:
-                            # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
-                            # 하나다. 스칼라는 첫 주장이 대표, arguments 는 union.
-                            folded += 1
-                        entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
+                    if assertion.get("completeness") != "complete":
+                        # 추출기가 필수 역할 결손을 표시한 주장(partial) — 스키마에
+                        # 완결성 컬럼이 없어 실으면 확정 주장과 구분 불가가 된다.
+                        # feature 존에 원본이 남으니 어휘/컬럼 합의 후 재적재한다.
+                        skipped_partial += 1
+                        continue
+                    nk = (source_code, article_id, str(event_type), str(predicate))
+                    entry = candidates.get(nk)
+                    if entry is None:
+                        entry = candidates[nk] = {
+                            "confidence": _confidence(assertion.get("confidence")),
+                            "arguments": [],
+                        }
+                    else:
+                        # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
+                        # 하나다. 스칼라는 첫 주장이 대표, arguments 는 union.
+                        folded += 1
+                    entry["arguments"].extend(a for a in arguments if isinstance(a, dict))
 
         # 역할→종별 계약(`role_bindings_v0_1.yaml`). assemble-events 가 이미 읽는 그 표다
         # — 같은 계보의 두 writer 가 다른 계약을 보고 있었다(ALPHA-802). 어휘가 깨져 있으면
@@ -542,6 +567,10 @@ def run(
         # 같은 기사의 낡은 판정이라 안 실은 행 — 유실이 아니라 **대체**다(ALPHA-900).
         # 0 이 아니면 배치 part 파일과 장중 미러가 겹친 창을 지났다는 뜻이다.
         "rows_superseded": rows_superseded,
+        # 파티션을 옮긴 기사라 **옛 파티션의 판정을 버린** 행 수(ALPHA-1051). 위
+        # `rows_superseded` 와 축이 다르다 — 저건 한 파티션 안(part↔미러), 이건 파티션 사이다.
+        # 0 이 아니면 벤더가 그날 기사를 다른 날짜로 재등록했다는 뜻이다.
+        "rows_moved_partitions": rows_moved_partitions,
         # 아직 흡수 안 돼 이번 런이 안 읽은 미러 조각 수(ALPHA-900). 유실이 아니라 **대기**다
         # — 다음 tag_news 가 게이트를 거쳐 part 파일로 흡수하면 그때 실린다.
         "minute_mirrors_unabsorbed": mirrors_unabsorbed,
@@ -620,6 +649,12 @@ def run(
     if args_role_missing:
         logger.warning("load_assertions: 역할 없는 argument %d건 — 그 자리는 적재하지 않았다",
                        args_role_missing)
+    if rows_moved_partitions:
+        # 버린 판정이 있었다는 사실은 품질 로그를 열어야 보이는 수치로 두지 않는다(Rule 12).
+        # 유실이 아니라 **대체**지만(옛 파티션 행은 레이크에 그대로 남는다), 벤더가 날짜를
+        # 옮겼다는 신호 자체가 이 레인의 관측값이다 — 매일 발화하면 그건 이상이다.
+        logger.warning("load_assertions: 파티션을 옮긴 기사 %d건 — 옛 파티션 판정을 버렸다",
+                       rows_moved_partitions)
     logger.info(
         "load_assertions: physical_rows=%d logical_rows=%d considered=%d missing_doc=%d no_resolved=%d created=%d"
         " already=%d args_inserted=%d resolution=%s",
