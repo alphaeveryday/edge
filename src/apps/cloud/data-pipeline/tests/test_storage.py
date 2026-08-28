@@ -8,6 +8,9 @@ from data_pipeline.lake import (
     S3Storage,
     canonical_etf_holdings_partition,
     canonical_run_manifest_key,
+    feature_run_manifest_key,
+    run_manifest_consumed_key,
+    unconsumed_run_ids,
     canonical_supply_contract_fact_partition,
     collection_log_key,
     is_raw_disclosure_key,
@@ -220,3 +223,36 @@ class _FakeS3:
     def delete_objects(self, *, Bucket, Delete):
         self.calls.append((Bucket, [o["Key"] for o in Delete["Objects"]]))
         return self.response
+
+
+def test_consumed_marker_is_per_consumer():
+    """WHY(ALPHA-1052): 한 manifest 에 소비자가 둘 이상인 계보가 있다 — normalize_news 의
+    canonical manifest 를 tag_news 와 load_documents 가 각각 읽는다. 마커를 공유하면 먼저
+    끝난 쪽이 상대의 미소비를 지워, 안 실린 범위가 소비됨으로 굳는다."""
+    a = run_manifest_consumed_key("canonical", "news_articles", "R1", "tag_news")
+    b = run_manifest_consumed_key("canonical", "news_articles", "R1", "load_documents")
+    assert a != b
+    assert a.startswith("operations_archive/canonical_run_manifests/dataset=news_articles/run_id=R1/")
+
+
+def test_unconsumed_lists_produced_minus_consumed(tmp_path):
+    """WHY(ALPHA-1052): 미소비 판정은 "manifest 는 있는데 내 마커가 없다" 하나다. 남의
+    마커나 마커 없는 run 을 잘못 세면 회수가 통째로 어긋난다."""
+    storage = LocalStorage(tmp_path / "lake")
+    for run_id in ("R1", "R2", "R3"):
+        storage.put_bytes(feature_run_manifest_key("news_assertions", run_id), b"{}")
+    storage.put_bytes(run_manifest_consumed_key("feature", "news_assertions", "R1", "me"), b"{}")
+    storage.put_bytes(run_manifest_consumed_key("feature", "news_assertions", "R2", "other"), b"{}")
+
+    assert unconsumed_run_ids(storage, "feature", "news_assertions", "me") == ["R2", "R3"]
+    assert unconsumed_run_ids(storage, "feature", "news_assertions", "me", exclude="R3") == ["R2"]
+
+
+def test_unconsumed_ignores_other_datasets(tmp_path):
+    """WHY(ALPHA-1052): dataset 프리픽스를 안 좁히면 남의 계보를 자기 미소비로 읽어
+    엉뚱한 범위를 적재한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "R1"), b"{}")
+    storage.put_bytes(feature_run_manifest_key("other_dataset", "R9"), b"{}")
+
+    assert unconsumed_run_ids(storage, "feature", "news_assertions", "me") == ["R1"]

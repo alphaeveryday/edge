@@ -70,7 +70,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from edge_ontology import load_authority_registry, load_relations
 
@@ -83,6 +83,8 @@ from ..lake import (
     feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
     quality_log_key,
+    run_manifest_consumed_key,
+    unconsumed_run_ids,
 )
 from .tag_news import _merge_by_article
 
@@ -90,6 +92,15 @@ logger = logging.getLogger(__name__)
 
 JOB_NAME = "load_assertions"
 DATASET = "document_assertion"
+# feature manifest 계보의 dataset 축 — 품질 로그의 DATASET 과 **다르다**(저건 이 스텝이
+# 쓰는 테이블, 이건 읽는 생산물). 두 곳(범위 GET·소비 마커)이 쓰므로 상수로 둔다.
+_MANIFEST_DATASET = "news_assertions"
+
+# 미소비 manifest 회수 한도 (ALPHA-1052). 한 런이 끌어올 최대 개수와 되돌아볼 기간.
+# 상한이 있는 이유: 밀린 것이 많다는 건 레인이 오래 죽어 있었다는 뜻이라 한 런에 몰아
+# 싣는 것보다 사람이 보는 편이 낫고, 무엇보다 한 런의 메모리·시간이 밀린 만큼 자란다.
+_CARRY_MAX_RUNS = 5
+_CARRY_LOOKBACK_DAYS = 7
 
 # tag-news 의 태깅 대상과 같은 축(TAGGED_LANGUAGES=ko) — 언어는 벤더 고정이라 source_code 도
 # 여기서 정해진다. 영어 태깅이 열리면 ("en", "fmp") 를 추가한다.
@@ -124,7 +135,7 @@ def _manifest_partitions(
     storage: Storage, input_run_id: str
 ) -> list[tuple[str, str, str, frozenset[str]]]:
     """TagNews가 증명한 직접 feature key와 현재 실행 article_id 범위."""
-    key = feature_run_manifest_key("news_assertions", input_run_id)
+    key = feature_run_manifest_key(_MANIFEST_DATASET, input_run_id)
     manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
     if not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id:
         raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
@@ -173,6 +184,80 @@ def _manifest_partitions(
         # 이동은 아래 `run()` 이 언어 단위 `_merge_by_article` 로 최신 판정만 남겨 흡수한다.
         partitions.append((language, published_date, parquet_key, frozenset(article_ids)))
     return partitions
+
+
+def _union_partitions(
+    partitions: list[tuple[str, str, str, frozenset[str]]],
+) -> list[tuple[str, str, str, frozenset[str]]]:
+    """같은 (language, published_date) 가 여러 manifest 에서 오면 article_id 를 합친다.
+
+    합치지 않고 두 항목으로 두면 같은 part 파일을 두 번 GET 하고 `physical_rows_read` 가
+    부풀어, 물리/논리 분리(ALPHA-1033)가 말하려는 수가 거짓이 된다. 직접 키는 파티션에서
+    결정되므로(`_manifest_partitions` 가 대조한다) 같은 파티션이면 키도 같다.
+    """
+    merged: dict[tuple[str, str], tuple[str, set[str]]] = {}
+    for language, date, key, ids in partitions:
+        entry = merged.get((language, date))
+        if entry is None:
+            merged[(language, date)] = (key, set(ids))
+        else:
+            entry[1].update(ids)
+    return [(language, date, key, frozenset(ids))
+            for (language, date), (key, ids) in sorted(merged.items())]
+
+
+def _carry_forward(
+    storage: Storage, *, exclude: str, now: datetime,
+    counters: dict[str, int], failures: list[dict],
+) -> tuple[list[tuple[str, str, str, frozenset[str]]], list[str]]:
+    """생산됐지만 아직 이 스텝이 안 실은 manifest 범위를 함께 싣는다 (ALPHA-1052).
+
+    ⚠️ **이건 보조 작업이다 — 실패해도 이번 런의 제 범위를 죽이지 않는다.** 회수 장치가
+    새로운 정지 원인이 되면 고치려던 것보다 나쁘다: 옛 manifest 하나가 깨져 있으면 그 뒤
+    모든 런이 같은 자리에서 죽어(자기증폭) 레인이 영구 정지한다. 그래서 manifest 마다
+    격리하고, 실패는 **수치·사유로 드러내되**(Rule 12) 마커를 안 남겨 다음 런이 다시 집게
+    둔다. 반대로 제 범위(`input_run_id`)의 실패는 격리하지 않는다 — 그건 이 런의 계약이다.
+
+    두 가지를 건너뛴다:
+    - **미완료 manifest**: 생산자가 시작 시 `feature_written=false` 로 쓰고 끝에 덮으므로,
+      생산자가 죽으면 false 가 영영 남는다. 소비 대상이 아니다(생산이 안 끝났다).
+    - **`_CARRY_LOOKBACK_DAYS` 보다 오래된 것**: 그 사이 part 파일이 여러 번 되쓰였고
+      mentions 게이트가 뺀 행도 있어(ALPHA-982) `missing` 검증이 죽을 수 있다. 조용히
+      버리지 않고 `stale` 로 세어 남긴다 — 사람이 판단할 일이다.
+    """
+    partitions: list[tuple[str, str, str, frozenset[str]]] = []
+    carried: list[str] = []
+    try:
+        pending = unconsumed_run_ids(storage, "feature", _MANIFEST_DATASET, JOB_NAME, exclude=exclude)
+    except Exception as exc:
+        # 탐색 자체가 실패해도 제 범위는 싣는다(보조 읽기의 인프라 실패는 격리).
+        logger.exception("미소비 manifest 탐색 실패(격리) — 이번 런 범위만 싣는다")
+        failures.append({"reasons": ["carry_forward_discovery_error"], "error": str(exc)})
+        counters["discovery_failed"] = 1
+        return partitions, carried
+    counters["pending"] = len(pending)
+    for run_id in pending[:_CARRY_MAX_RUNS]:
+        try:
+            manifest = json.loads(
+                storage.get_bytes(feature_run_manifest_key(_MANIFEST_DATASET, run_id)).decode("utf-8"))
+            if not isinstance(manifest, dict) or manifest.get("feature_written") is not True:
+                counters["unfinished"] += 1
+                continue
+            age = now - datetime.fromisoformat(manifest["started_at"])
+            if age > timedelta(days=_CARRY_LOOKBACK_DAYS):
+                counters["stale"] += 1
+                continue
+            partitions.extend(_manifest_partitions(storage, run_id))
+        except Exception as exc:
+            # 한 manifest 의 손상이 나머지 회수와 이번 런을 죽이지 않게 격리한다.
+            logger.exception("미소비 manifest 회수 실패(격리): run_id=%s", run_id)
+            failures.append({"reasons": ["carry_forward_error"], "input_run_id": run_id,
+                             "error": str(exc)})
+            counters["failed"] += 1
+            continue
+        carried.append(run_id)
+    counters["carried"] = len(carried)
+    return partitions, carried
 
 
 def _confidence(value: object) -> float | None:
@@ -231,6 +316,13 @@ def run(
     # manifest GET·검증도 아래 실패 경계 안이다. 그 전에 깨져도 quality log가 0건 범위를
     # 기록할 수 있도록 후보 컨테이너는 경계 밖에서 만든다(ALPHA-1033 fail-loud).
     candidates: dict[tuple[str, str, str, str], dict] = {}
+    # 미소비 manifest 회수 계측(ALPHA-1052) — 경계 밖에 둔다. 회수 탐색이 깨져도 quality log
+    # 가 "몇 개가 밀려 있었고 무엇이 실패했나"를 말해야 한다(Rule 12).
+    carry_counters: dict[str, int] = {
+        "pending": 0, "carried": 0, "unfinished": 0, "stale": 0,
+        "failed": 0, "discovery_failed": 0,
+    }
+    carried_run_ids: list[str] = []
 
     try:
         if input_run_id is not None and (from_date is not None or to_date is not None):
@@ -238,6 +330,12 @@ def run(
         manifest_partitions = (
             _manifest_partitions(storage, input_run_id) if input_run_id is not None else None
         )
+        if manifest_partitions is not None:
+            carried_partitions, carried_run_ids = _carry_forward(
+                storage, exclude=input_run_id, now=started_at,
+                counters=carry_counters, failures=failures,
+            )
+            manifest_partitions = _union_partitions(manifest_partitions + carried_partitions)
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
             # 파티션마다 접은 행을 여기 모아 **언어 단위로 한 번 더** 접는다(아래 주석).
@@ -573,6 +671,24 @@ def run(
     # 은 드리프트하지 않는다(Rule 5: 코드가 답할 수 있으면 코드가 답한다).
     resolution_rate = (resolved_any / resolution_denominator
                        if resolution_denominator else None)
+    # 소비 마커는 **적재가 성공했을 때만** 쓴다(ALPHA-1052). exit_code 가 0 이 아니면 트랜잭션이
+    # 롤백됐거나 일부 범위가 실패한 것이고, 그때 마커를 남기면 그 범위가 "소비됨"으로 굳어
+    # 다시는 안 실린다 — 이 티켓이 고치려는 바로 그 유실을 장치가 스스로 만든다.
+    # 마커 PUT 자체의 실패도 같은 방향으로 안전하다: 안 써지면 다음 런이 또 집는다(멱등).
+    if exit_code == 0 and input_run_id is not None:
+        for consumed_run_id in [input_run_id, *carried_run_ids]:
+            try:
+                storage.put_bytes(
+                    run_manifest_consumed_key(
+                        "feature", _MANIFEST_DATASET, consumed_run_id, JOB_NAME),
+                    json.dumps({"consumer": JOB_NAME, "run_id": run_id,
+                                "consumed_at": datetime.now(timezone.utc).isoformat()},
+                               ensure_ascii=False).encode("utf-8"))
+            except Exception:
+                # 적재는 이미 성공했다 — 마커 실패로 exit 을 올리면 성공한 런이 실패로 뒤집힌다.
+                logger.exception("소비 마커 기록 실패(다음 런이 재소비): run_id=%s", consumed_run_id)
+                carry_counters["marker_failed"] = carry_counters.get("marker_failed", 0) + 1
+
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
@@ -591,6 +707,11 @@ def run(
         # 아직 흡수 안 돼 이번 런이 안 읽은 미러 조각 수(ALPHA-900). 유실이 아니라 **대기**다
         # — 다음 tag_news 가 게이트를 거쳐 part 파일로 흡수하면 그때 실린다.
         "minute_mirrors_unabsorbed": mirrors_unabsorbed,
+        # 미소비 manifest 회수(ALPHA-1052). `pending` 이 0 이 아니면 앞선 런의 범위가 안 실려
+        # 있었다는 뜻이고, `carried` 가 그중 이번에 회수한 수다. 나머지 셋은 **왜 못 실었나**다:
+        # `unfinished`(생산자가 안 끝낸 manifest) · `stale`(되돌아보기 창 밖) ·
+        # `failed`(그 manifest 만 격리된 실패). 셋 다 0 이 정상이다.
+        "manifest_carry_forward": dict(carry_counters),
         "rows_no_assertion": rows_no_assertion, "rows_malformed": rows_malformed,
         "assertions_considered": len(candidates), "assertions_folded": folded,
         "missing_document": missing_document, "skipped_incomplete": skipped_incomplete,
@@ -666,6 +787,14 @@ def run(
     if args_role_missing:
         logger.warning("load_assertions: 역할 없는 argument %d건 — 그 자리는 적재하지 않았다",
                        args_role_missing)
+    if carry_counters["pending"]:
+        # 밀린 범위가 있었다는 사실은 로그 파일을 열어야 보이는 수치로 두지 않는다(Rule 12) —
+        # 이건 앞선 런이 죽었다는 뜻이고, 회수됐든 아니든 사람이 알아야 하는 신호다.
+        logger.warning(
+            "load_assertions: 미소비 manifest %d건 — 회수 %d건(미완료 %d·창밖 %d·실패 %d)",
+            carry_counters["pending"], carry_counters["carried"], carry_counters["unfinished"],
+            carry_counters["stale"], carry_counters["failed"],
+        )
     if rows_moved_partitions:
         # 버린 판정이 있었다는 사실은 품질 로그를 열어야 보이는 수치로 두지 않는다(Rule 12).
         # 유실이 아니라 **대체**지만(옛 파티션 행은 레이크에 그대로 남는다), 벤더가 날짜를

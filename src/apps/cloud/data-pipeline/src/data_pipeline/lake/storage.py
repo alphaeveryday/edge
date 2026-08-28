@@ -765,6 +765,65 @@ def feature_run_manifest_key(dataset: str, run_id: str) -> str:
     )
 
 
+# manifest 계보의 루트 — 소비 마커 탐색이 이 프리픽스를 LIST 한다(아래 unconsumed_run_ids).
+_MANIFEST_ROOT = {
+    "canonical": "operations_archive/canonical_run_manifests",
+    "feature": "operations_archive/feature_run_manifests",
+}
+
+
+def run_manifest_consumed_key(kind: str, dataset: str, run_id: str, consumer: str) -> str:
+    """그 manifest 를 **누가** 소비 완료했는지 남기는 마커 키 (ALPHA-1052).
+
+    manifest 는 생산자가 쓰고 소비자가 읽는데, 소비가 성공했다는 사실은 지금까지 어디에도
+    안 남았다 — 소비 스텝이 실패하면 그 범위는 다음 런 manifest 에 안 들어오고(이미 생산돼
+    `changed` 가 아니다) 영구 유실됐다. 마커가 있으면 "생산됐으나 미소비"가 LIST 하나로
+    계산돼 다음 런이 이어 싣는다.
+
+    ⚠️ **소비자별로 판다.** 한 manifest 에 소비자가 둘 이상인 계보가 있다 — `normalize_news`
+    의 canonical manifest 는 `tag_news` 와 `load_documents` 가 각각 읽는다. 한 마커를 공유하면
+    먼저 끝난 쪽이 상대의 미소비를 지운다.
+
+    ⚠️ 마커는 **소비자가 자기 성공을 증명한 뒤에만** 쓴다. 원장(ops_task_attempt)으로 대신할
+    수 없다 — 원장 기록은 본 작업을 막지 않으려 예외를 삼키므로(ledger.py 스펙 §3.4) 기록이
+    없는 것과 실패한 것이 구분되지 않는다. 그 축으로 회수를 판정하면 **관대한 방향으로**
+    틀린다(누락된 attempt = 회수 없음 = 조용한 유실).
+    """
+    return f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/run_id={run_id}/consumed/{consumer}.json"
+
+
+def unconsumed_run_ids(
+    storage, kind: str, dataset: str, consumer: str, *, exclude: str | None = None
+) -> list[str]:
+    """`manifest.json` 은 있는데 이 소비자의 consumed 마커가 없는 run_id (사전순, ALPHA-1052).
+
+    LIST 는 이 manifest 계보 프리픽스 **하나**다 — 파티션 데이터가 아니라 실행 메타라
+    ALPHA-1033 이 막은 데이터 풀스캔과 다른 축이다. 키 수는 런당 2~3개로 자라므로(뉴스 기준
+    연 ~1,500) 페이지 수는 년당 1~2다. 반환은 **정렬**이라 호출자가 같은 순서로 처리한다.
+
+    ⚠️ `feature_written`·`canonical_written` 이 false 인 반쪽 manifest 도 여기 섞여 나온다 —
+    생산자가 시작 시 false 로 쓰고 끝에 true 로 덮기 때문이다. 생산자가 죽으면 그 false
+    manifest 가 영영 남으므로, **호출자가 GET 해서 완료 여부를 보고 걸러야 한다**(여기서
+    거르려면 run 마다 GET 이 필요해 LIST 한 번의 이점이 사라진다).
+    """
+    prefix = f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/"
+    produced: set[str] = set()
+    consumed: set[str] = set()
+    marker_suffix = f"/consumed/{consumer}.json"
+    for key in storage.list_keys(prefix):
+        rest = key[len(prefix):]
+        if not rest.startswith("run_id="):
+            continue
+        run_id, _, tail = rest[len("run_id="):].partition("/")
+        if not run_id:
+            continue
+        if tail == "manifest.json":
+            produced.add(run_id)
+        elif key.endswith(marker_suffix):
+            consumed.add(run_id)
+    return sorted(produced - consumed - ({exclude} if exclude else set()))
+
+
 def quality_log_prefix(dataset: str) -> str:
     """그 dataset 의 품질 로그가 사는 프리픽스(날짜 이하 전부). 관측이 run_id 로 훑을 때 쓴다.
 
