@@ -978,8 +978,14 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   manifest 마다 격리한다: 옛 manifest 하나가 깨져도 이번 런은 살고, 못 실은 사유는
   `unfinished`·`stale`·`failed`·`over_limit` 로 갈라 남는다. 창(7일) 밖으로 밀린 것은
   `skipped` 마커로 닫아 탐색이 수렴하게 한다(consumed 와 이름이 다르다 — "안 싣고 닫았다"가
-  "실었다"로 둔갑하면 안 된다). ⚠️ 격리는 **읽기·검증까지**다 — 적재는 한 트랜잭션이라
-  회수 행이 DB 제약을 어기면 이번 런도 같이 죽는다(ALPHA-1053).
+  "실었다"로 둔갑하면 안 된다). **적재도 격리한다**(ALPHA-1053) —
+  후보를 범위에 귀속해(겹치는 기사는 자기 범위 몫) 회수 run 마다 중첩 트랜잭션(savepoint)으로
+  감싼다. 하나로 묶지 않는 것은 오염된 manifest 하나가 건강한 회수분까지 매 런 되돌려
+  그쪽도 수렴 못 하기 때문이다. 롤백된 그룹은 **수치도 되돌린다**(savepoint 는 DB 쓰기만
+  되돌리고 카운터는 파이썬 변수다) — 채번·`created`·해소율 분모까지. 실패한 그룹이 들고
+  있던 기사를 주장하는 manifest 는 전부 미소비로 남는다(`blocked_by_rollback`).
+  ⚠️ 남은 구멍: document 조회는 그룹 savepoint **밖**이라 그 실패는 여전히 런 전체를
+  죽인다 — 읽기이고 자기 범위만으로도 같은 질의가 나가서 그대로 뒀다.
   한 파티션에 같은 기사의 판정이 둘 있으면 **`tagged_at` 최신만 싣는다**(ALPHA-900,
   `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건 자연키가 갈린 옛
   판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다.

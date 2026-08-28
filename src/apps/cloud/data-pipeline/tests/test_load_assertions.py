@@ -134,6 +134,8 @@ class _FakeCursor:
             self._rows = [(a, d, conn.doc_available_at)
                           for a, d in conn.documents if a in wanted]
         elif upper.startswith("INSERT INTO DOCUMENT_ASSERTION"):
+            if conn.fail_on_event is not None and params[2] == conn.fail_on_event:
+                raise RuntimeError(f"제약 위반 모사: event_type={params[2]}")
             nk = (params[1], params[2], params[3])
             self.rowcount = 0 if nk in conn.existing_assertions else 1
         elif upper.startswith("UPDATE DOCUMENT_ASSERTION"):
@@ -161,13 +163,43 @@ class _FakeCursor:
         return False
 
 
+class _FakeTransaction:
+    """psycopg3 `conn.transaction()` 의 최소 대역 — **중첩이면 savepoint** 다.
+
+    ⚠️ 예외로 빠져나갈 때 **그 블록 안에서 기록된 문장을 되돌린다**. 되돌리지 않으면
+    테스트가 "롤백됐다"를 볼 수 없어, 격리 단언이 실제로는 아무것도 재지 않는 초록이
+    된다(ALPHA-1053). 예외는 삼키지 않는다 — 호출부가 격리 여부를 정한다.
+
+    ⚠️ 이건 제어 흐름 대역일 뿐 실제 savepoint 의미가 아니다. 실 Postgres 위 검증은
+    `tests/e2e/test_carried_scope_isolation.py` 가 진다.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        self._mark = len(self._conn.log)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            del self._conn.log[self._mark:]
+        return False
+
+
 class _FakeConn:
-    def __init__(self, documents=None, existing_assertions=None, existing_arguments=None):
+    def __init__(self, documents=None, existing_assertions=None, existing_arguments=None,
+                 fail_on_event=None):
         self.log: list = []
+        # 이 event_type_code 를 INSERT 하려 하면 터진다 — 회수 그룹만 오염시키는 수단이다.
+        self.fail_on_event = fail_on_event
         self.documents = documents or []          # (source_document_id, document_id)
         self.doc_available_at = _DOC_AVAILABLE_AT  # document.available_at 로 SELECT 에 실림
         self.existing_assertions = existing_assertions or set()  # (doc_id, event, predicate)
         self.existing_arguments = existing_arguments or set()
+
+    def transaction(self):
+        return _FakeTransaction(self)
 
     def cursor(self):
         return _FakeCursor(self)
@@ -550,6 +582,213 @@ def test_overlapping_scopes_read_the_part_file_once(tmp_path, monkeypatch):
     assert log["rows_moved_partitions"] == 0
     assert log["rows_superseded"] == 0
     assert log["logical_rows_read"] == 2
+
+
+def test_a_failing_carried_group_does_not_roll_back_this_run(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): ALPHA-1052 는 읽기·검증만 격리했고 **적재는 한 트랜잭션**이었다 —
+    회수 행이 터지면 온전한 이번 런까지 롤백됐다. 그러면 같은 미소비 manifest 가 다음 런에도
+    다시 들어와 창 만료(7일)까지 레인이 반복 정지한다. "회수는 보조 작업이라 이번 런을 안
+    죽인다"는 ALPHA-1052 의 선언이 적재 단계에서 거짓이었다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
+                     fail_on_event="OLDER_RUN")   # 회수 범위(T0)의 주장만 터진다
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"SUPPLY_CONTRACT"}          # 자기 범위는 살아서 커밋된다
+    carry = _log(storage)["manifest_carry_forward"]
+    assert carry["load_failed"] == 1 and carry["carried"] == 0
+    assert storage.list_keys(_consumed_key("T0")) == []   # 다음 런이 다시 집는다
+    assert storage.list_keys(_consumed_key("T1"))         # 자기 범위는 소비 완료
+
+
+def test_one_poisoned_carried_run_does_not_block_the_others(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 회수 전체를 savepoint 하나로 묶으면 오염된 manifest 하나가 건강한
+    회수분까지 매 런 되돌려 **그쪽도 영영 수렴 못 한다** — ALPHA-1052 3라운드에서 상한을
+    앞에서 잘랐을 때와 같은 굶주림이다. savepoint 는 회수 run 마다여야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    _write_feature(storage, "ko", "2026-08-24", [
+        _feature_row("healthy", [_assertion(event_type_code="HEALTHY_RUN")],
+                     published_at="2026-08-24T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T00"), json.dumps({
+        "run_id": "T00", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-24", ["healthy"])],
+    }).encode("utf-8"))
+    conn = _FakeConn(
+        documents=[("older", "doc_OLD"), ("current", "doc_CUR"), ("healthy", "doc_HEA")],
+        fail_on_event="OLDER_RUN")
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"SUPPLY_CONTRACT", "HEALTHY_RUN"}   # 성한 회수분은 실린다
+    assert storage.list_keys(_consumed_key("T00"))        # 그 run 은 소비 완료
+    assert storage.list_keys(_consumed_key("T0")) == []   # 오염된 run 만 남는다
+
+
+def test_a_rolled_back_group_claims_none_of_its_counters(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): **savepoint 는 DB 쓰기만 되돌린다 — 카운터는 파이썬 변수다.** 롤백된
+    그룹이 이미 올린 `created`·`arguments_inserted`·해소율 분모가 그대로 남으면
+    `ops.records_out` 이 실제 커밋 행보다 커진다. 그룹이 착지 못 했으면 그 그룹의 수는
+    아무것도 안 실어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    # 회수 범위에 주장 둘 — 앞 하나는 INSERT 성공, 뒤에서 터진다. savepoint 가 앞 것도
+    # 되돌리므로 카운터도 앞 것까지 되돌아가야 한다.
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("older", [_assertion(event_type_code="LANDS_FIRST"),
+                               _assertion(event_type_code="OLDER_RUN")],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["older"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
+                     fail_on_event="OLDER_RUN")
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    log = _log(storage)
+    # 자기 범위 한 건만 실렸다 — 롤백된 그룹의 LANDS_FIRST 는 어느 수에도 안 든다
+    assert log["created"] == 1
+    assert log["ops"]["records_out"] == 1
+    assert log["arguments_inserted"] == 1
+    assert log["argument_resolution"]["total"] == 1
+    assert len(log["created_rows_sample"]) == 1
+
+
+def test_a_rolled_back_group_blocks_every_manifest_claiming_its_articles(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 후보는 한 그룹에만 들어가지만 **기사는 여러 manifest 가 주장한다**
+    (재태깅으로 정상 생긴다). 겹치는 기사를 앞 그룹이 가져갔는데 그 그룹이 롤백되면, 뒤
+    manifest 의 그룹은 비어 있어 "성공"으로 보이고 마커를 받는다 — 그러면 그 기사는 어느
+    manifest 로도 다시 안 실린다(앞 manifest 는 창 만료 때 skipped 로 닫힌다)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("shared", [_assertion(event_type_code="OLDER_RUN")],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00")])
+    for run_id in ("T0", "T00"):        # 둘 다 같은 기사를 주장한다
+        storage.put_bytes(feature_run_manifest_key("news_assertions", run_id), json.dumps({
+            "run_id": run_id, "producer": "tag_news", "feature_written": True,
+            "started_at": "2026-08-25T15:00:00+00:00",
+            "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["shared"])],
+        }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _FakeConn(documents=[("shared", "doc_SHR"), ("current", "doc_CUR")],
+                     fail_on_event="OLDER_RUN")
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    # 후보를 안 가진 쪽도 그 기사를 주장하므로 미소비로 남는다
+    assert storage.list_keys(_consumed_key("T0")) == []
+    assert storage.list_keys(_consumed_key("T00")) == []
+    assert storage.list_keys(_consumed_key("T1"))      # 자기 범위는 온전하다
+
+    # 차단 사유는 섞이면 안 된다 — 문서 결손과 그룹 롤백은 대응이 다르다(전자는 상류
+    # LoadDocuments 재실행, 후자는 그 manifest 의 데이터 문제). 결손은 한 건도 없었다.
+    # ⚠️ 이 단언은 **T00 이라야 도달한다**: 적재가 터진 T0 는 `failed_carried` 로 이미
+    # eligible 에서 빠져, 겹치는 기사를 주장하는 다른 manifest 가 없으면 이 분기가 안 돈다.
+    log = _log(storage)
+    assert log["missing_document"] == 0
+    carry = log["manifest_carry_forward"]
+    assert carry["blocked_by_missing_document"] == 0
+    assert carry["blocked_by_rollback"] == 1
+    assert carry["load_failed"] == 1
+
+
+def test_a_concept_minted_in_two_groups_is_counted_once(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 채번을 그룹 안으로 옮기면서 `concepts_minted` 가 그룹별 **개수의 합**이
+    됐다. 같은 MINT 대상이 자기 범위와 회수 범위에 다 있으면 DB 에는 `ON CONFLICT DO NOTHING`
+    으로 한 행인데 로그는 둘이라 한다 — 전역 dict 였을 땐 그게 접혔다. 그룹 분리가 만든 회귀다."""
+    storage = LocalStorage(tmp_path / "lake")
+    same_metric = [{"role_code": "METRIC", "text": "매출", "entity_id": None},
+                   {"role_code": "ISSUER", "text": "삼성전자", "entity_id": None}]
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("older", [_assertion(event_type_code="OLDER_RUN",
+                                          arguments=same_metric)],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion(arguments=same_metric)],
+                     published_at="2026-08-26T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["older"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"SUPPLY_CONTRACT", "OLDER_RUN"}   # 두 그룹 다 커밋됐다(전제)
+    minted = {params[0] for params in _inserts(conn, "concept")}
+    assert len(minted) == 1, "같은 MINT 대상인데 개념 행이 둘이다"
+    assert _log(storage)["concepts_minted"] == 1, "그룹마다 세어 DB 행보다 크게 보고했다"
+
+
+def test_a_rolled_back_group_does_not_claim_its_minted_concepts(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 채번(entity·concept)이 그룹 밖에 있으면 롤백된 그룹의 개념이 로그에
+    남아 **만들지 않은 마스터를 만들었다고 주장한다**(ALPHA-830 과 같은 자리). 이번 세션에서
+    계측 거짓을 네 번 잡았다 — 채번도 롤백 단위 안이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("older", [_assertion(event_type_code="OLDER_RUN", arguments=[
+            # ⚠️ 채번되는 역할이어야 한다 — ISSUER/미등록회사는 **미해소**일 뿐 채번이
+            # 아니라서, 그걸로는 이 테스트가 채번 경로를 한 번도 안 밟고 통과한다.
+            {"role_code": "METRIC", "text": "매출", "entity_id": None},
+            {"role_code": "ISSUER", "text": "삼성전자", "entity_id": None},
+        ])], published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["older"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
+                     fail_on_event="OLDER_RUN")
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    # 롤백된 그룹이 세운 개념은 로그가 주장하지 않는다
+    log = _log(storage)
+    assert log["concepts_minted"] == 0        # 롤백된 그룹의 채번을 주장하지 않는다
+    assert _inserts(conn, "concept") == []    # savepoint 가 그 INSERT 도 되돌린다
+
+
+def test_own_scope_failure_still_fails_the_whole_run(tmp_path, monkeypatch):
+    """WHY(ALPHA-1053): 격리는 **회수 범위에만**이다. 자기 범위 실패까지 삼키면 이 런의
+    계약이 깨진 채 exit 0 이 되고, 소비 마커까지 남아 그 범위가 영영 안 실린다 — 이 PR 이
+    막으려는 유실을 정반대 방향으로 만든다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
+                     fail_on_event="SUPPLY_CONTRACT")   # 자기 범위(T1)의 주장이 터진다
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
+    assert storage.list_keys(_consumed_key("T1")) == []
+    assert storage.list_keys(_consumed_key("T0")) == []
+    assert _log(storage)["failures"][0]["reasons"] == ["load_error"]
 
 
 def test_consumed_manifest_is_not_carried_again(tmp_path, monkeypatch):
