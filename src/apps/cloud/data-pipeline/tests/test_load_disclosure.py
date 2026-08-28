@@ -338,6 +338,38 @@ def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
     assert ledger["before"] is None and ledger["after"] is None
 
 
+def test_commit_failure_resets_transactional_pending_metrics(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): guarded delete 뒤 commit이 실패하면 fact와 원장 삭제가 모두 롤백된다.
+    Python 카운터만 성공으로 남으면 운영 로그가 durable backlog를 완료로 오인한다."""
+    from contextlib import contextmanager
+
+    storage = LocalStorage(tmp_path / "lake")
+    row = _supply("R1")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [row])
+    payload = json.dumps([row], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn = _FakeConn()
+    conn.pending["R1"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(row["fetched_at"]),
+        "attempt_count": 0, "first_run": "T1", "last_run": "T1",
+    }
+
+    @contextmanager
+    def fail_commit(_config):
+        yield conn
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(load_disclosure, "connect", fail_commit)
+
+    assert load_disclosure.run(storage, "R1", db=_db()) == 1
+    ledger = _log(storage)["pending_ledger"]
+    assert ledger["succeeded"] == 0
+    assert ledger["failed"] == 0
+    assert ledger["after"] is None
+
+
 def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): 사업부문 winner의 정체성은 (rcept_no, ordinal)이다. 한 공시의
     여러 부문을 rcept_no 중복으로 오인하면 정상 manifest가 원장 진입 전에 실패한다."""

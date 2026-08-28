@@ -618,6 +618,9 @@ def run(
         logger.exception("공시 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
         docs_created = facts_written = facts_already = 0
+        pending_succeeded = 0
+        pending_failures = []
+        pending_after = None
         created_sample = []
         exit_code = 1
 
