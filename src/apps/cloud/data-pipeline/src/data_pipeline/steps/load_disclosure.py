@@ -199,13 +199,15 @@ def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
 def _pending_rows(conn) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT rcept_no, disclosure_type, canonical_rows, payload_sha256, attempt_count"
+            "SELECT rcept_no, disclosure_type, canonical_rows, payload_sha256, source_fetched_at,"
+            " attempt_count"
             " FROM disclosure_load_pending ORDER BY first_seen_at, rcept_no"
         )
         return [{"rcept_no": r, "disclosure_type": t,
                  "rows": json.loads(rows) if isinstance(rows, str) else rows,
-                 "payload_sha256": digest, "attempt_count": attempts}
-                for r, t, rows, digest, attempts in cur.fetchall()]
+                 "payload_sha256": digest, "source_fetched_at": source_fetched_at,
+                 "attempt_count": attempts}
+                for r, t, rows, digest, source_fetched_at, attempts in cur.fetchall()]
 
 
 def _pending_in_window(pending: list[dict], from_date: str | None,
@@ -224,6 +226,21 @@ def _pending_in_window(pending: list[dict], from_date: str | None,
                 and (to_date is None or report_date <= to_date)):
             selected.append(item)
     return selected
+
+
+def _merge_pending(canonical_rows: list[dict], pending: dict[str, list[dict]],
+                   pending_by_rcept: dict[str, dict]) -> list[dict]:
+    """canonical보다 source revision이 최신인 pending payload만 우선한다."""
+    grouped: dict[str, list[dict]] = {}
+    for row in canonical_rows:
+        grouped.setdefault(row["rcept_no"], []).append(row)
+    for rcept_no, pending_rows in pending.items():
+        current = grouped.get(rcept_no)
+        item = pending_by_rcept[rcept_no]
+        # 동률이면 가장 최근 normalizer가 쓴 shared canonical이 파서 correction 정본이다.
+        if current is None or item["source_fetched_at"] > _source_revision(current):
+            grouped[rcept_no] = pending_rows
+    return [row for rcept_no in sorted(grouped) for row in grouped[rcept_no]]
 
 
 def _mark_pending_failure(conn, pending: dict | None, code: str, error: str | None = None) -> None:
@@ -443,10 +460,8 @@ def run(
                               if item["disclosure_type"] == "SUPPLY_CONTRACT"}
             pending_segment = {item["rcept_no"]: item["rows"] for item in pending
                                if item["disclosure_type"] == "BUSINESS_SEGMENT"}
-            supply_rows = [row for row in supply_rows if row["rcept_no"] not in pending_supply]
-            supply_rows.extend(row for rows in pending_supply.values() for row in rows)
-            segment_rows = [row for row in segment_rows if row["rcept_no"] not in pending_segment]
-            segment_rows.extend(row for rows in pending_segment.values() for row in rows)
+            supply_rows = _merge_pending(supply_rows, pending_supply, pending_by_rcept)
+            segment_rows = _merge_pending(segment_rows, pending_segment, pending_by_rcept)
             documents = {**_document(supply_rows, "SUPPLY_CONTRACT"),
                          **_document(segment_rows, "BUSINESS_SEGMENT")}
             segment_by_rcept = {}

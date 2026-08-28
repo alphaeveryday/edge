@@ -102,7 +102,8 @@ class _FakeCursor:
             }
         elif upper.startswith("SELECT RCEPT_NO, DISCLOSURE_TYPE, CANONICAL_ROWS"):
             self._result = [(r, v["disclosure_type"], v["rows"], v["payload_sha256"],
-                             v["attempt_count"]) for r, v in sorted(self._conn.pending.items())]
+                             v["source_fetched_at"], v["attempt_count"])
+                            for r, v in sorted(self._conn.pending.items())]
         elif upper.startswith("UPDATE DISCLOSURE_LOAD_PENDING"):
             code, error, rcept_no, digest = params
             item = self._conn.pending.get(rcept_no)
@@ -349,7 +350,8 @@ def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_pa
 
 def test_run_scoped_manifest_survives_shared_canonical_overwrite(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): 다른 normalize 런이 report-date canonical을 덮어써도 먼저 완료된
-    manifest의 immutable 바이트는 남아야 그 winner를 durable ledger에 넣을 수 있다."""
+    manifest의 immutable 바이트는 남아야 그 winner를 원장 후보로 검증할 수 있다. 단, 적재
+    시점에는 source revision이 더 최신인 shared canonical을 되돌리면 안 된다."""
     storage = LocalStorage(tmp_path / "lake")
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
            "2026-06-30", [_supply("R1", amount_krw=1)])
@@ -360,8 +362,9 @@ def test_run_scoped_manifest_survives_shared_canonical_overwrite(tmp_path, monke
     _dual_manifests(storage, "T-new", supply=("R1",))
     conn = _FakeConn()
 
+    assert load_disclosure._manifest_winners(storage, "T-old")[0]["rows"][0]["amount_krw"] == 1
     assert _run(storage, conn, monkeypatch, input_run_id="T-old") == 0
-    assert _inserts(conn, "supply_contract_fact")[0][5] == 1
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 2
 
 
 def test_source_revision_matches_producer_leniency():
@@ -658,6 +661,32 @@ def test_window_does_not_consume_pending_outside_event_assembly_scope(tmp_path, 
 
     assert set(conn.pending) == {"R-old"}
     assert _inserts(conn, "document") == []
+
+
+def test_newer_canonical_wins_when_its_enqueue_previously_failed(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 새 canonical 작성 뒤 DB 장애로 enqueue가 실패하면 예전 pending만 남는다.
+    다음 실행이 그 payload를 무조건 우선하면 최신 fact를 되돌리고 원장까지 성공 삭제한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    newer = _supply("R1", amount_krw=200,
+                    fetched_at="2026-07-16T02:00:00+00:00")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [newer])
+    _dual_manifests(storage, "T1")
+    conn = _FakeConn()
+    older = _supply("R1", amount_krw=100,
+                    fetched_at="2026-07-16T01:00:00+00:00")
+    payload = json.dumps([older], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn.pending["R1"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(older["fetched_at"]),
+        "attempt_count": 0, "first_run": "old", "last_run": "old",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+
+    assert conn.pending == {}
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 200
 
 
 def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):
