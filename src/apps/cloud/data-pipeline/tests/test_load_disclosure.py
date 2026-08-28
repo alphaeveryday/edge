@@ -239,6 +239,45 @@ def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path,
     }
 
 
+def test_manifest_read_and_enqueue_are_serialized(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 과거 런이 canonical을 먼저 읽고 최신 런 뒤에 upsert하면 최신
+    correction을 덮는다. manifest read 자체가 enqueue advisory lock 안에서 일어나야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    observed = []
+
+    def fake_winners(actual_storage, actual_run_id):
+        observed.append((actual_storage, actual_run_id, conn.log[-1][0]))
+        return []
+
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", fake_winners)
+    load_disclosure._enqueue_winners(_db(), storage, "T1")
+
+    assert observed == [(storage, "T1", "SELECT pg_advisory_xact_lock(%s)")]
+
+
+def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): enqueue commit 뒤 canonical scan이 실패했는데 backlog 0으로 기록하면
+    운영자가 durable winner가 없다고 오판한다. 실제 COUNT 전 실패는 unknown이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+
+    def _fail_scan(*args, **kwargs):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(load_disclosure, "_read_facts", _fail_scan)
+
+    assert load_disclosure.run(storage, "R1", db=_db(), input_run_id="T1") == 1
+    assert set(conn.pending) == {"R1"}
+    ledger = _log(storage)["pending_ledger"]
+    assert ledger["before"] is None and ledger["after"] is None
+
+
 def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): 사업부문 winner의 정체성은 (rcept_no, ordinal)이다. 한 공시의
     여러 부문을 rcept_no 중복으로 오인하면 정상 manifest가 원장 진입 전에 실패한다."""

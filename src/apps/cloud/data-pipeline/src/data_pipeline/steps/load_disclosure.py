@@ -72,6 +72,9 @@ _SHARE_BASIS = {"REPORTED", "COMPUTED", "RESCALED", "UNRELIABLE"}
 
 _SAMPLE_LIMIT = 50
 _PARTIAL_EXIT_CODE = 2
+# mutable canonical을 읽고 pending에 반영하는 순서를 런 간 직렬화한다. PostgreSQL signed
+# bigint 범위 안의 고정 namespace key("DISCLOSU")다.
+_PENDING_ENQUEUE_LOCK = 0x444953434C4F5355
 
 _MANIFESTS = (
     ("supply_contract_fact", "normalize_disclosure", "SUPPLY_CONTRACT",
@@ -155,11 +158,13 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
     return winners
 
 
-def _enqueue_winners(db: DbConfig, run_id: str, winners: list[dict]) -> None:
-    """적재보다 먼저 별도 transaction으로 commit한다. 같은 ID 재등장은 최신 payload로 수렴."""
-    if not winners:
-        return
+def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
+    """manifest 읽기부터 enqueue commit까지 직렬화해 늦은 과거 런의 덮어쓰기를 막는다."""
     with connect(db) as conn, conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_PENDING_ENQUEUE_LOCK,))
+        winners = _manifest_winners(storage, run_id)
+        if not winners:
+            return
         cur.executemany(
             "INSERT INTO disclosure_load_pending (rcept_no, disclosure_type, canonical_rows,"
             " payload_sha256, first_seen_run_id, last_seen_run_id)"
@@ -364,14 +369,15 @@ def run(
     created_sample: list[dict] = []
     rejected_sample: list[dict] = []
     failures: list[dict] = []
-    pending_before = pending_after = pending_succeeded = 0
+    pending_before = pending_after = None if input_run_id is not None else 0
+    pending_succeeded = 0
     pending_failures: list[dict] = []
     exit_code = 0
 
     try:
         if input_run_id is not None:
             # 별도 connect 경계라 이 commit이 끝난 뒤에만 typed-fact 적재를 시작한다.
-            _enqueue_winners(db, input_run_id, _manifest_winners(storage, input_run_id))
+            _enqueue_winners(db, storage, input_run_id)
         supply_rows, s1 = _clean_rcept(_read_facts(
             storage, canonical_supply_contract_fact_partition, from_date, to_date))
         segment_rows, s2 = _clean_rcept(_read_facts(
