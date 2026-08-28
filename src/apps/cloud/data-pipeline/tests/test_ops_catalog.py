@@ -35,12 +35,13 @@ def test_content_hash_is_deterministic():
 
 
 def test_only_manifest_steps_fulfill_on_partial_exit():
-    # WHY(ALPHA-1036·1038): 비0 성공 산출은 일반 규칙이 아니라 winner를 commit하는 정제·적재의
+    # WHY(ALPHA-1036·1038·1044): 비0 성공 산출은 일반 규칙이 아니라 winner를 commit하는 정제·적재의
     # 계약이다. 다른 작업에 exit 2를 넓히면 실제 실패가 downstream 완료로 오인된다.
     partial = {
         "NORMALIZE_PRICE", "LOAD_PRICE_DAILY",
         "LOAD_PRICE_TRIGGERS",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
+        "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
     assert all(
@@ -505,6 +506,10 @@ def test_dependencies_encode_the_asl_gates():
     # 카탈로그에 돌아왔다(1분 레인의 그 순서 검증은 `test_disclosure_worker` 에 남아 있다).
     assert set(catalog.get("LOAD_DISCLOSURE").depends_on) == {
         "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT"}
+    for key in catalog.get("LOAD_DISCLOSURE").depends_on:
+        assert catalog.get(key).fulfilled_exit_codes == (0, 2), (
+            f"{key}: SFN은 exit 2의 완료 manifest를 하류로 보내므로 원장 의존도 충족돼야 한다"
+        )
     # 뉴스 레인(ALPHA-591)의 의존은 **뉴스 SFN 의 게이트 축**이다 — 옛 시장 의존(LOAD_ASSERTIONS
     # ← feature 7개, LOAD_DOCUMENTS ← ENRICH_CORP_CODE)을 복사하면 뉴스 런에 존재하지 않는
     # 작업을 기다려 영영 eligible 이 안 되고, hard deadline 뒤 전부 BLOCKED 로 오귀속된다.

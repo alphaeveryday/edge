@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import zipfile
@@ -15,6 +16,7 @@ from pathlib import Path
 from data_pipeline.lake import (
     LocalStorage,
     canonical_business_segment_fact_partition,
+    canonical_run_manifest_key,
     raw_disclosure_document_key,
     raw_disclosure_partition,
 )
@@ -81,6 +83,12 @@ def _canonical_rows(storage, report_date: str) -> list[dict]:
     return rows
 
 
+def _manifest(storage, run_id: str) -> dict:
+    return json.loads(storage.get_bytes(
+        canonical_run_manifest_key("business_segment_fact", run_id)
+    ).decode("utf-8"))
+
+
 def test_backfill_window_filters_business_reports_by_filing_date(tmp_path):
     """사업부문 백필도 공급계약과 같은 접수일 창을 써야 두 canonical dataset의 범위가
     갈리지 않는다."""
@@ -134,7 +142,7 @@ def test_no_segment_table_is_isolated_failure(tmp_path):
     body = _doc_zip("<html><body><p>사업의 내용 없음</p></body></html>", rcept_no)
     _write_run(storage, [(_report_record(rcept_no), body)])
 
-    assert seg.run(storage, "S1") == 0
+    assert seg.run(storage, "S1") == 2
     assert _canonical_rows(storage, "2026-03-19") == []
     log = _quality_log(storage)
     assert log["records_failed"] == 1
@@ -147,7 +155,7 @@ def test_non_object_row_is_isolated(tmp_path):
     key = f"{raw_disclosure_partition(SOURCE, MARKET, INGEST_DATE, 'R1')}/part-00000.ndjson"
     storage.put_bytes(key, (json.dumps("scalar") + "\n").encode("utf-8"))
 
-    assert seg.run(storage, "S1") == 0
+    assert seg.run(storage, "S1") == 2
     log = _quality_log(storage)
     assert log["records_failed"] == 1
     assert log["failures"][0]["reasons"] == ["non_object_row"]
@@ -200,3 +208,33 @@ def test_scoped_run_writes_canonical(tmp_path):
     assert len(_canonical_rows(storage, "2026-03-19")) == 4
     log = _quality_log(storage)
     assert log["canonical_written"] is True and log["records_passed"] == 4
+
+
+def test_manifest_records_segment_winners_with_direct_key_and_sha(tmp_path):
+    # WHY(ALPHA-1044): 사업부문은 rcept_no 하나가 여러 fact로 fan-out하므로 ordinal까지 winner
+    # 정체성에 있어야 하며, direct key와 SHA가 없으면 하류가 다시 prefix를 추측·LIST해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20260319000020"
+    _write_run(storage, [(_report_record(rcept_no), _doc_zip(PHARMA_HTML, rcept_no))])
+
+    assert seg.run(storage, "S1", input_run_id="R1") == 0
+    part = _manifest(storage, "S1")["canonical_partitions"][0]
+    assert part["winner_ids"] == [
+        {"rcept_no": rcept_no, "segment_ordinal": ordinal} for ordinal in range(4)
+    ]
+    assert part["key"] == (
+        f"{canonical_business_segment_fact_partition('2026-03-19')}/part-00000.parquet"
+    )
+    assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
+
+
+def test_partial_segment_failure_keeps_completed_empty_manifest(tmp_path):
+    # WHY(ALPHA-1044): 사업부문 파싱 실패가 공급계약 manifest와 뒤섞이지 않아야 한다. 이
+    # dataset은 성공 winner 0건을 완료로 확정하면서 종료 코드 2로 전체 window만 INCOMPLETE다.
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20260319000021"
+    _write_run(storage, [(_report_record(rcept_no), _doc_zip("<html/>", rcept_no))])
+
+    assert seg.run(storage, "S1") == 2
+    assert _manifest(storage, "S1")["canonical_written"] is True
+    assert _manifest(storage, "S1")["canonical_partitions"] == []

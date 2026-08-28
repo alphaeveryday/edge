@@ -440,6 +440,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="bigkinds",
         deadline_offset_seconds=1800, stalled_after_seconds=1800,
         pipeline_type="disclosure",
+        # 2 = 성공 winner manifest commit + 일부 행 실패. SFN도 loader를 계속 실행하므로
+        # 원장의 하류 의존 충족 계약을 같은 값으로 맞춘다(ALPHA-1044).
+        fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="NORMALIZE_DISCLOSURE_SEGMENT", stage="normalize",
@@ -448,6 +451,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="bigkinds",
         deadline_offset_seconds=1800, stalled_after_seconds=1800,
         pipeline_type="disclosure",
+        fulfilled_exit_codes=(0, 2),
     ),
     # ⚠️ 의존은 공시 SFN 의 `DisclosureNormalizeCheckResults` 게이트다 — **ENRICH_CORP_CODE 를
     # 걸 수 없다.** 그건 시장 레인 작업이라 이 런에 존재하지 않아 영영 eligible 이 안 된다

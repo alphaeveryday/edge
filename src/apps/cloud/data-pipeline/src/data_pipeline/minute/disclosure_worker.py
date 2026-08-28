@@ -258,15 +258,22 @@ class DisclosureWorker(MinuteWorkerLoop):
                 )
             else:
                 # 정제는 **방금 쓴 키만** 읽는다 — 기본 경로의 `raw/` 전량 스캔은 분 단위로
-                # 못 돈다(하루 720 tick × 버킷 전량 LIST). 0건 창이면 정제는 순수 no-op 이라
-                # 부르지 않는다(빈 quality_log 만 720개 쌓인다).
-                if outcome["raw_keys"]:
-                    step_exits["normalize"] = normalize_disclosure.run(
-                        self.storage, run_id, run_id, raw_keys=outcome["raw_keys"],
-                    )
-                    step_exits["segment"] = normalize_disclosure_segment.run(
-                        self.storage, run_id, run_id, raw_keys=outcome["raw_keys"],
-                    )
+                # 못 돈다(하루 720 tick × 버킷 전량 LIST). 빈 목록도 호출해 완료된 빈 run
+                # manifest를 남긴다. 그래야 정상 0건과 producer 미실행을 구분할 수 있다.
+                normalizers = (
+                    ("normalize", normalize_disclosure.run),
+                    ("segment", normalize_disclosure_segment.run),
+                )
+                for name, normalizer in normalizers:
+                    try:
+                        step_exits[name] = normalizer(
+                            self.storage, run_id, run_id, raw_keys=outcome["raw_keys"],
+                        )
+                    except Exception:
+                        # producer 계보는 독립이다. 한쪽 예외를 hard failure로 남기되 다른
+                        # manifest의 초기화·성공 기록까지 막지 않는다.
+                        logger.exception("공시 window 정제 예외(producer=%s)", name)
+                        step_exits[name] = 1
                 # 적재는 raw 가 0건이어도 돈다 — canonical 창 스캔이 **의도된 백로그 회수
                 # 경로**다(직전 tick 의 정제는 됐는데 적재가 깨진 경우를 여기서 줍는다).
                 # 창을 질의 창으로 좁혀 parquet GET 을 그 며칠로 묶는다.
@@ -282,15 +289,18 @@ class DisclosureWorker(MinuteWorkerLoop):
                 # 그 날짜만 LIST 하는 것이고, 배치 경로와 공유라 별건이다.
                 # 그리고 이 레인은 **창 밖 백로그를 회수하지 않는다** — 하루 한 번 전량 적재
                 # (`load-disclosure` 무창 배치)가 그 몫이고 PR B 범위 밖이다.
-                step_exits["load"] = load_disclosure.run(
-                    self.storage, run_id, db=cfg.db,
-                    from_date=query_from, to_date=query_to,
-                )
-                if step_exits["load"] == 0:
-                    step_exits["assemble"] = assemble_disclosure_events.run(
+                # exit 2는 성공 winner를 manifest까지 확정한 부분 실패라 하류가 그 범위를
+                # 처리한다. exit 1·그 밖의 값은 incomplete canonical을 뜻하므로 차단한다.
+                if all(step_exits[name] in (0, 2) for name in ("normalize", "segment")):
+                    step_exits["load"] = load_disclosure.run(
                         self.storage, run_id, db=cfg.db,
                         from_date=query_from, to_date=query_to,
                     )
+                    if step_exits["load"] == 0:
+                        step_exits["assemble"] = assemble_disclosure_events.run(
+                            self.storage, run_id, db=cfg.db,
+                            from_date=query_from, to_date=query_to,
+                        )
 
             data_status = _classify(raw_status, step_exits, rcept_nos)
             manifest = build_poll_manifest(
@@ -576,4 +586,3 @@ def disclosure_worker_cli(settings, *, session_date: str | None,
                 ticks, processed, failed, blocked)
     # 확인 게이트 — 실패가 있었거나 한 window 도 못 본 채 차단만 됐으면 성공이 아니다
     return 1 if failed or (blocked and not processed) else 0
-

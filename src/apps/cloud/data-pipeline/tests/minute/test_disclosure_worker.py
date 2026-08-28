@@ -57,11 +57,14 @@ class StubSteps:
     """5스텝을 대신하는 스텁 — 무엇을 어떤 인자로 불렀는지 기록한다."""
 
     def __init__(self, *, rcept_nos=("20260810000001", "20260810000002"),
-                 status="success", exit_code=0, raw_keys=None, truncated=False):
+                 status="success", exit_code=0, raw_keys=None, truncated=False,
+                 normalize_exit=0, segment_exit=0):
         self.rcept_nos = tuple(rcept_nos)
         self.status = status
         self.exit_code = exit_code
         self.truncated = truncated
+        self.normalize_exit = normalize_exit
+        self.segment_exit = segment_exit
         self.raw_keys = (
             ["raw/source=dart/dataset=disclosures/market=KR/ingest_date=2026-08-10"
              "/run_id=r1/part-00000.ndjson"] if raw_keys is None else raw_keys
@@ -91,11 +94,11 @@ class StubSteps:
     def normalize(self, storage, run_id, input_run_id=None, *, raw_keys=None):
         self.normalize_calls.append({"run_id": run_id, "input_run_id": input_run_id,
                                      "raw_keys": raw_keys})
-        return 0
+        return self.normalize_exit
 
     def segment(self, storage, run_id, input_run_id=None, *, raw_keys=None):
         self.segment_calls.append({"run_id": run_id, "raw_keys": raw_keys})
-        return 0
+        return self.segment_exit
 
     def load(self, storage, run_id, *, db, from_date=None, to_date=None):
         self.load_calls.append({"run_id": run_id, "from": from_date, "to": to_date})
@@ -380,16 +383,18 @@ def test_수집이_실패하면_정제와_적재를_부르지_않는다(tmp_path
     assert "WINDOW_FAILED" in states, "수집 실패가 tick 상태에 안 실렸다"
 
 
-def test_raw_가_0건이어도_적재는_돈다(tmp_path, monkeypatch):
+def test_raw_가_0건이어도_빈_manifest를_확정하고_적재는_돈다(tmp_path, monkeypatch):
     """적재의 canonical 창 스캔은 **의도된 백로그 회수 경로**다 — 직전 tick 의 정제는 됐는데
-    적재가 깨진 경우를 여기서 줍는다. 정제는 반대로 no-op 이라 부르지 않는다."""
+    적재가 깨진 경우를 여기서 줍는다. 정제도 빈 완료 manifest로 미실행과 정상 0건을 가른다."""
     db = FakeMinuteDB()
     steps = install(monkeypatch, StubSteps(rcept_nos=(), raw_keys=[]))
     worker, _, _, _ = build_worker(db, tmp_path, windows=1)
 
     run_ticks(worker, NOW)
 
-    assert steps.normalize_calls == [] and steps.segment_calls == []
+    assert steps.normalize_calls and steps.segment_calls
+    assert steps.normalize_calls[0]["raw_keys"] == []
+    assert steps.segment_calls[0]["raw_keys"] == []
     assert steps.load_calls, "0건 창에서 적재 회수 경로가 사라졌다"
 
 
@@ -429,6 +434,55 @@ def test_하위_스텝_실패는_INCOMPLETE_이고_소스_실패로_세지_않�
     assert [r["data_status"] for r in confirmed] == ["INCOMPLETE"]
     # 소스 단위 실패가 아니다 — 실패 unit 0(그게 PR A 의 유도 규칙이다)
     assert confirmed[0]["failed_unit_count"] == 0
+
+
+def test_dual_정제_한쪽_부분실패도_다른쪽을_실행하고_INCOMPLETE로_남긴다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1044): 공급계약 한 행 실패가 사업부문 성공 manifest 생성을 막으면 두 산출의
+    # 계보가 결합된다. 둘 다 실행하되 normalize=2를 window 성공으로 접지 않아야 한다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(normalize_exit=2, segment_exit=0))
+    worker, _, session_id, storage = build_worker(db, tmp_path, windows=1)
+
+    run_ticks(worker, NOW)
+
+    assert steps.normalize_calls and steps.segment_calls
+    assert steps.load_calls, "완료 manifest가 있는 부분 성공 범위를 적재하지 않았다"
+    confirmed = [r for r in _window_rows(db, session_id) if r["data_status"] != "DUE"]
+    assert [r["data_status"] for r in confirmed] == ["INCOMPLETE"]
+    manifest_key = next(k for k in storage.list_keys("operations_archive/minute_manifests/")
+                        if k.endswith("poll.json"))
+    assert json.loads(storage.get_bytes(manifest_key))["step_exits"]["normalize"] == 2
+    assert json.loads(storage.get_bytes(manifest_key))["step_exits"]["segment"] == 0
+
+
+def test_dual_정제_hard_failure는_둘다_실행하되_적재를_막는다(tmp_path, monkeypatch):
+    """한 producer의 저장 실패 뒤 canonical 직접 스캔 loader를 돌리면 incomplete 범위가 DB로
+    전파된다. 다른 producer는 독립 실행하되 하류 신뢰경계는 두 manifest가 모두 있어야 열린다."""
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(normalize_exit=1, segment_exit=0))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=1)
+
+    run_ticks(worker, NOW)
+
+    assert steps.normalize_calls and steps.segment_calls
+    assert steps.load_calls == []
+
+
+def test_dual_정제_한쪽_예외도_다른쪽을_실행하고_적재를_막는다(tmp_path, monkeypatch):
+    """WHY(ALPHA-1044): producer가 exit 1로 접지 못한 예외도 다른 manifest 계보를 막으면
+    안 된다. 다만 한쪽 manifest가 incomplete이므로 canonical loader 신뢰경계는 열지 않는다."""
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps())
+    monkeypatch.setattr(
+        dw.normalize_disclosure, "run",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("manifest put failed")),
+    )
+    worker, _, _, _ = build_worker(db, tmp_path, windows=1)
+
+    run_ticks(worker, NOW)
+
+    assert steps.segment_calls
+    assert steps.load_calls == []
 
 
 def test_소스_실패는_INVALID_이고_실패_unit_이_소스다(tmp_path, monkeypatch):

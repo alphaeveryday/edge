@@ -64,6 +64,30 @@ locals {
       StringEquals = "succeeded"
     }
   ]
+  # 정제 exit 2는 성공 winner를 canonical+manifest에 commit한 입력 부분 실패다. 둘 중 어느
+  # producer든 exit 2까지는 LoadDisclosure로 넘기고, 마지막 strict check에서 FAILED로 닫는다.
+  disclosure_normalize_continue_checks = [
+    for index, _ in local.disclosure_normalize_jobs : {
+      Or = [
+        {
+          Variable     = "$.normalize_results[${index}].status"
+          StringEquals = "succeeded"
+        },
+        {
+          And = [
+            {
+              Variable  = "$.normalize_results[${index}].exit_code"
+              IsPresent = true
+            },
+            {
+              Variable      = "$.normalize_results[${index}].exit_code"
+              NumericEquals = 2
+            },
+          ]
+        },
+      ]
+    }
+  ]
   disclosure_feature_success_checks = [
     for index, _ in local.disclosure_feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
@@ -124,9 +148,28 @@ locals {
         Next       = "DisclosureNormalizeCheckResults"
       }
       DisclosureNormalizeCheckResults = {
-        Type    = "Choice"
-        Choices = [{ And = local.disclosure_normalize_success_checks, Next = "DisclosureFeatureParallel" }]
+        Type = "Choice"
+        Choices = [
+          { And = local.disclosure_normalize_success_checks, Next = "DisclosureFeatureParallel" },
+          { And = local.disclosure_normalize_continue_checks, Next = "DisclosureNotifyNormalizePartial" },
+        ]
         Default = "DisclosureNotifyFailure"
+      }
+      DisclosureNotifyNormalizePartial = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::sns:publish"
+        ResultPath = null
+        Next       = "DisclosureFeatureParallel"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.normalize_partial_notification_error"
+          Next        = "DisclosureFeatureParallel"
+        }]
+        Parameters = {
+          TopicArn    = aws_sns_topic.alarms.arn
+          "Subject.$" = "States.Format('[${var.name}-disclosure] normalize 부분 실패 — run {}', $.run_id)"
+          "Message.$" = "States.JsonToString($)"
+        }
       }
       DisclosureFeatureParallel = {
         Type       = "Parallel"
@@ -140,11 +183,14 @@ locals {
         Choices = [{ And = local.disclosure_feature_success_checks, Next = "DisclosureRawPartialCheck" }]
         Default = "DisclosureNotifyFailure"
       }
-      # raw 부분 실패 런의 마감 판정(시장·뉴스 SFN 과 동형) — 다운스트림을 끝까지 돌린 뒤 raw 를
-      # 다시 보고 부분 실패였으면 FAILED 로 끝낸다. 알림은 이미 위에서 쐈으므로 SNS 를 안 탄다.
+      # raw·normalize 부분 실패 런의 마감 판정 — 다운스트림을 끝까지 돌린 뒤 둘을 다시 보고
+      # 부분 실패였으면 FAILED 로 끝낸다. 알림은 이미 위에서 쐈으므로 SNS 를 안 탄다.
       DisclosureRawPartialCheck = {
-        Type    = "Choice"
-        Choices = [{ And = local.disclosure_raw_success_checks, Next = "DisclosureSucceeded" }]
+        Type = "Choice"
+        Choices = [{
+          And  = concat(local.disclosure_raw_success_checks, local.disclosure_normalize_success_checks)
+          Next = "DisclosureSucceeded"
+        }]
         Default = "DisclosureFailed"
       }
       DisclosureSucceeded = { Type = "Succeed" }
