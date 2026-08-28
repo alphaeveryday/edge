@@ -22,6 +22,27 @@ resource "aws_s3_bucket_public_access_block" "lake" {
   restrict_public_buckets = true
 }
 
+# 공시 completed manifest의 winner를 DB pending 원장에 넣기 전까지 mutable canonical 덮어쓰기를
+# 견디는 run-scoped snapshot이다. 분당 실행마다 전체 날짜 파티션을 복사하므로 영구 보존하면
+# run 수 × 파티션 크기로 자란다. 정상 재시도보다 충분히 긴 30일을 두되, DB 원장 자체의
+# until-success 보존에는 만료를 두지 않는다.
+resource "aws_s3_bucket_lifecycle_configuration" "canonical_run_artifacts" {
+  bucket = aws_s3_bucket.lake.id
+
+  rule {
+    id     = "expire-canonical-run-artifacts"
+    status = "Enabled"
+
+    filter {
+      prefix = "operations_archive/canonical_run_artifacts/"
+    }
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
 # lake 전환 후 legacy raw/curated 버킷은 더 이상 TF 가 소유하지 않는다.
 # 원격 버킷은 삭제하지 않고 state 에서만 forget 한다. 콘솔 수동 정리는 이 apply 이후 가능하다.
 removed {
