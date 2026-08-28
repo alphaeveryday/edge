@@ -968,6 +968,18 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   정상 경로는 TagNews manifest의 직접 part만 GET하고 현재 `article_id`만 논리 처리한다.
   결손·손상 manifest는 풀스캔으로 넓히지 않고 실패하며, 누적 part의 물리 읽기 행과 manifest
   논리 행을 quality log에서 분리한다. 과거 일부/전체 복구는 `--from/--to`/명시 `--all`이다.
+  **실패한 범위는 다음 런이 이어 싣는다**(ALPHA-1052, `manifest_carry_forward`) — 성공 시
+  manifest 옆에 소비 마커를 쓰고, 시작할 때 "manifest 는 있는데 내 마커가 없는" run 을 함께
+  싣는다. 이게 없던 동안은 이 스텝이 죽으면 그 범위가 **영구 유실**이었다: 다음 런 manifest
+  에는 그 `article_id` 가 없다(이미 태깅돼 생산자의 `changed_ids` 밖). 마커는 소비자별이라
+  한 manifest 를 둘이 읽는 계보(normalize_news → tag-news·load-documents)도 서로를 안 지운다.
+  마커는 **범위가 온전히 착지했을 때만** 쓴다 — `missing_document` 가 있으면 그 범위는
+  미소비로 남는다(그 결손의 회수 수단이 같은 manifest 재실행이다). 회수는 **보조 작업**이라
+  manifest 마다 격리한다: 옛 manifest 하나가 깨져도 이번 런은 살고, 못 실은 사유는
+  `unfinished`·`stale`·`failed`·`over_limit` 로 갈라 남는다. 창(7일) 밖으로 밀린 것은
+  `skipped` 마커로 닫아 탐색이 수렴하게 한다(consumed 와 이름이 다르다 — "안 싣고 닫았다"가
+  "실었다"로 둔갑하면 안 된다). ⚠️ 격리는 **읽기·검증까지**다 — 적재는 한 트랜잭션이라
+  회수 행이 DB 제약을 어기면 이번 런도 같이 죽는다(ALPHA-1053).
   한 파티션에 같은 기사의 판정이 둘 있으면 **`tagged_at` 최신만 싣는다**(ALPHA-900,
   `rows_superseded`) — `tag-news` 의 압축과 같은 규칙이다. 안 그러면 사건 자연키가 갈린 옛
   판정이 함께 INSERT 되고 `ON CONFLICT DO NOTHING` 이라 영영 안 덮인다.

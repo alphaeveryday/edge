@@ -18,6 +18,8 @@ from data_pipeline.lake import (
     feature_run_manifest_key,
     feature_news_assertions_minute_prefix,
     feature_news_assertions_partition,
+    run_manifest_consumed_key,
+    run_manifest_skipped_key,
 )
 from data_pipeline.steps import load_assertions
 
@@ -47,6 +49,18 @@ def _write_feature(storage, language: str, date: str, rows: list[dict]) -> None:
     pq.write_table(table, buf)
     storage.put_bytes(
         f"{feature_news_assertions_partition(language, date)}/part-00000.parquet", buf.getvalue())
+
+
+def _lineage_prefix() -> str:
+    """manifest 계보 프리픽스 — 경로를 테스트가 다시 조립하지 않게 빌더에서 깎아 쓴다.
+
+    ⚠️ 아래 세 테스트의 `list_calls` 단언이 원래 `== []` 였다(ALPHA-1033: "상위 LIST 는 범위
+    회귀"). ALPHA-1052 의 미소비 회수가 LIST 를 **하나** 추가하는데, 그건 feature **데이터**
+    프리픽스가 아니라 manifest **계보** 프리픽스다 — 비용이 과거 파티션 수가 아니라 런 수에
+    비례하는 다른 축이다. 그래서 단언을 느슨하게 풀지 않고 **어느 프리픽스인지까지** 못박는다.
+    데이터 프리픽스를 LIST 하기 시작하면 이 단언이 그대로 깨진다.
+    """
+    return feature_run_manifest_key("news_assertions", "X").removesuffix("run_id=X/manifest.json")
 
 
 def _manifest_partition(language: str, date: str, article_ids: list[str]) -> dict:
@@ -209,7 +223,7 @@ def test_manifest_reads_direct_keys_and_reports_physical_and_logical_rows(tmp_pa
     _setup(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
-    assert storage.list_calls == []
+    assert storage.list_calls == [_lineage_prefix()]
     assert storage.get_calls == [
         feature_run_manifest_key("news_assertions", "T1"),
         partitions[0]["key"], partitions[1]["key"],
@@ -277,7 +291,7 @@ def test_empty_completed_feature_manifest_does_not_list_or_get_parquet(tmp_path,
     _setup(monkeypatch, _FakeConn())
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
-    assert storage.list_calls == []
+    assert storage.list_calls == [_lineage_prefix()]
     assert storage.get_calls == [feature_run_manifest_key("news_assertions", "T1")]
     assert _log(inner)["logical_rows_read"] == 0
 
@@ -337,7 +351,7 @@ def test_manifest_missing_logical_id_fails_loud(tmp_path):
     storage = _ReadSpy(inner)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
-    assert storage.list_calls == []
+    assert storage.list_calls == [_lineage_prefix()]
     assert storage.get_calls == [feature_run_manifest_key("news_assertions", "T1"), partition["key"]]
     log = _log(inner)
     assert log["logical_rows_read"] == 0
@@ -457,6 +471,260 @@ def test_manifest_array_order_does_not_decide_the_tie(tmp_path, monkeypatch):
 
     [(_, _, event_type, _, _, _)] = _inserts(conn, "document_assertion")
     assert event_type == "SUPPLY_CONTRACT"  # 배열 순서와 무관하게 늦은 파티션이 이긴다
+
+
+def _consumed_key(run_id: str) -> str:
+    return run_manifest_consumed_key("feature", "news_assertions", run_id, "load_assertions")
+
+
+def _two_runs_lake(storage, *, older_written: bool = True, older_started_at: str | None = None):
+    """앞선 런 T0 과 이번 런 T1 의 manifest·feature — T0 은 아직 미소비다."""
+    _write_feature(storage, "ko", "2026-08-25", [
+        _feature_row("older", [_assertion(event_type_code="OLDER_RUN")],
+                     published_at="2026-08-25T09:00:00+09:00")])
+    _write_feature(storage, "ko", "2026-08-26", [
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00")])
+    storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": older_written,
+        "started_at": older_started_at or "2026-08-25T15:00:00+00:00",
+        "feature_partitions": [_manifest_partition("ko", "2026-08-25", ["older"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+
+
+def _carry_conn():
+    return _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")])
+
+
+def test_unconsumed_manifest_from_a_failed_run_is_carried_forward(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): 이 스텝이 실패하면 그 범위는 다음 런 manifest 에 안 들어온다 —
+    이미 태깅돼 생산자의 `changed_ids` 밖이기 때문이다. 아무도 다시 안 실으면 그 하루가
+    영구 유실된다(2026-08-28 실발화). 다음 런이 미소비 범위를 **이어 실어야** 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"OLDER_RUN", "SUPPLY_CONTRACT"}  # 앞선 런 범위까지 실렸다
+    carry = _log(storage)["manifest_carry_forward"]
+    assert (carry["pending"], carry["carried"]) == (1, 1)
+    assert storage.list_keys(_consumed_key("T0")) and storage.list_keys(_consumed_key("T1"))
+
+
+def test_overlapping_scopes_read_the_part_file_once(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): 자기 범위와 회수 범위가 **같은 파티션**을 가리키는 것이 정상이다
+    (인접 날짜, 그리고 파티션을 옮긴 기사 — ALPHA-1051). 소유자별로 따로 읽으면서 캐시가
+    없으면 GET 도 `physical_rows_read` 도 두 배가 되어, 물리/논리 분리(ALPHA-1033)가
+    말하려는 수가 거짓이 된다 — "누적 part 에 과거 행이 몇 개였나"를 못 읽는다."""
+    inner = LocalStorage(tmp_path / "lake")
+    _write_feature(inner, "ko", "2026-08-26", [
+        _feature_row("older", [_assertion(event_type_code="OLDER_RUN")],
+                     published_at="2026-08-26T08:00:00+09:00"),
+        _feature_row("current", [_assertion()], published_at="2026-08-26T09:00:00+09:00"),
+    ])
+    inner.put_bytes(feature_run_manifest_key("news_assertions", "T0"), json.dumps({
+        "run_id": "T0", "producer": "tag_news", "feature_written": True,
+        "started_at": "2026-08-25T15:00:00+00:00",
+        # ⚠️ `current` 가 **두 manifest 에 다 있다** — tag_news 가 두 런에서 같은 기사를
+        # 다시 태깅하면(미러 흡수 뒤 재태깅) 정상으로 생기는 모양이다. 이게 없으면 두 범위가
+        # 같은 파티션을 가리켜도 행이 안 겹쳐 겹침 처리가 시험되지 않는다.
+        "feature_partitions": [_manifest_partition("ko", "2026-08-26", ["older", "current"])],
+    }).encode("utf-8"))
+    _write_feature_manifest(
+        inner, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    storage = _ReadSpy(inner)
+    _setup(monkeypatch, _carry_conn())
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    part_key = _manifest_partition("ko", "2026-08-26", [])["key"]
+    assert storage.get_calls.count(part_key) == 1     # 두 범위가 같은 part 를 한 번만 GET
+    log = _log(inner)
+    assert log["physical_rows_read"] == 2             # 4 면 이중 계수다
+    # ⚠️ GET 만 한 번이면 충분하지 않다 — 같은 행을 두 범위가 각각 담으면 언어 단위 접기가
+    # 그 차이를 **파티션 이동으로 계수해** ALPHA-1051 신호가 거짓이 된다. 이동은 없었다.
+    assert log["rows_moved_partitions"] == 0
+    assert log["rows_superseded"] == 0
+    assert log["logical_rows_read"] == 2
+
+
+def test_consumed_manifest_is_not_carried_again(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): 마커가 곧 "소비됐다"의 증거다. 이걸 안 보면 매 런이 과거 전체를
+    다시 실어 비용이 런 수에 비례해 자란다 — manifest 범위 제한(ALPHA-1033)이 무의미해진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    storage.put_bytes(_consumed_key("T0"), b"{}")
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"SUPPLY_CONTRACT"}  # T0 은 이미 소비됐다
+    assert _log(storage)["manifest_carry_forward"]["pending"] == 0
+
+
+def test_failed_load_writes_no_consumed_marker(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): **이 단언이 장치 전체의 안전핀이다.** 실패한 런이 마커를 남기면 그
+    범위가 "소비됨"으로 굳어 다시는 안 실린다 — 회수 장치가 스스로 영구 유실을 만든다."""
+    from contextlib import contextmanager
+
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+
+    @contextmanager
+    def _boom(config):
+        raise RuntimeError("DB 연결 끊김")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(load_assertions, "connect", _boom)
+    monkeypatch.setattr(load_assertions, "load_resolution_index", lambda c: _INDEX)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
+    assert storage.list_keys(_consumed_key("T1")) == []
+    assert storage.list_keys(_consumed_key("T0")) == []
+
+
+@pytest.mark.parametrize("door", ["manifest_json", "vanished_article", "wrong_partition_date"])
+def test_a_broken_carried_scope_never_kills_this_run(tmp_path, monkeypatch, door):
+    """WHY(ALPHA-1052): 회수 범위가 깨지는 **문이 하나가 아니다**. manifest JSON 손상만
+    막았더니 나머지가 그대로 열려 있었다(edge-review 3라운드) — manifest 는 멀쩡한데 그
+    범위의 parquet 검증이 죽는 경로다. 옛 manifest 가 가리키는 article_id 는 그 사이
+    되쓰기로 part 에서 사라질 수 있고(ALPHA-982), 그러면 매 후속 런이 같은 자리에서 죽어
+    **레인이 창 만료까지 정지한다** — 회수 장치가 고치려던 것보다 나쁜 정지를 만든다.
+
+    문마다 이번 런은 살아야 하고, 그 회수 범위는 마커를 못 받아 다음 런이 다시 집어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    if door == "manifest_json":
+        storage.put_bytes(feature_run_manifest_key("news_assertions", "T0"), b"{ not json")
+    elif door == "vanished_article":
+        # manifest 는 "older" 를 가리키는데 그 파티션의 part 가 되쓰여 사라졌다
+        _write_feature(storage, "ko", "2026-08-25", [
+            _feature_row("someone-else", [_assertion()],
+                         published_at="2026-08-25T09:00:00+09:00")])
+    else:
+        # part 는 있는데 그 행의 published_at 이 파티션 날짜와 어긋난다
+        _write_feature(storage, "ko", "2026-08-25", [
+            _feature_row("older", [_assertion()], published_at="2026-08-24T09:00:00+09:00")])
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0  # 제 범위는 산다
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert loaded == {"SUPPLY_CONTRACT"}
+    carry = _log(storage)["manifest_carry_forward"]
+    assert (carry["pending"], carry["carried"], carry["failed"]) == (1, 0, 1)
+    # 읽기 실패는 문서 결손이 아니다 — 섞으면 두 사유가 로그에서 안 갈린다
+    assert carry["blocked_by_missing_document"] == 0
+    assert storage.list_keys(_consumed_key("T0")) == []   # 다음 런이 다시 집는다
+    assert storage.list_keys(_consumed_key("T1"))         # 제 범위는 소비 완료다
+
+
+def test_stale_manifest_is_closed_so_discovery_converges(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): 창 밖으로 밀린 manifest 는 영원히 소비되지 않는다 — 닫지 않으면 매
+    런이 그걸 다시 GET 하고 다시 세, 탐색 비용과 `pending` 이 영원히 자란다(비수렴).
+    창 밖 판정은 단조(시간은 한 방향)라 한 번만 하면 된다. 마커 이름이 `consumed` 가
+    아니라 `skipped` 인 것이 핵심이다 — "안 싣고 닫았다"가 "실었다"로 둔갑하면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage, older_started_at="2026-01-01T00:00:00+00:00")
+    _setup(monkeypatch, _carry_conn())
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    assert _log(storage)["manifest_carry_forward"]["stale"] == 1
+    skipped = run_manifest_skipped_key("feature", "news_assertions", "T0", "load_assertions")
+    assert storage.list_keys(skipped)
+    assert storage.list_keys(_consumed_key("T0")) == []   # 실은 것이 아니다
+
+    body = json.loads(storage.get_bytes(skipped).decode("utf-8"))
+    assert body["reason"] == "lookback_expired"
+
+    # 다음 런은 이걸 다시 안 본다 — 그게 수렴이다
+    storage2 = _ReadSpy(storage)
+    _write_feature_manifest(
+        storage, "T2", [_manifest_partition("ko", "2026-08-26", ["current"])])
+    _setup(monkeypatch, _carry_conn())
+    assert load_assertions.run(storage2, "L2", db=_db(), input_run_id="T2") == 0
+    [second] = [k for k in storage.list_keys("operations_archive/") if "run_id=L2" in k]
+    assert json.loads(storage.get_bytes(second))["manifest_carry_forward"]["pending"] == 0
+    assert feature_run_manifest_key("news_assertions", "T0") not in storage2.get_calls
+
+
+@pytest.mark.parametrize("case,expect", [("unfinished", "unfinished")])
+def test_uncarryable_manifest_is_counted_not_silently_dropped(tmp_path, monkeypatch, case, expect):
+    """WHY(ALPHA-1052): 못 싣는 두 부류가 있다 — 생산자가 안 끝낸 manifest(`feature_written`
+    이 false 로 남았다)와 되돌아보기 창 밖의 것(그 사이 part 가 여러 번 되쓰여 `missing`
+    검증이 죽을 수 있다). 둘 다 **안 싣는 게 맞지만 조용히 버리면 안 된다** — 사유별 수치가
+    없으면 "회수가 도는데 왜 그 범위는 안 오나"를 로그만으로 설명할 수 없다(Rule 12)."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(
+        storage,
+        older_written=(case != "unfinished"),
+        older_started_at="2026-01-01T00:00:00+00:00" if case == "stale" else None,
+    )
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    carry = _log(storage)["manifest_carry_forward"]
+    assert (carry["pending"], carry["carried"], carry[expect]) == (1, 0, 1)
+    assert storage.list_keys(_consumed_key("T0")) == []
+
+
+@pytest.mark.parametrize("missing,unconsumed,consumed", [
+    ("current", "T1", "T0"),   # 이번 런 범위가 결손 — 회수한 T0 은 온전히 실렸다
+    ("older", "T0", "T1"),     # 회수 범위가 결손 — 이번 런 T1 은 온전히 실렸다
+])
+def test_missing_document_blocks_only_its_own_manifest(
+    tmp_path, monkeypatch, missing, unconsumed, consumed
+):
+    """WHY(ALPHA-1052): `missing_document` 는 **exit 0 인 결손**이고, 그 회수 수단이 바로
+    "같은 input_run_id 재실행"이다(ALPHA-1033). exit 0 만 보고 마커를 남기면 그 재실행
+    자격이 사라진다 — 그래서 결손이 있는 manifest 는 미소비로 남아야 한다.
+
+    **그런데 판정은 manifest 별이어야 한다.** 전역 카운터로 막으면 한 범위의 결손이 온전히
+    실린 다른 범위의 마커까지 막아, 그 범위가 매 런 다시 실리고 pending 이 무한히 자란다 —
+    수렴과 온전한 회수를 동시에 못 준다. 두 방향을 다 건다: 결손이 이번 런 쪽일 때와
+    회수 쪽일 때, 막히는 것은 **그쪽 하나뿐**이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    present = "older" if missing == "current" else "current"
+    conn = _FakeConn(documents=[(present, f"doc_{present.upper()}")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    log = _log(storage)
+    assert log["missing_document"] == 1
+    assert log["manifest_carry_forward"]["blocked_by_missing_document"] == 1
+    assert storage.list_keys(_consumed_key(unconsumed)) == []
+    assert storage.list_keys(_consumed_key(consumed))
+
+
+def test_uncarryable_manifests_do_not_starve_the_queue(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): 상한을 `pending[:N]` 으로 앞에서 자르면, 영구히 못 싣는 것이 앞자리를
+    차지했을 때 그 뒤는 **검사조차 안 돼 영원히 굶는다**. run_id 는 해시라 사전순이 시간순도
+    아니어서 어느 것이 앞에 올지 정해져 있지도 않다 — 상한은 실제로 실은 수에만 걸려야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    for i in range(6):  # _CARRY_MAX_RUNS 보다 많은, 영원히 못 싣는 manifest 가 앞에 깔린다
+        storage.put_bytes(feature_run_manifest_key("news_assertions", f"A{i}"), json.dumps({
+            "run_id": f"A{i}", "producer": "tag_news", "feature_written": False,
+            "started_at": "2026-08-25T15:00:00+00:00", "feature_partitions": [],
+        }).encode("utf-8"))
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert "OLDER_RUN" in loaded  # 뒤에 있던 정상 manifest 가 굶지 않았다
+    carry = _log(storage)["manifest_carry_forward"]
+    assert (carry["unfinished"], carry["carried"], carry["over_limit"]) == (6, 1, 0)
 
 
 def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):

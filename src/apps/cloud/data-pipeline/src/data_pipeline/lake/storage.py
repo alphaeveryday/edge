@@ -765,6 +765,97 @@ def feature_run_manifest_key(dataset: str, run_id: str) -> str:
     )
 
 
+# manifest 계보의 루트 — 소비 마커 탐색이 이 프리픽스를 LIST 한다(아래 unconsumed_run_ids).
+_MANIFEST_ROOT = {
+    "canonical": "operations_archive/canonical_run_manifests",
+    "feature": "operations_archive/feature_run_manifests",
+}
+
+
+def run_manifest_consumed_key(kind: str, dataset: str, run_id: str, consumer: str) -> str:
+    """그 manifest 를 **누가** 소비 완료했는지 남기는 마커 키 (ALPHA-1052).
+
+    manifest 는 생산자가 쓰고 소비자가 읽는데, 소비가 성공했다는 사실은 지금까지 어디에도
+    안 남았다 — 소비 스텝이 실패하면 그 범위는 다음 런 manifest 에 안 들어오고(이미 생산돼
+    `changed` 가 아니다) 영구 유실됐다. 마커가 있으면 "생산됐으나 미소비"가 LIST 하나로
+    계산돼 다음 런이 이어 싣는다.
+
+    ⚠️ **소비자별로 판다.** 한 manifest 에 소비자가 둘 이상인 계보가 있다 — `normalize_news`
+    의 canonical manifest 는 `tag_news` 와 `load_documents` 가 각각 읽는다. 한 마커를 공유하면
+    먼저 끝난 쪽이 상대의 미소비를 지운다.
+
+    ⚠️ **마커의 단위는 run_id 다 — manifest 의 세대가 아니다.** 생산자가 같은 run_id 로
+    manifest 를 다시 써 범위를 넓히면(`tag_news._existing_feature_partitions` 가 그 재시도를
+    지원한다) 자동 회수는 그 2세대를 미소비로 못 본다. 자동 경로에서는 도달하지 않는다:
+    뉴스 SFN 에 `Retry` 가 없고(2026-08-28 정의 확인) run_id 는 실행마다 새로 나므로, 한
+    소비 성공과 다음 생산 사이가 벌어지지 않는다. 남는 것은 **사람이 같은 run_id 로
+    tag-news 를 다시 돌린 경우**뿐이고, 그때는 같은 손이 `--input-run-id` 로 이 스텝도
+    재실행한다(그 경로는 마커와 무관하게 자기 manifest 를 항상 읽는다). 세대를 보려면
+    manifest 지문을 마커에 넣고 대조해야 하는데, 그러면 LIST 한 번이던 탐색이 run 마다
+    GET 둘로 바뀐다 — 도달 불가한 경로에 그 비용을 내지 않는다.
+
+    ⚠️ 마커는 **소비자가 자기 성공을 증명한 뒤에만** 쓴다. 원장(ops_task_attempt)으로 대신할
+    수 없다 — 원장 기록은 본 작업을 막지 않으려 예외를 삼키므로(ledger.py 스펙 §3.4) 기록이
+    없는 것과 실패한 것이 구분되지 않는다. 그 축으로 회수를 판정하면 **관대한 방향으로**
+    틀린다(누락된 attempt = 회수 없음 = 조용한 유실).
+    """
+    return f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/run_id={run_id}/consumed/{consumer}.json"
+
+
+def run_manifest_skipped_key(kind: str, dataset: str, run_id: str, consumer: str) -> str:
+    """그 manifest 를 이 소비자가 **싣지 않기로 끝냈다**는 종결 마커 키 (ALPHA-1052).
+
+    소비 마커와 축이 다르다 — 저건 "실었다", 이건 "안 싣고 닫았다"다. 한 이름으로 합치면
+    로그·조회가 둘을 구분 못 해 "회수됐다"가 거짓이 된다.
+
+    이게 없으면 **탐색이 수렴하지 않는다**: 되돌아보기 창 밖으로 밀린 manifest 는 영원히
+    소비되지 않으므로 매 런이 그걸 다시 GET 하고 다시 센다. 조건이 단조(시간은 한 방향)라
+    한 번 창 밖이면 영원히 창 밖이니, 그 판정을 한 번만 하고 닫는 것이 맞다.
+
+    ⚠️ **미완료 manifest(`*_written=false`)에는 쓰지 않는다.** 생산자가 같은 run_id 로
+    끝맺을 수 있어 조건이 단조가 아니다 — 닫아 버리면 완성된 범위를 영영 안 싣는다.
+    그건 창 밖으로 밀릴 때 이 마커를 받는다.
+    """
+    return f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/run_id={run_id}/skipped/{consumer}.json"
+
+
+def unconsumed_run_ids(
+    storage, kind: str, dataset: str, consumer: str, *, exclude: str | None = None
+) -> list[str]:
+    """`manifest.json` 은 있는데 이 소비자의 consumed 마커가 없는 run_id (사전순, ALPHA-1052).
+
+    LIST 는 이 manifest 계보 프리픽스 **하나**다 — 파티션 데이터가 아니라 실행 메타라
+    ALPHA-1033 이 막은 데이터 풀스캔과 다른 축이다. 키 수는 런당 2~3개로 자라므로(뉴스 기준
+    연 ~1,500) 페이지 수는 년당 1~2다. 반환은 **정렬**이라 호출자가 같은 순서로 처리한다.
+
+    "미소비"는 **두 종결 마커가 모두 없는 것**이다 — `consumed`(실었다)와 `skipped`(안 싣고
+    닫았다). skipped 가 없으면 영원히 못 싣는 manifest 를 매 런 다시 GET 해 탐색이 수렴하지
+    않는다.
+
+    ⚠️ `feature_written`·`canonical_written` 이 false 인 반쪽 manifest 도 여기 섞여 나온다 —
+    생산자가 시작 시 false 로 쓰고 끝에 true 로 덮기 때문이다. 생산자가 죽으면 그 false
+    manifest 가 영영 남으므로, **호출자가 GET 해서 완료 여부를 보고 걸러야 한다**(여기서
+    거르려면 run 마다 GET 이 필요해 LIST 한 번의 이점이 사라진다).
+    """
+    prefix = f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/"
+    produced: set[str] = set()
+    consumed: set[str] = set()
+    # 종결은 둘이다 — 실었거나(consumed), 안 싣고 닫았거나(skipped). 둘 다 빼야 탐색이 수렴한다.
+    marker_suffixes = (f"/consumed/{consumer}.json", f"/skipped/{consumer}.json")
+    for key in storage.list_keys(prefix):
+        rest = key[len(prefix):]
+        if not rest.startswith("run_id="):
+            continue
+        run_id, _, tail = rest[len("run_id="):].partition("/")
+        if not run_id:
+            continue
+        if tail == "manifest.json":
+            produced.add(run_id)
+        elif key.endswith(marker_suffixes):
+            consumed.add(run_id)
+    return sorted(produced - consumed - ({exclude} if exclude else set()))
+
+
 def quality_log_prefix(dataset: str) -> str:
     """그 dataset 의 품질 로그가 사는 프리픽스(날짜 이하 전부). 관측이 run_id 로 훑을 때 쓴다.
 
