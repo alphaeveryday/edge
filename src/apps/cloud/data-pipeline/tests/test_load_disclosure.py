@@ -6,17 +6,22 @@
 배치를 통째로 죽이며, 멱등이 깨지면 재실행이 fact_id 를 바꿔 설명이 인용할 계보가 끊긴다.
 """
 
+import hashlib
 import io
 import json
+from datetime import datetime
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from data_pipeline.config import DbConfig
 from data_pipeline.db import stable_domain_id
 from data_pipeline.lake import (
     LocalStorage,
     canonical_business_segment_fact_partition,
+    canonical_run_manifest_key,
+    canonical_run_partition_key,
     canonical_supply_contract_fact_partition,
 )
 from data_pipeline.steps import load_disclosure
@@ -70,8 +75,10 @@ def _segment(rcept_no, ordinal, **over):
 
 
 class _FakeCursor:
-    def __init__(self, log, profiles, existing_docs, actors):
-        self._log, self._profiles, self._existing, self._actors = log, profiles, existing_docs, actors
+    def __init__(self, conn):
+        self._conn = conn
+        self._log, self._profiles = conn.log, conn._profiles
+        self._existing, self._actors = conn._existing, conn._actors
         self.rowcount = 1
         self._result: list = []
 
@@ -79,13 +86,64 @@ class _FakeCursor:
         norm = " ".join(sql.split())
         self._log.append((norm, params))
         upper = norm.upper()
-        if upper.startswith("SELECT DART_CORP_CODE"):
+        if upper.startswith("INSERT INTO DISCLOSURE_LOAD_PENDING"):
+            rcept_no, dtype, rows, digest, source_fetched_at, first_run, last_run = params
+            old = self._conn.pending.get(rcept_no)
+            accepted = not old or source_fetched_at >= old["source_fetched_at"]
+            self.rowcount = int(accepted)
+            if not accepted:
+                return
+            attempts = old["attempt_count"] if old and old["payload_sha256"] == digest else 0
+            self._conn.pending[rcept_no] = {
+                "disclosure_type": dtype, "rows": rows, "payload_sha256": digest,
+                "source_fetched_at": source_fetched_at,
+                "attempt_count": attempts, "first_run": old["first_run"] if old else first_run,
+                "last_run": last_run,
+            }
+        elif upper.startswith("SELECT RCEPT_NO, DISCLOSURE_TYPE, CANONICAL_ROWS"):
+            self._result = [(r, v["disclosure_type"], v["rows"], v["payload_sha256"],
+                             v["source_fetched_at"], v["attempt_count"])
+                            for r, v in sorted(self._conn.pending.items())]
+        elif upper.startswith("UPDATE DISCLOSURE_LOAD_PENDING"):
+            code, error, rcept_no, digest = params
+            item = self._conn.pending.get(rcept_no)
+            if rcept_no in self._conn.conflict_on_failure and item:
+                item["payload_sha256"] = "newer-payload"
+            self.rowcount = int(bool(item and item["payload_sha256"] == digest))
+            if self.rowcount:
+                item["attempt_count"] += 1
+                item["last_error_code"] = code
+                item["last_error"] = error
+        elif upper.startswith("DELETE FROM DISCLOSURE_LOAD_PENDING"):
+            rcept_no, digest = params
+            item = self._conn.pending.get(rcept_no)
+            if rcept_no in self._conn.conflict_on_delete and item:
+                item["payload_sha256"] = "newer-payload"
+            self.rowcount = int(bool(item and item["payload_sha256"] == digest))
+            if self.rowcount:
+                del self._conn.pending[rcept_no]
+        elif upper.startswith("SELECT COUNT(*) FROM DISCLOSURE_LOAD_PENDING"):
+            self._result = [(len(self._conn.pending),)]
+        elif upper.startswith("UPDATE DISCLOSURE_FACT SET IS_CURRENT=FALSE"):
+            document_id, keep_ids = params
+            superseded = {fact[0] for fact in self._conn.disclosure_facts
+                          if fact[1] == document_id and fact[2] == "BUSINESS_SEGMENT"
+                          and fact[0] not in keep_ids}
+            self._conn.superseded_fact_ids |= superseded
+            self.rowcount = len(superseded)
+        elif upper.startswith("SELECT DART_CORP_CODE"):
             codes = params[0]
             self._result = [(c, self._profiles[c]) for c in codes if c in self._profiles]
         elif upper.startswith("SELECT A.ACTOR_ID, E.DISPLAY_NAME"):
             self._result = list(self._actors)
         elif upper.startswith("INSERT INTO DOCUMENT "):
+            if params[2] in self._conn.fail_docs:
+                raise RuntimeError(f"temporary failure: {params[2]}")
             self.rowcount = 0 if (params[1], params[2]) in self._existing else 1
+        elif upper.startswith("INSERT INTO DISCLOSURE_FACT "):
+            self._conn.disclosure_facts.add((params[0], params[1], params[2]))
+            self._conn.superseded_fact_ids.discard(params[0])
+            self.rowcount = 1
         else:
             self.rowcount = 1
 
@@ -104,14 +162,21 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, profiles=None, existing_docs=None, actors=()):
+    def __init__(self, profiles=None, existing_docs=None, actors=(), fail_docs=(),
+                 conflict_on_delete=(), conflict_on_failure=(), disclosure_facts=()):
         self.log: list = []
         self._profiles = profiles if profiles is not None else {"00126380": "actor_samsung"}
         self._existing = existing_docs or set()
         self._actors = actors
+        self.fail_docs = set(fail_docs)
+        self.conflict_on_delete = set(conflict_on_delete)
+        self.conflict_on_failure = set(conflict_on_failure)
+        self.disclosure_facts = set(disclosure_facts)
+        self.superseded_fact_ids: set[str] = set()
+        self.pending: dict[str, dict] = {}
 
     def cursor(self):
-        return _FakeCursor(self.log, self._profiles, self._existing, self._actors)
+        return _FakeCursor(self)
 
 
 def _fake_connect(conn):
@@ -141,6 +206,366 @@ def _run(storage, conn, monkeypatch, **kw):
 def _log(storage):
     keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _write_manifest(storage, run_id, dataset, producer, builder, date=None, rcept_nos=()):
+    partitions = []
+    if date is not None:
+        key = f"{builder(date)}/part-00000.parquet"
+        data = storage.get_bytes(key)
+        key = canonical_run_partition_key(dataset, run_id, date)
+        storage.put_bytes(key, data)
+        if producer == "normalize_disclosure_segment":
+            winner_ids = [
+                {"rcept_no": row["rcept_no"], "segment_ordinal": row["segment_ordinal"]}
+                for row in load_disclosure._read_parquet_rows(data)
+                if row["rcept_no"] in rcept_nos
+            ]
+        else:
+            winner_ids = [{"rcept_no": value} for value in sorted(rcept_nos)]
+        partitions.append({
+            "report_date": date, "key": key, "sha256": hashlib.sha256(data).hexdigest(),
+            "winner_ids": sorted(winner_ids, key=lambda item: tuple(item.values())),
+        })
+    storage.put_bytes(canonical_run_manifest_key(dataset, run_id), json.dumps({
+        "run_id": run_id, "producer": producer, "canonical_written": True,
+        "canonical_partitions": partitions,
+    }).encode())
+
+
+def _dual_manifests(storage, run_id, *, supply=(), segment=()):
+    _write_manifest(
+        storage, run_id, "supply_contract_fact", "normalize_disclosure",
+        canonical_supply_contract_fact_partition,
+        "2026-06-30" if supply else None, supply,
+    )
+    _write_manifest(
+        storage, run_id, "business_segment_fact", "normalize_disclosure_segment",
+        canonical_business_segment_fact_partition,
+        "2026-06-30" if segment else None, segment,
+    )
+
+
+def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): process가 적재 직전에 죽어도 current winner가 먼저 DB 원장에 있어야
+    다음 정상 실행이 회수한다. 성공 삭제는 typed fact와 같은 transaction 안에서만 일어난다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert conn.pending == {}
+    statements = [sql for sql, _ in conn.log]
+    assert next(i for i, sql in enumerate(statements)
+                if sql.startswith("INSERT INTO disclosure_load_pending")) < next(
+                    i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO document "))
+    assert _log(storage)["pending_ledger"] == {
+        "before": 1, "after": 0, "succeeded": 1, "failed": 0, "failed_items": [],
+        "retention": "until_success", "retry": "once_per_eligible_run_no_lifetime_cutoff",
+    }
+
+
+def test_manifest_read_and_enqueue_are_serialized(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 과거 런이 canonical을 먼저 읽고 최신 런 뒤에 upsert하면 최신
+    correction을 덮는다. manifest read 자체가 enqueue advisory lock 안에서 일어나야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    observed = []
+
+    def fake_winners(actual_storage, actual_run_id):
+        observed.append((actual_storage, actual_run_id, conn.log[-1][0]))
+        return []
+
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", fake_winners)
+    load_disclosure._enqueue_winners(_db(), storage, "T1")
+
+    assert observed == [(storage, "T1", "SELECT pg_advisory_xact_lock(%s)")]
+
+
+def test_older_source_revision_cannot_replace_newer_pending(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): lock 획득 순서는 source 최신순이 아니다. 늦게 도착한 과거 fetched_at이
+    최신 correction을 덮지 못하게 실제 source revision으로 조건부 upsert해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    winner = {
+        "rcept_no": "R1", "disclosure_type": "SUPPLY_CONTRACT", "rows": [_supply("R1")],
+        "payload": "new", "payload_sha256": "a" * 64,
+        "source_fetched_at": datetime.fromisoformat("2026-07-16T02:00:00+00:00"),
+    }
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [winner])
+    load_disclosure._enqueue_winners(_db(), storage, "new-run")
+
+    stale = {**winner, "payload": "old", "payload_sha256": "b" * 64,
+             "source_fetched_at": datetime.fromisoformat("2026-07-16T01:00:00+00:00")}
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [stale])
+    with pytest.raises(ValueError, match="source revision"):
+        load_disclosure._enqueue_winners(_db(), storage, "old-run")
+
+    assert conn.pending["R1"]["payload_sha256"] == "a" * 64
+
+
+def test_equal_source_revision_accepts_later_parser_correction(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 같은 raw 관측을 새 파서로 재정규화하면 fetched_at은 같고 payload만
+    바뀐다. enqueue lock의 뒤 실행을 거부하면 correction과 무관한 winner까지 함께 막힌다."""
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    revision = datetime.fromisoformat("2026-07-16T02:00:00+00:00")
+    winner = {
+        "rcept_no": "R1", "disclosure_type": "SUPPLY_CONTRACT", "rows": [_supply("R1")],
+        "payload": "old-parser", "payload_sha256": "a" * 64,
+        "source_fetched_at": revision,
+    }
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [winner])
+    load_disclosure._enqueue_winners(_db(), storage, "parser-v1")
+    corrected = {**winner, "payload": "new-parser", "payload_sha256": "b" * 64}
+    monkeypatch.setattr(load_disclosure, "_manifest_winners", lambda *args: [corrected])
+
+    load_disclosure._enqueue_winners(_db(), storage, "parser-v2")
+
+    assert conn.pending["R1"]["payload_sha256"] == "b" * 64
+
+
+def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): enqueue commit 뒤 canonical scan이 실패했는데 backlog 0으로 기록하면
+    운영자가 durable winner가 없다고 오판한다. 실제 COUNT 전 실패는 unknown이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn()
+    monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+
+    def _fail_scan(*args, **kwargs):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(load_disclosure, "_read_facts", _fail_scan)
+
+    assert load_disclosure.run(storage, "R1", db=_db(), input_run_id="T1") == 1
+    assert set(conn.pending) == {"R1"}
+    ledger = _log(storage)["pending_ledger"]
+    assert ledger["before"] is None and ledger["after"] is None
+
+
+def test_commit_failure_resets_transactional_pending_metrics(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): guarded delete 뒤 commit이 실패하면 fact와 원장 삭제가 모두 롤백된다.
+    Python 카운터만 성공으로 남으면 운영 로그가 durable backlog를 완료로 오인한다."""
+    from contextlib import contextmanager
+
+    storage = LocalStorage(tmp_path / "lake")
+    row = _supply("R1")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [row])
+    payload = json.dumps([row], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn = _FakeConn()
+    conn.pending["R1"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(row["fetched_at"]),
+        "attempt_count": 0, "first_run": "T1", "last_run": "T1",
+    }
+
+    @contextmanager
+    def fail_commit(_config):
+        yield conn
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(load_disclosure, "connect", fail_commit)
+
+    assert load_disclosure.run(storage, "R1", db=_db()) == 1
+    ledger = _log(storage)["pending_ledger"]
+    assert ledger["succeeded"] == 0
+    assert ledger["failed"] == 0
+    assert ledger["after"] is None
+
+
+def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 사업부문 winner의 정체성은 (rcept_no, ordinal)이다. 한 공시의
+    여러 부문을 rcept_no 중복으로 오인하면 정상 manifest가 원장 진입 전에 실패한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [_segment("R1", 0), _segment("R1", 1, segment_name="디스플레이")])
+    _dual_manifests(storage, "T1", segment=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert len(_inserts(conn, "business_segment_fact")) == 2
+    assert conn.pending == {}
+
+
+def test_run_scoped_manifest_survives_shared_canonical_overwrite(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 다른 normalize 런이 report-date canonical을 덮어써도 먼저 완료된
+    manifest의 immutable 바이트는 남아야 그 winner를 원장 후보로 검증할 수 있다. 단, 적재
+    시점에는 source revision이 더 최신인 shared canonical을 되돌리면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1", amount_krw=1)])
+    _dual_manifests(storage, "T-old", supply=("R1",))
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1", amount_krw=2,
+                                   fetched_at="2026-07-16T02:00:00+00:00")])
+    _dual_manifests(storage, "T-new", supply=("R1",))
+    conn = _FakeConn()
+
+    assert load_disclosure._manifest_winners(storage, "T-old")[0]["rows"][0]["amount_krw"] == 1
+    assert _run(storage, conn, monkeypatch, input_run_id="T-old") == 0
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 2
+
+
+def test_source_revision_matches_producer_leniency():
+    """WHY(ALPHA-1045): producer가 허용한 결측·오류·naive fetched_at을 consumer가 더 엄격하게
+    막으면 completed manifest 전체가 enqueue되지 않는다."""
+    oldest = datetime.min.replace(tzinfo=load_disclosure.timezone.utc)
+    assert load_disclosure._source_revision([_supply("R1", fetched_at=None)]) == oldest
+    assert load_disclosure._source_revision([_supply("R1", fetched_at="bad")]) == oldest
+    assert load_disclosure._source_revision([
+        _supply("R1", fetched_at="2026-07-16T01:00:00")
+    ]).tzinfo is not None
+
+
+def test_unresolved_issuer_stays_pending_and_next_normal_run_recovers(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): issuer master가 늦게 채워지는 것이 기존 full scan의 자동 회수 이유였다.
+    원장은 성공 전에는 보존되고, 다음 정상 실행에서 같은 payload를 다시 시도해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1", corp_code="99999999")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn(profiles={})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert conn.pending["R1"]["attempt_count"] == 1
+    assert conn.pending["R1"]["last_error_code"] == "unresolved_issuer"
+
+    # 같은 run 중복 실행도 INSERT를 늘리거나 attempt 이력을 초기화하지 않는다.
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R1"}
+    assert conn.pending["R1"]["attempt_count"] == 2
+
+    _dual_manifests(storage, "T2")
+    conn._profiles["99999999"] = "actor_late"
+    # 운영자의 manifest-free full scan도 원장을 읽어야 durable recovery가 실제로 닫힌다.
+    assert load_disclosure.run(storage, "T2", db=_db()) == 0
+    assert conn.pending == {}
+
+
+def test_one_temporary_failure_does_not_rollback_other_pending_items(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 한 공시의 DB 일시 실패 때문에 앞뒤 성공 공시와 원장 삭제까지
+    롤백되면 backlog가 매번 통째로 재처리된다. savepoint는 실패 ID만 남겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
+           [_supply("R1"), _supply("R2"), _supply("R3")])
+    _dual_manifests(storage, "T1", supply=("R1", "R2", "R3"))
+    conn = _FakeConn(fail_docs={"R2"})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R2"}
+    assert [params[2] for sql, params in conn.log
+            if sql.startswith("INSERT INTO document ")] == ["R1", "R2", "R3"]
+    ledger = _log(storage)["pending_ledger"]
+    assert (ledger["succeeded"], ledger["failed"], ledger["after"]) == (2, 1, 1)
+    assert ledger["failed_items"][0]["rcept_no"] == "R2"
+
+
+def test_full_scan_item_failure_returns_partial(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): legacy full scan 항목도 DB 실패를 성공으로 보고하면 하류가 불완전한
+    disclosure를 조립한다. pending 여부와 무관하게 항목 실패는 비0이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    conn = _FakeConn(fail_docs={"R1"})
+
+    assert _run(storage, conn, monkeypatch) == 2
+    assert _log(storage)["failures"][0]["rcept_no"] == "R1"
+
+
+def test_rejected_segment_keeps_receipt_pending(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 한 receipt의 일부 segment만 유효해도 reject가 있으면 winner 전체가
+    적재된 것이 아니다. 원장을 지우면 거절 행의 durable 재시도 증거가 사라진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [_segment("R1", 0), _segment("R1", 1, revenue_krw=-1)])
+    _dual_manifests(storage, "T1", segment=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert conn.pending["R1"]["last_error_code"] == "rejected_fact"
+    assert len(_inserts(conn, "business_segment_fact")) == 1
+
+
+def test_conditional_delete_conflict_is_partial(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 동시 실행이 더 최신 payload로 원장을 교체했으면 stale loader의
+    조건부 DELETE 0건은 성공이 아니다. stale typed-fact 쓰기도 SAVEPOINT로 되돌리고 하류
+    publish를 막은 채 최신 winner를 남겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn(conflict_on_delete={"R1"})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R1"}
+    assert _log(storage)["pending_ledger"]["failed_items"] == [
+        {"rcept_no": "R1", "reason": "payload_conflict"}
+    ]
+    assert _log(storage)["facts_written"] == 0
+    statements = [sql for sql, _ in conn.log]
+    assert "ROLLBACK TO SAVEPOINT disclosure_item" in statements
+
+
+def test_rejected_fact_guard_conflict_rolls_back_valid_siblings(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 부분 거절 실패를 기록하는 동안 최신 payload가 경합에서 이기면 예전
+    payload의 유효 sibling까지 커밋해서는 안 된다. 최신 원장이 이미 성공 삭제됐을 수도 있다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [_segment("R1", 0), _segment("R1", 1, revenue_krw=-1)])
+    _dual_manifests(storage, "T1", segment=("R1",))
+    conn = _FakeConn(conflict_on_failure={"R1"})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+
+    assert _log(storage)["facts_written"] == 0
+    assert _log(storage)["pending_ledger"]["failed_items"] == [
+        {"rcept_no": "R1", "reason": "payload_conflict"}
+    ]
+    assert "ROLLBACK TO SAVEPOINT disclosure_item" in [sql for sql, _ in conn.log]
+
+
+def test_non_finite_payload_is_retained_without_blocking_valid_winner(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): canonical은 NaN/Infinity를 담을 수 있지만 PostgreSQL JSONB는 못 담는다.
+    원장 직렬화가 전체 enqueue를 죽이지 않고 그 ID만 검증 실패 pending으로 남겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
+           [_supply("R-bad", ratio_pct=float("inf")), _supply("R-ok")])
+    _dual_manifests(storage, "T1", supply=("R-bad", "R-ok"))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R-bad"}
+    assert conn.pending["R-bad"]["last_error_code"] == "no_valid_fact"
+    assert [params[2] for sql, params in conn.log
+            if sql.startswith("INSERT INTO document ")] == ["R-ok"]
+
+
+def test_corrupt_or_incomplete_manifest_never_enqueues_or_falls_back(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): manifest 손상을 full scan으로 확대하면 incomplete canonical PUT을
+    정상 winner로 오인한다. 원장 commit 전 fail-loud하고 pending을 만들지 않는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    key = canonical_run_manifest_key("supply_contract_fact", "T1")
+    manifest = json.loads(storage.get_bytes(key))
+    manifest["canonical_written"] = False
+    storage.put_bytes(key, json.dumps(manifest).encode())
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 1
+    assert conn.pending == {}
+    assert _inserts(conn, "document") == []
 
 
 def test_supply_becomes_document_and_typed_fact(tmp_path, monkeypatch):
@@ -286,6 +711,88 @@ def test_window_prunes_partitions(tmp_path, monkeypatch):
     conn = _FakeConn()
     assert _run(storage, conn, monkeypatch, from_date="2026-06-30", to_date="2026-06-30") == 0
     assert [p[2] for p in _inserts(conn, "document")] == ["R-in"]
+
+
+def test_window_does_not_consume_pending_outside_event_assembly_scope(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 창 밖 pending을 typed fact로 성공·삭제하면 같은 창으로 도는 event
+    assembler가 그 fact를 못 보고 durable recovery가 조용히 끊긴다. 무창 실행이 회수해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _dual_manifests(storage, "T1")
+    conn = _FakeConn()
+    old = _supply("R-old", report_date="2026-06-29")
+    payload = json.dumps([old], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn.pending["R-old"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(old["fetched_at"]),
+        "attempt_count": 0, "first_run": "old", "last_run": "old",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1",
+                from_date="2026-06-30", to_date="2026-06-30") == 0
+
+    assert set(conn.pending) == {"R-old"}
+    assert _inserts(conn, "document") == []
+
+
+def test_newer_canonical_wins_when_its_enqueue_previously_failed(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 새 canonical 작성 뒤 DB 장애로 enqueue가 실패하면 예전 pending만 남는다.
+    다음 실행이 그 payload를 무조건 우선하면 최신 fact를 되돌리고 원장까지 성공 삭제한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    newer = _supply("R1", amount_krw=200,
+                    fetched_at="2026-07-16T02:00:00+00:00")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [newer])
+    _dual_manifests(storage, "T1")
+    conn = _FakeConn()
+    older = _supply("R1", amount_krw=100,
+                    fetched_at="2026-07-16T01:00:00+00:00")
+    payload = json.dumps([older], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn.pending["R1"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(older["fetched_at"]),
+        "attempt_count": 0, "first_run": "old", "last_run": "old",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+
+    assert conn.pending == {}
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 200
+
+
+def test_equal_revision_manifest_winners_tombstone_stale_segment_ordinals(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): parser correction이 segment 수를 줄여도 shared merge에는 옛 ordinal이
+    남는다. obsolete fact는 신규 소비에서 제외하되 과거 explanation lineage 행은 보존해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    current = _segment("R1", 0)
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [current, _segment("R1", 1, segment_name="obsolete")])
+    _dual_manifests(storage, "T2")
+    payload = json.dumps([current], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    document_id = stable_domain_id("doc", load_disclosure.SOURCE_CODE, "R1")
+    current_id = stable_domain_id("dfact", document_id, "BUSINESS_SEGMENT", 0)
+    obsolete_id = stable_domain_id("dfact", document_id, "BUSINESS_SEGMENT", 1)
+    conn = _FakeConn(disclosure_facts={
+        (current_id, document_id, "BUSINESS_SEGMENT"),
+        (obsolete_id, document_id, "BUSINESS_SEGMENT"),
+    })
+    conn.pending["R1"] = {
+        "disclosure_type": "BUSINESS_SEGMENT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(current["fetched_at"]),
+        "attempt_count": 0, "first_run": "T1", "last_run": "T1",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T2") == 0
+
+    assert conn.pending == {}
+    assert len(_inserts(conn, "business_segment_fact")) == 1
+    assert conn.disclosure_facts == {
+        (current_id, document_id, "BUSINESS_SEGMENT"),
+        (obsolete_id, document_id, "BUSINESS_SEGMENT"),
+    }
+    assert conn.superseded_fact_ids == {obsolete_id}
 
 
 def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):

@@ -145,6 +145,7 @@ def test_fact_sql_prefilters_on_kst_day():
     UTC 세션에서 하한일 오전 9시 이전 공시가 파이썬 판정 전에 잘려, 유효한 금액이 모호로도
     안 잡히고 조용히 PARSED 로 남는다(Codex #265 P2)."""
     sql = dart_values._FACT_SQL
+    assert "df.is_current" in sql
     assert "(df.available_at AT TIME ZONE 'Asia/Seoul')::date" in sql
     assert "df.available_at >=" not in sql
 

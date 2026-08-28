@@ -17,6 +17,7 @@ from data_pipeline.lake import (
     LocalStorage,
     canonical_business_segment_fact_partition,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     raw_disclosure_document_key,
     raw_disclosure_partition,
 )
@@ -222,9 +223,8 @@ def test_manifest_records_segment_winners_with_direct_key_and_sha(tmp_path):
     assert part["winner_ids"] == [
         {"rcept_no": rcept_no, "segment_ordinal": ordinal} for ordinal in range(4)
     ]
-    assert part["key"] == (
-        f"{canonical_business_segment_fact_partition('2026-03-19')}/part-00000.parquet"
-    )
+    assert part["key"] == canonical_run_partition_key(
+        "business_segment_fact", "S1", "2026-03-19")
     assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
 
 

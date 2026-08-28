@@ -294,6 +294,7 @@ class DisclosureWorker(MinuteWorkerLoop):
                 if all(step_exits[name] in (0, 2) for name in ("normalize", "segment")):
                     step_exits["load"] = load_disclosure.run(
                         self.storage, run_id, db=cfg.db,
+                        input_run_id=run_id,
                         from_date=query_from, to_date=query_to,
                     )
                     if step_exits["load"] == 0:

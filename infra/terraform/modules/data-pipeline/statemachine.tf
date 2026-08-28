@@ -239,7 +239,7 @@ locals {
       # 창 미지정 = canonical 전체 스캔 + 멱등(정정은 DO UPDATE).
       state        = "LoadDisclosure"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-disclosure', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-disclosure', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # 가격 원장 적재(ALPHA-377·1038) — NormalizePrice manifest의 KR direct key와 현재

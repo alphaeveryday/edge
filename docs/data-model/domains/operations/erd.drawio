@@ -109,6 +109,12 @@
         <mxCell id="table-7-row-0" parent="table-7" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="&lt;table style=&quot;width:246px;border-collapse:collapse;table-layout:fixed;&quot;&gt;&lt;tr&gt;&lt;td style=&quot;width:22px;color:#2563eb;font-size:9px;font-weight:700;white-space:nowrap;&quot;&gt;PK&lt;/td&gt;&lt;td style=&quot;white-space:nowrap;&quot;&gt;activity_id&lt;/td&gt;&lt;td style=&quot;width:72px;text-align:right;color:#64748b;font-size:10px;white-space:nowrap;&quot;&gt;bigint&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;" vertex="1">
           <mxGeometry height="25" width="270" y="38" as="geometry" />
         </mxCell>
+        <mxCell id="table-8" parent="1" style="swimlane;horizontal=1;startSize=38;rounded=0;html=1;fillColor=#e8f0fe;swimlaneFillColor=#ffffff;strokeColor=#7aa2e3;fontColor=#172554;fontStyle=1;align=left;spacingLeft=10;verticalAlign=middle;collapsible=0;" value="disclosure_load_pending" vertex="1">
+          <mxGeometry height="73" width="270" x="380" y="520" as="geometry" />
+        </mxCell>
+        <mxCell id="table-8-row-0" parent="table-8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="&lt;table style=&quot;width:246px;border-collapse:collapse;table-layout:fixed;&quot;&gt;&lt;tr&gt;&lt;td style=&quot;width:22px;color:#2563eb;font-size:9px;font-weight:700;white-space:nowrap;&quot;&gt;PK&lt;/td&gt;&lt;td style=&quot;white-space:nowrap;&quot;&gt;rcept_no&lt;/td&gt;&lt;td style=&quot;width:72px;text-align:right;color:#64748b;font-size:10px;white-space:nowrap;&quot;&gt;text&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;" vertex="1">
+          <mxGeometry height="25" width="270" y="38" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>

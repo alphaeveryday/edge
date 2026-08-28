@@ -692,6 +692,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 datetime.now(window_calendar_tz(args.step, args.source)), args.window_days)
         return load_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            input_run_id=args.input_run_id,
             from_date=load_from, to_date=load_to,
         )
 

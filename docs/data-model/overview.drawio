@@ -80,7 +80,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="cloud-label" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontStyle=1;fontColor=#64748b;" value="EDGE Cloud 환경 — Flyway cloud 세트 · 71테이블" vertex="1">
+        <mxCell id="cloud-label" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontStyle=1;fontColor=#64748b;" value="EDGE Cloud 환경 — Flyway cloud 세트 · 73테이블" vertex="1">
           <mxGeometry height="18" width="500" x="35" y="79" as="geometry" />
         </mxCell>
       </root>

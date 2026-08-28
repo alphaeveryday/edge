@@ -41,7 +41,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
 
     stages = (
         lambda: load_disclosure.run(
-            storage, run_id, db=db, from_date=from_date, to_date=to_date),
+            storage, run_id, db=db, input_run_id=run_id,
+            from_date=from_date, to_date=to_date),
         lambda: assemble_disclosure_events.run(
             storage, run_id, db=db, from_date=from_date, to_date=to_date),
     )

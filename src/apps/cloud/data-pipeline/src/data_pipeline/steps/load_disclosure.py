@@ -23,6 +23,14 @@ RESTRICT 로 요구한다. canonical 의 `corp_code`(8자리 dart)를 `company_p
 로 해소한다. 미해소(마스터 미시드)면 그 공시를 **적재 불가라 skip + 계측**한다 — 넣으면 FK
 위반으로 런 전체가 롤백된다. 커버리지 9→309 확장은 별건(ALPHA-491·477).
 
+**durable pending ledger(ALPHA-1045)**: 정상 경로는 공급계약·사업부문 completed manifest의
+direct key·SHA·winner를 검증하고 canonical 행 자체를 `disclosure_load_pending`에 먼저 commit한다.
+성공한 ID만 typed-fact transaction 안에서 삭제한다. issuer 미해소·검증 거절·일시 DB 실패는
+다음 eligible 정상 실행이 다시 시도하며, 보존 만료와 lifetime retry cutoff는 없다(날짜 범위
+실행은 같은 report_date 범위만, 무창 실행은 전량을 한 ID당 한 실행 1회 시도한다).
+항목별 SAVEPOINT라 한 ID 실패가 다른 성공을 롤백하지 않는다. 기존 canonical full scan은 아직
+옛 backlog를 회수하므로 유지한다 — 원장만으로 회수가 증명된 뒤 consumer 전환 PR에서 제거한다.
+
 **fact 게이트**: canonical 정제는 값 이상을 경고로만 통과시키므로(blocking 아님), DB CHECK 를
 파이썬에서 **선검증**해 위반 fact 만 뺀다 — 한 건이 배치 전체를 롤백시키지 않게. NaN/Infinity
 는 `<0` 비교를 조용히 통과하지만 DB 유한성 CHECK 에 걸리므로 여기서 명시적으로 거른다. 거절된
@@ -33,6 +41,7 @@ fact 는 사유와 함께 계측한다(조용한 유실 금지, Rule 12).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -44,6 +53,8 @@ from ..entity_resolution import mint_concept
 from ..lake import (
     Storage,
     canonical_business_segment_fact_partition,
+    canonical_run_manifest_key,
+    canonical_run_partition_key,
     canonical_supply_contract_fact_partition,
     quality_log_key,
 )
@@ -62,13 +73,223 @@ SOURCE_CODE = "dart"
 _SHARE_BASIS = {"REPORTED", "COMPUTED", "RESCALED", "UNRELIABLE"}
 
 _SAMPLE_LIMIT = 50
+_PARTIAL_EXIT_CODE = 2
+# mutable canonical을 읽고 pending에 반영하는 순서를 런 간 직렬화한다. PostgreSQL signed
+# bigint 범위 안의 고정 namespace key("DISCLOSU")다.
+_PENDING_ENQUEUE_LOCK = 0x444953434C4F5355
+
+_MANIFESTS = (
+    ("supply_contract_fact", "normalize_disclosure", "SUPPLY_CONTRACT"),
+    ("business_segment_fact", "normalize_disclosure_segment", "BUSINESS_SEGMENT"),
+)
+
+
+def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
+    """완료된 dual manifest의 direct key·SHA·winner만 원장 payload로 확정한다."""
+    winners: list[dict] = []
+    seen: set[str] = set()
+    seen_keys: set[str] = set()
+    for dataset, producer, disclosure_type in _MANIFESTS:
+        manifest = json.loads(storage.get_bytes(
+            canonical_run_manifest_key(dataset, run_id)).decode("utf-8"))
+        if (not isinstance(manifest, dict) or manifest.get("run_id") != run_id
+                or manifest.get("producer") != producer
+                or manifest.get("canonical_written") is not True
+                or not isinstance(manifest.get("canonical_partitions"), list)):
+            raise ValueError(f"완료된 공시 manifest가 아니다: dataset={dataset} run_id={run_id}")
+        for part in manifest["canonical_partitions"]:
+            report_date = part.get("report_date") if isinstance(part, dict) else None
+            try:
+                valid_date = (isinstance(report_date, str)
+                              and date.fromisoformat(report_date).isoformat() == report_date)
+            except ValueError:
+                valid_date = False
+            expected_key = (canonical_run_partition_key(dataset, run_id, report_date)
+                            if valid_date else None)
+            key, digest, ids = part.get("key"), part.get("sha256"), part.get("winner_ids")
+            if (key != expected_key or key in seen_keys
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or any(char not in "0123456789abcdef" for char in digest)
+                    or not isinstance(ids, list) or not ids):
+                raise ValueError(f"공시 manifest partition이 유효하지 않다: {part!r}")
+            seen_keys.add(key)
+            data = storage.get_bytes(key)
+            if hashlib.sha256(data).hexdigest() != digest:
+                raise ValueError(f"공시 manifest SHA가 canonical과 다르다: key={key}")
+            rows = _read_parquet_rows(data)
+            is_segment = disclosure_type == "BUSINESS_SEGMENT"
+            def _identity(item):
+                if not isinstance(item, dict):
+                    return None
+                rcept_no = item.get("rcept_no")
+                if not isinstance(rcept_no, str) or not rcept_no.strip():
+                    return None
+                if not is_segment:
+                    return rcept_no
+                ordinal = item.get("segment_ordinal")
+                if not isinstance(ordinal, int) or isinstance(ordinal, bool):
+                    return None
+                return rcept_no, ordinal
+
+            row_ids = [_identity(row) for row in rows]
+            if len([value for value in row_ids if value is not None]) != len(
+                    {value for value in row_ids if value is not None}):
+                raise ValueError(f"공시 canonical 행키가 중복이다: key={key}")
+            rows_by_id = {row_id: row for row_id, row in zip(row_ids, rows) if row_id is not None}
+            wanted = [_identity(item) for item in ids]
+            if (any(value is None for value in wanted)
+                    or wanted != sorted(set(wanted))):
+                raise ValueError(f"공시 manifest winner_ids가 유효하지 않다: {part!r}")
+            selected: dict[str, list[dict]] = {}
+            for winner_id in wanted:
+                if winner_id not in rows_by_id:
+                    raise ValueError(f"공시 manifest winner가 결손이다: winner_id={winner_id}")
+                row = rows_by_id[winner_id]
+                selected.setdefault(row["rcept_no"], []).append(row)
+            for rcept_no, selected_rows in selected.items():
+                if rcept_no in seen:
+                    raise ValueError(f"공시 manifest winner가 중복이다: rcept_no={rcept_no}")
+                seen.add(rcept_no)
+                payload = json.dumps(selected_rows, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"))
+                winners.append({"rcept_no": rcept_no, "disclosure_type": disclosure_type,
+                                "rows": selected_rows, "payload": payload,
+                                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                                "source_fetched_at": _source_revision(selected_rows)})
+    return winners
+
+
+def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
+    """manifest 읽기부터 enqueue commit까지 직렬화해 늦은 과거 런의 덮어쓰기를 막는다."""
+    with connect(db) as conn, conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_PENDING_ENQUEUE_LOCK,))
+        winners = _manifest_winners(storage, run_id)
+        if not winners:
+            return
+        for winner in winners:
+            cur.execute(
+                "INSERT INTO disclosure_load_pending (rcept_no, disclosure_type, canonical_rows,"
+                " payload_sha256, source_fetched_at, first_seen_run_id, last_seen_run_id)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+                " ON CONFLICT (rcept_no) DO UPDATE SET"
+                " disclosure_type=EXCLUDED.disclosure_type, canonical_rows=EXCLUDED.canonical_rows,"
+                " payload_sha256=EXCLUDED.payload_sha256,"
+                " source_fetched_at=EXCLUDED.source_fetched_at,"
+                " last_seen_run_id=EXCLUDED.last_seen_run_id,"
+                " last_seen_at=now(), attempt_count=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.attempt_count ELSE 0 END,"
+                " last_attempted_at=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_attempted_at ELSE NULL END,"
+                " last_error_code=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error_code ELSE NULL END,"
+                " last_error=CASE WHEN disclosure_load_pending.payload_sha256"
+                " = EXCLUDED.payload_sha256 THEN disclosure_load_pending.last_error ELSE NULL END"
+                # fetched_at 동률은 advisory lock으로 직렬화된 enqueue 순서가 revision이다.
+                # 파서 재실행은 같은 raw 관측에서도 payload를 정정할 수 있으므로 뒤 실행이 이긴다.
+                " WHERE disclosure_load_pending.source_fetched_at <= EXCLUDED.source_fetched_at",
+                (winner["rcept_no"], winner["disclosure_type"], winner["payload"],
+                 winner["payload_sha256"], winner["source_fetched_at"], run_id, run_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError(
+                    f"공시 pending source revision이 역행·충돌한다: rcept_no={winner['rcept_no']}"
+                )
+
+
+def _pending_rows(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT rcept_no, disclosure_type, canonical_rows, payload_sha256, source_fetched_at,"
+            " attempt_count"
+            " FROM disclosure_load_pending ORDER BY first_seen_at, rcept_no"
+        )
+        return [{"rcept_no": r, "disclosure_type": t,
+                 "rows": json.loads(rows) if isinstance(rows, str) else rows,
+                 "payload_sha256": digest, "source_fetched_at": source_fetched_at,
+                 "attempt_count": attempts}
+                for r, t, rows, digest, source_fetched_at, attempts in cur.fetchall()]
+
+
+def _pending_in_window(pending: list[dict], from_date: str | None,
+                       to_date: str | None) -> list[dict]:
+    """범위 실행은 그 report_date의 pending만 재시도한다. 무창 실행은 전부 회수한다."""
+    if from_date is None and to_date is None:
+        return pending
+    selected = []
+    for item in pending:
+        report_dates = {row.get("report_date") for row in item["rows"]
+                        if isinstance(row, dict) and isinstance(row.get("report_date"), str)}
+        if len(report_dates) != 1:
+            continue
+        report_date = next(iter(report_dates))
+        if ((from_date is None or report_date >= from_date)
+                and (to_date is None or report_date <= to_date)):
+            selected.append(item)
+    return selected
+
+
+def _merge_pending(canonical_rows: list[dict], pending: dict[str, list[dict]],
+                   pending_by_rcept: dict[str, dict]) -> list[dict]:
+    """canonical보다 source revision이 최신인 pending payload만 우선한다."""
+    grouped: dict[str, list[dict]] = {}
+    for row in canonical_rows:
+        grouped.setdefault(row["rcept_no"], []).append(row)
+    for rcept_no, pending_rows in pending.items():
+        current = grouped.get(rcept_no)
+        item = pending_by_rcept[rcept_no]
+        pending_revision = item["source_fetched_at"]
+        current_revision = _source_revision(current) if current is not None else None
+        if current is None or pending_revision > current_revision:
+            grouped[rcept_no] = pending_rows
+        elif pending_revision == current_revision:
+            current_by_identity = {
+                (row["rcept_no"], row.get("segment_ordinal")): row for row in current
+            }
+            # pending winner 행이 shared canonical과 같으면 manifest의 정확한 ID 집합이
+            # 이긴다. 값이 다른 동률 correction이면 shared canonical을 유지한다.
+            if all(current_by_identity.get(
+                    (row["rcept_no"], row.get("segment_ordinal"))) == row
+                    for row in pending_rows):
+                grouped[rcept_no] = pending_rows
+    return [row for rcept_no in sorted(grouped) for row in grouped[rcept_no]]
+
+
+def _mark_pending_failure(conn, pending: dict | None, code: str,
+                          error: str | None = None) -> bool:
+    if pending is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE disclosure_load_pending SET attempt_count=attempt_count+1,"
+            " last_attempted_at=now(), last_error_code=%s, last_error=%s"
+            " WHERE rcept_no=%s AND payload_sha256=%s",
+            (code, error, pending["rcept_no"], pending["payload_sha256"]),
+        )
+        return cur.rowcount == 1
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
+
     import pyarrow.parquet as pq
 
     return pq.read_table(io.BytesIO(data)).to_pylist()
+
+
+def _source_revision(rows: list[dict]) -> datetime:
+    """canonical fetched_at 최댓값을 payload의 단조 source revision으로 확정한다."""
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    revisions = []
+    for row in rows:
+        value = row.get("fetched_at")
+        try:
+            revision = datetime.fromisoformat(value) if isinstance(value, str) else oldest
+        except ValueError:
+            revision = oldest
+        if revision.tzinfo is None:
+            revision = revision.replace(tzinfo=timezone.utc)
+        revisions.append(revision)
+    return max(revisions)
 
 
 def _partition_dates(storage: Storage, marker: str) -> list[str]:
@@ -209,6 +430,7 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
@@ -222,9 +444,15 @@ def run(
     created_sample: list[dict] = []
     rejected_sample: list[dict] = []
     failures: list[dict] = []
+    pending_before = pending_after = None
+    pending_succeeded = 0
+    pending_failures: list[dict] = []
     exit_code = 0
 
     try:
+        if input_run_id is not None:
+            # 별도 connect 경계라 이 commit이 끝난 뒤에만 typed-fact 적재를 시작한다.
+            _enqueue_winners(db, storage, input_run_id)
         supply_rows, s1 = _clean_rcept(_read_facts(
             storage, canonical_supply_contract_fact_partition, from_date, to_date))
         segment_rows, s2 = _clean_rcept(_read_facts(
@@ -232,82 +460,162 @@ def run(
         supply_read, segment_read = len(supply_rows), len(segment_rows)
         skipped_missing_identity = s1 + s2
 
-        documents = {**_document(supply_rows, "SUPPLY_CONTRACT"),
-                     **_document(segment_rows, "BUSINESS_SEGMENT")}
-        segment_by_rcept: dict[str, list[dict]] = {}
-        for r in segment_rows:
-            segment_by_rcept.setdefault(r["rcept_no"], []).append(r)
-
         seen_fact_ids: set[str] = set()
 
         with connect(db) as conn:
+            # input_run_id는 새 manifest enqueue 범위일 뿐이다. manifest 없는 운영 full scan도
+            # 기존 durable pending을 전량 회수해야 한다.
+            all_pending = _pending_rows(conn)
+            pending_before = len(all_pending)
+            pending = _pending_in_window(all_pending, from_date, to_date)
+            pending_by_rcept = {item["rcept_no"]: item for item in pending}
+            # 원장 payload가 같은 논리 ID의 canonical full-scan 행보다 우선한다. 그래야 mutable
+            # parquet가 다음 정제에 덮여도 enqueue 시점 winner를 정확히 재시도한다.
+            pending_supply = {item["rcept_no"]: item["rows"] for item in pending
+                              if item["disclosure_type"] == "SUPPLY_CONTRACT"}
+            pending_segment = {item["rcept_no"]: item["rows"] for item in pending
+                               if item["disclosure_type"] == "BUSINESS_SEGMENT"}
+            supply_rows = _merge_pending(supply_rows, pending_supply, pending_by_rcept)
+            segment_rows = _merge_pending(segment_rows, pending_segment, pending_by_rcept)
+            documents = {**_document(supply_rows, "SUPPLY_CONTRACT"),
+                         **_document(segment_rows, "BUSINESS_SEGMENT")}
+            segment_by_rcept = {}
+            for row in segment_rows:
+                segment_by_rcept.setdefault(row["rcept_no"], []).append(row)
             issuers = _resolve_issuers(conn, {d["corp_code"] for d in documents.values()})
-            supply_rows = _prepare_supply_rows(conn, supply_rows)
             supply_by_rcept = {r["rcept_no"]: r for r in supply_rows}
 
             for rcept_no, doc in sorted(documents.items()):
+                pending_item = pending_by_rcept.get(rcept_no)
                 issuer_actor_id = issuers.get(doc["corp_code"])
                 if issuer_actor_id is None:
                     # 마스터 미시드 — FK RESTRICT 라 넣으면 런 전체 롤백. 세고 뺀다(9→309 별건).
                     skipped_unresolved_issuer += 1
+                    _mark_pending_failure(conn, pending_item, "unresolved_issuer")
+                    if pending_item:
+                        pending_failures.append({"rcept_no": rcept_no,
+                                                 "reason": "unresolved_issuer"})
                     continue
                 if not doc["report_date"]:
                     # report_date 는 공시의 시간축이자 파티션 정체성 — 없으면 날짜 조회에서 샌다.
                     skipped_no_report_date += 1
+                    _mark_pending_failure(conn, pending_item, "missing_report_date")
+                    if pending_item:
+                        pending_failures.append({"rcept_no": rcept_no,
+                                                 "reason": "missing_report_date"})
                     continue
-
-                document_id = stable_domain_id("doc", SOURCE_CODE, rcept_no)
-                pairs, rejects = _fact_inserts(
-                    rcept_no, document_id, doc, supply_by_rcept.get(rcept_no),
-                    segment_by_rcept.get(rcept_no, []), seen_fact_ids)
-                for rej in rejects:
-                    rejected_facts += 1
-                    if len(rejected_sample) < _SAMPLE_LIMIT:
-                        rejected_sample.append(rej)
-                if not pairs:
-                    # 유효 fact 가 하나도 없으면 문서만 적재할 이유가 없다(설명은 fact 를 읽는다).
-                    skipped_no_valid_fact += 1
-                    continue
-
                 with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO document (document_id, document_type, source_code,"
-                        " source_document_id, published_at, available_at, source_uri)"
-                        " VALUES (%s, 'DISCLOSURE', %s, %s, %s, %s, %s)"
-                        " ON CONFLICT (source_code, source_document_id) DO NOTHING",
-                        (document_id, SOURCE_CODE, rcept_no, doc["report_date"],
-                         doc["available_at"], doc["source_uri"]),
-                    )
-                    created = cur.rowcount == 1
-                    # 파서 메타(parser_version·report_date·parsed_result_uri)는 재파싱 시 바뀔 수
-                    # 있어 최신으로 갱신한다(같은 값 재적재는 WHERE 가 걸러 no-op). issuer 는
-                    # 정체성이라 갱신하지 않는다.
-                    cur.execute(
-                        "INSERT INTO disclosure_document (document_id, issuer_actor_id,"
-                        " disclosure_type, report_date, parser_version, parsed_result_uri)"
-                        " VALUES (%s, %s, %s, %s, %s, %s)"
-                        " ON CONFLICT (document_id) DO UPDATE SET"
-                        " disclosure_type = EXCLUDED.disclosure_type,"
-                        " report_date = EXCLUDED.report_date,"
-                        " parser_version = EXCLUDED.parser_version,"
-                        " parsed_result_uri = EXCLUDED.parsed_result_uri"
-                        " WHERE (disclosure_document.disclosure_type, disclosure_document.report_date,"
-                        " disclosure_document.parser_version, disclosure_document.parsed_result_uri)"
-                        " IS DISTINCT FROM (EXCLUDED.disclosure_type, EXCLUDED.report_date,"
-                        " EXCLUDED.parser_version, EXCLUDED.parsed_result_uri)",
-                        (document_id, issuer_actor_id, doc["disclosure_type"],
-                         doc["report_date"], doc["parser_version"] or "unknown",
-                         doc["source_uri"]),
-                    )
-                    for header_sql, header_params, child_sql, child_params in pairs:
-                        cur.execute(header_sql, header_params)
-                        cur.execute(child_sql, child_params)
-                        if cur.rowcount == 1:
-                            facts_written += 1
-                        else:
-                            # 변경 없음 = 이미 같은 값으로 적재돼 있다(멱등 재실행). 실패가
-                            # 아니라 정상 산출이라 따로 센다 — 안 세면 재실행이 0건으로 보인다.
-                            facts_already += 1
+                    cur.execute("SAVEPOINT disclosure_item")
+                    try:
+                        supply = supply_by_rcept.get(rcept_no)
+                        if supply is not None:
+                            supply = _prepare_supply_rows(conn, [supply])[0]
+                        document_id = stable_domain_id("doc", SOURCE_CODE, rcept_no)
+                        pairs, rejects = _fact_inserts(
+                            rcept_no, document_id, doc, supply,
+                            segment_by_rcept.get(rcept_no, []), seen_fact_ids)
+                        for reject in rejects:
+                            rejected_facts += 1
+                            if len(rejected_sample) < _SAMPLE_LIMIT:
+                                rejected_sample.append(reject)
+                        if not pairs:
+                            cur.execute("ROLLBACK TO SAVEPOINT disclosure_item")
+                            cur.execute("RELEASE SAVEPOINT disclosure_item")
+                            skipped_no_valid_fact += 1
+                            _mark_pending_failure(conn, pending_item, "no_valid_fact")
+                            if pending_item:
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "no_valid_fact"})
+                            continue
+
+                        cur.execute(
+                            "INSERT INTO document (document_id, document_type, source_code,"
+                            " source_document_id, published_at, available_at, source_uri)"
+                            " VALUES (%s, 'DISCLOSURE', %s, %s, %s, %s, %s)"
+                            " ON CONFLICT (source_code, source_document_id) DO NOTHING",
+                            (document_id, SOURCE_CODE, rcept_no, doc["report_date"],
+                             doc["available_at"], doc["source_uri"]),
+                        )
+                        created = cur.rowcount == 1
+                        cur.execute(
+                            "INSERT INTO disclosure_document (document_id, issuer_actor_id,"
+                            " disclosure_type, report_date, parser_version, parsed_result_uri)"
+                            " VALUES (%s, %s, %s, %s, %s, %s)"
+                            " ON CONFLICT (document_id) DO UPDATE SET"
+                            " disclosure_type = EXCLUDED.disclosure_type,"
+                            " report_date = EXCLUDED.report_date,"
+                            " parser_version = EXCLUDED.parser_version,"
+                            " parsed_result_uri = EXCLUDED.parsed_result_uri"
+                            " WHERE (disclosure_document.disclosure_type, disclosure_document.report_date,"
+                            " disclosure_document.parser_version, disclosure_document.parsed_result_uri)"
+                            " IS DISTINCT FROM (EXCLUDED.disclosure_type, EXCLUDED.report_date,"
+                            " EXCLUDED.parser_version, EXCLUDED.parsed_result_uri)",
+                            (document_id, issuer_actor_id, doc["disclosure_type"],
+                             doc["report_date"], doc["parser_version"] or "unknown",
+                             doc["source_uri"]),
+                        )
+                        item_written = item_already = 0
+                        for header_sql, header_params, child_sql, child_params in pairs:
+                            cur.execute(header_sql, header_params)
+                            cur.execute(child_sql, child_params)
+                            if cur.rowcount == 1:
+                                item_written += 1
+                            else:
+                                item_already += 1
+                        if pending_item is not None and rejects:
+                            if _mark_pending_failure(
+                                    conn, pending_item, "rejected_fact"):
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "rejected_fact"})
+                            else:
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "payload_conflict"})
+                                cur.execute("ROLLBACK TO SAVEPOINT disclosure_item")
+                                cur.execute("RELEASE SAVEPOINT disclosure_item")
+                                continue
+                        elif pending_item is not None:
+                            if pending_item["disclosure_type"] == "BUSINESS_SEGMENT":
+                                # pending payload는 enqueue 당시 manifest의 완전한 winner 집합이다.
+                                # 정정본에서 사라진 ordinal은 lineage FK를 보존하며 current에서 내린다.
+                                segment_fact_ids = [
+                                    header_params[0]
+                                    for _, header_params, _, _ in pairs
+                                    if header_params[2] == "BUSINESS_SEGMENT"
+                                ]
+                                cur.execute(
+                                    "UPDATE disclosure_fact SET is_current=FALSE"
+                                    " WHERE document_id=%s AND fact_type='BUSINESS_SEGMENT'"
+                                    " AND is_current AND NOT (fact_id = ANY(%s))",
+                                    (document_id, segment_fact_ids),
+                                )
+                            cur.execute(
+                                "DELETE FROM disclosure_load_pending"
+                                " WHERE rcept_no=%s AND payload_sha256=%s",
+                                (rcept_no, pending_item["payload_sha256"]),
+                            )
+                            if cur.rowcount == 1:
+                                pending_succeeded += 1
+                            else:
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "payload_conflict"})
+                                # 더 최신 pending writer가 경합에서 이겼다. 이 loader의 typed-fact
+                                # 쓰기를 남기면 최신 fact를 stale payload로 되돌릴 수 있다.
+                                cur.execute("ROLLBACK TO SAVEPOINT disclosure_item")
+                                cur.execute("RELEASE SAVEPOINT disclosure_item")
+                                continue
+                        cur.execute("RELEASE SAVEPOINT disclosure_item")
+                        facts_written += item_written
+                        facts_already += item_already
+                    except Exception as exc:
+                        cur.execute("ROLLBACK TO SAVEPOINT disclosure_item")
+                        cur.execute("RELEASE SAVEPOINT disclosure_item")
+                        _mark_pending_failure(conn, pending_item, "load_error", str(exc))
+                        failures.append({"reasons": ["item_load_error"],
+                                         "rcept_no": rcept_no, "error": str(exc)})
+                        if pending_item:
+                            pending_failures.append({"rcept_no": rcept_no,
+                                                     "reason": "load_error", "error": str(exc)})
+                        continue
 
                 if created:
                     docs_created += 1
@@ -315,14 +623,23 @@ def run(
                         created_sample.append({"document_id": document_id, "rcept_no": rcept_no})
                 else:
                     docs_already += 1
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM disclosure_load_pending")
+                pending_after = cur.fetchall()[0][0]
     except Exception as exc:
-        # 커밋 경계는 런 전체(connect) — 예외면 롤백이라 부분 적재가 없다. 트레이스백 대신
-        # 사유를 로그에 태운다(Rule 12).
+        # manifest/원장 초기화나 공용 DB 조회처럼 항목 격리 밖의 실패다. 항목 쓰기 실패는 위
+        # SAVEPOINT에서 격리되고 여기까지 오지 않는다. 트레이스백 대신 사유도 로그에 태운다.
         logger.exception("공시 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
         docs_created = facts_written = facts_already = 0
+        pending_succeeded = 0
+        pending_failures = []
+        pending_after = None
         created_sample = []
         exit_code = 1
+
+    if (pending_failures or failures) and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
@@ -338,6 +655,12 @@ def run(
         "facts_written": facts_written, "facts_already_present": facts_already,
         "created_rows_sample": created_sample,
         "failures": failures, "exit_code": exit_code,
+        "pending_ledger": {
+            "before": pending_before, "after": pending_after, "succeeded": pending_succeeded,
+            "failed": len(pending_failures), "failed_items": pending_failures[:_SAMPLE_LIMIT],
+            "retention": "until_success",
+            "retry": "once_per_eligible_run_no_lifetime_cutoff",
+        },
         # 원장 관측용 공통 봉투(ALPHA-181). 산출은 fact 행이다(문서는 그 부속). 발행사 미해소·
         # 보고일 결측·유효 fact 없음·거절은 그 공시가 fact 로 안 남은 유실이다.
         "ops": {
@@ -362,6 +685,10 @@ def run(
         skipped_no_report_date, skipped_no_valid_fact, rejected_facts,
         docs_created, facts_written, len(failures),
     )
+    if pending_failures:
+        logger.warning("load_disclosure: pending 실패 %d건, 잔여 %d건: %s",
+                       len(pending_failures), pending_after,
+                       [item["rcept_no"] for item in pending_failures[:_SAMPLE_LIMIT]])
     return exit_code
 
 
@@ -409,8 +736,9 @@ def _fact_inserts(rcept_no, document_id, doc, supply, segments, seen_fact_ids):
         # 걸러 no-op 로 만든다. 다른 rcept_no 정정본 supersession 은 범위 밖(정체성 해소 문제).
         header = ("INSERT INTO disclosure_fact (fact_id, document_id, fact_type, available_at)"
                   " VALUES (%s, %s, %s, %s) ON CONFLICT (fact_id) DO UPDATE SET"
-                  " available_at = EXCLUDED.available_at"
-                  " WHERE disclosure_fact.available_at IS DISTINCT FROM EXCLUDED.available_at")
+                  " available_at = EXCLUDED.available_at, is_current = TRUE"
+                  " WHERE disclosure_fact.available_at IS DISTINCT FROM EXCLUDED.available_at"
+                  " OR NOT disclosure_fact.is_current")
         table = "supply_contract_fact" if fact_type == "SUPPLY_CONTRACT" else "business_segment_fact"
         set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
         cur_tuple = ", ".join(f"{table}.{c}" for c in cols)

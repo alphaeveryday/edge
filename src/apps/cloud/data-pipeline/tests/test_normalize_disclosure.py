@@ -16,6 +16,7 @@ from pathlib import Path
 from data_pipeline.lake import (
     LocalStorage,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     canonical_supply_contract_fact_partition,
     raw_disclosure_document_key,
     raw_disclosure_partition,
@@ -423,9 +424,8 @@ def test_manifest_records_current_winner_with_direct_key_and_sha(tmp_path):
     assert len(manifest["canonical_partitions"]) == 1
     part = manifest["canonical_partitions"][0]
     assert part["winner_ids"] == [{"rcept_no": rcept_no}]
-    assert part["key"] == (
-        f"{canonical_supply_contract_fact_partition('2026-06-23')}/part-00000.parquet"
-    )
+    assert part["key"] == canonical_run_partition_key(
+        "supply_contract_fact", "D1", "2026-06-23")
     assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
     assert _quality_log(storage)["ops"]["records_out"] == 1
 

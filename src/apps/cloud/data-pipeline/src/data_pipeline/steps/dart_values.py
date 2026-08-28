@@ -70,7 +70,8 @@ _FACT_SQL = (
     " JOIN disclosure_fact df ON df.fact_id = scf.fact_id"
     " JOIN disclosure_document dd ON dd.document_id = df.document_id"
     " JOIN document d ON d.document_id = df.document_id"
-    " WHERE scf.contract_amount_krw IS NOT NULL AND scf.contract_amount_krw > 0"
+    " WHERE df.is_current AND scf.contract_amount_krw IS NOT NULL"
+    " AND scf.contract_amount_krw > 0"
     f" AND (df.available_at AT TIME ZONE 'Asia/Seoul')::date >= %s::date - {WINDOW_DAYS}"
     f" AND (df.available_at AT TIME ZONE 'Asia/Seoul')::date <= %s::date + {WINDOW_DAYS}"
 )
