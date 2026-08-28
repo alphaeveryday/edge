@@ -802,6 +802,23 @@ def run_manifest_consumed_key(kind: str, dataset: str, run_id: str, consumer: st
     return f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/run_id={run_id}/consumed/{consumer}.json"
 
 
+def run_manifest_skipped_key(kind: str, dataset: str, run_id: str, consumer: str) -> str:
+    """그 manifest 를 이 소비자가 **싣지 않기로 끝냈다**는 종결 마커 키 (ALPHA-1052).
+
+    소비 마커와 축이 다르다 — 저건 "실었다", 이건 "안 싣고 닫았다"다. 한 이름으로 합치면
+    로그·조회가 둘을 구분 못 해 "회수됐다"가 거짓이 된다.
+
+    이게 없으면 **탐색이 수렴하지 않는다**: 되돌아보기 창 밖으로 밀린 manifest 는 영원히
+    소비되지 않으므로 매 런이 그걸 다시 GET 하고 다시 센다. 조건이 단조(시간은 한 방향)라
+    한 번 창 밖이면 영원히 창 밖이니, 그 판정을 한 번만 하고 닫는 것이 맞다.
+
+    ⚠️ **미완료 manifest(`*_written=false`)에는 쓰지 않는다.** 생산자가 같은 run_id 로
+    끝맺을 수 있어 조건이 단조가 아니다 — 닫아 버리면 완성된 범위를 영영 안 싣는다.
+    그건 창 밖으로 밀릴 때 이 마커를 받는다.
+    """
+    return f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/run_id={run_id}/skipped/{consumer}.json"
+
+
 def unconsumed_run_ids(
     storage, kind: str, dataset: str, consumer: str, *, exclude: str | None = None
 ) -> list[str]:
@@ -811,6 +828,10 @@ def unconsumed_run_ids(
     ALPHA-1033 이 막은 데이터 풀스캔과 다른 축이다. 키 수는 런당 2~3개로 자라므로(뉴스 기준
     연 ~1,500) 페이지 수는 년당 1~2다. 반환은 **정렬**이라 호출자가 같은 순서로 처리한다.
 
+    "미소비"는 **두 종결 마커가 모두 없는 것**이다 — `consumed`(실었다)와 `skipped`(안 싣고
+    닫았다). skipped 가 없으면 영원히 못 싣는 manifest 를 매 런 다시 GET 해 탐색이 수렴하지
+    않는다.
+
     ⚠️ `feature_written`·`canonical_written` 이 false 인 반쪽 manifest 도 여기 섞여 나온다 —
     생산자가 시작 시 false 로 쓰고 끝에 true 로 덮기 때문이다. 생산자가 죽으면 그 false
     manifest 가 영영 남으므로, **호출자가 GET 해서 완료 여부를 보고 걸러야 한다**(여기서
@@ -819,7 +840,8 @@ def unconsumed_run_ids(
     prefix = f"{_MANIFEST_ROOT[kind]}/dataset={dataset}/"
     produced: set[str] = set()
     consumed: set[str] = set()
-    marker_suffix = f"/consumed/{consumer}.json"
+    # 종결은 둘이다 — 실었거나(consumed), 안 싣고 닫았거나(skipped). 둘 다 빼야 탐색이 수렴한다.
+    marker_suffixes = (f"/consumed/{consumer}.json", f"/skipped/{consumer}.json")
     for key in storage.list_keys(prefix):
         rest = key[len(prefix):]
         if not rest.startswith("run_id="):
@@ -829,7 +851,7 @@ def unconsumed_run_ids(
             continue
         if tail == "manifest.json":
             produced.add(run_id)
-        elif key.endswith(marker_suffix):
+        elif key.endswith(marker_suffixes):
             consumed.add(run_id)
     return sorted(produced - consumed - ({exclude} if exclude else set()))
 

@@ -84,6 +84,7 @@ from ..lake import (
     feature_news_assertions_partition,
     quality_log_key,
     run_manifest_consumed_key,
+    run_manifest_skipped_key,
     unconsumed_run_ids,
 )
 from .tag_news import _merge_by_article
@@ -186,30 +187,10 @@ def _manifest_partitions(
     return partitions
 
 
-def _union_partitions(
-    partitions: list[tuple[str, str, str, frozenset[str]]],
-) -> list[tuple[str, str, str, frozenset[str]]]:
-    """같은 (language, published_date) 가 여러 manifest 에서 오면 article_id 를 합친다.
-
-    합치지 않고 두 항목으로 두면 같은 part 파일을 두 번 GET 하고 `physical_rows_read` 가
-    부풀어, 물리/논리 분리(ALPHA-1033)가 말하려는 수가 거짓이 된다. 직접 키는 파티션에서
-    결정되므로(`_manifest_partitions` 가 대조한다) 같은 파티션이면 키도 같다.
-    """
-    merged: dict[tuple[str, str], tuple[str, set[str]]] = {}
-    for language, date, key, ids in partitions:
-        entry = merged.get((language, date))
-        if entry is None:
-            merged[(language, date)] = (key, set(ids))
-        else:
-            entry[1].update(ids)
-    return [(language, date, key, frozenset(ids))
-            for (language, date), (key, ids) in sorted(merged.items())]
-
-
 def _carry_forward(
     storage: Storage, *, exclude: str, now: datetime,
     counters: dict[str, int], failures: list[dict], scope_ids: dict[str, set[str]],
-) -> tuple[list[tuple[str, str, str, frozenset[str]]], list[str]]:
+) -> tuple[list[tuple[str, list[tuple[str, str, str, frozenset[str]]]]], list[str]]:
     """생산됐지만 아직 이 스텝이 안 실은 manifest 범위를 함께 싣는다 (ALPHA-1052).
 
     ⚠️ **이건 보조 작업이다 — 실패해도 이번 런의 제 범위를 죽이지 않는다.** 회수 장치가
@@ -225,7 +206,7 @@ def _carry_forward(
       mentions 게이트가 뺀 행도 있어(ALPHA-982) `missing` 검증이 죽을 수 있다. 조용히
       버리지 않고 `stale` 로 세어 남긴다 — 사람이 판단할 일이다.
     """
-    partitions: list[tuple[str, str, str, frozenset[str]]] = []
+    groups: list[tuple[str, list[tuple[str, str, str, frozenset[str]]]]] = []
     carried: list[str] = []
     try:
         pending = unconsumed_run_ids(storage, "feature", _MANIFEST_DATASET, JOB_NAME, exclude=exclude)
@@ -234,7 +215,7 @@ def _carry_forward(
         logger.exception("미소비 manifest 탐색 실패(격리) — 이번 런 범위만 싣는다")
         failures.append({"reasons": ["carry_forward_discovery_error"], "error": str(exc)})
         counters["discovery_failed"] = 1
-        return partitions, carried
+        return groups, carried
     counters["pending"] = len(pending)
     for run_id in pending:
         # ⚠️ 상한은 **실제로 실은 수**에만 건다. `pending[:N]` 으로 앞을 잘랐더니, 영구히
@@ -254,10 +235,21 @@ def _carry_forward(
             age = now - datetime.fromisoformat(manifest["started_at"])
             if age > timedelta(days=_CARRY_LOOKBACK_DAYS):
                 counters["stale"] += 1
+                # 창 밖 판정은 **단조**다(시간은 한 방향) — 다시 볼 일이 없으므로 닫는다.
+                # 안 닫으면 매 런이 이 manifest 를 다시 GET 하고 다시 세, 탐색 비용과
+                # `pending` 이 영원히 자란다. 소비 마커가 아니라 skipped 라 "실었다"로
+                # 둔갑하지 않는다 — 사람이 볼 수 있게 사유와 시각을 몸통에 남긴다.
+                storage.put_bytes(
+                    run_manifest_skipped_key("feature", _MANIFEST_DATASET, run_id, JOB_NAME),
+                    json.dumps({"consumer": JOB_NAME, "reason": "lookback_expired",
+                                "manifest_started_at": manifest["started_at"],
+                                "lookback_days": _CARRY_LOOKBACK_DAYS,
+                                "skipped_at": now.isoformat()},
+                               ensure_ascii=False).encode("utf-8"))
                 continue
             carried_scope = _manifest_partitions(storage, run_id)
             scope_ids[run_id] = {aid for *_, ids in carried_scope for aid in ids}
-            partitions.extend(carried_scope)
+            groups.append((run_id, carried_scope))
         except Exception as exc:
             # 한 manifest 의 손상이 나머지 회수와 이번 런을 죽이지 않게 격리한다.
             logger.exception("미소비 manifest 회수 실패(격리): run_id=%s", run_id)
@@ -267,7 +259,7 @@ def _carry_forward(
             continue
         carried.append(run_id)
     counters["carried"] = len(carried)
-    return partitions, carried
+    return groups, carried
 
 
 def _confidence(value: object) -> float | None:
@@ -338,6 +330,8 @@ def run(
     # 판정하려면 결손이 **어느 범위의 것인지** 알아야 한다(ALPHA-1052).
     scope_ids_by_run: dict[str, set[str]] = {}
     missing_article_ids: set[str] = set()
+    failed_carried: set[str] = set()   # 읽기 단계에서 격리된 회수 범위 — 마커를 안 남긴다
+    parquet_cache: dict[str, list[dict]] = {}
 
     try:
         if input_run_id is not None and (from_date is not None or to_date is not None):
@@ -352,7 +346,10 @@ def run(
                 storage, exclude=input_run_id, now=started_at,
                 counters=carry_counters, failures=failures, scope_ids=scope_ids_by_run,
             )
-            manifest_partitions = _union_partitions(manifest_partitions + carried_partitions)
+            # ⚠️ 합치지 않는다. 합치면 한 파티션의 article_id 집합이 두 범위의 합이 되어,
+            # 회수 범위의 결손이 낸 raise 를 **어느 범위 탓인지 못 가른다** — 격리가 불가능해
+            # 옛 manifest 하나가 이번 런까지 죽인다. 소유자를 달고 따로 읽는다(같은 part
+            # 파일은 위 캐시가 한 번만 GET 한다).
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
             # 파티션마다 접은 행을 여기 모아 **언어 단위로 한 번 더** 접는다(아래 주석).
@@ -372,75 +369,101 @@ def run(
             # 뒤집힌 배열이 오면 같은 입력에 다른 행이 적재된다. 여기서 정렬해 두 경로의
             # 순회 순서를 같게 만든다(`_partition_dates` 는 이미 오름차순이다).
             scopes = sorted(
-                [(date, key, ids) for lang, date, key, ids in manifest_partitions if lang == language]
+                [(date, key, ids, owner)
+                 for owner, parts in [(None, manifest_partitions), *carried_partitions]
+                 for lang, date, key, ids in parts if lang == language]
                 if manifest_partitions is not None else
-                [(date, None, None) for date in _partition_dates(storage, language)
+                [(date, None, None, None) for date in _partition_dates(storage, language)
                  if (from_date is None or date >= from_date)
                  and (to_date is None or date <= to_date)],
                 key=lambda scope: scope[0],
             )
-            for date, direct_key, article_ids in scopes:
-                prefix = feature_news_assertions_partition(language, date)
-                mirror_marker = feature_news_assertions_minute_prefix(language, date)
-                partition_rows: list[dict] = []
-                keys = [direct_key] if direct_key is not None else storage.list_keys(prefix + "/")
-                for parquet_key in keys:
-                    if not parquet_key.endswith(".parquet"):
-                        continue
-                    if parquet_key.startswith(mirror_marker):
-                        # ⚠️ **흡수 전 장중 미러는 아직 확정이 아니다**(ALPHA-900). 이 파티션의
-                        # 정본은 `tag_news` 가 되쓴 part 파일이고, 미러는 그 스텝이 읽어
-                        # 병합하기 전까지의 임시 조각이다. 여기서 바로 읽으면 `tag_news` 가
-                        # 거는 게이트(canonical mentions 판정 — 배치가 일부러 feature 집합
-                        # 밖에 두는 기사)를 **통째로 우회한다**: SFN 은 TagNews 뒤에
-                        # LoadAssertions 를 돌리는데, 그 사이에 도착한 미러는 게이트를 한 번도
-                        # 안 거친 채 DB 로 간다.
-                        # 건너뛰어도 지연이 없다 — 같은 SFN 런의 TagNews 가 흡수한 미러는 이미
-                        # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
-                        mirrors_unabsorbed += 1
-                        continue
-                    batch = _read_parquet_rows(storage.get_bytes(parquet_key))
-                    physical_rows_read += len(batch)
-                    partition_rows.extend(batch)
-                # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치가 쓴 part
-                # 파일과 장중이 남긴 미러가 한 파티션에 공존하는 창이 있고, 그 둘이 같은
-                # 기사의 **다른 본문**에 대한 판정이면 사건 자연키가 갈려 둘 다 적재된다 —
-                # 정정 전 사건이 DB 에 영구히 남는다(`ON CONFLICT DO NOTHING` 이라 나중에
-                # 덮이지도 않는다). 그래서 `tag_news` 의 압축과 **같은 규칙**으로 기사마다
-                # 최신 판정만 남긴다(규칙이 갈리면 두 소비자가 다른 사실을 본다).
-                # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
-                # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
-                if article_ids is not None:
-                    selected = [r for r in partition_rows if r.get("article_id") in article_ids]
-                    keyed = _merge_by_article(selected)
-                    missing = article_ids - keyed.keys()
-                    if missing:
-                        raise ValueError(
-                            f"manifest article_id가 feature에 없다: key={direct_key}, "
-                            f"article_ids={sorted(missing)!r}"
-                        )
-                    for article_id, row in keyed.items():
-                        if not _matches_partition_date(row.get("published_at"), date):
+            for date, direct_key, article_ids, owner in scopes:
+              # ⚠️ **회수 범위의 실패는 여기서 막는다**(ALPHA-1052). manifest JSON 이 멀쩡해도
+              # 그 범위의 parquet GET·`missing`·날짜 대조가 죽을 수 있다 — 옛 manifest 가
+              # 가리키는 article_id 가 그 사이 되쓰기로 part 에서 사라졌다면(ALPHA-982) 매
+              # 후속 런이 같은 자리에서 죽어 레인이 창 만료까지 정지한다. 제 범위(owner
+              # None)의 실패는 이 런의 계약이라 그대로 올린다.
+              try:
+                    prefix = feature_news_assertions_partition(language, date)
+                    mirror_marker = feature_news_assertions_minute_prefix(language, date)
+                    partition_rows: list[dict] = []
+                    keys = [direct_key] if direct_key is not None else storage.list_keys(prefix + "/")
+                    for parquet_key in keys:
+                        if not parquet_key.endswith(".parquet"):
+                            continue
+                        if parquet_key.startswith(mirror_marker):
+                            # ⚠️ **흡수 전 장중 미러는 아직 확정이 아니다**(ALPHA-900). 이 파티션의
+                            # 정본은 `tag_news` 가 되쓴 part 파일이고, 미러는 그 스텝이 읽어
+                            # 병합하기 전까지의 임시 조각이다. 여기서 바로 읽으면 `tag_news` 가
+                            # 거는 게이트(canonical mentions 판정 — 배치가 일부러 feature 집합
+                            # 밖에 두는 기사)를 **통째로 우회한다**: SFN 은 TagNews 뒤에
+                            # LoadAssertions 를 돌리는데, 그 사이에 도착한 미러는 게이트를 한 번도
+                            # 안 거친 채 DB 로 간다.
+                            # 건너뛰어도 지연이 없다 — 같은 SFN 런의 TagNews 가 흡수한 미러는 이미
+                            # part 파일에 있고, 그 뒤 도착분은 다음 런이 흡수해 싣는다.
+                            mirrors_unabsorbed += 1
+                            continue
+                        batch = parquet_cache.get(parquet_key)
+                        if batch is None:
+                            # 같은 part 파일을 자기 범위와 회수 범위가 함께 가리키는 것이 정상이다
+                            # (인접 날짜). 캐시가 없으면 GET 도 `physical_rows_read` 도 두 배가 되어
+                            # 물리/논리 분리(ALPHA-1033)가 거짓을 말한다.
+                            batch = _read_parquet_rows(storage.get_bytes(parquet_key))
+                            parquet_cache[parquet_key] = batch
+                            physical_rows_read += len(batch)
+                        partition_rows.extend(batch)
+                    # ⚠️ **한 기사에 판정이 둘 이상 있을 수 있다**(ALPHA-900). 배치가 쓴 part
+                    # 파일과 장중이 남긴 미러가 한 파티션에 공존하는 창이 있고, 그 둘이 같은
+                    # 기사의 **다른 본문**에 대한 판정이면 사건 자연키가 갈려 둘 다 적재된다 —
+                    # 정정 전 사건이 DB 에 영구히 남는다(`ON CONFLICT DO NOTHING` 이라 나중에
+                    # 덮이지도 않는다). 그래서 `tag_news` 의 압축과 **같은 규칙**으로 기사마다
+                    # 최신 판정만 남긴다(규칙이 갈리면 두 소비자가 다른 사실을 본다).
+                    # article_id 없는 행은 접지 않고 그대로 흘린다 — 접으면 여러 결손 행이
+                    # 하나로 뭉쳐 `rows_no_assertion` 이 실제보다 작게 보고된다(Rule 12).
+                    if article_ids is not None:
+                        selected = [r for r in partition_rows if r.get("article_id") in article_ids]
+                        keyed = _merge_by_article(selected)
+                        missing = article_ids - keyed.keys()
+                        if missing:
                             raise ValueError(
-                                "manifest article_id의 feature 날짜가 파티션과 다르다: "
-                                f"key={direct_key}, article_id={article_id}"
+                                f"manifest article_id가 feature에 없다: key={direct_key}, "
+                                f"article_ids={sorted(missing)!r}"
                             )
-                    unkeyed: list[dict] = []
-                    rows_superseded += len(selected) - len(keyed)
-                else:
-                    unkeyed = [r for r in partition_rows if not r.get("article_id")]
-                    keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
-                    rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
-                language_keyed.extend(keyed.values())
-                language_unkeyed.extend(unkeyed)
-            # ⚠️ **한 기사가 두 파티션에 있을 수 있다**(ALPHA-1051). 벤더가 같은 원문 URL 을
-            # 다른 날짜로 재등록하면 `published_date` 가 이동하는데 옛 파티션 행은 남는다.
-            # 파티션 안에서만 접으면 그 둘이 여기까지 살아 나와 아래 자연키 fold 에서
-            # **날짜와 무관하게** 합쳐진다 — 순회가 날짜 오름차순이라 낡은 쪽 confidence 가
-            # 대표가 되고, 사건유형·서술이 갈리면 정정 전 주장이 따로 적재된다.
-            # 그래서 파티션 안과 **같은 규칙**으로 한 번 더 접는다(최신 `tagged_at` 승).
-            # 같은 런이 두 파티션을 다 바꾸면 배치 행의 `tagged_at`(런 시작 시각)이 균일해
-            # 동률인데, 그때는 날짜 오름차순 순회 + `>=` 로 **늦은 날짜가 이긴다**. 결정적이다.
+                        for article_id, row in keyed.items():
+                            if not _matches_partition_date(row.get("published_at"), date):
+                                raise ValueError(
+                                    "manifest article_id의 feature 날짜가 파티션과 다르다: "
+                                    f"key={direct_key}, article_id={article_id}"
+                                )
+                        unkeyed: list[dict] = []
+                        rows_superseded += len(selected) - len(keyed)
+                    else:
+                        unkeyed = [r for r in partition_rows if not r.get("article_id")]
+                        keyed = _merge_by_article([r for r in partition_rows if r.get("article_id")])
+                        rows_superseded += len(partition_rows) - len(unkeyed) - len(keyed)
+                    language_keyed.extend(keyed.values())
+                    language_unkeyed.extend(unkeyed)
+                # ⚠️ **한 기사가 두 파티션에 있을 수 있다**(ALPHA-1051). 벤더가 같은 원문 URL 을
+                # 다른 날짜로 재등록하면 `published_date` 가 이동하는데 옛 파티션 행은 남는다.
+                # 파티션 안에서만 접으면 그 둘이 여기까지 살아 나와 아래 자연키 fold 에서
+                # **날짜와 무관하게** 합쳐진다 — 순회가 날짜 오름차순이라 낡은 쪽 confidence 가
+                # 대표가 되고, 사건유형·서술이 갈리면 정정 전 주장이 따로 적재된다.
+                # 그래서 파티션 안과 **같은 규칙**으로 한 번 더 접는다(최신 `tagged_at` 승).
+                # 같은 런이 두 파티션을 다 바꾸면 배치 행의 `tagged_at`(런 시작 시각)이 균일해
+                # 동률인데, 그때는 날짜 오름차순 순회 + `>=` 로 **늦은 날짜가 이긴다**. 결정적이다.
+              except Exception as exc:
+                  if owner is None:
+                      raise
+                  logger.exception("회수 범위 읽기 실패(격리): run_id=%s", owner)
+                  failures.append({"reasons": ["carry_forward_read_error"],
+                                   "input_run_id": owner, "error": str(exc)})
+                  if owner not in failed_carried:
+                      carry_counters["failed"] += 1
+                      carry_counters["carried"] -= 1
+                      failed_carried.add(owner)
+                  continue
+
             merged = _merge_by_article(language_keyed)
             rows_moved_partitions += len(language_keyed) - len(merged)
             for row in [*merged.values(), *language_unkeyed]:
@@ -709,7 +732,8 @@ def run(
     # 소비 완료가 안 되고 매 런 다시 실린다(반대 방향의 같은 고장).
     if exit_code == 0 and input_run_id is not None:
         landed = [r for r in [input_run_id, *carried_run_ids]
-                  if not (scope_ids_by_run.get(r, set()) & missing_article_ids)]
+                  if r not in failed_carried
+                  and not (scope_ids_by_run.get(r, set()) & missing_article_ids)]
         carry_counters["blocked_by_missing_document"] = (
             1 + len(carried_run_ids)) - len(landed)
         for consumed_run_id in landed:
