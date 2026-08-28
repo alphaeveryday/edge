@@ -448,7 +448,11 @@ def test_load_disclosure_window_days_prunes_report_date_partitions(monkeypatch):
     monkeypatch.setattr(run_mod, "default_window", lambda now, days: (f"from-{days}", f"to-{days}"))
     assert main(["load-disclosure", "--run-id", "R1", "--window-days", "3"]) == 0
     assert captured["window"] == ("from-3", "to-3")
-    assert captured["input_run_id"] == "R1"
+    assert captured["input_run_id"] is None
+
+    assert main(["load-disclosure", "--run-id", "R1", "--input-run-id", "N1",
+                 "--window-days", "3"]) == 0
+    assert captured["input_run_id"] == "N1"
 
 
 def test_load_disclosure_explicit_window_overrides_and_default_is_full_scan(monkeypatch):

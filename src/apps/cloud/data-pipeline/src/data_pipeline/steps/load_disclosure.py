@@ -113,23 +113,44 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
             data = storage.get_bytes(key)
             if hashlib.sha256(data).hexdigest() != digest:
                 raise ValueError(f"공시 manifest SHA가 canonical과 다르다: key={key}")
-            by_rcept: dict[str, list[dict]] = {}
-            for row in _read_parquet_rows(data):
-                rcept_no = (row.get("rcept_no") or "").strip()
-                if rcept_no:
-                    by_rcept.setdefault(rcept_no, []).append(row)
-            wanted = [item.get("rcept_no") if isinstance(item, dict) else None for item in ids]
-            if (any(not isinstance(value, str) or not value.strip() for value in wanted)
+            rows = _read_parquet_rows(data)
+            is_segment = disclosure_type == "BUSINESS_SEGMENT"
+            def _identity(item):
+                if not isinstance(item, dict):
+                    return None
+                rcept_no = item.get("rcept_no")
+                if not isinstance(rcept_no, str) or not rcept_no.strip():
+                    return None
+                if not is_segment:
+                    return rcept_no
+                ordinal = item.get("segment_ordinal")
+                if not isinstance(ordinal, int) or isinstance(ordinal, bool):
+                    return None
+                return rcept_no, ordinal
+
+            row_ids = [_identity(row) for row in rows]
+            if len([value for value in row_ids if value is not None]) != len(
+                    {value for value in row_ids if value is not None}):
+                raise ValueError(f"공시 canonical 행키가 중복이다: key={key}")
+            rows_by_id = {row_id: row for row_id, row in zip(row_ids, rows) if row_id is not None}
+            wanted = [_identity(item) for item in ids]
+            if (any(value is None for value in wanted)
                     or wanted != sorted(set(wanted))):
                 raise ValueError(f"공시 manifest winner_ids가 유효하지 않다: {part!r}")
-            for rcept_no in wanted:
-                if rcept_no in seen or rcept_no not in by_rcept:
-                    raise ValueError(f"공시 manifest winner가 중복·결손이다: rcept_no={rcept_no}")
+            selected: dict[str, list[dict]] = {}
+            for winner_id in wanted:
+                if winner_id not in rows_by_id:
+                    raise ValueError(f"공시 manifest winner가 결손이다: winner_id={winner_id}")
+                row = rows_by_id[winner_id]
+                selected.setdefault(row["rcept_no"], []).append(row)
+            for rcept_no, selected_rows in selected.items():
+                if rcept_no in seen:
+                    raise ValueError(f"공시 manifest winner가 중복이다: rcept_no={rcept_no}")
                 seen.add(rcept_no)
-                rows = by_rcept[rcept_no]
-                payload = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                payload = json.dumps(selected_rows, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"))
                 winners.append({"rcept_no": rcept_no, "disclosure_type": disclosure_type,
-                                "rows": rows, "payload": payload,
+                                "rows": selected_rows, "payload": payload,
                                 "payload_sha256": hashlib.sha256(payload.encode()).hexdigest()})
     return winners
 
@@ -459,7 +480,11 @@ def run(
                                 item_written += 1
                             else:
                                 item_already += 1
-                        if pending_item is not None:
+                        if pending_item is not None and rejects:
+                            _mark_pending_failure(conn, pending_item, "rejected_fact")
+                            pending_failures.append({"rcept_no": rcept_no,
+                                                     "reason": "rejected_fact"})
+                        elif pending_item is not None:
                             cur.execute(
                                 "DELETE FROM disclosure_load_pending"
                                 " WHERE rcept_no=%s AND payload_sha256=%s",
@@ -467,6 +492,9 @@ def run(
                             )
                             if cur.rowcount == 1:
                                 pending_succeeded += 1
+                            else:
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "payload_conflict"})
                         cur.execute("RELEASE SAVEPOINT disclosure_item")
                         facts_written += item_written
                         facts_already += item_already
@@ -500,7 +528,7 @@ def run(
         created_sample = []
         exit_code = 1
 
-    if pending_failures and exit_code == 0:
+    if (pending_failures or failures) and exit_code == 0:
         exit_code = _PARTIAL_EXIT_CODE
 
     log = {

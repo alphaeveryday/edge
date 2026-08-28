@@ -105,6 +105,8 @@ class _FakeCursor:
         elif upper.startswith("DELETE FROM DISCLOSURE_LOAD_PENDING"):
             rcept_no, digest = params
             item = self._conn.pending.get(rcept_no)
+            if rcept_no in self._conn.conflict_on_delete and item:
+                item["payload_sha256"] = "newer-payload"
             self.rowcount = int(bool(item and item["payload_sha256"] == digest))
             if self.rowcount:
                 del self._conn.pending[rcept_no]
@@ -137,12 +139,14 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, profiles=None, existing_docs=None, actors=(), fail_docs=()):
+    def __init__(self, profiles=None, existing_docs=None, actors=(), fail_docs=(),
+                 conflict_on_delete=()):
         self.log: list = []
         self._profiles = profiles if profiles is not None else {"00126380": "actor_samsung"}
         self._existing = existing_docs or set()
         self._actors = actors
         self.fail_docs = set(fail_docs)
+        self.conflict_on_delete = set(conflict_on_delete)
         self.pending: dict[str, dict] = {}
 
     def cursor(self):
@@ -183,9 +187,17 @@ def _write_manifest(storage, run_id, dataset, producer, builder, date=None, rcep
     if date is not None:
         key = f"{builder(date)}/part-00000.parquet"
         data = storage.get_bytes(key)
+        if producer == "normalize_disclosure_segment":
+            winner_ids = [
+                {"rcept_no": row["rcept_no"], "segment_ordinal": row["segment_ordinal"]}
+                for row in load_disclosure._read_parquet_rows(data)
+                if row["rcept_no"] in rcept_nos
+            ]
+        else:
+            winner_ids = [{"rcept_no": value} for value in sorted(rcept_nos)]
         partitions.append({
             "report_date": date, "key": key, "sha256": hashlib.sha256(data).hexdigest(),
-            "winner_ids": [{"rcept_no": value} for value in sorted(rcept_nos)],
+            "winner_ids": sorted(winner_ids, key=lambda item: tuple(item.values())),
         })
     storage.put_bytes(canonical_run_manifest_key(dataset, run_id), json.dumps({
         "run_id": run_id, "producer": producer, "canonical_written": True,
@@ -225,6 +237,20 @@ def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path,
         "before": 1, "after": 0, "succeeded": 1, "failed": 0, "failed_items": [],
         "retention": "until_success", "retry": "once_per_normal_run_no_lifetime_cutoff",
     }
+
+
+def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 사업부문 winner의 정체성은 (rcept_no, ordinal)이다. 한 공시의
+    여러 부문을 rcept_no 중복으로 오인하면 정상 manifest가 원장 진입 전에 실패한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [_segment("R1", 0), _segment("R1", 1, segment_name="디스플레이")])
+    _dual_manifests(storage, "T1", segment=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert len(_inserts(conn, "business_segment_fact")) == 2
+    assert conn.pending == {}
 
 
 def test_unresolved_issuer_stays_pending_and_next_normal_run_recovers(tmp_path, monkeypatch):
@@ -267,6 +293,48 @@ def test_one_temporary_failure_does_not_rollback_other_pending_items(tmp_path, m
     ledger = _log(storage)["pending_ledger"]
     assert (ledger["succeeded"], ledger["failed"], ledger["after"]) == (2, 1, 1)
     assert ledger["failed_items"][0]["rcept_no"] == "R2"
+
+
+def test_full_scan_item_failure_returns_partial(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): legacy full scan 항목도 DB 실패를 성공으로 보고하면 하류가 불완전한
+    disclosure를 조립한다. pending 여부와 무관하게 항목 실패는 비0이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    conn = _FakeConn(fail_docs={"R1"})
+
+    assert _run(storage, conn, monkeypatch) == 2
+    assert _log(storage)["failures"][0]["rcept_no"] == "R1"
+
+
+def test_rejected_segment_keeps_receipt_pending(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 한 receipt의 일부 segment만 유효해도 reject가 있으면 winner 전체가
+    적재된 것이 아니다. 원장을 지우면 거절 행의 durable 재시도 증거가 사라진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [_segment("R1", 0), _segment("R1", 1, revenue_krw=-1)])
+    _dual_manifests(storage, "T1", segment=("R1",))
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert conn.pending["R1"]["last_error_code"] == "rejected_fact"
+    assert len(_inserts(conn, "business_segment_fact")) == 1
+
+
+def test_conditional_delete_conflict_is_partial(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 동시 실행이 더 최신 payload로 원장을 교체했으면 stale loader의
+    조건부 DELETE 0건은 성공이 아니다. 하류 publish를 막고 최신 winner를 남겨야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn(conflict_on_delete={"R1"})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+    assert set(conn.pending) == {"R1"}
+    assert _log(storage)["pending_ledger"]["failed_items"] == [
+        {"rcept_no": "R1", "reason": "payload_conflict"}
+    ]
 
 
 def test_non_finite_payload_is_retained_without_blocking_valid_winner(tmp_path, monkeypatch):
