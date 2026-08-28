@@ -37,7 +37,7 @@ def _date_text(value) -> str | None:
 def fetch_facts(conn, *, from_date: str | None = None,
                 to_date: str | None = None) -> list[dict]:
     """공급계약 fact와 NEWS identity 축인 보통주 instrument를 함께 읽는다."""
-    conditions = []
+    conditions = ["df.is_current"]
     params = []
     if from_date is not None:
         conditions.append("dd.report_date >= %s")

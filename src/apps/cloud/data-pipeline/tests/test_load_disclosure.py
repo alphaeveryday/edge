@@ -124,13 +124,13 @@ class _FakeCursor:
                 del self._conn.pending[rcept_no]
         elif upper.startswith("SELECT COUNT(*) FROM DISCLOSURE_LOAD_PENDING"):
             self._result = [(len(self._conn.pending),)]
-        elif upper.startswith("DELETE FROM DISCLOSURE_FACT"):
+        elif upper.startswith("UPDATE DISCLOSURE_FACT SET IS_CURRENT=FALSE"):
             document_id, keep_ids = params
-            removed = {fact for fact in self._conn.disclosure_facts
-                       if fact[1] == document_id and fact[2] == "BUSINESS_SEGMENT"
-                       and fact[0] not in keep_ids}
-            self._conn.disclosure_facts -= removed
-            self.rowcount = len(removed)
+            superseded = {fact[0] for fact in self._conn.disclosure_facts
+                          if fact[1] == document_id and fact[2] == "BUSINESS_SEGMENT"
+                          and fact[0] not in keep_ids}
+            self._conn.superseded_fact_ids |= superseded
+            self.rowcount = len(superseded)
         elif upper.startswith("SELECT DART_CORP_CODE"):
             codes = params[0]
             self._result = [(c, self._profiles[c]) for c in codes if c in self._profiles]
@@ -142,6 +142,7 @@ class _FakeCursor:
             self.rowcount = 0 if (params[1], params[2]) in self._existing else 1
         elif upper.startswith("INSERT INTO DISCLOSURE_FACT "):
             self._conn.disclosure_facts.add((params[0], params[1], params[2]))
+            self._conn.superseded_fact_ids.discard(params[0])
             self.rowcount = 1
         else:
             self.rowcount = 1
@@ -171,6 +172,7 @@ class _FakeConn:
         self.conflict_on_delete = set(conflict_on_delete)
         self.conflict_on_failure = set(conflict_on_failure)
         self.disclosure_facts = set(disclosure_facts)
+        self.superseded_fact_ids: set[str] = set()
         self.pending: dict[str, dict] = {}
 
     def cursor(self):
@@ -759,9 +761,9 @@ def test_newer_canonical_wins_when_its_enqueue_previously_failed(tmp_path, monke
     assert _inserts(conn, "supply_contract_fact")[0][5] == 200
 
 
-def test_equal_revision_manifest_winners_drop_stale_segment_ordinals(tmp_path, monkeypatch):
+def test_equal_revision_manifest_winners_tombstone_stale_segment_ordinals(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): parser correction이 segment 수를 줄여도 shared merge에는 옛 ordinal이
-    남는다. 값이 같은 현재 winner 집합은 manifest 범위를 따라야 obsolete fact를 재적재하지 않는다."""
+    남는다. obsolete fact는 신규 소비에서 제외하되 과거 explanation lineage 행은 보존해야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     current = _segment("R1", 0)
     _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
@@ -786,7 +788,11 @@ def test_equal_revision_manifest_winners_drop_stale_segment_ordinals(tmp_path, m
 
     assert conn.pending == {}
     assert len(_inserts(conn, "business_segment_fact")) == 1
-    assert conn.disclosure_facts == {(current_id, document_id, "BUSINESS_SEGMENT")}
+    assert conn.disclosure_facts == {
+        (current_id, document_id, "BUSINESS_SEGMENT"),
+        (obsolete_id, document_id, "BUSINESS_SEGMENT"),
+    }
+    assert conn.superseded_fact_ids == {obsolete_id}
 
 
 def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):

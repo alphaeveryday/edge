@@ -113,6 +113,7 @@ Table "disclosure_fact" {
   "document_id" text [not null]
   "fact_type" varchar(30) [not null]
   "available_at" timestamptz [not null]
+  "is_current" boolean [not null]
 }
 
 Table "disclosure_load_pending" {

@@ -198,6 +198,7 @@ def test_fetch_maps_issuer_and_counterparty_to_common_instruments():
     assert fact["customer_instrument_id"] == "inst_customer"
     query = next(sql for sql, _ in conn.log if sql.upper().startswith("SELECT SC.FACT_ID"))
     assert query.upper().count("SHARE_CLASS_CODE = 'COMMON'") == 2
+    assert "df.is_current" in query
 
 
 def test_run_surfaces_required_identity_loss_in_quality_log(tmp_path, monkeypatch):

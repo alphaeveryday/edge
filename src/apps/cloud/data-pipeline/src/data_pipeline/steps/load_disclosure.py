@@ -576,16 +576,16 @@ def run(
                         elif pending_item is not None:
                             if pending_item["disclosure_type"] == "BUSINESS_SEGMENT":
                                 # pending payload는 enqueue 당시 manifest의 완전한 winner 집합이다.
-                                # 정정본에서 사라진 ordinal도 같은 원장 소비 트랜잭션에서 제거한다.
+                                # 정정본에서 사라진 ordinal은 lineage FK를 보존하며 current에서 내린다.
                                 segment_fact_ids = [
                                     header_params[0]
                                     for _, header_params, _, _ in pairs
                                     if header_params[2] == "BUSINESS_SEGMENT"
                                 ]
                                 cur.execute(
-                                    "DELETE FROM disclosure_fact"
+                                    "UPDATE disclosure_fact SET is_current=FALSE"
                                     " WHERE document_id=%s AND fact_type='BUSINESS_SEGMENT'"
-                                    " AND NOT (fact_id = ANY(%s))",
+                                    " AND is_current AND NOT (fact_id = ANY(%s))",
                                     (document_id, segment_fact_ids),
                                 )
                             cur.execute(
@@ -736,8 +736,9 @@ def _fact_inserts(rcept_no, document_id, doc, supply, segments, seen_fact_ids):
         # 걸러 no-op 로 만든다. 다른 rcept_no 정정본 supersession 은 범위 밖(정체성 해소 문제).
         header = ("INSERT INTO disclosure_fact (fact_id, document_id, fact_type, available_at)"
                   " VALUES (%s, %s, %s, %s) ON CONFLICT (fact_id) DO UPDATE SET"
-                  " available_at = EXCLUDED.available_at"
-                  " WHERE disclosure_fact.available_at IS DISTINCT FROM EXCLUDED.available_at")
+                  " available_at = EXCLUDED.available_at, is_current = TRUE"
+                  " WHERE disclosure_fact.available_at IS DISTINCT FROM EXCLUDED.available_at"
+                  " OR NOT disclosure_fact.is_current")
         table = "supply_contract_fact" if fact_type == "SUPPLY_CONTRACT" else "business_segment_fact"
         set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
         cur_tuple = ", ".join(f"{table}.{c}" for c in cols)

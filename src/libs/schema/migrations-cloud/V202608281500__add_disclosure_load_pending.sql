@@ -1,4 +1,12 @@
 -- ALPHA-1045: current disclosure manifest winners must survive loader/process failure.
+SET LOCAL lock_timeout = '3s';
+
+ALTER TABLE disclosure_fact
+    ADD COLUMN is_current BOOLEAN NOT NULL DEFAULT TRUE;
+
+COMMENT ON COLUMN disclosure_fact.is_current IS
+'True for the latest parser winner. Removed correction ordinals are retained as false so immutable explanation lineage remains valid.';
+
 CREATE TABLE disclosure_load_pending (
     rcept_no          TEXT PRIMARY KEY,
     disclosure_type   TEXT NOT NULL,
