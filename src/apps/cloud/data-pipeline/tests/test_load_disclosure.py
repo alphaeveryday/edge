@@ -107,7 +107,10 @@ class _FakeCursor:
         elif upper.startswith("UPDATE DISCLOSURE_LOAD_PENDING"):
             code, error, rcept_no, digest = params
             item = self._conn.pending.get(rcept_no)
-            if item and item["payload_sha256"] == digest:
+            if rcept_no in self._conn.conflict_on_failure and item:
+                item["payload_sha256"] = "newer-payload"
+            self.rowcount = int(bool(item and item["payload_sha256"] == digest))
+            if self.rowcount:
                 item["attempt_count"] += 1
                 item["last_error_code"] = code
                 item["last_error"] = error
@@ -149,13 +152,14 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, profiles=None, existing_docs=None, actors=(), fail_docs=(),
-                 conflict_on_delete=()):
+                 conflict_on_delete=(), conflict_on_failure=()):
         self.log: list = []
         self._profiles = profiles if profiles is not None else {"00126380": "actor_samsung"}
         self._existing = existing_docs or set()
         self._actors = actors
         self.fail_docs = set(fail_docs)
         self.conflict_on_delete = set(conflict_on_delete)
+        self.conflict_on_failure = set(conflict_on_failure)
         self.pending: dict[str, dict] = {}
 
     def cursor(self):
@@ -465,6 +469,24 @@ def test_conditional_delete_conflict_is_partial(tmp_path, monkeypatch):
     assert _log(storage)["facts_written"] == 0
     statements = [sql for sql, _ in conn.log]
     assert "ROLLBACK TO SAVEPOINT disclosure_item" in statements
+
+
+def test_rejected_fact_guard_conflict_rolls_back_valid_siblings(tmp_path, monkeypatch):
+    """WHY(ALPHA-1045): 부분 거절 실패를 기록하는 동안 최신 payload가 경합에서 이기면 예전
+    payload의 유효 sibling까지 커밋해서는 안 된다. 최신 원장이 이미 성공 삭제됐을 수도 있다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS, "2026-06-30",
+           [_segment("R1", 0), _segment("R1", 1, revenue_krw=-1)])
+    _dual_manifests(storage, "T1", segment=("R1",))
+    conn = _FakeConn(conflict_on_failure={"R1"})
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 2
+
+    assert _log(storage)["facts_written"] == 0
+    assert _log(storage)["pending_ledger"]["failed_items"] == [
+        {"rcept_no": "R1", "reason": "payload_conflict"}
+    ]
+    assert "ROLLBACK TO SAVEPOINT disclosure_item" in [sql for sql, _ in conn.log]
 
 
 def test_non_finite_payload_is_retained_without_blocking_valid_winner(tmp_path, monkeypatch):

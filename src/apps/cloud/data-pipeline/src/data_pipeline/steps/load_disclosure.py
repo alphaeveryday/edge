@@ -243,9 +243,10 @@ def _merge_pending(canonical_rows: list[dict], pending: dict[str, list[dict]],
     return [row for rcept_no in sorted(grouped) for row in grouped[rcept_no]]
 
 
-def _mark_pending_failure(conn, pending: dict | None, code: str, error: str | None = None) -> None:
+def _mark_pending_failure(conn, pending: dict | None, code: str,
+                          error: str | None = None) -> bool:
     if pending is None:
-        return
+        return False
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE disclosure_load_pending SET attempt_count=attempt_count+1,"
@@ -253,6 +254,7 @@ def _mark_pending_failure(conn, pending: dict | None, code: str, error: str | No
             " WHERE rcept_no=%s AND payload_sha256=%s",
             (code, error, pending["rcept_no"], pending["payload_sha256"]),
         )
+        return cur.rowcount == 1
 
 
 def _read_parquet_rows(data: bytes) -> list[dict]:
@@ -550,9 +552,16 @@ def run(
                             else:
                                 item_already += 1
                         if pending_item is not None and rejects:
-                            _mark_pending_failure(conn, pending_item, "rejected_fact")
-                            pending_failures.append({"rcept_no": rcept_no,
-                                                     "reason": "rejected_fact"})
+                            if _mark_pending_failure(
+                                    conn, pending_item, "rejected_fact"):
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "rejected_fact"})
+                            else:
+                                pending_failures.append({"rcept_no": rcept_no,
+                                                         "reason": "payload_conflict"})
+                                cur.execute("ROLLBACK TO SAVEPOINT disclosure_item")
+                                cur.execute("RELEASE SAVEPOINT disclosure_item")
+                                continue
                         elif pending_item is not None:
                             cur.execute(
                                 "DELETE FROM disclosure_load_pending"
