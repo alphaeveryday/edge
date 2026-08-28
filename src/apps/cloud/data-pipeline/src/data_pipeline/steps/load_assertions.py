@@ -236,7 +236,15 @@ def _carry_forward(
         counters["discovery_failed"] = 1
         return partitions, carried
     counters["pending"] = len(pending)
-    for run_id in pending[:_CARRY_MAX_RUNS]:
+    for run_id in pending:
+        # ⚠️ 상한은 **실제로 실은 수**에만 건다. `pending[:N]` 으로 앞을 잘랐더니, 영구히
+        # 못 싣는 것(미완료·창밖·손상)이 앞자리를 차지하면 그 뒤는 매 런 검사조차 안 돼
+        # **영원히 굶는다** — run_id 는 해시라 사전순이 시간순도 아니어서 어느 것이 앞에
+        # 올지도 정해져 있지 않다. 못 싣는 것은 예산을 안 먹으므로 뒤쪽까지 도달한다.
+        # 남은 것은 조용히 버리지 않고 `over_limit` 으로 센다(Rule 12) — 다음 런이 집는다.
+        if len(carried) >= _CARRY_MAX_RUNS:
+            counters["over_limit"] += 1
+            continue
         try:
             manifest = json.loads(
                 storage.get_bytes(feature_run_manifest_key(_MANIFEST_DATASET, run_id)).decode("utf-8"))
@@ -320,7 +328,7 @@ def run(
     # 가 "몇 개가 밀려 있었고 무엇이 실패했나"를 말해야 한다(Rule 12).
     carry_counters: dict[str, int] = {
         "pending": 0, "carried": 0, "unfinished": 0, "stale": 0,
-        "failed": 0, "discovery_failed": 0,
+        "failed": 0, "over_limit": 0, "discovery_failed": 0, "marker_failed": 0,
     }
     carried_run_ids: list[str] = []
 
@@ -671,11 +679,19 @@ def run(
     # 은 드리프트하지 않는다(Rule 5: 코드가 답할 수 있으면 코드가 답한다).
     resolution_rate = (resolved_any / resolution_denominator
                        if resolution_denominator else None)
-    # 소비 마커는 **적재가 성공했을 때만** 쓴다(ALPHA-1052). exit_code 가 0 이 아니면 트랜잭션이
-    # 롤백됐거나 일부 범위가 실패한 것이고, 그때 마커를 남기면 그 범위가 "소비됨"으로 굳어
-    # 다시는 안 실린다 — 이 티켓이 고치려는 바로 그 유실을 장치가 스스로 만든다.
-    # 마커 PUT 자체의 실패도 같은 방향으로 안전하다: 안 써지면 다음 런이 또 집는다(멱등).
-    if exit_code == 0 and input_run_id is not None:
+    # 소비 마커는 **범위가 온전히 착지했을 때만** 쓴다(ALPHA-1052). 마커를 잘못 남기면 그
+    # 범위는 영원히 안 실린다 — 이 티켓이 고치려는 바로 그 유실을 장치가 스스로 만든다.
+    # 마커 PUT 자체의 실패는 반대 방향이라 안전하다: 안 써지면 다음 런이 또 집는다(멱등).
+    #
+    # ⚠️ `exit_code == 0` 만으로는 부족하다 — `missing_document` 는 **exit 0 인 결손**이다.
+    # document 가 아직 안 실린 기사는 건너뛰고 세는데(그게 이 스텝의 계약이다), 그 회수
+    # 수단이 바로 "같은 input_run_id 재실행"이다(ALPHA-1033, 모듈 docstring·
+    # `test_missing_document_recovers_by_replaying_the_same_manifest`). 여기서 마커를
+    # 남기면 그 재실행 자격이 사라진다.
+    # 나머지 제외 카운터(`rows_malformed`·`skipped_partial`·`skipped_no_resolved_argument`)는
+    # 게이트가 아니다 — 재실행해도 같은 값이 나오는 **결정적 제외**라 막으면 이 범위가 영영
+    # 소비 완료가 안 되고 매 런 다시 실린다(반대 방향의 같은 고장).
+    if exit_code == 0 and missing_document == 0 and input_run_id is not None:
         for consumed_run_id in [input_run_id, *carried_run_ids]:
             try:
                 storage.put_bytes(
@@ -687,7 +703,7 @@ def run(
             except Exception:
                 # 적재는 이미 성공했다 — 마커 실패로 exit 을 올리면 성공한 런이 실패로 뒤집힌다.
                 logger.exception("소비 마커 기록 실패(다음 런이 재소비): run_id=%s", consumed_run_id)
-                carry_counters["marker_failed"] = carry_counters.get("marker_failed", 0) + 1
+                carry_counters["marker_failed"] += 1
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
@@ -710,7 +726,8 @@ def run(
         # 미소비 manifest 회수(ALPHA-1052). `pending` 이 0 이 아니면 앞선 런의 범위가 안 실려
         # 있었다는 뜻이고, `carried` 가 그중 이번에 회수한 수다. 나머지 셋은 **왜 못 실었나**다:
         # `unfinished`(생산자가 안 끝낸 manifest) · `stale`(되돌아보기 창 밖) ·
-        # `failed`(그 manifest 만 격리된 실패). 셋 다 0 이 정상이다.
+        # `failed`(그 manifest 만 격리된 실패) · `over_limit`(한 런 상한을 넘겨 다음 런으로).
+        # 넷 다 0 이 정상이다.
         "manifest_carry_forward": dict(carry_counters),
         "rows_no_assertion": rows_no_assertion, "rows_malformed": rows_malformed,
         "assertions_considered": len(candidates), "assertions_folded": folded,
@@ -791,9 +808,10 @@ def run(
         # 밀린 범위가 있었다는 사실은 로그 파일을 열어야 보이는 수치로 두지 않는다(Rule 12) —
         # 이건 앞선 런이 죽었다는 뜻이고, 회수됐든 아니든 사람이 알아야 하는 신호다.
         logger.warning(
-            "load_assertions: 미소비 manifest %d건 — 회수 %d건(미완료 %d·창밖 %d·실패 %d)",
+            "load_assertions: 미소비 manifest %d건 — 회수 %d건"
+            "(미완료 %d·창밖 %d·실패 %d·상한초과 %d)",
             carry_counters["pending"], carry_counters["carried"], carry_counters["unfinished"],
-            carry_counters["stale"], carry_counters["failed"],
+            carry_counters["stale"], carry_counters["failed"], carry_counters["over_limit"],
         )
     if rows_moved_partitions:
         # 버린 판정이 있었다는 사실은 품질 로그를 열어야 보이는 수치로 두지 않는다(Rule 12).

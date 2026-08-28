@@ -590,6 +590,44 @@ def test_uncarryable_manifest_is_counted_not_silently_dropped(tmp_path, monkeypa
     assert storage.list_keys(_consumed_key("T0")) == []
 
 
+def test_missing_document_leaves_the_manifest_unconsumed(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): `missing_document` 는 **exit 0 인 결손**이다 — document 가 아직 안
+    실린 기사는 건너뛰고 세는 게 이 스텝의 계약이고, 그 회수 수단이 바로 "같은
+    input_run_id 재실행"이다(ALPHA-1033). exit 0 만 보고 마커를 남기면 그 재실행 자격이
+    사라져, 회수 장치가 스스로 영구 유실을 만든다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    conn = _FakeConn(documents=[("older", "doc_OLD")])  # "current" 의 document 가 아직 없다
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+    assert _log(storage)["missing_document"] == 1
+    assert storage.list_keys(_consumed_key("T1")) == []
+    assert storage.list_keys(_consumed_key("T0")) == []
+
+
+def test_uncarryable_manifests_do_not_starve_the_queue(tmp_path, monkeypatch):
+    """WHY(ALPHA-1052): 상한을 `pending[:N]` 으로 앞에서 자르면, 영구히 못 싣는 것이 앞자리를
+    차지했을 때 그 뒤는 **검사조차 안 돼 영원히 굶는다**. run_id 는 해시라 사전순이 시간순도
+    아니어서 어느 것이 앞에 올지 정해져 있지도 않다 — 상한은 실제로 실은 수에만 걸려야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _two_runs_lake(storage)
+    for i in range(6):  # _CARRY_MAX_RUNS 보다 많은, 영원히 못 싣는 manifest 가 앞에 깔린다
+        storage.put_bytes(feature_run_manifest_key("news_assertions", f"A{i}"), json.dumps({
+            "run_id": f"A{i}", "producer": "tag_news", "feature_written": False,
+            "started_at": "2026-08-25T15:00:00+00:00", "feature_partitions": [],
+        }).encode("utf-8"))
+    conn = _carry_conn()
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
+
+    loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
+    assert "OLDER_RUN" in loaded  # 뒤에 있던 정상 manifest 가 굶지 않았다
+    carry = _log(storage)["manifest_carry_forward"]
+    assert (carry["unfinished"], carry["carried"], carry["over_limit"]) == (6, 1, 0)
+
+
 def test_new_assertion_lands_with_resolved_argument(tmp_path, monkeypatch):
     """주장 1건 = document_assertion 1행 + 해소된 argument — document_id 는 자연키로
     해소된 실제 행이어야 FK 가 살고, available_at 은 **그 document 의 가용 시각**이다.
