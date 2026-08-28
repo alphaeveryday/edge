@@ -241,6 +241,12 @@ def run(
         # (source_code, article_id, event_type, predicate) → {assertion 스칼라 + arguments set}
         for language, source_code in _SOURCE_CODE_BY_LANGUAGE.items():
             # 파티션마다 접은 행을 여기 모아 **언어 단위로 한 번 더** 접는다(아래 주석).
+            # ⚠️ 파티션별로 소비하던 것을 미루므로 **전 파티션의 행을 적재 직전까지 들고 있다**.
+            # 상한은 잰 값이다(2026-08-28): feature ko 파티션 126개·행 payload 합 ≈ 183MB
+            # (한 파티션 1,923행 ≈ 1.5MB). 정상 경로는 manifest 가 지목한 1~2 파티션뿐이고,
+            # 전 파티션을 여는 것은 수동 `--all`·넓은 `--from/--to` 복구뿐이다 — 그 경우에도
+            # 태스크 2GB 안이다. 이 수가 태스크 메모리에 근접하면 소비 필드
+            # (article_id·status·assertions·tagged_at)만 투영해 담는 것이 다음 수다.
             language_keyed: list[dict] = []
             language_unkeyed: list[dict] = []
             # ⚠️ **날짜 오름차순은 여기서 세운다**(ALPHA-1051). 아래 언어 단위 접기의 동률
