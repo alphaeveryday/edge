@@ -562,6 +562,11 @@ def run(
                             else:
                                 pending_failures.append({"rcept_no": rcept_no,
                                                          "reason": "payload_conflict"})
+                                # 더 최신 pending writer가 경합에서 이겼다. 이 loader의 typed-fact
+                                # 쓰기를 남기면 최신 fact를 stale payload로 되돌릴 수 있다.
+                                cur.execute("ROLLBACK TO SAVEPOINT disclosure_item")
+                                cur.execute("RELEASE SAVEPOINT disclosure_item")
+                                continue
                         cur.execute("RELEASE SAVEPOINT disclosure_item")
                         facts_written += item_written
                         facts_already += item_already

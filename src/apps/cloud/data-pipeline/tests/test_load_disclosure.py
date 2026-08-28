@@ -448,7 +448,8 @@ def test_rejected_segment_keeps_receipt_pending(tmp_path, monkeypatch):
 
 def test_conditional_delete_conflict_is_partial(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): 동시 실행이 더 최신 payload로 원장을 교체했으면 stale loader의
-    조건부 DELETE 0건은 성공이 아니다. 하류 publish를 막고 최신 winner를 남겨야 한다."""
+    조건부 DELETE 0건은 성공이 아니다. stale typed-fact 쓰기도 SAVEPOINT로 되돌리고 하류
+    publish를 막은 채 최신 winner를 남겨야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
            "2026-06-30", [_supply("R1")])
@@ -460,6 +461,9 @@ def test_conditional_delete_conflict_is_partial(tmp_path, monkeypatch):
     assert _log(storage)["pending_ledger"]["failed_items"] == [
         {"rcept_no": "R1", "reason": "payload_conflict"}
     ]
+    assert _log(storage)["facts_written"] == 0
+    statements = [sql for sql, _ in conn.log]
+    assert "ROLLBACK TO SAVEPOINT disclosure_item" in statements
 
 
 def test_non_finite_payload_is_retained_without_blocking_valid_winner(tmp_path, monkeypatch):
