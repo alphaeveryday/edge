@@ -124,6 +124,13 @@ class _FakeCursor:
                 del self._conn.pending[rcept_no]
         elif upper.startswith("SELECT COUNT(*) FROM DISCLOSURE_LOAD_PENDING"):
             self._result = [(len(self._conn.pending),)]
+        elif upper.startswith("DELETE FROM DISCLOSURE_FACT"):
+            document_id, keep_ids = params
+            removed = {fact for fact in self._conn.disclosure_facts
+                       if fact[1] == document_id and fact[2] == "BUSINESS_SEGMENT"
+                       and fact[0] not in keep_ids}
+            self._conn.disclosure_facts -= removed
+            self.rowcount = len(removed)
         elif upper.startswith("SELECT DART_CORP_CODE"):
             codes = params[0]
             self._result = [(c, self._profiles[c]) for c in codes if c in self._profiles]
@@ -133,6 +140,9 @@ class _FakeCursor:
             if params[2] in self._conn.fail_docs:
                 raise RuntimeError(f"temporary failure: {params[2]}")
             self.rowcount = 0 if (params[1], params[2]) in self._existing else 1
+        elif upper.startswith("INSERT INTO DISCLOSURE_FACT "):
+            self._conn.disclosure_facts.add((params[0], params[1], params[2]))
+            self.rowcount = 1
         else:
             self.rowcount = 1
 
@@ -152,7 +162,7 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, profiles=None, existing_docs=None, actors=(), fail_docs=(),
-                 conflict_on_delete=(), conflict_on_failure=()):
+                 conflict_on_delete=(), conflict_on_failure=(), disclosure_facts=()):
         self.log: list = []
         self._profiles = profiles if profiles is not None else {"00126380": "actor_samsung"}
         self._existing = existing_docs or set()
@@ -160,6 +170,7 @@ class _FakeConn:
         self.fail_docs = set(fail_docs)
         self.conflict_on_delete = set(conflict_on_delete)
         self.conflict_on_failure = set(conflict_on_failure)
+        self.disclosure_facts = set(disclosure_facts)
         self.pending: dict[str, dict] = {}
 
     def cursor(self):
@@ -757,7 +768,13 @@ def test_equal_revision_manifest_winners_drop_stale_segment_ordinals(tmp_path, m
            [current, _segment("R1", 1, segment_name="obsolete")])
     _dual_manifests(storage, "T2")
     payload = json.dumps([current], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    conn = _FakeConn()
+    document_id = stable_domain_id("doc", load_disclosure.SOURCE_CODE, "R1")
+    current_id = stable_domain_id("dfact", document_id, "BUSINESS_SEGMENT", 0)
+    obsolete_id = stable_domain_id("dfact", document_id, "BUSINESS_SEGMENT", 1)
+    conn = _FakeConn(disclosure_facts={
+        (current_id, document_id, "BUSINESS_SEGMENT"),
+        (obsolete_id, document_id, "BUSINESS_SEGMENT"),
+    })
     conn.pending["R1"] = {
         "disclosure_type": "BUSINESS_SEGMENT", "rows": payload,
         "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
@@ -769,6 +786,7 @@ def test_equal_revision_manifest_winners_drop_stale_segment_ordinals(tmp_path, m
 
     assert conn.pending == {}
     assert len(_inserts(conn, "business_segment_fact")) == 1
+    assert conn.disclosure_facts == {(current_id, document_id, "BUSINESS_SEGMENT")}
 
 
 def test_db_failure_is_recorded_not_a_silent_traceback(tmp_path, monkeypatch):

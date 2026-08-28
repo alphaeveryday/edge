@@ -574,6 +574,20 @@ def run(
                                 cur.execute("RELEASE SAVEPOINT disclosure_item")
                                 continue
                         elif pending_item is not None:
+                            if pending_item["disclosure_type"] == "BUSINESS_SEGMENT":
+                                # pending payload는 enqueue 당시 manifest의 완전한 winner 집합이다.
+                                # 정정본에서 사라진 ordinal도 같은 원장 소비 트랜잭션에서 제거한다.
+                                segment_fact_ids = [
+                                    header_params[0]
+                                    for _, header_params, _, _ in pairs
+                                    if header_params[2] == "BUSINESS_SEGMENT"
+                                ]
+                                cur.execute(
+                                    "DELETE FROM disclosure_fact"
+                                    " WHERE document_id=%s AND fact_type='BUSINESS_SEGMENT'"
+                                    " AND NOT (fact_id = ANY(%s))",
+                                    (document_id, segment_fact_ids),
+                                )
                             cur.execute(
                                 "DELETE FROM disclosure_load_pending"
                                 " WHERE rcept_no=%s AND payload_sha256=%s",
