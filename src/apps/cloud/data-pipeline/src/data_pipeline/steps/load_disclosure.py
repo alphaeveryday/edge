@@ -431,7 +431,7 @@ def run(
     created_sample: list[dict] = []
     rejected_sample: list[dict] = []
     failures: list[dict] = []
-    pending_before = pending_after = None if input_run_id is not None else 0
+    pending_before = pending_after = None
     pending_succeeded = 0
     pending_failures: list[dict] = []
     exit_code = 0
@@ -450,7 +450,9 @@ def run(
         seen_fact_ids: set[str] = set()
 
         with connect(db) as conn:
-            all_pending = _pending_rows(conn) if input_run_id is not None else []
+            # input_run_id는 새 manifest enqueue 범위일 뿐이다. manifest 없는 운영 full scan도
+            # 기존 durable pending을 전량 회수해야 한다.
+            all_pending = _pending_rows(conn)
             pending_before = len(all_pending)
             pending = _pending_in_window(all_pending, from_date, to_date)
             pending_by_rcept = {item["rcept_no"]: item for item in pending}
@@ -587,10 +589,9 @@ def run(
                         created_sample.append({"document_id": document_id, "rcept_no": rcept_no})
                 else:
                     docs_already += 1
-            if input_run_id is not None:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM disclosure_load_pending")
-                    pending_after = cur.fetchall()[0][0]
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM disclosure_load_pending")
+                pending_after = cur.fetchall()[0][0]
     except Exception as exc:
         # manifest/원장 초기화나 공용 DB 조회처럼 항목 격리 밖의 실패다. 항목 쓰기 실패는 위
         # SAVEPOINT에서 격리되고 여기까지 오지 않는다. 트레이스백 대신 사유도 로그에 태운다.

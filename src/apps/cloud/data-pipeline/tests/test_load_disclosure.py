@@ -398,7 +398,8 @@ def test_unresolved_issuer_stays_pending_and_next_normal_run_recovers(tmp_path, 
 
     _dual_manifests(storage, "T2")
     conn._profiles["99999999"] = "actor_late"
-    assert load_disclosure.run(storage, "T2", db=_db(), input_run_id="T2") == 0
+    # 운영자의 manifest-free full scan도 원장을 읽어야 durable recovery가 실제로 닫힌다.
+    assert load_disclosure.run(storage, "T2", db=_db()) == 0
     assert conn.pending == {}
 
 
