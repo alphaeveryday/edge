@@ -478,13 +478,14 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-news
 # corp_name·source_url·rcept_dt)를 조인한다. 게이트는 정체성(rcept_no)·시간축(report_date)·표현
 # 불가 수치(int64 초과 금액·비유한 비율)를 blocking, 값 이상(유보 상대방·범위밖 비율·비양수 금액)을
 # 경고로 data_quality_logs 에 남긴다. 통과 fact 는 canonical/disclosures/supply_contract_fact 에
-# rcept_no 로 멱등 병합 적재한다(같은 rcept_no 최신 fetched_at 우선). --input-run-id 로 특정 수집
-# 런의 raw 만 읽어 적재(SFN 경로; 미지정=전체 백필, 둘 다 멱등). 파서는 팀원(정준영)
+# rcept_no 로 멱등 병합 적재한다(같은 rcept_no 최신 fetched_at 우선). --input-run-id 는 배치
+# 수집이 남긴 completed raw manifest를 직접 GET해 그 exact key만 읽는다(SFN 경로). manifest가
+# 없거나 불완전·손상됐으면 과거 raw로 넓히지 않고 exit 1, 미지정은 전체 백필이다. 파서는 팀원(정준영)
 # 검증 프로토타입 이식 — graph 투영·theme 링킹은 범위 밖(analysis-engine 소관).
 # ⚠️ 입력 선택 축이 셋이다(CLI 는 앞 둘만 노출): 전체 스캔 / `--input-run-id` 스코프 /
-# **키 직접 전달**(`run(..., raw_keys=[...])` — 1분 레인 전용, ALPHA-875). 앞 둘은 `raw/` 를
-# 전량 LIST 한 뒤 거르므로 하루 720 window 가 돌 수 없어, Worker 는 방금 쓴 키를 그대로 넘겨
-# LIST 를 0 으로 만든다. 넘긴 키는 **걸러지지 않는다** — 규약 밖 키는 `raw_read_error` + exit 1
+# **키 직접 전달**(`run(..., raw_keys=[...])` — 1분 레인 전용, ALPHA-875). 전체 백필만 `raw/` 를
+# LIST한다. 배치는 manifest, Worker는 방금 쓴 키를 그대로 넘겨 LIST를 0으로 만든다. 직접 넘긴
+# 키는 **걸러지지 않는다** — 규약 밖 키는 `raw_read_error` + exit 1
 # 로 크게 남는다(미리 걸러내면 전건 탈락이 exit 0·0행으로 조용히 성공처럼 보인다).
 uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure
 #   특정 런만: ... run normalize-disclosure --input-run-id 20260701T000000Z
@@ -1124,8 +1125,11 @@ settings.targets.keywords            # ["금리", ...]
   하루 메타량이 ~70배였다(본문은 seen-map 이 막았다). **987 이 저녁 배치(하루 1런)로 되돌려
   지금은 그 증가가 멈췄고**, 8/10~8/26 에 쌓인 720-window 파티션만 과거 구간에 남아 있다.
   대가를 알고 택했던 형상이고(완전성 근거를 스스로
-  없앨 수 없다) `raw_keys` 없이 부르는 배치 경로(`normalize-disclosure` 풀스캔·백필)는 그
-  커진 존을 훑게 된다. 재사용 건수는
+  없앨 수 없다) `input_run_id` 없는 `normalize-disclosure` 전체 백필만 그 커진 존을 훑는다.
+  배치 수집은 exact 메타 key를
+  `operations_archive/raw_run_manifests/dataset=disclosures/run_id=…/manifest.json`에 확정하고,
+  두 공시 정제의 `input_run_id` 경로는 그 객체와 명시된 raw만 GET한다. 완료 bytes 손상·manifest
+  결손·불완전·계보 불일치는 과거 raw 스캔으로 폴백하지 않고 실패한다. 재사용 건수는
   collection_log 의 `documents_reused` 로 드러나고, 본문 fetch 가 실패한 건은 객체가 없어
   다음 실행이 자동 재시도한다. list.json 이 안 주는 `source_url` 은 rcept_no 로 구성해
   붙인다. 정체성 병합·정정 판정·corp_code↔ticker bridge 는 후속 canonical 소관.

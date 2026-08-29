@@ -22,6 +22,7 @@ from data_pipeline.lake import (
     raw_disclosure_partition,
 )
 from data_pipeline.steps import normalize_disclosure_segment as seg
+from data_pipeline.steps import disclosure_raw_manifest
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "disclosure"
 PHARMA_HTML = (FIXTURES_DIR / "segments_pharmaresearch_20260319.html").read_text(encoding="utf-8")
@@ -67,6 +68,10 @@ def _write_run(storage, records_and_bodies, *, run_id="R1", ingest_date=INGEST_D
     key = f"{raw_disclosure_partition(SOURCE, MARKET, ingest_date, run_id)}/part-00000.ndjson"
     body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in meta_rows)
     storage.put_bytes(key, body.encode("utf-8"))
+    storage.put_bytes(
+        disclosure_raw_manifest.key(run_id),
+        disclosure_raw_manifest.bytes_for(run_id, True, [key]),
+    )
 
 
 def _quality_log(storage) -> dict:

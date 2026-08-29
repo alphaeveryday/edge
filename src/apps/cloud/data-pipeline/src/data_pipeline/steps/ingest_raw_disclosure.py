@@ -60,6 +60,7 @@ from ..lake import (
 )
 from ..sources import DartDisclosureSource, StopFetch
 from ..sources.dart_disclosure import BODY_FORMAT
+from . import disclosure_raw_manifest
 from .ingest_price_raw import _kr_etf_ids, _kr_holdings_universe, _krx_expected_etfs
 
 logger = logging.getLogger(__name__)
@@ -165,8 +166,8 @@ def collect(
                       이 소스는 증분 커서가 없어 매 tick 이 날짜창 전체를 재독하므로, 같은
                       집합을 다시 봤다면 같은 값이어야 세대가 유지된다(`commit_disclosure_window`).
                       raw 메타 바이트를 해시하면 `fetched_at` 이 매 tick 달라 세대가 늘 증가한다.
-      - `raw_keys`  : 이 런이 쓴 메타 ndjson 키. 정제 스텝에 그대로 넘겨 `raw/` 전량 스캔을
-                      **아예 없앤다**(분 단위로는 그 스캔이 못 돈다).
+      - `raw_keys`  : 이 런이 쓴 메타 ndjson exact key. minute은 정제에 직접 넘기고 batch는
+                      run-scoped manifest로 확정해 input_run_id 소비자가 GET한다.
       - `list_truncated` : 목록을 **끝까지 못 읽었나**(`_stop_early` → `_segment_truncated`).
                       `status` 로는 이걸 알 수 없다 — `partial` 은 본문 fetch 실패나 남의 회사
                       malformed 행 하나로도 서고(그때 목록은 온전히 읽혔다), 절단도 같은
@@ -199,6 +200,30 @@ def collect(
         "started_at": started_at.isoformat(),
     }
 
+    if ingest_lane == "batch":
+        try:
+            storage.put_bytes(
+                disclosure_raw_manifest.key(run_id),
+                disclosure_raw_manifest.bytes_for(run_id, False, []),
+            )
+        except Exception as exc:
+            logger.exception("raw run manifest 초기화 실패")
+            failed = {
+                **log,
+                "status": "error",
+                "error": f"raw run manifest 초기화 실패: {exc}",
+                "reason": None,
+                "list_truncated": False,
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "ops": {"records_out": 0, "failed_records": 0},
+            }
+            try:
+                _write_log(storage, vendor, started_date, run_id, failed)
+            except Exception:
+                logger.exception("collection_log 기록 실패(manifest 초기화 실패 경로)")
+            return {"exit_code": 1, "log": failed, "rcept_nos": (), "raw_keys": [],
+                    "list_truncated": False}
+
     if not source.enabled:
         # 키 미주입 환경(로컬 등)은 실패가 아니라 명시적 skip — 로그로 드러낸다.
         # 로그 쓰기 실패는 스토리지 장애라 스케줄러에 비0으로 드러낸다(ALPHA-451) — 예외를
@@ -214,13 +239,25 @@ def collect(
                    # 전부에 성립해야 워터마크가 부재를 레거시로 접을 수 있다.
                    "list_truncated": False,
                    "ops": {"records_out": 0, "failed_records": 0}}
+        skip_exit_code = 0
+        try:
+            if ingest_lane == "batch":
+                disclosure_raw_manifest.write_completed(storage, run_id, [])
+        except Exception as exc:
+            logger.exception("raw run manifest 완료 기록 실패(skip 경로)")
+            skipped.update({
+                "status": "error",
+                "error": f"raw run manifest 완료 기록 실패: {exc}",
+                "reason": None,
+            })
+            skip_exit_code = 1
         try:
             _write_log(storage, vendor, started_date, run_id, skipped)
         except Exception:
             logger.exception("collection_log 기록 실패(skip 경로)")
             return {"exit_code": 1, "log": skipped, "rcept_nos": (), "raw_keys": [],
                     "list_truncated": False}
-        return {"exit_code": 0, "log": skipped, "rcept_nos": (), "raw_keys": [],
+        return {"exit_code": skip_exit_code, "log": skipped, "rcept_nos": (), "raw_keys": [],
                 "list_truncated": False}
 
     # 메타(공시목록 행)는 market 별 ndjson 으로, 본문(document.xml ZIP)은 rcept_no 별 객체로
@@ -456,6 +493,18 @@ def collect(
         # records_saved 가 따로 기록한다.
         "ops": {"records_out": saved_targets, "failed_records": len(failed_targets)},
     }
+    if ingest_lane == "batch":
+        try:
+            disclosure_raw_manifest.write_completed(storage, run_id, raw_keys)
+        except Exception as exc:
+            logger.exception("raw run manifest 완료 기록 실패")
+            payload["status"] = "error"
+            prior_error = payload.get("error")
+            manifest_error = f"raw run manifest 완료 기록 실패: {exc}"
+            payload["error"] = (
+                f"{prior_error}; {manifest_error}" if prior_error else manifest_error
+            )
+            exit_code = 1
     try:
         _write_log(storage, vendor, started_date, run_id, payload)
     except Exception:
