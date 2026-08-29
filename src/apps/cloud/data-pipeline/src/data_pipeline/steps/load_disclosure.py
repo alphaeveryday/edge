@@ -525,7 +525,8 @@ def run(
             raise ValueError("pending_only는 input_run_id와 함께 쓸 수 없다")
         if input_run_id is not None:
             with connect(db) as conn:
-                pending_retry_ids = len(_pending_rows(conn))
+                pending_retry_ids = len(_pending_in_window(
+                    _pending_rows(conn), from_date, to_date))
             # 별도 connect 경계라 이 commit이 끝난 뒤에만 typed-fact 적재를 시작한다.
             current_enqueued, current_physical_reads = _enqueue_winners(
                 db, storage, input_run_id)

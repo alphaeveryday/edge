@@ -883,6 +883,7 @@ def test_window_does_not_consume_pending_outside_event_assembly_scope(tmp_path, 
 
     assert set(conn.pending) == {"R-old"}
     assert _inserts(conn, "document") == []
+    assert _log(storage)["pending_retry_ids"] == 0
 
 
 def test_empty_current_does_not_override_pending_from_shared_canonical(tmp_path, monkeypatch):
