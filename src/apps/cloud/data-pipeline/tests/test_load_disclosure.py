@@ -292,14 +292,46 @@ def test_canonical_bootstrap_excludes_stale_segment_generation(tmp_path, monkeyp
     storage = LocalStorage(tmp_path / "lake")
     _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS,
            "2026-06-30", [
-               _segment("R1", 0, parser_version="segments-v2"),
-               _segment("R1", 1, parser_version="segments-v1", segment_name="obsolete"),
+               _segment("R1", 0, parser_version="segments-v2",
+                        fetched_at="2026-07-16T02:00:00+00:00"),
+               _segment("R1", 1, parser_version="segments-v1", segment_name="obsolete",
+                        fetched_at="2026-07-16T01:00:00+00:00"),
            ])
     conn = _FakeConn()
 
     assert _run(storage, conn, monkeypatch, bootstrap=True) == 0
     assert len(_inserts(conn, "business_segment_fact")) == 1
     assert _inserts(conn, "business_segment_fact")[0][1] == "반도체"
+
+
+def test_canonical_bootstrap_rejects_incomplete_newest_segment_generation(tmp_path):
+    """WHY(ALPHA-1055): 최신 parse의 ordinal 0만 gate 탈락할 수 있다. 남은 ordinal 1을
+    구세대 ordinal 0과 합치거나 구세대만 고르면 둘 다 거짓 current이므로 bootstrap을 막는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS,
+           "2026-06-30", [
+               _segment("R1", 0, parser_version="segments-v1",
+                        fetched_at="2026-07-16T01:00:00+00:00"),
+               _segment("R1", 1, parser_version="segments-v2",
+                        fetched_at="2026-07-16T02:00:00+00:00"),
+           ])
+
+    with pytest.raises(ValueError, match="ordinal이 불연속"):
+        load_disclosure._canonical_winners(storage, None, None)
+
+
+def test_canonical_bootstrap_rejects_equal_revision_segment_generations(tmp_path):
+    """WHY(ALPHA-1055): shared canonical에는 같은 raw fetched_at으로 재파싱한 두 parser의
+    선후가 없다. 버전 문자열을 순서로 추측하면 잘못된 payload를 복구 정본으로 만들 수 있다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS,
+           "2026-06-30", [
+               _segment("R1", 0, parser_version="segments-v1"),
+               _segment("R1", 1, parser_version="segments-v2"),
+           ])
+
+    with pytest.raises(ValueError, match="generation이 모호"):
+        load_disclosure._canonical_winners(storage, None, None)
 
 
 def test_failed_bootstrap_item_remains_and_pending_only_recovers_without_canonical(

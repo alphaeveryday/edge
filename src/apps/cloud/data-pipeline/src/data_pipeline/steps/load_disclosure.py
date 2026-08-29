@@ -351,14 +351,20 @@ def _canonical_winners(storage: Storage, from_date: str | None,
                         for value in ordinals) or len(ordinals) != len(set(ordinals))):
                     raise ValueError(f"사업부문 canonical 행키가 중복·결손이다: rcept_no={rcept_no}")
                 selected_rows = sorted(selected_rows, key=lambda row: row["segment_ordinal"])
-                # shared canonical은 parser correction에서 사라진 높은 ordinal을 보존한다.
-                # ordinal 0은 매 비어 있지 않은 generation에 반드시 다시 쓰이므로, 그 행과
-                # provenance가 같은 행만 현재 generation으로 bootstrap한다.
-                generation = (selected_rows[0].get("fetched_at"),
-                              selected_rows[0].get("parser_version"))
+                # shared canonical은 parser correction에서 사라진 ordinal을 보존한다. 최신
+                # fetched_at 세대만 고르되 같은 시각에 parser_version이 여럿이면 선후 근거가
+                # 사라진 상태라 추측하지 않는다.
+                newest_revision = max(_source_revision([row]) for row in selected_rows)
+                newest_rows = [row for row in selected_rows
+                               if _source_revision([row]) == newest_revision]
+                generations = {row.get("parser_version") for row in newest_rows}
+                if len(generations) != 1:
+                    raise ValueError(
+                        f"사업부문 canonical 최신 generation이 모호하다: rcept_no={rcept_no}"
+                    )
+                generation = next(iter(generations))
                 selected_rows = [
-                    row for row in selected_rows
-                    if (row.get("fetched_at"), row.get("parser_version")) == generation
+                    row for row in newest_rows if row.get("parser_version") == generation
                 ]
                 if [row["segment_ordinal"] for row in selected_rows] != list(
                         range(len(selected_rows))):
