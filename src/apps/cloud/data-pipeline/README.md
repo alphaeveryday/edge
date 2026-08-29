@@ -505,10 +505,10 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # part-00000.parquet 키와 SHA-256도 함께 고정한다. canonical·quality log가 모두 성공한 뒤에만
 # canonical_written=true가 된다. 행 격리는 성공 winner를 확정한 exit 2(하류 처리 뒤 실행은
 # INCOMPLETE/FAILED), 저장·무결성 실패는 incomplete manifest를 남기는 exit 1(해당 호출의 하류
-# 차단)이다. 정상 LoadDisclosure는 아직 issuer 미해소 자동 회수를 위해 canonical 전체를 스캔한다.
-# completed dual manifest winner와 명시 복구(--all 또는 --from/--to)의 shared canonical은
-# disclosure_load_pending에 먼저 commit하고 성공 ID만 제거한다. --pending-only는 canonical을
-# 읽지 않고 그 잔여만 회수한다. 정상 consumer 전환은 별도 PR 범위다.
+# 차단)이다. 정상 LoadDisclosure는 completed dual manifest의 direct key winner를
+# disclosure_load_pending에 먼저 commit하고 pending만 typed 적재한다. issuer 미해소·일시 실패는
+# 원장에 남아 다음 정상 실행이 재시도한다. 명시 복구(--all 또는 --from/--to)만 shared canonical을
+# pending에 bootstrap하며, --pending-only는 canonical을 읽지 않고 잔여만 회수한다.
 # 정상 0건도 canonical_written=true·빈 canonical_partitions로 producer 미실행과 구분한다.
 
 # ETF 구성종목 정제(Step2) — raw etf_holdings(FMP US·KRX KR) → 공통 구성종목 fact 정규화 + 게이트.
@@ -748,10 +748,10 @@ LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
 결손은 다시 ops 원장에서 본다. 증분 창은 원장 워터마크(`disclosure_watermark.py`)가
 직전 완주 런의 window_to 당일부터로 정해 늦은 노출 꼬리·런 실패를 다음 런이 회수한다.
 
-⚠️ 정상 SFN의 `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
-붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
-돌게 된 지금은 창 밖으로 밀린 canonical 을 자동으로 주워올 경로가 그것뿐이다. 특히 아래
-issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
+정상 SFN의 `LoadDisclosure`는 `--input-run-id`로 completed dual manifest의 direct key winner를
+pending에 commit한 뒤 pending만 typed 적재한다. shared canonical 상위 prefix LIST/fullscan은
+하지 않으며 manifest 결손·손상을 fullscan으로 우회하지 않는다. issuer 지연과 일시 실패는
+durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 명시 복구에서만 읽는다.
 
 **장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`, ALPHA-769)도 같은 형태다 —
 `CollectKisInvestorEstimate → NormalizeInvestorEstimate → LoadInvestorIntraday` 를 평일 5슬롯
