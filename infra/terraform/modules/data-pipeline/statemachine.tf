@@ -236,7 +236,7 @@ locals {
       # 공시 fact 적재(ALPHA-476) — canonical 공시 → document(DISCLOSURE)·disclosure_document·
       # disclosure_fact. issuer 는 company_profile.dart_corp_code 로 해소하므로 **앞 직렬
       # EnrichCorpCode 가 채운 뒤**라야 9→309 로 붙는다(rds task-def, DART API 불요).
-      # 창 미지정 = canonical 전체 스캔 + 멱등(정정은 DO UPDATE).
+      # 현재 normalize manifest winner를 pending에 먼저 commit하고 pending만 typed 적재한다.
       state        = "LoadDisclosure"
       taskdef_key  = "rds"
       command_expr = "States.Array('load-disclosure', '--run-id', $.run_id, '--input-run-id', $.run_id)"

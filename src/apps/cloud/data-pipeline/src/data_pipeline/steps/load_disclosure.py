@@ -28,15 +28,16 @@ direct key·SHA·winner를 검증하고 canonical 행 자체를 `disclosure_load
 성공한 ID만 typed-fact transaction 안에서 삭제한다. issuer 미해소·검증 거절·일시 DB 실패는
 다음 eligible 정상 실행이 다시 시도하며, 보존 만료와 lifetime retry cutoff는 없다(날짜 범위
 실행은 같은 report_date 범위만, 무창 실행은 전량을 한 ID당 한 실행 1회 시도한다).
-항목별 SAVEPOINT라 한 ID 실패가 다른 성공을 롤백하지 않는다. 기존 canonical full scan은 아직
-옛 backlog를 회수하므로 유지한다 — 원장만으로 회수가 증명된 뒤 consumer 전환 PR에서 제거한다.
+항목별 SAVEPOINT라 한 ID 실패가 다른 성공을 롤백하지 않는다. 정상 typed 적재는 pending만
+소비한다. shared canonical full scan은 명시 복구(`--all`, `--from/--to`) bootstrap에만 남는다.
 
 **fact 게이트**: canonical 정제는 값 이상을 경고로만 통과시키므로(blocking 아님), DB CHECK 를
 파이썬에서 **선검증**해 위반 fact 만 뺀다 — 한 건이 배치 전체를 롤백시키지 않게. NaN/Infinity
 는 `<0` 비교를 조용히 통과하지만 DB 유한성 CHECK 에 걸리므로 여기서 명시적으로 거른다. 거절된
 fact 는 사유와 함께 계측한다(조용한 유실 금지, Rule 12).
 
-**창(from/to) 미지정 = report_date 전체 스캔** — 멱등 skip 이라 재실행 비용은 신규분뿐이다.
+**정상 실행 = input run의 manifest direct key + durable pending** — manifest 결손·손상은
+fail-loud하며 shared canonical full scan으로 fallback하지 않는다.
 """
 
 from __future__ import annotations
@@ -154,6 +155,7 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
                                      separators=(",", ":"))
                 winners.append({"rcept_no": rcept_no, "disclosure_type": disclosure_type,
                                 "rows": selected_rows, "payload": payload,
+                                "_canonical_key": key,
                                 "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
                                 "source_fetched_at": _source_revision(selected_rows)})
     return winners
@@ -197,9 +199,18 @@ def _enqueue_pending(db: DbConfig, run_id: str, winner_fn) -> int:
         return len(winners)
 
 
-def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> int:
+def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> tuple[int, int]:
     """manifest 읽기부터 enqueue commit까지 직렬화해 늦은 과거 런의 덮어쓰기를 막는다."""
-    return _enqueue_pending(db, run_id, lambda: _manifest_winners(storage, run_id))
+    physical_reads = 0
+
+    def _winners():
+        nonlocal physical_reads
+        selected = _manifest_winners(storage, run_id)
+        physical_reads = len({item["_canonical_key"] for item in selected
+                              if "_canonical_key" in item})
+        return selected
+
+    return _enqueue_pending(db, run_id, _winners), physical_reads
 
 
 def _pending_rows(conn) -> list[dict]:
@@ -232,32 +243,6 @@ def _pending_in_window(pending: list[dict], from_date: str | None,
                 and (to_date is None or report_date <= to_date)):
             selected.append(item)
     return selected
-
-
-def _merge_pending(canonical_rows: list[dict], pending: dict[str, list[dict]],
-                   pending_by_rcept: dict[str, dict]) -> list[dict]:
-    """canonical보다 source revision이 최신인 pending payload만 우선한다."""
-    grouped: dict[str, list[dict]] = {}
-    for row in canonical_rows:
-        grouped.setdefault(row["rcept_no"], []).append(row)
-    for rcept_no, pending_rows in pending.items():
-        current = grouped.get(rcept_no)
-        item = pending_by_rcept[rcept_no]
-        pending_revision = item["source_fetched_at"]
-        current_revision = _source_revision(current) if current is not None else None
-        if current is None or pending_revision > current_revision:
-            grouped[rcept_no] = pending_rows
-        elif pending_revision == current_revision:
-            current_by_identity = {
-                (row["rcept_no"], row.get("segment_ordinal")): row for row in current
-            }
-            # pending winner 행이 shared canonical과 같으면 manifest의 정확한 ID 집합이
-            # 이긴다. 값이 다른 동률 correction이면 shared canonical을 유지한다.
-            if all(current_by_identity.get(
-                    (row["rcept_no"], row.get("segment_ordinal"))) == row
-                    for row in pending_rows):
-                grouped[rcept_no] = pending_rows
-    return [row for rcept_no in sorted(grouped) for row in grouped[rcept_no]]
 
 
 def _mark_pending_failure(conn, pending: dict | None, code: str,
@@ -528,6 +513,9 @@ def run(
     pending_succeeded = 0
     pending_failures: list[dict] = []
     bootstrap_enqueued = 0
+    current_enqueued = 0
+    current_physical_reads = 0
+    pending_retry_ids = None
     exit_code = 0
 
     try:
@@ -536,40 +524,37 @@ def run(
         if pending_only and input_run_id is not None:
             raise ValueError("pending_only는 input_run_id와 함께 쓸 수 없다")
         if input_run_id is not None:
+            with connect(db) as conn:
+                pending_retry_ids = len(_pending_in_window(
+                    _pending_rows(conn), from_date, to_date))
             # 별도 connect 경계라 이 commit이 끝난 뒤에만 typed-fact 적재를 시작한다.
-            _enqueue_winners(db, storage, input_run_id)
+            current_enqueued, current_physical_reads = _enqueue_winners(
+                db, storage, input_run_id)
         if bootstrap:
             bootstrap_enqueued = _bootstrap_pending(
                 db, storage, run_id, from_date, to_date)
-        if bootstrap or pending_only:
-            # 복구 모드는 canonical을 DB 적재 입력으로 직접 쓰지 않는다. 위 별도 transaction이
-            # commit한 pending만 아래 typed-fact transaction이 소비한다.
-            supply_rows, segment_rows, s1, s2 = [], [], 0, 0
-        else:
-            supply_rows, s1 = _clean_rcept(_read_facts(
-                storage, canonical_supply_contract_fact_partition, from_date, to_date))
-            segment_rows, s2 = _clean_rcept(_read_facts(
-                storage, canonical_business_segment_fact_partition, from_date, to_date))
+        # 정상·복구 모두 typed-fact transaction은 pending만 소비한다. shared canonical은
+        # 위의 명시 bootstrap에서만 읽으며 manifest 오류를 full scan으로 우회하지 않는다.
+        supply_rows, segment_rows, s1, s2 = [], [], 0, 0
         supply_read, segment_read = len(supply_rows), len(segment_rows)
         skipped_missing_identity = s1 + s2
 
         seen_fact_ids: set[str] = set()
 
         with connect(db) as conn:
-            # input_run_id는 새 manifest enqueue 범위일 뿐이다. manifest 없는 운영 full scan도
-            # 기존 durable pending을 전량 회수해야 한다.
             all_pending = _pending_rows(conn)
             pending_before = len(all_pending)
             pending = _pending_in_window(all_pending, from_date, to_date)
+            if pending_retry_ids is None:
+                pending_retry_ids = len(pending)
             pending_by_rcept = {item["rcept_no"]: item for item in pending}
-            # 원장 payload가 같은 논리 ID의 canonical full-scan 행보다 우선한다. 그래야 mutable
-            # parquet가 다음 정제에 덮여도 enqueue 시점 winner를 정확히 재시도한다.
-            pending_supply = {item["rcept_no"]: item["rows"] for item in pending
-                              if item["disclosure_type"] == "SUPPLY_CONTRACT"}
-            pending_segment = {item["rcept_no"]: item["rows"] for item in pending
-                               if item["disclosure_type"] == "BUSINESS_SEGMENT"}
-            supply_rows = _merge_pending(supply_rows, pending_supply, pending_by_rcept)
-            segment_rows = _merge_pending(segment_rows, pending_segment, pending_by_rcept)
+            supply_rows = [row for item in pending
+                           if item["disclosure_type"] == "SUPPLY_CONTRACT"
+                           for row in item["rows"]]
+            segment_rows = [row for item in pending
+                            if item["disclosure_type"] == "BUSINESS_SEGMENT"
+                            for row in item["rows"]]
+            supply_read, segment_read = len(supply_rows), len(segment_rows)
             documents = {**_document(supply_rows, "SUPPLY_CONTRACT"),
                          **_document(segment_rows, "BUSINESS_SEGMENT")}
             segment_by_rcept = {}
@@ -741,6 +726,9 @@ def run(
         "mode": ("canonical_bootstrap" if bootstrap else
                  "pending_only" if pending_only else "normal"),
         "bootstrap_enqueued": bootstrap_enqueued,
+        "current_manifest_ids": current_enqueued,
+        "current_canonical_objects_read": current_physical_reads,
+        "pending_retry_ids": pending_retry_ids,
         "supply_rows_read": supply_read, "segment_rows_read": segment_read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_unresolved_issuer": skipped_unresolved_issuer,

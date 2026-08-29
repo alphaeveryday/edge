@@ -685,9 +685,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # 정상 공시 적재(input-run-id/window-days)는 아직 기존 경로를 유지한다. 명시 복구
-    # (--all 또는 input-run-id 없는 --from/--to)만 canonical을 pending에 먼저 고정하며,
-    # --pending-only는 canonical을 전혀 읽지 않는다. 정상 전환은 후속 PR 소관이다.
+    # 정상 공시 적재는 input-run-id manifest winner를 pending에 먼저 고정하고 pending만
+    # typed DB로 소비한다. 명시 복구(--all 또는 --from/--to)만 shared canonical을 스캔해
+    # pending을 bootstrap하며, --pending-only는 canonical을 전혀 읽지 않는다.
     #
     # `--window-days` 를 받는 유일한 적재 스텝이다(ALPHA-721). 형제 로더들은 하루 1회만 돌아
     # 전체 스캔을 견디지만, 공시는 장중 레인이 붙으면 슬롯마다 그 스캔이 곱해진다

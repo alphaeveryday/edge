@@ -200,6 +200,10 @@ def _inserts(conn, table):
 
 def _run(storage, conn, monkeypatch, **kw):
     monkeypatch.setattr(load_disclosure, "connect", _fake_connect(conn))
+    if not any(key in kw for key in ("input_run_id", "bootstrap", "pending_only")):
+        # 일반 typed-loader 단위 사례는 명시 복구 bootstrap으로 canonical fixture를 pending에
+        # 고정한다. 정상 운영 경로는 input_run_id manifest만 허용한다.
+        kw["bootstrap"] = True
     return load_disclosure.run(storage, "R1", db=_db(), **kw)
 
 
@@ -265,6 +269,63 @@ def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path,
         "before": 1, "after": 0, "succeeded": 1, "failed": 0, "failed_items": [],
         "retention": "until_success", "retry": "once_per_eligible_run_no_lifetime_cutoff",
     }
+
+
+def test_normal_path_consumes_pending_without_shared_canonical_scan(tmp_path, monkeypatch):
+    """WHY(ALPHA-1046): 정상 SFN이 manifest winner를 pending에 commit한 뒤 shared canonical
+    prefix를 다시 LIST/fullscan하면 실행 범위가 current manifest 밖으로 넓어진다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    conn = _FakeConn()
+    monkeypatch.setattr(
+        load_disclosure, "_read_facts",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("shared canonical fullscan")),
+    )
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert [params[2] for sql, params in conn.log
+            if sql.startswith("INSERT INTO document ")] == ["R1"]
+
+
+def test_current_and_existing_pending_id_is_attempted_once(tmp_path, monkeypatch):
+    """WHY(ALPHA-1046): current와 재시도 원장에 같은 ID가 있으면 typed write와 attempt를
+    중복 수행하지 않고 current upsert 뒤 pending 한 행만 소비해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    row = _supply("R1")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [row])
+    _dual_manifests(storage, "T1", supply=("R1",))
+    payload = json.dumps([row], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    conn = _FakeConn()
+    conn.pending["R1"] = {
+        "disclosure_type": "SUPPLY_CONTRACT", "rows": payload,
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "source_fetched_at": datetime.fromisoformat(row["fetched_at"]),
+        "attempt_count": 0, "first_run": "old", "last_run": "old",
+    }
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert len(_inserts(conn, "document")) == 1
+    assert conn.pending == {}
+
+
+def test_empty_current_and_pending_avoids_canonical_list_or_get(tmp_path, monkeypatch):
+    """WHY(ALPHA-1046): 빈 정상 실행은 shared canonical을 탐색하거나 읽을 이유가 없다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _dual_manifests(storage, "T1")
+    conn = _FakeConn()
+    monkeypatch.setattr(
+        load_disclosure, "_read_facts",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("canonical LIST/GET")),
+    )
+
+    assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
+    assert _inserts(conn, "document") == []
+    log = _log(storage)
+    assert log["current_manifest_ids"] == 0
+    assert log["pending_ledger"]["before"] == 0
 
 
 def test_canonical_bootstrap_commits_pending_before_typed_load(tmp_path, monkeypatch):
@@ -420,9 +481,8 @@ def test_equal_source_revision_accepts_later_parser_correction(tmp_path, monkeyp
     assert conn.pending["R1"]["payload_sha256"] == "b" * 64
 
 
-def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
-    """WHY(ALPHA-1045): enqueue commit 뒤 canonical scan이 실패했는데 backlog 0으로 기록하면
-    운영자가 durable winner가 없다고 오판한다. 실제 COUNT 전 실패는 unknown이어야 한다."""
+def test_normal_path_does_not_scan_after_enqueue(tmp_path, monkeypatch):
+    """WHY(ALPHA-1046): enqueue 뒤 shared canonical scan을 다시 열면 manifest scope가 깨진다."""
     storage = LocalStorage(tmp_path / "lake")
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
            "2026-06-30", [_supply("R1")])
@@ -435,10 +495,10 @@ def test_setup_failure_marks_pending_count_unknown(tmp_path, monkeypatch):
 
     monkeypatch.setattr(load_disclosure, "_read_facts", _fail_scan)
 
-    assert load_disclosure.run(storage, "R1", db=_db(), input_run_id="T1") == 1
-    assert set(conn.pending) == {"R1"}
+    assert load_disclosure.run(storage, "R1", db=_db(), input_run_id="T1") == 0
+    assert conn.pending == {}
     ledger = _log(storage)["pending_ledger"]
-    assert ledger["before"] is None and ledger["after"] is None
+    assert ledger["before"] == 1 and ledger["after"] == 0
 
 
 def test_commit_failure_resets_transactional_pending_metrics(tmp_path, monkeypatch):
@@ -489,8 +549,8 @@ def test_segment_manifest_validates_composite_winners_then_groups_receipt(tmp_pa
 
 def test_run_scoped_manifest_survives_shared_canonical_overwrite(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): 다른 normalize 런이 report-date canonical을 덮어써도 먼저 완료된
-    manifest의 immutable 바이트는 남아야 그 winner를 원장 후보로 검증할 수 있다. 단, 적재
-    시점에는 source revision이 더 최신인 shared canonical을 되돌리면 안 된다."""
+    manifest의 immutable 바이트는 남아야 그 winner를 원장 후보로 검증할 수 있다. 적재도
+    shared canonical을 다시 읽지 않고 그 manifest winner를 정확히 소비해야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
            "2026-06-30", [_supply("R1", amount_krw=1)])
@@ -503,7 +563,7 @@ def test_run_scoped_manifest_survives_shared_canonical_overwrite(tmp_path, monke
 
     assert load_disclosure._manifest_winners(storage, "T-old")[0]["rows"][0]["amount_krw"] == 1
     assert _run(storage, conn, monkeypatch, input_run_id="T-old") == 0
-    assert _inserts(conn, "supply_contract_fact")[0][5] == 2
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 1
 
 
 def test_source_revision_matches_producer_leniency():
@@ -730,7 +790,7 @@ def test_unresolved_issuer_is_skipped_not_inserted(tmp_path, monkeypatch):
            [_supply("R1", corp_code="00126380"),
             _supply("R2", corp_code="99999999")])  # 미시드
     conn = _FakeConn(profiles={"00126380": "actor_samsung"})
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 2
 
     assert [p[2] for p in _inserts(conn, "document")] == ["R1"]
     assert _log(storage)["skipped_unresolved_issuer"] == 1
@@ -744,7 +804,7 @@ def test_counterparty_check_is_prevalidated(tmp_path, monkeypatch):
            [_supply("R1"),
             _supply("R2", counterparty=None, counterparty_raw=None, counterparty_withheld=False)])
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 2
 
     # R2 는 유효 fact 0 → 문서도 안 실린다(설명은 fact 를 읽는다).
     assert {p[2] for p in _inserts(conn, "document")} == {"R1"}
@@ -771,7 +831,7 @@ def test_bad_contract_dates_are_prevalidated(tmp_path, monkeypatch):
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
            [_supply("R1", contract_start="2026-12-31", contract_end="2026-01-01")])
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 2
     assert _inserts(conn, "supply_contract_fact") == []
     log = _log(storage)
     assert log["rejected_facts"] == 1
@@ -823,11 +883,12 @@ def test_window_does_not_consume_pending_outside_event_assembly_scope(tmp_path, 
 
     assert set(conn.pending) == {"R-old"}
     assert _inserts(conn, "document") == []
+    assert _log(storage)["pending_retry_ids"] == 0
 
 
-def test_newer_canonical_wins_when_its_enqueue_previously_failed(tmp_path, monkeypatch):
-    """WHY(ALPHA-1045): 새 canonical 작성 뒤 DB 장애로 enqueue가 실패하면 예전 pending만 남는다.
-    다음 실행이 그 payload를 무조건 우선하면 최신 fact를 되돌리고 원장까지 성공 삭제한다."""
+def test_empty_current_does_not_override_pending_from_shared_canonical(tmp_path, monkeypatch):
+    """WHY(ALPHA-1046): current manifest가 비었으면 shared canonical의 새 행을 끌어오지 않고
+    기존 durable pending만 재시도해야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     newer = _supply("R1", amount_krw=200,
                     fetched_at="2026-07-16T02:00:00+00:00")
@@ -848,7 +909,7 @@ def test_newer_canonical_wins_when_its_enqueue_previously_failed(tmp_path, monke
     assert _run(storage, conn, monkeypatch, input_run_id="T1") == 0
 
     assert conn.pending == {}
-    assert _inserts(conn, "supply_contract_fact")[0][5] == 200
+    assert _inserts(conn, "supply_contract_fact")[0][5] == 100
 
 
 def test_equal_revision_manifest_winners_tombstone_stale_segment_ordinals(tmp_path, monkeypatch):
@@ -914,7 +975,7 @@ def test_non_finite_ratio_is_prevalidated(tmp_path, monkeypatch):
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
            [_supply("R1", ratio_pct=float("inf"))])
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 2
     assert _inserts(conn, "supply_contract_fact") == []
     assert _log(storage)["rejected_facts_sample"][0]["reason"] == "non_finite_ratio"
 
@@ -926,9 +987,9 @@ def test_whitespace_rcept_no_is_skipped(tmp_path, monkeypatch):
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
            [_supply("R1"), _supply("   ")])
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
-    assert [p[2] for p in _inserts(conn, "document")] == ["R1"]
-    assert _log(storage)["skipped_missing_identity"] == 1
+    assert _run(storage, conn, monkeypatch) == 1
+    assert _inserts(conn, "document") == []
+    assert "pending 정체성 없는 행" in _log(storage)["failures"][0]["error"]
 
 
 def test_missing_report_date_is_skipped(tmp_path, monkeypatch):
@@ -938,9 +999,9 @@ def test_missing_report_date_is_skipped(tmp_path, monkeypatch):
     _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS, "2026-06-30",
            [_supply("R1", report_date=None)])
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 1
     assert _inserts(conn, "document") == []
-    assert _log(storage)["skipped_no_report_date"] == 1
+    assert "report_date가 결손" in _log(storage)["failures"][0]["error"]
 
 
 def test_invalid_fact_is_counted_even_when_document_still_loads(tmp_path, monkeypatch):
@@ -951,7 +1012,7 @@ def test_invalid_fact_is_counted_even_when_document_still_loads(tmp_path, monkey
            [_segment("R1", 0, segment_name="반도체"),
             _segment("R1", 1, segment_name="디스플레이", revenue_krw=-5)])
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
+    assert _run(storage, conn, monkeypatch) == 2
     log = _log(storage)
     assert log["facts_written"] == 1        # 정상 부문은 실린다
     assert log["rejected_facts"] == 1       # 음수 매출 부문은 계측된다
@@ -967,11 +1028,9 @@ def test_duplicate_ordinal_is_rejected_not_silently_lost(tmp_path, monkeypatch):
            [_segment("R1", 0, segment_name="반도체"),
             _segment("R1", 0, segment_name="디스플레이")])  # ordinal 중복(오염)
     conn = _FakeConn()
-    assert _run(storage, conn, monkeypatch) == 0
-    assert len(_inserts(conn, "business_segment_fact")) == 1
-    log = _log(storage)
-    assert log["rejected_facts"] == 1
-    assert log["rejected_facts_sample"][0]["reason"] == "duplicate_fact_id"
+    assert _run(storage, conn, monkeypatch) == 1
+    assert _inserts(conn, "business_segment_fact") == []
+    assert "행키가 중복" in _log(storage)["failures"][0]["error"]
 
 
 def test_corrected_facts_update_on_conflict(tmp_path, monkeypatch):
