@@ -159,13 +159,13 @@ def _manifest_winners(storage: Storage, run_id: str) -> list[dict]:
     return winners
 
 
-def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
-    """manifest 읽기부터 enqueue commit까지 직렬화해 늦은 과거 런의 덮어쓰기를 막는다."""
+def _enqueue_pending(db: DbConfig, run_id: str, winner_fn) -> int:
+    """원천 읽기부터 pending commit까지 직렬화한다."""
     with connect(db) as conn, conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (_PENDING_ENQUEUE_LOCK,))
-        winners = _manifest_winners(storage, run_id)
+        winners = winner_fn()
         if not winners:
-            return
+            return 0
         for winner in winners:
             cur.execute(
                 "INSERT INTO disclosure_load_pending (rcept_no, disclosure_type, canonical_rows,"
@@ -194,6 +194,12 @@ def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> None:
                 raise ValueError(
                     f"공시 pending source revision이 역행·충돌한다: rcept_no={winner['rcept_no']}"
                 )
+        return len(winners)
+
+
+def _enqueue_winners(db: DbConfig, storage: Storage, run_id: str) -> int:
+    """manifest 읽기부터 enqueue commit까지 직렬화해 늦은 과거 런의 덮어쓰기를 막는다."""
+    return _enqueue_pending(db, run_id, lambda: _manifest_winners(storage, run_id))
 
 
 def _pending_rows(conn) -> list[dict]:
@@ -315,6 +321,78 @@ def _read_facts(storage: Storage, builder, from_date, to_date) -> list[dict]:
     return rows
 
 
+def _canonical_winners(storage: Storage, from_date: str | None,
+                       to_date: str | None) -> list[dict]:
+    """명시 복구 범위의 shared canonical을 pending payload로 고정한다."""
+    winners: list[dict] = []
+    seen_rcept: set[str] = set()
+    datasets = (
+        ("SUPPLY_CONTRACT", canonical_supply_contract_fact_partition),
+        ("BUSINESS_SEGMENT", canonical_business_segment_fact_partition),
+    )
+    for disclosure_type, builder in datasets:
+        rows, skipped = _clean_rcept(_read_facts(storage, builder, from_date, to_date))
+        if skipped:
+            raise ValueError(
+                f"공시 canonical에 pending 정체성 없는 행이 있다: type={disclosure_type} count={skipped}"
+            )
+        grouped: dict[str, list[dict]] = {}
+        for row in rows:
+            grouped.setdefault(row["rcept_no"], []).append(row)
+        for rcept_no, selected_rows in sorted(grouped.items()):
+            if rcept_no in seen_rcept:
+                raise ValueError(f"공시 canonical 유형이 중복이다: rcept_no={rcept_no}")
+            seen_rcept.add(rcept_no)
+            if disclosure_type == "SUPPLY_CONTRACT" and len(selected_rows) != 1:
+                raise ValueError(f"공급계약 canonical 행키가 중복이다: rcept_no={rcept_no}")
+            if disclosure_type == "BUSINESS_SEGMENT":
+                ordinals = [row.get("segment_ordinal") for row in selected_rows]
+                if (any(not isinstance(value, int) or isinstance(value, bool)
+                        for value in ordinals) or len(ordinals) != len(set(ordinals))):
+                    raise ValueError(f"사업부문 canonical 행키가 중복·결손이다: rcept_no={rcept_no}")
+                selected_rows = sorted(selected_rows, key=lambda row: row["segment_ordinal"])
+                # shared canonical은 parser correction에서 사라진 ordinal을 보존한다. 최신
+                # fetched_at 세대만 고르되 같은 시각에 parser_version이 여럿이면 선후 근거가
+                # 사라진 상태라 추측하지 않는다.
+                newest_revision = max(_source_revision([row]) for row in selected_rows)
+                newest_rows = [row for row in selected_rows
+                               if _source_revision([row]) == newest_revision]
+                generations = {row.get("parser_version") for row in newest_rows}
+                if len(generations) != 1:
+                    raise ValueError(
+                        f"사업부문 canonical 최신 generation이 모호하다: rcept_no={rcept_no}"
+                    )
+                generation = next(iter(generations))
+                selected_rows = [
+                    row for row in newest_rows if row.get("parser_version") == generation
+                ]
+                if [row["segment_ordinal"] for row in selected_rows] != list(
+                        range(len(selected_rows))):
+                    raise ValueError(
+                        f"사업부문 canonical 현재 generation ordinal이 불연속이다: "
+                        f"rcept_no={rcept_no}"
+                    )
+            report_dates = {row.get("report_date") for row in selected_rows}
+            if len(report_dates) != 1 or not isinstance(next(iter(report_dates)), str):
+                raise ValueError(f"공시 canonical report_date가 결손·충돌한다: rcept_no={rcept_no}")
+            payload = json.dumps(selected_rows, ensure_ascii=False, sort_keys=True,
+                                 separators=(",", ":"))
+            winners.append({
+                "rcept_no": rcept_no, "disclosure_type": disclosure_type,
+                "rows": selected_rows, "payload": payload,
+                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                "source_fetched_at": _source_revision(selected_rows),
+            })
+    return winners
+
+
+def _bootstrap_pending(db: DbConfig, storage: Storage, run_id: str,
+                       from_date: str | None, to_date: str | None) -> int:
+    """shared canonical 복구 범위를 typed DB보다 먼저 pending에 commit한다."""
+    return _enqueue_pending(
+        db, run_id, lambda: _canonical_winners(storage, from_date, to_date))
+
+
 def _clean_rcept(rows: list[dict]) -> tuple[list[dict], int]:
     """rcept_no(문서 정체성 키)를 strip 하고 공백·결손 행을 뺀다. 공백뿐인 rcept_no 를 그대로
     두면 서로 다른 공시가 같은 document_id 로 접혀 충돌한다. 뺀 수를 함께 돌려준다(계측)."""
@@ -433,6 +511,8 @@ def run(
     input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    bootstrap: bool = False,
+    pending_only: bool = False,
 ) -> int:
     """canonical 공시 → 이벤트 스토어 적재. 성공 0, 장애 시 비0."""
     started_at = datetime.now(timezone.utc)
@@ -447,16 +527,29 @@ def run(
     pending_before = pending_after = None
     pending_succeeded = 0
     pending_failures: list[dict] = []
+    bootstrap_enqueued = 0
     exit_code = 0
 
     try:
+        if bootstrap and pending_only:
+            raise ValueError("bootstrap과 pending_only는 함께 쓸 수 없다")
+        if pending_only and input_run_id is not None:
+            raise ValueError("pending_only는 input_run_id와 함께 쓸 수 없다")
         if input_run_id is not None:
             # 별도 connect 경계라 이 commit이 끝난 뒤에만 typed-fact 적재를 시작한다.
             _enqueue_winners(db, storage, input_run_id)
-        supply_rows, s1 = _clean_rcept(_read_facts(
-            storage, canonical_supply_contract_fact_partition, from_date, to_date))
-        segment_rows, s2 = _clean_rcept(_read_facts(
-            storage, canonical_business_segment_fact_partition, from_date, to_date))
+        if bootstrap:
+            bootstrap_enqueued = _bootstrap_pending(
+                db, storage, run_id, from_date, to_date)
+        if bootstrap or pending_only:
+            # 복구 모드는 canonical을 DB 적재 입력으로 직접 쓰지 않는다. 위 별도 transaction이
+            # commit한 pending만 아래 typed-fact transaction이 소비한다.
+            supply_rows, segment_rows, s1, s2 = [], [], 0, 0
+        else:
+            supply_rows, s1 = _clean_rcept(_read_facts(
+                storage, canonical_supply_contract_fact_partition, from_date, to_date))
+            segment_rows, s2 = _clean_rcept(_read_facts(
+                storage, canonical_business_segment_fact_partition, from_date, to_date))
         supply_read, segment_read = len(supply_rows), len(segment_rows)
         skipped_missing_identity = s1 + s2
 
@@ -645,6 +738,9 @@ def run(
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date,
+        "mode": ("canonical_bootstrap" if bootstrap else
+                 "pending_only" if pending_only else "normal"),
+        "bootstrap_enqueued": bootstrap_enqueued,
         "supply_rows_read": supply_read, "segment_rows_read": segment_read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_unresolved_issuer": skipped_unresolved_issuer,

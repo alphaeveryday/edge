@@ -505,10 +505,10 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # part-00000.parquet 키와 SHA-256도 함께 고정한다. canonical·quality log가 모두 성공한 뒤에만
 # canonical_written=true가 된다. 행 격리는 성공 winner를 확정한 exit 2(하류 처리 뒤 실행은
 # INCOMPLETE/FAILED), 저장·무결성 실패는 incomplete manifest를 남기는 exit 1(해당 호출의 하류
-# 차단)이다. 아직 LoadDisclosure는 issuer 미해소 자동 회수를 위해 canonical 전체를 스캔하므로,
-# 실패 뒤 공유 canonical에 남은 파티션을 후속 정상 런이 회수할 수 있다. ALPHA-1045 PR02는
-# completed dual manifest winner를 DB pending ledger에 먼저 commit하고 성공 ID만 제거한다.
-# 기존 full scan 제거와 manifest-only consumer 전환은 ledger 회수 검증 뒤 후속 PR 범위다.
+# 차단)이다. 정상 LoadDisclosure는 아직 issuer 미해소 자동 회수를 위해 canonical 전체를 스캔한다.
+# completed dual manifest winner와 명시 복구(--all 또는 --from/--to)의 shared canonical은
+# disclosure_load_pending에 먼저 commit하고 성공 ID만 제거한다. --pending-only는 canonical을
+# 읽지 않고 그 잔여만 회수한다. 정상 consumer 전환은 별도 PR 범위다.
 # 정상 0건도 canonical_written=true·빈 canonical_partitions로 producer 미실행과 구분한다.
 
 # ETF 구성종목 정제(Step2) — raw etf_holdings(FMP US·KRX KR) → 공통 구성종목 fact 정규화 + 게이트.
@@ -609,14 +609,17 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # issuer 는 corp_code 를 company_profile.dart_corp_code 로 해소, 미해소(마스터 미시드)면
 # FK RESTRICT 회피 위해 skip+계측(커버리지 9→309 는 ALPHA-491). DB CHECK 는 파이썬 선검증해
 # 위반 fact 만 뺀다(한 건이 배치 롤백 안 되게). 멱등: document 자연키·fact_id=결정적 파생
-# ON CONFLICT. --from/--to 는 report_date 창(미지정=전체 스캔).
+# ON CONFLICT. 명시 복구는 --all(전체) 또는 --from/--to(report_date inclusive)이며 canonical을
+# pending에 먼저 고정한다. --pending-only는 pending 잔여만 회수한다. 범위 없는 수동 호출은
+# 거부한다(암묵 풀스캔 방지).
 # 창 인자가 하나 더 있다(ALPHA-721): --window-days N 은 오늘−N일 창을 앱이 계산해 넘긴다.
 # ASL 이 날짜 산술을 못 해 --from/--to 를 만들 수 없어서다 — 721·724 시절 다슬롯 공시 SFN
 # 을 위한 흔적이다(875 의 1분 워커는 CLI 가 아니라 스텝 함수에 날짜창을 직접 넘겼고, 987
-# 이후 스케줄 경로(18:10 SFN)는 옵션 없이 돈다). 명시 --from/--to 가 우선하고,
-# 둘 다 없으면 종전대로 풀스캔이다(백로그 회수 경로 보존 — 987 이후 스케줄 경로가 이쪽이다).
+# 이후 스케줄 경로(18:10 SFN)는 --input-run-id로 종전 동작을 유지한다). 명시 --from/--to가
+# input-run-id 없이 오면 bootstrap 복구이고, --all도 같은 전체 bootstrap이다.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
-  uv run --package data-pipeline python -m data_pipeline.run load-disclosure
+  uv run --package data-pipeline python -m data_pipeline.run load-disclosure --all
+# 실패 잔여만 재시도: ... run load-disclosure --pending-only
 
 # assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
 # assertion_argument 로. **해소 축은 역할이 정한다**(ALPHA-831) — 온톨로지 identity 표를
@@ -745,7 +748,7 @@ LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
 결손은 다시 ops 원장에서 본다. 증분 창은 원장 워터마크(`disclosure_watermark.py`)가
 직전 완주 런의 window_to 당일부터로 정해 늦은 노출 꼬리·런 실패를 다음 런이 회수한다.
 
-⚠️ `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
+⚠️ 정상 SFN의 `LoadDisclosure` 는 **창 없이(canonical 전체 스캔)** 돈다. 한때 이 레인만 `--window-days` 를
 붙였다가 되돌렸다 — 그 풀스캔이 곧 **백로그 회수 경로**이고, 컷오버로 15:40 런이 공시를 안
 돌게 된 지금은 창 밖으로 밀린 canonical 을 자동으로 주워올 경로가 그것뿐이다. 특히 아래
 issuer 지연 회수가 창을 넘기면 영구 누락이 된다.
@@ -957,7 +960,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 - `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
   dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
-  **적재 로더 중 유일하게 `--window-days` 를 받는다**(ALPHA-721). 공시는 장중 레인이 붙으면
+  명시 복구는 `--all` 또는 `--from/--to`로 canonical을 pending에 먼저 commit하고,
+  `--pending-only`는 canonical을 읽지 않고 잔여만 회수한다. 정상 SFN consumer는 아직 기존
+  input-run-id + full-scan 동작이다. **적재 로더 중 유일하게 `--window-days`도 받는다**(ALPHA-721). 공시는 장중 레인이 붙으면
   canonical 스캔이 슬롯마다 곱해진다. 뉴스 `load-documents`는 ALPHA-1031에서 manifest 직접
   키·현재 논리 ID 소비로 전환됐으며, 이 공시 경로의 LIST 제거는 별도 작업이다.
   그 레인이 실제로 붙었었다(ALPHA-875 `disclosure-worker` — 987 이 저녁 배치로 되돌려
