@@ -13,6 +13,7 @@ from data_pipeline.config import load_settings
 from data_pipeline.lake import LocalStorage, raw_disclosure_document_key
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.steps import ingest_raw_disclosure
+from data_pipeline.steps import disclosure_raw_manifest
 
 CONFIG = """
 [news.sources.fmp]
@@ -126,6 +127,11 @@ def test_saves_meta_ndjson_and_document_objects(tmp_path):
     log = _log(storage, "r1")
     assert log["status"] == "success"
     assert log["records_saved"] == 2 and log["documents_saved"] == 2
+    manifest = json.loads(storage.get_bytes(disclosure_raw_manifest.key("r1")))
+    assert manifest == {
+        "producer": "ingest_raw_disclosure", "raw_written": True,
+        "raw_keys": [meta_key], "run_id": "r1",
+    }
 
 
 def test_documents_written_as_fetched_not_buffered(tmp_path):
@@ -351,6 +357,73 @@ def test_raw_write_failure_still_writes_collection_log(tmp_path):
     log = _log(storage, "r1")
     assert log["status"] == "error"
     assert "denied" in log["error"]
+
+
+def test_manifest_initialization_failure_still_writes_collection_log(tmp_path):
+    # WHY(ALPHA-1054): raw manifest prefix만 권한이 빠진 배포에서도 실패 run의 감사 기록은
+    # collection_log에 남아야 한다. manifest 선행 실패가 이 기존 계약까지 끊으면 안 된다.
+    class ManifestFailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            if key.startswith("operations_archive/raw_run_manifests/"):
+                raise OSError("manifest write denied")
+            super().put_bytes(key, data)
+
+    source = FakeSource(records=[_rec("A1")])
+    code, storage = _run(
+        tmp_path, source, storage=ManifestFailingStorage(tmp_path / "lake")
+    )
+
+    assert code == 1
+    assert source.doc_requests == []
+    log = _log(storage, "r1")
+    assert log["status"] == "error"
+    assert "manifest write denied" in log["error"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_manifest_completion_failure_is_recorded_before_collection_log(tmp_path, enabled):
+    # WHY(ALPHA-1054): 완료 marker가 실패하면 normalize가 입력을 승인할 수 없다. collection_log를
+    # 먼저 쓰면 success/skipped가 영속돼 exit 1의 원인이 사라지므로 error 상태가 기록돼야 한다.
+    class CompletedManifestFailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            if key.startswith("operations_archive/raw_run_manifests/"):
+                manifest = json.loads(data)
+                if manifest["raw_written"] is True:
+                    raise OSError("completed manifest write denied")
+            super().put_bytes(key, data)
+
+    source = FakeSource(records=[_rec("A1")], enabled=enabled)
+    code, storage = _run(
+        tmp_path, source, storage=CompletedManifestFailingStorage(tmp_path / "lake")
+    )
+
+    assert code == 1
+    log = _log(storage, "r1")
+    assert log["status"] == "error"
+    assert "completed manifest write denied" in log["error"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_corrupt_completed_manifest_is_recorded_before_collection_log(tmp_path, enabled):
+    # WHY(ALPHA-1054): PUT 성공 응답만 믿으면 손상된 완료 marker와 success 로그가 함께 남아
+    # consumer만 뒤늦게 죽는다. producer가 exact bytes를 되읽어 확인하고 원인을 기록해야 한다.
+    class CorruptCompletedManifestStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            if key.startswith("operations_archive/raw_run_manifests/"):
+                manifest = json.loads(data)
+                if manifest["raw_written"] is True:
+                    return super().put_bytes(key, b"{")
+            super().put_bytes(key, data)
+
+    source = FakeSource(records=[_rec("A1")], enabled=enabled)
+    code, storage = _run(
+        tmp_path, source, storage=CorruptCompletedManifestStorage(tmp_path / "lake")
+    )
+
+    assert code == 1
+    log = _log(storage, "r1")
+    assert log["status"] == "error"
+    assert "무결성 검증 실패" in log["error"]
 
 
 def test_disabled_skip_survives_log_write_failure(tmp_path):

@@ -765,6 +765,14 @@ def canonical_run_partition_key(dataset: str, run_id: str, report_date: str) -> 
     )
 
 
+def raw_run_manifest_key(dataset: str, run_id: str) -> str:
+    """배치 raw producer가 확정한 실행별 직접 입력 key manifest."""
+    return (
+        f"operations_archive/raw_run_manifests/dataset={dataset}"
+        f"/run_id={run_id}/manifest.json"
+    )
+
+
 def feature_run_manifest_key(dataset: str, run_id: str) -> str:
     """feature producer가 현재 실행에서 바꾼 직접 파티션·논리 ID manifest 키."""
     return (
