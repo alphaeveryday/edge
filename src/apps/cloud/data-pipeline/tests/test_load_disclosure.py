@@ -267,6 +267,64 @@ def test_manifest_winner_is_durable_before_load_and_success_removes_it(tmp_path,
     }
 
 
+def test_canonical_bootstrap_commits_pending_before_typed_load(tmp_path, monkeypatch):
+    """WHY(ALPHA-1055): 복구 풀스캔이 canonical을 typed DB에 직접 넣으면 process 실패 때
+    재시도 정본이 없다. bootstrap 행은 document보다 먼저 pending transaction에 들어가야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, bootstrap=True) == 0
+    statements = [sql for sql, _ in conn.log]
+    assert next(i for i, sql in enumerate(statements)
+                if sql.startswith("INSERT INTO disclosure_load_pending")) < next(
+                    i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO document "))
+    assert conn.pending == {}
+    log = _log(storage)
+    assert log["mode"] == "canonical_bootstrap"
+    assert log["bootstrap_enqueued"] == 1
+
+
+def test_canonical_bootstrap_excludes_stale_segment_generation(tmp_path, monkeypatch):
+    """WHY(ALPHA-1055): shared canonical은 parser correction에서 사라진 높은 ordinal을
+    보존한다. bootstrap이 이를 current payload에 섞으면 이미 tombstone된 fact가 부활한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_business_segment_fact_partition, _SEGMENT_COLS,
+           "2026-06-30", [
+               _segment("R1", 0, parser_version="segments-v2"),
+               _segment("R1", 1, parser_version="segments-v1", segment_name="obsolete"),
+           ])
+    conn = _FakeConn()
+
+    assert _run(storage, conn, monkeypatch, bootstrap=True) == 0
+    assert len(_inserts(conn, "business_segment_fact")) == 1
+    assert _inserts(conn, "business_segment_fact")[0][1] == "반도체"
+
+
+def test_failed_bootstrap_item_remains_and_pending_only_recovers_without_canonical(
+        tmp_path, monkeypatch):
+    """WHY(ALPHA-1055): 실제 적재가 실패한 bootstrap 항목은 pending에 남고, 회수 명령은
+    mutable canonical을 다시 읽지 않아도 정확히 그 payload를 성공·삭제해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write(storage, canonical_supply_contract_fact_partition, _SUPPLY_COLS,
+           "2026-06-30", [_supply("R1")])
+    conn = _FakeConn(fail_docs={"R1"})
+
+    assert _run(storage, conn, monkeypatch, bootstrap=True) == 2
+    assert set(conn.pending) == {"R1"}
+    assert conn.pending["R1"]["last_error_code"] == "load_error"
+
+    conn.fail_docs.clear()
+    monkeypatch.setattr(
+        load_disclosure, "_read_facts",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("canonical read")),
+    )
+    assert _run(storage, conn, monkeypatch, pending_only=True) == 0
+    assert conn.pending == {}
+    assert _log(storage)["mode"] == "pending_only"
+
+
 def test_manifest_read_and_enqueue_are_serialized(tmp_path, monkeypatch):
     """WHY(ALPHA-1045): 과거 런이 canonical을 먼저 읽고 최신 런 뒤에 upsert하면 최신
     correction을 덮는다. manifest read 자체가 enqueue advisory lock 안에서 일어나야 한다."""

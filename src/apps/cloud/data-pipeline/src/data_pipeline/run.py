@@ -6,7 +6,8 @@
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
-        [--source VENDOR] [--input-run-id RUN_ID] [--all] [--limit N] [--window-days N]
+        [--source VENDOR] [--input-run-id RUN_ID] [--all] [--pending-only]
+        [--limit N] [--window-days N]
         [--interval-sec N]
 
 태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
@@ -288,7 +289,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
                         help="tag-news·load-documents·load-price-daily·load-price-triggers·"
-                             "load-etf-holdings·load-investor-intraday·load-assertions: 명시적 전체 스캔")
+                             "load-etf-holdings·load-investor-intraday·load-assertions·"
+                             "load-disclosure: 명시적 전체 스캔")
+    parser.add_argument("--pending-only", action="store_true",
+                        help="load-disclosure: canonical을 읽지 않고 pending 잔여만 회수")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
     parser.add_argument("--source", default=None, help="소스 벤더(뉴스: fmp|bigkinds, 가격: fmp|kis, 재무: fmp|dart). 미지정=fmp")
     # 태깅 전용 — 이번 런에서 새로 LLM 을 부를 기사 수 상한(이미 태깅된 건 안 셈). 비용이 호출
@@ -297,8 +301,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="tag-news: 이번 런에서 새로 태깅할 기사 수 상한(미지정=전부)")
     parser.add_argument("--window-days", type=int, default=None,
                         help="assemble-events·load-disclosure: 대상 파티션을 오늘−N일 창으로"
-                             " 제한(미지정: load-disclosure=풀스캔, assemble-events=오늘"
-                             " 하루). --from/--to 가 우선")
+                             " 제한(미지정: assemble-events=오늘 하루; load-disclosure는 명시적"
+                             " 범위 필수). --from/--to 가 우선")
     # iNAV 전용 — 표본 간격(초). 응답이 30행 고정이라 조회 창 = 이 값 × 30 이다(간격을 줄이면
     # 창도 같이 줄어든다). 갱신 주기가 30초 이하인 것까지만 실측됐고 그보다 잘게 의미가 있는지는
     # 미확정이라, 장중에 값을 바꿔가며 재보는 수단으로 플래그를 둔다(ALPHA-556 열린 결정).
@@ -502,12 +506,15 @@ def main(argv: list[str] | None = None) -> int:
         "load-etf-holdings",
         "load-investor-intraday",
         "load-assertions",
+        "load-disclosure",
     ):
         raise SystemExit(
             "--all 은 tag-news·load-documents·load-price-daily·load-price-triggers·"
             "load-etf-holdings·"
-            "load-investor-intraday·load-assertions 전용이다"
+            "load-investor-intraday·load-assertions·load-disclosure 전용이다"
         )
+    if args.pending_only and args.step != "load-disclosure":
+        raise SystemExit("--pending-only는 load-disclosure 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -678,7 +685,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
-    # 공시 적재는 canonical report_date 파티션을 읽어 DB에 쓴다(미지정=전체 + 멱등 skip).
+    # 정상 공시 적재(input-run-id/window-days)는 아직 기존 경로를 유지한다. 명시 복구
+    # (--all 또는 input-run-id 없는 --from/--to)만 canonical을 pending에 먼저 고정하며,
+    # --pending-only는 canonical을 전혀 읽지 않는다. 정상 전환은 후속 PR 소관이다.
     #
     # `--window-days` 를 받는 유일한 적재 스텝이다(ALPHA-721). 형제 로더들은 하루 1회만 돌아
     # 전체 스캔을 견디지만, 공시는 장중 레인이 붙으면 슬롯마다 그 스캔이 곱해진다
@@ -686,6 +695,38 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 만들 수 없으므로 창 **폭**을 받아 여기서 날짜로 편다 — assemble-events 와 같은
     # 패턴이고, 명시 `--from/--to` 가 주어지면 그쪽이 이긴다(백필 경로 보존).
     if args.step == "load-disclosure":
+        if (args.from_date is None) != (args.to_date is None):
+            raise SystemExit("load-disclosure의 --from과 --to는 함께 써야 한다")
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-disclosure의 --from은 --to보다 늦을 수 없다")
+        if args.pending_only and any((args.input_run_id, args.all_partitions,
+                                      args.from_date, args.window_days is not None)):
+            raise SystemExit("load-disclosure의 --pending-only는 다른 범위 인자와 함께 쓸 수 없다")
+        if args.all_partitions and any((args.input_run_id, args.from_date,
+                                        args.window_days is not None)):
+            raise SystemExit("load-disclosure의 --all은 다른 범위 인자와 함께 쓸 수 없다")
+        if args.input_run_id and args.from_date is not None:
+            raise SystemExit(
+                "load-disclosure의 --input-run-id는 --from/--to와 함께 쓸 수 없다"
+            )
+        if not any((args.input_run_id, args.all_partitions, args.from_date,
+                    args.pending_only, args.window_days is not None)):
+            raise SystemExit(
+                "load-disclosure는 --input-run-id, --from/--to, --all, --pending-only "
+                "또는 정상 SFN의 --window-days 중 하나가 필요하다"
+            )
         load_from, load_to = args.from_date, args.to_date
         if load_from is None and load_to is None and args.window_days is not None:
             load_from, load_to = default_window(
@@ -694,6 +735,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
             storage, run_id, db=db_config_from_env(settings.db),
             input_run_id=args.input_run_id,
             from_date=load_from, to_date=load_to,
+            bootstrap=(args.all_partitions
+                       or (args.from_date is not None and args.input_run_id is None)),
+            pending_only=args.pending_only,
         )
 
     # 보관 raw 재파싱 백필 — 창 미지정은 전체, 명시 창은 DART 접수일 inclusive 범위다.

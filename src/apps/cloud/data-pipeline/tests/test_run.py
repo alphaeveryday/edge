@@ -428,9 +428,12 @@ def _spy_load_disclosure(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, db, input_run_id, from_date, to_date):
+    def fake_run(storage, run_id, *, db, input_run_id, from_date, to_date,
+                 bootstrap, pending_only):
         captured["window"] = (from_date, to_date)
         captured["input_run_id"] = input_run_id
+        captured["bootstrap"] = bootstrap
+        captured["pending_only"] = pending_only
         return 0
 
     monkeypatch.setattr(run_mod.load_disclosure, "run", fake_run)
@@ -455,22 +458,35 @@ def test_load_disclosure_window_days_prunes_report_date_partitions(monkeypatch):
     assert captured["input_run_id"] == "N1"
 
 
-def test_load_disclosure_explicit_window_overrides_and_default_is_full_scan(monkeypatch):
-    # WHY(ALPHA-721): 두 기존 경로를 보존한다 — ① 명시 --from/--to 백필이 조용히 최근 N일로
-    #      좁혀지면 그 구간이 영영 적재되지 않는다 ② --window-days 미주입은 풀스캔이어야
-    #      밀린 canonical 을 다음 런이 주워오는 백로그 회수가 살아 있다(형제 로더들의 모델).
+def test_load_disclosure_explicit_recovery_scopes_are_fail_loud(monkeypatch):
+    # WHY(ALPHA-1055): 풀스캔을 암묵 기본값으로 남기면 운영 오배선이 canonical 전체를 읽는다.
+    # 날짜/전체 bootstrap과 pending-only는 서로 다른 복구 계약이라 플래그로 고정한다.
     run_mod, captured = _spy_load_disclosure(monkeypatch)
 
     def _boom(*a, **k):
         raise AssertionError("명시 창·창 미주입 경로에서 default_window 를 부르면 안 된다")
 
     monkeypatch.setattr(run_mod, "default_window", _boom)
-    assert main(["load-disclosure", "--run-id", "R", "--window-days", "3",
+    assert main(["load-disclosure", "--run-id", "R",
                  "--from", "2026-01-01", "--to", "2026-01-05"]) == 0
     assert captured["window"] == ("2026-01-01", "2026-01-05")
+    assert captured["bootstrap"] is True and captured["pending_only"] is False
 
-    assert main(["load-disclosure", "--run-id", "R"]) == 0
-    assert captured["window"] == (None, None)
+    assert main(["load-disclosure", "--run-id", "R", "--all"]) == 0
+    assert captured["window"] == (None, None) and captured["bootstrap"] is True
+
+    assert main(["load-disclosure", "--run-id", "R", "--pending-only"]) == 0
+    assert captured["pending_only"] is True and captured["bootstrap"] is False
+
+    with pytest.raises(SystemExit, match="중 하나가 필요하다"):
+        main(["load-disclosure", "--run-id", "R"])
+    with pytest.raises(SystemExit, match="함께 쓸 수 없다"):
+        main(["load-disclosure", "--run-id", "R", "--all", "--pending-only"])
+    with pytest.raises(SystemExit, match="함께 쓸 수 없다"):
+        main(["load-disclosure", "--run-id", "R", "--input-run-id", "N1",
+              "--from", "2026-01-01", "--to", "2026-01-05"])
+    with pytest.raises(SystemExit, match="함께 써야 한다"):
+        main(["load-disclosure", "--run-id", "R", "--from", "2026-01-01"])
 
 
 def test_backfill_normalize_disclosure_defaults_to_all_raw_and_accepts_filing_window(monkeypatch):
