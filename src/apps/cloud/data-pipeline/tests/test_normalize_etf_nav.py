@@ -4,11 +4,16 @@
 **나쁜 값이 passed 로 인증되지 않는지**를 더 촘촘히 본다(각도 H coerce-to-passing).
 """
 
+import hashlib
 import json
 
 import pytest
 
-from data_pipeline.lake import LocalStorage, canonical_etf_nav_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_nav_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import normalize_etf_nav
 
 # 라이브 실측 KIS 응답 행 + 수집 provenance(sources/kis_nav.py 가 붙이는 4개). 전 필드 문자열.
@@ -48,6 +53,10 @@ def _canonical_rows(storage, market="KR", trade_date="2026-07-16"):
         if key.endswith(".parquet"):
             rows.extend(normalize_etf_nav._read_parquet_rows(storage.get_bytes(key)))
     return rows
+
+
+def _manifest(storage, run_id="N1"):
+    return json.loads(storage.get_bytes(canonical_run_manifest_key("etf_nav", run_id)))
 
 
 def test_문자열_nav_가_수치로_정규화돼_canonical_에_들어간다(tmp_path):
@@ -92,7 +101,7 @@ def test_나쁜_nav_는_통과로_인증되지_않는다(tmp_path, bad_nav, reas
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_nav_row(nav=bad_nav)])
 
-    assert normalize_etf_nav.run(storage, "N1") == 0  # 행 탈락은 인프라 실패가 아니다
+    assert normalize_etf_nav.run(storage, "N1") == 2
 
     log = _quality_log(storage)
     assert log["records_passed"] == 0
@@ -108,7 +117,7 @@ def test_비달력일_미패딩_거래일은_막힌다(tmp_path, bad_date):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_nav_row(stck_bsop_date=bad_date)])
 
-    assert normalize_etf_nav.run(storage, "N1") == 0
+    assert normalize_etf_nav.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0
     assert "missing_trade_date" in log["failures"][0]["reasons"]
@@ -119,7 +128,7 @@ def test_미래_거래일은_bad_trade_date_로_막힌다(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_kis_nav_row(stck_bsop_date="20991231")])
 
-    assert normalize_etf_nav.run(storage, "N1") == 0
+    assert normalize_etf_nav.run(storage, "N1") == 2
     assert "bad_trade_date" in _quality_log(storage)["failures"][0]["reasons"]
 
 
@@ -173,7 +182,7 @@ def test_깨진_행은_격리되고_남은_행은_수집된다(tmp_path):
     ]) + "\n"
     storage.put_bytes(key, body.encode("utf-8"))
 
-    assert normalize_etf_nav.run(storage, "N1") == 0
+    assert normalize_etf_nav.run(storage, "N1") == 2
 
     log = _quality_log(storage)
     assert log["records_read"] == 5
@@ -182,6 +191,10 @@ def test_깨진_행은_격리되고_남은_행은_수집된다(tmp_path):
     assert reasons.count("unparseable_json") == 1
     assert reasons.count("non_object_row") == 2
     assert sorted(r["etf_id"] for r in _canonical_rows(storage)) == ["069500", "091160"]
+    assert _manifest(storage)["canonical_written"] is True
+    assert _manifest(storage)["canonical_partitions"][0]["winner_ids"] == [
+        {"etf_id": "069500"}, {"etf_id": "091160"},
+    ]
 
 
 def test_알수없는_벤더는_사유로_드러난다(tmp_path):
@@ -190,7 +203,7 @@ def test_알수없는_벤더는_사유로_드러난다(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(source="krx"), [_kis_nav_row()])
 
-    assert normalize_etf_nav.run(storage, "N1") == 0
+    assert normalize_etf_nav.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0
     assert log["failures"][0]["reasons"] == ["unsupported_vendor"]
@@ -202,5 +215,120 @@ def test_KR_아닌_시장은_막힌다(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(market="US"), [_kis_nav_row(market="US")])
 
-    assert normalize_etf_nav.run(storage, "N1") == 0
+    assert normalize_etf_nav.run(storage, "N1") == 2
     assert "unsupported_market" in _quality_log(storage)["failures"][0]["reasons"]
+
+
+class _TrackingStorage:
+    def __init__(self, inner, *, fail_put=None, corrupt_completed=False):
+        self.inner = inner
+        self.fail_put = fail_put
+        self.corrupt_completed = corrupt_completed
+        self.events = []
+
+    def list_keys(self, prefix):
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        data = self.inner.get_bytes(key)
+        completed = None
+        if "canonical_run_manifests" in key:
+            completed = json.loads(data).get("canonical_written")
+            if self.corrupt_completed and completed is True:
+                data = b"{}"
+        self.events.append(("get", key, completed))
+        return data
+
+    def put_bytes(self, key, data):
+        completed = None
+        if "canonical_run_manifests" in key:
+            completed = json.loads(data).get("canonical_written")
+        self.events.append(("put", key, completed))
+        if self.fail_put and self.fail_put in key:
+            raise OSError("의도된 저장 실패")
+        return self.inner.put_bytes(key, data)
+
+
+def test_manifest는_재확정과_최신_winner를_정렬해_직접키_sha로_기록한다(tmp_path):
+    # WHY(ALPHA-1042): consumer 범위는 값 변경분이 아니라 이번 실행의 성공 winner이며,
+    # 파티션·ID 순서와 direct object digest가 결정적이어야 재시도와 무결성 검증이 가능하다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(run_id="R0"), [_kis_nav_row()])
+    assert normalize_etf_nav.run(storage, "N0", "R0") == 0
+    _write_raw(storage, _raw_key(run_id="R1"), [
+        _kis_nav_row(our_etf_id="091160"),
+        _kis_nav_row(),
+        _kis_nav_row(),
+        _kis_nav_row(our_etf_id="091160", nav="200", fetched_at="2026-07-20T07:00:00+00:00"),
+        _kis_nav_row(our_etf_id="000660", stck_bsop_date="20260715"),
+    ])
+
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    parts = _manifest(storage)["canonical_partitions"]
+    assert [(p["trade_date"], p["winner_ids"]) for p in parts] == [
+        ("2026-07-15", [{"etf_id": "000660"}]),
+        ("2026-07-16", [{"etf_id": "069500"}, {"etf_id": "091160"}]),
+    ]
+    for part in parts:
+        assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
+    rows = {row["etf_id"]: row for row in _canonical_rows(storage)}
+    assert rows["091160"]["nav"] == pytest.approx(200)
+
+
+def test_동일최신시각의_상이nav는_그_id만_제외하고_exit2다(tmp_path):
+    # WHY(ALPHA-1042): 동일 vendor·시각이 서로 다른 fact를 주장하면 입력 순서로 고르는 것은
+    # 비결정적 오염이다. 충돌 ID만 제외하고 같은 파티션의 성공 winner는 보존한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(), [
+        _kis_nav_row(nav="100"), _kis_nav_row(nav="200"),
+        _kis_nav_row(our_etf_id="091160"),
+    ])
+
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 2
+    [part] = _manifest(storage)["canonical_partitions"]
+    assert part["winner_ids"] == [{"etf_id": "091160"}]
+    log = _quality_log(storage)
+    assert log["same_timestamp_conflicts"][0]["etf_id"] == "069500"
+    assert log["ops"] == {"records_out": 1, "failed_records": 1}
+
+
+def test_빈_입력은_유효한_빈_완료_manifest다(tmp_path):
+    # WHY(ALPHA-1042): 정상 0건과 manifest 결손을 구분해야 consumer가 전체 scan으로 넓히지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+    assert normalize_etf_nav.run(storage, "N1", "EMPTY") == 0
+    assert _manifest(storage) == {
+        "run_id": "N1", "producer": "normalize_etf_nav", "canonical_written": True,
+        "canonical_partitions": [],
+    }
+
+
+def test_manifest_commit순서와_동일run_멱등성을_고정한다(tmp_path):
+    # WHY(ALPHA-1042): 시작 즉시 이전 완료를 무효화하고 canonical→quality 뒤에만 완료를
+    # 공개해야 stale/미완성 범위를 consumer가 승인하지 않는다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(), [_kis_nav_row()])
+    storage = _TrackingStorage(inner)
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    first = inner.get_bytes(canonical_run_manifest_key("etf_nav", "N1"))
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    assert inner.get_bytes(canonical_run_manifest_key("etf_nav", "N1")) == first
+    assert storage.events[0] == ("put", canonical_run_manifest_key("etf_nav", "N1"), False)
+    canonical_put = next(i for i, e in enumerate(storage.events) if e[0] == "put" and e[1].startswith("canonical/"))
+    quality_put = next(i for i, e in enumerate(storage.events) if e[0] == "put" and "data_quality_logs" in e[1])
+    completed_put = next(i for i, e in enumerate(storage.events) if e == ("put", canonical_run_manifest_key("etf_nav", "N1"), True))
+    assert canonical_put < quality_put < completed_put
+
+
+def test_storage와_manifest_무결성_실패는_exit1이고_완료를_남기지_않는다(tmp_path):
+    # WHY(ALPHA-1042): canonical/quality/manifest 중 하나라도 신뢰할 수 없으면 부분 성공이
+    # 아니라 fatal이며, 같은 run의 이전 completed marker도 공개돼서는 안 된다.
+    for failing_prefix in ("canonical/market_data/etf_nav", "data_quality_logs"):
+        inner = LocalStorage(tmp_path / failing_prefix.replace("/", "_"))
+        _write_raw(inner, _raw_key(), [_kis_nav_row()])
+        assert normalize_etf_nav.run(_TrackingStorage(inner, fail_put=failing_prefix), "N1", "R1") == 1
+        assert _manifest(inner)["canonical_written"] is False
+
+    inner = LocalStorage(tmp_path / "manifest_corrupt")
+    _write_raw(inner, _raw_key(), [_kis_nav_row()])
+    assert normalize_etf_nav.run(_TrackingStorage(inner, corrupt_completed=True), "N1", "R1") == 1
+    assert _manifest(inner)["canonical_written"] is False
