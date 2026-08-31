@@ -1196,6 +1196,12 @@ settings.targets.keywords            # ["금리", ...]
     이 어느 거래일 스냅샷인지 복원할 수 없다(KRX holdings 의 `trd_dd` 와 같은 형태).
     각 행에 `our_ticker`·`market`·`kis_symbol`·`asof_date`·`fetched_at` 를 붙인다.
     슬롯 응답이 그날 것을 누적해 오므로 슬롯 간 중복은 **정상**이고 정리는 canonical 소관이다.
+- **canonical(EOD 투자자 수급, 정제 Step2)** — `normalize-investor`는 현재 input run에서 gate를
+  통과한 모든 `(market,ticker,trade_date)` winner를 직접 parquet key·SHA-256과 함께
+  `dataset=investor_flow_daily` canonical run manifest에 기록한다(ALPHA-1040). 같은 값 재확정도
+  winner이고 같은 vendor 중복은 최신 `fetched_at`이 이기며, 교차 vendor 충돌은 winner에서 제외해
+  quality와 exit 2에 남긴다. canonical→quality→completed manifest 순으로 공개하고, 빈 입력도
+  유효한 빈 completed manifest다. 저장·무결성 실패는 incomplete manifest와 exit 1로 fail-closed한다.
 - **canonical(장중 투자자 추정, 정제 Step2)** — `canonical/market_data/investor_flow_intraday/
   market=…/trade_date=…/part-*.parquet` 에 게이트 통과 행을 **(market,ticker,trade_date,asof_slot)
   키로 멱등 병합**(ALPHA-768). EOD 확정(`investor_flow_daily`)과 파티션 축은 같지만 **행 키가
