@@ -379,6 +379,14 @@ def run(
                     try:
                         cur.execute(_UPSERT_SQL, params)
                         row = cur.fetchone()
+                        if row is None:
+                            # 값이 같은 재확정 winner도 현재 manifest를 성공 소비한 범위다.
+                            # data_version을 그대로 두면 이전 run의 잔존 행과 구분할 수 없다.
+                            cur.execute(
+                                "UPDATE investor_flow_daily SET data_version = %s"
+                                " WHERE instrument_id = %s AND trade_date = %s",
+                                (confirmed_data_version, instrument_id, trade_date),
+                            )
                     except Exception as exc:
                         cur.execute("ROLLBACK TO SAVEPOINT investor_flow_row")
                         cur.execute("RELEASE SAVEPOINT investor_flow_row")
@@ -390,7 +398,7 @@ def run(
                         continue
                     cur.execute("RELEASE SAVEPOINT investor_flow_row")
                     if row is None:
-                        # 값이 같아 UPDATE 조건이 걸러낸 경우 — 재실행의 정상 경로다.
+                        # 값은 같아도 위 savepoint 안에서 현재 manifest 계보를 stamp했다.
                         already += 1
                         continue
                     if row[0]:

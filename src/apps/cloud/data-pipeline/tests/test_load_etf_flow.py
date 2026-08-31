@@ -248,6 +248,11 @@ def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
     first, second = _log(storage, "R1"), _log(storage, "R2")
     assert first["created"] == 1 and first["already_present"] == 0
     assert second["created"] == 0 and second["already_present"] == 1  # 신규 0 = 멱등
+    stamps = [params for sql, params in conn.log
+              if sql.startswith("UPDATE investor_flow_daily SET data_version")]
+    # WHY(ALPHA-1041): 동일 값 winner도 현재 manifest가 성공 재확정한 행이다. stamp가 없으면
+    # DB에서 이번 run의 성공 범위와 이전 값의 단순 잔존을 구분할 수 없다.
+    assert stamps == [("R2", "inst_samsung", "2026-07-16")]
 
 
 def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(tmp_path, monkeypatch):
