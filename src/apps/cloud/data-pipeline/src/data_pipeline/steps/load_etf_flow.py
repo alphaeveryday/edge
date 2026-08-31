@@ -25,17 +25,25 @@ canonical 이 최신 fetched_at 으로 수렴시키므로 마트가 DO NOTHING �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from ..config import DbConfig
 from ..db import connect
-from ..lake import Storage, canonical_investor_flow_partition, quality_log_key
+from ..lake import (
+    Storage,
+    canonical_investor_flow_partition,
+    canonical_run_manifest_key,
+    quality_log_key,
+)
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "load_etf_flow"
+_PARTIAL_EXIT_CODE = 2
 # 품질 로그 dataset. normalize_investor 도 canonical dataset 을 "investor_flow_daily" 로 쓰는데,
 # SFN 은 모든 스텝에 같은 run_id 를 넘긴다 — 로그 키가 같으면 이 로더가 정제 로그를 덮어써
 # records_failed·vendor_collisions 증거가 사라진다(load_price_daily GH-1 교훈). "_load" 로 분리.
@@ -95,6 +103,137 @@ def _partition_dates(storage: Storage, market: str) -> list[str]:
     return sorted(dates)
 
 
+def _manifest_partitions(
+    storage: Storage, input_run_id: str,
+) -> list[tuple[str, str, str, str, frozenset[str]]]:
+    """NormalizeInvestor가 승인한 직접 key와 현재 실행 winner 범위."""
+    manifest_key = canonical_run_manifest_key("investor_flow_daily", input_run_id)
+    manifest = json.loads(storage.get_bytes(manifest_key).decode("utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id:
+        raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
+    if (manifest.get("producer") != "normalize_investor"
+            or manifest.get("canonical_written") is not True):
+        raise ValueError(f"완료된 normalize-investor manifest가 아니다: run_id={input_run_id}")
+    raw = manifest.get("canonical_partitions")
+    if not isinstance(raw, list):
+        raise ValueError(f"canonical_partitions가 없는 manifest다: run_id={input_run_id}")
+
+    partitions: list[tuple[str, str, str, str, frozenset[str]]] = []
+    seen_partitions: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"canonical_partitions 항목이 객체가 아니다: run_id={input_run_id}")
+        market, trade_date = item.get("market"), item.get("trade_date")
+        try:
+            valid_date = (
+                isinstance(trade_date, str)
+                and datetime.strptime(trade_date, "%Y-%m-%d").strftime("%Y-%m-%d") == trade_date
+            )
+        except ValueError:
+            valid_date = False
+        if market not in _MICS_BY_MARKET or not valid_date:
+            raise ValueError(f"canonical_partitions 항목이 유효하지 않다: {item!r}")
+        partition = (market, trade_date)
+        if partition in seen_partitions:
+            raise ValueError(f"canonical_partitions 항목이 중복됐다: {item!r}")
+        seen_partitions.add(partition)
+
+        parquet_key = item.get("key")
+        expected_key = f"{canonical_investor_flow_partition(market, trade_date)}/part-00000.parquet"
+        if parquet_key != expected_key:
+            raise ValueError(f"canonical 직접 키가 파티션과 일치하지 않는다: {item!r}")
+        parquet_sha256 = item.get("sha256")
+        if not (
+            isinstance(parquet_sha256, str)
+            and len(parquet_sha256) == 64
+            and all(char in "0123456789abcdef" for char in parquet_sha256)
+        ):
+            raise ValueError(f"canonical sha256이 유효하지 않다: {item!r}")
+        raw_winners = item.get("winner_ids")
+        if not isinstance(raw_winners, list) or not raw_winners:
+            raise ValueError(f"winner_ids가 없는 manifest 파티션이다: {item!r}")
+        winner_ids: list[str] = []
+        for winner in raw_winners:
+            if not isinstance(winner, dict) or set(winner) != {"ticker"}:
+                raise ValueError(f"winner_ids 항목이 유효하지 않다: {item!r}")
+            ticker = winner.get("ticker")
+            if not (isinstance(ticker, str) and ticker.strip() and ticker == ticker.strip()):
+                raise ValueError(f"winner_ids 항목이 유효하지 않다: {item!r}")
+            winner_ids.append(ticker)
+        if winner_ids != sorted(set(winner_ids)):
+            raise ValueError(f"winner_ids가 정렬·고유 목록이 아니다: {item!r}")
+        partitions.append(
+            (market, trade_date, parquet_key, parquet_sha256, frozenset(winner_ids))
+        )
+    return partitions
+
+
+def _input_rows(
+    storage: Storage,
+    *,
+    input_run_id: str | None,
+    from_date: str | None,
+    to_date: str | None,
+) -> tuple[int, int, Iterator[tuple[str, str, dict, bool]]]:
+    """manifest 파티션·winner 수와 물리 행·논리 선택 여부를 분리해 낸다."""
+    if input_run_id is not None:
+        partitions = _manifest_partitions(storage, input_run_id)
+
+        def manifest_rows() -> Iterator[tuple[str, str, dict, bool]]:
+            """승인된 direct parquet의 물리 행과 winner 선택 여부를 검증해 낸다."""
+            for market, trade_date, key, expected_sha256, winner_ids in partitions:
+                found: set[str] = set()
+                parquet_bytes = storage.get_bytes(key)
+                if hashlib.sha256(parquet_bytes).hexdigest() != expected_sha256:
+                    raise ValueError(
+                        f"canonical 바이트가 manifest 이후 바뀌었다: key={key}, "
+                        f"run_id={input_run_id}"
+                    )
+                for row in _read_parquet_rows(parquet_bytes):
+                    ticker = row.get("ticker")
+                    selected = ticker in winner_ids
+                    if selected:
+                        if ticker in found:
+                            raise ValueError(
+                                f"manifest winner가 canonical에 중복됐다: key={key}, winner={ticker!r}"
+                            )
+                        if row.get("market") != market or row.get("trade_date") != trade_date:
+                            raise ValueError(
+                                f"manifest winner의 canonical 파티션 정체성이 다르다: "
+                                f"key={key}, winner={ticker!r}"
+                            )
+                        found.add(ticker)
+                    yield market, trade_date, row, selected
+                missing = winner_ids - found
+                if missing:
+                    raise ValueError(
+                        f"manifest winner가 canonical에 없다: key={key}, winners={sorted(missing)!r}"
+                    )
+
+        return (
+            len(partitions),
+            sum(len(partition[4]) for partition in partitions),
+            manifest_rows(),
+        )
+
+    def recovery_rows() -> Iterator[tuple[str, str, dict, bool]]:
+        """명시된 기존 복구 범위의 canonical parquet 행을 낸다."""
+        for market in _MICS_BY_MARKET:
+            dates = [
+                date for date in _partition_dates(storage, market)
+                if (from_date is None or date >= from_date) and (to_date is None or date <= to_date)
+            ]
+            for trade_date in dates:
+                prefix = canonical_investor_flow_partition(market, trade_date)
+                for key in storage.list_keys(prefix + "/"):
+                    if not key.endswith(".parquet"):
+                        continue
+                    for row in _read_parquet_rows(storage.get_bytes(key)):
+                        yield market, trade_date, row, True
+
+    return 0, 0, recovery_rows()
+
+
 def _instrument_ids(conn, mics: tuple[str, ...]) -> tuple[dict[str, str], set[str]]:
     """(그 지역 MIC 집합의) ticker → instrument_id, 그리고 MIC 를 가로질러 겹친 ticker 집합.
 
@@ -144,16 +283,19 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
+    input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
-    """canonical 투자자 수급 → investor_flow_daily 적재. 성공 0, 장애 시 비0.
+    """canonical 투자자 수급 → investor_flow_daily 적재. 성공 0, 행 부분 실패 2, 장애 1.
 
-    창(from/to) 미지정 = trade_date 전체 스캔. 멱등 skip 이라 재실행 비용은 신규분뿐이고,
-    놓친 날짜도 다음 런이 자연 회복한다(load_price_daily 와 같은 모델).
+    input_run_id는 정제 manifest의 직접 key와 winner만 처리한다. from/to는 명시 복구,
+    셋 다 미지정은 호출자가 명시한 전체 스캔이다.
     """
     started_at = datetime.now(timezone.utc)
-    read = skipped_missing_identity = skipped_unknown_instrument = skipped_load_violation = 0
+    physical_read = read = 0
+    manifest_partitions = manifest_winners = 0
+    skipped_missing_identity = skipped_unknown_instrument = skipped_load_violation = 0
     skipped_ambiguous_ticker = 0
     already = created = updated = 0
     created_sample: list[dict] = []
@@ -162,44 +304,45 @@ def run(
     load_violations: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
+    confirmed_data_version = input_run_id or run_id
 
     try:
+        if input_run_id is not None and (from_date is not None or to_date is not None):
+            raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
+        if (from_date is None) != (to_date is None):
+            raise ValueError("from_date와 to_date는 함께 써야 한다")
         # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면 최신
         # fetched_at 이 이긴다 — canonical 병합과 같은 규칙이다.
         candidates: dict[tuple[str, str, str], dict] = {}
-        for market in _MICS_BY_MARKET:
-            dates = [
-                d for d in _partition_dates(storage, market)
-                if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)
-            ]
-            for date in dates:
-                prefix = canonical_investor_flow_partition(market, date)
-                for key in storage.list_keys(prefix + "/"):
-                    if not key.endswith(".parquet"):
-                        continue
-                    for row in _read_parquet_rows(storage.get_bytes(key)):
-                        read += 1
-                        ticker, trade_date = row.get("ticker"), row.get("trade_date")
-                        if not (isinstance(ticker, str) and ticker.strip()
-                                and isinstance(trade_date, str) and trade_date.strip()):
-                            # 정체성은 비어있지 않은 문자열이어야 한다. 비문자열(스키마 드리프트로
-                            # 실린 int ticker 등)·공백을 통과시키면 아래 sorted(candidates) 에서
-                            # str/int 비교가 TypeError 를 내 바깥 try 가 load_error 로 잡아 **정상
-                            # 행까지 전체 롤백**한다 — 게이트가 스스로 죽는다(Rule 12). 조용히 크래시
-                            # 대신 격리·집계한다(canonical 은 string 타입이라 정상 경로엔 안 온다).
-                            skipped_missing_identity += 1
-                            continue
-                        fetched_at = row.get("fetched_at")
-                        cand_key = (market, ticker, trade_date)
-                        prev = candidates.get(cand_key)
-                        if prev is not None and (fetched_at or "") < prev["fetched_at_raw"]:
-                            continue
-                        fact = {col: row.get(col) for col in _NET_COLUMNS}
-                        # available_at = '우리가 이 관측을 쓸 수 있게 된 시각'. 수집 시각이 가장
-                        # 보수적인 근사다(load_price_daily 와 같은 규약).
-                        fact["available_at"] = fetched_at or started_at.isoformat()
-                        fact["fetched_at_raw"] = fetched_at or ""
-                        candidates[cand_key] = fact
+        manifest_partitions, manifest_winners, input_rows = _input_rows(
+            storage, input_run_id=input_run_id, from_date=from_date, to_date=to_date,
+        )
+        for market, partition_date, row, selected in input_rows:
+            physical_read += 1
+            if not selected:
+                continue
+            read += 1
+            ticker, trade_date = row.get("ticker"), row.get("trade_date")
+            if not (isinstance(ticker, str) and ticker.strip()
+                    and isinstance(trade_date, str) and trade_date.strip()):
+                # 정체성은 비어있지 않은 문자열이어야 한다. 비문자열·공백은 격리한다.
+                skipped_missing_identity += 1
+                continue
+            if row.get("market") != market or trade_date != partition_date:
+                # manifest 경로는 _input_rows가 fatal로 막고, 복구 경로도 다른 파티션 행을
+                # 잘못된 종목에 붙이지 않는다.
+                skipped_missing_identity += 1
+                continue
+            fetched_at = row.get("fetched_at")
+            cand_key = (market, ticker, trade_date)
+            prev = candidates.get(cand_key)
+            if prev is not None and (fetched_at or "") < prev["fetched_at_raw"]:
+                continue
+            fact = {col: row.get(col) for col in _NET_COLUMNS}
+            # 기존 명시 복구 동작을 보존한다. 결측 시 실행 시각을 쓰는 역사적 계약이다.
+            fact["available_at"] = fetched_at or started_at.isoformat()
+            fact["fetched_at_raw"] = fetched_at or ""
+            candidates[cand_key] = fact
 
         with connect(db) as conn:
             instruments = {
@@ -230,12 +373,32 @@ def run(
                     continue
                 params = [instrument_id, trade_date]
                 params += [fact[col] for col in _NET_COLUMNS]
-                params += [fact["available_at"], run_id]
+                params += [fact["available_at"], confirmed_data_version]
                 with conn.cursor() as cur:
-                    cur.execute(_UPSERT_SQL, params)
-                    row = cur.fetchone()
+                    cur.execute("SAVEPOINT investor_flow_row")
+                    try:
+                        cur.execute(_UPSERT_SQL, params)
+                        row = cur.fetchone()
+                        if row is None:
+                            # 값이 같은 재확정 winner도 현재 manifest를 성공 소비한 범위다.
+                            # data_version을 그대로 두면 이전 run의 잔존 행과 구분할 수 없다.
+                            cur.execute(
+                                "UPDATE investor_flow_daily SET data_version = %s"
+                                " WHERE instrument_id = %s AND trade_date = %s",
+                                (confirmed_data_version, instrument_id, trade_date),
+                            )
+                    except Exception as exc:
+                        cur.execute("ROLLBACK TO SAVEPOINT investor_flow_row")
+                        cur.execute("RELEASE SAVEPOINT investor_flow_row")
+                        failures.append({
+                            "market": market, "ticker": ticker, "trade_date": trade_date,
+                            "reasons": ["row_load_error"], "error": str(exc),
+                        })
+                        exit_code = _PARTIAL_EXIT_CODE
+                        continue
+                    cur.execute("RELEASE SAVEPOINT investor_flow_row")
                     if row is None:
-                        # 값이 같아 UPDATE 조건이 걸러낸 경우 — 재실행의 정상 경로다.
+                        # 값은 같아도 위 savepoint 안에서 현재 manifest 계보를 stamp했다.
                         already += 1
                         continue
                     if row[0]:
@@ -254,14 +417,22 @@ def run(
         # 죽는 대신 사유를 로그 계약("결과는 항상 로그")에 태운다(Rule 12).
         logger.exception("투자자 수급 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
-        created, updated, created_sample = 0, 0, []
+        already, created, updated, created_sample = 0, 0, 0, []
         exit_code = 1
+
+    if exit_code == 0 and (
+        skipped_missing_identity + skipped_unknown_instrument
+        + skipped_ambiguous_ticker + skipped_load_violation
+    ):
+        exit_code = _PARTIAL_EXIT_CODE
 
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
-        "markets": list(_MICS_BY_MARKET), "from_date": from_date, "to_date": to_date,
-        "rows_read": read,
+        "markets": list(_MICS_BY_MARKET), "input_run_id": input_run_id,
+        "from_date": from_date, "to_date": to_date,
+        "manifest_partitions": manifest_partitions, "manifest_winners": manifest_winners,
+        "physical_rows_read": physical_read, "logical_rows_read": read, "rows_read": read,
         "skipped_missing_identity": skipped_missing_identity,
         "skipped_unknown_instrument": skipped_unknown_instrument,
         # 마스터가 모르는 종목 목록 — instrument 마스터 확장이 얼마나 필요한지의 근거다.
@@ -286,7 +457,7 @@ def run(
                           json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"))
     except Exception:
         logger.exception("적재 로그 기록 실패")
-        exit_code = exit_code or 1
+        exit_code = 1
 
     logger.info(
         "load_etf_flow 완료: read=%d created=%d updated=%d already=%d "

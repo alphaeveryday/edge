@@ -681,6 +681,57 @@ def test_load_price_daily_forwards_manifest_scope_and_preserves_explicit_all(mon
     assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
 
 
+def test_load_etf_flow_requires_exactly_one_explicit_scope(monkeypatch):
+    # WHY(ALPHA-1041): 정상 SFN의 run 계보가 빠져도 암묵적 canonical 풀스캔으로 성공하면
+    # 데이터가 쌓일수록 비싸지는 배선 회귀가 숨는다. 혼합·반쪽 날짜 범위도 거부한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    for argv in (
+        ["load-etf-flow", "--run-id", "R"],
+        ["load-etf-flow", "--run-id", "R", "--input-run-id", "N1", "--all"],
+        ["load-etf-flow", "--run-id", "R", "--input-run-id", "N1",
+         "--from", "2026-08-20", "--to", "2026-08-21"],
+    ):
+        with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
+            main(argv)
+
+    for bound in ("--from", "--to"):
+        with pytest.raises(SystemExit, match="함께 써야"):
+            main(["load-etf-flow", "--run-id", "R", bound, "2026-08-20"])
+
+
+def test_load_etf_flow_forwards_manifest_and_recovery_scopes(monkeypatch):
+    # WHY(ALPHA-1041): 정상 경로는 NormalizeInvestor의 정확한 run_id를 전달해야 하고, 기존
+    # 날짜/전체 복구는 운영자가 명시한 경우에만 같은 인자로 보존돼야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = []
+    monkeypatch.setattr(
+        run_mod.load_etf_flow, "run",
+        lambda *args, **kwargs: captured.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-etf-flow", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured[-1]["input_run_id"] == "N1"
+    assert main(["load-etf-flow", "--run-id", "R", "--from", "2026-08-20",
+                 "--to", "2026-08-21"]) == 0
+    assert captured[-1]["from_date"] == "2026-08-20"
+    assert captured[-1]["to_date"] == "2026-08-21"
+    assert main(["load-etf-flow", "--run-id", "R", "--all"]) == 0
+    assert captured[-1]["input_run_id"] is None
+    assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_etf_flow_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1041): 불량·역전 창이 0건 성공이면 수동 복구 완료로 오인된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-etf-flow", "--run-id", "R", *argv])
+
+
 def test_load_price_triggers_forwards_manifest_scope_and_preserves_explicit_all(monkeypatch):
     # WHY(ALPHA-1039): 정상 SFN의 run_id가 사라지면 트리거가 canonical 가격·holdings 전체
     # 탐색으로 돌아간다. 전체 복구는 운영자가 --all을 직접 쓴 경우에만 허용한다.

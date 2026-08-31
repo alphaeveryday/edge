@@ -1076,6 +1076,58 @@ def test_가격_정제_부분실패는_manifest_적재_후_시장_SFN을_실패�
     assert 'Default = "PipelineFailed"' in final
 
 
+def test_EOD_수급_exit_0_2_1은_성공범위와_최종실패를_동시에_보존한다():
+    """WHY(ALPHA-1040·1041): NormalizeInvestor 2를 즉시 막으면 성공 winner를 잃고, 2를
+    성공으로 닫으면 유실이 숨는다. loader도 같은 계약이며 1은 절대 하류로 보내면 안 된다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+
+    assert (
+        "States.Array('load-etf-flow', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)" in sm
+    )
+    normalize_continue = sm.split("normalize_investor_continue_check = {", 1)[1].split(
+        "normalize_continue_checks = concat", 1)[0]
+    assert re.search(
+        r'Variable\s*=\s*"\$\.normalize_results\[\$\{local\.normalize_investor_index\}\]'
+        r'\.status".*?StringEquals\s*=\s*"succeeded"', normalize_continue, re.S,
+    )
+    assert re.search(
+        r'Variable\s*=\s*"\$\.normalize_results\[\$\{local\.normalize_investor_index\}\]'
+        r'\.exit_code".*?NumericEquals\s*=\s*2', normalize_continue, re.S,
+    )
+    assert "NumericEquals = 1" not in normalize_continue
+
+    loader_continue = sm.split("feature_etf_flow_continue_check = {", 1)[1].split(
+        "feature_continue_checks = concat", 1)[0]
+    assert re.search(
+        r'Variable\s*=\s*"\$\.feature_results\[\$\{local\.feature_etf_flow_index\}\]'
+        r'\.status".*?StringEquals\s*=\s*"succeeded"', loader_continue, re.S,
+    )
+    assert re.search(
+        r'Variable\s*=\s*"\$\.feature_results\[\$\{local\.feature_etf_flow_index\}\]'
+        r'\.exit_code".*?NumericEquals\s*=\s*2', loader_continue, re.S,
+    )
+    assert "NumericEquals = 1" not in loader_continue
+
+    normalize_gate = sm.split("NormalizeCheckResults = {", 1)[1].split(
+        "NotifyNormalizePartial = {", 1)[0]
+    assert 'Next = "NotifyNormalizePartial"' in normalize_gate
+    assert 'Default = "NotifyFailure"' in normalize_gate
+    feature_gate = sm.split("FeatureCheckResults = {", 1)[1].split(
+        "LoadPriceTriggers = merge", 1)[0]
+    assert 'local.feature_continue_checks' in feature_gate
+    assert 'Default = "NotifyFailure"' in feature_gate
+    partial = sm.split("FeaturePartialCheck = {", 1)[1].split(
+        "NotifyFeaturePartial = {", 1)[0]
+    assert "local.feature_etf_flow_index" in partial
+    assert 'Next = "NotifyFeaturePartial"' in partial
+    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
+    assert "local.normalize_success_checks" in final
+    assert "local.feature_success_checks" in final
+    assert 'Default = "PipelineFailed"' in final
+
+
 def test_가격_트리거는_DB_loader_뒤에서_manifest_범위를_처리하고_strict_마감한다():
     """WHY(ALPHA-1039): 트리거가 feature Parallel 안에 남으면 가격·holdings commit보다 먼저
     읽는 경합이 생긴다. 두 loader의 exit 0/2 뒤에는 실행하되, 어느 부분 실패도 전체 SFN

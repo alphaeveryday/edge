@@ -1202,6 +1202,12 @@ settings.targets.keywords            # ["금리", ...]
   winner이고 같은 vendor 중복은 최신 `fetched_at`이 이기며, 교차 vendor 충돌은 winner에서 제외해
   quality와 exit 2에 남긴다. canonical→quality→completed manifest 순으로 공개하고, 빈 입력도
   유효한 빈 completed manifest다. 저장·무결성 실패는 incomplete manifest와 exit 1로 fail-closed한다.
+- **적재(EOD 투자자 수급)** — 정상 `load-etf-flow --input-run-id`는 같은 run의 completed
+  manifest와 그 direct parquet만 GET하고 key·SHA·정렬/고유 winner·파티션 정체성을 검증한다
+  (ALPHA-1041). 결손·손상 때 LIST/fullscan으로 넓히지 않으며 빈 manifest는 canonical LIST/GET 없이
+  성공한다. 물리 parquet 행과 논리 winner 처리량을 분리하고, 개별 DB 행 실패는 savepoint로
+  격리해 다른 winner를 commit하되 exit 2와 최종 SFN Failed를 보존한다. 날짜 창과 `--all`은
+  명시 복구 전용이다.
 - **canonical(장중 투자자 추정, 정제 Step2)** — `canonical/market_data/investor_flow_intraday/
   market=…/trade_date=…/part-*.parquet` 에 게이트 통과 행을 **(market,ticker,trade_date,asof_slot)
   키로 멱등 병합**(ALPHA-768). EOD 확정(`investor_flow_daily`)과 파티션 축은 같지만 **행 키가

@@ -289,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
                         help="tag-news·load-documents·load-price-daily·load-price-triggers·"
-                             "load-etf-holdings·load-investor-intraday·load-assertions·"
+                             "load-etf-holdings·load-etf-flow·load-investor-intraday·load-assertions·"
                              "load-disclosure: 명시적 전체 스캔")
     parser.add_argument("--pending-only", action="store_true",
                         help="load-disclosure: canonical을 읽지 않고 pending 잔여만 회수")
@@ -503,14 +503,14 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
     if args.all_partitions and args.step not in (
         "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
-        "load-etf-holdings",
+        "load-etf-holdings", "load-etf-flow",
         "load-investor-intraday",
         "load-assertions",
         "load-disclosure",
     ):
         raise SystemExit(
             "--all 은 tag-news·load-documents·load-price-daily·load-price-triggers·"
-            "load-etf-holdings·"
+            "load-etf-holdings·load-etf-flow·"
             "load-investor-intraday·load-assertions·load-disclosure 전용이다"
         )
     if args.pending_only and args.step != "load-disclosure":
@@ -818,10 +818,39 @@ def _dispatch(args, settings, storage, run_id) -> int:
             expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
         )
 
-    # 투자자 수급 적재는 canonical trade_date 파티션을 읽는다(미지정=전체 + 멱등 skip).
+    # 투자자 수급 적재 정상 경로는 NormalizeInvestor manifest의 직접 key와 winner만 읽는다.
+    # 날짜창은 명시 복구, 전체 스캔은 --all을 직접 쓴 경우뿐이다(ALPHA-1041).
     if args.step == "load-etf-flow":
+        scopes = sum((args.input_run_id is not None,
+                      args.from_date is not None or args.to_date is not None,
+                      args.all_partitions))
+        if scopes != 1:
+            raise SystemExit(
+                "load-etf-flow는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+            )
+        if (args.from_date is None) != (args.to_date is None):
+            raise SystemExit("load-etf-flow의 --from과 --to는 함께 써야 한다")
+        parsed_dates = []
+        for name, value in (("--from", args.from_date), ("--to", args.to_date)):
+            if value is None:
+                parsed_dates.append(None)
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(
+                    f"load-etf-flow의 {name}은 YYYY-MM-DD 달력일이어야 한다"
+                ) from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(
+                    f"load-etf-flow의 {name}은 YYYY-MM-DD 달력일이어야 한다"
+                )
+            parsed_dates.append(parsed)
+        if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
+            raise SystemExit("load-etf-flow의 --from은 --to보다 늦을 수 없다")
         return load_etf_flow.run(
             storage, run_id, db=db_config_from_env(settings.db),
+            input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
         )
 
