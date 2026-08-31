@@ -10,14 +10,20 @@ WIDE 테이블(13 투자자 × 수량·대금 26 컬럼)이라 canonical 컬럼�
 모듈의 _NET_COLUMNS 에서 끌어와 테스트와 계약을 붙여 둔다.
 """
 
+import hashlib
 import io
 import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_investor_flow_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_investor_flow_partition,
+    canonical_run_manifest_key,
+)
 from data_pipeline.steps import load_etf_flow
 
 _NET = load_etf_flow._NET_COLUMNS  # 26 컬럼(카테고리×qty/val)
@@ -42,6 +48,59 @@ def _write_canonical(storage, market, trade_date, rows, part="part-00000", schem
         f"{canonical_investor_flow_partition(market, trade_date)}/{part}.parquet", buf.getvalue())
 
 
+def _write_manifest(storage, run_id="N1", partitions=None):
+    if partitions is None:
+        partitions = [{
+            "market": "KR", "trade_date": "2026-07-16",
+            "key": f"{canonical_investor_flow_partition('KR', '2026-07-16')}"
+                   "/part-00000.parquet",
+            "winner_ids": [{"ticker": "005930"}],
+        }]
+    items = []
+    for partition in partitions:
+        item = dict(partition)
+        item.setdefault("sha256", hashlib.sha256(storage.get_bytes(item["key"])).hexdigest())
+        items.append(item)
+    storage.put_bytes(
+        canonical_run_manifest_key("investor_flow_daily", run_id),
+        json.dumps({
+            "run_id": run_id, "producer": "normalize_investor",
+            "canonical_written": True, "canonical_partitions": items,
+        }, sort_keys=True).encode("utf-8"),
+    )
+
+
+def _manifest_payload(storage, run_id="N1"):
+    return json.loads(storage.get_bytes(
+        canonical_run_manifest_key("investor_flow_daily", run_id),
+    ).decode("utf-8"))
+
+
+def _put_manifest_payload(storage, payload, run_id="N1"):
+    storage.put_bytes(
+        canonical_run_manifest_key("investor_flow_daily", run_id),
+        json.dumps(payload, sort_keys=True).encode("utf-8"),
+    )
+
+
+class _TrackingStorage:
+    def __init__(self, inner):
+        self.inner = inner
+        self.list_calls: list[str] = []
+        self.get_calls: list[str] = []
+
+    def list_keys(self, prefix):
+        self.list_calls.append(prefix)
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        self.get_calls.append(key)
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        return self.inner.put_bytes(key, data)
+
+
 def _flow_row(ticker="005930", trade_date="2026-07-16", **over):
     # 26 net 컬럼을 모두 유효 정수로 채운다(순매수는 음수 정상이라 부호 섞어도 무방) — 기본은
     # 컬럼 인덱스로 구분 가능한 값을 준다. headline 은 NOT NULL 이라 결측이면 안 된다.
@@ -56,10 +115,11 @@ def _flow_row(ticker="005930", trade_date="2026-07-16", **over):
 class _FakeCursor:
     """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
 
-    def __init__(self, log, instrument_rows, existing):
+    def __init__(self, log, instrument_rows, existing, fail_instruments):
         self._log = log
         self._instrument_rows = instrument_rows
         self._existing = existing
+        self._fail_instruments = fail_instruments
         self._rows = []
         self._returning = None
         self.rowcount = 1
@@ -71,6 +131,8 @@ class _FakeCursor:
         if upper.startswith("SELECT TICKER, INSTRUMENT_ID FROM INSTRUMENT"):
             self._rows = list(self._instrument_rows)
         elif upper.startswith("INSERT INTO INVESTOR_FLOW_DAILY"):
+            if params[0] in self._fail_instruments:
+                raise ValueError("의도된 개별 행 DB 실패")
             # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신=(True,) /
             # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key = (params[0], params[1])
@@ -98,7 +160,7 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, instruments=None, existing=None, instrument_rows=None):
+    def __init__(self, instruments=None, existing=None, instrument_rows=None, fail_instruments=()):
         self.log = []
         if instrument_rows is not None:
             self.instrument_rows = list(instrument_rows)
@@ -106,9 +168,12 @@ class _FakeConn:
             instruments = instruments if instruments is not None else {"005930": "inst_samsung"}
             self.instrument_rows = list(instruments.items())
         self.existing = dict(existing or {})
+        self.fail_instruments = set(fail_instruments)
 
     def cursor(self):
-        return _FakeCursor(self.log, self.instrument_rows, self.existing)
+        return _FakeCursor(
+            self.log, self.instrument_rows, self.existing, self.fail_instruments,
+        )
 
 
 def _fake_connect(conn):
@@ -194,7 +259,7 @@ def test_마스터_미등록_종목은_적재하지_않고_수치로_남는다(t
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
-    assert load_etf_flow.run(storage, "R1", db=_db()) == 0
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 2
 
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 등록된 것만
     log = _log(storage)
@@ -230,7 +295,7 @@ def test_MIC_가로지른_중복_ticker_는_적재하지_않고_센다(tmp_path,
     ])
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
-    assert load_etf_flow.run(storage, "R1", db=_db()) == 0
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 2
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 모호하지 않은 것만
     log = _log(storage)
     assert log["created"] == 1
@@ -248,7 +313,7 @@ def test_headline_결측_행은_격리하고_센다(tmp_path, monkeypatch):
     conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
-    assert load_etf_flow.run(storage, "R1", db=_db()) == 0
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 2
 
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 정상 행만
     log = _log(storage)
@@ -270,7 +335,7 @@ def test_비정수_값은_배치를_죽이지_않고_격리된다(tmp_path, monk
     conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
-    assert load_etf_flow.run(storage, "R1", db=_db()) == 0   # 롤백 아님 — 정상 종료
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 2   # 롤백 아님 — 성공 범위 보존
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 정상 행은 살아남는다
     log = _log(storage)
     assert log["created"] == 1
@@ -338,7 +403,7 @@ def test_결손_행은_적재하지_않고_센다(tmp_path, monkeypatch):
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
-    assert load_etf_flow.run(storage, "R1", db=_db()) == 0
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 2
     log = _log(storage)
     assert log["created"] == 1
     assert log["skipped_missing_identity"] == 1
@@ -359,7 +424,7 @@ def test_비문자열_정체성은_배치를_죽이지_않고_격리된다(tmp_p
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
-    assert load_etf_flow.run(storage, "R1", db=_db()) == 0   # 롤백 아님 — 정상 종료
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 2   # 롤백 아님 — 성공 범위 보존
     assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]  # 정상 행은 살아남는다
     log = _log(storage)
     assert log["created"] == 1
@@ -397,3 +462,177 @@ def test_적재_실패는_롤백되고_로그에_남는다(tmp_path, monkeypatch
     assert log["created"] == 0
     assert log["failures"][0]["reasons"] == ["load_error"]
     assert "connection refused" in log["failures"][0]["error"]
+
+
+def test_정상_manifest는_direct_key만_읽고_물리행과_winner를_분리한다(
+        tmp_path, monkeypatch):
+    # WHY(ALPHA-1041): winner 하나를 위해 canonical prefix를 LIST하거나 물리 파일의 모든 행을
+    # 논리 처리량으로 세면 풀스캔 회귀와 실제 처리 범위를 관측에서 구분할 수 없다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [
+        _flow_row("005930"), _flow_row("000660"),
+    ])
+    _write_manifest(inner)
+    storage = _TrackingStorage(inner)
+    conn = _FakeConn(instruments={"005930": "inst_samsung"})
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+
+    canonical_key = (
+        f"{canonical_investor_flow_partition('KR', '2026-07-16')}/part-00000.parquet"
+    )
+    assert storage.list_calls == []
+    assert storage.get_calls == [
+        canonical_run_manifest_key("investor_flow_daily", "N1"), canonical_key,
+    ]
+    log = _log(inner)
+    assert log["manifest_partitions"] == 1 and log["manifest_winners"] == 1
+    assert log["physical_rows_read"] == 2 and log["logical_rows_read"] == 1
+    assert _inserts(conn)[0][-1] == "N1"
+
+
+def test_빈_completed_manifest는_canonical을_LIST_GET하지_않고_성공한다(
+        tmp_path, monkeypatch):
+    # WHY(ALPHA-1041): 유효한 무데이터 런은 전체 canonical 탐색의 신호가 아니라 성공 0건이다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_manifest(inner, partitions=[])
+    storage = _TrackingStorage(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("investor_flow_daily", "N1")]
+    assert _inserts(conn) == []
+    log = _log(inner)
+    assert log["manifest_partitions"] == log["manifest_winners"] == 0
+    assert log["physical_rows_read"] == log["logical_rows_read"] == 0
+
+
+@pytest.mark.parametrize(("field", "bad_value"), [
+    ("run_id", "OTHER"),
+    ("producer", "normalize_price"),
+    ("canonical_written", False),
+])
+def test_wrong_run_producer_completion_manifest는_fallback없이_fatal이다(
+        tmp_path, monkeypatch, field, bad_value):
+    # WHY(ALPHA-1041): 계보가 다른/미완료 manifest를 복구 fullscan으로 대체하면 승인되지 않은
+    # canonical 데이터가 정상 경로에 섞인다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [_flow_row()])
+    _write_manifest(inner)
+    payload = _manifest_payload(inner)
+    payload[field] = bad_value
+    _put_manifest_payload(inner, payload)
+    storage = _TrackingStorage(inner)
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(_FakeConn()))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("investor_flow_daily", "N1")]
+
+
+def test_manifest_결손은_canonical_fallback없이_fatal이다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1041): 정상 run manifest가 없다는 사실은 전체 canonical을 대신 읽을 근거가 아니다.
+    inner = LocalStorage(tmp_path / "lake")
+    storage = _TrackingStorage(inner)
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(_FakeConn()))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("investor_flow_daily", "N1")]
+
+
+@pytest.mark.parametrize("mutation", ["key", "sha", "winner_missing", "winner_duplicate",
+                                       "winner_unsorted", "partition_duplicate"])
+def test_manifest_key_sha_winner_partition_계약_위반은_fatal이다(
+        tmp_path, monkeypatch, mutation):
+    # WHY(ALPHA-1041): direct key/SHA와 정렬·고유 winner 계약이 느슨하면 다른 파티션 또는
+    # 변조된 파일을 읽고도 현재 run 성공으로 귀속한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _flow_row("005930"), _flow_row("000660"),
+    ])
+    _write_manifest(storage)
+    payload = _manifest_payload(storage)
+    part = payload["canonical_partitions"][0]
+    if mutation == "key":
+        part["key"] = part["key"].replace("2026-07-16", "2026-07-15")
+    elif mutation == "sha":
+        part["sha256"] = "not-a-sha"
+    elif mutation == "winner_missing":
+        part.pop("winner_ids")
+    elif mutation == "winner_duplicate":
+        part["winner_ids"] = [{"ticker": "005930"}, {"ticker": "005930"}]
+    elif mutation == "winner_unsorted":
+        part["winner_ids"] = [{"ticker": "005930"}, {"ticker": "000660"}]
+    else:
+        payload["canonical_partitions"].append(dict(part))
+    _put_manifest_payload(storage, payload)
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(_FakeConn()))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert _log(storage)["failures"][0]["reasons"] == ["load_error"]
+
+
+def test_manifest_SHA와_실제_canonical이_다르면_fatal이다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1041): manifest 확정 뒤 바뀐 바이트를 읽으면 producer가 검증한 commit이 아니다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_flow_row()])
+    _write_manifest(storage)
+    _write_canonical(storage, "KR", "2026-07-16", [_flow_row(net_qty_individual=-1)])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert _inserts(conn) == []
+
+
+@pytest.mark.parametrize("failure", ["missing", "duplicate", "partition_identity"])
+def test_manifest_winner의_물리_정합성_위반은_fatal이다(
+        tmp_path, monkeypatch, failure):
+    # WHY(ALPHA-1041): manifest에 승인된 winner가 없거나 두 번 존재하거나 다른 파티션 정체성을
+    # 가지면 일부/오염 적재보다 run 전체 fatal이 안전하다.
+    storage = LocalStorage(tmp_path / "lake")
+    if failure == "missing":
+        rows = [_flow_row("000660")]
+    elif failure == "duplicate":
+        rows = [_flow_row("005930"), _flow_row("005930")]
+    else:
+        rows = [_flow_row("005930", market="US")]
+    _write_canonical(storage, "KR", "2026-07-16", rows)
+    _write_manifest(storage)
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(_FakeConn()))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+
+
+def test_개별_SQL_실패는_savepoint로_격리하고_다른_성공행을_보존한다(
+        tmp_path, monkeypatch):
+    # WHY(ALPHA-1041): 한 종목 SQL 오류가 같은 manifest의 정상 winner까지 롤백시키면 부분 실패
+    # 범위를 보존한다는 exit 2 계약이 거짓이 된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _flow_row("000660"), _flow_row("005930"),
+    ])
+    _write_manifest(storage, partitions=[{
+        "market": "KR", "trade_date": "2026-07-16",
+        "key": f"{canonical_investor_flow_partition('KR', '2026-07-16')}"
+               "/part-00000.parquet",
+        "winner_ids": [{"ticker": "000660"}, {"ticker": "005930"}],
+    }])
+    conn = _FakeConn(
+        instruments={"000660": "inst_hynix", "005930": "inst_samsung"},
+        fail_instruments={"inst_hynix"},
+    )
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
+
+    assert load_etf_flow.run(storage, "R1", db=_db(), input_run_id="N1") == 2
+    log = _log(storage)
+    assert log["created"] == 1 and len(log["failures"]) == 1
+    commands = [sql for sql, _ in conn.log]
+    assert commands.count("SAVEPOINT investor_flow_row") == 2
+    assert commands.count("ROLLBACK TO SAVEPOINT investor_flow_row") == 1
+    assert commands.count("RELEASE SAVEPOINT investor_flow_row") == 2
+    assert log["ops"] == {"records_out": 1, "failed_records": 1}

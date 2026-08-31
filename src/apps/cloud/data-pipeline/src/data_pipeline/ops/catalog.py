@@ -290,6 +290,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="NORMALIZE_INVESTOR", stage="normalize", dataset="investor_flow_daily",
         required=True, cli_command=("normalize-investor",), sfn_state_name="NormalizeInvestor",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+        fulfilled_exit_codes=(0, 2),
     ),
     # ── 적재 6 (rds task-def) ─────────────────────────────────────────────────────
     CatalogEntry(
@@ -334,6 +335,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="LOAD_ETF_FLOW", stage="feature", dataset="investor_flow_load", required=True,
         cli_command=("load-etf-flow",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfFlow",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
+        fulfilled_exit_codes=(0, 2),
     ),
     # ── corp_code enrichment (rds_dart) ───────────────────────────────────────────
     CatalogEntry(

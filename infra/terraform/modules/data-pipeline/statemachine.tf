@@ -259,10 +259,10 @@ locals {
     {
       # 투자자 수급 적재(ALPHA-385) — canonical investor_flow_daily → investor_flow_daily.
       # LoadEtfNav·LoadPriceDaily·LoadEtfHoldings 와 같은 슬롯(normalize 뒤 canonical 을 읽는다).
-      # 창 미지정 = canonical 전체 스캔 + 멱등(순매수 값이 바뀐 정정만 UPDATE).
+      # 같은 run의 NormalizeInvestor manifest가 지목한 direct key와 winner만 읽는다.
       state        = "LoadEtfFlow"
       taskdef_key  = "rds"
-      command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id)"
+      command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # 장중 투자자 추정 적재(ALPHA-768·1036) — 현재 normalize manifest의 직접 parquet와
@@ -320,14 +320,13 @@ locals {
     }
   ]
 
-  # NormalizePrice exit 2는 성공 winner manifest를 확정한 부분 실패다. 다른 normalize는
-  # 전량 성공이어야 하며, price만 exit 2여도 feature를 실행한다. 마지막 판정은 아래의 엄격한
-  # normalize_success_checks를 다시 사용해 전체 SFN을 FAILED로 닫는다.
-  normalize_non_price_success_checks = [
+  # NormalizePrice·NormalizeInvestor exit 2는 성공 winner manifest를 확정한 부분 실패다.
+  # 둘은 feature를 실행하되 마지막 strict gate에서 전체 SFN을 FAILED로 닫는다.
+  normalize_non_partial_success_checks = [
     for index, job in local.market_normalize_jobs : {
       Variable     = "$.normalize_results[${index}].status"
       StringEquals = "succeeded"
-    } if job.state != "NormalizePrice"
+    } if !contains(["NormalizePrice", "NormalizeInvestor"], job.state)
   ]
   normalize_price_index = index(
     [for job in local.market_normalize_jobs : job.state],
@@ -353,9 +352,33 @@ locals {
       },
     ]
   }
+  normalize_investor_index = index(
+    [for job in local.market_normalize_jobs : job.state],
+    "NormalizeInvestor",
+  )
+  normalize_investor_continue_check = {
+    Or = [
+      {
+        Variable     = "$.normalize_results[${local.normalize_investor_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.normalize_results[${local.normalize_investor_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.normalize_results[${local.normalize_investor_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
   normalize_continue_checks = concat(
-    local.normalize_non_price_success_checks,
-    [local.normalize_price_continue_check],
+    local.normalize_non_partial_success_checks,
+    [local.normalize_price_continue_check, local.normalize_investor_continue_check],
   )
 
   feature_success_checks = [
@@ -365,14 +388,13 @@ locals {
     }
   ]
 
-  # LoadPriceDaily exit 2는 manifest 성공 winner를 DB에 보존한 부분 실패다. 트리거는 그
-  # 성공 범위를 계속 처리하되 마지막 RawPartialCheck의 strict feature_success_checks가
-  # 전체 SFN을 FAILED로 닫는다. 다른 feature는 전량 성공이어야 한다.
-  feature_non_price_load_success_checks = [
+  # LoadPriceDaily·LoadEtfFlow exit 2는 성공 winner를 DB에 보존한 부분 실패다. 트리거는
+  # 계속 처리하되 마지막 strict gate가 전체 SFN을 FAILED로 닫는다.
+  feature_non_partial_success_checks = [
     for index, job in local.market_feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
       StringEquals = "succeeded"
-    } if job.state != "LoadPriceDaily"
+    } if !contains(["LoadPriceDaily", "LoadEtfFlow"], job.state)
   ]
   feature_price_index = index(
     [for job in local.market_feature_jobs : job.state],
@@ -398,9 +420,33 @@ locals {
       },
     ]
   }
+  feature_etf_flow_index = index(
+    [for job in local.market_feature_jobs : job.state],
+    "LoadEtfFlow",
+  )
+  feature_etf_flow_continue_check = {
+    Or = [
+      {
+        Variable     = "$.feature_results[${local.feature_etf_flow_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.feature_results[${local.feature_etf_flow_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.feature_results[${local.feature_etf_flow_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
   feature_continue_checks = concat(
-    local.feature_non_price_load_success_checks,
-    [local.feature_price_continue_check],
+    local.feature_non_partial_success_checks,
+    [local.feature_price_continue_check, local.feature_etf_flow_continue_check],
   )
 
   ecs_run_task_base = {
@@ -623,12 +669,13 @@ locals {
           "Message.$" = "States.JsonToString($)"
         }
       }
-      # 정제 전량 성공 또는 NormalizePrice exit 2일 때 **마스터 적재**로 넘어간다.
+      # 정제 전량 성공 또는 manifest producer(price/investor) exit 2일 때 **마스터 적재**로 넘어간다.
       #
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면
-      # 다른 적재 잡은 아직 canonical full-scan으로 다음 런에 회복되지만 LoadPriceDaily는 현재
-      # manifest만 읽는다. 그래서 price exit 2의 성공 winner는 이 실행에서 반드시 적재한다.
+      # 다른 적재 잡은 아직 canonical full-scan으로 다음 런에 회복되지만 LoadPriceDaily와
+      # LoadEtfFlow는 현재 manifest만 읽는다. 그래서 producer exit 2의 성공 winner는 이 실행에서
+      # 반드시 적재한다.
       # 종목·ETF 마스터 적재 — feature 병렬 **앞 직렬**이다(ALPHA-462). fact 로더들
       # (LoadEtfNav·LoadPriceTriggers)이 instrument/etf_profile 을 FK 로 참조하는데, 같은
       # 병렬 페이즈에 두면 마스터 커밋 전에 fact 로더가 instrument 스냅샷을 읽어 그 ETF 를
@@ -784,6 +831,18 @@ locals {
                 },
                 {
                   Variable      = "$.feature_results[${local.feature_price_index}].exit_code"
+                  NumericEquals = 2
+                },
+              ]
+            },
+            {
+              And = [
+                {
+                  Variable  = "$.feature_results[${local.feature_etf_flow_index}].exit_code"
+                  IsPresent = true
+                },
+                {
+                  Variable      = "$.feature_results[${local.feature_etf_flow_index}].exit_code"
                   NumericEquals = 2
                 },
               ]
