@@ -1130,7 +1130,7 @@ def test_latest_good_gets_three_pointers_first_and_never_lists_canonical(tmp_pat
 @pytest.mark.parametrize("damage", [
     "corrupt_json", "wrong_dataset", "wrong_producer", "wrong_market", "bad_date",
     "bad_run", "wrong_key", "bad_sha", "duplicate_object", "unsorted_objects",
-    "dangling_artifact", "partition_identity_mismatch",
+    "empty_artifact", "dangling_artifact", "partition_identity_mismatch",
 ])
 def test_invalid_latest_good_input_fails_before_any_db_write(
         tmp_path, monkeypatch, damage):
@@ -1162,6 +1162,11 @@ def test_invalid_latest_good_input_fails_before_any_db_write(
         extra = dict(pointer["objects"][0])
         extra["key"] = "z/part.parquet"
         pointer["objects"] = [extra, pointer["objects"][0]]
+    elif damage == "empty_artifact":
+        _write_canonical(storage, "KR", "2026-07-15", [])
+        empty_bytes = storage.get_bytes(artifact_key)
+        pointer["objects"][0]["sha256"] = hashlib.sha256(empty_bytes).hexdigest()
+        pointer["objects"][0]["rows"] = 0
     elif damage == "dangling_artifact":
         storage.delete_keys([artifact_key])
     elif damage == "partition_identity_mismatch":

@@ -121,6 +121,10 @@ def _read_latest_good_inputs(storage: Storage, input_io: dict[str, int | None]) 
         object_keys = [obj["key"] for obj in pointer["objects"]]
         if object_keys != sorted(object_keys) or len(object_keys) != len(set(object_keys)):
             raise LatestGoodError(f"latest-good objects가 정렬·유일하지 않다: {dataset}")
+        if any(obj["rows"] == 0 for obj in pointer["objects"]):
+            # producer는 빈 정상 런에서 alias를 보존한다. 따라서 0행 pointer는 정상 상태가
+            # 아니라 pointer와 artifact가 함께 변조된 경우까지 포함한 계약 위반이다.
+            raise LatestGoodError(f"latest-good artifact가 비었다: {dataset}")
         inputs[dataset] = {
             "pointer": pointer,
             "pointer_key": pointer_key,
