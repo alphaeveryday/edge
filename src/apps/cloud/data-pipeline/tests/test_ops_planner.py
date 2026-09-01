@@ -1128,6 +1128,30 @@ def test_EOD_수급_exit_0_2_1은_성공범위와_최종실패를_동시에_보�
     assert 'Default = "PipelineFailed"' in final
 
 
+def test_ETF_NAV_exit_0_2_1은_하류진행과_최종실패를_동시에_보존한다():
+    """WHY(ALPHA-1042·1043): producer/consumer exit 2의 성공 범위는 이어 처리하되 SFN
+    성공으로 세탁하면 안 되고, exit 1은 신뢰할 범위가 없어 하류를 막아야 한다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+    assert (
+        "States.Array('load-etf-nav', '--run-id', $.run_id, "
+        "'--input-run-id', $.run_id)" in sm
+    )
+    normalize = sm.split("normalize_etf_nav_continue_check = {", 1)[1].split(
+        "normalize_continue_checks = concat", 1)[0]
+    assert "NumericEquals = 2" in normalize and "NumericEquals = 1" not in normalize
+    loader = sm.split("feature_etf_nav_continue_check = {", 1)[1].split(
+        "feature_continue_checks = concat", 1)[0]
+    assert "NumericEquals = 2" in loader and "NumericEquals = 1" not in loader
+    partial = sm.split("FeaturePartialCheck = {", 1)[1].split(
+        "NotifyFeaturePartial = {", 1)[0]
+    assert "local.feature_etf_nav_index" in partial
+    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
+    assert "local.normalize_success_checks" in final
+    assert "local.feature_success_checks" in final
+    assert 'Default = "PipelineFailed"' in final
+
+
 def test_가격_트리거는_DB_loader_뒤에서_manifest_범위를_처리하고_strict_마감한다():
     """WHY(ALPHA-1039): 트리거가 feature Parallel 안에 남으면 가격·holdings commit보다 먼저
     읽는 경합이 생긴다. 두 loader의 exit 0/2 뒤에는 실행하되, 어느 부분 실패도 전체 SFN
