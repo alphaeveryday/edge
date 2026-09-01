@@ -35,6 +35,7 @@ from ..lake import (
     Storage,
     canonical_etf_nav_partition,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
     is_raw_etf_nav_key,
     parse_raw_etf_nav_key,
     quality_log_key,
@@ -205,6 +206,7 @@ def _merge_partition(
 
 def _write_canonical(
     storage: Storage, passing: list[dict], conflicts: list[dict],
+    superseded: list[dict], run_id: str,
 ) -> tuple[list[dict], int]:
     """통과 행을 (market,trade_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
     반환: (이번 실행 winner manifest 파티션, 병합 뒤 canonical 행 수)."""
@@ -235,17 +237,37 @@ def _write_canonical(
         digest = hashlib.sha256(parquet_bytes).hexdigest()
         if hashlib.sha256(storage.get_bytes(key)).hexdigest() != digest:
             raise OSError(f"canonical parquet 무결성 검증 실패: {key}")
+        # shared canonical 은 다음 정제 런이 덮어쓴다. 완료 manifest가 그 가변 객체를 가리키면
+        # 다음 런과 consumer가 겹칠 때 앞 manifest의 SHA가 깨진다. 같은 바이트를 run-scoped
+        # artifact로 확정하고 하류에는 이 불변 키만 공개한다(공시 manifest와 같은 규약).
+        run_key = canonical_run_partition_key(DATASET, run_id, trade_date)
+        storage.put_bytes(run_key, parquet_bytes)
+        if hashlib.sha256(storage.get_bytes(run_key)).hexdigest() != digest:
+            raise OSError(f"run canonical parquet 무결성 검증 실패: {run_key}")
         conflicted = {
             item["etf_id"] for item in conflicts
             if item["market"] == market and item["trade_date"] == trade_date
         }
+        merged_by_id = {row["etf_id"]: row for row in merged}
+        current_by_id = {row["etf_id"]: row for row in current_winners}
+        for etf_id, current in sorted(current_by_id.items()):
+            if etf_id in conflicted or merged_by_id.get(etf_id) == current:
+                continue
+            canonical = merged_by_id.get(etf_id)
+            superseded.append({
+                "market": market, "etf_id": etf_id, "trade_date": trade_date,
+                "current_fetched_at": current.get("fetched_at"),
+                "canonical_fetched_at": canonical.get("fetched_at") if canonical else None,
+                "reason": "superseded_by_canonical",
+            })
         winner_ids = [
             {"etf_id": etf_id}
-            for etf_id in sorted({row["etf_id"] for row in current_winners} - conflicted)
+            for etf_id, current in sorted(current_by_id.items())
+            if etf_id not in conflicted and merged_by_id.get(etf_id) == current
         ]
         if winner_ids:
             partitions.append({
-                "market": market, "trade_date": trade_date, "key": key,
+                "market": market, "trade_date": trade_date, "key": run_key,
                 "sha256": digest, "winner_ids": winner_ids,
             })
         rows_written += len(merged)
@@ -344,12 +366,15 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     # 스코프든 전체 런이든 canonical 을 쓴다(ALPHA-389) — 병합이 기존 행을 읽어 합친다.
     conflicts: list[dict] = []
+    superseded: list[dict] = []
     partitions: list[dict] = []
     canonical_rows = 0
     canonical_written = False
     if manifest_initialized:
         try:
-            partitions, canonical_rows = _write_canonical(storage, passing, conflicts)
+            partitions, canonical_rows = _write_canonical(
+                storage, passing, conflicts, superseded, run_id,
+            )
             canonical_written = True
         except Exception:
             logger.exception("canonical 적재·무결성 검증 실패")
@@ -382,6 +407,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "canonical_rows_written": canonical_rows,
                 "manifest_winners": manifest_winners,
                 "same_timestamp_conflicts": conflicts,
+                "superseded_current_rows": superseded,
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
             }, ensure_ascii=False).encode("utf-8"),

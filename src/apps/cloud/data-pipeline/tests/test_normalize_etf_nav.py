@@ -13,6 +13,7 @@ from data_pipeline.lake import (
     LocalStorage,
     canonical_etf_nav_partition,
     canonical_run_manifest_key,
+    canonical_run_partition_key,
 )
 from data_pipeline.steps import normalize_etf_nav
 
@@ -40,8 +41,10 @@ def _write_raw(storage, key, rows):
     storage.put_bytes(key, body.encode("utf-8"))
 
 
-def _quality_log(storage):
+def _quality_log(storage, run_id=None):
     keys = list(storage.list_keys("operations_archive/data_quality_logs/"))
+    if run_id is not None:
+        keys = [key for key in keys if f"/run_id={run_id}/" in key]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
@@ -270,9 +273,57 @@ def test_manifest는_재확정과_최신_winner를_정렬해_직접키_sha로_�
         ("2026-07-16", [{"etf_id": "069500"}, {"etf_id": "091160"}]),
     ]
     for part in parts:
+        assert part["key"] == canonical_run_partition_key(
+            "etf_nav", "N1", part["trade_date"],
+        )
         assert part["sha256"] == hashlib.sha256(storage.get_bytes(part["key"])).hexdigest()
     rows = {row["etf_id"]: row for row in _canonical_rows(storage)}
     assert rows["091160"]["nav"] == pytest.approx(200)
+
+
+def test_오래된_현재행은_canonical_winner_계보를_주장하지_않는다(tmp_path):
+    # WHY(ALPHA-1042): 앞 런의 더 최신 NAV가 canonical에 있으면 늦게 도착한 과거 관측은
+    # 그 값을 재확인하지 않았다. manifest에 ID를 넣으면 consumer가 최신값에 현재 run_id를
+    # stamp해 거짓 lineage를 만든다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(run_id="R-new"), [
+        _kis_nav_row(nav="200", fetched_at="2026-07-21T06:00:00+00:00"),
+    ])
+    assert normalize_etf_nav.run(storage, "N-new", "R-new") == 0
+    _write_raw(storage, _raw_key(run_id="R-old"), [
+        _kis_nav_row(nav="100", fetched_at="2026-07-20T06:00:00+00:00"),
+    ])
+
+    assert normalize_etf_nav.run(storage, "N-old", "R-old") == 0
+    assert _manifest(storage, "N-old")["canonical_partitions"] == []
+    assert _canonical_rows(storage)[0]["nav"] == pytest.approx(200)
+    assert _quality_log(storage, "N-old")["superseded_current_rows"] == [{
+        "market": "KR", "etf_id": "069500", "trade_date": "2026-07-16",
+        "current_fetched_at": "2026-07-20T06:00:00+00:00",
+        "canonical_fetched_at": "2026-07-21T06:00:00+00:00",
+        "reason": "superseded_by_canonical",
+    }]
+
+
+def test_run_scoped_manifest는_shared_canonical_덮어쓰기후에도_불변이다(tmp_path):
+    # WHY(ALPHA-1042): 다음 normalize가 날짜 canonical을 덮어써도 먼저 완료된 manifest의
+    # direct key와 SHA는 유지돼야 앞 consumer의 재시도가 경합 없이 같은 winner를 읽는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(run_id="R1"), [
+        _kis_nav_row(nav="100", fetched_at="2026-07-20T06:00:00+00:00"),
+    ])
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    old_part = _manifest(storage, "N1")["canonical_partitions"][0]
+    old_bytes = storage.get_bytes(old_part["key"])
+
+    _write_raw(storage, _raw_key(run_id="R2"), [
+        _kis_nav_row(nav="200", fetched_at="2026-07-21T06:00:00+00:00"),
+    ])
+    assert normalize_etf_nav.run(storage, "N2", "R2") == 0
+
+    assert storage.get_bytes(old_part["key"]) == old_bytes
+    assert normalize_etf_nav._read_parquet_rows(old_bytes)[0]["nav"] == pytest.approx(100)
+    assert _canonical_rows(storage)[0]["nav"] == pytest.approx(200)
 
 
 def test_동일최신시각의_상이nav는_그_id만_제외하고_exit2다(tmp_path):
@@ -322,7 +373,9 @@ def test_manifest_commit순서와_동일run_멱등성을_고정한다(tmp_path):
 def test_storage와_manifest_무결성_실패는_exit1이고_완료를_남기지_않는다(tmp_path):
     # WHY(ALPHA-1042): canonical/quality/manifest 중 하나라도 신뢰할 수 없으면 부분 성공이
     # 아니라 fatal이며, 같은 run의 이전 completed marker도 공개돼서는 안 된다.
-    for failing_prefix in ("canonical/market_data/etf_nav", "data_quality_logs"):
+    for failing_prefix in (
+        "canonical/market_data/etf_nav", "canonical_run_artifacts", "data_quality_logs",
+    ):
         inner = LocalStorage(tmp_path / failing_prefix.replace("/", "_"))
         _write_raw(inner, _raw_key(), [_kis_nav_row()])
         assert normalize_etf_nav.run(_TrackingStorage(inner, fail_put=failing_prefix), "N1", "R1") == 1
