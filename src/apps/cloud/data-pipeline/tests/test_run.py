@@ -1023,7 +1023,7 @@ def test_load_etf_holdings_rejects_invalid_recovery_window(monkeypatch, argv):
     ("load-etf-holdings", "load_etf_holdings", ["load-etf-holdings", "--all"]),
     ("load-price-triggers", "load_price_triggers", ["load-price-triggers", "--all"]),
     ("normalize-news", "normalize_news", ["normalize-news"]),
-    ("load-instruments", "load_instruments", ["load-instruments"]),
+    ("load-instruments", "load_instruments", ["load-instruments", "--latest-good"]),
 ])
 def test_canonical_holdings_consumers_get_the_universe_root_filter(monkeypatch, step, module, argv):
     """canonical holdings 를 읽는 스텝은 **전부** 유니버스 뿌리 필터를 받는다 (ALPHA-855 선행).
@@ -1055,8 +1055,8 @@ def test_canonical_holdings_consumers_get_the_universe_root_filter(monkeypatch, 
     assert captured["expected_etfs"], "필터가 비면 전량 통과라 안 건 것과 같다"
 
 
-def test_load_instruments_phase1_exposes_explicit_modes_and_keeps_live_compatibility(monkeypatch):
-    """SFN을 바꾸기 전 image가 no-arg를 거부하면 배포 순간 정상 시장 런이 끊긴다(ALPHA-1048)."""
+def test_load_instruments_requires_exactly_one_explicit_input_mode(monkeypatch):
+    """정상과 복구 범위를 생략하면 canonical 전량을 조용히 읽는 회귀를 막는다(ALPHA-1048)."""
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     from data_pipeline import run as run_mod
 
@@ -1071,10 +1071,11 @@ def test_load_instruments_phase1_exposes_explicit_modes_and_keeps_live_compatibi
 
     assert main(["load-instruments", "--latest-good"]) == 0
     assert main(["load-instruments", "--all"]) == 0
-    assert main(["load-instruments"]) == 0
-    assert captured == [(True, False), (False, True), (False, False)]
+    assert captured == [(True, False), (False, True)]
 
-    with pytest.raises(SystemExit, match="함께 쓸 수 없다"):
+    with pytest.raises(SystemExit, match="정확히 하나"):
+        main(["load-instruments"])
+    with pytest.raises(SystemExit, match="정확히 하나"):
         main(["load-instruments", "--latest-good", "--all"])
     with pytest.raises(SystemExit, match="load-instruments 전용"):
         main(["normalize-etf", "--latest-good"])
