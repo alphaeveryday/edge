@@ -8,6 +8,7 @@
 
 import io
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -208,12 +209,21 @@ class _FakeConn:
 def _setup(monkeypatch, conn):
     from contextlib import contextmanager
 
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # ALPHA-1052 회수 fixture는 08-25 manifest가 7일 창 안에 있다는 전제다.
+            # 벽시계를 쓰면 09-02부터 같은 입력이 stale로 바뀌어 계약 테스트가 날짜에 진다.
+            frozen = cls(2026, 8, 28, tzinfo=timezone.utc)
+            return frozen.astimezone(tz) if tz is not None else frozen.replace(tzinfo=None)
+
     @contextmanager
     def _c(config):
         yield conn
 
     monkeypatch.setattr(load_assertions, "connect", _c)
     monkeypatch.setattr(load_assertions, "load_resolution_index", lambda c: _INDEX)
+    monkeypatch.setattr(load_assertions, "datetime", _Clock)
 
 
 def _db() -> DbConfig:
