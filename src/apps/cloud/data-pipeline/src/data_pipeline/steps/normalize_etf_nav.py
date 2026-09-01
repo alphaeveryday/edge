@@ -508,36 +508,38 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if (failures or conflicts) and exit_code == 0:
         exit_code = _PARTIAL_EXIT_CODE
 
+    quality_key = quality_log_key(DATASET, checked_date, run_id)
+    quality_payload = {
+        "run_id": run_id,
+        "job_name": JOB_NAME,
+        "dataset": DATASET,
+        "input_run_id": input_run_id,
+        "raw_files": len(raw_keys),
+        "records_read": read,
+        "records_passed": len(passing),
+        "records_failed": len(failures),
+        # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
+        "ops": {
+            "records_out": manifest_winners,
+            "failed_records": len(failures) + len(conflicts),
+        },
+        "failures": failures,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+        "canonical_partitions_written": len(partitions),
+        "canonical_rows_written": canonical_rows,
+        "manifest_winners": manifest_winners,
+        "same_timestamp_conflicts": conflicts,
+        "superseded_current_rows": superseded,
+        "exit_code": exit_code,
+        "started_at": started_at.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
     quality_written = True
     try:
         storage.put_bytes(
-            quality_log_key(DATASET, checked_date, run_id),
-            json.dumps({
-                "run_id": run_id,
-                "job_name": JOB_NAME,
-                "dataset": DATASET,
-                "input_run_id": input_run_id,
-                "raw_files": len(raw_keys),
-                "records_read": read,
-                "records_passed": len(passing),
-                "records_failed": len(failures),
-                # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
-                "ops": {
-                    "records_out": manifest_winners,
-                    "failed_records": len(failures) + len(conflicts),
-                },
-                "failures": failures,
-                "canonical_written": canonical_written,
-                "canonical_partitions": partitions,
-                "canonical_partitions_written": len(partitions),
-                "canonical_rows_written": canonical_rows,
-                "manifest_winners": manifest_winners,
-                "same_timestamp_conflicts": conflicts,
-                "superseded_current_rows": superseded,
-                "exit_code": exit_code,
-                "started_at": started_at.isoformat(),
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-            }, ensure_ascii=False).encode("utf-8"),
+            quality_key,
+            json.dumps(quality_payload, ensure_ascii=False).encode("utf-8"),
         )
     except Exception:
         logger.exception("quality_log 기록 실패 — 검증 결과 유실")
@@ -591,6 +593,20 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             )
         except Exception:
             logger.exception("canonical run manifest retryable 표시 실패")
+
+    if quality_written and quality_payload["exit_code"] != exit_code:
+        # quality는 completed manifest보다 먼저 존재해야 한다. 그 뒤 manifest 공개만 실패하면
+        # 최초 로그의 성공 exit를 그대로 두지 않고 최종 fatal 결과로 정정한다.
+        quality_payload["exit_code"] = exit_code
+        quality_payload["finished_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            storage.put_bytes(
+                quality_key,
+                json.dumps(quality_payload, ensure_ascii=False).encode("utf-8"),
+            )
+        except Exception:
+            logger.exception("manifest 실패 뒤 quality_log 최종 상태 정정 실패")
+            exit_code = 1
 
     logger.info(
         "normalize_etf_nav 완료: raw_files=%d read=%d passed=%d failed=%d "

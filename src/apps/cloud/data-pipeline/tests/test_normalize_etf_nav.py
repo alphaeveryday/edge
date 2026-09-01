@@ -461,6 +461,7 @@ def test_storage와_manifest_무결성_실패는_exit1이고_완료를_남기지
     assert normalize_etf_nav.run(_TrackingStorage(inner, corrupt_completed=True), "N1", "R1") == 1
     assert _manifest(inner)["canonical_written"] is False
     assert _manifest(inner)["retryable"] is True
+    assert _quality_log(inner)["exit_code"] == 1
     assert normalize_etf_nav.run(inner, "N1", "R1") == 0
 
 
