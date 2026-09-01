@@ -445,6 +445,57 @@ def test_partial_normalize_exit_fulfills_dependency_but_attempt_stays_failed():
     assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
 
 
+@pytest.mark.parametrize("task_key,state_name", [
+    ("NORMALIZE_ETF", "NormalizeEtf"),
+    ("NORMALIZE_ETF_PROFILE", "NormalizeEtfProfile"),
+])
+def test_pointer_producer_exit2_fulfills_load_instruments_dependency(task_key, state_name):
+    """WHY(ALPHA-1047): producer 부분 실패는 attempt를 실패로 남기면서도 보존된 last-good
+    pointer를 소비할 LoadInstruments 의존은 충족해야 한다."""
+    db = FakeOpsDB()
+    dependencies = [
+        "NORMALIZE_PRICE", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
+        "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
+    ]
+    upstream = [
+        {"task_key": key, "expected_task_id": f"up-{index}",
+         "eligible_at": _OLD, "deadline_at": _FUTURE}
+        for index, key in enumerate(dependencies)
+    ]
+    target = next(row for row in upstream if row["task_key"] == task_key)
+    _seed(db, upstream + [
+        {"task_key": "LOAD_INSTRUMENTS", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+
+    state_names = {
+        "NORMALIZE_PRICE": "NormalizePrice",
+        "NORMALIZE_ETF": "NormalizeEtf",
+        "NORMALIZE_ETF_PROFILE": "NormalizeEtfProfile",
+        "NORMALIZE_ETF_NAV": "NormalizeEtfNav",
+        "NORMALIZE_INVESTOR": "NormalizeInvestor",
+    }
+    history = []
+    for index, key in enumerate(dependencies):
+        offset = index * 10
+        for event in _entered(
+            state_names[key], arn=f"arn:task/{key.lower()}", succeeded=True,
+            exit_code=2 if key == task_key else 0,
+        ):
+            event["id"] += offset
+            if event["previousEventId"]:
+                event["previousEventId"] += offset
+            history.append(event)
+
+    _reconcile(db, history=history)
+
+    attempt = next(row for row in db.attempts
+                   if row["etid"] == target["expected_task_id"])
+    assert attempt["status"] == states.EXEC_FAILED
+    assert db.etasks_by_id[target["expected_task_id"]]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
 def test_dependency_uses_latest_retry_not_any_past_success():
     # WHY: 앞 normalize가 성공했어도 최신 redrive가 hard-fail이면 그 manifest는 소비 가능하다고
     #      단정할 수 없다. outcome과 달리 dependency만 any-success면 loader를 MISSED로 오귀속한다.

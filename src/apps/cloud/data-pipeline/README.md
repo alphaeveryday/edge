@@ -1357,6 +1357,10 @@ settings.targets.keywords            # ["금리", ...]
   남긴다. 정규 `load-etf-holdings --input-run-id <normalize-run>` 은 이 직접 키를 GET 해 그
   파티션만 읽는다 — 과거 전체 스캔은 `--all`, 과거 일부 복구는 `--input-run-id` 또는
   `--from/--to` 를 명시한 운영 경로뿐이다. 범위 없는 호출은 거부한다(ALPHA-1011).
+  시장 SFN과 Ops 원장은 `normalize-etf`·`normalize-etf-profile` exit 2를 실패 attempt이자
+  충족된 하류 의존으로 기록한다. 이 경우 보존된 last-good 입력으로 `LoadInstruments`까지
+  진행하지만 마지막 strict gate는 전체 실행을 실패로 닫고, exit 1은 즉시 하류를 막는다
+  (ALPHA-1047 compatibility phase).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

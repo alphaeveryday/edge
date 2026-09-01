@@ -366,6 +366,7 @@ def test_instrument_incomplete_data_keeps_outcome_fulfilled():
 
 @pytest.mark.parametrize("task_key", [
     "NORMALIZE_PRICE", "LOAD_PRICE_DAILY",
+    "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
     "NORMALIZE_INVESTOR", "LOAD_ETF_FLOW",
     "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
 ])

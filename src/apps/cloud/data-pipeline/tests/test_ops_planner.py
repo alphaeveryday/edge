@@ -1152,6 +1152,44 @@ def test_ETF_NAV_exit_0_2_1은_하류진행과_최종실패를_동시에_보존�
     assert 'Default = "PipelineFailed"' in final
 
 
+def test_ETF_pointer_producer_exit_0_2_1은_마스터진행과_최종실패를_보존한다():
+    """WHY(ALPHA-1047): holdings/profile producer exit 2는 기존 last-good pointer를 보존한다.
+    이를 즉시 막으면 LoadInstruments가 안전한 입력을 못 쓰고, 성공으로 닫으면 producer 실패가 숨는다."""
+    sm = test_ops_catalog._strip_hcl_comments(
+        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
+
+    strict_exclusions = sm.split("if !contains([", 1)[1].split("], job.state)", 1)[0]
+    continue_concat = sm.split("normalize_continue_checks = concat(", 1)[1].split(
+        "feature_success_checks =", 1)[0]
+    for name, state, next_local in (
+        ("normalize_etf", "NormalizeEtf", "normalize_etf_profile_index"),
+        ("normalize_etf_profile", "NormalizeEtfProfile", "normalize_continue_checks"),
+    ):
+        index_block = sm.split(f"{name}_index = index(", 1)[1].split(
+            f"{name}_continue_check = {{", 1)[0]
+        block = sm.split(f"{name}_continue_check = {{", 1)[1].split(
+            f"{next_local} =", 1)[0]
+        assert f'"{state}"' in index_block
+        assert block.count(f"${{local.{name}_index}}") == 3
+        assert re.search(r'\.status".*?StringEquals\s*=\s*"succeeded"', block, re.S)
+        assert re.search(
+            r'\.exit_code".*?IsPresent\s*=\s*true.*?NumericEquals\s*=\s*2',
+            block, re.S,
+        )
+        assert "NumericEquals = 1" not in block
+        assert f'"{state}"' in strict_exclusions
+        assert f"local.{name}_continue_check" in continue_concat
+    gate = sm.split("NormalizeCheckResults = {", 1)[1].split(
+        "NotifyNormalizePartial = {", 1)[0]
+    assert 'Next = "NotifyNormalizePartial"' in gate
+    assert 'Default = "NotifyFailure"' in gate
+    notify = sm.split("NotifyNormalizePartial = {", 1)[1].split("LoadInstruments =", 1)[0]
+    assert re.search(r'Next\s*=\s*"LoadInstruments"', notify)
+    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
+    assert "local.normalize_success_checks" in final
+    assert 'Default = "PipelineFailed"' in final
+
+
 def test_가격_트리거는_DB_loader_뒤에서_manifest_범위를_처리하고_strict_마감한다():
     """WHY(ALPHA-1039): 트리거가 feature Parallel 안에 남으면 가격·holdings commit보다 먼저
     읽는 경합이 생긴다. 두 loader의 exit 0/2 뒤에는 실행하되, 어느 부분 실패도 전체 SFN
