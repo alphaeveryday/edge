@@ -212,6 +212,16 @@ def test_ETF_NAV_정제_호환이미지는_부분성공을_구_SFN에_0으로_�
     assert main(["normalize-etf-nav", "--run-id", "R", "--input-run-id", "R"]) == 0
 
 
+def test_ETF_NAV_적재_호환이미지는_부분성공을_구_SFN에_0으로_반환한다(monkeypatch):
+    # WHY(ALPHA-1043): exit-2 게이트보다 이미지가 먼저 배포돼도 producer 성공 winner가
+    # loader까지 흘러야 한다. quality/manifest의 실패 증거는 그대로고 CLI 코드만 한시 매핑한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setattr(run_mod.load_etf_nav, "run", lambda *args, **kwargs: 2)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-etf-nav", "--run-id", "R"]) == 0
+
+
 def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
     # WHY: KRX getJsonData 는 응답에 **10초를 넘게** 걸린다 — 2026-07-15 라이브 실측에서 같은
     #      세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에 성공했다. 기본값
@@ -708,6 +718,56 @@ def test_load_etf_flow_requires_exactly_one_explicit_scope(monkeypatch):
     for bound in ("--from", "--to"):
         with pytest.raises(SystemExit, match="함께 써야"):
             main(["load-etf-flow", "--run-id", "R", bound, "2026-08-20"])
+
+
+def test_load_etf_nav_호환단계에서도_혼합_scope는_거부한다(monkeypatch):
+    # WHY(ALPHA-1043): 첫 이미지가 구 SFN의 scope 누락만 한시적으로 받아도, 서로 다른
+    # scope 혼합까지 허용하면 대상 범위의 우선순위가 모호해진다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    for argv in (
+        ["load-etf-nav", "--run-id", "R", "--input-run-id", "N1", "--all"],
+        ["load-etf-nav", "--run-id", "R", "--input-run-id", "N1",
+         "--from", "2026-08-20", "--to", "2026-08-21"],
+    ):
+        with pytest.raises(SystemExit, match="함께 쓸 수 없다"):
+            main(argv)
+    for bound in ("--from", "--to"):
+        with pytest.raises(SystemExit, match="함께 써야"):
+            main(["load-etf-nav", "--run-id", "R", bound, "2026-08-20"])
+
+
+def test_load_etf_nav_forwards_manifest_and_recovery_scopes(monkeypatch):
+    # WHY(ALPHA-1043): 호환 이미지가 구 SFN의 무인자 호출을 보존하면서도 새 manifest와
+    # 명시된 날짜/전체 복구 범위를 정확히 전달해야 배포 순서를 안전하게 분리할 수 있다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = []
+    monkeypatch.setattr(
+        run_mod.load_etf_nav, "run", lambda *args, **kwargs: captured.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+    assert main(["load-etf-nav", "--run-id", "R"]) == 0
+    assert captured[-1]["input_run_id"] is None
+    assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
+    assert main(["load-etf-nav", "--run-id", "R", "--input-run-id", "N1"]) == 0
+    assert captured[-1]["input_run_id"] == "N1"
+    assert main(["load-etf-nav", "--run-id", "R", "--from", "2026-08-20",
+                 "--to", "2026-08-21"]) == 0
+    assert (captured[-1]["from_date"], captured[-1]["to_date"]) == (
+        "2026-08-20", "2026-08-21",
+    )
+    assert main(["load-etf-nav", "--run-id", "R", "--all"]) == 0
+    assert captured[-1]["input_run_id"] is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-08-32", "--to", "2026-08-32"],
+    ["--from", "2026-08-20", "--to", "2026-08-10"],
+])
+def test_load_etf_nav_rejects_invalid_recovery_window(monkeypatch, argv):
+    # WHY(ALPHA-1043): 불량·역전 날짜가 0건 성공이면 수동 복구 완료로 오인된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["load-etf-nav", "--run-id", "R", *argv])
 
 
 def test_load_etf_flow_forwards_manifest_and_recovery_scopes(monkeypatch):
