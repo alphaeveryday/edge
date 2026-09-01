@@ -112,11 +112,13 @@ class _FakeCursor:
     """ON CONFLICT DO NOTHING 시맨틱 흉내 + instrument 조회 응답."""
 
     def __init__(self, log, instruments, existing_nav, existing_profiles,
-                 fail_nav_instruments, fail_profile_instruments, existing_available_at):
+                 fail_nav_instruments, fail_profile_instruments, existing_available_at,
+                 existing_data_version):
         self._log = log
         self._instruments = instruments
         self._existing_nav, self._existing_profiles = existing_nav, existing_profiles
         self._existing_available_at = existing_available_at
+        self._existing_data_version = existing_data_version
         self._fail_nav_instruments = fail_nav_instruments
         self._fail_profile_instruments = fail_profile_instruments
         self._rows: list = []
@@ -151,13 +153,16 @@ class _FakeCursor:
             if self._returning is not None:
                 self._existing_nav[key] = nav
                 self._existing_available_at[key] = incoming_at
+                self._existing_data_version[key] = params[4]
         elif upper.startswith("UPDATE ETF_NAV_DAILY SET AVAILABLE_AT"):
             key = (params[2], params[3])
             same_nav = self._existing_nav.get(key) == params[4]
-            not_newer = self._existing_available_at.get(key, "") <= params[5]
-            self._returning = (True,) if same_nav and not_newer else None
+            current_at = self._existing_available_at.get(key, "")
+            monotonic = current_at < params[6] or self._existing_data_version.get(key) == params[7]
+            self._returning = (True,) if same_nav and current_at <= params[5] and monotonic else None
             if self._returning is not None:
                 self._existing_available_at[key] = params[0]
+                self._existing_data_version[key] = params[1]
 
     def fetchall(self):
         return self._rows
@@ -174,12 +179,14 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, instruments=None, existing_nav=None, existing_profiles=None,
-                 fail_nav_instruments=(), fail_profile_instruments=(), existing_available_at=None):
+                 fail_nav_instruments=(), fail_profile_instruments=(), existing_available_at=None,
+                 existing_data_version=None):
         self.log: list = []
         self.instruments = instruments if instruments is not None else {"091160": "inst_kodex"}
         self.existing_nav = dict(existing_nav or {})
         self.existing_profiles = set(existing_profiles or ())
         self.existing_available_at = dict(existing_available_at or {})
+        self.existing_data_version = dict(existing_data_version or {})
         self.fail_nav_instruments = set(fail_nav_instruments)
         self.fail_profile_instruments = set(fail_profile_instruments)
 
@@ -188,6 +195,7 @@ class _FakeConn:
             self.log, self.instruments, self.existing_nav, self.existing_profiles,
             self.fail_nav_instruments, self.fail_profile_instruments,
             self.existing_available_at,
+            self.existing_data_version,
         )
 
 
@@ -252,7 +260,8 @@ def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
 
     first, second = _log(storage, "R1"), _log(storage, "R2")
     assert first["created"] == 1 and first["already_present"] == 0
-    assert second["created"] == 0 and second["already_present"] == 1  # 신규 0 = 멱등
+    assert second["created"] == 0 and second["already_present"] == 0  # 신규 0 = 멱등
+    assert second["skipped_stale_manifest"] == 1  # 다른 run은 동일 시각 계보도 덮지 않는다
 
 
 def test_마스터_미등록_ETF_는_적재하지_않고_수치로_남는다(tmp_path, monkeypatch):
@@ -569,6 +578,7 @@ def test_같은NAV_재확정도_manifest_lineage를_stamp한다(tmp_path, monkey
     assert updates[0][1] == (
         "2026-07-20T06:00:00+00:00", "N1", "inst_kodex", "2026-07-16",
         108746.33, "2026-07-20T06:00:00+00:00",
+        "2026-07-20T06:00:00+00:00", "N1",
     )
     assert _log(storage)["already_present"] == 1
 
@@ -596,6 +606,27 @@ def test_오래된_manifest_재시도는_최신NAV와_lineage를_되돌리지_�
     log = _log(storage, "R-old")
     assert log["skipped_stale_manifest"] == 1
     assert log["ops"]["records_out"] == 0
+
+
+def test_동일관측시각의_다른run은_data_version을_되돌리지_않는다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): run_id는 시간순 키가 아니다. 같은 NAV·fetched_at의 과거 manifest가
+    # 늦게 재시도돼도 현재 lineage를 덮을 근거가 없고, 같은 run 재시도만 idempotent하다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_nav_row()])
+    _write_manifest(storage, run_id="N-old")
+    key = ("inst_kodex", "2026-07-16")
+    conn = _FakeConn(
+        existing_nav={key: 108746.33},
+        existing_available_at={key: "2026-07-20T06:00:00+00:00"},
+        existing_data_version={key: "N-new"},
+    )
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
+
+    assert load_etf_nav.run(
+        storage, "R-old", db=_db(), input_run_id="N-old",
+    ) == 0
+    assert conn.existing_data_version[key] == "N-new"
+    assert _log(storage, "R-old")["skipped_stale_manifest"] == 1
 
 
 def test_outer_commit실패는_fatal이고_성공계측을_남기지_않는다(tmp_path, monkeypatch):

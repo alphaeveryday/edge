@@ -316,9 +316,11 @@ def run(
                                 "UPDATE etf_nav_daily SET available_at = %s, data_version = %s"
                                 " WHERE etf_instrument_id = %s AND trade_date = %s"
                                 "   AND nav IS NOT DISTINCT FROM %s AND available_at <= %s"
+                                "   AND (available_at < %s OR data_version = %s)"
                                 " RETURNING TRUE",
                                 (fact["available_at"], confirmed_data_version,
-                                 instrument_id, trade_date, fact["nav"], fact["available_at"]),
+                                 instrument_id, trade_date, fact["nav"], fact["available_at"],
+                                 fact["available_at"], confirmed_data_version),
                             )
                             stale_manifest = cur.fetchone() is None
                     except Exception as exc:
