@@ -212,6 +212,16 @@ def test_ETF_NAV_정제_호환이미지는_부분성공을_구_SFN에_0으로_�
     assert main(["normalize-etf-nav", "--run-id", "R", "--input-run-id", "R"]) == 0
 
 
+def test_ETF_NAV_적재_호환이미지는_부분성공을_구_SFN에_0으로_반환한다(monkeypatch):
+    # WHY(ALPHA-1043): exit-2 게이트보다 이미지가 먼저 배포돼도 producer 성공 winner가
+    # loader까지 흘러야 한다. quality/manifest의 실패 증거는 그대로고 CLI 코드만 한시 매핑한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setattr(run_mod.load_etf_nav, "run", lambda *args, **kwargs: 2)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-etf-nav", "--run-id", "R"]) == 0
+
+
 def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
     # WHY: KRX getJsonData 는 응답에 **10초를 넘게** 걸린다 — 2026-07-15 라이브 실측에서 같은
     #      세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에 성공했다. 기본값

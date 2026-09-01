@@ -817,11 +817,14 @@ def _dispatch(args, settings, storage, run_id) -> int:
             parsed_dates.append(parsed)
         if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
             raise SystemExit("load-etf-nav의 --from은 --to보다 늦을 수 없다")
-        return load_etf_nav.run(
+        exit_code = load_etf_nav.run(
             storage, run_id, db=db_config_from_env(settings.db),
             input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
         )
+        # 구 SFN feature gate도 exit 2를 하류 차단으로 읽는다. Terraform 게이트 착지 뒤
+        # normalize 매핑과 함께 제거해 부분 성공을 최종 FAILED로 다시 드러낸다.
+        return 0 if exit_code == 2 else exit_code
 
     # ETF 구성종목 적재의 정규 경로는 normalize run manifest가 지목한 파티션만 읽는다.
     # 날짜창은 명시 백필, 전체 스캔은 --all 을 직접 쓴 경우뿐이다(ALPHA-1011).

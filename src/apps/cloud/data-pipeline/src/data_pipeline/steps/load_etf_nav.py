@@ -226,6 +226,7 @@ def run(
     physical_read = read = 0
     manifest_partitions = manifest_winners = 0
     skipped_missing_identity = skipped_unknown_etf = skipped_load_violation = 0
+    skipped_stale_manifest = 0
     already = created = updated = profiles_created = 0
     created_sample: list[dict] = []
     unknown_etfs: set[str] = set()
@@ -303,18 +304,23 @@ def run(
                             " SET nav = EXCLUDED.nav, available_at = EXCLUDED.available_at,"
                             "     data_version = EXCLUDED.data_version"
                             " WHERE etf_nav_daily.nav IS DISTINCT FROM EXCLUDED.nav"
+                            "   AND etf_nav_daily.available_at < EXCLUDED.available_at"
                             " RETURNING (xmax <> 0) AS was_update",
                             (instrument_id, trade_date, fact["nav"], fact["available_at"],
                              confirmed_data_version),
                         )
                         row = cur.fetchone()
+                        stale_manifest = False
                         if row is None:
                             cur.execute(
                                 "UPDATE etf_nav_daily SET available_at = %s, data_version = %s"
-                                " WHERE etf_instrument_id = %s AND trade_date = %s",
+                                " WHERE etf_instrument_id = %s AND trade_date = %s"
+                                "   AND nav IS NOT DISTINCT FROM %s AND available_at <= %s"
+                                " RETURNING TRUE",
                                 (fact["available_at"], confirmed_data_version,
-                                 instrument_id, trade_date),
+                                 instrument_id, trade_date, fact["nav"], fact["available_at"]),
                             )
+                            stale_manifest = cur.fetchone() is None
                     except Exception as exc:
                         cur.execute("ROLLBACK TO SAVEPOINT etf_nav_row")
                         cur.execute("RELEASE SAVEPOINT etf_nav_row")
@@ -330,6 +336,11 @@ def run(
                         if profile_created:
                             profiles_created += 1
                     if row is None:
+                        if stale_manifest:
+                            # 더 최신 관측이 이미 적재됐다. 오래된 immutable manifest 재시도가
+                            # 값·available_at·data_version을 되돌리지 못하게 단조성을 지킨다.
+                            skipped_stale_manifest += 1
+                            continue
                         # 값이 같아 UPDATE 조건이 걸러낸 경우 — 재실행의 정상 경로다.
                         already += 1
                         continue
@@ -349,6 +360,7 @@ def run(
         logger.exception("NAV 적재 실패(롤백)")
         failures.append({"reasons": ["load_error"], "error": str(exc)})
         already, created, updated, created_sample, profiles_created = 0, 0, 0, [], 0
+        skipped_stale_manifest = 0
         exit_code = 1
 
     if exit_code == 0 and (
@@ -370,6 +382,7 @@ def run(
         # 마스터가 모르는 ETF 목록 — ETF 마스터 생성(ALPHA-379)이 얼마나 필요한지의 근거다.
         "unknown_etfs": sorted(unknown_etfs),
         "skipped_load_violation": skipped_load_violation,
+        "skipped_stale_manifest": skipped_stale_manifest,
         "load_violations": load_violations,
         "etf_profiles_created": profiles_created,
         "already_present": already, "created": created, "updated": updated,

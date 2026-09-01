@@ -112,10 +112,11 @@ class _FakeCursor:
     """ON CONFLICT DO NOTHING 시맨틱 흉내 + instrument 조회 응답."""
 
     def __init__(self, log, instruments, existing_nav, existing_profiles,
-                 fail_nav_instruments, fail_profile_instruments):
+                 fail_nav_instruments, fail_profile_instruments, existing_available_at):
         self._log = log
         self._instruments = instruments
         self._existing_nav, self._existing_profiles = existing_nav, existing_profiles
+        self._existing_available_at = existing_available_at
         self._fail_nav_instruments = fail_nav_instruments
         self._fail_profile_instruments = fail_profile_instruments
         self._rows: list = []
@@ -140,13 +141,23 @@ class _FakeCursor:
             # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key, nav = (params[0], params[1]), params[2]
             prev = self._existing_nav.get(key)
+            incoming_at = params[3]
             if prev is None:
                 self._returning, self.rowcount = (False,), 1
-            elif prev == nav:
+            elif prev == nav or self._existing_available_at.get(key, "") >= incoming_at:
                 self._returning, self.rowcount = None, 0
             else:
                 self._returning, self.rowcount = (True,), 1
-            self._existing_nav[key] = nav
+            if self._returning is not None:
+                self._existing_nav[key] = nav
+                self._existing_available_at[key] = incoming_at
+        elif upper.startswith("UPDATE ETF_NAV_DAILY SET AVAILABLE_AT"):
+            key = (params[2], params[3])
+            same_nav = self._existing_nav.get(key) == params[4]
+            not_newer = self._existing_available_at.get(key, "") <= params[5]
+            self._returning = (True,) if same_nav and not_newer else None
+            if self._returning is not None:
+                self._existing_available_at[key] = params[0]
 
     def fetchall(self):
         return self._rows
@@ -163,11 +174,12 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, instruments=None, existing_nav=None, existing_profiles=None,
-                 fail_nav_instruments=(), fail_profile_instruments=()):
+                 fail_nav_instruments=(), fail_profile_instruments=(), existing_available_at=None):
         self.log: list = []
         self.instruments = instruments if instruments is not None else {"091160": "inst_kodex"}
         self.existing_nav = dict(existing_nav or {})
         self.existing_profiles = set(existing_profiles or ())
+        self.existing_available_at = dict(existing_available_at or {})
         self.fail_nav_instruments = set(fail_nav_instruments)
         self.fail_profile_instruments = set(fail_profile_instruments)
 
@@ -175,6 +187,7 @@ class _FakeConn:
         return _FakeCursor(
             self.log, self.instruments, self.existing_nav, self.existing_profiles,
             self.fail_nav_instruments, self.fail_profile_instruments,
+            self.existing_available_at,
         )
 
 
@@ -555,8 +568,34 @@ def test_같은NAV_재확정도_manifest_lineage를_stamp한다(tmp_path, monkey
                if sql.upper().startswith("UPDATE ETF_NAV_DAILY SET AVAILABLE_AT")]
     assert updates[0][1] == (
         "2026-07-20T06:00:00+00:00", "N1", "inst_kodex", "2026-07-16",
+        108746.33, "2026-07-20T06:00:00+00:00",
     )
     assert _log(storage)["already_present"] == 1
+
+
+def test_오래된_manifest_재시도는_최신NAV와_lineage를_되돌리지_않는다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): run artifact가 불변이라 과거 manifest도 재시도될 수 있다. DB에 더
+    # 최신 fetched_at이 있으면 값뿐 아니라 available_at/data_version도 단조롭게 보존해야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _nav_row(nav=100.0, fetched_at="2026-07-20T06:00:00+00:00"),
+    ])
+    _write_manifest(storage, run_id="N-old")
+    key = ("inst_kodex", "2026-07-16")
+    conn = _FakeConn(
+        existing_nav={key: 200.0},
+        existing_available_at={key: "2026-07-21T06:00:00+00:00"},
+    )
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
+
+    assert load_etf_nav.run(
+        storage, "R-old", db=_db(), input_run_id="N-old",
+    ) == 0
+    assert conn.existing_nav[key] == pytest.approx(200.0)
+    assert conn.existing_available_at[key] == "2026-07-21T06:00:00+00:00"
+    log = _log(storage, "R-old")
+    assert log["skipped_stale_manifest"] == 1
+    assert log["ops"]["records_out"] == 0
 
 
 def test_outer_commit실패는_fatal이고_성공계측을_남기지_않는다(tmp_path, monkeypatch):
