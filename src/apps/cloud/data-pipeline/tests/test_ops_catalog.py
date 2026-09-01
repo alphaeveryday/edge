@@ -473,10 +473,13 @@ def test_serial_states_inject_ops_env():
 def test_load_instruments_normal_sfn_uses_latest_good_inputs():
     """WHY(ALPHA-1048): 정상 SFN이 scope를 생략하면 shared canonical 역사를 다시 훑어
     producer가 확정한 last-good snapshot 계약과 실행 비용 상한이 동시에 깨진다."""
-    tf = _combined_tf()
+    tf = _strip_hcl_comments(_STATEMACHINE_TF.read_text(encoding="utf-8"))
+    load_instruments = tf.split(
+        "LoadInstruments = merge(local.ecs_run_task_base, {", 1,
+    )[1].split("LoadInstrumentsCheckExitCode = {", 1)[0]
     assert (
         "States.Array('load-instruments', '--run-id', $.run_id, '--latest-good')"
-    ) in tf
+    ) in load_instruments
 
 
 def test_news_load_assertions_uses_current_tag_news_manifest():
