@@ -541,7 +541,7 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 #   기간 복구: ... run tag-news --from 2026-07-01 --to 2026-07-08
 #   전체 복구: ... run tag-news --all
 
-# 종목 마스터 적재(Step4, RDB) — canonical ETF 구성종목(market=KR)의 **최신 기준일** 중
+# 종목 마스터 적재(Step4, RDB) — 세 KR latest-good pointer가 직접 지목한 불변 snapshot 중
 # **유니버스 뿌리(`krx_etf.source.etf_map`) 안 ETF 만** 읽어(뿌리 밖 구성종목을 주워 담으면
 # 수집하지도 분석하지도 않는 회사가 마스터에 선다 — KRX 상장 전종목 축은 이 필터와 무관)
 # entity/actor/company_profile/instrument/equity_profile 을 만든다. 이 저장소가 Cloud Event
@@ -553,7 +553,10 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 #
 # DB 설정은 DATA_PIPELINE_DB__* (스토리지와 같은 인프라 네임스페이스). 비밀번호는 env 주입만.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
-  uv run --package data-pipeline python -m data_pipeline.run load-instruments
+  uv run --package data-pipeline python -m data_pipeline.run load-instruments --latest-good
+# 명시적 재해 복구만 shared canonical 전체를 읽는다: ... run load-instruments --all
+# Phase 1 image는 아직 no-arg인 live SFN과의 배포 순서를 위해 no-arg legacy 호출도 임시 수용한다.
+# SFN을 --latest-good으로 전환한 뒤 strict phase에서 이 호환 경로를 제거한다(ALPHA-1048).
 
 # corp_code enrichment(RDB, ALPHA-491) — load-instruments 가 NULL 로 둔 company_profile.
 # dart_corp_code 를 OpenDART corpCode.xml 매칭으로 채운다. 공시 로더 issuer 해소(9→309)와
@@ -959,7 +962,10 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다).
   LLM 호출은 기사별로 병렬 실행한다(ALPHA-519, `LLM_CONCURRENCY` env·기본 32·상한 100) —
   카운터·격리·병합은 취합 후 메인스레드라 순차 실행과 결과가 같다
-- `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — DB 접속정보는 이 task-def 에만 주입한다.
+- `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — 정상 `--latest-good`은 세 pointer를
+  먼저 직접 GET·검증하고 그 불변 artifact만 SHA 확인 뒤 읽는다. canonical parent LIST는 0이며,
+  세 입력이 모두 검증되기 전에는 DB transaction을 열지 않는다. `--all`은 명시 복구 전용이다.
+  DB 접속정보는 이 task-def 에만 주입한다.
   공용 env 에 두면 `DbConfig` 가 password 없이 구성돼 로드 시점에 죽어 **수집·정제 스텝까지 전멸**한다
 - `enrich-corp-code`(**직렬**, load-instruments 뒤 → FeatureParallel 앞, ALPHA-491·532, **rds_dart 세트**
   =DB+DART) — company_profile 의 NULL dart_corp_code 를 corpCode.xml 매칭으로 채운다. LoadDisclosure 의
@@ -1369,6 +1375,9 @@ settings.targets.keywords            # ["금리", ...]
   가리킨다. 행/수집 부분 실패(exit 2), 빈 런, 과거 런은 기존 pointer를 보존하며, 범위 없는 복구
   정제는 shared canonical만 수렴시키고 pointer를 전진시키지 않는다. instrument profile의 수집·정제는
   계속 수동 전용이다(ALPHA-1047 producer phase).
+  `load-instruments --latest-good`은 서로 다른 source run을 가리키는 세 pointer를 함께 허용하고,
+  pointer bytes/ETag·partition·artifact SHA/물리·논리 행 수를 품질 로그에 남긴다. pointer 결손·손상·
+  dangling artifact·정체성 불일치는 shared canonical fallback 없이 exit 1이다(ALPHA-1048 Phase 1).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=
