@@ -34,11 +34,13 @@ def test_content_hash_is_deterministic():
     assert len(catalog.content_hash()) == 64  # sha256 hex
 
 
-def test_only_manifest_steps_fulfill_on_partial_exit():
-    # WHY(ALPHA-1036·1038·1040·1041·1044): 비0 성공 산출은 일반 규칙이 아니라 winner를 commit하는 정제·적재의
-    # 계약이다. 다른 작업에 exit 2를 넓히면 실제 실패가 downstream 완료로 오인된다.
+def test_only_committed_scope_steps_fulfill_on_partial_exit():
+    # WHY(ALPHA-1036·1038·1040·1041·1044·1047): 비0 성공 산출은 일반 규칙이 아니라
+    # winner manifest 또는 last-good pointer를 보존한 작업의 계약이다. 다른 작업에 exit 2를
+    # 넓히면 실제 실패가 downstream 완료로 오인된다.
     partial = {
         "NORMALIZE_PRICE", "LOAD_PRICE_DAILY",
+        "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
         "LOAD_PRICE_TRIGGERS",
         "NORMALIZE_INVESTOR", "LOAD_ETF_FLOW",
         "NORMALIZE_ETF_NAV", "LOAD_ETF_NAV",

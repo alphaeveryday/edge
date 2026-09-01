@@ -319,13 +319,17 @@ locals {
     }
   ]
 
-  # NormalizePrice·NormalizeEtfNav·NormalizeInvestor exit 2는 성공 winner를 확정한 부분 실패다.
-  # 둘은 feature를 실행하되 마지막 strict gate에서 전체 SFN을 FAILED로 닫는다.
+  # NormalizePrice·NormalizeEtf·NormalizeEtfProfile·NormalizeEtfNav·NormalizeInvestor exit 2는
+  # 성공 winner 또는 last-good pointer를 확정한 부분 실패다. feature를 실행하되 마지막 strict
+  # gate에서 전체 SFN을 FAILED로 닫는다.
   normalize_non_partial_success_checks = [
     for index, job in local.market_normalize_jobs : {
       Variable     = "$.normalize_results[${index}].status"
       StringEquals = "succeeded"
-    } if !contains(["NormalizePrice", "NormalizeEtfNav", "NormalizeInvestor"], job.state)
+      } if !contains([
+        "NormalizePrice", "NormalizeEtf", "NormalizeEtfProfile", "NormalizeEtfNav",
+        "NormalizeInvestor",
+    ], job.state)
   ]
   normalize_price_index = index(
     [for job in local.market_normalize_jobs : job.state],
@@ -399,9 +403,58 @@ locals {
       },
     ]
   }
+  normalize_etf_index = index(
+    [for job in local.market_normalize_jobs : job.state],
+    "NormalizeEtf",
+  )
+  normalize_etf_continue_check = {
+    Or = [
+      {
+        Variable     = "$.normalize_results[${local.normalize_etf_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.normalize_results[${local.normalize_etf_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.normalize_results[${local.normalize_etf_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
+  normalize_etf_profile_index = index(
+    [for job in local.market_normalize_jobs : job.state],
+    "NormalizeEtfProfile",
+  )
+  normalize_etf_profile_continue_check = {
+    Or = [
+      {
+        Variable     = "$.normalize_results[${local.normalize_etf_profile_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.normalize_results[${local.normalize_etf_profile_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.normalize_results[${local.normalize_etf_profile_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
   normalize_continue_checks = concat(
     local.normalize_non_partial_success_checks,
-    [local.normalize_price_continue_check, local.normalize_etf_nav_continue_check,
+    [local.normalize_price_continue_check, local.normalize_etf_continue_check,
+      local.normalize_etf_profile_continue_check, local.normalize_etf_nav_continue_check,
     local.normalize_investor_continue_check],
   )
 
@@ -718,7 +771,7 @@ locals {
           "Message.$" = "States.JsonToString($)"
         }
       }
-      # 정제 전량 성공 또는 manifest producer(price/NAV/investor) exit 2일 때 마스터 적재로 넘어간다.
+      # 정제 전량 성공 또는 manifest/pointer producer exit 2일 때 마스터 적재로 넘어간다.
       #
       # ⚠️ 위 raw→normalize 게이트와 **성격이 다르다**(ALPHA-389 이후). 거기는 정제가 이제
       # run 스코프라 실패 런의 raw 가 자동으로 안 주워진다(영구 격리 — 사람이 재처리). 반면

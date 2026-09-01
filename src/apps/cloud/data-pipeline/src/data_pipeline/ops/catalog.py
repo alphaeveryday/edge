@@ -275,11 +275,13 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="NORMALIZE_ETF", stage="normalize", dataset="etf_holdings", required=True,
         cli_command=("normalize-etf",), sfn_state_name="NormalizeEtf",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+        fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="NORMALIZE_ETF_PROFILE", stage="normalize", dataset="etf_profile", required=True,
         cli_command=("normalize-etf-profile",), sfn_state_name="NormalizeEtfProfile",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+        fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="NORMALIZE_ETF_NAV", stage="normalize", dataset="etf_nav", required=True,
@@ -298,9 +300,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="LOAD_INSTRUMENTS", stage="feature", dataset="instrument_master", required=True,
         cli_command=("load-instruments",), sfn_state_name="LoadInstruments",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
-        # ASL `NormalizeCheckResults`는 전량 성공 또는 NormalizePrice exit 2에서 열린다.
-        # `fulfilled_exit_codes=(0,2)`가 그 부분 성공을 의존 충족으로 보존하고, 다른 normalize
-        # 실패는 BLOCKED로 남긴다. 의존을 비우면 게이트 미진입이 MISSED로 오귀속된다.
+        # ASL `NormalizeCheckResults`는 전량 성공 또는 다섯 producer의 exit 2에서 열린다.
+        # 각 `fulfilled_exit_codes=(0,2)`가 그 부분 성공/last-good을 의존 충족으로 보존하고,
+        # exit 1은 BLOCKED로 남긴다. 의존을 비우면 게이트 미진입이 MISSED로 오귀속된다.
         # ⚠️ 공시 정제 2개가 빠졌다(ALPHA-724) — 그 스텝이 시장 SFN 의 `NormalizeCheckResults`
         # 게이트 멤버가 아니게 됐기 때문이다. 남겨두면 시장 런에서 **영영 충족되지 않는 의존**이
         # 되어 이 작업이 BLOCKED 로 굳는다(그 정제는 다른 SFN 에서 돌므로 이 런엔 자리가 없다).
