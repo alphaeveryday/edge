@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 JOB_NAME = "normalize_etf_nav"
 DATASET = "etf_nav"
 _PARTIAL_EXIT_CODE = 2
+_CANONICAL_CAS_ATTEMPTS = 8
 
 _FUTURE_SLACK_DAYS = 2
 
@@ -218,25 +219,36 @@ def _write_canonical(
     rows_written = 0
     for (market, trade_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_etf_nav_partition(market, trade_date)
-        existing: list[dict] = []
-        for key in storage.list_keys(prefix + "/"):
-            if key.endswith(".parquet"):
-                existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         current_conflicts: list[dict] = []
-        canonical_conflicts: list[dict] = []
         current_winners = _merge_partition([], new_rows, current_conflicts)
-        merged = _merge_partition(existing, new_rows, canonical_conflicts)
-        for conflict in [*current_conflicts, *canonical_conflicts]:
-            if conflict not in conflicts:
-                conflicts.append(conflict)
         # part 를 누적하지 않고 항상 하나로 되쓴다 — 재실행이 part-00001, 00002… 를 쌓으면
         # 병합 결과가 아니라 중복이 남는다(가격·구성종목 정제와 동형).
         key = f"{prefix}/part-00000.parquet"
-        parquet_bytes = _write_parquet_rows(merged)
-        storage.put_bytes(key, parquet_bytes)
+        legacy_rows: list[dict] = []
+        for other_key in storage.list_keys(prefix + "/"):
+            if other_key.endswith(".parquet") and other_key != key:
+                legacy_rows.extend(_read_parquet_rows(storage.get_bytes(other_key)))
+
+        # shared canonical은 read-modify-write다. S3 ETag 조건부 PUT으로 한 writer만 이기게 하고,
+        # 진 writer는 최신 바이트를 다시 읽어 병합한다. 무조건 PUT이면 두 실행이 같은 이전판을
+        # 읽은 뒤 서로의 ID를 잃어버릴 수 있다.
+        for _ in range(_CANONICAL_CAS_ATTEMPTS):
+            current_bytes, version = storage.get_bytes_with_version(key)
+            existing = list(legacy_rows)
+            if current_bytes is not None:
+                existing.extend(_read_parquet_rows(current_bytes))
+            canonical_conflicts: list[dict] = []
+            merged = _merge_partition(existing, new_rows, canonical_conflicts)
+            parquet_bytes = _write_parquet_rows(merged)
+            if storage.put_bytes_if_version(key, parquet_bytes, version):
+                break
+        else:
+            raise OSError(f"canonical CAS 재시도 소진: {key}")
+
+        for conflict in [*current_conflicts, *canonical_conflicts]:
+            if conflict not in conflicts:
+                conflicts.append(conflict)
         digest = hashlib.sha256(parquet_bytes).hexdigest()
-        if hashlib.sha256(storage.get_bytes(key)).hexdigest() != digest:
-            raise OSError(f"canonical parquet 무결성 검증 실패: {key}")
         # shared canonical 은 다음 정제 런이 덮어쓴다. 완료 manifest가 그 가변 객체를 가리키면
         # 다음 런과 consumer가 겹칠 때 앞 manifest의 SHA가 깨진다. 같은 바이트를 run-scoped
         # artifact로 확정하고 하류에는 이 불변 키만 공개한다(공시 manifest와 같은 규약).

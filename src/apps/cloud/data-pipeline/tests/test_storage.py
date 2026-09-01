@@ -1,5 +1,7 @@
 """lake.storage 테스트 — 파티션 규약(SSOT)과 local 백엔드."""
 
+import io
+
 import pytest
 
 from data_pipeline.config import StorageConfig
@@ -94,6 +96,40 @@ def test_local_list_keys_are_posix_regardless_of_os(tmp_path):
         "feature/news/assertions/language=ko/part-0.parquet"
     ]
     assert all("\\" not in k for k in storage.list_keys(""))
+
+
+def test_local_conditional_put_rejects_stale_version(tmp_path):
+    # WHY(ALPHA-1042): canonical read-modify-write 사이 다른 writer가 갱신하면 stale writer는
+    # 덮지 말고 최신판을 다시 읽어야 한다.
+    storage = LocalStorage(tmp_path)
+    storage.put_bytes("canonical/nav.parquet", b"v1")
+    _, version = storage.get_bytes_with_version("canonical/nav.parquet")
+    storage.put_bytes("canonical/nav.parquet", b"v2")
+
+    assert storage.put_bytes_if_version("canonical/nav.parquet", b"stale", version) is False
+    assert storage.get_bytes("canonical/nav.parquet") == b"v2"
+
+
+def test_s3_conditional_put_uses_etag_compare_token():
+    # WHY(ALPHA-1042): 배포 백엔드가 ETag를 If-Match로 넘기지 않으면 로컬 CAS 테스트만
+    # 초록이고 실제 S3에서는 여전히 lost update가 난다.
+    class FakeCasS3:
+        def __init__(self):
+            self.put = None
+
+        def get_object(self, **kwargs):
+            return {"Body": io.BytesIO(b"v1"), "ETag": '"etag-v1"'}
+
+        def put_object(self, **kwargs):
+            self.put = kwargs
+
+    storage = S3Storage(bucket="b")
+    storage._client = FakeCasS3()
+    data, version = storage.get_bytes_with_version("canonical/nav.parquet")
+
+    assert data == b"v1" and version == '"etag-v1"'
+    assert storage.put_bytes_if_version("canonical/nav.parquet", b"v2", version) is True
+    assert storage._client.put["IfMatch"] == '"etag-v1"'
 
 
 def test_disclosure_key_roundtrip_and_excludes_document_zip():

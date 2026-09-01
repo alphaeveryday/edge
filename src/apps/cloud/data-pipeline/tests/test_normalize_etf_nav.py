@@ -251,6 +251,15 @@ class _TrackingStorage:
             raise OSError("의도된 저장 실패")
         return self.inner.put_bytes(key, data)
 
+    def get_bytes_with_version(self, key):
+        return self.inner.get_bytes_with_version(key)
+
+    def put_bytes_if_version(self, key, data, version):
+        self.events.append(("cas", key, version))
+        if self.fail_put and self.fail_put in key:
+            raise OSError("의도된 저장 실패")
+        return self.inner.put_bytes_if_version(key, data, version)
+
 
 def test_manifest는_재확정과_최신_winner를_정렬해_직접키_sha로_기록한다(tmp_path):
     # WHY(ALPHA-1042): consumer 범위는 값 변경분이 아니라 이번 실행의 성공 winner이며,
@@ -326,6 +335,34 @@ def test_run_scoped_manifest는_shared_canonical_덮어쓰기후에도_불변이
     assert _canonical_rows(storage)[0]["nav"] == pytest.approx(200)
 
 
+def test_shared_canonical_CAS경합은_최신판을_다시_병합한다(tmp_path):
+    # WHY(ALPHA-1042): 두 producer가 같은 이전판을 읽고 무조건 PUT하면 후착 writer가 선착
+    # writer의 ETF를 잃는다. 조건부 write 실패 뒤 최신판을 다시 읽어 둘 다 보존해야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    competitor = normalize_etf_nav._write_parquet_rows([{
+        "market": "KR", "etf_id": "091160", "trade_date": "2026-07-16", "nav": 200.0,
+        "currency": "KRW", "source_vendor": "kis",
+        "fetched_at": "2026-07-20T07:00:00+00:00",
+    }])
+
+    class InjectRaceStorage(_TrackingStorage):
+        def __init__(self, storage):
+            super().__init__(storage)
+            self.injected = False
+
+        def put_bytes_if_version(self, key, data, version):
+            if not self.injected:
+                self.injected = True
+                self.inner.put_bytes(key, competitor)
+            return super().put_bytes_if_version(key, data, version)
+
+    _write_raw(inner, _raw_key(run_id="R1"), [_kis_nav_row(our_etf_id="069500")])
+    storage = InjectRaceStorage(inner)
+
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    assert [row["etf_id"] for row in _canonical_rows(inner)] == ["069500", "091160"]
+
+
 def test_동일최신시각의_상이nav는_그_id만_제외하고_exit2다(tmp_path):
     # WHY(ALPHA-1042): 동일 vendor·시각이 서로 다른 fact를 주장하면 입력 순서로 고르는 것은
     # 비결정적 오염이다. 충돌 ID만 제외하고 같은 파티션의 성공 winner는 보존한다.
@@ -364,7 +401,10 @@ def test_manifest_commit순서와_동일run_멱등성을_고정한다(tmp_path):
     assert normalize_etf_nav.run(storage, "N1", "R1") == 0
     assert inner.get_bytes(canonical_run_manifest_key("etf_nav", "N1")) == first
     assert storage.events[0] == ("put", canonical_run_manifest_key("etf_nav", "N1"), False)
-    canonical_put = next(i for i, e in enumerate(storage.events) if e[0] == "put" and e[1].startswith("canonical/"))
+    canonical_put = next(
+        i for i, e in enumerate(storage.events)
+        if e[0] in ("put", "cas") and e[1].startswith("canonical/")
+    )
     quality_put = next(i for i, e in enumerate(storage.events) if e[0] == "put" and "data_quality_logs" in e[1])
     completed_put = next(i for i, e in enumerate(storage.events) if e == ("put", canonical_run_manifest_key("etf_nav", "N1"), True))
     assert canonical_put < quality_put < completed_put

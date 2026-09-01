@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -1193,6 +1195,14 @@ class Storage(Protocol):
         """key 의 바이트 — 없으면 백엔드별 not-found 예외."""
         ...
 
+    def get_bytes_with_version(self, key: str) -> tuple[bytes | None, str | None]:
+        """CAS 병합용 현재 바이트와 backend version. 결손은 (None, None)."""
+        ...
+
+    def put_bytes_if_version(self, key: str, data: bytes, version: str | None) -> bool:
+        """현재 version이 같을 때만 쓴다. 경합이면 False."""
+        ...
+
     def list_keys(self, prefix: str) -> list[str]:
         """문자열 prefix 로 시작하는 키 전부(정렬)."""
         ...
@@ -1218,6 +1228,7 @@ class LocalStorage:
 
     def __init__(self, root: str | Path):
         self.root = Path(root)
+        self._cas_lock = threading.Lock()
 
     def _path(self, key: str) -> Path:
         return self.root / key
@@ -1231,6 +1242,27 @@ class LocalStorage:
     def get_bytes(self, key: str) -> bytes:
         """파일 바이트 — 없으면 FileNotFoundError."""
         return self._path(key).read_bytes()
+
+    def get_bytes_with_version(self, key: str) -> tuple[bytes | None, str | None]:
+        """로컬 CAS snapshot — 같은 인스턴스의 조건부 write와 짝이다."""
+        with self._cas_lock:
+            path = self._path(key)
+            if not path.exists():
+                return None, None
+            data = path.read_bytes()
+            return data, hashlib.sha256(data).hexdigest()
+
+    def put_bytes_if_version(self, key: str, data: bytes, version: str | None) -> bool:
+        """테스트·로컬 실행용 process-local CAS."""
+        with self._cas_lock:
+            path = self._path(key)
+            current = path.read_bytes() if path.exists() else None
+            current_version = hashlib.sha256(current).hexdigest() if current is not None else None
+            if current_version != version:
+                return False
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            return True
 
     def list_keys(self, prefix: str) -> list[str]:
         """S3 와 같은 문자열 prefix 매칭 — forward-slash 키, 정렬(아래 주석)."""
@@ -1280,6 +1312,31 @@ class S3Storage:
     def get_bytes(self, key: str) -> bytes:  # pragma: no cover - 통합
         """get_object 바이트 — 없으면 ClientError(NoSuchKey)."""
         return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def get_bytes_with_version(self, key: str) -> tuple[bytes | None, str | None]:  # pragma: no cover - 통합
+        """S3 객체 바이트와 ETag — 조건부 PUT의 compare token."""
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+        except Exception as exc:
+            error = getattr(exc, "response", {}).get("Error", {})
+            if error.get("Code") in ("NoSuchKey", "404", "NotFound"):
+                return None, None
+            raise
+        return response["Body"].read(), response["ETag"]
+
+    def put_bytes_if_version(
+        self, key: str, data: bytes, version: str | None,
+    ) -> bool:  # pragma: no cover - 통합
+        """S3 If-Match/If-None-Match 조건부 PUT. 선행 writer가 있으면 False."""
+        condition = {"IfNoneMatch": "*"} if version is None else {"IfMatch": version}
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=key, Body=data, **condition)
+        except Exception as exc:
+            error = getattr(exc, "response", {}).get("Error", {})
+            if error.get("Code") in ("PreconditionFailed", "ConditionalRequestConflict", "409", "412"):
+                return False
+            raise
+        return True
 
     def list_keys(self, prefix: str) -> list[str]:  # pragma: no cover - 통합
         """list_objects_v2 페이지네이션 전량(정렬)."""
