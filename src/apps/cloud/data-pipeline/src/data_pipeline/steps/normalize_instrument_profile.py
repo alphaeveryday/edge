@@ -28,9 +28,17 @@ from datetime import datetime, timezone
 from ..lake import (
     Storage,
     canonical_instrument_profile_partition,
+    collection_log_key,
     is_raw_instrument_profile_key,
     parse_raw_instrument_profile_key,
     quality_log_key,
+)
+from ..lake.latest_good import (
+    PointerPlan,
+    inspect_collection_logs,
+    max_fetched_at,
+    prepare_pointer,
+    publish_pointer,
 )
 from ..parse import KR_MIC_BY_BOARD, krx_short_code
 
@@ -38,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 JOB_NAME = "normalize_instrument_profile"
 DATASET = "instrument_profile"
+_PARTIAL_EXIT_CODE = 2
 
 _CANONICAL_COLUMNS = (
     "market", "as_of_date", "ticker", "market_code", "isin", "display_name", "legal_name",
@@ -186,83 +195,222 @@ def _cross_board_collisions(rows: list[dict]) -> dict[str, list[str]]:
     return {t: sorted(b) for t, b in boards_by_ticker.items() if len(b) > 1}
 
 
+def _write_canonical(
+    storage: Storage, rows: list[dict],
+) -> tuple[list[dict[str, str]], int, list[tuple[str, str, bytes, list[dict]]]]:
+    """shared canonical 병합 결과와 이 실행이 쓴 merged snapshot bytes를 반환한다."""
+    by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        by_partition[(row["market"], row["as_of_date"])].append(row)
+
+    partitions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
+    rows_written = 0
+    for (market, as_of_date), new_rows in sorted(by_partition.items()):
+        prefix = canonical_instrument_profile_partition(market, as_of_date)
+        existing: list[dict] = []
+        for key in storage.list_keys(prefix + "/"):
+            if key.endswith(".parquet"):
+                existing.extend(_read_parquet_rows(storage.get_bytes(key)))
+        merged = _merge_partition(existing, new_rows)
+        data = _write_parquet_rows(merged)
+        storage.put_bytes(f"{prefix}/part-00000.parquet", data)
+        partitions.append({"market": market, "as_of_date": as_of_date})
+        candidates.append((market, as_of_date, data, merged))
+        rows_written += len(merged)
+    return partitions, rows_written, candidates
+
+
+def _collection_keys(raw_keys: list[str]) -> list[str]:
+    keys = []
+    for raw_key in raw_keys:
+        parsed = parse_raw_instrument_profile_key(raw_key)
+        if parsed["market"] == "KR":
+            keys.append(collection_log_key(
+                parsed["source"], DATASET, parsed["ingest_date"], parsed["run_id"],
+            ))
+    return keys
+
+
+def _prepare_latest_good(
+    storage: Storage, run_id: str,
+    candidates: list[tuple[str, str, bytes, list[dict]]],
+) -> PointerPlan | None:
+    kr_candidates = [
+        (as_of_date, max_fetched_at(rows), data, rows)
+        for market, as_of_date, data, rows in candidates if market == "KR"
+    ]
+    if not kr_candidates:
+        return None
+    as_of_date, _, data, rows = max(kr_candidates, key=lambda item: (item[0], item[1]))
+    return prepare_pointer(
+        storage, dataset=DATASET, producer=JOB_NAME, market="KR",
+        as_of_date=as_of_date, run_id=run_id, artifact_bytes=data, rows=rows,
+    )
+
+
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
-    """raw instrument_profile → 정규화 → canonical 멱등 병합 + quality_log."""
+    """raw instrument_profile → canonical + latest-good pointer. 성공 0, partial 2, fatal 1."""
     started_at = datetime.now(timezone.utc)
     rows_read = 0
     dropped: dict[str, int] = {}
     normalized: list[dict] = []
     exit_code = 0
     failures: list[dict] = []
-    collisions: dict[str, list[str]] = {}
-
+    raw_list_ok = True
     try:
         keys = [k for k in storage.list_keys("raw/") if is_raw_instrument_profile_key(k)]
-        if input_run_id:
+    except Exception as exc:
+        logger.exception("raw 목록 조회 실패")
+        keys = []
+        failures.append({"reasons": ["raw_list_error"], "error": str(exc)})
+        exit_code = 1
+        raw_list_ok = False
+    if input_run_id is not None:
+        try:
             keys = [k for k in keys
                     if parse_raw_instrument_profile_key(k)["run_id"] == input_run_id]
-        for key in sorted(keys):
-            for line in storage.get_bytes(key).decode("utf-8").splitlines():
-                if not line.strip():
-                    continue
-                rows_read += 1
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError:
-                    dropped["malformed_json"] = dropped.get("malformed_json", 0) + 1
-                    continue
-                if not isinstance(raw, dict):
-                    dropped["not_object"] = dropped.get("not_object", 0) + 1
-                    continue
-                row, reason = normalize_row(raw)
-                if row is None:
-                    dropped[reason] = dropped.get(reason, 0) + 1
-                    continue
-                normalized.append(row)
+        except Exception as exc:
+            logger.exception("raw key 파싱 실패")
+            keys = []
+            failures.append({"reasons": ["raw_key_error"], "error": str(exc)})
+            exit_code = 1
 
-        collisions = _cross_board_collisions(normalized)
-        by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
-        for row in normalized:
-            by_partition[(row["market"], row["as_of_date"])].append(row)
-        parts_written = rows_written = 0
-        for (market, as_of_date), new_rows in sorted(by_partition.items()):
-            prefix = canonical_instrument_profile_partition(market, as_of_date)
-            existing: list[dict] = []
-            for key in storage.list_keys(prefix + "/"):
-                if key.endswith(".parquet"):
-                    existing.extend(_read_parquet_rows(storage.get_bytes(key)))
-            merged = _merge_partition(existing, new_rows)
-            storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
-            parts_written += 1
-            rows_written += len(merged)
-    except Exception as exc:
-        logger.exception("종목기본정보 정제 실패")
-        failures.append({"reasons": ["normalize_error"], "error": str(exc)})
-        parts_written = rows_written = 0
-        exit_code = 1
+    collection_check = None
+    collection_error = None
+    if input_run_id is not None and keys:
+        try:
+            collection_check = inspect_collection_logs(storage, _collection_keys(keys))
+        except Exception as exc:
+            logger.exception("matching collection log 검증 실패")
+            collection_error = str(exc)
+            exit_code = 1
+
+    for key in sorted(keys):
+        try:
+            lines = storage.get_bytes(key).decode("utf-8").splitlines()
+        except Exception as exc:
+            logger.exception("raw 읽기 실패: %s", key)
+            failures.append({"raw_key": key, "reasons": ["raw_read_error"], "error": str(exc)})
+            exit_code = 1
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            rows_read += 1
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                dropped["malformed_json"] = dropped.get("malformed_json", 0) + 1
+                continue
+            if not isinstance(raw, dict):
+                dropped["not_object"] = dropped.get("not_object", 0) + 1
+                continue
+            try:
+                row, reason = normalize_row(raw)
+            except Exception:
+                logger.exception("행 정규화 실패(격리): %s", key)
+                dropped["row_error"] = dropped.get("row_error", 0) + 1
+                continue
+            if row is None:
+                dropped[reason] = dropped.get(reason, 0) + 1
+                continue
+            normalized.append(row)
+
+    collisions = _cross_board_collisions(normalized)
+    partitions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
+    rows_written = 0
+    canonical_written = False
+    if raw_list_ok:
+        try:
+            partitions, rows_written, candidates = _write_canonical(storage, normalized)
+            canonical_written = True
+        except Exception as exc:
+            logger.exception("canonical 적재 실패")
+            failures.append({"reasons": ["canonical_write_error"], "error": str(exc)})
+            exit_code = 1
+
+    collection_incomplete = collection_check is not None and not collection_check.complete
+    if (dropped or collisions or collection_incomplete) and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
+
+    plan: PointerPlan | None = None
+    pointer_error = collection_error
+    if input_run_id is None:
+        pointer_action = "retain_unscoped_recovery"
+    elif exit_code == 1:
+        pointer_action = "retain_fatal"
+    elif exit_code == _PARTIAL_EXIT_CODE:
+        pointer_action = "retain_partial"
+    elif not keys or not partitions:
+        pointer_action = "retain_empty"
+    else:
+        try:
+            plan = _prepare_latest_good(storage, run_id, candidates)
+            pointer_action = plan.action if plan is not None else "retain_no_kr_candidate"
+            if plan is not None:
+                exit_code = plan.exit_code
+        except Exception as exc:
+            logger.exception("latest-good artifact/pointer 준비 실패")
+            pointer_error = str(exc)
+            pointer_action = "retain_fatal"
+            exit_code = 1
 
     checked_date = started_at.isoformat()[:10]
+    finished_at = datetime.now(timezone.utc)
+    latest_good = plan.quality_fields() if plan is not None else {
+        "candidate": None,
+        "artifact": None,
+        "pointer_key": None,
+        "pointer_base_version": None,
+        "pointer_intended_action": pointer_action,
+    }
+    latest_good.update({
+        "collection_log_keys": list(collection_check.keys) if collection_check else [],
+        "collection_statuses": list(collection_check.statuses) if collection_check else [],
+        "error": pointer_error,
+    })
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
-        "started_at": started_at.isoformat(),
-        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": started_at.isoformat(), "finished_at": finished_at.isoformat(),
+        "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
         "input_run_id": input_run_id,
         "rows_read": rows_read, "rows_normalized": len(normalized),
         "dropped_by_reason": dropped,
-        # 시장 간 단축코드 충돌 — 0 이 정상이다. 0 이 아니면 병합이 한쪽을 덮었다는 뜻이라
-        # 어느 종목인지 이름을 남긴다(개수만으로는 고칠 수 없다).
         "cross_board_ticker_collisions": collisions,
-        "partitions_written": parts_written, "rows_written": rows_written,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+        "partitions_written": len(partitions), "rows_written": rows_written,
+        "latest_good": latest_good,
         "failures": failures, "exit_code": exit_code,
         "ops": {"records_out": rows_written,
                 "failed_records": sum(dropped.values()) + len(failures)},
     }
+    quality_key = quality_log_key(DATASET, checked_date, run_id)
     try:
-        storage.put_bytes(quality_log_key(DATASET, checked_date, run_id),
-                          json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"))
+        storage.put_bytes(
+            quality_key, json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
     except Exception:
         logger.exception("품질 로그 기록 실패")
-        exit_code = exit_code or 1
+        return 1
+
+    if plan is not None and plan.action == "advance" and exit_code == 0:
+        try:
+            publish_pointer(storage, plan)
+        except Exception as exc:
+            logger.exception("latest-good pointer CAS publish 실패")
+            exit_code = 1
+            log["exit_code"] = 1
+            log["latest_good"]["pointer_publish_error"] = str(exc)
+            log["finished_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                storage.put_bytes(
+                    quality_key, json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"),
+                )
+            except Exception:
+                logger.exception("pointer 실패 뒤 quality_log 최종 상태 정정 실패")
     logger.info(
         "normalize_instrument_profile 완료: read=%d normalized=%d written=%d dropped=%s",
         rows_read, len(normalized), rows_written, dropped,

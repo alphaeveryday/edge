@@ -12,7 +12,8 @@ from datetime import date
 import pytest
 
 from data_pipeline.config import KrxInstrumentSource as KrxInstrumentSourceConfig
-from data_pipeline.lake import LocalStorage
+from data_pipeline.lake import LocalStorage, latest_good_pointer_key
+from data_pipeline.lake.latest_good import parse_pointer
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.krx_instrument import KrxInstrumentSource
 from data_pipeline.steps import ingest_raw_instrument, normalize_instrument_profile
@@ -412,6 +413,12 @@ def test_second_run_merges_with_what_is_already_in_the_partition(tmp_path):
     assert "700000" in tickers      # 이번에 정제한 것
     assert "000000" in tickers      # ← 병합이 없으면 사라진다
     assert len(tickers) == 4200
+    pointer = parse_pointer(
+        storage.get_bytes(latest_good_pointer_key("instrument_profile", "KR")),
+    )
+    assert pointer["source_run_id"] == "NORM1"
+    assert pointer["partition"] == {"as_of_date": "2026-08-06"}
+    assert pointer["objects"][0]["rows"] == 4200
 
 
 def test_cross_board_ticker_collision_is_named_before_the_merge_hides_it(tmp_path):
@@ -426,7 +433,7 @@ def test_cross_board_ticker_collision_is_named_before_the_merge_hides_it(tmp_pat
     boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
     boards["knx"][0] = _row("000000", "충돌종목")     # 코스피 000000 과 같은 코드
     _, storage = _ingest(tmp_path, boards)
-    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 2
     log = _quality_log(storage)
     assert log["cross_board_ticker_collisions"] == {"000000": ["KONEX", "KOSPI"]}
 
@@ -446,7 +453,7 @@ def test_bad_ticker_row_is_dropped_with_a_reason(tmp_path):
     boards = _full_boards(n_kospi=1000, n_kosdaq=1000, n_konex=100)
     boards["stk"][0]["ISU_SRT_CD"] = "NOPE!!"
     _, storage = _ingest(tmp_path, boards)
-    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 2
     quality = [k for k in storage.list_keys("operations_archive/")
                if "instrument_profile" in k and "data_quality" in k]
     log = json.loads(storage.get_bytes(quality[0]).decode("utf-8"))
@@ -521,7 +528,7 @@ def test_unknown_board_is_dropped_with_a_reason(tmp_path):
     storage.put_bytes(key, "".join(json.dumps(r, ensure_ascii=False) + "\n"
                                    for r in rows).encode("utf-8"))
 
-    assert normalize_instrument_profile.run(storage, _RUN_ID) == 0
+    assert normalize_instrument_profile.run(storage, _RUN_ID) == 2
     log = _quality_log(storage)
     assert log["dropped_by_reason"]["unknown_board"] == 1
     assert log["rows_written"] == 9

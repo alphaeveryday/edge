@@ -850,7 +850,8 @@ durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 
     ```bash
     DATA_PIPELINE_KRX_INSTRUMENT__SOURCE__AUTH_KEY=... \
       uv run --package data-pipeline python -m data_pipeline.run ingest-raw-instrument
-    uv run --package data-pipeline python -m data_pipeline.run normalize-instrument-profile
+    uv run --package data-pipeline python -m data_pipeline.run normalize-instrument-profile \
+      --input-run-id <fresh-collection-run-id>
     ```
   - ⚠️ **당일 조회가 막혀 있다**(`basDd < 오늘`). 기준일은 달력이 직전 거래일로 정하므로
     `--from/--to` 는 **거부**한다 — 무시하고 돌면 소급한 줄 착각한다.
@@ -1361,6 +1362,13 @@ settings.targets.keywords            # ["금리", ...]
   충족된 하류 의존으로 기록한다. 이 경우 보존된 last-good 입력으로 `LoadInstruments`까지
   진행하지만 마지막 strict gate는 전체 실행을 실패로 닫고, exit 1은 즉시 하류를 막는다
   (ALPHA-1047 compatibility phase).
+  세 KR 마스터 생산자(`normalize-etf`·`normalize-etf-profile`·`normalize-instrument-profile`)는
+  `--input-run-id`로 요청된 raw와 그 collection log가 전량 성공한 경우에만 데이터셋별
+  `operations_archive/latest_good_partition_pointers/dataset=…/market=KR/pointer.json`을 CAS로
+  전진시킨다. alias는 mutable canonical이 아니라 run-scoped 불변 Parquet artifact와 SHA-256을
+  가리킨다. 행/수집 부분 실패(exit 2), 빈 런, 과거 런은 기존 pointer를 보존하며, 범위 없는 복구
+  정제는 shared canonical만 수렴시키고 pointer를 전진시키지 않는다. instrument profile의 수집·정제는
+  계속 수동 전용이다(ALPHA-1047 producer phase).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

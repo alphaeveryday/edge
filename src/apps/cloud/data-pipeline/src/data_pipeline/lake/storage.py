@@ -747,6 +747,25 @@ def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     )
 
 
+def latest_good_pointer_key(dataset: str, market: str) -> str:
+    """latest-good 파티션 포인터 alias — 데이터셋·시장마다 하나인 mutable CAS key."""
+    return (
+        "operations_archive/latest_good_partition_pointers/"
+        f"dataset={dataset}/market={market}/pointer.json"
+    )
+
+
+def latest_good_artifact_key(
+    dataset: str, market: str, as_of_date: str, run_id: str,
+) -> str:
+    """latest-good가 가리키는 run-scoped 불변 Parquet snapshot key."""
+    return (
+        "operations_archive/latest_good_partition_artifacts/"
+        f"dataset={dataset}/market={market}/as_of_date={as_of_date}"
+        f"/run_id={run_id}/part-00000.parquet"
+    )
+
+
 def canonical_run_manifest_key(dataset: str, run_id: str) -> str:
     """정제 실행이 실제로 갱신한 canonical 파티션 manifest의 직접 조회 키.
 

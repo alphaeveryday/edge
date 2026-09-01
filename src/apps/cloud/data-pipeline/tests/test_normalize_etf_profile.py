@@ -9,7 +9,13 @@ import json
 
 import pytest
 
-from data_pipeline.lake import LocalStorage, canonical_etf_profile_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_profile_partition,
+    collection_log_key,
+    parse_raw_etf_profile_key,
+)
+from data_pipeline.lake.latest_good import parse_pointer
 from data_pipeline.steps import normalize_etf_profile
 
 
@@ -20,6 +26,13 @@ def _raw_key(run_id="R1", date="2026-07-20", source="kis", market="KR"):
 
 def _write_raw(storage, key, rows):
     storage.put_bytes(key, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode())
+    parsed = parse_raw_etf_profile_key(key)
+    storage.put_bytes(
+        collection_log_key(
+            parsed["source"], "etf_profile", parsed["ingest_date"], parsed["run_id"],
+        ),
+        json.dumps({"status": "success"}).encode(),
+    )
 
 
 def _profile_row(**over):
@@ -84,7 +97,7 @@ def test_마스터가_될_수_없는_행은_막힌다(tmp_path, over, reason):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key(), [_profile_row(**over)])
 
-    assert normalize_etf_profile.run(storage, "R1") == 0
+    assert normalize_etf_profile.run(storage, "R1") == 2
     log = _log(storage)
     assert log["records_passed"] == 0
     assert reason in log["failures"][0]["reasons"]
@@ -120,7 +133,7 @@ def test_깨진_행은_격리되고_남은_행은_통과한다(tmp_path):
     ]) + "\n"
     storage.put_bytes(_raw_key(), body.encode())
 
-    assert normalize_etf_profile.run(storage, "R1") == 0
+    assert normalize_etf_profile.run(storage, "R1") == 2
     log = _log(storage)
     assert log["records_read"] == 4 and log["records_passed"] == 2
     reasons = [r for f in log["failures"] for r in f["reasons"]]
@@ -134,3 +147,8 @@ def test_input_run_id_는_그_수집런의_raw_만_읽는다(tmp_path):
 
     assert normalize_etf_profile.run(storage, "N1", "R2") == 0
     assert [r["etf_id"] for r in _canonical_rows(storage)] == ["091160"]
+    log = _log(storage, "N1")
+    pointer = parse_pointer(storage.get_bytes(log["latest_good"]["pointer_key"]))
+    assert pointer["source_run_id"] == "N1"
+    assert pointer["partition"] == {"as_of_date": "2026-07-20"}
+    assert pointer["objects"][0]["rows"] == 1
