@@ -38,9 +38,17 @@ from ..lake import (
     Storage,
     canonical_etf_holdings_partition,
     canonical_run_manifest_key,
+    collection_log_key,
     is_raw_etf_key,
     parse_raw_etf_key,
     quality_log_key,
+)
+from ..lake.latest_good import (
+    PointerPlan,
+    inspect_collection_logs,
+    max_fetched_at,
+    prepare_pointer,
+    publish_pointer,
 )
 from ..parse import KR_MIC_BY_BOARD
 from ..quality import BLOCKING_REASONS_ETF, validate_etf_holding
@@ -51,6 +59,7 @@ JOB_NAME = "normalize_etf"
 DATASET = "etf_holdings"
 
 _FUTURE_SLACK_DAYS = 2
+_PARTIAL_EXIT_CODE = 2
 
 # market → 표준 통화. 통화는 FX 환산하지 않고 market 별로 태깅만 한다(가격 정제와 동형).
 _CURRENCY = {"US": "USD", "KR": "KRW"}
@@ -319,24 +328,76 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict[s
     return partitions, rows_written
 
 
+def _collection_keys(raw_keys: list[str]) -> list[str]:
+    """KR raw와 정확히 짝인 collection log key들. 포인터 전량성 판정에만 쓴다."""
+    keys = []
+    for raw_key in raw_keys:
+        parsed = parse_raw_etf_key(raw_key)
+        if parsed["market"] == "KR":
+            keys.append(collection_log_key(
+                parsed["source"], DATASET, parsed["ingest_date"], parsed["run_id"],
+            ))
+    return keys
+
+
+def _prepare_latest_good(
+    storage: Storage, run_id: str, partitions: list[dict[str, str]],
+) -> PointerPlan | None:
+    """이번 실행이 쓴 KR 파티션 중 (as_of_date,max_fetched_at) 최신 snapshot을 준비한다."""
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
+    for part in partitions:
+        if part["market"] != "KR":
+            continue
+        key = f"{canonical_etf_holdings_partition('KR', part['as_of_date'])}/part-00000.parquet"
+        data = storage.get_bytes(key)
+        rows = _read_parquet_rows(data)
+        candidates.append((part["as_of_date"], max_fetched_at(rows), data, rows))
+    if not candidates:
+        return None
+    as_of_date, _, data, rows = max(candidates, key=lambda item: (item[0], item[1]))
+    return prepare_pointer(
+        storage, dataset=DATASET, producer=JOB_NAME, market="KR",
+        as_of_date=as_of_date, run_id=run_id, artifact_bytes=data, rows=rows,
+    )
+
+
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
-    """raw etf_holdings → 정규화 → 게이트 → canonical 멱등 병합 + quality_log. 성공 0, 장애 시 비0.
+    """raw etf_holdings → canonical + latest-good pointer. 성공 0, partial 2, fatal 1.
 
     input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다
-    (ALPHA-389 — SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다."""
+    (ALPHA-389 — SFN 이 이 경로로 돈다). 이 run-scoped 경로만 포인터를 전진시킨다.
+    미지정 전체 읽기는 기존 백필·복구 수단이며 shared canonical만 갱신한다."""
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_as_of_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
 
-    raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_key(k)]
+    failures: list[dict] = []
+    exit_code = 0
+    raw_list_ok = True
+    try:
+        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_key(k)]
+    except Exception as exc:
+        logger.exception("raw 목록 조회 실패")
+        raw_keys = []
+        failures.append({"raw_key": None, "reasons": ["raw_list_error"], "error": str(exc)})
+        exit_code = 1
+        raw_list_ok = False
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
+    collection_check = None
+    collection_error = None
+    if input_run_id is not None and raw_keys:
+        try:
+            collection_check = inspect_collection_logs(storage, _collection_keys(raw_keys))
+        except Exception as exc:
+            logger.exception("matching collection log 검증 실패")
+            collection_error = str(exc)
+            exit_code = 1
+
     read = 0
-    failures: list[dict] = []
     warnings: list[dict] = []
     passing: list[dict] = []
-    exit_code = 0
 
     for raw_key in raw_keys:
         try:
@@ -392,56 +453,113 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if warn:
                 warnings.append({**ref, "reasons": warn})
 
-    # 스코프든 전체 런이든 canonical 을 쓴다(ALPHA-389) — 병합이 기존 행을 읽어 합친다.
+    # 스코프든 전체 런이든 shared canonical 을 쓴다(ALPHA-389). pointer 전량성 실패여도
+    # 통과 행은 보존하되 alias만 전진시키지 않는다.
     partitions: list[dict[str, str]] = []
     canonical_rows = 0
-    canonical_written = True
-    try:
-        partitions, canonical_rows = _write_canonical(storage, passing)
-        storage.put_bytes(
-            canonical_run_manifest_key(DATASET, run_id),
-            json.dumps({
-                "run_id": run_id,
-                "job_name": JOB_NAME,
-                "canonical_written": True,
-                "canonical_partitions": partitions,
-            }, ensure_ascii=False).encode("utf-8"),
-        )
-    except Exception:
-        logger.exception("canonical 적재 실패")
-        # 감사 로그가 거짓말하지 않게 내린다 — 적재가 터졌는데 canonical_written=true 로
-        # 남으면 나중에 백필 판단이 "적재는 됐고 0행이었다"로 오독한다(Rule 12).
-        canonical_written = False
-        exit_code = 1
+    canonical_written = False
+    if raw_list_ok:
+        try:
+            partitions, canonical_rows = _write_canonical(storage, passing)
+            storage.put_bytes(
+                canonical_run_manifest_key(DATASET, run_id),
+                json.dumps({
+                    "run_id": run_id,
+                    "job_name": JOB_NAME,
+                    "canonical_written": True,
+                    "canonical_partitions": partitions,
+                }, ensure_ascii=False).encode("utf-8"),
+            )
+            canonical_written = True
+        except Exception:
+            logger.exception("canonical 적재 실패")
+            exit_code = 1
 
+    collection_incomplete = collection_check is not None and not collection_check.complete
+    if (failures or collection_incomplete) and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
+
+    plan: PointerPlan | None = None
+    pointer_error = collection_error
+    if input_run_id is None:
+        pointer_action = "retain_unscoped_recovery"
+    elif exit_code == 1:
+        pointer_action = "retain_fatal"
+    elif exit_code == _PARTIAL_EXIT_CODE:
+        pointer_action = "retain_partial"
+    elif not raw_keys or not partitions:
+        pointer_action = "retain_empty"
+    else:
+        try:
+            plan = _prepare_latest_good(storage, run_id, partitions)
+            pointer_action = plan.action if plan is not None else "retain_no_kr_candidate"
+            if plan is not None:
+                exit_code = plan.exit_code
+        except Exception as exc:
+            logger.exception("latest-good artifact/pointer 준비 실패")
+            pointer_error = str(exc)
+            pointer_action = "retain_fatal"
+            exit_code = 1
+
+    finished_at = datetime.now(timezone.utc)
+    latest_good = plan.quality_fields() if plan is not None else {
+        "candidate": None,
+        "artifact": None,
+        "pointer_key": None,
+        "pointer_base_version": None,
+        "pointer_intended_action": pointer_action,
+    }
+    latest_good.update({
+        "collection_log_keys": list(collection_check.keys) if collection_check else [],
+        "collection_statuses": list(collection_check.statuses) if collection_check else [],
+        "error": pointer_error,
+    })
+    quality_key = quality_log_key(DATASET, checked_date, run_id)
+    quality_payload = {
+        "run_id": run_id,
+        "job_name": JOB_NAME,
+        "dataset": DATASET,
+        "input_run_id": input_run_id,
+        "raw_files": len(raw_keys),
+        "records_read": read,
+        "records_passed": len(passing),
+        "records_failed": len(failures),
+        "ops": {"records_out": len(passing), "failed_records": len(failures)},
+        "records_warned": len(warnings),
+        "failures": failures,
+        "warnings": warnings,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+        "canonical_partitions_written": len(partitions),
+        "canonical_rows_written": canonical_rows,
+        "latest_good": latest_good,
+        "exit_code": exit_code,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+    }
     try:
-        storage.put_bytes(
-            quality_log_key(DATASET, checked_date, run_id),
-            json.dumps({
-                "run_id": run_id,
-                "job_name": JOB_NAME,
-                "dataset": DATASET,
-                "input_run_id": input_run_id,
-                "raw_files": len(raw_keys),
-                "records_read": read,
-                "records_passed": len(passing),
-                "records_failed": len(failures),
-                # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
-                "ops": {"records_out": len(passing), "failed_records": len(failures)},
-                "records_warned": len(warnings),
-                "failures": failures,
-                "warnings": warnings,
-                "canonical_written": canonical_written,
-                "canonical_partitions": partitions,
-                "canonical_partitions_written": len(partitions),
-                "canonical_rows_written": canonical_rows,
-                "started_at": started_at.isoformat(),
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-            }, ensure_ascii=False).encode("utf-8"),
-        )
+        storage.put_bytes(quality_key, json.dumps(quality_payload, ensure_ascii=False).encode("utf-8"))
     except Exception:
         logger.exception("quality_log 기록 실패 — 검증 결과 유실")
-        exit_code = exit_code or 1
+        return 1
+
+    # alias CAS가 마지막 필수 storage mutation이다. 성공 뒤 quality/manifest를 다시 쓰지 않는다.
+    if plan is not None and plan.action == "advance" and exit_code == 0:
+        try:
+            publish_pointer(storage, plan)
+        except Exception as exc:
+            logger.exception("latest-good pointer CAS publish 실패")
+            exit_code = 1
+            quality_payload["exit_code"] = 1
+            quality_payload["latest_good"]["pointer_publish_error"] = str(exc)
+            quality_payload["finished_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                storage.put_bytes(
+                    quality_key, json.dumps(quality_payload, ensure_ascii=False).encode("utf-8"),
+                )
+            except Exception:
+                logger.exception("pointer 실패 뒤 quality_log 최종 상태 정정 실패")
 
     logger.info(
         "normalize_etf 완료: raw_files=%d read=%d passed=%d failed=%d warned=%d "

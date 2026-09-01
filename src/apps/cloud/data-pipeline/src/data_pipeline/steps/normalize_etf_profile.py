@@ -23,16 +23,25 @@ from datetime import datetime, timezone
 from ..lake import (
     Storage,
     canonical_etf_profile_partition,
+    collection_log_key,
     is_raw_etf_profile_key,
     parse_raw_etf_profile_key,
     quality_log_key,
 )
-from ..quality import BLOCKING_REASONS_ETF_PROFILE, validate_etf_profile
+from ..lake.latest_good import (
+    PointerPlan,
+    inspect_collection_logs,
+    max_fetched_at,
+    prepare_pointer,
+    publish_pointer,
+)
+from ..quality import validate_etf_profile
 
 logger = logging.getLogger(__name__)
 
 JOB_NAME = "normalize_etf_profile"
 DATASET = "etf_profile"
+_PARTIAL_EXIT_CODE = 2
 
 _CURRENCY = {"KR": "KRW"}
 
@@ -120,13 +129,14 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     return [acc[k] for k in sorted(acc, key=str)]
 
 
-def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
-    """통과 행을 (market,as_of_date) 파티션별로 멱등 병합해 쓴다. 반환: (파티션 수, 행 수)."""
+def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict[str, str]], int]:
+    """통과 행을 파티션별로 병합한다. 반환 식별자는 latest-good candidate 범위다."""
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
         by_partition[(row["market"], row["as_of_date"])].append(row)
 
-    parts_written = rows_written = 0
+    partitions: list[dict[str, str]] = []
+    rows_written = 0
     for (market, as_of_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_etf_profile_partition(market, as_of_date)
         existing: list[dict] = []
@@ -135,24 +145,73 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[int, int]:
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
         storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
-        parts_written += 1
+        partitions.append({"market": market, "as_of_date": as_of_date})
         rows_written += len(merged)
-    return parts_written, rows_written
+    return partitions, rows_written
+
+
+def _collection_keys(raw_keys: list[str]) -> list[str]:
+    keys = []
+    for raw_key in raw_keys:
+        parsed = parse_raw_etf_profile_key(raw_key)
+        if parsed["market"] == "KR":
+            keys.append(collection_log_key(
+                parsed["source"], DATASET, parsed["ingest_date"], parsed["run_id"],
+            ))
+    return keys
+
+
+def _prepare_latest_good(
+    storage: Storage, run_id: str, partitions: list[dict[str, str]],
+) -> PointerPlan | None:
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
+    for part in partitions:
+        if part["market"] != "KR":
+            continue
+        key = f"{canonical_etf_profile_partition('KR', part['as_of_date'])}/part-00000.parquet"
+        data = storage.get_bytes(key)
+        rows = _read_parquet_rows(data)
+        candidates.append((part["as_of_date"], max_fetched_at(rows), data, rows))
+    if not candidates:
+        return None
+    as_of_date, _, data, rows = max(candidates, key=lambda item: (item[0], item[1]))
+    return prepare_pointer(
+        storage, dataset=DATASET, producer=JOB_NAME, market="KR",
+        as_of_date=as_of_date, run_id=run_id, artifact_bytes=data, rows=rows,
+    )
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
-    """raw etf_profile → 정규화 → 게이트 → canonical 멱등 병합 + quality_log."""
+    """raw etf_profile → canonical + latest-good pointer. 성공 0, partial 2, fatal 1."""
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
 
-    raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_profile_key(k)]
+    failures: list[dict] = []
+    exit_code = 0
+    raw_list_ok = True
+    try:
+        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_profile_key(k)]
+    except Exception as exc:
+        logger.exception("raw 목록 조회 실패")
+        raw_keys = []
+        failures.append({"raw_key": None, "reasons": ["raw_list_error"], "error": str(exc)})
+        exit_code = 1
+        raw_list_ok = False
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
+    collection_check = None
+    collection_error = None
+    if input_run_id is not None and raw_keys:
+        try:
+            collection_check = inspect_collection_logs(storage, _collection_keys(raw_keys))
+        except Exception as exc:
+            logger.exception("matching collection log 검증 실패")
+            collection_error = str(exc)
+            exit_code = 1
+
     read = 0
-    failures: list[dict] = []
     passing: list[dict] = []
-    exit_code = 0
 
     for raw_key in raw_keys:
         try:
@@ -199,40 +258,99 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 continue
             passing.append(row)
 
-    parts_written = canonical_rows = 0
-    canonical_written = True
-    try:
-        parts_written, canonical_rows = _write_canonical(storage, passing)
-    except Exception:
-        logger.exception("canonical 적재 실패")
-        canonical_written = False
-        exit_code = 1
+    partitions: list[dict[str, str]] = []
+    canonical_rows = 0
+    canonical_written = False
+    if raw_list_ok:
+        try:
+            partitions, canonical_rows = _write_canonical(storage, passing)
+            canonical_written = True
+        except Exception:
+            logger.exception("canonical 적재 실패")
+            exit_code = 1
 
+    collection_incomplete = collection_check is not None and not collection_check.complete
+    if (failures or collection_incomplete) and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
+
+    plan: PointerPlan | None = None
+    pointer_error = collection_error
+    if input_run_id is None:
+        pointer_action = "retain_unscoped_recovery"
+    elif exit_code == 1:
+        pointer_action = "retain_fatal"
+    elif exit_code == _PARTIAL_EXIT_CODE:
+        pointer_action = "retain_partial"
+    elif not raw_keys or not partitions:
+        pointer_action = "retain_empty"
+    else:
+        try:
+            plan = _prepare_latest_good(storage, run_id, partitions)
+            pointer_action = plan.action if plan is not None else "retain_no_kr_candidate"
+            if plan is not None:
+                exit_code = plan.exit_code
+        except Exception as exc:
+            logger.exception("latest-good artifact/pointer 준비 실패")
+            pointer_error = str(exc)
+            pointer_action = "retain_fatal"
+            exit_code = 1
+
+    finished_at = datetime.now(timezone.utc)
+    latest_good = plan.quality_fields() if plan is not None else {
+        "candidate": None,
+        "artifact": None,
+        "pointer_key": None,
+        "pointer_base_version": None,
+        "pointer_intended_action": pointer_action,
+    }
+    latest_good.update({
+        "collection_log_keys": list(collection_check.keys) if collection_check else [],
+        "collection_statuses": list(collection_check.statuses) if collection_check else [],
+        "error": pointer_error,
+    })
+    quality_key = quality_log_key(DATASET, checked_date, run_id)
+    quality_payload = {
+        "run_id": run_id, "job_name": JOB_NAME, "dataset": DATASET,
+        "input_run_id": input_run_id,
+        "raw_files": len(raw_keys), "records_read": read,
+        "records_passed": len(passing), "records_failed": len(failures),
+        "ops": {"records_out": len(passing), "failed_records": len(failures)},
+        "failures": failures,
+        "canonical_written": canonical_written,
+        "canonical_partitions": partitions,
+        "canonical_partitions_written": len(partitions),
+        "canonical_rows_written": canonical_rows,
+        "latest_good": latest_good,
+        "exit_code": exit_code,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+    }
     try:
-        storage.put_bytes(
-            quality_log_key(DATASET, checked_date, run_id),
-            json.dumps({
-                "run_id": run_id, "job_name": JOB_NAME, "dataset": DATASET,
-                "input_run_id": input_run_id,
-                "raw_files": len(raw_keys), "records_read": read,
-                "records_passed": len(passing), "records_failed": len(failures),
-                # 원장 관측용 공통 봉투(ALPHA-181) — 통과 행이 산출, 탈락 행이 유실이다.
-                "ops": {"records_out": len(passing), "failed_records": len(failures)},
-                "failures": failures,
-                "canonical_written": canonical_written,
-                "canonical_partitions_written": parts_written,
-                "canonical_rows_written": canonical_rows,
-                "started_at": started_at.isoformat(),
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-            }, ensure_ascii=False).encode("utf-8"),
-        )
+        storage.put_bytes(quality_key, json.dumps(quality_payload, ensure_ascii=False).encode("utf-8"))
     except Exception:
         logger.exception("quality_log 기록 실패 — 검증 결과 유실")
-        exit_code = exit_code or 1
+        return 1
+
+    if plan is not None and plan.action == "advance" and exit_code == 0:
+        try:
+            publish_pointer(storage, plan)
+        except Exception as exc:
+            logger.exception("latest-good pointer CAS publish 실패")
+            exit_code = 1
+            quality_payload["exit_code"] = 1
+            quality_payload["latest_good"]["pointer_publish_error"] = str(exc)
+            quality_payload["finished_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                storage.put_bytes(
+                    quality_key, json.dumps(quality_payload, ensure_ascii=False).encode("utf-8"),
+                )
+            except Exception:
+                logger.exception("pointer 실패 뒤 quality_log 최종 상태 정정 실패")
 
     logger.info(
         "normalize_etf_profile 완료: raw_files=%d read=%d passed=%d failed=%d "
         "canonical_parts=%d canonical_rows=%d",
-        len(raw_keys), read, len(passing), len(failures), parts_written, canonical_rows,
+        len(raw_keys), read, len(passing), len(failures), len(partitions), canonical_rows,
     )
     return exit_code

@@ -7,7 +7,16 @@ FMP updatedAt(datetime)·KRX trd_dd(YYYYMMDD) 기준일이 하나의 as_of_date 
 
 import json
 
-from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+import pytest
+
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_holdings_partition,
+    collection_log_key,
+    latest_good_pointer_key,
+    parse_raw_etf_key,
+)
+from data_pipeline.lake.latest_good import parse_pointer
 from data_pipeline.steps import normalize_etf
 
 
@@ -21,6 +30,13 @@ def _raw_key(source: str, market: str, run_id: str = "R1", date: str = "2026-07-
 def _write_raw(storage, key: str, rows: list[dict]) -> None:
     body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
     storage.put_bytes(key, body.encode("utf-8"))
+    parsed = parse_raw_etf_key(key)
+    storage.put_bytes(
+        collection_log_key(
+            parsed["source"], "etf_holdings", parsed["ingest_date"], parsed["run_id"],
+        ),
+        json.dumps({"status": "success"}).encode(),
+    )
 
 
 def _fmp_row(**over) -> dict:
@@ -48,6 +64,15 @@ def _krx_row(**over) -> dict:
 
 def _quality_log(storage) -> dict:
     keys = storage.list_keys("operations_archive/data_quality_logs/")
+    assert len(keys) == 1, keys
+    return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
+
+
+def _quality_for_run(storage, run_id: str) -> dict:
+    keys = [
+        key for key in storage.list_keys("operations_archive/data_quality_logs/")
+        if f"/run_id={run_id}/" in key
+    ]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
@@ -132,7 +157,7 @@ def test_blocking_identity_excluded_from_canonical(tmp_path):
         _krx_row(COMPST_ISU_CD="000660", trd_dd="20260231"),   # 비달력일 → 정규화 실패(blocking)
     ])
 
-    assert normalize_etf.run(storage, "N1") == 0
+    assert normalize_etf.run(storage, "N1") == 2
     rows = _canonical_rows(storage, "KR", "2026-07-14")
     assert [r["constituent_ticker"] for r in rows] == ["005930"]
     log = _quality_log(storage)
@@ -174,7 +199,7 @@ def test_non_object_row_isolated_not_crash(tmp_path):
     body = "null\n" + json.dumps(_fmp_row()) + "\n[]\n"
     storage.put_bytes(_raw_key("fmp", "US"), body.encode("utf-8"))
 
-    assert normalize_etf.run(storage, "N1") == 0  # 크래시 없이 완료
+    assert normalize_etf.run(storage, "N1") == 2  # 크래시 없이 partial로 완료
     log = _quality_log(storage)
     assert log["records_passed"] == 1 and log["records_failed"] == 2
     assert all("non_object_row" in f["reasons"] for f in log["failures"])
@@ -185,7 +210,7 @@ def test_unknown_vendor_reported_not_silently_passed(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("bogus", "KR"), [_krx_row()])
 
-    assert normalize_etf.run(storage, "N1") == 0
+    assert normalize_etf.run(storage, "N1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0 and log["records_failed"] == 1
     assert "unsupported_vendor" in log["failures"][0]["reasons"]
@@ -203,6 +228,114 @@ def test_input_run_id_scopes_read_and_writes_canonical(tmp_path):
     log = _quality_log(storage)
     assert log["records_read"] == 2  # R1(1건) 은 스코프 밖 — 읽지도 않는다
     assert log["canonical_written"] is True and log["canonical_rows_written"] == 2
+    pointer = parse_pointer(storage.get_bytes(log["latest_good"]["pointer_key"]))
+    assert pointer["source_run_id"] == "N1"
+    assert pointer["partition"] == {"as_of_date": "2026-07-14"}
+    assert pointer["objects"][0]["rows"] == 2
+
+
+@pytest.mark.parametrize("status", ["partial", "stopped", "error"])
+def test_incomplete_collection_retains_previous_pointer_and_canonical(tmp_path, status):
+    """WHY: 받은 정상 행은 보존하되 전량성이 없는 수집을 last-good으로 승격하면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    first_key = _raw_key("krx", "KR", run_id="R1")
+    _write_raw(storage, first_key, [_krx_row(COMPST_RTO="30.5")])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    pointer_key = latest_good_pointer_key("etf_holdings", "KR")
+    previous = storage.get_bytes(pointer_key)
+
+    second_key = _raw_key("krx", "KR", run_id="R2")
+    _write_raw(storage, second_key, [
+        _krx_row(COMPST_RTO="31.0", fetched_at="2026-07-15T00:00:00+00:00"),
+    ])
+    parsed = parse_raw_etf_key(second_key)
+    storage.put_bytes(
+        collection_log_key("krx", "etf_holdings", parsed["ingest_date"], "R2"),
+        json.dumps({"status": status}).encode(),
+    )
+
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
+    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["weight_pct"] == 31.0
+    assert storage.get_bytes(pointer_key) == previous
+
+
+def test_row_failure_and_empty_run_retain_previous_pointer(tmp_path):
+    """WHY: 부분 행은 canonical 성공분만 남기고, holiday/empty는 last-good을 그대로 쓴다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", run_id="R1"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    pointer_key = latest_good_pointer_key("etf_holdings", "KR")
+    previous = storage.get_bytes(pointer_key)
+
+    _write_raw(storage, _raw_key("krx", "KR", run_id="R2"), [
+        _krx_row(COMPST_RTO="31.0", fetched_at="2026-07-15T00:00:00+00:00"),
+        _krx_row(COMPST_ISU_CD="   "),
+    ])
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
+    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["weight_pct"] == 31.0
+    assert storage.get_bytes(pointer_key) == previous
+    assert (
+        _quality_for_run(storage, "N2")["latest_good"]["pointer_intended_action"]
+        == "retain_partial"
+    )
+
+    assert normalize_etf.run(storage, "N3", input_run_id="HOLIDAY") == 0
+    assert storage.get_bytes(pointer_key) == previous
+    assert (
+        _quality_for_run(storage, "N3")["latest_good"]["pointer_intended_action"]
+        == "retain_empty"
+    )
+
+
+@pytest.mark.parametrize("failure", ["artifact", "readback", "quality", "pointer"])
+def test_storage_failures_cannot_expose_false_pointer(tmp_path, failure):
+    """WHY: artifact/readback/quality/CAS 어느 단계가 깨져도 새 alias가 보여서는 안 된다."""
+    class FailingStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            if failure == "quality" and "data_quality_logs" in key:
+                raise OSError("quality write failed")
+            return super().put_bytes(key, data)
+
+        def get_bytes(self, key):
+            data = super().get_bytes(key)
+            if failure == "readback" and "latest_good_partition_artifacts" in key:
+                return data + b"corrupt"
+            return data
+
+        def put_bytes_if_version(self, key, data, version):
+            if failure == "artifact" and "latest_good_partition_artifacts" in key:
+                return False
+            if failure == "pointer" and key.endswith("/pointer.json"):
+                return False
+            return super().put_bytes_if_version(key, data, version)
+
+    storage = FailingStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", run_id="R1"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 1
+    assert latest_good_pointer_key("etf_holdings", "KR") not in storage.list_keys("")
+
+
+def test_pointer_cas_is_the_last_successful_storage_mutation(tmp_path):
+    """WHY: alias 공개 뒤 필수 쓰기가 실패해 성공 포인터만 남는 순서 역전을 막는다."""
+    class TrackingStorage(LocalStorage):
+        def __init__(self, root):
+            super().__init__(root)
+            self.events = []
+
+        def put_bytes(self, key, data):
+            self.events.append(("put", key))
+            return super().put_bytes(key, data)
+
+        def put_bytes_if_version(self, key, data, version):
+            self.events.append(("cas", key))
+            return super().put_bytes_if_version(key, data, version)
+
+    storage = TrackingStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", run_id="R1"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    assert storage.events[-1] == (
+        "cas", latest_good_pointer_key("etf_holdings", "KR"),
+    )
 
 
 def test_krx_kospi_and_kosdaq_resolve_to_distinct_mics(tmp_path):
@@ -331,7 +464,7 @@ def test_timezone_없는_fetched_at은_canonical_최신행으로_승격하지_�
         _krx_row(fetched_at="2026-07-14T02:00:00")
     ])
 
-    assert normalize_etf.run(storage, "R1") == 0
+    assert normalize_etf.run(storage, "R1") == 2
     log = _quality_log(storage)
     assert log["records_passed"] == 0
     assert log["failures"][0]["reasons"] == ["bad_fetched_at"]
