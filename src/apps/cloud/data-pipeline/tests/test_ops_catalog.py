@@ -470,6 +470,18 @@ def test_serial_states_inject_ops_env():
             f"{state} 에 OPS_SFN_STATE_NAME 주입이 없다"
 
 
+def test_load_instruments_normal_sfn_uses_latest_good_inputs():
+    """WHY(ALPHA-1048): 정상 SFN이 scope를 생략하면 shared canonical 역사를 다시 훑어
+    producer가 확정한 last-good snapshot 계약과 실행 비용 상한이 동시에 깨진다."""
+    tf = _strip_hcl_comments(_STATEMACHINE_TF.read_text(encoding="utf-8"))
+    load_instruments = tf.split(
+        "LoadInstruments = merge(local.ecs_run_task_base, {", 1,
+    )[1].split("LoadInstrumentsCheckExitCode = {", 1)[0]
+    assert (
+        "States.Array('load-instruments', '--run-id', $.run_id, '--latest-good')"
+    ) in load_instruments
+
+
 def test_news_load_assertions_uses_current_tag_news_manifest():
     """WHY(ALPHA-1033): 로더가 명시 범위를 강제해도 정상 SFN이 현재 run_id를 넘기지 않으면
     매 스케줄 실행이 시작 전에 실패한다. 날짜 추측이나 풀스캔으로 우회할 수 없는 배선이다."""
