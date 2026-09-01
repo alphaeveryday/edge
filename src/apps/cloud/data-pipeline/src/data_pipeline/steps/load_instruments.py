@@ -35,6 +35,7 @@ NULL 로 두면 별도 `enrich-corp-code` 스텝이 corpCode.xml 매칭으로 �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -46,8 +47,10 @@ from ..lake import (
     canonical_etf_holdings_partition,
     canonical_etf_profile_partition,
     canonical_instrument_profile_partition,
+    latest_good_pointer_key,
     quality_log_key,
 )
+from ..lake.latest_good import LatestGoodError, PRODUCERS, max_fetched_at, parse_pointer
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ _MICS_BY_MARKET = {"KR": ("XKRX", "XKOS", "XKON")}
 # 용도고 전수는 DB 가 갖고 있다 — 개수(`created`)는 상한과 무관하게 정확하다.
 _CREATED_SAMPLE_LIMIT = 200
 
+_LATEST_GOOD_DATASETS = ("etf_holdings", "etf_profile", "instrument_profile")
+
 
 def _fetched_at(value: object) -> datetime | None:
     if not isinstance(value, str):
@@ -93,6 +98,104 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
     import pyarrow.parquet as pq
 
     return pq.read_table(io.BytesIO(data)).to_pylist()
+
+
+def _read_latest_good_inputs(storage: Storage, input_io: dict[str, int | None]) -> dict[str, dict]:
+    """세 KR pointer와 artifact를 DB 연결 전에 검증해 메모리에 고정한다.
+
+    pointer 세 개를 먼저 읽는 이유는 첫 artifact를 읽은 뒤 셋째 pointer 결손을 발견하는
+    순서조차 정상 계약과 다르기 때문이다. artifact는 SHA를 확인한 뒤에만 Parquet parser에
+    넘긴다 — 손상 바이트가 parser 오류로 위장하면 pointer 무결성 위반이 가려진다.
+    """
+    inputs: dict[str, dict] = {}
+    for dataset in _LATEST_GOOD_DATASETS:
+        pointer_key = latest_good_pointer_key(dataset, "KR")
+        input_io["pointer_gets"] += 1
+        pointer_bytes, pointer_version = storage.get_bytes_with_version(pointer_key)
+        if pointer_bytes is None:
+            raise LatestGoodError(f"latest-good pointer가 없다: {pointer_key}")
+        pointer = parse_pointer(
+            pointer_bytes, expected_dataset=dataset,
+            expected_producer=PRODUCERS[dataset], expected_market="KR",
+        )
+        object_keys = [obj["key"] for obj in pointer["objects"]]
+        if object_keys != sorted(object_keys) or len(object_keys) != len(set(object_keys)):
+            raise LatestGoodError(f"latest-good objects가 정렬·유일하지 않다: {dataset}")
+        if any(obj["rows"] == 0 for obj in pointer["objects"]):
+            # producer는 빈 정상 런에서 alias를 보존한다. 따라서 0행 pointer는 정상 상태가
+            # 아니라 pointer와 artifact가 함께 변조된 경우까지 포함한 계약 위반이다.
+            raise LatestGoodError(f"latest-good artifact가 비었다: {dataset}")
+        inputs[dataset] = {
+            "pointer": pointer,
+            "pointer_key": pointer_key,
+            "pointer_version": pointer_version,
+            "pointer_bytes": pointer_bytes,
+        }
+
+    for dataset in _LATEST_GOOD_DATASETS:
+        item = inputs[dataset]
+        pointer = item["pointer"]
+        rows: list[dict] = []
+        object_metrics: list[dict] = []
+        for obj in pointer["objects"]:
+            try:
+                input_io["artifact_gets"] += 1
+                artifact_bytes = storage.get_bytes(obj["key"])
+            except Exception as exc:
+                raise LatestGoodError(
+                    f"latest-good artifact를 읽을 수 없다: {obj['key']}"
+                ) from exc
+            actual_sha = hashlib.sha256(artifact_bytes).hexdigest()
+            if actual_sha != obj["sha256"]:
+                raise LatestGoodError(f"latest-good artifact SHA가 다르다: {obj['key']}")
+            try:
+                object_rows = _read_parquet_rows(artifact_bytes)
+            except Exception as exc:
+                raise LatestGoodError(
+                    f"latest-good artifact Parquet가 손상됐다: {obj['key']}"
+                ) from exc
+            if len(object_rows) != obj["rows"]:
+                raise LatestGoodError(
+                    f"latest-good artifact 행 수가 다르다: {obj['key']} "
+                    f"pointer={obj['rows']} actual={len(object_rows)}"
+                )
+            rows.extend(object_rows)
+            object_metrics.append({
+                "key": obj["key"], "sha256": actual_sha,
+                "declared_rows": obj["rows"], "physical_rows": len(object_rows),
+                "bytes": len(artifact_bytes),
+            })
+
+        partition_date = pointer["partition"]["as_of_date"]
+        for index, row in enumerate(rows):
+            if (not isinstance(row, dict) or row.get("market") != pointer["market"]
+                    or row.get("as_of_date") != partition_date):
+                raise LatestGoodError(
+                    "latest-good artifact 행과 pointer partition이 일치하지 않는다: "
+                    f"dataset={dataset} row={index}"
+                )
+        actual_max_fetched_at = max_fetched_at(rows)
+        if actual_max_fetched_at != pointer["max_fetched_at"]:
+            raise LatestGoodError(
+                "latest-good artifact max_fetched_at이 pointer와 다르다: "
+                f"dataset={dataset} pointer={pointer['max_fetched_at']} "
+                f"actual={actual_max_fetched_at}"
+            )
+        item["rows"] = rows
+        item["quality"] = {
+            "dataset": dataset,
+            "pointer_key": item["pointer_key"],
+            "pointer_version": item["pointer_version"],
+            "pointer_bytes": len(item["pointer_bytes"]),
+            "pointer_sha256": hashlib.sha256(item["pointer_bytes"]).hexdigest(),
+            "source_run_id": pointer["source_run_id"],
+            "partition": pointer["partition"],
+            "object_count": len(pointer["objects"]),
+            "objects": object_metrics,
+            "physical_rows": len(rows),
+            "logical_rows": 0,
+        }
+    return inputs
 
 
 def _partition_dates(storage: Storage, market: str) -> list[str]:
@@ -239,8 +342,11 @@ def _insert_etf(conn, *, name: str, mic: str, ticker: str, currency: str) -> str
 
 
 def run(storage: Storage, run_id: str, *, db: DbConfig,
-        expected_etfs: frozenset[str] | None = None) -> int:
+        expected_etfs: frozenset[str] | None = None,
+        latest_good: bool = False, all_partitions: bool = False) -> int:
     """canonical 구성종목 → 종목 마스터 적재. 성공 0, 장애 시 비0."""
+    if latest_good and all_partitions:
+        raise ValueError("latest-good와 all은 함께 쓸 수 없다")
     started_at = datetime.now(timezone.utc)
     read = skipped_no_mic = existing = created = skipped_foreign_etf = 0
     skipped_unsupported_asset = skipped_unknown_asset_type = 0
@@ -255,7 +361,22 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
     failures: list[dict] = []
     exit_code = 0
 
-    for market in LOADED_MARKETS:
+    latest_good_inputs: dict[str, dict] = {}
+    input_io: dict[str, int | None] = {
+        "pointer_gets": 0,
+        "artifact_gets": 0,
+        "canonical_prefix_lists": 0 if latest_good else None,
+    }
+    if latest_good:
+        try:
+            latest_good_inputs = _read_latest_good_inputs(storage, input_io)
+        except Exception as exc:
+            logger.exception("latest-good 입력 검증 실패")
+            failures.append({"market": "KR", "reasons": ["latest_good_input_error"],
+                             "error": str(exc)})
+            exit_code = 1
+
+    for market in (() if latest_good and exit_code else LOADED_MARKETS):
         country = _COUNTRY_BY_MARKET.get(market)
         if country is None:
             # 국가 매핑 없는 시장을 조용히 넘기면 actor.country_code 가 비어 적재된다.
@@ -269,7 +390,15 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         market_read = market_no_mic = market_unknown_mic = market_foreign = 0
         market_unsupported = market_unknown_asset_type = 0
         logical_rows: dict[tuple[str, str], tuple[dict, datetime]] = {}
-        dates = _partition_dates(storage, market)
+        if latest_good:
+            holdings_input = latest_good_inputs["etf_holdings"]
+            dates = [holdings_input["pointer"]["partition"]["as_of_date"]]
+            holdings_objects = [(
+                holdings_input["pointer"]["objects"][0]["key"], holdings_input["rows"],
+            )]
+        else:
+            dates = _partition_dates(storage, market)
+            holdings_objects = []
         bad_dates = [date for date in dates if not _is_iso_date(date)]
         if bad_dates:
             failures.append({"market": market, "reasons": ["bad_partition_date"],
@@ -277,11 +406,14 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
             exit_code = 1
             dates = []
         if dates:
-            prefix = canonical_etf_holdings_partition(market, dates[-1])
-            for key in storage.list_keys(prefix + "/"):
-                if not key.endswith(".parquet"):
-                    continue
-                for row in _read_parquet_rows(storage.get_bytes(key)):
+            if not latest_good:
+                prefix = canonical_etf_holdings_partition(market, dates[-1])
+                holdings_objects = [
+                    (key, _read_parquet_rows(storage.get_bytes(key)))
+                    for key in storage.list_keys(prefix + "/") if key.endswith(".parquet")
+                ]
+            for key, object_rows in holdings_objects:
+                for row in object_rows:
                     read += 1
                     market_read += 1
                     row_market, as_of = row.get("market"), row.get("as_of_date")
@@ -320,6 +452,10 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
                         if parsed_fetched_at < previous[1]:
                             continue
                     logical_rows[candidate_key] = (row, parsed_fetched_at)
+            if latest_good:
+                latest_good_inputs["etf_holdings"]["quality"]["logical_rows"] += len(
+                    logical_rows
+                )
             for row, parsed_fetched_at in logical_rows.values():
                 etf_id, ticker = row["etf_id"], row["constituent_ticker"]
                 raw_asset_type = row.get("constituent_asset_type")
@@ -387,10 +523,17 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         # 선언된 누적값이라, 시장이 둘 이상이 되면 합계끼리 비교해 엉뚱한 시장을
         # 지목한다(오늘 LOADED_MARKETS 가 KR 하나뿐이라 안 드러날 뿐이다).
         market_read = market_no_mic = market_no_share_class = market_non_common = 0
-        for profile in _latest_instrument_profile_rows(storage, market):
+        instrument_profile_rows = (
+            latest_good_inputs["instrument_profile"]["rows"]
+            if latest_good else _latest_instrument_profile_rows(storage, market)
+        )
+        instrument_logical_keys: set[str] = set()
+        for profile in instrument_profile_rows:
             instruments_read += 1
             market_read += 1
             mic, ticker = profile.get("market_code"), profile.get("ticker")
+            if isinstance(ticker, str) and ticker:
+                instrument_logical_keys.add(ticker)
             if not mic or not ticker:
                 # 정제단이 이미 걸렀어야 하는 행. 구성종목의 지원 제외 자산과 **사유가
                 # 다르므로** 카운터를 따로 둔다.
@@ -433,6 +576,10 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
             # 구성종목 행과 같은 키 모양으로 맞춰 아래 소비 루프를 그대로 쓴다. 통화는
             # 소비부가 `or "KRW"` 로 받으므로 싣지 않는다(KR 상장분은 전부 원화).
             all_rows.setdefault((mic, ticker), {"constituent_name": profile.get("display_name")})
+        if latest_good:
+            latest_good_inputs["instrument_profile"]["quality"]["logical_rows"] += len(
+                instrument_logical_keys
+            )
 
         # 전종목 입력을 **읽었는데 한 건도 못 쓴** 상태는 사유와 함께 남긴다. 실제 경로가
         # 있다: `market_code`·`share_class` 컬럼이 생기기 전에 쓰인 canonical 파티션을 읽으면
@@ -465,7 +612,16 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         # 때만 이 시장을 건너뛴다. 예전엔 구성종목만 보고 continue 해서, 프로필만 있는 런이
         # 조용히 아무것도 안 했다(테스트가 잡음).
         mic_for_market = _MIC_BY_MARKET.get(market)
-        profile_rows = _latest_profile_rows(storage, market) if mic_for_market else []
+        profile_rows = (
+            latest_good_inputs["etf_profile"]["rows"]
+            if latest_good and mic_for_market else
+            (_latest_profile_rows(storage, market) if mic_for_market else [])
+        )
+        if latest_good:
+            latest_good_inputs["etf_profile"]["quality"]["logical_rows"] += len({
+                row.get("etf_id") for row in profile_rows
+                if isinstance(row.get("etf_id"), str) and row.get("etf_id")
+            })
         if not all_rows and not profile_rows:
             logger.info("적재 대상 없음: market=%s", market)
             continue
@@ -561,9 +717,24 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
             del created_rows[sample_at_market_start:]
             exit_code = 1
 
+    finished_at = datetime.now(timezone.utc)
+    latest_good_quality = [
+        latest_good_inputs[dataset]["quality"]
+        for dataset in _LATEST_GOOD_DATASETS if dataset in latest_good_inputs
+    ]
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
-        "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": started_at.isoformat(), "finished_at": finished_at.isoformat(),
+        "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+        "input_mode": ("latest_good" if latest_good else
+                       ("all" if all_partitions else "legacy_implicit_all")),
+        "latest_good_inputs": latest_good_quality,
+        # 운영 증명은 "pointer/artifact direct GET + canonical LIST 0"을 숫자로 남긴다.
+        # latest-good 경로는 위 검증 함수 하나만 입력 I/O를 담당하므로 정적 추론값이 아니라
+        # 실제 검증을 끝낸 입력 수와 object 수를 센 값이다.
+        "input_io": input_io,
+        "physical_rows_read": sum(item["physical_rows"] for item in latest_good_quality),
+        "logical_rows_read": sum(item["logical_rows"] for item in latest_good_quality),
         "markets": list(LOADED_MARKETS),
         "constituents_read": read, "skipped_no_mic": skipped_no_mic,
         "skipped_unsupported_asset": skipped_unsupported_asset,

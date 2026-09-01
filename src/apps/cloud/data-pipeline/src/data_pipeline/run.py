@@ -6,7 +6,7 @@
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
-        [--source VENDOR] [--input-run-id RUN_ID] [--all] [--pending-only]
+        [--source VENDOR] [--input-run-id RUN_ID] [--latest-good] [--all] [--pending-only]
         [--limit N] [--window-days N]
         [--interval-sec N]
 
@@ -288,10 +288,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-run-id", default=None,
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
-                        help="tag-news·load-documents·load-price-daily·load-price-triggers·"
+                        help="load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
                              "load-etf-nav·load-etf-holdings·load-etf-flow·"
                              "load-investor-intraday·load-assertions·"
                              "load-disclosure: 명시적 전체 스캔")
+    parser.add_argument("--latest-good", action="store_true",
+                        help="load-instruments: 세 KR latest-good pointer의 불변 artifact만 직접 읽기")
     parser.add_argument("--pending-only", action="store_true",
                         help="load-disclosure: canonical을 읽지 않고 pending 잔여만 회수")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
@@ -503,17 +505,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
     if args.all_partitions and args.step not in (
-        "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
+        "load-instruments", "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
         "load-etf-nav", "load-etf-holdings", "load-etf-flow",
         "load-investor-intraday",
         "load-assertions",
         "load-disclosure",
     ):
         raise SystemExit(
-            "--all 은 tag-news·load-documents·load-price-daily·load-price-triggers·"
+            "--all 은 load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
             "load-etf-nav·load-etf-holdings·load-etf-flow·"
             "load-investor-intraday·load-assertions·load-disclosure 전용이다"
         )
+    if args.latest_good and args.step != "load-instruments":
+        raise SystemExit("--latest-good은 load-instruments 전용이다")
+    if args.step == "load-instruments" and args.latest_good and args.all_partitions:
+        raise SystemExit("load-instruments는 --latest-good과 --all을 함께 쓸 수 없다")
     if args.pending_only and args.step != "load-disclosure":
         raise SystemExit("--pending-only는 load-disclosure 전용이다")
 
@@ -643,8 +649,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # LOADED_MARKETS 를 순회하는데 오늘 그 값이 ("KR",)라 맞아떨어진다 — US 를 더하면
         # US 구성종목이 전량 뿌리 밖으로 빠진다(failed_records 에도 안 잡혀 조용하다).
         # 시장을 늘릴 때 이 인자도 시장별로 갈라야 한다. load-etf-holdings 도 같다.
-        return load_instruments.run(storage, run_id, db=db_config_from_env(settings.db),
-                                    expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
+        return load_instruments.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            expected_etfs=ingest_price_raw._krx_expected_etfs(settings),
+            latest_good=args.latest_good, all_partitions=args.all_partitions,
+        )
 
     # corp_code enrichment 은 DB(미충전 KR 회사)를 읽고 OpenDART corpCode.xml 로 채운다 —
     # 마스터 적재도 공시 적재도 아닌 별개 관심사라 별도 스텝(ALPHA-491). db + DART 소스 둘 다 필요.

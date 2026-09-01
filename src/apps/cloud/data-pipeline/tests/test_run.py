@@ -1053,3 +1053,28 @@ def test_canonical_holdings_consumers_get_the_universe_root_filter(monkeypatch, 
     settings = run_mod.load_settings(None)
     assert captured["expected_etfs"] == frozenset(settings.krx_etf.source.etf_map)
     assert captured["expected_etfs"], "필터가 비면 전량 통과라 안 건 것과 같다"
+
+
+def test_load_instruments_phase1_exposes_explicit_modes_and_keeps_live_compatibility(monkeypatch):
+    """SFN을 바꾸기 전 image가 no-arg를 거부하면 배포 순간 정상 시장 런이 끊긴다(ALPHA-1048)."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    captured = []
+    monkeypatch.setattr(
+        run_mod.load_instruments, "run",
+        lambda *args, **kwargs: captured.append(
+            (kwargs["latest_good"], kwargs["all_partitions"])
+        ) or 0,
+    )
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+
+    assert main(["load-instruments", "--latest-good"]) == 0
+    assert main(["load-instruments", "--all"]) == 0
+    assert main(["load-instruments"]) == 0
+    assert captured == [(True, False), (False, True), (False, False)]
+
+    with pytest.raises(SystemExit, match="함께 쓸 수 없다"):
+        main(["load-instruments", "--latest-good", "--all"])
+    with pytest.raises(SystemExit, match="load-instruments 전용"):
+        main(["normalize-etf", "--latest-good"])

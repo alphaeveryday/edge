@@ -8,12 +8,18 @@
 """
 
 import io
+import hashlib
 import json
 
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_etf_holdings_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_holdings_partition,
+    latest_good_pointer_key,
+)
+from data_pipeline.lake.latest_good import prepare_pointer, publish_pointer, serialize_pointer
 from data_pipeline.steps import load_instruments
 
 _COLUMNS = ("market", "etf_id", "constituent_ticker", "constituent_isin", "constituent_name",
@@ -1012,3 +1018,277 @@ def test_KR_주식의_미지원_MIC는_마스터에_쓰지_않는다(tmp_path, m
     assert log["skipped_unknown_mic"] == 1
     assert log["ops"]["failed_records"] == 1
     assert not _inserts(conn, "instrument")
+
+
+# ── latest-good normal input (ALPHA-1048) ───────────────────────────────────
+def _publish_latest_good_fixture(
+    storage, dataset: str, producer: str, as_of: str, run_id: str, rows: list[dict],
+):
+    if dataset == "etf_holdings":
+        _write_canonical(storage, "KR", as_of, rows)
+        key = f"{canonical_etf_holdings_partition('KR', as_of)}/part-00000.parquet"
+    elif dataset == "etf_profile":
+        _write_profile_canonical(storage, "KR", as_of, rows)
+        from data_pipeline.lake import canonical_etf_profile_partition
+        key = f"{canonical_etf_profile_partition('KR', as_of)}/part-00000.parquet"
+    else:
+        _write_instrument_profile(storage, "KR", as_of, rows)
+        from data_pipeline.lake import canonical_instrument_profile_partition
+        key = f"{canonical_instrument_profile_partition('KR', as_of)}/part-00000.parquet"
+    plan = prepare_pointer(
+        storage, dataset=dataset, producer=producer, market="KR", as_of_date=as_of,
+        run_id=run_id, artifact_bytes=storage.get_bytes(key), rows=rows,
+    )
+    publish_pointer(storage, plan)
+    return plan
+
+
+def _latest_good_lake(tmp_path, *, run_ids=("H_OLD", "P_CURRENT", "I_OLD")):
+    storage = LocalStorage(tmp_path / "lake")
+    plans = {
+        "etf_holdings": _publish_latest_good_fixture(
+            storage, "etf_holdings", "normalize_etf", "2026-07-15", run_ids[0],
+            [_holding("005930", "삼성전자")],
+        ),
+        "etf_profile": _publish_latest_good_fixture(
+            storage, "etf_profile", "normalize_etf_profile", "2026-07-20", run_ids[1],
+            [_profile("069500", "KODEX 200")],
+        ),
+        "instrument_profile": _publish_latest_good_fixture(
+            storage, "instrument_profile", "normalize_instrument_profile", "2026-08-06",
+            run_ids[2], [_instrument_profile_row("068270", "셀트리온")],
+        ),
+    }
+    return storage, plans
+
+
+class _ObservedStorage:
+    """정상 소비가 어떤 storage operation을 했는지 순서까지 기록한다."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.calls: list[tuple[str, str]] = []
+
+    def get_bytes_with_version(self, key):
+        self.calls.append(("get_version", key))
+        return self.inner.get_bytes_with_version(key)
+
+    def get_bytes(self, key):
+        self.calls.append(("get", key))
+        return self.inner.get_bytes(key)
+
+    def list_keys(self, prefix):
+        self.calls.append(("list", prefix))
+        return self.inner.list_keys(prefix)
+
+    def put_bytes(self, key, data):
+        self.calls.append(("put", key))
+        return self.inner.put_bytes(key, data)
+
+    def put_bytes_if_version(self, key, data, version):
+        return self.inner.put_bytes_if_version(key, data, version)
+
+    def delete_keys(self, keys):
+        return self.inner.delete_keys(keys)
+
+
+def test_latest_good_gets_three_pointers_first_and_never_lists_canonical(tmp_path, monkeypatch):
+    """정상 마스터 적재 비용은 레이크 역사와 무관해야 한다 — pointer/object GET만 허용한다."""
+    inner, plans = _latest_good_lake(tmp_path)
+    storage = _ObservedStorage(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R1", db=_db(), latest_good=True) == 0
+
+    pointer_keys = [latest_good_pointer_key(dataset, "KR")
+                    for dataset in load_instruments._LATEST_GOOD_DATASETS]
+    artifact_keys = [plans[dataset].artifact["key"]
+                     for dataset in load_instruments._LATEST_GOOD_DATASETS]
+    reads = [call for call in storage.calls if call[0] in {"get", "get_version", "list"}]
+    assert reads == ([('get_version', key) for key in pointer_keys]
+                     + [('get', key) for key in artifact_keys])
+    assert not [call for call in storage.calls if call[0] == "list"]
+
+    log = _quality(inner)
+    assert log["input_mode"] == "latest_good"
+    assert [item["source_run_id"] for item in log["latest_good_inputs"]] == [
+        "H_OLD", "P_CURRENT", "I_OLD",
+    ], "입력 pointer는 서로 다른 run을 가리켜도 함께 소비돼야 한다"
+    assert [(item["physical_rows"], item["logical_rows"])
+            for item in log["latest_good_inputs"]] == [(1, 1), (1, 1), (1, 1)]
+    assert (log["physical_rows_read"], log["logical_rows_read"]) == (3, 3)
+    assert log["input_io"] == {
+        "pointer_gets": 3,
+        "artifact_gets": 3,
+        "canonical_prefix_lists": 0,
+    }
+    assert all(item["pointer_version"] for item in log["latest_good_inputs"])
+    assert log["duration_ms"] >= 0
+
+
+@pytest.mark.parametrize("damage", [
+    "corrupt_json", "wrong_dataset", "wrong_producer", "wrong_market", "bad_date",
+    "bad_run", "wrong_key", "bad_sha", "wrong_max_fetched_at",
+    "duplicate_object", "unsorted_objects",
+    "empty_artifact", "dangling_artifact", "partition_identity_mismatch",
+])
+def test_invalid_latest_good_input_fails_before_any_db_write(
+        tmp_path, monkeypatch, damage):
+    """세 입력 중 하나라도 불확정이면 반쪽 마스터 transaction을 열어서는 안 된다."""
+    storage, plans = _latest_good_lake(tmp_path)
+    pointer_key = latest_good_pointer_key("etf_holdings", "KR")
+    pointer = json.loads(storage.get_bytes(pointer_key).decode("utf-8"))
+    artifact_key = plans["etf_holdings"].artifact["key"]
+
+    if damage == "corrupt_json":
+        storage.put_bytes(pointer_key, b"{")
+    elif damage == "wrong_dataset":
+        pointer["dataset"] = "etf_profile"
+    elif damage == "wrong_producer":
+        pointer["producer"] = "normalize_etf_profile"
+    elif damage == "wrong_market":
+        pointer["market"] = "US"
+    elif damage == "bad_date":
+        pointer["partition"]["as_of_date"] = "2026-99-99"
+    elif damage == "bad_run":
+        pointer["source_run_id"] = "bad/run"
+    elif damage == "wrong_key":
+        pointer["objects"][0]["key"] = "canonical/not-immutable.parquet"
+    elif damage == "bad_sha":
+        pointer["objects"][0]["sha256"] = "a" * 64
+    elif damage == "wrong_max_fetched_at":
+        pointer["max_fetched_at"] = "2099-01-01T00:00:00+00:00"
+    elif damage == "duplicate_object":
+        pointer["objects"].append(dict(pointer["objects"][0]))
+    elif damage == "unsorted_objects":
+        extra = dict(pointer["objects"][0])
+        extra["key"] = "z/part.parquet"
+        pointer["objects"] = [extra, pointer["objects"][0]]
+    elif damage == "empty_artifact":
+        _write_canonical(storage, "KR", "2026-07-15", [])
+        empty_bytes = storage.get_bytes(artifact_key)
+        pointer["objects"][0]["sha256"] = hashlib.sha256(empty_bytes).hexdigest()
+        pointer["objects"][0]["rows"] = 0
+    elif damage == "dangling_artifact":
+        storage.delete_keys([artifact_key])
+    elif damage == "partition_identity_mismatch":
+        bad_row = _holding("005930", "삼성전자", as_of_date="1999-01-01")
+        _write_canonical(storage, "KR", "2026-07-15", [bad_row])
+        bad_bytes = storage.get_bytes(
+            f"{canonical_etf_holdings_partition('KR', '2026-07-15')}/part-00000.parquet"
+        )
+        storage.put_bytes(artifact_key, bad_bytes)
+        pointer["objects"][0]["sha256"] = hashlib.sha256(bad_bytes).hexdigest()
+        pointer["objects"][0]["rows"] = 1
+
+    if damage not in {"corrupt_json", "dangling_artifact"}:
+        payload = (serialize_pointer(pointer) if damage == "partition_identity_mismatch" else
+                   json.dumps(pointer, ensure_ascii=False).encode("utf-8"))
+        storage.put_bytes(pointer_key, payload)
+
+    def _db_must_not_open(_config):
+        raise AssertionError("latest-good 세 입력 검증 전에 DB를 열었다")
+
+    monkeypatch.setattr(load_instruments, "connect", _db_must_not_open)
+    assert load_instruments.run(storage, "R_BAD", db=_db(), latest_good=True) == 1
+    log = _quality(storage)
+    assert log["created"] == 0 and log["ops"]["records_out"] == 0
+    assert log["failures"][0]["reasons"] == ["latest_good_input_error"]
+    if damage == "bad_sha":
+        assert log["input_io"] == {
+            "pointer_gets": 3, "artifact_gets": 1, "canonical_prefix_lists": 0,
+        }
+
+
+def test_all_pointer_aliases_are_validated_before_any_artifact_or_db(tmp_path, monkeypatch):
+    """셋째 pointer 결손을 첫 artifact GET 뒤에 발견하면 'pointer 먼저 고정' 계약이 깨진다."""
+    inner, _plans = _latest_good_lake(tmp_path)
+    missing = latest_good_pointer_key("instrument_profile", "KR")
+    inner.delete_keys([missing])
+    storage = _ObservedStorage(inner)
+    monkeypatch.setattr(
+        load_instruments, "connect",
+        lambda _config: (_ for _ in ()).throw(AssertionError("DB를 열었다")),
+    )
+
+    assert load_instruments.run(storage, "R_BAD", db=_db(), latest_good=True) == 1
+    reads = [call for call in storage.calls if call[0] in {"get", "get_version"}]
+    assert reads == [
+        ("get_version", latest_good_pointer_key(dataset, "KR"))
+        for dataset in load_instruments._LATEST_GOOD_DATASETS
+    ]
+    assert _quality(inner)["input_io"] == {
+        "pointer_gets": 3, "artifact_gets": 0, "canonical_prefix_lists": 0,
+    }
+
+
+def test_retained_last_good_pointer_is_a_valid_empty_current_result(tmp_path, monkeypatch):
+    """현재 producer가 빈 정상 런이면 alias는 옛 run 그대로이고 consumer는 그걸 써야 한다."""
+    storage, _plans = _latest_good_lake(
+        tmp_path, run_ids=("H_RETAINED", "P_CURRENT", "I_RETAINED"),
+    )
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R_EMPTY_CURRENT", db=_db(), latest_good=True) == 0
+    log = _quality(storage)
+    assert [item["source_run_id"] for item in log["latest_good_inputs"]] == [
+        "H_RETAINED", "P_CURRENT", "I_RETAINED",
+    ]
+    assert len(_inserts(conn, "instrument")) == 3
+
+
+def test_repeated_identical_pointers_keep_db_natural_keys_idempotent(tmp_path, monkeypatch):
+    """같은 pointer 재소비가 새 ULID를 만들면 그 ID를 참조하는 모든 FK가 끊긴다."""
+    storage, _plans = _latest_good_lake(tmp_path)
+    first = _FakeConn()
+    second = _FakeConn(existing=[
+        ("XKRX", "005930", "inst_H"), ("XKRX", "068270", "inst_I"),
+        ("XKRX", "069500", "inst_E"),
+    ])
+    connections = iter((_fake_connect(first), _fake_connect(second)))
+    monkeypatch.setattr(load_instruments, "connect", lambda config: next(connections)(config))
+
+    assert load_instruments.run(storage, "R1", db=_db(), latest_good=True) == 0
+    assert load_instruments.run(storage, "R2", db=_db(), latest_good=True) == 0
+    assert len(_inserts(first, "instrument")) == 3
+    assert _inserts(second, "instrument") == []
+
+    key = next(k for k in storage.list_keys("operations_archive/data_quality_logs/")
+               if "/run_id=R2/" in k)
+    log = json.loads(storage.get_bytes(key).decode("utf-8"))
+    assert log["created"] == 0 and log["etfs_created"] == 0
+    assert log["already_present"] == 2 and log["etfs_already_present"] == 1
+
+
+def test_latest_good_metrics_remain_truthful_when_db_rolls_back(tmp_path, monkeypatch):
+    """input 검증은 끝났어도 DB rollback이면 records_out/created는 0이어야 한다."""
+    storage, _plans = _latest_good_lake(tmp_path)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _boom(_config):
+        raise RuntimeError("DB down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(load_instruments, "connect", _boom)
+    assert load_instruments.run(storage, "R_ROLLBACK", db=_db(), latest_good=True) == 1
+    log = _quality(storage)
+    assert [(item["physical_rows"], item["logical_rows"])
+            for item in log["latest_good_inputs"]] == [(1, 1), (1, 1), (1, 1)]
+    assert log["created"] == 0 and log["etfs_created"] == 0
+    assert log["created_rows"] == [] and log["ops"]["records_out"] == 0
+
+
+def test_explicit_all_keeps_the_canonical_recovery_path(tmp_path, monkeypatch):
+    """pointer 장애 복구 수단은 암묵 fallback이 아니라 운영자가 드러낸 --all이어야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-15", [_holding("005930", "삼성전자")])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_instruments, "connect", _fake_connect(conn))
+
+    assert load_instruments.run(storage, "R_ALL", db=_db(), all_partitions=True) == 0
+    assert _quality(storage)["input_mode"] == "all"
+    assert len(_inserts(conn, "instrument")) == 1
