@@ -1155,7 +1155,7 @@ def test_invalid_latest_good_input_fails_before_any_db_write(
     elif damage == "wrong_key":
         pointer["objects"][0]["key"] = "canonical/not-immutable.parquet"
     elif damage == "bad_sha":
-        pointer["objects"][0]["sha256"] = "A" * 64
+        pointer["objects"][0]["sha256"] = "a" * 64
     elif damage == "duplicate_object":
         pointer["objects"].append(dict(pointer["objects"][0]))
     elif damage == "unsorted_objects":
@@ -1187,6 +1187,10 @@ def test_invalid_latest_good_input_fails_before_any_db_write(
     log = _quality(storage)
     assert log["created"] == 0 and log["ops"]["records_out"] == 0
     assert log["failures"][0]["reasons"] == ["latest_good_input_error"]
+    if damage == "bad_sha":
+        assert log["input_io"] == {
+            "pointer_gets": 3, "artifact_gets": 1, "canonical_prefix_lists": 0,
+        }
 
 
 def test_all_pointer_aliases_are_validated_before_any_artifact_or_db(tmp_path, monkeypatch):
@@ -1206,6 +1210,9 @@ def test_all_pointer_aliases_are_validated_before_any_artifact_or_db(tmp_path, m
         ("get_version", latest_good_pointer_key(dataset, "KR"))
         for dataset in load_instruments._LATEST_GOOD_DATASETS
     ]
+    assert _quality(inner)["input_io"] == {
+        "pointer_gets": 3, "artifact_gets": 0, "canonical_prefix_lists": 0,
+    }
 
 
 def test_retained_last_good_pointer_is_a_valid_empty_current_result(tmp_path, monkeypatch):

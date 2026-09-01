@@ -100,7 +100,7 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
     return pq.read_table(io.BytesIO(data)).to_pylist()
 
 
-def _read_latest_good_inputs(storage: Storage) -> dict[str, dict]:
+def _read_latest_good_inputs(storage: Storage, input_io: dict[str, int | None]) -> dict[str, dict]:
     """세 KR pointer와 artifact를 DB 연결 전에 검증해 메모리에 고정한다.
 
     pointer 세 개를 먼저 읽는 이유는 첫 artifact를 읽은 뒤 셋째 pointer 결손을 발견하는
@@ -110,6 +110,7 @@ def _read_latest_good_inputs(storage: Storage) -> dict[str, dict]:
     inputs: dict[str, dict] = {}
     for dataset in _LATEST_GOOD_DATASETS:
         pointer_key = latest_good_pointer_key(dataset, "KR")
+        input_io["pointer_gets"] += 1
         pointer_bytes, pointer_version = storage.get_bytes_with_version(pointer_key)
         if pointer_bytes is None:
             raise LatestGoodError(f"latest-good pointer가 없다: {pointer_key}")
@@ -134,6 +135,7 @@ def _read_latest_good_inputs(storage: Storage) -> dict[str, dict]:
         object_metrics: list[dict] = []
         for obj in pointer["objects"]:
             try:
+                input_io["artifact_gets"] += 1
                 artifact_bytes = storage.get_bytes(obj["key"])
             except Exception as exc:
                 raise LatestGoodError(
@@ -349,9 +351,14 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
     exit_code = 0
 
     latest_good_inputs: dict[str, dict] = {}
+    input_io: dict[str, int | None] = {
+        "pointer_gets": 0,
+        "artifact_gets": 0,
+        "canonical_prefix_lists": 0 if latest_good else None,
+    }
     if latest_good:
         try:
-            latest_good_inputs = _read_latest_good_inputs(storage)
+            latest_good_inputs = _read_latest_good_inputs(storage, input_io)
         except Exception as exc:
             logger.exception("latest-good 입력 검증 실패")
             failures.append({"market": "KR", "reasons": ["latest_good_input_error"],
@@ -714,11 +721,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         # 운영 증명은 "pointer/artifact direct GET + canonical LIST 0"을 숫자로 남긴다.
         # latest-good 경로는 위 검증 함수 하나만 입력 I/O를 담당하므로 정적 추론값이 아니라
         # 실제 검증을 끝낸 입력 수와 object 수를 센 값이다.
-        "input_io": {
-            "pointer_gets": len(latest_good_quality),
-            "artifact_gets": sum(item["object_count"] for item in latest_good_quality),
-            "canonical_prefix_lists": 0 if latest_good else None,
-        },
+        "input_io": input_io,
         "physical_rows_read": sum(item["physical_rows"] for item in latest_good_quality),
         "logical_rows_read": sum(item["logical_rows"] for item in latest_good_quality),
         "markets": list(LOADED_MARKETS),
