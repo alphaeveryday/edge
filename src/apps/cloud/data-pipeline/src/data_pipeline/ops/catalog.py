@@ -285,6 +285,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         task_key="NORMALIZE_ETF_NAV", stage="normalize", dataset="etf_nav", required=True,
         cli_command=("normalize-etf-nav",), sfn_state_name="NormalizeEtfNav",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+        fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="NORMALIZE_INVESTOR", stage="normalize", dataset="investor_flow_daily",
@@ -322,9 +323,10 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="rds", deadline_offset_seconds=7200,
     ),
     CatalogEntry(
-        task_key="LOAD_ETF_NAV", stage="feature", dataset="etf_nav_daily", required=True,
+        task_key="LOAD_ETF_NAV", stage="feature", dataset="etf_nav_load", required=True,
         cli_command=("load-etf-nav",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfNav",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
+        fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="LOAD_ETF_HOLDINGS", stage="feature", dataset="etf_holding_snapshot",

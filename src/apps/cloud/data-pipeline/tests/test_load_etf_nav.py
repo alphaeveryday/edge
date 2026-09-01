@@ -8,13 +8,19 @@
 롤백되며, etf_profile 선행이 없으면 첫 적재부터 FK 위반이다.
 """
 
+import hashlib
 import io
 import json
 
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, canonical_etf_nav_partition
+from data_pipeline.lake import (
+    LocalStorage,
+    canonical_etf_nav_partition,
+    canonical_run_manifest_key,
+    canonical_run_partition_key,
+)
 from data_pipeline.steps import load_etf_nav
 
 _COLUMNS = ("market", "etf_id", "trade_date", "nav", "currency", "source_vendor", "fetched_at")
@@ -37,6 +43,64 @@ def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
         f"{canonical_etf_nav_partition(market, trade_date)}/{part}.parquet", buf.getvalue())
 
 
+def _write_manifest(storage, run_id="N1", partitions=None):
+    if partitions is None:
+        partitions = [{
+            "market": "KR", "trade_date": "2026-07-16",
+            "key": f"{canonical_etf_nav_partition('KR', '2026-07-16')}/part-00000.parquet",
+            "winner_ids": [{"etf_id": "091160"}],
+        }]
+    items = []
+    for partition in partitions:
+        item = dict(partition)
+        shared_key = (
+            f"{canonical_etf_nav_partition(item['market'], item['trade_date'])}"
+            "/part-00000.parquet"
+        )
+        if item.get("key") == shared_key:
+            run_key = canonical_run_partition_key("etf_nav", run_id, item["trade_date"])
+            storage.put_bytes(run_key, storage.get_bytes(shared_key))
+            item["key"] = run_key
+        item.setdefault("sha256", hashlib.sha256(storage.get_bytes(item["key"])).hexdigest())
+        items.append(item)
+    storage.put_bytes(
+        canonical_run_manifest_key("etf_nav", run_id),
+        json.dumps({
+            "run_id": run_id, "producer": "normalize_etf_nav",
+            "canonical_written": True, "canonical_partitions": items,
+        }, sort_keys=True).encode("utf-8"),
+    )
+
+
+def _manifest_payload(storage, run_id="N1"):
+    return json.loads(storage.get_bytes(canonical_run_manifest_key("etf_nav", run_id)))
+
+
+def _put_manifest_payload(storage, payload, run_id="N1"):
+    storage.put_bytes(
+        canonical_run_manifest_key("etf_nav", run_id),
+        json.dumps(payload, sort_keys=True).encode("utf-8"),
+    )
+
+
+class _TrackingStorage:
+    def __init__(self, inner):
+        self.inner = inner
+        self.list_calls = []
+        self.get_calls = []
+
+    def list_keys(self, prefix):
+        self.list_calls.append(prefix)
+        return self.inner.list_keys(prefix)
+
+    def get_bytes(self, key):
+        self.get_calls.append(key)
+        return self.inner.get_bytes(key)
+
+    def put_bytes(self, key, data):
+        return self.inner.put_bytes(key, data)
+
+
 def _nav_row(etf_id: str = "091160", trade_date: str = "2026-07-16", **over) -> dict:
     row = {"market": "KR", "etf_id": etf_id, "trade_date": trade_date, "nav": 108746.33,
            "currency": "KRW", "source_vendor": "kis", "fetched_at": "2026-07-20T06:00:00+00:00"}
@@ -47,10 +111,13 @@ def _nav_row(etf_id: str = "091160", trade_date: str = "2026-07-16", **over) -> 
 class _FakeCursor:
     """ON CONFLICT DO NOTHING 시맨틱 흉내 + instrument 조회 응답."""
 
-    def __init__(self, log: list, instruments: dict, existing_nav: set, existing_profiles: set):
+    def __init__(self, log, instruments, existing_nav, existing_profiles,
+                 fail_nav_instruments, fail_profile_instruments):
         self._log = log
         self._instruments = instruments
         self._existing_nav, self._existing_profiles = existing_nav, existing_profiles
+        self._fail_nav_instruments = fail_nav_instruments
+        self._fail_profile_instruments = fail_profile_instruments
         self._rows: list = []
         self._returning = None
         self.rowcount = 1
@@ -62,9 +129,13 @@ class _FakeCursor:
         if upper.startswith("SELECT TICKER, INSTRUMENT_ID FROM INSTRUMENT"):
             self._rows = list(self._instruments.items())
         elif upper.startswith("INSERT INTO ETF_PROFILE"):
+            if params[0] in self._fail_profile_instruments:
+                raise ValueError("의도된 profile SQL 실패")
             self.rowcount = 0 if params[0] in self._existing_profiles else 1
             self._existing_profiles.add(params[0])
         elif upper.startswith("INSERT INTO ETF_NAV_DAILY"):
+            if params[0] in self._fail_nav_instruments:
+                raise ValueError("의도된 NAV SQL 실패")
             # RETURNING (xmax <> 0) 시맨틱: 신규=(False,) / 값 바뀐 갱신=(True,) /
             # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key, nav = (params[0], params[1]), params[2]
@@ -91,14 +162,20 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, instruments=None, existing_nav=None, existing_profiles=None):
+    def __init__(self, instruments=None, existing_nav=None, existing_profiles=None,
+                 fail_nav_instruments=(), fail_profile_instruments=()):
         self.log: list = []
         self.instruments = instruments if instruments is not None else {"091160": "inst_kodex"}
         self.existing_nav = dict(existing_nav or {})
         self.existing_profiles = set(existing_profiles or ())
+        self.fail_nav_instruments = set(fail_nav_instruments)
+        self.fail_profile_instruments = set(fail_profile_instruments)
 
     def cursor(self):
-        return _FakeCursor(self.log, self.instruments, self.existing_nav, self.existing_profiles)
+        return _FakeCursor(
+            self.log, self.instruments, self.existing_nav, self.existing_profiles,
+            self.fail_nav_instruments, self.fail_profile_instruments,
+        )
 
 
 def _fake_connect(conn):
@@ -126,7 +203,7 @@ def _profile_inserts(conn) -> list:
 def _log(storage, run_id: str = "R1") -> dict:
     # 로그 키는 run_id 로 갈린다(quality_log_key) — 재실행 테스트는 런마다 로그가 따로 남는다.
     keys = [k for k in storage.list_keys("operations_archive/data_quality_logs/")
-            if "etf_nav_daily" in k and f"run_id={run_id}/" in k]
+            if "etf_nav_load" in k and f"run_id={run_id}/" in k]
     assert len(keys) == 1, keys
     return json.loads(storage.get_bytes(keys[0]).decode("utf-8"))
 
@@ -175,7 +252,7 @@ def test_마스터_미등록_ETF_는_적재하지_않고_수치로_남는다(tmp
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
 
-    assert load_etf_nav.run(storage, "R1", db=_db()) == 0
+    assert load_etf_nav.run(storage, "R1", db=_db()) == 2
 
     assert [p[0] for p in _nav_inserts(conn)] == ["inst_kodex"]  # 등록된 것만
     log = _log(storage)
@@ -248,13 +325,14 @@ def test_결손_행은_적재하지_않고_센다(tmp_path, monkeypatch):
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16",
                      [_nav_row(), _nav_row("069500", nav=None), {**_nav_row(), "etf_id": None}])
-    conn = _FakeConn()
+    conn = _FakeConn(instruments={"091160": "inst_kodex", "069500": "inst_kodex200"})
     monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
 
-    assert load_etf_nav.run(storage, "R1", db=_db()) == 0
+    assert load_etf_nav.run(storage, "R1", db=_db()) == 2
     log = _log(storage)
     assert log["created"] == 1
-    assert log["skipped_missing_identity"] == 2
+    assert log["skipped_missing_identity"] == 1
+    assert log["skipped_load_violation"] == 1
 
 
 def test_적재_실패는_롤백되고_로그에_남는다(tmp_path, monkeypatch):
@@ -315,3 +393,186 @@ def test_같은_키가_여러_part_에_있으면_최신_fetched_at_이_이긴다
     [(_, _, nav, available_at, _)] = _nav_inserts(conn)
     assert nav == pytest.approx(101.0)                      # 사전순 마지막 part 가 아니라 최신
     assert available_at == "2026-07-21T06:00:00+00:00"
+
+
+def test_정상_manifest는_direct_key만_읽고_물리행과_winner를_분리한다(
+        tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): winner 하나를 위해 canonical prefix를 LIST하거나 비-winner를 적재하면
+    # 정상 실행량과 과거 물리 행을 다시 섞어 fullscan 제거 계약이 무너진다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [_nav_row(), _nav_row("069500")])
+    _write_manifest(inner)
+    storage = _TrackingStorage(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
+
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+    key = canonical_run_partition_key("etf_nav", "N1", "2026-07-16")
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("etf_nav", "N1"), key]
+    assert len(_nav_inserts(conn)) == 1
+    log = _log(inner)
+    assert (log["manifest_partitions"], log["manifest_winners"]) == (1, 1)
+    assert (log["physical_rows_read"], log["logical_rows_read"]) == (2, 1)
+    assert log["duration_seconds"] >= 0
+    assert _nav_inserts(conn)[0][-1] == "N1"
+
+
+def test_빈_completed_manifest는_canonical_LIST_GET_없이_성공한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): 유효한 무데이터 런은 전체 canonical 탐색 신호가 아니라 성공 0건이다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_manifest(inner, partitions=[])
+    storage = _TrackingStorage(inner)
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
+
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+    assert storage.list_calls == []
+    assert storage.get_calls == [canonical_run_manifest_key("etf_nav", "N1")]
+    assert _nav_inserts(conn) == []
+    log = _log(inner)
+    assert log["manifest_partitions"] == log["manifest_winners"] == 0
+    assert log["physical_rows_read"] == log["logical_rows_read"] == 0
+
+
+@pytest.mark.parametrize(("field", "bad"), [
+    ("run_id", "OTHER"), ("producer", "normalize_price"), ("canonical_written", False),
+])
+def test_wrong_run_producer_completion은_fallback없이_fatal이다(
+        tmp_path, monkeypatch, field, bad):
+    # WHY(ALPHA-1043): 다른 계보·미완료 manifest를 fullscan으로 대체하면 승인 밖 데이터가 섞인다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_canonical(inner, "KR", "2026-07-16", [_nav_row()])
+    _write_manifest(inner)
+    payload = _manifest_payload(inner)
+    payload[field] = bad
+    _put_manifest_payload(inner, payload)
+    storage = _TrackingStorage(inner)
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(_FakeConn()))
+
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+    assert storage.list_calls == []
+
+
+@pytest.mark.parametrize("mutation", [
+    "key", "sha", "winner_shape", "winner_duplicate", "winner_unsorted", "partition_duplicate",
+])
+def test_manifest_key_sha_ID_정렬고유_위반은_fatal이다(tmp_path, monkeypatch, mutation):
+    # WHY(ALPHA-1043): direct key/SHA와 정렬·고유 ID가 느슨하면 변조·다른 파티션을 승인한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_nav_row(), _nav_row("069500")])
+    _write_manifest(storage)
+    payload = _manifest_payload(storage)
+    part = payload["canonical_partitions"][0]
+    if mutation == "key":
+        part["key"] = part["key"].replace("2026-07-16", "2026-07-15")
+    elif mutation == "sha":
+        part["sha256"] = "bad"
+    elif mutation == "winner_shape":
+        part["winner_ids"] = [{"ticker": "091160"}]
+    elif mutation == "winner_duplicate":
+        part["winner_ids"] = [{"etf_id": "091160"}, {"etf_id": "091160"}]
+    elif mutation == "winner_unsorted":
+        part["winner_ids"] = [{"etf_id": "091160"}, {"etf_id": "069500"}]
+    else:
+        payload["canonical_partitions"].append(dict(part))
+    _put_manifest_payload(storage, payload)
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(_FakeConn()))
+
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+
+
+def test_manifest_결손과_canonical_SHA_변조는_fallback없이_fatal이다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): 결손 manifest나 확정 뒤 바뀐 canonical은 전체 scan으로 복구할 근거가 없다.
+    missing = _TrackingStorage(LocalStorage(tmp_path / "missing"))
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(_FakeConn()))
+    assert load_etf_nav.run(missing, "R1", db=_db(), input_run_id="N1") == 1
+    assert missing.list_calls == []
+
+    storage = LocalStorage(tmp_path / "changed")
+    _write_canonical(storage, "KR", "2026-07-16", [_nav_row()])
+    _write_manifest(storage)
+    run_key = canonical_run_partition_key("etf_nav", "N1", "2026-07-16")
+    storage.put_bytes(run_key, b"changed after manifest completion")
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+
+
+@pytest.mark.parametrize("failure", ["missing", "duplicate", "partition_identity"])
+def test_manifest_winner_물리정합성_위반은_fatal이다(tmp_path, monkeypatch, failure):
+    # WHY(ALPHA-1043): 승인 winner가 없거나 중복되거나 다른 파티션 행이면 부분 적재보다 fatal이다.
+    storage = LocalStorage(tmp_path / "lake")
+    if failure == "missing":
+        rows = [_nav_row("069500")]
+    elif failure == "duplicate":
+        rows = [_nav_row(), _nav_row()]
+    else:
+        rows = [_nav_row(market="US")]
+    _write_canonical(storage, "KR", "2026-07-16", rows)
+    _write_manifest(storage)
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(_FakeConn()))
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 1
+
+
+@pytest.mark.parametrize("failure_kind", ["profile", "nav"])
+def test_profile_NAV_SQL실패는_savepoint로_격리하고_다른_성공을_보존한다(
+        tmp_path, monkeypatch, failure_kind):
+    # WHY(ALPHA-1043): profile과 NAV 중 한 SQL 오류가 같은 manifest의 정상 ETF까지 롤백하면
+    # 성공 범위를 보존한다는 exit 2 계약이 거짓이 된다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_nav_row("069500"), _nav_row()])
+    _write_manifest(storage, partitions=[{
+        "market": "KR", "trade_date": "2026-07-16",
+        "key": f"{canonical_etf_nav_partition('KR', '2026-07-16')}/part-00000.parquet",
+        "winner_ids": [{"etf_id": "069500"}, {"etf_id": "091160"}],
+    }])
+    kwargs = {f"fail_{failure_kind}_instruments": {"inst_bad"}}
+    conn = _FakeConn(
+        instruments={"069500": "inst_bad", "091160": "inst_good"}, **kwargs,
+    )
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
+
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 2
+    log = _log(storage)
+    assert log["created"] == 1 and len(log["failures"]) == 1
+    commands = [sql for sql, _ in conn.log]
+    assert commands.count("SAVEPOINT etf_nav_row") == 2
+    assert commands.count("ROLLBACK TO SAVEPOINT etf_nav_row") == 1
+    assert commands.count("RELEASE SAVEPOINT etf_nav_row") == 2
+    assert log["ops"] == {"records_out": 1, "failed_records": 1}
+
+
+def test_같은NAV_재확정도_manifest_lineage를_stamp한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): 같은 값도 현재 winner 재확정이다. 이전 data_version을 두면 현재 실행의
+    # 성공 범위와 과거 잔존 행을 구분할 수 없다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_nav_row()])
+    _write_manifest(storage)
+    conn = _FakeConn(existing_nav={("inst_kodex", "2026-07-16"): 108746.33})
+    monkeypatch.setattr(load_etf_nav, "connect", _fake_connect(conn))
+
+    assert load_etf_nav.run(storage, "R1", db=_db(), input_run_id="N1") == 0
+    updates = [(sql, params) for sql, params in conn.log
+               if sql.upper().startswith("UPDATE ETF_NAV_DAILY SET AVAILABLE_AT")]
+    assert updates[0][1] == (
+        "2026-07-20T06:00:00+00:00", "N1", "inst_kodex", "2026-07-16",
+    )
+    assert _log(storage)["already_present"] == 1
+
+
+def test_outer_commit실패는_fatal이고_성공계측을_남기지_않는다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1043): context manager 종료 commit 실패는 행 부분 실패가 아니라 전체 rollback이다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [_nav_row()])
+    conn = _FakeConn()
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _commit_boom(config):
+        yield conn
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(load_etf_nav, "connect", _commit_boom)
+    assert load_etf_nav.run(storage, "R1", db=_db()) == 1
+    log = _log(storage)
+    assert (log["created"], log["updated"], log["already_present"]) == (0, 0, 0)

@@ -41,6 +41,7 @@ def test_only_manifest_steps_fulfill_on_partial_exit():
         "NORMALIZE_PRICE", "LOAD_PRICE_DAILY",
         "LOAD_PRICE_TRIGGERS",
         "NORMALIZE_INVESTOR", "LOAD_ETF_FLOW",
+        "NORMALIZE_ETF_NAV", "LOAD_ETF_NAV",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
         "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
     }
@@ -50,6 +51,7 @@ def test_only_manifest_steps_fulfill_on_partial_exit():
         for entry in catalog.entries()
         if entry.task_key not in partial
     )
+    assert catalog.get("LOAD_ETF_NAV").dataset == "etf_nav_load"
 
 
 def test_by_sfn_state_maps_registered_only():
