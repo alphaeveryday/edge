@@ -195,13 +195,16 @@ def _cross_board_collisions(rows: list[dict]) -> dict[str, list[str]]:
     return {t: sorted(b) for t, b in boards_by_ticker.items() if len(b) > 1}
 
 
-def _write_canonical(storage: Storage, rows: list[dict]) -> tuple[list[dict[str, str]], int]:
-    """통과 행을 shared canonical에 병합하고 이번 런의 candidate 파티션을 반환한다."""
+def _write_canonical(
+    storage: Storage, rows: list[dict],
+) -> tuple[list[dict[str, str]], int, list[tuple[str, str, bytes, list[dict]]]]:
+    """shared canonical 병합 결과와 이 실행이 쓴 merged snapshot bytes를 반환한다."""
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in rows:
         by_partition[(row["market"], row["as_of_date"])].append(row)
 
     partitions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
     rows_written = 0
     for (market, as_of_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_instrument_profile_partition(market, as_of_date)
@@ -210,10 +213,12 @@ def _write_canonical(storage: Storage, rows: list[dict]) -> tuple[list[dict[str,
             if key.endswith(".parquet"):
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
-        storage.put_bytes(f"{prefix}/part-00000.parquet", _write_parquet_rows(merged))
+        data = _write_parquet_rows(merged)
+        storage.put_bytes(f"{prefix}/part-00000.parquet", data)
         partitions.append({"market": market, "as_of_date": as_of_date})
+        candidates.append((market, as_of_date, data, merged))
         rows_written += len(merged)
-    return partitions, rows_written
+    return partitions, rows_written, candidates
 
 
 def _collection_keys(raw_keys: list[str]) -> list[str]:
@@ -228,19 +233,16 @@ def _collection_keys(raw_keys: list[str]) -> list[str]:
 
 
 def _prepare_latest_good(
-    storage: Storage, run_id: str, partitions: list[dict[str, str]],
+    storage: Storage, run_id: str,
+    candidates: list[tuple[str, str, bytes, list[dict]]],
 ) -> PointerPlan | None:
-    candidates: list[tuple[str, str, bytes, list[dict]]] = []
-    for part in partitions:
-        if part["market"] != "KR":
-            continue
-        key = f"{canonical_instrument_profile_partition('KR', part['as_of_date'])}/part-00000.parquet"
-        data = storage.get_bytes(key)
-        rows = _read_parquet_rows(data)
-        candidates.append((part["as_of_date"], max_fetched_at(rows), data, rows))
-    if not candidates:
+    kr_candidates = [
+        (as_of_date, max_fetched_at(rows), data, rows)
+        for market, as_of_date, data, rows in candidates if market == "KR"
+    ]
+    if not kr_candidates:
         return None
-    as_of_date, _, data, rows = max(candidates, key=lambda item: (item[0], item[1]))
+    as_of_date, _, data, rows = max(kr_candidates, key=lambda item: (item[0], item[1]))
     return prepare_pointer(
         storage, dataset=DATASET, producer=JOB_NAME, market="KR",
         as_of_date=as_of_date, run_id=run_id, artifact_bytes=data, rows=rows,
@@ -317,11 +319,12 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     collisions = _cross_board_collisions(normalized)
     partitions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
     rows_written = 0
     canonical_written = False
     if raw_list_ok:
         try:
-            partitions, rows_written = _write_canonical(storage, normalized)
+            partitions, rows_written, candidates = _write_canonical(storage, normalized)
             canonical_written = True
         except Exception as exc:
             logger.exception("canonical 적재 실패")
@@ -344,7 +347,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         pointer_action = "retain_empty"
     else:
         try:
-            plan = _prepare_latest_good(storage, run_id, partitions)
+            plan = _prepare_latest_good(storage, run_id, candidates)
             pointer_action = plan.action if plan is not None else "retain_no_kr_candidate"
             if plan is not None:
                 exit_code = plan.exit_code

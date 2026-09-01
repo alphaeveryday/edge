@@ -326,6 +326,10 @@ def test_pointer_cas_is_the_last_successful_storage_mutation(tmp_path):
             self.events.append(("put", key))
             return super().put_bytes(key, data)
 
+        def get_bytes(self, key):
+            self.events.append(("get", key))
+            return super().get_bytes(key)
+
         def put_bytes_if_version(self, key, data, version):
             self.events.append(("cas", key))
             return super().put_bytes_if_version(key, data, version)
@@ -336,6 +340,10 @@ def test_pointer_cas_is_the_last_successful_storage_mutation(tmp_path):
     assert storage.events[-1] == (
         "cas", latest_good_pointer_key("etf_holdings", "KR"),
     )
+    assert not any(
+        event == "get" and key.startswith("canonical/")
+        for event, key in storage.events
+    ), "artifact는 이 런이 직렬화한 merged bytes를 써야지 mutable canonical을 다시 읽으면 안 된다"
 
 
 def test_krx_kospi_and_kosdaq_resolve_to_distinct_mics(tmp_path):

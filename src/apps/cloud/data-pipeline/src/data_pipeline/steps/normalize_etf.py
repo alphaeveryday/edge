@@ -297,14 +297,17 @@ def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     return [acc[k] for k in sorted(acc, key=lambda k: (str(k[0]), str(k[1])))]
 
 
-def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict[str, str]], int]:
+def _write_canonical(
+    storage: Storage, passing: list[dict],
+) -> tuple[list[dict[str, str]], int, list[tuple[str, str, bytes, list[dict]]]]:
     """통과 행을 (market,as_of_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
-    반환: (쓴 파티션 식별자, 쓴 행 수). 식별자는 하류 적재가 이 실행의 산출만 읽는 manifest 다."""
+    반환: (쓴 파티션 식별자, 쓴 행 수, 이 실행이 직렬화한 merged snapshot 후보)."""
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
         by_partition[(row["market"], row["as_of_date"])].append(row)
 
     partitions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
     rows_written = 0
     for (market, as_of_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_etf_holdings_partition(market, as_of_date)
@@ -317,15 +320,17 @@ def _write_canonical(storage: Storage, passing: list[dict]) -> tuple[list[dict[s
                 existing.extend(_read_parquet_rows(storage.get_bytes(key)))
         merged = _merge_partition(existing, new_rows)
         target_key = f"{prefix}/part-00000.parquet"
-        storage.put_bytes(target_key, _write_parquet_rows(merged))
+        data = _write_parquet_rows(merged)
+        storage.put_bytes(target_key, data)
         # canonical 파티션은 단일 파일 계약이다. 구형 part를 남기면 로더가 새 스키마와 함께
         # 다시 읽어 중복·UNKNOWN 유실로 계측한다. 새 파일 기록 성공 뒤라 교체 중 데이터도 잃지 않는다.
         stale_keys = [key for key in partition_keys if key != target_key]
         if stale_keys:
             storage.delete_keys(stale_keys)
         partitions.append({"market": market, "as_of_date": as_of_date})
+        candidates.append((market, as_of_date, data, merged))
         rows_written += len(merged)
-    return partitions, rows_written
+    return partitions, rows_written, candidates
 
 
 def _collection_keys(raw_keys: list[str]) -> list[str]:
@@ -341,20 +346,17 @@ def _collection_keys(raw_keys: list[str]) -> list[str]:
 
 
 def _prepare_latest_good(
-    storage: Storage, run_id: str, partitions: list[dict[str, str]],
+    storage: Storage, run_id: str,
+    candidates: list[tuple[str, str, bytes, list[dict]]],
 ) -> PointerPlan | None:
     """이번 실행이 쓴 KR 파티션 중 (as_of_date,max_fetched_at) 최신 snapshot을 준비한다."""
-    candidates: list[tuple[str, str, bytes, list[dict]]] = []
-    for part in partitions:
-        if part["market"] != "KR":
-            continue
-        key = f"{canonical_etf_holdings_partition('KR', part['as_of_date'])}/part-00000.parquet"
-        data = storage.get_bytes(key)
-        rows = _read_parquet_rows(data)
-        candidates.append((part["as_of_date"], max_fetched_at(rows), data, rows))
-    if not candidates:
+    kr_candidates = [
+        (as_of_date, max_fetched_at(rows), data, rows)
+        for market, as_of_date, data, rows in candidates if market == "KR"
+    ]
+    if not kr_candidates:
         return None
-    as_of_date, _, data, rows = max(candidates, key=lambda item: (item[0], item[1]))
+    as_of_date, _, data, rows = max(kr_candidates, key=lambda item: (item[0], item[1]))
     return prepare_pointer(
         storage, dataset=DATASET, producer=JOB_NAME, market="KR",
         as_of_date=as_of_date, run_id=run_id, artifact_bytes=data, rows=rows,
@@ -456,11 +458,12 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     # 스코프든 전체 런이든 shared canonical 을 쓴다(ALPHA-389). pointer 전량성 실패여도
     # 통과 행은 보존하되 alias만 전진시키지 않는다.
     partitions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str, bytes, list[dict]]] = []
     canonical_rows = 0
     canonical_written = False
     if raw_list_ok:
         try:
-            partitions, canonical_rows = _write_canonical(storage, passing)
+            partitions, canonical_rows, candidates = _write_canonical(storage, passing)
             storage.put_bytes(
                 canonical_run_manifest_key(DATASET, run_id),
                 json.dumps({
@@ -491,7 +494,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         pointer_action = "retain_empty"
     else:
         try:
-            plan = _prepare_latest_good(storage, run_id, partitions)
+            plan = _prepare_latest_good(storage, run_id, candidates)
             pointer_action = plan.action if plan is not None else "retain_no_kr_candidate"
             if plan is not None:
                 exit_code = plan.exit_code
