@@ -201,25 +201,25 @@ def test_normalize_etf_dispatches_step(tmp_path, monkeypatch):
     assert called == {"input_run_id": "R11"}
 
 
-def test_ETF_NAV_정제_호환이미지는_부분성공을_구_SFN에_0으로_반환한다(monkeypatch):
-    # WHY(ALPHA-1042): 자동 이미지 CD가 exit-2 게이트보다 먼저 배포돼도 producer의 성공
-    # winner가 loader까지 흘러야 한다. 실패 증거는 manifest·quality에 남고 CLI만 한시 매핑한다.
+def test_ETF_NAV_정제_부분성공을_SFN에_2로_반환한다(monkeypatch):
+    # WHY(ALPHA-1042): 배선이 exit 2의 성공 winner를 하류 처리하므로 CLI도 부분 실패를
+    # 숨기지 않아야 마지막 strict gate가 실행 전체를 FAILED로 닫는다.
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     from data_pipeline import run as run_mod
 
     monkeypatch.setattr(run_mod.normalize_etf_nav, "run", lambda *args: 2)
 
-    assert main(["normalize-etf-nav", "--run-id", "R", "--input-run-id", "R"]) == 0
+    assert main(["normalize-etf-nav", "--run-id", "R", "--input-run-id", "R"]) == 2
 
 
-def test_ETF_NAV_적재_호환이미지는_부분성공을_구_SFN에_0으로_반환한다(monkeypatch):
-    # WHY(ALPHA-1043): exit-2 게이트보다 이미지가 먼저 배포돼도 producer 성공 winner가
-    # loader까지 흘러야 한다. quality/manifest의 실패 증거는 그대로고 CLI 코드만 한시 매핑한다.
+def test_ETF_NAV_적재_부분성공을_SFN에_2로_반환한다(monkeypatch):
+    # WHY(ALPHA-1043): 배선이 loader exit 2를 이해하므로 CLI가 이를 0으로 세탁하면
+    # 마지막 strict gate가 부분 적재를 성공으로 오판한다.
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     monkeypatch.setattr(run_mod.load_etf_nav, "run", lambda *args, **kwargs: 2)
     monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
 
-    assert main(["load-etf-nav", "--run-id", "R"]) == 0
+    assert main(["load-etf-nav", "--run-id", "R", "--input-run-id", "N1"]) == 2
 
 
 def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
@@ -720,16 +720,17 @@ def test_load_etf_flow_requires_exactly_one_explicit_scope(monkeypatch):
             main(["load-etf-flow", "--run-id", "R", bound, "2026-08-20"])
 
 
-def test_load_etf_nav_호환단계에서도_혼합_scope는_거부한다(monkeypatch):
-    # WHY(ALPHA-1043): 첫 이미지가 구 SFN의 scope 누락만 한시적으로 받아도, 서로 다른
-    # scope 혼합까지 허용하면 대상 범위의 우선순위가 모호해진다.
+def test_load_etf_nav_requires_exactly_one_explicit_scope(monkeypatch):
+    # WHY(ALPHA-1043): 정상 SFN의 run 계보가 빠져도 암묵적 canonical 풀스캔으로 성공하면
+    # manifest 범위 계약의 배선 회귀가 숨는다. 혼합·반쪽 날짜 범위도 거부한다.
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     for argv in (
+        ["load-etf-nav", "--run-id", "R"],
         ["load-etf-nav", "--run-id", "R", "--input-run-id", "N1", "--all"],
         ["load-etf-nav", "--run-id", "R", "--input-run-id", "N1",
          "--from", "2026-08-20", "--to", "2026-08-21"],
     ):
-        with pytest.raises(SystemExit, match="함께 쓸 수 없다"):
+        with pytest.raises(SystemExit, match="--input-run-id, --from/--to, --all"):
             main(argv)
     for bound in ("--from", "--to"):
         with pytest.raises(SystemExit, match="함께 써야"):
@@ -737,17 +738,14 @@ def test_load_etf_nav_호환단계에서도_혼합_scope는_거부한다(monkeyp
 
 
 def test_load_etf_nav_forwards_manifest_and_recovery_scopes(monkeypatch):
-    # WHY(ALPHA-1043): 호환 이미지가 구 SFN의 무인자 호출을 보존하면서도 새 manifest와
-    # 명시된 날짜/전체 복구 범위를 정확히 전달해야 배포 순서를 안전하게 분리할 수 있다.
+    # WHY(ALPHA-1043): 정상 manifest와 명시된 날짜/전체 복구 범위를 정확히 전달해야
+    # 정상 실행과 사람의 복구 작업이 서로 다른 범위를 읽지 않는다.
     monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
     captured = []
     monkeypatch.setattr(
         run_mod.load_etf_nav, "run", lambda *args, **kwargs: captured.append(kwargs) or 0,
     )
     monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
-    assert main(["load-etf-nav", "--run-id", "R"]) == 0
-    assert captured[-1]["input_run_id"] is None
-    assert captured[-1]["from_date"] is None and captured[-1]["to_date"] is None
     assert main(["load-etf-nav", "--run-id", "R", "--input-run-id", "N1"]) == 0
     assert captured[-1]["input_run_id"] == "N1"
     assert main(["load-etf-nav", "--run-id", "R", "--from", "2026-08-20",

@@ -628,10 +628,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # NAV 정제도 raw 를 읽는 스텝이라 수집 창·벤더 인자가 없다 — 벤더는 raw 키의 source= 가
     # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-etf-nav":
-        exit_code = normalize_etf_nav.run(storage, run_id, args.input_run_id)
-        # 구 SFN은 NormalizeEtfNav exit 2를 하류 차단으로 읽는다. manifest·quality에는
-        # 부분 실패가 남으므로 ALPHA-1043 배선 게이트가 착지한 뒤 이 매핑을 제거한다.
-        return 0 if exit_code == 2 else exit_code
+        return normalize_etf_nav.run(storage, run_id, args.input_run_id)
     # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
     if args.step == "normalize-etf-profile":
         return normalize_etf_profile.run(storage, run_id, args.input_run_id)
@@ -790,12 +787,9 @@ def _dispatch(args, settings, storage, run_id) -> int:
         scopes = sum((args.input_run_id is not None,
                       args.from_date is not None or args.to_date is not None,
                       args.all_partitions))
-        # 3단계 배포의 호환 이미지 단계: 아직 배포된 SFN은 scope 인자를 보내지 않으므로
-        # 누락(0)은 한시적으로 기존 전체 scan으로 받는다. 혼합 scope는 항상 거부한다.
-        # SFN에 --input-run-id가 착지한 뒤 후속 코드 PR에서 `scopes != 1`로 닫는다.
-        if scopes > 1:
+        if scopes != 1:
             raise SystemExit(
-                "load-etf-nav는 --input-run-id, --from/--to, --all을 함께 쓸 수 없다"
+                "load-etf-nav는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
             )
         if (args.from_date is None) != (args.to_date is None):
             raise SystemExit("load-etf-nav의 --from과 --to는 함께 써야 한다")
@@ -817,14 +811,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
             parsed_dates.append(parsed)
         if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
             raise SystemExit("load-etf-nav의 --from은 --to보다 늦을 수 없다")
-        exit_code = load_etf_nav.run(
+        return load_etf_nav.run(
             storage, run_id, db=db_config_from_env(settings.db),
             input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
         )
-        # 구 SFN feature gate도 exit 2를 하류 차단으로 읽는다. Terraform 게이트 착지 뒤
-        # normalize 매핑과 함께 제거해 부분 성공을 최종 FAILED로 다시 드러낸다.
-        return 0 if exit_code == 2 else exit_code
 
     # ETF 구성종목 적재의 정규 경로는 normalize run manifest가 지목한 파티션만 읽는다.
     # 날짜창은 명시 백필, 전체 스캔은 --all 을 직접 쓴 경우뿐이다(ALPHA-1011).
