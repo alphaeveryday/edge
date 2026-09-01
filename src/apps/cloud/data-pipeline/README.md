@@ -587,6 +587,17 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-price-triggers
 
+# ETF NAV 적재(RDB) — 정상 경로는 normalize-etf-nav의 completed manifest가 지목한 direct
+# parquet와 winner만 읽어 etf_nav_daily에 적재한다. key·SHA-256·파티션 정체성이 어긋나면
+# 과거 canonical 전체로 넓히지 않고 실패한다. 같은 관측시각의 다른 run은 기존 data_version을
+# 덮지 않으며, 행별 DB 실패는 savepoint로 격리해 다른 winner를 commit하고 exit 2로 남긴다.
+# 날짜창과 --all은 명시 복구 전용이며 정상 Scheduler에서는 --input-run-id만 사용한다.
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-etf-nav \
+    --input-run-id <normalize-run-id>
+# 기간 복구: ... run load-etf-nav --from 2026-07-14 --to 2026-07-17
+# 전체 복구: ... run load-etf-nav --all
+
 # 문서 마스터 적재(RDB, ALPHA-374) — canonical 뉴스(ko·en)를 document(document_type='NEWS')로.
 # document_assertion.document_id FK 의 선행. 멱등: 자연키 uq_document_source(source_vendor,
 # article_id)로 있으면 skip, 없을 때만 발번한다. ID 는 그 자연키에서 **결정적으로** 파생하는
