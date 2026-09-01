@@ -293,7 +293,8 @@ def main(argv: list[str] | None = None) -> int:
                              "load-investor-intraday·load-assertions·"
                              "load-disclosure: 명시적 전체 스캔")
     parser.add_argument("--latest-good", action="store_true",
-                        help="load-instruments: 세 KR latest-good pointer의 불변 artifact만 직접 읽기")
+                        help="load-instruments 정상 모드: 세 KR latest-good pointer의 불변 "
+                             "artifact만 직접 읽기(--all과 정확히 하나 필수)")
     parser.add_argument("--pending-only", action="store_true",
                         help="load-disclosure: canonical을 읽지 않고 pending 잔여만 회수")
     # 벤더 선택 — 가격/재무 스텝에서 의미가 있다(미지정=fmp, 기존 동작 보존).
@@ -518,8 +519,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.latest_good and args.step != "load-instruments":
         raise SystemExit("--latest-good은 load-instruments 전용이다")
-    if args.step == "load-instruments" and args.latest_good and args.all_partitions:
-        raise SystemExit("load-instruments는 --latest-good과 --all을 함께 쓸 수 없다")
+    if args.step == "load-instruments" and args.latest_good == args.all_partitions:
+        raise SystemExit("load-instruments는 --latest-good 또는 --all 중 정확히 하나가 필요하다")
     if args.pending_only and args.step != "load-disclosure":
         raise SystemExit("--pending-only는 load-disclosure 전용이다")
 

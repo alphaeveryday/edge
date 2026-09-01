@@ -555,8 +555,7 @@ LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-n
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-instruments --latest-good
 # 명시적 재해 복구만 shared canonical 전체를 읽는다: ... run load-instruments --all
-# Phase 1 image는 아직 no-arg인 live SFN과의 배포 순서를 위해 no-arg legacy 호출도 임시 수용한다.
-# SFN을 --latest-good으로 전환한 뒤 strict phase에서 이 호환 경로를 제거한다(ALPHA-1048).
+# 입력 범위를 생략한 전량 스캔을 막기 위해 --latest-good 또는 --all 중 정확히 하나가 필수다.
 
 # corp_code enrichment(RDB, ALPHA-491) — load-instruments 가 NULL 로 둔 company_profile.
 # dart_corp_code 를 OpenDART corpCode.xml 매칭으로 채운다. 공시 로더 issuer 해소(9→309)와
@@ -1377,7 +1376,7 @@ settings.targets.keywords            # ["금리", ...]
   계속 수동 전용이다(ALPHA-1047 producer phase).
   `load-instruments --latest-good`은 서로 다른 source run을 가리키는 세 pointer를 함께 허용하고,
   pointer bytes/ETag·partition·artifact SHA/물리·논리 행 수를 품질 로그에 남긴다. pointer 결손·손상·
-  dangling artifact·정체성 불일치는 shared canonical fallback 없이 exit 1이다(ALPHA-1048 Phase 1).
+  dangling artifact·정체성 불일치는 shared canonical fallback 없이 exit 1이다(ALPHA-1048).
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=
