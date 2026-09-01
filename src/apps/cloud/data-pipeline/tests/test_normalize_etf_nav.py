@@ -252,10 +252,18 @@ class _TrackingStorage:
         return self.inner.put_bytes(key, data)
 
     def get_bytes_with_version(self, key):
-        return self.inner.get_bytes_with_version(key)
+        data, version = self.inner.get_bytes_with_version(key)
+        if data is not None and "canonical_run_manifests" in key:
+            completed = json.loads(data).get("canonical_written")
+            if self.corrupt_completed and completed is True:
+                data = b"{}"
+        return data, version
 
     def put_bytes_if_version(self, key, data, version):
-        self.events.append(("cas", key, version))
+        completed = None
+        if "canonical_run_manifests" in key:
+            completed = json.loads(data).get("canonical_written")
+        self.events.append(("cas", key, completed, version))
         if self.fail_put and self.fail_put in key:
             raise OSError("의도된 저장 실패")
         return self.inner.put_bytes_if_version(key, data, version)
@@ -351,7 +359,7 @@ def test_shared_canonical_CAS경합은_최신판을_다시_병합한다(tmp_path
             self.injected = False
 
         def put_bytes_if_version(self, key, data, version):
-            if not self.injected:
+            if not self.injected and key.startswith("canonical/"):
                 self.injected = True
                 self.inner.put_bytes(key, competitor)
             return super().put_bytes_if_version(key, data, version)
@@ -386,13 +394,13 @@ def test_빈_입력은_유효한_빈_완료_manifest다(tmp_path):
     assert normalize_etf_nav.run(storage, "N1", "EMPTY") == 0
     assert _manifest(storage) == {
         "run_id": "N1", "producer": "normalize_etf_nav", "canonical_written": True,
-        "canonical_partitions": [],
+        "canonical_partitions": [], "producer_exit_code": 0,
     }
 
 
 def test_manifest_commit순서와_동일run_멱등성을_고정한다(tmp_path):
-    # WHY(ALPHA-1042): 시작 즉시 이전 완료를 무효화하고 canonical→quality 뒤에만 완료를
-    # 공개해야 stale/미완성 범위를 consumer가 승인하지 않는다.
+    # WHY(ALPHA-1042): CAS claim 뒤 canonical→quality 순서로만 완료를 공개하고, 같은 run
+    # 재시도는 완료 artifact/manifest를 그대로 재사용해야 consumer 입력이 흔들리지 않는다.
     inner = LocalStorage(tmp_path / "lake")
     _write_raw(inner, _raw_key(), [_kis_nav_row()])
     storage = _TrackingStorage(inner)
@@ -400,14 +408,39 @@ def test_manifest_commit순서와_동일run_멱등성을_고정한다(tmp_path):
     first = inner.get_bytes(canonical_run_manifest_key("etf_nav", "N1"))
     assert normalize_etf_nav.run(storage, "N1", "R1") == 0
     assert inner.get_bytes(canonical_run_manifest_key("etf_nav", "N1")) == first
-    assert storage.events[0] == ("put", canonical_run_manifest_key("etf_nav", "N1"), False)
+    assert storage.events[0] == (
+        "cas", canonical_run_manifest_key("etf_nav", "N1"), False, None,
+    )
     canonical_put = next(
         i for i, e in enumerate(storage.events)
         if e[0] in ("put", "cas") and e[1].startswith("canonical/")
     )
     quality_put = next(i for i, e in enumerate(storage.events) if e[0] == "put" and "data_quality_logs" in e[1])
-    completed_put = next(i for i, e in enumerate(storage.events) if e == ("put", canonical_run_manifest_key("etf_nav", "N1"), True))
+    completed_put = next(
+        i for i, e in enumerate(storage.events)
+        if e[:3] == ("cas", canonical_run_manifest_key("etf_nav", "N1"), True)
+    )
     assert canonical_put < quality_put < completed_put
+
+
+def test_완료된_동일run은_입력이_바뀌어도_artifact와_manifest를_덮어쓰지_않는다(tmp_path):
+    # WHY(ALPHA-1042): run_id는 immutable snapshot의 정체성이다. 같은 수집 key의 내용이
+    # 뒤늦게 바뀌어도 완료 run을 다시 계산하면 이미 공개된 SHA 계약이 깨진다.
+    storage = LocalStorage(tmp_path / "lake")
+    raw_key = _raw_key()
+    _write_raw(storage, raw_key, [_kis_nav_row(nav="100")])
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    manifest_key = canonical_run_manifest_key("etf_nav", "N1")
+    manifest_before = storage.get_bytes(manifest_key)
+    [part] = _manifest(storage)["canonical_partitions"]
+    artifact_before = storage.get_bytes(part["key"])
+
+    _write_raw(storage, raw_key, [_kis_nav_row(nav="999")])
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+
+    assert storage.get_bytes(manifest_key) == manifest_before
+    assert storage.get_bytes(part["key"]) == artifact_before
+    assert normalize_etf_nav._read_parquet_rows(artifact_before)[0]["nav"] == pytest.approx(100)
 
 
 def test_storage와_manifest_무결성_실패는_exit1이고_완료를_남기지_않는다(tmp_path):

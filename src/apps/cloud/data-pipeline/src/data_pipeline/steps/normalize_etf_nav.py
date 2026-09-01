@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import math
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -253,7 +254,9 @@ def _write_canonical(
         # 다음 런과 consumer가 겹칠 때 앞 manifest의 SHA가 깨진다. 같은 바이트를 run-scoped
         # artifact로 확정하고 하류에는 이 불변 키만 공개한다(공시 manifest와 같은 규약).
         run_key = canonical_run_partition_key(DATASET, run_id, trade_date)
-        storage.put_bytes(run_key, parquet_bytes)
+        if not storage.put_bytes_if_version(run_key, parquet_bytes, None):
+            if storage.get_bytes(run_key) != parquet_bytes:
+                raise OSError(f"run canonical parquet 불변성 충돌: {run_key}")
         if hashlib.sha256(storage.get_bytes(run_key)).hexdigest() != digest:
             raise OSError(f"run canonical parquet 무결성 검증 실패: {run_key}")
         conflicted = {
@@ -286,13 +289,66 @@ def _write_canonical(
     return partitions, rows_written
 
 
-def _manifest_bytes(run_id: str, canonical_written: bool, partitions: list[dict]) -> bytes:
-    return json.dumps({
+def _manifest_bytes(
+    run_id: str, canonical_written: bool, partitions: list[dict],
+    *, attempt_id: str | None = None, producer_exit_code: int | None = None,
+) -> bytes:
+    payload = {
         "run_id": run_id,
         "producer": JOB_NAME,
         "canonical_written": canonical_written,
         "canonical_partitions": partitions,
-    }, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    }
+    if attempt_id is not None:
+        payload["attempt_id"] = attempt_id
+    if producer_exit_code is not None:
+        payload["producer_exit_code"] = producer_exit_code
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+
+
+def _completed_manifest_exit(storage: Storage, data: bytes, run_id: str) -> int | None:
+    """완료 manifest면 artifact를 재검증하고 원래 exit를, incomplete면 None을 반환한다."""
+    manifest = json.loads(data.decode("utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("run_id") != run_id:
+        raise ValueError(f"같은 key의 canonical manifest 정체성이 다르다: run_id={run_id}")
+    if manifest.get("canonical_written") is not True:
+        return None
+    if manifest.get("producer") != JOB_NAME:
+        raise ValueError(f"canonical manifest producer가 다르다: run_id={run_id}")
+    exit_code = manifest.get("producer_exit_code")
+    if exit_code not in (0, _PARTIAL_EXIT_CODE):
+        raise ValueError(f"완료 manifest exit_code가 유효하지 않다: run_id={run_id}")
+    partitions = manifest.get("canonical_partitions")
+    if not isinstance(partitions, list):
+        raise ValueError(f"완료 manifest partitions가 유효하지 않다: run_id={run_id}")
+    for item in partitions:
+        if not isinstance(item, dict):
+            raise ValueError(f"완료 manifest partition이 객체가 아니다: run_id={run_id}")
+        key, digest = item.get("key"), item.get("sha256")
+        if not isinstance(key, str) or not isinstance(digest, str):
+            raise ValueError(f"완료 manifest artifact 계약이 없다: run_id={run_id}")
+        if hashlib.sha256(storage.get_bytes(key)).hexdigest() != digest:
+            raise ValueError(f"완료 manifest artifact가 손상됐다: key={key}")
+    return exit_code
+
+
+def _claim_manifest(storage: Storage, key: str, run_id: str) -> tuple[str | None, str | None, int | None]:
+    """run manifest의 attempt 소유권을 CAS로 획득하거나 기존 완료 exit를 반환한다."""
+    attempt_id = uuid.uuid4().hex
+    draft = _manifest_bytes(run_id, False, [], attempt_id=attempt_id)
+    for _ in range(_CANONICAL_CAS_ATTEMPTS):
+        current, version = storage.get_bytes_with_version(key)
+        if current is not None:
+            completed_exit = _completed_manifest_exit(storage, current, run_id)
+            if completed_exit is not None:
+                return None, None, completed_exit
+            raise OSError(f"canonical run manifest가 이미 진행 중이거나 불완전하다: {key}")
+        if not storage.put_bytes_if_version(key, draft, version):
+            continue
+        saved, claim_version = storage.get_bytes_with_version(key)
+        if saved == draft and claim_version is not None:
+            return attempt_id, claim_version, None
+    raise OSError(f"canonical run manifest CAS 재시도 소진: {key}")
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
@@ -308,11 +364,17 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     manifest_initialized = True
     exit_code = 0
     try:
-        storage.put_bytes(manifest_key, _manifest_bytes(run_id, False, []))
+        attempt_id, manifest_version, completed_exit = _claim_manifest(
+            storage, manifest_key, run_id,
+        )
     except Exception:
-        logger.exception("canonical run manifest 초기화 실패")
+        logger.exception("canonical run manifest claim 실패")
+        attempt_id = manifest_version = completed_exit = None
         manifest_initialized = False
         exit_code = 1
+    if completed_exit is not None:
+        logger.info("normalize_etf_nav 완료 manifest 재사용: run_id=%s exit=%d", run_id, completed_exit)
+        return completed_exit
 
     try:
         raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_nav_key(k)]
@@ -394,6 +456,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     manifest_winners = sum(len(part["winner_ids"]) for part in partitions)
 
+    if (failures or conflicts) and exit_code == 0:
+        exit_code = _PARTIAL_EXIT_CODE
+
     quality_written = True
     try:
         storage.put_bytes(
@@ -420,6 +485,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "manifest_winners": manifest_winners,
                 "same_timestamp_conflicts": conflicts,
                 "superseded_current_rows": superseded,
+                "exit_code": exit_code,
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
             }, ensure_ascii=False).encode("utf-8"),
@@ -430,25 +496,39 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         exit_code = 1
 
     if canonical_written and quality_written and exit_code != 1:
+        pending = completed = completed_version = None
         try:
-            pending = _manifest_bytes(run_id, False, partitions)
-            storage.put_bytes(manifest_key, pending)
-            if storage.get_bytes(manifest_key) != pending:
+            if attempt_id is None or manifest_version is None:
+                raise OSError("canonical run manifest claim 정보가 없다")
+            pending = _manifest_bytes(run_id, False, partitions, attempt_id=attempt_id)
+            if not storage.put_bytes_if_version(manifest_key, pending, manifest_version):
+                raise OSError("incomplete manifest 소유권을 잃었다")
+            pending_read, pending_version = storage.get_bytes_with_version(manifest_key)
+            if pending_read != pending or pending_version is None:
                 raise OSError("incomplete manifest 무결성 검증 실패")
-            completed = _manifest_bytes(run_id, True, partitions)
-            storage.put_bytes(manifest_key, completed)
-            if storage.get_bytes(manifest_key) != completed:
+            completed = _manifest_bytes(
+                run_id, True, partitions, producer_exit_code=exit_code,
+            )
+            if not storage.put_bytes_if_version(manifest_key, completed, pending_version):
+                raise OSError("완료 manifest 소유권을 잃었다")
+            completed_read, completed_version = storage.get_bytes_with_version(manifest_key)
+            if completed_read != completed or completed_version is None:
                 raise OSError("완료 manifest 무결성 검증 실패")
         except Exception:
             logger.exception("canonical run manifest 기록·무결성 검증 실패")
             exit_code = 1
             try:
-                storage.put_bytes(manifest_key, _manifest_bytes(run_id, False, partitions))
+                current, current_version = storage.get_bytes_with_version(manifest_key)
+                owned = current in (pending, completed) or (
+                    completed_version is not None and current_version == completed_version
+                )
+                if owned and current_version is not None:
+                    invalid = _manifest_bytes(
+                        run_id, False, partitions, attempt_id=attempt_id,
+                    )
+                    storage.put_bytes_if_version(manifest_key, invalid, current_version)
             except Exception:
-                logger.exception("손상 manifest 무효화 실패")
-
-    if (failures or conflicts) and exit_code == 0:
-        exit_code = _PARTIAL_EXIT_CODE
+                logger.exception("소유한 손상 manifest 무효화 실패")
 
     logger.info(
         "normalize_etf_nav 완료: raw_files=%d read=%d passed=%d failed=%d "
