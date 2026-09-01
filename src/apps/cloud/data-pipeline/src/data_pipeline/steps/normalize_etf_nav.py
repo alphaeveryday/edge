@@ -49,6 +49,8 @@ JOB_NAME = "normalize_etf_nav"
 DATASET = "etf_nav"
 _PARTIAL_EXIT_CODE = 2
 _CANONICAL_CAS_ATTEMPTS = 8
+# EOD SFN의 최상위 TimeoutSeconds(6시간)보다 길어 살아 있는 task의 claim을 인수하지 않는다.
+_MANIFEST_CLAIM_TTL = timedelta(hours=7)
 
 _FUTURE_SLACK_DAYS = 2
 
@@ -291,7 +293,8 @@ def _write_canonical(
 
 def _manifest_bytes(
     run_id: str, canonical_written: bool, partitions: list[dict],
-    *, attempt_id: str | None = None, producer_exit_code: int | None = None,
+    *, attempt_id: str | None = None, claimed_at: str | None = None,
+    retryable: bool | None = None, producer_exit_code: int | None = None,
 ) -> bytes:
     payload = {
         "run_id": run_id,
@@ -301,6 +304,10 @@ def _manifest_bytes(
     }
     if attempt_id is not None:
         payload["attempt_id"] = attempt_id
+    if claimed_at is not None:
+        payload["claimed_at"] = claimed_at
+    if retryable is not None:
+        payload["retryable"] = retryable
     if producer_exit_code is not None:
         payload["producer_exit_code"] = producer_exit_code
     return json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -332,23 +339,61 @@ def _completed_manifest_exit(storage: Storage, data: bytes, run_id: str) -> int 
     return exit_code
 
 
-def _claim_manifest(storage: Storage, key: str, run_id: str) -> tuple[str | None, str | None, int | None]:
-    """run manifest의 attempt 소유권을 CAS로 획득하거나 기존 완료 exit를 반환한다."""
+def _claim_manifest(
+    storage: Storage, key: str, run_id: str,
+) -> tuple[str | None, str | None, str | None, int | None]:
+    """run manifest를 CAS claim한다. 명시 실패나 7시간 지난 claim만 인수한다."""
     attempt_id = uuid.uuid4().hex
-    draft = _manifest_bytes(run_id, False, [], attempt_id=attempt_id)
+    claimed_at = datetime.now(timezone.utc).isoformat()
+    draft = _manifest_bytes(
+        run_id, False, [], attempt_id=attempt_id, claimed_at=claimed_at,
+    )
     for _ in range(_CANONICAL_CAS_ATTEMPTS):
         current, version = storage.get_bytes_with_version(key)
         if current is not None:
             completed_exit = _completed_manifest_exit(storage, current, run_id)
             if completed_exit is not None:
-                return None, None, completed_exit
-            raise OSError(f"canonical run manifest가 이미 진행 중이거나 불완전하다: {key}")
+                return None, None, None, completed_exit
+            manifest = json.loads(current.decode("utf-8"))
+            stale = False
+            claim_time = manifest.get("claimed_at")
+            if isinstance(claim_time, str):
+                try:
+                    parsed = datetime.fromisoformat(claim_time)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    stale = datetime.now(timezone.utc) - parsed >= _MANIFEST_CLAIM_TTL
+                except ValueError:
+                    stale = False
+            if manifest.get("retryable") is not True and not stale:
+                raise OSError(f"canonical run manifest가 다른 attempt에서 진행 중이다: {key}")
         if not storage.put_bytes_if_version(key, draft, version):
             continue
         saved, claim_version = storage.get_bytes_with_version(key)
         if saved == draft and claim_version is not None:
-            return attempt_id, claim_version, None
+            return attempt_id, claimed_at, claim_version, None
     raise OSError(f"canonical run manifest CAS 재시도 소진: {key}")
+
+
+def _mark_manifest_retryable(
+    storage: Storage, key: str, run_id: str, attempt_id: str,
+    claimed_at: str, partitions: list[dict],
+) -> None:
+    """현재 attempt가 가진 incomplete claim만 다음 재시도가 인수할 수 있게 표시한다."""
+    current, version = storage.get_bytes_with_version(key)
+    if current is None or version is None:
+        return
+    manifest = json.loads(current.decode("utf-8"))
+    if (not isinstance(manifest, dict)
+            or manifest.get("canonical_written") is not False
+            or manifest.get("attempt_id") != attempt_id):
+        return
+    retryable = _manifest_bytes(
+        run_id, False, partitions, attempt_id=attempt_id,
+        claimed_at=claimed_at, retryable=True,
+    )
+    if not storage.put_bytes_if_version(key, retryable, version):
+        raise OSError(f"canonical run manifest retryable 표시 CAS 실패: {key}")
 
 
 def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
@@ -361,17 +406,14 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     max_trade_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
 
     manifest_key = canonical_run_manifest_key(DATASET, run_id)
-    manifest_initialized = True
     exit_code = 0
     try:
-        attempt_id, manifest_version, completed_exit = _claim_manifest(
+        attempt_id, claimed_at, manifest_version, completed_exit = _claim_manifest(
             storage, manifest_key, run_id,
         )
     except Exception:
         logger.exception("canonical run manifest claim 실패")
-        attempt_id = manifest_version = completed_exit = None
-        manifest_initialized = False
-        exit_code = 1
+        return 1
     if completed_exit is not None:
         logger.info("normalize_etf_nav 완료 manifest 재사용: run_id=%s exit=%d", run_id, completed_exit)
         return completed_exit
@@ -444,15 +486,14 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     partitions: list[dict] = []
     canonical_rows = 0
     canonical_written = False
-    if manifest_initialized:
-        try:
-            partitions, canonical_rows = _write_canonical(
-                storage, passing, conflicts, superseded, run_id,
-            )
-            canonical_written = True
-        except Exception:
-            logger.exception("canonical 적재·무결성 검증 실패")
-            exit_code = 1
+    try:
+        partitions, canonical_rows = _write_canonical(
+            storage, passing, conflicts, superseded, run_id,
+        )
+        canonical_written = True
+    except Exception:
+        logger.exception("canonical 적재·무결성 검증 실패")
+        exit_code = 1
 
     manifest_winners = sum(len(part["winner_ids"]) for part in partitions)
 
@@ -500,7 +541,11 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         try:
             if attempt_id is None or manifest_version is None:
                 raise OSError("canonical run manifest claim 정보가 없다")
-            pending = _manifest_bytes(run_id, False, partitions, attempt_id=attempt_id)
+            if claimed_at is None:
+                raise OSError("canonical run manifest claim 시각이 없다")
+            pending = _manifest_bytes(
+                run_id, False, partitions, attempt_id=attempt_id, claimed_at=claimed_at,
+            )
             if not storage.put_bytes_if_version(manifest_key, pending, manifest_version):
                 raise OSError("incomplete manifest 소유권을 잃었다")
             pending_read, pending_version = storage.get_bytes_with_version(manifest_key)
@@ -525,10 +570,19 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 if owned and current_version is not None:
                     invalid = _manifest_bytes(
                         run_id, False, partitions, attempt_id=attempt_id,
+                        claimed_at=claimed_at, retryable=True,
                     )
                     storage.put_bytes_if_version(manifest_key, invalid, current_version)
             except Exception:
                 logger.exception("소유한 손상 manifest 무효화 실패")
+
+    if exit_code == 1 and attempt_id is not None and claimed_at is not None:
+        try:
+            _mark_manifest_retryable(
+                storage, manifest_key, run_id, attempt_id, claimed_at, partitions,
+            )
+        except Exception:
+            logger.exception("canonical run manifest retryable 표시 실패")
 
     logger.info(
         "normalize_etf_nav 완료: raw_files=%d read=%d passed=%d failed=%d "

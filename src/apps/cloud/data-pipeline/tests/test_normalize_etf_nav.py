@@ -453,8 +453,46 @@ def test_storage와_manifest_무결성_실패는_exit1이고_완료를_남기지
         _write_raw(inner, _raw_key(), [_kis_nav_row()])
         assert normalize_etf_nav.run(_TrackingStorage(inner, fail_put=failing_prefix), "N1", "R1") == 1
         assert _manifest(inner)["canonical_written"] is False
+        assert _manifest(inner)["retryable"] is True
+        assert normalize_etf_nav.run(inner, "N1", "R1") == 0
 
     inner = LocalStorage(tmp_path / "manifest_corrupt")
     _write_raw(inner, _raw_key(), [_kis_nav_row()])
     assert normalize_etf_nav.run(_TrackingStorage(inner, corrupt_completed=True), "N1", "R1") == 1
     assert _manifest(inner)["canonical_written"] is False
+    assert _manifest(inner)["retryable"] is True
+    assert normalize_etf_nav.run(inner, "N1", "R1") == 0
+
+
+def test_fresh_manifest_claim_경쟁자는_run_scoped출력을_건드리지_않는다(tmp_path):
+    # WHY(ALPHA-1042): 같은 run_id의 claim 패자가 계속 실행하면 승자의 단일 quality log를
+    # 실패 로그로 덮을 수 있다. 소유권을 못 얻은 시도는 raw/canonical/log 쓰기 전에 끝나야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(), [_kis_nav_row()])
+    manifest_key = canonical_run_manifest_key("etf_nav", "N1")
+    attempt_id, claimed_at, version, completed_exit = normalize_etf_nav._claim_manifest(
+        storage, manifest_key, "N1",
+    )
+    assert all(value is not None for value in (attempt_id, claimed_at, version))
+    assert completed_exit is None
+
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 1
+
+    assert storage.list_keys("canonical/") == []
+    assert storage.list_keys("operations_archive/data_quality_logs/") == []
+    assert _manifest(storage)["attempt_id"] == attempt_id
+
+
+def test_비정상종료한_stale_claim은_CAS로_인수해_완료한다(tmp_path):
+    # WHY(ALPHA-1042): 프로세스가 claim 직후 강제 종료되면 retryable 표시를 못 남긴다.
+    # 실행 최대시간보다 오래된 lease는 같은 run_id 재시도가 인수해야 영구 고착되지 않는다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key(), [_kis_nav_row()])
+    manifest_key = canonical_run_manifest_key("etf_nav", "N1")
+    storage.put_bytes(manifest_key, normalize_etf_nav._manifest_bytes(
+        "N1", False, [], attempt_id="dead-attempt",
+        claimed_at="2000-01-01T00:00:00+00:00",
+    ))
+
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    assert _manifest(storage)["canonical_written"] is True
