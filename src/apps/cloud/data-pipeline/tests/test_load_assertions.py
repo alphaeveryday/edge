@@ -209,20 +209,25 @@ class _FakeConn:
 def _setup(monkeypatch, conn):
     from contextlib import contextmanager
 
-    class _Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            # ALPHA-1052 회수 fixture는 08-25 manifest가 7일 창 안에 있다는 전제다.
-            # 벽시계를 쓰면 09-02부터 같은 입력이 stale로 바뀌어 계약 테스트가 날짜에 진다.
-            frozen = cls(2026, 8, 28, tzinfo=timezone.utc)
-            return frozen.astimezone(tz) if tz is not None else frozen.replace(tzinfo=None)
-
     @contextmanager
     def _c(config):
         yield conn
 
     monkeypatch.setattr(load_assertions, "connect", _c)
     monkeypatch.setattr(load_assertions, "load_resolution_index", lambda c: _INDEX)
+
+
+def _setup_carry(monkeypatch, conn):
+    """Freeze only ALPHA-1052's historical carry-forward scenario clock."""
+    _setup(monkeypatch, conn)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # 08-25 manifests are intentionally inside this scenario's 7-day window.
+            frozen = cls(2026, 8, 28, tzinfo=timezone.utc)
+            return frozen.astimezone(tz) if tz is not None else frozen.replace(tzinfo=None)
+
     monkeypatch.setattr(load_assertions, "datetime", _Clock)
 
 
@@ -546,7 +551,7 @@ def test_unconsumed_manifest_from_a_failed_run_is_carried_forward(tmp_path, monk
     storage = LocalStorage(tmp_path / "lake")
     _two_runs_lake(storage)
     conn = _carry_conn()
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -579,7 +584,7 @@ def test_overlapping_scopes_read_the_part_file_once(tmp_path, monkeypatch):
     _write_feature_manifest(
         inner, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
     storage = _ReadSpy(inner)
-    _setup(monkeypatch, _carry_conn())
+    _setup_carry(monkeypatch, _carry_conn())
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -603,7 +608,7 @@ def test_a_failing_carried_group_does_not_roll_back_this_run(tmp_path, monkeypat
     _two_runs_lake(storage)
     conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
                      fail_on_event="OLDER_RUN")   # 회수 범위(T0)의 주장만 터진다
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -632,7 +637,7 @@ def test_one_poisoned_carried_run_does_not_block_the_others(tmp_path, monkeypatc
     conn = _FakeConn(
         documents=[("older", "doc_OLD"), ("current", "doc_CUR"), ("healthy", "doc_HEA")],
         fail_on_event="OLDER_RUN")
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -665,7 +670,7 @@ def test_a_rolled_back_group_claims_none_of_its_counters(tmp_path, monkeypatch):
         storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
     conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
                      fail_on_event="OLDER_RUN")
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -699,7 +704,7 @@ def test_a_rolled_back_group_blocks_every_manifest_claiming_its_articles(tmp_pat
         storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
     conn = _FakeConn(documents=[("shared", "doc_SHR"), ("current", "doc_CUR")],
                      fail_on_event="OLDER_RUN")
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -742,7 +747,7 @@ def test_a_concept_minted_in_two_groups_is_counted_once(tmp_path, monkeypatch):
     _write_feature_manifest(
         storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
     conn = _carry_conn()
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -776,7 +781,7 @@ def test_a_rolled_back_group_does_not_claim_its_minted_concepts(tmp_path, monkey
         storage, "T1", [_manifest_partition("ko", "2026-08-26", ["current"])])
     conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
                      fail_on_event="OLDER_RUN")
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
     # 롤백된 그룹이 세운 개념은 로그가 주장하지 않는다
@@ -793,7 +798,7 @@ def test_own_scope_failure_still_fails_the_whole_run(tmp_path, monkeypatch):
     _two_runs_lake(storage)
     conn = _FakeConn(documents=[("older", "doc_OLD"), ("current", "doc_CUR")],
                      fail_on_event="SUPPLY_CONTRACT")   # 자기 범위(T1)의 주장이 터진다
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 1
     assert storage.list_keys(_consumed_key("T1")) == []
@@ -808,7 +813,7 @@ def test_consumed_manifest_is_not_carried_again(tmp_path, monkeypatch):
     _two_runs_lake(storage)
     storage.put_bytes(_consumed_key("T0"), b"{}")
     conn = _carry_conn()
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -824,6 +829,7 @@ def test_failed_load_writes_no_consumed_marker(tmp_path, monkeypatch):
 
     storage = LocalStorage(tmp_path / "lake")
     _two_runs_lake(storage)
+    _setup_carry(monkeypatch, _FakeConn())
 
     @contextmanager
     def _boom(config):
@@ -861,7 +867,7 @@ def test_a_broken_carried_scope_never_kills_this_run(tmp_path, monkeypatch, door
         _write_feature(storage, "ko", "2026-08-25", [
             _feature_row("older", [_assertion()], published_at="2026-08-24T09:00:00+09:00")])
     conn = _carry_conn()
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0  # 제 범위는 산다
     loaded = {event for _, _, event, _, _, _ in _inserts(conn, "document_assertion")}
@@ -881,7 +887,7 @@ def test_stale_manifest_is_closed_so_discovery_converges(tmp_path, monkeypatch):
     아니라 `skipped` 인 것이 핵심이다 — "안 싣고 닫았다"가 "실었다"로 둔갑하면 안 된다."""
     storage = LocalStorage(tmp_path / "lake")
     _two_runs_lake(storage, older_started_at="2026-01-01T00:00:00+00:00")
-    _setup(monkeypatch, _carry_conn())
+    _setup_carry(monkeypatch, _carry_conn())
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
     assert _log(storage)["manifest_carry_forward"]["stale"] == 1
@@ -896,7 +902,7 @@ def test_stale_manifest_is_closed_so_discovery_converges(tmp_path, monkeypatch):
     storage2 = _ReadSpy(storage)
     _write_feature_manifest(
         storage, "T2", [_manifest_partition("ko", "2026-08-26", ["current"])])
-    _setup(monkeypatch, _carry_conn())
+    _setup_carry(monkeypatch, _carry_conn())
     assert load_assertions.run(storage2, "L2", db=_db(), input_run_id="T2") == 0
     [second] = [k for k in storage.list_keys("operations_archive/") if "run_id=L2" in k]
     assert json.loads(storage.get_bytes(second))["manifest_carry_forward"]["pending"] == 0
@@ -916,7 +922,7 @@ def test_uncarryable_manifest_is_counted_not_silently_dropped(tmp_path, monkeypa
         older_started_at="2026-01-01T00:00:00+00:00" if case == "stale" else None,
     )
     conn = _carry_conn()
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
     carry = _log(storage)["manifest_carry_forward"]
@@ -943,7 +949,7 @@ def test_missing_document_blocks_only_its_own_manifest(
     _two_runs_lake(storage)
     present = "older" if missing == "current" else "current"
     conn = _FakeConn(documents=[(present, f"doc_{present.upper()}")])
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
@@ -966,7 +972,7 @@ def test_uncarryable_manifests_do_not_starve_the_queue(tmp_path, monkeypatch):
             "started_at": "2026-08-25T15:00:00+00:00", "feature_partitions": [],
         }).encode("utf-8"))
     conn = _carry_conn()
-    _setup(monkeypatch, conn)
+    _setup_carry(monkeypatch, conn)
 
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
 
