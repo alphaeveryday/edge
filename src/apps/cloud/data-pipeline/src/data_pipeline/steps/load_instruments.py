@@ -50,7 +50,7 @@ from ..lake import (
     latest_good_pointer_key,
     quality_log_key,
 )
-from ..lake.latest_good import LatestGoodError, PRODUCERS, parse_pointer
+from ..lake.latest_good import LatestGoodError, PRODUCERS, max_fetched_at, parse_pointer
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +174,13 @@ def _read_latest_good_inputs(storage: Storage, input_io: dict[str, int | None]) 
                     "latest-good artifact 행과 pointer partition이 일치하지 않는다: "
                     f"dataset={dataset} row={index}"
                 )
+        actual_max_fetched_at = max_fetched_at(rows)
+        if actual_max_fetched_at != pointer["max_fetched_at"]:
+            raise LatestGoodError(
+                "latest-good artifact max_fetched_at이 pointer와 다르다: "
+                f"dataset={dataset} pointer={pointer['max_fetched_at']} "
+                f"actual={actual_max_fetched_at}"
+            )
         item["rows"] = rows
         item["quality"] = {
             "dataset": dataset,

@@ -1129,7 +1129,8 @@ def test_latest_good_gets_three_pointers_first_and_never_lists_canonical(tmp_pat
 
 @pytest.mark.parametrize("damage", [
     "corrupt_json", "wrong_dataset", "wrong_producer", "wrong_market", "bad_date",
-    "bad_run", "wrong_key", "bad_sha", "duplicate_object", "unsorted_objects",
+    "bad_run", "wrong_key", "bad_sha", "wrong_max_fetched_at",
+    "duplicate_object", "unsorted_objects",
     "empty_artifact", "dangling_artifact", "partition_identity_mismatch",
 ])
 def test_invalid_latest_good_input_fails_before_any_db_write(
@@ -1156,6 +1157,8 @@ def test_invalid_latest_good_input_fails_before_any_db_write(
         pointer["objects"][0]["key"] = "canonical/not-immutable.parquet"
     elif damage == "bad_sha":
         pointer["objects"][0]["sha256"] = "a" * 64
+    elif damage == "wrong_max_fetched_at":
+        pointer["max_fetched_at"] = "2099-01-01T00:00:00+00:00"
     elif damage == "duplicate_object":
         pointer["objects"].append(dict(pointer["objects"][0]))
     elif damage == "unsorted_objects":
