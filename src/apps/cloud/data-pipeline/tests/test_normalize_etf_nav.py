@@ -496,3 +496,58 @@ def test_비정상종료한_stale_claim은_CAS로_인수해_완료한다(tmp_pat
 
     assert normalize_etf_nav.run(storage, "N1", "R1") == 0
     assert _manifest(storage)["canonical_written"] is True
+
+
+def test_raw_읽기_fatal은_부분artifact를_동결하지_않고_재시도한다(tmp_path):
+    # WHY(ALPHA-1042): 일부 raw만 읽힌 상태에서 immutable artifact를 만들면 회복된 재시도가
+    # 완전한 bytes를 쓸 수 없어 영구 충돌한다. fatal 시 snapshot 자체를 미뤄야 한다.
+    inner = LocalStorage(tmp_path / "lake")
+    good_key = _raw_key(run_id="R1", date="2026-07-20")
+    failed_key = _raw_key(run_id="R1", date="2026-07-21")
+    _write_raw(inner, good_key, [_kis_nav_row(our_etf_id="069500")])
+    _write_raw(inner, failed_key, [_kis_nav_row(our_etf_id="091160")])
+
+    class FailRawOnce(_TrackingStorage):
+        def __init__(self, storage):
+            super().__init__(storage)
+            self.failed = False
+
+        def get_bytes(self, key):
+            if key == failed_key and not self.failed:
+                self.failed = True
+                raise OSError("일시 raw 읽기 실패")
+            return super().get_bytes(key)
+
+    storage = FailRawOnce(inner)
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 1
+    assert inner.list_keys("operations_archive/canonical_run_artifacts/") == []
+
+    assert normalize_etf_nav.run(storage, "N1", "R1") == 0
+    assert _manifest(inner)["canonical_partitions"][0]["winner_ids"] == [
+        {"etf_id": "069500"}, {"etf_id": "091160"},
+    ]
+
+
+def test_quality실패_뒤_shared가_전진해도_기존_run_snapshot으로_완료한다(tmp_path):
+    # WHY(ALPHA-1042): artifact 확정 뒤 quality 저장만 실패할 수 있다. 그 사이 다음 run이
+    # shared canonical을 갱신해도 재시도는 앞 run의 snapshot/SHA를 바꾸면 안 된다.
+    inner = LocalStorage(tmp_path / "lake")
+    _write_raw(inner, _raw_key(run_id="R1"), [
+        _kis_nav_row(nav="100", fetched_at="2026-07-20T06:00:00+00:00"),
+    ])
+    failing = _TrackingStorage(inner, fail_put="data_quality_logs")
+    assert normalize_etf_nav.run(failing, "N1", "R1") == 1
+    run_key = canonical_run_partition_key("etf_nav", "N1", "2026-07-16")
+    old_bytes = inner.get_bytes(run_key)
+
+    _write_raw(inner, _raw_key(run_id="R2"), [
+        _kis_nav_row(nav="200", fetched_at="2026-07-21T06:00:00+00:00"),
+    ])
+    assert normalize_etf_nav.run(inner, "N2", "R2") == 0
+
+    assert normalize_etf_nav.run(inner, "N1", "R1") == 0
+    [part] = _manifest(inner, "N1")["canonical_partitions"]
+    assert part["sha256"] == hashlib.sha256(old_bytes).hexdigest()
+    assert inner.get_bytes(run_key) == old_bytes
+    assert normalize_etf_nav._read_parquet_rows(old_bytes)[0]["nav"] == pytest.approx(100)
+    assert _canonical_rows(inner)[0]["nav"] == pytest.approx(200)

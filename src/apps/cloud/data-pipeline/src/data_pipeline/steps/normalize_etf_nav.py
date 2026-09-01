@@ -251,21 +251,26 @@ def _write_canonical(
         for conflict in [*current_conflicts, *canonical_conflicts]:
             if conflict not in conflicts:
                 conflicts.append(conflict)
-        digest = hashlib.sha256(parquet_bytes).hexdigest()
         # shared canonical 은 다음 정제 런이 덮어쓴다. 완료 manifest가 그 가변 객체를 가리키면
         # 다음 런과 consumer가 겹칠 때 앞 manifest의 SHA가 깨진다. 같은 바이트를 run-scoped
         # artifact로 확정하고 하류에는 이 불변 키만 공개한다(공시 manifest와 같은 규약).
         run_key = canonical_run_partition_key(DATASET, run_id, trade_date)
-        if not storage.put_bytes_if_version(run_key, parquet_bytes, None):
-            if storage.get_bytes(run_key) != parquet_bytes:
-                raise OSError(f"run canonical parquet 불변성 충돌: {run_key}")
+        run_bytes, _ = storage.get_bytes_with_version(run_key)
+        if run_bytes is None:
+            if not storage.put_bytes_if_version(run_key, parquet_bytes, None):
+                run_bytes = storage.get_bytes(run_key)
+            else:
+                run_bytes = parquet_bytes
+        # quality/manifest 기록 뒤 재시도라면 shared canonical은 다른 run이 이미 전진했을 수 있다.
+        # 이 run이 처음 확정한 snapshot을 재사용해야 immutable key의 계보가 유지된다.
+        digest = hashlib.sha256(run_bytes).hexdigest()
         if hashlib.sha256(storage.get_bytes(run_key)).hexdigest() != digest:
             raise OSError(f"run canonical parquet 무결성 검증 실패: {run_key}")
         conflicted = {
             item["etf_id"] for item in conflicts
             if item["market"] == market and item["trade_date"] == trade_date
         }
-        merged_by_id = {row["etf_id"]: row for row in merged}
+        merged_by_id = {row["etf_id"]: row for row in _read_parquet_rows(run_bytes)}
         current_by_id = {row["etf_id"]: row for row in current_winners}
         for etf_id, current in sorted(current_by_id.items()):
             if etf_id in conflicted or merged_by_id.get(etf_id) == current:
@@ -486,14 +491,17 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     partitions: list[dict] = []
     canonical_rows = 0
     canonical_written = False
-    try:
-        partitions, canonical_rows = _write_canonical(
-            storage, passing, conflicts, superseded, run_id,
-        )
-        canonical_written = True
-    except Exception:
-        logger.exception("canonical 적재·무결성 검증 실패")
-        exit_code = 1
+    # raw 목록/읽기 fatal 상태에서 일부 passing만 artifact로 동결하면, 입력이 회복된 같은 run
+    # 재시도가 다른 bytes를 만들어 영구 충돌한다. fatal이 없을 때만 snapshot을 확정한다.
+    if exit_code != 1:
+        try:
+            partitions, canonical_rows = _write_canonical(
+                storage, passing, conflicts, superseded, run_id,
+            )
+            canonical_written = True
+        except Exception:
+            logger.exception("canonical 적재·무결성 검증 실패")
+            exit_code = 1
 
     manifest_winners = sum(len(part["winner_ids"]) for part in partitions)
 
