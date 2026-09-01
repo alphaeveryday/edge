@@ -627,7 +627,10 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # NAV 정제도 raw 를 읽는 스텝이라 수집 창·벤더 인자가 없다 — 벤더는 raw 키의 source= 가
     # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-etf-nav":
-        return normalize_etf_nav.run(storage, run_id, args.input_run_id)
+        exit_code = normalize_etf_nav.run(storage, run_id, args.input_run_id)
+        # 구 SFN은 NormalizeEtfNav exit 2를 하류 차단으로 읽는다. manifest·quality에는
+        # 부분 실패가 남으므로 ALPHA-1043 배선 게이트가 착지한 뒤 이 매핑을 제거한다.
+        return 0 if exit_code == 2 else exit_code
     # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
     if args.step == "normalize-etf-profile":
         return normalize_etf_profile.run(storage, run_id, args.input_run_id)

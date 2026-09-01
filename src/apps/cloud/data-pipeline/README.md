@@ -520,6 +520,13 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 #   특정 런만: ... run normalize-etf --input-run-id 20260701T000000Z
 
+# ETF NAV 정제(Step2) — raw etf_nav(KIS)에서 거래일별 최신 NAV를 canonical로 병합한다.
+# 정상 SFN은 --input-run-id로 현재 수집 런만 읽는다. 성공 winner는 run-scoped parquet의
+# direct key·SHA-256과 함께 completed manifest에 고정되어 다음 normalize와 재시도에도 불변이다.
+# 행 탈락·동시각 NAV 충돌은 성공 winner를 보존한 exit 2, 저장·무결성 실패는 exit 1이다.
+uv run --package data-pipeline python -m data_pipeline.run normalize-etf-nav \
+  --input-run-id 20260701T000000Z
+
 # 뉴스 이벤트 태깅(Step3, 피처) — canonical 뉴스(language=ko)를 LLM 으로 태깅해
 # feature/news/assertions 에 article_id 멱등 병합. ko 만 태깅한다(프롬프트가 한국 금융 뉴스
 # 전용 — 영어 기사에 씌우면 품질이 조용히 무너진다).

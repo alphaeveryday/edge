@@ -201,6 +201,17 @@ def test_normalize_etf_dispatches_step(tmp_path, monkeypatch):
     assert called == {"input_run_id": "R11"}
 
 
+def test_ETF_NAV_정제_호환이미지는_부분성공을_구_SFN에_0으로_반환한다(monkeypatch):
+    # WHY(ALPHA-1042): 자동 이미지 CD가 exit-2 게이트보다 먼저 배포돼도 producer의 성공
+    # winner가 loader까지 흘러야 한다. 실패 증거는 manifest·quality에 남고 CLI만 한시 매핑한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    from data_pipeline import run as run_mod
+
+    monkeypatch.setattr(run_mod.normalize_etf_nav, "run", lambda *args: 2)
+
+    assert main(["normalize-etf-nav", "--run-id", "R", "--input-run-id", "R"]) == 0
+
+
 def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
     # WHY: KRX getJsonData 는 응답에 **10초를 넘게** 걸린다 — 2026-07-15 라이브 실측에서 같은
     #      세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에 성공했다. 기본값
