@@ -268,6 +268,16 @@ class _Cursor:
             assert "available_at <=" not in where_clause, \
                 "내용 쓰기가 시각으로 막혀 있다 — 미래 timestamp 행에서 정정이 유실된다"
             self._upsert_document(params)
+        elif s.startswith("INSERT INTO news_document (document_id, publisher)"):
+            # publisher 는 리드와 독립된 UPSERT 다(ALPHA-699). 한 문장에 합치면 언론사-only
+            # 정정이 lead_observed_at 을 움직일 수 있으므로 이 분기를 generic lead 보다 먼저 둔다.
+            assert "SET publisher = EXCLUDED.publisher" in s, \
+                "news_document upsert 가 언론사 정정을 반영하지 않는다"
+            assert "news_document.publisher IS DISTINCT FROM EXCLUDED.publisher" in s, \
+                "같은 언론사에도 UPDATE 하면 멱등 집계가 거짓이 된다"
+            assert "lead_observed_at" not in s and "available_at" not in s, \
+                "언론사-only 정정이 내용 시각을 움직인다"
+            self._upsert_news_publisher(params)
         elif s.startswith("INSERT INTO news_document"):
             assert "ON CONFLICT (document_id) DO UPDATE" in s, \
                 "news_document upsert 가 리드 정정을 반영하지 않는다"
@@ -656,6 +666,31 @@ class _Cursor:
         existing.update(lead_text=lead_text,
                         lead_observed_at=observed_at if stored is None
                         else max(stored, observed_at))
+        self.rowcount = 1
+
+    def _upsert_news_publisher(self, p):
+        publisher, source_code, article_id = p
+        document = self.db.documents.get((source_code, article_id))
+        if document is None:
+            self.rowcount = 0
+            return
+        key = document["document_id"]
+        existing = self.db.news_documents.get(key)
+        if existing is None:
+            # 실제 PG는 INSERT에서 생략한 nullable 리드 컬럼을 NULL로 만든다. 키 자체를
+            # 빼면 이후 1분 writer의 SELECT를 fake만 KeyError로 거부한다.
+            self.db.news_documents[key] = {
+                "document_id": key,
+                "lead_text": None,
+                "lead_observed_at": None,
+                "publisher": publisher,
+            }
+            self.rowcount = 1
+            return
+        if existing.get("publisher") == publisher:
+            self.rowcount = 0
+            return
+        existing["publisher"] = publisher
         self.rowcount = 1
 
     def _insert_session(self, p):
