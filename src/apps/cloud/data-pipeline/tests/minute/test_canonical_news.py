@@ -2,7 +2,7 @@
 
 의도: **정정이 도착하지 않으면 그 뒤는 전부 거짓말이 된다.** 원장은 새 지문(fp2)을
 처리했다고 말하는데 Consumer 가 읽은 건 옛 본문이고, 그 기사는 재관측 변화가 없는 한 새 job
-도 안 생겨 정정이 영영 태깅되지 않는다(봇 P1). 여기서 고정하는 건 넷이다.
+도 안 생겨 정정이 영영 태깅되지 않는다(봇 P1). 여기서 고정하는 핵심 계약은 다음과 같다.
 
 - **정정이 실제로 덮인다** — 제목·발행시각·리드 전부. 배치 loader 의 DO NOTHING 회귀가
   들어오면 깨져야 한다.
@@ -10,6 +10,8 @@
 - **같은 본문 재관측은 UPDATE 를 내지 않는다**(멱등 집계가 거짓이 되지 않게).
 - **article_id 는 원장이 준 값이 이긴다** — `_normalize` 의 재계산값을 쓰면 job 을 만든 id 와
   canonical 행의 id 가 갈린다.
+- **publisher 는 리드와 독립적으로 쓴다** — 값이 있을 때만 별도 UPSERT하고, 언론사-only
+  정정은 리드·문서 시각을 움직이지 않는다.
 """
 
 from __future__ import annotations
@@ -57,6 +59,67 @@ def write(db, *records, window_start=WINDOW_START, observed_at=None):
 
 
 class TestCorrection:
+    def test_publisher_is_stored_even_when_the_new_article_has_no_lead(self):
+        # 언론사는 리드의 부속값이 아니다. CONTENT 가 없는 기사도 PROVIDER 가 있으면
+        # 콘솔의 출처 축을 잃지 않아야 한다(ALPHA-699).
+        db = FakeMinuteDB()
+        write(db, vendor_row(CONTENT=None, PROVIDER="  픽스처일보  "))
+
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        news = db.news_documents[document["document_id"]]
+        assert news["lead_text"] is None
+        assert news["publisher"] == "픽스처일보"
+
+    def test_publisher_only_correction_changes_neither_timestamp(self):
+        # 언론사 정정은 별도 내용 축이다. 리드가 안 움직였는데 lead_observed_at 을 찍거나
+        # document.available_at 을 밀면 두 PIT 계약이 거짓이 된다.
+        db = FakeMinuteDB()
+        write(db, vendor_row())
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        news = db.news_documents[document["document_id"]]
+        before = (document["available_at"], news["lead_observed_at"])
+
+        later = OBSERVED + timedelta(hours=3)
+        assert write(db, vendor_row(PROVIDER="정정일보"), observed_at=later) == 1
+        assert news["publisher"] == "정정일보"
+        assert (document["available_at"], news["lead_observed_at"]) == before
+
+    def test_minute_writer_accepts_a_publisher_only_child_created_by_batch(self):
+        # 배치는 리드 없이 언론사만 있는 자식 행을 만들 수 있다. PostgreSQL은 생략한 리드
+        # 컬럼을 NULL로 채우므로 fake도 그 형상을 보존해야 배치→1분 경계를 거짓 없이 검증한다.
+        db = FakeMinuteDB()
+        write(db, vendor_row(CONTENT=None, PROVIDER=None))
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        del db.news_documents[document["document_id"]]
+        with db.connect(None) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO news_document (document_id, publisher)
+                SELECT document_id, %s FROM document
+                WHERE source_code = %s AND source_document_id = %s
+                ON CONFLICT (document_id) DO UPDATE
+                SET publisher = EXCLUDED.publisher
+                WHERE news_document.publisher IS DISTINCT FROM EXCLUDED.publisher
+                """,
+                ("배치일보", SOURCE, ARTICLE_ID),
+            )
+
+        assert write(db, vendor_row(CONTENT=None, PROVIDER="배치일보")) == 0
+        news = db.news_documents[document["document_id"]]
+        assert news["lead_text"] is None and news["lead_observed_at"] is None
+        assert news["publisher"] == "배치일보"
+
+    @pytest.mark.parametrize("provider", [None, "   "])
+    def test_missing_publisher_does_not_erase_the_stored_value(self, provider):
+        # 값 없음은 삭제 명령이 아니다. 벤더가 일시 누락한 관측으로 이미 아는 언론사를
+        # 지우면 다음 보정 수단이 없는 현재 배치 계약에서 영구 공백이 된다.
+        db = FakeMinuteDB()
+        write(db, vendor_row(PROVIDER="픽스처일보"))
+
+        assert write(db, vendor_row(PROVIDER=provider)) == 0
+        document = db.documents[(SOURCE, ARTICLE_ID)]
+        assert db.news_documents[document["document_id"]]["publisher"] == "픽스처일보"
+
     def test_changed_body_overwrites_the_stored_row(self):
         # 이 모듈의 존재 이유 — 배치 loader 의 DO NOTHING 을 그대로 쓰면 여기서 깨진다
         db = FakeMinuteDB()
@@ -298,6 +361,11 @@ class TestCorrection:
 
 
 class TestIdempotence:
+    def test_same_publisher_reobservation_writes_nothing(self):
+        db = FakeMinuteDB()
+        assert write(db, vendor_row(PROVIDER="픽스처일보")) == 1
+        assert write(db, vendor_row(PROVIDER="픽스처일보")) == 0
+
     def test_same_body_reobservation_writes_nothing(self):
         db = FakeMinuteDB()
         assert write(db, vendor_row()) == 1
@@ -386,3 +454,18 @@ class TestThroughTheWorker:
         # 안 오면 새 job(fp2)이 옛 텍스트로 성공한다(봇 P1)
         assert db.news_documents[after["document_id"]]["lead_text"] != before["lead"]
         assert after["available_at"] == before["available_at"] == observed
+
+    def test_raw_bigkinds_provider_reaches_news_document(self, tmp_path):
+        # writer fixture가 아니라 실제 Worker → MinuteCommitter 경계를 통과해야 raw PROVIDER가
+        # 중간 레이어에서 유실되지 않는다는 계약을 증명한다(ALPHA-699).
+        from test_news_worker import NOW, build_worker
+
+        db = FakeMinuteDB()
+        worker, _, _ = build_worker(
+            db, tmp_path, scenario={"scenario": "normal", "initial_count": 1},
+        )
+        worker.canonical_writer = PgNewsCanonicalWriter(clock=lambda: NOW)
+
+        assert worker.tick(NOW) == "PROCESSED"
+        (document,) = db.documents.values()
+        assert db.news_documents[document["document_id"]]["publisher"] == "픽스처일보"

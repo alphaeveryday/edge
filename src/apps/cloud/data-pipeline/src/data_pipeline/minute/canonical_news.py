@@ -301,6 +301,25 @@ class PgNewsCanonicalWriter:
                 observed_at,
             ),
         )
+
+        # 언론사는 리드와 독립된 축이다(ALPHA-699). 값이 있을 때만 별도 UPSERT 해서
+        # 벤더의 일시 결손을 삭제 명령으로 읽지 않고, 언론사-only 정정이 리드 관측 시각을
+        # 움직이지 않게 한다. 저장 ID 는 위와 같이 자연키로 다시 찾는다.
+        publisher_changed = 0
+        if normalized["publisher"]:
+            cur.execute(
+                """
+                INSERT INTO news_document (document_id, publisher)
+                SELECT document_id, %s FROM document
+                WHERE source_code = %s AND source_document_id = %s
+                ON CONFLICT (document_id) DO UPDATE
+                SET publisher = EXCLUDED.publisher
+                WHERE news_document.publisher IS DISTINCT FROM EXCLUDED.publisher
+                """,
+                (normalized["publisher"], source_code, article_id),
+            )
+            publisher_changed = cur.rowcount
+
         # rowcount 는 "행을 만들었다"도 1 이라 내용 변경과 구분되지 않는다 — **값**으로 본다.
         # 자식 행이 없던 문서(배치가 리드 없이 넣은 형상)의 previous_lead 는 None 이므로,
         # NULL 리드를 처음 만드는 건 변경이 아니고(도착 시각이 안 움직인다) 실제 리드가
@@ -324,4 +343,4 @@ class PgNewsCanonicalWriter:
                 """,
                 (observed_at, source_code, article_id),
             )
-        return 1 if (changed or lead_changed) else 0
+        return 1 if (changed or lead_changed or publisher_changed) else 0
