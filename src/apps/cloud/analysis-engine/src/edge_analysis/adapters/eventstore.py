@@ -368,7 +368,8 @@ class EventStore:
 
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT window_start, window_end, data_status, generation, checksum"
+                "SELECT window_start, window_end, data_status, generation, checksum,"
+                " manifest_uri, manifest_checksum"
                 " FROM minute_ingestion_window"
                 " WHERE session_id = %s AND window_start >= %s AND window_start < %s"
                 " ORDER BY window_start",
@@ -419,6 +420,8 @@ class EventStore:
                     end=row[1].astimezone(KST),
                     generation=generation,
                     checksum=str(checksum),
+                    manifest_uri=row[5],
+                    manifest_checksum=row[6],
                 ))
             except ValueError as error:
                 raise PipelineError(

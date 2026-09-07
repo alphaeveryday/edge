@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import io
 import sys
+from hashlib import sha256
+
+import pytest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
@@ -106,13 +109,13 @@ def sector_bar(unit: str, ts_hhmm: str, o, h, low, c, v) -> dict:
 class Fixture:
     """원장(FakeMinuteDB) + 레이크(LocalStorage) — 커밋 상태를 직접 심는다."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, session_day=SESSION_DAY):
         self.db = FakeMinuteDB()
         self.storage = LocalStorage(root=tmp_path)
         self.ledger = MinuteLedger(db=DbConfig(password="x"), connect_fn=self.db.connect)
-        planned = plan_session_windows(SESSION_DAY, universe=UNIVERSE, extended_hours=True)
+        planned = plan_session_windows(session_day, universe=UNIVERSE, extended_hours=True)
         self.session_id, _ = self.ledger.plan_session(
-            dataset="price_minute", source_group="toss", session_date=SESSION_DAY,
+            dataset="price_minute", source_group="toss", session_date=session_day,
             universe_version=UNIVERSE.universe_version,
             universe_hash=UNIVERSE.universe_hash, windows=planned,
         )
@@ -125,7 +128,7 @@ class Fixture:
         """artifact PUT + 원장 커밋 표시 — Worker 커밋 후의 상태를 재현한다."""
         self.put_artifact(hhmm, records, generation)
         window = self.db.windows[(self.session_id, w(hhmm))]
-        window["checksum"] = f"c-{hhmm}-{generation}"
+        window["checksum"] = sha256(serialize_records(records)).hexdigest()
         window["generation"] = generation
 
     def rollup_at(self, hhmm: str, session_date: str = SESSION_DATE) -> str | None:
@@ -174,7 +177,7 @@ class Fixture:
             canonical_sector_index_minute_artifact_key("KR", SESSION_DATE, hhmm, generation),
             serialize_records(records))
         window = self.db.windows[(self.sector_session_id, w(hhmm))]
-        window["checksum"], window["generation"] = f"s-{hhmm}-{generation}", generation
+        window["checksum"], window["generation"] = sha256(serialize_records(records)).hexdigest(), generation
 
     def rollup_sector(self, session_date: str = SESSION_DATE) -> str | None:
         return rollup_session(
@@ -509,7 +512,7 @@ class TestSessionRollup:
 
         owned = sorted(WRITER_OWNED_BEFORE_SINCE)[0]
         assert owned < WRITER_SINCE, "예외가 경계 앞이어야 의미가 있다"
-        fx = Fixture(tmp_path)
+        fx = Fixture(tmp_path, session_day=date.fromisoformat(owned))
         for hhmm in ("0900", "0901", "0902", "0903", "0904"):
             records = [{"unit_id": "500000",
                         "ts": datetime.combine(date.fromisoformat(owned),
@@ -519,8 +522,8 @@ class TestSessionRollup:
             fx.storage.put_bytes(
                 canonical_price_minute_artifact_key("KR", owned, hhmm, 1),
                 serialize_records(records))
-            window = fx.db.windows[(fx.session_id, w(hhmm))]
-            window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
+            window = fx.db.windows[(fx.session_id, records[0]["ts"])]
+            window["checksum"], window["generation"] = sha256(serialize_records(records)).hexdigest(), 1
         assert fx.rollup_session(session_date=owned) == canonical_intraday_5m_key("KR", owned)
 
 
@@ -579,7 +582,8 @@ class TestPartitionOwnerWhenSessionsContend:
                     "unit_id": "500000", "ts": start, "open": "100", "high": "101",
                     "low": "99", "close": "100", "volume": "1", "source": "kis"}]))
             window = fx.db.windows[(session_id, start)]
-            window["checksum"], window["generation"] = f"c-{hhmm}-1", 1
+            window["checksum"], window["generation"] = sha256(fx.storage.get_bytes(
+                canonical_price_minute_artifact_key("KR", day, hhmm, 1))).hexdigest(), 1
 
     def contended(self, fx, day: str) -> tuple[str, str]:
         """그날에 소유자·비소유자 세션을 하나씩 세우고 (소유자, 비소유자) 를 준다."""
@@ -1332,3 +1336,35 @@ def test_boundary_is_not_left_in_the_future():
 
 def _scan_boom(*args, **kwargs):
     raise RuntimeError("S3 throttled")
+
+
+@pytest.mark.parametrize("dataset", ["price_minute", "sector_index_minute"])
+def test_rollup_uses_content_artifacts_without_legacy_files(tmp_path, dataset):
+    from data_pipeline.lake import minute_content_artifact_key, minute_content_manifest_key
+    from data_pipeline.minute.artifacts import build_content_window_manifest, serialize_manifest
+
+    fx = Fixture(tmp_path)
+    sector = dataset == "sector_index_minute"
+    sid = fx.plan_sector() if sector else fx.session_id
+    for hhmm in ("0900", "0901", "0902", "0903", "0904"):
+        records = [sector_bar("0001", hhmm, 100, 101, 99, 100, 10)] if sector else [bar("500000", hhmm, 100, 101, 99, 100, 10)]
+        (fx.commit_sector if sector else fx.commit)(hhmm, records)
+        old_key = (canonical_sector_index_minute_artifact_key if sector else canonical_price_minute_artifact_key)("KR", SESSION_DATE, hhmm, 1)
+        body = fx.storage.get_bytes(old_key)
+        checksum = sha256(body).hexdigest()
+        key = minute_content_artifact_key(dataset, "KR", SESSION_DATE, sid, hhmm, checksum)
+        manifest = build_content_window_manifest(
+            dataset=dataset, session_id=sid, window_start=w(hhmm), window_end=w(hhmm) + timedelta(minutes=1),
+            generation=1, expected_unit_ids=[records[0]["unit_id"]], units={"received": [records[0]["unit_id"]]},
+            artifact_key=key, artifact_checksum=checksum,
+        )
+        data = serialize_manifest(manifest)
+        digest = sha256(data).hexdigest()
+        uri = minute_content_manifest_key(dataset, "KR", SESSION_DATE, sid, hhmm, 1, digest)
+        fx.storage.put_bytes(key, body)
+        fx.storage.put_bytes(uri, data)
+        fx.storage.delete_keys([old_key])
+        fx.db.windows[(sid, w(hhmm))].update(manifest_uri=uri, manifest_checksum=digest)
+    output = fx.rollup_sector() if sector else fx.rollup_session()
+    rows = fx.read_rows(output)
+    assert len(rows) == 1 and rows[0]["volume"] == 50

@@ -151,6 +151,12 @@ class _Cursor:
             window = self.db.windows.get((params[0], params[1]))
             if window is not None:
                 self._rows = [(window["claimed_by"], window["claim_token"])]
+        elif s.startswith("SELECT window_start, generation, checksum, manifest_uri"):
+            self._rows = [
+                (w["window_start"], w["generation"], w["checksum"], w.get("manifest_uri"),
+                 w.get("manifest_checksum"), w["window_end"]) for w in self.db.windows.values()
+                if w["session_id"] == params[0] and w.get("checksum") is not None
+            ]
         elif s.startswith("SELECT window_start, generation FROM minute_ingestion_window"):
             self._rows = [
                 (w["window_start"], w["generation"]) for w in self.db.windows.values()
@@ -368,7 +374,8 @@ class _Cursor:
             if rows:
                 first = rows[0]
                 self._rows = [(first["window_start"], first["generation"],
-                               first["data_status"], first["checksum"])]
+                               first["data_status"], first["checksum"], first.get("manifest_uri"),
+                               first.get("manifest_checksum"), first["window_end"])]
         elif s.startswith("SELECT attempt_count, redrive_generation FROM price_window_job"):
             # 트리거 persist 의 attempt fence(ALPHA-708) — CLAIMED 조건·FOR UPDATE 가
             # 빠지면 낡은 attempt 의 쓰기가 실DB 에서 통과한다
@@ -376,10 +383,11 @@ class _Cursor:
             row = self.db.jobs.get(("price", params[0]))
             if row is not None and row["status"] == "CLAIMED":
                 self._rows = [(row["attempt_count"], row["redrive_generation"])]
-        elif s.startswith("SELECT generation, checksum FROM minute_ingestion_window"):
+        elif s.startswith("SELECT generation, checksum, manifest_uri, manifest_checksum, window_end"):
             row = self.db.windows.get((params[0], params[1]))
             if row is not None:
-                self._rows = [(row["generation"], row["checksum"])]
+                self._rows = [(row["generation"], row["checksum"], row.get("manifest_uri"),
+                               row.get("manifest_checksum"), row["window_end"])]
         elif s.startswith("SELECT generation, data_status FROM minute_ingestion_window"):
             # persist·시가 확정의 stale 대조(ALPHA-708) — FOR UPDATE 가 빠지면 실DB 에선
             # 대조와 삽입 사이에 정정이 끼어드는 TOCTOU 라 문면을 못 박는다

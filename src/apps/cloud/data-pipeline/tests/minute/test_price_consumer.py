@@ -734,8 +734,11 @@ class TestContracts:
     def test_missing_artifact_is_transient(self, tmp_path):
         db = FakeMinuteDB()
         self._pipeline(db, tmp_path)
-        # 다른(빈) 스토리지를 보는 handler — artifact 만 없다
-        handler = build_handler(db, tmp_path / "empty")
+        # manifest 는 남기고 artifact 만 제거해야 두 실패 경계를 구분한다.
+        storage = LocalStorage(tmp_path)
+        for key in storage.list_keys("canonical/market_data/price_minute/"):
+            (tmp_path / key).unlink()
+        handler = build_handler(db, tmp_path)
         second = price_job_events(db)[1]
         with pytest.raises(TransientJobError, match="artifact"):
             claim_then_run(handler, second)
@@ -1274,3 +1277,43 @@ class TestPriceConsumerCli:
                                options=self._options(destination="price-explanation-realtme")),
                 universe="u",
             )
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_content_manifest_is_used_for_current_price_and_session_open(tmp_path, mixed):
+    import json
+    from data_pipeline.lake import minute_content_artifact_key, minute_content_manifest_key
+    from data_pipeline.minute.artifacts import serialize_manifest, sha256_bytes
+
+    db = FakeMinuteDB()
+    worker, _, sid = build_pipeline(
+        db, tmp_path,
+        prices={"500000": [(100, 100), (108, 110)],
+                "500001": [(200, 200), (200, 201)],
+                "100000": [(50, 50), (50, 50)]},
+    )
+    assert worker.tick(NOW) == "PROCESSED"
+    storage = LocalStorage(tmp_path)
+    committed = sorted((w for w in db.windows.values() if w["checksum"]), key=lambda w: w["window_start"])
+    for index, window in enumerate(committed):
+        if mixed and index == 1:
+            continue
+        manifest = json.loads(storage.get_bytes(window["manifest_uri"]))
+        old_key = manifest["artifact_key"]
+        body = storage.get_bytes(old_key)
+        start = window["window_start"].astimezone(KST)
+        key = minute_content_artifact_key("price_minute", "KR", "2026-07-31", sid,
+                                          start.strftime("%H%M"), window["checksum"])
+        manifest.update(schema_version=2, artifact_key=key)
+        manifest_body = serialize_manifest(manifest)
+        manifest_checksum = sha256_bytes(manifest_body)
+        uri = minute_content_manifest_key("price_minute", "KR", "2026-07-31", sid,
+                                          start.strftime("%H%M"), window["generation"], manifest_checksum)
+        storage.put_bytes(key, body)
+        storage.put_bytes(uri, manifest_body)
+        storage.delete_keys([old_key])  # generation 경로를 재구성하면 실제로 실패한다
+        window.update(manifest_uri=uri, manifest_checksum=manifest_checksum)
+    result = claim_then_run(build_handler(db, tmp_path), price_job_events(db)[1])
+    assert len(result) == 64
+    assert [t["entity_id"] for t in db.triggers.values()] == ["500000"]
+    assert db.session_opens

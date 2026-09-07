@@ -1106,11 +1106,12 @@ settings.targets.keywords            # ["금리", ...]
 
 ## 레이크 저장 계약
 
-### Minute 내용 주소 후보 계약 (ALPHA-1060 PR1)
+### Minute 내용 주소 후보·소비 계약 (ALPHA-1060 PR1·2)
 
 가격·iNAV·업종지수의 기존 writer는 generation 경로를 계속 쓴다. PR1은
 `minute_content_artifact_key`·`minute_content_manifest_key`와 `schema_version=2`
-manifest 계약을 추가하며, writer·reader의 신형 경로 연결과 활성화는 후속 PR이다.
+manifest 계약을 제공한다. 가격 소비자(현재 창·시가), 가격/업종 롤업과 분석 엔진은
+DB의 manifest URI·checksum을 함께 읽어 구/신형을 지원한다. 신형 writer 연결과 활성화는 후속 PR이다.
 후보가 저장됐다는 사실만으로 DB에 확정된 결과로 간주하지 않는다.
 
 - artifact: `canonical/market_data/{dataset}/market=KR/session_date=D/session_id=S/window=HHMM/content=SHA/{bars|inav}.ndjson`.
@@ -1123,8 +1124,10 @@ manifest 계약을 추가하며, writer·reader의 신형 경로 연결과 활�
   `generation`, `units`, `artifact_key`, `artifact_checksum`으로 고정한다. 시간은 UTC `Z`로
   정규화한 1분 경계이며 경로 날짜·HHMM은 KST 기준이다. 네 unit 분류는 서로 배타적인 정렬
   목록이다. attempt·worker·실행시각·자기 URI를 넣지 않는다. 분류만 바뀌어도 manifest는 달라진다.
-  validator는 형상과 artifact 주소 일치를 검사한다. DB 기대값 및 실제 저장 바이트 해시의 대조는
-  후속 reader가 수행한다. 버전 필드 없는 기존 manifest의 파싱은 유지한다.
+  validator는 형상과 artifact 주소 일치를 검사한다. reader는 DB의 dataset/session/window/generation/artifact checksum과 manifest를 대조하고
+  manifest·artifact의 저장 바이트 해시를 각각 검증한다. 버전 필드 없는 기존 manifest도 읽는다. DB의 manifest URI와 checksum이 **둘 다 없는**
+  legacy row에만 generation 경로 fallback을 허용한다. URI가 있는 manifest의 404·손상은
+  실패하며 구형 파일로 우회하지 않는다. 롤업은 입력 검증이 실패하면 기존 5분 파일을 보존한다.
 - `put_immutable`은 모든 기존 호출자에도 조건부 생성(`If-None-Match: *`)을 적용한다.
   충돌 시 GET 해시가 같은 객체만 재사용하며 다른 바이트는 오류다. 충돌 후 객체가 없으면
   최대 3회의 조건부 PUT/GET 뒤 일시 실패로 올린다. 권한·네트워크 오류는 그대로 전파한다.
