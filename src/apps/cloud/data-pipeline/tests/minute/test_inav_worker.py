@@ -312,6 +312,7 @@ class TestRunGate:
             source = KrxSource()
 
         class Settings:
+            minute_artifact_format = "legacy"
             db = DbConfig(password="x")
             kis_nav = Section()
             krx_etf = Krx()

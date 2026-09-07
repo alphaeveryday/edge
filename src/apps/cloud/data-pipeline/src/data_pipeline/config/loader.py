@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import (
     BaseSettings,
@@ -120,6 +121,8 @@ class Settings(BaseSettings):
     # 1분 Price Worker(ALPHA-706)는 `price-worker` 스텝만 쓴다 — 미설정이면 그
     # 진입점이 fail-loud 한다(토스 자격증명은 env 로만).
     minute_price_worker: MinutePriceWorkerConfig | None = None
+    # 세 분 레인만 적용. 세션 경계에서만 content_v2로 전환한다.
+    minute_artifact_format: Literal["legacy", "content_v2"] = "legacy"
     # 1분 가격 판정 Consumer(ALPHA-711)는 `price-consumer` 스텝만 쓴다 — 미설정이면
     # 그 진입점이 fail-loud 한다.
     minute_price_consumer: MinutePriceConsumerConfig | None = None

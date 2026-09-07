@@ -1,11 +1,11 @@
 """1분 window artifact·manifest 쓰기 (ALPHA-665, 계획 §8 전반부).
 
-S3 write 와 PostgreSQL commit 은 한 트랜잭션이 아니다(v0.7 9절). 기존 writer 는
+S3 write 와 PostgreSQL commit 은 한 트랜잭션이 아니다(v0.7 9절). 기본 legacy writer는
 generation key 를 쓴다. content_v2 계약은 변경된 재수집도 별도 후보에 보존하도록
 내용 주소 key 를 제공한다. 후보 PUT 자체는 DB 승자 확정을 의미하지 않는다.
 
 키는 lake/storage.py(경로 규약 SSOT)의 빌더가, 저장은 기존 Storage 프로토콜
-(local|s3)이 담당한다. content_v2 reader 는 artifact_reader.py 가 제공하며 writer 연결은 후속 변경이다.
+(local|s3)이 담당한다. content_v2 reader는 artifact_reader.py, writer와 DB 확정 연결은 worker.py가 제공한다.
 """
 
 from __future__ import annotations

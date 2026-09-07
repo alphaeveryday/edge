@@ -241,7 +241,7 @@ class TestCli:
         if kis_nav is ...:
             kis_nav = SimpleNamespace(
                 source=SimpleNamespace(app_key="k", app_secret="s", env="prod"))
-        return SimpleNamespace(db=db, minute_sector_index=sector_index,
+        return SimpleNamespace(minute_artifact_format="legacy", db=db, minute_sector_index=sector_index,
                                kis_nav=kis_nav, storage=None)
 
     def _cli(self, **kwargs):
@@ -324,7 +324,7 @@ class TestBoundedGate:
                 return real_datetime(*frozen, 9, 10, tzinfo=tz)
         monkeypatch.setattr(mod, "datetime", FrozenDatetime)
 
-        settings = SimpleNamespace(
+        settings = SimpleNamespace(minute_artifact_format="legacy",
             db=_DB,
             minute_sector_index=(MinuteSectorIndexConfig(index_map=INDEX_MAP)
                                  if sector_index is ... else sector_index),

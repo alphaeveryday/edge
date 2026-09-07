@@ -114,7 +114,11 @@ class _Cursor:
         s = " ".join(sql.split())
         self._rows = []
         self.rowcount = 0
-        if s.startswith("INSERT INTO minute_ingestion_session"):
+        if s.startswith("SELECT EXISTS (") and "manifest_uri LIKE" in s:
+            self._rows = [(any(w["session_id"] == params[0]
+                               and "/content=" in (w.get("manifest_uri") or "")
+                               for w in self.db.windows.values()),)]
+        elif s.startswith("INSERT INTO minute_ingestion_session"):
             self._insert_session(params)
         elif s.startswith("SELECT worker_fencing_token"):
             self._fence_select(params)
@@ -843,7 +847,7 @@ class _Cursor:
         self._rows = [
             (window["window_start"], window["window_end"], window["generation"],
              window.get("checksum"), window.get("manifest_checksum"),
-             window["attempt_count"], window["claim_token"])
+             window["attempt_count"], window["claim_token"], window.get("manifest_uri"))
         ]
 
     def _record_outcome(self, p):

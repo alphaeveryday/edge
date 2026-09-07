@@ -511,6 +511,9 @@ module "data_pipeline" {
   lake_bucket_name = module.pipeline.lake_bucket
   lake_bucket_arn  = module.pipeline.lake_bucket_arn
 
+  # ALPHA-1060: reader/schema/writer/사전검사 배포 후 세션 경계에서 활성화한다.
+  minute_artifact_format = "legacy"
+
   # feature 페이즈(ALPHA-386): tag-news 는 DeepSeek 키, load-* 는 RDS 접속이 필요하다.
   # deepseek 시크릿은 tag-news 와 analyze 페이즈가 함께 읽는다(그릇은 기존 CLI 생성분 — data 조회).
   db_host                = module.rds.address

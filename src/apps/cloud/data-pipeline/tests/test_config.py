@@ -350,3 +350,14 @@ def test_minute_universe_section_is_optional(tmp_path):
     # WHY: 섹터 후보 없이도 1분 레인은 돌아야 한다(이 축이 생기기 전과 같은 유니버스).
     #      필수로 만들면 이 섹션이 없는 환경의 로드가 통째로 죽는다.
     assert load_settings(_write(tmp_path, VALID)).minute_universe is None
+
+
+def test_minute_artifact_format_is_disabled_until_explicit_env_switch(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT", raising=False)
+    path = _write(tmp_path, VALID)
+    assert load_settings(path).minute_artifact_format == "legacy"
+    monkeypatch.setenv("DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT", "content_v2")
+    assert load_settings(path).minute_artifact_format == "content_v2"
+    monkeypatch.setenv("DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT", "content-v2")
+    with pytest.raises(ConfigError):
+        load_settings(path)

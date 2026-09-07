@@ -98,6 +98,7 @@ locals {
     price-worker = {
       command = ["price-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
+        DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT                      = var.minute_artifact_format
         DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION = var.minute_trigger_schema_version
         # source 는 세션 source_group 과 **같은 변수에서 파생**한다 — 갈리면 워커가 다른
         # session_id 를 유도해 기동 거부로 레인이 통째로 선다. 롤백(kis↔toss)은 이 변수
@@ -204,6 +205,7 @@ locals {
     inav-worker = {
       command = ["inav-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
+        DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT = var.minute_artifact_format
         # 토큰 공유 캐시(ALPHA-573) — price-worker 와 **같은 앱키를 쓴다**. 상주 워커엔
         # 없으면 안 된다: 매 기동 발급이 분당 1회 제한에 걸리고, 가격 레인·15:40 배치와
         # 발급을 다툰다.
@@ -231,6 +233,7 @@ locals {
     sector-index-worker = {
       command = ["sector-index-worker"]
       environment = merge(local.env, local.db_env, {
+        DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT = var.minute_artifact_format
         # 토큰 공유 캐시(ALPHA-573) — price-worker·inav-worker 와 **같은 앱키**다. KIS 앱키는
         # 전역 한도라 이걸 빼면 매 기동 발급이 분당 1회 제한에 걸리고 가격 레인과 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
