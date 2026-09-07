@@ -19,13 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake.storage import LocalStorage, canonical_price_minute_artifact_key
-from data_pipeline.minute.artifacts import put_immutable, serialize_records
 from data_pipeline.minute.commit import (
     CommitRejectedError,
     GenerationMismatchError,
     MinuteCommitter,
-    find_orphan_artifacts,
 )
 from data_pipeline.minute.models import KST, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
@@ -459,45 +456,6 @@ class TestCommitDisclosureWindow:
             committer.commit_disclosure_window(**kwargs)
 
 
-class TestOrphanDetection:
-    def test_s3_success_db_failure_detected_as_orphan(self, tmp_path):
-        # 계획 §8: S3 성공/DB 실패 → orphan 검출. S3 실패→DB 0 은 순서상 자명하다
-        # (commit 은 PUT 뒤에만 호출되고, PUT 실패는 commit 자체가 없다)
-        db, ledger, session_id, token, claim = ready_session()
-        storage = LocalStorage(root=tmp_path)
-        committed_key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
-        orphan_key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0901", 1)
-        put_immutable(storage, committed_key, serialize_records(list(RECORDS)))
-        put_immutable(storage, orphan_key, serialize_records(list(RECORDS)))
-        # 09:00 만 DB commit — 09:01 은 PUT 후 죽은 시나리오
-        MinuteCommitter(db=_DB, connect_fn=db.connect).commit_price_window(
-            **commit_kwargs(session_id, claim, token)
-        )
-        orphans = find_orphan_artifacts(
-            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            market="KR", session_date="2026-07-31",
-        )
-        assert orphans == [orphan_key]
-
-    def test_rerun_after_crash_clears_orphan(self, tmp_path):
-        # 재claim 실행이 같은 key 를 재사용해 commit 하면 orphan 이 사라진다
-        db, ledger, session_id, token, claim = ready_session()
-        storage = LocalStorage(root=tmp_path)
-        key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
-        put_immutable(storage, key, serialize_records(list(RECORDS)))
-        assert find_orphan_artifacts(
-            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            market="KR", session_date="2026-07-31",
-        ) == [key]
-        MinuteCommitter(db=_DB, connect_fn=db.connect).commit_price_window(
-            **commit_kwargs(session_id, claim, token)
-        )
-        assert find_orphan_artifacts(
-            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            market="KR", session_date="2026-07-31",
-        ) == []
-
-
 class TestGenerationGuard:
     def test_artifact_generation_mismatch_rejected(self):
         # Worker 가 세대 2 로 PUT 했는데 checksum 이 같아 DB 는 1 을 확정 — 어긋난 채
@@ -530,47 +488,7 @@ class TestGenerationGuard:
             committer.commit_price_window(**kwargs)
 
 
-class TestOrphanGenerations:
-    def test_prior_generation_artifact_is_not_orphan(self, tmp_path):
-        # correction 후 세대 1 artifact 는 immutable 정상 이력 — orphan 이 아니다
-        db, ledger, session_id, token, claim = ready_session()
-        storage = LocalStorage(root=tmp_path)
-        gen1 = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
-        gen2 = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 2)
-        gen3 = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 3)
-        for key in (gen1, gen2, gen3):
-            put_immutable(storage, key, serialize_records(list(RECORDS)))
-        committer = MinuteCommitter(db=_DB, connect_fn=db.connect)
-        committer.commit_price_window(
-            **commit_kwargs(session_id, claim, token)
-        )
-        db.windows[(session_id, claim["window_start"])]["data_status"] = "DUE"
-        reclaim = ledger.claim_due_window(
-            session_id=session_id, worker_id="w1", fence_token=token,
-            now=NOW, lease_seconds=60, lane="recovery",
-        )
-        kwargs = commit_kwargs(session_id, reclaim, token, checksum="e" * 64)
-        kwargs["artifact_generation"] = 2
-        committer.commit_price_window(**kwargs)
-        orphans = find_orphan_artifacts(
-            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            market="KR", session_date="2026-07-31",
-        )
-        assert orphans == [gen3]  # 커밋 세대(2)보다 높은 것만 orphan
-
-    def test_malformed_key_listed_not_fatal(self, tmp_path):
-        # 형식 밖 키 하나가 스캔을 죽이면 다른 orphan 이 안 보인다 — 나열로 일관 처리
-        db, ledger, session_id, token, claim = ready_session()
-        storage = LocalStorage(root=tmp_path)
-        bad = ("canonical/market_data/price_minute/market=KR/session_date=2026-07-31"
-               "/window=0900/generation=abc/bars.ndjson")
-        storage.put_bytes(bad, b"junk")
-        orphans = find_orphan_artifacts(
-            db=_DB, connect_fn=db.connect, storage=storage, session_id=session_id,
-            market="KR", session_date="2026-07-31",
-        )
-        assert orphans == [bad]
-
+class TestClassificationGeneration:
     def test_classification_only_correction_bumps_generation(self):
         # records 는 같고 manifest(분류)만 바뀐 정정 — 세대가 안 오르면 같은 manifest
         # key 에 다른 바이트를 PUT 해야 해 불변 계약과 충돌한다

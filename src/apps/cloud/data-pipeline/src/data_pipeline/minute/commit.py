@@ -1,4 +1,4 @@
-"""1분 window 의 fenced commit transaction + orphan 검출 (ALPHA-666, 계획 §8 후반부).
+"""1분 window 의 fenced commit transaction (ALPHA-666, 계획 §8 후반부).
 
 v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 **호출자가 먼저**
 끝내고, 여기는 한 트랜잭션에 다음을 묶는다:
@@ -13,7 +13,7 @@ v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 *
     → commit
 
 트랜잭션이 통째로 성공하거나 통째로 없던 일이 된다 — S3 성공/DB 실패의 잔재(orphan)는
-`find_orphan_artifacts` 가 검출하고, 처리 정책(재사용/quarantine)은 EOD QC(PR 8) 소관.
+`reconciliation.reconcile_minute_artifacts`가 DB 승자·이력과 대조하고 논리 격리한다.
 
 분봉 canonical 은 **S3 다**(2026-08-02 확정, ALPHA-701) — 호출자가 PUT 한 artifact
 자체가 정본이고, 이 트랜잭션은 가격에서 DB canonical 을 쓰지 않는다. DB writer 를
@@ -29,9 +29,7 @@ from typing import Protocol
 
 from ..config import DbConfig
 from ..db import connect as _default_connect
-from ..lake.storage import Storage, canonical_price_minute_prefix
 from .jobs import NEWS_EVENT_TYPE, PRICE_EVENT_TYPE, JobLedger, build_event_id
-from .models import KST
 from .news_overlap import (
     NewsIdentityConflictError,
     NewsObservation,
@@ -630,55 +628,3 @@ class MinuteCommitter:
             return {"generation": generation, "data_status": data_status,
                     "job_ids": tuple(job_ids), "quarantined": tuple(quarantined),
                     "stale_ids": tuple(stale_ids)}
-
-
-def find_orphan_artifacts(
-    *,
-    db: DbConfig,
-    connect_fn: Callable,
-    storage: Storage,
-    session_id: str,
-    market: str,
-    session_date: str,
-) -> list[str]:
-    """S3 에는 있는데 window 원장에 대응 커밋이 없는 artifact 키 목록 (v0.7 9절 복구 표).
-
-    "S3 PUT 후 DB commit 전 종료"의 잔재를 나열만 한다 — 재사용(재실행이 같은 key 를
-    다시 씀)이 기본 복구고, 남은 orphan 의 quarantine 정책은 EOD QC(PR 8)가 정한다.
-    """
-    with connect_fn(db) as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT window_start, generation FROM minute_ingestion_window
-            WHERE session_id = %s AND checksum IS NOT NULL
-            """,
-            (session_id,),
-        )
-        # window(HHMM, KST 축) → 커밋된 현재 세대. 과거 세대 artifact 는 immutable
-        # 정상 이력이다 — orphan 은 "커밋 세대보다 **높은** 세대" 또는 "커밋 자체가
-        # 없는 window" 뿐이다.
-        committed = {
-            ws.astimezone(KST).strftime("%H%M"): generation
-            for ws, generation in cur.fetchall()
-        }
-    prefix = canonical_price_minute_prefix(market, session_date)
-    orphans = []
-    for key in storage.list_keys(prefix):
-        if not key.endswith("/bars.ndjson"):
-            continue
-        parts = dict(
-            segment.split("=", 1) for segment in key.split("/") if "=" in segment
-        )
-        window_hhmm = parts.get("window")
-        try:
-            generation = int(parts.get("generation", ""))
-        except ValueError:
-            generation = None
-        if window_hhmm is None or generation is None:
-            # 관리 prefix 의 형식 밖 키 — 한 개가 스캔 전체를 죽이면 안 되고,
-            # 조용히 건너뛰면 잔재가 영영 안 보인다 → orphan 으로 나열(일관 정책)
-            orphans.append(key)
-            continue
-        if committed.get(window_hhmm) is None or generation > committed[window_hhmm]:
-            orphans.append(key)
-    return sorted(orphans)

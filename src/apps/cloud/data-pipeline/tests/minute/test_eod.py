@@ -42,6 +42,15 @@ WINDOW_PAIRS = plan_session_windows(SESSION_DATE, universe=UNIVERSE, extended_ho
 WINDOWS = tuple(start for start, _ in WINDOW_PAIRS)
 
 
+@pytest.fixture(autouse=True)
+def stub_artifact_reconciliation(monkeypatch):
+    # 이 파일은 세션 QC 판정 단위 검사다. 실제 S3/DB 대사는
+    # e2e/test_minute_artifact_reconciliation.py에서 실제 PG+worker 산출물로 검증한다.
+    monkeypatch.setattr("data_pipeline.minute.eod.reconcile_minute_artifacts",
+                        lambda **kw: {"ok": True, "scan_complete": True, "errors": [],
+                                      "uncommitted_candidate": []})
+
+
 def make_session(db, *, statuses=(), phase="DRAINED"):
     """하루치(390 window) 세션 하나. `statuses` 는 **앞쪽 window 부터** 덮어쓰고 나머지는
     VALID 다 — 원장 API 로 만들 수 없는 결손 상태를 직접 놓는다(거기 이르는 경로는
