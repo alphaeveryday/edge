@@ -610,6 +610,39 @@
         <mxCell id="table-20-row-2" parent="table-20" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=10;fontColor=#1e293b;fontSize=11;connectable=0;resizable=0;movable=0;" value="&lt;table style=&quot;width:246px;border-collapse:collapse;table-layout:fixed;&quot;&gt;&lt;tr&gt;&lt;td style=&quot;width:22px;color:#2563eb;font-size:9px;font-weight:700;white-space:nowrap;&quot;&gt;&lt;/td&gt;&lt;td style=&quot;white-space:nowrap;&quot;&gt;data_version&lt;/td&gt;&lt;td style=&quot;width:72px;text-align:right;color:#64748b;font-size:10px;white-space:nowrap;&quot;&gt;varchar(50)&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;" vertex="1">
           <mxGeometry height="25" width="270" y="88" as="geometry" />
         </mxCell>
+        <mxCell id="table-21" parent="1" style="swimlane;horizontal=1;startSize=38;rounded=0;html=1;fillColor=#e8f0fe;swimlaneFillColor=#ffffff;strokeColor=#7aa2e3;fontColor=#172554;fontStyle=1;align=left;spacingLeft=10;verticalAlign=middle;collapsible=0;" value="minute_window_artifact_commit" vertex="1">
+          <mxGeometry height="163" width="340" x="3030" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="table-21-row-0" parent="table-21" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontFamily=monospace;spacingLeft=10;" value="PK/FK session_id · window_start" vertex="1">
+          <mxGeometry as="geometry" height="25" width="340" x="0" y="38" />
+        </mxCell>
+        <mxCell id="table-21-row-1" parent="table-21" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontFamily=monospace;spacingLeft=10;" value="PK generation" vertex="1">
+          <mxGeometry as="geometry" height="25" width="340" x="0" y="63" />
+        </mxCell>
+        <mxCell id="table-21-row-2" parent="table-21" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontFamily=monospace;spacingLeft=10;" value="artifact_uri · artifact_checksum" vertex="1">
+          <mxGeometry as="geometry" height="25" width="340" x="0" y="88" />
+        </mxCell>
+        <mxCell id="table-21-row-3" parent="table-21" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontFamily=monospace;spacingLeft=10;" value="manifest_uri · manifest_checksum" vertex="1">
+          <mxGeometry as="geometry" height="25" width="340" x="0" y="113" />
+        </mxCell>
+        <mxCell id="table-21-row-4" parent="table-21" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontFamily=monospace;spacingLeft=10;" value="committed_at (최초 확정)" vertex="1">
+          <mxGeometry as="geometry" height="25" width="340" x="0" y="138" />
+        </mxCell>
+        <mxCell id="relation-24" edge="1" parent="1" source="table-21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748b;strokeWidth=1.4;endArrow=block;endFill=1;endSize=6;exitX=0;exitY=0.43865;entryX=1;entryY=0.5;" target="table-10" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-24-child" connectable="0" parent="relation-24" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontStyle=1;fontColor=#475569;labelBackgroundColor=#ffffff;" value="0..N" vertex="1">
+          <mxGeometry relative="1" x="-0.6" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-24-parent" connectable="0" parent="relation-24" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontStyle=1;fontColor=#475569;labelBackgroundColor=#ffffff;" value="1" vertex="1">
+          <mxGeometry relative="1" x="0.6" as="geometry">
+            <mxPoint y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>

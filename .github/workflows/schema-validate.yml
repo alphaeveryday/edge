@@ -216,6 +216,11 @@ jobs:
         working-directory: src
         run: ./gradlew :libs:schema:flywayValidate --info
 
+      - name: Minute artifact history constraints (real PostgreSQL)
+        run: >
+          docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
+          < src/libs/schema/tests/minute_window_artifact_commit.sql
+
       # ── 온프렘 세트(migrations-onprem/) — 별도 ephemeral DB에 독립 적용·검증 ──
       - name: Create onprem database
         run: docker exec edge-ci-pg createdb -U edge edge_onprem
