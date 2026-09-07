@@ -196,9 +196,7 @@ class LakeReader:
 
         result: list[MinuteBar] = []
         for source in windows:
-            session_date = source.start.date().isoformat()
-            window_hhmm = source.start.strftime("%H%M")
-            key = minute_artifact_key(market, session_date, window_hhmm, source.generation)
+            key = self._committed_artifact_key(market, source)
             try:
                 body = self._s3.get_object(Bucket=self._bucket, Key=key)["Body"].read()
             except ClientError as error:
@@ -245,6 +243,71 @@ class LakeReader:
                 bars.append(bar)
             result.extend(sorted(bars, key=lambda bar: bar.unit_id))
         return tuple(result)
+
+    def _committed_artifact_key(self, market: str, source: CommittedMinuteWindow) -> str:
+        """DB manifest 를 검증해 artifact 주소를 얻는다. 좌표 없는 legacy 만 fallback."""
+        import hashlib
+        import json
+        from datetime import timezone
+
+        from botocore.exceptions import ClientError
+
+        context = f"dataset=price_minute session={source.session_id} window={source.start.isoformat()}"
+        legacy_key = minute_artifact_key(
+            market, source.start.date().isoformat(), source.start.strftime("%H%M"), source.generation,
+        )
+        if source.manifest_uri is None:
+            return legacy_key
+        uri = source.manifest_uri
+        try:
+            body = self._s3.get_object(Bucket=self._bucket, Key=uri)["Body"].read()
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                raise ReturnsNotReadyError(f"{context} manifest 미착지: {uri}") from error
+            raise
+        if hashlib.sha256(body).hexdigest() != source.manifest_checksum:
+            raise ReturnsNotReadyError(f"{context} manifest checksum 불일치: {uri}")
+        try:
+            manifest = json.loads(body)
+            expected = {
+                "dataset": "price_minute", "session_id": source.session_id,
+                "window_start": source.start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "window_end": source.end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "generation": source.generation, "artifact_checksum": source.checksum,
+            }
+            fields = set(expected) | {"units", "artifact_key"}
+            if not isinstance(manifest, dict) or not fields <= manifest.keys():
+                raise ValueError("manifest 필드 오류")
+            if type(manifest["generation"]) is not int or any(manifest[k] != v for k, v in expected.items()):
+                raise ValueError("manifest identity 가 DB 승자와 다르다")
+            units = manifest["units"]
+            if not isinstance(units, dict) or set(units) != {"received", "no_trade", "missing", "invalid"}:
+                raise ValueError("manifest unit 분류 오류")
+            seen = set()
+            for ids in units.values():
+                if not isinstance(ids, list) or not all(isinstance(u, str) for u in ids):
+                    raise ValueError("manifest unit 목록 오류")
+                if len(ids) != len(set(ids)) or seen.intersection(ids):
+                    raise ValueError("manifest unit 중복")
+                seen.update(ids)
+            expected_key = legacy_key
+            if "schema_version" in manifest:
+                if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != 2
+                        or set(manifest) != fields | {"schema_version"}):
+                    raise ValueError("content manifest schema/필드 오류")
+                if any(ids != sorted(ids) or any(not u for u in ids) for ids in units.values()):
+                    raise ValueError("content manifest unit 정규화 오류")
+                # SSOT(data-pipeline lake/storage.py)의 분리 이미지용 전사. 공통 fixture로 검증한다.
+                expected_key = (
+                    f"{LAKE_PRICE_MINUTE_PREFIX}/market={market}/session_date={source.start.date().isoformat()}"
+                    f"/session_id={source.session_id}/window={source.start.strftime('%H%M')}"
+                    f"/content={source.checksum}/bars.ndjson"
+                )
+            if manifest["artifact_key"] != expected_key:
+                raise ValueError("artifact_key 가 DB 승자와 다르다")
+            return expected_key
+        except (ValueError, TypeError, KeyError) as error:
+            raise PipelineError(f"{context} manifest 계약 위반: {uri} — {error}") from error
 
     def load_prev_closes(self, market: str, trade_date: date) -> dict[str, float]:
         """직전 거래일 종가 — 분봉 분해의 분모(ALPHA-747).

@@ -458,7 +458,7 @@ class _MinuteWindowCursor:
 
 class _MinuteWindowConn:
     def __init__(self, rows=(), error=None):
-        self.rows = list(rows)
+        self.rows = [(*row, None, None) if len(row) == 5 else row for row in rows]
         self.error = error
         self.executed = []
 

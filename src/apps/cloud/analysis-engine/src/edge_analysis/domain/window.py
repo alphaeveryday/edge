@@ -83,6 +83,8 @@ class CommittedMinuteWindow:
     end: datetime
     generation: int
     checksum: str
+    manifest_uri: str | None = None
+    manifest_checksum: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "session_id", _text(self.session_id, "session_id"))
@@ -94,6 +96,12 @@ class CommittedMinuteWindow:
             raise ValueError("커밋 generation은 1 이상이어야 한다")
         if not _SHA256.fullmatch(self.checksum):
             raise ValueError("checksum은 lowercase sha256이어야 한다")
+        if self.manifest_uri is None:
+            if self.manifest_checksum is not None:
+                raise ValueError("manifest URI 없이 checksum만 존재한다")
+        elif (not self.manifest_uri or not isinstance(self.manifest_checksum, str)
+              or not _SHA256.fullmatch(self.manifest_checksum)):
+            raise ValueError("manifest 좌표가 불완전하다")
 
 
 @dataclass(frozen=True, slots=True)

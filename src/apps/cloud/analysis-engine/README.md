@@ -168,6 +168,16 @@ EDGE_EXPLANATION_QUEUE_URL=https://sqs.../price-explanation-realtime \
   python -m edge_analysis consume-triggers --max-polls 3
 ```
 
+### Minute artifact 호환 읽기 (ALPHA-1060)
+
+`minute_ingestion_window`의 generation·artifact checksum·manifest URI/checksum을 함께 읽는다.
+manifest가 있으면 해시와 dataset/session/window/generation 정체성을 검증한 뒤 그 artifact를
+해시 검증하여 읽는다. 기존 manifest와 `schema_version=2` 내용 주소 manifest를 모두 지원한다.
+DB의 manifest URI와 checksum이 모두 없는 legacy row만 기존 generation 경로로 읽는다.
+신형 manifest의 404·손상은 오류로 드러내며 legacy 파일로 우회하지 않는다. DB가 확정하지 않은
+후보를 LIST하여 채택하지 않는다. data-pipeline과 이미지가 분리돼 reader 구현은 별도이며,
+실 PostgreSQL 공통 fixture E2E로 가격 소비자·롤업과 계약을 대조한다.
+
 ## 환경 변수
 
 | 변수 | 용도 | 기본값 |

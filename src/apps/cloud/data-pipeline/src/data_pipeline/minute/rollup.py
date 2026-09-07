@@ -62,6 +62,7 @@ from ..lake.storage import (
     canonical_price_minute_artifact_key,
     canonical_sector_index_minute_artifact_key,
 )
+from .artifact_reader import read_window_artifact
 from .models import KST, Universe, plan_session_windows
 from .states import DATASET_PRICE_MINUTE, DATASET_SECTOR_INDEX_MINUTE
 
@@ -205,18 +206,16 @@ def scan_lower() -> str:
     return min({WRITER_SINCE, *WRITER_OWNED_BEFORE_SINCE})
 
 
-def _committed_generations(ledger, session_id: str) -> dict[str, int]:
-    """window(HHMM, KST 축) → 원장이 확정한 현재 세대. commit.py orphan 스캔과 같은 축."""
+def _committed_artifacts(ledger, session_id: str) -> dict[str, tuple]:
+    """HHMM → DB 가 함께 확정한 세대·checksum·manifest·창 끝 좌표."""
     with ledger.connect_fn(ledger.db) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT window_start, generation FROM minute_ingestion_window "
-            "WHERE session_id = %s AND checksum IS NOT NULL",
+            "SELECT window_start, generation, checksum, manifest_uri, manifest_checksum, window_end "
+            "FROM minute_ingestion_window WHERE session_id = %s AND checksum IS NOT NULL",
             (session_id,),
         )
-        return {
-            window_start.astimezone(KST).strftime("%H%M"): generation
-            for window_start, generation in cur.fetchall()
-        }
+        return {row[0].astimezone(KST).strftime("%H%M"): tuple(row[1:])
+                for row in cur.fetchall()}
 
 
 def _bucket_of(start: datetime) -> datetime:
@@ -276,7 +275,7 @@ def maybe_rollup(
         # Worker 는 _session_ready 로 planner 와 같은 universe 를 보증한다 — 여기
         # 도달하면 계획·커밋 축이 갈린 것이라 조용히 넘기지 않는다(Rule 12).
         raise ValueError(f"window {window_start.isoformat()} 는 세션 계획 밖이다")
-    committed = _committed_generations(ledger, session_id)
+    committed = _committed_artifacts(ledger, session_id)
     if window_start != members[-1] and members[-1].strftime("%H%M") not in committed:
         return None  # 버킷 미완 — 마지막 분이 아직 관측 전이다
     return _rollup_day(
@@ -335,13 +334,9 @@ def rollup_session(
         (window_start.astimezone(KST), window_end.astimezone(KST))
         for window_start, window_end, *_ in rows
     ]
-    # `_committed_generations` 와 같은 판정축(checksum 이 있으면 커밋된 것)이다 —
+    # `_committed_artifacts` 와 같은 판정축(checksum 이 있으면 커밋된 것)이다 —
     # 두 곳이 갈리면 후크와 배치가 다른 세대 집합을 보고 다른 바이트를 낸다.
-    committed = {
-        window_start.astimezone(KST).strftime("%H%M"): generation
-        for window_start, _, _, generation, checksum in rows
-        if checksum is not None
-    }
+    committed = _committed_artifacts(ledger, session_id)
     return _rollup_day(
         storage, ledger, dataset=dataset, session_id=session_id,
         market=market, session_date=session_date,
@@ -358,7 +353,7 @@ def _rollup_day(
     market: str,
     session_date: str,
     planned: Sequence[tuple[datetime, datetime]],
-    committed: dict[str, int],
+    committed: dict[str, tuple],
 ) -> str | None:
     """그날 전체를 재집계해 파티션 파일을 통째로 덮어쓴다. 반환은 PUT 한 키(또는 None).
 
@@ -370,7 +365,7 @@ def _rollup_day(
     record_of` 를 그대로 쓴다: `unit_id`·`ts`·o/h/l/c·`volume`) 갈라 둘 이유가 없고,
     갈라 두면 두 dataset 의 5분봉이 서로 다른 규칙으로 접혀 같은 뷰에 실린다.
     """
-    artifact_key_of, day_key_of, source_vendor = ROLLUP_DATASETS[dataset]
+    _artifact_key_of, day_key_of, source_vendor = ROLLUP_DATASETS[dataset]
     if not writer_owns(session_date):  # ISO 문자열이라 사전순 = 시간순
         logger.warning(
             "5분 롤업 %s(%s): 다른 벤더의 정본 파티션(< %s, 예외 %s) — 덮어쓰지 않는다",
@@ -449,12 +444,15 @@ def _rollup_day(
         if bucket_last[_bucket_of(start)] > horizon:
             continue  # 아직 안 닫힌 버킷 — 부분 관측을 완성 봉처럼 노출하지 않는다
         hhmm = start.strftime("%H%M")
-        generation = committed.get(hhmm)
-        if generation is None:
+        coordinates = committed.get(hhmm)
+        if coordinates is None:
             gaps.append(hhmm)  # 닫힌 버킷의 구멍 — 결손 분(재청구 대상)
             continue
-        artifact = storage.get_bytes(
-            artifact_key_of(market, session_date, hhmm, generation)
+        generation, checksum, manifest_uri, manifest_checksum, window_end = coordinates
+        artifact = read_window_artifact(
+            storage, dataset=dataset, market=market, session_id=session_id,
+            window_start=start, window_end=window_end, generation=generation,
+            checksum=checksum, manifest_uri=manifest_uri, manifest_checksum=manifest_checksum,
         )
         for line in artifact.decode("utf-8").splitlines():
             record = json.loads(line)

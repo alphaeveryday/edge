@@ -51,8 +51,8 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from ..config import DbConfig
 from ..db import connect as _default_connect, stable_domain_id
-from ..lake.storage import Storage, canonical_price_minute_artifact_key
-from .artifacts import sha256_bytes
+from ..lake.storage import Storage
+from .artifact_reader import ArtifactReadError, read_window_artifact
 from .consumer import PermanentJobError, TransientJobError
 from .jobs import (
     EXPOSURE_EVENT_TYPE,
@@ -243,7 +243,7 @@ class PriceTriggerHandler:
             raise TransientJobError(
                 f"window 행이 없다: {window_start}", code="WINDOW_ROW_NOT_FOUND"
             )
-        window_generation, window_checksum = window_row
+        window_generation, window_checksum, manifest_uri, manifest_checksum, window_end = window_row
         if window_generation != generation:
             # 이미 정정된 세대의 job — 재시도가 kernel claim 에 닿으면 DEAD('STALE')
             raise TransientJobError(
@@ -251,7 +251,9 @@ class PriceTriggerHandler:
                 code="STALE_GENERATION",
             )
         rows = self._artifact_rows(session_date, window_start, generation,
-                                   expected_checksum=window_checksum)
+                                   expected_checksum=window_checksum, session_id=session_id,
+                                   window_end=window_end, manifest_uri=manifest_uri,
+                                   manifest_checksum=manifest_checksum)
         # 형상 밖 행(비객체)은 여기서 걸러 한 건이 전체 판정을 죽이지 않게 한다 —
         # canonical 진입 차단의 정본 게이트는 워커 검증 경계(ALPHA-679)다
         etf_rows = {
@@ -518,7 +520,8 @@ class PriceTriggerHandler:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT generation, checksum FROM minute_ingestion_window
+                SELECT generation, checksum, manifest_uri, manifest_checksum, window_end
+                FROM minute_ingestion_window
                 WHERE session_id = %s AND window_start = %s
                 """,
                 (session_id, window_start),
@@ -526,26 +529,18 @@ class PriceTriggerHandler:
             return cur.fetchone()
 
     def _artifact_rows(self, session_date: str, window_start: datetime,
-                       generation: int, *, expected_checksum: str | None) -> list[dict]:
-        key = canonical_price_minute_artifact_key(
-            self.market, session_date,
-            window_start.astimezone(KST).strftime("%H%M"), generation,
-        )
+                       generation: int, *, expected_checksum: str, session_id: str,
+                       window_end: datetime, manifest_uri: str | None,
+                       manifest_checksum: str | None) -> list[dict]:
         try:
-            data = self.storage.get_bytes(key)
-        except Exception as error:  # 백엔드별 not-found 예외가 다르다(local/S3)
-            # commit 이 PUT 뒤에만 일어나므로 artifact 는 있어야 한다 — 안 보이면
-            # 읽기 일관성/배선 문제이지 job 의 성질이 아니다
-            raise TransientJobError(
-                f"canonical artifact 를 읽지 못했다: {key}", code="ARTIFACT_NOT_FOUND"
-            ) from error
-        if expected_checksum is not None and sha256_bytes(data) != expected_checksum:
-            # 원장 checksum 은 커밋된 바이트의 sha256 이다 — 어긋난 바이트로 판정하면
-            # 잘못된 canonical(동시 PUT 경합 등, ALPHA-704)이 그대로 발화한다.
-            # 재해시 검증이 소비자 쪽 계약이고, 지속되면 예산이 DEAD 로 드러낸다.
-            raise TransientJobError(
-                f"artifact checksum 불일치: {key}", code="ARTIFACT_CHECKSUM_MISMATCH"
+            data = read_window_artifact(
+                self.storage, dataset="price_minute", market=self.market,
+                session_id=session_id, window_start=window_start, window_end=window_end,
+                generation=generation, checksum=expected_checksum,
+                manifest_uri=manifest_uri, manifest_checksum=manifest_checksum,
             )
+        except ArtifactReadError as error:
+            raise TransientJobError(str(error), code=error.code) from error
         rows = []
         for line in data.decode("utf-8").splitlines():
             if line.strip():
@@ -562,7 +557,8 @@ class PriceTriggerHandler:
         first = self._first_window(session_id, session_date)
         if first is None:
             raise TransientJobError("세션에 window 계획이 없다", code="NO_WINDOWS")
-        first_start, first_generation, first_status, first_checksum = first
+        (first_start, first_generation, first_status, first_checksum,
+         first_manifest_uri, first_manifest_checksum, first_end) = first
         decisions: list[tuple] = []  # (entity, status, open_price, reason)
         if first_checksum is None:
             if first_status == WINDOW_MISSING:
@@ -582,7 +578,9 @@ class PriceTriggerHandler:
                 r.get("unit_id"): r
                 for r in self._artifact_rows(session_date, first_start,
                                              first_generation,
-                                             expected_checksum=first_checksum)
+                                             expected_checksum=first_checksum, session_id=session_id,
+                                             window_end=first_end, manifest_uri=first_manifest_uri,
+                                             manifest_checksum=first_manifest_checksum)
                 if isinstance(r, dict)
             }
             for entity_id in undecided:
@@ -665,7 +663,8 @@ class PriceTriggerHandler:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT window_start, generation, data_status, checksum
+                SELECT window_start, generation, data_status, checksum,
+                       manifest_uri, manifest_checksum, window_end
                 FROM minute_ingestion_window
                 WHERE session_id = %s AND window_start >= %s
                 ORDER BY window_start ASC LIMIT 1
