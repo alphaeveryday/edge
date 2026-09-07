@@ -696,3 +696,13 @@ variable "analysis_consumer_max_capacity" {
   type        = number
   default     = 4
 }
+
+variable "minute_artifact_format" {
+  description = "분 레인 artifact 형식. 세션 경계에서만 content_v2로 전환한다"
+  type        = string
+  default     = "legacy"
+  validation {
+    condition     = contains(["legacy", "content_v2"], var.minute_artifact_format)
+    error_message = "minute_artifact_format must be legacy or content_v2."
+  }
+}

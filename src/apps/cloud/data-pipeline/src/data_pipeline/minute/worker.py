@@ -35,17 +35,24 @@ from ..lake.storage import (
     canonical_sector_index_minute_artifact_key,
     canonical_price_minute_artifact_key,
     minute_window_manifest_key,
+    minute_content_artifact_key,
+    minute_content_manifest_key,
 )
+from .artifact_reader import read_window_artifact
 from .artifacts import (
     UNIT_CLASSES,
     ArtifactImmutabilityError,
     build_window_manifest,
+    build_content_window_manifest,
+    parse_manifest,
     put_immutable,
     serialize_manifest,
     serialize_records,
     sha256_bytes,
 )
 from .commit import (
+    ArtifactCommit,
+    ArtifactCommitConflictError,
     CommitRejectedError,
     GenerationMismatchError,
     MinuteCommitter,
@@ -112,6 +119,7 @@ class WorkerConfig:
     session_lease_seconds: int = 300
     heartbeat_every_seconds: int = 60
     recovery_budget_per_tick: int = 2
+    artifact_format: str = "legacy"
 
 
 class MinuteWorkerLoop:
@@ -140,7 +148,7 @@ class MinuteWorkerLoop:
 
     def _commit(self, claim: dict, *, result, records: tuple, units: dict,
                 generation: int, artifact_checksum: str, manifest_key: str,
-                manifest_checksum: str) -> None:
+                manifest_checksum: str, artifact_commits: tuple[ArtifactCommit, ...] = ()) -> None:
         """확정 트랜잭션. dataset 마다 job/outbox 축이 달라 공유하지 않는다."""
         raise NotImplementedError
 
@@ -195,6 +203,7 @@ class MinuteWorkerLoop:
     def _process_window(self, claim: dict, now: datetime) -> bool:
         """collect → 분할 검증 → artifact/manifest PUT → 확정. 예외 정책까지 공유부다."""
         cfg = self.config
+        artifact_key = manifest_key = None
         try:
             expected_unit_ids = self._expected_units(claim["window_start"])
             request = CollectionRequest(
@@ -231,29 +240,41 @@ class MinuteWorkerLoop:
             records = tuple(dict(record, source=cfg.source) for record in records)
             artifact_bytes = serialize_records(list(records))
             artifact_checksum = sha256_bytes(artifact_bytes)
-            generation, artifact_key, manifest_bytes, manifest_checksum = (
-                self._predict_generation(claim, artifact_checksum, units, expected_unit_ids)
-            )
+            artifact_commits = ()
+            if cfg.artifact_format == "content_v2":
+                (generation, artifact_key, manifest_bytes, manifest_checksum,
+                 manifest_key, artifact_commits) = self._prepare_content_artifact(
+                    claim, artifact_checksum, units, expected_unit_ids
+                )
+            else:
+                generation, artifact_key, manifest_bytes, manifest_checksum = (
+                    self._predict_generation(claim, artifact_checksum, units, expected_unit_ids)
+                )
+                manifest_key = minute_window_manifest_key(
+                    cfg.dataset, cfg.source, cfg.market, cfg.session_date,
+                    claim["window_start"].astimezone(KST).strftime("%H%M"), generation,
+                )
             put_immutable(self.storage, artifact_key, artifact_bytes)
-            manifest_key = minute_window_manifest_key(
-                cfg.dataset, cfg.source, cfg.market, cfg.session_date,
-                claim["window_start"].astimezone(KST).strftime("%H%M"), generation,
-            )
             put_immutable(self.storage, manifest_key, manifest_bytes)
             self._commit(
                 claim, result=result, records=records, units=units,
                 generation=generation, artifact_checksum=artifact_checksum,
                 manifest_key=manifest_key, manifest_checksum=manifest_checksum,
+                artifact_commits=artifact_commits,
             )
             self._after_commit(claim)
             return True
-        except (GenerationMismatchError, ArtifactImmutabilityError):
+        except (GenerationMismatchError, ArtifactImmutabilityError, ArtifactCommitConflictError):
             # 결정적 예측/불변 artifact 의 불변식 위반 — 재시도해도 같은 충돌이 반복될
             # 뿐이다(회복 불가). 크게 죽어서 수퍼바이저/운영자가 보게 한다.
             # ⚠️ collector 계약 위반(미지 분류·수량 불일치)은 여기 넣지 않는다: 전파하면
             # drain 이 release/ack 을 못 거쳐 세션이 DRAINING 에 고착되고, 교체 Worker 가
             # 같은 window 로 크래시 루프를 돈다. 그건 window 실패로 격리하고 잔여 판정은
             # drain 반납 → EOD QC 가 한다(지정된 판정 장치에 위임).
+            logger.exception(
+                "분 아티팩트 불변성 위반 dataset=%s session=%s window=%s artifact=%s manifest=%s",
+                cfg.dataset, self.session_id, claim["window_start"], artifact_key, manifest_key,
+            )
             raise
         except CommitRejectedError:
             # fence/claim 상실 — 이 window 는 새 소유자의 것이다. fence 까지 잃었다면
@@ -264,9 +285,59 @@ class MinuteWorkerLoop:
             # 한 window 의 실패를 다음 window 로 전파하지 않는다 — claim 은 lease 만료로
             # 재청구되고, 실패 자체는 크게 기록한다(조용한 폐기 금지, Rule 12)
             logger.exception(
-                "window %s 처리 실패 — lease 만료 후 재시도된다", claim["window_start"]
+                "window %s 처리 실패 — lease 만료 후 재시도된다 dataset=%s session=%s artifact=%s manifest=%s",
+                claim["window_start"], cfg.dataset, self.session_id, artifact_key, manifest_key,
             )
             return False
+
+    def _prepare_content_artifact(self, claim, checksum, units, expected_unit_ids):
+        """바이트/분류의 실제 변경만 새 세대로 만든다. 기존 승자는 검증 후 이력에 보존한다."""
+        cfg = self.config
+        hhmm = claim["window_start"].astimezone(KST).strftime("%H%M")
+        generation = claim["generation"] + 1
+        key = minute_content_artifact_key(
+            cfg.dataset, cfg.market, cfg.session_date, self.session_id, hhmm, checksum
+        )
+        # 같은 내용으로 보이는 경우에도 이번 요청의 완전분할부터 검증한다.
+        manifest = build_content_window_manifest(
+            dataset=cfg.dataset, session_id=self.session_id,
+            window_start=claim["window_start"], window_end=claim["window_end"],
+            generation=generation, expected_unit_ids=expected_unit_ids, units=units,
+            artifact_key=key, artifact_checksum=checksum,
+        )
+        history = ()
+        if claim["generation"]:
+            uri = claim["manifest_uri"]
+            if not uri:
+                raise ArtifactImmutabilityError("기존 승자 manifest가 없어 의미/이력을 검증할 수 없다")
+            read_window_artifact(
+                self.storage, dataset=cfg.dataset, market=cfg.market, session_id=self.session_id,
+                window_start=claim["window_start"], window_end=claim["window_end"],
+                generation=claim["generation"], checksum=claim["checksum"],
+                manifest_uri=uri, manifest_checksum=claim["manifest_checksum"],
+            )
+            previous_bytes = self.storage.get_bytes(uri)
+            if sha256_bytes(previous_bytes) != claim["manifest_checksum"]:
+                raise ArtifactImmutabilityError(f"기존 승자 manifest checksum 불일치: {uri}")
+            previous_manifest = parse_manifest(previous_bytes)
+            previous = ArtifactCommit(
+                claim["generation"], previous_manifest["artifact_key"], claim["checksum"],
+                uri, claim["manifest_checksum"],
+            )
+            history = (previous,)
+            previous_units = {k: sorted(v) for k, v in previous_manifest["units"].items()}
+            if checksum == previous.artifact_checksum and manifest["units"] == previous_units:
+                # legacy도 원래 바이트/URI를 그대로 재사용한다. 형식 이행은 정정이 아니다.
+                return (previous.generation, previous.artifact_uri, previous_bytes,
+                        previous.manifest_checksum, previous.manifest_uri, history)
+        data = serialize_manifest(manifest)
+        manifest_checksum = sha256_bytes(data)
+        uri = minute_content_manifest_key(
+            cfg.dataset, cfg.market, cfg.session_date, self.session_id, hhmm,
+            generation, manifest_checksum,
+        )
+        current = ArtifactCommit(generation, key, checksum, uri, manifest_checksum)
+        return generation, key, data, manifest_checksum, uri, (*history, current)
 
     def _session_ready(self) -> bool:
         """원장에 고정된 session 속성과 내 설정이 맞는가 — window 를 처리할 자격.
@@ -298,6 +369,10 @@ class MinuteWorkerLoop:
                 )
                 self.fence_token = None
             return "STOPPED"
+        if hasattr(self.config, "artifact_format"):
+            self.ledger.assert_artifact_format(
+                session_id=self.session_id, artifact_format=self.config.artifact_format
+            )
         if not self._ensure_fence(now):
             return "STOPPED"
 
@@ -477,7 +552,7 @@ class PriceWorker(MinuteWorkerLoop):
 
     def _commit(self, claim: dict, *, result, records: tuple, units: dict,
                 generation: int, artifact_checksum: str, manifest_key: str,
-                manifest_checksum: str) -> None:
+                manifest_checksum: str, artifact_commits: tuple[ArtifactCommit, ...] = ()) -> None:
         cfg = self.config
         self.committer.commit_price_window(
             session_id=self.session_id, window_start=claim["window_start"],
@@ -487,7 +562,7 @@ class PriceWorker(MinuteWorkerLoop):
             succeeded_unit_count=result.succeeded_count,
             failed_unit_count=result.failed_count, record_count=len(records),
             checksum=artifact_checksum, manifest_uri=manifest_key,
-            manifest_checksum=manifest_checksum,
+            manifest_checksum=manifest_checksum, artifact_commits=artifact_commits,
             missing_units=_failed_units(units) or None,
             stage_timestamps=result.stage_timestamps,
             trigger_schema_version=cfg.trigger_schema_version,
@@ -545,6 +620,7 @@ class InavWorkerConfig:
     # 매 tick 같은 것을 집어 앱키 전역 쿼터만 태우고 최신 분을 민다. 켜려면 원장에
     # "창 폭 안의 due 만" 이라는 지평 필터가 먼저 필요하다.
     recovery_budget_per_tick: int = 0
+    artifact_format: str = "legacy"
 
 
 @dataclass
@@ -609,7 +685,7 @@ class InavWorker(MinuteWorkerLoop):
 
     def _commit(self, claim: dict, *, result, records: tuple, units: dict,
                 generation: int, artifact_checksum: str, manifest_key: str,
-                manifest_checksum: str) -> None:
+                manifest_checksum: str, artifact_commits: tuple[ArtifactCommit, ...] = ()) -> None:
         # job·outbox 없음 — iNAV 는 하위 소비자가 없어 window 확정에서 멈춘다.
         self.committer.commit_inav_window(
             session_id=self.session_id, window_start=claim["window_start"],
@@ -619,7 +695,7 @@ class InavWorker(MinuteWorkerLoop):
             succeeded_unit_count=result.succeeded_count,
             failed_unit_count=result.failed_count, record_count=len(records),
             checksum=artifact_checksum, manifest_uri=manifest_key,
-            manifest_checksum=manifest_checksum,
+            manifest_checksum=manifest_checksum, artifact_commits=artifact_commits,
             missing_units=_failed_units(units) or None,
             stage_timestamps=result.stage_timestamps,
             artifact_generation=generation,
@@ -657,6 +733,7 @@ class SectorIndexWorkerConfig:
     # 집는데(`claim_due_window` ORDER BY ASC) 페이지(그날 최근 100봉) 밖 window 는 못
     # 채우면서 계속 최고령이라 매 tick 같은 것을 집어 앱키 쿼터만 태운다.
     recovery_budget_per_tick: int = 0
+    artifact_format: str = "legacy"
 
 
 @dataclass
@@ -715,7 +792,7 @@ class SectorIndexWorker(MinuteWorkerLoop):
 
     def _commit(self, claim: dict, *, result, records: tuple, units: dict,
                 generation: int, artifact_checksum: str, manifest_key: str,
-                manifest_checksum: str) -> None:
+                manifest_checksum: str, artifact_commits: tuple[ArtifactCommit, ...] = ()) -> None:
         # job·outbox 없음 — 지금 하위 소비자가 없어 window 확정에서 멈춘다.
         self.committer.commit_sector_index_window(
             session_id=self.session_id, window_start=claim["window_start"],
@@ -725,7 +802,7 @@ class SectorIndexWorker(MinuteWorkerLoop):
             succeeded_unit_count=result.succeeded_count,
             failed_unit_count=result.failed_count, record_count=len(records),
             checksum=artifact_checksum, manifest_uri=manifest_key,
-            manifest_checksum=manifest_checksum,
+            manifest_checksum=manifest_checksum, artifact_commits=artifact_commits,
             missing_units=_failed_units(units) or None,
             stage_timestamps=result.stage_timestamps,
             artifact_generation=generation,
@@ -925,6 +1002,7 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
             session_lease_seconds=options.session_lease_seconds,
             heartbeat_every_seconds=options.heartbeat_every_seconds,
             recovery_budget_per_tick=options.recovery_budget_per_tick,
+            artifact_format=settings.minute_artifact_format,
         ),
     )
     for received in (signal.SIGTERM, signal.SIGINT):
@@ -1164,6 +1242,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
             unit_ids=tuple(sorted(index_map)),
             expected_version=expected_version, expected_hash=expected_hash,
             run_id=worker_id,
+            artifact_format=settings.minute_artifact_format,
         ),
     )
     for received in (signal.SIGTERM, signal.SIGINT):
@@ -1334,6 +1413,7 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
             session_date=parsed_day.isoformat(),
             universe=universe_model,
             run_id=worker_id,
+            artifact_format=settings.minute_artifact_format,
         ),
     )
     for received in (signal.SIGTERM, signal.SIGINT):

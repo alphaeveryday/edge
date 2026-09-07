@@ -1106,12 +1106,13 @@ settings.targets.keywords            # ["금리", ...]
 
 ## 레이크 저장 계약
 
-### Minute 내용 주소 후보·소비 계약 (ALPHA-1060 PR1·2)
+### Minute 내용 주소 후보·확정·소비 계약 (ALPHA-1060)
 
-가격·iNAV·업종지수의 기존 writer는 generation 경로를 계속 쓴다. PR1은
-`minute_content_artifact_key`·`minute_content_manifest_key`와 `schema_version=2`
-manifest 계약을 제공한다. 가격 소비자(현재 창·시가), 가격/업종 롤업과 분석 엔진은
-DB의 manifest URI·checksum을 함께 읽어 구/신형을 지원한다. 신형 writer 연결과 활성화는 후속 PR이다.
+가격·iNAV·업종지수 writer의 `minute_artifact_format` 기본값과 현재 dev 값은 `legacy`다.
+`DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2`를 명시하면 내용 주소 후보와
+`schema_version=2` manifest를 쓰며, 수집 전에 확정 이력 스키마 존재를 검사한다.
+가격 소비자(현재 창·시가), 가격/업종 롤업과 분석 엔진은 DB의 manifest URI·checksum을
+함께 읽어 구/신형을 지원한다. 실제 dev 활성화는 격리·사전검사 배포 후 세션 경계에서 한다.
 후보가 저장됐다는 사실만으로 DB에 확정된 결과로 간주하지 않는다.
 
 - artifact: `canonical/market_data/{dataset}/market=KR/session_date=D/session_id=S/window=HHMM/content=SHA/{bars|inav}.ndjson`.
@@ -1128,6 +1129,18 @@ DB의 manifest URI·checksum을 함께 읽어 구/신형을 지원한다. 신형
   manifest·artifact의 저장 바이트 해시를 각각 검증한다. 버전 필드 없는 기존 manifest도 읽는다. DB의 manifest URI와 checksum이 **둘 다 없는**
   legacy row에만 generation 경로 fallback을 허용한다. URI가 있는 manifest의 404·손상은
   실패하며 구형 파일로 우회하지 않는다. 롤업은 입력 검증이 실패하면 기존 5분 파일을 보존한다.
+- 신형 writer는 기존 승자의 manifest와 artifact를 검증한 뒤 바이트·정규화된 unit 분류를
+  비교한다. 동일하면 generation과 기존 URI/checksum을 유지한다(legacy 승자도 그대로 유지).
+  실제 바이트/분류 변경만 +1이며 A→B→A는 1→2→3이다. 기존 승자 읽기 실패를 새 데이터로
+  간주하지 않는다. 수집 attempt/실행시각 변화만으로 가격 job/outbox가 늘지 않는다.
+- window·`minute_window_artifact_commit`·가격 job/outbox는 같은 PostgreSQL transaction이다.
+  검증된 이전 승자와 새 승자의 이력을 함께 남기며, 동일 이력 재기록은 no-op이고 다른 좌표는
+  전체 rollback이다. 최초 확정시각을 덮지 않는다. iNAV·업종은 가격 job/outbox를 만들지 않는다.
+  PUT 후 DB 실패는 실제 lease 재claim으로 복구한다. 확정 창의 정정 테스트는 별도 reopen
+  fixture를 쓰며, 자동 정정 스케줄을 추가한 것은 아니다.
+- 신형 승자가 있는 세션에 legacy writer의 기동·쓰기는 거부된다. 활성화 전에 두 호환 reader
+  배포·이력 migration·사전검사·구 writer drain을 확인해야 한다. 신형 세션을 legacy로
+  되돌리는 대신 쓰기를 멈추고 content_v2 지원 이미지로 복귀한다. 호환 reader/스키마는 유지한다.
 - `put_immutable`은 모든 기존 호출자에도 조건부 생성(`If-None-Match: *`)을 적용한다.
   충돌 시 GET 해시가 같은 객체만 재사용하며 다른 바이트는 오류다. 충돌 후 객체가 없으면
   최대 3회의 조건부 PUT/GET 뒤 일시 실패로 올린다. 권한·네트워크 오류는 그대로 전파한다.

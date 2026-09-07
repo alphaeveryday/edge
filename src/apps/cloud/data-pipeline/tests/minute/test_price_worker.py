@@ -556,7 +556,7 @@ class TestPriceWorkerCli:
 
     def _settings(self, *, db=None, options=None):
         from types import SimpleNamespace
-        return SimpleNamespace(db=db, minute_price_worker=options, storage=None)
+        return SimpleNamespace(minute_artifact_format="legacy", db=db, minute_price_worker=options, storage=None)
 
     def test_missing_db_fails_loud(self):
         from data_pipeline.minute.worker import price_worker_cli
@@ -725,7 +725,7 @@ class TestPriceWorkerConfig:
             lookback=1, lease_seconds=300, session_lease_seconds=300,
             heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
         )
-        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        settings = SimpleNamespace(minute_artifact_format="legacy", db=_DB, minute_price_worker=options, storage=None)
         code = price_worker_cli(
             settings, session_date=SESSION_DATE.isoformat(), universe=str(path),
             max_ticks=2,
@@ -750,7 +750,7 @@ class TestPriceWorkerConfig:
             lookback=1, lease_seconds=300, session_lease_seconds=300,
             heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
         )
-        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        settings = SimpleNamespace(minute_artifact_format="legacy", db=_DB, minute_price_worker=options, storage=None)
         with pytest.raises(SystemExit, match="자격증명 없음"):
             price_worker_cli(settings, session_date="2026-07-31", universe="u.json")
 
@@ -765,7 +765,7 @@ class TestPriceWorkerConfig:
             lookback=1, lease_seconds=300, session_lease_seconds=300,
             heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
         )
-        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        settings = SimpleNamespace(minute_artifact_format="legacy", db=_DB, minute_price_worker=options, storage=None)
         with pytest.raises(SystemExit, match="가격 큐 어휘가 아니다"):
             price_worker_cli(settings, session_date="2026-07-31", universe="u.json")
 
@@ -810,7 +810,7 @@ class TestPriceWorkerConfig:
             lookback=1, lease_seconds=300, session_lease_seconds=300,
             heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
         )
-        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        settings = SimpleNamespace(minute_artifact_format="legacy", db=_DB, minute_price_worker=options, storage=None)
         assert price_worker_cli(
             settings, session_date=SESSION_DATE.isoformat(), universe=str(path),
             max_ticks=5,
@@ -864,7 +864,7 @@ class TestPriceWorkerConfig:
             lookback=1, lease_seconds=300, session_lease_seconds=300,
             heartbeat_every_seconds=60, recovery_budget_per_tick=2, tick_seconds=0.0,
         )
-        settings = SimpleNamespace(db=_DB, minute_price_worker=options, storage=None)
+        settings = SimpleNamespace(minute_artifact_format="legacy", db=_DB, minute_price_worker=options, storage=None)
         assert price_worker_cli(
             settings, session_date=SESSION_DATE.isoformat(), universe=str(path),
             max_ticks=5,
@@ -992,7 +992,7 @@ class TestCollectorSelection:
 
         monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE)
         monkeypatch.setattr(worker_module, "make_price_collector", capture)
-        settings = SimpleNamespace(
+        settings = SimpleNamespace(minute_artifact_format="legacy",
             db=DbConfig(password="x"),
             minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
         )
@@ -1039,7 +1039,7 @@ class TestCollectorSelection:
         monkeypatch.setattr(worker_module, "MinuteCommitter", lambda db=None: object())
         monkeypatch.setattr("data_pipeline.lake.storage.make_storage", lambda config: object())
         monkeypatch.setattr(worker_module, "PriceWorker", capture)
-        settings = SimpleNamespace(
+        settings = SimpleNamespace(minute_artifact_format="legacy",
             db=DbConfig(password="x"), storage=None,
             minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
         )
@@ -1068,7 +1068,7 @@ class TestCollectorSelection:
         from data_pipeline.minute import models as models_module
 
         monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE_EXT)
-        settings = SimpleNamespace(
+        settings = SimpleNamespace(minute_artifact_format="legacy",
             db=DbConfig(password="x"),
             minute_price_worker=self._config(source="kis", app_key="k", app_secret="s"),
         )
@@ -1098,7 +1098,7 @@ class TestCollectorSelection:
         monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE_EXT)
         monkeypatch.setattr(worker_module, "MinuteLedger", lambda db=None: SimpleNamespace(
             session_snapshot=lambda **_: None))
-        settings = SimpleNamespace(
+        settings = SimpleNamespace(minute_artifact_format="legacy",
             db=DbConfig(password="x"),
             minute_price_worker=self._config(
                 source="toss", client_id="c", client_secret="s"),

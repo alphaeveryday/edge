@@ -40,6 +40,10 @@ from .states import (
 )
 
 
+class ArtifactFormatError(RuntimeError):
+    """신형 스키마 미적용 또는 신형 세션에 구형 writer가 진입한 설정 오류."""
+
+
 class UniverseConflictError(RuntimeError):
     """같은 날짜의 session 에 다른 universe 가 제시됐다 (v0.7 10.1).
 
@@ -59,6 +63,30 @@ class MinuteLedger:
 
     db: DbConfig
     connect_fn: Callable = _default_connect
+
+    @staticmethod
+    def _assert_legacy_artifacts_tx(cur, session_id: str) -> None:
+        cur.execute(
+            """SELECT EXISTS (
+                SELECT 1 FROM minute_ingestion_window
+                WHERE session_id = %s AND manifest_uri LIKE %s
+            )""",
+            (session_id, "operations_archive/minute_manifests/%/content=%/manifest.json"),
+        )
+        if cur.fetchone()[0]:
+            raise ArtifactFormatError(f"content_v2 승자가 있는 session={session_id}: legacy 쓰기 거부")
+
+    def assert_artifact_format(self, *, session_id: str, artifact_format: str) -> None:
+        """수집 전에 스키마/세션 형식 전제를 확인한다. legacy는 기존 테이블만 읽는다."""
+        if artifact_format not in ("legacy", "content_v2"):
+            raise ArtifactFormatError(f"알 수 없는 minute artifact format: {artifact_format}")
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            if artifact_format == "content_v2":
+                cur.execute("SELECT to_regclass('public.minute_window_artifact_commit')")
+                if cur.fetchone()[0] is None:
+                    raise ArtifactFormatError("content_v2 확정 이력 migration이 적용되지 않았다")
+            else:
+                self._assert_legacy_artifacts_tx(cur, session_id)
 
     # ── session 계획 ──────────────────────────────────────────
     def plan_session(
@@ -300,7 +328,8 @@ class MinuteLedger:
                     FOR UPDATE OF c SKIP LOCKED
                 )
                 RETURNING w.window_start, w.window_end, w.generation,
-                          w.checksum, w.manifest_checksum, w.attempt_count, w.claim_token
+                          w.checksum, w.manifest_checksum, w.attempt_count, w.claim_token,
+                          w.manifest_uri
                 """,
                 (WINDOW_CLAIMED, worker_id,
                  now + timedelta(seconds=lease_seconds),
@@ -321,6 +350,7 @@ class MinuteLedger:
                 "manifest_checksum": row[4],
                 "attempt_count": row[5],
                 "claim_token": row[6],
+                "manifest_uri": row[7],
             }
 
     # ── window 결과 기록 (PR 3 commit transaction 의 window 조각) ──────

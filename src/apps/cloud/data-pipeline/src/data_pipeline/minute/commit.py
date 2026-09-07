@@ -7,6 +7,7 @@ v0.7 9절 순서의 DB 측이다 — S3 artifact/manifest PUT(artifacts.py)은 *
     → claim 검증(window 행 잠금)
     → canonical upsert (뉴스만 — CanonicalWriter 경계 뒤)
     → window checksum/generation 확정 (_record_window_outcome_tx)
+    → 검증된 artifact 확정 이력 (content_v2 writer만)
     → price job + PriceWindowCommitted outbox (_insert_*_tx — outbox 는 조건부,
       과거일 백필 세션은 job 만 쓴다: ALPHA-863, `commit_price_window` 참조)
     → commit
@@ -37,13 +38,28 @@ from .news_overlap import (
     NewsSourceLedger,
     RejectedArticle,
 )
-from .repository import MinuteLedger
+from .repository import ArtifactFormatError, MinuteLedger
 from .states import (
     WINDOW_INCOMPLETE,
     WINDOW_INVALID,
     WINDOW_VALID,
     WINDOW_VALID_EMPTY,
 )
+
+
+@dataclass(frozen=True)
+class ArtifactCommit:
+    """검증된 승자 한 세대의 불변 저장 좌표. session/window는 commit 호출자가 제공한다."""
+
+    generation: int
+    artifact_uri: str
+    artifact_checksum: str
+    manifest_uri: str
+    manifest_checksum: str
+
+
+class ArtifactCommitConflictError(RuntimeError):
+    """이미 확정된 같은 세대의 좌표가 다르다. 전체 transaction을 거부한다."""
 
 
 class CanonicalWriter(Protocol):
@@ -110,6 +126,7 @@ class MinuteCommitter:
         fence_token: int,
         claim_token: int,
         artifact_generation: int,
+        artifact_commits: tuple[ArtifactCommit, ...] = (),
         **outcome,
     ) -> int:
         """fence/phase → claim 검증 → window 결과 확정 → 세대 대조. 가격·iNAV·공시 공유부.
@@ -123,6 +140,18 @@ class MinuteCommitter:
             raise CommitRejectedError(
                 f"fence 무효(phase={phase}) — session {session_id} commit 거부"
             )
+        if not artifact_commits:
+            # session 잠금 안에서 재확인해 수집 전 검사 이후 v2 확정과의 경합도 막는다.
+            MinuteLedger._assert_legacy_artifacts_tx(cur, session_id)
+            if "/content=" in outcome["manifest_uri"]:
+                raise ArtifactFormatError("content_v2 manifest는 확정 이력 없이 기록할 수 없다")
+        else:
+            current = artifact_commits[-1]
+            if (current.generation, current.artifact_checksum, current.manifest_uri,
+                current.manifest_checksum) != (
+                    artifact_generation, outcome["checksum"], outcome["manifest_uri"],
+                    outcome["manifest_checksum"]):
+                raise ArtifactCommitConflictError("현재 승자와 확정 이력 좌표가 다르다")
         # claim 을 **쓰기 전에** 검증한다 — stale claim 을 여기서 명시적으로
         # 거부해야 "다른 attempt 소유" 사유가 뭉개지지 않는다(아래 outcome 갱신
         # 실패는 불변식 위반으로만 남는다)
@@ -152,7 +181,36 @@ class MinuteCommitter:
             raise GenerationMismatchError(
                 f"artifact 세대 {artifact_generation} ≠ DB 확정 세대 {generation}"
             )
+        for artifact in artifact_commits:
+            self._insert_artifact_commit_tx(cur, session_id, window_start, artifact)
         return generation
+
+    @staticmethod
+    def _insert_artifact_commit_tx(cur, session_id, window_start, artifact: ArtifactCommit) -> None:
+        values = (artifact.artifact_uri, artifact.artifact_checksum,
+                  artifact.manifest_uri, artifact.manifest_checksum)
+        cur.execute(
+            """INSERT INTO minute_window_artifact_commit (
+                session_id, window_start, generation, artifact_uri, artifact_checksum,
+                manifest_uri, manifest_checksum
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (session_id, window_start, generation) DO NOTHING
+            RETURNING artifact_uri, artifact_checksum, manifest_uri, manifest_checksum""",
+            (session_id, window_start, artifact.generation, *values),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                """SELECT artifact_uri, artifact_checksum, manifest_uri, manifest_checksum
+                FROM minute_window_artifact_commit
+                WHERE session_id = %s AND window_start = %s AND generation = %s""",
+                (session_id, window_start, artifact.generation),
+            )
+            row = cur.fetchone()
+        if row is None or tuple(row) != values:
+            raise ArtifactCommitConflictError(
+                f"확정 이력 충돌 session={session_id} window={window_start} generation={artifact.generation}"
+            )
 
     def commit_price_window(
         self,
@@ -176,8 +234,9 @@ class MinuteCommitter:
         destination: str,
         artifact_generation: int,
         emit_outbox: bool,
+        artifact_commits: tuple[ArtifactCommit, ...] = (),
     ) -> int:
-        """한 트랜잭션에 window/job/outbox 를 확정하고 generation 을 돌려준다.
+        """한 트랜잭션에 window/선택적 artifact 이력/job/outbox 를 확정하고 generation 을 돌려준다.
 
         가격의 canonical 은 호출자가 이미 PUT 한 S3 artifact 다 — 여기서는 DB 에
         canonical 을 쓰지 않는다(ALPHA-701).
@@ -221,7 +280,8 @@ class MinuteCommitter:
             generation = self._confirm_window_tx(
                 cur, session_id=session_id, window_start=window_start,
                 worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
-                artifact_generation=artifact_generation, data_status=data_status,
+                artifact_generation=artifact_generation, artifact_commits=artifact_commits,
+                data_status=data_status,
                 expected_unit_count=expected_unit_count,
                 succeeded_unit_count=succeeded_unit_count,
                 failed_unit_count=failed_unit_count, record_count=record_count,
@@ -263,6 +323,7 @@ class MinuteCommitter:
         missing_units: list[str] | None,
         stage_timestamps: dict[str, datetime | str],
         artifact_generation: int,
+        artifact_commits: tuple[ArtifactCommit, ...] = (),
     ) -> int:
         """iNAV window 하나를 확정하고 generation 을 돌려준다 (ALPHA-851).
 
@@ -282,7 +343,8 @@ class MinuteCommitter:
             return self._confirm_window_tx(
                 cur, session_id=session_id, window_start=window_start,
                 worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
-                artifact_generation=artifact_generation, data_status=data_status,
+                artifact_generation=artifact_generation, artifact_commits=artifact_commits,
+                data_status=data_status,
                 expected_unit_count=expected_unit_count,
                 succeeded_unit_count=succeeded_unit_count,
                 failed_unit_count=failed_unit_count, record_count=record_count,
@@ -310,6 +372,7 @@ class MinuteCommitter:
         missing_units: list[str] | None,
         stage_timestamps: dict[str, datetime | str],
         artifact_generation: int,
+        artifact_commits: tuple[ArtifactCommit, ...] = (),
     ) -> int:
         """업종지수 window 하나를 확정하고 generation 을 돌려준다 (ALPHA-887).
 
@@ -326,7 +389,8 @@ class MinuteCommitter:
             return self._confirm_window_tx(
                 cur, session_id=session_id, window_start=window_start,
                 worker_id=worker_id, fence_token=fence_token, claim_token=claim_token,
-                artifact_generation=artifact_generation, data_status=data_status,
+                artifact_generation=artifact_generation, artifact_commits=artifact_commits,
+                data_status=data_status,
                 expected_unit_count=expected_unit_count,
                 succeeded_unit_count=succeeded_unit_count,
                 failed_unit_count=failed_unit_count, record_count=record_count,
