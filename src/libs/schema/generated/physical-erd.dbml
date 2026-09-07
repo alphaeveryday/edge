@@ -689,6 +689,21 @@ Table "minute_trigger_anchor" {
   }
 }
 
+Table "minute_window_artifact_commit" {
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
+  "generation" int [not null]
+  "artifact_uri" text [not null]
+  "artifact_checksum" text [not null]
+  "manifest_uri" text [not null]
+  "manifest_checksum" text [not null]
+  "committed_at" timestamptz [not null]
+
+  indexes {
+    ("session_id", "window_start", "generation") [pk]
+  }
+}
+
 Table "news_document" {
   "document_id" text [pk]
   "document_type" varchar(20)
@@ -1113,6 +1128,7 @@ Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."sessio
 Ref: "minute_price_trigger"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_session_open"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_trigger_anchor"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_window_artifact_commit".("session_id", "window_start") > "minute_ingestion_window".("session_id", "window_start")
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")

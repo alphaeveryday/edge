@@ -149,6 +149,17 @@ SET LOCAL lock_timeout = '3s';
   는 보유 시간이 행 수에 비례하므로, 그런 문장은 **파일을 갈라** 다른 표의 락 수명에
   묶이지 않게 한다(Flyway 는 마이그레이션 하나를 한 트랜잭션으로 감싼다).
 
+## 분 아티팩트 확정 이력
+
+`minute_window_artifact_commit`은 현재 window와 별개로 실제 확정된 세대를 보존한다.
+data-pipeline이 window·이력·가격 job/outbox를 같은 트랜잭션에서 기록하는 단일 writer다.
+PK는 `(session_id, window_start, generation)`이며 URI/checksum/최초 확정시각은
+재처리로 덮지 않는다. 이 migration은 테이블만 추가하며, 기존 승자의 검증·이력 기록은
+후속 writer가 담당한다. 같은 세대의 미확정 S3 후보를 과거 이력으로 추정하지 않는다.
+`tests/minute_window_artifact_commit.sql`은 schema CI의 실제 PostgreSQL에서 중복 승자,
+없는 window, generation/hash/URI 제약 및 실패 뒤 기존 상태 보존을 검증한다.
+
+
 ## 물리 ERD 자동 생성 (파생물)
 
 Flyway 마이그레이션이 스키마 SSOT 이므로, 물리 ERD 는 사람이 그리지 않고 **마이그레이션에서 생성**한다.
