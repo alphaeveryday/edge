@@ -46,7 +46,7 @@
 > `minute/states.py` 가 SQL CHECK 와 기계 동기화)과 session/window repository
 > (계획·claim·lease·fencing ALPHA-662 + watermark·lane·drain ALPHA-663)과 job/outbox
 > repository(결정적 event ID·원자 enqueue·PG=retry 권위, ALPHA-664), artifact/manifest
-> 경계(결정적·불변 key·put_immutable, ALPHA-665), fenced commit transaction(window·
+> 경계(결정적·불변 key·조건부 put_immutable, ALPHA-665·1060), fenced commit transaction(window·
 > job·outbox 원자화 + orphan 검출, ALPHA-666 — 가격 분봉 canonical 은 **S3 artifact
 > 정본**이라 트랜잭션 밖이고 DB canonical 은 뉴스만: ALPHA-701), Price Worker loop(fence·2-lane·
 > 세대 예측·drain·SIGTERM 인계, ALPHA-667 — collector 주입식)와 **토스 분봉 adapter**
@@ -1105,6 +1105,34 @@ settings.targets.keywords            # ["금리", ...]
   `DATA_PIPELINE_*` env의 오타 키는 pydantic-settings 표준 동작상 조용히 무시된다.
 
 ## 레이크 저장 계약
+
+### Minute 내용 주소 후보 계약 (ALPHA-1060 PR1)
+
+가격·iNAV·업종지수의 기존 writer는 generation 경로를 계속 쓴다. PR1은
+`minute_content_artifact_key`·`minute_content_manifest_key`와 `schema_version=2`
+manifest 계약을 추가하며, writer·reader의 신형 경로 연결과 활성화는 후속 PR이다.
+후보가 저장됐다는 사실만으로 DB에 확정된 결과로 간주하지 않는다.
+
+- artifact: `canonical/market_data/{dataset}/market=KR/session_date=D/session_id=S/window=HHMM/content=SHA/{bars|inav}.ndjson`.
+  `dataset`은 `price_minute`, `etf_inav_minute`, `sector_index_minute`이며 iNAV만 `inav.ndjson`을 쓴다.
+  SHA는 **저장 바이트**의 lowercase SHA-256이다. 같은 세대의 변경된 재수집은 다른 후보에
+  저장하고, 같은 바이트를 다시 확정할 때는 artifact를 재사용할 수 있다.
+- manifest: `operations_archive/minute_manifests/dataset={dataset}/market=KR/session_date=D/session_id=S/window=HHMM/generation=G/content=SHA/manifest.json`.
+  SHA는 canonical JSON manifest 바이트의 해시다. 30일 만료 `canonical_run_artifacts`에 두지 않는다.
+- v2 필드는 `schema_version`, `dataset`, `session_id`, `window_start`, `window_end`,
+  `generation`, `units`, `artifact_key`, `artifact_checksum`으로 고정한다. 시간은 UTC `Z`로
+  정규화한 1분 경계이며 경로 날짜·HHMM은 KST 기준이다. 네 unit 분류는 서로 배타적인 정렬
+  목록이다. attempt·worker·실행시각·자기 URI를 넣지 않는다. 분류만 바뀌어도 manifest는 달라진다.
+  validator는 형상과 artifact 주소 일치를 검사한다. DB 기대값 및 실제 저장 바이트 해시의 대조는
+  후속 reader가 수행한다. 버전 필드 없는 기존 manifest의 파싱은 유지한다.
+- `put_immutable`은 모든 기존 호출자에도 조건부 생성(`If-None-Match: *`)을 적용한다.
+  충돌 시 GET 해시가 같은 객체만 재사용하며 다른 바이트는 오류다. 충돌 후 객체가 없으면
+  최대 3회의 조건부 PUT/GET 뒤 일시 실패로 올린다. 권한·네트워크 오류는 그대로 전파한다.
+  [S3 조건부 쓰기 계약](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)을 따른다.
+- LocalStorage의 신규 생성은 같은 파일시스템의 완성된 임시 파일을 hard link로 원자적으로
+  게시한다. 인스턴스·프로세스가 달라도 기존 객체를 덮지 않는다. `.storage-put-`로 시작하는
+  파일명은 내부 임시 파일용으로 예약해 LIST에서 제외하며 정상·예외 종료 시 정리한다.
+  기존 version을 교체하는 로컬 CAS의 보장 범위는 같은 인스턴스 내부로 유지된다.
 
 수집물은 단일 lake 버킷(예: dev `s3://edge-dev-pipeline-lake/`, 또는 local 스텁)에 쓴다.
 경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.

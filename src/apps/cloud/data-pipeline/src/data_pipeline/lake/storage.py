@@ -21,7 +21,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import re
+import tempfile
 import threading
+from datetime import date
 from pathlib import Path
 from typing import Protocol
 
@@ -1184,6 +1188,62 @@ def minute_poll_manifest_key(
     )
 
 
+_MINUTE_CONTENT_FILES = {
+    "price_minute": "bars.ndjson",
+    "etf_inav_minute": "inav.ndjson",
+    "sector_index_minute": "bars.ndjson",
+}
+
+
+def _validate_minute_content_partition(
+    dataset: str, market: str, session_date: str, session_id: str,
+    window_start_hhmm: str, checksum: str,
+) -> None:
+    if dataset not in _MINUTE_CONTENT_FILES:
+        raise ValueError(f"content minute dataset 미지원: {dataset!r}")
+    for name, value in (("market", market), ("session_id", session_id)):
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError(f"{name} 파티션 값 오류: {value!r}")
+    if not isinstance(session_date, str) or date.fromisoformat(session_date).isoformat() != session_date:
+        raise ValueError("session_date 는 ISO 날짜여야 한다")
+    if not isinstance(window_start_hhmm, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3])[0-5][0-9]", window_start_hhmm):
+        raise ValueError("window_start_hhmm 은 HHMM 이어야 한다")
+    if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise ValueError("checksum 은 lowercase SHA-256 이어야 한다")
+
+
+def minute_content_artifact_key(
+    dataset: str, market: str, session_date: str, session_id: str,
+    window_start_hhmm: str, artifact_checksum: str,
+) -> str:
+    """세 minute 레인의 내용 주소 후보 키 — DB 확정 여부·generation 과 독립이다."""
+    _validate_minute_content_partition(
+        dataset, market, session_date, session_id, window_start_hhmm, artifact_checksum,
+    )
+    return (
+        f"canonical/market_data/{dataset}/market={market}/session_date={session_date}"
+        f"/session_id={session_id}/window={window_start_hhmm}"
+        f"/content={artifact_checksum}/{_MINUTE_CONTENT_FILES[dataset]}"
+    )
+
+
+def minute_content_manifest_key(
+    dataset: str, market: str, session_date: str, session_id: str,
+    window_start_hhmm: str, generation: int, manifest_checksum: str,
+) -> str:
+    """내용 주소 manifest 후보 키 — 같은 세대의 다른 후보도 서로 덮지 않는다."""
+    _validate_minute_content_partition(
+        dataset, market, session_date, session_id, window_start_hhmm, manifest_checksum,
+    )
+    if type(generation) is not int or generation < 1:
+        raise ValueError("generation 은 양의 정수여야 한다")
+    return (
+        f"operations_archive/minute_manifests/dataset={dataset}/market={market}"
+        f"/session_date={session_date}/session_id={session_id}/window={window_start_hhmm}"
+        f"/generation={generation}/content={manifest_checksum}/manifest.json"
+    )
+
+
 def minute_window_manifest_key(
     dataset: str, source: str, market: str, session_date: str,
     window_start_hhmm: str, generation: int,
@@ -1219,7 +1279,7 @@ class Storage(Protocol):
         ...
 
     def put_bytes_if_version(self, key: str, data: bytes, version: str | None) -> bool:
-        """현재 version이 같을 때만 쓴다. 경합이면 False."""
+        """현재 version이 같을 때만 쓴다. None 은 원자적 신규 생성, 경합이면 False."""
         ...
 
     def list_keys(self, prefix: str) -> list[str]:
@@ -1272,9 +1332,22 @@ class LocalStorage:
             return data, hashlib.sha256(data).hexdigest()
 
     def put_bytes_if_version(self, key: str, data: bytes, version: str | None) -> bool:
-        """테스트·로컬 실행용 process-local CAS."""
+        """None 은 프로세스 간 원자적 생성, 기존 version 교체는 인스턴스 내 CAS."""
         with self._cas_lock:
             path = self._path(key)
+            if version is None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # 완성된 같은 파일시스템 파일을 no-clobber 게시한다. 'xb' 에 직접
+                # 쓰면 다른 writer/reader 가 부분 바이트를 읽을 수 있다.
+                with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".storage-put-") as staged:
+                    staged.write(data)
+                    staged.flush()
+                    os.fsync(staged.fileno())
+                    try:
+                        os.link(staged.name, path)
+                    except FileExistsError:
+                        return False
+                return True
             current = path.read_bytes() if path.exists() else None
             current_version = hashlib.sha256(current).hexdigest() if current is not None else None
             if current_version != version:
@@ -1295,7 +1368,7 @@ class LocalStorage:
         keys = (
             p.relative_to(self.root).as_posix()
             for p in self.root.rglob("*")
-            if p.is_file()
+            if p.is_file() and not p.name.startswith(".storage-put-")
         )
         return sorted(k for k in keys if k.startswith(prefix))
 

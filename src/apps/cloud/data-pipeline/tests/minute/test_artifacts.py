@@ -8,6 +8,9 @@ key/바이트" 위에 선다 — 결정성·불변성·왕복이 깨지면 재�
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+import threading
 
 import pytest
 
@@ -127,6 +130,41 @@ class TestSerialization:
 
 
 class TestPutImmutable:
+    @pytest.mark.parametrize("same_content", [True, False])
+    def test_independent_instances_cannot_overwrite_winner(self, tmp_path, same_content):
+        # Two claims can PUT before either DB commit: storage must elect one byte string.
+        barrier = threading.Barrier(4)
+        payloads = [b"a" * 100_000 if same_content else bytes([i]) * 100_000 for i in range(4)]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(
+                lambda data: _competing_put(tmp_path, data, barrier), payloads,
+            ))
+        _assert_one_immutable_winner(tmp_path, payloads, results, same_content)
+
+    @pytest.mark.parametrize("same_content", [True, False])
+    def test_independent_processes_cannot_overwrite_winner(self, tmp_path, same_content):
+        # A Python lock cannot protect workers in different processes.
+        ctx = multiprocessing.get_context("spawn")
+        barrier = ctx.Barrier(4)
+        queue = ctx.Queue()
+        payloads = [b"a" * 100_000 if same_content else bytes([i]) * 100_000 for i in range(4)]
+        processes = [ctx.Process(target=_process_put, args=(tmp_path, data, barrier, queue))
+                     for data in payloads]
+        try:
+            for process in processes:
+                process.start()
+            results = [queue.get(timeout=30) for _ in processes]
+            for process in processes:
+                process.join(timeout=30)
+                assert process.exitcode == 0
+            _assert_one_immutable_winner(tmp_path, payloads, results, same_content)
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join(timeout=5)
+            queue.close()
+
     def test_put_then_rerun_is_noop(self, tmp_path):
         storage = LocalStorage(root=tmp_path)
         key = canonical_price_minute_artifact_key("KR", "2026-07-31", "0900", 1)
@@ -154,3 +192,35 @@ class TestPutImmutable:
         checksum_before_crash = put_immutable(storage, key, data)
         checksum_after_restart = put_immutable(storage, key, data)
         assert checksum_before_crash == checksum_after_restart
+
+
+def _competing_put(root, data, barrier):
+    storage = LocalStorage(root)
+    # Synchronize the old existence check too: deterministically exposes LIST/PUT races.
+    original_list = storage.list_keys
+
+    def racing_list(prefix):
+        keys = original_list(prefix)
+        barrier.wait(timeout=15)
+        return keys
+
+    storage.list_keys = racing_list
+    barrier.wait(timeout=15)
+    try:
+        return put_immutable(storage, "candidate/bars.ndjson", data)
+    except ArtifactImmutabilityError:
+        return "conflict"
+
+
+def _process_put(root, data, barrier, queue):
+    queue.put(_competing_put(root, data, barrier))
+
+
+def _assert_one_immutable_winner(root, payloads, results, same_content):
+    storage = LocalStorage(root)
+    winner = storage.get_bytes("candidate/bars.ndjson")
+    assert winner in payloads
+    checksum = sha256_bytes(winner)
+    assert results.count(checksum) == (4 if same_content else 1)
+    assert results.count("conflict") == (0 if same_content else 3)
+    assert storage.list_keys("") == ["candidate/bars.ndjson"]
