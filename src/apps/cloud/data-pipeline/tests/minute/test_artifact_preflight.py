@@ -279,3 +279,43 @@ def test_session_starter_cannot_restart_writers_after_boundary_check(ready, stat
     assert result["scan_complete"] and not result["activation_allowed"]
     assert not result["checks"]["old_tasks_absent"]
     assert result["task_blockers"] == ["task:starter"]
+
+
+@pytest.mark.parametrize("command", ["price-consumer", "consume-triggers"])
+@pytest.mark.parametrize("status", ["RUNNING", "STOPPING"])
+@pytest.mark.parametrize("compatible", [False, True])
+def test_standalone_readers_cannot_escape_image_and_revision_checks(ready, command, status, compatible):
+    # 별도 family의 구 reader도 같은 큐를 읽는다. 승인 TD 밖이면 현재 image도 허용하지 않는다.
+    service = ready.services[3 if command == "price-consumer" else 4]
+    td = deepcopy(ready.definitions[service["taskDefinition"]])
+    td.update(family="manual-reader", taskDefinitionArn="manual-reader:1")
+    ready.definitions[td["taskDefinitionArn"]] = td
+    container = td["containerDefinitions"][0]
+    digest = (DP if command == "price-consumer" else AE) if compatible else "sha256:" + "f"*64
+    ready.tasks.append({"taskArn": "task:reader", "taskDefinitionArn": td["taskDefinitionArn"],
+        "lastStatus": status, "group": "family:manual-reader",
+        "overrides": {"containerOverrides": [{"name": container["name"], "command": container["command"]}]},
+        "containers": [{"name": container["name"], "imageDigest": digest}]})
+    result = run(ready)
+    assert result["scan_complete"] and not result["activation_allowed"]
+    assert not result["checks"]["old_tasks_absent"]
+    assert result["task_blockers"] == ["task:reader"]
+
+
+@pytest.mark.parametrize("command", ["price-consumer", "consume-triggers"])
+@pytest.mark.parametrize("args", ["missing", "different"])
+def test_approved_reader_definition_does_not_approve_runtime_command_override(ready, command, args):
+    service = ready.services[3 if command == "price-consumer" else 4]
+    container = ready.definitions[service["taskDefinition"]]["containerDefinitions"][0]
+    actual_command = [command]
+    if args == "different":
+        actual_command += ["--universe", "s3://lake/config/minute/other.json"]
+    if command == "consume-triggers" and args == "missing":
+        actual_command = [command, "--invalid-option"]
+    ready.tasks.append({"taskArn": "task:override", "taskDefinitionArn": service["taskDefinition"],
+        "lastStatus": "RUNNING", "group": "family:manual-reader",
+        "overrides": {"containerOverrides": [{"name": container["name"], "command": actual_command}]},
+        "containers": [{"name": container["name"], "imageDigest": DP if command == "price-consumer" else AE}]})
+    result = run(ready)
+    assert result["scan_complete"] and not result["activation_allowed"]
+    assert result["task_blockers"] == ["task:override"]

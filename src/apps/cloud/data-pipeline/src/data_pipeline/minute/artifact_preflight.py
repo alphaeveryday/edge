@@ -244,8 +244,9 @@ def artifact_preflight(*, ledger, aws_session, cluster: str, service_prefix: str
                 writer = any(step in command for step in _WRITERS)
                 # start는 현재 digest여도 조회 뒤 writer를 다시 scale-up할 수 있다.
                 starter = "start-minute-session" in command
+                reader = any(step in command for step in ("price-consumer", "consume-triggers"))
                 related = td["family"] in (*names, f"{service_prefix}-minute-session")
-                if not writer and not starter and not related:
+                if not writer and not starter and not reader and not related:
                     continue
                 runtime = next((c for c in task.get("containers", []) if c["name"] == container["name"]), {})
                 expected = analysis_digest if container["name"] == "analysis-engine" else pipeline_digest
@@ -253,11 +254,13 @@ def artifact_preflight(*, ledger, aws_session, cluster: str, service_prefix: str
                 expected_td = (services[td["family"]]["taskDefinition"] if td["family"] in services
                                else ops_td["taskDefinitionArn"])
                 if (writer or starter or actual != expected or task["taskDefinitionArn"] != expected_td
+                        or ((reader or td["family"] in services) and command != container.get("command", []))
                         or override.get("environment") or override.get("environmentFiles")
                         or task.get("overrides", {}).get("taskRoleArn", td["taskRoleArn"]) != td["taskRoleArn"]):
                     blockers.append(task["taskArn"])
                 report["tasks"].append({"task": task["taskArn"], "task_definition": task["taskDefinitionArn"],
-                    "last_status": task["lastStatus"], "command": command, "writer": writer, "starter": starter,
+                    "last_status": task["lastStatus"], "command": command,
+                    "writer": writer, "starter": starter, "reader": reader,
                     "image_digest": actual, "expected_digest": expected})
         for name, service in services.items():
             running = [t for t in tasks if t.get("group") == f"service:{name}"

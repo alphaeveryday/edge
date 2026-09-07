@@ -1185,6 +1185,8 @@ desired 0 배포는 이미지 push 이후의 새 deployment여야 한다. start�
 실제 target revision/cluster/전체 command도 검증한 minute-session 정의와 일치해야 한다.
 worker·consumer·planner의 필수 universe URI, dataset/source 인자를 서로 대조하며
 universe 객체도 실제로 읽어 검증한다. 미검증 environment/role override는 전환을 막는다.
+별도 family로 실행한 reader도 실제 명령으로 식별하며, 승인된 task revision·image·명령과
+다른 reader는 전환을 막는다.
 
 ```bash
 AWS_PROFILE=edge uv run python -m data_pipeline.minute.artifact_preflight \
