@@ -25,7 +25,7 @@
 입력은 메모리 버퍼가 아니라 **원장이 확정한 세대의 canonical 1분 artifact(NDJSON)** 다
 — 재시작 안전·멱등·결정적(같은 커밋 세대 집합이면 같은 산출)이 이유고, S3 의 더 높은
 세대를 집지 않는 이유이기도 하다: PUT 후 DB commit 전에 죽은 orphan artifact 를 최신
-이라고 읽으면 원장에 확정되지 않은 가격이 파생에 실린다(find_orphan_artifacts 와 같은
+이라고 읽으면 원장에 확정되지 않은 가격이 파생에 실린다(reconcile_minute_artifacts 와 같은
 "커밋 세대가 정본" 축).
 
 롤업 규칙: open=구간 첫 1분봉 open · high=max · low=min · close=마지막 close ·

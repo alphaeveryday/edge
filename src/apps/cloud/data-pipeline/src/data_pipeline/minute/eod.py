@@ -9,7 +9,7 @@ DRAINED
 → QC_RUNNING CAS
 → DUE 잔존 → MISSING 확정
 → window 결과 집계 + 불변식 검사(CLAIMED 잔존·계획 개수)
-→ orphan artifact 나열(지우지 않는다)
+→ DB 승자·확정 이력과 manifest/artifact 대사 + 미확정 후보 나열(지우지 않는다)
 → FINALIZED(+final_checksum) 또는 FAILED
 ```
 
@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from ..lake.storage import Storage
-from .commit import find_orphan_artifacts
+from .reconciliation import MINUTE_ARTIFACT_DATASETS, reconcile_minute_artifacts
 from .models import (
     EXTENDED_CLOSE,
     EXTENDED_OPEN,
@@ -51,7 +51,6 @@ from .models import (
 )
 from .repository import MinuteLedger
 from .states import (
-    DATASET_PRICE_MINUTE,
     WINDOW_CLAIMED,
     WINDOW_DUE,
     WINDOW_INCOMPLETE,
@@ -63,13 +62,6 @@ from .states import (
 
 logger = logging.getLogger(__name__)
 
-# orphan 스캔이 성립하는 dataset — `find_orphan_artifacts` 의 prefix 가 이 값에 묶여 있다.
-_PRICE_DATASET = DATASET_PRICE_MINUTE
-# ⚠️ 1분 트랙은 KR 전용이다(유니버스·거래시간·소스가 전부 KR). market 을 CLI 인자로 열어
-# 두면 오타 하나가 **없는 prefix 를 훑고 빈 목록을 clean 으로 확정**한다 — 안 본 것이
-# "0건"이 되는 자리라 표면 자체를 없앴다. 다른 시장이 생기면 세션이 그 값을 갖게 하고
-# (원장 컬럼) 여기서 유도한다 — 호출자에게 받지 않는다.
-_MARKET = "KR"
 _WINDOW_STEP = timedelta(minutes=1)
 # 계획의 양 끝이 될 수 있는 시각 — universe 가 정규장만인지 시간외까지인지에 따라 갈린다
 # (`plan_session_windows`). QC 는 universe 를 모르므로 둘 다 허용하고 그 밖만 걸러낸다.
@@ -95,8 +87,10 @@ class SessionQcRejected(RuntimeError):
 
 @dataclass
 class SessionQc:
-    """세션 하나의 EOD 판정. `storage` 는 orphan 나열에만 쓴다 — 스캔 축은 (market,
-    session_date) canonical prefix 라 source 로 갈리지 않는다(ALPHA-705, 벤더는 컬럼)."""
+    """세션 하나의 EOD 판정. `storage` 로 현재·과거 승자의 바이트와 미확정 후보를 대사한다.
+
+    canonical 스캔 축은 (market, session_date)이며 내용 주소 manifest는 session별로 읽는다.
+    """
 
     ledger: MinuteLedger
     storage: Storage = field(repr=False)
@@ -121,9 +115,12 @@ class SessionQc:
         rows = self.ledger.session_window_rows(session_id=session_id)
         counts = _count_statuses(rows)
 
-        orphans, orphan_scanned = self._scan_orphans(session_id, session)
+        reconciliation = self._scan_artifacts(session_id, session)
+        orphans = [c["uri"] for c in reconciliation["uncommitted_candidate"]]
+        orphan_scanned = reconciliation["scan_complete"]
 
         violations = self._violations(session, rows, counts)
+        violations.extend(self._artifact_violations(reconciliation))
         summary = {
             "session_id": session_id,
             "session_date": session["session_date"].isoformat(),
@@ -134,6 +131,7 @@ class SessionQc:
             "complete_count": sum(counts[s] for s in _COMPLETE_STATUSES),
             "orphan_artifacts": orphans,
             "orphan_scanned": orphan_scanned,
+            "artifact_reconciliation": reconciliation,
             "violations": violations,
             "final_checksum": _final_checksum(rows),
             "final_generation": max(
@@ -169,16 +167,9 @@ class SessionQc:
             raise SessionQcRejected(f"확정 실패(다른 실행이 phase 를 바꿨다): {session_id}")
 
         if orphans:
-            # ⚠️ **확정을 막지 않는다.** orphan 은 커밋되지 않은 잔재라 원장 판정과 무관하고,
-            # 막으면 crash 잔재 하나가 그날 확정을 무기한 세운다 — 지금 이 잔재를 치울 도구가
-            # 없어서(격리 이동·삭제 미구현) 고칠 방법 없는 정지가 된다. 대신 키를 전부
-            # 결과에 싣고 로그로 올린다. 격리 정책·도구는 ALPHA-694.
-            # ⚠️ 남는 위험: 커밋 세대보다 높은 세대 키가 남아 있으면, 나중에 그 세대로
-            # 정정할 때 put_immutable 이 ArtifactImmutabilityError 로 막는다.
-            logger.warning(
-                "세션 %s 에 orphan artifact %d 건이 남아 있다(지우지 않는다 — ALPHA-694): %s",
-                session_id, len(orphans), orphans[:5],
-            )
+            # 미확정 후보는 업무 결손과 별개다. 무결성/조회 실패는 위에서 막지만,
+            # 정상 후보 잔재 자체는 확정을 막지 않고 논리 격리 CLI로 남길 수 있다.
+            logger.warning("세션 %s 미확정 후보 %d건: %s", session_id, len(orphans), orphans[:5])
         logger.info(
             "세션 QC 확정 session=%s windows=%d complete=%d missing=%d checksum=%s",
             session_id, len(rows), summary["complete_count"],
@@ -207,8 +198,11 @@ class SessionQc:
         # 키를 0 으로 읽어 "위반 없음"으로 오독한다. 읽기만으로 되는 것(집계·orphan)은
         # 다시 계산하고, 확정값(checksum·generation)은 **기록된 것**을 쓴다.
         rows = self.ledger.session_window_rows(session_id=session_id)
-        orphans, orphan_scanned = self._scan_orphans(session_id, session)
+        reconciliation = self._scan_artifacts(session_id, session)
+        orphans = [c["uri"] for c in reconciliation["uncommitted_candidate"]]
+        orphan_scanned = reconciliation["scan_complete"]
         recomputed = _final_checksum(rows)
+        artifact_violations = self._artifact_violations(reconciliation)
         logger.info("이미 확정된 세션 — 기록된 판정을 그대로 보고한다: %s", session_id)
         return {
             "session_id": session_id,
@@ -222,7 +216,8 @@ class SessionQc:
             ),
             "orphan_artifacts": orphans,
             "orphan_scanned": orphan_scanned,
-            "violations": (
+            "artifact_reconciliation": reconciliation,
+            "violations": artifact_violations + (
                 [] if recomputed == final_checksum
                 else [f"확정 checksum 과 현재 원장이 다르다: 기록 {final_checksum[:12]}… "
                       f"현재 {recomputed[:12]}…"]
@@ -234,30 +229,29 @@ class SessionQc:
             "checksum_matches_record": recomputed == final_checksum,
             # 확정 뒤 원장이 바뀌었으면 **성공으로 나가지 않는다** — 봉인 무결성이 깨진
             # 것이라 사람이 봐야 한다(exit 1). phase 는 이미 단방향이라 되돌리지 않는다.
-            "ok": recomputed == final_checksum,
+            "ok": recomputed == final_checksum and not artifact_violations,
             "phase": "FINALIZED", "reused": True,
         }
 
-    def _scan_orphans(self, session_id: str, session: dict) -> tuple[list[str], bool]:
-        """orphan 나열 — (키 목록, 실제로 훑었는가).
+    def _scan_artifacts(self, session_id: str, session: dict) -> dict:
+        """세 봉 레인은 승자/이력 대사. 뉴스·공시는 미지원임을 명시한다."""
+        if session["dataset"] not in MINUTE_ARTIFACT_DATASETS:
+            return {"supported": False, "scan_complete": False, "uncommitted_candidate": []}
+        result = reconcile_minute_artifacts(
+            ledger=self.ledger, storage=self.storage, session_id=session_id,
+        )
+        if result["errors"]:
+            # 조회 장애로 무결성 실패(FAILED/exit1)를 확정하지 않는다. 기존 CLI의
+            # 실행 불가(exit2) 경로에서 드러내고 QC_RUNNING 재진입으로 재시도한다.
+            raise RuntimeError(f"minute artifact 대사 실행 실패 session={session_id}: {result['errors']}")
+        return {"supported": True, **result}
 
-        ⚠️ `find_orphan_artifacts` 는 **가격 분봉 canonical 경로 전용**이다(prefix 가
-        `canonical/market_data/price_minute` 에 박혀 있다, ALPHA-705). 뉴스 세션에
-        그대로 부르면 같은 날짜의 무관한 가격 객체를 훑거나 아무것도 못 훑고
-        **"orphan 0건"으로 확정**된다 — 안 본 것을 없는 것으로 보고하는 게 여기서
-        가장 나쁜 실패다. 그래서 훑었는지를 함께 돌려준다.
-        """
-        if session["dataset"] != _PRICE_DATASET:
-            logger.info(
-                "orphan 스캔 생략 — dataset=%s 는 가격 분봉 경로 규약이 아니다(session=%s)",
-                session["dataset"], session_id,
-            )
-            return [], False
-        return find_orphan_artifacts(
-            db=self.ledger.db, connect_fn=self.ledger.connect_fn, storage=self.storage,
-            session_id=session_id, market=_MARKET,
-            session_date=session["session_date"].isoformat(),
-        ), True
+    @staticmethod
+    def _artifact_violations(result: dict) -> list[str]:
+        """검사하지 못했거나 승자/후보 무결성이 깨지면 EOD 성공으로 봉인하지 않는다."""
+        if result["supported"] and not result["ok"]:
+            return ["minute artifact 대사 실패 — artifact_reconciliation의 오류를 확인하라"]
+        return []
 
     @staticmethod
     def _violations(session: dict, rows: list, counts: dict) -> list[str]:

@@ -1141,6 +1141,21 @@ settings.targets.keywords            # ["금리", ...]
 - 신형 승자가 있는 세션에 legacy writer의 기동·쓰기는 거부된다. 활성화 전에 두 호환 reader
   배포·이력 migration·사전검사·구 writer drain을 확인해야 한다. 신형 세션을 legacy로
   되돌리는 대신 쓰기를 멈추고 content_v2 지원 이미지로 복귀한다. 호환 reader/스키마는 유지한다.
+- `reconcile-minute-artifacts`는 가격·iNAV·업종 모두 DB 현재 승자와 확정 이력을 같은
+  snapshot에서 읽고 manifest/artifact identity·checksum을 검증한다. 보고서는
+  `committed_current`, `committed_history`, `uncommitted_candidate`, `legacy_unverified`,
+  `integrity_error`, `scan_complete`를 구분한다. 과거 generation 숫자만으로 확정을 추측하지
+  않는다. artifact만 저장된 후보도 발견하며, DB 참조 없는 legacy 객체는 보존한다.
+- 기본 대사는 읽기 전용이다. ACTIVE 등 열린 세션 결과는 `provisional=true`이고 격리를
+  거부한다. DRAINED/QC_RUNNING/FINALIZED/FAILED에서는 writer DB 확정이 닫혀 있으므로
+  전체 검사 성공 후 미확정 내용 주소 후보만 논리 격리할 수 있다. 원본은 삭제/이동/덮어쓰지
+  않는다. URI/checksum·사유·실행자를 담은 기록은
+  `operations_archive/minute_artifact_quarantine/session_id=S/content=SHA/record.json`에
+  불변 저장한다. 같은 인자 재실행은 같은 기록이며, 중간 기록 실패 후 재시도도 수렴한다.
+  늦은 옛 writer PUT은 다음 스캔에서 발견될 수 있으므로 목록은 실행 시점의 snapshot이다.
+- EOD는 세 레인의 대사를 결과에 포함한다. 유효한 미확정 후보 자체는 세션 확정을 막지 않지만,
+  DB/LIST/객체 조회 실패 또는 무결성 오류는 성공으로 봉인하지 않는다. 뉴스·공시는 이 스캔의
+  대상이 아니며 `supported=false`, `scan_complete=false`로 표시한다.
 - `put_immutable`은 모든 기존 호출자에도 조건부 생성(`If-None-Match: *`)을 적용한다.
   충돌 시 GET 해시가 같은 객체만 재사용하며 다른 바이트는 오류다. 충돌 후 객체가 없으면
   최대 3회의 조건부 PUT/GET 뒤 일시 실패로 올린다. 권한·네트워크 오류는 그대로 전파한다.
@@ -1149,6 +1164,46 @@ settings.targets.keywords            # ["금리", ...]
   게시한다. 인스턴스·프로세스가 달라도 기존 객체를 덮지 않는다. `.storage-put-`로 시작하는
   파일명은 내부 임시 파일용으로 예약해 LIST에서 제외하며 정상·예외 종료 시 정리한다.
   기존 version을 교체하는 로컬 CAS의 보장 범위는 같은 인스턴스 내부로 유지된다.
+
+대사 실행 예시(`src/`에서 실행, 운영 DB 접속용 `DATA_PIPELINE_DB__*`와 S3 storage 설정을
+이미 주입한 환경). 대상 `SESSION_ID`는 원장에서 조회한 세션 ID다. 자격·설정·조회/격리 기록
+실패는 exit 2, 무결성 위반(참조 객체 404 포함)은 exit 1, 완전한 대사/요청 격리만 exit 0이다.
+S3 접근 거부·timeout은 무결성 판정과 구분하며 EOD도 QC_RUNNING에서 재시도할 수 있게 남긴다.
+
+```bash
+uv run python -m data_pipeline.run reconcile-minute-artifacts --session-id "$SESSION_ID"
+uv run python -m data_pipeline.run reconcile-minute-artifacts --session-id "$SESSION_ID" \
+  --quarantine --actor operator --reason "closed session reconciliation"
+```
+
+전환 사전검사는 **운영자 AWS 조회 자격**으로 실행한다. ECS/ECR·Scheduler GetSchedule 조회, IAM
+`SimulatePrincipalPolicy`, S3 lifecycle/policy/encryption 조회와 DB 읽기 권한이 필요하며,
+이 API 권한을 상주 writer 역할에 추가하지 않는다. `PIPELINE_DIGEST`와 `ANALYSIS_DIGEST`는
+각각 CI/CD가 검증한 이미지의 `sha256:...` 값이다. 현재 실행 task의 digest뿐 아니라
+minute-session(EOD reader)과 desired 0 서비스의 다음 기동 digest를 대조한다. 분석 서비스의
+desired 0 배포는 이미지 push 이후의 새 deployment여야 한다. start·stop·업종 롤업 Scheduler의
+실제 target revision/cluster/전체 command도 검증한 minute-session 정의와 일치해야 한다.
+worker·consumer·planner의 필수 universe URI, dataset/source 인자를 서로 대조하며
+universe 객체도 실제로 읽어 검증한다. 미검증 environment/role override는 전환을 막는다.
+별도 family로 실행한 reader도 실제 명령으로 식별하며, 승인된 task revision·image·명령과
+다른 reader는 전환을 막는다.
+
+```bash
+AWS_PROFILE=edge uv run python -m data_pipeline.minute.artifact_preflight \
+  --cluster edge-dev-worker --service-prefix edge-dev-data-pipeline \
+  --bucket edge-dev-pipeline-lake --pipeline-digest "$PIPELINE_DIGEST" \
+  --analysis-digest "$ANALYSIS_DIGEST"
+```
+
+migration `202609071200`, 세 레인의 닫힌 최신 세션·미종료 과거 세션/claim 0,
+기존 writer service desired/running 0 및 STOPPING 포함 writer·세션 시작 태스크 0, 호환 reader·실제/다음
+기동 이미지, 필수 S3 권한과 보존 경로의 lifecycle 비충돌을 모두 확인해야
+`activation_allowed=true`/exit 0이다. 미확인·진행 중·실패는 exit 2다. IAM 허용을
+bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bucket policy 없음/SSE-S3
+계약도 대조한다. 다른 policy·암호화 구성은 별도 검증 전까지 통과시키지 않는다.
+사전검사 PASS는 조회 시점 증거이며 CI/CD 성공을 대신하지 않는다. 활성화 직전에 재실행하고,
+자동 Terraform apply가 세션을 가로지르지 않도록 다음 세션 시작 전 여유를 확보한다.
+
 
 수집물은 단일 lake 버킷(예: dev `s3://edge-dev-pipeline-lake/`, 또는 local 스텁)에 쓴다.
 경로 규약의 SSOT 는 [`lake/storage.py`](src/data_pipeline/lake/storage.py)의 빌더다.

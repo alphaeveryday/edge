@@ -385,13 +385,20 @@ resource "aws_iam_role_policy" "minute_session" {
       },
       {
         # 5분 파생 산출 (ALPHA-955 — `rollup-minute-session`). 이 태스크가 레이크에
-        # 만드는 **유일한** 것이고, 그래서 프리픽스를 그 하나로 못박는다
+        # 만드는 파생 데이터이므로 프리픽스를 한정한다
         # (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례).
         # 없으면 매일 AccessDenied 다. Scheduler 자체는 RunTask 제출까지만 보지만 아래
         # ECS Task State Change rule 이 이 task family의 exit≠0 을 알람 토픽으로 올린다.
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = ["${var.lake_bucket_arn}/canonical/market_data/intraday_5m/*"]
+      },
+      {
+        # ALPHA-1060: 닫힌 세션 미확정 후보의 불변 논리 격리 기록만 생성한다.
+        # 원본 canonical/manifest의 수정·삭제·이동 권한은 추가하지 않는다.
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${var.lake_bucket_arn}/operations_archive/minute_artifact_quarantine/*"]
       },
       {
         Effect = "Allow"

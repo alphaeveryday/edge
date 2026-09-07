@@ -1244,6 +1244,16 @@ def minute_content_manifest_key(
     )
 
 
+def minute_artifact_quarantine_key(session_id: str, record_checksum: str) -> str:
+    """논리 격리 기록의 내용 주소. 원본 객체 경로와 겹치지 않고 재실행은 같은 기록이다."""
+    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+        raise ValueError("session_id 파티션 값 오류")
+    if not isinstance(record_checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", record_checksum):
+        raise ValueError("record_checksum 은 lowercase SHA-256 이어야 한다")
+    return (f"operations_archive/minute_artifact_quarantine/session_id={session_id}"
+            f"/content={record_checksum}/record.json")
+
+
 def minute_window_manifest_key(
     dataset: str, source: str, market: str, session_date: str,
     window_start_hhmm: str, generation: int,

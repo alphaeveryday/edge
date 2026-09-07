@@ -37,6 +37,7 @@ from .minute.news_consumer import news_consumer_cli
 from .minute.disclosure_worker import disclosure_worker_cli
 from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
+from .minute.reconciliation import reconcile_artifacts_cli
 from .minute.rollup import ROLLUP_DATASETS, rollup_session_cli
 from .minute.session_cli import drain_session_cli, plan_session_cli
 from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
@@ -237,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                  # EOD(ALPHA-693): qc-minute-session=drain 끝난 세션의 누락 확정·확정
                  # (DUE 잔존→MISSING, FINALIZED). 원장 DB + storage(orphan 나열) 필요.
                  "qc-minute-session",
+                 "reconcile-minute-artifacts",
                  # EOD(ALPHA-839): rollup-minute-session=그날 5분 파생을 마감 후 1회
                  # 확정. 커밋 후크는 "방금 닫힌 버킷"에서만 발화해 지나간 날을 영영 안
                  # 채운다. 원장 DB + storage(파티션 PUT·구멍 판정) 필요.
@@ -358,8 +360,12 @@ def main(argv: list[str] | None = None) -> int:
                              "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
                              "있는 세션까지 확정하거나 drain 을 건다")
     parser.add_argument("--reason", default=None,
-                        help="redrive: 왜 되살리는지(필수). 대체되는 delivery event 행에 "
+                        help="redrive·reconcile-minute-artifacts: 수동 개입 사유. delivery event 또는 격리 기록에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
+    parser.add_argument("--quarantine", action="store_true",
+                        help="reconcile-minute-artifacts: 닫힌 세션의 미확정 후보를 논리 격리")
+    parser.add_argument("--actor", default=None,
+                        help="reconcile-minute-artifacts --quarantine: 격리 실행자(필수)")
     parser.add_argument("--job-id", default=None,
                         help="redrive: 되살릴 job_id(결정적 ID). 대상은 **막힌 것**이다 — "
                              "DEAD job 이거나 Relay 가 발행 불가로 격리한 DEAD delivery event. "
@@ -402,7 +408,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.kind or not args.job_id or not (args.reason or "").strip():
             raise SystemExit("redrive 는 --kind·--job-id·--reason 이 모두 필요하다")
     elif (args.kind is not None or args.job_id is not None
-          or args.reason is not None or args.destination is not None):
+          or (args.reason is not None and args.step != "reconcile-minute-artifacts")
+          or args.destination is not None):
         raise SystemExit(
             "--kind·--job-id·--reason·--destination 은 redrive 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
@@ -412,10 +419,16 @@ def main(argv: list[str] | None = None) -> int:
     # 운영자는 명령이 먹은 줄 안다.
     # ⚠️ `--session-id` 결손은 여기서 막지 **않는다** — SystemExit 은 프로세스 1 로 나가는데,
     # QC 의 1 은 "원장이 스스로와 모순"이라는 뜻이다. 결손은 판정 불가(2)라 CLI 가 처리한다.
-    if args.step not in ("qc-minute-session", "drain-minute-session") \
+    if args.step != "reconcile-minute-artifacts" and (args.quarantine or args.actor is not None):
+        raise SystemExit("--quarantine·--actor 는 reconcile-minute-artifacts 전용이다")
+    if args.step == "reconcile-minute-artifacts" and not args.quarantine and (
+        args.actor is not None or args.reason is not None
+    ):
+        raise SystemExit("--actor·--reason 은 --quarantine과 함께 쓴다")
+    if args.step not in ("qc-minute-session", "drain-minute-session", "reconcile-minute-artifacts") \
             and args.session_id is not None:
         raise SystemExit(
-            "--session-id 는 qc-minute-session·drain-minute-session 에서만 쓴다 — "
+            "--session-id 는 qc-minute-session·drain-minute-session·reconcile-minute-artifacts 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step not in ("plan-minute-session", "start-minute-session",
@@ -545,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
         return dlq_reconcile_cli(settings, max_ticks=args.max_ticks)
     if args.step == "qc-minute-session":
         return qc_session_cli(settings, session_id=args.session_id)
+    if args.step == "reconcile-minute-artifacts":
+        return reconcile_artifacts_cli(settings, session_id=args.session_id,
+                                       quarantine=args.quarantine, actor=args.actor, reason=args.reason)
     if args.step == "rollup-minute-session":
         return rollup_session_cli(settings, dataset=args.dataset,
                                   source_group=args.source_group,
