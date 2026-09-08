@@ -10,6 +10,7 @@ import logging
 import os
 from datetime import datetime, time, timedelta, timezone
 
+from ..failures import validated_failure
 from ..lake import Storage, collection_log_prefix, quality_log_prefix
 from . import catalog, planner, reconciler, states, wrapper
 from . import contracts
@@ -261,6 +262,27 @@ def _observe_from_log(
     # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).
     if "received_count" in ops:
         signals["received_count"] = ops["received_count"]
+    if "failure" in ops:
+        failure = validated_failure(ops["failure"])
+        if failure is None:
+            # 값 자체를 로그에 찍으면 이 검증이 막으려던 비밀값을 다시 CloudWatch에 복사한다.
+            logger.warning("안전 실패 구조가 유효하지 않음(task=%s run_id=%s)", task_key, run_id)
+        failure_is_current = log.get("run_id") == run_id
+        if failure_is_current and not_before is not None:
+            try:
+                failure_started_at = datetime.fromisoformat(
+                    str(log["started_at"]).replace("Z", "+00:00")
+                )
+                failure_is_current = (
+                    failure_started_at.tzinfo is not None
+                    and failure_started_at >= not_before
+                )
+            except (KeyError, TypeError, ValueError):
+                failure_is_current = False
+        if failure is not None and failure_is_current:
+            signals["failure"] = failure
+        elif failure is not None:
+            logger.warning("현재 시도의 안전 실패 구조가 아님(task=%s run_id=%s)", task_key, run_id)
     # 엔티티 해소율은 LOAD_ASSERTIONS만 선택적으로 내는 저장 전용 pair다. 여기서 비율을
     # 재계산하거나 기본값을 만들지 않는다 — producer가 센 같은 시도의 원시 카운터를 보존한다.
     for key in ("entity_resolution_arguments_total", "entity_resolution_arguments_resolved"):

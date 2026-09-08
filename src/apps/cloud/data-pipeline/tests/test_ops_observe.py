@@ -13,9 +13,13 @@ from datetime import datetime
 
 import pytest
 
+from data_pipeline.config import DbConfig
 from data_pipeline.lake import LocalStorage, collection_log_key, quality_log_key
 from data_pipeline.ops import catalog, entry as ops_entry, states, wrapper
 from data_pipeline.ops.entry import _observe_from_log
+from data_pipeline.ops.ledger import Ledger
+
+from opsfakes import FakeOpsDB
 
 _RUN = "20260725T060000Z"
 
@@ -98,6 +102,97 @@ def test_optional_received_count_flows_at_entity_grain(tmp_path):
     signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
     assert signals["records_out"] == 4120
     assert signals["received_count"] == 32
+
+
+def test_safe_failure_flows_to_attempt_reason(tmp_path):
+    # WHY(ALPHA-1064): collection_log에 이미 있는 실제 원인이 generic step_nonzero_exit로
+    # 사라지면 대시보드만 보고 인증 실패를 복구할 수 없다.
+    storage = _storage(tmp_path)
+    entry = _entry("ETF_HOLDINGS_COLLECTION_KRX")
+    failure = {
+        "category": "AUTHENTICATION", "code": "KRX_CD010",
+        "summary": "KRX 패스워드 변경 필요",
+    }
+    _write_log(storage, entry, {
+        "run_id": _RUN, "status": "error",
+        "ops": {"records_out": 0, "failed_records": 0, "failure": failure},
+    })
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 1)
+    assert signals["failure"] == failure
+
+    db = FakeOpsDB()
+    expected = {
+        "expected_task_id": "et1", "pipeline_run_id": _RUN,
+        "task_key": entry.task_key, "plan_status": "DUE", "task_outcome": "PENDING",
+        "data_status": "UNKNOWN", "required": True, "expected_count": None,
+        "dataset_contract_key": None, "expected_as_of_date": None,
+    }
+    db.etasks[(_RUN, entry.task_key)] = expected
+    db.etasks_by_id["et1"] = expected
+    wrapper.instrument(
+        lambda: 1, task_key=entry.task_key, run_id=_RUN,
+        ledger=Ledger(db=DbConfig(password="x"), connect_fn=db.connect),
+        ecs_task_arn="arn:task/krx", observe_data_fn=lambda ec: signals,
+    )
+    assert db.attempts[-1]["failure_reason"] == (
+        "[인증 실패] KRX_CD010 · KRX 패스워드 변경 필요"
+    )
+
+    # 같은 run의 재시도가 성공 로그로 바뀌면 앞 시도의 인증 사유를 물려받지 않는다.
+    # WHY: 복구된 응답에도 빨간 원인이 남으면 운영자가 성공한 재시도를 다시 실행한다.
+    _write_log(storage, entry, {
+        "run_id": _RUN, "status": "success",
+        "ops": {"records_out": 1, "failed_records": 0},
+    })
+    recovered = _observe_from_log(storage, entry.task_key, _RUN, 0)
+    wrapper.instrument(
+        lambda: 0, task_key=entry.task_key, run_id=_RUN,
+        ledger=Ledger(db=DbConfig(password="x"), connect_fn=db.connect),
+        ecs_task_arn="arn:task/krx-retry", observe_data_fn=lambda ec: recovered,
+    )
+    assert db.attempts[-1]["status"] == states.EXEC_SUCCEEDED
+    assert db.attempts[-1]["failure_reason"] is None
+
+
+def test_untrusted_failure_structure_is_not_logged_or_forwarded(tmp_path, caplog):
+    # WHY: 구조 필드에 원문을 넣은 producer가 생겨도 observer가 비밀을 CloudWatch/원장에
+    # 재복사하면 안 된다. 등록 어휘와 다르면 generic 실패로 강등한다.
+    storage = _storage(tmp_path)
+    entry = _entry("ETF_HOLDINGS_COLLECTION_KRX")
+    secret = "token=sensitive"
+    _write_log(storage, entry, {
+        "run_id": _RUN, "status": "error",
+        "ops": {"records_out": 0, "failed_records": 0,
+                "failure": {"category": "AUTHENTICATION", "code": "KRX_CD010",
+                            "summary": secret}},
+    })
+
+    with caplog.at_level(logging.WARNING):
+        signals = _observe_from_log(storage, entry.task_key, _RUN, 1)
+    assert "failure" not in signals
+    assert secret not in caplog.text
+
+
+def test_previous_attempt_failure_is_not_reused_by_retry(tmp_path):
+    # WHY(ALPHA-1064): 같은 run_id의 재시도가 새 로그를 쓰기 전에 끝나도 앞 시도의 인증
+    # 원인을 현재 시도에 복사하면 복구 판단이 거짓이 된다. attempt 시작 하한으로 거른다.
+    storage = _storage(tmp_path)
+    entry = _entry("ETF_HOLDINGS_COLLECTION_KRX")
+    _write_log(storage, entry, {
+        "run_id": _RUN, "started_at": "2026-07-25T06:00:00+00:00", "status": "error",
+        "ops": {"records_out": 0, "failed_records": 0, "failure": {
+            "category": "AUTHENTICATION", "code": "KRX_CD010",
+            "summary": "KRX 패스워드 변경 필요",
+        }},
+    })
+
+    signals = _observe_from_log(
+        storage, entry.task_key, _RUN, 1,
+        not_before=datetime.fromisoformat("2026-07-25T06:01:00+00:00"),
+    )
+
+    assert "failure" not in signals
 
 
 def test_optional_entity_resolution_pair_flows_without_reinterpretation(tmp_path):

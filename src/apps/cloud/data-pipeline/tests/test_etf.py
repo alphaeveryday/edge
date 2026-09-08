@@ -5,6 +5,7 @@ import json
 import pytest
 
 from data_pipeline.config import EtfSource
+from data_pipeline.failures import SafeFailureError
 from data_pipeline.sources.etf import FmpEtfSource
 from data_pipeline.sources.http import StopFetch
 
@@ -72,6 +73,16 @@ def test_stopfetch_aborts_whole_source():
     src = _source({"SPY": StopFetch("429 rate limit")})
     with pytest.raises(StopFetch):
         list(src.fetch())
+
+
+def test_network_retry_exhaustion_aborts_whole_source_as_transient():
+    # WHY(ALPHA-1064): 공급자 네트워크 장애를 ETF 하나의 부분 실패로 삼키면 운영자가
+    # 재시도 가능한 장애를 데이터 결손으로 오판한다. 안전 분류를 스텝까지 보존해야 한다.
+    src = _source({"SPY": SafeFailureError("NETWORK_RETRY_EXHAUSTED")})
+    with pytest.raises(SafeFailureError) as caught:
+        list(src.fetch())
+    assert caught.value.detail()["category"] == "TRANSIENT"
+    assert src.fetch_failures == []
 
 
 def test_disabled_without_api_key():

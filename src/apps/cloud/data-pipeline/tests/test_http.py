@@ -7,11 +7,13 @@ get() 계약은 그대로여야 한다 — 이 회귀를 코드로 잠근다.
 
 import io
 import time
+import traceback
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from data_pipeline.failures import SafeFailureError
 from data_pipeline.sources.http import PoliteClient, StopFetch
 
 
@@ -87,6 +89,23 @@ def test_request_stops_on_4xx(monkeypatch):
         _client(monkeypatch, handler).request("GET", "https://x.example/y")
 
 
+def test_4xx_body_is_available_to_adapter_but_not_exception_text(monkeypatch):
+    # WHY(ALPHA-1064): 어댑터는 벤더 코드를 판정하려고 body가 필요하지만 str(exc)를 S3에 쓰는
+    # 수집기는 토큰·요청 전문까지 복사하면 안 된다.
+    secret = "account=fake-identifier&token=sensitive"
+
+    def handler(req):
+        raise urllib.error.HTTPError(
+            req.full_url, 403, "forbidden", {}, io.BytesIO(secret.encode())
+        )
+
+    with pytest.raises(StopFetch) as caught:
+        _client(monkeypatch, handler).request("GET", "https://x.example/y")
+
+    assert caught.value.body == secret
+    assert secret not in str(caught.value)
+
+
 def test_request_retries_5xx_then_succeeds(monkeypatch):
     # WHY: 일시적 5xx 는 백오프 재시도로 흡수해야 한 번의 서버 딸꾹질이 수집을 죽이지 않는다.
     calls = {"n": 0}
@@ -102,12 +121,17 @@ def test_request_retries_5xx_then_succeeds(monkeypatch):
 
 
 def test_request_raises_after_retry_exhaustion(monkeypatch):
-    # WHY: 재시도를 다 써도 실패하면 조용히 빈 결과가 아니라 RuntimeError 로 드러내야 한다.
-    def handler(req):
-        raise urllib.error.URLError("network down")
+    # WHY: 재시도를 다 써도 실패하면 조용히 빈 결과가 아니라 안전한 일시 장애로 드러내되,
+    #      원본 네트워크 예외의 URL·자격증명은 traceback에도 이어 붙이지 않는다.
+    secret = "proxy-password=sensitive"
 
-    with pytest.raises(RuntimeError):
+    def handler(req):
+        raise urllib.error.URLError(secret)
+
+    with pytest.raises(SafeFailureError) as caught:
         _client(monkeypatch, handler).request("GET", "https://x.example/y")
+    assert caught.value.detail()["category"] == "TRANSIENT"
+    assert secret not in "".join(traceback.format_exception(caught.value))
 
 
 class _FakeClock:

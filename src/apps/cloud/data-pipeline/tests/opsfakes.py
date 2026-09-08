@@ -286,6 +286,7 @@ class _Cursor:
         a = next((x for x in self.db.attempts if x["attempt_id"] == p[-1]), None)
         if a:
             a["status"] = p[0]; a["exit_code"] = p[1]
+            a["failure_reason"] = p[2]
             if len(p) == 7:
                 a["entity_resolution_arguments_total"] = p[4]
                 a["entity_resolution_arguments_resolved"] = p[5]

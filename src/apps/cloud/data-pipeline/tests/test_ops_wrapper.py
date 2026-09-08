@@ -344,6 +344,10 @@ def test_step_exception_closes_the_attempt_instead_of_leaving_it_running():
                            ecs_task_arn="arn:task/1")
     assert len(db.attempts) == 1
     assert db.attempts[0]["status"] == states.EXEC_FAILED     # RUNNING 으로 안 남는다
+    assert db.attempts[0]["failure_reason"] == (
+        "[원인 미분류] UNHANDLED_EXCEPTION · 처리되지 않은 예외"
+    )
+    assert "--from" not in db.attempts[0]["failure_reason"]  # 예외 원문은 장기 보존하지 않는다
     assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FAILED
     assert db.etasks_by_id["et1"]["data_status"] == states.DATA_UNKNOWN
 

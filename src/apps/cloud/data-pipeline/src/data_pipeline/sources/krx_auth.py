@@ -21,9 +21,12 @@ PoliteClient(운반 코어)는 응답 헤더(Set-Cookie)를 노출하지 않아 
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.cookiejar import CookieJar
+
+from ..failures import SafeFailureError, http_failure, krx_login_failure
 
 LOGIN_PAGE = "https://data.krx.co.kr/contents/MDC/COMS/client/view/login.jsp?site=mdc"
 LOGIN_ENDPOINT = "https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001D1.cmd"
@@ -54,30 +57,38 @@ class KrxAuth:
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         headers = {"User-Agent": USER_AGENT}
 
-        # 1) 초기 JSESSIONID 확보 — 이 쿠키를 로그인 POST 가 이어받아 서버가 승격한다.
-        opener.open(
-            urllib.request.Request(LOGIN_PAGE, headers=headers), timeout=self.timeout
-        ).read()
+        try:
+            # 1) 초기 JSESSIONID 확보 — 이 쿠키를 로그인 POST 가 이어받아 서버가 승격한다.
+            opener.open(
+                urllib.request.Request(LOGIN_PAGE, headers=headers), timeout=self.timeout
+            ).read()
 
-        # 2) 로그인 POST — mbrId/pw 평문(캡차·암호화 없음, 라이브 실측). 빈 필드도 그대로 보낸다.
-        body = urllib.parse.urlencode(
-            {"mbrNm": "", "telNo": "", "di": "", "certType": "",
-             "mbrId": self.mbr_id, "pw": self.pw}
-        ).encode("utf-8")
-        raw = opener.open(
-            urllib.request.Request(
-                LOGIN_ENDPOINT, data=body,
-                headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
-            ),
-            timeout=self.timeout,
-        ).read()
+            # 2) 로그인 POST — mbrId/pw 평문(캡차·암호화 없음, 라이브 실측). 빈 필드도 그대로 보낸다.
+            body = urllib.parse.urlencode(
+                {"mbrNm": "", "telNo": "", "di": "", "certType": "",
+                 "mbrId": self.mbr_id, "pw": self.pw}
+            ).encode("utf-8")
+            raw = opener.open(
+                urllib.request.Request(
+                    LOGIN_ENDPOINT, data=body,
+                    headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+                ),
+                timeout=self.timeout,
+            ).read()
+        except urllib.error.HTTPError as exc:
+            # HTTPError는 URLError 하위 타입이다. 인증 거부를 네트워크 장애로 뭉개지 않게
+            # 상태 코드만 허용 목록으로 분류하고 응답 본문·URL은 버린다.
+            raise SafeFailureError(http_failure(exc.code)["code"]) from None
+        except (urllib.error.URLError, TimeoutError) as exc:
+            # 네트워크 예외 문자열에는 URL·프록시 정보가 들어갈 수 있어 고정 어휘로 바꾼다.
+            raise SafeFailureError("NETWORK_RETRY_EXHAUSTED") from None
 
         data = json.loads(raw.decode("utf-8", errors="replace"))
         code = data.get("_error_code")
         if code != "CD001":
-            # CD011=중복 로그인(전용 계정 위반), 그 외=자격증명·폼 오류 — 조용히 넘기지 않고 fail-loud.
-            detail = data.get("_error_msg") or data
-            raise RuntimeError(f"KRX 로그인 실패: {code} ({detail})")
+            # 응답 객체에는 MBR_NO 같은 계정 식별자가 섞인다. 코드만 허용 목록으로 축약하고
+            # 메시지·응답 전문은 예외/S3/원장 어느 곳에도 복사하지 않는다(ALPHA-1064).
+            raise krx_login_failure(code)
 
         jsessionid = next((c.value for c in jar if c.name == "JSESSIONID"), None)
         if not jsessionid:

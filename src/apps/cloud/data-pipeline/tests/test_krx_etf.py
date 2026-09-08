@@ -12,6 +12,7 @@ from datetime import date, datetime
 import pytest
 
 from data_pipeline.config import KrxEtfSource as KrxEtfSourceConfig
+from data_pipeline.failures import SafeFailureError
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.krx_etf import KST, KrxEtfSource, _as_of, _short_code
 
@@ -171,6 +172,16 @@ def test_stopfetch_aborts_whole_source():
     src = _source({"KR7069500007": StopFetch("400 LOGOUT")})
     with pytest.raises(StopFetch):
         list(src.fetch())
+
+
+def test_network_retry_exhaustion_aborts_whole_source_as_transient():
+    # WHY(ALPHA-1064): 전송 계층의 재시도 소진을 ETF 격리 실패로 바꾸면 TRANSIENT가
+    # PARTIAL로 변질된다. 운영 재시도 판단에 쓰는 안전 분류를 스텝까지 보존한다.
+    src = _source({"KR7069500007": SafeFailureError("NETWORK_RETRY_EXHAUSTED")})
+    with pytest.raises(SafeFailureError) as caught:
+        list(src.fetch())
+    assert caught.value.detail()["category"] == "TRANSIENT"
+    assert src.fetch_failures == []
 
 
 def test_disabled_without_credentials():

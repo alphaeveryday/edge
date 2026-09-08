@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..config import Settings
 from ..lake import Storage, collection_log_key, raw_etf_partition
+from ..failures import SafeFailureError, failure_detail, http_failure, render_failure
 from ..sources import FmpEtfSource, KisNavSource, KrxEtfSource, StopFetch
 
 # 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 ETF 어댑터로
@@ -100,6 +101,7 @@ def run(
     actual_as_of_values: list[object] = []
     fetched = 0
     status, error, reason = "success", None, None
+    failure: dict[str, str] | None = None
     exit_code = 0
 
     try:
@@ -116,13 +118,19 @@ def run(
                 actual_as_of_values.append(record.get(evidence_field))
     except StopFetch as exc:
         # 4xx/429 — 부분 수집분은 저장하고 상태로 드러낸다(조용한 성공 금지).
-        logger.error("ETF 수집 중단(4xx/429): %s", exc)
-        status, error, exit_code = "stopped", str(exc), 1
+        failure = http_failure(exc.status)
+        logger.error("ETF 수집 중단(4xx/429): %s", render_failure(failure))
+        status, error, exit_code = "stopped", render_failure(failure), 1
+    except SafeFailureError as exc:
+        failure = exc.detail()
+        logger.error("ETF 수집 실패: %s", render_failure(failure))
+        status, error, exit_code = "error", render_failure(failure), 1
     except Exception as exc:
         # 예기치 못한 실패(재시도 소진 등)도 '결과는 항상 collection_log' 계약을 지킨다 —
         # 부분 수집분 저장 + status=error 로 남기고 비0 종료.
         logger.exception("ETF 수집 실패")
-        status, error, exit_code = "error", str(exc), 1
+        failure = failure_detail("COLLECTION_FAILED")
+        status, error, exit_code = "error", render_failure(failure), 1
 
     # raw 저장도 계약("결과는 항상 collection_log") 안에 둔다 — put_bytes 가 실패
     # (IAM·네트워크·부분 쓰기)해도 예외를 삼켜 status=error 로 남기고 로그를 쓴다.
@@ -135,16 +143,18 @@ def run(
             saved += len(records)
     except Exception as exc:
         logger.exception("raw 저장 실패")
-        status, error, exit_code = "error", str(exc), 1
+        failure = failure_detail("STORAGE_WRITE_FAILED")
+        status, error, exit_code = "error", render_failure(failure), 1
 
     # ETF 단위로 격리한 실패를 런 상태에 반영한다(격리≠은폐 — fail loud).
     #  - 저장분 있고 일부 실패 → partial(성공했지만 온전치 않음)
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     failed_etfs = getattr(source, "fetch_failures", [])
     if status == "success" and failed_etfs:
+        failure = failure_detail("PARTIAL_COLLECTION")
         if saved == 0:
             status, exit_code = "error", 1
-            error = f"모든 수집 ETF 실패 ({len(failed_etfs)}건)"
+            error = render_failure(failure)
         else:
             status, exit_code = "partial", 1
 
@@ -170,6 +180,7 @@ def run(
             # 원장 관측용 공통 봉투(ALPHA-181). ETF 단위 실패는 그 ETF 구성 전량 유실이다.
             "ops": {"records_out": saved, "failed_records": len(failed_etfs),
                     "received_count": len(received_etf_ids),
+                    **({"failure": failure} if failure is not None else {}),
                     **({"actual_as_of_values": actual_as_of_values}
                        if getattr(source, "actual_as_of_field", None) else {})},
         })

@@ -22,6 +22,7 @@ import urllib.request
 from collections.abc import Callable
 from datetime import datetime
 
+from ..failures import failure_detail, render_failure
 from . import catalog, contracts, states
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
@@ -266,7 +267,9 @@ def instrument(
         if attempt_id is not None:
             _safe(lambda: ledger.record_attempt_end(
                 attempt_id, execution_status=states.EXEC_FAILED, exit_code=None,
-                failure_reason=f"{type(exc).__name__}: {exc}"[:500],
+                # 예외 문자열은 토큰·요청 전문·계정 식별자를 포함할 수 있다. 상세는 traceback에
+                # 남기고 장기 보존되는 원장에는 고정된 안전 어휘만 쓴다(ALPHA-1064).
+                failure_reason=render_failure(failure_detail("UNHANDLED_EXCEPTION")),
                 data_status=states.DATA_UNKNOWN,
             ))
         _safe(lambda: ledger.update_task_outcome(
@@ -323,7 +326,7 @@ def instrument(
     if attempt_id is not None:
         _safe(lambda: ledger.record_attempt_end(
             attempt_id, execution_status=exec_status, exit_code=exit_code,
-            failure_reason=None if exit_code == 0 else "step_nonzero_exit",
+            failure_reason=None if exit_code == 0 else render_failure(signals.get("failure")),
             data_status=data_status,
             entity_resolution_counters=entity_resolution_counters,
         ))

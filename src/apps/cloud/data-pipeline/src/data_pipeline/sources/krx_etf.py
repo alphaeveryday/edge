@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 
 from ..config import KrxEtfSource as KrxEtfSourceConfig
+from ..failures import SafeFailureError
 from ..ops.trading_calendar import latest_kr_trading_day
 from .http import PoliteClient, StopFetch
 from .krx_auth import USER_AGENT, KrxAuth
@@ -166,6 +167,8 @@ class KrxEtfSource:
                 yield from self._fetch_etf(our_etf_id, isin, trd_dd, jsessionid, fetched_at)
             except StopFetch:
                 raise  # 4xx/429(미로그인 LOGOUT 포함) 는 소스 전체 문제 — 중단이 맞다
+            except SafeFailureError:
+                raise  # 재시도 소진은 공급자 전체 장애 — partial 로 격리하지 않는다
             except Exception as exc:
                 # 요청 실패·깨진 JSON·이상/빈 응답은 ETF 단위로 격리 — 남은 ETF 계속.
                 self._note_failure(isin, our_etf_id, str(exc))
