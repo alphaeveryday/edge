@@ -8,22 +8,15 @@
 -- schema-migrate 재실행에서 다시 시도한다.
 SET LOCAL lock_timeout = '3s';
 
--- schema와 writer는 별도 배포다. 새 writer가 올라오기 전 구 writer가 만든 행은 NULL로
--- 남겨 "발행 의도 미기록"을 보존한다. 이를 TRUE로 default하면 그 사이의 과거 백필이
--- 영구 전달 실패로 오분류된다. writer 전환·검증 뒤 별도 수축 단계에서 NOT NULL로 닫는다.
+-- schema와 writer는 별도 배포다. ADD 시점의 constant DEFAULT는 PG 11+ fast default로 기존
+-- tuple에만 TRUE를 읽히게 한 뒤 같은 transaction에서 즉시 제거한다. 그래서 DDL 전에 있던
+-- 행은 이후 status UPDATE로 tuple xmin이 바뀌어도 TRUE를 보존하고, DDL commit 뒤 구 writer가
+-- 컬럼을 생략해 만든 행은 NULL(의도 미기록)이다. writer 전환 뒤 별도 수축 단계에서 닫는다.
 ALTER TABLE price_window_job
-    ADD COLUMN delivery_expected BOOLEAN;
+    ADD COLUMN delivery_expected BOOLEAN DEFAULT TRUE;
 
--- 다음 migration이 DDL 시점에 이미 commit되어 보이던 행 집합만 복원한다. transaction 시작
--- 시각(created_at)은 DDL 전이지만 INSERT commit은 DDL 뒤인 구 writer도 있으므로 시각 cutoff로
--- 판정하지 않는다. PostgreSQL snapshot의 XID visibility를 쓰고 marker는 다음 migration이 제거한다.
-CREATE TABLE migration_alpha1066_price_delivery_snapshot (
-    singleton       BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-    pre_ddl_snapshot PG_SNAPSHOT NOT NULL
-);
-
-INSERT INTO migration_alpha1066_price_delivery_snapshot (pre_ddl_snapshot)
-VALUES (pg_current_snapshot());
+ALTER TABLE price_window_job
+    ALTER COLUMN delivery_expected DROP DEFAULT;
 
 COMMENT ON COLUMN price_window_job.delivery_expected IS
 '이 job의 현재 세대가 PriceWindowCommitted outbox를 가져야 하는지 여부. 실시간=true, 과거일 백필=false(ALPHA-863), 구 writer 전환 구간의 미기록=NULL.';
