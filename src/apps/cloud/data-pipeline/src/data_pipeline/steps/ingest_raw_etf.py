@@ -154,11 +154,12 @@ def run(
     #  - 저장분 0인데 실패 있음 → error(수집이 사실상 실패)
     failed_etfs = getattr(source, "fetch_failures", [])
     if status == "success" and failed_etfs:
-        failure = failure_detail("PARTIAL_COLLECTION")
         if saved == 0:
+            failure = failure_detail("COLLECTION_FAILED")
             status, exit_code = "error", 1
             error = render_failure(failure)
         else:
+            failure = failure_detail("PARTIAL_COLLECTION")
             status, exit_code = "partial", 1
 
     # 활성 소스인데 매핑된 대상이 0개면(etf_map 누락) 수집이 사실상 불가능한 설정 —

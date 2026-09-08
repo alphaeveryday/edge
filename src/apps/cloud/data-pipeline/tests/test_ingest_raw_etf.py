@@ -141,6 +141,9 @@ def test_all_etfs_failing_marks_run_error(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "error"
     assert log["records_failed_etfs"] == 2
+    assert log["ops"]["failure"] == {
+        "category": "UNKNOWN", "code": "COLLECTION_FAILED", "summary": "수집 실패",
+    }
 
 
 def test_partial_failure_marks_run_partial(tmp_path):
