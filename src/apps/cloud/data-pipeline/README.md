@@ -1108,7 +1108,7 @@ settings.targets.keywords            # ["금리", ...]
 
 ### Minute 내용 주소 후보·확정·소비 계약 (ALPHA-1060)
 
-가격·iNAV·업종지수 writer의 `minute_artifact_format` 기본값과 현재 dev 값은 `legacy`다.
+가격·iNAV·업종지수 writer의 `minute_artifact_format` 기본값은 `legacy`, dev 명시 설정은 `content_v2`다.
 `DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2`를 명시하면 내용 주소 후보와
 `schema_version=2` manifest를 쓰며, 수집 전에 확정 이력 스키마 존재를 검사한다.
 가격 소비자(현재 창·시가), 가격/업종 롤업과 분석 엔진은 DB의 manifest URI·checksum을
