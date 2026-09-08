@@ -40,6 +40,7 @@ def run(
     dataset: str = DATASET,
     partition=raw_investor_partition,
     job_name: str = JOB_NAME,
+    max_failed_symbols: int = 0,
 ) -> int:
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
 
@@ -51,7 +52,12 @@ def run(
     격리 규약이 전부 같고 **다른 것은 저장 위치뿐**이라, 스텝을 복제하지 않고 인자로 가른다
     (`ingest_raw_etf` 가 NAV·iNAV·프로필에 쓰는 것과 같은 형태 — ALPHA-380 선례).
     기본값은 EOD 라 기존 호출부는 무변경이다.
+
+    max_failed_symbols 이하의 격리 실패는 partial 로 기록하되 exit 0 으로 마감한다.
+    기본값 0은 기존 fail-loud 동작을 보존한다.
     """
+    if max_failed_symbols < 0:
+        raise ValueError("max_failed_symbols 는 0 이상이어야 한다")
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
@@ -146,12 +152,17 @@ def run(
     #    절단도 아래 로그(failed_symbols)엔 남겨 fail-loud 는 유지한다(가격 스텝과 동형).
     failed_symbols = getattr(source, "fetch_failures", [])
     real_failures = [f for f in failed_symbols if f.get("kind") != "truncation"]
+    real_failed_symbol_count = len({
+        (f.get("our_ticker"), f.get("symbol")) for f in real_failures
+    })
     if status == "success" and real_failures:
         if saved == 0:
             status, exit_code = "error", 1
-            error = f"모든 수집 심볼 실패 ({len(real_failures)}건)"
+            error = f"모든 수집 심볼 실패 ({real_failed_symbol_count}건)"
         else:
-            status, exit_code = "partial", 1
+            status = "partial"
+            if real_failed_symbol_count > max_failed_symbols:
+                exit_code = 1
 
     # 활성 소스인데 매핑된 대상이 0개면(유니버스 비어있음 등) 수집이 사실상 불가능한 설정 —
     # success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).

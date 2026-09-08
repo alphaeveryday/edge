@@ -373,8 +373,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
+    parser.add_argument("--max-failed-symbols", type=int, default=None,
+                        help="가격·투자자 수급 수집: exit 0 으로 허용할 격리 실패 심볼 수"
+                             "(미지정=0; partial·failed_records 기록은 유지)")
     args = parser.parse_args(argv)
 
+    if args.max_failed_symbols is not None:
+        if args.max_failed_symbols < 0:
+            raise SystemExit(
+                f"--max-failed-symbols 는 0 이상이어야 한다: {args.max_failed_symbols}"
+            )
+        if args.step not in (
+            "ingest-price-raw", "ingest-raw-investor", "ingest-raw-investor-estimate",
+        ):
+            raise SystemExit(
+                "--max-failed-symbols 는 가격·투자자 수급 수집에서만 쓴다 — "
+                f"이 스텝({args.step})에서는 무시되므로 거부한다"
+            )
+        if (args.step == "ingest-price-raw" and args.max_failed_symbols > 0
+                and (args.source or "fmp") != "kis"):
+            raise SystemExit(
+                "--max-failed-symbols 는 KIS 가격 수집에서만 쓴다 — "
+                f"source={args.source or 'fmp'} 는 엄격 모드로만 실행한다"
+            )
     # `--deadline-sec` 를 소비하는 스텝에서만 받는다. 조용히 무시하면 운영자가 상한이 걸렸다고
     # 오인하고, SFN 배선 오류(엉뚱한 브랜치에 상한을 준 것)도 안 드러난다(Rule 12).
     if args.deadline_sec is not None:
@@ -616,6 +637,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
+    max_failed_symbols = args.max_failed_symbols or 0
+
     # 유니버스 재생성은 canonical 만 읽어 config 객체를 쓰는 스텝이라 수집 창·벤더가 없다.
     # run_id 는 백업 객체 접미사로만 쓴다(`.bak-<run_id>`) — 같은 런의 산출임이 드러난다.
     if args.step == "build-minute-universe":
@@ -1179,6 +1202,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
             settings, storage, estimate_source, run_id,
             dataset="investor_flow_intraday", partition=raw_investor_estimate_partition,
             job_name="ingest_raw_investor_estimate",
+            max_failed_symbols=max_failed_symbols,
         )
 
     # 창 미지정 = 스케줄 증분 → 앱이 어제~오늘로 채운다. 하나라도 지정하면 그대로 존중(백필).
@@ -1293,7 +1317,10 @@ def _dispatch(args, settings, storage, run_id) -> int:
             price_source = YahooPriceSource(settings.yahoo_price.source)
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|kis|yahoo)")
-        return ingest_price_raw.run(settings, storage, price_source, run_id, from_date, to_date)
+        return ingest_price_raw.run(
+            settings, storage, price_source, run_id, from_date, to_date,
+            max_failed_symbols=max_failed_symbols,
+        )
     if args.step == "ingest-raw-investor":
         # 종목별 투자자 수급(ALPHA-482). KR·KIS 단일 벤더라 --source 분기가 없다. 수집
         # 유니버스는 canonical KR holdings 에서 파생한다(가격과 같은 축, universe_from_holdings).
@@ -1307,7 +1334,10 @@ def _dispatch(args, settings, storage, run_id) -> int:
         investor_source = KisInvestorSource(
             settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
         )
-        return ingest_raw_investor.run(settings, storage, investor_source, run_id, from_date, to_date)
+        return ingest_raw_investor.run(
+            settings, storage, investor_source, run_id, from_date, to_date,
+            max_failed_symbols=max_failed_symbols,
+        )
     if args.step == "ingest-raw-disclosure":
         # 공시는 KR·단일 벤더(OpenDART)라 --source 분기가 없다. 재무(fnlttSinglAcnt)와 별개
         # API·별개 잡이다. 날짜창은 뉴스와 동형으로 위에서 채워졌고, 여기서 원장 워터마크

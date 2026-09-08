@@ -54,7 +54,7 @@ locals {
     {
       state        = "CollectKisPrice"
       taskdef_key  = "kis"
-      command_expr = "States.Array('ingest-price-raw', '--source', 'kis', '--run-id', $.run_id)"
+      command_expr = "States.Array('ingest-price-raw', '--source', 'kis', '--max-failed-symbols', '1', '--run-id', $.run_id)"
     },
     {
       state        = "CollectDartFinancial"
@@ -87,7 +87,7 @@ locals {
       # (universe_from_holdings, 가격과 같은 축). NormalizeInvestor→LoadEtfFlow 체인의 raw 선행이다.
       state        = "CollectKisInvestor"
       taskdef_key  = "kis"
-      command_expr = "States.Array('ingest-raw-investor', '--run-id', $.run_id)"
+      command_expr = "States.Array('ingest-raw-investor', '--max-failed-symbols', '1', '--run-id', $.run_id)"
     },
     {
       # 장중 투자자 추정(ALPHA-767) — KIS HHPTJ04160200. 위 EOD 확정치와 **다른 데이터셋**이다
@@ -103,7 +103,7 @@ locals {
       # 않으려는 것이고, 그래서 EOD 수집과 달리 창을 넘길 자리가 없다.
       state        = "CollectKisInvestorEstimate"
       taskdef_key  = "kis"
-      command_expr = "States.Array('ingest-raw-investor-estimate', '--run-id', $.run_id)"
+      command_expr = "States.Array('ingest-raw-investor-estimate', '--max-failed-symbols', '1', '--run-id', $.run_id)"
     },
     # 기준일(ALPHA-387, dev 실측으로 확정): 스케줄이 장 마감 후(15:40 KST, ALPHA-414)라
     # **거래일 런은 그날 PDF 가 이미 게시돼 있다**(07-22·23·24 연속 스냅샷 내용 상이). 반면

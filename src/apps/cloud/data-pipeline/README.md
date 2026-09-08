@@ -308,6 +308,9 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # 8종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 8종이 샌다).
 # 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
 # 컨테이너 사이로도 공유한다(ALPHA-573 — 아래 ingest-raw-nav 항목).
+# 시장 SFN은 `--max-failed-symbols 1`을 명시한다(ALPHA-798). 고립 실패 1개는 exit 0이지만
+# collection log는 partial·failed_records=1을 보존해 원장에는 INCOMPLETE로 남는다. 2개 이상과
+# 저장 0건·신규편입 스캔 미완료는 비영이다. FMP·Yahoo는 양수 임계값을 거부해 엄격 모드다.
 #
 # ⭐ **유니버스에 처음 들어온 종목은 이력 창으로 한 번 더 받는다**(ALPHA-989). 유니버스가
 # holdings 파생이라 ETF 가 추가되면 즉시 넓어지는데 증분 창은 5일이라, 넓어진 유니버스는
@@ -832,6 +835,9 @@ durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 
 - `ingest-raw-etf-profile`(국내 ETF 프로필 = ETF 마스터 표시명 출처, **kis 세트**, ALPHA-462)
 - `ingest-raw-investor`(종목별 투자자 수급, **kis 세트**, ALPHA-482) — 유니버스는 canonical KR
   holdings 파생(가격과 같은 축). `NormalizeInvestor → LoadEtfFlow` 체인의 raw 선행이다.
+  - 시장 SFN은 `--max-failed-symbols 1`을 명시한다(ALPHA-798). 실패 심볼 1개까지 실행은 성공하되
+    collection log의 partial·실패 상세·failed_records를 보존해 원장에는 INCOMPLETE로 남긴다.
+    2개 이상 또는 저장 0건은 기존처럼 비영이다.
   - **EOD 서빙 블랙아웃 규약**(ALPHA-518·562): 확정 수급이 서빙되기 전에 질의하면 rt_cd=2
     `msg_cd=OPSQ2001 msg1="TIME LIMIT 00:00 ~ 15:40"` 이 온다. 이건 데이터 결손이 아니라
     **"지금이 서빙 개시 전"이라는 상시 조건**이라, 아무 때나 기다린다고 풀리지 않는다.
@@ -891,6 +897,9 @@ durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 
     `"5"` 한 자리 코드**로 확인됐다(`"0930"` 같은 시각 문자열이 아니다 — 슬롯 1 은 기관값이
     284/284 전건 0이라 09:30 외국인 갱신에 대응한다). 값은 장 시작부터의 **누적 순매수**라
     슬롯 간 차분이 그 구간의 순매수이고, 거래가 없던 종목은 그 슬롯 행이 아예 없다.
+  - 다섯 슬롯 모두 `--max-failed-symbols 1`을 쓴다(ALPHA-798). 고립 실패는 다음 슬롯의 누적 응답,
+    마지막 14:35 슬롯은 당일 수동 plan-run으로 회수할 수 있다. 회수 전까지 원장 INCOMPLETE가
+    남고, 2개 이상 또는 저장 0건은 실행도 실패한다.
   - ⚠️ **ETF 자체는 0행이다.** 거래소가 ETF 의 장중 투자자 귀속을 생산하지 않는다(KIS 장중
     투자자 4종 전수조사로 확정). 우리 유니버스는 ETF **구성종목**(개별주식)이라 적용되지만,
     holdings 유니버스에 섞여 오는 ETF 자신은 빈 응답이 정상이다.
