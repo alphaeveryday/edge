@@ -364,6 +364,21 @@ def test_catalog_matches_asl_command_and_taskdef_per_state():
         assert asl_vendor == entry_vendor, f"{entry.task_key}: 벤더가 ASL({asl_vendor})과 다르다"
 
 
+def test_kis_symbol_failure_threshold_is_explicit_per_lane():
+    """WHY(ALPHA-798): 기본값은 0이므로 ASL에서 한 레인이 인자를 빼면 배포는 성공하고
+    그 레인만 고립 1건에 다시 FAILED 로 회귀한다. KIS 세 레인은 1, FMP 는 0을 잠근다.
+    """
+    tf = _STATEMACHINE_TF.read_text(encoding="utf-8")
+    commands = {
+        m.group("state"): _asl_command_args(m.group("cmd"))
+        for m in _ASL_JOB_TRIPLE.finditer(tf)
+    }
+    for state in ("CollectKisPrice", "CollectKisInvestor", "CollectKisInvestorEstimate"):
+        args = commands[state]
+        assert args[args.index("--max-failed-symbols") + 1] == "1"
+    assert "--max-failed-symbols" not in commands["CollectFmpPrice"]
+
+
 def test_catalog_cli_commands_are_real_steps():
     """WHY: 존재하지 않는 CLI 를 가리키는 엔트리는 **영원히 FULFILLED 될 수 없다**(매 런 MISSED).
     argparse choices 와 대조해 오타·개명을 CI 에서 잡는다."""

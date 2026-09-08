@@ -591,6 +591,67 @@ def test_deadline_reaches_the_krx_source(monkeypatch):
     assert captured["deadline_sec"] is None
 
 
+def test_max_failed_symbols_rejects_invalid_or_ignored_values(monkeypatch):
+    # WHY(ALPHA-798): 음수는 부분 실패를 전부 실패로 만드는 모순된 정책이고, 다른
+    #      스텝에 준 값을 조용히 무시하면 Terraform 오배선을 운영자가 발견할 수 없다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+
+    with pytest.raises(SystemExit, match="0 이상"):
+        main(["ingest-price-raw", "--max-failed-symbols", "-1"])
+    with pytest.raises(SystemExit, match="무시되므로 거부"):
+        main(["normalize-etf", "--max-failed-symbols", "1"])
+    with pytest.raises(SystemExit, match="엄격 모드"):
+        main(["ingest-price-raw", "--source", "fmp", "--max-failed-symbols", "1"])
+    with pytest.raises(SystemExit, match="source=fmp"):
+        main(["ingest-price-raw", "--max-failed-symbols", "1"])
+    with pytest.raises(SystemExit, match="source=yahoo"):
+        main(["ingest-price-raw", "--source", "yahoo", "--max-failed-symbols", "1"])
+
+
+def test_explicit_zero_threshold_keeps_strict_price_sources_runnable(monkeypatch):
+    # WHY(ALPHA-798): 0은 엄격 모드의 명시 표현이다. 공통 실행기가 모든 레인에 0을 넘겨도
+    #      FMP·Yahoo 수집을 거부하면 기본값과 명시값이 다른 동작이 된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append((args[2].source_name, kwargs["max_failed_symbols"]))
+        return 0
+
+    monkeypatch.setattr(run_mod.ingest_price_raw, "run", spy)
+
+    assert main(["ingest-price-raw", "--source", "fmp", "--max-failed-symbols", "0"]) == 0
+    assert main(["ingest-price-raw", "--source", "yahoo", "--max-failed-symbols", "0"]) == 0
+    assert seen == [("fmp", 0), ("yahoo", 0)]
+
+
+def test_max_failed_symbols_reaches_all_three_kis_collection_lanes(monkeypatch):
+    # WHY(ALPHA-798): CLI 파서만 값을 받고 스텝에 넘기지 않으면 배포는 성공해도 운영 동작은
+    #      변하지 않는다. 가격·EOD 수급·장중 수급 세 호출부를 한 값으로 잠근다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["max_failed_symbols"])
+        return 0
+
+    monkeypatch.setattr(run_mod.ingest_price_raw, "run", spy)
+    monkeypatch.setattr(run_mod.ingest_raw_investor, "run", spy)
+
+    assert main([
+        "ingest-price-raw", "--source", "kis", "--from", "2026-09-01",
+        "--to", "2026-09-07", "--max-failed-symbols", "1",
+    ]) == 0
+    assert main([
+        "ingest-raw-investor", "--from", "2026-09-01", "--to", "2026-09-07",
+        "--max-failed-symbols", "1",
+    ]) == 0
+    assert main([
+        "ingest-raw-investor-estimate", "--max-failed-symbols", "1",
+    ]) == 0
+    assert seen == [1, 1, 1]
+
+
 def _spy_assemble(monkeypatch):
     """assemble-events 분기가 assemble_events.run 에 넘긴 창을 캡처한다(_spy_tag_news 와 동형).
     db 는 스파이가 안 쓰므로 db_config_from_env 를 항등으로 눌러 설정 결합을 끊는다."""

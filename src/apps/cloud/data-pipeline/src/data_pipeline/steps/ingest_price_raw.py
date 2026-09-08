@@ -402,12 +402,23 @@ def run(
     run_id: str,
     from_date: str | None = None,
     to_date: str | None = None,
+    *,
+    max_failed_symbols: int = 0,
 ) -> int:
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
 
     from_date/to_date 는 소스에 넘길 수집 날짜창(YYYY-MM-DD). 스케줄 증분·백필 창은
     run 엔트리가 정해 넘긴다.
+
+    max_failed_symbols 이하의 격리 실패는 partial 로 기록하되 exit 0 으로 마감한다.
+    기본값 0은 기존 fail-loud 동작을 보존한다.
     """
+    if max_failed_symbols < 0:
+        raise ValueError("max_failed_symbols 는 0 이상이어야 한다")
+    if max_failed_symbols and source.source_name != "kis":
+        raise ValueError(
+            f"max_failed_symbols 는 KIS 가격 소스에서만 쓴다: {source.source_name}"
+        )
     started_at = datetime.now(timezone.utc)
     started_date = started_at.isoformat()[:10]
     vendor = source.source_name  # 파티션·로그의 source= 키 (하드코딩 대신 소스가 규정)
@@ -584,7 +595,11 @@ def run(
             status, exit_code = "error", 1
             error = f"모든 수집 심볼 실패 ({len(real_failures)}건)"
         else:
-            status, exit_code = "partial", 1
+            status = "partial"
+            # 스캔 미완료가 이미 exit 1 을 설정했다면 심볼 허용치가 그 실패를
+            # 지우면 안 된다. 임계를 넘은 격리 실패만 비영으로 올린다.
+            if len(real_failures) > max_failed_symbols:
+                exit_code = 1
 
     # 활성 소스인데 매핑된 대상이 0개면(심볼맵 누락·전 대상 미매핑 KR 등) 수집이
     # 사실상 불가능한 설정 — success(0건)로 위장하지 않고 skip 으로 드러낸다(Rule 12).

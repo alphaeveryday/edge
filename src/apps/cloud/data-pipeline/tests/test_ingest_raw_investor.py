@@ -177,11 +177,66 @@ def test_symbol_error_marks_run_partial(tmp_path):
     err = json.dumps({"rt_cd": "1", "msg_cd": "OPSQ0001", "msg1": "조회 오류"})
     source = _source({"042700": [_ok([_row("20260703")])], "000660": [err], "091160": [err]})
 
-    assert ingest_raw_investor.run(settings, storage, source, "r1") == 1
+    assert ingest_raw_investor.run(
+        settings, storage, source, "r1", max_failed_symbols=1,
+    ) == 1
     logs = storage.list_keys("operations_archive/collection_logs/")
     log = json.loads(storage.get_bytes(logs[0]))
     assert log["status"] == "partial"
     assert log["records_failed_symbols"] == 2
+
+
+def test_one_symbol_failure_within_threshold_is_partial_but_exit_zero(tmp_path):
+    # WHY(ALPHA-798): 장중 누적 응답은 다음 슬롯이 고립 실패 1건을 회수한다. 그러나
+    #      현재 슬롯의 결손은 지우지 않고 partial·failed_records 로 남겨야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    _write_holdings(storage, "2026-07-15", [("000660", "091160")])
+    err = json.dumps({"rt_cd": "1", "msg_cd": "OPSQ0001", "msg1": "조회 오류"})
+    source = _source({
+        "005930": [_ok([_row("20260703")])],
+        "000660": [err],
+    })
+
+    assert ingest_raw_investor.run(
+        settings, storage, source, "r1", max_failed_symbols=1,
+    ) == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive/collection_logs/")[0]))
+    assert log["status"] == "partial"
+    assert log["records_saved"] == 1
+    assert log["records_failed_symbols"] == 1
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_threshold_counts_failed_symbols_not_failure_reasons(tmp_path):
+    # WHY(ALPHA-798): 한 심볼에서 malformed·slotless처럼 여러 사유가 함께 나와도 허용치의
+    #      단위는 실패 항목 수가 아니라 심볼 수다. 감사 로그는 두 사유를 모두 보존해야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+
+    class _DuplicateReasonSource:
+        source_name = "kis"
+        enabled = True
+        universe_from_holdings = False
+        planned_symbols = 1
+        fetch_failures = []
+
+        def fetch(self, symbols, from_date, to_date):
+            yield {"market": "KR", "our_ticker": "005930"}
+            self.fetch_failures = [
+                {"symbol": "005930", "our_ticker": "005930", "error": "malformed",
+                 "kind": "failure"},
+                {"symbol": "005930", "our_ticker": "005930", "error": "slotless",
+                 "kind": "failure"},
+            ]
+
+    assert ingest_raw_investor.run(
+        settings, storage, _DuplicateReasonSource(), "r1", max_failed_symbols=1,
+    ) == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive/collection_logs/")[0]))
+    assert log["status"] == "partial"
+    assert log["records_failed_symbols"] == 2
+    assert log["ops"]["failed_records"] == 2
 
 
 def test_어댑터가_낸_skip_사유는_실패가_아니라_skip_이다(tmp_path):

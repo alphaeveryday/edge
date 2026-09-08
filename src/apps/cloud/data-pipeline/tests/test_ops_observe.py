@@ -132,6 +132,23 @@ def test_failed_records_make_it_incomplete(tmp_path):
     assert wrapper.derive_data_status(signals) == states.DATA_INCOMPLETE
 
 
+def test_partial_collection_with_zero_exit_stays_data_incomplete(tmp_path):
+    # WHY(ALPHA-798): 허용치 이하의 고립 실패는 exit 0 이지만 완전한 데이터가 아니다.
+    #      collection status 가 partial 이고 failed_records 가 남았는데 VALID 로 세탁되면
+    #      오케스트레이션 알람을 줄이려다가 대시보드 품질 신호까지 지운다.
+    storage = _storage(tmp_path)
+    entry = _entry("PRICE_COLLECTION_KIS")
+    _write_log(storage, entry, {
+        "run_id": _RUN,
+        "status": "partial",
+        "ops": {"records_out": 100, "failed_records": 1},
+    })
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+    assert signals["request_completed"] is False
+    assert wrapper.derive_data_status(signals) == states.DATA_INCOMPLETE
+
+
 def test_missing_envelope_is_unknown_and_loud(tmp_path, caplog):
     # WHY: 증거 없음은 성공이 아니다. 봉투가 없을 때 0건·허용 같은 낙관 기본값으로 메우면
     #      계측 안 된 스텝이 조용히 초록으로 보인다(Rule 12).

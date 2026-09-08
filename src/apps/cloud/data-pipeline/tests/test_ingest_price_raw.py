@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from data_pipeline.config import PriceSource, load_settings
 from data_pipeline.lake import LocalStorage
 from data_pipeline.sources.fmp_price import FmpPriceSource
@@ -110,12 +112,18 @@ class _PartlyFailingClient(FakeClient):
         return super().get(url, accept=accept)
 
 
-def _run_client(tmp_path, client, run_id="20260703T000000Z"):
+def _run_client(
+    tmp_path, client, run_id="20260703T000000Z", *, max_failed_symbols=0, source_name="fmp",
+):
     settings = _settings(tmp_path)
     storage = LocalStorage(tmp_path / "lake")
     config = PriceSource(base_url=settings.price.source.base_url, api_key="k", symbol_map=_MAP)
     source = FmpPriceSource(config, client)
-    return ingest_price_raw.run(settings, storage, source, run_id), storage
+    source.source_name = source_name
+    return ingest_price_raw.run(
+        settings, storage, source, run_id,
+        max_failed_symbols=max_failed_symbols,
+    ), storage
 
 
 def test_all_symbols_failing_marks_run_error(tmp_path):
@@ -141,6 +149,51 @@ def test_partial_failure_marks_run_partial(tmp_path):
     assert log["status"] == "partial"
     assert log["records_saved"] == 1
     assert log["records_failed_symbols"] == 2
+
+
+def test_isolated_failure_within_threshold_keeps_partial_log_and_exits_zero(tmp_path):
+    # WHY(ALPHA-798): 고립 1건으로 전체 SFN 이 빨강이 되면 알람 피로가 진짜 장애를
+    #      가린다. 실행만 성공시키고 손실 사실은 partial·failed_records 로 남겨야 한다.
+    client = _PartlyFailingClient(
+        {"NVDA": [_bar("2026-07-01")], "AAPL": [_bar("2026-07-01")]},
+        failing=["SSNLF"],
+    )
+    code, storage = _run_client(
+        tmp_path, client, max_failed_symbols=1, source_name="kis",
+    )
+
+    assert code == 0
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "partial"
+    assert log["records_saved"] == 2
+    assert log["records_failed_symbols"] == 1
+    assert log["ops"]["failed_records"] == 1
+
+
+def test_total_failure_is_error_even_when_threshold_is_higher(tmp_path):
+    # WHY(ALPHA-798): 허용치는 소수의 격리 실패용이다. 저장 0건까지 성공시키면
+    #      자격증명·전량 장애가 정상으로 위장된다.
+    code, storage = _run_client(
+        tmp_path,
+        _PartlyFailingClient({}, failing=["NVDA", "AAPL", "SSNLF"]),
+        max_failed_symbols=10, source_name="kis",
+    )
+
+    assert code == 1
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["status"] == "error"
+    assert log["records_saved"] == 0
+
+
+def test_non_kis_price_source_cannot_enable_failure_threshold(tmp_path):
+    # WHY(ALPHA-798): CLI 외 직접 호출도 가능하므로 호출부 검사만으로는 FMP/Yahoo의 엄격
+    #      정책을 보장하지 못한다. 코어 스텝이 비 KIS 임계값을 거부해야 한다.
+    with pytest.raises(ValueError, match="KIS 가격 소스"):
+        _run_client(
+            tmp_path,
+            _PartlyFailingClient({"NVDA": [_bar("2026-07-01")]}, failing=["AAPL"]),
+            max_failed_symbols=1,
+        )
 
 
 def test_raw_write_failure_still_writes_collection_log(tmp_path):
@@ -953,7 +1006,10 @@ def test_scan_incomplete_does_not_mask_symbol_failures(tmp_path):
     _write_price_daily(storage, "2026-08-13", [])  # 빈 파티션 → 판정 근거 없음
     source = _RecordingSource(failures_by_call={0: [{"symbol": "000660", "error": "boom"}]})
 
-    assert ingest_price_raw.run(settings, storage, source, "r1", "2026-08-09", "2026-08-14") == 1
+    assert ingest_price_raw.run(
+        settings, storage, source, "r1", "2026-08-09", "2026-08-14",
+        max_failed_symbols=1,
+    ) == 1
     log = json.loads(storage.get_bytes(
         [k for k in storage.list_keys("operations_archive") if "kis" in k][0]))
     assert log["status"] == "partial"
@@ -1030,8 +1086,6 @@ def test_malformed_window_end_is_not_swallowed(tmp_path):
     # WHY: 비달력일 창 끝은 **입력 오류**이고 1차 fetch 도 같은 값을 쓴다 — 읽기 실패처럼
     #      격리해 삼키면 창이 틀린 채로 수집이 돈다. 파티션을 하나도 못 읽는 상황에서도
     #      이 오류는 그대로 올라와야 한다(격리 대상이 아니다).
-    import pytest
-
     storage = LocalStorage(tmp_path / "lake")
     _write_price_daily(storage, "2026-08-13", ["091160"])
     with pytest.raises(ValueError):
