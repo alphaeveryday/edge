@@ -165,8 +165,13 @@ class KrxEtfSource:
                 return
             try:
                 yield from self._fetch_etf(our_etf_id, isin, trd_dd, jsessionid, fetched_at)
-            except StopFetch:
-                raise  # 4xx/429(미로그인 LOGOUT 포함) 는 소스 전체 문제 — 중단이 맞다
+            except StopFetch as exc:
+                # KRX holdings 는 인증되지 않은 세션을 HTTP 400 + 본문 `LOGOUT`으로
+                # 알린다. status만 일반 4xx로 축약하면 운영자가 요청 오류로 오인하므로,
+                # 이 벤더 고유 신호만 고정 인증 코드로 바꾸고 본문은 전달하지 않는다.
+                if exc.status == 400 and exc.body.strip() == "LOGOUT":
+                    raise SafeFailureError("KRX_SESSION_REJECTED") from None
+                raise  # 나머지 4xx/429는 소스 전체 문제 — 중단이 맞다
             except SafeFailureError:
                 raise  # 재시도 소진은 공급자 전체 장애 — partial 로 격리하지 않는다
             except Exception as exc:

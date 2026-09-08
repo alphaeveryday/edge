@@ -19,6 +19,7 @@ _SPECS = {
     "KRX_CD010": _FailureSpec("AUTHENTICATION", "KRX 패스워드 변경 필요"),
     "KRX_CD011": _FailureSpec("AUTHENTICATION", "KRX 중복 로그인"),
     "KRX_LOGIN_REJECTED": _FailureSpec("AUTHENTICATION", "KRX 로그인 거부"),
+    "KRX_SESSION_REJECTED": _FailureSpec("AUTHENTICATION", "KRX 세션 인증 거부"),
     "HTTP_UNAUTHORIZED": _FailureSpec("AUTHENTICATION", "공급자 인증 거부"),
     "HTTP_FORBIDDEN": _FailureSpec("AUTHENTICATION", "공급자 접근 거부"),
     "RATE_LIMITED": _FailureSpec("TRANSIENT", "공급자 요청 한도 초과"),
