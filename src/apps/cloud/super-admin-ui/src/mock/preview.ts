@@ -557,7 +557,7 @@ const MOCK_DATASET: Record<string, string> = {
   NORMALIZE_ETF_PROFILE: 'etf_profile',
   NORMALIZE_INVESTOR: 'investor_flow_daily',
   LOAD_INSTRUMENTS: 'instrument_master',
-  LOAD_ETF_NAV: 'etf_nav_daily',
+  LOAD_ETF_NAV: 'etf_nav_load',
   LOAD_ETF_HOLDINGS: 'etf_holding_snapshot',
   LOAD_PRICE_TRIGGERS: 'price_movement_trigger',
   NORMALIZE_ETF: 'etf_holdings',
