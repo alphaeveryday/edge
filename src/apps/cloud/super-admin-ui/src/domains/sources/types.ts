@@ -368,7 +368,8 @@ export type MinuteWindowStatus =
   | 'INVALID';
 
 /**
- * 창 상태 집계 + 파생 1개. overdueNoEvidence = 기한(window_end)이 지났는데 DUE/CLAIMED 인 창 —
+ * 창 상태 집계 + 파생 1개. overdueNoEvidence = 수집 가능 시각(scheduled_at)이 지났는데
+ * DUE/CLAIMED 인 창 —
  * MISSING 판정은 EOD QC 몫이라 장중의 "안 돌았다"는 이 파생으로만 보인다(서버 판정,
  * 화면 재계산 금지). validEmpty(돌았는데 데이터 없음)와 다른 축이다.
  */
@@ -392,7 +393,7 @@ export interface MinuteGapWindow {
   noEvidence: boolean;
 }
 
-/** job 상태 집계 — waiting 은 PENDING+RETRY_WAIT */
+/** job 상태와 최신 outbox 전달 실패 집계 — waiting 은 전달 가능한 PENDING+RETRY_WAIT */
 export interface MinuteJobCounts {
   waiting: number;
   claimed: number;
@@ -400,6 +401,8 @@ export interface MinuteJobCounts {
   claimedExpired: number;
   succeeded: number;
   dead: number;
+  /** 미귀결 job의 최신 outbox event가 DEAD이거나 필수 event가 없는 수 */
+  deliveryFailed: number;
 }
 
 /**
@@ -429,4 +432,28 @@ export interface MinuteStatus {
   sessions: MinuteSession[];
   /** 뉴스 job 은 세션 연결 컬럼이 없어 날짜(생성 시각 KST) 축의 별도 집계다 */
   newsJobs: MinuteJobCounts;
+}
+
+/** 서버가 최근 날짜 범위의 minute 원장을 판정한 일별 상태(ALPHA-1066). */
+export type MinuteDailyState = 'NORMAL' | 'CAUTION' | 'FAILURE' | 'RUNNING' | 'WAITING';
+
+export interface MinuteDailyDataset {
+  dataset: string;
+  state: MinuteDailyState;
+  basis: string;
+  failedSessions: number;
+  totalSessions: number;
+}
+
+export interface MinuteDailyDay {
+  date: string;
+  /** 성공 응답에서 dataset 부재는 그 날짜에 세션이 없었다는 뜻이다. */
+  datasets: MinuteDailyDataset[];
+}
+
+export interface MinuteDailyStatus {
+  days: number;
+  from: string;
+  to: string;
+  dates: MinuteDailyDay[];
 }

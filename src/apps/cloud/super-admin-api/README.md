@@ -92,8 +92,10 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
   `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514)에 더해
-  **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651 — 세션·창
-  집계·무증거 파생, 행 복제 아님)이다 — 두 원장 모두 소유는 data-pipeline 이라(ADR-0005
+  **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
+  세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)이다. 일별 판정은 날짜별 상세 조회를
+  반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다 — 두 원장
+  모두 소유는 data-pipeline 이라(ADR-0005
   단일 writer) 여기선 **쓰지 않는다**. JPA 엔티티를 두지
   않는 이유: `ddl-auto=validate` 환경에서 소유하지 않은 5테이블에 이 앱 기동을 묶지 않기
   위함이다. **analyses 읽기는 설명 원장(`explanation_*`) 읽기 전용 조회**

@@ -85,7 +85,8 @@ function RealtimeShortcut({ date }: { date: string }) {
   const real = data !== undefined;
   const view = real ? data : MOCK_MINUTE;
   const newsJobsVisible = Object.values(view.newsJobs).some((count) => count > 0);
-  const newsJobsDefect = view.newsJobs.claimedExpired > 0 || view.newsJobs.dead > 0;
+  const newsJobsDefect = view.newsJobs.claimedExpired > 0 || view.newsJobs.dead > 0
+    || view.newsJobs.deliveryFailed > 0;
   const newsJobsRunning = hasPendingJobs(view.newsJobs);
 
   return (
@@ -132,7 +133,7 @@ function RealtimeShortcut({ date }: { date: string }) {
                       <span className="t-xs ops-lane-link">상세 →</span>
                     </span>
                     <span className="t-xs ops-rt-axis">
-                      대기 {view.newsJobs.waiting} · 유효 처리 중 {healthyClaimed(view.newsJobs)} · 고착 {view.newsJobs.claimedExpired} · DEAD {view.newsJobs.dead}
+                      대기 {view.newsJobs.waiting} · 유효 처리 중 {healthyClaimed(view.newsJobs)} · 고착 {view.newsJobs.claimedExpired} · DEAD {view.newsJobs.dead} · 전달 실패 {view.newsJobs.deliveryFailed}
                     </span>
                   </Link>
                 </li>

@@ -329,7 +329,7 @@ function PriceSessionCard({
             emphasis={w.overdueNoEvidence > 0}
             sub="기한 경과 · 결과 없음"
             info={
-              '판정 — 기한(window_end) 경과 후 결과 증거 없음\n' +
+              '판정 — 수집 가능 시각(scheduled_at) 경과 후 결과 증거 없음\n' +
               '원장 상태 — DUE 또는 유효 lease 없는 CLAIMED\n' +
               '판정 주체 — 서버(DB 시계). 화면이 다시 계산하지 않는다\n' +
               '구분 — 빈 데이터(VALID_EMPTY)는 실행 증거가 있어 정상 귀결로 따로 집계한다\n' +
@@ -393,7 +393,9 @@ function PriceSessionCard({
   );
 }
 
-const NO_JOB_AXIS: MinuteJobCounts = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 };
+const NO_JOB_AXIS: MinuteJobCounts = {
+  waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0,
+};
 
 /** 가격·뉴스 전용 job 의미가 없는 실시간 레인. 세션·창/poll 원장만 그대로 보인다. */
 function GenericSessionCard({
@@ -505,7 +507,7 @@ function NewsSessionCard({
             emphasis={w.overdueNoEvidence > 0}
             sub="기한 경과 · 결과 없음"
             info={
-              '판정 — 기한(window_end) 경과 후 결과 증거 없음\n' +
+              '판정 — 수집 가능 시각(scheduled_at) 경과 후 결과 증거 없음\n' +
               '원장 상태 — DUE 또는 유효 lease 없는 CLAIMED (서버 DB 시계 판정)\n' +
               '구분 — 신규 0건(VALID_EMPTY)은 poll 실행 증거가 있어 정상 귀결로 따로 집계한다\n' +
               '다음 확인 — 세션 heartbeat · lease · 관련 job\n\n' +
@@ -568,7 +570,7 @@ function NewsSessionCard({
  * 먼저 읽혀 고착 1건이 묻힌다.
  */
 const JOB_TIP = [
-  '이 숫자는 DB job 원장(status 컬럼)의 집계다 — 실제 큐 지표가 아니다.',
+  '이 숫자는 DB job 원장과 최신 outbox 전달 상태의 집계다 — 실제 큐 지표가 아니다.',
   'SQS backlog · in-flight · oldest message age 는 이 응답에 없다.',
   '',
   '대기 = PENDING + RETRY_WAIT',
@@ -577,6 +579,7 @@ const JOB_TIP = [
   '  writer 의 재청구 조건과 같은 집합이라 고착 후보이지만 **consumer 사망 확정이 아니다**.',
   'DEAD = 재시도가 끝난 상태. 이 응답에 해소 축이 없어 **당일 누적**이다',
   '  (이미 복구됐는지 알 수 없으므로 그것만으로 지금 장애라고 단정하지 않는다).',
+  '전달 실패 = 미귀결 job의 최신 outbox event가 DEAD이거나 필수 event가 없는 상태.',
 ].join('\n');
 
 function JobRow({ jobs }: { jobs: MinuteJobCounts }) {
@@ -601,6 +604,9 @@ function JobRow({ jobs }: { jobs: MinuteJobCounts }) {
         </span>
         <span className="t-xs" style={{ color: jobs.dead > 0 ? 'var(--warn)' : 'var(--fg-2)' }}>
           DEAD <b>{jobs.dead}</b> · 당일 누적
+        </span>
+        <span className="t-xs" style={{ color: jobs.deliveryFailed > 0 ? 'var(--down)' : 'var(--fg-2)' }}>
+          전달 실패 <b>{jobs.deliveryFailed}</b>
         </span>
       </div>
       <div className="mn-jobgroup mn-jobgroup-muted">

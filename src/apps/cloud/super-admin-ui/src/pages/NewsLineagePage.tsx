@@ -135,6 +135,12 @@ export function NewsLineagePage() {
    * **모름은 `pendingUnknown` 이 따로 진다** — `cumulative` 로 `pending` 을 통째로 눌러
    * 버리면 알아낸 진행 중까지 버려 목이 실 작업을 덮는다. */
   const pending = minute.data ? hasPendingJobs(minute.data.newsJobs) : false;
+  const deliveryFailed = minute.data?.newsJobs.deliveryFailed ?? 0;
+  const deliveryNotice = deliveryFailed > 0
+    ? minute.isError
+      ? `직전 실측에서 추출 job 전달 실패 ${deliveryFailed}건이었습니다 — 마지막 재조회가 실패해 현재 해소 여부는 알 수 없습니다.`
+      : `추출 job 전달 실패 ${deliveryFailed}건이 있습니다${cumulative ? ' (오늘치 기준 — 누적 전체 수가 아닙니다)' : ` (${date} 기준)`} — 최신 outbox event가 DEAD이거나 필수 event가 없어 consumer가 처리할 수 없습니다.`
+    : null;
   const pendingUnknown = !pending && (cumulative || minute.isPending || minute.isError);
 
   const noDocs = data.summary.totalDocuments === 0 && data.documents.length === 0;
@@ -142,7 +148,7 @@ export function NewsLineagePage() {
   /* 목 미리보기를 띄우는 조건. **막는 것은 "모름"이 아니라 "진행 중임을 알아낸 것"** 이다 —
    * 모름까지 막으면 날짜를 안 고른 기본 보기에서 미리보기가 영영 안 떠, 초기 환경 검수라는
    * 이 장치의 존재 이유가 사라진다. 대신 모를 때는 **안내 문구가 그 모름을 말한다**. */
-  const empty = noDocs && ext.succeeded + ext.dead === 0 && !pending;
+  const empty = noDocs && ext.succeeded + ext.dead === 0 && !pending && deliveryFailed === 0;
 
   /* 진행 중이거나 모르는 상태는 **목으로 덮지 않고 그 사실을 얹는다**(Rule 12).
    * ⚠️ 막다른 카드로 만들지 않는다 — 실 `LineageBody` 를 그대로 그려야 날짜·표본·단계
@@ -158,7 +164,9 @@ export function NewsLineagePage() {
               추출이 이미 끝난 날(terminal 만 있는 날)에 대고 **없는 관측 공백을 조사하러**
               보낸다 — 그 수는 바로 아래 표에 있는데도. */}
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 4 }}>
-            {pending
+            {deliveryNotice
+              ? '추출 job 전달 상태를 아래 원장 카드에서 확인해야 합니다.'
+              : pending
               ? /* ⚠️ `claimed` 를 그대로 쓰면 안 된다 — `claimedExpired` 가 그 부분집합이라
                  * lease 가 전부 끊긴 날에도 "처리 중 N건"이 뜬다. 개요 카드와 같은
                  * `healthyClaimed` 를 쓰고 고착은 따로 밝힌다(기다릴 일과 조사할 일이 다르다). */
@@ -188,6 +196,7 @@ export function NewsLineagePage() {
           setLimit={setLimit}
           stage={stage}
           setStage={setStage}
+          deliveryNotice={deliveryNotice}
         />
       </div>
     );
@@ -231,6 +240,7 @@ export function NewsLineagePage() {
       setLimit={setLimit}
       stage={stage}
       setStage={setStage}
+      deliveryNotice={deliveryNotice}
     />
   );
 }
@@ -243,6 +253,7 @@ function LineageBody({
   setLimit,
   stage,
   setStage,
+  deliveryNotice = null,
   mock = false,
 }: {
   data: NewsLineage;
@@ -252,6 +263,7 @@ function LineageBody({
   setLimit: (v: number) => void;
   stage: NewsLineageStage | undefined;
   setStage: (v: NewsLineageStage | undefined) => void;
+  deliveryNotice?: string | null;
   mock?: boolean;
 }) {
   const s = data.summary;
@@ -328,6 +340,11 @@ function LineageBody({
             />
           </span>
         </div>
+        {deliveryNotice && (
+          <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)', marginBottom: 6 }}>
+            {deliveryNotice}
+          </p>
+        )}
         {exTotal === 0 ? (
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
             귀결(SUCCEEDED/DEAD)된 추출 job 없음 — 1분 파이프라인 미가동과 진행 중(대기·재시도)이

@@ -20,7 +20,7 @@
  *   · 아직 기한 전인 대기(PENDING)는 실패·누락으로 판정하지 않는다.
  *   · 서버 판정(outcome·dataStatus·running)을 다시 정의하지 않는다 — 세기만 한다.
  */
-import type { GridCell, GridSlot, MinuteSession, MinuteStatus } from './types.ts';
+import type { GridCell, GridSlot, MinuteDailyStatus, MinuteSession, MinuteStatus } from './types.ts';
 import { ALL_DATASETS, DATASET_OF_TASK } from './datasetCatalog.ts';
 import { liveness } from './minuteView.ts';
 
@@ -28,8 +28,9 @@ import { liveness } from './minuteView.ts';
  * 하루·실행 하나의 상태.
  *
  * `상태 미제공` 은 판정이 아니라 **API 가 그 날짜의 판정 값을 주지 않았다**는 사실이다 —
- * 데이터 출처가 다르다는 이유로 운영 상태를 만들지 않기 위해 둔다(실시간 데이터셋은 최근
- * 7일 요약 엔드포인트가 없다). `계획 없음`(계획 행이 없다)과 다른 사실이라 합치지 않는다.
+ * 데이터 출처가 다르다는 이유로 운영 상태를 만들지 않기 위해 둔다(최근 일별 응답 범위 밖이거나
+ * 조회가 실패해 판정 값이 없을 수 있다). `계획 없음`(정상 응답에 세션이 없다)과 다른 사실이라
+ * 합치지 않는다.
  */
 export type DayState =
   | '정상'
@@ -69,6 +70,29 @@ export function realtimeDayState(
   return live
     ? { ...live, ...counts }
     : { state: '상태 미제공', basis: states[0]?.basis ?? '기록된 세션 없음', ...counts };
+}
+
+const DAILY_STATE: Record<string, DayState> = {
+  NORMAL: '정상', CAUTION: '주의', FAILURE: '장애', RUNNING: '실행 중', WAITING: '대기',
+};
+
+/** 서버가 판정한 최근 일별 상태. 성공 응답 범위 안의 dataset 부재는 명시적 세션 없음이다. */
+export function minuteDailyState(
+  dataset: string,
+  date: string,
+  daily?: MinuteDailyStatus,
+): { state: DayState; basis: string; failedSessions: number; totalSessions: number } | null {
+  if (!daily || date < daily.from || date > daily.to) return null;
+  const day = daily.dates.find((candidate) => candidate.date === date);
+  if (!day) return null;
+  const found = day.datasets.find((candidate) => candidate.dataset === dataset);
+  if (!found) {
+    return { state: '계획 없음', basis: '기록된 세션 없음', failedSessions: 0, totalSessions: 0 };
+  }
+  return {
+    state: DAILY_STATE[found.state] ?? '상태 미제공', basis: found.basis,
+    failedSessions: found.failedSessions, totalSessions: found.totalSessions,
+  };
 }
 
 export interface DayCounts {

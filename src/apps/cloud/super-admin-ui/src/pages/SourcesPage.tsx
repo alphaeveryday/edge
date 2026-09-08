@@ -784,7 +784,7 @@ function RealtimeLedger({
         )}
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-            무증거는 <b>서버(DB 시계) 판정</b>입니다 — 기한(window_end)이 지난 DUE, 또는 유효한 lease가
+            무증거는 <b>서버(DB 시계) 판정</b>입니다 — 수집 가능 시각(scheduled_at)이 지난 DUE, 또는 유효한 lease가
             없는 CLAIMED. 실행 로그(CloudWatch)는 별개 축이며 이 응답에 조회 경로가 없습니다.
           </p>
         </div>

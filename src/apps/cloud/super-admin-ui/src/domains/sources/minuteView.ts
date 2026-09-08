@@ -191,7 +191,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts, hasJobAxi
    * 창을 두 번 다르게 말한다. 마감·정산된 세션일수록 이 과대평가가 커진다. */
   const elapsed = evidenced + w.overdueNoEvidence + w.missing;
   const defects = qualityDefectCount(s);
-  const stuck = hasJobAxis ? jobs.claimedExpired + jobs.dead : 0;
+  const stuck = hasJobAxis ? jobs.claimedExpired + jobs.dead + jobs.deliveryFailed : 0;
   /* 기대 창 수와 원장 실재 행 수가 다르다 — 위 숫자들을 그대로 믿으면 안 된다는 사실이다.
    * `issues()` 는 이걸 내는데 여기서 안 보면 요약이 "정상"이라 하고 상세가 "원장 수를 못
    * 믿는다"고 해 둘이 어긋난다. 장애로 세우지는 않는다 — 세션이 죽은 게 아니라 **셈의
@@ -215,8 +215,8 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts, hasJobAxi
       !hasJobAxis
         ? `품질 결함 ${defects}`
         : kind === 'news'
-        ? `잘린 poll·격리 ${defects} · 처리 대기 ${jobs.waiting} · DEAD ${jobs.dead}`
-        : `품질 결함 ${defects} · DEAD ${jobs.dead}`,
+        ? `잘린 poll·격리 ${defects} · 처리 대기 ${jobs.waiting} · DEAD ${jobs.dead} · 전달 실패 ${jobs.deliveryFailed}`
+        : `품질 결함 ${defects} · DEAD ${jobs.dead} · 전달 실패 ${jobs.deliveryFailed}`,
   };
   const progress =
     kind === 'news'
@@ -287,7 +287,7 @@ export function sessionHealth(s: MinuteSession, jobs: MinuteJobCounts, hasJobAxi
         defects > 0
           ? `품질 결함 ${defects}${noun}`
           : stuck > 0
-            ? `유효 lease 없는 claim·DEAD ${stuck}건`
+            ? `유효 lease 없는 claim·DEAD·전달 실패 ${stuck}건`
             : `원장 불일치 — 기대 ${s.expectedWindowCount}${noun} 중 실재 행 ${materialized}`,
     };
   }
@@ -386,7 +386,7 @@ const NEWS_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string
   noEvidence: {
     label: '무증거',
     meaning:
-      '판정: 기한(window_end) 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. **기사가 없었다는 뜻이 아니다** — 그건 신규 0건이다. 이 사실만으로 worker 사망을 단정하지 않는다.',
+      '판정: 수집 가능 시각(scheduled_at) 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. **기사가 없었다는 뜻이 아니다** — 그건 신규 0건이다. 이 사실만으로 worker 사망을 단정하지 않는다.',
   },
   pending: {
     label: '미도래 · poll 중',
@@ -493,7 +493,7 @@ export function segments(s: MinuteSession): Segment[] {
       pattern: 'hatch',
       tone: 'blocked',
       meaning:
-        '판정: 기한(window_end) 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. 서버(DB 시계) 판정이며, 이 사실만으로 미실행·실행체 사망을 확정하지 않는다.',
+        '판정: 수집 가능 시각(scheduled_at) 경과 후 결과 증거 없음. 원장 상태는 DUE 또는 유효 lease 없는 CLAIMED 다. 서버(DB 시계) 판정이며, 이 사실만으로 미실행·실행체 사망을 확정하지 않는다.',
     },
     {
       key: 'pending',
@@ -587,6 +587,7 @@ export type IssueKey =
   | 'quality'
   | 'ledgerMismatch'
   | 'claimedExpired'
+  | 'deliveryFailed'
   | 'dead';
 
 export interface Issue {
@@ -646,7 +647,7 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       tone: 'blocked',
       range: rangeOf(noEvidenceGaps),
       detail: [
-        '판정 — 기한(window_end) 경과 후 결과 증거 없음',
+        '판정 — 수집 가능 시각(scheduled_at) 경과 후 결과 증거 없음',
         '원장 상태 — DUE 또는 유효 lease 없는 CLAIMED (서버 DB 시계 판정)',
         poll
           ? '구분 — 신규 0건(VALID_EMPTY)은 poll 실행 증거가 있어 정상 귀결로 따로 집계'
@@ -718,6 +719,20 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
       range: null,
       detail:
         '재시도가 소진된 job 이다. 이 응답에는 해소 축이 없어 이미 복구됐는지 알 수 없다 — 그것만으로 지금 장애라고 단정하지 않는다.',
+    });
+  }
+
+  if (jobs.deliveryFailed > 0) {
+    out.push({
+      key: 'deliveryFailed',
+      title: '후속 job 전달 실패',
+      short: '전달 실패',
+      count: jobs.deliveryFailed,
+      unit: 'job',
+      tone: 'blocked',
+      range: null,
+      detail:
+        '미귀결 job의 최신 outbox event가 DEAD이거나 필수 event가 없다. consumer가 처리할 수 없는 전달 고착이며 job 자체의 DEAD와 다른 사실이다.',
     });
   }
 
@@ -808,7 +823,7 @@ export const healthyClaimed = (jobs: MinuteJobCounts): number =>
 
 /** job 카운터의 포함 관계를 보존한 짧은 원장 근거. */
 export const jobEvidence = (jobs: MinuteJobCounts): string =>
-  `대기 ${jobs.waiting} · 처리 중 ${healthyClaimed(jobs)} · 유효 lease 없음 ${jobs.claimedExpired} · 성공 ${jobs.succeeded} · DEAD ${jobs.dead}`;
+  `대기 ${jobs.waiting} · 처리 중 ${healthyClaimed(jobs)} · 유효 lease 없음 ${jobs.claimedExpired} · 전달 실패 ${jobs.deliveryFailed} · 성공 ${jobs.succeeded} · DEAD ${jobs.dead}`;
 
 /** 뉴스 날짜 job은 세션 귀속이 아니며, 조회 실패를 로딩으로 위장하지 않는다. */
 export function newsDateJobEvidence(detail: MinuteDetailState | undefined): string {

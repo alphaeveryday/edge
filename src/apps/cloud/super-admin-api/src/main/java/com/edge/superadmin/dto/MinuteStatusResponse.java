@@ -58,11 +58,11 @@ public record MinuteStatusResponse(String date, List<SessionResponse> sessions,
 	}
 
 	public record JobCountsResponse(long waiting, long claimed, long claimedExpired,
-			long succeeded, long dead) {
+			long succeeded, long dead, long deliveryFailed) {
 
 		static JobCountsResponse from(JobCounts j) {
 			return new JobCountsResponse(j.waiting(), j.claimed(), j.claimedExpired(),
-					j.succeeded(), j.dead());
+					j.succeeded(), j.dead(), j.deliveryFailed());
 		}
 	}
 

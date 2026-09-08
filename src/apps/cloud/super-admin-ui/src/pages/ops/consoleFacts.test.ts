@@ -26,9 +26,9 @@ import {
 import type { ConsoleFactsDto } from '../../domains/console/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 
-const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead });
+const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead, deliveryFailed: 0 });
 
-const session = (dataset: string, sourceGroup: string, dead = 0) =>
+const session = (dataset: string, sourceGroup: string, dead = 0, deliveryFailed = 0) =>
   ({
     sessionId: `${dataset}-${sourceGroup}`,
     dataset,
@@ -43,11 +43,14 @@ const session = (dataset: string, sourceGroup: string, dead = 0) =>
     leaseExpired: false,
     windows: { valid: 0, validEmpty: 0, incomplete: 0, invalid: 0, missing: 0, due: 0, claimed: 0, overdueNoEvidence: 2 },
     gaps: [],
-    priceJobs: JOBS(dead),
+    priceJobs: { ...JOBS(dead), deliveryFailed },
   }) as unknown as MinuteStatus['sessions'][number];
 
-const status = (sessions: MinuteStatus['sessions'], newsDead = 0): MinuteStatus =>
-  ({ date: '2026-08-03', sessions, newsJobs: JOBS(newsDead) }) as unknown as MinuteStatus;
+const status = (sessions: MinuteStatus['sessions'], newsDead = 0, newsDeliveryFailed = 0): MinuteStatus =>
+  ({
+    date: '2026-08-03', sessions,
+    newsJobs: { ...JOBS(newsDead), deliveryFailed: newsDeliveryFailed },
+  }) as unknown as MinuteStatus;
 
 test('세션 identity 의 두 축을 다 옮긴다 — 벤더를 버리면 사건 키가 겹쳐 딥링크가 남의 세션을 연다', () => {
   /* 어휘 정본은 `data_pipeline/minute/states.py` 의 `SOURCE_GROUPS_BY_DATASET` 다:
@@ -76,8 +79,10 @@ test('어휘 밖 데이터셋의 job 원장은 0이 아니라 모름이다 — �
    * `평가됨 · 조건에 걸린 것 없음` 을 낸다 — 원장 부재가 정상으로 그려진다. */
   const f = minuteFacts(status([session('inav_minute', 'kis')]));
   assert.equal(f.sessions[0].deadJobs, null, '모르는 원장을 0으로 채웠다');
+  assert.equal(f.sessions[0].deliveryFailed, null, '모르는 전달 원장을 0으로 채웠다');
   /* 날짜 축 맵에도 안 들어간다 — 어느 원장을 읽어야 할지 모르는 데이터셋이다 */
   assert.equal('inav_minute' in f.deadJobsByDataset, false);
+  assert.equal('inav_minute' in f.deliveryFailedByDataset, false);
 });
 
 test('뉴스 DEAD 는 날짜 축 집계라고 밝힌다 — 안 밝히면 규칙이 벤더마다 같은 사실을 복제한다', () => {
@@ -88,15 +93,25 @@ test('뉴스 DEAD 는 날짜 축 집계라고 밝힌다 — 안 밝히면 규칙
   );
   /* 값이 세션에 안 실린다 — 세션 축으로는 **모름**이다(그 원장이 세션에 안 붙어 있다) */
   assert.deepEqual(f.sessions.map((s) => s.deadJobs), [null, null]);
+  assert.deepEqual(f.sessions.map((s) => s.deliveryFailed), [null, null]);
   /* 값은 데이터셋 하나당 **한 자리**에 선다. 세션에 실려 있던 동안은 벤더 수만큼 복제할
    * 여지가 구조적으로 남아 있었다(둘 다 3을 들고 있었다). */
   assert.deepEqual(f.deadJobsByDataset, { news_minute: 3 });
+  assert.deepEqual(f.deliveryFailedByDataset, { news_minute: 0 });
 });
 
 test('가격 DEAD 는 세션에 붙은 값이다 (두 축을 뭉치면 방어가 사라진다)', () => {
   const f = minuteFacts(status([session('price_minute', 'kis', 4)], 99));
   assert.equal(f.sessions[0].deadJobs, 4, '가격은 세션 job 을 읽어야 한다(날짜 집계 99 가 아니다)');
   assert.equal('price_minute' in f.deadJobsByDataset, false, '가격을 날짜 축에 실었다');
+});
+
+test('outbox 전달 실패는 DEAD와 분리된 같은 입도 축으로 옮긴다', () => {
+  const f = minuteFacts(status([session('price_minute', 'kis', 0, 2)], 0, 3));
+  assert.equal(f.sessions[0].deadJobs, 0);
+  assert.equal(f.sessions[0].deliveryFailed, 2);
+  assert.deepEqual(f.deadJobsByDataset, { news_minute: 0 });
+  assert.deepEqual(f.deliveryFailedByDataset, { news_minute: 3 });
 });
 
 test('🔴 뉴스 세션이 없어도 그날 DEAD 는 실린다 — 세션 순회로 읽으면 하필 그날 조용해진다', () => {

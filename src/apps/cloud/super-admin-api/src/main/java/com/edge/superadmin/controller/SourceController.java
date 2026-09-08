@@ -3,6 +3,7 @@ package com.edge.superadmin.controller;
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.superadmin.dto.HoldingsImpactResponse;
 import com.edge.superadmin.dto.MinuteStatusResponse;
+import com.edge.superadmin.dto.MinuteDailyStatusResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceGridResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse;
@@ -59,6 +60,13 @@ public class SourceController {
 	public ApiResponse<MinuteStatusResponse> minuteStatus(
 			@RequestParam(required = false) String date) {
 		return ApiResponse.onSuccess(sourceService.minuteStatus(date));
+	}
+
+	/** 최근 minute 세션의 일별 판정(ALPHA-1066) — Grid 한 요청용 bounded 범위. */
+	@GetMapping("/api/v1/sources/minute/daily")
+	public ApiResponse<MinuteDailyStatusResponse> minuteDailyStatus(
+			@RequestParam(defaultValue = "7") int days) {
+		return ApiResponse.onSuccess(sourceService.minuteDailyStatus(days));
 	}
 
 	/** 뉴스 계보(ALPHA-685·697) — 집계·근거 목록·1분 추출 요약. 검증은 서비스가 한다. */

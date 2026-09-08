@@ -391,7 +391,7 @@ export const MOCK_MINUTE: MinuteStatus = {
         { windowStart: iso('12:20'), windowEnd: iso('12:21'), dataStatus: 'MISSING', noEvidence: false },
         { windowStart: iso('12:21'), windowEnd: iso('12:22'), dataStatus: 'MISSING', noEvidence: false },
       ],
-      priceJobs: { waiting: 12, claimed: 3, claimedExpired: 1, succeeded: 1284, dead: 2 },
+      priceJobs: { waiting: 12, claimed: 3, claimedExpired: 1, succeeded: 1284, dead: 2, deliveryFailed: 0 },
     },
     /* 뉴스 세션은 가격과 **별도 객체**다 — 기대 창 수만 베껴 오면 뉴스가 가격의 사본이 된다.
      * 값의 모양이 다른 이유: 뉴스는 신규 기사가 없는 분이 다수라 VALID_EMPTY 가 대부분이고,
@@ -431,11 +431,11 @@ export const MOCK_MINUTE: MinuteStatus = {
       ],
       /* 뉴스 세션에는 window job 이 없다 — price_window_job 은 가격 창을 참조한다.
        * 서버도 0 을 채워 보낸다(JdbcMinuteStatusRepository 의 getOrDefault). */
-      priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+      priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0 },
     },
   ],
   /* 기사 단위 추출 job — 세션이 아니라 날짜 축이다(백필 생산자분이 섞인다) */
-  newsJobs: { waiting: 5, claimed: 2, claimedExpired: 0, succeeded: 318, dead: 3 },
+  newsJobs: { waiting: 5, claimed: 2, claimedExpired: 0, succeeded: 318, dead: 3, deliveryFailed: 0 },
 };
 
 /* ─────────── /overview — 레인 원장 요약 ─────────── */

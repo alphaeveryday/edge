@@ -19,6 +19,7 @@ import {
   hasPendingJobs,
   isCurrentKstDate,
   issues,
+  jobEvidence,
   liveness,
   materializedCount,
   qualityDefectCount,
@@ -29,7 +30,9 @@ import {
 } from './minuteView.ts';
 import type { MinuteGapWindow, MinuteJobCounts, MinuteSession } from './types.ts';
 
-const NO_JOBS: MinuteJobCounts = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 };
+const NO_JOBS: MinuteJobCounts = {
+  waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0,
+};
 
 type SessionOverride = Omit<Partial<MinuteSession>, 'windows'> & {
   windows?: Partial<MinuteSession['windows']>;
@@ -339,8 +342,8 @@ test('무증거 근거는 서버 판정 조건으로 쓰고 원인을 단정하�
     newsSession({ expectedWindowCount: 4, windows: w }),
   ]) {
     const none = issues(s, NO_JOBS).find((i) => i.key === 'noEvidence')!;
-    /* 서버가 실제로 쓰는 술어(기한 경과 + DUE/유효 lease 없는 CLAIMED)를 그대로 적는다 */
-    assert.match(none.detail, /기한\(window_end\) 경과 후 결과 증거 없음/);
+    /* 서버가 실제로 쓰는 술어(scheduled_at 경과 + DUE/유효 lease 없는 CLAIMED)를 그대로 적는다 */
+    assert.match(none.detail, /수집 가능 시각\(scheduled_at\) 경과 후 결과 증거 없음/);
     assert.match(none.detail, /DUE 또는 유효 lease 없는 CLAIMED/);
     /* VALID_EMPTY 는 실행 증거가 있으므로 정상 귀결로 따로 센다는 사실이 함께 남는다 */
     assert.match(none.detail, /VALID_EMPTY/);
@@ -566,7 +569,7 @@ test('poll 레인의 어느 조각에도 창·거래 어휘가 남지 않는다 
 });
 
 test('실을 신호가 없다 = 세션 0 **그리고** 뉴스 job 전 칸 0', () => {
-  const zero = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 };
+  const zero = { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0 };
   assert.equal(hasNoSignal({ sessions: [], newsJobs: zero }), true, '아무것도 없으면 참');
   assert.equal(hasNoSignal({ sessions: [{}], newsJobs: zero }), false, '세션이 있으면 실측이 이긴다');
 
@@ -583,7 +586,7 @@ test('실을 신호가 없다 = 세션 0 **그리고** 뉴스 job 전 칸 0', ()
 
 test('유효 처리 중은 고착을 뺀 값이다 — 부분집합을 나란히 세면 0이 N 으로 읽힌다', () => {
   const j = (claimed: number, claimedExpired: number): MinuteJobCounts => ({
-    waiting: 0, claimed, claimedExpired, succeeded: 0, dead: 0,
+    waiting: 0, claimed, claimedExpired, succeeded: 0, dead: 0, deliveryFailed: 0,
   });
   /* 🔴 전부 고착이면 유효 처리 중은 0이다. 빼지 않으면 "고착 4 · 처리 중 4" 가 되어
    * 실제로 도는 job 이 하나도 없는데 절반은 정상인 것처럼 보인다. */
@@ -594,9 +597,42 @@ test('유효 처리 중은 고착을 뺀 값이다 — 부분집합을 나란히
   assert.equal(healthyClaimed(j(1, 3)), 0);
 });
 
+test('outbox 전달 실패는 job DEAD와 다른 확인 항목으로 남는다', () => {
+  const jobs: MinuteJobCounts = { ...NO_JOBS, deliveryFailed: 2 };
+  const state = sessionHealth(session({ phase: 'FINALIZED' }), jobs);
+  assert.equal(state.tone, 'warn');
+  assert.match(state.reason, /고착 job 2/);
+  const item = issues(session({ phase: 'FINALIZED' }), jobs).find((candidate) => candidate.key === 'deliveryFailed')!;
+  assert.equal(item.count, 2);
+  assert.match(item.detail, /outbox event/);
+  assert.match(jobEvidence(jobs), /전달 실패 2/);
+});
+
+test('outbox 전달 실패는 요약·사건·계보 화면에서 완료나 부재로 사라지지 않는다', () => {
+  const incidents = readFileSync(new URL('../../pages/ops/IncidentsPage.tsx', import.meta.url), 'utf8');
+  const overview = readFileSync(new URL('../../pages/OverviewPage.tsx', import.meta.url), 'utf8');
+  const lineage = readFileSync(new URL('../../pages/NewsLineagePage.tsx', import.meta.url), 'utf8');
+  assert.match(incidents, /newsJobsDefect[\s\S]*deliveryFailed > 0/);
+  assert.match(incidents, /전달 실패 \{view\.newsJobs\.deliveryFailed\}/);
+  assert.match(overview, /뉴스 추출 전달 실패 \{data!\.newsJobs\.deliveryFailed\}/);
+  assert.match(overview, /isError && !real/,
+    '재조회 실패 때 React Query가 보존한 직전 실측을 오류 카드로 지우면 안 된다');
+  assert.match(overview, /아래 직전 실측을 유지하며 현재 해소 여부는 알 수 없습니다/);
+  assert.match(lineage, /deliveryFailed === 0/,
+    '전달 실패가 있는 날짜를 빈 상태와 목 미리보기로 덮으면 안 된다');
+  assert.match(lineage, /deliveryNotice=\{deliveryNotice\}/,
+    '문서가 있는 일반 계보 본문에도 전달 실패를 넘겨야 한다');
+  assert.match(lineage, /직전 실측에서 추출 job 전달 실패 \$\{deliveryFailed\}건/,
+    '재조회 실패 뒤 캐시를 현재 장애로 단정하면 안 된다');
+  const notice = lineage.indexOf('{deliveryNotice && (');
+  const terminal = lineage.indexOf('{exTotal === 0 ? (', notice);
+  assert.ok(notice >= 0 && terminal > notice,
+    '전달 실패 안내가 terminal 유무와 무관하게 job 카드에 먼저 보여야 한다');
+});
+
 test('미종결 job 이 있으면 "볼 것 없음"이 아니다 — terminal 만 세면 진행 중인 날이 접힌다', () => {
   const j = (o: Partial<MinuteJobCounts>): MinuteJobCounts => ({
-    waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, ...o,
+    waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0, ...o,
   });
   /* 🔴 이 조합이 정확히 문제의 상태다 — 문서는 아직 0건이고 terminal 도 0인데 실제로는 돌고 있다 */
   assert.equal(hasPendingJobs(j({ waiting: 5 })), true, 'PENDING/RETRY_WAIT 가 있으면 진행 중');

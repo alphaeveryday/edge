@@ -31,14 +31,14 @@ const session = (overrides: Partial<MinuteSession> = {}): MinuteSession => ({
     overdueNoEvidence: 0,
   },
   gaps: [],
-  priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+  priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0 },
   ...overrides,
 });
 
 const status = (date: string, sessions: MinuteSession[]): MinuteStatus => ({
   date,
   sessions,
-  newsJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+  newsJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0 },
 });
 
 test('날짜가 다르면 query cache key도 달라 과거 상세가 오늘 응답을 재사용하지 않는다', () => {

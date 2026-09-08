@@ -22,8 +22,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
-import type { MinuteStatus, SourceGrid } from '../domains/sources';
-import { useMinuteStatus, useSourceGrid } from '../domains/sources/hooks';
+import type { MinuteDailyStatus, MinuteStatus, SourceGrid } from '../domains/sources';
+import { useMinuteDailyStatus, useMinuteStatus, useSourceGrid } from '../domains/sources/hooks';
 import type { IntradayAnalysisTrendDto } from '../domains/console';
 import { useIntradayAnalysisTrend } from '../domains/console/hooks';
 import { intradayOutcome, kstDateAt } from '../domains/console/intradayAnalysisTrend';
@@ -36,7 +36,7 @@ import {
   kindOf,
 } from '../domains/sources/datasetCatalog';
 import type { DatasetDomain, DatasetEntry, DatasetKindLabel } from '../domains/sources/datasetCatalog';
-import { datesOf, realtimeDayState, realtimeSessionState, rollup } from '../domains/sources/dailyRollup';
+import { datesOf, minuteDailyState, realtimeDayState, realtimeSessionState, rollup } from '../domains/sources/dailyRollup';
 import type { DayExecution, DayRollup, DayState } from '../domains/sources/dailyRollup';
 import { datasetKind, jobEvidence, leaseEvidence, newsDateJobEvidence } from '../domains/sources/minuteView';
 import { MOCK_GRID } from '../mock/preview';
@@ -114,8 +114,8 @@ const STATUS_TIP = [
   '  빈 데이터(VALID_EMPTY) — 돌았고 그 날 데이터가 없었다는 증거가 남았다. 정상이다.',
   '  무증거(MISSED) — 기한이 지났는데 실행·결과 증거가 없다. 장애다.',
   '',
-  '상태 미제공 — API 가 그 날짜의 판정 값을 주지 않았다. 계획 없음(계획 행이 없다)과 다른',
-  '  사실이라 합치지 않는다. 실시간 데이터셋은 최근 7일 요약 엔드포인트가 없어 여기 해당한다.',
+  '상태 미제공 — API 가 그 날짜의 판정 값을 주지 않았다. 계획 없음(정상 응답에 세션이 없다)과',
+  '  다른 사실이라 합치지 않는다. 최근 7일 범위 밖이나 조회 실패가 여기 해당한다.',
   '',
   '기대 실행 수는 주기에서 지어내지 않고 계획(plan_status=DUE)이 있던 실행 인스턴스를 센다 —',
   '작업 수가 아니다. 그래서 일배치와 실시간 데이터셋에 같은 기대 실행 수가 적용되지 않는다.',
@@ -181,7 +181,13 @@ export function GridPage() {
   const { data: grid, isPending, isError, error } = useSourceGrid();
   /* 실시간 레인의 하루치 세션 — 격자 원장에 없는 행을 세션 원장이 답할 수 있는 만큼만 채운다.
    * 실패해도 격자는 그린다(세션이 없으면 예전처럼 상태 미제공). */
-  const { data: minute, isError: minuteError, dataUpdatedAt: minuteUpdatedAt } = useMinuteStatus();
+  const {
+    data: minute, isPending: minutePending,
+    isError: minuteError, dataUpdatedAt: minuteUpdatedAt,
+  } = useMinuteStatus();
+  const {
+    data: minuteDaily, isPending: minuteDailyPending, isError: minuteDailyError,
+  } = useMinuteDailyStatus(7);
   const intraday = useIntradayAnalysisTrend(undefined, 30);
   const [selectedOutcomeDate, setSelectedOutcomeDate] = useState<string | null>(null);
 
@@ -233,7 +239,7 @@ export function GridPage() {
       )}
       {isError ? (
         <LoadError error={error} />
-      ) : isPending ? (
+      ) : isPending || minutePending || minuteDailyPending ? (
         <PageSkeleton rows={6} />
       ) : (
         <GridBody
@@ -241,6 +247,8 @@ export function GridPage() {
           minute={minute}
           minuteError={minuteError}
           minuteUpdatedAt={minuteUpdatedAt}
+          minuteDaily={minuteDaily}
+          minuteDailyError={minuteDailyError}
         />
       )}
     </div>
@@ -274,17 +282,41 @@ function sessionState(
   return realtimeDayState(d.sessionDataset, date, minute);
 }
 
+function gridSessionState(
+  d: DatasetEntry,
+  date: string,
+  daily: MinuteDailyStatus | undefined,
+  minute?: MinuteStatus,
+): ReturnType<typeof realtimeDayState> {
+  const summarized = dailySessionState(d, date, daily);
+  if (summarized) return summarized;
+  return sessionState(d, date, minute);
+}
+
+function dailySessionState(
+  d: DatasetEntry,
+  date: string,
+  daily: MinuteDailyStatus | undefined,
+): ReturnType<typeof realtimeDayState> {
+  if (!d.sessionDataset) return null;
+  return minuteDailyState(d.sessionDataset, date, daily);
+}
+
 function GridBody({
   grid,
   minute,
   minuteError = false,
   minuteUpdatedAt = 0,
+  minuteDaily,
+  minuteDailyError = false,
   mock = false,
 }: {
   grid: SourceGrid;
   minute?: MinuteStatus;
   minuteError?: boolean;
   minuteUpdatedAt?: number;
+  minuteDaily?: MinuteDailyStatus;
+  minuteDailyError?: boolean;
   mock?: boolean;
 }) {
   const [kindFilter, setKindFilter] = useState<DatasetKindLabel | 'all'>('all');
@@ -326,10 +358,9 @@ function GridBody({
   /* 필터는 **행**에만 건다 — 슬롯을 걸러 날짜 축까지 바뀌면 필터를 바꿀 때마다 열이 움직인다 */
   const dates = useMemo(() => {
     const batchDates = datesOf(grid.slots);
-    return minute && !batchDates.includes(minute.date)
-      ? [...batchDates, minute.date].sort()
-      : batchDates;
-  }, [grid.slots, minute]);
+    const minuteDates = minuteDaily?.dates.map((day) => day.date) ?? (minute ? [minute.date] : []);
+    return [...new Set([...batchDates, ...minuteDates])].sort();
+  }, [grid.slots, minute, minuteDaily]);
   const rolled = useMemo(() => rollup(grid.slots), [grid.slots]);
   const at = (datasetId: string, date: string) => rolled.get(`${datasetId}|${date}`);
   const selectedRowMissing = selected?.dataset.inOpsGrid &&
@@ -348,7 +379,8 @@ function GridBody({
   });
 
   /* 실측 결과 스트립은 이 분기 밖 GridPage에 남고, 목 격자는 아래에서 따로 검수한다. */
-  if (grid.slots.length === 0 && !minute && !mock) {
+  if (grid.slots.length === 0 && !minute && !minuteDaily
+    && !minuteError && !minuteDailyError && !mock) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyRealNotice>최근 {grid.days}일 안에 기록된 파이프라인 실행이 없습니다.</EmptyRealNotice>
@@ -359,13 +391,14 @@ function GridBody({
 
   /**
    * 셀 상태 — **데이터 출처를 상태로 만들지 않는다.** 배치든 실시간이든 같은 어휘를 쓰고,
-   * 판정 값이 없을 때만 `상태 미제공` 이다. 실시간은 최근 7일 요약 API 가 없어, 세션 응답이 답하는
-   * 하루(sessionState)를 빼면 전부 여기 해당한다(목 미리보기에서는 목표 구조를 볼 수 있게 목 판정).
+   * 판정 값이 없을 때만 `상태 미제공` 이다. 최근 7일은 서버의 일별 판정을 쓰고, 재조회 실패 때는
+   * 보존된 정상 캐시를 유지한다. 캐시가 없을 때만 오늘 상세 응답으로 fallback 한다.
    */
   const boxState = (d: DatasetEntry, date: string): DayState => {
     const r = at(d.id, date);
     if (r) return r.state;
-    return sessionState(d, date, minute)?.state ?? (d.inOpsGrid ? '계획 없음' : '상태 미제공');
+    return gridSessionState(d, date, minuteDaily, minute)?.state
+      ?? (d.inOpsGrid ? '계획 없음' : '상태 미제공');
   };
 
   return (
@@ -373,6 +406,13 @@ function GridBody({
       {minuteError && (
         <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
           실시간 세션 축을 갱신하지 못했습니다 — {minute ? '직전 실측을 유지합니다.' : '상태 미제공으로 표시합니다.'}
+        </div>
+      )}
+      {minuteDailyError && (
+        <div className="card card-pad t-xs" style={{ color: 'var(--fg-3)' }}>
+          최근 7일 실시간 상태를 갱신하지 못했습니다 — {minuteDaily
+            ? '직전 실측을 유지합니다.'
+            : '과거 날짜는 상태 미제공으로 표시합니다.'}
         </div>
       )}
       <div className="card">
@@ -461,7 +501,11 @@ function GridBody({
                             type="button"
                             className={'gd-cellbtn' + (sel ? ' gd-selected' : '')}
                             aria-pressed={sel}
-                            title={boxTip(d, date, r, sessionState(d, date, minute))}
+                            title={boxTip(
+                              d, date, r,
+                              dailySessionState(d, date, minuteDaily),
+                              sessionState(d, date, minute),
+                            )}
                             aria-label={`${d.label} ${date} ${st} — 그날 실행 목록 보기`}
                             onClick={() => {
                               setSelected(sel ? null : { dataset: d, date });
@@ -484,9 +528,10 @@ function GridBody({
             행 축(데이터셋 · 유형 · 도메인 · 수집 주기)은 <b>{CATALOG_SOURCE}</b>입니다 — 격자 응답이
             데이터셋을 주지 않아 화면이 작업을 데이터셋으로 묶습니다. 상태와 기대 실행 수는 원장
             값에서만 셉니다. 실시간 데이터셋의 판정 출처는 <b>minute_ingestion_session/window</b>이고,
-            그 원장에는 최근 7일 일별 요약 엔드포인트가 없습니다 — 세션 응답이 답하는 <b>하루</b>만
-            그 세션의 실행체 생존(실행 중 · 주의 · 장애)을 펴고, 나머지 날짜는 <b>상태 미제공</b>으로 둡니다.
-            창 카운트로 그날의 귀결을 만들지 않습니다.
+            최근 7일은 서버가 terminal phase, lease·무증거 창, 품질 결함, 원장 수 불일치와 job·전달 고착을
+            판정한 일별 요약을 한 요청으로 받습니다. 성공 응답에서 세션이 없는 날짜는 <b>계획 없음</b>입니다.
+            재조회 실패 때는 직전 정상 응답을 유지하고, 캐시가 없으면 오늘만 상세 fallback을 쓰며 과거는
+            <b>상태 미제공</b>으로 둡니다. 분·poll 근거와 선택 날짜 상세는 기존 세션 상세가 답합니다.
           </p>
         </div>
       </div>
@@ -495,6 +540,7 @@ function GridBody({
             <DayDetail
               sel={{ ...selected, rollup: at(selected.dataset.id, selected.date) }}
               minuteDetail={selectedMinuteDetail}
+              dailyState={dailySessionState(selected.dataset, selected.date, minuteDaily)}
               mock={mock}
               onClose={() => setSelected(null)}
             />
@@ -623,21 +669,30 @@ function boxTip(
   d: DatasetEntry,
   date: string,
   r?: DayRollup,
-  live?: { state: DayState; basis: string } | null,
+  daily?: { state: DayState; basis: string } | null,
+  detail?: { state: DayState; basis: string } | null,
 ): string {
   if (!d.inOpsGrid) {
-    if (live) {
+    if (daily) {
       return [
-        `${d.label} · ${date} · ${live.state}`,
-        `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'} 세션`,
-        live.basis,
-        '이 날짜의 일별 요약은 여전히 없습니다 — 세션 생존만 편 것이고, 분·poll 단위는 세션 상세가 답합니다',
+        `${d.label} · ${date} · ${daily.state}`,
+        `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'} 일별 서버 판정`,
+        daily.basis,
+        '분·poll 단위와 세션별 근거는 세션 상세가 답합니다',
+      ].join('\n');
+    }
+    if (detail) {
+      return [
+        `${d.label} · ${date} · ${detail.state}`,
+        `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'} 상세 fallback`,
+        detail.basis,
+        '최근 일별 판정을 받지 못해 이 날짜의 실행체 생존 판정만 표시합니다',
       ].join('\n');
     }
     return [
       `${d.label} · ${date} · 상태 미제공`,
       `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '다른 원장'}`,
-      '그 원장에 최근 7일 일별 요약 엔드포인트가 없어 이 날짜의 판정 값을 받지 못했습니다',
+      '최근 일별 요약 범위 밖이거나 조회에 실패해 이 날짜의 판정 값을 받지 못했습니다',
       '없는 상태를 지어내지 않습니다 — 선택하면 그날의 세션 상세로 갑니다',
     ].join('\n');
   }
@@ -678,11 +733,13 @@ function boxTip(
 function DayDetail({
   sel,
   minuteDetail,
+  dailyState,
   mock,
   onClose,
 }: {
   sel: Selection & { rollup?: DayRollup };
   minuteDetail?: MinuteDetailState;
+  dailyState?: ReturnType<typeof realtimeDayState>;
   mock: boolean;
   onClose: () => void;
 }) {
@@ -700,6 +757,7 @@ function DayDetail({
     const live = minuteDetail?.kind === 'ready'
       ? sessionState(d, date, minuteDetail.minute)
       : null;
+    const displayed = dailyState ?? live;
     const detailMessage = minuteDetail?.kind === 'loading'
       ? '선택 날짜의 장중 세션을 불러오는 중입니다.'
       : minuteDetail?.kind === 'error'
@@ -713,12 +771,12 @@ function DayDetail({
           <span className="t-label">
             {d.label} · {date}
           </span>
-          <StatusBadge tone={STATE_TONE[live?.state ?? '상태 미제공']}>
-            {live?.state ?? '상태 미제공'}
+          <StatusBadge tone={STATE_TONE[displayed?.state ?? '상태 미제공']}>
+            {displayed?.state ?? '상태 미제공'}
           </StatusBadge>
-          {live && (
+          {displayed && (
             <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-              실패 세션 {live.failedSessions} / 전체 {live.totalSessions}
+              실패 세션 {displayed.failedSessions} / 전체 {displayed.totalSessions}
             </span>
           )}
           <InfoPopover
@@ -726,15 +784,13 @@ function DayDetail({
             title="판정 출처"
             text={
               `판정 출처: ${d.cadence.kind === 'intradayWindows' ? d.cadence.ledger : '—'}\n\n` +
-              (live
-                ? '이 원장에는 최근 7일 일별 요약 엔드포인트가 없다. 다만 세션 응답이 이 날짜의\n' +
-                  '세션을 주므로 그 실행체 생존 판정만 그대로 편다:\n' +
-                  `${live.basis}\n\n` +
-                  '창 카운트로 그날의 귀결을 만들지는 않는다 — 진행 중인 세션에\n' +
-                  '완결 판정을 붙이는 셈이라 근거가 없다. 분·poll 단위는 세션 상세가 답한다.'
-                : '이 원장에는 최근 7일 일별 요약 엔드포인트가 없어 격자가 이 날짜의 판정 값을 받지 못했다.\n' +
-                  '데이터 출처가 다른 것은 운영 상태가 아니므로 상태 어휘로 쓰지 않는다 —\n' +
-                  '없는 판정을 지어내는 대신 "상태 미제공"이라고 쓰고 세션 상세로 보낸다.')
+              (dailyState
+                ? '최근 일별 상태는 서버가 세션 phase, lease·무증거 창, 품질·원장·job·전달 사실로 판정한다:\n' +
+                  `${dailyState.basis}\n\n아래 목록은 선택 날짜의 세션별 분·poll 근거다.`
+                : live
+                  ? `상세 응답의 실행체 생존 fallback: ${live.basis}\n\n분·poll 단위는 아래 세션 상세가 답한다.`
+                  : '최근 일별 요약 범위 밖이거나 조회에 실패해 이 날짜의 판정 값을 받지 못했다.\n' +
+                    '없는 판정을 지어내는 대신 "상태 미제공"이라고 쓰고 세션 상세로 보낸다.')
             }
           />
           <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={onClose}>

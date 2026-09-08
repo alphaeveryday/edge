@@ -972,14 +972,18 @@ const session = (o: Partial<MinuteSessionFact>): MinuteSessionFact => ({
   leaseExpired: false,
   overdueNoEvidence: 0,
   deadJobs: 0,
+  deliveryFailed: 0,
   ...o,
 });
 const withMinute = (
   sessions: MinuteSessionFact[],
   deadJobsByDataset: Record<string, number | null> = {},
+  deliveryFailedByDataset: Record<string, number | null> = Object.fromEntries(
+    Object.keys(deadJobsByDataset).map((dataset) => [dataset, 0]),
+  ),
 ): Facts => {
   const f = emptyFacts();
-  f.minute = { date: '2026-08-03', sessions, deadJobsByDataset };
+  f.minute = { date: '2026-08-03', sessions, deadJobsByDataset, deliveryFailedByDataset };
   return f;
 };
 
@@ -1169,6 +1173,14 @@ test('R19 후속 처리 유실 — DEAD 는 종료 상태라 1건부터 위반 (
   /* 날짜 축도 같은 임계다 — 0건은 "봤는데 없었다"이지 위반이 아니다 */
   assert.equal(hits(withMinute([], { news_minute: 0 }), 'R19').length, 0);
   assert.equal(hits(withMinute([], { news_minute: 1 }), 'R19').length, 1);
+});
+
+test('R19 후속 처리 유실 — outbox 전달 실패도 별도 사실 축에서 위반이다', () => {
+  assert.equal(hits(withMinute([session({ deliveryFailed: 1 })]), 'R19').length, 1);
+  const dateAxis = hits(withMinute([], { news_minute: 0 }, { news_minute: 2 }), 'R19');
+  assert.equal(dateAxis.length, 1);
+  assert.equal(dateAxis[0].metric, 2);
+  assert.match(dateAxis[0].why, /outbox 전달 실패 2건/);
 });
 
 test('R19 — 같은 데이터셋을 두 축으로 두 번 세지 않는다 (세션에 낡은 값이 남아 있어도)', () => {
@@ -1647,7 +1659,7 @@ test('실시간 축을 읽는 규칙과 `axis: minute` 표기 집합이 같다 (
   const withoutMinute = emptyFacts();
   const withMinuteAxis: Facts = {
     ...emptyFacts(),
-    minute: { date: '2026-08-03', sessions: [session({})], deadJobsByDataset: {} },
+    minute: { date: '2026-08-03', sessions: [session({})], deadJobsByDataset: {}, deliveryFailedByDataset: {} },
   };
   const readsMinute = RULES.filter(
     (R) => R.canRun != null && !R.canRun(withoutMinute) && R.canRun(withMinuteAxis),
@@ -1753,6 +1765,7 @@ test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수
       session({ dataset: 'news_minute', sourceGroup: 'bigkinds', leaseExpired: true }), // 슬래시 + @범위
     ],
     deadJobsByDataset: {},
+    deliveryFailedByDataset: {},
   };
 
   const vs = evaluate(f, NOW).violations;

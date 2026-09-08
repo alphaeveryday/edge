@@ -968,7 +968,7 @@ export const RULES: Rule[] = [
     name: '실시간 후속 처리 유실',
     kls: '유실',
     base: 'P1',
-    desc: '실시간 레인의 후속 처리 작업이 종료 상태 실패(DEAD)로 남았다',
+    desc: '실시간 레인의 후속 처리 job 또는 outbox 전달이 실패로 남았다',
     dep: null,
     source: 'DB_LEDGER',
     /* `deadJobs: null` 은 **모름**이다(그 데이터셋의 job 원장을 응답이 안 준다). 이 축이 없으면
@@ -983,12 +983,17 @@ export const RULES: Rule[] = [
       if (!m) return false;
       /* 🔴 축 선언(맵) 자체가 없으면 못 돈다 — 응답은 런타임 검증을 안 거치고 오고, 빠진 것을
        * 빈 맵으로 접으면 날짜 축 데이터셋이 조용히 세션 축으로 재분류된다(벤더 수만큼 복제). */
-      if (!m.deadJobsByDataset || typeof m.deadJobsByDataset !== 'object') return false;
+      if (!m.deadJobsByDataset || typeof m.deadJobsByDataset !== 'object'
+        || !m.deliveryFailedByDataset || typeof m.deliveryFailedByDataset !== 'object') return false;
       const by = m.deadJobsByDataset;
-      if (m.sessions.length === 0 && Object.keys(by).length === 0) return true;
+      const deliveryBy = m.deliveryFailedByDataset;
+      const mappedDatasets = new Set([...Object.keys(by), ...Object.keys(deliveryBy)]);
+      if (m.sessions.length === 0 && mappedDatasets.size === 0) return true;
       return (
-        Object.values(by).some((v) => Number.isFinite(v)) ||
-        m.sessions.some((x) => !(x.dataset in by) && Number.isFinite(x.deadJobs))
+        [...mappedDatasets].some((dataset) =>
+          Number.isFinite(by[dataset]) && Number.isFinite(deliveryBy[dataset])) ||
+        m.sessions.some((x) => !mappedDatasets.has(x.dataset)
+          && Number.isFinite(x.deadJobs) && Number.isFinite(x.deliveryFailed))
       );
     },
     axis: 'minute',
@@ -998,10 +1003,17 @@ export const RULES: Rule[] = [
       const m = f.minute;
       if (!m) return null;
       const by = m.deadJobsByDataset ?? {};
+      const deliveryBy = m.deliveryFailedByDataset ?? {};
+      const mappedDatasets = new Set([...Object.keys(by), ...Object.keys(deliveryBy)]);
       const unknown = new Set<string>();
-      for (const [d, v] of Object.entries(by)) if (!Number.isFinite(v)) unknown.add(d);
+      for (const d of mappedDatasets) {
+        if (!Number.isFinite(by[d]) || !Number.isFinite(deliveryBy[d])) unknown.add(d);
+      }
       for (const x of m.sessions) {
-        if (!(x.dataset in by) && !Number.isFinite(x.deadJobs)) unknown.add(x.dataset);
+        if (!mappedDatasets.has(x.dataset)
+          && (!Number.isFinite(x.deadJobs) || !Number.isFinite(x.deliveryFailed))) {
+          unknown.add(x.dataset);
+        }
       }
       return unknown.size
         ? `후속 처리 원장을 못 읽는 데이터셋 ${[...unknown].join('·')} — 그 유실은 이 판정에 없다(0건이 아니다)`
@@ -1010,44 +1022,52 @@ export const RULES: Rule[] = [
     run: (f) => {
       const date = f.minute?.date ?? '';
       const by = f.minute?.deadJobsByDataset ?? {};
+      const deliveryBy = f.minute?.deliveryFailedByDataset ?? {};
+      const mappedDatasets = new Set([...Object.keys(by), ...Object.keys(deliveryBy)]);
       const out: ReturnType<Rule['run']> = [];
       /* ⚠️ **값의 입도가 사건의 입도를 정한다.** 뉴스 job 은 세션 연결 컬럼이 없어
        * `(dataset, date)` 집계 하나뿐이다. 그걸 세션마다 내면 벤더 둘인 날 같은 3건이 두
        * 사건으로 서서 6건으로 읽히고, 어느 벤더 소관인지 근거도 없다.
        * 그리고 **세션을 순회하지 않는다** — 그날 그 데이터셋의 세션이 없어도(아침 planner 전 ·
        * 비거래일 · 뉴스 계획만 실패한 날) 유실은 있다. 순회로 읽으면 하필 그날 조용해진다. */
-      for (const [dataset, dead] of Object.entries(by)) {
-        if (!Number.isFinite(dead) || (dead as number) < 1) continue;
+      for (const dataset of mappedDatasets) {
+        const dead = by[dataset];
+        const deliveryFailed = deliveryBy[dataset];
+        if (!Number.isFinite(dead) || !Number.isFinite(deliveryFailed)) continue;
+        const failures = (dead as number) + (deliveryFailed as number);
+        if (failures < 1) continue;
         out.push({
           target: dataset,
           targetId: dataset,
           scope: date,
           title: `${dataset} 후속 처리 유실`,
-          metric: dead as number,
+          metric: failures,
           unit: '건',
           /* "못 가른다"가 아니라 **지금 응답이 안 가른다**. 원장에는 축이 있다
            * (`news_extraction_job.source_code`) — 조회가 날짜 창만 걸고 GROUP BY 를 안 한다.
            * 불가능으로 못박으면 아무도 그 쿼리를 고치지 않는다. */
-          why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다. 이 수는 지금 응답이 날짜 축으로만 주어 벤더로 갈리지 않는다',
-          evidence: `후속 처리 작업 원장 ${date} dead (데이터셋·날짜 집계)`,
+          why: `job DEAD ${dead}건 · outbox 전달 실패 ${deliveryFailed}건이다 — 복구 전까지 후속 처리가 유실된다. 이 수는 지금 응답이 날짜 축으로만 주어 벤더로 갈리지 않는다`,
+          evidence: `후속 처리 작업·outbox 원장 ${date} 실패 (데이터셋·날짜 집계)`,
           drill: ['dataset', 'ds-' + dataset] as [string, string],
         });
       }
       /* 세션 축 — 날짜 축으로 이미 낸 데이터셋은 건너뛴다(같은 사실을 두 번 내지 않는다) */
       for (const s of f.minute?.sessions ?? []) {
-        if (s.dataset in by) continue;
+        if (mappedDatasets.has(s.dataset)) continue;
         /* `null`·수 아닌 값은 0이 아니라 **모름**이다 — 어느 원장을 읽어야 할지 모르는
          * 데이터셋을 "봤고 괜찮다"로 접지 않는다. 판정 대상에서 빠질 뿐이고 `note` 가 밝힌다. */
-        if (!Number.isFinite(s.deadJobs) || (s.deadJobs as number) < 1) continue;
+        if (!Number.isFinite(s.deadJobs) || !Number.isFinite(s.deliveryFailed)) continue;
+        const failures = (s.deadJobs as number) + (s.deliveryFailed as number);
+        if (failures < 1) continue;
         out.push({
           target: sessionLabel(s),
           targetId: sessionTarget(s),
           scope: date,
           title: `${sessionLabel(s)} 후속 처리 유실`,
-          metric: s.deadJobs as number,
+          metric: failures,
           unit: '건',
-          why: '재시도가 끝난 종료 상태 실패다 — 재투입 전까지 그만큼이 유실이다',
-          evidence: `후속 처리 작업 원장 ${date} dead`,
+          why: `job DEAD ${s.deadJobs}건 · outbox 전달 실패 ${s.deliveryFailed}건이다 — 복구 전까지 후속 처리가 유실된다`,
+          evidence: `후속 처리 작업·outbox 원장 ${date} 실패`,
           drill: ['dataset', 'ds-' + s.dataset] as [string, string],
         });
       }
