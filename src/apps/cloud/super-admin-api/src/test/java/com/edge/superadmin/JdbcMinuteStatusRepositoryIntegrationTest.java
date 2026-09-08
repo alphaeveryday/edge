@@ -131,7 +131,11 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertPriceJob("job-stale", "sess-t", PAST.plusMinutes(3), "DEAD");
 		jdbc.update("UPDATE price_window_job SET error_code = 'STALE' WHERE job_id = 'job-stale'");
 		insertWindow("sess-t", PAST.plusMinutes(4), "VALID");
-		insertPriceJob("job-backfill", "sess-t", PAST.plusMinutes(4), "PENDING");
+		insertPriceJob("job-backfill", "sess-t", PAST.plusMinutes(4), "PENDING", false);
+		insertWindow("sess-t", PAST.plusMinutes(8), "VALID");
+		insertPriceJob("job-past-realtime-missing", "sess-t", PAST.plusMinutes(8), "PENDING");
+		insertWindow("sess-t", PAST.plusMinutes(9), "VALID");
+		insertPriceJob("job-rollout-unknown", "sess-t", PAST.plusMinutes(9), "PENDING", null);
 		insertWindow("sess-t", PAST.plusMinutes(5), "VALID");
 		insertPriceJob("job-realtime", "sess-t", PAST.plusMinutes(5), "PENDING");
 		insertPriceOutbox("job-realtime", 0, "NEW");
@@ -168,7 +172,9 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 정정으로 폐기된 이전 세대 STALE 은 정상 격리다. 실제 DEAD 와 합치면 정정한 날이
 		// 영구 주의로 남는다.
 		assertThat(status.sessions().get(0).priceJobs().dead()).isEqualTo(1);
-		assertThat(status.sessions().get(0).priceJobs().deliveryFailed()).isEqualTo(1);
+		assertThat(status.sessions().get(0).priceJobs().deliveryFailed())
+				.as("실시간 필수 event 부재는 자정 뒤에도 남고 과거 백필 무발행만 제외한다")
+				.isEqualTo(2);
 		assertThat(status.sessions().get(0).priceJobs().claimed()).isEqualTo(2);
 		assertThat(status.sessions().get(0).priceJobs().claimedExpired()).isEqualTo(2);
 		assertThat(status.sessions().get(0).priceJobs().waiting()).isEqualTo(2);
@@ -182,13 +188,13 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
 		insertSession("sess-today", "price_minute", "toss", today, "ACTIVE");
 		insertWindow("sess-today", PAST, "VALID");
-		insertPriceJob("job-missing-event", "sess-today", PAST, "PENDING");
+		insertPriceJob("job-missing-event", "sess-today", PAST, "PENDING", null);
 
 		SessionSummary session = repository.status(today).sessions().get(0);
 
 		assertThat(session.priceJobs().waiting()).isZero();
 		assertThat(session.priceJobs().deliveryFailed())
-				.as("실시간 job은 outbox가 없으면 consumer에 도달할 수 없다")
+				.as("writer 전환 구간의 NULL도 오늘 실시간이면 전달 실패를 숨기지 않는다")
 				.isEqualTo(1);
 	}
 
@@ -213,7 +219,7 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertPriceJob("daily-stale", "sess-from", PAST.plusMinutes(2), "DEAD");
 		jdbc.update("UPDATE price_window_job SET error_code = 'STALE' WHERE job_id = 'daily-stale'");
 		insertWindow("sess-from", PAST.plusMinutes(3), "VALID");
-		insertPriceJob("daily-backfill", "sess-from", PAST.plusMinutes(3), "PENDING");
+		insertPriceJob("daily-backfill", "sess-from", PAST.plusMinutes(3), "PENDING", false);
 		insertWindow("sess-from", PAST.plusMinutes(4), "VALID");
 		insertPriceJob("daily-realtime", "sess-from", PAST.plusMinutes(4), "PENDING");
 		insertPriceOutbox("daily-realtime", 0, "NEW");
@@ -263,14 +269,19 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 
 	private void insertPriceJob(String jobId, String sessionId, OffsetDateTime windowStart,
 			String status) {
+		insertPriceJob(jobId, sessionId, windowStart, status, true);
+	}
+
+	private void insertPriceJob(String jobId, String sessionId, OffsetDateTime windowStart,
+			String status, Boolean deliveryExpected) {
 		// FK 가 window 행을 요구한다 — job 이 window 를 앞설 수 없다(스키마 주석).
 		jdbc.update("UPDATE minute_ingestion_window SET generation = 1 WHERE session_id = ? AND window_start = ?",
 				sessionId, windowStart);
 		jdbc.update("""
 				INSERT INTO price_window_job (job_id, session_id, window_start, generation,
-				       trigger_schema_version, status)
-				VALUES (?, ?, ?, 1, 'v1', ?)
-				""", jobId, sessionId, windowStart, status);
+				       trigger_schema_version, status, delivery_expected)
+				VALUES (?, ?, ?, 1, 'v1', ?, ?)
+				""", jobId, sessionId, windowStart, status, deliveryExpected);
 	}
 
 	private void insertNewsJob(String jobId, String createdAtUtc, String status) {

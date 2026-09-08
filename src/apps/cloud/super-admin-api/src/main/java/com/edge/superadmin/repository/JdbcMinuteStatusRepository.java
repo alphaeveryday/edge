@@ -106,14 +106,16 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			count(*) FILTER (WHERE %4$s) AS delivery_failed
 			""";
 	// price 의 DEAD('STALE')은 정정 후 이전 generation을 의도적으로 격리한 정상 귀결이다.
-	// outbox 없는 PENDING/RETRY_WAIT은 과거일 백필이 의도적으로 발행하지 않은 job이다.
-	// 둘을 실시간 실패·대기와 합치면 정정/백필한 날짜가 영구 경고로 남는다.
+	// delivery_expected는 writer가 commit 시점의 is_backfill 결정을 영구 기록한다. NULL은
+	// schema→writer 단계 배포 사이 구 writer 행뿐이다. 그 짧은 구간에는 종전의 오늘 날짜
+	// 판정을 fallback으로 유지하고, writer 전환·NULL 대사 뒤 NOT NULL 수축으로 제거한다.
 	private static final String PRICE_JOB_COUNT_COLUMNS =
 			JOB_COUNT_COLUMNS.formatted("j", " AND o.status IN ('NEW','PUBLISHED')",
 					" AND j.error_code IS DISTINCT FROM 'STALE'",
 					"j.status IN ('PENDING','RETRY_WAIT')"
-							+ " AND (o.status = 'DEAD' OR (o.event_id IS NULL"
-							+ " AND s.session_date = (now() AT TIME ZONE 'Asia/Seoul')::date))");
+							+ " AND COALESCE(j.delivery_expected,"
+							+ " s.session_date = (now() AT TIME ZONE 'Asia/Seoul')::date)"
+							+ " AND (o.status = 'DEAD' OR o.event_id IS NULL)");
 	private static final String NEWS_JOB_COUNT_COLUMNS =
 			JOB_COUNT_COLUMNS.formatted("j", " AND o.status IN ('NEW','PUBLISHED')",
 					"", "j.status IN ('PENDING','RETRY_WAIT')"

@@ -94,7 +94,10 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514)에 더해
   **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
   세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)이다. 일별 판정은 날짜별 상세 조회를
-  반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다 — 두 원장
+  반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다.
+  가격 job의 `delivery_expected`가 실시간 필수 event와 과거 백필 무발행을 영구 구분한다.
+  schema→writer 단계 배포 사이 구 writer 행의 `NULL`만 오늘 날짜 판정으로 호환하고, writer
+  전환·대사 뒤 NOT NULL 수축으로 닫는다 — 두 원장
   모두 소유는 data-pipeline 이라(ADR-0005
   단일 writer) 여기선 **쓰지 않는다**. JPA 엔티티를 두지
   않는 이유: `ddl-auto=validate` 환경에서 소유하지 않은 5테이블에 이 앱 기동을 묶지 않기

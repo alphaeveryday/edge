@@ -163,6 +163,7 @@ class JobLedger:
     @staticmethod
     def _insert_price_job_tx(
         cur, *, session_id, window_start, generation, trigger_schema_version,
+        delivery_expected,
     ) -> tuple[str, bool]:
         job_id = price_job_id(
             session_id=session_id, window_start=window_start,
@@ -171,12 +172,14 @@ class JobLedger:
         cur.execute(
             """
             INSERT INTO price_window_job (
-                job_id, session_id, window_start, generation, trigger_schema_version
-            ) VALUES (%s, %s, %s, %s, %s)
+                job_id, session_id, window_start, generation, trigger_schema_version,
+                delivery_expected
+            ) VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (job_id) DO NOTHING
             RETURNING job_id
             """,
-            (job_id, session_id, window_start, generation, trigger_schema_version),
+            (job_id, session_id, window_start, generation, trigger_schema_version,
+             delivery_expected),
         )
         return job_id, cur.fetchone() is not None
 
@@ -211,13 +214,14 @@ class JobLedger:
 
     def insert_price_job(
         self, *, session_id: str, window_start: datetime, generation: int,
-        trigger_schema_version: str,
+        trigger_schema_version: str, delivery_expected: bool,
     ) -> tuple[str, bool]:
         """identity UNIQUE 충돌은 no-op — (job_id, created). `insert_news_job` 과 같은 결."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             return self._insert_price_job_tx(
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
+                delivery_expected=delivery_expected,
             )
 
     def enqueue_news_job(
@@ -254,6 +258,7 @@ class JobLedger:
             job_id, created = self._insert_price_job_tx(
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
+                delivery_expected=True,
             )
             self._insert_outbox_tx(
                 cur,

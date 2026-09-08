@@ -75,6 +75,14 @@ class TestDeterministicIds:
 
 
 class TestJobIdentityInsert:
+    def test_price_job_delivery_intent_has_no_default(self):
+        """발행 의도를 빠뜨린 새 writer가 모든 job을 실시간으로 기록하지 못하게 한다."""
+        import inspect
+
+        parameter = inspect.signature(JobLedger.insert_price_job).parameters["delivery_expected"]
+        assert parameter.default is inspect.Parameter.empty
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
     def test_duplicate_insert_is_noop(self):
         db = FakeMinuteDB()
         ledger = make_ledger(db)
@@ -87,7 +95,7 @@ class TestJobIdentityInsert:
         db = FakeMinuteDB()
         ledger = make_ledger(db)
         args = dict(session_id="msn_x", window_start=WINDOW_START,
-                    generation=1, trigger_schema_version="t1")
+                    generation=1, trigger_schema_version="t1", delivery_expected=True)
         _, created1 = ledger.insert_price_job(**args)
         _, created2 = ledger.insert_price_job(**args)
         assert created1 is True and created2 is False
@@ -183,7 +191,7 @@ class TestPriceStaleRejection:
         }
         job_id, _ = ledger.insert_price_job(
             session_id="msn_x", window_start=WINDOW_START,
-            generation=1, trigger_schema_version="t1",
+            generation=1, trigger_schema_version="t1", delivery_expected=True,
         )
         assert ledger.claim_due_job(kind="price", worker_id="c1", now=NOW, lease_seconds=60) is None
         row = db.jobs[("price", job_id)]
@@ -197,7 +205,7 @@ class TestPriceStaleRejection:
         }
         job_id, _ = ledger.insert_price_job(
             session_id="msn_x", window_start=WINDOW_START,
-            generation=1, trigger_schema_version="t1",
+            generation=1, trigger_schema_version="t1", delivery_expected=True,
         )
         claim = ledger.claim_due_job(kind="price", worker_id="c1", now=NOW, lease_seconds=60)
         assert claim["job_id"] == job_id
@@ -385,11 +393,11 @@ class TestAtomicEnqueue:
         }
         stale_id, _ = ledger.insert_price_job(
             session_id="msn_x", window_start=WINDOW_START,
-            generation=1, trigger_schema_version="t1",
+            generation=1, trigger_schema_version="t1", delivery_expected=True,
         )
         current_id, _ = ledger.insert_price_job(
             session_id="msn_x", window_start=WINDOW_START,
-            generation=2, trigger_schema_version="t1",
+            generation=2, trigger_schema_version="t1", delivery_expected=True,
         )
         claim = ledger.claim_due_job(kind="price", worker_id="c1", now=NOW, lease_seconds=60)
         assert claim is not None and claim["job_id"] == current_id

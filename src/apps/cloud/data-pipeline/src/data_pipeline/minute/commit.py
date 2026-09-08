@@ -290,6 +290,7 @@ class MinuteCommitter:
             job_id, _ = JobLedger._insert_price_job_tx(
                 cur, session_id=session_id, window_start=window_start,
                 generation=generation, trigger_schema_version=trigger_schema_version,
+                delivery_expected=emit_outbox,
             )
             if emit_outbox:
                 JobLedger._insert_outbox_tx(

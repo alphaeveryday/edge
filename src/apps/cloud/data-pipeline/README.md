@@ -1988,7 +1988,9 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #  2) 과거일 세션은 **outbox 이벤트를 안 낸다**(ALPHA-863) — 커밋은 window·job 만 쓴다.
 #     판정은 `--session-date` 하나이고(`make_price_collector` 가 `is_backfill` 로 돌려준다)
 #     벤더와 무관하다. 그러니 백필 뒤 `dataset_commit_outbox` 에 행이 없는 것이 정상이고,
-#     수동 DEAD 격리도 필요 없다. 무엇을 수집했는지는 window·job 원장에 그대로 남는다.
+#     수동 DEAD 격리도 필요 없다. 그 발행 의도는 job의 `delivery_expected=false`에 같이 남아
+#     조회 시각이나 생성 시각으로 다시 추정하지 않는다(ALPHA-1066). 실시간 job은 true라 필수
+#     event 부재가 자정을 지나도 전달 실패로 보인다. 무엇을 수집했는지는 window·job 원장에 남는다.
 #  3) 종가 단일가 구간(15:21~15:29)의 값이 **당일 레인과 다르다**. 당일 TR 은 그 9분을
 #     마감 체결 봉의 복제로 채우고(거래량까지 반복 — 5분 마지막 두 버킷이 부풀려진다),
 #     소급 경로는 체결이 없었다는 사실대로 직전 종가 flat·거래량 0 으로 채운다. 백필한
