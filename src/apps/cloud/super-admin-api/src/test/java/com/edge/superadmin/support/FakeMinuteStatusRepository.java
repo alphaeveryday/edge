@@ -14,7 +14,7 @@ import java.util.Map;
  */
 public class FakeMinuteStatusRepository implements MinuteStatusRepository {
 
-	private static final JobCounts NO_JOBS = new JobCounts(0, 0, 0, 0, 0);
+	private static final JobCounts NO_JOBS = new JobCounts(0, 0, 0, 0, 0, 0);
 
 	private final Map<LocalDate, MinuteStatus> byDate;
 
@@ -29,5 +29,28 @@ public class FakeMinuteStatusRepository implements MinuteStatusRepository {
 	@Override
 	public MinuteStatus status(LocalDate sessionDate) {
 		return byDate.getOrDefault(sessionDate, new MinuteStatus(List.of(), NO_JOBS));
+	}
+
+	@Override
+	public DailyStatus dailyStatus(LocalDate fromInclusive, LocalDate toInclusive) {
+		List<DailySessionSummary> sessions = byDate.entrySet().stream()
+				.filter(e -> !e.getKey().isBefore(fromInclusive) && !e.getKey().isAfter(toInclusive))
+				.flatMap(e -> e.getValue().sessions().stream().map(s -> new DailySessionSummary(
+						s.dataset(), s.sourceGroup(), s.sessionDate(), s.phase(),
+						s.expectedWindowCount(), s.leaseExpired(),
+						new DailyWindowCounts(s.windows().due(), s.windows().claimed(),
+								s.windows().valid(), s.windows().validEmpty(),
+								s.windows().incomplete(), s.windows().missing(),
+								s.windows().invalid(), s.windows().overdueNoEvidence(),
+								s.gaps().stream().filter(g -> !g.noEvidence()).count()),
+						s.priceJobs())))
+				.toList();
+		Map<LocalDate, JobCounts> news = new HashMap<>();
+		byDate.forEach((date, status) -> {
+			if (!date.isBefore(fromInclusive) && !date.isAfter(toInclusive)) {
+				news.put(date, status.newsJobs());
+			}
+		});
+		return new DailyStatus(sessions, news);
 	}
 }

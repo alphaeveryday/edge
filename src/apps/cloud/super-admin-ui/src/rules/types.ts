@@ -228,8 +228,8 @@ export interface RunbookEntry {
  * 규칙은 사실만 읽는 층이고 화면 도메인을 모른다 — 반대로 끌어오면 계층이 뒤집힌다.
  * 대신 호출자가 DTO 를 이 모양으로 맞춰 넣는다 — 그 어댑터는 **아직 없다**(화면 조각이 들여온다).
  *
- * `deadJobs` 는 **세션에 붙은** 후속 처리 원장이다(가격 job 은 `session_id` 를 가진다).
- * 날짜 축 집계(뉴스)는 여기 넣지 않는다 — `MinuteFacts.deadJobsByDataset` 이 그 자리다.
+ * `deadJobs`·`deliveryFailed`는 **세션에 붙은** 후속 처리 원장이다(가격 job 은 `session_id` 를 가진다).
+ * 날짜 축 집계(뉴스)는 여기 넣지 않는다 — `MinuteFacts.*ByDataset` 이 그 자리다.
  * **세션마다 실으면 벤더 수만큼 복제**되고, 그날 세션이 없으면 값이 실릴 자리 자체가 없다.
  * 출처는 어댑터 소관, 입도는 규칙 소관이다.
  */
@@ -260,6 +260,8 @@ export interface MinuteSessionFact {
    * 세션이 없는 날 그 값은 실릴 자리가 없어 유실이 통째로 사라진다.
    */
   deadJobs: number | null;
+  /** 세션 축 미귀결 job의 최신 outbox 전달 실패. 원장 부재는 null이다. */
+  deliveryFailed: number | null;
 }
 
 /** 하루치 실시간 세션 — 원장에 `minute_ingestion_session/window` 축이 없으면 통째로 부재다 */
@@ -283,6 +285,8 @@ export interface MinuteFacts {
    * 값 `null` 은 0이 아니라 **모름**이다(그 원장을 이 응답이 주지 않는다).
    */
   deadJobsByDataset: Record<string, number | null>;
+  /** 날짜 축 미귀결 job의 최신 outbox 전달 실패. 키의 입도는 deadJobsByDataset과 같다. */
+  deliveryFailedByDataset: Record<string, number | null>;
 }
 
 export interface Facts {

@@ -46,7 +46,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Event Pipeline — 수집 상태 | `GET /api/v1/sources/report` |
 | Event Pipeline — 파이프라인 실행 이력 | `GET /api/v1/sources/grid` |
 | Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
-| Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` |
+| Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` · `GET /api/v1/sources/minute/daily`(최근 일별 Grid 판정) |
 | Event Pipeline — 구성종목 결손 영향 | `GET /api/v1/sources/impact/holdings` |
 | Event Pipeline — 분석 목록/무효화 | `GET /api/v1/analyses` · `POST /api/v1/analyses/{id}/invalidate` (사유 필수 — 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번, ALPHA-440. 구 정정/제외/복원 엔드포인트는 ALPHA-737 로 은퇴) |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |

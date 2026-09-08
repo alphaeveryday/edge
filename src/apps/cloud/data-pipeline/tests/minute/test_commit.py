@@ -101,6 +101,7 @@ class TestCommitPriceWindow:
         assert generation == 1
         assert db.outbox == {}
         assert len(db.jobs) == 1
+        assert next(iter(db.jobs.values()))["delivery_expected"] is False
         assert db.windows[(session_id, claim["window_start"])]["data_status"] == "VALID"
         assert db.connect_calls == before + 1  # 여전히 한 트랜잭션
 
@@ -117,6 +118,7 @@ class TestCommitPriceWindow:
         assert window["data_status"] == "VALID" and window["generation"] == 1
         assert len(db.jobs) == 1
         [(_, job_id)] = db.jobs.keys()
+        assert db.jobs[("price", job_id)]["delivery_expected"] is True
         assert f"PriceWindowCommitted:{job_id}:0" in db.outbox
 
     def test_rerun_same_checksum_no_new_outbox(self):

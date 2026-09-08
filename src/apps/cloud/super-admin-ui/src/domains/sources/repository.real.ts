@@ -4,6 +4,7 @@ import type { SourcesRepository } from './repository';
 import type {
   HoldingsImpact,
   MinuteStatus,
+  MinuteDailyStatus,
   NewsLineage,
   SourceGrid,
   SourceOverview,
@@ -37,4 +38,8 @@ export const realSourcesRepository: SourcesRepository = {
     ),
   minuteStatus: (date) =>
     apiClient.get<MinuteStatus>(date ? `/sources/minute?date=${date}` : '/sources/minute'),
+  minuteDailyStatus: (days) =>
+    apiClient.get<MinuteDailyStatus>(
+      days === undefined ? '/sources/minute/daily' : `/sources/minute/daily?days=${days}`,
+    ),
 };

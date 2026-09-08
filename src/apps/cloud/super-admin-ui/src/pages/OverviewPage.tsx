@@ -206,15 +206,20 @@ function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
           장중 1분 수집 상세 →
         </Link>
       </div>
-      {isError ? (
+      {isError && !real ? (
         /* 첫 화면 전체를 죽이지 않는다 — 이 카드만 실패를 밝힌다(조회 실패 ≠ 미가동) */
         <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
           1분 원장 조회 실패 — 미가동이 아니라 조회 오류입니다.
         </p>
-      ) : isPending ? (
+      ) : isPending && !real ? (
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>불러오는 중…</p>
       ) : (
         <>
+          {isError && real && (
+            <p className="t-xs m-0" style={{ color: 'var(--warn)', marginBottom: 6 }}>
+              1분 원장 재조회 실패 — 아래 직전 실측을 유지하며 현재 해소 여부는 알 수 없습니다.
+            </p>
+          )}
           {data!.sessions.length === 0 ? (
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
               오늘({data!.date}) 세션 없음 — 1분 파이프라인이 계획되지 않았다는 사실(비거래일 또는
@@ -231,6 +236,12 @@ function MinuteLaneCard({ preview = false }: { preview?: boolean }) {
             <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
               뉴스 추출 DEAD {data!.newsJobs.dead}건 —{' '}
               <Link to={`/lineage/news?date=${data!.date}`}>사유별 내역</Link>
+            </p>
+          )}
+          {data!.newsJobs.deliveryFailed > 0 && (
+            <p className="t-xs m-0" style={{ color: 'var(--down, #b91c1c)' }}>
+              뉴스 추출 전달 실패 {data!.newsJobs.deliveryFailed}건 —{' '}
+              <Link to={`/minute?date=${data!.date}&dataset=news_minute`}>outbox 근거 확인</Link>
             </p>
           )}
           {/* 🔴 **DEAD 만 그리면 나머지 칸이 화면에서 사라진다.** 목을 쓸지 정할 때는 전 칸을

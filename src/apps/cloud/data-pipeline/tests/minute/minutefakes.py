@@ -946,7 +946,7 @@ class _Cursor:
                        tagger_version=p[4], ontology_version=p[5])
         else:
             row.update(session_id=p[1], window_start=p[2], generation=p[3],
-                       trigger_schema_version=p[4])
+                       trigger_schema_version=p[4], delivery_expected=p[5])
         self.db.jobs[(kind, job_id)] = row
         self._rows = [(job_id,)]
 

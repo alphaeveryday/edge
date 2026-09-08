@@ -11,23 +11,23 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { dateOfSlot, datesOf, realtimeDayState, realtimeSessionState, rollup, stateOf } from './dailyRollup.ts';
+import { dateOfSlot, datesOf, minuteDailyState, realtimeDayState, realtimeSessionState, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
 import { jobEvidence, leaseEvidence, newsDateJobEvidence } from './minuteView.ts';
-import type { GridCell, GridSlot, MinuteSession, MinuteStatus } from './types.ts';
+import type { GridCell, GridSlot, MinuteDailyStatus, MinuteSession, MinuteStatus } from './types.ts';
 
 const minuteSession = (sourceGroup: string, values: Partial<MinuteSession> = {}): MinuteSession => ({
   sessionId: `session-${sourceGroup}`, dataset: 'price_minute', sourceGroup, phase: 'ACTIVE',
   universeVersion: 'v1', expectedWindowCount: 390, processedThrough: null,
   contiguousCompleteThrough: null, heartbeatAt: null, leaseExpiresAt: null, leaseExpired: false,
   windows: { due: 0, claimed: 0, valid: 0, validEmpty: 0, incomplete: 0, missing: 0, invalid: 0, overdueNoEvidence: 0 },
-  gaps: [], priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+  gaps: [], priceJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0 },
   ...values,
 });
 
 const minuteStatus = (sessions: MinuteSession[]): MinuteStatus => ({
   date: '2026-08-12', sessions,
-  newsJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0 },
+  newsJobs: { waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 0, dead: 0, deliveryFailed: 0 },
 });
 
 test('실패 1/3은 주의이고 실패 3/3만 장애다', () => {
@@ -72,14 +72,58 @@ test('생존 판정이 없는 세션도 실패/전체 분모는 숨기지 않는
 
 test('실시간 상세는 실패 분모와 window·lease·job 근거를 함께 표시한다', () => {
   const source = readFileSync(new URL('../../pages/GridPage.tsx', import.meta.url), 'utf8');
-  assert.match(source, /실패 세션 \{live\.failedSessions\} \/ 전체 \{live\.totalSessions\}/);
+  assert.match(source, /실패 세션 \{displayed\.failedSessions\} \/ 전체 \{displayed\.totalSessions\}/);
   assert.match(source, /<th>창 증거<\/th>[\s\S]*<th>lease 근거<\/th>[\s\S]*<th>job 근거<\/th>/);
   assert.match(source, /날짜 job\(세션 귀속 아님\)/, '날짜 job을 벤더 세션 근거로 위장하지 않는다');
   assert.match(source, /job 축 미제공/, 'job 축 없는 데이터셋에 뉴스 날짜 job을 붙이지 않는다');
   assert.equal(source.match(/날짜 job\(세션 귀속 아님\)/g)?.length, 1, '날짜 job은 벤더마다 복제하지 않는다');
   assert.match(source, /일부 벤더 실행체 실패는 주의, 전체 벤더 실패만 장애/);
-  assert.match(source, /실행체 생존\(실행 중 · 주의 · 장애\)/);
+  assert.match(source, /terminal phase, lease·무증거 창, 품질 결함, 원장 수 불일치와 job·전달 고착/);
   assert.equal(source.match(/newsDateJobEvidence\(minuteDetail\)/g)?.length, 1, '날짜 job 근거는 표 밖에서 한 번만 그린다');
+});
+
+test('최근 일별 서버 판정과 정상 응답의 세션 부재를 그대로 구분한다', () => {
+  const daily: MinuteDailyStatus = {
+    days: 2, from: '2026-08-11', to: '2026-08-12',
+    dates: [
+      { date: '2026-08-11', datasets: [] },
+      { date: '2026-08-12', datasets: [{
+        dataset: 'price_minute', state: 'CAUTION', basis: '실패 세션 1 / 전체 3',
+        failedSessions: 1, totalSessions: 3,
+      }] },
+    ],
+  };
+  assert.deepEqual(minuteDailyState('price_minute', '2026-08-11', daily), {
+    state: '계획 없음', basis: '기록된 세션 없음', failedSessions: 0, totalSessions: 0,
+  });
+  assert.deepEqual(minuteDailyState('price_minute', '2026-08-12', daily), {
+    state: '주의', basis: '실패 세션 1 / 전체 3', failedSessions: 1, totalSessions: 3,
+  });
+  assert.equal(minuteDailyState('price_minute', '2026-08-10', daily), null,
+    '범위 밖을 세션 없음으로 만들면 조회하지 않은 날이 계획 없음으로 위장한다');
+  assert.equal(minuteDailyState('price_minute', '2026-08-12'), null,
+    '조회 실패를 정상 응답의 세션 부재와 합치면 안 된다');
+});
+
+test('Grid는 최근 일별 상태를 한 범위 요청으로 가져오고 상세 날짜 요청을 보존한다', () => {
+  const repository = readFileSync(new URL('./repository.real.ts', import.meta.url), 'utf8');
+  const page = readFileSync(new URL('../../pages/GridPage.tsx', import.meta.url), 'utf8');
+  assert.match(repository, /\/sources\/minute\/daily\?days=\$\{days\}/);
+  assert.match(page, /useMinuteDailyStatus\(7\)/);
+  assert.match(page, /useMinuteStatus\(selectedMinuteDate, fetchSelectedMinute\)/,
+    '선택 날짜의 세션 주소·드릴다운은 기존 상세 API를 계속 써야 한다');
+  assert.match(page, /return minuteDailyState\(d\.sessionDataset, date, daily\);/,
+    '재조회 실패 상태여도 React Query가 보존한 마지막 정상 일별 데이터를 먼저 써야 한다');
+  assert.doesNotMatch(page, /if \(!dailyError\)/,
+    '오류 플래그 하나로 보존된 정상 캐시까지 버리면 과거 날짜가 상태 미제공으로 퇴행한다');
+  assert.match(page, /dailyState=\{dailySessionState\(selected\.dataset, selected\.date, minuteDaily\)\}/,
+    '오늘 상세 fallback을 일별 서버 판정 출처로 위장하면 안 된다');
+  assert.match(page, /상세 fallback[\s\S]*실행체 생존 판정만 표시합니다/,
+    '셀 툴팁도 일별 판정과 오늘 상세 fallback의 출처를 구분해야 한다');
+  assert.match(page, /!minuteError && !minuteDailyError && !mock/,
+    '조회 실패를 빈 실행 기록으로 위장하는 조기 반환을 열면 안 된다');
+  assert.match(page, /isPending \|\| minutePending \|\| minuteDailyPending/,
+    '첫 실시간 조회가 끝나기 전에 상태 미제공·빈 기록을 확정해서는 안 된다');
 });
 
 test('뉴스 날짜 job 조회 상태를 실패·대기와 구분한다', () => {
@@ -91,7 +135,7 @@ test('뉴스 날짜 job 조회 상태를 실패·대기와 구분한다', () => 
 
 test('job 포함 관계와 종료 세션의 원시 lease 근거를 보존한다', () => {
   assert.match(
-    jobEvidence({ waiting: 0, claimed: 4, claimedExpired: 4, succeeded: 1, dead: 0 }),
+    jobEvidence({ waiting: 0, claimed: 4, claimedExpired: 4, succeeded: 1, dead: 0, deliveryFailed: 0 }),
     /처리 중 0 · 유효 lease 없음 4/,
   );
   const closed = minuteSession('kis', {

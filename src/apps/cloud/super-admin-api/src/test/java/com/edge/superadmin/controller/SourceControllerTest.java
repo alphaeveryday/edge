@@ -826,15 +826,15 @@ class SourceControllerTest {
 						new MinuteStatusRepository.WindowCounts(5, 1, 300, 80, 0, 0, 0, 4),
 						List.of(new MinuteStatusRepository.GapWindow(STARTED, FINISHED,
 								"DUE", true)),
-						new MinuteStatusRepository.JobCounts(2, 1, 1, 290, 3)),
+						new MinuteStatusRepository.JobCounts(2, 1, 1, 290, 3, 4)),
 						// lease 부재 세션 — null 이 false 로 접히면 "미기동"이 "가동 중"이 된다
 						new MinuteStatusRepository.SessionSummary(
 								"sess-2", "news_minute", "bigkinds", day, "PLANNED", "uv-1", 390,
 								null, null, null, null, null,
 								new MinuteStatusRepository.WindowCounts(0, 0, 0, 0, 0, 0, 0, 0),
 								List.of(),
-								new MinuteStatusRepository.JobCounts(0, 0, 0, 0, 0))),
-				new MinuteStatusRepository.JobCounts(0, 0, 0, 40, 1));
+								new MinuteStatusRepository.JobCounts(0, 0, 0, 0, 0, 0))),
+				new MinuteStatusRepository.JobCounts(0, 0, 0, 40, 1, 2));
 
 		minuteMvc(new FakeMinuteStatusRepository(java.util.Map.of(day, status)))
 				.perform(get("/api/v1/sources/minute").param("date", "2026-08-03"))
@@ -847,10 +847,12 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.sessions[0].gaps[0].dataStatus").value("DUE"))
 				.andExpect(jsonPath("$.result.sessions[0].gaps[0].noEvidence").value(true))
 				.andExpect(jsonPath("$.result.sessions[0].priceJobs.dead").value(3))
+				.andExpect(jsonPath("$.result.sessions[0].priceJobs.deliveryFailed").value(4))
 				.andExpect(jsonPath("$.result.sessions[0].priceJobs.claimedExpired").value(1))
 				// null 보존 — JSON 에 null 로 실재해야 한다(키 부재나 false 로 접힘 금지)
 				.andExpect(jsonPath("$.result.sessions[1].leaseExpired", nullValue()))
-				.andExpect(jsonPath("$.result.newsJobs.dead").value(1));
+				.andExpect(jsonPath("$.result.newsJobs.dead").value(1))
+				.andExpect(jsonPath("$.result.newsJobs.deliveryFailed").value(2));
 	}
 
 	@Test
@@ -863,6 +865,20 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.sessions.length()").value(0));
 		minuteMvc(new FakeMinuteStatusRepository())
 				.perform(get("/api/v1/sources/minute").param("date", "2026-13-99"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("ADMN4001"));
+	}
+
+	@Test
+	void 일분_일별_요약은_기본_7일을_한번에_내리고_무제한_범위를_거절한다() throws Exception {
+		// WHY: Grid 가 날짜마다 상세 API 를 부르면 데이터셋×날짜 N 요청으로 되돌아간다.
+		minuteMvc(new FakeMinuteStatusRepository())
+				.perform(get("/api/v1/sources/minute/daily"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.days").value(7))
+				.andExpect(jsonPath("$.result.dates.length()").value(7));
+		minuteMvc(new FakeMinuteStatusRepository())
+				.perform(get("/api/v1/sources/minute/daily").param("days", "32"))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("ADMN4001"));
 	}

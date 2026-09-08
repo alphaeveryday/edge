@@ -14,9 +14,9 @@ import type { AxisFetch } from './notRun.ts';
 /**
  * API DTO → 규칙 사실. **규칙은 화면 도메인을 모른다** — 맞추는 일은 여기서 한 번만 한다.
  *
- * 이 어댑터의 판단은 `deadJobs` 를 **어디에** 싣는가 하나다. 가격 job 은 세션에 붙어 있고
+ * 이 어댑터의 판단은 job·outbox 실패를 **어디에** 싣는가다. 가격 job 은 세션에 붙어 있고
  * (`session_id`), 뉴스 job 은 `created_at` 하루 창 집계라 세션과 다른 컬럼으로 잘린다.
- * 그래서 값이 **두 자리**로 나간다 — 세션의 `deadJobs`(세션 축)와 `deadJobsByDataset`(날짜 축).
+ * 그래서 값이 **두 자리**로 나간다 — 세션의 실패 수(세션 축)와 데이터셋별 실패 수(날짜 축).
  * 규칙은 그 사정을 모른 채 어느 자리에 있는지만 보고 사건의 입도를 정한다.
  */
 export function minuteFacts(s: MinuteStatus): MinuteFacts {
@@ -35,6 +35,7 @@ export function minuteFacts(s: MinuteStatus): MinuteFacts {
        * 데이터셋(`other`)은 어느 원장을 읽어야 할지 모른다 — 0으로 접으면 원장 부재가
        * "봤고 괜찮다"로 그려진다. 모름은 `null` 이다. */
       deadJobs: datasetKind(x.dataset) === 'price' ? x.priceJobs.dead : null,
+      deliveryFailed: datasetKind(x.dataset) === 'price' ? x.priceJobs.deliveryFailed : null,
     })),
     /* 🔴 **세션을 순회해서 만들지 않는다.** `newsJobs` 는 `news_extraction_job` 을 `created_at`
      * 하루 창으로 센 값이고, 그 표에는 `session_id` 도 `session_date` 도 없다 — 세션과 **다른
@@ -43,6 +44,7 @@ export function minuteFacts(s: MinuteStatus): MinuteFacts {
      * 하필 가장 시끄러워야 할 날에. `MinutePage` 도 같은 이유로 뉴스 데이터셋을 세션과 무관하게
      * 세운다(`DATASET_ORDER` 합집합). 키가 곧 축 선언이라 표기를 따로 두지 않는다. */
     deadJobsByDataset: { [NEWS_MINUTE_DATASET]: s.newsJobs.dead },
+    deliveryFailedByDataset: { [NEWS_MINUTE_DATASET]: s.newsJobs.deliveryFailed },
   };
 }
 

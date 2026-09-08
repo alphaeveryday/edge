@@ -369,7 +369,7 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
       '판정: 최소 98% — 하루 8창 이상 비면 분석 입력이 흔들린다.',
       '빈 데이터(VALID_EMPTY)는 실행 증거가 있으므로 증거 창에 포함된다 — 무증거와 다른 사실이다.',
       '',
-      '⚠️ 계열 전체가 검수용 목이다 — 장중 원장에 최근 7일 일별 요약 엔드포인트가 없다.',
+      '⚠️ 계열 전체가 검수용 목이다 — 최근 일별 상태 API는 이 지표의 비율 계열을 제공하지 않는다.',
     ].join('\n'),
     drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
   },
@@ -385,13 +385,13 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
     source: noEvidenceToday === undefined ? 'MOCK' : 'DB_LEDGER',
     series: buildSeries({ today: noEvidenceToday ?? 4, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: noEvidenceToday === undefined, endDate: TODAY }),
     help: [
-      '무증거 창 = 기한(window_end)이 지났는데 결과 증거가 없는 창(DUE 또는 유효 lease 없는 CLAIMED).',
+      '무증거 창 = 수집 가능 시각(scheduled_at)이 지났는데 결과 증거가 없는 창(DUE 또는 유효 lease 없는 CLAIMED).',
       '',
       '판정: 1개 이상이면 이상 — 결손은 분포로 보지 않는다.',
       '이 수치만으로 미실행·실행체 사망을 확정하지 않는다.',
       '',
       noEvidenceToday === undefined
-        ? '⚠️ 계열 전체가 검수용 목이다 — 일별 요약 엔드포인트가 없다.'
+        ? '⚠️ 계열 전체가 검수용 목이다 — 최근 일별 상태 API는 이 지표의 과거 수치를 제공하지 않는다.'
         : '오늘 값은 분봉 원장 실측이고 과거 값만 검수용 목이다.',
     ].join('\n'),
     drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },

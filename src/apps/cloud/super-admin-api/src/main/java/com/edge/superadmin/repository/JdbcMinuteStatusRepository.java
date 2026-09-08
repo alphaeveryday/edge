@@ -38,7 +38,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			""";
 
 	/**
-	 * 무증거 술어 — 기한({@code window_end})이 지난 DUE, 또는 <b>유효한 lease 가 없는</b>
+	 * 무증거 술어 — 수집 가능 시각({@code scheduled_at})이 지난 DUE, 또는 <b>유효한 lease 가 없는</b>
 	 * CLAIMED(만료·NULL — writer 의 재청구 조건과 동일 집합). live lease 의 CLAIMED 는
 	 * 방금 닫힌 창을 정상 수집 중인 상태라 무증거로 세면 매분 오탐이 깜빡인다(봇 P2).
 	 * 두 SQL 이 같은 술어를 써야 집계와 근거 목록이 어긋나지 않는다.
@@ -47,7 +47,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			((w.data_status = 'DUE'
 			  OR (w.data_status = 'CLAIMED'
 			      AND (w.lease_expires_at IS NULL OR w.lease_expires_at < now())))
-			 AND w.window_end <= now())""";
+			 AND w.scheduled_at <= now())""";
 
 	/**
 	 * {@code overdue_no_evidence}: MISSING 은 EOD QC 가 매기므로 장중의 결손은 이 파생으로만
@@ -96,20 +96,38 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 	// 조건이 `IS NULL OR < now()`(jobs.py) 라, NULL 도 원장이 정의한 고착 형태다.
 	// 판정 시계는 나머지 파생과 같은 DB now() 다.
 	private static final String JOB_COUNT_COLUMNS = """
-			count(*) FILTER (WHERE %1$s.status IN ('PENDING','RETRY_WAIT')) AS waiting,
+			count(*) FILTER (WHERE %1$s.status IN ('PENDING','RETRY_WAIT')%2$s) AS waiting,
 			count(*) FILTER (WHERE %1$s.status = 'CLAIMED')   AS claimed,
 			count(*) FILTER (WHERE %1$s.status = 'CLAIMED'
 			                   AND (%1$s.lease_expires_at IS NULL
 			                        OR %1$s.lease_expires_at < now())) AS claimed_expired,
 			count(*) FILTER (WHERE %1$s.status = 'SUCCEEDED') AS succeeded,
-			count(*) FILTER (WHERE %1$s.status = 'DEAD')      AS dead
+			count(*) FILTER (WHERE %1$s.status = 'DEAD'%3$s) AS dead,
+			count(*) FILTER (WHERE %4$s) AS delivery_failed
 			""";
+	// price 의 DEAD('STALE')은 정정 후 이전 generation을 의도적으로 격리한 정상 귀결이다.
+	// delivery_expected는 writer가 commit 시점의 is_backfill 결정을 영구 기록한다. NULL은
+	// schema→writer 단계 배포 사이 구 writer 행뿐이다. 그 짧은 구간에는 종전의 오늘 날짜
+	// 판정을 fallback으로 유지하고, writer 전환·NULL 대사 뒤 NOT NULL 수축으로 제거한다.
+	private static final String PRICE_JOB_COUNT_COLUMNS =
+			JOB_COUNT_COLUMNS.formatted("j", " AND o.status IN ('NEW','PUBLISHED')",
+					" AND j.error_code IS DISTINCT FROM 'STALE'",
+					"j.status IN ('PENDING','RETRY_WAIT')"
+							+ " AND COALESCE(j.delivery_expected,"
+							+ " s.session_date = (now() AT TIME ZONE 'Asia/Seoul')::date)"
+							+ " AND (o.status = 'DEAD' OR o.event_id IS NULL)");
+	private static final String NEWS_JOB_COUNT_COLUMNS =
+			JOB_COUNT_COLUMNS.formatted("j", " AND o.status IN ('NEW','PUBLISHED')",
+					"", "j.status IN ('PENDING','RETRY_WAIT')"
+							+ " AND (o.event_id IS NULL OR o.status = 'DEAD')");
 
 	private static final String PRICE_JOBS_SQL = """
 			SELECT j.session_id,
-			""" + JOB_COUNT_COLUMNS.formatted("j") + """
+			""" + PRICE_JOB_COUNT_COLUMNS + """
 			  FROM price_window_job j
 			  JOIN minute_ingestion_session s ON s.session_id = j.session_id
+			  LEFT JOIN dataset_commit_outbox o
+			    ON o.event_id = 'PriceWindowCommitted:' || j.job_id || ':' || j.redrive_generation
 			 WHERE s.session_date = ?
 			 GROUP BY j.session_id
 			""";
@@ -121,9 +139,72 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 	 */
 	private static final String NEWS_JOBS_SQL = """
 			SELECT
-			""" + JOB_COUNT_COLUMNS.formatted("news_extraction_job") + """
-			  FROM news_extraction_job
-			 WHERE created_at >= ? AND created_at < ?
+			""" + NEWS_JOB_COUNT_COLUMNS + """
+			  FROM news_extraction_job j
+			  LEFT JOIN dataset_commit_outbox o
+			    ON o.event_id = 'NewsExtractionRequested:' || j.job_id || ':' || j.redrive_generation
+			 WHERE j.created_at >= ? AND j.created_at < ?
+			""";
+
+	/** 격자용 범위 집계 — 날짜별 상세 API 호출을 반복하지 않고 세션별 사실을 한 번에 읽는다. */
+	private static final String DAILY_SESSIONS_SQL = """
+			WITH window_counts AS (
+			    SELECT w.session_id,
+			           count(*) FILTER (WHERE w.data_status = 'DUE') AS due,
+			           count(*) FILTER (WHERE w.data_status = 'CLAIMED') AS claimed,
+			           count(*) FILTER (WHERE w.data_status = 'VALID') AS valid,
+			           count(*) FILTER (WHERE w.data_status = 'VALID_EMPTY') AS valid_empty,
+			           count(*) FILTER (WHERE w.data_status = 'INCOMPLETE') AS incomplete,
+			           count(*) FILTER (WHERE w.data_status = 'MISSING') AS missing,
+			           count(*) FILTER (WHERE w.data_status = 'INVALID') AS invalid,
+			           count(*) FILTER (WHERE
+			""" + NO_EVIDENCE_PREDICATE + """
+			           ) AS overdue_no_evidence,
+			           count(*) FILTER (WHERE w.failed_unit_count > 0) AS failed_unit_windows
+			      FROM minute_ingestion_window w
+			      JOIN minute_ingestion_session s ON s.session_id = w.session_id
+			     WHERE s.session_date BETWEEN ? AND ?
+			     GROUP BY w.session_id
+			), price_counts AS (
+			    SELECT j.session_id,
+			""" + PRICE_JOB_COUNT_COLUMNS + """
+			      FROM price_window_job j
+			      JOIN minute_ingestion_session s ON s.session_id = j.session_id
+			      LEFT JOIN dataset_commit_outbox o
+			        ON o.event_id = 'PriceWindowCommitted:' || j.job_id || ':' || j.redrive_generation
+			     WHERE s.session_date BETWEEN ? AND ?
+			     GROUP BY j.session_id
+			)
+			SELECT s.dataset, s.source_group, s.session_date, s.phase,
+			       s.expected_window_count,
+			       CASE WHEN s.lease_expires_at IS NULL THEN NULL
+			            ELSE s.lease_expires_at < now() END AS lease_expired,
+			       COALESCE(w.due, 0) AS due, COALESCE(w.claimed, 0) AS claimed,
+			       COALESCE(w.valid, 0) AS valid, COALESCE(w.valid_empty, 0) AS valid_empty,
+			       COALESCE(w.incomplete, 0) AS incomplete, COALESCE(w.missing, 0) AS missing,
+			       COALESCE(w.invalid, 0) AS invalid,
+			       COALESCE(w.overdue_no_evidence, 0) AS overdue_no_evidence,
+			       COALESCE(w.failed_unit_windows, 0) AS failed_unit_windows,
+			       COALESCE(p.waiting, 0) AS waiting, COALESCE(p.claimed, 0) AS claimed_jobs,
+			       COALESCE(p.claimed_expired, 0) AS claimed_expired,
+			       COALESCE(p.succeeded, 0) AS succeeded, COALESCE(p.dead, 0) AS dead,
+			       COALESCE(p.delivery_failed, 0) AS delivery_failed
+			  FROM minute_ingestion_session s
+			  LEFT JOIN window_counts w ON w.session_id = s.session_id
+			  LEFT JOIN price_counts p ON p.session_id = s.session_id
+			 WHERE s.session_date BETWEEN ? AND ?
+			 ORDER BY s.session_date, s.dataset, s.source_group, s.session_id
+			""";
+
+	private static final String DAILY_NEWS_JOBS_SQL = """
+			SELECT (j.created_at AT TIME ZONE 'Asia/Seoul')::date AS job_date,
+			""" + NEWS_JOB_COUNT_COLUMNS + """
+			  FROM news_extraction_job j
+			  LEFT JOIN dataset_commit_outbox o
+			    ON o.event_id = 'NewsExtractionRequested:' || j.job_id || ':' || j.redrive_generation
+			 WHERE j.created_at >= ? AND j.created_at < ?
+			 GROUP BY (j.created_at AT TIME ZONE 'Asia/Seoul')::date
+			 ORDER BY job_date
 			""";
 
 	private final JdbcTemplate jdbc;
@@ -176,7 +257,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 					// 창 행 0개 = 아직 materialize 전 — 집계 0 은 그 자체로 사실이다
 					counts.getOrDefault(sessionId, new WindowCounts(0, 0, 0, 0, 0, 0, 0, 0)),
 					gaps.getOrDefault(sessionId, List.of()),
-					priceJobs.getOrDefault(sessionId, new JobCounts(0, 0, 0, 0, 0)));
+					priceJobs.getOrDefault(sessionId, new JobCounts(0, 0, 0, 0, 0, 0)));
 		}, sessionDate);
 
 		OffsetDateTime dayStart = sessionDate.atStartOfDay(KST).toOffsetDateTime();
@@ -186,11 +267,41 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 		return new MinuteStatus(sessions, newsJobs);
 	}
 
+	@Override
+	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+	public DailyStatus dailyStatus(LocalDate fromInclusive, LocalDate toInclusive) {
+		List<DailySessionSummary> sessions = jdbc.query(DAILY_SESSIONS_SQL, (rs, i) ->
+				new DailySessionSummary(
+						rs.getString("dataset"), rs.getString("source_group"),
+						rs.getDate("session_date").toLocalDate(), rs.getString("phase"),
+						rs.getInt("expected_window_count"), nullableBoolean(rs, "lease_expired"),
+						new DailyWindowCounts(
+								rs.getLong("due"), rs.getLong("claimed"), rs.getLong("valid"),
+								rs.getLong("valid_empty"), rs.getLong("incomplete"),
+								rs.getLong("missing"), rs.getLong("invalid"),
+								rs.getLong("overdue_no_evidence"),
+								rs.getLong("failed_unit_windows")),
+						new JobCounts(rs.getLong("waiting"), rs.getLong("claimed_jobs"),
+								rs.getLong("claimed_expired"), rs.getLong("succeeded"),
+								rs.getLong("dead"), rs.getLong("delivery_failed"))),
+				fromInclusive, toInclusive, fromInclusive, toInclusive,
+				fromInclusive, toInclusive);
+
+		OffsetDateTime rangeStart = fromInclusive.atStartOfDay(KST).toOffsetDateTime();
+		OffsetDateTime rangeEnd = toInclusive.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
+		Map<LocalDate, JobCounts> newsJobs = new HashMap<>();
+		jdbc.query(DAILY_NEWS_JOBS_SQL, rs -> {
+			newsJobs.put(rs.getDate("job_date").toLocalDate(), mapJobs(rs));
+		}, rangeStart, rangeEnd);
+		return new DailyStatus(sessions, Map.copyOf(newsJobs));
+	}
+
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
 	private static JobCounts mapJobs(ResultSet rs) throws SQLException {
 		return new JobCounts(rs.getLong("waiting"), rs.getLong("claimed"),
-				rs.getLong("claimed_expired"), rs.getLong("succeeded"), rs.getLong("dead"));
+				rs.getLong("claimed_expired"), rs.getLong("succeeded"), rs.getLong("dead"),
+				rs.getLong("delivery_failed"));
 	}
 
 	/** lease 부재(NULL)와 만료를 뭉개지 않는다 — getBoolean 은 NULL 을 false 로 돌려준다. */

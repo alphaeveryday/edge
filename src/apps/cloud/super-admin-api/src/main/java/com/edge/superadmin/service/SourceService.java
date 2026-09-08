@@ -8,6 +8,7 @@ import com.edge.superadmin.dto.SourceOverviewResponse.DefectResponse;
 import com.edge.superadmin.dto.SourceOverviewResponse.LaneResponse;
 import com.edge.superadmin.dto.HoldingsImpactResponse;
 import com.edge.superadmin.dto.MinuteStatusResponse;
+import com.edge.superadmin.dto.MinuteDailyStatusResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
@@ -172,6 +173,17 @@ public class SourceService {
 		LocalDate sessionDate = date == null ? LocalDate.now(KST) : parseDateParam(date);
 		return MinuteStatusResponse.from(sessionDate.toString(),
 				minuteStatus.status(sessionDate));
+	}
+
+	/** 최근 {@code days}일의 minute 일별 판정. 상한은 격자 한 화면 용도에 맞춰 31일이다. */
+	public MinuteDailyStatusResponse minuteDailyStatus(int days) {
+		if (days < 1 || days > 31) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		LocalDate to = LocalDate.now(KST);
+		LocalDate from = to.minusDays(days - 1L);
+		return MinuteDailyStatusResponse.from(days, from, to,
+				minuteStatus.dailyStatus(from, to));
 	}
 
 	/**

@@ -3,6 +3,7 @@ package com.edge.superadmin.repository;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 장중 1분 파이프라인 원장({@code minute_*}) 요약 관측(ALPHA-651).
@@ -15,14 +16,34 @@ import java.util.List;
  * <p><b>이 신호가 틀리면 어느 방향인가</b>: MISSING 판정은 EOD QC 소관이라, 실행체가 죽으면
  * 창은 DUE 로 <b>잔류</b>한다. MISSING 만 세면 죽은 실행체가 "결손 0"으로 보인다(원장이
  * 관대해지는 방향). 그래서 기한이 지난 DUE/CLAIMED 를 {@code overdueNoEvidence} 로 여기서
- * 직접 센다 — "안 돌았다(무증거)"와 "돌았는데 빈 데이터(VALID_EMPTY)"가 구분되는 지점이다.
+	 * 직접 센다. 기한은 실제 claim 계약과 같은 {@code scheduled_at} 이다 — "안 돌았다(무증거)"와
+	 * "돌았는데 빈 데이터(VALID_EMPTY)"가 구분되는 지점이다.
  */
 public interface MinuteStatusRepository {
 
 	/** 해당 세션 날짜의 요약 — 세션 부재는 빈 목록(그 자체가 "미가동" 사실)이다. */
 	MinuteStatus status(LocalDate sessionDate);
 
+	/** 최근 일별 격자용 bounded 요약 — 상세 gap 목록 없이 날짜 범위를 한 번에 읽는다. */
+	DailyStatus dailyStatus(LocalDate fromInclusive, LocalDate toInclusive);
+
 	record MinuteStatus(List<SessionSummary> sessions, JobCounts newsJobs) {
+	}
+
+	record DailyStatus(List<DailySessionSummary> sessions, Map<LocalDate, JobCounts> newsJobs) {
+	}
+
+	record DailySessionSummary(String dataset, String sourceGroup, LocalDate sessionDate,
+			String phase, int expectedWindowCount, Boolean leaseExpired,
+			DailyWindowCounts windows, JobCounts priceJobs) {
+	}
+
+	record DailyWindowCounts(long due, long claimed, long valid, long validEmpty,
+			long incomplete, long missing, long invalid, long overdueNoEvidence,
+			long failedUnitWindows) {
+		public long materialized() {
+			return due + claimed + valid + validEmpty + incomplete + missing + invalid;
+		}
 	}
 
 	/**
@@ -40,7 +61,7 @@ public interface MinuteStatusRepository {
 
 	/**
 	 * 창 상태 집계 — 원장 어휘 7종 그대로 + 파생 1개({@code overdueNoEvidence} =
-	 * {@code window_end <= now()} 인 DUE·CLAIMED). CLAIMED 도 포함한다 — claim 만 있고 커밋이
+	 * {@code scheduled_at <= now()} 인 DUE·CLAIMED). CLAIMED 도 포함한다 — claim 만 있고 커밋이
 	 * 없는 과거 창은 데이터 증거가 없는 창이다.
 	 */
 	record WindowCounts(long due, long claimed, long valid, long validEmpty, long incomplete,
@@ -56,8 +77,11 @@ public interface MinuteStatusRepository {
 	 * job 상태 집계 — {@code waiting} 은 PENDING+RETRY_WAIT(재시도 대기 포함 미귀결).
 	 * {@code claimedExpired} 는 claimed 중 유효한 lease 가 없는 것(만료 또는 NULL — writer 의
 	 * 회수 조건과 동일, 서버 시계 판정). Consumer 가 죽고 아무도 재청구하지 않은 고착 후보다.
-	 * "처리 중"에 뭉개면 영원히 경고가 없다.
+	 * "처리 중"에 뭉개면 영원히 경고가 없다. {@code deliveryFailed}는 최신 outbox event가
+	 * DEAD이거나(뉴스는 event 자체가 없거나) 해서 consumer까지 전달될 수 없는 미귀결 job이다.
+	 * job 자체의 {@code dead}와 합치지 않아 상세 근거가 거짓말하지 않게 한다.
 	 */
-	record JobCounts(long waiting, long claimed, long claimedExpired, long succeeded, long dead) {
+	record JobCounts(long waiting, long claimed, long claimedExpired, long succeeded, long dead,
+			long deliveryFailed) {
 	}
 }

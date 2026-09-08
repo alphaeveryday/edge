@@ -2,6 +2,7 @@
 import type {
   HoldingsImpact,
   MinuteStatus,
+  MinuteDailyStatus,
   NewsLineage,
   NewsLineageStage,
   SourceGrid,
@@ -22,4 +23,6 @@ export interface SourcesRepository {
   holdingsImpact(runKey?: string): Promise<HoldingsImpact>;
   /** 장중 1분 파이프라인 요약(ALPHA-651). @param date 세션 날짜(KST), 없으면 오늘 */
   minuteStatus(date?: string): Promise<MinuteStatus>;
+  /** 최근 minute 세션의 서버 판정 일별 요약. 없으면 기본 7일. */
+  minuteDailyStatus(days?: number): Promise<MinuteDailyStatus>;
 }
