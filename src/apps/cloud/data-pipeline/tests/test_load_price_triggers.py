@@ -18,6 +18,8 @@ import json
 import pathlib
 from decimal import Decimal
 
+import pytest
+
 from data_pipeline.config import DbConfig, PriceTriggersConfig
 from data_pipeline.lake import (
     LocalStorage,
@@ -258,6 +260,181 @@ def test_manifest_partial_price_preserves_successful_trigger_and_exits_two(
     log = _quality_log(storage)
     assert log["created"] == 1 and log["missing_price"] == 1
     assert log["exit_code"] == 2
+
+
+def test_manifest_historical_debt_does_not_pollute_current_run_status(
+    tmp_path, monkeypatch,
+):
+    """WHY(ALPHA-1062): KIS가 약 100일 가격을 매일 재확정해도 최초 holdings 이전의
+    구조적 결손은 오늘 실행의 유실이 아니다. 숨기지는 않되 debt로 분리하지 않으면 같은
+    38 ETF x 46거래일이 매일 failed_records에 다시 잡혀 대시보드가 영구 INCOMPLETE다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260907T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-06-23", ["005930"]),
+        ("KR", "2026-08-24", ["005930"]),
+        ("KR", "2026-08-25", ["005930"]),
+        ("KR", "2026-09-07", ["005930"]),
+    ])
+    monkeypatch.setattr(
+        load_price_triggers, "_market_instrument_ids",
+        lambda _conn, _mics: ({"005930": "inst_STOCK"}, set()),
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_latest_good_holdings",
+        lambda _conn, _etfs, date: (
+            {} if date == "2026-06-23"
+            else {"inst_ETF": (
+                date, [("inst_STOCK", 0.0 if date == "2026-08-24" else 1.0)]
+            )}
+        ),
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_db_closes",
+        lambda _conn, _ids, date, _data_version: (
+            ({"inst_STOCK": 90.0}, {}) if date == "2026-08-25"
+            else ({"inst_STOCK": 110.0}, {"inst_STOCK": 100.0})
+        ),
+    )
+
+    conn = _FakeConn()
+    assert _run(storage, conn, monkeypatch, input_run_id=input_run_id) == 0
+    assert len(_inserts(conn)) == 1
+    log = _quality_log(storage)
+    assert log["operational_trade_date"] == "2026-09-07"
+    assert (log["missing_holdings"], log["missing_price"]) == (1, 1)
+    assert (log["historical_missing_holdings"],
+            log["historical_missing_price"]) == (1, 1)
+    assert (log["current_missing_holdings"], log["current_missing_price"]) == (0, 0)
+    assert log["historical_unavailable_proxies"] == 1
+    assert log["current_unavailable_proxies"] == 0
+    assert log["ops"]["failed_records"] == 0
+    assert log["exit_code"] == 0
+    assert {failure["scope"] for failure in log["failures"]} == {
+        "historical_reconciliation_debt"
+    }
+    assert {failure["reasons"][0] for failure in log["failures"]} == {
+        "missing_holdings", "missing_db_price", "proxy_unavailable"
+    }
+
+
+def test_manifest_current_date_missing_holdings_remains_partial(tmp_path, monkeypatch):
+    """WHY(ALPHA-1062): 오늘 holdings가 없으면 트리거 판정이 불가능하다. 역사 부채
+    분리가 현재 holdings 장애까지 정상으로 바꾸면 안 되므로 최신일은 exit 2를 유지한다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260907T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-09-07", ["005930"]),
+    ])
+    monkeypatch.setattr(
+        load_price_triggers, "_market_instrument_ids",
+        lambda _conn, _mics: ({"005930": "inst_STOCK"}, set()),
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_latest_good_holdings",
+        lambda _conn, _etfs, _date: {},
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_db_closes",
+        lambda _conn, _ids, _date, _data_version: (
+            {"inst_STOCK": 110.0}, {"inst_STOCK": 100.0}
+        ),
+    )
+
+    assert _run(storage, _FakeConn(), monkeypatch, input_run_id=input_run_id) == 2
+    log = _quality_log(storage)
+    assert log["operational_trade_date"] == "2026-09-07"
+    assert (log["current_missing_holdings"], log["current_missing_price"]) == (1, 0)
+    assert (log["historical_missing_holdings"],
+            log["historical_missing_price"]) == (0, 0)
+    assert log["ops"]["failed_records"] == 1
+    assert log["exit_code"] == 2
+    assert {failure["scope"] for failure in log["failures"]} == {
+        "current_operation"
+    }
+
+
+@pytest.mark.parametrize("closes", [
+    ({}, {"inst_STOCK": 100.0}),
+    ({"inst_STOCK": 110.0}, {}),
+], ids=["current-close", "previous-close"])
+def test_manifest_current_date_missing_price_remains_partial(
+    tmp_path, monkeypatch, closes,
+):
+    """WHY(ALPHA-1062): 오늘 현재가나 직전가 중 하나만 없어도 판정할 수 없다. 어느 쪽
+    결손도 과거 부채로 분류하면 조용한 NO_TRIGGER가 되므로 최신일은 exit 2를 유지한다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260907T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-09-07", ["005930"]),
+    ])
+    monkeypatch.setattr(
+        load_price_triggers, "_market_instrument_ids",
+        lambda _conn, _mics: ({"005930": "inst_STOCK"}, set()),
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_latest_good_holdings",
+        lambda _conn, _etfs, date: {
+            "inst_ETF": (date, [("inst_STOCK", 1.0)])
+        },
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_db_closes",
+        lambda _conn, _ids, _date, _data_version: closes,
+    )
+
+    assert _run(storage, _FakeConn(), monkeypatch, input_run_id=input_run_id) == 2
+    log = _quality_log(storage)
+    assert log["operational_trade_date"] == "2026-09-07"
+    assert (log["current_missing_holdings"], log["current_missing_price"]) == (0, 1)
+    assert (log["historical_missing_holdings"],
+            log["historical_missing_price"]) == (0, 0)
+    assert log["ops"]["failed_records"] == 1
+    assert log["exit_code"] == 2
+    assert {failure["scope"] for failure in log["failures"]} == {
+        "current_operation"
+    }
+
+
+def test_manifest_current_date_unavailable_proxy_remains_partial(tmp_path, monkeypatch):
+    """WHY(ALPHA-1062): 가격이 모두 있어도 holdings 비중이 전부 0이면 proxy를 계산할 수
+    없다. 이 경우를 가격 결손에 기대면 failed_records=0인 exit 2가 되어 원인도 상태도 갈린다."""
+    storage = _TrackingStorage(tmp_path)
+    input_run_id = "20260907T064000Z"
+    _write_price_manifest(storage, input_run_id, [
+        ("KR", "2026-09-07", ["005930"]),
+    ])
+    monkeypatch.setattr(
+        load_price_triggers, "_market_instrument_ids",
+        lambda _conn, _mics: ({"005930": "inst_STOCK"}, set()),
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_latest_good_holdings",
+        lambda _conn, _etfs, date: {
+            "inst_ETF": (date, [("inst_STOCK", 0.0)])
+        },
+    )
+    monkeypatch.setattr(
+        load_price_triggers, "_db_closes",
+        lambda _conn, _ids, _date, _data_version: (
+            {"inst_STOCK": 110.0}, {"inst_STOCK": 100.0}
+        ),
+    )
+
+    assert _run(storage, _FakeConn(), monkeypatch, input_run_id=input_run_id) == 2
+    log = _quality_log(storage)
+    assert (log["missing_holdings"], log["missing_price"]) == (0, 0)
+    assert log["current_unavailable_proxies"] == 1
+    assert log["historical_unavailable_proxies"] == 0
+    assert log["ops"]["failed_records"] == 1
+    assert log["failures"] == [{
+        "reasons": ["proxy_unavailable"],
+        "scope": "current_operation",
+        "trade_date": "2026-09-07",
+        "etf_ticker": _ETF,
+        "holdings_as_of": "2026-09-07",
+        "coverage": 0.0,
+    }]
 
 
 def test_manifest_row_failure_isolated_by_savepoint(tmp_path, monkeypatch):
@@ -693,7 +870,10 @@ def test_missing_holdings_counts_not_crashes(tmp_path, monkeypatch):
 
     assert _run(storage, conn, monkeypatch) == 0  # etf_ticker=_ETF 필터(기본)
     assert _inserts(conn) == []
-    assert _quality_log(storage)["missing_holdings"] == 1  # 7-16 이 대상, holdings 없음
+    log = _quality_log(storage)
+    assert log["missing_holdings"] == 1  # 7-16 이 대상, holdings 없음
+    assert log["historical_missing_holdings"] == 1
+    assert log["current_missing_holdings"] == 0
 
 
 def test_unknown_etf_filter_fails_loud(tmp_path, monkeypatch):
@@ -746,7 +926,10 @@ def test_nonfinite_close_treated_as_missing(tmp_path, monkeypatch):
 
     assert _run(storage, conn, monkeypatch) == 0
     assert _inserts(conn) == []
-    assert _quality_log(storage)["missing_price"] == 1
+    log = _quality_log(storage)
+    assert log["missing_price"] == 1
+    assert log["historical_missing_price"] == 1
+    assert log["current_missing_price"] == 0
 
 
 def test_window_narrows_target_dates(tmp_path, monkeypatch):

@@ -576,21 +576,29 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
 # skipped_unknown_etf 한 카운터로 뭉개져 진짜 결손을 못 본다.
 # 가격변동 트리거 적재(RDB, ALPHA-411) — canonical holdings 가중치 × 구성종목 일봉 수익률의
 # coverage 정규화 proxy(분석엔진 L0 산식 정본)가 absolute gate(abs_threshold=3%)를 넘는
-# 거래일만 price_movement_trigger 로. holdings 는 거래일 이하 최신 스냅샷, 없으면 가장 이른
-# 미래 스냅샷 폴백(엔진과 같은 선택, ALPHA-418 — 사용 횟수·as_of 는 quality_log 로 드러남).
+# 거래일만 price_movement_trigger 로. 정상 --input-run-id 경로의 holdings 는 거래일 이하 최신
+# 정상 DB 스냅샷만 쓰며, 명시 복구 경로는 없을 때 가장 이른 미래 스냅샷으로 폴백한다
+# (ALPHA-418 — 사용 횟수·as_of 는 quality_log 로 드러남).
 # 날짜 선택과 행 규칙(비중 결손·음수 제외)은 엔진과 같지만 **결손 과반 파티션 배제는
 # 엔진에만** 있다(ALPHA-951) — 그런 파티션에선 트리거는 남은 실값으로 서고 설명은 이전
 # 스냅샷으로 서서 둘이 갈린다.
 # 게이트 미통과 일자는 행이 없는 게 정상이고 그 수는
 # data_quality_logs 로 남는다. 구정책 행은 observation 참조가 없으면 자동 교체된다.
+# 정상 manifest 경로는 최신 KR 거래일을 operational_trade_date로 둔다. 그 날짜의 holdings·가격
+# 결손만 current_missing_*와 ops.failed_records·exit 2에 반영한다. 더 과거 결손은
+# historical_missing_*와 failures.scope=historical_reconciliation_debt로 계속 남기되 당일 원장
+# 상태를 INCOMPLETE로 만들지 않는다. 가격이 있어도 proxy를 계산할 수 없는 holdings는
+# current/historical_unavailable_proxies와 proxy_unavailable 상세로 같은 범위를 구분한다(ALPHA-1062).
 # 판정에 쓴 가격 coverage 는 두 곳에 나뉘어 남는다(ALPHA-452 — 1% 비중 종목 하나로 판정된
 # 트리거를 사후에 구분하기 위함): 아직 트리거가 없는 (ETF,거래일) 셀은 quality_log
 # (coverage_by_etf_date·coverage_min), 트리거가 난 셀은 그 행의 detection_reason 끝
 # |coverage=… 다. 멱등 skip 때문에 갈리므로 분포를 볼 땐 둘을 합쳐야 한다.
 # 하한으로 막지는 않는다(ALPHA-453).
-# --from/--to 는 대상 trade_date 파티션을 좁히는 창(미지정=전체 스캔, (etf,date) 멱등 skip).
+# Scheduler는 --input-run-id로 NormalizePrice manifest만 읽는다. --from/--to와 --all은
+# canonical 복구 경로이며 (etf,date) 멱등 skip을 유지한다.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
-  uv run --package data-pipeline python -m data_pipeline.run load-price-triggers
+  uv run --package data-pipeline python -m data_pipeline.run load-price-triggers \
+    --input-run-id <normalize-price-run-id>
 
 # ETF NAV 적재(RDB) — 정상 경로는 normalize-etf-nav의 completed manifest가 지목한 direct
 # parquet와 winner만 읽어 etf_nav_daily에 적재한다. key·SHA-256·파티션 정체성이 어긋나면
@@ -980,8 +988,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   issuer 해소(9→309)가 그 값에 의존하므로 병렬 앞 직렬이다. DB·DART 를 둘 다 부르므로 rds·dart 결합
   시크릿 task-def 를 쓴다(결합 없으면 rds 로 돌 때 source.enabled=false 로 skip). NULL 가드 멱등
 - `load-price-triggers`(→ Cloud Event Store RDB, **rds 세트** 재사용) — 구성종목 가중 proxy
-  3% 게이트(엔진 L0 정본, ALPHA-411). 창 미지정 = canonical 전체 스캔 + (etf, trade_date)
-  멱등 skip 이라, 놓친 거래일을 다음 실행이 자연 회복한다(ALPHA-406)
+  3% 게이트(엔진 L0 정본, ALPHA-411). 정상 실행은 NormalizePrice manifest 범위만 읽고 최신 KR
+  거래일 결손만 현재 운영 실패로 센다. 과거 결손은 reconciliation debt로 보존하며, canonical
+  전체·기간 스캔은 명시 복구 경로다(ALPHA-1039·1062)
 - `load-documents`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-374·410·1031) —
   NormalizeNews manifest의 직접 parquet만 GET하고 현재 실행 `article_id`를 document로 적재한다.
   결손·손상 manifest는 전체로 넓히지 않고 실패한다. 자연키 멱등, LoadAssertions의 FK 선행.

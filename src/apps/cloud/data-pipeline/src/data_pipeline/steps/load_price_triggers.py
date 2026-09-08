@@ -348,11 +348,15 @@ def run(
 ) -> int:
     """가격 manifest·DB 원장 → proxy 게이트 → 트리거 적재. 성공 0, 장애 시 비0.
 
-    input_run_id는 현재 NormalizePrice winner만 DB에서 평가한다. from/to와 인자 미지정은
-    기존 명시 복구 호출자가 선택한 canonical 경로다.
+    input_run_id는 현재 NormalizePrice winner만 DB에서 평가한다. 이 경로의 최신 KR 거래일
+    결손만 현재 운영 실패로 세고, 더 과거 결손은 reconciliation debt로 보존한다. from/to와
+    --all은 기존 명시 복구 호출자가 선택한 canonical 경로다.
     """
     started_at = datetime.now(timezone.utc)
     considered = missing_holdings = missing_price = gated_out = 0
+    current_missing_holdings = current_missing_price = 0
+    historical_missing_holdings = historical_missing_price = 0
+    current_unavailable_proxies = historical_unavailable_proxies = 0
     future_asof_used = 0  # 최초 스냅샷 이전 날짜에 미래 as_of 폴백을 쓴 (ETF×날짜) 횟수(ALPHA-418)
     already = created = replaced_stale_policy = stale_policy_kept = 0
     skipped_unknown_etf = 0  # holdings 에 있으나 마스터 미등록 — 그 ETF 만 skip(런은 계속)
@@ -369,6 +373,7 @@ def run(
     current_prices_read = previous_prices_read = 0
     unknown_target_tickers: set[str] = set()
     ambiguous_target_tickers: set[str] = set()
+    operational_trade_date: str | None = None
     manifest_scope: dict[
         str,
         tuple[
@@ -377,6 +382,7 @@ def run(
             dict[str, float],
         ],
     ] = {}
+    manifest_missing_price_ids: dict[str, set[str]] = {}
 
     closes_cache: dict[str, dict[str, float]] = {}
 
@@ -441,6 +447,7 @@ def run(
                 manifest_targets,
             ) = _manifest_targets(storage, input_run_id)
             targets = sorted(manifest_targets)
+            operational_trade_date = targets[-1] if targets else None
             prev_by_date: dict[str, str] = {}
             holdings_dates: list[str] = []
         else:
@@ -497,12 +504,20 @@ def run(
                     missing_ids = sorted(set(etf_ids) - holdings_by_id.keys())
                     if missing_ids:
                         missing_holdings += len(missing_ids)
+                        is_current = date == operational_trade_date
+                        if is_current:
+                            current_missing_holdings += len(missing_ids)
+                        else:
+                            historical_missing_holdings += len(missing_ids)
                         failures.append({
                             "reasons": ["missing_holdings"],
+                            "scope": ("current_operation" if is_current
+                                      else "historical_reconciliation_debt"),
                             "trade_date": date,
                             "etf_instrument_ids": missing_ids,
                         })
-                        exit_code = _PARTIAL_EXIT_CODE
+                        if is_current:
+                            exit_code = _PARTIAL_EXIT_CODE
                     related_by_ticker: dict[str, tuple[str, list[tuple[str, float]]]] = {}
                     for etf_id, (as_of, holdings) in holdings_by_id.items():
                         if any(constituent_id in resolved_ids for constituent_id, _ in holdings):
@@ -516,15 +531,24 @@ def run(
                     missing_current = sorted(resolved_ids - current.keys())
                     missing_previous = sorted(resolved_ids - previous.keys())
                     missing_price_ids = set(missing_current) | set(missing_previous)
+                    manifest_missing_price_ids[date] = missing_price_ids
                     if missing_price_ids:
                         missing_price += len(missing_price_ids)
+                        is_current = date == operational_trade_date
+                        if is_current:
+                            current_missing_price += len(missing_price_ids)
+                        else:
+                            historical_missing_price += len(missing_price_ids)
                         failures.append({
                             "reasons": ["missing_db_price"],
+                            "scope": ("current_operation" if is_current
+                                      else "historical_reconciliation_debt"),
                             "trade_date": date,
                             "missing_current_instrument_ids": missing_current,
                             "missing_previous_instrument_ids": missing_previous,
                         })
-                        exit_code = _PARTIAL_EXIT_CODE
+                        if is_current:
+                            exit_code = _PARTIAL_EXIT_CODE
                     holdings_rows_read += sum(
                         len(holdings) for _as_of, holdings in holdings_by_id.values()
                     )
@@ -675,6 +699,7 @@ def run(
                         holdings = holdings_of(as_of).get(etf_ticker, []) if as_of else []
                         if not holdings:
                             missing_holdings += 1
+                            historical_missing_holdings += 1
                             continue
                         proxy_ret, coverage = _proxy_return(
                             holdings, closes_of(date), closes_of(prev_by_date[date]))
@@ -693,9 +718,32 @@ def run(
                                 conn, stale_trigger_ids, etf_ticker, date):
                             continue
                         if input_run_id is not None:
-                            exit_code = _PARTIAL_EXIT_CODE
+                            is_current = date == operational_trade_date
+                            if is_current:
+                                exit_code = _PARTIAL_EXIT_CODE
+                            positive_ids = {
+                                instrument_id for instrument_id, weight in holdings if weight > 0
+                            }
+                            explained_by_missing_price = bool(
+                                positive_ids & manifest_missing_price_ids.get(date, set())
+                            )
+                            if not explained_by_missing_price:
+                                if is_current:
+                                    current_unavailable_proxies += 1
+                                else:
+                                    historical_unavailable_proxies += 1
+                                failures.append({
+                                    "reasons": ["proxy_unavailable"],
+                                    "scope": ("current_operation" if is_current
+                                              else "historical_reconciliation_debt"),
+                                    "trade_date": date,
+                                    "etf_ticker": etf_ticker,
+                                    "holdings_as_of": as_of,
+                                    "coverage": round(coverage, 4),
+                                })
                         else:
                             missing_price += 1
+                            historical_missing_price += 1
                         continue
                     if abs(proxy_ret) < config.abs_threshold:
                         if not remove_stale_without_replacement(
@@ -784,6 +832,13 @@ def run(
         "skipped_unknown_etf": skipped_unknown_etf,
         "abs_threshold": config.abs_threshold, "policy_version": config.policy_version,
         "considered": considered, "missing_holdings": missing_holdings,
+        "operational_trade_date": operational_trade_date,
+        "current_missing_holdings": current_missing_holdings,
+        "current_missing_price": current_missing_price,
+        "historical_missing_holdings": historical_missing_holdings,
+        "historical_missing_price": historical_missing_price,
+        "current_unavailable_proxies": current_unavailable_proxies,
+        "historical_unavailable_proxies": historical_unavailable_proxies,
         "future_asof_used": future_asof_used,
         "missing_price": missing_price, "gated_out": gated_out,
         "already_present": already, "replaced_stale_policy": replaced_stale_policy,
@@ -802,15 +857,17 @@ def run(
         "coverage_min": min((c for m in coverage_by_etf_date.values() for c in m.values()),
                             default=None),
         "failures": failures, "exit_code": exit_code,
-        # 원장 관측용 공통 봉투(ALPHA-181). ⚠️ `gated_out`·`missing_price`·`missing_holdings` 는
-        # **유실이 아니다** — 임계 미달이라 트리거가 안 난 것이거나 평가 대상이 아직 없는 것이다
-        # (트리거는 입력 행마다 1:1로 나오지 않는다). 유실은 마스터가 모르는 ETF 뿐이다.
+        # 원장 관측용 공통 봉투(ALPHA-181). `gated_out`은 유실이 아니다. 정상 manifest가
+        # 벤더의 역사 가격을 매일 재확정하므로 과거 가격·holdings 결손도 현재 런 유실로 다시
+        # 세지 않는다(ALPHA-1062). 최신 KR 거래일의 결손만 현재 운영 판정 불능으로 센다.
+        # 과거 결손은 위 historical_* 카운터와 scope가 붙은 failures에 계속 남는다.
         # `already`(현행 정책 행이 이미 있어 재평가 없이 건너뛴 셀)도 산출로 세지 않는다 —
         # 재판정하지 않은 것을 이 런의 근거로 쓰면 유실 카운터와 스코프가 어긋난다.
         "ops": {
             "records_out": created,
             "failed_records": (
-                missing_holdings + missing_price
+                current_missing_holdings + current_missing_price
+                + current_unavailable_proxies
                 + len(unknown_target_tickers) + len(ambiguous_target_tickers)
                 + sum(1 for failure in failures
                       if set(failure.get("reasons", ()))
