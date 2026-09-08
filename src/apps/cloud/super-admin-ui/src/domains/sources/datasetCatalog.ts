@@ -270,18 +270,19 @@ export const DATASET_GROUPS: DatasetGroup[] = [
       },
       {
         /* 공시 1분 세션의 과거 원장은 보존한다. 현재 수집은 ALPHA-987에서 18:10 일배치로
-         * 복원됐으며, 이 행은 기존 세션 이력을 조회하는 축이다. */
+         * 복원됐으며, 이 행은 기존 세션 이력을 조회하는 축이다. 운영 중인 레인으로 오독하지
+         * 않게 종료 상태를 이름·주기·링크 모두에서 직접 말한다. */
         id: 'disclosure_minute',
         domain: '시장',
-        label: '공시 (실시간)',
+        label: '공시 (실시간·종료)',
         taskKeys: [],
         cadence: {
           kind: 'intradayWindows',
-          label: '1분 poll · 세션의 예정 poll 수',
+          label: '과거 1분 poll 이력 · 현재 종료',
           ledger: 'minute_ingestion_window',
         },
         inOpsGrid: false,
-        elsewhere: { href: '/minute', label: '실시간 세션' },
+        elsewhere: { href: '/minute', label: '과거 실시간 세션' },
         sessionDataset: 'disclosure_minute',
       },
       {

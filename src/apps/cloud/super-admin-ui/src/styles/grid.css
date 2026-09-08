@@ -1,7 +1,7 @@
 /* 실행 격자 (ALPHA-594 → ALPHA-738 범례·접근성).
  *
  * 셀과 범례가 **같은 클래스**를 쓴다 — 두 곳에 모양을 복제하면 범례가 조용히 거짓말을 한다.
- * 인코딩 값(색·테두리·점 위치)은 기존 그대로다. 의미론은 하나도 바꾸지 않았다. */
+ * 상태 의미는 그대로 두고 실행 중 표식만 채움과 점을 함께 써 훑어볼 때도 보이게 한다. */
 
 /* 셀 클릭 표면 — 18×18 밀도를 유지하려고 버튼 자체를 셀 크기로 만든다 */
 .gd-cellbtn {
@@ -40,8 +40,18 @@
 .gd-s-ok { background: #22c55e; }
 .gd-s-warn { background: #f59e0b; }
 .gd-s-bad { background: #ef4444; }
-/* 실행 중은 배경을 덮지 않고 테두리로 — 기존 인코딩 그대로 */
-.gd-s-run { background: #e5e7eb; border: 2px solid #3b82f6; }
+/* 실행 중 — 테두리만 두면 회색 셀처럼 보여 옅은 채움과 중앙 점을 함께 쓴다 */
+.gd-s-run { background: #dbeafe; border: 2px solid #2563eb; }
+.gd-s-run::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2563eb;
+}
 /* 계획 스킵 — 안 한 게 아니라 할 일이 아니었다 */
 .gd-s-skip { background: repeating-linear-gradient(45deg, #e5e7eb 0 3px, #fff 3px 6px); }
 /* 대기 — 계획은 있고 아직 기한 전이다. 🔴 `계획 없음`과 **같은 클래스를 쓰면 안 된다**:

@@ -236,7 +236,7 @@ function marketSlot(date: string): GridSlot {
         'SUCCEEDED',
       );
     case MOCK_TRADING_DATE:
-      /* 오늘 — 아직 도는 중(파란 테두리)이고 수급은 결손 */
+      /* 오늘 — 아직 도는 중(파란 채움·점)이고 수급은 결손 */
       return lane(
         {
           PRICE_COLLECTION_KIS: COLLECT_TIMEOUT,
