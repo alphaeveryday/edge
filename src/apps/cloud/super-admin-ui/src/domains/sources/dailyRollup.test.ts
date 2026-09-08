@@ -138,6 +138,16 @@ test('🔴 격자에서 `대기` 와 `계획 없음` 은 다른 박스다 — �
   assert.match(source, /'대기 —/, 'STATUS_TIP 에 대기 항목이 없다');
 });
 
+test('실행 중 박스는 테두리 밖에도 채움과 중앙 표식이 있다 — 회색 빈 셀로 보이면 안 된다', () => {
+  const css = readFileSync(new URL('../../styles/grid.css', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const run = css.match(/\.gd-s-run\s*\{([^}]*)\}/)?.[1] ?? '';
+  assert.match(run, /background:\s*#dbeafe/i, '실행 중 셀의 옅은 파란 채움이 사라졌다');
+  assert.match(run, /border:\s*2px\s+solid\s+#2563eb/i, '실행 중 파란 테두리가 사라졌다');
+  assert.match(css, /\.gd-s-run::after\s*\{[^}]*content:\s*''[^}]*background:\s*#2563eb/s,
+    '실행 중 중앙의 파란 표식이 사라져 색과 얇은 테두리에만 의존한다');
+});
+
 const cell = (o: Partial<GridCell> & Pick<GridCell, 'taskKey'>): GridCell => ({
   stage: 'raw',
   planStatus: 'DUE',

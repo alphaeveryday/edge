@@ -86,6 +86,20 @@ test('실시간 데이터셋이 작업→데이터셋 역인덱스를 오염시�
   }
 });
 
+test('종료된 공시 1분 레인은 현재 운영 중인 일배치 공시와 혼동되지 않는다', () => {
+  const historical = ALL_DATASETS.find((d) => d.id === 'disclosure_minute');
+  const current = ALL_DATASETS.find((d) => d.id === 'disclosures');
+  assert.ok(historical && current, '공시의 과거 실시간 축과 현재 일배치 축이 모두 있어야 한다');
+  assert.match(historical.label, /종료/, '과거 세션 조회 행이 현재 실시간 수집처럼 보인다');
+  assert.match(historical.cadence.label, /현재 종료/, '주기 설명이 현재 poll 동작을 암시한다');
+  assert.match(historical.elsewhere?.label ?? '', /과거/, '상세 링크가 현재 세션으로 오인된다');
+  const gridPage = readFileSync(new URL('../../pages/GridPage.tsx', import.meta.url), 'utf8');
+  assert.match(gridPage, /\{detailLabel\} (?:날짜 )?상세 →/,
+    '카탈로그의 과거 표기가 실제 상세 링크에 렌더링되지 않는다');
+  assert.equal(kindOf(current), '일배치', '현재 공시 주 경로가 일배치여야 한다');
+  assert.doesNotMatch(current.label, /종료/, '현재 공시 배치까지 종료된 것으로 보인다');
+});
+
 test('배치 데이터셋은 반드시 격자에 있고 작업이 매여 있다', () => {
   for (const d of ALL_DATASETS.filter((x) => kindOf(x) === '일배치')) {
     assert.equal(d.inOpsGrid, true, d.id);

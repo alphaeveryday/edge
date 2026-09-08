@@ -52,8 +52,8 @@ import {
 import type { MinuteDetailState } from '../domains/sources/minuteHistory';
 import '../styles/grid.css';
 
-/* 상태 → 박스 모양. 색 하나에만 기대지 않도록 테두리·사선·빈 칸을 함께 쓴다.
- * 값은 기존 격자 인코딩을 물려받는다(초록 성공 · 주황 주의 · 빨강 장애 · 파란 테두리 실행 중 · 사선 스킵). */
+/* 상태 → 박스 모양. 색 하나에만 기대지 않도록 테두리·점·사선·빈 칸을 함께 쓴다.
+ * 초록 성공 · 주황 주의 · 빨강 장애 · 파란 채움/점 실행 중 · 사선 스킵. */
 const STATE_CLASS: Record<DayState, string> = {
   정상: 'gd-s-ok',
   주의: 'gd-s-warn',
@@ -695,6 +695,7 @@ function DayDetail({
      * 여기서 다시 적으면 구분자 든 벤더가 생기는 날 이 링크만 조용히 깨져 도착 화면이
      * "이 벤더 세션이 없습니다"라는 **거짓 부재**를 단언한다. */
     const href = minuteSessionHref(date, d.sessionDataset);
+    const detailLabel = d.elsewhere?.label ?? '실시간 세션';
     const sessions = minuteDetail?.kind === 'ready' ? minuteDetail.sessions : [];
     const live = minuteDetail?.kind === 'ready'
       ? sessionState(d, date, minuteDetail.minute)
@@ -783,20 +784,20 @@ function DayDetail({
                           ? '날짜 job 축은 표 아래에 별도 표시'
                           : 'job 축 미제공'}
                     </td>
-                    <td><Link to={sessionHref} className="gd-linkbtn">세션 상세 →</Link></td>
+                    <td><Link to={sessionHref} className="gd-linkbtn">{detailLabel} 상세 →</Link></td>
                   </tr>
                 );
               })}
               {minuteDetail?.kind === 'ready' && sessions.length === 0 && (
                 <tr>
                   <td colSpan={6}>이 날짜에 기록된 {d.label} 벤더 세션이 없습니다.</td>
-                  <td><Link to={href} className="gd-linkbtn">날짜 상세 →</Link></td>
+                  <td><Link to={href} className="gd-linkbtn">{detailLabel} 날짜 상세 →</Link></td>
                 </tr>
               )}
               {detailMessage && (
                 <tr>
                   <td colSpan={6}>{detailMessage}</td>
-                  <td><Link to={href} className="gd-linkbtn">날짜 상세 →</Link></td>
+                  <td><Link to={href} className="gd-linkbtn">{detailLabel} 날짜 상세 →</Link></td>
                 </tr>
               )}
               {!minuteDetail && mock && (
@@ -807,7 +808,7 @@ function DayDetail({
                   <td>—</td>
                   <td>—</td>
                   <td>—</td>
-                  <td><Link to={href} className="gd-linkbtn">세션 상세 →</Link></td>
+                  <td><Link to={href} className="gd-linkbtn">{detailLabel} 상세 →</Link></td>
                 </tr>
               )}
             </tbody>
