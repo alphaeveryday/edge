@@ -14,22 +14,5 @@ SET LOCAL lock_timeout = '3s';
 ALTER TABLE price_window_job
     ADD COLUMN delivery_expected BOOLEAN;
 
--- 기존 행은 event가 있으면 발행 대상이다. event가 없고 세션일 뒤 생성된 job만 당시 계약의
--- 과거일 백필로 복원한다. 이후 행은 writer가 명시하므로 이 추정에 의존하지 않는다.
-UPDATE price_window_job j
-   SET delivery_expected = CASE
-       WHEN EXISTS (
-           SELECT 1
-             FROM dataset_commit_outbox o
-            WHERE o.event_type = 'PriceWindowCommitted'
-              AND o.aggregate_id = j.job_id
-       ) THEN TRUE
-       WHEN (j.created_at AT TIME ZONE 'Asia/Seoul')::date > s.session_date THEN FALSE
-       ELSE TRUE
-   END
-  FROM minute_ingestion_session s
- WHERE s.session_id = j.session_id
-   AND j.delivery_expected IS NULL;
-
 COMMENT ON COLUMN price_window_job.delivery_expected IS
 '이 job의 현재 세대가 PriceWindowCommitted outbox를 가져야 하는지 여부. 실시간=true, 과거일 백필=false(ALPHA-863), 구 writer 전환 구간의 미기록=NULL.';
