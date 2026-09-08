@@ -134,8 +134,6 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertPriceJob("job-backfill", "sess-t", PAST.plusMinutes(4), "PENDING", false);
 		insertWindow("sess-t", PAST.plusMinutes(8), "VALID");
 		insertPriceJob("job-past-realtime-missing", "sess-t", PAST.plusMinutes(8), "PENDING");
-		insertWindow("sess-t", PAST.plusMinutes(9), "VALID");
-		insertPriceJob("job-rollout-unknown", "sess-t", PAST.plusMinutes(9), "PENDING", null);
 		insertWindow("sess-t", PAST.plusMinutes(5), "VALID");
 		insertPriceJob("job-realtime", "sess-t", PAST.plusMinutes(5), "PENDING");
 		insertPriceOutbox("job-realtime", 0, "NEW");
@@ -188,13 +186,13 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
 		insertSession("sess-today", "price_minute", "toss", today, "ACTIVE");
 		insertWindow("sess-today", PAST, "VALID");
-		insertPriceJob("job-missing-event", "sess-today", PAST, "PENDING", null);
+		insertPriceJob("job-missing-event", "sess-today", PAST, "PENDING");
 
 		SessionSummary session = repository.status(today).sessions().get(0);
 
 		assertThat(session.priceJobs().waiting()).isZero();
 		assertThat(session.priceJobs().deliveryFailed())
-				.as("writer 전환 구간의 NULL도 오늘 실시간이면 전달 실패를 숨기지 않는다")
+				.as("실시간 job은 outbox가 없으면 consumer에 도달할 수 없다")
 				.isEqualTo(1);
 	}
 
@@ -273,7 +271,7 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	private void insertPriceJob(String jobId, String sessionId, OffsetDateTime windowStart,
-			String status, Boolean deliveryExpected) {
+			String status, boolean deliveryExpected) {
 		// FK 가 window 행을 요구한다 — job 이 window 를 앞설 수 없다(스키마 주석).
 		jdbc.update("UPDATE minute_ingestion_window SET generation = 1 WHERE session_id = ? AND window_start = ?",
 				sessionId, windowStart);
