@@ -14,5 +14,16 @@ SET LOCAL lock_timeout = '3s';
 ALTER TABLE price_window_job
     ADD COLUMN delivery_expected BOOLEAN;
 
+-- 다음 migration이 이 DDL의 실제 환경별 적용 경계를 안다. target table은 이 transaction이
+-- commit될 때까지 ACCESS EXCLUSIVE라 새 job이 들어올 수 없고, commit 뒤 구 writer 행은 이
+-- cutoff보다 항상 늦다. marker는 복원 migration이 사용한 뒤 바로 제거한다.
+CREATE TABLE migration_alpha1066_price_delivery_cutoff (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    cutoff_at  TIMESTAMPTZ NOT NULL
+);
+
+INSERT INTO migration_alpha1066_price_delivery_cutoff (cutoff_at)
+VALUES (clock_timestamp());
+
 COMMENT ON COLUMN price_window_job.delivery_expected IS
 '이 job의 현재 세대가 PriceWindowCommitted outbox를 가져야 하는지 여부. 실시간=true, 과거일 백필=false(ALPHA-863), 구 writer 전환 구간의 미기록=NULL.';
