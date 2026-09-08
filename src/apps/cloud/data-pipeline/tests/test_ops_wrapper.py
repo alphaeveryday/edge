@@ -586,6 +586,26 @@ def test_stale_attempt_cannot_store_unsupported_records():
     assert db.etasks_by_id["et1"]["unsupported_records"] is None
 
 
+def test_stale_attempt_cannot_supply_failure_reason():
+    # WHY(ALPHA-1064): 겹친 동일 run 재시도가 공유 로그를 덮어도 다른 ECS attempt의 인증
+    # 사유를 현재 시도에 붙이면 안 된다. 정확한 attempt ID가 다르면 generic으로 강등한다.
+    db = FakeOpsDB()
+    _seed(db, task_key="ETF_HOLDINGS_COLLECTION_KRX")
+    wrapper.instrument(
+        lambda: 1, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/current",
+        observe_data_fn=lambda ec: {
+            "records_out": 0, "failed_records": 0,
+            "ops_attempt_id": "other-attempt",
+            "failure": {
+                "category": "AUTHENTICATION", "code": "KRX_CD010",
+                "summary": "KRX 패스워드 변경 필요",
+            },
+        },
+    )
+    assert db.attempts[-1]["failure_reason"] == "step_nonzero_exit"
+
+
 def test_instrument_scopes_attempt_marker_to_the_wrapped_run(monkeypatch):
     """WHY: 공유 로그의 pair는 이 wrapper attempt임을 증명해야 하고 기존 프로세스 환경도 보존한다."""
     db = FakeOpsDB()

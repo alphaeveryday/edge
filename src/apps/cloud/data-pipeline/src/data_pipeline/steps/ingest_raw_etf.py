@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
 
 from ..config import Settings
-from ..lake import Storage, collection_log_key, raw_etf_partition
 from ..failures import SafeFailureError, failure_detail, http_failure, render_failure
+from ..lake import Storage, collection_log_key, raw_etf_partition
 from ..sources import FmpEtfSource, KisNavSource, KrxEtfSource, StopFetch
 
 # 이 스텝은 벤더 무관(관례 인터페이스 duck typing)이다 — 타입힌트만 현재 ETF 어댑터로
@@ -58,6 +59,8 @@ def run(
         "job_name": job_name,
         "source_vendor": vendor,
         "started_at": started_at.isoformat(),
+        # 같은 run_id 재시도가 겹쳐도 observer가 다른 시도의 원인을 받지 않게 하는 결합 키.
+        "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
     }
 
     # 어댑터가 "지금은 수집하면 안 된다"고 판단한 사유(선택). 크리덴셜 유무와 별개다 —

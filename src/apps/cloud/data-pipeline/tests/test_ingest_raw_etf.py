@@ -159,7 +159,7 @@ def test_partial_failure_marks_run_partial(tmp_path):
     assert log["ops"]["received_count"] == 1
 
 
-def test_safe_auth_failure_is_structured_without_raw_response(tmp_path):
+def test_safe_auth_failure_is_structured_without_raw_response(tmp_path, monkeypatch):
     # WHY(ALPHA-1064): KRX CD010이 generic exit로만 보이던 실제 경로다. producer가 안전한
     # 구조를 collection_log에 실어 observer가 attempt 상세로 전달할 수 있어야 한다.
     settings = _settings(tmp_path)
@@ -169,6 +169,7 @@ def test_safe_auth_failure_is_structured_without_raw_response(tmp_path):
         FakeClient({}),
     )
     source.fetch = lambda: (_ for _ in ()).throw(SafeFailureError("KRX_CD010"))
+    monkeypatch.setenv("OPS_LEDGER_ATTEMPT_ID", "attempt-current")
 
     assert ingest_raw_etf.run(settings, storage, source, "20260703T000000Z") == 1
     raw_log = storage.get_bytes(storage.list_keys("operations_archive")[0])
@@ -177,6 +178,7 @@ def test_safe_auth_failure_is_structured_without_raw_response(tmp_path):
         "category": "AUTHENTICATION", "code": "KRX_CD010",
         "summary": "KRX 패스워드 변경 필요",
     }
+    assert log["ops_attempt_id"] == "attempt-current"
     assert b"MBR_NO" not in raw_log
 
 

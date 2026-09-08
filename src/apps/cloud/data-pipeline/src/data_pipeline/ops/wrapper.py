@@ -323,10 +323,16 @@ def instrument(
     entity_resolution_counters = _entity_resolution_counters(
         signals, expected_attempt_id=attempt_id,
     )
+    attempt_failure = signals.get("failure")
+    if attempt_failure is not None and signals.get("ops_attempt_id") != attempt_id:
+        # 같은 run_id의 겹친 재시도가 공유 로그를 덮을 수 있다. 시작 시각만으로는 뒤 시도의
+        # 로그를 앞 시도가 승인하므로 producer가 남긴 정확한 attempt ID까지 일치해야 한다.
+        logger.warning("실패 원인의 attempt 증거가 현재 실행과 다름 — generic으로 강등")
+        attempt_failure = None
     if attempt_id is not None:
         _safe(lambda: ledger.record_attempt_end(
             attempt_id, execution_status=exec_status, exit_code=exit_code,
-            failure_reason=None if exit_code == 0 else render_failure(signals.get("failure")),
+            failure_reason=None if exit_code == 0 else render_failure(attempt_failure),
             data_status=data_status,
             entity_resolution_counters=entity_resolution_counters,
         ))

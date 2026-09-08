@@ -133,7 +133,8 @@ def test_safe_failure_flows_to_attempt_reason(tmp_path):
     wrapper.instrument(
         lambda: 1, task_key=entry.task_key, run_id=_RUN,
         ledger=Ledger(db=DbConfig(password="x"), connect_fn=db.connect),
-        ecs_task_arn="arn:task/krx", observe_data_fn=lambda ec: signals,
+        ecs_task_arn="arn:task/krx",
+        observe_data_fn=lambda ec: {**signals, "ops_attempt_id": db.attempts[-1]["attempt_id"]},
     )
     assert db.attempts[-1]["failure_reason"] == (
         "[인증 실패] KRX_CD010 · KRX 패스워드 변경 필요"
