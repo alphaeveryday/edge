@@ -106,9 +106,8 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			count(*) FILTER (WHERE %4$s) AS delivery_failed
 			""";
 	// price 의 DEAD('STALE')은 정정 후 이전 generation을 의도적으로 격리한 정상 귀결이다.
-	// delivery_expected는 writer가 commit 시점의 is_backfill 결정을 영구 기록한다. NULL은
-	// schema→writer 단계 배포 사이 구 writer 행뿐이다. 그 짧은 구간에는 종전의 오늘 날짜
-	// 판정을 fallback으로 유지하고, writer 전환·NULL 대사 뒤 NOT NULL 수축으로 제거한다.
+	// delivery_expected는 writer가 commit 시점의 is_backfill 결정을 영구 기록한다. COALESCE는
+	// API와 NOT NULL 수축 migration의 독립 배포 순서만 호환하며, 수축 완료 뒤 NULL은 불가능하다.
 	private static final String PRICE_JOB_COUNT_COLUMNS =
 			JOB_COUNT_COLUMNS.formatted("j", " AND o.status IN ('NEW','PUBLISHED')",
 					" AND j.error_code IS DISTINCT FROM 'STALE'",
