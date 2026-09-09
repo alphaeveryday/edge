@@ -40,19 +40,31 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from collections import Counter
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
-from edge_ontology import (ProcessRegistry, load_process_registry,
+from edge_ontology import (ProcessRegistry, load_process_registry, load_relations,
                            resolve_authority, role_entity_kind)
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import mint_concept
+from ..entity_resolution import (ResolutionIndex, load_resolution_index, mint_concept,
+                                 resolve_alias_ticker)
 from ..events.amounts import BASIS_VALUES, parse_amount, parse_basis
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
+from ..ops.quality_diagnostics import (
+    ARGUMENTS_MISSING,
+    CONCEPT_REJECTED,
+    EVENT_SCOPE,
+    INSTRUMENT_NOT_FOUND,
+    REGISTRY_MISS,
+    build as build_quality_diagnostics,
+    issue as quality_issue,
+)
 from ..tagging.ontology import default_predicate, identity_roles
 from .dart_values import match_dart_values
 
@@ -451,7 +463,8 @@ def _validate_gate(item: dict, view: ProcessRegistry, entity_index: dict[str, st
 
 def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[dict],
                    gate: dict[str, dict], view: ProcessRegistry,
-                   entity_index: dict[str, str]) -> dict[str, dict]:
+                   entity_index: dict[str, str],
+                   resolution_index: ResolutionIndex | None = None) -> dict[str, dict]:
     """타입별 추출 콜 배치 1개 → {article_id: 게이트+추출 병합 분류}."""
     items, allowed_by_id = _llm_items(chunk, entity_index)
     payload = _complete_json(
@@ -466,15 +479,18 @@ def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[d
         cls = gate.get(article_id)
         if cls is None or cls["event_type_code"] != event_type_code:
             continue  # 게이트가 안 고른 id 를 지어내도 무시 — 판별은 게이트 소유
-        validated = _validate_extraction(item, view, cls, entity_index,
-                                         allowed_by_id.get(article_id, set()))
+        validated = _validate_extraction(
+            item, view, cls, entity_index, allowed_by_id.get(article_id, set()),
+            resolution_index,
+        )
         if validated is not None:
             out[article_id] = validated
     return out
 
 
 def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
-                         entity_index: dict[str, str], allowed_tickers: set[str]) -> dict | None:
+                         entity_index: dict[str, str], allowed_tickers: set[str],
+                         resolution_index: ResolutionIndex | None = None) -> dict | None:
     """추출 콜 항목 1건 검증 — 라벨이 메뉴에 드는지는 코드가 판정한다(Rule 5).
 
     불량 부분(메뉴 밖 역할·빈 mention)은 그 부분만 떨어뜨리고 이벤트는 살린다
@@ -533,6 +549,19 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
         group = raw.get("group")
         ticker = str(raw.get("ticker") or "")
         entity_id = entity_index.get(ticker) if ticker in allowed_tickers else None
+        relation = load_relations().get(role)
+        instrument_role = (
+            relation is not None and relation.is_entity
+            and not load_relations().sections_for(role)
+            and not load_relations().can_mint(role)
+        )
+        if entity_id is None and resolution_index is not None and instrument_role:
+            # 실측된 정식명 변형은 canonical ticker가 이 기사 mentions의 허용집합에 있을 때만
+            # 쓴다. instrument 역할이 아닌 LOCATION·PRODUCT 등에 적용하면 역할별 해소 축을
+            # 우회해 concept가 상장 종목으로 바뀐다.
+            alias_ticker = resolve_alias_ticker(resolution_index, mention)
+            if alias_ticker in allowed_tickers:
+                entity_id = entity_index.get(alias_ticker)
         if entity_id is None:
             # 티커가 없는 참여자 — 규제기관·법원·중앙은행은 닫힌 집합이라 레지스트리로
             # 해소한다(edge_ontology authority_registry). 이게 없으면 AUTHORITY 를
@@ -552,6 +581,16 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
                 # concept_type 은 종별 그대로 — 위치·규칙·제품이 한 통에 섞이면
                 # 소비자가 구분할 수 없다.
                 minted_concepts[entity_id] = (mention.strip(), role_entity_kind(role))
+        if entity_id is None:
+            resolution_reason = (
+                "registry_miss"
+                if (relation is not None and relation.registry_sections
+                    and not load_relations().can_mint(role))
+                else "instrument_not_found" if instrument_role
+                else CONCEPT_REJECTED
+            )
+        else:
+            resolution_reason = None
         covered_roles.add(role)
         arguments.append({
             "role_code": role,
@@ -560,6 +599,7 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
             "entity_id": entity_id,
             "entity_kind": _entity_kind(role, entity_id),
             "group_ord": _ordinal(group),
+            "resolution_reason": resolution_reason,
         })
 
     # 폴백 anchor 행이 설 때만 그 역할을 충족으로 센다 — 추출이 primary 를 다른 유효 역할로
@@ -635,6 +675,7 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
 
 def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
                     entity_index: dict[str, str],
+                    resolution_index: ResolutionIndex | None = None,
                     concurrency: int = DEFAULT_CLASSIFY_CONCURRENCY,
                     gate_drops_out: dict[str, int] | None = None,
                     gate_types_out: dict[str, int] | None = None) -> dict[str, dict]:
@@ -686,7 +727,7 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
     with ThreadPoolExecutor(max_workers=min(concurrency, len(jobs))) as pool:
         for partial in pool.map(
                 lambda job: _extract_batch(complete_fn, systems[job[0]], job[0], job[1],
-                                           gate, view, entity_index),
+                                           gate, view, entity_index, resolution_index),
                 jobs):
             results.update(partial)
 
@@ -703,6 +744,44 @@ def load_entity_index(conn) -> dict[str, str]:
     with conn.cursor() as cur:
         cur.execute("SELECT ticker, instrument_id FROM instrument")
         return {str(t): str(i) for t, i in cur.fetchall()}
+
+
+def _anchorless_issue_counts(
+    classifications: dict[str, dict], rows: list[dict],
+) -> tuple[Counter, dict[tuple[str, str, str], tuple[str, str]]]:
+    """접지 참여자 0건 이벤트만 원인·role·표현으로 세고 첫 기사 표본을 보존한다."""
+    by_id = {row["article_id"]: row for row in rows}
+    counts: Counter = Counter()
+    samples: dict[tuple[str, str, str], tuple[str, str]] = {}
+    for article_id, cls in classifications.items():
+        if cls.get("anchor_role") or any(
+            part.get("entity_id") is not None for part in cls.get("arguments", ())
+        ):
+            continue
+        unresolved = [
+            part for part in cls.get("arguments", ())
+            if part.get("entity_id") is None and part.get("mention_text")
+        ]
+        if unresolved:
+            issue_keys = [(
+                REGISTRY_MISS
+                if part.get("resolution_reason") == REGISTRY_MISS
+                else CONCEPT_REJECTED
+                if part.get("resolution_reason") == CONCEPT_REJECTED
+                else INSTRUMENT_NOT_FOUND,
+                str(part.get("role_code") or "UNKNOWN"),
+                str(part["mention_text"]),
+            ) for part in unresolved]
+        else:
+            issue_keys = [(
+                ARGUMENTS_MISSING, "EVENT", str(cls.get("event_type_code") or "UNKNOWN"),
+            )]
+        row = by_id.get(article_id) or {}
+        sample = (str(article_id), str(row.get("title") or "제목 없음"))
+        for key in issue_keys:
+            counts[key] += 1
+            samples.setdefault(key, sample)
+    return counts, samples
 
 
 def assembled_source_ids(conn, source_ids: list[str]) -> set[str]:
@@ -1325,6 +1404,8 @@ def run(
     # 발견 가능하게 봉투로 드러낸다. 날짜 커밋 뒤에만 합산(아래 카운터 규약과 동일).
     gate_drops: dict[str, int] = {}
     event_type_distribution: dict[str, int] = {}
+    diagnostic_counts: Counter = Counter()
+    diagnostic_samples: dict[tuple[str, str, str], tuple[str, str]] = {}
     failures: list[dict] = []
     exit_code = 0
 
@@ -1341,7 +1422,8 @@ def run(
                    if (from_date is None or d >= from_date) and (to_date is None or d <= to_date)]
 
         with connect(db) as conn:
-            entity_index = load_entity_index(conn)
+            resolution_index = load_resolution_index(conn)
+            entity_index = resolution_index.by_ticker
         for date in targets:
             # 커밋 경계는 **날짜**다(ALPHA-730) — 런 전체 한 트랜잭션이면 thread_events 의
             # advisory lock(edge-event-threading, ALPHA-727)과 recheck_assembled 의 doc 락을
@@ -1356,6 +1438,7 @@ def run(
                 date_gate_drops: dict[str, int] = {}
                 date_gate_types: dict[str, int] = {}
                 classifications = (classify_titles(complete_fn, todo, view, entity_index,
+                                                   resolution_index=resolution_index,
                                                    concurrency=concurrency,
                                                    gate_drops_out=date_gate_drops,
                                                    gate_types_out=date_gate_types)
@@ -1405,6 +1488,12 @@ def run(
                 1 for c in classifications.values()
                 if not c.get("anchor_role")
                 and not any(p["entity_id"] is not None for p in c.get("arguments", ())))
+            date_diagnostic_counts, date_diagnostic_samples = _anchorless_issue_counts(
+                classifications, todo,
+            )
+            diagnostic_counts.update(date_diagnostic_counts)
+            for key, sample in date_diagnostic_samples.items():
+                diagnostic_samples.setdefault(key, sample)
             events_created += len(created)
             # threaded = 실제로 스레드가 선 것, unknown_thread = identity 결측으로 UNKNOWN
             # (thread_id NULL). 둘을 갈라 로그에 남긴다 — UNKNOWN 을 threaded 로 뭉치면
@@ -1429,8 +1518,25 @@ def run(
         failures.append({"reasons": ["assemble_error"], "error": str(exc)})
         exit_code = 1
 
+    quality_diagnostics = build_quality_diagnostics(
+        EVENT_SCOPE,
+        {
+            "events": events_created,
+            "anchorless": anchorless_events,
+            "unresolvedArguments": arguments_unresolved,
+        },
+        [
+            quality_issue(
+                reason=reason, role=role, expression=expression, count=count,
+                article_id=diagnostic_samples[(reason, role, expression)][0],
+                title=diagnostic_samples[(reason, role, expression)][1],
+            )
+            for (reason, role, expression), count in diagnostic_counts.items()
+        ],
+    )
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
+        "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
         "assembler_version": ASSEMBLER_VERSION,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
@@ -1465,6 +1571,9 @@ def run(
         "ops": {
             "records_out": events_created,
             "failed_records": len(failures) + stage_rejected + anchorless_events,
+            # 실패 런의 부분 집계는 attempt 진단으로 고정하지 않는다. 상세 로그에는 위 원시
+            # 카운터가 남고, 정상 종료한 물리 시도만 현재 attempt ID와 함께 원장에 결합된다.
+            "quality_diagnostics": quality_diagnostics if exit_code == 0 else None,
         },
     }
     try:

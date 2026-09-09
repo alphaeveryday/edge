@@ -16,6 +16,7 @@ from . import catalog, planner, reconciler, states, wrapper
 from . import contracts
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
+from .quality_diagnostics import validated as validated_quality_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,12 @@ def _observe_from_log(
     for key in ("entity_resolution_arguments_total", "entity_resolution_arguments_resolved"):
         if key in ops:
             signals[key] = ops[key]
+    if "quality_diagnostics" in ops and ops["quality_diagnostics"] is not None:
+        diagnostics = validated_quality_diagnostics(ops["quality_diagnostics"])
+        if diagnostics is None:
+            logger.warning("품질 진단 구조가 유효하지 않음(task=%s run_id=%s)", task_key, run_id)
+        else:
+            signals["quality_diagnostics"] = diagnostics
     if entry.contract_key in (ETF_HOLDINGS_KRX_EOD, contracts.ETF_NAV_KIS_DAILY):
         # collected_at은 "현재 시도가 raw 산출물과 로그를 새로 남겼다"는 증명이 있을 때만 쓴다.
         # 같은 run_id의 옛 로그, skipped/깨진 로그, 0건 로그는 수집 산출물 증거가 아니다.

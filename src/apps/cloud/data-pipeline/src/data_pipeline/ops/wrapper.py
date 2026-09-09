@@ -26,6 +26,7 @@ from ..failures import failure_detail, render_failure
 from . import catalog, contracts, states
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
+from .quality_diagnostics import validated as validated_quality_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,22 @@ def _entity_resolution_counters(
                        "원장에 둘 다 NULL 로 남긴다", signals[total_key], signals[resolved_key])
         return empty
     return {total_key: total, resolved_key: resolved}
+
+
+def _quality_diagnostics(signals: dict, *, expected_attempt_id: str | None) -> dict | None:
+    """현재 성공 시도가 낸 bounded 진단만 원장에 저장한다."""
+    value = signals.get("quality_diagnostics")
+    if value is None:
+        return None
+    exit_code = signals.get("exit_code")
+    if (expected_attempt_id is None or signals.get("ops_attempt_id") != expected_attempt_id
+            or not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code != 0):
+        logger.warning("품질 진단의 attempt 증거가 현재 성공 실행과 다름 — 원장에 NULL로 남긴다")
+        return None
+    diagnostics = validated_quality_diagnostics(value)
+    if diagnostics is None:
+        logger.warning("품질 진단이 bounded 계약을 위반함 — 원장에 NULL로 남긴다")
+    return diagnostics
 
 
 def derive_data_status(signals: dict) -> str:
@@ -292,6 +309,9 @@ def instrument(
             signals.update(observe_data_fn(exit_code) or {})
         except Exception:
             logger.exception("data_status 신호 수집 실패 — UNKNOWN 으로 남긴다")
+    # 관측 봉투는 실제 프로세스 종료 코드를 증언하지 않는다. 같은 이름의 필드가 있어도
+    # run_fn 결과가 정본이다 — 실패 1을 False(== 0)로 덮으면 실패 진단이 성공처럼 남는다.
+    signals["exit_code"] = exit_code
     # observer의 self-report를 허용하지 않고 원장이 고정한 분모로 덮는다. 수신값도 저장 가능한
     # 정수로 정규화해 malformed 신호가 판정·JSON 어디에서도 그럴듯한 숫자로 남지 않게 한다.
     signals["expected_count"] = expected_count
@@ -318,11 +338,16 @@ def instrument(
     # derive_data_status의 nonzero 게이트가 UNKNOWN으로 덮어 부분 실패(INCOMPLETE)가 숨는다.
     data_signals = {**signals, "exit_code": 0 if output_fulfilled else exit_code}
     data_status = derive_data_status(data_signals)
-    exec_status = states.EXEC_SUCCEEDED if exit_code == 0 else states.EXEC_FAILED
+    exec_status = (
+        states.EXEC_SUCCEEDED
+        if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code == 0
+        else states.EXEC_FAILED
+    )
 
     entity_resolution_counters = _entity_resolution_counters(
         signals, expected_attempt_id=attempt_id,
     )
+    quality_diagnostics = _quality_diagnostics(signals, expected_attempt_id=attempt_id)
     attempt_failure = signals.get("failure")
     if attempt_failure is not None and signals.get("ops_attempt_id") != attempt_id:
         # 같은 run_id의 겹친 재시도가 공유 로그를 덮을 수 있다. 시작 시각만으로는 뒤 시도의
@@ -335,6 +360,7 @@ def instrument(
             failure_reason=None if exit_code == 0 else render_failure(attempt_failure),
             data_status=data_status,
             entity_resolution_counters=entity_resolution_counters,
+            quality_diagnostics=quality_diagnostics,
         ))
     # 실행 성공/실패(outcome)와 데이터 상태(data_status)는 별개 축이다 — 데이터가 INCOMPLETE 여도
     # 실행이 성공했으면 outcome=FULFILLED 다(attempt 를 실패로 바꾸지 않는다, 스펙 §3.2·시나리오 D).

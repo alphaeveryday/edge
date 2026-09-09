@@ -117,7 +117,12 @@ class _FakeCursor:
         flat = " ".join(sql.split())
         conn.log.append((flat, params))
         upper = flat.upper()
-        if upper.startswith("SELECT TICKER, INSTRUMENT_ID"):
+        if upper.startswith("SELECT I.INSTRUMENT_ID, I.TICKER"):
+            # assemble_events도 load_assertions와 같은 해소 인덱스를 쓴다. 이 테스트의
+            # 관심사는 ticker 축이므로 이름/발행사 축은 비워 실제 5열 계약만 모사한다.
+            self._rows = [(instrument_id, ticker, ticker, None, None)
+                          for ticker, instrument_id in conn.instruments]
+        elif upper.startswith("SELECT TICKER, INSTRUMENT_ID"):
             self._rows = list(conn.instruments)
         elif upper.startswith("SELECT D.SOURCE_DOCUMENT_ID FROM DOCUMENT D"):
             wanted = set(params[0])
@@ -1017,6 +1022,128 @@ def test_classify_merges_all_batches_with_correct_per_batch_tickers(tmp_path):
         assert cls["entity_id"] == ("inst_SAMSUNG" if tickers[i] == "005930" else "inst_HYNIX")
 
 
+def test_curated_alias_resolves_only_inside_article_ticker_scope():
+    """WHY(ALPHA-1067): 법인명 변형은 기사 mentions가 가리킨 같은 종목일 때만 회수한다.
+    전역 별칭만 보고 붙이면 모델이 ticker를 생략한 타사 기사에 잘못 접지된다."""
+    from edge_ontology import load_process_registry
+    from data_pipeline.entity_resolution import ResolutionIndex
+
+    view = load_process_registry()
+    entity_index = {"024110": "inst_IBK", "005930": "inst_SAMSUNG"}
+    resolution_index = ResolutionIndex(
+        by_key={"IBK기업은행": "inst_IBK"}, by_ticker=entity_index,
+        alias_ticker_by_key={"IBK기업은행": "024110"},
+        alias_keys=frozenset({"IBK기업은행"}),
+    )
+
+    def classify(ticker):
+        rows = [{"article_id": "a1", "title": "IBK기업은행 실적", "tickers": [ticker]}]
+        fn = _llm_fn(
+            [_gate_item("a1", ticker=ticker)],
+            [_extract_item("a1", arguments=[{
+                "role": "ISSUER", "mention": "IBK기업은행", "ticker": "", "group": 0,
+            }])],
+        )
+        return assemble_events.classify_titles(
+            fn, rows, view, entity_index, resolution_index=resolution_index,
+        )["a1"]
+
+    [allowed] = [a for a in classify("024110")["arguments"]
+                 if a["mention_text"] == "IBK기업은행"]
+    [outside] = [a for a in classify("005930")["arguments"]
+                 if a["mention_text"] == "IBK기업은행"]
+    assert allowed["entity_id"] == "inst_IBK"
+    assert outside["entity_id"] is None
+
+
+def test_curated_alias_does_not_override_role_specific_concept_resolution():
+    """WHY: 같은 표현이 LOCATION에 나오면 기사 ticker가 같아도 회사 instrument가 아니라 위치
+    concept여야 assertion writer와 event writer의 계보가 갈리지 않는다."""
+    from edge_ontology import load_process_registry
+    from data_pipeline.entity_resolution import ResolutionIndex
+
+    view = load_process_registry()
+    entity_index = {"004170": "inst_SHINSEGAE"}
+    resolution_index = ResolutionIndex(
+        by_key={"신세계백화점": "inst_SHINSEGAE"}, by_ticker=entity_index,
+        alias_ticker_by_key={"신세계백화점": "004170"},
+        alias_keys=frozenset({"신세계백화점"}),
+    )
+    result = assemble_events._validate_extraction(
+        {"arguments": [{
+            "role": "LOCATION", "mention": "신세계백화점", "ticker": "", "group": 0,
+        }]},
+        view,
+        {
+            "article_id": "a1", "event_type_code": "COMPANY.WORKFORCE.LAYOFF",
+            "anchor_role": None, "primary_ticker": "",
+        },
+        entity_index, {"004170"}, resolution_index,
+    )
+
+    [location] = [a for a in result["arguments"] if a["role_code"] == "LOCATION"]
+    assert location["entity_id"] != "inst_SHINSEGAE"
+    assert location["entity_id"].startswith("concept_")
+
+
+def test_anchorless_diagnostics_preserve_reason_and_first_article_sample():
+    """접지 실패가 단순 건수로 뭉개지지 않아야 화면에서 원인·표현·표본 기사까지 설명한다."""
+    classifications = {
+        "a1": {"event_type_code": "E1", "anchor_role": None, "arguments": [{
+            "role_code": "AUTHORITY", "mention_text": "없는기관", "entity_id": None,
+            "resolution_reason": "registry_miss",
+        }]},
+        "a2": {"event_type_code": "E1", "anchor_role": None, "arguments": [{
+            "role_code": "AUTHORITY", "mention_text": "없는기관", "entity_id": None,
+            "resolution_reason": "registry_miss",
+        }]},
+        "a3": {"event_type_code": "E2", "anchor_role": None, "arguments": []},
+    }
+    rows = [
+        {"article_id": "a1", "title": "첫 기사"},
+        {"article_id": "a2", "title": "둘째 기사"},
+        {"article_id": "a3", "title": "인자 없는 기사"},
+    ]
+
+    counts, samples = assemble_events._anchorless_issue_counts(classifications, rows)
+
+    assert counts[("registry_miss", "AUTHORITY", "없는기관")] == 2
+    assert samples[("registry_miss", "AUTHORITY", "없는기관")] == ("a1", "첫 기사")
+    assert counts[("arguments_missing", "EVENT", "E2")] == 1
+
+
+def test_anchorless_diagnostics_keep_concept_rejection_distinct_from_master_miss():
+    """WHY: 채번 정책이 거절한 위치를 종목 마스터 결손으로 보이면 운영자가 엉뚱한 축을 고친다."""
+    counts, _samples = assemble_events._anchorless_issue_counts({
+        "a1": {
+            "event_type_code": "E1", "anchor_role": None,
+            "arguments": [{
+                "role_code": "LOCATION", "mention_text": "123", "entity_id": None,
+                "resolution_reason": "concept_rejected",
+            }],
+        },
+    }, [{"article_id": "a1", "title": "숫자 위치"}])
+    assert counts[("concept_rejected", "LOCATION", "123")] == 1
+
+
+def test_registry_mint_fallback_rejection_keeps_final_concept_reason():
+    """WHY: EXCHANGE는 명부 miss 뒤 채번으로 내려가므로 숫자 입력의 최종 실패는 명부 결손이 아니다."""
+    from edge_ontology import load_process_registry
+
+    result = assemble_events._validate_extraction(
+        {"arguments": [{"role": "EXCHANGE", "mention": "123", "ticker": ""}]},
+        load_process_registry(),
+        {
+            "article_id": "a1", "event_type_code": "MARKET_STRUCTURE.EXCHANGE_OUTAGE",
+            "anchor_role": None, "primary_ticker": "",
+        },
+        {}, set(),
+    )
+    [exchange] = [a for a in result["arguments"] if a["role_code"] == "EXCHANGE"]
+    assert exchange["entity_id"] is None
+    assert exchange["resolution_reason"] == "concept_rejected"
+
+
 def test_malformed_nonscalar_labels_degrade_field_not_run(tmp_path, monkeypatch):
     """비스칼라 라벨({"predicate": []}·stage {}·basis []·confidence [])은 그 필드만
     결측/기본값 처리한다 — frozenset·dict 멤버십 TypeError 가 run() 밖으로 새면 기형 기사
@@ -1443,6 +1570,7 @@ def test_unknown_authority_stays_unresolved(tmp_path, monkeypatch):
     _write_news(storage, "ko", "2026-07-15", [_article("a1", title="당국, 삼성전자 조사")])
     conn = _FakeConn(assertion_rows=_assertion_rows_for("a1", etype, pred))
     _setup(monkeypatch, conn)
+    monkeypatch.setenv("OPS_LEDGER_ATTEMPT_ID", "attempt-current")
     complete_fn = _llm_fn(
         [_gate_item("a1", etype=etype)],
         [_extract_item("a1", predicate=pred, arguments=[
@@ -1458,7 +1586,9 @@ def test_unknown_authority_stays_unresolved(tmp_path, monkeypatch):
     # 미등록 기관은 entity_id 없이 원문 사실만 보존한다. 임의 id를 만들지 않아
     # thread identity에는 못 들어가되, 추출 사실·품질 계측은 사라지지 않는다.
     assert args[("AUTHORITY", None)][4:] == ("subject", "당국", None, 0)
-    assert _log(storage)["arguments_unresolved"] == 1
+    log = _log(storage)
+    assert log["arguments_unresolved"] == 1
+    assert log["ops_attempt_id"] == "attempt-current"
 
 
 def test_gate_response_contract_violations_are_counted():

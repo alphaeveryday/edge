@@ -379,6 +379,7 @@ class Ledger:
         self, attempt_id: str, *, execution_status: str, exit_code: int | None = None,
         failure_reason: str | None = None, data_status: str | None = None,
         entity_resolution_counters: dict | None = None,
+        quality_diagnostics: dict | None = None,
     ) -> bool:
         """attempt 종료 기록. bounded retry, 실패해도 본 작업 결과 불변(성공 여부만 bool 반환)."""
         for i in range(_END_RETRY_ATTEMPTS):
@@ -387,8 +388,10 @@ class Ledger:
                     sets = [
                         "execution_status=%s", "finished_at=now()", "exit_code=%s",
                         "failure_reason=%s", "data_status=COALESCE(%s, data_status)",
+                        "quality_diagnostics=COALESCE(%s::jsonb, quality_diagnostics)",
                     ]
-                    params = [execution_status, exit_code, failure_reason, data_status]
+                    params = [execution_status, exit_code, failure_reason, data_status,
+                              _jsonb(quality_diagnostics)]
                     if entity_resolution_counters is not None:
                         sets.extend((
                             "entity_resolution_arguments_total=%s",

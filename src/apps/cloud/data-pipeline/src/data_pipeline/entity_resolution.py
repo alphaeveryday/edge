@@ -3,7 +3,7 @@
 tag-news 의 argument `text` 는 기사 원문 표현("삼성전자"·"005930")이고,
 `assertion_argument.entity_id` 는 NOT NULL + FK 라 해소 없이는 한 건도 못 넣는다.
 
-**규칙은 코드가 답한다(Rule 5) — LLM 재호출 금지.** 완전일치 축 3개:
+**규칙은 코드가 답한다(Rule 5) — LLM 재호출 금지.** 마스터 축 3개와 실측 별칭 축:
   (a) 티커(6자리, `instrument.ticker`)      → instrument_id
   (b) 회사 정식명(발행사 entity display_name) → 그 회사 보통주 instrument_id
   (c) 종목/ETF display_name                  → instrument_id
@@ -13,19 +13,33 @@ tag-news 의 argument `text` 는 기사 원문 표현("삼성전자"·"005930")�
 회사(actor)가 아니라 그 발행사의 주식으로 해소한다.
 
 동명 충돌(한 키가 서로 다른 엔티티 2개)은 **미해소(ambiguous)** 다 — 아무거나 고르면
-그 순간 조용히 틀린다. 별칭·유사도 매칭은 완전일치 해소율 실측 후 별건(티켓 범위).
+그 순간 조용히 틀린다. 별칭은 정상 런에서 확인된 같은 상장사의 정식명 변형만 canonical
+마스터가 실제 존재할 때 붙인다. 유사도·그룹/브랜드 귀속은 하지 않는다.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # 충돌 표식 — dict 값이 None 이면 "그 키는 두 엔티티가 다퉜다"는 뜻이다.
 _AMBIGUOUS = None
 
 RESOLVED = "resolved"
+ALIAS_RESOLVED = "alias_resolved"
 UNRESOLVED = "unresolved"
 AMBIGUOUS = "ambiguous"
+
+# 2026-09-07 dev 정상 런의 상위 미해소 중, 같은 상장사를 가리키는 것이 결정적인 정식명·
+# 상호 표기만 둔다(ALPHA-1067). 그룹명·브랜드·비상장 자회사처럼 상장 instrument 귀속이
+# 해석인 표현(삼성·포스코·CJ온스타일·GS25)은 넣지 않는다.
+_INSTRUMENT_ALIASES = {
+    "IBK기업은행": "기업은행",
+    "중소기업은행": "기업은행",
+    "현대자동차": "현대차",
+    "LS일렉트릭": "LS ELECTRIC",
+    "한국전력공사": "한국전력",
+    "신세계백화점": "신세계",
+}
 
 
 @dataclass(frozen=True)
@@ -33,11 +47,13 @@ class ResolutionIndex:
     """정규화 키 → instrument entity_id (None = 동명 충돌)."""
 
     by_key: dict[str, str | None]
+    by_ticker: dict[str, str] = field(default_factory=dict)
+    alias_ticker_by_key: dict[str, str] = field(default_factory=dict)
+    alias_keys: frozenset[str] = frozenset()
 
 
 def _normalize(text: str) -> str:
-    """완전일치 전 최소 정규화 — 앞뒤·내부 연속 공백만 접는다. 그 이상(법인 접미사
-    제거·대소문자 등)은 별칭 축이라 해소율 실측 후 판단한다."""
+    """완전일치 전 최소 정규화 — 앞뒤·내부 연속 공백만 접는다."""
     return " ".join(text.split())
 
 
@@ -60,7 +76,9 @@ def load_resolution_index(conn) -> ResolutionIndex:
         rows = cur.fetchall()
 
     by_key: dict[str, str | None] = {}
+    by_ticker: dict[str, str] = {}
     for instrument_id, ticker, instrument_name, issuer_name, share_class in rows:
+        by_ticker[str(ticker)] = str(instrument_id)
         # 회사명 키는 보통주에만 건다 — 우선주가 있는 발행사에서 회사명이 두 종목으로
         # 갈려 ambiguous 가 되면 "회사명 → 그 회사 보통주" 약속이 깨진다. 우선주는
         # 자기 티커·종목명으로는 여전히 해소된다.
@@ -74,16 +92,52 @@ def load_resolution_index(conn) -> ResolutionIndex:
                 by_key[key] = str(instrument_id)
             elif by_key[key] != str(instrument_id):
                 by_key[key] = _AMBIGUOUS
-    return ResolutionIndex(by_key=by_key)
+
+    alias_ticker_by_key: dict[str, str] = {}
+    alias_keys: set[str] = set()
+    ticker_by_entity = {entity_id: ticker for ticker, entity_id in by_ticker.items()}
+    for raw_alias, raw_target in _INSTRUMENT_ALIASES.items():
+        alias, target = _normalize(raw_alias), _normalize(raw_target)
+        entity_id = by_key.get(target)
+        # 타깃이 없거나 충돌이면 별칭도 미해소다. 정적 별칭 때문에 없는 마스터를 지어내거나
+        # 충돌을 숨기지 않는다.
+        if entity_id is None:
+            continue
+        existing = by_key.get(alias)
+        if alias in by_key and existing != entity_id:
+            by_key[alias] = _AMBIGUOUS
+            continue
+        if alias in by_key:
+            # 실제 마스터 이름이면 별칭 전용 경로로 강등하지 않는다. 1분 조립은 기사 종목
+            # 범위를 받지 않아 curated alias를 쓰지 않지만, 마스터 완전일치는 계속 해소해야 한다.
+            # 배치 조립은 기사 허용 ticker를 검증하므로 그 역매핑은 별도로 보존한다.
+            ticker = ticker_by_entity.get(entity_id)
+            if ticker is not None:
+                alias_ticker_by_key[alias] = ticker
+            continue
+        by_key[alias] = entity_id
+        alias_keys.add(alias)
+        ticker = ticker_by_entity.get(entity_id)
+        if ticker is not None:
+            alias_ticker_by_key[alias] = ticker
+    return ResolutionIndex(
+        by_key=by_key,
+        by_ticker=by_ticker,
+        alias_ticker_by_key=alias_ticker_by_key,
+        alias_keys=frozenset(alias_keys),
+    )
 
 
-def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
+def resolve(
+    index: ResolutionIndex, text: object, *, allow_aliases: bool = False,
+) -> tuple[str | None, str]:
     """argument 텍스트 1건을 **instrument 인덱스로** 해소 — (entity_id | None, 사유).
 
     **이 함수는 역할을 모른다** — 텍스트를 instrument 인덱스에 대볼 뿐이다. 역할별 축
     분기는 `plan_resolution` 이 하고, 배치 적재(`load_assertions`)는 그쪽을 쓴다.
-    ⚠️ 다만 이 함수가 티커 축 전용인 것은 **아니다**: 1분 실시간 레인
-    (`minute/event_assembly`)은 아직 역할과 무관하게 여기로 온다 — 그쪽 전환은 ALPHA-852.
+    curated alias는 호출부가 명시적으로 허용할 때만 쓴다. 1분 실시간 레인은 기사별 허용
+    ticker를 받지 않으므로 기본값(False)을 유지해 다른 종목 기사의 비교 대상을 계보에
+    붙이지 않는다. 배치 조립은 `resolve_alias_ticker`로 허용 ticker를 별도 검증한다.
 
     사유는 호출부(로더)가 quality log 에 분포로 남긴다(Rule 12 — 미해소는 침묵하지
     않는다). 비문자열·공백뿐 텍스트는 unresolved 다.
@@ -93,10 +147,19 @@ def resolve(index: ResolutionIndex, text: object) -> tuple[str | None, str]:
     key = _normalize(text)
     if not key or key not in index.by_key:
         return None, UNRESOLVED
+    if key in index.alias_keys and not allow_aliases:
+        return None, UNRESOLVED
     entity_id = index.by_key[key]
     if entity_id is _AMBIGUOUS:
         return None, AMBIGUOUS
-    return entity_id, RESOLVED
+    return entity_id, ALIAS_RESOLVED if key in index.alias_keys else RESOLVED
+
+
+def resolve_alias_ticker(index: ResolutionIndex, text: object) -> str | None:
+    """별칭의 canonical ticker. assemble-events가 기사 허용 ticker 안에서만 쓸 수 있게 분리한다."""
+    if not isinstance(text, str):
+        return None
+    return index.alias_ticker_by_key.get(_normalize(text))
 
 
 # 해소 계획 사유 — quality log 의 축이 된다.
@@ -104,6 +167,7 @@ MINTED = "minted"
 REGISTRY_HIT = "registry_hit"
 REGISTRY_MISS = "registry_miss"
 NOT_RESOLVABLE = "not_resolvable"
+CONCEPT_REJECTED = "concept_rejected"
 
 
 def mint_concept(role_code: str, mention: str) -> tuple[str, str] | None:
@@ -177,7 +241,7 @@ def plan_resolution(
 
     # ── NONE: 티커 축
     if not load_relations().can_mint(role_code):
-        return (*resolve(index, text), None)
+        return (*resolve(index, text, allow_aliases=True), None)
 
     # ── MINT: 채번. **온톨로지가 정한 것만 판단한다** — 어떤 멘션을 개념으로 볼지는
     # `concept_key` 소관이고(하한·숫자만 배제), 이 함수는 그 판정을 그대로 따른다.
@@ -187,6 +251,6 @@ def plan_resolution(
     # `concept_key` 에 둔다. 여기(호출부)에 두면 그 갈림이 그대로 재발한다(ALPHA-861).
     coined = mint_concept(role_code, mention)
     if coined is None:
-        return None, UNRESOLVED, None
+        return None, CONCEPT_REJECTED, None
     entity_id, _key = coined
     return entity_id, MINTED, (mention, relation.entity_kind)
