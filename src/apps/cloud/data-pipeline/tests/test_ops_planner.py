@@ -455,16 +455,15 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_exactly_one_ledger_owns_disclosure(monkeypatch):
-    # WHY(ALPHA-875 → 987): 불변식은 그대로다 — **정확히 한 원장만 공시를 소유한다.**
-    #      875 는 1분 원장이 소유하는 상태를 잠갔고, 987 이 저녁 배치로 되돌리며 방향만
-    #      뒤집혔다: 이제 ops 원장(SFN 슬롯)이 소유하고 1분 레인은 비어야 한다.
+def test_runtime_owner_moves_to_incremental_disclosure_lane_before_catalog_cleanup(monkeypatch):
+    # WHY(ALPHA-1068): 앱 이미지 CD와 terraform apply는 독립이다. catalog 제거 이미지가
+    #      schedule 비활성화보다 먼저 배포되는 창을 없애기 위해 런타임 소유권부터 옮긴다.
     #
     #      둘 다 소유하면 이중 수집(두 레인이 같은 창을 각자 긁어 DART 일 한도 "020"),
     #      둘 다 안 소유하면 724 가 막으려던 조용한 전건 결손이다. 그래서 양쪽을 함께
-    #      단언한다 — 카탈로그(코드)와 terraform 토글이 **한 커밋 안에서** 일치해야
-    #      컷오버가 반쪽으로 착지할 수 없다.
-    # ops 원장: 공시 레인 4작업이 있다(소유자).
+    #      단언한다. catalog 4엔트리는 이 PR에서는 rollback 경로로 남지만 schedule이
+    #      DISABLED라 기대 슬롯이 없고, 분 레인 E2E 뒤 별도 앱 PR에서 제거한다.
+    # ops 원장 정의는 남아 있으나 scheduled owner는 아니다.
     assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
         "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
         "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE",
@@ -476,9 +475,8 @@ def test_exactly_one_ledger_owns_disclosure(monkeypatch):
     assert minute_states.DATASET_DISCLOSURE_MINUTE in minute_states.MINUTE_DATASETS
     allowed = minute_states.SOURCE_GROUPS_BY_DATASET[minute_states.DATASET_DISCLOSURE_MINUTE]
     assert allowed == frozenset({"dart"})
-    # ⚠️ 실제 소유 스위치는 terraform 토글이다(875 리뷰 실증: 상수만 봐선 레인을 꺼도
-    # 아무 테스트도 안 깨진다). dev 가 **비워야**(미편입) 1분 레인이 공시 세션을 계획하지
-    # 않는다 — 카탈로그 4엔트리와 이 값이 어긋나면 이중 수집 또는 전건 결손이다.
+    # 실제 소유 스위치는 terraform 토글이다(875 리뷰 실증: 상수만 봐선 레인을 꺼도
+    # 아무 테스트도 안 깨진다). dev가 dart를 명시해야 1분 레인이 공시 세션을 계획한다.
     # 모듈 기본값은 "dart"(레거시)로 남아 있어 **dev override 를 본다** — 875 는 기본값을
     # 스위치로 썼지만 987 은 envs/dev/main.tf 가 명시 override 로 비운다.
     import re
@@ -497,15 +495,17 @@ def test_exactly_one_ledger_owns_disclosure(monkeypatch):
         r'^\s*minute_session_disclosure_source_group\s*=\s*"([^"]*)"', dev_tf, re.M)
     assert toggle, ("dev 가 minute_session_disclosure_source_group 를 명시하지 않는다 — "
                     "모듈 기본값(dart)이 적용돼 1분 레인이 공시를 다시 소유한다(이중 수집)")
-    assert toggle.group(1) == "", (
-        f"1분 레인 토글이 비어 있지 않다: {toggle.group(1)!r} — 카탈로그가 공시를 소유하는 "
-        "지금 이 값이 차 있으면 두 레인이 같은 창을 긁는다")
-    # 스케줄도 함께 — ENABLED 가 아니면 카탈로그 기대(슬롯)가 영구 MISSED 다.
+    assert toggle.group(1) == "dart", (
+        f"1분 레인 토글이 dart가 아니다: {toggle.group(1)!r} — 공시를 소유할 런타임이 없다")
+    # 배치 스케줄은 같은 apply에서 꺼져야 이중 수집이 없다. ops_ledger.tf는 이 값이
+    # DISABLED면 OPS_DISCLOSURE_SCHED_HHMM을 비워 남아 있는 catalog 엔트리를 기대하지 않는다.
     sched = re.search(r'^\s*disclosure_schedule_state\s*=\s*"([^"]*)"', dev_tf, re.M)
-    assert sched and sched.group(1) == "ENABLED", (
-        "disclosure_schedule_state 가 ENABLED 가 아니다 — 카탈로그 4엔트리가 돌지 않는 "
-        "슬롯을 기대한다(매 거래일 전건 MISSED)")
-    # ARN 표: 배치 레인이 실제 기동 경로다.
+    assert sched and sched.group(1) == "DISABLED", (
+        "disclosure_schedule_state 가 DISABLED 가 아니다 — 1분 레인과 batch가 이중 수집한다")
+    stop = re.search(r'^\s*minute_session_stop_expression\s*=\s*"([^"]*)"', dev_tf, re.M)
+    assert stop and stop.group(1) == "cron(5 20 ? * MON-FRI *)", (
+        "공시 마지막 20:00 window 전에 세션을 닫으면 당일 공시가 영구 결손된다")
+    # ARN 표는 batch rollback 경로로 남긴다.
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
 
 
