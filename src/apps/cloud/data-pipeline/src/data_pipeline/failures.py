@@ -63,7 +63,11 @@ def failure_detail(code: str) -> dict[str, str]:
 
 def krx_login_failure(code: object) -> SafeFailureError:
     """KRX 응답 코드를 허용 목록으로 축약한다. 그 밖의 응답 필드는 읽지 않는다."""
-    safe_code = f"KRX_{code}" if code in {"CD010", "CD011"} else "KRX_LOGIN_REJECTED"
+    safe_code = (
+        f"KRX_{code}"
+        if isinstance(code, str) and code in {"CD010", "CD011"}
+        else "KRX_LOGIN_REJECTED"
+    )
     return SafeFailureError(safe_code)
 
 

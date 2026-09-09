@@ -125,6 +125,18 @@ def test_malformed_login_response_drops_response_detail(monkeypatch):
     assert secret not in "".join(traceback.format_exception(caught.value))
 
 
+@pytest.mark.parametrize("error_code", [{"unexpected": "shape"}, ["CD010"]])
+def test_non_string_login_error_code_is_safe_rejection(monkeypatch, error_code):
+    # WHY(ALPHA-1064): 스키마 드리프트로 코드가 객체/배열이면 허용 목록 비교가 TypeError를
+    #      내 generic 수집 실패로 숨겨질 수 있다. 형식이 틀려도 로그인 거부로 안전하게 닫는다.
+    _patch(monkeypatch, {"_error_code": error_code}, [_FakeCookie("JSESSIONID", "X")])
+
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail()["code"] == "KRX_LOGIN_REJECTED"
+
+
 def test_login_network_failure_is_classified_without_exception_detail(monkeypatch):
     # WHY(ALPHA-1064): 인증 거부와 일시 네트워크 장애는 운영 대응이 다르다. URL/프록시가
     # 들어갈 수 있는 URLError 원문은 버리고 재시도 소진 분류만 전달한다.
