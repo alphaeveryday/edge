@@ -46,7 +46,7 @@ def _count(value: object, *, positive: bool = False) -> bool:
 
 def _text_fits(value: object, limit: int) -> bool:
     """DB JSONB에 안전한 비어 있지 않은 printable UTF-8 문자열인가."""
-    if not isinstance(value, str) or not value or not value.isprintable():
+    if not isinstance(value, str) or not value.strip() or not value.isprintable():
         return False
     try:
         return len(value.encode("utf-8")) <= limit
@@ -57,7 +57,7 @@ def _text_fits(value: object, limit: int) -> bool:
 def _truncate(value: str, limit: int) -> str:
     """제어문자를 없애고 UTF-8 경계에서 잘라 JSON escape까지 포함한 상한을 지킨다."""
     printable = "".join(char if char.isprintable() else " " for char in value)
-    return printable.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
+    return printable.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore").strip()
 
 
 def build(
@@ -125,8 +125,11 @@ def validated(value: object) -> dict | None:
         if (not _text_fits(article_id, _MAX_ARTICLE_ID_BYTES)
                 or not _text_fits(title, _MAX_TITLE_BYTES)):
             return None
-    if scope == ASSERTION_SCOPE and issue_count > metrics["unresolved"]:
-        return None
+    if scope == ASSERTION_SCOPE:
+        if bool(issues) != (metrics["unresolved"] > 0):
+            return None
+        if issue_count > metrics["unresolved"]:
+            return None
     if scope == EVENT_SCOPE:
         if bool(issues) != (metrics["anchorless"] > 0):
             return None
@@ -147,11 +150,11 @@ def issue(
     """원문 본문 없이 표시명·제목 표본만 상한 안으로 만든다."""
     return {
         "reason": reason,
-        "role": _truncate(role, _MAX_ROLE_BYTES),
-        "expression": _truncate(expression, _MAX_EXPRESSION_BYTES),
+        "role": _truncate(role, _MAX_ROLE_BYTES) or "UNKNOWN",
+        "expression": _truncate(expression, _MAX_EXPRESSION_BYTES) or "UNKNOWN",
         "count": count,
         "sample": {
-            "articleId": _truncate(article_id, _MAX_ARTICLE_ID_BYTES),
-            "title": _truncate(title, _MAX_TITLE_BYTES),
+            "articleId": _truncate(article_id, _MAX_ARTICLE_ID_BYTES) or "UNKNOWN",
+            "title": _truncate(title, _MAX_TITLE_BYTES) or "제목 없음",
         },
     }

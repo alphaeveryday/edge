@@ -589,7 +589,7 @@ def test_stale_attempt_cannot_store_quality_diagnostics():
             "records_out": 1, "failed_records": 0, "ops_attempt_id": "stale-attempt",
             "quality_diagnostics": {
                 "schema": "news_resolution_v1", "scope": "assertion_arguments",
-                "metrics": {"total": 1, "resolved": 0, "unresolved": 1},
+                "metrics": {"total": 1, "resolved": 1, "unresolved": 0},
                 "issues": [],
             },
         },

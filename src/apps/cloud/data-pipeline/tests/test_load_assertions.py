@@ -1480,6 +1480,39 @@ def test_every_recoverable_axis_stays_in_the_unresolved_sample(tmp_path, monkeyp
                for row in diagnostics["issues"])
 
 
+def test_missing_argument_text_is_explained_in_quality_diagnostics(tmp_path, monkeypatch):
+    """해소 분모에 센 결측 text는 진단에서도 같은 수만큼 설명한다.
+
+    WHY: 값이 없거나 비문자열인 실체 argument도 plan_resolution의 미해소 결과라 분모에
+    포함된다. 이 경로를 issue에서 빼면 unresolved가 양수인데 원인 목록이 비는 실행 시도가
+    생겨, 진단을 추가한 목적 자체가 깨진다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    arguments = [
+        {"role_code": "ISSUER", "text": None, "entity_id": None},
+        {"role_code": "ISSUER", "text": 42, "entity_id": None},
+        {"role_code": "ISSUER", "text": "  ", "entity_id": None},
+        {"role_code": "ISSUER", "text": "삼성전자", "entity_id": None},
+    ]
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row(
+        "a1", [_assertion(arguments=arguments)],
+    )])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    diagnostics = _log(storage)["ops"]["quality_diagnostics"]
+    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3}
+    assert diagnostics["issues"] == [{
+        "reason": "arguments_missing",
+        "role": "ISSUER",
+        "expression": "text",
+        "count": 3,
+        "sample": {"articleId": "a1", "title": "삼성전자 수주"},
+    }]
+
+
 def test_no_writer_local_policy_narrows_minting(tmp_path, monkeypatch):
     """채번 여부는 **온톨로지만** 정한다 — 이 writer 가 따로 좁히지 않는다(ALPHA-861).
 

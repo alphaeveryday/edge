@@ -38,6 +38,7 @@ def test_validation_rejects_raw_or_unbounded_payloads():
     assert validated({**valid, "metrics": {**valid["metrics"], "total": True}}) is None
     assert validated({**valid, "metrics": {"total": 1, "resolved": 2, "unresolved": 0}}) is None
     assert validated({**valid, "metrics": {"total": 1, "resolved": 1, "unresolved": 0}}) is None
+    assert validated({**valid, "issues": []}) is None
     assert validated({**valid, "issues": [{**valid["issues"][0], "reason": "invented"}]}) is None
     assert validated({
         "schema": "news_resolution_v1", "scope": EVENT_SCOPE,
@@ -70,6 +71,19 @@ def test_validation_rejects_malformed_membership_and_postgres_unsafe_text_withou
             **valid,
             "issues": [{**valid["issues"][0], "expression": unsafe}],
         }) is None
+    for field in ("role", "expression"):
+        assert validated({
+            **valid,
+            "issues": [{**valid["issues"][0], field: "   "}],
+        }) is None
+    for field in ("articleId", "title"):
+        assert validated({
+            **valid,
+            "issues": [{
+                **valid["issues"][0],
+                "sample": {**valid["issues"][0]["sample"], field: "   "},
+            }],
+        }) is None
 
 
 def test_builder_keeps_ten_multibyte_samples_inside_storage_limit():
@@ -101,3 +115,19 @@ def test_builder_keeps_escaped_and_control_heavy_samples_inside_storage_limit():
 
     assert validated(value) == value
     assert len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) <= 8192
+
+
+def test_builder_replaces_control_only_display_fields_with_safe_labels():
+    """WHY: 원천 표본이 제어문자뿐이어도 진단 생성이 런을 죽이거나 빈 표시를 저장하면 안 된다."""
+    value = build(
+        ASSERTION_SCOPE, {"total": 1, "resolved": 0, "unresolved": 1},
+        [issue(
+            reason=INSTRUMENT_NOT_FOUND, role="\x00\n", expression="\x00\n", count=1,
+            article_id="\x00\n", title="\x00\n",
+        )],
+    )
+
+    [row] = value["issues"]
+    assert row["role"] == "UNKNOWN"
+    assert row["expression"] == "UNKNOWN"
+    assert row["sample"] == {"articleId": "UNKNOWN", "title": "제목 없음"}

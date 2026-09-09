@@ -91,6 +91,7 @@ from ..lake import (
     unconsumed_run_ids,
 )
 from ..ops.quality_diagnostics import (
+    ARGUMENTS_MISSING,
     CONCEPT_REJECTED,
     ASSERTION_SCOPE,
     INSTRUMENT_AMBIGUOUS,
@@ -739,6 +740,14 @@ def run(
                                                 else INSTRUMENT_NOT_FOUND
                                             )
                                             key = (diagnostic_reason, role_code, text)
+                                            unresolved_issue_counts[key] = (
+                                                unresolved_issue_counts.get(key, 0) + 1
+                                            )
+                                            unresolved_issue_samples.setdefault(
+                                                key, (entry["article_id"], entry["title"]),
+                                            )
+                                        else:
+                                            key = (ARGUMENTS_MISSING, role_code, "text")
                                             unresolved_issue_counts[key] = (
                                                 unresolved_issue_counts.get(key, 0) + 1
                                             )

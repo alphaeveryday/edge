@@ -118,13 +118,23 @@ def test_curated_legal_name_alias_resolves_only_when_master_target_exists():
         "현대자동차": "inst_HYUNDAI",
         "LS일렉트릭": "inst_LS",
         "한국전력공사": "inst_KEPCO",
-        "신세계백화점": "inst_SHINSEGAE",
     }
     for expression, entity_id in aliases.items():
         assert resolve(index, expression) == (None, UNRESOLVED)
         assert resolve(index, expression, allow_aliases=True) == (entity_id, ALIAS_RESOLVED)
     assert resolve_alias_ticker(index, "IBK기업은행") == "024110"
     assert resolve_alias_ticker(index, "삼성") is None
+
+
+def test_multi_issuer_department_store_brand_is_not_an_instrument_alias():
+    """WHY: 신세계백화점 브랜드는 신세계와 별도 상장사 광주신세계가 함께 사용하므로
+    기사 범위가 없는 assertion writer에서 한 instrument로 단정하면 계보가 오염된다."""
+    rows = _MASTER + [
+        ("inst_GWANGJU", "037710", "광주신세계 보통주", "광주신세계", "COMMON"),
+    ]
+    index = _index(rows)
+    assert resolve(index, "신세계백화점", allow_aliases=True) == (None, UNRESOLVED)
+    assert resolve_alias_ticker(index, "신세계백화점") is None
 
 
 def test_alias_does_not_exist_without_unambiguous_canonical_master():
