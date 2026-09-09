@@ -487,9 +487,10 @@ CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
-# 공시 레인(ALPHA-721 신설 → 724 SFN 이관 → 875 1분 세션 → **987 저녁 배치 복귀**).
-# 등록 4작업 — 875 의 3부 계약을 그대로 되돌렸다: ① `disclosure_schedule_state="ENABLED"`
-# ② `minute_session_disclosure_source_group=""` ③ 4 엔트리 복원, 셋이 **같은 apply** 다.
+# 은퇴한 공시 ops 레인 코드(ALPHA-721·724·987). ALPHA-1068부터 현재 catalog 엔트리는 0이고
+# `disclosure_minute/dart`가 소유한다. 이 상수와 SFN 정의는 이력 조회·rollback 경로로 남긴다.
+# batch 복원은 ① `disclosure_schedule_state="ENABLED"` ② minute source group 빈 값 ③ 공시
+# 4엔트리 복원을 **같은 변경**으로 수행한다.
 # ⚠️ ②를 빠뜨렸을 때의 증상은 MISSED 가 아니라 **이중 수집**이다: 1분 Worker 는 CLI 가 아니라
 # 스텝 함수를 부르므로 `by_cli` 충돌이 안 나고, 두 레인이 같은 창을 각자 긁어 DART 일 한도
 # ("020")를 태운다. 조용한 쪽이라 더 늦게 발견된다.

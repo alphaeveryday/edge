@@ -777,7 +777,8 @@ LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
 세션으로 넘겼다가 987 이 저녁 배치로 되돌렸고, **ALPHA-1068이 증분 1분 레인을 현재
 소유자로 복원했다**. 평일 18:10 스케줄은 DISABLED이고 `OPS_DISCLOSURE_SCHED_HHMM`도 빈
 값이며 카탈로그 공시 엔트리 4개도 제거됐다. SFN 정의만 rollback 경로로 남고, 복원할 때는
-scheduler와 catalog를 함께 되돌린다.
+scheduler와 catalog를 함께 되돌린다. ARN이 남아 있어도 현재처럼 해당 catalog가 비어 있으면
+`plan-run`은 기대 작업 없는 SFN 실행을 만들기 전에 fail-loud로 거부한다.
 
 정상 SFN의 `LoadDisclosure`는 `--input-run-id`로 completed dual manifest의 direct key winner를
 pending에 commit한 뒤 pending만 typed 적재한다. shared canonical 상위 prefix LIST/fullscan은

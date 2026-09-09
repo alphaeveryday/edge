@@ -567,10 +567,8 @@ module "data_pipeline" {
   # ── 네 번째 컷오버(ALPHA-1068): 저녁 배치 1슬롯 → 증분 1분 레인 ──────────────
   # 매 tick 날짜 전체를 다시 읽던 병목을 접수 원장 증분 poll로 제거해 875의 1분 레인을
   # 복원한다. 런타임 소유권은 같은 apply의 두 값으로 원자적으로 바뀐다: 아래 batch DISABLED와
-  # `minute_session_disclosure_source_group = "dart"`. ops catalog 4엔트리는 이 apply가 착지하고
-  # 분 레인의 당일 E2E가 확인된 뒤 별도 앱 PR에서 제거한다. 앱 이미지 CD와 terraform apply는
-  # 서로 독립이라 한 PR에 담으면 catalog 제거 이미지가 먼저 배포될 수 있기 때문이다. 이 중간
-  # 상태에서 catalog는 rollback용 정의일 뿐이고, schedule이 DISABLED라 기대 슬롯은 생기지 않는다.
+  # `minute_session_disclosure_source_group = "dart"`. 앱 이미지 CD와 terraform apply가 독립이라
+  # 이 apply와 분 레인의 당일 E2E를 먼저 완료했고, 후속 앱 PR에서 catalog 4엔트리를 제거했다.
   #
   # 거래일 07:45 이후 착지하면 아침 start가 이미 지난 상태라 apply만으로 오늘 공시 세션과
   # worker가 생기지 않는다. 기존 가격 세션은 16:10 stop 뒤 DRAINED라 start-minute-session이

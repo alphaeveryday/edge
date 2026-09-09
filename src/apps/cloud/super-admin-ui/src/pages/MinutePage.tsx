@@ -22,6 +22,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { BadgeTone } from 'ui-kit';
 import type { MinuteJobCounts, MinuteSession, MinuteStatus, OverviewLane } from '../domains/sources';
+import { ALL_DATASETS, kindOf } from '../domains/sources/datasetCatalog';
 import {
   MINUTE_API_GAPS,
   NEWS_API_GAPS,
@@ -60,13 +61,13 @@ const hhmm = (iso: string) =>
     hour12: false,
   });
 
-/* 데이터셋 표시 이름 — 어휘 정본은 data_pipeline/minute/states.py 다. 여기 없는 dataset 은
- * 원문 그대로 쓴다(모르는 것에 이름을 지어 주지 않는다). */
-const DATASET_LABEL: Record<string, string> = {
-  price_minute: '1분 가격',
-  news_minute: '뉴스',
-};
-const DATASET_ORDER = ['price_minute', 'news_minute'];
+/* 실시간 탭 이름·순서는 datasetCatalog가 정한다. 세션 원장의 새 dataset이 카탈로그 검사를
+ * 통과하면 이 화면도 같은 이름으로 즉시 세우고, 어휘 밖 값만 원문 그대로 보여 준다. */
+const REALTIME_CATALOG = ALL_DATASETS.filter((d) => kindOf(d) === '실시간');
+const DATASET_LABEL: Record<string, string> = Object.fromEntries(
+  REALTIME_CATALOG.map((d) => [d.id, d.label]),
+);
+const DATASET_ORDER = REALTIME_CATALOG.map((d) => d.id);
 
 /* ══ 지표 타일 ══ */
 function Kpi({
