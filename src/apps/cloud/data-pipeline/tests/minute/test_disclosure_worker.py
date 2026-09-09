@@ -58,37 +58,73 @@ class StubSteps:
 
     def __init__(self, *, rcept_nos=("20260810000001", "20260810000002"),
                  status="success", exit_code=0, raw_keys=None, truncated=False,
-                 normalize_exit=0, segment_exit=0):
+                 normalize_exit=0, segment_exit=0, cursor_safe=None,
+                 cursor_candidate="20260810000002", cursor_safes=None,
+                 cursor_candidates=None, list_total_count=None):
         self.rcept_nos = tuple(rcept_nos)
         self.status = status
         self.exit_code = exit_code
         self.truncated = truncated
         self.normalize_exit = normalize_exit
         self.segment_exit = segment_exit
+        self.cursor_safe = cursor_safe
+        self.cursor_candidate = cursor_candidate
+        self.cursor_safes = list(cursor_safes or [])
+        self.cursor_candidates = list(cursor_candidates or [])
+        self.list_total_count = list_total_count
         self.raw_keys = (
             ["raw/source=dart/dataset=disclosures/market=KR/ingest_date=2026-08-10"
              "/run_id=r1/part-00000.ndjson"] if raw_keys is None else raw_keys
         )
         self.collect_windows: list[tuple[str, str]] = []
         self.collect_run_ids: list[str] = []
+        self.collect_after: list[str | None] = []
+        self.collect_document_indexes: list[dict[str, dict[str, str]] | None] = []
         self.normalize_calls: list[dict] = []
         self.segment_calls: list[dict] = []
         self.load_calls: list[dict] = []
         self.assemble_calls: list[dict] = []
 
     def collect(self, settings, storage, source, run_id, from_date=None, to_date=None,
-                *, ingest_lane):
+                *, ingest_lane, after_rcept_no=None, known_rcept_nos=None,
+                previous_total_count=None, existing_documents_by_market=None):
         # 실물 collect() 계약과 동일하게 필수다 — 워커가 이 인자를 빠뜨리면 여기서 죽어야
         # 배치 워터마크(ALPHA-987)의 레인 구분 전제가 픽스처 뒤로 숨지 않는다.
         assert ingest_lane == "minute"
         self.collect_windows.append((from_date, to_date))
         self.collect_run_ids.append(run_id)
+        self.collect_after.append(after_rcept_no)
+        self.collect_document_indexes.append(existing_documents_by_market)
+        index = len(self.collect_after) - 1
         return {
             "exit_code": self.exit_code,
             "log": {"status": self.status, "error": None},
             "rcept_nos": self.rcept_nos,
             "raw_keys": list(self.raw_keys),
             "list_truncated": self.truncated,
+            "cursor_safe": (
+                self.cursor_safes[index] if index < len(self.cursor_safes)
+                else self.cursor_safe if self.cursor_safe is not None
+                else self.status not in {"error", "stopped", "skipped"} and not self.truncated
+            ),
+            "cursor_candidate": (
+                self.cursor_candidates[index] if index < len(self.cursor_candidates)
+                else self.cursor_candidate
+            ),
+            "cursor_found": after_rcept_no is not None,
+            "list_pages_requested": 1,
+            "list_rcept_nos_seen": self.rcept_nos,
+            "list_total_count": (
+                len(self.rcept_nos) if self.list_total_count is None
+                else self.list_total_count
+            ),
+            "scan_complete": after_rcept_no is None,
+            "incremental_stop_reason": (
+                None if after_rcept_no is None else "total_unchanged_first_page"
+            ),
+            "existing_documents_by_market": existing_documents_by_market or {
+                "KR": {"20260810000001": "raw/documents/20260810000001.zip"}
+            },
         }
 
     def normalize(self, storage, run_id, input_run_id=None, *, raw_keys=None):
@@ -184,11 +220,11 @@ def test_질의_창이_세션_날짜에서_나온다_벽시계가_아니다(tmp_
 
 
 def test_창_폭은_당일이고_세션_첫_tick만_D_1을_포함한다(tmp_path, monkeypatch):
-    """일 콜 총량이 창 폭에 정비례한다 — 720 window × 2일 창이면 1만~1.6만 콜이고
-    당일로 좁히면 절반이다. D-1 은 휴일·중단 캐치업용이라 하루 한 번으로 족하다."""
+    """전량 대사의 콜 수는 창 폭에 비례한다. D-1은 중단 캐치업용이라 첫 poll의 내구화가
+    끝난 뒤에는 당일 기준을 새로 만들고 이후 대사도 당일만 읽는다."""
     db = FakeMinuteDB()
     steps = install(monkeypatch, StubSteps())
-    worker, _, _, _ = build_worker(db, tmp_path, windows=3)
+    worker, _, _, storage = build_worker(db, tmp_path, windows=3)
 
     run_ticks(worker, NOW, count=6)
 
@@ -196,6 +232,158 @@ def test_창_폭은_당일이고_세션_첫_tick만_D_1을_포함한다(tmp_path
     assert steps.collect_windows[0] == ("2026-08-09", SESSION_DATE), "첫 tick 이 D-1 을 안 봤다"
     for later in steps.collect_windows[1:]:
         assert later == (SESSION_DATE, SESSION_DATE), f"첫 tick 이후에 D-1 이 또 붙었다: {later}"
+
+
+def test_첫_poll은_전량이고_이후에는_접수번호_경계까지만_읽는다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1068): 증분 경계가 실제 collect 호출에 안 실리면 상태 필드만 생기고 DART 호출은
+    #      여전히 매 분 전량이다. 첫 전량 관측이 안전하게 끝난 뒤부터만 경계를 넘긴다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(cursor_candidate="R2"))
+    worker, _, _, storage = build_worker(db, tmp_path, windows=3)
+
+    run_ticks(worker, NOW, count=4)
+
+    # 첫 D-1+D 기준은 다음 D-only 응답과 비교할 수 없으므로 질의 창이 바뀌는 두 번째 poll도 full.
+    assert steps.collect_after[:3] == [None, None, "R2"]
+    assert steps.collect_document_indexes[0] is None
+    assert steps.collect_document_indexes[1] == {
+        "KR": {"20260810000001": "raw/documents/20260810000001.zip"}
+    }
+    manifests = [json.loads(storage.get_bytes(key)) for key in sorted(
+        storage.list_keys("operations_archive/minute_manifests/")
+    )]
+    scopes = [item["observation_scope"]["mode"] for item in manifests]
+    assert scopes.count("full") == 2
+    assert scopes.count("incremental") == len(scopes) - 2
+
+
+def test_주기_대사는_증분_경계를_비우고_전량을_다시_본다(tmp_path, monkeypatch):
+    # WHY: 접수일만 정렬되는 목록에서 늦게 끼어든 행과 기존 정정은 커서 아래에 올 수 있다.
+    #      증분만 영구 반복하지 않고 설정된 주기마다 독립 전량 관측으로 회수해야 한다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(cursor_candidate="R2"))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=4)
+    worker.config.full_reconcile_every_polls = 1
+
+    run_ticks(worker, NOW, count=6)
+
+    assert steps.collect_after[:4] == [None, None, "R2", None]
+
+
+@pytest.mark.parametrize(
+    "unsafe", ["raw", "ingest_exit", "normalize", "normalize_partial", "load"],
+)
+def test_내구화_전_실패는_커서를_전진시키지_않고_다음_window가_재시도한다(
+        tmp_path, monkeypatch, unsafe):
+    # WHY: 대상 본문 저장 또는 completed canonical/pending enqueue 전에 커서가 전진하면,
+    #      다음 응답이 달라졌을 때 실패 공시가 경계 뒤에 갇혀 재시도되지 않는다.
+    db = FakeMinuteDB()
+    steps = StubSteps(
+        cursor_candidate="R2",
+        cursor_safe=unsafe != "raw",
+        exit_code=1 if unsafe == "ingest_exit" else 0,
+        normalize_exit=(1 if unsafe == "normalize" else 2 if unsafe == "normalize_partial" else 0),
+    )
+    install(monkeypatch, steps)
+    if unsafe == "load":
+        monkeypatch.setattr(dw.load_disclosure, "run", lambda *a, **k: 1)
+    worker, _, _, _ = build_worker(db, tmp_path, windows=3)
+
+    run_ticks(worker, NOW, count=4)
+
+    assert len(steps.collect_after) >= 2
+    assert steps.collect_after[:2] == [None, None]
+
+
+def test_안전하지_않은_증분_poll은_다음_window를_즉시_전량_대사한다(tmp_path, monkeypatch):
+    # WHY(edge-review): 기존 receipt의 변경 응답이 정제에 실패한 뒤 다음 페이지로 밀릴 수 있다.
+    #      같은 total_count의 1페이지 제한을 반복하면 실패 건을 주기 대사 전까지 재시도하지 못한다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(cursor_safe=False))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=4)
+    worker.prior_day_done = True
+    worker.rcept_cursor = "R0"
+    worker.baseline_query_window = (SESSION_DATE, SESSION_DATE)
+    worker.config.full_reconcile_every_polls = 60
+
+    run_ticks(worker, NOW, count=6)
+
+    assert steps.collect_after[:2] == ["R0", None]
+
+
+def test_증분_후속_예외도_전량_대사_시계를_멈추지_않는다(tmp_path, monkeypatch):
+    # WHY(edge-review): collect가 성공해도 assemble/manifest/commit에서 예외가 날 수 있다.
+    #      카운터를 함수 끝에서만 올리면 이 경로가 계속되는 동안 full 대사가 영구 연기된다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps())
+    monkeypatch.setattr(
+        dw.assemble_disclosure_events, "run",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("assemble boom")),
+    )
+    worker, _, _, _ = build_worker(db, tmp_path, windows=4)
+    worker.prior_day_done = True
+    worker.rcept_cursor = "R0"
+    worker.known_list_rcept_nos = {"R0"}
+    worker.list_total_count = 1
+    worker.baseline_query_window = (SESSION_DATE, SESSION_DATE)
+    worker.config.full_reconcile_every_polls = 60
+
+    run_ticks(worker, NOW, count=6)
+
+    assert steps.collect_after[:2] == ["R0", None]
+    assert worker.polls_since_full == 1
+    assert worker.existing_documents_by_market == {
+        "KR": {"20260810000001": "raw/documents/20260810000001.zip"}
+    }
+
+
+def test_assemble_exit_실패도_다음_window를_전량_대사한다(tmp_path, monkeypatch):
+    # WHY(edge-review): assemble은 예외를 삼켜 exit 1로 반환한다. 예외 경로만 막으면 이 실패가
+    #      안전한 증분으로 오인돼 기준을 복원하므로 실제 exit code까지 내구화 gate에 포함한다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps())
+    monkeypatch.setattr(dw.assemble_disclosure_events, "run", lambda *a, **k: 1)
+    worker, _, _, _ = build_worker(db, tmp_path, windows=3)
+    worker.prior_day_done = True
+    worker.rcept_cursor = "R0"
+    worker.known_list_rcept_nos = {"R0"}
+    worker.list_total_count = 1
+    worker.baseline_query_window = (SESSION_DATE, SESSION_DATE)
+
+    run_ticks(worker, NOW, count=4)
+
+    assert steps.collect_after[:2] == ["R0", None]
+
+
+def test_잘못된_total_count는_증분_기준을_설치하지_않는다(tmp_path, monkeypatch):
+    # WHY(edge-review): cursor와 known set만 설치되고 count가 비면 다음 호출이 paired-state
+    #      검증에서 API 요청 전에 죽는다. 세 값을 함께 검증해 원자적으로 설치해야 한다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(list_total_count="??"))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=2)
+
+    run_ticks(worker, NOW, count=3)
+
+    assert steps.collect_after[:2] == [None, None]
+    assert worker.rcept_cursor is None
+    assert worker.list_total_count is None
+    assert worker.baseline_query_window is None
+
+
+def test_실패_응답_다음의_변경된_응답이_같은_경계에서_복구된다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1058/1068): 첫 응답의 본문 저장 실패 뒤 커서를 넘기면, 다음 응답이 정상으로
+    #      바뀌어도 그 공시는 다시 오지 않는다. 실패한 poll은 경계 없이 재시도하고 정상
+    #      응답이 canonical/pending까지 내구화된 뒤에만 새 경계를 채택한다.
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(
+        cursor_safes=[False, True], cursor_candidates=["FAILED", "RECOVERED"]
+    ))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=2)
+
+    run_ticks(worker, NOW, count=3)
+
+    assert steps.collect_after[:2] == [None, None]
+    assert worker.rcept_cursor == "RECOVERED"
 
 
 def test_수집이_실패한_tick은_D_1_캐치업을_소진하지_않는다(tmp_path, monkeypatch):
@@ -230,25 +418,17 @@ def test_수집이_실패한_tick은_D_1_캐치업을_소진하지_않는다(tmp
     assert all(w == (SESSION_DATE, SESSION_DATE) for w in recovered[1:])
 
 
-def test_partial_은_캐치업을_소진한다_절단만_소진하지_않는다(tmp_path, monkeypatch):
-    """🔴 `status` 로 "창을 다 읽었나"를 판정하면 안 된다.
-
-    `partial` 은 목록 절단만이 아니라 **본문 fetch 실패 하나**, 심지어 **남의 회사 malformed
-    행 하나**로도 선다(`fetch_failures` 가 유니버스 필터 앞에서 채워진다). 그런 행은 그날 내내
-    같은 실패를 반복하므로, `status == "success"` 를 요구하면 캐치업이 하루 종일 소진되지 않고
-    720 window 전부가 2일 창을 질의한다 — 일 콜이 두 배가 되고 그게 DART 일 한도(STOP 코드)로
-    레인을 세우는 축이다. 물어야 할 것은 절단 여부 하나다.
-    """
+def test_partial_은_캐치업을_소진하지_않는다(tmp_path, monkeypatch):
+    """partial은 대상 행·본문 또는 감사 로그의 내구화 실패다. 시장 전체의 foreign 진단은
+    별도 필드로 분리돼 success를 유지하므로, partial을 관대하게 소비할 이유가 없다."""
     db = FakeMinuteDB()
     steps = install(monkeypatch, StubSteps(status="partial", exit_code=1))
     worker, _, _, _ = build_worker(db, tmp_path, windows=6)
 
     worker.tick(NOW)
 
-    assert worker.prior_day_done is True, "partial 이 캐치업을 하루 종일 붙잡고 있다"
-    # 같은 tick 의 두 번째 window 는 이미 당일 창이다
-    assert steps.collect_windows[0] == ("2026-08-09", SESSION_DATE)
-    assert all(w == (SESSION_DATE, SESSION_DATE) for w in steps.collect_windows[1:])
+    assert worker.prior_day_done is False
+    assert all(w == ("2026-08-09", SESSION_DATE) for w in steps.collect_windows)
 
 
 def test_절단은_캐치업을_소진하지_않는다(tmp_path, monkeypatch):
@@ -282,7 +462,7 @@ def test_안_봤으면_빈_성공이_아니다(tmp_path, monkeypatch):
 def test_세대_불일치는_삼키지_않는다(tmp_path, monkeypatch):
     """`GenerationMismatchError` 는 `CommitRejectedError` 하위가 아니라 맨 RuntimeError 라
     catch-all 이 삼킨다. 공시는 뉴스가 뺀 세대 대조를 **일부러 남긴** dataset 이고, 그 불일치는
-    예측 버그 신호다 — 삼키면 매 tick 창 전체 재독을 한 번씩 태우며 영원히 돈다. 공용 골격과
+    예측 버그 신호다 — 삼키면 매 tick DART poll을 한 번씩 태우며 영원히 돈다. 공용 골격과
     같이 크게 죽어야 한다."""
     from data_pipeline.minute.commit import GenerationMismatchError
 
@@ -535,6 +715,8 @@ def test_manifest_는_같은_관측이면_같은_바이트다(tmp_path):
         query_from=SESSION_DATE, query_to=SESSION_DATE,
         rcept_nos=("20260810000001",), data_status="VALID",
         step_exits={"ingest": 0, "load": 0},
+        observation_scope={"mode": "full", "after_rcept_no": None,
+                           "cursor_found": False, "pages_requested": 2},
     )
     first = dw.build_poll_manifest(**common)
     second = dw.build_poll_manifest(**common)
@@ -576,6 +758,7 @@ def test_manifest_키는_attempt_축이라_재시도가_불변_위반이_아니�
     manifest = json.loads(storage.get_bytes(key).decode("utf-8"))
     assert manifest["rcept_nos"] == ["20260810000001", "20260810000002"]
     assert manifest["query_window"] == ["2026-08-09", SESSION_DATE]
+    assert manifest["observation_scope"]["mode"] == "full"
     assert manifest["step_exits"] == {
         "assemble": 0, "ingest": 0, "load": 0, "normalize": 0, "segment": 0}
 

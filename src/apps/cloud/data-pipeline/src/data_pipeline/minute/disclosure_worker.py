@@ -15,11 +15,10 @@
 
 ## window 의 의미 — 산출물이 없다
 
-이 소스에는 증분 커서가 없다(시각 필드도 없어 rcept_no 워터마크도 불가 —
-`sources/dart_disclosure.py`). 매 tick 이 날짜창 전체를 다시 읽으므로 window 는
-"그 분에 한 번 폴링했다"는 **원장 단위**이고, 완전성은 window 가 아니라 **런 사이 rcept_no
-집합 비교**가 진다. 그래서 window checksum = 관측 rcept_no 집합 해시다 — raw 메타 바이트를
-해시하면 `fetched_at` 이 매 tick 달라 세대가 영원히 오른다.
+DART API에는 시각 커서가 없다. Worker는 첫 poll과 주기 대사에서 날짜창 전체를 읽고, 그 사이에는
+직전 전량 관측의 `rcept_no` 집합과 `total_count`로 증가분을 확인할 때까지만 읽는다(ALPHA-1068).
+같은 건수의 교체·정정은 주기 대사가 회수한다. manifest의 `observation_scope`가 full과 incremental을
+구분하고, window checksum은 그 poll이 실제 관측한 rcept_no 집합 해시다.
 
 ## 🔴 날짜창은 **세션 날짜(KST)** 에서 유도한다
 
@@ -37,8 +36,8 @@ UTC 시계가 여기선 파티션 키가 아니라 **질의 파라미터**를 �
 
 ## 창 폭 — 매 tick 당일, 세션 첫 tick 만 D-1 포함
 
-일 콜 총량이 창 폭에 정비례한다: 720 window × 창 전체 재독이라 2일 창이면 1만~1.6만 콜
-(현 10슬롯의 ~70배)이고, 당일로 좁히면 절반이다. DART 앱키는 **세 스텝이 공유**하고
+전량 poll의 콜 총량은 창 폭에 정비례한다. 이를 매 window 반복하면 2일 창은 1만~1.6만 콜이지만,
+증분 poll은 보통 경계가 있는 첫 페이지에서 멈추고 60 poll마다 전량 대사한다. DART 앱키는 **세 스텝이 공유**하고
 (`ingest-raw-disclosure`·`ingest-raw-financial`·`enrich-corp-code`) `"020" 일 사용한도 초과`가
 `STOP_STATUS_CODES` 라 닿으면 레인이 선다.
 
@@ -133,6 +132,7 @@ def build_poll_manifest(
     rcept_nos: tuple[str, ...],
     data_status: str,
     step_exits: dict[str, int],
+    observation_scope: dict,
 ) -> dict:
     """이 window 가 **무엇을 보고 무엇으로 판정했나** — EOD·감사가 읽는 기록.
 
@@ -156,6 +156,9 @@ def build_poll_manifest(
         # 실제로 질의한 날짜창 — 창 폭이 그날의 콜 총량과 캐치업 범위를 정하므로, 이게
         # 없으면 "왜 이 window 가 이 집합을 봤나"가 사후에 복원되지 않는다.
         "query_window": [query_from, query_to],
+        # 날짜는 API 파라미터일 뿐 실제 관측 깊이는 아니다. 증분 poll을 날짜 전체의 빈
+        # 관측으로 오인하지 않도록 경계·페이지 수·fallback 여부를 manifest에 함께 고정한다.
+        "observation_scope": observation_scope,
         "data_status": data_status,
         # 관측 전량. 완전성 판정(런 사이 집합 비교)의 입력이자 window checksum 의 재료다.
         "rcept_nos": list(rcept_nos),
@@ -182,10 +185,11 @@ class DisclosureWorkerConfig:
     # 300 을 여기 두면 층마다 다른 값이 되어 어느 게 진짜인지 헷갈린다.
     session_lease_seconds: int = 600
     heartbeat_every_seconds: int = 60
-    # 기본 1 — 뉴스와 같다. backlog window 하나마다 **날짜창 전체 재독**이 한 번 더 나가
+    # 기본 1 — 뉴스와 같다. backlog window 하나마다 DART poll이 한 번 더 나가
     # 벤더 콜이 가장 비싼 축이라, 가격의 2 를 빌려 쓰지 않는다. 0 은 금지다(DRAINING
     # 수렴이 recovery lane 만 열어서 — `worker.tick` 의 drain 분기).
     recovery_budget_per_tick: int = 1
+    full_reconcile_every_polls: int = 60
 
 
 @dataclass
@@ -205,6 +209,12 @@ class DisclosureWorker(MinuteWorkerLoop):
     # 절반으로 줄인다(모듈 docstring). **커밋이 성공한 뒤에** 세운다 — 먼저 세우면 첫
     # tick 이 실패한 날은 캐치업 창을 영영 못 본다.
     prior_day_done: bool = False
+    rcept_cursor: str | None = None
+    known_list_rcept_nos: set[str] = field(default_factory=set)
+    list_total_count: int | None = None
+    baseline_query_window: tuple[str, str] | None = None
+    polls_since_full: int = 0
+    existing_documents_by_market: dict[str, dict[str, str]] = field(default_factory=dict)
     _last_heartbeat: datetime | None = field(default=None, repr=False)
 
     def _run_id_for(self, claim: dict) -> str:
@@ -235,10 +245,37 @@ class DisclosureWorker(MinuteWorkerLoop):
             query_from, query_to = disclosure_query_window(
                 cfg.session_day, include_prior_day=include_prior_day
             )
+            force_full = (
+                self.rcept_cursor is None
+                or self.baseline_query_window != (query_from, query_to)
+                or self.polls_since_full >= cfg.full_reconcile_every_polls
+            )
+            after_rcept_no = None if force_full else self.rcept_cursor
+            if not force_full:
+                # 뒤 단계·manifest·commit 예외가 나도 시도한 증분 poll은 대사 시계에 포함한다.
+                # full 실패는 임계값을 유지해 다음 window가 다시 full을 시도한다.
+                self.polls_since_full += 1
+                # 이번 제한 관측이 끝까지 내구화돼야 같은 기준을 다음 poll에 다시 쓸 수 있다.
+                # 먼저 비우고 성공 경로에서만 복원하면 어느 예외도 재시도 대사를 우회하지 않는다.
+                self.baseline_query_window = None
             outcome = ingest_raw_disclosure.collect(
                 self.settings, self.storage, self.source, run_id, query_from, query_to,
-                ingest_lane="minute",
+                ingest_lane="minute", after_rcept_no=after_rcept_no,
+                known_rcept_nos=(frozenset(self.known_list_rcept_nos)
+                                 if after_rcept_no is not None else None),
+                previous_total_count=(self.list_total_count
+                                      if after_rcept_no is not None else None),
+                existing_documents_by_market=(self.existing_documents_by_market or None),
             )
+            returned_documents = outcome.get("existing_documents_by_market")
+            if isinstance(returned_documents, dict):
+                # raw 본문 저장/조회 결과는 이 시점에 이미 내구화됐다. 뒤 단계가 예외를 내도
+                # 되먹여야 다음 재시도가 같은 S3 prefix를 LIST하거나 본문을 다시 받지 않는다.
+                self.existing_documents_by_market = {
+                    market: dict(paths)
+                    for market, paths in returned_documents.items()
+                    if isinstance(market, str) and isinstance(paths, dict)
+                }
             raw_status = str(outcome["log"].get("status"))
             step_exits = {"ingest": int(outcome["exit_code"])}
             # **집합으로 정규화한다.** checksum 이 관측 집합의 해시라는 계약은 여기서
@@ -274,21 +311,9 @@ class DisclosureWorker(MinuteWorkerLoop):
                         # manifest의 초기화·성공 기록까지 막지 않는다.
                         logger.exception("공시 window 정제 예외(producer=%s)", name)
                         step_exits[name] = 1
-                # 적재는 raw 가 0건이어도 돈다 — canonical 창 스캔이 **의도된 백로그 회수
-                # 경로**다(직전 tick 의 정제는 됐는데 적재가 깨진 경우를 여기서 줍는다).
-                # 창을 질의 창으로 좁혀 parquet GET 을 그 며칠로 묶는다.
-                #
-                # ⚠️ **LIST 는 안 줄어든다.** `load_disclosure._read_facts` 는
-                # `_partition_dates` 로 `report_date=` 프리픽스 **전체**를 LIST 한 뒤 날짜를
-                # 거른다 — 좁히는 것은 GET 뿐이다. 그래서 window 하나가 dataset 둘(supply·
-                # segment) × 1 LIST = 2 LIST 이고 하루 1,440 회이며, 그 LIST 는 report_date
-                # 파티션 수(거래일마다 +1)에 따라 자란다. normalize 에서 없앤 그 비용이
-                # 여기엔 남아 있다.
-                # ponytail: 파티션 수 증가가 느려(거래일당 1) 발표 지평에선 안 문제라 이 PR 은
-                # 그대로 둔다. 고칠 자리는 `_read_facts` 가 창에서 파티션 프리픽스를 만들어
-                # 그 날짜만 LIST 하는 것이고, 배치 경로와 공유라 별건이다.
-                # 그리고 이 레인은 **창 밖 백로그를 회수하지 않는다** — 하루 한 번 전량 적재
-                # (`load-disclosure` 무창 배치)가 그 몫이고 PR B 범위 밖이다.
+                # 적재는 raw가 0건이어도 돈다. 현재 run의 completed canonical manifest를 exact
+                # GET해 durable pending에 enqueue하고, 기존 pending도 날짜 범위 안에서 재시도한다
+                # (ALPHA-1045). shared canonical LIST는 명시 bootstrap에만 남아 있다.
                 # exit 2는 성공 winner를 manifest까지 확정한 부분 실패라 하류가 그 범위를
                 # 처리한다. exit 1·그 밖의 값은 incomplete canonical을 뜻하므로 차단한다.
                 if all(step_exits[name] in (0, 2) for name in ("normalize", "segment")):
@@ -310,10 +335,11 @@ class DisclosureWorker(MinuteWorkerLoop):
                 window_start=claim["window_start"], window_end=claim["window_end"],
                 query_from=query_from, query_to=query_to,
                 rcept_nos=rcept_nos, data_status=data_status, step_exits=step_exits,
+                observation_scope=_observation_scope(after_rcept_no, outcome),
             )
             manifest_bytes = serialize_manifest(manifest)
-            # 키 축이 **attempt** 다(세대가 아니다) — 매 tick 이 창 전체를 재독하는 라이브
-            # 소스라 재poll 은 다른 관측을 낳는데 세대는 커밋이 성공해야 오른다. 세대 키에
+            # 키 축이 **attempt** 다(세대가 아니다) — 라이브 소스의 재poll은 다른 제한 관측을
+            # 낳는데 세대는 커밋이 성공해야 오른다. 세대 키에
             # 다른 바이트를 PUT 하면 그 window 가 불변 위반으로 영구히 막힌다(뉴스와 같은 축).
             manifest_key = minute_poll_manifest_key(
                 cfg.dataset, cfg.source_code, cfg.market, cfg.session_date,
@@ -337,23 +363,54 @@ class DisclosureWorker(MinuteWorkerLoop):
                                   "collection_finished_at": datetime.now(timezone.utc)},
                 artifact_generation=_predict_generation(claim, checksum, manifest_checksum),
             )
-            if include_prior_day and not hard_failed and not truncated:
+            cursor_candidate = outcome.get("cursor_candidate")
+            total_count = outcome.get("list_total_count")
+            valid_total_count = (
+                isinstance(total_count, int)
+                and not isinstance(total_count, bool)
+                and total_count >= 0
+            )
+            downstream_durable = (
+                step_exits.get("ingest") == 0
+                and all(step_exits.get(name) == 0 for name in ("normalize", "segment"))
+                and step_exits.get("load") in (0, 2)
+                and (
+                    step_exits.get("load") == 2
+                    or step_exits.get("assemble") == 0
+                )
+            )
+            cursor_safe = outcome.get("cursor_safe") is True and downstream_durable
+            state_safe = (
+                cursor_safe
+                and isinstance(cursor_candidate, str)
+                and bool(cursor_candidate)
+                and valid_total_count
+            )
+            if state_safe:
+                self.rcept_cursor = cursor_candidate
+                seen = {
+                    value for value in outcome.get("list_rcept_nos_seen", ())
+                    if isinstance(value, str) and value
+                }
+                if force_full or outcome.get("scan_complete") is True:
+                    self.known_list_rcept_nos = seen
+                else:
+                    self.known_list_rcept_nos.update(seen)
+                self.list_total_count = total_count
+                self.baseline_query_window = (query_from, query_to)
+            # 대사 주기는 커서 전진 성공과 독립이다. 증분 실패가 계속돼도 카운터는 올라가
+            # 경계 아래 신규·정정을 설정 주기 안에 전량 대사한다. 전량 poll 자체가 내구화에
+            # 실패한 경우에는 0으로 되감지 않아 다음 window가 다시 전량으로 시도한다.
+            if force_full:
+                if state_safe:
+                    self.polls_since_full = 0
+            if include_prior_day and cursor_safe:
                 # 캐치업 창은 **목록을 끝까지 읽은 tick** 만 소진한다.
                 #
-                # ⚠️ 기준이 `status == "success"` 가 아니다. `status` 는 `partial` 로도 서는데
-                # 그 사유가 목록 절단만이 아니다 — 본문(document.xml) fetch 실패 하나,
-                # 심지어 **남의 회사** malformed 행 하나로도 `partial` 이 된다
-                # (`fetch_failures` 는 유니버스 필터 **앞**에서 채워진다). 그런 행은 그날
-                # 내내 같은 실패를 반복하므로, success 를 요구하면 캐치업이 **하루 종일
-                # 소진되지 않고** 720 window 전부가 2일 창을 질의한다 — 일 콜이 두 배가 되고
-                # 그게 바로 `"020" 일 사용한도 초과`(STOP 코드)로 레인을 세우는 축이다.
-                #
-                # 물어야 할 것은 "창을 다 읽었나" 하나이고, 그 답은 `status` 가 아니라
-                # 절단 신호다(`collect` 의 `list_truncated`). 본문 실패는 관측한 rcept_no
-                # 집합을 줄이지 않으므로 캐치업의 성립과 무관하다.
-                #
-                # 커밋 성공도 기준이 못 된다 — 수집이 실패한 window 도 INVALID 로 정상
-                # 커밋되므로, 그걸 기준으로 삼으면 첫 tick 이 실패한 날 D-1 을 아무도 안 본다.
+                # 목록 완주만으로는 부족하다. 대상 본문·collection log·두 canonical manifest·load pending까지
+                # 내구화돼야 D-1을 다시 질의하지 않아도 된다. 그 전 실패는 다음 window가 같은
+                # 이틀 창을 다시 읽어 변경된 응답으로 복구한다. 시장 전체의 foreign malformed
+                # 행은 수집 스텝이 별도 진단으로 남기고 이 gate의 실패로 세지 않는다.
                 self.prior_day_done = True
             if data_status != WINDOW_VALID:
                 # 조용한 성공 위장 금지(Rule 12) — 어느 칸이 왜 깨졌는지 남긴다.
@@ -374,7 +431,7 @@ class DisclosureWorker(MinuteWorkerLoop):
             # `CommitRejectedError` 의 하위가 아니라 맨 `RuntimeError` 라(`commit.py`)
             # 아래 catch-all 이 잡아 로그만 남기고 False 를 낸다. 공시는 뉴스가 뺀 세대
             # 대조를 **일부러 남긴** dataset 이고(PR A) 그 불일치는 `_predict_generation`
-            # 의 예측 버그 신호다 — 삼키면 그 버그가 매 tick 창 전체 재독을 한 번씩
+            # 의 예측 버그 신호다 — 삼키면 그 버그가 매 tick DART poll을 한 번씩
             # 태우며 영원히 돈다.
             raise
         except CommitRejectedError:
@@ -389,6 +446,24 @@ class DisclosureWorker(MinuteWorkerLoop):
             return False
 
 
+def _observation_scope(after_rcept_no: str | None, outcome: dict) -> dict:
+    """API 날짜창과 실제 페이지 관측 범위를 분리해 감사 manifest에 남긴다."""
+    if after_rcept_no is None:
+        mode = "full"
+    elif outcome.get("scan_complete") is True:
+        mode = "full_fallback_incremental_state_changed"
+    else:
+        mode = "incremental"
+    return {
+        "mode": mode,
+        "after_rcept_no": after_rcept_no,
+        "cursor_found": bool(outcome.get("cursor_found", False)),
+        "pages_requested": int(outcome.get("list_pages_requested", 0)),
+        "stop_reason": outcome.get("incremental_stop_reason"),
+        "scan_complete": bool(outcome.get("scan_complete", False)),
+    }
+
+
 def _classify(
     raw_status: str, step_exits: dict[str, int], rcept_nos: tuple[str, ...]
 ) -> str:
@@ -400,7 +475,8 @@ def _classify(
     - 수집은 됐는데 어느 칸이든 비0(수집 `partial` 포함) → **INCOMPLETE**. "그 폴링의 산출이
       온전치 않다"는 뜻이고 소스 장애가 아니다 — PR A 가 INCOMPLETE 를 실패 unit 으로 세지
       않는 이유가 이것이다(세면 QC 가 소스 장애로 오독한다).
-    - 관측 0건 → **VALID_EMPTY**. 날짜창에 우리 유니버스 공시가 없는 건 정상이다(뉴스형).
+    - 관측 0건 → **VALID_EMPTY**. manifest가 선언한 observation_scope 안에 우리 공시가 없는
+      것은 정상이다. 증분 scope를 날짜창 전체의 무공시로 해석하면 안 된다.
     - 그 밖 → **VALID**.
     """
     if raw_status in _HARD_FAIL_STATUSES or raw_status in _NOT_OBSERVED_STATUSES:
@@ -552,6 +628,7 @@ def disclosure_worker_cli(settings, *, session_date: str | None,
             session_lease_seconds=options.session_lease_seconds,
             heartbeat_every_seconds=options.heartbeat_every_seconds,
             recovery_budget_per_tick=options.recovery_budget_per_tick,
+            full_reconcile_every_polls=options.full_reconcile_every_polls,
         ),
     )
     for received in (signal.SIGTERM, signal.SIGINT):

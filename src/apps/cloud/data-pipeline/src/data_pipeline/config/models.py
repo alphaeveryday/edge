@@ -676,7 +676,7 @@ class MinuteDisclosureWorkerConfig(BaseModel):
     # 종전 `PoliteClient()` 기본과 같은 10초. list.json 은 실측 ~0.9초/페이지(ALPHA-714 의
     # 슬롯당 6.3초 ÷ 7페이지)라 여유가 크다 — 느린 꼬리가 보이면 여기를 올린다.
     timeout_sec: float = Field(default=10.0, gt=0, le=120)
-    # window 하나(=날짜창 전체 재독)가 읽을 list.json 페이지 예산. **벤더의 `page_count` 가
+    # 전량 대사 window 하나가 읽을 list.json 페이지 예산. **벤더의 `page_count` 가
     # 아니다** — 그건 페이지당 건수(100)이고 이건 "한 window 가 몇 페이지를 넘기는가"다.
     #
     # ⭐ 이 값은 **실제 순회 상한으로 주입된다**(`disclosure_worker_cli` 가 이 워커의 소스
@@ -707,14 +707,17 @@ class MinuteDisclosureWorkerConfig(BaseModel):
     lease_seconds: int = Field(default=300, ge=90, le=3600)
     # ⚠️ 가격·뉴스의 300 을 **빌려 쓰지 않는다**. fence 는 heartbeat 주기(60) + 최악 tick
     # (280)을 덮어야 하므로 340 이 하한이고, 300 이면 기본 설정이 자기 검증에 걸린다.
-    # 공시 window 가 형제들보다 비싼 것(창 전체 재독)이 그대로 이 층에 나타난 값이다.
+    # 공시 전량 대사가 형제들보다 비싼 것이 그대로 이 층에 나타난 값이다.
     session_lease_seconds: int = Field(default=600, ge=60, le=7200)
     heartbeat_every_seconds: int = Field(default=60, ge=5, le=300)
     # 하한 1 — DRAINING 수렴은 recovery lane 만 연다(만료 고아 CLAIMED 회수). 0 이면
     # ack_drain 이 영구 거부돼 세션이 DRAINING 에 고착된다(worker.tick 의 drain 분기).
-    # 기본 1 은 뉴스와 같다: backlog window 하나마다 창 전체 재독이 한 번 더 나가므로
+    # 기본 1 은 뉴스와 같다: backlog window 하나마다 DART poll이 한 번 더 나가므로
     # (벤더 콜이 가장 비싼 축) 가격의 2 를 빌려 쓰지 않는다.
     recovery_budget_per_tick: int = Field(default=1, ge=1, le=10)
+    # 증분 경계 뒤에 늦게 끼어든 행·기존 행 정정을 회수하는 전량 대사 주기. 60이면 평상시
+    # 1페이지 poll 60회마다 날짜창 전체를 한 번 읽어 호출량을 제한하면서 최대 지연을 1시간으로 둔다.
+    full_reconcile_every_polls: int = Field(default=60, ge=1, le=720)
     tick_seconds: float = Field(default=5.0, gt=0, le=60)
 
     @model_validator(mode="after")

@@ -312,6 +312,148 @@ def test_row_repeated_across_shifted_pages_collapses(tmp_path):
     assert [r["rcept_no"] for r in records] == ["DUP", "X", "NEW"]
 
 
+def test_incremental_poll_stops_after_cursor_page_and_uses_explicit_order(tmp_path):
+    # WHY(ALPHA-1068): 매 분 날짜 전체를 다시 읽으면 하루 수천 list.json 호출이 나간다.
+    #      직전 최신 접수번호를 만난 페이지까지는 새 행과 같은 날짜의 불안정한 순서를 모두
+    #      흡수하고, 그 뒤 페이지는 읽지 않아야 호출량이 신규 유입 폭에 비례한다.
+    client = FakeClient(list_pages={
+        1: _page([
+            _row("공급계약", rcept_no="NEW"),
+            _row("사업보고서", rcept_no="CURSOR"),
+            _row("공급계약", rcept_no="SAME-DAY-AFTER"),
+        ], total_page=2, page_count=3),
+        2: _page([_row("공급계약", rcept_no="OLD")], total_page=2,
+                 page_no=2, page_count=3),
+    })
+    source = _source(tmp_path, client, api_key="k", page_count=3)
+
+    records = list(source.fetch(["005930"], after_rcept_no="CURSOR"))
+
+    assert [row["rcept_no"] for row in records] == ["NEW", "CURSOR", "SAME-DAY-AFTER"]
+    assert len(client.list_urls) == 1
+    assert source.incremental_cursor_found is True
+    assert source.incremental_cursor_candidate == "NEW"
+    assert source.list_pages_requested == 1
+    assert _param(client.list_urls[0], "sort") == "date"
+    assert _param(client.list_urls[0], "sort_mth") == "desc"
+
+
+def test_missing_incremental_cursor_falls_back_to_complete_scan(tmp_path):
+    # WHY: 보존기간·정정으로 경계 행이 목록에서 사라질 수 있다. 그때 1페이지를 성공으로 접으면
+    #      커서 아래의 미관측 행이 영구 누락된다. 경계를 못 찾은 poll은 끝까지 읽는 대사다.
+    client = FakeClient(list_pages={
+        1: _page([_row("공급계약", rcept_no="N1")], total_page=2, page_count=1),
+        2: _page([_row("사업보고서", rcept_no="N0")], total_page=2,
+                 page_no=2, page_count=1),
+    })
+    source = _source(tmp_path, client, api_key="k", page_count=1)
+
+    records = list(source.fetch(["005930"], after_rcept_no="GONE"))
+
+    assert [row["rcept_no"] for row in records] == ["N1", "N0"]
+    assert len(client.list_urls) == 2
+    assert source.incremental_cursor_found is False
+    assert source.incremental_cursor_candidate == "N1"
+
+
+def test_incremental_count_finds_new_receipt_below_foreign_cursor_page(tmp_path):
+    # WHY(edge-review): date desc는 같은 날짜 안의 rcept_no 순서를 보장하지 않는다. 유니버스 밖
+    #      cursor가 1페이지에 있어도 신규 대상이 2페이지에 끼면 exact cursor 중단은 거짓 빈
+    #      poll을 만든다. 이전 전량 집합 대비 total_count 증가분의 새 rcept_no를 모두 찾을 때까지
+    #      읽어야 신규 위치와 무관하게 회수된다.
+    old = _row("주주총회", rcept_no="CURSOR", stock_code="000660")
+    new = _row("공급계약", rcept_no="NEW")
+    client = FakeClient(list_pages={
+        1: _page([old], total_page=2, page_count=1, total_count=2),
+        2: _page([new], total_page=2, page_no=2, page_count=1, total_count=2),
+    })
+    source = _source(tmp_path, client, api_key="k", page_count=1)
+
+    records = list(source.fetch(
+        ["005930"], after_rcept_no="CURSOR",
+        known_rcept_nos=frozenset({"CURSOR"}), previous_total_count=1,
+    ))
+
+    assert [row["rcept_no"] for row in records] == ["NEW"]
+    assert len(client.list_urls) == 2
+    assert source.incremental_stop_reason == "expected_new_rcept_nos_seen"
+    assert source.incremental_cursor_found is True
+    assert source.list_rcept_nos_seen == {"CURSOR", "NEW"}
+
+
+def test_unchanged_total_needs_only_first_page_between_full_reconciliations(tmp_path):
+    # WHY(ALPHA-1068): 신규 건수가 0인데도 cursor 위치까지 찾으면 date 내 불안정한 순서 때문에
+    #      매번 전량으로 퇴화한다. total_count가 그대로인 poll은 1페이지 관측으로 끝내고,
+    #      동일 건수의 삭제+삽입·기존 정정은 설정된 주기 전량 대사가 회수한다.
+    client = FakeClient(list_pages={
+        1: _page([_row("주주총회", rcept_no="OTHER", stock_code="000660")],
+                 total_page=2, page_count=1, total_count=2),
+        2: _page([_row("공급계약", rcept_no="CURSOR")], total_page=2,
+                 page_no=2, page_count=1, total_count=2),
+    })
+    source = _source(tmp_path, client, api_key="k", page_count=1)
+
+    records = list(source.fetch(
+        ["005930"], after_rcept_no="CURSOR",
+        known_rcept_nos=frozenset({"CURSOR", "OTHER"}), previous_total_count=2,
+    ))
+
+    assert records == []
+    assert len(client.list_urls) == 1
+    assert source.incremental_stop_reason == "total_unchanged_first_page"
+
+
+def test_incremental_stop_does_not_hide_malformed_total_page(tmp_path):
+    # WHY(Rule 12): total_count가 그대로여도 응답의 페이지 경계가 깨졌으면 제한 관측을 성공으로
+    #      봉인할 수 없다. 증분 조기 종료보다 total_page 검증이 먼저여야 다음 poll이 재시도한다.
+    payload = _page(
+        [_row("공급계약", rcept_no="CURSOR")], total_count=1,
+    )
+    payload["total_page"] = "??"
+    source = _source(
+        tmp_path, FakeClient(list_pages={1: payload}), api_key="k", page_count=1,
+    )
+
+    records = list(source.fetch(
+        ["005930"], after_rcept_no="CURSOR",
+        known_rcept_nos=frozenset({"CURSOR"}), previous_total_count=1,
+    ))
+
+    assert [row["rcept_no"] for row in records] == ["CURSOR"]
+    assert source.incremental_stop_reason is None
+    assert source.incremental_scan_complete is False
+    assert any("total_page" in failure["error"] for failure in source.fetch_failures)
+
+
+@pytest.mark.parametrize("bad_total_count", [False, -1, 1.5, "??", None])
+def test_malformed_total_count_is_visible_and_unsafe_for_cursor(tmp_path, bad_total_count):
+    # WHY(edge-review): 증분 기준은 이전 전체 건수와 접수 집합이 한 쌍이다. 페이지는 읽었어도
+    #      total_count가 깨졌다면 다음 poll의 안전한 증가분을 계산할 수 없음을 명시해야 한다.
+    payload = _page([_row("공급계약", rcept_no="R1")])
+    payload["total_count"] = bad_total_count
+    source = _source(tmp_path, FakeClient(list_pages={1: payload}), api_key="k")
+
+    assert [row["rcept_no"] for row in source.fetch(["005930"])] == ["R1"]
+    assert source.list_total_count_valid is False
+    assert any("total_count" in failure["error"] for failure in source.fetch_failures)
+
+
+@pytest.mark.parametrize(
+    ("known", "total"),
+    [(frozenset({"CURSOR"}), None), (None, 1), (frozenset(), -1), (frozenset(), False)],
+)
+def test_incremental_state_requires_valid_paired_inputs(tmp_path, known, total):
+    # WHY: 집합과 건수 중 하나만 있거나 건수가 음수면 증가분을 계산할 수 없다. 이를 전량 성공으로
+    #      묵인하면 호출자의 상태 손상을 숨기므로 API 경계에서 명시적으로 거부한다.
+    source = _source(tmp_path, FakeClient(list_pages={}), api_key="k")
+
+    with pytest.raises(ValueError):
+        list(source.fetch(
+            ["005930"], after_rcept_no="CURSOR",
+            known_rcept_nos=known, previous_total_count=total,
+        ))
+
+
 def test_long_backfill_window_is_split_for_the_3month_limit(tmp_path):
     # WHY: corp_code 없는 질의는 **검색기간 3개월** 제한을 받는다 — 실측(2026-08-03)에서 4개월
     #      창은 `status=100 "corp_code가 없는 경우 검색기간은 3개월만 가능합니다."` 로 거절된다.
@@ -332,6 +474,29 @@ def test_long_backfill_window_is_split_for_the_3month_limit(tmp_path):
         prev = datetime.strptime(prev_end, "%Y%m%d").date()
         nxt = datetime.strptime(next_bgn, "%Y%m%d").date()
         assert (nxt - prev).days == 1
+
+
+def test_empty_later_segment_does_not_erase_accumulated_total_count(tmp_path):
+    # WHY(edge-review): 장기 backfill의 total_count는 세그먼트 합이다. 뒤 30일 창이 비었다고
+    #      앞 세그먼트에서 실제로 읽은 건수를 0으로 덮으면 collection log가 관측량을 거짓말한다.
+    class SegmentClient(FakeClient):
+        def request(self, method, url, *, headers=None, data=None, decode=True):
+            if "/list.json" in url:
+                self.list_urls.append(url)
+                if _param(url, "bgn_de") == "20260101":
+                    return json.dumps(_page([_row("공급계약", rcept_no="A1")]))
+                return json.dumps({"status": "013"})
+            return super().request(method, url, headers=headers, data=data, decode=decode)
+
+    source = _source(tmp_path, SegmentClient(list_pages={}), api_key="k")
+
+    records = list(source.fetch(
+        ["005930"], from_date="2026-01-01", to_date="2026-02-01",
+    ))
+
+    assert [row["rcept_no"] for row in records] == ["A1"]
+    assert source.list_total_count == 1
+    assert source.incremental_scan_complete is True
 
 
 def test_failed_segment_stops_later_segments(tmp_path):
@@ -362,6 +527,7 @@ def test_failed_segment_stops_later_segments(tmp_path):
     assert [r["rcept_no"] for r in records] == ["SEG1"]  # 받은 만큼만
     assert client.list_urls == []  # 뒤 세그먼트는 아예 안 부른다
     assert source.fetch_failures
+    assert source.incremental_scan_complete is False
 
 
 def test_row_level_isolation_does_not_stop_later_segments(tmp_path):

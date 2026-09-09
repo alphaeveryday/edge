@@ -34,10 +34,10 @@ raw 존에는 list 행 원본에 수집 provenance(our_ticker·market·stock_cod
 
 ⚠️ **`rcept_no` 앞 8자리는 날짜가 아니다.** 접수번호 발번일이라 공시일(`rcept_dt`)과 어긋날
 수 있다 — 실측(2026-07-31) 1,069건 중 94건이 `20260730…` 으로 시작한다(효력발생안내처럼 이전
-접수번호에 딸린 후속 공시). 접수번호를 워터마크로 쓰려는 시도는 여기서 막힌다. 애초에 이 API
-에는 증분 커서가 없어(시각 필드도 없다) **매번 날짜창 전체를 다시 읽는 것 외에 방법이 없다**.
-그 재독이 낭비처럼 보이지만 하루 4~11 콜이고, 부작용으로 매 런이 그날에 대한 독립된 완전
-관측이 된다 — 런 사이의 rcept_no 집합 비교가 곧 완전성 근거다(판정은 원장·EOD 소관).
+접수번호에 딸린 후속 공시). 따라서 번호 대소 비교를 워터마크로 쓰지 않는다. 1분 Worker는
+직전 전량 관측의 `rcept_no` 집합과 `total_count`를 함께 보관하고, 증가분만 확인될 때까지 읽는다.
+건수 감소·상태 불일치는 자연스럽게 전량 순회하고, 같은 건수의 교체·정정은 주기 전량 대사가
+회수한다(ALPHA-1068). 배치와 전량 대사는 기존처럼 날짜창 끝까지 읽는다.
 
 ⚠️ **18:00~19:00 제출분은 다음 날 창에 들어간다.** DART 접수시스템은 당일접수 07:30~18:00,
 익일접수 18:00~19:00 이라, 18:38 제출 공시의 `rcept_dt` 는 다음 날이다(실측 2026-08-03).
@@ -185,6 +185,7 @@ class DartDisclosureSource:
         # 둘이 어긋나는 것과 진짜 누락은 구분되지 않으므로, 여기서 완전성을 단언하면 관대한
         # 쪽이든 엄격한 쪽이든 거짓이 된다. 스텝은 이 값을 collection_log 에 기록만 한다.
         self.list_total_count: int | None = None
+        self.list_total_count_valid = True
         self.list_rows_seen: int = 0
         # 감쇠를 **두 축으로 갈라** 센다(ALPHA-865). 목록은 시장 전체라 우리 것이 되기까지
         # 필터를 둘 지나는데(유니버스 → 유형), 통과분만 세면 어느 쪽이 얼마나 잘랐는지
@@ -206,6 +207,14 @@ class DartDisclosureSource:
         # 구분하려고 따로 둔다 — "fetch_failures 가 늘었는가"로 보면 행 하나가 이상해도 창
         # 전체가 멈춘다. 절단은 페이지 순회가 중간에 끊긴 것이고, 격리는 그 행만 빠진 것이다.
         self._segment_truncated = False
+        # minute poll 증분 경계 관측. 배치 호출은 after_rcept_no=None 이라 기존처럼 전량 순회한다.
+        self.incremental_cursor_candidate: str | None = None
+        self.incremental_cursor_found = False
+        self.list_pages_requested = 0
+        self.list_rcept_nos_seen: set[str] = set()
+        self.incremental_scan_complete = False
+        self.incremental_stop_reason: str | None = None
+        self.incremental_expected_new: int | None = None
         self._corp_map: dict[str, dict[str, str]] | None = None
 
     @property
@@ -245,6 +254,7 @@ class DartDisclosureSource:
         rcept_no: str | None = None,
         page: int | None = None,
         kind: str = "failure",
+        scope: str | None = None,
     ) -> None:
         logger.warning(
             "dart 공시 대상 건너뜀: %s rcept_no=%s page=%s (%s)",
@@ -258,6 +268,9 @@ class DartDisclosureSource:
                 "page": page,
                 "error": reason,
                 "kind": kind,
+                # target/window는 이 런의 내구화 실패, foreign은 시장 전체 목록을 읽다가
+                # 발견했지만 어느 유니버스 소속인지 판정할 수 없는 감사 진단이다.
+                "scope": scope or ("target" if our_ticker else "window"),
             }
         )
 
@@ -266,18 +279,40 @@ class DartDisclosureSource:
         symbols: list[str],
         from_date: str | None = None,
         to_date: str | None = None,
+        *,
+        after_rcept_no: str | None = None,
+        known_rcept_nos: frozenset[str] | None = None,
+        previous_total_count: int | None = None,
     ) -> Iterator[dict]:
         """날짜창의 시장 전체 공시목록을 페이지네이션해 유니버스 메타 행을 낸다.
 
         대상 유형(report_nm) 여부는 버리는 기준이 아니라 각 행의 `is_target` 이다 — 본문을
         받을지는 스텝이 그 플래그로 정한다(모듈 docstring).
         """
+        if (known_rcept_nos is None) != (previous_total_count is None):
+            raise ValueError(
+                "known_rcept_nos와 previous_total_count는 함께 지정해야 합니다"
+            )
+        if previous_total_count is not None and (
+            not isinstance(previous_total_count, int)
+            or isinstance(previous_total_count, bool)
+            or previous_total_count < 0
+        ):
+            raise ValueError("previous_total_count는 0 이상의 정수여야 합니다")
         self.fetch_failures = []
         self.list_total_count = None
+        self.list_total_count_valid = True
         self.list_rows_seen = 0
         self.universe_matched = 0
         self.type_matched = 0
         self.dropped_malformed = 0
+        self.incremental_cursor_candidate = None
+        self.incremental_cursor_found = False
+        self.list_pages_requested = 0
+        self.list_rcept_nos_seen = set()
+        self.incremental_scan_complete = False
+        self.incremental_stop_reason = None
+        self.incremental_expected_new = None
         self.resolved_window = (from_date, to_date)
         plan = self.plan(symbols)
         self.planned_symbols = len(plan)
@@ -292,9 +327,16 @@ class DartDisclosureSource:
         actual_from, actual_to, segments = _window_segments(from_date, to_date)
         self.resolved_window = (actual_from, actual_to)
         for seg_from, seg_to in segments:
+            # segment 내부의 완료는 창 전체 완료가 아니다. 매 segment 전에 비워 예외·절단이
+            # 앞 segment의 true를 물려받지 않게 하고, 전부 끝난 뒤에만 아래에서 true로 봉인한다.
+            self.incremental_scan_complete = False
             yield from self._scan_window(
-                allowed, _to_dart_date(seg_from), _to_dart_date(seg_to), fetched_at
+                allowed, _to_dart_date(seg_from), _to_dart_date(seg_to), fetched_at,
+                after_rcept_no=after_rcept_no, known_rcept_nos=known_rcept_nos,
+                previous_total_count=previous_total_count,
             )
+            if self.incremental_stop_reason is not None:
+                return
             if self._segment_truncated:
                 # 세그먼트가 절단됐으면 **뒤 세그먼트도 멈춘다.** 계속 돌면 "앞 날짜는 잘렸는데
                 # 뒤 날짜는 온전한" raw 가 남고, partial 런도 후속 정제 대상이라 canonical 이
@@ -306,6 +348,9 @@ class DartDisclosureSource:
                     seg_from, seg_to,
                 )
                 return
+            if not self.incremental_scan_complete:
+                return
+        self.incremental_scan_complete = True
 
     def _is_target(self, report_nm: str) -> bool:
         """report_nm(문자열)이 대상 유형인지 — strip 후 부분일치(ㆍ·패딩·[기재정정] 접두 안전)."""
@@ -317,16 +362,18 @@ class DartDisclosureSource:
         bgn_de: str | None,
         end_de: str | None,
         fetched_at: str,
+        *,
+        after_rcept_no: str | None = None,
+        known_rcept_nos: frozenset[str] | None = None,
+        previous_total_count: int | None = None,
     ) -> Iterator[dict]:
         """한 세그먼트를 페이지 끝까지 훑어 유니버스 행을 낸다(유형은 플래그로 딸려 나간다).
 
         **완전성을 판정하지 않는다.** 이 루프가 하는 일은 두 가지다: ① 끝까지 읽었는가(못
         읽었으면 크게 말한다) ② 무엇을 봤는가(기록만 한다). 응답이 자기에 대해 하는 말
-        (`total_page`·`total_count`)로 "다 받았다"를 증명하려 들면 반례가 무한하다 — 그건
-        벤더가 거짓말할 수 있는 방법을 세는 일이지 증거가 아니다. 실제 증거는 **독립된 두
-        번째 관측**이고, 이 소스에선 그게 공짜로 나온다: 매 틱·매 런이 같은 날짜창을 통째로
-        다시 읽으므로(증분 커서가 없어서 그럴 수밖에 없다) 런 사이의 rcept_no 집합 비교가
-        곧 완전성 근거다. 그 판정은 여기가 아니라 원장·EOD 소관이다.
+        (`total_page`·`total_count`)로 "다 받았다"를 증명하려 들면 반례가 무한하다. 전량 호출은
+        날짜창 독립 관측이고, 증분 호출은 이전 `rcept_no` 집합과 `total_count`의 증가분을 확인한
+        범위까지의 제한 관측이다. 어느 범위였는지는 호출자가 collection log와 manifest에 기록한다.
 
         창 하나가 실패 단위다 — 종목별 질의 시절의 corp 단위 예외 격리는 재현하지 않는다.
         격리 축이던 corp 루프가 사라졌고, 페이지 응답의 의미 오류는 그 창을 못 믿는다는
@@ -343,9 +390,13 @@ class DartDisclosureSource:
         seen: set[str] = set()
         for page in range(1, self.max_pages + 1):
             payload = self._list(bgn_de, end_de, page)
+            self.list_pages_requested += 1
             status = str(payload.get("status") or "?")
             if status == "013":
                 # 조회 데이터 없음 = 정상 빈 창(그 기간에 대상 공시 없음) — 뉴스형.
+                if self.list_total_count is None:
+                    self.list_total_count = 0
+                self.incremental_scan_complete = True
                 return
             if status in STOP_STATUS_CODES:
                 msg = payload.get("message") or STATUS_MESSAGES.get(status, "?")
@@ -364,8 +415,24 @@ class DartDisclosureSource:
                 # 세그먼트마다 1페이지가 그 세그먼트 건수를 준다 — **누적**해야 창 전체 규모가
                 # 된다(대입하면 마지막 세그먼트 값만 남아 list_rows_seen 과 축이 어긋난다).
                 raw_count = payload.get("total_count")
-                if isinstance(raw_count, int) and not isinstance(raw_count, bool):
+                if (isinstance(raw_count, int) and not isinstance(raw_count, bool)
+                        and raw_count >= 0):
                     self.list_total_count = (self.list_total_count or 0) + raw_count
+                    if known_rcept_nos is not None and previous_total_count is not None:
+                        if raw_count >= previous_total_count:
+                            self.incremental_expected_new = raw_count - previous_total_count
+                        else:
+                            # 삭제·창 변경·벤더 정정으로 전체 건수가 줄었다. 일부 페이지를 기존
+                            # 집합과 합치면 사라진 행을 영원히 보존하므로 자연 종료까지 전량 읽는다.
+                            self.incremental_expected_new = None
+                else:
+                    self.list_total_count_valid = False
+                    self._note_failure(
+                        None, None,
+                        f"total_count를 0 이상의 정수로 읽을 수 없음: {raw_count!r}",
+                        page=page,
+                    )
+            cursor_seen_on_page = False
             for row in rows:
                 self.list_rows_seen += 1
                 if not isinstance(row, dict):
@@ -374,8 +441,21 @@ class DartDisclosureSource:
                     # 감수하는 오탐이다(조용히 버리는 쪽이 더 나쁘다).
                     self._note_failure(
                         None, None, f"malformed row: {type(row).__name__}", page=page,
+                        scope="foreign",
                     )
                     continue
+                raw_rcept_no = row.get("rcept_no")
+                if isinstance(raw_rcept_no, str) and raw_rcept_no.strip():
+                    normalized_rcept_no = raw_rcept_no.strip()
+                    self.list_rcept_nos_seen.add(normalized_rcept_no)
+                    if self.incremental_cursor_candidate is None:
+                        # 명시적 date desc 정렬의 첫 유효 접수번호가 다음 poll의 경계다.
+                        self.incremental_cursor_candidate = normalized_rcept_no
+                    if after_rcept_no == normalized_rcept_no:
+                        # 같은 rcept_dt 안의 순서는 계약이 아니므로 경계가 있는 페이지 끝까지
+                        # 읽는다. 페이지 중간에서 끊으면 그 뒤에 끼어든 새 행을 놓칠 수 있다.
+                        cursor_seen_on_page = True
+                        self.incremental_cursor_found = True
                 # 유니버스 필터가 **먼저다.** 시장 전체 목록에는 우리가 수집하지 않는 회사 행이
                 # 하루 수백 건 섞여 있어, 필드 게이트를 앞에 두면 남의 회사 행의 결함이 우리
                 # 런의 failed_records 로 올라가 원장이 없는 결측을 센다. 종목별 질의 시절엔
@@ -390,7 +470,7 @@ class DartDisclosureSource:
                         None, None,
                         f"stock_code 가 문자열이 아님: {type(raw_stock_code).__name__}"
                         " — 유니버스 판정 불가",
-                        page=page,
+                        page=page, scope="foreign",
                     )
                     continue
                 stock_code = raw_stock_code.strip()
@@ -473,7 +553,22 @@ class DartDisclosureSource:
                     f"total_page 를 페이지 수로 읽을 수 없음: {raw_total!r}", page=page
                 )
                 return
+            if known_rcept_nos is not None and previous_total_count is not None:
+                expected_new = self.incremental_expected_new
+                unknown_seen = len(self.list_rcept_nos_seen - known_rcept_nos)
+                if expected_new == 0:
+                    self.incremental_stop_reason = "total_unchanged_first_page"
+                    return
+                if isinstance(expected_new, int) and expected_new > 0 and unknown_seen >= expected_new:
+                    # 총건수 증가분을 rcept_no 미관측 집합으로 모두 확인했다. 신규 행이 어느
+                    # 페이지에 끼었든 그 수를 채울 때까지 읽으므로 exact cursor 위치에 기대지 않는다.
+                    self.incremental_stop_reason = "expected_new_rcept_nos_seen"
+                    return
+            elif cursor_seen_on_page:
+                self.incremental_stop_reason = "cursor_page_seen"
+                return
             if page >= raw_total:
+                self.incremental_scan_complete = True
                 return
         self._stop_early(
             f"MAX_PAGES({self.max_pages}) 도달 — 창을 좁혀 재실행", page=self.max_pages
@@ -494,6 +589,10 @@ class DartDisclosureSource:
             "crtfc_key": self.api_key or "",
             "page_no": page,
             "page_count": self.page_count,
+            # 기본 정렬에 기대지 않는다. 증분 경계는 최신 접수일 우선이라는 요청 계약이 있어야
+            # 성립하고, 같은 날짜 안의 불안정한 순서는 페이지 끝까지 읽어 흡수한다.
+            "sort": "date",
+            "sort_mth": "desc",
         }
         if bgn_de:
             params["bgn_de"] = bgn_de
