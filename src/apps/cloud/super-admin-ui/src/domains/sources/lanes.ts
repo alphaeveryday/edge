@@ -6,8 +6,9 @@
  * `JdbcPipelineStatusRepository.OVERVIEW_SQL` 이 `DISTINCT ON (pipeline_type)` 으로 **원장에
  * 있는 전 레인**을 낸다. 그래서 표에 없는 레인은 첫 화면에 원장 코드가 그대로 찍힌다.
  *
- * `disclosure` 는 ALPHA-987에서 18:10 일배치로 복원됐다. 레인 이동 때 이 표를 함께 바꾸지
- * 않으면 첫 화면에 원장 코드가 그대로 찍히므로 아래 테스트가 정본과 전건 대조한다.
+ * `disclosure` 는 ALPHA-1068에서 18:10 일배치를 내리며 ops 원장에서 제거됐다. 다만 개요
+ * SQL은 이력을 지우지 않아 그 레인의 마지막 런을 계속 반환하므로, 종료 표기를 붙인 과거
+ * 라벨을 남긴다. 현재 ops 레인과 이 예외를 아래 테스트가 따로 대조한다.
  *
  * ⚠️ **JSX 를 쓰지 않는다.** `OverviewPage.tsx` 안에 있는 동안은 `node --test` 가 파일을 못
  * 집어, 레인이 늘어도 아무 테스트가 안 깨졌다. 이 트랙이 같은 이유로 판정 모듈을 여러 번
@@ -21,7 +22,7 @@
 export const LANE_LABEL: Record<string, string> = {
   'etf-daily': '시장(EOD)',
   news: '뉴스',
-  disclosure: '공시',
+  disclosure: '공시 (일배치·종료)',
   'investor-intraday': '수급(장중)',
 };
 

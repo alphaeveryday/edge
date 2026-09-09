@@ -329,26 +329,27 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
   lagMetric(f, 'b.investor_flow', '수급 기준일 지연', 'investor_flow'),
   lagMetric(f, 'b.etf_nav', 'ETF NAV 기준일 지연', 'etf_nav'),
   {
-    id: 'b.disclosures',
-    label: '공시 문서 수',
-    group: 'batch',
+    id: 'i.disclosures',
+    label: '공시 1분 poll 관측량',
+    group: 'intraday',
     unit: '건',
     metricType: 'volume',
     comparisonType: 'medianDelta',
     threshold: 0.25,
     direction: 'stable',
     source: 'MOCK',
-    /* 일별 공시 적재 건수를 주는 응답이 없다 — 계열 전체가 목이다 */
+    /* 공시 1분 원장의 일별 관측량을 주는 응답이 없다 — 계열 전체가 목이다 */
     series: buildSeries({ today: 41, pin: 38, amplitude: 1, integer: true, min: 0, todayIsMock: true, endDate: TODAY }),
     help: [
-      '일별 공시 수집·적재 문서 수.',
+      '공시 1분 poll이 manifest 관측 범위에서 본 접수번호 건수의 일별 합계.',
+      '주기 전량 대사와 증분 관측이 섞이므로 고유 신규 공시 수는 아니다.',
       '',
       '판정: 직전 10영업일 중앙값 대비 ±25%(산출량 지표).',
-      '공시는 제출량 자체가 요일·이벤트에 따라 흔들려서 완전성이 아니라 분포로 본다.',
+      '관측량은 제출량과 전량 대사 시점에 따라 흔들려서 완전성이 아니라 분포로 본다.',
       '',
-      '⚠️ 오늘 값을 포함해 계열 전체가 검수용 목이다 — 일별 적재 건수를 주는 응답이 없다.',
+      '⚠️ 오늘 값을 포함해 계열 전체가 검수용 목이다 — 일별 poll 관측량을 주는 응답이 없다.',
     ].join('\n'),
-    drill: dsDrill('disclosures'),
+    drill: { href: `/minute?date=${TODAY}&dataset=disclosure_minute`, label: '세션 상세' },
   },
 
   /* 장중 — 분 단위 원시 개수가 아니라 비율·지연·결손 수로 */

@@ -188,11 +188,25 @@ test('네 분류가 모두 지표를 갖는다 — 뉴스가 화면을 대표하
 
 test('일배치는 데이터셋마다 식별되고 트리거가 대표하지 않는다', () => {
   const batch = METRICS.filter((m) => m.group === 'batch');
-  for (const ds of ['price_daily', 'etf_holdings', 'investor_flow', 'etf_nav', 'disclosures']) {
+  for (const ds of ['price_daily', 'etf_holdings', 'investor_flow', 'etf_nav']) {
     assert.ok(batch.some((m) => m.drill.href.includes(ds)), `${ds} 지표 있음`);
   }
+  assert.ok(!METRICS.some((m) => m.id === 'b.disclosures'), '은퇴한 공시 일배치 지표를 남기지 않는다');
+  assert.ok(
+    !METRICS.some((m) => m.drill.href.includes('ds-disclosures')),
+    '은퇴한 공시 배치 상세로 가는 링크를 남기지 않는다',
+  );
   assert.ok(!batch.some((m) => m.label.includes('트리거')), '트리거는 일배치 대표 지표가 아니다');
   assert.ok(METRICS.some((m) => m.group === 'analysis' && m.label.includes('트리거')), '트리거는 분석 보조로 남는다');
+});
+
+test('공시 관측량은 현재 1분 세션으로 이동한다 — 은퇴한 배치 상세를 가리키지 않는다', () => {
+  const disclosure = METRICS.find((m) => m.id === 'i.disclosures');
+  assert.ok(disclosure, '공시 관측량 지표가 있어야 한다');
+  assert.equal(disclosure.group, 'intraday');
+  assert.match(disclosure.drill.href, /\/minute\?.*dataset=disclosure_minute/);
+  assert.doesNotMatch(disclosure.drill.href, /ds-disclosures/);
+  assert.match(disclosure.help, /고유 신규 공시 수는 아니다/);
 });
 
 test('전달 지표는 하나도 없다', () => {

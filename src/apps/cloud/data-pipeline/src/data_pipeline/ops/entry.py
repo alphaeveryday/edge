@@ -384,6 +384,12 @@ def plan_run_cli(settings) -> int:
         raise SystemExit(
             f"모르는 OPS_PIPELINE_TYPE={pipeline_type} — "
             f"{'·'.join(_LANE_STATE_MACHINE_ARN_ENV)} 만 계획 가능")
+    if not catalog.entries(pipeline_type):
+        # ARN/SFN 정의는 rollback을 위해 남아 있어도 현재 catalog가 빈 은퇴 레인은 실행하지
+        # 않는다. 기대 작업 0개로 SFN을 띄우면 그 실행은 원장 밖이고 minute owner와 겹친다.
+        raise SystemExit(
+            f"OPS_PIPELINE_TYPE={pipeline_type}: catalog 등록 작업 0개 — 은퇴한 레인은 plan-run 불가"
+        )
     arn = os.environ.get(arn_env)
     if not arn:
         # 다른 레인 ARN 으로 폴백하지 않는다 — 기대는 이 레인 것이고 실행은 남의 SFN 이 되어

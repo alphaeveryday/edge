@@ -51,9 +51,9 @@ export type DatasetKind = 'price' | 'news' | 'disclosure' | 'other';
 export const NEWS_MINUTE_DATASET = 'news_minute';
 
 /**
- * 공시(ALPHA-875) — **window 단위 산출물이 없는 dataset 이다.** 증분 커서가 없어 매 tick 이
- * 그날 날짜창 전체를 다시 읽으므로, window 는 "그 분에 한 번 폴링했다"는 원장 단위다
- * (`minute/states.py` DATASET_DISCLOSURE_MINUTE 주석). 뉴스와 같은 성질이라 같이 읽는다.
+ * 공시(ALPHA-875·1068) — **window 단위 산출물이 없는 dataset 이다.** 첫 poll과 주기 대사는
+ * 날짜창 전체를 읽고, 그 사이는 직전 관측의 접수번호 집합을 경계로 증분 poll 한다. 그래도
+ * window 는 "그 분에 한 번 폴링했다"는 원장 단위라 뉴스와 같은 poll 축으로 읽는다.
  */
 export const DISCLOSURE_MINUTE_DATASET = 'disclosure_minute';
 
@@ -420,8 +420,12 @@ const OTHER_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: strin
  */
 const DISCLOSURE_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: string }>> = {
   ...POLL_SEGMENTS,
-  valid: { label: '신규 공시 관측', meaning: 'poll 이 돌았고 신규 공시를 관측한 분이다.' },
-  /* 공시의 불완전은 anchor 따라잡기가 아니다 — 증분 커서가 없어 그 기전 자체가 없다.
+  valid: {
+    label: '공시 관측',
+    meaning: 'poll 이 돌았고 manifest 가 선언한 관측 범위에서 공시를 관측한 분이다.',
+  },
+  /* 공시의 불완전은 anchor 따라잡기가 아니다 — 접수번호 경계는 API cursor가 아니며
+   * 뉴스의 anchor 도달 판정과 다른 기전이다.
    * `commit_disclosure_window` 는 하위 스텝 부분 실패를 INCOMPLETE 로 커밋한다. */
   incomplete: {
     label: '부분 실패 poll',
@@ -433,9 +437,9 @@ const DISCLOSURE_SEGMENTS: Partial<Record<SegmentKey, { label: string; meaning: 
     meaning: '실패 unit 이 있어 무효로 커밋된 poll 이다.',
   },
   validEmpty: {
-    label: '정상 · 신규 0건',
+    label: '정상 · 관측 0건',
     meaning:
-      'poll 이 돌았고 그 분에 신규 공시가 없었다는 **증거가 남은** 분 — 정상 poll 증거다. 무증거(결과 증거 없음)와 다른 사실이라 합쳐 세지 않는다.',
+      'poll 이 돌았고 manifest 가 선언한 관측 범위에서 공시가 없었다는 **증거가 남은** 분 — 정상 poll 증거다. 무증거(결과 증거 없음)와 다른 사실이라 합쳐 세지 않는다.',
   },
   pending: {
     label: '미도래 · poll 중',
@@ -615,8 +619,8 @@ export function issues(s: MinuteSession, jobs: MinuteJobCounts): Issue[] {
   const w = s.windows;
   /* 단위·명사는 dataset 이 정한다 — 뉴스·공시 화면에 "창"·"거래"가 나오면 없는 의미가 붙는다.
    * ⚠️ `poll` 과 `news` 는 다른 축이다: 단위 명사는 poll 레인 공통이지만, **따라잡기(anchor
-   * 미도달)는 뉴스 worker 고유**다 — 공시는 증분 커서가 없어 매 tick 이 날짜창 전체를 다시
-   * 읽으므로 "뒤처진 anchor" 라는 사실 자체가 없다. 한 변수로 접으면 없는 기전이 붙는다. */
+   * 미도달)는 뉴스 worker 고유**다 — 공시의 접수번호 경계는 페이지 탐색을 줄이는 관측
+   * 최적화이고 anchor 도달 상태를 만들지 않는다. 한 변수로 접으면 없는 기전이 붙는다. */
   const kind = datasetKind(s.dataset);
   const poll = isPollLane(kind);
   const news = kind === 'news';

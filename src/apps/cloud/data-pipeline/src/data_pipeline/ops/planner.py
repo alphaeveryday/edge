@@ -108,6 +108,10 @@ def plan_run(
     pipeline_type 이 레인을 정한다(ALPHA-591) — run_key 접두와 기대 작업 집합(그 레인의
     카탈로그)이 함께 갈린다. state_machine_arn 은 호출부가 레인에 맞는 것을 넘긴다.
     """
+    if not catalog.entries(pipeline_type):
+        raise ValueError(
+            f"{pipeline_type}: catalog 등록 작업 0개 — 기대 원장 없이 SFN을 시작할 수 없다"
+        )
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
 
     # 무결성 검사는 계획 생성 여부와 무관하게 매 호출 실행한다 — created=False(멱등 재호출)
