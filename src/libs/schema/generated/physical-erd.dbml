@@ -875,6 +875,7 @@ Table "ops_task_attempt" {
   "created_at" timestamptz [not null]
   "entity_resolution_arguments_total" bigint
   "entity_resolution_arguments_resolved" bigint
+  "quality_diagnostics" jsonb
 }
 
 Table "price_daily" {
