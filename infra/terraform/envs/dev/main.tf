@@ -564,45 +564,36 @@ module "data_pipeline" {
   # ── 두 번째 컷오버(ALPHA-875): SFN 10슬롯 → 1분 레인 ── (기록으로 남긴다)
   # 724 가 시장 SFN → 공시 SFN 으로 옮긴 그 스텝들을 875 가 1분 세션으로 보냈었다.
   #
-  # ── 세 번째 컷오버(ALPHA-987): 1분 레인 → 저녁 배치 1슬롯 (875 의 dev 되돌림) ──
-  # 동기는 dev 비용: 1분 세션 stop 을 20:05 → 16:10 으로 당기려면 시간외 격자(08:00–20:00)
-  # dataset 이 가격 하나만 남아야 하는데, 공시 레인 격자는 universe 무관 08:00–20:00 이라
-  # stop 이 매 거래일 230 window 를 봉인한다(stop 은 레인별이 아니라 전 레인 일괄 드레인).
-  # 슬롯은 10개가 아니라 **18:10 하나**다 — 당일 집합은 18:00 에 안 닫히지만(19:09 도착
-  # 실측) 늦은 꼬리·런 실패는 워터마크 창(`disclosure_watermark.py`, 아래 dart env)이 다음
-  # 런에서 회수한다. 875 의 3부 계약을 그대로 되돌린다(같은 apply):
-  #   ① 아래 ENABLED  ② `minute_session_disclosure_source_group = ""`  ③ catalog 4엔트리 복원
-  # ⚠️ ②가 빠지면 증상은 MISSED 가 아니라 **이중 수집**이다(두 레인이 같은 창을 긁어 DART
-  # 일 한도 "020"). ①이 빠지면 카탈로그 기대 슬롯이 매 거래일 전건 MISSED 다. 양쪽 정합은
-  # `test_ops_planner` 의 소유권 검사가 이 파일을 읽어 잠근다.
+  # ── 네 번째 컷오버(ALPHA-1068): 저녁 배치 1슬롯 → 증분 1분 레인 ──────────────
+  # 매 tick 날짜 전체를 다시 읽던 병목을 접수 원장 증분 poll로 제거해 875의 1분 레인을
+  # 복원한다. 런타임 소유권은 같은 apply의 두 값으로 원자적으로 바뀐다: 아래 batch DISABLED와
+  # `minute_session_disclosure_source_group = "dart"`. ops catalog 4엔트리는 이 apply가 착지하고
+  # 분 레인의 당일 E2E가 확인된 뒤 별도 앱 PR에서 제거한다. 앱 이미지 CD와 terraform apply는
+  # 서로 독립이라 한 PR에 담으면 catalog 제거 이미지가 먼저 배포될 수 있기 때문이다. 이 중간
+  # 상태에서 catalog는 rollback용 정의일 뿐이고, schedule이 DISABLED라 기대 슬롯은 생기지 않는다.
   #
-  # 🔴 **착지 타이밍**(875 의 Codex P1 과 대칭 — 이번엔 방향이 반대다): 거래일 아침 세션이
-  # 이미 공시 레인을 계획한 날 apply 가 뜨면 그날이 어그러진다. ⚠️ "16:10 전 착지" 는
-  # 안전하지 **않다**(Codex 반증): stop 은 실행 시점의 이 설정을 읽으므로, apply 뒤의
-  # stop 은 공시 레인을 드레인 목록(`lanes`)에서 **뺀 채** disclosure-worker 만 desired=0
-  # 으로 내린다 — 그날 공시 세션이 ACTIVE·미완료 window 로 영구 잔류하고 실행 중 tick 이
-  # 게이트 없이 절단된다. 안전한 착지는 둘뿐:
-  #   ① 비거래일 머지(제일 싸다)
-  #   ② 거래일이면 **20:05(구 stop) 이후** — 그날 세션은 구 설정의 stop 이 이미 정상
-  #      드레인했다. 그날 18:10 슬롯 기대가 소급 생겨 하루 거짓 MISSED 가 남는 것(다음
-  #      거래일부터 정상)과, 이미지 CD·terraform-apply 가 독립 워크플로라는 경합(875 와
-  #      동일)도 이 시각이 함께 해소한다 — 다음 18:10 발화까지 ~22시간이라 CD 가 그 안에
-  #      끝나고, 옛 이미지 Planner(공시 엔트리 0)가 새 슬롯을 계획하는 창이 없다.
-  disclosure_schedule_state = "ENABLED"
+  # 거래일 07:45 이후 착지하면 아침 start가 이미 지난 상태라 apply만으로 오늘 공시 세션과
+  # worker가 생기지 않는다. 기존 가격 세션은 16:10 stop 뒤 DRAINED라 start-minute-session이
+  # 가격 plan에서 먼저 실패한다. 따라서 apply 뒤 `plan-minute-session --dataset disclosure_minute
+  # --source-group dart --session-date <오늘>`을 직접 실행한 다음 disclosure-worker만 desired=1,
+  # force-new-deployment로 올린다. 이 당일 복원은 예약 stop이 남은 20:05 전에만 한다.
+  # 20:05 이후면 오늘 세션을 새로 만들지 않고 다음 거래일 07:45 자동 start를 기다린다. 오늘
+  # 세션을 늦게 만들면 stop이 실행 당일 세션만 찾으므로 영구 ACTIVE로 남는다.
+  # plan은 멱등이고 worker는 이 시점의 최신 digest를 고정한다.
+  # 오늘 18:10 batch는 이 apply부터 발화하지 않으며, 이미 제출된 실행이 있으면 끝까지 둔 뒤
+  # 분 레인을 실행해 두 소스가 동시에 DART를 긁는 시간을 만들지 않는다. batch 완료가
+  # 20:05를 넘기면 당일 분 레인은 건너뛰고 다음 거래일 자동 start로 전환한다.
+  disclosure_schedule_state = "DISABLED"
   # 저녁 1슬롯 — 모듈 기본(09~18시 정각 10슬롯)을 dev 가 override 한다. 원장 슬롯 기준
   # (`OPS_DISCLOSURE_SCHED_HHMM`)은 이 cron 에서 파생되므로 자동으로 따라온다.
   disclosure_schedule_expressions = {
     "h18" = "cron(10 18 ? * MON-FRI *)"
   }
-  # ② 1분 레인 공시 미편입 — 이 값이 컷오버 스위치다(variables.tf 주석). 비면 start 가
-  # 공시 세션을 계획하지 않고 disclosure-worker 도 안 올린다(서비스 정의는 롤백 경로로 남는다).
-  minute_session_disclosure_source_group = ""
-  # 1분 세션 stop 20:05 → 16:10 (ALPHA-985 의 원래 목표). 공시가 배치로 떠나 시간외 격자
-  # dataset 이 가격뿐이고, dev 정본에 `extended_hours_ids` 축이 없어 가격 격자는 09:00–15:30
-  # 이다 — 16:10 이면 recovery runway 40분(275분에서 축소, dev 라 감수).
-  # ⚠️ `_carry_extended` 가 직전 정본에서 시간외 축을 승계한다 — 사람이 한 번 넣으면 가격
-  # 격자도 20:00 까지 넓어져 이 값을 되돌려야 한다.
-  minute_session_stop_expression = "cron(10 16 ? * MON-FRI *)"
+  # 1분 레인이 공시 세션을 계획하고 disclosure-worker를 함께 올리는 실제 소유 스위치다.
+  minute_session_disclosure_source_group = "dart"
+  # 공시는 universe와 무관하게 08:00–20:00을 관측하므로 마지막 window 뒤 5분에 드레인한다.
+  # stop은 레인별이 아니라 선택 레인을 함께 닫으므로 16:10이면 공시 230 window를 잘라낸다.
+  minute_session_stop_expression = "cron(5 20 ? * MON-FRI *)"
 
   # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
   # ENABLED 라 이 줄은 **명시일 뿐 값을 바꾸지 않는다** — 그래도 적는 이유는 위 두 레인과 나란히
