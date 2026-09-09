@@ -5,11 +5,15 @@
 """
 
 from data_pipeline.entity_resolution import (
+    ALIAS_RESOLVED,
     AMBIGUOUS,
+    CONCEPT_REJECTED,
     RESOLVED,
     UNRESOLVED,
     load_resolution_index,
+    plan_resolution,
     resolve,
+    resolve_alias_ticker,
 )
 
 
@@ -43,6 +47,11 @@ _MASTER = [
     ("inst_SAMSUNG", "005930", "삼성전자 보통주", "삼성전자", "COMMON"),
     ("inst_HYNIX", "000660", "SK하이닉스 보통주", "SK하이닉스", "COMMON"),
     ("inst_KODEX", "091160", "KODEX 반도체", None, None),  # ETF — equity_profile 없음
+    ("inst_IBK", "024110", "기업은행 보통주", "기업은행", "COMMON"),
+    ("inst_HYUNDAI", "005380", "현대차 보통주", "현대차", "COMMON"),
+    ("inst_SHINSEGAE", "004170", "신세계 보통주", "신세계", "COMMON"),
+    ("inst_LS", "010120", "LS ELECTRIC 보통주", "LS ELECTRIC", "COMMON"),
+    ("inst_KEPCO", "015760", "한국전력 보통주", "한국전력", "COMMON"),
 ]
 
 
@@ -64,7 +73,7 @@ def test_unknown_text_is_unresolved_not_guessed():
     """마스터에 없는 표현("삼성"·미등록 종목)을 아무 데나 붙이면 조용히 틀린 계보가
     쌓인다 — None + 사유로 드러나야 로더가 수치로 남긴다."""
     index = _index()
-    assert resolve(index, "삼성") == (None, UNRESOLVED)  # 약칭은 완전일치 밖(별칭 축은 별건)
+    assert resolve(index, "삼성") == (None, UNRESOLVED)  # 그룹명은 상장사 귀속이 모호해 제외
     assert resolve(index, "존재하지않는회사") == (None, UNRESOLVED)
     assert resolve(index, "") == (None, UNRESOLVED)
     assert resolve(index, "   ") == (None, UNRESOLVED)
@@ -98,3 +107,54 @@ def test_same_instrument_repeated_is_not_a_collision():
     """같은 종목이 중복 행으로 와도(조인 중복 등) 자기 자신과는 충돌이 아니다."""
     index = _index(_MASTER + [_MASTER[0]])
     assert resolve(index, "삼성전자") == ("inst_SAMSUNG", RESOLVED)
+
+
+def test_curated_legal_name_alias_resolves_only_when_master_target_exists():
+    """WHY: 정상 런 상위 미해소의 정식명 변형을 회수하되 없는 마스터를 별칭으로 만들면 안 된다."""
+    index = _index()
+    aliases = {
+        "IBK기업은행": "inst_IBK",
+        "중소기업은행": "inst_IBK",
+        "현대자동차": "inst_HYUNDAI",
+        "LS일렉트릭": "inst_LS",
+        "한국전력공사": "inst_KEPCO",
+    }
+    for expression, entity_id in aliases.items():
+        assert resolve(index, expression) == (None, UNRESOLVED)
+        assert resolve(index, expression, allow_aliases=True) == (entity_id, ALIAS_RESOLVED)
+    assert resolve_alias_ticker(index, "IBK기업은행") == "024110"
+    assert resolve_alias_ticker(index, "삼성") is None
+
+
+def test_multi_issuer_department_store_brand_is_not_an_instrument_alias():
+    """WHY: 신세계백화점 브랜드는 신세계와 별도 상장사 광주신세계가 함께 사용하므로
+    기사 범위가 없는 assertion writer에서 한 instrument로 단정하면 계보가 오염된다."""
+    rows = _MASTER + [
+        ("inst_GWANGJU", "037710", "광주신세계 보통주", "광주신세계", "COMMON"),
+    ]
+    index = _index(rows)
+    assert resolve(index, "신세계백화점", allow_aliases=True) == (None, UNRESOLVED)
+    assert resolve_alias_ticker(index, "신세계백화점") is None
+
+
+def test_alias_does_not_exist_without_unambiguous_canonical_master():
+    """WHY: 배포 순서나 마스터 결손 때 별칭이 임의 instrument를 만들어서는 안 된다."""
+    index = _index([row for row in _MASTER if row[1] != "024110"])
+    assert resolve(index, "IBK기업은행") == (None, UNRESOLVED)
+    assert resolve_alias_ticker(index, "IBK기업은행") is None
+
+
+def test_alias_already_registered_as_master_name_keeps_batch_ticker_mapping():
+    """WHY: 발행사 정식명이 curated 표현과 같아도 배치는 기사 ticker 범위 안에서 그 이름을 써야 한다."""
+    rows = [
+        ("inst_IBK", "024110", "기업은행", "중소기업은행", "COMMON"),
+    ]
+    index = _index(rows)
+    assert resolve(index, "중소기업은행") == ("inst_IBK", RESOLVED)
+    assert resolve_alias_ticker(index, "중소기업은행") == "024110"
+
+
+def test_mint_policy_rejection_is_not_reported_as_instrument_master_miss():
+    """WHY: 숫자뿐인 위치를 종목 미등록으로 진단하면 마스터·alias 보강이라는 잘못된 대응을 부른다."""
+    entity_id, reason, minted = plan_resolution(_index(), "LOCATION", "123")
+    assert (entity_id, reason, minted) == (None, CONCEPT_REJECTED, None)

@@ -217,6 +217,50 @@ def test_optional_entity_resolution_pair_flows_without_reinterpretation(tmp_path
     assert signals["entity_resolution_attempt_id"] == "attempt-1"
 
 
+def test_bounded_news_diagnostics_flow_with_attempt_evidence(tmp_path):
+    """WHY(ALPHA-1067): 원인·표현 표본이 observer에서 사라지면 화면은 주황색만 보이고
+    운영자가 S3 로그를 직접 찾아야 한다. producer가 닫힌 계약으로 낸 구조만 전달한다."""
+    storage = _storage(tmp_path)
+    entry = _entry("LOAD_ASSERTIONS")
+    diagnostics = {
+        "schema": "news_resolution_v1",
+        "scope": "assertion_arguments",
+        "metrics": {"total": 4, "resolved": 3, "unresolved": 1},
+        "issues": [{
+            "reason": "instrument_not_found", "role": "ISSUER",
+            "expression": "미등록회사", "count": 1,
+            "sample": {"articleId": "a1", "title": "미등록회사 수주"},
+        }],
+    }
+    _write_log(storage, entry, {
+        "run_id": _RUN, "ops_attempt_id": "attempt-1",
+        "ops": {"records_out": 1, "failed_records": 0,
+                "quality_diagnostics": diagnostics},
+    })
+
+    signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+
+    assert signals["ops_attempt_id"] == "attempt-1"
+    assert signals["quality_diagnostics"] == diagnostics
+
+
+def test_malformed_news_diagnostics_are_not_forwarded(tmp_path, caplog):
+    """임의 원문 필드가 섞인 로그는 원장 JSONB로 장기 보존하지 않는다."""
+    storage = _storage(tmp_path)
+    entry = _entry("LOAD_ASSERTIONS")
+    _write_log(storage, entry, {
+        "run_id": _RUN, "ops_attempt_id": "attempt-1",
+        "ops": {"records_out": 1, "failed_records": 0,
+                "quality_diagnostics": {"rawArticle": "본문 전체"}},
+    })
+
+    with caplog.at_level(logging.WARNING):
+        signals = _observe_from_log(storage, entry.task_key, _RUN, 0)
+
+    assert "quality_diagnostics" not in signals
+    assert "품질 진단 구조가 유효하지 않음" in caplog.text
+
+
 def test_failed_records_make_it_incomplete(tmp_path):
     # WHY: 이 티켓 전체의 유일한 데이터-정합성 위험 — 유실 건수가 흘러가지 않으면 부분 유실이
     #      VALID 로 위장된다(edge-review G/H 가 원래 잡은 결함의 재발).

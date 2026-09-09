@@ -45,6 +45,25 @@ def test_attempt_idempotent_by_ecs_arn():
     assert len([a for a in db.attempts if a["etid"] == "et1"]) == 1
 
 
+def test_reconciler_style_end_update_preserves_existing_quality_diagnostics():
+    """WHY: reconciler가 오래된 RUNNING 스냅샷으로 늦게 종료를 보정해도 wrapper 진단을 지우면 안 된다."""
+    db = FakeOpsDB()
+    ledger = _ledger(db)
+    attempt_id = ledger.record_attempt_start(expected_task_id="et1", ecs_task_arn="arn:task/1")
+    diagnostics = {
+        "schema": "news_resolution_v1", "scope": "assertion_arguments",
+        "metrics": {"total": 1, "resolved": 1, "unresolved": 0}, "issues": [],
+    }
+    assert ledger.record_attempt_end(
+        attempt_id, execution_status=states.EXEC_SUCCEEDED, exit_code=0,
+        quality_diagnostics=diagnostics,
+    )
+    assert ledger.record_attempt_end(
+        attempt_id, execution_status=states.EXEC_SUCCEEDED, exit_code=0,
+    )
+    assert db.attempts[0]["quality_diagnostics"] == diagnostics
+
+
 def test_backfill_is_idempotent():
     """시나리오 14(원장 측) — backfill 이 기존 attempt 를 중복 생성하지 않는다."""
     db = FakeOpsDB()

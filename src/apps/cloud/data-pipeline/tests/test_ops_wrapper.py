@@ -538,6 +538,89 @@ def test_instrument_stores_envelope_counters():
     assert row["task_outcome"] == states.OUTCOME_FULFILLED
 
 
+def test_retry_stores_only_each_attempts_changed_quality_diagnostics():
+    """WHY(ALPHA-1067): 같은 run_id 재시도에서 공유 로그가 바뀌어도 앞 시도의 진단이
+    성공한 두 번째 attempt에 남으면 복구 뒤에도 대시보드가 옛 원인을 보여준다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_ASSERTIONS")
+    first = {
+        "schema": "news_resolution_v1", "scope": "assertion_arguments",
+        "metrics": {"total": 4, "resolved": 3, "unresolved": 1},
+        "issues": [{
+            "reason": "instrument_not_found", "role": "ISSUER",
+            "expression": "미등록회사", "count": 1,
+            "sample": {"articleId": "a1", "title": "미등록회사 수주"},
+        }],
+    }
+    recovered = {
+        "schema": "news_resolution_v1", "scope": "assertion_arguments",
+        "metrics": {"total": 4, "resolved": 4, "unresolved": 0}, "issues": [],
+    }
+
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_ASSERTIONS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/first",
+        observe_data_fn=lambda ec: {
+            "records_out": 1, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db), "quality_diagnostics": first,
+        },
+    )
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_ASSERTIONS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/retry",
+        observe_data_fn=lambda ec: {
+            "records_out": 1, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db), "quality_diagnostics": recovered,
+        },
+    )
+
+    assert db.attempts[0]["quality_diagnostics"] == first
+    assert db.attempts[1]["quality_diagnostics"] == recovered
+
+
+def test_stale_attempt_cannot_store_quality_diagnostics():
+    """다른 ECS attempt가 남긴 같은 run 로그는 현재 시도의 진단 증거가 아니다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_ASSERTIONS")
+    wrapper.instrument(
+        lambda: 0, task_key="LOAD_ASSERTIONS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/current",
+        observe_data_fn=lambda ec: {
+            "records_out": 1, "failed_records": 0, "ops_attempt_id": "stale-attempt",
+            "quality_diagnostics": {
+                "schema": "news_resolution_v1", "scope": "assertion_arguments",
+                "metrics": {"total": 1, "resolved": 1, "unresolved": 0},
+                "issues": [],
+            },
+        },
+    )
+
+    assert db.attempts[0]["quality_diagnostics"] is None
+
+
+def test_observer_cannot_replace_failed_exit_with_bool_and_store_diagnostics():
+    """WHY: False == 0이라 관측 로그가 실제 실패 코드를 덮으면 실패 attempt에 성공 진단이 남는다."""
+    db = FakeOpsDB()
+    _seed(db, task_key="LOAD_ASSERTIONS")
+    rc = wrapper.instrument(
+        lambda: 1, task_key="LOAD_ASSERTIONS", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/failed",
+        observe_data_fn=lambda ec: {
+            "exit_code": False, "records_out": 1, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
+            "quality_diagnostics": {
+                "schema": "news_resolution_v1", "scope": "assertion_arguments",
+                "metrics": {"total": 1, "resolved": 1, "unresolved": 0}, "issues": [],
+            },
+        },
+    )
+
+    assert rc == 1
+    assert db.attempts[0]["status"] == states.EXEC_FAILED
+    assert db.attempts[0]["exit_code"] == 1
+    assert db.attempts[0]["quality_diagnostics"] is None
+
+
 def test_non_etf_task_cannot_store_unsupported_records():
     """WHY: ETF 전용 신호가 다른 producer의 동명 키로 원장을 오염시키면 안 된다."""
     db = FakeOpsDB()

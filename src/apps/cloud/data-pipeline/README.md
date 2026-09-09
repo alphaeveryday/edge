@@ -1622,6 +1622,16 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   비율을 재계산하지 않고 두 원시 카운터만 그대로 전달한다. wrapper가 실행 중에 주입한
   `ops_attempt_id`가 현재 attempt와 일치할 때만 pair를 승인하므로, 같은 run의 겹친 재시도가 공유
   로그를 덮어써도 다른 시도의 값으로 오인하지 않는다.
+  `LOAD_ASSERTIONS`와 `ASSEMBLE_EVENTS`는 선택 필드 `quality_diagnostics`도 낸다(ALPHA-1067).
+  이 값은 `news_resolution_v1` 계약의 원인(`instrument_not_found`·`instrument_ambiguous`·
+  `registry_miss`·`concept_rejected`·`arguments_missing`)·역할·표현·건수와 첫 기사 표본이며, 상위 10건·
+  8KiB로 제한되고 기사 본문은 담지 않는다. assertion 진단은 모든 실체 argument 미해소를,
+  event 진단은 접지 참여자가 하나도 없는 event만 센다. observer와 wrapper가 구조·닫힌 사유
+  어휘·크기·현재 `ops_attempt_id`·성공 exit를 다시 검증한 뒤 `ops_task_attempt`에 저장하므로,
+  같은 run의 재시도가 바뀐 로그를 내면 각 attempt에는 자기 진단만 남는다. 정상 런에서 확인한
+  정식명 변형 별칭은 canonical master가 실제로 존재하고 단일 종목일 때만 assertion 해소에
+  사용한다. event 조립에서는 그 canonical ticker가 기사 mentions 허용집합에도 있어야 한다.
+  그룹명·브랜드처럼 상장사 귀속이 해석인 표현은 별칭에 포함하지 않는다.
 - **ETF 수집 완전성**(ALPHA-611) — `NAV_COLLECTION_KIS`·`ETF_PROFILE_COLLECTION_KIS`·
   `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
   `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이

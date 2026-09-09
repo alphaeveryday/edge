@@ -283,6 +283,12 @@ def test_manifest_reads_direct_keys_and_reports_physical_and_logical_rows(tmp_pa
         "records_out": 2, "failed_records": 0,
         "entity_resolution_arguments_total": 2,
         "entity_resolution_arguments_resolved": 2,
+        "quality_diagnostics": {
+            "schema": "news_resolution_v1",
+            "scope": "assertion_arguments",
+            "metrics": {"total": 2, "resolved": 2, "unresolved": 0},
+            "issues": [],
+        },
     }
 
 
@@ -1463,6 +1469,48 @@ def test_every_recoverable_axis_stays_in_the_unresolved_sample(tmp_path, monkeyp
     assert res["unresolved"] == 1 and res["ambiguous"] == 1 and res["registry_miss"] == 1
     sample = {t for t, _ in res["top_unresolved"]}
     assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 축 하나가 표본에서 빠졌다"
+    diagnostics = _log(storage)["ops"]["quality_diagnostics"]
+    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3}
+    assert {(row["reason"], row["role"], row["expression"]) for row in diagnostics["issues"]} == {
+        ("instrument_not_found", "ISSUER", "미등록회사"),
+        ("instrument_ambiguous", "ISSUER", "충돌이름"),
+        ("registry_miss", "AUTHORITY", "없는기관"),
+    }
+    assert all(row["sample"] == {"articleId": "a1", "title": "삼성전자 수주"}
+               for row in diagnostics["issues"])
+
+
+def test_missing_argument_text_is_explained_in_quality_diagnostics(tmp_path, monkeypatch):
+    """해소 분모에 센 결측 text는 진단에서도 같은 수만큼 설명한다.
+
+    WHY: 값이 없거나 비문자열인 실체 argument도 plan_resolution의 미해소 결과라 분모에
+    포함된다. 이 경로를 issue에서 빼면 unresolved가 양수인데 원인 목록이 비는 실행 시도가
+    생겨, 진단을 추가한 목적 자체가 깨진다.
+    """
+    storage = LocalStorage(tmp_path / "lake")
+    arguments = [
+        {"role_code": "ISSUER", "text": None, "entity_id": None},
+        {"role_code": "ISSUER", "text": 42, "entity_id": None},
+        {"role_code": "ISSUER", "text": "  ", "entity_id": None},
+        {"role_code": "ISSUER", "text": "삼성전자", "entity_id": None},
+    ]
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row(
+        "a1", [_assertion(arguments=arguments)],
+    )])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+
+    diagnostics = _log(storage)["ops"]["quality_diagnostics"]
+    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3}
+    assert diagnostics["issues"] == [{
+        "reason": "arguments_missing",
+        "role": "ISSUER",
+        "expression": "text",
+        "count": 3,
+        "sample": {"articleId": "a1", "title": "삼성전자 수주"},
+    }]
 
 
 def test_no_writer_local_policy_narrows_minting(tmp_path, monkeypatch):

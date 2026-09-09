@@ -77,7 +77,9 @@ from edge_ontology import load_authority_registry, load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import load_resolution_index, plan_resolution
+from ..entity_resolution import (AMBIGUOUS, CONCEPT_REJECTED as RESOLUTION_CONCEPT_REJECTED,
+                                 REGISTRY_MISS as RESOLUTION_REGISTRY_MISS,
+                                 load_resolution_index, plan_resolution)
 from ..lake import (
     Storage,
     feature_run_manifest_key,
@@ -87,6 +89,16 @@ from ..lake import (
     run_manifest_consumed_key,
     run_manifest_skipped_key,
     unconsumed_run_ids,
+)
+from ..ops.quality_diagnostics import (
+    ARGUMENTS_MISSING,
+    CONCEPT_REJECTED,
+    ASSERTION_SCOPE,
+    INSTRUMENT_AMBIGUOUS,
+    INSTRUMENT_NOT_FOUND,
+    REGISTRY_MISS,
+    build as build_quality_diagnostics,
+    issue as quality_issue,
 )
 from .tag_news import _merge_by_article
 
@@ -312,6 +324,8 @@ def run(
     pending_concepts: dict[str, tuple[str, str]] = {}
     # 미해소 표현 → 빈도. 별칭 축 도입 판단의 근거다(ALPHA-802).
     unresolved_texts: dict[str, int] = {}
+    unresolved_issue_counts: dict[tuple[str, str, str], int] = {}
+    unresolved_issue_samples: dict[tuple[str, str, str], tuple[str, str]] = {}
     created_sample: list[dict] = []
     failures: list[dict] = []
     exit_code = 0
@@ -523,6 +537,8 @@ def run(
                         entry = candidates[nk] = {
                             "confidence": _confidence(assertion.get("confidence")),
                             "arguments": [],
+                            "article_id": str(article_id),
+                            "title": str(row.get("title") or "제목 없음"),
                         }
                     else:
                         # 같은 문서·사건유형·서술의 재주장 — 자연키가 하나면 주장도
@@ -610,7 +626,8 @@ def run(
                     skipped_no_resolved_argument, args_total, resolved_any,
                     args_role_missing, non_entity_resolved,
                     dict(args_by_reason), dict(args_by_role_kind), dict(unknown_roles),
-                    dict(unresolved_texts), list(created_sample), set(missing_article_ids),
+                    dict(unresolved_texts), dict(unresolved_issue_counts),
+                    dict(unresolved_issue_samples), list(created_sample), set(missing_article_ids),
                 )
                 try:
                     with conn.transaction() if group_run is not None else nullcontext():
@@ -714,6 +731,29 @@ def run(
                                             # 있어 되돌렸으므로(ALPHA-861), 뺄 것도 없어졌다 — 지금
                                             # 안 붙은 것은 **전부 못 붙인 것**이다.
                                             unresolved_texts[text] = unresolved_texts.get(text, 0) + 1
+                                            diagnostic_reason = (
+                                                INSTRUMENT_AMBIGUOUS if reason == AMBIGUOUS
+                                                else REGISTRY_MISS
+                                                if reason == RESOLUTION_REGISTRY_MISS
+                                                else CONCEPT_REJECTED
+                                                if reason == RESOLUTION_CONCEPT_REJECTED
+                                                else INSTRUMENT_NOT_FOUND
+                                            )
+                                            key = (diagnostic_reason, role_code, text)
+                                            unresolved_issue_counts[key] = (
+                                                unresolved_issue_counts.get(key, 0) + 1
+                                            )
+                                            unresolved_issue_samples.setdefault(
+                                                key, (entry["article_id"], entry["title"]),
+                                            )
+                                        else:
+                                            key = (ARGUMENTS_MISSING, role_code, "text")
+                                            unresolved_issue_counts[key] = (
+                                                unresolved_issue_counts.get(key, 0) + 1
+                                            )
+                                            unresolved_issue_samples.setdefault(
+                                                key, (entry["article_id"], entry["title"]),
+                                            )
                                 elif kind == "non_entity" and entity_id is not None:
                                     # ⚠️ **이제 도달하지 않는다.** 역할별 분기(ALPHA-831)가 비실체를
                                     # 해소 전에 걸러서 `entity_id` 가 항상 None 이다. 카운터를 남겨 두는
@@ -783,7 +823,8 @@ def run(
                      skipped_no_resolved_argument, args_total, resolved_any,
                      args_role_missing, non_entity_resolved,
                      args_by_reason, args_by_role_kind, unknown_roles,
-                     unresolved_texts, created_sample, missing_article_ids) = snapshot
+                     unresolved_texts, unresolved_issue_counts, unresolved_issue_samples,
+                     created_sample, missing_article_ids) = snapshot
                     logger.exception("회수 범위 적재 실패(격리): run_id=%s", group_run)
                     failures.append({"reasons": ["carry_forward_load_error"],
                                      "input_run_id": group_run, "error": str(exc)})
@@ -870,6 +911,22 @@ def run(
                 logger.exception("소비 마커 기록 실패(다음 런이 재소비): run_id=%s", consumed_run_id)
                 carry_counters["marker_failed"] += 1
 
+    quality_diagnostics = build_quality_diagnostics(
+        ASSERTION_SCOPE,
+        {
+            "total": args_total,
+            "resolved": resolved_any,
+            "unresolved": args_total - resolved_any,
+        },
+        [
+            quality_issue(
+                reason=reason, role=role, expression=expression, count=count,
+                article_id=unresolved_issue_samples[(reason, role, expression)][0],
+                title=unresolved_issue_samples[(reason, role, expression)][1],
+            )
+            for (reason, role, expression), count in unresolved_issue_counts.items()
+        ],
+    )
     log = {
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
@@ -944,6 +1001,7 @@ def run(
             # 진단값을 남기되 저장 pair는 NULL로 보내 앞 시도의 성공값을 지운다(ALPHA-1000).
             "entity_resolution_arguments_total": args_total if exit_code == 0 else None,
             "entity_resolution_arguments_resolved": resolved_any if exit_code == 0 else None,
+            "quality_diagnostics": quality_diagnostics if exit_code == 0 else None,
         },
     }
     try:
