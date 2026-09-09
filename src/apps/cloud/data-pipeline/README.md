@@ -999,19 +999,14 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   왕복이 최대 95만 번이었고, 그것이 뉴스 SFN 이 상한에 물리던 원인이었다(TIMED_OUT 전건이 이 스텝
   미완). `created` 와 로그 표본은 `RETURNING` 이 돌려준 행에서만 뽑는다 — 배치의 `rowcount`
   로는 **어느 행**이 들어갔는지를 알 수 없다
-- `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532) — canonical 공시 →
+- `load-disclosure`(→ Cloud Event Store RDB, **rds 세트** 재사용, ALPHA-476·532·1045) — canonical 공시 →
   document(DISCLOSURE)·disclosure_document·disclosure_fact. issuer 는 앞 직렬 enrich-corp-code 가 채운
   dart_corp_code 로 해소(DART API 불요라 rds 세트). 자연키 멱등·정정 DO UPDATE.
-  명시 복구는 `--all` 또는 `--from/--to`로 canonical을 pending에 먼저 commit하고,
-  `--pending-only`는 canonical을 읽지 않고 잔여만 회수한다. 정상 SFN consumer는 아직 기존
-  input-run-id + full-scan 동작이다. **적재 로더 중 유일하게 `--window-days`도 받는다**(ALPHA-721). 공시는 장중 레인이 붙으면
-  canonical 스캔이 슬롯마다 곱해진다. 뉴스 `load-documents`는 ALPHA-1031에서 manifest 직접
-  키·현재 논리 ID 소비로 전환됐으며, 이 공시 경로의 LIST 제거는 별도 작업이다.
-  그 레인이 실제로 붙었었다(ALPHA-875 `disclosure-worker` — 987 이 저녁 배치로 되돌려
-  지금은 미편입) — 1분 레인은 이 함수를 **질의 날짜창으로 좁혀** 불렀다. ⚠️ 좁혀지는 것은 parquet GET 뿐이다: `_read_facts` 가 `report_date=` 프리픽스
-  **전체**를 LIST 한 뒤 날짜를 거르므로 window 당 2 LIST(supply·segment)가 남고 그 비용은
-  report_date 파티션 수에 비례해 자란다. 거래일당 +1 이라 당장은 견디지만, 줄이려면 창에서
-  파티션 프리픽스를 만들어 그 날짜만 LIST 해야 한다
+  정상 경로는 두 completed run manifest의 direct key·SHA·winner를 검증해 canonical 행을
+  pending에 먼저 commit한 뒤 pending만 소비하므로 shared canonical LIST를 하지 않는다.
+  명시 복구는 `--all` 또는 `--from/--to`로 canonical을 pending에 bootstrap하고,
+  `--pending-only`는 canonical을 읽지 않고 잔여만 회수한다. **적재 로더 중 유일하게
+  `--window-days`도 받는다**(ALPHA-721)
 - `load-assertions`(**직렬**, 뉴스 SFN 의 feature 페이즈 뒤 — ALPHA-376·410·553·1033) — feature assertion →
   document_assertion·assertion_argument. document FK 의존이 병렬이면 레이스라 직렬로 둔다.
   정상 경로는 TagNews manifest의 직접 part만 GET하고 현재 `article_id`만 논리 처리한다.
@@ -1264,9 +1259,9 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   다른 첫 로그**다 — 유실(`failed_records`)이 대상 스코프라 산출도 같은 스코프여야 한다(아래 ops
   봉투의 스코프 규칙). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
   (ALPHA-720): 같은 수집일(UTC 기준 ±1일)에 이미 받아 둔 본문은 다시 내려받지 않고 **기존 키를
-  가리킨다** — 증분 커서가 없어 매 실행이 날짜창 전체를 재독하므로, 장치가 없으면 하루 여러 번
-  도는 레인이 같은 ZIP 을 슬롯 수만큼 받는다. 메타는 그래도 **전건 저장**한다(창 전체 관측이
-  완전성 근거다 — 접으면 런 사이 rcept_no 집합 비교가 성립하지 않는다).
+  가리킨다**. 전량 대사와 증분 경계 페이지가 기존 행을 다시 내므로 이 장치가 같은 ZIP의 반복
+  다운로드를 막는다. minute worker는 첫 조회의 본문 색인을 프로세스 생명 동안 되먹여 이후
+  poll의 같은 S3 prefix LIST도 없앤다. 메타는 각 run이 실제 관측한 범위를 그대로 저장한다.
   ⚠️ 1분 레인(ALPHA-875)이 붙었던 동안은 그 "슬롯 수"가 하루 10 → **720 window** 라 이 존의
   하루 메타량이 ~70배였다(본문은 seen-map 이 막았다). **987 이 저녁 배치(하루 1런)로 되돌려
   지금은 그 증가가 멈췄고**, 8/10~8/26 에 쌓인 720-window 파티션만 과거 구간에 남아 있다.
@@ -1768,8 +1763,8 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # (ALPHA-875 — 🔴 987 컷오버로 지금은 **계획하지 마라**: 공시는 저녁 배치(18:10)가 소유한다.
 # 이 세션을 계획해 워커를 돌리면 배치와 같은 DART 창을 이중 수집한다. 아래는 롤백 시에만): `--universe` 를 **안 받는데**(주면 거부) 격자는 **720**이다. DART 당일접수가
 # 07:30~18:00 이라 정규장 격자면 16·17·18시 접수분을 다음 거래일까지 못 본다. iNAV 를 막은
-# 근거(어댑터 하한·소급 불가)가 공시에는 안 걸린다 — 매 tick 이 날짜창 전체를 재독하고
-# `ingest_date`(UTC) 파티션을 고르는 소비자가 없다(정제 두 스텝은 raw 전량 스캔).
+# 근거(어댑터 하한·소급 불가)가 공시에는 안 걸린다. 첫 poll·주기 대사는 날짜창 전체를 읽고
+# 사이 poll은 접수 원장 증가분까지만 읽으며, 정제 두 스텝은 그 poll의 exact raw key만 소비한다.
 # 🔴 그 소득은 **날짜창을 세션 날짜(KST)에서 유도**할 때만 실현된다 — `--from/--to` 를
 # 생략한 증분 기본창은 UTC 라 08:00 KST tick 이 `[D-2, D-1]` 을 질의한다(세션 날짜가 창 밖).
 # ⚠️ **업종지수 세션(`--dataset sector_index_minute --source-group kis`)은 세 번째
@@ -2048,7 +2043,12 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 세션이 먼저 계획돼 있어야 한다(plan-minute-session --dataset disclosure_minute
 # --source-group dart — universe 없음. 격자는 08:00~20:00 720개 — DART 접수 07:30~18:00).
 # 엔드포인트·유형 필터 정본은 [dart_disclosure.source](배치와 공유), pacing·예산은
-# [minute_disclosure_worker](기본: interval 1s·timeout 10s·페이지 예산 60·본문 예산 5).
+# [minute_disclosure_worker](기본: interval 1s·timeout 10s·페이지 예산 60·본문 예산 5·
+# 전량 대사 60 poll). 첫 poll과 전량 대사는 날짜창 끝까지 읽고, 사이 poll은 직전 전량 관측의
+# rcept_no 집합과 total_count 증가분을 확인할 때까지만 읽는다. 같은 건수의 교체·정정은 전량
+# 대사가 최대 60 poll 안에 회수한다. collection log와 window manifest의 observation_scope가
+# full/incremental/state-changed fallback을 구분한다. 대상 본문·두 canonical
+# manifest·load pending 내구화 전 실패는 커서를 전진시키지 않고 다음 window가 재시도한다.
 # ⚠️ 페이지 예산은 이 워커의 소스 `max_pages` 로 **주입**된다 — 벤더 섹션의 500(백필용)이
 # 그대로면 lease 검증이 실제보다 짧은 tick 을 통과시킨다.
 # 질의 날짜창은 **세션 날짜(KST)** 에서 나온다: 매 tick 당일, 세션 첫 tick 만 D-1 포함

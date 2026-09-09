@@ -167,12 +167,9 @@ def _meta_rows(storage, run_id) -> dict[str, dict]:
 
 
 def test_second_run_reuses_documents_but_keeps_full_meta(tmp_path):
-    # WHY(ALPHA-720): 이 소스엔 증분 커서가 없어 매 실행이 날짜창 전체를 다시 읽는다 — 장중
-    #      레인은 같은 날 10슬롯이 돌므로 장치가 없으면 **같은 document.xml ZIP 을 10번**
-    #      내려받는다. 없애야 할 것은 그 재다운로드 하나뿐이다.
-    #      메타(ndjson)는 반대로 **계속 전건 저장돼야 한다**: 매 런이 자기 run_id 파티션에
-    #      창 전체 관측을 남기는 것이 이 소스의 유일한 완전성 근거이고(런 사이 rcept_no 집합
-    #      비교), 메타까지 접으면 그 근거를 스스로 없앤다. 두 축을 한 테스트에 묶어 고정한다 —
+    # WHY(ALPHA-720): 전량 대사와 증분 경계 페이지는 기존 행을 다시 낸다. 장치가 없으면 같은
+    #      document.xml ZIP을 poll마다 다시 받는다. 메타(ndjson)는 반대로 각 run이 실제 관측한
+    #      범위를 계속 보존해야 한다. 두 축을 한 테스트에 묶어 고정한다 —
     #      "재다운로드를 줄인다"는 최적화가 메타 보존을 함께 깎는 것이 가장 그럴듯한 회귀다.
     storage = LocalStorage(tmp_path / "lake")
     first = FakeSource(records=[_rec("A1"), _rec("B2", report_nm="사업보고서")])
@@ -195,6 +192,35 @@ def test_second_run_reuses_documents_but_keeps_full_meta(tmp_path):
     assert all(r["body_format"] for r in rows2.values())
     # 본문 객체는 늘지 않았다(2회차가 자기 파티션에 사본을 만들지 않는다).
     assert len([k for k in storage.list_keys("raw") if k.endswith(".zip")]) == 2
+
+
+def test_minute_document_index_avoids_repeated_s3_list(tmp_path):
+    # WHY(ALPHA-1068): 본문 재다운로드를 막으려고 2일 prefix를 매 poll LIST하면 API 호출만
+    # 줄고 S3 부하는 그대로 반복된다. worker가 직전 색인을 넘긴 poll은 LIST 없이 exact key를
+    # 재사용해야 하며, 빈 색인도 이미 조회한 상태로 표현할 수 있어야 한다.
+    class ListSpy(LocalStorage):
+        def __init__(self, root):
+            super().__init__(root)
+            self.document_lists = 0
+
+        def list_keys(self, prefix):
+            if prefix.startswith("raw/source=dart/dataset=disclosures/"):
+                self.document_lists += 1
+            return super().list_keys(prefix)
+
+    storage = ListSpy(tmp_path / "lake")
+    existing_key = raw_disclosure_document_key("dart", "KR", "2026-08-04", "r0", "A1")
+    storage.put_bytes(existing_key, b"PK\x03\x04body")
+    outcome = ingest_raw_disclosure.collect(
+        _settings(tmp_path), storage, FakeSource(records=[_rec("A1")]), "r1",
+        ingest_lane="minute",
+        existing_documents_by_market={"KR": {"A1": existing_key}},
+    )
+
+    assert outcome["exit_code"] == 0
+    assert outcome["log"]["documents_reused"] == 1
+    assert outcome["existing_documents_by_market"] == {"KR": {"A1": existing_key}}
+    assert storage.document_lists == 0
 
 
 def test_seen_map_spans_two_ingest_dates_and_newest_key_wins(tmp_path):
@@ -254,6 +280,7 @@ def test_failed_document_is_retried_by_next_run(tmp_path):
     storage = LocalStorage(tmp_path / "lake")
     first = FakeSource(records=[_rec("OK1"), _rec("BAD2")], doc_fail={"BAD2"})
     assert _run(tmp_path, first, storage=storage, run_id="r1")[0] == 1  # partial
+    assert _log(storage, "r1")["cursor_safe"] is False
 
     second = FakeSource(records=[_rec("OK1"), _rec("BAD2")])
     code, _ = _run(tmp_path, second, storage=storage, run_id="r2")
@@ -262,6 +289,53 @@ def test_failed_document_is_retried_by_next_run(tmp_path):
     assert second.doc_requests == ["BAD2"]  # 실패했던 것만 재시도
     log2 = _log(storage, "r2")
     assert log2["documents_saved"] == 1 and log2["documents_reused"] == 1
+    assert log2["cursor_safe"] is True
+
+
+@pytest.mark.parametrize(("our_ticker", "expected_safe"), [("005930", False), (None, True)])
+def test_only_target_row_failures_block_cursor_advancement(
+        tmp_path, our_ticker, expected_safe):
+    # WHY(edge-review): 우리 대상의 malformed 행은 교정 응답을 즉시 전량 재시도해야 한다.
+    #      시장 전체 목록의 주인 불명 행까지 같은 gate에 묶으면 벤더의 고정 불량 한 건이
+    #      하루 720 poll을 모두 full로 만들어 쿼터를 소진하므로 두 스코프를 구분한다.
+    source = FakeSource(records=[_rec("OK1")])
+    source.fetch_failures = [{
+        "symbol": "005930" if our_ticker else None,
+        "our_ticker": our_ticker,
+        "rcept_no": "BAD1",
+        "page": 1,
+        "error": "malformed target row",
+        "scope": "target" if our_ticker else "foreign",
+    }]
+
+    _, storage = _run(tmp_path, source)
+
+    assert _log(storage, "r1")["cursor_safe"] is expected_safe
+
+
+def test_foreign_diagnostic_with_no_target_rows_is_valid_empty(tmp_path):
+    # WHY(edge-review): 대상 공시가 없는 정상 poll에 시장 전체의 식별 불가 행 하나가 고정돼도
+    #      매번 full/error가 되면 하루 쿼터를 소진한다. 진단은 보존하되 대상 실패로 세지 않는다.
+    source = FakeSource(records=[], planned=1)
+    source.fetch_failures = [{
+        "symbol": None,
+        "our_ticker": None,
+        "rcept_no": "FOREIGN",
+        "page": 1,
+        "error": "stock_code 가 문자열이 아님",
+        "kind": "failure",
+        "scope": "foreign",
+    }]
+
+    code, storage = _run(tmp_path, source)
+    log = _log(storage, "r1")
+
+    assert code == 0
+    assert log["status"] == "success"
+    assert log["ops"] == {"records_out": 0, "failed_records": 0}
+    assert log["records_failed_targets"] == 0
+    assert log["records_failed_diagnostics"] == 1
+    assert log["cursor_safe"] is True
 
 
 def test_same_rcept_no_twice_in_one_window_downloads_once(tmp_path):

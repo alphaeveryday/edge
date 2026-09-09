@@ -425,7 +425,7 @@ class TestCommitDisclosureWindow:
         assert window["missing_units"] is None
 
     def test_다른_attempt_소유_window_는_거부된다(self):
-        """매 tick 이 날짜창 전체를 재독하므로 두 attempt 의 관측이 겹치는 것이 **정상**이다
+        """같은 날짜창을 반복 poll하므로 두 attempt의 관측이 겹치는 것이 **정상**이다
         — 그래서 뒤늦은 attempt 가 남의 claim 위에 자기 판정을 쓰는 경합이 실재한다.
         SFN 레인이 슬롯 간격(3600s) > 실행시간으로 피하던 겹침을 1분 레인에서 막는 장치가
         이것 하나다(ALPHA-875 성공기준).

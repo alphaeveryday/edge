@@ -17,20 +17,17 @@ OpenDART 공시목록(list.json)을 **날짜창 단위로 시장 전체** 수집
 제한하지 않으면 본문 콜이 하루 ~11건에서 `universe_matched` 만큼(수십~100/일 규모)으로 뛴다.
 감쇠 두 축은 collection_log 의 `universe_matched`·`type_matched` 가 따로 센다.
 
-⚠️ **이 스텝은 완전성을 판정하지 않는다.** 소스가 남기는 `list_total_count`·`list_rows_seen`
-은 창 규모의 **관측**이지 판정이 아니다 — 목록은 수집 중에도 자라(접수 피크 16시) 페이지
-경계가 밀리므로, 둘의 차이가 절단인지 유입인지 구분되지 않는다. 실제 완전성 근거는 같은
-날짜창을 다시 읽는 **다음 런과의 rcept_no 집합 비교**이고, 그 판정 주체는 원장·EOD 다.
+⚠️ **이 스텝은 완전성을 판정하지 않는다.** `list_total_count`·`list_rows_seen`은 관측이고,
+1분 증분 호출이면 `incremental_*`와 `list_pages_requested`가 실제 깊이를 함께 말한다. 전량과
+증분을 같은 날짜창 관측으로 접지 않는다.
 
-⚠️ **틱 멱등은 본문에만 건다**(ALPHA-720). 증분 커서가 없어 매 실행이 날짜창 전체를 다시
-읽으므로, 장중 레인처럼 같은 날 여러 번 돌면 **같은 `document.xml` ZIP 을 슬롯 수만큼
-내려받는다**. 그래서 수집일 전후(UTC 오늘·어제)에 이미 저장된 본문 객체를 seen-map 으로
+⚠️ **틱 멱등은 본문에 건다**(ALPHA-720). 전량 대사와 경계 페이지가 기존 대상 행을 다시
+내므로, 수집일 전후(UTC 오늘·어제)에 이미 저장된 본문 객체를 seen-map 으로
 읽어 두고, 히트한 `rcept_no` 는 받지 않고 메타 행의 `document_raw_path` 를 **기존 키**로
 채운다(정제가 그 ZIP 을 그대로 연다).
 
-메타(ndjson)는 **접지 않는다** — 매 실행이 자기 run_id 파티션에 창 전체 관측을 남기는 것이
-이 소스의 유일한 완전성 근거이고(위 문단), 메타까지 접으면 런 사이 rcept_no 집합 비교 대상이
-사라져 근거를 스스로 없앤다. 본문 재다운로드만 없어지고 증거는 그대로다.
+메타(ndjson)는 **접지 않는다** — 각 실행이 실제 관측한 범위를 자기 run_id 파티션에 남긴다.
+본문 재다운로드만 없어지고 poll 증거는 그대로다.
 
 ⚠️ 장중 잦은 실행(미니배치)을 붙이면 그 레인은 **원장 밖**이라 침묵을 아무도 못 본다 —
 슬롯도 expected_task 도 없어 "1시간째 0건"을 판정할 주체가 없다. 백스톱은 15:40 일일 런이다:
@@ -87,9 +84,9 @@ def _existing_documents(
     **본문 fetch 가 실패해 객체가 없는 건은 여기 안 들어와 다음 실행이 자동 재시도한다** —
     별도 재시도 장치를 두지 않는 이유다(실패 목록을 따로 들고 다니면 그게 또 하나의 상태다).
 
-    ponytail: 조회 범위가 수집일 2일 고정이라 그보다 오래된 창의 백필(`--from 2026-01-01`)은
-    여전히 재다운로드한다. 창 폭에 비례하는 LIST 를 피하려는 의도적 상한이고 기존 동작과
-    같다 — 넓은 창의 재다운로드가 실제로 문제가 되면 창에서 수집일 후보를 뽑는 쪽으로 넓혀라.
+    minute worker는 이 결과를 프로세스 메모리에 보관해 다음 poll의 반복 LIST도 없앤다. 재기동
+    뒤 첫 대상 행에서만 다시 조회한다. 조회 범위가 수집일 2일 고정이라 그보다 오래된 창의
+    백필(`--from 2026-01-01`)은 여전히 재다운로드한다. 창 폭에 비례하는 LIST를 피하려는 기존 상한이다.
     """
     day = date.fromisoformat(started_date)
     found: dict[str, str] = {}
@@ -149,6 +146,10 @@ def collect(
     *,
     ingest_lane: str,
     window_meta: dict | None = None,
+    after_rcept_no: str | None = None,
+    known_rcept_nos: frozenset[str] | None = None,
+    previous_total_count: int | None = None,
+    existing_documents_by_market: dict[str, dict[str, str]] | None = None,
 ) -> dict:
     """`run` 과 같은 수집을 하고 **관측을 돌려준다** (ALPHA-875 — 1분 레인이 쓴다).
 
@@ -163,8 +164,7 @@ def collect(
       - `exit_code` : `run` 이 그대로 내보내는 값
       - `log`       : collection_log 에 쓴 payload 그대로(원장 판정 입력)
       - `rcept_nos` : 이 폴링이 관측한 rcept_no 정렬 튜플. **window checksum 의 재료**다 —
-                      이 소스는 증분 커서가 없어 매 tick 이 날짜창 전체를 재독하므로, 같은
-                      집합을 다시 봤다면 같은 값이어야 세대가 유지된다(`commit_disclosure_window`).
+                      같은 관측 범위·집합을 재시도했다면 같은 값이어야 세대가 유지된다.
                       raw 메타 바이트를 해시하면 `fetched_at` 이 매 tick 달라 세대가 늘 증가한다.
       - `raw_keys`  : 이 런이 쓴 메타 ndjson exact key. minute은 정제에 직접 넘기고 batch는
                       run-scoped manifest로 확정해 input_run_id 소비자가 GET한다.
@@ -267,7 +267,13 @@ def collect(
     # market → 이미 받아 둔 본문 색인. 시장이 실제로 나올 때 처음 만든다(안 나온 시장의
     # 프리픽스를 LIST 하지 않게). 저장 성공분을 여기 되먹여, 한 창 안에서 같은 rcept_no 의
     # 서로 다른 관측(rm ""→"정")이 두 번 와도 본문은 한 번만 받는다.
-    doc_index: dict[str, dict[str, str]] = {}
+    # minute worker는 프로세스 생명 동안 이 색인을 되먹여 같은 2일 prefix를 매 poll S3 LIST하지
+    # 않는다. None은 미초기화, {"KR": {}}는 조회했지만 기존 본문이 없다는 서로 다른 상태다.
+    # 배치와 직접 호출은 None이라 기존처럼 대상 행을 처음 만날 때 한 번 조회한다.
+    doc_index: dict[str, dict[str, str]] = {
+        market: dict(paths)
+        for market, paths in (existing_documents_by_market or {}).items()
+    }
     fetched = documents_saved = documents_reused = 0
     status, error, reason = "success", None, None
     exit_code = 0
@@ -300,7 +306,16 @@ def collect(
             log["symbols_from_holdings"] = len(merged - set(symbols))
             log["symbols_excluded_etf"] = len(union) - len(merged)
             symbols = sorted(merged)
-        for record in source.fetch(symbols, from_date, to_date):
+        records = (
+            source.fetch(
+                symbols, from_date, to_date, after_rcept_no=after_rcept_no,
+                known_rcept_nos=known_rcept_nos,
+                previous_total_count=previous_total_count,
+            )
+            if after_rcept_no is not None
+            else source.fetch(symbols, from_date, to_date)
+        )
+        for record in records:
             fetched += 1
             market = record["market"]
             if not record.get("is_target"):
@@ -400,7 +415,17 @@ def collect(
     # 그래서 **관용 필터를 두지 않는다.** 빈 집합으로 남겨두면 아무 일도 안 하면서 유효한
     # 확장점처럼 보여, 거기 이름을 하나 넣는 것만으로 "특정 실패를 성공 처리"하는 경로가 다시
     # 조용히 생긴다. `kind` 는 로그의 분류 라벨로만 남는다 — 판정에는 쓰지 않는다.
-    failed_targets = list(getattr(source, "fetch_failures", [])) + doc_failures
+    source_failures = list(getattr(source, "fetch_failures", []))
+    foreign_diagnostics = [
+        failure for failure in source_failures
+        if isinstance(failure, dict) and failure.get("scope") == "foreign"
+    ]
+    # scope가 없는 외부/레거시 어댑터 실패는 관대하게 foreign으로 추정하지 않는다. 명시된
+    # foreign만 감사 진단으로 분리하고 나머지는 종전처럼 실패로 닫는다.
+    blocking_source_failures = [
+        failure for failure in source_failures if failure not in foreign_diagnostics
+    ]
+    failed_targets = blocking_source_failures + doc_failures
     real_failures = failed_targets
     if status == "success" and real_failures:
         if saved_targets == 0:
@@ -436,6 +461,24 @@ def collect(
     # ⚠️ 단독으로는 완주 증명이 아니다 — StopFetch·status 이상 경로는 이 플래그를 세우지 않고
     # 죽는다(목록 미완인데 값은 False). 완주를 묻는 소비자(워터마크)는 status 와 함께 본다.
     list_truncated = bool(getattr(source, "_segment_truncated", False))
+    cursor_candidate = getattr(source, "incremental_cursor_candidate", None)
+    cursor_found = bool(getattr(source, "incremental_cursor_found", False))
+    list_pages_requested = int(getattr(source, "list_pages_requested", 0))
+    list_rcept_nos_seen = tuple(sorted(getattr(source, "list_rcept_nos_seen", set())))
+    list_total_count_valid = bool(getattr(source, "list_total_count_valid", True))
+    scan_complete = bool(getattr(source, "incremental_scan_complete", False))
+    incremental_stop_reason = getattr(source, "incremental_stop_reason", None)
+    target_row_failures = bool(blocking_source_failures)
+    # 커서 전진은 본문을 포함한 raw가 내구 저장됐을 때만 허용한다. 행 형상 실패는 다음 주기
+    # 전량 대사가 다시 보지만, 대상 본문 실패를 경계 뒤에 가두면 ALPHA-1058의 재시도 계약이
+    # 깨지므로 별도로 막는다. downstream manifest/pending 안전성은 worker가 이어서 판정한다.
+    cursor_safe = (
+        status not in {"error", "stopped", "skipped"}
+        and not list_truncated
+        and not doc_failures
+        and list_total_count_valid
+        and not target_row_failures
+    )
     payload = {
         **log,
         "status": status,
@@ -459,6 +502,8 @@ def collect(
         "window_to": source.resolved_window[1],
         "records_failed_targets": len(failed_targets),
         "failed_targets": failed_targets,
+        "records_failed_diagnostics": len(foreign_diagnostics),
+        "failed_diagnostics": foreign_diagnostics,
         "partitions": len(partitions),
         # 창 전체 규모 관측 — 소스가 신고한 건수(1페이지 total_count)와 실제로 훑은 행 수.
         # **판정이 아니다**: 목록은 수집 중에도 자라(접수 피크 16시) 페이지 경계가 밀리므로,
@@ -480,6 +525,16 @@ def collect(
         # 원장 워터마크(ALPHA-987)의 완주 판정 입력 — 종전엔 반환값으로만 냈으나(875 는 배치
         # 로그 바이트를 바꾸지 않으려 했다) 로그를 되읽는 소비자가 생겨 로그에도 남긴다.
         "list_truncated": list_truncated,
+        "incremental_after_rcept_no": after_rcept_no,
+        "incremental_cursor_candidate": cursor_candidate,
+        "incremental_cursor_found": cursor_found,
+        "list_pages_requested": list_pages_requested,
+        "list_rcept_nos_seen": len(list_rcept_nos_seen),
+        "list_total_count_valid": list_total_count_valid,
+        "target_row_failures": target_row_failures,
+        "incremental_scan_complete": scan_complete,
+        "incremental_stop_reason": incremental_stop_reason,
+        "cursor_safe": cursor_safe,
         "finished_at": datetime.now(timezone.utc).isoformat(),
         # 원장 관측용 공통 봉투(ALPHA-181). 본문(documents_saved)은 메타 행의 부속이라
         # records_out 은 메타 건수로 센다 — 행 단위 유실 판정의 기준이 그쪽이다.
@@ -524,6 +579,16 @@ def collect(
         # payload 와 같은 값 — 산출 시점의 주석 참조. (종전 "로그에는 넣지 않는다" 결정은
         # ALPHA-987 워터마크가 로그를 소비하게 되며 뒤집혔다.)
         "list_truncated": list_truncated,
+        "cursor_candidate": cursor_candidate,
+        "cursor_found": cursor_found,
+        "list_pages_requested": list_pages_requested,
+        "list_rcept_nos_seen": list_rcept_nos_seen,
+        "list_total_count": getattr(source, "list_total_count", None),
+        "list_total_count_valid": list_total_count_valid,
+        "scan_complete": scan_complete,
+        "incremental_stop_reason": incremental_stop_reason,
+        "cursor_safe": cursor_safe,
+        "existing_documents_by_market": doc_index,
     }
 
 

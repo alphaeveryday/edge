@@ -435,8 +435,8 @@ class MinuteCommitter:
 
         ⚠️ 뉴스와 달리 **세대 대조를 유지한다**. 뉴스가 그 검사를 뺀 근거는 artifact key 가
         세대 축이 아니라는 것이었는데, 여기서 그 검사는 key 규약이 아니라 **claim 과 commit
-        사이에 다른 attempt 가 이 window 를 확정했는지**를 잡는다 — 매 tick 이 날짜창 전체를
-        재독하는 성질 때문에 두 attempt 의 관측이 겹치는 것이 정상이라 그 경합이 실재한다.
+        사이에 다른 attempt 가 이 window 를 확정했는지**를 잡는다 — 같은 날짜창을 반복 poll해
+        두 attempt의 관측이 겹치는 것이 정상이라 그 경합이 실재한다.
         예측 규칙은 가격과 같다(claim 이 준 checksum 과 같으면 불변, 다르면 +1).
         """
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
