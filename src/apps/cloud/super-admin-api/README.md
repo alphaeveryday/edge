@@ -91,7 +91,8 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
-  `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514)에 더해
+  `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514)이며, 각 시도의
+  bounded 뉴스 품질 진단을 같은 attempt에 싣는다(ALPHA-1067 — 과거 미계측 시도는 null). 여기에
   **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
   세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)이다. 일별 판정은 날짜별 상세 조회를
   반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다.

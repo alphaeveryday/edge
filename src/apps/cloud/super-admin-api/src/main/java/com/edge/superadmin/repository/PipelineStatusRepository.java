@@ -1,5 +1,7 @@
 package com.edge.superadmin.repository;
 
+import tools.jackson.databind.JsonNode;
+
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -214,10 +216,12 @@ public interface PipelineStatusRepository {
 	 *
 	 * <p>{@code exitCode}는 <b>박스 타입</b>이다. 0 은 성공이고 null 은 모름인데 원시 타입으로
 	 * 받으면 JDBC 가 SQL NULL 을 0 으로 돌려줘 <b>모름이 성공으로 뒤집힌다</b>(ALPHA-182 NULL 계약).
+	 * {@code qualityDiagnostics}는 성공했지만 불완전한 결과의 원인을 그 시도에 고정한다.
 	 */
 	record AttemptStatus(String attemptId, Integer attemptNumber, String ecsTaskArn,
 			String executionStatus, OffsetDateTime startedAt, OffsetDateTime finishedAt,
-			Integer exitCode, String failureReason, String recordSource) {
+			Integer exitCode, String failureReason, String recordSource,
+			JsonNode qualityDiagnostics) {
 	}
 
 	/**

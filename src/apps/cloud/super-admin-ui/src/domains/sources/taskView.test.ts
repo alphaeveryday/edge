@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import type { TaskOutcome, TaskStatus } from './types.ts';
-import { tasksInFocus, taskStatusView } from './taskView.ts';
+import type { QualityDiagnostics, TaskOutcome, TaskStatus } from './types.ts';
+import {
+  attemptNeedsDetail,
+  parseQualityDiagnostics,
+  qualityDiagnosticsSummary,
+  qualityIssueText,
+  tasksInFocus,
+  taskStatusView,
+} from './taskView.ts';
 
 const task = (o: Partial<TaskStatus> = {}): TaskStatus => ({
   stage: 'raw', taskKey: 'collect', dataset: 'price_daily', planStatus: 'DUE', outcome: 'PENDING',
@@ -62,4 +69,70 @@ test('실시간 원장 화면은 재조회 오류만으로 직전 세션 근거�
   const source = readFileSync(new URL('../../pages/SourcesPage.tsx', import.meta.url), 'utf8');
   assert.match(source, /if \(isError && !data\) return <LoadError/, '캐시 data가 있어도 오류 화면으로 바뀐다');
   assert.match(source, /실시간 원장 재조회에 실패했습니다 — 직전 실측을 유지합니다/);
+});
+
+test('성공 시도도 뉴스 진단이 있으면 상세를 열고 모든 판단 근거를 보존한다', () => {
+  const diagnostics: QualityDiagnostics = {
+    schema: 'news_resolution_v1',
+    scope: 'assertion_arguments',
+    metrics: { total: 147, resolved: 95, unresolved: 52 },
+    issues: [{
+      reason: 'instrument_not_found', role: 'ISSUER', expression: '신세계백화점', count: 3,
+      sample: { articleId: 'article-1', title: '신세계백화점 명절선물 기사' },
+    }],
+  };
+  const attempt = {
+    attemptNumber: 2, ecsTaskArn: null, executionStatus: 'SUCCEEDED' as const,
+    startedAt: null, finishedAt: null, exitCode: 0, failureReason: null,
+    recordSource: 'WRAPPER' as const, qualityDiagnostics: diagnostics,
+  };
+
+  assert.equal(attemptNeedsDetail(attempt), true, 'exit 0만 보고 진단 상세를 접으면 안 된다');
+  assert.equal(qualityDiagnosticsSummary(diagnostics), '인자 147 · 해소 95 · 미해소 52');
+  assert.equal(
+    qualityIssueText(diagnostics.issues[0]),
+    '종목 없음 · ISSUER · 신세계백화점 · 3건 · article-1 · 신세계백화점 명절선물 기사',
+  );
+  assert.equal(attemptNeedsDetail({ ...attempt, qualityDiagnostics: null }), false);
+});
+
+test('anchorless 진단과 새 사유 어휘도 손실 없이 표시한다', () => {
+  const diagnostics: QualityDiagnostics = {
+    schema: 'news_resolution_v1',
+    scope: 'anchorless_events',
+    metrics: { events: 167, anchorless: 37, unresolvedArguments: 55 },
+    issues: [],
+  };
+  assert.equal(
+    qualityDiagnosticsSummary(diagnostics),
+    '이벤트 167 · 기준 종목 없음 37 · 미해소 인자 55',
+  );
+  assert.equal(
+    qualityDiagnosticsSummary({ ...diagnostics, metrics: {} }),
+    '이벤트 — · 기준 종목 없음 — · 미해소 인자 —',
+    '결측 지표를 관측된 0으로 만들면 안 된다',
+  );
+  assert.equal(qualityIssueText({
+    reason: 'future_reason', role: 'ISSUER', expression: '표현', count: 1,
+    sample: { articleId: 'article-2', title: '표본' },
+  }), 'future_reason · ISSUER · 표현 · 1건 · article-2 · 표본');
+});
+
+test('비정상 뉴스 진단은 해당 상세에서 격리해 원장 전체 렌더링을 보호한다', () => {
+  const valid: QualityDiagnostics = {
+    schema: 'news_resolution_v1',
+    scope: 'assertion_arguments',
+    metrics: { total: 147, resolved: 95, unresolved: 52 },
+    issues: [{
+      reason: 'instrument_not_found', role: 'ISSUER', expression: '신세계백화점', count: 3,
+      sample: { articleId: 'article-1', title: '표본 기사' },
+    }],
+  };
+  assert.deepEqual(parseQualityDiagnostics(valid), valid);
+  assert.equal(parseQualityDiagnostics({ ...valid, metrics: null }), null);
+  assert.equal(parseQualityDiagnostics({
+    ...valid,
+    issues: [{ ...valid.issues[0], sample: null }],
+  }), null);
+  assert.equal(parseQualityDiagnostics({ ...valid, issues: null }), null);
 });

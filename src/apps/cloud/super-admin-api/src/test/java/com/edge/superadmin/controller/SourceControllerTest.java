@@ -18,6 +18,8 @@ import com.edge.superadmin.support.FakeHoldingsImpactRepository;
 import com.edge.superadmin.support.FakeMinuteStatusRepository;
 import com.edge.superadmin.support.FakeNewsLineageRepository;
 import com.edge.superadmin.support.FakePipelineStatusRepository;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -63,8 +65,28 @@ class SourceControllerTest {
 
 	private static AttemptStatus attempt(int number, String status, Integer exitCode,
 			String failureReason, String recordSource) {
+		return attempt(number, status, exitCode, failureReason, recordSource, null);
+	}
+
+	private static AttemptStatus attempt(int number, String status, Integer exitCode,
+			String failureReason, String recordSource, JsonNode qualityDiagnostics) {
 		return new AttemptStatus("att-" + number, number, "arn:aws:ecs:task/" + number, status,
-				STARTED, FINISHED, exitCode, failureReason, recordSource);
+				STARTED, FINISHED, exitCode, failureReason, recordSource, qualityDiagnostics);
+	}
+
+	private static JsonNode qualityDiagnostics() {
+		var root = JsonNodeFactory.instance.objectNode();
+		root.put("schema", "news_resolution_v1");
+		root.put("scope", "assertion_arguments");
+		root.putObject("metrics").put("total", 147).put("resolved", 95).put("unresolved", 52);
+		var issue = root.putArray("issues").addObject();
+		issue.put("reason", "instrument_not_found");
+		issue.put("role", "ISSUER");
+		issue.put("expression", "신세계백화점");
+		issue.put("count", 3);
+		issue.putObject("sample").put("articleId", "article-1")
+				.put("title", "신세계백화점 명절선물 기사");
+		return root;
 	}
 
 	/**
@@ -88,7 +110,8 @@ class SourceControllerTest {
 				// 실행은 성공인데 데이터는 불완전 — 두 축이 따로 내려가는지 잠근다.
 				new TaskStatus("feature", "TAG_NEWS", "news_assertions", "DUE",
 						"FULFILLED", "INCOMPLETE", null, null, null, null, null, null, null, FINISHED, null,
-						null, List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER")), "att-1")),
+						null, List.of(attempt(1, "SUCCEEDED", 0, null, "WRAPPER",
+								qualityDiagnostics())), "att-1")),
 				List.of(new IssueStatus("LEDGER_GAP", "task", "TAG_NEWS", "OPEN", 3,
 						STARTED, FINISHED, null)));
 	}
@@ -194,6 +217,28 @@ class SourceControllerTest {
 				// 표시용 executionStatus 는 **마지막 원소에서 파생**된다(정의는 한 곳에만 둔다).
 				.andExpect(jsonPath("$.result.tasks[0].executionStatus").value("SUCCEEDED"))
 				.andExpect(jsonPath("$.result.tasks[0].lastFinishedAt").exists());
+	}
+
+	@Test
+	void 성공했지만_불완전한_뉴스_시도의_구조화_진단을_그대로_낸다() throws Exception {
+		// WHY: 뉴스 작업은 exit 0이어도 미해소 인자 때문에 INCOMPLETE다. 진단을 실패 문자열에
+		//      합치거나 task 단위로 옮기면 어느 재시도에서 나온 근거인지 잃는다.
+		mvc(sampleRun()).perform(get("/api/v1/sources/report"))
+				.andExpect(jsonPath("$.result.tasks[2].dataStatus").value("INCOMPLETE"))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.schema")
+						.value("news_resolution_v1"))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.metrics.resolved")
+						.value(95))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.issues[0].reason")
+						.value("instrument_not_found"))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.issues[0].role")
+						.value("ISSUER"))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.issues[0].expression")
+						.value("신세계백화점"))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.issues[0].count")
+						.value(3))
+				.andExpect(jsonPath("$.result.tasks[2].attempts[0].qualityDiagnostics.issues[0].sample.title")
+						.value("신세계백화점 명절선물 기사"));
 	}
 
 	@Test

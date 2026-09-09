@@ -57,6 +57,22 @@ export interface PipelineRun {
 /** 원장 기록 출처. 사후 복구를 정상 계측과 뭉개면 "원장이 스스로 메운 행"이 관측된 실행처럼 보인다. */
 export type RecordSource = 'WRAPPER' | 'RECONCILER_BACKFILL';
 
+export interface QualityDiagnosticIssue {
+  reason: string;
+  role: string;
+  expression: string;
+  count: number;
+  sample: { articleId: string; title: string };
+}
+
+/** producer가 검증해 attempt에 보존한 bounded 뉴스 품질 진단. */
+export interface QualityDiagnostics {
+  schema: string;
+  scope: string;
+  metrics: Record<string, number>;
+  issues: QualityDiagnosticIssue[];
+}
+
 /** 물리 실행 시도 하나. 재시도가 있으면 여러 건이고, 시각 오름차순이라 **마지막이 최신**이다. */
 export interface Attempt {
   /** 표시용. writer 가 안 채울 수 있어 null 가능 */
@@ -69,6 +85,8 @@ export interface Attempt {
   exitCode: number | null;
   failureReason: string | null;
   recordSource: RecordSource | null;
+  /** API와 UI의 독립 배포 구간에는 필드가 아직 없을 수 있다. wire 값은 표시 전에 검증한다. */
+  qualityDiagnostics?: unknown;
 }
 
 /** Planner 기대 ETF 수와 실제 수집 ETF 수의 대조 결과. null 은 "모름"이지 0이 아니다. */

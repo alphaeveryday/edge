@@ -5,6 +5,7 @@ import com.edge.superadmin.repository.PipelineStatusRepository.CompletenessStatu
 import com.edge.superadmin.repository.PipelineStatusRepository.IssueStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.PipelineRunStatus;
 import com.edge.superadmin.repository.PipelineStatusRepository.TaskStatus;
+import tools.jackson.databind.JsonNode;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -69,15 +70,18 @@ public record SourceReportResponse(RunResponse run, List<TaskResponse> tasks,
 		}
 	}
 
-	/** {@code attemptId} 는 싣지 않는다 — 내부 ID 이고 화면이 쓸 일이 없다(운영자 어휘가 아니다). */
+	/**
+	 * {@code attemptId} 는 싣지 않는다 — 내부 ID 이고 화면이 쓸 일이 없다(운영자 어휘가 아니다).
+	 * {@code qualityDiagnostics}는 재시도별 품질 근거라 task로 끌어올리지 않고 해당 시도에 둔다.
+	 */
 	public record AttemptResponse(Integer attemptNumber, String ecsTaskArn, String executionStatus,
 			String startedAt, String finishedAt, Integer exitCode, String failureReason,
-			String recordSource) {
+			String recordSource, JsonNode qualityDiagnostics) {
 
 		public static AttemptResponse from(AttemptStatus a) {
 			return new AttemptResponse(a.attemptNumber(), a.ecsTaskArn(), a.executionStatus(),
 					iso(a.startedAt()), iso(a.finishedAt()), a.exitCode(), a.failureReason(),
-					a.recordSource());
+					a.recordSource(), a.qualityDiagnostics());
 		}
 	}
 

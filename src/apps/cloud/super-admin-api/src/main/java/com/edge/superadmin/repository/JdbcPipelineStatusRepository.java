@@ -1,5 +1,8 @@
 package com.edge.superadmin.repository;
 
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Isolation;
@@ -85,7 +88,7 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 	private static final String ATTEMPTS_SQL = """
 			SELECT a.expected_task_id, a.attempt_id, a.attempt_number, a.ecs_task_arn,
 			       a.execution_status, a.started_at, a.finished_at, a.exit_code,
-			       a.failure_reason, a.record_source
+			       a.failure_reason, a.record_source, a.quality_diagnostics::text AS quality_diagnostics
 			  FROM ops_task_attempt a
 			  JOIN ops_expected_task t ON t.expected_task_id = a.expected_task_id
 			 WHERE t.pipeline_run_id = ?
@@ -168,9 +171,11 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			""";
 
 	private final JdbcTemplate jdbc;
+	private final ObjectMapper mapper;
 
-	public JdbcPipelineStatusRepository(JdbcTemplate jdbc) {
+	public JdbcPipelineStatusRepository(JdbcTemplate jdbc, ObjectMapper mapper) {
 		this.jdbc = jdbc;
+		this.mapper = mapper;
 	}
 
 	@Override
@@ -303,9 +308,23 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 							rs.getObject("finished_at", OffsetDateTime.class),
 							nullableInt(rs, "exit_code"),
 							rs.getString("failure_reason"),
-							rs.getString("record_source")));
+							rs.getString("record_source"),
+							parseQualityDiagnostics(rs)));
 		}, pipelineRunId);
 		return byTask;
+	}
+
+	private JsonNode parseQualityDiagnostics(ResultSet rs) throws SQLException {
+		String json = rs.getString("quality_diagnostics");
+		if (json == null) {
+			return null;
+		}
+		try {
+			return mapper.readTree(json);
+		} catch (JacksonException e) {
+			throw new IllegalStateException("quality_diagnostics 파싱 실패 — attempt "
+					+ rs.getString("attempt_id"), e);
+		}
 	}
 
 	private record RunRow(String pipelineRunId, String runKey, String launchStatus,

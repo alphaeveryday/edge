@@ -54,7 +54,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/overview` | 레인 원장 요약 (구 첫 화면) — **은퇴**(라우트·컴포넌트만 존치). 개요는 자기 질문("지금 정상인가")에 답할 수 없어 메뉴에서 뺐다 |
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
 | `/tenants/:id` | 테넌트 상세 (기본 정보 · 연결 상태 · 24H 호출 바 차트) |
-| `/sources` | 데이터 소스 수집 상태 |
+| `/sources` | 데이터 소스 수집 상태 (재시도별 뉴스 해소 지표·상위 미해소 사유와 표본 포함) |
 | `/grid` | 파이프라인 실행 이력 (데이터셋×날짜 수집 격자 + 별도 장중 분석 귀결 30일 스트립 — 선택 날짜의 결과 흐름과 벤더 세션·창 증거를 서로 다른 축으로 드릴다운) |
 | `/minute` | 장중 1분 수집 (세션 생존·창 집계·결손 창 목록 — 무증거 vs 빈 데이터 구분, ALPHA-651) |
 | `/lineage/news` | 뉴스 계보 (funnel 타일 N/M%+(i) 산출 정의·단계 필터·언론사·원문 링크·1분 추출 요약 — ALPHA-685·697) |
@@ -97,7 +97,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `styles/` 5 | ops·grid·minute·info-popover·mock-preview |
 | `pages/_shared/` | `InfoPopover`(portal 팝오버 — 포커스·Escape 처리) · `MockPreview` |
 | `mock/preview.ts` | 실 데이터 0건일 때 화면을 검수하는 미리보기 픽스처. `mock/preview.test.ts` 가 **서버가 낼 수 있는 응답인가**를 고정한다 |
-| `domains/sources/` 파생 7 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteHistory`(선택 날짜 조회 상태 + 날짜별 캐시 선택) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤) |
+| `domains/sources/` 파생 7 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteHistory`(선택 날짜 조회 상태 + 날짜별 캐시 선택) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤 + 뉴스 품질 진단 검증·표시) |
 | `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
 | `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
 | `pages/ops/` 판정 11 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4·ALPHA-979 조각 1·ALPHA-1003). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `chainView`(장중 갈래가 입구에서 사라졌는가 — **관측 결과이지 축의 유무가 아니다**) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기, 엔티티 해소율 60% 미만 주황) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
