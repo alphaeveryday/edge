@@ -21,6 +21,8 @@ import time
 import urllib.error
 import urllib.request
 
+from ..failures import SafeFailureError
+
 RETRY_BACKOFF_SEC = [1, 2, 4]
 
 
@@ -109,9 +111,8 @@ class PoliteClient:
 
         - method/headers/data 로 GET·POST·커스텀 헤더를 표현한다(data 있으면 POST 본문).
         - decode=True 면 UTF-8 문자열, False 면 원본 bytes 를 돌려준다(바이너리 ZIP 등).
-        재시도 소진은 RuntimeError. 4xx/429 는 재시도·격리 대상이 아니라 즉시 StopFetch.
+        재시도 소진은 SafeFailureError. 4xx/429 는 재시도·격리 대상이 아니라 즉시 StopFetch.
         """
-        last_exc: Exception | None = None
         for backoff in [0, *RETRY_BACKOFF_SEC]:
             if backoff:
                 self._sleep(backoff)
@@ -130,16 +131,18 @@ class PoliteClient:
                     except Exception:
                         detail = ""  # 본문을 못 읽어도 중단 자체는 그대로 진행한다
                     raise StopFetch(
-                        f"HTTP {exc.code}: 수집 중단 {detail}".rstrip(),
+                        f"HTTP {exc.code}: 수집 중단",
                         status=exc.code, body=detail,
                     ) from exc
-                last_exc = exc  # 5xx → 재시도
-            except (urllib.error.URLError, TimeoutError) as exc:
-                last_exc = exc
-        raise RuntimeError(f"{method} 재시도 소진: {last_exc}")
+                pass  # 5xx → 재시도
+            except (urllib.error.URLError, TimeoutError):
+                pass  # 네트워크 실패 → 재시도
+        # 원본 예외 문자열에는 URL·프록시 자격증명 등이 들어갈 수 있다. 호출자는 고정 코드로
+        # 일시 장애를 분류하고 원문은 현재 traceback 밖으로 전달하지 않는다(ALPHA-1064).
+        raise SafeFailureError("NETWORK_RETRY_EXHAUSTED")
 
     def get(self, url: str, *, accept: str = "application/json") -> str:
-        """GET 후 본문 문자열 반환. 4xx/429 는 StopFetch, 재시도 소진은 RuntimeError."""
+        """GET 후 본문 문자열 반환. 4xx/429 는 StopFetch, 재시도 소진은 SafeFailureError."""
         body = self.request("GET", url, headers={"Accept": accept}, decode=True)
         assert isinstance(body, str)  # decode=True 라 항상 str
         return body

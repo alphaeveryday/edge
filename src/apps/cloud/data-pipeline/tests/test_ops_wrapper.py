@@ -344,6 +344,10 @@ def test_step_exception_closes_the_attempt_instead_of_leaving_it_running():
                            ecs_task_arn="arn:task/1")
     assert len(db.attempts) == 1
     assert db.attempts[0]["status"] == states.EXEC_FAILED     # RUNNING 으로 안 남는다
+    assert db.attempts[0]["failure_reason"] == (
+        "[원인 미분류] UNHANDLED_EXCEPTION · 처리되지 않은 예외"
+    )
+    assert "--from" not in db.attempts[0]["failure_reason"]  # 예외 원문은 장기 보존하지 않는다
     assert db.etasks_by_id["et1"]["task_outcome"] == states.OUTCOME_FAILED
     assert db.etasks_by_id["et1"]["data_status"] == states.DATA_UNKNOWN
 
@@ -580,6 +584,26 @@ def test_stale_attempt_cannot_store_unsupported_records():
         },
     )
     assert db.etasks_by_id["et1"]["unsupported_records"] is None
+
+
+def test_stale_attempt_cannot_supply_failure_reason():
+    # WHY(ALPHA-1064): 겹친 동일 run 재시도가 공유 로그를 덮어도 다른 ECS attempt의 인증
+    # 사유를 현재 시도에 붙이면 안 된다. 정확한 attempt ID가 다르면 generic으로 강등한다.
+    db = FakeOpsDB()
+    _seed(db, task_key="ETF_HOLDINGS_COLLECTION_KRX")
+    wrapper.instrument(
+        lambda: 1, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/current",
+        observe_data_fn=lambda ec: {
+            "records_out": 0, "failed_records": 0,
+            "ops_attempt_id": "other-attempt",
+            "failure": {
+                "category": "AUTHENTICATION", "code": "KRX_CD010",
+                "summary": "KRX 패스워드 변경 필요",
+            },
+        },
+    )
+    assert db.attempts[-1]["failure_reason"] == "step_nonzero_exit"
 
 
 def test_instrument_scopes_attempt_marker_to_the_wrapped_run(monkeypatch):

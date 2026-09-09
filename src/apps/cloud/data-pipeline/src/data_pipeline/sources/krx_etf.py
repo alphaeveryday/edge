@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 
 from ..config import KrxEtfSource as KrxEtfSourceConfig
+from ..failures import SafeFailureError
 from ..ops.trading_calendar import latest_kr_trading_day
 from .http import PoliteClient, StopFetch
 from .krx_auth import USER_AGENT, KrxAuth
@@ -141,8 +142,8 @@ class KrxEtfSource:
 
         로그인은 run 당 1회 — 실패는 소스 전체 문제(자격증명·중복세션)라 격리하지 않고 예외로
         올린다(스텝이 error 로 드러냄). ETF 단위 실패(요청 실패·깨진 JSON·이상 응답·빈 output)는
-        격리·기록하고 남은 ETF 를 계속 수집한다. StopFetch(4xx/429 — 미로그인 400 LOGOUT 포함)만
-        소스 전체를 중단한다(세션·쿼터 문제라 재시도·격리 대상이 아니다).
+        격리·기록하고 남은 ETF 를 계속 수집한다. 4xx/429는 소스 전체를 중단하며, KRX의
+        미로그인 400 LOGOUT은 운영 조치가 보이도록 안전한 인증 실패로 변환한다.
         """
         self.fetch_failures = []
         plan = self.plan()
@@ -164,8 +165,15 @@ class KrxEtfSource:
                 return
             try:
                 yield from self._fetch_etf(our_etf_id, isin, trd_dd, jsessionid, fetched_at)
-            except StopFetch:
-                raise  # 4xx/429(미로그인 LOGOUT 포함) 는 소스 전체 문제 — 중단이 맞다
+            except StopFetch as exc:
+                # KRX holdings 는 인증되지 않은 세션을 HTTP 400 + 본문 `LOGOUT`으로
+                # 알린다. status만 일반 4xx로 축약하면 운영자가 요청 오류로 오인하므로,
+                # 이 벤더 고유 신호만 고정 인증 코드로 바꾸고 본문은 전달하지 않는다.
+                if exc.status == 400 and exc.body.strip() == "LOGOUT":
+                    raise SafeFailureError("KRX_SESSION_REJECTED") from None
+                raise  # 나머지 4xx/429는 소스 전체 문제 — 중단이 맞다
+            except SafeFailureError:
+                raise  # 재시도 소진은 공급자 전체 장애 — partial 로 격리하지 않는다
             except Exception as exc:
                 # 요청 실패·깨진 JSON·이상/빈 응답은 ETF 단위로 격리 — 남은 ETF 계속.
                 self._note_failure(isin, our_etf_id, str(exc))

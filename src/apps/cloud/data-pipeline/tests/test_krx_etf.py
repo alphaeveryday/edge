@@ -12,6 +12,7 @@ from datetime import date, datetime
 import pytest
 
 from data_pipeline.config import KrxEtfSource as KrxEtfSourceConfig
+from data_pipeline.failures import SafeFailureError
 from data_pipeline.sources.http import StopFetch
 from data_pipeline.sources.krx_etf import KST, KrxEtfSource, _as_of, _short_code
 
@@ -165,12 +166,38 @@ def test_malformed_row_skipped_others_preserved():
     assert len(rows) == 1 and len(src.fetch_failures) == 2
 
 
-def test_stopfetch_aborts_whole_source():
-    # WHY: 4xx/429(미로그인 400 LOGOUT 포함)는 세션·쿼터 문제라 ETF 단위 격리 대상이
-    #      아니다 — 소스 전체를 중단해야 한다.
-    src = _source({"KR7069500007": StopFetch("400 LOGOUT")})
+def test_krx_logout_aborts_as_safe_authentication_failure():
+    # WHY(ALPHA-1064): holdings API는 인증되지 않은 세션을 400 LOGOUT으로 반환한다.
+    #      일반 400 공급자 오류로 보이면 패스워드/세션 조치가 가려지고, 원문을 전달하면
+    #      안전 요약 계약이 깨지므로 KRX 고정 인증 코드로만 올린다.
+    src = _source({"KR7069500007": StopFetch(
+        "HTTP 400: 수집 중단", status=400, body="LOGOUT"
+    )})
+    with pytest.raises(SafeFailureError) as caught:
+        list(src.fetch())
+    assert caught.value.detail() == {
+        "category": "AUTHENTICATION", "code": "KRX_SESSION_REJECTED",
+        "summary": "KRX 세션 인증 거부",
+    }
+
+
+def test_non_logout_stopfetch_still_aborts_whole_source():
+    # WHY: LOGOUT이 아닌 4xx/429는 KRX 인증으로 단정하지 않고 원래 중단 신호를 보존한다.
+    src = _source({"KR7069500007": StopFetch(
+        "HTTP 400: 수집 중단", status=400, body='{"error":"bad request"}'
+    )})
     with pytest.raises(StopFetch):
         list(src.fetch())
+
+
+def test_network_retry_exhaustion_aborts_whole_source_as_transient():
+    # WHY(ALPHA-1064): 전송 계층의 재시도 소진을 ETF 격리 실패로 바꾸면 TRANSIENT가
+    # PARTIAL로 변질된다. 운영 재시도 판단에 쓰는 안전 분류를 스텝까지 보존한다.
+    src = _source({"KR7069500007": SafeFailureError("NETWORK_RETRY_EXHAUSTED")})
+    with pytest.raises(SafeFailureError) as caught:
+        list(src.fetch())
+    assert caught.value.detail()["category"] == "TRANSIENT"
+    assert src.fetch_failures == []
 
 
 def test_disabled_without_credentials():

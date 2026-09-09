@@ -8,6 +8,7 @@ import json
 import logging
 
 from data_pipeline.config import EtfSource, load_settings
+from data_pipeline.failures import SafeFailureError
 from data_pipeline.sources.etf import FmpEtfSource
 from data_pipeline.lake import LocalStorage
 from data_pipeline.steps import ingest_raw_etf
@@ -140,6 +141,9 @@ def test_all_etfs_failing_marks_run_error(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "error"
     assert log["records_failed_etfs"] == 2
+    assert log["ops"]["failure"] == {
+        "category": "UNKNOWN", "code": "COLLECTION_FAILED", "summary": "수집 실패",
+    }
 
 
 def test_partial_failure_marks_run_partial(tmp_path):
@@ -151,7 +155,55 @@ def test_partial_failure_marks_run_partial(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "partial"
     assert log["records_saved"] == 1 and log["records_failed_etfs"] == 1
+    assert log["ops"]["failure"] == {
+        "category": "PARTIAL", "code": "PARTIAL_COLLECTION",
+        "summary": "일부 대상 수집 실패",
+    }
     assert log["ops"]["received_count"] == 1
+
+
+def test_safe_auth_failure_is_structured_without_raw_response(tmp_path, monkeypatch):
+    # WHY(ALPHA-1064): KRX CD010이 generic exit로만 보이던 실제 경로다. producer가 안전한
+    # 구조를 collection_log에 실어 observer가 attempt 상세로 전달할 수 있어야 한다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = FmpEtfSource(
+        EtfSource(base_url=settings.etf.source.base_url, api_key="k", etf_map={"SPY": "SPY"}),
+        FakeClient({}),
+    )
+    source.fetch = lambda: (_ for _ in ()).throw(SafeFailureError("KRX_CD010"))
+    monkeypatch.setenv("OPS_LEDGER_ATTEMPT_ID", "attempt-current")
+
+    assert ingest_raw_etf.run(settings, storage, source, "20260703T000000Z") == 1
+    raw_log = storage.get_bytes(storage.list_keys("operations_archive")[0])
+    log = json.loads(raw_log)
+    assert log["ops"]["failure"] == {
+        "category": "AUTHENTICATION", "code": "KRX_CD010",
+        "summary": "KRX 패스워드 변경 필요",
+    }
+    assert log["ops_attempt_id"] == "attempt-current"
+    assert b"MBR_NO" not in raw_log
+
+
+def test_transient_failure_is_distinct_from_auth_and_partial(tmp_path):
+    # WHY(ALPHA-1064): 운영자는 자격증명을 고칠지 재시도할지 화면에서 결정해야 하므로
+    # 네트워크 재시도 소진을 인증/부분 실패와 같은 코드로 뭉개면 안 된다.
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    source = FmpEtfSource(
+        EtfSource(base_url=settings.etf.source.base_url, api_key="k", etf_map={"SPY": "SPY"}),
+        FakeClient({}),
+    )
+    source.fetch = lambda: (_ for _ in ()).throw(
+        SafeFailureError("NETWORK_RETRY_EXHAUSTED")
+    )
+
+    assert ingest_raw_etf.run(settings, storage, source, "20260703T000000Z") == 1
+    log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
+    assert log["ops"]["failure"] == {
+        "category": "TRANSIENT", "code": "NETWORK_RETRY_EXHAUSTED",
+        "summary": "네트워크 요청 재시도 소진",
+    }
 
 
 def test_error_object_response_is_failure(tmp_path):
@@ -197,7 +249,9 @@ def test_raw_write_failure_still_writes_collection_log(tmp_path):
     assert code == 1
     [log_key] = storage.list_keys("operations_archive")
     log = json.loads(storage.get_bytes(log_key))
-    assert log["status"] == "error" and "denied" in log["error"]
+    assert log["status"] == "error"
+    assert log["ops"]["failure"]["code"] == "STORAGE_WRITE_FAILED"
+    assert "denied" not in log["error"]
 
 
 def test_disabled_source_skips_with_log(tmp_path):
@@ -302,7 +356,9 @@ def test_unexpected_failure_still_writes_log(tmp_path):
 
     assert code == 1
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
-    assert log["status"] == "error" and "boom" in log["error"]
+    assert log["status"] == "error"
+    assert log["ops"]["failure"]["code"] == "COLLECTION_FAILED"
+    assert "boom" not in log["error"]
 
 
 def test_disabled_skip_survives_log_write_failure(tmp_path):

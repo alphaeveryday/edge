@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from ..config import EtfSource
+from ..failures import SafeFailureError
 from .fmp import market_for  # KR/US 분류는 FMP 벤더 무관 공통 규약 — 재정의하지 않는다
 from .http import PoliteClient, StopFetch
 
@@ -91,6 +92,8 @@ class FmpEtfSource:
                 yield from self._fetch_etf(our_etf_id, fmp_symbol, fetched_at)
             except StopFetch:
                 raise  # 4xx/429 는 소스 전체 문제(키·쿼터) — 중단이 맞다
+            except SafeFailureError:
+                raise  # 재시도 소진은 공급자 전체 장애 — partial 로 격리하지 않는다
             except Exception as exc:
                 # 요청 실패·깨진 JSON·비배열/빈 응답은 ETF 단위로 격리 — 남은 ETF 계속.
                 self._note_failure(fmp_symbol, our_etf_id, str(exc))

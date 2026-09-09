@@ -6,10 +6,13 @@ fail-loud, 성공은 승격 JSESSIONID 를 정확히 돌려주는지 검증한�
 """
 
 import json
+import traceback
+import urllib.error
 import urllib.request
 
 import pytest
 
+from data_pipeline.failures import SafeFailureError
 from data_pipeline.sources import krx_auth
 from data_pipeline.sources.krx_auth import KrxAuth
 
@@ -78,6 +81,158 @@ def test_duplicate_login_fails_loud(monkeypatch):
            [_FakeCookie("JSESSIONID", "X")])
     with pytest.raises(RuntimeError, match="CD011"):
         KrxAuth("id", "pw").session()
+
+
+def test_live_password_change_response_drops_account_fields(monkeypatch):
+    # WHY(ALPHA-1064): 실응답은 _error_message와 함께 MBR_NO를 보낸다. 예외 문자열을 그대로
+    # collection_log에 쓰는 경로에서 계정 식별자가 장기 보존됐으므로 허용 코드만 남겨야 한다.
+    sensitive = "account-identifier-must-not-leak"
+    _patch(monkeypatch, {
+        "previousMemberYn": False,
+        "MDC_MBR_TP_CD": "P",
+        "MBR_NO": sensitive,
+        "_error_code": "CD010",
+        "_error_message": "패스워드 변경 필요",
+    }, [_FakeCookie("JSESSIONID", "X")])
+
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail() == {
+        "category": "AUTHENTICATION",
+        "code": "KRX_CD010",
+        "summary": "KRX 패스워드 변경 필요",
+    }
+    assert sensitive not in str(caught.value)
+
+
+def test_malformed_login_response_drops_response_detail(monkeypatch):
+    # WHY(ALPHA-1064): JSON 파싱 예외는 원문 일부를 traceback에 싣는다. 로그인 응답에는
+    #      계정 식별자가 있을 수 있으므로 malformed 응답도 고정 코드 외 내용은 남기지 않는다.
+    secret = "MBR_NO=account-identifier-must-not-leak"
+
+    class MalformedOpener:
+        def open(self, req, timeout=None):
+            return _Resp(b"" if req.data is None else ("{" + secret).encode())
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: MalformedOpener())
+    monkeypatch.setattr(krx_auth, "CookieJar", lambda: [_FakeCookie("JSESSIONID", "X")])
+
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail()["code"] == "KRX_LOGIN_REJECTED"
+    assert secret not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize("error_code", [{"unexpected": "shape"}, ["CD010"]])
+def test_non_string_login_error_code_is_safe_rejection(monkeypatch, error_code):
+    # WHY(ALPHA-1064): 스키마 드리프트로 코드가 객체/배열이면 허용 목록 비교가 TypeError를
+    #      내 generic 수집 실패로 숨겨질 수 있다. 형식이 틀려도 로그인 거부로 안전하게 닫는다.
+    _patch(monkeypatch, {"_error_code": error_code}, [_FakeCookie("JSESSIONID", "X")])
+
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail()["code"] == "KRX_LOGIN_REJECTED"
+
+
+def test_login_network_failure_is_classified_without_exception_detail(monkeypatch):
+    # WHY(ALPHA-1064): 인증 거부와 일시 네트워크 장애는 운영 대응이 다르다. URL/프록시가
+    # 들어갈 수 있는 URLError 원문은 버리고 재시도 소진 분류만 전달한다.
+    secret = "proxy-password=sensitive"
+
+    calls = 0
+
+    class FailingOpener:
+        def open(self, req, timeout=None):
+            nonlocal calls
+            calls += 1
+            raise urllib.error.URLError(secret)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: FailingOpener())
+    monkeypatch.setattr(krx_auth.time, "sleep", lambda _: None)
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail()["category"] == "TRANSIENT"
+    assert calls == 4
+    assert secret not in str(caught.value)
+    assert secret not in "".join(traceback.format_exception(caught.value))
+
+
+def test_login_retries_5xx_then_succeeds(monkeypatch):
+    # WHY(ALPHA-1064): KRX 로그인 5xx는 자격증명 거부가 아니라 일시 장애다. 첫 GET이
+    #      복구되면 같은 cookiejar 흐름에서 POST까지 진행해 정상 세션을 돌려줘야 한다.
+    sleeps = []
+
+    class FlakyOpener:
+        def __init__(self):
+            self.calls = 0
+
+        def open(self, req, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise urllib.error.HTTPError(req.full_url, 503, "secret", {}, None)
+            if req.data is None:
+                return _Resp(b"")
+            return _Resp(b'{"_error_code":"CD001"}')
+
+    opener = FlakyOpener()
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: opener)
+    monkeypatch.setattr(krx_auth, "CookieJar", lambda: [_FakeCookie("JSESSIONID", "RECOVERED")])
+    monkeypatch.setattr(krx_auth.time, "sleep", sleeps.append)
+
+    assert KrxAuth("id", "pw").session() == "RECOVERED"
+    assert opener.calls == 3
+    assert sleeps == [1]
+
+
+def test_login_5xx_exhaustion_is_transient_without_response_detail(monkeypatch):
+    # WHY: 5xx가 계속되면 일반 공급자 요청 거부로 굳히지 않고, 제한 재시도 소진이라는
+    #      고정 일시 장애만 남겨 운영 재시도 판단과 민감한 응답 분리를 함께 지킨다.
+    secret_url = "https://user:token@data.krx.example/login"
+    calls = 0
+
+    class FailingOpener:
+        def open(self, req, timeout=None):
+            nonlocal calls
+            calls += 1
+            raise urllib.error.HTTPError(secret_url, 503, "secret response", {}, None)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: FailingOpener())
+    monkeypatch.setattr(krx_auth.time, "sleep", lambda _: None)
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail() == {
+        "category": "TRANSIENT", "code": "NETWORK_RETRY_EXHAUSTED",
+        "summary": "네트워크 요청 재시도 소진",
+    }
+    assert calls == 4
+    assert secret_url not in "".join(traceback.format_exception(caught.value))
+
+
+def test_login_http_forbidden_is_auth_without_response_detail(monkeypatch):
+    # WHY(ALPHA-1064): HTTPError는 URLError의 하위 타입이다. 403을 일시 장애로 잡으면
+    # 운영자가 자격증명 문제에 무의미한 재시도를 하므로 인증 실패로 분리해야 한다.
+    secret_url = "https://user:token@data.krx.example/login"
+
+    class FailingOpener:
+        def open(self, req, timeout=None):
+            raise urllib.error.HTTPError(secret_url, 403, "secret response", {}, None)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: FailingOpener())
+    with pytest.raises(SafeFailureError) as caught:
+        KrxAuth("id", "pw").session()
+
+    assert caught.value.detail() == {
+        "category": "AUTHENTICATION",
+        "code": "HTTP_FORBIDDEN",
+        "summary": "공급자 접근 거부",
+    }
+    assert secret_url not in str(caught.value)
+    assert secret_url not in "".join(traceback.format_exception(caught.value))
 
 
 def test_success_without_cookie_fails_loud(monkeypatch):
