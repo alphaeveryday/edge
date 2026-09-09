@@ -258,6 +258,12 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 				"2026-07-27T08:05:00Z");
 		insertAttempt("a3b", "t3", "arn:aws:ecs:task/3b", "2026-07-27T08:30:00Z",
 				"2026-07-27T08:25:00Z");
+		jdbc.update("UPDATE ops_task_attempt SET quality_diagnostics=?::jsonb WHERE attempt_id='a3b'",
+				"{\"schema\":\"news_resolution_v1\",\"scope\":\"assertion_arguments\","
+						+ "\"metrics\":{\"total\":2,\"resolved\":1,\"unresolved\":1},"
+						+ "\"issues\":[{\"reason\":\"instrument_not_found\",\"role\":\"ISSUER\","
+						+ "\"expression\":\"신세계백화점\",\"count\":1,"
+						+ "\"sample\":{\"articleId\":\"article-1\",\"title\":\"표본 기사\"}}]}");
 		jdbc.update("UPDATE ops_task_attempt SET exit_code=1, failure_reason=?, "
 				+ "record_source='RECONCILER_BACKFILL' WHERE attempt_id='a3a'", "ecs exit 1");
 
@@ -272,6 +278,8 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		// 원장이 스스로 메운 행과 실제 관측된 실행을 가르는 유일한 신호다.
 		assertThat(attempts.getFirst().recordSource()).isEqualTo("RECONCILER_BACKFILL");
 		assertThat(attempts.getLast().recordSource()).isEqualTo("WRAPPER");
+		assertThat(attempts.getLast().qualityDiagnostics().path("issues").get(0)
+				.path("expression").asText()).isEqualTo("신세계백화점");
 		assertThat(run.tasks().getFirst().currentAttempt().finishedAt().toInstant())
 				.isEqualTo(java.time.Instant.parse("2026-07-27T08:30:00Z"));
 	}

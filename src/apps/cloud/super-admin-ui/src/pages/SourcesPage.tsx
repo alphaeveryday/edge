@@ -15,7 +15,14 @@ import type {
 import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
 import { datasetKind, gapRuns, isPollLane, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
-import { tasksInFocus, taskStatusView } from '../domains/sources/taskView';
+import {
+  attemptNeedsDetail,
+  parseQualityDiagnostics,
+  qualityDiagnosticsSummary,
+  qualityIssueText,
+  tasksInFocus,
+  taskStatusView,
+} from '../domains/sources/taskView';
 import { MOCK_REPORT, mockReportForRun } from '../mock/preview';
 import { useConsoleEvaluation } from './ops/shared';
 import { incidentHref, incidentOfVid, REALTIME_DATASETS } from './ops/investigation';
@@ -101,19 +108,6 @@ function clock(iso: string | null) {
 const BACKFILL = 'RECONCILER_BACKFILL';
 
 /**
- * 이 시도가 "그냥 잘 된 것"인가. 아니면 상세 줄에 펼쳐 보여줄 사유가 있다는 뜻이다.
- * exit_code 는 **null(모름)을 성공으로 치지 않는다** — 0 일 때만 성공이다.
- */
-function isClean(a: Attempt) {
-  return (
-    a.executionStatus === 'SUCCEEDED' &&
-    a.exitCode === 0 &&
-    a.failureReason === null &&
-    a.recordSource !== BACKFILL
-  );
-}
-
-/**
  * 상세 줄을 펼칠 가치가 있는 작업인가.
  *
  * 25행 전부에 시각을 늘어놓으면 예외가 묻힌다 — `expected_at`·`deadline_at` 은 Planner 가 **모든**
@@ -123,7 +117,7 @@ function isClean(a: Attempt) {
 function hasDetail(task: TaskStatus) {
   return (
     task.attempts.length > 1 ||
-    task.attempts.some((a) => !isClean(a)) ||
+    task.attempts.some(attemptNeedsDetail) ||
     task.missedAt !== null ||
     task.skipReason !== null ||
     task.outcomeReason !== null
@@ -143,12 +137,37 @@ function AttemptLine({ attempt, index }: { attempt: Attempt; index: number }) {
   const id = taskId(attempt.ecsTaskArn);
   return (
     <span style={{ display: 'block' }}>
-      {`#${attempt.attemptNumber ?? index + 1} ${attempt.executionStatus} · ${span}`}
-      {/* exit_code 는 null 이면 "모름"이다 — 0(성공)으로 메우지 않는다 */}
-      {attempt.exitCode !== null && ` · exit ${attempt.exitCode}`}
-      {attempt.recordSource === BACKFILL && ' · 사후 복구 기록'}
-      {attempt.failureReason && ` · ${attempt.failureReason}`}
-      {id && ` · task ${id}`}
+      <span style={{ display: 'block' }}>
+        {`#${attempt.attemptNumber ?? index + 1} ${attempt.executionStatus} · ${span}`}
+        {/* exit_code 는 null 이면 "모름"이다 — 0(성공)으로 메우지 않는다 */}
+        {attempt.exitCode !== null && ` · exit ${attempt.exitCode}`}
+        {attempt.recordSource === BACKFILL && ' · 사후 복구 기록'}
+        {attempt.failureReason && ` · ${attempt.failureReason}`}
+        {id && ` · task ${id}`}
+      </span>
+      {attempt.qualityDiagnostics != null && (
+        <QualityDiagnosticsDetail value={attempt.qualityDiagnostics} />
+      )}
+    </span>
+  );
+}
+
+function QualityDiagnosticsDetail({ value }: { value: unknown }) {
+  const diagnostics = parseQualityDiagnostics(value);
+  return (
+    <span style={{ display: 'block', paddingLeft: 12, marginTop: 2 }}>
+      {diagnostics === null ? (
+        <span style={{ display: 'block' }}>뉴스 해소 진단 · 표시할 수 없는 형식</span>
+      ) : (
+        <>
+          <span style={{ display: 'block' }}>{`뉴스 해소 진단 · ${qualityDiagnosticsSummary(diagnostics)}`}</span>
+          {diagnostics.issues.map((issue, index) => (
+            <span key={`${issue.reason}:${issue.role}:${issue.expression}:${index}`} style={{ display: 'block' }}>
+              {qualityIssueText(issue)}
+            </span>
+          ))}
+        </>
+      )}
     </span>
   );
 }
