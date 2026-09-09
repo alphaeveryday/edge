@@ -86,18 +86,18 @@ test('실시간 데이터셋이 작업→데이터셋 역인덱스를 오염시�
   }
 });
 
-test('종료된 공시 1분 레인은 현재 운영 중인 일배치 공시와 혼동되지 않는다', () => {
-  const historical = ALL_DATASETS.find((d) => d.id === 'disclosure_minute');
-  const current = ALL_DATASETS.find((d) => d.id === 'disclosures');
-  assert.ok(historical && current, '공시의 과거 실시간 축과 현재 일배치 축이 모두 있어야 한다');
-  assert.match(historical.label, /종료/, '과거 세션 조회 행이 현재 실시간 수집처럼 보인다');
-  assert.match(historical.cadence.label, /현재 종료/, '주기 설명이 현재 poll 동작을 암시한다');
-  assert.match(historical.elsewhere?.label ?? '', /과거/, '상세 링크가 현재 세션으로 오인된다');
+test('공시는 현재 실시간 원장만 가리킨다 — 은퇴한 18:10 배치 행을 남기지 않는다', () => {
+  const realtime = ALL_DATASETS.find((d) => d.id === 'disclosure_minute');
+  const retiredBatch = ALL_DATASETS.find((d) => d.id === 'disclosures');
+  assert.ok(realtime, '현재 공시 1분 세션 행이 있어야 한다');
+  assert.equal(retiredBatch, undefined, '은퇴한 공시 배치 행이 유령 상태를 그리면 안 된다');
+  assert.equal(kindOf(realtime), '실시간');
+  assert.doesNotMatch(realtime.label, /종료/, '현재 실시간 공시를 종료된 레인으로 표시한다');
+  assert.match(realtime.cadence.label, /1분 poll/, '현재 poll 주기를 화면에서 알 수 있어야 한다');
+  assert.equal(realtime.elsewhere?.label, '실시간 세션');
   const gridPage = readFileSync(new URL('../../pages/GridPage.tsx', import.meta.url), 'utf8');
   assert.match(gridPage, /\{detailLabel\} (?:날짜 )?상세 →/,
-    '카탈로그의 과거 표기가 실제 상세 링크에 렌더링되지 않는다');
-  assert.equal(kindOf(current), '일배치', '현재 공시 주 경로가 일배치여야 한다');
-  assert.doesNotMatch(current.label, /종료/, '현재 공시 배치까지 종료된 것으로 보인다');
+    '카탈로그의 현재 세션 표기가 실제 상세 링크에 렌더링되지 않는다');
 });
 
 test('배치 데이터셋은 반드시 격자에 있고 작업이 매여 있다', () => {

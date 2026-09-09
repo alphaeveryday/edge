@@ -321,14 +321,14 @@ test('격자 슬롯은 그 레인의 ops 작업을 전부 담는다 — 일부�
 });
 
 test('픽스처가 안 담은 레인을 드러낸다 — 조용히 빠지면 그 화면이 없는 줄 모른다', () => {
-  /* 격자 픽스처는 etf-daily·news만 담고 disclosure·investor-intraday는 담지 않는다.
+  /* 격자 픽스처는 etf-daily·news만 담고 investor-intraday는 담지 않는다.
    * 불가능한 조합은 아니지만(그 레인 런이 없던 날일 수 있다) **검수 공백**이다 —
    * 여기서 이름을 불러 두면 다음 사람이 "없다"를 "안 만든다"로 읽지 않는다. */
   const inFixture = new Set(MOCK_GRID.slots.map((s) => s.runKey.split(':')[0]));
   const missing = [...OPS_BY_LANE.keys()].filter((l) => !inFixture.has(l));
   assert.deepEqual(
     missing,
-    ['disclosure', 'investor-intraday'],
+    ['investor-intraday'],
     '안 담은 레인 목록이 바뀌었다 — 의도인지 확인하라',
   );
 });
