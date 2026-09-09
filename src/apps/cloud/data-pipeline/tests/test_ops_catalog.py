@@ -45,7 +45,6 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         "NORMALIZE_INVESTOR", "LOAD_ETF_FLOW",
         "NORMALIZE_ETF_NAV", "LOAD_ETF_NAV",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
-        "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
     assert all(
@@ -80,10 +79,13 @@ _NOT_INSTRUMENTED = {
     "CollectFmpEtf": "FMP bandwidth 한도 소진 → SFN 토글 off",
     "CollectDartFinancial": "하류 소비자 0(financial_statements 를 읽는 정제·적재·분석 없음) — "
                             "대응할 이유 없는 실패 경보가 되므로 등록 보류",
+    "CollectDartDisclosure": "ALPHA-1068 증분 1분 원장이 소유 — batch scheduler와 기대 슬롯 off",
+    "NormalizeDisclosure": "ALPHA-1068 증분 1분 worker 체인과 minute window가 관측",
+    "NormalizeDisclosureSegment": "ALPHA-1068 증분 1분 worker 체인과 minute window가 관측",
+    "LoadDisclosure": "ALPHA-1068 증분 1분 worker 체인과 minute window가 관측",
     # AnalyzeOne 은 ALPHA-806 에서 state 자체가 사라졌다(analyze 페이즈 제거) — 설명은
     # SFN 스텝이 아니라 분봉 트리거 큐 상주 소비자가 만든다. 제외 목록에서도 뺀다.
-    # 공시 4state 는 875 가 여기(1분 레인 소유) 두었다가 987 이 저녁 배치로 되돌리며
-    # **다시 등록됐다** — 이 목록에 없다.
+    # batch rollback 때는 scheduler와 catalog 네 엔트리를 함께 복원한다.
 }
 
 
@@ -210,14 +212,11 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 안 줄어야 맞다(그 구분을 이 절이 든다).
     # 30 → 26(ALPHA-875): 공시 4작업이 SFN 원장을 떠났었다(1분 세션이 소유). 724 는 레인 간
     # 이동이라 총계가 그대로였고, 769 는 신설이라 늘었고, 875 는 떠나서 줄었다.
-    # 26 → 30(ALPHA-987): 그 4작업이 **저녁 배치(18:10 1슬롯)로 돌아왔다** — 875 의 dev
-    # 되돌림이다. 이 복원은 `disclosure_schedule_state=ENABLED` ·
-    # `minute_session_disclosure_source_group=""` 와 같은 apply 다(소유 원장은 정확히 하나 —
-    # 그 쌍방 단언은 test_ops_planner 의 소유권 검사가 진다).
-    assert len(registered) == 30
+    # 26 → 30(ALPHA-987) 뒤 ALPHA-1068이 증분 1분 원장으로 다시 옮겨 30 → 26이다.
+    assert len(registered) == 26
     assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
-    assert len(catalog.entries("disclosure")) == 4
+    assert len(catalog.entries("disclosure")) == 0
     assert len(catalog.entries("investor-intraday")) == 3
     # 자기 기록이 불가능한 등록 작업은 이제 **0개**다(ALPHA-596 이 krx·dart, ALPHA-610 이
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
@@ -406,11 +405,10 @@ def test_by_cli_resolves_vendor_split_steps():
     # 재무는 양쪽 다 미등록(FMP=토글 off, DART=하류 소비자 0) — 계측 없이 지나간다.
     assert catalog.by_cli("ingest-raw-financial", "dart") is None
     assert catalog.by_cli("ingest-raw-financial", None) is None
-    # 공시는 벤더 축이 없다(DART 단일) — --source 없이 해소된다. 레인이 바뀌어도(ALPHA-724)
-    # `by_cli` 는 전 레인 검색이라 그대로다: 컨테이너는 자기 레인을 모르고 CLI 가 정체성이다.
-    # 875 가 1분 세션으로 보내 None 이던 것을 987 이 저녁 배치로 되돌려 다시 해소된다 —
-    # 1분 레인은 이제 공시를 안 부르므로(source_group="") 오귀속될 호출자가 없다.
-    assert catalog.by_cli("ingest-raw-disclosure").task_key == "DISCLOSURE_COLLECTION_DART"
+    # 공시는 ALPHA-1068에서 minute worker가 직접 호출한다. ops batch catalog에는 해소되지 않는다.
+    for step in ("ingest-raw-disclosure", "normalize-disclosure",
+                 "normalize-disclosure-segment", "load-disclosure"):
+        assert catalog.by_cli(step) is None
     # 벤더 축이 없는 스텝은 --source 없이 해소된다.
     assert catalog.by_cli("normalize-price").task_key == "NORMALIZE_PRICE"
     assert catalog.by_cli("load-price-daily").task_key == "LOAD_PRICE_DAILY"
@@ -437,10 +435,10 @@ def test_task_key_resolves_from_the_cli_regardless_of_env(monkeypatch):
     # tag-news 는 뉴스 레인 원장 편입(ALPHA-591)으로 재등록 → ALPHA-610 이 직접 계측으로 승격.
     # 이제 attempt 결측은 정상이 아니라 LEDGER_GAP 이다(Reconciler backfill 은 백스톱).
     assert ops_entry.task_key_for("tag-news", None) == "TAG_NEWS"
-    # KRX·공시 수집은 등록·**직접 계측** 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
+    # KRX 수집은 등록·직접 계측 대상이다(ALPHA-578 등록 → ALPHA-596 계측).
     assert ops_entry.task_key_for("ingest-raw-etf", "krx") == "ETF_HOLDINGS_COLLECTION_KRX"
-    # 공시는 987 로 ops 원장에 복귀 — by_cli 와 같은 축으로 다시 해소된다.
-    assert ops_entry.task_key_for("ingest-raw-disclosure", None) == "DISCLOSURE_COLLECTION_DART"
+    # 공시는 1분 원장이 소유하므로 ops wrapper를 투명 통과한다.
+    assert ops_entry.task_key_for("ingest-raw-disclosure", None) is None
     assert ops_entry.task_key_for("ingest-raw-financial", "dart") is None   # 미등록 = 통과
 
 
@@ -533,15 +531,6 @@ def test_dependencies_encode_the_asl_gates():
     # SFN 은 투자자를 안 돌리는데 원장은 여전히 NORMALIZE_INVESTOR 를 기다려, 그 런이 영영
     # 미충족으로 BLOCKED 다. 그 어긋남이 이 테스트가 막으려는 바로 그 종류의 결함이다.
     assert set(catalog.get("LOAD_INSTRUMENTS").depends_on) == _market_normalize_task_keys()
-    # 공시 레인 게이트(ASL `DisclosureNormalizeCheckResults`) — 같은 축을 자기 레인으로
-    # 그린다. 875 동안은 엔트리가 없어 Worker 체인 순서가 지던 의존이, 987 복원으로
-    # 카탈로그에 돌아왔다(1분 레인의 그 순서 검증은 `test_disclosure_worker` 에 남아 있다).
-    assert set(catalog.get("LOAD_DISCLOSURE").depends_on) == {
-        "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT"}
-    for key in catalog.get("LOAD_DISCLOSURE").depends_on:
-        assert catalog.get(key).fulfilled_exit_codes == (0, 2), (
-            f"{key}: SFN은 exit 2의 완료 manifest를 하류로 보내므로 원장 의존도 충족돼야 한다"
-        )
     # 뉴스 레인(ALPHA-591)의 의존은 **뉴스 SFN 의 게이트 축**이다 — 옛 시장 의존(LOAD_ASSERTIONS
     # ← feature 7개, LOAD_DOCUMENTS ← ENRICH_CORP_CODE)을 복사하면 뉴스 런에 존재하지 않는
     # 작업을 기다려 영영 eligible 이 안 되고, hard deadline 뒤 전부 BLOCKED 로 오귀속된다.

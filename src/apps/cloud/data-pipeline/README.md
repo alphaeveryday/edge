@@ -775,10 +775,9 @@ LoadDisclosure` 를 돌았고(부분집합 필터 재사용, 새 state 정의 0�
 LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
 시장 SFN 에서 공시 체인이 빠졌다(15:40 런은 공시를 돌리지 않는다). 875 가 공시를 1분
 세션으로 넘겼다가 987 이 저녁 배치로 되돌렸고, **ALPHA-1068이 증분 1분 레인을 현재
-소유자로 복원했다**. SFN 정의와 카탈로그 공시 엔트리 4개는 첫 컷오버 단계의 rollback
-경로로 잠시 남지만 평일 18:10 스케줄은 DISABLED이고 `OPS_DISCLOSURE_SCHED_HHMM`도 빈
-값이라 ops 원장이 기대하는 공시 슬롯은 없다. 분 레인 E2E 뒤 별도 앱 PR이 카탈로그 4개를
-제거한다.
+소유자로 복원했다**. 평일 18:10 스케줄은 DISABLED이고 `OPS_DISCLOSURE_SCHED_HHMM`도 빈
+값이며 카탈로그 공시 엔트리 4개도 제거됐다. SFN 정의만 rollback 경로로 남고, 복원할 때는
+scheduler와 catalog를 함께 되돌린다.
 
 정상 SFN의 `LoadDisclosure`는 `--input-run-id`로 completed dual manifest의 direct key winner를
 pending에 commit한 뒤 pending만 typed 적재한다. shared canonical 상위 prefix LIST/fullscan은
@@ -1553,29 +1552,27 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
-  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 레인(`disclosure`) 4 + 장중 수급 레인
-  (`investor-intraday`) 3**(ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 26작업 =
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 장중 수급 레인(`investor-intraday`) 3**
+  (ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 SFN 원장 밖 1분 세션으로 보낸 몫이었고
-  **26 → 30 은 ALPHA-987 이 저녁 배치로 되돌린 복원**이다. ALPHA-1068 첫 컷오버 단계에서는
-  스케줄 비활성화보다 앱 이미지가 먼저 착지하는 창을 막기 위해 30개를 잠시 유지하고, 분 레인
-  E2E 뒤 별도 앱 PR에서 26개로 줄인다)(ECS Task state 35개 중 — **정의 파일**
+  **26 → 30 은 ALPHA-987 이 저녁 배치로 되돌린 복원**, **30 → 26 은 ALPHA-1068이 실제 dev
+  E2E 뒤 증분 1분 원장으로 다시 옮긴 결과**다)(ECS Task state 35개 중 — **정의 파일**
   기준으로 `statemachine.tf` 33 + `news_pipeline.tf` 2 다. 공시·장중 수급 .tf 는 state 를
   새로 정의하지 않고 부분집합 필터로 재사용하므로 저 33 안에 있다 — 레인별 계수는
   `pipeline_type` 축을 써라. 36→35 는 ALPHA-806 이 AnalyzeOne 을 걷어낸 몫이다.
-  ALPHA-181 → 578 → 553 PR2 → 591 → 769 → 806 → 875 → 987).
+  ALPHA-181 → 578 → 553 PR2 → 591 → 769 → 806 → 875 → 987 → 1068).
   레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
-  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 5개는 ① `fmp` 수집
+  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 9개는 ① `fmp` 수집
   4개(**FMP 공용키 bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을
   등록하면 매 런 MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`
   (**하류 소비자 0** — `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할
-  이유 없는 실패 경보가 된다). 공시 체인 4개(`CollectDartDisclosure`·`NormalizeDisclosure`·
-  `NormalizeDisclosureSegment`·`LoadDisclosure`)는 875 가 여기 제외로 두었다가 **987 이 저녁
-  배치로 되돌리며 재등록됐다**. `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이
-  analyze 페이즈를 걷었다 — 36→35). **KRX ETF·DART 공시는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
+  이유 없는 실패 경보가 된다) ③ 공시 체인 4개(`CollectDartDisclosure`·`NormalizeDisclosure`·
+  `NormalizeDisclosureSegment`·`LoadDisclosure`)(ALPHA-1068 증분 1분 원장이 소유). `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이
+  analyze 페이즈를 걷었다 — 36→35). **KRX ETF와 batch 시절 DART 공시는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
   task-def 에 DB env 를 주면서, 컨테이너 종료 즉시 판정되고 그전엔 못 얻던 `records_out`·
   `failed_records`·`data_status` 가 함께 올라온다("벤더 컨테이너에 RDS 접속을 주는 신뢰경계
   변경"이라는 전제는 실측 결과 이미 무너져 있었다: 실행 역할·보안그룹이 task-def 전체 공유라
@@ -1584,12 +1581,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 30작업이 전부 자기
+  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 26작업이 전부 자기
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1
-  을 내는 별건이다). 수집 커버리지는 `Collect*` 13개 중 8개 — 시장 9개 중 5개 + 뉴스 2개 중
-  1개(BigKinds) + 공시 1개 중 1개(DART — 현재는 비활성 rollback 엔트리) + 장중 수급 1개 중 1개다.
+  을 내는 별건이다). 수집 커버리지는 `Collect*` 13개 중 7개 — 시장 9개 중 5개 + 뉴스 2개 중
+  1개(BigKinds) + 장중 수급 1개 중 1개다. 공시 수집은 batch state 대신 1분 원장이 관측한다.
   근거 표는 `ops/catalog.py` docstring, CI 는 `test_ops_catalog` 가 양방향으로 잠근다 —
   `instrumented=True`↔`tasks.tf` DB env 배선 대조 포함(어긋나면 그 작업이 조용히 계측 없이 돈다).
   MVP 3작업(ALPHA-530)이었던 것:
@@ -1673,7 +1670,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
 EventBridge(daily·news×2(00:10·08:10)·장중수급×5) → Planner(plan-run) : DB 트랜잭션(pipeline_run+expected_task+snapshot)
                                               → commit → 결정적 execution_name → SFN StartExecution
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
-각 ECS 태스크(첫 컷오버 단계 30작업, 후속 catalog 정리 뒤 26작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
+각 ECS 태스크(catalog 26작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
 ```
 

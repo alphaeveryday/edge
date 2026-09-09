@@ -455,19 +455,10 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_runtime_owner_moves_to_incremental_disclosure_lane_before_catalog_cleanup(monkeypatch):
-    # WHY(ALPHA-1068): 앱 이미지 CD와 terraform apply는 독립이다. catalog 제거 이미지가
-    #      schedule 비활성화보다 먼저 배포되는 창을 없애기 위해 런타임 소유권부터 옮긴다.
-    #
-    #      둘 다 소유하면 이중 수집(두 레인이 같은 창을 각자 긁어 DART 일 한도 "020"),
-    #      둘 다 안 소유하면 724 가 막으려던 조용한 전건 결손이다. 그래서 양쪽을 함께
-    #      단언한다. catalog 4엔트리는 이 PR에서는 rollback 경로로 남지만 schedule이
-    #      DISABLED라 기대 슬롯이 없고, 분 레인 E2E 뒤 별도 앱 PR에서 제거한다.
-    # ops 원장 정의는 남아 있으나 scheduled owner는 아니다.
-    assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
-        "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
-        "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE",
-    }
+def test_runtime_owner_is_incremental_disclosure_lane_after_catalog_cleanup(monkeypatch):
+    # WHY(ALPHA-1068): 실제 분 레인 E2E 뒤 batch catalog를 제거해야 존재하지 않는 18:10 슬롯을
+    #      ops 원장이 소유하는 것으로 오인하지 않는다. rollback 때는 scheduler와 함께 복원한다.
+    assert catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE) == ()
     assert not [e for e in catalog.entries(catalog.PIPELINE_TYPE)
                 if "DISCLOSURE" in e.task_key]
     # 1분 원장: 어휘·상수는 남는다(875 가 박은 상수 — 롤백 경로). 소유 여부는 이게 아니라
@@ -505,7 +496,7 @@ def test_runtime_owner_moves_to_incremental_disclosure_lane_before_catalog_clean
     stop = re.search(r'^\s*minute_session_stop_expression\s*=\s*"([^"]*)"', dev_tf, re.M)
     assert stop and stop.group(1) == "cron(5 20 ? * MON-FRI *)", (
         "공시 마지막 20:00 window 전에 세션을 닫으면 당일 공시가 영구 결손된다")
-    # ARN 표는 batch rollback 경로로 남긴다.
+    # SFN 정의와 ARN 표는 batch rollback 경로로 남긴다.
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
 
 
