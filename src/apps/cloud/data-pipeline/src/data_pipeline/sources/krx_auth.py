@@ -21,12 +21,14 @@ PoliteClient(운반 코어)는 응답 헤더(Set-Cookie)를 노출하지 않아 
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from http.cookiejar import CookieJar
 
 from ..failures import SafeFailureError, http_failure, krx_login_failure
+from .http import RETRY_BACKOFF_SEC
 
 LOGIN_PAGE = "https://data.krx.co.kr/contents/MDC/COMS/client/view/login.jsp?site=mdc"
 LOGIN_ENDPOINT = "https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001D1.cmd"
@@ -52,38 +54,53 @@ class KrxAuth:
             self._jsessionid = self._login()
         return self._jsessionid
 
+    def _read(self, opener, request: urllib.request.Request) -> bytes:
+        """쿠키 opener 요청. 5xx/네트워크만 제한 재시도하고 원문은 버린다."""
+        attempts = [0, *RETRY_BACKOFF_SEC]
+        for index, backoff in enumerate(attempts):
+            if backoff:
+                time.sleep(backoff)
+            try:
+                return opener.open(request, timeout=self.timeout).read()
+            except urllib.error.HTTPError as exc:
+                if not 500 <= exc.code < 600:
+                    # 인증·권한·쿼터 등 4xx는 재시도로 두드리지 않는다.
+                    raise SafeFailureError(http_failure(exc.code)["code"]) from None
+            except (urllib.error.URLError, TimeoutError):
+                pass
+            if index == len(attempts) - 1:
+                raise SafeFailureError("NETWORK_RETRY_EXHAUSTED") from None
+        raise AssertionError("unreachable")
+
     def _login(self) -> str:
         jar = CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         headers = {"User-Agent": USER_AGENT}
 
+        # 1) 초기 JSESSIONID 확보 — 이 쿠키를 로그인 POST 가 이어받아 서버가 승격한다.
+        self._read(opener, urllib.request.Request(LOGIN_PAGE, headers=headers))
+
+        # 2) 로그인 POST — mbrId/pw 평문(캡차·암호화 없음, 라이브 실측). 빈 필드도 그대로 보낸다.
+        body = urllib.parse.urlencode(
+            {"mbrNm": "", "telNo": "", "di": "", "certType": "",
+             "mbrId": self.mbr_id, "pw": self.pw}
+        ).encode("utf-8")
+        raw = self._read(
+            opener,
+            urllib.request.Request(
+                LOGIN_ENDPOINT, data=body,
+                headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+            ),
+        )
+
         try:
-            # 1) 초기 JSESSIONID 확보 — 이 쿠키를 로그인 POST 가 이어받아 서버가 승격한다.
-            opener.open(
-                urllib.request.Request(LOGIN_PAGE, headers=headers), timeout=self.timeout
-            ).read()
-
-            # 2) 로그인 POST — mbrId/pw 평문(캡차·암호화 없음, 라이브 실측). 빈 필드도 그대로 보낸다.
-            body = urllib.parse.urlencode(
-                {"mbrNm": "", "telNo": "", "di": "", "certType": "",
-                 "mbrId": self.mbr_id, "pw": self.pw}
-            ).encode("utf-8")
-            raw = opener.open(
-                urllib.request.Request(
-                    LOGIN_ENDPOINT, data=body,
-                    headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
-                ),
-                timeout=self.timeout,
-            ).read()
-        except urllib.error.HTTPError as exc:
-            # HTTPError는 URLError 하위 타입이다. 인증 거부를 네트워크 장애로 뭉개지 않게
-            # 상태 코드만 허용 목록으로 분류하고 응답 본문·URL은 버린다.
-            raise SafeFailureError(http_failure(exc.code)["code"]) from None
-        except (urllib.error.URLError, TimeoutError) as exc:
-            # 네트워크 예외 문자열에는 URL·프록시 정보가 들어갈 수 있어 고정 어휘로 바꾼다.
-            raise SafeFailureError("NETWORK_RETRY_EXHAUSTED") from None
-
-        data = json.loads(raw.decode("utf-8", errors="replace"))
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            # 파싱 예외에는 응답 일부가 포함된다. 로그인 응답은 계정 필드를 가질 수 있으므로
+            # 원문을 traceback에 남기지 않고 고정 거부 코드로만 올린다.
+            raise krx_login_failure(None) from None
+        if not isinstance(data, dict):
+            raise krx_login_failure(None) from None
         code = data.get("_error_code")
         if code != "CD001":
             # 응답 객체에는 MBR_NO 같은 계정 식별자가 섞인다. 코드만 허용 목록으로 축약하고
