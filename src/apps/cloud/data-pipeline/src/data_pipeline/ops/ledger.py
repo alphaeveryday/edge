@@ -219,8 +219,10 @@ class Ledger:
         data_status: str | None = None, outcome_reason: str | None = None,
         current_attempt_id: str | None = None, completeness: dict | None = None,
         counters: dict | None = None, freshness: dict | None = None,
+        clear_outcome_reason: bool = False,
+        observed_updated_at=None,
         fulfilled: bool = False, missed: bool = False, blocked: bool = False,
-    ) -> None:
+    ) -> bool:
         """expected_task 의 결과 축을 갱신. 시각 컬럼은 해당 전이일 때만 찍는다(비래치 규칙 보존).
 
         missed_at 은 한 번 찍히면 보존한다(MISSED→FULFILLED 로 가도 미실행 이력이 남게, 스펙 §7).
@@ -233,6 +235,8 @@ class Ledger:
             sets.append("data_status=%s"); params.append(data_status)
         if outcome_reason is not None:
             sets.append("outcome_reason=%s"); params.append(outcome_reason)
+        elif clear_outcome_reason:
+            sets.append("outcome_reason=NULL")
         if current_attempt_id is not None:
             sets.append("current_attempt_id=%s"); params.append(current_attempt_id)
         if completeness is not None:
@@ -246,8 +250,8 @@ class Ledger:
         # 판정을 뒤집어도 이 인자를 안 넘겨 컬럼을 건드리지 않는다. 뒤집을 때 함께 NULL 로 지우는
         # 안을 넣었다가 **되돌렸다**: Reconciler 는 expected_task 를 한 번 읽어 캐시된 outcome 으로
         # 판정하므로, 그 사이 wrapper 가 성공+건수를 쓰면 방금 쓴 유효 카운터를 지운다(edge-review
-        # 3라운드). 제대로 하려면 UPDATE 에 "outcome 이 실제로 바뀔 때만" 조건을 걸어야 하는데,
-        # 그건 Reconciler 의 기존 경쟁 조건까지 손대는 별건이다(ALPHA-182 범위 밖).
+        # 3라운드). Reconciler outcome 갱신은 observed_updated_at CAS로 그 경쟁을 막지만, 판정에
+        # 쓰지 않은 카운터를 추측해 지우지는 않는다.
         # → 소비자는 "FAILED 옆의 건수는 앞 시도의 것일 수 있다"를 전제로 읽는다.
         if counters is not None:
             sets.append("records_out=%s"); params.append(counters.get("records_out"))
@@ -283,19 +287,29 @@ class Ledger:
         if blocked:
             sets.append("blocked_at=COALESCE(blocked_at, now())")
         params.append(expected_task_id)
+        where = "expected_task_id=%s"
+        if observed_updated_at is not None:
+            where += " AND updated_at=%s"
+            params.append(observed_updated_at)
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
-                f"UPDATE ops_expected_task SET {', '.join(sets)} WHERE expected_task_id=%s",
+                f"UPDATE ops_expected_task SET {', '.join(sets)} WHERE {where}",
                 tuple(params),
             )
+            return cur.rowcount > 0
 
-    def set_eligible(self, expected_task_id: str):
-        """eligible_at을 최초 1회 찍고 이 writer가 만든 updated_at 버전을 반환한다."""
+    def set_eligible(self, expected_task_id: str, *, observed_updated_at=None):
+        """다른 writer가 개입하지 않았을 때 eligible_at을 찍고 새 updated_at을 반환한다."""
+        params: list = [expected_task_id]
+        where = "expected_task_id=%s"
+        if observed_updated_at is not None:
+            where += " AND updated_at=%s"
+            params.append(observed_updated_at)
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE ops_expected_task SET eligible_at=COALESCE(eligible_at, now()),"
-                " updated_at=now() WHERE expected_task_id=%s RETURNING updated_at",
-                (expected_task_id,),
+                f" updated_at=now() WHERE {where} RETURNING updated_at",
+                tuple(params),
             )
             row = cur.fetchone()
             return row[0] if row is not None else None
@@ -304,13 +318,10 @@ class Ledger:
         self, expected_task_id: str, *, observed_updated_at,
     ) -> bool:
         """관측 뒤 다른 writer가 갱신하지 않은 expected_task만 PENDING으로 되돌린다."""
-        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            cur.execute(
-                "UPDATE ops_expected_task SET task_outcome=%s, outcome_reason=NULL,"
-                " updated_at=now() WHERE expected_task_id=%s AND updated_at=%s",
-                (states.OUTCOME_PENDING, expected_task_id, observed_updated_at),
-            )
-            return cur.rowcount > 0
+        return self.update_task_outcome(
+            expected_task_id, task_outcome=states.OUTCOME_PENDING,
+            clear_outcome_reason=True, observed_updated_at=observed_updated_at,
+        )
 
     # ── task_attempt ──────────────────────────────────────────
     def record_attempt_start(
@@ -417,7 +428,7 @@ class Ledger:
     def backfill_attempt(
         self, *, expected_task_id: str, ecs_task_arn: str, execution_status: str,
         sfn_execution_arn: str | None = None, sfn_state_name: str | None = None,
-        exit_code: int | None = None,
+        exit_code: int | None = None, started_at=None,
     ) -> str | None:
         """Reconciler 가 ECS ARN 은 있는데 원장에 attempt 가 없는 누락을 사후 복구(LEDGER_GAP).
 
@@ -434,12 +445,14 @@ class Ledger:
             cur.execute(
                 "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,"
                 " execution_status, exit_code, sfn_execution_arn, sfn_state_name, record_source,"
-                " started_at, finished_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now(),"
+                " started_at, finished_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,"
+                " COALESCE(%s::timestamptz, now()),"
                 f" {'now()' if terminal else 'NULL'})"
                 " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
                 " RETURNING attempt_id",
                 (new_id, expected_task_id, ecs_task_arn, execution_status, exit_code,
-                 sfn_execution_arn, sfn_state_name, states.SOURCE_RECONCILER_BACKFILL),
+                 sfn_execution_arn, sfn_state_name, states.SOURCE_RECONCILER_BACKFILL,
+                 started_at),
             )
             row = cur.fetchone()
             if row is not None:
@@ -464,6 +477,19 @@ class Ledger:
                  "exit_code": r[3], "record_source": r[4], "started_at": r[5]}
                 for r in cur.fetchall()
             ]
+
+    def correct_backfill_started_at(self, attempt_id: str, *, started_at) -> bool:
+        """과거 Reconciler backfill의 대조 시각을 SFN의 실제 진입 시각으로 보정한다."""
+        if started_at is None:
+            return False
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ops_task_attempt SET started_at=%s::timestamptz"
+                " WHERE attempt_id=%s AND record_source=%s"
+                " AND started_at IS DISTINCT FROM %s::timestamptz",
+                (started_at, attempt_id, states.SOURCE_RECONCILER_BACKFILL, started_at),
+            )
+            return cur.rowcount == 1
 
     # ── reconciliation_issue ──────────────────────────────────
     def open_or_bump_issue(
@@ -528,13 +554,14 @@ class Ledger:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT expected_task_id, task_key, stage, plan_status, task_outcome,"
-                " data_status, required, eligible_at, deadline_at, missed_at, updated_at"
+                " data_status, required, eligible_at, deadline_at, missed_at, updated_at,"
+                " outcome_reason"
                 " FROM ops_expected_task WHERE pipeline_run_id=%s",
                 (pipeline_run_id,),
             )
             keys = ("expected_task_id", "task_key", "stage", "plan_status", "task_outcome",
                     "data_status", "required", "eligible_at", "deadline_at", "missed_at",
-                    "updated_at")
+                    "updated_at", "outcome_reason")
             return [dict(zip(keys, r)) for r in cur.fetchall()]
 
     def resolve_issue(

@@ -18,7 +18,9 @@
 여러 번 뜨면 각 진입(TaskStateEntered)이 별개 occurrence 다. 이름별로 뭉치면 앞 시도의 exit code
 가 남아 새 시도를 오판하고 앞 시도 ARN 을 잃는다(ALPHA-530 #2). occurrence 마다 자기 ECS ARN·exit
 code 를 들고, 원장의 `ops_task_attempt`(ARN 별)와 1:1 로 맞물린다. 작업의 최종 outcome 은 **최신
-occurrence** 로 판정하되, 각 occurrence 의 물리 attempt 는 모두 기록한다(재시도 이력 보존).
+물리 attempt** 로 판정하되, 각 occurrence 의 물리 attempt 는 모두 기록한다(재시도 이력 보존).
+원래 SFN 실행 밖에서 같은 expected task를 재실행한 경우에는 원장 attempt도 증거에 포함한다.
+SFN occurrence와 원장 전용 attempt를 실제 시작 시각으로 합쳐 가장 나중 시도가 이기게 한다.
 
 **컨테이너 성패는 SFN TaskSucceeded 가 아니라 exit code 로 판정한다** — ecs:runTask.sync 는
 컨테이너가 non-zero 로 죽어도 TaskSucceeded 를 낼 수 있고(ASL 이 뒤 CheckExitCode Choice 로
@@ -121,9 +123,10 @@ def paginate_history(sfn, execution_arn: str) -> list[dict]:
     return events
 
 
-def _new_occ(entered_id) -> dict:
+def _new_occ(entered_id, entered_at=None) -> dict:
     return {"entered_id": entered_id, "ecs_task_arn": None, "exit_code": None,
-            "sfn_completed": False, "sfn_terminal_failed": False, "failed_to_start": False}
+            "sfn_completed": False, "sfn_terminal_failed": False, "failed_to_start": False,
+            "_entered_at": entered_at}
 
 
 def execution_evidence(events: list[dict]) -> dict[str, list[dict]]:
@@ -167,7 +170,7 @@ def execution_evidence(events: list[dict]) -> dict[str, list[dict]]:
             name = ev.get("stateEnteredEventDetails", {}).get("name")
             if eid is not None and name:
                 name_by_id[eid] = name
-                occ_by_id.setdefault(eid, _new_occ(eid))
+                occ_by_id.setdefault(eid, _new_occ(eid, ev.get("timestamp")))
 
     for ev in events:
         if ev.get("type") == "TaskStateEntered":
@@ -334,7 +337,8 @@ def _hydrate_occurrence_evidence(
 ) -> None:
     """한 reconcile snapshot의 occurrence에 ledger/ECS 종료 증거를 한 번 채운다.
 
-    SFN exit가 없으면 같은 ARN의 ledger attempt, 그마저 없으면 ECS를 쓴다. 모든 occurrence를
+    SFN exit가 없으면 같은 ARN의 ledger attempt, 그마저 없으면 ECS를 쓴다. SFN 실행 밖의
+    ledger attempt도 occurrence로 덧붙인 뒤 실제 시작 시각으로 정렬한다. 모든 occurrence를
     먼저 hydrate해야 dependency·attempt·outcome이 같은 snapshot을 보고 retry의 과거 ARN도
     이미 원장 exit가 있으면 ECS를 다시 조회하지 않는다.
     """
@@ -343,26 +347,63 @@ def _hydrate_occurrence_evidence(
         task = task_by_key.get(entry.task_key)
         if task is None:
             continue
-        occs = evidence.get(entry.sfn_state_name, [])
-        if not occs:
-            continue
+        occs = evidence.setdefault(entry.sfn_state_name, [])
+        attempts = ledger.attempts_for(task["expected_task_id"])
         attempts_by_arn = {
             attempt.get("ecs_task_arn"): attempt
-            for attempt in ledger.attempts_for(task["expected_task_id"])
+            for attempt in attempts
             if attempt.get("ecs_task_arn")
         }
+        occurrence_arns = {
+            occ.get("ecs_task_arn") for occ in occs if occ.get("ecs_task_arn")
+        }
+        for attempt in attempts:
+            arn = attempt.get("ecs_task_arn")
+            if not arn or arn in occurrence_arns:
+                continue
+            execution_status = attempt.get("execution_status")
+            occs.append({
+                "entered_id": None,
+                "ecs_task_arn": arn,
+                "exit_code": attempt.get("exit_code"),
+                "sfn_completed": execution_status == states.EXEC_SUCCEEDED,
+                "sfn_terminal_failed": execution_status == states.EXEC_FAILED,
+                "failed_to_start": False,
+                "_entered_at": attempt.get("started_at"),
+            })
         for occ in occs:
+            matching = attempts_by_arn.get(occ.get("ecs_task_arn"))
+            history_started_at = occ.get("_entered_at")
             exit_code = occ.get("exit_code")
-            if exit_code is None and occ.get("ecs_task_arn"):
-                matching = attempts_by_arn.get(occ["ecs_task_arn"])
+            if exit_code is None and matching is not None:
                 exit_code = matching.get("exit_code") if matching is not None else None
                 if isinstance(exit_code, int) and not isinstance(exit_code, bool):
                     occ["exit_code"] = exit_code
+            if matching is not None:
+                if (matching.get("record_source") == states.SOURCE_RECONCILER_BACKFILL
+                        and history_started_at is not None):
+                    # 구버전 Reconciler는 누락 시도를 대조 시각으로 backfill했다. SFN의 실제
+                    # 진입 시각을 즉시 사용·저장해야 과거 실패가 최신 수동 성공을 덮지 않는다.
+                    occ["_entered_at"] = history_started_at
+                    ledger.correct_backfill_started_at(
+                        matching["attempt_id"], started_at=history_started_at,
+                    )
+                    matching["started_at"] = history_started_at
+                else:
+                    # 같은 물리 attempt는 SFN ARN이 history에 도착하기 전후 모두 wrapper가 남긴
+                    # started_at으로 정렬한다. TaskStateEntered 시각으로 바뀌면 history lag 해소만으로
+                    # 수동 시도와 선후가 뒤집힌다.
+                    occ["_entered_at"] = matching.get("started_at")
             _terminal_status(occ, ecs, cluster_arn)
+        # AWS history에는 timestamp가 항상 있고 wrapper attempt에는 started_at이 있다. 과거
+        # 테스트/불완전 backfill처럼 둘 다 없으면 stable sort가 기존 SFN 순서 뒤에 ledger-only
+        # attempt를 둔다. timestamp가 있는 실제 실행에서는 물리 시작 순서가 정본이다.
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        occs.sort(key=lambda occ: _parse_ts(occ.get("_entered_at")) or epoch)
 
 
 def _completed_task_keys(evidence: dict[str, list[dict]]) -> set[str]:
-    """선행 완료 = hydrate된 최신 occurrence에서 카탈로그가 승인한 exit 확인."""
+    """선행 완료 = hydrate된 최신 물리 attempt에서 카탈로그가 승인한 exit 확인."""
     done: set[str] = set()
     for entry in catalog.entries():
         occs = evidence.get(entry.sfn_state_name, [])
@@ -388,7 +429,11 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
 
     deps_met = all(d in deps_done for d in entry.depends_on)
     if eligible_at is None and deps_met:
-        task["updated_at"] = ledger.set_eligible(etid)
+        task["updated_at"] = ledger.set_eligible(
+            etid, observed_updated_at=task["updated_at"],
+        )
+        if task["updated_at"] is None:
+            return
         eligible_at = now
 
     if not occs:
@@ -404,7 +449,7 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
                            now=now, stalled_after_seconds=stalled_after_seconds, task=task,
                            summary=summary)
 
-    # 2) **최신 occurrence** 로 작업 outcome 을 판정한다(재시도면 마지막 시도가 이긴다).
+    # 2) **최신 물리 attempt** 로 작업 outcome 을 판정한다(재시도면 마지막 시도가 이긴다).
     _judge_outcome(ledger, task, occs[-1], outcome=task["task_outcome"], run_id=run_id,
                    summary=summary)
 
@@ -428,14 +473,20 @@ def _judge_not_entered(ledger, task, *, eligible_at, now, hard_deadline, deps_me
         summary.setdefault("deadline_pending", []).append(task["task_key"])
         return
     if eligible_at is not None and (past_deadline or past_hard):
-        ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_MISSED, missed=True)
-        _open(ledger, states.ISSUE_MISSED, f"missed:{run_id}:{task['task_key']}",
-              run_id, task, summary, "missed")
+        updated = ledger.update_task_outcome(
+            etid, task_outcome=states.OUTCOME_MISSED, missed=True,
+            observed_updated_at=task["updated_at"],
+        )
+        if updated:
+            _open(ledger, states.ISSUE_MISSED, f"missed:{run_id}:{task['task_key']}",
+                  run_id, task, summary, "missed")
     elif not deps_met and past_hard:
-        ledger.update_task_outcome(
+        updated = ledger.update_task_outcome(
             etid, task_outcome=states.OUTCOME_BLOCKED, blocked=True,
-            outcome_reason=states.REASON_DEADLINE_UNMET)
-        summary["blocked"].append(task["task_key"])
+            outcome_reason=states.REASON_DEADLINE_UNMET,
+            observed_updated_at=task["updated_at"])
+        if updated:
+            summary["blocked"].append(task["task_key"])
 
 
 def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stalled_after_seconds,
@@ -453,7 +504,7 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
             expected_task_id=etid, ecs_task_arn=arn,
             execution_status=terminal or states.EXEC_RUNNING,
             sfn_state_name=entry.sfn_state_name, sfn_execution_arn=sfn_execution_arn,
-            exit_code=occ.get("exit_code"))
+            exit_code=occ.get("exit_code"), started_at=occ.get("_entered_at"))
         # 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음)은 attempt 결측이 **정상**이다 —
         # 위 backfill 이 유일·정확한 경로이므로 LEDGER_GAP 을 열지 않는다. 열면 매 런 새 ARN 으로
         # 새 이슈가 쌓이고(dedupe 키에 ARN 이 들어간다) resolve 경로도 없다(ALPHA-181).
@@ -485,7 +536,7 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
 
 
 def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
-    """작업 최종 outcome 을 **최신 occurrence** 로 판정한다(물리 attempt 는 이미 기록됨)."""
+    """작업 최종 outcome 을 **최신 물리 attempt** 로 판정한다(시도는 이미 기록됨)."""
     etid = task["expected_task_id"]
     if latest.get("ecs_task_arn"):
         terminal = latest.get("_terminal")
@@ -493,19 +544,24 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
         exit_code = latest.get("exit_code")
         output_fulfilled = entry is not None and _output_fulfilled(entry, exit_code)
         if output_fulfilled:
-            if outcome != states.OUTCOME_FULFILLED:
-                ledger.update_task_outcome(
-                    etid, task_outcome=states.OUTCOME_FULFILLED, fulfilled=True,
+            if outcome != states.OUTCOME_FULFILLED or task.get("outcome_reason") is not None:
+                updated = ledger.update_task_outcome(
+                    etid, task_outcome=states.OUTCOME_FULFILLED,
+                    clear_outcome_reason=True, fulfilled=True,
+                    observed_updated_at=task["updated_at"],
                 )
-                if outcome == states.OUTCOME_MISSED:   # 비래치: 늦은 성공(missed_at 보존)
+                if updated and outcome == states.OUTCOME_MISSED:
                     ledger.resolve_issue(f"missed:{run_id}:{task['task_key']}",
                                          resolution_reason="late_attempt_succeeded",
                                          resolution_source="reconciler")
                     summary["fulfilled_late"].append(task["task_key"])
         elif terminal == states.EXEC_FAILED and outcome != states.OUTCOME_FAILED:
-            ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
-                                       outcome_reason="attempt_failed")
-            summary["failed"].append(task["task_key"])
+            updated = ledger.update_task_outcome(
+                etid, task_outcome=states.OUTCOME_FAILED, outcome_reason="attempt_failed",
+                observed_updated_at=task["updated_at"],
+            )
+            if updated:
+                summary["failed"].append(task["task_key"])
         elif terminal is None and outcome != states.OUTCOME_PENDING:
             # 앞 occurrence의 확정 결과는 최신 retry의 결과가 아니다. 최신 시도가 미확정인 동안
             # dependency와 outcome 모두 PENDING이어야 하며, 앞 실패 사유도 현재 판정에 남기지
@@ -515,9 +571,13 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
             )
     elif latest.get("failed_to_start"):
         # RunTask submit 실패 + ARN 없음 — 가짜 attempt 안 만들고 outcome 으로만(스펙 §6).
-        ledger.update_task_outcome(etid, task_outcome=states.OUTCOME_FAILED,
-                                   outcome_reason=states.REASON_FAILED_TO_START)
-        summary["failed_to_start"].append(task["task_key"])
+        updated = ledger.update_task_outcome(
+            etid, task_outcome=states.OUTCOME_FAILED,
+            outcome_reason=states.REASON_FAILED_TO_START,
+            observed_updated_at=task["updated_at"],
+        )
+        if updated:
+            summary["failed_to_start"].append(task["task_key"])
     else:
         # 진입했으나 ECS 생성 확인 불가 — MISSED 로 단정하지 않는다(스펙 §7).
         _open(ledger, states.ISSUE_EVIDENCE_LOST, f"evidence_lost:{run_id}:{task['task_key']}",
