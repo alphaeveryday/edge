@@ -1,7 +1,7 @@
 """run 엔트리 테스트 — 증분 기본 날짜창 계산(스케줄러가 못 넣어주는 부분)."""
 
 import pathlib
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -246,6 +246,50 @@ def test_krx_etf_client_timeout_exceeds_measured_endpoint_latency(monkeypatch):
     monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
     assert main(["ingest-raw-etf", "--source", "krx"]) == 0
     assert captured["timeout"] > measured_latency_sec, "KRX 수집이 타임아웃으로 전량 실패한다"
+
+
+def test_krx_etf_single_day_backfill_reaches_source(monkeypatch):
+    # WHY(ALPHA-1063): 과거 실패일을 준 CLI가 날짜를 조용히 버리면 오늘 snapshot을 저장하고도
+    # 복구 성공처럼 보인다. 같은 단일 날짜가 source의 as_of_date까지 도달해야 한다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = {}
+
+    class _Spy(run_mod.KrxEtfSource):
+        def __init__(self, config, client, *args, **kwargs):
+            captured["as_of_date"] = kwargs.get("as_of_date")
+            super().__init__(config, client, *args, **kwargs)
+
+    monkeypatch.setattr(run_mod, "KrxEtfSource", _Spy)
+    monkeypatch.setattr(run_mod.ingest_raw_etf, "run", lambda *a, **k: 0)
+
+    assert main([
+        "ingest-raw-etf", "--source", "krx",
+        "--from", "2026-09-07", "--to", "2026-09-07",
+    ]) == 0
+    assert captured["as_of_date"] == date(2026, 9, 7)
+
+
+@pytest.mark.parametrize("argv", [
+    ["--from", "2026-09-07"],
+    ["--from", "2026-09-07", "--to", "2026-09-08"],
+    ["--from", "2026-09-31", "--to", "2026-09-31"],
+])
+def test_krx_etf_backfill_rejects_incomplete_range_or_invalid_window(monkeypatch, argv):
+    # WHY: 이 API는 snapshot 한 날짜만 받는다. 반쪽·다일 창을 성공 처리하면 복구 범위를
+    # 전부 채웠다는 잘못된 운영 증거가 남는다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        main(["ingest-raw-etf", "--source", "krx", *argv])
+
+
+def test_fmp_etf_rejects_historical_window(monkeypatch):
+    # WHY: FMP holdings는 현재 snapshot뿐인데 공용 인자를 조용히 무시하면 과거 백필로 오인된다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    with pytest.raises(SystemExit, match="현재 스냅샷"):
+        main([
+            "ingest-raw-etf", "--source", "fmp",
+            "--from", "2026-09-07", "--to", "2026-09-07",
+        ])
 
 
 def test_kis_rejects_to_without_from(monkeypatch):

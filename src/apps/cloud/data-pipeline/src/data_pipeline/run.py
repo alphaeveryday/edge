@@ -13,7 +13,8 @@
 태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
 (analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
 
-수집 날짜창(--from/--to) — 뉴스·가격·공시만 사용(재무제표·ETF holdings 는 스냅샷이라 창 없음).
+수집 날짜창(--from/--to) — 뉴스·가격·공시와 KRX ETF 단일 거래일 백필에 사용한다.
+FMP ETF holdings 는 현재 스냅샷이라 창이 없다.
 tag-news 정상 경로는 --input-run-id 로 NormalizeNews manifest의 직접 파티션과 현재 article_id만
 읽는다. 과거 재태깅은 --from/--to, 전체 복구는 명시적 --all만 허용한다.
 run_id 는 미지정 시 UTC 타임스탬프. 같은 run_id·창으로 재실행하면 raw 파티션 파일을
@@ -1111,10 +1112,31 @@ def _dispatch(args, settings, storage, run_id) -> int:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|dart)")
         return ingest_raw_financial.run(settings, storage, source, run_id)
 
-    # ETF 구성종목도 스냅샷(현재 holdings)이라 날짜창을 쓰지 않는다 — 재무와 함께 먼저
-    # 분기해 창 계산을 건너뛴다. US=FMP(미지정=fmp), KR=KRX 로그인 게이트 PDF(--source krx).
+    # ETF 구성종목은 별도 날짜창 계산 없이 분기한다. US=FMP(현재 스냅샷), KR=KRX 로그인
+    # 게이트 PDF(--source krx). KRX만 같은 --from/--to 한 날짜를 trdDd 백필로 받는다.
     if args.step == "ingest-raw-etf":
         vendor = args.source or "fmp"
+        explicit_window = args.from_date is not None or args.to_date is not None
+        as_of_date = None
+        if explicit_window:
+            if vendor != "krx":
+                raise SystemExit(
+                    "FMP ETF 구성종목은 --from/--to 를 쓸 수 없다 — 현재 스냅샷만 제공한다"
+                )
+            if args.from_date is None or args.to_date is None:
+                raise SystemExit("KRX ETF 백필의 --from과 --to는 함께 써야 한다")
+            try:
+                from_date = datetime.strptime(args.from_date, "%Y-%m-%d")
+                to_date = datetime.strptime(args.to_date, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit("KRX ETF 백필 날짜는 YYYY-MM-DD 달력일이어야 한다") from exc
+            if from_date.strftime("%Y-%m-%d") != args.from_date or (
+                to_date.strftime("%Y-%m-%d") != args.to_date
+            ):
+                raise SystemExit("KRX ETF 백필 날짜는 YYYY-MM-DD 달력일이어야 한다")
+            if from_date != to_date:
+                raise SystemExit("KRX ETF 백필은 한 거래일만 지정할 수 있다(--from과 --to 동일)")
+            as_of_date = from_date.date()
         if vendor == "fmp":
             if settings.etf is None:
                 # 섹션 미설정은 설정 오류 — 조용한 skip 이 아니라 명시적 실패.
@@ -1127,6 +1149,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 settings.krx_etf.source,
                 PoliteClient(timeout=KRX_ETF_TIMEOUT_SEC),
                 deadline_sec=args.deadline_sec,
+                as_of_date=as_of_date,
             )
         else:
             raise SystemExit(f"알 수 없는 --source: {vendor} (fmp|krx)")
