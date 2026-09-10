@@ -1669,6 +1669,13 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   저장한다(ALPHA-1000·ALPHA-1002). 둘은 성공 exit의 같은 시도에서만 함께 기록되고, 한쪽
   결측·malformed·`resolved > total`·비정상 exit이면 모두 **NULL**로 덮는다. 기존 행은 백필하지
   않았으므로 NULL은 0건이 아니라 계측 전/없음이다.
+- **재시도 결과 보존**(ALPHA-1063) — Reconciler는 원래 SFN history와 같은
+  `expected_task`에 기록된 수동·one-off attempt를 실제 `started_at` 순으로 합쳐, 가장 나중에
+  시작한 물리 시도의 exit code로 outcome과 dependency를 판정한다. 그래서 원래 SFN 실패 뒤
+  성공한 수동 복구를 다음 주기 대조가 다시 FAILED로 덮지 않는다. 과거 Reconciler가 대조
+  시각으로 만든 backfill 행은 SFN `TaskStateEntered.timestamp`로 보정하며, wrapper와 동시에
+  결과를 쓸 때는 `expected_task.updated_at` CAS가 대조 전의 낡은 판정을 막는다. 성공 시도는
+  이전 실패의 `outcome_reason`도 지운다.
 
 ### 실행 흐름 (스펙 §5)
 

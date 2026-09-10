@@ -368,6 +368,7 @@ def instrument(
         expected_task_id,
         task_outcome=(states.OUTCOME_FULFILLED if output_fulfilled else states.OUTCOME_FAILED),
         data_status=data_status, current_attempt_id=attempt_id,
+        clear_outcome_reason=output_fulfilled,
         completeness=completeness,
         # 판정에 쓴 그 신호를 그대로 싣는다(ALPHA-182) — 대시보드(ALPHA-514)의 건수 열.
         # 매 시도가 기본 건수들을 함께 덮는다(못 쓰면 NULL) — 이 행의 카운터는 항상

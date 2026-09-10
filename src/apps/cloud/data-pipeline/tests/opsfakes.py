@@ -96,11 +96,9 @@ class _Cursor:
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)
         elif s.startswith("UPDATE ops_expected_task SET eligible_at"):
-            self._set_eligible(p)
-        elif "WHERE expected_task_id=%s AND updated_at=%s" in s:
-            self._reset_etask_if_unchanged(p)
+            self._set_eligible(p, conditional="AND updated_at=%s" in s)
         elif s.startswith("UPDATE ops_expected_task SET"):
-            self._upd_etask(s, p)
+            self._upd_etask(s, p, conditional="AND updated_at=%s" in s)
         elif "SELECT count(*) FROM ops_task_attempt" in s:
             self._rows = [(sum(1 for a in self.db.attempts if a["etid"] == p[0]),)]
         elif "INSERT INTO ops_task_attempt" in s and "attempt_number" in s:
@@ -114,6 +112,8 @@ class _Cursor:
             self._attempts_for(p)
         elif s.startswith("UPDATE ops_task_attempt SET execution_status"):
             self._upd_attempt(p)
+        elif s.startswith("UPDATE ops_task_attempt SET started_at"):
+            self._correct_backfill_started_at(p)
         elif "INSERT INTO ops_reconciliation_issue" in s:
             self._upsert_issue(p)
         elif s.startswith("UPDATE ops_reconciliation_issue SET status='RESOLVED'"):
@@ -190,33 +190,33 @@ class _Cursor:
                 out.append((row["expected_task_id"], row["task_key"], row["stage"],
                             row["plan_status"], row["task_outcome"], row["data_status"],
                             row["required"], row["eligible_at"], row["deadline_at"],
-                            row["missed_at"], row.get("updated_at", 1)))
+                            row["missed_at"], row.get("updated_at", 1),
+                            row.get("outcome_reason")))
         self._rows = out
 
-    def _set_eligible(self, p):
+    def _set_eligible(self, p, *, conditional=False):
         row = self.db.etasks_by_id.get(p[0])
         if row:
+            if conditional and row.get("updated_at", 1) != p[1]:
+                return
             if row["eligible_at"] is None:
                 row["eligible_at"] = "ELIGIBLE"
             row["updated_at"] = row.get("updated_at", 1) + 1
             self._rows = [(row["updated_at"],)]
 
-    def _reset_etask_if_unchanged(self, p):
-        row = self.db.etasks_by_id.get(p[1])
-        if row and row.get("updated_at", 1) == p[2]:
-            row["task_outcome"] = p[0]
-            row["outcome_reason"] = None
-            row["updated_at"] = row.get("updated_at", 1) + 1
-            self.rowcount = 1
-
-    def _upd_etask(self, s, p):
-        row = self.db.etasks_by_id.get(p[-1])
+    def _upd_etask(self, s, p, *, conditional=False):
+        expected_task_id = p[-2] if conditional else p[-1]
+        row = self.db.etasks_by_id.get(expected_task_id)
         if not row:
+            return
+        if conditional and row.get("updated_at", 1) != p[-1]:
             return
         i = 0
         for col in ("task_outcome", "data_status", "outcome_reason", "current_attempt_id"):
             if f"{col}=%s" in s:
                 row[col] = p[i]; i += 1
+        if "outcome_reason=NULL" in s:
+            row["outcome_reason"] = None
         if "completeness=%s::jsonb" in s:
             row["completeness"] = json.loads(p[i]); i += 1
         # 실제 ledger 의 sets 순서와 같아야 한다 — 어긋나면 파라미터가 밀려 엉뚱한 컬럼에 박힌다.
@@ -248,6 +248,7 @@ class _Cursor:
         if "blocked_at=COALESCE" in s and row["blocked_at"] is None:
             row["blocked_at"] = "SET"
         row["updated_at"] = row.get("updated_at", 1) + 1
+        self.rowcount = 1
 
     def _find_attempt(self, etid, arn):
         return next((a for a in self.db.attempts if a["etid"] == etid and a["arn"] == arn), None)
@@ -266,13 +267,14 @@ class _Cursor:
         self._rows = [(p[0],)]
 
     def _ins_backfill(self, p):
-        # (new_id, etid, arn, status, exit_code, sfn_arn, sfn_state, source)
+        # (new_id, etid, arn, status, exit_code, sfn_arn, sfn_state, source, started_at)
         if self._find_attempt(p[1], p[2]):
             self._rows = []
             return
         self.db.attempts.append({"attempt_id": p[0], "etid": p[1], "arn": p[2], "status": p[3],
                                  "exit_code": p[4], "sfn_arn": p[5], "sfn_state": p[6],
-                                 "source": p[7], "number": None, "started_at": "STARTED",
+                                 "source": p[7], "number": None,
+                                 "started_at": p[8] or "STARTED",
                                  "quality_diagnostics": None,
                                  "entity_resolution_arguments_total": None,
                                  "entity_resolution_arguments_resolved": None})
@@ -294,6 +296,13 @@ class _Cursor:
             if len(p) == 8:
                 a["entity_resolution_arguments_total"] = p[5]
                 a["entity_resolution_arguments_resolved"] = p[6]
+
+    def _correct_backfill_started_at(self, p):
+        # (started_at, attempt_id, record_source, started_at)
+        a = next((x for x in self.db.attempts if x["attempt_id"] == p[1]), None)
+        if a and a["source"] == p[2] and a["started_at"] != p[0]:
+            a["started_at"] = p[0]
+            self.rowcount = 1
 
     def _upsert_issue(self, p):
         # (new_id, issue_type, scope, scope_key, dedupe_key, evidence_json)

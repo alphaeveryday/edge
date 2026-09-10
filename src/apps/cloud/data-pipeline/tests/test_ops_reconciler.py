@@ -822,6 +822,301 @@ def test_retry_occurrences_reuse_each_matching_ledger_exit_without_ecs_queries()
     assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
 
 
+def test_manual_recovery_attempt_outside_original_sfn_history_remains_authoritative():
+    # WHY(ALPHA-1063): 운영 복구를 같은 expected task의 새 ECS attempt로 성공시켜도 원래 실패한
+    # SFN history는 바뀌지 않는다. 주기 Reconciler가 그 과거 occurrence만 다시 믿으면 성공 데이터와
+    # 최신 attempt는 그대로인데 dashboard outcome만 FAILED로 되돌아간다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "task_outcome": states.OUTCOME_FULFILLED, "outcome_reason": "attempt_failed",
+         "current_attempt_id": "manual", "eligible_at": _OLD},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+    db.attempts.extend([
+        {"attempt_id": "scheduled", "etid": "e1", "arn": "arn:task/scheduled",
+         "status": states.EXEC_FAILED, "exit_code": 1, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _PAST},
+    ])
+
+    _reconcile(db, status="FAILED", history=_entered(
+        "NormalizeInvestorEstimate", arn="arn:task/scheduled", succeeded=True, exit_code=1,
+    ))
+
+    task = db.etasks_by_id["e1"]
+    assert task["task_outcome"] == states.OUTCOME_FULFILLED
+    assert task["outcome_reason"] is None
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_sfn_retry_started_after_manual_recovery_becomes_authoritative():
+    # WHY: current_attempt_id는 마지막으로 끝난 wrapper 시도다. 그 뒤 SFN retry가 시작된 동안까지
+    # 이전 수동 성공을 현재 결과로 노출하면 dependency가 너무 일찍 열린다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "task_outcome": states.OUTCOME_FULFILLED, "current_attempt_id": "manual",
+         "eligible_at": _OLD},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+    db.attempts.extend([
+        {"attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "sfn-retry", "etid": "e1", "arn": "arn:task/sfn-retry",
+         "status": states.EXEC_RUNNING, "exit_code": None, "source": "WRAPPER",
+         "started_at": _PAST},
+    ])
+    history = _entered("NormalizeInvestorEstimate", arn="arn:task/sfn-retry")
+    history[0]["timestamp"] = datetime.fromisoformat(_PAST)
+
+    _reconcile(db, status="RUNNING", history=history)
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_PENDING
+    assert db.etasks_by_id["e2"]["eligible_at"] is None
+
+
+def test_ledger_only_attempt_with_missing_end_record_uses_ecs_terminal_evidence():
+    # WHY: attempt 종료 DB 기록만 실패하고 wrapper의 task 결과 기록은 성공할 수 있다. ledger의
+    # RUNNING/exit NULL을 확정 증거로 고정하면 실제 ECS exit 0을 영영 회수하지 못한다.
+    db = FakeOpsDB()
+    _seed(db, [
+        {"task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+         "task_outcome": states.OUTCOME_FULFILLED, "current_attempt_id": "manual",
+         "eligible_at": _OLD},
+        {"task_key": "LOAD_INVESTOR_INTRADAY", "expected_task_id": "e2",
+         "eligible_at": None, "deadline_at": _FUTURE},
+    ])
+    db.attempts.append({
+        "attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+        "status": states.EXEC_RUNNING, "exit_code": None, "source": "WRAPPER",
+        "started_at": _PAST,
+    })
+
+    _reconcile(db, status="FAILED", ecs=FakeEcs(tasks={
+        "arn:task/manual": {"lastStatus": "STOPPED", "exitCode": 0},
+    }))
+
+    assert db.attempts[0]["status"] == states.EXEC_SUCCEEDED
+    assert db.attempts[0]["exit_code"] == 0
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e2"]["eligible_at"] == "ELIGIBLE"
+
+
+def test_later_started_manual_attempt_wins_even_if_sfn_attempt_finishes_last():
+    # WHY: current_attempt_id는 종료 순서로 바뀌므로 시작 순서의 정본이 아니다. 먼저 시작한 SFN이
+    # 수동 복구 뒤 늦게 끝났다고 수동 성공을 과거로 만들면 dashboard가 다시 빨개진다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FAILED, "outcome_reason": "attempt_failed",
+        "current_attempt_id": "sfn", "eligible_at": _OLD,
+    }])
+    db.attempts.extend([
+        {"attempt_id": "sfn", "etid": "e1", "arn": "arn:task/sfn",
+         "status": states.EXEC_FAILED, "exit_code": 1, "source": "WRAPPER",
+         "started_at": _OLD},
+        {"attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _PAST},
+    ])
+    history = _entered(
+        "NormalizeInvestorEstimate", arn="arn:task/sfn", succeeded=True, exit_code=1,
+    )
+    history[0]["timestamp"] = datetime.fromisoformat(_OLD)
+
+    _reconcile(db, status="FAILED", history=history)
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e1"]["outcome_reason"] is None
+
+
+def test_terminal_reconcile_does_not_overwrite_concurrent_wrapper_completion():
+    # WHY: Reconciler의 terminal 판정도 오래된 task snapshot을 쓴다. 그 사이 더 최신 wrapper가
+    # 실패를 확정하면 CAS 없는 성공 UPDATE가 current_attempt와 outcome을 서로 모순되게 만든다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FAILED, "outcome_reason": "old_failure",
+        "current_attempt_id": "old", "eligible_at": _OLD,
+    }])
+    db.attempts.append({
+        "attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+        "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+        "started_at": _OLD,
+    })
+
+    class RacingLedger(Ledger):
+        raced = False
+
+        def update_task_outcome(self, expected_task_id, **kwargs):
+            if kwargs.get("observed_updated_at") is not None and not self.raced:
+                self.raced = True
+                super().update_task_outcome(
+                    expected_task_id, task_outcome=states.OUTCOME_FAILED,
+                    outcome_reason="latest_failure", current_attempt_id="latest",
+                )
+            return super().update_task_outcome(expected_task_id, **kwargs)
+
+    reconcile_run(
+        RacingLedger(db=_DB, connect_fn=db.connect), run_key=_RUN_KEY, now=_NOW,
+        sfn_client=FakeSfn(
+            history=_entered(
+                "NormalizeInvestorEstimate", arn="arn:task/old", succeeded=True, exit_code=0,
+            ),
+            describe={"status": "FAILED"},
+        ),
+        ecs_client=FakeEcs(),
+    )
+
+    task = db.etasks_by_id["e1"]
+    assert task["task_outcome"] == states.OUTCOME_FAILED
+    assert task["outcome_reason"] == "latest_failure"
+    assert task["current_attempt_id"] == "latest"
+
+
+def test_sfn_arn_history_lag_does_not_change_attempt_order():
+    # WHY: 같은 SFN attempt를 ARN 도착 전에는 ledger started_at, 도착 뒤에는 더 이른 state 진입
+    # 시각으로 정렬하면 새 실행 없이 history가 채워진 것만으로 최신 결과가 뒤집힌다.
+    sfn_started = "2026-07-24T02:00:00+00:00"
+
+    def reconcile_with(history):
+        db = FakeOpsDB()
+        _seed(db, [{
+            "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+            "task_outcome": states.OUTCOME_FULFILLED, "current_attempt_id": "manual",
+            "eligible_at": _OLD,
+        }])
+        db.attempts.extend([
+            {"attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+             "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+             "started_at": _PAST},
+            {"attempt_id": "sfn", "etid": "e1", "arn": "arn:task/sfn",
+             "status": states.EXEC_FAILED, "exit_code": 1, "source": "WRAPPER",
+             "started_at": sfn_started},
+        ])
+        _reconcile(db, status="FAILED", history=history)
+        return db.etasks_by_id["e1"]["task_outcome"]
+
+    before_arn = _entered("NormalizeInvestorEstimate")
+    before_arn[0]["timestamp"] = datetime.fromisoformat(_OLD)
+    after_arn = _entered(
+        "NormalizeInvestorEstimate", arn="arn:task/sfn", succeeded=True, exit_code=1,
+    )
+    after_arn[0]["timestamp"] = datetime.fromisoformat(_OLD)
+
+    assert reconcile_with(before_arn) == states.OUTCOME_FAILED
+    assert reconcile_with(after_arn) == states.OUTCOME_FAILED
+
+
+def test_backfilled_old_sfn_attempt_keeps_original_start_order_across_polls():
+    # WHY: 누락 attempt를 대조 시각으로 backfill하면 첫 poll에선 수동 성공이 최신이었다가 같은
+    # history의 두 번째 poll에서 과거 SFN 실패가 최신으로 바뀐다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FULFILLED, "eligible_at": _OLD,
+    }])
+    db.attempts.append({
+        "attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+        "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+        "started_at": _PAST,
+    })
+    history = _entered(
+        "NormalizeInvestorEstimate", arn="arn:task/scheduled", succeeded=True, exit_code=1,
+    )
+    history[0]["timestamp"] = datetime.fromisoformat(_OLD)
+
+    _reconcile(db, status="FAILED", history=history)
+    first = db.etasks_by_id["e1"]["task_outcome"]
+    _reconcile(db, status="FAILED", history=history)
+
+    assert first == states.OUTCOME_FULFILLED
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    backfilled = next(a for a in db.attempts if a["arn"] == "arn:task/scheduled")
+    assert backfilled["started_at"] == datetime.fromisoformat(_OLD)
+
+
+def test_legacy_backfill_timestamp_is_corrected_before_attempt_ordering():
+    # WHY: 배포 전 backfill 행의 started_at은 실제 시작이 아니라 늦은 대조 시각이다. 이 값을
+    # 그대로 믿으면 더 나중에 시작한 수동 복구 성공을 과거 SFN 실패가 다시 덮는다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_FULFILLED, "eligible_at": _OLD,
+    }])
+    db.attempts.extend([
+        {"attempt_id": "manual", "etid": "e1", "arn": "arn:task/manual",
+         "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+         "started_at": _PAST},
+        {"attempt_id": "legacy", "etid": "e1", "arn": "arn:task/scheduled",
+         "status": states.EXEC_FAILED, "exit_code": 1, "source": "RECONCILER_BACKFILL",
+         "started_at": "2026-07-24T02:00:00+00:00"},
+    ])
+    history = _entered(
+        "NormalizeInvestorEstimate", arn="arn:task/scheduled", succeeded=True, exit_code=1,
+    )
+    history[0]["timestamp"] = datetime.fromisoformat(_OLD)
+
+    _reconcile(db, status="FAILED", history=history)
+    _reconcile(db, status="FAILED", history=history)
+
+    assert db.etasks_by_id["e1"]["task_outcome"] == states.OUTCOME_FULFILLED
+    legacy = next(a for a in db.attempts if a["attempt_id"] == "legacy")
+    assert legacy["started_at"] == datetime.fromisoformat(_OLD)
+
+
+def test_set_eligible_cas_conflict_stops_stale_terminal_judgement():
+    # WHY: eligible_at을 찍는 UPDATE도 task snapshot 뒤에 실행된다. 그 사이 wrapper가 새 결과를
+    # 쓰면 eligible UPDATE가 만든 새 버전을 Reconciler가 자기 버전으로 오인해서는 안 된다.
+    db = FakeOpsDB()
+    _seed(db, [{
+        "task_key": "NORMALIZE_INVESTOR_INTRADAY", "expected_task_id": "e1",
+        "task_outcome": states.OUTCOME_MISSED, "current_attempt_id": "old",
+        "eligible_at": None,
+    }])
+    db.attempts.append({
+        "attempt_id": "old", "etid": "e1", "arn": "arn:task/old",
+        "status": states.EXEC_SUCCEEDED, "exit_code": 0, "source": "WRAPPER",
+        "started_at": _OLD,
+    })
+
+    class RacingLedger(Ledger):
+        raced = False
+
+        def set_eligible(self, expected_task_id, **kwargs):
+            if not self.raced:
+                self.raced = True
+                super().update_task_outcome(
+                    expected_task_id, task_outcome=states.OUTCOME_FAILED,
+                    outcome_reason="latest_failure", current_attempt_id="latest",
+                )
+            return super().set_eligible(expected_task_id, **kwargs)
+
+    summary = reconcile_run(
+        RacingLedger(db=_DB, connect_fn=db.connect), run_key=_RUN_KEY, now=_NOW,
+        sfn_client=FakeSfn(
+            history=_entered(
+                "NormalizeInvestorEstimate", arn="arn:task/old", succeeded=True, exit_code=0,
+            ),
+            describe={"status": "FAILED"},
+        ),
+        ecs_client=FakeEcs(),
+    )
+
+    task = db.etasks_by_id["e1"]
+    assert task["task_outcome"] == states.OUTCOME_FAILED
+    assert task["outcome_reason"] == "latest_failure"
+    assert task["current_attempt_id"] == "latest"
+    assert task["eligible_at"] is None
+    assert summary["fulfilled_late"] == []
+
+
 def test_planner_missing_when_slot_has_no_run():
     """시나리오 19 — schedule 상 있어야 할 run_key 부재 → PLANNER_MISSING, 생기면 RESOLVE."""
     db = FakeOpsDB()

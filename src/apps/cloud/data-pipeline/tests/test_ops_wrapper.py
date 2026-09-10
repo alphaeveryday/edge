@@ -127,6 +127,24 @@ def test_krx_without_artifact_keeps_planner_evidence_missing():
     assert row["freshness_reason"] == states.FRESHNESS_EVIDENCE_MISSING
 
 
+def test_successful_retry_clears_previous_outcome_reason():
+    # WHY(ALPHA-1063): 실패 뒤 one-off 복구가 성공하면 outcome과 함께 실패 사유도 현재 시도로
+    # 교체되어야 한다. 실패 사유가 남으면 상세 화면은 초록 outcome 옆에 옛 실패를 계속 노출한다.
+    db = FakeOpsDB()
+    _seed(db, task_key="ETF_HOLDINGS_COLLECTION_KRX")
+    row = db.etasks_by_id["et1"]
+    row["task_outcome"] = states.OUTCOME_FAILED
+    row["outcome_reason"] = "attempt_failed"
+
+    wrapper.instrument(
+        lambda: 0, task_key="ETF_HOLDINGS_COLLECTION_KRX", run_id="R",
+        ledger=_ledger(db), ecs_task_arn="arn:task/recovery",
+    )
+
+    assert row["task_outcome"] == states.OUTCOME_FULFILLED
+    assert row["outcome_reason"] is None
+
+
 def test_kis_nav_uses_latest_vendor_trade_date_as_actual_as_of():
     """WHY: NAV 날짜창에는 여러 거래일이 정상적으로 섞인다. 요청일이 아니라 KIS 응답의
     stck_bsop_date 최댓값이 이 전달 경계가 실제로 확보한 최신 업무 기준일이다."""
