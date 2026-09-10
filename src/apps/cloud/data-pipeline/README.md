@@ -427,9 +427,9 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
 # etf_map, 현재 KR 38종 — 국내 반도체 30종 + KODEX 200 + 섹터 2종 + 은행 + 테마 4종,
-# ALPHA-454·624·927·936). 날짜창 없이
-# 그날(trdDd)
-# PDF 전량을 append(US ETF 와 동형). 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
+# ALPHA-454·624·927·936). 날짜창 미지정이면 그날(trdDd), 과거 복구는 같은 거래일을
+# --from/--to 양쪽에 지정해 그날 PDF 전량을 append한다. KRX PDF는 한 날짜 snapshot이라
+# 다일 범위와 한쪽만 지정한 창은 거부한다. 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
 # (현 유니버스엔 없다 — 경로만 유지). ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
 # --deadline-sec N: 벽시계 상한(ALPHA-581) — 벤더 열화로 상한에 닿으면 받은 것은 저장하고
 # 미시도 ETF 를 failed_etfs 로 기록하며 조기 마감(status=partial). 판정은 ETF 사이에서만
@@ -437,6 +437,9 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 미지정=무제한(기존 동작). SFN 배선은 krx_etf_deadline_sec 변수(statemachine.tf).
 DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-etf --source krx
+# 단일 거래일 백필 예:
+#   ... run ingest-raw-etf --source krx --from 2026-09-07 --to 2026-09-07
+# 명시 백필은 대상 연도가 포함된 OPS_KR_HOLIDAYS 설정이 있어야 한다. 거래일을 추측하지 않는다.
 
 # 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
 # KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
@@ -838,9 +841,11 @@ durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 
     `_as_of` 로 "거래일이면 오늘, 아니면 직전 거래일"을 라벨한다. 안 그러면 존재하지 않는
     거래일의 스냅샷이 canonical 에 as-of 로 남는다. 휴장일 집합은 Planner 와 같은
     `OPS_KR_HOLIDAYS`(terraform `kr_holidays`)를 krx task-def 에도 주입해 공유한다.
-  - ⚠️ 잔여(ALPHA-387): **trdDd 백필 수단 부재** — `ingest-raw-etf` 는 `--from/--to` 를 안 받아
-    실패한 날의 스냅샷을 다음 런이 못 줍는다(영구 결손, 별도 티켓). 빈 응답은 계속 fail-loud
-    이고, ALPHA-460 이후 그 실패가 뒤 페이즈를 막지는 않는다(알림 + 런 FAILED 마감).
+  - **trdDd 단일 거래일 백필**(ALPHA-1063): `ingest-raw-etf --source krx`에 같은 날짜의
+    `--from/--to`를 주면 그 거래일 snapshot을 다시 받는다. 대상 연도를 포함한
+    `OPS_KR_HOLIDAYS` 설정이 필수이고, 다일·반쪽 창과 휴장일·미래일은 fail-loud 한다.
+    빈 응답도 계속 실패이며, ALPHA-460 이후 그 실패가 뒤 페이즈를 막지는 않는다
+    (알림 + 런 FAILED 마감).
 - `ingest-raw-etf-profile`(국내 ETF 프로필 = ETF 마스터 표시명 출처, **kis 세트**, ALPHA-462)
 - `ingest-raw-investor`(종목별 투자자 수급, **kis 세트**, ALPHA-482) — 유니버스는 canonical KR
   holdings 파생(가격과 같은 축). `NormalizeInvestor → LoadEtfFlow` 체인의 raw 선행이다.

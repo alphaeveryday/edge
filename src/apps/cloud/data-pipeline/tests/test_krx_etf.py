@@ -45,12 +45,12 @@ class FakeClient:
         return json.dumps(payload)
 
 
-def _source(responses, etf_map=None, auth=None):
+def _source(responses, etf_map=None, auth=None, as_of_date=None):
     config = KrxEtfSourceConfig(
         mbr_id="id", pw="pw",
         etf_map=etf_map if etf_map is not None else {"069500": "KR7069500007"},
     )
-    src = KrxEtfSource(config, FakeClient(responses))
+    src = KrxEtfSource(config, FakeClient(responses), as_of_date=as_of_date)
     src.auth = auth or FakeAuth()
     return src
 
@@ -102,6 +102,63 @@ def test_fetch_attaches_meta_and_preserves_original():
     assert row["trd_dd"] in {before, after}
     # 원본 필드 무변형 보존.
     assert row["COMPST_ISU_CD"] == "005930" and row["COMPST_RTO"] == "30.5"
+
+
+def test_explicit_as_of_requests_the_historical_trading_day(monkeypatch):
+    # WHY(ALPHA-1063): KRX는 과거 trdDd를 지원하지만 CLI가 창을 무시해 실패일 재실행이 오늘
+    # 스냅샷으로 바뀌었다. 명시한 거래일이 요청과 raw 라벨 양쪽에 그대로 남아야 복구가 된다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-01-01")
+    src = _source(
+        {"KR7069500007": {"output": [{"COMPST_ISU_CD": "005930"}]}},
+        as_of_date=date(2026, 9, 7),
+    )
+
+    [row] = list(src.fetch())
+
+    assert row["trd_dd"] == "20260907"
+
+
+@pytest.mark.parametrize("as_of_date", [date(2026, 9, 6), date(2099, 1, 1)])
+def test_explicit_as_of_rejects_non_trading_or_future_dates(monkeypatch, as_of_date):
+    # WHY: 응답에 실제 기준일이 없어 휴장일·미래일을 요청일로 라벨하면 잘못된 snapshot이
+    # canonical까지 정상 데이터처럼 간다. API 호출 전에 닫아야 한다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-01-01")
+    src = _source(
+        {"KR7069500007": {"output": [{"COMPST_ISU_CD": "005930"}]}},
+        as_of_date=as_of_date,
+    )
+
+    with pytest.raises(ValueError, match="거래일|미래일"):
+        list(src.fetch())
+    assert src.auth.calls == 0
+
+
+def test_explicit_as_of_requires_holiday_calendar_for_target_year(monkeypatch):
+    # WHY: 휴장일 설정이 없거나 다른 연도만 있으면 평일 공휴일을 거래일로 오인해 요청일
+    # 라벨로 저장한다. 실제 KRX 응답에는 기준일 증거가 없으므로 추측 대신 닫아야 한다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2025-01-01")
+    src = _source(
+        {"KR7069500007": {"output": [{"COMPST_ISU_CD": "005930"}]}},
+        as_of_date=date(2026, 9, 7),
+    )
+
+    with pytest.raises(ValueError, match="2026년.*OPS_KR_HOLIDAYS"):
+        list(src.fetch())
+    assert src.auth.calls == 0
+
+
+@pytest.mark.parametrize("calendar", ["2026-not-a-date", "20260101", "2026-W01-4"])
+def test_explicit_as_of_rejects_malformed_holiday_calendar(monkeypatch, calendar):
+    # WHY: 연도 접두사만 맞는 불량 설정을 달력 근거로 인정하면 휴장일 검증이 다시 fail-open 된다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", calendar)
+    src = _source(
+        {"KR7069500007": {"output": [{"COMPST_ISU_CD": "005930"}]}},
+        as_of_date=date(2026, 9, 7),
+    )
+
+    with pytest.raises(ValueError, match="잘못된 날짜|YYYY-MM-DD"):
+        list(src.fetch())
+    assert src.auth.calls == 0
 
 
 def test_foreign_underlying_dash_preserved():
@@ -249,9 +306,8 @@ def test_상한에_닿으면_받은_행을_버리지_않고_조기_마감한다(
 
 
 def test_상한에_걸린_대상은_정체를_남긴다(monkeypatch):
-    # WHY: "몇 종 실패"만으로는 다음 날 무엇을 복구할지 모른다. KRX 는 trdDd 백필 수단이 없어
-    #      (ALPHA-387) 그날 못 받은 ETF 는 그날로 끝이라, **미시도 목록이 곧 결손 목록**이다.
-    #      개수만 세는 구현으로 바뀌면 이 테스트가 깨져야 한다.
+    # WHY: "몇 종 실패"만으로는 어떤 ETF를 백필 후 대조해야 할지 모른다. 전체 snapshot을
+    #      다시 받아도 **미시도 목록이 곧 원래 결손 목록**이라 개수만 세면 검증할 수 없다.
     etf_map, responses = _multi_etf(4)
     _clock(monkeypatch, [0, 0, 100, 100])
     src = _source(responses, etf_map=etf_map)

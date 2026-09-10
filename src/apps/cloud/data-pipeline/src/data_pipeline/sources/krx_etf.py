@@ -7,7 +7,7 @@
 US(FmpEtfSource)와 같은 관례 인터페이스(source_name·enabled·plan·fetch·fetch_failures·
 planned_etfs)를 지켜 기존 `ingest_raw_etf` 스텝을 그대로 재사용한다. 차이는 (1) 인증이 KRX
 계정 로그인(run 당 1회, krx_auth) (2) KR 시장 전용이라 market 은 항상 KR (3) etf_map 이
-our_etf_id → ISIN(표준코드)이고, ETF 당 1콜로 현재 PDF 구성종목 전량(스냅샷)을 받는다.
+our_etf_id → ISIN(표준코드)이고, ETF 당 1콜로 지정 기준일 PDF 구성종목 전량(스냅샷)을 받는다.
 
 기준일(as-of)은 우리가 지정하는 trdDd 다 — 매 run 이 그날의 PDF 전량을 받아 append 한다
 (재무·US ETF 스냅샷과 동형). raw 존에는 output 행 원본에 수집 provenance(our_etf_id·market·
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import urllib.parse
 from collections.abc import Iterator
@@ -68,6 +69,32 @@ def _short_code(isin: str) -> str:
     return isin[3:9] if len(isin) >= 9 else isin
 
 
+def _validate_historical_as_of(day: date, today: date) -> None:
+    """명시 백필일을 검증한다. 대상 연도 휴장일 설정이 없으면 거래일을 추측하지 않는다."""
+    if day > today:
+        raise ValueError(f"KRX ETF 기준일은 미래일 수 없다: {day}")
+    holiday_values = {
+        value.strip() for value in os.environ.get("OPS_KR_HOLIDAYS", "").split(",")
+        if value.strip()
+    }
+    holidays = set()
+    for value in holiday_values:
+        try:
+            holiday = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("OPS_KR_HOLIDAYS에 잘못된 날짜가 있다") from exc
+        if holiday.isoformat() != value:
+            raise ValueError("OPS_KR_HOLIDAYS는 YYYY-MM-DD 형식이어야 한다")
+        holidays.add(holiday)
+    if not any(holiday.year == day.year for holiday in holidays):
+        raise ValueError(
+            f"KRX ETF {day.year}년 백필에 필요한 OPS_KR_HOLIDAYS 설정이 없다"
+        )
+    normalized_holidays = frozenset(holiday.isoformat() for holiday in holidays)
+    if latest_kr_trading_day(day, normalized_holidays) != day:
+        raise ValueError(f"KRX ETF 기준일은 KR 거래일이어야 한다: {day}")
+
+
 class KrxEtfSource:
     """KRX 데이터시스템 ETF 구성종목 어댑터 — etf_map 이 곧 유니버스.
     deadline_sec 은 ETF 요청 사이에 검사하는 소프트 상한이다 — 넘긴 것을
@@ -76,7 +103,11 @@ class KrxEtfSource:
     source_name = "krx"
 
     def __init__(
-        self, config: KrxEtfSourceConfig, client: PoliteClient, deadline_sec: float | None = None
+        self,
+        config: KrxEtfSourceConfig,
+        client: PoliteClient,
+        deadline_sec: float | None = None,
+        as_of_date: date | None = None,
     ):
         self.config_enabled = config.enabled
         self.mbr_id = config.mbr_id
@@ -92,6 +123,7 @@ class KrxEtfSource:
         # 갖고 있었는데 프로세스가 그 앞에서 끊겼다). 끝나는 방식을 벤더나 사람이 아니라
         # 우리가 정해야 한다 — 상한에 닿으면 스스로 접고 **받은 것은 저장**한다.
         self.deadline_sec = deadline_sec
+        self.as_of_date = as_of_date
         self.auth = KrxAuth(config.mbr_id or "", config.pw or "")
         # ETF 단위로 격리한 실패를 여기 쌓아 스텝이 런 로그에 반영한다(격리≠은폐).
         self.fetch_failures: list[dict] = []
@@ -122,9 +154,8 @@ class KrxEtfSource:
         """상한에 걸려 **시도조차 못 한** 대상을 하나씩 기록한다.
 
         개수만 남기지 않고 정체(ISIN)를 남기는 이유: "7종 실패"와 "12종은 시도조차 못 함"은
-        다른 사실이고, 뒤엣것의 목록이 없으면 다음 날 결손 범위를 알 수 없다. KRX 는 trdDd
-        백필 수단이 없어(ALPHA-387) 그날 못 받은 ETF 는 그날로 끝이다 — 무엇이 빠졌는지가
-        곧 복구 대상 목록이다.
+        다른 사실이고, 뒤엣것의 목록이 없으면 백필 범위를 알 수 없다. KRX는 ETF별 선택
+        백필이 아니라 거래일 snapshot 전체를 다시 받으므로 무엇이 빠졌는지가 검증 대상이다.
 
         기록 자리는 `fetch_failures` 그대로다. 스텝이 이 목록을 보고 status=partial 로 남기고
         collection_log 에 실어 보내므로, 새 통로를 만들 이유가 없다(어휘 확장 금지).
@@ -151,9 +182,11 @@ class KrxEtfSource:
         if not plan:
             return
         fetched_at = datetime.now(timezone.utc).isoformat()
-        # 기준일 = 거래일이면 오늘, 비거래일이면 직전 거래일(_as_of 주석에 근거).
-        # ponytail: trdDd 백필(--to 배선)은 필요 시 추가.
-        trd_dd = _as_of(datetime.now(KST).date()).strftime("%Y%m%d")
+        today = datetime.now(KST).date()
+        if self.as_of_date is not None:
+            _validate_historical_as_of(self.as_of_date, today)
+        # 정규 실행은 오늘/직전 거래일, 수동 백필은 검증된 명시 거래일을 그대로 요청한다.
+        trd_dd = (self.as_of_date or _as_of(today)).strftime("%Y%m%d")
         # 로그인 1회(ETF마다 로그인 금지). 실패는 fetch 밖으로 전파해 소스 전체를 중단한다.
         jsessionid = self.auth.session()
         started_at = time.monotonic()

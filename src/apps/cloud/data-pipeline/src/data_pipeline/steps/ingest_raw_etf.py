@@ -3,9 +3,10 @@
 FMP ETF holdings 에서 ETF 별 구성종목 스냅샷을 수집해, market 별로 ingest_date 파티션
 (수집일) ndjson 으로 raw 존에 append 하고, 실행 결과를 collection_log 로 남긴다.
 
-가격(ingest_price_raw)과 동형이되 ETF holdings 는 스냅샷이라 날짜창(from/to)이 없다 —
-매 run 이 현재 구성종목 전량을 받아 그대로 append 한다(전부 보존, dedup 없음). 벤더
-기준일(updatedAt)은 각 레코드에 보존돼 후속 canonical 이 쓴다. 같은 스냅샷 중복 제거·
+가격(ingest_price_raw)과 동형이되 ETF holdings 는 한 기준일의 스냅샷이다. 정규 실행은 현재
+구성종목 전량을, KRX 명시 백필은 어댑터가 선택한 과거 거래일 전량을 받아 그대로 append 한다
+(전부 보존, dedup 없음). 벤더 기준일(updatedAt/trd_dd)은 각 레코드에 보존돼 후속 canonical 이
+쓴다. 같은 스냅샷 중복 제거·
 기준일 SCD·point-in-time 판정은 후속 canonical/etf_holdings(ALPHA-343) 소관이다.
 """
 
@@ -44,8 +45,8 @@ def run(
 ) -> int:
     """수집 실행. 성공 0, 중단/실패 비0 반환. 결과는 항상 collection_log 로 남긴다.
 
-    ETF holdings 는 스냅샷이라 날짜창이 없다 — 재무(ingest_raw_financial)처럼 창 인자를
-    받지 않고 매 run 이 현재 구성종목 전량을 수집한다.
+    ETF holdings 는 한 기준일 스냅샷이라 이 스텝이 창 인자를 받지 않는다. 정규 실행은 현재
+    기준일, KRX 단일일 백필은 소스 생성자가 검증해 보유한 과거 기준일 전량을 수집한다.
 
     NAV(ALPHA-380)도 같은 형상이라 이 스텝을 재사용한다 — 차이는 dataset/파티션 빌더뿐이라
     `dataset`·`partition`·`job_name` 으로만 가른다(로직 분기 없음). NAV 는 날짜창을 쓰지만
