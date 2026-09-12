@@ -19,7 +19,7 @@ public class RedisCircuitBreakerConfig {
 				.failureRateThreshold(50)
 				.slidingWindowSize(20)
 				.minimumNumberOfCalls(10)
-				.waitDurationInOpenState(Duration.ofSeconds(2))
+				.waitDurationInOpenState(Duration.ofSeconds(5))
 				.permittedNumberOfCallsInHalfOpenState(3)
 				.build());
 		circuitBreaker.getEventPublisher().onStateTransition(event ->
