@@ -8,12 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
-import java.util.Optional;
 
 public interface ForecastRepository extends JpaRepository<Forecast, Long> {
-
-	@Query(value = "select id from forecast where id = :id and status = 'OPEN' for share", nativeQuery = true)
-	Optional<Long> lockOpen(@Param("id") long id);
 
 	@Modifying
 	@Query(value = """
