@@ -143,28 +143,25 @@ class TestPlan:
         assert payload["windows"]["first"].endswith("09:00:00+09:00")
         assert payload["windows"]["last"].endswith("15:30:00+09:00")
 
-    def test_공시_세션은_universe_없이_시간외_격자로_계획된다(self, ledger_db, capsys):
-        """DART 당일접수는 07:30~18:00 이라 정규장 격자면 **16·17·18시가 계획에서 빠진다**
-        — 현 SFN 레인이 그 3슬롯을 돌고 있어서 그대로 컷오버하면 그 접수분이 다음 거래일
-        아침까지 안 들어온다(ALPHA-875).
+    def test_공시_세션은_universe_없이_정규장_격자로_계획된다(self, ledger_db, capsys):
+        """장중 최신성은 390창, 장외 회수는 마감 배치가 맡는다.
 
-        공시는 소스 단위라 universe 가 없다. `universe and universe.extended_hours_ids` 로
-        게이트를 두면 universe=None 이 falsy 라 `EXTENDED_HOURS_DATASETS` 에 넣어도 격자가
-        조용히 390 에 머문다 — 위 iNAV 테스트와 정확히 반대 방향의 배선 반례다.
+        실제 CLI 배선이 공시를 시간외로 넓히면 16:10 종료 뒤 처리할 수 없는 창이 남는다.
+        universe가 없는 소스여도 09:00~15:30 경계를 지켜야 한다.
         """
         code = plan_session_cli(
             make_settings(), dataset="disclosure_minute", source_group="dart",
             session_date="2026-07-31", universe=None,
         )
         payload = json.loads(capsys.readouterr().out)
-        assert (code, payload["window_count"]) == (0, 720)
-        assert payload["windows"]["first"].endswith("08:00:00+09:00")
-        assert payload["windows"]["last"].endswith("20:00:00+09:00")
+        assert (code, payload["window_count"]) == (0, 390)
+        assert payload["windows"]["first"].endswith("09:00:00+09:00")
+        assert payload["windows"]["last"].endswith("15:30:00+09:00")
 
     def test_뉴스_세션은_같은_경로에서_정규장_격자로_남는다(self, ledger_db, capsys):
-        """공시와 **같은 호출 형태**(universe=None)로 dataset 만 바꾼다 — 위 720 테스트와
-        짝이다. `EXTENDED_HOURS_DATASETS` 게이트를 통째로 걷어내는 구현은 위 테스트만으로
-        통과하고, 그러면 뉴스가 아무도 안 채우는 시간외 window 330개를 매일 DUE 로 쌓는다.
+        """뉴스도 공시와 같은 소스 단위 정규장 격자다.
+
+        시간외 정책을 모든 dataset에 적용하면 빈 시간외 창 330개가 추가된다.
         """
         code = plan_session_cli(
             make_settings(), dataset="news_minute", source_group="bigkinds",
@@ -210,7 +207,7 @@ class TestPlan:
 
     def test_업종지수_세션은_universe_없이_정규장_격자로_계획된다(self, ledger_db, capsys):
         """공시와 **같은 호출 형태**(universe=None)인데 격자는 390 이어야 한다 — 위
-        공시 720 테스트와 짝이다.
+        공시 390 테스트와 짝이다.
 
         이 dataset 은 형상이 하이브리드다: universe 축은 공시(소스 단위)인데 격자는
         iNAV(정규장)다. 한쪽만 보고 배선하면 `EXTENDED_HOURS_DATASETS` 에 같이 넣게

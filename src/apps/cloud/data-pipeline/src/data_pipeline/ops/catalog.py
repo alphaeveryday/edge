@@ -413,7 +413,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     ),
     # ══ 공시 마감 보충 배치 4작업(ALPHA-1073) ══════════════════════════════════
     # 장중은 minute 원장·직접 함수 호출, 마감 배치는 ops 원장·CLI로 구분한다.
-    # 카탈로그를 먼저 복원해 배포하고, ALPHA-1074에서 19:30 스케줄을 켠다.
+    # 카탈로그 복원 앱을 먼저 배포한 뒤 ALPHA-1074에서 19:30 스케줄을 켠다.
     # schedule DISABLED 동안 OPS_DISCLOSURE_SCHED_HHMM은 비어 기대 슬롯이 생기지 않는다.
     # 기존 deadline/partial/휴일 계약은 유지한다. 배치는 MON-FRI라 평일 공휴일에도 돈다.
     CatalogEntry(

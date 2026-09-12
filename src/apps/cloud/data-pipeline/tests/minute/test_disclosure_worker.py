@@ -27,7 +27,7 @@ from data_pipeline.minute import disclosure_worker as dw
 from data_pipeline.minute.commit import MinuteCommitter
 from data_pipeline.minute.models import KST, plan_session_windows
 from data_pipeline.minute.repository import MinuteLedger
-from data_pipeline.minute.states import DATASET_DISCLOSURE_MINUTE
+from data_pipeline.minute.states import DATASET_DISCLOSURE_MINUTE, EXTENDED_HOURS_DATASETS
 
 sys.path.insert(0, str(Path(__file__).parent))
 from minutefakes import FakeMinuteDB  # noqa: E402
@@ -157,9 +157,12 @@ def install(monkeypatch, steps: StubSteps) -> StubSteps:
 
 def build_worker(db, tmp_path, *, windows=3):
     ledger = MinuteLedger(db=_DB, connect_fn=db.connect)
-    # 격자는 720 이다 — 공시는 시간외를 계획한다(DART 접수 07:30~18:00). universe 는 없다.
-    planned = plan_session_windows(SESSION_DAY, universe=None, extended_hours=True)
-    assert len(planned) == 720, "공시 격자가 720 이 아니면 PR A 의 전제가 깨진 것이다"
+    # 운영 planner와 같은 정책으로 390창을 만들고 테스트에 필요한 앞부분만 사용한다.
+    planned = plan_session_windows(
+        SESSION_DAY, universe=None,
+        extended_hours=DATASET_DISCLOSURE_MINUTE in EXTENDED_HOURS_DATASETS,
+    )
+    assert len(planned) == 390, "장외 회수는 배치 소관이므로 상주는 390창이어야 한다"
     session_id, _ = ledger.plan_session(
         dataset=DATASET_DISCLOSURE_MINUTE, source_group="dart", session_date=SESSION_DAY,
         universe_version="disclosure-univ-v1", universe_hash="h" * 64,
@@ -446,7 +449,7 @@ def test_절단은_캐치업을_소진하지_않는다(tmp_path, monkeypatch):
 
 def test_안_봤으면_빈_성공이_아니다(tmp_path, monkeypatch):
     """`skipped`(소스 비활성·매핑 대상 0건)는 exit 0 이라 그냥 두면 VALID_EMPTY 로 접힌다 —
-    그러면 하루 720 window 가 **공시 0건인 정상 거래일**로 확정된다. "그 창에 공시가 없었다"와
+    그러면 하루 390 window 가 **공시 0건인 정상 거래일**로 확정된다. "그 창에 공시가 없었다"와
     "우리가 안 봤다"는 다른 사실이다(Rule 12)."""
     db = FakeMinuteDB()
     install(monkeypatch, StubSteps(status="skipped", rcept_nos=(), raw_keys=[]))
@@ -481,7 +484,7 @@ def test_세대_불일치는_삼키지_않는다(tmp_path, monkeypatch):
 # ── 2. 정제 입력 — raw 전량 스캔 부재 ──────────────────────────
 
 def test_정제는_방금_쓴_키만_받고_raw_전량_스캔을_하지_않는다(tmp_path, monkeypatch):
-    """`list_keys("raw/")` 는 버킷 전량 스캔이다 — 하루 720 tick 이 그걸 돌 수 없고,
+    """`list_keys("raw/")` 는 버킷 전량 스캔이다 — 하루 390 tick 이 그걸 돌 수 없고,
     비용이 레이크 크기에 비례해 자란다. 기능은 정상으로 보이므로 **부재를 구조로** 단언한다
     (프리픽스 목록을 기록해서 — 호출 수를 세면 다른 스캔이 섞여도 통과한다)."""
     db = FakeMinuteDB()
@@ -538,7 +541,7 @@ def test_실제_정제가_넘겨받은_키만_읽고_raw_를_LIST_하지_않는�
 
 def test_규약_밖_키를_넘기면_조용히_버리지_않는다(tmp_path):
     """넘겨받은 키를 미리 걸러내면 그 사고가 **사유 없이** 사라진다 — 전건이 걸러진 경우
-    `records_read=0` + exit 0 이 되어 호출자가 VALID 로 확정한다(하루 720 window). 규약 밖 키는
+    `records_read=0` + exit 0 이 되어 호출자가 VALID 로 확정한다(하루 390 window). 규약 밖 키는
     기존 loud 경로(`raw_read_error` + exit 1)로 남아야 한다."""
     from data_pipeline.steps import normalize_disclosure
 
