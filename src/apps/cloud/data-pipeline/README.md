@@ -796,6 +796,9 @@ source group을 비우고 19:30 배치를 유지한다.
 390창·16:10 drain·19:30 배치 및 이 경보 정리 확인까지 ALPHA-1074를 완료 처리하지 않는다.
 장중 워커는 직접 함수를 호출해 minute 원장에 기록하고 배치 CLI는 ops 원장에 기록한다.
 `plan-run`의 빈 카탈로그 거부는 유지하며, 복원된 공시 배치는 자기 4작업을 계획한다.
+배치의 완료 경계는 typed fact 적재다. 기존 장중 이벤트 조립은 유지하지만 장외 공시의
+`source_event` 자동 조립은 이번 복원 범위에 포함하지 않는다. 분석엔진의 기존
+`statics/tool_business.py`는 `s3_supply_fact`를 직접 조회한다.
 
 정상 SFN의 `LoadDisclosure`는 `--input-run-id`로 completed dual manifest의 direct key winner를
 pending에 commit한 뒤 pending만 typed 적재한다. shared canonical 상위 prefix LIST/fullscan은
