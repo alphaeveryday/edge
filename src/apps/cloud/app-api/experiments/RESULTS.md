@@ -94,6 +94,8 @@ Redis 경로 복귀(kill+11.4s)가 승격(+6.4s)보다 늦은 것은 서킷 open
 
 ## 발견 4 — sentinel 이중 정체성: 승격 노드가 자기 자신의 replica 로 강등
 
+상세 사고 기록: [sentinel-dual-identity.md](sentinel-dual-identity.md)
+
 비교 회전 중 **`monitor` 를 hostname 으로 등록한 노드가 승격 대상이 된 2개 런에서 모두**
 승격 0.9~2초 뒤 sentinel 이 그 노드에 `REPLICAOF <자기 주소>` 를 보내 자기 자신의
 replica 로 강등시키는 사고가 재현됐다 (replica-N 컨테이너가 승격될 땐 발생하지 않음).
