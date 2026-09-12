@@ -116,3 +116,43 @@ replica 로 강등시키는 사고가 재현됐다 (replica-N 컨테이너가 �
 - down-after 2000ms 미만 — 실환경(네트워크 지연 변동) 기준으로만 의미
 - 층 2 회복 과도기 p95(149.6ms) 축소 — half-open 시험을 부하 요청이 아닌 별도 프로브로
 - 재조정 잡 주기 10s 단축 vs DB 부하 — 스탬피드 실험(2단계 판정)과 함께
+
+## 회전 4 — 클라이언트(Lettuce) 집중 (down-after 2000ms 고정)
+
+초점 교정: sentinel 설정이 아니라 **클라이언트가 장애를 어떻게 겪는가**를 측정.
+같은 master SIGKILL 시나리오를 클라이언트 형상 3종으로 반복.
+
+### Lettuce 재탐색 타임라인 분해 (Run A, 서킷 ON)
+
+| 단계 | 시각 | 관측 근거 |
+|---|---|---|
+| 채널 끊김 인지 (ConnectionWatchdog) | kill+0.05s | `Reconnecting, last destination …` |
+| 재연결 백오프 루프 (sentinel 재질의 → 구주소 refused 반복) | +0.06s~ | `Cannot reconnect … Connection refused` |
+| sentinel +switch-master | +3.2s | sentinel 로그 |
+| **새 master 재연결 성공** | **+3.66s** | `Reconnected to <새 IP>` — switch 후 첫 백오프 시도 |
+| 서킷 CLOSED (Redis 경로 복귀) | +5.8s | open 대기 5s 가 지배 |
+
+- 플레인 연결의 Lettuce 는 sentinel pub/sub 구독이 아니라 **재연결 시점에 sentinel 에
+  현 master 를 재질의**한다. 그래서 클라이언트 복구 시각은 "switch-master 직후의 첫
+  백오프 재시도"로 결정되고, 승격 전 재시도는 전부 구주소 connection refused 다.
+- 클라이언트는 +3.66s 에 이미 복구됐지만 서킷 open 대기(5s) 때문에 경로 복귀는 +5.8s
+  — 복귀 하한을 정하는 건 클라이언트가 아니라 서킷 설정임이 분리 측정됐다.
+
+### 클라이언트 형상 3종 비교 — 장애 창의 요청 운명
+
+20rps, 창 = kill~+10s (약 190건). 성공률은 세 형상 모두 100%(DB fallback).
+
+| 형상 | 타임아웃(≈600ms) 지불 요청 | 느린 창 지속 |
+|---|---|---|
+| A. 서킷 ON (운영 형상) | **13건** | +0.8s 에 종료 (서킷 열림) |
+| B. 서킷 OFF·큐잉(DEFAULT) | **60건** | +3.1s (재연결까지 전 요청이 지불) |
+| C. 서킷 OFF·즉시 거절(REJECT_COMMANDS) | 50건 | +2.5s |
+
+- **서킷의 가치가 클라이언트 관점 수치로 분리됐다**: 순수 Lettuce(B)는 재연결까지
+  모든 요청이 명령 타임아웃을 지불한다(60건×~500ms). 서킷은 이를 13건으로 줄인다.
+- **REJECT_COMMANDS 는 이 워크로드에서 효과 제한적**(60→50건): 즉시 거절은 공유
+  커넥션의 큐잉에 적용되는데, 투표 쓰기 경로는 MULTI/EXEC(트랜잭션) 라 전용 커넥션을
+  쓰므로 연결 수립 경로의 타임아웃이 지배한다(예외 유형 로그 미수집 — 경로 귀속은
+  가설, 다음 회전에서 예외 클래스 수집으로 확정). 채택 안 함.
+- 서킷 비활성 토글은 `minimumNumberOfCalls=MAX` 로는 안 된다 — COUNT_BASED 창에서
+  창 크기로 캡된다(실측). resilience4j 의 DISABLED 상태 전이가 정답.
