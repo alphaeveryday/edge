@@ -2,6 +2,7 @@ package com.edge.app;
 
 import com.edge.app.repository.RedisRebuildRepository;
 import com.edge.app.service.RebuildService;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -51,6 +52,9 @@ class AppApplicationTests {
 
 	@Autowired
 	TransactionTemplate transactionTemplate;
+
+	@Autowired
+	CircuitBreaker redisCircuitBreaker;
 
 	private RestClient client() {
 		return RestClient.builder()
@@ -146,6 +150,38 @@ class AppApplicationTests {
 		assertEquals("1", redisTemplate.opsForValue().get("forecast:" + id + ":open"));
 		assertEquals(Boolean.TRUE,
 				redisTemplate.opsForSet().isMember("user:1:voted", String.valueOf(id)));
+		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
+	}
+
+	@Test
+	void 서킷_열림_저하_모드에서도_투표를_받고_복귀_후_재조정으로_수렴한다() {
+		RestClient client = client();
+
+		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
+				.body(Map.of(
+						"ticker", "091160",
+						"direction", "NEUTRAL",
+						"endAt", Instant.now().plusSeconds(3600).toString(),
+						"rationale", "저하 모드 테스트"))
+				.retrieve().toEntity(Map.class);
+		long id = ((Number) result(published).get("id")).longValue();
+		vote(client, id, 1, "AGREE");
+
+		redisCircuitBreaker.transitionToOpenState();
+		try {
+			ResponseEntity<Map> degraded = vote(client, id, 2, "AGREE");
+			assertEquals(200, degraded.getStatusCode().value());
+			assertEquals(2, result(degraded).get("agree"));
+
+			ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
+			assertEquals(2, result(card).get("agree"));
+		} finally {
+			redisCircuitBreaker.transitionToClosedState();
+		}
+
+		assertEquals(1, redisTemplate.opsForSet().size("vote:" + id + ":agree"));
+		rebuildService.rebuildPending();
+		assertEquals(2, redisTemplate.opsForSet().size("vote:" + id + ":agree"));
 		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
 	}
 

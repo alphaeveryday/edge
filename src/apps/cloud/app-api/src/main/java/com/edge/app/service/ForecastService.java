@@ -11,9 +11,9 @@ import com.edge.app.repository.ForecastRepository;
 import com.edge.app.repository.OutboxEventRepository;
 import com.edge.app.repository.RedisRebuildRepository;
 import com.edge.app.error.AppErrorStatus;
+import com.edge.app.error.RedisUnavailableException;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -45,7 +45,7 @@ public class ForecastService {
 			if (current != ForecastStatus.OPEN) {
 				forecastRedis.clearOpen(forecast.getId());
 			}
-		} catch (DataAccessException e) {
+		} catch (RedisUnavailableException e) {
 			recordRebuild(forecast.getId());
 		}
 		return ForecastResponse.from(forecast, new VoteCountResponse(0, 0));
@@ -66,7 +66,7 @@ public class ForecastService {
 		});
 		try {
 			forecastRedis.clearOpen(forecastId);
-		} catch (DataAccessException e) {
+		} catch (RedisUnavailableException e) {
 			recordRebuild(forecastId);
 		}
 	}
@@ -89,7 +89,7 @@ public class ForecastService {
 		for (Long id : closedIds) {
 			try {
 				forecastRedis.clearOpen(id);
-			} catch (DataAccessException e) {
+			} catch (RedisUnavailableException e) {
 				recordRebuild(id);
 			}
 		}

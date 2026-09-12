@@ -8,6 +8,7 @@ import com.edge.app.repository.ForecastRedisRepository;
 import com.edge.app.repository.ForecastRepository;
 import com.edge.app.repository.RedisRebuildRepository;
 import com.edge.app.repository.VoteRepository;
+import com.edge.app.error.RedisUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -34,7 +35,7 @@ public class RebuildService {
 		for (RedisRebuild target : targets) {
 			try {
 				rebuild(target);
-			} catch (DataAccessException e) {
+			} catch (DataAccessException | RedisUnavailableException e) {
 				log.warn("재구축 실패, 다음 주기에 재시도 — {}:{}", target.getResourceType(), target.getResourceId(), e);
 				return;
 			}

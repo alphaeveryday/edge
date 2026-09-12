@@ -12,9 +12,9 @@ import com.edge.app.repository.MemberRepository;
 import com.edge.app.repository.RedisRebuildRepository;
 import com.edge.app.repository.VoteRepository;
 import com.edge.app.error.AppErrorStatus;
+import com.edge.app.error.RedisUnavailableException;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -48,7 +48,7 @@ public class VoteService {
 			return new VoteCountResponse(
 					forecastRedis.count(forecastId, VoteChoice.AGREE),
 					forecastRedis.count(forecastId, VoteChoice.DISAGREE));
-		} catch (DataAccessException e) {
+		} catch (RedisUnavailableException e) {
 			recordRebuild(forecastId, userId);
 			return dbCounts(forecastId);
 		}
@@ -60,7 +60,7 @@ public class VoteService {
 				return new VoteCountResponse(
 						forecastRedis.count(forecast.getId(), VoteChoice.AGREE),
 						forecastRedis.count(forecast.getId(), VoteChoice.DISAGREE));
-			} catch (DataAccessException ignored) {
+			} catch (RedisUnavailableException ignored) {
 			}
 		}
 		return dbCounts(forecast.getId());
