@@ -50,18 +50,19 @@ services:
   sentinel-1: &sentinel
     image: redis:7-alpine
     # sentinel 은 설정 파일을 스스로 다시 쓰므로 쓰기 가능한 경로에 생성한다.
-    # announce-hostnames: 앱(Lettuce)에 IP 대신 compose 서비스명을 알려 재해석 가능하게.
+    # monitor 는 기동 시 서비스명을 IP 로 해석해 박는다 — hostname 으로 등록하면 같은
+    # 노드가 hostname/IP 두 정체성으로 이중 등록돼, 승격 직후 reconf-slaves 가 승격
+    # 노드를 자기 자신의 replica 로 강등시키는 사고가 재현됐다(RESULTS.md 발견 4).
     entrypoint:
       - sh
       - -c
       - |
+        MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}')
         cat > /tmp/sentinel.conf <<CONF
-        sentinel monitor mymaster redis-master 6379 2
-        sentinel down-after-milliseconds mymaster 5000
+        sentinel monitor mymaster $$MASTER_IP 6379 2
+        sentinel down-after-milliseconds mymaster 2000
         sentinel failover-timeout mymaster 10000
         sentinel parallel-syncs mymaster 1
-        sentinel resolve-hostnames yes
-        sentinel announce-hostnames yes
         CONF
         exec redis-sentinel /tmp/sentinel.conf
     depends_on:
