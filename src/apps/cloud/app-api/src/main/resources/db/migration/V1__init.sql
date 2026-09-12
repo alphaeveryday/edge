@@ -29,15 +29,6 @@ CREATE TABLE vote (
 
 CREATE INDEX idx_vote_user ON vote (user_id);
 
-CREATE TABLE outbox (
-    id           BIGSERIAL PRIMARY KEY,
-    event_type   VARCHAR(20) NOT NULL,
-    forecast_id  BIGINT      NOT NULL,
-    payload      TEXT        NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    published_at TIMESTAMPTZ
-);
-
 CREATE TABLE redis_rebuild (
     id            BIGSERIAL PRIMARY KEY,
     resource_type VARCHAR(20) NOT NULL,

@@ -3,10 +3,8 @@ package com.edge.app.service;
 import com.edge.app.dto.PublishForecastRequest;
 import com.edge.app.entity.Forecast;
 import com.edge.app.entity.ForecastStatus;
-import com.edge.app.entity.OutboxEvent;
 import com.edge.app.error.AppErrorStatus;
 import com.edge.app.repository.ForecastRepository;
-import com.edge.app.repository.OutboxEventRepository;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -19,14 +17,11 @@ import java.util.List;
 public class ForecastService {
 
 	private final ForecastRepository forecastRepository;
-	private final OutboxEventRepository outboxEventRepository;
 
 	@Transactional
 	public Forecast publish(PublishForecastRequest request) {
-		Forecast forecast = forecastRepository.save(new Forecast(
+		return forecastRepository.save(new Forecast(
 				request.ticker(), request.direction(), request.rationale(), request.endAt()));
-		outboxEventRepository.save(OutboxEvent.published(forecast.getId()));
-		return forecast;
 	}
 
 	@Transactional
@@ -40,7 +35,6 @@ public class ForecastService {
 		if (forecastRepository.withdraw(forecastId, reason) == 0) {
 			throw new GeneralException(AppErrorStatus.FORECAST_ALREADY_WITHDRAWN);
 		}
-		outboxEventRepository.save(OutboxEvent.withdrawn(forecastId));
 	}
 
 	@Transactional
