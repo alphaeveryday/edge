@@ -1,6 +1,6 @@
 package com.edge.app;
 
-import com.edge.app.service.VoteService;
+import com.edge.app.service.VoteBackUpProcessor;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,7 +41,7 @@ class AppApplicationTests {
 	int port;
 
 	@Autowired
-	VoteService voteService;
+	VoteBackUpProcessor voteBackUpProcessor;
 
 	@Autowired
 	StringRedisTemplate redisTemplate;
@@ -134,7 +134,7 @@ class AppApplicationTests {
 
 	private void flushUntil(java.util.function.BooleanSupplier condition) {
 		for (int i = 0; i < 20 && !condition.getAsBoolean(); i++) {
-			voteService.flush();
+			voteBackUpProcessor.flush();
 			try {
 				Thread.sleep(300);
 			} catch (InterruptedException e) {
