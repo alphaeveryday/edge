@@ -1,4 +1,4 @@
-package com.edge.app.backup;
+package com.edge.app.service;
 
 import com.edge.app.dto.MyVoteResponse;
 import com.edge.app.dto.VoteCountResponse;

@@ -1,6 +1,5 @@
 package com.edge.app.service;
 
-import com.edge.app.backup.BackUpProcessor;
 import com.edge.app.dto.MyVoteResponse;
 import com.edge.app.dto.VoteCountResponse;
 import com.edge.app.entity.Forecast;
