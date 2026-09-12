@@ -1,7 +1,6 @@
 package com.edge.app;
 
-import com.edge.app.repository.RedisRebuildRepository;
-import com.edge.app.service.RebuildService;
+import com.edge.app.service.VoteService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,7 +9,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -21,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AppApplicationTests {
@@ -42,16 +41,10 @@ class AppApplicationTests {
 	int port;
 
 	@Autowired
-	RebuildService rebuildService;
-
-	@Autowired
-	RedisRebuildRepository redisRebuildRepository;
+	VoteService voteService;
 
 	@Autowired
 	StringRedisTemplate redisTemplate;
-
-	@Autowired
-	TransactionTemplate transactionTemplate;
 
 	@Autowired
 	CircuitBreaker redisCircuitBreaker;
@@ -65,157 +58,106 @@ class AppApplicationTests {
 	}
 
 	@Test
-	void 발행_투표_철회_정상_경로() {
+	void 정상_경로_연타_뒤집기와_flush_반영() {
 		RestClient client = client();
-
-		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
-				.body(Map.of(
-						"ticker", "069500",
-						"direction", "UP",
-						"endAt", Instant.now().plusSeconds(3600).toString(),
-						"rationale", "테스트 근거"))
-				.retrieve().toEntity(Map.class);
-		assertEquals(200, published.getStatusCode().value());
-		assertEquals(true, published.getBody().get("isSuccess"));
-		long id = ((Number) result(published).get("id")).longValue();
+		long id = publish(client, "069500", "UP");
 
 		ResponseEntity<Map> vote1 = vote(client, id, 1, "AGREE");
 		assertEquals(200, vote1.getStatusCode().value());
-		assertEquals(1, result(vote1).get("agree"));
-		assertEquals(0, result(vote1).get("disagree"));
+		assertEquals(1, counts(vote1).get("agree"));
 
-		sleep(600); // 연타 마커 TTL(500ms) 경과 후 정상 변경
-		ResponseEntity<Map> changed = vote(client, id, 1, "DISAGREE");
-		assertEquals(0, result(changed).get("agree"));
-		assertEquals(1, result(changed).get("disagree"));
+		// 마커·락 없음 — 연타 즉시 뒤집기도 Redis 도착 순서(seq)대로 정확히 토글된다
+		ResponseEntity<Map> rapid = vote(client, id, 1, "DISAGREE");
+		assertEquals(200, rapid.getStatusCode().value());
+		assertEquals(0, counts(rapid).get("agree"));
+		assertEquals(1, counts(rapid).get("disagree"));
 
-		ResponseEntity<Map> vote2 = vote(client, id, 2, "AGREE");
-		assertEquals(1, result(vote2).get("agree"));
-		assertEquals(1, result(vote2).get("disagree"));
+		vote(client, id, 2, "AGREE");
 
 		ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
 		assertEquals("OPEN", result(card).get("status"));
 		assertEquals(1, result(card).get("agree"));
+		assertEquals(1, result(card).get("disagree"));
 
-		ResponseEntity<Map> withdrawn = client.post().uri("/api/forecasts/" + id + "/withdraw")
-				.body(Map.of("reason", "근거 오류")).retrieve().toEntity(Map.class);
-		assertEquals(200, withdrawn.getStatusCode().value());
-		assertEquals(true, withdrawn.getBody().get("isSuccess"));
+		flushUntil(() -> myVotes(client, 1).stream()
+				.anyMatch(v -> ((Number) v.get("forecastId")).longValue() == id
+						&& "DISAGREE".equals(v.get("choice"))));
 
-		ResponseEntity<Map> again = client.post().uri("/api/forecasts/" + id + "/withdraw")
-				.body(Map.of("reason", "중복")).retrieve().toEntity(Map.class);
-		assertEquals(409, again.getStatusCode().value());
-		assertEquals("APP4091", again.getBody().get("code"));
+		assertEquals(200, withdraw(client, id, "근거 오류"));
+		assertEquals(409, withdraw(client, id, "중복"));
 
-		ResponseEntity<Map> lateVote = vote(client, id, 3, "AGREE");
-		assertEquals(409, lateVote.getStatusCode().value());
-		assertEquals("APP4090", lateVote.getBody().get("code"));
+		ResponseEntity<Map> late = vote(client, id, 3, "AGREE");
+		assertEquals(409, late.getStatusCode().value());
+		assertEquals("APP4090", late.getBody().get("code"));
 
-		ResponseEntity<Map> myVotes = client.get().uri("/api/me/votes")
-				.header("X-User-Id", "1").retrieve().toEntity(Map.class);
-		Map<String, Object> mine = (Map<String, Object>) ((List<?>) myVotes.getBody().get("result")).get(0);
-		assertEquals("WITHDRAWN", mine.get("status"));
-		assertEquals("근거 오류", mine.get("withdrawReason"));
-		assertEquals("DISAGREE", mine.get("choice"));
+		assertEquals("WITHDRAWN", myVotes(client, 1).stream()
+				.filter(v -> ((Number) v.get("forecastId")).longValue() == id)
+				.findFirst().orElseThrow().get("status"));
 	}
 
 	@Test
-	void 레디스_유실_후_재조정_잡이_DB_기준으로_복구한다() {
+	void 우회_모드_투표와_복귀_재조정() {
 		RestClient client = client();
+		long id = publish(client, "371460", "DOWN");
 
-		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
-				.body(Map.of(
-						"ticker", "371460",
-						"direction", "DOWN",
-						"endAt", Instant.now().plusSeconds(3600).toString(),
-						"rationale", "재조정 테스트"))
-				.retrieve().toEntity(Map.class);
-		long id = ((Number) result(published).get("id")).longValue();
-		vote(client, id, 1, "AGREE");
-		vote(client, id, 2, "AGREE");
-		vote(client, id, 3, "DISAGREE");
-
-		redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
-		ResponseEntity<Map> lost = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
-		assertEquals(0, result(lost).get("agree"));
-
-		transactionTemplate.executeWithoutResult(status -> {
-			redisRebuildRepository.record("forecast", String.valueOf(id));
-			redisRebuildRepository.record("user", "1");
-		});
-		rebuildService.rebuildPending();
-
-		ResponseEntity<Map> restored = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
-		assertEquals(2, result(restored).get("agree"));
-		assertEquals(1, result(restored).get("disagree"));
-		assertEquals(Boolean.TRUE,
-				redisTemplate.opsForSet().isMember("user:1:voted", String.valueOf(id)));
-		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
-	}
-
-	@Test
-	void 서킷_열림_저하_모드에서도_투표를_받고_복귀_후_재조정으로_수렴한다() {
-		RestClient client = client();
-
-		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
-				.body(Map.of(
-						"ticker", "091160",
-						"direction", "NEUTRAL",
-						"endAt", Instant.now().plusSeconds(3600).toString(),
-						"rationale", "저하 모드 테스트"))
-				.retrieve().toEntity(Map.class);
-		long id = ((Number) result(published).get("id")).longValue();
 		vote(client, id, 1, "AGREE");
 
 		redisCircuitBreaker.transitionToOpenState();
 		try {
-			ResponseEntity<Map> degraded = vote(client, id, 2, "AGREE");
-			assertEquals(200, degraded.getStatusCode().value());
-			assertEquals(2, result(degraded).get("agree"));
-
-			ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
-			assertEquals(2, result(card).get("agree"));
+			ResponseEntity<Map> bypass = vote(client, id, 2, "AGREE");
+			assertEquals(200, bypass.getStatusCode().value());
+			// 우회 응답은 DB COUNT — 미flush 분(user 1)이 빠져 과소 표시될 수 있다 (§8)
+			assertTrue((int) counts(bypass).get("agree") >= 1);
 		} finally {
-			redisCircuitBreaker.transitionToClosedState();
+			redisCircuitBreaker.transitionToClosedState(); // CLOSED 전이가 복귀 재조정을 트리거
 		}
 
-		assertEquals(1, redisTemplate.opsForSet().size("vote:" + id + ":agree"));
-		rebuildService.rebuildPending();
-		assertEquals(2, redisTemplate.opsForSet().size("vote:" + id + ":agree"));
-		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
+		ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
+		assertEquals(2, result(card).get("agree"));
+
+		flushUntil(() -> myVotes(client, 1).stream()
+				.anyMatch(v -> ((Number) v.get("forecastId")).longValue() == id));
+		assertEquals(2L, redisTemplate.opsForHash().size("vote:{" + id + "}"), "재조정 후 두 표 모두 Redis에 존재");
 	}
 
-	@Test
-	void 연타는_마커가_거절하고_TTL_이후_변경은_허용된다() {
-		RestClient client = client();
-
+	private long publish(RestClient client, String ticker, String direction) {
 		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
 				.body(Map.of(
-						"ticker", "466920",
-						"direction", "UP",
+						"ticker", ticker,
+						"direction", direction,
 						"endAt", Instant.now().plusSeconds(3600).toString(),
-						"rationale", "연타 테스트"))
+						"rationale", "테스트"))
 				.retrieve().toEntity(Map.class);
-		long id = ((Number) result(published).get("id")).longValue();
-
-		assertEquals(200, vote(client, id, 2, "AGREE").getStatusCode().value());
-
-		ResponseEntity<Map> rapid = vote(client, id, 2, "DISAGREE");
-		assertEquals(429, rapid.getStatusCode().value());
-		assertEquals("APP4290", rapid.getBody().get("code"));
-
-		sleep(600);
-		ResponseEntity<Map> changed = vote(client, id, 2, "DISAGREE");
-		assertEquals(200, changed.getStatusCode().value());
-		assertEquals(1, result(changed).get("disagree"));
+		assertEquals(200, published.getStatusCode().value());
+		return ((Number) result(published).get("id")).longValue();
 	}
 
-	private void sleep(long millis) {
-		try {
-			Thread.sleep(millis);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
+	private void flushUntil(java.util.function.BooleanSupplier condition) {
+		for (int i = 0; i < 20 && !condition.getAsBoolean(); i++) {
+			voteService.flush();
+			try {
+				Thread.sleep(300);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
 		}
+		assertTrue(condition.getAsBoolean());
+	}
+
+	private List<Map<String, Object>> myVotes(RestClient client, long userId) {
+		ResponseEntity<Map> response = client.get().uri("/api/me/votes")
+				.header("X-User-Id", String.valueOf(userId)).retrieve().toEntity(Map.class);
+		return (List<Map<String, Object>>) response.getBody().get("result");
+	}
+
+	private int withdraw(RestClient client, long id, String reason) {
+		return client.post().uri("/api/forecasts/" + id + "/withdraw")
+				.body(Map.of("reason", reason)).retrieve().toEntity(Map.class)
+				.getStatusCode().value();
+	}
+
+	private Map<String, Object> counts(ResponseEntity<Map> response) {
+		return result(response);
 	}
 
 	private Map<String, Object> result(ResponseEntity<Map> response) {

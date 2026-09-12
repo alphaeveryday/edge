@@ -13,13 +13,7 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6390}
-      timeout: 500ms
+      timeout: 300ms
       # 명령 타임아웃(timeout)과 별개 — 죽은 노드 IP로의 TCP 연결 수립이 OS 기본
       # 재시도(분 단위)로 스레드를 블록하는 것을 끊는다 (층 1 실험 실측).
       connect-timeout: 1s
-
-app:
-  vote:
-    dedupe-enabled: true
-    # 연타 차단 마커 TTL — 커밋+MULTI/EXEC p99 보다 커야 역전 창을 덮는다. 실험으로 조정
-    dedupe-ttl: 500ms

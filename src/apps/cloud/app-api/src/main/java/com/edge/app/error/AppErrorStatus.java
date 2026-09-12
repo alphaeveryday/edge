@@ -7,7 +7,6 @@ import org.springframework.http.HttpStatus;
 public enum AppErrorStatus implements BaseErrorCode {
 
 	WITHDRAW_REASON_REQUIRED(HttpStatus.BAD_REQUEST, "APP4001", "철회 사유는 필수입니다."),
-	VOTE_IN_PROGRESS(HttpStatus.TOO_MANY_REQUESTS, "APP4290", "이전 투표를 처리 중입니다. 잠시 후 다시 시도해 주세요."),
 	MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND, "APP4040", "존재하지 않는 유저입니다."),
 	FORECAST_NOT_FOUND(HttpStatus.NOT_FOUND, "APP4041", "존재하지 않는 전망입니다."),
 	FORECAST_NOT_OPEN(HttpStatus.CONFLICT, "APP4090", "마감되었거나 철회된 전망입니다."),
