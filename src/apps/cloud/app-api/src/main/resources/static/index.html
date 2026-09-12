@@ -88,6 +88,14 @@
     <label>근거</label>
     <textarea id="pub-rationale" placeholder="전망 근거"></textarea>
     <button class="primary" onclick="publish()">발행</button>
+
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <h2>전망 철회 (어드민)</h2>
+    <div class="row">
+      <div><label>대상 전망</label><select id="wd-target"></select></div>
+      <div><label>철회 사유</label><input id="wd-reason" placeholder="사유 (필수)"></div>
+    </div>
+    <button class="primary" onclick="withdraw()">철회</button>
   </section>
 
   <section>
@@ -148,12 +156,14 @@ async function vote(id, choice) {
   } catch (e) { toast(e.message); refresh(); }
 }
 
-async function withdraw(id) {
-  const reason = prompt('철회 사유를 입력하세요');
-  if (!reason) return;
+async function withdraw() {
+  const id = document.getElementById('wd-target').value;
+  const reason = document.getElementById('wd-reason').value;
+  if (!id) { toast('철회할 전망이 없습니다'); return; }
   try {
     await api('POST', `/api/forecasts/${id}/withdraw`, { reason });
     toast('철회 완료');
+    document.getElementById('wd-reason').value = '';
     refresh();
   } catch (e) { toast(e.message); refresh(); }
 }
@@ -174,7 +184,6 @@ function cardHtml(forecast, myChoice) {
     <div class="actions">
       <button class="vote-agree ${myChoice === 'AGREE' ? 'on' : ''}" onclick="vote(${forecast.id}, 'AGREE')">동의</button>
       <button class="vote-disagree ${myChoice === 'DISAGREE' ? 'on' : ''}" onclick="vote(${forecast.id}, 'DISAGREE')">반대</button>
-      <button class="withdraw" onclick="withdraw(${forecast.id})">철회</button>
     </div>
   </div>`;
 }
@@ -204,6 +213,11 @@ async function refresh() {
     document.getElementById('cards').innerHTML =
       forecasts.length ? forecasts.map(f => cardHtml(f, mine[f.id])).join('')
                        : '<div class="empty">진행 중인 전망이 없습니다</div>';
+    const target = document.getElementById('wd-target');
+    const selected = target.value;
+    target.innerHTML = forecasts.map(f =>
+      `<option value="${f.id}">#${f.id} ${f.ticker} — ${DIRECTION[f.direction]}</option>`).join('');
+    if ([...target.options].some(o => o.value === selected)) target.value = selected;
     document.getElementById('myvotes').innerHTML =
       myVotes.length ? myVotes.map(myVoteHtml).join('')
                      : '<div class="empty">투표 내역이 없습니다</div>';
