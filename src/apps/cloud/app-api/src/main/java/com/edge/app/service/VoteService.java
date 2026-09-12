@@ -11,12 +11,12 @@ import com.edge.app.repository.ForecastRepository;
 import com.edge.app.repository.MemberRepository;
 import com.edge.app.repository.RedisRebuildRepository;
 import com.edge.app.repository.VoteRepository;
+import com.edge.app.error.AppErrorStatus;
+import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
@@ -36,11 +36,11 @@ public class VoteService {
 
 	public VoteCountResponse vote(long forecastId, long userId, VoteChoice choice) {
 		if (!memberRepository.existsById(userId)) {
-			throw new ResponseStatusException(HttpStatus.NOT_FOUND, "존재하지 않는 유저");
+			throw new GeneralException(AppErrorStatus.MEMBER_NOT_FOUND);
 		}
 		transaction.executeWithoutResult(status -> {
 			forecastRepository.lockOpen(forecastId)
-					.orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "마감되었거나 철회된 전망"));
+					.orElseThrow(() -> new GeneralException(AppErrorStatus.FORECAST_NOT_OPEN));
 			voteRepository.upsert(forecastId, userId, choice.name());
 		});
 		try {

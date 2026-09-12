@@ -54,43 +54,51 @@ class AppApplicationTests {
 						"endAt", Instant.now().plusSeconds(3600).toString(),
 						"rationale", "테스트 근거"))
 				.retrieve().toEntity(Map.class);
-		assertEquals(201, published.getStatusCode().value());
-		long id = ((Number) published.getBody().get("id")).longValue();
+		assertEquals(200, published.getStatusCode().value());
+		assertEquals(true, published.getBody().get("isSuccess"));
+		long id = ((Number) result(published).get("id")).longValue();
 
 		ResponseEntity<Map> vote1 = vote(client, id, 1, "AGREE");
 		assertEquals(200, vote1.getStatusCode().value());
-		assertEquals(1, vote1.getBody().get("agree"));
-		assertEquals(0, vote1.getBody().get("disagree"));
+		assertEquals(1, result(vote1).get("agree"));
+		assertEquals(0, result(vote1).get("disagree"));
 
 		ResponseEntity<Map> changed = vote(client, id, 1, "DISAGREE");
-		assertEquals(0, changed.getBody().get("agree"));
-		assertEquals(1, changed.getBody().get("disagree"));
+		assertEquals(0, result(changed).get("agree"));
+		assertEquals(1, result(changed).get("disagree"));
 
 		ResponseEntity<Map> vote2 = vote(client, id, 2, "AGREE");
-		assertEquals(1, vote2.getBody().get("agree"));
-		assertEquals(1, vote2.getBody().get("disagree"));
+		assertEquals(1, result(vote2).get("agree"));
+		assertEquals(1, result(vote2).get("disagree"));
 
 		ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
-		assertEquals("OPEN", card.getBody().get("status"));
-		assertEquals(1, card.getBody().get("agree"));
+		assertEquals("OPEN", result(card).get("status"));
+		assertEquals(1, result(card).get("agree"));
 
-		ResponseEntity<Void> withdrawn = client.post().uri("/api/forecasts/" + id + "/withdraw")
-				.body(Map.of("reason", "근거 오류")).retrieve().toEntity(Void.class);
+		ResponseEntity<Map> withdrawn = client.post().uri("/api/forecasts/" + id + "/withdraw")
+				.body(Map.of("reason", "근거 오류")).retrieve().toEntity(Map.class);
 		assertEquals(200, withdrawn.getStatusCode().value());
+		assertEquals(true, withdrawn.getBody().get("isSuccess"));
 
-		ResponseEntity<Void> again = client.post().uri("/api/forecasts/" + id + "/withdraw")
-				.body(Map.of("reason", "중복")).retrieve().toEntity(Void.class);
+		ResponseEntity<Map> again = client.post().uri("/api/forecasts/" + id + "/withdraw")
+				.body(Map.of("reason", "중복")).retrieve().toEntity(Map.class);
 		assertEquals(409, again.getStatusCode().value());
+		assertEquals("APP4091", again.getBody().get("code"));
 
 		ResponseEntity<Map> lateVote = vote(client, id, 3, "AGREE");
 		assertEquals(409, lateVote.getStatusCode().value());
+		assertEquals("APP4090", lateVote.getBody().get("code"));
 
-		ResponseEntity<List> myVotes = client.get().uri("/api/me/votes")
-				.header("X-User-Id", "1").retrieve().toEntity(List.class);
-		Map<String, Object> mine = (Map<String, Object>) myVotes.getBody().get(0);
+		ResponseEntity<Map> myVotes = client.get().uri("/api/me/votes")
+				.header("X-User-Id", "1").retrieve().toEntity(Map.class);
+		Map<String, Object> mine = (Map<String, Object>) ((List<?>) myVotes.getBody().get("result")).get(0);
 		assertEquals("WITHDRAWN", mine.get("status"));
 		assertEquals("근거 오류", mine.get("withdrawReason"));
 		assertEquals("DISAGREE", mine.get("choice"));
+	}
+
+	private Map<String, Object> result(ResponseEntity<Map> response) {
+		return (Map<String, Object>) response.getBody().get("result");
 	}
 
 	private ResponseEntity<Map> vote(RestClient client, long forecastId, long userId, String choice) {

@@ -10,13 +10,13 @@ import com.edge.app.repository.ForecastRedisRepository;
 import com.edge.app.repository.ForecastRepository;
 import com.edge.app.repository.OutboxEventRepository;
 import com.edge.app.repository.RedisRebuildRepository;
+import com.edge.app.error.AppErrorStatus;
+import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 
@@ -53,14 +53,14 @@ public class ForecastService {
 
 	public void withdraw(long forecastId, String reason) {
 		if (reason == null || reason.isBlank()) {
-			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "철회 사유 필수");
+			throw new GeneralException(AppErrorStatus.WITHDRAW_REASON_REQUIRED);
 		}
 		if (!forecastRepository.existsById(forecastId)) {
-			throw new ResponseStatusException(HttpStatus.NOT_FOUND, "존재하지 않는 전망");
+			throw new GeneralException(AppErrorStatus.FORECAST_NOT_FOUND);
 		}
 		transaction.executeWithoutResult(status -> {
 			if (forecastRepository.withdraw(forecastId, reason) == 0) {
-				throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 철회된 전망");
+				throw new GeneralException(AppErrorStatus.FORECAST_ALREADY_WITHDRAWN);
 			}
 			outboxEventRepository.save(OutboxEvent.withdrawn(forecastId));
 		});
@@ -73,7 +73,7 @@ public class ForecastService {
 
 	public ForecastResponse get(long forecastId) {
 		Forecast forecast = forecastRepository.findById(forecastId)
-				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "존재하지 않는 전망"));
+				.orElseThrow(() -> new GeneralException(AppErrorStatus.FORECAST_NOT_FOUND));
 		return ForecastResponse.from(forecast, voteService.counts(forecast));
 	}
 

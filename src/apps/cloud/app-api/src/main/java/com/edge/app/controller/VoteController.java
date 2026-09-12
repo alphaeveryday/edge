@@ -4,6 +4,7 @@ import com.edge.app.dto.MyVoteResponse;
 import com.edge.app.dto.VoteCountResponse;
 import com.edge.app.dto.VoteRequest;
 import com.edge.app.service.VoteService;
+import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,15 +22,15 @@ public class VoteController {
 	private final VoteService voteService;
 
 	@PutMapping("/api/forecasts/{id}/vote")
-	public VoteCountResponse vote(
+	public ApiResponse<VoteCountResponse> vote(
 			@PathVariable long id,
 			@RequestHeader("X-User-Id") long userId,
 			@RequestBody VoteRequest request) {
-		return voteService.vote(id, userId, request.choice());
+		return ApiResponse.onSuccess(voteService.vote(id, userId, request.choice()));
 	}
 
 	@GetMapping("/api/me/votes")
-	public List<MyVoteResponse> myVotes(@RequestHeader("X-User-Id") long userId) {
-		return voteService.myVotes(userId);
+	public ApiResponse<List<MyVoteResponse>> myVotes(@RequestHeader("X-User-Id") long userId) {
+		return ApiResponse.onSuccess(voteService.myVotes(userId));
 	}
 }

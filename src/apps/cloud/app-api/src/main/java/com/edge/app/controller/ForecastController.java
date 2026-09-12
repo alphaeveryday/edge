@@ -4,14 +4,13 @@ import com.edge.app.dto.ForecastResponse;
 import com.edge.app.dto.PublishForecastRequest;
 import com.edge.app.dto.WithdrawRequest;
 import com.edge.app.service.ForecastService;
+import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -24,23 +23,23 @@ public class ForecastController {
 	private final ForecastService forecastService;
 
 	@PostMapping
-	@ResponseStatus(HttpStatus.CREATED)
-	public ForecastResponse publish(@RequestBody PublishForecastRequest request) {
-		return forecastService.publish(request);
+	public ApiResponse<ForecastResponse> publish(@RequestBody PublishForecastRequest request) {
+		return ApiResponse.onSuccess(forecastService.publish(request));
 	}
 
 	@PostMapping("/{id}/withdraw")
-	public void withdraw(@PathVariable long id, @RequestBody WithdrawRequest request) {
+	public ApiResponse<Void> withdraw(@PathVariable long id, @RequestBody WithdrawRequest request) {
 		forecastService.withdraw(id, request.reason());
+		return ApiResponse.onSuccess(null);
 	}
 
 	@GetMapping
-	public List<ForecastResponse> listOpen() {
-		return forecastService.listOpen();
+	public ApiResponse<List<ForecastResponse>> listOpen() {
+		return ApiResponse.onSuccess(forecastService.listOpen());
 	}
 
 	@GetMapping("/{id}")
-	public ForecastResponse get(@PathVariable long id) {
-		return forecastService.get(id);
+	public ApiResponse<ForecastResponse> get(@PathVariable long id) {
+		return ApiResponse.onSuccess(forecastService.get(id));
 	}
 }
