@@ -35,8 +35,11 @@
   .badge.down { background:#dbeafe; color:#1d4ed8; }
   .rationale { font-size:13px; color:var(--sub); margin:8px 0; line-height:1.5; }
   .meta { font-size:11px; color:var(--sub); }
-  .bar { height:8px; border-radius:4px; background:#f1d4d4; overflow:hidden; margin:10px 0 4px; }
+  .bar-wrap { position:relative; margin:24px 0 4px; }
+  .bar { height:8px; border-radius:4px; background:#f1d4d4; overflow:hidden; }
   .bar > div { height:100%; background:var(--agree); }
+  .ratio { position:absolute; top:-17px; transform:translateX(-50%); font-size:11px;
+           font-weight:700; color:var(--agree); white-space:nowrap; }
   .counts { display:flex; justify-content:space-between; font-size:12px; color:var(--sub); }
   .actions { display:flex; gap:8px; margin-top:10px; }
   .vote-agree { background:#eff6ff; color:var(--agree); flex:1; }
@@ -179,8 +182,11 @@ function cardHtml(forecast, myChoice) {
     </div>
     <div class="rationale">${forecast.rationale ?? ''}</div>
     <div class="meta">마감 ${new Date(forecast.endAt).toLocaleString('ko-KR')}</div>
-    <div class="bar"><div style="width:${ratio}%"></div></div>
-    <div class="counts"><span>동의 ${forecast.agree} (${total ? ratio : '-'}%)</span><span>반대 ${forecast.disagree}</span></div>
+    <div class="bar-wrap">
+      ${total ? `<span class="ratio" style="left:clamp(14px, ${ratio}%, calc(100% - 14px))">${ratio}%</span>` : ''}
+      <div class="bar"><div style="width:${ratio}%"></div></div>
+    </div>
+    <div class="counts"><span>동의 ${forecast.agree}</span><span>반대 ${forecast.disagree}</span></div>
     <div class="actions">
       <button class="vote-agree ${myChoice === 'AGREE' ? 'on' : ''}" onclick="vote(${forecast.id}, 'AGREE')">동의</button>
       <button class="vote-disagree ${myChoice === 'DISAGREE' ? 'on' : ''}" onclick="vote(${forecast.id}, 'DISAGREE')">반대</button>
