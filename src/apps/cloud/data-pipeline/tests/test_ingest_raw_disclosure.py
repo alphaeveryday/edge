@@ -103,6 +103,33 @@ def _log(storage, run_id):
     return json.loads(storage.get_bytes(key))
 
 
+def test_closing_batch_recovers_minute_body_failure_without_redownloading_successes(tmp_path):
+    """목록을 본 것과 본문을 저장한 것은 다르다. 배치가 장중 실패 본문을 다시 받아야 한다."""
+    settings = _settings(tmp_path)
+    storage = LocalStorage(tmp_path / "lake")
+    records = [_rec("A1"), _rec("B2")]
+    minute = FakeSource(records, doc_fail={"B2"})
+    first = ingest_raw_disclosure.collect(
+        settings, storage, minute, "mdw-failed-body", "2026-07-16", "2026-07-16",
+        ingest_lane="minute",
+    )
+    assert first["exit_code"] != 0
+    assert first["log"]["ingest_lane"] == "minute"
+    assert set(minute.doc_requests) == {"A1", "B2"}
+
+    batch = FakeSource(records)
+    recovered = ingest_raw_disclosure.collect(
+        settings, storage, batch, "closing-batch", "2026-07-16", "2026-07-16",
+        ingest_lane="batch",
+    )
+    assert recovered["exit_code"] == 0
+    assert recovered["log"]["ingest_lane"] == "batch"
+    assert batch.doc_requests == ["B2"]
+    assert set(recovered["rcept_nos"]) == {"A1", "B2"}
+    # 배치 성공이 장중 사고 기록을 소급해서 지우면 최신성 장애가 사라진다.
+    assert _log(storage, "mdw-failed-body")["status"] == "partial"
+
+
 def test_saves_meta_ndjson_and_document_objects(tmp_path):
     # WHY: 공시 raw 는 메타(ndjson)와 본문(ZIP 객체)을 함께 남긴다 — 메타 행은 document_raw_path
     #      로 본문을 가리켜 둘을 잇고, 파티션은 source=dart/dataset=disclosures/market=KR 이어야
