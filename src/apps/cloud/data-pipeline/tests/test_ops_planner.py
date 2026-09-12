@@ -455,9 +455,9 @@ def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_batch_catalog_is_ready_before_schedule_cutover(monkeypatch):
-    # ALPHA-1073: 앱을 먼저 배포한다. 후속 전환 전까지 배치 스케줄은 꺼져 있고,
-    # 장중 직접 함수 호출과 배치 CLI는 별도 원장 정체성을 가진다.
+def test_disclosure_hybrid_schedule_keeps_intraday_and_closing_roles(monkeypatch):
+    # 장중 390창과 19:30 보충 배치는 각각 minute/ops 원장에 기록한다.
+    # 한 레인을 끄거나 배치를 장중에 옮기면 최신성 또는 장외 회수 계약을 잃는다.
     assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
         "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
         "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE",
@@ -488,18 +488,18 @@ def test_batch_catalog_is_ready_before_schedule_cutover(monkeypatch):
     toggle = re.search(
         r'^\s*minute_session_disclosure_source_group\s*=\s*"([^"]*)"', dev_tf, re.M)
     assert toggle, ("dev 가 minute_session_disclosure_source_group 를 명시하지 않는다 — "
-                    "모듈 기본값(dart)이 적용돼 1분 레인이 공시를 다시 소유한다(이중 수집)")
+                    "공시 장중 활성 여부를 명시해야 한다")
     assert toggle.group(1) == "dart", (
         f"1분 레인 토글이 dart가 아니다: {toggle.group(1)!r} — 공시를 소유할 런타임이 없다")
-    # 배치 스케줄은 같은 apply에서 꺼져야 이중 수집이 없다. ops_ledger.tf는 이 값이
-    # DISABLED면 OPS_DISCLOSURE_SCHED_HHMM을 비워 남아 있는 catalog 엔트리를 기대하지 않는다.
-    sched = re.search(r'^\s*disclosure_schedule_state\s*=\s*"([^"]*)"', dev_tf, re.M)
-    assert sched and sched.group(1) == "DISABLED", (
-        "disclosure_schedule_state 가 DISABLED 가 아니다 — 1분 레인과 batch가 이중 수집한다")
-    stop = re.search(r'^\s*minute_session_stop_expression\s*=\s*"([^"]*)"', dev_tf, re.M)
-    assert stop and stop.group(1) == "cron(5 20 ? * MON-FRI *)", (
-        "공시 마지막 20:00 window 전에 세션을 닫으면 당일 공시가 영구 결손된다")
-    # ARN 표는 batch rollback 경로로 남긴다.
+    sched = re.search(r'^\s*disclosure_schedule_state\s*=\s*"([^\"]*)"', dev_tf, re.M)
+    assert sched and sched.group(1) == "ENABLED", "마감 보충 배치가 꺼지면 장외 회수가 없다"
+    stop = re.search(r'^\s*minute_session_stop_expression\s*=\s*"([^\"]*)"', dev_tf, re.M)
+    assert stop and stop.group(1) == "cron(10 16 ? * MON-FRI *)"
+    schedules = re.search(r'disclosure_schedule_expressions\s*=\s*\{([^}]+)\}', dev_tf)
+    assert schedules
+    assert re.findall(r'"([^\"]+)"\s*=\s*"([^\"]+)"', schedules.group(1)) == [
+        ("h19", "cron(30 19 ? * MON-FRI *)"),
+    ], "장중 겹침 없이 19:30 한 슬롯만 보충한다"
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
 
 
@@ -1258,3 +1258,15 @@ def test_plan_run_cli_rejects_retired_disclosure_lane_even_with_rollback_arn(mon
     )
     with pytest.raises(SystemExit, match="catalog 등록 작업 0개"):
         entry.plan_run_cli(object())
+
+
+def test_closing_disclosure_batch_is_due_only_after_1930(monkeypatch):
+    """장중 실패를 배치 기대와 섞지 않고 마감 슬롯이 도래할 때만 기대한다."""
+    monkeypatch.setenv("OPS_DISCLOSURE_SCHED_HHMM", "19:30")
+    before = entry._due_slots(datetime(2026, 9, 14, 19, 29, tzinfo=planner_mod.KST))
+    after = entry._due_slots(datetime(2026, 9, 14, 19, 31, tzinfo=planner_mod.KST))
+    # Reconciler는 직전 거래일 슬롯도 재확인한다. 오늘 기대만 경계 전후로 비교한다.
+    assert not [key for key, _ in before if key.startswith("disclosure:2026-09-14")]
+    assert [key for key, _ in after if key.startswith("disclosure:2026-09-14")] == [
+        "disclosure:2026-09-14T19:30",
+    ]

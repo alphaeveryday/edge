@@ -564,34 +564,23 @@ module "data_pipeline" {
   # ── 두 번째 컷오버(ALPHA-875): SFN 10슬롯 → 1분 레인 ── (기록으로 남긴다)
   # 724 가 시장 SFN → 공시 SFN 으로 옮긴 그 스텝들을 875 가 1분 세션으로 보냈었다.
   #
-  # ── 네 번째 컷오버(ALPHA-1068): 저녁 배치 1슬롯 → 증분 1분 레인 ──────────────
-  # 매 tick 날짜 전체를 다시 읽던 병목을 접수 원장 증분 poll로 제거해 875의 1분 레인을
-  # 복원한다. 런타임 소유권은 같은 apply의 두 값으로 원자적으로 바뀐다: 아래 batch DISABLED와
-  # `minute_session_disclosure_source_group = "dart"`. 앱 이미지 CD와 terraform apply가 독립이라
-  # 이 apply와 분 레인의 당일 E2E를 먼저 완료했고, 후속 앱 PR에서 catalog 4엔트리를 제거했다.
-  #
-  # 거래일 07:45 이후 착지하면 아침 start가 이미 지난 상태라 apply만으로 오늘 공시 세션과
-  # worker가 생기지 않는다. 기존 가격 세션은 16:10 stop 뒤 DRAINED라 start-minute-session이
-  # 가격 plan에서 먼저 실패한다. 따라서 apply 뒤 `plan-minute-session --dataset disclosure_minute
-  # --source-group dart --session-date <오늘>`을 직접 실행한 다음 disclosure-worker만 desired=1,
-  # force-new-deployment로 올린다. 이 당일 복원은 예약 stop이 남은 20:05 전에만 한다.
-  # 20:05 이후면 오늘 세션을 새로 만들지 않고 다음 거래일 07:45 자동 start를 기다린다. 오늘
-  # 세션을 늦게 만들면 stop이 실행 당일 세션만 찾으므로 영구 ACTIVE로 남는다.
-  # plan은 멱등이고 worker는 이 시점의 최신 digest를 고정한다.
-  # 오늘 18:10 batch는 이 apply부터 발화하지 않으며, 이미 제출된 실행이 있으면 끝까지 둔 뒤
-  # 분 레인을 실행해 두 소스가 동시에 DART를 긁는 시간을 만들지 않는다. batch 완료가
-  # 20:05를 넘기면 당일 분 레인은 건너뛰고 다음 거래일 자동 start로 전환한다.
-  disclosure_schedule_state = "DISABLED"
-  # 저녁 1슬롯 — 모듈 기본(09~18시 정각 10슬롯)을 dev 가 override 한다. 원장 슬롯 기준
-  # (`OPS_DISCLOSURE_SCHED_HHMM`)은 이 cron 에서 파생되므로 자동으로 따라온다.
+  # ── 공시 장중+마감 보충(ALPHA-1071·1072·1073·1074) ──────────────────────
+  # ALPHA-1068의 증분 워커는 유지하고, 장중 격자는 09:00~15:30 390개로 줄인다.
+  # 16:10 종료와 19:30 배치 사이에 3시간 20분을 둔다. 배치는 장외·지연 공시 및 pending 회수다.
+  # 앱/인프라 배포는 독립이다. 배치 카탈로그 복원 앱(ALPHA-1073)을 먼저 배포하고,
+  # 비거래 경계에서 390 격자 앱과 이 설정의 배포를 모두 확인한 뒤 다음 거래일 start를 받는다.
+  # 이미 계획된 720창 세션은 재계획하지 않는다. 기존 세션·워커·배치가 종료된 뒤 전환한다.
+  # stop 실패는 서비스를 내리지 않으므로 알림 확인 후 잔류를 정리하고 배치를 실행한다.
+  # 복구는 정상 drain 뒤 minute source group만 비우고 19:30 배치를 유지한다.
+  disclosure_schedule_state = "ENABLED"
+  # ops 기대 슬롯과 watermark 활성 환경변수는 이 스케줄 설정에서 파생된다.
+  # 주말 활성화의 직전 금요일 거짓 경보는 첫 활성 슬롯 뒤 README 절차로 정리한다(ALPHA-1074).
   disclosure_schedule_expressions = {
-    "h18" = "cron(10 18 ? * MON-FRI *)"
+    "h19" = "cron(30 19 ? * MON-FRI *)"
   }
-  # 1분 레인이 공시 세션을 계획하고 disclosure-worker를 함께 올리는 실제 소유 스위치다.
   minute_session_disclosure_source_group = "dart"
-  # 공시는 universe와 무관하게 08:00–20:00을 관측하므로 마지막 window 뒤 5분에 드레인한다.
-  # stop은 레인별이 아니라 선택 레인을 함께 닫으므로 16:10이면 공시 230 window를 잘라낸다.
-  minute_session_stop_expression = "cron(5 20 ? * MON-FRI *)"
+  # dev 가격 정본은 시간외 선언이 없다. 가격에 시간외 종목을 넣으면 종료 시각도 재검토한다.
+  minute_session_stop_expression = "cron(10 16 ? * MON-FRI *)"
 
   # 장중 수급 레인(ALPHA-769): 평일 5슬롯(09:35·10:05·11:25·13:25·14:35 KST). 모듈 기본이
   # ENABLED 라 이 줄은 **명시일 뿐 값을 바꾸지 않는다** — 그래도 적는 이유는 위 두 레인과 나란히
