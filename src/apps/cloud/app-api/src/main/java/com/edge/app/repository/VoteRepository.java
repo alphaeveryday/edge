@@ -22,5 +22,9 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
 
 	long countByForecastIdAndChoiceAndVoidedFalse(long forecastId, VoteChoice choice);
 
+	@Query(value = "select user_id from vote where forecast_id = :forecastId and choice = :choice and voided = false",
+			nativeQuery = true)
+	List<Long> voterIds(@Param("forecastId") long forecastId, @Param("choice") String choice);
+
 	List<Vote> findByUserIdAndVoidedFalseOrderByUpdatedAtDesc(long userId);
 }

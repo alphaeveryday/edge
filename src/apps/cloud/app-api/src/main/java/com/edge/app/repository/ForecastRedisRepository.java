@@ -40,6 +40,49 @@ public class ForecastRedisRepository {
 		});
 	}
 
+	public void rebuildForecast(long forecastId, boolean open, List<String> agreeUids, List<String> disagreeUids) {
+		redis.execute(new SessionCallback<List<Object>>() {
+			@Override
+			@SuppressWarnings({"unchecked", "rawtypes"})
+			public List<Object> execute(RedisOperations operations) {
+				operations.multi();
+				if (open) {
+					operations.opsForValue().set(openKey(forecastId), "1");
+				} else {
+					operations.delete(openKey(forecastId));
+				}
+				swap(operations, voteKey(forecastId, VoteChoice.AGREE), agreeUids);
+				swap(operations, voteKey(forecastId, VoteChoice.DISAGREE), disagreeUids);
+				return operations.exec();
+			}
+		});
+	}
+
+	public void rebuildUserVoted(long userId, List<String> forecastIds) {
+		redis.execute(new SessionCallback<List<Object>>() {
+			@Override
+			@SuppressWarnings({"unchecked", "rawtypes"})
+			public List<Object> execute(RedisOperations operations) {
+				operations.multi();
+				swap(operations, votedKey(userId), forecastIds);
+				return operations.exec();
+			}
+		});
+	}
+
+	// 임시 키에 만들어 RENAME 으로 교체 — 재구축 중 부분 결과가 읽히지 않게 한다.
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	private void swap(RedisOperations operations, String key, List<String> members) {
+		if (members.isEmpty()) {
+			operations.delete(key);
+			return;
+		}
+		String tempKey = key + ":rebuild";
+		operations.delete(tempKey);
+		operations.opsForSet().add(tempKey, members.toArray(String[]::new));
+		operations.rename(tempKey, key);
+	}
+
 	public long count(long forecastId, VoteChoice choice) {
 		Long size = redis.opsForSet().size(voteKey(forecastId, choice));
 		return size == null ? 0 : size;

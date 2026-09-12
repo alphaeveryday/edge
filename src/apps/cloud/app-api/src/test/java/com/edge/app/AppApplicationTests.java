@@ -1,10 +1,15 @@
 package com.edge.app;
 
+import com.edge.app.repository.RedisRebuildRepository;
+import com.edge.app.service.RebuildService;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -34,6 +39,18 @@ class AppApplicationTests {
 
 	@LocalServerPort
 	int port;
+
+	@Autowired
+	RebuildService rebuildService;
+
+	@Autowired
+	RedisRebuildRepository redisRebuildRepository;
+
+	@Autowired
+	StringRedisTemplate redisTemplate;
+
+	@Autowired
+	TransactionTemplate transactionTemplate;
 
 	private RestClient client() {
 		return RestClient.builder()
@@ -95,6 +112,41 @@ class AppApplicationTests {
 		assertEquals("WITHDRAWN", mine.get("status"));
 		assertEquals("근거 오류", mine.get("withdrawReason"));
 		assertEquals("DISAGREE", mine.get("choice"));
+	}
+
+	@Test
+	void 레디스_유실_후_재조정_잡이_DB_기준으로_복구한다() {
+		RestClient client = client();
+
+		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
+				.body(Map.of(
+						"ticker", "371460",
+						"direction", "DOWN",
+						"endAt", Instant.now().plusSeconds(3600).toString(),
+						"rationale", "재조정 테스트"))
+				.retrieve().toEntity(Map.class);
+		long id = ((Number) result(published).get("id")).longValue();
+		vote(client, id, 1, "AGREE");
+		vote(client, id, 2, "AGREE");
+		vote(client, id, 3, "DISAGREE");
+
+		redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
+		ResponseEntity<Map> lost = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
+		assertEquals(0, result(lost).get("agree"));
+
+		transactionTemplate.executeWithoutResult(status -> {
+			redisRebuildRepository.record("forecast", String.valueOf(id));
+			redisRebuildRepository.record("user", "1");
+		});
+		rebuildService.rebuildPending();
+
+		ResponseEntity<Map> restored = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
+		assertEquals(2, result(restored).get("agree"));
+		assertEquals(1, result(restored).get("disagree"));
+		assertEquals("1", redisTemplate.opsForValue().get("forecast:" + id + ":open"));
+		assertEquals(Boolean.TRUE,
+				redisTemplate.opsForSet().isMember("user:1:voted", String.valueOf(id)));
+		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
 	}
 
 	private Map<String, Object> result(ResponseEntity<Map> response) {

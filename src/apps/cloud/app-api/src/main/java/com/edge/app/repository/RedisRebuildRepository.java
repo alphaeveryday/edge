@@ -6,7 +6,18 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
+import java.util.List;
+
 public interface RedisRebuildRepository extends JpaRepository<RedisRebuild, Long> {
+
+	List<RedisRebuild> findTop100ByStatusOrderByRequestedAtAsc(String status);
+
+	// requested_at 일치 조건: 처리 도중 새 실패가 같은 행을 PENDING 으로 되살렸으면 DONE 으로 덮지 않는다.
+	@Modifying
+	@Query(value = "update redis_rebuild set status = 'DONE' where id = :id and requested_at = :requestedAt",
+			nativeQuery = true)
+	void markDone(@Param("id") long id, @Param("requestedAt") Instant requestedAt);
 
 	@Modifying
 	@Query(value = """
