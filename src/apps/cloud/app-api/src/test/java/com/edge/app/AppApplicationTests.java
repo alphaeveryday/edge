@@ -84,6 +84,7 @@ class AppApplicationTests {
 		assertEquals(1, result(vote1).get("agree"));
 		assertEquals(0, result(vote1).get("disagree"));
 
+		sleep(600); // 연타 마커 TTL(500ms) 경과 후 정상 변경
 		ResponseEntity<Map> changed = vote(client, id, 1, "DISAGREE");
 		assertEquals(0, result(changed).get("agree"));
 		assertEquals(1, result(changed).get("disagree"));
@@ -147,7 +148,6 @@ class AppApplicationTests {
 		ResponseEntity<Map> restored = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
 		assertEquals(2, result(restored).get("agree"));
 		assertEquals(1, result(restored).get("disagree"));
-		assertEquals("1", redisTemplate.opsForValue().get("forecast:" + id + ":open"));
 		assertEquals(Boolean.TRUE,
 				redisTemplate.opsForSet().isMember("user:1:voted", String.valueOf(id)));
 		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
@@ -183,6 +183,39 @@ class AppApplicationTests {
 		rebuildService.rebuildPending();
 		assertEquals(2, redisTemplate.opsForSet().size("vote:" + id + ":agree"));
 		assertEquals(0, redisRebuildRepository.findTop100ByStatusOrderByRequestedAtAsc("PENDING").size());
+	}
+
+	@Test
+	void 연타는_마커가_거절하고_TTL_이후_변경은_허용된다() {
+		RestClient client = client();
+
+		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
+				.body(Map.of(
+						"ticker", "466920",
+						"direction", "UP",
+						"endAt", Instant.now().plusSeconds(3600).toString(),
+						"rationale", "연타 테스트"))
+				.retrieve().toEntity(Map.class);
+		long id = ((Number) result(published).get("id")).longValue();
+
+		assertEquals(200, vote(client, id, 2, "AGREE").getStatusCode().value());
+
+		ResponseEntity<Map> rapid = vote(client, id, 2, "DISAGREE");
+		assertEquals(429, rapid.getStatusCode().value());
+		assertEquals("APP4290", rapid.getBody().get("code"));
+
+		sleep(600);
+		ResponseEntity<Map> changed = vote(client, id, 2, "DISAGREE");
+		assertEquals(200, changed.getStatusCode().value());
+		assertEquals(1, result(changed).get("disagree"));
+	}
+
+	private void sleep(long millis) {
+		try {
+			Thread.sleep(millis);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private Map<String, Object> result(ResponseEntity<Map> response) {

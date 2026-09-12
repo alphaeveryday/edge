@@ -7,6 +7,7 @@ import com.edge.app.error.AppErrorStatus;
 import com.edge.app.repository.ForecastRepository;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,9 +38,10 @@ public class ForecastService {
 		}
 	}
 
+	@Scheduled(fixedDelay = 60_000)
 	@Transactional
-	public List<Long> closeExpired() {
-		return forecastRepository.closeExpired();
+	public void closeExpired() {
+		forecastRepository.closeExpired();
 	}
 
 	@Transactional(readOnly = true)
@@ -53,10 +55,4 @@ public class ForecastService {
 		return forecastRepository.findByStatusOrderByCreatedAtDesc(ForecastStatus.OPEN);
 	}
 
-	@Transactional(readOnly = true)
-	public ForecastStatus status(long forecastId) {
-		return forecastRepository.findById(forecastId)
-				.map(Forecast::getStatus)
-				.orElse(null);
-	}
 }

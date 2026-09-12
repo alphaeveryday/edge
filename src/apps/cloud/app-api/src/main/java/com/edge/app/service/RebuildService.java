@@ -1,11 +1,9 @@
 package com.edge.app.service;
 
-import com.edge.app.entity.ForecastStatus;
 import com.edge.app.entity.RedisRebuild;
 import com.edge.app.entity.Vote;
 import com.edge.app.entity.VoteChoice;
 import com.edge.app.repository.ForecastRedisRepository;
-import com.edge.app.repository.ForecastRepository;
 import com.edge.app.repository.RedisRebuildRepository;
 import com.edge.app.repository.VoteRepository;
 import com.edge.app.error.RedisUnavailableException;
@@ -23,7 +21,6 @@ import java.util.List;
 public class RebuildService {
 
 	private final RedisRebuildRepository redisRebuildRepository;
-	private final ForecastRepository forecastRepository;
 	private final VoteRepository voteRepository;
 	private final ForecastRedisRepository forecastRedis;
 
@@ -44,10 +41,7 @@ public class RebuildService {
 	private void rebuild(RedisRebuild target) {
 		long id = Long.parseLong(target.getResourceId());
 		if ("forecast".equals(target.getResourceType())) {
-			boolean open = forecastRepository.findById(id)
-					.map(forecast -> forecast.getStatus() == ForecastStatus.OPEN)
-					.orElse(false);
-			forecastRedis.rebuildForecast(id, open,
+			forecastRedis.rebuildForecast(id,
 					uids(voteRepository.voterIds(id, VoteChoice.AGREE.name())),
 					uids(voteRepository.voterIds(id, VoteChoice.DISAGREE.name())));
 		} else {

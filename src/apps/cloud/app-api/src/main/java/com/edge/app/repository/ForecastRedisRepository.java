@@ -11,6 +11,7 @@ import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.time.Duration;
 import java.util.List;
 
 @Repository
@@ -20,15 +21,10 @@ public class ForecastRedisRepository {
 	private final StringRedisTemplate redis;
 	private final CircuitBreaker circuitBreaker;
 
-	public void markOpen(long forecastId) {
-		guarded(() -> {
-			redis.opsForValue().set(openKey(forecastId), "1");
-			return null;
-		});
-	}
-
-	public void clearOpen(long forecastId) {
-		guarded(() -> redis.delete(openKey(forecastId)));
+	public boolean tryDedupe(long forecastId, long userId, Duration ttl) {
+		Boolean acquired = guarded(() ->
+				redis.opsForValue().setIfAbsent(dedupeKey(forecastId, userId), "1", ttl));
+		return Boolean.TRUE.equals(acquired);
 	}
 
 	public void applyVote(long forecastId, long userId, VoteChoice choice) {
@@ -48,17 +44,12 @@ public class ForecastRedisRepository {
 		}));
 	}
 
-	public void rebuildForecast(long forecastId, boolean open, List<String> agreeUids, List<String> disagreeUids) {
+	public void rebuildForecast(long forecastId, List<String> agreeUids, List<String> disagreeUids) {
 		guarded(() -> redis.execute(new SessionCallback<List<Object>>() {
 			@Override
 			@SuppressWarnings({"unchecked", "rawtypes"})
 			public List<Object> execute(RedisOperations operations) {
 				operations.multi();
-				if (open) {
-					operations.opsForValue().set(openKey(forecastId), "1");
-				} else {
-					operations.delete(openKey(forecastId));
-				}
 				swap(operations, voteKey(forecastId, VoteChoice.AGREE), agreeUids);
 				swap(operations, voteKey(forecastId, VoteChoice.DISAGREE), disagreeUids);
 				return operations.exec();
@@ -104,8 +95,8 @@ public class ForecastRedisRepository {
 		}
 	}
 
-	private String openKey(long forecastId) {
-		return "forecast:" + forecastId + ":open";
+	private String dedupeKey(long forecastId, long userId) {
+		return "dedupe:vote:" + forecastId + ":" + userId;
 	}
 
 	private String voteKey(long forecastId, VoteChoice choice) {

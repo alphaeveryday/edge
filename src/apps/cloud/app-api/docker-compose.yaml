@@ -10,11 +10,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/app
       SPRING_DATA_REDIS_SENTINEL_MASTER: mymaster
       SPRING_DATA_REDIS_SENTINEL_NODES: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
-      # 실험 토글 (기본 = 운영 형상): CIRCUIT=false 로 서킷 없는 순수 클라이언트 거동 관측
-      APP_REDIS_CIRCUIT_ENABLED: ${CIRCUIT:-true}
-      APP_REDIS_DISCONNECTED_BEHAVIOR: ${DISCONNECTED:-DEFAULT}
-      # Lettuce 재탐색 타임라인 관측용 (sentinel 신호 수신·토폴로지 갱신 로그)
-      LOGGING_LEVEL_IO_LETTUCE_CORE_MASTERREPLICA: DEBUG
+      # 연타 실험용: DEDUPE=false 로 마커 없는 대조 런
+      APP_VOTE_DEDUPE_ENABLED: ${DEDUPE:-true}
     depends_on:
       postgres:
         condition: service_healthy
