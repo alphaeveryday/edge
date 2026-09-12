@@ -77,9 +77,9 @@
 > ⚠️ **universe 가 없는 소스 단위 dataset(뉴스·공시)은 `extended_hours` 만이 범위를 정한다**
 > (ALPHA-875) — 기대 집합이 universe 에서 나오지 않아 "기대가 빈 window" 라는 실패 모드가
 > 없다(window 하나 = "그 분에 소스를 한 번 폴링했다", 소스가 낸 것이 0건이면 VALID_EMPTY).
-> 그래서 뉴스는 390·공시는 720 이고, 갈리는 자리는 `states.EXTENDED_HOURS_DATASETS` 하나다
-> (공시 720 격자는 ALPHA-1068부터 다시 실제 계획된다. 관측은 `disclosure_minute/dart`
-> 원장과 `disclosure-worker`에서 본다).
+> 뉴스와 공시는 모두 09:00~15:30, 390 window다(ALPHA-1072). 가격만
+> `states.EXTENDED_HOURS_DATASETS`에 남는다. 공시 장중 관측은 `disclosure_minute/dart`
+> 원장과 `disclosure-worker`에서 본다. 장외 회수용 마감 배치 복원은 ALPHA-1073·1074다.
 > ⚠️ 상품군 축이 **아니다**: 개별주 001527 도 15:30 이 마지막이라, 클래스는 규칙이 아니라
 > universe 가 선언한다. ⛔ **2026-08-02 결정: 장외는 제외한다** — 선언을 빈 채로 두면
 > 전 종목 정규장 390 window 이고, 정규장 390분은 실측상 전 종목이 빈틈없이 채워진다.
@@ -186,7 +186,7 @@
 > 없어, 권한이 서기 전 describe 가 AccessDenied 로 떨어지면 멀쩡한 이미지 배포까지
 > 막힌다. apply 후 그 변수를 켠다). **그 desired_count 를 바꾸는 주체가 ALPHA-712 다**
 > — `run start-minute-session`·`run stop-minute-session` 을 EventBridge Scheduler 가
-> 부른다(Premarket 07:45 / EOD 20:05 KST — 공시 마지막 20:00 window 뒤,
+> 부른다(Premarket 07:45 / EOD 20:05 KST — 현재 인프라 종료 설정이며 16:10 전환은 ALPHA-1074,
 > `aws_scheduler_schedule.minute_session`).
 > 같은 자원이 **업종지수 5분 파생 확정**도 부른다(평일 16:00 KST — `rollup-minute-session
 > --dataset sector_index_minute`, ALPHA-955). 시각이 다른 이유는 격자가 달라서다:
@@ -1783,13 +1783,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 격자는 **항상 390**이다 — 어댑터 하한이 09:00 이라(`kis_inav.MARKET_OPEN`) 시간외를
 # 계획하면 매 거래일 08:00~08:59 의 60 window 가 아무도 못 채운 채 DUE 로 남고, iNAV 는
 # 소급이 불가라 영구 결손이다. 시간외 종목이 든 universe 를 줘도 안 넓힌다.
-# ⚠️ **공시 세션(`--dataset disclosure_minute --source-group dart`)은 정확히 반대 사례다**
-# (ALPHA-875·1068): `--universe` 를 **안 받는데**(주면 거부) 격자는 **720**이다. DART 당일접수가
-# 07:30~18:00 이라 정규장 격자면 16·17·18시 접수분을 다음 거래일까지 못 본다. iNAV 를 막은
-# 근거(어댑터 하한·소급 불가)가 공시에는 안 걸린다. 첫 poll·주기 대사는 날짜창 전체를 읽고
-# 사이 poll은 접수 원장 증가분까지만 읽으며, 정제 두 스텝은 그 poll의 exact raw key만 소비한다.
-# 🔴 그 소득은 **날짜창을 세션 날짜(KST)에서 유도**할 때만 실현된다 — `--from/--to` 를
-# 생략한 증분 기본창은 UTC 라 08:00 KST tick 이 `[D-2, D-1]` 을 질의한다(세션 날짜가 창 밖).
+# 공시 세션(`--dataset disclosure_minute --source-group dart`)도 **390**이다(ALPHA-1072).
+# `--universe`는 받지 않는다. 장중 관측은 09:00~15:30이고 장외 회수는 마감 배치 소관이다.
+# 첫 poll·주기 대사는 날짜창 전체를 읽고 사이 poll은 접수 원장 증가분까지만 읽는다.
+# 정제 두 스텝은 그 poll의 exact raw key만 소비하며 날짜창은 세션 날짜(KST)에서 유도한다.
 # ⚠️ **업종지수 세션(`--dataset sector_index_minute --source-group kis`)은 세 번째
 # 형상이다**(ALPHA-887): `--universe` 를 **안 받는데**(주면 거부) 격자는 **390**이다 —
 # 위 둘의 조합이 아니라 각 축이 따로 정해진다는 뜻이다. universe 를 안 쓰는 이유는 소스
@@ -1800,7 +1797,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 주기 때문이고, 소급이 불가라 못 채운 window 는 영구 결손이다.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset disclosure_minute \
-    --source-group dart --session-date 2026-08-10   # universe 없음 · 720 window
+    --source-group dart --session-date 2026-08-10   # universe 없음 · 390 window
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run plan-minute-session --dataset sector_index_minute \
     --source-group kis --session-date 2026-08-10    # universe 없음 · 390 window
@@ -2062,7 +2059,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 체인 전체**를 한 window 에서 돈다: collect → normalize(공급계약) → normalize(사업부문)
 # → load → assemble. CLI 가 아니라 스텝 함수를 부르므로 `catalog.by_cli` 동시 소유 충돌이 없다.
 # 세션이 먼저 계획돼 있어야 한다(plan-minute-session --dataset disclosure_minute
-# --source-group dart — universe 없음. 격자는 08:00~20:00 720개 — DART 접수 07:30~18:00).
+# --source-group dart — universe 없음. 격자는 09:00~15:30 390개 — 장외 회수는 마감 배치 소관).
 # 엔드포인트·유형 필터 정본은 [dart_disclosure.source](배치와 공유), pacing·예산은
 # [minute_disclosure_worker](기본: interval 1s·timeout 10s·페이지 예산 60·본문 예산 5·
 # 전량 대사 60 poll). 첫 poll과 전량 대사는 날짜창 끝까지 읽고, 사이 poll은 직전 전량 관측의
