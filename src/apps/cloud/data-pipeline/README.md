@@ -777,16 +777,27 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 LoadDisclosure` 를 돌았고(부분집합 필터 재사용, 새 state 정의 0개 — 체인은 Feature 의
 LoadDisclosure 에서 닫힌다. 별도 이벤트 조립 state 는 **없다**),
 시장 SFN 에서 공시 체인이 빠졌다(15:40 런은 공시를 돌리지 않는다). 875 가 공시를 1분
-세션으로 넘겼다가 987 이 저녁 배치로 되돌렸고, **ALPHA-1068이 증분 1분 레인을 현재
-소유자로 복원했다**. 평일 18:10 스케줄은 DISABLED이고 `OPS_DISCLOSURE_SCHED_HHMM`도 빈
-값이며 카탈로그 공시 엔트리 4개도 제거됐다. SFN 정의만 rollback 경로로 남고, 복원할 때는
-scheduler와 catalog를 함께 되돌린다. ARN이 남아 있어도 현재처럼 해당 catalog가 비어 있으면
-`plan-run`은 기대 작업 없는 SFN 실행을 만들기 전에 fail-loud로 거부한다.
+세션으로 넘겼다가 987이 저녁 배치로 되돌렸고, ALPHA-1068이 증분 1분 수집을 복원했다.
+**ALPHA-1073은 장외 보충을 위해 배치 카탈로그 4작업을 복원한다.** 앱 선행 배포 단계에서는
+18:10 스케줄이 DISABLED이고 `OPS_DISCLOSURE_SCHED_HHMM`도 비어 기대 슬롯이 생기지 않는다.
+후속 ALPHA-1072·1074 전환에서 장중 390창·16:10 종료·19:30 배치를 함께 적용한다.
+장중 워커는 직접 함수를 호출해 minute 원장에 기록하고 배치 CLI는 ops 원장에 기록한다.
+`plan-run`의 빈 카탈로그 거부는 유지하며, 복원된 공시 배치는 자기 4작업을 계획한다.
 
 정상 SFN의 `LoadDisclosure`는 `--input-run-id`로 completed dual manifest의 direct key winner를
 pending에 commit한 뒤 pending만 typed 적재한다. shared canonical 상위 prefix LIST/fullscan은
 하지 않으며 manifest 결손·손상을 fullscan으로 우회하지 않는다. issuer 지연과 일시 실패는
 durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 명시 복구에서만 읽는다.
+
+공시 복구는 기존 경로를 사용한다(ALPHA-1073). 목록·본문·정규화의 일시 실패는 다음 장중
+재시도 또는 마감 배치의 날짜창 재조회로 회수한다. 본문이 이미 저장됐다면 기존 키를 재사용한다.
+배치 watermark는 `ingest_lane=batch`의 목록 완주만 인정하고 직전 날짜를 포함해 다시 읽는다.
+목록 완주는 본문·정규화·적재 완료와 다르므로 반복 실패는 원장에 남기고 대상 raw run으로
+재처리한다. 신규 수집이 0건이어도 정상 배치 적재는 날짜 제한 없이 기존 pending을 회수한다.
+수집 실패로 배치 적재까지 못 간 경우에는 기존 `load-disclosure --pending-only` 복구 경로를
+사용한다(DB·storage 설정 필요). watermark 탐색 10일 한계를 넘는 공백은 자동 회수로 간주하지
+않고 대상 기간을 확인해 명시 복구한다. 배치 성공은 실패했던 minute window를 수정하지 않는다.
+
 
 **장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`, ALPHA-769)도 같은 형태다 —
 `CollectKisInvestorEstimate → NormalizeInvestorEstimate → LoadInvestorIntraday` 를 평일 5슬롯
@@ -1558,13 +1569,14 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   BLOCKED·MISSED) / attempt.execution_status(RUNNING·SUCCEEDED·FAILED·TIMED_OUT) /
   data_status(UNKNOWN·VALID·VALID_EMPTY·INCOMPLETE·INVALID). STALLED 는 저장 상태가 아니라
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
-- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 26작업 =
-  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 장중 수급 레인(`investor-intraday`) 3**
+- **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
+  시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 보충 배치(`disclosure`) 4
+  + 장중 수급 레인(`investor-intraday`) 3**
   (ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 SFN 원장 밖 1분 세션으로 보낸 몫이었고
   **26 → 30 은 ALPHA-987 이 저녁 배치로 되돌린 복원**, **30 → 26 은 ALPHA-1068이 실제 dev
-  E2E 뒤 증분 1분 원장으로 다시 옮긴 결과**다)(ECS Task state 35개 중 — **정의 파일**
+  E2E 뒤 증분 1분 원장으로 다시 옮긴 결과**이며 ALPHA-1073이 보충 배치 4작업을 복원했다)(ECS Task state 35개 중 — **정의 파일**
   기준으로 `statemachine.tf` 33 + `news_pipeline.tf` 2 다. 공시·장중 수급 .tf 는 state 를
   새로 정의하지 않고 부분집합 필터로 재사용하므로 저 33 안에 있다 — 레인별 계수는
   `pipeline_type` 축을 써라. 36→35 는 ALPHA-806 이 AnalyzeOne 을 걷어낸 몫이다.
@@ -1572,13 +1584,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   레인은 `CatalogEntry.pipeline_type` 축이고
   Planner 가 `entries(pipeline_type)` 로 자기 레인만 계획한다 — 섞으면 상대 레인 작업이 매 런
   MISSED 다. 뉴스 6작업의 직렬 2개는 state 이름이 뉴스 SFN 의 것(`NewsLoadAssertions`·
-  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 9개는 ① `fmp` 수집
+  `NewsAssembleEvents`)이고 depends_on 도 뉴스 SFN 게이트 축으로 그렸다. 제외 5개는 ① `fmp` 수집
   4개(**FMP 공용키 bandwidth 한도 소진**으로 SFN 토글 `us_fmp_enabled` 를 껐다 — 안 도는 스텝을
   등록하면 매 런 MISSED, 한도 회복·토글 on 과 함께 등록, ALPHA-558) ② `CollectDartFinancial`
   (**하류 소비자 0** — `financial_statements` 를 읽는 정제·적재·분석이 없어, 등록하면 대응할
-  이유 없는 실패 경보가 된다) ③ 공시 체인 4개(`CollectDartDisclosure`·`NormalizeDisclosure`·
-  `NormalizeDisclosureSegment`·`LoadDisclosure`)(ALPHA-1068 증분 1분 원장이 소유). `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이
-  analyze 페이즈를 걷었다 — 36→35). **KRX ETF와 batch 시절 DART 공시는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
+  이유 없는 실패 경보가 된다). `AnalyzeOne` 은 제외가 아니라 **state 자체가 없다**(ALPHA-806 이
+  analyze 페이즈를 걷었다 — 36→35). **KRX ETF와 DART 공시 배치는 ALPHA-596 이 직접 계측으로 올렸다** — `tasks.tf` 가 두
   task-def 에 DB env 를 주면서, 컨테이너 종료 즉시 판정되고 그전엔 못 얻던 `records_out`·
   `failed_records`·`data_status` 가 함께 올라온다("벤더 컨테이너에 RDS 접속을 주는 신뢰경계
   변경"이라는 전제는 실측 결과 이미 무너져 있었다: 실행 역할·보안그룹이 task-def 전체 공유라

@@ -8,11 +8,10 @@
 않는다(스펙 §3.1). 대신 pipeline_run 에 catalog_version(배포 SHA)+catalog_content_hash 를 남겨
 재현한다.
 
-**등록 범위: ECS Task state 35개 중 26개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
+**등록 범위: ECS Task state 35개 중 30개**(ALPHA-181 확대 → ALPHA-578 수집 2 → ALPHA-553 PR2
 뉴스 레인 이관으로 27→21 → ALPHA-591 뉴스 레인 원장 편입으로 21→27 → **ALPHA-724 공시 레인
 컷오버로 소유 레인 이동(총계 27 유지)** → **ALPHA-769 장중 수급 레인 신설로 27→30** →
-ALPHA-875 공시 4작업이 SFN 원장을 떠나 30→26 → ALPHA-987 저녁 배치 복귀로 26→30 →
-**ALPHA-1068 증분 1분 레인 복원으로 30→26**). state 수
+ALPHA-875 공시 4작업이 SFN 원장을 떠나 30→26 → **ALPHA-987 저녁 배치 복귀로 26→30**, 1068의 제거 뒤 1073이 보충 배치 복원). state 수
 35 = `statemachine.tf` 33 + `news_pipeline.tf` 2(NewsLoadAssertions·NewsAssembleEvents).
 ⚠️ 이건 **정의 파일** 기준이지 레인 기준이 아니다 — `disclosure_pipeline.tf`·
 `investor_intraday_pipeline.tf` 는 state 를 새로 정의하지 않고 statemachine.tf 잡 정의를
@@ -46,24 +45,23 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 잠깐의 MISSED 는 자가 해소되지만 **미등록 유예는 잊히면 조용히 영구화된다**(공시가 원장 밖에서
 도는데 화면에 아무 흔적이 없다) — 그래서 관대한 쪽이 아니라 시끄러운 쪽을 골랐다(Rule 12).
 
-**레인(pipeline_type) 축**(ALPHA-591·724·769·875·987·1068): 카탈로그는 시장 레인
-(`etf-daily`, 17작업)·뉴스 레인(`news`, 6작업)·장중 수급 레인(`investor-intraday`, 3작업)을
-담는다. 공시는 ALPHA-1068부터 ops batch catalog 밖의 1분 원장이 소유한다. Planner 는
-`entries(pipeline_type)` 로 자기 레인만 계획한다 —
+**레인(pipeline_type) 축**(ALPHA-591·724·769·875·987): 카탈로그는 시장 레인(`etf-daily`, 17작업)·
+뉴스 레인(`news`, 6작업)·공시 레인(`disclosure`, 4작업 — 875 가 1분 세션으로 보냈던 것을
+987이 저녁 배치로 되돌렸고, 1068에서 빠진 4작업을 1073이 보충 배치로 복원했다)·장중 수급 레인(`investor-intraday`, 3작업)을 함께
+담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
 
-**제외 9개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12).
-등록 26 + 제외 9 = state 35 이고, `test_ops_catalog` 의 `_NOT_INSTRUMENTED` 가 이 표의 정본이다:
+**제외 5개와 해제 조건** — 숫자를 조용히 줄이지 않기 위해 여기 적어 둔다(Rule 12).
+등록 30 + 제외 5 = state 35 이고, `test_ops_catalog` 의 `_NOT_INSTRUMENTED` 가 이 표의 정본이다:
 
 | 제외 | state | 왜 |
 |---|---|---|
 | `fmp` task-def | CollectFmpNews·CollectFmpPrice·CollectFmpFinancial·CollectFmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
-| 공시 배치 | CollectDartDisclosure·NormalizeDisclosure·NormalizeDisclosureSegment·LoadDisclosure | **ALPHA-1068에서 증분 1분 세션이 소유권을 되찾았다.** 18:10 scheduler와 기대 슬롯은 꺼졌고 실제 관측 정본은 `minute_ingestion_session/window`와 S3 minute manifest다. batch를 rollback으로 다시 켤 때 네 엔트리를 함께 복원한다 |
 
-**등록 26작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
+**등록 30작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
 ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
@@ -88,11 +86,10 @@ revision 위에서 돌고, Reconciler 가 resolve 불가한 LEDGER_GAP 을 연�
 원장 결합이 수집을 위태롭게 하지도 않는다: `Ledger` 커넥션은 lazy 고 쓰기 실패는 예외를 던지지
 않는다(스펙 §3.4) — RDS 가 죽어도 수집은 backoff 뒤 그대로 진행한다.
 
-⚠️ 수집 커버리지는 `Collect*` state 13개 중 7개 등록 — 시장 9개 중 5개 + 뉴스 2개 중 1개
-(BigKinds) + 장중 수급 1개 중 1개다. 공시 1개는 배치 state가 아니라 1분 원장이 관측한다. 미등록
-6개는 FMP 4개(토글 off — 그중 `CollectFmpNews` 는 시장이 아니라 **뉴스 레인** 몫이라 시장
-분모에 넣지 마라)·`CollectDartFinancial`(소비자 0)·`CollectDartDisclosure`(1분 원장 소유)다.
-조용한 누락이 실제로 나는
+⚠️ 수집 커버리지는 `Collect*` state 13개 중 8개 등록 — 시장 9개 중 5개 + 뉴스 2개 중 1개
+(BigKinds) + 공시 1개 중 1개(DART — 987 저녁 배치 복귀) + 장중 수급 1개 중 1개다. 미등록
+5개는 FMP 4개(토글 off — 그중 `CollectFmpNews` 는 시장이 아니라 **뉴스 레인** 몫이라 시장
+분모에 넣지 마라)·`CollectDartFinancial`(소비자 0). 조용한 누락이 실제로 나는
 곳이 수집이므로(ALPHA-387·578) 커버리지의 **모양**이 숫자보다 중요하다.
 """
 
@@ -159,8 +156,8 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 26작업(시장 17 + 뉴스 6 + 장중수급 3). 공시 4작업은 ALPHA-1068에서 증분 1분
-# 원장으로 이동했고, 꺼진 batch SFN 정의만 rollback 경로로 남는다.
+# 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3). 공시 4작업은 875 가 1분 레인으로
+# 보냈다가 ALPHA-987이 저녁 배치로 되돌렸고, 1068의 제거 뒤 1073이 보충 배치로 복원했다.
 # sfn_state_name·cli_command·ecs_task_definition 은
 # statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf·investor_intraday_pipeline.tf 의 실제
 # state·command_expr·taskdef_key 와 일치해야 한다 (test_ops_catalog 이 삼중항으로 대조한다).
@@ -414,6 +411,54 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         ecs_task_definition="events", deadline_offset_seconds=10800,
         stalled_after_seconds=21600, pipeline_type="news",
     ),
+    # ══ 공시 마감 보충 배치 4작업(ALPHA-1073) ══════════════════════════════════
+    # 장중은 minute 원장·직접 함수 호출, 마감 배치는 ops 원장·CLI로 구분한다.
+    # 카탈로그를 먼저 복원해 배포하고, ALPHA-1074에서 19:30 스케줄을 켠다.
+    # schedule DISABLED 동안 OPS_DISCLOSURE_SCHED_HHMM은 비어 기대 슬롯이 생기지 않는다.
+    # 기존 deadline/partial/휴일 계약은 유지한다. 배치는 MON-FRI라 평일 공휴일에도 돈다.
+    CatalogEntry(
+        task_key="DISCLOSURE_COLLECTION_DART", stage="raw", dataset="disclosures", required=True,
+        cli_command=("ingest-raw-disclosure",), sfn_state_name="CollectDartDisclosure",
+        ecs_task_definition="dart", source_vendor="dart",
+        deadline_offset_seconds=1200, stalled_after_seconds=1800,
+        pipeline_type="disclosure",
+    ),
+    # 정제 의존은 시장·뉴스 레인과 같은 이유로 비운다 — raw 부분 실패는 뒤를 막지 않고
+    # (ADR-0030) 정제는 빈 입력을 정상 성공으로 처리하므로, raw 를 선행으로 걸면 수집 실패
+    # 런에서 **실제로 돌아 성공한 정제**가 BLOCKED 로 오귀속된다.
+    CatalogEntry(
+        task_key="NORMALIZE_DISCLOSURE", stage="normalize", dataset="supply_contract_fact",
+        required=True, cli_command=("normalize-disclosure",), sfn_state_name="NormalizeDisclosure",
+        ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1800, stalled_after_seconds=1800,
+        pipeline_type="disclosure",
+        # 2 = 성공 winner manifest commit + 일부 행 실패. SFN도 loader를 계속 실행하므로
+        # 원장의 하류 의존 충족 계약을 같은 값으로 맞춘다(ALPHA-1044).
+        fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_DISCLOSURE_SEGMENT", stage="normalize",
+        dataset="business_segment_fact", required=True,
+        cli_command=("normalize-disclosure-segment",), sfn_state_name="NormalizeDisclosureSegment",
+        ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1800, stalled_after_seconds=1800,
+        pipeline_type="disclosure",
+        fulfilled_exit_codes=(0, 2),
+    ),
+    # ⚠️ 의존은 공시 SFN 의 `DisclosureNormalizeCheckResults` 게이트다 — **ENRICH_CORP_CODE 를
+    # 걸 수 없다.** 그건 시장 레인 작업이라 이 런에 존재하지 않아 영영 eligible 이 안 된다
+    # (뉴스 레인이 옛 시장 의존을 복사하지 않은 것과 같은 함정). 실제 데이터 의존은 남아 있고
+    # **레인 간 읽기 전용 공유**로 성립한다: `company_profile.dart_corp_code` 를 시장 SFN 의
+    # EnrichCorpCode 가 채우고, 미해소 건은 이 스텝이 `skipped_unresolved_issuer` 로 계측한 뒤
+    # 다음 일일런 이후 슬롯이 줍는다(조용한 유실이 아니라 계측된 지연).
+    CatalogEntry(
+        task_key="LOAD_DISCLOSURE", stage="feature", dataset="disclosure_document", required=True,
+        cli_command=("load-disclosure",), sfn_state_name="LoadDisclosure",
+        ecs_task_definition="rds",
+        depends_on=("NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT"),
+        deadline_offset_seconds=2400, stalled_after_seconds=1800,
+        pipeline_type="disclosure",
+    ),
     # ══ 장중 수급 레인 3작업 (pipeline_type="investor-intraday" — 장중 수급 SFN
     # edge-dev-data-pipeline-investor-intraday, 평일 5슬롯, ALPHA-767·768·769) ═══════════
     # 공시와 달리 **레인 이동이 아니라 신설**이다 — 시장 SFN 이 이 스텝들을 돈 적이 없다.
@@ -487,13 +532,8 @@ CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
-# 은퇴한 공시 ops 레인 코드(ALPHA-721·724·987). ALPHA-1068부터 현재 catalog 엔트리는 0이고
-# `disclosure_minute/dart`가 소유한다. 이 상수와 SFN 정의는 이력 조회·rollback 경로로 남긴다.
-# batch 복원은 ① `disclosure_schedule_state="ENABLED"` ② minute source group 빈 값 ③ 공시
-# 4엔트리 복원을 **같은 변경**으로 수행한다.
-# ⚠️ ②를 빠뜨렸을 때의 증상은 MISSED 가 아니라 **이중 수집**이다: 1분 Worker 는 CLI 가 아니라
-# 스텝 함수를 부르므로 `by_cli` 충돌이 안 나고, 두 레인이 같은 창을 각자 긁어 DART 일 한도
-# ("020")를 태운다. 조용한 쪽이라 더 늦게 발견된다.
+# 공시 마감 보충 배치. 장중 minute 원장과 별도 정체성을 유지한다(ALPHA-1073).
+# 활성 스케줄은 OPS_DISCLOSURE_SCHED_HHMM에서만 기대하므로 앱 선행 배포가 가능하다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
 # 장중 수급 레인(ALPHA-769). 공시와 달리 **엔트리를 같은 PR 에서 등록한다** — 공시는 시장 SFN 이
 # 이미 돌던 스텝의 소유 레인 이동이라 순서를 나눠야 했지만(엔트리를 먼저 옮기면 시장 런이 자기

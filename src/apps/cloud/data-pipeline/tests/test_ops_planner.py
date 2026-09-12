@@ -50,22 +50,8 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
     # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — 카탈로그는 전 레인
-    # 26이지만 시장 일일런 기대는 17 이다. 뉴스 6·장중 수급 3은 자기 레인 런이 계획한다).
+    # 27이지만 시장 일일런 기대는 17 이다. 뉴스 6·공시 4는 자기 레인 런이 계획한다).
     assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 17
-
-
-def test_planner_rejects_lane_without_expected_tasks_before_ledger_or_sfn():
-    # WHY(ALPHA-1068): rollback ARN/SFN 정의가 남은 은퇴 레인을 허용하면 expected_task 0개인
-    # run을 만들고 현재 minute worker와 같은 DART 체인을 원장 밖에서 중복 실행한다.
-    db = FakeOpsDB()
-    sfn = FakeSfn()
-    with pytest.raises(ValueError, match="catalog 등록 작업 0개"):
-        plan_run(
-            _ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED,
-            pipeline_type=catalog.DISCLOSURE_PIPELINE_TYPE, sfn_client=sfn,
-        )
-    assert db.runs == {}
-    assert sfn.start_calls == []
 
 
 def test_same_day_different_slots_are_separate_runs():
@@ -457,23 +443,25 @@ def test_plan_run_cli_news_lane_requires_news_arn(monkeypatch):
         entry.plan_run_cli(object())
 
 
-def test_plan_run_cli_rejects_retired_disclosure_lane_even_with_rollback_arn(monkeypatch):
-    # WHY(ALPHA-1068): ARN과 SFN 정의는 rollback용으로 남지만 catalog 복원 전 plan-run을
-    #      허용하면 기대 작업 0개로 batch가 돌아 minute worker와 DART를 이중 수집한다.
+def test_plan_run_cli_disclosure_lane_requires_its_own_arn(monkeypatch):
+    # WHY(ALPHA-721): 뉴스 레인과 같은 이유다 — 다른 레인 ARN 으로 폴백하면 공시 기대를 걸고
+    #      **남의 SFN 을 기동**해 기대와 실행이 어긋난 런이 원장에 남는다. 레인이 셋이 되면서
+    #      분기가 표로 바뀌었으므로, 표에 있으나 env 가 빈 경로를 여기서 고정한다.
     monkeypatch.setenv("OPS_PIPELINE_TYPE", "disclosure")
-    monkeypatch.setenv("OPS_DISCLOSURE_STATE_MACHINE_ARN", _ARN)
-    monkeypatch.setattr(
-        entry, "ledger_from_settings",
-        lambda _settings: pytest.fail("은퇴 레인은 DB 원장을 열기 전에 거부해야 한다"),
-    )
-    with pytest.raises(SystemExit, match="catalog 등록 작업 0개"):
+    monkeypatch.delenv("OPS_DISCLOSURE_STATE_MACHINE_ARN", raising=False)
+    monkeypatch.setenv("OPS_STATE_MACHINE_ARN", _ARN)      # 있어도 폴백하면 안 된다
+    monkeypatch.setenv("OPS_NEWS_STATE_MACHINE_ARN", _ARN)
+    with pytest.raises(SystemExit, match="OPS_DISCLOSURE_STATE_MACHINE_ARN"):
         entry.plan_run_cli(object())
 
 
-def test_runtime_owner_is_incremental_disclosure_lane_after_catalog_cleanup(monkeypatch):
-    # WHY(ALPHA-1068): 실제 분 레인 E2E 뒤 batch catalog를 제거해야 존재하지 않는 18:10 슬롯을
-    #      ops 원장이 소유하는 것으로 오인하지 않는다. rollback 때는 scheduler와 함께 복원한다.
-    assert catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE) == ()
+def test_batch_catalog_is_ready_before_schedule_cutover(monkeypatch):
+    # ALPHA-1073: 앱을 먼저 배포한다. 후속 전환 전까지 배치 스케줄은 꺼져 있고,
+    # 장중 직접 함수 호출과 배치 CLI는 별도 원장 정체성을 가진다.
+    assert {e.task_key for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)} == {
+        "DISCLOSURE_COLLECTION_DART", "NORMALIZE_DISCLOSURE",
+        "NORMALIZE_DISCLOSURE_SEGMENT", "LOAD_DISCLOSURE",
+    }
     assert not [e for e in catalog.entries(catalog.PIPELINE_TYPE)
                 if "DISCLOSURE" in e.task_key]
     # 1분 원장: 어휘·상수는 남는다(875 가 박은 상수 — 롤백 경로). 소유 여부는 이게 아니라
@@ -511,7 +499,7 @@ def test_runtime_owner_is_incremental_disclosure_lane_after_catalog_cleanup(monk
     stop = re.search(r'^\s*minute_session_stop_expression\s*=\s*"([^"]*)"', dev_tf, re.M)
     assert stop and stop.group(1) == "cron(5 20 ? * MON-FRI *)", (
         "공시 마지막 20:00 window 전에 세션을 닫으면 당일 공시가 영구 결손된다")
-    # SFN 정의와 ARN 표는 batch rollback 경로로 남기되, 빈 catalog인 동안 planner가 거부한다.
+    # ARN 표는 batch rollback 경로로 남긴다.
     assert catalog.DISCLOSURE_PIPELINE_TYPE in entry._LANE_STATE_MACHINE_ARN_ENV
 
 
@@ -1241,3 +1229,32 @@ def test_가격_트리거는_DB_loader_뒤에서_manifest_범위를_처리하고
         r'Variable\s*=\s*"\$\.ecs\.Containers\[0\]\.ExitCode".*?NumericEquals\s*=\s*0',
         final, re.S,
     )
+
+
+def test_planner_rejects_lane_without_expected_tasks_before_ledger_or_sfn(monkeypatch):
+    monkeypatch.setattr(catalog, "entries", lambda *_: ())
+    # WHY(ALPHA-1068): rollback ARN/SFN 정의가 남은 은퇴 레인을 허용하면 expected_task 0개인
+    # run을 만들고 현재 minute worker와 같은 DART 체인을 원장 밖에서 중복 실행한다.
+    db = FakeOpsDB()
+    sfn = FakeSfn()
+    with pytest.raises(ValueError, match="catalog 등록 작업 0개"):
+        plan_run(
+            _ledger(db), state_machine_arn=_ARN, scheduled_time=_SCHED,
+            pipeline_type=catalog.DISCLOSURE_PIPELINE_TYPE, sfn_client=sfn,
+        )
+    assert db.runs == {}
+    assert sfn.start_calls == []
+
+
+def test_plan_run_cli_rejects_retired_disclosure_lane_even_with_rollback_arn(monkeypatch):
+    monkeypatch.setattr(catalog, "entries", lambda *_: ())
+    # WHY(ALPHA-1068): ARN과 SFN 정의는 rollback용으로 남지만 catalog 복원 전 plan-run을
+    #      허용하면 기대 작업 0개로 batch가 돌아 minute worker와 DART를 이중 수집한다.
+    monkeypatch.setenv("OPS_PIPELINE_TYPE", "disclosure")
+    monkeypatch.setenv("OPS_DISCLOSURE_STATE_MACHINE_ARN", _ARN)
+    monkeypatch.setattr(
+        entry, "ledger_from_settings",
+        lambda _settings: pytest.fail("은퇴 레인은 DB 원장을 열기 전에 거부해야 한다"),
+    )
+    with pytest.raises(SystemExit, match="catalog 등록 작업 0개"):
+        entry.plan_run_cli(object())
