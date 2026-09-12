@@ -809,7 +809,9 @@ durable pending이 다음 정상 슬롯까지 보존한다. shared canonical은 
 재처리한다. 신규 수집이 0건이어도 정상 배치 적재는 날짜 제한 없이 기존 pending을 회수한다.
 수집 실패로 배치 적재까지 못 간 경우에는 기존 `load-disclosure --pending-only` 복구 경로를
 사용한다(DB·storage 설정 필요). watermark 탐색 10일 한계를 넘는 공백은 자동 회수로 간주하지
-않고 대상 기간을 확인해 명시 복구한다. 배치 성공은 실패했던 minute window를 수정하지 않는다.
+않고 대상 기간을 확인해 명시 복구한다. 첫 배치도 `window_source`·`window_from/to`를 확인해
+워터마크 부재/조회 실패의 기본창 밖 공백이 있으면 대상 기간을 명시 복구한다. 배치 성공은
+실패했던 minute window를 수정하지 않는다.
 
 
 **장중 수급 레인**(`edge-dev-data-pipeline-investor-intraday`, ALPHA-769)도 같은 형태다 —
