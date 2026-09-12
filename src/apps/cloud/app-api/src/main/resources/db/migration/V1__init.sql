@@ -21,7 +21,6 @@ CREATE TABLE vote (
     forecast_id BIGINT      NOT NULL REFERENCES forecast (id),
     user_id     BIGINT      NOT NULL REFERENCES member (id),
     choice      VARCHAR(10) NOT NULL,
-    seq         BIGINT      NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (forecast_id, user_id)
 );

@@ -1,13 +1,9 @@
 package com.edge.app;
 
-import com.edge.app.service.VoteBackUpProcessor;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.GenericContainer;
@@ -19,7 +15,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AppApplicationTests {
@@ -40,15 +35,6 @@ class AppApplicationTests {
 	@LocalServerPort
 	int port;
 
-	@Autowired
-	VoteBackUpProcessor voteBackUpProcessor;
-
-	@Autowired
-	StringRedisTemplate redisTemplate;
-
-	@Autowired
-	CircuitBreaker redisCircuitBreaker;
-
 	private RestClient client() {
 		return RestClient.builder()
 				.baseUrl("http://localhost:" + port)
@@ -58,30 +44,36 @@ class AppApplicationTests {
 	}
 
 	@Test
-	void 정상_경로_연타_뒤집기와_flush_반영() {
+	void 투표_연타_철회_흐름() {
 		RestClient client = client();
-		long id = publish(client, "069500", "UP");
+		long id = publish(client);
 
 		ResponseEntity<Map> vote1 = vote(client, id, 1, "AGREE");
 		assertEquals(200, vote1.getStatusCode().value());
-		assertEquals(1, counts(vote1).get("agree"));
+		assertEquals(1, result(vote1).get("agree"));
 
-		// 마커·락 없음 — 연타 즉시 뒤집기도 Redis 도착 순서(seq)대로 정확히 토글된다
+		// 락 TTL(500ms) 내 연타 — 반영 없이 현재 집계만 돌아온다
 		ResponseEntity<Map> rapid = vote(client, id, 1, "DISAGREE");
 		assertEquals(200, rapid.getStatusCode().value());
-		assertEquals(0, counts(rapid).get("agree"));
-		assertEquals(1, counts(rapid).get("disagree"));
+		assertEquals(1, result(rapid).get("agree"));
+		assertEquals(0, result(rapid).get("disagree"));
+
+		sleep(600); // 락 만료 후 정상 변경
+		ResponseEntity<Map> changed = vote(client, id, 1, "DISAGREE");
+		assertEquals(0, result(changed).get("agree"));
+		assertEquals(1, result(changed).get("disagree"));
 
 		vote(client, id, 2, "AGREE");
 
 		ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
 		assertEquals("OPEN", result(card).get("status"));
 		assertEquals(1, result(card).get("agree"));
-		assertEquals(1, result(card).get("disagree"));
 
-		flushUntil(() -> myVotes(client, 1).stream()
-				.anyMatch(v -> ((Number) v.get("forecastId")).longValue() == id
-						&& "DISAGREE".equals(v.get("choice"))));
+		// 백업은 동기 — 즉시 DB 에서 조회된다
+		Map<String, Object> mine = myVotes(client, 1).stream()
+				.filter(v -> ((Number) v.get("forecastId")).longValue() == id)
+				.findFirst().orElseThrow();
+		assertEquals("DISAGREE", mine.get("choice"));
 
 		assertEquals(200, withdraw(client, id, "근거 오류"));
 		assertEquals(409, withdraw(client, id, "중복"));
@@ -95,53 +87,16 @@ class AppApplicationTests {
 				.findFirst().orElseThrow().get("status"));
 	}
 
-	@Test
-	void 우회_모드_투표와_복귀_재조정() {
-		RestClient client = client();
-		long id = publish(client, "371460", "DOWN");
-
-		vote(client, id, 1, "AGREE");
-
-		redisCircuitBreaker.transitionToOpenState();
-		try {
-			ResponseEntity<Map> bypass = vote(client, id, 2, "AGREE");
-			assertEquals(200, bypass.getStatusCode().value());
-			// 우회 응답은 DB COUNT — 미flush 분(user 1)이 빠져 과소 표시될 수 있다 (§8)
-			assertTrue((int) counts(bypass).get("agree") >= 1);
-		} finally {
-			redisCircuitBreaker.transitionToClosedState(); // CLOSED 전이가 복귀 재조정을 트리거
-		}
-
-		ResponseEntity<Map> card = client.get().uri("/api/forecasts/" + id).retrieve().toEntity(Map.class);
-		assertEquals(2, result(card).get("agree"));
-
-		flushUntil(() -> myVotes(client, 1).stream()
-				.anyMatch(v -> ((Number) v.get("forecastId")).longValue() == id));
-		assertEquals(2L, redisTemplate.opsForHash().size("vote:{" + id + "}"), "재조정 후 두 표 모두 Redis에 존재");
-	}
-
-	private long publish(RestClient client, String ticker, String direction) {
+	private long publish(RestClient client) {
 		ResponseEntity<Map> published = client.post().uri("/api/forecasts")
 				.body(Map.of(
-						"ticker", ticker,
-						"direction", direction,
+						"ticker", "069500",
+						"direction", "UP",
 						"endAt", Instant.now().plusSeconds(3600).toString(),
 						"rationale", "테스트"))
 				.retrieve().toEntity(Map.class);
 		assertEquals(200, published.getStatusCode().value());
 		return ((Number) result(published).get("id")).longValue();
-	}
-
-	private void flushUntil(java.util.function.BooleanSupplier condition) {
-		for (int i = 0; i < 20 && !condition.getAsBoolean(); i++) {
-			voteBackUpProcessor.flush();
-			try {
-				Thread.sleep(300);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-			}
-		}
-		assertTrue(condition.getAsBoolean());
 	}
 
 	private List<Map<String, Object>> myVotes(RestClient client, long userId) {
@@ -156,8 +111,12 @@ class AppApplicationTests {
 				.getStatusCode().value();
 	}
 
-	private Map<String, Object> counts(ResponseEntity<Map> response) {
-		return result(response);
+	private void sleep(long millis) {
+		try {
+			Thread.sleep(millis);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private Map<String, Object> result(ResponseEntity<Map> response) {

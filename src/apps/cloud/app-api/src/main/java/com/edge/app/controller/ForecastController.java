@@ -35,7 +35,6 @@ public class ForecastController {
 	@PostMapping("/{id}/withdraw")
 	public ApiResponse<Void> withdraw(@PathVariable long id, @RequestBody WithdrawRequest request) {
 		forecastService.withdraw(id, request.reason());
-		voteService.markWithdrawn(id);
 		return ApiResponse.onSuccess(null);
 	}
 

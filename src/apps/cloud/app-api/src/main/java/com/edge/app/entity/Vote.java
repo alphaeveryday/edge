@@ -26,7 +26,5 @@ public class Vote {
 	@Enumerated(EnumType.STRING)
 	private VoteChoice choice;
 
-	private Long seq;
-
 	private Instant updatedAt;
 }

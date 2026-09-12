@@ -23,7 +23,6 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
-	implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.2.0'
 	// 이 모듈은 자체 스키마를 소유하고 앱 기동 시 직접 마이그레이션한다 (libs/schema 와 분리).
 	// Boot 4 는 Flyway 자동설정이 spring-boot-flyway 모듈에 있다.
 	implementation 'org.springframework.boot:spring-boot-flyway'
