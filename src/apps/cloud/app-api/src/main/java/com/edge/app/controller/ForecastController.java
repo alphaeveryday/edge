@@ -3,7 +3,7 @@ package com.edge.app.controller;
 import com.edge.app.dto.ForecastResponse;
 import com.edge.app.dto.PublishForecastRequest;
 import com.edge.app.dto.WithdrawRequest;
-import com.edge.app.service.ForecastService;
+import com.edge.app.facade.ForecastFacade;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,26 +20,26 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ForecastController {
 
-	private final ForecastService forecastService;
+	private final ForecastFacade forecastFacade;
 
 	@PostMapping
 	public ApiResponse<ForecastResponse> publish(@RequestBody PublishForecastRequest request) {
-		return ApiResponse.onSuccess(forecastService.publish(request));
+		return ApiResponse.onSuccess(forecastFacade.publish(request));
 	}
 
 	@PostMapping("/{id}/withdraw")
 	public ApiResponse<Void> withdraw(@PathVariable long id, @RequestBody WithdrawRequest request) {
-		forecastService.withdraw(id, request.reason());
+		forecastFacade.withdraw(id, request.reason());
 		return ApiResponse.onSuccess(null);
 	}
 
 	@GetMapping
 	public ApiResponse<List<ForecastResponse>> listOpen() {
-		return ApiResponse.onSuccess(forecastService.listOpen());
+		return ApiResponse.onSuccess(forecastFacade.listOpen());
 	}
 
 	@GetMapping("/{id}")
 	public ApiResponse<ForecastResponse> get(@PathVariable long id) {
-		return ApiResponse.onSuccess(forecastService.get(id));
+		return ApiResponse.onSuccess(forecastFacade.get(id));
 	}
 }

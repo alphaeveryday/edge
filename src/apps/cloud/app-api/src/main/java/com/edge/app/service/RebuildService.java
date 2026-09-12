@@ -14,7 +14,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -27,7 +26,6 @@ public class RebuildService {
 	private final ForecastRepository forecastRepository;
 	private final VoteRepository voteRepository;
 	private final ForecastRedisRepository forecastRedis;
-	private final TransactionTemplate transaction;
 
 	@Scheduled(fixedDelay = 10_000)
 	public void rebuildPending() {
@@ -39,8 +37,7 @@ public class RebuildService {
 				log.warn("재구축 실패, 다음 주기에 재시도 — {}:{}", target.getResourceType(), target.getResourceId(), e);
 				return;
 			}
-			transaction.executeWithoutResult(status ->
-					redisRebuildRepository.markDone(target.getId(), target.getRequestedAt()));
+			redisRebuildRepository.markDone(target.getId(), target.getRequestedAt());
 		}
 	}
 

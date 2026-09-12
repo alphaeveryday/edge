@@ -3,7 +3,7 @@ package com.edge.app.controller;
 import com.edge.app.dto.MyVoteResponse;
 import com.edge.app.dto.VoteCountResponse;
 import com.edge.app.dto.VoteRequest;
-import com.edge.app.service.VoteService;
+import com.edge.app.facade.VoteFacade;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,18 +19,18 @@ import java.util.List;
 @RequiredArgsConstructor
 public class VoteController {
 
-	private final VoteService voteService;
+	private final VoteFacade voteFacade;
 
 	@PutMapping("/api/forecasts/{id}/vote")
 	public ApiResponse<VoteCountResponse> vote(
 			@PathVariable long id,
 			@RequestHeader("X-User-Id") long userId,
 			@RequestBody VoteRequest request) {
-		return ApiResponse.onSuccess(voteService.vote(id, userId, request.choice()));
+		return ApiResponse.onSuccess(voteFacade.vote(id, userId, request.choice()));
 	}
 
 	@GetMapping("/api/me/votes")
 	public ApiResponse<List<MyVoteResponse>> myVotes(@RequestHeader("X-User-Id") long userId) {
-		return ApiResponse.onSuccess(voteService.myVotes(userId));
+		return ApiResponse.onSuccess(voteFacade.myVotes(userId));
 	}
 }
