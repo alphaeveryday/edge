@@ -42,8 +42,6 @@ def _ohlcv(open_: Decimal, high: Decimal, low: Decimal, close: Decimal,
         raise ValueError("가격은 양수이고 volume은 비음수여야 한다")
     if low > min(open_, close) or high < max(open_, close) or low > high:
         raise ValueError("OHLC 범위가 모순이다")
-    if volume == 0 and len({open_, high, low, close}) != 1:
-        raise ValueError("무거래 봉(volume=0)은 OHLC가 같아야 한다")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +117,10 @@ class MinuteBar:
     def __post_init__(self) -> None:
         object.__setattr__(self, "unit_id", _text(self.unit_id, "unit_id"))
         _ohlcv(self.open, self.high, self.low, self.close, self.volume)
+        # flat 조건은 원본 1분봉의 계약이다. 서로 다른 가격의 무거래 분봉을
+        # 합친 봉은 volume=0이어도 OHLC가 다를 수 있다.
+        if self.volume == 0 and len({self.open, self.high, self.low, self.close}) != 1:
+            raise ValueError("무거래 봉(volume=0)은 OHLC가 같아야 한다")
 
 
 @dataclass(frozen=True, slots=True)

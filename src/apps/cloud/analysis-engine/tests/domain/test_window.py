@@ -192,6 +192,49 @@ def test_aggregate_window_keeps_the_last_partial_bar():
     assert bars[-1].volume == Decimal("13")
 
 
+@pytest.mark.parametrize("prices", [(100,) * 7, (100, 102, 99, 101, 103, 105, 104)])
+def test_zero_volume_aggregation_preserves_prices_on_both_clocks(prices):
+    # 각 무거래 분봉은 flat이어도 분 사이 기준 가격은 다를 수 있다. 집계 때문에
+    # 정상 입력을 거부하거나 가격/거래량을 보정하면 분석이 누락되거나 왜곡된다.
+    inputs = tuple(
+        MinuteBar(minute_bar(m).source, "A", *(Decimal(price),) * 4, Decimal("0"))
+        for m, price in enumerate(prices)
+    )
+    spec = window(7, requested_start_minute=2)
+
+    state = aggregate_window(spec, inputs)
+    requested = slice_requested_bars(spec, inputs)
+
+    for bars, ranges in ((state, ((0, 5), (5, 7))),
+                         (requested.bars, ((2, 5), (5, 7)))):
+        assert len(bars) == len(ranges)
+        for bar, (start, end) in zip(bars, ranges):
+            expected = prices[start:end]
+            assert (bar.start, bar.end, bar.observed_minutes) == (
+                at(9, start), at(9, end), end - start)
+            assert (bar.open, bar.high, bar.low, bar.close, bar.volume) == (
+                Decimal(expected[0]), Decimal(max(expected)), Decimal(min(expected)),
+                Decimal(expected[-1]), Decimal("0"))
+            assert bar.sources == tuple(source.source for source in inputs[start:end])
+
+
+@pytest.mark.parametrize(
+    "ohlcv",
+    [("100", "99", "98", "100", "0"),
+     ("100", "100", "100", "100", "-1"),
+     ("0", "100", "0", "100", "0"),
+     ("NaN", "100", "100", "100", "0"),
+     ("100", "100", "100", "100", "Infinity")],
+)
+def test_aggregate_still_rejects_invalid_ohlcv(ohlcv):
+    with pytest.raises(ValueError):
+        AggregatedBar(
+            "A", at(10, 15), at(10, 17), 2,
+            *(Decimal(value) for value in ohlcv),
+            (committed(15), committed(16)),
+        )
+
+
 def test_requested_window_uses_partial_first_and_last_bars_on_the_exact_clock():
     spec = window(27, requested_start_minute=12)
     minute_bars = tuple(minute_bar(m) for m in range(27))
