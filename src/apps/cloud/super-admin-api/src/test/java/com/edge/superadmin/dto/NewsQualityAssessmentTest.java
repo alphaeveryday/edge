@@ -50,9 +50,9 @@ class NewsQualityAssessmentTest {
 	}
 
 	@Test
-	void 기술_오류는_비율과_무관하게_한_건부터_주의다() {
+	void 기술_오류와_단계_거부를_구분하고_둘_다_한_건부터_주의다() {
 		assertThat(NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 9999, 2, assertion(9999, 9000, 1, 1))).reason()).isEqualTo("TECHNICAL_FAILURE");
-		assertThat(NewsQualityAssessment.from(cell("ASSEMBLE_EVENTS", 9999, 2, event(9999, 1))).reason()).isEqualTo("TECHNICAL_FAILURE");
+		assertThat(NewsQualityAssessment.from(cell("ASSEMBLE_EVENTS", 9999, 2, event(9999, 1))).reason()).isEqualTo("DATA_ERROR");
 	}
 
 	@Test

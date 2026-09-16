@@ -30,8 +30,8 @@ public record NewsQualityAssessment(String status, String reason,
 		if (events == null || anchorless == null || anchorless > events
 				|| !events.equals(cell.recordsOut()) || anchorless > cell.failedRecords()) return unknown();
 		Double excluded = events == 0 ? null : (double) anchorless / events;
-		// 이벤트 failed_records는 기술 오류 + anchorless. 차이가 있으면 반드시 경고한다.
-		if (cell.failedRecords() > anchorless) return result("CAUTION", "TECHNICAL_FAILURE", null, excluded);
+		// 성공한 이벤트 실행의 잔여 제외는 stage_rejected(허용되지 않은 단계 값)다.
+		if (cell.failedRecords() > anchorless) return result("CAUTION", "DATA_ERROR", null, excluded);
 		if (events == 0 || ("INCOMPLETE".equals(cell.dataStatus()) && anchorless == 0)) return unknown();
 		return result(atLeastTwentyPercent(anchorless, BigDecimal.valueOf(events)) ? "CAUTION" : "WITHIN_LIMITS",
 				"ANCHORLESS_RATE", null, excluded);
