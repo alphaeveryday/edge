@@ -1,6 +1,7 @@
 package com.edge.app.dto;
 
 import com.edge.app.entity.VoteChoice;
+import jakarta.validation.constraints.NotNull;
 
-public record VoteRequest(VoteChoice choice) {
+public record VoteRequest(@NotNull VoteChoice choice) {
 }

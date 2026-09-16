@@ -1,54 +1,31 @@
 package com.edge.app.repository;
 
-import com.edge.app.dto.VoteCountResponse;
+import com.edge.app.entity.Vote;
 import com.edge.app.entity.VoteChoice;
-import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 
-// 투표 주 저장소(Redis). 같은 유저의 read-modify-write 는 분산 락이 직렬화한다.
-@Repository
-@RequiredArgsConstructor
-public class VoteRepository {
+public interface VoteRepository extends JpaRepository<Vote, Long> {
+    interface ChoiceCount {
+        VoteChoice getChoice();
+        long getTotal();
+    }
 
-	// vote::forecast::{forecast_id}::votes      HASH  field=user, value=choice
-	// vote::forecast::{forecast_id}::agg        HASH  field=choice, value=count
-	private static final String VOTE_KEY_FORMAT = "vote::forecast::%s::votes";
-	private static final String AGG_KEY_FORMAT = "vote::forecast::%s::agg";
+    // 신규/변경을 DB 원자 upsert 로 판정한다 — SELECT 선검사는 동시 요청 레이스가 있다.
+    @Modifying
+    @Query(value = """
+            insert into forecast_vote(forecast_id, user_id, choice) values (:forecast, :user, :choice)
+            as new on duplicate key update choice = new.choice
+            """, nativeQuery = true)
+    void upsert(@Param("forecast") Long forecastId, @Param("user") Long userId, @Param("choice") String choice);
 
-	private final StringRedisTemplate redisTemplate;
-
-	public VoteCountResponse castVote(Long forecastId, Long userId, VoteChoice choice) {
-		String voteKey = generateVoteKey(forecastId);
-		String aggKey = generateAggKey(forecastId);
-		String old = (String) redisTemplate.opsForHash().get(voteKey, String.valueOf(userId));
-		if (!choice.name().equals(old)) {
-			redisTemplate.opsForHash().put(voteKey, String.valueOf(userId), choice.name());
-			if (old != null) {
-				redisTemplate.opsForHash().increment(aggKey, old, -1);
-			}
-			redisTemplate.opsForHash().increment(aggKey, choice.name(), 1);
-		}
-		return read(forecastId);
-	}
-
-	public VoteCountResponse read(Long forecastId) {
-		List<Object> counts = redisTemplate.opsForHash()
-				.multiGet(generateAggKey(forecastId), List.of("AGREE", "DISAGREE"));
-		return new VoteCountResponse(toCount(counts.get(0)), toCount(counts.get(1)));
-	}
-
-	private long toCount(Object value) {
-		return value == null ? 0L : Long.parseLong(String.valueOf(value));
-	}
-
-	private String generateVoteKey(Long forecastId) {
-		return VOTE_KEY_FORMAT.formatted(forecastId);
-	}
-
-	private String generateAggKey(Long forecastId) {
-		return AGG_KEY_FORMAT.formatted(forecastId);
-	}
+    @Query("""
+            select v.choice as choice, count(v) as total from Vote v
+            where v.forecastId = :forecast group by v.choice
+            """)
+    List<ChoiceCount> countByChoice(@Param("forecast") Long forecastId);
 }

@@ -1,57 +1,52 @@
 package com.edge.app.service;
 
-import com.edge.app.dto.MyVoteResponse;
 import com.edge.app.dto.VoteCountResponse;
-import com.edge.app.entity.Forecast;
-import com.edge.app.entity.ForecastStatus;
+import com.edge.app.dto.VoteCounts;
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.error.AppErrorStatus;
-import com.edge.app.repository.MemberRepository;
-import com.edge.app.repository.VoteDistributedLockRepository;
+import com.edge.app.event.VoteRecorded;
+import com.edge.app.repository.VoteCountRepository;
 import com.edge.app.repository.VoteRepository;
-import com.edge.common.exception.GeneralException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
-import java.util.List;
+import java.util.EnumMap;
+import java.util.Map;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class VoteService {
+    private final VoteRepository voteRepository;
+    private final VoteCountRepository voteCountRepository;
+    private final MeterRegistry meterRegistry;
+    private final ApplicationEventPublisher eventPublisher;
 
-	private static final Duration LOCK_TTL = Duration.ofMillis(500);
+    // Redis 갱신은 커밋 이후여야 한다 — 트랜잭션 안에서 이벤트만 발행하고,
+    // VoteCacheListener(AFTER_COMMIT)가 캐시를 따라 갱신한다(실패는 repository 폴백이 삼킴).
+    @Transactional
+    public void vote(Long forecastId, Long userId, VoteChoice choice) {
+        voteRepository.upsert(forecastId, userId, choice.name());
+        eventPublisher.publishEvent(new VoteRecorded(forecastId, userId, choice));
+    }
 
-	private final VoteRepository voteRepository;
-	private final VoteDistributedLockRepository voteDistributedLockRepository;
-	private final VoteBackUpProcessor voteBackUpProcessor;
-	private final ForecastService forecastService;
-	private final MemberRepository memberRepository;
+    // source(redis/db)는 어느 경로로 읽었는지의 표식 — 폴백 정책을 아는 이 계층이 붙인다.
+    @CircuitBreaker(name = "redis", fallbackMethod = "countsFromDb")
+    public VoteCountResponse counts(Long forecastId) {
+        return VoteCountResponse.from(voteCountRepository.counts(forecastId), "redis");
+    }
 
-	public VoteCountResponse vote(long forecastId, long userId, VoteChoice choice) {
-		if (!memberRepository.existsById(userId)) {
-			throw new GeneralException(AppErrorStatus.MEMBER_NOT_FOUND);
-		}
-		if (forecastService.find(forecastId).getStatus() != ForecastStatus.OPEN) {
-			throw new GeneralException(AppErrorStatus.FORECAST_NOT_OPEN);
-		}
-		// 락 실패 = TTL 내 연타 — 반영 없이 현재 집계만 반환한다
-		if (!voteDistributedLockRepository.lock(forecastId, userId, LOCK_TTL)) {
-			return voteRepository.read(forecastId);
-		}
-		VoteCountResponse counts = voteRepository.castVote(forecastId, userId, choice);
-		voteBackUpProcessor.backUp(forecastId, userId, choice);
-		return counts;
-	}
-
-	public VoteCountResponse counts(Forecast forecast) {
-		if (forecast.getStatus() == ForecastStatus.OPEN) {
-			return voteRepository.read(forecast.getId());
-		}
-		return voteBackUpProcessor.count(forecast.getId());
-	}
-
-	public List<MyVoteResponse> myVotes(long userId) {
-		return voteBackUpProcessor.myVotes(userId);
-	}
+    private VoteCountResponse countsFromDb(Long forecastId, Throwable ex) {
+        meterRegistry.counter("vote.redis.read.failures").increment();
+        log.warn("Redis count failed forecast={}; using DB", forecastId, ex);
+        Map<VoteChoice, Long> counts = new EnumMap<>(VoteChoice.class);
+        voteRepository.countByChoice(forecastId).forEach(row -> counts.put(row.getChoice(), row.getTotal()));
+        return VoteCountResponse.from(new VoteCounts(counts.getOrDefault(VoteChoice.BUY, 0L),
+                counts.getOrDefault(VoteChoice.HOLD, 0L),
+                counts.getOrDefault(VoteChoice.SELL, 0L)), "db");
+    }
 }
