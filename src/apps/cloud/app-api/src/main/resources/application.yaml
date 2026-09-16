@@ -2,18 +2,43 @@ spring:
   application:
     name: app
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55440/app}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:55440/app}
     username: ${SPRING_DATASOURCE_USERNAME:app}
     password: ${SPRING_DATASOURCE_PASSWORD:app}
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: validate
-    open-in-view: false
+  flyway:
+    locations: classpath:db/etf-migration
+    table: flyway_etf_schema_history
   data:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6390}
-      timeout: 300ms
-      # 명령 타임아웃(timeout)과 별개 — 죽은 노드 IP로의 TCP 연결 수립이 OS 기본
-      # 재시도(분 단위)로 스레드를 블록하는 것을 끊는다 (층 1 실험 실측).
-      connect-timeout: 1s
+      timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
+vote:
+  redis:
+    disconnected-behavior: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:REJECT_COMMANDS}
+    timeout-options: ${VOTE_REDIS_TIMEOUT_OPTIONS:true}
+    read-from: ${VOTE_REDIS_READ_FROM:MASTER}
+  admin-token: ${VOTE_ADMIN_TOKEN:}
+resilience4j:
+  circuitbreaker:
+    instances:
+      redis:
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 3s
+  reconcile:
+    interval: ${VOTE_RECONCILE_INTERVAL:PT5M}
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
