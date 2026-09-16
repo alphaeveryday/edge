@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { dateOfSlot, datesOf, minuteDailyState, realtimeDayState, realtimeSessionState, rollup, stateOf } from './dailyRollup.ts';
+import { qualityAssessmentText, dateOfSlot, datesOf, minuteDailyState, realtimeDayState, realtimeSessionState, rollup, stateOf } from './dailyRollup.ts';
 import type { DayCounts } from './dailyRollup.ts';
 import { jobEvidence, leaseEvidence, newsDateJobEvidence } from './minuteView.ts';
 import type { GridCell, GridSlot, MinuteDailyStatus, MinuteSession, MinuteStatus } from './types.ts';
@@ -216,6 +216,7 @@ const slot = (runKey: string, tradingDate: string, tasks: GridCell[]): GridSlot 
 
 const counts = (o: Partial<DayCounts> = {}): DayCounts => ({
   fulfilled: 0,
+  qualityWarnings: 0,
   emptyEvidence: 0,
   failed: 0,
   incomplete: 0,
@@ -403,8 +404,8 @@ test('카탈로그에 없는 작업은 어느 데이터셋에도 배정하지 �
 test('상태 우선순위 — 장애 > 주의 > 실행 중 > 정상', () => {
   assert.equal(stateOf(counts({ fulfilled: 1, failed: 1 }), 2), '장애');
   assert.equal(stateOf(counts({ fulfilled: 1, noEvidence: 1 }), 2), '장애');
-  assert.equal(stateOf(counts({ fulfilled: 1, incomplete: 1 }), 2), '주의');
-  assert.equal(stateOf(counts({ fulfilled: 1, failedRecords: 3 }), 2), '주의');
+  assert.equal(stateOf(counts({ fulfilled: 1, incomplete: 1, qualityWarnings: 1 }), 2), '주의');
+  assert.equal(stateOf(counts({ fulfilled: 1, failedRecords: 3, qualityWarnings: 1 }), 2), '주의');
   assert.equal(stateOf(counts({ fulfilled: 1, running: 1 }), 2), '실행 중');
   assert.equal(stateOf(counts({ fulfilled: 2 }), 2), '정상');
 });
@@ -528,4 +529,34 @@ test('작업이 없어도 기동은 된 슬롯은 행을 만들지 않는다 —
     tasks: [],
   };
   assert.equal(rollup([launched]).size, 0);
+});
+
+
+test('내용상 제외는 기준 이내이면 주황을 해제하되 원장 건수는 상세에 보존한다', () => {
+  const assessment = { status: 'WITHIN_LIMITS' as const, reason: 'RESOLUTION_RATE',
+    resolutionRate: 2278 / 3354, exclusionRate: 88 / 1366 };
+  const input = cell({ taskKey: 'LOAD_ASSERTIONS', outcome: 'FULFILLED',
+    dataStatus: 'INCOMPLETE', recordsOut: 1278, failedRecords: 88, qualityAssessment: assessment });
+  const day = [...rollup([slot('news:2026-09-16T00:10', '2026-09-16', [input])]).values()][0];
+  assert.equal(day.state, '정상');
+  assert.equal(day.counts.incomplete, 1);
+  assert.equal(day.counts.failedRecords, 88);
+  assert.equal(day.executions[0].tasks[0].dataStatus, 'INCOMPLETE');
+  assert.match(qualityAssessmentText(assessment)!, /운영 기준 이내.*67.9%.*6.4%/);
+});
+
+test('기술 오류·기준 이탈·옛 API의 부분결손은 계속 주의이고 실행 실패는 장애다', () => {
+  const input = cell({ taskKey: 'ASSEMBLE_EVENTS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', failedRecords: 1 });
+  for (const qualityAssessment of [undefined, { status: 'UNMEASURED' as const, reason: 'INSUFFICIENT_EVIDENCE', resolutionRate: null, exclusionRate: null },
+    { status: 'CAUTION' as const, reason: 'TECHNICAL_FAILURE', resolutionRate: null, exclusionRate: 0.01 }]) {
+    const day = [...rollup([slot('news:2026-09-16T00:10', '2026-09-16', [{ ...input, qualityAssessment }])]).values()][0];
+    assert.equal(day.state, '주의');
+  }
+  for (const outcome of ['FAILED', 'MISSED', 'BLOCKED'] as const) {
+    const day = [...rollup([slot('news:2026-09-16T00:10', '2026-09-16', [{ ...input, outcome,
+      qualityAssessment: { status: 'WITHIN_LIMITS', reason: 'ANCHORLESS_RATE', resolutionRate: null, exclusionRate: 0.01 } }])]).values()][0];
+    assert.equal(day.state, '장애');
+  }
+  const raw = cell({ taskKey: 'NEWS_COLLECTION_BIGKINDS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', failedRecords: 1 });
+  assert.equal([...rollup([slot('news:2026-09-16T00:10', '2026-09-16', [raw])]).values()][0].state, '주의');
 });

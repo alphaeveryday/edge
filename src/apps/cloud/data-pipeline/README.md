@@ -1657,7 +1657,12 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   이 값은 `news_resolution_v1` 계약의 원인(`instrument_not_found`·`instrument_ambiguous`·
   `registry_miss`·`concept_rejected`·`arguments_missing`)·역할·표현·건수와 첫 기사 표본이며, 상위 10건·
   8KiB로 제한되고 기사 본문은 담지 않는다. assertion 진단은 모든 실체 argument 미해소를,
-  event 진단은 접지 참여자가 하나도 없는 event만 센다. observer와 wrapper가 구조·닫힌 사유
+  event 진단은 접지 참여자가 하나도 없는 event만 센다.
+  assertion metrics의 선택 쌍 `excludedAssertions`(부분 추출 + 해소 인자 없는 주장)와
+  `technicalFailures`(실패 목록 + malformed + 원문 없음 + incomplete)는 함께 계측한다
+  (ALPHA-1076). 두 값의 합은 기존 `failed_records`와 같고 원장의 1건 이상 `INCOMPLETE`
+  계약은 유지한다. 구 진단(쌍 없음)도 계속 읽으며 운영 주의 판정은 API가 별도로 제공한다.
+  observer와 wrapper가 구조·닫힌 사유
   어휘·크기·현재 `ops_attempt_id`·성공 exit를 다시 검증한 뒤 `ops_task_attempt`에 저장하므로,
   같은 run의 재시도가 바뀐 로그를 내면 각 attempt에는 자기 진단만 남는다. 정상 런에서 확인한
   정식명 변형 별칭은 canonical master가 실제로 존재하고 단일 종목일 때만 assertion 해소에

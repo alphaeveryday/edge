@@ -76,7 +76,8 @@ public interface PipelineStatusRepository {
 	record GridCell(String stage, String taskKey, String planStatus, String outcome,
 			String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
 			String skipReason,
-			String outcomeReason, boolean running) {
+			String outcomeReason, boolean running, JsonNode qualityDiagnostics,
+			boolean qualityEvidenceCurrent, boolean completenessGap) {
 	}
 
 	/**

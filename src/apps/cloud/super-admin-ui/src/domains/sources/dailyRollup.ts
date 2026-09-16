@@ -18,9 +18,9 @@
  *   · 빈 데이터(VALID_EMPTY — 돌았고 데이터가 없었다는 증거)와 무증거(MISSED — 기한이 지났는데
  *     증거가 없다)는 끝까지 다른 칸에 센다. 합쳐 실패로 만들지 않는다.
  *   · 아직 기한 전인 대기(PENDING)는 실패·누락으로 판정하지 않는다.
- *   · 서버 판정(outcome·dataStatus·running)을 다시 정의하지 않는다 — 세기만 한다.
+ *   · 서버 판정(outcome·dataStatus·running·qualityAssessment)을 다시 정의하지 않는다 — 세기만 한다.
  */
-import type { GridCell, GridSlot, MinuteDailyStatus, MinuteSession, MinuteStatus } from './types.ts';
+import type { GridCell, GridSlot, NewsQualityAssessment, MinuteDailyStatus, MinuteSession, MinuteStatus } from './types.ts';
 import { ALL_DATASETS, DATASET_OF_TASK } from './datasetCatalog.ts';
 import { liveness } from './minuteView.ts';
 
@@ -98,6 +98,7 @@ export function minuteDailyState(
 export interface DayCounts {
   /** 기한이 지난 기대 실행 중 정상 귀결 */
   fulfilled: number;
+  qualityWarnings: number;
   /** 돌았고 그 분·그 날 데이터가 없었다는 **증거가 남은** 것 — 실패가 아니다 */
   emptyEvidence: number;
   failed: number;
@@ -115,6 +116,7 @@ export interface DayCounts {
 
 /** 실행 하나 안의 작업. 실행을 펼쳤을 때만 보이는 하위 층이다. */
 export interface DayTask {
+  qualityAssessment?: NewsQualityAssessment | null;
   taskKey: string;
   stage: string;
   outcome: string | null;
@@ -155,6 +157,7 @@ export interface DayRollup {
 
 const EMPTY: DayCounts = {
   fulfilled: 0,
+  qualityWarnings: 0,
   emptyEvidence: 0,
   failed: 0,
   incomplete: 0,
@@ -251,6 +254,11 @@ function tally(counts: DayCounts, cell: GridCell) {
     return;
   }
   counts.failedRecords += cell.failedRecords ?? 0;
+  const assessed = cell.qualityAssessment?.status;
+  const legacyWarning = cell.dataStatus === 'INCOMPLETE' || cell.dataStatus === 'INVALID'
+    || (cell.failedRecords ?? 0) > 0;
+  if (cell.dataStatus === 'INVALID' || assessed === 'CAUTION'
+    || (assessed !== 'WITHIN_LIMITS' && legacyWarning)) counts.qualityWarnings += 1;
   if (cell.dataStatus === 'VALID_EMPTY') counts.emptyEvidence += 1;
   if (cell.dataStatus === 'INCOMPLETE') counts.incomplete += 1;
   if (cell.dataStatus === 'INVALID') counts.invalid += 1;
@@ -281,7 +289,7 @@ export function stateOf(counts: DayCounts, cellCount: number): DayState {
   if (cellCount === 0) return '계획 없음';
   if (counts.skipped === cellCount) return '계획 스킵';
   if (counts.failed > 0 || counts.noEvidence > 0) return '장애';
-  if (counts.incomplete > 0 || counts.invalid > 0 || counts.failedRecords > 0) return '주의';
+  if (counts.qualityWarnings > 0) return '주의';
   /* 아직 끝나지 않은 것이 남아 있다 — 대기를 실패로 보지 않는다 */
   if (counts.running > 0) return '실행 중';
   if (counts.pending > 0) return '대기';
@@ -364,6 +372,7 @@ export function rollup(slots: GridSlot[]): Map<string, DayRollup> {
       tally(exec.counts, cell);
       tally(r.counts, cell);
       exec.tasks.push({
+        qualityAssessment: cell.qualityAssessment,
         taskKey: cell.taskKey,
         stage: cell.stage,
         outcome: cell.outcome,
@@ -400,4 +409,23 @@ export function datesOf(slots: GridSlot[]): string[] {
     if (d) set.add(d);
   }
   return [...set].sort();
+}
+
+/** 임계값 판정은 API가 담당하며 화면은 근거와 실제 비율만 표시한다. */
+export function qualityAssessmentText(value?: NewsQualityAssessment | null): string | null {
+  if (!value) return null;
+  const reasons: Record<string, string> = {
+    INSUFFICIENT_EVIDENCE: '품질 판정 근거 부족',
+    DATA_ERROR: '데이터 오류 또는 실제 누락',
+    TECHNICAL_FAILURE: '기술 오류 발생',
+    EXCLUSION_RATE: '주장 제외율 상한 도달',
+    RESOLUTION_RATE: '엔티티 해소율',
+    ANCHORLESS_RATE: '기준 종목 없는 이벤트 비율',
+  };
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+  return [
+    value.status === 'WITHIN_LIMITS' ? '운영 기준 이내' : reasons[value.reason] ?? value.reason,
+    value.resolutionRate == null ? null : `해소 ${pct(value.resolutionRate)} (하한 60%)`,
+    value.exclusionRate == null ? null : `제외 ${pct(value.exclusionRate)} (주의 20% 이상)`,
+  ].filter(Boolean).join(' · ');
 }

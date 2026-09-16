@@ -92,7 +92,12 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
   `ops_*` 읽기 전용 조회**(`repository/JdbcPipelineStatusRepository`, ALPHA-514)이며, 각 시도의
-  bounded 뉴스 품질 진단을 같은 attempt에 싣는다(ALPHA-1067 — 과거 미계측 시도는 null). 여기에
+  bounded 뉴스 품질 진단을 같은 attempt에 싣는다(ALPHA-1067 — 과거 미계측 시도는 null).
+  `/sources/grid`의 뉴스 주장·이벤트 셀에는 `qualityAssessment`(status/reason/resolutionRate/
+  exclusionRate)를 추가한다(ALPHA-1076). `NewsQualityAssessment`가 현재 성공 시도의 진단과
+  원장 카운터를 대사해 `WITHIN_LIMITS`·`CAUTION`·`UNMEASURED`를 내며 원장 필드는 바꾸지 않는다.
+  다른 작업은 null이다. 상세 표본은 이 응답에 복제하지 않는다. 비율은 0~1이며 분모가 없거나
+  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. 여기에
   **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
   세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)이다. 일별 판정은 날짜별 상세 조회를
   반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다.

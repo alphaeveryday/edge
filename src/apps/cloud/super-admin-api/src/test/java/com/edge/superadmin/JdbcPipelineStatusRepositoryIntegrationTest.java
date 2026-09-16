@@ -515,6 +515,31 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 	}
 
 	@Test
+	void 격자는_지목된_시도에만_품질_근거를_결합하고_재시도중에는_정상을_보장하지_않는다() {
+		insertRun("quality-run", "news:2026-09-16T00:10", "LAUNCHED", "SUCCEEDED", null, daysAgo(1));
+		insertTask("quality-task", "quality-run", "feature", "ASSEMBLE_EVENTS", "source_event",
+				"DUE", "FULFILLED", "INCOMPLETE", 296L, 24L);
+		insertAttempt("quality-current", "quality-task", "arn:aws:ecs:task/quality1", daysAgo(1), daysAgo(1));
+		jdbc.update("""
+				UPDATE ops_task_attempt SET exit_code=0, quality_diagnostics=
+				'{"schema":"news_resolution_v1","scope":"anchorless_events","metrics":{"events":296,"anchorless":24,"unresolvedArguments":166}}'::jsonb
+				WHERE attempt_id='quality-current'
+				""");
+		jdbc.update("UPDATE ops_expected_task SET current_attempt_id='quality-current' WHERE expected_task_id='quality-task'");
+		var cell = repository.grid(30).getFirst().tasks().getFirst();
+		assertThat(cell.qualityEvidenceCurrent()).isTrue();
+		assertThat(cell.qualityDiagnostics().path("metrics").path("anchorless").asInt()).isEqualTo(24);
+		assertThat(com.edge.superadmin.dto.SourceGridResponse.CellResponse.from(cell).qualityAssessment().status()).isEqualTo("WITHIN_LIMITS");
+
+		setCompleteness("quality-task", "{\"expected\":300,\"received\":296,\"missing\":4}");
+		assertThat(repository.grid(30).getFirst().tasks().getFirst().completenessGap()).isTrue();
+		insertAttempt("quality-retry", "quality-task", "arn:aws:ecs:task/quality2", "RUNNING", null, daysAgo(0));
+		assertThat(repository.grid(30).getFirst().tasks().getFirst().qualityEvidenceCurrent()).isFalse();
+		jdbc.update("UPDATE ops_expected_task SET current_attempt_id=NULL WHERE expected_task_id='quality-task'");
+		assertThat(repository.grid(30).getFirst().tasks().getFirst().qualityDiagnostics()).isNull();
+	}
+
+	@Test
 	void 기대작업이_없는_런도_격자_슬롯으로_온다() {
 		// WHY: 기동 실패 런은 기대 작업이 안 적힐 수 있다. INNER JOIN 이면 이 슬롯이 격자에서
 		//      통째로 사라진다 — "아예 못 뜬 런"이야말로 이 화면이 놓치면 안 되는 열이다.

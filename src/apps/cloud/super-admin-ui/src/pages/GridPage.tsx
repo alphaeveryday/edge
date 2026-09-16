@@ -36,7 +36,7 @@ import {
   kindOf,
 } from '../domains/sources/datasetCatalog';
 import type { DatasetDomain, DatasetEntry, DatasetKindLabel } from '../domains/sources/datasetCatalog';
-import { datesOf, minuteDailyState, realtimeDayState, realtimeSessionState, rollup } from '../domains/sources/dailyRollup';
+import { qualityAssessmentText, datesOf, minuteDailyState, realtimeDayState, realtimeSessionState, rollup } from '../domains/sources/dailyRollup';
 import type { DayExecution, DayRollup, DayState } from '../domains/sources/dailyRollup';
 import { datasetKind, jobEvidence, leaseEvidence, newsDateJobEvidence } from '../domains/sources/minuteView';
 import { MOCK_GRID } from '../mock/preview';
@@ -101,7 +101,9 @@ const STATUS_TIP = [
   '실행 인스턴스는 runKey 하나다 — 한 런에 작업이 3개여도 실행은 1회로 센다.',
   '',
   '정상 — 기한이 지난 기대 실행이 모두 정상 귀결됐다',
-  '주의 — 불완전·무효·유실 등 확인이 필요하다',
+  '주의 — 실제 누락·데이터 오류 또는 품질 기준 이탈이 있다',
+  '뉴스 — 기술 오류는 1건부터, 엔티티 해소율 60% 미만 또는 주장 제외·기준 종목 없는 이벤트 비율 20% 이상이면 주의다',
+  '뉴스의 내용상 제외는 기준 이내이고 오류와 구분할 근거가 있을 때만 주황을 해제한다. 원장 불완전·제외 건수는 상세에 남는다',
   '장애 — 실패 또는 기한이 지난 무증거가 있다',
   '실시간 세션 — 일부 벤더 실행체 실패는 주의, 전체 벤더 실패만 장애다',
   '실행 중 — 아직 끝나지 않은 것이 남았다',
@@ -970,7 +972,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
   const facts = [
     problems > 0 ? `문제 작업 ${problems}` : null,
     c.running > 0 ? `실행 중 ${c.running}` : null,
-    c.incomplete + c.invalid > 0 ? `부분 결손 ${c.incomplete + c.invalid}` : null,
+    c.incomplete + c.invalid > 0 ? `원장 불완전·무효 ${c.incomplete + c.invalid}` : null,
     c.skipped > 0 ? `계획 제외 ${c.skipped}` : null,
     `전체 작업 ${exec.tasks.length}`,
   ].filter(Boolean);
@@ -1004,7 +1006,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                 <th>데이터</th>
                 <th className="num">산출</th>
                 <th className="num">지원 제외</th>
-                <th className="num">유실</th>
+                <th className="num">제외·오류</th>
                 <th>사유</th>
               </tr>
             </thead>
@@ -1024,7 +1026,7 @@ function ExecutionRow({ exec, mock }: { exec: DayExecution; mock: boolean }) {
                   <td className="num">{t.recordsOut ?? '—'}</td>
                   <td className="num">{t.unsupportedRecords ?? '—'}</td>
                   <td className="num">{t.failedRecords ?? '—'}</td>
-                  <td className="col-muted t-xs">{t.reason ?? '—'}</td>
+                  <td className="col-muted t-xs">{[qualityAssessmentText(t.qualityAssessment), t.reason].filter(Boolean).join(' · ') || '—'}</td>
                 </tr>
               ))}
             </tbody>

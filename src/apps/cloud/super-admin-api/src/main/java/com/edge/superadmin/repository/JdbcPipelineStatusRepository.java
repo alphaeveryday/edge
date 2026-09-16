@@ -132,12 +132,22 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			       t.records_out,
 			       CASE WHEN t.task_key = 'LOAD_ETF_HOLDINGS' THEN t.unsupported_records END AS unsupported_records,
 			       t.failed_records, t.skip_reason, t.outcome_reason,
+			       a.attempt_id, a.quality_diagnostics::text AS quality_diagnostics,
+			       (a.execution_status = 'SUCCEEDED' AND a.exit_code = 0
+			        AND NOT EXISTS (SELECT 1 FROM ops_task_attempt live
+			                        WHERE live.expected_task_id = t.expected_task_id
+			                          AND live.execution_status = 'RUNNING')) AS quality_evidence_current,
+			       (COALESCE((t.completeness ->> 'missing')::bigint, 0) > 0
+			        OR (t.completeness ->> 'received')::bigint
+			           < (t.completeness ->> 'expected')::bigint) AS completeness_gap,
 			       (t.task_outcome = 'PENDING'
 			        AND EXISTS (SELECT 1 FROM ops_task_attempt a
 			                     WHERE a.expected_task_id = t.expected_task_id
 			                       AND a.execution_status = 'RUNNING')) AS running
 			  FROM ops_pipeline_run r
 			  LEFT JOIN ops_expected_task t ON t.pipeline_run_id = r.pipeline_run_id
+			  LEFT JOIN ops_task_attempt a ON a.attempt_id = t.current_attempt_id
+			                             AND a.expected_task_id = t.expected_task_id
 			 WHERE r.created_at >= now() - (? * interval '1 day')
 			 ORDER BY r.created_at ASC, r.pipeline_run_id ASC,
 			          CASE t.stage WHEN 'raw' THEN 0 WHEN 'normalize' THEN 1 ELSE 2 END, t.task_key
@@ -249,7 +259,8 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 						nullableLong(rs, "failed_records"),
 						rs.getString("skip_reason"),
 						rs.getString("outcome_reason"),
-						rs.getBoolean("running")));
+						rs.getBoolean("running"), parseQualityDiagnostics(rs),
+						rs.getBoolean("quality_evidence_current"), rs.getBoolean("completeness_gap")));
 			}
 		}, days);
 		return headers.entrySet().stream()
