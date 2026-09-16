@@ -911,12 +911,17 @@ def run(
                 logger.exception("소비 마커 기록 실패(다음 런이 재소비): run_id=%s", consumed_run_id)
                 carry_counters["marker_failed"] += 1
 
+    # 내용상 제외와 기술 오류를 나눠야 한 건의 미해소가 장애처럼 보이지 않는다.
+    excluded_assertions = skipped_partial + skipped_no_resolved_argument
+    technical_failures = len(failures) + rows_malformed + missing_document + skipped_incomplete
     quality_diagnostics = build_quality_diagnostics(
         ASSERTION_SCOPE,
         {
             "total": args_total,
             "resolved": resolved_any,
             "unresolved": args_total - resolved_any,
+            "excludedAssertions": excluded_assertions,
+            "technicalFailures": technical_failures,
         },
         [
             quality_issue(
@@ -994,9 +999,7 @@ def run(
         # malformed·문서 미적재·불완전/부분·해소 인자 없음.
         "ops": {
             "records_out": created + already,
-            "failed_records": (len(failures) + rows_malformed + missing_document
-                               + skipped_incomplete + skipped_partial
-                               + skipped_no_resolved_argument),
+            "failed_records": technical_failures + excluded_assertions,
             # 성공해 원장에 실린 시도의 해소율만 추이로 쓴다. 실패 시도는 top-level 품질 로그에
             # 진단값을 남기되 저장 pair는 NULL로 보내 앞 시도의 성공값을 지운다(ALPHA-1000).
             "entity_resolution_arguments_total": args_total if exit_code == 0 else None,

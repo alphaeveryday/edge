@@ -131,3 +131,13 @@ def test_builder_replaces_control_only_display_fields_with_safe_labels():
     assert row["role"] == "UNKNOWN"
     assert row["expression"] == "UNKNOWN"
     assert row["sample"] == {"articleId": "UNKNOWN", "title": "제목 없음"}
+
+
+def test_optional_load_breakdown_requires_both_non_negative_counts():
+    """WHY: 과거 로그는 읽되, 불완전한 새 계측으로 기술 오류를 내용상 제외로 숨기지 않는다."""
+    old = build(ASSERTION_SCOPE, {"total": 1, "resolved": 1, "unresolved": 0}, [])
+    metrics = {**old["metrics"], "excludedAssertions": 3, "technicalFailures": 0}
+    assert validated({**old, "metrics": metrics}) is not None
+    assert validated({**old, "metrics": {**old["metrics"], "excludedAssertions": 3}}) is None
+    assert validated({**old, "metrics": {**metrics, "technicalFailures": -1}}) is None
+    assert validated({**old, "metrics": {**metrics, "technicalFailures": True}}) is None

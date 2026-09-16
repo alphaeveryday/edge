@@ -303,16 +303,16 @@ class SourceControllerTest {
 				new GridSlot("etf-daily:2026-07-26T15:40", "LAUNCHED", "SUCCEEDED",
 						LocalDate.of(2026, 7, 26), List.of(
 						new GridCell("feature", "LOAD_ETF_HOLDINGS", "DUE", "FULFILLED", "VALID",
-								2736L, 42L, 0L, null, null, false),
+								2736L, 42L, 0L, null, null, false, null, false, false),
 						new GridCell("raw", "NEWS_COLLECTION_BIGKINDS", "SKIPPED", null, null,
-								null, null, null, "NON_TRADING_DAY", null, false),
+								null, null, null, "NON_TRADING_DAY", null, false, null, false, false),
 						new GridCell("feature", "TAG_NEWS", "DUE", "FULFILLED", "INCOMPLETE",
-								null, null, null, null, null, false),
+								null, null, null, null, null, false, null, false, false),
 						// WHY: outcome 은 wrapper 가 끝날 때 쓴다 — 실행 중엔 PENDING 인 채로
 						//      running 만 참이라, 이 축이 안 내려가면 런이 도는 내내 진행 중
 						//      작업이 "아직 시작도 안 함"과 같은 셀로 보인다(#297 P2 와 동형).
 						new GridCell("feature", "ASSEMBLE_EVENTS", "DUE", "PENDING", "UNKNOWN",
-								null, null, null, null, null, true))),
+								null, null, null, null, null, true, null, false, false))),
 				// WHY: 기동 실패는 orchestration 이 영영 null 이고 기대 작업도 없다 — 이 슬롯을
 				//      열에서 빼면 "아예 못 뜬 런"이 격자에서 사라진다(부재가 1급 신호인 화면).
 				new GridSlot("etf-daily:2026-07-27T15:40", "LAUNCH_FAILED", null, null, List.of()));

@@ -19,6 +19,8 @@ _SCOPES = {
     ASSERTION_SCOPE: frozenset({"total", "resolved", "unresolved"}),
     EVENT_SCOPE: frozenset({"events", "anchorless", "unresolvedArguments"}),
 }
+_ASSERTION_LOAD_METRICS = frozenset({"excludedAssertions", "technicalFailures"})
+
 _REASONS = frozenset({
     INSTRUMENT_NOT_FOUND,
     INSTRUMENT_AMBIGUOUS,
@@ -92,7 +94,10 @@ def validated(value: object) -> dict | None:
     if value.get("schema") != SCHEMA or not isinstance(scope, str) or scope not in _SCOPES:
         return None
     metrics = value.get("metrics")
-    if (not isinstance(metrics, dict) or set(metrics) != _SCOPES[scope]
+    allowed = [_SCOPES[scope]]
+    if scope == ASSERTION_SCOPE:
+        allowed.append(_SCOPES[scope] | _ASSERTION_LOAD_METRICS)
+    if (not isinstance(metrics, dict) or set(metrics) not in allowed
             or any(not _count(v) for v in metrics.values())):
         return None
     if scope == ASSERTION_SCOPE and metrics["resolved"] + metrics["unresolved"] != metrics["total"]:

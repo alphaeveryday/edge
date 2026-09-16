@@ -286,7 +286,8 @@ def test_manifest_reads_direct_keys_and_reports_physical_and_logical_rows(tmp_pa
         "quality_diagnostics": {
             "schema": "news_resolution_v1",
             "scope": "assertion_arguments",
-            "metrics": {"total": 2, "resolved": 2, "unresolved": 0},
+            "metrics": {"total": 2, "resolved": 2, "unresolved": 0,
+                        "excludedAssertions": 0, "technicalFailures": 0},
             "issues": [],
         },
     }
@@ -323,6 +324,7 @@ def test_missing_document_recovers_by_replaying_the_same_manifest(tmp_path, monk
     assert load_assertions.run(storage, "L1", db=_db(), input_run_id="T1") == 0
     first = _log(storage)
     assert first["missing_document"] == 1
+    assert first["ops"]["quality_diagnostics"]["metrics"]["technicalFailures"] == 1
     assert first["ops"]["records_out"] == 0 and first["ops"]["failed_records"] == 1
 
     recovered = _FakeConn(documents=[("a1", "doc_D1")])
@@ -1047,6 +1049,8 @@ def test_unresolved_only_assertion_is_skipped_and_counted(tmp_path, monkeypatch)
     assert _inserts(conn, "document_assertion") == []
     log = _log(storage)
     assert log["skipped_no_resolved_argument"] == 2
+    assert log["ops"]["quality_diagnostics"]["metrics"]["excludedAssertions"] == 2
+    assert log["ops"]["quality_diagnostics"]["metrics"]["technicalFailures"] == 0
     res = log["argument_resolution"]
     assert res["total"] == 2 and res["unresolved"] == 1 and res["ambiguous"] == 1
     assert res["rate"] == 0.0
@@ -1070,6 +1074,7 @@ def test_partial_assertion_is_not_persisted_as_confirmed(tmp_path, monkeypatch):
     assert load_assertions.run(storage, "R1", db=_db()) == 0
     assert len(_inserts(conn, "document_assertion")) == 1
     assert _log(storage)["skipped_partial"] == 1
+    assert _log(storage)["ops"]["quality_diagnostics"]["metrics"]["excludedAssertions"] == 1
 
 
 def test_missing_document_is_skipped_not_a_broken_fk(tmp_path, monkeypatch):
@@ -1470,7 +1475,8 @@ def test_every_recoverable_axis_stays_in_the_unresolved_sample(tmp_path, monkeyp
     sample = {t for t, _ in res["top_unresolved"]}
     assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 축 하나가 표본에서 빠졌다"
     diagnostics = _log(storage)["ops"]["quality_diagnostics"]
-    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3}
+    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3,
+                                      "excludedAssertions": 0, "technicalFailures": 0}
     assert {(row["reason"], row["role"], row["expression"]) for row in diagnostics["issues"]} == {
         ("instrument_not_found", "ISSUER", "미등록회사"),
         ("instrument_ambiguous", "ISSUER", "충돌이름"),
@@ -1503,7 +1509,8 @@ def test_missing_argument_text_is_explained_in_quality_diagnostics(tmp_path, mon
     assert load_assertions.run(storage, "R1", db=_db()) == 0
 
     diagnostics = _log(storage)["ops"]["quality_diagnostics"]
-    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3}
+    assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3,
+                                      "excludedAssertions": 0, "technicalFailures": 0}
     assert diagnostics["issues"] == [{
         "reason": "arguments_missing",
         "role": "ISSUER",
