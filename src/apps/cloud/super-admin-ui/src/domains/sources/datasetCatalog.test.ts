@@ -86,11 +86,16 @@ test('실시간 데이터셋이 작업→데이터셋 역인덱스를 오염시�
   }
 });
 
-test('공시는 현재 실시간 원장만 가리킨다 — 은퇴한 18:10 배치 행을 남기지 않는다', () => {
+test('공시는 장중 상주 수집과 19:30 보충 배치를 각각의 원장에 연결한다', () => {
   const realtime = ALL_DATASETS.find((d) => d.id === 'disclosure_minute');
-  const retiredBatch = ALL_DATASETS.find((d) => d.id === 'disclosures');
+  const batch = ALL_DATASETS.find((d) => d.id === 'disclosures');
   assert.ok(realtime, '현재 공시 1분 세션 행이 있어야 한다');
-  assert.equal(retiredBatch, undefined, '은퇴한 공시 배치 행이 유령 상태를 그리면 안 된다');
+  assert.ok(batch, '복구된 보충 배치 실패가 격자에서 사라지면 안 된다');
+  assert.equal(batch.lane, 'disclosure');
+  assert.equal(kindOf(batch), '일배치');
+  assert.equal(batch.inOpsGrid, true);
+  assert.match(batch.cadence.label, /19:30/);
+  assert.equal(batch.taskKeys.length, 4);
   assert.equal(kindOf(realtime), '실시간');
   assert.doesNotMatch(realtime.label, /종료/, '현재 실시간 공시를 종료된 레인으로 표시한다');
   assert.match(realtime.cadence.label, /1분 poll/, '현재 poll 주기를 화면에서 알 수 있어야 한다');

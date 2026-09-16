@@ -93,6 +93,18 @@ export const DATASET_GROUPS: DatasetGroup[] = [
     group: '시장 (EOD)',
     datasets: [
       {
+        id: 'disclosures',
+        lane: 'disclosure',
+        domain: '시장',
+        label: '공시 (배치 보충)',
+        taskKeys: [
+          'DISCLOSURE_COLLECTION_DART', 'NORMALIZE_DISCLOSURE',
+          'NORMALIZE_DISCLOSURE_SEGMENT', 'LOAD_DISCLOSURE',
+        ],
+        cadence: daily('일 1회 · 19:30 슬롯'),
+        inOpsGrid: true,
+      },
+      {
         id: 'etf_holdings',
         lane: 'etf-daily',
         domain: '시장',
@@ -248,8 +260,7 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         sessionDataset: 'etf_inav_minute',
       },
       {
-        /* ALPHA-1068에서 18:10 일배치를 내리고 1분 세션을 다시 현재 공시 수집 경로로
-         * 전환했다. ops 격자가 아니라 minute_ingestion_* 원장에서 상태를 읽는다. */
+        /* 장중 상주 수집. 별도 19:30 보충 배치와 원장이 다르므로 행을 나눈다. */
         id: 'disclosure_minute',
         domain: '시장',
         label: '공시 (실시간)',

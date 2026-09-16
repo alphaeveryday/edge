@@ -23,13 +23,11 @@ test('카탈로그가 아는 레인은 전부 표시 이름을 얻는다', () =>
   }
 });
 
-test('현재 카탈로그 밖에는 개요 SQL이 계속 내는 종료 공시 레인만 남는다', () => {
-  /* OVERVIEW_SQL은 전 이력에서 레인별 최신 런을 골라 은퇴한 레인도 계속 반환한다. 현재
-   * 카탈로그로만 표를 자르면 공시 카드에 원장 코드가 노출되므로, 그 한 건은 종료를 직접
-   * 밝힌 라벨로 보존한다. 다른 유령 라벨이 늘면 이 단언이 깨진다. */
-  const retired = Object.keys(LANE_LABEL).filter((lane) => !lanesInCatalog.includes(lane));
-  assert.deepEqual(retired, ['disclosure']);
-  assert.match(LANE_LABEL.disclosure, /일배치·종료/);
+test('복구된 공시 보충 배치를 종료된 레인으로 표시하지 않는다', () => {
+  const orphaned = Object.keys(LANE_LABEL).filter((lane) => !lanesInCatalog.includes(lane));
+  assert.deepEqual(orphaned, []);
+  assert.match(LANE_LABEL.disclosure, /배치 보충/);
+  assert.doesNotMatch(LANE_LABEL.disclosure, /종료/);
 });
 
 test('모르는 레인은 이름을 지어내지 않고 원장 코드를 그대로 낸다', () => {
