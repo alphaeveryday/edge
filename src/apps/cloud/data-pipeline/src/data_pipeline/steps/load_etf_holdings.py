@@ -230,7 +230,9 @@ def run(
             for date in dates:
                 prefix = canonical_etf_holdings_partition(market, date)
                 parquet_keys = [
-                    key for key in storage.list_keys(prefix + "/") if key.endswith(".parquet")
+                    key for key in storage.list_keys(prefix + "/")
+                    if (relative := key.removeprefix(prefix + "/")).startswith("part-")
+                    and relative.endswith(".parquet") and "/" not in relative
                 ]
                 if manifest is not None and not parquet_keys:
                     raise ValueError(f"manifest 파티션에 parquet가 없다: market={market}, date={date}")

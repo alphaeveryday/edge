@@ -1485,20 +1485,31 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   둔다 — `segment_name` 은 한 문서에서 유일하지 않다(제품/용역 sub-row 로 같은 부문 반복). 파서(4-전략
   추출)가 뽑은 `revenue_krw·revenue_share_pct·share_basis·period` 에 메타 provenance 를 조인한다.
 - **canonical(ETF 구성종목, 정제 Step2)** — `canonical/holdings/etf_holdings/market=…/as_of_date=…/part-*.parquet`
-  에 게이트 통과 행을 **(etf_id, constituent_ticker) 키로 멱등 병합**. raw 와 달리 run_id·source_vendor
-  파티션이 없다(멱등). market·as_of_date 가 파티션, (etf_id, constituent_ticker)가 파티션 내 행 키다
+  에 검증된 전량 수집본을 **ETF 단위로 교체**한다(ALPHA-1059). raw의 source/run 경계를 유지하고
+  수집 로그의 성공·정체성·수집/저장/raw 건수 일치와 필수 행 검증을 확인한다. 수집기는 holdings
+  로그의 `raw_sha256`에 실제 저장한 객체별 SHA-256을 남기고 정규화는 읽은 바이트와 대조한다.
+  같은 run 재시도의 새 raw가 이전 성공 로그와 결합되는 것을 막기 위한 필수 증거다.
+  해시가 없는 과거 로그도 자동 전량 교체 근거로 사용하지 않으며, 재수집 또는 별도 운영 대조가
+  필요하다. 부분 수집·필수 행
+  탈락·혼합 기준일은 해당 수집본 전체 반영을 보류하고 기존 canonical과 정상본 포인터를 보존한다.
+  raw와 달리 run_id·source_vendor 파티션은 없다. market·as_of_date가 파티션이며
+  (etf_id, constituent_ticker)가 파티션 내 행 키다
   (1 ETF → N 구성종목 fan-out). 기준일 as_of_date 는 벤더가 준다 — FMP `updatedAt`(datetime→date)·
   KRX `trd_dd`(우리가 지정). **market-스코프 파티션이라 한 파티션엔 한 벤더만**(US=fmp·KR=krx disjoint)
-  → 가격의 벤더 교차 충돌 가드가 불필요하다. 같은 키 재적재는 최신 fetched_at 우선. `weight_pct·shares·
-  market_value` 는 참고 필드(KRX 해외기초는 대시(-)→null), `source_vendor`(fmp|krx)는 컬럼(provenance).
+  → 입력 raw의 source/market 조합을 검증한다. 같은 ETF·기준일의 최신 전량본을 fetched_at으로
+  선택하며 축소 정정에서 빠진 구성종목은 남기지 않는다. 같은 시각의 서로 다른 raw 내용은 충돌이다.
+  스코프 재실행은 최신본을 과거 수집본으로 덮지 않는다. `weight_pct·shares·market_value`는 참고 필드(KRX 해외기초는 대시(-)→null), `source_vendor`(fmp|krx)는 컬럼(provenance).
   KRX `SECUGRP_ID/MKT_ID`의 실측 조합은 `constituent_asset_type`(`EQUITY|CASH|OPTION|UNKNOWN`)
   으로 보존한다. holdings·instrument 적재기는 주식만 적재하고 현금·옵션은
   `skipped_unsupported_asset`과 유형별 수로
   계측하되 유실에는 넣지 않는다. 미지 유형은 `skipped_unknown_asset_type`으로 유실에 남긴다
   (ALPHA-1017). `load-etf-holdings`는 정상 제외 합계를 `ops.unsupported_records`에도 남겨 실행
   이력에서 적재·지원 제외·유실을 분리한다(ALPHA-1020).
-  파티션을 갱신할 때는 기존 직접 자식 `part-*.parquet`와 새 행을 합쳐 `part-00000.parquet`로
-  수렴시킨 뒤 나머지 직접 자식 part만 지운다. 중첩 보관 객체와 raw 입력은 삭제하지 않는다.
+  파티션은 `part-00000.parquet`로 조건부 교체한 뒤 나머지 직접 자식 part만 지운다.
+  구형 part 삭제 실패 뒤 같은·과거 런 재시도와 다른 ETF 수집에서도 이미 교체한 최신
+  target에 오래된 구성종목을 다시 합치지 않고 정리를 재시도한다.
+  중첩 보관 객체와 raw 입력은 삭제하지 않는다. holdings 적재기와 canonical 기반 트리거는
+  정규화와 같은 직접 자식 `part-*.parquet`만 읽어 보관본의 삭제 종목이 재유입되지 않게 한다.
   🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다** — 파티션은 지워지지 않아 config 에서 뺀
   ETF 의 옛 행이 남고, 참조 계열(명부만 필요한 ETF)도 섞여 들어온다. 읽는 쪽은 유니버스 뿌리
   (`krx_etf.source.etf_map` 키)로 한 번 거른다 — `ingest-price-raw`·`load-etf-holdings`·
@@ -1507,7 +1518,9 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   `failed_records` 로 잡혀 원장이 **영구 INCOMPLETE** 가 된다.
   `normalize-etf` 는 실제로 갱신한 파티션을
   `operations_archive/canonical_run_manifests/dataset=etf_holdings/run_id=…/manifest.json` 에도
-  남긴다. 정규 `load-etf-holdings --input-run-id <normalize-run>` 은 이 직접 키를 GET 해 그
+  남긴다. 부분 수집으로 반영할 대상이 없으면 빈 파티션 목록을 남겨, 하류가 계속 실행돼도
+  기존 DB status/data_version을 재스탬프하지 않는다.
+  정규 `load-etf-holdings --input-run-id <normalize-run>` 은 이 직접 키를 GET 해 그
   파티션만 읽는다 — 과거 전체 스캔은 `--all`, 과거 일부 복구는 `--input-run-id` 또는
   `--from/--to` 를 명시한 운영 경로뿐이다. 범위 없는 호출은 거부한다(ALPHA-1011).
   시장 SFN과 Ops 원장은 `normalize-etf`·`normalize-etf-profile` exit 2를 실패 attempt이자
@@ -1519,7 +1532,13 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   `operations_archive/latest_good_partition_pointers/dataset=…/market=KR/pointer.json`을 CAS로
   전진시킨다. alias는 mutable canonical이 아니라 run-scoped 불변 Parquet artifact와 SHA-256을
   가리킨다. 행/수집 부분 실패(exit 2), 빈 런, 과거 런은 기존 pointer를 보존하며, 범위 없는 복구
-  정제는 shared canonical만 수렴시키고 pointer를 전진시키지 않는다. instrument profile의 수집·정제는
+  정제는 shared canonical만 수렴시키고 pointer를 전진시키지 않는다. ETF 전체 raw 복구는
+  검증된 최신 전량본으로 기존 union/partial 오염도 교체한다. 방문한 파티션의 기존 ETF에 전량
+  raw 근거가 없거나 raw 목록 조회 중 canonical이 바뀌면 실패한다. 완전본 후보가 전혀 없는
+  과거 파티션은 보존하며 전량 검증된 결과로 취급하지 않는다. 복구 후 적재도 해당 normalize
+  manifest의 `--input-run-id` 범위로 수행한다. 별도 전체 스캔인 로더 `--all`은 이 검증 범위를
+  벗어난 과거 파티션도 읽으므로 검증된 복구 결과를 적재하는 대용으로 쓰지 않는다.
+  instrument profile의 수집·정제는
   계속 수동 전용이다(ALPHA-1047 producer phase).
   `load-instruments --latest-good`은 서로 다른 source run을 가리키는 세 pointer를 함께 허용하고,
   pointer bytes/ETag·partition·artifact SHA/물리·논리 행 수를 품질 로그에 남긴다. pointer 결손·손상·

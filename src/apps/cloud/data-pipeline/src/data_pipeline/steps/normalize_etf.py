@@ -1,4 +1,4 @@
-"""ETF 구성종목 정제 Step2 — 정규화 + fact 게이트 + canonical 멱등 병합 (ALPHA-342/343).
+"""ETF 구성종목 정제 Step2 — 정규화 + fact 게이트 + 전량 스냅샷 교체 (ALPHA-1059).
 
 raw etf_holdings(FMP·KRX 두 벤더, 이형 스키마)를 읽어 **공통 구성종목 fact 행으로 정규화**
 하고(ETF 식별자·구성종목·비중·기준일), 게이트(quality/etf.validate_etf_holding)를 통과하는지
@@ -6,7 +6,7 @@ raw etf_holdings(FMP·KRX 두 벤더, 이형 스키마)를 읽어 **공통 구�
 
 가격 정제(normalize_price)의 벤더 라우팅(source= 로 판별)과 공시 fact 정제(normalize_
 disclosure_segment)의 blocking/경고 분리·canonical 멱등 병합을 합친 형태다:
-  - 정체성(market·etf_id·구성종목·as_of_date)이 없으면 blocking(canonical 제외).
+  - 정체성(market·etf_id·구성종목·as_of_date)이 없으면 blocking(해당 수집본 교체 보류).
   - 비중·주식수·평가금액은 참고 필드 — KRX 해외기초 ETF 는 비중·평가금액을 대시(-)로 줘
     정규화가 null 로 정리하고(결측은 경고 안 냄), 값이 있어도 범위 이상은 경고로만 표면화한다.
     구성종목 자체는 보존해 canonical 로 넘긴다(멤버십·주식수는 유효 신호, 비중 파생은 다운스트림).
@@ -28,6 +28,7 @@ constituent 자동 수집(targets 확장)은 이 스텝 범위 밖 — canonical
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -45,7 +46,7 @@ from ..lake import (
 )
 from ..lake.latest_good import (
     PointerPlan,
-    inspect_collection_logs,
+    CollectionCheck,
     max_fetched_at,
     prepare_pointer,
     publish_pointer,
@@ -274,33 +275,76 @@ def _fetched_at(row: dict) -> datetime:
     return dt if dt.tzinfo else _OLDEST
 
 
-def _merge_partition(existing: list[dict], new_rows: list[dict]) -> list[dict]:
-    """한 (market,as_of_date) 파티션을 (etf_id,constituent_ticker) 키로 멱등 병합. 같은 키
-    재적재는 최신 fetched_at 우선, 동률이면 신규(멱등 재실행).
+def _snapshot_rows(rows: list[dict]) -> list[dict]:
+    """한 전량 수집본의 구성종목을 정렬한다. 중복·시각 혼합은 전량성 위반이다."""
+    if len({row["as_of_date"] for row in rows}) != 1:
+        raise ValueError("ETF snapshot has mixed as_of_date")
+    if len({_fetched_at(row) for row in rows}) != 1:
+        raise ValueError("ETF snapshot has mixed fetched_at")
+    if len({row["constituent_ticker"] for row in rows}) != len(rows):
+        raise ValueError("ETF snapshot has duplicate constituents")
+    return sorted(rows, key=lambda row: row["constituent_ticker"])
 
-    벤더 교차 충돌 가드가 없다 — 파티션이 market-스코프라 한 파티션엔 한 벤더만(US=fmp·KR=krx)
-    온다. 같은 (etf_id,constituent) 를 두 벤더가 만들 수 없으므로 최신 우선 dedup 이면 충분하다.
 
-    ponytail: 같은 (etf_id,as_of_date)를 더 늦은 fetched_at 으로 재수집했는데 구성종목이 하나
-    빠지면(같은 날짜 스냅샷 정정), 그 사라진 구성종목의 옛 행이 tombstone 없이 남는 얕은
-    staleness 가 있다 — 병합이 키별 최신우선이라 '사라짐'을 표현할 새 행이 없어서다. 리밸런싱은
-    새 기준일→새 파티션이라 무관하고, 같은 날짜 축소는 벤더 정정 시에만 생기며 raw 는 append-only
-    라 감사 가능하다. 사업부문 fact(normalize_disclosure_segment)가 같은 한계를 수용·연기한 것과
-    동형이다(SCD·point-in-time 은 파이프라인 전반이 다운스트림 소관으로 둔다). full snapshot-replace
-    (etf_id 별 최신 fetched_at 스냅샷으로 통째 교체)는 후속 — 지금 유니버스·정정 빈도엔 무해하다."""
-    acc: dict[tuple, dict] = {}
-    for row in [*existing, *new_rows]:
-        key = (row["etf_id"], row["constituent_ticker"])
-        prev = acc.get(key)
-        if prev is None or _fetched_at(row) >= _fetched_at(prev):
-            acc[key] = row
-    return [acc[k] for k in sorted(acc, key=lambda k: (str(k[0]), str(k[1])))]
+def _same_snapshot(left: list[dict], right: list[dict]) -> bool:
+    """런 provenance를 제외한 canonical 전체 내용이 같은지 비교한다."""
+    def _values(rows):
+        return sorted((tuple(row.get(column) for column in _CANONICAL_COLUMNS) for row in rows),
+                      key=lambda values: values[2])
+    return _values(left) == _values(right)
+
+
+def _merge_partition(
+    existing: list[dict], new_rows: list[dict], *, rebuild: bool = False,
+) -> list[dict]:
+    """검증된 수집본을 ETF 단위로 교체한다(ALPHA-1059). 다른 ETF·최신 정정은 보존한다.
+
+    new_rows의 _collection_key는 raw의 source/run 정체성이다. 전체 복구에서도 서로 다른
+    수집본을 행별 union하지 않는다. 같은 시각의 다른 raw 내용은 순서를 증명할 수 없어 거부한다.
+    전체 raw 복구(rebuild)는 선택된 전량본으로 기존 오염도 교체한다. 스코프 실행은 역행하지 않는다.
+    """
+    acc: dict[str, list[dict]] = defaultdict(list)
+    seen = set()
+    for row in existing:
+        identity = tuple(row.get(column) for column in _CANONICAL_COLUMNS)
+        if identity not in seen:
+            acc[row["etf_id"]].append(row)
+            seen.add(identity)
+    snapshots: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in new_rows:
+        snapshots[(row["etf_id"], row["_collection_key"])].append(row)
+    # 같은 ETF의 최신 완전본 하나를 먼저 고른다. 중간 정정은 canonical에 노출하지 않는다.
+    selected: dict[str, list[dict]] = {}
+    for (etf_id, _), rows in sorted(
+        snapshots.items(), key=lambda item: max(_fetched_at(row) for row in item[1]), reverse=True,
+    ):
+        rows = _snapshot_rows(rows)
+        previous = selected.get(etf_id)
+        if previous is None or _fetched_at(rows[0]) > _fetched_at(previous[0]):
+            selected[etf_id] = rows
+        elif _fetched_at(rows[0]) == _fetched_at(previous[0]) and not _same_snapshot(rows, previous):
+            raise ValueError(f"ETF snapshot same-order conflict: {etf_id}")
+    if rebuild and acc.keys() - selected.keys():
+        raise ValueError("full recovery cannot certify existing ETFs without a complete raw snapshot: "
+                         + ",".join(sorted(acc.keys() - selected.keys())))
+    for etf_id, rows in selected.items():
+        previous = acc.get(etf_id, [])
+        previous_time = max((_fetched_at(row) for row in previous), default=_OLDEST)
+        candidate_time = _fetched_at(rows[0])
+        if rebuild or candidate_time > previous_time:
+            acc[etf_id] = rows
+        elif candidate_time == previous_time and not _same_snapshot(rows, previous):
+            raise ValueError(f"ETF snapshot same-order conflict: {etf_id}")
+    return [row for etf_id in sorted(acc) for row in sorted(
+        acc[etf_id], key=lambda row: row["constituent_ticker"],
+    )]
 
 
 def _write_canonical(
-    storage: Storage, passing: list[dict],
+    storage: Storage, passing: list[dict], *, rebuild: bool = False,
+    recovery_versions: dict[str, str | None] | None = None,
 ) -> tuple[list[dict[str, str]], int, list[tuple[str, str, bytes, list[dict]]]]:
-    """통과 행을 (market,as_of_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
+    """검증된 전량 수집본을 파티션별로 ETF 단위 교체해 쓴다.
     반환: (쓴 파티션 식별자, 쓴 행 수, 이 실행이 직렬화한 merged snapshot 후보)."""
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
@@ -311,17 +355,46 @@ def _write_canonical(
     rows_written = 0
     for (market, as_of_date), new_rows in sorted(by_partition.items()):
         prefix = canonical_etf_holdings_partition(market, as_of_date)
-        existing: list[dict] = []
+        target_key = f"{prefix}/part-00000.parquet"
+        current, version = storage.get_bytes_with_version(target_key)
+        if recovery_versions is not None and version != recovery_versions.get(target_key):
+            raise ValueError(f"canonical changed during raw recovery: {target_key}")
+        existing = _read_parquet_rows(current) if current is not None else []
+        # 이전 시도가 target 쓰기 뒤 구형 part 삭제에서 실패했을 수 있다. 이번 전량 raw와
+        # 정확히 일치하거나 incoming보다 최신인 target ETF에는 구형 part를 다시 합치지 않는다.
+        # 과거 런 재실행도 최신 target에 제거된 종목을 되살리지 않고 정리만 재시도한다.
+        incoming = _merge_partition([], new_rows)
+        confirmed = {
+            etf_id for etf_id in {row["etf_id"] for row in incoming}
+            if _same_snapshot([row for row in existing if row["etf_id"] == etf_id],
+                              [row for row in incoming if row["etf_id"] == etf_id])
+            or max((_fetched_at(row) for row in existing if row["etf_id"] == etf_id), default=_OLDEST)
+            > max(_fetched_at(row) for row in incoming if row["etf_id"] == etf_id)
+        }
+        target_times = {
+            etf_id: max(_fetched_at(row) for row in existing if row["etf_id"] == etf_id)
+            for etf_id in {row["etf_id"] for row in existing}
+        }
         partition_keys = []
         for key in storage.list_keys(prefix + "/"):
             relative = key.removeprefix(prefix + "/")
             if relative.startswith("part-") and relative.endswith(".parquet") and "/" not in relative:
                 partition_keys.append(key)
-                existing.extend(_read_parquet_rows(storage.get_bytes(key)))
-        merged = _merge_partition(existing, new_rows)
-        target_key = f"{prefix}/part-00000.parquet"
+                if key != target_key:
+                    # 이번 입력에 없는 ETF도 이미 교체된 target보다 오래된 part로
+                    # 되살리면 안 된다. 구형 part의 같은/더 최신 수집본은 기존 병합에 남긴다.
+                    legacy: dict[str, list[dict]] = defaultdict(list)
+                    for row in _read_parquet_rows(storage.get_bytes(key)):
+                        legacy[row["etf_id"]].append(row)
+                    for etf_id, rows in legacy.items():
+                        if (etf_id not in confirmed
+                                and max(_fetched_at(row) for row in rows)
+                                >= target_times.get(etf_id, _OLDEST)):
+                            existing.extend(rows)
+        merged = _merge_partition(existing, new_rows, rebuild=rebuild)
         data = _write_parquet_rows(merged)
-        storage.put_bytes(target_key, data)
+        if not storage.put_bytes_if_version(target_key, data, version):
+            raise ValueError(f"canonical snapshot concurrent write: {target_key}")
         # canonical 파티션은 단일 파일 계약이다. 구형 part를 남기면 로더가 새 스키마와 함께
         # 다시 읽어 중복·UNKNOWN 유실로 계측한다. 새 파일 기록 성공 뒤라 교체 중 데이터도 잃지 않는다.
         stale_keys = [key for key in partition_keys if key != target_key]
@@ -333,16 +406,62 @@ def _write_canonical(
     return partitions, rows_written, candidates
 
 
-def _collection_keys(raw_keys: list[str]) -> list[str]:
-    """KR raw와 정확히 짝인 collection log key들. 포인터 전량성 판정에만 쓴다."""
-    keys = []
+def _collection_key(raw_key: str) -> str:
+    """KR/FMP raw와 정확히 짝인 수집 로그 key."""
+    parsed = parse_raw_etf_key(raw_key)
+    return collection_log_key(parsed["source"], DATASET, parsed["ingest_date"], parsed["run_id"])
+
+
+def _complete_rows(
+    storage: Storage, raw_keys: list[str], passing: list[dict], failures: list[dict],
+    read_counts: dict[str, int], raw_sha256: dict[str, str],
+) -> tuple[list[dict], CollectionCheck]:
+    """전량 증거가 있는 수집 런만 반영한다. 부분 행은 raw에 보존하고 canonical은 유지한다."""
+    grouped: dict[str, list[str]] = defaultdict(list)
     for raw_key in raw_keys:
-        parsed = parse_raw_etf_key(raw_key)
-        if parsed["market"] == "KR":
-            keys.append(collection_log_key(
-                parsed["source"], DATASET, parsed["ingest_date"], parsed["run_id"],
-            ))
-    return keys
+        try:
+            grouped[_collection_key(raw_key)].append(raw_key)
+        except (KeyError, ValueError):
+            # run의 raw_read_error가 이미 기록된 경로다. 품질 로그까지 진행한다.
+            continue
+    bad_raw = {failure.get("raw_key") for failure in failures}
+    accepted: set[str] = set()
+    by_collection: dict[str, dict[tuple, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for row in passing:
+        by_collection[row["_collection_key"]][(row["market"], row["etf_id"])].append(row)
+    statuses = []
+    for key, keys in sorted(grouped.items()):
+        status = "unverified"
+        try:
+            log = json.loads(storage.get_bytes(key))
+            parsed = parse_raw_etf_key(keys[0])
+            status = log.get("status")
+            count = sum(read_counts.get(raw_key, 0) for raw_key in keys)
+            complete = (
+                status == "success" and count > 0
+                and log.get("run_id") == parsed["run_id"]
+                and log.get("source_vendor") == parsed["source"]
+                and all(type(log.get(field)) is int and log[field] == count
+                        for field in ("records_fetched", "records_saved"))
+                and type(log.get("records_failed_etfs")) is int
+                and log["records_failed_etfs"] == 0
+                and log.get("raw_sha256") == {raw_key: raw_sha256.get(raw_key) for raw_key in keys}
+                and all(raw_key in raw_sha256 for raw_key in keys)
+            )
+            if not complete:
+                raise ValueError("collection status/identity/count/hash does not prove a full snapshot")
+            for rows in by_collection[key].values():
+                _snapshot_rows(rows)
+        except Exception as exc:
+            failures.append({"raw_key": keys[0], "collection_log_key": key,
+                             "reasons": ["incomplete_collection"], "error": str(exc)})
+            continue
+        finally:
+            statuses.append(status)
+        if not bad_raw.intersection(keys):
+            accepted.add(key)
+    return ([row for row in passing if row["_collection_key"] in accepted],
+            CollectionCheck(tuple(sorted(grouped)), tuple(statuses), len(accepted) == len(grouped)))
 
 
 def _prepare_latest_good(
@@ -368,7 +487,8 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다
     (ALPHA-389 — SFN 이 이 경로로 돈다). 이 run-scoped 경로만 포인터를 전진시킨다.
-    미지정 전체 읽기는 기존 백필·복구 수단이며 shared canonical만 갱신한다."""
+    미지정 전체 복구는 검증된 최신 전량본으로 shared canonical의 기존 오염도 교체한다.
+    전체 복구는 포인터를 전진시키지 않는다. 누락·실패 런은 품질 로그와 비0 종료로 드러낸다."""
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_as_of_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
@@ -376,7 +496,15 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     failures: list[dict] = []
     exit_code = 0
     raw_list_ok = True
+    recovery_versions = None
     try:
+        if input_run_id is None:
+            # raw inventory 이후 완료된 정상 정정을 전체 복구의 과거 후보로 덮지 않는다.
+            recovery_versions = {
+                key: storage.get_bytes_with_version(key)[1]
+                for key in storage.list_keys("canonical/holdings/etf_holdings/")
+                if key.endswith("/part-00000.parquet")
+            }
         raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_key(k)]
     except Exception as exc:
         logger.exception("raw 목록 조회 실패")
@@ -387,24 +515,19 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if input_run_id is not None:
         raw_keys = [k for k in raw_keys if f"/run_id={input_run_id}/" in k]
 
-    collection_check = None
-    collection_error = None
-    if input_run_id is not None and raw_keys:
-        try:
-            collection_check = inspect_collection_logs(storage, _collection_keys(raw_keys))
-        except Exception as exc:
-            logger.exception("matching collection log 검증 실패")
-            collection_error = str(exc)
-            exit_code = 1
-
     read = 0
     warnings: list[dict] = []
     passing: list[dict] = []
+    read_counts: dict[str, int] = defaultdict(int)
+    raw_sha256: dict[str, str] = {}
 
     for raw_key in raw_keys:
         try:
-            vendor = parse_raw_etf_key(raw_key)["source"]
-            lines = storage.get_bytes(raw_key).decode("utf-8").splitlines()
+            raw_partition = parse_raw_etf_key(raw_key)
+            vendor = raw_partition["source"]
+            data = storage.get_bytes(raw_key)
+            raw_sha256[raw_key] = hashlib.sha256(data).hexdigest()
+            lines = data.decode("utf-8").splitlines()
         except Exception as exc:
             logger.exception("raw 읽기/키 파싱 실패: %s", raw_key)
             failures.append({"raw_key": raw_key, "reasons": ["raw_read_error"], "error": str(exc)})
@@ -414,6 +537,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if not line.strip():
                 continue
             read += 1
+            read_counts[raw_key] += 1
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
@@ -438,6 +562,11 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 failures.append({"raw_key": raw_key, "reasons": ["row_error"], "error": str(exc)})
                 continue
 
+            if row["market"] != raw_partition["market"] or (vendor, row["market"]) not in {
+                ("krx", "KR"), ("fmp", "US"),
+            }:
+                failures.append({"raw_key": raw_key, "reasons": ["source_market_mismatch"]})
+                continue
             if _fetched_at(row) == _OLDEST:
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["bad_fetched_at"]})
@@ -446,24 +575,35 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             ref = {"market": row["market"], "etf_id": row["etf_id"],
                    "constituent_ticker": row["constituent_ticker"],
                    "as_of_date": row["as_of_date"], "source_vendor": vendor, "raw_key": raw_key}
+            if any(isinstance(row[field], str) and row[field].strip()
+                   and row[field] != row[field].strip()
+                   for field in ("etf_id", "constituent_ticker")):
+                failures.append({**ref, "reasons": ["identity_whitespace"]})
+                continue
             blocking = [r for r in reasons if r in BLOCKING_REASONS_ETF]
             if blocking:
                 failures.append({**ref, "reasons": reasons})
                 continue
+            row["_collection_key"] = _collection_key(raw_key)
             passing.append(row)
             warn = [r for r in reasons if r not in BLOCKING_REASONS_ETF]
             if warn:
                 warnings.append({**ref, "reasons": warn})
 
-    # 스코프든 전체 런이든 shared canonical 을 쓴다(ALPHA-389). pointer 전량성 실패여도
-    # 통과 행은 보존하되 alias만 전진시키지 않는다.
+    # 부분 런은 shared canonical도 건드리지 않는다. exit 2 뒤 하류가 실행돼도
+    # 빈 manifest를 읽어 DB status/version을 그대로 유지한다.
+    eligible, collection_check = _complete_rows(
+        storage, raw_keys, passing, failures, read_counts, raw_sha256,
+    )
     partitions: list[dict[str, str]] = []
     candidates: list[tuple[str, str, bytes, list[dict]]] = []
     canonical_rows = 0
     canonical_written = False
-    if raw_list_ok:
+    if raw_list_ok and exit_code != 1:
         try:
-            partitions, canonical_rows, candidates = _write_canonical(storage, passing)
+            partitions, canonical_rows, candidates = _write_canonical(
+                storage, eligible, rebuild=input_run_id is None, recovery_versions=recovery_versions,
+            )
             storage.put_bytes(
                 canonical_run_manifest_key(DATASET, run_id),
                 json.dumps({
@@ -483,7 +623,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         exit_code = _PARTIAL_EXIT_CODE
 
     plan: PointerPlan | None = None
-    pointer_error = collection_error
+    pointer_error = None
     if input_run_id is None:
         pointer_action = "retain_unscoped_recovery"
     elif exit_code == 1:
@@ -526,8 +666,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         "raw_files": len(raw_keys),
         "records_read": read,
         "records_passed": len(passing),
+        "records_eligible": len(eligible),
         "records_failed": len(failures),
-        "ops": {"records_out": len(passing), "failed_records": len(failures)},
+        "ops": {"records_out": len(eligible), "failed_records": len(failures)},
         "records_warned": len(warnings),
         "failures": failures,
         "warnings": warnings,

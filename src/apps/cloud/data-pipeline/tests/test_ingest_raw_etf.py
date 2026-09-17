@@ -4,6 +4,7 @@ ETF holdings 는 스냅샷이라 날짜창이 없고, 수집 대상이 etf_map(E
 가격(ingest_price_raw)과 fail-loud 상태 로직은 같되 그 두 점이 다르다.
 """
 
+import hashlib
 import json
 import logging
 
@@ -94,9 +95,34 @@ def test_saves_ingest_date_partition_and_log(tmp_path):
     log = json.loads(storage.get_bytes(storage.list_keys("operations_archive")[0]))
     assert log["status"] == "success"
     assert log["records_fetched"] == 3 and log["records_saved"] == 3
+    assert log["raw_sha256"] == {raw_key: hashlib.sha256(storage.get_bytes(raw_key)).hexdigest()}
     # 행 수(holdings 3행)가 아니라 기대 snapshot과 같은 ETF entity grain(2종)이다.
     assert log["ops"]["records_out"] == 3
     assert log["ops"]["received_count"] == 2
+
+
+def test_retry_raw_cannot_borrow_previous_success_log_with_same_row_count(tmp_path):
+    """WHY: raw만 교체된 재시도 중간 상태가 이전 성공 로그로 전량 삭제를 승인하면 안 된다."""
+    from data_pipeline.lake import canonical_etf_holdings_partition
+    from data_pipeline.steps import normalize_etf
+
+    code, storage = _run(tmp_path, {"SPY": [_holding("A", 60), _holding("B", 40)]},
+                         etf_map={"SPY": "SPY"}, run_id="SAME-RUN")
+    assert code == 0
+    assert normalize_etf.run(storage, "N1", input_run_id="SAME-RUN") == 0
+    target = canonical_etf_holdings_partition("US", "2026-07-11") + "/part-00000.parquet"
+    previous = storage.get_bytes(target)
+    [raw_key] = storage.list_keys("raw/")
+    old_log_key = storage.list_keys("operations_archive/collection_logs/")[0]
+    old_log = storage.get_bytes(old_log_key)
+    rows = [json.loads(line) for line in storage.get_bytes(raw_key).decode().splitlines()]
+    # 새 시도에서 A만 남고 다른 ETF가 1행 늘면 전체 행 수는 여전히 2다.
+    rows[0]["weightPercentage"] = 100
+    rows[1]["our_etf_id"] = "QQQ"
+    storage.put_bytes(raw_key, "".join(json.dumps(row) + "\n" for row in rows).encode())
+    assert storage.get_bytes(old_log_key) == old_log
+    assert normalize_etf.run(storage, "N2", input_run_id="SAME-RUN") == 2
+    assert storage.get_bytes(target) == previous
 
 
 def test_actual_as_of_evidence_preserves_missing_values(tmp_path):
