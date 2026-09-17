@@ -1,10 +1,11 @@
-"""normalize_etf 스텝 테스트 — 벤더 이형(FMP·KRX) 흡수 + fact 게이트 + canonical 멱등 병합
-(ALPHA-342/343).
+"""normalize_etf 스텝 테스트 — 벤더 이형(FMP·KRX) 흡수 + fact 게이트 + canonical 전량 스냅샷 교체
+(ALPHA-1059).
 
 핵심 시나리오: KRX 해외기초 ETF 의 대시(-) 비중이 null 로 통과해 구성종목이 보존되는 것,
 FMP updatedAt(datetime)·KRX trd_dd(YYYYMMDD) 기준일이 하나의 as_of_date 로 수렴하는 것.
 """
 
+import hashlib
 import json
 
 import pytest
@@ -35,7 +36,10 @@ def _write_raw(storage, key: str, rows: list[dict]) -> None:
         collection_log_key(
             parsed["source"], "etf_holdings", parsed["ingest_date"], parsed["run_id"],
         ),
-        json.dumps({"status": "success"}).encode(),
+        json.dumps({"status": "success", "run_id": parsed["run_id"],
+                    "source_vendor": parsed["source"], "records_fetched": len(rows),
+                    "records_saved": len(rows), "records_failed_etfs": 0,
+                    "raw_sha256": {key: hashlib.sha256(body.encode("utf-8")).hexdigest()}}).encode(),
     )
 
 
@@ -110,6 +114,205 @@ def test_both_vendors_normalize_to_common_schema(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("vendor,market,day", [("krx", "KR", "2026-07-14"),
+                                             ("fmp", "US", "2026-07-11")])
+def test_full_snapshot_shrink_is_idempotent_and_older_run_cannot_resurrect(tmp_path, vendor, market, day):
+    """WHY: 삭제는 행별 최신값으로 표현되지 않는다. 다른 ETF는 보존하고 재실행도 안전해야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    def row(ticker, weight, **extra):
+        return (_krx_row(COMPST_ISU_CD=ticker, COMPST_RTO=str(weight), **extra)
+                if vendor == "krx" else _fmp_row(asset=ticker, weightPercentage=weight, **extra))
+    _write_raw(storage, _raw_key(vendor, market, "R1"),
+               [row("A", 60), row("B", 40), row("C", 100, our_etf_id="OTHER")])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    _write_raw(storage, _raw_key(vendor, market, "R2"),
+               [row("A", 100, fetched_at="2026-07-15T00:00:00+00:00")])
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 0
+    expected = _canonical_rows(storage, market, day)
+    assert {(r["constituent_ticker"], r["weight_pct"]) for r in expected} == {("A", 100), ("C", 100)}
+    for norm, source in (("N2", "R2"), ("N3", "R1"), ("N4", None)):
+        assert normalize_etf.run(storage, norm, input_run_id=source) == 0
+        assert _canonical_rows(storage, market, day) == expected
+
+
+@pytest.mark.parametrize("log_change", [None, {"records_saved": 0}, {"records_fetched": True},
+                                      {"records_failed_etfs": 1}, {"run_id": "OTHER"},
+                                      {"raw_sha256": None}, {"raw_sha256": {}}])
+def test_unproven_collection_cannot_replace_or_publish_load_manifest(tmp_path, log_change):
+    """WHY: 성공 문자열만으로 잘린 raw를 전량으로 승격하면 정상 구성종목을 삭제한다."""
+    from data_pipeline.lake import canonical_run_manifest_key
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", "R1"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    previous = _canonical_rows(storage, "KR", "2026-07-14")
+    key = _raw_key("krx", "KR", "R2")
+    _write_raw(storage, key, [_krx_row(COMPST_RTO="100", fetched_at="2026-07-15T00:00:00+00:00")])
+    log_key = collection_log_key("krx", "etf_holdings", "2026-07-14", "R2")
+    if log_change is None:
+        storage.delete_keys([log_key])
+    else:
+        payload = json.loads(storage.get_bytes(log_key))
+        storage.put_bytes(log_key, json.dumps({**payload, **log_change}).encode())
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
+    assert _canonical_rows(storage, "KR", "2026-07-14") == previous
+    manifest = json.loads(storage.get_bytes(canonical_run_manifest_key("etf_holdings", "N2")))
+    assert manifest["canonical_partitions"] == []
+
+
+def test_recovery_uses_last_complete_run_without_unioning_partial_rows(tmp_path):
+    """WHY: 전체 복구도 수집 런 경계를 지켜야 오래된 종목·부분 정정이 되살아나지 않는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", "R1"), [_krx_row(), _krx_row(COMPST_ISU_CD="B")])
+    _write_raw(storage, _raw_key("krx", "KR", "R2"),
+               [_krx_row(COMPST_RTO="100", fetched_at="2026-07-15T00:00:00+00:00")])
+    _write_raw(storage, _raw_key("krx", "KR", "R3"),
+               [_krx_row(COMPST_RTO="20", fetched_at="2026-07-16T00:00:00+00:00"),
+                _krx_row(COMPST_ISU_CD="")])
+    assert normalize_etf.run(storage, "RECOVERY") == 2
+    assert [(r["constituent_ticker"], r["weight_pct"]) for r in
+            _canonical_rows(storage, "KR", "2026-07-14")] == [("005930", 100)]
+
+
+def test_equal_revision_conflict_preserves_existing_snapshot(tmp_path):
+    """WHY: 같은 수집 시각의 다른 내용을 파일 정렬 순서로 임의 채택하지 않는다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", "R1"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    previous = _canonical_rows(storage, "KR", "2026-07-14")
+    _write_raw(storage, _raw_key("krx", "KR", "R2"), [_krx_row(COMPST_RTO="100")])
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 1
+    assert _canonical_rows(storage, "KR", "2026-07-14") == previous
+
+
+def test_full_recovery_repairs_legacy_union_and_newer_partial_poison(tmp_path):
+    """WHY: 최대 fetched_at은 기존 canonical이 전량본이라는 증거가 아니다."""
+    storage = LocalStorage(tmp_path / "lake")
+    first = [_krx_row(COMPST_RTO="60"), _krx_row(COMPST_ISU_CD="B", COMPST_RTO="40")]
+    corrected = [_krx_row(COMPST_RTO="100", fetched_at="2026-07-15T00:00:00+00:00")]
+    _write_raw(storage, _raw_key("krx", "KR", "R1"), first)
+    _write_raw(storage, _raw_key("krx", "KR", "R2"), corrected)
+    target = canonical_etf_holdings_partition("KR", "2026-07-14") + "/part-00000.parquet"
+    for poisoned in (
+        corrected + [first[1]],
+        [_krx_row(COMPST_RTO="20", fetched_at="2026-07-16T00:00:00+00:00"), first[1]],
+    ):
+        storage.put_bytes(target, normalize_etf._write_parquet_rows(
+            [normalize_etf._normalize("krx", row) for row in poisoned],
+        ))
+        assert normalize_etf.run(storage, "RECOVERY") == 0
+        rows = _canonical_rows(storage, "KR", "2026-07-14")
+        assert [(r["constituent_ticker"], r["weight_pct"]) for r in rows] == [("005930", 100)]
+
+
+def test_malformed_raw_path_still_emits_quality_log(tmp_path):
+    """WHY: 손상된 raw 객체 하나로 품질 기록 전 크래시가 반복되면 복구 원인을 알 수 없다."""
+    storage = LocalStorage(tmp_path / "lake")
+    storage.put_bytes("raw/source=krx/dataset=etf_holdings/ingest_date=2026-07-14"
+                      "/run_id=R1/part-00000.ndjson", json.dumps(_krx_row()).encode())
+    assert normalize_etf.run(storage, "N1") == 1
+    assert _quality_log(storage)["failures"][0]["reasons"] == ["raw_read_error"]
+    assert storage.list_keys("canonical/") == []
+
+
+@pytest.mark.parametrize("extra", [{"COMPST_ISU_CD": " 005930 "}, {"our_etf_id": "069500 "}])
+def test_loader_rejected_identity_cannot_replace_good_snapshot(tmp_path, extra):
+    """WHY: 로더가 거부하는 정체성으로 전량 교체하면 기존의 정상 행까지 삭제된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR", "R1"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    previous = _canonical_rows(storage, "KR", "2026-07-14")
+    _write_raw(storage, _raw_key("krx", "KR", "R2"),
+               [_krx_row(fetched_at="2026-07-15T00:00:00+00:00", **extra)])
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
+    assert _canonical_rows(storage, "KR", "2026-07-14") == previous
+
+
+def test_canonical_CAS_conflict_does_not_publish_success(tmp_path):
+    """WHY: 다른 writer의 최신 파일을 오래된 read 결과로 덮어써서는 안 된다."""
+    class RacingStorage(LocalStorage):
+        def put_bytes_if_version(self, key, data, version):
+            if key.startswith("canonical/"):
+                return False
+            return super().put_bytes_if_version(key, data, version)
+    storage = RacingStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [_krx_row()])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 1
+    assert _quality_log(storage)["canonical_written"] is False
+    assert latest_good_pointer_key("etf_holdings", "KR") not in storage.list_keys("")
+
+
+def test_recovery_cannot_restamp_unproven_old_ETF_through_another_ETF(tmp_path):
+    """WHY: 파티션 manifest의 로더는 모든 ETF를 읽으므로 증거 없는 잔존 ETF도 승격될 수 있다."""
+    from data_pipeline.lake import canonical_run_manifest_key
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [_krx_row()])
+    target = canonical_etf_holdings_partition("KR", "2026-07-14") + "/part-00000.parquet"
+    previous = normalize_etf._write_parquet_rows([
+        normalize_etf._normalize("krx", _krx_row(our_etf_id="UNPROVEN")),
+    ])
+    storage.put_bytes(target, previous)
+    assert normalize_etf.run(storage, "RECOVERY") == 1
+    assert storage.get_bytes(target) == previous
+    assert canonical_run_manifest_key("etf_holdings", "RECOVERY") not in storage.list_keys("")
+
+
+def test_mixed_FMP_dates_are_not_two_complete_snapshots(tmp_path):
+    """WHY: 응답에 존재하는 B가 다른 updatedAt 때문에 A의 기준일에서 삭제되면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", "R1"), [_fmp_row(), _fmp_row(asset="B")])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    previous = _canonical_rows(storage, "US", "2026-07-11")
+    _write_raw(storage, _raw_key("fmp", "US", "R2"), [
+        _fmp_row(fetched_at="2026-07-15T00:00:00+00:00"),
+        _fmp_row(asset="B", updatedAt="2026-07-10 09:07:03", fetched_at="2026-07-15T00:00:00+00:00"),
+    ])
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
+    assert _canonical_rows(storage, "US", "2026-07-11") == previous
+    assert _canonical_rows(storage, "US", "2026-07-10") == []
+
+
+def test_full_recovery_does_not_overwrite_a_snapshot_published_after_raw_listing(tmp_path):
+    """WHY: canonical 읽기의 ETag만으로는 raw 목록에 없던 최신 정정을 보호하지 못한다."""
+    target = canonical_etf_holdings_partition("KR", "2026-07-14") + "/part-00000.parquet"
+    newer = normalize_etf._write_parquet_rows([normalize_etf._normalize("krx", _krx_row(
+        COMPST_RTO="100", fetched_at="2026-07-16T00:00:00+00:00",
+    ))])
+    class RacingStorage(LocalStorage):
+        def list_keys(self, prefix):
+            keys = super().list_keys(prefix)
+            if prefix == "raw/":
+                self.put_bytes(target, newer)
+            return keys
+    storage = RacingStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("krx", "KR"), [_krx_row()])
+    assert normalize_etf.run(storage, "RECOVERY") == 1
+    assert storage.get_bytes(target) == newer
+
+
+def test_same_run_retry_finishes_stale_part_cleanup_after_delete_failure(tmp_path):
+    """WHY: target 교체 후 삭제 실패가 같은 런 재시도를 영구 충돌로 막으면 안 된다."""
+    class FailingOnceStorage(LocalStorage):
+        failed = False
+        def delete_keys(self, keys):
+            if not self.failed:
+                self.failed = True
+                raise OSError("temporary delete failure")
+            return super().delete_keys(keys)
+    storage = FailingOnceStorage(tmp_path / "lake")
+    prefix = canonical_etf_holdings_partition("KR", "2026-07-14")
+    old = [_krx_row(COMPST_RTO="60"), _krx_row(COMPST_ISU_CD="B", COMPST_RTO="40")]
+    storage.put_bytes(prefix + "/part-00001.parquet", normalize_etf._write_parquet_rows(
+        [normalize_etf._normalize("krx", row) for row in old],
+    ))
+    _write_raw(storage, _raw_key("krx", "KR"),
+               [_krx_row(COMPST_RTO="100", fetched_at="2026-07-15T00:00:00+00:00")])
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 1
+    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    assert storage.list_keys(prefix + "/") == [prefix + "/part-00000.parquet"]
+    assert [(r["constituent_ticker"], r["weight_pct"]) for r in
+            _canonical_rows(storage, "KR", "2026-07-14")] == [("005930", 100)]
+
+
 def test_foreign_underlying_dash_weight_nulled_but_row_preserved(tmp_path):
     # WHY: KRX 해외기초 ETF(TIGER美S&P500)는 비중·평가금액을 대시(-)로 준다 — 구성종목을
     #      버리지 않고 weight_pct=null 로 통과시켜 멤버십·주식수를 보존한다(사용자 결정). 결측은
@@ -147,8 +350,7 @@ def test_passing_rows_idempotent_and_latest_fetched_at_wins(tmp_path):
 
 def test_blocking_identity_excluded_from_canonical(tmp_path):
     # WHY: 정체성 결측(구성종목 코드 없음)·시간축 불량(비달력일 trd_dd → 정규화 실패)은
-    #      canonical 행키·파티션을 못 만들어 blocking — 통과 행만 적재되고 탈락은 quality_log
-    #      에만 남는다. ('20260231'=2월 31일은 strptime 파싱 실패라 missing_as_of_date; 범위밖
+    #      canonical 행키·파티션을 못 만들어 blocking — 수집본 전체 반영을 보류한다. ('20260231'=2월 31일은 strptime 파싱 실패라 missing_as_of_date; 범위밖
     #      유효날짜의 bad_as_of_date 는 test_quality_etf 가 커버.)
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("krx", "KR"), [
@@ -159,7 +361,7 @@ def test_blocking_identity_excluded_from_canonical(tmp_path):
 
     assert normalize_etf.run(storage, "N1") == 2
     rows = _canonical_rows(storage, "KR", "2026-07-14")
-    assert [r["constituent_ticker"] for r in rows] == ["005930"]
+    assert rows == []  # 행 탈락은 전체 구성종목의 삭제 증거가 아니다
     log = _quality_log(storage)
     assert log["records_passed"] == 1 and log["records_failed"] == 2
     reasons = {r for f in log["failures"] for r in f["reasons"]}
@@ -196,8 +398,7 @@ def test_non_object_row_isolated_not_crash(tmp_path):
     # WHY: 유효 JSON 이지만 객체가 아닌 행(null·배열)은 _normalize 의 record.get 에서 런 전체를
     #      죽여 quality_log 조차 못 남긴다 — 행 단위로 격리해 나머지 검증은 완료돼야 한다(Rule 12).
     storage = LocalStorage(tmp_path / "lake")
-    body = "null\n" + json.dumps(_fmp_row()) + "\n[]\n"
-    storage.put_bytes(_raw_key("fmp", "US"), body.encode("utf-8"))
+    _write_raw(storage, _raw_key("fmp", "US"), [None, _fmp_row(), []])
 
     assert normalize_etf.run(storage, "N1") == 2  # 크래시 없이 partial로 완료
     log = _quality_log(storage)
@@ -236,7 +437,7 @@ def test_input_run_id_scopes_read_and_writes_canonical(tmp_path):
 
 @pytest.mark.parametrize("status", ["partial", "stopped", "error"])
 def test_incomplete_collection_retains_previous_pointer_and_canonical(tmp_path, status):
-    """WHY: 받은 정상 행은 보존하되 전량성이 없는 수집을 last-good으로 승격하면 안 된다."""
+    """WHY: 부분 수집은 구성과 비중 모두 기존 정상본을 유지해야 한다."""
     storage = LocalStorage(tmp_path / "lake")
     first_key = _raw_key("krx", "KR", run_id="R1")
     _write_raw(storage, first_key, [_krx_row(COMPST_RTO="30.5")])
@@ -255,12 +456,12 @@ def test_incomplete_collection_retains_previous_pointer_and_canonical(tmp_path, 
     )
 
     assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
-    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["weight_pct"] == 31.0
+    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["weight_pct"] == 30.5
     assert storage.get_bytes(pointer_key) == previous
 
 
 def test_row_failure_and_empty_run_retain_previous_pointer(tmp_path):
-    """WHY: 부분 행은 canonical 성공분만 남기고, holiday/empty는 last-good을 그대로 쓴다."""
+    """WHY: 행 탈락과 빈 런이 삭제/정정으로 오인되어 기존 정상본을 바꾸면 안 된다."""
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("krx", "KR", run_id="R1"), [_krx_row()])
     assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
@@ -272,7 +473,7 @@ def test_row_failure_and_empty_run_retain_previous_pointer(tmp_path):
         _krx_row(COMPST_ISU_CD="   "),
     ])
     assert normalize_etf.run(storage, "N2", input_run_id="R2") == 2
-    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["weight_pct"] == 31.0
+    assert _canonical_rows(storage, "KR", "2026-07-14")[0]["weight_pct"] == 30.5
     assert storage.get_bytes(pointer_key) == previous
     assert (
         _quality_for_run(storage, "N2")["latest_good"]["pointer_intended_action"]

@@ -12,6 +12,7 @@ FMP ETF holdings 에서 ETF 별 구성종목 스냅샷을 수집해, market 별�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -139,11 +140,14 @@ def run(
     # raw 저장도 계약("결과는 항상 collection_log") 안에 둔다 — put_bytes 가 실패
     # (IAM·네트워크·부분 쓰기)해도 예외를 삼켜 status=error 로 남기고 로그를 쓴다.
     saved = 0
+    raw_sha256: dict[str, str] = {}
     try:
         for market, records in sorted(partitions.items()):
             key = f"{partition(vendor, market, started_date, run_id)}/part-00000.ndjson"
             lines = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
-            storage.put_bytes(key, lines.encode("utf-8"))
+            data = lines.encode("utf-8")
+            storage.put_bytes(key, data)
+            raw_sha256[key] = hashlib.sha256(data).hexdigest()
             saved += len(records)
     except Exception as exc:
         logger.exception("raw 저장 실패")
@@ -178,6 +182,8 @@ def run(
             "reason": reason,
             "records_fetched": fetched,
             "records_saved": saved,
+            # 같은 run 재시도에서 새 raw와 이전 success 로그가 짝지어지지 않게 한다.
+            **({"raw_sha256": raw_sha256} if dataset == DATASET else {}),
             "records_failed_etfs": len(failed_etfs),
             "failed_etfs": failed_etfs,
             "partitions": len(partitions),
