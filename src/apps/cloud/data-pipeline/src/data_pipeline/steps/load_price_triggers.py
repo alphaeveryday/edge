@@ -113,7 +113,8 @@ def _holdings_by_etf(
     by_etf: dict[str, list[tuple[str, float]]] = {}
     prefix = canonical_etf_holdings_partition(market, as_of_date)
     for key in storage.list_keys(prefix + "/"):
-        if not key.endswith(".parquet"):
+        relative = key.removeprefix(prefix + "/")
+        if not (relative.startswith("part-") and relative.endswith(".parquet") and "/" not in relative):
             continue
         for row in _read_parquet_rows(storage.get_bytes(key)):
             etf_id = row.get("etf_id")

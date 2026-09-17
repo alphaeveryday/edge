@@ -289,8 +289,9 @@ def test_full_recovery_does_not_overwrite_a_snapshot_published_after_raw_listing
     assert storage.get_bytes(target) == newer
 
 
-def test_same_run_retry_finishes_stale_part_cleanup_after_delete_failure(tmp_path):
-    """WHY: target 교체 후 삭제 실패가 같은 런 재시도를 영구 충돌로 막으면 안 된다."""
+@pytest.mark.parametrize("replay_source", ["R1", "R2", "OTHER"])
+def test_retry_finishes_stale_part_cleanup_without_resurrecting_old_rows(tmp_path, replay_source):
+    """WHY: 삭제 실패 뒤 같은·과거·다른 ETF 런 어느 것도 제거된 종목을 되살리면 안 된다."""
     class FailingOnceStorage(LocalStorage):
         failed = False
         def delete_keys(self, keys):
@@ -304,13 +305,19 @@ def test_same_run_retry_finishes_stale_part_cleanup_after_delete_failure(tmp_pat
     storage.put_bytes(prefix + "/part-00001.parquet", normalize_etf._write_parquet_rows(
         [normalize_etf._normalize("krx", row) for row in old],
     ))
-    _write_raw(storage, _raw_key("krx", "KR"),
+    _write_raw(storage, _raw_key("krx", "KR", "R1"), old)
+    _write_raw(storage, _raw_key("krx", "KR", "R2"),
                [_krx_row(COMPST_RTO="100", fetched_at="2026-07-15T00:00:00+00:00")])
-    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 1
-    assert normalize_etf.run(storage, "N1", input_run_id="R1") == 0
+    _write_raw(storage, _raw_key("krx", "KR", "OTHER"),
+               [_krx_row(our_etf_id="OTHER", COMPST_ISU_CD="C", COMPST_RTO="100",
+                         fetched_at="2026-07-16T00:00:00+00:00")])
+    assert normalize_etf.run(storage, "N2", input_run_id="R2") == 1
+    assert normalize_etf.run(storage, "RETRY", input_run_id=replay_source) == 0
     assert storage.list_keys(prefix + "/") == [prefix + "/part-00000.parquet"]
     assert [(r["constituent_ticker"], r["weight_pct"]) for r in
-            _canonical_rows(storage, "KR", "2026-07-14")] == [("005930", 100)]
+            _canonical_rows(storage, "KR", "2026-07-14") if r["etf_id"] == "069500"] == [("005930", 100)]
+    if replay_source == "OTHER":
+        assert any(r["etf_id"] == "OTHER" for r in _canonical_rows(storage, "KR", "2026-07-14"))
 
 
 def test_foreign_underlying_dash_weight_nulled_but_row_preserved(tmp_path):

@@ -6,7 +6,9 @@ import os
 import pytest
 
 from data_pipeline.config import DbConfig
-from data_pipeline.lake import LocalStorage, collection_log_key, latest_good_pointer_key
+from data_pipeline.lake import (
+    LocalStorage, canonical_etf_holdings_partition, collection_log_key, latest_good_pointer_key,
+)
 from data_pipeline.steps import load_etf_holdings, load_price_triggers, normalize_etf
 
 pytestmark = pytest.mark.skipif(
@@ -76,10 +78,17 @@ def test_raw_correction_and_partial_preservation_reach_trigger_input(tmp_path):
         assert load_etf_holdings.run(storage, "N1", db=db, input_run_id="N1") == 0
         assert dict(current()[ETF][1]) == {A: .6, B: .4}
 
+        # 보관본은 삭제하지 않되, 현행 스냅샷·트리거 입력에 재유입되면 안 된다.
+        prefix = canonical_etf_holdings_partition("KR", DAY)
+        archived = storage.get_bytes(f"{prefix}/part-00000.parquet")
+        storage.put_bytes(f"{prefix}/archive/part-backup.parquet", archived)
+
         _raw(storage, "R2", [("991057", 100)])
         assert normalize_etf.run(storage, "N2", input_run_id="R2") == 0
         assert load_etf_holdings.run(storage, "N2", db=db, input_run_id="N2") == 0
         assert current() == {ETF: (DAY, [(A, 1.0)])}
+        assert load_price_triggers._holdings_by_etf(storage, "KR", DAY) == {"991059": [("991057", 1.0)]}
+        assert storage.get_bytes(f"{prefix}/archive/part-backup.parquet") == archived
         pointer = storage.get_bytes(latest_good_pointer_key("etf_holdings", "KR"))
 
         # 부분 수집과 행 탈락 모두 기존 값 및 DB version을 보존해야 한다.

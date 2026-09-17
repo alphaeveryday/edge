@@ -361,12 +361,19 @@ def _write_canonical(
             raise ValueError(f"canonical changed during raw recovery: {target_key}")
         existing = _read_parquet_rows(current) if current is not None else []
         # 이전 시도가 target 쓰기 뒤 구형 part 삭제에서 실패했을 수 있다. 이번 전량 raw와
-        # 정확히 일치하는 target ETF에는 구형 part를 다시 합치지 않고 정리만 재시도한다.
+        # 정확히 일치하거나 incoming보다 최신인 target ETF에는 구형 part를 다시 합치지 않는다.
+        # 과거 런 재실행도 최신 target에 제거된 종목을 되살리지 않고 정리만 재시도한다.
         incoming = _merge_partition([], new_rows)
         confirmed = {
             etf_id for etf_id in {row["etf_id"] for row in incoming}
             if _same_snapshot([row for row in existing if row["etf_id"] == etf_id],
                               [row for row in incoming if row["etf_id"] == etf_id])
+            or max((_fetched_at(row) for row in existing if row["etf_id"] == etf_id), default=_OLDEST)
+            > max(_fetched_at(row) for row in incoming if row["etf_id"] == etf_id)
+        }
+        target_times = {
+            etf_id: max(_fetched_at(row) for row in existing if row["etf_id"] == etf_id)
+            for etf_id in {row["etf_id"] for row in existing}
         }
         partition_keys = []
         for key in storage.list_keys(prefix + "/"):
@@ -374,8 +381,16 @@ def _write_canonical(
             if relative.startswith("part-") and relative.endswith(".parquet") and "/" not in relative:
                 partition_keys.append(key)
                 if key != target_key:
-                    existing.extend(row for row in _read_parquet_rows(storage.get_bytes(key))
-                                    if row["etf_id"] not in confirmed)
+                    # 이번 입력에 없는 ETF도 이미 교체된 target보다 오래된 part로
+                    # 되살리면 안 된다. 구형 part의 같은/더 최신 수집본은 기존 병합에 남긴다.
+                    legacy: dict[str, list[dict]] = defaultdict(list)
+                    for row in _read_parquet_rows(storage.get_bytes(key)):
+                        legacy[row["etf_id"]].append(row)
+                    for etf_id, rows in legacy.items():
+                        if (etf_id not in confirmed
+                                and max(_fetched_at(row) for row in rows)
+                                >= target_times.get(etf_id, _OLDEST)):
+                            existing.extend(rows)
         merged = _merge_partition(existing, new_rows, rebuild=rebuild)
         data = _write_parquet_rows(merged)
         if not storage.put_bytes_if_version(target_key, data, version):

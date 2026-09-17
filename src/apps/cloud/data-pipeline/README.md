@@ -1506,8 +1506,10 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   (ALPHA-1017). `load-etf-holdings`는 정상 제외 합계를 `ops.unsupported_records`에도 남겨 실행
   이력에서 적재·지원 제외·유실을 분리한다(ALPHA-1020).
   파티션은 `part-00000.parquet`로 조건부 교체한 뒤 나머지 직접 자식 part만 지운다.
-  target이 검증된 수집본과 일치하면 구형 part 삭제 실패도 같은 런 재시도로 복구한다.
-  중첩 보관 객체와 raw 입력은 삭제하지 않는다.
+  구형 part 삭제 실패 뒤 같은·과거 런 재시도와 다른 ETF 수집에서도 이미 교체한 최신
+  target에 오래된 구성종목을 다시 합치지 않고 정리를 재시도한다.
+  중첩 보관 객체와 raw 입력은 삭제하지 않는다. holdings 적재기와 canonical 기반 트리거는
+  정규화와 같은 직접 자식 `part-*.parquet`만 읽어 보관본의 삭제 종목이 재유입되지 않게 한다.
   🔴 **이 파티션의 etf_id 집합은 분석 유니버스가 아니다** — 파티션은 지워지지 않아 config 에서 뺀
   ETF 의 옛 행이 남고, 참조 계열(명부만 필요한 ETF)도 섞여 들어온다. 읽는 쪽은 유니버스 뿌리
   (`krx_etf.source.etf_map` 키)로 한 번 거른다 — `ingest-price-raw`·`load-etf-holdings`·
