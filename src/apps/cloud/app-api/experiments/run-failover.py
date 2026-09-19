@@ -4,6 +4,7 @@ Creates an isolated project; preserves containers and data for inspection.
 from datetime import datetime
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -21,6 +22,10 @@ env = dict(os.environ, VOTE_REDIS_COMMAND_TIMEOUT='5000ms' if scenario == 'S1' e
            VOTE_REDIS_TIMEOUT_OPTIONS='false' if scenario == 'S1' else 'true',
            VOTE_REDIS_RETRY='true' if scenario == 'S3' else 'false',
            VOTE_REDIS_READ_FROM='REPLICA_PREFERRED' if scenario == 'S5' else 'MASTER')
+user_pool = int(os.environ.get('USER_POOL', '0'))
+if user_pool and user_pool < 500:
+    # 50rps 에서 같은 사용자의 요청 간격 = pool/50 초. 겹치면 ack 도착 순서가 커밋 순서와 달라져 사용자별 대조가 무효다.
+    raise SystemExit('USER_POOL must be >= 500 (>= 10s between a user\'s requests at 50rps) or unset')
 project = os.environ.get('EXPERIMENT_PROJECT', 'etf-' + scenario.lower() + '-' + str(int(time.time())))
 mode = os.environ.get('VOTE_MODE', 'db-first')
 compose = ['docker', 'compose', '-p', project, '-f', str(root.parent / 'docker-compose.yaml')]
@@ -31,6 +36,10 @@ def dc(*args):
 def get(path):
     with urllib.request.urlopen('http://localhost:8080' + path, timeout=6) as r:
         return r.read().decode()
+def parse_time(stamp):
+    # k6 는 RFC3339 로 소수초를 가변 자릿수(최대 9)로 찍는다 — 3.11 미만 fromisoformat 은 6자리·Z 미지원.
+    stamp = re.sub(r'\.(\d+)', lambda m: '.' + (m.group(1) + '000000')[:6], stamp).replace('Z', '+00:00')
+    return datetime.fromisoformat(stamp)
 def sql(query):
     return dc('exec', '-T', 'mysql', 'mysql', '-uapp', '-papp', '-Dapp', '-N', '-e', query)
 (out / 'project.txt').write_text(project)
@@ -90,7 +99,7 @@ with (out / 'samples.json').open() as samples:
     for line in samples:
         point = json.loads(line)
         if point.get('metric') == 'vote_status' and point['type'] == 'Point' and point['data']['tags'].get('status') == '200':
-            user, stamp = point['data']['tags']['user'], datetime.fromisoformat(point['data']['time'].replace('Z', '+00:00'))
+            user, stamp = point['data']['tags']['user'], parse_time(point['data']['time'])
             if user not in acked or stamp > acked[user][0]:
                 acked[user] = (stamp, point['data']['tags']['choice'])
 acked = {user: choice for user, (_, choice) in acked.items()}
