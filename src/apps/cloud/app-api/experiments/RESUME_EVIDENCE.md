@@ -8,7 +8,7 @@
 
 - master kill 시나리오에서 Lettuce disconnectedBehavior·타임아웃 정책별 SLO 초과율·톰캣 스레드 점유·부하 유실을 비교해 즉시 실패 정책 채택 — 스레드 풀 점유 195 → 3, 장애 구간 투표 p99 6,803ms → 7.4ms, 부하 유실 118건 → 0건
 - 투표 원본은 DB(unique 제약 + 원자 upsert)에 두고 Redis는 파생 집계로 한정, 장애 구간 Redis 미반영 최대 697건을 재연결 이벤트·주기 기반 DB 재집계로 자동 복구 (실패 로그 ≈ 재조정 delta 검산 일치)
-- 사용자별 이전 선택을 비교하는 멱등 Lua(choices 해시)로 재투표·재실행 시 중복 집계 0건 — 커밋 후 캐시 갱신은 @TransactionalEventListener(AFTER_COMMIT)로 순서를 구조적으로 보장, Cluster 전환 대비 전망 단위 해시태그로 동일 슬롯 배치
+- 사용자별 이전 선택을 비교하는 멱등 Lua(choices 해시)로 재투표·재실행 시 중복 집계가 구조적으로 불가능(재실행은 실측, 재투표는 부하에 미포함) — 커밋 후 캐시 갱신은 @TransactionalEventListener(AFTER_COMMIT)로 순서를 구조적으로 보장, Cluster 전환 대비 전망 단위 해시태그로 동일 슬롯 배치
 
 ## 실험 조건 (현행 정본)
 
