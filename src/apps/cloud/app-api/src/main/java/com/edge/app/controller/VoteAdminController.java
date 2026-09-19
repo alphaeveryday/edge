@@ -5,12 +5,14 @@ import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@ConditionalOnProperty(name = "vote.mode", havingValue = "db-first", matchIfMissing = true)
 @RequiredArgsConstructor
 public class VoteAdminController {
     private final VoteReconciler voteReconciler;

@@ -2,6 +2,7 @@ package com.edge.app.controller;
 
 import com.edge.app.dto.VoteCountResponse;
 import com.edge.app.dto.VoteRequest;
+import com.edge.app.service.VoteCommandService;
 import com.edge.app.service.VoteService;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.Valid;
@@ -17,13 +18,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequiredArgsConstructor
 public class VoteController {
+    private final VoteCommandService voteCommandService;
     private final VoteService voteService;
 
     @PostMapping("/api/v1/forecasts/{forecastId}/votes")
     public ApiResponse<Void> vote(@PathVariable Long forecastId,
             @RequestHeader("X-User-Id") @Positive Long userId,
             @RequestBody @Valid VoteRequest request) {
-        voteService.vote(forecastId, userId, request.choice());
+        voteCommandService.vote(forecastId, userId, request.choice());
         return ApiResponse.onSuccess(null);
     }
 

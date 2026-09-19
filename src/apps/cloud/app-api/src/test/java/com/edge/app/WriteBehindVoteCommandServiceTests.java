@@ -22,7 +22,7 @@ import static org.mockito.Mockito.doAnswer;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {"vote.mode=write-behind", "vote.flush.interval-ms=3600000"})
-class WriteBehindVoteServiceTests extends ContainerTests {
+class WriteBehindVoteCommandServiceTests extends ContainerTests {
     @LocalServerPort
     int port;
     @MockitoSpyBean
