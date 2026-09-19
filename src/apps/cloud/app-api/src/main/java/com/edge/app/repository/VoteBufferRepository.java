@@ -1,5 +1,6 @@
 package com.edge.app.repository;
 
+import com.edge.app.entity.Vote;
 import com.edge.app.entity.VoteChoice;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -8,6 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,6 +24,7 @@ public class VoteBufferRepository {
     private static final DefaultRedisScript<Long> RECORD = script("vote-buffer.lua");
     private static final DefaultRedisScript<Long> CLEAR = script("clear-dirty.lua");
     private static final DefaultRedisScript<Long> RELEASE = script("release-dirty.lua");
+    private static final DefaultRedisScript<Long> WARM = script("warm.lua");
 
     public boolean record(Long forecastId, Long userId, VoteChoice choice) {
         List<String> keys = List.of(key(forecastId, "choices"), key(forecastId, "count"), key(forecastId, "dirty"), DIRTY_FORECASTS);
@@ -45,6 +48,19 @@ public class VoteBufferRepository {
 
     public boolean releaseIfClean(Long forecastId) {
         return redisTemplate.execute(RELEASE, List.of(key(forecastId, "dirty"), DIRTY_FORECASTS), forecastId.toString()) == 1;
+    }
+
+    public boolean loadIfAbsent(Long forecastId, List<Vote> votes) {
+        List<String> args = new ArrayList<>();
+        for (VoteChoice choice : VoteChoice.values()) {
+            args.add(Long.toString(votes.stream().filter(v -> v.getChoice() == choice).count()));
+        }
+        votes.forEach(v -> {
+            args.add(v.getUserId().toString());
+            args.add(v.getChoice().name());
+        });
+        List<String> keys = List.of(key(forecastId, "choices"), key(forecastId, "count"), key(forecastId, "dirty"));
+        return redisTemplate.execute(WARM, keys, args.toArray()) == 1;
     }
 
     private static String key(Long forecastId, String suffix) {
