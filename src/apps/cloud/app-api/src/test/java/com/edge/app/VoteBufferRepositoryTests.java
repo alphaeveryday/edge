@@ -1,7 +1,7 @@
 package com.edge.app;
 
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.repository.VoteBufferRepository;
+import com.edge.app.repository.writebehind.VoteBufferRepository;
 import com.edge.app.repository.VoteCountRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

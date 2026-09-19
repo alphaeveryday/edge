@@ -1,8 +1,8 @@
-package com.edge.app.service;
+package com.edge.app.service.writebehind;
 
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.repository.VoteBufferRepository;
-import com.edge.app.repository.VoteFlushRepository;
+import com.edge.app.repository.writebehind.VoteBufferRepository;
+import com.edge.app.repository.writebehind.VoteFlushRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;

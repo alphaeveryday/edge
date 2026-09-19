@@ -1,12 +1,13 @@
-package com.edge.app.service;
+package com.edge.app.service.writebehind;
 
 import com.edge.app.dto.VoteCountResponse;
 import com.edge.app.dto.VoteCounts;
 import com.edge.app.entity.VoteChoice;
 import com.edge.app.error.AppErrorStatus;
-import com.edge.app.repository.VoteBufferRepository;
 import com.edge.app.repository.VoteCountRepository;
 import com.edge.app.repository.VoteRepository;
+import com.edge.app.repository.writebehind.VoteBufferRepository;
+import com.edge.app.service.VoteService;
 import com.edge.common.exception.GeneralException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.micrometer.core.instrument.MeterRegistry;

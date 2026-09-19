@@ -2,10 +2,10 @@ package com.edge.app;
 
 import com.edge.app.entity.Vote;
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.repository.VoteBufferRepository;
-import com.edge.app.repository.VoteFlushRepository;
+import com.edge.app.repository.writebehind.VoteBufferRepository;
+import com.edge.app.repository.writebehind.VoteFlushRepository;
 import com.edge.app.repository.VoteRepository;
-import com.edge.app.service.VoteFlusher;
+import com.edge.app.service.writebehind.VoteFlusher;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

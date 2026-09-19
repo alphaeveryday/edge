@@ -1,4 +1,4 @@
-package com.edge.app.repository;
+package com.edge.app.repository.writebehind;
 
 import com.edge.app.entity.Vote;
 import com.edge.app.entity.VoteChoice;
@@ -24,10 +24,10 @@ import java.util.stream.Collectors;
 public class VoteBufferRepository {
     private final StringRedisTemplate redisTemplate;
     private static final String DIRTY_FORECASTS = "vote:dirty-forecasts";
-    private static final DefaultRedisScript<Long> RECORD = script("vote-buffer.lua");
-    private static final DefaultRedisScript<Long> CLEAR = script("clear-dirty.lua");
-    private static final DefaultRedisScript<Long> RELEASE = script("release-dirty.lua");
-    private static final DefaultRedisScript<Long> WARM = script("warm.lua");
+    private static final DefaultRedisScript<Long> RECORD = script("writebehind/vote-buffer.lua");
+    private static final DefaultRedisScript<Long> CLEAR = script("writebehind/clear-dirty.lua");
+    private static final DefaultRedisScript<Long> RELEASE = script("writebehind/release-dirty.lua");
+    private static final DefaultRedisScript<Long> WARM = script("writebehind/warm.lua");
 
     public boolean record(Long forecastId, Long userId, VoteChoice choice) {
         List<String> keys = List.of(key(forecastId, "choices"), key(forecastId, "count"), key(forecastId, "dirty"), DIRTY_FORECASTS);

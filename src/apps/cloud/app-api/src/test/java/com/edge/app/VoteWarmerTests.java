@@ -2,10 +2,10 @@ package com.edge.app;
 
 import com.edge.app.dto.VoteCounts;
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.repository.VoteBufferRepository;
+import com.edge.app.repository.writebehind.VoteBufferRepository;
 import com.edge.app.repository.VoteCountRepository;
-import com.edge.app.repository.VoteFlushRepository;
-import com.edge.app.service.VoteWarmer;
+import com.edge.app.repository.writebehind.VoteFlushRepository;
+import com.edge.app.service.writebehind.VoteWarmer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

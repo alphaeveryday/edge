@@ -1,7 +1,7 @@
-package com.edge.app.service;
+package com.edge.app.service.writebehind;
 
 import com.edge.app.entity.Vote;
-import com.edge.app.repository.VoteBufferRepository;
+import com.edge.app.repository.writebehind.VoteBufferRepository;
 import com.edge.app.repository.VoteRepository;
 import io.lettuce.core.event.connection.ConnectionActivatedEvent;
 import io.lettuce.core.resource.ClientResources;

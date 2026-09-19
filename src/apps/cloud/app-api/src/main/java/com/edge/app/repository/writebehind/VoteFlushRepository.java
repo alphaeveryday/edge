@@ -1,4 +1,4 @@
-package com.edge.app.repository;
+package com.edge.app.repository.writebehind;
 
 import com.edge.app.entity.VoteChoice;
 import lombok.RequiredArgsConstructor;
