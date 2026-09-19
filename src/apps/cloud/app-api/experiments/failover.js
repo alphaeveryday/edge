@@ -10,6 +10,8 @@ const unrelatedFailure = new Rate('unrelated_failure');
 const base = __ENV.BASE_URL || 'http://localhost:8080';
 const etf = __ENV.ETF_ID || '069500';
 const runId = Number(__ENV.USER_OFFSET || '1');
+// USER_POOL 설정 시 같은 사용자가 여러 번, 다른 choice 로 투표한다(재투표 축). 미설정이면 요청마다 고유 사용자.
+const userPool = Number(__ENV.USER_POOL || '0');
 export const options = {
   scenarios: {
     votes: { executor: 'constant-arrival-rate', rate: 50, timeUnit: '1s', duration: '180s', preAllocatedVUs: 100, maxVUs: 300, exec: 'vote' },
@@ -19,10 +21,13 @@ export const options = {
   thresholds: { vote_failure: ['rate==0'], dropped_iterations: ['count==0'], ...(__ENV.SCENARIO === 'S2' ? {vote_latency: ['max<1000']} : {}) },
 };
 export function vote() {
-  const r = http.post(`${base}/api/v1/forecasts/${etf}/votes`, JSON.stringify({choice: ['BUY', 'HOLD', 'SELL'][exec.scenario.iterationInTest % 3]}), {
-    headers: {'Content-Type':'application/json', 'X-User-Id': String(runId + exec.scenario.iterationInTest)}, timeout: '10s',
+  const i = exec.scenario.iterationInTest;
+  const user = runId + (userPool ? i % userPool : i);
+  const choice = ['BUY', 'HOLD', 'SELL'][(userPool ? Math.floor(i / userPool) + i % userPool : i) % 3];
+  const r = http.post(`${base}/api/v1/forecasts/${etf}/votes`, JSON.stringify({choice}), {
+    headers: {'Content-Type':'application/json', 'X-User-Id': String(user)}, timeout: '10s',
   });
-  voteStatus.add(1, {status: String(r.status)});
+  voteStatus.add(1, {status: String(r.status), user: String(user), choice});
   voteFailure.add(r.status !== 200);
   voteLatency.add(r.timings.duration);
 }

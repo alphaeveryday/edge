@@ -21,7 +21,10 @@ env = dict(os.environ, VOTE_REDIS_COMMAND_TIMEOUT='5000ms' if scenario == 'S1' e
            VOTE_REDIS_RETRY='true' if scenario == 'S3' else 'false',
            VOTE_REDIS_READ_FROM='REPLICA_PREFERRED' if scenario == 'S5' else 'MASTER')
 project = os.environ.get('EXPERIMENT_PROJECT', 'etf-' + scenario.lower() + '-' + str(int(time.time())))
+mode = os.environ.get('VOTE_MODE', 'db-first')
 compose = ['docker', 'compose', '-p', project, '-f', str(root.parent / 'docker-compose.yaml')]
+if mode == 'write-behind':
+    compose += ['-f', str(root.parent / 'docker-compose.write-behind.yaml')]
 def dc(*args):
     return subprocess.check_output(compose + list(args), env=env, text=True)
 def get(path):
@@ -57,6 +60,15 @@ with (out / 'k6.log').open('w') as log:
         except Exception as e: threads.append({'elapsed':elapsed, 'error':str(e)})
         time.sleep(1)
 (out / 'threads.json').write_text(json.dumps(threads, indent=2))
+def master_cli(*args):
+    address = dc('exec', '-T', 'sentinel-1', 'redis-cli', '-p', '26379', '--raw', 'SENTINEL', 'get-master-addr-by-name', 'mymaster').splitlines()
+    return dc('exec', '-T', 'sentinel-1', 'redis-cli', '-h', address[0], '-p', address[1], '--raw', *args)
+if mode == 'write-behind':
+    # DB snapshot 은 flush 가 dirty 를 비운 뒤에 떠야 한다 — 미flush 분은 지연이지 유실이 아니다.
+    for _ in range(60):
+        if master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0': break
+        time.sleep(1)
+    (out / 'dirty-after-load.txt').write_text(master_cli('SCARD', 'vote:dirty-forecasts'))
 (out / 'before-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
 (out / 'db.tsv').write_text(sql("select choice,count(*) from forecast_vote where forecast_id='" + etf + "' group by choice;"))
 (out / 'duplicates.tsv').write_text(sql('select forecast_id,user_id,count(*) from forecast_vote group by forecast_id,user_id having count(*)>1;'))
@@ -69,8 +81,23 @@ for _ in range(300):
     except Exception: pass
     time.sleep(1)
 (out / 'after-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
-master_address = dc('exec', '-T', 'sentinel-1', 'redis-cli', '-p', '26379', '--raw', 'SENTINEL', 'get-master-addr-by-name', 'mymaster').splitlines()
-(out / 'master-voted.txt').write_text(dc('exec', '-T', 'sentinel-1', 'redis-cli', '-h', master_address[0], '-p', master_address[1], 'HLEN', 'vote:{' + etf + '}:choices'))
+(out / 'master-voted.txt').write_text(master_cli('HLEN', 'vote:{' + etf + '}:choices'))
+# 사용자별 최종 choice 3방향 대조: k6 ack(200 의 마지막 choice) vs DB vs Redis choices 해시.
+acked = {}
+with (out / 'samples.json').open() as samples:
+    for line in samples:
+        point = json.loads(line)
+        if point.get('metric') == 'vote_status' and point['type'] == 'Point' and point['data']['tags'].get('status') == '200':
+            acked[point['data']['tags']['user']] = (point['data']['time'], point['data']['tags']['choice'])
+acked = {user: choice for user, (_, choice) in acked.items()}
+db_choices = dict(line.split('\t') for line in sql("select user_id,choice from forecast_vote where forecast_id='" + etf + "';").splitlines())
+redis_pairs = master_cli('HGETALL', 'vote:{' + etf + '}:choices').split()
+redis_choices = dict(zip(redis_pairs[::2], redis_pairs[1::2]))
+per_user = {'acked': len(acked), 'db': len(db_choices), 'redis': len(redis_choices),
+            'ack_db_mismatch': sorted(u for u, c in acked.items() if db_choices.get(u) != c),
+            'ack_redis_mismatch': sorted(u for u, c in acked.items() if redis_choices.get(u) != c),
+            'db_redis_mismatch': sorted(u for u in set(db_choices) | set(redis_choices) if db_choices.get(u) != redis_choices.get(u))}
+(out / 'per-user.json').write_text(json.dumps(per_user, indent=2))
 (out / 'sentinel.log').write_text(dc('logs', '--timestamps', 'sentinel-1', 'sentinel-2', 'sentinel-3'))
 (out / 'app.log').write_text(dc('logs', '--timestamps', 'app'))
 final = json.loads((out / 'after-reconcile.json').read_text())['result']
@@ -78,7 +105,8 @@ correct = (final['source'] == 'redis'
            and all(final[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL'))
            and int((out / 'master-voted.txt').read_text()) == sum(map(int, expected.values()))
            and not (out / 'duplicates.tsv').read_text().strip())
-(out / 'checks.json').write_text(json.dumps({'db_redis_equal':correct, 'k6_exit':load.returncode}, indent=2))
+(out / 'checks.json').write_text(json.dumps({'mode':mode, 'db_redis_equal':correct, 'k6_exit':load.returncode,
+    'ack_db_mismatch':len(per_user['ack_db_mismatch']), 'ack_redis_mismatch':len(per_user['ack_redis_mismatch'])}, indent=2))
 print('Results:', out)
 print('Cleanup after review:', ' '.join(compose + ['down']))
 raise SystemExit(load.returncode or (1 if not correct else 0))
