@@ -1,6 +1,6 @@
 package com.edge.app;
 
-import com.edge.app.service.VoteCommandService;
+import com.edge.app.service.VoteService;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,18 +15,18 @@ class WriteBehindModeTests extends ContainerTests {
     @Autowired
     ApplicationContext context;
     @Autowired
-    VoteCommandService commandService;
+    VoteService voteService;
 
     @Test
     void dbFirstBeansAreAbsent() {
         assertFalse(context.containsBean("voteReconciler"));
         assertFalse(context.containsBean("voteAdminController"));
         assertFalse(context.containsBean("voteCacheListener"));
-        assertFalse(context.containsBean("dbFirstVoteCommandService"));
+        assertFalse(context.containsBean("dbFirstVoteService"));
     }
 
     @Test
-    void commandServiceIsWriteBehind() {
-        assertEquals("WriteBehindVoteCommandService", AopUtils.getTargetClass(commandService).getSimpleName());
+    void voteServiceIsWriteBehind() {
+        assertEquals("WriteBehindVoteService", AopUtils.getTargetClass(voteService).getSimpleName());
     }
 }

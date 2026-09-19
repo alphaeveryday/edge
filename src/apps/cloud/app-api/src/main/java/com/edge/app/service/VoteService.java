@@ -1,40 +1,11 @@
 package com.edge.app.service;
 
 import com.edge.app.dto.VoteCountResponse;
-import com.edge.app.dto.VoteCounts;
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.repository.VoteCountRepository;
-import com.edge.app.repository.VoteRepository;
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-import io.micrometer.core.instrument.MeterRegistry;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
 
-import java.util.EnumMap;
-import java.util.Map;
+// 쓰기 정책별 구현(db-first / write-behind)을 vote.mode 로 택일한다 — 실험용, 종료 후 한쪽만 남긴다.
+public interface VoteService {
+    void vote(Long forecastId, Long userId, VoteChoice choice);
 
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class VoteService {
-    private final VoteRepository voteRepository;
-    private final VoteCountRepository voteCountRepository;
-    private final MeterRegistry meterRegistry;
-
-    // source(redis/db)는 어느 경로로 읽었는지의 표식 — 폴백 정책을 아는 이 계층이 붙인다.
-    @CircuitBreaker(name = "redis", fallbackMethod = "countsFromDb")
-    public VoteCountResponse counts(Long forecastId) {
-        return VoteCountResponse.from(voteCountRepository.counts(forecastId), "redis");
-    }
-
-    private VoteCountResponse countsFromDb(Long forecastId, Throwable ex) {
-        meterRegistry.counter("vote.redis.read.failures").increment();
-        log.warn("Redis count failed forecast={}; using DB", forecastId, ex);
-        Map<VoteChoice, Long> counts = new EnumMap<>(VoteChoice.class);
-        voteRepository.countByChoice(forecastId).forEach(row -> counts.put(row.getChoice(), row.getTotal()));
-        return VoteCountResponse.from(new VoteCounts(counts.getOrDefault(VoteChoice.BUY, 0L),
-                counts.getOrDefault(VoteChoice.HOLD, 0L),
-                counts.getOrDefault(VoteChoice.SELL, 0L)), "db");
-    }
+    VoteCountResponse counts(Long forecastId);
 }
