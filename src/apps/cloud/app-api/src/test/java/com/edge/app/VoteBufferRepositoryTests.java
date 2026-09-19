@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@SpringBootTest(properties = "vote.mode=write-behind")
+@SpringBootTest(properties = {"vote.mode=write-behind", "vote.flush.interval-ms=3600000"})
 class VoteBufferRepositoryTests extends ContainerTests {
     @Autowired
     VoteBufferRepository buffer;

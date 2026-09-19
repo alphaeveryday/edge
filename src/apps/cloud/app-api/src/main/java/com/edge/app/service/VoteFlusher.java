@@ -34,7 +34,7 @@ public class VoteFlusher {
                 .mapToLong(fid -> b.readDirty(fid, Integer.MAX_VALUE).size()).sum()).register(meterRegistry);
     }
 
-    @Scheduled(fixedDelayString = "${vote.flush.interval-ms:3000}")
+    @Scheduled(fixedDelayString = "${vote.flush.interval-ms:3000}", initialDelayString = "${vote.flush.interval-ms:3000}")
     public void flush() {
         long start = System.nanoTime();
         try {

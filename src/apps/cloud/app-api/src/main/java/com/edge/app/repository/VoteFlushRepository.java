@@ -4,14 +4,14 @@ import com.edge.app.entity.VoteChoice;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-@Repository
+@Component
 @ConditionalOnProperty(name = "vote.mode", havingValue = "write-behind")
 @RequiredArgsConstructor
 public class VoteFlushRepository {
