@@ -38,3 +38,23 @@ DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long
 코드 스타일은 로컬 kuke-board/service/view를 참고했다. 서비스는 트랜잭션 쓰기+이벤트 발행, event 패키지의 리스너가 커밋 후 캐시 갱신, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
 
 `/ping`은 제거했다. 실험 시작 준비 확인은 기존 `/actuator/health`를 사용한다. 무관 요청 지연(NFR-1)은 부하 실험의 별도 k6 시나리오가 정적 `/`(50rps)로 측정한다 — actuator health는 Redis 인디케이터를 포함해 무관 요청으로 부적합하다.
+
+## write-behind 모드 (실험용)
+
+`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로이며, 기존 소스는 수정하지 않고 신규 빈만으로 갈아끼운다.
+
+- 쓰기: `WriteBehindVoteService`(`VoteService` 상속, `@Primary`)가 `vote()` 를 override 해 `VoteBufferRepository` 의 Lua 한 번으로 count·choices 갱신 + `vote:{fid}:dirty` 해시·`vote:dirty-forecasts` 집합 마킹을 한다. DB 트랜잭션을 열지 않는다(`NOT_SUPPORTED`). Redis 실패는 서킷 폴백이 503(`VOTE5030`)으로 즉시 반려한다 — DB 우회는 없다.
+- flush: `VoteFlusher` 가 `vote.flush.interval-ms`(기본 3000, 첫 실행도 한 주기 뒤) 마다 전망별로 `vote.flush.batch-size`(기본 500) 만큼 HSCAN 으로 읽어 `forecast_vote` 에 다중행 upsert 하고, 읽었던 choice 와 같은 항목만 dirty 에서 지운다. 한 주기에 전망당 한 배치. 전망 하나의 실패는 다른 전망을 막지 않는다.
+- warm: `VoteWarmer` 가 기동 완료·Lettuce 재연결·`vote.warm.interval`(기본 PT5M) 마다 DB 표를 `HSETNX` 로 병합한다 — Redis 에 없는 사용자만 채우고 살아 있는 표(미flush dirty 포함)는 덮지 않는다. 페일오버로 낡아진 살아 있는 표는 되돌리지 않는다(검산으로 크기만 측정하는 것이 실험 설계).
+- 사라지는 것: `VoteReconciler`·`POST /api/v1/admin/votes/reconcile`(404)·AFTER_COMMIT 리스너 호출. 조회 `counts()` 는 상속돼 같지만, Redis 폴백의 `source=db` 는 flush 지연분만큼 낡은 값이다.
+- 메트릭: `vote.flush.size`·`vote.flush.duration`·`vote.flush.failures`·`vote.dirty.size`·`vote.warm.loaded`·`vote.warm.failures`·`vote.redis.write.failures`.
+
+```sh
+# 이 디렉터리에서: override 를 겹쳐 기동
+docker compose -f docker-compose.yaml -f docker-compose.write-behind.yaml up --build -d
+# experiments 에서: VOTE_MODE 가 override 를 자동으로 덧붙인다. USER_POOL 은 재투표 축(같은 사용자가 라운드마다 다른 choice) —
+# 500 미만이면 같은 사용자의 요청이 겹쳐 ack 순서와 커밋 순서가 달라지므로 거부한다.
+VOTE_MODE=write-behind USER_POOL=3000 python3 run-failover.py S2
+```
+
+write-behind 실행은 DB snapshot 전에 `vote:dirty-forecasts` 가 빌 때까지(최대 60초) 기다린다. 판정은 기존 선택지별 합계·`HLEN`·중복행에 더해 사용자별 최종 choice 를 k6 ack(200 의 마지막 시각)·DB·Redis 세 방향으로 대조해 `per-user.json` 에 남긴다. `ack_db_mismatch` 가 유실 측정값이며, `drain_complete`·`db_redis_mismatch`·`ack_db_mismatch` 는 `checks.json` 과 종료 코드에 반영된다. 테스트는 `vote.mode` 별 컨텍스트(기본에서 write-behind 빈 부재·write-behind 에서 재조정기 부재)와 버퍼 Lua·flush·warm·503 경로를 Testcontainers 로 검증한다.

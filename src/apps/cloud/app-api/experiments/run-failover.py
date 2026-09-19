@@ -14,6 +14,10 @@ import urllib.request
 scenario = sys.argv[1] if len(sys.argv) > 1 else 'S2'
 if scenario not in {'S1', 'S2', 'S3', 'S4', 'S5'}:
     raise SystemExit('Choose S1..S5')
+user_pool = int(os.environ.get('USER_POOL', '0'))
+if user_pool and user_pool < 500:
+    # 50rps 에서 같은 사용자의 요청 간격 = pool/50 초. 겹치면 ack 도착 순서가 커밋 순서와 달라져 사용자별 대조가 무효다.
+    raise SystemExit('USER_POOL must be >= 500 (>= 10s between a user\'s requests at 50rps) or unset')
 root = Path(__file__).resolve().parent
 out = root / 'runs' / (scenario + '-' + time.strftime('%Y%m%d-%H%M%S'))
 out.mkdir(parents=True)
@@ -22,10 +26,6 @@ env = dict(os.environ, VOTE_REDIS_COMMAND_TIMEOUT='5000ms' if scenario == 'S1' e
            VOTE_REDIS_TIMEOUT_OPTIONS='false' if scenario == 'S1' else 'true',
            VOTE_REDIS_RETRY='true' if scenario == 'S3' else 'false',
            VOTE_REDIS_READ_FROM='REPLICA_PREFERRED' if scenario == 'S5' else 'MASTER')
-user_pool = int(os.environ.get('USER_POOL', '0'))
-if user_pool and user_pool < 500:
-    # 50rps 에서 같은 사용자의 요청 간격 = pool/50 초. 겹치면 ack 도착 순서가 커밋 순서와 달라져 사용자별 대조가 무효다.
-    raise SystemExit('USER_POOL must be >= 500 (>= 10s between a user\'s requests at 50rps) or unset')
 project = os.environ.get('EXPERIMENT_PROJECT', 'etf-' + scenario.lower() + '-' + str(int(time.time())))
 mode = os.environ.get('VOTE_MODE', 'db-first')
 compose = ['docker', 'compose', '-p', project, '-f', str(root.parent / 'docker-compose.yaml')]
