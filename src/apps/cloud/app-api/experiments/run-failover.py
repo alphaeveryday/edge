@@ -1,6 +1,7 @@
 """Local isolated compose experiment. Run from this directory: python3 run-failover.py S2.
 Creates an isolated project; preserves containers and data for inspection.
 """
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -89,7 +90,7 @@ with (out / 'samples.json').open() as samples:
     for line in samples:
         point = json.loads(line)
         if point.get('metric') == 'vote_status' and point['type'] == 'Point' and point['data']['tags'].get('status') == '200':
-            user, stamp = point['data']['tags']['user'], point['data']['time']
+            user, stamp = point['data']['tags']['user'], datetime.fromisoformat(point['data']['time'].replace('Z', '+00:00'))
             if user not in acked or stamp > acked[user][0]:
                 acked[user] = (stamp, point['data']['tags']['choice'])
 acked = {user: choice for user, (_, choice) in acked.items()}
@@ -108,7 +109,7 @@ correct = (final['source'] == 'redis'
            and all(final[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL'))
            and int((out / 'master-voted.txt').read_text()) == sum(map(int, expected.values()))
            and not (out / 'duplicates.tsv').read_text().strip()
-           and drain_complete and not per_user['db_redis_mismatch'])
+           and drain_complete and not per_user['db_redis_mismatch'] and not per_user['ack_db_mismatch'])
 (out / 'checks.json').write_text(json.dumps({'mode':mode, 'db_redis_equal':correct, 'drain_complete':drain_complete, 'k6_exit':load.returncode,
     'ack_db_mismatch':len(per_user['ack_db_mismatch']), 'ack_redis_mismatch':len(per_user['ack_redis_mismatch'])}, indent=2))
 print('Results:', out)

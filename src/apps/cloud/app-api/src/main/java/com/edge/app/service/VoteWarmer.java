@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -33,24 +34,34 @@ public class VoteWarmer {
     private final MeterRegistry meterRegistry;
     private final ClientResources clientResources;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean running = new AtomicBoolean();
     private Disposable subscription;
 
     @PostConstruct
     void subscribe() {
         subscription = clientResources.eventBus().get()
                 .filter(event -> event instanceof ConnectionActivatedEvent)
-                .subscribe(event -> executor.submit(this::warm));
+                .subscribe(event -> request());
     }
 
     @EventListener(ApplicationReadyEvent.class)
     void onReady() {
+        request();
+    }
+
+    // 겹친 트리거는 병합하고, Lettuce 이벤트 스레드에서는 제출만 한다(블로킹 작업 금지).
+    public boolean request() {
+        if (!running.compareAndSet(false, true)) {
+            return false;
+        }
         executor.submit(this::warm);
+        return true;
     }
 
     // 재연결 없이 warm 만 실패한 경우(일시 DB 장애)를 위한 주기 재시도.
     @Scheduled(fixedDelayString = "${vote.warm.interval:PT5M}", initialDelayString = "${vote.warm.interval:PT5M}")
     void scheduled() {
-        executor.submit(this::warm);
+        request();
     }
 
     public void warm() {
@@ -64,6 +75,8 @@ public class VoteWarmer {
         } catch (Exception ex) {
             meterRegistry.counter("vote.warm.failures").increment();
             log.warn("Warm failed; next trigger will retry", ex);
+        } finally {
+            running.set(false);
         }
     }
 
