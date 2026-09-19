@@ -42,13 +42,15 @@ class VoteWarmerTests extends ContainerTests {
     }
 
     @Test
-    void warmSkipsForecastAlreadyLiveInRedis() {
+    void warmMergesMissingUsersWithoutOverridingLiveOnes() {
         long etf = 402;
         buffer.record(etf, 1L, VoteChoice.BUY);
-        flushRepository.upsertAll(etf, Map.of(2L, VoteChoice.HOLD));
+        // DB 의 user 1 은 낡은 표(SELL), user 2 는 Redis 에 없는 표 — 전자는 무시, 후자만 채운다.
+        flushRepository.upsertAll(etf, Map.of(1L, VoteChoice.SELL, 2L, VoteChoice.HOLD));
         warmer.warm();
-        assertEquals(new VoteCounts(1, 0, 0), counts.counts(etf));
-        assertEquals(1, redis.opsForHash().size("vote:{" + etf + "}:choices"));
+        assertEquals(new VoteCounts(1, 1, 0), counts.counts(etf));
+        assertEquals("BUY", redis.opsForHash().get("vote:{" + etf + "}:choices", "1"));
+        assertEquals(Map.of(1L, VoteChoice.BUY), buffer.readDirty(etf, 10));
     }
 
     @Test

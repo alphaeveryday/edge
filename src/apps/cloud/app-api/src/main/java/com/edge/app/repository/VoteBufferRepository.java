@@ -5,11 +5,14 @@ import com.edge.app.entity.VoteChoice;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,9 +40,15 @@ public class VoteBufferRepository {
     }
 
     public Map<Long, VoteChoice> readDirty(Long forecastId, int batchSize) {
-        return redisTemplate.<String, String>opsForHash().entries(key(forecastId, "dirty")).entrySet().stream()
-                .limit(batchSize)
-                .collect(Collectors.toMap(e -> Long.valueOf(e.getKey()), e -> VoteChoice.valueOf(e.getValue())));
+        Map<Long, VoteChoice> batch = new HashMap<>();
+        try (Cursor<Map.Entry<String, String>> cursor = redisTemplate.<String, String>opsForHash()
+                .scan(key(forecastId, "dirty"), ScanOptions.scanOptions().count(batchSize).build())) {
+            while (cursor.hasNext() && batch.size() < batchSize) {
+                var entry = cursor.next();
+                batch.put(Long.valueOf(entry.getKey()), VoteChoice.valueOf(entry.getValue()));
+            }
+        }
+        return batch;
     }
 
     public boolean clearDirtyIfUnchanged(Long forecastId, Long userId, VoteChoice choice) {
@@ -50,17 +59,17 @@ public class VoteBufferRepository {
         return redisTemplate.execute(RELEASE, List.of(key(forecastId, "dirty"), DIRTY_FORECASTS), forecastId.toString()) == 1;
     }
 
-    public boolean loadIfAbsent(Long forecastId, List<Vote> votes) {
+    public long mergeMissing(Long forecastId, List<Vote> votes) {
         List<String> args = new ArrayList<>();
-        for (VoteChoice choice : VoteChoice.values()) {
-            args.add(Long.toString(votes.stream().filter(v -> v.getChoice() == choice).count()));
-        }
         votes.forEach(v -> {
             args.add(v.getUserId().toString());
             args.add(v.getChoice().name());
         });
-        List<String> keys = List.of(key(forecastId, "choices"), key(forecastId, "count"), key(forecastId, "dirty"));
-        return redisTemplate.execute(WARM, keys, args.toArray()) == 1;
+        return redisTemplate.execute(WARM, List.of(key(forecastId, "choices"), key(forecastId, "count")), args.toArray());
+    }
+
+    public long dirtySize(Long forecastId) {
+        return redisTemplate.opsForHash().size(key(forecastId, "dirty"));
     }
 
     private static String key(Long forecastId, String suffix) {

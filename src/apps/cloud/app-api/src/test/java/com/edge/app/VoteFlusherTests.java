@@ -10,6 +10,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.util.List;
@@ -35,6 +36,8 @@ class VoteFlusherTests extends ContainerTests {
     VoteRepository voteRepository;
     @Autowired
     MeterRegistry meterRegistry;
+    @Autowired
+    StringRedisTemplate redis;
 
     Map<Long, VoteChoice> dbVotes(long etf) {
         return voteRepository.findAll().stream().filter(v -> v.getForecastId() == etf)
@@ -95,6 +98,21 @@ class VoteFlusherTests extends ContainerTests {
         assertEquals(1, voteRepository.findAll().stream().filter(v -> v.getForecastId() == etf).count());
         assertEquals(Map.of(1L, VoteChoice.BUY), dbVotes(etf));
         assertFalse(buffer.dirtyForecasts().contains(etf));
+    }
+
+    @Test
+    void corruptForecastDoesNotBlockOtherForecasts() {
+        long bad = 206, good = 207;
+        redis.opsForHash().put("vote:{" + bad + "}:dirty", "not-a-user", "BUY");
+        redis.opsForSet().add("vote:dirty-forecasts", Long.toString(bad));
+        buffer.record(good, 1L, VoteChoice.SELL);
+        double before = meterRegistry.counter("vote.flush.failures").count();
+        flusher.flush();
+        assertEquals(Map.of(1L, VoteChoice.SELL), dbVotes(good));
+        assertFalse(buffer.dirtyForecasts().contains(good));
+        assertEquals(before + 1, meterRegistry.counter("vote.flush.failures").count());
+        redis.delete("vote:{" + bad + "}:dirty");
+        redis.opsForSet().remove("vote:dirty-forecasts", Long.toString(bad));
     }
 
     @Test

@@ -30,8 +30,8 @@ public class VoteFlusher {
 
     @PostConstruct
     void registerGauge() {
-        Gauge.builder("vote.dirty.size", buffer, b -> b.dirtyForecasts().stream()
-                .mapToLong(fid -> b.readDirty(fid, Integer.MAX_VALUE).size()).sum()).register(meterRegistry);
+        Gauge.builder("vote.dirty.size", buffer, b -> b.dirtyForecasts().stream().mapToLong(b::dirtySize).sum())
+                .register(meterRegistry);
     }
 
     @Scheduled(fixedDelayString = "${vote.flush.interval-ms:3000}", initialDelayString = "${vote.flush.interval-ms:3000}")
@@ -39,17 +39,27 @@ public class VoteFlusher {
         long start = System.nanoTime();
         try {
             for (Long forecastId : buffer.dirtyForecasts()) {
-                Map<Long, VoteChoice> batch = buffer.readDirty(forecastId, batchSize);
-                flushRepository.upsertAll(forecastId, batch);
-                batch.forEach((userId, choice) -> buffer.clearDirtyIfUnchanged(forecastId, userId, choice));
-                buffer.releaseIfClean(forecastId);
-                meterRegistry.counter("vote.flush.size").increment(batch.size());
+                flushForecast(forecastId);
             }
         } catch (Exception ex) {
             meterRegistry.counter("vote.flush.failures").increment();
-            log.warn("Flush failed; dirty votes retry next run", ex);
+            log.warn("Flush run failed before any forecast; retry next run", ex);
         } finally {
             meterRegistry.timer("vote.flush.duration").record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+        }
+    }
+
+    // 전망 하나의 실패(DB 장애·손상 dirty)가 다른 전망의 flush 를 막지 않도록 전망 단위로 격리한다.
+    private void flushForecast(Long forecastId) {
+        try {
+            Map<Long, VoteChoice> batch = buffer.readDirty(forecastId, batchSize);
+            flushRepository.upsertAll(forecastId, batch);
+            batch.forEach((userId, choice) -> buffer.clearDirtyIfUnchanged(forecastId, userId, choice));
+            buffer.releaseIfClean(forecastId);
+            meterRegistry.counter("vote.flush.size").increment(batch.size());
+        } catch (Exception ex) {
+            meterRegistry.counter("vote.flush.failures").increment();
+            log.warn("Flush failed forecast={}; dirty votes retry next run", forecastId, ex);
         }
     }
 }

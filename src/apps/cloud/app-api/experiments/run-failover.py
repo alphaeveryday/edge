@@ -69,6 +69,7 @@ if mode == 'write-behind':
         if master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0': break
         time.sleep(1)
     (out / 'dirty-after-load.txt').write_text(master_cli('SCARD', 'vote:dirty-forecasts'))
+drain_complete = mode != 'write-behind' or master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0'
 (out / 'before-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
 (out / 'db.tsv').write_text(sql("select choice,count(*) from forecast_vote where forecast_id='" + etf + "' group by choice;"))
 (out / 'duplicates.tsv').write_text(sql('select forecast_id,user_id,count(*) from forecast_vote group by forecast_id,user_id having count(*)>1;'))
@@ -88,7 +89,9 @@ with (out / 'samples.json').open() as samples:
     for line in samples:
         point = json.loads(line)
         if point.get('metric') == 'vote_status' and point['type'] == 'Point' and point['data']['tags'].get('status') == '200':
-            acked[point['data']['tags']['user']] = (point['data']['time'], point['data']['tags']['choice'])
+            user, stamp = point['data']['tags']['user'], point['data']['time']
+            if user not in acked or stamp > acked[user][0]:
+                acked[user] = (stamp, point['data']['tags']['choice'])
 acked = {user: choice for user, (_, choice) in acked.items()}
 db_choices = dict(line.split('\t') for line in sql("select user_id,choice from forecast_vote where forecast_id='" + etf + "';").splitlines())
 redis_pairs = master_cli('HGETALL', 'vote:{' + etf + '}:choices').split()
@@ -104,8 +107,9 @@ final = json.loads((out / 'after-reconcile.json').read_text())['result']
 correct = (final['source'] == 'redis'
            and all(final[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL'))
            and int((out / 'master-voted.txt').read_text()) == sum(map(int, expected.values()))
-           and not (out / 'duplicates.tsv').read_text().strip())
-(out / 'checks.json').write_text(json.dumps({'mode':mode, 'db_redis_equal':correct, 'k6_exit':load.returncode,
+           and not (out / 'duplicates.tsv').read_text().strip()
+           and drain_complete and not per_user['db_redis_mismatch'])
+(out / 'checks.json').write_text(json.dumps({'mode':mode, 'db_redis_equal':correct, 'drain_complete':drain_complete, 'k6_exit':load.returncode,
     'ack_db_mismatch':len(per_user['ack_db_mismatch']), 'ack_redis_mismatch':len(per_user['ack_redis_mismatch'])}, indent=2))
 print('Results:', out)
 print('Cleanup after review:', ' '.join(compose + ['down']))
