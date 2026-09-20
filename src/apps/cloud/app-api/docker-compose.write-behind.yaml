@@ -1,0 +1,9 @@
+# write-behind 실험용 override — 기본 compose 위에 겹쳐 쓴다:
+#   docker compose -f docker-compose.yaml -f docker-compose.write-behind.yaml up
+services:
+  app:
+    environment:
+      VOTE_MODE: write-behind
+      VOTE_FLUSH_INTERVAL_MS: ${VOTE_FLUSH_INTERVAL_MS:-3000}
+      VOTE_FLUSH_BATCH_SIZE: ${VOTE_FLUSH_BATCH_SIZE:-500}
+      VOTE_WARM_INTERVAL: ${VOTE_WARM_INTERVAL:-PT5M}

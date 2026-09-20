@@ -1,0 +1,80 @@
+services:
+  app:
+    build:
+      # 빌드 컨텍스트 = src 루트 (멀티프로젝트 — 루트 gradlew·libs 필요)
+      context: ../../..
+      dockerfile: apps/cloud/app-api/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      VOTE_ADMIN_TOKEN: ${VOTE_ADMIN_TOKEN:-local-experiment}
+      VOTE_REDIS_COMMAND_TIMEOUT: ${VOTE_REDIS_COMMAND_TIMEOUT:-500ms}
+      VOTE_REDIS_DISCONNECTED_BEHAVIOR: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:-REJECT_COMMANDS}
+      VOTE_REDIS_TIMEOUT_OPTIONS: ${VOTE_REDIS_TIMEOUT_OPTIONS:-true}
+      VOTE_REDIS_READ_FROM: ${VOTE_REDIS_READ_FROM:-MASTER}
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/app
+      SPRING_DATA_REDIS_SENTINEL_MASTER: mymaster
+      SPRING_DATA_REDIS_SENTINEL_NODES: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+    depends_on:
+      mysql:
+        condition: service_healthy
+      sentinel-1:
+        condition: service_started
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: local-root
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app
+    ports:
+      - "55440:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uapp -papp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  redis-master:
+    image: redis:7-alpine
+    command: redis-server
+    ports:
+      - "6390:6379"
+
+  redis-replica-1:
+    image: redis:7-alpine
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+
+  redis-replica-2:
+    image: redis:7-alpine
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+
+  sentinel-1: &sentinel
+    image: redis:7-alpine
+    # sentinel 은 설정 파일을 스스로 다시 쓰므로 쓰기 가능한 경로에 생성한다.
+    # monitor 는 기동 시 서비스명을 IP 로 해석해 박는다 — hostname 으로 등록하면 같은
+    # 노드가 hostname/IP 두 정체성으로 이중 등록돼, 승격 직후 reconf-slaves 가 승격
+    # 노드를 자기 자신의 replica 로 강등시키는 사고가 재현됐다(RESULTS.md 발견 4).
+    entrypoint:
+      - sh
+      - -c
+      - |
+        MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}')
+        cat > /tmp/sentinel.conf <<CONF
+        sentinel monitor mymaster $$MASTER_IP 6379 2
+        sentinel down-after-milliseconds mymaster 5000
+        CONF
+        exec redis-sentinel /tmp/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+
+  sentinel-2: *sentinel
+
+  sentinel-3: *sentinel
