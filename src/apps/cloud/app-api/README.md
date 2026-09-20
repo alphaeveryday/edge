@@ -35,6 +35,29 @@ Cluster 실험은 마스터 3+replica 3 에 `cluster-require-full-coverage=no`�
 
 실측과 미검증 범위: [ETF failover 검증 결과](experiments/FAILOVER_RESULTS.md).
 
+## Redis Cluster 부분 장애 실측 (2026-09-20)
+
+마스터 3+replica 3, `cluster-require-full-coverage=no`. 투표·조회·무관 요청 각 50rps 를 3분 넣고 60초 후 샤드 0 의 마스터·replica 에 장애를 주입했다. 정상 샤드 요청이 장애를 느끼는지를 주입 후 20초 구간의 투표 SLO(1초) 초과율과 조회 DB 폴백 비율로, 전파 원인을 Tomcat busy·HikariCP 대기(풀 10)로 쟀다. 인기 종목(트래픽 50%)을 장애 샤드에 두면 전역 실패율 67%, 정상 샤드에 두면 17% 다. 원본은 `experiments/runs/C*`(gitignore) 의 result.json 이고 표의 값은 hot=failed 기준이다.
+
+| 구성 | 장애 | 정상 샤드 투표 SLO 초과 | 정상 샤드 조회 DB 폴백 | busy | HikariCP 대기 | 조회 폴백 qps |
+|---|---|---|---|---|---|---|
+| C1 기본값(60s·버퍼링·서킷 off) | SIGKILL | **94.2%** (hot=healthy 80.6%) | 0% (폴백 없이 대기) | 168~176 | 102~122 | 0 |
+| C2 500ms·REJECT·서킷 off | SIGKILL | 0% | 0% | 2~4 | 0 | 33 |
+| C2 | pause·partition | **82~86%** | 0% | 200 | 185~187 | 18~19 |
+| C3 전역 서킷 | SIGKILL | 0% | **94.5%** (재현 95.3%) | 4 | 0 | 49 |
+| C3 | pause·partition | 0% | 89.2% | 42 | 15 | 48 |
+| C4 샤드 서킷 | SIGKILL | 0% | **0%** | 4 | 0 | 33 |
+| C4 | pause·partition | 0% | 0% | 13 | 0 | 33 |
+
+- C1: 장애 슬롯 명령이 60초 동안 큐에 남고 그 대기가 AFTER_COMMIT 리스너에서 일어나 DB 커넥션 반환이 밀렸다. 풀 10개가 소진되자 정상 샤드 투표와 정적 `/`(28~40% SLO 초과)까지 밀렸고 커넥션 획득 타임아웃(30초)으로 DB 트랜잭션 생성 실패 111~528건이 났다. 부하 종료 후에도 버퍼가 남아 hot=healthy 런은 재조정 검산이 제한 시간 안에 끝나지 않았다(이후 구성은 전 런 30/30 일치).
+- C2: SIGKILL 은 연결 종료를 감지해 즉시 거부되지만 pause·partition 은 TCP 가 살아 있어 요청마다 500ms 를 기다린다. 장애 샤드 투표 33rps × 0.5s 의 동시 대기가 풀 10개를 넘겨 스레드 200 까지 포화됐다.
+- C3: 서킷이 대기를 끊어 SLO 초과는 0% 지만 전역 실패율이 판단 기준이라 정상 샤드 조회까지 폴백됐다. hot=healthy(17%)에서는 반대로 장애 샤드가 전건 실패해도 임계치 50% 에 못 미쳐 거의 열리지 않았다(우연 개방 150·204건, 폴백 9qps 는 전부 장애 샤드).
+- C4: 서킷 이름이 슬롯 소유 마스터라 장애 샤드만 차단된다(`redis-shard-0` 만 개방, hot=healthy 도 0.7초 만에 차단). 폴백 qps 49→33 은 정상 샤드 조회가 Redis 로 돌아간 몫이다.
+
+replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤드 조회 폴백은 전 런 0%. 승격 뒤 장애 샤드 조회가 Redis 로 돌아오기까지는 0.5~2.7초 또는 6.9~7.4초의 두 무리로 갈리며 topology refresh 설정 유무와 무관했다 — 원인은 확인하지 않았다.
+
+개념 설명은 [블로그](https://choyoungseo20.github.io/posts/redis-cluster/)에 있다.
+
 DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 auto-increment 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(forecast_id, user_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON DUPLICATE KEY UPDATE`(원자 upsert)로 한다. `DbFirstVoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
 
 코드 스타일은 로컬 kuke-board/service/view를 참고했다. 서비스(`VoteService` 의 db-first 구현)는 트랜잭션 쓰기+이벤트 발행과 서킷 폴백 집계, event 패키지의 리스너가 커밋 후 캐시 갱신, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
