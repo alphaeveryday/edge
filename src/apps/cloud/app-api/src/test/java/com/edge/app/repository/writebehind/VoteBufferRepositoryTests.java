@@ -1,5 +1,6 @@
-package com.edge.app;
+package com.edge.app.repository.writebehind;
 
+import com.edge.app.ContainerTests;
 import com.edge.app.entity.VoteChoice;
 import com.edge.app.repository.writebehind.VoteBufferRepository;
 import com.edge.app.repository.VoteCountRepository;
