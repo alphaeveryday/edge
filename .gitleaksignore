@@ -5,3 +5,6 @@
 
 # app-api README 의 curl 예시 — X-User-Id 는 로컬 실험용 사용자 식별 헤더(값 1), 비밀 아님.
 dc4471e5ac6acc6fc7b8b934aef1e5a69f3f1304:src/apps/cloud/app-api/README.md:curl-auth-header:8
+
+# PR #933 squash 후 같은 로컬 curl 예시 — 기존 dc4471e5 예외와 동일한 비밀이 아닌 입력.
+5b4cd967a4486e55771c4710527a2860faa96884:src/apps/cloud/app-api/README.md:curl-auth-header:8
