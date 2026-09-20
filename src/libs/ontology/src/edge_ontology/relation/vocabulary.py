@@ -38,12 +38,12 @@ def _identity_spec(doc: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[s
 
 
 def _scheme_for(role: str, kind: str | None, per_role: Mapping[str, Any],
-                per_kind: Mapping[str, str]) -> tuple[str, tuple[str, ...], bool]:
-    """(scheme, sections, mint_fallback) — 역할 선언이 있으면 그것, 없으면 종별 기본값."""
+                per_kind: Mapping[str, str]) -> tuple[str, tuple[str, ...], bool, tuple[str, ...]]:
+    """(scheme, sections, mint_fallback, fallback_sections) — 역할별 해소 정책."""
     spec = per_role.get(role)
     if spec is None:
         scheme = per_kind.get(kind or "", NONE) if kind else NONE
-        return str(scheme), (), False
+        return str(scheme), (), False, ()
     if not isinstance(spec, Mapping):
         raise ValueError(f"identity.roles.{role} 이 매핑이 아니다")
     scheme = str(spec.get("scheme") or NONE)
@@ -54,7 +54,13 @@ def _scheme_for(role: str, kind: str | None, per_role: Mapping[str, Any],
     unknown = sorted(set(sections) - set(REGISTRY_SECTIONS))
     if unknown:
         raise ValueError(f"identity.roles.{role}: 명부에 없는 절 {unknown}")
-    return scheme, sections, bool(spec.get("mint_fallback"))
+    fallback_sections = tuple(spec.get("fallback_sections") or ())
+    if fallback_sections and (scheme != NONE or sections):
+        raise ValueError(f"identity.roles.{role}: fallback_sections 는 NONE 종목 조회 뒤에만 허용")
+    unknown_fallback = sorted(set(fallback_sections) - set(REGISTRY_SECTIONS))
+    if unknown_fallback:
+        raise ValueError(f"identity.roles.{role}: 폴백 명부에 없는 절 {unknown_fallback}")
+    return scheme, sections, bool(spec.get("mint_fallback")), fallback_sections
 
 
 @lru_cache(maxsize=1)
@@ -91,13 +97,14 @@ def load_relations(path: Path | str | None = None) -> RelationVocabulary:
             if role in relations:
                 raise ValueError(f"역할 {role} 이 종별 둘에 걸쳐 있다: "
                                  f"{relations[role].entity_kind} / {kind}")
-            scheme, sections, mint_fallback = _scheme_for(role, kind, per_role, per_kind)
+            scheme, sections, mint_fallback, registry_fallback = _scheme_for(role, kind, per_role, per_kind)
             if scheme not in SCHEMES:
                 raise ValueError(f"역할 {role} 의 scheme 이 어휘 밖: {scheme}")
             if mint_fallback:
                 fallback.add(role)
             relations[role] = Relation(role_code=role, entity_kind=kind, scheme=scheme,
-                                       registry_sections=sections)
+                                       registry_sections=sections,
+                                       registry_fallback_sections=registry_fallback)
 
     for value_class, body in non_entity_table.items():
         for role in (body or {}).get("roles") or ():
@@ -122,10 +129,12 @@ def role_entity_kind(role_code: str) -> str | None:
 def resolve_authority(role_code: str, mention: str) -> str | None:
     """명부로 해소하는 역할의 멘션 → 기관 entity_id.
 
-    역할이 볼 절만 본다(`identity.roles.<역할>.sections`). 전 절을 뒤지면 COURT 자리에
+    역할이 볼 sections 또는 fallback_sections만 본다. 폴백 역할은 호출부에서
+    기존 종목 조회를 먼저 수행한다. 전 절을 뒤지면 COURT 자리에
     규제기관이 해소된다 — 그게 이 함수가 절을 인자로 넘기는 이유다.
     """
-    sections = load_relations().sections_for(role_code)
+    relation = load_relations().get(role_code)
+    sections = (relation.registry_sections or relation.registry_fallback_sections) if relation else ()
     if not sections:
         return None
     return load_authority_registry().resolve(mention, sections)

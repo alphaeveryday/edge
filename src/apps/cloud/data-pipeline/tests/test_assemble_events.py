@@ -1668,3 +1668,61 @@ def test_event_type_distribution_counts_gate_judgments_not_extraction_survivors(
     log = _log(storage)
     assert log["events_created"] == 0                    # 추출 누락 — 적재 없음
     assert log["event_type_distribution"] == {_ETYPE: 1}  # 게이트 판정은 분포에 남는다
+
+
+@pytest.mark.parametrize("ticker", ["005930", ""])
+def test_institution_partner_uses_same_id_without_creating_an_instrument_anchor(ticker):
+    # WHY: 기관은 참여자다. 기관 연결만으로 기사 종목 앵커를 만들어선 안 된다.
+    from edge_ontology import load_process_registry
+    from data_pipeline.entity_resolution import ResolutionIndex, plan_resolution
+
+    entity_index = {"005930": "inst_SAMSUNG"}
+    resolution_index = ResolutionIndex(by_key={}, by_ticker=entity_index,
+                                      alias_ticker_by_key={}, alias_keys=frozenset())
+    event_type = "COMPANY.ALLIANCE.PARTNERSHIP"
+    rows = [{"article_id": "a1", "title": "금융감독원 협력", "tickers": [ticker] if ticker else []}]
+    fn = _llm_fn(
+        [_gate_item("a1", ticker=ticker, etype=event_type)],
+        [_extract_item("a1", predicate="FORM", arguments=[{
+            "role": "PARTNER_2", "mention": "금융감독원", "ticker": "", "group": 0,
+        }])],
+    )
+    classified = assemble_events.classify_titles(
+        fn, rows, load_process_registry(), entity_index, resolution_index=resolution_index,
+    )
+    if not ticker:
+        assert classified == {}  # 기관만으로 종목 게이트를 우회하지 않는다
+        return
+    cls = classified["a1"]
+    [participant] = [a for a in cls["arguments"] if a["mention_text"] == "금융감독원"]
+    assert participant["entity_id"] == plan_resolution(resolution_index, "PARTNER_2", "금융감독원")[0]
+    assert participant["entity_id"] == "actor_auth_kr_fss"
+    assert participant["role_code"] == "PARTNER_2"
+    assert participant["entity_kind"] == "COMPANY_ENTITY"
+    assert cls["entity_id"] == ("inst_SAMSUNG" if ticker else None)
+    assert cls["anchor_role"] is None  # 다중 primary의 역할을 기관 연결로 추측하지 않는다
+
+
+@pytest.mark.parametrize("candidate,allowed,expected", [
+    ("inst_FSS", True, "inst_FSS"), ("inst_FSS", False, None), (None, True, None),
+])
+def test_institution_fallback_cannot_override_instrument_match_or_ambiguity(candidate, allowed, expected):
+    # WHY: assertion과 event writer가 같은 이름을 서로 다른 ID로 저장하면 계보가 갈린다.
+    from edge_ontology import load_process_registry
+    from data_pipeline.entity_resolution import ResolutionIndex
+
+    index = ResolutionIndex(by_key={"금융감독원": candidate},
+                            by_ticker={"000001": "inst_FSS"},
+                            alias_ticker_by_key={}, alias_keys=frozenset())
+    gate = {"article_id": "a1", "event_type_code": "COMPANY.ALLIANCE.PARTNERSHIP",
+            "primary_ticker": "005930", "entity_id": "inst_SAMSUNG", "anchor_role": None}
+    cls = assemble_events._validate_extraction(
+        {"predicate": "FORM", "arguments": [{"role": "PARTNER_2", "mention": "금융감독원"}]},
+        load_process_registry(), gate,
+        {"005930": "inst_SAMSUNG", "000001": "inst_FSS"},
+        {"005930", "000001"} if allowed else {"005930"}, index,
+    )
+    [participant] = cls["arguments"]
+    assert participant["entity_id"] == expected
+    if candidate is None:
+        assert participant["resolution_reason"] == "instrument_ambiguous"
