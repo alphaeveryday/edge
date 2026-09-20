@@ -183,6 +183,7 @@ with (out / 'samples.json').open() as fh:
                 read_db[sec] = read_db.get(sec, 0) + 1
 rows = []
 for (kind, ph, cls), a in sorted(agg.items()):
+    if a['n'] == 0: continue  # read_source 만 있고 지연 표본이 없는 버킷(경계 시각 사이) — 분모 0
     lat = sorted(a['lat']); p99 = lat[min(len(lat) - 1, int(len(lat) * 0.99))] if lat else None
     rows.append({'kind': kind, 'phase': ph, 'class': cls, 'n': a['n'], 'slo_exceed': round(a['slo'] / a['n'], 4), 'error': round(a['err'] / a['n'], 4),
                  'db_fallback': round(a['db'] / a['n'], 4) if kind == 'read' else None, 'p99_ms': round(p99, 1) if p99 is not None else None})
@@ -228,4 +229,7 @@ for r in rows:
     print(f"{r['kind']:10}{r['phase']:8}{r['class']:10}{r['n']:>7}{r['slo_exceed']:>8.1%}{r['error']:>8.1%}{db_col}{r['p99_ms']:>9}")
 print('Results:', out)
 print('Cleanup after review:', ' '.join(compose + ['down', '-v']))
+# 장애가 주입되지 않은 런(부하가 INJECT_AT 전에 끝남 등)은 실험이 아니다 — HTTP 실패율은 측정 대상이라 게이트가 아니다.
+if fault is None:
+    print('FAULT WAS NEVER INJECTED — not a failure-injection run'); raise SystemExit(2)
 raise SystemExit(load.returncode or (0 if not mismatch and not duplicates else 1))

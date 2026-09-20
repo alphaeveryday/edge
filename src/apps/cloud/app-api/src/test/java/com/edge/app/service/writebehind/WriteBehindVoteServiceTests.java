@@ -54,8 +54,9 @@ class WriteBehindVoteServiceTests extends ContainerTests {
         }).when(buffer).record(etf, 1L, VoteChoice.BUY);
         assertEquals(200, vote(etf, 1, "BUY"));
         assertEquals(0, dbRows(etf));
-        String body = client().get().uri("/api/v1/forecasts/" + etf + "/votes/count").retrieve().body(String.class);
-        assertTrue(body.contains("\"buy\":1") && body.contains("\"source\":\"redis\""), body);
+        Map<?, ?> result = (Map<?, ?>) client().get().uri("/api/v1/forecasts/" + etf + "/votes/count")
+                .retrieve().body(Map.class).get("result");
+        assertEquals(Map.of("buy", 1, "hold", 0, "sell", 0, "source", "redis"), result);
     }
 
     @Test
