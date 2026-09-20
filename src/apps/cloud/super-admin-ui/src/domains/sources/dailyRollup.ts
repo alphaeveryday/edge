@@ -425,7 +425,10 @@ export function qualityAssessmentText(value?: NewsQualityAssessment | null): str
   const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
   return [
     value.status === 'WITHIN_LIMITS' ? '운영 기준 이내' : reasons[value.reason] ?? value.reason,
-    value.resolutionRate == null ? null : `해소 ${pct(value.resolutionRate)} (하한 60%)`,
+    value.resolutionRate == null ? null : `전체 해소 ${pct(value.resolutionRate)}`,
+    value.assessmentBasis === 'POLICY_ADJUSTED'
+      ? `정책 제외 ${value.policyExcluded ?? '—'}건 · 판정 해소 ${value.assessmentResolutionRate == null ? '분모 없음' : pct(value.assessmentResolutionRate)} (하한 60%)`
+      : value.reason === 'RESOLUTION_RATE' ? '이전 기준 · 전체 해소율 하한 60%' : null,
     value.exclusionRate == null ? null : `제외 ${pct(value.exclusionRate)} (주의 20% 이상)`,
   ].filter(Boolean).join(' · ');
 }

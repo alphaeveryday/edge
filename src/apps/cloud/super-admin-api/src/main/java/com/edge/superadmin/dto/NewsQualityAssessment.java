@@ -7,7 +7,8 @@ import java.math.BigDecimal;
 
 /** 실행이력의 운영 판정. 원장의 INCOMPLETE/failed_records는 그대로 보존한다. */
 public record NewsQualityAssessment(String status, String reason,
-		Double resolutionRate, Double exclusionRate) {
+		Double resolutionRate, Double exclusionRate,
+		Long policyExcluded, Double assessmentResolutionRate, String assessmentBasis) {
 
 	public static NewsQualityAssessment from(GridCell cell) {
 		boolean assertions = "LOAD_ASSERTIONS".equals(cell.taskKey());
@@ -57,10 +58,22 @@ public record NewsQualityAssessment(String status, String reason,
 		}
 		if (total == 0 || considered.signum() == 0
 				|| ("INCOMPLETE".equals(cell.dataStatus()) && excluded == 0)) return unknown();
+		boolean policyPresent = metrics.has("policyExcluded") || metrics.has("actionableUnresolved");
+		Long policy = policyPresent ? metric(metrics, "policyExcluded") : Long.valueOf(0);
+		Long actionable = policyPresent ? metric(metrics, "actionableUnresolved") : unresolved;
+		if (policy == null || actionable == null || policy > unresolved || actionable != unresolved - policy) {
+			return result("UNMEASURED", "INSUFFICIENT_EVIDENCE", resolution, exclusion);
+		}
+		long denominator = total - policy;
+		String basis = policyPresent ? "POLICY_ADJUSTED" : "LEGACY";
+		Double assessed = denominator == 0 ? null : (double) resolved / denominator;
+		if (denominator == 0) return new NewsQualityAssessment("UNMEASURED", "INSUFFICIENT_EVIDENCE",
+				resolution, exclusion, policyPresent ? policy : null, null, basis);
 		// 기존 뉴스 추이 하한 60%(ALPHA-1003). 건수 곱셈은 bigint overflow 없이 비교한다.
 		boolean low = BigDecimal.valueOf(resolved).multiply(BigDecimal.valueOf(5))
-				.compareTo(BigDecimal.valueOf(total).multiply(BigDecimal.valueOf(3))) < 0;
-		return result(low ? "CAUTION" : "WITHIN_LIMITS", "RESOLUTION_RATE", resolution, exclusion);
+				.compareTo(BigDecimal.valueOf(denominator).multiply(BigDecimal.valueOf(3))) < 0;
+		return new NewsQualityAssessment(low ? "CAUTION" : "WITHIN_LIMITS", "RESOLUTION_RATE",
+				resolution, exclusion, policyPresent ? policy : null, assessed, basis);
 	}
 
 	private static boolean atLeastTwentyPercent(long excluded, BigDecimal total) {
@@ -82,6 +95,6 @@ public record NewsQualityAssessment(String status, String reason,
 	}
 
 	private static NewsQualityAssessment result(String status, String reason, Double resolution, Double exclusion) {
-		return new NewsQualityAssessment(status, reason, resolution, exclusion);
+		return new NewsQualityAssessment(status, reason, resolution, exclusion, null, null, null);
 	}
 }

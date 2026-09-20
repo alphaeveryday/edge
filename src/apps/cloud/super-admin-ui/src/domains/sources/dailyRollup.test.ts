@@ -560,3 +560,28 @@ test('기술 오류·기준 이탈·옛 API의 부분결손은 계속 주의이�
   const raw = cell({ taskKey: 'NEWS_COLLECTION_BIGKINDS', outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', failedRecords: 1 });
   assert.equal([...rollup([slot('news:2026-09-16T00:10', '2026-09-16', [raw])]).values()][0].state, '주의');
 });
+
+
+test('정책 판정률과 원본 해소율을 구분하고 과거 기준을 명시한다', () => {
+  const text = qualityAssessmentText({ status: 'WITHIN_LIMITS', reason: 'RESOLUTION_RATE',
+    resolutionRate: 0.48, exclusionRate: 0.01, policyExcluded: 20,
+    assessmentResolutionRate: 0.6, assessmentBasis: 'POLICY_ADJUSTED' });
+  assert.match(text!, /전체 해소 48.0%/);
+  assert.match(text!, /정책 제외 20건 · 판정 해소 60.0%/);
+  assert.match(qualityAssessmentText({ status: 'CAUTION', reason: 'RESOLUTION_RATE',
+    resolutionRate: 0.48, exclusionRate: 0.01 })!, /이전 기준/);
+});
+
+
+test('정책 조정 후 정상인 야간 실행이 아침 실행의 이상을 숨기지 않는다', () => {
+  const make = (status: 'WITHIN_LIMITS' | 'CAUTION') => cell({ taskKey: 'LOAD_ASSERTIONS',
+    outcome: 'FULFILLED', dataStatus: 'INCOMPLETE', recordsOut: 99, failedRecords: 1,
+    qualityAssessment: { status, reason: 'RESOLUTION_RATE', resolutionRate: 0.48, exclusionRate: 0.01,
+      policyExcluded: 20, assessmentResolutionRate: status === 'CAUTION' ? 0.59 : 0.6,
+      assessmentBasis: 'POLICY_ADJUSTED' } });
+  const day = [...rollup([
+    slot('news:2026-09-19T00:10', '2026-09-19', [make('WITHIN_LIMITS')]),
+    slot('news:2026-09-19T08:10', '2026-09-19', [make('CAUTION')]),
+  ]).values()][0];
+  assert.equal(day.state, '주의');
+});
