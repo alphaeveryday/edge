@@ -116,8 +116,10 @@ load_end = time.time()
 survivor = shards[(fail_shard + 1) % len(shards)]['master']
 def cli(*args):
     return dc('exec', '-T', survivor, 'redis-cli', '-c', '--raw', *args)
-if fault_kind == 'kill': dc('start', shards[fail_shard]['master'], shards[fail_shard]['replica'])
-elif fault_kind == 'pause': dc('unpause', shards[fail_shard]['master'], shards[fail_shard]['replica'])
+# 복구 대상은 주입한 victims 그대로(KILL_REPLICA=false 면 마스터만) — 안 멈춘 컨테이너 unpause 는 docker 가 거부한다.
+if not injected: pass
+elif fault_kind == 'kill': dc('start', *victims)
+elif fault_kind == 'pause': dc('unpause', *victims)
 else:
     for v, (cid, ip) in victim_ips.items():
         subprocess.check_call(['docker', 'network', 'connect', '--ip', ip, project + '_default', cid])

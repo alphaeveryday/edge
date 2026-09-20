@@ -67,7 +67,7 @@ DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long
 
 ## write-behind 모드 (실험용)
 
-`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다. 단일 인스턴스·Sentinel 전용이다: 인스턴스가 둘이면 flush 가 겹쳐 오래된 배치가 최신 표를 덮을 수 있고(소유권·버전 검사 없음), Cluster 에선 전역 `vote:dirty-forecasts` 와 전망별 키가 다른 슬롯이라 다중 키 Lua 가 CROSSSLOT 으로 실패하므로 기동 시 거부한다.
+`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다. 단일 인스턴스·Sentinel 전용이다: 인스턴스가 둘이면 flush 가 겹쳐 오래된 배치가 최신 표를 덮을 수 있고(소유권·버전 검사 없음), Cluster 에선 전역 `vote:dirty-forecasts` 와 전망별 키가 다른 슬롯이라 다중 키 Lua 가 CROSSSLOT 으로 실패하므로 기동 시 거부한다. dirty 배치 읽기(HSCAN)도 `VOTE_REDIS_READ_FROM=MASTER`(기본) 전제다 — replica 읽기(S5)와 조합하면 지연 replica 의 낡은 dirty 가 최신 DB 표를 덮을 수 있다.
 
 - 쓰기: `WriteBehindVoteService.vote()` 가 `VoteBufferRepository` 의 Lua 한 번으로 count·choices 갱신 + `vote:{fid}:dirty` 해시·`vote:dirty-forecasts` 집합 마킹을 한다. DB 트랜잭션을 열지 않는다. Redis 실패는 서킷 폴백이 503(`VOTE5030`)으로 즉시 반려한다 — DB 우회는 없다.
 - flush: `VoteFlusher` 가 `vote.flush.interval-ms`(기본 3000, 첫 실행도 한 주기 뒤) 마다 전망별로 `vote.flush.batch-size`(기본 500) 만큼 HSCAN 으로 읽어 `forecast_vote` 에 다중행 upsert 하고, 읽었던 choice 와 같은 항목만 dirty 에서 지운다. 한 주기에 전망당 한 배치. 전망 하나의 실패는 다른 전망을 막지 않는다.
