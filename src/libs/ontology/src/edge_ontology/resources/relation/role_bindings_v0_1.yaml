@@ -26,12 +26,17 @@ identity:
   #   MINT      정규화 문자열 채번(열린 집합).
   #   NONE      해소하지 않는다. 티커로 오는 것(발행사·상대방)과 동명이인.
   # mint_fallback: REGISTRY 에서 못 찾으면 채번까지 갈지. 기본 false.
+  # fallback_sections: NONE 종목 조회가 미해소일 때만 찾는 기관 명부. 충돌을 덮지 않는다.
+  # 검증된 기관도 협력/투자 상대방이 될 수 있다. 원래 역할은 보존하고 ISSUER는 제외한다.
   #
   # sections 를 좁히는 이유: 좁히지 않으면 별칭 평면 하나를 공유해 COURT 자리에
   # 규제기관이 해소된다(COURT+"공정거래위원회" → actor_auth_kr_ftc). 역할이 종을
   # 좁혀야 하는데 안 좁히던 버그다.
   roles:
-    AUTHORITY:    {scheme: REGISTRY, sections: [authorities, foreign_authorities]}
+    AUTHORITY:    {scheme: REGISTRY, sections: [authorities, foreign_authorities, central_banks]}
+    PARTNER:      {scheme: NONE, fallback_sections: [authorities, foreign_authorities, institutions]}
+    PARTNER_2:    {scheme: NONE, fallback_sections: [authorities, foreign_authorities, institutions]}
+    INVESTOR:     {scheme: NONE, fallback_sections: [authorities, foreign_authorities, institutions]}
     COURT:        {scheme: REGISTRY, sections: [courts]}
     CENTRAL_BANK: {scheme: REGISTRY, sections: [central_banks]}
     # 거래소는 명부에 있다(actor_inst_kr_krx). 채번만 하면 같은 기관이 AUTHORITY 자리에선
@@ -48,7 +53,7 @@ identity:
     LOCATION_OR_HAZARD:  MINT
     INDEX_OR_EXCHANGE:   MINT
     ISSUER:              NONE     # ticker 로 온다. 채번하면 상장사가 유령으로 갈린다
-    COMPANY_ENTITY:      NONE     # 미상장 상대방은 미해소 유지가 낫다
+    COMPANY_ENTITY:      NONE     # 위에 명시한 기관 폴백 외 미상장 상대방은 미해소 유지
     PERSON:              NONE     # 제목의 인물명은 동명이인을 못 가린다
     COHORT:              NONE     # group_key 는 sector_map 자산이다
 

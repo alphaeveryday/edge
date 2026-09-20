@@ -12,6 +12,10 @@ run() 은 한 번에 ETF 한 종을 돈다.
 > 조립한 `source_event` 계보를 읽는다. 뉴스 읽기·제목 분류·계보 조립·threading 은 feature
 > 페이즈(data-pipeline)로 이관됐다.
 
+기관 참여자의 원문·역할·actor ID는 이벤트 인자로 보존한다. 현재 ObjectSet은
+정부·기관 actor 객체 조회를 제공하지 않으므로 `news.follow_argument`는 해당 대상에
+`TARGET_NOT_AVAILABLE`을 반환한다. 이를 종목이나 개념 객체로 간주하지 않는다.
+
 ## 흐름 ([설계도](../../../../docs/analysis-engine/architecture/analysis-engine-logic.drawio) · [PNG](../../../../docs/analysis-engine/architecture/analysis-engine-logic.png))
 
 ```

@@ -19,6 +19,7 @@ class Relation:
       - `entity_kind` — **무엇인가**. 없으면 비실체 자리이고 `value_class` 가 이유를 말한다
         (TIME·VALUE·TEXT). 둘 중 정확히 하나만 채워진다.
       - `scheme`/`registry_sections` — **무엇으로 키를 삼는가**. 종과 독립이다.
+      - `registry_fallback_sections` — NONE 종목 조회가 미해소일 때만 볼 기관 절.
       - `mints` — 명부에서 못 찾았을 때 채번까지 갈지.
     """
     role_code: str
@@ -26,6 +27,7 @@ class Relation:
     value_class: str | None = None
     scheme: str = NONE
     registry_sections: tuple[str, ...] = ()
+    registry_fallback_sections: tuple[str, ...] = ()
 
     @property
     def is_entity(self) -> bool:

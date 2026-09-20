@@ -248,7 +248,8 @@ class NewsEventAssembler:
             "arguments": participant_args,
             "measures": measures,
         }
-        return _validate_extraction(item, view, gate_cls, entity_index, resolved_tickers)
+        return _validate_extraction(item, view, gate_cls, entity_index, resolved_tickers,
+                                    res_index, allow_aliases=False)
 
 
 def _thread_event(created: dict, cls: dict, published_at: str) -> dict:

@@ -14,6 +14,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from edge_ontology import load_authority_registry
+
 from ..observability import record
 
 MAX_INSPECT_ROWS = 40
@@ -735,6 +737,13 @@ class ObjectSetRuntime:
         if row["entity_id"] is None:
             return {**self._envelope(self._sets[narrowed]), "resolved": False,
                     "reason": "UNRESOLVED_ARGUMENT", "argument": argument,
+                    "objects": []}
+        # Registered institutions live in the actor namespace. The current
+        # ObjectSet catalog exposes company actors only; preserve the argument
+        # instead of presenting a government counterparty as an issuer/concept.
+        if str(row["entity_id"]) in load_authority_registry().entries:
+            return {**self._envelope(self._sets[narrowed]), "resolved": False,
+                    "reason": "TARGET_NOT_AVAILABLE", "argument": argument,
                     "objects": []}
         declared_kind = str(row["entity_kind"] or "")
         # Entity-resolution stores listed-company arguments in the instrument
