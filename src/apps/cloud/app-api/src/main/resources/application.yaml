@@ -30,6 +30,8 @@ vote:
   admin-token: ${VOTE_ADMIN_TOKEN:}
   circuit:
     scope: ${VOTE_CIRCUIT_SCOPE:global}
+  reconcile:
+    interval: ${VOTE_RECONCILE_INTERVAL:PT5M}
 resilience4j:
   circuitbreaker:
     instances:
@@ -38,8 +40,6 @@ resilience4j:
         minimum-number-of-calls: 10
         wait-duration-in-open-state: 3s
         failure-rate-threshold: ${VOTE_CIRCUIT_FAILURE_RATE:50}
-  reconcile:
-    interval: ${VOTE_RECONCILE_INTERVAL:PT5M}
 server:
   tomcat:
     mbeanregistry:
