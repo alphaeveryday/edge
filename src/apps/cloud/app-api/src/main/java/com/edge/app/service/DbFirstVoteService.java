@@ -6,7 +6,7 @@ import com.edge.app.entity.VoteChoice;
 import com.edge.app.event.VoteRecorded;
 import com.edge.app.repository.VoteCountRepository;
 import com.edge.app.repository.VoteRepository;
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import com.edge.app.config.RedisCircuit;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +27,7 @@ public class DbFirstVoteService implements VoteService {
     private final VoteCountRepository voteCountRepository;
     private final MeterRegistry meterRegistry;
     private final ApplicationEventPublisher eventPublisher;
+    private final RedisCircuit circuit;
 
     // Redis 갱신은 커밋 이후여야 한다 — 트랜잭션 안에서 이벤트만 발행하고,
     // VoteCacheListener(AFTER_COMMIT)가 캐시를 따라 갱신한다(실패는 repository 폴백이 삼킴).
@@ -39,9 +40,13 @@ public class DbFirstVoteService implements VoteService {
 
     // source(redis/db)는 어느 경로로 읽었는지의 표식 — 폴백 정책을 아는 이 계층이 붙인다.
     @Override
-    @CircuitBreaker(name = "redis", fallbackMethod = "countsFromDb")
     public VoteCountResponse counts(Long forecastId) {
-        return VoteCountResponse.from(voteCountRepository.counts(forecastId), "redis");
+        try {
+            return circuit.of(forecastId).executeSupplier(
+                    () -> VoteCountResponse.from(voteCountRepository.counts(forecastId), "redis"));
+        } catch (Exception ex) {
+            return countsFromDb(forecastId, ex);
+        }
     }
 
     private VoteCountResponse countsFromDb(Long forecastId, Throwable ex) {

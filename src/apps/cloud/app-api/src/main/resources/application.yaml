@@ -24,6 +24,8 @@ vote:
     timeout-options: ${VOTE_REDIS_TIMEOUT_OPTIONS:true}
     read-from: ${VOTE_REDIS_READ_FROM:MASTER}
   admin-token: ${VOTE_ADMIN_TOKEN:}
+  circuit:
+    scope: ${VOTE_CIRCUIT_SCOPE:global}
 resilience4j:
   circuitbreaker:
     instances:
