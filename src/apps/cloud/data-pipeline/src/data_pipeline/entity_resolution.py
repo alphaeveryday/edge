@@ -236,8 +236,8 @@ def plan_resolution(
       MINT      `mint_concept` — **assemble-events 와 같은 그 함수**를 부른다. "같은 원시
                 함수를 각자 조립"으로는 부족했다: 접두사 하나만 달라도 산식이 갈려 같은
                 개념에 ID 가 둘 생기고 조인이 조용히 끊긴다(ALPHA-456 이 겪은 실패 양식).
-      NONE      instrument 인덱스(`resolve`). 못 붙으면 미해소 — 채번하면 상장사가 유령으로
-                갈린다는 게 온톨로지가 NONE 을 고른 이유다.
+      NONE      instrument 인덱스(`resolve`) 우선. 미해소일 때만 역할에 선언된 기관 명부
+                폴백을 허용한다. 충돌은 보존하며 새 실체를 채번하지 않는다.
 
     세 번째 반환값은 **채번한 개념**이다 `(display_name, concept_type)`. 호출부가
     entity(CONCEPT) → concept → assertion_argument 순서로 FK 를 세운다 — 이 함수는 DB 를
@@ -268,7 +268,12 @@ def plan_resolution(
 
     # ── NONE: 티커 축
     if not load_relations().can_mint(role_code):
-        return (*resolve(index, text, allow_aliases=True), None)
+        entity_id, reason = resolve(index, text, allow_aliases=True)
+        if reason == UNRESOLVED and mention and relation.registry_fallback_sections:
+            authority_id = resolve_authority(role_code, mention)
+            if authority_id:
+                return authority_id, REGISTRY_HIT, None
+        return entity_id, reason, None
 
     # ── MINT: 채번. **온톨로지가 정한 것만 판단한다** — 어떤 멘션을 개념으로 볼지는
     # `concept_key` 소관이고(하한·숫자만 배제), 이 함수는 그 판정을 그대로 따른다.

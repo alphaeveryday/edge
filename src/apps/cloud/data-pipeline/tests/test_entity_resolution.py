@@ -213,3 +213,22 @@ def test_observed_alias_cannot_create_or_choose_a_missing_or_ambiguous_target():
     occupied = rows + [("inst_OTHER", "999999", expression, "다른 발행사", "COMMON")]
     assert resolve(_index(occupied), expression, allow_aliases=True) == (None, AMBIGUOUS)
     assert resolve_alias_ticker(_index(occupied), expression) is None
+
+
+def test_registered_counterparty_fallback_preserves_instrument_priority_and_ambiguity():
+    # WHY: 기관을 협력/투자 상대방으로 연결하되 기존 종목 연결과 충돌을 덮으면 안 된다.
+    from data_pipeline.entity_resolution import REGISTRY_HIT, REGISTRY_MISS
+
+    for role in ("PARTNER", "PARTNER_2", "INVESTOR"):
+        assert plan_resolution(_index(), role, "금융감독원") == (
+            "actor_auth_kr_fss", REGISTRY_HIT, None)
+        assert plan_resolution(_index(), role, "삼성전자") == ("inst_SAMSUNG", RESOLVED, None)
+        assert plan_resolution(_index(), role, "정부") == (None, UNRESOLVED, None)
+    assert plan_resolution(_index(), "ISSUER", "금융감독원") == (None, UNRESOLVED, None)
+    assert plan_resolution(_index(), "AUTHORITY", "삼성전자") == (None, REGISTRY_MISS, None)
+    assert plan_resolution(_index(), "AUTHORITY", "한국은행") == (
+        "actor_cb_kr_bok", REGISTRY_HIT, None)
+    rows = [("first", "000001", "금융감독원 보통주", "금융감독원", "COMMON")]
+    assert plan_resolution(_index(rows), "PARTNER", "금융감독원") == ("first", RESOLVED, None)
+    rows += [("second", "000002", "금융감독원 보통주", "금융감독원", "COMMON")]
+    assert plan_resolution(_index(rows), "PARTNER", "금융감독원") == (None, AMBIGUOUS, None)
