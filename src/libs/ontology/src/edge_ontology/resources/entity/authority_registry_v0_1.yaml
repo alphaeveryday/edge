@@ -1,12 +1,12 @@
 meta:
   version: 0.1.0
-  date: '2026-07-28'
+  date: '2026-09-20'
   purpose: closed registry of authorities, courts, central banks and market institutions
     so AUTHORITY_OR_RULE identity roles can resolve to a real entity
   local_amendment:
     # 관계층 role_bindings 와 같은 사정 — edge 에서 먼저 만들었다. 상류 백포트 대상.
     # 계약 future_entity_backlog 의 `official_policy_rule_master` 의 최소 구현이다:
-    # 규제기관·법원·중앙은행만 담고, 규칙(RULE)·사건(LEGAL_ISSUE)은 담지 않는다
+    # 행정·인증기관·법원·중앙은행을 담고, 규칙(RULE)·사건(LEGAL_ISSUE)은 담지 않는다
     # (그쪽은 열린 집합이라 레지스트리로 못 닫는다).
     why: AUTHORITY·COURT·CENTRAL_BANK 가 identity 인 타입이 100% UNKNOWN 이었다.
       값을 담을 entity 행이 없어서다. actor_type 은 이미 스키마에 있었다
@@ -18,6 +18,8 @@ meta:
     rule: exact match on normalized alias
     ambiguous_rejected: ['정부', '당국', '금융당국', '규제당국', '법원', '검찰', '위원회']
 
+# ALPHA-1081: 공식 전체명/병기만 증보. 구 부처 ID·약칭을 새 부처로 재할당하지 않는다.
+# DB 선행 시드 V202609202030 적용 뒤 배포한다. 모호한 약칭·잘린 이름은 추가하지 않는다.
 authorities:
 - entity_id: actor_auth_kr_ftc
   display_name: 공정거래위원회
@@ -231,6 +233,77 @@ authorities:
   country_code: KR
   aliases: [병무청]
 
+- entity_id: actor_auth_kr_motir
+  display_name: 산업통상부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [산업통상부]
+- entity_id: actor_auth_kr_mcee
+  display_name: 기후에너지환경부
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [기후에너지환경부]
+- entity_id: actor_auth_kr_kolas
+  display_name: 한국인정기구
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [한국인정기구, 한국인정기구(KOLAS)]
+- entity_id: actor_auth_kr_ksa
+  display_name: 한국표준협회
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국표준협회, 한국표준협회(KSA)]
+- entity_id: actor_auth_kr_kci
+  display_name: 한국준법진흥원
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국준법진흥원, 한국준법진흥원(KCI)]
+- entity_id: actor_auth_kr_keiti
+  display_name: 한국환경산업기술원
+  actor_type: INSTITUTION
+  country_code: KR
+  aliases: [한국환경산업기술원, 한국환경산업기술원(KEITI)]
+- entity_id: actor_auth_kr_sejong
+  display_name: 세종특별자치시
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [세종특별자치시, 세종시]
+- entity_id: actor_auth_kr_gwacheon
+  display_name: 과천시
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [과천시]
+- entity_id: actor_auth_kr_gyeonggi
+  display_name: 경기도
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [경기도]
+- entity_id: actor_auth_kr_gangwon
+  display_name: 강원특별자치도
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [강원특별자치도, 강원도]
+- entity_id: actor_auth_kr_suwon
+  display_name: 수원시
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [수원시, 수원특례시]
+- entity_id: actor_auth_kr_hadong
+  display_name: 하동군
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [하동군, 경남 하동군]
+- entity_id: actor_auth_kr_seodaemun
+  display_name: 서울특별시 서대문구
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [서울특별시 서대문구, 서대문구청]
+- entity_id: actor_auth_kr_tongyeong
+  display_name: 통영시
+  actor_type: GOVERNMENT
+  country_code: KR
+  aliases: [통영시]
+
 courts:
 - entity_id: actor_court_kr_supreme
   display_name: 대법원
@@ -338,7 +411,7 @@ foreign_authorities:
   display_name: 미국 증권거래위원회
   actor_type: GOVERNMENT
   country_code: US
-  aliases: [증권거래위원회, sec, 미국증권거래위원회]
+  aliases: [증권거래위원회, sec, 미국증권거래위원회, 미국 증권거래위원회(SEC)]
 - entity_id: actor_auth_us_fda
   display_name: 미국 식품의약국
   actor_type: GOVERNMENT
@@ -369,3 +442,9 @@ foreign_authorities:
   actor_type: GOVERNMENT
   country_code: CN
   aliases: [국가시장감독관리총국, 시장감독관리총국, samr]
+
+- entity_id: actor_auth_us_usda
+  display_name: 미국 농무부
+  actor_type: GOVERNMENT
+  country_code: US
+  aliases: [미국 농무부, 미국 농무부(USDA)]

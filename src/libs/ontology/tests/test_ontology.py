@@ -83,15 +83,54 @@ def test_authority_registry_matches_seed_migration():
     #      실수를 여기서 잡는다 — 마이그레이션은 레지스트리의 투영이다.
     import re
 
-    seed = Path(__file__).resolve().parents[3] / (
-        "libs/schema/migrations-cloud/V202607291730__seed_authority_actors.sql")
-    sql = seed.read_text(encoding="utf-8")
+    migrations = Path(__file__).resolve().parents[3] / "libs/schema/migrations-cloud"
+    # 이미 적용한 초기 SQL은 불변이다. 전방 증보까지 합쳐 FK 대상과 종별을 대조한다.
+    sql = "\n".join(path.read_text(encoding="utf-8")
+                    for path in sorted(migrations.glob("V*__*authority_actors.sql")))
+    entities = dict(re.findall(
+        r"\('(actor_(?:auth|court|cb|inst)_[a-z0-9_]+)', 'ACTOR', '([^']+)', 'ACTIVE'\)", sql))
+    actors = {entity_id: (actor_type, country) for entity_id, actor_type, country in re.findall(
+        r"\('(actor_(?:auth|court|cb|inst)_[a-z0-9_]+)', '([A-Z]+)', '([A-Z]+)'\)", sql)}
     registry = O.load_authority_registry()
-    for entity_id, entry in registry.entries.items():
-        assert f"'{entity_id}'" in sql, entity_id
-        assert f"'{entry.actor_type}'" in sql, entry.actor_type
-    seeded = set(re.findall(r"'(actor_(?:auth|court|cb|inst)_[a-z0-9_]+)'", sql))
-    assert seeded == set(registry.entries)
+    assert entities == {key: entry.display_name for key, entry in registry.entries.items()}
+    assert actors == {key: (entry.actor_type, entry.country_code)
+                      for key, entry in registry.entries.items()}
+
+
+@pytest.mark.parametrize("mention,entity_id", [
+    ('산업통상부', 'actor_auth_kr_motir'),
+    ('기후에너지환경부', 'actor_auth_kr_mcee'),
+    ('한국인정기구(KOLAS)', 'actor_auth_kr_kolas'),
+    ('한국표준협회(KSA)', 'actor_auth_kr_ksa'),
+    ('한국준법진흥원(KCI)', 'actor_auth_kr_kci'),
+    ('한국환경산업기술원(KEITI)', 'actor_auth_kr_keiti'),
+    ('세종시', 'actor_auth_kr_sejong'),
+    ('과천시', 'actor_auth_kr_gwacheon'),
+    ('경기도', 'actor_auth_kr_gyeonggi'),
+    ('강원도', 'actor_auth_kr_gangwon'),
+    ('수원특례시', 'actor_auth_kr_suwon'),
+    ('경남 하동군', 'actor_auth_kr_hadong'),
+    ('서대문구청', 'actor_auth_kr_seodaemun'),
+    ('통영시', 'actor_auth_kr_tongyeong'),
+    ('미국 농무부(USDA)', 'actor_auth_us_usda'),
+    ("미국 증권거래위원회(SEC)", "actor_auth_us_sec"),
+])
+def test_verified_news_authorities_keep_role_boundaries(mention, entity_id):
+    # WHY: 표기만 보완한다. 기관명과 같아도 발행사나 법원 역할로 오해소되면 안 된다.
+    assert O.resolve_authority("AUTHORITY", mention) == entity_id
+    for role in ("ISSUER", "COURT", "CENTRAL_BANK"):
+        assert O.resolve_authority(role, mention) is None
+
+
+def test_authority_amendment_does_not_reassign_old_or_ambiguous_names():
+    # WHY: 조직개편 때문에 과거 ID/약칭을 재할당하면 이미 저장한 사건의 정체성이 갈린다.
+    assert O.resolve_authority("AUTHORITY", "산업통상자원부") == "actor_auth_kr_motie"
+    assert O.resolve_authority("AUTHORITY", "산업부") == "actor_auth_kr_motie"
+    assert O.resolve_authority("AUTHORITY", "환경부") == "actor_auth_kr_me"
+    for mention in ("정부", "금융당국", "한국준법진", "KCI", "유럽연합(EU)",
+                    "산업통상부·중소벤처기업부", "기후에너지환경부 산하 기관"):
+        assert O.resolve_authority("AUTHORITY", mention) is None
+
 
 
 # ── 2. 속성(Attribute) ─────────────────────────────────────────────────────

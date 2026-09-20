@@ -21,6 +21,7 @@ on:
       - "src/pyproject.toml"
       - "src/uv.lock"
       - "src/.dockerignore"   # 이미지 컨텍스트 규칙 변경도 스모크 대상(deploy-* paths 와 일치)
+      - "src/libs/ontology/**"   # 공유 명부/역할 변경도 두 앱 회귀 검증
       - "src/libs/schema/migrations-cloud/**"   # e2e 가 실 스키마를 적용한다 — 스키마 변경도 게이트 대상
       - ".github/workflows/test-python.yml"
 
@@ -66,6 +67,11 @@ jobs:
       - name: pytest ${{ matrix.app }}
         working-directory: src
         run: uv run --package ${{ matrix.app }} pytest apps/cloud/${{ matrix.app }}/tests -q
+
+      - name: pytest ontology contracts
+        if: matrix.app == 'data-pipeline'
+        working-directory: src
+        run: uv run --package data-pipeline pytest libs/ontology/tests -q
 
   # ── 이미지 빌드 스모크 (push 없음) ───────────────────────────
   # 머지 후 deploy-* 에서야 첫 docker build 가 도는 구멍을 막는다 — 패키징·Dockerfile
