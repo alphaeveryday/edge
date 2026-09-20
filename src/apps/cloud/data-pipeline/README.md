@@ -1673,6 +1673,10 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   비율을 재계산하지 않고 두 원시 카운터만 그대로 전달한다. wrapper가 실행 중에 주입한
   `ops_attempt_id`가 현재 attempt와 일치할 때만 pair를 승인하므로, 같은 run의 겹친 재시도가 공유
   로그를 덮어써도 다른 시도의 값으로 오인하지 않는다.
+  `LOAD_ASSERTIONS`는 전량 미해소 집계에서 정책 제외(`policyExcluded`)와
+  판정 대상 미해소(`actionableUnresolved`)를 구분한다. 인물·업종·명시된 모호어만
+  정책 제외하며 기존 total/resolved/unresolved와 미해소 표본은 보존한다.
+  두 새 지표는 함께 제공하는 선택 필드이므로 과거 진단도 유효하다.
   `LOAD_ASSERTIONS`와 `ASSEMBLE_EVENTS`는 선택 필드 `quality_diagnostics`도 낸다(ALPHA-1067).
   이 값은 `news_resolution_v1` 계약의 원인(`instrument_not_found`·`instrument_ambiguous`·
   `registry_miss`·`concept_rejected`·`arguments_missing`)·역할·표현·건수와 첫 기사 표본이며, 상위 10건·

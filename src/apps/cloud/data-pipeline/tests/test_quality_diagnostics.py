@@ -141,3 +141,22 @@ def test_optional_load_breakdown_requires_both_non_negative_counts():
     assert validated({**old, "metrics": {**old["metrics"], "excludedAssertions": 3}}) is None
     assert validated({**old, "metrics": {**metrics, "technicalFailures": -1}}) is None
     assert validated({**old, "metrics": {**metrics, "technicalFailures": True}}) is None
+
+
+def test_policy_metrics_are_an_optional_consistent_pair():
+    # WHY: 기존 원장은 읽고, 반쪽 계측이나 미해소보다 큰 제외로 정상 판정을 만들지 않는다.
+    base = {"total": 10, "resolved": 2, "unresolved": 8}
+    for load in ({}, {"excludedAssertions": 0, "technicalFailures": 0}):
+        legacy = build(ASSERTION_SCOPE, {**base, **load}, [_issue(0)])
+        assert validated(legacy) == legacy
+        current = build(ASSERTION_SCOPE, {**base, **load, "policyExcluded": 7,
+                                         "actionableUnresolved": 1}, [_issue(0)])
+        assert validated(current) == current
+        for bad in ({"policyExcluded": 7}, {"actionableUnresolved": 1},
+                    {"policyExcluded": 8, "actionableUnresolved": 1},
+                    {"policyExcluded": -1, "actionableUnresolved": 9},
+                    {"policyExcluded": True, "actionableUnresolved": 7}):
+            assert validated({**current, "metrics": {**base, **load, **bad}}) is None
+    empty = build(ASSERTION_SCOPE, {"total": 0, "resolved": 0, "unresolved": 0,
+                                   "policyExcluded": 0, "actionableUnresolved": 0}, [])
+    assert validated(empty) == empty

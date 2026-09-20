@@ -287,7 +287,8 @@ def test_manifest_reads_direct_keys_and_reports_physical_and_logical_rows(tmp_pa
             "schema": "news_resolution_v1",
             "scope": "assertion_arguments",
             "metrics": {"total": 2, "resolved": 2, "unresolved": 0,
-                        "excludedAssertions": 0, "technicalFailures": 0},
+                        "excludedAssertions": 0, "technicalFailures": 0,
+                        "policyExcluded": 0, "actionableUnresolved": 0},
             "issues": [],
         },
     }
@@ -1476,7 +1477,8 @@ def test_every_recoverable_axis_stays_in_the_unresolved_sample(tmp_path, monkeyp
     assert sample == {"미등록회사", "충돌이름", "없는기관"}, "회수 축 하나가 표본에서 빠졌다"
     diagnostics = _log(storage)["ops"]["quality_diagnostics"]
     assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3,
-                                      "excludedAssertions": 0, "technicalFailures": 0}
+                                      "excludedAssertions": 0, "technicalFailures": 0,
+                                      "policyExcluded": 0, "actionableUnresolved": 3}
     assert {(row["reason"], row["role"], row["expression"]) for row in diagnostics["issues"]} == {
         ("instrument_not_found", "ISSUER", "미등록회사"),
         ("instrument_ambiguous", "ISSUER", "충돌이름"),
@@ -1510,7 +1512,8 @@ def test_missing_argument_text_is_explained_in_quality_diagnostics(tmp_path, mon
 
     diagnostics = _log(storage)["ops"]["quality_diagnostics"]
     assert diagnostics["metrics"] == {"total": 4, "resolved": 1, "unresolved": 3,
-                                      "excludedAssertions": 0, "technicalFailures": 0}
+                                      "excludedAssertions": 0, "technicalFailures": 0,
+                                      "policyExcluded": 0, "actionableUnresolved": 3}
     assert diagnostics["issues"] == [{
         "reason": "arguments_missing",
         "role": "ISSUER",
@@ -1809,3 +1812,22 @@ def _feature_parquet(rows: list[dict]) -> bytes:
     buf = io.BytesIO()
     pq.write_table(table, buf)
     return buf.getvalue()
+
+
+def test_policy_counts_use_full_population_without_hiding_unknowns(tmp_path, monkeypatch):
+    # WHY: 표시 표본 10건의 비율로 판정하면 긴 꼬리의 정책 제외가 누락된다.
+    storage = LocalStorage(tmp_path / "lake")
+    arguments = _args(("ISSUER", "삼성전자"), ("AUTHORITY", "정부"),
+                      ("ISSUER", "미등록회사"), ("ISSUER", "충돌이름"),
+                      *(("PERSON", f"인물{i}") for i in range(12)))
+    arguments.append({"role_code": "PERSON", "text": None})
+    _write_feature(storage, "ko", "2026-07-15", [_feature_row("a1", [_assertion(arguments=arguments)])])
+    conn = _FakeConn(documents=[("a1", "doc_D1")])
+    _setup(monkeypatch, conn)
+    assert load_assertions.run(storage, "R1", db=_db()) == 0
+    diagnostics = _log(storage)["ops"]["quality_diagnostics"]
+    assert diagnostics["metrics"] == {
+        "total": 17, "resolved": 1, "unresolved": 16, "policyExcluded": 13,
+        "actionableUnresolved": 3, "excludedAssertions": 0, "technicalFailures": 0,
+    }
+    assert len(diagnostics["issues"]) == 10
