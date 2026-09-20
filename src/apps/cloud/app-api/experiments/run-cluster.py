@@ -6,6 +6,7 @@ env: HOT=failed|healthy(인기 종목 위치, 기본 failed) FAIL_SHARD=0 KILL_R
 """
 from datetime import datetime
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -130,12 +131,17 @@ db = {}
 for line in sql("select forecast_id,choice,count(*) from forecast_vote where forecast_id in (" + ','.join(forecast_ids) + ") group by forecast_id,choice;").splitlines():
     fid, choice, cnt = line.split('\t'); db.setdefault(fid, {})[choice.lower()] = int(cnt)
 # C1 은 부하 종료 후에도 버퍼링된 명령이 60s 타임아웃까지 스레드를 잡는다 — 조회 실패는 불일치로 보고 재시도.
+# choices 해시(사용자→선택)도 DB 사용자 수와 맞아야 한다 — count 만 같고 해시가 비면 다음 재투표가 잘못 차감된다.
+db_users = {}
+for line in sql("select forecast_id,count(*) from forecast_vote where forecast_id in (" + ','.join(forecast_ids) + ") group by forecast_id;").splitlines():
+    fid, cnt = line.split('\t'); db_users[fid] = int(cnt)
 def consistent():
     bad = []
     for fid in forecast_ids:
         try:
             r = json.loads(get(f'/api/v1/forecasts/{fid}/votes/count'))['result']
-            if r['source'] != 'redis' or any(r[c] != db.get(fid, {}).get(c, 0) for c in ('buy', 'hold', 'sell')): bad.append(fid)
+            if r['source'] != 'redis' or any(r[c] != db.get(fid, {}).get(c, 0) for c in ('buy', 'hold', 'sell')): bad.append(fid); continue
+            if int(cli('hlen', 'vote:{' + fid + '}:choices').strip() or 0) != db_users.get(fid, 0): bad.append(fid)
         except Exception: bad.append(fid)
     return bad
 for _ in range(90):
@@ -173,13 +179,13 @@ with (out / 'samples.json').open() as fh:
             key = ('read', ph, 'failed' if int(t['shard']) == fail_shard else 'healthy')
             agg.setdefault(key, {'n': 0, 'slo': 0, 'err': 0, 'db': 0, 'lat': []})['db'] += t.get('source') == 'db'
             if t.get('source') == 'db':
-                sec = int(parse_time(d['time']).timestamp() - (fault or 0))
+                sec = math.floor(parse_time(d['time']).timestamp() - (fault or 0))
                 read_db[sec] = read_db.get(sec, 0) + 1
 rows = []
 for (kind, ph, cls), a in sorted(agg.items()):
-    lat = sorted(a['lat']); p99 = lat[min(len(lat) - 1, int(len(lat) * 0.99))]
+    lat = sorted(a['lat']); p99 = lat[min(len(lat) - 1, int(len(lat) * 0.99))] if lat else None
     rows.append({'kind': kind, 'phase': ph, 'class': cls, 'n': a['n'], 'slo_exceed': round(a['slo'] / a['n'], 4), 'error': round(a['err'] / a['n'], 4),
-                 'db_fallback': round(a['db'] / a['n'], 4) if kind == 'read' else None, 'p99_ms': round(p99, 1)})
+                 'db_fallback': round(a['db'] / a['n'], 4) if kind == 'read' else None, 'p99_ms': round(p99, 1) if p99 is not None else None})
 # 페일오버 소요 = replica 의 승격 로그 시각 - 주입 시각. 앱 회복 = 장애 샤드 읽기가 다시 source=redis 를 돌려준 첫 시각.
 failover = None
 for line in (out / 'redis.log').read_text().splitlines():
@@ -193,7 +199,8 @@ with (out / 'samples.json').open() as fh:
         if p['type'] == 'Point' and p['metric'] == 'read_source' and fault:
             t = p['data']['tags']
             ts = parse_time(p['data']['time']).timestamp()
-            if int(t['shard']) == fail_shard and t.get('source') == 'redis' and ts > fault + 1:
+            # 승격 전(또는 주입 명령이 끝나기 전) 성공 응답을 회복으로 세지 않는다 — failover 시각이 있으면 그 이후만.
+            if int(t['shard']) == fail_shard and t.get('source') == 'redis' and ts > fault + max(1, failover or 0):
                 app_recover = round(ts - fault, 2); break
 busy = [r['tomcat.threads.busy'] for r in samples if r['tomcat.threads.busy'] is not None]
 pending = [r['hikaricp.connections.pending'] for r in samples if r['hikaricp.connections.pending'] is not None]
@@ -221,4 +228,4 @@ for r in rows:
     print(f"{r['kind']:10}{r['phase']:8}{r['class']:10}{r['n']:>7}{r['slo_exceed']:>8.1%}{r['error']:>8.1%}{db_col}{r['p99_ms']:>9}")
 print('Results:', out)
 print('Cleanup after review:', ' '.join(compose + ['down', '-v']))
-raise SystemExit(0 if not mismatch and not duplicates else 1)
+raise SystemExit(load.returncode or (0 if not mismatch and not duplicates else 1))
