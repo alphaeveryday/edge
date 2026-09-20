@@ -185,6 +185,9 @@ export interface NewsQualityAssessment {
   status: 'WITHIN_LIMITS' | 'CAUTION' | 'UNMEASURED';
   reason: string;
   resolutionRate: number | null;
+  policyExcluded?: number | null;
+  assessmentResolutionRate?: number | null;
+  assessmentBasis?: 'POLICY_ADJUSTED' | 'LEGACY' | null;
   exclusionRate: number | null;
 }
 

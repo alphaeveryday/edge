@@ -81,4 +81,44 @@ class NewsQualityAssessmentTest {
 				"INCOMPLETE", 99L, null, 1L, null, null, false, evidence, true, true)).reason()).isEqualTo("DATA_ERROR");
 		assertThat(NewsQualityAssessment.from(cell("TAG_NEWS", 10, 1, evidence))).isNull();
 	}
+	private JsonNode policy(long total, long resolved, long excluded, long technical, String extra) {
+		String old = assertion(total, resolved, excluded, technical).toString();
+		return mapper.readTree(old.substring(0, old.length() - 2) + "," + extra + "}}");
+	}
+
+	@Test
+	void 정책_제외를_분모에서만_빼고_원본과_이전_판정을_보존한다() {
+		var a = NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 99, 1,
+				policy(100, 48, 1, 0, "\"policyExcluded\":20,\"actionableUnresolved\":32")));
+		assertThat(a.status()).isEqualTo("WITHIN_LIMITS");
+		assertThat(a.resolutionRate()).isEqualTo(0.48);
+		assertThat(a.assessmentResolutionRate()).isEqualTo(0.6);
+		assertThat(a.policyExcluded()).isEqualTo(20);
+		assertThat(a.assessmentBasis()).isEqualTo("POLICY_ADJUSTED");
+		assertThat(NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 99, 1,
+				policy(100, 47, 1, 0, "\"policyExcluded\":20,\"actionableUnresolved\":33"))).status()).isEqualTo("CAUTION");
+		var legacy = NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 99, 1, assertion(100, 48, 1, 0)));
+		assertThat(legacy.status()).isEqualTo("CAUTION");
+		assertThat(legacy.assessmentBasis()).isEqualTo("LEGACY");
+	}
+
+	@Test
+	void 정책_계측_모순은_미측정이며_실제_오류가_우선한다() {
+		for (String extra : new String[] {"\"policyExcluded\":20", "\"actionableUnresolved\":32",
+				"\"policyExcluded\":null,\"actionableUnresolved\":32",
+				"\"policyExcluded\":true,\"actionableUnresolved\":32",
+				"\"policyExcluded\":53,\"actionableUnresolved\":0"}) {
+			assertThat(NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 99, 1,
+					policy(100, 48, 1, 0, extra))).status()).isEqualTo("UNMEASURED");
+			assertThat(NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 99, 2,
+					policy(100, 48, 1, 1, extra))).reason()).isEqualTo("TECHNICAL_FAILURE");
+			assertThat(NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 80, 20,
+					policy(100, 48, 20, 0, extra))).reason()).isEqualTo("EXCLUSION_RATE");
+		}
+		var empty = NewsQualityAssessment.from(cell("LOAD_ASSERTIONS", 99, 1,
+				policy(100, 0, 1, 0, "\"policyExcluded\":100,\"actionableUnresolved\":0")));
+		assertThat(empty.status()).isEqualTo("UNMEASURED");
+		assertThat(empty.assessmentResolutionRate()).isNull();
+	}
+
 }

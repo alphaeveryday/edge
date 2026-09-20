@@ -88,13 +88,19 @@ export function parseQualityDiagnostics(value: unknown): QualityDiagnostics | nu
   const metrics = value.metrics;
   if (!requiredMetrics.every((key) => isNonNegativeInteger(metrics[key]))) return null;
 
+  if (value.scope === 'assertion_arguments' && ('policyExcluded' in metrics || 'actionableUnresolved' in metrics)) {
+    if (!isNonNegativeInteger(metrics.policyExcluded) || !isNonNegativeInteger(metrics.actionableUnresolved)
+      || metrics.policyExcluded + metrics.actionableUnresolved !== metrics.unresolved) return null;
+  }
   return value as unknown as QualityDiagnostics;
 }
 
 export function qualityDiagnosticsSummary(value: QualityDiagnostics): string {
   const m = value.metrics;
   if (value.scope === 'assertion_arguments') {
-    return `인자 ${m.total ?? '—'} · 해소 ${m.resolved ?? '—'} · 미해소 ${m.unresolved ?? '—'}`;
+    return `인자 ${m.total ?? '—'} · 해소 ${m.resolved ?? '—'} · 미해소 ${m.unresolved ?? '—'}`
+      + (m.policyExcluded == null || m.actionableUnresolved == null ? ''
+        : ` · 정책 제외 ${m.policyExcluded} · 판정 대상 미해소 ${m.actionableUnresolved}`);
   }
   if (value.scope === 'anchorless_events') {
     return `이벤트 ${m.events ?? '—'} · 기준 종목 없음 ${m.anchorless ?? '—'} · 미해소 인자 ${m.unresolvedArguments ?? '—'}`;

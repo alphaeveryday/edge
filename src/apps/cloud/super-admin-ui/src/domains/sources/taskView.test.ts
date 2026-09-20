@@ -136,3 +136,15 @@ test('비정상 뉴스 진단은 해당 상세에서 격리해 원장 전체 렌
   }), null);
   assert.equal(parseQualityDiagnostics({ ...valid, issues: null }), null);
 });
+
+
+test('정책 미해소 계측은 완전한 쌍만 표시한다', () => {
+  const d = { schema: 'news_resolution_v1', scope: 'assertion_arguments',
+    metrics: { total: 10, resolved: 4, unresolved: 6, policyExcluded: 5, actionableUnresolved: 1 }, issues: [] };
+  const parsed = parseQualityDiagnostics(d);
+  assert.ok(parsed);
+  assert.match(qualityDiagnosticsSummary(parsed), /미해소 6 · 정책 제외 5 · 판정 대상 미해소 1/);
+  for (const metrics of [{ ...d.metrics, policyExcluded: null }, { ...d.metrics, actionableUnresolved: 2 }]) {
+    assert.equal(parseQualityDiagnostics({ ...d, metrics }), null);
+  }
+});
