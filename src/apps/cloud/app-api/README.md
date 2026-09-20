@@ -12,7 +12,7 @@ curl -i -X POST localhost:8080/api/v1/admin/votes/reconcile -H 'X-Admin-Token: l
 
 사용자 ID는 양의 정수, 선택지는 BUY/HOLD/SELL(산다·기다린다·판다)이다. forecast ID는 Long 숫자이며 별도 존재 검증은 없다(발번은 전망 엔티티 도입 시 확정). 숫자가 아닌 경로 값은 공통 400 이다. 사용자 헤더는 로컬 실험용 식별자이며 로그인 인증은 구현하지 않는다. POST는 DB 커밋 후 Redis Lua를 실행하고 200을 반환한다 — 신규·변경·no-op 모두 200이다. GET 응답의 `result`는 `{buy,hold,sell,source}`다. Redis 실패 시 source=db이고, 정상 Redis에 키가 없으면 0을 반환하며 다음 재조정이 복구한다.
 
-재조정은 시작 후 1초, 이후 5분 주기, Lettuce 연결 활성화, 관리자 호출(200, 비동기)로 실행된다. 관리자 토큰 미설정 시 수동 호출은 403이다. 동시에 들어온 트리거는 합친다. DB snapshot의 count(선택지별 집계)와 choices(사용자→선택 해시)를 단일 Lua로 교체한다. snapshot 이후 투표와의 경합은 다음 주기에 보정한다. 대규모 전망의 전체 사용자 목록을 메모리와 Lua로 처리하므로 실험 규모를 넘어서는 성능은 별도 검증해야 한다.
+재조정은 시작 후 1초, 이후 5분 주기, Lettuce 연결 활성화, 관리자 호출(200, 비동기)로 실행된다. 관리자 토큰 미설정 시 수동 호출은 403이다. 동시에 들어온 트리거는 합친다. DB snapshot의 count(선택지별 집계)와 choices(사용자→선택 해시)를 단일 Lua로 교체한다. snapshot 이후 커밋된 표는 그 재조정의 교체에 덮여 다음 주기(또는 재연결·관리자 트리거)까지 집계에서 빠질 수 있다 — 복구 경로에만 있는 창이라 버전 검사는 두지 않았다. 대규모 전망의 전체 사용자 목록을 메모리와 Lua로 처리하므로 실험 규모를 넘어서는 성능은 별도 검증해야 한다.
 
 기본값은 REJECT_COMMANDS / 500ms / timeoutOptions=true / MASTER다. 환경 변수는 application.yaml과 compose에 외부화했다. S3 실험용 재시도(`VOTE_REDIS_RETRY`)는 실험 종결 후 제거했다 — 실측·해석은 experiments/FAILOVER_RESULTS.md 기록이 정본이다. Lua가 choices 해시의 이전 선택과 비교해 같으면 no-op, 다르면 이전 카운터 -1·새 카운터 +1 하므로 동일 투표 재실행은 중복 집계되지 않는다.
 

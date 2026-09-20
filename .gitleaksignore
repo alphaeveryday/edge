@@ -2,3 +2,6 @@
 
 # 삭제된 구 widget-ui 문서의 설치 예시 플레이스홀더(pub_live_acme_001) — 실제 키 아님.
 0a0ee7f96dad824e1a42278d8ce7a802975f8cd8:src/apps/widget-ui/notes/widget-data-attributes-note.md:generic-api-key:35
+
+# app-api README 의 curl 예시 — X-User-Id 는 로컬 실험용 사용자 식별 헤더(값 1), 비밀 아님.
+dc4471e5ac6acc6fc7b8b934aef1e5a69f3f1304:src/apps/cloud/app-api/README.md:curl-auth-header:8
