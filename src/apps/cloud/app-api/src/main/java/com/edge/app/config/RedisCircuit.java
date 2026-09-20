@@ -31,7 +31,9 @@ public class RedisCircuit {
             return registry.circuitBreaker("redis");
         }
         int slot = SlotHash.getSlot("vote:{" + forecastId + "}:count");
-        RedisClusterNode master = client.getPartitions().getMasterBySlot(slot);
+        var partitions = client.getPartitions();
+        // 빈 Partitions 는 getMasterBySlot 이 빈 캐시 배열을 인덱싱해 예외를 낸다 — null 가드 앞에서 걸러 전역으로.
+        RedisClusterNode master = partitions.isEmpty() ? null : partitions.getMasterBySlot(slot);
         if (master == null || master.getSlots().isEmpty()) {
             return registry.circuitBreaker("redis");
         }

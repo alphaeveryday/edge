@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+
 @RestController
 @ConditionalOnProperty(name = "vote.mode", havingValue = "db-first", matchIfMissing = true)
 @RequiredArgsConstructor
@@ -22,7 +25,8 @@ public class VoteAdminController {
 
     @PostMapping("/api/v1/admin/votes/reconcile")
     public ApiResponse<Boolean> reconcile(@RequestHeader(value = "X-Admin-Token", defaultValue = "") String token) {
-        if (adminToken.isBlank() || !adminToken.equals(token)) {
+        if (adminToken.isBlank() || !MessageDigest.isEqual(
+                adminToken.getBytes(StandardCharsets.UTF_8), token.getBytes(StandardCharsets.UTF_8))) {
             throw new GeneralException(ErrorStatus._FORBIDDEN);
         }
         return ApiResponse.onSuccess(voteReconciler.request());

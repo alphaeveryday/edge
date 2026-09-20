@@ -24,7 +24,7 @@ Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹
 # src 디렉터리에서: 실제 MySQL·Redis Docker 컨테이너 필요
 ./gradlew :apps:cloud:app-api:test
 # 기존 compose를 내려 포트 8080, 55440, 6390을 비운 후 experiments에서
-python3 run-failover.py S2  # S1~S5, 각 3분 부하, 60초 후 장애
+python3 run-failover.py S2  # S1·S2·S4·S5(S3 retry 는 제거돼 거부), 각 3분 부하, 60초 후 장애
 # Redis Cluster 부분 장애(6노드 compose, docker-compose.cluster.yaml)
 HOT=failed FAULT=kill python3 run-cluster.py C4  # C1 기본값 / C2 500ms·REJECT / C3 전역 서킷 / C4 샤드 서킷
 ```
@@ -41,7 +41,7 @@ Cluster 실험은 마스터 3+replica 3 에 `cluster-require-full-coverage=no`�
 
 | 구성 | 장애 | 정상 샤드 투표 SLO 초과 | 정상 샤드 조회 DB 폴백 | busy | HikariCP 대기 | 조회 폴백 qps |
 |---|---|---|---|---|---|---|
-| C1 기본값(60s·버퍼링·서킷 off) | SIGKILL | **94.2%** (hot=healthy 80.6%) | 0% (폴백 없이 대기) | 168~176 | 102~122 | 0 |
+| C1 기본값(60s·버퍼링·서킷 off¹) | SIGKILL | **94.2%** (hot=healthy 80.6%) | 0% (폴백 없이 대기) | 168~176 | 102~122 | 0 |
 | C2 500ms·REJECT·서킷 off | SIGKILL | 0% | 0% | 2~4 | 0 | 33 |
 | C2 | pause·partition | **82~86%** | 0% | 200 | 185~187 | 18~19 |
 | C3 전역 서킷 | SIGKILL | 0% | **94.5%** (재현 95.3%) | 4 | 0 | 49 |
@@ -49,6 +49,7 @@ Cluster 실험은 마스터 3+replica 3 에 `cluster-require-full-coverage=no`�
 | C4 샤드 서킷 | SIGKILL | 0% | **0%** | 4 | 0 | 33 |
 | C4 | pause·partition | 0% | 0% | 13 | 0 | 33 |
 
+¹ 서킷 off 는 실패율 임계치 100% 로 무력화한 것이라 완전한 off 가 아니다 — 창(20건)이 전부 실패하면 열린다. C1 두 런은 주입 60초 뒤(during 창 밖), C2 kill 한 런(021853)은 0.2초 만에 열렸다. 표에 쓴 C2 런(022148)은 개방 0건이다.
 - C1: 장애 슬롯 명령이 60초 동안 큐에 남고 그 대기가 AFTER_COMMIT 리스너에서 일어나 DB 커넥션 반환이 밀렸다. 풀 10개가 소진되자 정상 샤드 투표와 정적 `/`(28~40% SLO 초과)까지 밀렸고 커넥션 획득 타임아웃(30초)으로 DB 트랜잭션 생성 실패 111~528건이 났다. 부하 종료 후에도 버퍼가 남아 hot=healthy 런은 재조정 검산이 제한 시간 안에 끝나지 않았다(이후 구성은 전 런 30/30 일치).
 - C2: SIGKILL 은 연결 종료를 감지해 즉시 거부되지만 pause·partition 은 TCP 가 살아 있어 요청마다 500ms 를 기다린다. 장애 샤드 투표 33rps × 0.5s 의 동시 대기가 풀 10개를 넘겨 스레드 200 까지 포화됐다.
 - C3: 서킷이 대기를 끊어 SLO 초과는 0% 지만 전역 실패율이 판단 기준이라 정상 샤드 조회까지 폴백됐다. hot=healthy(17%)에서는 반대로 장애 샤드가 전건 실패해도 임계치 50% 에 못 미쳐 거의 열리지 않았다(우연 개방 150·204건, 폴백 9qps 는 전부 장애 샤드).
@@ -58,7 +59,7 @@ replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤�
 
 개념 설명은 [블로그](https://choyoungseo20.github.io/posts/redis-cluster/)에 있다.
 
-DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 auto-increment 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(forecast_id, user_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON DUPLICATE KEY UPDATE`(원자 upsert)로 한다. `DbFirstVoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
+DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 auto-increment 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(forecast_id, user_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON DUPLICATE KEY UPDATE`(원자 upsert)로 한다. `DbFirstVoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. 커밋 순서와 리스너 실행 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
 
 코드 스타일은 로컬 kuke-board/service/view를 참고했다. 서비스(`VoteService` 의 db-first 구현)는 트랜잭션 쓰기+이벤트 발행과 서킷 폴백 집계, event 패키지의 리스너가 커밋 후 캐시 갱신, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
 
@@ -66,7 +67,7 @@ DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long
 
 ## write-behind 모드 (실험용)
 
-`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다.
+`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다. 단일 인스턴스·Sentinel 전용이다: 인스턴스가 둘이면 flush 가 겹쳐 오래된 배치가 최신 표를 덮을 수 있고(소유권·버전 검사 없음), Cluster 에선 전역 `vote:dirty-forecasts` 와 전망별 키가 다른 슬롯이라 다중 키 Lua 가 CROSSSLOT 으로 실패하므로 기동 시 거부한다.
 
 - 쓰기: `WriteBehindVoteService.vote()` 가 `VoteBufferRepository` 의 Lua 한 번으로 count·choices 갱신 + `vote:{fid}:dirty` 해시·`vote:dirty-forecasts` 집합 마킹을 한다. DB 트랜잭션을 열지 않는다. Redis 실패는 서킷 폴백이 503(`VOTE5030`)으로 즉시 반려한다 — DB 우회는 없다.
 - flush: `VoteFlusher` 가 `vote.flush.interval-ms`(기본 3000, 첫 실행도 한 주기 뒤) 마다 전망별로 `vote.flush.batch-size`(기본 500) 만큼 HSCAN 으로 읽어 `forecast_vote` 에 다중행 upsert 하고, 읽었던 choice 와 같은 항목만 dirty 에서 지운다. 한 주기에 전망당 한 배치. 전망 하나의 실패는 다른 전망을 막지 않는다.

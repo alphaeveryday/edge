@@ -7,6 +7,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
+import jakarta.annotation.PostConstruct;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
@@ -23,11 +26,20 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class VoteBufferRepository {
     private final StringRedisTemplate redisTemplate;
+    private final RedisConnectionFactory connectionFactory;
     private static final String DIRTY_FORECASTS = "vote:dirty-forecasts";
     private static final DefaultRedisScript<Long> RECORD = script("writebehind/vote-buffer.lua");
     private static final DefaultRedisScript<Long> CLEAR = script("writebehind/clear-dirty.lua");
     private static final DefaultRedisScript<Long> RELEASE = script("writebehind/release-dirty.lua");
     private static final DefaultRedisScript<Long> WARM = script("writebehind/warm.lua");
+
+    // 전망별 키({forecastId})와 전역 dirty 집합이 다른 슬롯이라 Cluster 에선 다중 키 Lua 가 CROSSSLOT 으로 전건 실패한다.
+    @PostConstruct
+    void rejectCluster() {
+        if (connectionFactory instanceof LettuceConnectionFactory lettuce && lettuce.isClusterAware()) {
+            throw new IllegalStateException("vote.mode=write-behind does not support Redis Cluster (CROSSSLOT on vote:dirty-forecasts)");
+        }
+    }
 
     public boolean record(Long forecastId, Long userId, VoteChoice choice) {
         List<String> keys = List.of(key(forecastId, "choices"), key(forecastId, "count"), key(forecastId, "dirty"), DIRTY_FORECASTS);

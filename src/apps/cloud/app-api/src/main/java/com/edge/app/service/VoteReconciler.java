@@ -63,14 +63,24 @@ public class VoteReconciler {
             // 단일 findAll 스냅샷 — 전망 목록/전망별 조회의 시차 없이 한 시점 기준으로 교체한다.
             Map<Long, List<Vote>> byForecast = voteRepository.findAll().stream()
                     .collect(Collectors.groupingBy(Vote::getForecastId));
+            // 전망 단위로 격리한다 — Cluster 부분 장애에서 한 샤드의 실패가 정상 샤드 전망의 복구를 막으면 안 된다.
+            int failed = 0;
             for (var entry : byForecast.entrySet()) {
-                var delta = voteCountRepository.replace(entry.getKey(), entry.getValue());
-                meterRegistry.counter("vote.reconcile.missing").increment(delta.missing());
-                meterRegistry.counter("vote.reconcile.excess").increment(delta.excess());
-                log.info("Reconciled forecast={} dbVotes={} buyDelta={} holdDelta={} sellDelta={}",
-                        entry.getKey(), entry.getValue().size(), delta.buyDelta(), delta.holdDelta(), delta.sellDelta());
+                try {
+                    var delta = voteCountRepository.replace(entry.getKey(), entry.getValue());
+                    meterRegistry.counter("vote.reconcile.missing").increment(delta.missing());
+                    meterRegistry.counter("vote.reconcile.excess").increment(delta.excess());
+                    log.info("Reconciled forecast={} dbVotes={} buyDelta={} holdDelta={} sellDelta={}",
+                            entry.getKey(), entry.getValue().size(), delta.buyDelta(), delta.holdDelta(), delta.sellDelta());
+                } catch (Exception ex) {
+                    failed++;
+                    log.warn("Reconciliation failed forecast={}; next trigger will repair", entry.getKey(), ex);
+                }
             }
-            meterRegistry.counter("vote.reconcile.success").increment();
+            meterRegistry.counter(failed == 0 ? "vote.reconcile.success" : "vote.reconcile.failures").increment();
+            if (failed > 0) {
+                log.warn("Reconciliation partial: {} of {} forecasts failed", failed, byForecast.size());
+            }
         } catch (Exception ex) {
             meterRegistry.counter("vote.reconcile.failures").increment();
             log.warn("Reconciliation failed; next trigger will repair", ex);

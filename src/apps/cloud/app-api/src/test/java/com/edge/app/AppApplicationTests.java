@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -69,13 +70,24 @@ class AppApplicationTests {
     @Test
     void voteIsCommittedBeforeRedisIsCalled() throws Exception {
         long etf = 11;
+        // 리스너 안의 단언은 AFTER_COMMIT 콜백이 삼킨다 — 관측값을 테스트 스레드로 가져와 여기서 단언한다.
+        var seenAtRedisCall = new CompletableFuture<Integer>();
         doAnswer(invocation -> {
             try (var pool = Executors.newSingleThreadExecutor()) {
-                assertEquals(1, pool.submit(() -> votes(etf).size()).get(5, TimeUnit.SECONDS));
+                seenAtRedisCall.complete(pool.submit(() -> votes(etf).size()).get(5, TimeUnit.SECONDS));
             }
             return invocation.callRealMethod();
         }).when(voteCountRepository).vote(etf, 1L, VoteChoice.BUY);
         assertEquals(200, vote(etf, 1, "BUY"));
+        assertEquals(1, seenAtRedisCall.get(5, TimeUnit.SECONDS), "vote must be visible in DB before Redis is called");
+    }
+
+    @Test
+    void numericChoiceIsRejected() {
+        int status = client().post().uri("/api/v1/forecasts/12/votes").header("X-User-Id", "1")
+                .body(Map.of("choice", 0)).retrieve().toBodilessEntity().getStatusCode().value();
+        assertEquals(400, status);
+        assertTrue(votes(12).isEmpty());
     }
 
     @Test

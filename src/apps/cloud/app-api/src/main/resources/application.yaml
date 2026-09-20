@@ -5,6 +5,10 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:55440/app}
     username: ${SPRING_DATASOURCE_USERNAME:app}
     password: ${SPRING_DATASOURCE_PASSWORD:app}
+  jackson:
+    datatype:
+      enum:
+        fail-on-numbers-for-enums: true   # {"choice":0} 이 BUY 로 접수되지 않게
   jpa:
     open-in-view: false
     hibernate:
