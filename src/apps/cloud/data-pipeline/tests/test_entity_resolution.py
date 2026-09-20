@@ -158,3 +158,58 @@ def test_mint_policy_rejection_is_not_reported_as_instrument_master_miss():
     """WHY: 숫자뿐인 위치를 종목 미등록으로 진단하면 마스터·alias 보강이라는 잘못된 대응을 부른다."""
     entity_id, reason, minted = plan_resolution(_index(), "LOCATION", "123")
     assert (entity_id, reason, minted) == (None, CONCEPT_REJECTED, None)
+
+
+def test_observed_legal_aliases_preserve_canonical_instrument_and_opt_in():
+    """WHY: 명시한 정식명만 같은 보통주로 회수하고 실시간 기본 경로의 적용 범위는 넓히지 않는다."""
+    cases = [
+        ('047810', '한국항공우주', ('한국항공우주산업(KAI)', 'KAI(한국항공우주산업)')),
+        ('035510', '신세계 I&C', ('신세계아이앤씨',)),
+        ('003620', 'KG모빌리티', ('KG모빌리티(KGM)', 'KG 모빌리티(KGM)')),
+        ('071320', '지역난방공사', ('한국지역난방공사',)),
+        ('161390', '한국타이어앤테크놀로지', ('한국타이어', '한국타이어(한국타이어앤테크놀로지)', '한국타이어앤테크놀로지(한국타이어)')),
+        ('180400', 'DXVX', ('디엑스앤브이엑스', '디엑스앤브이엑스(DXVX)', '디엑스앤브이엑스(Dx&Vx)')),
+        ('018260', '삼성에스디에스', ('삼성SDS',)),
+        ('000150', '두산', ('㈜두산',)),
+        ('005300', '롯데칠성', ('롯데칠성음료',)),
+        ('006280', '녹십자', ('GC녹십자',)),
+        ('052690', '한전기술', ('한국전력기술',)),
+        ('000270', '기아', ('기아(주)', '기아㈜')),
+        ('017670', 'SK텔레콤', ('SKT', 'SK텔레콤(SKT)')),
+        ('012450', '한화에어로스페이스', ('한화 에어로스페이스',)),
+        ('067160', 'SOOP', ('SOOP(옛 아프리카TV)',)),
+        ('066970', '엘앤에프', ('엘앤에프(L&F)',)),
+        ('105560', 'KB금융', ('KB금융지주',)),
+        ('035420', 'NAVER', ('네이버',)),
+        ('032640', 'LG유플러스', ('LGU+',)),
+        ('078930', 'GS', ('㈜GS',)),
+    ]
+    rows = [(f"inst_{ticker}", ticker, f"{name} 보통주", name, "COMMON")
+            for ticker, name, _ in cases]
+    index = _index(rows)
+    for ticker, name, aliases in cases:
+        expected = f"inst_{ticker}"
+        assert resolve(index, name) == (expected, RESOLVED)
+        for alias in aliases:
+            assert resolve(index, alias) == (None, UNRESOLVED)
+            assert resolve(index, alias, allow_aliases=True) == (expected, ALIAS_RESOLVED)
+            assert resolve_alias_ticker(index, alias) == ticker
+            assert plan_resolution(index, "ISSUER", alias)[:2] == (expected, ALIAS_RESOLVED)
+            # 발행사와 비슷하게 쓰이는 그룹/브랜드/자회사 표현을 부분일치로 회수하면 안 된다.
+            assert resolve(index, alias + "그룹", allow_aliases=True) == (None, UNRESOLVED)
+            assert resolve(index, alias + " 자회사", allow_aliases=True) == (None, UNRESOLVED)
+    for expression in ("두산그룹", "GC", "한국앤컴퍼니", "기아인천서비스센터", "GS25",
+                       "하나금융그룹", "한화금융", "SK온", "신세계백화점", "네이버클라우드"):
+        assert resolve(index, expression, allow_aliases=True) == (None, UNRESOLVED)
+
+
+def test_observed_alias_cannot_create_or_choose_a_missing_or_ambiguous_target():
+    """WHY: 새 약칭이 빈 마스터·동명 충돌을 우회하거나 이미 있는 다른 종목명을 빼앗지 않는다."""
+    rows = [("inst_KAI", "047810", "한국항공우주 보통주", "한국항공우주", "COMMON")]
+    expression = "한국항공우주산업(KAI)"
+    assert resolve(_index([]), expression, allow_aliases=True) == (None, UNRESOLVED)
+    collision = rows + [("inst_OTHER", "999999", "다른 주식", "한국항공우주", "COMMON")]
+    assert resolve(_index(collision), expression, allow_aliases=True) == (None, UNRESOLVED)
+    occupied = rows + [("inst_OTHER", "999999", expression, "다른 발행사", "COMMON")]
+    assert resolve(_index(occupied), expression, allow_aliases=True) == (None, AMBIGUOUS)
+    assert resolve_alias_ticker(_index(occupied), expression) is None

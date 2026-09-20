@@ -1687,6 +1687,9 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   정식명 변형 별칭은 canonical master가 실제로 존재하고 단일 종목일 때만 assertion 해소에
   사용한다. event 조립에서는 그 canonical ticker가 기사 mentions 허용집합에도 있어야 한다.
   그룹명·브랜드처럼 상장사 귀속이 해석인 표현은 별칭에 포함하지 않는다.
+  2026-09-19 미해소 재현으로 검증한 정식명·약칭 28개 표기를 추가했다(ALPHA-1080).
+  공백·괄호·법인표기를 일반적으로 제거하는 규칙이 아니라 명시적 별칭이며, 다른 종목의
+  실제 이름과 충돌하면 `ambiguous`로 남긴다.
 - **ETF 수집 완전성**(ALPHA-611) — `NAV_COLLECTION_KIS`·`ETF_PROFILE_COLLECTION_KIS`·
   `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
   `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이
