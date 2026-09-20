@@ -33,6 +33,7 @@ resilience4j:
         sliding-window-size: 20
         minimum-number-of-calls: 10
         wait-duration-in-open-state: 3s
+        failure-rate-threshold: ${VOTE_CIRCUIT_FAILURE_RATE:50}
   reconcile:
     interval: ${VOTE_RECONCILE_INTERVAL:PT5M}
 server:
