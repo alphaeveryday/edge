@@ -16,7 +16,7 @@ curl -i -X POST localhost:8080/api/v1/admin/votes/reconcile -H 'X-Admin-Token: l
 
 기본값은 REJECT_COMMANDS / 500ms / timeoutOptions=true / MASTER다. 환경 변수는 application.yaml과 compose에 외부화했다. S3 실험용 재시도(`VOTE_REDIS_RETRY`)는 실험 종결 후 제거했다 — 실측·해석은 experiments/FAILOVER_RESULTS.md 기록이 정본이다. Lua가 choices 해시의 이전 선택과 비교해 같으면 no-op, 다르면 이전 카운터 -1·새 카운터 +1 하므로 동일 투표 재실행은 중복 집계되지 않는다.
 
-Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹었다. 쓰기 서킷은 `VoteCountRepository.vote()`에 있어 열려도 DB 저장은 막지 않고 폴백이 실패를 삼킨다(메트릭+로그). 읽기 서킷은 `DbFirstVoteService.counts()`에 있고 폴백이 DB 집계로 대체한다. 재조정 `replace()`는 복구 경로라 서킷 밖이다. 서킷이 열리면 Lettuce 타임아웃 대기 없이 즉시 폴백한다(REJECT가 못 잡는 "연결은 살아 있는데 느려지는" 유형의 이중 방어).
+Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹었다. 쓰기 서킷은 `VoteCountRepository.vote()`에 있어 열려도 DB 저장은 막지 않고 폴백이 실패를 삼킨다(메트릭+로그). 읽기 서킷은 `DbFirstVoteService.counts()`에 있고 폴백이 DB 집계로 대체한다. 재조정 `replace()`는 복구 경로라 서킷 밖이다. 서킷이 열리면 Lettuce 타임아웃 대기 없이 즉시 폴백한다(REJECT가 못 잡는 "연결은 살아 있는데 느려지는" 유형의 이중 방어). 서킷 범위는 `VOTE_CIRCUIT_SCOPE`(기본 `global`)로 고른다 — `shard`면 `RedisCircuit`이 키 슬롯을 소유한 마스터의 첫 슬롯 번호로 서킷(`redis-shard-0`·`redis-shard-5461`·…)을 골라 장애 샤드만 차단한다. 슬롯 표는 Lettuce `Partitions`를 그대로 쓰므로 페일오버(노드만 바뀜)엔 상태가 이어지고 리샤딩(소유자 바뀜)엔 옮긴 슬롯이 새 샤드 서킷으로 따라간다. Cluster가 아니면 `shard`여도 전역 `redis`로 동작한다.
 
 클라이언트 timeout 옵션 의미는 [Lettuce 공식 문서](https://github.com/redis/lettuce/blob/main/docs/advanced-usage/client-options.md)를 참고했다. 500ms는 커맨드 제한이며, 전체 HTTP 지연·5분 복구는 부하 실험으로 판정해야 한다.
 
@@ -25,9 +25,11 @@ Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹
 ./gradlew :apps:cloud:app-api:test
 # 기존 compose를 내려 포트 8080, 55440, 6390을 비운 후 experiments에서
 python3 run-failover.py S2  # S1~S5, 각 3분 부하, 60초 후 장애
+# Redis Cluster 부분 장애(6노드 compose, docker-compose.cluster.yaml)
+HOT=failed FAULT=kill python3 run-cluster.py C4  # C1 기본값 / C2 500ms·REJECT / C3 전역 서킷 / C4 샤드 서킷
 ```
 
-실험은 k6 투표 50rps, 별도 compose project를 사용한다. 종료 후 데이터 확인을 위해 컨테이너를 남기며 출력된 down 명령으로 정리한다. 결과는 experiments/runs에 기록한다. S4는 해당 프로젝트의 원래 master만 네트워크에서 분리한다. 매 실행 새 사용자·전망 ID를 사용한다.
+Cluster 실험은 마스터 3+replica 3 에 `cluster-require-full-coverage=no`로, 한 샤드의 마스터·replica를 SIGKILL·`docker pause`·네트워크 분리(`FAULT`)하거나 마스터만 죽여 replica 승격(`KILL_REPLICA=false`)을 본다. k6가 Redis와 같은 CRC16으로 종목을 샤드별 10개 배치해 요청마다 샤드를 태깅하고, 인기 종목(트래픽 50%)을 장애 샤드/정상 샤드(`HOT`)에 둬 전역 실패율 67%/17%를 만든다. 결과는 장애 전·중·후 × 샤드 등급별 SLO 초과·DB 폴백·서킷 개방으로 집계한다. Sentinel 실험은 k6 투표 50rps, 별도 compose project를 사용한다. 종료 후 데이터 확인을 위해 컨테이너를 남기며 출력된 down 명령으로 정리한다. 결과는 experiments/runs에 기록한다. S4는 해당 프로젝트의 원래 master만 네트워크에서 분리한다. 매 실행 새 사용자·전망 ID를 사용한다.
 
 측정: k6 samples의 응답 코드·투표 지연, threads.json의 최대 busy, fault.json과 sentinel.log의 +switch-master 차이, DB와 Redis 선택지별 차이, app.log의 재조정 delta/duration. Redis 재조정 전 차이는 장애 직후 재연결 트리거가 먼저 보정할 수 있으므로 **app.log delta를 함께 사용**한다. 합계만 같아도 선택지별 오류가 있을 수 있어 최종 판정은 각 선택지와 choices 해시까지 확인해야 한다. NFR-4는 fault부터가 아니라 failover 완료부터 복구 완료까지 판정한다. 과거 RESULTS.md와 load.py는 이전 전망·Redis 선저장 구현의 기록으로 이번 구현의 근거가 아니다.
 
