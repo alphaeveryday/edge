@@ -392,3 +392,39 @@ def test_unfillable_identity_types_are_declared():
     for type_id in declared["off_menu"]["types"]:
         pt = registry[type_id]
         assert set(pt.identity_required) - (set(pt.required_roles) | set(pt.optional_roles))
+
+
+def test_counterparty_registry_fallback_is_explicit_and_does_not_change_role_kind():
+    # WHY: 미등록 상대방을 채번하거나 전체 기관 명부를 검색하면 잘못된 정체성이 생긴다.
+    vocabulary = O.load_relations()
+    for role in ("PARTNER", "PARTNER_2", "INVESTOR"):
+        assert vocabulary.kind_of(role) == "COMPANY_ENTITY"
+        assert vocabulary.sections_for(role) == ()  # 종목 우선 경로를 유지한다
+        assert vocabulary.get(role).registry_fallback_sections == (
+            "authorities", "foreign_authorities", "institutions")
+        assert not vocabulary.can_mint(role)
+        assert O.resolve_authority(role, "금감원") == "actor_auth_kr_fss"
+        assert O.resolve_authority(role, "대법원") is None
+    for role in ("ISSUER", "TARGET_COMPANY", "PERSON", "CUSTOMER", "SUPPLIER"):
+        assert not vocabulary.get(role).registry_fallback_sections
+    assert O.resolve_authority("AUTHORITY", "한국은행") == "actor_cb_kr_bok"
+    assert O.resolve_authority("COURT", "한국은행") is None
+
+
+@pytest.mark.parametrize("scheme,sections", [("MINT", "authorities"), ("REGISTRY", "authorities"),
+                                           ("NONE", "unknown_section")])
+def test_counterparty_fallback_rejects_invalid_policy(tmp_path, scheme, sections):
+    # WHY: 잘못된 정책 선언을 조용히 무시하면 role별 writer의 해소 결과가 갈린다.
+    import yaml
+    from edge_ontology.constants import RELATION_DIR
+    from edge_ontology._resource import load_yaml_resource
+
+    doc = load_yaml_resource(RELATION_DIR, "role_bindings_v0_1.yaml")
+    doc["identity"]["roles"]["PARTNER"] = {
+        "scheme": scheme, "sections": ["authorities"] if scheme == "REGISTRY" else [],
+        "fallback_sections": [sections],
+    }
+    path = tmp_path / "roles.yaml"
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(ValueError, match="폴백|fallback_sections"):
+        O.load_relations(path)

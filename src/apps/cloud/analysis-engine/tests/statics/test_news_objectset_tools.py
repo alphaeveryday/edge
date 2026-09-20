@@ -325,3 +325,28 @@ def test_scoped_news_discovers_constituent_when_direct_etf_has_zero_and_clamps_p
         "etf_holding_snapshot", "event_argument", "source_event",
         "event_evidence", "document_assertion", "document", "event_thread_link",
     ]
+
+
+def test_institution_counterparty_is_preserved_without_claiming_an_issuer_target():
+    # WHY: a government actor in a partner role is not an instrument, and the
+    # current ObjectSet catalog cannot follow government actors. Fail visibly.
+    lake = _NewsLake()
+    lake.con.execute("CREATE TABLE args AS SELECT * FROM v_event_argument")
+    lake.con.execute("INSERT INTO args VALUES (7, 'evt_1', 'PARTNER_2', 'object', "
+                     "'금융감독원', 'COMPANY_ENTITY', 'actor_auth_kr_fss', 0.9)")
+    lake.con.execute("CREATE OR REPLACE VIEW v_event_argument AS SELECT * FROM args")
+    runtime = ObjectSetRuntime(lake, as_of="2026-08-07T12:00:00", dataset_versions={
+        "event_thread": "t1", "event_thread_link": "tl1", "source_event": "se1",
+        "event_argument": "ea1", "instrument": "i1",
+    })
+    thread = _call(runtime, "news.get_thread", {"thread_id": "thr_1"})
+    events = _call(runtime, "news.list_events", {"handle": thread["handle"]})
+    arguments = _call(runtime, "news.get_event_arguments", {"handle": events["handle"]})
+    result = _call(runtime, "news.follow_argument", {
+        "handle": arguments["handle"], "event_argument_id": 7})
+    assert result["resolved"] is False
+    assert result["reason"] == "TARGET_NOT_AVAILABLE"
+    assert result["kind"] == "EVENT_ARGUMENT"
+    assert result["objects"] == []
+    assert result["argument"]["entity_id"] == "actor_auth_kr_fss"
+    assert result["argument"]["role_code"] == "PARTNER_2"

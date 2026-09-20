@@ -657,8 +657,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 
 # assertion 적재(RDB, ALPHA-375·376) — feature 뉴스 assertion(ko)을 document_assertion·
 # assertion_argument 로. **해소 축은 역할이 정한다**(ALPHA-831) — 온톨로지 identity 표를
-# 읽어 셋으로 갈린다: NONE=instrument 완전일치(티커·정식명·종목명) / REGISTRY=시드된 기관
-# 명부 조회(못 찾아도 채번 안 함) / MINT=멘션에서 결정적 채번. 미해소·충돌은 quality log 에
+# 읽어 셋으로 갈린다: NONE=instrument 우선(미해소인 PARTNER·PARTNER_2·INVESTOR만
+# 선언된 기관 명부 폴백, 충돌/ISSUER는 제외) / REGISTRY=시드된 기관 명부 조회
+# (못 찾아도 채번 안 함; AUTHORITY는 중앙은행 포함) / MINT=멘션에서 결정적 채번. 미해소·충돌은 quality log 에
 # 사유별 수치로 남긴다(해소율 실측).
 # ⚠️ **쓰기 표면이 넷이다**: 채번 경로가 entity(CONCEPT)·concept 마스터 행을 함께 만든다
 # (FK 순서로 argument 보다 먼저). 채번 산식은 entity_resolution.mint_concept **하나**이고
