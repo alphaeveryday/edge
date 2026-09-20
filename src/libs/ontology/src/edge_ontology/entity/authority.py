@@ -48,6 +48,8 @@ class AuthorityRegistry:
     entries: Mapping[str, AuthorityEntry]                  # entity_id → 항목
     by_section: Mapping[str, Mapping[str, str]]            # 절 → (정규화 별칭 → entity_id)
 
+    ambiguous_rejected: frozenset[str] = frozenset()
+
     def resolve(self, mention: str, sections: Iterable[str]) -> str | None:
         """멘션을 기관 entity_id 로 — **주어진 절 안에서만** 찾는다.
 
@@ -101,5 +103,6 @@ def load_authority_registry(path: Path | str | None = None) -> AuthorityRegistry
         raise ValueError(f"명부에 알 수 없는 절이 있다 — 코드가 안 읽는다: {sorted(unknown)}")
     return AuthorityRegistry(
         entries=MappingProxyType(entries),
+        ambiguous_rejected=frozenset(banned),
         by_section=MappingProxyType({k: MappingProxyType(v) for k, v in by_section.items()}),
     )

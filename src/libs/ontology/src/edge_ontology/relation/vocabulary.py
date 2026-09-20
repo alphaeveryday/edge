@@ -153,3 +153,16 @@ def concept_key(role_code: str, mention: str) -> str | None:
     if len(key) < MIN_CONCEPT_CHARS or key.isdigit():
         return None
     return key
+
+
+def is_policy_excluded(role_code: str, mention: object) -> bool:
+    """미해소 중 정책상 특정 개체를 식별하지 않는 자리·모호어인가.
+
+    해소 결과를 바꾸지 않는다. 진단에서 미해소 전량을 보존한 채 판정 분모를
+    구분할 때만 사용한다. 결측·미등록 기업·명부 누락은 제외하지 않는다.
+    """
+    relation = load_relations().get(role_code)
+    if relation is None or not relation.is_entity or not isinstance(mention, str) or not mention.strip():
+        return False
+    return (relation.entity_kind in {"PERSON", "COHORT"}
+            or normalize_name(mention) in load_authority_registry().ambiguous_rejected)

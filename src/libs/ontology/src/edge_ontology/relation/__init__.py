@@ -1,6 +1,6 @@
 """3. 관계(Relation) — 실체를 잇는 구조적 연결."""
 from .model import MINT, NONE, REGISTRY, Relation, RelationVocabulary
-from .vocabulary import concept_key, load_relations, resolve_authority, role_entity_kind
+from .vocabulary import concept_key, is_policy_excluded, load_relations, resolve_authority, role_entity_kind
 
 __all__ = [
     "MINT",
@@ -9,6 +9,7 @@ __all__ = [
     "Relation",
     "RelationVocabulary",
     "concept_key",
+    "is_policy_excluded",
     "load_relations",
     "resolve_authority",
     "role_entity_kind",

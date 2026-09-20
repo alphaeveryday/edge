@@ -14,7 +14,8 @@ def _diagnostics(resolved: int) -> dict:
     return {
         "schema": "news_resolution_v1",
         "scope": "assertion_arguments",
-        "metrics": {"total": 1, "resolved": resolved, "unresolved": unresolved},
+        "metrics": {"total": 1, "resolved": resolved, "unresolved": unresolved,
+                    "policyExcluded": 0, "actionableUnresolved": unresolved},
         "issues": [] if resolved else [{
             "reason": "instrument_not_found", "role": "ISSUER",
             "expression": "미등록회사", "count": 1,
