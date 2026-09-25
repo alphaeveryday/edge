@@ -906,6 +906,7 @@ def price_consumer_cli(settings, *, universe: str | None,
     from datetime import timezone
 
     from .consumer import ConsumerConfig, MinuteConsumer, SqsQueue
+    from .kafka_transport import KafkaQueue, is_kafka_url
     from .models import load_universe_uri
 
     if settings.db is None:
@@ -950,9 +951,15 @@ def price_consumer_cli(settings, *, universe: str | None,
         destination=options.destination,
         extended_hours_ids=frozenset(universe_model.extended_hours_ids),
     )
+    if is_kafka_url(options.queue_url):
+        # 로컬 개발판(kafka_transport 도크스트링) — 실시간과 복구가 같은 명령을 쓰고
+        # DB·group·시작 offset 만 다르다
+        queue = KafkaQueue(options.queue_url)
+    else:
+        queue = SqsQueue(wait_seconds=options.wait_seconds)
     consumer = MinuteConsumer(
         jobs=JobLedger(db=settings.db),
-        queue=SqsQueue(wait_seconds=options.wait_seconds),
+        queue=queue,
         handler=handler,
         config=ConsumerConfig(
             consumer_id=f"pc-{socket.gethostname()}-{os.getpid()}",
@@ -987,6 +994,8 @@ def price_consumer_cli(settings, *, universe: str | None,
                 return 0 if max_ticks is None else 1
     finally:
         consumer.close()  # in-flight 를 끝까지 — 실행은 했는데 기록이 없는 상태 방지
+        if isinstance(queue, KafkaQueue):
+            queue.close()
     # 배선 오류 신호는 성공으로 접지 않는다 — poison(파싱 불가)·misrouted(kind 불일치)·
     # orphan(job 행 없음)·ahead(세대 역전)는 재시도로 낫지 않는 생산자/배선 결함이다
     wiring_errors = sum(totals.get(key, 0)

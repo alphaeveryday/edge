@@ -33,6 +33,9 @@ dev = ["pytest>=8"]
 # 돌리고(`uv sync --package data-pipeline --group local`), 클라우드는 그 결과를 s3
 # canonical 레이크에서 읽는다. 미설치 상태로 `--source yahoo` 를 부르면 fail-loud.
 local = ["yfinance>=0.2.40"]
+# Kafka transport 로컬 개발판(minute/kafka_transport.py) — 클라우드 이미지에 안 들어간다.
+# 운영 경로는 SQS 그대로다. 실험: experiments/kafka-price-lane/README.md
+kafka = ["confluent-kafka>=2.12"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
