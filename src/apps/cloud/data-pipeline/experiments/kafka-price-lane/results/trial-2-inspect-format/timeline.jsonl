@@ -1,0 +1,41 @@
+{"at": 1790314681.161608, "action": "planned", "session": "msn_8a82f2a2104bc4465f53ff43db", "windows": 14}
+{"at": 1790314682.168305, "action": "committed_window", "seq": 0, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314685.371825, "action": "live_succeeded", "seq": 0, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314685.9962418, "action": "committed_window", "seq": 1, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314686.00111, "action": "live_succeeded", "seq": 1, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314686.882304, "action": "F4_snapshot_then_corrupt_anchor", "position": {"last_seq": 1, "window": "2026-09-25 09:01:00+09:00", "live_committed_offsets": {"0": null, "1": null, "2": 2}, "anchor": [["100.000000"]]}, "corrupted_rows": 1}
+{"at": 1790314687.4546869, "action": "committed_window", "seq": 2, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314687.670221, "action": "live_succeeded", "seq": 2, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314688.294053, "action": "committed_window", "seq": 3, "close": 105, "worker": "PROCESSED"}
+{"at": 1790314689.4395242, "action": "F1_live_exit_before_offset_commit", "seq": 3, "exit": 73, "job": ["SUCCEEDED", 1, null], "handle": "price-analysis-realtime:2:3", "committed_offset": 3}
+{"at": 1790314733.312495, "action": "F1_redelivered", "handle": "price-analysis-realtime:2:3", "first_tick": {"received": 1, "terminal": 1}, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314733.330475, "action": "live_succeeded", "seq": 3, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314734.0942562, "action": "committed_window", "seq": 4, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314734.100111, "action": "live_succeeded", "seq": 4, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314734.952759, "action": "committed_window", "seq": 5, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314734.9582238, "action": "F2_artifact_hidden", "seq": 5, "uri": "canonical/market_data/price_minute/market=KR/session_date=2026-09-25/session_id=msn_8a82f2a2104bc4465f53ff43db/window=0905/content=f7034acc6aeaf069d808bb16723c8af101a20bd2dd236485272f72a2ae7c7121/bars.ndjson"}
+{"at": 1790314737.638182, "action": "F2_retrying", "seq": 5, "job": ["RETRY_WAIT", 2, "ARTIFACT_NOT_FOUND"]}
+{"at": 1790314738.262207, "action": "committed_window", "seq": 6, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314741.294076, "action": "F2_next_window_while_retrying", "seq": 6, "job": ["PENDING", 0, null], "received": null, "failing": ["RETRY_WAIT", 3, "ARTIFACT_NOT_FOUND"]}
+{"at": 1790314741.2947168, "action": "F2_artifact_restored", "seq": 5}
+{"at": 1790314744.7327201, "action": "F2_recovered", "seq": 5, "job": ["SUCCEEDED", 4, null], "seconds_after_restore": 3.43, "next_job": ["SUCCEEDED", 1, null]}
+{"at": 1790314745.312188, "action": "committed_window", "seq": 7, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314745.537992, "action": "live_succeeded", "seq": 7, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314747.0105548, "action": "F4_repair_db_prepared", "reset_jobs": 6, "first_sync": {"minute_ingestion_window": 0, "minute_window_artifact_commit": 0, "price_window_job": 0}, "group_reset": "GROUP                          TOPIC                          PARTITION  NEW-OFFSET     \nprice-repair                   price-analysis-realtime        0          0              \nprice-repair                   price-analysis-realtime        1          0              \nprice-repair                   price-analysis-realtime        2          0"}
+{"at": 1790314748.719738, "action": "F4_repair_exit_before_offset_commit", "exit": 73, "handle": "price-analysis-realtime:2:4", "job": ["SUCCEEDED", 1, null], "committed_offset": 4}
+{"at": 1790314793.082865, "action": "F4_repair_caught_up_to_detection", "ticks": [{"received": 1, "terminal": 1}, {"received": 1, "terminal": 1}, {"received": 1, "succeeded": 1}, {"received": 1, "succeeded": 1}, {"received": 1, "terminal": 1}, {"received": 1, "succeeded": 1}, {"received": 1, "succeeded": 1}, {"received": 1, "succeeded": 1}]}
+{"at": 1790314793.729435, "action": "committed_window", "seq": 8, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314793.941447, "action": "live_succeeded", "seq": 8, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314794.725225, "action": "committed_window", "seq": 9, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314794.7313302, "action": "live_succeeded", "seq": 9, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314798.773073, "action": "F3_broker_restarted", "seconds": 4.04}
+{"at": 1790314799.384619, "action": "committed_window", "seq": 10, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314799.605142, "action": "live_succeeded", "seq": 10, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314800.2001972, "action": "committed_window", "seq": 11, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314800.420137, "action": "live_succeeded", "seq": 11, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314801.466561, "action": "switch_sync_inputs", "live_exit": 0, "repair_orphan_ticks_before": 1, "repair_job_before_sync": null, "synced": {"minute_ingestion_window": 4, "minute_window_artifact_commit": 4, "price_window_job": 4}}
+{"at": 1790314811.2399201, "action": "switch_derived_state_copied_to_live", "tables": ["minute_session_open", "minute_trigger_anchor", "minute_price_trigger"], "note": "\ud30c\uc0dd outbox \ub294 \uc62e\uae30\uc9c0 \uc54a\uc558\ub2e4 \u2014 \ub2a6\uc740 \ubc1c\ud654\uc758 \ubc1c\ud589 \uc5ec\ubd80\ub294 \uc5c5\ubb34 \uacb0\uc815"}
+{"at": 1790314812.039079, "action": "committed_window", "seq": 12, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314812.259213, "action": "live_succeeded", "seq": 12, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314812.8451872, "action": "committed_window", "seq": 13, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314812.85204, "action": "live_succeeded", "seq": 13, "job": ["SUCCEEDED", 1, null]}

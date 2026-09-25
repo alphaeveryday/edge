@@ -1,0 +1,14 @@
+{
+  "last_seq": 1,
+  "window": "2026-09-25 09:01:00+09:00",
+  "live_committed_offsets": {
+    "0": null,
+    "1": null,
+    "2": 2
+  },
+  "anchor": [
+    [
+      "100.000000"
+    ]
+  ]
+}

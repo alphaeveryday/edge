@@ -1,0 +1,43 @@
+{"at": 1790316104.5707796, "pid": 1, "event": "start", "argv": ["price-consumer", "--universe", "/run-data/universe.json"], "crash_offset": "2026-09-25T09:04:00+09:00"}
+{"at": 1790316104.6388512, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:0", "window_start": "2026-09-25T00:00:00Z"}
+{"at": 1790316104.6690185, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:0"}
+{"at": 1790316104.6692119, "pid": 1, "event": "tick", "counts": {"received": 1, "terminal": 1}}
+{"at": 1790316104.6693723, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:1", "window_start": "2026-09-25T00:01:00Z"}
+{"at": 1790316104.6736178, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:1"}
+{"at": 1790316104.6737819, "pid": 1, "event": "tick", "counts": {"received": 1, "terminal": 1}}
+{"at": 1790316104.6739168, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:2", "window_start": "2026-09-25T00:02:00Z"}
+{"at": 1790316104.7044754, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:2"}
+{"at": 1790316104.7046947, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316104.7048573, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:3", "window_start": "2026-09-25T00:03:00Z"}
+{"at": 1790316104.7272573, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:3"}
+{"at": 1790316104.7274907, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316104.7276244, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:4", "window_start": "2026-09-25T00:04:00Z"}
+{"at": 1790316104.7514179, "pid": 1, "event": "exit_before_offset_commit", "handle": "price-analysis-realtime:2:4"}
+{"at": 1790316106.3983774, "pid": 1, "event": "start", "argv": ["price-consumer", "--universe", "/run-data/universe.json"], "crash_offset": null}
+{"at": 1790316149.7324328, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:4", "window_start": "2026-09-25T00:04:00Z"}
+{"at": 1790316149.7746472, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:4"}
+{"at": 1790316149.7748969, "pid": 1, "event": "tick", "counts": {"received": 1, "terminal": 1}}
+{"at": 1790316149.7751036, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:5", "window_start": "2026-09-25T00:05:00Z"}
+{"at": 1790316149.8107774, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:5"}
+{"at": 1790316149.8109965, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316149.811157, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:6", "window_start": "2026-09-25T00:06:00Z"}
+{"at": 1790316149.8395288, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:6"}
+{"at": 1790316149.8397558, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316149.839896, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:7", "window_start": "2026-09-25T00:07:00Z"}
+{"at": 1790316149.8667362, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:7"}
+{"at": 1790316149.8669422, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316150.632009, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:8", "window_start": "2026-09-25T00:08:00Z"}
+{"at": 1790316150.6368535, "pid": 1, "event": "tick", "counts": {"received": 1, "orphan": 1}}
+{"at": 1790316167.0884914, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:8", "window_start": "2026-09-25T00:08:00Z"}
+{"at": 1790316167.131913, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:8"}
+{"at": 1790316167.1321948, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316167.1324217, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:9", "window_start": "2026-09-25T00:09:00Z"}
+{"at": 1790316167.170156, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:9"}
+{"at": 1790316167.17038, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316167.170659, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:10", "window_start": "2026-09-25T00:10:00Z"}
+{"at": 1790316167.2050564, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:10"}
+{"at": 1790316167.2052968, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316167.2056787, "pid": 1, "event": "received", "handle": "price-analysis-realtime:2:11", "window_start": "2026-09-25T00:11:00Z"}
+{"at": 1790316167.2386835, "pid": 1, "event": "committed", "handle": "price-analysis-realtime:2:11"}
+{"at": 1790316167.2389863, "pid": 1, "event": "tick", "counts": {"received": 1, "succeeded": 1}}
+{"at": 1790316168.2404346, "pid": 1, "event": "tick", "counts": {"stopped": 1, "released": 0}}

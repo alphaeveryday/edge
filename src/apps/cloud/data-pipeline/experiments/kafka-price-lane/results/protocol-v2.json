@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "question": "실시간 판정과 과거 입력 복구가 같은 소비 코드·offset 관리로 동작하는가(실제 EDGE 경로)",
+  "prices": [
+    104,
+    100,
+    104,
+    105,
+    100,
+    104,
+    100,
+    104,
+    100,
+    104,
+    100,
+    104,
+    100,
+    104
+  ],
+  "prev_close": 100,
+  "abs_threshold": "0.03",
+  "revert_threshold": "0.01",
+  "real": "Worker commit·outbox·Relay·Kafka·MinuteConsumer kernel·PriceTriggerHandler·PostgreSQL 16",
+  "substituted": "수집기(스크립트 가격), 저장소(LocalStorage 파일)",
+  "faults": {
+    "F1": "운영 소비자: seq3 DB 성공 뒤 offset commit 전 exit 73",
+    "F2": "seq5 artifact 를 숨겨 재시도 — 그동안 seq6 발행",
+    "F3": "seq9 처리 뒤 브로커 재시작",
+    "F4": "seq1 스냅샷 뒤 앵커 100→104 손상, seq7 뒤 발견. 복구 소비자 offset 0 부터 재생, seq4 DB 성공 뒤 offset commit 전 exit 73"
+  },
+  "success": {
+    "S1": "운영 job 전부 SUCCEEDED, poison·misrouted·ahead 0",
+    "S2": "F1 재수신이 실행 없이 terminal 로 commit, job attempt 1",
+    "S3": "F2 동안 seq6 는 수신되지 않고 PENDING, 복구 뒤 순서대로 처리",
+    "S4": "F3 뒤 수동 개입 없이 이어서 처리",
+    "S5": "복구 DB: 스냅샷 이전 job 은 terminal 로 건너뜀, 손상 구간 재판정, 입력 원장 동기화 전 orphan 대기, 동기화 뒤 따라잡음, 트리거·앵커·파생 outbox 가 기대값과 전부 일치",
+    "S6": "전환 뒤 운영 DB 의 트리거·앵커가 전 구간 기대값과 일치",
+    "S7": "운영·복구 컨테이너의 이미지·명령 동일, env 차이는 DB 이름·group·장애 변수뿐",
+    "S8": "복구 DB 재생 전 SUCCEEDED job 집합 = 스냅샷과 같은 트랜잭션에서 읽은 SUCCEEDED 집합"
+  },
+  "not_claimed": "처리량·지연 순위, 복제·HA, 실제 AWS·S3, 운영 전환, 외부 부수효과 exactly-once, 다중 세션·다중 생산자"
+}
