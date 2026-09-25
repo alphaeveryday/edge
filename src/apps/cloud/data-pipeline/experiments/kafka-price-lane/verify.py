@@ -13,6 +13,7 @@ PROTOCOL = json.loads((HERE / "results" / "protocol-v1.json").read_text())   # �
 PRICES = [Decimal(p) for p in PROTOCOL["prices"]]
 START = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)   # 09:00 KST
 SWITCH_AFTER, SNAPSHOT_SEQ = 11, 1
+ETF = "500000"
 V1_RUNS = {"r0", "r1"}   # protocol-v1 로 실행한 결과(S8 대조 기록 없음)
 
 
@@ -42,12 +43,20 @@ def triggers(db):
 
 
 def events(db):
-    return sorted((seq_of(e[2]["window_start"]), e[1]) for e in db["events"])
+    """(창, 종류, 종목, 판정 값) — 종류·창만 보면 payload 가 틀려도 통과한다."""
+    rows = []
+    for _, kind, payload in db["events"]:
+        values = ((Decimal(payload["anchor_price"]), Decimal(payload["close_price"]))
+                  if kind == "PriceTriggerFired"
+                  else (Decimal(payload["prev_close"]), Decimal(payload["close_price"])))
+        rows.append((seq_of(payload["window_start"]), kind, payload["entity_id"], values))
+    return sorted(rows)
 
 
 def expected_events(fires, reverts, skip=()):
-    return sorted([(s, "PriceTriggerFired") for s, *_ in fires if s not in skip]
-                  + [(s, "ExposureReverted") for s in reverts])
+    return sorted([(s, "PriceTriggerFired", ETF, (anchor, close)) for s, anchor, close in fires
+                   if s not in skip]
+                  + [(s, "ExposureReverted", ETF, (Decimal(100), PRICES[s])) for s in reverts])
 
 
 def verify(run):
