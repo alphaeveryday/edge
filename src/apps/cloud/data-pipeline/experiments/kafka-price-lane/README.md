@@ -17,7 +17,7 @@ Docker와 uv가 필요하다. 이 폴더에서:
 ```sh
 docker compose -p kafka-price-lab build
 uv run lab.py r5          # results/r5 에 기록. 같은 이름이 있으면 덮지 않고 실패한다
-python3 verify.py r0 r1 r2 r3 r4   # 결과 파일만으로 성공 조건 재판정
+python3 verify.py r0 r1 r2 r3 r4 r5   # 결과 파일만으로 성공 조건 재판정
 ```
 
 `lab.py`는 시작할 때 `docker compose down -v`로 이 프로젝트(`kafka-price-lab`)의 컨테이너·볼륨을 초기화하고, 끝나면 다시 내린다. 포트는 `127.0.0.1:55442`(PostgreSQL)만 연다.
@@ -96,6 +96,7 @@ python3 verify.py r0 r1 r2 r3 r4   # 결과 파일만으로 성공 조건 재판
 - **Relay 재시도의 순서:** 위 2번. 순서가 필요하면 destination별 선두 사건이 실패할 때 뒤 사건 발행을 멈추는 방식을 따로 검증해야 한다.
 - **다중 세션·다중 파티션·HA:** 한 세션(한 파티션), 단일 브로커만 실행했다.
 - **group session timeout:** 비정상 종료 뒤 약 43초 공백. 값은 조정하지 않았다.
+- **처리 시간 상한(`max.poll.interval.ms`, 기본 300초):** handler가 도는 동안에는 poll이 없어, 한 창의 처리가 이 값을 넘으면 소비자가 그룹에서 빠지고 다음 수신 오류로 CLI가 종료된다. committed offset은 미완료 메시지를 넘지 않으므로 재기동하면 그 지점부터 다시 온다(건너뜀 없음, 가용성 한계). kernel의 lease 기본값(600초)이 이 값보다 길다는 불일치가 있고, 실험의 compose에는 재시작 정책이 없다. 가격 handler는 이번 실험에서 한 창에 1초 미만이었다.
 - **늦게 복원된 발화의 외부 발행:** 범위 밖. 정책이 정해지면 전환 절차에 넣는다.
 
 ## 실패 기록

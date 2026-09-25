@@ -21,8 +21,15 @@ kernel 은 `receive/delete/change_visibility`, Relay 는 `publish_batch` 만 본
 가용성보다 순서를 택했다. ⚠️ **예외는 DEAD 다.** 재시도 예산이 소진되면 kernel 이 DEAD 를
 기록하고 delete 하므로 offset 이 넘어가 다음 창을 판정한다. 그 창의 앵커 변화가 빠져 뒤
 판정이 달라질 수 있고(회수 누락 → 다음 발화 누락), redrive 로 늦게 온 과거 창은 앵커 역전
-가드에 막혀 상태를 되돌리지 못한다 — 복구는 재생 절차다(experiments/kafka-price-lane). 천장: poison 은 DLQ 없이 파티션을 막는다(fail loud). 운영에 쓰려면
-DLQ topic 과 대사 경로가 먼저다.
+가드에 막혀 상태를 되돌리지 못한다 — 복구는 재생 절차다(experiments/kafka-price-lane).
+
+천장: poison 은 DLQ 없이 파티션을 막는다(fail loud). 운영에 쓰려면 DLQ topic 과 대사
+경로가 먼저다.
+
+천장: handler 가 도는 동안 poll 이 없다 — 한 창의 처리가 `max.poll.interval.ms`(기본 300초)를
+넘으면 소비자가 group 에서 빠지고 다음 receive 가 오류로 CLI 를 죽인다. committed offset 은
+미완료 메시지를 넘지 않아 재기동하면 그 자리부터 다시 온다. kernel lease 기본값(600초)보다
+짧다는 불일치가 있다.
 """
 
 from __future__ import annotations
