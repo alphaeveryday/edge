@@ -58,7 +58,7 @@ def verify(run):
     timeline = {e["action"]: e for e in map(json.loads, (folder / "timeline.jsonl").read_text().splitlines())}
     live, repair = state["edge"], state["edge_repair"]
     fires, reverts, final = expected(len(PRICES))
-    r_fires, r_reverts, _ = expected(SWITCH_AFTER + 1)
+    r_fires, r_reverts, r_final = expected(SWITCH_AFTER + 1)
     checks = {}
 
     # S1 — 운영 경로 전 창 성공, 배선 오류 신호 0, offset 이 창 수와 같다(중복 발행 없음)
@@ -98,6 +98,7 @@ def verify(run):
                     and sum(c.get("succeeded", 0) for c in r_ticks) == SWITCH_AFTER - SNAPSHOT_SEQ - 1
                     and any(c.get("orphan") for c in r_ticks)
                     and triggers(repair) == r_fires
+                    and [(Decimal(a[1]), seq_of(a[2])) for a in repair["anchors"]] == [r_final]
                     and events(repair) == expected_events(r_fires, r_reverts)
                     and all(j[1] == "SUCCEEDED" for j in repair["jobs"][:SWITCH_AFTER + 1]))
 
