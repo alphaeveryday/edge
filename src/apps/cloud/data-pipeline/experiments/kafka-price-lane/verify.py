@@ -13,6 +13,7 @@ PROTOCOL = json.loads((HERE / "results" / "protocol-v1.json").read_text())   # �
 PRICES = [Decimal(p) for p in PROTOCOL["prices"]]
 START = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)   # 09:00 KST
 SWITCH_AFTER, SNAPSHOT_SEQ = 11, 1
+V1_RUNS = {"r0", "r1"}   # protocol-v1 로 실행한 결과(S8 대조 기록 없음)
 
 
 def expected(until):
@@ -114,13 +115,19 @@ def verify(run):
         "LAB_EXIT_BEFORE_COMMIT_WINDOW"}
 
     # S8 — 경계: 재생 전 복구 DB 의 SUCCEEDED job = 스냅샷 트랜잭션의 SUCCEEDED 집합(v2 부터)
-    before = folder / "repair-jobs-before-replay.json"
-    if before.exists():
-        snap = {j for j, _ in json.loads((folder / "snapshot-position.json").read_text())["succeeded_jobs"]}
-        done = {j for j, _, status in json.loads(before.read_text()) if status == "SUCCEEDED"}
-        checks["S8"] = bool(snap) and done == snap
+    # v1 실행은 이름으로 고정한다 — 파일 유무로 버전을 추정하면 v2 증거가 빠진 실행이
+    # v1 로 간주돼 통과한다
+    if run in V1_RUNS:
+        checks["S8"] = None   # v1 — 경계를 상수 창 번호로 정했고 대조 기록이 없다
     else:
-        checks["S8"] = None   # v1 실행 — 경계를 상수 창 번호로 정했고 대조 기록이 없다
+        before = folder / "repair-jobs-before-replay.json"
+        position = json.loads((folder / "snapshot-position.json").read_text())
+        if not before.exists() or "succeeded_jobs" not in position:
+            checks["S8"] = False
+        else:
+            snap = {j for j, _ in position["succeeded_jobs"]}
+            done = {j for j, _, status in json.loads(before.read_text()) if status == "SUCCEEDED"}
+            checks["S8"] = bool(snap) and done == snap
     return checks
 
 

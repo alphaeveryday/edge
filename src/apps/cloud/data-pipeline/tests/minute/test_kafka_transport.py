@@ -15,6 +15,7 @@ from data_pipeline.minute.kafka_transport import (
     _partition_key,
     parse_kafka_url,
 )
+from confluent_kafka import KafkaException
 from data_pipeline.minute.relay import OutboxMessage
 
 URL = "kafka://broker:9092/price-analysis-realtime?group=price-live"
@@ -46,7 +47,7 @@ class _FakeConsumer:
     def __init__(self, size):
         self.size, self.position, self.paused = size, 0, False
         self.commits, self.timeouts = [], []
-        self.fail_commit = False
+        self.fail_commit = None
 
     def consume(self, num_messages, timeout):
         self.timeouts.append(timeout)
@@ -58,14 +59,18 @@ class _FakeConsumer:
 
     def commit(self, offsets, asynchronous):
         assert asynchronous is False   # commit 전에 다음 메시지로 가면 안 된다
-        if self.fail_commit:
+        if self.fail_commit == "raise":
             raise RuntimeError("REBALANCE_IN_PROGRESS")
+        if self.fail_commit == "partition":
+            # 동기 commit 의 파티션별 실패는 예외가 아니라 반환값의 error 로 온다
+            return [_Committed(error="UNKNOWN_MEMBER_ID")]
         self.commits.append(offsets[0].offset)
+        return [_Committed(error=None)]
 
     def rebalance(self):
-        """재할당 — 새 소유자는 committed offset 부터 읽고 멈춤 상태는 초기화된다."""
+        """재할당 — committed offset 부터 다시 읽는다. **앱이 건 pause 는 유지된다**
+        (librdkafka 는 할당 해제·재할당에서 라이브러리 pause 만 푼다)."""
         self.position = self.commits[-1] if self.commits else 0
-        self.paused = False
 
     def pause(self, _tps):
         self.paused = True
@@ -169,20 +174,35 @@ def test_commit_failure_never_moves_committed_offset_past_unfinished():
     # committed offset 은 그 메시지를 넘지 않는다 — 재기동하면 실패한 commit 분부터 다시 온다
     queue, fake, _ = _queue()
     (first,) = _receive(queue)
-    fake.fail_commit = True
+    fake.fail_commit = "raise"
     with pytest.raises(RuntimeError):
         queue.delete(queue_url=URL, receipt_handle=first.receipt_handle)
-    fake.fail_commit = False
+    fake.fail_commit = None
     (second,) = _receive(queue)                   # 위치는 이미 지났다(DB 는 terminal)
     assert second.message_id.endswith(":1")
     assert _receive(queue) == ()                  # 두 번째는 판정 보류 → 멈춤
     assert fake.commits == []
-    fake.rebalance()                              # 재기동과 같은 효과
+    queue._on_revoke(None, [_TopicPartition()])   # 재할당(revoke 콜백 → 재할당 순서)
+    fake.rebalance()
     assert _receive(queue)[0].message_id == first.message_id
 
 
 class _TopicPartition:
     topic, partition = "price-analysis-realtime", 0
+
+
+class _Committed:
+    def __init__(self, error):
+        self.error = error
+
+
+def test_partition_commit_error_is_raised_not_recorded_as_success():
+    # 실패한 commit 을 성공으로 넘기면 관측(committed)과 실제 위치가 어긋난다(Rule 12)
+    queue, fake, _ = _queue()
+    (message,) = _receive(queue)
+    fake.fail_commit = "partition"
+    with pytest.raises(KafkaException):
+        queue.delete(queue_url=URL, receipt_handle=message.receipt_handle)
 
 
 class _Producer:

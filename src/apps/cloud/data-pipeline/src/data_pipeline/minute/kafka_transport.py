@@ -89,7 +89,13 @@ class KafkaQueue:
         self._consumer = consumer
 
     def _on_revoke(self, _consumer, partitions) -> None:
-        # 넘긴 파티션의 멈춤·미완 상태는 새 소유자가 committed offset 부터 다시 판정한다
+        # 넘긴 파티션의 멈춤·미완 상태는 새 소유자가 committed offset 부터 다시 판정한다.
+        # ⚠️ 멈춘 파티션은 **여기서 resume** 한다(할당 해제 전) — librdkafka 는 앱이 건
+        # pause 를 재할당 뒤에도 유지하므로, 예약만 지우면 같은 소비자에 돌아온 파티션이
+        # 아무도 풀지 않는 pause 로 영구 정지한다. on_lost 미설정이면 lost 도 여기로 온다.
+        held = [tp for tp in partitions if (tp.topic, tp.partition) in self._held]
+        if held:
+            self._consumer.resume(held)
         for tp in partitions:
             self._held.pop((tp.topic, tp.partition), None)
             if self._inflight and (self._inflight.topic, self._inflight.partition) == (
@@ -135,12 +141,17 @@ class KafkaQueue:
         # commit 이 실패해도 위치는 이미 지났다 — 재기동하면 committed offset 부터 다시
         # 오고, DB 가 terminal 이라 kernel 이 실행 없이 지운다(SQS 삭제 실패와 같은 결과)
         inflight.acked = True
-        from confluent_kafka import TopicPartition
+        from confluent_kafka import KafkaException, TopicPartition
 
-        self._consumer.commit(
+        results = self._consumer.commit(
             offsets=[TopicPartition(inflight.topic, inflight.partition, inflight.offset + 1)],
             asynchronous=False,
         )
+        # 동기 commit 도 파티션별 오류는 예외가 아니라 반환값에 실린다 — 안 보면 실패한
+        # commit 이 성공으로 기록된다. 올리면 kernel(_delete)이 "재배달된다"로 남긴다
+        for result in results or ():
+            if result.error is not None:
+                raise KafkaException(result.error)
 
     def change_visibility(self, *, queue_url: str, receipt_handle: str,
                           seconds: int) -> None:
