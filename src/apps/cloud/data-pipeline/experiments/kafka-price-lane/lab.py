@@ -369,8 +369,11 @@ class Lab:
         for service in ("live", "repair"):
             (info,) = json.loads(subprocess.run(["docker", "inspect", f"{PROJECT}-{service}-1"],
                                                 capture_output=True, text=True, check=True).stdout)
+            # env 는 판정에 쓰는 키만 남긴다 — 베이스 이미지 env(GPG_KEY 등)까지 기록하면
+            # 시크릿 스캔에 걸리고, 결과 파일에 필요 없는 값이 섞인다
             state["containers"][service] = {"image": info["Image"], "cmd": info["Config"]["Cmd"],
-                                            "env": sorted(info["Config"]["Env"])}
+                                            "env": sorted(e for e in info["Config"]["Env"]
+                                                          if e.startswith(("DATA_PIPELINE_", "LAB_")))}
         (self.dir / "state.json").write_text(json.dumps(state, default=str, indent=2))
         (self.dir / "containers.log").write_text(self.compose("logs", "--no-color", capture=True).stdout)
 
