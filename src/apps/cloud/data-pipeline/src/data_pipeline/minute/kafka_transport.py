@@ -17,8 +17,11 @@ kernel 은 `receive/delete/change_visibility`, Relay 는 `publish_batch` 만 본
 한 번에 한 건만 받는다(`max_messages=1`). 여러 건을 받아 일부만 지우면 누적 offset 이
 앞의 미완 메시지를 건너뛴다.
 
-결과: 실패한 창 뒤의 창은 기다린다 — 가격 상태는 순서가 바뀌면 틀리므로 가용성보다
-순서를 택했다. 천장: poison 은 DLQ 없이 파티션을 막는다(fail loud). 운영에 쓰려면
+결과: 재시도·판정 보류 중인 창 뒤의 창은 기다린다 — 가격 상태는 순서가 바뀌면 틀리므로
+가용성보다 순서를 택했다. ⚠️ **예외는 DEAD 다.** 재시도 예산이 소진되면 kernel 이 DEAD 를
+기록하고 delete 하므로 offset 이 넘어가 다음 창을 판정한다. 그 창의 앵커 변화가 빠져 뒤
+판정이 달라질 수 있고(회수 누락 → 다음 발화 누락), redrive 로 늦게 온 과거 창은 앵커 역전
+가드에 막혀 상태를 되돌리지 못한다 — 복구는 재생 절차다(experiments/kafka-price-lane). 천장: poison 은 DLQ 없이 파티션을 막는다(fail loud). 운영에 쓰려면
 DLQ topic 과 대사 경로가 먼저다.
 """
 

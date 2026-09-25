@@ -253,9 +253,13 @@ class Lab:
             # 한다. 하나라도 더 있으면 그 창은 재판정 없이 건너뛰어진다(조용한 누락)
             before = cur.execute("SELECT job_id, window_start, status FROM price_window_job"
                                  " ORDER BY window_start").fetchall()
-            extra = sorted({j for j, _, st in before if st == "SUCCEEDED"} - set(done))
-            if extra:
-                raise AssertionError(f"스냅샷 밖 SUCCEEDED job — 경계 불일치: {extra}")
+            # 양방향이다 — 스냅샷 안인데 SUCCEEDED 가 아닌 job 은 결과가 복원된 창을 다시
+            # 판정하거나(행이 없으면) 뒤늦게 PENDING 으로 끼어든다
+            now_done = {j for j, _, st in before if st == "SUCCEEDED"}
+            if now_done != set(done):
+                raise AssertionError(
+                    f"경계 불일치 — 스냅샷 밖 SUCCEEDED: {sorted(now_done - set(done))}, "
+                    f"스냅샷 안 비SUCCEEDED: {sorted(set(done) - now_done)}")
         (self.dir / "repair-jobs-before-replay.json").write_text(json.dumps(before, default=str, indent=2))
         synced = self.sync_inputs()
         out = self.kafka("/opt/kafka/bin/kafka-consumer-groups.sh", "--bootstrap-server", "localhost:9092",

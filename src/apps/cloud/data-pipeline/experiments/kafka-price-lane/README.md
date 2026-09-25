@@ -36,7 +36,7 @@ python3 verify.py r0 r1 r2 r3 r4   # 결과 파일만으로 성공 조건 재판
 **복구 절차(F4):**
 
 0. 스냅샷: 판정 파생 상태(`minute_session_open`·`minute_trigger_anchor`·`minute_price_trigger`·파생 outbox)와 **그 시점 SUCCEEDED job 집합**을 한 REPEATABLE READ 트랜잭션에서 뜬다
-1. 복구 DB `edge_repair` = 운영 DB 복사 → 파생 상태만 스냅샷으로 되돌림 → 스냅샷의 SUCCEEDED 집합 **밖**의 job을 PENDING으로 초기화 → 복구 DB에 남은 SUCCEEDED가 그 집합과 다르면 중단
+1. 복구 DB `edge_repair` = 운영 DB 복사 → 파생 상태만 스냅샷으로 되돌림 → 스냅샷의 SUCCEEDED 집합 **밖**의 job을 PENDING으로 초기화 → 복구 DB에 남은 SUCCEEDED가 그 집합과 다르면(양방향) 중단
 2. `kafka-consumer-groups --reset-offsets --to-earliest`로 복구 group을 **offset 0**에 둔다
 3. 운영과 **같은 이미지·같은 명령**의 `repair` 서비스를 띄운다(DB 이름과 group만 다름). seq4에서 offset commit 전 exit 73 → 재기동
 4. 운영은 그동안 seq8~11을 계속 처리한다. 복구 소비자는 seq8에서 job 행이 없어 `orphan`으로 멈춘다
