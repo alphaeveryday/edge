@@ -1,0 +1,23 @@
+{"at": 1790314591.9815779, "action": "planned", "session": "msn_8a82f2a2104bc4465f53ff43db", "windows": 14}
+{"at": 1790314592.9784808, "action": "committed_window", "seq": 0, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314596.1673548, "action": "live_succeeded", "seq": 0, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314596.788129, "action": "committed_window", "seq": 1, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314596.795824, "action": "live_succeeded", "seq": 1, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314597.742107, "action": "F4_snapshot_then_corrupt_anchor", "position": {"last_seq": 1, "window": "2026-09-25 09:01:00+09:00", "live_committed_offsets": {"0": null, "1": null, "2": 2}, "anchor": [["100.000000"]]}, "corrupted_rows": 1}
+{"at": 1790314598.392771, "action": "committed_window", "seq": 2, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314598.400531, "action": "live_succeeded", "seq": 2, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314598.973985, "action": "committed_window", "seq": 3, "close": 105, "worker": "PROCESSED"}
+{"at": 1790314600.024854, "action": "F1_live_exit_before_offset_commit", "seq": 3, "exit": 73, "job": ["SUCCEEDED", 1, null], "handle": "price-analysis-realtime:2:3", "committed_offset": 3}
+{"at": 1790314644.062751, "action": "F1_redelivered", "handle": "price-analysis-realtime:2:3", "first_tick": {"received": 1, "terminal": 1}, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314644.081585, "action": "live_succeeded", "seq": 3, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314644.912631, "action": "committed_window", "seq": 4, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314644.92255, "action": "live_succeeded", "seq": 4, "job": ["SUCCEEDED", 1, null]}
+{"at": 1790314645.815434, "action": "committed_window", "seq": 5, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314645.823458, "action": "F2_artifact_hidden", "seq": 5, "uri": "canonical/market_data/price_minute/market=KR/session_date=2026-09-25/session_id=msn_8a82f2a2104bc4465f53ff43db/window=0905/content=f7034acc6aeaf069d808bb16723c8af101a20bd2dd236485272f72a2ae7c7121/bars.ndjson"}
+{"at": 1790314648.502572, "action": "F2_retrying", "seq": 5, "job": ["CLAIMED", 2, "ARTIFACT_NOT_FOUND"]}
+{"at": 1790314649.164125, "action": "committed_window", "seq": 6, "close": 100, "worker": "PROCESSED"}
+{"at": 1790314652.1812081, "action": "F2_next_window_while_retrying", "seq": 6, "job": ["PENDING", 0, null], "received": null, "failing": ["RETRY_WAIT", 3, "ARTIFACT_NOT_FOUND"]}
+{"at": 1790314652.18146, "action": "F2_artifact_restored", "seq": 5}
+{"at": 1790314655.174646, "action": "F2_recovered", "seq": 5, "job": ["SUCCEEDED", 4, null], "seconds_after_restore": 2.99, "next_job": ["SUCCEEDED", 1, null]}
+{"at": 1790314655.7708402, "action": "committed_window", "seq": 7, "close": 104, "worker": "PROCESSED"}
+{"at": 1790314655.985773, "action": "live_succeeded", "seq": 7, "job": ["SUCCEEDED", 1, null]}

@@ -565,9 +565,15 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
             "(DATA_PIPELINE_MINUTE_RELAY__QUEUE_URLS='{\"<destination>\":\"<url>\"}' 주입)"
         )
     options = settings.minute_relay
+    from .kafka_transport import KafkaPublisher, is_kafka_url
+
+    kafka_urls = [url for url in options.queue_urls.values() if is_kafka_url(url)]
+    if kafka_urls and len(kafka_urls) != len(options.queue_urls):
+        # 발행기는 하나다 — 섞으면 한쪽 URL 이 엉뚱한 발행기로 가서 전부 실패한다
+        raise SystemExit("queue_urls 에 kafka:// 와 SQS URL 이 섞였다 — 한 종류로 맞춰라")
     relay = OutboxRelay(
         jobs=JobLedger(db=settings.db),
-        publisher=SqsPublisher(),
+        publisher=KafkaPublisher() if kafka_urls else SqsPublisher(),
         config=RelayConfig(
             relay_id=f"relay-{socket.gethostname()}-{os.getpid()}",
             queue_urls=dict(options.queue_urls),

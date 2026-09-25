@@ -62,11 +62,13 @@ jobs:
         # --python 3.12: 프로덕션 이미지(python:3.12-slim)와 러너 인터프리터를 고정 일치.
         # --package: 워크스페이스 합집합이 아니라 그 앱 의존만 설치 — 교차 의존 누수가
         # CI 에선 green, 프로드 이미지에선 ImportError 로 갈리는 것을 차단한다.
-        run: uv sync --locked --python 3.12 --package ${{ matrix.app }}
+        # data-pipeline 은 테스트 환경에만 kafka 그룹을 더한다 — Kafka transport 어댑터
+        # 테스트가 실제로 돌아야 한다(운영 이미지 Dockerfile 은 그룹을 설치하지 않는다).
+        run: uv sync --locked --python 3.12 --package ${{ matrix.app }} ${{ matrix.app == 'data-pipeline' && '--group kafka' || '' }}
 
       - name: pytest ${{ matrix.app }}
         working-directory: src
-        run: uv run --package ${{ matrix.app }} pytest apps/cloud/${{ matrix.app }}/tests -q
+        run: uv run --package ${{ matrix.app }} ${{ matrix.app == 'data-pipeline' && '--group kafka' || '' }} pytest apps/cloud/${{ matrix.app }}/tests -q
 
       - name: pytest ontology contracts
         if: matrix.app == 'data-pipeline'

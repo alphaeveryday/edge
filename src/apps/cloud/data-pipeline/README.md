@@ -269,8 +269,10 @@
 Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `src/pyproject.toml`.
 
 ```bash
-uv sync --package data-pipeline --group dev                         # src/에서 의존성 설치
-uv run --package data-pipeline --group dev pytest apps/cloud/data-pipeline/tests
+uv sync --package data-pipeline --group dev --group kafka           # src/에서 의존성 설치
+uv run --package data-pipeline --group dev --group kafka pytest apps/cloud/data-pipeline/tests
+# kafka 그룹은 테스트 환경 전용이다(Kafka transport 로컬 개발판 — minute/kafka_transport.py).
+# 운영 이미지는 설치하지 않는다. 빠지면 그 테스트가 skip 이 아니라 실패한다(CI 도 설치한다).
 
 # 뉴스 원본저장(Step1) — 기본은 local 스토리지(./.lake), FMP 키는 env 로
 # 날짜창 미지정 = 증분(어제~오늘, 앱이 계산). 백필은 --from/--to 로 구간 지정.
@@ -738,7 +740,7 @@ LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 > uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/data-pipeline`에서, pip ≥ 25.1):
 > ```bash
 > python3 -m venv .venv
-> .venv/bin/pip install -e . --group dev   # dev 그룹(pytest)은 PEP 735 [dependency-groups]
+> .venv/bin/pip install -e . --group dev --group kafka   # PEP 735 [dependency-groups] — dev(pytest)·kafka(어댑터 테스트)
 > .venv/bin/pytest
 > ```
 
@@ -2080,6 +2082,9 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 # revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은
 # 파일/객체(s3://… 지원). --max-ticks 는 로컬 확인용 — 배선 오류 신호
 # (poison·misrouted·orphan·ahead)가 있으면 exit 1.
+# QUEUE_URL 이 kafka://<bootstrap>/<topic>?group=<id> 면 Kafka transport **로컬 개발판**을
+# 쓴다(kafka 그룹 필요, batch_size=1 — 운영 경로 아님). 절차·한계는
+# experiments/kafka-price-lane/README.md. relay 의 QUEUE_URLS 도 같은 scheme 을 받는다(혼용 거부).
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2.1 \

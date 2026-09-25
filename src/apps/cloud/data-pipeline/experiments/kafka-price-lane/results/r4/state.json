@@ -1,0 +1,743 @@
+{
+  "edge": {
+    "triggers": [
+      [
+        "2026-09-25 00:00:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_f653e2ce5c904debd49207529f"
+      ],
+      [
+        "2026-09-25 00:02:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_2072f31fa9447c2bc3809d4833"
+      ],
+      [
+        "2026-09-25 00:05:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_5c8b04796de329c62f943fa763"
+      ],
+      [
+        "2026-09-25 00:07:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_280cf422c57e988f7ce3593e5a"
+      ],
+      [
+        "2026-09-25 00:09:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_814ae7df5cf8cc7dd0d5ae11ce"
+      ],
+      [
+        "2026-09-25 00:11:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_929c77304014d513019ed034c3"
+      ],
+      [
+        "2026-09-25 00:13:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_c68bdbd056e0cec5b5c711e04c"
+      ]
+    ],
+    "anchors": [
+      [
+        "500000",
+        "104.000000",
+        "2026-09-25 00:13:00+00:00"
+      ]
+    ],
+    "events": [
+      [
+        "ExposureReverted:mrv_4369856b8c14e00feaf8346f01:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:01:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_761ab56b6274b69434d31ba9b3:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:08:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_8739608844cf4d8d41862f2bd0:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:12:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_880a574e02639002cdbc554df7:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:10:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_a229885b8d8c1709b7634b5e6a:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:06:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_e8ab773f03146bc9dc9c6762cc:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:04:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_280cf422c57e988f7ce3593e5a:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_280cf422c57e988f7ce3593e5a",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:07:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_5c8b04796de329c62f943fa763:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_5c8b04796de329c62f943fa763",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:05:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_814ae7df5cf8cc7dd0d5ae11ce:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_814ae7df5cf8cc7dd0d5ae11ce",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:09:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_929c77304014d513019ed034c3:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_929c77304014d513019ed034c3",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:11:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_c68bdbd056e0cec5b5c711e04c:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_c68bdbd056e0cec5b5c711e04c",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:13:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_f653e2ce5c904debd49207529f:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_f653e2ce5c904debd49207529f",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:00:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ]
+    ],
+    "jobs": [
+      [
+        "2026-09-25 00:00:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:01:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:02:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:03:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:04:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:05:00+00:00",
+        "SUCCEEDED",
+        4,
+        null
+      ],
+      [
+        "2026-09-25 00:06:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:07:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:08:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:09:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:10:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:11:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:12:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:13:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ]
+    ]
+  },
+  "edge_repair": {
+    "triggers": [
+      [
+        "2026-09-25 00:00:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_f653e2ce5c904debd49207529f"
+      ],
+      [
+        "2026-09-25 00:02:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_2072f31fa9447c2bc3809d4833"
+      ],
+      [
+        "2026-09-25 00:05:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_5c8b04796de329c62f943fa763"
+      ],
+      [
+        "2026-09-25 00:07:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_280cf422c57e988f7ce3593e5a"
+      ],
+      [
+        "2026-09-25 00:09:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_814ae7df5cf8cc7dd0d5ae11ce"
+      ],
+      [
+        "2026-09-25 00:11:00+00:00",
+        "500000",
+        "100.000000",
+        "104.000000",
+        "100.000000",
+        "0.04000000",
+        1,
+        "mpt_929c77304014d513019ed034c3"
+      ]
+    ],
+    "anchors": [
+      [
+        "500000",
+        "104.000000",
+        "2026-09-25 00:11:00+00:00"
+      ]
+    ],
+    "events": [
+      [
+        "ExposureReverted:mrv_4369856b8c14e00feaf8346f01:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:01:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_761ab56b6274b69434d31ba9b3:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:08:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_880a574e02639002cdbc554df7:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:10:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_a229885b8d8c1709b7634b5e6a:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:06:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "ExposureReverted:mrv_e8ab773f03146bc9dc9c6762cc:0",
+        "ExposureReverted",
+        {
+          "entity_id": "500000",
+          "prev_close": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "close_price": "100",
+          "open_change": "0",
+          "window_start": "2026-09-25T00:04:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_2072f31fa9447c2bc3809d4833:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_2072f31fa9447c2bc3809d4833",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:02:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_280cf422c57e988f7ce3593e5a:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_280cf422c57e988f7ce3593e5a",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:07:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_5c8b04796de329c62f943fa763:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_5c8b04796de329c62f943fa763",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:05:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_814ae7df5cf8cc7dd0d5ae11ce:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_814ae7df5cf8cc7dd0d5ae11ce",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:09:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_929c77304014d513019ed034c3:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_929c77304014d513019ed034c3",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:11:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ],
+      [
+        "PriceTriggerFired:mpt_f653e2ce5c904debd49207529f:0",
+        "PriceTriggerFired",
+        {
+          "entity_id": "500000",
+          "threshold": "0.03",
+          "generation": 1,
+          "open_price": "100.000000",
+          "session_id": "msn_8a82f2a2104bc4465f53ff43db",
+          "trigger_id": "mpt_f653e2ce5c904debd49207529f",
+          "change_rate": "0.04",
+          "close_price": "104",
+          "anchor_price": "100.000000",
+          "window_start": "2026-09-25T00:00:00Z",
+          "detection_policy_version": "intraday-anchor-v2"
+        }
+      ]
+    ],
+    "jobs": [
+      [
+        "2026-09-25 00:00:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:01:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:02:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:03:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:04:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:05:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:06:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:07:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:08:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:09:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:10:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ],
+      [
+        "2026-09-25 00:11:00+00:00",
+        "SUCCEEDED",
+        1,
+        null
+      ]
+    ]
+  },
+  "offsets": {
+    "price-live": {
+      "0": null,
+      "1": null,
+      "2": 14
+    },
+    "price-repair": {
+      "0": 0,
+      "1": 0,
+      "2": 12
+    }
+  },
+  "containers": {
+    "live": {
+      "image": "sha256:b487676fa18fcab0f61a49102a9fcd81259ce91d4ae681fec36d10a3e01fe708",
+      "cmd": [
+        "python",
+        "/lab/entry.py",
+        "price-consumer",
+        "--universe",
+        "/run-data/universe.json"
+      ],
+      "env": [
+        "DATA_PIPELINE_DB__HOST=postgres",
+        "DATA_PIPELINE_DB__NAME=edge",
+        "DATA_PIPELINE_DB__PASSWORD=edge",
+        "DATA_PIPELINE_DB__PORT=5432",
+        "DATA_PIPELINE_DB__SSLMODE=disable",
+        "DATA_PIPELINE_DB__USER=edge",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__BATCH_SIZE=1",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__HEARTBEAT_SECONDS=1",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__LEASE_SECONDS=16",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__MAX_ATTEMPTS=20",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=kafka://kafka:9092/price-analysis-realtime?group=price-live",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__RETRY_BASE_SECONDS=1",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__RETRY_MAX_SECONDS=4",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__VISIBILITY_SECONDS=16",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__WAIT_SECONDS=1",
+        "DATA_PIPELINE_STORAGE__BACKEND=local",
+        "DATA_PIPELINE_STORAGE__LOCAL_ROOT=/run-data/lake",
+        "LAB_EXIT_BEFORE_COMMIT_WINDOW=",
+        "LAB_NAME=live"
+      ]
+    },
+    "repair": {
+      "image": "sha256:b487676fa18fcab0f61a49102a9fcd81259ce91d4ae681fec36d10a3e01fe708",
+      "cmd": [
+        "python",
+        "/lab/entry.py",
+        "price-consumer",
+        "--universe",
+        "/run-data/universe.json"
+      ],
+      "env": [
+        "DATA_PIPELINE_DB__HOST=postgres",
+        "DATA_PIPELINE_DB__NAME=edge_repair",
+        "DATA_PIPELINE_DB__PASSWORD=edge",
+        "DATA_PIPELINE_DB__PORT=5432",
+        "DATA_PIPELINE_DB__SSLMODE=disable",
+        "DATA_PIPELINE_DB__USER=edge",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__BATCH_SIZE=1",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__HEARTBEAT_SECONDS=1",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__LEASE_SECONDS=16",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__MAX_ATTEMPTS=20",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=kafka://kafka:9092/price-analysis-realtime?group=price-repair",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__RETRY_BASE_SECONDS=1",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__RETRY_MAX_SECONDS=4",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__VISIBILITY_SECONDS=16",
+        "DATA_PIPELINE_MINUTE_PRICE_CONSUMER__WAIT_SECONDS=1",
+        "DATA_PIPELINE_STORAGE__BACKEND=local",
+        "DATA_PIPELINE_STORAGE__LOCAL_ROOT=/run-data/lake",
+        "LAB_EXIT_BEFORE_COMMIT_WINDOW=",
+        "LAB_NAME=repair"
+      ]
+    }
+  }
+}
