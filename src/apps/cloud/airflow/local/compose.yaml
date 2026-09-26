@@ -1,0 +1,80 @@
+# 장중 수급 레인 — 기존 경로(배포 ASL 재현)와 Airflow 경로의 로컬 비교. lab.py 가 구동한다.
+# 포트는 127.0.0.1 에만 연다. 운영 AWS·외부 업무 API 를 부르지 않는다(AWS 는 fake-aws 대역).
+x-app: &app
+  build: {context: ../../../.., dockerfile: apps/cloud/airflow/local/Dockerfile}
+  image: edge-airflow-migration-lab:local
+  environment: &biz
+    DATA_PIPELINE_DB__HOST: postgres
+    DATA_PIPELINE_DB__PORT: "5432"
+    DATA_PIPELINE_DB__NAME: edge
+    DATA_PIPELINE_DB__USER: edge
+    DATA_PIPELINE_DB__PASSWORD: edge
+    DATA_PIPELINE_DB__SSLMODE: disable
+    DATA_PIPELINE_STORAGE__BACKEND: local
+    DATA_PIPELINE_STORAGE__LOCAL_ROOT: /lab-data/lake
+    AWS_ACCESS_KEY_ID: lab
+    AWS_SECRET_ACCESS_KEY: lab
+    AWS_DEFAULT_REGION: ap-northeast-2
+
+services:
+  postgres:
+    image: postgres:16
+    environment: {POSTGRES_DB: edge, POSTGRES_USER: edge, POSTGRES_PASSWORD: edge}
+    ports: ["127.0.0.1:55472:5432"]
+    healthcheck: {test: [CMD-SHELL, pg_isready -U edge -d edge], interval: 1s, retries: 30}
+
+  flyway:
+    image: flyway/flyway:10.21.0
+    depends_on: {postgres: {condition: service_healthy}}
+    volumes: ["../../../../libs/schema/migrations-cloud:/flyway/sql:ro"]
+    command: -url=jdbc:postgresql://postgres:5432/edge -user=edge -password=edge -connectRetries=10 -locations=filesystem:/flyway/sql migrate
+
+  # ECS·SNS·SFN 대역. 업무 스텝은 이 컨테이너의 서브프로세스로 돈다(= 실행 관리와 분리된 "컨테이너").
+  fake-aws:
+    <<: *app
+    entrypoint: ["/opt/dp/bin/python", "/lab/fake_aws.py"]
+    depends_on: {flyway: {condition: service_completed_successfully}}
+    volumes: [".:/lab:ro", "./inputs:/inputs:ro", "../../data-pipeline/src:/dp-src:ro", "labdata:/lab-data"]
+    environment:
+      <<: *biz
+      PYTHONPATH: /dp-src
+      OPS_KR_HOLIDAYS: ${OPS_KR_HOLIDAYS:-}
+      # 업무 코드의 boto3(plan-run 의 StartExecution)도 대역으로 간다.
+      AWS_ENDPOINT_URL: http://127.0.0.1:4566
+    ports: ["127.0.0.1:54566:4566"]
+
+  airflow-db:
+    image: postgres:16
+    environment: {POSTGRES_DB: airflow, POSTGRES_USER: airflow, POSTGRES_PASSWORD: airflow}
+    healthcheck: {test: [CMD-SHELL, pg_isready -U airflow -d airflow], interval: 1s, retries: 30}
+
+  airflow:
+    <<: *app
+    command: ["standalone"]
+    depends_on:
+      airflow-db: {condition: service_healthy}
+      fake-aws: {condition: service_started}
+    volumes: ["../dags:/opt/edge/dags:ro"]
+    ports: ["127.0.0.1:58100:8080"]
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/edge/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+      AIRFLOW__CORE__PARALLELISM: "4"
+      AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "15"
+      # 실행 관리 프로세스 중단 시험을 짧게 — 기본 300s.
+      AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "30"
+      AIRFLOW_CONN_AWS_DEFAULT: '{"conn_type": "aws", "login": "lab", "password": "lab", "extra": {"endpoint_url": "http://fake-aws:4566", "region_name": "ap-northeast-2"}}'
+      EDGE_ECS_CLUSTER: arn:aws:ecs:ap-northeast-2:000000000000:cluster/edge-lab
+      EDGE_ECS_TASKDEF_PREFIX: edge-dev-data-pipeline
+      EDGE_ECS_SUBNETS: subnet-lab
+      EDGE_ECS_SECURITY_GROUPS: sg-lab
+      EDGE_ALARM_TOPIC_ARN: arn:aws:sns:ap-northeast-2:000000000000:edge-lab-alarms
+      EDGE_LAB_TODAY_KST: ${EDGE_LAB_TODAY_KST:-}
+    healthcheck: {test: [CMD-SHELL, "curl -fs localhost:8080/api/v2/monitor/health"], interval: 3s, retries: 80}
+
+volumes:
+  labdata:
