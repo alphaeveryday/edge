@@ -1,0 +1,6 @@
+# 원본 raw 는 커밋하지 않는다 — inputs.json 의 run_id·sha256 로 재현한다(README "실행")
+inputs/raw/
+# 원시 결과 로그는 보존한다(루트 .gitignore 의 *.log 를 이 폴더 결과에만 되돌린다)
+!results/**/*.log
+# dag-processor 런타임 로그는 결과가 아니다
+results/*/airflow-logs/dag_processor/

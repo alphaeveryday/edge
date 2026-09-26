@@ -1,0 +1,74 @@
+# Airflow 백필·부분 복구 로컬 실험 — 실행은 trial.py 가 한다(README.md).
+# 포트는 127.0.0.1 에만 연다. 클라우드 자원을 만들지 않는다.
+x-app: &app
+  build:
+    context: ../../../../..
+    dockerfile: apps/cloud/data-pipeline/experiments/airflow-backfill/Dockerfile
+  image: edge-airflow-backfill-lab:local
+  volumes:
+    - .:/lab:ro
+    - ./inputs:/inputs:ro
+    - labdata:/lab-data
+  environment: &env
+    DATA_PIPELINE_DB__HOST: postgres
+    DATA_PIPELINE_DB__PORT: "5432"
+    DATA_PIPELINE_DB__NAME: edge
+    DATA_PIPELINE_DB__USER: edge
+    DATA_PIPELINE_DB__PASSWORD: edge
+    DATA_PIPELINE_DB__SSLMODE: disable
+    DATA_PIPELINE_STORAGE__BACKEND: local
+    DATA_PIPELINE_STORAGE__LOCAL_ROOT: /lab-data/lake
+    # AWS 자격증명을 넘기지 않는다 — 업무 코드가 AWS 를 부르면 실패해야 한다.
+    AWS_ACCESS_KEY_ID: ""
+    AWS_SECRET_ACCESS_KEY: ""
+    AWS_DEFAULT_REGION: ap-northeast-2
+  depends_on:
+    flyway: {condition: service_completed_successfully}
+
+services:
+  postgres:
+    image: postgres:16
+    environment: {POSTGRES_DB: edge, POSTGRES_USER: edge, POSTGRES_PASSWORD: edge}
+    ports: ["127.0.0.1:55452:5432"]
+    healthcheck: {test: [CMD-SHELL, pg_isready -U edge -d edge], interval: 1s, retries: 30}
+
+  flyway:
+    image: flyway/flyway:10.21.0
+    depends_on: {postgres: {condition: service_healthy}}
+    volumes: ["../../../../../libs/schema/migrations-cloud:/flyway/sql:ro"]
+    command: -url=jdbc:postgresql://postgres:5432/edge -user=edge -password=edge -connectRetries=10 -locations=filesystem:/flyway/sql migrate
+
+  # A·B 실행 컨테이너 — Airflow 없이 같은 이미지·같은 업무 코드
+  runner:
+    <<: *app
+    entrypoint: ["sleep", "infinity"]
+    environment: {<<: *env, LAB_CANDIDATE: runner}
+
+  airflow-db:
+    image: postgres:16
+    environment: {POSTGRES_DB: airflow, POSTGRES_USER: airflow, POSTGRES_PASSWORD: airflow}
+    healthcheck: {test: [CMD-SHELL, pg_isready -U airflow -d airflow], interval: 1s, retries: 30}
+
+  # C — 단일 컨테이너 standalone(api-server·scheduler·dag-processor·triggerer), LocalExecutor
+  airflow:
+    <<: *app
+    command: ["standalone"]
+    depends_on:
+      flyway: {condition: service_completed_successfully}
+      airflow-db: {condition: service_healthy}
+    ports: ["127.0.0.1:58080:8080"]
+    environment:
+      <<: *env
+      LAB_CANDIDATE: C
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /lab/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+      AIRFLOW__CORE__PARALLELISM: "1"
+      AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
+    healthcheck: {test: [CMD-SHELL, "curl -fs localhost:8080/api/v2/monitor/health"], interval: 3s, retries: 60}
+
+volumes:
+  labdata:

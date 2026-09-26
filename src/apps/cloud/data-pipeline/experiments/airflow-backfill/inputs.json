@@ -1,0 +1,54 @@
+{
+ "source": "s3://edge-dev-pipeline-lake (read-only copy 2026-09-26)",
+ "inputs": [
+  {
+   "business_date": "2026-09-15",
+   "run_id": "run_4d874712b33854a818c2c8f572",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-15/run_id=run_4d874712b33854a818c2c8f572/part-00000.ndjson",
+   "sha256": "7a33e6df59b9d63d79fe13ff9b1d0647801b793d960f05e8d552ed735e965ce5",
+   "lines": 1711
+  },
+  {
+   "business_date": "2026-09-16",
+   "run_id": "run_f855401d7506e10e2f5b51f1b8",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-16/run_id=run_f855401d7506e10e2f5b51f1b8/part-00000.ndjson",
+   "sha256": "c4f4b24296c693da4703298ce63a60ec5ffef0eb6a3174b361c3f2a476c1c536",
+   "lines": 1713
+  },
+  {
+   "business_date": "2026-09-17",
+   "run_id": "run_d45be5621ac3511a661261030c",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-17/run_id=run_d45be5621ac3511a661261030c/part-00000.ndjson",
+   "sha256": "c7c6ac87bfa8cbebc09ab13d0390d213b5875ac64b235022639df97fa8dfa04a",
+   "lines": 1715
+  },
+  {
+   "business_date": "2026-09-18",
+   "run_id": "run_78168e8d63f9a2c0b1cc406fab",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-18/run_id=run_78168e8d63f9a2c0b1cc406fab/part-00000.ndjson",
+   "sha256": "2ffd731c3e9adbe1ac7edf886c449bf7c36df1cdd471535a313f73dc4dc47675",
+   "lines": 2054
+  },
+  {
+   "business_date": "2026-09-21",
+   "run_id": "run_5dde9fe0f9cca0e2316a0c3706",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-21/run_id=run_5dde9fe0f9cca0e2316a0c3706/part-00000.ndjson",
+   "sha256": "4457194f25438e24fde5cb3b9580a6e75118c5caf44bb9dc4a739ad3a64b7c41",
+   "lines": 1648
+  },
+  {
+   "business_date": "2026-09-22",
+   "run_id": "run_d0806a79474da3ee0ea89d16bd",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-22/run_id=run_d0806a79474da3ee0ea89d16bd/part-00000.ndjson",
+   "sha256": "d58a712eaddd22d5ef1d1ad7a5a2ef5e2d1962b6de7306ac567e52f9f556ccbf",
+   "lines": 1649
+  },
+  {
+   "business_date": "2026-09-23",
+   "run_id": "run_61783effcb2fd13db51ebbd601",
+   "raw_key": "raw/source=kis/dataset=price_daily/market=KR/ingest_date=2026-09-23/run_id=run_61783effcb2fd13db51ebbd601/part-00000.ndjson",
+   "sha256": "926b3cdb150a0f473b04fe3e2b9520e4148a7f549a75332626a2674beaa7f289",
+   "lines": 1650
+  }
+ ]
+}

@@ -1,0 +1,6331 @@
+[
+ {
+  "candidate": "A",
+  "scenario": "N",
+  "faults": [],
+  "request_sec": 5.38,
+  "observed": {
+   "notified": []
+  },
+  "after_request": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 0
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 7,
+    "load-price-daily:ok": 7
+   }
+  },
+  "invocation_log": [
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361937.6704924,
+    "ended": 1790361937.8713648
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361937.871486,
+    "ended": 1790361938.3193047
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361938.319453,
+    "ended": 1790361938.613271
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361938.613387,
+    "ended": 1790361939.1358438
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361939.1360326,
+    "ended": 1790361939.445386
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361939.4454584,
+    "ended": 1790361939.946698
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361939.9468396,
+    "ended": 1790361940.0880015
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361940.0881035,
+    "ended": 1790361940.6542468
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361940.654391,
+    "ended": 1790361940.7955592
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361940.7956316,
+    "ended": 1790361941.259992
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361941.2602012,
+    "ended": 1790361941.4200275
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361941.4201655,
+    "ended": 1790361941.914658
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361941.9147947,
+    "ended": 1790361942.0798287
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361942.0799036,
+    "ended": 1790361942.551662
+   }
+  ]
+ },
+ {
+  "candidate": "B",
+  "scenario": "N",
+  "faults": [],
+  "request_sec": 5.47,
+  "observed": {
+   "summary": "{\"2026-09-15\": \"ok\", \"2026-09-16\": \"ok\", \"2026-09-17\": \"ok\", \"2026-09-18\": \"ok\", \"2026-09-21\": \"ok\", \"2026-09-22\": \"ok\", \"2026-09-23\": \"ok\"}"
+  },
+  "after_request": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 0
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 7,
+    "load-price-daily:ok": 7
+   }
+  },
+  "invocation_log": [
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361944.3793523,
+    "ended": 1790361944.5469596
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361944.547095,
+    "ended": 1790361944.994035
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361945.0087857,
+    "ended": 1790361945.3011568
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361945.3012269,
+    "ended": 1790361945.8217304
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361945.8359427,
+    "ended": 1790361946.144276
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361946.1443522,
+    "ended": 1790361946.6489584
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361946.6635735,
+    "ended": 1790361946.803393
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361946.8034956,
+    "ended": 1790361947.3909464
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361947.405476,
+    "ended": 1790361947.5451272
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361947.54521,
+    "ended": 1790361948.0274801
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361948.0451677,
+    "ended": 1790361948.195775
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361948.1958637,
+    "ended": 1790361948.6515894
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361948.6661716,
+    "ended": 1790361948.8260782
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361948.8262055,
+    "ended": 1790361949.2922204
+   }
+  ]
+ },
+ {
+  "candidate": "C",
+  "scenario": "N",
+  "faults": [],
+  "request_sec": 60.8,
+  "observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "success",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "success"
+   }
+  },
+  "after_request": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 0
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 7,
+    "load-price-daily:ok": 7
+   }
+  },
+  "invocation_log": [
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361958.6498969,
+    "ended": 1790361958.8514988
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361959.699826,
+    "ended": 1790361960.1991193
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361963.8860526,
+    "ended": 1790361964.2349966
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361964.9385667,
+    "ended": 1790361965.4818475
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361968.6853845,
+    "ended": 1790361969.0335767
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361969.7441113,
+    "ended": 1790361970.31395
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361974.3667207,
+    "ended": 1790361974.5458467
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361975.414391,
+    "ended": 1790361976.0583556
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361979.7286294,
+    "ended": 1790361979.9213617
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361980.7846057,
+    "ended": 1790361981.29195
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361984.9823678,
+    "ended": 1790361985.1789012
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361985.7188814,
+    "ended": 1790361986.2487297
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361990.7875364,
+    "ended": 1790361991.0225763
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790361991.830877,
+    "ended": 1790361992.352774
+   }
+  ]
+ },
+ {
+  "candidate": "A",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 3.94,
+  "observed": {
+   "notified": [
+    "run_d45be5621ac3511a661261030c",
+    "run_61783effcb2fd13db51ebbd601"
+   ]
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "normalize-price --run-id manual_1261030c_1790362022 --input-run-id run_d45be5621ac3511a661261030c",
+   "load-price-daily --run-id manual_1261030c_1790362022 --input-run-id manual_1261030c_1790362022",
+   "normalize-price --run-id manual_1ebbd601_1790362024 --input-run-id run_61783effcb2fd13db51ebbd601",
+   "load-price-daily --run-id manual_1ebbd601_1790362024 --input-run-id manual_1ebbd601_1790362024"
+  ],
+  "recovery_sec": 4.37,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 3347
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "notified": []
+  },
+  "rerequest_sec": 6.85,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 0
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {
+    "normalize-price:ok": 7,
+    "load-price-daily:ok": 7
+   }
+  },
+  "invocation_log": [
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362018.023064,
+    "ended": 1790362018.2351456
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362018.2352521,
+    "ended": 1790362018.6714745
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362018.6716158,
+    "ended": 1790362018.961161
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362018.961234,
+    "ended": 1790362019.4706352
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362019.4708138,
+    "ended": 1790362019.4920337
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362019.4921596,
+    "ended": 1790362019.6363938
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362019.6364756,
+    "ended": 1790362020.1909232
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362020.1910837,
+    "ended": 1790362020.3300014
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362020.330079,
+    "ended": 1790362020.8048892
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362020.8050294,
+    "ended": 1790362020.9538083
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362020.953902,
+    "ended": 1790362021.4213257
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362021.4215202,
+    "ended": 1790362021.4433548
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "manual_1261030c_1790362022",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362022.7077346,
+    "ended": 1790362023.0887098
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "manual_1261030c_1790362022",
+     "--input-run-id",
+     "manual_1261030c_1790362022"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362023.6136587,
+    "ended": 1790362024.213596
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "manual_1ebbd601_1790362024",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362024.7183368,
+    "ended": 1790362024.9255996
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "manual_1ebbd601_1790362024",
+     "--input-run-id",
+     "manual_1ebbd601_1790362024"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362025.437221,
+    "ended": 1790362025.9488728
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362027.1784363,
+    "ended": 1790362027.5772018
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362027.577288,
+    "ended": 1790362028.1358418
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362028.135961,
+    "ended": 1790362028.4903564
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362028.490431,
+    "ended": 1790362029.0801969
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362029.08034,
+    "ended": 1790362029.440157
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362029.440234,
+    "ended": 1790362030.0003088
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362030.0004475,
+    "ended": 1790362030.159021
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362030.1591237,
+    "ended": 1790362030.8017483
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362030.8018973,
+    "ended": 1790362030.9623425
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362030.9624152,
+    "ended": 1790362031.4844906
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362031.4846327,
+    "ended": 1790362031.6448884
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362031.6449587,
+    "ended": 1790362032.1802845
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362032.1804605,
+    "ended": 1790362032.3568554
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362032.3569307,
+    "ended": 1790362032.875137
+   }
+  ],
+  "rep": 0
+ },
+ {
+  "candidate": "B",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 4.04,
+  "observed": {
+   "summary": "{\"2026-09-15\": \"ok\", \"2026-09-16\": \"ok\", \"2026-09-17\": \"normalize_failed\", \"2026-09-18\": \"ok\", \"2026-09-21\": \"ok\", \"2026-09-22\": \"ok\", \"2026-09-23\": \"normalize_failed\"}"
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "backfill 2026-09-15 2026-09-23"
+  ],
+  "recovery_sec": 2.84,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "summary": "{\"2026-09-15\": \"skipped(done)\", \"2026-09-16\": \"skipped(done)\", \"2026-09-17\": \"skipped(done)\", \"2026-09-18\": \"skipped(done)\", \"2026-09-21\": \"skipped(done)\", \"2026-09-22\": \"skipped(done)\", \"2026-09-23\": \"skipped(done)\"}"
+  },
+  "rerequest_sec": 0.95,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {}
+  },
+  "invocation_log": [
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362034.649353,
+    "ended": 1790362034.8154817
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362034.8155773,
+    "ended": 1790362035.2661104
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362035.2814238,
+    "ended": 1790362035.577757
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362035.5778332,
+    "ended": 1790362036.0936708
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362036.109095,
+    "ended": 1790362036.1294422
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362036.1367183,
+    "ended": 1790362036.2759554
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362036.2760336,
+    "ended": 1790362036.8296626
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362036.8438425,
+    "ended": 1790362036.991987
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362036.9920654,
+    "ended": 1790362037.4513924
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362037.4658766,
+    "ended": 1790362037.6226532
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362037.6227274,
+    "ended": 1790362038.0927467
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362038.1076703,
+    "ended": 1790362038.128121
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362039.4134052,
+    "ended": 1790362039.7855728
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362039.785661,
+    "ended": 1790362040.3558826
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362040.390198,
+    "ended": 1790362040.5503457
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362040.5504174,
+    "ended": 1790362041.045164
+   }
+  ],
+  "rep": 0
+ },
+ {
+  "candidate": "C",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 57.54,
+  "observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "failed",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "failed"
+   }
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "tasks clear price_daily_recovery -s 2026-09-15 -e 2026-09-24 --only-failed --downstream -y"
+  ],
+  "recovery_sec": 11.51,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "success",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "success"
+   }
+  },
+  "rerequest_sec": 18.93,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {}
+  },
+  "invocation_log": [
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362051.948695,
+    "ended": 1790362052.1515691
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362053.008159,
+    "ended": 1790362053.491459
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362056.8193848,
+    "ended": 1790362057.1556375
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362057.878722,
+    "ended": 1790362058.4366133
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362061.363588,
+    "ended": 1790362061.4208944
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362066.5815556,
+    "ended": 1790362066.7617693
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362067.891539,
+    "ended": 1790362068.498483
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362073.1389556,
+    "ended": 1790362073.3275728
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362074.1975129,
+    "ended": 1790362074.7234132
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362076.389219,
+    "ended": 1790362076.5846756
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362077.9159636,
+    "ended": 1790362078.4322927
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362082.1294873,
+    "ended": 1790362082.1855485
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362109.0045238,
+    "ended": 1790362109.3952184
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362110.0584,
+    "ended": 1790362110.6665378
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362114.2139795,
+    "ended": 1790362114.4260323
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362115.258772,
+    "ended": 1790362115.7779472
+   }
+  ],
+  "rep": 0
+ },
+ {
+  "candidate": "B",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 4.1,
+  "observed": {
+   "summary": "{\"2026-09-15\": \"ok\", \"2026-09-16\": \"ok\", \"2026-09-17\": \"normalize_failed\", \"2026-09-18\": \"ok\", \"2026-09-21\": \"ok\", \"2026-09-22\": \"ok\", \"2026-09-23\": \"normalize_failed\"}"
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "backfill 2026-09-15 2026-09-23"
+  ],
+  "recovery_sec": 2.8,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "summary": "{\"2026-09-15\": \"skipped(done)\", \"2026-09-16\": \"skipped(done)\", \"2026-09-17\": \"skipped(done)\", \"2026-09-18\": \"skipped(done)\", \"2026-09-21\": \"skipped(done)\", \"2026-09-22\": \"skipped(done)\", \"2026-09-23\": \"skipped(done)\"}"
+  },
+  "rerequest_sec": 0.97,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {}
+  },
+  "invocation_log": [
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362137.9612892,
+    "ended": 1790362138.1377733
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362138.1378949,
+    "ended": 1790362138.5847251
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362138.599363,
+    "ended": 1790362138.9110806
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362138.9111555,
+    "ended": 1790362139.4424489
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362139.4570935,
+    "ended": 1790362139.4769425
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362139.4843397,
+    "ended": 1790362139.6200252
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362139.6201017,
+    "ended": 1790362140.1903093
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362140.2063286,
+    "ended": 1790362140.348634
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362140.3487225,
+    "ended": 1790362140.8205993
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362140.8356051,
+    "ended": 1790362140.9964495
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362140.996548,
+    "ended": 1790362141.470187
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362141.4847217,
+    "ended": 1790362141.5050862
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362142.7833214,
+    "ended": 1790362143.1332784
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362143.1333582,
+    "ended": 1790362143.6935892
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362143.72799,
+    "ended": 1790362143.8880544
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362143.8881323,
+    "ended": 1790362144.3738754
+   }
+  ],
+  "rep": 1
+ },
+ {
+  "candidate": "C",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 44.12,
+  "observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "failed",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "failed"
+   }
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "tasks clear price_daily_recovery -s 2026-09-15 -e 2026-09-24 --only-failed --downstream -y"
+  ],
+  "recovery_sec": 11.45,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "success",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "success"
+   }
+  },
+  "rerequest_sec": 18.9,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {}
+  },
+  "invocation_log": [
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362154.6130438,
+    "ended": 1790362154.8129313
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362155.6767402,
+    "ended": 1790362156.1675234
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362159.2086854,
+    "ended": 1790362159.5422153
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362160.2785413,
+    "ended": 1790362160.8792996
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362165.5216126,
+    "ended": 1790362165.586012
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362170.2454407,
+    "ended": 1790362170.441307
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362171.2866933,
+    "ended": 1790362171.9484522
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362176.4730012,
+    "ended": 1790362176.6656702
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362177.1618547,
+    "ended": 1790362177.6699605
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362181.358162,
+    "ended": 1790362181.560173
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362182.6140618,
+    "ended": 1790362183.128457
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362186.7948878,
+    "ended": 1790362186.852055
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362198.2458797,
+    "ended": 1790362198.6426473
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362199.2839842,
+    "ended": 1790362199.902664
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362203.4474454,
+    "ended": 1790362203.6616087
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362204.5138388,
+    "ended": 1790362205.0361888
+   }
+  ],
+  "rep": 1
+ },
+ {
+  "candidate": "A",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 3.43,
+  "observed": {
+   "notified": [
+    "run_d45be5621ac3511a661261030c",
+    "run_61783effcb2fd13db51ebbd601"
+   ]
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "normalize-price --run-id manual_1261030c_1790362231 --input-run-id run_d45be5621ac3511a661261030c",
+   "load-price-daily --run-id manual_1261030c_1790362231 --input-run-id manual_1261030c_1790362231",
+   "normalize-price --run-id manual_1ebbd601_1790362233 --input-run-id run_61783effcb2fd13db51ebbd601",
+   "load-price-daily --run-id manual_1ebbd601_1790362233 --input-run-id manual_1ebbd601_1790362233"
+  ],
+  "recovery_sec": 4.42,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 3347
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "notified": []
+  },
+  "rerequest_sec": 6.81,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 0
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {
+    "normalize-price:ok": 7,
+    "load-price-daily:ok": 7
+   }
+  },
+  "invocation_log": [
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362227.7698078,
+    "ended": 1790362227.971907
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362227.9720495,
+    "ended": 1790362228.3934524
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362228.3935888,
+    "ended": 1790362228.6746397
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362228.6747122,
+    "ended": 1790362229.2299323
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362229.2301311,
+    "ended": 1790362229.250174
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362229.250269,
+    "ended": 1790362229.3830378
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362229.3831117,
+    "ended": 1790362229.9216695
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362229.9217987,
+    "ended": 1790362230.0682263
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362230.0683205,
+    "ended": 1790362230.3008823
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362230.3010197,
+    "ended": 1790362230.4475815
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362230.4476507,
+    "ended": 1790362230.6769114
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362230.6770759,
+    "ended": 1790362230.6973147
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "manual_1261030c_1790362231",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362231.9445095,
+    "ended": 1790362232.3321378
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "manual_1261030c_1790362231",
+     "--input-run-id",
+     "manual_1261030c_1790362231"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362232.8468552,
+    "ended": 1790362233.4582593
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "manual_1ebbd601_1790362233",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362233.9969776,
+    "ended": 1790362234.1919355
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "manual_1ebbd601_1790362233",
+     "--input-run-id",
+     "manual_1ebbd601_1790362233"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362234.7020116,
+    "ended": 1790362235.219238
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362236.4611273,
+    "ended": 1790362236.8521216
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362236.852214,
+    "ended": 1790362237.41887
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362237.419044,
+    "ended": 1790362237.7640514
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362237.764126,
+    "ended": 1790362238.3445017
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362238.3446536,
+    "ended": 1790362238.7075222
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362238.7076063,
+    "ended": 1790362239.2719598
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362239.2721376,
+    "ended": 1790362239.4268534
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362239.4269345,
+    "ended": 1790362240.0638943
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362240.0640116,
+    "ended": 1790362240.217051
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362240.217122,
+    "ended": 1790362240.734039
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362240.7341738,
+    "ended": 1790362240.897804
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362240.8979216,
+    "ended": 1790362241.4339764
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362241.434142,
+    "ended": 1790362241.6042137
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362241.6043048,
+    "ended": 1790362242.1268759
+   }
+  ],
+  "rep": 1
+ },
+ {
+  "candidate": "C",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 37.82,
+  "observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "failed",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "failed"
+   }
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "tasks clear price_daily_recovery -s 2026-09-15 -e 2026-09-24 --only-failed --downstream -y"
+  ],
+  "recovery_sec": 11.47,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "runs": {
+    "2026-09-15": "success",
+    "2026-09-16": "success",
+    "2026-09-17": "success",
+    "2026-09-18": "success",
+    "2026-09-21": "success",
+    "2026-09-22": "success",
+    "2026-09-23": "success"
+   }
+  },
+  "rerequest_sec": 18.85,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {}
+  },
+  "invocation_log": [
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362251.4274943,
+    "ended": 1790362251.6242788
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362252.4990795,
+    "ended": 1790362252.9773345
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362256.0341394,
+    "ended": 1790362256.3724546
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362257.354179,
+    "ended": 1790362257.9046547
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362261.5482833,
+    "ended": 1790362261.6036878
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362266.7435522,
+    "ended": 1790362266.9255183
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362268.4190035,
+    "ended": 1790362269.0122046
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362272.7335901,
+    "ended": 1790362272.9391098
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362273.7855148,
+    "ended": 1790362274.3072107
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362277.4188855,
+    "ended": 1790362277.6269457
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362278.4752483,
+    "ended": 1790362278.9893196
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362282.6668203,
+    "ended": 1790362282.7224672
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362288.4744632,
+    "ended": 1790362288.8666859
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362289.5334494,
+    "ended": 1790362290.1541202
+   },
+   {
+    "candidate": "C",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362293.7006345,
+    "ended": 1790362293.905651
+   },
+   {
+    "candidate": "C",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362294.7395284,
+    "ended": 1790362295.2509248
+   }
+  ],
+  "rep": 2
+ },
+ {
+  "candidate": "A",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 3.9,
+  "observed": {
+   "notified": [
+    "run_d45be5621ac3511a661261030c",
+    "run_61783effcb2fd13db51ebbd601"
+   ]
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "normalize-price --run-id manual_1261030c_1790362322 --input-run-id run_d45be5621ac3511a661261030c",
+   "load-price-daily --run-id manual_1261030c_1790362322 --input-run-id manual_1261030c_1790362322",
+   "normalize-price --run-id manual_1ebbd601_1790362324 --input-run-id run_61783effcb2fd13db51ebbd601",
+   "load-price-daily --run-id manual_1ebbd601_1790362324 --input-run-id manual_1ebbd601_1790362324"
+  ],
+  "recovery_sec": 4.36,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 3347
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "notified": []
+  },
+  "rerequest_sec": 6.82,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 0
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {
+    "normalize-price:ok": 7,
+    "load-price-daily:ok": 7
+   }
+  },
+  "invocation_log": [
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362318.0439386,
+    "ended": 1790362318.242791
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362318.242878,
+    "ended": 1790362318.6723318
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362318.6724997,
+    "ended": 1790362318.9628162
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362318.9628923,
+    "ended": 1790362319.473705
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362319.4739003,
+    "ended": 1790362319.4941127
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362319.4942126,
+    "ended": 1790362319.6264296
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362319.6265175,
+    "ended": 1790362320.2031324
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362320.2032814,
+    "ended": 1790362320.3474302
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362320.3475053,
+    "ended": 1790362320.812975
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362320.8131332,
+    "ended": 1790362320.9664817
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362320.966559,
+    "ended": 1790362321.423722
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362321.4238994,
+    "ended": 1790362321.444387
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "manual_1261030c_1790362322",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362322.6916368,
+    "ended": 1790362323.0761976
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "manual_1261030c_1790362322",
+     "--input-run-id",
+     "manual_1261030c_1790362322"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362323.5879543,
+    "ended": 1790362324.2000542
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "manual_1ebbd601_1790362324",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362324.7262228,
+    "ended": 1790362324.92277
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "manual_1ebbd601_1790362324",
+     "--input-run-id",
+     "manual_1ebbd601_1790362324"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362325.4008088,
+    "ended": 1790362325.9091067
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362327.1787498,
+    "ended": 1790362327.5667841
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362327.56687,
+    "ended": 1790362328.134313
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362328.134439,
+    "ended": 1790362328.4877634
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362328.4878423,
+    "ended": 1790362329.0704648
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362329.0705907,
+    "ended": 1790362329.4415333
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362329.4416084,
+    "ended": 1790362330.0140023
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362330.01415,
+    "ended": 1790362330.1657226
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362330.1658032,
+    "ended": 1790362330.8029652
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362330.8032343,
+    "ended": 1790362330.960873
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362330.9609454,
+    "ended": 1790362331.482563
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362331.4827018,
+    "ended": 1790362331.6406717
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362331.6407447,
+    "ended": 1790362332.1757185
+   },
+   {
+    "candidate": "A",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362332.1758428,
+    "ended": 1790362332.342114
+   },
+   {
+    "candidate": "A",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362332.3421853,
+    "ended": 1790362332.8728967
+   }
+  ],
+  "rep": 2
+ },
+ {
+  "candidate": "B",
+  "scenario": "F",
+  "faults": [
+   "2026-09-17",
+   "2026-09-23"
+  ],
+  "request_sec": 4.02,
+  "observed": {
+   "summary": "{\"2026-09-15\": \"ok\", \"2026-09-16\": \"ok\", \"2026-09-17\": \"normalize_failed\", \"2026-09-18\": \"ok\", \"2026-09-21\": \"ok\", \"2026-09-22\": \"ok\", \"2026-09-23\": \"normalize_failed\"}"
+  },
+  "after_request": {
+   "business_ok": false,
+   "canonical": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "fetched_at_mismatch": 1308
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 3754,
+    "duplicates": 0,
+    "missing": 411,
+    "extra": 0,
+    "value_mismatch": 397,
+    "data_version_differs_from_sequential": 1308
+   },
+   "runs_complete": 5,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": false,
+     "manifest": false,
+     "LOAD_PRICE_DAILY": "PENDING",
+     "NORMALIZE_PRICE": "FAILED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "manual_commands": [
+   "backfill 2026-09-15 2026-09-23"
+  ],
+  "recovery_sec": 2.79,
+  "after_recovery": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "rerequest_observed": {
+   "summary": "{\"2026-09-15\": \"skipped(done)\", \"2026-09-16\": \"skipped(done)\", \"2026-09-17\": \"skipped(done)\", \"2026-09-18\": \"skipped(done)\", \"2026-09-21\": \"skipped(done)\", \"2026-09-22\": \"skipped(done)\", \"2026-09-23\": \"skipped(done)\"}"
+  },
+  "rerequest_sec": 0.98,
+  "after_rerequest": {
+   "business_ok": true,
+   "canonical": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "fetched_at_mismatch": 0
+   },
+   "price_daily": {
+    "expected": 4165,
+    "actual": 4165,
+    "duplicates": 0,
+    "missing": 0,
+    "extra": 0,
+    "value_mismatch": 0,
+    "data_version_differs_from_sequential": 1628
+   },
+   "runs_complete": 7,
+   "runs": {
+    "2026-09-15": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-16": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-17": {
+     "ok": true,
+     "manifest": true,
+     "LOAD_PRICE_DAILY": "FULFILLED",
+     "NORMALIZE_PRICE": "FULFILLED"
+    },
+    "2026-09-18": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-21": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-22": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    },
+    "2026-09-23": {
+     "ok": true,
+     "manifest": true,
+     "NORMALIZE_PRICE": "FULFILLED",
+     "LOAD_PRICE_DAILY": "FULFILLED"
+    }
+   },
+   "ledger_attempts": {
+    "2026-09-15/LOAD_PRICE_DAILY": 0,
+    "2026-09-15/NORMALIZE_PRICE": 0,
+    "2026-09-16/LOAD_PRICE_DAILY": 0,
+    "2026-09-16/NORMALIZE_PRICE": 0,
+    "2026-09-17/LOAD_PRICE_DAILY": 0,
+    "2026-09-17/NORMALIZE_PRICE": 0,
+    "2026-09-18/LOAD_PRICE_DAILY": 0,
+    "2026-09-18/NORMALIZE_PRICE": 0,
+    "2026-09-21/LOAD_PRICE_DAILY": 0,
+    "2026-09-21/NORMALIZE_PRICE": 0,
+    "2026-09-22/LOAD_PRICE_DAILY": 0,
+    "2026-09-22/NORMALIZE_PRICE": 0,
+    "2026-09-23/LOAD_PRICE_DAILY": 0,
+    "2026-09-23/NORMALIZE_PRICE": 0
+   }
+  },
+  "invocations": {
+   "request": {
+    "normalize-price:ok": 5,
+    "load-price-daily:ok": 5,
+    "normalize-price:fail": 2
+   },
+   "recover": {
+    "normalize-price:ok": 2,
+    "load-price-daily:ok": 2
+   },
+   "rerequest": {}
+  },
+  "invocation_log": [
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362334.6171224,
+    "ended": 1790362334.7883348
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_4d874712b33854a818c2c8f572",
+     "--input-run-id",
+     "run_4d874712b33854a818c2c8f572"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362334.7884223,
+    "ended": 1790362335.2154703
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362335.2310286,
+    "ended": 1790362335.5312057
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_f855401d7506e10e2f5b51f1b8",
+     "--input-run-id",
+     "run_f855401d7506e10e2f5b51f1b8"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362335.5313013,
+    "ended": 1790362336.0631192
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362336.077188,
+    "ended": 1790362336.0965593
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362336.1037447,
+    "ended": 1790362336.2364984
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_78168e8d63f9a2c0b1cc406fab",
+     "--input-run-id",
+     "run_78168e8d63f9a2c0b1cc406fab"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362336.2365751,
+    "ended": 1790362336.7770686
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362336.791076,
+    "ended": 1790362336.9325185
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706",
+     "--input-run-id",
+     "run_5dde9fe0f9cca0e2316a0c3706"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362336.9325933,
+    "ended": 1790362337.3892689
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362337.4041383,
+    "ended": 1790362337.5523016
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d0806a79474da3ee0ea89d16bd",
+     "--input-run-id",
+     "run_d0806a79474da3ee0ea89d16bd"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362337.5523753,
+    "ended": 1790362338.0357587
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 1,
+    "fault": true,
+    "started": 1790362338.0501113,
+    "ended": 1790362338.0704567
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362339.369463,
+    "ended": 1790362339.728089
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_d45be5621ac3511a661261030c",
+     "--input-run-id",
+     "run_d45be5621ac3511a661261030c"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362339.7281976,
+    "ended": 1790362340.3028862
+   },
+   {
+    "candidate": "B",
+    "step": "normalize-price",
+    "argv": [
+     "normalize-price",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362340.337725,
+    "ended": 1790362340.501027
+   },
+   {
+    "candidate": "B",
+    "step": "load-price-daily",
+    "argv": [
+     "load-price-daily",
+     "--run-id",
+     "run_61783effcb2fd13db51ebbd601",
+     "--input-run-id",
+     "run_61783effcb2fd13db51ebbd601"
+    ],
+    "exit": 0,
+    "fault": false,
+    "started": 1790362340.5011027,
+    "ended": 1790362340.9804308
+   }
+  ],
+  "rep": 2
+ }
+]
