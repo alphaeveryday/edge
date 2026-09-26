@@ -96,8 +96,9 @@ def airflow(rec: Recorder, *args: str, check: bool = True):
 # ── 비교군별 절차 ─────────────────────────────────────────────────────────────
 
 def _invocations(rec: Recorder) -> list[dict]:
+    # 파일이 없을 때(호출 0건)만 빈 목록이다 — 조회 실패를 0건으로 접으면 단계별 집계가 밀린다
     p = rec.sh(DC + ["exec", "-T", "runner", "sh", "-c",
-                     "cat /lab-data/state/invocations.jsonl 2>/dev/null || true"])
+                     "f=/lab-data/state/invocations.jsonl; [ ! -e $f ] || cat $f"], check=True)
     return [json.loads(line) for line in p.stdout.splitlines() if line.strip()]
 
 
@@ -188,7 +189,9 @@ def scenario(rec: Recorder, cand: str, name: str, faults: list[str]) -> dict:
 def _count(inv: list[dict]) -> dict:
     out: dict = {}
     for i in inv:
-        key = f"{i['step']}:{'fail' if i['exit'] not in (0, 2) else 'ok'}"
+        # exit 2 를 계속 진행으로 보는 것은 normalize-price 뿐이다(lab.py step 과 같은 규칙)
+        ok = i["exit"] == 0 or (i["step"] == "normalize-price" and i["exit"] == 2)
+        key = f"{i['step']}:{'ok' if ok else 'fail'}"
         out[key] = out.get(key, 0) + 1
     return out
 
@@ -231,6 +234,12 @@ def run(name: str, reps: int) -> int:
         rec._stop = True
         sampler.join(timeout=10)
         (out / "results.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
+    # 마지막 대사가 하나라도 불일치면 실행 자체를 실패로 끝낸다(결과 파일은 그대로 남긴다)
+    failed = [f"{r['candidate']}:{r['scenario']}" for r in results
+              if not (r.get("after_rerequest") or r.get("after_recovery") or r["after_request"])["business_ok"]]
+    if failed:
+        print("최종 대사 불일치:", failed, file=sys.stderr)
+        return 1
     return 0
 
 

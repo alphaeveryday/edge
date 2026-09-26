@@ -46,7 +46,7 @@ B·C의 공통 개선(고정 입력, 완료 확인 `check-run`, 원장 run_id �
 | 정상 요청(s) | 5.38 (실패 포함 3.4~3.9) | 5.47 (4.0~4.1) | 60.8 (37.8~57.5) |
 | 재요청(s) | 6.8 | 1.0 | 18.9 |
 
-- 경과시간은 **자동 실행 시간**이다(요청 제출 → 독립 대사 통과, monotonic). 사람의 조사·판단 시간은 재지 않았다. A의 "실패 run을 알아내고 새 run-id를 만들고 적재 입력을 새 run-id로 바꾸는" 판단은 스크립트가 대신했다.
+- 경과시간은 **자동 실행 시간**이다(monotonic). 복구·재요청은 요청 제출 → 독립 대사 통과까지, 정상 요청은 요청 제출 → 요청 종료까지이며 뒤따르는 대사(약 0.6초)는 포함하지 않는다. 사람의 조사·판단 시간은 재지 않았다. A의 "실패 run을 알아내고 새 run-id를 만들고 적재 입력을 새 run-id로 바꾸는" 판단은 스크립트가 대신했다.
 - 세 방식 모두 복구에서 실패한 두 날짜만 다시 돌렸다. A는 운영자가 올바르게 고른 경우이고, B·C는 도구가 골랐다.
 - C의 경과시간 대부분은 scheduler의 run·task 배정 간격과 backfill 완료 표시 대기다. 업무 처리 자체는 날짜당 약 0.8초로 세 방식이 같다.
 - 실행 이력: C는 `normalize_price` try_number 2로 재시도 이력을 구분한다. B는 호출 기록과 원장 outcome만 남는다. 로컬 실행에서는 세 방식 모두 원장 attempt가 **생성되지 않는다**(`ecs_task_arn 없음 — attempt 생성 안 함`, wrapper가 ECS ARN을 요구).
@@ -208,5 +208,7 @@ python3 trial.py down                # 컨테이너·볼륨 삭제
 포트는 `127.0.0.1:55452`(업무 DB)·`127.0.0.1:58080`(Airflow UI/API, 인증 없음)만 연다. 결과 폴더: `results.json`(시나리오별 수치·대사·호출 기록), `commands.log`(모든 명령의 stdout/stderr 원문), `stats.jsonl`(자원 표본), `airflow-logs/`(마지막 C 시행의 task 로그), `versions.json`(git sha·Airflow·Python·pip freeze).
 
 ## 실패 기록
+
+- 사후 보강(PR 전 리뷰, 원시 결과 재생성 없음): `trial.py`가 ① 최종 대사 불일치 시 비0 종료, ② `load-price-daily` exit 2를 실패로 집계(계속 진행 규칙은 `normalize-price`만), ③ 호출 기록 조회 실패를 0건으로 접지 않도록 고쳤다. r1·r2 원시 결과를 대조해 영향이 없음을 확인했다 — exit 2 호출 0건, 호출 기록 조회 실패 0건, 전 시나리오 최종 `business_ok=true`. r1·r2는 수정 전 코드로 만들어졌다.
 
 - `r1-aborted-backfill-race`: C의 재요청 `backfill create`가 `AlreadyRunningBackfill`로 실패했다. dag run이 모두 끝나도 scheduler가 backfill `completed_at`을 찍기 전에는 새 backfill을 받지 않는다. 대기 조건에 `completed_at`을 추가해 r2를 새로 돌렸다. r1에서 끝난 A·B·C 정상, A·B 실패 시나리오의 대사 결과·호출 수는 r2와 같다.
