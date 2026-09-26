@@ -229,7 +229,9 @@ def run(name: str, reps: int) -> int:
                 r = scenario(rec, cand, "F", FAULTS)
                 r["rep"] = rep
                 results.append(r)
-        rec.sh(["docker", "cp", f"{PROJECT}-airflow-1:/opt/airflow/logs", str(out / "airflow-logs")])
+        # task 로그는 C 비교의 감사 증거다 — 복사 실패를 성공 실행으로 넘기지 않는다
+        rec.sh(["docker", "cp", f"{PROJECT}-airflow-1:/opt/airflow/logs", str(out / "airflow-logs")],
+               check=True)
     finally:
         rec._stop = True
         sampler.join(timeout=10)
