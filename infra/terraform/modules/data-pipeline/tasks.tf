@@ -156,6 +156,10 @@ locals {
     DATA_PIPELINE_DB__PORT = tostring(var.db_port)
     DATA_PIPELINE_DB__NAME = var.db_name
     DATA_PIPELINE_DB__USER = var.db_user
+    # 공유 호출 허용(ALPHA-1087, 기본 false). KIS 앱키를 쓰는 호출자(kis task-def·분 워커 3종)는
+    # 전부 이 맵을 합치므로 **값 하나가 전환 단위**다 — 일부 컨테이너만 켜지는 배포를 구조로 막는다
+    # (켠 쪽은 공유 예산을, 끈 쪽은 자기 간격을 각자 다 써 합이 한도를 넘는다). 전환 절차는 ALPHA-1087
+    DATA_PIPELINE_CALL_BUDGET__ENABLED = tostring(var.call_budget_enabled)
   }
 
   # 운영 원장(ALPHA-530): 계측 대상 컨테이너가 wrapper 로 attempt/data_status 를 **직접**

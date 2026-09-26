@@ -706,3 +706,9 @@ variable "minute_artifact_format" {
     error_message = "minute_artifact_format must be legacy or content_v2."
   }
 }
+
+variable "call_budget_enabled" {
+  description = "KIS 앱키 공유 호출 허용(call_budget) 사용 여부. 켜기·끄기는 모든 KIS 호출자가 멈춘 시간대에 한 번에 한다 — 부분 전환은 합산 한도를 깬다(ALPHA-1087)."
+  type        = bool
+  default     = false
+}

@@ -111,6 +111,9 @@ locals {
         # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+        # 한 window 안 동시 요청 수(ALPHA-1087). 공유 호출 허용과 **같은 변수에서 유도**한다 —
+        # 허용 없이 동시성만 켜지면 로컬 간격 안에서 실제 발신률만 올라 합산이 더 나빠진다(코드도 1로 강제).
+        DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = var.call_budget_enabled ? "2" : "1"
       })
       # 선택된 source 의 자격증명 쌍**만** 주입한다 — ECS 는 기동 시 secrets 전부를
       # 해석하므로, 미사용 벤더 쌍을 같이 걸면 그 시크릿에 값이 없는 환경(신규 환경·
