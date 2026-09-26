@@ -19,6 +19,7 @@ JSONB 파라미터는 json.dumps 문자열 + `%s::jsonb` 캐스트로 넘긴다(
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -95,14 +96,15 @@ class Ledger:
                 "INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, execution_name,"
                 " pipeline_type, schedule_slot, trading_date, hard_deadline_at,"
                 " catalog_version, catalog_content_hash, image_digest, input_hash,"
-                " expected_execution_arn, launch_status)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " expected_execution_arn, launch_status, orchestrator, orchestrator_run_ref)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                 " ON CONFLICT (run_key) DO NOTHING"
                 " RETURNING pipeline_run_id",
                 (new_id, f["run_key"], f["execution_name"], f["pipeline_type"],
                  f["schedule_slot"], f["trading_date"], f["hard_deadline_at"],
                  f["catalog_version"], f["catalog_content_hash"], f["image_digest"],
-                 f["input_hash"], f["expected_execution_arn"], states.LAUNCH_PLANNING),
+                 f["input_hash"], f["expected_execution_arn"], states.LAUNCH_PLANNING,
+                 f.get("orchestrator", states.ORCHESTRATOR_SFN), f.get("orchestrator_run_ref")),
             )
             row = cur.fetchone()
             if row is not None:
@@ -111,6 +113,14 @@ class Ledger:
                 "SELECT pipeline_run_id FROM ops_pipeline_run WHERE run_key = %s", (f["run_key"],)
             )
             return str(cur.fetchone()[0]), False
+
+    @staticmethod
+    def _run_orchestrator_tx(conn, run_key: str) -> str | None:
+        """이미 계획된 슬롯의 실행 주체 — Planner 가 다른 주체의 재계획을 거부하는 근거."""
+        with conn.cursor() as cur:
+            cur.execute("SELECT orchestrator FROM ops_pipeline_run WHERE run_key = %s", (run_key,))
+            row = cur.fetchone()
+            return None if row is None else row[0]
 
     def set_launch_result(
         self, pipeline_run_id: str, *, launch_status: str,
@@ -199,7 +209,7 @@ class Ledger:
             cur.execute(
                 "SELECT et.expected_task_id, et.plan_status, et.task_outcome, et.data_status,"
                 " et.required, snap.expected_entity_count, et.dataset_contract_key,"
-                " et.expected_as_of_date"
+                " et.expected_as_of_date, et.records_out"
                 " FROM ops_expected_task et"
                 " LEFT JOIN ops_expectation_snapshot snap"
                 " ON snap.expectation_snapshot_id=et.expectation_snapshot_id"
@@ -212,7 +222,7 @@ class Ledger:
             return {"expected_task_id": str(row[0]), "plan_status": row[1],
                     "task_outcome": row[2], "data_status": row[3], "required": row[4],
                     "expected_count": row[5], "dataset_contract_key": row[6],
-                    "expected_as_of_date": row[7]}
+                    "expected_as_of_date": row[7], "records_out": row[8]}
 
     def update_task_outcome(
         self, expected_task_id: str, *, task_outcome: str | None = None,
@@ -478,6 +488,44 @@ class Ledger:
                 for r in cur.fetchall()
             ]
 
+    def reprocess_ready(self, run_key: str) -> tuple[bool, str]:
+        """재처리 가능한 기존 슬롯인가 — (가능, 사유). 계획이 있고 raw 단계가 모두 끝났어야(1건 이상 저장한
+        FULFILLED 또는 계획상 SKIPPED) 다시 정제·적재할 입력이 있다. 없는 슬롯·수집 실패·0건 skip 슬롯을
+        재처리하면 빈 입력 정제가 성공으로 끝난다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(et.expected_task_id) FILTER (WHERE et.stage='raw'),"
+                " count(et.expected_task_id) FILTER (WHERE et.stage='raw' AND"
+                "  ((et.task_outcome='FULFILLED' AND et.records_out > 0) OR et.plan_status='SKIPPED'))"
+                " FROM ops_pipeline_run r LEFT JOIN ops_expected_task et"
+                " ON et.pipeline_run_id = r.pipeline_run_id WHERE r.run_key=%s",
+                (run_key,),
+            )
+            row = cur.fetchone()
+        if row is None or row[0] is None:
+            return False, "계획된 run 없음"
+        raw_total, raw_done = int(row[0] or 0), int(row[1] or 0)
+        if raw_total == 0:
+            return False, "계획된 run 없음 또는 raw 단계 없음"
+        if raw_done < raw_total:
+            return False, f"raw 단계 미완료({raw_done}/{raw_total})"
+        return True, "ok"
+
+    def attempt_created_after(self, *, pipeline_run_id: str, stages: list[str], attempt_id: str) -> bool:
+        """같은 run 의 stages 작업에 attempt_id 보다 **나중에 만들어진** attempt 가 있는가.
+
+        비교를 DB 시계(created_at) 한 곳에서 한다 — 컨테이너마다 다른 시계나 같은 밀리초 안에서 순서가
+        무작위인 ULID 로는 "선행 단계가 그 뒤에 다시 돌았다"를 확정할 수 없다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND et.stage = ANY(%s)"
+                " AND a.created_at > (SELECT created_at FROM ops_task_attempt WHERE attempt_id=%s))",
+                (pipeline_run_id, list(stages), attempt_id),
+            )
+            return bool(cur.fetchone()[0])
+
     def correct_backfill_started_at(self, attempt_id: str, *, started_at) -> bool:
         """과거 Reconciler backfill의 대조 시각을 SFN의 실제 진입 시각으로 보정한다."""
         if started_at is None:
@@ -531,6 +579,10 @@ class Ledger:
                 if acquired:
                     cur.execute("SELECT pg_advisory_unlock(%s)", (key,))
 
+    def step_lock(self, task_key: str) -> "StepLock":
+        """작업 하나의 실행권(세션 advisory lock). 사용법은 StepLock 참조."""
+        return StepLock(self, task_key)
+
     # ── Reconciler 조회 ───────────────────────────────────────
     def get_pipeline_run(self, run_key: str) -> dict | None:
         """run_key → pipeline_run 행 dict, 없으면 None."""
@@ -538,7 +590,8 @@ class Ledger:
             cur.execute(
                 "SELECT pipeline_run_id, run_key, execution_name, expected_execution_arn,"
                 " sfn_execution_arn, launch_status, orchestration_status, hard_deadline_at,"
-                " trading_date, input_hash FROM ops_pipeline_run WHERE run_key=%s",
+                " trading_date, input_hash, orchestrator, orchestrator_run_ref"
+                " FROM ops_pipeline_run WHERE run_key=%s",
                 (run_key,),
             )
             row = cur.fetchone()
@@ -546,7 +599,8 @@ class Ledger:
                 return None
             keys = ("pipeline_run_id", "run_key", "execution_name", "expected_execution_arn",
                     "sfn_execution_arn", "launch_status", "orchestration_status",
-                    "hard_deadline_at", "trading_date", "input_hash")
+                    "hard_deadline_at", "trading_date", "input_hash", "orchestrator",
+                    "orchestrator_run_ref")
             return dict(zip(keys, row))
 
     def expected_tasks_for(self, pipeline_run_id: str) -> list[dict]:
@@ -576,3 +630,54 @@ class Ledger:
                 (resolution_reason, resolution_source, dedupe_key),
             )
             return cur.rowcount > 0
+
+
+class StepLock:
+    """같은 작업(task_key)을 동시에 한 실행만 하게 하는 PostgreSQL 세션 advisory lock.
+
+    잡은 커넥션을 작업이 끝날 때까지 열어 둔다. 프로세스·컨테이너가 죽으면 커넥션이 끊겨 lock 이
+    **스스로 풀린다** — 만료 시각을 추정해야 하는 lease 행과 달리 죽은 실행이 실행권을 쥐고 남지 않는다.
+    한계: 커넥션만 끊기고 프로세스는 계속 쓰는 경우(네트워크 분리)엔 lock 이 풀려 다음 실행이 들어올 수
+    있다 — 쓰기 자체를 막는 fencing 이 아니다(canonical 병합 CAS 부재는 ALPHA-1057).
+
+    키가 task_key 만인 이유: 장중 수급처럼 여러 슬롯이 같은 거래일 파티션을 병합하는 레인은 **다른 슬롯의
+    같은 스텝**도 겹치면 안 된다. 슬롯 간 간격이 스텝 시간보다 길어 정상 흐름은 기다리지 않는다.
+    """
+
+    _POLL_SECONDS = 5.0
+
+    def __init__(self, ledger: "Ledger", task_key: str):
+        self.ledger = ledger
+        digest = hashlib.sha256(f"ops-step:{task_key}".encode("utf-8")).digest()
+        self.key = int.from_bytes(digest[:8], "big", signed=True)
+        self._cm = self._cur_cm = self._cur = None
+
+    def acquire(self, *, wait_seconds: float) -> bool:
+        """wait_seconds 동안 기다려 잡으면 True, 못 잡으면 False. DB 에 못 닿으면 **예외**(판단 불가)."""
+        self._cm = self.ledger.connect_fn(self.ledger.db)
+        conn = self._cm.__enter__()
+        self._cur_cm = conn.cursor()
+        self._cur = self._cur_cm.__enter__()
+        deadline = self.ledger.clock_fn() + wait_seconds
+        while True:
+            self._cur.execute("SELECT pg_try_advisory_lock(%s)", (self.key,))
+            if bool(self._cur.fetchone()[0]):
+                return True
+            if self.ledger.clock_fn() >= deadline:
+                return False
+            self.ledger.sleep_fn(self._POLL_SECONDS)
+
+    def release(self, acquired: bool) -> None:
+        """풀고 커넥션을 닫는다. 실패해도 예외를 올리지 않는다 — 커넥션이 닫히면 lock 도 풀리고,
+        여기서 터지면 이미 끝난 작업의 exit code 가 트레이스백으로 바뀐다."""
+        try:
+            if acquired and self._cur is not None:
+                self._cur.execute("SELECT pg_advisory_unlock(%s)", (self.key,))
+        except Exception:
+            logger.warning("step lock 해제 실패 — 커넥션 종료로 풀린다", exc_info=True)
+        for cm in (self._cur_cm, self._cm):
+            try:
+                if cm is not None:
+                    cm.__exit__(None, None, None)
+            except Exception:
+                logger.warning("step lock 커넥션 정리 실패", exc_info=True)

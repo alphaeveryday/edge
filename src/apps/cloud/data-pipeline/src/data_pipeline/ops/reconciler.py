@@ -1,5 +1,8 @@
 """Reconciler — 예정(expected_task)과 실제(SFN/ECS 증거)를 대조 (ALPHA-530, 스펙 §7).
 
+Airflow 주체 런(ALPHA-1088)은 SFN 이력이 없어 원장 attempt(ECS ARN)·ECS 종료 코드만으로 대조하고,
+orchestration_status 는 DAG 가 보고한 판정(없으면 원장 투영)으로 채운다.
+
 멱등하게 동작한다 — 같은 상태를 반복 탐지해도 이슈·알림이 무한 중복되지 않는다(OPEN 부분
 유니크 + occurrence_count). 증거 규칙(스펙 §7):
 
@@ -247,8 +250,12 @@ def reconcile_run(
     cluster_arn: str | None = None,
     now: datetime | None = None,
     stalled_after_seconds: int | None = None,
+    reported_status: str | None = None,
 ) -> dict:
-    """한 run 을 대조한다. 관측·판정 요약 dict 반환."""
+    """한 run 을 대조한다. 관측·판정 요약 dict 반환.
+
+    reported_status: Airflow DAG 가 끝나며 넘긴 자기 판정(SUCCEEDED|FAILED). Airflow 런에만 쓴다.
+    """
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
     ecs = ecs_client if ecs_client is not None else aws.ecs_client()
     now = now or datetime.now(timezone.utc)
@@ -281,7 +288,15 @@ def reconcile_run(
     # 오프셋이라(카탈로그 주석) SFN 이 정상 실행 중인데도 뒤 스테이지가 아직 진입 안 한 시점을
     # 자주 지난다. "안 돌았다"와 "아직 차례가 아니다"는 다르다(ALPHA-181).
     execution_running = False
-    if exec_arn:
+    if run.get("orchestrator") == states.ORCHESTRATOR_AIRFLOW:
+        # Airflow 주체 런엔 SFN history 가 없다. 실행 증거는 wrapper 가 남긴 원장 attempt(ECS ARN)
+        # 이고, 아래 hydrate 가 그것을 occurrence 로 붙인다. Airflow DAG run 상태는 조회하지 않으므로
+        # "아직 도는 중"을 알 수 없다 — 런 hard deadline 전까지는 도는 중으로 본다. 그래서 MISSED 는
+        # hard deadline 뒤에만 찍힌다(늦게 찍힐 뿐 거짓 MISSED 는 없다). 조기 실패는 Airflow 화면이 낸다.
+        execution_running = hard_deadline is None or now < hard_deadline
+        summary["evidence_ok"] = True
+        summary["orchestrator"] = states.ORCHESTRATOR_AIRFLOW
+    elif exec_arn:
         try:
             desc = sfn.describe_execution(executionArn=exec_arn)
             used_arn = desc.get("executionArn", exec_arn)
@@ -320,6 +335,7 @@ def reconcile_run(
     _hydrate_occurrence_evidence(
         evidence, ledger=ledger, tasks=tasks, ecs=ecs, cluster_arn=cluster_arn,
     )
+    airflow = run.get("orchestrator") == states.ORCHESTRATOR_AIRFLOW
     deps_done = _completed_task_keys(evidence)
     for task in tasks:
         if task["plan_status"] == states.PLAN_SKIPPED:
@@ -328,7 +344,46 @@ def reconcile_run(
                         cluster_arn=cluster_arn, now=now, hard_deadline=hard_deadline,
                         sfn_execution_arn=used_arn, stalled_after_seconds=stalled_after_seconds,
                         deps_done=deps_done, execution_running=execution_running, summary=summary)
+    if airflow:
+        # SFN 런은 DescribeExecution 이 orchestration_status 를 채우지만 Airflow 런은 채울 주체가 없다 —
+        # 비워 두면 콘솔 R02 가 hard deadline 뒤 정상 완료 런까지 "미귀결"로 올린다.
+        # 정본은 DAG 가 보고한 판정이다. 원장 투영은 보고가 없을 때(DAG 가 죽음 등)의 대체이고, 이미
+        # 확정된 값을 덮지 않는다 — 원장에는 실행 세대 구분이 없어, 재처리 run 이 새 attempt 없이 실패해도
+        # 앞 세대의 성공 attempt 로 SUCCEEDED 를 투영할 수 있기 때문이다.
+        if reported_status in (states.ORCH_SUCCEEDED, states.ORCH_FAILED):
+            status = reported_status
+        elif run["orchestration_status"] in (None, states.ORCH_RUNNING):
+            status = _airflow_run_status(ledger.expected_tasks_for(run_id), evidence,
+                                         past_hard=hard_deadline is not None and now >= hard_deadline)
+        else:
+            status = run["orchestration_status"]
+        if status != run["orchestration_status"]:
+            ledger.set_launch_result(run_id, launch_status=states.LAUNCH_LAUNCHED,
+                                     orchestration_status=status)
+        summary["orchestration"] = status
     return summary
+
+
+def _airflow_run_status(tasks: list[dict], evidence: dict[str, list[dict]], *, past_hard: bool) -> str:
+    """Airflow 주체 런의 orchestration_status 를 원장에서 투영한다 — DAG verdict 와 같은 뜻.
+
+    SUCCEEDED: 계획 작업(SKIPPED 제외)이 전부 FULFILLED 이고 최신 물리 시도 exit 0(부분 성공 2 는 아님).
+    RUNNING: 아직 결론 안 난 작업이 있다(hard deadline 전). 그 뒤까지 열려 있으면 FAILED.
+    """
+    open_, failed = False, False
+    for task in tasks:
+        if task["plan_status"] == states.PLAN_SKIPPED:
+            continue
+        entry = catalog.get(task["task_key"])
+        occs = evidence.get(entry.sfn_state_name, []) if entry is not None else []
+        latest_exit = occs[-1].get("exit_code") if occs else None
+        if task["task_outcome"] in (None, states.OUTCOME_PENDING) or latest_exit is None:
+            open_ = True
+        elif not (task["task_outcome"] == states.OUTCOME_FULFILLED and latest_exit == 0):
+            failed = True
+    if open_ and not past_hard:
+        return states.ORCH_RUNNING
+    return states.ORCH_FAILED if (open_ or failed) else states.ORCH_SUCCEEDED
 
 
 def _hydrate_occurrence_evidence(

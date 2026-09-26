@@ -70,6 +70,11 @@ LAUNCH_STATUSES = frozenset(
     {LAUNCH_PLANNING, LAUNCH_LAUNCHED, LAUNCH_FAILED, LAUNCH_CONFLICT, LAUNCH_UNKNOWN}
 )
 
+# ── pipeline_run.orchestrator (레인별 단계 이관 중 한 슬롯의 실행 주체) ──
+ORCHESTRATOR_SFN = "SFN"
+ORCHESTRATOR_AIRFLOW = "AIRFLOW"
+ORCHESTRATORS = frozenset({ORCHESTRATOR_SFN, ORCHESTRATOR_AIRFLOW})
+
 # ── pipeline_run.orchestration_status (SFN describe 동기화) ──
 ORCH_RUNNING = "RUNNING"
 ORCH_SUCCEEDED = "SUCCEEDED"

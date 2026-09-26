@@ -3,7 +3,9 @@
 등록 작업(카탈로그 24개)의 `run()` 을 감싸 pipeline run·
 task key·SFN state/execution·ECS Task ARN·시각·exit code·execution status·data status·failure
 reason 를 남긴다. **원장 기록 실패가 본 작업을 실패시키지 않는다**(스펙 §3.4) — 모든 원장 호출은
-예외를 삼키고 진행한다.
+예외를 삼키고 진행한다. 예외는 Airflow 경로의 `OPS_EXCLUSIVE_STEP=1` 뿐이다: 실행 전 판단 재료(실행권·
+기대 작업·실행 이력·시작 기록)를 원장에서 확인하지 못하면 실행하지 않고 STEP_NOT_RUN_EXIT(75)로 끝난다
+(ALPHA-1088 — 재시도가 이미 끝난 업무를 다시 부르는 중복 실행을 막는다).
 
 성공 exit code 를 자동으로 VALID 로 바꾸지 않는다(스펙 §6·§3.3). 신호가 부족하면 UNKNOWN 이다.
 
@@ -210,6 +212,11 @@ def derive_data_status(signals: dict) -> str:
     return states.DATA_VALID if completeness_known else states.DATA_UNKNOWN
 
 
+# 실행권·실행 이력을 확인하지 못해 **업무를 실행하지 않고** 끝났다(EX_TEMPFAIL). 오케스트레이터가
+# 인프라 실패처럼 재시도할 수 있는 값이다 — 업무 실패(1)·부분 실패(2)와 섞이지 않는다.
+STEP_NOT_RUN_EXIT = 75
+
+
 def instrument(
     run_fn: Callable[[], int],
     *,
@@ -224,11 +231,95 @@ def instrument(
     """run_fn(실제 스텝)을 원장 계측으로 감싼다. run_fn 의 exit code 를 **그대로** 반환한다.
 
     ledger=None(원장 미설정) 또는 expected_task 부재(미등록)면 계측 없이 run_fn 만 돈다.
-    """
-    if ledger is None:
-        return run_fn()
 
-    expected = _safe(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key))
+    `OPS_EXCLUSIVE_STEP=1`(Airflow 경로가 주입)이면 실행 전에 작업의 실행권(StepLock)을 잡고, 원장을
+    읽지 못하면 **실행하지 않는다**(STEP_NOT_RUN_EXIT). env 가 없는 SFN·수동 경로는 종전 그대로
+    원장 장애에도 작업을 진행한다(스펙 §3.4).
+    """
+    kwargs = dict(task_key=task_key, run_id=run_id, ledger=ledger, ecs_task_arn=ecs_task_arn,
+                  sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
+                  observe_data_fn=observe_data_fn)
+    exclusive = os.environ.get("OPS_EXCLUSIVE_STEP") == "1"
+    if ledger is None:
+        if exclusive:
+            # 원장이 없으면 실행권도 이력도 확인할 수 없다 — 배선 누락(task-def DB env)을 드러낸다.
+            logger.error("OPS_EXCLUSIVE_STEP=1 인데 원장 미설정 — 실행하지 않는다(task=%s)", task_key)
+            return STEP_NOT_RUN_EXIT
+        return run_fn()
+    if not exclusive:
+        return _instrument(run_fn, strict=False, **kwargs)
+    wait_seconds = float(os.environ.get("OPS_STEP_LOCK_WAIT_SECONDS", "600"))
+    lock = ledger.step_lock(task_key)
+    acquired = False
+    try:
+        try:
+            acquired = lock.acquire(wait_seconds=wait_seconds)
+        except Exception:
+            # 실행권을 판단할 수 없다 — 이미 다른 실행이 돌고 있을 수도, 이미 끝났을 수도 있다.
+            logger.exception("실행권 확인 불가(원장 접근 실패) — 실행하지 않는다(task=%s)", task_key)
+            return STEP_NOT_RUN_EXIT
+        if not acquired:
+            logger.warning("다른 실행이 %.0f초 넘게 이 작업을 잡고 있다 — 실행하지 않는다(task=%s run_id=%s)",
+                           wait_seconds, task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        return _instrument(run_fn, strict=True, **kwargs)
+    finally:
+        lock.release(acquired)
+
+
+# 한 run 안에서 선행 단계 판정 순서(카탈로그 stage). normalize 는 depends_on 이 없지만(raw 부분 실패여도
+# 도는 계약) 입력은 raw 다 — 성공 skip 의 "입력 불변" 판정은 depends_on 이 아니라 단계로 한다.
+_STAGE_ORDER = {"raw": 0, "normalize": 1, "feature": 2}
+
+
+def _upstream_ran_after(ledger: Ledger, run_id: str, task_key: str, since_attempt_id: str) -> bool:
+    """같은 run 의 앞 단계 작업에 since 이후 만들어진 attempt 가 있는가(판정은 DB 시계)."""
+    entry = catalog.get(task_key)
+    order = _STAGE_ORDER.get(entry.stage) if entry is not None else None
+    if not order:
+        return False
+    stages = [stage for stage, rank in _STAGE_ORDER.items() if rank < order]
+    return ledger.attempt_created_after(pipeline_run_id=run_id, stages=stages,
+                                        attempt_id=since_attempt_id)
+
+
+class _LedgerUnavailable(Exception):
+    """strict 모드에서 실행 전 판단 재료(기대 작업·실행 이력)를 읽지 못했다."""
+
+
+def _read(fn: Callable, *, strict: bool):
+    """strict 면 실패를 _LedgerUnavailable 로 올리고, 아니면 종전처럼 삼킨다(_safe)."""
+    if not strict:
+        return _safe(fn)
+    try:
+        return fn()
+    except Exception as exc:
+        raise _LedgerUnavailable() from exc
+
+
+def _instrument(
+    run_fn: Callable[[], int],
+    *,
+    strict: bool,
+    task_key: str,
+    run_id: str,
+    ledger: Ledger,
+    ecs_task_arn: str | None,
+    sfn_execution_arn: str | None,
+    sfn_state_name: str | None,
+    observe_data_fn: Callable[[int], dict] | None,
+) -> int:
+    try:
+        expected = _read(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key),
+                         strict=strict)
+    except _LedgerUnavailable:
+        logger.exception("기대 작업 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+        return STEP_NOT_RUN_EXIT
+    if strict and not expected:
+        # 실행 주체가 계획한 run 인데 기대 작업이 없다 = run_id 불일치·계획 누락. 원장 밖에서 돌면 다음
+        # 재시도가 이 실행을 볼 수 없어 중복이 된다(비-strict 경로의 투명 통과와 다른 이유).
+        logger.error("기대 작업 없음 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+        return STEP_NOT_RUN_EXIT
     if not expected:
         # 미등록 작업 또는 원장 조회 실패 — 본 작업만 돌린다(투명 통과, 스펙 §6).
         # ⚠️ 여기엔 세 가지가 섞인다: ① 미등록(의도) ② 조회 실패(_safe 가 logger.exception 남김)
@@ -244,6 +335,41 @@ def instrument(
         # 실행되더라도, 계획상 SKIP 된 작업에 실행 이력을 붙이면 축이 오염된다(edge-review).
         return run_fn()
     expected_task_id = expected["expected_task_id"]
+    if os.environ.get("OPS_SKIP_IF_SUCCEEDED") == "1":
+        # 오케스트레이터 재시도가 이미 끝난 업무를 다시 부르는 경로다(Airflow 는 ECS 가 끝난 뒤 응답을
+        # 잃으면 새 태스크를 띄운다 — provider 의 reattach 는 RUNNING 태스크만 찾는다). 최신 물리
+        # 시도가 exit 0 이면 외부 호출·쓰기를 반복하지 않는다. exit 2(부분)는 복구 재시도가 정당해
+        # 건너뛰지 않는다. 의도한 재처리는 이 env 없이 돌린다(Airflow 재처리 run — conf reprocess_slot).
+        # 이 확인은 StepLock 안에서 해야 원자적이다(확인과 실행 사이에 같은 작업이 끼어들지 못한다).
+        # 실행권 없이 이 env 만 켜면 "아직 끝나지 않은 같은 작업"은 못 막는다.
+        # 조회 실패: strict(Airflow)면 실행하지 않고, 아니면 종전처럼 실행 쪽으로 연다(§3.4).
+        try:
+            attempts = _read(lambda: ledger.attempts_for(expected_task_id), strict=strict) or []
+        except _LedgerUnavailable:
+            logger.exception("실행 이력 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        latest_exit = attempts[-1].get("exit_code") if attempts else None
+        try:
+            upstream_newer = (
+                latest_exit == 0 and not isinstance(latest_exit, bool)
+                and _read(lambda: _upstream_ran_after(ledger, run_id, task_key,
+                                                      attempts[-1]["attempt_id"]), strict=strict)
+            )
+        except _LedgerUnavailable:
+            logger.exception("선행 작업 이력 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        if upstream_newer:
+            # 선행 단계가 이 성공 뒤에 다시 돌았다(예: 수집 실패 → 빈 입력 정제 성공 → 수집 복구). 입력이
+            # 바뀌었으니 성공 이력이 있어도 다시 실행한다 — skip 하면 복구한 raw 가 영영 적재되지 않는다.
+            logger.info("선행 작업이 마지막 성공 뒤에 다시 돌았다 — 다시 실행한다(task=%s)", task_key)
+        elif not (isinstance(expected.get("records_out"), int) and expected["records_out"] > 0):
+            # 0건 성공(소스 비활성·자격증명 결측 skip 등)은 다시 불러도 반복될 외부 부수효과가 없다 —
+            # skip 근거로 삼으면 설정을 고친 뒤의 재수집이 영영 막힌다.
+            logger.info("최신 성공이 0건 — 다시 실행한다(task=%s)", task_key)
+        elif latest_exit == 0 and not isinstance(latest_exit, bool):
+            logger.warning("이미 성공한 작업 — 다시 실행하지 않는다(task=%s run_id=%s attempts=%d)",
+                           task_key, run_id, len(attempts))
+            return 0
     # 기대값은 Planner가 실행 전에 고정한 snapshot만 정본이다. observer가 expected_count를
     # 자기신고하도록 두면 수집기가 빠뜨린 대상을 분모에서도 줄여 스스로 만점 처리할 수 있다.
     expected_count = _counter(expected.get("expected_count"))
@@ -259,6 +385,13 @@ def instrument(
         expected_task_id=expected_task_id, ecs_task_arn=arn or "",
         sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
     ))
+    if strict and attempt_id is None:
+        # 시작 기록 없이 실행하면 원장에 흔적 없는 실행이 생긴다 — 다음 재시도의 성공 skip 이 더 오래된
+        # 성공을 믿고, Reconciler 는 hard deadline 뒤 실제로 돈 작업을 MISSED 로 찍는다. 아직 아무 일도
+        # 하지 않았으므로 실행하지 않고 재시도에 맡긴다(ECS ARN 을 못 얻은 경우도 여기로 온다).
+        logger.error("attempt 시작 기록 실패 — 실행하지 않는다(task=%s run_id=%s arn=%s)",
+                     task_key, run_id, arn)
+        return STEP_NOT_RUN_EXIT
 
     def run_with_attempt_marker():
         """OPS_LEDGER_ATTEMPT_ID env 를 이 시도의 것으로 바꿔 본 작업을 돌리고 원복한다."""

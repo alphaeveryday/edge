@@ -63,6 +63,9 @@ class _Cursor:
             self._rows = [(True,)]
         elif "INSERT INTO ops_pipeline_run" in s:
             self._ins_run(p)
+        elif "SELECT orchestrator FROM ops_pipeline_run WHERE run_key" in s:
+            r = self.db.runs.get(p[0])
+            self._rows = [(r["orchestrator"],)] if r else []
         elif "SELECT pipeline_run_id FROM ops_pipeline_run WHERE run_key" in s:
             r = self.db.runs.get(p[0])
             self._rows = [(r["pipeline_run_id"],)] if r else []
@@ -92,6 +95,7 @@ class _Cursor:
                     snapshot["expected_entity_count"] if snapshot else None,
                     row.get("dataset_contract_key"),
                     row.get("expected_as_of_date"),
+                    row.get("records_out"),
                 )]
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)
@@ -108,6 +112,22 @@ class _Cursor:
         elif "SELECT attempt_id FROM ops_task_attempt WHERE expected_task_id" in s:
             a = self._find_attempt(p[0], p[1])
             self._rows = [(a["attempt_id"],)] if a else []
+        elif "FROM ops_pipeline_run r LEFT JOIN ops_expected_task et" in s:   # reprocess_ready
+            run = self.db.runs.get(p[0])
+            raw = [row for row in self.db.etasks.values()
+                   if run and row["pipeline_run_id"] == run["pipeline_run_id"] and row["stage"] == "raw"]
+            done = [row for row in raw
+                    if (row["task_outcome"] == "FULFILLED" and (row.get("records_out") or 0) > 0)
+                    or row["plan_status"] == "SKIPPED"]
+            self._rows = [(len(raw), len(done))]
+        elif "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a" in s:   # attempt_created_after
+            # created_at 대신 삽입 순서(= DB 시계 순서의 대역)로 비교한다.
+            run_id, stages, attempt_id = p
+            order = [a["attempt_id"] for a in self.db.attempts]
+            since = order.index(attempt_id) if attempt_id in order else len(order)
+            etids = {row["expected_task_id"] for row in self.db.etasks.values()
+                     if row["pipeline_run_id"] == run_id and row["stage"] in stages}
+            self._rows = [(any(a["etid"] in etids for a in self.db.attempts[since + 1:]),)]
         elif "SELECT attempt_id, ecs_task_arn, execution_status, exit_code, record_source" in s:
             self._attempts_for(p)
         elif s.startswith("UPDATE ops_task_attempt SET execution_status"):
@@ -137,7 +157,8 @@ class _Cursor:
         row = {"pipeline_run_id": p[0], "run_key": run_key, "execution_name": p[2],
                "pipeline_type": p[3], "schedule_slot": p[4], "trading_date": p[5],
                "hard_deadline_at": p[6], "input_hash": p[10], "expected_execution_arn": p[11],
-               "sfn_execution_arn": None, "launch_status": p[12], "orchestration_status": None}
+               "sfn_execution_arn": None, "launch_status": p[12], "orchestration_status": None,
+               "orchestrator": p[13], "orchestrator_run_ref": p[14]}
         self.db.runs[run_key] = row
         self.db.runs_by_id[p[0]] = row
         self._rows = [(p[0],)]
@@ -158,7 +179,8 @@ class _Cursor:
         self._rows = [(row["pipeline_run_id"], row["run_key"], row["execution_name"],
                        row["expected_execution_arn"], row["sfn_execution_arn"],
                        row["launch_status"], row["orchestration_status"],
-                       row["hard_deadline_at"], row["trading_date"], row.get("input_hash"))]
+                       row["hard_deadline_at"], row["trading_date"], row.get("input_hash"),
+                       row.get("orchestrator", "SFN"), row.get("orchestrator_run_ref"))]
 
     def _ins_etask(self, p):
         key = (p[1], p[2])

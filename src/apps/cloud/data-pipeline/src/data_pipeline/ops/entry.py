@@ -390,8 +390,25 @@ def plan_run_cli(settings) -> int:
         raise SystemExit(
             f"OPS_PIPELINE_TYPE={pipeline_type}: catalog 등록 작업 0개 — 은퇴한 레인은 plan-run 불가"
         )
+    # 실행 주체(Airflow 이관). Airflow 가 부르면 계획만 남기고 SFN 을 시작하지 않는다 — 실행은
+    # 이 plan-run 을 띄운 DAG run 이 한다. 기본값은 기존 스케줄 경로(SFN)라 env 가 없는 배포는 불변.
+    orchestrator = os.environ.get("OPS_ORCHESTRATOR", states.ORCHESTRATOR_SFN)
+    if orchestrator not in states.ORCHESTRATORS:
+        raise SystemExit(f"모르는 OPS_ORCHESTRATOR={orchestrator} — "
+                         f"{'·'.join(sorted(states.ORCHESTRATORS))} 만")
+    orchestrator_run_ref = os.environ.get("OPS_ORCHESTRATOR_RUN_REF") or None
     arn = os.environ.get(arn_env)
-    if not arn:
+    if orchestrator == states.ORCHESTRATOR_AIRFLOW:
+        if orchestrator_run_ref is None:
+            # 원장 run ↔ Airflow run 을 잇는 유일한 키다. 없이 계획하면 두 이력이 끊긴다.
+            raise SystemExit("OPS_ORCHESTRATOR=AIRFLOW 는 OPS_ORCHESTRATOR_RUN_REF(dag_id/run_id) 필수")
+        # 없거나 못 읽으면 `_scheduled_time` 이 지금 시각으로 폴백한다 — Airflow 재시도가 분을
+        # 넘기면 다른 run_key(= 다른 run_id)가 생겨 같은 슬롯이 두 번 실행된다.
+        try:
+            datetime.fromisoformat(os.environ["OPS_SCHEDULED_TIME"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            raise SystemExit("OPS_ORCHESTRATOR=AIRFLOW 는 읽을 수 있는 OPS_SCHEDULED_TIME(ISO 슬롯 시각) 필수")
+    elif not arn:
         # 다른 레인 ARN 으로 폴백하지 않는다 — 기대는 이 레인 것이고 실행은 남의 SFN 이 되어
         # 기대와 실행이 어긋난 런이 원장에 남는다. 시작 전에 죽는 편이 낫다(Rule 12).
         raise SystemExit(f"{arn_env} 없음 — {pipeline_type} 레인 plan-run 은 그 레인 SFN ARN 필수")
@@ -403,14 +420,22 @@ def plan_run_cli(settings) -> int:
         if pipeline_type == catalog.PIPELINE_TYPE
         else None
     )
+    if os.environ.get("OPS_REPROCESS") == "1":
+        # 재처리 요청(Airflow reprocess_slot)은 기존 슬롯만 — 없는 슬롯을 새로 계획하면 수집 없이 빈 입력
+        # 정제·적재가 성공으로 끝나 "재처리했다"가 거짓이 된다.
+        run_key = planner.slot_run_key(_scheduled_time().astimezone(planner.KST), pipeline_type)
+        ready, reason = ledger.reprocess_ready(run_key)
+        if not ready:
+            raise SystemExit(f"재처리 불가({run_key}): {reason}")
     result = planner.plan_run(
         ledger, state_machine_arn=arn, scheduled_time=_scheduled_time(),
         pipeline_type=pipeline_type, universe_provider=universe_provider,
+        orchestrator=orchestrator, orchestrator_run_ref=orchestrator_run_ref,
     )
     logger.info(
-        "plan-run: lane=%s run=%s launch=%s created=%s trading=%s",
+        "plan-run: lane=%s run=%s launch=%s created=%s trading=%s orchestrator=%s",
         pipeline_type, result.pipeline_run_id, result.launch_status, result.created,
-        result.trading_day,
+        result.trading_day, orchestrator,
     )
     # LAUNCHED 만 성공. FAILED/CONFLICT/UNKNOWN 은 비0 으로 드러낸다(fail-loud, Rule 12).
     return 0 if result.launch_status == states.LAUNCH_LAUNCHED else 1
@@ -512,8 +537,14 @@ def reconcile_cli(settings) -> int:
             if grace_passed:
                 reconciler.detect_planner_missing(ledger, expected_run_keys=grace_passed)
             run_keys = [key for key, _ in due]
+        # Airflow DAG 가 끝나며 자기 run_key 를 지목해 부를 때만 판정을 함께 넘긴다(주기 실행은 없음).
+        reported = os.environ.get("OPS_ORCHESTRATION_STATUS") or None
+        if reported is not None and (not override or reported not in (states.ORCH_SUCCEEDED,
+                                                                        states.ORCH_FAILED)):
+            raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
         for run_key in run_keys:
             summary = reconciler.reconcile_run(
-                ledger, run_key=run_key, cluster_arn=cluster_arn, now=now)
+                ledger, run_key=run_key, cluster_arn=cluster_arn, now=now,
+                reported_status=reported)
             logger.info("reconcile: %s", summary)
     return 0
