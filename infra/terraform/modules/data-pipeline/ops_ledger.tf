@@ -54,7 +54,12 @@ locals {
   # 조건 자체가 필요한 이유는 같다: 누군가 스케줄을 끄면(사고 대응·비용) 슬롯 기준만 남아
   # Reconciler 가 뜰 리 없는 슬롯을 매번 결측으로 판정해 **참인 PLANNER_MISSING** 을 하루 5개씩
   # 연다(실제로 안 돌았으니 resolve 되지 않는다). 끄는 행위 하나로 두 사실이 함께 꺼져야 한다.
-  investor_intraday_schedule_hhmm = var.investor_intraday_schedule_state != "ENABLED" ? "" : join(",", sort([
+  #
+  # Airflow 가 이 레인을 실행하면(investor_intraday_orchestrator = "AIRFLOW") EventBridge 스케줄은 꺼지지만
+  # 슬롯은 여전히 예정된다 — Reconciler 가 Airflow 런도 같은 run_key 로 대조하고, Airflow 가 슬롯을
+  # 아예 안 돌렸을 때 PLANNER_MISSING 을 열어야 하므로 값을 유지한다(ALPHA-1088).
+  _investor_intraday_slots_expected = var.investor_intraday_schedule_state == "ENABLED" || var.investor_intraday_orchestrator == "AIRFLOW"
+  investor_intraday_schedule_hhmm = !local._investor_intraday_slots_expected ? "" : join(",", sort([
     for hm in local._investor_intraday_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
   ]))
 
