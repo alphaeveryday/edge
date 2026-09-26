@@ -237,8 +237,13 @@ def run(name: str, reps: int) -> int:
     # 정상 요청 뒤(N)·복구 뒤·재요청 뒤(F) 대사를 각각 본다 — 재요청 성공이 복구 실패를 가리지
     # 않게. F 의 요청 직후 불일치는 주입한 실패라 판정에서 뺀다. 결과 파일은 그대로 남긴다.
     checks = {"N": ("after_request",), "F": ("after_recovery", "after_rerequest")}
+    # B·C 는 원장 완료(7/7)까지가 완료 계약이다. A 복구 뒤 5/7 은 현행 절차의 관측값이라 뺀다.
+    def bad(r, k):
+        v = r[k]
+        ledger_required = r["candidate"] != "A" or k != "after_recovery"
+        return not v["business_ok"] or (ledger_required and v["runs_complete"] != 7)
     failed = [f"{r['candidate']}:{r['scenario']}:{k}" for r in results
-              for k in checks[r["scenario"]] if not r[k]["business_ok"]]
+              for k in checks[r["scenario"]] if bad(r, k)]
     if failed:
         print("최종 대사 불일치:", failed, file=sys.stderr)
         return 1
