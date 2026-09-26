@@ -116,6 +116,8 @@ from .ops import entry as ops_entry
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
+# 공유 호출 허용(ALPHA-1087, 기본 비활성). 켜면 KIS 스텝은 위 간격 대신 call_budget 행을 쓴다.
+from .sources.call_budget import CLASS_BATCH, CLASS_LANE, kis_http_client  # noqa: E402
 
 # KRX getJsonData(구성종목 PDF) 응답 타임아웃 — **기본 10초로는 100% 실패한다**(ALPHA-368).
 # 2026-07-15 라이브 실측: 같은 세션·같은 요청이 timeout=10s 에선 TimeoutError, 45s 에선 12.4초에
@@ -1165,7 +1167,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         profile_source = KisEtfProfileSource(
             settings.kis_nav.source,
             settings.krx_etf.source.etf_map,
-            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC, caller="etf-profile", call_class=CLASS_BATCH),
         )
         return ingest_raw_etf.run(
             settings, storage, profile_source, run_id,
@@ -1219,7 +1221,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         if settings.kis_investor is None:
             raise SystemExit("kis_investor.source 설정이 없다 — sources.toml 확인")
         estimate_source = KisInvestorEstimateSource(
-            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+            settings.kis_investor.source, kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC, caller="investor-estimate", call_class=CLASS_LANE)
         )
         return ingest_raw_investor.run(
             settings, storage, estimate_source, run_id,
@@ -1276,7 +1278,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         nav_source = KisNavSource(
             settings.kis_nav.source,
             settings.krx_etf.source.etf_map,
-            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC, caller="nav", call_class=CLASS_BATCH),
             from_date,
             to_date,
         )
@@ -1302,7 +1304,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
         inav_source = KisInavSource(
             settings.kis_nav.source,
             settings.krx_etf.source.etf_map,
-            PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC),
+            kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC, caller="inav-batch", call_class=CLASS_BATCH),
             # `or` 로 쓰면 0 이 falsy 라 조용히 기본값이 된다 — 어댑터의 1 미만 가드를
             # CLI 가 우회해 잘못된 입력이 성공으로 기록된다(Rule 12).
             interval_sec=(
@@ -1330,7 +1332,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 # (증분=둘 다 미지정은 위에서 창을 채웠으므로 이 경로로 오지 않는다.)
                 raise SystemExit("KIS 가격은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
             price_source = KisDailyPriceSource(
-                settings.kis_price.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+                settings.kis_price.source, kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC, caller="daily-price", call_class=CLASS_BATCH)
             )
         elif vendor == "yahoo":
             if settings.yahoo_price is None:
@@ -1355,7 +1357,7 @@ def _dispatch(args, settings, storage, run_id) -> int:
             # 무한정 과거로 돈다 — 무의미한 전량 페이지네이션 전에 fail-fast(가격과 동형).
             raise SystemExit("KIS 투자자 수급은 --from 없이 --to 만 지정할 수 없다 — --from 을 함께 지정")
         investor_source = KisInvestorSource(
-            settings.kis_investor.source, PoliteClient(min_interval=KIS_MIN_INTERVAL_SEC)
+            settings.kis_investor.source, kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC, caller="investor", call_class=CLASS_BATCH)
         )
         return ingest_raw_investor.run(
             settings, storage, investor_source, run_id, from_date, to_date,

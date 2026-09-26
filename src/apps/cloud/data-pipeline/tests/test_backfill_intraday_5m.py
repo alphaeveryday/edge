@@ -343,6 +343,9 @@ class _Secrets:
     def get_secret_value(self, SecretId):            # noqa: N803
         return {"SecretString": '{"app_key": "k", "app_secret": "s"}'}
 
+    def describe_task_definition(self, taskDefinition):  # noqa: N803 — 공유 허용 꺼진 배포(가드 통과)
+        return {"taskDefinition": {"containerDefinitions": [{"environment": []}]}}
+
 
 class _Args:
     def __init__(self, **kw):
@@ -857,3 +860,17 @@ def test_collectors_skip_ticker_days_another_vendor_already_covers():
 
     assert d1 not in out or not out[d1], "토스가 이미 덮인 날을 다시 받았다"
     assert {r["ticker"] for r in out[d2]} == {"A"}
+
+
+def test_kis_backfill_refuses_when_shared_call_budget_is_enabled():
+    """공유 허용이 켜진 배포에서 로컬 간격으로 도는 백필은 합산 한도를 깬다 — 배포 사실로 거부한다."""
+    def ecs(flag):
+        class E:
+            def describe_task_definition(self, taskDefinition):
+                env = [] if flag is None else [{"name": "DATA_PIPELINE_CALL_BUDGET__ENABLED", "value": flag}]
+                return {"taskDefinition": {"containerDefinitions": [{"environment": env}]}}
+        return E()
+    with pytest.raises(SystemExit):
+        backfill.refuse_if_call_budget_enabled(ecs("true"))
+    backfill.refuse_if_call_budget_enabled(ecs("false"))
+    backfill.refuse_if_call_budget_enabled(ecs(None))

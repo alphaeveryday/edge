@@ -50,9 +50,12 @@ class PoliteClient:
     `_respect_interval` 도크스트링이 정본이다. 재시도·StopFetch 는 `request()`.
     """
 
-    def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0):
+    def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0, pacer=None):
         self.min_interval = min_interval
         self.timeout = timeout
+        # 공유 호출 허용(sources/call_budget.py). 있으면 매 발신 시도가 pacer.pace() 를 거치고
+        # 로컬 간격(min_interval)은 쓰지 않는다 — 그 간격은 계정 예산을 나눠 쓰려던 값이다.
+        self.pacer = pacer
         # 다음 요청을 보낼 수 있는 가장 이른 시각(monotonic). 워커 여럿이 공유해도 전체
         # 발신 속도가 1/min_interval 로 묶인다(_respect_interval 주석).
         self._next_slot_at = 0.0
@@ -116,7 +119,12 @@ class PoliteClient:
         for backoff in [0, *RETRY_BACKOFF_SEC]:
             if backoff:
                 self._sleep(backoff)
-            self._respect_interval()
+            # 재시도도 새 허용을 받는다(같은 전체 예산). pacer 가 돌아온 뒤 소켓 쓰기까지의 지연(연결·
+            # TLS 핸드셰이크)은 통제하지 못한다 — call_budget 도크스트링.
+            if self.pacer is not None:
+                self.pacer.pace()
+            else:
+                self._respect_interval()
             req = urllib.request.Request(
                 url, data=data, headers=headers or {}, method=method
             )

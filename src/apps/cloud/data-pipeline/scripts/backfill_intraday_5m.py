@@ -111,6 +111,9 @@ VENDORS = {
 }
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
 KIS_SECRET = "edge-dev-data-pipeline/kis/oauth"
+# 공유 호출 허용(ALPHA-1087) 플래그의 **배포된 사실**을 읽을 kis 태스크 정의. 이 스크립트는 로컬에서
+# 돌고 공유 허용을 거치지 않으므로(자기 PoliteClient 간격), 켜진 환경에서 돌면 합산 한도를 깬다.
+KIS_TASK_FAMILY = "edge-dev-data-pipeline-kis"
 # 소급 TR 은 한 콜 120봉이라 하루 4콜이다(실측). 간격이 곧 유량 상한이고 앱키 전역이라
 # 다른 KIS 스텝과 나눠 쓴다. **1분 가격 워커와 같은 간격**이다 — 0.08 → 12.5 req/s 이고
 # 레포 예산선은 15/s, 벤더 한도(EGW00201)는 20/s 다(`config/models.py:min_interval_sec`).
@@ -424,6 +427,7 @@ def _collect_kis(days, targets, covered, a):
     중간에 죽으면 받은 날은 남기고 이어서"가 바로 이 자리다. 다음 실행은 `covered` 가
     이미 쓴 날을 걸러 주므로 이어받는다.
     """
+    refuse_if_call_budget_enabled(boto3.client("ecs"))
     sec = json.loads(boto3.client("secretsmanager")
                      .get_secret_value(SecretId=KIS_SECRET)["SecretString"])
     vendor = VENDORS["kis"]["vendor"]
@@ -513,6 +517,25 @@ def _collect_kis(days, targets, covered, a):
         if failed:
             log.warning("수집 실패 (종목,날짜) %d건 — 상장 전 날짜가 대부분이다. 산출이 "
                         "0이라 다음 실행도 같은 자리에서 콜을 태운다", failed)
+
+
+def refuse_if_call_budget_enabled(ecs) -> None:
+    """공유 호출 허용이 켜진 배포에서는 KIS 백필을 거부한다(fail-closed).
+
+    판정은 배포된 kis 태스크 정의의 env 로 한다 — 이 스크립트를 도는 로컬 셸의 env 는 배포 상태를
+    모른다. 조회 실패(권한·이름 변경)도 그대로 올려 실행을 막는다: 확인 못 한 채 도는 쪽이 합산 한도를
+    깨는 쪽이다.
+
+    ⚠️ **완전한 차단이 아니다.** 보는 것은 "가장 최근 등록된 태스크 정의"이지 지금 실행 중인 태스크가
+    아니다 — 전환 배포 도중이나 정의는 끈 상태인데 이전 공유 모드 태스크가 남아 있는 동안에는 판정이
+    실제와 어긋날 수 있다. 운영 절차(ALPHA-1087: 공유 모드 중 수동 백필 금지)가 1차 통제이고
+    이건 보조 가드다.
+    """
+    td = ecs.describe_task_definition(taskDefinition=KIS_TASK_FAMILY)["taskDefinition"]
+    env = {e["name"]: e["value"] for c in td["containerDefinitions"] for e in c.get("environment", [])}
+    if env.get("DATA_PIPELINE_CALL_BUDGET__ENABLED", "false").strip().lower() == "true":
+        raise SystemExit("공유 호출 허용이 켜진 환경이다 — 이 스크립트는 공유 허용을 거치지 않아 합산 한도를 깬다. "
+                         "끈 시간대·끈 환경에서 실행한다(ALPHA-1087).")
 
 
 def main() -> int:

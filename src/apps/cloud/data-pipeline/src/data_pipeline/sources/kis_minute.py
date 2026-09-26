@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -40,6 +41,7 @@ from decimal import Decimal
 from .candle import Candle, build_candle, is_stamp, to_decimal
 from .http import PoliteClient, StopFetch
 from .kis_auth import KisAuth, token_expired, domain_for
+from .call_budget import CallBudgetError
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +182,9 @@ class KisMinuteClient:
         self.retry_count = 0
         # 유량 소진(예산까지 EGW00201)이 연속된 종목 수 — RATE_STREAK_LIMIT 승격 판정용.
         self._rate_streak = 0
+        # 동시 요청에서 두 카운터 갱신을 보호한다(분 워커 fetch_concurrency>1). 승격 판정의 '연속'은
+        # 완료 순서 기준이 된다 — 동시성 N 이면 진행 중 요청 N 개만큼 순서가 섞일 수 있다.
+        self._counter_lock = threading.Lock()
 
     def candles(self, symbol: str, *, window_end: datetime) -> tuple[Candle, ...]:
         """`window_end` 로 끝나는 30분치 봉(최신→과거).
@@ -193,10 +198,10 @@ class KisMinuteClient:
         return tuple(candle for row in rows
                      if (candle := parse_minute_row(row, symbol)) is not None)
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, token: str | None = None) -> dict[str, str]:
         return {
             "content-type": "application/json; charset=utf-8",
-            "authorization": f"Bearer {self.auth.token()}",
+            "authorization": f"Bearer {token if token is not None else self.auth.token()}",
             "appkey": self.app_key,
             "appsecret": self.app_secret,
             "tr_id": self.tr_id,
@@ -219,33 +224,37 @@ class KisMinuteClient:
         url = self._url(symbol, hour)
         reissued = False
         for attempt in range(MAX_RATE_RETRY):
-            data = self._call(url, symbol)
+            data, used_token = self._call(url, symbol)
             if data.get("rt_cd") == "0":
                 output2 = data.get("output2")
                 # 빈 list 는 정상(그 창에 봉이 없다 — collector 가 missing 으로 센다).
                 # 키 누락·비-list 는 rt_cd=0 인데도 이상이라 형상 위반으로 올린다.
                 if not isinstance(output2, list):
                     raise ValueError(f"KIS rt_cd=0 인데 output2 이상: {type(output2).__name__}")
-                self._rate_streak = 0  # 성공 = 유량 회복 — 승격 판정을 리셋한다
+                with self._counter_lock:
+                    self._rate_streak = 0  # 성공 = 유량 회복 — 승격 판정을 리셋한다
                 return output2
             detail = f"rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} msg1={data.get('msg1')}"
             if _token_expired(f"{data.get('msg_cd')} {data.get('msg1')}") and not reissued:
                 logger.warning("KIS 분봉 토큰 만료 — 캐시 폐기 후 1회 재발급: %s", detail)
-                self.auth.invalidate()
+                self.auth.invalidate(used_token)   # 이 요청이 쓴 토큰일 때만 — 이미 갱신됐으면 새 토큰 재사용
                 reissued = True
                 continue
             if data.get("msg_cd") == RATE_MSG_CD:
                 if attempt < MAX_RATE_RETRY - 1:
-                    self.retry_count += 1
+                    with self._counter_lock:
+                        self.retry_count += 1
                     self.client._sleep(0.7 * (attempt + 1))
                     continue
                 # 재시도 예산까지 유량 소진 — 연속되면 종목이 아니라 앱키 전역의 상태다.
                 # 종목별 missing 으로만 접으면 백오프 합(~7초)이 전 종목에 곱해져 window
                 # 폭주가 된다(RATE_STREAK_LIMIT 주석의 산술).
-                self._rate_streak += 1
-                if self._rate_streak >= RATE_STREAK_LIMIT:
+                with self._counter_lock:
+                    self._rate_streak += 1
+                    streak = self._rate_streak
+                if streak >= RATE_STREAK_LIMIT:
                     raise KisSourceError(
-                        f"KIS 유량 소진 연속 {self._rate_streak}종목 — 소스 전역 승격: {detail}")
+                        f"KIS 유량 소진 연속 {streak}종목 — 소스 전역 승격: {detail}")
                 raise KisUnitError(f"KIS 분봉 {symbol} 유량 소진: {detail}")
             # 종목 단위 오류(없는 종목·일시 거절)는 재시도로 풀릴 수 있다 —
             # 원장이 그 window 를 다시 claim 하는 것으로 재시도된다.
@@ -254,16 +263,26 @@ class KisMinuteClient:
         # **마지막 칸에서 토큰 만료 재발급을 쓴 경우**(continue 로 루프가 끝난다).
         raise KisUnitError(f"KIS 분봉 {symbol}: 재시도 예산({MAX_RATE_RETRY}) 소진")
 
-    def _call(self, url: str, symbol: str) -> dict:
-        """1회 요청 → 응답 dict. 소스 전역/종목 단위/형상 위반을 여기서 가른다."""
+    def _call(self, url: str, symbol: str) -> tuple[dict, str | None]:
+        """1회 요청 → (응답 dict, 이 요청이 쓴 토큰). 소스 전역/종목 단위/형상 위반을 여기서 가른다.
+
+        토큰 조회는 종전처럼 try **안**에 둔다(인증 축 사고의 분류가 바뀌지 않게 — kis_sector_index 주석).
+        쓴 토큰을 돌려주는 이유: 만료 실패를 **그 토큰**과 묶어야 동시 요청에서 이미 갱신된 새 토큰을
+        지우지 않는다(`KisAuth.invalidate`).
+        """
+        used_token = None
         try:
-            body = self.client.request("GET", url, headers=self._headers(), decode=True)
+            used_token = self.auth.token()
+            body = self.client.request("GET", url, headers=self._headers(used_token), decode=True)
+        except CallBudgetError:
+            raise   # 공유 허용 장애는 원형 그대로 — window 시도 실패로 전파(종목 결손으로 접지 않는다)
         except StopFetch as exc:
             if _token_expired(getattr(exc, "body", "")):
                 # 4xx 로 오는 만료 — 캐시를 버리고 올린다. 호출부(_rows)가 다음 attempt 에
                 # 새 토큰으로 재발급된 헤더를 만든다.
                 logger.warning("KIS 분봉 4xx 토큰 만료 — 캐시 폐기: %s", exc)
-                self.auth.invalidate()
+                if used_token is not None:
+                    self.auth.invalidate(used_token)
                 raise KisUnitError(f"KIS 분봉 {symbol} 토큰 만료: {exc}") from exc
             # 그 밖의 4xx/429 는 키·권한·쿼터 — 종목을 바꿔도 안 풀린다.
             raise KisSourceError(f"KIS 분봉 소스 전역 실패: {exc}") from exc
@@ -278,7 +297,7 @@ class KisMinuteClient:
             raise KisUnitError(f"KIS 분봉 {symbol} 응답 JSON 손상: {exc}") from exc
         if not isinstance(data, dict):
             raise ValueError(f"KIS 응답이 객체가 아님: {type(data).__name__}")
-        return data
+        return data, used_token
 
 
 # ── 소급(과거 거래일) 분봉 ────────────────────────────────────────────────

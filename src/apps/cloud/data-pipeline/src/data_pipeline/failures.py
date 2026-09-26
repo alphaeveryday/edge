@@ -25,6 +25,7 @@ _SPECS = {
     "RATE_LIMITED": _FailureSpec("TRANSIENT", "공급자 요청 한도 초과"),
     "NETWORK_RETRY_EXHAUSTED": _FailureSpec("TRANSIENT", "네트워크 요청 재시도 소진"),
     "HTTP_REQUEST_REJECTED": _FailureSpec("PROVIDER", "공급자 요청 거부"),
+    "CALL_BUDGET_BLOCKED": _FailureSpec("TRANSIENT", "공유 호출 허용 차단(저장소 장애·일시정지·기한 초과)"),
     "PARTIAL_COLLECTION": _FailureSpec("PARTIAL", "일부 대상 수집 실패"),
     "STORAGE_WRITE_FAILED": _FailureSpec("STORAGE", "수집 결과 저장 실패"),
     "COLLECTION_FAILED": _FailureSpec("UNKNOWN", "수집 실패"),
@@ -79,6 +80,9 @@ def http_failure(status: object) -> dict[str, str]:
         return failure_detail("HTTP_FORBIDDEN")
     if status == 429:
         return failure_detail("RATE_LIMITED")
+    if status == "CALL_BUDGET":
+        # 공유 호출 허용 오류(sources/call_budget.CallBudgetError) — 공급자에 요청을 보내지 않았다.
+        return failure_detail("CALL_BUDGET_BLOCKED")
     return failure_detail("HTTP_REQUEST_REJECTED")
 
 
