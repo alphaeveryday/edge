@@ -234,9 +234,11 @@ def run(name: str, reps: int) -> int:
         rec._stop = True
         sampler.join(timeout=10)
         (out / "results.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
-    # 마지막 대사가 하나라도 불일치면 실행 자체를 실패로 끝낸다(결과 파일은 그대로 남긴다)
-    failed = [f"{r['candidate']}:{r['scenario']}" for r in results
-              if not (r.get("after_rerequest") or r.get("after_recovery") or r["after_request"])["business_ok"]]
+    # 정상 요청 뒤(N)·복구 뒤·재요청 뒤(F) 대사를 각각 본다 — 재요청 성공이 복구 실패를 가리지
+    # 않게. F 의 요청 직후 불일치는 주입한 실패라 판정에서 뺀다. 결과 파일은 그대로 남긴다.
+    checks = {"N": ("after_request",), "F": ("after_recovery", "after_rerequest")}
+    failed = [f"{r['candidate']}:{r['scenario']}:{k}" for r in results
+              for k in checks[r["scenario"]] if not r[k]["business_ok"]]
     if failed:
         print("최종 대사 불일치:", failed, file=sys.stderr)
         return 1

@@ -209,6 +209,6 @@ python3 trial.py down                # 컨테이너·볼륨 삭제
 
 ## 실패 기록
 
-- 사후 보강(PR 전 리뷰, 원시 결과 재생성 없음): `trial.py`가 ① 최종 대사 불일치 시 비0 종료, ② `load-price-daily` exit 2를 실패로 집계(계속 진행 규칙은 `normalize-price`만), ③ 호출 기록 조회 실패를 0건으로 접지 않도록 고쳤다. r1·r2 원시 결과를 대조해 영향이 없음을 확인했다 — exit 2 호출 0건, 호출 기록 조회 실패 0건, 전 시나리오 최종 `business_ok=true`. r1·r2는 수정 전 코드로 만들어졌다.
+- 사후 보강(PR 전 리뷰, 원시 결과 재생성 없음): `trial.py`가 ① 정상 요청 뒤·복구 뒤·재요청 뒤 대사 중 하나라도 불일치하면 비0 종료, ② `load-price-daily` exit 2를 실패로 집계(계속 진행 규칙은 `normalize-price`만), ③ 호출 기록 조회 실패를 0건으로 접지 않도록 고쳤다. r1·r2 원시 결과를 대조해 영향이 없음을 확인했다 — exit 2 호출 0건, 호출 기록 조회 실패 0건, 전 시나리오의 정상 요청 뒤(N)·복구 뒤·재요청 뒤(F) `business_ok=true`. r1·r2는 수정 전 코드로 만들어졌다.
 
 - `r1-aborted-backfill-race`: C의 재요청 `backfill create`가 `AlreadyRunningBackfill`로 실패했다. dag run이 모두 끝나도 scheduler가 backfill `completed_at`을 찍기 전에는 새 backfill을 받지 않는다. 대기 조건에 `completed_at`을 추가해 r2를 새로 돌렸다. r1에서 끝난 A·B·C 정상, A·B 실패 시나리오의 대사 결과·호출 수는 r2와 같다.
