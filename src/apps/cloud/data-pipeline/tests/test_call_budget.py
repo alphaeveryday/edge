@@ -31,7 +31,7 @@ class FakeStore:
     def __init__(self, clock, script, rtt=0.001):
         self.clock, self.script, self.rtt, self.calls = clock, list(script), rtt, 0
 
-    def acquire(self, budget_id, call_class, cost=1):
+    def acquire(self, budget_id, call_class, cost=1, timeout=None):
         self.calls += 1
         item = self.script.pop(0)
         if callable(item):
@@ -271,3 +271,83 @@ def test_contended_stats_lock_cannot_turn_a_late_grant_into_a_send():
     with pytest.raises(IndexError):
         p.pace()
     assert p.stats.c["granted"] == 0 and p.stats.c["discard_late"] == 2
+
+
+class _FakeResult:
+    def __init__(self, status, row=None, sqlstate=None):
+        self.status, self.row, self.sqlstate = status, row, sqlstate
+
+    def get_value(self, r, c):
+        return self.row[c]
+
+    def error_field(self, _field):
+        return self.sqlstate
+
+
+class _FakePg:
+    """libpq 비차단 커넥션 대역 — 응답이 이미 도착해 있고 get_result 가 script 를 낸다."""
+
+    socket = 0
+
+    def __init__(self, results):
+        from psycopg import pq
+
+        self.results, self.status = list(results), pq.ConnStatus.OK
+
+    def finish(self):
+        pass
+
+    def send_query_params(self, *a):
+        pass
+
+    def flush(self):
+        return 0
+
+    def is_busy(self):
+        return False
+
+    def get_result(self):
+        return self.results.pop(0) if self.results else None
+
+
+def test_error_after_the_row_is_not_a_grant():
+    """행(GRANTED)을 받은 뒤 커밋 단계 오류가 오면 예약은 롤백됐다 — 허용으로 믿으면 예산 밖 발신이다."""
+    from psycopg import pq
+
+    store = cb.PgBudgetStore(None, CallBudgetConfig(enabled=True))
+    store._pg = _FakePg([_FakeResult(pq.ExecStatus.TUPLES_OK, (b"GRANTED", b"0", b"0")),
+                         _FakeResult(pq.ExecStatus.FATAL_ERROR, sqlstate=b"40001")])
+    with pytest.raises(cb.CallBudgetUnavailable, match="40001"):
+        store.acquire("kis", 0, timeout=1.0)
+    assert store._pg is None                                # 상태를 모르는 커넥션은 버린다
+    store._pg = _FakePg([_FakeResult(pq.ExecStatus.TUPLES_OK, (b"GRANTED", b"0.01", b"0"))])
+    assert store.acquire("kis", 0, timeout=1.0) == ("GRANTED", 0.01, 0.0)
+
+
+def test_socket_error_while_connecting_is_a_budget_outage(monkeypatch):
+    """연결 대기 중 소켓 오류(OSError)도 CallBudgetUnavailable 여야 한다 — 원형으로 새면 pace 의 재연결·
+    CALL_BUDGET_BLOCKED 분류를 건너뛰고, 반쯤 연 libpq 커넥션이 남는다."""
+    from psycopg import pq
+
+    finished = []
+
+    class Half:
+        socket, status = 0, pq.ConnStatus.STARTED
+
+        def finish(self):
+            finished.append(True)
+
+    def boom(*a, **k):
+        raise OSError("poll failed")
+    class FakePGconn:
+        @staticmethod
+        def connect_start(conninfo):
+            return Half()
+    monkeypatch.setattr(pq, "PGconn", FakePGconn)
+    monkeypatch.setattr(cb, "_wait_socket", boom)
+    from data_pipeline.config import DbConfig
+    store = cb.PgBudgetStore(DbConfig(host="h", port=1, name="d", user="u", password="p"), CallBudgetConfig(enabled=True))
+    with pytest.raises(cb.CallBudgetUnavailable, match="OSError"):
+        store.acquire("kis", 0, timeout=1.0)
+    assert finished == [True] and store._pg is None
+    assert store._lock.acquire(blocking=False)                 # 잠금도 풀렸다

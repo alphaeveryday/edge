@@ -26,6 +26,7 @@ psycopg 는 지연 import 한다(db.py 관례).
 from __future__ import annotations
 
 import logging
+import select
 import threading
 import time
 
@@ -82,62 +83,143 @@ class PgBudgetStore:
 
     호출 1건 = `call_budget_acquire` 한 번 = 짧은 트랜잭션 하나(잠금→시각→판정→예약). 대기·HTTP 는
     트랜잭션 밖이다. 커넥션 오류는 버리고 다음 호출에 다시 연다.
+
+    시간 상한(ALPHA-1087). 호출 1회(저장소 잠금 대기+연결+질의)는 `min(timeout, statement_timeout + 0.5s)` 안에
+    끝난다. `timeout` 은 pace 의 남은 시간이다. 서버 상한(statement_timeout·lock_timeout)은 서버 실행만 막는다.
+    psycopg 3 는 두 경계를 못 막는다 — `execute` 는 응답 수신에 전체 기한이 없고(`Connection.wait` 가 기한 없이
+    소켓을 기다린다), `connect_timeout` 은 정수 초·최소 2초다. 그래서 연결·질의 모두 libpq 비동기 API
+    (`psycopg.pq`)로 하고 소켓을 기한까지만 기다린다. 기한을 넘기면 **서버가 예약을 확정했을 수 있다** —
+    그래도 허용을 못 받았으니 발신하지 않고, 상태를 모르는 커넥션은 버린다(재사용·반환 없음. 그 슬롯은
+    예산 손실로 센다).
+    ⚠️ 막지 못하는 것: 호스트 이름 해석(DNS). libpq 가 연결 시작 시 동기로 푼다.
     """
 
     def __init__(self, db: DbConfig, cfg: CallBudgetConfig):
         self.db, self.cfg = db, cfg
-        self._conn = None
+        self._pg = None                     # psycopg.pq.PGconn — 이 저장소 전용, autocommit(libpq 기본)
         self._lock = threading.Lock()
 
-    def _connect(self):
-        import psycopg
+    def _begin(self, timeout: float | None) -> float:
+        """이 호출의 단조 기한을 정하고 저장소 잠금을 그 기한까지만 기다린다(다른 스레드의 호출도 기한이 있다)."""
+        cap = self.cfg.statement_timeout_ms / 1000 + _QUERY_MARGIN_SEC
+        end = time.monotonic() + min(cap, cap if timeout is None else timeout)
+        if not self._lock.acquire(timeout=max(0.0, end - time.monotonic())):
+            raise CallBudgetUnavailable("StoreBusy")
+        return end
 
-        return psycopg.connect(
-            host=self.db.host, port=self.db.port, dbname=self.db.name, user=self.db.user,
-            password=self.db.password, sslmode=self.db.sslmode, autocommit=True,
-            connect_timeout=self.cfg.connect_timeout_sec,
-            options=f"-c statement_timeout={self.cfg.statement_timeout_ms} -c lock_timeout={self.cfg.statement_timeout_ms}",
-            application_name="call-budget",
-        )
+    def _connect_if_needed(self, end: float) -> None:
+        from psycopg import pq
+        from psycopg.conninfo import make_conninfo
 
-    def ensure_connected(self) -> None:
+        if self._pg is not None and self._pg.status == pq.ConnStatus.OK:
+            return
+        self.close()
+        timeouts = f"-c statement_timeout={self.cfg.statement_timeout_ms} -c lock_timeout={self.cfg.statement_timeout_ms}"
+        try:
+            pg = pq.PGconn.connect_start(make_conninfo(
+                host=self.db.host, port=self.db.port, dbname=self.db.name, user=self.db.user,
+                password=self.db.password, sslmode=self.db.sslmode, application_name="call-budget",
+                options=timeouts).encode())
+        except Exception as exc:  # noqa: BLE001 — 원문은 접속 정보를 담을 수 있다
+            raise CallBudgetUnavailable(type(exc).__name__) from None
+        try:
+            state = pq.PollingStatus.WRITING
+            while state != pq.PollingStatus.OK:
+                if state == pq.PollingStatus.FAILED or pg.status == pq.ConnStatus.BAD:
+                    # 원문에는 접속 정보가 섞일 수 있다 — 종류만 싣는다(ALPHA-1064 관례).
+                    raise CallBudgetUnavailable("ConnectFailed")
+                _wait_socket(pg.socket, end, select.POLLIN if state == pq.PollingStatus.READING else select.POLLOUT,
+                             "ConnectTimeout")
+                state = pg.connect_poll()
+            pg.nonblocking = 1
+        except CallBudgetUnavailable:
+            pg.finish()
+            raise
+        except Exception as exc:  # noqa: BLE001 — 소켓·libpq 오류도 발신 금지로(원문은 접속 정보를 담을 수 있다)
+            pg.finish()
+            raise CallBudgetUnavailable(type(exc).__name__) from None
+        self._pg = pg
+
+    def ensure_connected(self, timeout: float | None = None) -> None:
         """커넥션을 미리 연다 — 연결 수립(TCP·인증)이 허용 왕복 측정에 섞여 첫 허용이 폐기되지 않게."""
-        import psycopg
+        end = self._begin(timeout)
+        try:
+            self._connect_if_needed(end)
+        finally:
+            self._lock.release()
 
-        with self._lock:
-            if self._conn is None or self._conn.closed:
-                try:
-                    self._conn = self._connect()
-                except psycopg.Error as exc:
-                    self._conn = None
-                    raise CallBudgetUnavailable(type(exc).__name__) from None
-
-    def acquire(self, budget_id: str, call_class: int, cost: int = 1) -> tuple[str, float, float]:
-        """(outcome, wait_sec, lock_wait_sec). 저장소 오류는 CallBudgetUnavailable."""
-        import psycopg
-
-        with self._lock:
+    def acquire(self, budget_id: str, call_class: int, cost: int = 1,
+                timeout: float | None = None) -> tuple[str, float, float]:
+        """(outcome, wait_sec, lock_wait_sec). 저장소 오류·기한 초과는 CallBudgetUnavailable(발신 금지).
+        `timeout` 은 pace 의 남은 시간이다. 상한을 넘긴 응답은 어차피 rtt_max 로 버려질 허용이다.
+        """
+        end = self._begin(timeout)
+        try:
+            self._connect_if_needed(end)
             try:
-                if self._conn is None or self._conn.closed:
-                    self._conn = self._connect()
-                row = self._conn.execute(
-                    "SELECT outcome, wait_sec, lock_wait_sec FROM call_budget_acquire(%s, %s::smallint, %s)",
-                    (budget_id, call_class, cost),
-                ).fetchone()
-            except psycopg.Error as exc:
+                return self._query(end, budget_id, call_class, cost)
+            except CallBudgetUnavailable:
+                self.close()                # 응답 불확실 — 상태를 모르는 커넥션은 재사용하지 않는다
+                raise
+            except Exception as exc:        # noqa: BLE001 — libpq·소켓 오류. 원문은 접속 정보를 담을 수 있다
                 self.close()
-                # 원문에는 접속 정보가 섞일 수 있다 — 종류만 싣는다(ALPHA-1064 관례).
                 raise CallBudgetUnavailable(type(exc).__name__) from None
-        return row[0], float(row[1]), float(row[2])
+        finally:
+            self._lock.release()
+
+    def _query(self, end: float, budget_id: str, call_class: int, cost: int) -> tuple[str, float, float]:
+        from psycopg import pq
+
+        pg = self._pg
+        pg.send_query_params(_ACQUIRE_SQL, [budget_id.encode(), str(call_class).encode(), str(cost).encode()])
+        while pg.flush():                   # 1 = 아직 다 못 보냄(비차단 커넥션)
+            # libpq 계약: 읽기·쓰기 어느 쪽이든 기다리고, 읽을 게 오면 먼저 소비해야 서버 송신이 풀린다.
+            if _wait_socket(pg.socket, end, select.POLLIN | select.POLLOUT) & select.POLLIN:
+                pg.consume_input()
+        results = []
+        while True:
+            while pg.is_busy():
+                _wait_socket(pg.socket, end, select.POLLIN)
+                pg.consume_input()
+            r = pg.get_result()
+            if r is None:
+                break
+            results.append(r)
+        # 결과를 **전부** 본다 — 행을 준 뒤 암묵 커밋이 실패하면 오류 결과가 뒤따른다. 첫 결과만 믿으면
+        # 롤백된 예약으로 발신한다(ALPHA-1087 edge-review).
+        bad = next((r for r in results if r.status != pq.ExecStatus.TUPLES_OK), None)
+        if bad is not None or len(results) != 1:
+            state = bad.error_field(pq.DiagnosticField.SQLSTATE) if bad is not None else None
+            raise CallBudgetUnavailable(f"ServerError:{(state or b'').decode()}")
+        row = results[0]
+        return row.get_value(0, 0).decode(), float(row.get_value(0, 1)), float(row.get_value(0, 2))
 
     def close(self) -> None:
         """전용 커넥션을 닫는다(다음 acquire 가 다시 연다)."""
-        if self._conn is not None:
+        if self._pg is not None:
             try:
-                self._conn.close()
+                self._pg.finish()           # 비차단 — 종료 메시지는 최선 노력, 소켓은 닫힌다
             except Exception:  # noqa: BLE001 — 닫기 실패는 다음 연결로 대체된다
                 pass
-            self._conn = None
+            self._pg = None
+
+
+_ACQUIRE_SQL = b"SELECT outcome, wait_sec, lock_wait_sec FROM call_budget_acquire($1, $2::smallint, $3::integer)"
+_QUERY_MARGIN_SEC = 0.5     # 서버 실행 상한(statement_timeout) 위의 네트워크 여유
+
+
+def _wait_socket(fd: int, end: float, event: int, what: str = "ResponseTimeout") -> int:
+    """소켓이 준비될 때까지 기한까지만 기다리고 준비된 이벤트를 돌려준다. 질의 중 기한이면 응답 불확실이다
+    (서버는 처리했을 수 있다)."""
+    left = end - time.monotonic()
+    if left <= 0:
+        raise CallBudgetUnavailable(what)
+    poller = select.poll()                  # select() 는 fd 1024 이상을 못 다룬다
+    poller.register(fd, event | select.POLLERR | select.POLLHUP)
+    ready = poller.poll(left * 1000)
+    if not ready:
+        raise CallBudgetUnavailable(what)
+    return ready[0][1]
 
 
 class _Stats:
@@ -194,10 +276,12 @@ class SharedBudgetPacer:
                 self._count("deadline_exceeded")
                 raise CallBudgetDeadlineExceeded(self.caller)
             try:
+                # 저장소 호출도 남은 기한 안에서만 기다린다 — 응답 유실·잠금 대기가 max_wait 를 넘기지 않게
                 if hasattr(self.store, "ensure_connected"):
-                    self.store.ensure_connected()       # 연결 수립은 왕복 측정 밖에서
+                    self.store.ensure_connected(timeout=deadline - self._clock())   # 연결 수립은 왕복 측정 밖에서
                 t_req = self._clock()
-                outcome, wait, lock_wait = self.store.acquire(self.cfg.budget_id, self.call_class, cost)
+                outcome, wait, lock_wait = self.store.acquire(self.cfg.budget_id, self.call_class, cost,
+                                                              timeout=deadline - t_req)
             except CallBudgetUnavailable:
                 self._count("store_errors")
                 outage_since = outage_since if outage_since is not None else self._clock()

@@ -1160,6 +1160,8 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
 `call_budget`·`call_budget_class` 표에서 발신 슬롯을 받는다. 클래스 우선순위도 적용된다:
 0 분 가격 워커 > 1 발화 보충(아직 호출자 없음) > 2 장중 레인(iNAV·업종지수·장중 수급) > 3 EOD 배치·과거일 백필. 허용 저장소에 닿지 못하거나 대기 상한을 넘기면 호출하지 않는다.
 이때 `CallBudgetError`를 내고, 실패 코드는 `CALL_BUDGET_BLOCKED`(TRANSIENT)다.
+저장소 호출 1회(잠금 대기·연결·질의)는 `statement_timeout_ms` + 0.5s 안에 끝난다. 응답을 못 받으면 서버가 예약을
+확정했어도 발신하지 않고, 그 커넥션은 버린다. 결정과 검증 범위는 [ADR-0055](../../../../docs/adr/0055-kis-shared-call-budget-on-postgres.md)에 있다.
 
 - 켜기: `DATA_PIPELINE_CALL_BUDGET__ENABLED=true`(terraform `call_budget_enabled`, 기본 `false`).
   그 밖의 키(`BUDGET_ID`·`RTT_MAX_SEC`·`SEND_WINDOW_SEC`·`MAX_WAIT_SEC` 등)는 `CallBudgetConfig` 가
