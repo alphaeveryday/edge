@@ -20,7 +20,7 @@ export default function Watch() {
   const [newOpen, setNewOpen] = useState(false);
   return (
     <View style={styles.root}>
-      <TopBar badge={12} />
+      <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="관심" />
         <View style={styles.chips}>

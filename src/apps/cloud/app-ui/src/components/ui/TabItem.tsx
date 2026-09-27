@@ -2,10 +2,10 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-export function TabItem({ label, on, dot, onPress }: { label: string; on: boolean; dot?: boolean; onPress?: () => void }) {
+export function TabItem({ label, on, dot, grow = true, onPress }: { label: string; on: boolean; dot?: boolean; grow?: boolean; onPress?: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.tab, on && styles.on]}>
-      <Text style={[styles.label, { color: on ? colors.text : colors.textFaint, fontFamily: on ? fam.extrabold : fam.semibold }]}>{label}</Text>
+    <Pressable onPress={onPress} style={[styles.tab, !grow && { flex: 0, flexShrink: 0, paddingHorizontal: 12 }, on && styles.on]}>
+      <Text numberOfLines={1} style={[styles.label, { color: on ? colors.text : colors.textFaint, fontFamily: on ? fam.extrabold : fam.semibold }]}>{label}</Text>
       {dot && <View style={styles.dot} />}
     </Pressable>
   );

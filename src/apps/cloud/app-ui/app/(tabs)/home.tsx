@@ -9,6 +9,7 @@ import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
 import { useHomeBrief } from '@/features/home/queries';
+import { useStories } from '@/features/story/queries';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useWatchGroup } from '@/store/watch';
@@ -20,6 +21,8 @@ export default function Home() {
   const [showAll, setShowAll] = useState(false);
   const brief = useHomeBrief(group);
   const posts = useHotPosts();
+  const { data: stories } = useStories();
+  const hasStory = (code: string) => (stories ?? []).some((s) => s.etf.code === code);
   const b = brief.data;
   const rows = b ? (showAll ? b.etfs : b.etfs.slice(0, 3)) : [];
   const more = (b?.etfs.length ?? 0) > 3;
@@ -27,7 +30,7 @@ export default function Home() {
 
   return (
     <View style={styles.root}>
-      <TopBar badge={12} />
+      <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="내 종목 브리핑" meta={b?.asOf} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
@@ -36,7 +39,7 @@ export default function Home() {
         {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
 
         <View style={styles.rows}>
-          {rows.map((e) => <EtfRow key={e.code} etf={e} />)}
+          {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={hasStory(e.code) ? () => router.push(`/story/${e.code}`) : undefined} />)}
           {more && (
             <View style={{ marginTop: 12 }}>
               <LinkRow variant="card" muted label={showAll ? '접기' : `${b!.etfs.length - 3}개 더 보기`} open={showAll} onPress={() => setShowAll((v) => !v)} />

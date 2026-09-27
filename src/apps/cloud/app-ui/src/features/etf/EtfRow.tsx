@@ -9,12 +9,13 @@ interface Props {
   etf: EtfSummary;
   showSub?: boolean;
   divider?: boolean;
+  onPress?: () => void;
 }
 
-export function EtfRow({ etf, showSub, divider = true }: Props) {
+export function EtfRow({ etf, showSub, divider = true, onPress }: Props) {
   const router = useRouter();
   return (
-    <Pressable onPress={() => router.push(`/etf/${etf.code}/brief`)} style={({ pressed }) => [styles.row, divider && styles.divider, pressed && { opacity: 0.6 }]}>
+    <Pressable onPress={onPress ?? (() => router.push(`/etf/${etf.code}/brief`))} style={({ pressed }) => [styles.row, divider && styles.divider, pressed && { opacity: 0.6 }]}>
       <SectorIcon theme={etf.theme} bg={etf.logoBg} size={36} />
       <View style={styles.mid}>
         <Text numberOfLines={1} style={styles.name}>{etf.name}</Text>

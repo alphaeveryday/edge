@@ -22,7 +22,7 @@ export default function Community() {
   const { data: pollEtf } = useEtf(POLL_ETF);
   return (
     <View style={styles.root}>
-      <TopBar badge={12} />
+      <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="커뮤니티" />
         <View style={styles.chips}>

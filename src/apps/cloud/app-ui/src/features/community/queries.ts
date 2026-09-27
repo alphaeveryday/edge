@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
-import type { Poll, PollChoice, Post } from '@/api';
+import type { Me, Poll, PollChoice, Post } from '@/api';
 
+export const useMyPosts = () => useQuery({ queryKey: ['community', 'mine'], queryFn: () => api.community.mine() });
+export const useUpdateMe = () => {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (patch: Partial<Me>) => api.user.update(patch), onSuccess: (me) => qc.setQueryData(['user', 'me'], me) });
+};
 export const useMe = () => useQuery({ queryKey: ['user', 'me'], queryFn: () => api.user.me(), staleTime: Infinity });
 export const useHotPosts = () => useQuery({ queryKey: ['community', 'hot'], queryFn: () => api.community.hot() });
 export const useEtfPosts = (code: string) => useQuery({ queryKey: ['community', 'posts', code], queryFn: () => api.community.posts(code) });

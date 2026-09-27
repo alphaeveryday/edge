@@ -256,3 +256,28 @@ export interface IssueDetail {
   effect: { theme: string; dir: Dir; body: string };
   affected: (EtfSummary & { prev?: Signal })[];
 }
+
+export type StoryCard =
+  | { kind: 'ai'; sec?: string; badge: string; changePct: number; headline: string; noteTitle: string; notes: string[]; news: { issueId: string; t: string; phase: string; kw: string; dir: Dir }[] }
+  | { kind: 'news'; sec?: string; issueId: string; t: string; kw: string; b: string }
+  | { kind: 'hook'; sec?: string; big: string; capPre: string; capB: string; capPost: string };
+
+export interface Story {
+  etf: EtfSummary;
+  sub: string;
+  prev?: Signal;
+  cards: StoryCard[];
+}
+
+export type NotiKind = 'watch' | 'signal' | 'content' | 'comm';
+
+export interface Notification {
+  id: string;
+  kind: NotiKind;
+  etf?: EtfCode;
+  postId?: string;
+  time: string;
+  title: string;
+  body: string;
+  read: boolean;
+}

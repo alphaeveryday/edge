@@ -16,7 +16,7 @@ export default function Explore() {
   const [theme, setTheme] = useState<string | null>(null);
   return (
     <View style={styles.root}>
-      <TopBar badge={12} />
+      <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="탐색" meta="오늘 08:30 기준" />
         <View style={{ paddingTop: 22 }}>

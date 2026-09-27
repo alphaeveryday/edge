@@ -1,11 +1,12 @@
 import type { ApiClient } from '../client';
-import type { Poll, PollChoice, Post, Reply, WatchGroup } from '../types';
+import type { Me, Poll, PollChoice, Post, Reply, WatchGroup } from '../types';
 import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
 import { RANK_META, THEME_DETAILS, THEME_FEED, THEME_SHEET } from './explore';
 import { genericIssue, ISSUE_DETAILS, ISSUE_ROWS } from './issues';
+import { NOTIFICATIONS, STORY_CARDS } from './story';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -13,7 +14,8 @@ const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v
 // 인메모리 쓰기 상태. 앱 재시작 시 초기화
 const posts = [...POSTS, ...ETF_POSTS].map((p) => ({ ...p }));
 const votes: Record<string, PollChoice | null> = {};
-const ME = { nick: '지수', handle: '@me', avatarBg: '#3D34E0' };
+const ME: Me = { nick: '지수', handle: '@me', avatarBg: '#3D34E0' };
+const notis = NOTIFICATIONS.map((n) => ({ ...n }));
 const replies: Record<string, Reply[]> = {
   p1: [
     { id: 'r1', author: { name: '분할매수중', avatarBg: '#0E8A6C' }, time: '32분', body: '반도체TOP10 저도 같은 생각이에요. 다만 강력 상승 판단이 유지되는지 한 주 더 보려고요.' },
@@ -160,7 +162,35 @@ export const mockClient: ApiClient = {
     },
   },
   user: {
-    me: () => delay(ME, 20),
+    me: () => delay({ ...ME }, 20),
+    update: (patch) => {
+      Object.assign(ME, patch);
+      return delay({ ...ME }, 40);
+    },
+  },
+  story: {
+    queue: () =>
+      delay(
+        (members.base ?? [])
+          .filter((c) => STORY_CARDS[c])
+          .map((c) => {
+            const e = etfOf(c);
+            return { etf: e, sub: STORY_CARDS[c].sub, prev: c === 'AXAI' ? ('up' as const) : undefined, cards: STORY_CARDS[c].cards };
+          }),
+      ),
+  },
+  notification: {
+    list: (kind) => delay(notis.filter((n) => kind === 'all' || n.kind === kind).map((n) => ({ ...n }))),
+    unread: () => delay(notis.filter((n) => !n.read).length, 20),
+    read: (id) => {
+      const n = notis.find((x) => x.id === id);
+      if (n) n.read = true;
+      return delay(undefined, 20);
+    },
+    readAll: () => {
+      notis.forEach((n) => (n.read = true));
+      return delay(undefined, 20);
+    },
   },
   home: {
     brief: (group = 'base') => {
@@ -200,6 +230,7 @@ export const mockClient: ApiClient = {
       posts.unshift(post);
       return delay({ ...post }, 60);
     },
+    mine: () => delay(posts.filter((p) => p.mine).map((p) => ({ ...p }))),
     remove: (id) => {
       const i = posts.findIndex((x) => x.id === id);
       if (i >= 0) posts.splice(i, 1);

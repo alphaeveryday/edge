@@ -23,6 +23,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
         <Stack.Screen name="story/[etf]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
         <Stack.Screen name="community/write" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="menu" options={{ animation: 'slide_from_right' }} />
       </Stack>
       <Toast />
     </QueryClientProvider>
