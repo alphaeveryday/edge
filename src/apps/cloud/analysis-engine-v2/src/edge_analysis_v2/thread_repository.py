@@ -6,7 +6,7 @@ from .tools.news_threads import _timestamp, summarize_news_thread
 
 def load_thread_summary(
     connection, thread_id: str, constituent_ids: list[str], *,
-    start_at: str, analysis_at: str, preview_limit: int = 3,
+    start_at: str, analysis_at: str, preview_limit: int = 3, cursor: str | None = None,
 ) -> dict | None:
     """Read one scoped thread and assemble its event preview.
 
@@ -17,6 +17,7 @@ def load_thread_summary(
         start_at: Inclusive article publication lower bound with UTC offset.
         analysis_at: Server-fixed inclusive availability cutoff with UTC offset.
         preview_limit: Maximum displayed unique events; does not limit SQL rows.
+        cursor: Previous page's final event ID, within the same scope.
 
     Returns:
         Thread summary, or None for no eligible linked articles. Current surviving
@@ -41,8 +42,8 @@ def load_thread_summary(
     start, end = start_time.isoformat(), end_time.isoformat()
     targets = sorted(set(constituent_ids))
     slots = ",".join(["%s"] * len(targets))
-    with connection.cursor() as cursor:
-        cursor.execute(f"""
+    with connection.cursor() as db_cursor:
+        db_cursor.execute(f"""
             SELECT DISTINCT l.thread_id, s.source_event_id, s.lifecycle_stage,
                 s.event_type_code, s.predicate_code, l.novelty_status,
                 d.document_id, d.title, d.published_at,
@@ -64,6 +65,6 @@ def load_thread_summary(
                             AND entity.entity_id IN ({slots}))
         """, (thread_id, start, end, end, end, end, end, *targets))
         rows = [{key: value.isoformat() if isinstance(value, datetime) else value
-                 for key, value in row.items()} for row in cursor.fetchall()]
+                 for key, value in row.items()} for row in db_cursor.fetchall()]
     return summarize_news_thread(thread_id, rows, start_at=start, end_at=end,
-                                 preview_limit=preview_limit)
+                                 preview_limit=preview_limit, cursor=cursor)

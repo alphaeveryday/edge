@@ -44,13 +44,15 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
     @tool("get_news_thread",
           "이미 발견한 thread_id의 사건을 확인하는 탐색용 툴. 서버가 정한 종목·기간 안에서 "
           "단계별 고유 사건 최대 3개와 중복 기사 수를 반환한다. null은 범위 내 조회 결과 없음이다. "
-          "has_more_events=true이면 일부 사건이 생략되어 있다. 현재 추가 페이지 조회는 지원하지 않는다. "
+          "next_cursor가 있으면 동일 thread_id와 cursor로 다음 사건을 조회한다. "
           "반환 {tool_run_id, result}를 즉시 읽는다. 이 실행 ID는 최종 기사 근거로 사용하지 않는다.",
-          {"type": "object", "properties": {"thread_id": {"type": "string", "minLength": 1}},
+          {"type": "object", "properties": {"thread_id": {"type": "string", "minLength": 1},
+                                            "cursor": {"type": "string", "minLength": 1}},
            "required": ["thread_id"], "additionalProperties": False})
     async def get_news_thread(arguments):
         result = load_thread_summary(connection, arguments["thread_id"], context["constituent_ids"],
-                                     start_at=start_at, analysis_at=analysis_at)
+                                     start_at=start_at, analysis_at=analysis_at,
+                                     cursor=arguments.get("cursor"))
         run_id = uuid4().hex
         output = {"tool_run_id": run_id, "result": result}
         record = {"tool_id": definition["tool_id"], "arguments": arguments,

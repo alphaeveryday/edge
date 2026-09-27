@@ -74,3 +74,21 @@ def test_empty_unknown_and_out_of_window_do_not_invent_events():
     assert summarize([row(published_at="2026-09-20T23:59:59+09:00")]) is None
     with pytest.raises(ValueError, match="preview_limit"):
         summarize([row()], 0)
+
+
+def test_pages_keep_every_unique_event_and_scope_wide_duplicate_count():
+    rows = [row('e1', 'n1', lifecycle_stage='PLANNED'), row('e2', 'n2'),
+            row('e3', 'n3', lifecycle_stage='PLANNED'), row('e4', 'n4'),
+            row('duplicate', 'n4', 'DUPLICATE_REBROADCAST'),
+            row('duplicate2', 'n5', 'DUPLICATE_REBROADCAST')]
+    first = summarize_news_thread('t1', rows, start_at=START, end_at=END, preview_limit=2)
+    second = summarize_news_thread('t1', list(reversed(rows)), start_at=START,
+                                   end_at=END, preview_limit=2, cursor=first['next_cursor'])
+    ids = [e['source_event_id'] for page in (first, second)
+           for stage in page['stages'] for e in stage['events']]
+    assert ids == ['e1', 'e2', 'e3', 'e4']
+    assert first['duplicate_count'] == second['duplicate_count'] == 1
+    assert second['next_cursor'] is None
+    assert second['has_more_events'] is False
+    with pytest.raises(ValueError, match='cursor'):
+        summarize_news_thread('t1', rows, start_at=START, end_at=END, cursor='other-event')

@@ -57,3 +57,33 @@ def test_storage_failure_is_not_returned_as_success(db, tmp_path):
                     assert (await session.call_tool("get_news_thread", {"thread_id": "thread"})).model_dump(by_alias=True)["isError"]
                 tasks.cancel_scope.cancel()
     asyncio.run(check())
+
+
+def test_sdk_pagination_reaches_hidden_events_without_changing_scope(db, tmp_path):
+    for number in range(7):
+        article(db, number)
+    config = make_news_thread_server(db, ['sixth-stock'], tmp_path, start_at=START, analysis_at=AT)
+
+    async def check():
+        server = config['instance']
+        async with create_client_server_memory_streams() as (client, transport):
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(server.run, *transport, server.create_initialization_options())
+                async with ClientSession(*client) as session:
+                    await session.initialize()
+                    arguments, ids = {'thread_id': 'thread'}, []
+                    while True:
+                        response = await session.call_tool('get_news_thread', arguments)
+                        assert not response.model_dump(by_alias=True)['isError']
+                        output = json.loads(response.content[0].text)
+                        page = output['result']
+                        ids.extend(e['source_event_id'] for s in page['stages'] for e in s['events'])
+                        if page['next_cursor'] is None:
+                            break
+                        arguments = {'thread_id': 'thread', 'cursor': page['next_cursor']}
+                    assert ids == list(map(str, range(7)))
+                    invalid = await session.call_tool('get_news_thread', {'thread_id': 'thread', 'cursor': 'outside'})
+                    assert invalid.model_dump(by_alias=True)['isError']
+                    assert len(list((tmp_path / 'runs').glob('*.json'))) == 3
+                tasks.cancel_scope.cancel()
+    asyncio.run(check())

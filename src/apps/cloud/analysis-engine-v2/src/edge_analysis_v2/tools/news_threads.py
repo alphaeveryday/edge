@@ -11,7 +11,7 @@ def _timestamp(value: str) -> datetime:
 
 def summarize_news_thread(
     thread_id: str, rows: list[dict], *, start_at: str, end_at: str,
-    preview_limit: int = 3,
+    preview_limit: int = 3, cursor: str | None = None,
 ) -> dict | None:
     """Build one thread preview from historically eligible joined source rows.
 
@@ -22,6 +22,7 @@ def summarize_news_thread(
         start_at: Inclusive article publication lower bound, with UTC offset.
         end_at: Inclusive publication and availability cutoff, with UTC offset.
         preview_limit: Maximum unique events shown, independent of duplicate count.
+        cursor: Last event ID from the preceding page within the same scope.
 
     Returns:
         Thread ID, duplicate article count, stages and overflow flag, or None
@@ -65,6 +66,8 @@ def summarize_news_thread(
         group = groups.setdefault(identity, {"metadata": metadata, "articles": {}})
         group["articles"][document_id] = article
     if not seen:
+        if cursor is not None:
+            raise ValueError("cursor is outside the current thread scope")
         return None
     events = []
     for identity, group in groups.items():
@@ -76,9 +79,18 @@ def summarize_news_thread(
         events.append((metadata["lifecycle_stage"], event))
     events.sort(key=lambda pair: (-_timestamp(pair[1]["published_at"]).timestamp(),
                                  pair[1]["source_event_id"]))
+    offset = 0
+    if cursor is not None:
+        ids = [event['source_event_id'] for _, event in events]
+        if cursor not in ids:
+            raise ValueError("cursor is outside the current thread scope")
+        offset = ids.index(cursor) + 1
+    page = events[offset:offset + preview_limit]
+    has_more = offset + len(page) < len(events)
     stages = {}
-    for stage, event in events[:preview_limit]:
+    for stage, event in page:
         stages.setdefault(stage, []).append(event)
     return {"thread_id": thread_id, "duplicate_count": len(duplicates - unique_ids),
             "stages": [{"stage": stage, "events": items} for stage, items in stages.items()],
-            "has_more_events": len(events) > preview_limit}
+            "has_more_events": has_more,
+            "next_cursor": page[-1][1]['source_event_id'] if has_more else None}
