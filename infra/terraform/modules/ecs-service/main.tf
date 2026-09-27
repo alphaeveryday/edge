@@ -211,7 +211,9 @@ resource "aws_ecs_service" "this" {
   # task_definition 은 생성 후 CD(deploy-app.yml)가 소유한다 — CD 가 ECR semver 이미지로 새 리비전을
   # 등록해 서비스를 롤링 업데이트하므로, TF 는 실행 리비전을 되돌리지 않는다(위 aws_ecs_task_definition 은
   # baseline 으로만 남음). 없으면 매 apply 가 CD 배포를 tfvars 핀으로 롤백한다(ECS+외부 CD 표준 패턴).
+  # desired_count 는 오토스케일이 켜지면 Application Auto Scaling 이 소유한다 — 매 apply 가
+  # 스케일 아웃된 태스크 수를 초기값으로 되돌리지 않게 한다. 꺼져 있으면 TF 가 그대로 소유.
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes = [task_definition, desired_count]
   }
 }

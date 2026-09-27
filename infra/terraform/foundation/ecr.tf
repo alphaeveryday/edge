@@ -6,6 +6,7 @@ locals {
   # state 에 반영한 뒤(2026-07-21 apply), 2단계(ALPHA-475)에서 키를 빼 안전히 destroy 했다.
   image_repositories = toset([
     "edge/super-admin-api",
+    "edge/app-api", # ETF Orca 앱 API (ADR-0056)
     "edge/tenant-sync-api",
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
