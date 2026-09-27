@@ -699,3 +699,114 @@ moved {
   from = module.news_pipeline
   to   = module.pipeline
 }
+
+# ── ETF Orca 앱 API: app-api (ADR-0056) ─────────────────
+# B2C 앱 서버. 파이프라인·콘솔이 쓰는 `edge-dev` 와 DB 인스턴스를 나눈다. 폭발 반경(스키마
+# 머지=재부팅=1분 레인 정지, ALPHA-924)·부하 성격·PII 경계가 이유다. 파이프라인 데이터는
+# 이 DB 로 명시적 동기화로만 들어온다(실데이터 연동 지점, 계약 설계 뒤 결정).
+module "app_rds" {
+  source     = "../../modules/rds"
+  name       = "${local.prefix}-app"
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.data_subnet_ids
+
+  db_name         = "app"
+  master_username = "app"
+
+  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
+}
+
+# 투표 집계 캐시. 앱은 프라이머리 엔드포인트 하나만 보고(rediss://), 페일오버는 DNS 가 따라간다.
+module "app_redis" {
+  source     = "../../modules/elasticache"
+  name       = "${local.prefix}-app"
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.data_subnet_ids
+}
+
+# 공개 엣지, 호스트 1:1(ADR-0034). 모바일 앱은 쿠키·same-origin 이 없어 CloudFront 프록시 불필요.
+module "app_alb" {
+  source = "../../modules/alb"
+
+  name              = "${local.prefix}-app"
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+
+  enable_https    = true
+  certificate_arn = data.aws_acm_certificate.wildcard_alb.arn
+}
+
+module "app_api" {
+  source = "../../modules/ecs-service"
+
+  name   = "app-api"
+  region = var.region
+
+  cluster_arn                   = module.service_cluster.cluster_arn
+  service_connect_namespace_arn = module.service_cluster.namespace_arn
+
+  container_image  = var.app_api_image
+  container_port   = 8080
+  cpu_architecture = "X86_64"
+
+  vpc_id        = module.network.vpc_id
+  subnet_ids    = module.network.private_subnet_ids
+  desired_count = 1
+
+  # 1~N: CPU 60% target tracking, 초기 상한 2. 앱의 @Scheduled 셋은 ShedLock 으로 한 대만 돈다.
+  autoscaling = {
+    min_capacity       = 1
+    max_capacity       = 2
+    cpu_target_percent = 60
+  }
+
+  target_group_arn           = module.app_alb.target_group_arn
+  ingress_security_group_ids = [module.app_alb.security_group_id]
+
+  # JVM 부팅 마진. super-admin-api 와 같은 처방(ALPHA-688).
+  health_check_grace_period_seconds = 300
+
+  environment = {
+    SPRING_DATASOURCE_URL         = "jdbc:postgresql://${module.app_rds.endpoint}/${module.app_rds.db_name}"
+    SPRING_DATASOURCE_USERNAME    = module.app_rds.master_username
+    SPRING_DATA_REDIS_HOST        = module.app_redis.primary_endpoint
+    SPRING_DATA_REDIS_PORT        = tostring(module.app_redis.port)
+    SPRING_DATA_REDIS_SSL_ENABLED = "true"
+  }
+  secrets = {
+    SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
+  }
+  secret_arns = [module.app_rds.master_user_secret_arn]
+
+  depends_on = [module.app_alb]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "app_rds_from_app_api" {
+  security_group_id            = module.app_rds.security_group_id
+  referenced_security_group_id = module.app_api.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "app-api to postgres"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "app_redis_from_app_api" {
+  security_group_id            = module.app_redis.security_group_id
+  referenced_security_group_id = module.app_api.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 6379
+  to_port                      = 6379
+  description                  = "app-api to redis"
+}
+
+resource "aws_route53_record" "app_api" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.app_api_domain
+  type    = "A"
+
+  alias {
+    name                   = module.app_alb.dns_name
+    zone_id                = module.app_alb.zone_id
+    evaluate_target_health = false
+  }
+}
