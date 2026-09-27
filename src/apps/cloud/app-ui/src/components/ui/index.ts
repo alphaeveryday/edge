@@ -1,4 +1,5 @@
 export { Avatar } from './Avatar';
+export { BottomSheet } from './BottomSheet';
 export { Chevron } from './Chevron';
 export { Chip } from './Chip';
 export { CtaButton } from './CtaButton';
@@ -11,4 +12,5 @@ export { ChangeOnly, RowQuote } from './Quote';
 export { SearchField } from './SearchField';
 export { SectionHead } from './SectionHead';
 export { SectorIcon } from './SectorIcon';
+export { SheetHead } from './SheetHead';
 export { Sticker } from './Sticker';

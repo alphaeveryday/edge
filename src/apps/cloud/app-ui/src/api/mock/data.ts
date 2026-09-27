@@ -2,12 +2,12 @@ import type { EtfSummary, Post, Theme, WatchGroup } from '../types';
 
 // 디자인 스크립트 ETFS 의 name·theme·logoBg·price·dayChange 값
 export const ETFS: EtfSummary[] = [
-  { code: 'AXAI', name: 'TIGER 반도체TOP10', theme: 'AI·반도체', logoBg: '#3D34E0', price: 12845, changePct: 3.2, signal: 'strongUp', hot: true },
-  { code: 'DEFN', name: 'PLUS K방산', theme: '방산', logoBg: '#131318', price: 21480, changePct: 2.1, signal: 'strongUp', hot: true },
-  { code: 'GRID', name: 'KODEX 미국AI전력핵심인프라', theme: '배당·인프라', logoBg: '#0E8A6C', price: 15320, changePct: 0.6, signal: 'up', hot: true },
-  { code: 'KBND', name: 'KODEX 국고채30년액티브', theme: '채권', logoBg: '#E0562B', price: 108450, changePct: 0.3, signal: 'neutral' },
-  { code: 'MEDX', name: 'TIGER 바이오TOP10', theme: '바이오', logoBg: '#8B34E0', price: 9870, changePct: -1.4, signal: 'down' },
-  { code: 'SOLR', name: 'TIGER Fn신재생에너지', theme: '친환경', logoBg: '#E8A13D', price: 6240, changePct: -0.8, signal: 'neutral' },
+  { code: 'AXAI', name: 'TIGER 반도체TOP10', theme: 'AI·반도체', logoBg: '#3D34E0', price: 12845, changePct: 3.2, signal: 'strongUp', hot: true, sub: '미래에셋 · 국내 반도체 상위 10종' },
+  { code: 'DEFN', name: 'PLUS K방산', theme: '방산', logoBg: '#131318', price: 21480, changePct: 2.1, signal: 'strongUp', hot: true, sub: '한화 · 국내 방산 대표 10종' },
+  { code: 'GRID', name: 'KODEX 미국AI전력핵심인프라', theme: '배당·인프라', logoBg: '#0E8A6C', price: 15320, changePct: 0.6, signal: 'up', hot: true, sub: '삼성 · 미국 전력 유틸리티·인프라' },
+  { code: 'KBND', name: 'KODEX 국고채30년액티브', theme: '채권', logoBg: '#E0562B', price: 108450, changePct: 0.3, signal: 'neutral', sub: '삼성 · 국고채 30년 만기' },
+  { code: 'MEDX', name: 'TIGER 바이오TOP10', theme: '바이오', logoBg: '#8B34E0', price: 9870, changePct: -1.4, signal: 'down', sub: '미래에셋 · 국내 바이오 상위 10종' },
+  { code: 'SOLR', name: 'TIGER Fn신재생에너지', theme: '친환경', logoBg: '#E8A13D', price: 6240, changePct: -0.8, signal: 'neutral', sub: '미래에셋 · 태양광·풍력·ESS' },
 ];
 
 export const THEMES: Theme[] = [
@@ -21,7 +21,7 @@ export const THEMES: Theme[] = [
   { key: '채권', label: '채권', group: 'asset', bg: '#E0562B' },
 ];
 
-export const GROUPS: WatchGroup[] = [
+export const GROUPS: Omit<WatchGroup, 'count'>[] = [
   { key: 'base', label: '기본 관심' },
   { key: 'ai', label: 'AI 밸류체인' },
 ];

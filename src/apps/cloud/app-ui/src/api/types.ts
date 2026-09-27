@@ -11,6 +11,7 @@ export interface EtfSummary {
   changePct: number;
   signal: Signal;
   hot?: boolean;
+  sub?: string;
 }
 
 export interface Theme {
@@ -24,6 +25,7 @@ export interface Theme {
 export interface WatchGroup {
   key: string;
   label: string;
+  count: number;
 }
 
 export interface HomeBrief {

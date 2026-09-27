@@ -11,11 +11,12 @@ import { EdgeCard } from '@/features/home/EdgeCard';
 import { useHomeBrief } from '@/features/home/queries';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { useWatchGroup } from '@/store/watch';
 
 export default function Home() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const [group, setGroup] = useState<string>();
+  const { group, setGroup } = useWatchGroup();
   const [showAll, setShowAll] = useState(false);
   const brief = useHomeBrief(group);
   const posts = useHotPosts();
