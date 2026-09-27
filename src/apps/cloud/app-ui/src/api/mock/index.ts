@@ -1,12 +1,13 @@
 import type { ApiClient } from '../client';
 import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
-import { ETFS, GROUPS, GROUP_MEMBERS, POSTS } from './data';
+import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
 // 인메모리 쓰기 상태. 앱 재시작 시 초기화
 const posts = POSTS.map((p) => ({ ...p }));
+const groupMembers: Record<string, string[]> = { ...GROUP_MEMBERS };
 
 const avgSignal = (codes: string[]): Signal => {
   const idx = codes.map((c) => SIGNAL_ORDER.indexOf(ETFS.find((e) => e.code === c)!.signal));
@@ -20,10 +21,20 @@ export const mockClient: ApiClient = {
       const e = ETFS.find((x) => x.code === code);
       return e ? delay(e) : Promise.reject(new Error(`unknown etf ${code}`));
     },
+    list: () => delay(ETFS),
+  },
+  theme: {
+    list: () => delay(THEMES),
+  },
+  onboarding: {
+    complete: ({ etfs }) => {
+      groupMembers.base = etfs;
+      return delay(undefined);
+    },
   },
   home: {
     brief: (group = 'base') => {
-      const codes = GROUP_MEMBERS[group] ?? [];
+      const codes = groupMembers[group] ?? [];
       const etfs = codes.map((c) => ETFS.find((e) => e.code === c)!);
       const changePct = etfs.length ? Math.round((etfs.reduce((a, e) => a + e.changePct, 0) / etfs.length) * 10) / 10 : 0;
       return delay({ asOf: '오늘 08:30 기준', groups: GROUPS, group, band: avgSignal(codes), changePct, etfs });

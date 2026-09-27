@@ -1,13 +1,24 @@
-import type { EtfSummary, Post, WatchGroup } from '../types';
+import type { EtfSummary, Post, Theme, WatchGroup } from '../types';
 
 // 디자인 스크립트 ETFS 의 name·theme·logoBg·price·dayChange 값
 export const ETFS: EtfSummary[] = [
-  { code: 'AXAI', name: 'TIGER 반도체TOP10', theme: 'AI·반도체', logoBg: '#3D34E0', price: 12845, changePct: 3.2, signal: 'strongUp' },
-  { code: 'DEFN', name: 'PLUS K방산', theme: '방산', logoBg: '#131318', price: 21480, changePct: 2.1, signal: 'strongUp' },
-  { code: 'GRID', name: 'KODEX 미국AI전력핵심인프라', theme: '배당·인프라', logoBg: '#0E8A6C', price: 15320, changePct: 0.6, signal: 'up' },
+  { code: 'AXAI', name: 'TIGER 반도체TOP10', theme: 'AI·반도체', logoBg: '#3D34E0', price: 12845, changePct: 3.2, signal: 'strongUp', hot: true },
+  { code: 'DEFN', name: 'PLUS K방산', theme: '방산', logoBg: '#131318', price: 21480, changePct: 2.1, signal: 'strongUp', hot: true },
+  { code: 'GRID', name: 'KODEX 미국AI전력핵심인프라', theme: '배당·인프라', logoBg: '#0E8A6C', price: 15320, changePct: 0.6, signal: 'up', hot: true },
   { code: 'KBND', name: 'KODEX 국고채30년액티브', theme: '채권', logoBg: '#E0562B', price: 108450, changePct: 0.3, signal: 'neutral' },
   { code: 'MEDX', name: 'TIGER 바이오TOP10', theme: '바이오', logoBg: '#8B34E0', price: 9870, changePct: -1.4, signal: 'down' },
   { code: 'SOLR', name: 'TIGER Fn신재생에너지', theme: '친환경', logoBg: '#E8A13D', price: 6240, changePct: -0.8, signal: 'neutral' },
+];
+
+export const THEMES: Theme[] = [
+  { key: 'AI·반도체', label: 'AI·반도체', group: 'industry', bg: '#3D34E0', hot: true },
+  { key: '방산', label: '방산', group: 'industry', bg: '#131318', hot: true },
+  { key: '바이오', label: '바이오', group: 'industry', bg: '#8B34E0' },
+  { key: '친환경', label: '친환경', group: 'industry', bg: '#0E8A6C' },
+  { key: '원자재', label: '원자재', group: 'industry', bg: '#C9820E' },
+  { key: '국내주식', label: '국내주식', group: 'asset', bg: '#1B64DA' },
+  { key: '배당·인프라', label: '배당·인프라', group: 'asset', bg: '#6C5CF5' },
+  { key: '채권', label: '채권', group: 'asset', bg: '#E0562B' },
 ];
 
 export const GROUPS: WatchGroup[] = [

@@ -10,6 +10,15 @@ export interface EtfSummary {
   price: number;
   changePct: number;
   signal: Signal;
+  hot?: boolean;
+}
+
+export interface Theme {
+  key: string;
+  label: string;
+  group: 'industry' | 'asset';
+  bg: string;
+  hot?: boolean;
 }
 
 export interface WatchGroup {
