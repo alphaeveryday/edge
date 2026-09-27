@@ -1,10 +1,11 @@
 import type { ApiClient } from '../client';
-import type { Poll, PollChoice, WatchGroup } from '../types';
+import type { Poll, PollChoice, Post, Reply, WatchGroup } from '../types';
 import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
 import { RANK_META, THEME_DETAILS, THEME_FEED, THEME_SHEET } from './explore';
+import { genericIssue, ISSUE_DETAILS, ISSUE_ROWS } from './issues';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -12,6 +13,15 @@ const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v
 // 인메모리 쓰기 상태. 앱 재시작 시 초기화
 const posts = [...POSTS, ...ETF_POSTS].map((p) => ({ ...p }));
 const votes: Record<string, PollChoice | null> = {};
+const ME = { nick: '지수', handle: '@me', avatarBg: '#3D34E0' };
+const replies: Record<string, Reply[]> = {
+  p1: [
+    { id: 'r1', author: { name: '분할매수중', avatarBg: '#0E8A6C' }, time: '32분', body: '반도체TOP10 저도 같은 생각이에요. 다만 강력 상승 판단이 유지되는지 한 주 더 보려고요.' },
+    { id: 'r2', author: { name: '장투합니다', avatarBg: '#8B34E0' }, time: '1시간', body: '저는 숫자가 나온 다음에 들어가요. 지금은 기대만 앞서 있어요.' },
+    { id: 'r3', author: { name: '초보투자자', avatarBg: '#E8A13D' }, time: '2시간', body: '이거 초보가 봐도 되는 건가요? 설명 감사합니다.' },
+  ],
+};
+let seq = 100;
 const groups = GROUPS.map((g) => ({ ...g }));
 const members: Record<string, string[]> = Object.fromEntries(Object.entries(GROUP_MEMBERS).map(([k, v]) => [k, [...v]]));
 let recent = ['AXAI', 'DEFN', 'GRID'];
@@ -134,6 +144,24 @@ export const mockClient: ApiClient = {
       return h ? delay(h, 40) : Promise.reject(new Error(`no hint ${key}`));
     },
   },
+  issue: {
+    list: (tab) => {
+      const mine = members.base ?? [];
+      const rows = tab === 'mine' ? ISSUE_ROWS.filter((r) => !r.etf || mine.includes(r.etf.code)) : ISSUE_ROWS;
+      return delay(rows);
+    },
+    get: (id) => {
+      const row = ISSUE_ROWS.find((r) => r.id === id);
+      if (!row) return Promise.reject(new Error(`unknown issue ${id}`));
+      const d = ISSUE_DETAILS[id] ?? genericIssue(row);
+      const mine = members.base ?? [];
+      const affected = d.affectedCodes.map(etfOf).sort((a, b) => Number(mine.includes(b.code)) - Number(mine.includes(a.code)));
+      return delay({ ...d, affected });
+    },
+  },
+  user: {
+    me: () => delay(ME, 20),
+  },
   home: {
     brief: (group = 'base') => {
       const codes = members[group] ?? [];
@@ -144,6 +172,39 @@ export const mockClient: ApiClient = {
   },
   community: {
     hot: () => delay(posts.filter((p) => ['p1', 'p2', 'p3'].includes(p.id)).map((p) => ({ ...p }))),
+    feed: (scope) => {
+      const mine = members.base ?? [];
+      const list = posts.filter((p) => scope === 'all' || mine.includes(p.etf.code));
+      return delay(list.map((p) => ({ ...p })));
+    },
+    get: (id) => {
+      const p = posts.find((x) => x.id === id);
+      return p ? delay({ ...p, views: p.views ?? 7300 }) : Promise.reject(new Error(`unknown post ${id}`));
+    },
+    replies: (id) => delay((replies[id] ?? []).map((r) => ({ ...r }))),
+    reply: (id, body) => {
+      const r: Reply = { id: 'r' + ++seq, author: { name: ME.nick, avatarBg: ME.avatarBg }, time: '방금', body };
+      replies[id] = [...(replies[id] ?? []), r];
+      const p = posts.find((x) => x.id === id);
+      if (p) p.reply += 1;
+      return delay(r, 40);
+    },
+    create: ({ body, tags }) => {
+      const e = tags[0] ? etfOf(tags[0]) : undefined;
+      const post: Post = {
+        id: 'u' + ++seq,
+        etf: e ? { code: e.code, theme: e.theme, logoBg: e.logoBg, short: e.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '') } : { code: '', theme: '', logoBg: '#8E8E93', short: '' },
+        author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg },
+        time: '방금', body, like: 0, reply: 0, repost: 0, liked: false, views: 0, mine: true,
+      };
+      posts.unshift(post);
+      return delay({ ...post }, 60);
+    },
+    remove: (id) => {
+      const i = posts.findIndex((x) => x.id === id);
+      if (i >= 0) posts.splice(i, 1);
+      return delay(undefined, 40);
+    },
     posts: (code) => delay(posts.filter((p) => p.etf.code === code && !p.id.startsWith('p')).map((p) => ({ ...p }))),
     poll: (code) => delay(pollOf(code)),
     vote: (code, choice) => {

@@ -1,4 +1,4 @@
-import type { Axis, ChartData, RankRow, ThemeDetail, ThemeFeedItem, ThemeSheet, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, IssueDetail, IssueRow, Me, Reply, RankRow, ThemeDetail, ThemeFeedItem, ThemeSheet, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -49,9 +49,24 @@ export interface HomeApi {
 export interface CommunityApi {
   hot(): Promise<Post[]>;
   posts(code: EtfCode): Promise<Post[]>;
+  feed(scope: 'all' | 'mine'): Promise<Post[]>;
+  get(id: string): Promise<Post>;
+  replies(id: string): Promise<Reply[]>;
+  reply(id: string, body: string): Promise<Reply>;
+  create(input: { body: string; tags: EtfCode[] }): Promise<Post>;
+  remove(id: string): Promise<void>;
   toggleLike(id: string): Promise<Post>;
   poll(code: EtfCode): Promise<Poll>;
   vote(code: EtfCode, choice: PollChoice): Promise<Poll>;
+}
+
+export interface IssueApi {
+  list(tab: 'mine' | 'all'): Promise<IssueRow[]>;
+  get(id: string): Promise<IssueDetail>;
+}
+
+export interface UserApi {
+  me(): Promise<Me>;
 }
 
 export interface ApiClient {
@@ -63,4 +78,6 @@ export interface ApiClient {
   analysis: AnalysisApi;
   home: HomeApi;
   community: CommunityApi;
+  issue: IssueApi;
+  user: UserApi;
 }

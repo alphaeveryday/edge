@@ -50,6 +50,8 @@ export interface Post {
   reply: number;
   repost: number;
   liked: boolean;
+  views?: number;
+  mine?: boolean;
 }
 
 export interface Candle {
@@ -221,4 +223,36 @@ export interface ThemeDetail {
   structure: string;
   structureWhy: string;
   soWhat: string;
+}
+
+export interface Me {
+  nick: string;
+  handle: string;
+  avatarBg: string;
+}
+
+export interface Reply {
+  id: string;
+  author: { name: string; avatarBg: string };
+  time: string;
+  body: string;
+}
+
+export interface IssueRow {
+  id: string;
+  rank: number;
+  delta: number;
+  title: string;
+  kw: string;
+  etf?: Pick<EtfSummary, 'code' | 'name' | 'theme' | 'logoBg' | 'sub'>;
+}
+
+export interface IssueDetail {
+  id: string;
+  title: string;
+  body: string;
+  points: string[];
+  sources: { title: string; pub: string; url: string }[];
+  effect: { theme: string; dir: Dir; body: string };
+  affected: (EtfSummary & { prev?: Signal })[];
 }
