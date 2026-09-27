@@ -2,3 +2,5 @@
 packages:
   - "apps/*/*"
   - "libs/*"
+  # app-ui(Expo)는 독립 패키지 — Metro 가 pnpm 심볼릭 링크 구조와 충돌해 자체 npm lockfile 로 관리
+  - "!apps/cloud/app-ui"
