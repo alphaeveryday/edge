@@ -1,5 +1,29 @@
-import { Placeholder } from '@/components/Placeholder';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { IconButton } from '@/components/ui';
+import { EtfPostRow } from '@/features/community/EtfPostRow';
+import { PollCard } from '@/features/community/PollCard';
+import { useEtfPosts, usePoll } from '@/features/community/queries';
 
 export default function EtfCommunity() {
-  return <Placeholder title="ETF 커뮤니티 · 투표" />;
+  const { code } = useLocalSearchParams<{ code: string }>();
+  const router = useRouter();
+  const { data: poll } = usePoll(code);
+  const { data: posts } = useEtfPosts(code);
+  return (
+    <View style={{ flex: 1 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+        {poll && <View style={styles.poll}><PollCard poll={poll} /></View>}
+        {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
+      </ScrollView>
+      <View style={styles.fab}>
+        <IconButton icon="plus" size={56} fab onPress={() => router.push('/community/write')} />
+      </View>
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  poll: { marginTop: 14, marginHorizontal: 16, marginBottom: 6 },
+  fab: { position: 'absolute', right: 18, bottom: 26 },
+});

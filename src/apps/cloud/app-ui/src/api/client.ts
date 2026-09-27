@@ -1,10 +1,13 @@
-import type { Axis, DailyAnalysis, EtfCode, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
   list(): Promise<EtfSummary[]>;
   search(q: string): Promise<EtfSummary[]>;
   recent(): Promise<EtfSummary[]>;
+  chart(code: EtfCode, range: string): Promise<ChartData>;
+  move(code: EtfCode): Promise<MoveInfo>;
+  detail(code: EtfCode): Promise<EtfDetailData>;
 }
 
 export interface WatchApi {
@@ -38,7 +41,10 @@ export interface HomeApi {
 
 export interface CommunityApi {
   hot(): Promise<Post[]>;
+  posts(code: EtfCode): Promise<Post[]>;
   toggleLike(id: string): Promise<Post>;
+  poll(code: EtfCode): Promise<Poll>;
+  vote(code: EtfCode, choice: PollChoice): Promise<Poll>;
 }
 
 export interface ApiClient {

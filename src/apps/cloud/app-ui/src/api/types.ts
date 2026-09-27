@@ -42,12 +42,73 @@ export interface Post {
   etf: Pick<EtfSummary, 'code' | 'theme' | 'logoBg'> & { short: string };
   author: { name: string; handle: string; avatarBg: string };
   time: string;
+  title?: string;
   body: string;
+  quoteTag?: string;
+  repostOf?: { name: string; avatarBg: string; time: string; body: string };
   like: number;
   reply: number;
   repost: number;
   liked: boolean;
 }
+
+export interface Candle {
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+export interface ChartData {
+  range: string;
+  candles: Candle[];
+  ma5: (number | null)[];
+  ma20: (number | null)[];
+  axis: string[];
+}
+
+export interface MoveInfo {
+  ago: string;
+  text: string;
+  foot: string;
+  sheetTitle: string;
+  groups: { head: string; items: { dir: Dir; t: string; sub?: string }[] }[];
+}
+
+export interface HeatCell {
+  name: string;
+  weight: number;
+  changePct: number;
+  dir: Dir;
+}
+
+export interface HoldingRow {
+  name: string;
+  weight: number;
+  dir: Dir;
+  desc: string;
+}
+
+export interface EtfDetailData {
+  insight: { dir: Dir; text: string };
+  stocks: HeatCell[];
+  themes: HeatCell[];
+  holdings: HoldingRow[];
+  themeRows: HoldingRow[];
+  stockCount: number;
+  info: { k: string; v: string }[];
+  blurb: string;
+}
+
+export type PollChoice = 'buy' | 'wait' | 'sell';
+
+export interface Poll {
+  code: EtfCode;
+  count: number;
+  pct: Record<PollChoice, number>;
+  mine: PollChoice | null;
+}
+
 
 export type Axis = '이슈' | '차트' | '매크로' | '밸류' | '수급';
 export type Dir = 'help' | 'neutral' | 'burden';

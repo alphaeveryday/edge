@@ -1,0 +1,81 @@
+import { StyleSheet, Text, View } from 'react-native';
+import Svg, { G, Line, Path, Rect } from 'react-native-svg';
+import type { ChartData } from '@/api';
+import { chgColor, pct, won } from '@/lib/format';
+import { colors } from '@/theme/tokens';
+import { fam } from '@/theme/typography';
+
+const W = 354, H = 262, PLOT_W = 296;
+const MA20 = '#E0891A';
+
+export function CandleChart({ data, name, price, changePct }: { data: ChartData; name: string; price: number; changePct: number }) {
+  const lo = Math.min(...data.candles.map((c) => c.l));
+  const hi = Math.max(...data.candles.map((c) => c.h));
+  const pad = (hi - lo) * 0.08;
+  const y = (v: number) => H - ((v - (lo - pad)) / (hi - lo + pad * 2)) * H;
+  const step = PLOT_W / data.candles.length;
+  const x = (i: number) => step * i + step / 2;
+  const path = (arr: (number | null)[]) => arr.map((v, i) => (v == null ? null : `${i && arr[i - 1] != null ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
+  const grid = [0.2, 0.5, 0.8].map((f) => ({ f, v: Math.round(lo - pad + (hi - lo + pad * 2) * (1 - f)) }));
+  const last5 = data.ma5[data.ma5.length - 1];
+  const last20 = data.ma20[data.ma20.length - 1];
+  return (
+    <View style={styles.root}>
+      <View style={styles.plot}>
+        <View style={styles.legend} pointerEvents="none">
+          <View style={styles.legendRow}>
+            <Text style={styles.legendName}>{name} · {data.range}</Text>
+            <Text style={[styles.legendQuote, { color: chgColor(changePct) }]}>{won(price)} {pct(changePct)}</Text>
+          </View>
+          <View style={[styles.legendRow, { gap: 10 }]}>
+            <View style={styles.maItem}><View style={[styles.maLine, { backgroundColor: colors.textFaint }]} /><Text style={styles.maText}>MA5 <Text style={styles.maVal}>{last5 ? last5.toLocaleString('en-US') : '-'}</Text></Text></View>
+            <View style={styles.maItem}><View style={[styles.maLine, { backgroundColor: MA20 }]} /><Text style={styles.maText}>MA20 <Text style={styles.maVal}>{last20 ? last20.toLocaleString('en-US') : '-'}</Text></Text></View>
+          </View>
+        </View>
+        {grid.map((g) => (
+          <Text key={g.f} style={[styles.gridLabel, { top: `${g.f * 100}%` }]}>{(g.v / 10000).toFixed(2)}만</Text>
+        ))}
+        <Svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={styles.svg}>
+          {grid.map((g) => <Line key={g.f} x1={0} x2={PLOT_W} y1={H * g.f} y2={H * g.f} stroke={colors.surface} strokeWidth={1} />)}
+          <Line x1={PLOT_W} x2={PLOT_W} y1={0} y2={H} stroke={colors.line} strokeWidth={1} />
+          {data.candles.map((c, i) => {
+            const up = c.c >= c.o;
+            const col = up ? colors.up : colors.down;
+            const top = y(Math.max(c.o, c.c));
+            const h = Math.max(1.5, Math.abs(y(c.o) - y(c.c)));
+            return (
+              <G key={i}>
+                <Line x1={x(i)} x2={x(i)} y1={y(c.h)} y2={y(c.l)} stroke={col} strokeWidth={1} />
+                <Rect x={x(i) - 3.5} y={top} width={7} height={h} fill={col} />
+              </G>
+            );
+          })}
+          <Path d={path(data.ma5)} fill="none" stroke={colors.textFaint} strokeWidth={1.6} strokeLinejoin="round" />
+          <Path d={path(data.ma20)} fill="none" stroke={MA20} strokeWidth={2} strokeLinejoin="round" />
+        </Svg>
+      </View>
+      <View style={styles.axis}>
+        {data.axis.map((l, i) => (
+          <Text key={l} style={[styles.axisLabel, { left: `${((i + 0.5) / data.axis.length) * (PLOT_W / W) * 100}%` }]}>{l}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.line },
+  plot: { paddingTop: 12 },
+  svg: { width: '100%', height: 340 },
+  legend: { position: 'absolute', left: 16, top: 12, zIndex: 2, gap: 4 },
+  legendRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  legendName: { fontFamily: fam.bold, fontSize: 12, color: colors.text },
+  legendQuote: { fontFamily: fam.monoBold, fontSize: 12 },
+  maItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  maLine: { width: 10, height: 2 },
+  maText: { fontFamily: fam.mono, fontSize: 12, color: colors.textFaint },
+  maVal: { fontFamily: fam.monoBold, color: colors.textSub },
+  gridLabel: { position: 'absolute', right: 8, marginTop: -7, fontFamily: fam.mono, fontSize: 11, color: colors.textFaint, zIndex: 2 },
+  axis: { height: 26, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.line },
+  axisLabel: { position: 'absolute', top: 6, marginLeft: -16, width: 32, textAlign: 'center', fontFamily: fam.mono, fontSize: 10, color: colors.textFaint },
+});
