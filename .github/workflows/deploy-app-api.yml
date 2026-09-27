@@ -1,0 +1,46 @@
+# app-api dev 배포 (ETF Orca 앱 API, ADR-0056). 자기 코드(또는 모든 JVM 앱 이미지에 영향을 주는
+# 공유 경로)가 바뀐 dev push 에서만 트리거되는 독립 배포. 절차는 deploy-app.yml 한 벌을 재사용한다.
+#
+# paths 필터 주의: diff 를 계산할 수 없는 push(force 등)에서는 GitHub 이 fail-open 으로
+# 워크플로를 실행한다. 과잉 배포가 누락보다 안전하다는 방침과 일치.
+#
+# workflow_dispatch 는 최초 이미지 부트스트랩용. ECS 서비스가 참조하는 0.0.1 이 ECR 에
+# 없는 신설 직후, 앱 코드 변경 없이도 첫 push 를 만들 수 있어야 한다(dev ref 로 실행해야
+# OIDC 신뢰(ref:refs/heads/dev)를 통과한다). dispatch 는 head_commit 이 비어 bump=patch 가 되므로
+# 빈 ECR 에서 정확히 0.0.1(tfvars baseline)이 만들어진다.
+name: deploy-app-api
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/cloud/app-api/**"
+      # 공유 경로. 모든 JVM 앱 이미지에 영향(schema SQL 은 migrate 소관이라 제외).
+      - "src/libs/jvm-common/**"
+      - "src/settings.gradle"
+      - "src/gradle/**"
+      - "src/gradlew"
+      - "src/gradlew.bat"
+      - "src/.dockerignore"
+      # 배포 절차 자체의 변경. tenant-sync-api 와 같이 이 파일 자신은 넣지 않는다.
+      # 이 워크플로가 신설되는 머지 push 에서 terraform-apply(권한·서비스 생성)와 경주해
+      # 첫 실행이 반드시 실패하기 때문. 부트스트랩은 workflow_dispatch 가 담당한다.
+      - ".github/workflows/deploy-app.yml"
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+# 같은 앱의 배포는 직렬화, 실행 중 롤아웃은 취소하지 않는다(latest-pending-wins).
+concurrency:
+  group: deploy-app-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    with:
+      app: app-api
+      plane: cloud

@@ -52,6 +52,10 @@ data "aws_ecr_repository" "tenant_sync_api" {
   name = "edge/tenant-sync-api"
 }
 
+data "aws_ecr_repository" "app_api" {
+  name = "edge/app-api"
+}
+
 # data-pipeline 의 tag-news·analyze 페이즈가 함께 읽는 DeepSeek API 키 시크릿 — 그릇이 TF 밖
 # CLI 로 먼저 생겨 모듈 소유가 아니다(data 로 조회). 이름의 네임스페이스는 data-pipeline 관례.
 # 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"api_key":"..."}'.
@@ -458,15 +462,17 @@ module "gha_deploy_dev" {
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
 
-  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api·tenant-sync-api) + data-pipeline 배치 이미지.
+  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api·tenant-sync-api·app-api) + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
     data.aws_ecr_repository.super_admin_api.arn,
     data.aws_ecr_repository.tenant_sync_api.arn,
+    data.aws_ecr_repository.app_api.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = concat([
     module.super_admin_api.service_arn,
     module.tenant_sync_api.service_arn,
+    module.app_api.service_arn,
     # 1분 상주 서비스(ALPHA-711) — deploy-data-pipeline.yml 이 이미지 push 뒤
     # force-new-deployment 로 mutable 태그를 다시 당기게 한다(없으면 상주 프로세스가
     # 배포 후에도 옛 이미지를 계속 돈다).
@@ -474,6 +480,7 @@ module "gha_deploy_dev" {
   app_pass_role_arns = [
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
     module.tenant_sync_api.execution_role_arn, module.tenant_sync_api.task_role_arn,
+    module.app_api.execution_role_arn, module.app_api.task_role_arn,
   ]
 
   # UI 배포(deploy-ui.yml) 권한 — 프론트 S3 sync + CloudFront 무효화.
@@ -734,6 +741,11 @@ module "app_alb" {
 
   enable_https    = true
   certificate_arn = data.aws_acm_certificate.wildcard_alb.arn
+
+  # readiness 그룹(readinessState 만)을 본다. 기본 /actuator/health 는 Redis·DB 인디케이터를 합산해
+  # Redis 만 내려가도 503 이라, 매처 200 단일인 ALB 가 전 태스크를 교체해 버린다(로컬 실측).
+  # 앱은 Redis 없이 DB-first 로 버티는 설계라 외부 의존 장애가 태스크 교체로 번지면 안 된다.
+  health_check_path = "/actuator/health/readiness"
 }
 
 module "app_api" {
