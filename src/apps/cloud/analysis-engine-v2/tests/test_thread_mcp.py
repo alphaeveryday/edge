@@ -104,3 +104,26 @@ def test_sdk_pagination_reaches_hidden_events_without_changing_scope(db, tmp_pat
                     assert len(list((tmp_path / 'runs').glob('*.json'))) == 3
                 tasks.cancel_scope.cancel()
     asyncio.run(check())
+
+
+def test_exploration_budget_preserves_final_reference_calls(db, tmp_path):
+    article(db, 0)
+    config = make_news_thread_server(db, ['sixth-stock'], tmp_path, start_at=START, analysis_at=AT,
+                                    max_exploration_calls=1)
+
+    async def check():
+        server = config['instance']
+        async with create_client_server_memory_streams() as (client, transport):
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(server.run, *transport, server.create_initialization_options())
+                async with ClientSession(*client) as session:
+                    await session.initialize()
+                    assert not (await session.call_tool('get_news_thread', {'thread_id':'thread'})).model_dump(by_alias=True)['isError']
+                    denied = await session.call_tool('search_news_threads', {})
+                    assert denied.model_dump(by_alias=True)['isError']
+                    assert 'budget' in denied.content[0].text
+                    final = await session.call_tool('get_issue_evidence', {'news_ids':['0'], 'include_body':False})
+                    assert not final.model_dump(by_alias=True)['isError']
+                    assert len(list((tmp_path/'runs').glob('*.json'))) == 2
+                tasks.cancel_scope.cancel()
+    asyncio.run(check())

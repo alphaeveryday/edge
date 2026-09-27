@@ -12,7 +12,7 @@ from .tools.news_threads import _timestamp
 
 
 def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path,
-                            *, start_at: str, analysis_at: str):
+                            *, start_at: str, analysis_at: str, max_exploration_calls: int = 12):
     """Register news exploration and evidence tools with server-owned scope.
 
     Args:
@@ -21,10 +21,23 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
         bucket: Execution record directory; raw source rows are not copied.
         start_at: Fixed article publication lower bound.
         analysis_at: Fixed availability cutoff, unavailable for agent override.
+        max_exploration_calls: Shared attempt limit for search, previews and excerpts.
+            Title-only final references remain available after this limit.
 
     Returns:
         Claude SDK MCP config. Only title-only evidence calls support final citation.
     """
+    if type(max_exploration_calls) is not int or max_exploration_calls < 1:
+        raise ValueError('max_exploration_calls must be a positive integer')
+    exploration_calls = 0
+
+    def reserve_exploration():
+        """Bound database exploration while preserving final evidence retrieval."""
+        nonlocal exploration_calls
+        if exploration_calls >= max_exploration_calls:
+            raise ValueError('Exploration budget exhausted. Use already-read articles for get_issue_evidence(include_body=false), or omit unsupported items.')
+        exploration_calls += 1
+
     bucket = Path(bucket)
     (bucket / "runs").mkdir(parents=True, exist_ok=True)
     context = {"start_at": start_at, "analysis_at": analysis_at,
@@ -76,6 +89,7 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
                                             "cursor": {"type": "string", "minLength": 1}},
            "required": ["thread_id"], "additionalProperties": False})
     async def get_news_thread(arguments):
+        reserve_exploration()
         result = load_thread_summary(connection, arguments["thread_id"], context["constituent_ids"],
                                      start_at=start_at, analysis_at=analysis_at,
                                      cursor=arguments.get("cursor"))
@@ -92,11 +106,14 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
               'include_body': {'type': 'boolean'}},
            'required': ['news_ids', 'include_body'], 'additionalProperties': False})
     async def get_issue_evidence(arguments):
+        if arguments['include_body']:
+            reserve_exploration()
         result = load_issue_evidence(connection, arguments['news_ids'], arguments['include_body'],
                                      context['constituent_ids'], start_at=start_at, analysis_at=analysis_at)
         return saved_response(evidence_definition['tool_id'], arguments, result)
 
     @tool('search_news_threads',
+          f'이 서버의 탐색 호출 한도는 총 {max_exploration_calls}회이며 기사 발췌 조회도 포함한다. 최종 제목 참조는 별도다. '
           '서버가 제공한 뉴스 범위에서 기존 스레드와 미연결 기사를 최신순으로 10개씩 찾는다. '
           'query는 제목에 포함된 단어 그대로 검색한다. 검색어는 스레드를 고르며 해당 스레드의 중복 수는 '
           '검색어와 관계없이 요청한 종목·기간 전체 기준이다. start_at/end_at 생략 시 서버 범위 전체, '
@@ -108,6 +125,7 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
               'query': {'type': 'string', 'maxLength': 200},
               'cursor': {'type': 'string', 'minLength': 1}}, 'additionalProperties': False})
     async def search_news_threads(arguments):
+        reserve_exploration()
         requested_start = arguments.get('start_at', start_at)
         if _timestamp(requested_start) < _timestamp(start_at):
             raise ValueError('start_at is outside the server news range')
@@ -128,6 +146,7 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
               'cursor': {'type': 'string', 'minLength': 1}},
            'required': ['thread_id'], 'additionalProperties': False})
     async def get_news_thread_articles(arguments):
+        reserve_exploration()
         result = load_thread_articles(connection, arguments['thread_id'], context['constituent_ids'],
                                       start_at=start_at, analysis_at=analysis_at,
                                       source_event_id=arguments.get('source_event_id'), cursor=arguments.get('cursor'))
