@@ -1,0 +1,34 @@
+name: test-analysis-v2
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "src/apps/cloud/analysis-engine-v2/**"
+      - "src/pyproject.toml"
+      - "src/uv.lock"
+      - ".github/workflows/test-analysis-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-analysis-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "src/uv.lock"
+      - name: Install locked v2 dependencies
+        working-directory: src
+        run: uv sync --locked --python 3.12 --package analysis-engine-v2
+      - name: Verify news contracts without AWS or model credentials
+        working-directory: src
+        run: uv run --locked --package analysis-engine-v2 pytest apps/cloud/analysis-engine-v2/tests -q

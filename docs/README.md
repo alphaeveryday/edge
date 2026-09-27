@@ -13,6 +13,7 @@
 | [context.md](context.md) | 제품 정의·변경 배경, 기존 vs 신규, 하이브리드 아키텍처 개요, Cloud/On-Prem 책임 분리, 서비스/API 변경표 | 전체 그림을 잡을 때 (필독) |
 | [repo-structure.md](repo-structure.md) | 저장소 구조 — 모노레포 트리·워크스페이스·apps/libs 역할표·데이터 흐름 (구 루트 README 본문) | 모듈 위치·역할이 헷갈릴 때 |
 | [git-conventions.md](git-conventions.md) | Git 컨벤션 SSOT — 브랜치 전략·커밋/PR 제목·머지 정책·worktree (구 루트 README 본문) | 브랜치·커밋·PR·머지 전 |
+| [analysis-engine-v2/news-thread-implementation.md](analysis-engine-v2/news-thread-implementation.md) | v2 뉴스 탐색·기사 근거 툴의 구현과 검증 범위 | 기존 분석엔진과 분리된 v2 개발 현황 확인 |
 | [scope.md](scope.md) | MVP 제외 범위 (명시적 아웃) | 기능 범위가 헷갈릴 때 |
 | [implementation.md](implementation.md) | 구현 결정 현행 스펙 — 코드베이스, 데모 토폴로지, Rule 배포 경로, DB 변경 절차, 현행 CD | 구현·배포·스키마를 바꾸기 전 |
 | [data-model/](data-model/) | 물리 데이터 모델 ERD — Cloud 7도메인 + On-Prem 세트 (Flyway 파생 DBML 과 CI 대조) | 테이블·FK 관계를 볼 때 |

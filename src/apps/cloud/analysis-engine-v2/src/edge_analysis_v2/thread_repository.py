@@ -42,14 +42,21 @@ def load_thread_summary(
     Raises:
         ValueError: Connection, scope, bounds or preview limit is invalid.
     """
+    if type(preview_limit) is not int or preview_limit < 1:
+        raise ValueError("preview_limit must be a positive integer")
+    rows = _load_thread_rows(connection, thread_id, constituent_ids, start_at, analysis_at, end_at)
+    return summarize_news_thread(thread_id, rows, start_at=start_at, end_at=analysis_at,
+                                 preview_limit=preview_limit, cursor=cursor)
+
+
+def _load_thread_rows(connection, thread_id, constituent_ids, start_at, analysis_at, end_at=None):
+    """Read the same eligible relationship rows for previews and article exploration."""
     start, end, targets = _scope(connection, constituent_ids, start_at, analysis_at)
     publication_end = end if end_at is None else _timestamp(end_at).isoformat()
     if not _timestamp(start) <= _timestamp(publication_end) <= _timestamp(end):
         raise ValueError('end_at must be between start_at and analysis_at')
     if not isinstance(thread_id, str) or not thread_id.strip():
         raise ValueError("thread_id is required")
-    if type(preview_limit) is not int or preview_limit < 1:
-        raise ValueError("preview_limit must be a positive integer")
     slots = ",".join(["%s"] * len(targets))
     with connection.cursor() as db_cursor:
         db_cursor.execute(f"""
@@ -75,8 +82,48 @@ def load_thread_summary(
         """, (thread_id, start, publication_end, end, end, end, end, *targets))
         rows = [{key: value.isoformat() if isinstance(value, datetime) else value
                  for key, value in row.items()} for row in db_cursor.fetchall()]
-    return summarize_news_thread(thread_id, rows, start_at=start, end_at=end,
-                                 preview_limit=preview_limit, cursor=cursor)
+    return rows
+
+
+def load_thread_articles(connection, thread_id: str, constituent_ids: list[str], *,
+                         start_at: str, analysis_at: str, source_event_id: str | None = None,
+                         cursor: str | None = None) -> dict:
+    """Expose linked article titles hidden by representative or duplicate compression.
+
+    Args:
+        connection: Read-only repeatable-read dictionary-row connection.
+        thread_id: Existing thread ID discovered in the current scope.
+        constituent_ids: Server-owned eligible constituent IDs.
+        start_at: Publication lower bound.
+        analysis_at: Fixed publication and availability cutoff.
+        source_event_id: Optional exact event ID for its alternative evidence articles.
+        cursor: Last article ID returned in the preceding page of the same request.
+
+    Returns:
+        At most ten distinct article titles and a next cursor. No event relabeling.
+
+    Raises:
+        ValueError: Invalid scope or cursor outside the eligible article list.
+    """
+    rows = _load_thread_rows(connection, thread_id, constituent_ids, start_at, analysis_at)
+    articles = {}
+    for row in rows:
+        if source_event_id is not None and row['source_event_id'] != source_event_id:
+            continue
+        article = {key: row[key] for key in ('document_id', 'title', 'published_at')}
+        if row['document_id'] in articles and articles[row['document_id']] != article:
+            raise ValueError('conflicting article metadata')
+        articles[row['document_id']] = article
+    ordered = sorted(articles.values(), key=lambda a: (-_timestamp(a['published_at']).timestamp(), a['document_id']))
+    ids = [a['document_id'] for a in ordered]
+    offset = 0
+    if cursor is not None:
+        if cursor not in ids:
+            raise ValueError('cursor is outside the current article scope')
+        offset = ids.index(cursor) + 1
+    page = ordered[offset:offset + 10]
+    return {'articles': page,
+            'next_cursor': page[-1]['document_id'] if offset + len(page) < len(ordered) else None}
 
 
 def load_issue_evidence(connection, news_ids: list[str], include_body: bool,

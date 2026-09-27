@@ -22,7 +22,7 @@ def test_sdk_call_reads_database_and_persists_identical_envelope(db, tmp_path):
                 async with ClientSession(*client) as session:
                     await session.initialize()
                     catalog = (await session.list_tools()).tools
-                    assert [item.name for item in catalog] == ["get_news_thread", "get_issue_evidence", "search_news_threads"]
+                    assert [item.name for item in catalog] == ["get_news_thread", "get_issue_evidence", "search_news_threads", "get_news_thread_articles"]
                     assert "탐색용" in catalog[0].description
                     invalid = await session.call_tool("get_news_thread", {"thread_id": "thread", "analysis_at": "2099"})
                     assert invalid.model_dump(by_alias=True)["isError"]
@@ -30,6 +30,9 @@ def test_sdk_call_reads_database_and_persists_identical_envelope(db, tmp_path):
                     found = await session.call_tool('search_news_threads', {})
                     assert not found.model_dump(by_alias=True)['isError']
                     assert json.loads(found.content[0].text)['result']['threads'][0]['thread_id'] == 'thread'
+                    articles = await session.call_tool('get_news_thread_articles', {'thread_id': 'thread', 'source_event_id': '0'})
+                    assert not articles.model_dump(by_alias=True)['isError']
+                    assert json.loads(articles.content[0].text)['result']['articles'][0]['document_id'] == '0'
                     future = await session.call_tool('search_news_threads', {'end_at': '2026-09-22T08:30:00+09:00'})
                     assert future.model_dump(by_alias=True)['isError']
                     response = await session.call_tool("get_news_thread", {"thread_id": "thread"})
