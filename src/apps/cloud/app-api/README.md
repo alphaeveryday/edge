@@ -1,6 +1,6 @@
 # app-api — ETF 전망 컨센서스 투표
 
-PRD_ETF_투표_Redis_Failover(2026-09-13)의 로컬 실험용 API. 투표 단위는 전망(forecast)이다 — 같은 ETF에 전망이 여러 개 열릴 수 있으므로 ETF가 아니라 전망에 표가 붙는다. 전망 엔티티는 아직 없고 forecastId는 Long 식별자다. 사용자당 1표를 유지하되 재투표로 선택을 바꿀 수 있다(마지막 선택 우선, 같은 선택 재투표는 no-op). 기존 PostgreSQL 데이터는 자동 이관하지 않는다. MySQL용 `db/etf-migration`과 별도 Flyway history table을 사용한다. 과거 `db/migration`은 기존 스키마 기록이다.
+PRD_ETF_투표_Redis_Failover(2026-09-13)의 로컬 실험용 API. 투표 단위는 전망(forecast)이다 — 같은 ETF에 전망이 여러 개 열릴 수 있으므로 ETF가 아니라 전망에 표가 붙는다. 전망 엔티티는 아직 없고 forecastId는 Long 식별자다. 사용자당 1표를 유지하되 재투표로 선택을 바꿀 수 있다(마지막 선택 우선, 같은 선택 재투표는 no-op). DB 는 PostgreSQL 이다(ADR-0056, MySQL 에서 전환). `db/etf-migration`과 별도 Flyway history table을 사용한다. 과거 `db/migration`은 기존 스키마 기록이다. `@Scheduled` 셋(재조정·워머·플러셔)은 ShedLock 리스(`shedlock` 테이블)로 다중 인스턴스에서 한 대만 돈다. ElastiCache 에는 `SPRING_DATA_REDIS_SSL_ENABLED=true` 로 붙는다.
 
 ```sh
 # 이 디렉터리에서
@@ -21,7 +21,7 @@ Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹
 클라이언트 timeout 옵션 의미는 [Lettuce 공식 문서](https://github.com/redis/lettuce/blob/main/docs/advanced-usage/client-options.md)를 참고했다. 500ms는 커맨드 제한이며, 전체 HTTP 지연·5분 복구는 부하 실험으로 판정해야 한다.
 
 ```sh
-# src 디렉터리에서: 실제 MySQL·Redis Docker 컨테이너 필요
+# src 디렉터리에서: 실제 PostgreSQL·Redis Docker 컨테이너 필요
 ./gradlew :apps:cloud:app-api:test
 # 기존 compose를 내려 포트 8080, 55440, 6390을 비운 후 experiments에서
 python3 run-failover.py S2  # S1·S2·S4·S5(S3 retry 는 제거돼 거부), 각 3분 부하, 60초 후 장애

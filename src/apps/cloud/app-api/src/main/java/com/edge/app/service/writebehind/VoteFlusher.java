@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -35,6 +36,7 @@ public class VoteFlusher {
     }
 
     @Scheduled(fixedDelayString = "${vote.flush.interval-ms:3000}", initialDelayString = "${vote.flush.interval-ms:3000}")
+    @SchedulerLock(name = "vote-flush", lockAtMostFor = "PT30S")
     public void flush() {
         long start = System.nanoTime();
         try {

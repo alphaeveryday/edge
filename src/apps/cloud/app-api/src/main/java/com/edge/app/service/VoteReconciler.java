@@ -11,6 +11,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
@@ -44,6 +45,7 @@ public class VoteReconciler {
     }
 
     @Scheduled(fixedDelayString = "${vote.reconcile.interval:PT5M}", initialDelayString = "${vote.reconcile.initial-delay:PT1S}")
+    @SchedulerLock(name = "vote-reconcile", lockAtMostFor = "PT4M")
     public void scheduled() {
         request();
     }

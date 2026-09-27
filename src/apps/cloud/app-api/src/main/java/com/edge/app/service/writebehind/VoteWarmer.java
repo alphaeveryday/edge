@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
@@ -60,6 +61,7 @@ public class VoteWarmer {
 
     // 재연결 없이 warm 만 실패한 경우(일시 DB 장애)를 위한 주기 재시도.
     @Scheduled(fixedDelayString = "${vote.warm.interval:PT5M}", initialDelayString = "${vote.warm.interval:PT5M}")
+    @SchedulerLock(name = "vote-warm", lockAtMostFor = "PT4M")
     void scheduled() {
         request();
     }

@@ -29,6 +29,6 @@ public class VoteFlushRepository {
             args.add(choice.name());
         });
         jdbcTemplate.update("insert into forecast_vote(forecast_id, user_id, choice) values " + rows
-                + " as new on duplicate key update choice = new.choice", args.toArray());
+                + " on conflict (forecast_id, user_id) do update set choice = excluded.choice", args.toArray());
     }
 }

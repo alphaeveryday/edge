@@ -31,14 +31,17 @@ dependencies {
 	// Boot 4 는 Flyway 자동설정이 spring-boot-flyway 모듈에 있다.
 	implementation 'org.springframework.boot:spring-boot-flyway'
 	implementation 'org.flywaydb:flyway-core'
-	implementation 'org.flywaydb:flyway-mysql'
-	runtimeOnly 'com.mysql:mysql-connector-j'
+	implementation 'org.flywaydb:flyway-database-postgresql'
+	runtimeOnly 'org.postgresql:postgresql'
+	// 다중 인스턴스에서 @Scheduled 셋(재조정·워머·플러셔)을 한 대만 실행(ADR-0056). intake 와 같은 shedlock 테이블 리스.
+	implementation 'net.javacrumbs.shedlock:shedlock-spring:7.10.0'
+	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:7.10.0'
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
 	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
-	testImplementation 'org.testcontainers:testcontainers-mysql'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

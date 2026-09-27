@@ -2,7 +2,7 @@ spring:
   application:
     name: app
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:55440/app}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55440/app}
     username: ${SPRING_DATASOURCE_USERNAME:app}
     password: ${SPRING_DATASOURCE_PASSWORD:app}
   jackson:
@@ -22,6 +22,8 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6390}
       timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
       connect-timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
+      ssl:
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache 는 전송 암호화 필수(ADR-0056), 로컬 compose 는 평문
 vote:
   redis:
     disconnected-behavior: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:REJECT_COMMANDS}
