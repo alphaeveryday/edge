@@ -180,3 +180,45 @@ export interface Hint {
   list?: { k: string; d: string }[];
   why?: string;
 }
+
+export interface RankRow {
+  etf: EtfSummary;
+  rank: number;
+  title: string;
+  chips: string[];
+  ready: boolean;
+}
+
+export interface ThemeSheet {
+  theme: string;
+  title: string;
+  why: string;
+  rows: { etf: EtfSummary; tag?: string }[];
+}
+
+export interface ThemeFeedItem {
+  key: string;
+  bg: string;
+  count: number;
+  headline: string;
+  dir: Dir;
+}
+
+export interface ThemeDetail {
+  key: string;
+  headline: string;
+  stocks: { name: string; logoBg: string; etfs: string }[];
+  intro: string;
+  updated: string;
+  countLabel: string;
+  todayLine: string;
+  todayEffect: string;
+  importantLead: string;
+  importantWhy: string;
+  metric: { name: string; now: string; dir: Dir; vals: number[]; thresh: number; xLabels: string[]; refLabel: string; state: string };
+  thesis: string;
+  surface: string;
+  structure: string;
+  structureWhy: string;
+  soWhat: string;
+}

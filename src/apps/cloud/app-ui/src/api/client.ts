@@ -1,4 +1,4 @@
-import type { Axis, ChartData, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, RankRow, ThemeDetail, ThemeFeedItem, ThemeSheet, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -22,6 +22,13 @@ export interface WatchApi {
 
 export interface ThemeApi {
   list(): Promise<Theme[]>;
+  sheet(theme: string): Promise<ThemeSheet>;
+  feed(sort: string): Promise<ThemeFeedItem[]>;
+  detail(key: string): Promise<ThemeDetail>;
+}
+
+export interface ExploreApi {
+  rank(): Promise<RankRow[]>;
 }
 
 export interface OnboardingApi {
@@ -51,6 +58,7 @@ export interface ApiClient {
   etf: EtfApi;
   watch: WatchApi;
   theme: ThemeApi;
+  explore: ExploreApi;
   onboarding: OnboardingApi;
   analysis: AnalysisApi;
   home: HomeApi;

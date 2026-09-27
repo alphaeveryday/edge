@@ -4,6 +4,7 @@ import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
+import { RANK_META, THEME_DETAILS, THEME_FEED, THEME_SHEET } from './explore';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -90,6 +91,27 @@ export const mockClient: ApiClient = {
   },
   theme: {
     list: () => delay(THEMES),
+    sheet: (theme) => {
+      const meta = THEME_SHEET[theme];
+      const rows = ETFS.filter((e) => e.theme === theme || (theme === 'AI·반도체' && e.code === 'GRID')).sort((a, b) => SIGNAL_ORDER.indexOf(b.signal) - SIGNAL_ORDER.indexOf(a.signal));
+      return delay({ theme, title: `${theme} ETF ${rows.length}종`, why: meta?.why ?? '', rows: rows.map((e) => ({ etf: e, tag: meta?.tags[e.code] || undefined })) });
+    },
+    feed: (sort) => {
+      const list = sort === 'up' ? THEME_FEED.filter((t) => t.dir === 'help') : sort === 'down' ? THEME_FEED.filter((t) => t.dir === 'burden') : THEME_FEED;
+      return delay(list);
+    },
+    detail: (key) => {
+      const d = THEME_DETAILS[key];
+      return d ? delay(d) : Promise.reject(new Error(`no theme detail ${key}`));
+    },
+  },
+  explore: {
+    rank: () =>
+      delay(
+        [...ETFS]
+          .sort((a, b) => SIGNAL_ORDER.indexOf(b.signal) - SIGNAL_ORDER.indexOf(a.signal) || b.changePct - a.changePct)
+          .map((e, i) => ({ etf: e, rank: i + 1, ...(RANK_META[e.code] ?? { title: e.name, chips: [], ready: false }) })),
+      ),
   },
   onboarding: {
     complete: ({ etfs }) => {
