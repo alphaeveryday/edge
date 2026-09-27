@@ -40,6 +40,7 @@ def db():
     connection = Connection()
     connection.raw.executescript("""
         CREATE TABLE document(document_id, document_type, title, published_at, available_at);
+        CREATE TABLE news_document(document_id, lead_text, lead_observed_at);
         CREATE TABLE document_entity(document_id, entity_id);
         CREATE TABLE document_assertion(assertion_id, document_id, available_at);
         CREATE TABLE event_evidence(source_event_id, assertion_id);

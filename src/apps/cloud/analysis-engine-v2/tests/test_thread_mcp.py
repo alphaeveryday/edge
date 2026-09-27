@@ -22,7 +22,7 @@ def test_sdk_call_reads_database_and_persists_identical_envelope(db, tmp_path):
                 async with ClientSession(*client) as session:
                     await session.initialize()
                     catalog = (await session.list_tools()).tools
-                    assert [item.name for item in catalog] == ["get_news_thread"]
+                    assert [item.name for item in catalog] == ["get_news_thread", "get_issue_evidence"]
                     assert "탐색용" in catalog[0].description
                     invalid = await session.call_tool("get_news_thread", {"thread_id": "thread", "analysis_at": "2099"})
                     assert invalid.model_dump(by_alias=True)["isError"]
@@ -37,6 +37,15 @@ def test_sdk_call_reads_database_and_persists_identical_envelope(db, tmp_path):
                     assert output["result"]["stages"][0]["events"][0]["document_id"] == "0"
                     second = await session.call_tool("get_news_thread", {"thread_id": "thread"})
                     assert json.loads(second.content[0].text)["tool_run_id"] != output["tool_run_id"]
+                    for include_body in (True, False):
+                        response = await session.call_tool('get_issue_evidence', {'news_ids': ['0'], 'include_body': include_body})
+                        assert not response.model_dump(by_alias=True)['isError']
+                        evidence = json.loads(response.content[0].text)
+                        record = json.loads((tmp_path / 'runs' / (evidence['tool_run_id'] + '.json')).read_text(encoding='utf-8'))
+                        assert record['output'] == evidence
+                        assert record['tool_id'] == 'get_issue_evidence:v2'
+                        assert record['arguments']['include_body'] is include_body
+                        assert ('lead_text' in evidence['result']['news'][0]) is include_body
                 tasks.cancel_scope.cancel()
     asyncio.run(check())
 
