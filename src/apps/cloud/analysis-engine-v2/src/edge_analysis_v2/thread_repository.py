@@ -21,6 +21,7 @@ def _scope(connection, constituent_ids, start_at, analysis_at):
 def load_thread_summary(
     connection, thread_id: str, constituent_ids: list[str], *,
     start_at: str, analysis_at: str, preview_limit: int = 3, cursor: str | None = None,
+    end_at: str | None = None,
 ) -> dict | None:
     """Read one scoped thread and assemble its event preview.
 
@@ -32,6 +33,7 @@ def load_thread_summary(
         analysis_at: Server-fixed inclusive availability cutoff with UTC offset.
         preview_limit: Maximum displayed unique events; does not limit SQL rows.
         cursor: Previous page's final event ID, within the same scope.
+        end_at: Optional publication upper bound, no later than analysis_at.
 
     Returns:
         Thread summary, or None for no eligible linked articles. Current surviving
@@ -41,6 +43,9 @@ def load_thread_summary(
         ValueError: Connection, scope, bounds or preview limit is invalid.
     """
     start, end, targets = _scope(connection, constituent_ids, start_at, analysis_at)
+    publication_end = end if end_at is None else _timestamp(end_at).isoformat()
+    if not _timestamp(start) <= _timestamp(publication_end) <= _timestamp(end):
+        raise ValueError('end_at must be between start_at and analysis_at')
     if not isinstance(thread_id, str) or not thread_id.strip():
         raise ValueError("thread_id is required")
     if type(preview_limit) is not int or preview_limit < 1:
@@ -67,7 +72,7 @@ def load_thread_summary(
               AND EXISTS (SELECT 1 FROM document_entity entity
                           WHERE entity.document_id = d.document_id
                             AND entity.entity_id IN ({slots}))
-        """, (thread_id, start, end, end, end, end, end, *targets))
+        """, (thread_id, start, publication_end, end, end, end, end, *targets))
         rows = [{key: value.isoformat() if isinstance(value, datetime) else value
                  for key, value in row.items()} for row in db_cursor.fetchall()]
     return summarize_news_thread(thread_id, rows, start_at=start, end_at=end,

@@ -1,4 +1,4 @@
-ALPHA-1092는 단일 스레드 조회·사건 페이지 탐색·기사 발췌와 최종 참조·Claude SDK 툴 등록·호출 기록 저장까지 구현했다. 가상 DB로 DeepSeek 호출, 실제 PostgreSQL로 사건 조회를 확인했다. 스레드 검색·앱의 초기 입력 연결은 남았다. 티켓 전체 완료가 아니다.
+ALPHA-1092는 스레드 검색·사건 페이지 탐색·기사 발췌와 최종 참조·Claude SDK 툴 등록·호출 기록 저장까지 구현했다. 가상 DB로 DeepSeek 호출, 실제 PostgreSQL로 사건 조회를 확인했다. 앱의 초기 입력 연결·사건별 추가 기사 탐색은 남았다. 티켓 전체 완료가 아니다.
 
 ## 구현
 
@@ -21,7 +21,7 @@ ALPHA-1092는 단일 스레드 조회·사건 페이지 탐색·기사 발췌와
 
 ## 검증과 다음 작업
 
-- 테스트 26개 통과, 제외된 테스트 없음. 사건 페이지·기사 시점과 대상 제한·SDK 반환과 저장 일치 포함.
+- 테스트 29개 통과, 제외된 테스트 없음. 검색의 미연결 기사·전체 페이지·다른 검색 조건의 커서 거부 포함.
 - `load_thread_summary`는 기존 테이블의 사건·단계·중복 분류를 보존해 조립 함수에 전달. 지정 스레드·기간·구성종목 범위에서 300기사 제한 없이 집계.
 - 테스트는 실제 SQL 조인을 SQLite에서 실행. PostgreSQL 드라이버·타입·권한·쿼리 성능 검증을 대신하지 않음.
 - 구성종목은 호출자가 전달. 전체 편입 조회 연결은 T03 작업이며 아직 완료되지 않음.
@@ -34,7 +34,9 @@ ALPHA-1092는 단일 스레드 조회·사건 페이지 탐색·기사 발췌와
 ## 에이전트 연결과 기록
 
 - `make_news_thread_server(connection, constituent_ids, bucket, start_at=..., analysis_at=...)`를 `ClaudeAgentOptions.mcp_servers["analysis"]`에 전달.
-- 허용 툴: `mcp__analysis__get_news_thread`, `mcp__analysis__get_issue_evidence`. 종목·기간은 서버 고정.
+- 허용 툴: `mcp__analysis__get_news_thread`, `mcp__analysis__get_issue_evidence`, `mcp__analysis__search_news_threads`. 종목·조회 가능 기간은 서버 고정.
+- `search_news_threads(start_at?, end_at?, query?, cursor?)`: 서버 범위 안에서 기간을 좁혀 검색. 제목 부분일치·최신순. 스레드와 미연결 기사를 합해 10개씩 반환. 커서는 동일 조건·트랜잭션에서만 유효.
+- 검색어로 선택된 스레드의 중복 수·미리보기는 해당 기간 전체 기준. 초기 입력도 이 함수의 `result` 본문을 사용.
 - `get_issue_evidence(news_ids, include_body)`: 기사 ID 1~10개. true는 확보 발췌, false는 기사 ID·제목. false 호출만 최종 근거로 연결.
 - 발췌가 없거나 cutoff 이후 관측됐으면 `lead_text:null`, `content_kind:unavailable`. 기사 자체가 범위 밖이면 전체 호출 오류. 성공한 일부 기사만 조용히 반환하지 않음.
 - `runs/{tool_run_id}.json`: 함수 ID·인자·조회 범위·출력·실행시각. `output`은 모델에 반환한 `{tool_run_id,result}`와 동일. raw 조회 행 복제 없음.

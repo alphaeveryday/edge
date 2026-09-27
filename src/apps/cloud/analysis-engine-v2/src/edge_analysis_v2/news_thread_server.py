@@ -7,6 +7,8 @@ from uuid import uuid4
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .thread_repository import load_thread_summary, load_issue_evidence
+from .news_search import search_news_threads as search_threads
+from .tools.news_threads import _timestamp
 
 
 def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path,
@@ -36,7 +38,11 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
         'tool_id': 'get_issue_evidence:v2', 'final_evidence_when': {'include_body': False},
         'formula_latex': '', 'description': 'Available lead excerpt or title-only article reference.',
         'source_name': 'document / news_document / document_entity'}
-    for definition in (thread_definition, evidence_definition):
+    search_definition = {
+        'tool_id': 'search_news_threads:v2', 'final_evidence': False,
+        'formula_latex': '', 'description': 'Scoped thread previews and unlinked article titles, latest first.',
+        'source_name': thread_definition['source_name']}
+    for definition in (thread_definition, evidence_definition, search_definition):
         definition_path = definitions / (definition['tool_id'].replace(':', '-') + '.json')
         try:
             with definition_path.open("x", encoding="utf-8") as stream:
@@ -85,4 +91,25 @@ def make_news_thread_server(connection, constituent_ids: list[str], bucket: Path
                                      context['constituent_ids'], start_at=start_at, analysis_at=analysis_at)
         return saved_response(evidence_definition['tool_id'], arguments, result)
 
-    return create_sdk_mcp_server(name="analysis", version="2.0.0", tools=[get_news_thread, get_issue_evidence])
+    @tool('search_news_threads',
+          '서버가 제공한 뉴스 범위에서 기존 스레드와 미연결 기사를 최신순으로 10개씩 찾는다. '
+          'query는 제목에 포함된 단어 그대로 검색한다. 검색어는 스레드를 고르며 해당 스레드의 중복 수는 '
+          '검색어와 관계없이 요청한 종목·기간 전체 기준이다. start_at/end_at 생략 시 서버 범위 전체, '
+          '지정 시 그 안으로만 좁힌다. next_cursor는 같은 조건의 다음 페이지에 사용한다. '
+          '빈 stages는 해당 기간에 고유 사건이 없다는 뜻이다. 초기 입력만 보고 뉴스 전체를 확인했다고 판단하지 않는다. '
+          '최종 근거는 여기의 실행 ID 대신 get_issue_evidence(include_body=false)로 받는다.',
+          {'type': 'object', 'properties': {
+              'start_at': {'type': 'string'}, 'end_at': {'type': 'string'},
+              'query': {'type': 'string', 'maxLength': 200},
+              'cursor': {'type': 'string', 'minLength': 1}}, 'additionalProperties': False})
+    async def search_news_threads(arguments):
+        requested_start = arguments.get('start_at', start_at)
+        if _timestamp(requested_start) < _timestamp(start_at):
+            raise ValueError('start_at is outside the server news range')
+        result = search_threads(connection, context['constituent_ids'], start_at=requested_start,
+                                end_at=arguments.get('end_at', analysis_at), analysis_at=analysis_at,
+                                query=arguments.get('query', ''), cursor=arguments.get('cursor'))
+        return saved_response(search_definition['tool_id'], arguments, result)
+
+    return create_sdk_mcp_server(name="analysis", version="2.0.0",
+                                 tools=[get_news_thread, get_issue_evidence, search_news_threads])
