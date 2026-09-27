@@ -14,3 +14,4 @@ export { SectionHead } from './SectionHead';
 export { SectorIcon } from './SectorIcon';
 export { SheetHead } from './SheetHead';
 export { Sticker } from './Sticker';
+export { TabItem } from './TabItem';

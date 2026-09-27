@@ -8,9 +8,10 @@ interface Props {
   size?: number;
   radius?: number;
   showLabel?: boolean;
+  label?: string;
 }
 
-export function Sticker({ signal, size = 28, radius = 9, showLabel = true }: Props) {
+export function Sticker({ signal, size = 28, radius = 9, showLabel = true, label }: Props) {
   const s = SIG[signal];
   const markSize = s.double ? 9 : 13;
   return (
@@ -25,7 +26,7 @@ export function Sticker({ signal, size = 28, radius = 9, showLabel = true }: Pro
         <Text style={[styles.mark, { color: s.color, fontSize: markSize, lineHeight: markSize * (s.double ? 0.9 : 1) }]}>{s.mark}</Text>
         {s.double && <Text style={[styles.mark, { color: s.color, fontSize: markSize, lineHeight: markSize * 0.9 }]}>{s.mark}</Text>}
       </View>
-      {showLabel && <Text style={[styles.label, { color: s.labelColor }]}>{s.label}</Text>}
+      {showLabel && <Text style={[styles.label, { color: s.labelColor }]}>{label ?? s.label}</Text>}
     </View>
   );
 }

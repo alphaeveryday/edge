@@ -2,6 +2,7 @@ import type { ApiClient } from '../client';
 import type { WatchGroup } from '../types';
 import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
+import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -74,6 +75,21 @@ export const mockClient: ApiClient = {
     complete: ({ etfs }) => {
       members.base = [...etfs];
       return delay(undefined);
+    },
+  },
+  analysis: {
+    daily: (code) => delay(dailyOf(code, etfOf(code).name)),
+    factor: (code, axis) => {
+      const f = FACTORS[code]?.[axis];
+      return f ? delay(f) : Promise.reject(new Error(`no factor page ${code} ${axis}`));
+    },
+    metric: (code, axis) => {
+      const m = METRICS[code]?.[axis];
+      return m ? delay(m) : Promise.reject(new Error(`no metric page ${code} ${axis}`));
+    },
+    hint: (key) => {
+      const h = HINTS[key];
+      return h ? delay(h, 40) : Promise.reject(new Error(`no hint ${key}`));
     },
   },
   home: {

@@ -1,10 +1,9 @@
-import { Link, Slot, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
+import { Slot, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { IconButton } from '@/components/ui';
-import { Pressable } from 'react-native';
+import { NavBar, RowQuote, SectorIcon, Sticker, TabItem } from '@/components/ui';
 import { useEtf } from '@/features/etf/queries';
 import { PickGroupSheet } from '@/features/watch/PickGroupSheet';
 import { useMembership } from '@/features/watch/queries';
@@ -29,24 +28,24 @@ export default function EtfLayout() {
   const inWatch = (mine ?? []).length > 0;
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
-      <View style={styles.nav}>
-        <IconButton icon="back" onPress={() => router.back()} />
-        <Text numberOfLines={1} style={styles.name}>{data?.name ?? code}</Text>
+      <NavBar title={data?.theme ?? ''} onBack={() => router.back()} rightIcon="search" onRight={() => router.push('/search')} />
+      <View style={styles.head}>
+        {data && <SectorIcon theme={data.theme} bg={data.logoBg} size={38} />}
+        <View style={styles.mid}>
+          <Text numberOfLines={1} style={styles.name}>{data?.name ?? code}</Text>
+          {data && <RowQuote price={data.price} changePct={data.changePct} />}
+        </View>
+        {data && <Sticker signal={data.signal} />}
         <Pressable onPress={() => setPick(true)} hitSlop={6} style={styles.heart}>
-          <Svg width={22} height={22} viewBox="0 0 24 24">
-            <Path d="M12 21s-7-4.6-9.3-9.3C.9 8 3 4.5 6.5 4.5c2 0 3.5 1 4.5 2.6 1-1.6 2.5-2.6 4.5-2.6 3.5 0 5.6 3.5 3.8 7.2C19 16.4 12 21 12 21z" fill={inWatch ? colors.up : 'none'} stroke={inWatch ? colors.up : colors.text} strokeWidth={1.8} strokeLinejoin="round" />
+          <Svg width={20} height={20} viewBox="0 0 24 24">
+            <Path d="M12 21s-7-4.6-9.3-9.3C.9 8 3 4.5 6.5 4.5c2 0 3.5 1 4.5 2.6 1-1.6 2.5-2.6 4.5-2.6 3.5 0 5.6 3.5 3.8 7.2C19 16.4 12 21 12 21z" fill={inWatch ? colors.up : 'none'} stroke={inWatch ? colors.up : colors.textDisabled} strokeWidth={1.8} strokeLinejoin="round" />
           </Svg>
         </Pressable>
       </View>
       <View style={styles.tabs}>
-        {TABS.map((t) => {
-          const on = path.endsWith(`/${t.seg}`);
-          return (
-            <Link key={t.seg} href={`/etf/${code}/${t.seg}`} replace style={[styles.tab, on && styles.tabOn]}>
-              {t.label}
-            </Link>
-          );
-        })}
+        {TABS.map((t) => (
+          <TabItem key={t.seg} label={t.label} on={path.endsWith(`/${t.seg}`)} onPress={() => router.replace(`/etf/${code}/${t.seg}`)} />
+        ))}
       </View>
       <Slot />
       <PickGroupSheet etf={pick && data ? data : null} onClose={() => setPick(false)} />
@@ -55,11 +54,10 @@ export default function EtfLayout() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  nav: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 },
-  name: { flex: 1, textAlign: 'center', fontFamily: fam.extrabold, fontSize: 16, color: colors.text, letterSpacing: -0.3 },
-  heart: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  tabs: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.line, marginTop: 4 },
-  tab: { flex: 1, textAlign: 'center', paddingVertical: 12, color: colors.textFaint, fontSize: 14, fontFamily: fam.semibold },
-  tabOn: { color: colors.text, fontFamily: fam.bold },
+  root: { flex: 1, backgroundColor: colors.white },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 4, paddingBottom: 12, paddingHorizontal: 16 },
+  mid: { flex: 1, gap: 5 },
+  name: { fontFamily: fam.bold, fontSize: 15, color: colors.text, letterSpacing: -0.3, lineHeight: 20 },
+  heart: { paddingVertical: 4, paddingLeft: 4 },
+  tabs: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.line },
 });

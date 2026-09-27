@@ -1,4 +1,4 @@
-import type { EtfCode, EtfSummary, HomeBrief, Post, Theme, WatchGroup } from './types';
+import type { Axis, DailyAnalysis, EtfCode, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -25,6 +25,13 @@ export interface OnboardingApi {
   complete(input: { themes: string[]; etfs: EtfCode[] }): Promise<void>;
 }
 
+export interface AnalysisApi {
+  daily(code: EtfCode, date?: string): Promise<DailyAnalysis>;
+  factor(code: EtfCode, axis: Axis): Promise<FactorPage>;
+  metric(code: EtfCode, axis: Axis): Promise<MetricPage>;
+  hint(key: string): Promise<Hint>;
+}
+
 export interface HomeApi {
   brief(group?: string): Promise<HomeBrief>;
 }
@@ -39,6 +46,7 @@ export interface ApiClient {
   watch: WatchApi;
   theme: ThemeApi;
   onboarding: OnboardingApi;
+  analysis: AnalysisApi;
   home: HomeApi;
   community: CommunityApi;
 }
