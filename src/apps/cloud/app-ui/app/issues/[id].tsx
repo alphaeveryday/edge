@@ -6,6 +6,7 @@ import Svg, { Path } from 'react-native-svg';
 import { BottomSheet, Chevron, NavBar, SectionHead, SectorIcon, SheetHead, Sticker } from '@/components/ui';
 import { dirLabel } from '@/features/analysis/dir';
 import { useIssue } from '@/features/issue/queries';
+import { QueryState } from '@/components/state';
 import { useMembership, useSetMembership } from '@/features/watch/queries';
 import { chgColor, pct, won } from '@/lib/format';
 import { colors, PAGE_X } from '@/theme/tokens';
@@ -42,15 +43,15 @@ export default function LiveIssue() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const { data: d } = useIssue(id);
+  const q = useIssue(id);
   const [points, setPoints] = useState(false);
   const [rel, setRel] = useState(true);
   const [src, setSrc] = useState(false);
-  if (!d) return <View style={[styles.root, { paddingTop: top + 8 }]}><NavBar title="이슈" onBack={() => router.back()} /></View>;
-  const e = EFF[d.effect.dir];
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="이슈" onBack={() => router.back()} />
+      <QueryState query={q} rows={3}>
+        {(d) => { const e = EFF[d.effect.dir]; return (<>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         <Text style={styles.kicker}>오늘 · 관련 ETF {d.affected.length}개</Text>
         <Text style={styles.title}>{d.title}</Text>
@@ -119,6 +120,8 @@ export default function LiveIssue() {
           ))}
         </ScrollView>
       </BottomSheet>
+        </>); }}
+      </QueryState>
     </View>
   );
 }

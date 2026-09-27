@@ -7,6 +7,7 @@ import { NavBar, RowQuote, SectorIcon, Sticker, TabItem } from '@/components/ui'
 import { useEtf } from '@/features/etf/queries';
 import { PickGroupSheet } from '@/features/watch/PickGroupSheet';
 import { useMembership } from '@/features/watch/queries';
+import { useRequireLogin } from '@/store/session';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -25,6 +26,7 @@ export default function EtfLayout() {
   const { data } = useEtf(code);
   const { data: mine } = useMembership(code);
   const [pick, setPick] = useState(false);
+  const requireLogin = useRequireLogin();
   const inWatch = (mine ?? []).length > 0;
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
@@ -36,7 +38,7 @@ export default function EtfLayout() {
           {data && <RowQuote price={data.price} changePct={data.changePct} />}
         </View>
         {data && <Sticker signal={data.signal} />}
-        <Pressable onPress={() => setPick(true)} hitSlop={6} style={styles.heart}>
+        <Pressable onPress={() => requireLogin('관심 담기', () => setPick(true))} hitSlop={6} style={styles.heart}>
           <Svg width={20} height={20} viewBox="0 0 24 24">
             <Path d="M12 21s-7-4.6-9.3-9.3C.9 8 3 4.5 6.5 4.5c2 0 3.5 1 4.5 2.6 1-1.6 2.5-2.6 4.5-2.6 3.5 0 5.6 3.5 3.8 7.2C19 16.4 12 21 12 21z" fill={inWatch ? colors.up : 'none'} stroke={inWatch ? colors.up : colors.textDisabled} strokeWidth={1.8} strokeLinejoin="round" />
           </Svg>

@@ -6,6 +6,7 @@ import { LinkRow } from '@/components/ui';
 import { CandleChart } from '@/features/etf/CandleChart';
 import { MoveSheet } from '@/features/etf/MoveSheet';
 import { useChart, useEtf, useMove } from '@/features/etf/queries';
+import { Loading } from '@/components/state';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -15,7 +16,7 @@ export default function EtfSummary() {
   const { data: chart } = useChart(code);
   const { data: move } = useMove(code);
   const [open, setOpen] = useState(false);
-  if (!etf) return null;
+  if (!etf || !chart) return <Loading rows={3} />;
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
       {chart && <CandleChart data={chart} name={etf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} price={etf.price} changePct={etf.changePct} />}

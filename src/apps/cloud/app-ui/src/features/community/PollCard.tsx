@@ -3,6 +3,7 @@ import type { Poll, PollChoice } from '@/api';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useVote } from './queries';
+import { useRequireLogin } from '@/store/session';
 
 const META: { k: PollChoice; label: string; c: string; bg: string }[] = [
   { k: 'buy', label: '산다', c: colors.up, bg: '#FFF0F1' },
@@ -12,6 +13,7 @@ const META: { k: PollChoice; label: string; c: string; bg: string }[] = [
 
 export function PollCard({ poll }: { poll: Poll }) {
   const vote = useVote(poll.code);
+  const requireLogin = useRequireLogin();
   const top = META.reduce((a, b) => (poll.pct[b.k] > poll.pct[a.k] ? b : a));
   const voted = !!poll.mine;
   return (
@@ -39,7 +41,7 @@ export function PollCard({ poll }: { poll: Poll }) {
           return (
             <Pressable
               key={m.k}
-              onPress={() => vote.mutate(m.k)}
+              onPress={() => requireLogin('투표', () => vote.mutate(m.k))}
               style={({ pressed }) => [styles.btn, voted ? { backgroundColor: on ? m.c : colors.white, borderWidth: 1.5, borderColor: on ? m.c : colors.line } : { backgroundColor: m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
             >
               <Text style={[styles.btnText, { color: voted && on ? colors.white : m.c }]}>{m.label}</Text>

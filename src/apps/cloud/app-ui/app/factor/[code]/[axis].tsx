@@ -5,6 +5,7 @@ import type { Axis } from '@/api';
 import { IconButton, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { useFactor } from '@/features/analysis/queries';
+import { QueryState } from '@/components/state';
 import { useEtf } from '@/features/etf/queries';
 import { colors, signal as SIG } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -14,7 +15,8 @@ export default function FactorPage() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: etf } = useEtf(code);
-  const { data: f } = useFactor(code, axis);
+  const q = useFactor(code, axis);
+  const f = q.data;
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.nav}>
@@ -22,7 +24,8 @@ export default function FactorPage() {
         {f && <Sticker signal={dirSignal[f.dir]} size={28} radius={11} label={f.axis} />}
         <Text style={styles.etf}>{etf?.name}</Text>
       </View>
-      {f && (
+      <QueryState query={q} rows={3} pending={{ title: `${axis} 요인 상세는 준비 중이에요`, sub: '재료가 확인되면 이 축의 근거를 정리해 올려요' }}>
+        {(f) => (
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           <Text style={styles.headline}>{f.headline}</Text>
           {f.events && (
@@ -65,7 +68,8 @@ export default function FactorPage() {
             </View>
           )}
         </ScrollView>
-      )}
+        )}
+      </QueryState>
     </View>
   );
 }

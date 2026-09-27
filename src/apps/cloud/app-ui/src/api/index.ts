@@ -7,3 +7,4 @@ const mode = process.env.EXPO_PUBLIC_API_MODE ?? 'mock';
 export const api: ApiClient = mode === 'mock' ? mockClient : mockClient;
 export type { ApiClient } from './client';
 export * from './types';
+export { ApiError, isApiError } from './error';

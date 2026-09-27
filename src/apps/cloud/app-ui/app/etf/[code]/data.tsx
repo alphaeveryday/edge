@@ -5,6 +5,7 @@ import { Chip, LinkRow, SectionHead } from '@/components/ui';
 import { dirLabel } from '@/features/analysis/dir';
 import { HeatMap } from '@/features/etf/HeatMap';
 import { useEtfDetail } from '@/features/etf/queries';
+import { QueryState } from '@/components/state';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -14,15 +15,14 @@ const LEGEND_TEMP = [{ c: colors.down, t: '부담' }, { c: '#8FBBFA', t: '' }, {
 
 export default function EtfData() {
   const { code } = useLocalSearchParams<{ code: string }>();
-  const { data: d } = useEtfDetail(code);
+  const q = useEtfDetail(code);
   const [target, setTarget] = useState<'stock' | 'theme'>('stock');
   const [mode, setMode] = useState<'temp' | 'chg'>('temp');
   const [comp, setComp] = useState<'stock' | 'theme'>('stock');
   const [more, setMore] = useState(false);
-  if (!d) return null;
-  const rows = comp === 'stock' ? d.holdings : d.themeRows;
-  const shown = more ? rows : rows.slice(0, 3);
   return (
+    <QueryState query={q} rows={5}>
+      {(d) => { const rows = comp === 'stock' ? d.holdings : d.themeRows; const shown = more ? rows : rows.slice(0, 3); return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       <View style={styles.insight}>
         <View style={styles.insightHead}>
@@ -104,6 +104,8 @@ export default function EtfData() {
         {!!d.blurb && <Text style={styles.blurb}>{d.blurb}</Text>}
       </View>
     </ScrollView>
+      ); }}
+    </QueryState>
   );
 }
 

@@ -2,7 +2,9 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar, Chevron, NavBar, ToggleRow } from '@/components/ui';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/api';
+import { Avatar, BottomSheet, Chevron, CtaButton, ListRow, NavBar, SheetHead, ToggleRow } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
@@ -16,6 +18,12 @@ export default function Profile() {
   const logout = useSession((s) => s.logout);
   const toast = useToast((s) => s.show);
   const [notif, setNotif] = useState(true);
+  const [delOpen, setDelOpen] = useState(false);
+  const qc = useQueryClient();
+  const del = useMutation({
+    mutationFn: () => api.user.deleteAccount(),
+    onSuccess: () => { qc.clear(); logout(); setDelOpen(false); router.dismissAll(); router.replace('/onboarding/how'); toast('계정을 지웠어요'); },
+  });
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="계정" onBack={() => router.back()} />
@@ -24,7 +32,7 @@ export default function Profile() {
           {me && <Avatar label={me.nick} bg={me.avatarBg} size={52} />}
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{me?.nick}</Text>
-            <Text style={styles.email}>jisoo.kim@gmail.com</Text>
+            <Text style={styles.email}>{me?.email}</Text>
           </View>
           <Chevron size={16} color={colors.textDisabled} />
         </Pressable>
@@ -32,11 +40,24 @@ export default function Profile() {
         <View style={styles.card}>
           <ToggleRow label="관심 ETF 온도 변화 알림" sub="온도가 바뀌는 순간에만 알려드려요" on={notif} onToggle={() => setNotif((v) => !v)} />
         </View>
-        <Pressable onPress={() => { logout(); router.replace('/login'); toast('로그아웃했어요'); }} style={styles.logout}>
+        <Text style={styles.cap}>계정</Text>
+        <View style={[styles.card, { paddingHorizontal: 8 }]}>
+          <ListRow label="이용약관" divider onPress={() => toast('약관 페이지는 준비 중이에요')} />
+          <ListRow label="개인정보 처리방침" divider onPress={() => toast('처리방침 페이지는 준비 중이에요')} />
+          <ListRow label="회원 탈퇴" labelColor={colors.textMuted} onPress={() => setDelOpen(true)} />
+        </View>
+        <Pressable onPress={() => { api.auth.logout(); logout(); router.replace('/login'); toast('로그아웃했어요'); }} style={styles.logout}>
           <Text style={styles.logoutText}>로그아웃</Text>
         </Pressable>
         <Text style={styles.version}>ETF Orca v0.1.0</Text>
       </ScrollView>
+      <BottomSheet open={delOpen} onClose={() => setDelOpen(false)}>
+        <SheetHead title="정말 탈퇴할까요?" sub="관심 종목·그룹·쓴 글·투표 기록이 모두 지워지고 되돌릴 수 없어요." />
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
+          <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setDelOpen(false)} /></View>
+          <View style={{ flex: 1.6 }}><CtaButton label="탈퇴하기" tone="danger" onPress={() => del.mutate()} /></View>
+        </View>
+      </BottomSheet>
     </View>
   );
 }

@@ -7,12 +7,14 @@ import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
 import { useRank } from '@/features/explore/queries';
 import { ThemeSheet } from '@/features/explore/ThemeSheet';
 import { colors, PAGE_X } from '@/theme/tokens';
+import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
 
 export default function Explore() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const { data } = useRank();
+  const q = useRank();
+  const data = q.data;
   const [theme, setTheme] = useState<string | null>(null);
   return (
     <View style={styles.root}>
@@ -23,6 +25,7 @@ export default function Explore() {
           <SectionHead title="AI가 보는 오늘 순위" actionLabel="테마" onAction={() => router.push('/themes')} />
         </View>
         <Text style={styles.lead}>재료가 확인된 ETF부터 위에 있어요.</Text>
+        {q.isPending && <Loading rows={5} />}
         <View style={{ paddingTop: 4, paddingHorizontal: PAGE_X }}>
           {data?.map((r) => {
             const top3 = r.rank <= 3;

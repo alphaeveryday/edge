@@ -8,6 +8,7 @@ import { EtfRow } from '@/features/etf/EtfRow';
 import { GroupChips } from '@/features/watch/GroupChips';
 import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
 import { useWatchList } from '@/features/watch/queries';
+import { useRequireLogin } from '@/store/session';
 import { useWatchGroup } from '@/store/watch';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -18,13 +19,14 @@ export default function Watch() {
   const group = useWatchGroup((s) => s.group);
   const { data } = useWatchList(group);
   const [newOpen, setNewOpen] = useState(false);
+  const requireLogin = useRequireLogin();
   return (
     <View style={styles.root}>
       <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="관심" />
         <View style={styles.chips}>
-          <GroupChips onAdd={() => setNewOpen(true)} onEdit={() => router.push('/watch/edit')} />
+          <GroupChips onAdd={() => requireLogin('그룹 만들기', () => setNewOpen(true))} onEdit={() => requireLogin('관심 편집', () => router.push('/watch/edit'))} />
         </View>
         <View style={{ paddingHorizontal: PAGE_X }}>
           {data?.map((e) => <EtfRow key={e.code} etf={e} />)}

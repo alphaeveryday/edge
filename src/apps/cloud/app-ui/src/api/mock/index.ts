@@ -1,4 +1,5 @@
 import type { ApiClient } from '../client';
+import { ApiError } from '../error';
 import type { Me, Poll, PollChoice, Post, Reply, WatchGroup } from '../types';
 import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
@@ -14,7 +15,8 @@ const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v
 // 인메모리 쓰기 상태. 앱 재시작 시 초기화
 const posts = [...POSTS, ...ETF_POSTS].map((p) => ({ ...p }));
 const votes: Record<string, PollChoice | null> = {};
-const ME: Me = { nick: '지수', handle: '@me', avatarBg: '#3D34E0' };
+const ME: Me = { nick: '지수', handle: '@me', avatarBg: '#3D34E0', email: 'jisoo.kim@gmail.com' };
+const ACCOUNTS: Record<string, string> = { 'jisoo.kim@gmail.com': 'password' };
 const notis = NOTIFICATIONS.map((n) => ({ ...n }));
 const replies: Record<string, Reply[]> = {
   p1: [
@@ -56,7 +58,7 @@ export const mockClient: ApiClient = {
   etf: {
     get: (code) => {
       const e = ETFS.find((x) => x.code === code);
-      if (!e) return Promise.reject(new Error(`unknown etf ${code}`));
+      if (!e) return Promise.reject(new ApiError('NOT_FOUND', `unknown etf ${code}`));
       recent = [code, ...recent.filter((c) => c !== code)].slice(0, 5);
       return delay(e);
     },
@@ -80,7 +82,7 @@ export const mockClient: ApiClient = {
       return delay({ ...g, count: 0 });
     },
     deleteGroup: (key) => {
-      if (key === 'base') return Promise.reject(new Error('기본 관심은 지울 수 없어요'));
+      if (key === 'base') return Promise.reject(new ApiError('INVALID', '기본 관심은 지울 수 없어요'));
       const i = groups.findIndex((g) => g.key === key);
       if (i >= 0) groups.splice(i, 1);
       delete members[key];
@@ -114,7 +116,7 @@ export const mockClient: ApiClient = {
     },
     detail: (key) => {
       const d = THEME_DETAILS[key];
-      return d ? delay(d) : Promise.reject(new Error(`no theme detail ${key}`));
+      return d ? delay(d) : Promise.reject(new ApiError('NOT_READY', `no theme detail ${key}`));
     },
   },
   explore: {
@@ -135,15 +137,15 @@ export const mockClient: ApiClient = {
     daily: (code) => delay(dailyOf(code, etfOf(code).name)),
     factor: (code, axis) => {
       const f = FACTORS[code]?.[axis];
-      return f ? delay(f) : Promise.reject(new Error(`no factor page ${code} ${axis}`));
+      return f ? delay(f) : Promise.reject(new ApiError('NOT_READY', `no factor page ${code} ${axis}`));
     },
     metric: (code, axis) => {
       const m = METRICS[code]?.[axis];
-      return m ? delay(m) : Promise.reject(new Error(`no metric page ${code} ${axis}`));
+      return m ? delay(m) : Promise.reject(new ApiError('NOT_READY', `no metric page ${code} ${axis}`));
     },
     hint: (key) => {
       const h = HINTS[key];
-      return h ? delay(h, 40) : Promise.reject(new Error(`no hint ${key}`));
+      return h ? delay(h, 40) : Promise.reject(new ApiError('NOT_FOUND', `no hint ${key}`));
     },
   },
   issue: {
@@ -154,7 +156,7 @@ export const mockClient: ApiClient = {
     },
     get: (id) => {
       const row = ISSUE_ROWS.find((r) => r.id === id);
-      if (!row) return Promise.reject(new Error(`unknown issue ${id}`));
+      if (!row) return Promise.reject(new ApiError('NOT_FOUND', `unknown issue ${id}`));
       const d = ISSUE_DETAILS[id] ?? genericIssue(row);
       const mine = members.base ?? [];
       const affected = d.affectedCodes.map(etfOf).sort((a, b) => Number(mine.includes(b.code)) - Number(mine.includes(a.code)));
@@ -167,6 +169,31 @@ export const mockClient: ApiClient = {
       Object.assign(ME, patch);
       return delay({ ...ME }, 40);
     },
+    acceptDisclaimer: () => {
+      ME.disclaimerAcceptedAt = new Date().toISOString();
+      return delay({ ...ME }, 20);
+    },
+    deleteAccount: () => {
+      members.base = [];
+      ME.disclaimerAcceptedAt = undefined;
+      return delay(undefined, 60);
+    },
+  },
+  auth: {
+    login: (email, password) => {
+      if (!ACCOUNTS[email] || ACCOUNTS[email] !== password) return Promise.reject(new ApiError('UNAUTHORIZED', '이메일 또는 비밀번호가 맞지 않아요'));
+      ME.email = email;
+      return delay({ ...ME });
+    },
+    social: () => delay({ ...ME }),
+    signup: ({ email, password, nick }) => {
+      if (ACCOUNTS[email]) return Promise.reject(new ApiError('INVALID', '이미 가입된 이메일이에요'));
+      ACCOUNTS[email] = password;
+      Object.assign(ME, { email, nick, handle: '@' + email.split('@')[0] });
+      return delay({ ...ME });
+    },
+    requestPasswordReset: (email) => (ACCOUNTS[email] ? delay(undefined) : Promise.reject(new ApiError('NOT_FOUND', '가입되지 않은 이메일이에요'))),
+    logout: () => delay(undefined, 20),
   },
   story: {
     queue: () =>
@@ -209,7 +236,7 @@ export const mockClient: ApiClient = {
     },
     get: (id) => {
       const p = posts.find((x) => x.id === id);
-      return p ? delay({ ...p, views: p.views ?? 7300 }) : Promise.reject(new Error(`unknown post ${id}`));
+      return p ? delay({ ...p, views: p.views ?? 7300 }) : Promise.reject(new ApiError('NOT_FOUND', `unknown post ${id}`));
     },
     replies: (id) => delay((replies[id] ?? []).map((r) => ({ ...r }))),
     reply: (id, body) => {
@@ -244,7 +271,7 @@ export const mockClient: ApiClient = {
     },
     toggleLike: (id) => {
       const p = posts.find((x) => x.id === id);
-      if (!p) return Promise.reject(new Error(`unknown post ${id}`));
+      if (!p) return Promise.reject(new ApiError('NOT_FOUND', `unknown post ${id}`));
       p.liked = !p.liked;
       p.like += p.liked ? 1 : -1;
       return delay({ ...p }, 40);

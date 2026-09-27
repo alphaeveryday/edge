@@ -5,6 +5,7 @@ import type { Axis, Dir } from '@/api';
 import { Chevron, NavBar, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { useMetric } from '@/features/analysis/queries';
+import { QueryState } from '@/components/state';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -19,11 +20,12 @@ export default function MetricPage() {
   const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const { data: m } = useMetric(code, axis);
+  const q = useMetric(code, axis);
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title={`${axis} 지표`} onBack={() => router.back()} />
-      {m && (
+      <QueryState query={q} rows={3} pending={{ title: `${axis} 지표는 준비 중이에요`, sub: '이 ETF에 맞는 지표가 정리되면 올라와요' }}>
+        {(m) => (
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           <View style={styles.verdictRow}>
             <Sticker signal={dirSignal[m.dir]} size={30} radius={11} label={m.axis} />
@@ -53,7 +55,8 @@ export default function MetricPage() {
             </Pressable>
           )}
         </ScrollView>
-      )}
+        )}
+      </QueryState>
     </View>
   );
 }

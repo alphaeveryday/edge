@@ -8,6 +8,7 @@ import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { PollCard } from '@/features/community/PollCard';
 import { useFeed, usePoll } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
+import { useRequireLogin } from '@/store/session';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -15,6 +16,7 @@ const POLL_ETF = 'AXAI';
 
 export default function Community() {
   const router = useRouter();
+  const requireLogin = useRequireLogin();
   const { top } = useSafeAreaInsets();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const { data: posts } = useFeed(scope);
@@ -42,7 +44,7 @@ export default function Community() {
         {posts && posts.length === 0 && <Text style={styles.empty}>관심 ETF를 담으면 그 ETF의 글이 모여요</Text>}
       </ScrollView>
       <View style={styles.fab}>
-        <IconButton icon="plus" size={56} fab onPress={() => router.push('/community/write')} />
+        <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push('/community/write'))} />
       </View>
     </View>
   );

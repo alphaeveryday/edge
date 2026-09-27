@@ -229,6 +229,8 @@ export interface Me {
   nick: string;
   handle: string;
   avatarBg: string;
+  email?: string;
+  disclaimerAcceptedAt?: string;
 }
 
 export interface Reply {

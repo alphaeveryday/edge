@@ -3,8 +3,10 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Line, Polyline } from 'react-native-svg';
+import type { ThemeDetail as ThemeDetailT } from '@/api';
 import { Avatar, BottomSheet, NavBar, SheetHead } from '@/components/ui';
 import { useThemeDetail } from '@/features/explore/queries';
+import { QueryState } from '@/components/state';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -15,9 +17,19 @@ export default function ThemeDetail() {
   const key = decodeURIComponent(id);
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const { data: d } = useThemeDetail(key);
+  const q = useThemeDetail(key);
   const [sheet, setSheet] = useState(false);
-  if (!d) return <View style={[styles.root, { paddingTop: top + 8 }]}><NavBar title="테마 분석" onBack={() => router.back()} /></View>;
+  return (
+    <View style={[styles.root, { paddingTop: top + 8 }]}>
+      <NavBar title="테마 분석" onBack={() => router.back()} rightIcon="share" />
+      <QueryState query={q} rows={4} pending={{ title: `${key} 테마 분석은 준비 중이에요`, sub: '이 테마를 움직이는 지표가 정해지면 올라와요' }}>
+        {(d) => <ThemeBody d={d} sheet={sheet} setSheet={setSheet} />}
+      </QueryState>
+    </View>
+  );
+}
+
+function ThemeBody({ d, sheet, setSheet }: { d: ThemeDetailT; sheet: boolean; setSheet: (v: boolean) => void }) {
   const m = d.metric;
   const lo = Math.min(...m.vals, m.thresh) - 5, hi = Math.max(...m.vals, m.thresh) + 5;
   const y = (v: number) => CH - 8 - ((v - lo) / (hi - lo)) * (CH - 16);
@@ -25,8 +37,7 @@ export default function ThemeDetail() {
   const pts = m.vals.map((v, i) => `${x(i)},${y(v)}`).join(' ');
   const mc = m.dir === 'help' ? colors.up : m.dir === 'burden' ? colors.down : colors.textSub;
   return (
-    <View style={[styles.root, { paddingTop: top + 8 }]}>
-      <NavBar title="테마 분석" onBack={() => router.back()} rightIcon="share" />
+    <>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 44 }}>
         <Text style={styles.kicker}>테마 분석 · {d.key}</Text>
         <Text style={styles.headline}>{d.headline}</Text>
@@ -103,7 +114,7 @@ export default function ThemeDetail() {
           ))}
         </ScrollView>
       </BottomSheet>
-    </View>
+    </>
   );
 }
 

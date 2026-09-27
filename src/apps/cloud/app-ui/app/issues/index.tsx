@@ -5,13 +5,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Chevron, Chip, NavBar, PageTitle, SectorIcon } from '@/components/ui';
 import { useIssues } from '@/features/issue/queries';
 import { colors, PAGE_X } from '@/theme/tokens';
+import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
 
 export default function Issues() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const [tab, setTab] = useState<'all' | 'mine'>('all');
-  const { data } = useIssues(tab);
+  const q = useIssues(tab);
+  const data = q.data;
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="이슈" onBack={() => router.back()} />
@@ -27,6 +29,7 @@ export default function Issues() {
           <Chip label="전체" on={tab === 'all'} onPress={() => setTab('all')} />
           <Chip label="내 관심" on={tab === 'mine'} onPress={() => setTab('mine')} />
         </View>
+        {q.isPending && <Loading rows={5} />}
         <View style={styles.list}>
           {data?.map((r) => (
             <Pressable key={r.id} onPress={() => router.push(`/issues/${r.id}`)} style={({ pressed }) => [styles.card, pressed && { opacity: 0.6 }]}>

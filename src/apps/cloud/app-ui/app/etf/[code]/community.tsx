@@ -4,10 +4,12 @@ import { IconButton } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { PollCard } from '@/features/community/PollCard';
 import { useEtfPosts, usePoll } from '@/features/community/queries';
+import { useRequireLogin } from '@/store/session';
 
 export default function EtfCommunity() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
+  const requireLogin = useRequireLogin();
   const { data: poll } = usePoll(code);
   const { data: posts } = useEtfPosts(code);
   return (
@@ -17,7 +19,7 @@ export default function EtfCommunity() {
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </ScrollView>
       <View style={styles.fab}>
-        <IconButton icon="plus" size={56} fab onPress={() => router.push('/community/write')} />
+        <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push('/community/write'))} />
       </View>
     </View>
   );

@@ -4,6 +4,7 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
 import { useDeletePost, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
+import { useRequireLogin } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -20,10 +21,11 @@ export default function Post() {
   const toast = useToast((s) => s.show);
   const [draft, setDraft] = useState('');
   const [more, setMore] = useState(false);
+  const requireLogin = useRequireLogin();
   const send = () => {
     const t = draft.trim();
     if (!t) return;
-    reply.mutate(t, { onSuccess: () => setDraft('') });
+    requireLogin('답글', () => reply.mutate(t, { onSuccess: () => setDraft('') }));
   };
   const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); router.back(); toast('글을 지웠어요'); } });
   return (

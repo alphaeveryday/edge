@@ -5,6 +5,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { Toast } from '@/components/Toast';
+import { LoginGateSheet } from '@/features/auth/LoginGateSheet';
 import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
@@ -24,7 +25,10 @@ export default function RootLayout() {
         <Stack.Screen name="story/[etf]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
         <Stack.Screen name="community/write" options={{ presentation: 'modal' }} />
         <Stack.Screen name="menu" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="auth/signup" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="auth/reset" options={{ presentation: 'modal' }} />
       </Stack>
+      <LoginGateSheet />
       <Toast />
     </QueryClientProvider>
   );

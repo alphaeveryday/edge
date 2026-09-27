@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar, PageTitle, SectionHead, SectorIcon } from '@/components/ui';
 import { useThemeFeed } from '@/features/explore/queries';
 import { colors, PAGE_X } from '@/theme/tokens';
+import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
 
 const SORTS = [{ k: 'all', label: '전체' }, { k: 'up', label: '상승' }, { k: 'down', label: '하락' }];
@@ -13,7 +14,8 @@ export default function Themes() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const [sort, setSort] = useState('all');
-  const { data } = useThemeFeed(sort);
+  const q = useThemeFeed(sort);
+  const data = q.data;
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="테마" onBack={() => router.back()} />
@@ -30,6 +32,7 @@ export default function Themes() {
             );
           })}
         </View>
+        {q.isPending && <Loading rows={5} />}
         <View style={{ paddingTop: 4, paddingHorizontal: PAGE_X }}>
           {data?.map((t) => (
             <Pressable key={t.key} onPress={() => router.push(`/themes/${encodeURIComponent(t.key)}`)} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>

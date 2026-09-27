@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import type { StoryCard } from '@/api';
 import { Chevron, IconButton, SectorIcon } from '@/components/ui';
+import { Loading, Pending } from '@/components/state';
 import { useStories } from '@/features/story/queries';
 import { pct } from '@/lib/format';
 import { colors, signal as SIG } from '@/theme/tokens';
@@ -104,7 +105,13 @@ export default function Story() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
 
-  if (!story || !card) return <View style={styles.root} />;
+  if (!stories) return <View style={[styles.root, { paddingTop: top + 8 }]}><Loading rows={2} /></View>;
+  if (!story || !card) return (
+    <View style={[styles.root, { paddingTop: top + 8 }]}>
+      <View style={styles.head}><View style={{ flex: 1 }} /><IconButton icon="close" onPress={() => router.back()} /></View>
+      <Pending title="오늘 스토리가 아직 없어요" sub="관심 ETF의 데일리가 발행되면 여기에 모여요" />
+    </View>
+  );
   const now = SIG[story.etf.signal];
   const prevSig = story.prev ? SIG[story.prev] : null;
   const width = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });

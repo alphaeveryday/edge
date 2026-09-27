@@ -69,6 +69,16 @@ export interface IssueApi {
 export interface UserApi {
   me(): Promise<Me>;
   update(patch: Partial<Me>): Promise<Me>;
+  acceptDisclaimer(): Promise<Me>;
+  deleteAccount(): Promise<void>;
+}
+
+export interface AuthApi {
+  login(email: string, password: string): Promise<Me>;
+  social(provider: 'apple' | 'google'): Promise<Me>;
+  signup(input: { email: string; password: string; nick: string }): Promise<Me>;
+  requestPasswordReset(email: string): Promise<void>;
+  logout(): Promise<void>;
 }
 
 export interface StoryApi {
@@ -93,6 +103,7 @@ export interface ApiClient {
   community: CommunityApi;
   issue: IssueApi;
   user: UserApi;
+  auth: AuthApi;
   story: StoryApi;
   notification: NotificationApi;
 }
