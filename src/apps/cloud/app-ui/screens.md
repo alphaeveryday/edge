@@ -59,41 +59,30 @@ pptx 32장(`tmp.md`)보다 이 파일이 최신이며 화면이 더 많다. 제�
 
 제외 확정(2026-09-28): 투자 에이전트 채팅(`agentContext`, 미니플레이어), 인사이트 상세(`isInsight`, 홈 `feedMode` 노브는 미사용 잔재). 홈은 ETF 기반 레이아웃 하나로 간다.
 
-## Expo Router 트리 (안)
+## Expo Router 트리 (구현 기준, 2026-09-28)
 
 ```
 app/
-  _layout.tsx                # 루트 스택 + 온보딩 게이트
-  onboarding/
-    _layout.tsx              # 가로 스와이프 스택
-    [step].tsx               # how · sticker · what · theme · etf
+  _layout.tsx                # 루트 스택 + 폰트 로드 + Toast
+  index.tsx                  # 온보딩 게이트
+  onboarding/{how,sticker,what,theme,etf}.tsx
   login.tsx
-  (tabs)/
-    _layout.tsx              # 탭바: home · watch · explore · community
-    home.tsx
-    watch/index.tsx
-    watch/edit.tsx
-    explore/index.tsx
-    explore/compare.tsx      # isExCmp
-    explore/themes.tsx
-    explore/themes/[id].tsx  # isThemeDetail
-    community/index.tsx
-  etf/[code]/_layout.tsx     # 상단 헤더 + 4탭 세그먼트
-  etf/[code]/summary.tsx
-  etf/[code]/brief.tsx
-  etf/[code]/data.tsx
-  etf/[code]/community.tsx
-  issues/index.tsx
-  issues/[id].tsx            # isLiveIssue
-  search.tsx
-  story/[etf].tsx            # 모달 프레젠테이션
-  post/[id].tsx
-  profile/index.tsx          # 계정
-  profile/community.tsx      # 커뮤니티 프로필
-  notifications.tsx
+  (tabs)/                    # 탭바: home · watch · explore · community
+    home.tsx  watch/index.tsx  explore.tsx  community.tsx
+  watch/edit.tsx             # 탭바 없는 전체 화면
+  etf/[code]/_layout.tsx     # 헤더 + 4탭 세그먼트
+  etf/[code]/{brief,summary,data,community}.tsx
+  factor/[code]/[axis].tsx   # 요인 상세
+  metric/[code]/[axis].tsx   # 요인 지표
+  themes/index.tsx  themes/[id].tsx  themes/compare.tsx
+  issues/index.tsx  issues/[id].tsx
+  search.tsx  menu.tsx  notifications.tsx
+  story/[etf].tsx            # 풀스크린 모달
+  post/[id].tsx  community/write.tsx (모달)
+  profile/index.tsx  profile/community.tsx
 ```
 
-시트·모달은 라우트가 아니라 컴포넌트(bottom-sheet)로 두고, 필요한 것만 `presentation: 'modal'` 라우트로 승격한다(스토리·글쓰기·게시물 더보기).
+시트·모달은 컴포넌트(BottomSheet·HintSheet·DailySheet)로 두고, 스토리·글쓰기만 모달 라우트다. 요인 상세·지표·전체 메뉴는 디자인이 전체 화면 push 라 라우트로 뒀다.
 
 ## 상태·데이터 (디자인 state 기준)
 
@@ -109,3 +98,46 @@ app/
 ## 미결
 
 1. 잘린 스크립트 뒤쪽(목 데이터 나머지·핸들러) 확보 방법 — Claude Design 에서 파일 내보내기.
+
+## 2단계 점검 (2026-09-28)
+
+mock 으로 전 화면 관통 완료. 링크 대상은 전부 존재하는 라우트다.
+
+### 반응 없는 것 (보류)
+- AI 분석 탭 날짜 스트립 좌우 화살표: 주 이동 없음 (mock 이 1주만 있음)
+- 테마 분석 우상단 공유 아이콘
+- 게시물 액션의 리포스트(인용 리포스트 글쓰기 미구현)
+- 관심 편집 드래그 정렬(손잡이만), 온보딩 마르키·등장 애니메이션, 테마 선택 사진(아이콘 대체)
+- 탐색 안의 검색 상태(정렬 칩·결과 없음) — 전역 검색으로 대체
+
+### 데이터 없을 때 빈 화면이 되는 경로
+- 요인 상세·요인 지표: 반도체TOP10·K방산 일부 축만 데이터 있음. 나머지 축은 헤더만 뜬다 → "준비 중" 상태 화면 필요
+- 테마 분석: AI·반도체·방산만 상세 있음. 나머지 테마는 네비만 뜬다
+- ETF 상세 AI 분석·종목정보·오늘 움직임: 데이터 로딩 전 빈 화면(스켈레톤 없음)
+- 스토리: 관심 ETF 중 데이터 있는 종목만 큐에 들어감 (반도체TOP10·K방산)
+
+### 빈 상태 있음
+홈(관심 0), 관심(그룹 비었음), 검색(결과 없음), 온보딩 ETF(검색 결과 없음), 알림(종류 없음), 게시물(답글 0), 커뮤니티 프로필(글 0), 커뮤니티 피드(내 관심 0), 이슈(내 관심 0)
+
+### 아직 없는 화면 (인터랙션 기준)
+흐름이 끊기는 것
+- 이메일 회원가입·비밀번호 재설정 (로그인의 이메일 폼은 mock 로그인으로 통과)
+- 비로그인 게스트 유도 시트 (관심·투표·글쓰기 진입 시)
+- 인용 리포스트 글쓰기 (글쓰기 시트의 인용 박스)
+- 타인 프로필 (게시물 작성자 탭)
+- 게시물 신고 사유 선택 (현재 토스트만)
+- 알림 설정 상세 (계정에 토글 하나)
+- 관심 편집 그룹 이름 변경 (생성·삭제만 있음)
+
+상태 화면
+- 로딩 스켈레톤, 네트워크 오류·재시도, 분석 미발행(08:30 이전) 안내
+- 스플래시(폰트 로드 중 흰 화면)·온보딩 재방문
+- 요인·테마 "준비 중" 상태
+
+금융 앱 필수
+- 투자 유의·면책 고지 (첫 AI 분석 진입 동의 또는 분석 하단)
+- 약관·개인정보 처리방침·회원 탈퇴
+
+### 다음 단계로 넘길 것
+- 3단계 API 계약: `src/api/client.ts` 인터페이스 12개(etf·watch·theme·explore·onboarding·analysis·home·community·issue·user·story·notification)가 출발점
+- mock 데이터는 반도체TOP10·K방산 두 종목 중심. 나머지 4종은 기본값
