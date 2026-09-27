@@ -1,5 +1,123 @@
-import { Placeholder } from '@/components/Placeholder';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Avatar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
+import { useDeletePost, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
+import { useToast } from '@/store/toast';
+import { colors, PAGE_X } from '@/theme/tokens';
+import { fam } from '@/theme/typography';
 
 export default function Post() {
-  return <Placeholder title="게시물" />;
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
+  const { top, bottom } = useSafeAreaInsets();
+  const { data: p } = usePost(id);
+  const { data: replies } = useReplies(id);
+  const like = useToggleLike();
+  const reply = useReply(id);
+  const del = useDeletePost();
+  const toast = useToast((s) => s.show);
+  const [draft, setDraft] = useState('');
+  const [more, setMore] = useState(false);
+  const send = () => {
+    const t = draft.trim();
+    if (!t) return;
+    reply.mutate(t, { onSuccess: () => setDraft('') });
+  };
+  const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); router.back(); toast('글을 지웠어요'); } });
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.root, { paddingTop: top + 8 }]}>
+      <View style={styles.navWrap}>
+        <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : toast('신고를 접수했어요'))} />
+      </View>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
+        {p && (
+          <View style={styles.post}>
+            <View style={styles.head}>
+              <Avatar label={p.author.name} bg={p.author.avatarBg} size={42} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text numberOfLines={1} style={styles.name}>{p.author.name}</Text>
+                <Text style={styles.time}>{p.time}</Text>
+              </View>
+            </View>
+            <Text style={styles.body}>{p.title ? `${p.title}\n${p.body}` : p.body}</Text>
+            {p.repostOf && (
+              <View style={styles.quote}>
+                <View style={styles.quoteHead}>
+                  <Avatar label={p.repostOf.name} bg={p.repostOf.avatarBg} size={22} />
+                  <Text style={styles.quoteName}>{p.repostOf.name}</Text>
+                  <Text style={styles.quoteTime}>{p.repostOf.time}</Text>
+                </View>
+                <Text style={styles.quoteBody}>{p.repostOf.body}</Text>
+              </View>
+            )}
+            {!!p.etf.short && (
+              <Pressable onPress={() => router.push(`/etf/${p.etf.code}/brief`)} style={({ pressed }) => [styles.tag, pressed && { opacity: 0.6 }]}>
+                <SectorIcon theme={p.etf.theme} bg={p.etf.logoBg} size={16} />
+                <Text style={styles.tagText}>{p.etf.short}</Text>
+              </Pressable>
+            )}
+            <Text style={styles.views}>조회 {(p.views ?? 0).toLocaleString('ko-KR')}</Text>
+            <View style={styles.actions}>
+              <PostActions size="lg" like={p.like} reply={p.reply} repost={p.repost} liked={p.liked} onLike={() => like.mutate(p.id)} />
+            </View>
+          </View>
+        )}
+        {replies?.map((r) => (
+          <View key={r.id} style={styles.reply}>
+            <Avatar label={r.author.name} bg={r.author.avatarBg} size={36} />
+            <View style={{ flex: 1, gap: 5 }}>
+              <View style={styles.replyHead}>
+                <Text numberOfLines={1} style={styles.replyName}>{r.author.name}</Text>
+                <Text style={styles.replyTime}>{r.time}</Text>
+              </View>
+              <Text style={styles.replyBody}>{r.body}</Text>
+            </View>
+          </View>
+        ))}
+      </ScrollView>
+      <View style={[styles.composer, { paddingBottom: Math.max(bottom, 12) + 10 }]}>
+        <TextInput value={draft} onChangeText={setDraft} placeholder="답글 쓰기" placeholderTextColor={colors.textFaint} style={styles.input} onSubmitEditing={send} />
+        <Pressable onPress={send} disabled={!draft.trim()}>
+          <Text style={[styles.send, { color: draft.trim() ? colors.primary : colors.textDisabled }]}>게시</Text>
+        </Pressable>
+      </View>
+      <BottomSheet open={more} onClose={() => setMore(false)}>
+        <SheetHead title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." />
+        <View style={styles.sheetBtns}>
+          <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setMore(false)} /></View>
+          <View style={{ flex: 1.6 }}><CtaButton label="지우기" tone="danger" onPress={remove} /></View>
+        </View>
+      </BottomSheet>
+    </KeyboardAvoidingView>
+  );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.white },
+  navWrap: { borderBottomWidth: 1, borderBottomColor: colors.surface },
+  post: { paddingTop: 16, paddingHorizontal: PAGE_X, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: colors.surface },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  name: { fontFamily: fam.extrabold, fontSize: 15, color: colors.text, letterSpacing: -0.3 },
+  time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
+  body: { fontFamily: fam.regular, fontSize: 18, lineHeight: 29, color: colors.text, marginTop: 14 },
+  quote: { marginTop: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, gap: 6 },
+  quoteHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  quoteName: { fontFamily: fam.bold, fontSize: 14, color: colors.text },
+  quoteTime: { fontFamily: fam.regular, fontSize: 12, color: colors.textFaint },
+  quoteBody: { fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: '#333D4B' },
+  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, backgroundColor: colors.surface, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 },
+  tagText: { fontFamily: fam.bold, fontSize: 13, color: colors.textSub },
+  views: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 14 },
+  actions: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.surface },
+  reply: { flexDirection: 'row', gap: 11, paddingTop: 14, paddingHorizontal: PAGE_X, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
+  replyHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  replyName: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, maxWidth: 110 },
+  replyTime: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
+  replyBody: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
+  composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.white },
+  input: { flex: 1, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 12, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  send: { fontFamily: fam.extrabold, fontSize: 15 },
+  sheetBtns: { flexDirection: 'row', gap: 8, marginTop: 18 },
+});

@@ -2,13 +2,13 @@ import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { Post } from '@/api';
-import { Avatar, PostActions } from '@/components/ui';
+import { Avatar, PostActions, SectorIcon } from '@/components/ui';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useToggleLike } from './queries';
 
 // ETF 커뮤니티·전체 커뮤니티 공용 게시물 카드 (제목·인용 태그·리포스트 포함)
-export function EtfPostRow({ post, onQuoteTag }: { post: Post; onQuoteTag?: () => void }) {
+export function EtfPostRow({ post, onQuoteTag, showTag }: { post: Post; onQuoteTag?: () => void; showTag?: boolean }) {
   const router = useRouter();
   const like = useToggleLike();
   const open = () => router.push(`/post/${post.id}`);
@@ -32,6 +32,12 @@ export function EtfPostRow({ post, onQuoteTag }: { post: Post; onQuoteTag?: () =
           </Pressable>
         )}
       </View>
+      {showTag && !!post.etf.short && (
+        <View style={styles.tag}>
+          <SectorIcon theme={post.etf.theme} bg={post.etf.logoBg} size={14} />
+          <Text style={styles.tagText}>{post.etf.short}</Text>
+        </View>
+      )}
       {!!post.title && <Text style={styles.title}>{post.title}</Text>}
       <Text numberOfLines={3} style={styles.body}>{post.body}</Text>
       {post.repostOf && (
@@ -60,6 +66,8 @@ const styles = StyleSheet.create({
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
   quoteTag: { backgroundColor: colors.primarySoft, borderRadius: 8, paddingVertical: 5, paddingHorizontal: 9 },
   quoteTagText: { fontFamily: fam.bold, fontSize: 12, color: colors.primary },
+  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: 8, paddingVertical: 5, paddingHorizontal: 9 },
+  tagText: { fontFamily: fam.bold, fontSize: 12, color: colors.textSub },
   title: { fontFamily: fam.extrabold, fontSize: 17, lineHeight: 24, letterSpacing: -0.34, color: colors.text },
   body: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: '#333D4B' },
   quote: { borderWidth: 1, borderColor: colors.line, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, gap: 6 },
