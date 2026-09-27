@@ -139,3 +139,15 @@ variable "task_policy_statements" {
   }))
   default = []
 }
+
+# 태스크 수 자동 조정. null 이면 desired_count 고정. 지정 시 desired_count 는 초기값이 되고
+# 이후 태스크 수는 Application Auto Scaling 이 소유한다(아래 lifecycle ignore).
+variable "autoscaling" {
+  description = "target tracking 오토스케일 {min_capacity, max_capacity, cpu_target_percent}. null=고정"
+  type = object({
+    min_capacity       = number
+    max_capacity       = number
+    cpu_target_percent = number
+  })
+  default = null
+}
