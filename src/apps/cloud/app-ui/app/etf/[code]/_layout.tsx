@@ -1,7 +1,7 @@
 import { Link, Slot, useLocalSearchParams, usePathname } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { useEtf } from '@/features/etf/queries';
-import { colors, size, space } from '@/theme/tokens';
+import { colors, space } from '@/theme/tokens';
 
 const TABS = [
   { seg: 'brief', label: 'AI 분석' },
@@ -34,8 +34,8 @@ export default function EtfLayout() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg, paddingTop: 56 },
-  name: { fontSize: size.title, fontWeight: '700', color: colors.text, paddingHorizontal: space.xl },
+  name: { fontSize: 17, fontWeight: '700', color: colors.text, paddingHorizontal: space.xl },
   tabs: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.line, marginTop: space.md },
-  tab: { flex: 1, textAlign: 'center', paddingVertical: space.md, color: colors.textFaint, fontSize: size.body },
+  tab: { flex: 1, textAlign: 'center', paddingVertical: space.md, color: colors.textFaint, fontSize: 14 },
   tabOn: { color: colors.text, fontWeight: '700' },
 });

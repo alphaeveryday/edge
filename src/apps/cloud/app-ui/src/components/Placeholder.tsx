@@ -1,6 +1,6 @@
 import { Link, type Href } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, size, space } from '@/theme/tokens';
+import { colors, space } from '@/theme/tokens';
 
 interface Props {
   title: string;
@@ -22,6 +22,6 @@ export function Placeholder({ title, links = [] }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg, padding: space.xl, gap: space.md },
-  title: { fontSize: size.h3, fontWeight: '800', color: colors.text },
-  link: { fontSize: size.base, color: colors.primary, paddingVertical: space.xs },
+  title: { fontSize: 20, fontWeight: '800', color: colors.text },
+  link: { fontSize: 15, color: colors.primary, paddingVertical: space.xs },
 });

@@ -26,7 +26,8 @@
     },
     "plugins": [
       "expo-router",
-      "expo-dev-client"
+      "expo-dev-client",
+      "expo-splash-screen"
     ],
     "experiments": {
       "typedRoutes": true

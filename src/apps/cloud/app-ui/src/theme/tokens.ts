@@ -1,7 +1,8 @@
 export const colors = {
-  bg: '#FFFFFF',
-  bgAlt: '#F7F8FA',
+  bg: '#FAFAF8',
+  card: '#F7F8FA',
   surface: '#F2F4F6',
+  white: '#FFFFFF',
   line: '#E5E8EB',
   text: '#191F28',
   textSub: '#4E5968',
@@ -13,36 +14,26 @@ export const colors = {
   primarySoft: '#EEF0FF',
   accent: '#6C5CF5',
   up: '#F04452',
+  upDeep: '#D22F3D',
   down: '#3182F6',
-  neutral: '#8B95A1',
+  downDeep: '#1B64DA',
+  neutral: '#8E8E93',
+  neutralDeep: '#636366',
   warn: '#E8A13D',
   positive: '#0E8A6C',
 } as const;
 
-// 전망 스티커 5단계. 디자인 스크립트가 잘려 강/약 색 구분은 확인 후 조정
+// 전망 스티커 5단계 (Sticker.dc.html 의 color/labelColor/bg 값)
 export const signal = {
-  strongUp: { label: '강력 상승', color: '#F04452', bg: '#FFF0F1' },
-  up: { label: '상승', color: '#F04452', bg: '#FFF5F6' },
-  neutral: { label: '중립', color: '#8B95A1', bg: '#F2F4F6' },
-  down: { label: '하락', color: '#3182F6', bg: '#F0F6FF' },
-  strongDown: { label: '강력 하락', color: '#1B64DA', bg: '#EAF2FF' },
+  strongUp: { label: '강력 상승', mark: '▲', double: true, color: '#F04452', labelColor: '#D22F3D', bg: 'rgba(240,68,82,0.18)', line: 'rgba(240,68,82,0.18)' },
+  up: { label: '상승', mark: '▲', double: false, color: '#F04452', labelColor: '#D22F3D', bg: 'rgba(240,68,82,0.18)', line: 'rgba(240,68,82,0.18)' },
+  neutral: { label: '중립', mark: '■', double: false, color: '#8E8E93', labelColor: '#636366', bg: 'rgba(142,142,147,0.22)', line: 'rgba(142,142,147,0.2)' },
+  down: { label: '하락', mark: '▼', double: false, color: '#3182F6', labelColor: '#1B64DA', bg: 'rgba(49,130,246,0.18)', line: 'rgba(49,130,246,0.18)' },
+  strongDown: { label: '강력 하락', mark: '▼', double: true, color: '#3182F6', labelColor: '#1B64DA', bg: 'rgba(49,130,246,0.18)', line: 'rgba(49,130,246,0.18)' },
 } as const;
 export type Signal = keyof typeof signal;
-
-export const font = {
-  sans: 'Pretendard',
-  mono: 'JetBrainsMono',
-} as const;
-
-export const size = {
-  caption: 11,
-  small: 12,
-  body: 14,
-  base: 15,
-  title: 17,
-  h3: 20,
-  h2: 26,
-} as const;
+export const SIGNAL_ORDER: Signal[] = ['strongDown', 'down', 'neutral', 'up', 'strongUp'];
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 } as const;
 export const radius = { sm: 8, md: 14, lg: 22, pill: 999 } as const;
+export const PAGE_X = 20;

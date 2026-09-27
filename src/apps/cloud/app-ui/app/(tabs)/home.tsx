@@ -1,18 +1,66 @@
-import { Placeholder } from '@/components/Placeholder';
-import { useWatchEtfs } from '@/features/etf/queries';
+import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { TOP_BAR_H, TopBar } from '@/components/TopBar';
+import { Chip, LinkRow, PageTitle, SectionHead } from '@/components/ui';
+import { PostRow } from '@/features/community/PostRow';
+import { useHotPosts } from '@/features/community/queries';
+import { EtfRow } from '@/features/etf/EtfRow';
+import { EdgeCard } from '@/features/home/EdgeCard';
+import { useHomeBrief } from '@/features/home/queries';
+import { colors, PAGE_X } from '@/theme/tokens';
+import { fam } from '@/theme/typography';
 
 export default function Home() {
-  const { data } = useWatchEtfs();
+  const router = useRouter();
+  const { top } = useSafeAreaInsets();
+  const [group, setGroup] = useState<string>();
+  const [showAll, setShowAll] = useState(false);
+  const brief = useHomeBrief(group);
+  const posts = useHotPosts();
+  const b = brief.data;
+  const rows = b ? (showAll ? b.etfs : b.etfs.slice(0, 3)) : [];
+  const more = (b?.etfs.length ?? 0) > 3;
+  const groupLabel = b?.groups.find((g) => g.key === b.group)?.label ?? '';
+
   return (
-    <Placeholder
-      title="홈 · 내 종목 브리핑"
-      links={[
-        ...(data ?? []).map((e) => ({ label: `${e.name} ${e.changePct > 0 ? '+' : ''}${e.changePct}%`, href: `/etf/${e.code}/brief` as const })),
-        { label: '스토리', href: '/story/AXAI' },
-        { label: '검색', href: '/search' },
-        { label: '알림', href: '/notifications' },
-        { label: '전체 메뉴 · 계정', href: '/profile' },
-      ]}
-    />
+    <View style={styles.root}>
+      <TopBar badge={12} />
+      <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+        <PageTitle title="내 종목 브리핑" meta={b?.asOf} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+          {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === b.group} onPress={() => setGroup(g.key)} />)}
+        </ScrollView>
+        {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
+
+        <View style={styles.rows}>
+          {rows.map((e) => <EtfRow key={e.code} etf={e} />)}
+          {more && (
+            <View style={{ marginTop: 12 }}>
+              <LinkRow variant="card" muted label={showAll ? '접기' : `${b!.etfs.length - 3}개 더 보기`} open={showAll} onPress={() => setShowAll((v) => !v)} />
+            </View>
+          )}
+          {b && b.etfs.length === 0 && <Text style={styles.empty}>관심 ETF가 없어요 · 탐색에서 담아 보세요</Text>}
+        </View>
+
+        <View style={styles.divider} />
+        <View style={{ paddingTop: 22 }}>
+          <SectionHead title="커뮤니티 인기글" />
+        </View>
+        {posts.data?.map((p) => <PostRow key={p.id} post={p} />)}
+        <View style={{ marginTop: 12, marginHorizontal: PAGE_X }}>
+          <LinkRow variant="card" muted label="더보기" open={false} onPress={() => router.push('/(tabs)/community')} />
+        </View>
+      </ScrollView>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
+  chips: { flexDirection: 'row', gap: 6, paddingTop: 12, paddingHorizontal: PAGE_X },
+  rows: { paddingTop: 18, paddingHorizontal: PAGE_X },
+  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textSub, paddingVertical: 34 },
+  divider: { height: 10, backgroundColor: colors.surface, marginTop: 26 },
+});
