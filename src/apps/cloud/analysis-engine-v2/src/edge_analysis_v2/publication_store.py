@@ -187,6 +187,8 @@ class PublicationStore:
                         VALUES(%s,%s,%s,%s,%s,%s)""", (uuid4().hex, identity, kind, position, item["label"], item["tool_run_ids"]))
             if factor_details is not None:
                 from .factor_store import save_factor_details
+                for item in factor_details['issue']['items']:
+                    self._evidence(cur, item['tool_run_ids'], analysis)
                 save_factor_details(self.connection, identity, **factor_details)
             cur.execute("""UPDATE outlook_analyses SET status='completed',published_at=%s,outlook_sticker=%s,
                 summary_title=%s,summary=%s,detail_title=%s,detail_mode=%s,conclusion_title=%s,
