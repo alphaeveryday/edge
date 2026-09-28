@@ -184,7 +184,7 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     # 뷰는 옛 뷰에 없던 행이나 같은 행 두 벌을 읽는다.
     # 운영 조회 정본은 이 raw 가 아니라 `bars_5m`·`s3_intraday_5m` 이다.
     ("s3_kr_5min",          "glob", "raw/source=fmp/dataset=price_5min/market=KR/"
-                                    "ingest_date=2026-07-29/run_id=run_8645481c2c1d4451af227c1633f1030d/*.KS.parquet"),
+                                    "ingest_date=2026-07-25/run_id=run_282ca79c51eb968199260508cc6cb0b3/*.KS.parquet"),
     ("s3_us_5min",          "glob", "raw/source=fmp/dataset=price_5min/market=US/"
                                     "ingest_date=2026-07-25/run_id=run_39e89ffcdce8500e9d8507b051751c4e/*.parquet"),
     ("s3_statement_line",   "ice",  "draft/canonical/financials/statement_line"),
