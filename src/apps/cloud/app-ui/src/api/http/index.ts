@@ -43,8 +43,7 @@ export const httpClient: ApiClient = {
   },
   theme: {
     list: async () => (await request<m.WireTheme[]>('GET', '/themes', { auth: false })).map(m.theme),
-    // 앱 파라미터명 sort 는 계약의 방향 필터 dir
-    feed: async (sort) => (await request<m.WireThemeFeedItem[]>('GET', '/themes/feed', { query: { dir: sort || 'all' }, auth: false })).map(m.themeFeedItem),
+    feed: async () => (await request<m.WireThemeFeedItem[]>('GET', '/themes/feed', { auth: false })).map(m.themeFeedItem),
     detail: async (key) => m.themeDetail(await request<m.WireThemeDetail>('GET', `/themes/${encodeURIComponent(key)}`, { auth: false })),
   },
   explore: {

@@ -22,7 +22,7 @@ export interface WatchApi {
 
 export interface ThemeApi {
   list(): Promise<Theme[]>;
-  feed(sort: string): Promise<ThemeFeedItem[]>;
+  feed(): Promise<ThemeFeedItem[]>;
   detail(key: string): Promise<ThemeDetail>;
 }
 

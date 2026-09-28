@@ -105,10 +105,7 @@ export const mockClient: ApiClient = {
   },
   theme: {
     list: () => delay(THEMES),
-    feed: (sort) => {
-      const list = sort === 'up' ? THEME_FEED.filter((t) => t.dir === 'help') : sort === 'down' ? THEME_FEED.filter((t) => t.dir === 'burden') : THEME_FEED;
-      return delay(list);
-    },
+    feed: () => delay(THEME_FEED),
     detail: (key) => {
       const d = THEME_DETAILS[key];
       return d ? delay(d) : Promise.reject(new ApiError('NOT_READY', `no theme detail ${key}`));

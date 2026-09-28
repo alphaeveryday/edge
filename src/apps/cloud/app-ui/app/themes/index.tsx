@@ -1,5 +1,4 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar, PageTitle, SectionHead, SectorIcon } from '@/components/ui';
@@ -8,13 +7,10 @@ import { colors, PAGE_X } from '@/theme/tokens';
 import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
 
-const SORTS = [{ k: 'all', label: '전체' }, { k: 'up', label: '상승' }, { k: 'down', label: '하락' }];
-
 export default function Themes() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const [sort, setSort] = useState('all');
-  const q = useThemeFeed(sort);
+  const q = useThemeFeed();
   const data = q.data;
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
@@ -23,14 +19,7 @@ export default function Themes() {
         <PageTitle title="테마" sub="코스피 3,412 +0.8% · 환율 1,318원 -0.4%" />
         <View style={{ paddingTop: 26 }}><SectionHead title="테마 분석" meta={`${data?.length ?? 0}개 테마`} /></View>
         <View style={styles.sorts}>
-          {SORTS.map((s) => {
-            const on = s.k === sort;
-            return (
-              <Pressable key={s.k} onPress={() => setSort(s.k)} style={[styles.sort, on && styles.sortOn]}>
-                <Text style={[styles.sortText, { color: on ? colors.text : colors.textFaint, fontFamily: on ? fam.extrabold : fam.semibold }]}>{s.label}</Text>
-              </Pressable>
-            );
-          })}
+          <View style={[styles.sort, styles.sortOn]}><Text style={styles.sortText}>전체</Text></View>
         </View>
         {q.isPending && <Loading rows={5} />}
         <View style={{ paddingTop: 4, paddingHorizontal: PAGE_X }}>
@@ -57,7 +46,7 @@ const styles = StyleSheet.create({
   sorts: { flexDirection: 'row', gap: 18, paddingTop: 16, paddingHorizontal: PAGE_X, borderBottomWidth: 1, borderBottomColor: colors.surface },
   sort: { paddingBottom: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   sortOn: { borderBottomColor: colors.text },
-  sortText: { fontSize: 15 },
+  sortText: { fontSize: 15, color: colors.text, fontFamily: fam.extrabold },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.surface },
   thumb: { width: 62, height: 62, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
