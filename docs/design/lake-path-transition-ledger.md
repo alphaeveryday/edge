@@ -1,6 +1,6 @@
 # 레이크 경로 현황 대장
 
-상태: 현황 기록 · 2026-09-28. **경로 통합·기존 데이터 이관·소비자 전환은 이번 작업에서 보류한다**(§7 후속).
+상태: 현황 기록 · 2026-09-28 · **레이크 정리는 축소 범위로 완료**(§8). **경로 통합·기존 데이터 이관·소비자 전환은 보류했고 완료가 아니다**(§7 후속).
 관련 결정은 [ADR-0057](../adr/0057-lake-dataset-canonical-consumption-and-retirement.md)(**제안됨** — 승인·구현 아님)이다.
 신규 수집 데이터의 저장 계약은 [ETF 데이터 저장 경로 설계 초안](etf-data-storage-plan.md) §9에 있다.
 이 문서는 기존 데이터셋별 경로·생산자·소비자·확인된 문제의 기록이다. 팀 승인을 뜻하지 않는다.
@@ -153,7 +153,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 
 | 소비 경로 | 지금 | 비고 |
 |---|---|---|
-| `duck._bars` (`bars_5m`) | Glue 표(08-05 정지) 우선. 요청일 착지 미달이면 canonical 합집합 | 기준일을 주는 생성 지점은 15곳 중 둘(`pipeline.py`·`window_batch.py`)뿐이다. **나머지 13곳(CLI·실험)은 Glue 표를 신선도 판정 없이 정본으로 써서 08-05 이후 봉을 못 본다** — 기존 결함, §6 |
+| `duck._bars` (`bars_5m`) | Glue 표(08-05 정지) 우선. 요청일 착지 미달이면 canonical 합집합 | 기준일 없는 `CausalLake()` 13곳은 전부 `__main__` 연구·점검 CLI다(운영 `pipeline.py`·`window_batch.py`는 기준일을 준다). 그중 10곳은 자기 분석일·구간이 있는데 넘기지 않아 Glue를 판정 없이 정본으로 썼다 → ALPHA-1108에서 분석일로 원천을 고르고 `bars_readiness`로 드러낸다. `pit`·`fin`·`flowhist`는 5분봉을 안 읽는다 |
 | `duck.s3_kr_5min`·`s3_us_5min` | 애드혹 raw | 코드 소비자 0 |
 | `duck.s3_intraday_5m` | canonical 전 파일 글롭 | `part-*.parquet` 전부를 읽는다 |
 
@@ -205,7 +205,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 | fx·지수·금리 canonical에 생산자가 없어 2026-08-01부터 공백이다. `macro_z`·`fx_beta`가 오류 없이 빈 입력으로 돈다 | §1·§2 [실측] | ALPHA-1105 |
 | `fx_usdkrw`와 `fx_daily`의 `change_pct`는 같은 이름에 정의가 다르다 | §2 [실측] | 전환 시 호환 뷰 (ALPHA-1105) |
 | `collect.intraday`가 채워진 파티션의 `part-0`을 덮는다 | [코드] (실제 발생 흔적은 없음) | #953 (ALPHA-1106) |
-| `CausalLake` 13개 생성 지점이 08-05에 멈춘 Glue 표를 정본으로 써서 이후 5분봉을 못 본다 | `iceberg_covers`가 `asked_day`가 비면 최신일 유무만 본다 [코드]. Glue 최신 2026-08-05 [실측] | ALPHA-1108 |
+| 연구·점검 CLI 10곳이 분석일을 넘기지 않아 08-05에 멈춘 Glue 표를 정본으로 쓰고, 그 뒤 날짜에서 봉 0개를 오류 없이 받았다 | `iceberg_covers`는 `asked_day`가 비면 최신일 유무만 본다 [코드]. Glue 최신 2026-08-05 [실측] | ALPHA-1108 (PR 검토 중) — 원천 판정은 분석일로, 요청 구간의 봉 유무는 `bars_readiness`로 판정. 5분봉 전용 도구(interval·premium5)는 요청일 봉이 없으면 exit 2로 보류 |
 | 16종 543,281행이 canonical에 없어, canonical 폴백으로 도는 운영 분석이 그 이력을 못 본다 | §3.3 [실측] | 적재 보류 (§7) |
 | KR canonical 250 파티션이 레포 밖 배치로 재작성됐고, 그 코드·기록이 없다 | §3.2 [실측] | ALPHA-901에 기록 |
 
@@ -222,11 +222,28 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 |---|---|---|
 | 로컬 이력 16종 → canonical 적재 | §3.3의 1~4. 적재 직전 dry-run을 다시 해 계획을 고정하고, 적재 후 대조, 파일 목록 기준 롤백 | ALPHA-1104 (보존 브랜치) |
 | `bars_5m` Glue → canonical 소비 전환 | 위 적재·대조. 64,883 격리 키를 복구하지 않는 결정 확인. Glue 전 키 집합과 canonical 대조 | 신규 발번 필요 |
-| 13개 생성 지점의 낡은 Glue 사용 | 위 전환 또는 신선도 판정을 기준일 없이도 적용 | [ALPHA-1108](https://alphaeveryday.atlassian.net/browse/ALPHA-1108) |
+| 연구·점검 CLI의 낡은 Glue 사용 | 없음 | [ALPHA-1108](https://alphaeveryday.atlassian.net/browse/ALPHA-1108) PR 검토 중. 잔여: 운영 경로(`pipeline`·`window_batch`)는 요청일 봉이 어느 원천에도 없을 때도 계속 돈다 — `bars_readiness`를 운영 상태에 잇는 것은 별도 판단 |
 | `s3_kr_5min`·`s3_us_5min`을 표준 raw로 전환 | 없음(바이트 동일). 코드는 보존 브랜치 | ALPHA-1104 |
-| FX·지수·금리 생산자 | FMP bandwidth 확인. 입력: FMP stable EOD(FX 4 · 지수 6 · 미 국채 금리). 산출: 기존 `canonical/market_data/{fx_daily,index_daily,rates_daily}` 경로와 파일 스키마. 주기: 거래일 1회(미국장 마감 뒤). 준비 기준: 2026-08-01~ 공백 소급과 신선도 계약(ADR-0043) | ALPHA-1105 |
+| FX·지수·금리 생산자 | 신규 수집 저장 계약([설계 초안](etf-data-storage-plan.md) §9)을 적용해 생산자·갱신 주기·준비 판정을 정한다. FMP bandwidth 확인. 입력: FMP stable EOD(FX 4 · 지수 6 · 미 국채 금리). 산출: 기존 `canonical/market_data/{fx_daily,index_daily,rates_daily}` 경로와 파일 스키마. 주기: 거래일 1회(미국장 마감 뒤). 준비 기준: 2026-08-01~ 공백 소급과 신선도 계약(ADR-0043) | ALPHA-1105 |
 | `fx_usdkrw`·`us_market` 호환 뷰 전환 | 위 생산자. `change_pct`는 일중 정의를 재현(§2) | ALPHA-1105 |
 | US raw ↔ canonical 키 대조 | 없음. US 5분봉 소비 전환·US 애드혹 raw 폐기의 선행 조건 | 신규 발번 필요 |
 | 구 경로 폐기 (애드혹 raw·KR 07-29 중복·Glue·스테이징) | writer 0·reader 0(코드와 런타임 모두)·보존 기간·승인 | 경로별 |
 | `sector_index_daily`·`sector_membership` 생산자 | 통일 스펙 §4.1 | 미발번 |
 | DataGuide·draft Iceberg 승격 | 갱신 담당·Dataset Contract | 미발번 |
+
+## 8. 작업 상태 (축소 범위 완료 — 2026-09-28)
+
+| 항목 | 결과 |
+|---|---|
+| [#953](https://github.com/alphaeveryday/edge/pull/953) `collect.intraday` 파티션 덮어쓰기 방지 (ALPHA-1106 일부) | `75c6999d` 머지 16:52:34 KST |
+| [#952](https://github.com/alphaeveryday/edge/pull/952) raw 복사 도구 (ALPHA-1104 일부) | `335c8f87` 머지 16:52:44 KST |
+| [#951](https://github.com/alphaeveryday/edge/pull/951) 이 대장·신규 수집 저장 계약 §9·ADR-0057 (ALPHA-901) | `29ed8678` 머지 16:53:00 KST |
+| [#957](https://github.com/alphaeveryday/edge/pull/957) 기준일 없는 CLI의 낡은 Glue 사용 (ALPHA-1108) | 최신 dev 반영 후 CI 전건(scan 포함)·Codex 👍, 리뷰 반영 smoke 종목 단위 보류·심볼 형 정규화. 머지 커밋·시각은 ALPHA-1108에 기록 |
+
+- **scan**: 세 PR의 머지 시점에는 gitleaks(전체 히스토리)가 `feature/app-ui-screens`의 커밋 `a8aab422`·`ab9119ac`에서 3건을 탐지해 실패했다.
+  사용자 승인으로 그 실패를 예외로 두고 머지했다(통과로 간주하지 않음).
+  이후 #956(`fa2fcbc8`)이 `.gitleaksignore`에 그 3건을 사유와 함께 추가했고, 그 뒤 `dev`의 gitleaks는 통과한다.
+- **배포**: 머지 시점에 ECS 상주 서비스는 전부 desired 0이었다. 재배포로 수집이 끊기지 않았다.
+- **데이터**: 이 작업이 바꾼 데이터는 §3.1의 표준 raw 추가 복사(3,388개)와 그 기록 로그뿐이다. canonical·뷰·삭제는 없다.
+- ADR-0057은 **제안·적용 보류** 상태다. 문서 머지는 ADR 적용이나 데이터 전환 승인이 아니다.
+

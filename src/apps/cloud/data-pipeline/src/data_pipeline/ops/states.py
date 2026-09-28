@@ -70,6 +70,11 @@ LAUNCH_STATUSES = frozenset(
     {LAUNCH_PLANNING, LAUNCH_LAUNCHED, LAUNCH_FAILED, LAUNCH_CONFLICT, LAUNCH_UNKNOWN}
 )
 
+# ── pipeline_run.orchestrator (레인별 단계 이관 중 한 슬롯의 실행 주체) ──
+ORCHESTRATOR_SFN = "SFN"
+ORCHESTRATOR_AIRFLOW = "AIRFLOW"
+ORCHESTRATORS = frozenset({ORCHESTRATOR_SFN, ORCHESTRATOR_AIRFLOW})
+
 # ── pipeline_run.orchestration_status (SFN describe 동기화) ──
 ORCH_RUNNING = "RUNNING"
 ORCH_SUCCEEDED = "SUCCEEDED"
@@ -89,10 +94,24 @@ ISSUE_LAUNCH_CONFLICT = "LAUNCH_CONFLICT"
 # Planner 는 pipeline_run 을 남겼는데 SFN 실행이 확인되지 않는다(StartExecution 전/중 크래시).
 # 스케줄러 RunTask 성공이 Planner 프로세스 성공을 보장하지 않아 생기는 fail-loud 공백을 메운다.
 ISSUE_LAUNCH_UNCONFIRMED = "LAUNCH_UNCONFIRMED"
+# 앞선 실행의 종료를 확인하지 못해 새 업무를 시작하지 않았다(ALPHA-1088, Airflow 경로). 결손·업무 실패와
+# 다른 사유다 — 운영자가 기존 작업 종료를 확인한 뒤에만 다시 돌린다. evidence.kind 가 종류를 가른다:
+#   OPEN_ATTEMPT      같은 작업의 업무 시도가 원장에 RUNNING 으로 남아 있다(원장 시도가 닫히면 풀린다).
+#   ECS_STATE_UNKNOWN ECS 태스크가 생겼는지·끝났는지 확인하지 못했다(운영자가 RESOLVED 로 바꿔야 풀린다).
+#   RESULT_UNKNOWN    ECS 종료는 확인됐지만 업무 결과를 알 수 없다(강제 종료 등, 새 실행을 막지는 않는다).
+ISSUE_EXECUTION_HOLD = "EXECUTION_HOLD"
+HOLD_OPEN_ATTEMPT = "OPEN_ATTEMPT"
+HOLD_ECS_STATE_UNKNOWN = "ECS_STATE_UNKNOWN"
+HOLD_RESULT_UNKNOWN = "RESULT_UNKNOWN"
+HOLD_KINDS = frozenset({HOLD_OPEN_ATTEMPT, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN})
 
 # ── 사유 코드(outcome_reason / skip_reason / record_source) ──
 SKIP_NON_TRADING_DAY = "NON_TRADING_DAY"
 REASON_FAILED_TO_START = "FAILED_TO_START"          # RunTask submit/start 실패(ECS ARN 없음)
 REASON_DEADLINE_UNMET = "DEADLINE_UNMET_UPSTREAM"   # hard deadline 뒤에도 upstream 미완 → BLOCKED
+REASON_EXECUTION_HOLD = "EXECUTION_HOLD"            # 실행 보류 — ISSUE_EXECUTION_HOLD 참조
 SOURCE_WRAPPER = "WRAPPER"
 SOURCE_RECONCILER_BACKFILL = "RECONCILER_BACKFILL"
+# 컨테이너는 떴지만 이미 성공한 작업이라 업무를 실행하지 않은 시도(ALPHA-1088, Airflow 재시도 가드).
+# "최신 업무 시도" 판정에서는 빠진다 — 업무 결과를 만든 시도가 아니기 때문이다.
+SOURCE_DUPLICATE_SKIP = "DUPLICATE_SKIP"

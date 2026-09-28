@@ -18,7 +18,7 @@ import math
 import sys
 from dataclasses import dataclass
 
-from .duck import CausalLake
+from .duck import CausalLake, gate_bars
 from .frame import PathVerdict
 
 _SQL = """
@@ -98,6 +98,8 @@ _selfcheck()
 if __name__ == "__main__":
     d0 = sys.argv[1] if len(sys.argv) > 1 else "2026-07-13"
     d1 = sys.argv[2] if len(sys.argv) > 2 else "2026-07-31"
-    print(summarize(screen(CausalLake(), d0, d1)))
+    lake = CausalLake(day=d1)                 # 구간의 끝으로 원천 판정 (ALPHA-1108)
+    gate_bars(lake, d1, since=d0, block=False)
+    print(summarize(screen(lake, d0, d1)))
 
 __all__ = ["Cell", "screen", "summarize"]

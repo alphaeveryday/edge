@@ -227,8 +227,10 @@ def main() -> None:
     if len(sys.argv) < 2:
         _selfcheck()
         return
-    from .duck import CausalLake
-    lake, day = CausalLake(), sys.argv[1]
+    from .duck import CausalLake, gate_bars
+    day = sys.argv[1]
+    lake = CausalLake(day=day)          # 기준일로 원천 판정 (ALPHA-1108)
+    gate_bars(lake, day, block=False)
     if len(sys.argv) > 2:
         print(say_market_trial(run_market_trial(lake, day, etype=sys.argv[2])))
     else:

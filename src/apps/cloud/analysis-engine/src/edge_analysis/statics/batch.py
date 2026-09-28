@@ -138,14 +138,17 @@ if __name__ == "__main__":       # pragma: no cover
     import os
 
     from ..adapters.llm import DeepSeekClient
-    from .duck import CausalLake
+    from .duck import CausalLake, gate_bars
 
     if len(sys.argv) < 4:
         sys.exit(__doc__)
     client = DeepSeekClient(os.environ["DEEPSEEK_API_KEY"],
                             model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
     root = os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")
-    svs = run(CausalLake(), client.complete_json, sys.argv[1], sys.argv[2], sys.argv[3],
+    # 구간 도구: 원천은 구간의 끝으로 고르고, 준비 판정은 구간 전체로 잰다(ALPHA-1108).
+    lake = CausalLake(day=sys.argv[3])
+    gate_bars(lake, sys.argv[3], since=sys.argv[2], block=False)
+    svs = run(lake, client.complete_json, sys.argv[1], sys.argv[2], sys.argv[3],
               top=int(sys.argv[4]) if len(sys.argv) > 4 else 8,
               n=int(sys.argv[5]) if len(sys.argv) > 5 else 3, root=root)
     print(report(svs, root=root))

@@ -800,8 +800,10 @@ def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] not in ("multi", "spill"):
         _selfcheck()
         return
-    from .duck import CausalLake
-    lake, day = CausalLake(), sys.argv[2]
+    from .duck import CausalLake, gate_bars
+    day = sys.argv[2]
+    lake = CausalLake(day=day)          # 기준일로 원천 판정 (ALPHA-1108)
+    gate_bars(lake, day, block=False)
     if sys.argv[1] == "multi":
         # 조절자는 **전량**을 넣는다 - 고르면 그게 선택이고, 결측 관문은 코드가 친다.
         print(say_multi(run_multi(lake, day, sys.argv[3].split(","),

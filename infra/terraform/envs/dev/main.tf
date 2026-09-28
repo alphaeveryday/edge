@@ -605,6 +605,9 @@ module "data_pipeline" {
   # ⚠️ 이 스케줄이 켜져 있으므로 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 도 함께 주입된다
   # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다.
   investor_intraday_schedule_state = "ENABLED"
+  # 실행 주체(ALPHA-1088). 전환은 이 한 줄을 "AIRFLOW" 로 바꿔 apply 한다 — 스케줄은 꺼지고 Reconciler
+  # 슬롯 대조는 유지된다. 바꾸기 전 src/apps/cloud/airflow/README.md 의 종료 확인(①~⑤)을 따른다.
+  investor_intraday_orchestrator = "SFN"
 
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를

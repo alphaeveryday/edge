@@ -39,6 +39,7 @@ export function attemptNeedsDetail(attempt: Attempt): boolean {
     attempt.exitCode !== 0 ||
     attempt.failureReason !== null ||
     attempt.recordSource === 'RECONCILER_BACKFILL' ||
+    attempt.recordSource === 'DUPLICATE_SKIP' ||
     attempt.qualityDiagnostics != null
   );
 }
