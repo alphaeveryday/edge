@@ -534,6 +534,51 @@ def scenario_report() -> None:
     snapshot("report")
 
 
+def scenario_trace() -> None:
+    """Airflow 시도 ↔ 원장 attempt 추적: 정상 슬롯 + 수집 응답 유실(재시도가 중복 skip 으로 남는가)."""
+    d1 = "2026-09-22"
+    set_today(d1)
+    reset()
+    faults([{"step": "ingest-raw-investor-estimate", "action": "sleep_before", "seconds": 25,
+             "run_id": rid(d1, "09:35")}])
+    import threading
+    threading.Thread(target=kill_task_process, args=(15,), daemon=True).start()
+    af_slot(d1, "09:35")
+    note("trace_attempts", rows=psql(
+        "SELECT et.task_key, a.record_source, a.exit_code, a.orchestrator_attempt_ref"
+        " FROM ops_task_attempt a JOIN ops_expected_task et USING (expected_task_id)"
+        " ORDER BY a.created_at").splitlines())
+    note("trace_run", rows=psql(
+        "SELECT run_key, orchestrator_run_ref, orchestration_status,"
+        " orchestration_reported_at IS NOT NULL FROM ops_pipeline_run").splitlines())
+    snapshot("trace")
+
+
+def scenario_lockloss() -> None:
+    """잠금 연결 상실: A 가 실행권을 쥔 채 일하는 중 A 의 잠금 커넥션만 끊기면 B 가 들어오는가."""
+    d1, slot = "2026-09-22", "10:05"
+    reset()
+    ecs_wait(ecs_run(["plan-run"], {"OPS_SCHEDULED_TIME": slot_iso(d1, slot), "OPS_PIPELINE_TYPE": LANE,
+                                   "OPS_ORCHESTRATOR": "AIRFLOW", "OPS_ORCHESTRATOR_RUN_REF": "lab/lock"},
+                     "edge-dev-data-pipeline-ops"))
+    ecs_wait(ecs_run(["ingest-raw-investor-estimate", "--max-failed-symbols", "1", "--run-id", rid(d1, slot)],
+                     AF_ENV, "edge-dev-data-pipeline-kis"))
+    reprocess_env = {"OPS_EXCLUSIVE_STEP": "1"}     # 정제는 성공 skip 없음(DAG 와 같은 env)
+    faults([{"step": "normalize-investor-estimate", "action": "sleep_in_step", "seconds": 30}])
+    a = ecs_run(normalize_cmd(d1, slot), reprocess_env, NORMALIZE_TD)
+    time.sleep(5)
+    killed = psql("SELECT count(pg_terminate_backend(pid)) FROM pg_locks WHERE locktype='advisory'").strip()
+    note("lockloss_terminated_lock_backends", count=killed)
+    b = ecs_run(normalize_cmd(d1, slot), reprocess_env, NORMALIZE_TD)
+    b_exit = ecs_wait(b)
+    a_exit = ecs_wait(a)
+    rows = attempts_of(d1, slot, "NORMALIZE_INVESTOR_INTRADAY")
+    note("lockloss_result", a_exit=a_exit, b_exit=b_exit,
+         attempts=[(r[0][-6:], r[1], r[2][11:19], r[3][11:19]) for r in rows],
+         overlap=len(rows) == 2 and rows[1][2] < rows[0][3])
+    snapshot("lockloss")
+
+
 def scenario_partial() -> None:
     """정제 부분 실패 — 벤더 응답에 깨진 행 1개(거래일 결측)가 섞인 슬롯. 실제 정제 게이트가 그 행만
     탈락시키고 나머지 winner 를 commit 한 뒤 exit 2 를 낸다. 두 경로의 exit 2 해석 대조."""
@@ -574,11 +619,12 @@ if __name__ == "__main__":
     elif cmd == "snapshot":
         snapshot(*rest)
     elif cmd in ("scenario-legacy", "scenario-airflow", "scenario-partial", "scenario-guard",
-                 "scenario-holiday", "scenario-report"):
+                 "scenario-holiday", "scenario-report", "scenario-trace", "scenario-lockloss"):
         try:
             {"scenario-legacy": scenario_legacy, "scenario-airflow": scenario_airflow,
              "scenario-partial": scenario_partial, "scenario-guard": scenario_guard,
-             "scenario-holiday": scenario_holiday, "scenario-report": scenario_report}[cmd]()
+             "scenario-holiday": scenario_holiday, "scenario-report": scenario_report,
+             "scenario-trace": scenario_trace, "scenario-lockloss": scenario_lockloss}[cmd]()
         finally:
             RESULTS.mkdir(parents=True, exist_ok=True)
             (RESULTS / f"{cmd}.events.jsonl").write_text(

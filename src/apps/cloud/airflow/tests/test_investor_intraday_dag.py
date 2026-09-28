@@ -32,6 +32,19 @@ def dag_module():
     return module
 
 
+def test_dagbag_parses_the_folder_like_the_dag_processor():
+    # 모듈 import 가 아니라 실제 Airflow DagBag 으로 폴더를 파싱한다 — scheduler 가 보는 것과 같은 경로.
+    from airflow.dag_processing.dagbag import DagBag
+    original = socket.socket.connect
+    socket.socket.connect = lambda *a, **k: (_ for _ in ()).throw(AssertionError("parse-time network"))
+    try:
+        bag = DagBag(dag_folder=str(ROOT / "dags"))
+    finally:
+        socket.socket.connect = original
+    assert bag.import_errors == {}
+    assert sorted(bag.dag_ids) == ["edge_investor_intraday"]
+
+
 def test_pipeline_run_id_matches_production_run_ids():
     # 실제 dev 레이크 raw 경로의 run_id(2026-09-22 슬롯)와 같아야 원장·레이크가 같은 런을 가리킨다.
     from edge_batch import pipeline_run_id
@@ -249,3 +262,64 @@ def test_verdict_fails_when_the_status_report_did_not_land(dag_module):
     for report in (None, 1, 75):
         with pytest.raises(AirflowFailException, match="판정 보고 실패"):
             verdict(ti=Ti(report), dag_run=run)
+
+
+def test_every_step_passes_its_airflow_attempt_ref(dag_module):
+    # 원장 attempt → Airflow 시도 역추적의 유일한 연결이다.
+    for task_id in ("plan", "collect", "normalize", "load", "report"):
+        env = {e["name"]: e["value"] for e in
+               dag_module.dag.get_task(task_id).overrides["containerOverrides"][0]["environment"]}
+        assert env["OPS_ORCHESTRATOR_ATTEMPT_REF"] == (
+            "airflow:{{ dag.dag_id }}/{{ run_id }}/{{ task.task_id }}/{{ ti.try_number }}")
+
+
+def test_status_is_not_reported_when_plan_did_not_succeed(dag_module):
+    # 계획이 실패(충돌·재처리 불가·인프라)한 run 은 업무를 안 건드렸다 — 슬롯의 기존 판정을 덮지 않는다.
+    class Ti:
+        def __init__(self, plan):
+            self.codes = {"plan": plan, "collect": 0, "normalize": 0, "load": 0}
+
+        def xcom_pull(self, task_ids, key):
+            return self.codes.get(task_ids)
+
+    run = SimpleNamespace(conf={})
+    assert dag_module._status(Ti(None), run) == "" and dag_module._status(Ti(1), run) == ""
+    assert dag_module._status(Ti(0), run) == "SUCCEEDED"
+
+
+@pytest.mark.parametrize("running_arn", ["arn:running", None])
+def test_reattach_is_recorded_only_when_it_happens(monkeypatch, running_arn):
+    # 재접속한 try 는 새 attempt 를 만들지 않는다 — 이 XCom 이 원장 밖의 유일한 흔적이다.
+    import airflow.sdk
+    from airflow.providers.amazon.aws.operators.ecs import EcsRunTaskOperator
+    from edge_batch import EdgeStep
+    op = EdgeStep(task_id="n", taskdef_key="bigkinds", command=["x"])
+    ti = _Ti()
+    monkeypatch.setattr(airflow.sdk, "get_current_context", lambda: {"ti": ti})
+
+    def found(self, started_by):
+        self.arn = running_arn
+    monkeypatch.setattr(EcsRunTaskOperator, "_try_reattach_task", found)
+    op._try_reattach_task("sb")
+    assert ti.pushed == ({"ecs_reattached_arn": running_arn} if running_arn else {})
+
+
+@pytest.mark.parametrize("now_kst, expected_kst", [
+    ("2026-09-28T11:45:00", "2026-09-28T13:25:00"),   # 11:25 슬롯 20분 뒤 활성화 — 지난 슬롯을 돌리지 않는다
+    ("2026-09-28T15:00:00", "2026-09-29T09:35:00"),   # 전환 절차의 장 마감 뒤 활성화 — 14:35 재실행 없음
+    ("2026-09-27T04:00:00", "2026-09-28T09:35:00"),   # 일요일 활성화
+])
+def test_activation_does_not_run_an_already_passed_slot(dag_module, monkeypatch, now_kst, expected_kst):
+    # 실제 Airflow timetable 로 "처음 켰을 때 다음 run" 을 계산한다(catchup=False, 이전 run 없음).
+    import airflow.timetables.trigger as trigger
+    from airflow.timetables.base import TimeRestriction
+    kst = timezone(timedelta(hours=9))
+    now = datetime.fromisoformat(now_kst).replace(tzinfo=kst).astimezone(timezone.utc)
+    import pendulum
+    monkeypatch.setattr(trigger, "utcnow", lambda: pendulum.instance(now))
+    # MultipleCron 의 no-catchup 정렬 키는 utcnow 가 아니라 time.time() 을 쓴다 — 둘 다 고정한다.
+    monkeypatch.setattr(trigger.time, "time", lambda: now.timestamp())
+    info = dag_module.dag.timetable.next_dagrun_info(
+        last_automated_data_interval=None,
+        restriction=TimeRestriction(earliest=None, latest=None, catchup=False))
+    assert info.logical_date.astimezone(kst).strftime("%Y-%m-%dT%H:%M:%S") == expected_kst

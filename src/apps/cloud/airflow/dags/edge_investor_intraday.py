@@ -41,6 +41,10 @@ def _judged_steps(dag_run) -> tuple[str, ...]:
 
 
 def _status(ti, dag_run) -> str:
+    """report 가 원장에 넘길 판정. plan 이 성공하지 않았으면 빈 값(보고 없음) — 이 run 은 업무를 건드리지
+    않았으므로 그 슬롯의 기존 판정(예: 앞 run 의 SUCCEEDED)을 덮으면 안 된다."""
+    if ti.xcom_pull(task_ids="plan", key="exit_code") != 0:
+        return ""
     return run_status({s: ti.xcom_pull(task_ids=s, key="exit_code") for s in _judged_steps(dag_run)})
 ALARM_TOPIC = os.environ.get("EDGE_ALARM_TOPIC_ARN") or None
 
@@ -59,7 +63,11 @@ def _notify_failure(context):
 
 with DAG(
     dag_id="edge_investor_intraday",
-    schedule=MultipleCronTriggerTimetable(*CRONS, timezone="Asia/Seoul"),
+    # run_immediately=timedelta(0): 활성화(unpause) 시 이미 지난 슬롯을 즉시 돌리지 않는다. 3.3.2 는
+    # False 를 "다음 슬롯까지 대기"로 문서화했지만 코드는 None 처럼 다루어, 슬롯 뒤 max(다음 발화까지의
+    # 10%, 5분) 안에 켜면 그 슬롯을 즉시 만든다 — 하루 1회 cron 5개라 창이 2.4시간이다(로컬 관찰: 11:25
+    # 슬롯이 11:45 unpause 에 즉시 실행). 전환 절차상 15:00 에 켜면 SFN 이 끝낸 14:35 슬롯이 다시 불린다.
+    schedule=MultipleCronTriggerTimetable(*CRONS, timezone="Asia/Seoul", run_immediately=timedelta(0)),
     catchup=False,
     max_active_runs=1,
     # SFN TimeoutSeconds(1500)와 같다: 최소 슬롯 간격(30분)보다 짧아 다음 슬롯과 겹치지 않는다.

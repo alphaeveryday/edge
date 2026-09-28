@@ -20,7 +20,9 @@ from airflow.sdk.exceptions import AirflowException, AirflowFailException
 KST = timezone(timedelta(hours=9))
 CONTAINER = "data-pipeline"              # tasks.tf local.container_name
 # db.PIPELINE_ID + "\x01" 구분자 — data_pipeline.db.stable_domain_id 와 **같아야 한다**.
-# Airflow 환경에 업무 패키지를 설치하지 않으려고 복제했고, 동등성은 tests/ 가 실제 함수와 대조한다.
+# Airflow 환경에 업무 패키지를 설치하지 않으려고 복제했다. 대조는 두 쪽에서 한다: airflow/tests 는 실제
+# dev run_id 벡터로, data-pipeline tests/test_airflow_dag_contract.py 는 이 파일의 상수·env 이름을 업무
+# 코드의 정의와 직접 비교한다(이 파일을 바꾸면 test-python 도 돈다).
 _PIPELINE_ID = "alphamale-etf-daily-v1"
 
 # 배포 환경값 — terraform 출력(클러스터·서브넷·보안그룹·태스크 정의 이름 접두)을 Airflow 환경변수로 준다.
@@ -105,7 +107,11 @@ class EdgeStep(EcsRunTaskOperator):
                  noop_on_reprocess: bool = False, exclusive: bool = True,
                  skip_if_succeeded: bool = False, reprocess_env: dict[str, str] | None = None,
                  **kwargs):
-        environment = [{"name": k, "value": v} for k, v in (env or {}).items()]
+        # 이 ECS 태스크를 띄운 Airflow 시도 — wrapper 가 attempt 에 남긴다(원장 → Airflow 역추적).
+        # try_number 는 렌더링 시점(=이 시도)의 값이다. 재접속한 시도는 새 attempt 를 만들지 않는다.
+        env = {"OPS_ORCHESTRATOR_ATTEMPT_REF":
+               "airflow:{{ dag.dag_id }}/{{ run_id }}/{{ task.task_id }}/{{ ti.try_number }}", **(env or {})}
+        environment = [{"name": k, "value": v} for k, v in env.items()]
         super().__init__(
             cluster=CLUSTER, task_definition=f"{TASKDEF_PREFIX}-{taskdef_key}",
             launch_type="FARGATE", network_configuration=NETWORK,
@@ -173,6 +179,18 @@ class EdgeStep(EcsRunTaskOperator):
                 raise failure
             raise AirflowException(f"ECS 종료 코드를 확인하지 못했다(ECS {self.arn}) — 재시도")
         raise AirflowFailException(f"업무 실패 exit {code} (ECS {self.arn})") from failure
+
+    def _try_reattach_task(self, started_by: str):
+        """실행 중인 ECS 태스크에 다시 붙었는지 남긴다 — 이 시도는 새 attempt 를 만들지 않으므로
+        원장의 attempt 는 처음 띄운 시도를 가리킨다. 같은 ARN 이 이 시도의 XCom·로그에 남는다."""
+        super()._try_reattach_task(started_by)
+        if self.arn:
+            self.log.warning("실행 중인 ECS 태스크에 재접속: %s (새 업무 시도 없음)", self.arn)
+            from airflow.sdk import get_current_context
+            try:
+                get_current_context()["ti"].xcom_push(key="ecs_reattached_arn", value=self.arn)
+            except Exception:       # 컨텍스트 밖(단위 호출) — 로그로 충분하다
+                pass
 
     def _exit_code(self) -> int | None:
         """정지한 컨테이너의 정수 exit code. 없거나 확인 불가면 None(단정하지 않는다)."""
