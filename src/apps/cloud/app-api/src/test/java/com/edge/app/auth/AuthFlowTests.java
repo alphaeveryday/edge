@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.client.RestClient;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -155,5 +156,29 @@ class AuthFlowTests extends ContainerTests {
         assertEquals(400, bad.getStatusCode().value());
         assertEquals(400, call("POST", "/api/v1/auth/social", Map.of("provider", "email", "idToken", "t")).getStatusCode().value());
         assertEquals(400, call("POST", "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t")).getStatusCode().value());
+    }
+
+    /** 서버 로그(2026-09-28): 앱이 가입을 4건 동시에 보내 선검사를 전부 통과하고 uq_member_email 에서 500 이 났다. */
+    @Test
+    void concurrentSignupsWithSameEmailYieldOneAccountAndConflictsForTheRest() throws Exception {
+        int n = 6;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(n);
+        var gate = new java.util.concurrent.CountDownLatch(1);
+        List<java.util.concurrent.Future<Integer>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            futures.add(pool.submit(() -> {
+                gate.await();
+                return call("POST", "/api/v1/auth/signup", Map.of("email", "race@example.com", "password", "pw123456", "nick", "n"))
+                        .getStatusCode().value();
+            }));
+        }
+        gate.countDown();
+        List<Integer> codes = new java.util.ArrayList<>();
+        for (var f : futures) {
+            codes.add(f.get());
+        }
+        pool.shutdown();
+        assertEquals(1, codes.stream().filter(c -> c == 200).count(), codes.toString());
+        assertEquals(n - 1, codes.stream().filter(c -> c == 409).count(), codes.toString());
     }
 }

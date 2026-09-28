@@ -20,6 +20,7 @@ import com.edge.app.member.repository.RefreshTokenRepository;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -76,13 +77,19 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
+    // 동시 가입은 선검사를 같이 통과하므로 uq_member_email 위반도 MEMBER4090 이다.
     @Transactional
     public AuthResponse signup(SignupRequest request, String deviceKey) {
         if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isPresent()) {
             throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
         }
-        Member member = memberRepository.save(Member.email(request.email(),
-                passwordEncoder.encode(request.password()), request.nick().trim(), newHandle()));
+        Member member;
+        try {
+            member = memberRepository.saveAndFlush(Member.email(request.email(),
+                    passwordEncoder.encode(request.password()), request.nick().trim(), newHandle()));
+        } catch (DataIntegrityViolationException e) {
+            throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
+        }
         return signIn(member, deviceKey);
     }
 
