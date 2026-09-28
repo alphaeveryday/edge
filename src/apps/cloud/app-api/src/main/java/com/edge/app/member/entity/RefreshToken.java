@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 
-/** 원문은 저장하지 않는다(sha-256 해시). 재발급마다 새 행, 옛 행은 revoked_at. */
+/** sha-256 해시만 저장. 재발급마다 새 행, 옛 행은 revoked_at 표기 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

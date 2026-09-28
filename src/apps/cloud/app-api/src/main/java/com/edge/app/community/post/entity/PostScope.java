@@ -2,7 +2,7 @@ package com.edge.app.community.post.entity;
 
 import com.fasterxml.jackson.annotation.JsonValue;
 
-// 쿼리 파라미터 scope 의 계약값(all | mine | hot). 소문자 변환은 PostScopeConverter.
+// 쿼리 파라미터 scope 의 계약값
 public enum PostScope {
     ALL, MINE, HOT;
 

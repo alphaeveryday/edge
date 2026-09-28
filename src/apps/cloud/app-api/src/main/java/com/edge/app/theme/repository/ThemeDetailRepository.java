@@ -18,7 +18,7 @@ public interface ThemeDetailRepository extends JpaRepository<ThemeDetail, ThemeD
 
     Optional<ThemeDetail> findTopByThemeKeyOrderByAsOfDesc(String themeKey);
 
-    /** 테마별 최신 발행본 + etf.theme_key 집계. 발행본이 없는 테마는 빠진다. 정렬은 인기순 고정(hot, position). */
+    /** 테마별 최신 발행본과 편입 수 집계. 발행본 없는 테마 제외, 인기순 고정 */
     @Query(value = """
             select t.key as key, (select count(*) from etf e where e.theme_key = t.key) as count,
                    d.headline as headline, d.dir as dir

@@ -46,7 +46,7 @@ public class EtfService {
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.ETF_NOT_FOUND));
     }
 
-    /** 구간은 최신 일봉 기준. ma5·ma20 은 앞 행을 더 읽어 계산하고 모자라면 null. */
+    /** 차트 조회. 구간은 최신 일봉 기준, 이동평균은 선행 행 부족 시 null */
     @Transactional(readOnly = true)
     public ChartResponse chart(String code, ChartRange range) {
         requireEtf(code);
@@ -69,7 +69,7 @@ public class EtfService {
                 visible.stream().map(c -> AXIS.format(c.getTradeDate())).toList());
     }
 
-    /** 발행본이 없거나 summary 가 null 이면 ANALYSIS4001(2026-09-28 결정). */
+    /** 오늘 움직임 조회. 발행본 없음·summary null 은 ANALYSIS4001 */
     @Transactional(readOnly = true)
     public MoveResponse move(String code) {
         requireEtf(code);
@@ -90,7 +90,7 @@ public class EtfService {
                 groups.entrySet().stream().map(e -> new MoveResponse.Group(e.getKey(), e.getValue())).toList());
     }
 
-    /** payload 는 EtfDetailData 전체(erd.md). 없으면 ANALYSIS4001. */
+    /** 종목정보 조회. payload 는 EtfDetailData 전체, 없으면 ANALYSIS4001 */
     @Transactional(readOnly = true)
     public EtfDetailResponse detail(String code) {
         requireEtf(code);

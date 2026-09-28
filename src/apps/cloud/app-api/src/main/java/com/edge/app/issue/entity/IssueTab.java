@@ -1,6 +1,6 @@
 package com.edge.app.issue.entity;
 
-// 쿼리 파라미터 tab 의 계약값(mine | all). 필수, 기본값 없음.
+// 쿼리 파라미터 tab 의 계약값. 필수, 기본값 없음
 public enum IssueTab {
     MINE, ALL;
 

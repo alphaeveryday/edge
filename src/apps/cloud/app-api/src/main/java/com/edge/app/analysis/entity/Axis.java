@@ -3,7 +3,7 @@ package com.edge.app.analysis.entity;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
-// 요인 축. API 값은 계약 Axis 그대로(issue | chart | macro | value | flow). 라벨은 앱이 가진다.
+// 요인 축. 와이어 값은 계약 소문자 코드, 라벨은 앱 소유
 public enum Axis {
     ISSUE, CHART, MACRO, VALUE, FLOW;
 

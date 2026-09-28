@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
-// API 값은 계약 NotiKind 그대로(watch | signal | content | comm).
+// 알림 종류. 와이어 값은 계약 소문자 코드
 public enum NotiKind {
     WATCH, SIGNAL, CONTENT, COMM;
 

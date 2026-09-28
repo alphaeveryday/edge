@@ -41,13 +41,13 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** PRD 커뮤니티 정책: 쓰기는 회원, 관심 ETF 에 대해서만(POST4002), 태그 3개(POST4003). 삭제는 소프트. */
+/** 커뮤니티 정책. 쓰기는 회원, 관심 ETF 한정, 태그 3개 상한, 소프트 삭제 */
 @Service
 @RequiredArgsConstructor
 public class PostService {
     private static final int TAG_MAX = 3;
     private static final String DELETED_MEMBER_NAME = "탈퇴한 사용자";
-    // 첫 페이지 커서. 피드는 최신순이라 상한, 답글은 오래된 순이라 하한.
+    // 첫 페이지 sentinel. 피드는 상한, 답글은 하한
     private static final Cursor FEED_START = new Cursor(Instant.parse("9999-12-31T00:00:00Z"), Long.MAX_VALUE);
     private static final Cursor REPLY_START = new Cursor(Instant.EPOCH, 0);
 
@@ -108,7 +108,7 @@ public class PostService {
         return responses(List.of(post), memberId).get(0);
     }
 
-    // 조회수 증가는 계약(communityGet). 요청자가 있으면 liked·mine 을 채운다.
+    // 조회수 증가와 요청자 기준 liked·mine 채움
     @Transactional
     public PostResponse get(String id, AppPrincipal principal) {
         Post post = existing(id);
@@ -173,7 +173,7 @@ public class PostService {
         }
     }
 
-    // size+1 로 읽어 다음 페이지 유무를 알고, 마지막 행으로 커서를 만든다.
+    // size+1 조회로 다음 페이지 판정, 마지막 행으로 커서 생성
     private static <E, R> PageResponse<R> page(List<E> rows, int size, Function<E, Cursor> cursorOf,
             Function<List<E>, List<R>> toResponses) {
         boolean more = rows.size() > size;
@@ -207,7 +207,7 @@ public class PostService {
                 r.getCreatedAt(), r.getBody())).toList();
     }
 
-    // 탈퇴 회원은 행이 남아 있고 이름만 가린다.
+    // 탈퇴 회원 이름 가림
     private Map<Long, PostResponse.Author> authors(Set<Long> memberIds) {
         return memberRepository.findAllById(memberIds).stream().collect(Collectors.toMap(Member::getId,
                 m -> new PostResponse.Author(m.getDeletedAt() == null ? m.getNick() : DELETED_MEMBER_NAME, m.getHandle())));

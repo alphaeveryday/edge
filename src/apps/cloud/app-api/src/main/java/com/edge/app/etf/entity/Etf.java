@@ -7,7 +7,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** 읽기 전용 동기화 테이블. 앱은 읽기만 한다. */
+/** 읽기 전용 동기화 테이블 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

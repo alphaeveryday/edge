@@ -12,7 +12,7 @@ import java.time.Instant;
 import java.util.List;
 
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
-    /** 최신순 키셋. 첫 페이지의 at·id 는 상한 sentinel. byKind 면 kind 로 거른다. */
+    /** 최신순 키셋 조회. 첫 페이지는 상한 sentinel, byKind 면 종류 필터 */
     @Query("""
             select n from Notification n where n.principalId = :p
               and (n.createdAt < :at or (n.createdAt = :at and n.id < :id))

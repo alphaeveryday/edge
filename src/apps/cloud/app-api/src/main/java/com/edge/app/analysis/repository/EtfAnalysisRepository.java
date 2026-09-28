@@ -14,7 +14,7 @@ public interface EtfAnalysisRepository extends JpaRepository<EtfAnalysis, Long> 
 
     Optional<EtfAnalysis> findByEtfCodeAndAsOf(String etfCode, LocalDate asOf);
 
-    /** 직전 발행본(prev signal). */
+    /** 직전 발행본 조회 */
     Optional<EtfAnalysis> findTopByEtfCodeAndAsOfLessThanOrderByAsOfDesc(String etfCode, LocalDate asOf);
 
     @Query("select a.asOf from EtfAnalysis a where a.etfCode = :code order by a.asOf")

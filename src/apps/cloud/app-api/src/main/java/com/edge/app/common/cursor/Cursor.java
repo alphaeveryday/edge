@@ -7,10 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 
-/**
- * 키셋 커서 (created_at DESC, id DESC). 문자열 형식은 base64url("epochMicros:id").
- * 서비스는 마지막 행으로 만들어 nextCursor 로 주고, 다음 요청의 cursor 를 decode 해 WHERE 에 쓴다.
- */
+/** 키셋 커서. created_at·id 쌍의 base64url 인코딩 */
 public record Cursor(Instant createdAt, long id) {
     private static final long MICROS = 1_000_000L;
 
@@ -20,7 +17,7 @@ public record Cursor(Instant createdAt, long id) {
                 .encodeToString((micros + ":" + id).getBytes(StandardCharsets.US_ASCII));
     }
 
-    /** 형식이 어긋나면 COMMON400. */
+    /** 형식 오류는 COMMON400 */
     public static Cursor decode(String encoded) {
         try {
             String raw = new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.US_ASCII);

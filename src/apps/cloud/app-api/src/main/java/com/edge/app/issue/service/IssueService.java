@@ -32,7 +32,7 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 커서는 (as_of, rank) 를 Cursor(createdAt=as_of 자정 UTC, id=rank) 에 싣는다. */
+/** 이슈 조회. 커서는 as_of 자정 UTC 와 rank 쌍 */
 @Service
 @RequiredArgsConstructor
 public class IssueService {
@@ -44,7 +44,7 @@ public class IssueService {
     private final PrincipalRepository principalRepository;
     private final WatchItemRepository watchItemRepository;
 
-    // principal 해소가 upsert 라 readOnly 가 아니다.
+    // principal 해소 upsert 때문에 readOnly 미적용
     @Transactional
     public PageResponse<IssueRowResponse> list(AppPrincipal principal, IssueTab tab, Cursor cursor, int size) {
         List<String> codes = List.of();
@@ -87,7 +87,7 @@ public class IssueService {
         }).toList();
     }
 
-    /** affected = EtfSummary + prev(직전 발행본 signal). 동기화에서 빠진 코드는 숨긴다. */
+    /** 영향 ETF 조립. 직전 발행본 signal 동봉, 동기화에 없는 코드 숨김 */
     private List<IssueDetailResponse.Affected> affected(List<String> codes) {
         if (codes.isEmpty()) {
             return List.of();

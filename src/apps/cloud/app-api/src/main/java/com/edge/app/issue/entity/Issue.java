@@ -12,7 +12,7 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.time.LocalDate;
 
-/** 이슈 하나가 한 행. rank·delta 는 최신 순위. payload = {body, points, sources, effect, affected[{code}]}. */
+/** 이슈 발행본. rank·delta 는 최신 순위, payload 는 body·points·sources·effect·affected 원문 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

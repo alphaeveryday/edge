@@ -18,7 +18,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.Optional;
 
-/** 액세스 JWT 발급·검증. 클레임은 sub(memberId)·iat·exp 만. 리프레시는 DB 저장이라 여기 없다. */
+/** 액세스 JWT 발급·검증. 클레임은 sub·iat·exp */
 @Component
 public class AccessTokens {
     private final MACSigner signer;
@@ -55,7 +55,7 @@ public class AccessTokens {
         return jwt.serialize();
     }
 
-    /** 서명·만료·sub 중 하나라도 어긋나면 empty. */
+    /** 서명·만료·sub 검증. 실패는 empty */
     public Optional<Long> verify(String token) {
         try {
             SignedJWT jwt = SignedJWT.parse(token);

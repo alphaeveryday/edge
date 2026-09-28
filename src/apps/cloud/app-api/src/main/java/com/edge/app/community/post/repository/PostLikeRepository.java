@@ -10,7 +10,7 @@ import java.util.Collection;
 import java.util.List;
 
 public interface PostLikeRepository extends JpaRepository<PostLike, PostLike.Key> {
-    /** 멱등 삽입. 실제 들어간 행 수(0 또는 1)를 돌려줘 카운터 증감을 결정한다. */
+    /** 멱등 삽입. 반환 행 수로 카운터 증감 결정 */
     @Modifying
     @Query(value = "insert into post_like(post_id, member_id) values (:post, :member) on conflict do nothing", nativeQuery = true)
     int insertIfAbsent(@Param("post") long postId, @Param("member") long memberId);

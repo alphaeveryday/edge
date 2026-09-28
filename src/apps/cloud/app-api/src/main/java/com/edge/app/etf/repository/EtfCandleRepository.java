@@ -12,6 +12,6 @@ public interface EtfCandleRepository extends JpaRepository<EtfCandle, EtfCandle.
 
     List<EtfCandle> findByEtfCodeAndTradeDateGreaterThanEqualOrderByTradeDate(String etfCode, LocalDate from);
 
-    /** 이동평균의 앞 구간. ma20 은 첫 행 앞 19행이 필요하다. */
+    /** 이동평균용 선행 구간 조회. ma20 은 19행 선행 */
     List<EtfCandle> findTop19ByEtfCodeAndTradeDateLessThanOrderByTradeDateDesc(String etfCode, LocalDate before);
 }

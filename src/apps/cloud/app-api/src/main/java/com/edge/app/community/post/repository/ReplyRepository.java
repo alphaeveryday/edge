@@ -10,7 +10,7 @@ import java.time.Instant;
 import java.util.List;
 
 public interface ReplyRepository extends JpaRepository<Reply, Long> {
-    /** 답글은 오래된 순. 커서는 마지막 답글 뒤부터, 첫 페이지는 하한 sentinel. */
+    /** 답글 오래된 순 키셋 조회. 첫 페이지는 하한 sentinel */
     @Query("""
             select r from Reply r where r.postId = :post and r.deletedAt is null
               and (r.createdAt > :at or (r.createdAt = :at and r.id > :id))

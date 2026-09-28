@@ -44,7 +44,7 @@ public class PostController {
         return ApiResponse.onSuccess(postService.create(principal.memberId(), request));
     }
 
-    // 공개 조회지만 요청자가 있으면 liked·mine 을 채운다.
+    // 공개 조회. 요청자 있으면 liked·mine 채움
     @GetMapping("/{id}")
     public ApiResponse<PostResponse> communityGet(@PathVariable String id, @Nullable AppPrincipal principal) {
         return ApiResponse.onSuccess(postService.get(id, principal));

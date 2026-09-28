@@ -12,7 +12,7 @@ import org.hibernate.type.SqlTypes;
 
 import java.io.Serializable;
 
-/** 5요인 상세. 축별 독립 발행이라 행을 나눈다. 행이 없으면 ANALYSIS4001. */
+/** 5요인 상세. 축별 독립 발행이라 축마다 한 행 */
 @Entity
 @Getter
 @IdClass(EtfAnalysisAxis.Key.class)

@@ -9,7 +9,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** 회원과 게스트 디바이스를 한 종류의 소유자로 본다. 관심·알림·온보딩 행은 principal_id 만 가진다. */
+/** 회원과 게스트 디바이스의 공통 소유자. 관심·알림·온보딩 행의 유일한 소유 키 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

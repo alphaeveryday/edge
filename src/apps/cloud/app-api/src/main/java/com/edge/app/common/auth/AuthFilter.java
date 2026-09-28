@@ -14,9 +14,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 
 /**
- * 헤더만 해석해 요청 속성에 principal 을 둔다. DB 는 보지 않는다.
- * Bearer 가 있으면 토큰이 우선이고 검증 실패는 즉시 COMMON401(게스트로 강등하지 않는다).
- * 없으면 X-Device-Id 를 게스트로 둔다. 둘 다 없으면 익명으로 통과시키고 차단은 리졸버가 인자 유무로 한다.
+ * 헤더 해석과 요청 속성 principal 설정. DB 조회 없음.
+ * Bearer 우선, 검증 실패는 즉시 COMMON401. 없으면 X-Device-Id 게스트, 둘 다 없으면 익명 통과.
  */
 @Component
 public class AuthFilter extends OncePerRequestFilter {

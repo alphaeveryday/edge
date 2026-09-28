@@ -22,10 +22,7 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/**
- * 관심 그룹 기준 요약(BFF). band 는 signal 5단계 서수 평균의 반올림, changePct 는 산술평균(2026-09-28 결정).
- * 관심 그룹은 watch 도메인이 만든다. 아직 없으면 빈 브리프.
- */
+/** 관심 그룹 요약. band 는 signal 서수 평균 반올림, changePct 는 산술평균. 그룹 없으면 빈 브리프. */
 @Service
 @RequiredArgsConstructor
 public class HomeService {
@@ -34,7 +31,7 @@ public class HomeService {
     private final WatchItemRepository itemRepository;
     private final EtfRepository etfRepository;
 
-    // principal 해소가 upsert 라 readOnly 가 아니다.
+    // principal 해소 upsert 때문에 readOnly 미적용
     @Transactional
     public HomeBriefResponse brief(AppPrincipal principal, String group) {
         long principalId = principalRepository.resolve(principal);

@@ -3,7 +3,7 @@ package com.edge.app.etf.entity;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
-// API 값은 계약 Signal 그대로(strongDown | down | neutral | up | strongUp). value() 로 오가고 name() 은 쓰지 않는다.
+// 전망 5단계. 와이어 값은 계약 카멜케이스 코드
 public enum Signal {
     STRONG_DOWN("strongDown"), DOWN("down"), NEUTRAL("neutral"), UP("up"), STRONG_UP("strongUp");
 

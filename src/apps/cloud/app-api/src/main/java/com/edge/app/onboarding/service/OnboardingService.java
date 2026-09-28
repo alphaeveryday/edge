@@ -21,7 +21,7 @@ public class OnboardingService {
     private final PrincipalThemeRepository themeRepository;
     private final ApplicationEventPublisher eventPublisher;
 
-    // 테마는 교체, ETF 는 기본 그룹에 추가(watch 가 이벤트로 처리).
+    // 테마 교체, ETF 는 이벤트로 기본 그룹 추가
     @Transactional
     public void complete(AppPrincipal principal, OnboardingCompleteRequest request) {
         long principalId = principalRepository.resolve(principal);

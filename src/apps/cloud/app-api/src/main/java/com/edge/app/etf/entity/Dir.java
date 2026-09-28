@@ -3,7 +3,7 @@ package com.edge.app.etf.entity;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
-// 요인 방향. API 값은 계약 Dir 그대로(help | neutral | burden).
+// 요인 방향. 와이어 값은 계약 소문자 코드
 public enum Dir {
     HELP, NEUTRAL, BURDEN;
 
@@ -22,7 +22,7 @@ public enum Dir {
         throw new IllegalArgumentException("unknown dir: " + value);
     }
 
-    /** 발행본 어휘를 3단계로 접는다(erd.md): sticker 5단계, sentiment, 계약값. 모르면 neutral. */
+    /** 발행본 어휘의 3단계 접기. sticker·sentiment·계약값 수용, 모르면 neutral */
     public static Dir fold(String raw) {
         if (raw == null) {
             return NEUTRAL;

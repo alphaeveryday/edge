@@ -6,7 +6,7 @@ import java.time.Instant;
 
 public record PostResponse(String id, Etf etf, Author author, Instant time, String title, String body, String quoteTag,
         RepostOf repostOf, int like, int reply, int repost, boolean liked, int views, boolean mine) {
-    // short 는 Java 예약어라 컴포넌트명은 shortName, 와이어 키는 계약대로 short.
+    // 예약어 회피. 컴포넌트명 shortName, 와이어 키 short
     public record Etf(String code, String theme, @JsonProperty("short") String shortName) {
     }
 

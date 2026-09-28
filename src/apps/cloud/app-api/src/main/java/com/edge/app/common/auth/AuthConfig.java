@@ -12,7 +12,7 @@ import java.util.List;
 @EnableConfigurationProperties(JwtProperties.class)
 public class AuthConfig implements WebMvcConfigurer {
     static {
-        // 리졸버가 채우는 인자라 요청 파라미터가 아니다. springdoc 문서(계약 대조용)에서 뺀다.
+        // 리졸버 인자의 springdoc 문서 제외
         SpringDocUtils.getConfig().addRequestWrapperToIgnore(MemberPrincipal.class, AppPrincipal.class);
     }
 

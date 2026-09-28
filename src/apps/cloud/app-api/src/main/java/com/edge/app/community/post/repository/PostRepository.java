@@ -15,10 +15,7 @@ import java.util.Optional;
 public interface PostRepository extends JpaRepository<Post, Long> {
     Optional<Post> findByIdAndDeletedAtIsNull(long id);
 
-    /**
-     * 최신순 키셋 피드. byCode 면 code 를 태그한 글, byCodes 면 codes 중 하나를 태그한 글(관심 ETF 글).
-     * 첫 페이지의 at·id 는 서비스가 상한 sentinel 을 준다(null 파라미터는 PostgreSQL 이 타입을 못 정한다).
-     */
+    /** 최신순 키셋 피드. byCode 는 단일 태그, byCodes 는 관심 코드 태그, 첫 페이지는 상한 sentinel */
     @Query("""
             select p from Post p where p.deletedAt is null
               and (p.createdAt < :at or (p.createdAt = :at and p.id < :id))
@@ -30,7 +27,7 @@ public interface PostRepository extends JpaRepository<Post, Long> {
             @Param("code") String code, @Param("byCodes") boolean byCodes, @Param("codes") Collection<String> codes,
             Limit limit);
 
-    /** 인기순은 좋아요 수 우선. 커서 없이 첫 페이지만 준다(집계 정렬은 키셋이 안 된다). */
+    /** 인기순 첫 페이지. 좋아요 수 정렬, 커서 없음 */
     @Query("select p from Post p where p.deletedAt is null order by p.likeCount desc, p.createdAt desc, p.id desc")
     List<Post> hot(Limit limit);
 

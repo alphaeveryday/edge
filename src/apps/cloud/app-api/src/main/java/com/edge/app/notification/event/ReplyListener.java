@@ -6,7 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-/** 답글이 달리면 글쓴이에게 comm 알림. 자기 글에 단 답글은 알리지 않는다. 같은 트랜잭션에서 처리된다. */
+/** 답글 발생 시 글쓴이 comm 알림. 자기 글 답글 제외, 같은 트랜잭션 처리 */
 @Component
 @RequiredArgsConstructor
 public class ReplyListener {

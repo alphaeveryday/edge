@@ -25,7 +25,7 @@ public class AuthController {
 
     private final AuthService authService;
 
-    // X-Device-Id 는 선택. 있으면 게스트 데이터를 계정으로 매핑한다(guestMapped).
+    // X-Device-Id 선택. 있으면 게스트 데이터의 계정 매핑
     @PostMapping("/login")
     public ApiResponse<AuthResponse> authLogin(@RequestBody @Valid LoginRequest request,
             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {

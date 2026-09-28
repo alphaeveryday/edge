@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 
-/** 온보딩에서 고른 테마. */
+/** 온보딩 선택 테마 */
 @Entity
 @Getter
 @IdClass(PrincipalTheme.Key.class)

@@ -76,7 +76,7 @@ public class Member {
         this.disclaimerAcceptedAt = at;
     }
 
-    /** 행은 남기고 식별 정보만 비운다. 글·답글의 작성자 참조 유지, 같은 계정으로 재가입 가능. */
+    /** 탈퇴 처리. 행 유지, 식별 정보만 NULL, 재가입 가능 */
     public void withdraw(Instant at) {
         this.deletedAt = at;
         this.email = null;

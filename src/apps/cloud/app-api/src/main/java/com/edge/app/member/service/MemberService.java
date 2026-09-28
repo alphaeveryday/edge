@@ -37,7 +37,7 @@ public class MemberService {
         return MeResponse.from(member);
     }
 
-    // 액세스 토큰은 만료까지 살아 있으므로 탈퇴와 함께 리프레시를 전부 폐기하고 디바이스 연결을 푼다.
+    // 탈퇴 시 리프레시 전부 폐기와 디바이스 연결 해제
     @Transactional
     public void deleteAccount(long memberId) {
         Instant now = Instant.now();
@@ -53,7 +53,7 @@ public class MemberService {
         return MeResponse.from(member);
     }
 
-    // 토큰은 유효하지만 회원이 탈퇴한 경우. 앱이 토큰을 지우도록 COMMON401.
+    // 유효 토큰의 탈퇴 회원은 COMMON401
     private Member active(long memberId) {
         return memberRepository.findByIdAndDeletedAtIsNull(memberId)
                 .orElseThrow(() -> new GeneralException(ErrorStatus._UNAUTHORIZED));

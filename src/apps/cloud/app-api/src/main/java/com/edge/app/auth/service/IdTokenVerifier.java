@@ -22,7 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Apple·Google idToken 을 발급자 JWKS 로 검증하고 (sub, email) 을 돌려준다. 어긋나면 empty. */
+/** Apple·Google idToken 의 JWKS 검증. 결과는 sub·email, 실패는 empty */
 @Component
 @EnableConfigurationProperties(SocialProperties.class)
 public class IdTokenVerifier {
@@ -67,7 +67,7 @@ public class IdTokenVerifier {
     static JWTProcessor<SecurityContext> processor(JWKSource<SecurityContext> keys, String issuer, String audience) {
         DefaultJWTProcessor<SecurityContext> processor = new DefaultJWTProcessor<>();
         processor.setJWSKeySelector(new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, keys));
-        // audience 미설정이면 어떤 토큰도 통과하지 못하도록 빈 문자열을 요구한다.
+        // audience 미설정 시 빈 문자열 요구로 전부 거절
         String required = audience == null || audience.isBlank() ? "" : audience;
         processor.setJWTClaimsSetVerifier(new DefaultJWTClaimsVerifier<>(required,
                 new JWTClaimsSet.Builder().issuer(issuer).build(), Set.of("sub", "exp")));

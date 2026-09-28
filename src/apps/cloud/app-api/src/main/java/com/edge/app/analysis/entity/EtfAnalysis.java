@@ -14,7 +14,7 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.time.LocalDate;
 
-/** 전망 발행본. payload = {outlook, summary_card, detail, factors, conclusion, publication}. */
+/** 전망 발행본. payload 는 outlook·summary_card·detail·factors·conclusion·publication 원문 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

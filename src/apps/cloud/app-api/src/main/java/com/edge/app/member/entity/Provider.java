@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
-// DB·API 값은 소문자(email | apple | google). value() 로 오가고 name() 은 쓰지 않는다.
+// 가입 경로. DB·와이어 값은 소문자
 public enum Provider {
     EMAIL, APPLE, GOOGLE;
 

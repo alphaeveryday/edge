@@ -13,7 +13,7 @@ public record IssueDetailResponse(String id, String title, String body, List<Str
     public record Effect(String theme, Dir dir, String body) {
     }
 
-    // 계약 EtfSummary + prev
+    // 계약 EtfSummary 에 prev 추가
     public record Affected(String code, String name, String theme, double price, double changePct, Signal signal,
             boolean hot, String sub, Signal prev) {
     }

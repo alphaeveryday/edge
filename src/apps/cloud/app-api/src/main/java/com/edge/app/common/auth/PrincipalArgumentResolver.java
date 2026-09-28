@@ -10,8 +10,8 @@ import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
 /**
- * 인자 타입이 요구 수준이다. MemberPrincipal 은 회원만, AppPrincipal 은 회원 또는 게스트. 없으면 COMMON401.
- * {@code @Nullable AppPrincipal} 은 익명도 통과시키고 null 을 준다(공개 조회가 요청자 기준 필드를 채울 때).
+ * 인자 타입이 인증 요구 수준. MemberPrincipal 은 회원 한정, AppPrincipal 은 회원 또는 게스트, 부재는 COMMON401.
+ * Nullable AppPrincipal 은 익명 통과와 null 주입.
  */
 public class PrincipalArgumentResolver implements HandlerMethodArgumentResolver {
     @Override

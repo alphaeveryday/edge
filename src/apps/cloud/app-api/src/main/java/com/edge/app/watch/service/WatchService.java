@@ -31,7 +31,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 기본 그룹은 첫 접근 때 만든다. 사용자 그룹 10개 상한·기본 그룹 삭제 불가는 PRD 정책. */
+/** 관심 그룹 관리. 기본 그룹은 첫 접근 생성, 사용자 그룹 10개 상한, 기본 그룹 삭제 불가 */
 @Service
 @RequiredArgsConstructor
 public class WatchService {
@@ -65,7 +65,7 @@ public class WatchService {
         return new WatchGroupResponse(group.getKey(), group.getLabel(), 0);
     }
 
-    // 그룹에 있던 종목은 기본 그룹에 유지한다(PRD). 없는 그룹은 이미 지워진 것으로 본다.
+    // 삭제 그룹의 종목은 기본 그룹 유지, 없는 그룹은 no-op
     @Transactional
     public void deleteGroup(AppPrincipal principal, String key) {
         long principalId = principalRepository.resolve(principal);
@@ -113,7 +113,7 @@ public class WatchService {
         }
     }
 
-    // principal 해소가 upsert 라 readOnly 가 아니다.
+    // principal 해소 upsert 때문에 readOnly 미적용
     @Transactional
     public List<String> membership(AppPrincipal principal, String code) {
         return itemRepository.groupKeysOf(principalRepository.resolve(principal), code);
@@ -136,7 +136,7 @@ public class WatchService {
         }
     }
 
-    /** 기본 그룹에 종목을 더한다(이미 있으면 그대로). 온보딩 완료가 이벤트로 부른다. */
+    /** 기본 그룹 종목 추가. 멱등, 온보딩 완료 이벤트가 호출 */
     @Transactional
     public void addToBase(long principalId, List<String> codes) {
         requireEtfs(codes);
@@ -166,7 +166,7 @@ public class WatchService {
         }
         Map<String, EtfSummaryResponse> byCode = etfRepository.summaries(codes).stream()
                 .map(EtfSummaryResponse::from).collect(Collectors.toMap(EtfSummaryResponse::code, Function.identity()));
-        // 동기화에서 빠진 코드(상장폐지 등)는 숨긴다. 순서는 관심 순서.
+        // 동기화에 없는 코드 숨김, 관심 순서 유지
         return codes.stream().map(byCode::get).filter(Objects::nonNull).toList();
     }
 

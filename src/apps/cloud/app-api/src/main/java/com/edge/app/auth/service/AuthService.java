@@ -34,8 +34,8 @@ import java.util.Base64;
 import java.util.HexFormat;
 
 /**
- * 가입·로그인은 member 행을 여기서 만든다(가입은 auth 의 쓰기). 그 뒤 회원 상태 변경은 MemberService.
- * 리프레시 토큰은 불투명 난수, DB 에는 sha-256 만. 재발급마다 회전한다.
+ * 가입·로그인의 member 행 생성. 이후 회원 상태 변경은 MemberService 소유.
+ * 리프레시 토큰은 불투명 난수, DB 저장은 sha-256 해시, 재발급마다 회전.
  */
 @Service
 @RequiredArgsConstructor
@@ -77,7 +77,7 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 동시 가입은 선검사를 같이 통과하므로 uq_member_email 위반도 MEMBER4002 이다.
+    // 동시 가입의 유니크 위반도 MEMBER4002 로 응답
     @Transactional
     public AuthResponse signup(SignupRequest request, String deviceKey) {
         if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isPresent()) {
@@ -93,7 +93,7 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 발송 수단이 아직 없다. 계정 존재만 확인하고 계약의 코드로 답한다.
+    // 발송 수단 부재. 계정 존재 확인만
     @Transactional(readOnly = true)
     public void requestPasswordReset(PasswordResetRequest request) {
         if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isEmpty()) {
@@ -101,7 +101,7 @@ public class AuthService {
         }
     }
 
-    // 요청에 디바이스가 없어 기기 단위로 고를 수 없다. 회원의 리프레시 전부 폐기.
+    // 요청에 디바이스 정보가 없어 회원 리프레시 전부 폐기
     @Transactional
     public void logout(AppPrincipal principal) {
         if (principal.isMember()) {
@@ -122,7 +122,7 @@ public class AuthService {
                 MeResponse.from(member), false);
     }
 
-    // PRD 게스트 데이터 정책: 계정에 관심 데이터가 없으면 디바이스의 것을 계정으로 옮긴다. 디바이스는 회원에 연결.
+    // 게스트 데이터 정책. 계정에 관심 데이터가 없으면 디바이스 소유 행 이전, 디바이스는 회원에 연결
     private AuthResponse signIn(Member member, String deviceKey) {
         long memberPrincipal = principalRepository.upsertMember(member.getId());
         Long deviceId = null;

@@ -10,10 +10,7 @@ import java.util.Collection;
 import java.util.List;
 
 public interface IssueRepository extends JpaRepository<Issue, String> {
-    /**
-     * 순위 키셋(as_of DESC, rank ASC). byCodes 면 issue_etf 에 codes 중 하나가 있는 이슈(관심 기준).
-     * 첫 페이지의 asOf·rank 는 서비스가 sentinel 을 준다. codes 는 비면 안 된다(서비스가 먼저 거른다).
-     */
+    /** 순위 키셋 조회. byCodes 면 관심 코드 태그 이슈, 첫 페이지는 sentinel, codes 는 비면 안 됨 */
     @Query(value = """
             select i.* from issue i
             where (i.as_of < :asOf or (i.as_of = :asOf and i.rank > :rank))
