@@ -5,6 +5,7 @@ import com.edge.app.common.cursor.Cursor;
 import com.edge.app.common.cursor.PageResponse;
 import com.edge.app.issue.dto.IssueDetailResponse;
 import com.edge.app.issue.dto.IssueRowResponse;
+import com.edge.app.issue.entity.IssueTab;
 import com.edge.app.issue.service.IssueService;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.constraints.Max;
@@ -23,7 +24,7 @@ public class IssueController {
     private final IssueService issueService;
 
     @GetMapping
-    public ApiResponse<PageResponse<IssueRowResponse>> issueList(AppPrincipal principal, @RequestParam String tab,
+    public ApiResponse<PageResponse<IssueRowResponse>> issueList(AppPrincipal principal, @RequestParam IssueTab tab,
             @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.onSuccess(issueService.list(principal, tab, cursor == null ? null : Cursor.decode(cursor), size));
     }
