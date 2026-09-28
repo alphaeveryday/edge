@@ -106,7 +106,8 @@ def _instrument(step: str, run_id: str | None, fault: dict) -> None:
         def counted(*a, **k):
             # 시작을 먼저 남긴다 — 업무 도중 죽으면(강제 종료·OOM·예외) 끝 기록이 없어도 "시작했다"는 남는다.
             # 판정은 business_starts 로 한다("업무 실행 0" = 시작 기록 0). business_runs 는 끝까지 간 것만.
-            _record("business_starts", {"step": step, "run_id": run_id})
+            # 장애 주입(exit)은 업무 함수를 부르지 않는다 — 실제 실행과 섞이지 않게 표시한다.
+            _record("business_starts", {"step": step, "run_id": run_id, "injected_exit": fault.get("exit")})
             code = None
             try:
                 if "sleep_in_step" in fault:

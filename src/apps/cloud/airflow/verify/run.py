@@ -140,9 +140,10 @@ def _api(method: str, path: str, body: dict | None = None) -> dict:
 def trigger(args) -> int:
     # 검증 DAG 는 pause 로 생성된다(dags_are_paused_at_creation). 일정이 없으니 풀어도 수동 run 만 돈다.
     _api("PATCH", f"/api/v2/dags/{DAG}", {"is_paused": False})
+    slot = _slot(args.slot)             # 한 번만 — 자정을 넘기면 logical_date 와 run_id 의 날짜가 갈린다
     run = _api("POST", f"/api/v2/dags/{DAG}/dagRuns",
-               {"logical_date": _slot(args.slot).isoformat(), "conf": json.loads(args.conf)})
-    print(json.dumps({"dag_run_id": run["dag_run_id"], "pipeline_run_id": _run_id(_slot(args.slot))}))
+               {"logical_date": slot.isoformat(), "conf": json.loads(args.conf)})
+    print(json.dumps({"dag_run_id": run["dag_run_id"], "pipeline_run_id": _run_id(slot)}))
     return 0
 
 
@@ -175,17 +176,22 @@ def evidence(args) -> int:
         "ecs_tasks": [{"arn": t["taskArn"].rsplit("/", 1)[1], "cmd": t["overrides"]["containerOverrides"][0]["command"][0],
                        "started_by": t.get("startedBy"), "status": t["lastStatus"], "stop": t.get("stopCode"),
                        "exit": t["containers"][0].get("exitCode")} for t in sorted(mine, key=lambda t: t["createdAt"])],
+        # 실제 업무 호출만 센다. 주입한 exit 는 따로(업무 함수를 부르지 않았다).
         "business_starts": [(r["step"], (r.get("ecs_task_arn") or "").rsplit("/", 1)[-1])
-                            for r in state["business_starts"]],
+                            for r in state["business_starts"] if r.get("injected_exit") is None],
+        "injected_exits": [(r["step"], r["injected_exit"], (r.get("ecs_task_arn") or "").rsplit("/", 1)[-1])
+                           for r in state["business_starts"] if r.get("injected_exit") is not None],
         "business_runs": [(r["step"], r["exit"], (r.get("ecs_task_arn") or "").rsplit("/", 1)[-1])
                           for r in state["business_runs"]],
         "partition_writes": len(state["partition_writes"]),
         "external_calls_replayed": len(state["external_calls"]),
     }, ensure_ascii=False, indent=1))
-    _, text = _one_off(f"{PREFIX}-verify-ops", ["verify-ledger"])
-    for line in text.splitlines():
-        if line.startswith("VERIFY_LEDGER "):
-            print(json.dumps(json.loads(line.removeprefix("VERIFY_LEDGER ")), ensure_ascii=False, indent=1))
+    code, text = _one_off(f"{PREFIX}-verify-ops", ["verify-ledger"])
+    lines = [line for line in text.splitlines() if line.startswith("VERIFY_LEDGER ")]
+    if code != 0 or not lines:
+        print(f"원장 조회 실패(exit={code}) — 네 가지 대조 중 원장이 없다", file=sys.stderr)
+        return 1
+    print(json.dumps(json.loads(lines[-1].removeprefix("VERIFY_LEDGER ")), ensure_ascii=False, indent=1))
     return 0
 
 
