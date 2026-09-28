@@ -649,7 +649,57 @@ locals {
               "task_arn.$"  = "$.ecs.TaskArn"
             }
           }
+          # ⚠️ ECS runTask.sync 는 비0 종료를 Task 실패(States.TaskFailed)로 올린다 — 비0 종료는
+          # 위 CheckExitCode→Failed 가 아니라 여기로 온다. exit_code 를 안 실으면 "exit 2 는 부분
+          # 성공이라 계속" 조건(normalize_*·feature_*_continue_check)이 영영 거짓이 되어 적재가
+          # 통째로 빠진다(ALPHA-1113, 09-01~09-28 계속 경로 진입 0건). cause 는 ECS 태스크 JSON
+          # 이라 ExitCode·TaskArn 을 풀어 싣는다. 그 밖의 오류(타임아웃·RunTask API 예외·ExitCode
+          # 없는 시작 실패)는 exit_code 없이 기존 출력 그대로 — 계속 조건이 거짓이라 fail-closed.
+          # Pass 는 Catch 가 없어 StringToJson 이 비-JSON cause 에 터지면 브랜치째 죽는다(raw 페이즈는
+          # 실패 브랜치를 partial 로 넘기는데 그게 Parallel 실패로 바뀐다) — JSON 모양일 때만 푼다.
           "${job.state}TaskFailed" = {
+            Type = "Choice"
+            Choices = [{
+              And = [
+                { Variable = "$.error.Error", StringEquals = "States.TaskFailed" },
+                # 없는 경로를 StringMatches 로 참조하면 Choice 가 States.Runtime 으로 죽는다(test-state 실측).
+                { Variable = "$.error.Cause", IsPresent = true },
+                { Variable = "$.error.Cause", StringMatches = "{*" },
+              ]
+              Next = "${job.state}ParseFailedTask"
+            }]
+            Default = "${job.state}TaskFailedNoExitCode"
+          }
+          "${job.state}ParseFailedTask" = {
+            Type       = "Pass"
+            Parameters = { "cause.$" = "States.StringToJson($.error.Cause)" }
+            ResultPath = "$.failed_task"
+            Next       = "${job.state}HasExitCode"
+          }
+          "${job.state}HasExitCode" = {
+            Type = "Choice"
+            Choices = [{
+              And = [
+                { Variable = "$.failed_task.cause.Containers[0].ExitCode", IsPresent = true },
+                { Variable = "$.failed_task.cause.TaskArn", IsPresent = true },
+              ]
+              Next = "${job.state}TaskFailedWithExitCode"
+            }]
+            Default = "${job.state}TaskFailedNoExitCode"
+          }
+          "${job.state}TaskFailedWithExitCode" = {
+            Type = "Pass"
+            End  = true
+            Parameters = {
+              job           = job.state
+              status        = "failed"
+              cause         = "${job.state} container exited non-zero"
+              "exit_code.$" = "$.failed_task.cause.Containers[0].ExitCode"
+              "task_arn.$"  = "$.failed_task.cause.TaskArn"
+              "error.$"     = "$.error"
+            }
+          }
+          "${job.state}TaskFailedNoExitCode" = {
             Type = "Pass"
             End  = true
             Parameters = {

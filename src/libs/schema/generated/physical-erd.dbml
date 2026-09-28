@@ -839,6 +839,9 @@ Table "ops_pipeline_run" {
   "orchestration_status" text
   "created_at" timestamptz [not null]
   "updated_at" timestamptz [not null]
+  "orchestrator" text [not null]
+  "orchestrator_run_ref" text
+  "orchestration_reported_at" timestamptz
 }
 
 Table "ops_reconciliation_issue" {
@@ -876,6 +879,7 @@ Table "ops_task_attempt" {
   "entity_resolution_arguments_total" bigint
   "entity_resolution_arguments_resolved" bigint
   "quality_diagnostics" jsonb
+  "orchestrator_attempt_ref" text
 }
 
 Table "price_daily" {
