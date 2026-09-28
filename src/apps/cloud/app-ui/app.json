@@ -9,7 +9,10 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.alphaeveryday.etforca"
+      "bundleIdentifier": "com.alphaeveryday.etforca",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.alphaeveryday.etforca",
@@ -40,6 +43,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "073e6dd5-2d8e-4f8b-8d27-e6cc032b75ef"
+      }
+    },
+    "owner": "choyounseo"
   }
 }
