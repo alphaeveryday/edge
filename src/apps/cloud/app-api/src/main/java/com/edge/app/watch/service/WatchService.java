@@ -2,7 +2,7 @@ package com.edge.app.watch.service;
 
 import com.edge.app.common.auth.AppPrincipal;
 import com.edge.app.etf.dto.EtfSummaryResponse;
-import com.edge.app.etf.service.EtfService;
+import com.edge.app.etf.service.EtfExamples;
 import com.edge.app.watch.dto.WatchGroupCreateRequest;
 import com.edge.app.watch.dto.WatchGroupResponse;
 import com.edge.app.watch.dto.WatchMembersRequest;
@@ -14,10 +14,8 @@ import java.util.List;
 /** 스텁. */
 @Service
 public class WatchService {
-    public static final WatchGroupResponse BASE = new WatchGroupResponse("base", "label", 1);
-
     public List<WatchGroupResponse> groups(AppPrincipal principal) {
-        return List.of(BASE);
+        return List.of(WatchExamples.base());
     }
 
     public WatchGroupResponse createGroup(AppPrincipal principal, WatchGroupCreateRequest request) {
@@ -28,14 +26,14 @@ public class WatchService {
     }
 
     public List<EtfSummaryResponse> list(AppPrincipal principal, String group) {
-        return List.of(EtfService.SUMMARY);
+        return List.of(EtfExamples.summary());
     }
 
     public void setMembers(AppPrincipal principal, String group, WatchMembersRequest request) {
     }
 
     public List<String> membership(AppPrincipal principal, String code) {
-        return List.of(BASE.key());
+        return List.of(WatchExamples.base().key());
     }
 
     public void setMembership(AppPrincipal principal, String code, WatchMembershipRequest request) {

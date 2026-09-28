@@ -1,6 +1,5 @@
 package com.edge.app.explore.service;
 
-import com.edge.app.etf.service.EtfService;
 import com.edge.app.explore.dto.RankRowResponse;
 import org.springframework.stereotype.Service;
 
@@ -10,6 +9,6 @@ import java.util.List;
 @Service
 public class ExploreService {
     public List<RankRowResponse> rank() {
-        return List.of(new RankRowResponse(EtfService.SUMMARY, 1, "title", List.of("chip"), false));
+        return List.of(ExploreExamples.rankRow());
     }
 }

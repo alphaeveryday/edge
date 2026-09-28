@@ -5,20 +5,15 @@ import com.edge.app.common.cursor.Cursor;
 import com.edge.app.common.cursor.PageResponse;
 import com.edge.app.notification.dto.NotificationResponse;
 import com.edge.app.notification.dto.UnreadCountResponse;
-import com.edge.app.notification.entity.NotiKind;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.List;
 
 /** 스텁. */
 @Service
 public class NotificationService {
-    private static final Instant AT = Instant.parse("2026-01-01T00:00:00Z");
-
     public PageResponse<NotificationResponse> list(AppPrincipal principal, String kind, Cursor cursor, int size) {
-        return new PageResponse<>(List.of(
-                new NotificationResponse("id", NotiKind.WATCH, "000000", "postId", AT, "title", "body", false)), null);
+        return new PageResponse<>(List.of(NotificationExamples.notification()), null);
     }
 
     public UnreadCountResponse unread(AppPrincipal principal) {
