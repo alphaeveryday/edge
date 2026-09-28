@@ -5,6 +5,7 @@ import com.edge.app.etf.dto.ChartResponse;
 import com.edge.app.etf.dto.EtfDetailResponse;
 import com.edge.app.etf.dto.EtfSummaryResponse;
 import com.edge.app.etf.dto.MoveResponse;
+import com.edge.app.etf.entity.ChartRange;
 import com.edge.app.etf.service.EtfService;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -34,7 +35,7 @@ public class EtfController {
 
     @GetMapping("/{code}/chart")
     public ApiResponse<ChartResponse> etfChart(@PathVariable String code, AppPrincipal principal,
-            @RequestParam(defaultValue = "1M") String range) {
+            @RequestParam(defaultValue = "1M") ChartRange range) {
         return ApiResponse.onSuccess(etfService.chart(code, range));
     }
 
