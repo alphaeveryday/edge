@@ -30,6 +30,9 @@ def client_for(message):
             assert options.permission_mode == 'dontAsk'
             assert options.env['DISABLE_AUTO_COMPACT'] == '0'
             assert options.strict_mcp_config
+            # The same agent must have thinking enabled for evidence review.
+            assert options.thinking == {'type': 'enabled', 'budget_tokens': 8192}
+            assert options.effort == 'high'
         async def __aenter__(self):
             return self
         async def __aexit__(self, *args):
