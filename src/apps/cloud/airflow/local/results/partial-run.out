@@ -1,0 +1,15 @@
+{"t": 1790454356.4, "event": "today", "day": "2026-09-22"}
+{"t": 1790454365.2, "event": "reset", "tickers": 366}
+{"t": 1790454369.3, "event": "legacy", "slot": "2026-09-22T09:35:00+09:00", "plan_exit": 0, "sfn": "SUCCEEDED", "seconds": 4.0}
+{"t": 1790454372.4, "event": "legacy", "slot": "2026-09-22T10:05:00+09:00", "plan_exit": 0, "sfn": "FAILED", "seconds": 3.0}
+{"t": 1790454372.7, "event": "partial_point_in_time", "path": "legacy", "visible_by_as_of": {"10:30": ["1|333"], "11:30": ["1|333"]}}
+{"t": 1790454376.7, "event": "legacy", "slot": "2026-09-22T11:25:00+09:00", "plan_exit": 0, "sfn": "SUCCEEDED", "seconds": 4.0}
+{"t": 1790454376.8, "event": "partial_after_next_slot", "path": "legacy", "rows": ["1|333|2026-09-22", "00:36:17.012965+00|2026-09-22", "00:36:17.012965+00", "2|354|2026-09-22", "02:26:18.112859+00|2026-09-22", "02:26:18.112859+00", "3|361|2026-09-22", "02:26:18.112859+00|2026-09-22", "02:26:18.112859+00"]}
+{"t": 1790454377.3, "event": "snapshot", "name": "legacy-partial", "db_rows": 1048, "calls": {"invocations": 3, "calls": 1048}}
+{"t": 1790454386.7, "event": "reset", "tickers": 366}
+{"t": 1790454420.2, "event": "airflow", "run_id": "lab__2026-09-22T09:35", "state": "success", "tasks": {"plan": "success", "collect": "success", "normalize": "success", "load": "success", "verdict": "success"}, "seconds": 33.5, "trigger_out": "       |                     | :00                | 00                  |          |                    |                     |          |            |        |"}
+{"t": 1790454452.7, "event": "airflow", "run_id": "lab__2026-09-22T10:05", "state": "failed", "tasks": {"load": "success", "verdict": "failed", "plan": "success", "collect": "success", "normalize": "success"}, "seconds": 32.4, "trigger_out": "       |                     | :00                | 00                  |          |                    |                     |          |            |        |"}
+{"t": 1790454453.0, "event": "partial_point_in_time", "path": "airflow", "visible_by_as_of": {"10:30": ["1|333", "2|354"], "11:30": ["1|333", "2|354"]}}
+{"t": 1790454485.3, "event": "airflow", "run_id": "lab__2026-09-22T11:25", "state": "success", "tasks": {"plan": "success", "collect": "success", "normalize": "success", "load": "success", "verdict": "success"}, "seconds": 32.3, "trigger_out": "       |                     | :00                | 00                  |          |                    |                     |          |            |        |"}
+{"t": 1790454485.5, "event": "partial_after_next_slot", "path": "airflow", "rows": ["1|333|2026-09-22", "00:36:17.012965+00|2026-09-22", "00:36:17.012965+00", "2|354|2026-09-22", "01:06:36.286034+00|2026-09-22", "01:06:36.286034+00", "3|361|2026-09-22", "02:26:18.112859+00|2026-09-22", "02:26:18.112859+00"]}
+{"t": 1790454486.0, "event": "snapshot", "name": "airflow-partial", "db_rows": 1048, "calls": {"invocations": 3, "calls": 1048}}

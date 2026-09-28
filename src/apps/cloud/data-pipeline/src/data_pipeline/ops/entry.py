@@ -6,13 +6,14 @@ Ledger 를 만들지 않고(instrument 는 투명 통과), plan-run·reconcile �
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, time, timedelta, timezone
 
 from ..failures import validated_failure
 from ..lake import Storage, collection_log_prefix, quality_log_prefix
-from . import catalog, planner, reconciler, states, wrapper
+from . import aws, catalog, planner, reconciler, states, wrapper
 from . import contracts
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
@@ -390,8 +391,25 @@ def plan_run_cli(settings) -> int:
         raise SystemExit(
             f"OPS_PIPELINE_TYPE={pipeline_type}: catalog 등록 작업 0개 — 은퇴한 레인은 plan-run 불가"
         )
+    # 실행 주체(Airflow 이관). Airflow 가 부르면 계획만 남기고 SFN 을 시작하지 않는다 — 실행은
+    # 이 plan-run 을 띄운 DAG run 이 한다. 기본값은 기존 스케줄 경로(SFN)라 env 가 없는 배포는 불변.
+    orchestrator = os.environ.get("OPS_ORCHESTRATOR", states.ORCHESTRATOR_SFN)
+    if orchestrator not in states.ORCHESTRATORS:
+        raise SystemExit(f"모르는 OPS_ORCHESTRATOR={orchestrator} — "
+                         f"{'·'.join(sorted(states.ORCHESTRATORS))} 만")
+    orchestrator_run_ref = os.environ.get("OPS_ORCHESTRATOR_RUN_REF") or None
     arn = os.environ.get(arn_env)
-    if not arn:
+    if orchestrator == states.ORCHESTRATOR_AIRFLOW:
+        if orchestrator_run_ref is None:
+            # 원장 run ↔ Airflow run 을 잇는 유일한 키다. 없이 계획하면 두 이력이 끊긴다.
+            raise SystemExit("OPS_ORCHESTRATOR=AIRFLOW 는 OPS_ORCHESTRATOR_RUN_REF(dag_id/run_id) 필수")
+        # 없거나 못 읽으면 `_scheduled_time` 이 지금 시각으로 폴백한다 — Airflow 재시도가 분을
+        # 넘기면 다른 run_key(= 다른 run_id)가 생겨 같은 슬롯이 두 번 실행된다.
+        try:
+            datetime.fromisoformat(os.environ["OPS_SCHEDULED_TIME"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            raise SystemExit("OPS_ORCHESTRATOR=AIRFLOW 는 읽을 수 있는 OPS_SCHEDULED_TIME(ISO 슬롯 시각) 필수")
+    elif not arn:
         # 다른 레인 ARN 으로 폴백하지 않는다 — 기대는 이 레인 것이고 실행은 남의 SFN 이 되어
         # 기대와 실행이 어긋난 런이 원장에 남는다. 시작 전에 죽는 편이 낫다(Rule 12).
         raise SystemExit(f"{arn_env} 없음 — {pipeline_type} 레인 plan-run 은 그 레인 SFN ARN 필수")
@@ -403,14 +421,22 @@ def plan_run_cli(settings) -> int:
         if pipeline_type == catalog.PIPELINE_TYPE
         else None
     )
+    if os.environ.get("OPS_REPROCESS") == "1":
+        # 재처리 요청(Airflow reprocess_slot)은 기존 슬롯만 — 없는 슬롯을 새로 계획하면 수집 없이 빈 입력
+        # 정제·적재가 성공으로 끝나 "재처리했다"가 거짓이 된다.
+        run_key = planner.slot_run_key(_scheduled_time().astimezone(planner.KST), pipeline_type)
+        ready, reason = ledger.reprocess_ready(run_key)
+        if not ready:
+            raise SystemExit(f"재처리 불가({run_key}): {reason}")
     result = planner.plan_run(
         ledger, state_machine_arn=arn, scheduled_time=_scheduled_time(),
         pipeline_type=pipeline_type, universe_provider=universe_provider,
+        orchestrator=orchestrator, orchestrator_run_ref=orchestrator_run_ref,
     )
     logger.info(
-        "plan-run: lane=%s run=%s launch=%s created=%s trading=%s",
+        "plan-run: lane=%s run=%s launch=%s created=%s trading=%s orchestrator=%s",
         pipeline_type, result.pipeline_run_id, result.launch_status, result.created,
-        result.trading_day,
+        result.trading_day, orchestrator,
     )
     # LAUNCHED 만 성공. FAILED/CONFLICT/UNKNOWN 은 비0 으로 드러낸다(fail-loud, Rule 12).
     return 0 if result.launch_status == states.LAUNCH_LAUNCHED else 1
@@ -481,6 +507,25 @@ def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
     return slots
 
 
+def _execution_holds(run_key: str | None) -> dict[str, dict]:
+    """`OPS_EXECUTION_HOLDS` — Airflow DAG report 가 넘기는 보류 스텝 {task_key: {"kind", "reason"}}(JSON).
+    형식이 틀리면 조용히 버리지 않고 실패한다 — 보류가 원장에 안 남으면 재처리가 그 작업을 우회한다."""
+    raw = os.environ.get("OPS_EXECUTION_HOLDS") or ""
+    if not raw:
+        return {}
+    try:
+        holds = json.loads(raw)
+    except ValueError as exc:
+        raise SystemExit(f"OPS_EXECUTION_HOLDS 가 JSON 이 아니다: {exc}") from exc
+    if not run_key or not isinstance(holds, dict) or not all(
+            catalog.get(k) is not None and isinstance(v, dict) and v.get("kind") in (
+                states.HOLD_ECS_STATE_UNKNOWN, states.HOLD_RESULT_UNKNOWN)
+            for k, v in holds.items()):
+        raise SystemExit("OPS_EXECUTION_HOLDS 는 OPS_RUN_KEY 와 함께, {카탈로그 task_key: "
+                         "{kind: ECS_STATE_UNKNOWN|RESULT_UNKNOWN, reason}} 만")
+    return holds
+
+
 def reconcile_cli(settings) -> int:
     """주기 Reconciler. advisory lock 으로 중복 실행 방지. 예정 지난 슬롯만 PLANNER_MISSING."""
     ledger = ledger_from_settings(settings)
@@ -489,10 +534,27 @@ def reconcile_cli(settings) -> int:
     now = _scheduled_time()
     override = os.environ.get("OPS_RUN_KEY")
     cluster_arn = os.environ.get("OPS_CLUSTER_ARN")
+    # Airflow DAG 가 끝나며 자기 run_key 를 지목해 부를 때만 판정을 함께 넘긴다(주기 실행은 없음).
+    reported = os.environ.get("OPS_ORCHESTRATION_STATUS") or None
+    if reported is not None and (not override or reported not in (states.ORCH_SUCCEEDED,
+                                                                    states.ORCH_FAILED)):
+        raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
+    holds = _execution_holds(override)
+    reported_ref = os.environ.get("OPS_REPORT_RUN_REF") or None
+    lifetime = int(os.environ.get("OPS_AIRFLOW_RUN_LIFETIME_SECONDS")
+                   or reconciler.AIRFLOW_RUN_LIFETIME_SECONDS)
     with ledger.advisory_lock(_RECONCILE_LOCK) as acquired:
         if not acquired:
+            if reported is not None or holds:
+                # 보고·보류는 이 호출이 유일한 전달 경로다 — 주기 대조가 락을 쥔 동안 0 으로 끝내면 판정이
+                # 유실되고, 주기 투영은 확정값을 덮지 않아 영영 고쳐지지 않는다. 재시도하게 한다.
+                logger.warning("reconcile: 락 경합 — 보고(%s)를 재시도 대상으로 돌린다", reported)
+                return wrapper.STEP_NOT_RUN_EXIT
             logger.info("reconcile: 다른 인스턴스가 락 보유 — skip")
             return 0
+        if holds:
+            # 대조보다 먼저 — 시도 없는 보류 작업이 MISSED(미실행)로 찍히기 전에 보류로 남긴다.
+            reconciler.record_execution_holds(ledger, run_key=override, holds=holds)
         if override:
             # override 는 특정 런을 reconcile 하려는 수동 지정이라(미래 슬롯일 수 있다) 결측
             # 판정 대상이 아니다(edge-review).
@@ -500,13 +562,13 @@ def reconcile_cli(settings) -> int:
         else:
             due = _due_slots(now.astimezone(planner.KST))
             if not due:
-                logger.info("reconcile: 예정 지난 슬롯 없음 — skip")
-                return 0
+                logger.info("reconcile: 예정 지난 슬롯 없음 — 슬롯 대조 skip")
             # ⚠️ 알려진 사각(ALPHA-565): 주기 reconcile 은 **`_due_slots` 가 만드는 스케줄 슬롯**만
             # 본다. ALPHA-564 로 수동·백필 실행이 자기 슬롯을 갖게 됐는데, 그 키는 `_due_slots` 가
             # 절대 만들지 않으므로 `OPS_RUN_KEY` 로 명시 지정하지 않으면 **영영 대조되지 않는다** —
             # 수동 런이 초기에 죽으면 기대작업이 DUE 로 남은 채 이슈 없이 조용히 통과한다(관대한 쪽).
             # 제대로 된 해소는 "종료되지 않은 런"을 원장에서 훑는 것이고, 그건 새 쿼리라 별건이다.
+            # (Airflow 런은 아래 sweep 이 "끝나지 않은 시도가 남은 런"을 훑는다 — ALPHA-1088.)
             # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다.
             grace_passed = [key for key, grace in due if grace]
             if grace_passed:
@@ -514,6 +576,18 @@ def reconcile_cli(settings) -> int:
             run_keys = [key for key, _ in due]
         for run_key in run_keys:
             summary = reconciler.reconcile_run(
-                ledger, run_key=run_key, cluster_arn=cluster_arn, now=now)
+                ledger, run_key=run_key, cluster_arn=cluster_arn, now=now,
+                reported_status=reported, reported_ref=reported_ref, lifetime_seconds=lifetime)
             logger.info("reconcile: %s", summary)
+        if not override:
+            # DAG 의 report·verdict·callback 이 돌지 못한(시간 초과·worker 사망) Airflow 런의 미확정 실행을 찾는다 —
+            # 슬롯 대조와 별개로 매 주기(휴장일·야간 포함) 돈다. 슬롯 대조 뒤에 둔다(실패가 대조를 막지 않게).
+            swept = reconciler.sweep_airflow_runs(ledger, ecs=aws.ecs_client(), cluster_arn=cluster_arn,
+                                                  now=now, lifetime_seconds=lifetime,
+                                                  skip_run_keys=frozenset(run_keys))
+            logger.info("reconcile: airflow sweep %s", swept)
+            if swept.get("errors"):
+                # 슬롯 대조는 이미 끝났다 — 점검이 원장 밖 실행을 확인하지 못한 것을 성공으로 숨기지 않는다.
+                logger.error("reconcile: airflow sweep 미완료 %s", swept["errors"])
+                return 1
     return 0
