@@ -7,6 +7,8 @@ import com.edge.app.issue.dto.IssueDetailResponse;
 import com.edge.app.issue.dto.IssueRowResponse;
 import com.edge.app.issue.service.IssueService;
 import com.edge.common.apipayload.ApiResponse;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,7 +24,7 @@ public class IssueController {
 
     @GetMapping
     public ApiResponse<PageResponse<IssueRowResponse>> issueList(AppPrincipal principal, @RequestParam String tab,
-            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.onSuccess(issueService.list(principal, tab, cursor == null ? null : Cursor.decode(cursor), size));
     }
 

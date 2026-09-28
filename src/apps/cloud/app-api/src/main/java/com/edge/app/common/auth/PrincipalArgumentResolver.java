@@ -9,7 +9,10 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
-/** 인자 타입이 요구 수준이다. MemberPrincipal 은 회원만, AppPrincipal 은 회원 또는 게스트. 없으면 COMMON401. */
+/**
+ * 인자 타입이 요구 수준이다. MemberPrincipal 은 회원만, AppPrincipal 은 회원 또는 게스트. 없으면 COMMON401.
+ * {@code @Nullable AppPrincipal} 은 익명도 통과시키고 null 을 준다(공개 조회가 요청자 기준 필드를 채울 때).
+ */
 public class PrincipalArgumentResolver implements HandlerMethodArgumentResolver {
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
@@ -32,6 +35,9 @@ public class PrincipalArgumentResolver implements HandlerMethodArgumentResolver 
         }
         String deviceKey = (String) webRequest.getAttribute(AuthFilter.DEVICE_ATTR, RequestAttributes.SCOPE_REQUEST);
         if (deviceKey == null) {
+            if (parameter.isOptional()) {
+                return null;
+            }
             throw new GeneralException(ErrorStatus._UNAUTHORIZED);
         }
         return AppPrincipal.device(deviceKey);

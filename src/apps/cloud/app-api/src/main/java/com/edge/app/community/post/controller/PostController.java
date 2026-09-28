@@ -11,6 +11,8 @@ import com.edge.app.community.post.dto.ReplyResponse;
 import com.edge.app.community.post.service.PostService;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,7 +33,7 @@ public class PostController {
     @GetMapping
     public ApiResponse<PageResponse<PostResponse>> communityFeed(AppPrincipal principal,
             @RequestParam(defaultValue = "all") String scope, @RequestParam(required = false) String code,
-            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.onSuccess(postService.feed(principal, scope, code, cursor == null ? null : Cursor.decode(cursor), size));
     }
 
@@ -53,7 +55,7 @@ public class PostController {
 
     @GetMapping("/{id}/replies")
     public ApiResponse<PageResponse<ReplyResponse>> communityReplies(@PathVariable String id,
-            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.onSuccess(postService.replies(id, cursor == null ? null : Cursor.decode(cursor), size));
     }
 

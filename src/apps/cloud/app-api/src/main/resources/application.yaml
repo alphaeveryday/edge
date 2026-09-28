@@ -6,6 +6,7 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:app}
     password: ${SPRING_DATASOURCE_PASSWORD:app}
   jackson:
+    default-property-inclusion: non_null   # 계약: 선택 필드는 키 생략. nextCursor 만 ALWAYS(PageResponse)
     datatype:
       enum:
         fail-on-numbers-for-enums: true   # {"choice":0} 이 BUY 로 접수되지 않게
