@@ -1150,8 +1150,9 @@ settings.targets.keywords            # ["금리", ...]
 - **파일 경로**: `load_settings(path)` 인자 > `DATA_PIPELINE_CONFIG_FILE` env > 동봉 기본 설정.
   배포 환경(dev/prod)은 보통 env로 외부 설정 파일을 가리켜 동봉 기본값을 대체한다.
 - **명시적 실패**: 필수값 누락·알 수 없는 키·대상 0개·공백 값·파일 없음은 조용한 기본값 대신
-  `ConfigError`로 드러난다(AGENTS Rule 12). 단, `extra="forbid"`는 **TOML 파일 키에만** 적용된다 —
-  `DATA_PIPELINE_*` env의 오타 키는 pydantic-settings 표준 동작상 조용히 무시된다.
+  `ConfigError`로 드러난다(AGENTS Rule 12). 단, 최상위 섹션이 없는 `DATA_PIPELINE_*` env 키(오타 포함)는
+  pydantic-settings 표준 동작상 조용히 무시된다. **있는 섹션 아래의 모르는 키**(예: 이전 이미지에
+  `DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY`)는 `extra="forbid"`로 기동을 거부한다(ALPHA-1087 실측).
 
 ### KIS 공유 호출 예산 (ALPHA-1087, 기본 비활성)
 
@@ -1167,8 +1168,9 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
   그 밖의 키(`BUDGET_ID`·`RTT_MAX_SEC`·`SEND_WINDOW_SEC`·`MAX_WAIT_SEC` 등)는 `CallBudgetConfig` 가
   정본이다. 기본값 25ms·50ms 는 **로컬 실험 설정**이고, 운영 측정으로 확정한 값이 아니다.
 - 분봉 워커 동시 요청 `DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY`(기본 1, 최대 4)는
-  공유 예산이 켜졌을 때만 적용된다. 꺼져 있으면 경고를 남기고 1로 돈다. terraform 은 같은 변수에서
-  `true`→2, `false`→1 을 유도한다.
+  공유 예산이 켜졌을 때만 적용된다. 꺼져 있으면 경고를 남기고 1로 돈다. terraform 은 같은 변수가
+  `true`일 때만 2를 싣고, `false`면 변수를 싣지 않는다(코드 기본 1). 이 필드를 모르는 이전 이미지가
+  기동을 거부하지 않게 하기 위해서다 — 머지 배포에서 terraform-apply 가 이미지 배포보다 먼저 끝날 수 있다.
 - 운영 CLI(DB env 필요):
   ```bash
   python -m data_pipeline.sources.call_budget init kis 15     # 표·클래스 시드(이미 있으면 그대로)
