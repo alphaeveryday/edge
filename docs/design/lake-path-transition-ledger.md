@@ -1,6 +1,6 @@
 # 레이크 경로 현황 대장
 
-상태: 현황 기록 · 2026-09-28. **경로 통합·기존 데이터 이관·소비자 전환은 이번 작업에서 보류한다**(§7 후속).
+상태: 현황 기록 · 2026-09-28 · **레이크 정리는 축소 범위로 완료**(§8). **경로 통합·기존 데이터 이관·소비자 전환은 보류했고 완료가 아니다**(§7 후속).
 관련 결정은 [ADR-0057](../adr/0057-lake-dataset-canonical-consumption-and-retirement.md)(**제안됨** — 승인·구현 아님)이다.
 신규 수집 데이터의 저장 계약은 [ETF 데이터 저장 경로 설계 초안](etf-data-storage-plan.md) §9에 있다.
 이 문서는 기존 데이터셋별 경로·생산자·소비자·확인된 문제의 기록이다. 팀 승인을 뜻하지 않는다.
@@ -230,3 +230,20 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 | 구 경로 폐기 (애드혹 raw·KR 07-29 중복·Glue·스테이징) | writer 0·reader 0(코드와 런타임 모두)·보존 기간·승인 | 경로별 |
 | `sector_index_daily`·`sector_membership` 생산자 | 통일 스펙 §4.1 | 미발번 |
 | DataGuide·draft Iceberg 승격 | 갱신 담당·Dataset Contract | 미발번 |
+
+## 8. 작업 상태 (축소 범위 완료 — 2026-09-28)
+
+| 항목 | 결과 |
+|---|---|
+| [#953](https://github.com/alphaeveryday/edge/pull/953) `collect.intraday` 파티션 덮어쓰기 방지 (ALPHA-1106 일부) | `75c6999d` 머지 16:52:34 KST |
+| [#952](https://github.com/alphaeveryday/edge/pull/952) raw 복사 도구 (ALPHA-1104 일부) | `335c8f87` 머지 16:52:44 KST |
+| [#951](https://github.com/alphaeveryday/edge/pull/951) 이 대장·신규 수집 저장 계약 §9·ADR-0057 (ALPHA-901) | `29ed8678` 머지 16:53:00 KST |
+| [#957](https://github.com/alphaeveryday/edge/pull/957) 기준일 없는 CLI의 낡은 Glue 사용 (ALPHA-1108) | 최종 결과는 PR·ALPHA-1108에 기록 |
+
+- **scan**: 세 PR의 머지 시점에는 gitleaks(전체 히스토리)가 `feature/app-ui-screens`의 커밋 `a8aab422`·`ab9119ac`에서 3건을 탐지해 실패했다.
+  사용자 승인으로 그 실패를 예외로 두고 머지했다(통과로 간주하지 않음).
+  이후 #956(`fa2fcbc8`)이 `.gitleaksignore`에 그 3건을 사유와 함께 추가했고, 그 뒤 `dev`의 gitleaks는 통과한다.
+- **배포**: 머지 시점에 ECS 상주 서비스는 전부 desired 0이었다. 재배포로 수집이 끊기지 않았다.
+- **데이터**: 이 작업이 바꾼 데이터는 §3.1의 표준 raw 추가 복사(3,388개)와 그 기록 로그뿐이다. canonical·뷰·삭제는 없다.
+- ADR-0057은 **제안·적용 보류** 상태다. 문서 머지는 ADR 적용이나 데이터 전환 승인이 아니다.
+
