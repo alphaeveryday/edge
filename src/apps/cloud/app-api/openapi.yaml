@@ -48,7 +48,7 @@ tags:
   - name: explore
     description: 탐색 순위
   - name: analysis
-    description: AI 일간 분석과 요인·지표 페이지. 미생성은 ANALYSIS4041
+    description: AI 일간 분석과 요인·지표 페이지. 미생성은 ANALYSIS4001
   - name: issue
     description: 이슈 목록·상세
   - name: community
@@ -56,7 +56,7 @@ tags:
   - name: notification
     description: 알림 목록·읽음
 
-# 도메인 에러 코드 목록. 형식 {도메인}{HTTP}{일련}. app-api AppErrorStatus enum 과 1:1.
+# 도메인 에러 코드 목록. 형식 {도메인}{4|5}{순번}(4 클라이언트·5 서버 오류, 순번은 도메인 안 단조 증가). HTTP 상태는 http 필드. app-api AppErrorStatus enum 과 1:1.
 # action 은 앱이 해결 가능한 위반에서 이동할 화면. 없으면 message 를 보여주고 끝.
 # 행별 본문을 채우며 추가한다.
 x-error-codes:
@@ -64,20 +64,19 @@ x-error-codes:
   COMMON401: { http: 401, message: 인증이 필요합니다., action: login }
   COMMON403: { http: 403, message: 금지된 요청입니다. }
   COMMON500: { http: 500, message: "서버 에러, 관리자에게 문의 바랍니다." }
-  ETF4040: { http: 404, message: 없는 ETF 입니다. }
-  ANALYSIS4041: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 앱 Pending 화면 분기. 없는 ETF(ETF4040)와 구분
-  THEME4040: { http: 404, message: 없는 테마입니다. }
-  ISSUE4040: { http: 404, message: 없는 이슈입니다. }
-  POST4040: { http: 404, message: 없는 글입니다. }
-  POST4000: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 커뮤니티 정책
-  POST4001: { http: 400, message: 태그는 최대 3개입니다. }
-  WATCH4000: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
-  WATCH4001: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 관심 정책
-  NOTI4000: { http: 400, message: 게스트는 알림 종목을 3개까지 둘 수 있습니다., action: login }   # PRD 알림 정책
-  MEMBER4040: { http: 404, message: 가입되지 않은 이메일입니다. }
-  MEMBER4090: { http: 409, message: 이미 가입된 이메일입니다., action: login }
-  AUTH4010: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
-  VOTE5030: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
+  ETF4001: { http: 404, message: 없는 ETF 입니다. }
+  ANALYSIS4001: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 앱 Pending 화면 분기. 없는 ETF(ETF4001)와 구분
+  THEME4001: { http: 404, message: 없는 테마입니다. }
+  ISSUE4001: { http: 404, message: 없는 이슈입니다. }
+  POST4001: { http: 404, message: 없는 글입니다. }
+  POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 커뮤니티 정책
+  POST4003: { http: 400, message: 태그는 최대 3개입니다. }
+  WATCH4001: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
+  WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 관심 정책
+  MEMBER4001: { http: 404, message: 가입되지 않은 이메일입니다. }
+  MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
+  AUTH4001: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
+  VOTE5001: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
 
 security:
   - bearerAuth: []
@@ -94,7 +93,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/EmailLogin' }
       responses:
         '200': { $ref: '#/components/responses/AuthResult' }
-        '401': { $ref: '#/components/responses/Error' }   # AUTH4010
+        '401': { $ref: '#/components/responses/Error' }   # AUTH4001
   /auth/social:
     post:
       tags: [auth]
@@ -133,7 +132,7 @@ paths:
                 nick: { type: string }
       responses:
         '200': { $ref: '#/components/responses/AuthResult' }
-        '409': { $ref: '#/components/responses/Error' }   # MEMBER4090
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4002
   /auth/password-reset:
     post:
       tags: [auth]
@@ -151,7 +150,7 @@ paths:
                 email: { type: string, format: email }
       responses:
         '200': { $ref: '#/components/responses/Empty' }
-        '404': { $ref: '#/components/responses/Error' }   # MEMBER4040. 계정 존재 노출은 감수(사용자 안내 우선, 2026-09-28 결정)
+        '404': { $ref: '#/components/responses/Error' }   # MEMBER4001. 계정 존재 노출은 감수(사용자 안내 우선, 2026-09-28 결정)
   /auth/logout:
     post:
       tags: [auth]
@@ -299,7 +298,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/EtfSummary' }
-        '404': { $ref: '#/components/responses/Error' }   # ETF4040
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001
   /etfs/{code}/chart:
     get:
       tags: [etf]
@@ -319,13 +318,13 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/ChartData' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
-        '404': { $ref: '#/components/responses/Error' }   # ETF4040
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001
   /etfs/{code}/move:
     get:
       tags: [etf]
       operationId: etfMove
       summary: 왜 움직였을까 (장중 설명)
-      description: 왜 움직였을까 (장중 설명). 발행본이 없거나 summary 가 비어 있으면 ANALYSIS4041(앱은 준비 중 화면).
+      description: 왜 움직였을까 (장중 설명). 발행본이 없거나 summary 가 비어 있으면 ANALYSIS4001(앱은 준비 중 화면).
       parameters: [{ $ref: '#/components/parameters/EtfCode' }]
       responses:
         '200':
@@ -338,7 +337,7 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/MoveInfo' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
-        '404': { $ref: '#/components/responses/Error' }   # ETF4040 | ANALYSIS4041
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001 | ANALYSIS4001
   /etfs/{code}/detail:
     get:
       tags: [etf]
@@ -357,7 +356,7 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/EtfDetailData' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
-        '404': { $ref: '#/components/responses/Error' }   # ETF4040 | ANALYSIS4041
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001 | ANALYSIS4001
 
   # ── watch ────────────────────────────────────────────
   /watch-groups:
@@ -380,7 +379,7 @@ paths:
       tags: [watch]
       operationId: watchCreateGroup
       summary: 관심 그룹 생성
-      description: 사용자 그룹 최대 10개 (PRD 정책, 초과 시 WATCH4001).
+      description: 사용자 그룹 최대 10개 (PRD 정책, 초과 시 WATCH4002).
       requestBody:
         required: true
         content:
@@ -400,7 +399,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/WatchGroup' }
-        '400': { $ref: '#/components/responses/Error' }   # WATCH4001
+        '400': { $ref: '#/components/responses/Error' }   # WATCH4002
   /watch-groups/{group}:
     delete:
       tags: [watch]
@@ -410,7 +409,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
       responses:
         '200': { $ref: '#/components/responses/Empty' }
-        '400': { $ref: '#/components/responses/Error' }   # WATCH4000
+        '400': { $ref: '#/components/responses/Error' }   # WATCH4001
   /watch-groups/{group}/etfs:
     get:
       tags: [watch]
@@ -527,7 +526,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/ThemeSheet' }
-        '404': { $ref: '#/components/responses/Error' }   # THEME4040
+        '404': { $ref: '#/components/responses/Error' }   # THEME4001
   /themes/{key}:
     get:
       tags: [theme]
@@ -545,7 +544,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/ThemeDetail' }
-        '404': { $ref: '#/components/responses/Error' }   # THEME4040 또는 ANALYSIS4041(mock 은 NOT_READY)
+        '404': { $ref: '#/components/responses/Error' }   # THEME4001 또는 ANALYSIS4001(mock 은 NOT_READY)
 
   # ── explore ──────────────────────────────────────────
   /explore/rank:
@@ -587,7 +586,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/DailyAnalysis' }
-        '404': { $ref: '#/components/responses/Error' }   # ETF4040 | ANALYSIS4041
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001 | ANALYSIS4001
   /etfs/{code}/analysis/factors/{axis}:
     get:
       tags: [analysis]
@@ -607,7 +606,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/FactorPage' }
-        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4041
+        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
   /etfs/{code}/analysis/metrics/{axis}:
     get:
       tags: [analysis]
@@ -627,7 +626,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/MetricPage' }
-        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4041
+        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
   # ── issue ────────────────────────────────────────────
   /issues:
     get:
@@ -670,7 +669,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/IssueDetail' }
-        '404': { $ref: '#/components/responses/Error' }   # ISSUE4040
+        '404': { $ref: '#/components/responses/Error' }   # ISSUE4001
 
   # ── community ────────────────────────────────────────
   /posts:
@@ -694,7 +693,7 @@ paths:
       operationId: communityCreate
       summary: 글 작성
       security: [{ bearerAuth: [] }]
-      description: 관심 ETF 에 대해서만 작성 가능(POST4000, 앱은 관심 편집으로 이동), 태그 최대 3개(POST4001).
+      description: 관심 ETF 에 대해서만 작성 가능(POST4002, 앱은 관심 편집으로 이동), 태그 최대 3개(POST4003).
       requestBody:
         required: true
         content:
@@ -707,7 +706,7 @@ paths:
                 tags: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/EtfCode' } }
       responses:
         '200': { $ref: '#/components/responses/Post' }
-        '400': { $ref: '#/components/responses/Error' }   # POST4000 | POST4001
+        '400': { $ref: '#/components/responses/Error' }   # POST4002 | POST4003
   /posts/{id}:
     get:
       tags: [community]
@@ -718,7 +717,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '200': { $ref: '#/components/responses/Post' }
-        '404': { $ref: '#/components/responses/Error' }   # POST4040
+        '404': { $ref: '#/components/responses/Error' }   # POST4001
     delete:
       tags: [community]
       operationId: communityRemove
@@ -789,7 +788,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '200': { $ref: '#/components/responses/Post' }
-        '404': { $ref: '#/components/responses/Error' }   # POST4040
+        '404': { $ref: '#/components/responses/Error' }   # POST4001
     delete:
       tags: [community]
       operationId: communityUnlike
@@ -799,7 +798,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '200': { $ref: '#/components/responses/Post' }
-        '404': { $ref: '#/components/responses/Error' }   # POST4040
+        '404': { $ref: '#/components/responses/Error' }   # POST4001
   /etfs/{code}/vote:
     put:
       tags: [community]
@@ -820,7 +819,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
-        '503': { $ref: '#/components/responses/Error' }   # VOTE5030
+        '503': { $ref: '#/components/responses/Error' }   # VOTE5001
   /etfs/{code}/vote/count:
     get:
       tags: [community]

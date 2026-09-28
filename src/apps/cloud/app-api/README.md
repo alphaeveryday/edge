@@ -58,13 +58,13 @@ com.edge.app
 
 **인증.** 회원 `Authorization: Bearer` 액세스 JWT + DB 저장 리프레시, 게스트 `X-Device-Id`. 둘 다 있으면 토큰 우선. common 의 `AuthFilter` 가 해석하고 리졸버가 인자 타입으로 넘긴다. `MemberPrincipal` 은 회원만, `AppPrincipal` 은 회원 또는 게스트, 익명이면 COMMON401. 필터는 DB 를 보지 않는다.
 
-**에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4040`, `ANALYSIS4041`). 앱은 code 를 번역 없이 그대로 분기한다.
+**에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4001`, `ANALYSIS4001`). 앱은 code 를 번역 없이 그대로 분기한다.
 
 **기존 투표 코드 이동(완료).** 투표 파일은 `community/vote/` 아래 계층 폴더(실험 자산은 `service/writebehind/`·`repository/writebehind/`), 경로는 `PUT /api/v1/etfs/{code}/vote`(응답에 현황 없음)와 `GET /api/v1/etfs/{code}/vote/count`(공개). 투표 응답에 집계를 싣지 않는 이유는 쓰기 경로에 Redis 읽기가 붙으면 장애 실측 조건(요청당 실패 1회)이 달라지기 때문이다. 계약이 현황을 요구하면 계약을 고친다. Redis·ShedLock 설정은 `common/config`. `experiments/` 스크립트는 옛 경로와 `X-User-Id` 그대로라 재실행 전 회원별 토큰 발급 방식으로 고쳐야 한다.
 
 **먼저 만들 수 있는 것(계약과 무관).** common 의 셋: 인증 필터, AppErrorStatus 확장, 커서 유틸. 계약이 확정되면 도메인별 구현을 바로 시작한다.
 
-**구현 순서는 스텁 → 실 구현.** 계약의 operation 전부를 컨트롤러·DTO 로 먼저 만들고 서비스는 고정 예시 데이터를 반환한다. 앱은 그 시점부터 붙는다. 도메인을 구현하면 그 서비스 본문을 교체한다. mock 모드(플래그로 mock·real 병존)는 두지 않는다. 앱 쪽 mock 클라이언트가 이미 13 도메인을 덮고 있어 서버 mock 은 가짜 데이터 두 벌이 되고, 플래그·분기가 영구히 남기 때문이다. 실데이터가 아직 없는 도메인은 스텁이 예시를 주거나 준비 중 코드(`ANALYSIS4041`)를 준다. 남은 스텁은 검색으로 센다.
+**구현 순서는 스텁 → 실 구현.** 계약의 operation 전부를 컨트롤러·DTO 로 먼저 만들고 서비스는 고정 예시 데이터를 반환한다. 앱은 그 시점부터 붙는다. 도메인을 구현하면 그 서비스 본문을 교체한다. mock 모드(플래그로 mock·real 병존)는 두지 않는다. 앱 쪽 mock 클라이언트가 이미 13 도메인을 덮고 있어 서버 mock 은 가짜 데이터 두 벌이 되고, 플래그·분기가 영구히 남기 때문이다. 실데이터가 아직 없는 도메인은 스텁이 예시를 주거나 준비 중 코드(`ANALYSIS4001`)를 준다. 남은 스텁은 검색으로 센다.
 
 **데이터.** 사용자·관심·게시물·투표·알림은 이 모듈이 쓰기 소유. ETF·분석·이슈·테마는 파이프라인 산출물을 앱 DB 로 동기화한 읽기 전용 테이블(방식 미결, ADR-0056 미결 항목). 스키마는 `db/etf-migration` Flyway 가 소유하며 Hibernate 는 `validate` 만 한다.
 
@@ -102,7 +102,7 @@ DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long
 
 `vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다. 단일 인스턴스·Sentinel 전용이다: 인스턴스가 둘이면 flush 가 겹쳐 오래된 배치가 최신 표를 덮을 수 있고(소유권·버전 검사 없음), Cluster 에선 전역 `vote:dirty-etfs` 와 전망별 키가 다른 슬롯이라 다중 키 Lua 가 CROSSSLOT 으로 실패하므로 기동 시 거부한다. dirty 배치 읽기(HSCAN)도 `VOTE_REDIS_READ_FROM=MASTER`(기본) 전제다 — replica 읽기(S5)와 조합하면 지연 replica 의 낡은 dirty 가 최신 DB 표를 덮을 수 있다.
 
-- 쓰기: `WriteBehindVoteService.vote()` 가 `VoteBufferRepository` 의 Lua 한 번으로 count·choices 갱신 + `vote:{code}:dirty` 해시·`vote:dirty-etfs` 집합 마킹을 한다. DB 트랜잭션을 열지 않는다. Redis 실패는 서킷 폴백이 503(`VOTE5030`)으로 즉시 반려한다 — DB 우회는 없다.
+- 쓰기: `WriteBehindVoteService.vote()` 가 `VoteBufferRepository` 의 Lua 한 번으로 count·choices 갱신 + `vote:{code}:dirty` 해시·`vote:dirty-etfs` 집합 마킹을 한다. DB 트랜잭션을 열지 않는다. Redis 실패는 서킷 폴백이 503(`VOTE5001`)으로 즉시 반려한다 — DB 우회는 없다.
 - flush: `VoteFlusher` 가 `vote.flush.interval-ms`(기본 3000, 첫 실행도 한 주기 뒤) 마다 전망별로 `vote.flush.batch-size`(기본 500) 만큼 HSCAN 으로 읽어 `vote` 에 다중행 upsert 하고, 읽었던 choice 와 같은 항목만 dirty 에서 지운다. 한 주기에 전망당 한 배치. 전망 하나의 실패는 다른 전망을 막지 않는다.
 - warm: `VoteWarmer` 가 기동 완료·Lettuce 재연결·`vote.warm.interval`(기본 PT5M) 마다 DB 표를 `HSETNX` 로 병합한다 — Redis 에 없는 사용자만 채우고 살아 있는 표(미flush dirty 포함)는 덮지 않는다. 페일오버로 낡아진 살아 있는 표는 되돌리지 않는다(검산으로 크기만 측정하는 것이 실험 설계).
 - 사라지는 것(db-first 조건부 빈): `VoteReconciler`·`POST /api/v1/admin/votes/reconcile`(404)·`VoteCacheListener`. 조회 `counts()` 는 같은 로직이지만, Redis 폴백의 `source=db` 는 flush 지연분만큼 낡은 값이다.
