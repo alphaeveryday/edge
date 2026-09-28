@@ -188,6 +188,9 @@ def test_other_tickers_bars_do_not_make_this_ticker_ready(tmp_path, monkeypatch)
     assert lk.bars_readiness("2026-09-28").day_ready                  # 시장 단위로는 있다
     r = lk.bars_readiness("2026-09-28", ticker="069500")
     assert not r.day_ready and "069500" in r.reason()
+    # 심볼 형(`CausalLake.bars` 계약)도 같은 종목으로 본다 — 코드 형만 받으면 smoke 가 늘 보류된다.
+    assert lk.bars_readiness("2026-09-28", ticker="005930.KS").day_ready
+    assert lk.bars_readiness("2026-09-28", ticker="005930").day_ready
     with pytest.raises(SystemExit):
         gate_bars(lk, "2026-09-28", block=True, ticker="069500")
 

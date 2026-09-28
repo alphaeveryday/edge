@@ -908,8 +908,11 @@ class CausalLake:
         since = since or day
         # `ticker` 를 주면 **그 종목의** 봉만 센다 — 한 종목을 설명하는 도구가 남의 봉으로
         # 준비됐다고 판정받지 않게. 비우면 시장 전체(날짜 단위)다.
+        # 심볼 형(`005930.KS` — `CausalLake.bars` 계약)과 코드 형(`005930`)을 둘 다 받는다.
+        # `bars_5m.ticker` 는 두 원천 모두 접미사 없는 코드다.
+        code = ticker.removesuffix(".KS").removesuffix(".KQ")
         vend = f"source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'" + (
-            f" AND ticker = '{ticker}'" if ticker else "")
+            f" AND ticker = '{code}'" if code else "")
         try:
             present = {str(d) for (d,) in self.con.execute(
                 f"SELECT DISTINCT trade_date FROM bars_5m WHERE trade_date BETWEEN "
