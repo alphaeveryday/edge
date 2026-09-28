@@ -89,7 +89,7 @@ server-side copy만 하므로 값 변형이 없다.
 
 | preset | 원천 | 대상·제외 | 목적 (`raw/source=fmp/dataset=price_5min/…`) | 결과 |
 |---|---|---|---|---|
-| kr | `raw/kr_intraday/fmp_5min/` | 1,271 · 1,273(cursor 1,269·log·스크립트·pyc·`kospi200_proxy`) | `market=KR/ingest_date=2026-07-29/run_id=run_8645481c2c1d4451af227c1633f1030d/` | **2026-07-29 기존 실행** · 오늘 재검증 1,271 `already_identical` |
+| kr | `raw/kr_intraday/fmp_5min/` | 1,271 · 1,273(cursor 1,269·log·스크립트·pyc·`kospi200_proxy`) | `market=KR/ingest_date=2026-07-25/run_id=run_282ca79c51eb968199260508cc6cb0b3/` | 복사 1,271 (2026-09-28) |
 | kr-gap | `raw/kr_intraday/fmp_5min_gap/` | 11 · 0 | `market=KR/ingest_date={2026-08-02,08-04}/run_id=run_4282c8a71d6479b2633aab83671785cf/` | 복사 11 |
 | us-gap | `raw/fmp_5min_us_gap/` | 6 · 0 | `market=US/ingest_date=2026-08-02/run_id=run_1ae43d9dfd62c4f2b41818a368f19208/` | 복사 6 |
 | us | `raw/fmp_5min_us/` | 2,100 · 27(cursor 24·log·out·스크립트) | `market=US/ingest_date=2026-07-25/run_id=run_39e89ffcdce8500e9d8507b051751c4e/` | 복사 2,100 (멀티파트 원천 42개는 MD5로 대조) |
@@ -99,8 +99,10 @@ server-side copy만 하므로 값 변형이 없다.
 - 이관 기록: `operations_archive/collection_logs/source=fmp/dataset=price_5min/started_date=2026-09-28/run_id=<run_id>-<시각>/log.json`.
   원천 키·ETag·크기·LastModified·목적 키·목적 ETag·상태가 객체마다 한 줄이다. 버킷 버전 관리가 꺼져 있어
   `src_version_id`는 null이다.
-- ⚠️ KR 기존 복사(07-29)의 `ingest_date`는 **복사일**이다(원천 LastModified는 07-25). 새 도구는 원천 날짜를 쓴다.
-  기존 복사본은 바이트가 같으므로 다시 쓰지 않고 이 차이만 기록한다.
+- ⚠️ 2026-07-29 KR 기존 복사(`ingest_date=2026-07-29/run_id=run_8645481c2c1d4451af227c1633f1030d/`, 1,271개)는
+  `ingest_date`에 **복사일**을 넣었다(원천 LastModified는 07-25). ADR-0057 §1의 수신일 규약에 어긋나므로 위 행대로
+  원천 날짜로 다시 복사했다. 옛 복사본은 바이트가 같은 **중복**이다. reader가 없어 §5 폐기 대상이다
+  (오늘 대조 1,271 `already_identical`).
 - 이관하지 않은 것: 수집 상태 파일(cursor·log·스크립트)과 `kospi200_proxy.parquet`(가격 raw가 아닌 종목 참조)은
   구 프리픽스에 남긴다. `raw/kr_intraday/fmp_1min/`(2,539 · 2.05GB, 1분봉)은 대상 dataset이 정해지지 않아
   **미이관**이다.
@@ -201,6 +203,7 @@ server-side copy만 하므로 값 변형이 없다.
 | `raw/kr_intraday/fmp_5min/`·`raw/fmp_5min_us/` | 없음(레포 밖 수집기 정지) | ALPHA-1104 배포 전까지 `duck.s3_kr_5min`·`s3_us_5min` | 배포 후 reader 0 확인 + 보존 기간 결정 + 승인 |
 | `raw/kr_intraday/fmp_5min_gap/`·`raw/fmp_5min_us_gap/` | `collect/intraday.py:publish_raw` | 레포 밖 `normalize_intraday.py`(주석) | ALPHA-1106 writer 이전 후 |
 | `raw/kr_intraday/fmp_1min/` | 없음 | 없음(레포 참조 0) | dataset 결정 전 보존 |
+| 표준 raw의 KR 07-29 중복 복사 (`…/ingest_date=2026-07-29/run_id=run_8645…/`) | 없음 | 없음(#952 이후) | 승인 후 삭제 — 07-25 복사와 ETag 전건 동일 |
 | Glue `edge_intraday_5m`·스테이징 `local_5m` | 레포 밖(정지) | `duck._bars_iceberg`(기본 1순위) | §3.3 이관 + `bars_5m` canonical 전환 + 13 생성 지점 결과 대조 후 |
 | `analysis/backfill/{fx_usdkrw,us_market}` | `statics/backfill.py`(로컬) | `paneltest`·`sqltool` | ALPHA-1105 생산 + 호환 뷰 전환 후 |
 

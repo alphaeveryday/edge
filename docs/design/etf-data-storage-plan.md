@@ -148,7 +148,7 @@ manifest는 직접 객체 키·해시·행 수·입력 실행·출력 파티션�
 |---|---|---|---|
 | 높음 | `analysis/backfill/{name}.parquet`, `duck.py`의 BACKFILL_SETS | 원천 데이터와 재생성 가능한 가공물을 구분하고 정규 생산·조회로 전환 | `fx_usdkrw`·`us_market`는 기존 FX·지수 canonical과 중복 대조. `sector_index`·`sector_member`는 정규 경로 구축. `layers_daily`는 가능한 축부터 호환 뷰로 대체. 단순 폴더 이동으로 끝내지 않음 |
 | 높음 | `draft/curated/source=dataguide/...`, `duck.py`·`pit.py`·`fin.py`·`flowhist.py`·`dgwide.py` 직접 참조 | 운영 소비가 임시 존에 의존하는 경계를 해소. 공급자 원본·정규 관측·가공 캐시의 역할 및 생산 담당 확정 | 원본 보존 후 검증된 세트만 정제·승격. `pit_daily`·`fin_annual`·`flow_daily`는 대체 자료 확보 전 유지 |
-| 높음 | `raw/kr_intraday/fmp_5min/`, `raw/fmp_5min_us/`, gap 경로, 로컬 5분봉 | 원본 보관은 표준 raw로 수렴, 운영 조회는 기존 5분봉 정본으로 수렴 | KR 복사는 2026-07-29 실행 완료(1,271개 ETag 일치), KR gap·US·US gap은 2026-09-28 이관(전환 대장 §3.1). 원본 복사와 canonical/Glue 정제·적재는 별도. 로컬에만 있는 과거 구간도 이관 대상 |
+| 높음 | `raw/kr_intraday/fmp_5min/`, `raw/fmp_5min_us/`, gap 경로, 로컬 5분봉 | 원본 보관은 표준 raw로 수렴, 운영 조회는 기존 5분봉 정본으로 수렴 | KR·KR gap·US·US gap 모두 2026-09-28 원본 수신일 기준으로 이관(전환 대장 §3.1 — 07-29 KR 복사는 복사일 파티션이라 중복으로 남김). 원본 복사와 canonical/Glue 정제·적재는 별도. 로컬에만 있는 과거 구간도 이관 대상 |
 | 조건부 | `draft/canonical/*` Iceberg | 소스 품질·시점 이력 조건 확인 후 데이터셋별 승격 | Glue DB·테이블 location·메타데이터를 함께 다뤄야 함. S3 prefix 복사만으로 승격하지 않음 |
 | 이동 불필요 | 기존 `canonical/market_data/{price_daily,investor_flow_daily,fx_daily,rates_daily,...}` | 경로 유지. 빠진 경로 빌더·상시 생산·신선도 계약 보강 | 누락 이력 보충·단위 정합성 검증만 수행 |
 | 유지 | 분봉 불변 artifact, operations_archive, RDB 조회용 복제 | 서로 다른 생명주기·감사·서비스 목적의 정상 분리 | 폴더 수를 줄이려고 병합하지 않음 |
