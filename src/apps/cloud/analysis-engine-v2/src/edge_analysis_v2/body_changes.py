@@ -55,6 +55,10 @@ class BodyEditor:
         self.draft = deepcopy(base) if base is not None else {"title": "", "items": []}
         updates = self.draft.get("updates", {})
         self.updates = deepcopy(updates.get("items", [])) if updates.get("date") == self.date else []
+        if updates.get("date") != self.date:
+            for item in self.draft["items"]:
+                for sentence in item["sentences"]:
+                    sentence["is_updated"] = False
         self.mode = "create" if base is None else "update"
 
     def write(self, title: str, items: list) -> dict:
@@ -125,6 +129,7 @@ class BodyEditor:
         if self.base is not None:
             for identity, item in previous.items():
                 if identity not in current:
+                    updates.pop(identity, None)
                     updates[identity] = {"id": identity, "change_type": "deleted", "title_keyword": item["title_keyword"],
                                          "sentence": None, "tool_run_ids": item["tool_run_ids"]}
             for identity, item in current.items():

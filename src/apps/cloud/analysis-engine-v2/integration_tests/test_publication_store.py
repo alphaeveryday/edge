@@ -134,3 +134,33 @@ def test_outlook_changed_topic_and_daily_updates_share_new_analysis(publication)
     result = store.save_outlook(second, features(second), body)
     assert result["detail"]["updates"]["items"][0]["sentence"] == "새 불릿"
     assert store.get_outlook(identity) == first
+
+
+@pytest.mark.parametrize("problem", ["missing", "ineligible", "future"])
+def test_unverifiable_evidence_cannot_publish_a_sentence(publication, problem):
+    store, key, _ = publication
+    if problem == "missing":
+        invalid = response("not-stored")
+        target = key
+    elif problem == "ineligible":
+        store.final_tool_names = frozenset()
+        invalid, target = response(key), key
+    else:
+        target = key + "-earlier"
+        store.begin("movement", target, key, NOW - timedelta(minutes=1))
+        invalid = response(key)
+    with pytest.raises(ValueError, match="Evidence"):
+        store.save_movement(target, invalid)
+    assert store.get_movement(target) is None
+
+
+def test_a_late_older_result_cannot_change_the_newer_stored_publication(publication):
+    store, key, evidence = publication
+    newer = key + "-newer"
+    store.begin("movement", newer, key, NOW + timedelta(minutes=1))
+    evidence(newer)
+    newest = store.save_movement(newer, response(newer))
+    store.save_movement(key, response(key))
+    assert store.get_movement(newer) == newest
+    latest = store.connection.execute("SELECT analysis_id FROM movement_analyses WHERE etf_code=%s AND status='completed' ORDER BY analysis_at DESC LIMIT 1", (key,)).fetchone()[0]
+    assert latest == newer

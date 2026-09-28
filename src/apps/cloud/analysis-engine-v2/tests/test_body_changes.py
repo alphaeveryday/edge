@@ -76,3 +76,19 @@ def test_title_or_text_change_requires_full_evidence():
     editor = BodyEditor(base(), NOW)
     with pytest.raises(ValueError, match="tool_run_ids"):
         editor.apply([{"action": "update", "id": "0", "title_keyword": "new"}])
+
+
+def test_yesterday_highlight_is_not_presented_as_todays_new_information():
+    editor = BodyEditor(base(), NOW)
+    editor.apply([{"action":"update", "id":"0", "sentences":["new"],
+                  "updated_sentence_numbers":[1], "tool_run_ids":["run-2"]}])
+    next_day = BodyEditor(editor.result(), NOW.replace(day=29))
+    assert next_day.result()["items"][0]["sentences"][0]["is_updated"] is False
+
+
+def test_a_restored_topic_deleted_again_is_last_in_deletion_order():
+    editor = BodyEditor(base(2), NOW)
+    editor.apply([{"action":"remove", "id":"0"}, {"action":"remove", "id":"1"}])
+    editor.apply([{"action":"add", **topic("0")}])
+    editor.apply([{"action":"remove", "id":"0"}])
+    assert [i["id"] for i in editor.result()["updates"]["items"]] == ["1", "0"]
