@@ -59,3 +59,13 @@ management:
     web:
       exposure:
         include: health,metrics
+  endpoint:
+    health:
+      # ALB 가 보는 readiness 는 Kubernetes 밖에선 명시적으로 켜야 노출된다.
+      probes:
+        enabled: true
+      group:
+        # DB 를 포함해 RDS 비밀번호 로테이션 뒤 태스크가 교체되게 한다. Redis 는 제외
+        # (기본 /actuator/health 는 Redis 만 내려가도 503 이라 전 태스크가 교체된다).
+        readiness:
+          include: readinessState,db
