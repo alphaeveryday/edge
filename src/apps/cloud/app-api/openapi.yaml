@@ -319,12 +319,13 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/ChartData' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # ETF4040
   /etfs/{code}/move:
     get:
       tags: [etf]
       operationId: etfMove
       summary: 왜 움직였을까 (장중 설명)
-      description: 왜 움직였을까 (장중 설명).
+      description: 왜 움직였을까 (장중 설명). 발행본이 없거나 summary 가 비어 있으면 ANALYSIS4041(앱은 준비 중 화면).
       parameters: [{ $ref: '#/components/parameters/EtfCode' }]
       responses:
         '200':
@@ -337,6 +338,7 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/MoveInfo' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # ETF4040 | ANALYSIS4041
   /etfs/{code}/detail:
     get:
       tags: [etf]
@@ -355,6 +357,7 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/EtfDetailData' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # ETF4040 | ANALYSIS4041
 
   # ── watch ────────────────────────────────────────────
   /watch-groups:
