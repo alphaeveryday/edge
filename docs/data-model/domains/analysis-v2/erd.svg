@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1980 1120"><rect width="100%" height="100%" fill="#ffffff"/>
+<style>text{font-family:Arial,sans-serif;fill:#0f172a}.title{font-size:25px;font-weight:bold}.subtitle{font-size:13px;fill:#64748b}.relation{fill:none;stroke:#64748b;stroke-width:1.5}.cardinality{font-size:12px}</style>
+<text class="title" x="70" y="55">Analysis v2 - outputs and audit</text><text class="subtitle" x="70" y="100">Solid lines: foreign keys. Evidence ID arrays are validated by storage code.</text>
+<g id="table-movement_analyses"><rect class="table" x="70" y="140" width="350" height="300" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="71" y="141" width="348" height="35" fill="#dbeafe"/><text x="82" y="164" font-size="15" font-weight="bold">movement_analyses</text>
+<text x="82" y="198" font-size="12">analysis_id : text</text>
+<text x="82" y="219" font-size="12">etf_code : text</text>
+<text x="82" y="240" font-size="12">analysis_at : timestamptz</text>
+<text x="82" y="261" font-size="12">previous_analysis_id : text</text>
+<text x="82" y="282" font-size="12">status : text</text>
+<text x="82" y="303" font-size="12">published_at : timestamptz</text>
+<text x="82" y="324" font-size="12">error_message : text</text>
+<text x="82" y="345" font-size="12">trading_date : date</text>
+<text x="82" y="366" font-size="12">summary : text</text>
+<text x="82" y="387" font-size="12">selected_item_ids : text[]</text>
+</g>
+<g id="table-movement_items"><rect class="table" x="70" y="590" width="350" height="300" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="71" y="591" width="348" height="35" fill="#dbeafe"/><text x="82" y="614" font-size="15" font-weight="bold">movement_items</text>
+<text x="82" y="648" font-size="12">item_id : text</text>
+<text x="82" y="669" font-size="12">analysis_id : text</text>
+<text x="82" y="690" font-size="12">type : text</text>
+<text x="82" y="711" font-size="12">title_keyword : text</text>
+<text x="82" y="732" font-size="12">sentence : text</text>
+<text x="82" y="753" font-size="12">sentiment : text</text>
+<text x="82" y="774" font-size="12">source_as_of : timestamptz</text>
+<text x="82" y="795" font-size="12">tool_run_ids : text[]</text>
+<text x="82" y="816" font-size="12">created_at : timestamptz</text>
+</g>
+<g id="table-outlook_analyses"><rect class="table" x="1000" y="140" width="410" height="400" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1001" y="141" width="408" height="35" fill="#d1fae5"/><text x="1012" y="164" font-size="15" font-weight="bold">outlook_analyses</text>
+<text x="1012" y="198" font-size="12">analysis_id : text</text>
+<text x="1012" y="219" font-size="12">etf_code : text</text>
+<text x="1012" y="240" font-size="12">analysis_at : timestamptz</text>
+<text x="1012" y="261" font-size="12">previous_analysis_id : text</text>
+<text x="1012" y="282" font-size="12">status : text</text>
+<text x="1012" y="303" font-size="12">published_at : timestamptz</text>
+<text x="1012" y="324" font-size="12">error_message : text</text>
+<text x="1012" y="345" font-size="12">outlook_sticker : text</text>
+<text x="1012" y="366" font-size="12">summary_title : text</text>
+<text x="1012" y="387" font-size="12">summary : text</text>
+<text x="1012" y="408" font-size="12">detail_title : text</text>
+<text x="1012" y="429" font-size="12">detail_mode : text</text>
+<text x="1012" y="450" font-size="12">conclusion_title : text</text>
+<text x="1012" y="471" font-size="12">conclusion_sentence : text</text>
+<text x="1012" y="492" font-size="12">change_condition : text</text>
+</g>
+<g id="table-outlook_items"><rect class="table" x="1000" y="680" width="410" height="330" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1001" y="681" width="408" height="35" fill="#d1fae5"/><text x="1012" y="704" font-size="15" font-weight="bold">outlook_items</text>
+<text x="1012" y="738" font-size="12">row_id : text</text>
+<text x="1012" y="759" font-size="12">analysis_id : text</text>
+<text x="1012" y="780" font-size="12">item_id : text</text>
+<text x="1012" y="801" font-size="12">section : text</text>
+<text x="1012" y="822" font-size="12">change_type : text</text>
+<text x="1012" y="843" font-size="12">position : int</text>
+<text x="1012" y="864" font-size="12">title_keyword : text</text>
+<text x="1012" y="885" font-size="12">bullets : jsonb</text>
+<text x="1012" y="906" font-size="12">sentence : text</text>
+<text x="1012" y="927" font-size="12">source_as_of : timestamptz</text>
+<text x="1012" y="948" font-size="12">tool_run_ids : text[]</text>
+</g>
+<g id="table-outlook_factors"><rect class="table" x="1530" y="140" width="370" height="200" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1531" y="141" width="368" height="35" fill="#d1fae5"/><text x="1542" y="164" font-size="15" font-weight="bold">outlook_factors</text>
+<text x="1542" y="198" font-size="12">row_id : text</text>
+<text x="1542" y="219" font-size="12">analysis_id : text</text>
+<text x="1542" y="240" font-size="12">type : text</text>
+<text x="1542" y="261" font-size="12">sticker : text</text>
+<text x="1542" y="282" font-size="12">sentence : text</text>
+</g>
+<g id="table-outlook_conclusion_keywords"><rect class="table" x="1530" y="510" width="370" height="240" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1531" y="511" width="368" height="35" fill="#d1fae5"/><text x="1542" y="534" font-size="15" font-weight="bold">outlook_conclusion_keywords</text>
+<text x="1542" y="568" font-size="12">row_id : text</text>
+<text x="1542" y="589" font-size="12">analysis_id : text</text>
+<text x="1542" y="610" font-size="12">kind : text</text>
+<text x="1542" y="631" font-size="12">position : int</text>
+<text x="1542" y="652" font-size="12">label : text</text>
+<text x="1542" y="673" font-size="12">tool_run_ids : text[]</text>
+</g>
+<g id="table-tool_definitions"><rect class="table" x="540" y="140" width="350" height="260" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="541" y="141" width="348" height="35" fill="#fef3c7"/><text x="552" y="164" font-size="15" font-weight="bold">tool_definitions</text>
+<text x="552" y="198" font-size="12">tool_id : text</text>
+<text x="552" y="219" font-size="12">function_name : text</text>
+<text x="552" y="240" font-size="12">version : text</text>
+<text x="552" y="261" font-size="12">formula_latex : text</text>
+<text x="552" y="282" font-size="12">description : text</text>
+<text x="552" y="303" font-size="12">source_names : text[]</text>
+</g>
+<g id="table-tool_runs"><rect class="table" x="540" y="660" width="350" height="350" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="541" y="661" width="348" height="35" fill="#fef3c7"/><text x="552" y="684" font-size="15" font-weight="bold">tool_runs</text>
+<text x="552" y="718" font-size="12">tool_run_id : text</text>
+<text x="552" y="739" font-size="12">tool_id : text</text>
+<text x="552" y="760" font-size="12">movement_analysis_id : text</text>
+<text x="552" y="781" font-size="12">outlook_analysis_id : text</text>
+<text x="552" y="802" font-size="12">arguments : jsonb</text>
+<text x="552" y="823" font-size="12">context : jsonb</text>
+<text x="552" y="844" font-size="12">output : jsonb</text>
+<text x="552" y="865" font-size="12">status : text</text>
+<text x="552" y="886" font-size="12">error_message : text</text>
+<text x="552" y="907" font-size="12">started_at : timestamptz</text>
+<text x="552" y="928" font-size="12">finished_at : timestamptz</text>
+</g>
+<path class="relation" d="M 240 590 L 240 440"/>
+<text class="cardinality" x="245" y="582">0..N</text>
+<text class="cardinality" x="245" y="432">1</text>
+<path class="relation" d="M 420 200 L 460 200 L 460 245 L 420 245"/>
+<text class="cardinality" x="425" y="192">0..N</text>
+<text class="cardinality" x="425" y="237">0..1</text>
+<path class="relation" d="M 1210 680 L 1210 540"/>
+<text class="cardinality" x="1215" y="672">0..N</text>
+<text class="cardinality" x="1215" y="532">1</text>
+<path class="relation" d="M 1530 230 L 1410 230"/>
+<text class="cardinality" x="1535" y="222">0..N</text>
+<text class="cardinality" x="1415" y="222">1</text>
+<path class="relation" d="M 1530 570 L 1460 570 L 1460 450 L 1410 450"/>
+<text class="cardinality" x="1535" y="562">0..N</text>
+<text class="cardinality" x="1415" y="442">1</text>
+<path class="relation" d="M 1000 200 L 960 200 L 960 245 L 1000 245"/>
+<text class="cardinality" x="1005" y="192">0..N</text>
+<text class="cardinality" x="1005" y="237">0..1</text>
+<path class="relation" d="M 715 660 L 715 400"/>
+<text class="cardinality" x="720" y="652">0..N</text>
+<text class="cardinality" x="720" y="392">1</text>
+<path class="relation" d="M 540 740 L 490 740 L 490 370 L 420 370"/>
+<text class="cardinality" x="545" y="732">0..N</text>
+<text class="cardinality" x="425" y="362">0..1</text>
+<path class="relation" d="M 890 740 L 930 740 L 930 450 L 1000 450"/>
+<text class="cardinality" x="895" y="732">0..N</text>
+<text class="cardinality" x="1005" y="442">0..1</text>
+</svg>
