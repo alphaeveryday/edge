@@ -5,6 +5,9 @@ locals {
   analysis_engine_image_tag        = "analysis-engine-latest"
   data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
   data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
+  # foundation 이 소유하는 edge/airflow(ALPHA-1119). data 로 조회하지 않는다 — foundation apply 전에도 plan 이 선다.
+  airflow_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/edge/airflow"
+  airflow_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/edge/airflow"
 }
 
 # ── DNS / TLS ───────────────────────────────────────────
@@ -673,6 +676,74 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
   from_port                    = 5432
   to_port                      = 5432
   description                  = "data-pipeline batch tasks to postgres"
+}
+
+# ── Airflow 실행 환경 (ALPHA-1119) ──────────────────────
+# 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README src/apps/cloud/airflow
+# "실행 환경"). 실행 주체 전환은 이 블록이 아니라 data_pipeline 의 investor_intraday_orchestrator 가 한다.
+#
+# 메타DB 는 업무 DB(edge-dev)와 인스턴스를 나눈다 — app_rds 와 같은 이유(폭발 반경). edge-dev 는 메모리 고갈로
+# 죽은 이력(2026-08-10)이 있고 최근 2주 여유 메모리 최저 574MB·CPU 최고 96% 다. Airflow scheduler 는 매초 DB 를
+# 폴링하고 구성요소마다 커넥션 풀을 쥔다. 같은 인스턴스에 두면 그 부하가 업무 레인 전체의 장애 범위에 들어간다.
+# 나눠도 공유하는 것: VPC·data 서브넷, 알람 SNS 토픽. Airflow 메타DB 장애는 Airflow 만 멈춘다(업무 DB 무관).
+# 업무 DB 장애는 여전히 Airflow 런의 원장 스텝을 실패시킨다(원장이 업무 DB 에 있으므로).
+module "airflow_rds" {
+  source     = "../../modules/rds"
+  name       = "${local.prefix}-airflow"
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.data_subnet_ids
+
+  db_name         = "airflow"
+  master_username = "airflow"
+  instance_class  = "db.t4g.micro"
+
+  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
+}
+
+module "airflow" {
+  source = "../../modules/airflow"
+
+  name       = "${local.prefix}-airflow"
+  region     = var.region
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.private_subnet_ids
+
+  # al2023-ami-ecs-hvm-2023.0.20260922-kernel-6.1-arm64 (2026-09-28 recommended). 교체는 README "호스트 교체".
+  ami_id        = "ami-0c15069e7568e5f41"
+  instance_type = "t4g.medium"
+
+  # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
+  image = "${local.airflow_ecr_repository_url}:bootstrap"
+
+  db_host                = module.airflow_rds.address
+  db_port                = module.airflow_rds.port
+  db_name                = module.airflow_rds.db_name
+  db_user                = module.airflow_rds.master_username
+  db_password_secret_arn = module.airflow_rds.master_user_secret_arn
+  db_security_group_id   = module.airflow_rds.security_group_id
+
+  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
+
+  batch_cluster_arn = module.worker_cluster.cluster_arn
+  batch_task_definition_families = [
+    module.data_pipeline.task_definition_families["kis"],
+    module.data_pipeline.task_definition_families["bigkinds"],
+    module.data_pipeline.task_definition_families["rds"],
+    module.data_pipeline.ops_task_definition_family,
+  ]
+  batch_task_definition_prefix = "${local.prefix}-data-pipeline"
+  batch_pass_role_arns         = module.data_pipeline.batch_pass_role_arns
+  batch_security_group_id      = module.data_pipeline.security_group_id
+  batch_log_group_name         = module.data_pipeline.log_group_name
+  batch_log_group_arn          = module.data_pipeline.log_group_arn
+
+  deploy_role_name   = element(split("/", module.gha_deploy_dev.role_arn), 1) # vars.AWS_DEPLOY_ROLE_ARN 의 역할
+  ecr_repository_arn = local.airflow_ecr_repository_arn
+
+  # 격리 검증(KIS·업무 DB·레이크와 무관). 검증이 끝나면 false 로 걷는다(버킷·태스크 정의·역할).
+  verify_enabled = true
+  verify_image   = "${local.airflow_ecr_repository_url}:verify"
+  kr_holidays    = module.data_pipeline.kr_holidays
 }
 
 # analysis-engine 모듈은 ALPHA-408 에서 data-pipeline 의 analyze 페이즈로 흡수돼 삭제됐다.
