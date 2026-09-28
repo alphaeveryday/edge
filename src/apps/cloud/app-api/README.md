@@ -48,9 +48,9 @@ com.edge.app
   explore/ analysis/ issue/ community/ notification/
 ```
 
-각 도메인 안은 `XxxController`, `XxxService`, `XxxRepository`, `dto/` 넷이다. 도메인 안에 기능이 여럿이면 기능 하위 패키지로 묶는다(`community/vote/`, 나중의 `community/post/`). 엔티티는 접미사 없이 이름 그대로(`Post`, `Vote`). 조회 하나짜리 도메인(home·story·explore)은 Repository 없이 Service 가 다른 도메인 Repository 를 읽는다. 도메인이 작으면 파일 셋으로 끝나도 된다.
+각 도메인 안은 계층 폴더 `controller/`·`service/`·`repository/`·`entity/`·`event/`·`dto/` 로 나눈다(없는 계층 폴더는 만들지 않는다). 도메인 안에 기능이 여럿이면 기능 하위 패키지로 먼저 묶고 그 안을 계층 폴더로 나눈다(`community/vote/controller/`, 나중의 `community/post/`). 엔티티는 접미사 없이 이름 그대로(`Post`, `Vote`). 조회 하나짜리 도메인(home·story·explore)은 Repository 없이 Service 가 다른 도메인 Repository 를 읽는다. 도메인이 작으면 파일 셋으로 끝나도 된다.
 
-**계층 두께는 지금 투표 API 그대로.** Controller 는 검증(`@Valid`)·호출·`ApiResponse.onSuccess` 반환만, Service 는 트랜잭션 경계와 규칙, Repository 는 JPA. DTO 는 record, 이름은 `XxxRequest`/`XxxResponse`.
+**계층 두께는 지금 투표 API 그대로.** Controller 는 검증(`@Valid`)·호출·`ApiResponse.onSuccess` 반환만, Service 는 트랜잭션 경계와 규칙, Repository 는 JPA. DTO 는 record, 이름은 `XxxRequest`/`XxxResponse`. 저장소 반환형 record(`VoteCounts`·`VoteReconcileResult` 같은 Redis·Lua 결과)는 `dto/` 가 아니라 `repository/` 에 둔다.
 
 **Service 는 구체 클래스가 기본.** `VoteService` 가 인터페이스인 이유는 db-first·write-behind 구현을 바꿔 끼우기 위해서다. 그 사정이 없는 도메인은 클래스 하나. 미리 두는 인터페이스는 추측성 추상화라 두지 않는다.
 
@@ -60,7 +60,7 @@ com.edge.app
 
 **에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4040`, `ANALYSIS4041`). 앱은 code 를 번역 없이 그대로 분기한다.
 
-**기존 투표 코드 이동(완료).** 투표 파일은 `community/vote/`(실험 자산은 `community/vote/writebehind/`), 경로는 `PUT /api/v1/etfs/{code}/vote`(응답에 현황 없음)와 `GET /api/v1/etfs/{code}/vote/count`(공개). 투표 응답에 집계를 싣지 않는 이유는 쓰기 경로에 Redis 읽기가 붙으면 장애 실측 조건(요청당 실패 1회)이 달라지기 때문이다. 계약이 현황을 요구하면 계약을 고친다. Redis·ShedLock 설정은 `common/config`. `experiments/` 스크립트는 옛 경로와 `X-User-Id` 그대로라 재실행 전 회원별 토큰 발급 방식으로 고쳐야 한다.
+**기존 투표 코드 이동(완료).** 투표 파일은 `community/vote/` 아래 계층 폴더(실험 자산은 `service/writebehind/`·`repository/writebehind/`), 경로는 `PUT /api/v1/etfs/{code}/vote`(응답에 현황 없음)와 `GET /api/v1/etfs/{code}/vote/count`(공개). 투표 응답에 집계를 싣지 않는 이유는 쓰기 경로에 Redis 읽기가 붙으면 장애 실측 조건(요청당 실패 1회)이 달라지기 때문이다. 계약이 현황을 요구하면 계약을 고친다. Redis·ShedLock 설정은 `common/config`. `experiments/` 스크립트는 옛 경로와 `X-User-Id` 그대로라 재실행 전 회원별 토큰 발급 방식으로 고쳐야 한다.
 
 **먼저 만들 수 있는 것(계약과 무관).** common 의 셋: 인증 필터, AppErrorStatus 확장, 커서 유틸. 계약이 확정되면 도메인별 구현을 바로 시작한다.
 

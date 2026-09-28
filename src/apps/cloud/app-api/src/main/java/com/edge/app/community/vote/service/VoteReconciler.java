@@ -1,4 +1,8 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.service;
+
+import com.edge.app.community.vote.entity.Vote;
+import com.edge.app.community.vote.repository.VoteCountRepository;
+import com.edge.app.community.vote.repository.VoteRepository;
 
 import io.lettuce.core.event.connection.ConnectionActivatedEvent;
 import io.lettuce.core.resource.ClientResources;

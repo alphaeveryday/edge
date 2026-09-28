@@ -1,4 +1,6 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.controller;
+
+import com.edge.app.community.vote.service.VoteReconciler;
 
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.apipayload.code.status.ErrorStatus;

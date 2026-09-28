@@ -1,7 +1,9 @@
-package com.edge.app.community.vote.writebehind;
+package com.edge.app.community.vote.service.writebehind;
 
-import com.edge.app.community.vote.Vote;
-import com.edge.app.community.vote.VoteRepository;
+import com.edge.app.community.vote.repository.writebehind.VoteBufferRepository;
+
+import com.edge.app.community.vote.entity.Vote;
+import com.edge.app.community.vote.repository.VoteRepository;
 import io.lettuce.core.event.connection.ConnectionActivatedEvent;
 import io.lettuce.core.resource.ClientResources;
 import io.micrometer.core.instrument.MeterRegistry;

@@ -1,4 +1,4 @@
-package com.edge.app.community.vote.dto;
+package com.edge.app.community.vote.repository;
 
 public record VoteReconcileResult(long buyDelta, long waitDelta, long sellDelta) {
 

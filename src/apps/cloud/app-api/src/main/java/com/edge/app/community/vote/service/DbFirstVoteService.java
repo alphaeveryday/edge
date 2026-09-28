@@ -1,7 +1,13 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.service;
+
+import com.edge.app.community.vote.entity.VoteChoice;
+import com.edge.app.community.vote.event.VoteCacheListener;
+import com.edge.app.community.vote.event.VoteRecorded;
+import com.edge.app.community.vote.repository.VoteCountRepository;
+import com.edge.app.community.vote.repository.VoteRepository;
 
 import com.edge.app.community.vote.dto.VoteCountResponse;
-import com.edge.app.community.vote.dto.VoteCounts;
+import com.edge.app.community.vote.repository.VoteCounts;
 import com.edge.app.common.config.RedisCircuit;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;

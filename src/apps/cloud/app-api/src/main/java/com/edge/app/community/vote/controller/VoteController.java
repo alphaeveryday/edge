@@ -1,4 +1,6 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.controller;
+
+import com.edge.app.community.vote.service.VoteService;
 
 import com.edge.app.common.auth.MemberPrincipal;
 import com.edge.app.community.vote.dto.VoteCountResponse;

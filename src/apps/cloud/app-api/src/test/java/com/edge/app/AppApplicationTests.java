@@ -1,13 +1,13 @@
 package com.edge.app;
 
 import com.edge.app.community.vote.dto.VoteCountResponse;
-import com.edge.app.community.vote.dto.VoteCounts;
-import com.edge.app.community.vote.Vote;
-import com.edge.app.community.vote.VoteChoice;
-import com.edge.app.community.vote.VoteCountRepository;
-import com.edge.app.community.vote.VoteRepository;
+import com.edge.app.community.vote.repository.VoteCounts;
+import com.edge.app.community.vote.entity.Vote;
+import com.edge.app.community.vote.entity.VoteChoice;
+import com.edge.app.community.vote.repository.VoteCountRepository;
+import com.edge.app.community.vote.repository.VoteRepository;
 import com.edge.app.common.auth.AccessTokens;
-import com.edge.app.community.vote.VoteService;
+import com.edge.app.community.vote.service.VoteService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

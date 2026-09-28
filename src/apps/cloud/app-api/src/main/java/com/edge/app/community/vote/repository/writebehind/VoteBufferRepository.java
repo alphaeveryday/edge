@@ -1,7 +1,7 @@
-package com.edge.app.community.vote.writebehind;
+package com.edge.app.community.vote.repository.writebehind;
 
-import com.edge.app.community.vote.Vote;
-import com.edge.app.community.vote.VoteChoice;
+import com.edge.app.community.vote.entity.Vote;
+import com.edge.app.community.vote.entity.VoteChoice;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;

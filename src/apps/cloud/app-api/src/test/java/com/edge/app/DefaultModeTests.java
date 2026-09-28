@@ -1,6 +1,8 @@
 package com.edge.app;
 
-import com.edge.app.community.vote.VoteService;
+import com.edge.app.community.vote.service.DbFirstVoteService;
+
+import com.edge.app.community.vote.service.VoteService;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -1,4 +1,7 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.repository;
+
+import com.edge.app.community.vote.entity.Vote;
+import com.edge.app.community.vote.entity.VoteChoice;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;

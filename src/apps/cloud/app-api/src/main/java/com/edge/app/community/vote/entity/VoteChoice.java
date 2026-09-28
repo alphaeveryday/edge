@@ -1,4 +1,4 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.entity;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;

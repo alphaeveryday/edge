@@ -1,4 +1,6 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.event;
+
+import com.edge.app.community.vote.repository.VoteCountRepository;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

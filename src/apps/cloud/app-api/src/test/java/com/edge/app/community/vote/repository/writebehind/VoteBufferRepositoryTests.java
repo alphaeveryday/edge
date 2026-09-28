@@ -1,8 +1,8 @@
-package com.edge.app.community.vote.writebehind;
+package com.edge.app.community.vote.repository.writebehind;
 
 import com.edge.app.ContainerTests;
-import com.edge.app.community.vote.VoteChoice;
-import com.edge.app.community.vote.VoteCountRepository;
+import com.edge.app.community.vote.entity.VoteChoice;
+import com.edge.app.community.vote.repository.VoteCountRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

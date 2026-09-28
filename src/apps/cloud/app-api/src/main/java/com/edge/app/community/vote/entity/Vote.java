@@ -1,4 +1,4 @@
-package com.edge.app.community.vote;
+package com.edge.app.community.vote.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
