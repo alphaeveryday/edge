@@ -3,7 +3,7 @@ package com.edge.app.service.writebehind;
 import com.edge.app.dto.VoteCountResponse;
 import com.edge.app.dto.VoteCounts;
 import com.edge.app.entity.VoteChoice;
-import com.edge.app.error.AppErrorStatus;
+import com.edge.app.common.AppErrorStatus;
 import com.edge.app.repository.VoteCountRepository;
 import com.edge.app.repository.VoteRepository;
 import com.edge.app.repository.writebehind.VoteBufferRepository;

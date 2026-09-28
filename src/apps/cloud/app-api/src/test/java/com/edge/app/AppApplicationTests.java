@@ -32,7 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "vote.admin-token=test-admin", "vote.reconcile.initial-delay=PT1H"})
+        "vote.admin-token=test-admin", "vote.reconcile.initial-delay=PT1H",
+        "app.jwt.secret=0123456789abcdef0123456789abcdef"})
 class AppApplicationTests {
     @ServiceConnection
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(DockerImageName.parse("postgres:16"));

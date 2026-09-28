@@ -24,6 +24,10 @@ spring:
       connect-timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
       ssl:
         enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache 는 전송 암호화 필수(ADR-0056), 로컬 compose 는 평문
+app:
+  jwt:
+    secret: ${APP_JWT_SECRET}   # 필수, 기본값 없음. HS256 이라 32바이트 이상
+    access-ttl: ${APP_JWT_ACCESS_TTL:PT1H}
 vote:
   redis:
     disconnected-behavior: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:REJECT_COMMANDS}
