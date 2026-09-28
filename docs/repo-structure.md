@@ -18,7 +18,7 @@ src/
 │   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
 │   │   ├── app-api/          # JVM    · B2C 전망 투표 접수·집계 (실험 트랙, 자체 MySQL·Redis)
 │   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
-│   │   ├── airflow/          # Python · 유한 배치의 Airflow DAG(SFN 에서 레인별 이관 중) · 미배포
+│   │   ├── airflow/          # Python · 유한 배치의 Airflow DAG(SFN 에서 레인별 이관 중) · ECS on EC2 이미지·검증 경로(ALPHA-1119)
 │   │   └── analysis-engine/  # Python · 분봉 트리거 큐 상주 소비자 → 분석 결과 DB 저장
 │   └── onprem/               #   edge-onprem (증권사 관리 환경)
 │       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
@@ -68,7 +68,7 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `publication-api` | JVM | **edge-onprem** | MTS 위젯이 직접 호출하는 조회 표면 — **Published만 반환**, 고객 식별 비수취 ([contracts/publication-api.md](contracts/publication-api.md)·[ADR-0053](adr/0053-widget-direct-serving-no-personalization.md)). 온프렘 Published Store(PG) 조회 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 4종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 무효화 단독**(게시본 WITHDRAWN 전이 + `tenant_delivery` INVALIDATION 발번 + `admin_activity_log` 감사) — ALPHA-440·737, session 은 인증 세션 주체 투영 — ALPHA-608) + **콘솔 규칙 엔진의 사실 표면**(`GET /api/v1/console/facts` 하루 사실 + `GET /api/v1/console/trends/entity-resolution`·`intraday-analysis` 최근 일별 사실 — 판정은 클라이언트. 축과 추이 계약은 [계약 문서](contracts/console-facts-api.md)가 정본 — [ADR-0050](adr/0050-console-facts-endpoint.md) — ALPHA-738·1001·1005) |
 | `data-pipeline` | Python | **edge-cloud** | 통합(시장) 파이프라인 SFN의 raw 수집→정제→feature 페이즈 + 뉴스·장중 수급 배치 SFN + 가격·뉴스·공시·iNAV·업종지수 1분 세션 담당. 공시 배치 SFN은 rollback 정의만 유지 |
-| `airflow` | Python(DAG) | **edge-cloud**(미배포) | 유한 배치 실행 관리를 SFN 에서 레인별로 옮기는 DAG·연결 코드. 업무 실행은 data-pipeline 의 기존 ECS 태스크 정의·명령을 그대로 부른다. 첫 레인은 장중 수급(로컬 검증까지, 운영 전환 전) |
+| `airflow` | Python(DAG) | **edge-cloud**(ECS on EC2 `edge-dev-airflow`, 이미지 `edge/airflow` — ALPHA-1119) | 유한 배치 실행 관리를 SFN 에서 레인별로 옮기는 DAG·연결 코드와 배포 이미지·격리 검증 경로. 업무 실행은 data-pipeline 의 기존 ECS 태스크 정의·명령을 그대로 부른다. 첫 레인은 장중 수급 — DAG 는 pause 로 배포, 실행 주체는 여전히 SFN(운영 전환은 별도 승인) |
 | `analysis-engine` | Python | **edge-cloud** | 분봉 트리거 큐를 소비하는 상주 서비스 → 분석 결과를 DB에 저장 (SFN 페이즈 아님 — ALPHA-806) |
 | `app-api` | JVM | **edge-cloud** (`etforca.edgesignal.dev`, 별도 RDS·ElastiCache — [ADR-0056](adr/0056-etforca-app-api-infra.md)) | B2C 앱용 ETF 전망 BUY·HOLD·SELL 투표 접수·집계 API — Redis 장애 격리 실험 트랙(Sentinel failover·Cluster 부분 장애, 모듈 README 가 정본). **자체 MySQL 스키마·Flyway 를 모듈 안에 둔다(`libs/schema` 밖)** — 배포 아티팩트·스키마 SSOT 편입은 ADR 미결(ALPHA-1070·1078) |
 
