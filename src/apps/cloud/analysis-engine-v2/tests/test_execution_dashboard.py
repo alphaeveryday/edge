@@ -1,6 +1,7 @@
 """Keep local agent execution bounded and credentials off the browser surface."""
 
 from threading import Event
+import json
 
 import pytest
 
@@ -57,3 +58,13 @@ def test_job_errors_are_visible_without_secret_leakage(tmp_path):
 def test_unknown_id_never_becomes_a_filesystem_path(tmp_path):
     manager = ExecutionDashboard(tmp_path, key='secret', model='test', connection_factory=lambda:None)
     assert manager.detail('../outside') is None
+
+
+def test_restart_marks_previous_running_job_interrupted_without_reexecuting(tmp_path):
+    identity = 'a'*32
+    folder = tmp_path/identity
+    folder.mkdir()
+    (folder/'job.json').write_text(json.dumps({'analysis_id':identity,'status':'running','started_at':'2026-09-14'}),encoding='utf-8')
+    manager = ExecutionDashboard(tmp_path,key='secret',model='test',connection_factory=lambda:None)
+    assert manager.jobs()[0]['status'] == 'interrupted'
+    assert manager.worker is None

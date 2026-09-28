@@ -105,6 +105,19 @@ def render_job(detail):
     parts = ['<h2>로컬 실행 기록</h2><p class="muted">입력은 목자료입니다. 툴 저장과 모델 호출은 실제 실행입니다.</p>',
              '<pre>'+html.escape(json.dumps(detail['job'],ensure_ascii=False,indent=2))+'</pre>']
     for name, value in detail['artifacts'].items():
+        if name.endswith('.json'):
+            try:
+                value = json.dumps(json.loads(value), ensure_ascii=False, indent=2)
+            except ValueError:
+                pass
+        elif name.endswith('.jsonl'):
+            lines = []
+            for line in value.splitlines():
+                try:
+                    lines.append(json.dumps(json.loads(line), ensure_ascii=False, indent=2))
+                except ValueError:
+                    lines.append(line)
+            value = '\n\n'.join(lines)
         parts.extend(['<h3>'+labels[name]+'</h3>', '<pre>'+html.escape(value)+'</pre>'])
     return ''.join(parts)
 

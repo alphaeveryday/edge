@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from edge_analysis_v2.cloud_review import make_handler, render_evidence
+from edge_analysis_v2.cloud_review import make_handler, render_evidence, render_job
 
 
 @contextmanager
@@ -126,3 +126,12 @@ def test_feature_routes_return_only_the_requested_backend_contract():
     assert code == 200
     assert set(json.loads(body)) == {'summary_card'}
     reader.assert_called_once_with('outlook','example','summary')
+
+
+def test_raw_model_artifacts_are_pretty_and_escaped_without_losing_integer_precision():
+    page = render_job({'job':{},'artifacts':{'input.json':'{"value":9007199254740993,"text":"<script>x</script>"}',
+                                           'events.jsonl':'{"text":"model"}\n{"unfinished"'}})
+    assert '9007199254740993' in page
+    assert '<script>' not in page
+    assert '\n  &quot;value&quot;' in page
+    assert 'unfinished' in page
