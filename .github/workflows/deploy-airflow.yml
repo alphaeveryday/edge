@@ -109,14 +109,15 @@ jobs:
 
           # TF 가 만든 최신 리비전(환경·자원·역할)을 복사해 이미지만 바꾼다. null 필드는 register 가 거부한다.
           register() {
-            aws ecs describe-task-definition --task-definition "$1" --query taskDefinition --output json \
+            local def
+            def="$(aws ecs describe-task-definition --task-definition "$1" --query taskDefinition --output json \
               | jq --arg IMG "${IMAGE}" '
                   .containerDefinitions |= map(.image = $IMG)
                   | {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions,
                      requiresCompatibilities, cpu, memory, runtimePlatform}
-                  | with_entries(select(.value != null))' \
-              | aws ecs register-task-definition --cli-input-json file:///dev/stdin \
-                  --query taskDefinition.taskDefinitionArn --output text
+                  | with_entries(select(.value != null))')"
+            aws ecs register-task-definition --cli-input-json "${def}" \
+              --query taskDefinition.taskDefinitionArn --output text
           }
 
           # 1) 메타DB 마이그레이션 — 서비스와 같은 서브넷·SG 로 Fargate one-off 1회. exit 0 이 아니면 멈춘다.

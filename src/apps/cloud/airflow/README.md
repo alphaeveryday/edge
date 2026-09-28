@@ -391,7 +391,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 | 종료 확인·보류 해제 뒤 정상 복구 | README "보류 해제와 수동 복구" 절차 그대로 | 실제 |
 | EC2 교체 뒤 메타데이터·DAG·로그·추적 복구 | 실행 중 `start-instance-refresh` | 실제 |
 
-판정은 Airflow 상태 표시가 아니라 **네 가지 대조**로 한다: 실제 ECS 태스크 수(`run.py evidence`), 업무 실행 수(`state/business_runs`), 원장 상태(`verify-ledger`), 산출물 쓰기(`state/partition_writes`). `clientToken` 이나 ECS 조회를 쓴다고 해서 정확히 한 번 실행이 보장되지는 않는다. KIS 에는 멱등 키가 없고, 저장소에는 fencing·CAS 가 없다(ALPHA-1057). 검증이 보이는 것은 "이 경로들에서 새 태스크를 띄우지 않았다"까지다.
+판정은 Airflow 상태 표시가 아니라 **네 가지 대조**로 한다: 실제 ECS 태스크 수(`run.py evidence`), 업무 실행 수(`state/business_starts` — 호출 전에 남는다), 원장 상태(`verify-ledger`), 산출물 쓰기(`state/partition_writes`). `clientToken` 이나 ECS 조회를 쓴다고 해서 정확히 한 번 실행이 보장되지는 않는다. KIS 에는 멱등 키가 없고, 저장소에는 fencing·CAS 가 없다(ALPHA-1057). 검증이 보이는 것은 "이 경로들에서 새 태스크를 띄우지 않았다"까지다.
 
 ```bash
 cd src/apps/cloud/airflow

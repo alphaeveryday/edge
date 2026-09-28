@@ -6,7 +6,7 @@
     python verify/run.py evidence --slot 10:05 # ECS 태스크 수·업무 실행 수·원장·산출물 쓰기를 한 번에
 
 성공 기준은 Airflow 상태가 아니라 **네 가지 대조**다: 실제 ECS 태스크 수(검증 클러스터, 이 run 의 --run-id),
-업무 실행 수(shim 의 business_runs — wrapper 가 보류·skip 하면 0), 원장 상태(검증 DB), 산출물 쓰기(partition_writes).
+업무 실행 수(shim 의 business_starts — wrapper 가 보류·skip 하면 0), 원장 상태(검증 DB), 산출물 쓰기(partition_writes).
 운영 자원은 쓰지 않는다: 업무 레이크는 **읽기만**(재생 입력 1개 복사 원본), 쓰기는 검증 버킷·검증 DB·검증 클러스터뿐.
 """
 
@@ -154,20 +154,29 @@ def evidence(args) -> int:
                 for a in page["taskArns"]]
         for i in range(0, len(arns), 100):
             tasks += ecs.describe_tasks(cluster=CLUSTER, tasks=arns[i:i + 100])["tasks"]
-    mine = [t for t in tasks if run_id in (t.get("overrides", {}).get("containerOverrides") or [{}])[0].get(
-        "command", [])]
+    slot = _slot(args.slot)
+    marks = {f"{LANE}:{slot.strftime('%Y-%m-%dT%H:%M')}", slot.isoformat()}   # report 의 OPS_RUN_KEY, plan 의 슬롯
+
+    def ours(t: dict) -> bool:
+        # 업무 스텝은 --run-id 로, plan·report 는 env(OPS_SCHEDULED_TIME·OPS_RUN_KEY)로 이 슬롯을 가리킨다.
+        override = (t.get("overrides", {}).get("containerOverrides") or [{}])[0]
+        env = {e.get("value") for e in override.get("environment") or []}
+        return run_id in (override.get("command") or []) or bool(marks & env)
+    mine = [t for t in tasks if ours(t)]
     bucket = _bucket()
     state = {}
-    for kind in ("invocations", "business_runs", "partition_writes", "external_calls"):
+    for kind in ("invocations", "business_starts", "business_runs", "partition_writes", "external_calls"):
         objs = [o["Key"] for page in s3.get_paginator("list_objects_v2").paginate(
             Bucket=bucket, Prefix=f"state/{kind}/") for o in page.get("Contents", [])]
         records = [json.loads(s3.get_object(Bucket=bucket, Key=k)["Body"].read()) for k in objs]
-        state[kind] = [r for r in records if r.get("run_id") in (run_id, None) or kind == "external_calls"]
+        state[kind] = [r for r in records if r.get("run_id") == run_id]
     print(json.dumps({
         "pipeline_run_id": run_id,
         "ecs_tasks": [{"arn": t["taskArn"].rsplit("/", 1)[1], "cmd": t["overrides"]["containerOverrides"][0]["command"][0],
                        "started_by": t.get("startedBy"), "status": t["lastStatus"], "stop": t.get("stopCode"),
                        "exit": t["containers"][0].get("exitCode")} for t in sorted(mine, key=lambda t: t["createdAt"])],
+        "business_starts": [(r["step"], (r.get("ecs_task_arn") or "").rsplit("/", 1)[-1])
+                            for r in state["business_starts"]],
         "business_runs": [(r["step"], r["exit"], (r.get("ecs_task_arn") or "").rsplit("/", 1)[-1])
                           for r in state["business_runs"]],
         "partition_writes": len(state["partition_writes"]),

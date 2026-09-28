@@ -4,8 +4,9 @@
 바꾸는 것은 셋뿐이다(저장 위치는 모두 검증 버킷 `VERIFY_BUCKET`, 원장은 검증 DB — 태스크 정의가 정한다).
 1. KIS 장중 추정 소스 → 버킷의 저장 응답(`fixtures/investor_estimate.ndjson`) 재생. asof_date 는 오늘(KST)로 바꾼다
    (이 소스는 당일만 수집한다). 외부 호출 없음 — 재생 1회를 `state/external_calls/` 에 센다.
-2. 계수: 스텝 함수가 실제로 불린 횟수(`state/business_runs/` — wrapper 가 보류·skip 하면 0)와 canonical 장중 수급
-   파티션 쓰기(`state/partition_writes/`). exit code 가 아니라 이것으로 "업무가 돌았나"를 판정한다.
+2. 계수: 스텝 함수가 실제로 불린 횟수(`state/business_starts/` — 호출 **전에** 남긴다. wrapper 가 보류·skip 하면 0)와
+   끝난 횟수(`state/business_runs/`, exit 포함), canonical 장중 수급 파티션 쓰기(`state/partition_writes/`). exit code 가
+   아니라 이것으로 "업무가 돌았나"를 판정한다.
 3. 장애(env `VERIFY_FAULT`, 검증 DAG 가 try 별로 넣는다): {"exit": code} 업무 없이 code 로 끝냄(wrapper 는 그대로
    실패 attempt 를 남긴다) · {"sleep_in_step": 초} 실행권을 잡은 뒤 스텝 안에서 대기 후 정상 진행 ·
    {"sleep_before": 초} wrapper 전에 대기.
@@ -103,12 +104,17 @@ def _instrument(step: str, run_id: str | None, fault: dict) -> None:
         inner = module.run
 
         def counted(*a, **k):
-            started = datetime.now(timezone.utc).isoformat()
-            if "sleep_in_step" in fault:
-                time.sleep(fault["sleep_in_step"])
-            code = fault["exit"] if "exit" in fault else inner(*a, **k)
-            _record("business_runs", {"step": step, "run_id": run_id, "start": started, "exit": code})
-            return code
+            # 시작을 먼저 남긴다 — 업무 도중 죽으면(강제 종료·OOM·예외) 끝 기록이 없어도 "시작했다"는 남는다.
+            # 판정은 business_starts 로 한다("업무 실행 0" = 시작 기록 0). business_runs 는 끝까지 간 것만.
+            _record("business_starts", {"step": step, "run_id": run_id})
+            code = None
+            try:
+                if "sleep_in_step" in fault:
+                    time.sleep(fault["sleep_in_step"])
+                code = fault["exit"] if "exit" in fault else inner(*a, **k)
+                return code
+            finally:
+                _record("business_runs", {"step": step, "run_id": run_id, "exit": code})
         module.run = counted
 
     from data_pipeline.lake import storage as lake_storage
