@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태: 첫 레인인 장중 수급(`edge_investor_intraday`)을 **로컬에서 검증했다. 운영 배포와 전환은 아직 하지 않았다.** Airflow 실행 환경(MWAA 또는 자체 운영)도 아직 정하지 않았다.
+현재 상태: 첫 레인인 장중 수급(`edge_investor_intraday`)을 로컬에서 검증했다. 실행 환경은 **ECS on EC2 자체 운영**으로 정했고 Terraform·배포 워크플로·격리 검증 경로를 만들었다(ALPHA-1119, 아래 "실행 환경"). **실제 리소스 생성·배포·실제 AWS 검증·운영 전환은 아직 하지 않았다** — 비용·plan 승인 대기. MWAA 는 조직 SCP 가 거부한다(ALPHA-1086 조사).
 
 ## 구성
 
@@ -11,6 +11,10 @@
 | `dags/edge_batch.py` | 레인 공통 연결 코드. `EdgeStep`(ECS 실행과 exit code 해석), 슬롯과 `pipeline_run_id` 파생 |
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
+| `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
+| `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
+| `deploy/compose.local.yaml` | 배포 이미지의 로컬 리허설(ECS 태스크와 같은 세 컨테이너·localhost 공유, 마이그레이션 선행) |
+| `verify/` | 실제 AWS 격리 검증 — `shim.py`(검증 태스크 진입점: 재생 입력·계수·장애), `Dockerfile`(배포된 업무 이미지 + shim), `run.py`(설정·trigger·증거 수집) |
 | `local/` | 로컬 비교 환경. ECS·SNS·SFN 대역, 배포된 ASL 해석기, 저장 입력 재생 |
 | `requirements.txt` · `requirements-test.txt` | Airflow 3.3.2, amazon provider 9.36.0 · pytest(테스트 전용) |
 
@@ -198,6 +202,205 @@ docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro --entrypoint bash
 - clear는 "재시도·재접속·보류 정책"의 제약을 받는다(앞 시도의 ECS 기록이 조회될 때만 판단 가능).
 - ⚠️ 3.3.2 CLI의 `airflow tasks clear -s/-e`로는 수동 trigger run을 지정하지 못했다. logical date로도, run_after 창으로도 고르지 못했고, 매번 exit 0에 출력 없이 상태가 그대로였다(로컬에서 3회 관찰). 실패한 run을 복구할 때는 REST API `POST /api/v2/dags/{dag_id}/clearTaskInstances`에 `dag_run_id`와 `task_ids`, `include_downstream`을 지정해 호출한다.
 
+## 실행 환경(ECS on EC2, ALPHA-1119)
+
+Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module "airflow_rds"`·`module "airflow"`, `foundation/ecr.tf`(`edge/airflow`). 배포: `.github/workflows/deploy-airflow.yml`.
+
+### 구성과 선택 이유
+
+| 결정 | 선택 | 이유 |
+|---|---|---|
+| 실행 방식 | 일반 ECS on EC2(ASG + Capacity Provider) | ECS Managed Instances 가 아니다(별도 관리 요금). MWAA 는 SCP 거부 |
+| 클러스터 | 전용 `edge-dev-airflow` | worker 클러스터의 capacity provider 목록은 `aws_ecs_cluster_capacity_providers` 가 통째로 소유한다. EC2 용량을 더하면 기존 리소스를 고치게 된다. 클러스터는 무료다 |
+| 호스트 | t4g.medium(arm64, 2 vCPU·4 GiB) 1대, ASG min 1·max 2 | 로컬 실측(아래 표)으로 구성요소 합이 약 1.2 GB. t4g.small(2 GiB)은 헬스체크 CLI 가 겹칠 때 여유가 없다. max 2 는 호스트 교체 때만 쓴다 |
+| AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
+| 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
+| Executor | LocalExecutor, `parallelism=4` | 장중 수급은 직렬이다(`max_active_runs=1`). Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
+| Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
+| 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
+| 메타DB | 별도 RDS `edge-dev-airflow`(db.t4g.micro, PostgreSQL 16, 백업 7일) | 아래 "메타DB" |
+| DAG 배포 | 이미지에 굽는다(`Dockerfile`) | 세 구성요소와 마이그레이션 작업이 한 이미지 태그(커밋)를 쓴다. 서버에 파일을 복사하지 않는다 |
+| UI 접근 | SSM 포트 포워딩만 | ALB·공인 IP 없음. 태스크 SG 는 호스트 SG 에서 온 8080 만 받는다 |
+| 인증 | Airflow 3 기본 SimpleAuthManager, 사용자 `admin` 1명 | 비밀번호는 Secrets Manager. ⚠️ Airflow 문서는 SimpleAuthManager 를 개발·테스트용으로 분류한다. 여기서는 네트워크 경로가 SSM 뿐이고 사용자가 1명이라 받아들였다. 사용자가 늘면 FAB auth manager 로 바꾼다 |
+
+**구성요소별 자원(태스크 정의 상한).** 로컬 리허설(`deploy/compose.local.yaml`, arm64) 실측 뒤 정했다.
+
+| 컨테이너 | 상한 MiB | CPU unit | 실측(유휴) | 실측(task 1개 실행 중) |
+|---|---|---|---|---|
+| api-server(workers 1) | 900 | 512 | 230 MiB | — |
+| scheduler(+LocalExecutor task 프로세스) | 1600 | 1024 | 270 MiB | 최대 464 MiB. task 1개 약 200 MiB → parallelism 4 면 약 1.1 GiB |
+| dag-processor | 600 | 256 | 190 MiB | — |
+| 합(태스크 메모리 3100) | | | 약 690 MiB | |
+
+- 배포 때 추가 용량은 필요 없다. 서비스는 min 0 / max 100 으로 옛 태스크를 멈춘 뒤 새 태스크를 띄운다. scheduler 가 둘 뜨는 순간이 없고, 대가로 1~3분 Airflow 가 멈춘다. 그래서 `deploy-airflow` 는 평일 장중(KST 09:20~15:00)에 명시 허용 없이 배포하지 않는다.
+- 마이그레이션 작업(`airflow db migrate`)은 **Fargate ARM64** one-off 다. 서비스 태스크가 호스트 메모리를 거의 쓰므로 같은 호스트에 자리를 요구하지 않는다.
+
+### 메타DB
+
+- 업무 DB `edge-dev` 와 **인스턴스를 나눴다.** `edge-dev` 는 2026-08-10 메모리 고갈로 하루 다섯 번 죽었다. 최근 2주(09-14~09-27) 여유 메모리는 최저 574 MB, CPU 는 최고 96% 였다(CloudWatch 일 단위). scheduler 는 매초 DB 를 폴링하고 구성요소마다 커넥션 풀을 쥔다(풀 3 + overflow 5). 같은 인스턴스에 두면 그 부하가 업무 레인 전체의 장애 범위에 들어간다. `app_rds` 를 분리한 것과 같은 이유다.
+- 나눠도 공유하는 것: VPC·data 서브넷, 알람 SNS 토픽. 메타DB 장애는 Airflow 만 멈춘다. 반대로 업무 DB 장애는 여전히 Airflow 런의 원장 스텝(plan·report·wrapper)을 실패시킨다. 원장이 업무 DB 에 있기 때문이다.
+- 백업: RDS 자동 백업 7일(PITR). 복구는 PITR 로 새 인스턴스를 만든 뒤 `module "airflow_rds"` 를 그 인스턴스로 바꾸고 `deploy-airflow` 를 다시 돌린다.
+- 메타DB 를 잃으면 사라지는 것: DAG run·task 이력, XCom(보류 사유 포함), pause 상태. **업무 상태의 정본은 원장(업무 DB)이다.** 보류는 `report` 가 원장 `EXECUTION_HOLD` 로 옮기고, 결말 없는 실행은 주기 Reconciler 의 sweep 이 찾는다. 새 메타DB 에서 DAG 는 pause 로 다시 생긴다(`dags_are_paused_at_creation`). 잃은 이력 구간의 보류는 원장으로 판단한다.
+- 비밀번호 로테이션: `modules/rds` 가 토 09:00~12:00 KST 에 돌린다. 연결 문자열은 태스크 기동 때 한 번 만들어진다. 로테이션 뒤에는 새 연결이 실패하고, 헬스체크가 태스크를 교체하며, 새 태스크가 새 비밀번호를 받는다. 장이 없는 시간이다.
+
+### 장애 범위와 호스트 교체
+
+- **호스트 1대가 단일 장애점이다.** 호스트가 죽으면 Airflow 전체(스케줄·task 프로세스)가 멈춘다. 이미 뜬 업무 ECS 태스크(worker 클러스터, Fargate)는 멈추지 않고 끝까지 돈다.
+- 복구 흐름: ASG 가 새 호스트를 띄운다 → ECS 가 서비스 태스크를 배치한다 → scheduler 가 heartbeat 끊긴 task 를 실패로 보고 재시도한다 → `EdgeStep` 이 `startedBy` 로 앞 ECS 태스크를 찾아 재접속하거나, 결말을 모르면 보류한다(위 "재시도·재접속·보류 정책").
+- 멈춘 동안의 슬롯은 돌리지 않는다(`catchup=False`, 소급 수집 불가). 수집 공백으로 남는다. 이 레인의 응답은 그날 누적이라 다음 슬롯이 대부분 회수한다.
+- 계획된 교체(AMI 갱신 등)는 장 마감 뒤에 한다.
+  1. `envs/dev/main.tf` `ami_id` 를 바꿔 머지한다(launch template 만 바뀐다. 도는 호스트는 그대로다).
+  2. 교체를 시작한다. 새 호스트를 먼저 띄우고, managed draining 이 태스크를 옮긴 뒤 옛 호스트를 끈다.
+     ```bash
+     aws autoscaling start-instance-refresh --auto-scaling-group-name edge-dev-airflow-host \
+       --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200}'
+     aws autoscaling describe-instance-refreshes --auto-scaling-group-name edge-dev-airflow-host
+     ```
+  3. 확인: 서비스 태스크 1개 RUNNING·세 컨테이너 HEALTHY, UI 로그인, 과거 run·task 로그가 보이는지.
+
+### 비밀값과 IAM
+
+| 역할 | 권한 |
+|---|---|
+| 호스트(EC2) | ECS 에이전트(`AmazonEC2ContainerServiceforEC2Role`), SSM(`AmazonSSMManagedInstanceCore`). IMDSv2 강제, 태스크는 호스트 IMDS 차단(`ECS_AWSVPC_BLOCK_IMDS`) |
+| execution | 이미지 pull·awslogs, 시크릿 2개 읽기(메타DB RDS 관리형 시크릿, `edge-dev-airflow/app`) |
+| task(Airflow 프로세스) | 업무 태스크 정의 4종(kis·bigkinds·rds·ops)의 `RunTask`(worker 클러스터 한정), `ListTasks`·`DescribeTasks`·`StopTask`(같은 클러스터), `DescribeTaskDefinition`, 업무 역할 3개 `PassRole`(ecs-tasks 한정), 알람 토픽 `Publish`, 업무 컨테이너 로그 읽기, 자기 task 로그 쓰기. 업무 S3·DB 권한 없음. 검증 자원이 켜져 있으면 검증 태스크 정의·검증 클러스터 몫이 더해진다 |
+| 배포(기존 `edge-dev-gha-schema-migrate` 역할에 정책 추가) | `edge/airflow` push, 마이그레이션 태스크 `RunTask`, 서비스 `UpdateService`, Airflow 역할 `PassRole`, 구성요소 로그 읽기 |
+
+- `edge-dev-airflow/app` 시크릿의 값은 Terraform 이 만들지 않는다(state 에 평문을 남기지 않는다). 최초 1회 넣는다(아래 "최초 구축"). 키: `jwt_secret`(구성요소 간 Execution API 토큰 서명), `api_secret_key`, `admin_password`.
+- 메타DB 연결 문자열은 `deploy/entrypoint.sh` 가 만든다. 비밀번호는 URL 인코딩해 파일(`/opt/airflow/sql_alchemy_conn`, 0600)에 쓰고, Airflow 는 `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD` 로 읽는다. env 로 export 하면 entrypoint 를 거치지 않는 ECS 헬스체크(`docker exec`)가 연결을 못 보고 sqlite 로 떨어진다. 로컬 리허설에서 헬스체크가 실제로 그렇게 실패해서 고쳤다.
+
+### 로그·상태 점검·알림
+
+| 무엇 | 어디 | 보존 |
+|---|---|---|
+| 구성요소 stdout(api-server·scheduler·dag-processor·migrate) | CloudWatch `/ecs/edge-dev-airflow` | 30일 |
+| task 로그(Airflow remote logging) | CloudWatch `/airflow/edge-dev-airflow/tasks` — UI 에서 그대로 보인다 | 30일 |
+| 업무 컨테이너 로그 | 기존 `/ecs/edge-dev-data-pipeline`. `EdgeStep` 이 task 로그로 끌어온다 | 14일(기존) |
+| 검증 태스크 로그 | `/ecs/edge-dev-airflow-verify` | 14일 |
+
+- 헬스체크: api-server `curl /api/v2/monitor/health`, scheduler·dag-processor `airflow jobs check --local`(60초 간격, 3회 실패면 ECS 가 태스크를 교체한다).
+- 알림(모두 기존 파이프라인 SNS 토픽):
+  - `edge-dev-airflow-service-down`: 서비스의 ECS CPU 지표가 10분 끊기면 울린다(태스크 없음·교체 실패·호스트 사망).
+  - 메타DB 여유 메모리 알람·RDS 이벤트 구독: `modules/rds` 가 붙인다.
+  - DAG 실패: 운영 DAG 의 `on_failure_callback`(기존).
+- ⚠️ 서비스가 desired 0 인 동안(최초 구축 직후, 첫 배포 전)은 서비스 중단 알람이 울린다. 첫 배포로 풀린다.
+
+### 최초 구축(한 번)
+
+1. `foundation` apply(수동) — `edge/airflow` ECR 저장소.
+2. 이 PR 머지 → `terraform-apply` 가 메타DB·클러스터·호스트·서비스(desired 0)·검증 자원을 만든다. 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 아직 없으면 "서비스 없음"으로 실패한다. 의도한 동작이다.
+3. 앱 시크릿 값 넣기:
+   ```bash
+   aws secretsmanager put-secret-value --secret-id edge-dev-airflow/app --secret-string "$(python3 -c '
+   import json, secrets; print(json.dumps({"jwt_secret": secrets.token_urlsafe(48),
+     "api_secret_key": secrets.token_urlsafe(32), "admin_password": secrets.token_urlsafe(18)}))')"
+   ```
+4. `deploy-airflow` 를 workflow_dispatch 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable.
+5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
+
+### 배포·롤백
+
+- 평시 배포: `src/apps/cloud/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
+- 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다.
+- Airflow **버전을 내리는** 롤백은 이 경로로 하지 않는다. 새 버전의 `db migrate` 가 스키마를 올렸기 때문이다. 업그레이드 전에 메타DB 스냅샷을 찍고, 되돌릴 때는 그 스냅샷으로 복원한 뒤 옛 이미지를 배포한다.
+- Terraform 이 태스크 정의(환경·자원·역할)를 바꾸면 **다음 배포부터** 반영된다. 서비스의 리비전과 desired 는 CD 가 소유한다(`ignore_changes`). 바로 반영하려면 workflow_dispatch 로 같은 태그를 다시 배포한다.
+
+### UI 접근
+
+```bash
+iid=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names edge-dev-airflow-host \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+tip=$(aws ecs describe-tasks --cluster edge-dev-airflow --tasks $(aws ecs list-tasks --cluster edge-dev-airflow \
+  --service-name edge-dev-airflow --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].attachments[0].details[?name==`privateIPv4Address`].value' --output text)
+aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters "host=$tip,portNumber=8080,localPortNumber=18080"     # → http://127.0.0.1:18080 (admin)
+```
+
+로컬에 Session Manager 플러그인이 필요하다. 태스크 IP 는 태스크가 바뀔 때마다 달라진다.
+
+### 월 비용(서울 리전, 2026-09-28 공개 단가, 730시간)
+
+**이번에 늘어나는 비용**
+
+| 항목 | 계산 | USD/월 |
+|---|---|---|
+| EC2 t4g.medium 온디맨드 | 0.0416 × 730 | 30.37 |
+| EBS gp3 30 GiB(루트) | 30 × 0.0912 | 2.74 |
+| RDS db.t4g.micro Single-AZ | 0.025 × 730 | 18.25 |
+| RDS gp3 20 GiB | 20 × 0.131 | 2.62 |
+| RDS 백업(7일, 할당량 이내) | 할당 스토리지만큼 무료 | 0 |
+| Secrets Manager 2개(RDS 관리형·앱) | 2 × 0.40 | 0.80 |
+| CloudWatch Logs 수집(추정 2~4 GB) | × 0.76/GB. 보관 비용은 소액 | 1.5~3.0 |
+| CloudWatch 알람 2개(서비스 중단·메타DB 메모리) | 2 × 0.10 | 0.20 |
+| ECR 저장(베이스 레이어 공유, 약 0.7 GB + 검증 이미지) | × 0.10/GB | ≈ 0.1 |
+| NAT 처리량(이미지 pull 약 0.66 GB × 월 10회 + API) | × 0.059/GB | 0.4~1.0 |
+| **합계** | | **약 57~59** |
+
+**늘지 않는 것(0원)과 그 근거:** 공인 IPv4 0개(private 서브넷·EIP 없음), ALB 없음, VPC 엔드포인트 추가 없음, SSM Session Manager 무료. ECS 자체 관리 요금도 없다. ECS on EC2 는 EC2·EBS 만 과금한다(Managed Instances 가 아니다).
+
+**일시적으로 늘어나는 것**
+
+- 호스트 교체 때 두 번째 t4g.medium: 약 15분 × 0.0416 ≈ 0.01/회.
+- 배포마다 마이그레이션 Fargate ARM64 약 1분: 0.01 미만.
+- 격리 검증 기간의 검증 태스크(Fargate x86 0.25 vCPU·0.5 GB, 수백 회 × 1~2분): 약 0.1~0.5 합계. 검증 버킷 S3 는 소액이다(30일 만료).
+
+**이미 지출 중인 것(이번 작업과 무관하게 계속)**
+
+- NAT 게이트웨이 시간 요금: 0.059 × 730 ≈ 43.07. 기존 게이트웨이를 그대로 쓴다.
+- 업무 DB `edge-dev`, worker 클러스터의 업무 Fargate 태스크: 실행 주체가 SFN 이든 Airflow 든 같은 태스크가 돈다.
+- 전환 뒤에는 이 레인의 SFN 상태 전이 요금이 사라진다(하루 5회 × 수 전이, 소액).
+
+**고려했으나 택하지 않은 절감안**
+
+| 안 | 절감(USD/월) | 택하지 않은 이유 |
+|---|---|---|
+| 메타DB 를 `edge-dev` 에 같이(별도 DB·계정) | 약 21 | 위 "메타DB" — 메모리 고갈 이력이 있는 업무 DB 의 장애 범위를 넓힌다 |
+| t4g.small | 약 15 | 로컬 실측 합 약 1.2 GB(parallelism 4 기준) + 헬스체크 CLI 가 겹친다. 등록 메모리 약 1.9 GB 로는 여유가 없다. 실제 AWS 실측 뒤 다시 본다 |
+| Savings Plan·RI | 약 30% | 도입 초기라 약정하지 않는다 |
+
+### 실제 AWS 검증(격리)
+
+검증은 `edge_investor_intraday_verify` DAG 로 한다. 운영 DAG 와 **같은 `build_dag`·`EdgeStep`**(제출 전 확인·제출·추적·보류·재접속)을 쓰고, 격리 자원(`modules/airflow/verify.tf`)에만 닿는다.
+
+- 원장: 검증 DB `edge_verify`(메타DB 인스턴스의 별도 DB. 업무 RDS 에는 SG 조차 없다). 스키마는 업무와 같은 `migrations-cloud` 다.
+- 레이크: 검증 버킷(30일 만료). 업무 레이크는 재생 입력 한 파일을 **읽기만** 한다.
+- KIS: 호출하지 않는다. 검증 태스크 정의에 KIS 시크릿이 없고, 수집 스텝은 shim 이 저장 응답을 재생한다.
+- ECS: 검증 태스크는 Airflow 클러스터(Fargate)에서 돈다. 업무 Reconciler sweep 이 보는 worker 클러스터와 섞이지 않는다. 같은 슬롯이면 run_id 가 업무와 같아지므로 섞이면 안 된다.
+- 업무 코드: 배포된 data-pipeline 이미지 그대로 쓴다. shim 은 소스 교체·계수·장애만 더한다.
+
+로컬 확인(이 PR, 실제 AWS 아님):
+- shim 스모크: 로컬 Postgres(SSL)·S3 대역(localstack)·Flyway 로 실제 `data_pipeline` 코드를 돌렸다.
+- 결과:
+  - 검증 DB 생성, 스키마 70개 적용, 종목 366개 등록.
+  - plan(AIRFLOW) → 수집(재생 1,779행) → **같은 수집 재실행은 `DUPLICATE_SKIP`**(업무 실행 수 증가 0) → 정제 → 적재 장애 주입(exit 1, 실패 attempt) → 적재 1,779행.
+  - 원장 조회·reset 정상.
+
+검증 항목과 방법(승인 뒤 실행 — 결과는 이 절과 학습 문서 §32.12 에 기록한다):
+
+| 항목 | 방법 | 실제 관측 / 모의 주입 |
+|---|---|---|
+| ECS 제출·시작·정상 종료·로그 조회 | 오늘 슬롯 trigger, 장애 없음 | 실제 |
+| 확정된 업무 실패 vs 결과 미상 | 컨테이너 `{"exit": 1}` / 실행 중 `aws ecs stop-task`(StopTask 137) | 실패 exit 는 주입, 강제 종료는 실제 |
+| 제출 응답 유실 → 중복 생성 없음 | conf `runtask_response_lost` | 주입(RunTask 는 실제로 태스크를 만든다) |
+| 상태 조회 실패 → 새 작업 없이 보류 | `runtask_response_lost` + `list_tasks_error_after_submit` | 주입 |
+| 구성요소 재시작 뒤 재접속 | 수집 `sleep_in_step` 중 `aws ecs update-service --force-new-deployment` | 재시작은 실제, 긴 스텝은 주입 |
+| DAG timeout·worker 사망 뒤 원장 보존 | `sleep_in_step` > 900초로 dagrun_timeout, 뒤 검증 ops `reconcile`(sweep) | timeout 은 실제, 긴 스텝은 주입 |
+| HOLD 에서 retry·clear·다른 run → 업무 중복 없음 | 보류 뒤 REST clear·새 run trigger | 실제 |
+| 종료 확인·보류 해제 뒤 정상 복구 | README "보류 해제와 수동 복구" 절차 그대로 | 실제 |
+| EC2 교체 뒤 메타데이터·DAG·로그·추적 복구 | 실행 중 `start-instance-refresh` | 실제 |
+
+판정은 Airflow 상태 표시가 아니라 **네 가지 대조**로 한다: 실제 ECS 태스크 수(`run.py evidence`), 업무 실행 수(`state/business_runs`), 원장 상태(`verify-ledger`), 산출물 쓰기(`state/partition_writes`). `clientToken` 이나 ECS 조회를 쓴다고 해서 정확히 한 번 실행이 보장되지는 않는다. KIS 에는 멱등 키가 없고, 저장소에는 fencing·CAS 가 없다(ALPHA-1057). 검증이 보이는 것은 "이 경로들에서 새 태스크를 띄우지 않았다"까지다.
+
+```bash
+cd src/apps/cloud/airflow
+docker build --build-arg BASE=<배포된 data-pipeline 이미지 다이제스트> -t <ecr>/edge/airflow:verify verify && docker push <ecr>/edge/airflow:verify
+EDGE_LAKE_BUCKET=<레이크(읽기)> python verify/run.py setup
+AIRFLOW_PASSWORD=... python verify/run.py trigger --slot 10:05 --conf '{"faults": {"collect": {"runtask_response_lost": [1]}}}'
+python verify/run.py evidence --slot 10:05
+```
+
 ## 운영 전환·롤백 절차(장중 수급, 아직 실행하지 않았다)
 
 **불변 조건.** 한 레인의 스텝은 어느 순간에도 한 주체만 실행한다. 여러 슬롯이 같은 거래일 canonical 파티션을 CAS 없이 병합하기 때문이다(ALPHA-1057). 주체가 바뀌는 순간 기존 주체의 실행이 **실제로 끝났음을 확인하기 전에는 새 주체를 켜지 않는다.** DAG pause나 스케줄 DISABLED는 새 실행 생성을 멈출 뿐이고, 이미 뜬 ECS 태스크를 멈추지 않는다.
@@ -264,6 +467,22 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
   - 25분이 지나도 ③에 남아 있으면 `aws ecs stop-task`로 종료를 **요청**하고, `describe-tasks`가 `STOPPED`를 보일 때까지 ①·③을 다시 확인한다. 강제 종료한 태스크의 결과는 미상이다(보류 해제 절차 4·5로 산출물을 본다).
 - **파티션 쓰기 종료**는 ③(프로세스 부재, `STOPPED`)으로만 확정한다. 원장 attempt 종료나 lock 해제는 쓰기 종료를 보증하지 않는다.
 - **상태를 확인할 수 없으면 전환을 보류하고 수집 공백을 받아들인다.** 두 주체를 함께 켜 두는 것보다 그 슬롯을 비우는 쪽을 택한다.
+
+### 전환 전 대조 — 최신 dev SFN(#958 뒤)과 Airflow 경로의 의미
+
+2026-09-28 dev 의 `investor_intraday_pipeline.tf`(ASL)와 DAG 를 대조했다. 업무 동작은 바꾸지 않았다.
+
+| 상황 | SFN(현행) | Airflow | 같은가 |
+|---|---|---|---|
+| 수집 비0(부분·실패) | NotifyRawPartial → 정제 계속, 런 FAILED | 정제 계속(`ALL_DONE_MIN_ONE_SUCCESS`), verdict 런 FAILED | 같다 |
+| 정제 exit 2 | NotifyNormalizePartial → 적재 계속, 런 FAILED | 적재 계속(`partial_exit_codes=(2,)`), 런 FAILED | 같다(#958 이 SFN 을 고쳐 일치) |
+| 적재 exit 2 | FeatureCheckResults 실패 → NotifyFailure, 런 FAILED | 성공 처리 뒤 verdict 런 FAILED | 결과 같음(적재 뒤 스텝 없음). 알림은 SFN SNS 1건 / DAG 실패 SNS 1건 |
+| 기동 실패(TaskFailedToStart)·exit 75 | 재시도 없음(ASL Retry 0) → 런 FAILED | 재시도(다음 try 가 새 태스크) | **다르다(의도)** — 업무 미시작만 다시 띄운다 |
+| 결과 미상(StopTask·신호 종료·조회 불가) | 런 FAILED | 보류(HOLD), 같은 task_key 이후 실행 차단(76) | **다르다(의도)** — 이번 초기 운영 정책 |
+| 런 판정 기록 | Reconciler 가 DescribeExecution 으로 채움 | `report` 가 보고, 주기 Reconciler 가 원장 증거로 보완 | 같은 컬럼·같은 run_key |
+| 원장 행 | `orchestrator='SFN'`, `sfn_execution_arn` | `orchestrator='AIRFLOW'`, `orchestrator_run_ref`·`orchestrator_attempt_ref` | 소비자(콘솔 R02 포함)는 둘 다 읽는다 |
+
+- 부분 실패 적재 정책(선택 1/2)은 여전히 팀 결정 항목이다(아래 "활성화 전 결정" 1). 지금은 두 경로 모두 선택 2(유효 행 적재 + 런 FAILED)다.
 
 ### 전환(SFN → Airflow)
 
@@ -346,10 +565,12 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.
 4. **결말 없이 끝난 실행의 보류 기록 — 해결(ALPHA-1088 후속, 아래 "미확정 실행을 원장이 스스로 찾는다").** worker 사망·수동 failed·`dagrun_timeout`으로 report·verdict·callback이 돌지 못해도 원장에 보류가 남는다. 남는 경계(탐지 지연)는 그 절에 적었다.
 5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
-6. **Airflow 실행 환경.** MWAA(3.3.1까지 지원) 또는 자체 운영. 그에 따른 `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 연결과 DAG 배포 경로를 정한다.
+6. **Airflow 실행 환경 — 정함(ALPHA-1119).** ECS on EC2 자체 운영(위 "실행 환경"). `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 는 `modules/airflow` 태스크 정의가 주입하고, DAG 는 이미지로 배포한다. 남은 것은 실제 리소스 생성과 실제 AWS 검증이다.
 7. **아래 "실제 환경 검증"의 성공 기준 충족.**
 
 ## 실제 환경 검증 계획(실행 환경이 정해진 뒤, dev)
+
+> ALPHA-1119: 먼저 위 "실제 AWS 검증(격리)"을 한다. 아래 표의 항목 중 IAM·로그·ListTasks 반영 지연·종료 경위·재접속·응답 유실·보류 해제는 격리 검증 DAG 가 같은 EdgeStep 경로로 확인한다. 운영 데이터가 필요한 항목(정상 실행의 실제 KIS 수집, 운영 원장 대조)은 전환 승인 뒤 첫날 대사에서 본다.
 
 로컬 대역으로 검증한 것을 실제 ECS·IAM·로그로 다시 확인한다. 전부 dev에서, DAG는 이 레인 전용 테스트 run(과거 슬롯 재처리 또는 업무 영향 없는 수동 슬롯)으로 한다.
 
