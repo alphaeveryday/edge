@@ -12,8 +12,8 @@ from uuid import uuid4
 SCENARIOS = {'baseline':'기본', 'unusual_flow':'특이 수급', 'competing_signals':'상충 지표',
              'followup':'후속 기사', 'quiet':'변화 없음'}
 SCENARIOS.update({f'replay_{day}':f'연속 재생 {day}/5' for day in range(1,6)})
-ARTIFACTS = ('input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
-             'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json', 'quality_review.md')
+ARTIFACTS = ('quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
+             'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json')
 
 
 def read_settings(path: Path) -> dict:
