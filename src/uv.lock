@@ -13,6 +13,7 @@ resolution-markers = [
 [manifest]
 members = [
     "analysis-engine",
+    "analysis-engine-v2",
     "data-pipeline",
     "edge-ontology",
 ]
@@ -54,6 +55,25 @@ requires-dist = [
     { name = "pytz", specifier = ">=2024.1" },
     { name = "pyyaml", specifier = ">=6" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "analysis-engine-v2"
+version = "0.1.0"
+source = { editable = "apps/cloud/analysis-engine-v2" }
+dependencies = [
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.1" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]
