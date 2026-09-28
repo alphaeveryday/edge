@@ -30,7 +30,7 @@ ETF 자체 수급과 구성종목 수급을 모두 확보하고 구성종목 가
 | Cloud Event Store | 서비스가 읽는 관측값·가용성·필요한 피처 | 데이터 파이프라인 로더 | 기존 DB 계약을 따르는 서버·분석 소비자 |
 
 분봉은 기존 artifact/manifest와 DB의 확정 세대 계약을 유지한다. 새 일배치 경로로 옮기지 않는다.
-기존 5분봉의 Glue Iceberg 정본도 유지한다. 이 초안의 일별 Parquet 규약을 모든 레인에 적용하지 않는다.
+기존 5분봉 저장 형식(canonical `intraday_5m` 파티션)도 유지한다. Glue Iceberg 표는 canonical 전환이 끝날 때까지만 현행 1순위 소비·롤백용으로 둔다(목표는 canonical 단일 경로 — [전환 대장](lake-path-transition-ledger.md) §3.4). 이 초안의 일별 Parquet 규약을 모든 레인에 적용하지 않는다.
 고객별 데이터·최종 노출 콘텐츠는 이 설계에 포함하지 않는다([저장 위치 기준](../domain/data-residency.md)).
 
 ## 2. 데이터셋별 경로와 행의 기준
