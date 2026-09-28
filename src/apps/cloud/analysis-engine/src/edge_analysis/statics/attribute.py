@@ -23,7 +23,7 @@ from collections import Counter
 from datetime import datetime, time, timedelta, timezone
 
 from ..observability import record as trace   # registry.record 와 이름 충돌 회피
-from .duck import CausalLake
+from .duck import CausalLake, gate_bars
 from .hypothesize import explore, propose
 from .narrate import AdditiveBudget, Edge, additive_say, narrate
 from .paneltest import EdgeReport, edge_tests
@@ -838,7 +838,9 @@ if __name__ == "__main__":
         os.environ["DEEPSEEK_API_KEY"],
         os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")))
     with collect_trace() as tr:
-        out = run_cell(CausalLake(), client.complete_json, *sys.argv[1:])
+        lake = CausalLake(day=sys.argv[3])      # 기준일로 원천 판정 (ALPHA-1108)
+        gate_bars(lake, sys.argv[3], block=False)
+        out = run_cell(lake, client.complete_json, *sys.argv[1:])
     print(out)
     # 프롬프트·응답 원문은 stdout 금지(observability 계약) - 파일로만 흐른다.
     d = Path(os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill")) / "traces"

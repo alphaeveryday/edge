@@ -411,13 +411,15 @@ if __name__ == "__main__":       # pragma: no cover
     import os
 
     from ..adapters.llm import DeepSeekClient
-    from .duck import CausalLake
+    from .duck import CausalLake, gate_bars
 
     if len(sys.argv) < 4:
         sys.exit(__doc__)
     client = DeepSeekClient(os.environ["DEEPSEEK_API_KEY"],
                             model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
-    survey = survey_cell(CausalLake(), client.complete_json, *sys.argv[1:4],
+    lake = CausalLake(day=sys.argv[3])      # 기준일로 원천 판정 (ALPHA-1108)
+    gate_bars(lake, sys.argv[3], block=False)
+    survey = survey_cell(lake, client.complete_json, *sys.argv[1:4],
                          n=int(sys.argv[4]) if len(sys.argv) > 4 else 4)
     print(survey.report())
     append_ledger(os.environ.get("CAUSAL_BACKFILL_DIR", ".tmp/causal-backfill"), survey)

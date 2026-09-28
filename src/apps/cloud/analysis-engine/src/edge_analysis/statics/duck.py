@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -351,6 +352,84 @@ def backfill_sources(name: str, local: Path) -> tuple[tuple[str, str], ...]:
         ("로컬", local.as_posix() if local.is_file() else "")) if src)
 
 
+@dataclass(frozen=True)
+class BarsReadiness:
+    """요청 구간의 5분봉이 **선택된 원천에** 실제로 있는가 (ALPHA-1108).
+
+    `iceberg_covers` 는 어느 원천을 쓸지 고르는 판정이고, 이건 고른 뒤 그 원천이
+    요청 구간을 담았는지 재는 판정이다. 빈 날을 네 갈래로 가른다 — 처방이 다르다.
+      · `present`     : 가격 봉이 있는 날
+      · `missing`     : 다른 원천(canonical 5분 파티션·일봉)이 거래일이라고 증언하는데
+                        고른 원천에 봉이 없는 날 — **결손**
+      · `unwitnessed` : 평일인데 어느 원천에도 흔적이 없는 날 — 휴장이거나 아직 적재
+                        전이다. 이 레이크엔 거래일 달력이 없어 **둘을 가를 수 없다**
+      · `newest`      : 고른 원천의 최신 가격 거래일. 요청일보다 앞이면 원천 갱신이
+                        멈췄거나 아직 안 들어왔다는 뜻이다
+    주말은 셀 대상이 아니다. 새 최신성 문턱은 두지 않는다 — 있는가/없는가만 잰다.
+    """
+
+    day: str
+    since: str
+    source: str
+    newest: str | None
+    present: tuple[str, ...]
+    missing: tuple[str, ...]
+    unwitnessed: tuple[str, ...]
+    witness_ok: bool = True     # 거래일 증인 목록을 읽었나 — 못 읽었으면 결손·휴장을 못 가른다
+
+    @property
+    def day_ready(self) -> bool:
+        """요청일(구간의 끝)에 봉이 있나."""
+        return self.day in self.present
+
+    def reason(self) -> str:
+        """사람이 읽는 한 줄. 준비됐으면 결손·미상 날만 덧붙인다."""
+        tail = []
+        if self.missing:
+            tail.append(f"결손 {len(self.missing)}일(예: {', '.join(self.missing[:3])})")
+        if self.unwitnessed:
+            tail.append(f"휴장 또는 미적재 {len(self.unwitnessed)}일"
+                        f"(예: {', '.join(self.unwitnessed[:3])})")
+        if not self.witness_ok:
+            tail.append("거래일 증인 목록을 못 읽어 결손과 휴장을 가르지 못했다")
+        extra = (" · " + " · ".join(tail)) if tail else ""
+        if self.day_ready:
+            return f"5분봉 준비됨 {self.since}~{self.day} [{self.source}]{extra}"
+        if self.day in self.missing:
+            why = "결손 — 다른 원천은 거래일이라는데 고른 원천에 봉이 없다"
+        elif date.fromisoformat(self.day).weekday() >= 5:
+            why = "주말"
+        else:
+            why = "휴장 또는 미적재 — 어느 원천에도 그날이 없어 가를 수 없다"
+        if self.newest and self.newest < self.day:
+            why += f"; 고른 원천은 {self.newest} 이후 갱신이 없다"
+        elif not self.newest:
+            why += "; 고른 원천에 요청일 앞 31일 안의 봉이 없다"
+        return f"5분봉 준비 안 됨 {self.day}: {why} [{self.source}]{extra}"
+
+
+def gate_bars(lake, day: str, since: str = "", *, block: bool, ticker: str = "") -> BarsReadiness:
+    """CLI 가 분석 전에 부른다. 판정을 stderr 에 한 줄 남기고, `block` 이면 요청일에 봉이
+    없을 때 **exit 2 로 멈춘다**(보류) — 빈 봉 위에서 계산한 산출을 정상 결과처럼 내지 않는다.
+
+    `block=False` 는 5분봉이 층 하나의 재료일 뿐인 도구용이다 — 요청일 봉이 없어도 다른
+    층은 설 수 있으므로 멈추지 않되, 판정은 똑같이 드러낸다.
+    """
+    import sys
+
+    r = lake.bars_readiness(day, since, ticker)
+    print(r.reason(), file=sys.stderr)
+    if block and not r.day_ready:
+        raise SystemExit(2)
+    return r
+
+
+def _weekdays(since: str, day: str) -> list[str]:
+    d0, d1 = date.fromisoformat(since), date.fromisoformat(day)
+    return [(d0 + timedelta(n)).isoformat() for n in range((d1 - d0).days + 1)
+            if (d0 + timedelta(n)).weekday() < 5]
+
+
 class CausalLake:
     """한 연결 위의 뷰 집합. exists 딕셔너리가 곧 커버리지 보고서다."""
 
@@ -371,6 +450,8 @@ class CausalLake:
         # 처방이 다르다: 낡음은 상류 적재 일감이고 ATTACH 실패는 권한 일감이다. 뭉쳐서
         # 읽으면 소비자가 "정본이 낡았다"고 잘못 말한다(이 저장소가 계속 싸워 온 유형).
         self.stale_5m: str = ""
+        # 정본(Glue) 탐침이 본 최신 거래일. 원천 갱신 중단을 사유로 적을 때 쓴다(ALPHA-1108).
+        self.iceberg_newest = None
         self.backfill_notes: dict[str, str] = {}  # 백필 세트 → 못 읽은/0행인 사유
         self.day: str = ""                      # 지금 뷰가 잘려 있는 기준일
         # 5분봉 **정본 신선도**의 기준일. `day` 와 다르다: 그건 뷰를 자르는 시점이고
@@ -449,6 +530,7 @@ class CausalLake:
                 f"(WHERE trade_date = {day_pred} "
                 f"AND ticker = '{MARKET_PROXY_TICKER}') FROM {tbl} "
                 f"WHERE source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'").fetchone()
+            self.iceberg_newest = newest
             if not iceberg_covers(newest, self.asked_day, day_tks, mkt_rows):
                 # **세 사유를 갈라 적는다** - 처방이 다르다. 없는 것은 적재가 아예 안 돈
                 # 것이고, 13종은 돌다 만 것이고, 시장 프록시 부재는 착지 폭과 무관하게
@@ -813,6 +895,63 @@ class CausalLake:
         self.day = day
         return len(self.bound) - len(self.unbound)
 
+    # ── 5분봉 준비 판정 (ALPHA-1108) ───────────────────────────────────────
+    def bars_readiness(self, day: str, since: str = "", ticker: str = "") -> BarsReadiness:
+        """`bars_5m` 이 [since, day] 를 담았는가. 소비자가 **자기가 분석할 구간**으로 부른다.
+
+        원천 선택(`_bars_iceberg`)은 생성 때 한 번, 요청일 하루만 본다. 구간 도구는 그 뒤
+        이것으로 구간 전체를 잰다 — 원천을 바꾸지 않고 **있는 그대로를 보고**한다.
+        거래일 증인은 canonical 5분 파티션·canonical 일봉 파티션의 날짜다(목록만 읽는다).
+        증인을 못 읽으면 그 사실을 `unbound` 에 남기고, 그땐 `missing` 이 비어도 결손이
+        없다는 뜻이 아니다.
+        """
+        since = since or day
+        # `ticker` 를 주면 **그 종목의** 봉만 센다 — 한 종목을 설명하는 도구가 남의 봉으로
+        # 준비됐다고 판정받지 않게. 비우면 시장 전체(날짜 단위)다.
+        vend = f"source_vendor IS DISTINCT FROM '{SECTOR_ROLLUP_VENDOR}'" + (
+            f" AND ticker = '{ticker}'" if ticker else "")
+        try:
+            present = {str(d) for (d,) in self.con.execute(
+                f"SELECT DISTINCT trade_date FROM bars_5m WHERE trade_date BETWEEN "
+                f"DATE '{since}' AND DATE '{day}' AND {vend}").fetchall()}
+            newest = (self.iceberg_newest
+                      if "Glue" in str(self.exists.get("bars_5m")) and not ticker else None)
+            if newest is None:
+                row = self.con.execute(
+                    f"SELECT max(trade_date) FROM bars_5m WHERE trade_date <= DATE '{day}' "
+                    f"AND trade_date >= DATE '{day}' - INTERVAL 31 DAY AND {vend}").fetchone()
+                newest = row[0] if row else None
+        except Exception as e:      # noqa: BLE001 - 뷰가 없으면 '준비 안 됨'이지 도구의 죽음이 아니다
+            # `_bars` 가 원천을 하나도 못 걸면 뷰를 안 만든다(`exists["bars_5m"] = 0`).
+            self.unbound["bars_readiness"] = f"{type(e).__name__}: {str(e)[:80]}"
+            present, newest = set(), None
+        self.unbound.pop("bars_calendar", None)
+        witness = self._trading_day_witness(since, day)
+        span = _weekdays(since, day)
+        return BarsReadiness(
+            day=day, since=since,
+            source=str(self.exists.get("bars_5m")) + (f" · {ticker}" if ticker else ""),
+            newest=str(newest)[:10] if newest else None,
+            present=tuple(d for d in span if d in present),
+            missing=tuple(d for d in span if d in witness and d not in present),
+            unwitnessed=tuple(d for d in span if d not in witness and d not in present),
+            witness_ok="bars_calendar" not in self.unbound)
+
+    def _trading_day_witness(self, since: str, day: str) -> set[str]:
+        """거래일이라고 증언하는 날. 파티션 **목록만** 본다 — 파일을 읽지 않는다."""
+        out: set[str] = set()
+        for prefix in ("canonical/market_data/intraday_5m/market=KR",
+                       "canonical/market_data/price_daily/market=KR"):
+            try:
+                for (f,) in self.con.execute(
+                        f"SELECT file FROM glob('{LAKE}{prefix}/trade_date=*/*.parquet')").fetchall():
+                    d = str(f).split("trade_date=")[1][:10]
+                    if since <= d <= day:
+                        out.add(d)
+            except Exception as e:      # noqa: BLE001 - 증인 부재는 사유로 남긴다
+                self.unbound["bars_calendar"] = f"{prefix}: {type(e).__name__}: {str(e)[:60]}"
+        return out
+
     # ── 표면 ────────────────────────────────────────────────────────────
     def sql(self, q: str) -> list[tuple]:
         """질의. **지연 등록된 뷰는 여기서 걸린다** - 등록만 해두고 부를 때 건다.
@@ -1061,5 +1200,5 @@ class CausalLake:
             "GROUP BY e.source_event_id ORDER BY 1")
 
 
-__all__ = ["BACKFILL_SETS", "BARS_ICEBERG", "CausalLake", "RDB_TABLES", "ROLLUP_FROM",
+__all__ = ["BACKFILL_SETS", "BARS_ICEBERG", "BarsReadiness", "CausalLake", "RDB_TABLES", "ROLLUP_FROM", "gate_bars",
            "backfill_sources", "rdb_dsn_from_env", "s3_secret_sql", "session_pragmas"]

@@ -13,7 +13,7 @@ import os
 import sys
 from datetime import datetime, time, timedelta, timezone
 
-from .duck import CausalLake
+from .duck import CausalLake, gate_bars
 from .gates import edge_gate
 from .narrate import narrate
 from .render import Row, render
@@ -31,7 +31,8 @@ def _kst_naive(ts) -> datetime:
 
 
 def run(ticker: str, instrument_id: str, day: str) -> str:
-    lake = CausalLake()
+    lake = CausalLake(day=day)          # 기준일로 원천 판정 (ALPHA-1108)
+    gate_bars(lake, day, block=False)
     print(lake.coverage(), file=sys.stderr)
 
     d = datetime.strptime(day, "%Y-%m-%d")

@@ -465,12 +465,14 @@ def main() -> None:
     import os
 
     from ..adapters.llm import DeepSeekClient, TracingClient
-    from .duck import CausalLake
+    from .duck import CausalLake, gate_bars
     client = TracingClient(DeepSeekClient(
         os.environ["DEEPSEEK_API_KEY"],
         os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")))
     layer = sys.argv[3] if len(sys.argv) > 3 else "고유"
-    imps, log = verify(CausalLake(), sys.argv[2], etype=sys.argv[1], layer=layer,
+    lake = CausalLake(day=sys.argv[2])  # 기준일로 원천 판정 (ALPHA-1108)
+    gate_bars(lake, sys.argv[2], block=False)
+    imps, log = verify(lake, sys.argv[2], etype=sys.argv[1], layer=layer,
                        ask=client.complete_json)
     print(log)
     print()
