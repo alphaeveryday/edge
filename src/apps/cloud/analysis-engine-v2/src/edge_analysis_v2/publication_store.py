@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 
 from . import schemas
 from .body_changes import KST
+from .audited_execution import ToolInputError
 
 
 class PublicationStore:
@@ -80,13 +81,39 @@ class PublicationStore:
                 LEFT JOIN outlook_analyses o ON r.outlook_analysis_id=o.analysis_id
                 WHERE r.tool_run_id=%s""", (identity,))
             run = cur.fetchone()
-            if (not run or run["status"] != "completed" or run["function_name"] not in self.final_tool_names
+            if (not run or run["status"] != "completed"
                     or run["etf_code"] != analysis["etf_code"] or run["analysis_at"] > analysis["analysis_at"]
                     or (analysis["analysis_id"] not in (run["movement_analysis_id"], run["outlook_analysis_id"])
                         and run["analysis_status"] != "completed")):
-                raise ValueError("Evidence is missing, foreign, future, failed, or not final-eligible")
+                raise ToolInputError(f"Evidence {identity!r} is missing, foreign, future, failed, or not final-eligible")
+            if run["function_name"] not in self.final_tool_names:
+                hint = ("Call get_issue_evidence(include_body=false) and use its new tool_run_id."
+                        if run["function_name"] == "search_news_threads"
+                        else "Use a successful final calculation or evidence tool_run_id.")
+                raise ToolInputError(f"Evidence {identity!r} from {run['function_name']} is not final-eligible. {hint}")
             if run["function_name"] == "get_issue_evidence" and run["arguments"].get("include_body") is not False:
-                raise ValueError("Final news evidence must exclude article body")
+                raise ToolInputError(f"Evidence {identity!r}: final news evidence must exclude article body. "
+                                     "Call get_issue_evidence(include_body=false) and use its new tool_run_id.")
+
+    def validate_outlook_body_evidence(self, identity, body):
+        """Reject invalid draft references before a successful edit is returned.
+
+        Args:
+            identity: Running outlook execution identifier.
+            body: Candidate BodyEditor result, including derived updates.
+
+        Raises:
+            ToolInputError: A reference cannot be used as final evidence.
+            ValueError: The outlook is missing or no longer running.
+        """
+        self._idle()
+        with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM outlook_analyses WHERE analysis_id=%s", (identity,))
+            analysis = cur.fetchone()
+            if not analysis or analysis['status'] != 'running':
+                raise ValueError('Running outlook required for draft validation')
+            for item in body['items'] + body['updates']['items']:
+                self._evidence(cur, item['tool_run_ids'], analysis)
 
     def save_movement(self, identity, response):
         """Save new immutable items and select at most five same-day items."""
