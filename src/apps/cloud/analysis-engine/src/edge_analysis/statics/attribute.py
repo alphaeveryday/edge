@@ -839,7 +839,8 @@ if __name__ == "__main__":
         os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")))
     with collect_trace() as tr:
         lake = CausalLake(day=sys.argv[3])      # 기준일로 원천 판정 (ALPHA-1108)
-        gate_bars(lake, sys.argv[3], block=False)
+        # 이 셀은 그 종목의 5분봉 분해(`load_cell` → `decompose`)가 본체다 — 없으면 보류한다.
+        gate_bars(lake, sys.argv[3], block=True, ticker=sys.argv[1])
         out = run_cell(lake, client.complete_json, *sys.argv[1:])
     print(out)
     # 프롬프트·응답 원문은 stdout 금지(observability 계약) - 파일로만 흐른다.

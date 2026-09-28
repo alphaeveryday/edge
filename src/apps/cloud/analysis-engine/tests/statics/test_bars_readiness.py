@@ -227,3 +227,29 @@ def test_smoke_holds_on_the_requested_tickers_bars(monkeypatch):
     with pytest.raises(SystemExit) as e:
         smoke.run("069500", "iid", "2026-09-28")
     assert e.value.code == 2 and seen == {"day": "2026-09-28", "ticker": "069500"}
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")      # runpy 가 이미 import 된 모듈을 __main__ 으로 다시 돈다
+@pytest.mark.parametrize("mod", ["attribute", "expressive"])
+def test_single_ticker_decomposition_clis_hold_on_that_tickers_bars(monkeypatch, mod):
+    """attribute·expressive 는 `load_cell` → `decompose` 가 본체다 — 봉이 없으면 트레이스백
+    (`ValueError: 봉이 없다`) 대신 **그 종목** 판정으로 보류한다(시장 단위 '준비됨' 금지)."""
+    import runpy
+
+    seen = {}
+
+    class _Lake:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def bars_readiness(self, day, since="", ticker=""):
+            seen["ticker"] = ticker
+            return BarsReadiness(day, day, "S3 canonical", day, (), (day,), ())
+
+    monkeypatch.setattr(duck, "CausalLake", _Lake)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test")
+    monkeypatch.setattr(sys, "argv", [mod, "005930.KS", "iid", "2026-09-28"])
+    with pytest.raises(SystemExit) as e:
+        runpy.run_module(f"edge_analysis.statics.{mod}", run_name="__main__")
+    assert e.value.code == 2
+    assert seen == {"day": "2026-09-28", "ticker": "005930.KS"}

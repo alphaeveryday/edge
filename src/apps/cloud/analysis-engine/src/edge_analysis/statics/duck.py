@@ -413,7 +413,8 @@ def gate_bars(lake, day: str, since: str = "", *, block: bool, ticker: str = "")
     없을 때 **exit 2 로 멈춘다**(보류) — 빈 봉 위에서 계산한 산출을 정상 결과처럼 내지 않는다.
 
     `block=False` 는 5분봉이 층 하나의 재료일 뿐인 도구용이다 — 요청일 봉이 없어도 다른
-    층은 설 수 있으므로 멈추지 않되, 판정은 똑같이 드러낸다.
+    층은 설 수 있으므로 멈추지 않되, 판정은 똑같이 드러낸다. 한 종목의 분해가 본체인
+    도구(interval·premium5·smoke·attribute·expressive)는 `ticker` 를 주고 보류한다.
     """
     import sys
 

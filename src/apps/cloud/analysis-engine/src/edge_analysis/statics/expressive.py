@@ -418,7 +418,8 @@ if __name__ == "__main__":       # pragma: no cover
     client = DeepSeekClient(os.environ["DEEPSEEK_API_KEY"],
                             model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
     lake = CausalLake(day=sys.argv[3])      # 기준일로 원천 판정 (ALPHA-1108)
-    gate_bars(lake, sys.argv[3], block=False)
+    # `survey_cell` 도 `attribute.load_cell` 의 분해를 탄다 — 그 종목 봉이 없으면 보류한다.
+    gate_bars(lake, sys.argv[3], block=True, ticker=sys.argv[1])
     survey = survey_cell(lake, client.complete_json, *sys.argv[1:4],
                          n=int(sys.argv[4]) if len(sys.argv) > 4 else 4)
     print(survey.report())
