@@ -1,13 +1,74 @@
 package com.edge.app.home.service;
 
 import com.edge.app.common.auth.AppPrincipal;
+import com.edge.app.etf.dto.EtfSummaryResponse;
+import com.edge.app.etf.entity.Signal;
+import com.edge.app.etf.repository.EtfRepository;
 import com.edge.app.home.dto.HomeBriefResponse;
+import com.edge.app.member.repository.PrincipalRepository;
+import com.edge.app.watch.dto.WatchGroupResponse;
+import com.edge.app.watch.entity.WatchGroup;
+import com.edge.app.watch.entity.WatchItem;
+import com.edge.app.watch.repository.WatchGroupRepository;
+import com.edge.app.watch.repository.WatchItemRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-/** 스텁. */
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * 관심 그룹 기준 요약(BFF). band 는 signal 5단계 서수 평균의 반올림, changePct 는 산술평균(2026-09-28 결정).
+ * 관심 그룹은 watch 도메인이 만든다. 아직 없으면 빈 브리프.
+ */
 @Service
+@RequiredArgsConstructor
 public class HomeService {
+    private final PrincipalRepository principalRepository;
+    private final WatchGroupRepository groupRepository;
+    private final WatchItemRepository itemRepository;
+    private final EtfRepository etfRepository;
+
+    // principal 해소가 upsert 라 readOnly 가 아니다.
+    @Transactional
     public HomeBriefResponse brief(AppPrincipal principal, String group) {
-        return HomeExamples.brief(group);
+        long principalId = principalRepository.resolve(principal);
+        List<WatchGroup> groups = groupRepository.findByPrincipalIdOrderByPosition(principalId);
+        String key = group == null ? WatchGroup.BASE_KEY : group;
+        List<String> codes = groups.stream().filter(g -> g.getKey().equals(key)).findFirst()
+                .map(g -> itemRepository.findByGroupIdOrderByPosition(g.getId()).stream().map(WatchItem::getEtfCode).toList())
+                .orElse(List.of());
+        List<EtfSummaryResponse> etfs = summaries(codes);
+        Instant asOf = codes.isEmpty() ? null : etfRepository.latestQuoteAsOf(codes);
+        return new HomeBriefResponse(asOf == null ? Instant.now() : asOf,
+                groups.stream().map(g -> new WatchGroupResponse(g.getKey(), g.getLabel(), (int) itemRepository.countByGroupId(g.getId()))).toList(),
+                key, band(etfs), changePct(etfs), etfs);
+    }
+
+    private List<EtfSummaryResponse> summaries(List<String> codes) {
+        if (codes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, EtfSummaryResponse> byCode = etfRepository.summaries(codes).stream()
+                .map(EtfSummaryResponse::from).collect(Collectors.toMap(EtfSummaryResponse::code, Function.identity()));
+        return codes.stream().map(byCode::get).filter(Objects::nonNull).toList();
+    }
+
+    private static Signal band(List<EtfSummaryResponse> etfs) {
+        if (etfs.isEmpty()) {
+            return Signal.NEUTRAL;
+        }
+        double mean = etfs.stream().mapToInt(e -> e.signal().ordinal()).average().orElse(Signal.NEUTRAL.ordinal());
+        return Signal.values()[(int) Math.round(mean)];
+    }
+
+    private static double changePct(List<EtfSummaryResponse> etfs) {
+        double mean = etfs.stream().mapToDouble(EtfSummaryResponse::changePct).average().orElse(0);
+        return Math.round(mean * 100) / 100.0;
     }
 }
