@@ -6,6 +6,7 @@ from uuid import uuid4
 from psycopg import sql
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from . import schemas
 from .body_changes import KST
@@ -141,6 +142,96 @@ class PublicationStore:
         self._idle()
         with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
             return self._movement(cur, identity)
+
+    def save_outlook(self, identity, features, body, *, factor_details=None):
+        """Atomically publish the edited body and complete independent features.
+
+        Args:
+            identity: Running outlook execution ID.
+            features: outlook, summary_card, factors, and conclusion objects.
+            body: BodyEditor.result(), never a separate agent-authored delta.
+            factor_details: Optional metrics and issue detail for the same edition.
+        """
+        self._idle()
+        with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
+            analysis = self._analysis(cur, "outlook", identity)
+            if analysis["status"] == "completed":
+                return self._outlook(cur, identity)
+            schemas.outlook(features, body)
+            if body["updates"]["date"] != analysis["analysis_at"].astimezone(KST).date().isoformat():
+                raise ValueError("Update date must match analysis date")
+            if (body["mode"] == "create") != (analysis["previous_analysis_id"] is None):
+                raise ValueError("Body mode disagrees with previous publication")
+            for position, item in enumerate(body["items"]):
+                self._evidence(cur, item["tool_run_ids"], analysis)
+                cur.execute("""INSERT INTO outlook_items
+                    (row_id,analysis_id,item_id,section,position,title_keyword,bullets,source_as_of,tool_run_ids)
+                    VALUES(%s,%s,%s,'detail',%s,%s,%s,%s,%s)""",
+                    (uuid4().hex, identity, item["id"], position, item["title_keyword"], Jsonb(item["sentences"]),
+                     analysis["analysis_at"], item["tool_run_ids"]))
+            for position, item in enumerate(body["updates"]["items"]):
+                self._evidence(cur, item["tool_run_ids"], analysis)
+                cur.execute("""INSERT INTO outlook_items
+                    (row_id,analysis_id,item_id,section,change_type,position,title_keyword,sentence,tool_run_ids)
+                    VALUES(%s,%s,%s,'update',%s,%s,%s,%s,%s)""",
+                    (uuid4().hex, identity, item["id"], item["change_type"], position, item["title_keyword"],
+                     item["sentence"], item["tool_run_ids"]))
+            for factor in features["factors"]:
+                cur.execute("""INSERT INTO outlook_factors(row_id,analysis_id,type,sticker,sentence)
+                    VALUES(%s,%s,%s,%s,%s)""", (uuid4().hex, identity, factor["type"], factor["sticker"], factor["sentence"]))
+            conclusion = features["conclusion"]
+            for field, kind in (("supports", "support"), ("burdens", "burden")):
+                for position, item in enumerate(conclusion[field]):
+                    self._evidence(cur, item["tool_run_ids"], analysis)
+                    cur.execute("""INSERT INTO outlook_conclusion_keywords(row_id,analysis_id,kind,position,label,tool_run_ids)
+                        VALUES(%s,%s,%s,%s,%s,%s)""", (uuid4().hex, identity, kind, position, item["label"], item["tool_run_ids"]))
+            if factor_details is not None:
+                from .factor_store import save_factor_details
+                save_factor_details(self.connection, identity, **factor_details)
+            cur.execute("""UPDATE outlook_analyses SET status='completed',published_at=%s,outlook_sticker=%s,
+                summary_title=%s,summary=%s,detail_title=%s,detail_mode=%s,conclusion_title=%s,
+                conclusion_sentence=%s,change_condition=%s WHERE analysis_id=%s""",
+                (datetime.now(KST), features["outlook"]["direction"], features["summary_card"]["title"],
+                 features["summary_card"]["summary"], body["title"], body["mode"], conclusion["title"],
+                 conclusion["sentence"], conclusion.get("change_condition"), identity))
+            return self._outlook(cur, identity)
+
+    def _outlook(self, cur, identity):
+        cur.execute("SELECT * FROM outlook_analyses WHERE analysis_id=%s AND status='completed'", (identity,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        detail = {"title": row["detail_title"], "items": [], "updates": {
+            "date": row["analysis_at"].astimezone(KST).date().isoformat(), "items": []}}
+        cur.execute("SELECT * FROM outlook_items WHERE analysis_id=%s ORDER BY position", (identity,))
+        for item in cur.fetchall():
+            if item["section"] not in ("detail", "update"):
+                continue
+            value = {"id": item["item_id"], "title_keyword": item["title_keyword"], "tool_run_ids": item["tool_run_ids"]}
+            if item["section"] == "detail":
+                value["sentences"] = item["bullets"]
+                detail["items"].append(value)
+            else:
+                value.update(change_type=item["change_type"], sentence=item["sentence"])
+                detail["updates"]["items"].append(value)
+        cur.execute("SELECT type,sticker,sentence FROM outlook_factors WHERE analysis_id=%s", (identity,))
+        factors = {factor["type"]: factor for factor in cur.fetchall()}
+        conclusion = {"title": row["conclusion_title"], "supports": [], "burdens": [], "sentence": row["conclusion_sentence"]}
+        if row["change_condition"] is not None:
+            conclusion["change_condition"] = row["change_condition"]
+        cur.execute("SELECT kind,label,tool_run_ids FROM outlook_conclusion_keywords WHERE analysis_id=%s ORDER BY position", (identity,))
+        for item in cur.fetchall():
+            field = "supports" if item.pop("kind") == "support" else "burdens"
+            conclusion[field].append(item)
+        return {"outlook": {"direction": row["outlook_sticker"]},
+                "summary_card": {"title": row["summary_title"], "summary": row["summary"]},
+                "detail": detail, "factors": [factors[factor] for factor in schemas.FACTORS], "conclusion": conclusion}
+
+    def get_outlook(self, identity):
+        """Assemble the independent outlook feature objects from committed rows."""
+        self._idle()
+        with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
+            return self._outlook(cur, identity)
 
     def fail(self, kind, identity, error):
         """Mark an unfinished execution failed without changing a publication."""

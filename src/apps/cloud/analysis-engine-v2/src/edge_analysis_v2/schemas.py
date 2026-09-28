@@ -44,3 +44,67 @@ def movement(response):
             raise ValueError("Invalid movement classification")
     if len(set(identities)) != len(identities):
         raise ValueError("Duplicate candidate ID")
+
+
+def outlook(features, body):
+    """Require complete independently authored outlook features and edited body."""
+    if set(features) != {"outlook", "summary_card", "factors", "conclusion"}:
+        raise ValueError("Unexpected outlook features")
+    if set(features["outlook"]) != {"direction"} or features["outlook"]["direction"] not in STICKERS:
+        raise ValueError("Invalid outlook sticker")
+    summary = features["summary_card"]
+    if set(summary) != {"title", "summary"}:
+        raise ValueError("Invalid summary card")
+    text(summary["title"])
+    text(summary["summary"])
+    factors = features["factors"]
+    if not isinstance(factors, list) or len(factors) != 5 or {factor["type"] for factor in factors} != set(FACTORS):
+        raise ValueError("Exactly five distinct factors required")
+    for factor in factors:
+        if set(factor) != {"type", "sticker", "sentence"} or factor["sticker"] not in STICKERS:
+            raise ValueError("Invalid factor")
+        text(factor["sentence"])
+    conclusion = features["conclusion"]
+    if set(conclusion) - {"title", "supports", "burdens", "sentence", "change_condition"}:
+        raise ValueError("Unexpected conclusion fields")
+    text(conclusion["title"])
+    text(conclusion["sentence"])
+    if "change_condition" in conclusion:
+        text(conclusion["change_condition"])
+    for kind in ("supports", "burdens"):
+        if not isinstance(conclusion[kind], list):
+            raise ValueError("Conclusion keywords must be lists")
+        for item in conclusion[kind]:
+            if set(item) != {"label", "tool_run_ids"}:
+                raise ValueError("Unexpected keyword fields")
+            text(item["label"])
+            references(item["tool_run_ids"])
+    if set(body) != {"title", "items", "updates", "mode"} or body["mode"] not in {"create", "update", "rewrite"}:
+        raise ValueError("Invalid edited body")
+    text(body["title"])
+    if not isinstance(body["items"], list) or len(body["items"]) > 15:
+        raise ValueError("At most 15 topics")
+    for item in body["items"]:
+        if set(item) != {"id", "title_keyword", "sentences", "tool_run_ids"}:
+            raise ValueError("Unexpected body topic fields")
+        text(item["id"])
+        text(item["title_keyword"])
+        references(item["tool_run_ids"])
+        if not isinstance(item["sentences"], list) or not item["sentences"]:
+            raise ValueError("Topic requires sentences")
+        for sentence in item["sentences"]:
+            if set(sentence) != {"sentence", "is_updated"} or type(sentence["is_updated"]) is not bool:
+                raise ValueError("Invalid bullet")
+            text(sentence["sentence"])
+    if len({item["id"] for item in body["items"]}) != len(body["items"]):
+        raise ValueError("Duplicate topic ID")
+    if set(body["updates"]) != {"date", "items"}:
+        raise ValueError("Invalid updates")
+    for item in body["updates"]["items"]:
+        if set(item) != {"id", "change_type", "title_keyword", "sentence", "tool_run_ids"} or item["change_type"] not in {"added", "modified", "deleted"}:
+            raise ValueError("Invalid update item")
+        text(item["id"])
+        text(item["title_keyword"])
+        if item["sentence"] is not None:
+            text(item["sentence"])
+        references(item["tool_run_ids"])

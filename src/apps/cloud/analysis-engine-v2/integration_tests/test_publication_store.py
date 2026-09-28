@@ -10,6 +10,8 @@ from psycopg.conninfo import conninfo_to_dict
 
 from edge_analysis_v2.publication_store import PublicationStore
 from edge_analysis_v2.tool_store import ToolStore
+from edge_analysis_v2.body_changes import BodyEditor
+from edge_analysis_v2.schemas import FACTORS
 
 
 NOW = datetime.fromisoformat("2026-09-28T10:00:00+09:00")
@@ -79,3 +81,56 @@ def test_previous_day_items_cannot_be_selected_as_today(publication):
     store.begin("movement", second, key, NOW + timedelta(days=1), key)
     with pytest.raises(ValueError, match="other-day"):
         store.save_movement(second, {"new_items":[], "selected_item_ids":selected, "summary":"요약"})
+
+
+def features(run):
+    return {"outlook":{"direction":"상승"}, "summary_card":{"title":"요약 제목", "summary":"요약"},
+            "factors":[{"type":factor, "sticker":"상승", "sentence":"설명"} for factor in FACTORS],
+            "conclusion":{"title":"결론", "supports":[{"label":"도움", "tool_run_ids":[run]}],
+                          "burdens":[], "sentence":"판단"}}
+
+
+def test_outlook_all_features_are_assembled_from_committed_rows(publication):
+    store, key, evidence = publication
+    identity = key + "-outlook"
+    store.begin("outlook", identity, key, NOW)
+    evidence(identity, "outlook")
+    editor = BodyEditor(None, NOW)
+    body = editor.write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"], "tool_run_ids":[identity]}])
+    result = store.save_outlook(identity, features(identity), body)
+    assert result["detail"]["items"][0]["sentences"][0] == {"sentence":"불릿", "is_updated":False}
+    assert result["detail"]["updates"]["items"] == []
+    assert store.get_outlook(identity) == result
+    assert store.save_outlook(identity, {}, {}) == result
+
+
+def test_missing_factor_rejects_entire_publication_instead_of_inventing_neutral(publication):
+    store, key, evidence = publication
+    identity = key + "-outlook"
+    store.begin("outlook", identity, key, NOW)
+    evidence(identity, "outlook")
+    incomplete = features(identity)
+    incomplete["factors"].pop()
+    body = BodyEditor(None, NOW).write("본문", [])
+    with pytest.raises(ValueError, match="five"):
+        store.save_outlook(identity, incomplete, body)
+    assert store.get_outlook(identity) is None
+    assert store.connection.execute("SELECT count(*) FROM outlook_factors WHERE analysis_id=%s", (identity,)).fetchone()[0] == 0
+
+
+def test_outlook_changed_topic_and_daily_updates_share_new_analysis(publication):
+    store, key, evidence = publication
+    identity = key + "-outlook"
+    store.begin("outlook", identity, key, NOW)
+    evidence(identity, "outlook")
+    editor = BodyEditor(None, NOW)
+    body = editor.write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"], "tool_run_ids":[identity]}])
+    first = store.save_outlook(identity, features(identity), body)
+    second = identity + "-next"
+    store.begin("outlook", second, key, NOW + timedelta(minutes=1), identity)
+    evidence(second, "outlook")
+    editor = BodyEditor(first["detail"], NOW)
+    body = editor.apply([{"action":"update", "id":"topic", "sentences":["새 불릿"], "updated_sentence_numbers":[1], "tool_run_ids":[second]}])
+    result = store.save_outlook(second, features(second), body)
+    assert result["detail"]["updates"]["items"][0]["sentence"] == "새 불릿"
+    assert store.get_outlook(identity) == first
