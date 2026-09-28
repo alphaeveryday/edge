@@ -7,14 +7,14 @@
 세 묶음이다.
 - **쓰기 소유**: 앱이 만든다. 사용자·디바이스·토큰·관심·알림·커뮤니티·투표.
 - **읽기 전용 동기화**: 파이프라인 산출물과 시장 데이터를 앱 DB 로 옮긴 것. 앱은 읽기만 한다.
-- **화면 전용 응답**(HomeBrief·EtfSummary·ThemeSheet·ThemeFeedItem)은 테이블 없이 위 둘을 조합한다.
+- **화면 전용 응답**(HomeBrief·EtfSummary·ThemeFeedItem)은 테이블 없이 위 둘을 조합한다.
 
 ## 공통 규칙
 
 이름 규칙.
 - 테이블은 단수 snake_case. 회원은 `member`(`user` 금지), 게스트 기기는 `device`, 둘을 묶은 소유자는 `principal`.
 - 쓰기 소유의 자식·연결 테이블은 부모 이름을 접두사로(`watch_item`·`post_tag`·`post_like`·`principal_theme`·`issue_etf`). 자체 정체성이 있는 것은 제 이름(`reply`·`notification`·`vote`).
-- 동기화 테이블은 단위를 접두사로. ETF 단위 발행본·시장 데이터는 `etf_`(`etf_move`·`etf_analysis`·`etf_analysis_axis`·`etf_story`·`etf_rank`·`etf_detail`·`etf_quote`·`etf_candle`), 테마 단위는 `theme_`(`theme_detail`). 마스터는 이름 그대로(`etf`·`theme`·`issue`).
+- 동기화 테이블은 단위를 접두사로. ETF 단위 발행본·시장 데이터는 `etf_`(`etf_move`·`etf_analysis`·`etf_analysis_axis`·`etf_rank`·`etf_detail`·`etf_quote`·`etf_candle`), 테마 단위는 `theme_`(`theme_detail`). 마스터는 이름 그대로(`etf`·`theme`·`issue`).
 - 참조 컬럼은 `<테이블>_id`(`member_id`·`device_id`·`principal_id`·`post_id`·`etf_analysis_id`). ETF 와 테마는 자연키라 `etf_code`·`theme_key`. 파이프라인 키는 원래 이름 유지(`instrument_id`·`concept_id`).
 - 시각 컬럼은 `_at`(`created_at`·`updated_at`·`deleted_at`·`published_at`·`synced_at`), 기준일은 `as_of`.
 - enum 값은 소문자 varchar + CHECK.
@@ -213,7 +213,7 @@ PK `(post_id, member_id)`. PUT 은 `INSERT ... ON CONFLICT DO NOTHING`, DELETE �
 | etf_candle | price_daily | close·volume 만 있고 **open·high·low 없음** |
 | etf_quote | 없음 | 마트에 실시간 시세 테이블 없음 |
 | etf_detail(holdings) | etf_holding_snapshot | weight_ratio 0~1 |
-| 이슈·테마 본문·순위·스토리 | 없음 | 계약이 요구하는 키로 테이블만 선점 |
+| 이슈·테마 본문·순위 | 없음 | 계약이 요구하는 키로 테이블만 선점 |
 
 규칙.
 - 앱 DB 안 별도 테이블. 앱은 읽기만 한다. 쓰기 주체(논리 복제·배치·파이프라인 직접 쓰기)는 4단계 동기화 방식 결정 때 정한다.
@@ -293,7 +293,7 @@ PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있�
 | payload | jsonb | `{outlook, summary_card, detail, factors, conclusion, publication}` |
 | synced_at | timestamptz | |
 
-`UNIQUE(etf_code, as_of)`. `detail` 은 서버가 수정분을 반영한 완성본(`title, items[], updates{date, items[]}`)이다. 매핑: `dates`=같은 ETF 의 as_of 목록(`hasDaily`), `now`=signal, `prev`=직전 as_of 행의 signal, `headTitle`=summary_card.title, `synth`=summary_card.summary, `axes`=factors(sticker→Dir, `hasPage`=`etf_analysis_axis` 행 존재), `title`=detail.title, `args`=detail.items(`no` 순번, `claim`=title_keyword, `body`=sentences[].sentence), `todayDate`·`today`=detail.updates, `closingTitle`=conclusion.title, `pos`=supports[].label, `neg`=burdens[].label, `close`=conclusion.sentence(+change_condition). `question`·`dateline` 은 서비스 고정 문구, `next` 는 관심 그룹의 다음 ETF. `id`·`tool_run_ids`·`is_updated`·`reason` 은 앱에 내려가지 않는다. 최신 signal 은 `EtfSummary.signal`·`HomeBrief.band`·`IssueDetail.affected[].prev` 에도 쓴다.
+`UNIQUE(etf_code, as_of)`. `detail` 은 서버가 수정분을 반영한 완성본(`title, items[], updates{date, items[]}`)이다. 매핑: `dates`=같은 ETF 의 as_of 목록(`hasDaily`), `now`=signal, `prev`=직전 as_of 행의 signal, `headTitle`=고정 문구 "오늘 발행", `question`=summary_card.title, `dateline`=published_at, `synth`=summary_card.summary, `axes`=factors(sticker→Dir, `hasPage`=`etf_analysis_axis` 행 존재), `title`=detail.title, `args`=detail.items(`no` 순번, `claim`=title_keyword, `body`=sentences[].sentence), `todayDate`·`today`=detail.updates, `closingTitle`=conclusion.title, `pos`=supports[].label, `neg`=burdens[].label, `close`=conclusion.sentence(+change_condition). `id`·`tool_run_ids`·`is_updated`·`reason` 은 앱에 내려가지 않는다. 최신 signal 은 `EtfSummary.signal`·`HomeBrief.band`·`IssueDetail.affected[].prev` 에도 쓴다.
 
 ### etf_analysis_axis (5요인 상세)
 | 컬럼 | 타입 | 비고 |
@@ -337,10 +337,10 @@ PK `(issue_id, etf_code)`, 인덱스 `(etf_code)`. `GET /issues?tab=mine` 이 �
 | published_at | timestamptz | `ThemeDetail.updated` |
 | dir | varchar(8) | `ThemeFeedItem.dir` |
 | headline | varchar(200) | `ThemeFeedItem.headline` |
-| payload | jsonb | `ThemeDetail` 본문 + `ThemeSheet` 의 `title, why, rows[].tag` |
+| payload | jsonb | `ThemeDetail` 본문 |
 | synced_at | timestamptz | |
 
-PK `(theme_key, as_of)`. 피드는 테마별 최신 as_of 행. `GET /themes/feed?dir=` 는 dir 컬럼. 원천 미확인.
+PK `(theme_key, as_of)`. 피드는 테마별 최신 as_of 행. 원천 미확인.
 
 ### etf_rank (탐색 순위)
 | 컬럼 | 타입 | 비고 |
@@ -364,21 +364,9 @@ PK `(as_of, rank)`. 최신 as_of 만 조회. 원천 미확인.
 
 구성종목 비중·설명 문장이 전부 작성물이라 통째로 둔다. 종목 기준 역조회 엔드포인트가 없어 `etf_holding` 정규화는 하지 않는다. 원천 미확인.
 
-### etf_story
-| 컬럼 | 타입 | 비고 |
-|---|---|---|
-| etf_code | varchar(6) → etf | |
-| as_of | date | |
-| published_at | timestamptz | |
-| payload | jsonb | `Story.cards[]` |
-| synced_at | timestamptz | |
-
-PK `(etf_code, as_of)`. `Story.etf`·`prev` 는 조인. 생산자 미확인. 카드 kind 중 `hook` 은 카피라 서버가 쓸 수 없고(원칙: 서버는 문장을 쓰지 않는다) `ai`·`news` 는 etf_move·etf_analysis·issue 에서 뽑을 수 있다. 생산자가 정해질 때까지 스텁이 예시를 준다.
-
 ### 조합 (테이블 없음)
 - `EtfSummary` = etf + etf_quote + 최신 etf_analysis.signal.
 - `HomeBrief` = 관심 그룹의 EtfSummary 목록. `band`·`changePct` 는 그룹 종합이며 규칙은 서비스에 둔다.
-- `ThemeSheet` = theme_detail.payload 의 sheet 부분 + `etf.theme_key` 로 모은 EtfSummary.
 - `ThemeFeedItem` = theme + theme_detail 최신 행 + `etf.theme_key` 집계.
 
 ## ER 다이어그램 (쓰기 소유)
@@ -421,13 +409,12 @@ erDiagram
     theme ||--o{ theme_detail : ""
     etf ||--o{ etf_rank : ""
     etf ||--o| etf_detail : ""
-    etf ||--o{ etf_story : ""
 ```
 
 ## 열린 질문
 - `Post.etf.short`(ETF 짧은 이름)·`Post.author.name` 은 조인으로 만든다. 탈퇴 회원은 name 을 "탈퇴한 사용자" 로.
 - 리포스트 카운터(`repost_count`)는 `repost_of_id` 집계로도 되지만 피드 조회마다 세지 않으려고 카운터를 둔다.
 - 파이프라인에 요청할 것: `outlook.direction` 5단계 enum 동봉. 오늘 움직임 `summary` null 발행본을 `GET /etfs/{code}/move` 가 어떻게 답할지(404 코드 vs 빈 응답)는 계약 확인.
-- 원천 갭: `etf_candle` 의 open·high·low(`price_daily` 는 close·volume 만), `etf_quote` 의 실시간 시세(마트에 없음). 원천 미확인: issue·theme_detail·etf_rank·etf_detail 본문·etf_story. 스토리는 생산자 자체가 없다.
+- 원천 갭: `etf_candle` 의 open·high·low(`price_daily` 는 close·volume 만), `etf_quote` 의 실시간 시세(마트에 없음). 원천 미확인: issue·theme_detail·etf_rank·etf_detail 본문.
 - 상장폐지 등으로 `etf` 에 없는 코드가 관심·게시물에 남으면 조인이 빈다. 숨길지 표시할지는 서비스 규칙으로 정한다.
 - 동기화 방식(논리 복제·배치·파이프라인 직접 쓰기)은 4단계에서. 방식에 따라 `synced_at` 의 의미와 upsert 주체가 정해진다.
