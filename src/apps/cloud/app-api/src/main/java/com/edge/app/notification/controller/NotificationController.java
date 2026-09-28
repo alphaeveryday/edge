@@ -5,6 +5,7 @@ import com.edge.app.common.cursor.Cursor;
 import com.edge.app.common.cursor.PageResponse;
 import com.edge.app.notification.dto.NotificationResponse;
 import com.edge.app.notification.dto.UnreadCountResponse;
+import com.edge.app.notification.entity.NotiFilter;
 import com.edge.app.notification.service.NotificationService;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.constraints.Max;
@@ -25,7 +26,7 @@ public class NotificationController {
 
     @GetMapping
     public ApiResponse<PageResponse<NotificationResponse>> notificationList(AppPrincipal principal,
-            @RequestParam(required = false) String kind, @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) NotiFilter kind, @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.onSuccess(notificationService.list(principal, kind, cursor == null ? null : Cursor.decode(cursor), size));
     }
