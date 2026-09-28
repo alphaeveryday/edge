@@ -71,6 +71,7 @@ low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=t
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import logging
@@ -320,18 +321,22 @@ def _day_payload(prior_rows: list[dict], existing: set[str],
     return keep + rows, len(rows)
 
 
+def _serialize(rows: list[dict]) -> bytes:
+    """행 → parquet 바이트. 같은 행·같은 pyarrow 면 같은 바이트다 — fmp 계획이 md5 로 파일을 고정하는 근거."""
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(rows, schema=SCHEMA), buf, compression="snappy")
+    return buf.getvalue()
+
+
 def _write_day(s3, bucket: str, day: str, rows: list[dict], dry: bool,
                name: str) -> int:
     if not rows:
         return 0
-    tbl = pa.Table.from_pylist(rows, schema=SCHEMA)
     if dry:
-        return tbl.num_rows
-    buf = io.BytesIO()
-    pq.write_table(tbl, buf, compression="snappy")
+        return len(rows)
     s3.put_object(Bucket=bucket, Key=f"{PREFIX}/trade_date={day}/{name}",
-                  Body=buf.getvalue())
-    return tbl.num_rows
+                  Body=_serialize(rows))
+    return len(rows)
 
 
 def _collect_toss(days, targets, covered, a):
@@ -540,8 +545,6 @@ def _load_local_source(uri: str) -> dict:
     의 시가가 된다) · (ticker, ts) 유일(소비자 글롭은 파티션 내 중복을 안 걷는다).
     예외 하나: 5분 격자 밖 시각은 죽지 않고 `off_grid` 로 따로 모아 대장에 남긴다(아래).
     """
-    import hashlib
-
     bucket, key = uri.removeprefix("s3://").split("/", 1)
     obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
     body = obj["Body"].read()
@@ -599,7 +602,12 @@ def _collect_fmp_local(days, targets, covered, a):
     for d in days:
         rows = src.get(d, [])
         out = [r for r in rows if r["ticker"] in targets and r["ticker"] not in covered[d]]
-        stats["skipped_covered"] += sum(1 for r in rows if r["ticker"] in covered[d])
+        for r in rows:
+            if r["ticker"] in covered[d]:
+                stats["skipped_covered"] += 1
+                cells = getattr(a, "fmp_covered_cells", None)
+                if cells is not None:
+                    cells[(d, r["ticker"])] += 1
         stats["skipped_not_target"] += sum(1 for r in rows if r["ticker"] not in targets
                                            and r["ticker"] not in covered[d])
         if out:
@@ -640,8 +648,19 @@ def main() -> int:
                     help="fmp 전용 — 이관 원천 parquet 의 s3:// 경로(ALPHA-1104 스테이징 파일)")
     ap.add_argument("--report", default="",
                     help="fmp 전용 — 이관 대장 JSON 을 이 로컬 경로에 쓴다(원천 해시·날짜별 착지·건너뜀 사유)")
+    ap.add_argument("--plan", default="",
+                    help="fmp 전용 — 실제 적재는 이 dry-run 대장과 원천·목적 상태·파일 md5 가 전부 같을 "
+                         "때만 쓴다. 하나라도 다르면 한 파일도 쓰지 않고 멈춘다")
+    ap.add_argument("--verify", default="",
+                    help="fmp 전용 — 실행 대장(비 dry-run)을 받아 착지 파일·기존 파일·행·키를 대조한다(읽기만)")
+    ap.add_argument("--rollback", default="",
+                    help="fmp 전용 — 실행 대장의 파일 목록만 지운다. 전 파일 ETag 가 대장과 같고 기존 "
+                         "파일이 그대로일 때만. --dry-run 이면 지우지 않고 판정만")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if a.vendor == "fmp" and (a.verify or a.rollback):
+        run = json.loads(open(a.verify or a.rollback, encoding="utf-8").read())
+        return (_fmp_verify if a.verify else _fmp_rollback)(_s3(), a, run)
 
     spec = VENDORS[a.vendor]
     backfill_name = spec["file"]
@@ -649,6 +668,8 @@ def main() -> int:
     migrating_fmp = a.vendor == "fmp" and not a.repair_session_hours
     if migrating_fmp and not a.source_parquet:
         ap.error("--vendor fmp 는 --source-parquet 가 필요하다")
+    if migrating_fmp and not a.dry_run and not a.plan:
+        ap.error("--vendor fmp 실제 적재는 --plan <dry-run 대장> 이 필요하다 — dry-run 을 먼저 돌려라")
     s3 = _s3()
     days = _trading_days(s3, a.bucket)[-a.days:]
     if migrating_fmp:
@@ -657,7 +678,11 @@ def main() -> int:
         # 수집기가 `skipped_outside_calendar` 로 센다.
         a.fmp_source = _load_local_source(a.source_parquet)
         a.fmp_stats = defaultdict(int)
+        a.fmp_covered_cells = defaultdict(int)     # (날짜, 종목) → 이미 가진 칸이라 안 옮긴 행
         days = [d for d in days if d in a.fmp_source["by_day"]]
+        # 쓰기 전 목적 상태. dry-run 은 이것을 대장에 싣고, 실제 적재는 대장의 것과 비교한다.
+        a.fmp_snapshot = _partition_snapshot(s3, a.bucket, days)
+        a.fmp_plan = json.loads(open(a.plan, encoding="utf-8").read()) if a.plan else None
     if not days:
         log.error("파티션이 없다 — 버킷/프리픽스를 확인해라")
         return 1
@@ -734,7 +759,15 @@ def main() -> int:
     collect = {"kis": _collect_kis, "toss": _collect_toss, "fmp": _collect_fmp_local}[a.vendor]
     landed: list[dict] = []
     try:
-        total, days_written = _consume(s3, a, spec, collect(days, targets, covered, a), landed)
+        stream = collect(days, targets, covered, a)
+        if a.vendor == "fmp":
+            if a.fmp_plan is not None:
+                problems = _fmp_plan_problems(a.fmp_plan, a)
+                if problems:
+                    raise PlanMismatch("; ".join(problems[:10]))
+            total, days_written = _consume_fmp(s3, a, stream, landed)
+        else:
+            total, days_written = _consume(s3, a, spec, stream, landed)
     except Exception as e:
         # 이미 착지한 날이 있을 수 있다 — 대장을 남기고 올린다. 안 남기면 재실행이 그날을
         # `skipped_covered` 로 세어 이 런의 원천 해시·착지 내역을 되살릴 길이 없다.
@@ -770,6 +803,191 @@ def _consume(s3, a, spec, stream, landed: list[dict]) -> tuple[int, int]:
     return total, days_written
 
 
+class PlanMismatch(RuntimeError):
+    """dry-run 대장과 지금이 다르다 — 쓰지 않고 멈춘다."""
+
+
+def _partition_snapshot(s3, bucket: str, days) -> dict[str, dict[str, str]]:
+    """{날짜: {키: ETag}} — 대상 날짜 파티션의 지금 파일. 프리픽스를 한 번 훑는다."""
+    want, out = set(days), {d: {} for d in days}
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{PREFIX}/"):
+        for o in page.get("Contents", []):
+            d = o["Key"].split("trade_date=")[-1].split("/")[0]
+            if d in want:
+                out[d][o["Key"]] = o["ETag"].strip('"')
+    return out
+
+
+def _fmp_plan_problems(plan: dict, a) -> list[str]:
+    """dry-run 대장과 지금의 차이. 비면 같다. 원천 해시 · 대상 파티션 파일(키·ETag) 둘을 본다.
+
+    착지분(이미 쓴 우리 파일)은 차이로 세지 않는다 — 중단 뒤 재개는 계획의 md5 와 같은 파일만
+    남아 있으면 이어 간다(`_consume_fmp`). 그 밖의 파일이 하나라도 달라지면 dry-run 이후 누가
+    썼다는 뜻이라 멈춘다.
+    """
+    problems = []
+    if plan.get("status") != "dry_run_ok" or not plan.get("dry_run"):
+        problems.append(f"계획이 성공한 dry-run 이 아니다 (status={plan.get('status')})")
+    if plan.get("bucket") != a.bucket:
+        problems.append(f"버킷이 다르다 ({plan.get('bucket')} ≠ {a.bucket})")
+    if plan.get("source", {}).get("sha256") != a.fmp_source["sha256"]:
+        problems.append("원천 sha256 이 계획과 다르다")
+    mine = {x["dest_key"]: x["md5"] for x in plan.get("landed", [])}
+    before = plan.get("snapshot", {})
+    for d in sorted(set(before) | set(a.fmp_snapshot)):
+        now = {k: e for k, e in a.fmp_snapshot.get(d, {}).items()
+               if not (k in mine and mine[k] == e)}
+        if now != before.get(d, {}):
+            problems.append(f"{d} 파티션 파일이 계획 이후 바뀌었다")
+    return problems
+
+
+def _head_etag(s3, bucket: str, key: str) -> str | None:
+    try:
+        return s3.head_object(Bucket=bucket, Key=key)["ETag"].strip('"')
+    except s3.exceptions.ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
+def _consume_fmp(s3, a, stream, landed: list[dict]) -> tuple[int, int]:
+    """fmp 이관의 쓰기 — 새 파일만 만들고, 계획과 한 바이트라도 다르면 멈춘다.
+
+    `_consume` 과 다른 점: 앞선 착지분과 **병합하지 않는다**(이 파일명은 이관 전엔 없다).
+    이미 있으면 계획의 md5 와 같을 때만 재개로 건너뛰고, 다르면 멈춘다. PUT 직전에 파티션을
+    다시 훑어 dry-run 이후 바뀐 파일이 있는지 보고, PUT 뒤에는 돌아온 ETag 가 md5 와 같은지 본다.
+    """
+    name = VENDORS["fmp"]["file"]
+    plan = {x["trade_date"]: x for x in a.fmp_plan["landed"]} if a.fmp_plan else None
+    total = days_written = 0
+    for d, rows in stream:
+        key = f"{PREFIX}/trade_date={d}/{name}"
+        existing = _tickers_present(_read_day(s3, a.bucket, d))
+        payload = _day_payload([], existing, rows, close_inclusive=True)
+        if payload is None:
+            continue
+        out, fresh = payload
+        body = _serialize(out)
+        entry = {"trade_date": d, "dest_key": key, "rows_added": fresh, "file_rows": len(out),
+                 "tickers": sorted({r["ticker"] for r in out}),
+                 "md5": hashlib.md5(body).hexdigest(),  # noqa: S324 - S3 ETag 대조용
+                 "sha256": hashlib.sha256(body).hexdigest(), "etag": None}
+        if plan is not None:
+            want = plan.get(d)
+            if want is None or want["md5"] != entry["md5"]:
+                raise PlanMismatch(f"{d} 산출이 계획과 다르다")
+        if not a.dry_run:
+            head = _head_etag(s3, a.bucket, key)
+            if head is not None:
+                # 수집기는 우리 파일이 이미 가진 칸을 건너뛰므로 여기 온 목적 키는 비어 있어야 한다.
+                # 있다면 계획 밖의 누군가가 같은 이름으로 썼다 — 덮지 않는다.
+                raise PlanMismatch(f"{key} 가 이미 있다 (ETag {head}) — 덮어쓰지 않는다")
+            now = _partition_snapshot(s3, a.bucket, [d])[d]
+            if now != a.fmp_snapshot.get(d, {}):
+                raise PlanMismatch(f"{d} 파티션이 실행 중에 바뀌었다")
+            etag = s3.put_object(Bucket=a.bucket, Key=key, Body=body)["ETag"].strip('"')
+            if etag != entry["md5"]:
+                raise PlanMismatch(f"{key} PUT ETag 가 md5 와 다르다")
+            entry["etag"] = etag
+        landed.append(entry)
+        total += fresh
+        days_written += 1
+        log.info("%s ← %d행%s", d, fresh, " (dry-run)" if a.dry_run else "")
+    if plan is not None:
+        # 계획엔 있는데 이번에 산출되지 않은 날 — 앞선 실행이 이미 쓴 날이면(수집기가 그 칸을
+        # `covered` 로 건너뛴다) 계획 md5 와 같은 파일이 있어야 한다. 아니면 상태가 어긋났다.
+        missing = []
+        for d in sorted(set(plan) - {x["trade_date"] for x in landed}):
+            want = plan[d]
+            head = None if a.dry_run else _head_etag(s3, a.bucket, want["dest_key"])
+            if head is not None and head == want["md5"]:
+                landed.append({k: want[k] for k in ("trade_date", "dest_key", "rows_added",
+                                                    "file_rows", "tickers", "md5", "sha256")}
+                              | {"etag": head, "resumed": True})
+                total += want["rows_added"]
+                days_written += 1
+            else:
+                missing.append(d)
+        if missing:
+            raise PlanMismatch(f"계획의 {len(missing)}일이 산출되지 않았다 (예: {missing[:3]})")
+    return total, days_written
+
+
+def _executed_landed(run: dict) -> list[dict]:
+    if run.get("dry_run") or not run.get("landed"):
+        raise SystemExit("실행 대장이 아니다 — dry-run 대장이거나 착지 목록이 비었다")
+    return [x for x in run["landed"] if x.get("etag")]
+
+
+def _fmp_verify(s3, a, run: dict) -> int:
+    """적재 뒤 대조(읽기만). 날짜마다: 파일 목록 = 적재 전 + 이 파일 · 기존 파일 ETag 불변 ·
+    이 파일 ETag = 대장 · 행 수·종목 = 대장 · 파일 안 (ticker, ts) 유일 · 계약(격자·정규장·
+    날짜·available_at) · **같은 파티션 다른 파일과 종목이 겹치지 않음**(소비자 글롭이 두 번 센다)."""
+    results, bad = [], 0
+    for x in _executed_landed(run):
+        d, key, probs = x["trade_date"], x["dest_key"], []
+        now = _partition_snapshot(s3, a.bucket, [d])[d]
+        before = run["snapshot"].get(d, {})
+        if set(now) != set(before) | {key}:
+            probs.append(f"파일 목록이 다르다: {sorted(set(now) ^ (set(before) | {key}))}")
+        probs += [f"기존 파일이 바뀌었다: {k}" for k, e in before.items() if now.get(k) != e]
+        if now.get(key) != x["etag"]:
+            probs.append("착지 파일 ETag 가 대장과 다르다")
+        t = _read_day(s3, a.bucket, d, key.rsplit("/", 1)[-1])
+        rows = t.to_pylist() if t is not None else []
+        if len(rows) != x["file_rows"] or sorted({r["ticker"] for r in rows}) != x["tickers"]:
+            probs.append(f"행·종목이 대장과 다르다 ({len(rows)}행)")
+        if len({(r["ticker"], r["ts"]) for r in rows}) != len(rows):
+            probs.append("(ticker, ts) 중복")
+        probs += [f"계약 위반 {r['ticker']} {r['ts']}" for r in rows
+                  if r["ts"].date().isoformat() != d or r["source_vendor"] != VENDORS["fmp"]["vendor"]
+                  or r["available_at"] != r["ts"] + timedelta(minutes=BUCKET_MINUTES)
+                  or r["ts"].minute % BUCKET_MINUTES or not _in_session(r["ts"].time(), True)][:3]
+        others = set()
+        for k in now:
+            if k != key:
+                others |= _tickers_present(_read_day(s3, a.bucket, d, k.rsplit("/", 1)[-1]))
+        if others & set(x["tickers"]):
+            probs.append(f"다른 파일과 종목이 겹친다: {sorted(others & set(x['tickers']))[:5]}")
+        bad += bool(probs)
+        results.append({"trade_date": d, "ok": not probs, "problems": probs})
+    out = {"verified": len(results), "failed": bad, "results": results}
+    if a.report:
+        with open(a.report, "w", encoding="utf-8") as f:
+            f.write(json.dumps(out, ensure_ascii=False, indent=1))
+    log.info("적재 대조: %d일 중 실패 %d", len(results), bad)
+    return 0 if results and not bad else 1
+
+
+def _fmp_rollback(s3, a, run: dict) -> int:
+    """실행 대장의 파일만 지운다. **전부 확인한 뒤에야 하나라도 지운다.**
+
+    멈추는 조건: 지울 파일의 ETag 가 대장과 다르다(누가 고쳐 썼다) · 같은 파티션의 기존 파일이
+    적재 전과 다르다(누가 병합·재작성했다 — 그 경우 이 파일만 지워서는 원상이 아니다). 이미 없는
+    파일은 앞선 롤백분으로 보고 건너뛴다. prefix 를 지우지 않는다.
+    """
+    todo, probs = [], []
+    for x in _executed_landed(run):
+        now = _partition_snapshot(s3, a.bucket, [x["trade_date"]])[x["trade_date"]]
+        if x["dest_key"] not in now:
+            continue
+        if now[x["dest_key"]] != x["etag"]:
+            probs.append(f"{x['dest_key']} ETag 가 대장과 다르다")
+        probs += [f"{k} 가 적재 전과 다르다" for k, e in run["snapshot"].get(x["trade_date"], {}).items()
+                  if now.get(k) != e]
+        todo.append(x["dest_key"])
+    if probs:
+        for p in probs[:20]:
+            log.error("롤백 중단 — %s", p)
+        return 1
+    for k in todo:
+        if not a.dry_run:
+            s3.delete_object(Bucket=a.bucket, Key=k)
+    log.info("롤백 %d파일%s", len(todo), " (dry-run — 지우지 않음)" if a.dry_run else " 삭제")
+    return 0
+
+
 def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> int:
     """이관 대장을 남기고 **원천 행이 전부 설명되는지** 판정한다 — 안 되면 exit 1.
 
@@ -780,7 +998,9 @@ def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> in
     st, src = dict(a.fmp_stats), a.fmp_source
     st["skipped_off_grid"] = len(src.get("off_grid", []))
     accounted = st.get("yielded", 0) + sum(v for k, v in st.items() if k.startswith("skipped_"))
-    ok = error is None and accounted == src["rows"] and st.get("yielded", 0) == total
+    # 재개로 건너뛴 날의 행은 수집기가 '이미 가진 칸'으로 셌다 — 이번 쓰기 수에서 뺀 값이 yielded 다.
+    resumed = sum(x["rows_added"] for x in landed if x.get("resumed"))
+    ok = error is None and accounted == src["rows"] and st.get("yielded", 0) == total - resumed
     status = (("dry_run_ok" if a.dry_run else "success") if ok
               else "error" if error is not None else "unaccounted_rows")
     report = {
@@ -790,6 +1010,9 @@ def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> in
         "source": {k: src[k] for k in ("uri", "etag", "sha256", "rows")},
         "targets": targets, "rows_added": total, "stats": st, "accounted": accounted,
         "off_grid": src.get("off_grid", []),
+        "snapshot": getattr(a, "fmp_snapshot", {}), "plan": getattr(a, "plan", "") or None,
+        "covered_cells": [{"trade_date": d, "ticker": t, "rows": n} for (d, t), n
+                          in sorted(getattr(a, "fmp_covered_cells", {}).items())],
         "landed": landed,
     }
     body = json.dumps(report, ensure_ascii=False, indent=1, default=str)

@@ -436,17 +436,28 @@ def test_main_writes_the_requested_vendors_file_with_that_vendors_collector():
     monkey.setattr(backfill, "_load_local_source",
                    lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 1,
                                 "by_day": {day: [_row("091170")]}})
+    monkey.setattr(backfill, "_partition_snapshot", lambda _s3, _b, days: {d: {} for d in days})
     monkey.setattr(backfill, "_write_day",
                    lambda _s3, _b, d, rows, _dry, name: wrote.append((d, name)) or len(rows))
+
+    import json
+    import tempfile
 
     try:
         for vendor in sorted(backfill.VENDORS):
             ran.clear(), wrote.clear()
-            extra = ["--source-parquet", "s3://b/k.parquet"] if vendor == "fmp" else []
+            report = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
+            extra = (["--source-parquet", "s3://b/k.parquet", "--report", report]
+                     if vendor == "fmp" else [])
             monkey.setattr("sys.argv",
                            ["backfill", "--vendor", vendor, "--dry-run", *extra])
             assert backfill.main() == 0
             assert ran == [vendor], f"--vendor {vendor} 인데 {ran} 이 돌았다"
+            if vendor == "fmp":
+                # fmp 는 병합 쓰기(_write_day)를 안 탄다 — 새 파일만 만드는 경로라 대장의 키를 본다.
+                keys = [x["dest_key"] for x in json.load(open(report))["landed"]]
+                wrote.extend((k.split("trade_date=")[1].split("/")[0], k.rsplit("/", 1)[1])
+                             for k in keys)
             assert wrote == [(day, backfill.VENDORS[vendor]["file"])], \
                 f"--vendor {vendor} 가 {wrote} 에 썼다"
     finally:
@@ -981,11 +992,14 @@ def test_fmp_failure_mid_run_still_leaves_the_ledger(monkeypatch, tmp_path):
                         lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 2,
                                      "by_day": {d: [_fmp_row("069500", d)] for d in days}})
 
-    def _write(_s3, _b, d, rows, _dry, _name):
-        if d == days[1]:
+    real = backfill._serialize
+
+    def _ser(rows):
+        if rows[0]["ts"].date().isoformat() == days[1]:
             raise OSError("PUT 실패")
-        return len(rows)
-    monkeypatch.setattr(backfill, "_write_day", _write)
+        return real(rows)
+    monkeypatch.setattr(backfill, "_serialize", _ser)
+    monkeypatch.setattr(backfill, "_partition_snapshot", lambda _s3, _b, ds: {d: {} for d in ds})
     report = tmp_path / "r.json"
     monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--dry-run",
                                      "--source-parquet", "s3://b/k", "--report", str(report)])
@@ -1007,6 +1021,7 @@ def test_fmp_main_fails_when_source_rows_are_not_all_accounted_for(monkeypatch, 
     monkeypatch.setattr(backfill, "_load_local_source",
                         lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 3,
                                      "by_day": {day: [_fmp_row("069500")]}})   # 3 이라 주장
+    monkeypatch.setattr(backfill, "_partition_snapshot", lambda _s3, _b, ds: {d: {} for d in ds})
     report = tmp_path / "r.json"
     monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--dry-run",
                                      "--source-parquet", "s3://b/k", "--report", str(report)])
@@ -1059,3 +1074,158 @@ def test_fmp_session_repair_needs_no_source_and_scans_the_whole_window(monkeypat
                                      "--dry-run"])
     assert backfill.main() == 0
     assert seen == days
+
+
+# ── fmp 실행 계약: 계획 고정 · 존재 검사 · 대조 · 롤백 (ALPHA-1104) ─────────────────
+
+class _MemS3:
+    """list/head/get/put/delete 만 흉내내는 메모리 S3. ETag = md5(본문) — SSE-S3 단일 PUT 과 같다."""
+
+    class exceptions:  # noqa: N801 - boto3 모양
+        class NoSuchKey(Exception):
+            pass
+
+        class ClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+    def __init__(self, objs: dict[str, bytes]):
+        self.objs, self.puts, self.deletes = dict(objs), [], []
+
+    def _etag(self, k):
+        import hashlib
+        return hashlib.md5(self.objs[k]).hexdigest()  # noqa: S324
+
+    def get_paginator(self, _name):
+        outer = self
+
+        class _P:
+            def paginate(self, Bucket, Prefix):  # noqa: N803
+                yield {"Contents": [{"Key": k, "ETag": f'"{outer._etag(k)}"'}
+                                    for k in sorted(outer.objs) if k.startswith(Prefix)]}
+        return _P()
+
+    def head_object(self, Bucket, Key):  # noqa: N803
+        if Key not in self.objs:
+            raise self.exceptions.ClientError("404")
+        return {"ETag": f'"{self._etag(Key)}"'}
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        import io
+        if Key not in self.objs:
+            raise self.exceptions.NoSuchKey()
+        return {"Body": io.BytesIO(self.objs[Key])}
+
+    def put_object(self, Bucket, Key, Body):  # noqa: N803
+        self.objs[Key] = Body
+        if Key.startswith("canonical/"):      # 이관 대장 로그 PUT 은 데이터 쓰기가 아니다
+            self.puts.append(Key)
+        return {"ETag": f'"{self._etag(Key)}"'}
+
+    def delete_object(self, Bucket, Key):  # noqa: N803
+        del self.objs[Key]
+        self.deletes.append(Key)
+
+
+_DAY = "2024-03-04"
+_P0 = f"{backfill.PREFIX}/trade_date={_DAY}/part-0.parquet"
+_FMP = f"{backfill.PREFIX}/trade_date={_DAY}/part-fmp-backfill.parquet"
+
+
+def _p0(ticker="005930") -> bytes:
+    return backfill._serialize([_fmp_row(ticker) | {"source_vendor": "fmp"}])
+
+
+def _run_fmp(monkeypatch, s3, tmp_path, *extra, name="r.json") -> tuple[int, dict]:
+    """main 을 fmp 로 한 번 돌린다. 원천은 069500 한 봉."""
+    import json
+    monkeypatch.setattr(backfill, "_s3", lambda: s3)
+    monkeypatch.setattr(backfill, "_trading_days", lambda _s3, _b: [_DAY])
+    monkeypatch.setattr(backfill, "_configured_universe", lambda: set())
+    monkeypatch.setattr(backfill, "_load_local_source",
+                        lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 1,
+                                     "off_grid": [], "by_day": {_DAY: [_fmp_row("069500")]}})
+    report = tmp_path / name
+    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--source-parquet", "s3://b/k",
+                                     "--report", str(report), *extra])
+    code = backfill.main()
+    return code, (json.loads(report.read_text()) if report.exists() else {})
+
+
+def test_fmp_real_load_refuses_to_run_without_a_dry_run_plan(monkeypatch, tmp_path):
+    """계획 없는 실제 적재는 인자 단계에서 거부된다 — dry-run 을 건너뛴 쓰기를 막는다."""
+    with pytest.raises(SystemExit):
+        _run_fmp(monkeypatch, _MemS3({_P0: _p0()}), tmp_path)
+
+
+def test_fmp_load_writes_exactly_the_planned_file_and_resumes_without_rewriting(monkeypatch, tmp_path):
+    """dry-run 대장대로 새 파일 하나만 생기고 ETag = 계획 md5. 다시 돌리면 PUT 이 없다(재개)."""
+    s3 = _MemS3({_P0: _p0()})
+    code, plan = _run_fmp(monkeypatch, s3, tmp_path, "--dry-run", name="plan.json")
+    assert code == 0 and s3.puts == [] and plan["snapshot"][_DAY] == {_P0: s3._etag(_P0)}
+    code, run = _run_fmp(monkeypatch, s3, tmp_path, "--plan", str(tmp_path / "plan.json"))
+    assert code == 0 and s3.puts == [_FMP]
+    assert run["landed"][0]["etag"] == plan["landed"][0]["md5"] == s3._etag(_FMP)
+    s3.puts.clear()
+    code, again = _run_fmp(monkeypatch, s3, tmp_path, "--plan", str(tmp_path / "plan.json"),
+                           name="again.json")
+    assert code == 0 and s3.puts == [] and again["landed"][0]["resumed"] is True
+
+
+def test_fmp_load_stops_before_any_write_when_the_target_changed_after_dry_run(monkeypatch, tmp_path):
+    """dry-run 이후 정본 파일이 바뀌면 한 파일도 쓰지 않고 exit 1 — 누가 그 사이 썼다는 뜻이다.
+
+    WHY: 적재 판정(이미 가진 칸 건너뛰기)은 dry-run 시점 상태로 검토·승인됐다. 그 상태가
+    달라진 채 쓰면 승인받지 않은 내용이 들어간다.
+    """
+    s3 = _MemS3({_P0: _p0()})
+    _run_fmp(monkeypatch, s3, tmp_path, "--dry-run", name="plan.json")
+    s3.objs[_P0] = _p0("000660")                                     # 다른 writer 가 재작성
+    with pytest.raises(backfill.PlanMismatch):
+        _run_fmp(monkeypatch, s3, tmp_path, "--plan", str(tmp_path / "plan.json"))
+    assert s3.puts == []
+
+
+def test_fmp_load_never_overwrites_a_foreign_file_at_the_destination(monkeypatch, tmp_path):
+    """목적 키에 계획과 다른 바이트가 있으면 덮지 않고 멈춘다(존재 검사)."""
+    s3 = _MemS3({_P0: _p0()})
+    _run_fmp(monkeypatch, s3, tmp_path, "--dry-run", name="plan.json")
+    monkeypatch.setattr(backfill, "_fmp_plan_problems", lambda plan, a: [])  # 사전 대조를 비켜 간 경합
+    foreign = backfill._serialize([_fmp_row("091160")])
+    s3.objs[_FMP] = foreign
+    with pytest.raises(backfill.PlanMismatch):
+        _run_fmp(monkeypatch, s3, tmp_path, "--plan", str(tmp_path / "plan.json"))
+    assert s3.objs[_FMP] == foreign and s3.puts == []
+
+
+def _executed(monkeypatch, tmp_path):
+    s3 = _MemS3({_P0: _p0()})
+    _run_fmp(monkeypatch, s3, tmp_path, "--dry-run", name="plan.json")
+    _run_fmp(monkeypatch, s3, tmp_path, "--plan", str(tmp_path / "plan.json"), name="run.json")
+    return s3, str(tmp_path / "run.json")
+
+
+def test_fmp_verify_passes_a_clean_load_and_catches_a_ticker_overlap(monkeypatch, tmp_path):
+    """대조는 깨끗한 적재를 통과시키고, 같은 파티션 다른 파일에 같은 종목이 생기면 실패한다."""
+    s3, run = _executed(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--verify", run])
+    assert backfill.main() == 0
+    s3.objs[_P0] = backfill._serialize([_fmp_row("069500") | {"source_vendor": "fmp"}])
+    assert backfill.main() == 1
+
+
+def test_fmp_rollback_deletes_only_the_runs_files_and_only_when_state_matches(monkeypatch, tmp_path):
+    """롤백은 대장의 파일만 지운다. 그 파일이나 기존 파일이 바뀌었으면 하나도 안 지운다.
+
+    WHY: 적재 뒤 누가 이 파일을 part-0 에 병합했다면(08-09 ALPHA-901 배치가 한 일) 이 파일만
+    지워서는 원상이 아니다 — 지우면 오히려 병합된 쪽과 어긋난다.
+    """
+    s3, run = _executed(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--rollback", run, "--dry-run"])
+    assert backfill.main() == 0 and s3.deletes == []
+    s3.objs[_P0] = _p0("000660")                                     # 적재 뒤 재작성
+    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--rollback", run])
+    assert backfill.main() == 1 and s3.deletes == [] and _FMP in s3.objs
+    s3.objs[_P0] = _p0()
+    assert backfill.main() == 0 and s3.deletes == [_FMP]
+    assert {k for k in s3.objs if k.startswith("canonical/")} == {_P0}
