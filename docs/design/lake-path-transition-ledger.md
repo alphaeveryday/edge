@@ -238,7 +238,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 | [#953](https://github.com/alphaeveryday/edge/pull/953) `collect.intraday` 파티션 덮어쓰기 방지 (ALPHA-1106 일부) | `75c6999d` 머지 16:52:34 KST |
 | [#952](https://github.com/alphaeveryday/edge/pull/952) raw 복사 도구 (ALPHA-1104 일부) | `335c8f87` 머지 16:52:44 KST |
 | [#951](https://github.com/alphaeveryday/edge/pull/951) 이 대장·신규 수집 저장 계약 §9·ADR-0057 (ALPHA-901) | `29ed8678` 머지 16:53:00 KST |
-| [#957](https://github.com/alphaeveryday/edge/pull/957) 기준일 없는 CLI의 낡은 Glue 사용 (ALPHA-1108) | 최종 결과는 PR·ALPHA-1108에 기록 |
+| [#957](https://github.com/alphaeveryday/edge/pull/957) 기준일 없는 CLI의 낡은 Glue 사용 (ALPHA-1108) | 최신 dev 반영 후 CI 전건(scan 포함)·Codex 👍, 리뷰 반영 smoke 종목 단위 보류·심볼 형 정규화. 머지 커밋·시각은 ALPHA-1108에 기록 |
 
 - **scan**: 세 PR의 머지 시점에는 gitleaks(전체 히스토리)가 `feature/app-ui-screens`의 커밋 `a8aab422`·`ab9119ac`에서 3건을 탐지해 실패했다.
   사용자 승인으로 그 실패를 예외로 두고 머지했다(통과로 간주하지 않음).
