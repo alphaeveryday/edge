@@ -6,9 +6,13 @@
 # - 에러 코드: COMMON400/401/403/500 은 jvm-common, 도메인 코드는 app-api AppErrorStatus 소유.
 #   앱은 code 를 번역 없이 그대로 분기한다. 이 파일의 x-error-codes 가 코드 목록의 SSOT.
 # - 페이지네이션: 커서. ?cursor=&size=, 응답 result 에 items[] 와 nextCursor(마지막이면 null).
-# - 스키마 이름과 필드는 app-ui src/api/types.ts 를 그대로 옮겼다. 표시용 필드(logoBg·bg·avatarBg 등)와
-#   미리 포맷된 문자열(time·ago·price 문구)은 서버가 줄지 앱이 만들지 행마다 결정한다. TODO 로 표시.
-# - 경로·operationId 는 client.ts 메서드 1:1 이다. 합칠 후보는 TODO(merge) 로 적었다.
+# - 스키마 이름과 필드는 app-ui src/api/types.ts 에서 옮기되 다음을 뺐다(2026-09-28 결정).
+#   표시용 색(logoBg·bg·avatarBg)은 앱이 theme key·handle 로 매핑한다. 시각은 전부 ISO 8601 이고
+#   상대 문구("3분 전")·기준 문구("오늘 08:30 기준")는 앱이 만든다.
+# - 서버 없이 앱에서 끝내는 것: 최근 본 ETF(기기 저장), 용어 힌트(앱 번들). 로그아웃은 서버가 리프레시 토큰을 지운다.
+# - 합친 것: etf.list+search → GET /etfs?q=, community.feed/mine/posts/hot → GET /posts?scope=&code=.
+# - Axis 는 영문 코드(issue·chart·macro·value·flow). 라벨은 앱이 가진다.
+# - 정책 위반은 도메인 코드 + 400. 앱이 해결 가능한 위반은 x-error-codes 의 action 대로 화면 이동한다.
 #
 # 출처: app-ui src/api/client.ts(13 도메인 52 메서드), src/api/types.ts.
 
@@ -39,21 +43,25 @@ tags:
   - name: notification
 
 # 도메인 에러 코드 목록. 형식 {도메인}{HTTP}{일련}. app-api AppErrorStatus enum 과 1:1.
-# TODO: 행별 본문을 채우며 추가한다. 아래는 앱 mock 이 이미 구분하는 실패에서 뽑은 최소 집합.
+# action 은 앱이 해결 가능한 위반에서 이동할 화면. 없으면 message 를 보여주고 끝.
+# 행별 본문을 채우며 추가한다.
 x-error-codes:
   COMMON400: { http: 400, message: 잘못된 요청입니다. }
-  COMMON401: { http: 401, message: 인증이 필요합니다. }
+  COMMON401: { http: 401, message: 인증이 필요합니다., action: login }
   COMMON403: { http: 403, message: 금지된 요청입니다. }
-  COMMON500: { http: 500, message: 서버 에러, 관리자에게 문의 바랍니다. }
+  COMMON500: { http: 500, message: "서버 에러, 관리자에게 문의 바랍니다." }
   ETF4040: { http: 404, message: 없는 ETF 입니다. }
   ANALYSIS4041: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 앱 Pending 화면 분기. 없는 ETF(ETF4040)와 구분
   THEME4040: { http: 404, message: 없는 테마입니다. }
   ISSUE4040: { http: 404, message: 없는 이슈입니다. }
   POST4040: { http: 404, message: 없는 글입니다. }
-  HINT4040: { http: 404, message: 없는 용어입니다. }
+  POST4000: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 커뮤니티 정책
+  POST4001: { http: 400, message: 태그는 최대 3개입니다. }
   WATCH4000: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
+  WATCH4001: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 관심 정책
+  NOTI4000: { http: 400, message: 게스트는 알림 종목을 3개까지 둘 수 있습니다., action: login }   # PRD 알림 정책
   USER4040: { http: 404, message: 가입되지 않은 이메일입니다. }
-  USER4090: { http: 409, message: 이미 가입된 이메일입니다. }
+  USER4090: { http: 409, message: 이미 가입된 이메일입니다., action: login }
   AUTH4010: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
   VOTE5030: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
 
@@ -129,7 +137,7 @@ paths:
     post:
       tags: [auth]
       operationId: authLogout
-      description: 리프레시 토큰 무효화. TODO 앱이 토큰만 버리는 것으로 끝낼지 결정.
+      description: 리프레시 토큰을 DB 에서 지운다. 앱은 성공 후 토큰과 기기 게스트 데이터를 초기화한다(PRD 게스트 데이터 정책).
       responses:
         '200': { $ref: '#/components/responses/Empty' }
   /auth/refresh:
@@ -230,16 +238,10 @@ paths:
     get:
       tags: [etf]
       operationId: etfList
-      description: TODO(merge) etf.list 와 etf.search 를 q 파라미터 하나로.
+      description: 전체 목록 또는 검색. 앱의 etf.list 와 etf.search 가 함께 쓴다. 최근 본 ETF 는 기기 저장(서버 없음).
+      security: []
       parameters:
-        - { name: q, in: query, schema: { type: string } }
-      responses:
-        '200': { $ref: '#/components/responses/EtfSummaryList' }
-  /etfs/recent:
-    get:
-      tags: [etf]
-      operationId: etfRecent
-      description: TODO 최근 본 ETF 는 기기 저장으로 끝낼 수 있다. 서버 불필요 후보.
+        - { name: q, in: query, schema: { type: string }, description: 이름·코드 검색어. 없으면 전체 }
       responses:
         '200': { $ref: '#/components/responses/EtfSummaryList' }
   /etfs/{code}:
@@ -326,7 +328,7 @@ paths:
     post:
       tags: [watch]
       operationId: watchCreateGroup
-      description: 사용자 그룹 최대 10개 (PRD 정책). TODO 초과 시 에러 코드.
+      description: 사용자 그룹 최대 10개 (PRD 정책, 초과 시 WATCH4001).
       requestBody:
         required: true
         content:
@@ -346,6 +348,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/WatchGroup' }
+        '400': { $ref: '#/components/responses/Error' }   # WATCH4001
   /watch-groups/{group}:
     delete:
       tags: [watch]
@@ -553,26 +556,6 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/MetricPage' }
         '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4041
-  /hints/{key}:
-    get:
-      tags: [analysis]
-      operationId: analysisHint
-      security: []
-      description: TODO 정적 사전이면 앱 번들. 서버 불필요 후보.
-      parameters:
-        - { name: key, in: path, required: true, schema: { type: string } }
-      responses:
-        '200':
-          description: 용어 힌트
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result: { $ref: '#/components/schemas/Hint' }
-        '404': { $ref: '#/components/responses/Error' }   # HINT4040
-
   # ── issue ────────────────────────────────────────────
   /issues:
     get:
@@ -620,10 +603,10 @@ paths:
       tags: [community]
       operationId: communityFeed
       description: |
-        TODO(merge) community.feed(scope)·community.mine·community.posts(code)·community.hot 을
-        scope(all|mine|hot) + code 파라미터로 합치는 후보.
+        글 목록 하나로 통합. 앱의 community.feed(all|mine)·mine·posts(code)·hot 이 함께 쓴다.
+        scope=all 추천(인기순), mine 내 관심 ETF 글(회원), hot 홈 인기글. code 를 주면 그 ETF 글만.
       parameters:
-        - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot] }, description: mine 은 회원 }
+        - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot], default: all }, description: mine 은 회원 필요 }
         - { name: code, in: query, schema: { $ref: '#/components/schemas/EtfCode' } }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Size' }
@@ -633,7 +616,7 @@ paths:
       tags: [community]
       operationId: communityCreate
       security: [{ bearerAuth: [] }]
-      description: 관심 ETF 에 대해서만 작성 가능, 태그 최대 3개 (PRD 정책). TODO 위반 코드.
+      description: 관심 ETF 에 대해서만 작성 가능(POST4000, 앱은 관심 편집으로 이동), 태그 최대 3개(POST4001).
       requestBody:
         required: true
         content:
@@ -646,6 +629,7 @@ paths:
                 tags: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/EtfCode' } }
       responses:
         '200': { $ref: '#/components/responses/Post' }
+        '400': { $ref: '#/components/responses/Error' }   # POST4000 | POST4001
   /posts/{id}:
     get:
       tags: [community]
@@ -714,12 +698,22 @@ paths:
   /posts/{id}/like:
     put:
       tags: [community]
-      operationId: communityToggleLike
+      operationId: communityLike
       security: [{ bearerAuth: [] }]
-      description: 토글. TODO PUT/DELETE 분리 여부.
+      description: 좋아요 추가. 멱등. 앱 toggleLike 는 현재 liked 에 따라 PUT/DELETE 중 하나를 부른다.
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '200': { $ref: '#/components/responses/Post' }
+        '404': { $ref: '#/components/responses/Error' }   # POST4040
+    delete:
+      tags: [community]
+      operationId: communityUnlike
+      security: [{ bearerAuth: [] }]
+      description: 좋아요 취소. 멱등.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+        '404': { $ref: '#/components/responses/Error' }   # POST4040
   /etfs/{code}/poll:
     get:
       tags: [community]
@@ -920,7 +914,7 @@ components:
       required: [isSuccess, code, message]
       properties:
         isSuccess: { type: boolean }
-        code: { type: string, description: 성공 COMMON200, 실패는 x-error-codes }
+        code: { type: string, description: "성공 COMMON200, 실패는 x-error-codes" }
         message: { type: string }
         result: {}
     Page:
@@ -942,18 +936,17 @@ components:
     EtfCode: { type: string, description: 'KRX 종목 코드 6자리 (예: 069500)' }
     Signal: { type: string, enum: [strongDown, down, neutral, up, strongUp] }
     Dir: { type: string, enum: [help, neutral, burden] }
-    Axis: { type: string, enum: [이슈, 차트, 매크로, 밸류, 수급], description: TODO 영문 enum 으로 바꿀지 }
+    Axis: { type: string, enum: [issue, chart, macro, value, flow], description: 요인 축. 라벨(이슈·차트·매크로·밸류·수급)은 앱이 가진다 }
     PollChoice: { type: string, enum: [buy, wait, sell] }
     NotiKind: { type: string, enum: [watch, signal, content, comm] }
 
     EtfSummary:
       type: object
-      required: [code, name, theme, logoBg, price, changePct, signal]
+      required: [code, name, theme, price, changePct, signal]
       properties:
         code: { $ref: '#/components/schemas/EtfCode' }
         name: { type: string }
-        theme: { type: string, description: 테마 key }
-        logoBg: { type: string, description: 'TODO 표시용 색. 서버가 줄지 앱 테마 매핑으로 할지' }
+        theme: { type: string, description: 테마 key. 로고 색은 앱이 여기서 매핑 }
         price: { type: number }
         changePct: { type: number }
         signal: { $ref: '#/components/schemas/Signal' }
@@ -961,12 +954,11 @@ components:
         sub: { type: string }
     Theme:
       type: object
-      required: [key, label, group, bg]
+      required: [key, label, group]
       properties:
         key: { type: string }
         label: { type: string }
         group: { type: string, enum: [industry, asset] }
-        bg: { type: string, description: TODO 표시용 }
         hot: { type: boolean }
     WatchGroup:
       type: object
@@ -979,7 +971,7 @@ components:
       type: object
       required: [asOf, groups, group, band, changePct, etfs]
       properties:
-        asOf: { type: string, description: 'TODO ISO 8601 로 통일 (콘솔 규약 KST 고정 표기)' }
+        asOf: { type: string, format: date-time, description: 기준 시각. "오늘 08:30 기준" 문구는 앱이 만든다 }
         groups: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
         group: { type: string }
         band: { $ref: '#/components/schemas/Signal' }
@@ -987,11 +979,10 @@ components:
         etfs: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
     Me:
       type: object
-      required: [nick, handle, avatarBg]
+      required: [nick, handle]
       properties:
         nick: { type: string }
-        handle: { type: string }
-        avatarBg: { type: string }
+        handle: { type: string, description: 아바타 색은 앱이 handle 로 매핑 }
         email: { type: string }
         disclaimerAcceptedAt: { type: string, format: date-time }
     MePatch:
@@ -999,7 +990,6 @@ components:
       properties:
         nick: { type: string }
         handle: { type: string }
-        avatarBg: { type: string }
 
     # ── 커뮤니티 ──
     Post:
@@ -1009,20 +999,18 @@ components:
         id: { type: string }
         etf:
           type: object
-          required: [code, theme, logoBg, short]
+          required: [code, theme, short]
           properties:
             code: { $ref: '#/components/schemas/EtfCode' }
             theme: { type: string }
-            logoBg: { type: string }
             short: { type: string }
         author:
           type: object
-          required: [name, handle, avatarBg]
+          required: [name, handle]
           properties:
             name: { type: string }
             handle: { type: string }
-            avatarBg: { type: string }
-        time: { type: string, description: 'TODO 상대 시각 문구(3분 전)는 앱이 만든다. 서버는 ISO 8601' }
+        time: { type: string, format: date-time, description: 작성 시각. "3분 전" 은 앱이 만든다 }
         title: { type: string }
         body: { type: string }
         quoteTag: { type: string }
@@ -1030,8 +1018,8 @@ components:
           type: object
           properties:
             name: { type: string }
-            avatarBg: { type: string }
-            time: { type: string }
+            handle: { type: string }
+            time: { type: string, format: date-time }
             body: { type: string }
         like: { type: integer }
         reply: { type: integer }
@@ -1046,11 +1034,11 @@ components:
         id: { type: string }
         author:
           type: object
-          required: [name, avatarBg]
+          required: [name, handle]
           properties:
             name: { type: string }
-            avatarBg: { type: string }
-        time: { type: string }
+            handle: { type: string }
+        time: { type: string, format: date-time }
         body: { type: string }
     Poll:
       type: object
@@ -1090,9 +1078,9 @@ components:
         axis: { type: array, items: { type: string } }
     MoveInfo:
       type: object
-      required: [ago, text, foot, sheetTitle, groups]
+      required: [at, text, foot, sheetTitle, groups]
       properties:
-        ago: { type: string, description: TODO 상대 시각. 서버는 시각을 주고 앱이 만든다 }
+        at: { type: string, format: date-time, description: 설명 생성 시각. "10분 전" 은 앱이 만든다 (앱 필드 ago 대체) }
         text: { type: string }
         foot: { type: string }
         sheetTitle: { type: string }
@@ -1249,23 +1237,6 @@ components:
         verdict: { type: string }
         tiles: { type: array, items: { $ref: '#/components/schemas/MetricTile' } }
         hasDetail: { type: boolean }
-    Hint:
-      type: object
-      required: [title, body]
-      properties:
-        title: { type: string }
-        orig: { type: string }
-        body: { type: string }
-        list:
-          type: array
-          items:
-            type: object
-            required: [k, d]
-            properties:
-              k: { type: string }
-              d: { type: string }
-        why: { type: string }
-
     # ── 탐색·테마 ──
     RankRow:
       type: object
@@ -1293,10 +1264,9 @@ components:
               tag: { type: string }
     ThemeFeedItem:
       type: object
-      required: [key, bg, count, headline, dir]
+      required: [key, count, headline, dir]
       properties:
         key: { type: string }
-        bg: { type: string }
         count: { type: integer }
         headline: { type: string }
         dir: { $ref: '#/components/schemas/Dir' }
@@ -1310,13 +1280,12 @@ components:
           type: array
           items:
             type: object
-            required: [name, logoBg, etfs]
+            required: [name, etfs]
             properties:
               name: { type: string }
-              logoBg: { type: string }
               etfs: { type: string }
         intro: { type: string }
-        updated: { type: string }
+        updated: { type: string, format: date-time }
         countLabel: { type: string }
         todayLine: { type: string }
         todayEffect: { type: string }
@@ -1352,12 +1321,11 @@ components:
         kw: { type: string }
         etf:
           type: object
-          required: [code, name, theme, logoBg]
+          required: [code, name, theme]
           properties:
             code: { $ref: '#/components/schemas/EtfCode' }
             name: { type: string }
             theme: { type: string }
-            logoBg: { type: string }
             sub: { type: string }
     IssueDetail:
       type: object
