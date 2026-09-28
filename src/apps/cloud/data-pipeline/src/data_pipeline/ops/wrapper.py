@@ -283,6 +283,18 @@ def _upstream_ran_after(ledger: Ledger, run_id: str, task_key: str, since_attemp
                                         attempt_id=since_attempt_id)
 
 
+def _record_duplicate_skip(ledger: Ledger, expected_task_id: str) -> None:
+    """업무를 건너뛴 이 컨테이너를 추적 가능한 시도로 남긴다(DUPLICATE_SKIP). best-effort —
+    기록 실패가 skip 판단(이미 끝난 업무)을 바꾸지 않는다. ECS ARN 을 못 얻으면 남기지 않는다."""
+    arn = _detect_ecs_task_arn()
+    if not arn:
+        return
+    _safe(lambda: ledger.record_duplicate_skip(
+        expected_task_id=expected_task_id, ecs_task_arn=arn,
+        orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None,
+    ))
+
+
 class _LedgerUnavailable(Exception):
     """strict 모드에서 실행 전 판단 재료(기대 작업·실행 이력)를 읽지 못했다."""
 
@@ -348,6 +360,9 @@ def _instrument(
         except _LedgerUnavailable:
             logger.exception("실행 이력 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
             return STEP_NOT_RUN_EXIT
+        # 판정은 업무를 실제로 한 시도만 본다 — 앞선 중복 skip 행이 "최신 시도"가 되면 건수·exit 가
+        # 어긋나(current_attempt_id 불일치) 다음 재시도가 멀쩡한 성공을 다시 돌린다.
+        attempts = [a for a in attempts if a.get("record_source") != states.SOURCE_DUPLICATE_SKIP]
         latest_exit = attempts[-1].get("exit_code") if attempts else None
         try:
             upstream_newer = (
@@ -374,6 +389,7 @@ def _instrument(
         elif latest_exit == 0 and not isinstance(latest_exit, bool):
             logger.warning("이미 성공한 작업 — 다시 실행하지 않는다(task=%s run_id=%s attempts=%d)",
                            task_key, run_id, len(attempts))
+            _record_duplicate_skip(ledger, expected_task_id)
             return 0
     # 기대값은 Planner가 실행 전에 고정한 snapshot만 정본이다. observer가 expected_count를
     # 자기신고하도록 두면 수집기가 빠뜨린 대상을 분모에서도 줄여 스스로 만점 처리할 수 있다.
@@ -389,6 +405,7 @@ def _instrument(
     attempt_id = _safe(lambda: ledger.record_attempt_start(
         expected_task_id=expected_task_id, ecs_task_arn=arn or "",
         sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
+        orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None,
     ))
     if strict and attempt_id is None:
         # 시작 기록 없이 실행하면 원장에 흔적 없는 실행이 생긴다 — 다음 재시도의 성공 skip 이 더 오래된

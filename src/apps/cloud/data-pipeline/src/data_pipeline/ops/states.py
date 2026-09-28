@@ -101,3 +101,6 @@ REASON_FAILED_TO_START = "FAILED_TO_START"          # RunTask submit/start 실�
 REASON_DEADLINE_UNMET = "DEADLINE_UNMET_UPSTREAM"   # hard deadline 뒤에도 upstream 미완 → BLOCKED
 SOURCE_WRAPPER = "WRAPPER"
 SOURCE_RECONCILER_BACKFILL = "RECONCILER_BACKFILL"
+# 컨테이너는 떴지만 이미 성공한 작업이라 업무를 실행하지 않은 시도(ALPHA-1088, Airflow 재시도 가드).
+# "최신 업무 시도" 판정에서는 빠진다 — 업무 결과를 만든 시도가 아니기 때문이다.
+SOURCE_DUPLICATE_SKIP = "DUPLICATE_SKIP"

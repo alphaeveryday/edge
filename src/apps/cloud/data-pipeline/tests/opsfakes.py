@@ -106,6 +106,14 @@ class _Cursor:
             self._upd_etask(s, p, conditional="AND updated_at=%s" in s)
         elif "SELECT count(*) FROM ops_task_attempt" in s:
             self._rows = [(sum(1 for a in self.db.attempts if a["etid"] == p[0]),)]
+        elif "execution_status, started_at, finished_at, exit_code, record_source" in s:   # duplicate skip
+            if not self._find_attempt(p[1], p[2]):
+                self.db.attempts.append({"attempt_id": p[0], "etid": p[1], "number": None, "arn": p[2],
+                                         "status": p[3], "sfn_arn": None, "sfn_state": None, "source": p[4],
+                                         "orchestrator_attempt_ref": p[5], "exit_code": 0,
+                                         "started_at": "STARTED", "quality_diagnostics": None,
+                                         "entity_resolution_arguments_total": None,
+                                         "entity_resolution_arguments_resolved": None})
         elif "INSERT INTO ops_task_attempt" in s and "attempt_number" in s:
             self._ins_attempt(p)
         elif "INSERT INTO ops_task_attempt" in s:  # backfill (no attempt_number col)
@@ -121,14 +129,42 @@ class _Cursor:
                     if (row["task_outcome"] == "FULFILLED" and (row.get("records_out") or 0) > 0)
                     or row["plan_status"] == "SKIPPED"]
             self._rows = [(len(raw), len(done))]
-        elif "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a" in s:   # attempt_created_after
+        elif "max(a.created_at) FROM ops_expected_task et" in s:   # latest_business_attempts
+            # created_at 대신 삽입 순서(index)를 시각의 대역으로 쓴다.
+            run_id, skip_source = p
+            latest = {}
+            for index, a in enumerate(self.db.attempts):
+                row = self.db.etasks_by_id.get(a["etid"])
+                if row and row["pipeline_run_id"] == run_id and a["source"] != skip_source:
+                    latest[row["task_key"]] = (row["stage"], index)
+            self._rows = [(k, v[0], v[1]) for k, v in latest.items()]
+        elif "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a" in s and "et.stage" in s:   # attempt_created_after
             # created_at 대신 삽입 순서(= DB 시계 순서의 대역)로 비교한다.
-            run_id, stages, attempt_id = p
+            run_id, stages, skip_source, attempt_id = p
             order = [a["attempt_id"] for a in self.db.attempts]
             since = order.index(attempt_id) if attempt_id in order else len(order)
             etids = {row["expected_task_id"] for row in self.db.etasks.values()
                      if row["pipeline_run_id"] == run_id and row["stage"] in stages}
-            self._rows = [(any(a["etid"] in etids for a in self.db.attempts[since + 1:]),)]
+            self._rows = [(any(a["etid"] in etids and a["source"] != skip_source
+                               for a in self.db.attempts[since + 1:]),)]
+        elif "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a" in s:   # business_attempt_after
+            # 보고 시각(대역: 보고 때의 attempt 개수) 뒤에 생긴 업무 시도가 있는가. skip 제외는 **SQL 에
+            # 그 조건이 있을 때만** 흉내 낸다 — 조건이 빠진 변이를 대역이 대신 막아 주지 않게.
+            excludes = "a.record_source <> %s" in s
+            run_id, skip_source, since = p if excludes else (p[0], None, p[1])
+            etids = {row["expected_task_id"] for row in self.db.etasks.values()
+                     if row["pipeline_run_id"] == run_id}
+            self._rows = [(any(a["etid"] in etids and a["source"] != skip_source
+                               for a in self.db.attempts[since:]),)]
+        elif s.startswith("UPDATE ops_pipeline_run SET orchestration_status=NULL"):
+            row = self.db.runs_by_id.get(p[0])
+            if row:
+                row["orchestration_status"] = None
+        elif s.startswith("UPDATE ops_pipeline_run SET orchestration_status"):   # report
+            row = self.db.runs_by_id.get(p[1])
+            if row:
+                row["orchestration_status"] = p[0]
+                row["orchestration_reported_at"] = len(self.db.attempts)   # 대역 시각 = attempt 수
         elif "SELECT attempt_id, ecs_task_arn, execution_status, exit_code, record_source" in s:
             self._attempts_for(p)
         elif s.startswith("UPDATE ops_task_attempt SET execution_status"):
@@ -181,7 +217,8 @@ class _Cursor:
                        row["expected_execution_arn"], row["sfn_execution_arn"],
                        row["launch_status"], row["orchestration_status"],
                        row["hard_deadline_at"], row["trading_date"], row.get("input_hash"),
-                       row.get("orchestrator", "SFN"), row.get("orchestrator_run_ref"))]
+                       row.get("orchestrator", "SFN"), row.get("orchestrator_run_ref"),
+                       row.get("orchestration_reported_at"))]
 
     def _ins_etask(self, p):
         key = (p[1], p[2])
@@ -283,6 +320,7 @@ class _Cursor:
             return
         self.db.attempts.append({"attempt_id": p[0], "etid": p[1], "number": p[2], "arn": p[3],
                                  "status": p[4], "sfn_arn": p[5], "sfn_state": p[6], "source": p[7],
+                                 "orchestrator_attempt_ref": p[8] if len(p) > 8 else None,
                                  "exit_code": None, "started_at": "STARTED",
                                  "quality_diagnostics": None,
                                  "entity_resolution_arguments_total": None,

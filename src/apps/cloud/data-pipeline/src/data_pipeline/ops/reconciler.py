@@ -347,43 +347,74 @@ def reconcile_run(
     if airflow:
         # SFN 런은 DescribeExecution 이 orchestration_status 를 채우지만 Airflow 런은 채울 주체가 없다 —
         # 비워 두면 콘솔 R02 가 hard deadline 뒤 정상 완료 런까지 "미귀결"로 올린다.
-        # 정본은 DAG 가 보고한 판정이다. 원장 투영은 보고가 없을 때(DAG 가 죽음 등)의 대체이고, 이미
-        # 확정된 값을 덮지 않는다 — 원장에는 실행 세대 구분이 없어, 재처리 run 이 새 attempt 없이 실패해도
-        # 앞 세대의 성공 attempt 로 SUCCEEDED 를 투영할 수 있기 때문이다.
+        # ① DAG 가 보고한 판정이 정본이다(보고 시각을 함께 남긴다).
+        # ② 보고가 없거나 보고 뒤에 새 업무 시도가 생겼을 때만 원장 증거로 투영한다 — 원장엔 실행 세대
+        #    구분이 없어, 새 시도 없이 실패한 재처리의 보고를 앞 세대 성공으로 덮으면 안 된다.
+        # ③ 투영은 **결론이 난 증거로만** 한다. 열린 작업(미실행·종료 코드 미확인)이 있으면 값을 바꾸지
+        #    않는다 — 일시적 조회 실패를 종료로 단정하지 않고, hard deadline 뒤에도 비어 있으면 R02 가
+        #    "마감 초과 미귀결"로 드러낸다(그게 정확한 상태다).
+        status = run["orchestration_status"]
         if reported_status in (states.ORCH_SUCCEEDED, states.ORCH_FAILED):
+            ledger.record_orchestration_report(run_id, status=reported_status)
             status = reported_status
-        elif run["orchestration_status"] in (None, states.ORCH_RUNNING):
-            status = _airflow_run_status(ledger.expected_tasks_for(run_id), evidence,
-                                         past_hard=hard_deadline is not None and now >= hard_deadline)
-        else:
-            status = run["orchestration_status"]
-        if status != run["orchestration_status"]:
-            ledger.set_launch_result(run_id, launch_status=states.LAUNCH_LAUNCHED,
-                                     orchestration_status=status)
+        elif ledger.business_attempt_after(run_id, run.get("orchestration_reported_at")):
+            projected = _airflow_run_status(ledger.expected_tasks_for(run_id), evidence,
+                                            stale=_stale_tasks(ledger.latest_business_attempts(run_id)))
+            if projected is None:
+                # 이미 판정된 슬롯에 결론 안 난 새 시도(재처리 진행 중·종료 증거 유실)가 생겼다 —
+                # 앞 판정을 남기면 새 시도의 미귀결이 가려진다(R02 는 NULL 만 본다). 미귀결로 되돌린다.
+                if status is not None:
+                    ledger.clear_orchestration_status(run_id)
+                    status = None
+            elif projected != status:
+                ledger.set_launch_result(run_id, launch_status=states.LAUNCH_LAUNCHED,
+                                         orchestration_status=projected)
+                status = projected
         summary["orchestration"] = status
     return summary
 
 
-def _airflow_run_status(tasks: list[dict], evidence: dict[str, list[dict]], *, past_hard: bool) -> str:
+_STAGE_RANK = {"raw": 0, "normalize": 1, "feature": 2}
+
+
+def _stale_tasks(latest: dict[str, tuple[str, object]]) -> set[str]:
+    """앞 단계가 자기 마지막 시도 **뒤에** 다시 돈 작업 — 그 결과는 지금 입력의 결과가 아니다.
+
+    원장엔 실행 세대가 없다. 재처리가 정제만 다시 돌리고 적재 전에 끊기면 적재의 최신 시도는 앞 세대의
+    성공이다. 이를 결론으로 쓰면 새 정제 결과가 적재되지 않았는데 SUCCEEDED 가 투영된다."""
+    stale = set()
+    for task_key, (stage, at) in latest.items():
+        rank = _STAGE_RANK.get(stage)
+        if rank is None or at is None:
+            continue
+        if any(_STAGE_RANK.get(up_stage, rank) < rank and up_at is not None and up_at > at
+               for up_stage, up_at in latest.values()):
+            stale.add(task_key)
+    return stale
+
+
+def _airflow_run_status(tasks: list[dict], evidence: dict[str, list[dict]],
+                        stale: set[str] | None = None) -> str | None:
     """Airflow 주체 런의 orchestration_status 를 원장에서 투영한다 — DAG verdict 와 같은 뜻.
 
-    SUCCEEDED: 계획 작업(SKIPPED 제외)이 전부 FULFILLED 이고 최신 물리 시도 exit 0(부분 성공 2 는 아님).
-    RUNNING: 아직 결론 안 난 작업이 있다(hard deadline 전). 그 뒤까지 열려 있으면 FAILED.
+    SUCCEEDED: 계획 작업(SKIPPED 제외)이 전부 FULFILLED 이고 최신 업무 시도 exit 0(부분 성공 2 는 아님).
+    FAILED: 전부 결론이 났는데 그렇지 않다.
+    None: 아직 결론 안 난 작업(미실행·종료 코드 미확인·앞 단계보다 오래된 결과)이 있다 — 투영하지 않는다.
     """
-    open_, failed = False, False
+    failed = False
     for task in tasks:
         if task["plan_status"] == states.PLAN_SKIPPED:
             continue
+        if task["task_key"] in (stale or ()):
+            return None
         entry = catalog.get(task["task_key"])
         occs = evidence.get(entry.sfn_state_name, []) if entry is not None else []
         latest_exit = occs[-1].get("exit_code") if occs else None
         if task["task_outcome"] in (None, states.OUTCOME_PENDING) or latest_exit is None:
-            open_ = True
-        elif not (task["task_outcome"] == states.OUTCOME_FULFILLED and latest_exit == 0):
+            return None
+        if not (task["task_outcome"] == states.OUTCOME_FULFILLED and latest_exit == 0):
             failed = True
-    if open_ and not past_hard:
-        return states.ORCH_RUNNING
-    return states.ORCH_FAILED if (open_ or failed) else states.ORCH_SUCCEEDED
+    return states.ORCH_FAILED if failed else states.ORCH_SUCCEEDED
 
 
 def _hydrate_occurrence_evidence(
@@ -416,6 +447,8 @@ def _hydrate_occurrence_evidence(
             arn = attempt.get("ecs_task_arn")
             if not arn or arn in occurrence_arns:
                 continue
+            if attempt.get("record_source") == states.SOURCE_DUPLICATE_SKIP:
+                continue    # 업무를 하지 않은 컨테이너 — 작업 판정의 증거가 아니다(ALPHA-1088)
             execution_status = attempt.get("execution_status")
             occs.append({
                 "entered_id": None,

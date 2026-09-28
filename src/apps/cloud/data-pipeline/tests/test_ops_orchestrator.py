@@ -356,8 +356,9 @@ def test_reconciler_projects_airflow_run_status_like_the_dag_verdict(normalize_e
     result = _plan_airflow(db)
     run_id = result.pipeline_run_id
     ecs = FakeEcs()
+    # 결론 안 난 증거로는 투영하지 않는다(RUNNING 도 쓰지 않는다 — 비어 있어야 R02 가 마감 뒤 드러낸다).
     assert reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=ecs,
-                         now=_SLOT + timedelta(minutes=5))["orchestration"] == states.ORCH_RUNNING
+                         now=_SLOT + timedelta(minutes=5))["orchestration"] is None
     _finish(db, run_id, {"INVESTOR_INTRADAY_COLLECTION_KIS": ("arn:ecs/c", 0),
                          "NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n", normalize_exit),
                          "LOAD_INVESTOR_INTRADAY": ("arn:ecs/l", 0)})
@@ -366,12 +367,72 @@ def test_reconciler_projects_airflow_run_status_like_the_dag_verdict(normalize_e
     assert db.runs[result.run_key]["orchestration_status"] == expected
 
 
-def test_reconciler_closes_a_stuck_airflow_run_as_failed_after_hard_deadline():
+def test_unconcluded_airflow_run_stays_unresolved_after_hard_deadline():
+    # 증거가 없으면 종료로 단정하지 않는다 — NULL 로 남아 콘솔 R02(마감 초과 미귀결)가 드러낸다.
     db = FakeOpsDB()
     result = _plan_airflow(db)
     summary = reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(),
                             ecs_client=FakeEcs(), now=_SLOT + timedelta(hours=7))
-    assert summary["orchestration"] == states.ORCH_FAILED
+    assert summary["orchestration"] is None
+    assert db.runs[result.run_key]["orchestration_status"] is None
+
+
+def test_transient_ecs_read_failure_is_not_turned_into_a_terminal_status():
+    # 앞 두 작업은 성공, 적재 attempt 는 시작만 기록됐고 ECS 조회가 일시 실패 — FAILED 로 닫지 않는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _finish(db, run_id, {"INVESTOR_INTRADAY_COLLECTION_KIS": ("arn:ecs/c", 0),
+                         "NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n", 0)})
+    _start_only(db, run_id, "LOAD_INVESTOR_INTRADAY", "arn:ecs/l")
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=_EcsDown(),
+                  now=_SLOT + timedelta(hours=7))
+    assert db.runs[result.run_key]["orchestration_status"] is None
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(),        # 조회 회복
+                  ecs_client=FakeEcs(tasks={"arn:ecs/l": {"lastStatus": "STOPPED", "exitCode": 0}}),
+                  now=_SLOT + timedelta(hours=7, minutes=15))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED
+
+
+def test_rerun_after_a_report_is_projected_when_the_dag_could_not_report():
+    # 보고(FAILED) 뒤 clear 로 다시 돌아 성공했지만 DAG 가 보고 전에 죽었다 — 새 업무 시도가 이긴다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _finish(db, run_id, {"INVESTOR_INTRADAY_COLLECTION_KIS": ("arn:ecs/c", 0),
+                         "NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n", 1)})
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+              now=_SLOT + timedelta(hours=1))
+    reconcile_run(_ledger(db), reported_status=states.ORCH_FAILED, **kw)
+    _finish(db, run_id, {"NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n2", 0),
+                         "LOAD_INVESTOR_INTRADAY": ("arn:ecs/l", 0)})
+    reconcile_run(_ledger(db), **kw)
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED
+
+
+def test_skip_is_traceable_but_not_business_evidence(monkeypatch):
+    # 중복 skip 도 어느 Airflow 시도·ECS 태스크였는지 남긴다. 다음 판단의 "최신 시도"가 되면 안 된다.
+    db = FakeOpsDB()
+    run_id = _plan_airflow(db).pipeline_run_id
+    monkeypatch.setenv("OPS_ORCHESTRATOR_ATTEMPT_REF", "airflow:edge_investor_intraday/r1/collect/1")
+    _record(db, run_id, "INVESTOR_INTRADAY_COLLECTION_KIS", arn="arn:ecs/c1", exit_code=0)
+    _exclusive(monkeypatch)
+    for try_number, arn in ((2, "arn:ecs/c2"), (3, "arn:ecs/c3")):
+        monkeypatch.setenv("OPS_ORCHESTRATOR_ATTEMPT_REF",
+                           f"airflow:edge_investor_intraday/r1/collect/{try_number}")
+        monkeypatch.setenv("OPS_ECS_TASK_ARN", arn)
+        calls = []
+        rc = wrapper.instrument(lambda: calls.append(1) or 0, task_key="INVESTOR_INTRADAY_COLLECTION_KIS",
+                                run_id=run_id, ledger=_ledger(db), ecs_task_arn=arn)
+        assert rc == 0 and calls == []           # 두 번째 skip 도 여전히 skip(첫 skip 행에 안 흔들린다)
+    # skip 행은 한 번에 완료 상태로 쓴다 — RUNNING 으로 남으면 전환 절차의 종료 확인을 영구히 막는다.
+    assert all(a["status"] == states.EXEC_SUCCEEDED for a in db.attempts)
+    rows = [(a["arn"], a["source"], a["orchestrator_attempt_ref"], a["exit_code"]) for a in db.attempts]
+    assert rows == [
+        ("arn:ecs/c1", states.SOURCE_WRAPPER, "airflow:edge_investor_intraday/r1/collect/1", 0),
+        ("arn:ecs/c2", states.SOURCE_DUPLICATE_SKIP, "airflow:edge_investor_intraday/r1/collect/2", 0),
+        ("arn:ecs/c3", states.SOURCE_DUPLICATE_SKIP, "airflow:edge_investor_intraday/r1/collect/3", 0),
+    ]
 
 
 def test_zero_row_success_does_not_block_recollection(monkeypatch):
@@ -430,3 +491,56 @@ def test_success_skip_requires_count_and_exit_from_the_same_attempt(monkeypatch)
     rc = wrapper.instrument(lambda: calls.append(1) or 0, task_key="INVESTOR_INTRADAY_COLLECTION_KIS",
                             run_id=run_id, ledger=ledger, ecs_task_arn="arn:ecs/c3")
     assert rc == 0 and calls == [1]       # 앞 시도의 건수로 최신 시도를 skip 하지 않는다
+
+
+
+def test_new_unconcluded_attempt_reopens_a_previously_settled_slot():
+    # 성공으로 보고된 슬롯을 재처리하던 중 종료 증거·보고가 유실 — 앞 SUCCEEDED 가 남으면 R02 가 못 본다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _finish(db, run_id, {"INVESTOR_INTRADAY_COLLECTION_KIS": ("arn:ecs/c", 0),
+                         "NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n", 0),
+                         "LOAD_INVESTOR_INTRADAY": ("arn:ecs/l", 0)})
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(hours=1))
+    reconcile_run(_ledger(db), reported_status=states.ORCH_SUCCEEDED, ecs_client=FakeEcs(), **kw)
+    _start_only(db, run_id, "NORMALIZE_INVESTOR_INTRADAY", "arn:ecs/n-reprocess")
+    reconcile_run(_ledger(db), ecs_client=_EcsDown(), **kw)
+    assert db.runs[result.run_key]["orchestration_status"] is None
+
+
+
+def test_projection_does_not_mix_generations():
+    # 보고(FAILED) 뒤 재처리가 정제만 다시 성공시키고 적재·보고 전에 끊겼다. 적재의 최신 시도는 앞 세대의
+    # 성공이다 — 이를 결론으로 쓰면 새 정제 결과가 적재되지 않았는데 SUCCEEDED 가 된다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _finish(db, run_id, {"INVESTOR_INTRADAY_COLLECTION_KIS": ("arn:ecs/c", 0),
+                         "NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n", 2),
+                         "LOAD_INVESTOR_INTRADAY": ("arn:ecs/l", 0)})
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+              now=_SLOT + timedelta(hours=1))
+    reconcile_run(_ledger(db), reported_status=states.ORCH_FAILED, **kw)
+    _finish(db, run_id, {"NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n2", 0)})
+    reconcile_run(_ledger(db), **kw)
+    assert db.runs[result.run_key]["orchestration_status"] is None      # 미귀결 — 성공으로 단정 안 함
+
+
+def test_skip_row_after_a_report_does_not_reopen_it(monkeypatch):
+    # 보고 뒤 운영자가 collect 만 clear 해 중복 skip 행이 생겼다 — 업무 시도가 아니므로 보고를 유지한다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _finish(db, run_id, {"INVESTOR_INTRADAY_COLLECTION_KIS": ("arn:ecs/c", 0),
+                         "NORMALIZE_INVESTOR_INTRADAY": ("arn:ecs/n", 1)})
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+              now=_SLOT + timedelta(hours=1))
+    reconcile_run(_ledger(db), reported_status=states.ORCH_FAILED, **kw)
+    _exclusive(monkeypatch)
+    monkeypatch.setenv("OPS_ECS_TASK_ARN", "arn:ecs/c-again")
+    wrapper.instrument(lambda: 0, task_key="INVESTOR_INTRADAY_COLLECTION_KIS", run_id=run_id,
+                       ledger=_ledger(db), ecs_task_arn="arn:ecs/c-again")
+    assert db.attempts[-1]["source"] == states.SOURCE_DUPLICATE_SKIP
+    reconcile_run(_ledger(db), **kw)
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED

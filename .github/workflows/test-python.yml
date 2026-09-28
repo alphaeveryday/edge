@@ -23,6 +23,7 @@ on:
       - "src/.dockerignore"   # 이미지 컨텍스트 규칙 변경도 스모크 대상(deploy-* paths 와 일치)
       - "src/libs/ontology/**"   # 공유 명부/역할 변경도 두 앱 회귀 검증
       - "src/libs/schema/migrations-cloud/**"   # e2e 가 실 스키마를 적용한다 — 스키마 변경도 게이트 대상
+      - "src/apps/cloud/airflow/dags/**"   # DAG 가 복제한 업무 상수·env 이름을 data-pipeline 테스트가 대조한다(ALPHA-1088)
       - ".github/workflows/test-python.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다.

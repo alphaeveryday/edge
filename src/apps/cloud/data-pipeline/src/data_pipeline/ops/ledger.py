@@ -338,7 +338,7 @@ class Ledger:
     def record_attempt_start(
         self, *, expected_task_id: str, ecs_task_arn: str,
         sfn_execution_arn: str | None = None, sfn_state_name: str | None = None,
-        record_source: str = states.SOURCE_WRAPPER,
+        record_source: str = states.SOURCE_WRAPPER, orchestrator_attempt_ref: str | None = None,
     ) -> str | None:
         """attempt 시작 기록(멱등). 성공 시 attempt_id, 계속 실패 시 None(본 작업은 진행).
 
@@ -355,7 +355,7 @@ class Ledger:
                 return self._insert_attempt(
                     expected_task_id=expected_task_id, ecs_task_arn=ecs_task_arn,
                     sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
-                    record_source=record_source,
+                    record_source=record_source, orchestrator_attempt_ref=orchestrator_attempt_ref,
                 )
             except Exception:
                 if self.clock_fn() >= deadline:
@@ -368,24 +368,26 @@ class Ledger:
 
     def _insert_attempt(
         self, *, expected_task_id: str, ecs_task_arn: str, sfn_execution_arn: str | None,
-        sfn_state_name: str | None, record_source: str,
+        sfn_state_name: str | None, record_source: str, orchestrator_attempt_ref: str | None = None,
     ) -> str:
         new_id = domain_id("att")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             # attempt_number 는 표시용 — 조회+1(멱등 수단 아님, 경쟁은 표시 부정확만 유발).
+            # 업무를 실행한 시도만 센다 — 중복 skip 행이 번호를 건너뛰게 하지 않는다(ALPHA-1088).
             cur.execute(
-                "SELECT count(*) FROM ops_task_attempt WHERE expected_task_id=%s",
-                (expected_task_id,),
+                "SELECT count(*) FROM ops_task_attempt WHERE expected_task_id=%s"
+                " AND record_source <> %s",
+                (expected_task_id, states.SOURCE_DUPLICATE_SKIP),
             )
             number = int(cur.fetchone()[0]) + 1
             cur.execute(
                 "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, attempt_number,"
                 " ecs_task_arn, execution_status, started_at, sfn_execution_arn, sfn_state_name,"
-                " record_source) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s)"
+                " record_source, orchestrator_attempt_ref) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s)"
                 " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
                 " RETURNING attempt_id",
                 (new_id, expected_task_id, number, ecs_task_arn, states.EXEC_RUNNING,
-                 sfn_execution_arn, sfn_state_name, record_source),
+                 sfn_execution_arn, sfn_state_name, record_source, orchestrator_attempt_ref),
             )
             row = cur.fetchone()
             if row is not None:
@@ -522,8 +524,68 @@ class Ledger:
                 "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a"
                 " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
                 " WHERE et.pipeline_run_id=%s AND et.stage = ANY(%s)"
+                " AND a.record_source <> %s"
                 " AND a.created_at > (SELECT created_at FROM ops_task_attempt WHERE attempt_id=%s))",
-                (pipeline_run_id, list(stages), attempt_id),
+                (pipeline_run_id, list(stages), states.SOURCE_DUPLICATE_SKIP, attempt_id),
+            )
+            return bool(cur.fetchone()[0])
+
+    def record_duplicate_skip(self, *, expected_task_id: str, ecs_task_arn: str,
+                              orchestrator_attempt_ref: str | None) -> None:
+        """업무 없이 끝난 중복 재시도 컨테이너를 **완료 상태로 한 번에** 남긴다(DUPLICATE_SKIP).
+
+        시작·종료를 두 번에 나눠 쓰면 종료 기록이 실패할 때 RUNNING 행이 남는다 — 이 행은 업무
+        판정에서 빠지므로 Reconciler 가 닫지 않고, 전환 절차의 "RUNNING 시도 없음" 확인을 영구히 막는다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,"
+                " execution_status, started_at, finished_at, exit_code, record_source,"
+                " orchestrator_attempt_ref) VALUES (%s,%s,%s,%s,now(),now(),0,%s,%s)"
+                " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING",
+                (domain_id("att"), expected_task_id, ecs_task_arn, states.EXEC_SUCCEEDED,
+                 states.SOURCE_DUPLICATE_SKIP, orchestrator_attempt_ref),
+            )
+
+    def clear_orchestration_status(self, pipeline_run_id: str) -> None:
+        """런 판정을 비운다(미귀결). 이미 판정된 슬롯에 결론 안 난 새 업무 시도가 생긴 경우다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ops_pipeline_run SET orchestration_status=NULL, updated_at=now()"
+                " WHERE pipeline_run_id=%s",
+                (pipeline_run_id,),
+            )
+
+    def latest_business_attempts(self, pipeline_run_id: str) -> dict[str, tuple[str, object]]:
+        """작업별 (stage, 마지막 업무 시도 created_at) — 중복 skip 제외. 세대 섞임 판정용(DB 시계)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT et.task_key, et.stage, max(a.created_at) FROM ops_expected_task et"
+                " JOIN ops_task_attempt a ON a.expected_task_id = et.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND a.record_source <> %s"
+                " GROUP BY et.task_key, et.stage",
+                (pipeline_run_id, states.SOURCE_DUPLICATE_SKIP),
+            )
+            return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+    def record_orchestration_report(self, pipeline_run_id: str, *, status: str) -> None:
+        """오케스트레이터가 보고한 런 판정을 적고 보고 시각을 남긴다(Reconciler 투영의 기준선)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ops_pipeline_run SET orchestration_status=%s,"
+                " orchestration_reported_at=now(), updated_at=now() WHERE pipeline_run_id=%s",
+                (status, pipeline_run_id),
+            )
+
+    def business_attempt_after(self, pipeline_run_id: str, since) -> bool:
+        """since 뒤에 만들어진 업무 시도(중복 skip 제외)가 이 run 에 있는가. since 가 None 이면 True."""
+        if since is None:
+            return True
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND a.record_source <> %s AND a.created_at > %s)",
+                (pipeline_run_id, states.SOURCE_DUPLICATE_SKIP, since),
             )
             return bool(cur.fetchone()[0])
 
@@ -591,8 +653,8 @@ class Ledger:
             cur.execute(
                 "SELECT pipeline_run_id, run_key, execution_name, expected_execution_arn,"
                 " sfn_execution_arn, launch_status, orchestration_status, hard_deadline_at,"
-                " trading_date, input_hash, orchestrator, orchestrator_run_ref"
-                " FROM ops_pipeline_run WHERE run_key=%s",
+                " trading_date, input_hash, orchestrator, orchestrator_run_ref,"
+                " orchestration_reported_at FROM ops_pipeline_run WHERE run_key=%s",
                 (run_key,),
             )
             row = cur.fetchone()
@@ -601,7 +663,7 @@ class Ledger:
             keys = ("pipeline_run_id", "run_key", "execution_name", "expected_execution_arn",
                     "sfn_execution_arn", "launch_status", "orchestration_status",
                     "hard_deadline_at", "trading_date", "input_hash", "orchestrator",
-                    "orchestrator_run_ref")
+                    "orchestrator_run_ref", "orchestration_reported_at")
             return dict(zip(keys, row))
 
     def expected_tasks_for(self, pipeline_run_id: str) -> list[dict]:
