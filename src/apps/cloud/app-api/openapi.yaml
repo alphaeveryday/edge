@@ -30,7 +30,7 @@ servers:
 tags:
   - name: auth
     description: 로그인·가입·토큰. 회원은 Bearer, 게스트는 X-Device-Id
-  - name: user
+  - name: member
     description: 내 계정. 프로필·면책 동의·탈퇴
   - name: onboarding
     description: 첫 진입 테마·ETF 선택 저장
@@ -73,8 +73,8 @@ x-error-codes:
   WATCH4000: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
   WATCH4001: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 관심 정책
   NOTI4000: { http: 400, message: 게스트는 알림 종목을 3개까지 둘 수 있습니다., action: login }   # PRD 알림 정책
-  USER4040: { http: 404, message: 가입되지 않은 이메일입니다. }
-  USER4090: { http: 409, message: 이미 가입된 이메일입니다., action: login }
+  MEMBER4040: { http: 404, message: 가입되지 않은 이메일입니다. }
+  MEMBER4090: { http: 409, message: 이미 가입된 이메일입니다., action: login }
   AUTH4010: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
   VOTE5030: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
 
@@ -132,7 +132,7 @@ paths:
                 nick: { type: string }
       responses:
         '200': { $ref: '#/components/responses/AuthResult' }
-        '409': { $ref: '#/components/responses/Error' }   # USER4090
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4090
   /auth/password-reset:
     post:
       tags: [auth]
@@ -150,7 +150,7 @@ paths:
                 email: { type: string, format: email }
       responses:
         '200': { $ref: '#/components/responses/Empty' }
-        '404': { $ref: '#/components/responses/Error' }   # USER4040. 계정 존재 노출은 감수(사용자 안내 우선, 2026-09-28 결정)
+        '404': { $ref: '#/components/responses/Error' }   # MEMBER4040. 계정 존재 노출은 감수(사용자 안내 우선, 2026-09-28 결정)
   /auth/logout:
     post:
       tags: [auth]
@@ -180,19 +180,19 @@ paths:
         '200': { $ref: '#/components/responses/AuthResult' }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
 
-  # ── user ─────────────────────────────────────────────
+  # ── member ─────────────────────────────────────────────
   /me:
     get:
-      tags: [user]
-      operationId: userMe
+      tags: [member]
+      operationId: memberMe
       summary: 내 정보 조회
       security: [{ bearerAuth: [] }]
       responses:
         '200': { $ref: '#/components/responses/Me' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
     patch:
-      tags: [user]
-      operationId: userUpdate
+      tags: [member]
+      operationId: memberUpdate
       summary: 프로필 수정
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -203,8 +203,8 @@ paths:
         '200': { $ref: '#/components/responses/Me' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
     delete:
-      tags: [user]
-      operationId: userDeleteAccount
+      tags: [member]
+      operationId: memberDeleteAccount
       summary: 회원 탈퇴
       security: [{ bearerAuth: [] }]
       responses:
@@ -212,8 +212,8 @@ paths:
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
   /me/disclaimer:
     post:
-      tags: [user]
-      operationId: userAcceptDisclaimer
+      tags: [member]
+      operationId: memberAcceptDisclaimer
       summary: 면책 고지 동의
       security: [{ bearerAuth: [] }]
       responses:

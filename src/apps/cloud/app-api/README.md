@@ -44,7 +44,7 @@ app-api 를 ETF Orca 앱(app-ui)의 B2C 서버로 확장한다(ADR-0056). 계약
 ```
 com.edge.app
   common/        AppErrorStatus, 인증 필터(Bearer + X-Device-Id), 커서 인코딩, config(Redis·ShedLock)
-  auth/ user/ onboarding/ home/ story/ etf/ watch/ theme/
+  auth/ member/ onboarding/ home/ story/ etf/ watch/ theme/
   explore/ analysis/ issue/ community/ notification/
 ```
 
