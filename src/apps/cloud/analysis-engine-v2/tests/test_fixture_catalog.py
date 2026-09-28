@@ -1,0 +1,33 @@
+"""The runnable fixture supports every factor without source data connections."""
+import json
+
+import pytest
+
+from edge_analysis_v2.fixture_tools import FixtureTools
+from edge_analysis_v2.fixture_tools.demo import build_demo_fixture
+
+
+@pytest.mark.parametrize("factor", ["차트", "매크로", "밸류", "수급"])
+def test_all_detail_factors_have_real_calculations(factor):
+    tools = FixtureTools(build_demo_fixture())
+    result = tools.call("get_factor_metrics", {"type": factor})
+    assert result["result"]["type"] == factor
+    assert result["result"]["metrics"]
+    assert all(r["observed_at"] for r in result["result"]["metrics"])
+    json.dumps(result, allow_nan=False)
+
+
+def test_initial_input_is_raw_bounded_and_time_limited():
+    fixture = build_demo_fixture()
+    fixture["macro"].append({"series": "usd_krw", "value": 9999, "unit": "KRW_per_USD", "observed_at": "2099-01-01T00:00:00+09:00", "available_at": "2099-01-01T00:00:00+09:00"})
+    payload = FixtureTools(fixture).initial_input()
+    assert len(payload["prices"]["rows"]) == 120
+    assert len(payload["flow"]["rows"]) == 180
+    assert len(payload["financials"]["rows"]) == 8
+    assert 9999 not in [row[1] for row in payload["macro"]["usd_krw"]["rows"]]
+
+
+def test_preopen_never_uses_current_day_provisional_price():
+    fixture = build_demo_fixture(analysis_at="2026-09-21T08:30:00+09:00")
+    assert fixture["price_snapshots"] == []
+    assert FixtureTools(fixture).call("calculate_chart_indicators", {})["result"]["momentum"] is not None

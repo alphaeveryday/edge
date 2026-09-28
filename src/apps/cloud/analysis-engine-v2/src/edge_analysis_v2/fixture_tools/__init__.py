@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from .common import available, holdings, instant, table
 from . import chart, factors, flow, macro, news, valuation
+from .demo import make_fixture
 
 
 class FixtureTools:
@@ -32,7 +33,7 @@ class FixtureTools:
         self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"])
         self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"])
         self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"])
-        self._register("get_factor_metrics", "요인 상세 화면의 계산 가능한 지표와 관측시각을 확정합니다. 상태·스티커·전망 판단은 포함하지 않습니다. 누락 카드는 숨기며 0으로 채우지 않습니다.", {"type": {"type": "string", "enum": ["차트", "매크로", "밸류", "수급"]}}, lambda **args: factors.metrics(self.fixture, **args), r"\text{각 카드의 등록 수식으로 계산}", ["ETF 가격", "거시 관측", "공개 재무", "확정 수급", "구성종목 비중"])
+        self._register("get_factor_metrics", "요인 상세 화면의 계산 가능한 지표와 관측시각을 확정합니다. 이동평균은 현재가 반영, 신고가는 확정 종가 비교, 거래대금은 전일/직전20일 평균, ATR은 첫14일 평균 시드 후 Wilder입니다. 금리 일정은 한국 날짜 차이, 환율·금리·브렌트는 최신 관측값입니다. 상태·스티커·전망 판단은 포함하지 않습니다.", {"type": {"type": "string", "enum": ["차트", "매크로", "밸류", "수급"]}}, lambda **args: factors.metrics(self.fixture, **args), factors.FORMULA_LATEX, ["ETF 가격", "거시 관측", "공개 재무", "확정 수급", "구성종목 비중"])
 
     def _register(self, name, description, parameters, callback, formula, sources):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources}
@@ -62,4 +63,16 @@ class FixtureTools:
         context = self.fixture["context"]
         dates = sorted({r["date"] for r in self.fixture.get("flow", []) if r["date"] <= context["flow_as_of_date"]})[-30:]
         rows = [r for r in available(self.fixture.get("flow", []), instant(context["analysis_at"])) if r["date"] in dates and r.get("finalized") is True]
-        return {"context": deepcopy(context), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": table(rows, ["instrument_id", "date", "investor", "net_amount_krw"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
+        cutoff = instant(context["analysis_at"])
+        prices = []
+        source_prices = [r for r in available(self.fixture.get("prices", []), cutoff) if r["date"] < cutoff.date().isoformat()]
+        for target in sorted({r["instrument_id"] for r in source_prices}):
+            prices.extend(sorted([r for r in source_prices if r["instrument_id"] == target], key=lambda r: r["date"])[-40:])
+        financials = []
+        source_financials = available(self.fixture.get("financials", []), cutoff)
+        for target in sorted({r["instrument_id"] for r in source_financials}):
+            latest = {}
+            for row in sorted([r for r in source_financials if r["instrument_id"] == target], key=lambda r: instant(r["available_at"])):
+                latest[row["period"]] = row
+            financials.extend(latest[p] for p in sorted(latest)[-4:])
+        return {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": table(rows, ["instrument_id", "date", "investor", "net_amount_krw"]), "prices": table(prices, ["instrument_id", "date", "high", "low", "close", "volume", "turnover"]), "price_snapshots": chart.snapshots(self.fixture), "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
