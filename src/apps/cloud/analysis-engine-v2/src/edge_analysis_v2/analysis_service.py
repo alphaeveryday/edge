@@ -21,6 +21,7 @@ from .publication_store import PublicationStore
 from .tool_store import ToolStore
 
 KST = timezone(timedelta(hours=9))
+_LATEST = object()
 
 
 def _previous(connection, kind, etf_code, cutoff):
@@ -30,14 +31,14 @@ def _previous(connection, kind, etf_code, cutoff):
         if kind == 'movement':
             query += sql.SQL(' AND trading_date=%s')
             args.append(cutoff.astimezone(KST).date())
-        cur.execute(query + sql.SQL(' ORDER BY analysis_at DESC, analysis_id DESC LIMIT 1'), args)
+        cur.execute(query + sql.SQL(' ORDER BY analysis_at DESC, published_at DESC, analysis_id DESC LIMIT 1'), args)
         row = cur.fetchone()
         return row['analysis_id'] if row else None
 
 
 def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     artifacts: Path, analysis_id: str, model='deepseek-flash',
-                    model_call=run_model) -> dict:
+                    model_call=run_model, previous_analysis_id=_LATEST) -> dict:
     """Run one idempotent request with independently committed tool evidence.
 
     Args:
@@ -49,6 +50,8 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
         analysis_id: Server-created request identity.
         model: Model configured for the local execution.
         model_call: Async model runner; replaced only by offline tests.
+        previous_analysis_id: Explicit predecessor; None starts independently.
+            Omit to use the latest completed analysis before the cutoff.
 
     Returns:
         Final screen objects reassembled from committed database rows.
@@ -73,7 +76,8 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
         with connection.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.SQL('SELECT previous_analysis_id FROM {} WHERE analysis_id=%s').format(sql.Identifier(kind+'_analyses')), (analysis_id,))
             existing = cur.fetchone()
-        previous_id = existing['previous_analysis_id'] if existing else _previous(connection, kind, context['etf_code'], cutoff)
+        previous_id = existing['previous_analysis_id'] if existing else (
+            _previous(connection, kind, context['etf_code'], cutoff) if previous_analysis_id is _LATEST else previous_analysis_id)
         parent = store.begin(kind, analysis_id, context['etf_code'], cutoff, previous_id)
         read = store.get_movement if kind == 'movement' else store.get_outlook
         if parent['status'] == 'completed':
@@ -86,11 +90,16 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
             initial = tools.initial_input() | {'previous_analysis': previous}
             if kind == 'movement':
                 with connection.cursor(row_factory=dict_row) as cur:
-                    cur.execute('''SELECT i.item_id, i.type, i.title_keyword, i.sentence,
+                    cur.execute('''WITH RECURSIVE history AS (
+                        SELECT analysis_id,previous_analysis_id FROM movement_analyses WHERE analysis_id=%s
+                        UNION ALL SELECT a.analysis_id,a.previous_analysis_id FROM movement_analyses a
+                        JOIN history h ON a.analysis_id=h.previous_analysis_id
+                        ) SELECT i.item_id, i.type, i.title_keyword, i.sentence,
                         i.sentiment,i.tool_run_ids,i.source_as_of FROM movement_items i
-                        JOIN movement_analyses a USING(analysis_id) WHERE a.etf_code=%s
+                        JOIN history h ON h.analysis_id=i.analysis_id
+                        JOIN movement_analyses a ON a.analysis_id=i.analysis_id WHERE a.etf_code=%s
                         AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<%s
-                        ORDER BY i.created_at,i.item_id''', (context['etf_code'],cutoff.astimezone(KST).date(),cutoff))
+                        ORDER BY i.created_at,i.item_id''', (previous_id,context['etf_code'],cutoff.astimezone(KST).date(),cutoff))
                     initial['previous_items'] = json.loads(json.dumps(cur.fetchall(), default=str))
             definitions = list(tools.definitions)
             schemas = list(tools.schemas)
