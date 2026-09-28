@@ -4,6 +4,9 @@
 > 어느 존이 정본인지, 수작업 백필로만 존재하는 것을 어떤 순서로 상시 수집으로 전환할지 정한다.
 > 조사 근거는 전부 레포 코드·문서다(레이크 실측 없음) — 실측이 필요한 주장은 **[실측 필요]** 로 표기한다.
 >
+> 2026-09-28 dev 실측(객체·기간·writer·reader)과 데이터셋별 전환 상태는 [레이크 경로 전환 대장](lake-path-transition-ledger.md)이 잇는다 —
+> 아래 [실측 필요] 표기 중 그 대장이 잰 것은 그쪽 수치가 최신이다.
+>
 > 표면 목록의 코드 정본: `analysis-engine/src/edge_analysis/statics/duck.py`
 > (`RDB_TABLES`·`S3_SETS`·`BACKFILL_SETS`). 경로 규약의 코드 정본:
 > `data-pipeline/src/data_pipeline/lake/storage.py`.

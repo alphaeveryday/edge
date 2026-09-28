@@ -37,6 +37,7 @@
 | [design/data-source-unification-spec.md](design/data-source-unification-spec.md) | 분석 소비 데이터 표면 전수표·존 통일 원칙·백필→포워드 전환 목록·수집 파이프라인 스펙 (ALPHA-879) | 데이터 소스를 새로 상시화하거나 수작업 백필을 정리할 때 |
 | [design/open-source-backfill.md](design/open-source-backfill.md) | 오픈소스 백필 수집 방법 기록 (2026-08-02 일회성 — 적재 규약·벤더 함정) | 그 백필 데이터의 출처·함정이 궁금할 때 |
 | [design/etf-data-storage-plan.md](design/etf-data-storage-plan.md) | ETF 데이터 저장 경로·행 키·시점 이력·수급 가중합 설계 초안 | 수집 구현 전 팀과 저장·조회 계약을 검토할 때 |
+| [design/lake-path-transition-ledger.md](design/lake-path-transition-ledger.md) | 레이크 데이터셋별 현재 경로·writer·reader·목적 표면·전환 상태 대장 (ADR-0057, 2026-09-28 dev 실측) | 임시 경로를 정본으로 옮기거나 구 경로를 폐기할 때 |
 
 > **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
 
