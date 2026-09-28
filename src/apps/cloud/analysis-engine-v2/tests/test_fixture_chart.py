@@ -49,3 +49,17 @@ def test_missing_expected_daily_price_is_not_shortened_window():
     fixture["prices"].pop(-3)
     with pytest.raises(ValueError, match="missing"):
         FixtureTools(fixture).call("calculate_chart_indicators", {})
+
+
+@pytest.mark.parametrize("ratio, expected", [(1.01, 1), (1, 0), (.99, -1)])
+def test_high_distance_preserves_breakthrough_sign_without_clipping(ratio, expected):
+    fixture = chart_fixture()
+    high = max(row["close"] for row in fixture["prices"])
+    current = fixture["price_snapshots"][-1]
+    current.update(price=high*ratio, high=high*ratio+1, low=high*ratio-1)
+    result = FixtureTools(fixture).call("get_factor_metrics", {"type": "차트"})["result"]
+    cards = {row["key"]: row for row in result["metrics"]}
+    assert cards["distance_from_52w_closing_high_pct"]["value"] == pytest.approx(expected)
+    assert cards["distance_from_52w_closing_high_pct"]["observed_at"] == current["observed_at"]
+    assert cards["new_closing_high_count_20d"]["observed_at"] == fixture["prices"][-1]["available_at"]
+    assert cards["turnover_ratio_previous_day"]["observed_at"] == fixture["prices"][-1]["available_at"]

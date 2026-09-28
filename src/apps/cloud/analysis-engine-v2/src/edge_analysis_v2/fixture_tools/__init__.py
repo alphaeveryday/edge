@@ -33,10 +33,10 @@ class FixtureTools:
         self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"])
         self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"])
         self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"])
-        self._register("get_factor_metrics", "요인 상세 화면의 계산 가능한 지표와 관측시각을 확정합니다. 이동평균은 현재가 반영, 신고가는 확정 종가 비교, 거래대금은 전일/직전20일 평균, ATR은 첫14일 평균 시드 후 Wilder입니다. 금리 일정은 한국 날짜 차이, 환율·금리·브렌트는 최신 관측값입니다. 분배율은12개월 실제 지급액/현재가, 좌수변화는20확정일 전과 비교합니다. 상태·스티커·전망 판단은 포함하지 않습니다.", {"type": {"type": "string", "enum": ["차트", "매크로", "밸류", "수급"]}}, lambda **args: factors.metrics(self.fixture, **args), factors.FORMULA_LATEX, ["ETF 가격", "거시 관측", "공개 재무", "확정 수급", "구성종목 비중", "ETF 분배금 지급", "ETF 발행좌수"])
+        self._register("get_factor_metrics", "요인 상세 화면의 계산 가능한 지표와 관측시각을 확정합니다. distance_from_52w_closing_high_pct=100(현재가/이전52주 최고종가-1): 양수는 이전 최고종가 돌파, 음수는 고점 아래, 0은 동일입니다. +1.1%는 고점보다1.1% 위이며 아래가 아닙니다. 절댓값이나 하락폭으로 바꾸지 마세요. ma20_distance_pct=100(현재가/20일선-1): 양수는20일선 위, 음수는 아래, 0은 동일입니다. 장중 이격률은 관측시각T의 현재가, 장전은 최신 확정 종가 기준입니다. new_closing_high_count_20d는 완료일D까지 최근20확정일의 종가 신고가 일수이며 오늘 장중 돌파 횟수가 아닙니다. turnover_ratio_previous_day는 완료일D 거래대금/그 이전20확정일 평균입니다. ATR은 첫14일 평균 시드 후 Wilder입니다. 금리 일정은 한국 날짜 차이, 환율·금리·브렌트는 최신 관측값입니다. 분배율은12개월 실제 지급액/현재가, 좌수변화는20확정일 전과 비교합니다. 상태·스티커·전망 판단은 포함하지 않습니다.", {"type": {"type": "string", "enum": ["차트", "매크로", "밸류", "수급"]}}, lambda **args: factors.metrics(self.fixture, **args), factors.FORMULA_LATEX, ["ETF 가격", "거시 관측", "공개 재무", "확정 수급", "구성종목 비중", "ETF 분배금 지급", "ETF 발행좌수"], version="v2")
 
-    def _register(self, name, description, parameters, callback, formula, sources):
-        self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources}
+    def _register(self, name, description, parameters, callback, formula, sources, *, version="v1"):
+        self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources, "version": version}
 
     @property
     def schemas(self):
@@ -46,7 +46,7 @@ class FixtureTools:
     @property
     def definitions(self):
         """Return immutable administrator-readable calculation definitions."""
-        return [{"tool_id": f"{name}:v1", "function_name": name, "version": "v1", "description": tool["description"], "formula_latex": tool["formula"], "source_names": tool["sources"]} for name, tool in self._tools.items()]
+        return [{"tool_id": f"{name}:{tool['version']}", "function_name": name, "version": tool["version"], "description": tool["description"], "formula_latex": tool["formula"], "source_names": tool["sources"]} for name, tool in self._tools.items()]
 
     def call(self, name, arguments):
         """Calculate once and return the exact object to be stored and shown."""
