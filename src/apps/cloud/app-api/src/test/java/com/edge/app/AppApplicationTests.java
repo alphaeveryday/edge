@@ -1,12 +1,13 @@
 package com.edge.app;
 
-import com.edge.app.dto.VoteCountResponse;
-import com.edge.app.dto.VoteCounts;
-import com.edge.app.entity.Vote;
-import com.edge.app.entity.VoteChoice;
-import com.edge.app.repository.VoteCountRepository;
-import com.edge.app.repository.VoteRepository;
-import com.edge.app.service.VoteService;
+import com.edge.app.community.vote.dto.VoteCountResponse;
+import com.edge.app.community.vote.dto.VoteCounts;
+import com.edge.app.community.vote.Vote;
+import com.edge.app.community.vote.VoteChoice;
+import com.edge.app.community.vote.VoteCountRepository;
+import com.edge.app.community.vote.VoteRepository;
+import com.edge.app.common.auth.AccessTokens;
+import com.edge.app.community.vote.VoteService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -55,6 +56,8 @@ class AppApplicationTests {
     VoteRepository voteRepository;
     @Autowired
     StringRedisTemplate redis;
+    @Autowired
+    AccessTokens tokens;
 
     RestClient client() {
         return RestClient.builder().baseUrl("http://localhost:" + port)
@@ -63,8 +66,11 @@ class AppApplicationTests {
     List<Vote> votes(String etf) {
         return voteRepository.findAll().stream().filter(v -> v.getEtfCode().equals(etf)).toList();
     }
-    int vote(String etf, long member, String choice) {
-        return client().post().uri("/api/v1/forecasts/" + etf + "/votes").header("X-User-Id", Long.toString(member))
+    String bearer(long member) {
+        return "Bearer " + tokens.issue(member);
+    }
+    int vote(String etf, long member, Object choice) {
+        return client().put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(member))
                 .body(Map.of("choice", choice)).retrieve().toBodilessEntity().getStatusCode().value();
     }
 
@@ -85,9 +91,7 @@ class AppApplicationTests {
 
     @Test
     void numericChoiceIsRejected() {
-        int status = client().post().uri("/api/v1/forecasts/000012/votes").header("X-User-Id", "1")
-                .body(Map.of("choice", 0)).retrieve().toBodilessEntity().getStatusCode().value();
-        assertEquals(400, status);
+        assertEquals(400, vote("000012", 1, 0));
         assertTrue(votes("000012").isEmpty());
     }
 
@@ -158,8 +162,10 @@ class AppApplicationTests {
     void manualRepairRequiresAdminAndRepairsBothDerivedKeys() throws Exception {
         String etf = "000044";
         assertEquals(400, vote(etf, 1, "INVALID"));
-        assertEquals(400, vote(etf, 0, "buy"));
-        assertEquals(400, client().post().uri("/api/v1/forecasts/" + etf + "/votes").header("X-User-Id", "1")
+        // 회원 전용이라 토큰 없는 투표는 COMMON401.
+        assertEquals(401, client().put().uri("/api/v1/etfs/" + etf + "/vote")
+                .body(Map.of("choice", "buy")).retrieve().toBodilessEntity().getStatusCode().value());
+        assertEquals(400, client().put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(1))
                 .body(Map.of()).retrieve().toBodilessEntity().getStatusCode().value());
         assertEquals(200, vote(etf, 1, "buy"));
         redis.opsForHash().put("vote:{" + etf + "}:count", "buy", "99");

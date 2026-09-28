@@ -6,6 +6,7 @@
 # - 에러 코드: COMMON400/401/403/500 은 jvm-common, 도메인 코드는 app-api AppErrorStatus 소유.
 #   앱은 code 를 번역 없이 그대로 분기한다. 이 파일의 x-error-codes 가 코드 목록의 SSOT.
 # - 페이지네이션: 커서. ?cursor=&size=, 응답 result 에 items[] 와 nextCursor(마지막이면 null).
+# - 투표: PUT 응답은 현황을 싣지 않는다(쓰기 경로에 읽기를 붙이지 않음). 앱은 성공 후 GET count.
 # - 스키마 이름과 필드는 app-ui src/api/types.ts 에서 옮기되 다음을 뺐다(2026-09-28 결정).
 #   표시용 색(logoBg·bg·avatarBg)은 앱이 theme key·handle 로 매핑한다. 시각은 전부 ISO 8601 이고
 #   상대 문구("3분 전")·기준 문구("오늘 08:30 기준")는 앱이 만든다.
@@ -797,21 +798,12 @@ paths:
         '200': { $ref: '#/components/responses/Post' }
         '404': { $ref: '#/components/responses/Error' }   # POST4040
   /etfs/{code}/vote:
-    get:
-      tags: [community]
-      operationId: communityVoteSummary
-      summary: 투표 현황
-      description: 분포 + 내 선택. mine 은 회원만 채워진다. 기존 forecast_vote 테이블.
-      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
-      responses:
-        '200': { $ref: '#/components/responses/VoteSummary' }
-        '401': { $ref: '#/components/responses/Error' }   # COMMON401
     put:
       tags: [community]
       operationId: communityVote
       summary: 투표 (생성·변경)
       security: [{ bearerAuth: [] }]
-      description: ETF 당 계정별 1건, 변경 무제한, 마감 없음 (upsert).
+      description: ETF 당 계정별 1건, 변경 무제한, 마감 없음 (upsert). 응답에 현황을 싣지 않는다(투표 쓰기 경로에 읽기를 붙이지 않음). 앱은 성공 후 count 를 다시 읽는다.
       parameters: [{ $ref: '#/components/parameters/EtfCode' }]
       requestBody:
         required: true
@@ -823,9 +815,19 @@ paths:
               properties:
                 choice: { $ref: '#/components/schemas/VoteChoice' }
       responses:
-        '200': { $ref: '#/components/responses/VoteSummary' }
-        '503': { $ref: '#/components/responses/Error' }   # VOTE5030
+        '200': { $ref: '#/components/responses/Empty' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '503': { $ref: '#/components/responses/Error' }   # VOTE5030
+  /etfs/{code}/vote/count:
+    get:
+      tags: [community]
+      operationId: communityVoteCount
+      summary: 투표 집계
+      description: 선택별 인원. 게스트도 조회. 내 선택은 싣지 않는다. source 는 집계를 읽은 경로(Redis 장애면 db 폴백).
+      security: []
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200': { $ref: '#/components/responses/VoteCount' }
 
   # ── notification ─────────────────────────────────────
   /notifications:
@@ -990,15 +992,15 @@ components:
                       - $ref: '#/components/schemas/Page'
                       - properties:
                           items: { type: array, items: { $ref: '#/components/schemas/Post' } }
-    VoteSummary:
-      description: 투표 현황
+    VoteCount:
+      description: 투표 집계
       content:
         application/json:
           schema:
             allOf:
               - $ref: '#/components/schemas/ApiResponse'
               - properties:
-                  result: { $ref: '#/components/schemas/VoteSummary' }
+                  result: { $ref: '#/components/schemas/VoteCount' }
 
   schemas:
     # ── 공통 ──
@@ -1134,23 +1136,14 @@ components:
             handle: { type: string }
         time: { type: string, format: date-time }
         body: { type: string }
-    VoteSummary:
+    VoteCount:
       type: object
-      required: [code, count, pct, mine]
+      required: [buys, waits, sells, source]
       properties:
-        code: { $ref: '#/components/schemas/EtfCode' }
-        count: { type: integer }
-        pct:
-          type: object
-          required: [buy, wait, sell]
-          properties:
-            buy: { type: number }
-            wait: { type: number }
-            sell: { type: number }
-        mine:
-          oneOf:
-            - $ref: '#/components/schemas/VoteChoice'
-            - type: 'null'
+        buys: { type: integer }
+        waits: { type: integer }
+        sells: { type: integer }
+        source: { type: string, enum: [redis, db] }
 
     # ── ETF 상세 ──
     Candle:

@@ -5,8 +5,8 @@ PRD_ETF_투표_Redis_Failover(2026-09-13)의 로컬 실험용 API. 투표 단위
 ```sh
 # 이 디렉터리에서
 VOTE_ADMIN_TOKEN=local-experiment docker compose up --build -d
-curl -i -X POST localhost:8080/api/v1/forecasts/69500/votes -H 'X-User-Id: 1' -H 'Content-Type: application/json' -d '{"choice":"BUY"}'
-curl localhost:8080/api/v1/forecasts/69500/votes/count
+curl -i -X PUT localhost:8080/api/v1/etfs/069500/vote -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"choice":"buy"}'
+curl localhost:8080/api/v1/etfs/069500/vote/count
 curl -i -X POST localhost:8080/api/v1/admin/votes/reconcile -H 'X-Admin-Token: local-experiment'
 ```
 
@@ -48,7 +48,7 @@ com.edge.app
   explore/ analysis/ issue/ community/ notification/
 ```
 
-각 도메인 안은 `XxxController`, `XxxService`, `XxxRepository`, `dto/` 넷이다. 엔티티는 접미사 없이 이름 그대로(`Post`, `Vote`). 조회 하나짜리 도메인(home·story·explore)은 Repository 없이 Service 가 다른 도메인 Repository 를 읽는다. 도메인이 작으면 파일 셋으로 끝나도 된다.
+각 도메인 안은 `XxxController`, `XxxService`, `XxxRepository`, `dto/` 넷이다. 도메인 안에 기능이 여럿이면 기능 하위 패키지로 묶는다(`community/vote/`, 나중의 `community/post/`). 엔티티는 접미사 없이 이름 그대로(`Post`, `Vote`). 조회 하나짜리 도메인(home·story·explore)은 Repository 없이 Service 가 다른 도메인 Repository 를 읽는다. 도메인이 작으면 파일 셋으로 끝나도 된다.
 
 **계층 두께는 지금 투표 API 그대로.** Controller 는 검증(`@Valid`)·호출·`ApiResponse.onSuccess` 반환만, Service 는 트랜잭션 경계와 규칙, Repository 는 JPA. DTO 는 record, 이름은 `XxxRequest`/`XxxResponse`.
 
@@ -56,11 +56,11 @@ com.edge.app
 
 **도메인 간 참조.** 다른 도메인 것은 Service 가 아니라 Repository 를 직접 읽는다(Service 끼리 부르면 순환·계층 비대). 쓰기는 자기 도메인만 한다. 부수 효과(글 작성 후 알림 생성 등)는 `VoteRecorded` 처럼 이벤트로 넘긴다.
 
-**인증.** 회원 `Authorization: Bearer` 액세스 JWT + DB 저장 리프레시, 게스트 `X-Device-Id`. 둘 다 있으면 토큰 우선. common 의 필터가 해석해 컨트롤러 인자(`@AuthenticationPrincipal` 류)로 넘긴다. 지금의 `X-User-Id` 헤더는 이 인자로 교체한다.
+**인증.** 회원 `Authorization: Bearer` 액세스 JWT + DB 저장 리프레시, 게스트 `X-Device-Id`. 둘 다 있으면 토큰 우선. common 의 `AuthFilter` 가 해석하고 리졸버가 인자 타입으로 넘긴다. `MemberPrincipal` 은 회원만, `AppPrincipal` 은 회원 또는 게스트, 익명이면 COMMON401. 필터는 DB 를 보지 않는다.
 
 **에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4040`, `ANALYSIS4041`). 앱은 code 를 번역 없이 그대로 분기한다.
 
-**기존 투표 코드 이동.** `controller/service/repository/dto/entity/event` 의 투표 파일을 `community/` 로 옮기고 경로를 `/api/v1/etfs/{code}/vote`(GET 현황, PUT 투표)로 바꾼다. `VoteAdminController`·재조정·write-behind 는 실험 자산이라 함께 옮기되 형태는 유지한다. Redis·ShedLock 설정은 `common/config` 로.
+**기존 투표 코드 이동(완료).** 투표 파일은 `community/vote/`(실험 자산은 `community/vote/writebehind/`), 경로는 `PUT /api/v1/etfs/{code}/vote`(응답에 현황 없음)와 `GET /api/v1/etfs/{code}/vote/count`(공개). 투표 응답에 집계를 싣지 않는 이유는 쓰기 경로에 Redis 읽기가 붙으면 장애 실측 조건(요청당 실패 1회)이 달라지기 때문이다. 계약이 현황을 요구하면 계약을 고친다. Redis·ShedLock 설정은 `common/config`. `experiments/` 스크립트는 옛 경로와 `X-User-Id` 그대로라 재실행 전 회원별 토큰 발급 방식으로 고쳐야 한다.
 
 **먼저 만들 수 있는 것(계약과 무관).** common 의 셋: 인증 필터, AppErrorStatus 확장, 커서 유틸. 계약이 확정되면 도메인별 구현을 바로 시작한다.
 
