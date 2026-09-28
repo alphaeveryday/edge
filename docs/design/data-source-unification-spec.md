@@ -53,7 +53,7 @@ PIT 안전성 표기: ✅ = 시점 클램프/파티션이 선견을 구조적으
 | 표면 | 경로 | 생산자 | 갱신 | PIT |
 |---|---|---|---|---|
 | `s3_dg_*` 6셋 (market·financials·flow·price·consensus·items) | `draft/curated/source=dataguide/…` (gzip CSV) | DataGuide 수작업 적재 (레포 밖) | 수작업 — market_daily 는 248거래일분, as_of 주간 파티션(consensus) [실측 필요: 마지막 as_of] | ⚠️ trade_date/as_of 스냅샷이라 구조적 선견은 없으나 갱신이 사람 손 |
-| `s3_kr_5min` / `s3_us_5min` | `raw/kr_intraday/fmp_5min/*.KS.parquet` / `raw/fmp_5min_us/` | 수작업 FMP 수집 | 중단 (KR 2026-07-16·US 2026-06-26 절단 — FMP 응답 상한 버그, open-source-backfill §4) | ⚠️ |
+| `s3_kr_5min` / `s3_us_5min` | 표준 raw 이관 스냅샷 `raw/source=fmp/dataset=price_5min/market={KR,US}/…/run_id=…/` (ALPHA-1104 — 원 애드혹 `raw/kr_intraday/fmp_5min/`·`raw/fmp_5min_us/` 와 바이트 동일) | 수작업 FMP 수집 | 중단 (KR 2026-07-16·US 2026-06-26 절단 — FMP 응답 상한 버그, open-source-backfill §4) | ⚠️ |
 | `s3_statement_line` 등 draft/canonical Iceberg 7셋 | `draft/canonical/…` | `backfill/run.py` (HuggingFace dartlab) | 수작업 백필 | ❌ dartlab 은 최종 확정치만(정정 이력 없음 — README "이 입력은 PIT 가 아니다") |
 | `s3_estimate_line` | `draft/canonical/estimates/estimate_line` | — | **메타데이터만, 데이터 0파일** (실적재는 `s3_dg_consensus` 로 감) | — |
 
