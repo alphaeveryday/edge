@@ -1371,7 +1371,9 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
 - **canonical(EOD 투자자 수급, 정제 Step2)** — `normalize-investor`는 현재 input run에서 gate를
   통과한 모든 `(market,ticker,trade_date)` winner를 직접 parquet key·SHA-256과 함께
   `dataset=investor_flow_daily` canonical run manifest에 기록한다(ALPHA-1040). 같은 값 재확정도
-  winner이고 같은 vendor 중복은 최신 `fetched_at`이 이기며, 교차 vendor 충돌은 winner에서 제외해
+  winner이고 같은 vendor 중복은 **그 거래일 정규장 마감(15:30 KST) 뒤 가장 이른 수집분**이 이기며
+  (장중 수집분은 최후순위 — ALPHA-1107: 다음 날 재수집분은 시간외 체결이 더해진 값이라 최신 승이면
+  D일 값이 매일 덮인다), 교차 vendor 충돌은 winner에서 제외해
   quality와 exit 2에 남긴다. canonical→quality→completed manifest 순으로 공개하고, 빈 입력도
   유효한 빈 completed manifest다. 저장·무결성 실패는 incomplete manifest와 exit 1로 fail-closed한다.
 - **적재(EOD 투자자 수급)** — 정상 `load-etf-flow --input-run-id`는 같은 run의 completed
@@ -1379,7 +1381,8 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   (ALPHA-1041). 결손·손상 때 LIST/fullscan으로 넓히지 않으며 빈 manifest는 canonical LIST/GET 없이
   성공한다. 물리 parquet 행과 논리 winner 처리량을 분리하고, 개별 DB 행 실패는 savepoint로
   격리해 다른 winner를 commit하되 exit 2와 최종 SFN Failed를 보존한다. 날짜 창과 `--all`은
-  명시 복구 전용이다.
+  명시 복구 전용이다. 마트 행은 순매수 값이 바뀌거나 **`available_at` 이 앞당겨질 때만** 갱신한다 —
+  옛 raw 재정제로 canonical 승자가 D일 수집분으로 돌아오면 값이 같아도 시각이 복구된다(ALPHA-1107).
 - **canonical(장중 투자자 추정, 정제 Step2)** — `canonical/market_data/investor_flow_intraday/
   market=…/trade_date=…/part-*.parquet` 에 게이트 통과 행을 **(market,ticker,trade_date,asof_slot)
   키로 멱등 병합**(ALPHA-768). EOD 확정(`investor_flow_daily`)과 파티션 축은 같지만 **행 키가
