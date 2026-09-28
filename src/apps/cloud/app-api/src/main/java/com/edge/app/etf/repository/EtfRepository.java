@@ -44,9 +44,6 @@ public interface EtfRepository extends JpaRepository<Etf, String> {
             """, nativeQuery = true)
     List<SummaryRow> search(@Param("q") String q);
 
-    @Query(value = SUMMARY_SELECT + "where e.theme_key = :theme order by e.hot desc, e.name", nativeQuery = true)
-    List<SummaryRow> byTheme(@Param("theme") String themeKey);
-
     @Query("select max(q.asOf) from EtfQuote q where q.etfCode in :codes")
     Instant latestQuoteAsOf(@Param("codes") Collection<String> codes);
 }

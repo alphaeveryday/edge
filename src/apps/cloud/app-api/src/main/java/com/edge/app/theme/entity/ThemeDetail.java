@@ -14,7 +14,7 @@ import java.io.Serializable;
 import java.time.Instant;
 import java.time.LocalDate;
 
-/** 테마 분석 발행본. payload 는 ThemeDetail 본문 + sheet{title, why, rows[{code, tag}]}. */
+/** 테마 분석 발행본. payload 는 ThemeDetail 본문 원문 */
 @Entity
 @Getter
 @IdClass(ThemeDetail.Key.class)

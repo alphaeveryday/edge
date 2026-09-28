@@ -2,14 +2,10 @@ package com.edge.app.theme.service;
 
 import com.edge.app.common.AppErrorStatus;
 import com.edge.app.common.json.Payload;
-import com.edge.app.etf.dto.EtfSummaryResponse;
 import com.edge.app.etf.entity.Dir;
-import com.edge.app.etf.repository.EtfRepository;
 import com.edge.app.theme.dto.ThemeDetailResponse;
 import com.edge.app.theme.dto.ThemeFeedItemResponse;
 import com.edge.app.theme.dto.ThemeResponse;
-import com.edge.app.theme.dto.ThemeSheetResponse;
-import com.edge.app.theme.entity.FeedDir;
 import com.edge.app.theme.entity.ThemeDetail;
 import com.edge.app.theme.repository.ThemeDetailRepository;
 import com.edge.app.theme.repository.ThemeRepository;
@@ -19,15 +15,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class ThemeService {
     private final ThemeRepository themeRepository;
     private final ThemeDetailRepository detailRepository;
-    private final EtfRepository etfRepository;
 
     @Transactional(readOnly = true)
     public List<ThemeResponse> list() {
@@ -36,25 +29,10 @@ public class ThemeService {
     }
 
     @Transactional(readOnly = true)
-    public List<ThemeFeedItemResponse> feed(FeedDir dir) {
-        return detailRepository.feed(dir.detailDir()).stream()
+    public List<ThemeFeedItemResponse> feed() {
+        return detailRepository.feed().stream()
                 .map(r -> new ThemeFeedItemResponse(r.getKey(), r.getCount().intValue(), r.getHeadline(), Dir.fold(r.getDir())))
                 .toList();
-    }
-
-    /** rows 는 etf.theme_key 로 항상 채운다. title·why·tag 는 최신 발행본의 sheet, 없으면 빈 값. */
-    @Transactional(readOnly = true)
-    public ThemeSheetResponse sheet(String key) {
-        requireTheme(key);
-        Payload sheet = detailRepository.findTopByThemeKeyOrderByAsOfDesc(key)
-                .map(d -> Payload.parse(d.getPayload()).get("sheet")).orElse(Payload.parse(null));
-        Map<String, String> tags = sheet.list("rows").stream()
-                .collect(Collectors.toMap(r -> r.text("code"), r -> r.text("tag"), (a, b) -> a));
-        List<ThemeSheetResponse.Row> rows = etfRepository.byTheme(key).stream()
-                .map(EtfSummaryResponse::from)
-                .map(e -> new ThemeSheetResponse.Row(e, tags.getOrDefault(e.code(), null)))
-                .toList();
-        return new ThemeSheetResponse(key, sheet.text("title"), sheet.text("why"), rows);
     }
 
     @Transactional(readOnly = true)

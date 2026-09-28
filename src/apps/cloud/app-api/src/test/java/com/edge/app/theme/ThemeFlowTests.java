@@ -15,10 +15,8 @@ import static com.edge.app.ApiCalls.call;
 import static com.edge.app.ApiCalls.result;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 피드는 발행본이 있는 테마만 방향 필터로, 시트는 발행본 없이도 ETF 행을 채우고, 분석은 발행본이 없으면 준비 중. */
+/** 피드는 발행본이 있는 테마만, 분석은 발행본이 없으면 준비 중 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ThemeFlowTests extends ContainerTests {
     @LocalServerPort
@@ -40,7 +38,7 @@ class ThemeFlowTests extends ContainerTests {
                 "{\"stocks\":[{\"name\":\"SK하이닉스\",\"etfs\":\"2종\"}],\"intro\":\"i\",\"countLabel\":\"2종\",\"todayLine\":\"tl\",\"todayEffect\":\"te\","
                         + "\"importantLead\":\"il\",\"importantWhy\":\"iw\",\"metric\":{\"name\":\"m\",\"now\":\"1\",\"dir\":\"help\",\"vals\":[1,2.5],\"thresh\":2,"
                         + "\"xLabels\":[\"a\",\"b\"],\"refLabel\":\"r\",\"state\":\"s\"},\"thesis\":\"t\",\"surface\":\"su\",\"structure\":\"st\",\"structureWhy\":\"sw\","
-                        + "\"soWhat\":\"so\",\"sheet\":{\"title\":\"시트 제목\",\"why\":\"이유\",\"rows\":[{\"code\":\"920002\",\"tag\":\"대장\"}]}}");
+                        + "\"soWhat\":\"so\"}");
     }
 
     @Test
@@ -54,7 +52,7 @@ class ThemeFlowTests extends ContainerTests {
     }
 
     @Test
-    void feedUsesLatestDetailAndFiltersByDirection() {
+    void feedUsesLatestDetail() {
         List<Map<String, Object>> all = result(call(port, "GET", "/api/v1/themes/feed", null));
         Map<String, Object> up = all.stream().filter(t -> "tt-up".equals(t.get("key"))).findFirst().orElseThrow();
         assertEquals("상승 헤드라인", up.get("headline"), "최신 as_of 의 행");
@@ -62,25 +60,6 @@ class ThemeFlowTests extends ContainerTests {
         assertEquals(2, up.get("count"));
         assertFalse(all.stream().anyMatch(t -> "tt-none".equals(t.get("key"))), "발행본 없는 테마는 피드에 없다");
 
-        List<Map<String, Object>> down = result(call(port, "GET", "/api/v1/themes/feed?dir=down", null));
-        assertTrue(down.stream().anyMatch(t -> "tt-down".equals(t.get("key"))));
-        assertFalse(down.stream().anyMatch(t -> "tt-up".equals(t.get("key"))));
-        assertEquals(400, call(port, "GET", "/api/v1/themes/feed?dir=sideways", null).getStatusCode().value());
-    }
-
-    @Test
-    void sheetFillsRowsFromEtfMasterAndTagsFromDetail() {
-        Map<String, Object> sheet = result(call(port, "GET", "/api/v1/themes/tt-up/sheet", null, "X-Device-Id", "t1"));
-        assertEquals("시트 제목", sheet.get("title"));
-        List<Map<String, Object>> rows = (List<Map<String, Object>>) sheet.get("rows");
-        assertEquals(List.of("920002", "920001"), rows.stream().map(r -> ((Map<String, Object>) r.get("etf")).get("code")).toList(), "hot 우선");
-        assertEquals("대장", rows.get(0).get("tag"));
-        assertNull(rows.get(1).get("tag"));
-
-        Map<String, Object> none = result(call(port, "GET", "/api/v1/themes/tt-none/sheet", null, "X-Device-Id", "t1"));
-        assertEquals("", none.get("title"));
-        assertEquals(List.of(), none.get("rows"));
-        assertEquals("THEME4001", call(port, "GET", "/api/v1/themes/nope/sheet", null, "X-Device-Id", "t1").getBody().get("code"));
     }
 
     @Test

@@ -3,7 +3,6 @@ package com.edge.app.theme.repository;
 import com.edge.app.theme.entity.ThemeDetail;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,8 +23,7 @@ public interface ThemeDetailRepository extends JpaRepository<ThemeDetail, ThemeD
                    d.headline as headline, d.dir as dir
             from theme t
             join lateral (select * from theme_detail d where d.theme_key = t.key order by d.as_of desc limit 1) d on true
-            where :dir = '' or d.dir = :dir
             order by t.hot desc, t.position
             """, nativeQuery = true)
-    List<FeedRow> feed(@Param("dir") String dir);
+    List<FeedRow> feed();
 }
