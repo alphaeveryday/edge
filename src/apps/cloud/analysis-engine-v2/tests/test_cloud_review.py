@@ -9,12 +9,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from edge_analysis_v2.cloud_review import make_handler, render_evidence
+from edge_analysis_v2.cloud_review import make_handler, render_evidence, render_job
 
 
 @contextmanager
-def server(reader):
-    instance = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(reader))
+def server(reader, **kwargs):
+    instance = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(reader, **kwargs))
     thread = Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     try:
@@ -89,3 +89,49 @@ def test_tool_output_and_definition_are_escaped_without_rounding():
     assert '<img' not in page
     assert 'data-latex="&quot; onmouseover=&quot;' in page
     assert '일별 수급' in page
+
+
+def post(port, body, headers):
+    connection = HTTPConnection('127.0.0.1',port)
+    try:
+        connection.request('POST','/api/jobs',body=json.dumps(body),headers=headers)
+        response = connection.getresponse()
+        return response.status,response.read().decode()
+    finally:
+        connection.close()
+
+
+def test_readonly_server_cannot_start_model_calls():
+    with server(Mock()) as port:
+        assert post(port,{}, {'Origin':f'http://127.0.0.1:{port}'})[0] == 403
+
+
+def test_job_start_requires_origin_and_csrf_before_invoking_runner():
+    execution = Mock(csrf_token='token')
+    execution.start.return_value = {'analysis_id':'a','status':'running'}
+    with server(Mock(), execution=execution) as port:
+        headers = {'Origin':f'http://127.0.0.1:{port}','Content-Type':'application/json','X-CSRF-Token':'token'}
+        body = {'kind':'movement','scenario':'baseline'}
+        assert post(port,body,headers | {'Origin':'https://evil.example'})[0] == 403
+        assert post(port,body,headers | {'X-CSRF-Token':'wrong'})[0] == 403
+        execution.start.assert_not_called()
+        assert post(port,body,headers)[0] == 202
+        execution.start.assert_called_once_with(body)
+
+
+def test_feature_routes_return_only_the_requested_backend_contract():
+    reader = Mock(return_value={'summary_card':{'title':'title','summary':'text'}})
+    with server(Mock(), screen_reader=reader) as port:
+        code, body = request(port,'/api/screens/outlook/example/summary')
+    assert code == 200
+    assert set(json.loads(body)) == {'summary_card'}
+    reader.assert_called_once_with('outlook','example','summary')
+
+
+def test_raw_model_artifacts_are_pretty_and_escaped_without_losing_integer_precision():
+    page = render_job({'job':{},'artifacts':{'input.json':'{"value":9007199254740993,"text":"<script>x</script>"}',
+                                           'events.jsonl':'{"text":"model"}\n{"unfinished"'}})
+    assert '9007199254740993' in page
+    assert '<script>' not in page
+    assert '\n  &quot;value&quot;' in page
+    assert 'unfinished' in page
