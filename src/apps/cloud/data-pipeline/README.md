@@ -2282,8 +2282,10 @@ edge-review 4라운드로 실질 결함은 수렴했고, 아래는 **의도적�
   대신 **BLOCKED** 로 마감한다 — 방향이 안전(BLOCKED 가 "선행 때문"을 더 정확히)하고, 매 dep 마다
   ECS 콜을 더하는 대가가 이 사소한 불일치보다 커서 두었다(Rule 2).
 - **SFN 통합 실패(TaskFailed) 를 실패로 인정** — exit code 를 못 얻고 ECS 도 미확정일 때 SFN
-  TaskFailed 를 FAILED 로 본다. runTask.sync 의 TaskFailed 는 컨테이너 exit≠0 이 아니라 **작업
-  자체가 실패**한 신호라 이게 맞다(exit code 는 우선 조회한다).
+  TaskFailed 를 FAILED 로 본다. ⚠️ runTask.sync 는 **컨테이너 exit≠0 도 TaskFailed 로 올린다**
+  (cause JSON 의 `Containers[].ExitCode` 에 종료 코드가 실린다 — 2026-09-28 실측 exit 2). 그래서
+  exit code 를 우선 조회하는 순서가 중요하고, SFN 브랜치 꼬리도 같은 cause 에서 exit code 를
+  풀어 부분 성공(exit 2) 계속 조건에 쓴다(ALPHA-1113).
 - **완전성(VALID)의 부분 배선** — ETF 3작업은 정적 `etf_map` snapshot과 `received_count`가
   연결됐다(ALPHA-611). 반면 가격·수급·공시처럼 런타임 holdings에서 종목 유니버스를 파생하는
   작업은 계획 시점의 독립 정본이 없어 여전히 `UNKNOWN`이다(false-VALID 를 내느니 UNKNOWN —
