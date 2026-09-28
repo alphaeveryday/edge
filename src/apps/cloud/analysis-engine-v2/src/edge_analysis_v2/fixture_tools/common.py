@@ -1,14 +1,14 @@
 """Small deterministic helpers for fixture-bound calculations."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 
 def instant(value):
-    """Parse a source timestamp with an explicit timezone."""
+    """Parse an explicit source timestamp in the Korean market timezone."""
     value = datetime.fromisoformat(value)
     if value.utcoffset() is None:
         raise ValueError("timestamp requires offset")
-    return value
+    return value.astimezone(timezone(timedelta(hours=9)))
 
 
 def decimal(value):

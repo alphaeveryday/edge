@@ -10,6 +10,7 @@
 - `.initial_input()`: 시점 제한된 원자료. 시계열은 `columns/rows`, 뉴스는 객체 목록.
 - `context`: `etf_code`, 명시적 시차가 있는 `analysis_at`, 확정 수급일 `flow_as_of_date`.
 - 모든 자료는 `available_at <= analysis_at`. 미래 관측·미래 발표 제외. 결측은 0으로 채우지 않는다.
+- 거래 날짜는 KST. UTC로 전달된 분석시각도 같은 한국 거래일로 해석한다.
 
 ## 뉴스·구성종목
 

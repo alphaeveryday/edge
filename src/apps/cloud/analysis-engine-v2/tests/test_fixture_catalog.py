@@ -39,3 +39,10 @@ def test_quiet_scenario_has_no_new_news_or_indicator_extreme():
     assert 20 < result["momentum"] < 80
     assert all(r["published_at"] < "2026-09-15" for r in fixture["news"])
     assert max(abs(r["net_amount_krw"]) for r in fixture["flow"]) <= 15000
+
+
+def test_utc_cutoff_means_same_korean_trading_day():
+    fixture = build_demo_fixture(analysis_at="2026-09-22T08:30:00+09:00")
+    expected = FixtureTools(fixture).call("get_factor_metrics", {"type": "차트"})["result"]
+    fixture["context"]["analysis_at"] = "2026-09-21T23:30:00+00:00"
+    assert FixtureTools(fixture).call("get_factor_metrics", {"type": "차트"})["result"] == expected
