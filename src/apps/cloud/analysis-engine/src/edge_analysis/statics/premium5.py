@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .duck import CausalLake
+from .duck import CausalLake, gate_bars
 
 # 바스켓 가중 커버리지 바닥. 이 밑이면 괴리가 아니라 결측을 괴리로 읽는 것이다.
 MIN_COVER = 0.60
@@ -209,8 +209,9 @@ if __name__ == "__main__":                        # pragma: no cover
     import sys
 
     _selfcheck()
-    lk = CausalLake()
     tk, day = sys.argv[1], sys.argv[2]
+    lk = CausalLake(day=day)            # 기준일로 원천 판정 (ALPHA-1108)
+    gate_bars(lk, day, block=True, ticker=tk)
     sp, note = premium_5m(lk, tk, day)
     print(note)
     for w in (sp.wins if sp else ())[:12]:

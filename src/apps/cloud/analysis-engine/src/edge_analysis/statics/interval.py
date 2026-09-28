@@ -1029,8 +1029,12 @@ def explain(lake, ticker: str, instrument_id: str, day: str,
 def main() -> None:
     if len(sys.argv) != 6:
         raise SystemExit(__doc__)
-    from .duck import CausalLake
-    print(explain(CausalLake(), *sys.argv[1:]))
+    from .duck import CausalLake, gate_bars
+    # 기준일로 원천을 고르고(낡은 정본을 안 쓴다), 그날 봉이 없으면 보류한다(ALPHA-1108).
+    day = sys.argv[3]
+    lake = CausalLake(day=day)
+    gate_bars(lake, day, block=True, ticker=sys.argv[1])
+    print(explain(lake, *sys.argv[1:]))
 
 
 if __name__ == "__main__":       # pragma: no cover
