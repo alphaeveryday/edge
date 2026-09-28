@@ -10,6 +10,7 @@ import pytest
 from edge_analysis_v2 import analysis_service
 from edge_analysis_v2.fixture_tools import make_fixture
 from edge_analysis_v2.tool_store import ToolStore
+from edge_analysis_v2.audited_execution import ToolExecutionError
 
 
 @pytest.fixture
@@ -100,3 +101,36 @@ def test_postcommit_display_read_failure_returns_completed_publication(execution
     async def must_not_run(**kwargs):
         pytest.fail('A completed request must not call the model again')
     assert execute(must_not_run) == screen
+
+
+@pytest.mark.parametrize('operation', ['write_outlook_body', 'apply_outlook_body_changes'])
+def test_agent_can_correct_nonfinal_evidence_before_publication(execution, operation):
+    execute, factory, identity = execution
+    failed_runs = []
+    async def model(**kwargs):
+        reference = write_body(kwargs)
+        search = kwargs['call']('search_news_threads', {})['tool_run_id']
+        topic = {'id': 'supply', 'title_keyword': '수정 계약', 'sentences': ['수정된 계약 물량이에요.'],
+                 'tool_run_ids': [search]}
+        invalid = ({'title': '수정 본문', 'items': [topic]} if operation == 'write_outlook_body'
+                   else {'changes': [{'action': 'update', **topic}]})
+        with pytest.raises(ToolExecutionError) as error:
+            kwargs['call'](operation, invalid)
+        failed_runs.append(error.value.tool_run_id)
+        assert search in str(error.value)
+        assert 'search_news_threads' in str(error.value)
+        assert 'include_body=false' in str(error.value)
+        # A harmless readback edit proves the rejected draft was not applied.
+        draft = kwargs['call']('apply_outlook_body_changes', {'changes': []})['result']
+        assert draft['items'][0]['sentences'][0]['sentence'] == '계약 물량을 확보했어요.'
+        topic['tool_run_ids'][:] = [reference]
+        kwargs['call'](operation, invalid)
+        return final_response(reference)
+    screen = execute(model)
+    assert screen['detail']['items'][0]['sentences'][0]['sentence'] == '수정된 계약 물량이에요.'
+    with factory() as connection:
+        row = connection.execute('SELECT status,output,error_message FROM tool_runs WHERE tool_run_id=%s',
+                                 (failed_runs[0],)).fetchone()
+        assert row[0] == 'failed' and row[1] is None
+        assert 'search_news_threads' in row[2]
+        assert connection.execute('SELECT status FROM outlook_analyses WHERE analysis_id=%s', (identity,)).fetchone()[0] == 'completed'

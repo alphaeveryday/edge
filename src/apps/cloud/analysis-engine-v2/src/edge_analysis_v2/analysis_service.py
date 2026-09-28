@@ -114,6 +114,7 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     result = editor.apply(**arguments)
                 else:
                     return tools.call(name, arguments)
+                store.validate_outlook_body_evidence(analysis_id, result)
                 return {'tool_run_id':uuid4().hex,'result':result}
             executor = AuditedExecution(calculate,ToolStore(audit_connection),definitions=definitions,
                 analysis_kind=kind,analysis_id=analysis_id,context=context)
