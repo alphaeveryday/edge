@@ -36,6 +36,8 @@ def available(rows, cutoff, time_key=None):
 def holdings(fixture, day=None):
     """Read one complete equity portfolio without renormalizing missing weights."""
     cutoff = instant(fixture["context"]["analysis_at"])
+    if day is not None:
+        cutoff = min(cutoff, instant(day + "T23:59:59.999999+09:00"))
     day = day or cutoff.date().isoformat()
     date.fromisoformat(day)
     rows = [r for r in available(fixture.get("holdings", []), cutoff) if r["as_of_date"] <= day]

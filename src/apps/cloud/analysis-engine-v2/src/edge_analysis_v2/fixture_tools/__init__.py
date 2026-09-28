@@ -2,8 +2,8 @@
 from copy import deepcopy
 from uuid import uuid4
 
-from .common import holdings, instant
-from . import news
+from .common import available, holdings, instant, table
+from . import flow, news
 
 
 class FixtureTools:
@@ -13,7 +13,7 @@ class FixtureTools:
         fixture: Raw observations and a fixed context; copied at construction.
     """
 
-    final_tool_names = {"get_issue_evidence", "get_etf_holdings"}
+    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow"}
 
     def __init__(self, fixture):
         self.fixture = deepcopy(fixture)
@@ -22,6 +22,9 @@ class FixtureTools:
         self._register("search_news_threads", "공개된 뉴스의 단계별 사건과 중복 보도 수를 탐색합니다. 기사 근거는 get_issue_evidence로 확보하세요.", {}, lambda: news.search(self.fixture), "", ["뉴스 기사"])
         self._register("get_issue_evidence", "기사 ID로 원문을 읽습니다. include_body=true는 탐색, false는 최종 문장의 기사 근거입니다.", {"news_ids": {"type": "array", "items": {"type": "string"}}, "include_body": {"type": "boolean"}}, lambda **args: news.evidence(self.fixture, **args), "", ["뉴스 기사"])
         self._register("get_etf_holdings", "분석 시각까지 공개된 전체 구성종목과 비중을 확인합니다. 일부 종목을 전체로 환산하지 않습니다.", {}, lambda: holdings(self.fixture), r"\sum_i w_i=1", ["ETF 구성종목 비중"])
+        parameters = {"investor": {"type": "string", "enum": ["foreign", "institution", "individual"]}, "lookback_days": {"type": "integer", "minimum": 1, "maximum": 30}, "operation": {"type": "string", "enum": ["sum", "frequency", "streak"]}, "direction": {"type": "string", "enum": ["net_buy", "net_sell", "none"]}}
+        for name, extra in (("calculate_investor_flow", {"instrument_id": {"type": "string"}}), ("calculate_weighted_flow", {})):
+            self._register(name, "확정 거래일의 순매수 합계·빈도·최신일부터 연속을 계산합니다. sum은 direction=none. 가중 수급은 ETF 구성종목 기준이며 ETF 자체 거래가 아닙니다. exact=false인 연속은 최소 일수입니다.", parameters | extra, lambda **args: flow.calculate(self.fixture, **args), r"F_d=\sum_iw_{i,d}x_{i,d};\ S=\sum_dF_d;\ M=\sum_d[sF_d>0]", ["투자자별 확정 순매수", "일별 ETF 구성종목 비중"])
 
     def _register(self, name, description, parameters, callback, formula, sources):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources}
@@ -48,4 +51,7 @@ class FixtureTools:
 
     def initial_input(self):
         """Return bounded raw data, without model answers or reference labels."""
-        return {"context": deepcopy(self.fixture["context"]), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
+        context = self.fixture["context"]
+        dates = sorted({r["date"] for r in self.fixture.get("flow", []) if r["date"] <= context["flow_as_of_date"]})[-30:]
+        rows = [r for r in available(self.fixture.get("flow", []), instant(context["analysis_at"])) if r["date"] in dates and r.get("finalized") is True]
+        return {"context": deepcopy(context), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": table(rows, ["instrument_id", "date", "investor", "net_amount_krw"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
