@@ -429,14 +429,27 @@ def publish_canonical(con, market: str, *, table: str = "bars",
                       dest: str | None = None) -> int:
     """canonical 파티션(market/trade_date)으로 올린다. 반환은 쓴 행 수.
 
-    ``OVERWRITE_OR_IGNORE``: 같은 날을 다시 수집하면 그 날 파티션만 갈아탄다. 다른
-    날 파티션은 건드리지 않는다 — 접두사를 비우면 이력이 사라진다.
+    ``OVERWRITE_OR_IGNORE``: 다른 날 파티션은 건드리지 않는다 — 접두사를 비우면 이력이
+    사라진다. **같은 날 재수집은 거부한다**(아래 가드, ALPHA-1106) — 이미 채워진 파티션을
+    고치는 길은 소유 writer(롤업·백필 스크립트)다.
     """
     target = dest or bucket_url(CANONICAL_PREFIX)
     sel = canonical_select(market, table=table)
     n = con.execute(f"SELECT count(*) FROM ({sel})").fetchone()[0]
     if not n:
         raise PipelineError(f"canonical 적재 0행 — {market} 스테이지가 비었다")
+    # 🔴 **파일이 이미 있는 파티션에는 쓰지 않는다** (ALPHA-1106). `part-{i}` 는 롤업·기존
+    # fmp 의 `part-0` 과 이름이 같아 그날 다른 종목까지 통째로 덮고, 백필 파일
+    # (`part-*-backfill.parquet`)과는 같은 (ticker, ts) 를 나란히 두어 소비자 글롭이 두 번
+    # 센다. 소유권 규칙(`data_pipeline.minute.rollup.writer_owns`·백필 서로소)을 이 모듈이
+    # 모르므로, 빈 파티션(처음 채우는 날)만 허용하는 것이 지킬 수 있는 최소선이다.
+    mkt = market.upper()
+    days = [str(d) for (d,) in con.execute(f"SELECT DISTINCT trade_date FROM ({sel})").fetchall()]
+    taken = [d for d in days if con.execute(
+        f"SELECT count(*) FROM glob('{target}/market={mkt}/trade_date={d}/*')").fetchone()[0]]
+    if taken:
+        raise PipelineError(f"canonical 파티션에 이미 파일이 있다 — 덮어쓰지 않는다 "
+                            f"({mkt} {len(taken)}일, 예: {taken[:3]}, ALPHA-1106)")
     con.execute(f"""
         COPY ({sel}) TO '{target}'
         (FORMAT parquet, PARTITION_BY (market, trade_date), OVERWRITE_OR_IGNORE true,
