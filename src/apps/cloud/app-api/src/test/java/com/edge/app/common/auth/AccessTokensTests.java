@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AccessTokensTests {
-    static final String SECRET = "0123456789abcdef0123456789abcdef";
+    static final String SECRET = "test-jwt-secret-for-tests-only-32bytes";
     static final Instant NOW = Instant.parse("2026-09-28T00:00:00Z");
 
     static AccessTokens at(Instant now, String secret) throws Exception {

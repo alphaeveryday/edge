@@ -36,7 +36,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class WatchService {
     private static final int USER_GROUP_MAX = 10;
-    private static final String KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private static final String KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"; // gitleaks:allow
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final PrincipalRepository principalRepository;

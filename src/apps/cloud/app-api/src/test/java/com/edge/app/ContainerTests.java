@@ -20,6 +20,6 @@ public abstract class ContainerTests {
 
     @DynamicPropertySource
     static void jwtSecret(DynamicPropertyRegistry registry) {
-        registry.add("app.jwt.secret", () -> "0123456789abcdef0123456789abcdef");
+        registry.add("app.jwt.secret", () -> "test-jwt-secret-for-tests-only-32bytes");
     }
 }

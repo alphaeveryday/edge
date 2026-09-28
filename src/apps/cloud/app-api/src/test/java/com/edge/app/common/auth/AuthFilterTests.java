@@ -41,7 +41,7 @@ class AuthFilterTests {
 
     @BeforeEach
     void setUp() throws Exception {
-        tokens = new AccessTokens(new JwtProperties("0123456789abcdef0123456789abcdef", Duration.ofHours(1)));
+        tokens = new AccessTokens(new JwtProperties("test-jwt-secret-for-tests-only-32bytes", Duration.ofHours(1)));
         mvc = MockMvcBuilders.standaloneSetup(new Probe())
                 .addFilters(new AuthFilter(tokens, new ObjectMapper()))
                 .setCustomArgumentResolvers(new PrincipalArgumentResolver())
