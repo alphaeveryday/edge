@@ -796,15 +796,15 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Post' }
         '404': { $ref: '#/components/responses/Error' }   # POST4040
-  /etfs/{code}/poll:
+  /etfs/{code}/vote:
     get:
       tags: [community]
-      operationId: communityPoll
+      operationId: communityVoteSummary
       summary: 투표 현황
       description: 분포 + 내 선택. mine 은 회원만 채워진다. 기존 forecast_vote 테이블.
       parameters: [{ $ref: '#/components/parameters/EtfCode' }]
       responses:
-        '200': { $ref: '#/components/responses/Poll' }
+        '200': { $ref: '#/components/responses/VoteSummary' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
     put:
       tags: [community]
@@ -821,9 +821,9 @@ paths:
               type: object
               required: [choice]
               properties:
-                choice: { $ref: '#/components/schemas/PollChoice' }
+                choice: { $ref: '#/components/schemas/VoteChoice' }
       responses:
-        '200': { $ref: '#/components/responses/Poll' }
+        '200': { $ref: '#/components/responses/VoteSummary' }
         '503': { $ref: '#/components/responses/Error' }   # VOTE5030
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
 
@@ -990,7 +990,7 @@ components:
                       - $ref: '#/components/schemas/Page'
                       - properties:
                           items: { type: array, items: { $ref: '#/components/schemas/Post' } }
-    Poll:
+    VoteSummary:
       description: 투표 현황
       content:
         application/json:
@@ -998,7 +998,7 @@ components:
             allOf:
               - $ref: '#/components/schemas/ApiResponse'
               - properties:
-                  result: { $ref: '#/components/schemas/Poll' }
+                  result: { $ref: '#/components/schemas/VoteSummary' }
 
   schemas:
     # ── 공통 ──
@@ -1031,7 +1031,7 @@ components:
     Signal: { type: string, enum: [strongDown, down, neutral, up, strongUp] }
     Dir: { type: string, enum: [help, neutral, burden] }
     Axis: { type: string, enum: [issue, chart, macro, value, flow], description: 요인 축. 라벨(이슈·차트·매크로·밸류·수급)은 앱이 가진다 }
-    PollChoice: { type: string, enum: [buy, wait, sell] }
+    VoteChoice: { type: string, enum: [buy, wait, sell] }
     NotiKind: { type: string, enum: [watch, signal, content, comm] }
 
     EtfSummary:
@@ -1134,7 +1134,7 @@ components:
             handle: { type: string }
         time: { type: string, format: date-time }
         body: { type: string }
-    Poll:
+    VoteSummary:
       type: object
       required: [code, count, pct, mine]
       properties:
@@ -1149,7 +1149,7 @@ components:
             sell: { type: number }
         mine:
           oneOf:
-            - $ref: '#/components/schemas/PollChoice'
+            - $ref: '#/components/schemas/VoteChoice'
             - type: 'null'
 
     # ── ETF 상세 ──

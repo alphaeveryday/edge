@@ -60,7 +60,7 @@ com.edge.app
 
 **에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4040`, `ANALYSIS4041`). 앱은 code 를 번역 없이 그대로 분기한다.
 
-**기존 투표 코드 이동.** `controller/service/repository/dto/entity/event` 의 투표 파일을 `community/` 로 옮기고 경로를 `/api/v1/etfs/{code}/poll`(GET 현황, PUT 투표)로 바꾼다. `VoteAdminController`·재조정·write-behind 는 실험 자산이라 함께 옮기되 형태는 유지한다. Redis·ShedLock 설정은 `common/config` 로.
+**기존 투표 코드 이동.** `controller/service/repository/dto/entity/event` 의 투표 파일을 `community/` 로 옮기고 경로를 `/api/v1/etfs/{code}/vote`(GET 현황, PUT 투표)로 바꾼다. `VoteAdminController`·재조정·write-behind 는 실험 자산이라 함께 옮기되 형태는 유지한다. Redis·ShedLock 설정은 `common/config` 로.
 
 **먼저 만들 수 있는 것(계약과 무관).** common 의 셋: 인증 필터, AppErrorStatus 확장, 커서 유틸. 계약이 확정되면 도메인별 구현을 바로 시작한다.
 
