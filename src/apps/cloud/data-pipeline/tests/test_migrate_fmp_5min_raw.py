@@ -161,3 +161,6 @@ def test_limit_and_ingest_date_reject_malformed_values():
     with pytest.raises(argparse.ArgumentTypeError):
         mig._iso_date_or_empty("2026-07-25/run_id=other")
     assert mig._iso_date_or_empty("2026-07-25") == "2026-07-25" and mig._iso_date_or_empty("") == ""
+    with pytest.raises(argparse.ArgumentTypeError):
+        mig._run_id_or_empty("retry/run_id=other")
+    assert mig._run_id_or_empty("run_8645481c2c1d4451af227c1633f1030d")

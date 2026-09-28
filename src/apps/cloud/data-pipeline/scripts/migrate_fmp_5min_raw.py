@@ -46,6 +46,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -157,6 +158,13 @@ def _non_negative(text: str) -> int:
     return n
 
 
+def _run_id_or_empty(text: str) -> str:
+    """--run-id 는 키 한 조각만 — 레이크의 run_id 규약(`lake.latest_good._RUN_ID`)과 같은 모양."""
+    if text and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", text):
+        raise argparse.ArgumentTypeError(f"run_id 는 한 경로 조각이어야 한다: {text!r}")
+    return text
+
+
 def _iso_date_or_empty(text: str) -> str:
     """--ingest-date 는 YYYY-MM-DD 만 — 경로 조각이 섞이면 raw 파티션 규약 밖에 쓴다."""
     if text:
@@ -175,7 +183,7 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--preset", choices=sorted(PRESETS), required=True)
     parser.add_argument("--bucket", default="edge-dev-pipeline-lake")
-    parser.add_argument("--run-id", default="", help="비우면 원본 프리픽스 해시")
+    parser.add_argument("--run-id", default="", type=_run_id_or_empty, help="비우면 원본 프리픽스 해시")
     parser.add_argument("--ingest-date", default="", type=_iso_date_or_empty,
                         help="비우면 객체별 원본 LastModified 날짜(UTC)")
     parser.add_argument("--match", default="", help="파일명 글롭으로 범위 제한 (예: 'A*.parquet')")
