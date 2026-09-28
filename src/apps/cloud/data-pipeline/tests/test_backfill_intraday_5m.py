@@ -11,7 +11,7 @@
 
 import importlib.util
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from pathlib import Path
 
 import pytest
@@ -430,21 +430,14 @@ def test_main_writes_the_requested_vendors_file_with_that_vendors_collector():
                    lambda *a, **k: ran.append("toss") or [(day, [_row("091170")])])
     monkey.setattr(backfill, "_collect_kis",
                    lambda *a, **k: ran.append("kis") or [(day, [_row("091170")])])
-    monkey.setattr(backfill, "_collect_fmp_local",
-                   lambda _d, _t, _c, a: ran.append("fmp") or a.fmp_stats.update(yielded=1)
-                   or [(day, [_row("091170")])])
-    monkey.setattr(backfill, "_load_local_source",
-                   lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 1,
-                                "by_day": {day: [_row("091170")]}})
     monkey.setattr(backfill, "_write_day",
                    lambda _s3, _b, d, rows, _dry, name: wrote.append((d, name)) or len(rows))
 
     try:
         for vendor in sorted(backfill.VENDORS):
             ran.clear(), wrote.clear()
-            extra = ["--source-parquet", "s3://b/k.parquet"] if vendor == "fmp" else []
             monkey.setattr("sys.argv",
-                           ["backfill", "--vendor", vendor, "--dry-run", *extra])
+                           ["backfill", "--vendor", vendor, "--dry-run"])
             assert backfill.main() == 0
             assert ran == [vendor], f"--vendor {vendor} 인데 {ran} 이 돌았다"
             assert wrote == [(day, backfill.VENDORS[vendor]["file"])], \
@@ -864,198 +857,3 @@ def test_collectors_skip_ticker_days_another_vendor_already_covers():
 
     assert d1 not in out or not out[d1], "토스가 이미 덮인 날을 다시 받았다"
     assert {r["ticker"] for r in out[d2]} == {"A"}
-
-
-# ── fmp 로컬 이력 이관 (ALPHA-1104) ─────────────────────────────────────────
-
-def _fmp_row(ticker: str, day: str = "2024-03-04", hhmm: str = "09:00") -> dict:
-    ts = datetime.fromisoformat(f"{day} {hhmm}:00")
-    return {"ticker": ticker, "source_symbol": f"{ticker}.KS", "ts": ts,
-            "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10,
-            "source_vendor": "fmp_backfill", "available_at": ts + timedelta(minutes=5)}
-
-
-def test_fmp_migration_never_overwrites_a_cell_someone_already_holds():
-    """이미 정본·다른 벤더가 가진 (종목, 날짜)는 원천 값이 달라도 옮기지 않는다.
-
-    WHY: 운영 분석은 지금 canonical 을 읽는다. 원천(로컬 fmp 재수집)이 토스 백필과 값이
-    다른 칸을 이관이 갈아치우면 **저장 이관이 분석 결과를 바꾼다** — 그건 이 작업의 범위
-    밖인 데이터 품질 결정이다. 그리고 건너뛴 행은 사유와 함께 세어 원천 전량이 설명돼야 한다.
-    """
-    import argparse
-    from collections import defaultdict
-
-    src = {"2024-03-04": [_fmp_row("069500"), _fmp_row("091160")],
-           "2024-03-05": [_fmp_row("069500", "2024-03-05")],
-           "2026-08-05": [_fmp_row("069500", "2026-08-05")]}     # 롤업 소유일 → 달력 밖
-    a = argparse.Namespace(fmp_source={"by_day": src}, fmp_stats=defaultdict(int))
-    covered = {"2024-03-04": {"091160"}, "2024-03-05": set()}
-    got = dict(backfill._collect_fmp_local(["2024-03-04", "2024-03-05"],
-                                           {"069500", "091160"}, covered, a))
-    assert {d: [r["ticker"] for r in rows] for d, rows in got.items()} == \
-        {"2024-03-04": ["069500"], "2024-03-05": ["069500"]}
-    assert dict(a.fmp_stats) == {"yielded": 2, "skipped_covered": 1,
-                                 "skipped_not_target": 0, "skipped_outside_calendar": 1}
-    assert sum(a.fmp_stats.values()) == sum(len(v) for v in src.values())
-
-
-def test_fmp_closing_auction_bar_survives_a_merge_rerun():
-    """fmp 벤더 봉은 15:30 종가 봉을 가진다 — 같은 파일을 다시 병합해도 안 걷힌다.
-
-    WHY: 병합 경로는 앞선 착지분에 정규장 필터를 다시 건다(토스 장전·장후 봉을 걷으려고).
-    그 필터가 롤업 계약(< 15:30)이면 두 번째 실행이 ETF 의 종가 봉만 조용히 지운다 —
-    같은 시대 개별주(`part-0` fmp)엔 남아 있는 봉이다. 토스·KIS 쪽 필터는 그대로다.
-    """
-    prior = [_fmp_row("069500", hhmm="15:30"), _fmp_row("069500", hhmm="15:25")]
-    rows, fresh = backfill._day_payload(prior, set(), [_fmp_row("091160")],
-                                        close_inclusive=True)
-    assert fresh == 1
-    assert {r["ts"].strftime("%H:%M") for r in rows if r["ticker"] == "069500"} == \
-        {"15:25", "15:30"}
-    rows, _ = backfill._day_payload(prior, set(), [_fmp_row("091160")])
-    assert {r["ts"].strftime("%H:%M") for r in rows if r["ticker"] == "069500"} == {"15:25"}
-
-
-def _source(monkeypatch, rows: list[dict]):
-    """스테이징 원천 parquet 을 흉내낸다. 행은 (ts, trade_date, available_at) 만 바꾼다."""
-    import io
-
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    base = {"symbol": "069500.KS", "ticker": "069500", "open": 1.0, "high": 1.0,
-            "low": 1.0, "close": 1.0, "volume": 1, "source_vendor": "fmp_backfill"}
-    buf = io.BytesIO()
-    pq.write_table(pa.Table.from_pylist([base | r for r in rows]), buf)
-
-    class _S3:
-        def get_object(self, Bucket, Key):  # noqa: N803
-            return {"Body": io.BytesIO(buf.getvalue()), "ETag": '"e"'}
-
-    monkeypatch.setattr(backfill.boto3, "client", lambda _n: _S3())
-
-
-def _src_row(ts: str, day: str | None = None, avail: str | None = None) -> dict:
-    t = datetime.fromisoformat(ts)
-    return {"ts": ts, "trade_date": day or ts[:10],
-            "available_at": avail or str(t + timedelta(minutes=5))}
-
-
-@pytest.mark.parametrize("rows, reason", [
-    ([_src_row("2024-03-04 09:00:00", avail="2026-08-05 13:19:00")], "available_at"),  # 업로드 시각
-    ([_src_row("2024-03-04 09:00:00", day="2024-03-05")], "trade_date"),               # 파티션이 갈린다
-    ([_src_row("2024-03-04 08:00:00")], "정규장 밖"),                                    # 장전 봉 = 가짜 시가
-    ([_src_row("2024-03-04 09:00:00"), _src_row("2024-03-04 09:00:00")], "중복"),       # 두 번 센다
-    ([_src_row("2024-03-04T09:00:00+09:00", avail="2024-03-04T09:05:00+09:00")], "시간대"),  # 9시간 밀린다
-])
-def test_fmp_source_that_breaks_the_canonical_contract_is_refused(monkeypatch, rows, reason):
-    """원천이 정본 계약을 어기면 한 행도 옮기지 않고 죽는다.
-
-    WHY: 거르면 회계(착지+건너뜀=원천)가 맞은 채 행이 사라지고, 실으면 정본이 오염된다.
-    넷 다 회계 검사를 통과하는 결함이다 — 검사는 수를 세지 값의 계약을 안 본다.
-    """
-    _source(monkeypatch, rows)
-    with pytest.raises(ValueError, match=reason):
-        backfill._load_local_source("s3://b/k.parquet")
-
-
-def test_fmp_source_keeps_the_closing_auction_bar(monkeypatch):
-    """15:30 종가 봉은 정규장 안이다 — 위 거부가 그 봉까지 잘라 내면 안 된다."""
-    _source(monkeypatch, [_src_row("2024-03-04 15:30:00")])
-    src = backfill._load_local_source("s3://b/k.parquet")
-    assert [r["ts"].strftime("%H:%M") for r in src["by_day"]["2024-03-04"]] == ["15:30"]
-
-
-def test_fmp_failure_mid_run_still_leaves_the_ledger(monkeypatch, tmp_path):
-    """이틀째 쓰기가 죽어도 첫날 착지분과 error 상태가 대장에 남고, 예외는 그대로 올라간다.
-
-    WHY: 대장이 루프 정상 종료 뒤에만 쓰이면, 재실행은 첫날을 '이미 가진 칸'으로 세므로
-    그 런이 무엇을 옮겼는지 되살릴 길이 없다.
-    """
-    days = ["2024-03-04", "2024-03-05"]
-    monkeypatch.setattr(backfill, "_s3", lambda: None)
-    monkeypatch.setattr(backfill, "_trading_days", lambda _s3, _b: days)
-    monkeypatch.setattr(backfill, "_read_day", lambda _s3, _b, _d, name="part-0.parquet": None)
-    monkeypatch.setattr(backfill, "_configured_universe", lambda: set())
-    monkeypatch.setattr(backfill, "_load_local_source",
-                        lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 2,
-                                     "by_day": {d: [_fmp_row("069500", d)] for d in days}})
-
-    def _write(_s3, _b, d, rows, _dry, _name):
-        if d == days[1]:
-            raise OSError("PUT 실패")
-        return len(rows)
-    monkeypatch.setattr(backfill, "_write_day", _write)
-    report = tmp_path / "r.json"
-    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--dry-run",
-                                     "--source-parquet", "s3://b/k", "--report", str(report)])
-    with pytest.raises(OSError):
-        backfill.main()
-    import json
-    got = json.loads(report.read_text())
-    assert got["status"] == "error" and "PUT 실패" in got["error"]
-    assert [x["trade_date"] for x in got["landed"]] == [days[0]]
-
-
-def test_fmp_main_fails_when_source_rows_are_not_all_accounted_for(monkeypatch, tmp_path):
-    """착지 + 건너뜀 ≠ 원천 행이면 exit 1 — 행이 조용히 사라진 이관을 성공으로 접지 않는다."""
-    day = "2024-03-04"
-    monkeypatch.setattr(backfill, "_s3", lambda: None)
-    monkeypatch.setattr(backfill, "_trading_days", lambda _s3, _b: [day])
-    monkeypatch.setattr(backfill, "_read_day", lambda _s3, _b, _d, name="part-0.parquet": None)
-    monkeypatch.setattr(backfill, "_configured_universe", lambda: set())
-    monkeypatch.setattr(backfill, "_load_local_source",
-                        lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 3,
-                                     "by_day": {day: [_fmp_row("069500")]}})   # 3 이라 주장
-    report = tmp_path / "r.json"
-    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--dry-run",
-                                     "--source-parquet", "s3://b/k", "--report", str(report)])
-    assert backfill.main() == 1
-    assert '"unaccounted_rows"' in report.read_text()
-
-
-def test_fmp_ledger_reaches_s3_even_when_the_local_copy_fails(monkeypatch, tmp_path):
-    """로컬 `--report` 경로가 죽어도 S3 대장은 기록되고, 런은 exit 1 로 끝난다."""
-    import argparse
-    from collections import defaultdict
-
-    put: list[str] = []
-
-    class _S3:
-        def put_object(self, Bucket, Key, Body):  # noqa: N803
-            put.append(Key)
-    monkeypatch.setattr(backfill, "_s3", lambda: _S3())
-    a = argparse.Namespace(fmp_stats=defaultdict(int, yielded=1), dry_run=False, bucket="b",
-                           fmp_source={"uri": "s3://b/k", "etag": "e", "sha256": "h", "rows": 1},
-                           report=str(tmp_path / "없는-폴더" / "r.json"))
-    assert backfill._fmp_report(a, ["069500"], [], 1) == 1
-    assert len(put) == 1 and "dataset=intraday_5m" in put[0]
-
-
-def test_fmp_off_grid_rows_are_set_aside_and_counted_not_migrated(monkeypatch):
-    """5분 격자 밖 시각(09:01)은 옮기지 않되 키와 함께 따로 세어 회계에 넣는다.
-
-    WHY: ts 는 5분 구간 라벨이라 09:01 봉은 시계열을 깬다. 실측 원천에 12행(volume 0)이
-    있어 죽이면 이관 전체가 막히고, 조용히 거르면 원천 행이 설명 없이 사라진다.
-    """
-    _source(monkeypatch, [_src_row("2024-03-04 09:00:00"), _src_row("2024-03-04 09:01:00")])
-    src = backfill._load_local_source("s3://b/k.parquet")
-    assert [r["ts"].strftime("%H:%M") for r in src["by_day"]["2024-03-04"]] == ["09:00"]
-    assert [x["ts"] for x in src["off_grid"]] == ["2024-03-04 09:01:00"]
-    assert src["rows"] == 2
-
-
-def test_fmp_session_repair_needs_no_source_and_scans_the_whole_window(monkeypatch):
-    """정규장 복구는 원천 없이 돌고, 원천 날짜로 창이 좁혀지지 않는다(이미 쓴 파일 전부가 대상)."""
-    days = ["2024-03-04", "2024-03-05"]
-    seen: list[str] = []
-    monkeypatch.setattr(backfill, "_s3", lambda: None)
-    monkeypatch.setattr(backfill, "_trading_days", lambda _s3, _b: days)
-    monkeypatch.setattr(backfill, "_read_day",
-                        lambda _s3, _b, d, name="part-0.parquet": seen.append(d) or None)
-    monkeypatch.setattr(backfill, "_load_local_source",
-                        lambda uri: pytest.fail("복구 경로가 원천을 읽었다"))
-    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--repair-session-hours",
-                                     "--dry-run"])
-    assert backfill.main() == 0
-    assert seen == days
