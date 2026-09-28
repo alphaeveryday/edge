@@ -23,14 +23,14 @@ public class VoteController {
 
     // 응답에 현황을 싣지 않는다. 쓰기 경로에 읽기를 붙이면 장애 실측 조건이 달라진다. 앱은 성공 후 count 를 읽는다.
     @PutMapping
-    public ApiResponse<Void> vote(@PathVariable String code, MemberPrincipal principal,
+    public ApiResponse<Void> communityVote(@PathVariable String code, MemberPrincipal principal,
             @RequestBody @Valid VoteRequest request) {
         voteService.vote(code, principal.memberId(), request.choice());
         return ApiResponse.onSuccess(null);
     }
 
     @GetMapping("/count")
-    public ApiResponse<VoteCountResponse> counts(@PathVariable String code) {
+    public ApiResponse<VoteCountResponse> communityVoteCount(@PathVariable String code) {
         return ApiResponse.onSuccess(voteService.counts(code));
     }
 }
