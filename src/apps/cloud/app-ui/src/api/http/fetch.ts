@@ -6,13 +6,18 @@ export const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:808
 interface Envelope<T> { isSuccess: boolean; code: string; message: string; result?: T }
 type Query = Record<string, string | number | undefined>;
 
-// 서버 code → 앱 ApiErrorCode. 앱은 화면 분기에 이 넷만 쓴다
-const toCode = (code: string): ApiErrorCode => {
-  if (code === 'COMMON401' || code === 'AUTH4010') return 'UNAUTHORIZED';
-  if (code === 'ANALYSIS4041') return 'NOT_READY';
-  if (/4040$/.test(code)) return 'NOT_FOUND';
-  return 'INVALID';
+// 서버 code → 앱 ApiErrorCode. 코드별 명시 매핑, 없으면 INVALID
+const CODE_MAP: Record<string, ApiErrorCode> = {
+  COMMON401: 'UNAUTHORIZED',
+  AUTH4001: 'UNAUTHORIZED',
+  ANALYSIS4001: 'NOT_READY',
+  ETF4001: 'NOT_FOUND',
+  THEME4001: 'NOT_FOUND',
+  ISSUE4001: 'NOT_FOUND',
+  POST4001: 'NOT_FOUND',
+  MEMBER4001: 'NOT_FOUND',
 };
+const toCode = (code: string): ApiErrorCode => CODE_MAP[code] ?? 'INVALID';
 
 const qs = (q?: Query) => {
   if (!q) return '';
