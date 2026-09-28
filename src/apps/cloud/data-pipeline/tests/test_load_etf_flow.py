@@ -350,8 +350,8 @@ def test_비정수_값은_배치를_죽이지_않고_격리된다(tmp_path, monk
 
 
 def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):
-    # WHY: canonical 은 같은 (종목,거래일) 을 최신 fetched_at 으로 수렴시킨다. 마트가 첫 값을
-    #      고수하면 두 계층이 영구 불일치한다. 순매수 값이 바뀐 경우에만 갱신해야 한다.
+    # WHY: canonical 승자가 바뀌면(옛 raw 재정제 등) 마트가 첫 값을 고수할 때 두 계층이 영구
+    #      불일치한다. 순매수 값이 바뀐 경우에만 갱신해야 한다.
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [_flow_row(net_qty_individual=-1000)])
     conn = _FakeConn()
@@ -368,23 +368,25 @@ def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):
     assert _inserts(conn)[-1][2] == -2000   # net_qty_individual = 첫 net 컬럼
 
 
-def test_같은_키가_여러_part_에_있으면_최신_fetched_at_이_이긴다(tmp_path, monkeypatch):
-    # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 오래된 수급이 마트에 고착될 수 있다.
-    #      canonical 병합과 같은 규칙(최신 fetched_at 우선)을 후보 선정에 적용한다.
+def test_같은_키가_여러_part_에_있으면_canonical_과_같은_승자를_고른다(tmp_path, monkeypatch):
+    # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 수급이 마트에 고착될 수 있다. 후보 선정은
+    #      canonical 병합과 같은 순위여야 한다(ALPHA-1107) — 거래일 정규장 마감 뒤 가장 이른
+    #      수집분. 다음 날 재수집분(시간외 포함)이 이기면 available_at 이 밀려 과거 시점 조회에서
+    #      행이 사라진다.
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_flow_row(net_qty_individual=-2000, fetched_at="2026-07-21T06:00:00+00:00")],
+                     [_flow_row(net_qty_individual=-1000, fetched_at="2026-07-16T06:41:00+00:00")],
                      part="part-00000")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_flow_row(net_qty_individual=-1000, fetched_at="2026-07-20T06:00:00+00:00")],
+                     [_flow_row(net_qty_individual=-2000, fetched_at="2026-07-17T06:41:00+00:00")],
                      part="part-00001")
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
 
     assert load_etf_flow.run(storage, "R1", db=_db()) == 0
     [params] = _inserts(conn)
-    assert params[2] == -2000                          # 사전순 마지막 part 가 아니라 최신
-    assert params[-2] == "2026-07-21T06:00:00+00:00"
+    assert params[2] == -1000                          # 사전순 마지막 part 도 최신도 아니다
+    assert params[-2] == "2026-07-16T06:41:00+00:00"   # available_at 도 D일 수집 시각
 
 
 def test_창으로_적재_대상_거래일을_좁힌다(tmp_path, monkeypatch):

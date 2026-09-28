@@ -8,8 +8,10 @@ ALPHA-482) → 이 스텝이 체인의 끝이다. load_price_daily(377)와 같�
 
 **멱등**: PK `(instrument_id, trade_date)` 가 곧 멱등의 근거다 — 같은 값 재적재는
 `ON CONFLICT … DO UPDATE … WHERE (…) IS DISTINCT FROM (…)` 의 WHERE 가 걸러내 아무 행도
-반환하지 않고 already 로 세어진다. 벤더 정정(순매수 값이 실제로 바뀐 경우)만 UPDATE 로 흐른다 —
-canonical 이 최신 fetched_at 으로 수렴시키므로 마트가 DO NOTHING 이면 두 계층이 영구 불일치한다.
+반환하지 않고 already 로 세어진다. canonical 승자가 실제로 바뀐 경우(순매수 값 변경)만 UPDATE 로
+흐른다 — 마트가 DO NOTHING 이면 두 계층이 영구 불일치한다. canonical 승자는 정규장 마감 뒤 가장
+이른 수집분으로 고정되므로(`normalize_investor._winner_rank`, ALPHA-1107) 다음 날 재수집이 값과
+`available_at` 을 밀어내지 않는다.
 
 **instrument_id 해소**: canonical 의 `(market, ticker)` → `instrument` 조회다. canonical 은
 지역 "KR" 만 주고 MIC 는 없어, KRX 세 시장 MIC(XKRX·XKOS·XKON) 를 다 훑어 ticker 로 찾는다
@@ -39,6 +41,7 @@ from ..lake import (
     canonical_run_manifest_key,
     quality_log_key,
 )
+from .normalize_investor import _winner_rank
 
 logger = logging.getLogger(__name__)
 
@@ -311,8 +314,8 @@ def run(
             raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
         if (from_date is None) != (to_date is None):
             raise ValueError("from_date와 to_date는 함께 써야 한다")
-        # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면 최신
-        # fetched_at 이 이긴다 — canonical 병합과 같은 규칙이다.
+        # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면
+        # canonical 병합과 **같은 순위**(`_winner_rank`)로 고른다 — 규칙이 둘이면 두 계층이 갈린다.
         candidates: dict[tuple[str, str, str], dict] = {}
         manifest_partitions, manifest_winners, input_rows = _input_rows(
             storage, input_run_id=input_run_id, from_date=from_date, to_date=to_date,
@@ -336,12 +339,13 @@ def run(
             fetched_at = row.get("fetched_at")
             cand_key = (market, ticker, trade_date)
             prev = candidates.get(cand_key)
-            if prev is not None and (fetched_at or "") < prev["fetched_at_raw"]:
+            rank = _winner_rank(row)
+            if prev is not None and rank > prev["rank"]:
                 continue
             fact = {col: row.get(col) for col in _NET_COLUMNS}
             # 기존 명시 복구 동작을 보존한다. 결측 시 실행 시각을 쓰는 역사적 계약이다.
             fact["available_at"] = fetched_at or started_at.isoformat()
-            fact["fetched_at_raw"] = fetched_at or ""
+            fact["rank"] = rank
             candidates[cand_key] = fact
 
         with connect(db) as conn:
