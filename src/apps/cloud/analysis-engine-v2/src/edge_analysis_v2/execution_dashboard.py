@@ -12,7 +12,7 @@ from uuid import uuid4
 SCENARIOS = {'baseline':'기본', 'unusual_flow':'특이 수급', 'competing_signals':'상충 지표',
              'followup':'후속 기사', 'quiet':'변화 없음'}
 ARTIFACTS = ('input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
-             'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json')
+             'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json', 'quality_review.md')
 
 
 def read_settings(path: Path) -> dict:
@@ -99,7 +99,8 @@ class ExecutionDashboard:
                    artifacts=self.runs_dir/job['analysis_id'], analysis_id=job['analysis_id'], model=self.model)
             job = job | {'status':'completed'}
         except Exception as exc:
-            job = job | {'status':'failed', 'error':type(exc).__name__ + ': 실행 실패. 아래 모델 기록과 DB 상태를 확인하세요.'}
+            detail = str(exc)[:1500].replace(self.key,'[redacted]') if isinstance(exc, ValueError) else '실행 실패. 아래 모델 기록과 DB 상태를 확인하세요.'
+            job = job | {'status':'failed', 'error':type(exc).__name__ + ': ' + detail}
         self._save(job | {'finished_at':datetime.now(timezone.utc).isoformat()})
 
     def jobs(self) -> list:
