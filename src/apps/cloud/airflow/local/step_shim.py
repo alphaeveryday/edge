@@ -3,7 +3,10 @@
 바꾸는 것은 둘뿐이다.
 1. KIS 장중 추정 소스 → 저장된 dev raw 재생(`/inputs/dev-lake`). 수집 스텝의 저장·로그·원장 계측은
    실제 코드가 한다. 재생 1회의 종목 수를 "외부 호출"로 `/lab-data/state/external_calls.jsonl` 에 센다.
-2. 장애 주입(`/lab-data/state/faults.json`): {"step","run_id","action","times",...} 규칙을 한 번씩 소모한다.
+2. 업무 실행·파티션 쓰기 계수: 스텝 함수가 실제로 불린 횟수(`business_runs.jsonl` — wrapper 가 보류·skip 하면
+   0)와 canonical 장중 수급 파티션 쓰기(`partition_writes.jsonl`)를 남긴다. exit code 가 아니라 이것으로 "업무가
+   돌았나"를 판정한다.
+3. 장애 주입(`/lab-data/state/faults.json`): {"step","run_id","action","times",...} 규칙을 한 번씩 소모한다.
    - exit: 스텝 함수가 일을 하지 않고 code 를 돌려준다(외부 호출·쓰기 없음). 원장 wrapper 는 그대로 돌아
      운영처럼 실패 attempt 를 남긴다.
    - raw_read_error: 정제가 raw 를 읽을 때 1회 IOError(실제 코드가 exit 를 정한다).
@@ -49,7 +52,8 @@ def _take_fault(step: str, run_id: str | None) -> dict | None:
         fcntl.flock(fp, fcntl.LOCK_EX)
         rules = json.load(fp)
         for rule in rules:
-            if rule["step"] == step and rule.get("run_id") in (None, run_id) and rule.get("times", 1) > 0:
+            if ("api" not in rule and rule.get("step") == step and rule.get("run_id") in (None, run_id)
+                    and rule.get("times", 1) > 0):
                 rule["times"] = rule.get("times", 1) - 1
                 fp.seek(0); fp.truncate(); json.dump(rules, fp)
                 return rule
@@ -145,8 +149,39 @@ def main(argv: list[str]) -> int:
             return original(self, key)
 
         lake_storage.LocalStorage.get_bytes = failing
+    _count_business(step, run_id)
     dp_run.KisInvestorEstimateSource = ReplayEstimateSource
     return dp_run.main(argv)
+
+
+def _count_business(step: str, run_id: str | None) -> None:
+    """스텝 함수 호출(= wrapper 게이트를 통과한 업무 실행)과 canonical 파티션 쓰기를 센다."""
+    from data_pipeline.lake import storage as lake_storage
+    from data_pipeline.steps import (ingest_raw_investor, load_investor_intraday,
+                                     normalize_investor_estimate)
+    arn = os.environ.get("OPS_ECS_TASK_ARN")
+    module = {"ingest-raw-investor-estimate": ingest_raw_investor,
+              "normalize-investor-estimate": normalize_investor_estimate,
+              "load-investor-intraday": load_investor_intraday}.get(step)
+    if module is not None:
+        inner = module.run
+
+        def counted(*a, **k):
+            started = datetime.now(timezone.utc).isoformat()
+            code = inner(*a, **k)
+            _append("business_runs.jsonl", {"step": step, "run_id": run_id, "ecs_task_arn": arn,
+                                            "start": started, "end": datetime.now(timezone.utc).isoformat(),
+                                            "exit": code})
+            return code
+        module.run = counted
+    put = lake_storage.LocalStorage.put_bytes
+
+    def counted_put(self, key, data):
+        if key.startswith("canonical/") and "investor_flow_intraday" in key:
+            _append("partition_writes.jsonl", {"key": key, "ecs_task_arn": arn, "run_id": run_id,
+                                                "at": datetime.now(timezone.utc).isoformat()})
+        return put(self, key, data)
+    lake_storage.LocalStorage.put_bytes = counted_put
 
 
 if __name__ == "__main__":

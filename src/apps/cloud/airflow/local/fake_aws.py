@@ -1,6 +1,10 @@
 """로컬 AWS 대역 — ECS·SNS·Step Functions 의 이 레인이 쓰는 호출만. 운영 AWS 를 부르지 않는다.
 
-- ECS(JSON 1.1): RunTask·ListTasks·DescribeTasks·StopTask. RunTask 는 컨테이너 대신 같은 이미지의
+- ECS(JSON 1.1): RunTask·ListTasks·DescribeTasks·StopTask. RunTask 는 clientToken 이 같으면 새로 만들지 않고
+  첫 요청의 태스크를 돌려준다(ECS 멱등 토큰 — 실제 AWS 의 보존 기간·세부 동작은 대역으로 입증하지 않는다).
+  ECS API 장애 주입(faults.json 의 "api" 규칙): run_task refuse(배치 거부 확정)·lose_response(생성 뒤 5xx —
+  같은 토큰의 재전송도 5xx)·lose_response_invisible(+ ListTasks 에 안 보임), list_tasks error(started_by 지정),
+  describe_tasks error(그 스텝 태스크 조회만). RunTask 는 컨테이너 대신 같은 이미지의
   업무 코드(`step_shim.py` → `data_pipeline.run.main`)를 서브프로세스로 띄운다. `OPS_ECS_TASK_ARN` 으로
   가짜 ARN 을 넘겨 wrapper 가 운영처럼 attempt 를 남긴다.
 - SNS Publish: 기록만 한다.
@@ -33,15 +37,40 @@ ACCOUNT = "000000000000"
 
 LOCK = threading.Lock()
 TASKS: dict[str, dict] = {}
+TOKENS: dict[str, str] = {}          # clientToken -> taskArn
+RUN_REQUESTS: list[dict] = []        # RunTask 요청(boto 재전송 포함) — 제출 횟수 ≠ 생성 태스크 수를 보인다
 PROCS: dict[str, subprocess.Popen] = {}
 SNS: list[dict] = []
 EXECUTIONS: dict[str, dict] = {}
 
 
 class AwsError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, status: int = 400):
         super().__init__(message)
-        self.code = code
+        self.code, self.status = code, status
+
+
+def _take_api_fault(api: str, **match) -> dict | None:
+    """faults.json 의 {"api": ..., 조건..., "times"} 규칙 하나를 소모해 돌려준다. token 규칙은 같은 토큰에 계속 적용."""
+    path = Path("/lab-data/state/faults.json")
+    if not path.exists():
+        return None
+    with LOCK:
+        rules = json.loads(path.read_text())
+        for rule in rules:
+            if rule.get("api") != api or rule.get("times", 1) <= 0:
+                continue
+            if any(k in rule and rule[k] != v for k, v in match.items() if k != "token"):
+                continue
+            if "token" in match and rule.get("token") not in (None, match["token"]):
+                continue
+            if "token" in match and rule.get("sticky"):
+                rule["token"] = match["token"]          # 같은 요청의 boto 재전송에도 계속 적용
+            else:
+                rule["times"] = rule.get("times", 1) - 1
+            path.write_text(json.dumps(rules))
+            return rule
+    return None
 
 
 # ── ECS ──────────────────────────────────────────────────────────────
@@ -57,7 +86,8 @@ def _take_start_fault(step: str) -> bool:
     with LOCK:
         rules = json.loads(path.read_text())
         for rule in rules:
-            if rule["step"] == step and rule["action"] == "fail_to_start" and rule.get("times", 1) > 0:
+            if (rule.get("step") == step and rule.get("action") == "fail_to_start" and "api" not in rule
+                    and rule.get("times", 1) > 0):
                 rule["times"] = rule.get("times", 1) - 1
                 path.write_text(json.dumps(rules))
                 return True
@@ -67,6 +97,33 @@ def _take_start_fault(step: str) -> bool:
 def run_task(req: dict) -> dict:
     override = req["overrides"]["containerOverrides"][0]
     command = override.get("command") or []
+    step = command[0] if command else None
+    token = req.get("clientToken")
+    with LOCK:
+        RUN_REQUESTS.append({"step": step, "token": token, "startedBy": req.get("startedBy"), "at": time.time()})
+        known = TOKENS.get(token) if token else None
+    if known is not None:
+        lost = _take_api_fault("run_task", step=step, token=token)
+        if lost:
+            raise AwsError("ServerException", "lab: 주입한 응답 유실(같은 토큰 재전송)", 500)
+        return {"tasks": [_public(TASKS[known])], "failures": []}
+    fault = _take_api_fault("run_task", step=step, token=token)
+    if fault and fault["action"] == "refuse":
+        return {"tasks": [], "failures": [{"reason": "RESOURCE:MEMORY", "detail": "lab: 주입한 배치 거부"}]}
+    response = _create_task(req, command)
+    arn = response["tasks"][0]["taskArn"]
+    with LOCK:
+        if token:
+            TOKENS[token] = arn
+        if fault and fault["action"] == "lose_response_invisible":
+            TASKS[arn]["_hidden"] = True
+    if fault and fault["action"] in ("lose_response", "lose_response_invisible"):
+        raise AwsError("ServerException", "lab: 주입한 응답 유실(태스크는 생성됨)", 500)
+    return response
+
+
+def _create_task(req: dict, command: list[str]) -> dict:
+    override = req["overrides"]["containerOverrides"][0]
     env = {e["name"]: e["value"] for e in override.get("environment", [])}
     arn = f"arn:aws:ecs:ap-northeast-2:{ACCOUNT}:task/edge-lab/{uuid.uuid4().hex}"
     if command and _take_start_fault(command[0]):
@@ -111,14 +168,23 @@ def run_task(req: dict) -> dict:
 
 
 def list_tasks(req: dict) -> dict:
+    if _take_api_fault("list_tasks", started_by=req.get("startedBy")):
+        raise AwsError("ClientException", "lab: 주입한 ListTasks 실패")
     with LOCK:
         arns = [a for a, t in TASKS.items()
-                if (req.get("desiredStatus") in (None, t["desiredStatus"]))
+                if not t.get("_hidden")
+                and (req.get("desiredStatus") in (None, t["desiredStatus"]))
                 and (req.get("startedBy") in (None, t["startedBy"]))]
     return {"taskArns": arns}
 
 
 def describe_tasks(req: dict) -> dict:
+    with LOCK:
+        # 끝난 태스크 조회만 실패시킨다 — 대기(waiter) 중 폴링이 규칙을 먼저 소모하지 않게.
+        steps = {(TASKS[a]["_command"] or [None])[0] for a in req["tasks"]
+                 if a in TASKS and TASKS[a]["lastStatus"] == "STOPPED"}
+    if any(_take_api_fault("describe_tasks", step=step) for step in steps):
+        raise AwsError("ClientException", "lab: 주입한 DescribeTasks 실패")
     with LOCK:
         found = [_public(TASKS[a]) for a in req["tasks"] if a in TASKS]
         missing = [{"arn": a, "reason": "MISSING"} for a in req["tasks"] if a not in TASKS]
@@ -129,8 +195,9 @@ def stop_task(req: dict) -> dict:
     arn = req["task"]
     with LOCK:
         task, proc = TASKS[arn], PROCS.get(arn)
-        task["desiredStatus"] = "STOPPED"
-        task["stopCode"], task["stoppedReason"] = "UserInitiated", req.get("reason", "stopped")
+        if task["lastStatus"] != "STOPPED":        # 이미 멈춘 태스크의 종료 경위는 바뀌지 않는다(ECS 와 같다)
+            task["desiredStatus"] = "STOPPED"
+            task["stopCode"], task["stoppedReason"] = "UserInitiated", req.get("reason", "stopped")
     if proc and proc.poll() is None:
         proc.terminate()
     return {"task": _public(task)}
@@ -340,7 +407,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 state = {"tasks": [{**_public(t), "command": t["_command"], "env": t["_env"]}
                                    for t in TASKS.values()],
-                         "sns": SNS, "executions": list(EXECUTIONS.values())}
+                         "sns": SNS, "executions": list(EXECUTIONS.values()),
+                         "run_requests": RUN_REQUESTS}
             self._send(200, json.dumps(state, default=str).encode(), "application/json")
         else:
             self._send(404, b"{}")
@@ -349,7 +417,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         if self.path == "/_lab/reset":
             with LOCK:
-                TASKS.clear(); PROCS.clear(); SNS.clear(); EXECUTIONS.clear()
+                TASKS.clear(); PROCS.clear(); SNS.clear(); EXECUTIONS.clear(); TOKENS.clear()
+                RUN_REQUESTS.clear()
             return self._send(200, b"{}", "application/json")
         target = self.headers.get("X-Amz-Target")
         if target is None:                               # SNS query protocol
@@ -371,7 +440,7 @@ class Handler(BaseHTTPRequestHandler):
             result = HANDLERS[target](json.loads(body or b"{}"))
             self._send(200, json.dumps(result, default=str).encode())
         except AwsError as exc:
-            self._send(400, json.dumps({"__type": exc.code, "message": str(exc)}).encode())
+            self._send(exc.status, json.dumps({"__type": exc.code, "message": str(exc)}).encode())
 
     def log_message(self, *args):
         pass

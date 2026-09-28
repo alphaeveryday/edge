@@ -6,7 +6,8 @@ raw 부분 실패여도 정제·적재 계속, 정제 exit 2 면 적재 계속, 
 - 정제·적재 exit 2 가 실제로 하류를 계속 탄다. 현행 ASL 은 runTask.sync 가 비0 종료를 TaskFailed 로
   올려 Catch 경로(exit_code 없음)로 가므로 "exit 2 면 적재 계속" 분기에 도달하지 못한다(dev 실행 이력 확인).
 - 실행 요청 = 이 DAG run. plan 은 원장만 쓰고 SFN 을 시작하지 않는다(OPS_ORCHESTRATOR=AIRFLOW).
-- 인프라 실패(exit code 없음)만 재시도한다. 이미 성공한 스텝의 재실행은 컨테이너 가드가 막는다.
+- 업무를 시작하지 않았음이 확인된 경우(기동 실패·실행권 대기 초과)와 아직 도는 태스크 재접속만 재시도한다.
+  실행 상태를 모르면(제출 응답 유실·조회 실패·강제 종료) 새 태스크를 띄우지 않고 보류한다(EdgeStep).
 
 일정·날짜:
 - logical_date = cron 발화 시각(슬롯). 데이터 구간 개념이 없는 trigger timetable 이다.
@@ -18,6 +19,7 @@ raw 부분 실패여도 정제·적재 계속, 정제 exit 2 면 적재 계속, 
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import timedelta
 
@@ -26,12 +28,16 @@ from airflow.sdk import DAG, Param, TriggerRule, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 
-from edge_batch import CLUSTER, EdgeStep, pipeline_run_id, reprocess_slot, run_key, run_status, slot_time
+from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, EdgeStep, pipeline_run_id,
+                        reprocess_slot, run_key, run_status, slot_time)
 
 LANE = "investor-intraday"
 # variables.tf `investor_intraday_schedule_expressions` 와 같은 슬롯(드리프트는 tests 가 대조).
 CRONS = ("35 9 * * 1-5", "5 10 * * 1-5", "25 11 * * 1-5", "25 13 * * 1-5", "35 14 * * 1-5")
 STEPS = ("collect", "normalize", "load")
+# 원장 카탈로그 task_key(data_pipeline.ops.catalog — tests/test_airflow_dag_contract.py 가 대조).
+TASK_KEYS = {"collect": "INVESTOR_INTRADAY_COLLECTION_KIS", "normalize": "NORMALIZE_INVESTOR_INTRADAY",
+             "load": "LOAD_INVESTOR_INTRADAY"}
 
 
 def _judged_steps(dag_run) -> tuple[str, ...]:
@@ -46,6 +52,22 @@ def _status(ti, dag_run) -> str:
     if ti.xcom_pull(task_ids="plan", key="exit_code") != 0:
         return ""
     return run_status({s: ti.xcom_pull(task_ids=s, key="exit_code") for s in _judged_steps(dag_run)})
+
+
+def _holds(ti, steps=("plan", *STEPS, "report")) -> dict:
+    """이 run 에서 Airflow 가 보류한 스텝 {task_id: {"kind","reason"}}(XCom `hold`). plan·report 보류도 런 판정에
+    드러낸다(원장 기록은 업무 스텝만 — plan·report 는 카탈로그 작업이 아니다)."""
+    return {s: h for s in steps if (h := ti.xcom_pull(task_ids=s, key="hold"))}
+
+
+def _holds_env(ti) -> str:
+    """report 가 원장에 옮길 보류 — ECS 상태·결과를 모르는 것만. 컨테이너 보류(OPEN_ATTEMPT)는 컨테이너가 이미
+    원장에 남겼다. JSON {task_key: {"kind","reason"}}, 없으면 빈 값."""
+    holds = {TASK_KEYS[s]: h for s, h in _holds(ti, STEPS).items()
+             if h.get("kind") in (HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN)}
+    return json.dumps(holds, ensure_ascii=False) if holds else ""
+
+
 ALARM_TOPIC = os.environ.get("EDGE_ALARM_TOPIC_ARN") or None
 
 
@@ -83,6 +105,7 @@ with DAG(
         "edge_run_key": lambda logical_date, dag_run: run_key(
             LANE, slot_time({"logical_date": logical_date, "dag_run": dag_run})),
         "edge_run_status": _status,
+        "edge_holds": _holds_env,
     },
     default_args={"retries": 2, "retry_delay": timedelta(seconds=30)},
     on_failure_callback=_notify_failure,
@@ -119,9 +142,11 @@ with DAG(
     # verdict 앞에 둔다 — DAG run 상태는 마지막(leaf) task 가 정하므로 보고 성공이 런 실패를 가리지 않게.
     report = EdgeStep(
         task_id="report", taskdef_key="ops", command=["reconcile"], exclusive=False,
-        trigger_rule=TriggerRule.ALL_DONE,
+        trigger_rule=TriggerRule.ALL_DONE, stop_on_upstream_hold=False,     # 보류를 원장에 옮기는 것이 일이다
         env={"OPS_RUN_KEY": "{{ edge_run_key(logical_date, dag_run) }}",
              "OPS_ORCHESTRATION_STATUS": "{{ edge_run_status(ti, dag_run) }}",
+             # 보류를 원장에 남겨야 재처리·수동 trigger 가 그 작업을 우회하지 못한다(원장 게이트).
+             "OPS_EXECUTION_HOLDS": "{{ edge_holds(ti) }}",
              "OPS_CLUSTER_ARN": CLUSTER},
     )
 
@@ -130,6 +155,10 @@ with DAG(
         """ASL RawPartialCheck — 실행한 스텝이 모두 exit 0 일 때만 런 성공. 업무 완료 판정은 원장이 한다.
         재처리 run 은 수집을 하지 않으므로 정제·적재만 본다."""
         codes = {step: ti.xcom_pull(task_ids=step, key="exit_code") for step in _judged_steps(dag_run)}
+        holds = _holds(ti)
+        if holds:
+            # 결손·업무 실패와 다른 사유 — 운영자가 기존 작업 종료를 확인해야 한다(README "보류 해제").
+            raise AirflowFailException(f"실행 보류 {holds} exit_codes={codes}")
         if run_status(codes) != "SUCCEEDED":
             raise AirflowFailException(f"런 실패 마감 exit_codes={codes}")
         # 판정 보고가 원장에 닿지 않았으면 성공으로 닫지 않는다 — 재처리 run 은 뒤에 이 run_key 를 다시
