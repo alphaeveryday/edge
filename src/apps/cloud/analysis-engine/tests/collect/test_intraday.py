@@ -515,3 +515,13 @@ def test_이미_채워진_파티션은_다시_쓰지_않는다(con, tmp_path):
     with pytest.raises(PipelineError, match="이미 파일이 있다"):
         intraday.publish_canonical(con, MARKET, dest=dest.as_posix())
     assert sorted(p.name for p in part.iterdir()) == ["part-fmp-backfill.parquet"]
+
+
+def test_디렉터리_마커만_있는_파티션은_막지_않는다(con, tmp_path):
+    """데이터 파일이 아닌 것(디렉터리 마커·비 parquet)만 있는 날은 처음 채우는 날이다."""
+    dest = tmp_path / "intraday_5m"
+    part = dest / "market=KR" / "trade_date=2026-07-30"
+    part.mkdir(parents=True)
+    (part / "_marker").write_bytes(b"")
+    intraday.stage_rows(con, _day_rows(SYMBOL, "2026-07-30"))
+    assert intraday.publish_canonical(con, MARKET, dest=dest.as_posix()) > 0

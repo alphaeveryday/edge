@@ -443,10 +443,13 @@ def publish_canonical(con, market: str, *, table: str = "bars",
     # (`part-*-backfill.parquet`)과는 같은 (ticker, ts) 를 나란히 두어 소비자 글롭이 두 번
     # 센다. 소유권 규칙(`data_pipeline.minute.rollup.writer_owns`·백필 서로소)을 이 모듈이
     # 모르므로, 빈 파티션(처음 채우는 날)만 허용하는 것이 지킬 수 있는 최소선이다.
+    # 세는 것은 `*.parquet` 뿐이다 — S3 콘솔이 만드는 0바이트 디렉터리 마커는 소비자 글롭이
+    # 안 읽는 비데이터라(`data_pipeline.lake.storage.is_foreign_5m_key` 와 같은 규약) 막을 이유가 없다.
+    # ⚠️ 검사와 COPY 는 원자적이지 않다 — 같은 날을 동시에 쓰는 writer 와의 경합은 못 막는다.
     mkt = market.upper()
     days = [str(d) for (d,) in con.execute(f"SELECT DISTINCT trade_date FROM ({sel})").fetchall()]
     taken = [d for d in days if con.execute(
-        f"SELECT count(*) FROM glob('{target}/market={mkt}/trade_date={d}/*')").fetchone()[0]]
+        f"SELECT count(*) FROM glob('{target}/market={mkt}/trade_date={d}/*.parquet')").fetchone()[0]]
     if taken:
         raise PipelineError(f"canonical 파티션에 이미 파일이 있다 — 덮어쓰지 않는다 "
                             f"({mkt} {len(taken)}일, 예: {taken[:3]}, ALPHA-1106)")
