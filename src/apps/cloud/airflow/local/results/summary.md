@@ -126,7 +126,7 @@
 - 외부 호출(재생 종목 수): 687 / 수집 실행 2
 - ECS 실행(대역): 12 (가드 env 켜짐 2) · 스텝 진입 {'plan-run': 2, 'ingest-raw-investor-estimate': 2, 'normalize-investor-estimate': 7, 'reconcile': 1}
 - SNS: []
-- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED']]
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_95a67a8127a39125cf91eb6cf8:NORMALIZE_INVESTOR_INTRADAY:RESULT_UNKNOWN', 'OPEN']]
 
 | run_key | 주체 | launch | 작업 outcome[attempt exit] |
 |---|---|---|---|
@@ -140,7 +140,7 @@
 - 외부 호출(재생 종목 수): 687 / 수집 실행 2
 - ECS 실행(대역): 17 (가드 env 켜짐 2) · 스텝 진입 {'plan-run': 4, 'ingest-raw-investor-estimate': 2, 'normalize-investor-estimate': 4, 'load-investor-intraday': 2, 'reconcile': 5}
 - SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T10:05', '[investor-intraday] FAILED — airflow lab__2026-09-22T10:05', '[investor-intraday] FAILED — airflow lab__v7_reprocess']
-- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_95a67a8127a39125cf91eb6cf8:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['MISSED', 'missed:run_95a67a8127a39125cf91eb6cf8:LOAD_INVESTOR_INTRADAY', 'OPEN']]
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_95a67a8127a39125cf91eb6cf8:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['MISSED', 'missed:run_95a67a8127a39125cf91eb6cf8:LOAD_INVESTOR_INTRADAY', 'OPEN']]
 
 | run_key | 주체 | launch | 작업 outcome[attempt exit] |
 |---|---|---|---|
@@ -149,18 +149,19 @@
 
 ### hold-v3-v5
 
-- canonical vs dev: 
-- DB 행 0 · 값 sha `4f53cda18c2b` · 행+data_version sha `4f53cda18c2b`
-- 외부 호출(재생 종목 수): 0 / 수집 실행 0
-- ECS 실행(대역): 12 (가드 env 켜짐 3) · 스텝 진입 {'plan-run': 3, 'normalize-investor-estimate': 1, 'load-investor-intraday': 1, 'reconcile': 4, 'ingest-raw-investor-estimate': 3}
-- SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T11:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T11:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T13:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T14:35']
-- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:INVESTOR_INTRADAY_COLLECTION_KIS', 'OPEN'], ['EXECUTION_HOLD', 'execution_hold:run_6bbdd052c8b01e07a08fa69bfb:INVESTOR_INTRADAY_COLLECTION_KIS', 'OPEN'], ['MISSED', 'missed:run_2eed4fa22525b9d4caa51ea0d6:NORMALIZE_INVESTOR_INTRADAY', 'OPEN'], ['MISSED', 'missed:run_6bbdd052c8b01e07a08fa69bfb:INVESTOR_INTRADAY_COLLECTION_KIS', 'OPEN'], ['MISSED', 'missed:run_f9cd53180e6ecb3b675f9b6078:NORMALIZE_INVESTOR_INTRADAY', 'OPEN']]
+- canonical vs dev: 2026-09-22 1779행 바이트 동일
+- DB 행 1779 · 값 sha `f265af26ac35` · 행+data_version sha `32739608e83d`
+- 외부 호출(재생 종목 수): 720 / 수집 실행 2
+- ECS 실행(대역): 18 (가드 env 켜짐 3) · 스텝 진입 {'plan-run': 4, 'normalize-investor-estimate': 3, 'load-investor-intraday': 3, 'reconcile': 5, 'ingest-raw-investor-estimate': 3}
+- SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T11:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T11:25', '[investor-intraday] FAILED — airflow lab__v3b_blocked']
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:INVESTOR_INTRADAY_COLLECTION_KIS', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_6bbdd052c8b01e07a08fa69bfb:INVESTOR_INTRADAY_COLLECTION_KIS:ECS_STATE_UNKNOWN', 'RESOLVED'], ['MISSED', 'missed:run_6bbdd052c8b01e07a08fa69bfb:INVESTOR_INTRADAY_COLLECTION_KIS', 'OPEN'], ['MISSED', 'missed:run_f9cd53180e6ecb3b675f9b6078:NORMALIZE_INVESTOR_INTRADAY', 'OPEN']]
 
 | run_key | 주체 | launch | 작업 outcome[attempt exit] |
 |---|---|---|---|
+| 2026-09-22T10:05 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0] |
 | 2026-09-22T11:25 | AIRFLOW | LAUNCHED | 수집 MISSED[-] · 적재 FULFILLED[0] · 정제 FULFILLED[0] |
 | 2026-09-22T13:25 | AIRFLOW | LAUNCHED | 수집 FAILED[-] · 적재 BLOCKED[-] · 정제 MISSED[-] |
-| 2026-09-22T14:35 | AIRFLOW | LAUNCHED | 수집 FAILED[-] · 적재 BLOCKED[-] · 정제 MISSED[-] |
+| 2026-09-22T14:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0] |
 
 ### hold-v6-v8
 
@@ -322,3 +323,70 @@
 | run_key | 주체 | launch | 작업 outcome[attempt exit] |
 |---|---|---|---|
 | 2026-09-22T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0,0] · 적재 FULFILLED[0] · 정제 FULFILLED[0] |
+
+### unsettled-u1
+
+- canonical vs dev: 2026-09-22 333행 **불일치**
+- DB 행 333 · 값 sha `15b907d6e8ec` · 행+data_version sha `5f592eca8f0a`
+- 외부 호출(재생 종목 수): 687 / 수집 실행 2
+- ECS 실행(대역): 17 (가드 env 켜짐 2) · 스텝 진입 {'plan-run': 4, 'ingest-raw-investor-estimate': 2, 'normalize-investor-estimate': 5, 'reconcile': 5, 'load-investor-intraday': 1}
+- SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T10:05', '[investor-intraday] FAILED — airflow lab__u1_reprocess', '[investor-intraday] FAILED — airflow lab__2026-09-22T09:35']
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_c52a16e3d7f98774b0fe384f5d:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['MISSED', 'missed:run_c52a16e3d7f98774b0fe384f5d:LOAD_INVESTOR_INTRADAY', 'OPEN']]
+
+| run_key | 주체 | launch | 작업 outcome[attempt exit] |
+|---|---|---|---|
+| 2026-09-22T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0,0] |
+| 2026-09-22T10:05 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FAILED[-] |
+
+### unsettled-u2
+
+- canonical vs dev: 2026-09-22 1048행 **불일치**
+- DB 행 333 · 값 sha `15b907d6e8ec` · 행+data_version sha `5f592eca8f0a`
+- 외부 호출(재생 종목 수): 1048 / 수집 실행 3
+- ECS 실행(대역): 21 (가드 env 켜짐 3) · 스텝 진입 {'plan-run': 5, 'ingest-raw-investor-estimate': 3, 'normalize-investor-estimate': 6, 'reconcile': 6, 'load-investor-intraday': 1}
+- SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T10:05', '[investor-intraday] FAILED — airflow lab__u1_reprocess', '[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T11:25']
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_6bbdd052c8b01e07a08fa69bfb:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_c52a16e3d7f98774b0fe384f5d:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['MISSED', 'missed:run_c52a16e3d7f98774b0fe384f5d:LOAD_INVESTOR_INTRADAY', 'OPEN']]
+
+| run_key | 주체 | launch | 작업 outcome[attempt exit] |
+|---|---|---|---|
+| 2026-09-22T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0,0] |
+| 2026-09-22T10:05 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FAILED[-] |
+| 2026-09-22T11:25 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FULFILLED[0] |
+
+### unsettled-u3
+
+- canonical vs dev: 2026-09-22 1048행 **불일치**; 2026-09-23 312행 **불일치**
+- DB 행 645 · 값 sha `16d7a83d366f` · 행+data_version sha `9431904dfba2`
+- 외부 호출(재생 종목 수): 1360 / 수집 실행 4
+- ECS 실행(대역): 32 (가드 env 켜짐 6) · 스텝 진입 {'plan-run': 8, 'ingest-raw-investor-estimate': 6, 'normalize-investor-estimate': 7, 'reconcile': 9, 'load-investor-intraday': 2}
+- SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T10:05', '[investor-intraday] FAILED — airflow lab__u1_reprocess', '[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T11:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T13:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T14:35']
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:INVESTOR_INTRADAY_COLLECTION_KIS', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_6bbdd052c8b01e07a08fa69bfb:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_c52a16e3d7f98774b0fe384f5d:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_f9cd53180e6ecb3b675f9b6078:INVESTOR_INTRADAY_COLLECTION_KIS:ECS_STATE_UNKNOWN', 'RESOLVED'], ['MISSED', 'missed:run_2eed4fa22525b9d4caa51ea0d6:NORMALIZE_INVESTOR_INTRADAY', 'OPEN'], ['MISSED', 'missed:run_c52a16e3d7f98774b0fe384f5d:LOAD_INVESTOR_INTRADAY', 'OPEN'], ['PLANNER_MISSING', 'planner_missing:etf-daily:2026-09-28T15:40', 'OPEN']]
+
+| run_key | 주체 | launch | 작업 outcome[attempt exit] |
+|---|---|---|---|
+| 2026-09-22T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0,0] |
+| 2026-09-22T10:05 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FAILED[-] |
+| 2026-09-22T11:25 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FULFILLED[0] |
+| 2026-09-22T13:25 | AIRFLOW | LAUNCHED | 수집 FAILED[-] · 적재 PENDING[-] · 정제 PENDING[-] |
+| 2026-09-22T14:35 | AIRFLOW | LAUNCHED | 수집 FAILED[-] · 적재 BLOCKED[-] · 정제 MISSED[-] |
+| 2026-09-23T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0] |
+
+### unsettled-u4-u5
+
+- canonical vs dev: 2026-09-22 1048행 **불일치**; 2026-09-23 658행 **불일치**
+- DB 행 991 · 값 sha `843ef07ad1da` · 행+data_version sha `7b9e1d6c70d6`
+- 외부 호출(재생 종목 수): 2065 / 수집 실행 6
+- ECS 실행(대역): 45 (가드 env 켜짐 8) · 스텝 진입 {'plan-run': 11, 'ingest-raw-investor-estimate': 8, 'normalize-investor-estimate': 10, 'reconcile': 13, 'load-investor-intraday': 3}
+- SNS: ['[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T10:05', '[investor-intraday] FAILED — airflow lab__u1_reprocess', '[investor-intraday] FAILED — airflow lab__2026-09-22T09:35', '[investor-intraday] FAILED — airflow lab__2026-09-22T11:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T13:25', '[investor-intraday] FAILED — airflow lab__2026-09-22T14:35', '[investor-intraday] FAILED — airflow lab__u4_reprocess', '[investor-intraday] FAILED — airflow lab__2026-09-23T11:25']
+- 원장 이슈: [['EXECUTION_HOLD', 'execution_hold:INVESTOR_INTRADAY_COLLECTION_KIS', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:NORMALIZE_INVESTOR_INTRADAY', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_6bbdd052c8b01e07a08fa69bfb:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_a8375e40d61ad7f9add980524e:NORMALIZE_INVESTOR_INTRADAY:RESULT_UNKNOWN', 'OPEN'], ['EXECUTION_HOLD', 'execution_hold:run_c52a16e3d7f98774b0fe384f5d:NORMALIZE_INVESTOR_INTRADAY:ECS_STATE_UNKNOWN', 'RESOLVED'], ['EXECUTION_HOLD', 'execution_hold:run_f9cd53180e6ecb3b675f9b6078:INVESTOR_INTRADAY_COLLECTION_KIS:ECS_STATE_UNKNOWN', 'RESOLVED'], ['MISSED', 'missed:run_2eed4fa22525b9d4caa51ea0d6:NORMALIZE_INVESTOR_INTRADAY', 'OPEN'], ['MISSED', 'missed:run_c52a16e3d7f98774b0fe384f5d:LOAD_INVESTOR_INTRADAY', 'OPEN'], ['PLANNER_MISSING', 'planner_missing:etf-daily:2026-09-28T15:40', 'OPEN']]
+
+| run_key | 주체 | launch | 작업 outcome[attempt exit] |
+|---|---|---|---|
+| 2026-09-22T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0,0] |
+| 2026-09-22T10:05 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FAILED[-] |
+| 2026-09-22T11:25 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FULFILLED[0] |
+| 2026-09-22T13:25 | AIRFLOW | LAUNCHED | 수집 FAILED[-] · 적재 PENDING[-] · 정제 PENDING[-] |
+| 2026-09-22T14:35 | AIRFLOW | LAUNCHED | 수집 FAILED[-] · 적재 BLOCKED[-] · 정제 MISSED[-] |
+| 2026-09-23T09:35 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FULFILLED[0] |
+| 2026-09-23T10:05 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 FULFILLED[0] · 정제 FAILED[0,1] |
+| 2026-09-23T11:25 | AIRFLOW | LAUNCHED | 수집 FULFILLED[0] · 적재 BLOCKED[-] · 정제 FAILED[137] |

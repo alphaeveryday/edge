@@ -367,6 +367,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 | scheduler·worker 중단·복구 | 실행 중 scheduler 재시작(실행 환경 방식대로) | run이 이어서 끝나고 중복 ECS 0 |
 | 보고 실패와 대조 복구 | report 직전 원장 접속 차단(보안그룹 임시 변경 등, dev 한정) | report 75 → 재시도. 소진되면 verdict 실패. 차단 해제 뒤 주기 Reconciler가 NULL을 투영으로 채운다 |
 | 잠금 연결 상실 | 정제 중 lock 백엔드 종료(`pg_terminate_backend`) 뒤 다른 슬롯 재처리 trigger | 재처리 정제 exit 76, 업무 실행 0, `EXECUTION_HOLD`(OPEN_ATTEMPT). 기존 작업 종료 뒤 다음 run은 정상 실행 |
+| 주기 점검(sweep)과 IAM | 머지 뒤 주기 reconcile 로그의 `airflow sweep` 요약·종료 코드. 활성화 뒤엔 DAG 시간 초과를 한 번 유도(테스트 run) | `ecs_listing: ok`, AccessDenied 0, 종료 코드 0. 시간 초과 run의 미확정 실행이 30~45분 안에 `EXECUTION_HOLD`로 남는다 |
 | 보류 해제 절차 | 위 재처리 뒤 README "보류 해제와 수동 복구"를 그대로 따라 한다 | 종료 확인 ①~⑥ 결과와 해제 SQL이 이 문서대로 동작. 해제 전 clear·재처리는 계속 보류 |
 
 ## 머지 순서와 선행 조건
