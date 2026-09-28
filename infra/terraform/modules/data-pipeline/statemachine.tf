@@ -655,12 +655,18 @@ locals {
           # 통째로 빠진다(ALPHA-1113, 09-01~09-28 계속 경로 진입 0건). cause 는 ECS 태스크 JSON
           # 이라 ExitCode·TaskArn 을 풀어 싣는다. 그 밖의 오류(타임아웃·RunTask API 예외·ExitCode
           # 없는 시작 실패)는 exit_code 없이 기존 출력 그대로 — 계속 조건이 거짓이라 fail-closed.
+          # Pass 는 Catch 가 없어 StringToJson 이 비-JSON cause 에 터지면 브랜치째 죽는다(raw 페이즈는
+          # 실패 브랜치를 partial 로 넘기는데 그게 Parallel 실패로 바뀐다) — JSON 모양일 때만 푼다.
           "${job.state}TaskFailed" = {
             Type = "Choice"
             Choices = [{
-              Variable     = "$.error.Error"
-              StringEquals = "States.TaskFailed"
-              Next         = "${job.state}ParseFailedTask"
+              And = [
+                { Variable = "$.error.Error", StringEquals = "States.TaskFailed" },
+                # 없는 경로를 StringMatches 로 참조하면 Choice 가 States.Runtime 으로 죽는다(test-state 실측).
+                { Variable = "$.error.Cause", IsPresent = true },
+                { Variable = "$.error.Cause", StringMatches = "{*" },
+              ]
+              Next = "${job.state}ParseFailedTask"
             }]
             Default = "${job.state}TaskFailedNoExitCode"
           }
