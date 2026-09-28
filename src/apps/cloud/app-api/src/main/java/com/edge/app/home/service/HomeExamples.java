@@ -3,7 +3,7 @@ package com.edge.app.home.service;
 import com.edge.app.etf.entity.Signal;
 import com.edge.app.etf.service.EtfExamples;
 import com.edge.app.home.dto.HomeBriefResponse;
-import com.edge.app.watch.service.WatchExamples;
+import com.edge.app.watch.dto.WatchGroupResponse;
 
 import java.time.Instant;
 import java.util.List;
@@ -16,7 +16,7 @@ final class HomeExamples {
     }
 
     static HomeBriefResponse brief(String group) {
-        var base = WatchExamples.base();
+        var base = new WatchGroupResponse("base", "label", 1);
         return new HomeBriefResponse(AT, List.of(base), group == null ? base.key() : group, Signal.NEUTRAL, 0,
                 List.of(EtfExamples.summary()));
     }
