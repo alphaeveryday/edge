@@ -538,6 +538,7 @@ def _load_local_source(uri: str) -> dict:
     사라지고, 싣으면 정본이 오염된다. 넷을 본다: `available_at = ts + 5분` · `trade_date`
     = `ts` 의 날짜(파티션을 가른다) · 정규장 봉(09:00~15:30, 장전 봉은 `interval._gap`
     의 시가가 된다) · (ticker, ts) 유일(소비자 글롭은 파티션 내 중복을 안 걷는다).
+    예외 하나: 5분 격자 밖 시각은 죽지 않고 `off_grid` 로 따로 모아 대장에 남긴다(아래).
     """
     import hashlib
 
@@ -546,6 +547,7 @@ def _load_local_source(uri: str) -> dict:
     body = obj["Body"].read()
     by_day: dict[str, list[dict]] = defaultdict(list)
     seen: set[tuple[str, datetime]] = set()
+    off_grid: list[dict] = []
     for r in pq.read_table(io.BytesIO(body)).to_pylist():
         ts = datetime.fromisoformat(str(r["ts"]))
         avail = datetime.fromisoformat(str(r["available_at"]))
@@ -560,7 +562,10 @@ def _load_local_source(uri: str) -> dict:
         if not _in_session(ts.time(), close_inclusive=True):
             raise ValueError(f"정규장 밖 봉: {r['ticker']} {ts}")
         if ts.minute % BUCKET_MINUTES or ts.second or ts.microsecond:
-            raise ValueError(f"5분 격자 밖 시각: {r['ticker']} {ts}")
+            # 5분 구간 라벨이 아니다 — 옮기지 않는다. 실측 원천에 12행(전부 volume 0, 2025-01~03)
+            # 이 있어 이관 전체를 멈추는 대신 **사유와 키를 대장에 남기고** 건너뛴다.
+            off_grid.append({"ticker": r["ticker"], "ts": str(ts), "volume": r["volume"]})
+            continue
         if (r["ticker"], ts) in seen:
             raise ValueError(f"(ticker, ts) 중복: {r['ticker']} {ts}")
         seen.add((r["ticker"], ts))
@@ -572,7 +577,8 @@ def _load_local_source(uri: str) -> dict:
         })
     return {"uri": uri, "etag": obj["ETag"].strip('"'),
             "sha256": hashlib.sha256(body).hexdigest(),
-            "rows": sum(len(v) for v in by_day.values()), "by_day": dict(by_day)}
+            "rows": sum(len(v) for v in by_day.values()) + len(off_grid),
+            "off_grid": off_grid, "by_day": dict(by_day)}
 
 
 def _collect_fmp_local(days, targets, covered, a):
@@ -770,6 +776,7 @@ def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> in
     두 번 셌다는 뜻이라 성공으로 접지 않는다(Rule 12).
     """
     st, src = dict(a.fmp_stats), a.fmp_source
+    st["skipped_off_grid"] = len(src.get("off_grid", []))
     accounted = st.get("yielded", 0) + sum(v for k, v in st.items() if k.startswith("skipped_"))
     ok = error is None and accounted == src["rows"] and st.get("yielded", 0) == total
     status = (("dry_run_ok" if a.dry_run else "success") if ok
@@ -780,6 +787,7 @@ def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> in
         "status": status, "error": f"{type(error).__name__}: {error}"[:300] if error else None,
         "source": {k: src[k] for k in ("uri", "etag", "sha256", "rows")},
         "targets": targets, "rows_added": total, "stats": st, "accounted": accounted,
+        "off_grid": src.get("off_grid", []),
         "landed": landed,
     }
     body = json.dumps(report, ensure_ascii=False, indent=1, default=str)

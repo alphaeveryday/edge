@@ -947,7 +947,6 @@ def _src_row(ts: str, day: str | None = None, avail: str | None = None) -> dict:
     ([_src_row("2024-03-04 08:00:00")], "정규장 밖"),                                    # 장전 봉 = 가짜 시가
     ([_src_row("2024-03-04 09:00:00"), _src_row("2024-03-04 09:00:00")], "중복"),       # 두 번 센다
     ([_src_row("2024-03-04T09:00:00+09:00", avail="2024-03-04T09:05:00+09:00")], "시간대"),  # 9시간 밀린다
-    ([_src_row("2024-03-04 09:01:00")], "5분 격자"),                                    # 구간 라벨이 아니다
 ])
 def test_fmp_source_that_breaks_the_canonical_contract_is_refused(monkeypatch, rows, reason):
     """원천이 정본 계약을 어기면 한 행도 옮기지 않고 죽는다.
@@ -1031,3 +1030,16 @@ def test_fmp_ledger_reaches_s3_even_when_the_local_copy_fails(monkeypatch, tmp_p
                            report=str(tmp_path / "없는-폴더" / "r.json"))
     assert backfill._fmp_report(a, ["069500"], [], 1) == 1
     assert len(put) == 1 and "dataset=intraday_5m" in put[0]
+
+
+def test_fmp_off_grid_rows_are_set_aside_and_counted_not_migrated(monkeypatch):
+    """5분 격자 밖 시각(09:01)은 옮기지 않되 키와 함께 따로 세어 회계에 넣는다.
+
+    WHY: ts 는 5분 구간 라벨이라 09:01 봉은 시계열을 깬다. 실측 원천에 12행(volume 0)이
+    있어 죽이면 이관 전체가 막히고, 조용히 거르면 원천 행이 설명 없이 사라진다.
+    """
+    _source(monkeypatch, [_src_row("2024-03-04 09:00:00"), _src_row("2024-03-04 09:01:00")])
+    src = backfill._load_local_source("s3://b/k.parquet")
+    assert [r["ts"].strftime("%H:%M") for r in src["by_day"]["2024-03-04"]] == ["09:00"]
+    assert [x["ts"] for x in src["off_grid"]] == ["2024-03-04 09:01:00"]
+    assert src["rows"] == 2
