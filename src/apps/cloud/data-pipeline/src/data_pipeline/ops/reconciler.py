@@ -379,6 +379,9 @@ def reconcile_run(
             if latest_ref and not latest_ref.startswith(f"airflow:{reported_ref}/"):
                 # 이 보고를 낸 run 보다 뒤에 다른 run 이 업무를 돌렸다 — 늦게 도착한 옛 보고다. 새 run 의 판정
                 # (또는 미귀결)을 덮지 않는다. 보류 기록은 사실이라 entry 에서 따로 남는다.
+                # 반대로 업무 시도를 하나도 남기지 못한 새 run(75·76·제출 전 실패)의 보고도 여기서 걸린다 — 의도다.
+                # 그 run 은 슬롯 데이터를 바꾸지 않았으므로 슬롯 판정은 여전히 앞 run 의 결과다(plan 실패 run 이
+                # 보고하지 않는 것과 같은 이유). 그 run 의 실패는 Airflow 화면·보류 기록으로 드러난다.
                 logger.warning("옛 DAG run 의 보고(%s) — 최신 업무 시도는 %s. 판정을 기록하지 않는다",
                                reported_ref, latest_ref)
                 summary["stale_report"] = {"reported": reported_ref, "latest": latest_ref}
@@ -405,6 +408,12 @@ def reconcile_run(
 
 _STAGE_RANK = {"raw": 0, "normalize": 1, "feature": 2}
 
+def run_hold_key(run_id: str, task_key: str, kind: str) -> str:
+    """런·작업 단위 보류 이슈의 dedupe 키. 종류를 키에 넣는다 — open_or_bump 는 evidence 를 새 값으로 덮으므로,
+    종류가 다른 두 기록이 한 키를 쓰면 나중 기록이 게이트가 보는 kind(ECS_STATE_UNKNOWN)를 지울 수 있다."""
+    return f"execution_hold:{run_id}:{task_key}:{kind}"
+
+
 # Airflow DAG run 이 살아 있을 수 있는 최대 시간 — dagrun_timeout(1500초) + 여유. 이보다 오래 결말이 없는 실행은
 # 그 run 의 report·verdict 가 돌 수 없으므로(시간 초과·worker 사망) 원장이 스스로 보류로 남긴다.
 AIRFLOW_RUN_LIFETIME_SECONDS = 1800
@@ -418,17 +427,18 @@ def _record_unfinished(ledger, run_id: str, tasks: list[dict], evidence: dict[st
       않는다 — 종료는 확인됐다. 산출물 확인 뒤 운영자가 닫는다).
     - DAG 수명이 지나도록 끝나지 않은 시도(ECS 가 아직 돌거나 조회 불가) → OPEN_ATTEMPT(막는 것은 그 RUNNING
       시도 자체다). ECS 종료 증거로 닫히면 자동으로 해결된다.
-    dedupe 는 report 의 보류(`execution_hold:{run}:{task}`)와 겹치지 않게 접미사를 붙인다."""
+    dedupe 는 `run_hold_key` — 보류 종류가 키에 들어가 report·주기 점검·이 대조가 같은 사실은 한 이슈로 모이고,
+    다른 종류가 서로의 evidence(특히 게이트가 보는 kind)를 덮지 않는다."""
     for task in tasks:
         entry = catalog.get(task["task_key"])
         if entry is None or task["plan_status"] == states.PLAN_SKIPPED:
             continue
-        base = f"execution_hold:{run_id}:{task['task_key']}"
         occs = [o for o in evidence.get(entry.sfn_state_name, []) if o.get("ecs_task_arn")]
         for occ in occs:
             if occ.get("_closed_now") and occ.get("_stopped_without_exit"):
                 ledger.open_or_bump_issue(
-                    issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"{base}:result", scope="task",
+                    issue_type=states.ISSUE_EXECUTION_HOLD,
+                    dedupe_key=run_hold_key(run_id, task["task_key"], states.HOLD_RESULT_UNKNOWN), scope="task",
                     scope_key=task["expected_task_id"],
                     evidence={"kind": states.HOLD_RESULT_UNKNOWN, "ecs_task_arn": occ["ecs_task_arn"],
                               "exit_code": occ.get("exit_code"),
@@ -439,15 +449,16 @@ def _record_unfinished(ledger, run_id: str, tasks: list[dict], evidence: dict[st
         if latest is not None and latest.get("_terminal") is None:
             if started is not None and (now - started).total_seconds() > lifetime_seconds:
                 ledger.open_or_bump_issue(
-                    issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"{base}:unfinished", scope="task",
+                    issue_type=states.ISSUE_EXECUTION_HOLD,
+                    dedupe_key=run_hold_key(run_id, task["task_key"], states.HOLD_OPEN_ATTEMPT), scope="task",
                     scope_key=task["expected_task_id"],
                     evidence={"kind": states.HOLD_OPEN_ATTEMPT, "ecs_task_arn": latest["ecs_task_arn"],
                               "started_at": str(started),
                               "reason": "DAG 수명이 지났는데 끝나지 않은 시도 — 결말 보고를 받을 수 없다"})
                 summary.setdefault("unfinished", []).append(task["task_key"])
         elif latest is not None:
-            ledger.resolve_issue(f"{base}:unfinished", resolution_reason="attempt_closed_with_ecs_evidence",
-                                 resolution_source="reconciler")
+            ledger.resolve_issue(run_hold_key(run_id, task["task_key"], states.HOLD_OPEN_ATTEMPT),
+                                 resolution_reason="attempt_closed_with_ecs_evidence", resolution_source="reconciler")
 
 
 def _alive_lane_tasks(ecs, cluster_arn: str) -> list[dict]:
@@ -476,18 +487,27 @@ def _command_arg(command: list[str], name: str) -> str | None:
 
 
 def sweep_airflow_runs(ledger: Ledger, *, ecs, cluster_arn: str | None, now: datetime,
-                       lifetime_seconds: int = AIRFLOW_RUN_LIFETIME_SECONDS, sfn_client=None) -> dict:
+                       lifetime_seconds: int = AIRFLOW_RUN_LIFETIME_SECONDS, sfn_client=None,
+                       skip_run_keys: frozenset = frozenset()) -> dict:
     """주기 점검 — DAG 의 report·verdict·callback 이 돌지 못한 Airflow 런의 미확정 실행을 찾아 원장에 남긴다.
 
     ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함)을 대조한다 — ECS 증거로 닫거나 보류 기록.
     ② ECS 에 이 카탈로그 명령(`--run-id <Airflow 런>`)으로 DAG 수명보다 오래 도는데 원장에 시도가 없는 태스크 →
        ECS_STATE_UNKNOWN 보류(해제 전까지 같은 작업의 새 업무를 막는다 — 그 태스크가 늦게 떠도 스스로 멈춘다).
-    ECS 조회 실패는 기록하지 않고 드러낸다(모르는 것을 없는 것으로 읽지 않는다)."""
-    summary: dict = {"reconciled": [], "unrecorded": [], "ecs_listing": "skipped"}
+    ECS 조회 실패는 기록하지 않고 드러낸다(모르는 것을 없는 것으로 읽지 않는다) — summary["errors"] 에 남기고
+    호출부가 비0 으로 끝낸다. 한 런의 대조 실패가 나머지 런을 막지 않는다. skip_run_keys: 이번 주기에 슬롯 대조가
+    이미 본 런(두 번 대조하지 않는다)."""
+    summary: dict = {"reconciled": [], "unrecorded": [], "ecs_listing": "skipped", "errors": []}
     for run_key in ledger.airflow_run_keys_with_open_attempts():
-        reconcile_run(ledger, run_key=run_key, ecs_client=ecs, sfn_client=sfn_client,
-                      cluster_arn=cluster_arn, now=now, lifetime_seconds=lifetime_seconds)
-        summary["reconciled"].append(run_key)
+        if run_key in skip_run_keys:
+            continue
+        try:
+            reconcile_run(ledger, run_key=run_key, ecs_client=ecs, sfn_client=sfn_client,
+                          cluster_arn=cluster_arn, now=now, lifetime_seconds=lifetime_seconds)
+            summary["reconciled"].append(run_key)
+        except Exception as exc:
+            logger.exception("sweep: 런 대조 실패(%s) — 다음 런으로", run_key)
+            summary["errors"].append(f"reconcile {run_key}: {type(exc).__name__}")
     if not cluster_arn:
         return summary
     try:
@@ -495,6 +515,7 @@ def sweep_airflow_runs(ledger: Ledger, *, ecs, cluster_arn: str | None, now: dat
     except Exception:
         logger.exception("ECS 살아 있는 태스크 조회 실패 — 원장 밖 실행을 확인하지 못했다")
         summary["ecs_listing"] = "failed"
+        summary["errors"].append("ecs listing failed")
         return summary
     summary["ecs_listing"] = "ok"
     for task in alive:
@@ -516,7 +537,8 @@ def sweep_airflow_runs(ledger: Ledger, *, ecs, cluster_arn: str | None, now: dat
                for a in ledger.attempts_for(expected["expected_task_id"])):
             continue                     # 원장에 있다 — ①의 대조가 다룬다
         ledger.open_or_bump_issue(
-            issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"execution_hold:{run_id}:{entry.task_key}",
+            issue_type=states.ISSUE_EXECUTION_HOLD,
+            dedupe_key=run_hold_key(run_id, entry.task_key, states.HOLD_ECS_STATE_UNKNOWN),
             scope="task", scope_key=expected["expected_task_id"],
             evidence={"kind": states.HOLD_ECS_STATE_UNKNOWN, "run_key": run["run_key"],
                       "ecs_task_arn": task.get("taskArn"), "last_status": task.get("lastStatus"),
@@ -904,7 +926,7 @@ def record_execution_holds(ledger: Ledger, *, run_key: str, holds: dict[str, dic
             continue
         etid = task["expected_task_id"]
         ledger.open_or_bump_issue(
-            issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"execution_hold:{run_id}:{task_key}",
+            issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=run_hold_key(run_id, task_key, hold["kind"]),
             scope="task", scope_key=etid,
             evidence={"kind": hold["kind"], "reason": hold.get("reason"), "run_key": run_key,
                       "orchestrator_run_ref": run.get("orchestrator_run_ref")})

@@ -201,13 +201,24 @@ class _Cursor:
                     if self.db.etasks_by_id.get(a["etid"], {}).get("pipeline_run_id") == run_id
                     and a["source"] != skip_source]
             self._rows = [(rows[-1].get("orchestrator_attempt_ref"),)] if rows else []   # 삽입 순서 = created_at
-        elif "SELECT DISTINCT r.run_key FROM ops_task_attempt a" in s:   # airflow_run_keys_with_open_attempts
-            running, orchestrator = p
+        elif ("SELECT r.run_key FROM ops_task_attempt a" in s
+              and " UNION SELECT r.run_key FROM ops_reconciliation_issue i JOIN ops_expected_task et ON"
+                  " i.scope='task' AND et.expected_task_id = i.scope_key" in s
+              and "WHERE i.issue_type=%s AND i.status='OPEN' AND i.dedupe_key LIKE %s" in s):
+            # airflow_run_keys_with_open_attempts — 두 갈래 조건이 SQL 에 그대로 있을 때만 응답한다(변이 방어)
+            running, orchestrator, issue_type, like, _ = p
+            suffix = like.lstrip("%")
             keys = set()
             for a in self.db.attempts:
                 et = self.db.etasks_by_id.get(a["etid"])
                 run = et and self.db.runs_by_id.get(et["pipeline_run_id"])
                 if a["status"] == running and run and run.get("orchestrator") == orchestrator:
+                    keys.add(run["run_key"])
+            for i in self.db.issues:
+                et = self.db.etasks_by_id.get(i["scope_key"]) if i["scope"] == "task" else None
+                run = et and self.db.runs_by_id.get(et["pipeline_run_id"])
+                if (i["issue_type"] == issue_type and i["status"] == "OPEN" and i["dedupe_key"].endswith(suffix)
+                        and run and run.get("orchestrator") == orchestrator):
                     keys.add(run["run_key"])
             self._rows = [(k,) for k in sorted(keys)]
         elif "SELECT run_key, orchestrator FROM ops_pipeline_run WHERE pipeline_run_id" in s:

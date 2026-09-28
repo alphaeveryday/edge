@@ -553,6 +553,11 @@ def test_skip_row_after_a_report_does_not_reopen_it(monkeypatch):
 _NORMALIZE = "NORMALIZE_INVESTOR_INTRADAY"
 
 
+def _rec_key(run_id, task_key, kind):
+    from data_pipeline.ops.reconciler import run_hold_key
+    return run_hold_key(run_id, task_key, kind)
+
+
 def _plan_slot(db, slot, ref):
     return plan_run(_ledger(db), state_machine_arn=None, scheduled_time=slot, pipeline_type=_LANE,
                     sfn_client=_NoSfn(), orchestrator=states.ORCHESTRATOR_AIRFLOW,
@@ -684,7 +689,7 @@ def test_airflow_ecs_hold_blocks_reprocess_until_the_operator_resolves_it(monkey
                               ledger=_ledger(db), ecs_task_arn="arn:ecs/l")
     assert load == 0
     # 운영자가 종료를 확인하고 해제한다(삭제가 아니라 RESOLVED 전이).
-    _ledger(db).resolve_issue(f"execution_hold:{run_id}:{_NORMALIZE}",
+    _ledger(db).resolve_issue(_rec_key(run_id, _NORMALIZE, states.HOLD_ECS_STATE_UNKNOWN),
                               resolution_reason="operator_confirmed_stopped", resolution_source="operator")
     calls = []
     assert _run(db, other, calls, arn="arn:ecs/c") == 0 and calls == ["arn:ecs/c"]
@@ -780,7 +785,7 @@ def test_unfinished_attempt_past_dag_lifetime_is_recorded_and_released_by_ecs_ev
     ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}})
     reconcile_run(_ledger(db), ecs_client=ecs, **kw)
     [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
-    assert issue["dedupe_key"].endswith(":unfinished") and issue["evidence"]["kind"] == states.HOLD_OPEN_ATTEMPT
+    assert issue["dedupe_key"].endswith(":OPEN_ATTEMPT") and issue["evidence"]["kind"] == states.HOLD_OPEN_ATTEMPT
     ecs.tasks["arn:ecs/n"] = {"lastStatus": "STOPPED", "exitCode": 0, "stopCode": "EssentialContainerExited"}
     reconcile_run(_ledger(db), ecs_client=ecs, **kw)
     assert not db.open_issues(states.ISSUE_EXECUTION_HOLD)
@@ -905,3 +910,118 @@ def test_hold_report_losing_the_reconcile_lock_is_retried(monkeypatch):
     monkeypatch.delenv("OPS_ORCHESTRATION_STATUS", raising=False)
     monkeypatch.setenv("OPS_EXECUTION_HOLDS", '{"NORMALIZE_INVESTOR_INTRADAY": {"kind": "ECS_STATE_UNKNOWN"}}')
     assert entry.reconcile_cli(object()) == wrapper.STEP_NOT_RUN_EXIT
+
+
+def test_a_later_hold_of_another_kind_does_not_lift_the_gate(monkeypatch):
+    # 주기 점검이 원장 밖 태스크를 ECS_STATE_UNKNOWN 으로 남긴 뒤, 같은 런의 재처리 report 가 그 작업을 RESULT_UNKNOWN
+    # 으로 보고했다. 한 키를 쓰면 evidence 가 덮여 게이트(kind=ECS_STATE_UNKNOWN)가 풀린다 — 종류별 키로 막는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    cmd = ["normalize-investor-estimate", "--run-id", run_id]
+    _rec.sweep_airflow_runs(_ledger(db), ecs=_SweepEcs({"arn:ecs/o": {"lastStatus": "PENDING", "command": cmd,
+                                                                      "createdAt": _SLOT}}),
+                            cluster_arn="c", now=_SLOT + timedelta(minutes=45))
+    _rec.record_execution_holds(_ledger(db), run_key=result.run_key, holds={
+        _NORMALIZE: {"kind": states.HOLD_RESULT_UNKNOWN, "reason": "killed"}})
+    kinds = sorted(i["evidence"]["kind"] for i in db.open_issues(states.ISSUE_EXECUTION_HOLD))
+    assert kinds == [states.HOLD_ECS_STATE_UNKNOWN, states.HOLD_RESULT_UNKNOWN]
+    _exclusive(monkeypatch, skip=False)
+    assert _run(db, run_id, [], arn="arn:ecs/x") == wrapper.STEP_HELD_EXIT
+
+
+def test_report_and_reconciler_record_one_result_unknown_for_one_killed_container():
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
+    _rec.record_execution_holds(_ledger(db), run_key=result.run_key, holds={
+        _NORMALIZE: {"kind": states.HOLD_RESULT_UNKNOWN, "reason": "killed"}})
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(minutes=40),
+                  ecs_client=_SweepEcs({"arn:ecs/n": {"lastStatus": "STOPPED", "exitCode": 137}}))
+    assert len(db.open_issues(states.ISSUE_EXECUTION_HOLD)) == 1
+
+
+def test_unfinished_record_is_closed_even_when_the_attempt_ended_by_itself():
+    # 수명을 넘긴 시도가 기록된 뒤 컨테이너가 스스로 끝을 기록했다(원장 RUNNING 없음). 과거 슬롯 런이라 슬롯 대조가
+    # 안 본다 — 열린 기록이 있는 런도 점검이 훑어 닫는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
+    _age(db, "arn:ecs/n", _SLOT)
+    ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}})
+    _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(minutes=40))
+    assert db.open_issues(states.ISSUE_EXECUTION_HOLD)
+    a = db.attempts[-1]
+    a["status"], a["exit_code"] = states.EXEC_SUCCEEDED, 0          # wrapper 가 스스로 끝을 기록
+    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(days=1))
+    assert summary["reconciled"] == [result.run_key] and not db.open_issues(states.ISSUE_EXECUTION_HOLD)
+
+
+def test_sweep_skips_runs_the_slot_reconcile_already_saw():
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
+    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=_SweepEcs(), cluster_arn=None, now=_SLOT,
+                                      skip_run_keys=frozenset({result.run_key}))
+    assert summary["reconciled"] == []
+
+
+class _PagedEcs(_SweepEcs):
+    """ListTasks 를 2쪽으로 나누고, DescribeTasks 는 100개를 넘으면 실제 ECS 처럼 거부한다."""
+
+    def __init__(self, tasks):
+        super().__init__(tasks)
+        self.describe_sizes = []
+
+    def list_tasks(self, **kw):
+        arns = sorted(self.tasks)
+        half = len(arns) // 2
+        if kw.get("nextToken") == "p2":
+            return {"taskArns": arns[half:]}
+        return {"taskArns": arns[:half], "nextToken": "p2"}
+
+    def describe_tasks(self, **kw):
+        if len(kw["tasks"]) > 100:
+            raise ValueError("DescribeTasks accepts at most 100 tasks")
+        self.describe_sizes.append(len(kw["tasks"]))
+        return super().describe_tasks(**kw)
+
+
+def test_sweep_reads_every_page_and_describes_in_chunks_of_100():
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    cmd = ["normalize-investor-estimate", "--run-id", result.pipeline_run_id]
+    tasks = {f"arn:ecs/other{i:03d}": {"lastStatus": "RUNNING", "command": ["load-price-daily"], "createdAt": _SLOT}
+             for i in range(230)}
+    tasks["arn:ecs/zz-orphan"] = {"lastStatus": "RUNNING", "command": cmd, "createdAt": _SLOT}   # 둘째 쪽 끝
+    ecs = _PagedEcs(tasks)
+    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c", now=_SLOT + timedelta(hours=1))
+    assert [u["ecs_task_arn"] for u in summary["unrecorded"]] == ["arn:ecs/zz-orphan"]
+    assert sorted(ecs.describe_sizes) == [31, 100, 100]
+
+
+def test_sweep_failure_fails_the_periodic_run_after_slot_reconciliation(monkeypatch):
+    # 슬롯 대조는 끝난 뒤다 — 원장 밖 실행을 확인하지 못한 것을 exit 0 으로 숨기지 않는다.
+    db = FakeOpsDB()
+    reconciled = []
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda _s: _ledger(db))
+    monkeypatch.setattr(entry, "_due_slots", lambda _now: [("investor-intraday:2026-09-22T09:35", False)])
+    monkeypatch.setattr(_rec, "reconcile_run", lambda ledger, **kw: reconciled.append(kw["run_key"]) or {})
+    monkeypatch.setattr(_rec, "sweep_airflow_runs", lambda ledger, **kw: {"errors": ["ecs listing failed"]})
+    monkeypatch.delenv("OPS_RUN_KEY", raising=False)
+    assert entry.reconcile_cli(object()) == 1
+    assert reconciled == ["investor-intraday:2026-09-22T09:35"]
+
+
+def test_report_of_a_newer_run_that_did_no_business_does_not_replace_the_slot_verdict():
+    # 새 재처리 run 이 업무를 하나도 못 돌렸다(76·75·제출 전 실패) — 슬롯 데이터는 앞 run 의 결과 그대로다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _record(db, result.pipeline_run_id, _NORMALIZE, arn="arn:ecs/a", exit_code=0)
+    next(a for a in db.attempts if a["arn"] == "arn:ecs/a")["orchestrator_attempt_ref"] = \
+        "airflow:edge_investor_intraday/A/normalize/1"
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(), now=_SLOT + timedelta(minutes=30))
+    reconcile_run(_ledger(db), reported_status=states.ORCH_SUCCEEDED, reported_ref="edge_investor_intraday/A", **kw)
+    summary = reconcile_run(_ledger(db), reported_status=states.ORCH_FAILED,
+                            reported_ref="edge_investor_intraday/B", **kw)
+    assert "stale_report" in summary and db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED

@@ -1,10 +1,9 @@
 """장중 수급 레인(investor-intraday) — SFN `edge-*-investor-intraday` 의 Airflow 실행 경로.
 
 현행과 같은 것: 슬롯(평일 KST 09:35·10:05·11:25·13:25·14:35), Planner 원장 계획, 세 ECS 스텝과 명령,
-raw 부분 실패여도 정제·적재 계속, 정제 exit 2 면 적재 계속, 끝에서 런 FAILED 마감.
+raw 부분 실패여도 정제·적재 계속, 정제 exit 2 면 적재 계속(SFN 은 #958·ALPHA-1113 뒤부터 실제로 그렇다 —
+부분 실패 적재 정책 자체는 팀 결정 항목, README "활성화 전 결정"), 끝에서 런 FAILED 마감.
 달라진 것(의도):
-- 정제·적재 exit 2 가 실제로 하류를 계속 탄다. 현행 ASL 은 runTask.sync 가 비0 종료를 TaskFailed 로
-  올려 Catch 경로(exit_code 없음)로 가므로 "exit 2 면 적재 계속" 분기에 도달하지 못한다(dev 실행 이력 확인).
 - 실행 요청 = 이 DAG run. plan 은 원장만 쓰고 SFN 을 시작하지 않는다(OPS_ORCHESTRATOR=AIRFLOW).
 - 업무를 시작하지 않았음이 확인된 경우(기동 실패·실행권 대기 초과)와 아직 도는 태스크 재접속만 재시도한다.
   실행 상태를 모르면(제출 응답 유실·조회 실패·강제 종료) 새 태스크를 띄우지 않고 보류한다(EdgeStep).

@@ -592,15 +592,22 @@ class Ledger:
             return None if row is None else row[0]
 
     def airflow_run_keys_with_open_attempts(self) -> list[str]:
-        """원장상 끝나지 않은 업무 시도가 남은 Airflow 런 — 주기 점검이 슬롯 대조와 별개로 훑는다(과거 슬롯
-        재처리 런도 포함: 주기 슬롯 대조는 최근 예정일만 본다)."""
+        """주기 점검이 슬롯 대조와 별개로 훑을 Airflow 런 — 원장상 끝나지 않은 업무 시도가 남았거나, 수명을 넘긴
+        미종료 시도 기록(OPEN_ATTEMPT 보류)이 아직 열린 런(그 시도가 스스로 끝났으면 대조가 기록을 닫는다). 과거
+        슬롯 재처리 런도 포함한다 — 주기 슬롯 대조는 최근 예정일만 본다."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT r.run_key FROM ops_task_attempt a"
+                "SELECT r.run_key FROM ops_task_attempt a"
                 " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
                 " JOIN ops_pipeline_run r ON r.pipeline_run_id = et.pipeline_run_id"
-                " WHERE a.execution_status=%s AND r.orchestrator=%s ORDER BY r.run_key",
-                (states.EXEC_RUNNING, states.ORCHESTRATOR_AIRFLOW),
+                " WHERE a.execution_status=%s AND r.orchestrator=%s"
+                " UNION SELECT r.run_key FROM ops_reconciliation_issue i"
+                " JOIN ops_expected_task et ON i.scope='task' AND et.expected_task_id = i.scope_key"
+                " JOIN ops_pipeline_run r ON r.pipeline_run_id = et.pipeline_run_id"
+                " WHERE i.issue_type=%s AND i.status='OPEN' AND i.dedupe_key LIKE %s AND r.orchestrator=%s"
+                " ORDER BY 1",
+                (states.EXEC_RUNNING, states.ORCHESTRATOR_AIRFLOW, states.ISSUE_EXECUTION_HOLD,
+                 f"%:{states.HOLD_OPEN_ATTEMPT}", states.ORCHESTRATOR_AIRFLOW),
             )
             return [row[0] for row in cur.fetchall()]
 

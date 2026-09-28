@@ -583,6 +583,11 @@ def reconcile_cli(settings) -> int:
             # DAG 의 report·verdict·callback 이 돌지 못한(시간 초과·worker 사망) Airflow 런의 미확정 실행을 찾는다 —
             # 슬롯 대조와 별개로 매 주기(휴장일·야간 포함) 돈다. 슬롯 대조 뒤에 둔다(실패가 대조를 막지 않게).
             swept = reconciler.sweep_airflow_runs(ledger, ecs=aws.ecs_client(), cluster_arn=cluster_arn,
-                                                  now=now, lifetime_seconds=lifetime)
+                                                  now=now, lifetime_seconds=lifetime,
+                                                  skip_run_keys=frozenset(run_keys))
             logger.info("reconcile: airflow sweep %s", swept)
+            if swept.get("errors"):
+                # 슬롯 대조는 이미 끝났다 — 점검이 원장 밖 실행을 확인하지 못한 것을 성공으로 숨기지 않는다.
+                logger.error("reconcile: airflow sweep 미완료 %s", swept["errors"])
+                return 1
     return 0
