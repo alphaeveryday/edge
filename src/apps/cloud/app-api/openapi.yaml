@@ -1,0 +1,1458 @@
+# ETF Orca 앱 API 계약 (뼈대). 정본은 이 파일이다. 노션 PRD 의 정책·데이터 모델은 참고.
+#
+# 규약(2026-09-28 확정)
+# - 인증: 회원 Bearer(액세스 JWT + DB 저장 리프레시), 게스트 X-Device-Id. 둘 다 있으면 토큰 우선.
+# - 응답 봉투: libs/jvm-common ApiResponse {isSuccess, code, message, result}. 실패도 같은 봉투.
+# - 에러 코드: COMMON400/401/403/500 은 jvm-common, 도메인 코드는 app-api AppErrorStatus 소유.
+#   앱은 code 를 번역 없이 그대로 분기한다. 이 파일의 x-error-codes 가 코드 목록의 SSOT.
+# - 페이지네이션: 커서. ?cursor=&size=, 응답 result 에 items[] 와 nextCursor(마지막이면 null).
+# - 스키마 이름과 필드는 app-ui src/api/types.ts 를 그대로 옮겼다. 표시용 필드(logoBg·bg·avatarBg 등)와
+#   미리 포맷된 문자열(time·ago·price 문구)은 서버가 줄지 앱이 만들지 행마다 결정한다. TODO 로 표시.
+# - 경로·operationId 는 client.ts 메서드 1:1 이다. 합칠 후보는 TODO(merge) 로 적었다.
+#
+# 출처: app-ui src/api/client.ts(13 도메인 52 메서드), src/api/types.ts.
+
+openapi: 3.1.0
+info:
+  title: ETF Orca App API
+  version: 0.1.0
+  description: ETF 전망·분석·커뮤니티 B2C 앱 API. 뼈대 단계.
+servers:
+  - url: https://etforca.edgesignal.dev/api/v1
+    description: dev (ADR-0056)
+  - url: http://localhost:8080/api/v1
+    description: local compose
+
+tags:
+  - name: auth
+  - name: user
+  - name: onboarding
+  - name: home
+  - name: story
+  - name: etf
+  - name: watch
+  - name: theme
+  - name: explore
+  - name: analysis
+  - name: issue
+  - name: community
+  - name: notification
+
+# 도메인 에러 코드 목록. 형식 {도메인}{HTTP}{일련}. app-api AppErrorStatus enum 과 1:1.
+# TODO: 행별 본문을 채우며 추가한다. 아래는 앱 mock 이 이미 구분하는 실패에서 뽑은 최소 집합.
+x-error-codes:
+  COMMON400: { http: 400, message: 잘못된 요청입니다. }
+  COMMON401: { http: 401, message: 인증이 필요합니다. }
+  COMMON403: { http: 403, message: 금지된 요청입니다. }
+  COMMON500: { http: 500, message: 서버 에러, 관리자에게 문의 바랍니다. }
+  ETF4040: { http: 404, message: 없는 ETF 입니다. }
+  ANALYSIS4041: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 앱 Pending 화면 분기. 없는 ETF(ETF4040)와 구분
+  THEME4040: { http: 404, message: 없는 테마입니다. }
+  ISSUE4040: { http: 404, message: 없는 이슈입니다. }
+  POST4040: { http: 404, message: 없는 글입니다. }
+  HINT4040: { http: 404, message: 없는 용어입니다. }
+  WATCH4000: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
+  USER4040: { http: 404, message: 가입되지 않은 이메일입니다. }
+  USER4090: { http: 409, message: 이미 가입된 이메일입니다. }
+  AUTH4010: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
+  VOTE5030: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
+
+security:
+  - bearerAuth: []
+  - deviceId: []
+
+paths:
+  # ── auth ─────────────────────────────────────────────
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: authLogin
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/EmailLogin' }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+        '401': { $ref: '#/components/responses/Error' }   # AUTH4010
+  /auth/social:
+    post:
+      tags: [auth]
+      operationId: authSocial
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, idToken]
+              properties:
+                provider: { type: string, enum: [apple, google] }
+                idToken: { type: string, description: 플랫폼이 발급한 id 토큰. 서버가 검증 }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+  /auth/signup:
+    post:
+      tags: [auth]
+      operationId: authSignup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, nick]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                nick: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+        '409': { $ref: '#/components/responses/Error' }   # USER4090
+  /auth/password-reset:
+    post:
+      tags: [auth]
+      operationId: authRequestPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '404': { $ref: '#/components/responses/Error' }   # USER4040. TODO 계정 존재 노출 여부
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: authLogout
+      description: 리프레시 토큰 무효화. TODO 앱이 토큰만 버리는 것으로 끝낼지 결정.
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: authRefresh
+      description: 노션 참고 항목. client.ts 에는 없고 fetch 계층이 쓴다.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+
+  # ── user ─────────────────────────────────────────────
+  /me:
+    get:
+      tags: [user]
+      operationId: userMe
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+    patch:
+      tags: [user]
+      operationId: userUpdate
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MePatch' }
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+    delete:
+      tags: [user]
+      operationId: userDeleteAccount
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+  /me/disclaimer:
+    post:
+      tags: [user]
+      operationId: userAcceptDisclaimer
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+
+  # ── onboarding ───────────────────────────────────────
+  /onboarding/complete:
+    post:
+      tags: [onboarding]
+      operationId: onboardingComplete
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [themes, etfs]
+              properties:
+                themes: { type: array, items: { type: string } }
+                etfs: { type: array, items: { $ref: '#/components/schemas/EtfCode' } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+
+  # ── home / story ─────────────────────────────────────
+  /home/brief:
+    get:
+      tags: [home]
+      operationId: homeBrief
+      description: 화면 전용(BFF). 관심 그룹 기준 요약.
+      parameters:
+        - { name: group, in: query, schema: { type: string }, description: 관심 그룹 key. 없으면 기본 그룹 }
+      responses:
+        '200': { $ref: '#/components/responses/HomeBrief' }
+  /stories:
+    get:
+      tags: [story]
+      operationId: storyQueue
+      responses:
+        '200':
+          description: 스토리 큐
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/Story' } }
+
+  # ── etf ──────────────────────────────────────────────
+  /etfs:
+    get:
+      tags: [etf]
+      operationId: etfList
+      description: TODO(merge) etf.list 와 etf.search 를 q 파라미터 하나로.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/EtfSummaryList' }
+  /etfs/recent:
+    get:
+      tags: [etf]
+      operationId: etfRecent
+      description: TODO 최근 본 ETF 는 기기 저장으로 끝낼 수 있다. 서버 불필요 후보.
+      responses:
+        '200': { $ref: '#/components/responses/EtfSummaryList' }
+  /etfs/{code}:
+    get:
+      tags: [etf]
+      operationId: etfGet
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: ETF 요약
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/EtfSummary' }
+        '404': { $ref: '#/components/responses/Error' }   # ETF4040
+  /etfs/{code}/chart:
+    get:
+      tags: [etf]
+      operationId: etfChart
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { name: range, in: query, required: true, schema: { type: string }, description: 'TODO enum 확정 (예: 1M, 3M, 1Y)' }
+      responses:
+        '200':
+          description: 일봉 차트
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/ChartData' }
+  /etfs/{code}/move:
+    get:
+      tags: [etf]
+      operationId: etfMove
+      description: 왜 움직였을까 (장중 설명).
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 움직임 설명
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/MoveInfo' }
+  /etfs/{code}/detail:
+    get:
+      tags: [etf]
+      operationId: etfDetail
+      description: 화면 전용. 종목 정보 탭(구성 종목·테마·운용사).
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 종목 정보
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/EtfDetailData' }
+
+  # ── watch ────────────────────────────────────────────
+  /watch-groups:
+    get:
+      tags: [watch]
+      operationId: watchGroups
+      responses:
+        '200':
+          description: 관심 그룹 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
+    post:
+      tags: [watch]
+      operationId: watchCreateGroup
+      description: 사용자 그룹 최대 10개 (PRD 정책). TODO 초과 시 에러 코드.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses:
+        '200':
+          description: 생성된 그룹
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/WatchGroup' }
+  /watch-groups/{group}:
+    delete:
+      tags: [watch]
+      operationId: watchDeleteGroup
+      description: 기본 그룹(base)은 삭제 불가. 그룹에 있던 종목은 기본 그룹에 유지 (PRD 정책).
+      parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # WATCH4000
+  /watch-groups/{group}/etfs:
+    get:
+      tags: [watch]
+      operationId: watchList
+      parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
+      responses:
+        '200': { $ref: '#/components/responses/EtfSummaryList' }
+    put:
+      tags: [watch]
+      operationId: watchSetMembers
+      description: 그룹 구성원 전체를 순서 포함 교체.
+      parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codes]
+              properties:
+                codes: { type: array, items: { $ref: '#/components/schemas/EtfCode' } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+  /etfs/{code}/watch-groups:
+    get:
+      tags: [watch]
+      operationId: watchMembership
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 이 ETF 가 담긴 그룹 key 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { type: string } }
+    put:
+      tags: [watch]
+      operationId: watchSetMembership
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groups]
+              properties:
+                groups: { type: array, items: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+
+  # ── theme ────────────────────────────────────────────
+  /themes:
+    get:
+      tags: [theme]
+      operationId: themeList
+      security: []
+      responses:
+        '200':
+          description: 테마 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/Theme' } }
+  /themes/feed:
+    get:
+      tags: [theme]
+      operationId: themeFeed
+      security: []
+      parameters:
+        - { name: sort, in: query, schema: { type: string }, description: TODO enum 확정 }
+      responses:
+        '200':
+          description: 테마 피드
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/ThemeFeedItem' } }
+  /themes/{key}/sheet:
+    get:
+      tags: [theme]
+      operationId: themeSheet
+      description: 화면 전용. 테마 ETF N종 시트.
+      parameters: [{ $ref: '#/components/parameters/ThemeKey' }]
+      responses:
+        '200':
+          description: 테마 시트
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/ThemeSheet' }
+        '404': { $ref: '#/components/responses/Error' }   # THEME4040
+  /themes/{key}:
+    get:
+      tags: [theme]
+      operationId: themeDetail
+      security: []
+      parameters: [{ $ref: '#/components/parameters/ThemeKey' }]
+      responses:
+        '200':
+          description: 테마 분석
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/ThemeDetail' }
+        '404': { $ref: '#/components/responses/Error' }   # THEME4040 또는 ANALYSIS4041(mock 은 NOT_READY)
+
+  # ── explore ──────────────────────────────────────────
+  /explore/rank:
+    get:
+      tags: [explore]
+      operationId: exploreRank
+      security: []
+      description: AI 가 보는 오늘 순위. 고정 목록이라 페이지네이션 없음.
+      responses:
+        '200':
+          description: 순위
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/RankRow' } }
+
+  # ── analysis ─────────────────────────────────────────
+  /etfs/{code}/analysis:
+    get:
+      tags: [analysis]
+      operationId: analysisDaily
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { name: date, in: query, schema: { type: string, format: date }, description: 없으면 최신 }
+      responses:
+        '200':
+          description: 일간 분석
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/DailyAnalysis' }
+        '404': { $ref: '#/components/responses/Error' }   # ETF4040 | ANALYSIS4041
+  /etfs/{code}/analysis/factors/{axis}:
+    get:
+      tags: [analysis]
+      operationId: analysisFactor
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { $ref: '#/components/parameters/Axis' }
+      responses:
+        '200':
+          description: 요인 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/FactorPage' }
+        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4041
+  /etfs/{code}/analysis/metrics/{axis}:
+    get:
+      tags: [analysis]
+      operationId: analysisMetric
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { $ref: '#/components/parameters/Axis' }
+      responses:
+        '200':
+          description: 지표 페이지
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/MetricPage' }
+        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4041
+  /hints/{key}:
+    get:
+      tags: [analysis]
+      operationId: analysisHint
+      security: []
+      description: TODO 정적 사전이면 앱 번들. 서버 불필요 후보.
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 용어 힌트
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/Hint' }
+        '404': { $ref: '#/components/responses/Error' }   # HINT4040
+
+  # ── issue ────────────────────────────────────────────
+  /issues:
+    get:
+      tags: [issue]
+      operationId: issueList
+      parameters:
+        - { name: tab, in: query, required: true, schema: { type: string, enum: [mine, all] } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200':
+          description: 이슈 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        allOf:
+                          - $ref: '#/components/schemas/Page'
+                          - properties:
+                              items: { type: array, items: { $ref: '#/components/schemas/IssueRow' } }
+  /issues/{id}:
+    get:
+      tags: [issue]
+      operationId: issueGet
+      security: []
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: 이슈 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/IssueDetail' }
+        '404': { $ref: '#/components/responses/Error' }   # ISSUE4040
+
+  # ── community ────────────────────────────────────────
+  /posts:
+    get:
+      tags: [community]
+      operationId: communityFeed
+      description: |
+        TODO(merge) community.feed(scope)·community.mine·community.posts(code)·community.hot 을
+        scope(all|mine|hot) + code 파라미터로 합치는 후보.
+      parameters:
+        - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot] }, description: mine 은 회원 }
+        - { name: code, in: query, schema: { $ref: '#/components/schemas/EtfCode' } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { $ref: '#/components/responses/PostPage' }
+    post:
+      tags: [community]
+      operationId: communityCreate
+      security: [{ bearerAuth: [] }]
+      description: 관심 ETF 에 대해서만 작성 가능, 태그 최대 3개 (PRD 정책). TODO 위반 코드.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, tags]
+              properties:
+                body: { type: string, maxLength: 280 }
+                tags: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/EtfCode' } }
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+  /posts/{id}:
+    get:
+      tags: [community]
+      operationId: communityGet
+      security: []
+      description: 조회수 증가.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+        '404': { $ref: '#/components/responses/Error' }   # POST4040
+    delete:
+      tags: [community]
+      operationId: communityRemove
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '403': { $ref: '#/components/responses/Error' }   # 남의 글
+  /posts/{id}/replies:
+    get:
+      tags: [community]
+      operationId: communityReplies
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200':
+          description: 답글 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        allOf:
+                          - $ref: '#/components/schemas/Page'
+                          - properties:
+                              items: { type: array, items: { $ref: '#/components/schemas/Reply' } }
+    post:
+      tags: [community]
+      operationId: communityReply
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        '200':
+          description: 작성된 답글
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/Reply' }
+  /posts/{id}/like:
+    put:
+      tags: [community]
+      operationId: communityToggleLike
+      security: [{ bearerAuth: [] }]
+      description: 토글. TODO PUT/DELETE 분리 여부.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+  /etfs/{code}/poll:
+    get:
+      tags: [community]
+      operationId: communityPoll
+      description: 분포 + 내 선택. mine 은 회원만 채워진다. 기존 forecast_vote 테이블.
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200': { $ref: '#/components/responses/Poll' }
+    put:
+      tags: [community]
+      operationId: communityVote
+      security: [{ bearerAuth: [] }]
+      description: ETF 당 계정별 1건, 변경 무제한, 마감 없음 (upsert).
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [choice]
+              properties:
+                choice: { $ref: '#/components/schemas/PollChoice' }
+      responses:
+        '200': { $ref: '#/components/responses/Poll' }
+        '503': { $ref: '#/components/responses/Error' }   # VOTE5030
+
+  # ── notification ─────────────────────────────────────
+  /notifications:
+    get:
+      tags: [notification]
+      operationId: notificationList
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [all, watch, signal, content, comm] } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200':
+          description: 알림 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        allOf:
+                          - $ref: '#/components/schemas/Page'
+                          - properties:
+                              items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+  /notifications/unread-count:
+    get:
+      tags: [notification]
+      operationId: notificationUnread
+      responses:
+        '200':
+          description: 안 읽은 수
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        type: object
+                        properties:
+                          count: { type: integer }
+  /notifications/{id}/read:
+    post:
+      tags: [notification]
+      operationId: notificationRead
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+  /notifications/read-all:
+    post:
+      tags: [notification]
+      operationId: notificationReadAll
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    deviceId:
+      type: apiKey
+      in: header
+      name: X-Device-Id
+
+  parameters:
+    EtfCode: { name: code, in: path, required: true, schema: { $ref: '#/components/schemas/EtfCode' } }
+    WatchGroup: { name: group, in: path, required: true, schema: { type: string }, description: 관심 그룹 key. 기본 그룹은 base }
+    ThemeKey: { name: key, in: path, required: true, schema: { type: string } }
+    Axis: { name: axis, in: path, required: true, schema: { $ref: '#/components/schemas/Axis' } }
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    Cursor: { name: cursor, in: query, schema: { type: string }, description: 이전 응답의 nextCursor. 첫 페이지는 생략 }
+    Size: { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+
+  requestBodies:
+    EmailLogin:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email, password]
+            properties:
+              email: { type: string, format: email }
+              password: { type: string }
+
+  responses:
+    Empty:
+      description: 성공, result 없음
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Error:
+      description: 실패. code 는 x-error-codes 참조
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    AuthResult:
+      description: 로그인·가입·갱신 결과
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/AuthResult' }
+    Me:
+      description: 내 정보
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/Me' }
+    HomeBrief:
+      description: 홈 브리프
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/HomeBrief' }
+    EtfSummaryList:
+      description: ETF 요약 목록
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
+    Post:
+      description: 글
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/Post' }
+    PostPage:
+      description: 글 목록 (커서)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result:
+                    allOf:
+                      - $ref: '#/components/schemas/Page'
+                      - properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Post' } }
+    Poll:
+      description: 투표 현황
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/Poll' }
+
+  schemas:
+    # ── 공통 ──
+    ApiResponse:
+      description: libs/jvm-common ApiResponse. 키는 정확히 이 넷, result 는 null 이면 생략.
+      type: object
+      required: [isSuccess, code, message]
+      properties:
+        isSuccess: { type: boolean }
+        code: { type: string, description: 성공 COMMON200, 실패는 x-error-codes }
+        message: { type: string }
+        result: {}
+    Page:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: {} }
+        nextCursor: { type: [string, 'null'] }
+    AuthResult:
+      type: object
+      required: [accessToken, refreshToken, me]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        me: { $ref: '#/components/schemas/Me' }
+        guestMapped: { type: boolean, description: 디바이스 게스트 데이터를 계정에 매핑했는지 (PRD 게스트 데이터 정책) }
+
+    # ── 기본 타입 (types.ts) ──
+    EtfCode: { type: string, description: 'KRX 종목 코드 6자리 (예: 069500)' }
+    Signal: { type: string, enum: [strongDown, down, neutral, up, strongUp] }
+    Dir: { type: string, enum: [help, neutral, burden] }
+    Axis: { type: string, enum: [이슈, 차트, 매크로, 밸류, 수급], description: TODO 영문 enum 으로 바꿀지 }
+    PollChoice: { type: string, enum: [buy, wait, sell] }
+    NotiKind: { type: string, enum: [watch, signal, content, comm] }
+
+    EtfSummary:
+      type: object
+      required: [code, name, theme, logoBg, price, changePct, signal]
+      properties:
+        code: { $ref: '#/components/schemas/EtfCode' }
+        name: { type: string }
+        theme: { type: string, description: 테마 key }
+        logoBg: { type: string, description: 'TODO 표시용 색. 서버가 줄지 앱 테마 매핑으로 할지' }
+        price: { type: number }
+        changePct: { type: number }
+        signal: { $ref: '#/components/schemas/Signal' }
+        hot: { type: boolean }
+        sub: { type: string }
+    Theme:
+      type: object
+      required: [key, label, group, bg]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        group: { type: string, enum: [industry, asset] }
+        bg: { type: string, description: TODO 표시용 }
+        hot: { type: boolean }
+    WatchGroup:
+      type: object
+      required: [key, label, count]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        count: { type: integer }
+    HomeBrief:
+      type: object
+      required: [asOf, groups, group, band, changePct, etfs]
+      properties:
+        asOf: { type: string, description: 'TODO ISO 8601 로 통일 (콘솔 규약 KST 고정 표기)' }
+        groups: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
+        group: { type: string }
+        band: { $ref: '#/components/schemas/Signal' }
+        changePct: { type: number }
+        etfs: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
+    Me:
+      type: object
+      required: [nick, handle, avatarBg]
+      properties:
+        nick: { type: string }
+        handle: { type: string }
+        avatarBg: { type: string }
+        email: { type: string }
+        disclaimerAcceptedAt: { type: string, format: date-time }
+    MePatch:
+      type: object
+      properties:
+        nick: { type: string }
+        handle: { type: string }
+        avatarBg: { type: string }
+
+    # ── 커뮤니티 ──
+    Post:
+      type: object
+      required: [id, etf, author, time, body, like, reply, repost, liked]
+      properties:
+        id: { type: string }
+        etf:
+          type: object
+          required: [code, theme, logoBg, short]
+          properties:
+            code: { $ref: '#/components/schemas/EtfCode' }
+            theme: { type: string }
+            logoBg: { type: string }
+            short: { type: string }
+        author:
+          type: object
+          required: [name, handle, avatarBg]
+          properties:
+            name: { type: string }
+            handle: { type: string }
+            avatarBg: { type: string }
+        time: { type: string, description: 'TODO 상대 시각 문구(3분 전)는 앱이 만든다. 서버는 ISO 8601' }
+        title: { type: string }
+        body: { type: string }
+        quoteTag: { type: string }
+        repostOf:
+          type: object
+          properties:
+            name: { type: string }
+            avatarBg: { type: string }
+            time: { type: string }
+            body: { type: string }
+        like: { type: integer }
+        reply: { type: integer }
+        repost: { type: integer }
+        liked: { type: boolean }
+        views: { type: integer }
+        mine: { type: boolean }
+    Reply:
+      type: object
+      required: [id, author, time, body]
+      properties:
+        id: { type: string }
+        author:
+          type: object
+          required: [name, avatarBg]
+          properties:
+            name: { type: string }
+            avatarBg: { type: string }
+        time: { type: string }
+        body: { type: string }
+    Poll:
+      type: object
+      required: [code, count, pct, mine]
+      properties:
+        code: { $ref: '#/components/schemas/EtfCode' }
+        count: { type: integer }
+        pct:
+          type: object
+          required: [buy, wait, sell]
+          properties:
+            buy: { type: number }
+            wait: { type: number }
+            sell: { type: number }
+        mine:
+          oneOf:
+            - $ref: '#/components/schemas/PollChoice'
+            - type: 'null'
+
+    # ── ETF 상세 ──
+    Candle:
+      type: object
+      required: [o, h, l, c]
+      properties:
+        o: { type: number }
+        h: { type: number }
+        l: { type: number }
+        c: { type: number }
+    ChartData:
+      type: object
+      required: [range, candles, ma5, ma20, axis]
+      properties:
+        range: { type: string }
+        candles: { type: array, items: { $ref: '#/components/schemas/Candle' } }
+        ma5: { type: array, items: { type: [number, 'null'] } }
+        ma20: { type: array, items: { type: [number, 'null'] } }
+        axis: { type: array, items: { type: string } }
+    MoveInfo:
+      type: object
+      required: [ago, text, foot, sheetTitle, groups]
+      properties:
+        ago: { type: string, description: TODO 상대 시각. 서버는 시각을 주고 앱이 만든다 }
+        text: { type: string }
+        foot: { type: string }
+        sheetTitle: { type: string }
+        groups:
+          type: array
+          items:
+            type: object
+            required: [head, items]
+            properties:
+              head: { type: string }
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [dir, t]
+                  properties:
+                    dir: { $ref: '#/components/schemas/Dir' }
+                    t: { type: string }
+                    sub: { type: string }
+    HeatCell:
+      type: object
+      required: [name, weight, changePct, dir]
+      properties:
+        name: { type: string }
+        weight: { type: number }
+        changePct: { type: number }
+        dir: { $ref: '#/components/schemas/Dir' }
+    HoldingRow:
+      type: object
+      required: [name, weight, dir, desc]
+      properties:
+        name: { type: string }
+        weight: { type: number }
+        dir: { $ref: '#/components/schemas/Dir' }
+        desc: { type: string }
+    EtfDetailData:
+      type: object
+      required: [insight, stocks, themes, holdings, themeRows, stockCount, info, blurb]
+      properties:
+        insight:
+          type: object
+          required: [dir, text]
+          properties:
+            dir: { $ref: '#/components/schemas/Dir' }
+            text: { type: string }
+        stocks: { type: array, items: { $ref: '#/components/schemas/HeatCell' } }
+        themes: { type: array, items: { $ref: '#/components/schemas/HeatCell' } }
+        holdings: { type: array, items: { $ref: '#/components/schemas/HoldingRow' } }
+        themeRows: { type: array, items: { $ref: '#/components/schemas/HoldingRow' } }
+        stockCount: { type: integer }
+        info:
+          type: array
+          items:
+            type: object
+            required: [k, v]
+            properties:
+              k: { type: string }
+              v: { type: string }
+        blurb: { type: string }
+
+    # ── 분석 ──
+    AxisRead:
+      type: object
+      required: [axis, dir, summary, hasPage]
+      properties:
+        axis: { $ref: '#/components/schemas/Axis' }
+        dir: { $ref: '#/components/schemas/Dir' }
+        summary: { type: string }
+        hasPage: { type: boolean }
+    DailyDate:
+      type: object
+      required: [key, w, d, hasDaily]
+      properties:
+        key: { type: string, format: date }
+        w: { type: string, description: 요일 표시 }
+        d: { type: string, description: 일 표시 }
+        hasDaily: { type: boolean }
+    DailyAnalysis:
+      type: object
+      required: [date, dates, headTitle, question, dateline, now, synth, axes, title, todayDate, today, args, closingTitle, neg, pos, close]
+      properties:
+        date: { type: string, format: date }
+        dates: { type: array, items: { $ref: '#/components/schemas/DailyDate' } }
+        headTitle: { type: string }
+        question: { type: string }
+        dateline: { type: string }
+        now: { $ref: '#/components/schemas/Signal' }
+        prev: { $ref: '#/components/schemas/Signal' }
+        synth: { type: string }
+        axes: { type: array, items: { $ref: '#/components/schemas/AxisRead' } }
+        title: { type: string }
+        todayDate: { type: string }
+        today: { type: array, items: { type: string } }
+        args:
+          type: array
+          items:
+            type: object
+            required: [no, claim, body]
+            properties:
+              no: { type: string }
+              claim: { type: string }
+              body: { type: array, items: { type: string } }
+        closingTitle: { type: string }
+        neg: { type: array, items: { type: string } }
+        pos: { type: array, items: { type: string } }
+        close: { type: string }
+        next:
+          type: object
+          required: [code, name]
+          properties:
+            code: { $ref: '#/components/schemas/EtfCode' }
+            name: { type: string }
+    FactorPage:
+      type: object
+      required: [axis, dir, headline]
+      properties:
+        axis: { $ref: '#/components/schemas/Axis' }
+        dir: { $ref: '#/components/schemas/Dir' }
+        headline: { type: string }
+        events:
+          type: array
+          items:
+            type: object
+            required: [dir, k, body]
+            properties:
+              dir: { $ref: '#/components/schemas/Dir' }
+              k: { type: string }
+              body: { type: string }
+        chartInds:
+          type: array
+          items:
+            type: object
+            required: [dir, name, d]
+            properties:
+              dir: { $ref: '#/components/schemas/Dir' }
+              name: { type: string }
+              d: { type: string }
+        judg: { type: array, items: { type: string } }
+    MetricTile:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        dir: { $ref: '#/components/schemas/Dir' }
+        note: { type: string }
+        wide: { type: boolean }
+    MetricPage:
+      type: object
+      required: [axis, dir, verdict, tiles, hasDetail]
+      properties:
+        axis: { $ref: '#/components/schemas/Axis' }
+        dir: { $ref: '#/components/schemas/Dir' }
+        verdict: { type: string }
+        tiles: { type: array, items: { $ref: '#/components/schemas/MetricTile' } }
+        hasDetail: { type: boolean }
+    Hint:
+      type: object
+      required: [title, body]
+      properties:
+        title: { type: string }
+        orig: { type: string }
+        body: { type: string }
+        list:
+          type: array
+          items:
+            type: object
+            required: [k, d]
+            properties:
+              k: { type: string }
+              d: { type: string }
+        why: { type: string }
+
+    # ── 탐색·테마 ──
+    RankRow:
+      type: object
+      required: [etf, rank, title, chips, ready]
+      properties:
+        etf: { $ref: '#/components/schemas/EtfSummary' }
+        rank: { type: integer }
+        title: { type: string }
+        chips: { type: array, items: { type: string } }
+        ready: { type: boolean }
+    ThemeSheet:
+      type: object
+      required: [theme, title, why, rows]
+      properties:
+        theme: { type: string }
+        title: { type: string }
+        why: { type: string }
+        rows:
+          type: array
+          items:
+            type: object
+            required: [etf]
+            properties:
+              etf: { $ref: '#/components/schemas/EtfSummary' }
+              tag: { type: string }
+    ThemeFeedItem:
+      type: object
+      required: [key, bg, count, headline, dir]
+      properties:
+        key: { type: string }
+        bg: { type: string }
+        count: { type: integer }
+        headline: { type: string }
+        dir: { $ref: '#/components/schemas/Dir' }
+    ThemeDetail:
+      type: object
+      required: [key, headline, stocks, intro, updated, countLabel, todayLine, todayEffect, importantLead, importantWhy, metric, thesis, surface, structure, structureWhy, soWhat]
+      properties:
+        key: { type: string }
+        headline: { type: string }
+        stocks:
+          type: array
+          items:
+            type: object
+            required: [name, logoBg, etfs]
+            properties:
+              name: { type: string }
+              logoBg: { type: string }
+              etfs: { type: string }
+        intro: { type: string }
+        updated: { type: string }
+        countLabel: { type: string }
+        todayLine: { type: string }
+        todayEffect: { type: string }
+        importantLead: { type: string }
+        importantWhy: { type: string }
+        metric:
+          type: object
+          required: [name, now, dir, vals, thresh, xLabels, refLabel, state]
+          properties:
+            name: { type: string }
+            now: { type: string }
+            dir: { $ref: '#/components/schemas/Dir' }
+            vals: { type: array, items: { type: number } }
+            thresh: { type: number }
+            xLabels: { type: array, items: { type: string } }
+            refLabel: { type: string }
+            state: { type: string }
+        thesis: { type: string }
+        surface: { type: string }
+        structure: { type: string }
+        structureWhy: { type: string }
+        soWhat: { type: string }
+
+    # ── 이슈 ──
+    IssueRow:
+      type: object
+      required: [id, rank, delta, title, kw]
+      properties:
+        id: { type: string }
+        rank: { type: integer }
+        delta: { type: integer, description: 순위 변동 }
+        title: { type: string }
+        kw: { type: string }
+        etf:
+          type: object
+          required: [code, name, theme, logoBg]
+          properties:
+            code: { $ref: '#/components/schemas/EtfCode' }
+            name: { type: string }
+            theme: { type: string }
+            logoBg: { type: string }
+            sub: { type: string }
+    IssueDetail:
+      type: object
+      required: [id, title, body, points, sources, effect, affected]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        points: { type: array, items: { type: string } }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [title, pub, url]
+            properties:
+              title: { type: string }
+              pub: { type: string }
+              url: { type: string, format: uri }
+        effect:
+          type: object
+          required: [theme, dir, body]
+          properties:
+            theme: { type: string }
+            dir: { $ref: '#/components/schemas/Dir' }
+            body: { type: string }
+        affected:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/EtfSummary'
+              - type: object
+                properties:
+                  prev: { $ref: '#/components/schemas/Signal' }
+
+    # ── 스토리 ──
+    StoryCard:
+      oneOf:
+        - type: object
+          required: [kind, badge, changePct, headline, noteTitle, notes, news]
+          properties:
+            kind: { type: string, const: ai }
+            sec: { type: string }
+            badge: { type: string }
+            changePct: { type: number }
+            headline: { type: string }
+            noteTitle: { type: string }
+            notes: { type: array, items: { type: string } }
+            news:
+              type: array
+              items:
+                type: object
+                required: [issueId, t, phase, kw, dir]
+                properties:
+                  issueId: { type: string }
+                  t: { type: string }
+                  phase: { type: string }
+                  kw: { type: string }
+                  dir: { $ref: '#/components/schemas/Dir' }
+        - type: object
+          required: [kind, issueId, t, kw, b]
+          properties:
+            kind: { type: string, const: news }
+            sec: { type: string }
+            issueId: { type: string }
+            t: { type: string }
+            kw: { type: string }
+            b: { type: string }
+        - type: object
+          required: [kind, big, capPre, capB, capPost]
+          properties:
+            kind: { type: string, const: hook }
+            sec: { type: string }
+            big: { type: string }
+            capPre: { type: string }
+            capB: { type: string }
+            capPost: { type: string }
+    Story:
+      type: object
+      required: [etf, sub, cards]
+      properties:
+        etf: { $ref: '#/components/schemas/EtfSummary' }
+        sub: { type: string }
+        prev: { $ref: '#/components/schemas/Signal' }
+        cards: { type: array, items: { $ref: '#/components/schemas/StoryCard' } }
+
+    # ── 알림 ──
+    Notification:
+      type: object
+      required: [id, kind, time, title, body, read]
+      properties:
+        id: { type: string }
+        kind: { $ref: '#/components/schemas/NotiKind' }
+        etf: { $ref: '#/components/schemas/EtfCode' }
+        postId: { type: string }
+        time: { type: string, format: date-time }
+        title: { type: string }
+        body: { type: string }
+        read: { type: boolean }

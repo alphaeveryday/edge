@@ -35,6 +35,37 @@ Cluster 실험은 마스터 3+replica 3 에 `cluster-require-full-coverage=no`�
 
 실측과 미검증 범위: [ETF failover 검증 결과](experiments/FAILOVER_RESULTS.md).
 
+## 구조 (ETF Orca 앱 API 확장 계획, 2026-09-28)
+
+app-api 를 ETF Orca 앱(app-ui)의 B2C 서버로 확장한다(ADR-0056). 계약 정본은 [openapi.yaml](openapi.yaml)(계약 우선). 구현 때 springdoc 을 붙여 `/v3/api-docs` 로 나오는 구현 문서를 yaml 과 대조하는 검증용으로만 쓴다. 애노테이션으로 yaml 내용을 중복 기술하지 않는다. 아직 계획이며, 아래 규칙대로 구현한다.
+
+**패키지는 도메인 단위, 안은 layered.** 도메인은 openapi.yaml 의 태그 13개와 1:1 이라 operationId 와 클래스가 바로 대응된다.
+
+```
+com.edge.app
+  common/        AppErrorStatus, 인증 필터(Bearer + X-Device-Id), 커서 인코딩, config(Redis·ShedLock)
+  auth/ user/ onboarding/ home/ story/ etf/ watch/ theme/
+  explore/ analysis/ issue/ community/ notification/
+```
+
+각 도메인 안은 `XxxController`, `XxxService`, `XxxRepository`, `dto/` 넷이다. 엔티티는 접미사 없이 이름 그대로(`Post`, `Vote`). 조회 하나짜리 도메인(home·story·explore)은 Repository 없이 Service 가 다른 도메인 Repository 를 읽는다. 도메인이 작으면 파일 셋으로 끝나도 된다.
+
+**계층 두께는 지금 투표 API 그대로.** Controller 는 검증(`@Valid`)·호출·`ApiResponse.onSuccess` 반환만, Service 는 트랜잭션 경계와 규칙, Repository 는 JPA. DTO 는 record, 이름은 `XxxRequest`/`XxxResponse`.
+
+**Service 는 구체 클래스가 기본.** `VoteService` 가 인터페이스인 이유는 db-first·write-behind 구현을 바꿔 끼우기 위해서다. 그 사정이 없는 도메인은 클래스 하나. 미리 두는 인터페이스는 추측성 추상화라 두지 않는다.
+
+**도메인 간 참조.** 다른 도메인 것은 Service 가 아니라 Repository 를 직접 읽는다(Service 끼리 부르면 순환·계층 비대). 쓰기는 자기 도메인만 한다. 부수 효과(글 작성 후 알림 생성 등)는 `VoteRecorded` 처럼 이벤트로 넘긴다.
+
+**인증.** 회원 `Authorization: Bearer` 액세스 JWT + DB 저장 리프레시, 게스트 `X-Device-Id`. 둘 다 있으면 토큰 우선. common 의 필터가 해석해 컨트롤러 인자(`@AuthenticationPrincipal` 류)로 넘긴다. 지금의 `X-User-Id` 헤더는 이 인자로 교체한다.
+
+**에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4040`, `ANALYSIS4041`). 앱은 code 를 번역 없이 그대로 분기한다.
+
+**기존 투표 코드 이동.** `controller/service/repository/dto/entity/event` 의 투표 파일을 `community/` 로 옮기고 경로를 `/api/v1/etfs/{code}/poll`(GET 현황, PUT 투표)로 바꾼다. `VoteAdminController`·재조정·write-behind 는 실험 자산이라 함께 옮기되 형태는 유지한다. Redis·ShedLock 설정은 `common/config` 로.
+
+**먼저 만들 수 있는 것(계약과 무관).** common 의 셋: 인증 필터, AppErrorStatus 확장, 커서 유틸. 계약이 확정되면 도메인별 구현을 바로 시작한다.
+
+**데이터.** 사용자·관심·게시물·투표·알림은 이 모듈이 쓰기 소유. ETF·분석·이슈·테마는 파이프라인 산출물을 앱 DB 로 동기화한 읽기 전용 테이블(방식 미결, ADR-0056 미결 항목). 스키마는 `db/etf-migration` Flyway 가 소유하며 Hibernate 는 `validate` 만 한다.
+
 ## Redis Cluster 부분 장애 실측 (2026-09-20)
 
 마스터 3+replica 3, `cluster-require-full-coverage=no`. 투표·조회·무관 요청 각 50rps 를 3분 넣고 60초 후 샤드 0 의 마스터·replica 에 장애를 주입했다. 정상 샤드 요청이 장애를 느끼는지를 주입 후 20초 구간의 투표 SLO(1초) 초과율과 조회 DB 폴백 비율로, 전파 원인을 Tomcat busy·HikariCP 대기(풀 10)로 쟀다. 인기 종목(트래픽 50%)을 장애 샤드에 두면 전역 실패율 67%, 정상 샤드에 두면 17% 다. 원본은 `experiments/runs/C*`(gitignore) 의 result.json 이고 표의 값은 hot=failed 기준이다.
