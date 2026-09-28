@@ -68,3 +68,21 @@ def test_restart_marks_previous_running_job_interrupted_without_reexecuting(tmp_
     manager = ExecutionDashboard(tmp_path,key='secret',model='test',connection_factory=lambda:None)
     assert manager.jobs()[0]['status'] == 'interrupted'
     assert manager.worker is None
+
+
+def test_independent_cases_never_inherit_another_case_but_replay_links_in_order(tmp_path):
+    calls = []
+    manager = ExecutionDashboard(tmp_path, key='secret', model='test', connection_factory=lambda:None,
+        runner=lambda **kwargs:calls.append(kwargs), fixture_factory=lambda scenario,analysis_at:{})
+    with pytest.raises(ValueError, match='preceding'):
+        manager.start({'kind':'movement','scenario':'replay_2'})
+    first = manager.start({'kind':'movement','scenario':'replay_1'})
+    manager.worker.join(3)
+    manager.start({'kind':'movement','scenario':'baseline'})
+    manager.worker.join(3)
+    assert calls[-1]['previous_analysis_id'] is None
+    manager.start({'kind':'movement','scenario':'replay_2'})
+    manager.worker.join(3)
+    assert calls[-1]['previous_analysis_id'] == first['analysis_id']
+    with pytest.raises(ValueError, match='preceding'):
+        manager.start({'kind':'outlook','scenario':'replay_2'})

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 SCENARIOS = {'baseline':'기본', 'unusual_flow':'특이 수급', 'competing_signals':'상충 지표',
              'followup':'후속 기사', 'quiet':'변화 없음'}
+SCENARIOS.update({f'replay_{day}':f'연속 재생 {day}/5' for day in range(1,6)})
 ARTIFACTS = ('input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
              'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json', 'quality_review.md')
 
@@ -30,7 +31,7 @@ def read_settings(path: Path) -> dict:
 
 def scenario_cutoff(kind: str, scenario: str) -> str:
     """Choose a fixed historical cutoff for repeatable intraday/daily checks."""
-    index = list(SCENARIOS).index(scenario)
+    index = int(scenario[-1])-1 if scenario.startswith('replay_') else list(SCENARIOS).index(scenario)
     return f'2026-09-{14+index:02d}T08:30:00+09:00' if kind == 'outlook' else f'2026-09-14T{10+index:02d}:00:00+09:00'
 
 
@@ -76,7 +77,15 @@ class ExecutionDashboard:
         with self.lock:
             if self.worker is not None and self.worker.is_alive():
                 raise ValueError('An analysis is already running')
-            job = body | {'analysis_id':uuid4().hex, 'status':'running',
+            previous_id = None
+            if body['scenario'].startswith('replay_') and body['scenario'] != 'replay_1':
+                preceding = 'replay_' + str(int(body['scenario'][-1])-1)
+                previous = next((job for job in self.jobs() if job['kind']==body['kind']
+                                 and job['scenario']==preceding and job['status']=='completed'), None)
+                if previous is None:
+                    raise ValueError('Complete the preceding replay step first')
+                previous_id = previous['analysis_id']
+            job = body | {'analysis_id':uuid4().hex, 'status':'running', 'previous_analysis_id':previous_id,
                           'analysis_at':scenario_cutoff(body['kind'],body['scenario']),
                           'started_at':datetime.now(timezone.utc).isoformat()}
             self._save(job)
@@ -92,11 +101,14 @@ class ExecutionDashboard:
                 runner = execute_request
             factory = self.fixture_factory
             if factory is None:
-                from .fixture_tools import make_fixture
-                factory = make_fixture
-            runner(kind=job['kind'], fixture=factory(job['scenario'], analysis_at=job['analysis_at']),
+                from .fixture_tools import make_fixture, make_replay_fixture
+                fixture = make_replay_fixture(job['analysis_at']) if job['scenario'].startswith('replay_') else make_fixture(job['scenario'], job['analysis_at'])
+            else:
+                fixture = factory(job['scenario'], analysis_at=job['analysis_at'])
+            runner(kind=job['kind'], fixture=fixture,
                    connection_factory=self.connection_factory, key=self.key,
-                   artifacts=self.runs_dir/job['analysis_id'], analysis_id=job['analysis_id'], model=self.model)
+                   artifacts=self.runs_dir/job['analysis_id'], analysis_id=job['analysis_id'], model=self.model,
+                   previous_analysis_id=job['previous_analysis_id'])
             job = job | {'status':'completed'}
         except Exception as exc:
             detail = str(exc)[:1500].replace(self.key,'[redacted]') if isinstance(exc, ValueError) else '실행 실패. 아래 모델 기록과 DB 상태를 확인하세요.'
