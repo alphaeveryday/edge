@@ -149,7 +149,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 - 아래 "활성화 전 결정·미해결 조건"이 모두 해결됐고 "실제 환경 검증"의 성공 기준을 충족했다.
 
 1. **경계.** 마지막 SFN 슬롯은 전날 14:35다. 첫 Airflow 슬롯은 다음 거래일 09:35다. 장 마감 뒤(15:00 이후)에 진행한다.
-2. **새 실행 생성 중단.** `investor_intraday_orchestrator = "AIRFLOW"`로 apply한다(envs/dev).
+2. **새 실행 생성 중단.** `infra/terraform/envs/dev/main.tf`의 `module "data_pipeline"` 인자 `investor_intraday_orchestrator = "SFN"`을 `"AIRFLOW"`로 바꿔 apply한다.
    - 이 레인의 EventBridge 스케줄 5개가 DISABLED가 된다.
    - Reconciler 슬롯 대조(`OPS_INVESTOR_INTRADAY_SCHED_HHMM`)는 유지된다. 그래서 Airflow 런도 같은 run_key로 대조되고, Airflow가 슬롯을 안 돌리면 PLANNER_MISSING이 열린다.
    - `investor_intraday_schedule_state = "DISABLED"`로 끄면 **안 된다.** 그 값은 슬롯 대조까지 끈다.
@@ -172,7 +172,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 2. **종료 확인.** ①~⑤를 모두 확인한다.
    - Airflow가 죽어서 ⑤를 볼 수 없으면 ECS(③)·원장(①)·lock(②)으로 판단한다. 셋 다 비어야 3으로 간다.
    - 판단할 수 없으면 SFN을 켜지 않는다. 그 사이 슬롯은 5의 회수 대상이 된다.
-3. **다음 스케줄 활성화 조건.** 종료가 확인된 뒤에만 `investor_intraday_orchestrator = "SFN"`으로 apply한다. 스케줄이 다시 켜지고, 다음 cron 슬롯부터 SFN이 실행한다.
+3. **다음 스케줄 활성화 조건.** 종료가 확인된 뒤에만 `envs/dev/main.tf`의 `investor_intraday_orchestrator`를 `"SFN"`으로 되돌려 apply한다. 스케줄이 다시 켜지고, 다음 cron 슬롯부터 SFN이 실행한다.
 4. **장중 긴급 롤백과 "한 거래일 안에서 섞지 않는다"의 관계.**
    - 평시 전환은 거래일 경계에서만 한다.
    - 긴급 롤백은 장중에도 할 수 있다. 이때 섞여도 되는 조건은 **2의 종료 확인 하나**다. 병합 위험은 같은 시점의 동시 실행에서 오고, 같은 날 주체가 차례로 바뀌는 것 자체에서 오지 않는다.
