@@ -1,6 +1,6 @@
 # ADR-0056: ETF Orca 앱 API(app-api) 클라우드 인프라: 별도 PostgreSQL·ElastiCache·N 인스턴스·단일 호스트
 
-- 상태: 제안
+- 상태: 승인됨 (2026-09-28 — 인프라 배선 머지로 승인 전환)
 - 날짜: 2026-09-28
 - 관련: ADR-0009(AWS 배포 토폴로지) · ADR-0034(ALB 호스트 1:1) · ADR-0055(앱 계층 다중 인스턴스, ShedLock 선례) · `src/apps/cloud/app-api/README.md` · `src/apps/cloud/app-ui/screens.md`
 
@@ -12,7 +12,7 @@ app-api 는 ETF 전망 투표의 Redis 장애 실험 트랙으로 시작해 자�
 
 ## 결정
 
-1. **인스턴스 1~N.** `ecs-service` 의 `desired_count` 로 시작하고 target tracking 오토스케일(초기 최소 1·최대 2)을 모듈에 추가한다. 앱의 `@Scheduled` 셋(VoteReconciler·VoteWarmer·VoteFlusher)은 ShedLock 으로 한 대만 실행한다(ADR-0055 와 같은 방식). Redis 는 ElastiCache(클러스터 모드 끔, 프라이머리 1 + 레플리카 1, Multi-AZ)로 신설 모듈을 둔다.
+1. **인스턴스 1~N.** `ecs-service` 의 `desired_count` 로 시작하고 target tracking 오토스케일(초기 최소 1·최대 2)을 모듈에 추가한다. 앱의 `@Scheduled` 셋(VoteReconciler·VoteWarmer·VoteFlusher)은 ShedLock 으로 한 대만 실행한다(ADR-0055 와 같은 방식). Redis 는 ElastiCache(클러스터 모드 끔, 프라이머리 1 + 레플리카 1, Multi-AZ)로 신설 모듈을 둔다. dev 는 상시 과금을 줄이려 단일 노드로 시작하고, 페일오버 실측이 필요할 때 2 로 올린다.
 2. **DB 는 별도 RDS 인스턴스.** `edge-dev` 와 인스턴스를 나눈다. 같은 인스턴스 안의 스키마 분리는 택하지 않는다.
 3. **엔진은 PostgreSQL.** app-api 를 MySQL 에서 전환한다. 전환 시점은 지금이다. Flyway 파일이 1개뿐이다.
 4. **도메인은 `etforca.edgesignal.dev`.** ALB 호스트 1:1 규약(ADR-0034)대로 전용 ALB 하나, 경로는 `/api/v1`. dev 도 같은 이름을 쓴다. 와일드카드 인증서로 덮이므로 foundation 변경은 없다.
@@ -41,6 +41,6 @@ MySQL 이 나은 점도 있다. Redis 장애 실험이 MySQL 기준 실측이고
 
 - 신설: `modules/elasticache`, `ecs-service` 오토스케일 입력, `envs/dev` 에 `app_rds`·`app_redis`·`app_alb`·`app_api` 모듈 인스턴스.
 - app-api: PostgreSQL 전환(드라이버·방언·Flyway `db/etf-migration` 타입), ShedLock, Boot 4 헬스체크 함정 반영, `X-User-Id` 헤더 인증은 계약 단계에서 교체.
-- CD: super-admin-api 와 같은 OIDC 이미지 빌드·롤아웃. 앱 CD IAM 미해결(ALPHA-303)이 걸리는지 확인.
-- 비용: RDS 최소 인스턴스 + ElastiCache 최소 노드 2 + ALB 1 이 추가된다.
+- CD: super-admin-api 와 같은 OIDC 이미지 빌드·롤아웃. JWT 서명 키는 Secrets Manager 에 선생성해 ECS secrets 로 주입한다(부트스트랩 비밀번호와 같은 규율).
+- 비용: RDS `db.t4g.micro` + ElastiCache `cache.t4g.micro` 1 + ALB 1 이 추가된다.
 - 미결: 브랜드 도메인 시점, 오토스케일 상한, 실데이터 동기화 방식(논리 복제 vs 배치)은 계약 설계 뒤로 넘긴다.
