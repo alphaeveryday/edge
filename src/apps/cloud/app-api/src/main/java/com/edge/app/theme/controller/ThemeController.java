@@ -5,6 +5,7 @@ import com.edge.app.theme.dto.ThemeDetailResponse;
 import com.edge.app.theme.dto.ThemeFeedItemResponse;
 import com.edge.app.theme.dto.ThemeResponse;
 import com.edge.app.theme.dto.ThemeSheetResponse;
+import com.edge.app.theme.entity.FeedDir;
 import com.edge.app.theme.service.ThemeService;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +29,7 @@ public class ThemeController {
     }
 
     @GetMapping("/feed")
-    public ApiResponse<List<ThemeFeedItemResponse>> themeFeed(@RequestParam(defaultValue = "all") String dir) {
+    public ApiResponse<List<ThemeFeedItemResponse>> themeFeed(@RequestParam(defaultValue = "all") FeedDir dir) {
         return ApiResponse.onSuccess(themeService.feed(dir));
     }
 
