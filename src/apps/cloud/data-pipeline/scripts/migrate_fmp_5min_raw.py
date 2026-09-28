@@ -197,19 +197,30 @@ def main() -> int:
         "objects": results, "excluded": excluded,
     }
     body = json.dumps(log, ensure_ascii=False, indent=1).encode("utf-8")
-    if args.report:
-        Path(args.report).write_bytes(body)
+    # 두 기록은 서로를 막지 않는다 — 복사는 이미 끝났으므로 어느 한쪽이라도 남아야 재시도를
+    # 판단할 수 있다. 어느 쪽이든 실패하면 exit 1.
+    recorded = True
     if not args.dry_run:
         # 로그 run_id 에 실행 시각을 붙인다 — 같은 목적지 재실행(검증)이 앞선 로그를 덮지 않게.
         log_key = collection_log_key(source=SOURCE_VENDOR, dataset=DATASET,
                                      started_date=started_at.date().isoformat(),
                                      run_id=f"{run_id}-{started_at:%Y%m%dT%H%M%SZ}")
-        s3.put_object(Bucket=args.bucket, Key=log_key, Body=body)
-        print(f"collection_log: {log_key}")
+        try:
+            s3.put_object(Bucket=args.bucket, Key=log_key, Body=body)
+            print(f"collection_log: {log_key}")
+        except Exception as exc:  # noqa: BLE001 - 로컬 사본을 살리고 실패로 끝낸다
+            print(f"collection_log 기록 실패: {type(exc).__name__}: {exc}")
+            recorded = False
+    if args.report:
+        try:
+            Path(args.report).write_bytes(body)
+        except OSError as exc:
+            print(f"--report 기록 실패: {exc}")
+            recorded = False
     print(f"{status}: {counts}")
     for r in [r for r in results if r["status"] in ("error", "mismatch")][:20]:
         print(f"  {r['status']} {r['src_key']}: {r.get('error', r.get('dest_etag'))}")
-    return 0 if status in ("success", "dry_run_ok") else 1
+    return 0 if recorded and status in ("success", "dry_run_ok") else 1
 
 
 if __name__ == "__main__":
