@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
 import { Avatar, BottomSheet, Chevron, CtaButton, ListRow, NavBar, SheetHead, ToggleRow } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
+import { useOnboarding } from '@/store/onboarding';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
@@ -15,14 +16,17 @@ export default function Profile() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: me } = useMe();
+  const qc = useQueryClient();
   const logout = useSession((s) => s.logout);
+  const resetOnboarding = useOnboarding((s) => s.reset);
   const toast = useToast((s) => s.show);
+  // 로그아웃·탈퇴 공통. 온보딩으로 돌아간다
+  const leave = (msg: string) => { qc.clear(); logout(); resetOnboarding(); router.dismissAll(); router.replace('/onboarding/how'); toast(msg); };
   const [notif, setNotif] = useState(true);
   const [delOpen, setDelOpen] = useState(false);
-  const qc = useQueryClient();
   const del = useMutation({
     mutationFn: () => api.user.deleteAccount(),
-    onSuccess: () => { qc.clear(); logout(); setDelOpen(false); router.dismissAll(); router.replace('/onboarding/how'); toast('계정을 지웠어요'); },
+    onSuccess: () => { setDelOpen(false); leave('계정을 지웠어요'); },
   });
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
@@ -46,7 +50,7 @@ export default function Profile() {
           <ListRow label="개인정보 처리방침" divider onPress={() => toast('처리방침 페이지는 준비 중이에요')} />
           <ListRow label="회원 탈퇴" labelColor={colors.textMuted} onPress={() => setDelOpen(true)} />
         </View>
-        <Pressable onPress={() => { api.auth.logout(); logout(); router.replace('/login'); toast('로그아웃했어요'); }} style={styles.logout}>
+        <Pressable onPress={() => { api.auth.logout(); leave('로그아웃했어요'); }} style={styles.logout}>
           <Text style={styles.logoutText}>로그아웃</Text>
         </Pressable>
         <Text style={styles.version}>ETF Orca v0.1.0</Text>

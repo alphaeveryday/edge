@@ -5,6 +5,7 @@ interface OnboardingState {
   etfs: string[];
   toggleTheme: (k: string) => void;
   toggleEtf: (code: string) => void;
+  reset: () => void;
 }
 
 const toggle = (arr: string[], k: string) => (arr.includes(k) ? arr.filter((x) => x !== k) : [...arr, k]);
@@ -14,4 +15,5 @@ export const useOnboarding = create<OnboardingState>((set) => ({
   etfs: [],
   toggleTheme: (k) => set((s) => ({ themes: toggle(s.themes, k) })),
   toggleEtf: (c) => set((s) => ({ etfs: toggle(s.etfs, c) })),
+  reset: () => set({ themes: [], etfs: [] }),
 }));

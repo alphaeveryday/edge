@@ -5,7 +5,9 @@ import { SearchField, SectorIcon } from '@/components/ui';
 import { useEtfList } from '@/features/etf/queries';
 import { PickCircle } from '@/features/onboarding/PickCircle';
 import { PickShell } from '@/features/onboarding/PickShell';
+import { api } from '@/api';
 import { useOnboarding } from '@/store/onboarding';
+import { useSession } from '@/store/session';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -15,6 +17,7 @@ export default function EtfPick() {
   const router = useRouter();
   const { data } = useEtfList();
   const { themes, etfs, toggleEtf } = useOnboarding();
+  const finishOnboarding = useSession((s) => s.finishOnboarding);
   const [q, setQ] = useState('');
   const list = useMemo(() => {
     const all = data ?? [];
@@ -23,6 +26,11 @@ export default function EtfPick() {
     return k ? ranked.filter((e) => e.name.includes(k) || e.theme.includes(k)) : ranked;
   }, [data, themes, q]);
   const n = etfs.length;
+  const done = async () => {
+    await api.onboarding.complete({ themes, etfs });
+    finishOnboarding();
+    router.replace('/(tabs)/home');
+  };
   return (
     <PickShell
       navTitle=""
@@ -31,7 +39,7 @@ export default function EtfPick() {
       cta={`${n}개 선택`}
       ctaDisabled={n === 0}
       onBack={() => router.back()}
-      onNext={() => router.push('/login')}
+      onNext={done}
     >
       <View style={styles.search}>
         <SearchField value={q} onChangeText={setQ} placeholder="ETF·테마 검색" />
