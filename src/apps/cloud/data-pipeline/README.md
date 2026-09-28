@@ -426,7 +426,7 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
-# etf_map, 현재 KR 38종 — 국내 반도체 30종 + KODEX 200 + 섹터 2종 + 은행 + 테마 4종,
+# etf_map, 현재 KR 37종 — 국내 반도체 29종(488210 상장폐지 제외, ALPHA-1114) + KODEX 200 + 섹터 2종 + 은행 + 테마 4종,
 # ALPHA-454·624·927·936). 날짜창 미지정이면 그날(trdDd), 과거 복구는 같은 거래일을
 # --from/--to 양쪽에 지정해 그날 PDF 전량을 append한다. KRX PDF는 한 날짜 snapshot이라
 # 다일 범위와 한쪽만 지정한 창은 거부한다. 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
@@ -443,7 +443,7 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 
 # 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
 # KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
-# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 38종)을 그대로 공유한다
+# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 37종)을 그대로 공유한다
 # — 구성종목과 NAV 가 다른 목록을 보면 안 되기 때문. KIS 는 ISIN 이 아니라 6자리 단축코드로
 # 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 38종 중 8종 — 숫자로만 거르면 샌다).
 # 창(--from/--to)을 그대로 받아 1콜로 구간 거래일 NAV 를 받으므로 백필도 같은 명령이다.
