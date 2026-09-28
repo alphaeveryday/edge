@@ -17,4 +17,4 @@ useDefault = true
 [allowlist]
 description = "Public factor metric identifiers"
 regexTarget = "secret"
-regexes = ['''^(ma20_distance_pct|ma60_direction|commodity_return_20d_pct)$''']
+regexes = ['''^(ma20_distance_pct|ma60_direction|commodity_return_20d_pct|distribution_yield_12m_pct)$''']
