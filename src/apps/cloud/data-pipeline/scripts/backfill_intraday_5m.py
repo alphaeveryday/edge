@@ -559,6 +559,8 @@ def _load_local_source(uri: str) -> dict:
             raise ValueError(f"trade_date 가 ts 의 날짜가 아니다: {r['ticker']} {ts} {r['trade_date']}")
         if not _in_session(ts.time(), close_inclusive=True):
             raise ValueError(f"정규장 밖 봉: {r['ticker']} {ts}")
+        if ts.minute % BUCKET_MINUTES or ts.second or ts.microsecond:
+            raise ValueError(f"5분 격자 밖 시각: {r['ticker']} {ts}")
         if (r["ticker"], ts) in seen:
             raise ValueError(f"(ticker, ts) 중복: {r['ticker']} {ts}")
         seen.add((r["ticker"], ts))
